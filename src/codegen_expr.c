@@ -4251,7 +4251,7 @@ static int defined_value_parent(const NodeTable *nt, int par) {
 static int defined_value_path(Compiler *c, int v, Buf *b) {
   const NodeTable *nt = c->nt;
   int par = nt_ref(nt, v, "parent");
-  const char *nm = nt_key_name(nt, v);
+  const char *nm = key_name(c, v);
   if (par < 0 || !nm) return 0;
   if (!defined_value_parent(nt, par)) return 0;
   Repr pr = repr_of(c, par);
@@ -7018,7 +7018,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
      one (a forwarded real proc answers by its pointer). The read itself
      would name lv_<blk>, which no inline site declares (#4477). */
   {
-    const char *pn = nt_key_name(nt, id);
+    const char *pn = key_name(c, id);
     int pr = nt_ref(nt, id, "receiver");
     if (pn && (sp_streq(pn, "nil?") || sp_streq(pn, "!")) && pr >= 0 &&
         nt_kind(nt, pr) == NK_LocalVariableReadNode) {

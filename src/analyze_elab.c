@@ -283,7 +283,7 @@ static int elab_block_when(Compiler *c, int call, int lazy) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
   int rv = nm ? nt_ref(nt, call, "receiver") : -1;
-  const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_key_name(nt, rv) : NULL;
+  const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? key_name(c, rv) : NULL;
   if (!nm) return ELAB_BLK_UNKNOWN;
   if (is_deferred_block_call(rn, nm) || (lazy && lr_lazy_later(c, call))) return ELAB_BLK_LATER;
   if (is_eval_exec_family(nm) || is_class_builder(rn, nm)) return ELAB_BLK_ASSUMED;
@@ -5299,7 +5299,7 @@ static const char *lr_read_key(Compiler *c, int read) {
     int core = -1, ci = lr_class_ref_at(c, read, &core);
     if (ci >= 0 && core < 0) return c->classes[ci].name;
   }
-  return nt_key_name(nt, read);
+  return key_name(c, read);
 }
 static int lr_rta_const(LrRta *t, int node) {
   const NodeTable *nt = t->c->nt;
@@ -9078,7 +9078,7 @@ int elab_defines(Compiler *c, int cls, const char *name) {
 int elab_mixin_module(Compiler *c, const LrMixin *m) {
   if (m->mod >= 0) return m->mod;
   NodeKind k = m->ref >= 0 ? nt_kind(c->nt, m->ref) : NK_NilNode;
-  return k == NK_ConstantReadNode || k == NK_ConstantPathNode ? elab_module_named(c, nt_key_name(c->nt, m->ref)) : -1;
+  return k == NK_ConstantReadNode || k == NK_ConstantPathNode ? elab_module_named(c, key_name(c, m->ref)) : -1;
 }
 
 /* ---- SPINEL_ELAB_CHECK ---- */
@@ -9225,7 +9225,7 @@ void elab_dump(Compiler *c, FILE *out) {
   for (int e = 0; e < r->nst; e++) {
     const LrStmt *s = &r->st[e];
     int cp = nt_ref(nt, s->node, "constant_path");
-    const char *nm = cp >= 0 ? nt_key_name(nt, cp) : nt_key_name(nt, s->node);
+    const char *nm = cp >= 0 ? key_name(c, cp) : key_name(c, s->node);
     fprintf(out, "%*sr%d #%d%s f%d %s%s%s line %d\n", 2 * s->depth, "", s->region, e, s->may ? " may" : "",
             s->file, nt_type(nt, s->node), nm ? " " : "", nm ? nm : "", (int)nt_int(nt, s->node, "node_line", 0));
   }
@@ -10048,7 +10048,7 @@ void elab_const_keys(Compiler *c) {
             lr_key_queue(&q, &nq, &cq, id, es[i].key);
           break;
         }
-      const char *rn = nt_key_name(nt, id);
+      const char *rn = key_name(c, id);
       if (check && rn && nm && !sp_streq(rn, nm))
         fprintf(stderr, "constkey: unresolved-renamed %s %s line %lld name=%s written=%s\n", o == ELAB_NO ? "no" : "unknown",
                 nt_type(nt, id), (long long)nt_int(nt, id, "node_line", 0), rn, nm);
@@ -10414,4 +10414,9 @@ int elab_class_super_owner(Compiler *c, int cls, int own, const char *name, int 
   int got = lr_sup_chain(&s, cls, 0);
   lr_sup_out(&s, reach, nreach, reader, opaque);
   return 1 << (got ? s.ans : MX_NONE);
+}
+
+/* See node_table.h. */
+const char *key_name(const Compiler *c, int n) {
+  return nt_key_name(c->nt, n);
 }

@@ -396,7 +396,7 @@ static int nf_class_excludes_nil(Compiler *c, int p) {
   if (an != 1) return 0;
   NodeKind ak = nt_kind(nt, av[0]);
   if (ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) return 0;
-  const char *k = nt_key_name(nt, av[0]);
+  const char *k = key_name(c, av[0]);
   if (!k || sp_streq(k, "NilClass") || sp_streq(k, "Object") || sp_streq(k, "BasicObject") ||
       sp_streq(k, "Kernel")) return 0;
   /* a builtin class the program does not reopen (String, Hash, Integer):

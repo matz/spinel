@@ -103,7 +103,7 @@ static const char *bcv_write_class(Compiler *c, int w, const char *dyn) {
     return pci >= 0 ? c->classes[pci].name : dyn;
   }
   if (vk == NK_LocalVariableReadNode) return nt_str(nt, val, "name") ? NULL : dyn;
-  const char *cn = vk == NK_ConstantReadNode ? nt_key_name(nt, val) : NULL;
+  const char *cn = vk == NK_ConstantReadNode ? key_name(c, val) : NULL;
   return cn && (is_builtin_class_name(cn) || const_node_class_index(c, val) >= 0) ? cn : dyn;
 }
 
@@ -2769,7 +2769,7 @@ static void cg_cands_collect(Compiler *c, int n0, CgCands *cs) {
     else if (k == NK_ClassNode || k == NK_ModuleNode) {
       int cp = nt_ref(nt, id, "constant_path");
       const char *rn = cp >= 0 ? nt_str(nt, cp, "qc_ruby_name") : NULL;
-      if (!rn) rn = cp >= 0 ? nt_key_name(nt, cp) : nt_str(nt, id, "name");
+      if (!rn) rn = cp >= 0 ? key_name(c, cp) : nt_str(nt, id, "name");
       const char *rl = rn ? strrchr(rn, ':') : NULL;
       v = rl ? rl + 1 : rn;
       int ci = elab_header_class(c, id, NULL, NULL);
@@ -4760,7 +4760,7 @@ int desugar_env_enum(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
     if (!nm || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    const char *rn = nt_key_name(nt, recv);
+    const char *rn = key_name(c, recv);
     if (!rn || !sp_streq(rn, "ENV")) continue;
     int is_enum = env_enum_method(nm);
     /* fetch WITH a block rides the snapshot's block-aware Hash#fetch (#2745) */
@@ -7483,7 +7483,7 @@ static int dsend_local_names(Compiler *c, int arg, char ***names, int *n) {
     if (c->nscope[id] != scope || id == arg) continue;
     NodeKind k = nt_kind(nt, id);
     if (k == NK_LocalVariableReadNode) continue;
-    const char *wn = nt_key_name(nt, id);
+    const char *wn = key_name(c, id);
     if (!wn || !sp_streq(wn, vn)) continue;
     const char *ty = nt_type(nt, id);
     NodeKind ty_k = nt_kind(nt, id);
@@ -12447,7 +12447,7 @@ static int rsc_shadowed(char **names, int nn, const char *nm) {
 int desugar_errno_aliases_left(Compiler *c, LowerCtx *lc, int id) {
   const NodeTable *nt = c->nt;
   int par = nt_ref(nt, id, "parent");
-  const char *leaf = nt_key_name(nt, id);
+  const char *leaf = key_name(c, id);
   if (par < 0 || !leaf || nt_kind(nt, par) != NK_ConstantReadNode) return 0;
   const char *pn = nt_str(nt, par, "name");
   /* IO::EWOULDBLOCKWaitReadable / Writable are IO::EAGAINWait* where
@@ -15509,7 +15509,7 @@ static int nomethod_own_init(Compiler *c) {
   c->nomethod_init = 1;
   for (int id = 0; id < nt->count && c->nomethod_init == 1; id++) {
     int cp = nt_kind(nt, id) == NK_ClassNode ? nt_ref(nt, id, "constant_path") : -1;
-    const char *cn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
+    const char *cn = cp >= 0 ? key_name(c, cp) : NULL;
     if (!cn || !is_no_method_error_class(cn)) continue;
     int root = nt_kind(nt, cp) == NK_ConstantPathNode ? nt_ref(nt, cp, "parent") < 0 : nt_int(nt, cp, "root_anchored", 0);
     if (root && class_defines_initialize(nt, id)) c->nomethod_init = 2;
@@ -15518,7 +15518,7 @@ static int nomethod_own_init(Compiler *c) {
     int tn = 0; const int *top = nt_arr(nt, prog_root_stmts(c, r), "body", &tn);
     for (int t = 0; t < tn; t++) {
       int cp = nt_kind(nt, top[t]) == NK_ClassNode ? nt_ref(nt, top[t], "constant_path") : -1;
-      const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
+      const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
       if (cn && is_no_method_error_class(cn) && class_defines_initialize(nt, top[t])) c->nomethod_init = 2;
     }
   }
@@ -16693,7 +16693,7 @@ int desugar_builtins(Compiler *c) {
   for (int i = 0; i < tn; i++) {
     int st = tb[i];
     int cp = nt_kind(nt, st) == NK_ModuleNode ? nt_ref(nt, st, "constant_path") : -1;
-    const char *mn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
+    const char *mn = cp >= 0 ? key_name(c, cp) : NULL;
     if (!is_enumerable_module_name(mn)) { if (!tfile[i]) nb[nbn++] = st; continue; }
     int body = nt_ref(nt, st, "body");
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
@@ -17043,7 +17043,7 @@ static int stored_enum_write(Compiler *c, int id, int n0) {
     "partition", "take_while", "drop_while", "find_index", "index", "rindex", "minmax_by", "reverse_each", "each_entry", "gsub", "gsub!", NULL };
   NodeTable *nt = (NodeTable *)c->nt;
   int x = nt_ref(nt, id, "receiver");
-  const char *nm = nt_key_name(nt, id), *vn = nt_key_name(nt, x);
+  const char *nm = key_name(c, id), *vn = key_name(c, x);
   if (!nm || !sp_streq(nm, "each") || nt_ref(nt, id, "block") < 0 || nt_ref(nt, id, "arguments") >= 0 ||
       nt_kind(nt, x) != NK_LocalVariableReadNode || !vn) return -1;
   int w = -1, nw = 0;
@@ -17665,8 +17665,8 @@ int desugar_builtin_splat_forward(Compiler *c) {
     /* Time.new takes the fields one by one: a splatted Array local
        (`Time.new(*fields)`) was read whole as the year. (Time's other
        makers, at, utc, local, gm and mktime, read a splat as it is.) */
-    int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && nt_key_name(nt, recv) &&
-               sp_streq(nt_key_name(nt, recv), "Time") &&
+    int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && key_name(c, recv) &&
+               sp_streq(key_name(c, recv), "Time") &&
                /* (a reopen of Time leaves Time.new alone unless it defines its own) */
                (comp_core_class(c, CORE_TIME) < 0 || comp_cmethod_in_chain(c, comp_core_class(c, CORE_TIME), "new", NULL) < 0) &&
                sp_streq(nm, "new") && nt_ref(nt, id, "block") < 0 && rest && ms && ty_is_array(infer_type(c, sv));
@@ -17897,7 +17897,7 @@ static int value_block_name_free(Compiler *c, const char *name) {
     /* Struct.new / Data.define name members; another `new` takes values */
     if (w >= 7) {
       int rc = nt_ref(nt, k, "receiver");
-      const char *rn = rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode ? nt_key_name(nt, rc) : NULL;
+      const char *rn = rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode ? key_name(c, rc) : NULL;
       if (!rn || !sp_streq(rn, w == 7 ? "Struct" : "Data")) continue;
     }
     /* define_method and alias_method name the method first; the others name one in each argument */
@@ -18807,7 +18807,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
     int st = tb[i];
     if (!class_def_opens_frame(nt, st)) { if (!tfile[i]) nb[nbn++] = st; continue; }
     int cp = nt_ref(nt, st, "constant_path");
-    const char *mn = cp >= 0 ? nt_key_name(nt, cp) : nt_str(nt, st, "name");
+    const char *mn = cp >= 0 ? key_name(c, cp) : nt_str(nt, st, "name");
     int bx = bx_of_name(mn);
     if (bx < 0 || sp_builtin_extra_names_n(bx) == 0) { if (!tfile[i]) nb[nbn++] = st; continue; }
     int body = class_def_body(nt, st);
@@ -24948,7 +24948,7 @@ int desugar_class_body_object_acts(Compiler *c) {
        inside `module Foo`) */
     int cp = nt_ref(nt, cn, "constant_path");
     NodeKind cpk = cp >= 0 ? nt_kind(nt, cp) : NK_NilNode;
-    const char *cname = cpk == NK_ConstantReadNode || cpk == NK_ConstantPathNode ? nt_key_name(nt, cp) : NULL;
+    const char *cname = cpk == NK_ConstantReadNode || cpk == NK_ConstantPathNode ? key_name(c, cp) : NULL;
     int builtin = cname && (is_builtin_class_name(cname) || is_builtin_module_name(cname)) &&
                   (cpk == NK_ConstantReadNode ? !engine_lexically_nested(nt, cn) : nt_ref(nt, cp, "parent") < 0);
     changed |= cb_give_self(nt, class_def_body(nt, cn), builtin ? cname : NULL, 0, cname);
@@ -27091,7 +27091,7 @@ int desugar_builtin_reopen_methods(Compiler *c) {
     if (!class_def_is_class(nt, m)) continue;
     int cp = nt_ref(nt, m, "constant_path");
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
-    const char *cn = nt_key_name(nt, cp);
+    const char *cn = key_name(c, cp);
     const char *g = cn ? mo_guard_class(cn) : NULL;
     if (!g) continue;
     /* a program's own class of the name (with a superclass) is its own */
@@ -28483,7 +28483,7 @@ int desugar_builtin_ivars(Compiler *c) {
     if (!class_def_opens_frame(nt, m) || class_def_super(nt, m) >= 0) continue;
     int cp = nt_ref(nt, m, "constant_path");
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
-    int mode = biv_mode(nt_key_name(nt, cp));
+    int mode = biv_mode(key_name(c, cp));
     /* a module mixed into one builtin class alone (rbself_module_host):
        its methods and attr_* run with that builtin value as self, so they
        read and write the value's instance variables as a reopening's do
@@ -31948,7 +31948,7 @@ int desugar_builtin_reopen_self_class(Compiler *c) {
     if (nt_kind(nt, n) != NK_ClassNode || !top[n]) continue;
     int cp = nt_ref(nt, n, "constant_path");
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
-    const char *cn = nt_key_name(nt, cp);
+    const char *cn = key_name(c, cp);
     if (!cn || !bsc_builtin_one_class(cn)) continue;
     char cname[64]; snprintf(cname, sizeof cname, "%s", cn);
     int b = nt_ref(nt, n, "body");
@@ -32059,15 +32059,15 @@ int desugar_time_singleton_bare_ctor(Compiler *c) {
   for (int n = 0; n < n0; n++) {
     if (nt_kind(nt, n) != NK_ClassNode || !top[n]) continue;
     int cp = nt_ref(nt, n, "constant_path");
-    if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_key_name(nt, cp) ||
-        !sp_streq(nt_key_name(nt, cp), "Time")) continue;
+    if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !key_name(c, cp) ||
+        !sp_streq(key_name(c, cp), "Time")) continue;
     tsc_collect(nt, nt_ref(nt, n, "body"), 0, &t);
   }
   for (int n = 0; n < n0; n++) {
     if (nt_kind(nt, n) != NK_ClassNode || !top[n]) continue;
     int cp = nt_ref(nt, n, "constant_path");
-    if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_key_name(nt, cp) ||
-        !sp_streq(nt_key_name(nt, cp), "Time")) continue;
+    if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !key_name(c, cp) ||
+        !sp_streq(key_name(c, cp), "Time")) continue;
     tsc_rewrite(nt, nt_ref(nt, n, "body"), 0, &t, &changed);
   }
   free(top);
@@ -32187,7 +32187,7 @@ int desugar_builtin_reopen_self_cmethods(Compiler *c) {
   for (int n = 0; n < n0; n++) {
     if (nt_kind(nt, n) != NK_ClassNode || !top[n]) continue;
     int cp = nt_ref(nt, n, "constant_path");
-    const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
+    const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
     if (!cn || !builtin_class_id(cn) || bscm_subclassed(nt, cn)) continue;
     BscmNames t; memset(&t, 0, sizeof t);
     t.cls = cn;
@@ -32220,7 +32220,7 @@ int desugar_builtin_reopen_named_superclass(Compiler *c) {
     if (nt_kind(nt, n) != NK_ClassNode) continue;
     int cp = nt_ref(nt, n, "constant_path"), sc = nt_ref(nt, n, "superclass");
     if (cp < 0 || sc < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || nt_kind(nt, sc) != NK_ConstantReadNode) continue;
-    const char *cn = nt_key_name(nt, cp), *sn = nt_str(nt, sc, "name");
+    const char *cn = key_name(c, cp), *sn = nt_str(nt, sc, "name");
     if (!cn || !sn || is_builtin_exception_name(cn)) continue;
     int cid = builtin_class_id(cn), sid = builtin_class_id(sn);
     if (cid == 0 || sid == 0 || builtin_class_parent_id(cid) != sid) continue;

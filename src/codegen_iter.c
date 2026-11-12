@@ -565,7 +565,7 @@ static void inline_target_lookup(Compiler *c, int id, const char *name, int recv
        the key classes are indexed under */
     const char *cname = ((rk == NK_ConstantReadNode ||
                                  rk == NK_ConstantPathNode))
-                        ? nt_key_name(nt, recv) : NULL;
+                        ? key_name(c, recv) : NULL;
     /* (the class the node names: an alias's too) */
   int ci = cname ? const_node_class_index(c, recv) : rk == NK_SelfNode && class_body_self_ci(c, recv) >= 0 ? class_body_self_ci(c, recv) : self_class_static_ci(c, recv);
   if (ci < 0 && cname) ci = comp_class_index(c, cname);
@@ -671,7 +671,7 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
   NodeKind rk = nt_kind(nt, recv);
   const char *cname = ((rk == NK_ConstantReadNode ||
                                rk == NK_ConstantPathNode))
-                      ? nt_key_name(nt, recv) : NULL;
+                      ? key_name(c, recv) : NULL;
   /* a class body's self is that class, as a constant naming it is */
   int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
   if (narrow && !cname && bci < 0) {
@@ -3730,7 +3730,7 @@ int call_targets_yielding_method(Compiler *c, int id) {
     TyKind rt = comp_ntype(c, recv);
     NodeKind rk = nt_kind(nt, recv);
     const char *cn = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
-                     ? nt_key_name(nt, recv) : NULL;
+                     ? key_name(c, recv) : NULL;
     /* (the class the node names, as inline_target_lookup asks) */
     int ci = cn ? const_node_class_index(c, recv) : rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
     if (ci < 0 && cn) ci = comp_class_index(c, cn);

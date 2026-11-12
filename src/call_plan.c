@@ -241,7 +241,7 @@ int cplan_class_value_answers(Compiler *c, int recv, const char *name) {
   const NodeTable *nt = c->nt;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   int named = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
-  const char *bn = rk == NK_ConstantReadNode || (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0) ? nt_key_name(nt, recv) : NULL;
+  const char *bn = rk == NK_ConstantReadNode || (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0) ? key_name(c, recv) : NULL;
   int ci = named ? const_node_class_index(c, recv) : -1;
   int own = ci >= 0 && !(c->classes[ci].is_builtin_const && !comp_class_in_namespace(c, ci));
   if (own || !bn || !(is_builtin_class_name(bn) || is_builtin_module_const_name(bn)))
@@ -4849,7 +4849,7 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
   /* The receiver's constant name, for the limits that are keyed on it. */
   NodeKind rty_k = nt_kind(nt, recv);
   const char *rcn = (rty_k == NK_ConstantReadNode || rty_k == NK_ConstantPathNode)
-                    ? nt_key_name(nt, recv) : NULL;
+                    ? key_name(c, recv) : NULL;
   const char *why = hit >= 0 ? tbl[hit].why : NULL;
   if (why) *lx = LX_NAME;
   /* resolved to String#method's own wrapper, so a user `method` elsewhere

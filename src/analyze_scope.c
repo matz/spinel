@@ -1088,7 +1088,7 @@ int class_eval_reopen_class(Compiler *c, int id, int enclosing_class) {
   }
   else if ((recv_k == NK_ConstantReadNode ||
                          recv_k == NK_ConstantPathNode)) {
-    const char *recv_name = nt_key_name(nt, recv);
+    const char *recv_name = key_name(c, recv);
     if (!recv_name) return -1;
     ci = const_node_class_index(c, recv);
     if (ci < 0) return -1;
@@ -1157,7 +1157,7 @@ static void class_reopen_stmt(Compiler *c, int s, int depth) {
     if (nt_ref(nt, s, "superclass") >= 0)
       unsupported_feature(c, s, "`class Class < ...` is not supported: reopen Class without a superclass");
     nt_node_set_type(nt, s, "ModuleNode");
-    nt_node_set_str(nt, cp, "qc_orig_name", nt_key_name(nt, cp));   /* the name the program wrote */
+    nt_node_set_str(nt, cp, "qc_orig_name", key_name(c, cp));   /* the name the program wrote */
     nt_node_set_str(nt, cp, "name", CLASS_REOPEN_NAME);
     return;
   }
@@ -1197,7 +1197,7 @@ void desugar_class_reopen(Compiler *c) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ClassNode && k != NK_ModuleNode && k != NK_ConstantWriteNode) continue;
     int cp = k == NK_ConstantWriteNode ? id : nt_ref(nt, id, "constant_path");
-    const char *cn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
+    const char *cn = cp >= 0 ? key_name(c, cp) : NULL;
     if (cn && sp_streq(cn, CLASS_REOPEN_NAME))
       unsupported_feature(c, id, "the constant name Class__reopen is reserved by the compiler");
   }
@@ -1384,7 +1384,7 @@ static void refuse_native_class_reopen(Compiler *c, int id, int cp, int class_id
 static int singleton_const_class(Compiler *c, int recv, int class_id) {
   NodeKind k = nt_kind(c->nt, recv);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
-  const char *name = nt_key_name(c->nt, recv);
+  const char *name = key_name(c, recv);
   if (reopened_native_class(c, recv, class_id, name) || is_untabled_native_class_name(name)) return -2;
   int ci = const_node_class_index(c, recv);
   if (ci < 0 && (is_builtin_class_name(name) || is_builtin_module_const_name(name))) {
@@ -1715,7 +1715,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   if (ty_k == NK_ClassNode || ty_k == NK_ModuleNode) {
     int cp = nt_ref(c->nt, id, "constant_path");
     const char *cname = cp >= 0 ? nt_str(c->nt, cp, "qc_name") : NULL;
-    if (!cname && cp >= 0) cname = nt_key_name(c->nt, cp);
+    if (!cname && cp >= 0) cname = key_name(c, cp);
     int alias = elab_header_entity(c, id, &w.pos);
     int cls_toplevel = class_id < 0 && cp >= 0 &&
                        nt_kind(c->nt, cp) == NK_ConstantReadNode;
@@ -1772,7 +1772,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       if (real) {
         char buf[256]; snprintf(buf, sizeof buf, "%s", real);  /* copy: set frees cname */
         nt_set_str((NodeTable *)c->nt, cp, "name", buf);
-        cname = nt_key_name(c->nt, cp);
+        cname = key_name(c, cp);
         cls_leaf = cname;  /* the old leaf pointed into the freed name */
       }
     }
@@ -3426,7 +3426,7 @@ static int sg_binding(Compiler *c, int id, int recv, int *bk, const char **rn, S
     case NK_GlobalVariableReadNode: *bk = SG_GVAR; break;
     default: return -1;
   }
-  *rn = nt_key_name(nt, recv);
+  *rn = key_name(c, recv);
   if (!*rn) return -1;
   if (*bk == SG_CONST && const_node_class_index(c, recv) >= 0) return -1;  /* class method */
   /* the local's binding scope is the node's ENCLOSING scope (the receiver read
@@ -5410,7 +5410,7 @@ void register_globals_consts(Compiler *c) {
             sp_streq(nt_str(nt, v, "name"), "new")) {
           int vr = nt_ref(nt, v, "receiver");
           if (vr >= 0 && nt_kind(nt, vr) == NK_ConstantReadNode &&
-              nt_key_name(nt, vr) && const_node_class_index(c, vr) >= 0)
+              key_name(c, vr) && const_node_class_index(c, vr) >= 0)
             cv->init_guarded = 1;
         }
       }
@@ -5851,7 +5851,7 @@ void register_ffi_decls(Compiler *c) {
         for (int dj = 0; dj < nck; dj++) NT_FOREACH_KIND(nt, ck[dj], ucn) {
           int ucp = class_def_is_class(nt, ucn) ? nt_ref(nt, ucn, "constant_path") : -1;
           NodeKind ucpk = nt_kind(nt, ucp);
-          const char *ucpn = ucp >= 0 ? nt_key_name(nt, ucp) : NULL;
+          const char *ucpn = ucp >= 0 ? key_name(c, ucp) : NULL;
           if (!ucpn || !sp_streq(ucpn, leaf) || nt_str(nt, ucp, "qc_name")) continue;
           /* a class the collision qualifier already registered under its
              own path (`Cache::Store` beside "OpenSSL::X509::Store") is a
@@ -6534,7 +6534,7 @@ static int node_is_empty_hash_producer(Compiler *c, int node) {
     if (!nm || !sp_streq(nm, "new")) return 0;
     int r = nt_ref(nt, node, "receiver");
     if (r < 0 || nt_kind(nt, r) != NK_ConstantReadNode) return 0;
-    const char *rn = nt_key_name(nt, r);
+    const char *rn = key_name(c, r);
     if (!rn || !sp_streq(rn, "Hash")) return 0;
     int a = nt_ref(nt, node, "arguments");
     int an = 0; if (a >= 0) nt_arr(nt, a, "arguments", &an);
@@ -7149,7 +7149,7 @@ static void check_class_redeclarations(Compiler *c) {
     int cp = nt_ref(nt, id, "constant_path");
     /* (the name qualify keys a colliding header by, else the one written) */
     const char *nm = cp >= 0 && nt_str(nt, cp, "qc_name") ? nt_str(nt, cp, "qc_name")
-                   : cp >= 0 ? nt_key_name(nt, cp) : nt_str(nt, id, "name");
+                   : cp >= 0 ? key_name(c, cp) : nt_str(nt, id, "name");
     /* registered before any skip below: a qualified or unnamed-skip
        declaration still counts as an earlier one, as the scan it replaces
        counted every declaration ahead of this node */
@@ -7185,7 +7185,7 @@ static void check_class_redeclarations(Compiler *c) {
       int cw = cws[ci];
       if (cw >= n) break;
       if (nt_kind(nt, cw) != NK_ConstantWriteNode) continue;
-      const char *wn = nt_key_name(nt, cw);
+      const char *wn = key_name(c, cw);
       if (!wn || !sp_streq(wn, nm)) continue;
       if (((c->node_cbody && cw < c->node_cap) ? c->node_cbody[cw] : -1) != dcid) continue;
       int v = nt_ref(nt, cw, "value");
@@ -7218,7 +7218,7 @@ static void check_class_redeclarations(Compiler *c) {
     NodeKind sk = nt_kind(nt, sc), fk = nt_kind(nt, fs);
     if (!(sk == NK_ConstantReadNode || sk == NK_ConstantPathNode)) continue;
     if (!(fk == NK_ConstantReadNode || fk == NK_ConstantPathNode)) continue;
-    const char *sn = nt_key_name(nt, sc), *fn = nt_key_name(nt, fs);
+    const char *sn = key_name(c, sc), *fn = key_name(c, fs);
     if (!sn || !fn || sp_streq(sn, fn)) continue;
     char msg[512];
     snprintf(msg, sizeof msg,
@@ -7290,7 +7290,7 @@ static const char *builtin_value_superclass(Compiler *c, int sc) {
   if (sc < 0) return NULL;
   NodeKind k = nt_kind(nt, sc);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return NULL;
-  const char *nm = nt_key_name(nt, sc);
+  const char *nm = key_name(c, sc);
   if (!nm || !str_in(nm, refused)) return NULL;
   if (k == NK_ConstantPathNode) {
     int par = nt_ref(nt, sc, "parent");
@@ -7370,7 +7370,7 @@ static void check_builtin_subclasses(Compiler *c) {
     if (!nm || !sp_streq(nm, "new") || nt_ref(nt, id, "block") >= 0) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    const char *rn = nt_key_name(nt, recv);
+    const char *rn = key_name(c, recv);
     if (!rn || !sp_streq(rn, "Class")) continue;
     int args = nt_ref(nt, id, "arguments"), ac = 0;
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
@@ -8741,7 +8741,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
   int sc = class_def_super(nt, c->classes[ci].def_node);
   NodeKind sk = sc >= 0 ? nt_kind(nt, sc) : NK_NONE;
   if ((sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) &&
-      is_comparable_builtin_name(nt_key_name(nt, sc)))
+      is_comparable_builtin_name(key_name(c, sc)))
     c->classes[ci].cmp_inc_at = 1;
   int n = 0;
   BodyMix *mx = body_mixins(c, ci, body_node, 1u << LR_INCLUDE | 1u << LR_PREPEND, &n);
@@ -8749,7 +8749,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
     int arg = mx[j].ref, mod_id = mx[j].mod;
     NodeKind ak = arg >= 0 ? nt_kind(nt, arg) : NK_NONE;
     const char *mname = arg < 0 ? c->classes[mod_id].name
-                      : ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? nt_key_name(nt, arg) : NULL;
+                      : ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? key_name(c, arg) : NULL;
     if (mx[j].kind == LR_PREPEND) {
       if (is_comparable_module_name(mname)) c->classes[ci].cmp_prepended = 1;
       else if (!c->classes[ci].cmp_prepended && comp_comparable_reaches(c, mod_id))
@@ -10306,7 +10306,7 @@ void specialize_inherited_cls_new(Compiler *c) {
     else {
       NodeKind rk = nt_kind(nt, recv);
       if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
-      const char *cn = nt_key_name(nt, recv);
+      const char *cn = key_name(c, recv);
       /* (the class the node names: an alias's too) */
       ci = const_node_class_index(c, recv);
       if (ci < 0) ci = cn ? comp_class_index(c, cn) : -1;

@@ -377,7 +377,7 @@ static int poll_pure_node(Compiler *c, int n, int ret_ok, int stores) {
        nothing of the runtime (an Integer power may grow into a Bignum) */
     if (recv >= 0 && sp_streq(nm, "**") && comp_ntype_settled(c, n) == TY_FLOAT && comp_ntype_settled(c, recv) == TY_FLOAT)
       return an == 1 && poll_pure_node(c, recv, ret_ok, stores) && poll_scalar_ty(comp_ntype_settled(c, av[0]));
-    if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && sp_streq(nt_key_name(nt, recv), "Math") &&
+    if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && sp_streq(key_name(c, recv), "Math") &&
         poll_math_fn(nm) && comp_ntype_settled(c, n) == TY_FLOAT && !an_user_defines_method(c, nm)) {
       for (int i = 0; i < an; i++) if (!poll_scalar_ty(comp_ntype_settled(c, av[i]))) return 0;
       return 1;
@@ -1808,7 +1808,7 @@ static int class_is_user_numeric(Compiler *c, int cid) {
     int sup = class_def_super(nt, c->classes[k].def_node);
     if (sup < 0) continue;
     NodeKind sk = nt_kind(nt, sup);
-    const char *sn = (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) ? nt_key_name(nt, sup) : NULL;
+    const char *sn = (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) ? key_name(c, sup) : NULL;
     if (sn && sp_streq(sn, "Numeric")) return 1;
   }
   return 0;
@@ -5059,7 +5059,7 @@ int fi_fiber_stack_risk(Compiler *c) {
     NodeKind k = nt_kind(nt, i);
     if (!ty) continue;
     if (k == NK_ConstantReadNode) {
-      const char *nm = nt_key_name(nt, i);
+      const char *nm = key_name(c, i);
       if (nm && (sp_streq(nm, "Fiber") || sp_streq(nm, "Thread") || sp_streq(nm, "Enumerator") ||
                  sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") || sp_streq(nm, "Mutex") ||
                  sp_streq(nm, "Monitor") || sp_streq(nm, "ConditionVariable")))
@@ -8714,7 +8714,7 @@ int proc_does_nonlocal_return(Compiler *c, int create) {
   int is_proc = (recv < 0 && sp_streq(cn, "proc"));
   int is_proc_new = (sp_streq(cn, "new") && recv >= 0 &&
                      nt_kind(c->nt, recv) == NK_ConstantReadNode &&
-                     nt_key_name(c->nt, recv) && sp_streq(nt_key_name(c->nt, recv), "Proc"));
+                     key_name(c, recv) && sp_streq(key_name(c, recv), "Proc"));
   if (!is_proc && !is_proc_new) return 0;
   if (nt_ref(c->nt, create, "block") < 0) return 0;
   return proc_body_has_return(c, proc_body_node(c, create));
@@ -11655,7 +11655,7 @@ int class_is_exc_subclass(Compiler *c, int ci) {
   int ans = 0;
   for (int k = ci, guard = 0; k >= 0 && guard < 256; guard++) {
     int sc = class_def_super(c->nt, c->classes[k].def_node);
-    const char *sn = sc >= 0 ? nt_key_name(c->nt, sc) : NULL;
+    const char *sn = sc >= 0 ? key_name(c, sc) : NULL;
     if (superclass_builtin_exc_name(c->nt, sc)) { ans = 1; break; }
     int next = c->classes[k].parent;
     /* The parent links are not resolved yet when the rescue-arm specialization
@@ -19283,7 +19283,7 @@ static char *build_types_json(Compiler *c) {
       if (eln > 0) buf_printf(&b, ",\"end_line\":%d,\"end_col\":%d", eln, (int)nt_int(nt, id, "node_end_col", 0)); }
     { const char *kind = nt_type(nt, id);
       if (kind) { buf_puts(&b, ",\"kind\":\""); json_escape_into(&b, kind); buf_puts(&b, "\""); }
-      const char *nm = nt_key_name(nt, id);
+      const char *nm = key_name(c, id);
       if (nm && *nm) { buf_puts(&b, ",\"name\":\""); json_escape_into(&b, nm); buf_puts(&b, "\""); } }
     buf_puts(&b, ",\"type\":\"");
     Buf tag; memset(&tag, 0, sizeof tag);
@@ -19433,7 +19433,7 @@ int class_builtin_superclass(Compiler *c, int i) {
   int sc_node = class_def_super(c->nt, c->classes[i].def_node);
   if (sc_node >= 0) {
     NodeKind sc_k = nt_kind(c->nt, sc_node);
-    const char *sc_nm = (sc_k == NK_ConstantReadNode || sc_k == NK_ConstantPathNode) ? nt_key_name(c->nt, sc_node) : NULL;
+    const char *sc_nm = (sc_k == NK_ConstantReadNode || sc_k == NK_ConstantPathNode) ? key_name(c, sc_node) : NULL;
     /* an exception path is read whole: the leaf of Math::DomainError,
        "DomainError", has no id, and the class sat under Object */
     const char *exc_nm = superclass_builtin_exc_name(c->nt, sc_node);
@@ -19538,7 +19538,7 @@ static int program_needs_class_machinery(Compiler *c) {
         need = 1;
     }
     else if (ty_k == NK_ConstantReadNode || ty_k == NK_ConstantPathNode) {
-      const char *nm = nt_key_name(nt, i);
+      const char *nm = key_name(c, i);
       if (nm && is_builtin_class_name(nm) && !(raised && raised[i])) need = 1;
     }
   }
@@ -19696,7 +19696,7 @@ static void scan_prologue_features(Compiler *c) {
     else if (ty_k == NK_SymbolNode || ty_k == NK_InterpolatedSymbolNode)
       g_uses_symbols = 1;
     else if (ty_k == NK_ConstantReadNode || ty_k == NK_ConstantPathNode) {
-      const char *nm = nt_key_name(nt, i);
+      const char *nm = key_name(c, i);
       if (!nm) continue;
       /* A class a bundled library defines, named without requiring it. CRuby
          raises NameError at run time; here the unknown constant flows into
@@ -21202,7 +21202,7 @@ static void refuse_syserr_errno_const(Compiler *c) {
       int ci = c->node_cbody[st[i]];
       /* the name may come qualified (`MyErr__Errno`) when two classes
          define one */
-      const char *wn = nt_key_name(c->nt, st[i]);
+      const char *wn = key_name(c, st[i]);
       size_t wl = wn ? strlen(wn) : 0;
       if (ci >= 0 && class_is_syserr(c, ci) && wn &&
           (sp_streq(wn, "Errno") || (wl > 7 && sp_streq(wn + wl - 7, "__Errno"))))
@@ -21216,7 +21216,7 @@ static void refuse_syserr_errno_const(Compiler *c) {
     int tg = nt_ref(c->nt, ks[i], "target");
     int par = tg >= 0 ? nt_ref(c->nt, tg, "parent") : -1;
     const char *pn = par >= 0 ? nt_str(c->nt, par, "name") : NULL;
-    if (tg >= 0 && sp_streq(nt_key_name(c->nt, tg), "Errno") && pn &&
+    if (tg >= 0 && sp_streq(key_name(c, tg), "Errno") && pn &&
         class_is_syserr(c, const_node_class_index(c, par)))
       unsupported_feature(c, ks[i], "an Errno constant defined in a subclass of SystemCallError "
                                     "(its errno is read from the Errno class above it)");
@@ -21998,7 +21998,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         if (sc >= 0) {
           NodeKind sk = nt_kind(c->nt, sc);
           if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode)
-            par = nt_key_name(c->nt, sc);
+            par = key_name(c, sc);
           /* a builtin exception by its whole path (Errno::ENOENT) */
           const char *bpar = superclass_builtin_exc_name(c->nt, sc);
           if (bpar) par = bpar;

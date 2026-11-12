@@ -2653,7 +2653,7 @@ int an_program_names_name_error(Compiler *c) {
   memo_nt = c->nt; memo = 0;
   for (int id = 0; id < c->nt->count && !memo; id++) {
     if (nt_kind(c->nt, id) != NK_ConstantReadNode && nt_kind(c->nt, id) != NK_ConstantPathNode) continue;
-    const char *n = nt_key_name(c->nt, id);
+    const char *n = key_name(c, id);
     if (n && (sp_streq(n, "NameError") || sp_streq(n, "NoMethodError"))) memo = 1;
   }
   return memo;
@@ -4852,7 +4852,7 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
     const char *rty = nt_type(nt, recv);
     NodeKind rk = nt_kind(nt, recv);
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Time") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Time") &&
         (sp_streq(name, "now") || sp_streq(name, "at") || sp_streq(name, "local") ||
          sp_streq(name, "mktime") || sp_streq(name, "utc") || sp_streq(name, "gm") ||
          sp_streq(name, "new")))
@@ -4861,39 +4861,39 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
        program's Time has its own class method of that name */
     if (time_strict_parser_call(c, id)) { *out = TY_TIME; return 1; }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "GC") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "GC") &&
         (sp_streq(name, "start") || sp_streq(name, "compact")))
       { *out = TY_NIL; return 1; }
     /* GC.total_time: the collector's accumulated time, in nanoseconds;
        GC.count: the collections so far */
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "GC") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "GC") &&
         (sp_streq(name, "total_time") || sp_streq(name, "count")) && argc == 0)
       { *out = TY_INT; return 1; }
     /* Encoding.find(name): a boxed Encoding (nil for "internal") */
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Encoding") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Encoding") &&
         sp_streq(name, "find") && argc == 1)
       { *out = TY_POLY; return 1; }
     /* Encoding.list: an Array of them */
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Encoding") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Encoding") &&
         sp_streq(name, "list") && argc == 0)
       { *out = TY_POLY_ARRAY; return 1; }
     /* Warning[] / Warning[]= / Warning.warn (codegen_call.c's arm) */
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Warning")) {
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Warning")) {
       if (sp_streq(name, "[]")) { *out = TY_BOOL; return 1; }
       if (sp_streq(name, "[]=")) { *out = TY_POLY; return 1; }   /* the assignment's value: the RHS, boxed */
       if (sp_streq(name, "warn")) { *out = TY_NIL; return 1; }
     }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "GC") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "GC") &&
         sp_streq(name, "stat"))
       /* GC.stat(key) is the one statistic */
       { *out = argc == 1 && nt_kind(nt, argv[0]) != NK_KeywordHashNode ? TY_INT : TY_STR_INT_HASH; return 1; }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Process")) {
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Process")) {
       if (sp_streq(name, "times") && argc == 0) { *out = TY_TMS; return 1; }
       if (sp_streq(name, "pid") || sp_streq(name, "ppid") ||
           sp_streq(name, "uid") || sp_streq(name, "gid") ||
@@ -4914,11 +4914,11 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
       }
     }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Integer") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Integer") &&
         sp_streq(name, "sqrt"))
       { *out = TY_INT; return 1; }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Marshal")) {
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Marshal")) {
       if (sp_streq(name, "dump") && argc == 1) { *out = TY_STRING; return 1; }
       /* Marshal.dump(obj, io) writes the bytes to io and answers io (#4112) */
       if (sp_streq(name, "dump") && argc == 2) { *out = TY_IO; return 1; }
@@ -4933,7 +4933,7 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
       if (vrt == TY_POLY || vrt == TY_CLASS) { *out = TY_POLY; return 1; }
     }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Math") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Math") &&
         (sp_streq(name, "sin") || sp_streq(name, "cos") || sp_streq(name, "tan") ||
          sp_streq(name, "asin") || sp_streq(name, "acos") || sp_streq(name, "atan") ||
          sp_streq(name, "atan2") || sp_streq(name, "sinh") || sp_streq(name, "cosh") ||
@@ -4946,18 +4946,18 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
          sp_streq(name, "gamma")))
       { *out = TY_FLOAT; return 1; }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Math") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Math") &&
         (sp_streq(name, "lgamma") || sp_streq(name, "frexp")) && argc == 1)
       { *out = TY_POLY_ARRAY; return 1; }  /* [log(|gamma|), sign] / [fraction, exponent] */
     /* JSON.generate/dump return type comes from the native binding
        (packages/json, inferred in the FFI/native block above), not a hardcoded
        arm. */
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir") &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Dir") &&
         (is_exist_alias(name)))
       { *out = TY_BOOL; return 1; }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir")) {
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Dir")) {
       if (is_dir_blockless_iter(name) && nt_ref(nt, id, "block") < 0 &&
           (an_builtin_only || cplan_const_user(c, id, recv, 1).mi < 0))
         { *out = TY_ENUMERATOR; return 1; }
@@ -4967,9 +4967,9 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
         { *out = TY_INT; return 1; }
     }
     if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) &&
-        (sp_streq(nt_key_name(nt, recv), "File") ||
-         sp_streq(nt_key_name(nt, recv), "FileTest"))) {
+        key_name(c, recv) &&
+        (sp_streq(key_name(c, recv), "File") ||
+         sp_streq(key_name(c, recv), "FileTest"))) {
       if (sp_streq(name, "basename") || sp_streq(name, "dirname") || sp_streq(name, "extname") ||
           sp_streq(name, "read") || sp_streq(name, "binread") || sp_streq(name, "expand_path") ||
           sp_streq(name, "join") || sp_streq(name, "realpath") ||
@@ -5015,8 +5015,8 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
         { *out = TY_POLY; return 1; }
       }
     }
-    if (rk == NK_ConstantReadNode && nt_key_name(nt, recv) &&
-        sp_streq(nt_key_name(nt, recv), "Addrinfo") && sp_feature_required("socket")) {
+    if (rk == NK_ConstantReadNode && key_name(c, recv) &&
+        sp_streq(key_name(c, recv), "Addrinfo") && sp_feature_required("socket")) {
       if (((sp_streq(name, "tcp") || sp_streq(name, "udp")) && argc == 2) ||
           ((sp_streq(name, "ip") || sp_streq(name, "unix")) && argc == 1))
         { *out = TY_ADDRINFO; return 1; }
@@ -5024,7 +5024,7 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
     /* BasicSocket.do_not_reverse_lookup, on any socket class; the writer
        answers its argument */
     if (rk == NK_ConstantReadNode && sp_feature_required("socket") &&
-        io_family_name(nt_key_name(nt, recv)) && !is_io_class_name(nt_key_name(nt, recv))) {
+        io_family_name(key_name(c, recv)) && !is_io_class_name(key_name(c, recv))) {
       int skc = const_node_class_index(c, recv);
       if (skc < 0 || call_target(c, id, skc, name, CT_CMETHOD, NULL) < 0) {
         if (sp_streq(name, "do_not_reverse_lookup") && argc == 0) { *out = TY_BOOL; return 1; }
@@ -5038,8 +5038,8 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
           { *out = TY_STRING; return 1; }
       }
     }
-    if (rk == NK_ConstantReadNode && nt_key_name(nt, recv) &&
-        sp_streq(nt_key_name(nt, recv), "Socket") && sp_feature_required("socket")) {
+    if (rk == NK_ConstantReadNode && key_name(c, recv) &&
+        sp_streq(key_name(c, recv), "Socket") && sp_feature_required("socket")) {
       if (sp_streq(name, "gethostname") && argc == 0) { *out = TY_STRING; return 1; }
       /* Socket.unix / Socket.tcp: a connected Socket handle (#9934) */
       if ((sp_streq(name, "unix") && argc == 1) || (sp_streq(name, "tcp") && argc == 2)) { *out = TY_IO; return 1; }
@@ -5056,7 +5056,7 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
     }
     /* a builtin class's own methods (IO.pipe, IO.select): its class-side rows */
     if (rk == NK_ConstantReadNode) {
-      const BuiltinClassOp *cop = cplan_builtin_class_row(c, id, nt_key_name(nt, recv));
+      const BuiltinClassOp *cop = cplan_builtin_class_row(c, id, key_name(c, recv));
       if (cop && cop->op.result != TY_UNKNOWN) {
         if (an_bop_records(c, id)) c->bop_inf[id] = &cop->op;
         *out = cop->op.result;
@@ -5075,7 +5075,7 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
     /* Fiber.new {} / Thread.new {} / Fiber.current etc.
        Handles both bare Const and ::Const path forms. */
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-      const char *cn2 = nt_key_name(nt, recv);
+      const char *cn2 = key_name(c, recv);
       if (cn2 && sp_streq(name, "new") && sp_streq(cn2, "Enumerator") &&
           nt_ref(nt, id, "block") >= 0) { *out = TY_ENUMERATOR; return 1; }
       if (cn2 && sp_streq(name, "new") && sp_streq(cn2, "Fiber")) { *out = TY_FIBER; return 1; }
@@ -5174,7 +5174,7 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
 
   /* Dir.new / Dir.open and the Dir handle instance surface (#2821) */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir") &&
+      key_name(c, recv) && sp_streq(key_name(c, recv), "Dir") &&
       (is_open_constructor(name)) && argc >= 1) {
     int dblk = nt_ref(nt, id, "block");
     if (dblk < 0) { *out = TY_DIR; return 1; }
@@ -8204,7 +8204,7 @@ int node_is_scope_tail(Compiler *c, int mi, int id) {
 /* A Kernel method that runs its block: loop, catch and throw, instance_eval and instance_exec, a trampoline's block (infer_call_inner's rules, in their order) */
 static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, TyKind rt, TyKind *out) {
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      is_env_const(nt_key_name(nt, recv)) && !comp_const(c, "ENV") &&
+      is_env_const(key_name(c, recv)) && !comp_const(c, "ENV") &&
       bop_share_named(BOP_ENV, name) == BSH_FETCH) {
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0) {
@@ -8650,7 +8650,7 @@ static int infer_regexp_call(Compiler *c, int id, const NodeTable *nt, const cha
 
   /* Regexp class methods */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Regexp")) {
+      key_name(c, recv) && sp_streq(key_name(c, recv), "Regexp")) {
     if ((sp_streq(name, "escape") || sp_streq(name, "quote")) && argc >= 1) { *out = TY_STRING; return 1; }
     if (sp_streq(name, "union")) { *out = TY_REGEX; return 1; }  /* argc 0 = the never-matching /(?!)/ */
     if (sp_streq(name, "last_match") && argc == 0) { *out = TY_MATCHDATA; return 1; }
@@ -8711,7 +8711,7 @@ static int infer_constant_query_call(Compiler *c, int id, const NodeTable *nt, c
   /* A user singleton's return type wins over the builtin's, just as its
      call plan wins in emission and sharing. Inference reads a fresh plan. */
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
-  const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_key_name(nt, recv) : NULL;
+  const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? key_name(c, recv) : NULL;
   if (!an_builtin_only) {
     const CallPlan pl = cplan_const_user(c, id, recv, 1);
     if (pl.mi >= 0) {
@@ -9838,7 +9838,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   { TyKind ed; if (recv < 0 && infer_enum_desugar_call(name, argc, &ed)) return ed; }
   /* Dir surface (#2823, #2828, #2830) */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir") && (an_builtin_only || cplan_const_user(c, id, recv, 1).mi < 0)) {
+      key_name(c, recv) && sp_streq(key_name(c, recv), "Dir") && (an_builtin_only || cplan_const_user(c, id, recv, 1).mi < 0)) {
     if (sp_streq(name, "empty?") && argc == 1) return TY_BOOL;
     if (sp_streq(name, "home") && argc == 1) return TY_STRING;
     if (sp_streq(name, "glob") && (argc == 1 || argc == 2)) return TY_STR_ARRAY;
@@ -9873,8 +9873,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   }
   if (recv >= 0) {
     NodeKind rrk = nt_kind(nt, recv);
-    if (rrk == NK_ConstantReadNode && nt_key_name(nt, recv) &&
-        sp_streq(nt_key_name(nt, recv), "Complex") &&
+    if (rrk == NK_ConstantReadNode && key_name(c, recv) &&
+        sp_streq(key_name(c, recv), "Complex") &&
         (sp_streq(name, "polar") || sp_streq(name, "rect") || sp_streq(name, "rectangular")))
       return TY_COMPLEX;
   }
@@ -10117,7 +10117,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   /* Signal.trap / Signal.list / Signal.signame; Process.kill (#2735, #2750) */
   if (recv >= 0 && nt_type(nt, recv) &&
       (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
-    const char *rname = nt_key_name(nt, recv);
+    const char *rname = key_name(c, recv);
     if (rname && sp_streq(rname, "ENV")) {
       if (sp_streq(name, "class")) return TY_CLASS;
       if (sp_streq(name, "frozen?")) return TY_BOOL;
@@ -10192,7 +10192,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   }
   /* ENV direct arms (#2743, #2746): typed results so p/interp accept them */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode) {
-    const char *rn = nt_key_name(nt, recv);
+    const char *rn = key_name(c, recv);
     if (rn && sp_streq(rn, "ENV")) {
       if (sp_streq(name, "to_s")) return TY_STRING;
       /* a non-String key raises TypeError; type the (diverging) call poly */
@@ -10492,7 +10492,7 @@ static int an_empty_container_new(Compiler *c, int b) {
   const char *nm = nt_str(nt, b, "name");
   int r = nt_ref(nt, b, "receiver");
   if (!nm || !sp_streq(nm, "new") || r < 0 || nt_kind(nt, r) != NK_ConstantReadNode) return 0;
-  const char *rn = nt_key_name(nt, r);
+  const char *rn = key_name(c, r);
   int a = nt_ref(nt, b, "arguments");
   int an = 0; if (a >= 0) nt_arr(nt, a, "arguments", &an);
   int k = 0;
@@ -12687,7 +12687,7 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
       int cid = -1, want_cm = 0;
       if (ty_is_object(comp_ntype_settled(c, recv))) cid = ty_object_class(comp_ntype_settled(c, recv));
       else if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
-        const char *cn = nt_key_name(nt, recv);
+        const char *cn = key_name(c, recv);
         cid = cn ? const_node_class_index(c, recv) : -1; want_cm = 1;
       }
       else if (recv < 0) { Scope *cs = comp_scope_of(c, id); cid = cs ? cs->class_id : -1; want_cm = cs ? cs->is_cmethod : 0; }
@@ -12762,8 +12762,8 @@ int an_program_news_object(Compiler *c) {
   for (int n = comp_kind_first(c, NK_CallNode); n >= 0 && !found; n = comp_kind_next(c, n)) {
     if (nt_kind(nt, n) != NK_CallNode || !nt_str(nt, n, "name") || !sp_streq(nt_str(nt, n, "name"), "new")) continue;
     int r = nt_ref(nt, n, "receiver");
-    found = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && nt_key_name(nt, r) &&
-            sp_streq(nt_key_name(nt, r), "Object");
+    found = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && key_name(c, r) &&
+            sp_streq(key_name(c, r), "Object");
   }
   memo_c = c; memo = found;
   return found;

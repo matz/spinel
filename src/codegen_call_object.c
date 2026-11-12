@@ -2923,7 +2923,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
     }
     /* TrueClass.new / FalseClass.new / NilClass.new: no allocator */
     if (nm0 && sp_streq(nm0, "new") && rv0 >= 0 && nt_kind(nt, rv0) == NK_ConstantReadNode) {
-      const char *cn0 = nt_key_name(nt, rv0);
+      const char *cn0 = key_name(c, rv0);
       if (cn0 && (is_immediate_class_name(cn0))) {
         buf_printf(b, "(sp_raise_cls(\"NoMethodError\","
                       " (&(\"\\xff\" \"undefined method 'new' for class %s\")[1])), 0)", cn0);

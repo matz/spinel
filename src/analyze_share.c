@@ -393,7 +393,7 @@ static int sh_yielder_new(Compiler *c, int u) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, u, "receiver");
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
-  const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_key_name(nt, r) : NULL;
+  const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? key_name(c, r) : NULL;
   const char *nm = nt_str(nt, u, "name");
   return cn && nm && bop_share_named(BOP_ANY_RECV, nm) == BSH_NEW && const_node_class_index(c, r) < 0 &&
          bop_share_named(BOP_CLASS_NEW, cn) == BSH_NEW_YIELDER;
@@ -456,7 +456,7 @@ static void sh_ivar_writes_build(ShareFacts *F, Compiler *c) {
       const char *old = argc >= 2 ? sh_lit_name(nt, argv[1]) : NULL;
       if (!old || name_is_plain_setter(old)) F->ivw_all = 1;
     }
-    else if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_marshal_const(nt_key_name(nt, r)))
+    else if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_marshal_const(key_name(c, r)))
       F->ivw_all = 1;
   }
   NT_FOREACH_KIND(nt, NK_AliasMethodNode, u) {
@@ -590,7 +590,7 @@ int share_call_stores_block(Compiler *c, int n) {
   int recv = nt_ref(nt, n, "receiver");
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    const char *cn = nt_key_name(nt, recv);
+    const char *cn = key_name(c, recv);
     return cn && sp_streq(nm, "new") && (sp_streq(cn, "Array") || sp_streq(cn, "Hash"));
   }
   static const TyKind fams[] = { BOP_ANY_ARRAY, BOP_ANY_HASH, BOP_ANY_RECV };
@@ -820,7 +820,7 @@ static ShareFacts *sh_memo_build(Compiler *c) {
   if (!F->blk_dyn || !F->blk_unk || !F->fresh_blk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   memset(F->fresh_blk, -1, ns);
   NT_FOREACH_KIND(nt, NK_ConstantReadNode, cr)
-    if (!F->ostruct && nt_key_name(nt, cr) && sp_streq(nt_key_name(nt, cr), "OpenStruct")) F->ostruct = 1;
+    if (!F->ostruct && key_name(c, cr) && sp_streq(key_name(c, cr), "OpenStruct")) F->ostruct = 1;
   sh_mb_build(F, c);
   sh_index_blocks(F, c);
   return F;
@@ -1624,7 +1624,7 @@ static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
   int rcv = nt_ref(nt, n, "receiver");
   const char *cn = nt_str(nt, n, "name");
   if (cn && rcv >= 0 && nt_ref(nt, n, "block") < 0 && !sh_has_targets(c, n)) {
-    if (nt_kind(nt, rcv) == NK_ConstantReadNode && is_env_const(nt_key_name(nt, rcv)) && is_aref_name(cn))
+    if (nt_kind(nt, rcv) == NK_ConstantReadNode && is_env_const(key_name(c, rcv)) && is_aref_name(cn))
       return 1;
     if ((is_receiver_conversion(cn) || is_freeze_name(cn)) && call_plain_argc(c, n) == 0)
       return share_value_fresh(c, rcv, depth + 1);

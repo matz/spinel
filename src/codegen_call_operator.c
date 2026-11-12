@@ -370,7 +370,7 @@ static int emit_isa_runtime_flag_class(Compiler *c, const NodeTable *nt, const c
   /* Queue and SizedQueue are one runtime object told apart by its bound, so
      these two cannot be answered statically from TY_QUEUE alone -- a
      SizedQueue reported false for its own class (#3466). */
-  { const char *qcn = nt_key_name(nt, argv[0]);
+  { const char *qcn = key_name(c, argv[0]);
     if (eff_rt == TY_QUEUE && qcn &&
         (is_queue_class_name(qcn))) {
       int tq3 = ++g_tmp;
@@ -1303,7 +1303,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     /* a bool receiver's class depends on its VALUE: true is a TrueClass,
        false a FalseClass (ty_matches_class carries only the type) */
     {
-      const char *bcn = nt_key_name(nt, argv[0]);
+      const char *bcn = key_name(c, argv[0]);
       if (rt == TY_BOOL && bcn &&
           (is_boolean_class_name(bcn))) {
         buf_puts(b, "(("); emit_expr(c, recv, b);
@@ -1517,7 +1517,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
   if (recv >= 0 && ty_is_object(rt) && argc == 1 &&
       (sp_streq(name, "is_a?") || sp_streq(name, "kind_of?"))) {
     const char *acn = nt_kind(nt, argv[0]) == NK_ConstantReadNode
-                        ? nt_key_name(nt, argv[0]) : NULL;
+                        ? key_name(c, argv[0]) : NULL;
     if (acn && is_object_root(acn)) {
       buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 1)");
       return 1;

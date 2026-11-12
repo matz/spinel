@@ -730,6 +730,10 @@ int elab_class_candidates(Compiler *c, int node, int **out);   /* the classes a 
    Object's; below -1 not known) and the name (NULL outside the load
    phase's walk) */
 int elab_header_class(const Compiler *c, int node, int *owner, const char **leaf);
+/* The name a class or module header's constant path (or a read) is keyed by,
+   asked of the compiler: nt_key_name, where the readers move from the name
+   the header was stamped with to the class it opened (#10793). */
+const char *key_name(const Compiler *c, int n);
 /* ...and the class a class builder's write opens (`X = Struct.new(:a) do`,
    `k = Data.define(:a) do`), -1 for a write no builder made a class at */
 int elab_builder_class(Compiler *c, int node);

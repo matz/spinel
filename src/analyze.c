@@ -1653,7 +1653,7 @@ void compute_reachable(Compiler *c, int typed) {
     const NodeKind *dk = class_def_kinds(&ndk);
     for (int dh = 0; dh < ndk; dh++) NT_FOREACH_KIND(c->nt, dk[dh], cid) {
       int sup = class_def_is_class(c->nt, cid) ? class_def_super(c->nt, cid) : -1;
-      const char *sn = sup >= 0 ? nt_key_name(c->nt, sup) : NULL;
+      const char *sn = sup >= 0 ? key_name(c, sup) : NULL;
       if (sn && sp_streq(sn, "Numeric")) has_unum = 1;
     }
     c->uses_kconv = has_kint || has_kflt || has_unum;
@@ -1693,7 +1693,7 @@ void compute_reachable(Compiler *c, int typed) {
       int recv = nt_ref(c->nt, id, "receiver");
       NodeKind kind = recv >= 0 ? nt_kind(c->nt, recv) : NK_NONE;
       if (kind != NK_ConstantReadNode && !(kind == NK_ConstantPathNode && nt_ref(c->nt, recv, "parent") < 0)) continue;
-      const char *receiver = nt_key_name(c->nt, recv);
+      const char *receiver = key_name(c, recv);
       if (args >= 0) nt_arr(c->nt, args, "arguments", &argc);
       if (argc > 1 && name && sp_streq(name, "parse") && receiver && sp_streq(receiver, "JSON")) MARK_NAME("to_int");
     }
@@ -1831,7 +1831,7 @@ static int marshal_read_as_value(Compiler *c) {
   int *par = an_parent_map(nt), ans = 0;
   for (int id = 0; id < nt->count && !ans; id++) {
     if (nt_kind(nt, id) != NK_ConstantReadNode) continue;
-    const char *nm = nt_key_name(nt, id);
+    const char *nm = key_name(c, id);
     if (!is_marshal_const(nm)) continue;
     int p = par ? par[id] : -1;
     const char *meth = p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id ? nt_str(nt, p, "name") : NULL;
@@ -1893,7 +1893,7 @@ void compute_instantiated(Compiler *c, int early) {
        class, with each one's methods and every poly arm (#10592). */
     if (recv >= 0 && (sp_streq(name, "load") || sp_streq(name, "restore"))) {
       NodeKind rk = nt_kind(nt, recv);
-      const char *rn = nt_key_name(nt, recv);
+      const char *rn = key_name(c, recv);
       Scope *encl = comp_scope_of(c, id);
       if (rk == NK_ConstantReadNode && rn && sp_streq(rn, "Marshal") && (!encl || encl->reachable)) {
         disable = 1; break;
@@ -2696,7 +2696,7 @@ int an_program_makes_dir(Compiler *c) {
   for (int id = 0; id < nt->count && !memo; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) continue;
-    const char *nm = nt_key_name(nt, id);
+    const char *nm = key_name(c, id);
     if (nm && sp_streq(nm, "Dir")) memo = 1;
   }
   memo_nt = nt; memo_n = nt->count;
@@ -3419,7 +3419,7 @@ static void desugar_env_values(Compiler *c) {
   int n0 = comp_const(c, "ENV") ? 0 : nt->count;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_ConstantReadNode || ok[id]) continue;
-    const char *nm = nt_key_name(nt, id);
+    const char *nm = key_name(c, id);
     if (!nm || !sp_streq(nm, "ENV")) continue;
     nt_node_set_type(nt, id, "CallNode");
     /* (ENV itself as a value, a store into which copies as ENV's does:
@@ -3852,7 +3852,7 @@ static int dyn_def_reaches_class_bodies(Compiler *c, int h) {
     if (pk == NK_SingletonClassNode || pk == NK_ModuleNode || pk == NK_BlockNode) return 1;
     if (pk == NK_ClassNode) {
       int cp = nt_ref(nt, p, "constant_path");
-      const char *cn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
+      const char *cn = cp >= 0 ? key_name(c, cp) : NULL;
       return !cn || sp_streq(cn, "Module") || sp_streq(cn, "Class");
     }
     if (pk == NK_DefNode) return 1;
@@ -6591,7 +6591,7 @@ void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
   QCRebase *own = NULL;
   if (class_def_opens_cref(nt, node) && depth < QC_MAXDEPTH) {
     int cp = nt_ref(nt, node, "constant_path");
-    const char *mn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
+    const char *mn = cp >= 0 ? key_name(c, cp) : NULL;
     if (mn) {
       /* `class A::B`: B is defined in A, so it is recorded as a write under
          A as well as under the module it is written in -- `class X::Foo`
@@ -6857,8 +6857,8 @@ static void qc_refuse_conditional_builder(Compiler *c) {
     for (int h = 0; h < 2; h++)
       NT_FOREACH_KIND(nt, HK[h], hd) {
         int cp = nt_ref(nt, hd, "constant_path");
-        if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_key_name(nt, cp) ||
-            !sp_streq(nt_key_name(nt, cp), wn) || qc_enclosing_body(nt, par, hd) != body)
+        if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !key_name(c, cp) ||
+            !sp_streq(key_name(c, cp), wn) || qc_enclosing_body(nt, par, hd) != body)
           continue;
         /* A header that runs first makes its own class, and the write then
            puts the built class in its place: the header's methods are not
@@ -12889,7 +12889,7 @@ static int desugar_hash_new_capacity(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     int r = nt_ref(nt, id, "receiver");
     if (!nm || !sp_streq(nm, "new") || r < 0 || nt_kind(nt, r) != NK_ConstantReadNode ||
-        !nt_key_name(nt, r) || !sp_streq(nt_key_name(nt, r), "Hash")) continue;
+        !key_name(c, r) || !sp_streq(key_name(c, r), "Hash")) continue;
     int argsn = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
     if (nt_argv_kwh(nt, av, an) < 0) continue;
@@ -12938,7 +12938,7 @@ static int pin_arg_position_hash_new(Compiler *c) {
       if (arecv < 0) continue;
       NodeKind rk = nt_kind(nt, arecv);
       if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
-      const char *cn = nt_key_name(nt, arecv);
+      const char *cn = key_name(c, arecv);
       if (cn && sp_streq(cn, "Hash")) {
         if (cplan_const_user(c, a, arecv, 1).mi >= 0) continue;
         nt_node_set_str(nt, a, "name", "__hash_new_default");
@@ -12998,7 +12998,7 @@ int desugar_kernel_recv(Compiler *c) {
     if (recv < 0) continue;
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_ConstantReadNode) continue;
-    const char *rn = nt_key_name(nt, recv);
+    const char *rn = key_name(c, recv);
     if (!rn || !sp_streq(rn, "Kernel")) continue;
     const char *mn = nt_str(nt, id, "name");
     if (!mn || !is_kernel_module_function(mn) || cplan_const_user(c, id, recv, 1).mi >= 0) continue;
@@ -13366,7 +13366,7 @@ static int desugar_class_literal_ctors(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
     if (nt_ref(nt, id, "block") >= 0) continue;
-    const char *rn = nt_key_name(nt, recv);
+    const char *rn = key_name(c, recv);
     const char *mn = nt_str(nt, id, "name");
     if (!rn || !mn) continue;
     int ca = nt_ref(nt, id, "arguments");
@@ -13524,8 +13524,8 @@ int desugar_include_math(Compiler *c) {
     const int *aa = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
     for (int j = 0; j < an; j++) {
       NodeKind ak = nt_kind(nt, aa[j]);
-      if (ak == NK_ConstantReadNode && nt_key_name(nt, aa[j]) &&
-          sp_streq(nt_key_name(nt, aa[j]), "Math")) { has_include = 1; break; }
+      if (ak == NK_ConstantReadNode && key_name(c, aa[j]) &&
+          sp_streq(key_name(c, aa[j]), "Math")) { has_include = 1; break; }
     }
   }
   if (!has_include) return 0;
@@ -13778,7 +13778,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
   if (nm && sp_streq(nm, "new")) {
     int prv = nt_ref(nt, id, "receiver");
     int ppar = prv >= 0 && nt_kind(nt, prv) == NK_ConstantPathNode ? nt_ref(nt, prv, "parent") : -1;
-    if (ppar >= 0 && nt_key_name(nt, prv) && sp_streq(nt_key_name(nt, prv), "Product") &&
+    if (ppar >= 0 && key_name(c, prv) && sp_streq(key_name(c, prv), "Product") &&
         nt_kind(nt, ppar) == NK_ConstantReadNode && nt_str(nt, ppar, "name") &&
         sp_streq(nt_str(nt, ppar, "name"), "Enumerator")) {
       nt_node_set_ref(nt, id, "receiver", ppar);
@@ -13795,7 +13795,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
   if (nm && sp_streq(nm, "new")) {
     int prv = nt_ref(nt, id, "receiver");
     int ppar = prv >= 0 && nt_kind(nt, prv) == NK_ConstantPathNode ? nt_ref(nt, prv, "parent") : -1;
-    if (ppar >= 0 && nt_key_name(nt, prv) && sp_streq(nt_key_name(nt, prv), "Chain") &&
+    if (ppar >= 0 && key_name(c, prv) && sp_streq(key_name(c, prv), "Chain") &&
         nt_kind(nt, ppar) == NK_ConstantReadNode && nt_str(nt, ppar, "name") &&
         sp_streq(nt_str(nt, ppar, "name"), "Enumerator") && nt_ref(nt, id, "block") < 0) {
       int cargs = nt_ref(nt, id, "arguments");
@@ -14143,7 +14143,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     int krc = nt_ref(nt, id, "receiver");
     NodeKind krt2_k = nt_kind(nt, krc);
     if (krt2_k == NK_ConstantReadNode &&
-        nt_key_name(nt, krc) && sp_streq(nt_key_name(nt, krc), "Hash")) {
+        key_name(c, krc) && sp_streq(key_name(c, krc), "Hash")) {
       int ka = nt_ref(nt, id, "arguments");
       int kac = 0;
       const int *kav = ka >= 0 ? nt_arr(nt, ka, "arguments", &kac) : NULL;
@@ -14976,7 +14976,7 @@ static int desugar_yielder_block_arg(Compiler *c) {
     int erecv = nt_ref(nt, en, "receiver");
     if (!enm || !sp_streq(enm, "new") || erecv < 0) continue;
     if (nt_kind(nt, erecv) != NK_ConstantReadNode && nt_kind(nt, erecv) != NK_ConstantPathNode) continue;
-    const char *ecn = nt_key_name(nt, erecv);
+    const char *ecn = key_name(c, erecv);
     if (!ecn || !sp_streq(ecn, "Enumerator")) continue;
     int eblk = nt_ref(nt, en, "block");
     if (eblk < 0 || nt_kind(nt, eblk) != NK_BlockNode) continue;
@@ -15396,7 +15396,7 @@ int desugar_socket_open_gate(Compiler *c, LowerCtx *lc) {
   for (int id = 0; id < lc->n0; id++) {
     if (nt_kind(nt, id) != NK_ClassNode) continue;
     int cp = nt_ref(nt, id, "constant_path");
-    if (cp >= 0 && is_socket_constructor_class(nt_key_name(nt, cp))) return 0;
+    if (cp >= 0 && is_socket_constructor_class(key_name(c, cp))) return 0;
   }
   return 1;
 }
@@ -15547,7 +15547,7 @@ static int desugar_file_stat_new(Compiler *c) {
     if (!nm || !sp_streq(nm, "new")) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_kind(nt, recv) != NK_ConstantPathNode) continue;
-    const char *cn = nt_key_name(nt, recv);
+    const char *cn = key_name(c, recv);
     if (!cn || !sp_streq(cn, "Stat")) continue;
     int par = nt_ref(nt, recv, "parent");
     const char *pn = par >= 0 ? nt_str(nt, par, "name") : NULL;
@@ -20254,7 +20254,7 @@ static const char *nng_guard_param(Compiler *c, Scope *s, int st) {
 int class_has_subclass(Compiler *c, int ocid);
 static TyKind isa_narrow_type(Compiler *c, int arg, const Scope *s) {
   const NodeTable *nt = c->nt;
-  const char *cn = nt_key_name(nt, arg);
+  const char *cn = key_name(c, arg);
   NodeKind ak = nt_kind(nt, arg);
   if (!cn) return TY_UNKNOWN;
   /* A user class with no subclass: is_a?(K) proves the exact class, so the
@@ -21517,7 +21517,7 @@ static void mark_mixed_key_hash_locals(Compiler *c) {
         sp_streq(nt_str(nt, val, "name"), "new")) {
       int hr = nt_ref(nt, val, "receiver");
       hash_new = hr >= 0 && nt_kind(nt, hr) == NK_ConstantReadNode &&
-                 nt_key_name(nt, hr) && sp_streq(nt_key_name(nt, hr), "Hash");
+                 key_name(c, hr) && sp_streq(key_name(c, hr), "Hash");
     }
     const char *lname = nt_str(nt, id, "name");
     const Scope *ls = comp_scope_of(c, id);
@@ -22178,7 +22178,7 @@ static int widen_mixed_key_hash_slots(Compiler *c) {
         const char *cn = nt_str(nt, val, "name");
         int hr = nt_ref(nt, val, "receiver");
         if (!cn || !sp_streq(cn, "new") || hr < 0 || nt_kind(nt, hr) != NK_ConstantReadNode ||
-            !nt_key_name(nt, hr) || !sp_streq(nt_key_name(nt, hr), "Hash")) continue;
+            !key_name(c, hr) || !sp_streq(key_name(c, hr), "Hash")) continue;
       }
       else if (vkd != NK_HashNode) continue;
       HashKeySlot hs;
@@ -22259,7 +22259,7 @@ static void hash_key_evidence(Compiler *c, int w, const char *cn, const char *ln
   }
   else {
     if (nt_kind(nt, wr) != NK_ConstantReadNode) return;
-    const char *rn = nt_key_name(nt, wr);
+    const char *rn = key_name(c, wr);
     if (!rn || !sp_streq(rn, cn)) return;
   }
   int wa = nt_ref(nt, w, "arguments");
@@ -22273,7 +22273,7 @@ static void mark_empty_hash_const_writes(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_ConstantWriteNode) continue;
-    const char *cn = nt_key_name(nt, id);
+    const char *cn = key_name(c, id);
     int v = nt_ref(nt, id, "value");
     if (!cn || v < 0 || v >= c->node_cap) continue;
     /* `EMPTY = {}.freeze` binds the same literal as `EMPTY = {}` (#4510) */
@@ -26872,7 +26872,7 @@ static int share_default_apply(Compiler *c) {
     const int *argv = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
     if (recv < 0 || argc < 2 || nt_kind(c->nt, argv[1]) == NK_SplatNode ||
         (nt_kind(c->nt, recv) != NK_ConstantReadNode && nt_kind(c->nt, recv) != NK_ConstantPathNode) ||
-        !is_array_new(nt_key_name(c->nt, recv), nt_key_name(c->nt, n)) || !comp_scope_of(c, n)->reachable)
+        !is_array_new(key_name(c, recv), key_name(c, n)) || !comp_scope_of(c, n)->reachable)
       continue;
     changed |= strbuf_container_source_walk(c, n, 0, SB_DEMAND);
     infer_type(c, n);
@@ -29557,7 +29557,7 @@ static int param_borrow_builtin_new(Compiler *c, int n) {
   int recv = nt_ref(nt, n, "receiver"), blk = nt_ref(nt, n, "block");
   if (!name || !sp_streq(name, "new") || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return 0;
   if (blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode) return 0;
-  const char *cn = nt_key_name(nt, recv);
+  const char *cn = key_name(c, recv);
   if (!cn || (!sp_streq(cn, "Array") && !sp_streq(cn, "Hash"))) return 0;
   int cid = comp_builtin_class_named(c, cn);
   return cid < 0 || comp_method_in_class(c, cid, "initialize") < 0;
@@ -29733,7 +29733,7 @@ static int an_ruby_runs_unseen(Compiler *c) {
     if (recv >= 0) {
       NodeKind rk = nt_kind(nt, recv);
       if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
-      if (!(rn = nt_key_name(nt, recv))) continue;
+      if (!(rn = key_name(c, recv))) continue;
     }
     if (is_async_code_entry(rn, nt_str(nt, n, "name"))) return 1;
   }
@@ -31064,7 +31064,7 @@ static int dyn_call_hands_on(Compiler *c, int call, const char *un, int ur, int 
   else {
     NodeKind rk = nt_kind(nt, ur);
     TyKind rt = comp_ntype(c, ur);
-    int ci = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && nt_key_name(nt, ur)
+    int ci = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && key_name(c, ur)
                ? const_node_class_index(c, ur) : -1;
     if (ci >= 0) mi = call_target(c, call, ci, un, CT_CMETHOD, NULL);
     else if (ty_is_object(rt)) mi = call_target(c, call, ty_object_class(rt), un, 0, NULL);
@@ -33743,7 +33743,7 @@ int an_thread_arg_block(Compiler *c, int n) {
   if (!nm || r < 0) return -1;
   if (sp_streq(nm, "new")) {
     int b = nt_ref(nt, n, "block");
-    return nt_kind(nt, r) == NK_ConstantReadNode && sp_streq(nt_key_name(nt, r), "Thread") &&
+    return nt_kind(nt, r) == NK_ConstantReadNode && sp_streq(key_name(c, r), "Thread") &&
            b >= 0 && nt_kind(nt, b) == NK_BlockNode ? b : -1;
   }
   if (!sp_streq(nm, "resume")) return -1;
@@ -34376,7 +34376,7 @@ static int promote_spread_string_args(Compiler *c) {
     /* `C.new(*s)` binds C's initialize */
     int ctor = -1, r = nt_ref(nt, n, "receiver");
     if (sp_streq(nm, "new") && r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
-      int ci = nt_key_name(nt, r) ? const_node_class_index(c, r) : -1;
+      int ci = key_name(c, r) ? const_node_class_index(c, r) : -1;
       ctor = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
     }
     int first = ctor >= 0 ? ctor : dyn_scopes_named(c, nm);
@@ -34508,7 +34508,7 @@ static int fwd_call_target(Compiler *c, int u) {
   TyKind rt = comp_ntype(c, recv);
   if (ty_is_object(rt)) return call_target(c, u, ty_object_class(rt), nm, 0, NULL);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    int ci = nt_key_name(nt, recv) ? const_node_class_index(c, recv) : -1;
+    int ci = key_name(c, recv) ? const_node_class_index(c, recv) : -1;
     return ci >= 0 ? call_target(c, u, ci, nm, CT_CMETHOD, NULL) : -1;
   }
   return -1;
@@ -37479,7 +37479,7 @@ static const CArr *const_array(Compiler *c, const char *name) {
   for (int id = 0; id < nt->count && !bad; id++) {
     NodeKind k = nt_kind(nt, id);
     const char *wn = NULL; int v = -1;
-    if (k == NK_ConstantWriteNode) { wn = nt_key_name(nt, id); v = nt_ref(nt, id, "value"); }
+    if (k == NK_ConstantWriteNode) { wn = key_name(c, id); v = nt_ref(nt, id, "value"); }
     else if (k == NK_ConstantPathWriteNode) { int tg = nt_ref(nt, id, "target"); wn = tg >= 0 ? nt_str(nt, tg, "name") : NULL; v = nt_ref(nt, id, "value"); }
     else if (k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode || k == NK_ConstantOperatorWriteNode ||
              k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) wn = nt_str(nt, id, "name");
@@ -37518,8 +37518,8 @@ static const CArr *const_array(Compiler *c, const char *name) {
    with 0 <= K < len */
 static int const_array_index_in_range(Compiler *c, int recv, int idx) {
   const NodeTable *nt = c->nt;
-  if (!carr_is_read(nt, recv, nt_key_name(nt, recv))) return 0;
-  const CArr *ca = const_array(c, nt_key_name(nt, recv));
+  if (!carr_is_read(nt, recv, key_name(c, recv))) return 0;
+  const CArr *ca = const_array(c, key_name(c, recv));
   if (!ca || idx < 0) return 0;
   if (nt_kind(nt, idx) == NK_IntegerNode && !nt_str(nt, idx, "bigval")) {
     long long k = (long long)nt_int(nt, idx, "value", 0);
@@ -39153,8 +39153,8 @@ static void nn_structure(Compiler *c) {
   nn_no_ivar_facts = nn_no_ivar_slots;
   static const char *const async[] = { "Thread", "Queue", "SizedQueue", "Mutex", "Monitor", "ConditionVariable",
                                        "Signal", "ObjectSpace", NULL };
-  NT_FOREACH_KIND(nt, NK_ConstantReadNode, k) if (nn_name_in(nt_key_name(nt, k), async)) nn_no_ivar_facts = 1;
-  NT_FOREACH_KIND(nt, NK_ConstantPathNode, k) if (nn_name_in(nt_key_name(nt, k), async)) nn_no_ivar_facts = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, k) if (nn_name_in(key_name(c, k), async)) nn_no_ivar_facts = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, k) if (nn_name_in(key_name(c, k), async)) nn_no_ivar_facts = 1;
   NT_FOREACH_KIND(nt, NK_CallNode, a) {
     const char *an = nt_str(nt, a, "name");
     if (an && (sp_streq(an, "trap") || sp_streq(an, "define_finalizer"))) nn_no_ivar_facts = 1;
@@ -47251,7 +47251,7 @@ static void rewrite_array_subclass_calls(Compiler *c) {
       const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
       NodeKind ak = argc == 1 ? nt_kind(nt, av[0]) : NK_SplatNode;
       if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode &&
-          is_array_new(nt_key_name(nt, r), nt_key_name(nt, id)) &&
+          is_array_new(key_name(c, r), key_name(c, id)) &&
           (ak == NK_LocalVariableReadNode || ak == NK_InstanceVariableReadNode || ak == NK_SelfNode ||
            ak == NK_ClassVariableReadNode || ak == NK_GlobalVariableReadNode ||
            (ak == NK_CallNode && nt_ref(nt, av[0], "block") < 0)))
@@ -54388,7 +54388,7 @@ static void mark_native_str_operands(Compiler *c) {
     if (recv < 0 || !name || nt_ref(nt, n, "block") >= 0) continue;
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
-    const char *mod = nt_key_name(nt, recv);
+    const char *mod = key_name(c, recv);
     if (!mod || (ffi_find_func(c, mod, name) < 0 && comp_native_find(c, mod, name) < 0)) continue;
     int args = nt_ref(nt, n, "arguments");
     int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
@@ -54546,7 +54546,7 @@ static void an_presence_writes(Compiler *c, int id) {
     /* objects made without initialize: the order it assigns the ivars in says nothing of theirs */
     { int rr = nt_ref(nt, id, "receiver");
       if (is_allocate_name(nm) ||
-          (rr >= 0 && nt_kind(nt, rr) == NK_ConstantReadNode && is_marshal_load(nt_key_name(nt, rr), nm)))
+          (rr >= 0 && nt_kind(nt, rr) == NK_ConstantReadNode && is_marshal_load(key_name(c, rr), nm)))
         c->pres_noinit = 1; }
     if (is_ivar_set(nm) && k0 != NK_SymbolNode && k0 != NK_StringNode) c->pres_any = 1;
     else if (is_ivar_remove_name(nm) && (k0 == NK_SymbolNode || k0 == NK_StringNode))
@@ -54637,7 +54637,7 @@ static void an_presence_observe(Compiler *c, int id) {
   else if (r < 0 && is_text_print(nm)) {
     for (int i = 0; i < ac; i++) if (ty_is_hash(comp_ntype(c, av[i]))) an_presence_node(c, av[i], OBS_INSPECT);
   }
-  else if (ac >= 1 && r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_marshal_dump(nt_key_name(nt, r), nm))
+  else if (ac >= 1 && r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_marshal_dump(key_name(c, r), nm))
     an_presence_node(c, av[0], OBS_DUMP);
 }
 

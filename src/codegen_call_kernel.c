@@ -1520,7 +1520,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   {
     int erecv = nt_ref(nt, id, "receiver");
     NodeKind erk = nt_kind(nt, erecv);
-    const char *ern = (erk == NK_ConstantReadNode) ? nt_key_name(nt, erecv) : NULL;
+    const char *ern = (erk == NK_ConstantReadNode) ? key_name(c, erecv) : NULL;
     if (ern && sp_streq(ern, "ENV")) {
       const char *enm = nt_str(nt, id, "name");
       int eac = 0; const int *eav = call_args(nt, id, &eac);
@@ -1737,7 +1737,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   if (recv >= 0 && sp_streq(name, "[]") && argc == 1) {
     NodeKind rty2_k = nt_kind(nt, recv);
     if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_key_name(nt, recv);
+      const char *rn = key_name(c, recv);
       if (rn && sp_streq(rn, "ENV")) {
         buf_puts(b, "sp_env_str(getenv("); emit_env_str(c, argv[0], 0, b); buf_puts(b, "))");
         return 1;

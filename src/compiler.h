@@ -1886,11 +1886,12 @@ typedef struct {
      them (call_plan.c, mixin_copies_module); 0 for cls's chain; behind:
      1 + the method a guard entry's method_missing else arm stands for,
      the one behind the mixins that finds no method (guard_entry_make),
-     0 for none. Each name
+     0 for none; face: VF_NONE, or the visibility the arms of the versions
+     that are closed to it raise for (call_plan.h). Each name
      is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
      the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face; } *ver_entries;
   int nver_entries;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
@@ -1920,7 +1921,7 @@ typedef struct {
      count) and ver_names one scope-holding entry of each name (ver_entries_index) */
   int *ver_ix, *ver_ix_next, *ver_names, *ver_names_next;
   unsigned ver_ix_nb;
-  struct VerPin { int node, scope; } *ver_pins;
+  struct VerPin { int node, scope, vis; } *ver_pins;
   int nver_pins;
   /* the entries are made (ver_entries_build): the versions the calls get
      are kept, and a call that reaches a later prepend's copy binds its

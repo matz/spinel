@@ -847,12 +847,14 @@ int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint
 /* the visibility bit (1 public, 2 protected, 4 private) of main's own
    method `name` where node runs: a top-level def or alias, a method of
    Object's own; 0 where main has none there; -1 where the record cannot
-   tell (node in a method body, a def under a condition, an undef) */
+   tell (node in a method body, a def under a condition, an undef, an
+   Object entry of the name under a condition, an entry of either that may
+   run again before node) */
 int elab_main_method_vis_at(Compiler *c, int node, const char *name);
 /* Is main's def of `name` (a top-level def or alias) the live entry of
    Object's method table where node runs, rather than Object's own def?
    The later of the two answers: 1 main's, 0 Object's, -1 where the record
-   cannot tell. */
+   cannot tell (as elab_main_method_vis_at). */
 int elab_main_def_live_at(Compiler *c, int node, const char *name);
 /* ... when no change of it follows: elab_method_vis_at's answer at p, or -1
    where an entry of the name's histories along cls's superclass chain at or

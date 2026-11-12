@@ -4163,6 +4163,24 @@ static int lr_runs_again(Compiler *c, int node, LoadPoint p) {
     if (q.seq <= r->st[e].last) return 1;
   return 0;
 }
+/* ...for an entry of history h (past its visibility versions with
+   skip_vis) */
+static int lr_hist_runs_again(Compiler *c, const LrHist *h, LoadPoint p, int skip_vis) {
+  for (int i = h ? h->n - 1 : -1; i >= 0; i--)
+    if (!(skip_vis && h->v[i].kind == LR_VIS) && lr_runs_again(c, h->v[i].node, p)) return 1;
+  return 0;
+}
+
+/* Does history h hold an entry the version entries do not arm: a
+   visibility word (`private :m`), whose change they do not hold yet, or an
+   alias that makes no method of the program's (of a builtin's method, or of
+   one nothing answers: no version, since the builtin is not one)? The ask of
+   which entry is live then stays as it was. */
+static int lr_hist_unarmed(const LrHist *h) {
+  for (int i = 0; h && i < h->n; i++)
+    if (h->v[i].kind == LR_VIS || h->v[i].absent || (h->v[i].kind == LR_ALIAS && h->v[i].scope <= 0)) return 1;
+  return 0;
+}
 
 /* ...of a method: an undef stops the search (LR_STOP), a removal passes it
    on; a visibility change (`private :m`) counts only when vis asks for it.
@@ -4172,9 +4190,7 @@ static int lr_own(Compiler *c, const LrHist *h, const LrHist *t, LoadPoint p, in
   const LrDef *v = NULL;
   int o = lr_last_before(c, h, t, p, late, !vis, &v);
   if (out && v) *out = v;
-  for (int k = 0; k < 2; k++, h = t)
-    for (int i = late || p.region < 0 || !h ? 0 : h->n; i > 0; i--)
-      if ((vis || h->v[i - 1].kind != LR_VIS) && lr_runs_again(c, h->v[i - 1].node, p)) return ELAB_UNKNOWN;
+  if (!late && (lr_hist_runs_again(c, h, p, !vis) || lr_hist_runs_again(c, t, p, !vis))) return ELAB_UNKNOWN;
   return o != ELAB_YES ? o : v->kind == LR_UNDEF ? LR_STOP : v->kind == LR_REMOVE ? ELAB_NO : ELAB_YES;
 }
 /* The visibility main's alias at p of an original that main's own history
@@ -4710,9 +4726,13 @@ int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
   const LrDef *v = NULL;
   int unsure = 0, o = lr_search_one(c, cls, 0, name, -1, p, p.region < 0, 0, &v, 0, &unsure, 1);
   /* a definition under a condition (a branch, a rescue, a modifier; or the
-     dispatcher a lone one is lowered to) may not have run */
+     dispatcher a lone one is lowered to) or in an iterator's body may not
+     have run, unless p comes after it in the branch or body that holds it
+     (lr_may_dominates: that run has made it) */
   const LrStmt *st = o == ELAB_YES && v ? lr_stmt_of(elab_fresh(c), v->node) : NULL;
-  if (v && (v->may || nt_int(c->nt, v->node, "cond_lone_disp", 0) || (st && (st->may || st->fmay || st->fpartial)))) return ELAB_UNKNOWN;
+  if (v && (nt_int(c->nt, v->node, "cond_lone_disp", 0) ||
+            ((v->may || (st && (st->may || st->fmay || st->fpartial))) && !lr_may_dominates(c->lrec, v, p))))
+    return ELAB_UNKNOWN;
   return unsure ? ELAB_UNKNOWN : o == LR_STOP ? ELAB_YES : o;
 }
 
@@ -8942,15 +8962,25 @@ int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint
 /* main's and Object's last entries of name before p (*md, *od), which
    share Object's method table, past their visibility words with skip_vis:
    which is the later, 1 main's, 2 Object's; 0 when neither has one; -1
-   when the record cannot order them. Where Object's entries are not sure
-   (a change under a condition), *od is NULL and main's entry answers. */
+   when the record cannot order them, or cannot tell which is live: an
+   entry of either that may have run before p but not surely (a change
+   under a condition, `if c; class Object; def m`) comes after the last
+   sure one, read over both histories in the record's order as their one
+   entry (lr_table_twin), or an entry of either may run again before p (a
+   loop's body, lr_runs_again, as lr_own has it). */
 static int elab_main_object_later(Compiler *c, const char *name, LoadPoint p, int skip_vis, const LrDef **md,
                                   const LrDef **od) {
   int oc = comp_core_class(c, CORE_OBJECT);
-  const LrHist *oh = oc >= 0 ? lr_hist(c->lrec, oc, 0, name, 0) : NULL;
+  const LrHist *oh = oc >= 0 ? lr_hist(c->lrec, oc, 0, name, 0) : NULL, *mh = lr_hist(c->lrec, LR_MAIN, 0, name, 0);
   *md = *od = NULL;
   int oo = oh ? lr_last_before(c, oh, NULL, p, 0, skip_vis, od) : ELAB_NO;
-  int mo = lr_last_before(c, lr_hist(c->lrec, LR_MAIN, 0, name, 0), NULL, p, 0, skip_vis, md);
+  int mo = lr_last_before(c, mh, NULL, p, 0, skip_vis, md);
+  if (!lr_hist_unarmed(oh) && !lr_hist_unarmed(mh) &&
+      (lr_last_before(c, mh, oh, p, 0, skip_vis, NULL) == ELAB_UNKNOWN ||
+       lr_hist_runs_again(c, oh, p, skip_vis) || lr_hist_runs_again(c, mh, p, skip_vis))) {
+    *md = *od = NULL;
+    return -1;
+  }
   if (oo != ELAB_YES || !*od) {
     *od = NULL;
     return mo == ELAB_YES && *md ? 1 : mo == ELAB_NO ? 0 : -1;
@@ -8974,8 +9004,9 @@ int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
      own history: the later of the two last entries before p counts. */
   const LrDef *od = NULL, *md = NULL;
   int later = elab_main_object_later(c, name, p, 0, &md, &od);
+  if (later < 0) return -1;
   if (od) {
-    if (later < 0 || !md) return -1;
+    if (!md) return -1;
     /* An Object entry ahead of main's def (`alias_method :m, :to_s`)
        leaves main's def (or main's visibility word) the answer. Main's
        alias is not read here: it takes the visibility of its source

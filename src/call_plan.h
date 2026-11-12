@@ -188,8 +188,18 @@ int cplan_bam_reopen_target(Compiler *c, int mi);
    a name the node does not itself call but makes CRuby call (a row of
    tools/implied_calls.yml), which passes the gate on the node's own names.
    CT_INCLUDED asks the method a module the top level includes brings, as
-   seen from node id (cls is not read); the record is not asked for it yet. */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64 };
+   seen from node id (cls is not read); the record is not asked for it yet.
+   CT_PUBLIC marks a call that enforces visibility (an explicit receiver
+   that is not self, public_send): where the arms of the entry it binds
+   differ in visibility, it binds the face entry that raises for the
+   private ones (VF_PRIVATE), or with CT_PROTECTED also for the protected
+   ones (VF_PUBLIC: public_send, or a caller to which a protected owner is
+   not open). */
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256 };
+/* The face of a version entry (VerEntry.face): 0 the entry every arm of
+   which runs its version, VF_PRIVATE one whose arms of a private version
+   raise, VF_PUBLIC one whose arms of a private or a protected version do */
+enum { VF_NONE, VF_PRIVATE, VF_PUBLIC };
 /* The names call node id itself calls, into out: a call's or an attribute
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method
@@ -380,6 +390,17 @@ int cplan_pinned_builtin(const Compiler *c, int id);
 /* Is call id an entry's arm (or else arm) call, pinned to the method it
    runs or to the builtin (ver_entry_targets lists the methods)? */
 int cplan_pinned(const Compiler *c, int id);
+/* ...and the visibility (SP_VIS_PRIVATE or SP_VIS_PROTECTED) that a face
+   entry's arm for that version raises with, instead of running it; 0 for
+   an arm that runs, and for any other node */
+int cplan_pinned_vis(const Compiler *c, int id);
+/* flags = 0 (a call's instance-chain ask) with CT_PUBLIC (and CT_PROTECTED)
+   added where call id enforces visibility (an explicit receiver that is not
+   self, public_send) and has no block; any other flags as they are. call_target asks with
+   them, so that every reader that asks which method such a call runs gets
+   the entry the plan made for it (ct_face_for), and the survey of the
+   entries (ver_need) asks the same. */
+unsigned ct_vis_flags(Compiler *c, int id, unsigned flags);
 /* the methods entry scope e's arms call, its else arm's last: at most
    VER_MAX_ARMS + 1; an open history's else arm, which calls none, as its
    last version (the method a Method object of it captured before) */

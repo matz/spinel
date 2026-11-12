@@ -565,6 +565,8 @@ const char *builtin_singleton_owner(const char *cls, const char *name);
    (also Class's)? */
 enum { BSELF_MAIN, BSELF_MODULE, BSELF_CLASS, BSELF_N };
 int builtin_self_method_known(const char *name, int kind);
+/* Is `m` a singleton method the core gives main (to_s, inspect)? */
+int main_singleton_method(const char *m);
 /* Is `m` one of main's own methods, beside Object's (its to_s and inspect, the
    private ones a top-level body calls as a class body would)? */
 int main_self_method(const char *m);

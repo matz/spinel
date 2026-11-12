@@ -16786,8 +16786,10 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
   }
   if (is_text_conversion(name)) {
+    /* (a builtin_only call is the builtin's arm alone: main's singleton's
+       `to_s`, cplan_main_singleton_call, whatever Object's table holds) */
     int has_user_method = 0;
-    for (int k = 0; k < c->nclasses; k++)
+    for (int k = 0; k < c->nclasses && !cplan_builtin_call(c, id); k++)
       if (comp_poly_arm_defines_n(c, k, name, argc)) { has_user_method = 1; break; }
     if (!has_user_method) {
       /* (to_s as the program calls it: a Symbol's is a new String) */

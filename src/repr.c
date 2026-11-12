@@ -1023,13 +1023,14 @@ int repr_boxed_reader_handle(Compiler *c, int v) {
    are not among those targets, nor is the method the call is in (`def
    to_s = @v.to_s`, whose box may hold another of its objects): that arm
    answers what the method's other tails answer, which its own return
-   decides. */
+   decides. main's own `to_s` (cplan_main_text_call) answers main's text,
+   not a box's String. */
 int repr_boxed_to_s_operand(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return -1;
   const char *nm = nt_str(nt, v, "name");
   int recv = nt_ref(nt, v, "receiver");
-  if (!is_to_s_name(nm) || recv < 0 || call_plain_argc(c, v) != 0 ||
+  if (!is_to_s_name(nm) || recv < 0 || call_plain_argc(c, v) != 0 || cplan_main_text_call(c, v) ||
       nt_ref(nt, v, "block") >= 0 || repr_of(c, recv).kind != RK_BOXED ||
       (comp_ntype_settled(c, v) != TY_STRING && comp_ntype_settled(c, v) != TY_STRBUF)) return -1;
   int targets[CPT_MAX], n = cplan_targets(c, v, targets, CPT_MAX);

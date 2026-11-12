@@ -231,9 +231,12 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
    the class a super's lookup started from, written by those two only. Only
-   cplan_resolve_super and cplan_presence read kind, and nothing reads why
-   yet. */
-typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
+   cplan_resolve_super, cplan_presence and cplan_main_singleton_call read
+   kind, and nothing reads why yet. ML_SINGLETON: a call on main that main's
+   own singleton answers by the core's method it has from the start (`to_s`,
+   `inspect`: elab_main_singleton_at), ahead of Object's table; no method of
+   the program's. */
+typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE, ML_SINGLETON } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
    with no version, and no entry (MANY); a version the plan cannot map
@@ -403,6 +406,14 @@ CallPlan cplan_user_fresh(Compiler *c, int id);
    no types and no resolution, so every phase may ask it. The plan of such a
    call is empty. */
 int cplan_builtin_call(const Compiler *c, int id);
+/* Does main's own singleton answer call id by the core's `to_s` or
+   `inspect` (ML_SINGLETON), so that the call is main's text, not a method of
+   Object's table? For `method(:to_s)`, does it answer the capture? */
+int cplan_main_singleton_call(Compiler *c, int id);
+/* Is call id main's own `to_s` or `inspect`, as desugar_main_singleton_calls
+   recorded the plan's answer (cplan_main_singleton_call): its receiver is
+   main, so its value is main's text. Every phase may ask it. */
+int cplan_main_text_call(const Compiler *c, int id);
 /* Does Object's program method of the name answer call id for the receivers no
    class arm of its dispatch took (builtin values, instances of classes without
    a method of their own)? The second also asks class_id's chain. A call that

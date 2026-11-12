@@ -5619,6 +5619,15 @@ int bam_owner(Compiler *c, int mi, const char **name) {
   return dn >= 0 ? (int)nt_int(c->nt, dn, "bam_owner_ci", 0) - 1 : -1;
 }
 
+/* Does wrapper mi stand for one of main's own singleton methods: was its
+   bind site a capture the plan answered on main's singleton
+   (cplan_main_singleton_call, recorded on the def as bam_main_sg)? Its
+   owner is main's singleton class, which is not modeled. */
+int bam_main_singleton(Compiler *c, int mi) {
+  int dn = mi >= 0 && mi < c->nscopes ? c->scopes[mi].def_node : -1;
+  return dn >= 0 && nt_int(c->nt, dn, "bam_main_sg", 0) != 0;
+}
+
 /* Is method mi a Struct member's accessor wrapper: an accessor's wrapper
    (bam_accessor) that no attr_* call declares (bam_src), named for one of
    the members of the class it stands for? An attr_* accessor in a

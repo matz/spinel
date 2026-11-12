@@ -165,6 +165,21 @@ int cplan_builtin_call(const Compiler *c, int id) {
 }
 
 /* See call_plan.h. */
+int cplan_main_text_call(const Compiler *c, int id) {
+  return nt_int(c->nt, id, "main_sg", 0) != 0;
+}
+
+/* See call_plan.h. */
+int cplan_main_singleton_call(Compiler *c, int id) {
+  const char *nm = nt_kind(c->nt, id) == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;
+  int cap = is_bound_method_maker(nm);
+  MethodLookup ml = { .def_class = -1 };
+  if (cap) nm = method_sym_arg(c, id);
+  return nm && main_singleton_method(nm) && call_target(c, id, -1, nm, CT_TOP | (cap ? CT_CAPTURE : 0), &ml) < 0 &&
+         ml.kind == ML_SINGLETON;
+}
+
+/* See call_plan.h. */
 int comp_call_reaches_own_any(Compiler *c, int id, const char *name) {
   return !cplan_builtin_call(c, id) && comp_object_defines(c, name);
 }
@@ -2531,18 +2546,64 @@ static int cplan_record_new_gap(Compiler *c, int id) {
   if (ci >= 0 && c->classes[ci].is_struct) user_new_at(c, id, ci, &unplaced);
   return unplaced;
 }
-/* Does call id run with main as self and look on main first: receiverless
-   or on `self`, in a file's top-level statements (a block there too) or
-   in a method of main's own; not in a top-level `def`, which runs on whatever
-   object called it. At a load point, only once main's method of the name
-   is defined there. */
-static int ct_on_main(Compiler *c, int id, const char *name) {
-  const LrDef *d = NULL;
+/* Does the literal block of a call of `nm` (on the constant `rn`, or NULL)
+   run with the self around the call however it runs: a builtin's (an
+   iterator, tap, loop, catch, at_exit, a thread's or a fiber's body) where
+   the program has no method of the name (an instance method, a class
+   method, main's own), nor a method_missing a call of it could reach. A
+   block given to a method of the program's, made a Proc or a lambda, or
+   handed on by a call that reaches its target by what it is given (send,
+   call, new: is_opaque_reaching_call) may run later on another object
+   (`o.instance_exec(&b)`), so its self is not known. */
+static int ct_block_keeps_self(Compiler *c, const char *rn, const char *nm) {
+  int ncm = 0;
+  if (!nm || an_user_defines_method(c, nm) || an_user_defines_method(c, METHOD_MISSING_NAME) ||
+      comp_main_method(c, nm) >= 0 || (comp_cmethod_candidates(c, nm, &ncm), ncm > 0)) return 0;
+  return is_async_code_entry(rn, nm) || !is_opaque_reaching_call(nm);
+}
+/* The nearest call around node whose literal block may run with another
+   self than the code around it, or -1: one that runs it so
+   (is_block_self_call: an instance_eval, a define_method, a class
+   builder), or one whose block's self is not known (ct_block_keeps_self);
+   a lambda literal is its own such node. A def or class body ends the
+   climb. */
+static int ct_block_self_call(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *par = elab_node_parents(c, &n);
+  for (int p = node >= 0 && node < n ? par[node] : -1, k = 0; p >= 0 && p < n && k < n; p = par[p], k++) {
+    NodeKind pk = nt_kind(nt, p);
+    if (pk == NK_DefNode || pk == NK_ClassNode || pk == NK_ModuleNode || pk == NK_SingletonClassNode) return -1;
+    if (pk == NK_LambdaNode) return p;
+    int call = pk == NK_BlockNode ? par[p] : -1;
+    if (call < 0 || call >= n || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != p) continue;
+    int rv = nt_ref(nt, call, "receiver");
+    const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
+    const char *nm = nt_str(nt, call, "name");
+    if (is_block_self_call(rn, nm) || !ct_block_keeps_self(c, rn, nm)) return call;
+  }
+  return -1;
+}
+/* Does call id run with main as self: receiverless or on `self`, in a
+   file's top-level statements (a block there too, where its self is
+   known: ct_block_self_call, and an instance_eval's or instance_exec's on
+   main) or in a method of main's own; not in a top-level `def`, which runs
+   on whatever object called it. */
+static int ct_runs_on_main(Compiler *c, int id) {
   if (nt_kind(c->nt, id) != NK_CallNode) return 0;
   int recv = nt_ref(c->nt, id, "receiver");
   if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return 0;
+  int ie = ct_block_self_call(c, id);
+  if (ie >= 0)
+    return nt_kind(c->nt, ie) == NK_CallNode && is_instance_eval_family(nt_str(c->nt, ie, "name")) && ct_runs_on_main(c, ie);
   const Scope *s = comp_scope_of(c, id);
-  if (!self_is_main(c, id) || (!prog_is_top_scope(c, s) && !s->is_cmethod)) return 0;
+  return self_is_main(c, id) && (prog_is_top_scope(c, s) || s->is_cmethod);
+}
+/* Does call id run on main (ct_runs_on_main) and look on main first? At a
+   load point, only once main's method of the name is defined there. */
+static int ct_on_main(Compiler *c, int id, const char *name) {
+  const LrDef *d = NULL;
+  if (!ct_runs_on_main(c, id)) return 0;
   LoadPoint p = elab_point_of(c, id);
   return p.region < 0 || elab_method_at(c, -1, name, 1, p, &d) != ELAB_NO;
 }
@@ -2593,9 +2654,17 @@ int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst) {
 /* The method call id finds by name, call_target's start: the table's
    (ct_table), but main's own method ahead of Object's for a call on main
    (ct_on_main), as CRuby's lookup there; its versions are then main's
-   chain's, which ends in Object's (*flags gains CT_CMETHOD) */
+   chain's, which ends in Object's (*flags gains CT_CMETHOD). Where main's
+   singleton answers by the core's `to_s` or `inspect`, none
+   (ML_SINGLETON). */
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
   if (*flags & CT_INCLUDED) return comp_included_method_index(c, name, id);
+  const LrDef *d = NULL;
+  if ((*flags & CT_TOP) && id >= 0 && main_singleton_method(name) && ct_runs_on_main(c, id) &&
+      elab_main_singleton_at(c, name, elab_point_of(c, id), &d) == ELAB_YES && !d) {
+    if (ml) ml->kind = ML_SINGLETON;
+    return -1;
+  }
   int si = (*flags & CT_TOP) && id >= 0 ? comp_main_method(c, name) : -1;
   int mi = si >= 0 && ct_on_main(c, id, name) ? si : ct_table(c, cls, name, *flags, ml ? &ml->def_class : NULL);
   if ((*flags & CT_TOP) && mi >= 0 && c->scopes[mi].is_cmethod) *flags |= CT_CMETHOD;
@@ -2612,7 +2681,9 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   }
   else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (flags & CT_INCLUDED) ||
            (!(flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) && !ct_calls(c, id, name))) {
-    if (mi < 0) ml->kind = ML_NONE;
+    if (mi < 0) {
+      if (ml->kind != ML_SINGLETON) ml->kind = ML_NONE;
+    }
     else if (ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
       ml->kind = ML_TABLE;
       ml->why = MLW_UNASKED;

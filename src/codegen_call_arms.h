@@ -12,6 +12,10 @@
 #include "call_plan.h"
 
 int array_fill_boxes_handle(Compiler *c, int id, int fill);
+/* main's own `to_s` or `inspect` (cplan_main_text_call): main's text, the
+   String sp_poly_to_s answers for main, with no dispatch and no box for its
+   receiver, which is main. emit_call_inner asks it ahead of the arms. */
+int emit_main_text_call(Compiler *c, int id, Buf *b);
 
 /* ---- the arms ---- */
 int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv);

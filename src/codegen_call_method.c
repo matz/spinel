@@ -1028,6 +1028,18 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
                strncmp(c->scopes[target].name, "__bam_", 6) == 0;
   int mrecv = mn >= 0 ? nt_ref(nt, mn, "receiver") : -1;
   const char *bown = NULL;
+  /* main's own singleton method's owner is main's singleton class, which
+     is not modeled: the compile warns, and the call raises
+     NotImplementedError where it runs, after its receiver */
+  if (is_bam && bam_main_singleton(c, target)) {
+    warn_unrouted_call(c, x->id, "Method#owner of a method of main's singleton class");
+    buf_puts(b, "(sp_raise_cls(\"NotImplementedError\", ({ (void)(");
+    emit_expr_for_effect(c, recv, b);
+    buf_puts(b, "); \"spinel: Method#owner of a method of main's singleton class is not supported\"; })), ");
+    emit_builtin_class_value(c, "Object", b);
+    buf_puts(b, ")");
+    return 1;
+  }
   if (target >= 0 && (!is_bam || cplan_bam_reopen_target(c, target) >= 0 || bam_owner(c, target, &bown) >= 0 || bown)) {
     /* a method a module provides is owned by that module, however many
        classes include it (#3662); a class method by its class's singleton;

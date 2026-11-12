@@ -3548,10 +3548,14 @@ static int bsv_foreign(TyKind t, TyKind want) {
 
 /* What block_store_value_ty gathers from a block's values: the first of a
    kind bsv_foreign takes for `want`, and whether one is an Integer (1)
-   and one a Float (2). */
+   and one a Float (2). A nil found first gives way to a later value of
+   another kind: `x == 1 ? nil : :tag` on an Integer Array answered nil,
+   the Array widened only to a nullable Integer, and the Symbol was
+   stored as an Integer. The kind that holds the Symbol holds nil too. */
 typedef struct { TyKind want, found; unsigned num; } BsvArms;
 static void bsv_leaf(BsvArms *a, TyKind t) {
-  if (a->found == TY_UNKNOWN && bsv_foreign(t, a->want)) a->found = t;
+  if ((a->found == TY_UNKNOWN || (a->found == TY_NIL && t != TY_NIL)) && bsv_foreign(t, a->want))
+    a->found = t;
   if (t == TY_INT) a->num |= 1;
   else if (t == TY_FLOAT) a->num |= 2;
 }

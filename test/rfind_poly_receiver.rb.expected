@@ -17,3 +17,6 @@ range: "NoMethodError"
 bag: "NoMethodError"
 poly array: 2
 poly bag: "NoMethodError"
+2
+nil
+"cc"

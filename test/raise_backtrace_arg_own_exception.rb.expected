@@ -1,0 +1,22 @@
+B: m ["bt1"] nil
+B: m ["f1", "f2"] nil
+A: A-ex:m1 ["b11"] nil
+RuntimeError: r ["y"] nil
+ArgumentError: r [] nil
+B: m ["k1"] nil
+A: A-ex:m ["z"] nil
+B: m ["z"] nil
+A: A-ex:m ["z"] #<B: c>
+A: A-ex:m ["w"] nil
+B: m ["q"] #<RuntimeError: in>
+A: A-ex:d ["deep"] nil
+B: d ["deep"] nil
+A: A-ex:m
+A: A-ex:m #<B: cc>
+B: m #<B: cc>
+nil: exception class/object expected
+String: exception class/object expected
+Foo: exception class/object expected
+exception class/object expected
+exception class/object expected
+11

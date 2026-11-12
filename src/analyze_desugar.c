@@ -11774,8 +11774,8 @@ int desugar_exception_super_new(Compiler *c) {
    of the program's (its own `def self.exception`, or one of a class above
    it): CRuby raises what `K.exception(m)` answers, which need not be a K.
    Spell the call so; a class without one keeps the raise of K, whose
-   `exception` is `new`. A backtrace argument, a splat and a program's own
-   `raise` keep the old path. */
+   `exception` is `new`. A backtrace argument takes raise_backtrace_arg; a
+   splat and a program's own `raise` keep the old path. */
 /* Does the program define a method `name` of any kind: an instance method,
    a class method, a module function or a top-level def? A bare `raise` in
    its reach is that method, which takes the class and message as given. */
@@ -11859,7 +11859,9 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
     int ex = fwd_new_call(nt, k, "exception", npos == 2 ? aav[1] : -1);
     fwd_copy_loc(nt, ex, kept);
     nt_set_ignore_visibility(nt, ex, 1);   /* raise calls a private one too */
-    nt_node_set_arr(nt, aa, "arguments", &ex, 1);
+    /* (a `cause:` keyword stays the raise's own) */
+    int moved[2] = { ex, an > npos ? aav[an - 1] : -1 };
+    nt_node_set_arr(nt, aa, "arguments", moved, an > npos ? 2 : 1);
     nt_node_set_int(nt, arm, "raise_own_kept", 1);
     int test;
     if (hold && first) {
@@ -11905,6 +11907,149 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
   free(own);
   return 1;
 }
+/* Is keyword hash kw of a raise `cause: x` alone? A hash with any other
+   key (or a `**` operand) is one more positional argument to raise, which
+   keeps the raise as written. */
+static int raise_kw_cause_only(const NodeTable *nt, int kw) {
+  int n = 0; const int *els = nt_arr(nt, kw, "elements", &n);
+  if (n != 1 || !els || nt_kind(nt, els[0]) != NK_AssocNode) return 0;
+  int key = nt_ref(nt, els[0], "key");
+  const char *kv = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+  return kv && sp_streq(kv, "cause");
+}
+static int fwd_stable_operand(Compiler *c, int e);
+static int raise_kw_cause_stable(Compiler *c, int kw) {
+  const NodeTable *nt = c->nt;
+  if (!raise_kw_cause_only(nt, kw)) return 0;
+  int n = 0; const int *els = nt_arr(nt, kw, "elements", &n);
+  return fwd_stable_operand(c, nt_ref(nt, els[0], "value"));
+}
+/* `raise X, m, bt` (and `fail`): CRuby makes the exception as
+   `X.exception(m)`, calls its set_backtrace(bt), and raises it. Spinel
+   dropped bt, and skipped X's own `self.exception`. The raise becomes
+     raise((t = X.exception(m); t.set_backtrace(bt); t), cause: c)
+   with X (unless a constant), m, bt and c held first, in order, where
+   reading one of them runs code. A constant X must name an exception
+   class; a class value takes the new raise only where it is one at run
+   time (`x.is_a?(Class) && x <= Exception`), and else keeps the raise as
+   written, whose TypeError a nil or a String class gets. A program that
+   defines set_backtrace keeps the old path. */
+/* a write of `value` to temp nm of id's scope, or (value < 0) a read of it */
+static int rbt_var(Compiler *c, NodeTable *nt, int id, const char *nm, int value) {
+  int n = fwd_new_node_like(nt, id, value >= 0 ? "LocalVariableWriteNode" : "LocalVariableReadNode");
+  nt_node_set_str(nt, n, "name", nm); nt_node_set_int(nt, n, "depth", 0);
+  if (value >= 0) nt_node_set_ref(nt, n, "value", value);
+  scope_local_intern(comp_scope_of(c, id), nm);
+  return n;
+}
+/* a raise (`fail`) like id's on args[0..n) */
+static int rbt_raise(NodeTable *nt, int id, const int *args, int n) {
+  int r = fwd_new_call(nt, -1, nt_str(nt, id, "name"), -1), a = nt_new_node(nt, "ArgumentsNode");
+  nt_node_set_arr(nt, a, "arguments", args, n);
+  nt_node_set_ref(nt, r, "arguments", a);
+  fwd_copy_loc(nt, r, id);
+  nt_node_set_int(nt, r, "raise_own_kept", 1);
+  return r;
+}
+static int raise_backtrace_arg(Compiler *c, int id, const int *av, int kw) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  /* (a program's own set_backtrace keeps the old path: Spinel has no super
+     into Exception's, nor a boxed dispatch beside it) */
+  if (an_scopes_named_first(c, "set_backtrace") >= 0) return 0;
+  if (kw && !raise_kw_cause_only(nt, av[3])) return 0;
+  NodeKind k0 = nt_kind(nt, av[0]);
+  int konst = k0 == NK_ConstantReadNode || k0 == NK_ConstantPathNode;
+  if (konst) {
+    /* an exception class: any other class keeps the raise, and its TypeError */
+    int ci = class_recv_static_ci(c, av[0]);
+    const char *cn = k0 == NK_ConstantReadNode ? nt_str(nt, av[0], "name") : NULL;
+    if (ci >= 0 ? !class_is_exc_subclass(c, ci) : !(cn && is_builtin_exception_name(cn))) return 0;
+  }
+  else {
+    if (g_infer_optimistic) return 0;
+    TyKind kt = infer_type(c, av[0]);
+    if (kt != TY_CLASS && kt != TY_POLY) return 0;
+  }
+  int args = nt_ref(nt, id, "arguments");
+  int xk = av[0], m = av[1], bt = av[2], kwh = kw ? av[3] : -1;
+  int ca = -1, cv = -1;
+  if (kw) { int n = 0; const int *els = nt_arr(nt, kwh, "elements", &n); ca = els[0]; cv = nt_ref(nt, ca, "value"); }
+  int hold = !konst || !fwd_stable_operand(c, m) || !fwd_stable_operand(c, bt) || (cv >= 0 && !fwd_stable_operand(c, cv));
+  int base = nt->count;
+  const char *tag = comp_node_tag(c, id);
+  char te[48], tm[48], tb[48], tx[48], tc[48];
+  snprintf(tx, sizeof tx, "__rbt_x%s", tag);
+  snprintf(te, sizeof te, "__rbt_e%s", tag);
+  snprintf(tm, sizeof tm, "__rbt_m%s", tag);
+  snprintf(tb, sizeof tb, "__rbt_b%s", tag);
+  snprintf(tc, sizeof tc, "__rbt_c%s", tag);
+  int stm[8], ns = 0;
+  /* every operand is read before X.exception runs, in order */
+  if (hold) {
+    if (!konst) { stm[ns++] = rbt_var(c, nt, id, tx, xk); xk = rbt_var(c, nt, id, tx, -1); }
+    stm[ns++] = rbt_var(c, nt, id, tm, m); m = rbt_var(c, nt, id, tm, -1);
+    stm[ns++] = rbt_var(c, nt, id, tb, bt); bt = rbt_var(c, nt, id, tb, -1);
+    if (cv >= 0 && !fwd_stable_operand(c, cv)) {
+      stm[ns++] = rbt_var(c, nt, id, tc, cv);
+      nt_node_set_ref(nt, ca, "value", rbt_var(c, nt, id, tc, -1));
+    }
+  }
+  int ex = fwd_new_call(nt, xk, "exception", m);
+  fwd_copy_loc(nt, ex, id);
+  nt_set_ignore_visibility(nt, ex, 1);   /* raise calls a private one too */
+  int sb = fwd_new_call(nt, rbt_var(c, nt, id, te, -1), "set_backtrace", bt);
+  fwd_copy_loc(nt, sb, id);
+  int es[3] = { rbt_var(c, nt, id, te, ex), sb, rbt_var(c, nt, id, te, -1) };
+  int body = nt_new_node(nt, "StatementsNode"), par = fwd_new_node_like(nt, id, "ParenthesesNode");
+  nt_node_set_arr(nt, body, "body", es, 3);
+  nt_node_set_ref(nt, par, "body", body);
+  int moved[2] = { par, kwh };
+  if (konst && !hold) {
+    nt_node_set_arr(nt, args, "arguments", moved, kw ? 2 : 1);
+  }
+  else {
+    int fin;
+    if (konst) fin = rbt_raise(nt, id, moved, kw ? 2 : 1);
+    else {
+      /* a class value raises this way only when it is an exception class;
+         any other value (nil, String) keeps the raise as written, which
+         raises its TypeError */
+      int isc = fwd_new_call(nt, rbt_var(c, nt, id, tx, -1), "is_a?", fwd_new_node_like(nt, id, "ConstantReadNode"));
+      { int an = 0; const int *aa = nt_arr(nt, nt_ref(nt, isc, "arguments"), "arguments", &an); nt_node_set_str(nt, aa[0], "name", "Class"); }
+      int exc = fwd_new_node_like(nt, id, "ConstantReadNode");
+      nt_node_set_str(nt, exc, "name", "Exception");
+      int le = fwd_new_call(nt, rbt_var(c, nt, id, tx, -1), "<=", exc);
+      int an = nt_new_node(nt, "AndNode");
+      nt_node_set_ref(nt, an, "left", isc); nt_node_set_ref(nt, an, "right", le);
+      int yes = rbt_raise(nt, id, moved, kw ? 2 : 1);
+      int old[4] = { rbt_var(c, nt, id, tx, -1), nt_clone_subtree(nt, m), nt_clone_subtree(nt, bt),
+                     kw ? nt_clone_subtree(nt, kwh) : -1 };
+      int no = rbt_raise(nt, id, old, kw ? 4 : 3);
+      int ys = nt_new_node(nt, "StatementsNode"), nst = nt_new_node(nt, "StatementsNode");
+      int el = nt_new_node(nt, "ElseNode"); fin = nt_new_node(nt, "IfNode");
+      nt_node_set_arr(nt, ys, "body", &yes, 1);
+      nt_node_set_arr(nt, nst, "body", &no, 1);
+      nt_node_set_ref(nt, el, "statements", nst);
+      nt_node_set_ref(nt, fin, "predicate", an);
+      nt_node_set_ref(nt, fin, "statements", ys);
+      nt_node_set_ref(nt, fin, "subsequent", el);
+    }
+    stm[ns++] = fin;
+    int ob = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, ob, "body", stm, ns);
+    long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+    nt_node_reset(nt, id, "ParenthesesNode");
+    nt_node_set_ref(nt, id, "body", ob);
+    nt_node_set_int(nt, id, "node_line", line);
+    nt_node_set_int(nt, id, "node_file", file);
+  }
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    c->node_cbody[j] = c->node_cbody[id];
+  }
+  return 1;
+}
 int desugar_raise_own_exception(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -11922,11 +12067,19 @@ int desugar_raise_own_exception(Compiler *c) {
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
     if (ac < 1 || nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
     int kw = nt_kind(nt, av[ac - 1]) == NK_KeywordHashNode, npos = ac - kw;
-    if (npos < 1 || npos > 2) continue;
+    if (npos < 1 || npos > 3) continue;
     if (nt_int(nt, id, "raise_own_kept", 0)) continue;
+    if (npos == 3) {
+      int fi = nm[0] == 'f';
+      if (owned[fi] < 0) owned[fi] = raise_name_program_defined(c, nm);
+      if (!owned[fi] && raise_backtrace_arg(c, id, av, kw)) changed = 1;
+      continue;
+    }
     NodeKind k0 = nt_kind(nt, av[0]);
     int constant = k0 == NK_ConstantReadNode || k0 == NK_ConstantPathNode;
-    if (!constant && (kw || g_infer_optimistic)) continue;
+    /* (a class value's `cause:` must be a value reading it runs nothing:
+       the arms read it after k.exception runs) */
+    if (!constant && (g_infer_optimistic || (kw && npos < 3 && !raise_kw_cause_stable(c, av[ac - 1])))) continue;
     if (!constant) {
       TyKind kt = infer_type(c, av[0]);
       if (kt != TY_CLASS && kt != TY_POLY) continue;

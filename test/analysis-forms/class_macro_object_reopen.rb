@@ -1,5 +1,7 @@
-# `class Calc` inside `class Object` reopens the top-level Calc: its macro
-# calls write the state the macro reads, which the form answers in order.
+# `class Calc` inside `class Object` reopens the top-level Calc, so its
+# `kind :b` writes the state the later `constant :SIZE` macro reads: the
+# analysis form follows the reopening to the top-level class and answers
+# 2, where the text pass leaves the macro as written.
 module Consts
   def kind(k = nil)
     return @kind if k.nil?

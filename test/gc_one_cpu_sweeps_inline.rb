@@ -15,7 +15,9 @@
 # whatever this process was started with. CRuby has no such report, so there
 # the second is given without looking, as it is where there is no taskset to
 # hold the child with, and for the two-CPU cases where the process may not
-# use two (one CPU in its mask, or a CPU quota from its cgroup).
+# use two (one CPU in its mask, or a CPU quota from its cgroup of less than
+# two). A child that does not exit cleanly, or prints anything but its sum,
+# answers false for the first.
 require "open3"
 
 def churn
@@ -39,13 +41,23 @@ def allowed_cpus
   end
 end
 
-# A cgroup's CPU quota narrows the count too, whatever the mask says: cgroup
-# v2's cpu.max ("max 100000" is none), else v1's cpu.cfs_quota_us (-1 is none).
-def quota?
+# The CPUs a cgroup's quota leaves the process, rounded up as the runtime
+# rounds them, or nil for no quota: cgroup v2's cpu.max ("200000 100000" is
+# two, "max 100000" is none), else v1's cpu.cfs_quota_us over
+# cpu.cfs_period_us (a quota of -1 is none).
+def quota_cpus
   v2 = "/sys/fs/cgroup/cpu.max"
-  return !File.read(v2).start_with?("max") if File.exist?(v2)
-  v1 = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
-  File.exist?(v1) && File.read(v1).to_i > 0
+  if File.exist?(v2)
+    quota, period = File.read(v2).split
+    return nil if quota == "max"
+    quota, period = quota.to_i, period.to_i
+  else
+    v1 = "/sys/fs/cgroup/cpu/cpu.cfs_"
+    return nil unless File.exist?(v1 + "quota_us") && File.exist?(v1 + "period_us")
+    quota, period = File.read(v1 + "quota_us").to_i, File.read(v1 + "period_us").to_i
+  end
+  return nil if quota <= 0 || period <= 0
+  (quota + period - 1) / period
 end
 
 def taskset?
@@ -60,8 +72,8 @@ def beside_program(cpus, settings, otherwise, expected)
   return [true, otherwise] unless cpus
   env = { "SPINEL_GC_PHASES" => "1" }
   SETTINGS.each { |k| env[k] = settings[k] }
-  out, err, _status = Open3.capture3(env, "taskset", "-c", cpus.join(","), $0, "child")
-  [out.to_i == expected, err.include?("[gcph] concurrent sweep:")]
+  out, err, status = Open3.capture3(env, "taskset", "-c", cpus.join(","), $0, "child")
+  [status.success? && out.strip == expected.to_s, err.include?("[gcph] concurrent sweep:")]
 end
 
 if ARGV[0] == "child"
@@ -69,7 +81,8 @@ if ARGV[0] == "child"
 else
   cpus = RUBY_ENGINE == "spinel" && taskset? ? allowed_cpus : []
   one = cpus.empty? ? nil : cpus.first(1)
-  two = cpus.size >= 2 && !quota? ? cpus.first(2) : nil
+  quota = quota_cpus
+  two = cpus.size >= 2 && (quota.nil? || quota >= 2) ? cpus.first(2) : nil
   sum = churn
   p beside_program(one, {}, false, sum)
   p beside_program(one, { "SPINEL_WORKERS" => "1" }, false, sum)

@@ -11825,10 +11825,6 @@ const char *class_ruby_name(Compiler *c, int ci) {
     const char *seg = c->classes[chain[i]].name;
     if (i == depth - 1 && i > 0 && c->classes[chain[i]].ruby_name_cache) seg = c->classes[chain[i]].ruby_name_cache;
     else if (!seg) continue;
-    /* A name qualify_colliding_classes rewrote carries its enclosing path
-       already (`Brainfuck__Array`): the Ruby-visible name is the leaf, since
-       the enclosers are being prepended here. */
-    if (i < depth - 1 && strstr(seg, "__")) seg = comp_class_ruby_leaf(c, chain[i]);
     if (buf[0]) strncat(buf, "::", sizeof(buf) - strlen(buf) - 1);
     strncat(buf, seg, sizeof(buf) - strlen(buf) - 1);
   }

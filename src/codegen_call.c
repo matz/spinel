@@ -9943,8 +9943,9 @@ static int poly_key_inert(Compiler *c, int key) {
    hash key #hash, a `*` #to_a, a `**` #to_hash, a Range's ends #<=>. */
 static int poly_inert(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
+  if (view_ran_first(node)) return 1;
   node = nt_paren_single(c->nt, node);
-  if (node < 0) return 1;
+  if (node < 0 || view_ran_first(node)) return 1;
   int n = 0; const int *els;
   switch (nt_kind(nt, node)) {
   case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
@@ -9988,10 +9989,11 @@ static int poly_inert(Compiler *c, int node) {
 /* The index of the last of the `n` in `args` that is not inert, -1 for
    none: an argument before it has code run after its temp is made.
    Under sharing, an argument already evaluated by the operand holder is
-   just its temp here; it cannot rebind an earlier handle's source. */
+   just its temp here (poly_inert); it cannot rebind an earlier handle's
+   source. */
 static int poly_last_live(Compiler *c, const int *args, int n) {
   for (int j = n - 1; j >= 0; j--)
-    if (!(arg_ran_first(args[j], 0)) && !poly_inert(c, args[j])) return j;
+    if (!poly_inert(c, args[j])) return j;
   return -1;
 }
 
@@ -17446,8 +17448,8 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
              holds, beside one that may allocate, goes into a rooted slot
              where the C compiler makes it */
           int lt = 0, at = 0;
-          if (!arg_ran_first(recv, 0) && !subtree_is_pure_read(c, recv) && operand_may_allocate(c, argv[0])) lt = ++g_tmp;
-          if (!arg_ran_first(argv[0], 0) && !subtree_is_pure_read(c, argv[0]) && operand_may_allocate(c, recv)) at = ++g_tmp;
+          if (!subtree_is_pure_read(c, recv) && operand_may_allocate(c, argv[0])) lt = ++g_tmp;
+          if (!subtree_is_pure_read(c, argv[0]) && operand_may_allocate(c, recv)) at = ++g_tmp;
           if (lt || at) buf_puts(b, "({ ");
           if (lt) { buf_printf(b, "sp_StrRange _t%d = {0}; ", lt); emit_gc_root_tmp_refs(c, rt, lt, b); buf_puts(b, " "); }
           if (at) { buf_printf(b, "sp_StrRange _t%d = {0}; ", at); emit_gc_root_tmp_refs(c, a0, at, b); buf_puts(b, " "); }
@@ -23810,7 +23812,7 @@ int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw) {
        left in place, `o.m(@v, f(2))` read what f left in @v (read_rebound_by) */
     int rebound = 0;
     for (int j = a + 1; j < nhn && !rebound; j++) rebound = read_rebound_by(c, hn[a], hn[j]);
-    if (!aty || (!rebound && (ak == NK_LocalVariableReadNode ||
+    if (!aty || view_held(hn[a]) || (!rebound && (ak == NK_LocalVariableReadNode ||
                               ak == NK_InstanceVariableReadNode)) ||
         ak == NK_SplatNode || ak == NK_KeywordHashNode ||
         ak == NK_BlockArgumentNode || nt_kind(nt, hn[a]) == NK_ForwardingArgumentsNode ||
@@ -23822,7 +23824,7 @@ int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw) {
     argov_reserve();
     int ht = hoist_boxed_rooted(c, hn[a]);
     hoisted_sv[hoisted_n] = g_n_argov;
-    view_bind_temp(hn[a], ht);
+    view_hold(view_bind_temp(hn[a], ht));
     hoisted_vw[hoisted_n] = view_push(c, hn[a], TY_POLY);
     hoisted_n++;
   }
@@ -25485,10 +25487,12 @@ int call_is_field_read(Compiler *c, int id, int *allocates) {
    field reads, all the way down? Operands that all answer yes need no ordering
    and no roots: nothing can run between them to collect a value or to move
    what another one reads. A whitelist, so anything it does not name is an
-   effect. */
-int subtree_is_pure_read(Compiler *c, int id) {
+   effect. A node bound to a temp its value already ran into (view_bind) is
+   that temp, whatever its shape; `bound` 0 asks about the node's own code
+   instead (subtree_code_is_pure_read). */
+static int pure_read_walk(Compiler *c, int id, int bound) {
   const NodeTable *nt = c->nt;
-  if (id < 0) return 1;
+  if (id < 0 || (bound && view_ran_first(id))) return 1;
   switch (nt_kind(nt, id)) {
     case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
     case NK_ClassVariableReadNode: case NK_SelfNode: case NK_IntegerNode:
@@ -25527,16 +25531,19 @@ int subtree_is_pure_read(Compiler *c, int id) {
   }
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
-    if (!subtree_is_pure_read(c, nt_ref_at(nt, id, i))) return 0;
+    if (!pure_read_walk(c, nt_ref_at(nt, id, i), bound)) return 0;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0;
     const int *ids = nt_arr_at(nt, id, i, &n);
     for (int j = 0; j < n; j++)
-      if (!subtree_is_pure_read(c, ids[j])) return 0;
+      if (!pure_read_walk(c, ids[j], bound)) return 0;
   }
   return 1;
 }
+/* See codegen_internal.h. */
+int subtree_is_pure_read(Compiler *c, int id) { return pure_read_walk(c, id, 1); }
+int subtree_code_is_pure_read(Compiler *c, int id) { return pure_read_walk(c, id, 0); }
 static int plain_is_attr_call(const char *nm) {
   return sp_streq(nm, "attr") || sp_streq(nm, "attr_reader") || sp_streq(nm, "attr_writer") ||
          sp_streq(nm, "attr_accessor");
@@ -25825,7 +25832,7 @@ static int plain_calls_own(Compiler *c, int a) {
 int subtree_is_plain_value(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   id = nt_paren_single(c->nt, id);
-  if (id < 0) return 1;
+  if (id < 0 || view_ran_first(id)) return 1;
   if (subtree_is_pure_read(c, id)) return !plain_calls_own(c, id);
   switch (nt_kind(nt, id)) {
     /* a global's read is off the list above, which also answers for
@@ -26065,7 +26072,7 @@ static int operand_local_rebound_by(Compiler *c, int x, int after) {
   const NodeTable *nt = c->nt;
   if (x < 0) return 0;
   NodeKind k = nt_kind(nt, x);
-  if (k == NK_LocalVariableReadNode) return !arg_ran_first(x, 0) && read_rebound_by(c, x, after);
+  if (k == NK_LocalVariableReadNode) return read_rebound_by(c, x, after);
   if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
   for (int i = 0; i < nt_num_refs(nt, x); i++)
     if (operand_local_rebound_by(c, nt_ref_at(nt, x, i), after)) return 1;
@@ -26216,7 +26223,7 @@ int strbuf_read_copies(Compiler *c, int v) {
   if (k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode && !repr_static_read_kind(k))
     return 0;
   Repr rp = repr_of(c, v);
-  return !rp.handle && !rp.head_held && !arg_ran_first(v, 0) && operand_allocates_beside(c, v) &&
+  return !rp.handle && !rp.head_held && operand_allocates_beside(c, v) &&
          strbuf_slot_has(c, v);
 }
 /* Is operand `v` of call id such a copy (strbuf_read_copies)? A String
@@ -26240,13 +26247,14 @@ static int operand_reads_copy(Compiler *c, int id, int v) {
    another operand that runs inside the same C call allocate, so that a
    collection it runs frees the copy before the call takes it? A bound
    operand runs ahead of the call, as every observable one (obs[]) is when
-   there are two; one that ran already is its temp. `s.gsub(q, q + q)`
+   there are two; one that ran already is its temp, which
+   operand_allocates_beside answers. `s.gsub(q, q + q)`
    with s a shared local read freed bytes. */
 static int operand_copy_at_risk(Compiler *c, const int *operand, int nop, int i,
                                 const int *cand, const int *obs, int observable) {
   for (int j = 0; j < nop; j++) {
     int v = operand[j];
-    if (j == i || repr_of(c, v).head_held || arg_ran_first(v, 0)) continue;
+    if (j == i || repr_of(c, v).head_held) continue;
     if ((cand[j] || !obs[j] || observable < 2) && operand_allocates_beside(c, v)) return 1;
   }
   return 0;
@@ -28607,7 +28615,7 @@ static int emit_recv_snapshot(Compiler *c, int id, Buf *b) {
      concat calls doubled the compile per link.) */
   Buf ref; memset(&ref, 0, sizeof ref);
   if (recv >= 0 && args >= 0 && is_concat_name(nt_str(nt, id, "name")) &&
-      !arg_ran_first(recv, 0) && read_rebound_by(c, recv, args) && strbuf_slot_text(c, recv, &ref)) {
+      read_rebound_by(c, recv, args) && strbuf_slot_text(c, recv, &ref)) {
     int th = ++g_tmp, mark = g_n_argov;
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);\n", th, ref.p, th);

@@ -336,7 +336,7 @@ static void emit_io_read_nonblock_value(Compiler *c, int id, Buf *b) {
   if (exc < 0) buf_puts(b, "1; ");
   else if (boxed[3]) buf_printf(b, "sp_poly_truthy(_t%d); ", held[3]);
   else buf_printf(b, "_t%d; ", held[3]);
-  int rebound = exc >= 0 && read_rebound_by(c, argv[1], exc), update = ++g_tmp;
+  int rebound = exc >= 0 && read_code_rebound_by(c, argv[1], exc), update = ++g_tmp;
   if (rebound) {
     buf_printf(b, "sp_bool _t%d = sp_poly_unbox_s(_t%d) == ", update, held[2]);
     if (repr_of(c, argv[1]).as_ty == TY_STRING) emit_expr(c, argv[1], b);
@@ -425,7 +425,7 @@ static void emit_io_read_nonblock_buffer(Compiler *c, int id, int handle, Buf *b
              ts, tb, eof, held[1], held[1], tb, tb);
   if (nt_kind(nt, argv[1]) == NK_LocalVariableReadNode) {
     if (!strbuf_slot_has(c, argv[1]) && !(shared && strbuf_boxed_local(c, argv[1]))) {
-      int rebound = argc == 3 && read_rebound_by(c, argv[1], argv[2]);
+      int rebound = argc == 3 && read_code_rebound_by(c, argv[1], argv[2]);
       if (rebound) {
         buf_puts(b, "if (sp_poly_unbox_s("); emit_boxed(c, argv[1], b);
         buf_printf(b, ") == _t%d) { ", ts);

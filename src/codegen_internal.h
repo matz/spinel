@@ -641,9 +641,11 @@ extern int  *g_argov_node;
 extern char (*g_argov_text)[ARGOV_TEXT_LEN];
 /* Per slot: ARGOV_OINT, the bound text is an oint (view_bind_o); ARGOV_RAN,
    it is a temp the binder assigned before the binding is read
-   (view_bind_temp). */
+   (view_bind_temp; view_ran_first asks it); ARGOV_HELD, that temp is rooted
+   for the binding's life (view_hold). */
 #define ARGOV_OINT 1u
 #define ARGOV_RAN  2u
+#define ARGOV_HELD 4u
 extern unsigned char *g_argov_flag;
 int view_bind_o(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 extern int  g_n_argov;
@@ -684,6 +686,10 @@ void emit_scan_rtcheck_open(Compiler *c, int id, int recv, Buf *pre, int indent,
    -- variable and literal reads, scalar arithmetic, typed-array reads and
    plain field reads, all the way down (codegen_call.c)? */
 int subtree_is_pure_read(Compiler *c, int id);
+/* The same question about the node's own code, whether or not it already ran
+   into a temp: for a question about what the whole statement runs, not what
+   reading the node here runs. */
+int subtree_code_is_pure_read(Compiler *c, int id);
 /* A pure read, or one of the forms beside that list which run no call of the
    program's and make nothing either: a global's read; a unary minus, `abs`
    or an operator on numbers; `!` on a boolean; `size` or `length` of a
@@ -2387,11 +2393,17 @@ int emit_args_before_binding(Compiler *c, Scope *m, const int *argv, int argc, B
    (LocalVar.proc_rebinds), by anything that may call that proc
    (subtree_may_run_proc); an
    instance, global or class variable by any effect. A value built of reads
-   (`[x, 2]`) asks it of each; a block reads when it runs. */
+   (`[x, 2]`) asks it of each; a block reads when it runs. A node bound to a
+   temp the binder marked as run first (view_ran_first) reads that temp: no. */
 int read_rebound_by(Compiler *c, int x, int after);
+/* ...of the variables x's own code reads, whatever x is bound to: whether
+   `after` can give the variable itself another value. A write back to the
+   variable asks it (aset_recv_rebinds_only): a receiver read first into a
+   temp still has its variable rebound by the key or value. */
+int read_code_rebound_by(Compiler *c, int x, int after);
 void strbuf_hold_slot(Compiler *c, int v, int r, Buf *sb);
 /* Whether the key or value of `x[key] = val` may give the local or instance
-   variable `x` reads another value (read_rebound_by) and cannot mutate it,
+   variable `x` reads another value (read_code_rebound_by) and cannot mutate it,
    so a store reads the receiver first and leaves the new binding; 0 for
    any other receiver (codegen_call_recv.c). */
 int aset_recv_rebinds_only(Compiler *c, int recv, int key, int val);
@@ -2750,6 +2762,19 @@ void view_unbind(int n);
    view_unwind puts them back with the views. */
 int view_bind_park(Compiler *c, const Scope *m, int call);
 void view_bind_unpark(Compiler *c, int n);
+/* Is node `node`'s latest binding to a temp the binder marked as run first
+   (view_bind_temp)? Its read is then that plain temp: it runs nothing,
+   allocates nothing and reads no variable a sibling can rebind, whatever the
+   node's own shape. */
+int view_ran_first(int node);
+/* ...and the binder rooted that temp for as long as the binding lives
+   (view_hold): emit_args_filled_argv's handle temps and the boxed temps
+   hoist_dispatch_args roots. */
+int view_held(int node);
+/* The temp the binding at `slot` names is rooted for as long as the binding
+   lives. Called by the binder that rooted it, right after view_bind_temp.
+   Only a ran-first slot takes it. */
+void view_hold(int slot);
 /* A constant receiver's read effect already ran for the enclosing emission. */
 int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);

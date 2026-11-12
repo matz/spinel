@@ -8733,6 +8733,7 @@ else {
    in-sequence assignment (`a = {...}; foo(a)` as an operand passed a stale `a`).
    That matches the g_argov skip in emit_args_filled. A param default like `{}`
    (provided < 0) is a fresh allocation and does want the root -- #1445.
+   A node an outer emitter bound to a rooted temp (view_held) is rooted already.
    A String Range is no pointer, but it carries two Strings by value (and,
    built --share-strings, their handles): one made in the list is held by
    nothing once its own expression ends, and a later argument that
@@ -8740,6 +8741,7 @@ else {
 int arg_wants_root(Compiler *c, TyKind pt, int provided) {
   if (pt != TY_POLY && pt != TY_STR_RANGE && !needs_root(pt)) return 0;
   if (provided < 0) return 1;
+  if (view_held(provided)) return 0;
   NodeKind ak = nt_kind(c->nt, provided);
   return !((ak == NK_LocalVariableReadNode ||
                    ak == NK_InstanceVariableReadNode ||
@@ -9640,10 +9642,12 @@ int hold_operand_pre(Compiler *c, int node, TyKind ty, int boxed, int t, int roo
   return t;
 }
 
-/* See codegen_internal.h. */
-int read_rebound_by(Compiler *c, int x, int after) {
+/* The walk of read_rebound_by and read_code_rebound_by. `bound`: a node
+   bound to a temp the binder marked as run first (view_ran_first) reads
+   that temp, which nothing after it rebinds. */
+static int rebound_walk(Compiler *c, int x, int after, int bound) {
   const NodeTable *nt = c->nt;
-  if (after < 0) return 0;
+  if (after < 0 || (bound && view_ran_first(x))) return 0;
   switch (nt_kind(nt, x)) {
     case NK_LocalVariableReadNode: {
       const char *nm = nt_str(nt, x, "name");
@@ -9682,15 +9686,17 @@ int read_rebound_by(Compiler *c, int x, int after) {
          k: (x = 3))` spread the Array built after the keyword ran */
       if (x < 0) return 0;
       for (int i = 0; i < nt_num_refs(nt, x); i++)
-        if (read_rebound_by(c, nt_ref_at(nt, x, i), after)) return 1;
+        if (rebound_walk(c, nt_ref_at(nt, x, i), after, bound)) return 1;
       for (int i = 0; i < nt_num_arrs(nt, x); i++) {
         int n = 0; const int *ids = nt_arr_at(nt, x, i, &n);
-        for (int j = 0; j < n; j++) if (read_rebound_by(c, ids[j], after)) return 1;
+        for (int j = 0; j < n; j++) if (rebound_walk(c, ids[j], after, bound)) return 1;
       }
       return 0;
     }
   }
 }
+int read_rebound_by(Compiler *c, int x, int after) { return rebound_walk(c, x, after, 1); }
+int read_code_rebound_by(Compiler *c, int x, int after) { return rebound_walk(c, x, after, 0); }
 
 /* The argument `v` of a call binding in parameter order, evaluated ahead of
    the binding into a rooted temp its uses read (emit_arg_temp). A value with no C type -- nil -- is evaluated for its effect
@@ -12429,8 +12435,9 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
          double-evaluates it and emits an ill-typed sp_RbVal temp (the splat
          lowers to sp_PolyArray*) (#3242) */
       if (ak == NK_SplatNode) continue;
-      /* one the call ran first (emit_args_before_binding) reads its temp */
-      if (arg_ran_first(argv[k], argov_saved)) continue;
+      /* one the call ran first (emit_args_before_binding) reads its temp, and
+         so does one an outer emitter bound to a rooted temp */
+      if (arg_ran_first(argv[k], argov_saved) || view_held(argv[k])) continue;
       /* `+"lit"` into a parameter that is the handle because a Method
          reaches it: the binding builds the handle from the literal itself
          (emit_arg_or_default), and a copy made here first went unused */
@@ -12471,7 +12478,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);\n", ht, hb.p, ht);
         free(hb.p);
-        view_bind_temp(argv[k], ht);
+        view_hold(view_bind_temp(argv[k], ht));
         if (held) held[k] = ht;
         continue;
       }
@@ -12547,7 +12554,7 @@ else {
         buf_puts(g_pre, "\n");
       }
       free(hb.p);
-      view_bind_temp(argv[k], ht);
+      { int hs = view_bind_temp(argv[k], ht); if (root) view_hold(hs); }
       if (held && root) held[k] = ht;
     }
   }

@@ -4554,8 +4554,8 @@ static int emit_str_mut_writeback(Compiler *c, int recv, int lvw, int tn, const 
    It is cleared ahead of the statement, so a sub or gsub that the receiver,
    an argument, a conversion of one or the block runs leaves its own answer
    there (`y.sub!("q", z.sub("a", "b"))`). A read runs none: what
-   subtree_is_pure_read names, a global, a constant, and a reader call on
-   one of those. */
+   subtree_code_is_pure_read names (the operand's own code, ran first or
+   not), a global, a constant, and a reader call on one of those. */
 static int sub_bang_reads(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   while (n >= 0) {
@@ -4564,7 +4564,7 @@ static int sub_bang_reads(Compiler *c, int n) {
     if (k == NK_GlobalVariableReadNode || k == NK_ConstantReadNode) return 1;
     if (k == NK_ConstantPathNode) n = nt_ref(nt, n, "parent");
     else if (k == NK_CallNode && call_is_field_read(c, n, &alloc)) n = nt_ref(nt, n, "receiver");
-    else return subtree_is_pure_read(c, n);
+    else return subtree_code_is_pure_read(c, n);
   }
   return 1;
 }
@@ -14379,7 +14379,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     int tr = ++g_tmp;
     /* a Range that no name holds sits in its temp while the argument is
        made: when that may allocate, the temp's two ends are rooted first */
-    int hold = argc == 1 && !arg_ran_first(recv, 0) && !subtree_is_pure_read(c, recv) &&
+    int hold = argc == 1 && !subtree_is_pure_read(c, recv) &&
                operand_may_allocate(c, argv[0]);
     if (is_range_membership(name) && argc == 1) {
       const char *fn = is_membership_alias(name) ?
@@ -15336,7 +15336,7 @@ static int aset_touches_recv(Compiler *c, int id, NodeKind rk, const char *nm) {
 int aset_recv_rebinds_only(Compiler *c, int recv, int key, int val) {
   NodeKind rk = nt_kind(c->nt, recv);
   if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) return 0;
-  if (!read_rebound_by(c, recv, key) && !read_rebound_by(c, recv, val)) return 0;
+  if (!read_code_rebound_by(c, recv, key) && !read_code_rebound_by(c, recv, val)) return 0;
   return !aset_recv_may_mutate(c, recv, key, val);
 }
 /* See codegen_internal.h. */

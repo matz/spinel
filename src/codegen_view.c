@@ -177,6 +177,21 @@ void view_bind_unpark(Compiler *c, int n) {
   while (n-- > 0) view_pop(c, view_sp - 1);
 }
 
+/* Does node's latest binding, the one emit_expr writes, carry flag `bit`?
+   No binding carries none. */
+static int view_latest_has(int node, unsigned char bit) {
+  if (node < 0) return 0;
+  for (int i = g_n_argov - 1; i >= 0; i--)
+    if (g_argov_node[i] == node) return (g_argov_flag[i] & bit) != 0;
+  return 0;
+}
+/* See codegen_internal.h. */
+int view_ran_first(int node) { return view_latest_has(node, ARGOV_RAN); }
+int view_held(int node) { return view_latest_has(node, ARGOV_HELD); }
+void view_hold(int slot) {
+  if (slot >= 0 && slot < g_n_argov && (g_argov_flag[slot] & ARGOV_RAN)) g_argov_flag[slot] |= ARGOV_HELD;
+}
+
 unsigned view_epoch(void) { return view_epoch_n; }
 
 /* the slot an entry of `kind` names for node `id` */

@@ -38,7 +38,11 @@ At each step `elab_child` decides where the load phase stands. The walk:
   (`nt_pred_const`) is folded: its arm runs whenever the condition is
   reached, and the arms after one that always runs never do;
 - enters a block given to any other call, a program method's, as `may`:
-  the method may yield to it before it answers, or keep it;
+  the method may yield to it before it answers, or keep it. A block that
+  never runs has no statements to enter: where a call on self in a class
+  body, at a point that runs once, hands one to a class method of the
+  program's and no method of that name uses its block
+  (`elab_block_never_runs`), the scope walk leaves the block's body out;
 - does not enter method bodies, lambdas, and the blocks kept to run later
   (a Proc, `define_method`, a thread, `at_exit`:
   `is_deferred_block_call`). Their nodes have no point: `elab_point_of`

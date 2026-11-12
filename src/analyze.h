@@ -399,6 +399,16 @@ int elab_self_at(Compiler *c, int node);
    itself (a block of another call may run under another self, as
    class_exec's does); -2 otherwise, and for main's top level */
 int elab_self_value_at(Compiler *c, int node);
+/* Does the load phase never run the block of `call`, a call on self in the
+   body of class cls, where self is the class (the scope walk's direct
+   class: under a condition or in an expression of the body, not in a
+   block or a method): the record finds a def of the program's among the
+   class's class methods for it there, its own, its extends' or a
+   superclass's, and no method the program defines by that name uses the
+   block it is given, whichever of them is live when the call runs? 0 where
+   that is not sure: a name the walk reads by itself (elab_block_when), one
+   the program takes away somewhere, a statement that may run again. */
+int elab_block_never_runs(Compiler *c, int call, int cls);
 /* Has module cls's singleton class been made at p, which CRuby makes on
    the first of its makers (is_singleton_class_maker, a def on the
    singleton, `class << m`, an instance or class variable write), or at

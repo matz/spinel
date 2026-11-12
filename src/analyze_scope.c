@@ -1833,6 +1833,15 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       first = ct_table_loop_form(c, id, w.pos.list, w.slot - 1);
       if (first >= 0) { walk_scope_in(c, first, w); return; }
     }
+    /* a block the call hands to a method that drops it never runs
+       (elab_block_never_runs): what it holds defines nothing, as the dead
+       arm of a literal condition does not (desugar_engine_branches), so
+       the walk leaves its body out */
+    if (!dead && elab_block_never_runs(c, id, w.direct)) {
+      int blk = nt_ref(c->nt, id, "block");
+      nt_subtree_blank((NodeTable *)c->nt, nt_ref(c->nt, blk, "body"));
+      nt_node_set_ref((NodeTable *)c->nt, blk, "body", -1);
+    }
     /* `Klass.class_eval/module_eval { defs }` (and the bare/`self.` forms in a
        class body) reopens the class: its block body's `def` and `define_method`
        become instance methods on it, exactly like a `class Klass ... end` reopen.

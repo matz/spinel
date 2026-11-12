@@ -190,9 +190,15 @@ static const char *class_leaf_name(const char *n) {
    or module the program nests in k, a constant it writes in a body of k or
    through `k::NAME = v`, or one a write the analysis cannot place may
    define (a path written through a dynamic parent, const_set). *sub is the
-   class or module the member is, -1 when it is a value or unknown. */
-static int class_may_have_const(Compiler *c, int k, const char *nm, int *sub, int depth) {
+   class or module the member is, -1 when it is a value or unknown. `seen`
+   holds, per class, one more than the least depth the search entered it at
+   (0: not yet): a class met again no nearer is not searched again, since
+   modules that each include several of the ones before them are reached by
+   a number of routes that grows with every link. */
+static int class_may_have_const_from(Compiler *c, int k, const char *nm, int *sub, int depth, int *seen) {
   if (k < 0 || k >= c->nclasses || depth > 32) return 0;
+  if (seen[k] && seen[k] <= depth + 1) return 0;
+  seen[k] = depth + 1;
   ClassInfo *ki = &c->classes[k];
   if (!ki->name) return 1;
   for (int j = 0; j < c->nclasses; j++)
@@ -215,11 +221,11 @@ static int class_may_have_const(Compiler *c, int k, const char *nm, int *sub, in
     *sub = comp_class_index(c, nm);
     return 1;
   }
-  if (class_may_have_const(c, ki->parent, nm, sub, depth + 1)) return 1;
+  if (class_may_have_const_from(c, ki->parent, nm, sub, depth + 1, seen)) return 1;
   for (int i = 0; i < ki->nincluded_mods; i++)
-    if (class_may_have_const(c, ki->included_mods[i], nm, sub, depth + 1)) return 1;
+    if (class_may_have_const_from(c, ki->included_mods[i], nm, sub, depth + 1, seen)) return 1;
   for (int i = 0; i < ki->nprepended_mods; i++)
-    if (class_may_have_const(c, ki->prepended_mods[i], nm, sub, depth + 1)) return 1;
+    if (class_may_have_const_from(c, ki->prepended_mods[i], nm, sub, depth + 1, seen)) return 1;
   /* a class's chain ends at Object, whose modules (a top-level include,
      Kernel) a scoped read reaches, though not Object's own constants: not a
      module's, nor a class's below BasicObject (`K::C`, with C in a module
@@ -230,21 +236,28 @@ static int class_may_have_const(Compiler *c, int k, const char *nm, int *sub, in
       int o = roots[r];
       if (r == 0 && o < 0) {
         for (int i = 0; i < c->ntoplevel_includes; i++)
-          if (class_may_have_const(c, c->toplevel_includes[i], nm, sub, depth + 1)) return 1;
+          if (class_may_have_const_from(c, c->toplevel_includes[i], nm, sub, depth + 1, seen)) return 1;
         continue;
       }
       if (o < 0 || o == k) continue;
       ClassInfo *oi = &c->classes[o];
-      if (r == 1 && class_may_have_const(c, o, nm, sub, depth + 1)) return 1;
+      if (r == 1 && class_may_have_const_from(c, o, nm, sub, depth + 1, seen)) return 1;
       for (int i = 0; r == 0 && i < oi->nincluded_mods; i++)
-        if (class_may_have_const(c, oi->included_mods[i], nm, sub, depth + 1)) return 1;
+        if (class_may_have_const_from(c, oi->included_mods[i], nm, sub, depth + 1, seen)) return 1;
       for (int i = 0; r == 0 && i < c->ntoplevel_includes; i++)
-        if (class_may_have_const(c, c->toplevel_includes[i], nm, sub, depth + 1)) return 1;
+        if (class_may_have_const_from(c, c->toplevel_includes[i], nm, sub, depth + 1, seen)) return 1;
       for (int i = 0; r == 0 && i < oi->nprepended_mods; i++)
-        if (class_may_have_const(c, oi->prepended_mods[i], nm, sub, depth + 1)) return 1;
+        if (class_may_have_const_from(c, oi->prepended_mods[i], nm, sub, depth + 1, seen)) return 1;
     }
   }
   return 0;
+}
+static int class_may_have_const(Compiler *c, int k, const char *nm, int *sub, int depth) {
+  int *seen = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *seen);
+  if (!seen) return 1;   /* unknown: it may */
+  int r = class_may_have_const_from(c, k, nm, sub, depth, seen);
+  free(seen);
+  return r;
 }
 /* Can the program define constant `nm` where no class body or `P::NAME = v`
    path shows it: through a path whose parent is not a constant

@@ -32,3 +32,17 @@ p calls
 shown = [[1, 99], [2, 3]].map { |a| pick(a, none) }
 p shown
 p calls
+
+# only nil means "no ifnone": any other fallback is called when nothing
+# matches, so false raises NoMethodError for false.call (CRuby checks
+# !NIL_P(if_none))
+def pick_or_raise(x, ifnone)
+  x.find(ifnone) { |v| v == 99 }
+rescue NoMethodError
+  "NoMethodError"
+end
+p pick_or_raise([1, 2, 3], false)
+p pick_or_raise([1, 99], false)
+p pick_or_raise(1..3, false)
+p pick_or_raise(["a"], nil)
+p pick_or_raise(["a"], false)

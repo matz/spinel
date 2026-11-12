@@ -2130,6 +2130,19 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       buf_puts(b, ", _rpm)); (sp_BoundMethod *)0; })");
       return 1;
     }
+    /* an ivar holding one class binds that class's method (method_obj_lookup)
+       while the slot holds that class: a slot no write has reached is nil,
+       whose lookup is CRuby's NameError */
+    int ivk = mi >= 0 && recv >= 0 && nt_kind(nt, recv) == NK_InstanceVariableReadNode &&
+              repr_of(c, recv).as_ty == TY_CLASS && repr_of(c, recv).kind != RK_BOXED ? class_ivar_static_ci(c, recv) : -1;
+    if (ivk >= 0) {
+      int tk = ++g_tmp;
+      buf_printf(b, "({ sp_Class _t%d = ", tk);
+      emit_expr(c, recv, b);
+      buf_printf(b, "; if (_t%d.name || _t%d.cls_id != %d) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(", tk, tk, ivk);
+      emit_str_literal(b, sym);
+      buf_printf(b, ", sp_box_class(_t%d))); ", tk);
+    }
     /* bare method(:sym) on an instance method binds the current self */
     /* a method_missing Method (cplan_capture_missing) binds its receiver
        after its respond_to_missing? test */
@@ -2510,6 +2523,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     }
     if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
+    if (ivk >= 0) buf_puts(b, "; })");
     return 1;
   }
   /* `klass.instance_method(name).parameters` with a class or a name only the

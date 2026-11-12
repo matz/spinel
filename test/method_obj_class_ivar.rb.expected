@@ -1,0 +1,15 @@
+17
+[17, 17, 17]
+17
+1
+#<Class:Box>
+:pick
+"a!"
+"b?"
+-2
+[17, 17]
+17
+17
+[NameError, "undefined method 'pick' for class 'NilClass'"]
+17
+[17, 17]

@@ -1205,13 +1205,12 @@ enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS };
 typedef struct ElabRec { Compiler *c; LoadRecord *r; int *fc; unsigned char *fs, *vs, *vmain; int cap; unsigned char unplaced; int cur, cfc; unsigned char cfs; int body; } ElabRec;   /* cur: the statement being recorded, in the frame cfc / cfs; body: the def whose body makes the versions (LrDef.body) */
 
 /* The constant name a class or module header (or a read) names, as the
-   program wrote it: a header the qualify passes renamed keeps the Ruby path
-   it resolved to (qc_ruby_name), whose last name it is; a read they renamed
-   keeps the name it had (qc_orig_name). */
+   program wrote it: a header keeps the name written beside the C name the
+   walk registers it under (walk_class_c_name); a read the qualify passes
+   renamed keeps the name it had (qc_orig_name). */
 static const char *lr_written_name(const NodeTable *nt, int cp) {
-  const char *rn = nt_str(nt, cp, "qc_ruby_name"), *q = rn;
-  for (const char *p = rn ? strstr(rn, "::") : NULL; p; p = strstr(p + 2, "::")) q = p + 2;
-  return rn ? q : nt_str(nt, cp, "qc_orig_name") ? nt_str(nt, cp, "qc_orig_name") : nt_key_name(nt, cp);
+  const char *o = nt_str(nt, cp, "qc_orig_name");
+  return o ? o : nt_str(nt, cp, "name");
 }
 
 static int lr_const_at(Compiler *c, int node, const char *name, LoadPoint p, const LrDef **out, int key);

@@ -340,6 +340,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
          it: hoisted to g_pre they ran before the whole enclosing expression,
          so `"#{x}" + "#{x = "b"}"` read x after the assignment (#5574) */
       for (int si = 0; si + 1 < bn; si++) emit_stmt(c, body[si], &decls, 0);
+      /* an empty `#{}` is nil, whose to_s writes nothing */
+      if (expr < 0) continue;
       NodeKind ek = nt_kind(nt, expr);
       /* a part of a class the program reopened with its own to_s is already
          `<part>.to_s` (desugar_interp_reopened_to_s) */

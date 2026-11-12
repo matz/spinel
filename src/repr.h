@@ -247,6 +247,13 @@ ReprForm repr_box_form(const Compiler *c, Repr r);
 /* Can node's box (emit_boxed) hold a heap pointer, which a temp holding
    the box across an allocation has to root? */
 int repr_box_holds_heap(Compiler *c, int node);
+/* Does boxing a value of representation r build a new heap object (a by-value
+   struct's cell, a value object's copy, a String handle made around bytes,
+   which is what boxing a String's bytes does)?
+   A box that only tags a pointer, a scalar or a handle that exists does not,
+   and so holds nothing the value's own root does not. A form this cannot
+   tell answers yes. */
+int repr_box_allocates(const Compiler *c, Repr r);
 const char *repr_form_name(int form);
 /* --repr-check is on */
 extern int g_repr_check;

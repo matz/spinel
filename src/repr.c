@@ -1439,6 +1439,23 @@ int repr_box_holds_heap(Compiler *c, int node) {
     return 1;
   }
 }
+/* See repr.h. */
+int repr_box_allocates(const Compiler *c, Repr r) {
+  switch (repr_box_form(c, r)) {
+  case RF_PASS: case RF_NIL_EFFECT: case RF_INT: case RF_INT_NIL: case RF_FLT:
+  case RF_FLT_NIL: case RF_BIGINT: case RF_BOOL: case RF_SYM:
+  case RF_NULLABLE: case RF_NULLABLE_DYN: case RF_STRBUF_HANDLE:
+  case RF_STRBUF_ELEM: case RF_PTR_ARRAY:
+    return 0;
+  case RF_STRUCT:
+    /* a struct held by value (a Range, Complex, Rational, Tms) is copied into a
+       cell; a Time is held by pointer (its Repr kind says struct, its C type
+       says otherwise) and a Class is tagged with its index */
+    return ty_is_struct_valued(r.as_ty) && r.as_ty != TY_CLASS;
+  default:
+    return 1;   /* a copy (RF_VOBJ), a fresh handle, a shape-specific box */
+  }
+}
 
 const char *repr_form_name(int form) {
   static const char *const names[RF__COUNT] = {

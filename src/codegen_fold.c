@@ -8911,10 +8911,18 @@ static void emit_arg_rooted(Compiler *c, Scope *m, int idx, int provided, int he
   char ht[ARGOV_TEXT_LEN] = "";
   if (held > 0) snprintf(ht, sizeof ht, "_t%d", held);
   else if (provided >= 0 && view_held_text(provided)) snprintf(ht, sizeof ht, "%s", view_held_text(provided));
-  if (ht[0] && provided >= 0 && ab.p && sp_streq(ab.p, ht)) {
+  /* a held binding that is a handle, passed to a handle parameter, is that
+     handle (SP_STR_HDL of a handle is the handle) */
+  if (ht[0] && provided >= 0 && ab.p && pt == TY_STRBUF && view_held_handle(provided))
+    buf_puts(out, ab.p);
+  else if (ht[0] && provided >= 0 && ab.p && sp_streq(ab.p, ht)) {
     emit_obj_upcast_prefix(c, pt, comp_ntype(c, provided), out);
     buf_puts(out, ht);
   }
+  /* a poly parameter boxing the held value holds nothing new when the box
+     only tags it: the held temp is the root */
+  else if (ht[0] && provided >= 0 && pt == TY_POLY && ab.p && !repr_box_allocates(c, repr_of(c, provided)))
+    buf_puts(out, ab.p);
   else emit_rooted_operand(c, pt, provided, ab.p ? ab.p : default_value_from_compiler(c, pt), out);
   free(ab.p);
 }
@@ -9549,23 +9557,10 @@ int ran_first_read(Compiler *c, int node, const char *text) {
 }
 
 /* A box that only wraps what its operand holds (an immediate, or a pointer
-   the operand's own temp roots): built from the head's temp, it needs no
-   root of its own. A struct, a value object or a fresh handle is a new
-   heap object. */
-static int box_wraps(ReprForm f) {
-  switch (f) {
-  case RF_PASS: case RF_INT: case RF_INT_NIL: case RF_FLT: case RF_FLT_NIL: case RF_BIGINT:
-  case RF_STR: case RF_BOOL: case RF_SYM: case RF_NULLABLE: case RF_NULLABLE_DYN:
-  case RF_STRBUF_HANDLE: case RF_PTR_ARRAY:
-    return 1;
-  default:
-    return 0;
-  }
-}
-
-/* See codegen_internal.h. */
+   the operand's own temp roots), built from the head's temp, needs no root of
+   its own (repr_box_allocates). See codegen_internal.h. */
 int head_held_box(Compiler *c, int node) {
-  return head_held_temp(c, node) >= 0 && box_wraps(repr_box_form(c, repr_of(c, node)));
+  return head_held_temp(c, node) >= 0 && !repr_box_allocates(c, repr_of(c, node));
 }
 
 /* See codegen_internal.h. */
@@ -12484,7 +12479,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);\n", ht, hb.p, ht);
         free(hb.p);
-        view_hold(view_bind_temp(argv[k], ht));
+        view_hold_handle(view_bind_temp(argv[k], ht));
         if (held) held[k] = ht;
         continue;
       }
@@ -12560,7 +12555,7 @@ else {
         buf_puts(g_pre, "\n");
       }
       free(hb.p);
-      { int hs = view_bind_temp(argv[k], ht); if (root) view_hold(hs); }
+      { int hs = view_bind_temp(argv[k], ht); if (root) { if (at == TY_STRBUF) view_hold_handle(hs); else view_hold(hs); } }
       if (held && root) held[k] = ht;
     }
   }

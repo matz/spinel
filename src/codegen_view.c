@@ -197,6 +197,11 @@ int view_held(int node) { return view_held_text(node) != NULL; }
 void view_hold(int slot) {
   if (slot >= 0 && slot < g_n_argov && (g_argov_flag[slot] & ARGOV_RAN)) g_argov_flag[slot] |= ARGOV_HELD;
 }
+void view_hold_handle(int slot) {
+  view_hold(slot);
+  if (slot >= 0 && slot < g_n_argov && (g_argov_flag[slot] & ARGOV_HELD)) g_argov_flag[slot] |= ARGOV_HANDLE;
+}
+int view_held_handle(int node) { return view_held(node) && view_latest_has(node, ARGOV_HANDLE); }
 
 unsigned view_epoch(void) { return view_epoch_n; }
 

@@ -102,3 +102,21 @@ while i < 120
 end
 puts sup[0].show, sup[119].show, sup.map(&:show).uniq.size
 puts asg[0].show, asg[119].show, asg.map(&:show).uniq.size
+
+# a frozen String made in the argument list is boxed into a new handle by a
+# poly parameter, beside another that allocates
+class F
+  def initialize(a, b) = (@a = a; @b = b)
+
+  def show = "#{@a.inspect} #{@b.inspect} #{@a.frozen?}"
+end
+
+F.new(1, :one)
+frz = []
+i = 0
+while i < 120
+  frz << F.new("a#{i}".freeze, [i, i]).show
+  frz << F.new("a#{i}".freeze, "c#{i}".freeze).show
+  i += 1
+end
+puts frz[0], frz[1], frz[239], frz.uniq.size

@@ -23243,8 +23243,8 @@ static void emit_vis_msg_boxed(int vis, const char *vnm, int tv, const char *arg
   else buf_printf(b, "_t%d; })", tm);
 }
 static int emit_vis_refusal_x(Compiler *c, int id, Buf *b);
+static void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
 static void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
-static int boxed_value_needs_root(Compiler *c, int op);
 static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
 /* Does a reopened builtin class or module (`class Proc; def top`, `module
    Comparable; def top`) other than own (the closed method's) answer vnm?
@@ -23435,20 +23435,21 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
   if (boxed && rr.as_ty == TY_NIL) { cname = "nil"; named = 1; boxed = 0; }
   const char *kind = vis == SP_VIS_PRIVATE ? "private" : "protected";
   const NodeTable *nt = c->nt;
-  /* The receiver, then the arguments in source order, run ahead of the
-     raise (each one's prelude in front of it) as statements of its message
-     argument, which stages the receiver and the positional arguments on the
-     exception (#receiver, #args), as the missing method's raise does
-     (emit_missing_raise): the text leads with the raise, which is how a
-     slot knows it diverges, and stands for the call's value. */
+  /* The receiver, then the arguments in source order and the `&expr`
+     (emit_raise_operands), run ahead of the raise (each one's prelude in
+     front of it) as statements of its message argument, which stages the
+     receiver and the positional arguments on the exception (#receiver,
+     #args), as the missing method's raise does (emit_missing_raise): the
+     text leads with the raise, which is how a slot knows it diverges, and
+     stands for the call's value. */
   int vac = 0; const int *vav = call_args(nt, id, &vac);
   int staged = !nt_argv_has(nt, vav, vac, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
   int tv = ++g_tmp, t0 = g_tmp + 1;
   g_tmp += vac;
   buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = ", tv); emit_boxed(c, vrecv, b);
   buf_puts(b, "; ");
-  if (boxed_value_needs_root(c, vrecv)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
-  for (int k = 0; k < vac; k++) emit_missing_operand(c, vav[k], staged ? t0 + k : 0, b);
+  if (repr_box_holds_heap(c, vrecv)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
+  emit_raise_operands(c, id, staged, t0, b);
   Buf args; memset(&args, 0, sizeof args);
   if (staged) {
     buf_printf(&args, "%d, (sp_RbVal[]){", vac);
@@ -24136,17 +24137,10 @@ static void emit_raise_placeholder(Compiler *c, int id, Buf *b) {
   }
   else buf_printf(b, ", %s)", dflt);
 }
-/* Does node op's boxed value hold a heap pointer, which a temp holding it
-   ahead of a raise roots? (a scalar, nil, true, false, a Symbol and a
-   class value do not, nor does a frozen String literal, whose handle is
-   static: share_frozen_literal) */
-static int boxed_value_needs_root(Compiler *c, int op) {
-  Repr r = repr_of(c, op);
-  return (needs_root(r.as_ty) || r.big || r.kind == RK_BOXED) && !share_frozen_literal(c, op);
-}
 /* An operand ahead of a raise (emit_missing_raise), as a statement after
-   its own prelude: its boxed value into temp t, rooted where it holds a
-   heap pointer, for t > 0, else run for its effect */
+   its own prelude: its boxed value into temp t, rooted unless the box
+   proves it holds no heap pointer (repr_box_holds_heap), for t > 0, else
+   run for its effect */
 static void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
   Buf ap, ae; memset(&ap, 0, sizeof ap); memset(&ae, 0, sizeof ae);
   Buf *sv = g_pre; g_pre = &ap;
@@ -24155,12 +24149,12 @@ static void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
   if (ap.p) buf_puts(b, ap.p);
   if (t > 0) {
     buf_printf(b, "sp_RbVal _t%d = %s; ", t, ae.p ? ae.p : "sp_box_nil()");
-    if (boxed_value_needs_root(c, op)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
+    if (repr_box_holds_heap(c, op)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
   }
   else buf_printf(b, "(void)(%s); ", ae.p ? ae.p : "0");
   free(ap.p); free(ae.p);
 }
-/* The `&expr` ahead of a raise (emit_missing_raise, emit_unrouted_gap), as
+/* The `&expr` ahead of a raise (emit_raise_operands, emit_unrouted_gap), as
    CRuby evaluates it before the method is looked up: its value is taken as a
    proc (a Symbol or a Method is one, anything else answers its TypeError) and
    run for its effect, the prelude of each in front. */
@@ -24195,6 +24189,21 @@ static void emit_block_arg_operand(Compiler *c, int id, int fe, Buf *b) {
   if (ae.p) buf_puts(b, ae.p);
   free(ap.p); free(ae.p);
 }
+/* The operands of call m that run ahead of its raise, after its receiver,
+   in CRuby's order: its arguments (emit_missing_operand), into temps t0..
+   when staged on the exception (#args), else for their effect, then its
+   `&expr`, taken as a proc (emit_block_arg_operand). A `&blk` or `&` that
+   hands on the method's own block (resolve_forwarded_block) runs nothing
+   and is a Proc or nil already, and an inlined copy of the method binds no
+   C variable for it, so it is left out. */
+static void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int argc = 0; const int *argv = call_args(nt, m, &argc);
+  for (int k = 0; k < argc; k++) emit_missing_operand(c, argv[k], staged ? t0 + k : 0, b);
+  int blk = nt_ref(nt, m, "block");
+  int fe = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
+  if (fe >= 0 && resolve_forwarded_block(c, blk) == blk) emit_block_arg_operand(c, m, fe, b);
+}
 /* The raise of call m, which finds no method where it runs (cplan_missing
    kind, self, anon): CRuby's NameError or NoMethodError, raised after the
    operands of run that the value at holder runs ahead of m (none for NULL)
@@ -24211,18 +24220,20 @@ static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, i
   char head[240];
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, m, "name");
-  int recv = nt_ref(nt, m, "receiver"), blk = nt_ref(nt, m, "block");
+  int recv = nt_ref(nt, m, "receiver");
   int argc = 0; const int *argv = call_args(nt, m, &argc);
   int staged = kind == CM_NOMETHOD && !nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
   int t0 = g_tmp + 1;
   g_tmp += argc;
-  int fe = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
-  int body = argc > 0 || fe >= 0 || (run && run->n > 0);
+  /* (the operands, written first: a raise that runs none has no
+     statements around its message) */
+  Buf ops; memset(&ops, 0, sizeof ops);
+  for (int k = 0; run && k < run->n; k++) emit_missing_operand(c, run->ids[k], 0, &ops);
+  emit_raise_operands(c, m, staged, t0, &ops);
+  int body = ops.len > 0;
   buf_puts(b, kind == CM_NAMEERROR ? "(sp_raise_cls(\"NameError\", " : "(sp_raise_cls(\"NoMethodError\", ");
-  if (body) buf_puts(b, "({ ");
-  for (int k = 0; run && k < run->n; k++) emit_missing_operand(c, run->ids[k], 0, b);
-  for (int k = 0; k < argc; k++) emit_missing_operand(c, argv[k], staged ? t0 + k : 0, b);
-  if (fe >= 0) emit_block_arg_operand(c, m, fe, b);
+  if (body) { buf_puts(b, "({ "); buf_puts(b, ops.p); }
+  free(ops.p);
   snprintf(head, sizeof head, "%s '%s' for %s ", kind == CM_NAMEERROR ? "undefined local variable or method" : "undefined method",
            name, anon >= 0 && comp_class_is_module(c, &c->classes[anon]) ? "module" : "class");
   buf_puts(b, staged ? "sp_stage_recv_args_msg(" : "sp_stage_recv_msg(");

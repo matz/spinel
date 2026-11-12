@@ -244,6 +244,9 @@ typedef enum {
 
 /* the form a value of representation r is boxed in */
 ReprForm repr_box_form(const Compiler *c, Repr r);
+/* Can node's box (emit_boxed) hold a heap pointer, which a temp holding
+   the box across an allocation has to root? */
+int repr_box_holds_heap(Compiler *c, int node);
 const char *repr_form_name(int form);
 /* --repr-check is on */
 extern int g_repr_check;

@@ -442,6 +442,13 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
       g_self = svs; g_self_deref = svd;
       ren_unpark(&park);
     }
+    /* The arguments ran first, inside this block (emit_args_before_binding):
+       what a binding builds from them (a keyword hash taken whole) builds
+       here too, not out at the statement ahead of the block where the
+       values are not read yet. */
+    Buf lb, pb; memset(&lb, 0, sizeof lb); memset(&pb, 0, sizeof pb);
+    Buf *ob = b, *sv_bpre = g_pre; int sv_bind = g_indent;
+    if (ran_first) { b = &lb; g_pre = &pb; g_indent = din; }
     emit_indent(b, din);
     int pc = 0;
     { Buf rn; memset(&rn, 0, sizeof rn); buf_printf(&rn, "_y%d_%s", tag, m->pnames[i]);
@@ -498,6 +505,12 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
     g_self = svs; g_self_deref = svd;
     ren_unpark(&park);
     buf_puts(b, pc ? ");\n" : ";\n");
+    if (ran_first) {
+      b = ob; g_pre = sv_bpre; g_indent = sv_bind;
+      buf_puts(b, pb.p ? pb.p : "");
+      buf_puts(b, lb.p ? lb.p : "");
+      free(pb.p); free(lb.p);
+    }
   }
   inl_dflt_leave(sv_dflt);
   view_unbind(argov_saved);

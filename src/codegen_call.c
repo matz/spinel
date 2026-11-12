@@ -30739,6 +30739,20 @@ static void emit_call_inner(Compiler *c, int id, Buf *b) {
   { int br = nt_ref(c->nt, id, "receiver");
     if (br >= 0 && cplan_builtin_call(c, id) && !g_poly_builtin_arm &&
         comp_ntype(c, br) == TY_POLY) {
+      /* `equal?` is the identity of any value, a class value too, whose
+         dispatch has only the classes' own methods */
+      int ea = nt_ref(c->nt, id, "arguments"), en = 0;
+      const int *ev = ea >= 0 ? nt_arr(c->nt, ea, "arguments", &en) : NULL;
+      const char *enm = nt_str(c->nt, id, "name");
+      if (enm && sp_streq(enm, "equal?") && en == 1 && nt_ref(c->nt, id, "block") < 0 &&
+          nt_kind(c->nt, ev[0]) != NK_SplatNode) {
+        /* (the call keeps the type the program's own equal? gave it) */
+        int bx = comp_ntype(c, id) == TY_POLY;
+        if (bx) buf_puts(b, "sp_box_bool(");
+        emit_value_identity(c, br, ev[0], b);
+        if (bx) buf_puts(b, ")");
+        return;
+      }
       int va = view_push_arm(id, g_prbd_skip, 1);
       /* --int-overflow=promote boxed the prepended method's own Integer
          answer, so the call is poly while the builtin's stays scalar: the

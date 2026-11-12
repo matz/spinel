@@ -42,11 +42,10 @@ static void emit_int_bit_recv(Compiler *c, int recv, TyKind rt, const char *conv
   emit_scalar_operand_op(c, recv, name, b);   /* NoMethodError for nil */
 }
 
-/* A nullable String compared by identity with a box or nil: both
-   operands boxed, the receiver evaluated before an allocating argument
-   and rooted across it. (--share-strings compares String identities
-   through the plan, emit_str_equal.) */
-static void emit_string_identity(Compiler *c, int recv, int arg, Buf *b) {
+/* See codegen_internal.h. The receiver is evaluated before an allocating
+   argument and rooted across it. A nullable String compared by identity
+   with a box or nil takes this too. */
+void emit_value_identity(Compiler *c, int recv, int arg, Buf *b) {
   int operand[2] = { recv, arg }, t[2];
   buf_puts(b, "({ ");
   for (int i = 0; i < 2; i++)
@@ -266,7 +265,7 @@ static int emit_compare_lead_arms(Compiler *c, int id, const char *name, int rec
       (repr_of(c, argv[0]).kind == RK_BOXED || repr_of(c, argv[0]).as_ty == TY_NIL ||
        (repr_of(c, argv[0]).may_nil && repr_of(c, argv[0]).as_ty != TY_STRING &&
         repr_of(c, argv[0]).as_ty != TY_STRBUF))) {
-    emit_string_identity(c, recv, argv[0], b);
+    emit_value_identity(c, recv, argv[0], b);
     return 1;
   }
   return 0;

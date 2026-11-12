@@ -1,0 +1,10 @@
+"café €"
+"café crème!"
+"é+é"
+[["k", "値 v"], ["a", "%zz %"]]
+false
+#<Encoding:UTF-8>
+[ArgumentError, "invalid %-encoding (é%zz)"]
+400004
+true
+linear

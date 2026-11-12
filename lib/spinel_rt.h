@@ -2316,14 +2316,15 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
     "__id__", "define_singleton_method", "instance_eval", "instance_exec",
     "private_methods", "protected_methods", "public_method", "public_methods",
     "remove_instance_variable", "singleton_method", "singleton_methods", NULL };
-  /* empty? is Array's and Hash's, not Enumerable's: a Range does not answer
-     it in CRuby, and activesupport's Object#blank? asks exactly that --
-     deliberately absent from this array, even though both Array and Hash
-     get it from their own generated sp_gen_responds_*[] instead. */
+  /* empty? and length are Array's and Hash's, not Enumerable's: a Range or
+     an Enumerator does not answer them in CRuby, and activesupport's
+     Object#blank? asks exactly that -- deliberately absent from this array,
+     even though both Array and Hash get them from their own generated
+     sp_gen_responds_*[] instead. */
   static const char *const enumm[] = {
     "each", "each_with_index", "each_with_object", "map", "collect", "select",
     "filter", "reject", "find", "detect", "reduce", "inject", "to_a", "size",
-    "length", "count", "include?", "first", "min", "max", "sort", "sort_by",
+    "count", "include?", "first", "min", "max", "sort", "sort_by",
     "sum", "any?", "all?", "none?", "one?", "group_by", "partition", "zip",
     "flat_map", "each_slice", "each_cons", "take", "drop", NULL };
   static const char *const numm[] = {

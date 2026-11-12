@@ -21696,13 +21696,19 @@ static void alias_pair_names(const NodeTable *nt, int s, const char **nw, const 
   }
 }
 
+/* (in body `upto_body`, only the statements ahead of the `upto`th) */
+static int alias_class_defines_upto(const NodeTable *nt, const char *cls, const char *meth, int n0, int upto_body, int upto);
 static int alias_class_defines(const NodeTable *nt, const char *cls, const char *meth, int n0) {
+  return alias_class_defines_upto(nt, cls, meth, n0, -1, 0);
+}
+static int alias_class_defines_upto(const NodeTable *nt, const char *cls, const char *meth, int n0, int upto_body, int upto) {
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_class(nt, m)) continue;
     const char *cn = class_def_name(nt, m);
     if (!cn || !sp_streq(cn, cls)) continue;
     int body = class_def_body(nt, m);
     int n = 0; const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+    if (body >= 0 && body == upto_body && upto < n) n = upto;
     for (int k = 0; k < n; k++) {
       if (nt_kind(nt, st[k]) == NK_DefNode && nt_ref(nt, st[k], "receiver") < 0 &&
           nt_str(nt, st[k], "name") && sp_streq(nt_str(nt, st[k], "name"), meth)) return 1;
@@ -21864,6 +21870,31 @@ int desugar_send_aliases(Compiler *c) {
   return changed;
 }
 
+int builtin_method_arity(const char *cls, const char *m, int *out);
+/* The builtin alias_builtin_rooted finds at the root of cls's chain, or NULL. */
+static const char *alias_builtin_root(const NodeTable *nt, const char *cls, const char *meth, int n0) {
+  for (int hop = 0; cls && hop < 16; hop++) {
+    const char *sup = NULL;
+    for (int m = 0; m < n0 && !sup; m++) {
+      if (!class_def_is_class(nt, m)) continue;
+      const char *cn = class_def_name(nt, m);
+      int sc = class_def_super(nt, m);
+      if (cn && sp_streq(cn, cls) && sc >= 0 && nt_kind(nt, sc) == NK_ConstantReadNode) sup = nt_str(nt, sc, "name");
+    }
+    if (!sup) return NULL;
+    int own = 0;
+    for (int m = 0; m < n0 && !own; m++) {
+      if (!class_def_is_class(nt, m)) continue;
+      const char *cn = class_def_name(nt, m);
+      own = cn && sp_streq(cn, sup) && class_def_super(nt, m) >= 0;
+    }
+    if (!own) return sp_streq(sup, "Hash") || sp_streq(sup, "Array") || sp_streq(sup, "String") ? sup : NULL;
+    if (alias_class_defines(nt, sup, meth, n0)) return NULL;
+    cls = sup;
+  }
+  return NULL;
+}
+
 int desugar_inherited_aliases(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -21884,7 +21915,50 @@ int desugar_inherited_aliases(Compiler *c) {
       const char *nw = NULL, *od = NULL;
       alias_pair_names(nt, s, &nw, &od);
       /* (an alias of a def of the program is bound at registration, register_alias_methods: only a chain rooted at a builtin keeps its forwarder) */
-      if (!nw || !od || alias_class_defines(nt, cls, od, n0) || !alias_builtin_rooted(nt, cls, od, n0)) continue;
+      if (!nw || !od || !alias_builtin_rooted(nt, cls, od, n0)) continue;
+      /* An alias of the builtin's method in a class that defines the name
+         itself after it (Hashie::Mash's `alias regular_writer []=` ahead of its
+         own `[]=`): the alias is the builtin's, and a method of its own, which
+         a subclass overrides and reaches with `super` (OmniAuth's AuthHash).
+         It becomes `def nw(*a, &b) = self.od(*a, &b)`, the call the builtin's
+         alone. One defined before the alias is the class's own, as before. */
+      if (alias_class_defines(nt, cls, od, n0)) {
+        if (alias_class_defines_upto(nt, cls, od, n0, body, k)) continue;
+        /* (a fixed count only: the builtin's call with a splat would reach the
+           class's own method of the name) */
+        const char *root = alias_builtin_root(nt, cls, od, n0);
+        int ar = -1;
+        if (!root || !builtin_method_arity(root, od, &ar) || ar < 0 || ar > 8) continue;
+        char nwb[256], odb[256];
+        snprintf(nwb, sizeof nwb, "%s", nw); snprintf(odb, sizeof odb, "%s", od);
+        int fd = fwd_new_node_like(nt, s, "DefNode"), ps = fwd_new_node_like(nt, s, "ParametersNode");
+        int call = fwd_new_node_like(nt, s, "CallNode"), self = fwd_new_node_like(nt, s, "SelfNode");
+        int req[8], rd[8];
+        for (int a = 0; a < ar; a++) {
+          char pn[32]; snprintf(pn, sizeof pn, "spinel_alias_p%d__", a);
+          req[a] = fwd_new_node_like(nt, s, "RequiredParameterNode");
+          nt_node_set_str(nt, req[a], "name", pn);
+          rd[a] = local_read_like(nt, s, pn);
+        }
+        nt_node_set_arr(nt, ps, "requireds", req, ar);
+        if (ar > 0) {
+          int args = fwd_new_node_like(nt, s, "ArgumentsNode");
+          nt_node_set_arr(nt, args, "arguments", rd, ar);
+          nt_node_set_ref(nt, call, "arguments", args);
+        }
+        nt_node_set_str(nt, call, "name", odb);
+        nt_node_set_ref(nt, call, "receiver", self);
+        nt_node_set_int(nt, call, "builtin_only", 1);
+        int bd = fwd_new_node_like(nt, s, "StatementsNode");
+        nt_node_set_arr(nt, bd, "body", &call, 1);
+        nt_node_set_str(nt, fd, "name", nwb);
+        nt_node_set_ref(nt, fd, "parameters", ps);
+        nt_node_set_ref(nt, fd, "body", bd);
+        nt_node_set_ref(nt, fd, "receiver", -1);
+        out[no - 1] = fd;
+        grew = changed = 1;
+        continue;
+      }
       char nwc[256], odc[256], hid[300];
       snprintf(nwc, sizeof nwc, "%s", nw); snprintf(odc, sizeof odc, "%s", od);
       snprintf(hid, sizeof hid, "%s#inherited", nwc);

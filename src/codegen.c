@@ -17022,10 +17022,10 @@ void emit_super(Compiler *c, int id, Buf *b) {
        at run time, which no emitted code here does, so it is refused rather
        than answered by a NoMethodError CRuby does not raise. An override
        whose whole body is `super` is let through while no other override
-       exists: every send then lowers past it (send_family_user_answers), so
-       its body never runs. */
+       exists (send_family_defined_anywhere): every send then lowers past it
+       (send_family_user_answers), so its body never runs. */
     if (uname && is_send_family(uname) &&
-        (!send_def_just_supers(c, (int)(s - c->scopes)) || send_family_program_owns(c, uname))) {
+        (!send_def_just_supers(c, (int)(s - c->scopes)) || send_family_defined_anywhere(c, uname))) {
       static char msg[320];
       snprintf(msg, sizeof msg, "unsupported `super` in a program-defined `%s`: "
                "it reaches Object#%s, which a program method cannot call yet "

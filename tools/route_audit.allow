@@ -23,6 +23,7 @@ src/analyze.c act_has_override which subclasses override the name
 src/analyze.c compute_reachable comp_method_in_chain a send's name, in every class
 src/analyze.c ie_class_answers which classes answer the name
 src/analyze.c ie_class_value_target which classes answer the name
+src/analyze_desugar.c send_any_class_owns which classes answer a send-family name
 src/analyze.c ie_poly_self_classes which classes answer the name
 src/analyze.c mixin_call_guarded which classes answer the name
 src/analyze.c oa_copy_name which classes define dup or clone (a program's own may answer anything)
@@ -64,8 +65,8 @@ src/analyze.c ps_op_reopened an operator's presence
 src/analyze.c rd_builtin_string_method a name's presence
 src/analyze_desugar.c fwd_io_one_param_iter a name's presence in a File or IO reopening
 src/analyze_desugar.c iter_name_program_defined a name's presence in a reopened Array, Hash, Range or Enumerable
-src/analyze_desugar.c send_family_program_owns a name's presence
 src/analyze_desugar.c send_split_by_owner the classes that define a send-family name of their own
+src/analyze_desugar.c send_family_defined_anywhere a name's presence
 src/analyze_infer.c an_any_class_cmethod a name's presence
 src/analyze_infer.c an_module_defines a name's presence
 src/analyze_infer.c an_module_methods_listable a name's presence

@@ -2488,7 +2488,7 @@ static inline int comp_object_defines(Compiler *c, const char *name) {
   return oc >= 0 && comp_method_in_chain(c, oc, name, NULL) >= 0;
 }
 int        send_def_just_supers(Compiler *c, int mi);          /* analyze_desugar.c */
-int        send_family_program_owns(Compiler *c, const char *name);
+int        send_family_defined_anywhere(Compiler *c, const char *name);   /* analyze_desugar.c */
 /* Array subclasses (#7449, ClassInfo.ary_root): the root of class cid's
    Array chain or -1; the same for an object type (-1 for any other type);
    the kind of the Array the chain's instances embed, TY_POLY_ARRAY once the

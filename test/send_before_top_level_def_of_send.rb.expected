@@ -1,0 +1,9 @@
+:main_m
+[:n, 1]
+:main_m
+:main_m
+:main_m
+NoMethodError
+[:top, :m]
+[:top, :n, 1]
+[:top, :m]

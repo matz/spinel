@@ -10225,6 +10225,13 @@ int infer_default_param_types(Compiler *c) {
       if (dt == TY_NIL || dt == TY_UNKNOWN || dt == TY_VOID) continue;
       LocalVar *p = scope_local(sc, sc->pnames[i]);
       if (!p || p->rbs_seeded) continue;
+      /* narrow_object_arrays took the default as one of the parameter's
+         sources and narrowed it anyway: a default that reads as the poly
+         array is that table built at the narrowed kind, as a narrowed
+         local's write is (lv_keep_decisions). Joined, the two array kinds
+         gave the poly scalar, the write pass put the pin back, and the
+         fixpoint ran to its cap. */
+      if (dt == TY_POLY_ARRAY && ty_is_ptr_array(p->oa_pin) && p->type == p->oa_pin) continue;
       /* an empty literal default is untyped by the rule above, not by any
          value: say so; another default's value speaks for itself */
       TyKind merged = ty_unify(p->type, dt);

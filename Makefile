@@ -5158,6 +5158,10 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for default_empty_array_object_rows)"; ok=0;; \
 	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (an empty [] default widened an object-array parameter every round: the fixpoint ran to its cap)"; ok=0; };; \
 	esac; \
+	rounds=$$(SP_FIXPOINT_LOG=1 $(SPINEL) test/default_object_array_param_converges.rb -c --no-line-map -o "$$tmp/doa.c" 2>&1 | sed -n 's/^\[fp\] rounds=\([0-9]*\).*/\1/p' | tail -1); \
+	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for default_object_array_param_converges)"; ok=0;; \
+	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (a [Info.new] default joined its poly array into an object-array parameter every round: the fixpoint ran to its cap)"; ok=0; };; \
+	esac; \
 	rounds=$$(SP_FIXPOINT_LOG=1 $(SPINEL) test/infer/reopen_implicit_self_converges.rb -c --no-line-map -o "$$tmp/ris.c" 2>&1 | sed -n 's/^\[fp\] rounds=\([0-9]*\).*/\1/p' | tail -1); \
 	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for reopen_implicit_self_converges)"; ok=0;; \
 	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (a bare call in a Time reopen was tried on a new self node every round, and the types moved: the fixpoint ran to its cap)"; ok=0; };; \

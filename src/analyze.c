@@ -14434,8 +14434,21 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     int rrc_empty_lit = rrc >= 0 &&
                         nt_kind(nt, rrc) == NK_ArrayNode &&
                         ({ int _n = 0; nt_arr(nt, rrc, "elements", &_n); _n == 0; });
-    if (rrc >= 0 && (ty_is_array(infer_type(c, rrc)) || rrc_empty_lit)) {
-      int rev = nt_ref(nt, id, "block") >= 0 ? -1 : nt_new_node(nt, "CallNode");
+    /* A receiver known only at run time (TY_POLY: an Integer array at one
+       call site, a String array at another) has no rfind arm of its own and
+       died with NoMethodError (K-039). With a block it takes the same
+       reverse.find lowering as a typed array, provided no class of the
+       program defines its own rfind -- then a poly receiver could be that
+       class and the call must stay a dispatch. */
+    int rrc_poly = rrc >= 0 && nt_ref(nt, id, "block") >= 0 &&
+                   (infer_type(c, rrc) == TY_POLY || nt_kind(nt, rrc) == NK_YieldNode) &&
+                   !an_user_recv_defines_method(c, "rfind");
+    if (rrc >= 0 && (ty_is_array(infer_type(c, rrc)) || rrc_empty_lit || rrc_poly)) {
+      /* a typed array's block form is walked backwards by the find loop
+         itself (the "rfind" flag below); a poly receiver goes through the
+         generic find clone, which only walks forwards, so it needs the
+         reversed copy as its receiver */
+      int rev = nt_ref(nt, id, "block") >= 0 && !rrc_poly ? -1 : nt_new_node(nt, "CallNode");
       if (rev >= 0) {
         nt_node_set_str(nt, rev, "name", "reverse");
         nt_node_set_ref(nt, rev, "receiver", rrc);

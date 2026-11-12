@@ -16910,6 +16910,16 @@ int desugar_builtins(Compiler *c) {
       const int *iav = ia >= 0 ? nt_arr(nt, ia, "arguments", &iac) : NULL;
       if (iac == 0 || (iac == 1 && nt_kind(nt, iav[0]) == NK_SplatNode)) cn0 = "find_index";
     }
+    /* Array#rfind { } on a receiver known only at run time (a yield whose
+       blocks give an Integer array and a String array) is lowered to
+       `recv.reverse.find { }` in the fixpoint (desugar_enum_named_call), a
+       call that was written as rfind: give it the find copy that call will
+       need, or the widened receiver found no copy and the typed find loop
+       stayed shaped for the first block's element type (K-039) */
+    if (cn0 && sp_streq(cn0, "rfind") && nt_ref(nt, id, "block") >= 0 && nt_ref(nt, id, "receiver") >= 0) {
+      int ra = nt_ref(nt, id, "arguments");
+      if (ra < 0) cn0 = "find";
+    }
     /* `recv.send(:tally)` / public_send / __send__ with a literal name is
        retargeted onto `recv.tally` inside the fixpoint
        (desugar_public_send_recv), after this pass: give it its copy under
@@ -18161,6 +18171,10 @@ int desugar_builtin_enum_calls(Compiler *c) {
       continue;
     }
     if (chained && chained[id]) continue;
+    /* an rfind a typed Array walks backwards in place (desugar_enum_named_call
+       sets the flag): the copy's each walks forwards, and would answer the
+       first match where the last one is wanted */
+    if (nt_int(nt, id, "rfind", 0)) continue;
     int ok = 0;
     /* an Enumerator over a generator is driven lazily through #next by the
        typed emitter of these names, which is what lets a prefix be taken

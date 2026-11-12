@@ -1,0 +1,33 @@
+NameError 'bad' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError '@1' is not allowed as an instance variable name
+NameError '@@x' is not allowed as an instance variable name
+NameError '@a-b' is not allowed as an instance variable name
+NameError 'q"x' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError '@1' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError '@1' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError 'bad' is not allowed as an instance variable name
+NameError '@9' is not allowed as an instance variable name
+run recv
+run value
+NameError 'bad' is not allowed as an instance variable name
+run recv
+run value
+NameError 'bad' is not allowed as an instance variable name
+run recv
+NameError 'bad' is not allowed as an instance variable name
+ok nil
+ok 1
+ok true
+ok 1
+ok false
+ok 3
+:bad

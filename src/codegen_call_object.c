@@ -3092,6 +3092,21 @@ static int emit_bivar_table_op(Compiler *c, const BopCtx *x, char op, Buf *b) {
   return 1;
 }
 
+void emit_ivar_name_error(Compiler *c, Buf *b, const char *sym, int arg) {
+  size_t n = strlen(sym ? sym : "") + 64;
+  char *msg = malloc(n);
+  snprintf(msg, n, "'%s' is not allowed as an instance variable name", sym ? sym : "");
+  /* a Symbol name is NameError#name as it is; a String one would be the
+     String itself, which the staged text (interned) cannot carry */
+  int as_sym = arg >= 0 && nt_kind(c->nt, arg) == NK_SymbolNode;
+  buf_puts(b, "sp_raise_cls(\"NameError\", ");
+  if (as_sym) { buf_puts(b, "(sp_exc_stage_name("); emit_str_literal(b, sym ? sym : ""); buf_puts(b, "), "); }
+  emit_str_literal(b, msg);
+  if (as_sym) buf_puts(b, ")");
+  buf_puts(b, ")");
+  free(msg);
+}
+
 int emit_op_ivar_reflection(Compiler *c, const BopCtx *x, Buf *b) {
   const NodeTable *nt = c->nt;
   int id = x->id, recv = x->recv, argc;
@@ -3123,9 +3138,8 @@ int emit_op_ivar_reflection(Compiler *c, const BopCtx *x, Buf *b) {
     else { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "); "); }
   }
   if (tn >= 0) buf_printf(b, "sp_ivar_name_check(_t%d); ", tn);
-  /* a literal name with no `@` is NameError before anything else */
-  if (argc >= 1 && sym && sym[0] != '@')
-    buf_printf(b, "sp_raise_cls(\"NameError\", \"'%s' is not allowed as an instance variable name\"); ", sym);
+  /* a literal name that is no ivar name is NameError before anything else */
+  if (argc >= 1 && sym && !ivar_name_ok(sym)) { emit_ivar_name_error(c, b, sym, argv[0]); buf_puts(b, "; "); }
   /* the prefix is rooted: the receiver's inspect allocates before the
      message is built, and a collection there freed it */
   if (is_set)
@@ -3180,7 +3194,13 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     const char *ivn = nt_kind(nt, argv[0]) == NK_SymbolNode
                         ? nt_str(nt, argv[0], "value") : nt_str(nt, argv[0], "content");
     int dcid = ty_object_class(rt);
-    int have = ivn && ivn[0] == '@' && comp_ivar_index(&c->classes[dcid], ivn) >= 0;
+    /* a name that is no ivar name raises, the receiver evaluated first */
+    if (!ivar_name_ok(ivn)) {
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), ");
+      emit_ivar_name_error(c, b, ivn, argv[0]); buf_puts(b, ", (sp_bool)0)");
+      return 1;
+    }
+    int have = comp_ivar_index(&c->classes[dcid], ivn) >= 0;
     /* one nothing has set yet is not defined (ivar_set_kind) */
     if (have && ((ivar_set_kind(c, dcid, ivn) & 1) ||
                  poly_ivar_unset_marked(c, dcid, comp_ivar_index(&c->classes[dcid], ivn)))) {
@@ -3193,7 +3213,7 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
     /* a name the class does not declare: in the object's table, where a
        computed instance_variable_set may have put it (#8219) */
-    if (!have && ivn && ivn[0] == '@' && c->classes[dcid].computed_ivar_set && !comp_ty_value_obj(c, rt)) {
+    if (!have && c->classes[dcid].computed_ivar_set && !comp_ty_value_obj(c, rt)) {
       buf_printf(b, "sp_bivar_defined_p((const void *)("); emit_expr(c, recv, b);
       buf_printf(b, "), sp_sym_intern(\"%s\"))", ivn);
       return 1;
@@ -3517,13 +3537,14 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
     NodeKind rk = nt_kind(nt, recv);
     int recv_lvalue = (rk == NK_LocalVariableReadNode ||
                               rk == NK_InstanceVariableReadNode || rk == NK_SelfNode);
-    /* A name without a leading `@` is never a valid ivar name: raise NameError
-       at runtime (evaluating the receiver first for its side effects). */
-    if (!sym || sym[0] != '@') {
-      if (recv >= 0) { buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); }
-      else buf_puts(b, "(");
-      buf_printf(b, "sp_raise_cls(\"NameError\", \"'%s' is not allowed as an instance variable name\"), sp_box_nil())",
-                 sym ? sym : "");
+    /* A name that is no ivar name (`"bad"`, `:@1`) raises NameError at
+       run time, after the receiver and a set's value are evaluated. */
+    if (!ivar_name_ok(sym)) {
+      buf_puts(b, "(");
+      if (recv >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); }
+      if (is_set) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[1], b); buf_puts(b, "), "); }
+      emit_ivar_name_error(c, b, sym, argv[0]);
+      buf_puts(b, ", sp_box_nil())");
       return 1;
     }
     if (is_set && c->classes[cid].is_data) return emit_data_ivar_set(c, id, recv, argv[1], cid, b);

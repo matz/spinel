@@ -1532,6 +1532,17 @@ int cvar_name_ok(const char *n) {
   for (p++; *p; p++) if (!(*p == '_' || isalnum(*p) || *p >= 0x80)) return 0;
   return 1;
 }
+/* Is `n` an instance variable name: `@` and an identifier, as
+   cvar_name_ok asks of `@@`? An instance_variable_get / _set / _defined?
+   with a literal name that is not one (`"bad"`, `:@1`, `:@@x`) raises
+   CRuby's NameError when it runs. */
+int ivar_name_ok(const char *n) {
+  if (!n || n[0] != '@') return 0;
+  const unsigned char *p = (const unsigned char *)n + 1;
+  if (!(*p == '_' || isalpha(*p) || *p >= 0x80)) return 0;
+  for (p++; *p; p++) if (!(*p == '_' || isalnum(*p) || *p >= 0x80)) return 0;
+  return 1;
+}
 int comp_cvar_owner(const Compiler *c, int cid, const char *name) {
   int owner = cid;
   if (cid < 0 || !name) return cid;

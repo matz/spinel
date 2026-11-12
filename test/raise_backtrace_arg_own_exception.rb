@@ -31,5 +31,14 @@ show { deep(A) }
 show { deep(B) }
 ka = A
 begin; raise ka, "m", cause: nil; rescue => e; puts "#{e.class}: #{e.message}"; end
-ks.each { |kk| begin; raise kk, "m", cause: B.new("cc"); rescue => e; puts "#{e.class}: #{e.message} #{e.cause.inspect}"; end }
+cz = B.new("cc")
+ks.each { |kk| begin; raise kk, "m", cause: cz; rescue => e; puts "#{e.class}: #{e.message} #{e.cause.inspect}"; end }
+
+# a class that is no exception class raises TypeError, as before
+class Foo; end
+[nil, String, Foo].each do |kk|
+  begin; raise kk, "m", ["b"]; rescue TypeError => e; puts "#{kk.inspect}: #{e.message}"; end
+end
+begin; raise Foo, "m", ["b"]; rescue TypeError => e; puts e.message; end
+begin; raise String, "m", ["b"]; rescue TypeError => e; puts e.message; end
 p $n

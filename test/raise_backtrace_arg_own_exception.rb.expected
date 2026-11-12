@@ -14,4 +14,9 @@ B: d ["deep"] nil
 A: A-ex:m
 A: A-ex:m #<B: cc>
 B: m #<B: cc>
+nil: exception class/object expected
+String: exception class/object expected
+Foo: exception class/object expected
+exception class/object expected
+exception class/object expected
 11

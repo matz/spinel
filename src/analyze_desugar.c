@@ -5182,21 +5182,29 @@ static int send_own_in_chain(Compiler *c, int call, int cid, const char *name, i
    call `id` rather than Object's? In Ruby a class's `def send` is that class's:
    the bubbletea gem's Runner#send(message) sits in the same program as Thor's
    and tty-reader's runtime-name sends, which are Object#send all the same.
-   Taken as the program's when the program defines the name at the top level
-   (Object's then, for every receiver), when the call has no receiver (or self)
-   and the enclosing class's chain defines it, when the receiver's class does,
-   or when the receiver is known only at run time and any class of the program
-   defines it (no flow says which classes reach it). A method that only calls
-   super is not one (send_def_just_supers). */
-/* Does the program define `name` (send, __send__ or public_send) anywhere,
-   past the methods that only call super? 2 for a top-level def (Object's,
-   so every receiver's), 1 for a class's or module's, 0 for none. */
-int send_family_program_owns(Compiler *c, const char *name) {
-  int tmi = comp_method_index(c, name);
-  if (tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi)) return 2;
-  for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_class(c, k, name);
-    if (mi >= 0 && !send_def_just_supers(c, mi)) return 1;
+   Taken as the program's when a top-level def of the name answers the call
+   (Object's then, for every receiver: send_top_answers), when the call has no
+   receiver (or self) and the enclosing class's chain defines it, when the
+   receiver's class does, or when the receiver is known only at run time and
+   any class of the program defines it (no flow says which classes reach it).
+   A method that only calls super is not one (send_def_just_supers). */
+/* Does a top-level def of `name` answer call `id`: a def the call meets
+   (call_target's CT_TOP), past one that only calls super? Object's, so every
+   receiver's. */
+static int send_top_answers(Compiler *c, int id, const char *name) {
+  int tmi = call_target(c, id, -1, name, CT_TOP, NULL);
+  return tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi);
+}
+
+/* Does a class of the program answer call `id` with a send of its own (the
+   classes whose chain answers the name, or every class while the chain memo
+   cannot be trusted)? For a receiver whose class no flow tells. */
+static int send_any_class_owns(Compiler *c, int id, const char *name) {
+  int n;
+  const int *rs = comp_name_responders(c, name, 0, &n);
+  for (int i = 0, k = 0; rs ? i < n : k < c->nclasses; i++, k++) {
+    if (rs) k = rs[2 * i];
+    if (send_own_in_chain(c, id, k, name, 0)) return 1;
   }
   return 0;
 }
@@ -5207,7 +5215,7 @@ int send_family_program_owns(Compiler *c, const char *name) {
    no class set for the value, any class's send may answer. */
 static int send_poly_user_answers(Compiler *c, int id, int recv, const char *name) {
   const ClsSet *s = cls_fact_node(c, recv);
-  if (!s || s->all) return 1;
+  if (!s || s->all) return send_any_class_owns(c, id, name);
   for (int k = cls_set_next(s, -1); k >= 0; k = cls_set_next(s, k)) {
     int cm = k >= c->nclasses;
     if (send_own_in_chain(c, id, cm ? k - c->nclasses : k, name, cm)) return 1;
@@ -5220,8 +5228,7 @@ static int send_poly_user_answers(Compiler *c, int id, int recv, const char *nam
 }
 
 static int send_family_user_answers(Compiler *c, int id, int recv, const char *name) {
-  int own = send_family_program_owns(c, name);
-  if (own != 1) return own == 2;
+  if (send_top_answers(c, id, name)) return 1;
   if (recv < 0 || nt_kind(c->nt, recv) == NK_SelfNode) {
     Scope *sc = comp_scope_of(c, id);
     if (!sc || sc->class_id < 0) return 0;
@@ -5234,6 +5241,21 @@ static int send_family_user_answers(Compiler *c, int id, int recv, const char *n
   int bcls = builtin_class_of_type(rt) ? core_of_type(rt) : -1;
   int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
   return bci >= 0 && send_own_in_chain(c, id, bci, name, 0);
+}
+
+/* Does the program define `name` (send, __send__ or public_send) anywhere,
+   past the methods that only call super: a top-level def or a class's or a
+   module's own? A question about the name, not a call (the `super` refusal in
+   a method that only calls super: while no other override exists every send
+   lowers past it, send_family_user_answers). */
+int send_family_defined_anywhere(Compiler *c, const char *name) {
+  int tmi = comp_method_index(c, name);
+  if (tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi)) return 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    int mi = comp_method_in_class(c, k, name);
+    if (mi >= 0 && !send_def_just_supers(c, mi)) return 1;
+  }
+  return 0;
 }
 
 int desugar_implicit_send(Compiler *c) {
@@ -5356,7 +5378,7 @@ static int sus_class_const(Compiler *c, int ci) {
 static int send_split_by_owner(Compiler *c, int id, const char *nm) {
   NodeTable *nt = (NodeTable *)c->nt;
   int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0 || nt_ref(nt, id, "block") >= 0 || send_family_program_owns(c, nm) != 1) return 0;
+  if (recv < 0 || nt_ref(nt, id, "block") >= 0 || send_top_answers(c, id, nm)) return 0;
   TyKind rt = infer_type(c, recv);
   if (rt != TY_POLY && rt != TY_UNKNOWN) return 0;
   int args = nt_ref(nt, id, "arguments"), argc = 0;

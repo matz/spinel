@@ -242,12 +242,44 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    from (-1: a prepend chain with no next) */
 int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */
+/* Does call id run Kernel's raise: a receiverless `raise` or `fail` that no
+   method of the program answers (a class's own `raise`, a top-level def)? */
+int cplan_kernel_raise(Compiler *c, int id);
 /* Does the Class row for call id, named name, on the class value recv answer
    the call? Not where a class method of the program's does (the plan binds
    it a target), nor where the row is a private method's and the call names
    an explicit receiver and does not ignore visibility (a send does): that is
    NoMethodError. */
 int cplan_class_row(Compiler *c, int id, int recv, const char *name);
+/* How many positionals call id's trailing keyword hash adds for a callee
+   whose keyword fact is kwpos (builtin_kw_positional): 0 for none, a hash
+   that spreads nothing (`**{}`, `**nil`) or keywords the callee takes; 1 for
+   one it passes as a Hash (a key, or the full branch split_kwsplat_calls
+   made, whose hash is not empty); -1 where the run time decides (an open
+   `**` the split left: under defined?, beside a splat, or one whose callee
+   no fact speaks for). 0 for a call with no keyword hash. */
+int cplan_hash_positionals(Compiler *c, int id, int kwpos);
+/* The same for builtin cls's method `name` (its class method where cside),
+   by its keyword fact (builtin_kw_positional). A method that takes the one
+   keyword builtin_kw_taken names and passes a hash with any other key on
+   counts that hash: 1 where a literal key is another or the hash is the
+   full branch of a split (split_kwsplat_calls tests for another key), 0
+   where every element is that keyword or spreads nothing or the hash is
+   the split's other branch, -1 where a `**` operand is the run time's
+   (the split, which runs from the method's most positionals on, gives each
+   of its branches a count). */
+int cplan_builtin_hash_positionals(Compiler *c, int id, const char *cls, const char *name, int cside);
+/* Does the keyword hash or Hash literal h hold a key other than `key`: 1
+   where a literal key is another (in a `**{...}` literal too); 0 where
+   every element is `key:` or spreads nothing; -1 where a key or a `**`
+   operand is the run time's (`k => v`, `**h`). */
+int cplan_hash_holds_key_past(Compiler *c, int h, const char *key);
+/* The class-side row (bop_class_find) call id takes on builtin class cls,
+   its constant receiver: NULL where none of cls's singleton chain has one,
+   or where a class method the program gives a class of the chain, up to
+   the row's own, stands in front of it (`class IO; def self.select` is
+   what File.select runs). */
+const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls);
 /* A call that builds an instance of an Array or Hash subclass (or, with
    `[]`, of a Struct or Data class: cplan_as_new) from its arguments through
    a Class value known only at run time (a parameter, an element, a call's
@@ -1146,6 +1178,11 @@ int cplan_entry_finds(const Compiler *c, int e);
    class's `self.new`, so that inference, the emitter and the call plan
    name one method. */
 int cplan_user_new(Compiler *c, int id, int ci);
+/* The class method of program class ci that call id, named name, runs:
+   for a `new` the one cplan_user_new answers (none where the builtin
+   constructor answers a call before the class's `def self.new`), for any
+   other name the one call_target finds there. */
+int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

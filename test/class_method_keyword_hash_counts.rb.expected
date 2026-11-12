@@ -1,0 +1,9 @@
+basename 3: ArgumentError: wrong number of arguments (given 3, expected 1..2)
+basename 2: TypeError: no implicit conversion of Hash into String
+basename: "b"
+dirname 3: ArgumentError: wrong number of arguments (given 3, expected 1..2)
+expand_path 3: ArgumentError: wrong number of arguments (given 3, expected 1..2)
+absolute_path 3: ArgumentError: wrong number of arguments (given 3, expected 1..2)
+log 3: ArgumentError: wrong number of arguments (given 3, expected 1..2)
+log: 3.0
+rand 2: ArgumentError: wrong number of arguments (given 2, expected 0..1)

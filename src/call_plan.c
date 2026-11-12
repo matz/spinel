@@ -404,6 +404,13 @@ static int cplan_root_under_builtin(Compiler *c, int top) {
 int cplan_kernel_def(Compiler *c, const char *name) {
   return elab_main_history_marked(c, name, "kernel_def");
 }
+/* See call_plan.h. */
+int cplan_kernel_raise(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  return nm && is_raise_alias(nm) && cplan_user(c, id).dispatch == CP_NONE;
+}
 /* A super's parent-chain target, past inherited copies of the same
    extended definition. Shared by resolution, inference, inline splicing and
    the miss check. Every step is call_target's, with CT_REACH: it skips the
@@ -707,9 +714,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;   /* a class body's self */
   if (sci >= 0 || bci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     int ci = sci >= 0 ? sci : bci >= 0 ? bci : const_node_class_index(c, recv);
-    /* (a `new`: the one the call reaches, as inference and the static
-       emitter take it: cplan_user_new) */
-    int mi = ci < 0 ? -1 : is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
+    int mi = ci < 0 ? -1 : cplan_cmethod_target(c, id, ci, name);
     /* a package's native_func, which the constant calls in C directly; its
        def is for the module reached as a value */
     if (sci < 0 && comp_scope_native_twin(c, mi)) return;
@@ -2404,6 +2409,10 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
 }
 /* See call_plan.h. */
 int cplan_user_new(Compiler *c, int id, int ci) { return user_new_at(c, id, ci, NULL); }
+/* See call_plan.h. */
+int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name) {
+  return is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
+}
 /* Is call id a `new` (or a record class's `[]`) on a record class whose
    target the record cannot place (user_new_at)? The class is the
    receiver's constant, or self's in a class method (the copy's class for
@@ -2961,6 +2970,104 @@ int cplan_self_class(Compiler *c, int id) {
   if (framed) elab_plan_leave(c);
   return ci;
 }
+/* Does the keyword hash or Hash literal h spread a key: 1; 0 where its
+   `**` operands are nil or literals that spread nothing; -1 where one is
+   the run time's (an anonymous `**` too). */
+static int spread_elements(const NodeTable *nt, int h) {
+  int en = 0, sp = 0;
+  const int *els = nt_arr(nt, h, "elements", &en);
+  for (int e = 0; e < en && sp <= 0; e++) {
+    if (nt_kind(nt, els[e]) != NK_AssocSplatNode) return 1;
+    int v = nt_ref(nt, els[e], "value");
+    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+    int one = vk == NK_NilNode ? 0 : vk == NK_HashNode ? spread_elements(nt, v) : -1;
+    if (one != 0) sp = one;
+  }
+  return sp;
+}
+/* See call_plan.h. */
+int cplan_hash_positionals(Compiler *c, int id, int kwpos) {
+  int argc = 0;
+  const int *argv = call_args(c->nt, id, &argc);
+  if (argc == 0 || nt_kind(c->nt, argv[argc - 1]) != NK_KeywordHashNode) return 0;
+  int h = argv[argc - 1];
+  int sp = nt_int(c->nt, h, "kwsplit_full", 0) ? 1 : spread_elements(c->nt, h);
+  if (sp == 0 || kwpos == 0) return 0;
+  return kwpos == 1 ? sp : -1;
+}
+/* Is the key node k of a hash pair the Symbol `key`: 1; 0 where it is a
+   literal of another value; -1 where its value is the run time's (a
+   variable, a call, an interpolated Symbol). */
+static int hash_key_is(const NodeTable *nt, int k, const char *key) {
+  switch (nt_kind(nt, k)) {
+    case NK_SymbolNode: {
+      const char *kn = nt_str(nt, k, "value");
+      return kn ? sp_streq(kn, key) : -1;
+    }
+    case NK_StringNode: case NK_IntegerNode: case NK_FloatNode: case NK_RationalNode:
+    case NK_ImaginaryNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
+      return 0;
+    default:
+      return -1;
+  }
+}
+/* See call_plan.h. */
+int cplan_hash_holds_key_past(Compiler *c, int h, const char *key) {
+  const NodeTable *nt = c->nt;
+  int en = 0, sp = 0;
+  const int *els = nt_arr(nt, h, "elements", &en);
+  for (int e = 0; e < en; e++) {
+    int k = nt_kind(nt, els[e]) == NK_AssocNode ? nt_ref(nt, els[e], "key") : -1;
+    int one;
+    if (k >= 0) {
+      int is = hash_key_is(nt, k, key);
+      one = is < 0 ? -1 : !is;
+    } else {
+      int v = nt_kind(nt, els[e]) == NK_AssocSplatNode ? nt_ref(nt, els[e], "value") : -1;
+      NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+      one = vk == NK_NilNode ? 0 : vk == NK_HashNode ? cplan_hash_holds_key_past(c, v, key) : -1;
+    }
+    if (one == 1) return 1;
+    if (one < 0) sp = -1;
+  }
+  return sp;
+}
+/* cplan_hash_positionals for a callee that takes the one keyword `key`
+   and passes a hash with any other key on as one more positional
+   (builtin_kw_taken): 1 where the hash holds another key
+   (cplan_hash_holds_key_past) or is the full branch of a split (split_kwsplat_calls
+   tests for another key), 0 where it holds none or is the split's other
+   branch, -1 where a `**` operand is the run time's. */
+static int hash_positionals_past(Compiler *c, int id, const char *key) {
+  const NodeTable *nt = c->nt;
+  int argc = 0;
+  const int *argv = call_args(nt, id, &argc);
+  if (argc == 0 || nt_kind(nt, argv[argc - 1]) != NK_KeywordHashNode) return 0;
+  int h = argv[argc - 1];
+  if (nt_int(nt, h, "kwsplit_taken", 0)) return 0;
+  /* the split's branches: one holds no other key, the other one does */
+  return nt_int(nt, h, "kwsplit_full", 0) ? 1 : cplan_hash_holds_key_past(c, h, key);
+}
+/* See call_plan.h. */
+int cplan_builtin_hash_positionals(Compiler *c, int id, const char *cls, const char *name, int cside) {
+  int kwpos = builtin_kw_positional(cls, name, cside);
+  return kwpos == 2 ? hash_positionals_past(c, id, builtin_kw_taken(cls, name, cside)) : cplan_hash_positionals(c, id, kwpos);
+}
+/* See call_plan.h. */
+const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls) {
+  const char *name = nt_str(c->nt, id, "name");
+  int argc = 0;
+  call_args(c->nt, id, &argc);
+  const BuiltinClassOp *cop = bop_class_find(cls, name, argc, nt_ref(c->nt, id, "block") >= 0);
+  const char *a;
+  for (int i = 0; cop && (a = builtin_ancestor_at(cls, i)); i++) {
+    int ci = comp_class_index(c, a);
+    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return NULL;
+    if (sp_streq(a, cop->cls)) break;
+  }
+  return cop;
+}
+
 /* Does a builtin answer `name` on program class ci (main for -1): one on
    any self, a core class's own, a record class's own
    (elab_record_cmethod)? */

@@ -1,0 +1,9 @@
+fwda: [3]
+fwda f: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+fwdc: " abc "
+fwdc f: TypeError: no implicit conversion of Hash into String
+fwdh: {z: 1}
+fwde: true
+fwde f: ArgumentError: wrong number of arguments (given 2, expected 1)
+fwds: true
+fwds f: ArgumentError: wrong number of arguments (given 4, expected 1..3)

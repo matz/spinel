@@ -192,7 +192,7 @@ CLASS_TARGETS = {
   "Random"  => %w[new rand srand],
   "ENV"     => %w[fetch key? has_key? include? member? assoc rassoc values_at],
   "Kernel"  => %w[format sprintf Integer Float String Array Hash Rational Complex
-                  throw catch raise rand srand caller lambda proc binding block_given?
+                  throw catch raise fail rand srand caller lambda proc binding block_given?
                   local_variables global_variables respond_to_missing?],
   # the class-side surface of the constants a program names bare: GC, Fiber
   # and Thread are not classes the compiler declares; a class Struct.new or
@@ -210,10 +210,13 @@ CLASS_TARGETS = {
   "Signal"  => %w[signame list trap],
   "Socket"  => %w[new getaddrinfo getnameinfo pair socketpair gethostname sockaddr_in
                   unpack_sockaddr_in pack_sockaddr_in sockaddr_un pack_sockaddr_un],
+  # (BasicSocket's own class methods; for_fd is ahead of IO.for_fd)
+  "BasicSocket" => %w[for_fd do_not_reverse_lookup do_not_reverse_lookup=],
   "TCPSocket"  => %w[new open],
   "TCPServer"  => %w[new open],
   "UNIXSocket" => %w[new open],
   "UNIXServer" => %w[new open],
+  "UDPSocket"  => %w[new],
   "SizedQueue" => %w[new],
   "Queue"      => %w[new],
   "Base64"  => %w[encode64 decode64 strict_encode64 strict_decode64
@@ -425,6 +428,11 @@ def spec_covers(wide, narrow)
     wmin >= 0 && wmin <= nmin && (wmax < 0 || (nmax >= 0 && nmax <= wmax))
   end
 end
+# KIND_CLASSES: the classes one TyKind's rows stand for; a keyword fact
+# (BAK, below) holds for such a row only where it holds on each class, at
+# that class's own counts (SizedQueue#push takes timeout:, Queue#push none)
+KIND_CLASSES = { "Queue" => %w[Queue SizedQueue] }
+kind_specs = inst.select { |r| KIND_CLASSES.each_value.any? { |ks| ks.include?(r[0]) } }.to_h { |r| [r[0, 2], r[2..]] }
 sized = inst.select { |r| r[0] == "SizedQueue" }.to_h { |r| [r[1], r[2..]] }
 inst.reject! { |r| r[0] == "SizedQueue" }
 inst.map! do |r|
@@ -435,6 +443,7 @@ inst.map! do |r|
   spec_covers(s, r[2..]) ? ["Queue", r[1], *s] : nil
 end
 inst.compact!
+
 
 CLASS_CONSTANTS = {
   "StructClass" => Struct.new(:a), "DataClass" => Data.define(:a),
@@ -453,6 +462,99 @@ CLASS_TARGETS.each do |cls, meths|
     cm << [cls, m, *s] if s
   end
 end
+# The class methods whose keyword hash is one more positional (BACK): a
+# fixed Method#arity and no keyword parameters, as BasicSocket.for_fd(fd)
+# has, so `BasicSocket.for_fd(1, autoclose: false)` passes two arguments;
+# else, where a side's maximum is proved, the instance side's keyword probe
+# on each such side (File.basename(p, s, a: 1): given 3, expected 1..2).
+# KW_PASSTHROUGH methods, of a class or its instances, take one keyword and
+# pass a hash with any other key as one more positional, so the probe's
+# unknown key reads as a method that takes none: they keep no BACK or BAK
+# row but a BAKT row naming the keyword and the side's most positionals,
+# and the run aborts if one stops taking it (an unborn Fiber checks the
+# arguments before it refuses the raise). Thread#raise takes cause: too, but
+# counts its arguments only on a live thread (a dead one answers nil for any
+# count), so no fact counts it.
+#   Kernel.raise, Kernel.fail, Fiber#raise        cause:
+KW_PASSTHROUGH = {
+  ["Kernel", :class] => { "raise" => :cause, "fail" => :cause },
+  ["Fiber", :instance] => { "raise" => :cause },
+}
+KW_PASSTHROUGH.each do |(cls, side), ms|
+  ms.each do |m, key|
+    recv = side == :class ? Object.const_get(cls) : INSTANCE_RECEIVERS.fetch(cls).call
+    r = begin
+      recv.__send__(m, RuntimeError, "a", nil, key => nil)
+    rescue ArgumentError => e
+      e
+    rescue Exception
+      nil
+    end
+    abort "#{cls} #{m} no longer takes #{key}: beside its most positionals" if r.is_a?(ArgumentError)
+  end
+end
+cmkw = cm.select do |cls, m, min, max, _, _, bmin, bmax|
+  next false if KW_PASSTHROUGH.fetch([cls, :class], {}).key?(m)
+  const = CLASS_CONSTANTS.fetch(cls) { Object.const_get(cls) }
+  meth = const.method(m)
+  next false if meth.parameters.any? { |kind, _| %i[key keyreq keyrest].include?(kind) }
+  next true if meth.arity >= 0
+  sides = [[min, max, false], [bmin, bmax, true]].select { |lo, hi, _| lo >= 0 && hi >= 0 }
+  !sides.empty? && sides.all? { |_, hi, blk| kw_positional?(-> { const }, m.to_sym, hi, block: blk) }
+end
+# The libraries whose methods on a builtin class Spinel answers from the
+# library's builtin-op rows (io/console: IO#winsize, IO.console). Each is
+# loaded after the core surface above is probed, and what it adds -- the
+# public methods a probe receiver answers after the require and not before,
+# and the class methods a class itself defines then -- is probed and written
+# as BAL (instance) and BALC (class) rows that name the library first. Only
+# the count check reads them, for a program that requires the library
+# (builtin_library_fact_holds); the core tables (names, reflection) stay the
+# core's.
+LIBRARIES = %w[io/console]
+lib = []
+libc = []
+LIBRARIES.each do |feature|
+  inst_before = INSTANCE_RECEIVERS.to_h { |cls, thunk| [cls, thunk.call.public_methods] }
+  consts = CLASS_TARGETS.keys.to_h { |cls| [cls, CLASS_CONSTANTS.fetch(cls) { Object.const_get(cls) }] }
+  cls_before = consts.transform_values(&:public_methods)
+  require feature
+  INSTANCE_RECEIVERS.each do |cls, thunk|
+    added = thunk.call.public_methods - inst_before[cls]
+    (added.map(&:to_s).sort - INSTANCE_METHOD_SKIP).each do |m|
+      s = full_spec_of(thunk, m)
+      lib << [feature, cls, m, *s] if s
+    end
+  end
+  consts.each do |cls, const|
+    added = (const.public_methods - cls_before[cls]).select { |m| const.method(m).owner == const.singleton_class }
+    added.map(&:to_s).sort.each do |m|
+      s = full_spec_of(-> { const }, m)
+      libc << [feature, cls, m, *s] if s
+    end
+  end
+end
+# The Kernel functions that take any number of arguments and no keywords
+# (BACK too): CRuby passes the keyword hash as one more argument, which
+# the probe sees in the function's answer or its output (the output
+# functions are probed with $stdout swapped), where a function that takes
+# keywords raises "unknown keyword". The probe passes no argument, then a
+# "%p" (format's). It runs after the libraries' probe: pp loads io/console.
+KERNEL_KW_UNBOUNDED = %w[format sprintf p pp puts print]
+def kw_hash_positional?(m, need)
+  out, $stdout = $stdout, StringIO.new
+  r = Kernel.__send__(m, *Array.new(need, "%p"), __kwprobe: 1)
+  ($stdout.string + r.inspect).include?("__kwprobe")
+rescue Exception
+  false
+ensure
+  $stdout = out
+end
+KERNEL_KW_UNBOUNDED.each do |m|
+  next if cmkw.any? { |r| r[0, 2] == ["Kernel", m] }
+  cmkw << ["Kernel", m] if (0..1).any? { |need| kw_hash_positional?(m, need) }
+end
+
 # Method#arity of each class's OWN public instance methods, read straight off
 # CRuby rather than probed (a C method that counts its own arguments reads
 # -1 here; the spec tables above hold what it accepts), plus the Kernel
@@ -493,12 +595,35 @@ abort "Method#arity dump failed" unless $?.success? && !dump.empty?
 params, arity_all = dump.partition { |r| r[0] == "P" }
 arity_all.map! { |c, m, a| [c, m, a.to_i] }
 kernel_arity, arity = arity_all.partition { |r| r[0] == "Kernel" }
-kwpos = inst.select do |cls, m, min, max, _, _, bmin, bmax|
+# The instance methods whose keyword hash is one more positional (BAK): the
+# keyword probe on each side whose maximum is proved; or a fixed arity and
+# no keyword parameters where no Method#arity row says so (a module's
+# method: Comparable#between?, Enumerable#each_slice); on each class a
+# KIND_CLASSES row stands for, and never for a KW_PASSTHROUGH method
+arity_rows = arity.to_h { |c, m, a| [[c, m], a] }
+row_kw_positional = lambda do |cls, m, min, max, bmin, bmax|
   sides = [[min, max, false], [bmin, bmax, true]].select { |lo, hi, _| lo >= 0 && hi >= 0 }
   thunk = INSTANCE_RECEIVERS.fetch(cls)
-  next false if sides.empty? || (thunk.call.method(m).arity rescue 0) >= 0
+  next false if sides.empty?
+  meth = (thunk.call.method(m) rescue nil)
+  if meth && meth.arity >= 0
+    next !arity_rows.key?([cls, m]) && meth.parameters.none? { |kind, _| %i[key keyreq keyrest].include?(kind) }
+  end
   sides.all? { |_, hi, blk| kw_positional?(thunk, m.to_sym, hi, block: blk) }
 end
+kwpos = inst.select do |cls, m, min, max, _, _, bmin, bmax|
+  next false if KW_PASSTHROUGH.fetch([cls, :instance], {}).key?(m)
+  next row_kw_positional.(cls, m, min, max, bmin, bmax) unless KIND_CLASSES.key?(cls)
+  KIND_CLASSES[cls].all? do |k|
+    s = kind_specs[[k, m]]
+    s && row_kw_positional.(k, m, s[0], s[1], s[4], s[5])
+  end
+end
+# A library's instance methods whose keyword hash is one more positional
+# (BALK, its library first), by BAK's rule, probed with the library loaded:
+# io/console's IO#winsize takes none, so `$stdout.winsize(a: 1)` passes one
+# argument. A library's class methods (BALC) have no count to check.
+libkw = lib.select { |_, cls, m, min, max, _, _, bmin, bmax| row_kw_positional.(cls, m, min, max, bmin, bmax) }
 # Keep both facts where available; introspection is not an acceptance rule.
 # Retain Method#arity order, including the receiverless Kernel wrappers.
 counts = inst.to_h { |r| [r[0, 2], r[2..]] }
@@ -507,7 +632,12 @@ out = <<~C
      add a new method to the generator's lists and regenerate with --write.
      Method#arity and accepted positional counts are independent facts.
      BAI carries both, BAM only Method#arity, BAS only instance counts,
-     and BAC class/module counts. -1 maxima are unbounded; NULL messages
+     and BAC class/module counts; BAL and BALC are a library's instance
+     and class counts, its name first. BACK names the class methods whose
+     keyword hash counts as a positional (no keywords), BALK a library's
+     instance methods whose hash does, its name first; BAKT a method that
+     takes one keyword and counts a hash with any other key as a
+     positional, 1 for a class method, then its most positionals. -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
      Kernel Method#arity describes receiverless method(:name) wrappers.
      BAP is Method#parameters by the class or module that defines the
@@ -524,9 +654,20 @@ end
 end
 inst.each { |r| render.("BAS", r) if counts.key?(r[0, 2]) }
 cm.each { |r| render.("BAC", r) }
+lib.each { |r| render.("BAL", r) }
+libc.each { |r| render.("BALC", r) }
 kwpos.each { |r| render.("BAK", r[0, 2]) }
+cmkw.each { |r| render.("BACK", r[0, 2]) }
+libkw.each { |r| render.("BALK", r[0, 3]) }
+KW_PASSTHROUGH.each do |(cls, side), ms|
+  ms.each do |m, key|
+    row = (side == :class ? cm : inst).find { |r| r[0] == cls && r[1] == m }
+    abort "#{cls} #{m}: a KW_PASSTHROUGH method needs its counts" unless row && row[3] >= 0
+    render.("BAKT", [cls, m, key.to_s, side == :class ? 1 : 0, row[3]])
+  end
+end
 params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
-summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{params.length} parameters entries"
+summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{lib.length + libc.length} library + #{params.length} parameters entries"
 if ARGV.include?("--check")
   # the private-Kernel list the compiler and the runtime share is held to CRuby's
   listed = File.read(File.join(__dir__, "../lib/sp_kernel_private.h")).scan(/X\("([^"]+)"\)/).flatten

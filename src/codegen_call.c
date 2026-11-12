@@ -2484,7 +2484,12 @@ const char *const comparable_names[] = {
     "<", ">", "<=", ">=", "==", "between?", "clamp", NULL };
 
 #define BAK(...)
+#define BACK(...)
+#define BAKT(...)
 #define BAP(...)
+#define BAL(...)
+#define BALC(...)
+#define BALK(...)
 /* Method#arity reads the introspection column of the shared facts. */
 #define BAI(c,m,a,...) {c,m,a},
 #define BAM(c,m,a) {c,m,a},
@@ -2551,6 +2556,12 @@ int builtin_method_known(const char *cls, const char *m) {
 int builtin_method_known_any(const char *m) {
   for (int i = 0; m && sp_builtin_arity_tbl[i].cls; i++)
     if (sp_builtin_arity_tbl[i].m && sp_streq(sp_builtin_arity_tbl[i].m, m)) return 1;
+  return 0;
+}
+/* ...of a fixed Method#arity? */
+int builtin_method_fixed_any(const char *m) {
+  for (int i = 0; m && sp_builtin_arity_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_arity_tbl[i].m, m) && sp_builtin_arity_tbl[i].a >= 0) return 1;
   return 0;
 }
 /* Arity of a user method target scope (same rule as the Method#arity emit for
@@ -20551,7 +20562,8 @@ static int emit_range_step_bad_stride(Compiler *c, int id, int recv, int arg,
 typedef struct { const char *cls; const char *m; int min; int max;
                  const char *lo_exp; const char *hi_exp;
                  int blk_min; int blk_max;
-                 const char *blk_lo_exp; const char *blk_hi_exp; } SpAritySpec;
+                 const char *blk_lo_exp; const char *blk_hi_exp;
+                 const char *feature; } SpAritySpec;
 
 /* A call whose argument count CRuby's own method cannot take: evaluate the
    receiver and arguments for effect, then raise CRuby's ArgumentError --
@@ -20571,12 +20583,51 @@ typedef struct { const char *cls; const char *m; int min; int max;
 static const SpAritySpec
 sp_builtin_arity_spec_tbl[] = {
 #include "builtin_arity.inc"
-  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL}
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL, NULL}
 };
 #undef BAI
 #undef BAM
 #undef BAS
 #undef BAC
+/* The counts of the methods a library adds to a builtin class (BAL: io/console's
+   IO#winsize; BALC its class methods), each with its library: the count check
+   reads them where the program has the library, and nothing else does */
+#undef BAL
+#undef BALC
+#undef BALK
+#define BAI(...)
+#define BAM(...)
+#define BAS(...)
+#define BAC(...)
+#define BAL(f, ...) {__VA_ARGS__, f},
+#define BALC(...)
+#define BALK(...)
+static const SpAritySpec
+sp_builtin_lib_arity_spec_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL, NULL}
+};
+#undef BAL
+#undef BALC
+#undef BALK
+#define BAL(...)
+#define BALC(f, ...) {__VA_ARGS__, f},
+#define BALK(...)
+static const SpAritySpec
+sp_builtin_lib_cmeth_arity_spec_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL, NULL}
+};
+#undef BAI
+#undef BAM
+#undef BAS
+#undef BAC
+#undef BAL
+#undef BALC
+#undef BALK
+#define BAL(...)
+#define BALC(...)
+#define BALK(...)
 /* Method#arity of a Numeric method that Integer and Float inherit (abs2,
    quo, +@, step): the Method#arity rows are each class's own methods, so
    these have only the counts the class accepts. One count is the arity, a
@@ -20711,40 +20762,17 @@ int builtin_method_names(const char *cls, const char **out, int cap) {
 static const SpAritySpec
 sp_builtin_cmeth_arity_spec_tbl[] = {
 #include "builtin_arity.inc"
-  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL}
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL, NULL}
 };
 #undef BAI
 #undef BAM
 #undef BAS
 #undef BAC
 #undef BAK
-#define BAI(...)
-#define BAM(...)
-#define BAS(...)
-#define BAC(...)
-#define BAK(c,m) {c,m},
-static const struct { const char *cls; const char *m; } sp_builtin_kwpos_tbl[] = {
-#include "builtin_arity.inc"
-  {NULL, NULL}
-};
-#undef BAI
-#undef BAM
-#undef BAS
-#undef BAC
-#undef BAK
+#undef BAL
+#undef BALC
+#undef BALK
 #undef BAP
-static int kwh_counts(const char *cls, const char *name) {
-  int fa, fixed = 0;
-  if (builtin_method_arity(cls, name, &fa)) { if (fa >= 0) return 1; }
-  else for (int i = 0; sp_builtin_arity_tbl[i].cls && !fixed; i++)
-    fixed = sp_streq(sp_builtin_arity_tbl[i].m, name) && sp_builtin_arity_tbl[i].a >= 0;
-  for (int i = 0; fixed && sp_builtin_arity_spec_tbl[i].cls; i++)
-    if (sp_streq(sp_builtin_arity_spec_tbl[i].cls, cls) && sp_streq(sp_builtin_arity_spec_tbl[i].m, name) &&
-        sp_builtin_arity_spec_tbl[i].min >= 0 && sp_builtin_arity_spec_tbl[i].min == sp_builtin_arity_spec_tbl[i].max) return 1;
-  for (int i = 0; sp_builtin_kwpos_tbl[i].cls; i++)
-    if (sp_streq(sp_builtin_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_kwpos_tbl[i].m, name)) return 1;
-  return 0;
-}
 /* Method#parameters of the builtins, by the class or module that defines
    each (BAP: CRuby's instance_method(m).parameters) */
 #define BAI(...)
@@ -20752,6 +20780,9 @@ static int kwh_counts(const char *cls, const char *name) {
 #define BAS(...)
 #define BAC(...)
 #define BAK(...)
+#define BAL(...)
+#define BALC(...)
+#define BALK(...)
 #define BAP(c,m,p,cside) {c,m,p,cside},
 static const struct { const char *owner, *m, *params; int cside; } sp_builtin_params_tbl[] = {
 #include "builtin_arity.inc"
@@ -20762,6 +20793,9 @@ static const struct { const char *owner, *m, *params; int cside; } sp_builtin_pa
 #undef BAS
 #undef BAC
 #undef BAK
+#undef BAL
+#undef BALC
+#undef BALK
 #undef BAP
 /* The parameters CRuby lists for owner's instance method m, as
    sp_BoundMethod.params carries them ("kind[:name]" entries separated by
@@ -20791,22 +20825,34 @@ int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi) {
   }
   return 0;
 }
-/* The row of one spec table for (cls, name), read for the bare or the
-   block-carrying call. Answers whether the table has the row; exp receives
-   CRuby's wording when argc falls outside the accepted counts. */
+/* The row of one spec table for (cls, name); the instance and the class
+   table take in the rows of the libraries the program requires
+   (builtin_library_fact_holds), or of every library when every_lib (the
+   --check-bop-arity check, which has no program). */
+static const SpAritySpec *arity_spec_find(const SpAritySpec *tbl, const char *cls, const char *name, int every_lib) {
+  for (int i = 0; tbl[i].cls; i++)
+    if (sp_streq(tbl[i].cls, cls) && sp_streq(tbl[i].m, name)) return &tbl[i];
+  const SpAritySpec *lib = tbl == sp_builtin_arity_spec_tbl ? sp_builtin_lib_arity_spec_tbl
+                         : tbl == sp_builtin_cmeth_arity_spec_tbl ? sp_builtin_lib_cmeth_arity_spec_tbl : NULL;
+  for (int i = 0; lib && lib[i].cls; i++)
+    if (sp_streq(lib[i].cls, cls) && sp_streq(lib[i].m, name) && (every_lib || builtin_library_fact_holds(lib[i].feature)))
+      return &lib[i];
+  return NULL;
+}
+/* That row read for the bare or the block-carrying call. Answers whether
+   the table has the row; exp receives CRuby's wording when argc falls
+   outside the accepted counts. */
 static int arity_spec_row(const SpAritySpec *tbl, const char *cls, const char *name,
                           int with_block, int argc, char *exp, size_t n) {
-  for (int i = 0; tbl[i].cls; i++) {
-    if (!sp_streq(tbl[i].cls, cls) || !sp_streq(tbl[i].m, name)) continue;
-    int mn = with_block ? tbl[i].blk_min : tbl[i].min;
-    int mx = with_block ? tbl[i].blk_max : tbl[i].max;
-    const char *lo = with_block ? tbl[i].blk_lo_exp : tbl[i].lo_exp;
-    const char *hi = with_block ? tbl[i].blk_hi_exp : tbl[i].hi_exp;
-    if (mn >= 0 && argc < mn && lo) snprintf(exp, n, "%s", lo);
-    else if (mx >= 0 && argc > mx && hi) snprintf(exp, n, "%s", hi);
-    return 1;
-  }
-  return 0;
+  const SpAritySpec *r = arity_spec_find(tbl, cls, name, 0);
+  if (!r) return 0;
+  int mn = with_block ? r->blk_min : r->min;
+  int mx = with_block ? r->blk_max : r->max;
+  const char *lo = with_block ? r->blk_lo_exp : r->lo_exp;
+  const char *hi = with_block ? r->blk_hi_exp : r->hi_exp;
+  if (mn >= 0 && argc < mn && lo) snprintf(exp, n, "%s", lo);
+  else if (mx >= 0 && argc > mx && hi) snprintf(exp, n, "%s", hi);
+  return 1;
 }
 int builtin_cmethod_known(const char *cls, const char *name) {
   char exp[32] = "";
@@ -20855,9 +20901,8 @@ int builtin_super_cmethod_known(const char *cls, const char *name) {
   return 0;
 }
 
-/* The arity table's class for a row's receiver kind, or NULL: the kinds the
-   table probes a receiver of. */
-static const char *bop_spec_class(TyKind k) {
+/* See codegen_internal.h. */
+const char *bop_spec_class(TyKind k) {
   if (k == BOP_ANY_ARRAY || (k >= 0 && ty_is_array(k))) return "Array";
   if (k == BOP_ANY_HASH || (k >= 0 && ty_is_hash(k))) return "Hash";
   switch (k) {
@@ -20897,6 +20942,7 @@ static const char *const bop_arity_kw_rows[][2] = {
   {"Array", "pack"},        /* buffer: */
   {"Queue", "pop"}, {"Queue", "shift"}, {"Queue", "deq"},    /* timeout: */
   {"Queue", "push"}, {"Queue", "<<"}, {"Queue", "enq"},      /* timeout: (SizedQueue's) */
+  {"IO", "for_fd"}, {"IO", "new"},   /* class methods: mode:, autoclose:, ... */
   {NULL, NULL}
 };
 static int bop_arity_kw_row(const char *cls, const char *name) {
@@ -20927,6 +20973,32 @@ static int builtin_arity_tables_agree(void) {
           checked, bad);
   return bad;
 }
+/* Is builtin-op row r (of class cls; sep "#" for an instance method, "."
+   for a class method) outside CRuby's counts sp? Prints the finding; a
+   keyword row in bop_arity_kw_rows is marked used instead. */
+static int bop_row_outside(const char *cls, const char *sep, const BuiltinOp *r, const SpAritySpec *sp,
+                           int *kw_used, int *checked) {
+  if (!sp || (sp->min < 0 && sp->blk_min < 0)) return 0;   /* no row, or unproved */
+  /* the bare and the block-carrying counts together: a row serves both */
+  int lo = sp->min >= 0 ? sp->min : sp->blk_min;
+  if (sp->min >= 0 && sp->blk_min >= 0 && sp->blk_min < lo) lo = sp->blk_min;
+  int hi = -2;
+  if (sp->min >= 0) hi = sp->max;
+  if (sp->blk_min >= 0 && hi != -1 && (sp->blk_max == -1 || sp->blk_max > hi)) hi = sp->blk_max;
+  (*checked)++;
+  if (r->argc_min >= lo && (hi < 0 || r->argc_max <= hi)) return 0;
+  if (bop_arity_kw_row(cls, r->name)) {
+    for (int k = 0; bop_arity_kw_rows[k][0]; k++)
+      if (sp_streq(cls, bop_arity_kw_rows[k][0]) && sp_streq(r->name, bop_arity_kw_rows[k][1])) kw_used[k] = 1;
+    return 0;
+  }
+  char his[16];
+  if (hi < 0) snprintf(his, sizeof his, "any");
+  else snprintf(his, sizeof his, "%d", hi);
+  fprintf(stderr, "check-bop-arity: %s%s%s: row %d..%d, CRuby %d..%s\n", cls, sep, r->name,
+          r->argc_min, r->argc_max, lo, his);
+  return 1;
+}
 int builtin_ops_arity_check(void) {
   int checked = 0, bad = builtin_arity_tables_agree();
   int kw_used[sizeof bop_arity_kw_rows / sizeof bop_arity_kw_rows[0]] = {0};
@@ -20936,29 +21008,14 @@ int builtin_ops_arity_check(void) {
     if (r->flags & BOPF_INTERNAL) continue;   /* a function of the compiler's, not a CRuby method: no count to check */
     const char *cls = bop_spec_class(r->recv);
     if (!cls) continue;
-    const SpAritySpec *sp = NULL;
-    for (const SpAritySpec *t = sp_builtin_arity_spec_tbl; t->cls; t++)
-      if (sp_streq(t->cls, cls) && sp_streq(t->m, r->name)) { sp = t; break; }
-    if (!sp || (sp->min < 0 && sp->blk_min < 0)) continue;   /* no row, or unproved */
-    /* the bare and the block-carrying counts together: a row serves both */
-    int lo = sp->min >= 0 ? sp->min : sp->blk_min;
-    if (sp->min >= 0 && sp->blk_min >= 0 && sp->blk_min < lo) lo = sp->blk_min;
-    int hi = -2;
-    if (sp->min >= 0) hi = sp->max;
-    if (sp->blk_min >= 0 && hi != -1 && (sp->blk_max == -1 || sp->blk_max > hi)) hi = sp->blk_max;
-    checked++;
-    if (r->argc_min >= lo && (hi < 0 || r->argc_max <= hi)) continue;
-    if (bop_arity_kw_row(cls, r->name)) {
-      for (int k = 0; bop_arity_kw_rows[k][0]; k++)
-        if (sp_streq(cls, bop_arity_kw_rows[k][0]) && sp_streq(r->name, bop_arity_kw_rows[k][1])) kw_used[k] = 1;
-      continue;
-    }
-    char his[16];
-    if (hi < 0) snprintf(his, sizeof his, "any");
-    else snprintf(his, sizeof his, "%d", hi);
-    fprintf(stderr, "check-bop-arity: %s#%s: row %d..%d, CRuby %d..%s\n", cls, r->name,
-            r->argc_min, r->argc_max, lo, his);
-    bad++;
+    bad += bop_row_outside(cls, "#", r, arity_spec_find(sp_builtin_arity_spec_tbl, cls, r->name, 1), kw_used, &checked);
+  }
+  /* the class-side rows, against their own class's class-method counts */
+  for (int i = 0; i < bop_class_row_count(); i++) {
+    const BuiltinClassOp *r = bop_class_row(i);
+    if (r->op.argc_max == BOP_ARGC_ANY) continue;
+    bad += bop_row_outside(r->cls, ".", &r->op, arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, r->cls, r->op.name, 1),
+                           kw_used, &checked);
   }
   /* an exemption no row needs any more is a stale hand entry */
   for (int k = 0; bop_arity_kw_rows[k][0]; k++)
@@ -21167,10 +21224,12 @@ static int arity_call_block(Compiler *c, int id, int non_nil, int *argc, int *kw
   for (int i = 0; i < *argc; i++) {
     const char *at = nt_type(nt, argv[i]);
     NodeKind ak = nt_kind(nt, argv[i]);
+    /* a trailing keyword hash: kwh 1, or 2 where it spreads a `**` operand,
+       which adds one positional or none at run time */
     if (i == *argc - 1 && nt_kind(nt, argv[i]) == NK_KeywordHashNode) {
       int en = 0; const int *els = nt_arr(nt, argv[i], "elements", &en);
-      for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) == NK_AssocSplatNode) return -1;
       *kwh = 1;
+      for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) == NK_AssocSplatNode) *kwh = 2;
       continue;
     }
     if (at && (ak == NK_SplatNode || ak == NK_KeywordHashNode ||
@@ -21185,13 +21244,53 @@ static int arity_call_block(Compiler *c, int id, int non_nil, int *argc, int *kw
    exp receives CRuby's wording of the accepted range, eval_recv whether the
    receiver is an expression to evaluate before the raise. */
 /* Does constant read `recv` hold a builtin value -- an Array, a Hash, a
-   String, a number -- rather than a class or module? */
+   String, a number, a stream (STDOUT) -- rather than a class or module? */
 static int const_reads_builtin_value(Compiler *c, int recv) {
   TyKind rt = comp_ntype(c, recv);
   return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
-         rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL;
+         rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL || rt == TY_IO;
 }
-static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n, int *eval_recv) {
+/* Count call id's trailing keyword hash into *argc as the call plan says
+   builtin cls's method `name` (its class method where cside) sees it
+   (cplan_builtin_hash_positionals): 0 where the run time decides. */
+static int hash_counted(Compiler *c, int id, const char *cls, const char *name, int cside, int *argc) {
+  int hp = cplan_builtin_hash_positionals(c, id, cls, name, cside);
+  if (hp < 0) return 0;
+  *argc -= 1 - hp;
+  return 1;
+}
+/* CRuby's counts for class method `name` of builtin class cls: its own row
+   of the facts, or the row of the class of its singleton chain that has
+   the method (bop_class_owner: File.sysopen is IO's), read as CRuby finds
+   it. A `new` is the class's own: its counts are its initialize's, never a
+   superclass's. The modules a class includes are not on the chain, their
+   singleton methods not being inherited, and a class method the program
+   defines on the chain, up to that class, keeps its own count. A keyword
+   hash (kwh) is counted as the class whose counts are read takes it
+   (builtin_kw_positional): apart, leaving *argc the positionals CRuby's message
+   gives, or as a positional, as many as the call plan says it adds
+   (cplan_hash_positionals). Nothing says: not counted. */
+static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char *name,
+                                int with_block, int *argc, int kwh, char *exp, size_t n) {
+  const char *owner = is_new_name(name) ? NULL : bop_class_owner(cls, name);
+  const char *a = cls;
+  for (int i = 0; a; a = builtin_ancestor_at(cls, ++i)) {
+    if (i > 0 && is_builtin_module_name(a)) continue;
+    int ci = i > 0 ? comp_class_index(c, a) : -1;
+    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
+    if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name, 0)) {
+      if (kwh && !hash_counted(c, id, a, name, 1, argc)) return 0;
+      return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);
+    }
+    if (!owner || sp_streq(a, owner)) break;
+  }
+  return 0;
+}
+/* Does call id pass a count CRuby refuses: then exp is the expected range,
+   eval_recv whether the receiver is evaluated first, and given the count
+   CRuby's message gives. */
+static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n, int *eval_recv,
+                           int *given) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
@@ -21206,7 +21305,6 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
   /* a constant that holds a value (`C = [1]; C.<<(2, 3)`) is checked by
      its value's class below, not as a class object */
   if (rty2_k == NK_ConstantReadNode && const_reads_builtin_value(c, recv)) rty2_k = NK_CallNode;
-  if (kwh && (recv < 0 || (rty2_k == NK_ConstantReadNode))) return 0;
   if (recv < 0) {
     /* A bare call resolves to the enclosing class's chain, then to a
        top-level def or a reopened Kernel or Object, and only then to the
@@ -21222,6 +21320,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       return 0;
     if (call_target(c, id, -1, name, CT_TOP, NULL) >= 0 ||
         reopened_owns(c, "Kernel", name) || reopened_owns(c, "Object", name)) return 0;
+    if (kwh && !hash_counted(c, id, "Kernel", name, 1, &argc)) return 0;
     if (!arity_spec_row(ctbl, "Kernel", name, with_block, argc, exp, n) || !exp[0]) return 0;
     *eval_recv = 0;
   }
@@ -21251,7 +21350,12 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       else if (c->classes[uc].is_data) cn = "DataClass";
       else surface = mod ? "Module" : "Class";
     }
-    if (surface) {
+    /* a builtin class the program reopens keeps the counts of its own class
+       methods (IO.for_fd) for a name the program does not define; the rest
+       is the surface's */
+    int own = !surface || class_is_builtin_reopen(c, uc) ? class_arity_spec_row(c, id, cn, name, with_block, &argc, kwh, exp, n) : 0;
+    if (surface && !own) {
+      if (kwh) return 0;   /* (Class's and Module's rows do not say which take keywords) */
       if (reopened_owns(c, surface, name) ||
           (sp_streq(surface, "Class") && reopened_owns(c, "Module", name)) ||
           reopened_owns(c, "Object", name) || reopened_owns(c, "Kernel", name)) return 0;
@@ -21259,7 +21363,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
           (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, name)))
         return 0;
     }
-    else if (!arity_spec_row(ctbl, cn, name, with_block, argc, exp, n)) return 0;
+    else if (!own) return 0;
     if (!exp[0]) return 0;
     *eval_recv = 0;  /* a constant read has no effect to evaluate */
   }
@@ -21304,11 +21408,9 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     /* a name the class inherits from Object unchanged has Object's row: the
        table keeps a class's own row only where the class defines the name,
        and a forwarding name keeps one that never fires */
-    const char *owner = bcn;
-    if (!arity_spec_row(itbl, bcn, name, with_block, argc, exp, n)) {
-      if (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n)) return 0;
-      owner = "Object";
-    }
+    const char *owner = arity_spec_find(itbl, bcn, name, 0) ? bcn : arity_spec_find(itbl, "Object", name, 0) ? "Object" : NULL;
+    if (!owner || (kwh && !hash_counted(c, id, owner, name, 0, &argc))) return 0;
+    arity_spec_row(itbl, owner, name, with_block, argc, exp, n);
     if (!exp[0]) return 0;
     /* a reopened builtin that defines the name keeps its own dispatch --
        the receiver's class, the other class its kind stands for, or the
@@ -21319,8 +21421,8 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     if (reopened_owns(c, bcn, name) || reopened_owns(c, owner, name) ||
         (twin && reopened_owns(c, twin, name)) ||
         (sp_streq(owner, "Object") && toplevel_def(c, name))) return 0;
-    if (kwh && !kwh_counts(owner, name)) return 0;
   }
+  *given = argc;
   return 1;
 }
 
@@ -21328,14 +21430,19 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
    the native classes after them. */
 #define POLY_ARITY_BUILTINS 10
 #define POLY_ARITY_MAX 16
-static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests, char exps[][32]);
+static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const char **tests, char exps[][32]);
 static int poly_arity_rows(Compiler *c, const char *name, int with_block, int argc, int kwh, int partial,
                            const char **tests, char exps[][32]);
 int builtin_arity_violation(Compiler *c, int id, int non_nil) {
-  char exp[32]; int eval_recv;
-  if (arity_violation(c, id, non_nil, exp, sizeof exp, &eval_recv)) return 1;
+  char exp[32]; int eval_recv, given;
+  if (arity_violation(c, id, non_nil, exp, sizeof exp, &eval_recv, &given)) return 1;
   const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
-  return poly_arity_plan(c, id, non_nil, tests, exps) > 0 ? 2 : 0;
+  return poly_arity_plan(c, id, non_nil, 0, tests, exps) > 0 ? 2 : 0;
+}
+/* See codegen_internal.h. */
+int builtin_count_refused_boxed(Compiler *c, int id) {
+  const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
+  return poly_arity_plan(c, id, 0, 1, tests, exps) > 0;
 }
 
 /* The raise for a count a method refuses: the receiver (when asked) and the
@@ -21361,8 +21468,11 @@ void emit_wrong_count(Compiler *c, int id, const char *exp, int eval_recv, int g
     }
     int en = 0; const int *els = nt_arr(nt, argv[i], "elements", &en);
     for (int e = 0; e < en; e++) {
-      buf_puts(b, "(void)("); emit_expr_for_effect(c, nt_ref(nt, els[e], "key"), b); buf_puts(b, "); ");
-      buf_puts(b, "(void)("); emit_expr_for_effect(c, nt_ref(nt, els[e], "value"), b); buf_puts(b, "); ");
+      /* (a `**` operand has a value only, and an anonymous `**` none) */
+      int k = nt_kind(nt, els[e]) == NK_AssocSplatNode ? -1 : nt_ref(nt, els[e], "key");
+      int v = nt_ref(nt, els[e], "value");
+      if (k >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, k, b); buf_puts(b, "); "); }
+      if (v >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, v, b); buf_puts(b, "); "); }
     }
   }
   buf_printf(b, "sp_raise_cls(\"ArgumentError\","
@@ -21585,18 +21695,23 @@ int emit_native_count_mismatch(Compiler *c, int id, int cid, const char *name, i
    on the class the receiver has at run time: ArgumentError with that
    class's range where it has the method, NoMethodError where it has not.
    Fills the classes' runtime tests and ranges; answers how many. */
-static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests, char exps[][32]) {
+/* mm_aside: the builtins' counts alone, whatever a method_missing of the
+   program answers (the call's type: builtin_count_refused_boxed) */
+static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const char **tests, char exps[][32]) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name || recv < 0 || repr_of(c, recv).kind != RK_BOXED) return 0;
   int argc = 0, kwh, with_block = arity_call_block(c, id, non_nil, &argc, &kwh);
-  if (with_block < 0) return 0;
+  /* (a keyword hash the plan counts as a Hash, which poly_arity_rows checks
+     every class passes as one; one it counts as nothing would change the
+     count the guard words) */
+  if (with_block < 0 || (kwh && cplan_hash_positionals(c, id, 1) != 1)) return 0;
   if (recv_user_defines(c, name) || call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
   /* a method_missing anywhere: the classes whose chain answers it, or every
      class while the chain memo cannot be trusted */
-  int nmm;
-  comp_name_responders(c, "method_missing", 0, &nmm);
+  int nmm = 0;
+  if (!mm_aside) comp_name_responders(c, "method_missing", 0, &nmm);
   if (nmm > 0) return 0;
   /* (an accessor of the name anywhere, from the set of every class's;
      the classes were walked at every boxed dispatch, #10546) */
@@ -21648,7 +21763,7 @@ static int poly_arity_rows(Compiler *c, const char *name, int with_block, int ar
       snprintf(exp, sizeof exp, "%d", a);
     }
     if (!exp[0]) { if (partial) continue; return 0; }   /* this class takes the count */
-    if (kwh && !kwh_counts(CLS[q], name) && !kwh_counts("Object", name)) return 0;
+    if (kwh && builtin_kw_positional(CLS[q], name, 0) != 1 && builtin_kw_positional("Object", name, 0) != 1) return 0;
     tests[n] = TST[q];
     snprintf(exps[n], 32, "%s", exp);
     n++;
@@ -21706,7 +21821,7 @@ static int g_poly_arity_node = -1;
 static int emit_poly_arity_guard(Compiler *c, int id, Buf *b) {
   if (g_poly_arity_node == id || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
   const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
-  int n = poly_arity_plan(c, id, 0, tests, exps);
+  int n = poly_arity_plan(c, id, 0, 0, tests, exps);
   if (n == 0) return 0;
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
@@ -21824,8 +21939,8 @@ static int emit_case_opts_guard(Compiler *c, int id, Buf *b) {
 }
 
 int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
-  char exp[32]; int eval_recv;
-  if (!arity_violation(c, id, 0, exp, sizeof exp, &eval_recv)) return 0;
+  char exp[32]; int eval_recv, given;
+  if (!arity_violation(c, id, 0, exp, sizeof exp, &eval_recv, &given)) return 0;
   /* One TyKind holds Queue and SizedQueue, and their push takes 1 and 1..2
      (SizedQueue's non_block): the table keeps the wider range, and the
      message is the receiver's own, read off its capacity */
@@ -21846,7 +21961,7 @@ int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
                tq, argc, argc, dv ? dv : "0");
     return 1;
   }
-  emit_wrong_count(c, id, exp, eval_recv, -1, b);
+  emit_wrong_count(c, id, exp, eval_recv, given, b);
   return 1;
 }
 

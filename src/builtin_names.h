@@ -36,6 +36,34 @@ int is_object_class_name(const char *n);   /* Object alone: the top level's cons
 int is_object_root(const char *n);    /* Object Kernel BasicObject: the classes every object has */
 int is_send_family(const char *n);    /* send __send__ public_send */
 int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes keywords in CRuby (clone, round, lines ...) */
+/* Does a CRuby fact of a method of `feature` hold for this program: a core
+   method's (feature NULL) always, a library's (io/console) where the
+   program writes the require. The default require mode provides a
+   library's methods without the require, but CRuby has no such method
+   there: its counts and keyword facts (BAL, BALC, BALK) and its op rows'
+   keyword answer do not apply, and the call answers as an unknown method's. */
+int builtin_library_fact_holds(const char *feature);
+/* Is a keyword hash one more positional of cls's builtin method `name` (its
+   class method where cside), as CRuby counts a method that takes no
+   keywords: 1; 0 where the method takes keywords; 2 where it takes the one
+   keyword builtin_kw_taken names and counts a hash with any other key as
+   a positional; -1 where no fact says. A library's method has its fact
+   where the program requires the library (io/console's IO#winsize: 1). */
+int builtin_kw_positional(const char *cls, const char *name, int cside);
+/* The one keyword that method takes where its keyword fact is 2 (`cause`
+   for Kernel.raise, Kernel.fail and Fiber#raise); NULL otherwise. */
+const char *builtin_kw_taken(const char *cls, const char *name, int cside);
+/* The keyword every builtin named `name` that takes one that way takes,
+   where `npos` positionals reach the most one of them takes (from there a
+   hash with another key is one more refused argument, which CRuby's message
+   counts); NULL where none does, two take different ones, or npos is below
+   every such maximum. */
+const char *builtin_name_kw_taken(const char *name, int npos);
+/* Does some builtin of the name take no keywords: an op row or class-side
+   row without BOPF_KEYWORDS, a fixed Method#arity, the facts' BAK or BACK,
+   or a BALK of a library the program requires.
+   The `**` split's gate. */
+int builtin_name_kwless(const char *name);
 int is_method_name_reflection(const char *n); /* send family, method public_method instance_method define_method define_singleton_method alias_method singleton_method respond_to? method_defined? */
 int is_code_eval_name(const char *n);  /* eval class_eval module_eval instance_eval: given its code as a String */
 int is_symbol_conversion(const char *n); /* to_sym intern: a Symbol made of a value */
@@ -594,7 +622,7 @@ int boxed_stat_name(const char *n);   /* mode or a numeric field */
 int boxed_stat_reader(const char *n); /* mtime, atime, ftype */
 /* ---- Lowerings onto a library's method: the shared shape rows ----
    A call of one of these shapes is lowered by the analysis onto a method or
-   constant a library defines (builtins/*.rb, Set): `system(cmd, out: ...)`
+   constant a library defines (the .rb files of builtins/, Set): `system(cmd, out: ...)`
    onto builtins/system_spawn.rb's __sp_system_spawn, and so on. Each row is
    the shape, the name it lowers to and the library that defines that name.
    The desugar a row's family names reads its shape from here; conditions on

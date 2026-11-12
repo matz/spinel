@@ -216,6 +216,12 @@ typedef enum {
   BOPE_BOXED_ARRAY_COUNT, /* a count-taking Enumerable read through a box */
   BOPE_BOXED_ARRAY_ONLY,  /* a boxed Array read that requires an Array */
   BOPE_BOXED_ARRAY_OR_RANGE, /* a boxed read that accepts Array and Range */
+  /* IO's own methods, class-side rows (codegen_call_io.c) */
+  BOPE_IO_FOR_FD,         /* IO.for_fd / IO.new(fd [, mode] [, autoclose:]) */
+  BOPE_IO_SELECT,         /* IO.select(read [, write [, error [, timeout]]]) */
+  BOPE_IO_COPY_STREAM,    /* IO.copy_stream(src, dst) */
+  BOPE_IO_SYSOPEN,        /* IO.sysopen(path [, mode [, perm]]) */
+  BOPE_IO_SET_WINSIZE,    /* IO#winsize= (io/console) with an Integer Array */
   BOPE__COUNT
 } BopEmit;
 
@@ -242,6 +248,10 @@ typedef struct BuiltinOp {
                              places in the emission chain gives the rows of
                              each place their own stage. Inference reads
                              every row whatever its stage. */
+  const char *feature;    /* the library that defines the method
+                             (io/console), or NULL for the core's: the row
+                             answers only where the program has it
+                             (sp_feature_enabled) */
 } BuiltinOp;
 
 /* The row answers for a boxed (poly) receiver too, behind a run-time class
@@ -348,7 +358,8 @@ typedef struct BuiltinOp {
 /* The method takes keywords in CRuby (clone(freeze:), round(half:),
    step(by:, to:), sample(random:), pack(buffer:), lines(chomp:) ...): a `**`
    operand of its call is the method's own. A name with a row that lacks the
-   flag takes none (bop_name_kwless), and builtin_name_takes_keywords answers
+   flag takes none (bop_name_kwless; a library's row where the program
+   requires the library), and builtin_name_takes_keywords answers
    for the names a splat dispatch keeps the `**` of. */
 #define BOPF_KEYWORDS 4096
 /* A row of a function the compiler makes calls to and the program cannot
@@ -357,6 +368,12 @@ typedef struct BuiltinOp {
    the program wrote never takes it. It is no CRuby method, so the arity
    check against CRuby's counts skips it. */
 #define BOPF_INTERNAL 8192
+/* A class-side row (BuiltinClassOp) whose answer is built as an instance of
+   its own class (IO.pipe, IO.for_fd, IO.new): a subclass's call (File.pipe)
+   answers instances of the subclass, which the row's emitter does not
+   build, so the row answers for its own class only and the lookup does not
+   hand it down the singleton chain. */
+#define BOPF_OWN_CLASS 16384
 
 /* A row's recv may name a family of kinds rather than one; a caller looks
    the family up with the family's value. Not a TyKind any value has. */
@@ -469,6 +486,37 @@ const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_blo
    negative stage reads every row, as bop_find_arg does */
 const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
                                 BopArgKind arg_of, const void *ud, int stage);
+
+/* Is op a library's IO row (io/console's winsize, winsize=) that emits the
+   call? The boxed IO dispatch serves these on a handle read back out of a
+   container, as the typed arm does (emit_call_poly_io_arms). */
+int bop_io_library_row(const BuiltinOp *op);
+
+/* A builtin class's own method (a singleton method: IO.select), as a row:
+   op says what `Cls.name(...)` answers and how codegen emits it, as a
+   BuiltinOp row does for an instance's method (op.recv is TY_CLASS). */
+typedef struct {
+  const char *cls;        /* the builtin class whose singleton defines it */
+  BuiltinOp op;
+} BuiltinClassOp;
+/* The class-side row for `name` called with argc arguments (a block when
+   has_block) on builtin class cls, read through cls's singleton chain as
+   CRuby looks the method up: File.select finds IO's row. A row flagged
+   BOPF_OWN_CLASS answers on its own class only, and a row of a library
+   (op.feature) only where the program has the library. NULL for none. */
+const BuiltinClassOp *bop_class_find(const char *cls, const char *name, int argc, int has_block);
+/* The class of cls's singleton chain whose rows have class method name:
+   the first with a row of the name, as CRuby finds a singleton method
+   (File.sysopen is IO's), whatever the count. NULL for none. */
+const char *bop_class_owner(const char *cls, const char *name);
+/* Does class method name of builtin class cls take keywords in CRuby, as
+   its own class-side rows say (BOPF_KEYWORDS): 1, 0 for rows without the
+   flag, -1 where cls has no row of the name. */
+int bop_class_keywords(const char *cls, const char *name);
+/* Does a class-side row of the name, of any class, lack BOPF_KEYWORDS? */
+int bop_class_name_kwless(const char *name);
+int bop_class_row_count(void);
+const BuiltinClassOp *bop_class_row(int i);   /* the i-th class-side row, NULL past the last */
 
 /* Whether any row applies to receivers of kind rt: a caller checks this
    before reading the call's arguments, so receivers no row covers cost

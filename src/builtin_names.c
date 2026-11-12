@@ -2298,6 +2298,118 @@ int builtin_core_is_a(int k, int anc) {
   return 0;
 }
 
+/* The builtins whose keyword hash is one more positional, from CRuby's own
+   facts (builtin_arity.inc): BAK the instance methods, BALK a library's,
+   with the library (io/console's IO#winsize), which hold where
+   builtin_library_fact_holds says; BACK the class methods (fixed arity, no keywords) */
+#define BAI(...)
+#define BAM(...)
+#define BAS(...)
+#define BAC(...)
+#define BAK(c,m) {c,m,NULL},
+#define BACK(...)
+#define BAKT(...)
+#define BAP(...)
+#define BAL(...)
+#define BALC(...)
+#define BALK(f,c,m) {c,m,f},
+static const struct { const char *cls, *m, *feature; } sp_builtin_kwpos_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL, NULL}
+};
+#undef BAK
+#undef BACK
+#undef BALK
+#define BAK(...)
+#define BALK(...)
+#define BACK(c,m) {c,m},
+static const struct { const char *cls; const char *m; } sp_builtin_cmeth_kwpos_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL}
+};
+#undef BACK
+#undef BAKT
+#define BACK(...)
+#define BAKT(c,m,k,cside,max) {c,m,k,cside,max},
+/* BAKT: the methods that take one keyword and pass a hash with any other
+   key on as one more positional (Kernel.raise, Kernel.fail and Fiber#raise,
+   cause:), with their most positionals */
+static const struct { const char *cls, *m, *key; int cside, max; } sp_builtin_kw_taken_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL, NULL, 0, 0}
+};
+#undef BAKT
+#undef BAI
+#undef BAM
+#undef BAS
+#undef BAC
+#undef BAK
+#undef BACK
+#undef BAL
+#undef BALC
+#undef BALK
+#undef BAP
+/* See builtin_names.h. */
+int builtin_library_fact_holds(const char *feature) {
+  return !feature || sp_feature_required(feature);
+}
+/* See builtin_names.h. */
+const char *builtin_kw_taken(const char *cls, const char *name, int cside) {
+  for (int i = 0; cls && name && sp_builtin_kw_taken_tbl[i].cls; i++)
+    if (sp_builtin_kw_taken_tbl[i].cside == cside && sp_streq(sp_builtin_kw_taken_tbl[i].cls, cls) &&
+        sp_streq(sp_builtin_kw_taken_tbl[i].m, name))
+      return sp_builtin_kw_taken_tbl[i].key;
+  return NULL;
+}
+/* See builtin_names.h. */
+const char *builtin_name_kw_taken(const char *name, int npos) {
+  const char *key = NULL;
+  int at_max = 0;
+  for (int i = 0; name && sp_builtin_kw_taken_tbl[i].cls; i++) {
+    if (!sp_streq(sp_builtin_kw_taken_tbl[i].m, name)) continue;
+    if (key && !sp_streq(key, sp_builtin_kw_taken_tbl[i].key)) return NULL;
+    key = sp_builtin_kw_taken_tbl[i].key;
+    if (npos >= sp_builtin_kw_taken_tbl[i].max) at_max = 1;
+  }
+  return at_max ? key : NULL;
+}
+/* See builtin_names.h. The facts' BAKT first; then the instance side: a
+   fixed Method#arity, or a fixed accepted count where the class has no
+   Method#arity row and some class has a fixed one, or the facts' BAK; the
+   class side: cls's own class-side rows (bop_class_keywords), else the
+   facts' BACK (BasicSocket.for_fd). */
+int builtin_kw_positional(const char *cls, const char *name, int cside) {
+  if (!cls || !name) return -1;
+  if (builtin_kw_taken(cls, name, cside)) return 2;
+  if (cside) {
+    int kw = bop_class_keywords(cls, name);
+    if (kw >= 0) return !kw;
+    for (int i = 0; sp_builtin_cmeth_kwpos_tbl[i].cls; i++)
+      if (sp_streq(sp_builtin_cmeth_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_cmeth_kwpos_tbl[i].m, name)) return 1;
+    return -1;
+  }
+  int fa, min, max;
+  const char *lo, *hi;
+  if (builtin_method_arity(cls, name, &fa)) { if (fa >= 0) return 1; }
+  else if (builtin_method_fixed_any(name) && builtin_class_arity_spec(cls, name, &min, &max, &lo, &hi) && min == max)
+    return 1;
+  for (int i = 0; sp_builtin_kwpos_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_kwpos_tbl[i].m, name) &&
+        builtin_library_fact_holds(sp_builtin_kwpos_tbl[i].feature))
+      return 1;
+  return -1;
+}
+/* See builtin_names.h. */
+int builtin_name_kwless(const char *name) {
+  if (!name) return 0;
+  if (bop_name_kwless(name) || bop_class_name_kwless(name) || builtin_method_fixed_any(name)) return 1;
+  for (int i = 0; sp_builtin_kwpos_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_kwpos_tbl[i].m, name) && builtin_library_fact_holds(sp_builtin_kwpos_tbl[i].feature)) return 1;
+  for (int i = 0; sp_builtin_cmeth_kwpos_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_cmeth_kwpos_tbl[i].m, name)) return 1;
+  return 0;
+}
+
 /* The names CRuby's own facts give Object, BasicObject, Kernel, Module and
    Class (builtin_arity.inc), sorted once per self kind for
    builtin_self_method_known */
@@ -2306,7 +2418,12 @@ int builtin_core_is_a(int k, int anc) {
 #define BAS(c,m,...) {c,m},
 #define BAC(...)
 #define BAK(...)
+#define BACK(...)
+#define BAKT(...)
 #define BAP(...)
+#define BAL(...)
+#define BALC(...)
+#define BALK(...)
 static const struct { const char *cls, *m; } self_fact_rows[] = {
 #include "builtin_arity.inc"
 };
@@ -2315,6 +2432,11 @@ static const struct { const char *cls, *m; } self_fact_rows[] = {
 #undef BAS
 #undef BAC
 #undef BAK
+#undef BACK
+#undef BAKT
+#undef BAL
+#undef BALC
+#undef BALK
 #undef BAP
 /* Does Spinel have values of table class k: a builtin class row, a synthetic slot, or a class the arity facts
    list (StringScanner, Set, StringIO)? */

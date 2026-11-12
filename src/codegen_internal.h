@@ -616,6 +616,14 @@ int builtin_super_cmethod_known(const char *cls, const char *name);
 int builtin_instance_name_known(const char *m);
 int builtin_instance_method_known(const char *cls, const char *m);
 int builtin_arity_violation(Compiler *c, int id, int non_nil);   /* non_nil: a `&.` call's non-nil arm */
+/* Does every builtin class a boxed receiver of call id can be refuse its
+   count, a method_missing of the program aside (which may answer it)? */
+int builtin_count_refused_boxed(Compiler *c, int id);
+/* Does CRuby refuse the arguments call id gives the method of op, a
+   library's IO row (io/console's winsize given one), a keyword hash
+   counted as the call plan says? A boxed handle's dispatch raises its
+   ArgumentError, and inference types the call by the row's answer. */
+int io_library_count_refused(Compiler *c, int id, const BuiltinOp *op, const char *name);
 int builtin_object_method_known(const char *m);
 int name_is_enumerable_module_method(const char *m);
 int class_object_answers_builtin(const char *qm, int is_module);
@@ -2666,6 +2674,14 @@ int emit_builtin_op_tmp(Compiler *c, int id, int recv, TyKind rt, const char *na
    there; every other lookup reads stage 0 */
 int emit_builtin_op_stage(Compiler *c, int id, int recv, TyKind rt, const char *name,
                           int stage, Buf *b);
+/* The row emit_builtin_op finds for call id, named name, on a receiver
+   read as kind rt (stage 0, the arguments' kinds as codegen has them), or
+   NULL: what an arm that renders the call itself switches on */
+const struct BuiltinOp *emit_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name);
+/* Call id, named name, on builtin class cls (a constant receiver's name),
+   emitted through its class-side row (cplan_builtin_class_row): 0 when no
+   row of the class's singleton chain emits it */
+int emit_builtin_class_op(Compiler *c, int id, const char *cls, const char *name, Buf *b);
 
 /* #7483: a block's body typed again under one arm's type for its parameter
    (the caller set the parameter's slot to `kind`): each statement's
@@ -2917,6 +2933,12 @@ int emit_op_array_cycle_endless(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_slice_groups(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_join_str(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_pred_class(Compiler *c, const BopCtx *x, Buf *b);
+/* IO's class-side rows and io/console's writer (codegen_call_io.c) */
+int emit_op_io_for_fd(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_io_select(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_io_sysopen(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_io_set_winsize(Compiler *c, const BopCtx *x, Buf *b);
 /* A typed array receiver of a compare (`ck` "cmp") or a blockless sum (`ck`
    "sum"), wrapped in the runtime's nil check where the array can hold nil
    (codegen_call_recv.c) */
@@ -3026,6 +3048,9 @@ int order_operand_inert(Compiler *c, int call, int op, int is_recv);   /* codege
 /* ...and the count it expects when it does not (NULL when it admits it) */
 const char *builtin_arity_expected(const char *cls, const char *name, int with_block, int argc,
                                    char *exp, size_t n);
+/* The arity table's class for a row's receiver kind, or NULL: the kinds the
+   table probes a receiver of (a stream's are File's). */
+const char *bop_spec_class(TyKind k);
 void emit_complex_coerce(Compiler *c, int node, Buf *b);
 int emit_complex_real_args(Compiler *c, const int *argv, int argc, int polar, Buf *b);
 void emit_brk_wrapped_call(Compiler *c, int id, Buf *b);

@@ -210,7 +210,11 @@ typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int 
                              (sp_bm_set_ident) */
   const char *aliases;    /* " a b c ": the names of the owner's alias group of
                              a builtin method's ident (sp_bm_set_group); a held
-                             Method has no owner, so it finds its own name here */
+                             Method has no owner, so it finds its own name here.
+                             A held Method's own: " Class=Owner#canonical ... ",
+                             the method its name calls on each builtin class
+                             where the name has other spellings
+                             (sp_bm_held_alias_same) */
   sp_int hkey;            /* one number for every spelling of the method's
                              name group (builtin_name_group_hash), 0 for none:
                              the hash of a builtin or held Method takes it */
@@ -356,6 +360,34 @@ static inline sp_bool sp_bm_cross_same(const sp_BoundMethod *h, const sp_BoundMe
   if (x.tag == SP_TAG_OBJ) return x.v.i == y.v.i;
   return sp_bm_recv_same(x, y);
 }
+/* The method a held Method's map (sp_BoundMethod.aliases) says its name calls
+   on a receiver of class cls: the "Owner#canonical" word after " cls=", and its
+   length in *n; NULL when the map does not list cls. */
+static inline const char *sp_bm_held_canon(const char *map, const char *cls, size_t *n) {
+  size_t cl = strlen(cls);
+  for (const char *p = map; *p;) {
+    while (*p == ' ') p++;
+    const char *e = p;
+    while (*e && *e != ' ') e++;
+    if ((size_t)(e - p) > cl && memcmp(p, cls, cl) == 0 && p[cl] == '=') { *n = (size_t)(e - p) - cl - 1; return p + cl + 1; }
+    p = e;
+  }
+  return NULL;
+}
+/* Two held Methods of one receiver under two names call one builtin method
+   when both maps list the receiver's class with one Owner#canonical:
+   `[].method(:size)` and `[].method(:length)` from a boxed `[]`. A class the
+   maps leave out (a program's subclass, a reopening that may answer the
+   name) keeps the names apart. */
+const char *sp_poly_class_name(sp_RbVal v);
+static inline sp_bool sp_bm_held_alias_same(const sp_BoundMethod *x, const sp_BoundMethod *y) {
+  if (!x->aliases || !y->aliases) return 0;
+  const char *cls = sp_poly_class_name(sp_bm_held_recv(x->self));
+  if (!cls) return 0;
+  size_t xn, yn;
+  const char *xc = sp_bm_held_canon(x->aliases, cls, &xn), *yc = sp_bm_held_canon(y->aliases, cls, &yn);
+  return xc && yc && xn == yn && memcmp(xc, yc, xn) == 0;
+}
 /* Method#== / #eql? / #equal? and the Hash-key compare: the same bound receiver
    and the same target -- one fn, or one builtin method (ident). A class
    method has no fn (0), so its name tells it apart; an alias of a def shares
@@ -381,7 +413,7 @@ static inline sp_bool sp_bm_same(const sp_BoundMethod *x, const sp_BoundMethod *
      receiver's class is only known at run time, so no ident names its method:
      the same receiver value and the same name stand for one method (unless the
      class is reopened between the two calls) */
-  if (x->held) return x->name == y->name || (x->name && y->name && strcmp(x->name, y->name) == 0);
+  if (x->held) return x->name == y->name || (x->name && y->name && strcmp(x->name, y->name) == 0) || sp_bm_held_alias_same(x, y);
   if (x->fn != y->fn) return 0;
   return x->fn != 0 || x->name == y->name || (x->name && y->name && strcmp(x->name, y->name) == 0);
 }

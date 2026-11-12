@@ -2136,6 +2136,45 @@ const char *builtin_method_alias_group(const char *cls, const char *canonical) {
       o += (size_t)snprintf(out + o, cap - o, "%s ", BMT_ALIASES[i].name);
   return out;
 }
+/* The method a held Method's written name calls, for each builtin class a
+   boxed receiver's run time may name, as " Class=Owner#canonical ..." with a
+   space each side: Owner is the first of Class's ancestors that has the
+   name, and canonical is the name's first spelling in Owner's alias group.
+   Only classes where the name is in an alias group are listed. A class
+   that skip(ud, Class) refuses (the program's reopening may answer the
+   name first) is left out. Two held Methods of one receiver call one
+   method when both list the receiver's class with the same Owner#canonical.
+   NULL when no class lists the name. */
+char *builtin_method_class_canon_map(const char *name, int (*skip)(void *, const char *), void *ud) {
+  if (!name) return NULL;
+  size_t cap = 0, o = 0;
+  char *out = NULL;
+  const BuiltinClass *r;
+  for (int i = 0; (r = builtin_class_at(i)) != NULL; i++) {
+    const char *cls = r->name, *own = NULL, *a;
+    int dup = 0;
+    for (int j = 0; j < i && !dup; j++) dup = sp_streq(builtin_class_at(j)->name, cls);
+    if (dup) continue;
+    for (int k = 0; (a = builtin_ancestor_at(cls, k)) && !own; k++)
+      if (builtin_owns_instance_method(a, name)) own = a;
+    if (!own) continue;
+    const char *canon = builtin_method_canonical(own, name);
+    const char *grp = builtin_method_alias_group(own, canon);
+    if (!grp) continue;
+    free((void *)grp);
+    if (skip && skip(ud, cls)) continue;
+    size_t need = strlen(cls) + strlen(own) + strlen(canon) + 4;
+    if (o + need + 2 > cap) {
+      cap = (o + need + 2) * 2;
+      char *nb = realloc(out, cap);
+      if (!nb) { free(out); return NULL; }
+      out = nb;
+    }
+    if (!o) out[o++] = ' ';
+    o += (size_t)snprintf(out + o, cap - o, "%s=%s#%s ", cls, own, canon);
+  }
+  return out;
+}
 /* A number every spelling of one method shares, whichever class a Method's
    receiver is: the names that are aliases of each other in some class are
    one group (a union over every class, looser than any one class's own

@@ -2995,6 +2995,10 @@ int desugar_handle_reopen_self_recv(Compiler *c) {
     if (!cn || (!sp_streq(cn, "Thread") && !sp_streq(cn, "Fiber") &&
                 !is_builtin_exception_name(cn))) continue;
     if (call_target(c, id, s->class_id, nm, 0, NULL) >= 0) continue;
+    /* a bare `raise` (or `puts`, ...) in an exception's method is Kernel's
+       function: no exception answers the name, where a Thread answers its
+       own raise and exit */
+    if (is_builtin_exception_name(cn) && reopen_kernel_name(nm)) continue;
     /* `Kernel.raise` written so, its receiver dropped (desugar_kernel_recv):
        Kernel's function, not the handle's method of the name */
     if (nt_int(nt, id, "kernel_recv", 0)) continue;

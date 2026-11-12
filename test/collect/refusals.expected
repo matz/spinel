@@ -1826,6 +1826,10 @@ spinel: test/reject/stringio_subclass_initialize_no_super.rb:7: NoSuper#initiali
 spinel: test/reject/struct_new_member_list_changed.rb:7: Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols
 == test/reject/struct_new_member_list_changed.rb [promote] rc=1
 spinel: test/reject/struct_new_member_list_changed.rb:7: Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols
+== test/reject/struct_new_member_list_class_print.rb [default] rc=1
+spinel: test/reject/struct_new_member_list_class_print.rb:9: Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols
+== test/reject/struct_new_member_list_class_print.rb [promote] rc=1
+spinel: test/reject/struct_new_member_list_class_print.rb:9: Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols
 == test/reject/struct_new_member_names_own_to_sym.rb [default] rc=1
 spinel: test/reject/struct_new_member_names_own_to_sym.rb:8: Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols
 == test/reject/struct_new_member_names_own_to_sym.rb [promote] rc=1

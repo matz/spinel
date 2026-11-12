@@ -25,6 +25,9 @@ p D.new(u: 1, v: 2), DK.length
 w = %w[p q]
 W = Struct.new(*w.map(&:to_sym))
 p W.members, w.size
+cw = %w[m n]
+CW = Struct.new(*cw.collect(&:to_sym))
+p CW.members
 
 # a local of the same name in another method changes its own list
 def other

@@ -2761,6 +2761,20 @@ static int rsl_no_own_method(const NodeTable *nt, const char *m) {
   return !rsl_own_method(nt, "Array", m) && !rsl_own_method(nt, "Object", m) &&
          !rsl_own_method(nt, "Kernel", m);
 }
+/* Can a receiverless call of m reach a method the program writes? A def
+   of that name anywhere (`def self.print(keys)` in a class body), or a
+   Symbol of it (define_method, alias_method), counts. */
+static int rsl_name_written(const NodeTable *nt, const char *m) {
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (dn && sp_streq(dn, m)) return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_SymbolNode, y) {
+    const char *yv = nt_str(nt, y, "value");
+    if (yv && sp_streq(yv, m)) return 1;
+  }
+  return 0;
+}
 /* the reads that answer the Array itself: `keys.each { }.push(:c)` */
 static int rsl_answers_self(const char *m) {
   return sp_streq(m, "each") || sp_streq(m, "each_with_index") || sp_streq(m, "freeze") || is_to_a_name(m);
@@ -2782,7 +2796,8 @@ static int rsl_read_keeps_list(Compiler *c, const int *par, int r) {
   if (pk == NK_SplatNode) return 1;
   if (pk == NK_CallNode && nt_ref(nt, p, "receiver") == r) {
     const char *m = nt_str(nt, p, "name");
-    return m && bop_name_has_reader(m, BOP_READ_ARRAY_INTACT) && rsl_no_own_method(nt, m) &&
+    /* collect: map's other name, a transform resolve_symbol_list reads */
+    return m && (bop_name_has_reader(m, BOP_READ_ARRAY_INTACT) || sp_streq(m, "collect")) && rsl_no_own_method(nt, m) &&
            (!rsl_answers_self(m) || comp_value_dropped(c, p) || rsl_read_keeps_list(c, par, p));
   }
   if (pk == NK_StatementsNode) {
@@ -2795,7 +2810,7 @@ static int rsl_read_keeps_list(Compiler *c, const int *par, int r) {
     nt_arr(nt, p, "arguments", &an);
     const char *m = nt_str(nt, k, "name");
     if (an != 1 || !m || nt_ref(nt, k, "receiver") >= 0 || nt_ref(nt, k, "block") >= 0) return 0;
-    if (!rsl_no_own_method(nt, m) || !rsl_no_own_method(nt, "inspect") || !rsl_no_own_method(nt, "to_s")) return 0;
+    if (rsl_name_written(nt, m) || !rsl_no_own_method(nt, "inspect") || !rsl_no_own_method(nt, "to_s")) return 0;
     if (sp_streq(m, "puts") || sp_streq(m, "print")) return 1;
     return (sp_streq(m, "p") || sp_streq(m, "pp")) && (comp_value_dropped(c, k) || rsl_read_keeps_list(c, par, k));
   }

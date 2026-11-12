@@ -19423,6 +19423,22 @@ void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv,
     refl_note(r, wn, refl_vis_wanted(comp_method_vis(k, wn), pub, prot, priv));
   }
 }
+/* Enumerable's instance methods in CRuby, all public */
+static const char *const enumerable_method_names[] = {
+    "all?", "any?", "chain", "chunk", "chunk_while", "collect", "collect_concat",
+    "compact", "count", "cycle", "detect", "drop", "drop_while", "each_cons",
+    "each_entry", "each_slice", "each_with_index", "each_with_object", "entries",
+    "filter", "filter_map", "find", "find_all", "find_index", "first", "flat_map",
+    "grep", "grep_v", "group_by", "include?", "inject", "lazy", "map", "max",
+    "max_by", "member?", "min", "min_by", "minmax", "minmax_by", "none?", "one?",
+    "partition", "reduce", "reject", "reverse_each", "select", "slice_after",
+    "slice_before", "slice_when", "sort", "sort_by", "sum", "take", "take_while",
+    "tally", "to_a", "to_h", "to_set", "uniq", "zip", NULL };
+static int enumerable_method_name(const char *m) {
+  for (int i = 0; m && enumerable_method_names[i]; i++)
+    if (sp_streq(enumerable_method_names[i], m)) return 1;
+  return 0;
+}
 
 /* The names an instance of `cid` answers Object#methods (pub+prot) or
    #public_methods (pub) with: its class chain's own methods, then the core
@@ -19442,16 +19458,7 @@ static void refl_object_methods(Compiler *c, int cid, int pub, int prot, int sin
   static const char *const datam[] = {
     "==", "deconstruct", "deconstruct_keys", "eql?", "hash", "inspect", "members",
     "to_h", "to_s", "with", NULL };
-  static const char *const enumm[] = {
-    "all?", "any?", "chain", "chunk", "chunk_while", "collect", "collect_concat",
-    "compact", "count", "cycle", "detect", "drop", "drop_while", "each_cons",
-    "each_entry", "each_slice", "each_with_index", "each_with_object", "entries",
-    "filter", "filter_map", "find", "find_all", "find_index", "first", "flat_map",
-    "grep", "grep_v", "group_by", "include?", "inject", "lazy", "map", "max",
-    "max_by", "member?", "min", "min_by", "minmax", "minmax_by", "none?", "one?",
-    "partition", "reduce", "reject", "reverse_each", "select", "slice_after",
-    "slice_before", "slice_when", "sort", "sort_by", "sum", "take", "take_while",
-    "tally", "to_a", "to_h", "to_set", "uniq", "zip", NULL };
+  const char *const *enumm = enumerable_method_names;
   static const char *const cmpm[] = {
     "<", "<=", "==", ">", ">=", "between?", "clamp", NULL };
   static const char *const objm[] = {
@@ -19970,15 +19977,17 @@ static const char *const *builtin_value_ancestry(TyKind rt) {
   static const char *const en[][6] = {
     { "Array", "Enumerable", "Object", "Kernel", "BasicObject", NULL },
     { "Hash", "Enumerable", "Object", "Kernel", "BasicObject", NULL },
-    { "Range", "Enumerable", "Object", "Kernel", "BasicObject", NULL } };
+    { "Range", "Enumerable", "Object", "Kernel", "BasicObject", NULL },
+    { "Enumerator", "Enumerable", "Object", "Kernel", "BasicObject", NULL } };
   static const char *const nil[] = { "NilClass", "Object", "Kernel", "BasicObject", NULL };
   static const char *const boolean[] = { "TrueClass", "FalseClass", "Object", "Kernel", "BasicObject", NULL };
   if (rt == TY_BOOL) return boolean;
-  const char *cn = rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_TIME_RANGE || rt == TY_OBJ_RANGE ? "Range" : builtin_class_of_type(rt);
+  const char *cn = rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_TIME_RANGE || rt == TY_OBJ_RANGE ? "Range"
+                 : rt == TY_ENUMERATOR ? "Enumerator" : builtin_class_of_type(rt);
   if (!cn) return NULL;
   for (int i = 0; i < 2; i++) if (sp_streq(cn, num[i][0])) return num[i];
   for (int i = 0; i < 3; i++) if (sp_streq(cn, cmp[i][0])) return cmp[i];
-  for (int i = 0; i < 3; i++) if (sp_streq(cn, en[i][0])) return en[i];
+  for (int i = 0; i < 4; i++) if (sp_streq(cn, en[i][0])) return en[i];
   return sp_streq(cn, "NilClass") ? nil : NULL;
 }
 /* Whether a respond_to? probe's yes for `qm` on a builtin `rt` value has no
@@ -20025,9 +20034,12 @@ static int rt_probe_unfounded(Compiler *c, TyKind rt, const char *qm) {
      Comparable included (tools/gen_builtin_arity_spec.rb writes them from
      CRuby). So the probe typing `7.to_a` (a conversion the compiler
      answers for any value) is no basis: CRuby's Integer has no to_a.
-     Enumerable has no rows, so an Array, Hash or Range keeps the probe's
-     answer for its names (chain, to_set). */
-  for (int a = 0; anc[a]; a++) if (sp_streq(anc[a], "Enumerable")) return 0;
+     Enumerable has no rows, so an Array, Hash, Range or Enumerator keeps
+     the probe's answer for Enumerable's names (chain, to_set). Any other
+     name is not Enumerable's: `length` is Array's and Hash's, so a Range
+     or an Enumerator does not answer it. */
+  for (int a = 0; anc[a]; a++)
+    if (sp_streq(anc[a], "Enumerable") && enumerable_method_name(qm)) return 0;
   /* The program's reopenings of the value's ancestors keep the probe's
      answer when they could add the name some other way: a
      respond_to_missing? (only a run-time call could tell), an alias of a

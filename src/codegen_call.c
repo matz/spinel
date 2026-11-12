@@ -2678,9 +2678,7 @@ static void class_stmt_const_names(const NodeTable *nt, int stmt, const char **n
   if (!full) return;
   const char *last = strrchr(full, ':');
   *nm = last ? last + 1 : full;   /* the leaf name, not the path */
-  const char *rn = nt_str(nt, ncp, "qc_ruby_name");
-  const char *rl = rn ? strrchr(rn, ':') : NULL;
-  if (rn) *sh = rl ? rl + 1 : rn;
+  if (nt_str(nt, ncp, "qc_name")) *sh = nt_str(nt, ncp, "name");
 }
 
 /* The class a `class A::B` / `module A::B` statement opens, or -1 when STMT

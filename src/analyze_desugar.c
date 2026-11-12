@@ -2772,7 +2772,8 @@ static void cg_cands_collect(Compiler *c, int n0, CgCands *cs) {
     }
     else if (k == NK_ClassNode || k == NK_ModuleNode) {
       int cp = nt_ref(nt, id, "constant_path");
-      const char *rn = cp >= 0 ? nt_str(nt, cp, "qc_ruby_name") : NULL;
+      /* the leaf written (a qualified header keeps it beside its key) */
+      const char *rn = cp >= 0 && nt_str(nt, cp, "qc_name") ? nt_str(nt, cp, "name") : NULL;
       if (!rn) rn = cp >= 0 ? key_name(c, cp) : nt_str(nt, id, "name");
       const char *rl = rn ? strrchr(rn, ':') : NULL;
       v = rl ? rl + 1 : rn;

@@ -7427,8 +7427,9 @@ static void check_builtin_subclasses(Compiler *c) {
     int sc = class_def_is_class(nt, id) ? class_def_super(nt, id) : -1;
     if (sc < 0) continue;
     int cp = nt_ref(nt, id, "constant_path");
-    const char *cn = cp >= 0 ? nt_str(nt, cp, "qc_ruby_name") : NULL;  /* `A::OpenStruct`, not its key */
-    if (!cn) cn = class_def_key(c, id);
+    /* a qualified class by its Ruby path (`A::OpenStruct`, not its key) */
+    int hc = cp >= 0 && nt_str(nt, cp, "qc_name") ? elab_header_class(c, id, NULL, NULL) : -1;
+    const char *cn = hc >= 0 ? class_ruby_name(c, hc) : class_def_key(c, id);
     const char *par = refused_builtin_superclass(c, sc);
     /* an Array or Hash subclass is supported (mark_array_subclasses), beside
        a reopen of its builtin too: the reopen's methods are the builtin's

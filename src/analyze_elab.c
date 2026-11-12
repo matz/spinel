@@ -1407,7 +1407,7 @@ static int lr_core_path_text(Compiler *c, int node, char *buf, size_t cap) {
 }
 /* A path from a core constant the program does not reopen as a class
    (`Regexp::Syntax::Token`) is absolute: the class whose header spells
-   that Ruby path (the qualify pass's qc_ruby_name, or a compact header's
+   that Ruby path (a qualified header's class's, or a compact header's
    own path), else the class its parent's class writes the name as */
 static int lr_class_written_as(Compiler *c, int owner, const char *name);
 static int lr_class_by_core_path(Compiler *c, int node, int depth) {
@@ -1419,7 +1419,11 @@ static int lr_class_by_core_path(Compiler *c, int node, int depth) {
     NodeKind hk = nt_kind(nt, h);
     if (hk != NK_ClassNode && hk != NK_ModuleNode) continue;
     int cp = nt_ref(nt, h, "constant_path");
-    const char *rn = cp >= 0 ? nt_str(nt, cp, "qc_ruby_name") : NULL;
+    /* a qualified header's class keeps the Ruby path it resolved to */
+    int qual = cp >= 0 && nt_str(nt, cp, "qc_name") != NULL;
+    int qk = qual ? elab_header_class(c, h, NULL, NULL) : -1;
+    if (qual && qk < 0) return LR_UNKNOWN_CLASS;   /* (not registered yet: its path is not known) */
+    const char *rn = qual ? class_ruby_name(c, qk) : NULL;
     if (!rn && cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode && lr_core_path_text(c, cp, hp, sizeof hp)) rn = hp;
     if (!rn || !sp_streq(rn, path)) continue;
     int k = elab_header_class(c, h, NULL, NULL);

@@ -814,11 +814,8 @@ const char *comp_class_ruby_leaf(const Compiler *c, int k) {
   /* (a Struct.new or Data.define write is no builder there) */
   if (nn < 0 && dn >= 0 && nt_kind(nt, dn) == NK_ConstantWriteNode) nn = dn;
   if (nn < 0 && dn >= 0 && nt_kind(nt, dn) == NK_ConstantPathWriteNode) nn = nt_ref(nt, dn, "target");
-  /* (a name qualify_colliding_classes rewrote keeps its Ruby path in
-     qc_ruby_name: the leaf is its last segment) */
-  const char *src = nn >= 0 ? nt_str(nt, nn, "qc_ruby_name") : NULL;
-  if (src) { const char *q = src; while ((q = strstr(q, "::")) != NULL) src = q += 2; }
-  else if (nn >= 0) src = nt_str(nt, nn, "name");
+  /* (a name qualify_colliding_classes rewrote keeps the leaf written) */
+  const char *src = nn >= 0 ? nt_str(nt, nn, "name") : NULL;
   if (src && strstr(src, "__")) {
     size_t l = strlen(nm), sl = strlen(src);
     if (l == sl && sp_streq(nm, src)) return nm;

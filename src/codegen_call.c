@@ -8435,6 +8435,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
      answer that can be nil is held as the oint */
   int slot_o = oint_kind(ret) && node_is_oint(c, id);
   int va = view_push_arm(id, g_prbd_skip, 1);
+  g_arm.arm_cls = "String";
   /* Some of these arms hoist a statement into the prelude -- the `const char
      *_tN = sp_poly_recv_s(recv, "<name>")` that roots the receiver's bytes
      across the call. Ahead of the dispatch that statement would run for

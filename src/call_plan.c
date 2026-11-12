@@ -320,6 +320,20 @@ int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
 }
 
 /* See call_plan.h. */
+int cplan_arm_object_target(Compiler *c, int call, const char *cls) {
+  const char *name = nt_str(c->nt, call, "name");
+  if (!name) return -1;
+  if (!cls) {
+    int oc = comp_core_class(c, CORE_OBJECT);
+    return oc >= 0 ? call_target(c, call, oc, name, 0, NULL) : -1;
+  }
+  CallPlan p;
+  cplan_set(&p, -1, -1, UC_NONE, CP_NONE);
+  cplan_root_reopen(c, call, name, cls, CORE_OBJECT, &p);
+  return p.mi;
+}
+
+/* See call_plan.h. */
 int cplan_reopen_target(Compiler *c, CallPlan p) {
   return p.mi >= 0 && p.via == UC_REOPEN && p.dispatch == CP_DIRECT &&
          (cplan_root_reopen_owner(c, &p) || c->scopes[p.mi].yields) ? p.mi : -1;

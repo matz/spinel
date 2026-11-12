@@ -12,3 +12,5 @@ true
 [:@cached]
 nil
 []
+nil
+"instance-variable"

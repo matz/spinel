@@ -22866,7 +22866,9 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       if (iv2 >= 0) { ivt2 = c->classes[sc2].ivar_types[iv2]; eh2 = repr_of_ivar(c, sc2, iv2).elems_handle; }
       /* an ivar only nil is written to has no slot, here or below: it is
          nil, so `||=` runs its value (a frozen receiver refusing the write)
-         and `&&=` runs nothing (emit_expr_node's value form says the same) */
+         and `&&=` runs nothing (emit_expr_node's value form says the same)
+         (register_locals now gives `@x ||= v` a slot, so this is mostly the
+         `&&=` form) */
       else if (cws2 && cws2->class_id >= 0 && !cws2->is_cmethod && sc2 != c->toplevel_class &&
                comp_ntype(c, v) == TY_NIL && !ivar_slot_below(c, sc2, nm)) {
         if (is_or) {

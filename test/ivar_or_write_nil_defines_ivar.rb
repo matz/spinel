@@ -46,3 +46,13 @@ class Gate
 end
 g = Gate.new
 p g.shut, g.instance_variables
+
+# defined?(@x) after the write runs
+class Check
+  def ask = defined?(@q)
+  def touch = @q ||= nil
+end
+ch = Check.new
+p ch.ask
+ch.touch
+p ch.ask

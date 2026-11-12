@@ -1,0 +1,39 @@
+before the def: NameError
+6
+:double
+3
+16
+8
+1
+1.5
+HI!
+"abab"
+5
+:a
+String has none: NameError
+undefined: NameError
+6
+:t
+numeric
+numeric
+object
+object
+object
+1
+Numeric
+[[:req, :a]]
+-2
+Object
+[[:req, :a], [:opt, :b]]
+7
+pv
+public_method pv: NameError
+public_method pt: NameError
+String public_method pv: NameError
+before public: NameError
+v2
+1
+0
+6
+6
+[2, 4]

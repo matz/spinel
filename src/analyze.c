@@ -11524,7 +11524,11 @@ static int desugar_builtin_method_obj(Compiler *c) {
     const char *owner_name = NULL;   /* the builtin's class or module, its Method's #owner */
     const char *bclasses = NULL;   /* the builtin classes the receiver may be of */
     /* an undefined name must reach codegen's immediate NameError, not become
-       a wrapper whose body call aborts the build (#2752) */
+       a wrapper whose body call aborts the build (#2752). A name the builtin
+       tables lack is defined all the same where the program's reopening of
+       the receiver's class, or of an ancestor, gives it a def live at the
+       Method's maker (cplan_builtin_reopen_def): the wrapper's body call is
+       that def's call. public_method takes a public def only. */
     {
       const char *bcls = rt == TY_STRING ? "String" : rt == TY_INT ? "Integer"
                        : rt == TY_FLOAT ? "Float" : rt == TY_SYMBOL ? "Symbol"
@@ -11543,8 +11547,11 @@ static int desugar_builtin_method_obj(Compiler *c) {
          which the class's own table leaves out */
       if (bcls && !bool_op &&
           !builtin_method_known(bcls, sym) && !builtin_comparable_owns(bcls, sym) &&
-          !builtin_numeric_owns(bcls, sym) && !builtin_object_method_known(sym))
-        continue;
+          !builtin_numeric_owns(bcls, sym) && !builtin_object_method_known(sym)) {
+        int rd = rt == TY_BOOL ? -1 : cplan_builtin_reopen_def(c, id, bcls, sym, NULL);
+        if (rd >= 0 && nt_int(nt, id, "public_capture", 0) && !cplan_reopen_def_public(c, id, rd, sym)) rd = -1;
+        if (rd < 0) continue;
+      }
       cmp_only = bcls && !builtin_method_known(bcls, sym) && builtin_comparable_owns(bcls, sym);
       num_only = bcls && !builtin_method_known(bcls, sym) && builtin_numeric_owns(bcls, sym);
       owner_name = rt == TY_BOOL ? builtin_bool_method_owner(bool_cls, sym) : builtin_method_owner(bcls, sym);

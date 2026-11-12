@@ -4737,7 +4737,7 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
   }
   const char *nm = nt_str(nt, x, "name");
   if (!nm || nt_ref(nt, x, "arguments") >= 0 || nt_ref(nt, x, "block") >= 0) return -1;
-  int readers = 0;
+  int readers[16], nreaders = 0;
   for (int si = 0; si < c->nscopes; si++) {
     const Scope *s = &c->scopes[si];
     /* (a method of the name that takes no block, or one that does not store it, answers no
@@ -4745,9 +4745,10 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
        class reaching the instance_eval is refused there, by the proc's own class) */
     if (!s->name || !sp_streq(s->name, nm) || !s->blk_param || !s->blk_param[0]) continue;
     if (ie_stored_reader_ivar(c, s) < 0) continue;
-    readers++;
+    if (nreaders >= 16) return -1;
+    readers[nreaders++] = si;
   }
-  if (!readers) return -1;
+  if (!nreaders) return -1;
   int total = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, call) {
     const char *cn = nt_str(nt, call, "name");
@@ -4758,6 +4759,16 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
     const Scope *cs = comp_scope_of(c, call);
     int in_body = cs && cs->def_node < 0 && call < c->node_cap && c->node_cbody[call] >= 0;
     if (!(cr < 0 ? in_body : nt_kind(nt, cr) == NK_ConstantReadNode || nt_kind(nt, cr) == NK_SelfNode)) continue;
+    /* Not a call of the name the reader is not what it reaches (`self.info { }` in
+       Logger#report): its block runs on Logger, not on the instance_eval receiver */
+    int cls = -1, cside = 1;
+    if (cr >= 0 && nt_kind(nt, cr) == NK_ConstantReadNode) cls = comp_class_at_ruby_path(c, nt_str(nt, cr, "name"));
+    else if (cs && cs->def_node >= 0) cls = cs->class_id, cside = cs->is_cmethod;
+    else if (in_body) cls = c->node_cbody[call];
+    int mi = cls < 0 ? -1 : cside ? comp_cmethod_in_chain(c, cls, nm, NULL) : comp_method_in_chain(c, cls, nm, NULL);
+    int reaches = 0;
+    for (int r = 0; r < nreaders && !reaches; r++) reaches = readers[r] == mi;
+    if (!reaches) continue;
     if (nt_kind(nt, b) != NK_BlockNode) return -1;
     if (total >= cap) return -1;
     out[total++] = nt_ref(nt, b, "body");

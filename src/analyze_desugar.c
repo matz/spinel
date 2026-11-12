@@ -22036,6 +22036,12 @@ int desugar_inherited_aliases(Compiler *c) {
           nt_node_set_arr(nt, args, "arguments", rd, ar);
           nt_node_set_ref(nt, call, "arguments", args);
         }
+        /* the caller's block reaches the builtin, as through the alias (`raw_each { ... }` of Hash#each) */
+        int bp = fwd_new_node_like(nt, s, "BlockParameterNode"), ba = fwd_new_node_like(nt, s, "BlockArgumentNode");
+        nt_node_set_str(nt, bp, "name", "spinel_alias_b__");
+        nt_node_set_ref(nt, ps, "block", bp);
+        nt_node_set_ref(nt, ba, "expression", local_read_like(nt, s, "spinel_alias_b__"));
+        nt_node_set_ref(nt, call, "block", ba);
         nt_node_set_str(nt, call, "name", odb);
         nt_node_set_ref(nt, call, "receiver", self);
         nt_node_set_int(nt, call, "builtin_only", 1);
@@ -22045,6 +22051,8 @@ int desugar_inherited_aliases(Compiler *c) {
         nt_node_set_ref(nt, fd, "parameters", ps);
         nt_node_set_ref(nt, fd, "body", bd);
         nt_node_set_ref(nt, fd, "receiver", -1);
+        /* an alias, not a def: a `private` section ahead of it leaves it the builtin's visibility (lr_def) */
+        nt_node_set_int(nt, fd, "alias_forwarder", 1);
         out[no - 1] = fd;
         grew = changed = 1;
         continue;

@@ -385,6 +385,47 @@ static const char *const BAM_RECV_TST[] = {
   "_t%d.tag == SP_TAG_SYM && _t%d.tag == SP_TAG_SYM",
   "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE" };
 
+/* The test of the cells an arm of a version entry runs under: the tests
+   cplan_method_arms gives it (an arm of an arm: both), `&&`-joined */
+static void emit_arm_cells_test(Compiler *c, const int *t, Buf *b) {
+  for (int k = 0, first = 1; k < 2; k++)
+    if (t[k] >= 0) { if (!first) buf_puts(b, " && "); emit_expr(c, t[k], b); first = 0; }
+}
+
+/* The value one class's arm stands for, as f writes it for a method mi (-1:
+   none, the wrapper's own). Where the capture finds an entry (a version
+   only the run time picks) it is the entry's arms in order, each under the
+   test of its cells (cplan_method_arms), as the Method of one class's
+   receiver is made. */
+typedef void (*ArmValueFn)(Compiler *c, const CplanClassArm *a, int mi, Buf *b, void *ud);
+static void emit_arm_value(Compiler *c, int mn, const CplanClassArm *a, ArmValueFn f, void *ud, Buf *b) {
+  if (a->kind != CP_CARM_ENTRY) { f(c, a, a->kind == CP_CARM_METHOD ? a->mi : -1, b, ud); return; }
+  int to[2 * (VER_MAX_ARMS + 1)], tests[4 * (VER_MAX_ARMS + 1)], n = cplan_method_arms(c, a->mi, mn, to, tests);
+  buf_puts(b, "(");
+  for (int i = 0; i < n; i++) {
+    const int *t = &tests[2 * i];
+    if (t[0] < 0 && t[1] < 0) { f(c, a, to[i] == CPLAN_ARM_NONE ? -1 : to[i], b, ud); n = -1; break; }
+    buf_puts(b, "(");
+    emit_arm_cells_test(c, t, b);
+    buf_puts(b, ") ? ");
+    f(c, a, to[i] == CPLAN_ARM_NONE ? -1 : to[i], b, ud);
+    buf_puts(b, " : ");
+  }
+  if (n >= 0) f(c, a, -1, b, ud);
+  buf_puts(b, ")");
+}
+
+static void arm_params_fn(Compiler *c, const CplanClassArm *a, int mi, Buf *b, void *ud) {
+  (void)a;
+  char *kp = mi >= 0 ? method_params_str(c, mi) : NULL;
+  emit_str_literal(b, mi >= 0 ? (kp ? kp : "") : (const char *)ud);
+  free(kp);
+}
+static void arm_arity_fn(Compiler *c, const CplanClassArm *a, int mi, Buf *b, void *ud) {
+  int ar;
+  (void)a;
+  buf_printf(b, "(sp_int)%d", mi >= 0 && method_scope_arity(c, mi, &ar) ? ar : (int)(intptr_t)ud);
+}
 /* Method#parameters of a boxed receiver's wrapper mi (bam_poly) for method
    sym, by the class the receiver _t<tbr> has at run time, as its arity is
    read: a program class's def of sym, its accessor's list (a reader's
@@ -407,18 +448,26 @@ static void emit_method_params_by_recv(Compiler *c, int mi, const char *sym, int
     emit_str_literal(b, bp);
     buf_puts(b, " : ");
   }
-  for (int k = 0; k < c->nclasses; k++) {
-    int mk = comp_method_in_chain(c, k, sym, NULL);
-    char *kp = mk >= 0 ? method_params_str(c, mk) : NULL;
-    const char *p = mk >= 0 ? (kp ? kp : "") : comp_reader_in_chain(c, k, sym, NULL) ? ""
-                  : attr_writer_named(c, k, sym) ? "req" : NULL;
-    if (p && !sp_streq(p, fb)) {
-      buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? ", tbr, tbr, k);
-      emit_str_literal(b, p);
-      buf_puts(b, " : ");
+  int na;
+  CplanClassArm *arms = cplan_capture_class_arms(c, site, sym, &na);
+  for (int i = 0; i < na; i++) {
+    /* (an arm that is the wrapper's own list says nothing: the fallback) */
+    if (arms[i].kind != CP_CARM_ENTRY) {
+      char *kp = arms[i].kind == CP_CARM_METHOD ? method_params_str(c, arms[i].mi) : NULL;
+      const char *p = arms[i].kind == CP_CARM_METHOD ? (kp ? kp : "") : arms[i].kind == CP_CARM_READER ? "" : "req";
+      if (!sp_streq(p, fb)) {
+        buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? ", tbr, tbr, arms[i].cls);
+        emit_str_literal(b, p);
+        buf_puts(b, " : ");
+      }
+      free(kp);
+      continue;
     }
-    free(kp);
+    buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? ", tbr, tbr, arms[i].cls);
+    emit_arm_value(c, site, &arms[i], arm_params_fn, (void *)fb, b);
+    buf_puts(b, " : ");
   }
+  free(arms);
   emit_str_literal(b, fb);
   buf_puts(b, ")");
   free(fallback);
@@ -855,6 +904,15 @@ int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
+/* `_t<tr> = [file, line];` of the def node dk, or NULL for none */
+static void emit_method_source_pair(const NodeTable *nt, int tr, int dk, Buf *b) {
+  if (dk < 0) { buf_printf(b, "_t%d = NULL;", tr); return; }
+  const char *fk = nt_file_path(nt, (int)nt_int(nt, dk, "node_file", 0));
+  buf_printf(b, "_t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str(", tr, tr);
+  emit_source_path_literal(b, fk && *fk ? fk : nt->source_file ? nt->source_file : "");
+  buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL));", tr, (int)nt_int(nt, dk, "node_line", 0));
+}
+
 /* Method#source_location: [file, line] of the target's def, from the same
    node position the #line machinery uses (#3247); mn is the node that
    makes the Method (-1: none). */
@@ -872,26 +930,46 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tm4); emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); sp_RbVal _t%d = sp_PolyArray_get((sp_PolyArray *)_t%d->self, 0);"
                   " sp_PolyArray *_t%d = NULL; SP_GC_ROOT(_t%d); ", tm4, tv4, tm4, tr4, tr4);
-    for (int k = 0; sym4 && k < c->nclasses; k++) {
+    int na4 = 0;
+    CplanClassArm *arms4 = sym4 ? cplan_capture_class_arms(c, mn, sym4, &na4) : NULL;
+    for (int i4 = 0; i4 < na4; i4++) {
+      int k = arms4[i4].cls;
       if (comp_class_is_module(c, &c->classes[k])) continue;
-      int mk = comp_method_in_chain(c, k, sym4, NULL);
-      int dk = mk >= 0 ? c->scopes[mk].def_node : -1;
+      int entry = arms4[i4].kind == CP_CARM_ENTRY;
+      int dk = arms4[i4].kind == CP_CARM_METHOD && !entry ? c->scopes[arms4[i4].mi].def_node : -1;
       /* an attr method stands where the accessor the bind site meets
          answers (cplan_accessor_met): its attr_* call, or none (a Struct's
          member, an alias of a module's accessor) */
-      if (comp_resolve_member(c, k, sym4, 0, NULL, NULL) == SP_MEMBER_ATTR) {
+      if (arms4[i4].kind == CP_CARM_READER || arms4[i4].kind == CP_CARM_WRITER) {
         CplanAccessor acc;
         cplan_accessor_met(c, mn, k, sym4, &acc);
         dk = acc.pos == 1 ? acc.node : -1;
       }
-      else if (dk < 0 || nt_int(nt, dk, "bam_poly", 0)) continue;
+      else if (!entry && (dk < 0 || nt_int(nt, dk, "bam_poly", 0))) continue;
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) { ", tv4, tv4, k);
-      if (dk < 0) { buf_printf(b, "_t%d = NULL; } else ", tr4); continue; }
-      const char *fk = nt_file_path(nt, (int)nt_int(nt, dk, "node_file", 0));
-      buf_printf(b, "_t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str(", tr4, tr4);
-      emit_source_path_literal(b, fk && *fk ? fk : nt->source_file ? nt->source_file : "");
-      buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL)); } else ", tr4, (int)nt_int(nt, dk, "node_line", 0));
+      if (!entry) {
+        emit_method_source_pair(nt, tr4, dk, b);
+        buf_puts(b, " }\nelse ");
+        continue;
+      }
+      /* (the pair of the version the entry's cells pick) */
+      int to[2 * (VER_MAX_ARMS + 1)], tests[4 * (VER_MAX_ARMS + 1)], nv = cplan_method_arms(c, arms4[i4].mi, mn, to, tests);
+      int closed = 0;
+      for (int v = 0; v < nv && !closed; v++) {
+        const int *t = &tests[2 * v];
+        int dv = to[v] >= 0 ? c->scopes[to[v]].def_node : -1;
+        if (t[0] >= 0 || t[1] >= 0) {
+          buf_puts(b, "if (");
+          emit_arm_cells_test(c, t, b);
+          buf_puts(b, ") { ");
+        }
+        else closed = 1;
+        emit_method_source_pair(nt, tr4, dv >= 0 && !nt_int(nt, dv, "bam_poly", 0) ? dv : -1, b);
+        buf_puts(b, " }\nelse ");
+      }
+      if (!closed) buf_printf(b, "{ _t%d = NULL; } }\nelse ", tr4);
     }
+    free(arms4);
     /* a receiver no arm took answers by a native method, whose location is
        nil -- unless the program's own def can answer it: one in a module,
        a reopened builtin class (Object, Integer, ...) or at the top level,
@@ -1245,12 +1323,20 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
       int t = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, nt_ref(nt, mn, "receiver"), b); buf_puts(b, "; ");
       buf_printf(b, "_t%d.cls_id == SP_BUILTIN_PROC ? sp_proc_arity((sp_Proc *)_t%d.v.p)", t, t);
-      for (int k = 0; k < c->nclasses; k++) {
+      int na;
+      CplanClassArm *arms = cplan_capture_class_arms(c, mn, msym, &na);
+      for (int i = 0; i < na; i++) {
         int a = 0;
-        int mi = comp_method_in_chain(c, k, msym, NULL);
-        if (mi < 0 || !method_scope_arity(c, mi, &a)) continue;
-        buf_printf(b, " : (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? (sp_int)%d", t, t, k, a);
+        if (arms[i].kind == CP_CARM_ENTRY) {
+          buf_printf(b, " : (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? (sp_int)", t, t, arms[i].cls);
+          emit_arm_value(c, mn, &arms[i], arm_arity_fn, (void *)(intptr_t)-1, b);
+          continue;
+        }
+        if (arms[i].kind != CP_CARM_METHOD) continue;
+        if (!method_scope_arity(c, arms[i].mi, &a)) continue;
+        buf_printf(b, " : (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? (sp_int)%d", t, t, arms[i].cls, a);
       }
+      free(arms);
       buf_printf(b, " : (sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"undefined method '%s'\")[1])), (sp_int)0); })", msym);
       return 1;
     }
@@ -2459,12 +2545,21 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
           if (!builtin_method_arity(BAM_RECV_CLS[q], disp, &ba)) continue;
           buf_puts(b, "("); buf_printf(b, BAM_RECV_TST[q], tbr, tbr); buf_printf(b, ") ? %d : ", ba);
         }
-        for (int k = 0; k < c->nclasses; k++) {
-          int ka = method_scope_arity(c, comp_method_in_chain(c, k, disp, NULL), &ar) ? ar
-                 : comp_reader_in_chain(c, k, disp, NULL) ? 0 : attr_writer_named(c, k, disp) ? 1 : fallback;
+        int na;
+        CplanClassArm *arms = cplan_capture_class_arms(c, id, disp, &na);
+        for (int i = 0; i < na; i++) {
+          if (arms[i].kind == CP_CARM_ENTRY) {
+            buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? ", tbr, tbr, arms[i].cls);
+            emit_arm_value(c, id, &arms[i], arm_arity_fn, (void *)(intptr_t)fallback, b);
+            buf_puts(b, " : ");
+            continue;
+          }
+          int ka = arms[i].kind == CP_CARM_METHOD ? (method_scope_arity(c, arms[i].mi, &ar) ? ar : fallback)
+                 : arms[i].kind == CP_CARM_READER ? 0 : 1;
           if (ka != fallback)
-            buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? %d : ", tbr, tbr, k, ka);
+            buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? %d : ", tbr, tbr, arms[i].cls, ka);
         }
+        free(arms);
         buf_printf(b, "%d)", fallback);
       }
       else if (mi >= 0 && method_scope_arity(c, mi, &ar)) buf_printf(b, ", (sp_int)%d", ar);
@@ -2616,8 +2711,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     const int *t = &tests[2 * i];
     if (t[0] >= 0 || t[1] >= 0) {
       buf_puts(b, "if (");
-      for (int k = 0, first = 1; k < 2; k++)
-        if (t[k] >= 0) { if (!first) buf_puts(b, " && "); emit_expr(c, t[k], b); first = 0; }
+      emit_arm_cells_test(c, t, b);
       buf_puts(b, ") ");
     }
     /* no version live, where the entry's else arm finds no method: CRuby's

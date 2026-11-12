@@ -180,6 +180,18 @@ int cplan_builtin_reopen_def(Compiler *c, int site, const char *cls, const char 
    the final one (a `public :sym` that follows does not count)? Not where the
    record cannot tell it. */
 int cplan_reopen_def_public(Compiler *c, int site, int mi, const char *sym);
+/* How a Method of `sym` that node mn makes stands for each class of the
+   program a boxed receiver may be of at run time, in ascending class order:
+   CP_CARM_METHOD the def's scope the capture meets there (call_target's
+   capture on the class); CP_CARM_ENTRY the scope of a version entry, where
+   the capture finds one a run-time test of its cells picks (the arms of
+   cplan_method_arms); CP_CARM_READER or CP_CARM_WRITER the attribute the
+   capture met, or the class's own where no def is. A class with none has no
+   arm (the receiver of it raises NameError). *n their count; the caller
+   frees the list. */
+typedef enum { CP_CARM_METHOD, CP_CARM_READER, CP_CARM_WRITER, CP_CARM_ENTRY } CplanClassArmKind;
+typedef struct { int cls, mi; CplanClassArmKind kind; } CplanClassArm;
+CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, int *n);
 /* The method scope call `id` runs when it asks for `name`: on cls's
    instance side through its chain, CT_CMETHOD on its class side, CT_OWN
    in cls's own table only, CT_TOP among the top-level functions (cls not

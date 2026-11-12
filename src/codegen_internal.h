@@ -650,10 +650,12 @@ extern char (*g_argov_text)[ARGOV_TEXT_LEN];
 /* Per slot: ARGOV_OINT, the bound text is an oint (view_bind_o); ARGOV_RAN,
    it is a temp the binder assigned before the binding is read
    (view_bind_temp; view_ran_first asks it); ARGOV_HELD, that temp is rooted
-   for the binding's life (view_hold). */
+   for the binding's life (view_hold); ARGOV_HANDLE, it is a String handle
+   (view_hold_handle). */
 #define ARGOV_OINT 1u
 #define ARGOV_RAN  2u
 #define ARGOV_HELD 4u
+#define ARGOV_HANDLE 8u
 extern unsigned char *g_argov_flag;
 int view_bind_o(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 extern int  g_n_argov;
@@ -2791,10 +2793,17 @@ int view_ran_first(int node);
    (view_hold): emit_args_filled_argv's handle temps and the boxed temps
    hoist_dispatch_args roots. */
 int view_held(int node);
+/* ...and the temp's text, or NULL when the node's latest binding is not held:
+   an argument that renders as it is passed on as that temp. */
+const char *view_held_text(int node);
 /* The temp the binding at `slot` names is rooted for as long as the binding
    lives. Called by the binder that rooted it, right after view_bind_temp.
    Only a ran-first slot takes it. */
 void view_hold(int slot);
+/* ...and the temp is a String handle (an sp_String *), not the bytes. */
+void view_hold_handle(int slot);
+/* The node's latest binding is held, and its temp is a String handle. */
+int view_held_handle(int node);
 /* A constant receiver's read effect already ran for the enclosing emission. */
 int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);

@@ -8044,7 +8044,7 @@ static int seed_name_und_eq(const char *a, const char *b) {
 }
 
 static int seed_class_index(Compiler *c, const char *name) {
-  /* a Ruby path names its class exactly */
+  /* a Ruby path names its class exactly (a qualified class keeps its own) */
   if (name && strstr(name, "::")) { int rp = comp_class_at_ruby_path(c, name); if (rp >= 0) return rp; }
   char buf[256];
   size_t j = 0;
@@ -8055,16 +8055,6 @@ static int seed_class_index(Compiler *c, const char *name) {
   buf[j] = '\0';
   int direct = comp_class_index(c, buf);
   if (direct >= 0) return direct;
-  /* A class whose leaf name collided across modules was renamed to the
-     `<Mod>__..__<Leaf>` form by qualify_colliding_classes; match that too. */
-  char buf2[256];
-  size_t j2 = 0;
-  for (const char *p = name; *p && j2 < sizeof buf2 - 1; ) {
-    if (p[0] == ':' && p[1] == ':') { if (j2 + 2 < sizeof buf2) { buf2[j2++] = '_'; buf2[j2++] = '_'; } p += 2; }
-    else buf2[j2++] = *p++;
-  }
-  buf2[j2] = '\0';
-  if (!sp_streq(buf, buf2)) { int q2 = comp_class_index(c, buf2); if (q2 >= 0) return q2; }
   /* A native class declared under a qualified name (`native_struct
      "IO::Buffer"`) is keyed by its leaf with no enclosing link; its Ruby
      name keeps the path. Match that name in the `_` form. */

@@ -883,6 +883,7 @@ void emit_ie_param_default(Compiler *c, TyKind t, Buf *b) {
   buf_puts(b, default_value_from_compiler(c, t));
 }
 
+int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth);
 int emit_ie_proc(Compiler *c, int id, int recv, int self_cls, int blk, int tramp, Buf *b) {
   const NodeTable *nt = c->nt;
   Repr tr = repr_of(c, id);
@@ -898,6 +899,15 @@ int emit_ie_proc(Compiler *c, int id, int recv, int self_cls, int blk, int tramp
   const char *fn = fe >= 0 ? nt_str(nt, fe, "name") : NULL;
   int rc = ty_is_object(rt) ? ty_object_class(rt) : -1, lit = ie_block_body(c, blk);
   int k = lit >= 0 ? ie_class_of(c, lit) : -1;
+  /* a block read back through the reader that stored it (ie_trace_bodies):
+     the class every literal it can be was marked to run on */
+  if (lit < 0 && fe >= 0) {
+    int tb[16], tn = ie_trace_bodies(c, fe, tb, 16, 0);
+    for (int i = 0; i < tn; i++) {
+      int tk = tb[i] >= 0 ? ie_class_of(c, tb[i]) : -1;
+      k = i == 0 ? tk : (k == tk ? k : -1);
+    }
+  }
   /* a proc handed in through a positional or keyword parameter: the call
      sites' literals were marked to run on the receiver (ie_param_literals);
      one the analysis could not follow is refused here, not left to raise

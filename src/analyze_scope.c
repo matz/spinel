@@ -2528,11 +2528,23 @@ const char *class_def_bare_name(const NodeTable *nt, int def_node) {
 }
 
 /* See analyze.h. */
+/* the class definition def_node opened, where the qualify pass named it, as
+   the load record holds it */
+static const char *class_def_opened_name(const Compiler *c, int def_node) {
+  int cp = class_def_path(c->nt, def_node);
+  if (!c->lrec || cp < 0 || !nt_str(c->nt, cp, "qc_name")) return NULL;
+  int ci = elab_header_class(c, def_node, NULL, NULL);
+  const char *cn = ci >= 0 && ci < c->nclasses ? c->classes[ci].name : NULL;
+  return cn;
+}
 const char *class_def_key(const Compiler *c, int def_node) {
-  return class_def_name(c->nt, def_node);
+  const char *cn = class_def_opened_name(c, def_node);
+  return cn ? cn : class_def_name(c->nt, def_node);
 }
 const char *class_def_bare_key(const Compiler *c, int def_node) {
-  return class_def_bare_name(c->nt, def_node);
+  const char *bn = class_def_bare_name(c->nt, def_node);
+  const char *cn = bn ? class_def_opened_name(c, def_node) : NULL;
+  return cn ? cn : bn;
 }
 
 /* The body a definition's statements go in, set by a pass that rebuilds

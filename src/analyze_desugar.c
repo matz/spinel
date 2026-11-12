@@ -8765,12 +8765,15 @@ int desugar_dynamic_respond_to(Compiler *c) {
    defined (rtm_live_at), a program with its own respond_to? (its own answer,
    whose super is Object's), a name known only at run time, a safe-navigation
    call, and a splat or block argument. */
-/* v as it is where reading it runs nothing (a literal, self), else held in
+/* v as it is where reading it runs nothing (a literal, self: a literal
+   receiver keeps its own reading, a temp would widen an Integer under
+   --int-overflow=promote), else held in
    temp tname of id's scope (*wr the write) */
 static int rtm_hold(Compiler *c, NodeTable *nt, int id, int v, const char *tname, int *wr) {
   NodeKind k = nt_kind(nt, v);
   *wr = -1;
-  if (k == NK_TrueNode || k == NK_FalseNode || k == NK_NilNode || k == NK_SelfNode) return 0;
+  if (k == NK_TrueNode || k == NK_FalseNode || k == NK_NilNode || k == NK_SelfNode ||
+      k == NK_IntegerNode || k == NK_FloatNode || k == NK_SymbolNode) return 0;
   *wr = step_kw_tmp(nt, comp_scope_of(c, id), tname, v);
   return 1;
 }

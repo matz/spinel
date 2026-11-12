@@ -7887,6 +7887,21 @@ static int lr_form_leads(const NodeTable *nt, int stmt, int form) {
    prepend of core modules alone (`include Comparable`), which the record
    keeps as opaque since it does not hold the module, and which defines no
    method of the program's on the includer (#11040) */
+/* Does node id give a class a const_missing: a def of that name, or a
+   define_singleton_method or define_method naming it by a literal? */
+static int lr_defines_const_missing(const NodeTable *nt, int id) {
+  NodeKind k = nt_kind(nt, id);
+  const char *nm = k == NK_DefNode || k == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  if (!nm) return 0;
+  if (k == NK_DefNode) return is_const_missing_name(nm);
+  if (!is_define_singleton_method_name(nm) && !is_define_method_name(nm)) return 0;
+  int an = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  if (ac < 1) return 0;
+  NodeKind ak = nt_kind(nt, av[0]);
+  const char *dn = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") : ak == NK_StringNode ? nt_str(nt, av[0], "unescaped") : NULL;
+  return dn && is_const_missing_name(dn);
+}
 /* Is constant read n (`Missing`, `Missing::Thing`) one whose first name
    the program defines nowhere -- no class or module of it, no constant
    write, no const_set or autoload naming it, no const_missing to answer
@@ -7900,10 +7915,10 @@ static int lr_const_root_undefined(const NodeTable *nt, int n) {
   for (int id = 0; id < nt->count; id++) {
     NodeKind ik = nt_kind(nt, id);
     const char *in = NULL;
+    if (lr_defines_const_missing(nt, id)) return 0;
     if (ik == NK_ClassNode || ik == NK_ModuleNode) in = class_def_name(nt, id);
     else if (ik == NK_ConstantWriteNode || ik == NK_ConstantOrWriteNode || ik == NK_ConstantTargetNode) in = nt_str(nt, id, "name");
     else if (ik == NK_ConstantPathTargetNode) in = nt_str(nt, id, "name");
-    else if (ik == NK_DefNode) { const char *dn = nt_str(nt, id, "name"); if (dn && sp_streq(dn, "const_missing")) return 0; }
     else if (ik == NK_CallNode) {
       const char *cn = nt_str(nt, id, "name");
       if (cn && (sp_streq(cn, "const_set") || sp_streq(cn, "autoload"))) {
@@ -7926,7 +7941,7 @@ static int lr_const_names_open(const NodeTable *nt) {
     NodeKind ik = nt_kind(nt, id);
     const char *nm = ik == NK_DefNode || ik == NK_CallNode ? nt_str(nt, id, "name") : NULL;
     if (!nm) continue;
-    if (ik == NK_DefNode && sp_streq(nm, "const_missing")) return 1;
+    if (lr_defines_const_missing(nt, id)) return 1;
     if (ik == NK_CallNode && (sp_streq(nm, "const_set") || sp_streq(nm, "autoload"))) {
       int an = nt_ref(nt, id, "arguments"), ac = 0;
       const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;

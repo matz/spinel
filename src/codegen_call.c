@@ -23244,7 +23244,6 @@ static void emit_vis_msg_boxed(int vis, const char *vnm, int tv, const char *arg
 }
 static int emit_vis_refusal_x(Compiler *c, int id, Buf *b);
 static void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
-static int boxed_value_needs_root(Compiler *c, int op);
 static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
 /* Does a reopened builtin class or module (`class Proc; def top`, `module
    Comparable; def top`) other than own (the closed method's) answer vnm?
@@ -23447,7 +23446,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
   g_tmp += vac;
   buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = ", tv); emit_boxed(c, vrecv, b);
   buf_puts(b, "; ");
-  if (boxed_value_needs_root(c, vrecv)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
+  if (repr_box_holds_heap(c, vrecv)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
   for (int k = 0; k < vac; k++) emit_missing_operand(c, vav[k], staged ? t0 + k : 0, b);
   Buf args; memset(&args, 0, sizeof args);
   if (staged) {
@@ -24136,17 +24135,10 @@ static void emit_raise_placeholder(Compiler *c, int id, Buf *b) {
   }
   else buf_printf(b, ", %s)", dflt);
 }
-/* Does node op's boxed value hold a heap pointer, which a temp holding it
-   ahead of a raise roots? (a scalar, nil, true, false, a Symbol and a
-   class value do not, nor does a frozen String literal, whose handle is
-   static: share_frozen_literal) */
-static int boxed_value_needs_root(Compiler *c, int op) {
-  Repr r = repr_of(c, op);
-  return (needs_root(r.as_ty) || r.big || r.kind == RK_BOXED) && !share_frozen_literal(c, op);
-}
 /* An operand ahead of a raise (emit_missing_raise), as a statement after
-   its own prelude: its boxed value into temp t, rooted where it holds a
-   heap pointer, for t > 0, else run for its effect */
+   its own prelude: its boxed value into temp t, rooted unless the box
+   proves it holds no heap pointer (repr_box_holds_heap), for t > 0, else
+   run for its effect */
 static void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
   Buf ap, ae; memset(&ap, 0, sizeof ap); memset(&ae, 0, sizeof ae);
   Buf *sv = g_pre; g_pre = &ap;
@@ -24155,7 +24147,7 @@ static void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
   if (ap.p) buf_puts(b, ap.p);
   if (t > 0) {
     buf_printf(b, "sp_RbVal _t%d = %s; ", t, ae.p ? ae.p : "sp_box_nil()");
-    if (boxed_value_needs_root(c, op)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
+    if (repr_box_holds_heap(c, op)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
   }
   else buf_printf(b, "(void)(%s); ", ae.p ? ae.p : "0");
   free(ap.p); free(ae.p);

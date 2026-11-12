@@ -1409,6 +1409,37 @@ ReprForm repr_box_form(const Compiler *c, Repr r) {
   return RF_NULLABLE;
 }
 
+/* See repr.h. Every box can, unless its form proves an immediate: an
+   Integer, a Float (each with its nil or not), true, false, a Symbol, nil
+   and a void value's nil; or a Class, boxed by its id or by its name
+   (sp_box_class), whose name the collector marks but every producer
+   passes as a literal, so it holds nothing collectable. A by-value
+   struct's box is a heap copy of it (a Range, a Rational, Process::Tms),
+   whatever the slot that holds the struct needs, and a Time's is its
+   object; a builtin pointer the collector does not own (a Regexp's
+   compiled pattern: its row roots no slot) is not one. An untyped value
+   is boxed by its shape where it has one (an empty `[]` or `{}`, a bare
+   Array.new or Hash.new): a new container. A frozen String literal's box
+   is its static handle (share_frozen_literal). */
+int repr_box_holds_heap(Compiler *c, int node) {
+  Repr r = repr_of(c, node);
+  if (share_frozen_literal(c, node)) return 0;
+  switch (repr_box_form(c, r)) {
+  case RF_INT: case RF_INT_NIL: case RF_FLT: case RF_FLT_NIL: case RF_BOOL: case RF_SYM:
+    return 0;
+  case RF_NIL_EFFECT:
+    return r.untyped;
+  case RF_STRUCT:
+    return r.as_ty != TY_CLASS;
+  case RF_NULLABLE: {
+    const TyTraits *tr = ty_traits_of(r.as_ty);
+    return !tr || tr->needs_root;
+  }
+  default:
+    return 1;
+  }
+}
+
 const char *repr_form_name(int form) {
   static const char *const names[RF__COUNT] = {
     "PASS", "NIL_EFFECT", "INT", "INT_NIL", "FLT", "FLT_NIL", "BIGINT", "STR",

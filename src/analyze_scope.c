@@ -1659,9 +1659,10 @@ static int record_write_class(Compiler *c, int id, int hdr) {
   int ci = elab_header_class(c, id, NULL, NULL);
   if (ci >= 0) return ci;   /* a subtree two lists share, walked again */
   if (nt_kind(c->nt, id) == NK_ConstantWriteNode) {
-    char wname[600];
-    const char *cname = walk_class_c_name(c, id, id, wname, sizeof wname, NULL, 0) ? wname : nt_str(c->nt, id, "name");
-    return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, NULL, hdr) : -1;
+    char wname[600], wruby[600];
+    int qualified = walk_class_c_name(c, id, id, wname, sizeof wname, wruby, sizeof wruby);
+    const char *cname = qualified ? wname : nt_str(c->nt, id, "name");
+    return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, qualified ? wruby : NULL, hdr) : -1;
   }
   char an[48];
   snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id));
@@ -1838,9 +1839,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     char wname[600], wruby[600];
     int qualified = walk_class_c_name(c, id, cp, wname, sizeof wname, wruby, sizeof wruby);
     const char *bname = qualified ? wname : class_def_key(c, id);
-    /* (a builder's own write, `X = Class.new`, keeps the Ruby path
-       registration gives it) */
-    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, bname, qualified && cp != id ? wruby : NULL, class_cref(c, class_id, w.cblock));
+    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, bname, qualified ? wruby : NULL, class_cref(c, class_id, w.cblock));
   }
   /* `P = Struct.new(:a) do ... end`, `k = Data.define(:a)`: likewise */
   else if (class_def_record(c->nt, id) >= 0) {

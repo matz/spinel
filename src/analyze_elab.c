@@ -8239,7 +8239,7 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *
     c->classes[ci].enclosing_class = encl; comp_class_path_moved();
     /* a qualified name comes with the Ruby path the walk resolved the
        header to (`AP = P; class AP::Foo` is P::Foo: walk_class_c_name) */
-    const char *qrn = cp >= 0 ? rname : NULL;
+    const char *qrn = rname;
     if (qrn) c->classes[ci].ruby_name_cache = strdup(qrn);
     /* `class A::B`: A encloses B wherever it is written. The leaf is the
        header's as written: a `__` in it is the program's own, not the

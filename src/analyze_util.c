@@ -1557,6 +1557,10 @@ int record_recv_class(Compiler *c, int node) {
   int ci = -1;
   if (nt_kind(c->nt, node) == NK_SelfNode) {
     const Scope *s = comp_scope_of(c, node);
+    /* a self instance_eval or instance_exec rebinds is the receiver it is
+       handed, not the class of the method around it: that receiver's own
+       dispatch answers, at run time for a proc (ie_rself) */
+    if (nt_int(c->nt, node, "ie_rself", 0) || ie_class_of(c, node) != -1) return -1;
     if (s && s->is_cmethod) ci = s->class_id;
     else ci = class_body_self_ci(c, node);   /* a class body's self, a Struct.new block's among them */
   }

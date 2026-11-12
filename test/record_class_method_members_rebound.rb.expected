@@ -1,0 +1,33 @@
+[:code]
+[:other, :extra]
+[:left, :right]
+[:code]
+["other", "extra"]
+["code"]
+false
+true
+[2, :other]
+[1, :code]
+:skip
+[:other, :extra]
+[:code]
+[:code]
+[:left, :right]
+[:left, :right]
+[:other, :extra]
+[:left, :right]
+NoMethodError
+[:other, :extra]
+[:left, :right]
+true
+[:other, :extra]
+[:other, :extra]
+[:left, :right]
+[:left, :right]
+[:code]
+NoMethodError
+[:code]
+true
+[:left, :right]
+[:left, :right]
+NameError

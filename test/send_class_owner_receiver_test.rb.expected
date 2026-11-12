@@ -1,0 +1,4 @@
+:lm
+[:ksend, :m]
+:cm
+[:msend, :m]

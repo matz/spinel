@@ -5267,15 +5267,18 @@ static int send_top_answers(Compiler *c, int id, const char *name) {
   return tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi);
 }
 
-/* Does a class of the program answer call `id` with a send of its own (the
-   classes whose chain answers the name, or every class while the chain memo
-   cannot be trusted)? For a receiver whose class no flow tells. */
+/* Does a class of the program answer call `id` with a send of its own, on its
+   instances or on the class itself (the classes whose chain answers the name
+   on each side, or every class while the chain memo cannot be trusted)? For
+   a receiver whose class no flow tells. */
 static int send_any_class_owns(Compiler *c, int id, const char *name) {
-  int n;
-  const int *rs = comp_name_responders(c, name, 0, &n);
-  for (int i = 0, k = 0; rs ? i < n : k < c->nclasses; i++, k++) {
-    if (rs) k = rs[2 * i];
-    if (send_own_in_chain(c, id, k, name, 0)) return 1;
+  for (int side = 0; side < 2; side++) {
+    int n;
+    const int *rs = comp_name_responders(c, name, side, &n);
+    for (int i = 0, k = 0; rs ? i < n : k < c->nclasses; i++, k++) {
+      if (rs) k = rs[2 * i];
+      if (send_own_in_chain(c, id, k, name, side)) return 1;
+    }
   }
   return 0;
 }
@@ -5302,7 +5305,11 @@ static int send_family_user_answers(Compiler *c, int id, int recv, const char *n
   if (send_top_answers(c, id, name)) return 1;
   if (recv < 0 || nt_kind(c->nt, recv) == NK_SelfNode) {
     Scope *sc = comp_scope_of(c, id);
-    if (!sc || sc->class_id < 0) return 0;
+    if (!sc || sc->class_id < 0) {
+      /* in a class's own body self is the class (comp_cbody_call_mi) */
+      int cb = c->node_cbody[id];
+      return cb >= 0 && !(sc && sc->name) && send_own_in_chain(c, id, cb, name, 1);
+    }
     return send_own_in_chain(c, id, sc->class_id, name, sc->is_cmethod);
   }
   TyKind rt = infer_type(c, recv);
@@ -5472,7 +5479,17 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
     if (mi < 0 || send_def_just_supers(c, mi) || !class_ruby_name(c, k)) continue;
     owners[nown++] = k;
   }
-  if (nown == 0) { free(owners); return 0; }
+  /* the classes and modules whose own singleton chain answers it: a Class
+     value of theirs (or of a subclass) is the owner's too */
+  int *cowners = malloc(sizeof(int) * (size_t)(c->nclasses + 1)), ncown = 0;
+  if (!cowners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  { int nr;
+    const int *rs = comp_name_responders(c, nm, 1, &nr);
+    for (int i = 0, k = 0; rs ? i < nr : k < c->nclasses; i++, k++) {
+      if (rs) k = rs[2 * i];
+      if (class_ruby_name(c, k) && send_own_in_chain(c, id, k, nm, 1)) cowners[ncown++] = k;
+    } }
+  if (nown == 0 && ncown == 0) { free(owners); free(cowners); return 0; }
   char mbuf[256], tname[64];
   snprintf(mbuf, sizeof mbuf, "%s", mname);
   snprintf(tname, sizeof tname, "__sus_%s", comp_node_tag(c, id));
@@ -5509,15 +5526,35 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
   /* `r&.send(:m)` answers nil for a nil receiver on either arm */
   if (nt_safe_nav(nt, id)) nt_set_safe_nav(nt, direct, 1);
   int cond = -1;
-  for (int i = 0; i < nown; i++) {
+  for (int i = 0; i < nown + ncown; i++) {
     int tr = nt_new_node(nt, "LocalVariableReadNode");
     nt_node_set_str(nt, tr, "name", tname); nt_node_set_int(nt, tr, "depth", 0);
-    int kc = sus_class_const(c, owners[i]);
-    if (kc < 0) { free(owners); return 0; }
-    int test = fwd_new_call(nt, tr, "is_a?", kc);
+    int cls = i < nown ? owners[i] : cowners[i - nown];
+    int kc = sus_class_const(c, cls);
+    if (kc < 0) { free(owners); free(cowners); return 0; }
+    /* an instance owner: `t.is_a?(K)`. A class or module owner: `Module === t`
+       first (a test on the constant Module, which no method of a class of the
+       value, an `is_a?` or `<=` it defines, can answer), then for a class K
+       `t <= K` (K itself or a class below it, which inherits its singleton
+       send) and for a module K `t.equal?(K)` (K's singleton methods are K's
+       own: a class including K does not have them) */
+    int test;
+    if (i < nown) test = fwd_new_call(nt, tr, "is_a?", kc);
+    else {
+      int tr2 = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, tr2, "name", tname); nt_node_set_int(nt, tr2, "depth", 0);
+      int mod = nt_new_node(nt, "ConstantReadNode");
+      nt_node_set_str(nt, mod, "name", "Module");
+      int isc = fwd_new_call(nt, mod, "===", tr);
+      int same = fwd_new_call(nt, tr2, comp_class_is_module(c, &c->classes[cls]) ? "equal?" : "<=", kc);
+      int an = nt_new_node(nt, "AndNode");
+      nt_node_set_ref(nt, an, "left", isc); nt_node_set_ref(nt, an, "right", same);
+      test = an;
+    }
     if (cond < 0) cond = test;
     else { int o = nt_new_node(nt, "OrNode"); nt_node_set_ref(nt, o, "left", cond); nt_node_set_ref(nt, o, "right", test); cond = o; }
   }
+  free(cowners);
   int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
   int el = nt_new_node(nt, "ElseNode"), ifn = nt_new_node(nt, "IfNode");
   nt_node_set_arr(nt, ys, "body", &keep, 1);

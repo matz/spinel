@@ -383,8 +383,13 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
    typed: the version the plan answers (cplan_implied_target) when it and
    the table's method answer an Array type; -1 otherwise. Only the one the
    load record proves the object answers there: a to_ary defined, or
-   brought in by an include, after the assignment is not answered yet. */
-int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op);
+   brought in by an include, after the assignment is not answered yet.
+   Where the plan answers a version that may give another value (nil, a
+   non-Array, or Arrays of another type than the table's), *boxed (may be
+   NULL) is 1: the site converts the value boxed
+   (cplan_boxed_to_ary_classes), its targets taking what that conversion
+   gives. */
+int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed);
 /* How a class's boxed to_ary runs where the plan answers it: the method
    table's method (the one sp_obj_to_ary calls), the version entry, or
    another version its window proves */

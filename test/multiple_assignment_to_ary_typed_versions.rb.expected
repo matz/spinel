@@ -1,0 +1,12 @@
+[1, 2]
+[1, [2]]
+1 2
+["x", :y]
+["x", [:y, 3.5]]
+"x" :y
+[#<K>, nil]
+[#<K>, []]
+#<K> nil
+TypeError: can't convert K to Array (K#to_ary gives Integer)
+TypeError: can't convert K to Array (K#to_ary gives Integer)
+TypeError: can't convert K to Array (K#to_ary gives Integer)

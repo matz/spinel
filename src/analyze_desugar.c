@@ -11774,8 +11774,8 @@ int desugar_exception_super_new(Compiler *c) {
    of the program's (its own `def self.exception`, or one of a class above
    it): CRuby raises what `K.exception(m)` answers, which need not be a K.
    Spell the call so; a class without one keeps the raise of K, whose
-   `exception` is `new`. A backtrace argument, a splat and a program's own
-   `raise` keep the old path. */
+   `exception` is `new`. A backtrace argument takes raise_backtrace_arg; a
+   splat and a program's own `raise` keep the old path. */
 /* Does the program define a method `name` of any kind: an instance method,
    a class method, a module function or a top-level def? A bare `raise` in
    its reach is that method, which takes the class and message as given. */
@@ -11859,7 +11859,9 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
     int ex = fwd_new_call(nt, k, "exception", npos == 2 ? aav[1] : -1);
     fwd_copy_loc(nt, ex, kept);
     nt_set_ignore_visibility(nt, ex, 1);   /* raise calls a private one too */
-    nt_node_set_arr(nt, aa, "arguments", &ex, 1);
+    /* (a `cause:` keyword stays the raise's own) */
+    int moved[2] = { ex, an > npos ? aav[an - 1] : -1 };
+    nt_node_set_arr(nt, aa, "arguments", moved, an > npos ? 2 : 1);
     nt_node_set_int(nt, arm, "raise_own_kept", 1);
     int test;
     if (hold && first) {
@@ -11905,6 +11907,96 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
   free(own);
   return 1;
 }
+/* Is keyword hash kw of a raise `cause: x` alone? A hash with any other
+   key (or a `**` operand) is one more positional argument to raise, which
+   keeps the raise as written. */
+static int raise_kw_cause_only(const NodeTable *nt, int kw) {
+  int n = 0; const int *els = nt_arr(nt, kw, "elements", &n);
+  if (n != 1 || !els || nt_kind(nt, els[0]) != NK_AssocNode) return 0;
+  int key = nt_ref(nt, els[0], "key");
+  const char *kv = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+  return kv && sp_streq(kv, "cause");
+}
+/* `raise X, m, bt` (and `fail`): CRuby makes the exception as
+   `X.exception(m)`, calls its set_backtrace(bt), and raises it. Spinel
+   dropped bt, and skipped X's own `self.exception`. The raise becomes
+     raise((t = X.exception(m); t.set_backtrace(bt); t), **kw)
+   on a temp, with X (unless a constant), m and bt held first, in order,
+   where reading one of them runs code. X is a constant or a class value; any other keeps the raise as
+   written, as does a program that defines set_backtrace. */
+static int raise_backtrace_arg(Compiler *c, int id, const int *av, int kw) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  /* (a program's own set_backtrace keeps the old path: Spinel has no super
+     into Exception's, nor a boxed dispatch beside it) */
+  if (an_scopes_named_first(c, "set_backtrace") >= 0) return 0;
+  if (kw && !raise_kw_cause_only(nt, av[3])) return 0;
+  NodeKind k0 = nt_kind(nt, av[0]);
+  if (k0 != NK_ConstantReadNode && k0 != NK_ConstantPathNode) {
+    if (g_infer_optimistic) return 0;
+    TyKind kt = infer_type(c, av[0]);
+    if (kt != TY_CLASS && kt != TY_POLY) return 0;
+  }
+  int args = nt_ref(nt, id, "arguments");
+  int xk = av[0], m = av[1], bt = av[2], kwh = kw ? av[3] : -1;
+  int hold = !fwd_stable_operand(c, xk) || !fwd_stable_operand(c, m) || !fwd_stable_operand(c, bt);
+  int base = nt->count;
+  const char *tag = comp_node_tag(c, id);
+  char te[48], tm[48], tb[48], tx[48];
+  snprintf(tx, sizeof tx, "__rbt_x%s", tag);
+  snprintf(te, sizeof te, "__rbt_e%s", tag);
+  snprintf(tm, sizeof tm, "__rbt_m%s", tag);
+  snprintf(tb, sizeof tb, "__rbt_b%s", tag);
+  Scope *sc = comp_scope_of(c, id);
+  int stm[6], ns = 0;
+  if (hold) {
+    if (k0 != NK_ConstantReadNode && k0 != NK_ConstantPathNode) {
+      int wx = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+      nt_node_set_str(nt, wx, "name", tx); nt_node_set_int(nt, wx, "depth", 0);
+      nt_node_set_ref(nt, wx, "value", xk);
+      scope_local_intern(sc, tx);
+      stm[ns++] = wx;
+      xk = fwd_new_node_like(nt, id, "LocalVariableReadNode");
+      nt_node_set_str(nt, xk, "name", tx); nt_node_set_int(nt, xk, "depth", 0);
+    }
+    int wm = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+    nt_node_set_str(nt, wm, "name", tm); nt_node_set_int(nt, wm, "depth", 0);
+    nt_node_set_ref(nt, wm, "value", m);
+    int wb = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+    nt_node_set_str(nt, wb, "name", tb); nt_node_set_int(nt, wb, "depth", 0);
+    nt_node_set_ref(nt, wb, "value", bt);
+    scope_local_intern(sc, tm); scope_local_intern(sc, tb);
+    stm[ns++] = wm; stm[ns++] = wb;
+    m = fwd_new_node_like(nt, id, "LocalVariableReadNode");
+    nt_node_set_str(nt, m, "name", tm); nt_node_set_int(nt, m, "depth", 0);
+    bt = fwd_new_node_like(nt, id, "LocalVariableReadNode");
+    nt_node_set_str(nt, bt, "name", tb); nt_node_set_int(nt, bt, "depth", 0);
+  }
+  int ex = fwd_new_call(nt, xk, "exception", m);
+  fwd_copy_loc(nt, ex, id);
+  nt_set_ignore_visibility(nt, ex, 1);   /* raise calls a private one too */
+  int we = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+  nt_node_set_str(nt, we, "name", te); nt_node_set_int(nt, we, "depth", 0);
+  nt_node_set_ref(nt, we, "value", ex);
+  scope_local_intern(sc, te);
+  int re1 = fwd_new_node_like(nt, id, "LocalVariableReadNode");
+  nt_node_set_str(nt, re1, "name", te); nt_node_set_int(nt, re1, "depth", 0);
+  int sb = fwd_new_call(nt, re1, "set_backtrace", bt);
+  fwd_copy_loc(nt, sb, id);
+  int re2 = fwd_new_node_like(nt, id, "LocalVariableReadNode");
+  nt_node_set_str(nt, re2, "name", te); nt_node_set_int(nt, re2, "depth", 0);
+  stm[ns++] = we; stm[ns++] = sb; stm[ns++] = re2;
+  int body = nt_new_node(nt, "StatementsNode"), par = fwd_new_node_like(nt, id, "ParenthesesNode");
+  nt_node_set_arr(nt, body, "body", stm, ns);
+  nt_node_set_ref(nt, par, "body", body);
+  int moved[2] = { par, kwh };
+  nt_node_set_arr(nt, args, "arguments", moved, kw ? 2 : 1);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    c->node_cbody[j] = c->node_cbody[id];
+  }
+  return 1;
+}
 int desugar_raise_own_exception(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -11922,11 +12014,17 @@ int desugar_raise_own_exception(Compiler *c) {
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
     if (ac < 1 || nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
     int kw = nt_kind(nt, av[ac - 1]) == NK_KeywordHashNode, npos = ac - kw;
-    if (npos < 1 || npos > 2) continue;
+    if (npos < 1 || npos > 3) continue;
     if (nt_int(nt, id, "raise_own_kept", 0)) continue;
+    if (npos == 3) {
+      int fi = nm[0] == 'f';
+      if (owned[fi] < 0) owned[fi] = raise_name_program_defined(c, nm);
+      if (!owned[fi] && raise_backtrace_arg(c, id, av, kw)) changed = 1;
+      continue;
+    }
     NodeKind k0 = nt_kind(nt, av[0]);
     int constant = k0 == NK_ConstantReadNode || k0 == NK_ConstantPathNode;
-    if (!constant && (kw || g_infer_optimistic)) continue;
+    if (!constant && (g_infer_optimistic || (kw && !raise_kw_cause_only(nt, av[ac - 1])))) continue;
     if (!constant) {
       TyKind kt = infer_type(c, av[0]);
       if (kt != TY_CLASS && kt != TY_POLY) continue;

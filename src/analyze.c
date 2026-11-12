@@ -22923,12 +22923,16 @@ static int scope_seeds_ivar(Compiler *c, int mi, const char *ivname) {
 /* Does any `initialize` in ci's chain write @<name>? A ctor that exists but
    never assigns a given ivar leaves it nil on a fresh instance, same as no
    ctor at all -- so the nil-backstop below must key on the actual write, not
-   on the mere presence of an initialize (#3136). */
+   on the mere presence of an initialize (#3136). A class's counts where
+   every initialize a `new` of it may run writes it (cplan_new_initializers):
+   a version that does not leaves it nil too. */
 static int ctor_writes_ivar(Compiler *c, int ci, const char *ivname) {
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
     int mi = comp_method_in_class(c, k, "initialize");
     if (mi < 0 || c->scopes[mi].def_node < 0) continue;
-    if (scope_seeds_ivar(c, mi, ivname)) return 1;
+    int ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, k, ms, VER_MAX_ARMS, &whole), all = n > 0 && whole;
+    for (int i = 0; i < n && all; i++) all = c->scopes[ms[i]].def_node >= 0 && scope_seeds_ivar(c, ms[i], ivname);
+    if (all) return 1;
   }
   return 0;
 }
@@ -37800,9 +37804,12 @@ int ivar_assigned_in_initialize(Compiler *c, int k, const char *ivn) {
     for (unsigned i = h & (unsigned)(iai_cap - 1); iai_memo[i].ivn; i = (i + 1) & (unsigned)(iai_cap - 1))
       if (iai_memo[i].k == k && strcmp(iai_memo[i].ivn, ivn) == 0) return iai_memo[i].v;
   }
-  int defcls = -1;
-  int mi = comp_method_in_chain(c, k, "initialize", &defcls);
-  int v = mi >= 0 && ivs_body_writes(c, k, defcls, c->scopes[mi].body, ivn, 0) == 1;
+  /* every initialize a `new` of k may run writes it (the table's first, as
+     its class finds it; a version as the class it is a method of) */
+  int defcls = -1, ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, k, ms, VER_MAX_ARMS, &whole), v = n > 0 && whole;
+  if (n > 0) comp_method_in_chain(c, k, "initialize", &defcls);
+  for (int i = 0; i < n && v; i++)
+    v = ivs_body_writes(c, k, i ? c->scopes[ms[i]].class_id : defcls, c->scopes[ms[i]].body, ivn, 0) == 1;
   if (iai_used * 2 >= iai_cap) {
     int ncap = iai_cap ? iai_cap * 2 : 256;
     void *nm2 = calloc((size_t)ncap, sizeof *iai_memo);

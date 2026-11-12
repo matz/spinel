@@ -568,6 +568,7 @@ void comp_free(Compiler *c) {
   free(c->ver_late); c->ver_late = NULL; c->nver_late = 0;
   ver_hold_free(c);
   ver_chain_free(c);
+  new_inits_free(c);
   free(c->ver_ix); free(c->ver_ix_next); free(c->ver_names); free(c->ver_names_next);
   c->ver_ix = c->ver_ix_next = c->ver_names = c->ver_names_next = NULL; c->ver_ix_nb = 0;
   free(c->ver_pins); c->ver_pins = NULL; c->nver_pins = 0;

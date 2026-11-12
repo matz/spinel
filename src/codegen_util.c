@@ -2539,9 +2539,13 @@ static int ivs_method_sets(Compiler *c, int mi, const char *ivn, int depth, int 
   }
   return ivs_writes_toplevel(c, nt_ref(c->nt, m->def_node, "body"), ivn, mi, depth, strict);
 }
+/* ...by every initialize a `new` of class cid may run (cplan_new_initializers) */
 static int ivs_init_sets(Compiler *c, int cid, const char *ivn, int depth, int strict) {
-  if (cid < 0) return 0;
-  return ivs_method_sets(c, comp_method_in_chain(c, cid, "initialize", NULL), ivn, depth, strict);
+  int ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, cid, ms, VER_MAX_ARMS, &whole);
+  if (!whole) return 0;
+  for (int i = 0; i < n; i++)
+    if (!ivs_method_sets(c, ms[i], ivn, depth, strict)) return 0;
+  return n > 0;
 }
 /* May code under `n`, run in method scope mi, see the object's ivars:
    self handed on (kept in an ivar of its own, it is not), a reflective read
@@ -2687,9 +2691,21 @@ static int ivs_order_method(Compiler *c, int mi, int leaf, int *ord, int *n, int
   }
   return ivs_order_walk(c, nt_ref(c->nt, m->def_node, "body"), mi, leaf, ord, n, depth);
 }
+/* ...of every initialize a `new` of class cid may run
+   (cplan_new_initializers), when they all give the one order */
 static int ivs_order_init(Compiler *c, int cid, int leaf, int *ord, int *n, int depth) {
-  if (cid < 0) return 1;
-  return ivs_order_method(c, comp_method_in_chain(c, cid, "initialize", NULL), leaf, ord, n, depth);
+  int ms[VER_MAX_ARMS], whole, nm = cplan_new_initializers(c, cid, ms, VER_MAX_ARMS, &whole), n0 = *n;
+  if (!whole || nm == 0) return whole;
+  if (!ivs_order_method(c, ms[0], leaf, ord, n, depth)) return 0;
+  int *o2 = nm > 1 ? malloc(sizeof(int) * (size_t)(c->classes[leaf].nivars + 1)) : NULL, ok = 1;
+  if (nm > 1 && !o2) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 1; i < nm && ok; i++) {
+    int k = n0;
+    memcpy(o2, ord, sizeof(int) * (size_t)n0);
+    ok = ivs_order_method(c, ms[i], leaf, o2, &k, depth) && k == *n && !memcmp(o2, ord, sizeof(int) * (size_t)k);
+  }
+  free(o2);
+  return ok;
 }
 static void ivs_order_add(Compiler *c, int leaf, const char *ivn, int *ord, int *n) {
   int ix = comp_ivar_index(&c->classes[leaf], ivn);

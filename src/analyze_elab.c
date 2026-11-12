@@ -6268,6 +6268,13 @@ static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWin
 int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap) {
   return lr_span(c, cls, name, sg, w, out, cap, NULL);
 }
+int elab_instance_span(Compiler *c, int cls, const char *name, const LrDef **out, int cap) {
+  LoadRecord *r = elab_fresh(c);
+  if (!r->recorded || r->nregion > 1) return -1;
+  lr_run_points(c);
+  ElabWindow w = { { 0, 0, -1 }, { 0, r->rend[0], -1 }, 0, 0, 0 };
+  return lr_span(c, cls, name, 0, &w, out, cap, NULL);
+}
 void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int how, ElabMeet *m, const LrDef **out, int cap) {
   LoadPoint p = elab_point_of(c, id);
   int after = how & 1;

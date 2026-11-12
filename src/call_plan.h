@@ -358,6 +358,7 @@ int ct_version_named(Compiler *c, const char *nm);
 int ct_version_marked(Compiler *c, const char *nm);
 void ver_hold_free(Compiler *c);
 void ver_chain_free(Compiler *c);
+void new_inits_free(Compiler *c);
 /* the method call id reaches when it can reach only main's own method of
    name, -1 for none (a call on main where main's method is defined) */
 int ct_main_target(Compiler *c, int id, const char *name);
@@ -464,6 +465,22 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
    (no row, or an undef on the chain) */
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
+/* Every initialize a builtin `new` of class ci may run, wherever it runs:
+   the table's method, then each other version of it the record holds (a
+   replaced one, in the history of the class that defines it) that an
+   instance of ci may meet, into out[0..cap). How many: 0 where ci has none
+   of the program's. *whole says whether that is every one: it is 0 where
+   the record cannot list the versions, a met version is a removal, an
+   undef or one the record does not map to a method, or past cap, and
+   then out holds the table's method and the versions it could map. A
+   fact of every construction of ci (which ivars it leaves set) holds
+   where *whole is 1 and it holds for each; a flow into every initialize a
+   construction binds (analyze_cls.c, cf_inits) takes the list either way.
+   The record is made by the time the analysis asks (elab_program runs
+   before the passes that ask these facts); asked before, it answers the
+   table's method alone with *whole 0, which a memo of the facts
+   (ivar_assigned_in_initialize) would keep as "not set". */
+int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole);
 /* The to_ary of the program's through which a value of type t converts
    where node `at` takes it apart (the implied to_ary call a row makes on
    operand op: a multiple assignment's value, the element a nested target

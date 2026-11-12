@@ -1,5 +1,6 @@
 #include "analyze_internal.h"
 #include "builtin_names.h"
+#include "builtin_ops.h"
 #include "call_plan.h"
 #include "share.h"
 #include "value_pos.h"
@@ -2751,6 +2752,96 @@ static int rsl_own_method(const NodeTable *nt, const char *cls, const char *name
   }
   return 0;
 }
+/* Can the program change the Array a member-list local or constant holds,
+   so that the list its one write made is not the list a later
+   `Struct.new(*keys)` reads? Each read of it (by name: `name`, a local of
+   scope `scp`, or a constant when scp is NULL) must leave the Array as it
+   is and must not hand it on (rsl_read_keeps_list). */
+static int rsl_no_own_method(const NodeTable *nt, const char *m) {
+  return !rsl_own_method(nt, "Array", m) && !rsl_own_method(nt, "Object", m) &&
+         !rsl_own_method(nt, "Kernel", m);
+}
+/* Can a receiverless call of m reach a method the program writes? A def
+   of that name anywhere (`def self.print(keys)` in a class body), or a
+   Symbol of it (define_method, alias_method), counts. */
+static int rsl_name_written(const NodeTable *nt, const char *m) {
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (dn && sp_streq(dn, m)) return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_SymbolNode, y) {
+    const char *yv = nt_str(nt, y, "value");
+    if (yv && sp_streq(yv, m)) return 1;
+  }
+  return 0;
+}
+/* the reads that answer the Array itself: `keys.each { }.push(:c)` */
+static int rsl_answers_self(const char *m) {
+  return sp_streq(m, "each") || sp_streq(m, "each_with_index") || sp_streq(m, "freeze") || is_to_a_name(m);
+}
+/* Does read r of the list leave its Array as it is? It may be:
+   - the receiver of an Array read (BOP_READ_ARRAY_INTACT) the program does
+     not define again; a read that answers the Array itself
+     (`keys.each { }`, `*keys.freeze`) only where its value is dropped
+     or is itself such a read;
+   - a splat operand (`*keys` passes the elements);
+   - an interpolation (`"#{keys}"` makes a new String);
+   - the argument of puts, print, p or pp (p only where its value is
+     dropped or is such a read, as p answers its argument). */
+static int rsl_read_keeps_list(Compiler *c, const int *par, int r) {
+  const NodeTable *nt = c->nt;
+  int p = par[r];
+  if (p < 0) return 0;
+  NodeKind pk = nt_kind(nt, p);
+  if (pk == NK_SplatNode) return 1;
+  if (pk == NK_CallNode && nt_ref(nt, p, "receiver") == r) {
+    const char *m = nt_str(nt, p, "name");
+    /* collect: map's other name, a transform resolve_symbol_list reads */
+    return m && (bop_name_has_reader(m, BOP_READ_ARRAY_INTACT) || sp_streq(m, "collect")) && rsl_no_own_method(nt, m) &&
+           (!rsl_answers_self(m) || comp_value_dropped(c, p) || rsl_read_keeps_list(c, par, p));
+  }
+  if (pk == NK_StatementsNode) {
+    int bn = 0; nt_arr(nt, p, "body", &bn);
+    return bn == 1 && par[p] >= 0 && nt_kind(nt, par[p]) == NK_EmbeddedStatementsNode &&
+           rsl_no_own_method(nt, "to_s") && rsl_no_own_method(nt, "inspect");
+  }
+  if (pk == NK_ArgumentsNode && par[p] >= 0 && nt_kind(nt, par[p]) == NK_CallNode) {
+    int k = par[p], an = 0;
+    nt_arr(nt, p, "arguments", &an);
+    const char *m = nt_str(nt, k, "name");
+    if (an != 1 || !m || nt_ref(nt, k, "receiver") >= 0 || nt_ref(nt, k, "block") >= 0) return 0;
+    if (rsl_name_written(nt, m) || !rsl_no_own_method(nt, "inspect") || !rsl_no_own_method(nt, "to_s")) return 0;
+    if (sp_streq(m, "puts") || sp_streq(m, "print")) return 1;
+    return (sp_streq(m, "p") || sp_streq(m, "pp")) && (comp_value_dropped(c, k) || rsl_read_keeps_list(c, par, k));
+  }
+  return 0;
+}
+static int rsl_list_may_change(Compiler *c, const char *name, Scope *scp) {
+  const NodeTable *nt = c->nt;
+  /* `X::KEYS` reaches the constant by another node kind */
+  if (!scp) NT_FOREACH_KIND(nt, NK_ConstantPathNode, r) {
+    const char *rn = nt_str(nt, r, "name");
+    if (rn && sp_streq(rn, name)) return 1;
+  }
+  const int *par = NULL;
+  NT_FOREACH_KIND(nt, scp ? NK_LocalVariableReadNode : NK_ConstantReadNode, r) {
+    const char *rn = nt_str(nt, r, "name");
+    if (!rn || !sp_streq(rn, name) || (scp && comp_scope_of(c, r) != scp)) continue;
+    if (!par) par = comp_parent_map(c);
+    if (!rsl_read_keeps_list(c, par, r)) return 1;
+  }
+  return 0;
+}
+
+/* `%i[a b].freeze`: a list no one can change, whatever its reads do (a
+   change raises FrozenError) */
+static int rsl_frozen_literal(const NodeTable *nt, int v) {
+  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
+  const char *mn = nt_str(nt, v, "name");
+  int r = nt_ref(nt, v, "receiver");
+  return mn && sp_streq(mn, "freeze") && nt_ref(nt, v, "arguments") < 0 && r >= 0 &&
+         nt_kind(nt, r) == NK_ArrayNode && !rsl_own_method(nt, "Array", "freeze");
+}
 int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return -1;
@@ -2784,13 +2875,17 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
        be applied inline at the Struct.new (`Struct.new(*keys.reverse)`). */
     int src = -1;
     for (int w = 0; vn && w < nt->count; w++) {
-      if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
+      NodeKind wk = nt_kind(nt, w);
+      if (!comp_is_local_write(wk)) continue;
       const char *wn = nt_str(nt, w, "name");
       if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != scp) continue;
-      if (src >= 0) return -1;
+      /* `keys += [:c]`, `keys ||= ...`, `keys, x = ...`: a second write */
+      if (src >= 0 || wk != NK_LocalVariableWriteNode) return -1;
       src = nt_ref(nt, w, "value");
     }
     if (src < 0) return -1;
+    /* the one write's Array, changed in place after it (`keys << :c`) */
+    if (!rsl_frozen_literal(nt, src) && rsl_list_may_change(c, vn, scp)) return -1;
     return resolve_symbol_list(c, src, out, cap, depth + 1);
   }
   /* a constant the program writes once (`KEYS = %i[a b].freeze`, regexp_parser's
@@ -2799,13 +2894,17 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
     const char *cn = nt_str(nt, node, "name");
     int src = -1;
     for (int w = 0; cn && w < nt->count; w++) {
-      if (nt_kind(nt, w) != NK_ConstantWriteNode) continue;
+      NodeKind wk = nt_kind(nt, w);
+      if (wk != NK_ConstantWriteNode && wk != NK_ConstantOperatorWriteNode && wk != NK_ConstantOrWriteNode &&
+          wk != NK_ConstantAndWriteNode && wk != NK_ConstantTargetNode) continue;
       const char *wn = nt_str(nt, w, "name");
       if (!wn || !sp_streq(wn, cn)) continue;
-      if (src >= 0) return -1;
+      /* `KEYS += [:c]`, `KEYS ||= ...`, `KEYS, X = ...`: a second write */
+      if (src >= 0 || wk != NK_ConstantWriteNode) return -1;
       src = nt_ref(nt, w, "value");
     }
     if (src < 0) return -1;
+    if (!rsl_frozen_literal(nt, src) && rsl_list_may_change(c, cn, NULL)) return -1;
     return resolve_symbol_list(c, src, out, cap, depth + 1);
   }
   /* a receiverless method on a resolvable symbol list that yields another

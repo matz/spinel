@@ -512,6 +512,15 @@ int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
   return cplan_super_chain_mi(c, id, s, par, uname, ml);
 }
 
+/* Does the `super` of the program's send, __send__ or public_send in scope
+   s, which finds no method above it, reach Object's, which nothing can call
+   (a body that is only a pass-through to it lowers past the method:
+   send_def_just_supers; an instance side's does only while no other of the
+   name exists, as every send then lowers past it)? */
+static int cplan_send_super_refused(Compiler *c, const Scope *s, const char *uname) {
+  return !send_def_just_supers(c, (int)(s - c->scopes)) || (!s->is_cmethod && send_family_defined_anywhere(c, uname));
+}
+
 static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !s->name) return;
@@ -528,6 +537,20 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     p->msg = "super to an inherited builtin singleton method is not supported; see docs/limitations.md";
   } else if (uname && s->is_cmethod && is_definition_hook_name(uname))
     p->core_hook = 1;   /* Class#inherited and the like: a no-op that reads no class and calls no method */
+  else if (uname && is_send_family(uname) && cplan_send_super_refused(c, s, uname)) {
+    /* `super` from the program's own send, __send__ or public_send that
+       nothing above defines is Object's: it dispatches on the name at run
+       time, which no emitted code does, so it is refused rather than
+       answered by a NoMethodError CRuby does not raise */
+    char msg[400];
+    snprintf(msg, sizeof msg, "unsupported `super` in a program-defined `%s`: "
+             "it reaches Object#%s, which a program method cannot call yet "
+             "(only a `%s` that passes its parameters straight to `super` is supported, "
+             "in a program with no other `%s` of its own)", uname, uname, uname, uname);
+    cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
+    p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
+    p->msg = cplan_keep(c, strdup(msg));
+  }
 }
 
 /* Is node id inside a block, a lambda or a method body (it may run later)? */

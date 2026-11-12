@@ -1278,7 +1278,16 @@ int cplan_presence_class(Compiler *c, int id);
    a remove, and in a program that defines respond_to_missing?
    (respond_to_missing_defined). */
 typedef struct { int n; char cell[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; int els; } CplanCells;
-int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, CplanCells *out);
+int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out);
+/* The class whose own or inherited class methods class-side list call id lists, when the cells may answer it
+   (a `C.singleton_methods` on a constant, list_cells_shape; *own for the `(false)` form); -1 for any other. The
+   survey asks each name it may list the entry a call there would take (cplan_presence_asks), so that
+   cplan_list_cells gives its cells. */
+int cplan_list_class(Compiler *c, int id, int *own);
+/* The cells that answer whether class-side list id lists class method `name` of cls (own: its own versions): the
+   public versions' cells, where cplan_cmethod_presence gives some and every version is public (a list shows
+   public and protected methods); 0 where the table answers it. */
+int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, CplanCells *out);
 /* Whether name answers on cls's chain where presence site id runs, as a
    call of the name there finds it, from call_target with CT_REACH (side: 0
    for an instance's chain, CT_CMETHOD for the class side, with CT_OWN for

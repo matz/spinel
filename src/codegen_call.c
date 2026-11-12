@@ -19584,6 +19584,8 @@ void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r) {
   cplan_list_candidates(c, ci, CT_CMETHOD | (all ? 0 : CT_OWN), refl_cmethod_cand_note, &n);
 }
 
+static int cells_testable(Compiler *c, const CplanCells *cs);
+static void emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b);
 /* Emit the listed names of `r` as a PolyArray of symbols. Interned at run
    time: a name the source never spells is not in the generated symbol
    table. A name of the program's is left out where the call plan proves
@@ -19595,6 +19597,18 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
   for (int i = 0; i < r->n; i++) {
     if (!(r->show[i] & REFL_SHOWN)) continue;
     if (cid >= 0 && comp_is_undeffed_in_chain(c, cid, r->v[i])) continue;
+    /* a class-side name whose versions the record cannot order against the list: listed where one of its
+       cells says it is live (cplan_cmethod_presence), as a respond_to? there answers; public versions only */
+    CplanCells cs;
+    if (r->at && (r->at_side & CT_CMETHOD) && !(r->show[i] & REFL_ROW) &&
+        cplan_list_cells(c, r->at - 1, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, &cs) && cells_testable(c, &cs)) {
+      buf_puts(b, "if (");
+      emit_cells_test(c, &cs, b);
+      buf_printf(b, "0) sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", ta);
+      emit_str_literal(b, r->v[i]);
+      buf_puts(b, "))); ");
+      continue;
+    }
     if (r->at && !(r->show[i] & REFL_ROW) && cplan_list_omits(c, r->at - 1, r->at_cls, r->at_side, r->v[i])) continue;
     buf_printf(b, "sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", ta);
     emit_str_literal(b, r->v[i]);
@@ -20178,22 +20192,29 @@ static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   return sk && is_record_class_cmethod(qm, sk == 2);
 }
 /* See codegen_call_arms.h. */
-int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b) {
-  int all = argc >= 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode, ci = cplan_presence_class(c, id);
-  CplanCells cs;
-  if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, &cs)) return 0;
-  /* a cell is an Integer global: an sp_int, or an sp_RbVal under
-     --int-overflow=promote, compared as the entry's arms compare it */
-  for (int i = 0; i < cs.n; i++) {
-    LocalVar *g = comp_gvar(c, cs.cell[i] + 1);
+/* Do the cells hold values the run-time test compares (an Integer global: an sp_int, or an sp_RbVal under
+   --int-overflow=promote, compared as the entry's arms compare it)? */
+static int cells_testable(Compiler *c, const CplanCells *cs) {
+  for (int i = 0; i < cs->n; i++) {
+    LocalVar *g = comp_gvar(c, cs->cell[i] + 1);
     ReprKind k = g ? repr_slot_kind(c, g) : RK_NONE;
     if (k != RK_SCALAR && k != RK_BOXED) return 0;
   }
+  return 1;
+}
+/* ...the test that some version is live: each cell equals its version, ored, ahead of the caller's last operand */
+static void emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
+  for (int i = 0; i < cs->n; i++)
+    buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL)) || " : "gv_%s == %d || ",
+               cs->cell[i] + 1, cs->val[i]);
+}
+int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b) {
+  int all = argc >= 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode, ci = cplan_presence_class(c, id);
+  CplanCells cs;
+  if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, 0, &cs) || !cells_testable(c, &cs)) return 0;
   if (!b) return 1;
   buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(" : "(");
-  for (int i = 0; i < cs.n; i++)
-    buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs.cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL)) || " : "gv_%s == %d || ",
-               cs.cell[i] + 1, cs.val[i]);
+  emit_cells_test(c, &cs, b);
   buf_printf(b, "%d)", cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci]))));
   return 1;
 }

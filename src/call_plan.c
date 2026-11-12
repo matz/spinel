@@ -3057,9 +3057,14 @@ static int ct_blocks_run_at_once(Compiler *c, int id) {
    its point (ct_undefined_at), it does not run any time after it
    (ct_after_point), and every block around it runs at once
    (ct_blocks_run_at_once)? A presence question there finds none at
-   every run (call_target's MLW_RECORD for a name with no method scope). */
+   every run (call_target's MLW_RECORD for a name with no method scope,
+   and cplan_cmethod_later). */
 static int ct_before_versions(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi) {
-  return ct_undefined_at(c, id, cls, name, flags, mi) && !ct_after_point(c, id) && ct_blocks_run_at_once(c, id);
+  if (!ct_undefined_at(c, id, cls, name, flags, mi)) return 0;
+  int framed = elab_plan_enter(c, id);
+  int before = !ct_after_point(c, id) && ct_blocks_run_at_once(c, id);
+  if (framed) elab_plan_leave(c);
+  return before;
 }
 /* Does the copy a class-side alias of the name makes (Scope.alias_of) in a
    class of ci's chain below the one declaring the name's `class << self`
@@ -3117,11 +3122,7 @@ int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
   int asked = id >= 0 ? (int)nt_int(c->nt, id, "defined_ask", 0) : 0;
   if (asked) id = asked - 1;   /* defined?'s respond_to?: at the call it asks of */
-  if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1)) return 0;
-  int framed = elab_plan_enter(c, id);
-  int now = elab_blocks_run_now(c, id);
-  if (framed) elab_plan_leave(c);
-  return now;
+  return id >= 0 && cls >= 0 && ct_before_versions(c, id, cls, name, CT_CMETHOD, -1);
 }
 /* See call_plan.h. */
 int cplan_presence_class(Compiler *c, int id) {

@@ -1274,10 +1274,13 @@ int cplan_self_builtin(Compiler *c, int id);
    as the record proves at the call's load point (call_target's answer for
    a call there)? A reflection asked there (`C.respond_to?(:z)` before
    `def C.z`) then finds none. 0 unless the call has a point and runs when
-   its statement does: not in a method body, a lambda or an END body, and
-   in a block only when every block around it is certain to run at once
-   (elab_blocks_run_now: a builtin iterator on a literal); 0 too for a class
-   whose chain the record does not know. The respond_to? a `defined?(C.z)`
+   its statement does: not in a method body, a lambda or an END body, nor
+   in a block that may run after its point, and in a block only when every
+   block around it runs at once (ct_before_versions, the proof a method
+   list's accessor asks too: a builtin iterator on a literal, a program
+   method whose body runs it before answering, or an iterator's name no
+   method of the program's can take over); 0 too for a class whose chain
+   the record does not know. The respond_to? a `defined?(C.z)`
    is answered by (desugar_defined_method_call) asks at the point of the
    call `C.z` (the defined?'s). */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);

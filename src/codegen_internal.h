@@ -1254,6 +1254,12 @@ void effect_view_close(Compiler *c, int v);
    value is. A rescue operand is read so when an exception reaches its
    clause. */
 int const_read_raises(Compiler *c, int id);
+/* The NameError of constant (path) node id, whose lookup the caller knows
+   to fail there: its read where that raises, else (a path whose read
+   answers by its last name, though the class or module before it holds no
+   such constant) the raise itself, naming that class or module as CRuby
+   does, with the build-time warning a read gives. */
+void emit_const_lookup_failure(Compiler *c, int id, Buf *b);
 /* The constant path as the program wrote it, for a NameError (codegen_expr.c) */
 void const_path_written(const NodeTable *nt, int id, char *out, size_t cap);
 void emit_constant_slot(Compiler *c, int id, Buf *b);

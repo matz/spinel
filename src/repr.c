@@ -225,9 +225,14 @@ static int node_is_oint_asked(Compiler *c, int node) {
     TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
     int a2 = nt_ref(nt, node, "arguments"), an2 = 0;
     if (a2 >= 0) nt_arr(nt, a2, "arguments", &an2);
+    /* Kernel's then and tap, where the plan binds the call to no method of
+       the program's (an Object or a class method of the name answers in
+       its own form, below) */
+    CallPlan kp = cplan_user(c, node);
+    int kernel = kp.mi < 0 && kp.dispatch == CP_NONE;
     /* `x.then { ... }` answers its block: a nil tail or a `next` that can
        hand nil makes it nil */
-    if ((sp_streq(nm, "then") || sp_streq(nm, "yield_self")) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
+    if (kernel && is_then_alias(nm) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
       int bb = nt_ref(nt, blk, "body");
       int bn = 0; const int *bs = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
       if (bn > 0 && (node_has_oint_form(c, bs[bn - 1]) || nt_kind(nt, bs[bn - 1]) == NK_NilNode)) return 1;
@@ -245,7 +250,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
       return nt_kind(nt, lv) == NK_NilNode || repr_of(c, lv).kind == RK_BOXED || node_has_oint_form(c, lv);
     }
     /* `x.tap { ... }` answers its receiver, in the receiver's form */
-    if (sp_streq(nm, "tap") && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
+    if (kernel && is_tap_name(nm) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
     /* unary `+` hands an Integer / Float its operand: the operand's form */
     if (sp_streq(nm, "+@") && an2 == 0 && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
     /* a proc's result comes back boxed and is unboxed with its nil */

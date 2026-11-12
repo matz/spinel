@@ -6924,7 +6924,11 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
     if (sp_streq(name, "`") && argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode) { *out = TY_STRING; return 1; }  /* the command's output */
     if (sp_streq(name, "trap") && argc >= 1) { *out = TY_POLY; return 1; }  /* the previous handler: a command string or a Proc */
     /* at_exit answers the Proc it registered, so the handler stays callable (#3727) */
-    if (sp_streq(name, "at_exit") && nt_ref(nt, id, "block") >= 0) { *out = TY_PROC; return 1; }
+    if (sp_streq(name, "at_exit") && nt_ref(nt, id, "block") >= 0) {
+      /* `END { }` (end_once) is nil as a value */
+      *out = nt_int(nt, id, "end_once", 0) ? TY_NIL : TY_PROC;
+      return 1;
+    }
     if (sp_streq(name, "rand")) {
       if (argc == 0) { *out = TY_FLOAT; return 1; }
       if (infer_type(c, argv[0]) == TY_FLOAT_RANGE) { *out = TY_FLOAT; return 1; }   /* rand(float range) */

@@ -150,11 +150,21 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
      the hooks in reverse order, from main()'s tail and from every other path
      that ends the program. The registration expression evaluates to the proc;
      sp_at_exit_push locks the table in the threaded build. */
-  if (recv < 0 && sp_streq(name, "at_exit") && nt_ref(nt, id, "block") >= 0 && !bare_call_class_owned(c, id)) {
+  /* `END { }` (the parser's at_exit marked end_once) is Kernel's whatever
+     the program defines, and registers its block the first time it runs
+     only, as CRuby does */
+  int end_once = nt_int(nt, id, "end_once", 0);
+  if (recv < 0 && sp_streq(name, "at_exit") && nt_ref(nt, id, "block") >= 0 && (end_once || !bare_call_class_owned(c, id))) {
     g_needs_at_exit = 1;
+    int to = end_once ? ++g_tmp : 0;
+    /* END's value is nil: the registering expression is run for its effect.
+       The first-time flag is swapped atomically, so two threads that run
+       the same END register it once */
+    if (end_once) buf_printf(b, "({ static int _t%d; if (!SP_ATOMIC_EXCHANGE(&_t%d, 1, __ATOMIC_ACQ_REL)) { ", to, to);
     buf_puts(b, "sp_at_exit_push(");
     emit_proc_literal(c, id, b);
     buf_puts(b, ")");
+    if (end_once) buf_puts(b, "; } 0; })");
     return 1;
   }
 

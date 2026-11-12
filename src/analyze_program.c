@@ -785,8 +785,8 @@ void prog_refuse_loads(Compiler *c) {
   }
   int *parent = an_parent_map(nt);
   if (!parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  NodeKind kinds[] = { NK_LoadNode, NK_PostExecutionNode, NK_ReturnNode };
-  for (int ki = 0; ki < 3; ki++) NT_FOREACH_KIND(nt, kinds[ki], id) {
+  NodeKind kinds[] = { NK_LoadNode, NK_ReturnNode };
+  for (int ki = 0; ki < 2; ki++) NT_FOREACH_KIND(nt, kinds[ki], id) {
     NodeKind k = kinds[ki];
     if (k == NK_LoadNode) {
       if (nt_int(nt, id, "target_file", -1) == 0)
@@ -794,11 +794,6 @@ void prog_refuse_loads(Compiler *c) {
       for (int j = 0; j < prog_load_ncand(nt, id); j++)
         if (prog_load_cand(nt, id, j) == 0)
           unsupported_feature(c, id, "--load-model=graph: a computed require may load the program's own entry file again, for now");
-    }
-    else if (k == NK_PostExecutionNode) {
-      int r = prog_root_of(c, parent, id);
-      if (r >= 0 && r != nt->root_id)
-        unsupported_feature(c, id, "--load-model=graph: an END block in a required file, for now");
     }
     else if (k == NK_ReturnNode) {
       /* the nearest method, lambda or block around it: a block's, at the top level */

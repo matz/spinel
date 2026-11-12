@@ -950,6 +950,23 @@ int cplan_visibility_class(Compiler *c, int id, int ci);
 int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod);
 int cplan_super_needs_method_missing(Compiler *c, int id);
 int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);
+/* The visibility of the method call id binds on class ci's chain (its class
+   method's with CPV_CMETHOD), at the call's point: the plan's one answer of
+   it, which every visibility refusal reads. Per version, as the record has
+   it at the point, where the call is bound to the version live there: one
+   the roots' lookup bound (CPV_ROOT, cplan_root_method, which answers a
+   lazy chain's block and a call with no place itself), or where the name
+   has versions (ct_version_named) whose visibility may differ between
+   points (elab_method_vis_varies), the call runs at its point (not later,
+   nor in a block a target may keep) and the version the plan binds it to
+   is the record's there, so a call that meets a module's version behind a
+   later own def takes the module's; else the declared one
+   (comp_method_vis_declared, comp_cmethod_vis_declared), whose declaring
+   class goes to *at either way. Where no point answers, a face entry picks
+   the version at run time: each of its arms raises with its own version's
+   visibility (cplan_pinned_vis), an arm's fact rather than a call's. */
+enum { CPV_CMETHOD = 1, CPV_ROOT = 2 };
+int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, int *at);
 TyKind cplan_poly_arg_storage(Compiler *c, int id);
 /* The re-entry of a call on an object whose static class cannot answer the
    name while one of its subclasses can (#4023). Computed afresh. */

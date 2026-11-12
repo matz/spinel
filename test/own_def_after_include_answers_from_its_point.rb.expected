@@ -1,0 +1,35 @@
+:m
+:m
+[:m]
+[:m, :m]
+[:m, :m]
+:m_frozen
+M
+:c
+:c
+[:c]
+[:c, :m]
+[:c, :c]
+:c_frozen
+:m
+C
+NoMethodError
+NoMethodError
+NoMethodError
+:p
+:p
+:p
+:d
+:d
+:d
+:k
+NoMethodError
+:arr
+:n
+:n_frozen
+:n
+:n
+:object
+:object_frozen
+:object
+:object

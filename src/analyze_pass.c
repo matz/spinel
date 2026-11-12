@@ -3863,7 +3863,14 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         vt = ftail;
         TyKind fnx = block_next_value_ty(c, fbody);
         if (fnx != TY_UNKNOWN) vt = vt == TY_UNKNOWN ? fnx : ty_unify(vt, fnx);
-        if (fnx != TY_UNKNOWN && recv >= 0) {
+        /* The arms are read with or without a `next`: a tail of mixed
+           kinds (`x == 2 ? 2.5 : x`) joins to the boxed kind as two
+           `next` values do, and the store evidence leaves that alone.
+           A typed param, ivar or Struct member then kept its Integer
+           elements and the Float was lost. A lone nil arm with no `next`
+           keeps the joined tail, as before: the nil answered by itself
+           left `[0, 0].fill { |i| i == 1 ? nil : 5 }` typed. */
+        if (recv >= 0) {
           TyKind frt = infer_type(c, recv);
           unsigned fnum = 0;
           /* a boxed local may hold Arrays of several kinds: the joined
@@ -3871,8 +3878,11 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
              answered kind left the others typed */
           int fboxed = frt == TY_POLY && nt_kind(nt, recv) == NK_LocalVariableReadNode;
           if (frt != TY_POLY_ARRAY && !fboxed)
-            vt = block_store_value_ty(c, fbody, fbn > 0 ? fbs[fbn - 1] : -1, (TyKind)vt,
-                                      ty_is_array(frt) ? ty_array_elem(frt) : TY_UNKNOWN, &fnum);
+{
+            TyKind fbv = block_store_value_ty(c, fbody, fbn > 0 ? fbs[fbn - 1] : -1, (TyKind)vt,
+                                              ty_is_array(frt) ? ty_array_elem(frt) : TY_UNKNOWN, &fnum);
+            if (fnx != TY_UNKNOWN || fbv != TY_NIL) vt = fbv;
+          }
           /* a row read out of a table (`m[0].map! { |x| next 1.5 if x == 1;
              2 }`) whose block stores an Integer and a Float: each one is its
              own evidence, as for a row written twice, and the row widens

@@ -1,0 +1,13 @@
+:public
+:public
+:public
+1
+"private method 'tap' called for nil"
+"private method 'then' called for an instance of Integer"
+[1]
+2
+20
+"private method 'tap' called for nil"
+"private method 'tap' called for nil"
+200
+:public

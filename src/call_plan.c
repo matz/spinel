@@ -141,7 +141,7 @@ int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi) {
    no Object method reaches. */
 static const char *cplan_builtin_name_of(Compiler *c, int cid) {
   const BuiltinClass *r = NULL;
-  if (class_is_blank_slate(c, cid)) return NULL;
+  if (cid == comp_core_class(c, CORE_BASIC_OBJECT) || class_is_blank_slate(c, cid)) return NULL;
   int bp = class_builtin_parent(c, cid);
   for (int i = 0; (r = builtin_class_at(i)) && r->id != bp; i++) {}
   return r ? r->name : "Object";
@@ -203,46 +203,53 @@ int cplan_object_method_named(Compiler *c, const char *name) {
   }
   return 0;
 }
-/* Is class ci one of the roots a program's method on a builtin receiver is
-   found on ahead of the lookup's later ancestors: Object, Kernel, Numeric,
-   NilClass? */
+/* Is core slot s one of the roots a program's method on a builtin
+   receiver is found on, past the builtin's own classes: NilClass, Numeric,
+   Object, Kernel, BasicObject? */
+static int cplan_root_slot(int s) {
+  return s == CORE_NILCLASS || s == CORE_NUMERIC || s == CORE_OBJECT || s == CORE_KERNEL || s == CORE_BASIC_OBJECT;
+}
+/* Is class ci the program's reopening of one of those roots? */
 static int cplan_is_root_class(Compiler *c, int ci) {
-  return ci >= 0 && (ci == comp_core_class(c, CORE_OBJECT) || ci == comp_core_class(c, CORE_KERNEL) ||
-                     ci == comp_core_class(c, CORE_NUMERIC) || ci == comp_core_class(c, CORE_NILCLASS));
+  int s = ci >= 0 && ci < c->nclasses && c->classes[ci].name ? builtin_core_class_slot(c->classes[ci].name) : -1;
+  return s >= 0 && comp_core_class(c, s) == ci && cplan_root_slot(s);
 }
 /* See call_plan.h. */
 int cplan_root_reopen_owner(Compiler *c, const CallPlan *p) {
   return p->via == UC_REOPEN && cplan_is_root_class(c, p->owner_ci);
 }
 /* See call_plan.h. */
-const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
+int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
   const char *name = nt_str(c->nt, id, "name");
-  if (!name || nt_int(c->nt, id, "builtin_only", 0)) return NULL;
-  if (p->mi < 0 || !cplan_root_reopen_owner(c, p)) return NULL;
+  if (!name || nt_int(c->nt, id, "builtin_only", 0)) return 0;
+  if (p->mi < 0 || !cplan_root_reopen_owner(c, p)) return 0;
+  /* (p's facts are read before the asks below, which can rewrite it) */
+  int mc = c->scopes[p->mi].class_id, at_object = p->owner_ci == comp_core_class(c, CORE_OBJECT);
   /* (a class-gated exception accessor the program adds to Object is picked
      by an exception's class at run time) */
   int recv = nt_ref(c->nt, id, "receiver");
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
   /* (`nil&.m` answers nil and calls nothing: the readers' own fold of it) */
-  if (rt == TY_NIL && nt_safe_nav(c->nt, id)) return NULL;
+  if (rt == TY_NIL && nt_safe_nav(c->nt, id)) return 0;
   /* (an Object method beside a NilClass one of the name: a String, Integer or
      Float is answered boxed, as the analysis reads it before the nullability settles) */
-  if (p->owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, name, recv, rt)) return NULL;
+  if (at_object && cplan_nil_scalar_boxed(c, id, name, recv, rt)) return 0;
   int exc = rt == TY_EXCEPTION || (ty_is_object(rt) && class_is_exc_subclass(c, ty_object_class(rt)));
-  if (exc && cplan_exc_object_method(c, id, name) >= 0) return NULL;
+  if (exc && cplan_exc_object_method(c, id, name) >= 0) return 0;
   /* A private or protected one is refused, or allowed, by the visibility
      arms, which see the receiver's class (an exception's arms refuse it
      themselves), so every reader leaves it to them where a call of the name
      would otherwise reach a builtin's method: Kernel's tap, dup, frozen?.
      One no builtin has is typed by the program's method, as before. */
-  int mc = c->scopes[p->mi].class_id;
-  if (mc < 0) return NULL;
+  if (mc < 0) return 0;
   if (exc || builtin_answers_ahead_of("Object", name, NULL)) {
     /* (the visibility at the call, which a later `public` or `private` does not change) */
     int vis = elab_method_vis_at(c, mc, name, 0, elab_point_of(c, id));
-    if ((vis < 0 ? comp_method_vis_declared(c, mc, name, NULL) : vis) != SP_VIS_PUBLIC) return NULL;
+    if ((vis < 0 ? comp_method_vis_declared(c, mc, name, NULL) : vis) != SP_VIS_PUBLIC) return 0;
   }
-  return p;
+  /* (one closed to the call binds none: it raises) */
+  if (cplan_root_closed(c, id, NULL) >= 0) return 0;
+  return 1;
 }
 
 /* See call_plan.h. */
@@ -6322,25 +6329,194 @@ static int cplan_nil_family(TyKind t) {
          t == TY_IO || ty_is_object(t);
 }
 
-/* Does the program give nil a method `name` of its own: on NilClass,
-   Object, Kernel or BasicObject, or at the top level (a private Object
-   method, which CRuby names as such), for call `call`? */
-static int cplan_nil_user_method(Compiler *c, int call, const char *name) {
-  static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  if (call_target(c, call, -1, name, CT_TOP, NULL) >= 0) return 1;
-  for (int i = 0; owners[i] >= 0; i++) {
-    int k = comp_core_class(c, owners[i]);
-    if (k >= 0 && call_target(c, call, k, name, 0, NULL) >= 0) return 1;
+/* Is self at node id an Object, so that Object's protected method is open
+   to it? Main and a class method's class are; an instance method's self
+   is, unless its class is a blank slate (BasicObject's subclass). */
+static int object_protected_open(Compiler *c, int id) {
+  Scope *cs = comp_scope_of(c, id);
+  if (!cs || cs->is_cmethod || cs->class_id < 0) return 1;
+  return !class_is_blank_slate(c, cs->class_id);
+}
+/* Has a def of `name` on root k's chain (main's own, a top-level def,
+   for k < 0) run wherever call `call` runs, which has no place in the
+   load (a method body, a closure), as the record proves it: at every
+   state of the statements it may run in (ct_every_span)? One that may run
+   before every def finds none there: its NoMethodError is the undefined
+   method's, not a private one's. */
+static int cplan_root_def_ran(Compiler *c, int call, int k, const char *name) {
+  const LrDef *ds[8];
+  int framed = elab_plan_enter(c, call);
+  int n = ct_every_span(c, call, k >= 0 ? k : -1 /* main */, name, 0, ds, 8);
+  if (framed) elab_plan_leave(c);
+  return n > 0;
+}
+/* The visibility at call `call` of root k's method `name` (k -1: main's,
+   a top-level def, which is Object's private method until `public :name`),
+   as the record has it there, else as declared; -1 where the record
+   cannot tell for main's (a def or a visibility word under a condition),
+   and for a call with no place in the load that may run before every
+   def (cplan_root_def_ran).
+   A protected one of Object's, Kernel's or main's is open wherever self
+   is an Object, one of BasicObject's wherever self is anything, but never
+   to public_send. */
+static int cplan_root_vis(Compiler *c, int call, int k, const char *name) {
+  int oc = comp_core_class(c, CORE_OBJECT), vis;
+  int placed = elab_point_of(c, call).region >= 0;
+  if (k < 0) {
+    int mv = elab_main_method_vis_at(c, call, name), at = -1;
+    vis = mv == 1 ? SP_VIS_PUBLIC : mv == 2 ? SP_VIS_PROTECTED : mv == 4 ? SP_VIS_PRIVATE : -1;
+    /* (a call with no place in the load takes the declared one, where
+       the def ran before it and may not run again) */
+    if (vis < 0 && (placed || !cplan_root_def_ran(c, call, k, name))) return -1;
+    ElabVersion vs[8];
+    int n = vis < 0 ? elab_history_versions(c, -1 /* main */, 0, name, vs, 8) : 0;
+    for (int i = 0; i < n; i++) if (vs[i].v->may) return -1;
+    if (n < 0) return -1;
+    if (vis < 0) vis = oc >= 0 ? comp_method_vis_declared(c, oc, name, &at) : SP_VIS_PRIVATE;
+    if (mv < 1 && at < 0) vis = SP_VIS_PRIVATE;
   }
-  return 0;
+  else {
+    vis = elab_method_vis_at(c, k, name, 0, elab_point_of(c, call));
+    if (vis < 0 && !placed && !cplan_root_def_ran(c, call, k, name)) return -1;
+    if (vis < 0) vis = comp_method_vis_declared(c, k, name, NULL);
+  }
+  if (vis == SP_VIS_PROTECTED && !nt_str(c->nt, call, "vis_enforce") &&
+      (k == comp_core_class(c, CORE_BASIC_OBJECT) ||
+       ((k < 0 || k == oc || k == comp_core_class(c, CORE_KERNEL)) && object_protected_open(c, call)) ||
+       (k >= 0 && method_vis_for_caller(c, call, k, name) == SP_VIS_PUBLIC))) vis = SP_VIS_PUBLIC;
+  return vis;
+}
+/* See call_plan.h. */
+int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, int *vis) {
+  if (vis) *vis = -1;
+  if (!cls || !name) return -1;
+  for (int i = 0;; i++) {
+    const char *a = builtin_ancestor_at(cls, i);
+    if (!a) return -1;
+    int s = builtin_core_class_slot(a);
+    int root = cplan_root_slot(s);
+    int k = comp_builtin_class_named(c, a), owner = k;
+    int mi = k >= 0 ? call_target(c, call, k, name, CT_OWN, NULL) : -1;
+    /* a top-level def is Object's from where it runs: of the two, the
+       later def answers */
+    if (s == CORE_OBJECT) {
+      /* (the def is asked of the tables, not bound for the call: the walk
+         binds nothing, so it asks no version of the def and makes no
+         version demand; where the record proves the call runs before the
+         def, there is none) */
+      int tm = ct_send_shadow(c, call, name) ? -1 : call_target(c, -1, -1, name, CT_TOP, NULL);
+      if (tm >= 0 && (elab_main_method_vis_at(c, call, name) == 0 || ct_undefined_at(c, call, -1, name, CT_TOP, tm))) tm = -1;
+      int live = tm >= 0 && mi >= 0 ? elab_main_def_live_at(c, call, name) : 1;
+      if (live < 0) return -1;
+      if (tm >= 0 && live) mi = tm, owner = -1;
+    }
+    /* (a reopened builtin's own method below the roots answers by its
+       class's arms) */
+    if (mi >= 0 && !root) return -1;
+    if (mi >= 0) {
+      if (vis) *vis = cplan_root_vis(c, call, owner, name);
+      return mi;
+    }
+    /* a builtin's own method answers first, and so does a `public :name`
+       the root declares itself */
+    int at = -1;
+    if (root && k >= 0 && comp_method_vis_declared(c, k, name, &at) == SP_VIS_PUBLIC && at == k) return -1;
+    if (builtin_owns_instance_method(a, name)) {
+      int bv = core_method_vis(a, name, 0, NULL);
+      if (vis) *vis = bv == 4 ? SP_VIS_PRIVATE : bv == 2 ? SP_VIS_PROTECTED : bv == 1 ? SP_VIS_PUBLIC : -1;
+      return -1;
+    }
+  }
+}
+/* See call_plan.h. */
+int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis) {
+  if (!name || call < 0) return -1;
+  /* (a call that skips visibility, `send`'s, runs the method) */
+  const NodeTable *nt = c->nt;
+  if (nt_ignore_visibility(nt, call) || nt_str(nt, call, "send_blind") ||
+      (nt_int(nt, call, "dyn_arm", 0) && !nt_str(nt, call, "vis_enforce"))) return -1;
+  /* (a method_missing nil reaches answers the call instead) */
+  if (elab_method_versions(c, "method_missing")) return -1;
+  int v = SP_VIS_PUBLIC, mi = cplan_root_method(c, call, core_class_name(CORE_NILCLASS), name, &v);
+  if (mi < 0 || (v != SP_VIS_PRIVATE && v != SP_VIS_PROTECTED)) return -1;
+  if (vis) *vis = v;
+  return mi;
+}
+/* See call_plan.h. */
+int cplan_class_answers_ahead_of_object(Compiler *c, int call, int k, const char *name) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  if (k < 0 || k >= c->nclasses || k == oc || !name) return 0;
+  int mi = call_target(c, call, k, name, 0, NULL);
+  if (mi >= 0 && mi < c->nscopes && c->scopes[mi].class_id != oc) return 1;
+  int at = -1;
+  comp_method_vis_declared(c, k, name, &at);
+  if (at >= 0 && at != oc) return 1;
+  char base[256];
+  return comp_reader_in_chain(c, k, name, NULL) ||
+         (setter_base_name(name, base, sizeof base) && comp_writer_in_chain(c, k, base, NULL)) ||
+         cplan_has_method_missing(c, call, k, 0);
+}
+/* See call_plan.h. */
+int cplan_root_closed(Compiler *c, int id, int *vis) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  int recv = name ? nt_ref(nt, id, "receiver") : -1;
+  if (recv < 0) return -1;
+  /* (a call that skips visibility, `send`'s, and one on self run the
+     method; public_send refuses on any receiver) */
+  if (!nt_str(nt, id, "vis_enforce") &&
+      (nt_ignore_visibility(nt, id) || nt_str(nt, id, "send_blind") || nt_int(nt, id, "dyn_arm", 0) ||
+       nt_kind(nt, recv) == NK_SelfNode || nt_int(nt, id, "self_call", 0))) return -1;
+  TyKind rt = comp_ntype(c, recv);
+  /* (`nil&.m` calls nothing) */
+  if (rt == TY_NIL && nt_safe_nav(nt, id)) return -1;
+  if (rt == TY_NIL) return cplan_nil_closed_method(c, id, name, vis);
+  /* (a method_missing every object reaches answers the call instead) */
+  if (cplan_mm_method(c, comp_core_class(c, CORE_OBJECT), 0) >= 0) return -1;
+  /* the lookup from the receiver's builtin class; a boxed value's from
+     Object, which the arms ask at run time of a value whose own class
+     answers the name ahead of Object (cplan_send_split_owners) */
+  int bcls = object_fallback_class_of_type(rt);
+  const char *cls = ty_is_object(rt) ? cplan_builtin_name_of(c, ty_object_class(rt))
+                  : rt == TY_CLASS ? core_class_name(CORE_MODULE)
+                  : rt == TY_BOOL ? core_class_name(CORE_TRUECLASS)
+                  : bcls >= 0 ? core_class_name(bcls)
+                  : rt == TY_POLY ? core_class_name(CORE_OBJECT) : NULL;
+  /* the receiver's own class answers first: a program object's, or a
+     subclass's the value may be an instance of; a builtin value's
+     reopened class (a boxed value's is asked at run time) */
+  int own = ty_is_object(rt) ? ty_object_class(rt) : rt != TY_POLY && cls ? comp_builtin_class_named(c, cls) : -1;
+  if (cplan_class_answers_ahead_of_object(c, id, own, name)) return -1;
+  int nd = 0;
+  const int *ds = ty_is_object(rt) && own >= 0 ? comp_descendants(c, own, &nd) : NULL;
+  for (int i = 0; i < nd; i++) if (cplan_class_answers_ahead_of_object(c, id, ds[i], name)) return -1;
+  /* (an exception value may be of any exception class: one whose own
+     accessor answers first, UncaughtThrowError#value, or a class of the
+     program's or a reopening that answers the name; the exception arms ask
+     its class at run time) */
+  if (rt == TY_EXCEPTION) {
+    int xr[1];
+    if (is_gated_exception_accessor(name) || exc_reopen_definers(c, name, xr, 1) > 0) return -1;
+    for (int k = 0; k < c->nclasses; k++)
+      if (class_is_exc_subclass(c, k) && cplan_class_answers_ahead_of_object(c, id, k, name)) return -1;
+  }
+  /* (one that may be nil is closed only where nil's lookup closes it too) */
+  if (rt != TY_POLY && repr_of(c, recv).may_nil && cplan_nil_closed_method(c, id, name, NULL) < 0) return -1;
+  int v = -1, mi = cplan_root_method(c, id, cls, name, &v);
+  /* a builtin's own private method found first (Array#initialize_copy)
+     closes the call to the program's root method behind it too */
+  if (mi < 0 && (v == SP_VIS_PRIVATE || v == SP_VIS_PROTECTED))
+    mi = cplan_root_method(c, id, core_class_name(CORE_OBJECT), name, NULL);
+  if (mi < 0 || (v != SP_VIS_PRIVATE && v != SP_VIS_PROTECTED)) return -1;
+  if (vis) *vis = v;
+  return mi;
 }
 
 int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcls) {
-  int nk = comp_core_class(c, CORE_NILCLASS), ok = comp_core_class(c, CORE_OBJECT);
-  int mi = nk >= 0 ? call_target(c, call, nk, name, 0, NULL) : -1;
-  *nilcls = mi >= 0;
-  if (mi < 0 && ok >= 0) mi = call_target(c, call, ok, name, 0, NULL);
-  return mi;
+  int v, mi = cplan_root_method(c, call, core_class_name(CORE_NILCLASS), name, &v);
+  int k = mi >= 0 ? c->scopes[mi].class_id : -1;
+  *nilcls = k >= 0 && k == comp_core_class(c, CORE_NILCLASS);
+  return k >= 0 && (*nilcls || k == comp_core_class(c, CORE_OBJECT)) ? mi : -1;
 }
 
 /* nil's answer to respond_to?(name) by a method of the program's: the
@@ -6565,7 +6741,7 @@ int cplan_nil(Compiler *c, int id) {
      answer, where neither NilClass nor Object has one of the program's) */
   int pnil = 0;
   int nil_own = builtin_answers_ahead_of("NilClass", nm, "Object") && cplan_nil_program_method(c, id, nm, &pnil) < 0;
-  if (!nil_own && cplan_nil_user_method(c, id, nm))
+  if (!nil_own && cplan_root_method(c, id, core_class_name(CORE_NILCLASS), nm, NULL) >= 0)
     return (rr.kind == RK_PTR || rr.kind == RK_STRBUF) && cplan_nil_runs_other(c, id, rt, nm) &&
            cplan_nil_program_served(c, id)
            ? CN_PROGRAM : CN_NONE;

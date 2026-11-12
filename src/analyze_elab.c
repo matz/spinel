@@ -8391,6 +8391,26 @@ int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint
 }
 
 /* See analyze.h. */
+/* main's and Object's last entries of name before p (*md, *od), which
+   share Object's method table, past their visibility words with skip_vis:
+   which is the later, 1 main's, 2 Object's; 0 when neither has one; -1
+   when the record cannot order them. Where Object's entries are not sure
+   (a change under a condition), *od is NULL and main's entry answers. */
+static int elab_main_object_later(Compiler *c, const char *name, LoadPoint p, int skip_vis, const LrDef **md,
+                                  const LrDef **od) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  const LrHist *oh = oc >= 0 ? lr_hist(c->lrec, oc, 0, name, 0) : NULL;
+  *md = *od = NULL;
+  int oo = oh ? lr_last_before(c, oh, p, 0, skip_vis, od) : ELAB_NO;
+  int mo = lr_last_before(c, lr_hist(c->lrec, LR_MAIN, 0, name, 0), p, 0, skip_vis, md);
+  if (oo != ELAB_YES || !*od) {
+    *od = NULL;
+    return mo == ELAB_YES && *md ? 1 : mo == ELAB_NO ? 0 : -1;
+  }
+  if (mo != ELAB_YES || !*md) return mo == ELAB_NO ? 2 : -1;
+  int ord = elab_cmp(elab_point_of(c, (*md)->node), elab_point_of(c, (*od)->node));
+  return ord == PROG_AFTER ? 1 : ord == PROG_BEFORE ? 2 : -1;
+}
 int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
   LoadPoint p = elab_point_of(c, node);
   const LrDef *d = NULL;
@@ -8403,27 +8423,31 @@ int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
   int v = elab_method_vis_at(c, LR_MAIN, name, 0, p);
   /* A visibility word in a reopened Object (`class Object; private :m;
      end`) changes main's method too, but the record files it in Object's
-     own history: the later of the two last entries before p counts.
-     Where Object's entries are not sure, main's answer stays. */
-  int oc = comp_core_class(c, CORE_OBJECT);
-  const LrHist *oh = oc >= 0 ? lr_hist(c->lrec, oc, 0, name, 0) : NULL;
+     own history: the later of the two last entries before p counts. */
   const LrDef *od = NULL, *md = NULL;
-  int oo = oh ? lr_last_before(c, oh, p, 0, 0, &od) : ELAB_NO;
-  /* (a change under a condition: main's own answer, as before) */
-  if (oo == ELAB_YES) {
-    if (lr_last_before(c, lr_hist(c->lrec, LR_MAIN, 0, name, 0), p, 0, 0, &md) != ELAB_YES || !md) return -1;
-    int ord = elab_cmp(elab_point_of(c, md->node), elab_point_of(c, od->node));
-    if (ord != PROG_BEFORE && ord != PROG_AFTER) return -1;
+  int later = elab_main_object_later(c, name, p, 0, &md, &od);
+  if (od) {
+    if (later < 0 || !md) return -1;
     /* An Object entry ahead of main's def (`alias_method :m, :to_s`)
        leaves main's def (or main's visibility word) the answer. Main's
        alias is not read here: it takes the visibility of its source
        method. An Object entry after main's last entry that is no
        visibility word is not read here either. */
-    if (ord == PROG_AFTER && md->kind != LR_DEF && md->kind != LR_VIS) return -1;
-    if (ord == PROG_BEFORE && od->kind != LR_VIS) return -1;
-    if (ord == PROG_BEFORE) v = od->vis;
+    if (later == 1 && md->kind != LR_DEF && md->kind != LR_VIS) return -1;
+    if (later == 2 && od->kind != LR_VIS) return -1;
+    if (later == 2) v = od->vis;
   }
   return v == SP_VIS_PUBLIC ? 1 : v == SP_VIS_PROTECTED ? 2 : v == SP_VIS_PRIVATE ? 4 : -1;
+}
+
+int elab_main_def_live_at(Compiler *c, int node, const char *name) {
+  LoadPoint p = elab_point_of(c, node);
+  const LrDef *md = NULL, *od = NULL;
+  if (p.region < 0 || !name || !lr_ready(c, p)) return -1;
+  /* (a visibility word changes no def) */
+  int later = elab_main_object_later(c, name, p, 1, &md, &od);
+  const LrDef *d = later == 1 ? md : later == 2 ? od : NULL;
+  return d && (d->kind == LR_DEF || d->kind == LR_ALIAS) ? later == 1 : -1;
 }
 
 int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, LoadPoint p) {

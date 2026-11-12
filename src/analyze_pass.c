@@ -13953,7 +13953,7 @@ int desugar_class_eval_value(Compiler *c) {
     /* (its body runs with the class as self, not the code around it) */
     nt_node_set_int(nt, beg, "self_rebound", 1);
     /* the call becomes a transparent alias of the begin's value */
-    nt_node_set_str(nt, id, "name", "itself");
+    nt_set_itself_call(nt, id);
     nt_node_set_ref(nt, id, "receiver", beg);
     nt_node_set_ref(nt, id, "block", -1);
     nt_node_set_ref(nt, id, "arguments", -1);
@@ -14522,7 +14522,7 @@ int desugar_instance_eval_builtin(Compiler *c) {
     if (stmts < 0 || beg < 0) continue;
     nt_node_set_arr(nt, stmts, "body", items, ni);
     nt_node_set_ref(nt, beg, "body", stmts);
-    nt_node_set_str(nt, id, "name", "itself");
+    nt_set_itself_call(nt, id);
     nt_node_set_ref(nt, id, "receiver", beg);
     nt_node_set_ref(nt, id, "block", -1);
     nt_node_set_ref(nt, id, "arguments", -1);
@@ -15018,7 +15018,7 @@ int desugar_dir_surface(Compiler *c) {
         { int eitems[2] = { recv, outer };
           nt_node_set_arr(nt, estmts, "body", eitems, 2); }
         nt_node_set_ref(nt, eparen, "body", estmts);
-        nt_node_set_str(nt, id, "name", "itself");
+        nt_set_itself_call(nt, id);
         nt_node_set_ref(nt, id, "receiver", eparen);
         nt_node_set_ref(nt, id, "arguments", -1);
         nt_node_set_ref(nt, id, "block", -1);
@@ -15204,7 +15204,7 @@ int desugar_dir_surface(Compiler *c) {
       if (!breaks) hitems[nhi++] = nil2;
       nt_node_set_arr(nt, fstmts, "body", hitems, nhi);
       nt_node_set_ref(nt, fparen, "body", fstmts);
-      nt_node_set_str(nt, id, "name", "itself");
+      nt_set_itself_call(nt, id);
       nt_node_set_ref(nt, id, "receiver", fparen);
       nt_node_set_ref(nt, id, "arguments", -1);
       nt_node_set_ref(nt, id, "block", -1);
@@ -15242,7 +15242,7 @@ int desugar_dir_surface(Compiler *c) {
         { int items2[2] = { ec, nil2 };
           nt_node_set_arr(nt, fstmts, "body", items2, breaks ? 1 : 2); }
         nt_node_set_ref(nt, fparen, "body", fstmts);
-        nt_node_set_str(nt, id, "name", "itself");
+        nt_set_itself_call(nt, id);
         nt_node_set_ref(nt, id, "receiver", fparen);
       }
       else {
@@ -15321,7 +15321,7 @@ int desugar_dir_surface(Compiler *c) {
       int body[2] = { ec, nil2 };
       nt_node_set_arr(nt, st, "body", body, 2);
       nt_node_set_ref(nt, pr, "body", st);
-      nt_node_set_str(nt, id, "name", "itself");
+      nt_set_itself_call(nt, id);
       nt_node_set_ref(nt, id, "receiver", pr);
       nt_node_set_ref(nt, id, "arguments", -1);
       nt_node_set_ref(nt, id, "block", -1);
@@ -15505,7 +15505,7 @@ int desugar_dir_surface(Compiler *c) {
       { int all[5] = { wdir, wsav, cd1, beg, rval };
         nt_node_set_arr(nt, ostmts, "body", all, 5); }
       nt_node_set_ref(nt, oparen, "body", ostmts);
-      nt_node_set_str(nt, id, "name", "itself");
+      nt_set_itself_call(nt, id);
       nt_node_set_ref(nt, id, "receiver", oparen);
       nt_node_set_ref(nt, id, "arguments", -1);
       nt_node_set_ref(nt, id, "block", -1);
@@ -21890,7 +21890,7 @@ int desugar_io_console_modes(Compiler *c) {
       int ost = nt_new_node(nt, "StatementsNode"); nt_node_set_arr(nt, ost, "body", all, 2);
       opar = nt_new_node(nt, "ParenthesesNode"); nt_node_set_ref(nt, opar, "body", ost);
     }
-    nt_node_set_str(nt, id, "name", "itself");
+    nt_set_itself_call(nt, id);
     nt_node_set_ref(nt, id, "receiver", opar);
     nt_node_set_ref(nt, id, "arguments", -1);
     nt_node_set_ref(nt, id, "block", -1);

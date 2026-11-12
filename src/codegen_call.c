@@ -23011,49 +23011,30 @@ void emit_vis_raise_boxed(int vis, const char *vnm, int tv, Buf *b) {
                 "sp_raise_cls(\"NoMethodError\", sp_sprintf(\"%%s method '%%s' called for %%s\", \"%s\", \"%s\", _t%d)); })",
              td, tv, td, tv, vis == SP_VIS_PRIVATE ? "private" : "protected", vnm, td);
 }
+/* ...its message alone, for a raise around it (sp_raise_cls copies it
+   before it allocates), with the arguments staged for #args when args gives
+   them (`n, (sp_RbVal[]){...}`, else NULL), the message rooted while their
+   list is made */
+static void emit_vis_msg_boxed(int vis, const char *vnm, int tv, const char *args, Buf *b) {
+  int td = ++g_tmp, tm = ++g_tmp;
+  buf_printf(b, "({ const char *_t%d = sp_nomethod_recv_desc(_t%d); SP_GC_ROOT_STR(_t%d); sp_exc_stage_recv(_t%d); "
+                "const char *_t%d = sp_sprintf(\"%%s method '%%s' called for %%s\", \"%s\", \"%s\", _t%d); ",
+             td, tv, td, tv, tm, vis == SP_VIS_PRIVATE ? "private" : "protected", vnm, td);
+  if (args) buf_printf(b, "SP_GC_ROOT_STR(_t%d); sp_stage_args_msg(_t%d, %s); })", tm, tm, args);
+  else buf_printf(b, "_t%d; })", tm);
+}
 static int emit_vis_refusal_x(Compiler *c, int id, Buf *b);
-/* Is self at node id an Object, so that Object's protected method is open
-   to it? Main and a class method's class are; an instance method's self
-   is, unless its class is a blank slate (BasicObject's subclass). */
-static int object_protected_open(Compiler *c, int id) {
-  Scope *cs = comp_scope_of(c, id);
-  if (!cs || cs->is_cmethod || cs->class_id < 0) return 1;
-  return !class_is_blank_slate(c, cs->class_id);
-}
-/* The visibility by which the program's Object reopening's method vnm
-   refuses the call at node id, or SP_VIS_PUBLIC when the call is open: no
-   such method, a public one, a protected one open to the caller (never
-   through public_send, stamped), or a method_missing on Object. *oci gets
-   Object's class index. */
-static int object_reopen_closed_vis(Compiler *c, int id, const char *vnm, int stamped, int *oci) {
-  *oci = comp_core_class(c, CORE_OBJECT);
-  if (!vnm || builtin_object_method_known(vnm)) return SP_VIS_PUBLIC;
-  if (*oci < 0 || call_target(c, id, *oci, vnm, CT_OWN, NULL) < 0) return SP_VIS_PUBLIC;
-  int vis = comp_method_vis_declared(c, *oci, vnm, NULL);
-  /* a protected method of Object is callable wherever self is an Object
-     (main, a class, any instance but a blank slate's) */
-  if (vis == SP_VIS_PROTECTED && !stamped && object_protected_open(c, id)) return SP_VIS_PUBLIC;
-  if (cplan_has_method_missing(c, id, *oci, 0)) return SP_VIS_PUBLIC;
-  return vis;
-}
-/* Does an instance of class k answer vnm below Object: by its own or an
-   ancestor's method, a reader (attr_reader, a Struct member), a
-   method_missing, or a visibility its chain declares (`public :top`)? */
-static int object_reopen_class_owns(Compiler *c, int id, int k, int oci, const char *vnm) {
-  int mi = call_target(c, id, k, vnm, 0, NULL);
-  if (mi >= 0 && mi < c->nscopes && c->scopes[mi].class_id != oci) return 1;
-  int at = -1;
-  comp_method_vis_declared(c, k, vnm, &at);
-  if (at >= 0 && at != oci) return 1;
-  return comp_reader_in_chain(c, k, vnm, NULL) || cplan_has_method_missing(c, id, k, 0);
-}
+static void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
+static int boxed_value_needs_root(Compiler *c, int op);
+static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
 /* Does a reopened builtin class or module (`class Proc; def top`, `module
-   Comparable; def top`) answer vnm? Its values reach it by paths (a
-   Bignum, a Proc, an included module) these checks do not follow, so the
-   call is left as the dispatch reads it. */
-static int object_reopen_builtin_owns(Compiler *c, int id, int oci, const char *vnm) {
+   Comparable; def top`) other than own (the closed method's) answer vnm?
+   Its values reach it by paths (a Bignum, a Proc, an included module)
+   these checks do not follow, so the call is left as the dispatch reads
+   it. */
+static int object_reopen_builtin_owns(Compiler *c, int id, int own, const char *vnm) {
   for (int k = 0; k < c->nclasses; k++) {
-    if (k == oci || !c->classes[k].name) continue;
+    if (k == own || !c->classes[k].name) continue;
     if (!class_is_builtin_reopen(c, k) && builtin_class_id(c->classes[k].name) == 0) continue;
     if (call_target(c, id, k, vnm, CT_OWN, NULL) >= 0 || comp_reader_in_chain(c, k, vnm, NULL)) return 1;
   }
@@ -23102,14 +23083,19 @@ static int class_or_module_reopen_mixes(Compiler *c, int m, int only_module) {
   return 0;
 }
 /* Can a class or module value answer vnm below Object: a class method of
-   that name (any_class: of any class), a module's instance method (an
-   `extend` gives it; for one known class cls, a module cls extends), or a
-   reopened Class or Module's? (cls: -1 for none; -2 for a builtin class,
-   -3 for a builtin module, the program does not reopen) */
+   that name (any_class: of any class), a `class << self` accessor (the
+   plan's, cplan_sg_accessor: of any class, or of one known class cls), a
+   module's instance method (an `extend` gives it; for one known class cls,
+   a module cls extends), or a reopened Class or Module's? (cls: -1 for
+   none; -2 for a builtin class, -3 for a builtin module, the program does
+   not reopen) */
 static int object_reopen_class_value_owns(Compiler *c, int id, int oci, const char *vnm, int any_class, int cls) {
+  char slot[256];
+  if (cls >= 0 && cplan_sg_accessor(c, id, cls, vnm, slot, sizeof slot) != CP_SG_NONE) return 1;
   for (int k = 0; k < c->nclasses; k++) {
     if (k == oci) continue;
-    if (any_class && call_target(c, id, k, vnm, CT_CMETHOD, NULL) >= 0) return 1;
+    if (any_class && (call_target(c, id, k, vnm, CT_CMETHOD, NULL) >= 0 ||
+                      cplan_sg_accessor(c, id, k, vnm, slot, sizeof slot) != CP_SG_NONE)) return 1;
     const char *kn = c->classes[k].name;
     int class_reopen = kn && (sp_streq(kn, "Class") || sp_streq(kn, "Module"));
     if ((comp_class_is_module(c, &c->classes[k]) || class_reopen) &&
@@ -23127,22 +23113,31 @@ static int object_reopen_class_value_owns(Compiler *c, int id, int oci, const ch
   }
   return 0;
 }
-/* A private (or protected) method of a program's Object reopening, called
-   with an explicit receiver whose own class does not define the name: the
-   method is Object's, so the call is refused as CRuby refuses it, with the
-   receiver's class in the message (`5.foo` after `class Object; def foo;
-   private :foo; end`). A boxed receiver names its class at run time. */
+/* A private (or protected) method of the program's at the roots, a
+   top-level def's or an Object, Kernel, Numeric or BasicObject reopening's
+   (cplan_root_closed), called with an explicit receiver whose own class
+   does not define the name: the call is refused as CRuby refuses it, with
+   the receiver's class in the message (`5.foo` after `class Object; def
+   foo; private :foo; end`, or after a top-level `def foo`). A boxed
+   receiver, nil, true and false, and one that may be nil, name themselves
+   at run time. */
 static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind vrt, int vcid,
                                           const char *vnm, int stamped, Buf *b) {
-  int oci = -1;
-  int vis = object_reopen_closed_vis(c, id, vnm, stamped, &oci);
-  if (vis == SP_VIS_PUBLIC) return 0;
-  /* `x&.public_send(:top)` may hold nil, which it never calls on */
-  if (stamped && nt_safe_nav(c->nt, id)) return 0;
-  if (vcid != oci && !(vcid >= 0 && !class_is_builtin_reopen(c, vcid)) && object_reopen_builtin_owns(c, id, oci, vnm)) return 0;
+  int oci = comp_core_class(c, CORE_OBJECT), vis = SP_VIS_PUBLIC, mi = cplan_root_closed(c, id, &vis);
+  if (mi < 0) return 0;
+  /* `x&.public_send(:top)` may hold nil, which it never calls on; `x&.top`
+     raises past its nil guard */
+  if ((stamped && nt_safe_nav(c->nt, id)) || sn_guard_pending(c, id)) return 0;
+  /* (the closed method's own class is no other reopening: a top-level
+     def's is Object) */
+  int own = c->scopes[mi].class_id >= 0 ? c->scopes[mi].class_id : oci;
+  if (vcid != oci && !(vcid >= 0 && !class_is_builtin_reopen(c, vcid)) && object_reopen_builtin_owns(c, id, own, vnm)) return 0;
   const char *cname = NULL;
   char cvname[256];
-  int boxed = 0, named = 0;
+  /* boxed: the raise names the receiver at run time; any_class: the value
+     may be of any class, BasicObject's too */
+  int boxed = 0, named = 0, any_class = 0;
+  Repr rr = repr_of(c, vrecv);
   /* main is named as main, in the top-level statements only (a top-level
      def runs on any self through send) */
   Scope *ms = comp_scope_of(c, id);
@@ -23187,60 +23182,79 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     }
   }
   else if (vcid >= 0) {
+    /* (the plan asked the value's class and its subclasses; a reopened
+       NilClass's, TrueClass's or FalseClass's value, and one that may be
+       nil, is named at run time) */
     if (vcid == oci && !stamped) return 0;
-    if (vcid != oci && object_reopen_class_owns(c, id, vcid, oci, vnm)) return 0;
-    /* the value may be a subclass's instance, which may answer it */
-    for (int k = 0; k < c->nclasses; k++)
-      if (k != vcid && k != oci && is_descendant(c, k, vcid) && object_reopen_class_owns(c, id, k, oci, vnm)) return 0;
     cname = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
+    boxed = rr.may_nil || is_immediate_class_name(cname);
   }
   else if (vrt == TY_POLY) {
     /* only when no class of the program answers the name itself; else the
        dispatch's precheck asks the value's class (emit_poly_vis_precheck) */
     for (int k = 0; k < c->nclasses; k++)
       if (k != oci && (comp_class_is_module(c, &c->classes[k]) ? call_target(c, id, k, vnm, CT_OWN, NULL) >= 0
-                                                               : object_reopen_class_owns(c, id, k, oci, vnm))) return 0;
+                                                               : cplan_class_answers_ahead_of_object(c, id, k, vnm))) return 0;
     if (object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) return 0;
     /* a class value answers Class's or Module's public method: the
        dispatch's precheck lets only those values through */
     if (class_value_builtin_answers(c, vnm, 1) && poly_class_reflect_arm(c, id, vnm, NULL)) return 0;
-    boxed = 1;
+    /* a value whose own builtin class answers the name ahead of Object:
+       the dispatch's precheck asks it at run time */
+    if (emit_owner_class_test(c, vrecv, vnm, 0, 1, NULL)) return 0;
+    boxed = any_class = 1;
   }
   else {
-    cname = builtin_class_of_type(vrt);
-    if (!cname || builtin_method_known(cname, vnm)) return 0;
-    /* a reopening of the value's builtin class that answers it */
-    int bcls = core_of_type(vrt);
-    int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
-    if (bci >= 0 && bci != oci && object_reopen_class_owns(c, id, bci, oci, vnm)) return 0;
+    /* (the plan's lookup passed the builtin class's own methods and its
+       reopening's) the value's builtin class, by its name; nil, true and
+       false, and a value that may be nil, are named at run time */
+    cname = builtin_class_of_type(rr.as_ty);
+    boxed = rr.may_nil || (cname ? is_immediate_class_name(cname) : rr.kind == RK_SCALAR);
+    if (!cname && !boxed) return 0;
   }
+  /* (nil itself is named as nil) */
+  if (boxed && rr.as_ty == TY_NIL) { cname = "nil"; named = 1; boxed = 0; }
   const char *kind = vis == SP_VIS_PRIVATE ? "private" : "protected";
   const NodeTable *nt = c->nt;
-  buf_puts(b, "(");
-  int tv = -1;
-  if (boxed) {
-    tv = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, vrecv, b);
-    /* the raise below names the temp's class, so it is inside the temp's
-       scope: a root frame used to lend it a slot that outlived the scope */
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_exc_stage_recv(_t%d); ", tv, tv);
+  /* The receiver, then the arguments in source order, run ahead of the
+     raise (each one's prelude in front of it) as statements of its message
+     argument, which stages the receiver and the positional arguments on the
+     exception (#receiver, #args), as the missing method's raise does
+     (emit_missing_raise): the text leads with the raise, which is how a
+     slot knows it diverges, and stands for the call's value. */
+  int vac = 0; const int *vav = call_args(nt, id, &vac);
+  int staged = !nt_argv_has(nt, vav, vac, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
+  int tv = ++g_tmp, t0 = g_tmp + 1;
+  g_tmp += vac;
+  buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = ", tv); emit_boxed(c, vrecv, b);
+  buf_puts(b, "; ");
+  if (boxed_value_needs_root(c, vrecv)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
+  for (int k = 0; k < vac; k++) emit_missing_operand(c, vav[k], staged ? t0 + k : 0, b);
+  Buf args; memset(&args, 0, sizeof args);
+  if (staged) {
+    buf_printf(&args, "%d, (sp_RbVal[]){", vac);
+    for (int k = 0; k < vac; k++) buf_printf(&args, "%s_t%d", k ? ", " : "", t0 + k);
+    buf_puts(&args, vac ? "}" : "sp_box_nil()}");
   }
-  else { buf_puts(b, "sp_exc_stage_recv("); emit_boxed(c, vrecv, b); buf_puts(b, "), "); }
-  { int vac; const int *vav = call_args(nt, id, &vac);
-    for (int k = 0; k < vac; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, vav[k], b); buf_puts(b, "), "); } }
   if (boxed) {
-    emit_vis_raise_boxed(vis, vnm, tv, b);
-    buf_printf(b, ", %s; }))", default_value_from_compiler(c, repr_of(c, id).as_ty));
+    /* (a BasicObject reaches no Object method: undefined method's error) */
+    if (any_class) buf_printf(b, "sp_poly_kind_of_builtin(_t%d, \"Object\") ? ", tv);
+    emit_vis_msg_boxed(vis, vnm, tv, args.p, b);
+    if (any_class && staged) buf_printf(b, " : sp_nomethod_msg_args(\"%s\", _t%d, %s)", vnm, tv, args.p);
+    else if (any_class) buf_printf(b, " : sp_nomethod_msg(\"%s\", _t%d)", vnm, tv);
   }
   else {
     char head[200]; snprintf(head, sizeof head, "%s method '%s' called for an instance of ", kind, vnm);
-    buf_puts(b, "sp_raise_cls(\"NoMethodError\", ");
+    buf_puts(b, staged ? "sp_stage_recv_args_msg(" : "sp_stage_recv_msg(");
     if (named)
-      buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for %s\")[1]))", kind, vnm, cname);
-    else if (vcid >= 0 && anon_class_text(c, vcid, head, b)) buf_puts(b, ")");
-    else buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for an instance of %s\")[1]))", kind, vnm, cname);
-    buf_printf(b, ", %s)", default_value_from_compiler(c, repr_of(c, id).as_ty));
+      buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for %s\")[1])", kind, vnm, cname);
+    else if (!(vcid >= 0 && anon_class_text(c, vcid, head, b)))
+      buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for an instance of %s\")[1])", kind, vnm, cname);
+    buf_printf(b, ", _t%d%s%s)", tv, staged ? ", " : "", staged ? args.p : "");
   }
+  free(args.p);
+  buf_puts(b, "; }))");
+  emit_raise_placeholder(c, id, b);
   return 1;
 }
 /* Does class k or an ancestor include module mod (directly or through an
@@ -23486,19 +23500,18 @@ static int vis_name_may_refuse(Compiler *c, const char *nm) {
    The typed form is emit_object_reopen_vis_refusal. A reopened builtin
    module that answers the name (Comparable) leaves the call to the
    dispatch. */
-static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const char *vnm, int stamped, Buf *b) {
-  int oci = -1;
-  int vis = object_reopen_closed_vis(c, id, vnm, stamped, &oci);
-  if (vis == SP_VIS_PUBLIC) return;
+static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const char *vnm, Buf *b) {
+  int oci = comp_core_class(c, CORE_OBJECT), vis = SP_VIS_PUBLIC, mi = cplan_root_closed(c, id, &vis);
+  if (mi < 0) return;
   Buf own; memset(&own, 0, sizeof own);
   int tk = ++g_tmp;
   /* when a reopened builtin answers the name, only the program's own
      classes that do not are refused, by name (a positive list); else every
      class but those that answer it (a negative list) */
-  int positive = object_reopen_builtin_owns(c, id, oci, vnm);
+  int positive = object_reopen_builtin_owns(c, id, c->scopes[mi].class_id >= 0 ? c->scopes[mi].class_id : oci, vnm);
   for (int k = 0; k < c->nclasses; k++) {
     if (k == oci || comp_class_is_module(c, &c->classes[k])) continue;
-    int owns = object_reopen_class_owns(c, id, k, oci, vnm);
+    int owns = cplan_class_answers_ahead_of_object(c, id, k, vnm);
     if (positive) {
       if (!owns && !c->classes[k].is_native_class && !class_is_builtin_reopen(c, k) &&
           builtin_class_id(c->classes[k].name) == 0)
@@ -23555,7 +23568,13 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
     buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && !sp_class_is_module_val(sp_unbox_class(_t%d)))", tv, tv);
   /* `x&.public_send(:top)` never calls on nil */
   if (nt_safe_nav(c->nt, id)) buf_printf(b, " && _t%d.tag != SP_TAG_NIL", tv);
-  buf_puts(b, ") { ");
+  /* a value whose own builtin class answers the name ahead of Object
+     (Symbol#name) takes the dispatch */
+  Buf ob; memset(&ob, 0, sizeof ob);
+  if (emit_owner_class_test(c, nt_ref(c->nt, id, "receiver"), vnm, tv, 1, &ob)) buf_printf(b, " && !%s", ob.p);
+  free(ob.p);
+  /* (a BasicObject reaches no Object method) */
+  buf_printf(b, " && sp_poly_kind_of_builtin(_t%d, \"Object\")) { ", tv);
   emit_vis_raise_boxed(vis, vnm, tv, b);
   buf_puts(b, "; } } ");
 }
@@ -23638,7 +23657,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
     }
     if (tk >= 0) buf_puts(b, "} ");
   }
-  if (plain || stamped) emit_object_reopen_vis_precheck(c, id, tv, vnm, stamped, b);
+  if (plain || stamped) emit_object_reopen_vis_precheck(c, id, tv, vnm, b);
   /* a boxed IO handle, by the reopening its kind picks */
   int ks[16], n = io_reopen_defs(c, vnm, 0, ks, 16);
   for (int i = 0; i < n; i++) {
@@ -23898,16 +23917,27 @@ static void emit_raise_placeholder(Compiler *c, int id, Buf *b) {
   }
   else buf_printf(b, ", %s)", dflt);
 }
+/* Does node op's boxed value hold a heap pointer, which a temp holding it
+   ahead of a raise roots? (a scalar, nil, true, false, a Symbol and a
+   class value do not, nor does a frozen String literal, whose handle is
+   static: share_frozen_literal) */
+static int boxed_value_needs_root(Compiler *c, int op) {
+  Repr r = repr_of(c, op);
+  return (needs_root(r.as_ty) || r.big || r.kind == RK_BOXED) && !share_frozen_literal(c, op);
+}
 /* An operand ahead of a raise (emit_missing_raise), as a statement after
-   its own prelude: its boxed value into temp t, rooted, for t > 0, else
-   run for its effect */
+   its own prelude: its boxed value into temp t, rooted where it holds a
+   heap pointer, for t > 0, else run for its effect */
 static void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
   Buf ap, ae; memset(&ap, 0, sizeof ap); memset(&ae, 0, sizeof ae);
   Buf *sv = g_pre; g_pre = &ap;
   if (t > 0) emit_boxed(c, op, &ae); else emit_expr(c, op, &ae);
   g_pre = sv;
   if (ap.p) buf_puts(b, ap.p);
-  if (t > 0) buf_printf(b, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", t, ae.p ? ae.p : "sp_box_nil()", t);
+  if (t > 0) {
+    buf_printf(b, "sp_RbVal _t%d = %s; ", t, ae.p ? ae.p : "sp_box_nil()");
+    if (boxed_value_needs_root(c, op)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
+  }
   else buf_printf(b, "(void)(%s); ", ae.p ? ae.p : "0");
   free(ap.p); free(ae.p);
 }
@@ -28216,63 +28246,6 @@ static int emit_nil_answer_call(Compiler *c, int id, Buf *b) {
   else buf_printf(b, "({ %s%s; })", hb.p ? hb.p : "", vb.p);
   free(hb.p); free(cb.p); free(rb.p); free(vb.p);
   return 1;
-}
-
-/* nil's method for call `call` (name), found as CRuby looks it up for
-   nil (NilClass, Object, a top-level def, Kernel, BasicObject), when the
-   first one found is closed to the call: private (a top-level def is
-   private unless the program declares it public), or protected to a caller
-   whose self is not an instance of its owner. Its scope index, or -1 (none,
-   or the first one is open). *vis gets SP_VIS_PRIVATE or SP_VIS_PROTECTED. */
-int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis) {
-  static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, -2, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  if (!name || call < 0) return -1;
-  /* (a call that skips visibility, `send`'s, runs the method) */
-  const NodeTable *nt = c->nt;
-  if (nt_ignore_visibility(nt, call) || nt_str(nt, call, "send_blind") ||
-      (nt_int(nt, call, "dyn_arm", 0) && !nt_str(nt, call, "vis_enforce"))) return -1;
-  /* (a method_missing nil reaches answers the call instead) */
-  if (elab_method_versions(c, "method_missing")) return -1;
-  int oc = comp_core_class(c, CORE_OBJECT), nk = comp_core_class(c, CORE_NILCLASS);
-  for (int i = 0; owners[i] != -1; i++) {
-    /* below NilClass: a builtin public method of NilClass's own answers
-       first, and so does a `public :name` NilClass declares */
-    if (i > 0) {
-      int at = -1;
-      if (builtin_answers_ahead_of("NilClass", name, "Object")) return -1;
-      if (nk >= 0 && comp_method_vis_declared(c, nk, name, &at) == SP_VIS_PUBLIC && at == nk) return -1;
-    }
-    int k = owners[i] == -2 ? oc : comp_core_class(c, owners[i]);
-    MethodLookup ml = { .def_class = -1 };
-    int mi;
-    if (owners[i] == -2) mi = call_target(c, call, -1, name, CT_TOP, NULL);
-    else mi = k >= 0 ? call_target(c, call, k, name, 0, &ml) : -1;
-    int dc = ml.def_class;
-    if (mi < 0) continue;
-    /* (a top-level def is Object's private method until `public :name`;
-       a program that never reopens Object has no table for it) */
-    if (owners[i] == -2) {
-      int at = -1;
-      int v = oc >= 0 ? comp_method_vis_declared(c, oc, name, &at) : SP_VIS_PRIVATE;
-      if (at >= 0 && v != SP_VIS_PRIVATE) return -1;
-      if (vis) *vis = SP_VIS_PRIVATE;
-      return mi;
-    }
-    if (dc < 0) dc = c->scopes[mi].class_id;
-    if (dc < 0) dc = k;
-    if (dc < 0) return -1;
-    int v = comp_method_vis_declared(c, dc, name, NULL);
-    /* (a protected method of Object's or Kernel's is open wherever self is
-       an Object, one of BasicObject's wherever self is anything) */
-    if (v == SP_VIS_PROTECTED &&
-        (dc == comp_core_class(c, CORE_BASIC_OBJECT) ||
-         ((dc == oc || dc == comp_core_class(c, CORE_KERNEL)) && object_protected_open(c, call)) ||
-         method_vis_for_caller(c, call, dc, name) == SP_VIS_PUBLIC)) v = SP_VIS_PUBLIC;
-    if (v != SP_VIS_PRIVATE && v != SP_VIS_PROTECTED) return -1;
-    if (vis) *vis = v;
-    return mi;
-  }
-  return -1;
 }
 
 /* Has the answer of nil's method for call id (cplan_nil_program_method)
@@ -35439,15 +35412,17 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
   /* a method of a root class (Object, Numeric, NilClass) the plan binds
      answers every receiver the lookup reaches it for, ahead of the arms
      below that know the name (Kernel's tap, then, frozen?) */
-  { const CallPlan *rp = nt_ref(nt, id, "receiver") >= 0 ? cplan_root_reopen_call(c, id, cplan_user(c, id)) : NULL;
+  if (nt_ref(nt, id, "receiver") >= 0) {
+    CallPlan rp = *cplan_user(c, id);
     /* (a block that breaks is wrapped first, below: the wrapper's own pass,
        with the call as g_brk_skip_id, comes back here; so is a `&.` whose
        nil guard is still ahead, by emit_call_safe_nav_arms, which re-enters
        with the call as g_sn_skip) */
-    if (rp && rp->dispatch == CP_DIRECT && (id == g_brk_skip_id || !call_breaks(c, id)) && !sn_guard_pending(c, id)) {
+    if (cplan_root_reopen_call(c, id, &rp) && rp.dispatch == CP_DIRECT && (id == g_brk_skip_id || !call_breaks(c, id)) && !sn_guard_pending(c, id)) {
       if (g_plan_check) cplan_served("root-reopen");
-      if (emit_root_reopen_call(c, id, b, nt, nt_ref(nt, id, "receiver"), rp->owner_ci, rp->mi)) return;
-    } }
+      if (emit_root_reopen_call(c, id, b, nt, nt_ref(nt, id, "receiver"), rp.owner_ci, rp.mi)) return;
+    }
+  }
   if (emit_anon_struct_value(c, id, b)) return;
   /* push/append/<< on an empty array literal in value position: the literal
      has no storage to mutate and returns self, so `[].push(1, 2)` is just the

@@ -2807,8 +2807,8 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
     if (ty_is_object(rt)) mi = call_target(c, id, cls = ty_object_class(rt), name, 0, NULL);
     /* ...and a method of the root classes every receiver reaches (the plan's) */
     if (mi < 0) {
-      const CallPlan *rp = cplan_root_reopen_call(c, id, cplan_user_fresh(c, id));
-      if (rp) mi = rp->mi;
+      CallPlan rp = *cplan_user_fresh(c, id);
+      if (cplan_root_reopen_call(c, id, &rp)) mi = rp.mi;
     }
   }
   if (mi < 0) return 0;
@@ -13754,7 +13754,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       else if (ty_is_object(rt) && ty_object_class(rt) == comp_builtin_class_named(c, tsr->target) &&
                nt_ref(nt, id, "block") < 0) {
         nt_node_set_int(nt, id, "enum_self_result", recv);
-        nt_node_set_str(nt, id, "name", "itself");
+        nt_set_itself_call(nt, id);
         nt_node_set_ref(nt, id, "arguments", -1);
         *changed = 1;
         return 1;
@@ -43942,7 +43942,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   int paren = nt_new_node(nt, "ParenthesesNode");
   nt_node_set_ref(nt, paren, "body", stmts);
   /* the call becomes a transparent alias of the dispatch's value */
-  nt_node_set_str(nt, id, "name", "itself");
+  nt_set_itself_call(nt, id);
   nt_node_set_ref(nt, id, "receiver", paren);
   nt_node_set_ref(nt, id, "block", -1);
   nt_node_set_ref(nt, id, "arguments", -1);

@@ -1946,7 +1946,7 @@ decisions-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	  [ "$$(SPINEL_GC_STRESS=2 $(TIMEOUT10) "$$tmp/fa" 2>&1)" = "$$(printf 'true\ntrue')" ] || \
 	  { echo "decisions-test: FAIL (the program whose receiver temp is a slot of the frame does not answer true, true under SPINEL_GC_STRESS=2)"; ok=0; }; \
 	$(SPINEL) test/fixtures/decisions/builtin_split_narrowed.rb -c -o "$$tmp/bs.c" >/dev/null 2>&1 && \
-	  [ "$$(grep -c 'sp_str_in_list(sp_poly_class_name' "$$tmp/bs.c")" = 1 ] && grep 'sp_str_in_list(sp_poly_class_name' "$$tmp/bs.c" | grep -q '"IO"' && grep -q 'sp_message()' "$$tmp/bs.c" || \
+	  [ "$$(grep -c 'sp_poly_class_name_id(' "$$tmp/bs.c")" = 1 ] && grep 'sp_poly_class_name_id(' "$$tmp/bs.c" | grep -qE '== -120[^0-9]' && grep -q 'sp_message()' "$$tmp/bs.c" || \
 	  { echo "decisions-test: FAIL (a boxed send tested builtin classes its receiver cannot be, or dropped the one it may be)"; ok=0; }; \
 	n=$$(printf 'm%0700d' 0); \
 	printf 'class Sprites\n  def initialize; @s = [[1, 2], [3]]; end\n  def %sa(i) = @s[i].size\n  def %sb(i) = @s[i].first\nend\ns = Sprites.new\np s.%sa(0), s.%sb(1)\n' $$n $$n $$n $$n > "$$tmp/long.rb"; \

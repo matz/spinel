@@ -1,0 +1,8 @@
+private method 'foo' called for an instance of Integer
+private method 'foo' called for an instance of String
+private method 'foo' called for an instance of Integer
+private method 'foo' called for an instance of Symbol
+"ABC"
+"SHOUT"
+private method 'upcase' called for an instance of Mute
+undefined method 'late' for an instance of Integer

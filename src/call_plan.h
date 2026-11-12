@@ -93,12 +93,15 @@ typedef struct {
    lookup reaches it for (cplan_root_reopen)? The kinds of reopening below
    that, a builtin class's own, bind by the receiver's type. */
 int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
-/* ...and call id's plan p where it is such a binding that answers the call
-   ahead of the builtin arms (not an alias that captured the builtin's
-   method, nor an exception accessor picked at run time, nor a private or
-   protected method of a name a builtin has), else NULL. The
-   analysis asks cplan_user_fresh's plan, its types still moving. */
-const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p);
+/* ...and is call id's plan p such a binding that answers the call ahead
+   of the builtin arms (not an alias that captured the builtin's method,
+   nor an exception accessor picked at run time, nor a private or
+   protected method of a name a builtin has, nor one closed to the call)?
+   The analysis asks cplan_user_fresh's plan, its types still moving. The
+   ask reads Reprs, which can resolve another call's plan into the one
+   cplan_user and cplan_user_fresh return: a caller that reads p after it
+   passes its own copy. */
+int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p);
 /* The method of the program's that p binds directly to a call on a builtin value, a root class's or a reopened class's yielding one, -1 where p binds none: its answer, a yield's block value included, is the call's. */
 int cplan_reopen_target(Compiler *c, const CallPlan *p);
 /* Does any scope define an instance method `name` every object answers: the
@@ -847,9 +850,42 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
    hides it). include_all is 1 or 0 when known, -1 when only the run time
    knows it: a private method then gives 2 (the include_all decides). */
 int cplan_nil_program_responds(Compiler *c, const char *name, int include_all);
-/* codegen_call.c: nil's method for the call when it is closed to it
-   (private, or protected to this caller), -1 otherwise */
+/* The program's method CRuby's lookup of `name` on an instance of
+   builtin class cls reaches first at the roots (NilClass, Numeric,
+   Object -- a top-level def is Object's from where it runs, and the later
+   of the two defs answers --, Kernel, BasicObject), for call `call`: its
+   scope, with *vis (may be NULL) its visibility at the call (-1 where the
+   record cannot tell), or -1 when a builtin's method answers first (*vis
+   then its visibility), a reopened builtin below the roots has one, none
+   does, or the record cannot order a top-level def and Object's. */
+int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, int *vis);
+/* nil's method for the call when it is closed to it (private, or
+   protected to this caller): cplan_root_method's from NilClass; -1
+   otherwise, or where a method_missing answers */
 int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis);
+/* Does an instance of class k answer `name` ahead of Object's method:
+   by a method of its chain's other than Object's, a reader or a writer
+   (attr_*, a Struct member), a visibility the chain declares below Object
+   (`public :top`), or a method_missing? 0 for Object itself. */
+int cplan_class_answers_ahead_of_object(Compiler *c, int call, int k, const char *name);
+/* The method an explicit-receiver call id reaches, when it is the
+   program's method at the roots (cplan_root_method, from the receiver's
+   builtin class) and it, or a builtin's own method found ahead of it, is
+   closed to the call: private, or protected to this caller (public_send's
+   too); *vis gets which. -1 where the receiver's own class answers first
+   (cplan_class_answers_ahead_of_object: a program object's class or a
+   subclass the value may be of, a builtin value's reopened class), the
+   method is open, a call skips visibility or calls on self, or a
+   method_missing of every object answers. A boxed receiver's lookup is
+   Object's: its arms ask the value's own class at run time (the program's
+   classes by cplan_class_answers_ahead_of_object, the builtin ones by
+   cplan_send_split_owners). The plan binds no method for such a call; its
+   arms raise CRuby's NoMethodError. It binds and builds nothing and makes
+   no version demand (cplan_root_method asks the top-level def of the
+   tables), but the lookups it reads record the inference's memo
+   dependencies (a class's method_missing, its chain), so a type that
+   rests on its answer is asked again when they move. */
+int cplan_root_closed(Compiler *c, int id, int *vis);
 int cplan_nil_program_served(Compiler *c, int id);  /* codegen_call.c: nil's method's answer has the call's type */
 /* Is a nil fact's source `why` (nil_fact_why) a nil the program writes --
    a literal, a missing else, a safe navigation, a slot read before its

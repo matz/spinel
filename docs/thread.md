@@ -195,7 +195,7 @@ These are deliberate consequences of real parallelism, listed in
 | `SPINEL_SLAB_HUGE` | `0` stops the slab asking for transparent huge pages on its arenas (`madvise(MADV_HUGEPAGE)`, effective where `transparent_hugepage` is `madvise` or `always`). On by default: an arena faults in as two 2 MB pages instead of a thousand 4 KB ones, and a list benchmark spent a third of its time in those faults |
 | `SPINEL_GC_CONC` | `0` sweeps under the stop-the-world barrier instead of beside the program, which is also what the verifiers (`SPINEL_GC_VERIFY`, `SPINEL_GC_VERIFY_GEN`) and aging (`SPINEL_GC_AGE`) do on their own, since they read the heap the sweep is rewriting. `SPINEL_GC_VERIFY` also checks the slab's bitmaps against their invariants at every barrier and after every chunk's sweep |
 | `SPINEL_GC_PAR_MARK` | `0` marks on the collector alone. By default the mark's drain runs on the collector and up to `SPINEL_GC_MARKERS` parked workers (default min(workers, 4)), sharing the pending objects in small chunks; the verifiers and aging mark serially on their own |
-| `SPINEL_GC_SWEEPERS` | how many sweeper threads sweep the old lists (default the worker count, at most 8). `SPINEL_GC_OWNER=0` hands them the young lists too, instead of each worker sweeping its own |
+| `SPINEL_GC_SWEEPERS` | how many sweeper threads sweep the old lists (default the worker count, at most 8, and none where the process may use a single CPU: the collector then sweeps under the barrier, as with `SPINEL_GC_CONC=0`). `SPINEL_GC_OWNER=0` hands them the young lists too, instead of each worker sweeping its own |
 | `SPINEL_GC_TRIM_SEC` | how often the container buffers glibc still holds are given back to the OS with `malloc_trim` (default 1, `0` never). A trim walks every arena, tens of milliseconds on a many-core box; it runs on its own thread beside the program, but a worker that allocates from the arena being walked waits for it, so a longer interval buys latency for memory: on a 32-core server `10` took the room page's p99 from 122 to 102 ms and its RSS from 950 MB to 1.4 GB |
 | `SPINEL_GC_STR_MAJOR_KB` | the string OLD generation's own gate: how much old string it takes to make the next string sweep a MAJOR (default 1024). Only a major reclaims an old string |
 | `SPINEL_GC_STR_MAJOR` | the major's policy. By default it runs on a SCHEDULE (a major every N string sweeps, N adapted from the survival ratio) with the size test demoted to a backstop, which is how the object heap has always run its full collection. `size` restores the gate that shipped before it -- the size test on its own, re-aimed to twice what the last major KEPT (what it left minus what the same sweep promoted, which is no survivor of anything yet). `fixed` pins both the cadence and the backstop where the floor put them |
@@ -388,6 +388,15 @@ Rails-shaped server the stop-the-world sweep was 30% of the wall clock;
 without it, and with the drain shared, the same server answers 20% more
 requests a second with a p99 20-50% lower, and the pause is under a
 millisecond.
+
+A process that may use a single CPU (its affinity mask, or a container's
+CPU quota) starts no sweeper thread and sweeps under the barrier instead.
+A sweeper there cannot run beside the program, only in its place, so each
+collection paid the wake-up and the context switches there and back for a
+sweep the collector does in the same time. On a program that allocates
+hard on one CPU that was 6 to 11% of the wall clock and nearly all of its
+context switches; with two CPUs or more nothing changes.
+`SPINEL_GC_SWEEPERS=N` starts the sweepers all the same.
 
 The sweep does not touch the dead either. A slab block's generation, its
 mark and whether its death runs a finalizer are bits in its chunk's

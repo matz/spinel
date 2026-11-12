@@ -1354,8 +1354,10 @@ TESTS := $(filter-out test/io_winsize_set.rb,$(TESTS))
 endif
 # A test whose subject only Linux gives (`# spinel: linux`): a connect to a
 # listener whose accept queue is full hangs there, as one to a dead host
-# does, where macOS refuses it at once. Such a test runs on Linux alone;
-# master's Linux jobs and the ryzen9 lanes are its check.
+# does, where macOS refuses it at once; and only Linux holds a process to
+# chosen CPUs, for a test of what one that may use a single CPU does. Such
+# a test runs on Linux alone; master's Linux jobs and the ryzen9 lanes are
+# its check.
 ifneq ($(shell uname -s),Linux)
 TESTS := $(filter-out $(shell grep -l '^\# spinel: linux' test/*.rb),$(TESTS))
 endif

@@ -18,3 +18,6 @@ nil
 "NoMethodError"
 nil
 "NoMethodError"
+:fallback
+:fallback
+99

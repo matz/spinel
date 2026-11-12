@@ -46,3 +46,13 @@ p pick_or_raise([1, 99], false)
 p pick_or_raise(1..3, false)
 p pick_or_raise(["a"], nil)
 p pick_or_raise(["a"], false)
+
+# the nil test is an identity test, as CRuby's NIL_P: a fallback whose class
+# answers true to nil? is still called
+class Fallback
+  def nil?; true; end
+  def call; :fallback; end
+end
+p pick_or_raise([1, 2, 3], Fallback.new)
+p pick_or_raise(["a"], Fallback.new)
+p pick_or_raise([1, 99], Fallback.new)

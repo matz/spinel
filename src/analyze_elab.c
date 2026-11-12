@@ -8212,14 +8212,15 @@ int elab_fire_after(Compiler *c, int list, int j) {
 }
 
 /* The class the class or module header at node opens, as registration
-   holds it under cname (qualify's spelling): a new one, made here, whose
+   holds it under cname (the walk's spelling; rname, the Ruby path of a
+   qualified one, NULL for the name as written): a new one, made here, whose
    body encl's encloses -- or, for `class A::B`, the class A names
    wherever the header stands, and for `class ::B` none -- else the class
    of that name it reopens, whose definition becomes this opening when it
    is the first to declare a superclass. The node -> class map answers it
    from here on (elab_header_opened); a header with no name opens none,
    and its body stays encl's. */
-int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
+int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *rname, int encl) {
   if (!cname) { elab_header_opened(c, node, -1, 0); return encl; }
   /* the class the header's entity holds (elab_header_entity): the one it
      reopens, or none for a new one; where the record does not know (an
@@ -8233,9 +8234,9 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
     comp_class_new(c, cname, node);
     ci = c->nclasses - 1;
     c->classes[ci].enclosing_class = encl; comp_class_path_moved();
-    /* a name qualify_colliding_classes gave carries the Ruby path it
-       resolved the header to (`AP = P; class AP::Foo` is P::Foo) */
-    const char *qrn = cp >= 0 ? nt_str(c->nt, cp, "qc_ruby_name") : NULL;
+    /* a qualified name comes with the Ruby path the walk resolved the
+       header to (`AP = P; class AP::Foo` is P::Foo: walk_class_c_name) */
+    const char *qrn = cp >= 0 ? rname : NULL;
     if (qrn) c->classes[ci].ruby_name_cache = strdup(qrn);
     /* `class A::B`: A encloses B wherever it is written. The leaf is the
        header's as written: a `__` in it is the program's own, not the

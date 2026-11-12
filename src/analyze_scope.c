@@ -1541,9 +1541,9 @@ static void wcn_add(char *out, size_t cap, const char *t) { strncat(out, t, cap 
    of its Ruby path, then the leaf, joined by `__` after the salt's
    underscores (`_Outer__Foo`). A compact header under a builtin
    (`module Comparable::Ext`) is nested in nothing, so the builtin is no
-   part of the name. 0, with out untouched, for a name the pass left as
-   written. */
-static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap) {
+   part of the name. Its Ruby path in rb when asked (A::B::Foo). 0, with
+   out and rb untouched, for a name the pass left as written. */
+static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap, char *rb, size_t rcap) {
   const NodeTable *nt = c->nt;
   if (np < 0 || !nt_str(nt, np, "qc_name") || cap < 2) return 0;
   int owner = -2;
@@ -1570,6 +1570,12 @@ static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap)
   while (ns > 0) { wcn_add(out, cap, seg[--ns]); wcn_add(out, cap, "__"); }
   const char *leaf = nt_str(nt, np, "name");
   if (leaf) wcn_add(out, cap, leaf);
+  /* and its Ruby path, when asked: the owner's, then the leaf */
+  if (rb && rcap > 1) {
+    rb[0] = 0;
+    if (owner >= 0) { wcn_add(rb, rcap, class_ruby_name(c, owner)); wcn_add(rb, rcap, "::"); }
+    if (leaf) wcn_add(rb, rcap, leaf);
+  }
   return 1;
 }
 
@@ -1652,8 +1658,8 @@ static int record_write_class(Compiler *c, int id, int hdr) {
   if (ci >= 0) return ci;   /* a subtree two lists share, walked again */
   if (nt_kind(c->nt, id) == NK_ConstantWriteNode) {
     char wname[600];
-    const char *cname = walk_class_c_name(c, id, id, wname, sizeof wname) ? wname : nt_str(c->nt, id, "name");
-    return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, hdr) : -1;
+    const char *cname = walk_class_c_name(c, id, id, wname, sizeof wname, NULL, 0) ? wname : nt_str(c->nt, id, "name");
+    return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, NULL, hdr) : -1;
   }
   char an[48];
   snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id));
@@ -1755,8 +1761,9 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   if (ty_k == NK_ClassNode || ty_k == NK_ModuleNode) {
     int cp = nt_ref(c->nt, id, "constant_path");
     int alias = elab_header_entity(c, id, &w.pos);
-    char wname[600];
-    const char *cname = walk_class_c_name(c, id, cp, wname, sizeof wname) ? wname : cp >= 0 ? key_name(c, cp) : NULL;
+    char wname[600], wruby[600];
+    int qualified = walk_class_c_name(c, id, cp, wname, sizeof wname, wruby, sizeof wruby);
+    const char *cname = qualified ? wname : cp >= 0 ? key_name(c, cp) : NULL;
     int cls_toplevel = class_id < 0 && cp >= 0 &&
                        nt_kind(c->nt, cp) == NK_ConstantReadNode;
     /* An earlier pass mangles a nested name to `Outer__Inner`: test the leaf. */
@@ -1818,7 +1825,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     }
     if (nt_kind(c->nt, id) == NK_ClassNode && cname)
       refuse_native_class_reopen(c, id, cp, class_id, w.cblock, cls_leaf);
-    child_class = elab_rec_open(c, id, cp, cname, class_cref(c, class_id, w.cblock));
+    child_class = elab_rec_open(c, id, cp, cname, qualified ? wruby : NULL, class_cref(c, class_id, w.cblock));
   }
   /* `X = Class.new(S) do ... end`, `A::B = Module.new do ... end`: the class
      is made at the write, as a header's, and the block is walked with the
@@ -1826,9 +1833,12 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   else if (class_def_builder(c->nt, id) >= 0) {
     int cp = class_def_path(c->nt, id);
     elab_builder_entity(c, id, &w.pos);
-    char wname[600];
-    const char *bname = walk_class_c_name(c, id, cp, wname, sizeof wname) ? wname : class_def_key(c, id);
-    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, bname, class_cref(c, class_id, w.cblock));
+    char wname[600], wruby[600];
+    int qualified = walk_class_c_name(c, id, cp, wname, sizeof wname, wruby, sizeof wruby);
+    const char *bname = qualified ? wname : class_def_key(c, id);
+    /* (a builder's own write, `X = Class.new`, keeps the Ruby path
+       registration gives it) */
+    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, bname, qualified && cp != id ? wruby : NULL, class_cref(c, class_id, w.cblock));
   }
   /* `P = Struct.new(:a) do ... end`, `k = Data.define(:a)`: likewise */
   else if (class_def_record(c->nt, id) >= 0) {

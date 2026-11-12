@@ -437,12 +437,21 @@ module Enumerable
 
   def rfind
     if block_given?
+      # Only an Array reaches this walk, and it reads the array live at each
+      # step, as the typed path's loop does: an element the block writes
+      # before the walk gets to it is the element the walk sees, and an
+      # array the block shrinks is walked from its new end (CRuby's
+      # rb_ary_rfind clamps the index the same way)
       found = nil
-      to_a.reverse.each do |x|
+      i = size
+      while i > 0
+        i -= 1
+        x = self[i]
         if yield(x)
           found = x
           break
         end
+        i = size if i > size
       end
       found
     else

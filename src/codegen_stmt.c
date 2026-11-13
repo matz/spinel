@@ -3754,9 +3754,11 @@ void emit_route_recv_root(Compiler *c, int hr, int t, int argc, const int *argv,
   if (alloc) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
 }
 /* Does route v (emit_strbuf_route) answer a String, never nil: `+s` (which
-   raises for a nil s) and `String(s)`? Every other one can answer nil. */
+   raises for a nil s), `String(s)` and an exception's text? Every other one
+   can answer nil. */
 static int strbuf_route_nonnil(Compiler *c, int v) {
-  if (strbuf_route_exc_message(c, v)) return 1;
+  /* `e&.message` answers nil for a nil e, as the route does (`cause&.message`) */
+  if (strbuf_route_exc_message(c, v)) return !nt_safe_nav(c->nt, nt_paren_single(c->nt, v));
   /* A fresh user return may be nil, unlike the builtin conversion. */
   if (repr_boxed_to_s_operand(c, nt_paren_single(c->nt, v)) >= 0) return 0;
   /* `s&.to_s` answers nil for a nil s, where `s.to_s` answers "". */
@@ -3879,8 +3881,10 @@ int emit_recv_route_handle(Compiler *c, int id, int recv, Buf *b) {
     }
   }
   /* a `&.` call skips a nil receiver, which the raise below would not:
-     its guard takes the receiver (emit_call_safe_nav_arms) */
-  if (!nonnil && nt_safe_nav(c->nt, id)) {
+     its guard takes the receiver (emit_call_safe_nav_arms). Under its
+     guard (g_sn_skip: emit_bang_on_held's on a held receiver) the
+     receiver is not nil. */
+  if (!nonnil && nt_safe_nav(c->nt, id) && g_sn_skip != id) {
     free(hb.p);
     if (pre && g_pre == pre && pre->len > pre_mark) { pre->len = pre_mark; pre->p[pre_mark] = '\0'; }
     return 0;
@@ -4447,6 +4451,15 @@ static int tap_block_hoists(Compiler *c, int v) {
   int blk = nt_ref(c->nt, v, "block");
   return g_pre && nm && is_tap_name(nm) && blk >= 0 && nt_kind(c->nt, blk) == NK_BlockNode && !nt_safe_nav(c->nt, v);
 }
+/* Does bang v leave a nil receiver to the call itself: a safe-navigation
+   call (`g(s)&.upcase!`), which answers nil for it (emit_bang_on_held), or
+   a method nil has too (tap, itself), which nil answers? Any other bang
+   held on its receiver (emit_bang_held_open) raises NoMethodError for nil
+   at the hold, or cannot meet one. */
+static int bang_held_nil_passes(Compiler *c, int v) {
+  const char *vn = nt_str(c->nt, v, "name");
+  return nt_safe_nav(c->nt, v) || (vn && is_nil_method(vn));
+}
 /* The receiver handle of bang v held in _t<th> and rooted, opened as `({
    sp_String *_t<th> = <handle>; ...` in b: ahead of the statement instead
    (g_pre) when v is gsub!/sub!'s or scan's block form, whose loop runs
@@ -4458,8 +4471,7 @@ static void emit_bang_held_open(Compiler *c, int v, int th, const char *href, in
                                 Buf *b) {
   Buf *hb = sb_block_hoists(c, v) || scan_block_hoists(c, v) || tap_block_hoists(c, v) ? g_pre : b;
   /* (nil has a tap and an itself of its own: they answer nil) */
-  const char *vn = nt_str(c->nt, v, "name");
-  int check = !nonnil && !nt_safe_nav(c->nt, v) && !(vn && is_nil_method(vn));
+  int check = !nonnil && !bang_held_nil_passes(c, v);
   buf_puts(b, "({ ");
   size_t at = hb->len;
   if (hb != b) emit_indent(hb, g_indent);
@@ -5121,9 +5133,15 @@ static void emit_bang_self_form(Compiler *c, int v, int pub, int form, Buf *b) {
     else ran_first_bind_read(r, th);
     /* the route tests the held receiver for nil itself (emit_bang_held_open,
        or after the arguments when they run first): a guard of the call's
-       own would go ahead of the hold and read its temp undeclared (#10017) */
+       own would go ahead of the hold and read its temp undeclared (#10017),
+       and the plan's nil target (cplan_nil) would hold the receiver a second
+       time, as its bytes, under which a method that changes its receiver
+       finds no handle (strbuf_recv_handle) and changes nothing. The call is
+       marked as tested for both. */
     int sv_ng = g_ivar_nil_guarded_id; g_ivar_nil_guarded_id = v;
+    int nil_view = !bang_held_nil_passes(c, v) ? view_push_call_nil_tested(c, v) : -1;
     emit_bang_on_held(c, v, th, b);
+    if (nil_view >= 0) view_pop(c, nil_view);
     g_ivar_nil_guarded_id = sv_ng;
     view_unbind(mark);
     if (as_h) { view_pop(c, st); view_pop(c, sv); }

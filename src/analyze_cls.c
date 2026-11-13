@@ -3040,6 +3040,10 @@ static int cf_any_new(CF *f, int v, const int *argv, int argc, int blk) {
   Compiler *c = f->c;
   const NodeTable *nt = f->nt;
   if (v < 0 || c->has_anonymous_classes || f->nanon || c->n_cext_extensions) return 0;
+  /* (the unified walk holds a container's contents in its own set: a
+     builtin's `new` with arguments (`Hash.new(x)`, `Array.new(n, x)`) holds
+     what they are, which is anything here) */
+  if (!f->directed && argc > 0) return 0;
   CFByName *nb = cf_byname(f, "new");
   if (nb->n) return 0;
   for (int k = 0; k < c->nclasses; k++)
@@ -3052,7 +3056,10 @@ static int cf_any_new(CF *f, int v, const int *argv, int argc, int blk) {
   }
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_class_is_module(c, &c->classes[k])) continue;
-    int initm = plain ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
+    /* (a class's own `self.new` takes what it takes: it is built as
+       cf_construct builds it, whatever its initialize takes) */
+    int initm = plain && comp_cmethod_in_chain(c, k, "new", NULL) < 0
+                ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
     if (initm >= 0 && !cf_init_may_take(&c->scopes[initm], argc)) continue;
     cf_construct(f, v, k, argv, argc, blk, "new");
   }
@@ -3063,6 +3070,9 @@ static int cf_any_new(CF *f, int v, const int *argv, int argc, int blk) {
   memcpy(bk, cls_bk_subtree(c, CORE_EXCEPTION), sizeof bk);
   cf_bk_bit(bk, CORE_STRING); cf_bk_bit(bk, CORE_ARRAY); cf_bk_bit(bk, CORE_HASH); cf_bk_bit(bk, CORE_OBJECT);
   cf_add_set(f, v, cf_bset_mask(f, 1, 0, 0, bk));
+  /* (directed) the builtin's contents are what its arguments were, which
+     the walk does not follow here: an element read is anything */
+  if (f->directed) cf_ptop_set(f, v);
   return 1;
 }
 
@@ -3986,7 +3996,8 @@ static int cf_bk_own(CF *f, NodeKind k) {
    value and no other value's `<` can pass without raising. -1 when the
    branch is not such a read, or a value may answer the test otherwise: a
    method `<`, `<=` or `<=>` of the program's (an instance's, through
-   Comparable, or a class's own), or a class made at run time. */
+   Comparable, or a class's own), a method_missing that may answer one,
+   or a class made at run time. */
 static int cf_subclass_test(CF *f, int pred, int stmts) {
   Compiler *c = f->c;
   const NodeTable *nt = f->nt;
@@ -4035,7 +4046,9 @@ static int cf_subclass_test(CF *f, int pred, int stmts) {
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_method_in_chain(c, k, "<", NULL) >= 0 || comp_method_in_chain(c, k, "<=", NULL) >= 0 ||
         comp_method_in_chain(c, k, "<=>", NULL) >= 0 || comp_cmethod_in_chain(c, k, "<", NULL) >= 0 ||
-        comp_cmethod_in_chain(c, k, "<=", NULL) >= 0)
+        comp_cmethod_in_chain(c, k, "<=", NULL) >= 0 ||
+        comp_method_in_chain(c, k, "method_missing", NULL) >= 0 ||
+        comp_cmethod_in_chain(c, k, "method_missing", NULL) >= 0)
       return -1;
   }
   int t = cf_tb(f, 0);

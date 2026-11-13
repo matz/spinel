@@ -48,3 +48,14 @@ p pick3("Sub").new(3).kind
 # `new(...)` forwards two arguments to a two-argument initialize
 def build(name, ...) = Object.const_get(name).new(...)
 p build("Pair", 3, 4).public_send("pair_only".to_sym)
+
+# a class's own `self.new` takes what it takes, whatever its initialize does
+class Made
+  def made_only = "made"
+end
+class Maker
+  def self.new(a) = Made.new
+  def initialize(a, b, c) = nil
+end
+Made.new.made_only if ARGV.size > 99
+p Object.const_get("Maker").new(1).public_send("made_only".to_sym)

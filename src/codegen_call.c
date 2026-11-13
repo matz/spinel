@@ -16031,13 +16031,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                                                 : write_slot_ty(c, id);
       const char *hcn = ty_hash_cname(ht);
       if (argc == 0 || nt_kind(nt, argv[0]) == NK_NilNode) buf_printf(b, "sp_%sHash_new()", hcn);
-      else {
-        buf_printf(b, "sp_%sHash_new_with_default(", hcn);
-        if (ht == TY_SYM_POLY_HASH || ht == TY_STR_POLY_HASH || ht == TY_POLY_POLY_HASH)
-          emit_boxed(c, argv[0], b);
-        else emit_expr(c, argv[0], b);
-        buf_puts(b, ")");
-      }
+      else emit_hash_new_with_default(c, ht, argv[0], b);
       { *out = 1; return 1; }
     }
     /* Hash.new { |hash, key| default } -> a PolyPolyHash with a default-proc

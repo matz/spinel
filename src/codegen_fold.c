@@ -601,8 +601,10 @@ int emit_hash_collect_expr(Compiler *c, int id, Buf *b) {
     }
     else {
       int cvn = oint_kind(rr.val) && hash_vals_nullable(c, recv);   /* the value with its nil (D3b-ii) */
-      buf_printf(g_pre, "sp_%sHash_%s(_t%d, _t%d->order[_t%d], sp_%sHash_%s(_t%d, _t%d->order[_t%d])); }",
-                 hn, cvn ? "oset" : "set", tres, trecv, ti, hn, cvn ? "vget" : "get", trecv, trecv, ti);   /* a key the walk is on is present */
+      /* (a String value copied as the handle the Hash holds, elem_held) */
+      const char *cs = cvn ? "" : typed_elem_store_sfx(rr.as_ty);
+      buf_printf(g_pre, "sp_%sHash_%s%s(_t%d, _t%d->order[_t%d], sp_%sHash_%s%s(_t%d, _t%d->order[_t%d])); }",
+                 hn, cvn ? "oset" : "set", cs, tres, trecv, ti, hn, cvn ? "vget" : "get", cs, trecv, trecv, ti);   /* a key the walk is on is present */
     }
     buf_puts(g_pre, "\n");
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
@@ -1149,7 +1151,11 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   /* the value stored carries its nil: the source's (transform_keys) or the
      block's (an oint-formed or boxed result, transform_values) */
   int oset_k = keys && svn && dvn && dr.val == svt;
-  emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_%sHash_%s(_t%d, ", dhn, oset_k || oset_v ? "oset" : "set", td);
+  /* transform_keys between two Hashes that hold the handle copies the
+     value as that handle (elem_held) */
+  const char *cs = keys && !oset_k && typed_elem_held(dt) == TY_STRBUF && typed_elem_held(rr.as_ty) == TY_STRBUF
+                   ? typed_elem_store_sfx(dt) : "";
+  emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_%sHash_%s%s(_t%d, ", dhn, oset_k || oset_v ? "oset" : "set", cs, td);
   if (keys) {
     /* new key = block result; unbox if block returned poly but key type is typed */
     const char *vbp = vb.p ? vb.p : "0";
@@ -1173,7 +1179,7 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
       buf_printf(g_pre, "%ssp_%sHash_get_e(_t%d, _t%d))", typed_elem_box_open(rr.as_ty), shn, ts, tk);
     else if (dvt == TY_POLY && svt != TY_POLY) { Buf bx; memset(&bx, 0, sizeof bx); char g[64]; snprintf(g, sizeof g, "sp_%sHash_get(_t%d, _t%d)", shn, ts, tk); emit_boxed_text(c, svt, g, &bx); buf_puts(g_pre, bx.p ? bx.p : ""); free(bx.p); }
     else if (oset_k) buf_printf(g_pre, "sp_%sHash_vget(_t%d, _t%d)", shn, ts, tk);
-    else buf_printf(g_pre, "sp_%sHash_get(_t%d, _t%d)", shn, ts, tk);
+    else buf_printf(g_pre, "sp_%sHash_get%s(_t%d, _t%d)", shn, cs, ts, tk);
   }
   else {
     /* key carried over; new value = block result (box/unbox to match dest type) */

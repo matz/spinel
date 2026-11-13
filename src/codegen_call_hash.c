@@ -661,7 +661,7 @@ int emit_op_hash_merge_bang_many(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {", ti, ti, to, ti);
     buf_printf(b, " %s _t%d = _t%d->order[_t%d];", c_type_name(kt), tk, to, ti);
     int mvn = ty_hash_val(rt) == TY_INT && hash_vals_nullable(c, recv);   /* with its nil (D3b-ii) */
-    buf_printf(b, " sp_%sHash_%s(_t%d, _t%d, sp_%sHash_%s(_t%d, _t%d)); }", hn, mvn ? "oset" : "set", tr, tk, hn, mvn ? "vget" : "get", to, tk);
+    buf_puts(b, " "); emit_hash_entry_copy(rt, mvn, tr, to, tk, b); buf_puts(b, " }");
   }
   buf_printf(b, " _t%d; })", tr);
   return 1;

@@ -2033,7 +2033,7 @@ void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b) {
     emit_unresolved_coerced(c, node, et, &v);
   else if (et == TY_INT) emit_int_expr_nilable(c, node, &v);
   else if (et == TY_FLOAT) emit_float_expr(c, node, &v);
-  else is_held = emit_typed_elem_coerce(c, node, rt, "an Array element", &v);
+  else is_held = emit_typed_elem_coerce(c, node, rt, ty_is_hash(rt) ? "a Hash element store" : "an Array element", &v);
   if (is_held) buf_puts(b, v.p ? v.p : "");
   else emit_typed_elem_hold(c, node, rt, v.p ? v.p : "", b);
   free(v.p);
@@ -2119,6 +2119,8 @@ int typed_elem_hold_may_make(Compiler *c, int node, TyKind rt) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(c->nt, node);
   if (k == NK_NilNode) return 0;
+  /* a frozen literal is held as its own static object (strbuf_new_of_text) */
+  if (k == NK_StringNode && nt_int(c->nt, node, "fzl", 0)) return 0;
   int var = k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k);
   return !(var && repr_of(c, node).handle);
 }
@@ -3546,13 +3548,21 @@ int emit_empty_container_for_slot(Compiler *c, int v, TyKind slot, Buf *b) {
     if (hv != TY_POLY && dt != TY_UNKNOWN && dt != hv && !(hv == TY_FLOAT && dt == TY_INT) &&
         !(hv == TY_STRING && dt == TY_STRBUF))
       unsupported(c, v, "a Hash.new default of another type than the typed hash slot's values");
-    buf_printf(b, "sp_%sHash_new_with_default(", hcn);
-    if (ty_hash_val(slot) == TY_POLY) emit_boxed(c, av[0], b);
-    else emit_expr(c, av[0], b);
-    buf_puts(b, ")");
+    emit_hash_new_with_default(c, slot, av[0], b);
     return 1;
   }
   return 0;
+}
+/* `Hash.new(d)` built as typed Hash kind ht, by the kind's own
+   new_with_default entry: the default d held as the Hash holds a value --
+   boxed for a Hash of boxed values, the handle for a Hash of String values
+   (elem_held, through the _e entry), else as it is */
+void emit_hash_new_with_default(Compiler *c, TyKind ht, int d, Buf *b) {
+  buf_printf(b, "sp_%sHash_new_with_default%s(", ty_hash_cname(ht), typed_elem_store_sfx(ht));
+  if (ty_hash_val(ht) == TY_POLY) emit_boxed(c, d, b);
+  else if (typed_elem_held(ht) == TY_STRBUF) emit_typed_elem_value(c, d, ht, b);
+  else emit_expr(c, d, b);
+  buf_puts(b, ")");
 }
 
 /* emit_poly_rhs_coerced's conversion of a boxed value into a scalar or a

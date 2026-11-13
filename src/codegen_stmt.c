@@ -5826,19 +5826,11 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     /* built at the slot's variant, the capacity evaluated */
   }
   else if ((is_empty_hash || is_hash_new) && lv && ty_hash_cname(lv->type)) {
-    const char *hcn = ty_hash_cname(lv->type);
-    int poly_val = (lv->type == TY_SYM_POLY_HASH || lv->type == TY_STR_POLY_HASH ||
-                    lv->type == TY_POLY_POLY_HASH);
-    if (is_hash_new && hash_new_default >= 0 && nt_kind(c->nt, hash_new_default) != NK_NilNode) {
-      /* `Hash.new(nil)` is `Hash.new`: a nil default lowered into an Integer
-         slot as 0, and a miss then answered a truthy 0 where Ruby answers nil */
-      buf_printf(b, "sp_%sHash_new_with_default(", hcn);
-      if (poly_val) emit_boxed(c, hash_new_default, b); else emit_expr(c, hash_new_default, b);
-      buf_puts(b, ")");
-    }
-    else {
-      buf_printf(b, "sp_%sHash_new()", hcn);
-    }
+    /* `Hash.new(nil)` is `Hash.new`: a nil default lowered into an Integer
+       slot as 0, and a miss then answered a truthy 0 where Ruby answers nil */
+    if (is_hash_new && hash_new_default >= 0 && nt_kind(c->nt, hash_new_default) != NK_NilNode)
+      emit_hash_new_with_default(c, lv->type, hash_new_default, b);
+    else buf_printf(b, "sp_%sHash_new()", ty_hash_cname(lv->type));
   }
   else if (lv && lv->type == TY_POLY_ARRAY && ty_is_array(comp_ntype(c, v)) && comp_ntype(c, v) != TY_POLY_ARRAY) {
     /* widen typed array literal to PolyArray for this slot */
@@ -15060,17 +15052,13 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
       const char *hcn = ty_hash_cname(g_ret_type);
       int ha = nt_ref(c->nt, node, "arguments"); int hac = 0;
       const int *hav = ha >= 0 ? nt_arr(c->nt, ha, "arguments", &hac) : NULL;
-      int poly_val = (g_ret_type == TY_SYM_POLY_HASH || g_ret_type == TY_STR_POLY_HASH);
       if (hac == 0) {
         buf_printf(b, "sp_%sHash_new()", hcn);
         return;
       }
-      /* every hash variant now has sp_<H>Hash_new_with_default (PolyPolyHash
-         gained it in #1674), and the poly-valued variants box the default */
-      buf_printf(b, "sp_%sHash_new_with_default(", hcn);
-      if (poly_val || g_ret_type == TY_POLY_POLY_HASH) emit_boxed(c, hav[0], b);
-      else emit_expr(c, hav[0], b);
-      buf_puts(b, ")");
+      /* every hash variant has sp_<H>Hash_new_with_default (PolyPolyHash
+         gained it in #1674) */
+      emit_hash_new_with_default(c, g_ret_type, hav[0], b);
       return;
     }
   }
@@ -22264,12 +22252,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     }
     else if (v_empty_hash && ty_is_hash(lv->type)) {
       const char *hcn = ty_hash_cname(lv->type);
-      if (hcn && v_hash_dflt >= 0) {
-        buf_printf(b, "sp_%sHash_new_with_default(", hcn);
-        if (ty_hash_val(lv->type) == TY_POLY) emit_boxed(c, v_hash_dflt, b);
-        else emit_expr(c, v_hash_dflt, b);
-        buf_puts(b, ")");
-      }
+      if (hcn && v_hash_dflt >= 0) emit_hash_new_with_default(c, lv->type, v_hash_dflt, b);
       else if (hcn && v_lit_frozen) buf_printf(b, "sp_gc_freeze(sp_%sHash_new())", hcn);   /* `X = {}.freeze`: the freeze the strip took off (#4510) */
       else if (hcn) buf_printf(b, "sp_%sHash_new()", hcn);
       else emit_expr(c, v, b);
@@ -24680,8 +24663,14 @@ static int hash_store_oset(Compiler *c, int val, TyKind rt) {
   if (rt != TY_STR_INT_HASH && rt != TY_INT_INT_HASH) return 0;
   return nt_kind(c->nt, val) == NK_NilNode || node_has_oint_form(c, val) || repr_of(c, val).kind == RK_BOXED;
 }
+/* The kind a store into typed Hash kind rt holds its value as: the handle
+   for a Hash of String values (elem_held), else the value's own kind */
+static TyKind hash_store_held(TyKind rt) {
+  return typed_elem_held(rt) == TY_STRBUF ? TY_STRBUF : ty_hash_val(rt);
+}
 /* The value of a hash store, as the kind's set takes it (as an oint for
-   hash_store_oset's `_oset`). */
+   hash_store_oset's `_oset`, as the handle for the `_e` set of a Hash of
+   String values). */
 static void emit_hash_store_val(Compiler *c, int val, TyKind rt, Buf *b) {
   if (ty_hash_val(rt) == TY_POLY) { emit_boxed(c, val, b); return; }
   if (hash_store_oset(c, val, rt)) {
@@ -24695,7 +24684,16 @@ static void emit_hash_store_val(Compiler *c, int val, TyKind rt, Buf *b) {
      path does. */
   TyKind hvt = ty_hash_val(rt);
   int vboxed = repr_of(c, val).kind == RK_BOXED;
-  if (vboxed && hvt == TY_STRING) { buf_puts(b, "sp_poly_hval_s("); emit_expr(c, val, b); buf_puts(b, ")"); }
+  /* a String value is held as its handle (elem_held, emit_typed_elem_value);
+     a boxed one is unboxed first, as below */
+  if (typed_elem_held(rt) == TY_STRBUF && vboxed) {
+    Buf v; memset(&v, 0, sizeof v);
+    buf_puts(&v, "sp_poly_hval_s("); emit_expr(c, val, &v); buf_puts(&v, ")");
+    emit_typed_elem_hold(c, val, rt, v.p ? v.p : "", b);
+    free(v.p);
+  }
+  else if (typed_elem_held(rt) == TY_STRBUF) emit_typed_elem_value(c, val, rt, b);
+  else if (vboxed && hvt == TY_STRING) { buf_puts(b, "sp_poly_hval_s("); emit_expr(c, val, b); buf_puts(b, ")"); }
   else if (vboxed && hvt == TY_INT) { buf_puts(b, "sp_poly_hval_i("); emit_expr(c, val, b); buf_puts(b, ")"); }
   else if (vboxed && hvt == TY_FLOAT) { buf_puts(b, "sp_poly_hval_f("); emit_expr(c, val, b); buf_puts(b, ")"); }
   else emit_coerce(c, val, hvt, CO_HOLD, "a Hash element store", b);
@@ -25668,11 +25666,11 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         buf_printf(b, "%s _t%d = ", c_type_name(kt), tk); emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, "; ");
         if (operand_may_allocate(c, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, b); buf_puts(b, " "); }
         int vo = hash_store_oset(c, argv[1], rt);
-        const char *vct = vo ? "sp_oint" : c_type_name(ty_hash_val(rt));
+        const char *vct = vo ? "sp_oint" : c_type_name(hash_store_held(rt));
         buf_printf(b, "%s _t%d = ", vct ? vct : "sp_RbVal", tv); emit_hash_store_val(c, argv[1], rt, b);
         const char *hbc = hash_box_cls(rt);
         buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s); ", tr, tr, hbc ? hbc : "0");
-        buf_printf(b, "sp_%sHash_%s(_t%d, _t%d, _t%d); }\n", hn, vo ? "oset" : "set", tr, tk, tv);
+        buf_printf(b, "sp_%sHash_%s%s(_t%d, _t%d, _t%d); }\n", hn, vo ? "oset" : "set", vo ? "" : typed_elem_store_sfx(rt), tr, tk, tv);
         return 1;
       }
       /* A key that is a shared String slot's read is a fresh copy, held by
@@ -25681,15 +25679,17 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
          CRuby stores the key String as it is at the set, after the value
          has run, so reading it last is its order too. */
       int tv = -1;
-      if (strbuf_read_copies(c, argv[0]) && operand_may_allocate(c, argv[1])) {
-        TyKind vt = ty_hash_val(rt);
+      if (strbuf_read_copies(c, argv[0]) &&
+          (operand_may_allocate(c, argv[1]) || typed_elem_hold_may_make(c, argv[1], rt))) {
+        TyKind vt = hash_store_held(rt);
         tv = ++g_tmp;
         buf_printf(b, "{ %s _t%d = ", c_type_name(vt), tv); emit_hash_store_val(c, argv[1], rt, b);
         buf_puts(b, "; "); emit_gc_root_tmp(c, vt, tv, b); buf_puts(b, " ");
       }
       buf_puts(b, "if (sp_gc_is_frozen("); emit_expr(c, recv, b); buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_expr(c, recv, b); buf_printf(b, ", %s);\n", hash_box_cls(rt));
       emit_indent(b, indent);
-      buf_printf(b, "sp_%sHash_%s(", hn, hash_store_oset(c, argv[1], rt) ? "oset" : "set"); emit_expr(c, recv, b); buf_puts(b, ", ");
+      int vo = hash_store_oset(c, argv[1], rt);
+      buf_printf(b, "sp_%sHash_%s%s(", hn, vo ? "oset" : "set", vo ? "" : typed_elem_store_sfx(rt)); emit_expr(c, recv, b); buf_puts(b, ", ");
       emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, ", ");
       if (tv >= 0) buf_printf(b, "_t%d); }\n", tv);
       else { emit_hash_store_val(c, argv[1], rt, b); buf_puts(b, ");\n"); }
@@ -26441,7 +26441,11 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
        the frozen check: Ruby desugars `h[k] += v` to `h[k] = h[k] + v`, so the
        read and the RHS run before []= raises on a frozen hash. */
     int tv = ++g_tmp;
-    const char *pf = vt == TY_POLY ?
+    /* a String value is the handle the Hash holds (elem_held): an operator
+       but `+` runs on that String's own box, as on a boxed value (`<<`
+       appends to the String itself), and the String it answers is stored */
+    int hbox = typed_elem_held(rt) == TY_STRBUF && !is_plus_op(op);
+    const char *pf = (vt == TY_POLY || hbox) ?
         (sp_streq(op, "+") ? "sp_poly_add" : sp_streq(op, "-") ? "sp_poly_sub" :
          sp_streq(op, "*") ? "sp_poly_mul" : sp_streq(op, "/") ? "sp_poly_div" :
          sp_streq(op, "%") ? "sp_poly_mod" : sp_streq(op, "**") ? "sp_poly_pow_recv" :
@@ -26471,18 +26475,22 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     }
     else if ((rt == TY_STR_INT_HASH || rt == TY_INT_INT_HASH) && vt == TY_INT)
       snprintf(slot, sizeof slot, "sp_oint_val(sp_%sHash_oget%s(_t%d, %s), \"%s\")", hn, rs, ta, rk, op);
+    else if (hbox)
+      snprintf(slot, sizeof slot, "%ssp_%sHash_get%s%s(_t%d, %s))", typed_elem_box_open(rt), hn, rs,
+               typed_elem_store_sfx(rt), ta, rk);
     else
       snprintf(slot, sizeof slot, "sp_%sHash_get%s(_t%d, %s)", hn, rs, ta, rk);
-    if (eff) iow_capture_slot(c, vt, slot, sizeof slot, b);
+    if (eff) iow_capture_slot(c, hbox ? TY_POLY : vt, slot, sizeof slot, b);
     /* an Integer slot given a boxed right-hand side (a method answering a
        promoted Integer) takes it as an Integer, as an Integer operand */
     int rhs_int = !pf && vt == TY_INT && repr_of(c, v).kind == RK_BOXED;
     char *rhs = iow_rhs(c, v, pf ? IOW_RHS_BOXED : rhs_int ? IOW_RHS_INT : IOW_RHS_EXPR, eff ? b : NULL);
-    buf_printf(b, "%s _t%d = ", c_type_name(vt), tv);
+    buf_printf(b, "%s _t%d = ", c_type_name(hbox ? TY_STRBUF : vt), tv);
     /* a poly-valued slot folds via the dynamic operator on boxed operands */
     /* a String slot that misses (no default) reads nil: `nil + "x"` is
        NoMethodError, which sp_str_plus raises (sp_str_concat took nil as "") */
     if (vt == TY_STRING && sp_streq(op, "+")) buf_printf(b, "sp_str_plus(%s, %s)", slot, rhs);
+    else if (hbox) buf_printf(b, "sp_poly_as_strbuf(%s(%s, %s))", pf, slot, rhs);
     else if (pf) buf_printf(b, "%s(%s, %s)", pf, slot, rhs);
     else if (iow_scalar_fold(c, vt, op, rhs_int ? TY_INT : comp_ntype(c, v), v, slot, rhs, b)) { }
     else buf_printf(b, "%s %s (%s)", slot, op, rhs);
@@ -26490,7 +26498,13 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     buf_puts(b, "; ");
     buf_printf(b, "if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s); ", ta, ta, hash_box_cls(rt));
     if (ts) buf_printf(b, "sp_%sHash_opw_put(_t%d, _t%d, %s, _t%d); }\n", hn, ta, ts, sk, tv);
-    else buf_printf(b, "sp_%sHash_set(_t%d, %s, %s_t%d%s); }\n", hn, ta, sk, ONE_HV_O(hn), tv, ONE_HV_C(hn));
+    else {
+      /* (the value as the Hash holds it, emit_typed_elem_hold) */
+      char tvn[24]; snprintf(tvn, sizeof tvn, "_t%d", tv);
+      buf_printf(b, "sp_%sHash_set%s(_t%d, %s, ", hn, typed_elem_store_sfx(rt), ta, sk);
+      if (hbox) buf_puts(b, tvn); else emit_typed_elem_hold(c, -1, rt, tvn, b);
+      buf_puts(b, "); }\n");
+    }
     return;
   }
 
@@ -26837,8 +26851,10 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
       buf_puts(b, ") ");
       int open = 0, oset = 0;
       char *rhs = iow_frozen_hash_rhs(iow_guarded_hash_rhs(c, v, rt, b, &open, &oset), ta, rt);
-      /* (one-String mode: a String-valued Hash takes the value's bytes face) */
-      buf_printf(b, "sp_%sHash_%s(_t%d, %s, %s%s%s)", hn, oset ? "oset" : "set", ta, sk, ONE_HV_O(hn), rhs, ONE_HV_C(hn));
+      /* (the value as the Hash holds it, emit_typed_elem_hold) */
+      buf_printf(b, "sp_%sHash_%s%s(_t%d, %s, ", hn, oset ? "oset" : "set", oset ? "" : typed_elem_store_sfx(rt), ta, sk);
+      emit_typed_elem_hold(c, v, rt, rhs, b);
+      buf_puts(b, ")");
       iow_guard_close(rhs, open, b);
     }
     buf_puts(b, "; }\n");

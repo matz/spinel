@@ -81,6 +81,7 @@ int is_tap_name(const char *n);       /* tap */
 int is_quantifier(const char *n);     /* all? any? none? one? */
 int is_name_error_class(const char *n);   /* NameError NoMethodError: .new(msg, name, ...) */
 int is_no_method_error_class(const char *n);   /* NoMethodError: .new(msg, name, args, ...) */
+int is_name_error_root_class(const char *n);   /* NameError alone: a variable-like call's error */
 int is_set_op(const char *n);         /* & intersection | union - difference */
 int is_combination_family(const char *n);  /* combination permutation repeated_combination repeated_permutation */
 /* the visibility word a call names: module_function first, so that a

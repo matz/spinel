@@ -234,8 +234,12 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
 enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256 };
 /* The face of a version entry (VerEntry.face): 0 the entry every arm of
    which runs its version, VF_PRIVATE one whose arms of a private version
-   raise, VF_PUBLIC one whose arms of a private or a protected version do */
-enum { VF_NONE, VF_PRIVATE, VF_PUBLIC };
+   raise, VF_PUBLIC one whose arms of a private or a protected version do;
+   VF_VCALL the entry of a variable-like call (`f`, no receiver, arguments
+   or parentheses: nt_vcall) on a chain that holds an undef, whose undef
+   arm raises CRuby's NameError for it, where the others raise
+   NoMethodError (ct_call_face) */
+enum { VF_NONE, VF_PRIVATE, VF_PUBLIC, VF_VCALL };
 /* The names call node id itself calls, into out: a call's or an attribute
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method
@@ -1182,6 +1186,12 @@ int cplan_block_arg(Compiler *c, int id, const char **cn);
    otherwise; anon may be NULL). Pure. */
 typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD } CplanMissing;
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
+/* Does an undef of `name` on class cls's chain stop call id, an instance
+   call on a cls receiver (comp_is_undeffed_in_chain), with no version entry
+   whose cells tell at run time whether the undef has run (its undef arm
+   raises: ver_entry_make)? The call then raises NoMethodError where it
+   is. */
+int cplan_undef_stops(Compiler *c, int id, int cls, const char *name);
 /* ---- CU_*: a builtin name CRuby answers that no route of the compiler took ----
    cplan_missing's mirror: that one proves CRuby raises for a program's
    name; this one reads CRuby's tables for a builtin's. Whether call id --
@@ -1338,14 +1348,17 @@ int cplan_presence_class(Compiler *c, int id);
    call of the name there would take, where the record cannot order the
    call against a version (a method body's def, which may run any number
    of times). Each cell holds one of the chain's versions while that
-   version is the method; only public ones unless include_all; and els,
+   version is the method, in the chain's order, nearest history first;
+   gone[k] where cell k's version is an undef, which while live says the
+   method is gone whatever a farther history holds; only public ones
+   unless include_all; and els,
    whether the entry's else arm, which the call runs while none is live,
    finds the method so (cplan_entry_finds). 1 with the
    cells in *out, 0 where the answer is the table's or the record's at the
-   point (cplan_cmethod_later), for a chain whose entry arms an undef or
-   a remove, and in a program that defines respond_to_missing?
+   point (cplan_cmethod_later), for a chain whose entry arms a remove, and
+   in a program that defines respond_to_missing?
    (respond_to_missing_defined). */
-typedef struct { int n; char cell[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; int els; } CplanCells;
+typedef struct { int n; char cell[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char gone[VER_MAX_ARMS]; int els; } CplanCells;
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out);
 /* The class whose own or inherited class methods class-side list call id lists, when the cells may answer it
    (a `C.singleton_methods` on a constant, list_cells_shape; *own for the `(false)` form); -1 for any other. The

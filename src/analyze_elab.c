@@ -3467,7 +3467,8 @@ static int lr_refl_has(char *const *l, int n, const char *name) {
    the table after all: where the side is not a class's own class side
    (cside 0), in a program that defines respond_to_missing?
    (respond_to_missing_defined), or where one of the name's versions
-   undefines or removes it (cplan_cmethod_presence declines them)? */
+   removes it (cplan_cmethod_presence declines a remove; an undef's cell
+   says the method is gone while it is live)? */
 static int lr_refl_cell_table(Compiler *c, const char *name, int cside) {
   LoadRecord *r = c->lrec;
   if (!lr_refl_has(r->refl_cell, r->nrefl_cell, name) && !(cside && r->refl_cell_list)) return 0;
@@ -3475,7 +3476,7 @@ static int lr_refl_cell_table(Compiler *c, const char *name, int cside) {
   const LrVers *x = lr_vers(r, name);
   for (int h = x ? x->first : -1; h >= 0; h = r->hist[h].nlink)
     for (int j = 0; j < r->hist[h].n; j++)
-      if (r->hist[h].v[j].kind == LR_UNDEF || r->hist[h].v[j].kind == LR_REMOVE) return 1;
+      if (r->hist[h].v[j].kind == LR_REMOVE) return 1;
   return 0;
 }
 /* the first version of history h, NULL for none */

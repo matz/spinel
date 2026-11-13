@@ -1044,12 +1044,15 @@ int attr_as_def(NodeTable *nt, int call, const char *base, int writer);   /* `de
 /* A dispatcher def over arms `<sel> == <val>` calling `callee` with the
    def's parameters passed on, and an else arm (disp_def_build,
    analyze_desugar.c); for that arm `raise NoMethodError.new(msg, :name,
-   [<args>], receiver: self)`, the args the def's ar parameters */
-typedef struct { const char *sel; int val; const char *callee; int hist; } DispArm;
+   [<args>], receiver: self)`, the args the def's ar parameters (with
+   vcall, the NameError a variable-like call raises: disp_raise_no_method's
+   vcall). An arm whose stmt is set (1 + a node) runs that statement in
+   place of the call: a version entry's arm for an undef raises there */
+typedef struct { const char *sel; int val; const char *callee; int hist, stmt; } DispArm;
 int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, int blk,
                    const DispArm *arm, int narm, int els);
-int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar);
-int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar);
+int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar, int vcall);
+int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_when_unspread(Compiler *c, int call);

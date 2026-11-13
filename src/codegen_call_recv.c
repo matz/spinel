@@ -13207,8 +13207,8 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       g_nsub_cast_node = sv_node; g_nsub_cast_type = sv_type;
       if (done) return 1;
     }
-    /* undef'd method: raise NoMethodError */
-    if (comp_is_undeffed_in_chain(c, cid, name)) {
+    /* undef'd method: raise NoMethodError (or the entry's undef arm does) */
+    if (cplan_undef_stops(c, id, cid, name)) {
       TyKind ret_ty = repr_of(c, id).as_ty;
       {
         char head[200]; snprintf(head, sizeof head, "undefined method '%s' for an instance of ", name);

@@ -579,6 +579,11 @@ int elab_in_kept_block(Compiler *c, int id);
    (elab_block_runs: a lazy chain's) or in an END body: it may run any time
    after its point too */
 int elab_runs_later(Compiler *c, int id);
+/* ...and whether node id is in a block whose run time the record does not
+   place for certain (elab_block_runs: any answer but ELAB_BLK_NOW, a
+   block kept, assumed to run now, given to a call the record cannot read,
+   or run later) or in an END body, with no def or lambda between */
+int elab_in_unplaced_block(Compiler *c, int id);
 void elab_window_open(Compiler *c, ElabWindow *w);
 /* the versions of cls's method `name` (singleton when sg) a call running
    over window w can reach, each once, into out[0..cap) (NULL: none): the

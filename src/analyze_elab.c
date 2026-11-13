@@ -5765,9 +5765,13 @@ static void lr_rta(Compiler *c) {
   t.ustart = t.key + n; t.ulist = t.ustart + nk + 2; t.stack = t.ulist + n; t.hnext = t.stack + n; t.hfirst = t.hnext + r->nhist; t.pend = t.hfirst + ncl;
   t.rq = t.hreach + r->nhist; t.sub = t.rq + r->nnames; t.ext = t.sub + ncl; t.seen = t.ext + ncl; t.rbits = t.seen + n;
   for (int i = 0; i < n; i++) {   /* each node's innermost def (the def itself is its outer one's) */
-    int p = par[i];
+    int p = par[i], o;
     while (p >= 0 && p < n && p > i && nt_kind(c->nt, p) != NK_DefNode) p = par[p];
     t.key[i] = p < 0 || p >= n ? -1 : nt_kind(c->nt, p) == NK_DefNode ? p : t.key[p];
+    /* (a node of a copy no file's root reaches, a method body a pass
+       cloned: the def of the node it copies, where the frame places it,
+       lr_plan_place) */
+    if (p < 0 && (o = nt_clone_source(c->nt, i)) >= 0 && o < i) t.key[i] = t.key[o];
   }
   for (int i = 0; i < n; i++)   /* grouped: a def's nodes; the others by their statement */
     t.key[i] = t.key[i] >= 0 ? r->nst + t.key[i] : r->at[i] >= 0 ? r->at[i] : -1;
@@ -6024,6 +6028,17 @@ int elab_runs_later(Compiler *c, int id) {
     if (k == NK_DefNode || k == NK_LambdaNode) return 0;
     if (k == NK_PostExecutionNode ||
         (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) == ELAB_BLK_LATER)) return 1;
+  }
+  return 0;
+}
+int elab_in_unplaced_block(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(c->nt, a);
+    if (k == NK_DefNode || k == NK_LambdaNode) return 0;
+    if (k == NK_PostExecutionNode ||
+        (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) != ELAB_BLK_NOW)) return 1;
   }
   return 0;
 }

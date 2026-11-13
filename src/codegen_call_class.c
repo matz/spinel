@@ -3326,7 +3326,7 @@ static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, co
   int self_t = -1;
   if (ctor_needs_self_defaults(c, initm, argc)) {
     self_t = ctor_alloc_decl(c, ci, &pdpre);
-    selftxt = ctor_self_text(c, ci, self_t);
+    selftxt = ctor_self_text(c, ci, initm, self_t);
     g_ctor_self = selftxt;
     g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
   }
@@ -3375,7 +3375,7 @@ static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, co
   g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
   free(selftxt);
   emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
-  emit_ctor_arm_case(c, ci, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, b);
+  emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, b);
   free(pdpre.p); free(ab.p);
 }
 
@@ -3713,7 +3713,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       int self_t = -1;
       if (ctor_needs_self_defaults(c, initm, argc)) {
         self_t = ctor_alloc_decl(c, ci, &pdpre);
-        selftxt = ctor_self_text(c, ci, self_t);
+        selftxt = ctor_self_text(c, ci, initm, self_t);
         g_ctor_self = selftxt;
         g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
       }
@@ -3758,7 +3758,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       free(selftxt);
       emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
       g_arm_member_fills = afill.p;
-      emit_ctor_arm_case(c, ci, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is ? -1 : argc, b);
+      emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is ? -1 : argc, b);
       g_arm_member_fills = NULL;
       free(pdpre.p); free(ab.p); free(afill.p);
     }
@@ -3849,7 +3849,12 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     if (emit_native_ctor(c, id, ci, argc, argv, b)) return 1;
     if (ci >= 0) {
       if (class_is_exc_subclass(c, ci)) {
-        int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+        int initm = cplan_new_initialize(c, id, ci, NULL);
+        /* (a version the constructor does not run: on the allocated object) */
+        if (initm >= 0 && !ctor_new_runs(c, ci, initm)) {
+          emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, b);
+          return 1;
+        }
         if (initm >= 0) {
           /* user initialize: call the generated sp_ClassName_new(args) constructor */
           buf_printf(b, "sp_%s_new(", c->classes[ci].c_name);
@@ -3915,8 +3920,12 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
            `NS::Reg.new { ... }` on an `initialize(o = nil, &blk)` were calls
            with too few arguments (a plain `Reg.new` never came this way). */
         if (emit_or_take_back(c, id, b, emit_class_new_call)) return 1;
+        int initm = cplan_new_initialize(c, id, ci, NULL);
+        if (initm >= 0 && !ctor_new_runs(c, ci, initm)) {
+          emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, b);
+          return 1;
+        }
         buf_printf(b, "sp_%s_new(", c->classes[ci].c_name);
-        int initm = comp_method_in_chain(c, ci, "initialize", NULL);
         if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
         if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : "", b);
         buf_puts(b, ")");

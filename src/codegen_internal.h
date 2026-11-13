@@ -2287,6 +2287,9 @@ int each_split_applies(Compiler *c, int id);
 void emit_penum_kind_test(Buf *b, int tv);
 void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b);
 void emit_pool_fwd(Compiler *c, int cid);
+/* a body written to g_procs ahead of the constructors begins and ends (emit_pool_fwd) */
+void ahead_body_enter(Compiler *c);
+void ahead_body_leave(Compiler *c);
 void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b);
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out);
 int declare_default_locals(Compiler *c, Scope *m, int dnode);

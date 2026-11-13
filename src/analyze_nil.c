@@ -1667,7 +1667,7 @@ static void nf_calls(NF *f, int **yields, int *nyields) {
         Scope *s = comp_scope_of(c, id);
         if (s && s->is_cmethod && s->class_id >= 0) k = s->class_id;
       }
-      if (k >= 0) mi = comp_method_in_chain(c, k, "initialize", NULL);
+      if (k >= 0) mi = cplan_new_initialize(c, id, k, NULL);
       dispatch = CP_DIRECT;
     }
     if (mi >= 0) {

@@ -1949,6 +1949,7 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
    leaves the table without it (comp_is_undeffed_in_chain): the call is
    lowered as a call of `name`, which binds through the table, so that call
    is not the version proved. ml may be NULL. */
+static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m);
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
   *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
@@ -1957,6 +1958,100 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
     *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNASKED, .def_class = -1 };
     return -1;
   }
+  return ct_implied_at(c, id, cls, name, m);
+}
+/* The answers of cplan_new_initialize, kept by (site, class) for the
+   record, the method table and the version entries as they stand
+   (elab_stamp, nscopes, nclasses, nver_entries), and dropped with the
+   version memos (ver_memo_drop: a fact the windows read changed, a block
+   newly kept): every reader of a site asks it, and each ask read the
+   site's window from the record. */
+struct NewSites { struct NewSiteSlot { int id, ci, vi; MethodLookup m; } *slot; int cap, used, nscopes, ncls, nent; ElabStamp stamp; };
+void new_sites_free(Compiler *c) {
+  if (!c->new_sites) return;
+  free(c->new_sites->slot);
+  free(c->new_sites);
+  c->new_sites = NULL;
+}
+static unsigned new_sites_hash(int id, int ci) {
+  return ver_mix((unsigned)id * 0x9E3779B1u + (unsigned)ci * 0x85EBCA6Bu);
+}
+/* (the slot of (id, ci): the kept answer, or the empty slot it goes in) */
+static struct NewSiteSlot *new_sites_slot(Compiler *c, int id, int ci) {
+  struct NewSites *m = c->new_sites;
+  if (m && (!elab_stamp_same(m->stamp, elab_stamp(c)) || m->nscopes != c->nscopes || m->ncls != c->nclasses || m->nent != c->nver_entries)) {
+    new_sites_free(c);
+    m = NULL;
+  }
+  if (!m) {
+    if (!(c->new_sites = m = calloc(1, sizeof *m))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    m->stamp = elab_stamp(c);
+    m->nscopes = c->nscopes;
+    m->ncls = c->nclasses;
+    m->nent = c->nver_entries;
+  }
+  if (2 * (m->used + 1) > m->cap) {   /* grown: every kept answer moves */
+    struct NewSiteSlot *old = m->slot;
+    int ocap = m->cap;
+    m->cap = ocap ? 2 * ocap : 256;
+    if (!(m->slot = calloc((size_t)m->cap, sizeof *m->slot))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < m->cap; i++) m->slot[i].id = -1;
+    for (int i = 0; i < ocap; i++) {
+      if (old[i].id < 0) continue;
+      int j = (int)(new_sites_hash(old[i].id, old[i].ci) & (unsigned)(m->cap - 1));
+      while (m->slot[j].id >= 0) j = (j + 1) & (m->cap - 1);
+      m->slot[j] = old[i];
+    }
+    free(old);
+  }
+  int j = (int)(new_sites_hash(id, ci) & (unsigned)(m->cap - 1));
+  while (m->slot[j].id >= 0 && (m->slot[j].id != id || m->slot[j].ci != ci)) j = (j + 1) & (m->cap - 1);
+  return &m->slot[j];
+}
+/* See call_plan.h. Class#new's initialize: the window's version (the
+   steps of cplan_implied_target past its row); an entry is not taken, as
+   none is made for initialize (ver_named_one). A site in a block whose run
+   time the record does not place keeps the table's (elab_in_unplaced_block). */
+int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
+  MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
+  int tm = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
+  *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = -1 };
+  if (tm < 0 || id < 0 || comp_is_undeffed_in_chain(c, ci, "initialize")) return tm;
+  /* (one version on the chain: the table's, the only one a site meets) */
+  int first = 0, body = 0, late = 0;
+  if (ver_chain_count(c, ci, 0, "initialize", &first, &body, &late) == 1) return tm;
+  struct NewSiteSlot *e = new_sites_slot(c, id, ci);
+  if (e->id >= 0) { *m = e->m; return e->vi; }
+  /* (a site in a block the record does not place, kept, assumed or given
+     to a call it cannot read, may run on either side of a reopening: it
+     cannot tell, and keeps the table's) */
+  int vi = -1;
+  if (elab_in_unplaced_block(c, id)) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNPLACED, .def_class = -1 };
+  else vi = ct_implied_at(c, id, ci, "initialize", m);
+  if (vi < 0 || m->kind != ML_METHOD) {
+    if (m->kind != ML_TABLE) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_MANY, .def_class = -1 };
+    vi = tm;
+  }
+  /* (asking may have grown the table or rebuilt the record: the slot again) */
+  e = new_sites_slot(c, id, ci);
+  if (e->id < 0) { *e = (struct NewSiteSlot){ id, ci, vi, *m }; c->new_sites->used++; }
+  return vi;
+}
+/* See call_plan.h. The class as the raise's lowering names it
+   (emit_call_raise_arms): the constant's class, by name. */
+int cplan_raise_initialize(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (!cplan_kernel_raise(c, id)) return -1;
+  int args = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+  NodeKind k = ac > 0 ? nt_kind(nt, av[0]) : NK_NONE;
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
+  const char *cn = const_node_match_class_name(c, av[0]);
+  int xc = comp_class_index(c, cn ? cn : nt_str(nt, av[0], "name"));
+  return xc >= 0 && class_is_exc_subclass(c, xc) ? cplan_new_initialize(c, id, xc, NULL) : -1;
+}
+/* The window step of cplan_implied_target, for a call node id makes */
+static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m) {
   const LrDef *ds[VER_MAX_ARMS];
   int framed = elab_plan_enter(c, id), vi = -1, n = ct_every_span(c, id, cls, name, 0, ds, VER_MAX_ARMS);
   if (n == 1) {
@@ -1995,6 +2090,10 @@ static int new_inits_list(Compiler *c, int ci, int *out, int *whole) {
   if (nh < 0) *whole = 0;
   if (nh <= 1) return n;
   int ns = elab_instance_span(c, ci, "initialize", ds, VER_MAX_ARMS), all = ns < 0 || ns > VER_MAX_ARMS;
+  /* (an interval of the span with no version, after a removal: an instance
+     made there runs no initialize of the program's) */
+  for (int j = 0; !all && j < ns; j++)
+    if (!ds[j]) *whole = 0;
   for (int i = 0; i < nh; i++) {
     const LrDef *d = hv[i].v;
     int met = all;
@@ -4440,12 +4539,13 @@ static int cplan_new_class(Compiler *c, int id, int *own) {
 
 /* The initialize methods a builtin `new` runs that builds class ci, or with
    own an instance of ci or of any subclass (into out, at most CPT_MAX;
-   CPT_UNKNOWN past it). */
-static int ct_class_initializers(Compiler *c, int ci, int own, int *out) {
+   CPT_UNKNOWN past it): those the plan answers where the construction id
+   runs (cplan_new_initialize), the table's for id -1. */
+static int ct_class_initializers(Compiler *c, int id, int ci, int own, int *out) {
   int n = 0;
   for (int k = ci; ci >= 0 && k < c->nclasses; k++) {
     if (k != ci && (!own || !is_descendant(c, k, ci))) continue;
-    int mi = comp_method_in_chain(c, k, "initialize", NULL), dup = 0;
+    int mi = cplan_new_initialize(c, id, k, NULL), dup = 0;
     for (int j = 0; j < n; j++) dup |= out[j] == mi;
     if (mi < 0 || dup) continue;
     if (n == CPT_MAX) return CPT_UNKNOWN;
@@ -4468,7 +4568,7 @@ static int ct_class_initializers(Compiler *c, int ci, int own, int *out) {
 static int ct_new_initializers(Compiler *c, int id, int *out) {
   const NodeTable *nt = c->nt;
   if (!is_new_name(nt_str(nt, id, "name"))) return -2;
-  int own, ci = cplan_new_class(c, id, &own), n = ci >= 0 ? ct_class_initializers(c, ci, own, out) : 0;
+  int own, ci = cplan_new_class(c, id, &own), n = ci >= 0 ? ct_class_initializers(c, id, ci, own, out) : 0;
   int r = nt_ref(nt, id, "receiver");
   if (ci >= 0 || r < 0) return ci >= 0 ? n : -2;
   NodeKind k = nt_kind(nt, r);
@@ -4787,7 +4887,7 @@ static int ct_super_new_initializers(Compiler *c, int id, int *out) {
   if (cplan_super_target(c, id, s, NULL) >= 0) return -2;
   int mod = comp_class_is_module(c, &c->classes[s->class_id]);
   if (mod ? !s->is_cmethod : comp_super_shadow(c, comp_super_site(c, s)) != NULL) return CPT_UNKNOWN;
-  return !mod && s->is_cmethod ? ct_class_initializers(c, s->class_id, 1, out) : -2;
+  return !mod && s->is_cmethod ? ct_class_initializers(c, -1, s->class_id, 1, out) : -2;
 }
 /* A `new` call id that a program `new` answers for some class its
    receiver may be: those methods (its cplan_targets), and the initialize
@@ -4818,7 +4918,7 @@ static int ct_mixed_new_entries(Compiler *c, int id, int *out) {
   for (int i = 0; i < ncls; i++) {
     int k = cls[i], init[CPT_MAX];
     if (comp_class_is_module(c, &c->classes[k]) || comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
-    int ni = ct_class_initializers(c, k, 0, init);
+    int ni = ct_class_initializers(c, -1, k, 0, init);
     if (ni < 0) return CPT_UNKNOWN;
     for (int j = 0; j < ni; j++) {
       int dup = 0;
@@ -9180,6 +9280,7 @@ void ver_memo_drop(Compiler *c) {
   c->ver_memo_cap = c->ver_memo_n = 0;
   free(c->guard_memo.at); free(c->guard_memo.to);
   c->guard_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
+  new_sites_free(c);
 }
 static int ver_late_key_cmp(const struct VerLate *x, const struct VerLate *y) {
   int d = strcmp(x->name, y->name);

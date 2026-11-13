@@ -1625,7 +1625,7 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
   if (target && !x->unplaced) lr_settle_add(x->r, SET_ALIAS, node, cls, sg, may, vis, name);
   if (ov >= 0) vis = ov;
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
-  lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->unplaced && !x->body, .scope = sc, .body = x->body });
+  lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->body ? 0 : x->unplaced, .scope = sc, .body = x->body });
   lr_event(x, cls, sg, name, kind, node, vis);
   if (!sg && bvis == BVIS_MODULE_FUNCTION && lr_mf_copies(kind, target)) {
     lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = x->unplaced, .scope = sc });
@@ -2906,6 +2906,61 @@ static void lr_check_held(Compiler *c) {
   }
 }
 
+/* The method table a visibility word names (lr_unplaced_words): its
+   receiver's (`Object.send(:private, :m)`), else that of the class or
+   module body it is written in, main's outside every one; below LR_MAIN
+   for a singleton class body's, or a receiver the record holds no class
+   of */
+static int lr_word_table(Compiler *c, const int *par, int n, int node) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, node, "receiver");
+  if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) return lr_class_ref_at(c, recv, NULL);
+  for (int p = node < n ? par[node] : -1; p >= 0 && p < n; p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_ClassNode || k == NK_ModuleNode) return elab_header_class(c, p, NULL, NULL);
+    if (k == NK_SingletonClassNode) return LR_UNKNOWN_CLASS;
+  }
+  return LR_MAIN;
+}
+static int lr_hist_has_node(LoadRecord *r, int cls, const char *name, int node) {
+  const LrHist *h = lr_hist(r, cls, 0, name, 0);
+  for (int i = 0; h && i < h->n; i++)
+    if (h->v[i].node == node) return 1;
+  return 0;
+}
+/* The visibility words of the program no walk records: one in a body
+   that runs later than its statement (at_exit's, END's, a Proc's or a
+   lambda's, a thread's, a trap's, a method's), and one sent
+   (`send(:public, :m)`), wherever it stands. CRuby runs such a word at a
+   time the record does not order (the program may exit before an
+   at_exit body, or run it early at an `exit`), so the record holds it at
+   no point a query sees, nor as the load ends (LR_UNPLACED_LATER), on the
+   table it names (lr_word_table): the arms that read a version's
+   visibility then know there is a change they cannot place
+   (lr_version_vis). */
+static void lr_unplaced_words(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  LoadRecord *r = c->lrec;
+  const int *par = r->plan_depth ? r->plan_par : r->up;
+  ElabRec x = { c, r, .unplaced = LR_UNPLACED_LATER };
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = id < r->n ? nt_str(nt, id, "name") : NULL;
+    int skip = 0, an = nm ? nt_ref(nt, id, "arguments") : -1, ac = 0;
+    const char *sent = nm && is_send_family(nm) ? call_sent_name(nt, id, &skip) : NULL;
+    int bvis = visibility_of_name(sent ? sent : nm), cls = bvis ? lr_word_table(c, par, r->n, id) : LR_UNKNOWN_CLASS;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+    if (cls < LR_MAIN || (!sent && !(r->bits[id] & LR_LATE))) continue;
+    for (int i = skip; i < ac; i++) {
+      int en = 1;
+      const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];
+      for (int k = 0; k < en; k++) {
+        const char *w = vis_arg_name(nt, ev[k]);
+        if (w && !lr_hist_has_node(r, cls, w, id)) lr_method(&x, cls, 0, w, id, LR_VIS, bvis, 1, NULL);
+      }
+    }
+  }
+}
+
 /* A class or module body that is no statement of the load phase: one in
    a lambda or in a block kept to run later (`l = -> { class G; private
    :foo; end }`), or in an expression. It runs when the program runs that
@@ -2968,6 +3023,7 @@ static void lr_record_unplaced(Compiler *c) {
     lr_body_defs(c, ci, body, d);
   }
   lr_body_versions(c);
+  lr_unplaced_words(c);
 }
 
 /* The record dropped and made again over the walked statements */
@@ -4175,10 +4231,12 @@ static int lr_hist_runs_again(Compiler *c, const LrHist *h, LoadPoint p, int ski
    visibility word (`private :m`), whose change they do not hold yet, or an
    alias that makes no method of the program's (of a builtin's method, or of
    one nothing answers: no version, since the builtin is not one)? The ask of
-   which entry is live then stays as it was. */
+   which entry is live then stays as it was. A word that runs at a time the
+   record does not order (LR_UNPLACED_LATER) is no entry of the load's: the
+   arms keep the defs' visibility for it (lr_version_vis). */
 static int lr_hist_unarmed(const LrHist *h) {
   for (int i = 0; h && i < h->n; i++)
-    if (h->v[i].kind == LR_VIS || h->v[i].absent || (h->v[i].kind == LR_ALIAS && h->v[i].scope <= 0)) return 1;
+    if ((h->v[i].kind == LR_VIS && h->v[i].unplaced != LR_UNPLACED_LATER) || h->v[i].absent || (h->v[i].kind == LR_ALIAS && h->v[i].scope <= 0)) return 1;
   return 0;
 }
 
@@ -4650,6 +4708,83 @@ int elab_main_object_one_entry(Compiler *c, const char *name) {
   const LrHist *h = r && r->recorded ? lr_hist(r, LR_MAIN, 0, name, 0) : NULL;
   const LrHist *t = lr_table_twin(c, h);
   return h && lr_first_version(h) && t && lr_first_version(t);
+}
+/* May call id, of history h's name, meet version v (whose def is at pv)
+   through the arms before the visibility word at pw runs? Not where it
+   runs only before the def, or at a point where the record knows the live
+   version (it takes that version, with its visibility there), or first
+   after the word (elab_point_from: a call in a method body from its def's
+   statement). A call made since the record's map (a dynamic send's arm,
+   made in the fixpoint and asked while the plan holds the map) has no
+   point yet: it may, and *unmapped says so. */
+static int lr_vis_call_ahead(Compiler *c, const LrHist *h, const LrHist *t, const LrDef *v, LoadPoint pv, LoadPoint pw, int id, int *unmapped) {
+  if (id >= elab_fresh(c)->n) return *unmapped = 1;
+  LoadPoint q = elab_point_of(c, id);
+  const LrDef *at = NULL;
+  if (q.region >= 0 && ((elab_cmp(q, pv) == PROG_BEFORE && !lr_runs_again(c, v->node, q)) || lr_own(c, h, t, q, 0, 0, &at) == ELAB_YES))
+    return 0;
+  return elab_cmp(pw, elab_point_from(c, id)) != PROG_BEFORE;
+}
+/* The visibility a version's face arm takes (elab_version_vis), for
+   version v of history h: its def's, or that of the last visibility word
+   that runs on it, where the record proves the word runs, on it, ahead of
+   every call of the name that may meet it. A word of h or of its twin t
+   (main's and Object's histories of a name are one entry of Object's
+   table) runs on v where v is live at its point (lr_own past the words);
+   it is proved where it runs once, surely and whole, at its point, and
+   every call with a receiver, or send of the name by a literal Symbol,
+   that may meet v through the arms first runs after the word
+   (lr_vis_call_ahead). A send whose name the record cannot read is asked
+   through its arms, the calls of each name the fixpoint makes for it
+   (desugar_dynamic_send), once they are made.
+   Anything else (a word that may run, in a loop, a branch, a method body,
+   after a statement that may raise; a call that may run between the def
+   and the word; a word whose version the record cannot tell) leaves the
+   def's, as the arms took it before: telling those apart takes a run-time
+   visibility. */
+static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unmapped) {
+  const NodeTable *nt = c->nt;
+  const LrHist *t = lr_table_twin(c, h);
+  LoadPoint pv = elab_point_of(c, v->node), pw = { -1, -1, -1 };
+  int vis = v->vis, changed = 0;
+  if (pv.region < 0 || v->body || v->unplaced) return v->vis;
+  for (int k = 0; k < 2; k++)
+    for (int i = 0, n = k ? (t ? t->n : 0) : h->n; i < n; i++) {
+      const LrDef *w = k ? &t->v[i] : &h->v[i], *at = NULL;
+      if (w->kind != LR_VIS) continue;
+      LoadPoint p = elab_point_of(c, w->node);
+      int o = w->unplaced || w->body || p.region < 0 ? ELAB_UNKNOWN : lr_own(c, h, t, p, 0, 0, &at);
+      if (o == ELAB_NO || o == LR_STOP || (o == ELAB_YES && at != v)) continue;   /* (it runs on another version, or on none) */
+      if (o != ELAB_YES || w->may || elab_point_partial(c, w->node)) return v->vis;
+      changed |= w->vis != v->vis;
+      if (pw.region < 0 || elab_cmp(pw, p) == PROG_BEFORE) pw = p, vis = w->vis;
+    }
+  if (!changed) return v->vis;
+  for (int id = an_calls_named_first(c, h->name); id >= 0; id = an_calls_named_next(id))
+    if (nt_kind(nt, id) == NK_CallNode && sp_streq(nt_str(nt, id, "name"), h->name) &&
+        (nt_ref(nt, id, "receiver") >= 0 || nt_str(nt, id, "vis_enforce")) && lr_vis_call_ahead(c, h, t, v, pv, pw, id, unmapped))
+      return v->vis;
+  /* (and a send of the name by a literal Symbol, `x.public_send(:m)`, as
+     lr_readers reads one) */
+  int *sends = NULL, ns = an_calls_named_if(c, is_send_family, nt->count, &sends), ahead = 0;
+  for (int k = 0; k < ns && !ahead; k++) {
+    const char *by = call_sent_name(nt, sends[k], NULL);
+    ahead = by && sp_streq(by, h->name) && lr_vis_call_ahead(c, h, t, v, pv, pw, sends[k], unmapped);
+  }
+  free(sends);
+  return ahead ? v->vis : vis;
+}
+int elab_version_vis(Compiler *c, const ElabVersion *ev) {
+  LoadRecord *r = c->lrec;
+  LrHist *h = r && r->recorded && ev->hist >= 0 && ev->hist < r->nhist ? &r->hist[ev->hist] : NULL;
+  if (!h || ev->v < h->v || ev->v >= h->v + h->n) return ev->v->vis;
+  LrDef *v = &h->v[ev->v - h->v];
+  if (v->arm_vis) return v->arm_vis - 1;
+  /* (an answer that met a call with no point yet is the def's for now,
+     and asked again once the map places the call) */
+  int unmapped = 0, vis = lr_version_vis(c, h, v, &unmapped);
+  if (!unmapped) v->arm_vis = (unsigned char)(vis + 1);
+  return vis;
 }
 int elab_main_history_marked(Compiler *c, const char *name, const char *mark) {
   ElabVersion vs[32];
@@ -9087,7 +9222,7 @@ int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, Lo
    (lr_stmt_applied, at v's point now) */
 static int lr_applied(Compiler *c, const LrDef *v) {
   LoadRecord *r = elab_fresh(c);
-  if (v->absent) return 0;
+  if (v->absent || v->unplaced == LR_UNPLACED_LATER) return 0;
   return lr_stmt_applied(lr_stmt_of(r, v->node), v->unplaced, v->may);
 }
 

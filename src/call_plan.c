@@ -2420,10 +2420,12 @@ static int cplan_mm_method(Compiler *c, int ci, int cmethod);
 static int ct_flags_face(unsigned flags) {
   return !(flags & CT_PUBLIC) ? VF_NONE : flags & CT_PROTECTED ? VF_PUBLIC : VF_PRIVATE;
 }
-/* Are the versions of name on rcls's instance side, at definition, all
-   closed to a call of face (1, *vis the first one's visibility), all open
-   (0), or some of each (-1)? -2 where they cannot be told apart: an undef,
-   no version, or one that is not Object's or the top level's. */
+/* Are the versions of name on rcls's instance side, each with the
+   visibility its arm takes (elab_version_vis: its def's, or a visibility
+   word's the record proves), all closed to a call of face (1, *vis the
+   first one's visibility), all open (0), or some of each (-1)? -2 where
+   they cannot be told apart: an undef, no version, or one that is not
+   Object's or the top level's. */
 static int ver_arms_closed(Compiler *c, int rcls, const char *name, int face, int *vis) {
   int closed = 0, open = 0, oc = comp_core_class(c, CORE_OBJECT);
   ElabVersion vs[VER_MAX_ARMS];
@@ -2435,21 +2437,22 @@ static int ver_arms_closed(Compiler *c, int rcls, const char *name, int face, in
        self cannot be passed to) */
     int sc = vs[i].v->scope, ci = sc > 0 && sc < c->nscopes ? c->scopes[sc].class_id : -2;
     if (vs[i].v->kind == LR_UNDEF || (ci != -1 && ci != oc)) return -2;
-    if (ver_closed_to(vs[i].v->vis, face)) {
-      if (!closed && vis) *vis = vs[i].v->vis;
+    int v = elab_version_vis(c, &vs[i]);
+    if (ver_closed_to(v, face)) {
+      if (!closed && vis) *vis = v;
       closed = 1;
     }
     else open = 1;
   }
   return !closed && !open ? -2 : closed && open ? -1 : closed;
 }
-/* The visibility at definition of the version of name whose def is node
-   def on rcls's instance side, -1 for none. */
+/* The visibility the arm of the version of name whose def is node def
+   on rcls's instance side takes (elab_version_vis), -1 for none. */
 static int ver_def_vis(Compiler *c, int rcls, const char *name, int def) {
   ElabVersion vs[VER_MAX_ARMS];
   int nv = elab_chain_versions(c, rcls, 0, name, vs, VER_MAX_ARMS);
   for (int i = 0; i < nv; i++)
-    if (vs[i].v->node == def) return vs[i].v->vis;
+    if (vs[i].v->node == def) return elab_version_vis(c, &vs[i]);
   return -1;
 }
 /* The face of the entry a call asked with flags binds on rcls's instance
@@ -7900,7 +7903,8 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
     vis &= vs[i].v->vis == vs[0].v->vis;
     ver_cell_name(vs[i].cell, sel[na]);
     arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].cell + 1 };
-    raise[na] = face && ver_closed_to(vs[i].v->vis, face) ? vs[i].v->vis : 0;
+    int fv = face ? elab_version_vis(c, &vs[i]) : SP_VIS_PUBLIC;
+    raise[na] = ver_closed_to(fv, face) ? fv : 0;
     to[na++] = s;
     if (nt_int(c->nt, c->scopes[s].def_node, "concat_builtin_version", 0)) fallback = s;
     same &= ver_same_source(c->nt, c->scopes[s].def_node, c->scopes[mi].def_node);

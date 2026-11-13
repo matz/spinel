@@ -3347,6 +3347,10 @@ static int an_reopen_head_call(Compiler *c, int id, int recv, TyKind *out) {
   TyKind hrt = infer_type(c, recv);
   if (hrt == TY_POLY || hrt == TY_UNKNOWN || cplan_builtin_call(c, id)) return 0;
   const CallPlan p = cplan_user_fresh(c, id);
+  /* (every answer below is a method the plan binds: with none, the closed
+     ask is not made, the walk of the receiver's roots it takes for each
+     typed call) */
+  if (p.mi < 0) return 0;
   /* (a method closed to the call binds none: the call raises) */
   if (cplan_root_closed(c, id, NULL) >= 0) return 0;
   if (p.mi >= 0 && p.via == UC_REOPEN && hrt == TY_ENUMERATOR) *out = an_user_call(c, id, p.mi, p.via, p.owner_ci);

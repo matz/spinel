@@ -18112,8 +18112,13 @@ static char *oa_walk_disc(Compiler *c, int nc) {
       if (cn && nt_ref(nt, call, "receiver") < 0 && (is_attr_decl_reader(cn) || is_attr_decl_writer(cn))) mn = NULL;
     }
     else if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+      /* as a call is: a `super` whose own value its place throws away reads
+         nothing, and one ending a method reads only where that method is
+         read (OA_READ_METHOD). Counted wherever it stood, the `super(n)` of
+         one class's initialize had every initialize's last walk hand its
+         Array on, and those Arrays stayed boxed. */
       Scope *ssc = comp_scope_of(c, id);
-      mn = ssc ? ssc->name : NULL;
+      if (!walk_disc[id] && !is_tail[id] && !oa_value_dropped(c, id)) mn = ssc ? ssc->name : NULL;
     }
     else if (k == NK_CallOrWriteNode || k == NK_CallAndWriteNode ||
              (nt_kind(nt, id) == NK_CallOperatorWriteNode))
@@ -18149,10 +18154,13 @@ static char *oa_walk_disc(Compiler *c, int nc) {
   }
   qsort(named, (size_t)nnamed, sizeof *named, oa_named_cmp);
   /* m_read[s]: something reads method s's value. read.key is the worklist:
-     a method read through a name adds its tail call's name at the end. */
+     a method read through a name adds its tail call's name at the end, and
+     a tail `super` the method's own name (the super method answers to it) */
   char *m_read = (char *)calloc((size_t)ns, 1);
   #define OA_READ_METHOD(s) do { int _s = (s); if (!m_read[_s]) { m_read[_s] = 1; int _t = tail[_s]; \
-      const char *_cn = !walk_disc[_t] && nt_kind(nt, _t) == NK_CallNode ? nt_str(nt, _t, "name") : NULL; \
+      NodeKind _tk = nt_kind(nt, _t); \
+      const char *_cn = walk_disc[_t] ? NULL : _tk == NK_CallNode ? nt_str(nt, _t, "name") : \
+                        _tk == NK_SuperNode || _tk == NK_ForwardingSuperNode ? c->scopes[_s].name : NULL; \
       if (_cn && !anh_has(&read, _cn)) anh_add(&read, _cn); } } while (0)
   for (int s = 0; s < c->nscopes; s++)
     if (tail[s] >= 0 && (all || oa_entered_unseen(&c->scopes[s]))) OA_READ_METHOD(s);

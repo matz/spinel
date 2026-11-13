@@ -163,7 +163,7 @@ PROGRAMS.each do |name, src|
   path = File.join(dir, name)
   File.write(path, src)
   puts "== #{name}"
-  puts `bin/spinel --dump-order=all #{path}`
+  puts IO.popen(["bin/spinel", "--dump-order=all", path], &:read)
   File.delete(path)
 end
 Dir.rmdir(dir)

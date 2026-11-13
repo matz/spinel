@@ -3047,7 +3047,8 @@ static int cf_any_new(CF *f, int v, const int *argv, int argc, int blk) {
   int plain = blk < 0 || nt_kind(nt, blk) == NK_BlockNode;
   for (int a = 0; a < argc && plain; a++) {
     NodeKind ak = nt_kind(nt, argv[a]);
-    plain = ak != NK_SplatNode && ak != NK_KeywordHashNode && ak != NK_BlockArgumentNode;
+    plain = ak != NK_SplatNode && ak != NK_KeywordHashNode && ak != NK_BlockArgumentNode &&
+            ak != NK_ForwardingArgumentsNode;
   }
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_class_is_module(c, &c->classes[k])) continue;
@@ -3995,10 +3996,12 @@ static int cf_subclass_test(CF *f, int pred, int stmts) {
   if (x < 0 || nt_kind(nt, x) != NK_LocalVariableReadNode) return -1;
   const char *xn = nt_str(nt, x, "name");
   if (!xn || c->has_anonymous_classes || f->nanon || c->n_cext_extensions) return -1;
-  /* (the predicate: a conjunct at a time, down the `&&` chain) */
+  /* (the predicate: a conjunct at a time, down the `&&` chain, left to
+     right; a conjunct after the test runs after it, and one with an effect
+     (a call, which a closure that rebinds x may answer) voids it) */
   int stack[32], ns = 0, test = -1, strict = 1;
   stack[ns++] = pred;
-  while (ns > 0 && test < 0) {
+  while (ns > 0) {
     int p = stack[--ns];
     NodeKind pk = nt_kind(nt, p);
     if (pk == NK_ParenthesesNode) {
@@ -4009,6 +4012,10 @@ static int cf_subclass_test(CF *f, int pred, int stmts) {
     }
     if (pk == NK_AndNode) {
       if (ns < 31) { stack[ns++] = nt_ref(nt, p, "right"); stack[ns++] = nt_ref(nt, p, "left"); }
+      continue;
+    }
+    if (test >= 0) {
+      if (subtree_has_side_effect(c, p)) return -1;
       continue;
     }
     const char *cn = pk == NK_CallNode ? nt_str(nt, p, "name") : NULL;
@@ -5362,6 +5369,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     for (int v = 0; v < nt->count; v++) c->cls_fact[v] = cf_set_of(&f, v);
     c->cls_fact_n = nt->count;
     c->cls_pool = f.pool; c->ncls_pool = f.npool;
+    c->cls_fact_ncls = c->nclasses;
 #ifdef SP_EMIT_TRACE
     emit_trace_sets(c, f.closed ? "closed" : f.directed ? "open" : "unified");
 #endif
@@ -5721,7 +5729,11 @@ int cls_fact_excludes_class_value(Compiler *c, int recv, int k) {
      nor one a builtin's answer may be a Class object in, bc, where a Class
      object of the program's handed to the runtime comes back, #10303) */
   if ((s->n == 0 && !s->bv && !s->os) || s->bc) return 0;
-  return !cls_set_has(s, k + c->nclasses);
+  /* (a Class object's member is counted from the class table the pass
+     saw: a class made since, the top level's ivar holder, shifts
+     c->nclasses past it; one made since is in no set) */
+  if (k >= c->cls_fact_ncls) return 0;
+  return !cls_set_has(s, k + c->cls_fact_ncls);
 }
 
 /* See compiler.h. */

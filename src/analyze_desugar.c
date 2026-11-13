@@ -8059,11 +8059,14 @@ static int dsend_poly_builtin_classes(Compiler *c, const char **out, int cap) {
 }
 
 /* Is `name` a method only classes the receiver recv never holds define
-   (cls_fact_excludes), one no builtin answers? */
+   (cls_fact_excludes), one no builtin answers, and no class it may hold
+   answers through method_missing? */
 static int dsend_name_only_outside(Compiler *c, int recv, const char *name) {
   int lo = 0, hi = -1;
   if (builtin_recv_arity_span(name, &lo, &hi) || comp_object_defines(c, name)) return 0;
   int any = 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (!cls_fact_excludes(c, recv, k) && comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_method_in_class(c, k, name) < 0) continue;
     if (!cls_fact_excludes(c, recv, k)) return 0;

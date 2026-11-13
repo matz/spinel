@@ -8750,10 +8750,9 @@ static int emit_poly_builtin_default_spread(Compiler *c, int id, int recv, const
   free(arms.p);
   return 1;
 }
-/* Set while a count's arm of a builtin's generic entry is emitted
-   (bi_generic_fn): the answer the analysis recorded for the call is the
-   splatted form's, so each count asks its own. */
-static int g_bi_count_arm = 0;
+/* (g_arm.count_arm, set while a count's arm of a builtin's generic entry
+   is emitted, bi_generic_fn: the answer the analysis recorded for the call
+   is the splatted form's, so each count asks its own.) */
 static int emit_poly_builtin_default_generic(Compiler *c, int id, int recv, const char *name,
                                              int argc, const int *argv, const int *atmp,
                                              const TyKind *atmp_ty, TyKind ret, int tv, int tr,
@@ -9056,7 +9055,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
                      !poly_arg_held_oint(c, argv[a], atmp_ty[a]))))
       return 0;
   }
-  TyKind bt = (c->poly_builtin_ty && id < c->node_cap && !g_bi_count_arm && !nil_fwd)
+  TyKind bt = (c->poly_builtin_ty && id < c->node_cap && !g_arm.count_arm && !nil_fwd)
                 ? c->poly_builtin_ty[id] : TY_UNKNOWN;
   /* `to_s` / `inspect` answer a String on every builtin receiver, with or
      without an argument (Integer#to_s(base)); the analysis types them by the
@@ -9147,8 +9146,16 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
       buf_printf(&ib, " : sp_String_new_shared(%s))", nb->p);
     }
     else if (wrap_h && !is_raise) buf_printf(&ib, "SP_STR_HDL(%s)", nb->p);
-    /* a generic entry's arm typed boxed: boxed by the C type it has */
-    else if (g_bi_count_arm && ret == TY_POLY && bt == TY_POLY && !is_raise) buf_printf(&ib, "SP_BI_BOX(%s)", nb->p);
+    /* an arm typed boxed (a generic entry's, or the builtin arm of a send
+       split, whose call joins the top-level def's answer) is boxed by the C
+       type it has */
+    else if ((g_arm.count_arm || g_arm.send_split == id) && ret == TY_POLY && bt == TY_POLY && !is_raise) {
+      /* a name every builtin row of answers nil (IO#puts, #print): the
+         emitter's value form is a placeholder Integer, so the arm answers
+         nil after running it */
+      if (g_arm.send_split == id && bop_send_answers_nil(name)) buf_printf(&ib, "({ (void)(%s); sp_box_nil(); })", nb->p);
+      else buf_printf(&ib, "SP_BI_BOX(%s)", nb->p);
+    }
     else buf_puts(&ib, nb->p);
   }
   free(nb->p); free(nb);
@@ -9653,11 +9660,11 @@ static int bi_generic_fn(Compiler *c, int id, const char *name) {
     TyKind ety[BI_GENERIC_MAX];
     for (int k = 0; k < BI_GENERIC_MAX; k++) { eatmp[k] = tv; ety[k] = TY_POLY; }
     Buf one; memset(&one, 0, sizeof one);
-    int sv = g_bi_count_arm;
-    g_bi_count_arm = 1;
+    int sv = g_arm.count_arm;
+    g_arm.count_arm = 1;
     int ok = emit_poly_builtin_default_at(c, call, self, name, n, n ? el : NULL, n ? eatmp : NULL,
                                           n ? ety : NULL, TY_POLY, tv, tr, 0, &one);
-    g_bi_count_arm = sv;
+    g_arm.count_arm = sv;
     view_unbind(slot);
     /* an arm that reads anything of the site's function cannot move here */
     int self_contained = 0;

@@ -3274,6 +3274,41 @@ int bop_kernel_answers(const char *name, int argc, int has_block) {
 }
 
 /* See builtin_ops.h. */
+const char *bop_row_class(const BuiltinOp *r) {
+  if (r->flags & (BOPF_INTERNAL | BOPF_BASIC_OBJECT)) return NULL;
+  switch (r->recv) {
+  case TY_POLY: case BOP_KERNEL: case BOP_IVAR_LESS: case TY_CLASS: return NULL;
+  case BOP_ANY_ARRAY: return "Array";
+  case BOP_ANY_HASH: return "Hash";
+  case TY_IO: return "IO";
+  default: return core_class_name(core_of_type(r->recv));
+  }
+}
+
+/* See builtin_ops.h. */
+int bop_below_object_answers(const char *name) {
+  for (int i = 0; name && !builtin_object_method_known(name) && i < BOP_NROWS; i++) {
+    const BuiltinOp *r = &bop_rows[i];
+    if (r->name[0] == name[0] && sp_streq(r->name, name) && bop_row_class(r) &&
+        builtin_library_fact_holds(r->feature)) return 1;
+  }
+  return 0;
+}
+
+/* See builtin_ops.h. */
+int bop_send_answers_nil(const char *name) {
+  int any = 0;
+  for (int i = 0; name && i < BOP_NROWS; i++) {
+    const BuiltinOp *r = &bop_rows[i];
+    if (r->name[0] != name[0] || !sp_streq(r->name, name) || !bop_row_class(r) ||
+        !builtin_library_fact_holds(r->feature)) continue;
+    if (r->result != TY_NIL) return 0;
+    any = 1;
+  }
+  return any;
+}
+
+/* See builtin_ops.h. */
 int bop_class_answers(const char *name, int argc, int has_block) {
   const BuiltinOp *r = argc >= 0 ? bop_find(TY_CLASS, name, argc, has_block) : NULL;
   return r && !(r->flags & BOPF_PRIVATE);

@@ -1587,6 +1587,12 @@ static int builtin_name_in(const char *name, const char *const *names) {
     if (sp_streq(name, names[i])) return 1;
   return 0;
 }
+int builtin_class_boxed_by_tag(const char *n) {
+  static const char *const T[] = { "Integer", "Float", "String", "Symbol", "NilClass", "TrueClass", "FalseClass",
+                                   "Class", "Module", "Encoding", NULL };
+  return builtin_name_in(n, T);
+}
+
 
 /* The globals the runtime sets, by name without the `$` (the punctuation ones
    are told by their spelling): their values are the runtime's objects, not

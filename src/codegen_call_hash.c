@@ -440,25 +440,45 @@ int emit_op_hash_to_s(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
+/* Can a value of typed Hash kind rt (receiver recv), one not of boxed
+   values, be nil? A String value is held as its handle, whose NULL is nil
+   (elem_held), and an Integer value carries its nil where analyze marked
+   the Hash as able to hold one (hash_vals_nullable, DESIGN.md D3b-ii). */
+static int hash_typed_val_may_nil(Compiler *c, int recv, TyKind rt) {
+  return typed_elem_held(rt) == TY_STRBUF || (oint_kind(ty_hash_val(rt)) && hash_vals_nullable(c, recv));
+}
+/* The loop body copying each pair of such a Hash _t<th> (kind rt) whose
+   value is not nil into _t<tf>, at the walk's index _t<ti> */
+static void emit_hash_compact_pair(Compiler *c, int recv, TyKind rt, int th, int tf, int ti, Buf *b) {
+  const char *hn = ty_hash_cname(rt);
+  int vn = oint_kind(ty_hash_val(rt)) && hash_vals_nullable(c, recv), tk = ++g_tmp;
+  buf_printf(b, " %s _t%d = _t%d->order[_t%d]; if (", c_type_name(ty_hash_key(rt)), tk, th, ti);
+  if (vn) buf_printf(b, "!sp_%sHash_vget(_t%d, _t%d).nil", hn, th, tk);
+  else buf_printf(b, "sp_%sHash_get%s(_t%d, _t%d)", hn, typed_elem_store_sfx(rt), th, tk);
+  buf_puts(b, ") "); emit_hash_entry_copy(rt, vn, tf, th, tk, b); buf_puts(b, " }");
+}
 /* compact!: drop nil-valued pairs in place; self when changed, nil when a
-   no-op. Only the poly-valued variants can hold nil; the others are left
-   to the arms after the lookup. */
+   no-op. A typed Hash whose values cannot be nil is the no-op, after the
+   frozen check CRuby's compact! makes. */
 int emit_op_hash_compact_bang(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   TyKind rt = x->rt;
-  if (!(rt == TY_SYM_POLY_HASH || rt == TY_STR_POLY_HASH || rt == TY_POLY_POLY_HASH)) return 0;
   const char *hnc = ty_hash_cname(rt);
-  /* PolyPoly's order[] holds slot indexes, not keys; the other variants
-     store the key itself in order[] (#2430) */
-  int ppk = rt == TY_POLY_POLY_HASH;
+  if (!hnc) return 0;
   int th = ++g_tmp, tf = ++g_tmp, ti = ++g_tmp, tv = ++g_tmp, tc2 = ++g_tmp;
   buf_printf(b, "({ sp_%sHash *_t%d = ", hnc, th); emit_expr(c, recv, b);
   buf_printf(b, "; SP_GC_ROOT(_t%d); if (_t%d && sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);",
              th, th, th, th, hash_box_cls(rt));
+  int poly = ty_hash_val(rt) == TY_POLY;
+  if (!poly && !hash_typed_val_may_nil(c, recv, rt)) { buf_puts(b, " sp_box_nil(); })"); return 1; }
+  /* PolyPoly's order[] holds slot indexes, not keys; the other variants
+     store the key itself in order[] (#2430) */
+  int ppk = rt == TY_POLY_POLY_HASH;
   buf_printf(b, " sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);"
                 " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {",
              hnc, tf, hnc, tf, ti, ti, th, ti);
-  if (ppk)
+  if (!poly) emit_hash_compact_pair(c, recv, rt, th, tf, ti, b);
+  else if (ppk)
     buf_printf(b, " sp_RbVal _k9 = _t%d->keys[_t%d->order[_t%d]];"
                   " sp_RbVal _t%d = sp_%sHash_get(_t%d, _k9);"
                   " if (!sp_poly_nil_p(_t%d)) sp_%sHash_set(_t%d, _k9, _t%d); }",
@@ -1079,9 +1099,20 @@ int emit_op_hash_compact(Compiler *c, const BopCtx *x, Buf *b) {
   TyKind rt = x->rt;
   const char *hn = ty_hash_cname(rt);
   TyKind vt = ty_hash_val(rt);
-  if (vt != TY_POLY) {
-    /* Non-poly values can't be nil; compact is equivalent to dup */
+  if (vt != TY_POLY && !hash_typed_val_may_nil(c, recv, rt)) {
+    /* values that cannot be nil: compact is dup */
     buf_printf(b, "sp_%sHash_dup(", hn); emit_expr(c, recv, b); buf_puts(b, ")");
+  }
+  else if (vt != TY_POLY) {
+    /* a copy of the pairs whose value is not nil, keeping the default */
+    int th = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp;
+    buf_printf(b, "({ sp_%sHash *_t%d = ", hn, th); emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);", th, hn, tr, hn, tr);
+    buf_printf(b, " _t%d->default_v = _t%d->default_v;", tr, th);
+    if (oint_kind(vt)) buf_printf(b, " _t%d->default_nil = _t%d->default_nil;", tr, th);
+    buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {", ti, ti, th, ti);
+    emit_hash_compact_pair(c, recv, rt, th, tr, ti, b);
+    buf_printf(b, " _t%d; })", tr);
   }
   else if (rt == TY_POLY_POLY_HASH) {
     int th = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp;

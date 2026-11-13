@@ -133,7 +133,7 @@ typedef enum {
   BOPE_HASH_KEYS,         /* Hash#keys */
   BOPE_HASH_FETCH,        /* fetch(key), no default, no block */
   BOPE_HASH_TO_S,         /* Hash#to_s */
-  BOPE_HASH_COMPACT_BANG, /* compact! on a poly-valued variant */
+  BOPE_HASH_COMPACT_BANG, /* compact!: self when it dropped a nil value, else nil */
   BOPE_HASH_REHASH,       /* Hash#rehash */
   BOPE_HASH_REPLACE,      /* replace(hash) of the same variant, or into PolyPoly */
   BOPE_HASH_SET_DEFAULT,  /* Hash#default= */

@@ -88,6 +88,20 @@ rescue NameError => e
   p e.class
 end
 
+$g = 1
+begin
+  Missing.build($g = 5)
+rescue NameError => e
+  p [e.class, $g]
+end
+
+o = [1, 2]
+begin
+  2.missing(o, (o = nil; Array.new(t(3))), -> { 4 })
+rescue NoMethodError => e
+  p [e.args[0], e.args[1], e.args[2].call]
+end
+
 v = [1, "a", nil][0]
 bad = 0
 300.times do |i|
@@ -96,3 +110,23 @@ rescue NoMethodError => e
   bad += 1 unless e.args.map(&:call) == [i, i + 1, i + 2, i + 3]
 end
 p bad
+
+# A variable read ahead of a later argument that overwrites it and then
+# allocates is held where it is read, a local and an instance variable.
+def rebind_local
+  s = +"held"
+  nil.foo(s, (s = nil; -> { 1 }))
+rescue NoMethodError => e
+  p [e.args[0], e.args[1].call]
+end
+rebind_local
+
+class RebindIvar
+  def initialize; @a = +"held"; end
+  def go
+    nil.foo(@a, (@a = nil; -> { 2 }))
+  rescue NoMethodError => e
+    p [e.args[0], e.args[1].call]
+  end
+end
+RebindIvar.new.go

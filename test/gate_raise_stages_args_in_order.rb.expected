@@ -29,4 +29,9 @@ t 3
 NameError
 NameError
 NameError
+[NameError, 1]
+t 3
+[[1, 2], [nil, nil, nil], 4]
 0
+["held", 1]
+["held", 2]

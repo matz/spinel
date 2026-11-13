@@ -24193,17 +24193,21 @@ static void emit_raise_placeholder(Compiler *c, int id, Buf *b) {
   }
   else buf_printf(b, ", %s)", dflt);
 }
-/* Is the receiver recv of a raise's staged arguments an operand of its own,
-   to run ahead of the first argument's setup: 2 when it runs code (its value
-   is fresh, held by nothing; a constant the program cannot resolve raises
-   NameError there, const_read_raises, before any argument runs), 1 when it
-   is a read an argument may give another value (`x.qux((x = 2; [1]))`), 0
-   otherwise. One the operand order ran already is its temporary. */
+/* What the receiver recv of a raise's staged arguments is to them, as an
+   operand that runs ahead of the first argument's setup: SR_RUNS when it runs
+   code (its value is fresh, held by nothing), SR_RAISES when its read raises
+   (a constant the program cannot resolve: NameError comes before any
+   argument runs, const_read_raises, and there is no value to hold),
+   SR_REBOUND when it is a read an argument may give another value
+   (`x.qux((x = 2; [1]))`), SR_IN_PLACE otherwise. One the operand order ran
+   already is its temporary. */
+enum { SR_IN_PLACE, SR_REBOUND, SR_RUNS, SR_RAISES };
 static int staged_recv_runs(Compiler *c, int recv, int argc, const int *argv) {
-  if (recv < 0 || arg_ran_first(recv, 0)) return 0;
-  if (subtree_has_side_effect(c, recv) || const_read_raises(c, recv)) return 2;
-  for (int k = 0; k < argc; k++) if (read_rebound_by(c, recv, argv[k])) return 1;
-  return 0;
+  if (recv < 0 || arg_ran_first(recv, 0)) return SR_IN_PLACE;
+  if (subtree_has_side_effect(c, recv)) return SR_RUNS;
+  if (const_read_raises(c, recv)) return SR_RAISES;
+  for (int k = 0; k < argc; k++) if (read_rebound_by(c, recv, argv[k])) return SR_REBOUND;
+  return SR_IN_PLACE;
 }
 /* The arguments a raise stages for NoMethodError#args, as the text
    `N, (sp_RbVal[]){...}` into list. A box is built in the list, except one
@@ -24215,42 +24219,55 @@ static int staged_recv_runs(Compiler *c, int recv, int argc, const int *argv) {
    ordered: the arguments are expressions of a call, which run left to right
    after the receiver recv (-1: none, or one that ran already). Each one's
    setup is taken aside (emit_split_pre). The receiver is the first operand
-   when it runs code or an argument reassigns what it reads
+   when it runs code, its read raises or an argument reassigns what it reads
    (staged_recv_runs), or when the caller holds it in a rooted temporary
    already (held: written ahead of pre, so an allocation cannot free it, but
    an argument's setup left ahead of the statement would run before it).
    Where a box allocates, or an operand after the first has setup that is not
    a pure read (an Array.new's size check and allocation, an `a[0] += 1`), or
+   an argument that is not a pure read follows a receiver that runs code or
+   raises (`Missing.build($g = 5)` raises NameError before $g changes), or
    an argument allocates where it stands (operand_allocates_beside: a Proc it
-   builds) after an operand whose value nothing holds (an argument, or a
-   receiver that ran code, not one read from a variable),
+   builds) after an operand whose value nothing holds (a fresh value whose
+   box holds heap: a call's, a lambda's, a receiver that ran code; not a
+   read of a variable, which holds it),
    every argument goes into a temporary, in order, its setup right ahead of
-   it, and each whose box holds heap is rooted: `x.qux(f, Array.new(g))` ran
-   g before f, and a lambda built in the list was freed by the next one's
-   allocation. An argument the operand order ran already stays its
-   temporary. Unstaged, the setup goes ahead of the statement, where
-   emit_boxed writes it. 1 when the arguments are staged with the receiver
-   as their first operand and the caller is to hold it ahead of pre
-   (emit_hold_receiver). An entry's parameters are reads and need no order. */
+   it, and each whose box holds heap is rooted, but for a variable's read no
+   later argument reassigns, which its variable holds (strh_var_read):
+   `x.qux(f, Array.new(g))` ran g before f, and a lambda built in the list
+   was freed by the next one's allocation. An argument the operand order
+   ran already stays its temporary. Unstaged, the setup goes ahead of the statement, where
+   emit_boxed writes it. Answers what the caller is to hold ahead of pre
+   (emit_hold_receiver) when the arguments are staged with the receiver as
+   their first operand: staged_recv_runs' answer, SR_IN_PLACE for none. An
+   entry's parameters are reads and need no order. */
 static int emit_staged_args(Compiler *c, int argc, const int *argv, int ordered, int recv, int held,
                             Buf *pre, Buf *list) {
   Buf *ap = calloc((size_t)argc + 1, sizeof *ap), *av = calloc((size_t)argc + 1, sizeof *av);
-  char *alloc = calloc((size_t)argc + 1, 1);
-  if (!ap || !av || !alloc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int rr = !ordered || recv < 0 ? 0 : held ? 2 : staged_recv_runs(c, recv, argc, argv);
-  int any = 0;
+  char *alloc = calloc((size_t)argc + 1, 1), *kept = calloc((size_t)argc + 1, 1);
+  if (!ap || !av || !alloc || !kept) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int rr = !ordered || recv < 0 ? SR_IN_PLACE : held ? SR_RUNS : staged_recv_runs(c, recv, argc, argv);
+  int runs = (rr == SR_RUNS || rr == SR_RAISES) && !held;
+  int any = 0, fresh = rr == SR_RUNS && !held && repr_box_holds_heap(c, recv);
   for (int k = 0; k < argc; k++) {
     emit_split_pre(c, argv[k], emit_boxed, &ap[k], &av[k]);
     alloc[k] = (char)(repr_box_allocates(c, repr_of(c, argv[k])) && repr_box_holds_heap(c, argv[k]));
     if (arg_ran_first(argv[k], 0)) { any |= alloc[k]; continue; }
-    any |= alloc[k] || ((k > 0 || rr) && ap[k].len && !subtree_is_pure_read(c, argv[k])) ||
-           ((k > 0 || (rr == 2 && !held)) && operand_allocates_beside(c, argv[k]));
+    int pure = subtree_is_pure_read(c, argv[k]);
+    any |= alloc[k] || ((((k > 0 || rr) && ap[k].len) || runs) && !pure) ||
+           (fresh && operand_allocates_beside(c, argv[k]));
+    /* a variable keeps what it was read from unless a later argument
+       reassigns it; a constant's reassignment (`K = nil`, `const_set`) is
+       not one read_rebound_by answers, so a constant's read stays rooted */
+    kept[k] = (char)(strh_var_read(c->nt, argv[k]) && nt_kind(c->nt, argv[k]) != NK_ConstantReadNode);
+    for (int j = k + 1; j < argc && kept[k]; j++) if (read_rebound_by(c, argv[k], argv[j])) kept[k] = 0;
+    fresh |= !alloc[k] && !kept[k] && repr_box_holds_heap(c, argv[k]);
   }
   int stage = any && ordered;
   buf_printf(list, "%d, (sp_RbVal[]){", argc);
   for (int k = 0; k < argc; k++) {
     if (k) buf_puts(list, ", ");
-    int root = alloc[k] || (stage && repr_box_holds_heap(c, argv[k]) && !arg_ran_first(argv[k], 0));
+    int root = alloc[k] || (stage && !kept[k] && repr_box_holds_heap(c, argv[k]) && !arg_ran_first(argv[k], 0));
     if (ap[k].p) buf_puts(stage || !g_pre ? pre : g_pre, ap[k].p);
     if (!root && (!stage || arg_ran_first(argv[k], 0))) buf_puts(list, av[k].p ? av[k].p : "sp_box_nil()");
     else {
@@ -24262,17 +24279,18 @@ static int emit_staged_args(Compiler *c, int argc, const int *argv, int ordered,
     free(ap[k].p); free(av[k].p);
   }
   buf_puts(list, argc ? "}" : "sp_box_nil()}");
-  free(ap); free(av); free(alloc);
-  return stage && rr;
+  free(ap); free(av); free(alloc); free(kept);
+  return stage ? rr : SR_IN_PLACE;
 }
 /* The receiver text rb, held in a temporary written to b ahead of the arguments'
-   temporaries (rooted when its box holds heap), and rb becomes the temporary:
-   CRuby evaluates the receiver first, and an argument may reassign what it
-   names (`a.qux((a = A.new; 1..2))`). */
-static void emit_hold_receiver(Compiler *c, int recv, Buf *rb, Buf *b) {
+   temporaries (rooted when its box holds heap and it has a value: one whose
+   read raises, hold SR_RAISES, never writes it), and rb becomes the
+   temporary: CRuby evaluates the receiver first, and an argument may
+   reassign what it names (`a.qux((a = A.new; 1..2))`). */
+static void emit_hold_receiver(Compiler *c, int recv, int hold, Buf *rb, Buf *b) {
   int t = ++g_tmp;
   buf_printf(b, "sp_RbVal _t%d = %s; ", t, rb->p ? rb->p : "sp_box_nil()");
-  if (repr_box_holds_heap(c, recv)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
+  if (hold != SR_RAISES && repr_box_holds_heap(c, recv)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
   free(rb->p); memset(rb, 0, sizeof *rb);
   buf_printf(rb, "_t%d", t);
 }
@@ -24285,10 +24303,10 @@ static void emit_hold_receiver(Compiler *c, int recv, Buf *rb, Buf *b) {
 static void emit_gate_msg_args(Compiler *c, const char *nm, int recv, int gstage, int gac, const int *gav, Buf *b) {
   Buf rb, pre, list; memset(&rb, 0, sizeof rb); memset(&pre, 0, sizeof pre); memset(&list, 0, sizeof list);
   emit_boxed(c, recv, &rb);
-  int hold = gstage && emit_staged_args(c, gac, gav, 1, recv, 0, &pre, &list);
+  int hold = gstage ? emit_staged_args(c, gac, gav, 1, recv, 0, &pre, &list) : SR_IN_PLACE;
   if (pre.p) {
     buf_puts(b, "({ ");
-    if (hold) emit_hold_receiver(c, recv, &rb, b);
+    if (hold) emit_hold_receiver(c, recv, hold, &rb, b);
     buf_puts(b, pre.p);
   }
   buf_printf(b, "sp_nomethod_msg%s(\"%s\", %s", gstage ? "_args" : "", nm ? nm : "?", rb.p ? rb.p : "sp_box_nil()");
@@ -24310,10 +24328,11 @@ static void emit_gate_msg(Compiler *c, const char *gmsg, int recv, int recv_run,
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", rrt);
   }
   else if (recv_stageable) emit_boxed(c, recv, &rb);
-  int hold = gstage && emit_staged_args(c, gac, gav, 1, recv_run || recv_stageable ? recv : -1, recv_run, &pre, &lst);
+  int hold = gstage ? emit_staged_args(c, gac, gav, 1, recv_run || recv_stageable ? recv : -1, recv_run, &pre, &lst)
+                    : SR_IN_PLACE;
   if (pre.p) {
     buf_puts(b, "({ ");
-    if (hold && !recv_run) emit_hold_receiver(c, recv, &rb, b);
+    if (hold && !recv_run) emit_hold_receiver(c, recv, hold, &rb, b);
     buf_puts(b, pre.p);
   }
   if (recv_stageable) {

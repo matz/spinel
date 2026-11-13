@@ -487,6 +487,49 @@ const char *sp_poly_to_s(sp_RbVal v)
   }
 }
 
+/* The class list's names by hash: sp_bcls_slot[h] is 1 + the index of the row
+   whose name hashes to slot h (open addressing), 0 for an empty slot. Built on
+   the first lookup from the rows that have an id, so it cannot drift from the
+   list; a lookup is one hash of the name and, for a hit, one compare. */
+/* the names are stored in the rows (not pointed to), so the table needs no
+   load-time relocation */
+#define SP_BCLS_NAME_MAX 48
+#define X(k, nm, id, flags) _Static_assert(sizeof(nm) <= SP_BCLS_NAME_MAX, "raise SP_BCLS_NAME_MAX");
+SP_BUILTIN_CLASSES(X)
+#undef X
+#define X(k, nm, id, flags) {nm, id},
+static const struct { char name[SP_BCLS_NAME_MAX]; int id; } sp_bcls_rows[] = { SP_BUILTIN_CLASSES(X) };
+#undef X
+#define SP_BCLS_NROWS ((int)(sizeof sp_bcls_rows / sizeof sp_bcls_rows[0]))
+#define SP_BCLS_SLOTS 256   /* a power of two, over twice the rows */
+_Static_assert(SP_BCLS_SLOTS >= 2 * (int)(sizeof sp_bcls_rows / sizeof sp_bcls_rows[0]), "raise SP_BCLS_SLOTS");
+static unsigned char sp_bcls_slot[SP_BCLS_SLOTS];
+static int sp_bcls_state;   /* 0 not built, 1 a thread is building it, 2 built */
+static inline unsigned sp_bcls_hash(const char *n) {
+  unsigned h = 2166136261u;
+  for (; *n; n++) h = (h ^ (unsigned char)*n) * 16777619u;
+  return h & (SP_BCLS_SLOTS - 1);
+}
+static void sp_bcls_build(void) {
+  int none = 0;
+  if (!SP_ATOMIC_CAS(&sp_bcls_state, &none, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    while (SP_ATOMIC_LOAD(&sp_bcls_state, __ATOMIC_ACQUIRE) != 2) {}
+    return;
+  }
+  for (int i = 0; i < SP_BCLS_NROWS; i++) {
+    if (!sp_bcls_rows[i].id) continue;
+    unsigned h = sp_bcls_hash(sp_bcls_rows[i].name);
+    while (sp_bcls_slot[h]) h = (h + 1) & (SP_BCLS_SLOTS - 1);
+    sp_bcls_slot[h] = (unsigned char)(i + 1);
+  }
+  SP_ATOMIC_STORE(&sp_bcls_state, 2, __ATOMIC_RELEASE);
+}
+int sp_builtin_class_id_of(const char *n) {
+  if (SP_ATOMIC_LOAD(&sp_bcls_state, __ATOMIC_ACQUIRE) != 2) sp_bcls_build();
+  for (unsigned h = sp_bcls_hash(n); sp_bcls_slot[h]; h = (h + 1) & (SP_BCLS_SLOTS - 1))
+    if (!strcmp(n, sp_bcls_rows[sp_bcls_slot[h] - 1].name)) return sp_bcls_rows[sp_bcls_slot[h] - 1].id;
+  return -1;
+}
 /* The class name of a boxed value, and in *id the builtin class id of that name
    (the table's, sp_Class.cls_id of the class value) where the arm names it by
    a literal; -1 for a name the arm computes or the table has no id for. */
@@ -575,7 +618,12 @@ static const char *sp_poly_class_name_arm(sp_RbVal v, int *id)
         case SP_BUILTIN_YIELDER: return SPL("Enumerator::Yielder");
         case SP_BUILTIN_RANDOM: return SPL("Random");
         case SP_BUILTIN_ARGF: return SPL("ARGF.class");
-        case SP_BUILTIN_EXCEPTION: return sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p);
+        case SP_BUILTIN_EXCEPTION: {
+          /* a builtin exception class carries its id (sp_Exception.cls_id) */
+          const sp_Exception *e = (const sp_Exception *)v.v.p;
+          if (e && e->cls_id) *id = e->cls_id;
+          return sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p);
+        }
         default: { sp_Class c = {v.cls_id}; return sp_class_to_s(c); }
       }
     default: return (*id = SP_BCLS_OBJECT, SPL("Object"));

@@ -51957,14 +51957,27 @@ static void an_phase_post_fixpoint(Compiler *c) {
   /* Backstop: transplanted module scopes share the same def_node. If one
      copy has known param types (from call sites) but another copy lacks callers
      and has TY_UNKNOWN params, propagate the known types across. */
+  /* (the scopes of each def node, ascending: asking every scope for each
+     unknown parameter grew with the methods squared, and a method nothing
+     calls has every parameter unknown) */
+  int *dn_first = malloc(sizeof(int) * ((size_t)c->nt->count + 1)), *dn_next = malloc(sizeof(int) * ((size_t)c->nscopes + 1));
+  if (!dn_first || !dn_next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i <= c->nt->count; i++) dn_first[i] = -1;
+  for (int s = c->nscopes - 1; s >= 0; s--) {
+    int dn = c->scopes[s].def_node;
+    dn_next[s] = -1;
+    if (dn < 0 || dn >= c->nt->count) continue;
+    dn_next[s] = dn_first[dn]; dn_first[dn] = s;
+  }
   for (int s1 = 0; s1 < c->nscopes; s1++) {
     Scope *sc1 = &c->scopes[s1];
     if (sc1->nparams == 0 || sc1->def_node < 0 || !sc1->name) continue;
+    if (sc1->def_node >= c->nt->count || dn_next[dn_first[sc1->def_node]] < 0) continue;   /* (no other scope of the def) */
     for (int pi = 0; pi < sc1->nparams; pi++) {
       if (!sc1->pnames[pi]) continue;
       LocalVar *p1 = scope_local(sc1, sc1->pnames[pi]);
       if (!p1 || p1->type != TY_UNKNOWN) continue;
-      for (int s2 = 0; s2 < c->nscopes; s2++) {
+      for (int s2 = dn_first[sc1->def_node]; s2 >= 0; s2 = dn_next[s2]) {
         if (s2 == s1) continue;
         Scope *sc2 = &c->scopes[s2];
         if (sc2->def_node != sc1->def_node || sc2->nparams != sc1->nparams) continue;
@@ -51976,6 +51989,7 @@ static void an_phase_post_fixpoint(Compiler *c) {
       }
     }
   }
+  free(dn_first); free(dn_next);
 
   /* Backstop: an ivar assigned only an empty array literal (no element
      evidence from usage) is left UNKNOWN, which falls back to int and a

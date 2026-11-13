@@ -17654,6 +17654,27 @@ int desugar_builtins(Compiler *c) {
   return 1;
 }
 
+/* Is vn the name of a parameter (or a block-local) among the first n0
+   nodes? The names are kept as a set for the table's version and n0: a
+   walk over the nodes for each stored-enum each grew with the program
+   squared. */
+static ANameHash g_sew_params;
+static const NodeTable *g_sew_nt;
+static unsigned g_sew_ver;
+static int g_sew_n0 = -1;
+static int sew_param_named(const NodeTable *nt, int n0, const char *vn) {
+  if (g_sew_nt != nt || g_sew_ver != nt->version || g_sew_n0 != n0) {
+    anh_free(&g_sew_params); memset(&g_sew_params, 0, sizeof g_sew_params);
+    for (int p = 0; p < n0; p++) {
+      const char *pt = nt_type(nt, p), *pn = nt_str(nt, p, "name");
+      if (pt && pn && (strstr(pt, "ParameterNode") || nt_kind(nt, p) == NK_BlockLocalVariableNode) &&
+          !anh_has(&g_sew_params, pn))
+        anh_add(&g_sew_params, pn);
+    }
+    g_sew_nt = nt; g_sew_ver = nt->version; g_sew_n0 = n0;
+  }
+  return anh_has(&g_sew_params, vn);
+}
 static int stored_enum_write(Compiler *c, int id, int n0) {
   static const char *const meths[] = {
     "map", "collect", "select", "filter", "find_all", "reject", "sort_by", "group_by",
@@ -17665,7 +17686,9 @@ static int stored_enum_write(Compiler *c, int id, int n0) {
   if (!nm || !sp_streq(nm, "each") || nt_ref(nt, id, "block") < 0 || nt_ref(nt, id, "arguments") >= 0 ||
       nt_kind(nt, x) != NK_LocalVariableReadNode || !vn) return -1;
   int w = -1, nw = 0;
-  for (int k = comp_lvw_first(c, vn); k >= 0; k = comp_lvw_next(c, k))
+  /* (a second write answers: the name's writes across every method of the
+     program were each counted, for each such each) */
+  for (int k = comp_lvw_first(c, vn); k >= 0 && nw < 2; k = comp_lvw_next(c, k))
     if (nt_str(nt, k, "name") && sp_streq(nt_str(nt, k, "name"), vn)) { w = k; nw++; }
   if (nw != 1 || nt_kind(nt, w) != NK_LocalVariableWriteNode) return -1;
   int v = (int)nt_int(nt, w, "enum_src", nt_ref(nt, w, "value"));
@@ -17677,11 +17700,7 @@ static int stored_enum_write(Compiler *c, int id, int n0) {
       nt_safe_nav(nt, v)) return -1;
   while (meths[k] && !sp_streq(m, meths[k])) k++;
   if (!meths[k] || program_defines_name(nt, n0, m)) return -1;
-  for (int p = 0; p < n0; p++) {
-    const char *pt = nt_type(nt, p), *pn = nt_str(nt, p, "name");
-    NodeKind pk = nt_kind(nt, p);
-    if (pt && pn && sp_streq(pn, vn) && (strstr(pt, "ParameterNode") || pk == NK_BlockLocalVariableNode)) return -1;
-  }
+  if (sew_param_named(nt, n0, vn)) return -1;
   return w;
 }
 

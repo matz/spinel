@@ -2247,9 +2247,16 @@ unsigned builtin_name_group_hash(const char *name) {
    must be sure a method exists (must) counts only what CRuby has with no
    library or with a required one at the version CRuby ships. */
 enum { BMT_PUBLIC = 1 << 14 };   /* public in every run that has the name */
+/* (kept while no feature is added: every builtin-table lookup asks it, and
+   the 12 asks of the set were a twentieth of a large program's analysis) */
 static unsigned bmt_loaded(void) {
-  unsigned m = 1;
+  static int seen = -1;
+  static unsigned m;
+  int n = sp_features_required_count();
+  if (n == seen) return m;
+  m = 1;
   for (unsigned i = 0; i < sizeof BMT_LIBS / sizeof *BMT_LIBS; i++) if (sp_feature_required(BMT_LIBS[i])) m |= 2u << i;
+  seen = n;
   return m;
 }
 static int bmt_has(const char *const *names, const unsigned short *flags, int n, const char *m, unsigned must, int pub) {
@@ -2335,14 +2342,23 @@ int builtin_answers_ahead_of(const char *cls, const char *m, const char *root) {
 /* The i-th ancestor of builtin class or module cls in CRuby's lookup order (0: cls itself), counting only those a
    library the program has defines; NULL past the last, and for a name with no table. The walk of a mixin's `super`
    steps through these, asking each for the name it looks up (builtin_owns_instance_method). */
+/* (a walk asks i = 0, 1, ... of one class: the step after the last one
+   answered goes on from its ancestor, not from the first again, which made
+   every walk quadratic in the ancestors) */
+static struct { const BuiltinMethodTable *t; unsigned must; int i, k; } bmt_walk = { NULL, 0, -1, -1 };
 const char *builtin_ancestor_at(const char *cls, int i) {
   const BuiltinMethodTable *t = bmt_find(cls);
   unsigned must = bmt_loaded();
   if (!t || !(t->flags & must)) return NULL;
-  for (int k = 0; k < t->nanc; k++) {
+  int k = 0, j = i;
+  if (bmt_walk.t == t && bmt_walk.must == must && i > bmt_walk.i) k = bmt_walk.k + 1, j = i - bmt_walk.i - 1;
+  for (; k < t->nanc; k++) {
     const BuiltinMethodTable *a = bmt_find(t->ancestors[k]);
     if (!a || !((t->aflags[k] & must) && (a->flags & must))) continue;
-    if (i-- == 0) return t->ancestors[k];
+    if (j-- == 0) {
+      bmt_walk.t = t, bmt_walk.must = must, bmt_walk.i = i, bmt_walk.k = k;
+      return t->ancestors[k];
+    }
   }
   return NULL;
 }

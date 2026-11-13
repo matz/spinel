@@ -43,3 +43,16 @@ p b
 p t { yr.step(sbox[3]).to_a }
 p t { yr.step(sbox[4]).to_a }
 p t { yr.step(sbox[5]).first(1) }
+# an endless one gives its begin, then the error of the stride
+p t { eyr.step(sbox[5]).first(1) }
+p t { eyr.step(sbox[5]).first(2) }
+p t { eyr.step(sbox[3]).first(1) }
+p t { eyr.step(sbox[3]).first(2) }
+p t { (eyr % sbox[5]).first(1) }
+p t { eyr.step(sbox[5]).inspect }
+p t { eyr.step(sbox[3]).inspect }
+p t { eyr.step(sbox[4]).inspect }
+p t { eyr.step(sbox[5]).size }
+en = eyr.step(sbox[5])
+p t { en.next }
+p t { en.next }

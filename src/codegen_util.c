@@ -7728,6 +7728,22 @@ int class_is_builtin_module_reopen(Compiler *c, int cid) {
   const char *qn = class_ruby_name(c, cid);
   return qn && is_builtin_module_name(qn) && builtin_class_id(qn) != 0;
 }
+/* Is class entry `cid` the program's reopening of a builtin class
+   (`class Module; def m; end`, Method, BasicObject, Data)? Its values
+   (String, a Method, 5) carry the builtin's own tag or id, never the
+   entry's, so an is_a?, an instance_of? or a `when` on that entry must also
+   ask the runtime, by the class's Ruby name (Process::Status, not Status),
+   as for a builtin module (class_is_builtin_module_reopen). A program's own
+   class of the same leaf name in another module (`Ns::Method`) is not one,
+   and neither is a constant the program assigns (`Data = Struct.new(:a)`,
+   `BasicObject = Class.new`): only a `class` header reopens. */
+int class_is_builtin_class_reopen(Compiler *c, int cid) {
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  int def = c->classes[cid].def_node;
+  if (def < 0 || nt_kind(c->nt, def) != NK_ClassNode) return 0;
+  const char *qn = class_ruby_name(c, cid);
+  return qn && is_builtin_class_name(qn);
+}
 int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
   const char *self_cls = NULL;
   switch (t) {

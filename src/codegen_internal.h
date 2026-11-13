@@ -2206,6 +2206,7 @@ int eq_family(TyKind t);
 int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact);
 int builtin_reopen_includes_module(Compiler *c, int mod);
 int class_is_builtin_module_reopen(Compiler *c, int cid);
+int class_is_builtin_class_reopen(Compiler *c, int cid);
 void emit_method_call(Compiler *c, int id, Buf *b);
 /* A receiverless call the enclosing class's own chain answers (see
    codegen_call.c): the Kernel arms must stand down for it. */

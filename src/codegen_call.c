@@ -25840,6 +25840,15 @@ int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int exact, Bu
          program class id, so the runtime answers for it as with no entry */
       if (!exact && class_is_builtin_module_reopen(c, cid))
         buf_printf(b, " || sp_poly_kind_of_builtin(%s, \"%s\")", v, cn);
+      /* the program reopens a builtin class (`class Module; def m; end`):
+         its values (String, a Method, 5) carry no program class id either,
+         so the runtime answers for them as with no entry, by the Ruby name
+         (cn is the leaf: Status for Process::Status) */
+      if (class_is_builtin_class_reopen(c, cid)) {
+        const char *rn = class_ruby_name(c, cid);
+        if (exact) buf_printf(b, " || (strcmp(sp_poly_class_name(%s), \"%s\") == 0)", v, rn);
+        else buf_printf(b, " || sp_poly_kind_of_builtin(%s, \"%s\")", v, rn);
+      }
     }
     /* a builtin ancestor not covered above (Object/BasicObject/Kernel hold
        for every value but a BasicObject.new, which is only a BasicObject;

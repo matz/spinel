@@ -7599,10 +7599,14 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
           }
         if (any) buf_puts(b, "))");
       }
-      /* a reopened builtin module (`module Comparable; def m; end`):
-         a builtin value that includes it has no program class id */
+      /* a reopened builtin module (`module Comparable; def m; end`) or
+         class (`class Module; def m; end`, asked by its Ruby name:
+         Process::Status): a builtin value that includes or is one has no
+         program class id */
       if (class_is_builtin_module_reopen(c, cid))
         buf_printf(b, " || sp_poly_kind_of_builtin(%s, \"%s\")", tmp, cn);
+      else if (class_is_builtin_class_reopen(c, cid))
+        buf_printf(b, " || sp_poly_kind_of_builtin(%s, \"%s\")", tmp, class_ruby_name(c, cid));
     }
     /* A known builtin class with no arm above -- an exception class most of
        all: a boxed exception walks its hierarchy at run time, so `when

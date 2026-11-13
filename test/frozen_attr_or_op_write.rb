@@ -26,6 +26,7 @@ try("or str") { f.name ||= "x" }
 try("or int") { f.count ||= 3 }
 try("or arr") { f.list ||= [1] }
 try("and nil") { f.work &&= 5 }
+try("and set") { f.n &&= 5 }
 try("value") { v = (f.work ||= 9); v }
 try("self in method") { f.bump }
 try("op int") { f.n += 1 }
@@ -35,6 +36,18 @@ try("sub") { Sub.new.freeze.work ||= 1 }
 try("def reader") { W.new.freeze.w ||= 1 }
 try("struct") { S.new(nil, 2).freeze.a ||= 1 }
 try("struct set") { S.new(nil, 2).freeze.b ||= 1 }
+class G
+  attr_accessor :x
+  def initialize; @x = 2; end
+end
+class H
+  attr_accessor :x
+  def initialize; @x = 3; end
+end
+boxed = [H.new, G.new][rand < 2 ? 1 : 0]
+boxed.freeze
+try("boxed op") { boxed.x += 1 }
+try("boxed or set") { boxed.x ||= 1 }
 
 g = F.new
 g.work = 1

@@ -22077,6 +22077,8 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         any = 1;
         emit_indent(b, indent + 1);
         buf_printf(b, "case %d: { sp_%s *_o = (sp_%s *)_t%d.v.p; ", k, cn, cn, trecv);
+        /* the writer is the ivar's store: a frozen receiver refuses it */
+        emit_frozen_obj_guard(c, k, "_o", b);
         if (ivs) {
           /* a new String: the concatenation's bytes, in the slot's face */
           buf_printf(b, "_o->iv_%s = SP_STR_TO(_o->iv_%s, sp_str_concat(SP_STR_B(_o->iv_%s), ", iv_c(rn), iv_c(rn), iv_c(rn));

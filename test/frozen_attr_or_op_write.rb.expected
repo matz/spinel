@@ -3,6 +3,7 @@ or str: FrozenError
 or int: FrozenError
 or arr: FrozenError
 and nil: ok nil
+and set: FrozenError
 value: FrozenError
 self in method: FrozenError
 op int: FrozenError
@@ -12,6 +13,8 @@ sub: FrozenError
 def reader: FrozenError
 struct: FrozenError
 struct set: ok 2
+boxed op: FrozenError
+boxed or set: ok 2
 or set: ok 1
 or set str: ok "a"
 param frozen: FrozenError

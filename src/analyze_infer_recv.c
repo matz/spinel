@@ -1293,8 +1293,7 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        method storing `self` types it as the class that DEFINED the method --
        so the call dispatches at run time and its value is that union (#4023).
        The emitter routes the same shape through the poly dispatch. */
-    if (call_target(c, id, cid, name, 0, NULL) < 0 &&
-        !comp_reader_in_chain(c, cid, name, NULL) && !cls->is_native_class &&
+    if (!call_answers(c, id, cid, name, 0, NULL) && !cls->is_native_class &&
         comp_subclass_answers(c, cid, name)) {
       /* Runtime-name send arms on boxed self may include classes the descendant plan excludes. */
       if (g_plan_check && !nt_int(nt, id, "dyn_arm", 0)) {
@@ -1315,9 +1314,8 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     /* Object#hash default (no user hash in the chain): value/pointer int.
        Structs keep their dedicated value-based hash arm. */
     if (sp_streq(name, "hash") && argc == 0 && !cls->is_struct &&
-        comp_method_in_chain(c, cid, "hash", NULL) < 0 &&
-        /* a reader named hash answers its ivar, typed as the ivar is */
-        !comp_reader_in_chain(c, cid, "hash", NULL)) { *out = TY_INT; return 1; }
+        /* (a reader named hash answers its ivar, typed as the ivar is) */
+        !call_answers(c, -1, cid, "hash", 0, NULL)) { *out = TY_INT; return 1; }
     /* native class (C-backed): a declared instance method returns its spec
        type, also on a subclass of the class (#9269) */
     int ncid = comp_native_answer_class(c, cid, name);
@@ -1453,8 +1451,9 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
          boxed slot instead, the expression read as poly while the emitter
          handed back the raw argument (`def x=(v) = super` under
          --int-overflow=promote). */
-      if (comp_writer_in_chain(c, cid, base, &wdefc) && argc >= 1 &&
-          call_attr_target(c, -1, cid, base, CT_WRITER, NULL)) {
+      MethodLookup wml = { .def_class = -1 };
+      if (argc >= 1 && call_attr_target(c, -1, cid, base, CT_WRITER, &wml)) {
+        wdefc = wml.def_class;
         TyKind rhsk = infer_type(c, argv[0]);
         /* (a handle local's value is its String face, as an ivar write's is) */
         if (rhsk == TY_STRBUF) rhsk = TY_STRING;

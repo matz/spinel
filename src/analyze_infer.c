@@ -2859,8 +2859,7 @@ int an_bare_call_class_owned(Compiler *c, int id) {
   int cid = sc ? sc->class_id : -1;
   if (cid < 0 || cid >= c->nclasses) return 0;
   if (sc->is_cmethod) return call_target(c, id, cid, name, CT_CMETHOD, NULL) >= 0;
-  return call_target(c, id, cid, name, 0, NULL) >= 0 ||
-         comp_reader_in_chain(c, cid, name, NULL);
+  return call_answers(c, id, cid, name, 0, NULL);
 }
 
 static TyKind infer_call_inner(Compiler *c, int id);
@@ -6585,8 +6584,10 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
         int cmi = call_target(c, id, self->class_id, name, CT_CMETHOD, NULL);
         if (cmi >= 0) { *out = an_self_call_ret(c, self, name, cmi, id); return 1; }
       }
-      { int rdcls2 = -1;
-        if (comp_reader_in_chain(c, self->class_id, name, &rdcls2)) {
+      { MethodLookup rml2 = { .def_class = -1 };
+        int rdcls2 = -1;
+        if (call_attr_target(c, -1, self->class_id, name, 0, &rml2)) {
+          rdcls2 = rml2.def_class;
           const char *rname2 = comp_resolve_alias(c, self->class_id, name);
           char ivn[256];
           snprintf(ivn, sizeof ivn, "@%s", rname2);
@@ -9078,7 +9079,7 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
   for (int i = 0; i < n; i++) {
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 0;
+    if (call_answers(c, -1, k, name, 0, NULL)) return 0;
     if (an_object_methods_listable(c, k, name)) any = 1;
   }
   return any;

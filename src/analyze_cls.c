@@ -2891,9 +2891,10 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
       continue;
     }
     if (k < 0) { builtin = 1; continue; }
-    int mi = call_target(c, v, k, nm, 0, NULL);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, v, k, nm, 0, &ml);
     if (mi >= 0) { if (!CF_UT(mi)) builtin = 1; continue; }
-    if (comp_reader_in_chain(c, k, nm, NULL)) {
+    if (ml.kind == ML_ATTR) {
       /* the reader an alias names reads its own ivar (`alias loc location`) */
       char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, k, nm));
       cf_flow(f, cf_entry(f, f->fam[k], ivn), v);
@@ -3591,9 +3592,10 @@ static void cf_call(CF *f, int v) {
       }
       else {
         for (int i = cls_set_next(&f->pool[dsi], -1); i >= 0; i = cls_set_next(&f->pool[dsi], i)) {
-          int mi = call_target(c, v, i, nm, 0, NULL);
+          MethodLookup ml = { .def_class = -1 };
+          int mi = call_target(c, v, i, nm, 0, &ml);
           if (mi >= 0) { if (cf_user_target(f, v, mi, argv, argc, blk)) found = 1; continue; }
-          if (comp_reader_in_chain(c, i, nm, NULL)) {
+          if (ml.kind == ML_ATTR) {
             char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, i, nm));
             cf_flow(f, cf_entry(f, f->fam[i], ivn), v);
             found = 1;

@@ -9458,7 +9458,7 @@ void rewrite_self_attr_empty_writes(Compiler *c) {
     int ci = s->class_id;
     ClassInfo *cls = &c->classes[ci];
     if (comp_class_is_module(c, cls) || cls->is_struct || cls->is_native_class) continue;
-    if (!comp_writer_in_chain(c, ci, base, NULL) || call_target(c, id, ci, name, 0, NULL) >= 0) continue;
+    if (!call_attr_target(c, id, ci, base, CT_WRITER, NULL)) continue;
     if (comp_prep_chain_target(c, ci, name)) continue;
     int over = 0;
     for (int k = 0; k < c->nclasses && !over; k++)

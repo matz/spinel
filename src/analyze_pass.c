@@ -2576,26 +2576,18 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
       }
       else {
         MethodLookup ml = { .def_class = -1 };
-        int rdef = -1;
         mi = call_target(c, call, from, mname, 0, &ml);
-        int rd = comp_reader_in_chain(c, from, mname, &rdef);
-        /* a class carries its parent's readers as its own, so a method there
-           over an inherited reader is the override, not a tie */
-        int pdef = ml.def_class >= 0 ? c->classes[ml.def_class].parent : -1;
-        int over = mi >= 0 && rd && ml.def_class == rdef && pdef >= 0 &&
-                   comp_reader_in_chain(c, pdef, mname, NULL);
-        if (mi >= 0 && (!rd || over || (ml.def_class != rdef && is_descendant(c, ml.def_class, rdef)))) {
+        if (mi >= 0) {
           defcls = ml.def_class;
           niv = getter_exit_ivars(c, mi, ivs, 8);
         }
-        else if (rd && (mi < 0 || (ml.def_class != rdef && is_descendant(c, rdef, ml.def_class)))) {
+        else if (ml.kind == ML_ATTR) {
           snprintf(rbuf, sizeof rbuf, "@%s", comp_resolve_alias(c, from, mname));
-          defcls = rdef;
+          defcls = ml.def_class;
           ivs[0] = rbuf;
           niv = 1;
           break;
         }
-        else mi = -1;
       }
       if (mi < 0 || niv > 0 || defcls < 0) break;
       if (!is_bare_super(c, scope_body_last(c, mi))) break;
@@ -2632,8 +2624,8 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
 /* Does class `k` itself define the instance getter `mname`, as a method or
    an attr_reader (not one it inherits)? */
 static int class_owns_getter(Compiler *c, int k, const char *mname) {
-  int kd = -1;
-  if (comp_reader_in_chain(c, k, mname, &kd)) return kd == k;
+  MethodLookup ml = { .def_class = -1 };
+  if (call_attr_target(c, -1, k, mname, 0, &ml)) return ml.def_class == k;
   return comp_method_in_class(c, k, mname) >= 0;
 }
 
@@ -3126,16 +3118,16 @@ static int masgn_attr_take(Compiler *c, int tgt, TyKind elem) {
   if (rt != TY_POLY && only < 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (only >= 0 && k != only && !is_descendant(c, k, only)) continue;
-    int wdc = -1;
-    int wmi = call_target(c, tgt, k, nm, 0, NULL);
+    MethodLookup wml = { .def_class = -1 };
+    int wmi = call_target(c, tgt, k, nm, 0, &wml);
     if (wmi >= 0) {
       Scope *ws = &c->scopes[wmi];
       LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;
       if (wp) changed |= slot_take(c, wp, elem, -1);
       continue;
     }
-    if (!comp_writer_in_chain(c, k, base, &wdc)) continue;
-    int wcls = wdc >= 0 ? wdc : k, iv = comp_ivar_index(&c->classes[wcls], ivn);
+    if (!call_attr_target(c, tgt, k, base, CT_WRITER, &wml)) continue;
+    int wcls = wml.def_class >= 0 ? wml.def_class : k, iv = comp_ivar_index(&c->classes[wcls], ivn);
     if (iv < 0 || class_ivar_pinned(&c->classes[wcls], ivn)) continue;
     TyKind mg = ty_unify(c->classes[wcls].ivar_types[iv], elem);
     if (mg != c->classes[wcls].ivar_types[iv]) { ivar_set_type(&c->classes[wcls], iv, mg); changed = 1; }
@@ -4462,7 +4454,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
                 if (last < 0 || nt_kind(nt, last) != NK_InstanceVariableReadNode) continue;
                 ivn = nt_str(nt, last, "name");
               }
-              else if (comp_reader_in_chain(c, k, mname, &kd)) {
+              else if (ml.kind == ML_ATTR) {
                 snprintf(rbuf, sizeof rbuf, "@%s", mname);
                 ivn = rbuf;
               }
@@ -19580,18 +19572,17 @@ static int scope_tail_unresolved_call(Compiler *c, int s) {
      user class defining the same name is not a candidate here (the receiver is
      statically a String / Integer / ...), and treating it as one put the
      method back to void as soon as any library happened to share the name. */
-  { const char *bn = rt == TY_STRING || rt == TY_STRBUF ? "String"
+  { MethodLookup ml = { .def_class = -1 };
+    const char *bn = rt == TY_STRING || rt == TY_STRBUF ? "String"
                    : rt == TY_INT || rt == TY_BIGINT ? "Integer"
                    : rt == TY_FLOAT ? "Float"
                    : rt == TY_SYMBOL ? "Symbol" : NULL;
     if (bn) {
       int bc = comp_builtin_class_named(c, bn);
-      if (bc >= 0 && (call_target(c, last, bc, nm, 0, NULL) >= 0 ||
-                      comp_reader_in_chain(c, bc, nm, NULL))) return 0;
+      if (bc >= 0 && (call_answers(c, last, bc, nm, 0, &ml))) return 0;
     }
     int oc = comp_core_class(c, CORE_OBJECT);
-    if (oc >= 0 && (call_target(c, last, oc, nm, 0, NULL) >= 0 ||
-                    comp_reader_in_chain(c, oc, nm, NULL))) return 0;
+    if (oc >= 0 && (call_answers(c, last, oc, nm, 0, &ml))) return 0;
   }
   return 1;
 }

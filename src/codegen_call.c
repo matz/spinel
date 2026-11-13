@@ -24193,37 +24193,77 @@ static void emit_raise_placeholder(Compiler *c, int id, Buf *b) {
   }
   else buf_printf(b, ", %s)", dflt);
 }
+/* Is the receiver recv of a raise's staged arguments an operand of its own,
+   to run ahead of the first argument's setup: 2 when it runs code (its value
+   is fresh, held by nothing; a constant the program cannot resolve raises
+   NameError there, const_read_raises, before any argument runs), 1 when it
+   is a read an argument may give another value (`x.qux((x = 2; [1]))`), 0
+   otherwise. One the operand order ran already is its temporary. */
+static int staged_recv_runs(Compiler *c, int recv, int argc, const int *argv) {
+  if (recv < 0 || arg_ran_first(recv, 0)) return 0;
+  if (subtree_has_side_effect(c, recv) || const_read_raises(c, recv)) return 2;
+  for (int k = 0; k < argc; k++) if (read_rebound_by(c, recv, argv[k])) return 1;
+  return 0;
+}
 /* The arguments a raise stages for NoMethodError#args, as the text
    `N, (sp_RbVal[]){...}` into list. A box is built in the list, except one
    that builds a fresh heap cell (repr_box_allocates, and holds one: a Range's
    copy, not a literal's static handle): that goes into a rooted temporary, its
    statement into pre ahead of the list, as the allocation of the next box may
    collect it before the message roots the list. The values themselves are an
-   entry's parameters (rooted by its prologue) or a call's operands; an
-   operand's own fresh value, passed through boxed, is not rooted here.
-   ordered: the arguments are expressions of a call, which run left to right:
-   once one goes into a temporary, every one does, in order, and each whose
-   box holds heap is rooted (a call's result passed through boxed is held
-   while the next argument allocates). An entry's parameters are reads and
-   need no order. */
-static void emit_staged_args(Compiler *c, int argc, const int *argv, int ordered, Buf *pre, Buf *list) {
+   entry's parameters (rooted by its prologue) or a call's operands.
+   ordered: the arguments are expressions of a call, which run left to right
+   after the receiver recv (-1: none, or one that ran already). Each one's
+   setup is taken aside (emit_split_pre). The receiver is the first operand
+   when it runs code or an argument reassigns what it reads
+   (staged_recv_runs), or when the caller holds it in a rooted temporary
+   already (held: written ahead of pre, so an allocation cannot free it, but
+   an argument's setup left ahead of the statement would run before it).
+   Where a box allocates, or an operand after the first has setup that is not
+   a pure read (an Array.new's size check and allocation, an `a[0] += 1`), or
+   an argument allocates where it stands (operand_allocates_beside: a Proc it
+   builds) after an operand whose value nothing holds (an argument, or a
+   receiver that ran code, not one read from a variable),
+   every argument goes into a temporary, in order, its setup right ahead of
+   it, and each whose box holds heap is rooted: `x.qux(f, Array.new(g))` ran
+   g before f, and a lambda built in the list was freed by the next one's
+   allocation. An argument the operand order ran already stays its
+   temporary. Unstaged, the setup goes ahead of the statement, where
+   emit_boxed writes it. 1 when the arguments are staged with the receiver
+   as their first operand and the caller is to hold it ahead of pre
+   (emit_hold_receiver). An entry's parameters are reads and need no order. */
+static int emit_staged_args(Compiler *c, int argc, const int *argv, int ordered, int recv, int held,
+                            Buf *pre, Buf *list) {
+  Buf *ap = calloc((size_t)argc + 1, sizeof *ap), *av = calloc((size_t)argc + 1, sizeof *av);
+  char *alloc = calloc((size_t)argc + 1, 1);
+  if (!ap || !av || !alloc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int rr = !ordered || recv < 0 ? 0 : held ? 2 : staged_recv_runs(c, recv, argc, argv);
   int any = 0;
-  for (int k = 0; k < argc; k++) any |= repr_box_allocates(c, repr_of(c, argv[k])) && repr_box_holds_heap(c, argv[k]);
+  for (int k = 0; k < argc; k++) {
+    emit_split_pre(c, argv[k], emit_boxed, &ap[k], &av[k]);
+    alloc[k] = (char)(repr_box_allocates(c, repr_of(c, argv[k])) && repr_box_holds_heap(c, argv[k]));
+    if (arg_ran_first(argv[k], 0)) { any |= alloc[k]; continue; }
+    any |= alloc[k] || ((k > 0 || rr) && ap[k].len && !subtree_is_pure_read(c, argv[k])) ||
+           ((k > 0 || (rr == 2 && !held)) && operand_allocates_beside(c, argv[k]));
+  }
+  int stage = any && ordered;
   buf_printf(list, "%d, (sp_RbVal[]){", argc);
   for (int k = 0; k < argc; k++) {
     if (k) buf_puts(list, ", ");
-    int holds = repr_box_holds_heap(c, argv[k]);
-    int root = holds && (repr_box_allocates(c, repr_of(c, argv[k])) || (any && ordered));
-    if (!root && !(any && ordered)) { emit_boxed(c, argv[k], list); continue; }
-    Buf ab; memset(&ab, 0, sizeof ab);
-    emit_boxed(c, argv[k], &ab);
-    int t = ++g_tmp;
-    buf_printf(pre, "sp_RbVal _t%d = %s; ", t, ab.p ? ab.p : "sp_box_nil()");
-    if (root) buf_printf(pre, "SP_GC_ROOT_RBVAL(_t%d); ", t);
-    buf_printf(list, "_t%d", t);
-    free(ab.p);
+    int root = alloc[k] || (stage && repr_box_holds_heap(c, argv[k]) && !arg_ran_first(argv[k], 0));
+    if (ap[k].p) buf_puts(stage || !g_pre ? pre : g_pre, ap[k].p);
+    if (!root && (!stage || arg_ran_first(argv[k], 0))) buf_puts(list, av[k].p ? av[k].p : "sp_box_nil()");
+    else {
+      int t = ++g_tmp;
+      buf_printf(pre, "sp_RbVal _t%d = %s; ", t, av[k].p ? av[k].p : "sp_box_nil()");
+      if (root) buf_printf(pre, "SP_GC_ROOT_RBVAL(_t%d); ", t);
+      buf_printf(list, "_t%d", t);
+    }
+    free(ap[k].p); free(av[k].p);
   }
   buf_puts(list, argc ? "}" : "sp_box_nil()}");
+  free(ap); free(av); free(alloc);
+  return stage && rr;
 }
 /* The receiver text rb, held in a temporary written to b ahead of the arguments'
    temporaries (rooted when its box holds heap), and rb becomes the temporary:
@@ -24239,15 +24279,16 @@ static void emit_hold_receiver(Compiler *c, int recv, Buf *rb, Buf *b) {
 /* `sp_nomethod_msg[_args]("nm", recv[, N, (sp_RbVal[]){...}])`, the message of
    a call no class answers, with the staged arguments of emit_staged_args: their
    rooted temporaries ahead of it, in a statement expression. The receiver runs
-   before the arguments: where an argument goes into a temporary, it goes into
-   one first (emit_hold_receiver), as an argument may assign it. */
+   before the arguments: where it is one of the staged operands, it goes into
+   a temporary first (emit_hold_receiver), as it runs code or an argument may
+   assign it. */
 static void emit_gate_msg_args(Compiler *c, const char *nm, int recv, int gstage, int gac, const int *gav, Buf *b) {
   Buf rb, pre, list; memset(&rb, 0, sizeof rb); memset(&pre, 0, sizeof pre); memset(&list, 0, sizeof list);
   emit_boxed(c, recv, &rb);
-  if (gstage) emit_staged_args(c, gac, gav, 1, &pre, &list);
+  int hold = gstage && emit_staged_args(c, gac, gav, 1, recv, 0, &pre, &list);
   if (pre.p) {
     buf_puts(b, "({ ");
-    emit_hold_receiver(c, recv, &rb, b);
+    if (hold) emit_hold_receiver(c, recv, &rb, b);
     buf_puts(b, pre.p);
   }
   buf_printf(b, "sp_nomethod_msg%s(\"%s\", %s", gstage ? "_args" : "", nm ? nm : "?", rb.p ? rb.p : "sp_box_nil()");
@@ -24269,10 +24310,10 @@ static void emit_gate_msg(Compiler *c, const char *gmsg, int recv, int recv_run,
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", rrt);
   }
   else if (recv_stageable) emit_boxed(c, recv, &rb);
-  if (gstage) emit_staged_args(c, gac, gav, 1, &pre, &lst);
+  int hold = gstage && emit_staged_args(c, gac, gav, 1, recv_run || recv_stageable ? recv : -1, recv_run, &pre, &lst);
   if (pre.p) {
     buf_puts(b, "({ ");
-    if (!recv_run && recv_stageable) emit_hold_receiver(c, recv, &rb, b);
+    if (hold && !recv_run) emit_hold_receiver(c, recv, &rb, b);
     buf_puts(b, pre.p);
   }
   if (recv_stageable) {
@@ -24306,7 +24347,7 @@ static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
   int staged = !spread && !nt_argv_has(nt, vav, vac, NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
   int tv = ++g_tmp, ta = ++g_tmp;
   Buf args, ops; memset(&args, 0, sizeof args); memset(&ops, 0, sizeof ops);
-  if (staged) emit_staged_args(c, vac, vav, 0, &ops, &args);
+  if (staged) emit_staged_args(c, vac, vav, 0, -1, 0, &ops, &args);
   buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = self; ", tv);
   if (ops.p) buf_puts(b, ops.p);
   if (spread)

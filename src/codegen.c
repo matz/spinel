@@ -12664,6 +12664,57 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
   buf_puts(b, "  return s->data;\n}\n");
 }
 
+/* Does Struct or Data class cid's constructor sp_<cid>_new run the
+   program's initialize, a reachable one on its chain, taking that one's
+   parameters, rather than fill the members (emit_class_new)? */
+static int struct_ctor_runs_init(Compiler *c, int cid) {
+  int si = comp_method_in_chain(c, cid, "initialize", NULL);
+  return si >= 0 && c->scopes[si].reachable;
+}
+/* The constructor of Struct or Data class ci that fills the members from
+   its arguments, one per member, in order: sp_<ci>_new */
+static void emit_struct_members_ctor(Compiler *c, ClassInfo *ci, Buf *b) {
+  int cid = (int)(ci - c->classes);
+  buf_printf(b, "static sp_%s *sp_%s_new(", ci->c_name, ci->c_name);
+  for (int i = 0; i < ci->nmembers; i++) {
+    if (i) buf_puts(b, ", ");
+    emit_ctype(c, ci->ivar_types[i], b);
+    buf_printf(b, " a%d", i);
+  }
+  if (ci->nmembers == 0) buf_puts(b, "void");
+  buf_puts(b, ") {\n");
+  /* Root every heap-backed member argument before allocating the struct:
+     SP_POOL_NEW can trigger a GC, and a member value that is a fresh,
+     otherwise-unrooted temporary (e.g. a `data[8, 8].delete("\0").upcase`
+     WAD lump name) would be swept before it is stored into the ivar,
+     leaving a dangling pointer the collector later reads (use-after-free). */
+  for (int i = 0; i < ci->nmembers; i++) {
+    TyKind mt = ci->ivar_types[i];
+    /* Gate on needs_root() -- the codebase's authoritative "this type is a
+       heap pointer the GC scans" predicate -- so EVERY heap-backed member
+       (bigint, obj_array, proc/method/exception, io/fiber/etc.) is rooted,
+       not just strings/poly/object/array/hash. A fresh bigint or obj_array
+       temporary is just as sweepable across SP_POOL_NEW's GC as a string. */
+    if (mt == TY_STRING)      buf_printf(b, "  SP_GC_ROOT_STR(a%d);\n", i);
+    else if (mt == TY_POLY)   buf_printf(b, "  SP_GC_ROOT_RBVAL(a%d);\n", i);
+    /* a String Range by value: what it carries (emit_srange_param_root) */
+    else if (mt == TY_STR_RANGE) { char name[32]; snprintf(name, sizeof name, "a%d", i); emit_srange_param_root(c, name, b); }
+    else if (needs_root(mt))  buf_printf(b, "  SP_GC_ROOT(a%d);\n", i);
+  }
+  buf_printf(b, "  sp_%s *self = SP_POOL_NEW(%s, %s%s%s);\n",
+            ci->c_name, ci->c_name,
+            class_needs_scan(ci) ? "sp_" : "", class_needs_scan(ci) ? ci->c_name : "NULL",
+            class_needs_scan(ci) ? "__gc_scan" : "");
+  buf_puts(b, "  SP_GC_ROOT(self);\n");
+  buf_printf(b, "  self->cls_id = %d;\n", ctor_cls_id(c, cid));
+  for (int i = 0; i < ci->nmembers; i++)
+    buf_printf(b, "  self->iv_%s = a%d;\n", iv_c(ci->ivars[i] + 1), i);  /* skip leading '@' */
+  /* an attr's or a method's own ivar is no member: it starts nil */
+  emit_ivar_nil_inits_from(c, b, ci, ci->nmembers, "self->", "  ", ";\n");
+  /* Data instances are frozen from construction (CRuby); Struct is mutable. */
+  if (ci->is_data) buf_puts(b, "  sp_gc_freeze(self);\n");
+  buf_puts(b, "  return self;\n}\n");
+}
 void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   /* Native (C-backed) class: constructor + methods live in the package; nothing
      is generated here (see the native_method externs + .new emission). */
@@ -12674,7 +12725,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   if (ci->is_struct) {
     int sinit_def = cid;
     int sinit = comp_method_in_chain(c, cid, "initialize", &sinit_def);
-    if (sinit >= 0 && c->scopes[sinit].reachable) {
+    if (struct_ctor_runs_init(c, cid)) {
       /* Custom `initialize` override (a `Struct.new(...) do def initialize ...
          super(...) end end` block, e.g. doom's Visplane): the constructor
          allocates a blank instance and delegates to the user initialize -- the
@@ -12737,45 +12788,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     }
     /* Struct constructor: one parameter per member, set the backing ivars. */
     buf_printf(b, "SP_POOL_DEFINE(%s)\n", ci->c_name);
-    buf_printf(b, "static sp_%s *sp_%s_new(", ci->c_name, ci->c_name);
-    for (int i = 0; i < ci->nmembers; i++) {
-      if (i) buf_puts(b, ", ");
-      emit_ctype(c, ci->ivar_types[i], b);
-      buf_printf(b, " a%d", i);
-    }
-    if (ci->nmembers == 0) buf_puts(b, "void");
-    buf_puts(b, ") {\n");
-    /* Root every heap-backed member argument before allocating the struct:
-       SP_POOL_NEW can trigger a GC, and a member value that is a fresh,
-       otherwise-unrooted temporary (e.g. a `data[8, 8].delete("\0").upcase`
-       WAD lump name) would be swept before it is stored into the ivar,
-       leaving a dangling pointer the collector later reads (use-after-free). */
-    for (int i = 0; i < ci->nmembers; i++) {
-      TyKind mt = ci->ivar_types[i];
-      /* Gate on needs_root() -- the codebase's authoritative "this type is a
-         heap pointer the GC scans" predicate -- so EVERY heap-backed member
-         (bigint, obj_array, proc/method/exception, io/fiber/etc.) is rooted,
-         not just strings/poly/object/array/hash. A fresh bigint or obj_array
-         temporary is just as sweepable across SP_POOL_NEW's GC as a string. */
-      if (mt == TY_STRING)      buf_printf(b, "  SP_GC_ROOT_STR(a%d);\n", i);
-      else if (mt == TY_POLY)   buf_printf(b, "  SP_GC_ROOT_RBVAL(a%d);\n", i);
-      /* a String Range by value: what it carries (emit_srange_param_root) */
-      else if (mt == TY_STR_RANGE) { char name[32]; snprintf(name, sizeof name, "a%d", i); emit_srange_param_root(c, name, b); }
-      else if (needs_root(mt))  buf_printf(b, "  SP_GC_ROOT(a%d);\n", i);
-    }
-    buf_printf(b, "  sp_%s *self = SP_POOL_NEW(%s, %s%s%s);\n",
-              ci->c_name, ci->c_name,
-              class_needs_scan(ci) ? "sp_" : "", class_needs_scan(ci) ? ci->c_name : "NULL",
-              class_needs_scan(ci) ? "__gc_scan" : "");
-    buf_puts(b, "  SP_GC_ROOT(self);\n");
-    buf_printf(b, "  self->cls_id = %d;\n", ctor_cls_id(c, cid));
-    for (int i = 0; i < ci->nmembers; i++)
-      buf_printf(b, "  self->iv_%s = a%d;\n", iv_c(ci->ivars[i] + 1), i);  /* skip leading '@' */
-    /* an attr's or a method's own ivar is no member: it starts nil */
-    emit_ivar_nil_inits_from(c, b, ci, ci->nmembers, "self->", "  ", ";\n");
-    /* Data instances are frozen from construction (CRuby); Struct is mutable. */
-    if (ci->is_data) buf_puts(b, "  sp_gc_freeze(self);\n");
-    buf_puts(b, "  return self;\n}\n");
+    emit_struct_members_ctor(c, ci, b);
     struct_meta:;
     /* Struct/Data #inspect: the default representation, generated unless the
        user redefined the method, so a user override wins. */

@@ -15261,6 +15261,52 @@ static int try_convert_arysub(Compiler *c, int arg, int emb, Buf *b) {
   return 1;
 }
 
+/* String.try_convert(x) on an object typed x: CRuby's rb_check_string_type
+   calls x's #to_str (private or not) and checks its answer. nil and a String
+   are the answer; any other answer is a TypeError naming the class and what
+   it gave (sp_str_cmp_conv). The conversion bridge carries only a #to_str
+   typed String, so a #to_str of another type (an Integer) answered nil.
+   A class with no #to_str whose method_missing the program defines may
+   answer it (CRuby asks method_missing), which is refused, as the other
+   #to_str sites refuse it. 0 leaves the call to the bridge. */
+static int emit_try_convert_obj_to_str(Compiler *c, int id, int arg, TyKind at, Buf *b) {
+  int cid = ty_object_class(at), def = -1;
+  if (cid < 0 || cid >= c->nclasses || c->classes[cid].is_native_class) return 0;
+  int mi = comp_method_in_chain(c, cid, "to_str", &def);
+  if (mi >= 0 && comp_is_undeffed_in_chain(c, cid, "to_str")) return 0;
+  if (mi < 0) {
+    if (comp_method_in_chain(c, cid, "method_missing", NULL) >= 0)
+      unsupported_feature(c, id, "String.try_convert of an object whose method_missing may answer #to_str");
+    return 0;
+  }
+  Scope *m = &c->scopes[mi];
+  /* a String or poly #to_str is the bridge's (sp_poly_check_str); an alias
+     or a #to_str with parameters keeps the old path (class_has_to_str_shape) */
+  if (m->ret == TY_STRING || m->ret == TY_POLY || !sp_streq(m->name, "to_str") ||
+      m->nparams != 0 || m->rest_idx >= 0 || def < 0) return 0;
+  /* x may hold a subclass instance: a subclass that answers #to_str from
+     another definition keeps the old path */
+  for (int k = 0; k < c->nclasses; k++) {
+    int up = c->classes[k].parent;
+    while (up >= 0 && up != cid) up = c->classes[up].parent;
+    if (up != cid) continue;
+    int kd = -1;
+    if (comp_method_in_chain(c, k, "to_str", &kd) != mi || kd != def) return 0;
+  }
+  if (comp_ty_value_obj(c, ty_object(def))) return 0;
+  int to = ++g_tmp, tr = ++g_tmp, ts = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", to);
+  emit_boxed(c, arg, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = sp_box_nil(); if (_t%d.tag == SP_TAG_OBJ) { _t%d = ",
+             to, tr, to, tr);
+  char call[256];
+  snprintf(call, sizeof call, "%s((sp_%s *)_t%d.v.p)", mc_method(c, m), c->classes[def].c_name, to);
+  emit_boxed_ret_call(c, m, call, b);
+  buf_printf(b, "; } SP_GC_ROOT_RBVAL(_t%d); const char *_t%d = sp_str_cmp_conv(_t%d, _t%d); "
+                "_t%d ? sp_box_str(_t%d) : sp_box_nil(); })", tr, ts, tr, to, ts, ts);
+  return 1;
+}
+
 int emit_try_convert_boxed(Compiler *c, const char *cname, int arg, Buf *b) {
   if (repr_of(c, arg).kind != RK_BOXED) return 0;
   buf_printf(b, "sp_poly_class_try_convert(sp_box_class_name(SPL(\"%s\")), ", cname);
@@ -16645,6 +16691,8 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
     int ok = want_str ? (at == TY_STRING || at == TY_STRBUF) : (at == TY_IO);
     if (ok) { emit_boxed(c, argv[0], b); return 1; }
     if (want_str && try_convert_arysub(c, argv[0], 2, b)) return 1;
+    if (want_str && ty_is_object(at) && repr_of(c, argv[0]).kind != RK_BOXED &&
+        emit_try_convert_obj_to_str(c, id, argv[0], at, b)) return 1;
     if (want_str && (ty_is_object(at) || repr_of(c, argv[0]).kind == RK_BOXED)) {
       int t = ++g_tmp;
       buf_printf(b, "({ const char *_t%d = sp_poly_check_str(", t);

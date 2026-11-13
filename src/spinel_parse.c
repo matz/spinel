@@ -2831,20 +2831,51 @@ static char **sp_grow_strs(char **a, int n, int *cap, int init) {
   return np;
 }
 
+/* The required features by name: an open-addressed set of indices into
+   sp_req_feats, kept at most half full. The analysis asks it for each of
+   the method tables' libraries at every builtin-table lookup (bmt_loaded),
+   and a scan of the list made that grow with the calls times the files a
+   program requires (#11722). */
+static int *sp_req_slots = NULL;
+static int sp_req_nslots = 0;
+static unsigned sp_req_hash(const char *s) {
+  unsigned h = 2166136261u;
+  for (; *s; s++) h = (h ^ (unsigned char)*s) * 16777619u;
+  return h;
+}
+static int sp_req_find(const char *name) {
+  if (!sp_req_nslots) return -1;
+  for (unsigned i = sp_req_hash(name) & (unsigned)(sp_req_nslots - 1);; i = (i + 1) & (unsigned)(sp_req_nslots - 1)) {
+    int k = sp_req_slots[i];
+    if (k < 0) return -1;
+    if (strcmp(sp_req_feats[k], name) == 0) return k;
+  }
+}
+static void sp_req_place(int k) {
+  unsigned i = sp_req_hash(sp_req_feats[k]) & (unsigned)(sp_req_nslots - 1);
+  while (sp_req_slots[i] >= 0) i = (i + 1) & (unsigned)(sp_req_nslots - 1);
+  sp_req_slots[i] = k;
+}
+
 void sp_feature_mark(const char *name) {
-  if (!name) return;
-  for (int i = 0; i < sp_req_feats_n; i++)
-    if (strcmp(sp_req_feats[i], name) == 0) return;
+  if (!name || sp_req_find(name) >= 0) return;
   sp_req_feats = sp_grow_strs(sp_req_feats, sp_req_feats_n, &sp_req_feats_cap, 64);
   sp_req_feats[sp_req_feats_n++] = strdup(name);
+  if (2 * sp_req_feats_n > sp_req_nslots) {
+    free(sp_req_slots);
+    sp_req_nslots = sp_req_nslots ? sp_req_nslots * 2 : 128;
+    sp_req_slots = (int *)malloc(sizeof(int) * (size_t)sp_req_nslots);
+    if (!sp_req_slots) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+    for (int i = 0; i < sp_req_nslots; i++) sp_req_slots[i] = -1;
+    for (int k = 0; k < sp_req_feats_n; k++) sp_req_place(k);
+  }
+  else sp_req_place(sp_req_feats_n - 1);
 }
 
 int sp_feature_enabled(const char *name) {
   if (!g_strict_require) return 1;   /* gate off: always provide (baseline) */
   if (!name) return 1;
-  for (int i = 0; i < sp_req_feats_n; i++)
-    if (strcmp(sp_req_feats[i], name) == 0) return 1;
-  return 0;
+  return sp_req_find(name) >= 0;
 }
 
 /* Like sp_feature_enabled, but the require is mandatory REGARDLESS of the
@@ -2853,10 +2884,7 @@ int sp_feature_enabled(const char *name) {
    (socket's TCPServer/TCPSocket) -- without this, the baseline mode would
    grow the constants unconditionally and diverge from CRuby's NameError. */
 int sp_feature_required(const char *name) {
-  if (!name) return 0;
-  for (int i = 0; i < sp_req_feats_n; i++)
-    if (strcmp(sp_req_feats[i], name) == 0) return 1;
-  return 0;
+  return name && sp_req_find(name) >= 0;
 }
 
 /* Feature search roots from `-I <dir>` (like ruby -I). A plain `require "X"`

@@ -6923,7 +6923,6 @@ int emit_poly_pred_value(Compiler *c, int id, const char *tvref,
    poly dispatch only knows user-class arms, so these fell to NoMethodError.
    Emitted as a runtime tag/cls_id check; declined when a user class defines the
    name so the general dispatch (which then has arms) wins. (#3162) */
-static int reopened_owns(Compiler *c, const char *cls, const char *name);   /* below */
 int base_arg_may_gc(Compiler *c, int arg) {
   NodeKind k = nt_kind(c->nt, arg);
   return comp_ntype(c, arg) != TY_INT || (k != NK_IntegerNode && k != NK_LocalVariableReadNode);
@@ -21147,12 +21146,9 @@ int builtin_arity_admits(const char *cls, const char *name, int argc) {
 /* Whether a reopened builtin -- Object, Kernel, Class, Module, the
    receiver's own or the other class its kind stands for -- defines the
    name: a def there keeps its dispatch, whatever the count. */
-static int reopened_owns(Compiler *c, const char *cls, const char *name) {
+int reopened_owns(Compiler *c, const char *cls, const char *name) {
   int bc = comp_builtin_class_named(c, cls);
   return bc >= 0 && comp_method_in_chain(c, bc, name, NULL) >= 0;
-}
-int builtin_reopen_owns(Compiler *c, const char *cls, const char *name) {
-  return reopened_owns(c, cls, name);
 }
 
 /* The singleton defs a program writes on a constant -- `def S1.m`, or a

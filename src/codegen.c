@@ -18459,7 +18459,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
   if (g_gen_obj_struct_values)
     buf_puts(b, "  sp_obj_struct_values_fn = sp_obj_struct_values;\n");
   {
-    static const char *const lacks[] = { "last", "join", "sample", "shuffle", "flatten", "at", "pack",
+    static const char *const lacks[] = { "last", "join", "sample", "shuffle", "shuffle!", "flatten", "at", "pack",
                                          "rotate", "values_at", "length", "empty?", "include?", "member?",
                                          "count", "first", NULL };
     /* one entry per name: an Object#last leaves IO#length raising */
@@ -18472,14 +18472,16 @@ void emit_regex_section(Compiler *c, Buf *b) {
     if (any) buf_puts(b, ", NULL }; sp_poly_root_lacks_names = rl; }\n");
   }
   {
-    /* the Array names a boxed Enumerator lacks (sp_poly_ary_chk) that a
-       reopened Enumerator or Enumerable defines */
-    static const char *const elacks[] = { "last", "join", "sample", "shuffle", "flatten", "at", "pack",
-                                          "rotate", "values_at", NULL };
+    /* the Array names a boxed Enumerator lacks (sp_poly_ary_chk, the names
+       up to "values_at" above) that a reopened Enumerator or Enumerable
+       defines, or all of them when one defines method_missing */
+    static const char *const lacks[] = { "last", "join", "sample", "shuffle", "shuffle!", "flatten", "at", "pack",
+                                         "rotate", "values_at", NULL };
+    int mm = reopened_owns(c, "Enumerator", "method_missing") || reopened_owns(c, "Enumerable", "method_missing");
     int any = 0;
-    for (int i = 0; elacks[i]; i++)
-      if (builtin_reopen_owns(c, "Enumerator", elacks[i]) || builtin_reopen_owns(c, "Enumerable", elacks[i])) {
-        buf_printf(b, "%s\"%s\"", any ? ", " : "  { static const char *const el[] = { ", elacks[i]);
+    for (int i = 0; lacks[i]; i++)
+      if (mm || reopened_owns(c, "Enumerator", lacks[i]) || reopened_owns(c, "Enumerable", lacks[i])) {
+        buf_printf(b, "%s\"%s\"", any ? ", " : "  { static const char *const el[] = { ", lacks[i]);
         any = 1;
       }
     if (any) buf_puts(b, ", NULL }; sp_poly_enum_lacks_names = el; }\n");

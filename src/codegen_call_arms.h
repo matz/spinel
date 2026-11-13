@@ -160,7 +160,7 @@ int respond_to_runtime_reaches(Compiler *c, TyKind rt);
 int root_reopen_defines(Compiler *c, const char *qm);
 /* 1 when the program's reopen of the builtin class or module `cls` (its
    chain) defines `name` */
-int builtin_reopen_owns(Compiler *c, const char *cls, const char *name);
+int reopened_owns(Compiler *c, const char *cls, const char *name);
 int bool_side_responds(Compiler *c, const char *qm, int include_all, int foldable, int *ta, int *fa);
 int root_reopen_defines_own(Compiler *c, int k, const char *qm);   /* a root reopening k defines qm itself (def, attr_reader, attr_writer) */
 int root_reopen_method_vis(Compiler *c, int cid, const char *qm);   /* an Object, Kernel or BasicObject reopening's method qm: its visibility, or -1 */

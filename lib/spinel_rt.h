@@ -5521,18 +5521,19 @@ static sp_int sp_poly_struct_size(sp_RbVal v);   /* defined below */
 /* 1 when a reopened Object, Kernel or BasicObject defines m, one of the
    names a boxed Struct, IO or Symbol lacks (sp_poly_root_lacks_names): its
    own method answers m, so the checks below do not raise for it. */
-static SP_UNUSED int sp_poly_root_defines(const char *m) {
-  for (const char *const *n = sp_poly_root_lacks_names; n && *n; n++)
+static SP_UNUSED int sp_poly_names_have(const char *const *names, const char *m) {
+  for (const char *const *n = names; n && *n; n++)
     if (strcmp(*n, m) == 0) return 1;
   return 0;
 }
-/* 1 when a reopened Enumerator or Enumerable defines m, an Array name an
-   Enumerator lacks (sp_poly_enum_lacks_names): the check below leaves it to
-   the old route. */
+static SP_UNUSED int sp_poly_root_defines(const char *m) {
+  return sp_poly_names_have(sp_poly_root_lacks_names, m);
+}
+/* 1 when a reopened Enumerator or Enumerable defines m (or a method_missing
+   that may answer it), an Array name an Enumerator lacks
+   (sp_poly_enum_lacks_names): the check below leaves it to the old route. */
 static SP_UNUSED int sp_poly_enum_defines(const char *m) {
-  for (const char *const *n = sp_poly_enum_lacks_names; n && *n; n++)
-    if (strcmp(*n, m) == 0) return 1;
-  return 0;
+  return sp_poly_names_have(sp_poly_enum_lacks_names, m);
 }
 /* An Enumerable name (count, first, include?, member?) on a boxed value:
    nil, a number, a boolean, and a builtin with no #size that has no #each

@@ -7000,6 +7000,15 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
          assign to whatever the yield's value was typed as (a String local
          took an sp_int and the C build stopped) */
       { Repr yt_repr = repr_of(c, id);
+        /* a yield no block reaches has no type of its own: the sentinel
+           takes the one of the write its value goes to, which the write
+           does not convert (`@r = yield` into an Integer slot) */
+        if (yt_repr.as_ty == TY_UNKNOWN && yt_repr.kind != RK_BOXED) {
+          VpUp up;
+          vp_climb(nt, codegen_node_parents(c, id), id, VPS_ALL & ~VP_WRITES, &up);
+          if (up.kind == VPU_ENDED && up.parent >= 0 && vp_is_value_edge(nt, up.parent, up.node, VP_WRITES))
+            yt_repr = repr_of(c, up.parent);
+        }
         TyKind yt = yt_repr.as_ty;
         if (yt_repr.kind == RK_BOXED || yt == TY_UNKNOWN || yt == TY_NIL || yt == TY_VOID) buf_puts(b, "sp_box_nil())");
         else if (yt == TY_INT) buf_puts(b, "(sp_int)0)");

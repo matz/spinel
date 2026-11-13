@@ -35317,11 +35317,41 @@ static int pf_scope_named(Compiler *c, const Scope *src, const char *name) {
   if (src->class_id < 0) return comp_method_index(c, name);
   return (src->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, src->class_id, name);
 }
+/* The initialize versions that run by a proc form of their own, marked in
+   a table of the n0 scopes there are (the caller frees it): a version some
+   construction may run in place of the table's (cplan_new_initializers),
+   where an exception class's construction builds it (`E.new`, `raise E`,
+   `E.exception` all run the constructor, which does not splice), or where
+   a `new` the plan answers it at passes a proc (`K.new(&pr)`). A plain
+   `new` with no block splices the version, as it splices the table's. */
+static char *pf_init_versions(Compiler *c, int n0) {
+  const NodeTable *nt = c->nt;
+  char *mark = calloc(n0 > 0 ? (size_t)n0 : 1, 1);
+  if (!mark) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!class_is_exc_subclass(c, k)) continue;
+    int ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, k, ms, VER_MAX_ARMS, &whole);
+    for (int i = 1; i < n; i++)
+      if (ms[i] >= 0 && ms[i] < n0) mark[ms[i]] = 1;
+  }
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || !is_new_name(nt_str(nt, id, "name"))) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
+    int ks[VER_MAX_ARMS], nk = new_recv_classes(c, nt_ref(nt, id, "receiver"), ks, VER_MAX_ARMS);
+    for (int i = 0; i < nk; i++) {
+      int mi = cplan_new_initialize(c, id, ks[i], NULL);
+      if (mi >= 0 && mi < n0) mark[mi] = 1;
+    }
+  }
+  return mark;
+}
 
 int make_yield_proc_forms(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int made = 0;
+  int made = 0, n0 = c->nscopes;
   mark_ctor_cycles(c);
+  char *init_versions = pf_init_versions(c, n0);
   for (int next = 1; next < c->nscopes; next++) {
     int s = next;
     Scope *src = &c->scopes[s];
@@ -35362,15 +35392,19 @@ int make_yield_proc_forms(Compiler *c) {
        object (string interpolation, puts, p of a container) */
     int display = src->class_id >= 0 && !src->is_cmethod && src->nparams == 0 &&
                   (sp_streq(src->name, "to_s") || sp_streq(src->name, "inspect"));
-    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src)) &&
+    /* an initialize version a construction runs by a proc form of its own
+       (pf_init_versions) */
+    int init_version = s < n0 && init_versions[s] && pf_scope_named(c, src, src->name) != s;
+    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !init_version && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src)) &&
         !pf_in_class_dispatch(c, src) && !(src->ctor_cycle && ctor_graph_init(c, s)))
       continue;
     /* A method the program reopens has two definitions in the scope table
        and the last one wins (comp_method_in_class): only that one gets the
        clone. Cloning the first left the poly dispatch arm running the
        package's transport where every other call site ran the program's
-       stub in front of it (#4502). */
-    if (pf_scope_named(c, src, src->name) != s) {
+       stub in front of it (#4502). An initialize version is not called by
+       its name: the sites the plan answers it at call its clone. */
+    if (pf_scope_named(c, src, src->name) != s && !init_version) {
       src->pf_by_name = 1;
       continue;
     }
@@ -35455,6 +35489,7 @@ int make_yield_proc_forms(Compiler *c) {
       }
     }
   }
+  free(init_versions);
   return made;
 }
 

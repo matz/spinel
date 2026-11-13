@@ -203,11 +203,12 @@ int emit_ctor_new_with_proc(Compiler *c, int id, int ci, Buf *b) {
       !(nt_kind(c->nt, blk) == NK_BlockNode && ctor_new_on_cycle(c, id, ci, initm))) return 0;
   /* The clone is the constructor's, of the initialize it runs. A version
      the plan answers here instead (cplan_new_initialize) that does not
-     yield takes the proc as a plain construction does; one that yields has
-     no clone of its own, and the site keeps the constructor's (a gap). */
+     yield takes the proc as a plain construction does; one that yields
+     runs by its own clone on the proc (ctor_alloc_init). */
   if (!ctor_new_runs(c, ci, initm)) {
     if (initm < 0 || !c->scopes[initm].yields) return 0;
-    initm = cplan_new_initialize(c, -1, ci, NULL);
+    if (by_sblk || nt_kind(c->nt, blk) != NK_BlockArgumentNode || scope_proc_form_of(c, initm) < 0) initm = cplan_new_initialize(c, -1, ci, NULL);
+    else { emit_ctor_alloc_init(c, ci, initm, nt_ref(c->nt, id, "arguments"), id, b); return 1; }
   }
   if (ctor_init_proc_form(c, ci) < 0) return 0;
   /* A literal block, here or forwarded from the site a body was spliced
@@ -12647,6 +12648,11 @@ void emit_ctor_alloc_init_argv(Compiler *c, int cid, int initm, const int *argv,
 static void ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, const int *argv, int argc,
                             int call_id, Buf *b) {
   int is_val = comp_ty_value_obj(c, ty_object(cid));
+  /* a yielding version has no function of its own: its proc-form clone
+     runs it, on the site's proc or on none (yield then raises
+     LocalJumpError), the arguments laid out for the clone */
+  int pf = initm >= 0 && c->scopes[initm].yields ? scope_proc_form_of(c, initm) : -1;
+  if (pf >= 0) initm = pf;
   buf_puts(b, "({ ");
   int t = ctor_alloc_decl(c, cid, b);
   char *selftxt = ctor_self_text(c, cid, initm, t);

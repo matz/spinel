@@ -7709,7 +7709,7 @@ static void dflt_self_enter(Scope *m, int dv, char *selfb, size_t cap) {
      caller's class, `N.new` from another class's method could not find the
      helper a recursive default calls, and refused the call or raised
      NoMethodError at run time. */
-  else if (dv >= 0 && g_ctor_self && m->name && sp_streq(m->name, "initialize")) {
+  else if (dv >= 0 && g_ctor_self && scope_is_initialize(m)) {
     g_self = g_ctor_self;
     g_self_deref = g_ctor_self_deref ? g_ctor_self_deref : "->";
     g_emitting_class_id = m->class_id;

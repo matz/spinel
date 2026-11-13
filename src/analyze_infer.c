@@ -6972,13 +6972,13 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
     if (is_len_alias(name) && argc == 0) {
       /* a member of that name wins: its generated reader is the method */
       char szn[272]; snprintf(szn, sizeof szn, "@%s", name);
-      if (comp_ivar_index(sc, szn) < 0) { *out = TY_INT; return 1; }
+      if (comp_inst_ivar_index(sc, szn) < 0) { *out = TY_INT; return 1; }
     }
     if (sp_streq(name, "values_at")) { *out = TY_POLY_ARRAY; return 1; }   /* no keys selects nothing */
     if (sp_streq(name, "hash") && argc == 0) {
       /* a member of that name wins, like size/length above (#4190) */
       char hn2[272]; snprintf(hn2, sizeof hn2, "@%s", name);
-      if (comp_ivar_index(sc, hn2) < 0) { *out = TY_INT; return 1; }
+      if (comp_inst_ivar_index(sc, hn2) < 0) { *out = TY_INT; return 1; }
     }
     if (sp_streq(name, "deconstruct_keys") && argc == 1) { *out = TY_SYM_POLY_HASH; return 1; }
     if (is_dig_name(name) && argc >= 1) {

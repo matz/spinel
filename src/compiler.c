@@ -10,6 +10,7 @@
 #include "codegen_poly.h"
 #include "value_pos.h"
 #include "call_plan.h"
+#include "holder.h"
 #include "method_table_check.h"
 
 #include <stdio.h>
@@ -525,7 +526,8 @@ void comp_free(Compiler *c) {
   share_plan_free(c);
   dsn_free(c);
   order_facts_free(c);
-  free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own); free(c->ie_map.rb); free(c->ie_map.prm);
+  free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own); free(c->ie_map.pending);
+  free(c->ie_map.rb); free(c->ie_map.prm);
   builtin_given_free(c);
   ic_free(c);
   cplan_to_ary_entries_free(c);
@@ -629,6 +631,7 @@ void comp_free(Compiler *c) {
     for (int j = 0; j < c->classes[i].nivars; j++) free(c->classes[i].ivars[j]);
     free(c->classes[i].ivars);
     free((TyKind *)c->classes[i].ivar_types);
+    free(c->classes[i].ivar_side);
     free(c->classes[i].ivar_obj_may_nil);
     free(c->classes[i].ivar_elem_may_nil);
     for (int j = 0; j < c->classes[i].n_rbs_pin_ivars; j++) free(c->classes[i].rbs_pin_ivars[j]);
@@ -1476,9 +1479,12 @@ int comp_ivar_index(ClassInfo *ci, const char *name) {
   return name_idx_find(&ci->ivars_ix, ci->ivars, ci->nivars, name);
 }
 
-int comp_ivar_intern(ClassInfo *ci, const char *name) {
+int comp_ivar_intern(ClassInfo *ci, const char *name, int side) {
   int idx = comp_ivar_index(ci, name);
-  if (idx >= 0) return idx;
+  if (idx >= 0) {
+    if (side & ~ci->ivar_side[idx]) { ci->ivar_side[idx] |= (unsigned char)side; comp_touch_class(ci->idx); }
+    return idx;
+  }
   if (ci->nivars >= ci->civars) {
     ci->civars = ci->civars ? ci->civars * 2 : 8;
     ci->ivars = realloc(ci->ivars, sizeof(char *) * (size_t)ci->civars);
@@ -1493,8 +1499,12 @@ int comp_ivar_intern(ClassInfo *ci, const char *name) {
     ci->ivar_nullable_int_elem = realloc(ci->ivar_nullable_int_elem, (size_t)ci->civars);
     ci->ivar_arr_elem_arr_or_nil = realloc(ci->ivar_arr_elem_arr_or_nil, (size_t)ci->civars);
     ci->ivar_alias_wide = realloc(ci->ivar_alias_wide, (size_t)ci->civars);
+    unsigned char *sd = realloc(ci->ivar_side, (size_t)ci->civars);
+    if (!sd) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    ci->ivar_side = sd;
   }
   ci->ivars[ci->nivars] = strdup(name);
+  ci->ivar_side[ci->nivars] = (unsigned char)side;
   ((TyKind *)ci->ivar_types)[ci->nivars] = TY_UNKNOWN;
   comp_touch_class(ci->idx);    /* a new ivar is a change of the table */
   { ci->ivar_str_shared[ci->nivars] = 0; comp_touch_class(ci->idx); }
@@ -1510,29 +1520,51 @@ int comp_ivar_intern(ClassInfo *ci, const char *name) {
   return ci->nivars++;
 }
 
+int comp_ivar_on(const ClassInfo *ci, int iv, int side) {
+  IMEMO_DEP_CLASS(ci->idx);
+  return iv >= 0 && iv < ci->nivars && (ci->ivar_side[iv] & side) != 0;
+}
+
+int comp_inst_ivar_index(ClassInfo *ci, const char *name) {
+  int iv = comp_ivar_index(ci, name);
+  return comp_ivar_on(ci, iv, IVS_INST) ? iv : -1;
+}
+
+int comp_class_ivar_index(ClassInfo *ci, const char *name) {
+  int iv = comp_ivar_index(ci, name);
+  return comp_ivar_on(ci, iv, IVS_CLASS) ? iv : -1;
+}
+
+int comp_inst_ivar_count(const ClassInfo *ci) {
+  int n = 0;
+  for (int i = 0; i < ci->nivars; i++) n += comp_ivar_on(ci, i, IVS_INST);
+  return n;
+}
+
+/* Swap ivars a and b of ci with every per-ivar fact. */
+static void ivar_entry_swap(ClassInfo *ci, int a, int b) {
+  char *nm = ci->ivars[a]; ci->ivars[a] = ci->ivars[b]; ci->ivars[b] = nm;
+  TyKind *ty = (TyKind *)ci->ivar_types, t = ty[a]; ty[a] = ty[b]; ty[b] = t;
+  TyKind oa = ci->ivar_oa_type[a]; ci->ivar_oa_type[a] = ci->ivar_oa_type[b]; ci->ivar_oa_type[b] = oa;
+  int os = ci->ivar_oa_seed[a]; ci->ivar_oa_seed[a] = ci->ivar_oa_seed[b]; ci->ivar_oa_seed[b] = os;
+  unsigned char *flags[] = { ci->ivar_str_shared, ci->ivar_elems_shared, ci->ivar_int_table, ci->ivar_oa_conflict,
+                             ci->ivar_nullable_int, ci->ivar_nullable_int_elem, ci->ivar_arr_elem_arr_or_nil,
+                             ci->ivar_alias_wide, ci->ivar_side };
+  for (size_t k = 0; k < sizeof flags / sizeof flags[0]; k++) {
+    unsigned char f = flags[k][a]; flags[k][a] = flags[k][b]; flags[k][b] = f;
+  }
+}
+
 /* Intern a Struct/Data member's backing ivar as the next member: members sit
    at ivars[0..nmembers), in declaration order, ahead of any other ivar the
    class already interned (an attr's, or one a method assigns). */
 int comp_member_intern(ClassInfo *ci, const char *name) {
-  int idx = comp_ivar_intern(ci, name);
+  int idx = comp_ivar_intern(ci, name, IVS_INST);
   if (idx < ci->nmembers) return idx;
   int m = ci->nmembers;
   if (idx != m) {
     comp_touch_class(ci->idx);  /* the ivars are renumbered */
-#define IV_SWAP(arr, T) do { T _t = ci->arr[idx]; ((T *)ci->arr)[idx] = ci->arr[m]; ((T *)ci->arr)[m] = _t; } while (0)
-    IV_SWAP(ivars, char *);
-    IV_SWAP(ivar_types, TyKind);
-    IV_SWAP(ivar_str_shared, unsigned char);
-    IV_SWAP(ivar_elems_shared, unsigned char);
-    IV_SWAP(ivar_int_table, unsigned char);
-    IV_SWAP(ivar_oa_type, TyKind);
-    IV_SWAP(ivar_oa_seed, int);
-    IV_SWAP(ivar_oa_conflict, unsigned char);
-    IV_SWAP(ivar_nullable_int, unsigned char);
-    IV_SWAP(ivar_nullable_int_elem, unsigned char);
-    IV_SWAP(ivar_arr_elem_arr_or_nil, unsigned char);
-    IV_SWAP(ivar_alias_wide, unsigned char);
-#undef IV_SWAP
+    ivar_entry_swap(ci, idx, m);
   }
   return ci->nmembers++;
 }
@@ -4884,13 +4916,8 @@ void comp_pres_note(Compiler *c, const char *ivn, int flag) {
    the emitters use (instance method -> class, top-level -> Toplevel; class
    methods / instance_eval contexts return -1). */
 int comp_ivar_owner(Compiler *c, int node) {
-  Scope *cs = comp_scope_of(c, node);
-  if (!cs) return -1;
-  /* a class method's ivar is its class's civ_ slot, typed with the class's
-     ivars (strbuf_ivar_owner): the same rules make it the handle */
-  if (cs->is_cmethod) return cs->class_id;
-  if (cs->class_id >= 0) return cs->class_id;
-  return c->toplevel_class;
+  int cid;
+  return holder_ivar_side(c, node, &cid) ? cid : -1;
 }
 
 /* The variable a site names, by the read kind, name and key the String

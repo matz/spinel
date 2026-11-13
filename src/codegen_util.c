@@ -756,10 +756,8 @@ int operand_may_allocate(Compiler *c, int id) {
   if (repr_self_shared(c, id)) return 1;
   if (repr_static_read_kind(nt_kind(c->nt, id)) && repr_of(c, id).share) return 1;
   if (nt_kind(c->nt, id) != NK_InstanceVariableReadNode) return 0;
-  const char *nm = nt_str(c->nt, id, "name");
-  int cid = nm ? strbuf_ivar_owner(c, id) : -1;
-  int iv = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-  return iv >= 0 && c->classes[cid].ivar_types[iv] == TY_STRBUF;
+  HolderRef h;
+  return holder_of_node_slot(c, id, &h) && h.idx >= 0 && c->classes[h.cid].ivar_types[h.idx] == TY_STRBUF;
 }
 /* True if evaluating the subtree at `id` can be observed by, or can observe,
    a sibling argument's evaluation: any call (a user method, a mutating builtin,
@@ -2573,26 +2571,6 @@ const char *strbuf_local_name(Compiler *c, int recv) {
   LocalVar *rl = rs ? scope_local(rs, rn) : NULL;
   return repr_of_slot(c, rl).kind == RK_STRBUF ? rn : NULL;
 }
-/* The owning class slot of an ivar READ node, mirroring the read emitter's
-   storage resolution: instance method -> its class; top-level method ->
-   the Toplevel pseudo-class; a class method -> its class, whose civ_ slot
-   holds it (strbuf_slot_text); an instance_eval context returns -1 (its
-   storage is not a per-instance field). */
-int strbuf_ivar_owner(Compiler *c, int node) {
-  /* (--share-strings: an ivar in an instance_eval/exec splice is the
-     rebound receiver's, as the ivar emitter takes it: `K.new(s).instance_exec
-     { @name }` read the surrounding scope's slot facts for K's @name) */
-  if (ie_class_of(c, node) >= 0) return ie_class_of(c, node);
-  Scope *cs = comp_scope_of(c, node);
-  if (!cs) return -1;
-  if (cs->is_cmethod) return cs->class_id;
-  if (cs->class_id >= 0) return cs->class_id;
-  if (g_ie_class_id >= 0) return g_ie_class_id;
-  /* a block or a proc written in a class or module body reads the body
-     class's own slot, as the read emitter resolves it */
-  if (holder_cbody(c, node) >= 0) return holder_cbody(c, node);
-  return c->toplevel_class;
-}
 /* ---- Is an object's ivar set? ----
    An object lays out every ivar its class can hold, and a slot nothing has
    written yet reads nil -- which instance_variables, instance_variable_
@@ -2794,7 +2772,7 @@ static int ivs_order_init(Compiler *c, int cid, int leaf, int *ord, int *n, int 
   return ok;
 }
 static void ivs_order_add(Compiler *c, int leaf, const char *ivn, int *ord, int *n) {
-  int ix = comp_ivar_index(&c->classes[leaf], ivn);
+  int ix = comp_inst_ivar_index(&c->classes[leaf], ivn);
   for (int i = 0; ix >= 0 && i < *n; i++) if (ord[i] == ix) return;
   if (ix >= 0) ord[(*n)++] = ix;
 }
@@ -2829,7 +2807,8 @@ static int ivs_order_walk(Compiler *c, int body, int mi, int leaf, int *ord, int
   if (k == NK_StatementsNode) {
     int cnt = 0; const int *st = nt_arr(nt, body, "body", &cnt);
     /* once every ivar has been entered, the rest cannot change the order */
-    for (int i = 0; i < cnt && *n < c->classes[leaf].nivars; i++)
+    int ninst = comp_inst_ivar_count(&c->classes[leaf]);
+    for (int i = 0; i < cnt && *n < ninst; i++)
       if (!ivs_order_walk(c, st[i], mi, leaf, ord, n, depth)) return 0;
     return 1;
   }
@@ -3166,7 +3145,7 @@ static int ivs_tracked(Compiler *c, int cid, const char *ivn, int *memo, int *bm
   /* the base kinds of the members, and whether one is observed; only then
      do the costlier checks of initialize's order and of the writes run */
   for (int k = 0; k < c->nclasses && fam > 0; k++) {
-    int iv = c->classes[k].presence_family == fam ? comp_ivar_index(&c->classes[k], ivn) : -1;
+    int iv = c->classes[k].presence_family == fam ? comp_inst_ivar_index(&c->classes[k], ivn) : -1;
     if (iv < 0) continue;
     int slot = iv < 64 ? k * 64 + iv : -1;
     int base = slot >= 0 && bmemo[slot] >= 0 ? bmemo[slot] : ivs_base_kind(c, k, ivn);
@@ -3176,7 +3155,7 @@ static int ivs_tracked(Compiler *c, int cid, const char *ivn, int *memo, int *bm
     set0 |= base == 0;
   }
   for (int k = 0; k < c->nclasses && seen; k++) {
-    int iv = c->classes[k].presence_family == fam ? comp_ivar_index(&c->classes[k], ivn) : -1;
+    int iv = c->classes[k].presence_family == fam ? comp_inst_ivar_index(&c->classes[k], ivn) : -1;
     if (iv < 0) continue;
     int base = iv < 64 ? bmemo[k * 64 + iv] : ivs_base_kind(c, k, ivn);
     if (base == 0 && !needs && !ivs_init_sets(c, k, ivn, 0, 1)) needs = 1;
@@ -3185,7 +3164,7 @@ static int ivs_tracked(Compiler *c, int cid, const char *ivn, int *memo, int *bm
   if (seen && !needs && set0) needs = (comp_pres_flags(c, ivn) & PRES_REMOVED) != 0;
   int tracked = seen && needs && !unmarked;
   for (int k = 0; k < c->nclasses && fam > 0; k++) {
-    int iv = c->classes[k].presence_family == fam ? comp_ivar_index(&c->classes[k], ivn) : -1;
+    int iv = c->classes[k].presence_family == fam ? comp_inst_ivar_index(&c->classes[k], ivn) : -1;
     if (iv >= 0 && iv < 64 && bmemo[k * 64 + iv] >= 0) memo[k * 64 + iv] = tracked ? 3 : bmemo[k * 64 + iv];
   }
   return tracked;
@@ -3197,7 +3176,7 @@ static unsigned g_ivs_flush_gen = 0;
 static int ivs_kind(Compiler *c, int cid, const char *ivn) {
   if (cid < 0 || cid >= c->nclasses || !ivn) return 2;
   ClassInfo *ci = &c->classes[cid];
-  int iv = comp_ivar_index(ci, ivn);
+  int iv = comp_inst_ivar_index(ci, ivn);
   if (iv < 0) return 2;
   int n = c->nclasses * 64;
   if (c->pres_memo_n != n * 2) {
@@ -3253,7 +3232,7 @@ static int ivs_kind(Compiler *c, int cid, const char *ivn) {
 int ivar_ranked(Compiler *c, int cid) {
   /* a class with no ivars has no rank to keep, nor a counter */
   if (!c->pres_seen || cid < 0 || cid >= c->nclasses || c->classes[cid].presence_family <= 0 ||
-      c->classes[cid].nivars == 0) return 0;
+      comp_inst_ivar_count(&c->classes[cid]) == 0) return 0;
   int fam = c->classes[cid].presence_family;
   if (c->pres_rank_n != c->nclasses) {
     free(c->pres_rank);
@@ -3272,23 +3251,25 @@ int ivar_ranked(Compiler *c, int cid) {
     ok = !ki->is_value_type && !class_is_exc_subclass(c, k);
     int late = 0;
     for (int j = 0; j < ki->nivars && ok; j++) {
+      if (!comp_ivar_on(ki, j, IVS_INST)) continue;
       ok = !ivs_unmarked_write(c, k, ki->ivars[j]);
       late |= ivs_kind(c, k, ki->ivars[j]) != 0;
     }
     /* an object whose ivars all initialize assigns, unconditionally and
        first, has its class's order; one with a single ivar has no order */
-    varies |= late && ki->nivars > 1;
+    varies |= late && comp_inst_ivar_count(ki) > 1;
   }
   *m = seen && varies && ok ? 2 : 1;
   return *m == 2;
 }
 int ivar_set_kind(Compiler *c, int cid, const char *ivn) {
   int kind = ivs_kind(c, cid, ivn);
-  if (kind == 3 || cid < 0 || cid >= c->nclasses || comp_ivar_index(&c->classes[cid], ivn) < 0) return kind;
+  if (kind == 3 || cid < 0 || cid >= c->nclasses || comp_inst_ivar_index(&c->classes[cid], ivn) < 0) return kind;
   return ivar_ranked(c, cid) ? 3 : kind;
 }
 /* A listing of a ranked class's ivars (ivar_ranked) walks those assigned in
-   the order they were first: `case <index>:` per ivar between these, with
+   the order they were first: `case <index>:` per ivar between these, the
+   index its place among the object's fields (ivar_listing_order_new's), with
    _ixk the position in the walk (0 for the first). obj is the object. */
 void emit_ivar_order_open(Compiler *c, int cid, const char *obj, Buf *b) {
   ClassInfo *ci = &c->classes[cid];
@@ -3299,21 +3280,24 @@ void emit_ivar_order_open(Compiler *c, int cid, const char *obj, Buf *b) {
 void emit_ivar_order_close(Buf *b) {
   buf_puts(b, "} }");
 }
-/* The order the listings of class cid walk its ivars in, ord[0..nivars):
+/* The order the listings of class cid walk its object's ivars in, ord[0..*n)
+   with *n its instance fields (a class-level ivar is the class object's):
    the order initialize assigns them in where it assigns every one
    unconditionally (kind 0 all), else the layout's. A family that keeps the
-   rank of each first assignment (ivar_ranked) sorts at run time instead. */
+   rank of each first assignment (ivar_ranked) sorts at run time instead,
+   by the place in the layout's. */
 /* ... cached per class (Compiler.pres_ord), the walk being initialize's size.
    Objects made without initialize (allocate, Marshal.load) have no such
    order: the program that makes any lists in the layout's. */
 /* ... the order class cid lists its ivars in, from initialize's, when it has one */
 static int ivs_static_order(Compiler *c, int cid, int *ord) {
   ClassInfo *ci = &c->classes[cid];
-  int n = 0, ok = ci->nivars > 1 && !ci->is_struct && !ci->is_data && !c->pres_noinit && !ivar_ranked(c, cid);
-  for (int j = 0; j < ci->nivars && ok; j++) ok = ivar_set_kind(c, cid, ci->ivars[j]) == 0;
-  return ok && ivs_order_init(c, cid, cid, ord, &n, 0) && n == ci->nivars;
+  int ni = comp_inst_ivar_count(ci);
+  int n = 0, ok = ni > 1 && !ci->is_struct && !ci->is_data && !c->pres_noinit && !ivar_ranked(c, cid);
+  for (int j = 0; j < ci->nivars && ok; j++) ok = !comp_ivar_on(ci, j, IVS_INST) || ivar_set_kind(c, cid, ci->ivars[j]) == 0;
+  return ok && ivs_order_init(c, cid, cid, ord, &n, 0) && n == ni;
 }
-int *ivar_listing_order_new(Compiler *c, int cid) {
+int *ivar_listing_order_new(Compiler *c, int cid, int *n) {
   ClassInfo *ci = &c->classes[cid];
   size_t sz = sizeof(int) * (size_t)(ci->nivars > 0 ? ci->nivars : 1);
   if (c->pres_ord_n != c->nclasses) {
@@ -3326,9 +3310,12 @@ int *ivar_listing_order_new(Compiler *c, int cid) {
   if (!c->pres_ord[cid]) {
     int *ord = (int *)malloc(sz);
     if (!ord) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    if (!ivs_static_order(c, cid, ord)) for (int j = 0; j < ci->nivars; j++) ord[j] = j;
+    if (!ivs_static_order(c, cid, ord))
+      for (int j = 0, k = 0; j < ci->nivars; j++)
+        if (comp_ivar_on(ci, j, IVS_INST)) ord[k++] = j;
     c->pres_ord[cid] = ord;
   }
+  *n = comp_inst_ivar_count(ci);
   int *copy = (int *)malloc(sz);
   if (!copy) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   memcpy(copy, c->pres_ord[cid], sz);
@@ -3340,7 +3327,7 @@ int *ivar_listing_order_new(Compiler *c, int cid) {
    2): set or unset cannot be read off the value, so the constructor seeds
    it with a nil carrying SP_IVAR_UNSET_MARK in its cls_id. */
 int poly_ivar_unset_marked(Compiler *c, int cid, int iv) {
-  if (cid < 0 || cid >= c->nclasses || iv < 0 || iv >= c->classes[cid].nivars) return 0;
+  if (cid < 0 || cid >= c->nclasses || !comp_ivar_on(&c->classes[cid], iv, IVS_INST)) return 0;
   ClassInfo *ci = &c->classes[cid];
   if (ci->ivar_types[iv] != TY_POLY || (ci->is_struct && iv < ci->nmembers)) return 0;
   return ivar_set_kind(c, cid, ci->ivars[iv]) == 2;
@@ -3467,31 +3454,14 @@ void emit_civ_slot_decl(Compiler *c, int cid, const char *nm, const char *ctype,
   if (civ_defined_probed(c, nm))
     buf_printf(b, "static int civ_%s_%s__set = 0;\n", c->classes[cid].name, iv_c(nm + 1));
 }
-/* The class whose civ_ slot ivar node `node` (scope s) stores into or reads,
-   by the write emitters' rule: a class method's ivar is its class's, a
-   class body's (outside an instance_eval) the body class's, any other one
-   outside a class the Toplevel pseudo-class's; -1 for an instance's field. */
-int civ_class_of(Compiler *c, int node, Scope *s) {
-  if (!s) return -1;
-  if (s->is_cmethod) return s->class_id;
-  if (s->class_id >= 0 || g_ie_class_id >= 0 || ie_class_of(c, node) >= 0) return -1;
-  if (g_class_body_id >= 0) return g_class_body_id;
-  return c->toplevel_class;
-}
-/* The same for ivar write node `w`, which stores into self: an instance
-   method's, or an instance_eval body's, whose self is the rebound receiver
-   (the class the write emitters take, ie_class_of first); for a
-   class-level ivar's write, its civ_ slot's set flag (civ_set_mark). */
+/* The statement that marks ivar write node `w`'s slot assigned after its
+   store (holder_ivar_side): an object's field's flag (ivar_set_mark), or a
+   class-level ivar's civ_ slot's set flag (civ_set_mark). */
 const char *ivar_write_mark(Compiler *c, int w, char *buf, size_t cap) {
-  Scope *s = comp_scope_of(c, w);
   const char *nm = nt_str(c->nt, w, "name");
-  int iec = ie_class_of(c, w);
-  if (s && nm && iec < 0) {
-    int gc = civ_class_of(c, w, s);
-    if (gc >= 0) return civ_set_mark(c, gc, nm, buf, cap);
-  }
-  int cid = iec >= 0 ? iec : s && !s->is_cmethod && s->class_id >= 0 ? s->class_id : g_ie_class_id;
-  if (!s || cid < 0 || !nm || !g_self) return NULL;
+  int cid, side = nm ? holder_ivar_side(c, w, &cid) : 0;
+  if (side == IVS_CLASS) return civ_set_mark(c, cid, nm, buf, cap);
+  if (side != IVS_INST || !g_self) return NULL;
   return ivar_set_mark(c, cid, nm, g_self, g_self_deref, buf, cap);
 }
 int *an_parent_map(const NodeTable *nt);
@@ -8111,7 +8081,7 @@ int ty_gc_holds_refs(Compiler *c, TyKind t) {
   if (!comp_ty_value_obj(c, t)) return 0;
   ClassInfo *vc = &c->classes[ty_object_class(t)];
   for (int i = 0; i < vc->nivars; i++)
-    if (vc->ivar_types[i] == TY_STRING) return 1;
+    if (comp_ivar_on(vc, i, IVS_INST) && vc->ivar_types[i] == TY_STRING) return 1;
   return 0;
 }
 /* Root a temp of a kind ty_gc_holds_refs answers: as emit_gc_root_tmp, or
@@ -8142,7 +8112,7 @@ void emit_gc_root_tmp_refs(Compiler *c, TyKind t, int tmp, Buf *b) {
   ClassInfo *vc = &c->classes[ty_object_class(t)];
   const char *sep = "";
   for (int i = 0; i < vc->nivars; i++)
-    if (vc->ivar_types[i] == TY_STRING || vc->ivar_types[i] == TY_STRBUF) {
+    if (comp_ivar_on(vc, i, IVS_INST) && (vc->ivar_types[i] == TY_STRING || vc->ivar_types[i] == TY_STRBUF)) {
       buf_printf(b, "%sSP_GC_ROOT(_t%d.iv_%s);", sep, tmp, iv_c(vc->ivars[i] + 1));
       sep = " ";
     }
@@ -8588,7 +8558,8 @@ static int class_is_allocated(Compiler *c, int cid) {
 static int ivar_has_nilbit_own(Compiler *c, int cid, int iv) {
   if (cid < 0 || cid >= c->nclasses) return 0;
   ClassInfo *ci = &c->classes[cid];
-  if (iv < 0 || iv >= ci->nivars || !oint_kind(ci->ivar_types[iv])) return 0;
+  /* (a class-level ivar is the class object's: its civ_ static, civ_is_oint) */
+  if (!comp_ivar_on(ci, iv, IVS_INST) || !oint_kind(ci->ivar_types[iv])) return 0;
   if (ci->ivar_nullable_int && ci->ivar_nullable_int[iv]) return 1;
   if (class_is_allocated(c, cid)) return 1;
   /* a Struct / Data member is assigned by the generated constructor */
@@ -8678,36 +8649,27 @@ void ivar_nilbit_assign(Compiler *c, int cid, int iv, const char *obj, const cha
   snprintf(out, cap, "%siv__nilb[%d] = %s", obj, k, nil);
 }
 
-/* The ivar an InstanceVariableReadNode / write names, as the read emitter
-   resolves it (emit_ivar_cvar_gvar_expr): the object's field of class
-   `*cid` (kind 1), or the class-level / top-level static civ_C_x (kind 2);
-   0 when the class has no such slot. */
+/* The ivar an InstanceVariableReadNode / write names, by holder_ivar_side:
+   the object's field of class `*cid` (kind 1), or the class-level /
+   top-level static civ_C_x (kind 2); 0 when the class has no such slot. */
 int ivar_node_slot(Compiler *c, int node, int *cid, int *iv) {
-  HolderRef h;
   *cid = *iv = -1;
-  Scope *cs = comp_scope_of(c, node);
   const char *nm = nt_str(c->nt, node, "name");
-  if (!nm) return 0;
-  /* inside an instance_eval / instance_exec splice: the receiver's class
-     (the analysis's map for the node, else the splice being emitted) */
-  int iec = ie_class_of(c, node);
-  if (iec < 0 && cs && cs->class_id < 0 && !cs->is_cmethod) iec = g_ie_class_id;
-  if (iec >= 0) {
-    for (int k = iec; k >= 0; k = c->classes[k].parent) {
-      int i = comp_ivar_index(&c->classes[k], nm);
+  int k, side = nm ? holder_ivar_side(c, node, &k) : 0;
+  if (!side) return 0;
+  /* an object's field: its class's own, or, for an instance_eval
+     receiver, the nearest class above it that lays the name out */
+  if (side == IVS_INST) {
+    for (; k >= 0; k = c->classes[k].parent) {
+      int i = comp_inst_ivar_index(&c->classes[k], nm);
       if (i >= 0) { *cid = k; *iv = i; return 1; }
     }
     return 0;
   }
-  /* a class body outside any def: the class-level static */
-  if (cs && cs->class_id < 0 && !cs->is_cmethod && g_class_body_id >= 0) {
-    int i = comp_ivar_index(&c->classes[g_class_body_id], nm);
-    if (i < 0) return 0;
-    *cid = g_class_body_id; *iv = i; return 2;
-  }
-  if (!holder_of_node_in(c, node, g_class_body_id, &h) || h.idx < 0) return 0;
-  *cid = h.cid; *iv = h.idx;
-  return h.cls_slot ? 2 : 1;
+  int i = comp_ivar_index(&c->classes[k], nm);
+  if (i < 0) return 0;
+  *cid = k; *iv = i;
+  return 2;
 }
 /* The head of a Range walk, `for (VAR = first; ...; VAR += step)`, whose
    bounds may sit at the ends of sp_int: `i >= last` with last at INTPTR_MIN

@@ -273,8 +273,14 @@ static int node_is_oint_asked(Compiler *c, int node) {
            : comp_trampoline_kind(c, call_target(c, node, ty_object_class(iert), nm, 0, NULL)) != 0)) {
       int bb = nt_ref(nt, ieb, "body");
       int bn = 0; const int *bs = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
-      return (bn > 0 && node_is_oint(c, bs[bn - 1])) ||
-             (bb >= 0 && (block_next_may_be_nil(c, bb) || block_break_may_be_nil(c, bb)));
+      /* (a splice nested in a non-object one reads its own receiver's
+         ivars, as its emission does: emit_call_instance_eval_arms) */
+      int sv_nil = g_ie_nil_ivars;
+      if (r >= 0 && is_instance_eval_family(nm) && g_ie_nil_ivars != node + 1) g_ie_nil_ivars = 0;
+      int o = (bn > 0 && node_is_oint(c, bs[bn - 1])) ||
+              (bb >= 0 && (block_next_may_be_nil(c, bb) || block_break_may_be_nil(c, bb)));
+      g_ie_nil_ivars = sv_nil;
+      return o;
     }
     /* Array's, Hash's or String's own method on an instance of a subclass
        of one (comp_arysub_call, a `super` into it too): the rows below for
@@ -764,10 +770,8 @@ int repr_write_share(const Compiler *c, int node) {
   }
   if (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode ||
       k == NK_InstanceVariableAndWriteNode) {
-    const char *nm = nt_str(nt, node, "name");
-    int cid = nm ? strbuf_ivar_owner(mc, node) : -1;
-    int iv = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-    return iv >= 0 && repr_of_ivar(c, cid, iv).share;
+    HolderRef h;
+    return holder_of_node_slot(c, node, &h) && h.idx >= 0 && repr_of_ivar(c, h.cid, h.idx).share;
   }
   if (k == NK_GlobalVariableWriteNode || k == NK_GlobalVariableOrWriteNode || k == NK_GlobalVariableAndWriteNode ||
       k == NK_ClassVariableWriteNode || k == NK_ClassVariableOrWriteNode || k == NK_ClassVariableAndWriteNode)
@@ -1144,10 +1148,8 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
     /* An ivar promoted after the node types settled still reads as
        String here. Its box carries the shared slot's handle too. */
     if (k == NK_InstanceVariableReadNode) {
-      const char *nm = nt_str(nt, node, "name");
-      int cid = nm ? strbuf_ivar_owner(mc, node) : -1;
-      int iv = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-      return iv >= 0 && repr_of_ivar(c, cid, iv).share ? RS_HANDLE : RS_NONE;
+      HolderRef h;
+      return holder_of_node_slot(c, node, &h) && h.idx >= 0 && repr_of_ivar(c, h.cid, h.idx).share ? RS_HANDLE : RS_NONE;
     }
     /* a write in value position whose slot holds the handle the rule
        assigned: its value is that slot, as the slot's read is */
@@ -1170,10 +1172,8 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
     return lv && lv->type == TY_POLY ? RS_SLOT_POLY : RS_HANDLE;
   }
   if (k == NK_InstanceVariableReadNode) {
-    const char *nm = nt_str(nt, node, "name");
-    int cid = nm ? strbuf_ivar_owner(mc, node) : -1;
-    int iv = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-    if (iv >= 0 && c->classes[cid].ivar_types[iv] == TY_STRBUF) return RS_HANDLE;
+    HolderRef h;
+    if (holder_of_node_slot(c, node, &h) && h.idx >= 0 && c->classes[h.cid].ivar_types[h.idx] == TY_STRBUF) return RS_HANDLE;
   }
   /* a global holding the handle (--share-strings) */
   if ((repr_static_read_kind(k) || k == NK_GlobalVariableWriteNode) && repr_static_share(c, node))
@@ -1183,10 +1183,8 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
      arm beside it boxed that `const char *` as the handle, and the C did
      not build) */
   if (k == NK_InstanceVariableWriteNode) {
-    const char *nm = nt_str(nt, node, "name");
-    int cid = nm ? strbuf_ivar_owner(mc, node) : -1;
-    int iv = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-    if (iv < 0 || c->classes[cid].ivar_types[iv] == TY_STRBUF) return RS_HANDLE;
+    HolderRef h;
+    if (!holder_of_node_slot(c, node, &h) || h.idx < 0 || c->classes[h.cid].ivar_types[h.idx] == TY_STRBUF) return RS_HANDLE;
   }
   /* so is any write's whose slot holds the rule's handle */
   if (repr_write_share(c, node)) return RS_HANDLE;

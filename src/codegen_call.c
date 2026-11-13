@@ -3485,7 +3485,7 @@ void emit_proc_call_args(Compiler *c, int call, int argc, const int *argv, Buf *
         else if (ty_is_object(at) && comp_ty_value_obj(c, at)) {
           ClassInfo *vc = &c->classes[ty_object_class(at)];
           for (int i = 0; i < vc->nivars; i++)
-            if (vc->ivar_types[i] == TY_STRING || vc->ivar_types[i] == TY_STRBUF) {
+            if (comp_ivar_on(vc, i, IVS_INST) && (vc->ivar_types[i] == TY_STRING || vc->ivar_types[i] == TY_STRBUF)) {
               emit_indent(g_pre, g_indent);
               buf_printf(g_pre, "SP_GC_ROOT(_t%d.iv_%s);\n", atmp[k], iv_c(vc->ivars[i] + 1));
             }
@@ -5481,7 +5481,7 @@ static void emit_sysexit_alloc(Compiler *c, int ci, const char **dim, Buf *b) {
   static char ty[160];
   if (ci < 0) { *dim = "sp_Exception"; buf_puts(b, "sp_exc_new(\"SystemExit\", (&(\"\\xff\")[1]))"); return; }
   const char *cn = class_ruby_name(c, ci); if (!cn) cn = c->classes[ci].name;
-  if (c->classes[ci].nivars > 0) {
+  if (comp_inst_ivar_count(&c->classes[ci]) > 0) {
     snprintf(ty, sizeof ty, "sp_%s", c->classes[ci].c_name);
     *dim = ty;
     buf_printf(b, "(sp_%s *)sp_exc_new_sub_sized(sizeof(sp_%s), \"%s\", (&(\"\\xff\")[1]))",
@@ -5610,7 +5610,7 @@ int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, 
   int ta, tk;
   emit_exc_args_gather(c, id, argc, argv, &ta, &tk);
   buf_printf(b, "({ sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, expected 0..1)\"); ", argc);
-  if (c->classes[ci].nivars > 0) buf_printf(b, "(sp_%s *)NULL; })", c->classes[ci].c_name);
+  if (comp_inst_ivar_count(&c->classes[ci]) > 0) buf_printf(b, "(sp_%s *)NULL; })", c->classes[ci].c_name);
   else buf_puts(b, "(sp_Exception *)NULL; })");
   return 1;
 }
@@ -13780,7 +13780,7 @@ static int exc_sub_new_arm_text(Compiler *c, int id, int ci, int argc, const cha
                     "%s.tag == SP_TAG_STR ? %s.v.s : sp_poly_to_s(%s)); ", a0, a0, a0, a0);
     else buf_puts(b, "(&(\"\\xff\")[1]); ");
   }
-  if (c->classes[ci].nivars > 0)
+  if (comp_inst_ivar_count(&c->classes[ci]) > 0)
     buf_printf(b, "_t%d = sp_box_obj(sp_exc_new_sub_sized(sizeof(sp_%s), \"%s\", _m), %d); } break; ",
                rt2, c->classes[ci].c_name, cn, ci);
   else
@@ -15509,8 +15509,8 @@ void emit_exc_new_no_init(Compiler *c, int id, int ci, int argc, const int *argv
   Buf mh; memset(&mh, 0, sizeof mh);
   int mk, hm = !class_is_syserr(c, ci) && argc >= 1 && comp_ntype(c, argv[0]) == TY_STRING &&
                exc_msg_hold(c, argv[0], b, &mh, &mk);
-  if (hm) buf_printf(b, "((sp_%s *)sp_exc_attach_msg(", c->classes[ci].nivars > 0 ? c->classes[ci].c_name : "Exception");
-  if (c->classes[ci].nivars > 0)
+  if (hm) buf_printf(b, "((sp_%s *)sp_exc_attach_msg(", comp_inst_ivar_count(&c->classes[ci]) > 0 ? c->classes[ci].c_name : "Exception");
+  if (comp_inst_ivar_count(&c->classes[ci]) > 0)
     buf_printf(b, "((sp_%s *)sp_exc_new_sub_sized(sizeof(sp_%s), \"%s\", ",
                c->classes[ci].c_name, c->classes[ci].c_name, cn2);
   else
@@ -15533,7 +15533,7 @@ void emit_exc_new_no_init(Compiler *c, int id, int ci, int argc, const int *argv
     }
   }
   else buf_puts(b, "(&(\"\\xff\")[1])");
-  buf_puts(b, c->classes[ci].nivars > 0 ? "))" : ")");
+  buf_puts(b, comp_inst_ivar_count(&c->classes[ci]) > 0 ? "))" : ")");
   if (hm) buf_printf(b, ", %s))", mh.p);
   if (hm) exc_msg_release(b, mk);
   free(mh.p);
@@ -29686,10 +29686,9 @@ static int ctor_arg_shared(Compiler *c, int a, int boxed) {
            (!boxed || repr_of(c, a).handle);
   }
   if (k != NK_InstanceVariableReadNode || boxed) return 0;
-  const char *nm = nt_str(nt, a, "name");
-  int cid = nm ? strbuf_ivar_owner(c, a) : -1;
-  int iv = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-  return iv >= 0 && c->classes[cid].ivar_types[iv] == TY_STRBUF && c->classes[cid].ivar_str_shared[iv];
+  HolderRef h;
+  if (!holder_of_node_slot(c, a, &h) || h.idx < 0) return 0;
+  return c->classes[h.cid].ivar_types[h.idx] == TY_STRBUF && c->classes[h.cid].ivar_str_shared[h.idx];
 }
 
 /* The `new` / `raise` arm of refuse_string_copies: 1 when the call is one. */

@@ -11843,7 +11843,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
   }
   /* #hash: combine the boxed member hashes so equal-valued structs agree.
      A member literally named `hash` shadows this with its reader (#2975). */
-  if (sp_streq(name, "hash") && argc == 0 && comp_ivar_index(sc, "@hash") < 0) {
+  if (is_hash_name(name) && argc == 0 && comp_inst_ivar_index(sc, "@hash") < 0) {
     int tv5 = ++g_tmp, th5 = ++g_tmp;
     Buf rb5 = expr_buf(c, recv);
     buf_printf(b, "({ sp_%s *_t%d = %s; uint64_t _t%d = 1469598103934665603ULL;",
@@ -11860,7 +11860,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
   }
   if (is_len_alias(name) && argc == 0 && !sc->is_data) {
     char szn[272]; snprintf(szn, sizeof szn, "@%s", name);
-    if (comp_ivar_index(sc, szn) < 0) {
+    if (comp_inst_ivar_index(sc, szn) < 0) {
       Buf rb = expr_buf(c, recv);
       buf_printf(b, "((void)(%s), %dLL)", rb.p ? rb.p : "0", sc->nmembers);
       free(rb.p);
@@ -13150,12 +13150,14 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       int tv2 = ++g_tmp;
       buf_printf(b, "({ sp_%s _t%d = ", ci2->c_name, tv2); emit_expr(c, recv, b);
       buf_printf(b, "; sp_sprintf(\"#<%s:0x%%016llx", rn2);
+      /* (the object's own ivars: a class-level one is the class object's) */
       if (want_ins)
-        for (int vi = 0; vi < ci2->nivars; vi++)
-          buf_printf(b, "%s %s=%%s", vi ? "," : "", ci2->ivars[vi]);
+        for (int vi = 0, shown = 0; vi < ci2->nivars; vi++)
+          if (comp_ivar_on(ci2, vi, IVS_INST)) buf_printf(b, "%s %s=%%s", shown++ ? "," : "", ci2->ivars[vi]);
       buf_printf(b, ">\", %s(unsigned long long)(uintptr_t)&_t%d", rarg2, tv2);
       if (want_ins)
         for (int vi = 0; vi < ci2->nivars; vi++) {
+          if (!comp_ivar_on(ci2, vi, IVS_INST)) continue;
           char fb2[300]; snprintf(fb2, sizeof fb2, "_t%d.iv_%s", tv2, iv_c(ci2->ivars[vi] + 1));
           buf_puts(b, ", sp_poly_inspect(");
           emit_boxed_text(c, ci2->ivar_types[vi], fb2, b);
@@ -13257,7 +13259,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       int mi = -1;
       if (sym && sym[0] == '@')
         for (int i = c->classes[cid].is_struct ? c->classes[cid].nmembers : 0; i < c->classes[cid].nivars; i++)
-          if (sp_streq(c->classes[cid].ivars[i], sym)) { mi = i; break; }
+          if (comp_ivar_on(&c->classes[cid], i, IVS_INST) && sp_streq(c->classes[cid].ivars[i], sym)) { mi = i; break; }
       /* a boxed field that starts with the unset mark (poly_ivar_unset_marked)
          can be undefined again: an unset one raises NameError, a set one
          answers its value and takes the mark back, so defined? and
@@ -17883,7 +17885,7 @@ void emit_ivar_get_by_name(Compiler *c, int k, const char *objp, const char *syv
   buf_printf(b, "{ const char *_n = sp_sym_to_s(%s); (void)_n; ", syv);
   for (int iv = ci->is_struct ? ci->nmembers : 0; iv < ci->nivars; iv++) {
     const char *sym = ci->ivars[iv];
-    if (!sym || sym[0] != '@') continue;
+    if (!sym || sym[0] != '@' || !comp_ivar_on(ci, iv, IVS_INST)) continue;
     TyKind t = ci->ivar_types[iv];
     char fld[400];
     snprintf(fld, sizeof fld, "%siv_%s", objp, iv_c(sym + 1));
@@ -17914,7 +17916,7 @@ void emit_ivar_defined_by_name(Compiler *c, int k, const char *objp, const char 
   buf_printf(b, "{ const char *_n = sp_sym_to_s(%s); (void)_n; ", syv);
   for (int iv = ci->is_struct ? ci->nmembers : 0; iv < ci->nivars; iv++) {
     const char *sym = ci->ivars[iv];
-    if (!sym || sym[0] != '@') continue;
+    if (!sym || sym[0] != '@' || !comp_ivar_on(ci, iv, IVS_INST)) continue;
     buf_printf(b, "%sif (strcmp(_n, \"%s\") == 0) %s = ", any ? "else " : "", sym, out);
     if ((ivar_set_kind(c, k, sym) & 1) || poly_ivar_unset_marked(c, k, iv)) {
       char ex[400], tb[600];
@@ -18061,7 +18063,7 @@ void emit_ivar_set_by_name(Compiler *c, int k, const char *obj, const char *syv,
   emit_frozen_obj_guard(c, k, obj, b);
   for (int iv = ci->is_struct ? ci->nmembers : 0; iv < ci->nivars; iv++) {
     const char *sym = ci->ivars[iv];
-    if (!sym || sym[0] != '@') continue;
+    if (!sym || sym[0] != '@' || !comp_ivar_on(ci, iv, IVS_INST)) continue;
     TyKind t = ci->ivar_types[iv];
     buf_printf(b, "%sif (strcmp(_n, \"%s\") == 0) { ", any ? "else " : "", sym);
     any = 1;
@@ -18288,7 +18290,7 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
          and Spinel has one slot for both, as the typed form refuses */
       for (int k = 0; k < c->nclasses; k++) {
         ClassInfo *sk = &c->classes[k];
-        int miv = sk->instantiated && sk->is_struct && !sk->is_data ? comp_ivar_index(sk, sym) : -1;
+        int miv = sk->instantiated && sk->is_struct && !sk->is_data ? comp_inst_ivar_index(sk, sym) : -1;
         if (miv >= 0 && miv < sk->nmembers && poly_ivar_set_reaches(c, id, k))
           unsupported(c, id, "instance_variable_set to an ivar absent from the fixed object layout");
       }
@@ -18297,7 +18299,7 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
       if (rt == TY_EXCEPTION && (nt_kind(nt, argv[1]) == NK_NilNode || comp_ntype(c, argv[1]) == TY_NIL ||
                                  nullable_int_value(c, argv[1]))) {
         for (int k = 0; k < c->nclasses; k++) {
-          int eiv = class_is_exc_subclass(c, k) ? comp_ivar_index(&c->classes[k], sym) : -1;
+          int eiv = class_is_exc_subclass(c, k) ? comp_inst_ivar_index(&c->classes[k], sym) : -1;
           if (eiv >= 0 && oint_kind(c->classes[k].ivar_types[eiv]) && !ivar_has_nilbit(c, k, eiv))
             unsupported(c, id, "instance_variable_set of a value that may be nil into an exception's Integer or Float ivar");
         }
@@ -18319,7 +18321,7 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
           continue;
         }
         if (!c->classes[k].instantiated) continue;
-        int iv = comp_ivar_index(&c->classes[k], sym);
+        int iv = comp_inst_ivar_index(&c->classes[k], sym);
         if (cplan_builtin_call(c, id) && !is_builtin_reopen(c->classes[k].name) &&
             (iv < 0 || comp_ty_value_obj(c, ty_object(k))) && poly_ivar_set_reaches(c, id, k))
           unsupported(c, id, "instance variable write to a receiver without a writable slot");
@@ -18407,7 +18409,7 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
       buf_puts(b, ") {");
       for (int k = 0; k < c->nclasses; k++) {
         if (!c->classes[k].instantiated) continue;
-        int iv = comp_ivar_index(&c->classes[k], sym);
+        int iv = comp_inst_ivar_index(&c->classes[k], sym);
         /* a Struct member is no ivar: it reads nil (#2849) */
         if (iv < 0 || (c->classes[k].is_struct && iv < c->classes[k].nmembers)) {
           /* a name the class does not declare, where a computed write may
@@ -18481,7 +18483,7 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
       buf_puts(b, ") {");
       for (int k = 0; k < c->nclasses; k++) {
         if (!c->classes[k].instantiated) continue;
-        int iv = comp_ivar_index(&c->classes[k], sym);
+        int iv = comp_inst_ivar_index(&c->classes[k], sym);
         if (iv < 0 || (c->classes[k].is_struct && iv < c->classes[k].nmembers)) {
           /* a computed instance_variable_set's table (#8219) */
           if (c->classes[k].computed_ivar_set)

@@ -129,7 +129,6 @@ typedef struct { int sv, from; RenCopy k; int arm; } RenPark;
 RenPark ren_park(int from);
 void ren_unpark(RenPark *p);
 const char *strbuf_local_name(Compiler *c, int recv);
-int strbuf_ivar_owner(Compiler *c, int node);
 int attr_assign_slot(Compiler *c, int id, int *cid, int *iv);
 const int *codegen_node_parents(Compiler *c, int node);
 int node_is_block_stmt(Compiler *c, int node);
@@ -147,7 +146,7 @@ int strbuf_assign_route(Compiler *c, int v);
 int ivar_set_kind(Compiler *c, int cid, const char *ivn);
 /* ... and whether the family keeps the rank of each ivar's first assignment in place of the flag (codegen_util.c) */
 int ivar_ranked(Compiler *c, int cid);
-int *ivar_listing_order_new(Compiler *c, int cid); /* malloc'd; the caller frees */
+int *ivar_listing_order_new(Compiler *c, int cid, int *n); /* malloc'd; the caller frees */
 void emit_ivar_order_open(Compiler *c, int cid, const char *obj, Buf *b);
 void emit_ivar_order_close(Buf *b);
 void emit_ivar_list_fill(Compiler *c, int k, const char *obj, const char *arr, int create, Buf *b);
@@ -158,7 +157,6 @@ const char *ivar_set_mark(Compiler *c, int cid, const char *ivn, const char *obj
 const char *ivar_write_mark(Compiler *c, int w, char *buf, size_t cap);
 int civ_defined_probed(Compiler *c, const char *nm);
 const char *civ_set_mark(Compiler *c, int cid, const char *nm, char *buf, size_t cap);
-int civ_class_of(Compiler *c, int node, Scope *s);
 void emit_civ_slot_decl(Compiler *c, int cid, const char *nm, const char *ctype, TyKind t,
                         const char *init, Buf *b);
 int ie_class_of(Compiler *c, int node);

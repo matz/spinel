@@ -18944,7 +18944,9 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         int iv_rt = comp_ivar_index(&c->classes[iv_home_cid], ivnm);
         if (iv_rt >= 0) ivt = c->classes[iv_home_cid].ivar_types[iv_rt];
         buf_printf(b, "%s = ", iv_lhs);
-        if (oint_kind(ivt) && iv_rt >= 0 && ivar_has_nilbit(c, iv_home_cid, iv_rt)) {
+        /* (the slot keeps its nil: an object's field in its nil bit, a
+           class-level static in itself, ivar_read_slot_is_oint) */
+        if (oint_kind(ivt) && iv_rt >= 0 && ivar_read_slot_is_oint(c, lefts[i])) {
           /* the element with its nil into the field's nil bit */
           char og[96];
           if (sp_streq(k, "Poly")) snprintf(og, sizeof og, "%s(%s)", oint_unbox(ivt), get_expr);
@@ -19104,7 +19106,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
           buf_puts(b, bx2.p ? bx2.p : "sp_box_nil()"); free(bx2.p);
           buf_puts(b, ")");
         }
-        else if ((sp_streq(k, "Int") || sp_streq(k, "Float")) && iv_rt2 >= 0 && ivar_has_nilbit(c, iv_home_cid, iv_rt2)) {
+        else if ((sp_streq(k, "Int") || sp_streq(k, "Float")) && iv_rt2 >= 0 && ivar_read_slot_is_oint(c, rights[j])) {
           /* the element with its nil into the field's nil bit */
           char og2[160]; snprintf(og2, sizeof og2, "sp_%sArray_oget(_t%d, _t%d)", k, tarr, tix);
           emit_ivar_lhs_otext(c, iv_home_cid, iv_rt2, ivnm2, iv_lhs, og2, b);
@@ -19215,7 +19217,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
                        : ivt == TY_STRBUF ? "sp_slot_strbuf_ck" : NULL;
         /* an Integer or Float element with its nil: into the field's bit,
            or refused for a plain field */
-        if (ck && oint_kind(ivt) && ivar_has_nilbit(c, iv_home_cid, iv_rt)) {
+        if (ck && oint_kind(ivt) && ivar_read_slot_is_oint(c, lefts[i])) {
           char og[200], ipfx[300]; snprintf(og, sizeof og, "%s(%s, \"%s\")", ck, get_expr, ivnm);
           (void)ipfx;
           emit_ivar_lhs_otext(c, iv_home_cid, iv_rt, ivnm, iv_lhs, og, b);

@@ -1411,7 +1411,7 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
            The members alone: a Struct's own ivar past them (`@z`, set by
            instance_variable_set) is a field like any class's, which the
            codegen reads unboxed */
-        int iv = (sym && sym[0] == '@') ? comp_ivar_index(cls, sym) : -1;
+        int iv = (sym && sym[0] == '@') ? comp_inst_ivar_index(cls, sym) : -1;
         if (iv >= 0 && cls->is_struct && iv < cls->nmembers) iv = -1;
         if (iv >= 0) { *out = ivar_value_ty(cls, iv); return 1; }
         { *out = TY_POLY; return 1; }

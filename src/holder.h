@@ -80,11 +80,19 @@ int holder_cvar_owner(const Compiler *c, int node, const char *nm, int body);
    that names no holder and for an ivar with no class; its kind, node and
    name set when a local, global, constant or class variable has no slot.
    An ivar or class variable the class has no entry for resolves
-   with idx -1 (its slot is still spelled). An ivar resolves by the read
-   side's rule (strbuf_ivar_owner): the method's class, a class method's
-   class-level global, a top-level method's Toplevel global, nothing
-   inside an instance_eval block. */
+   with idx -1 (its slot is still spelled). An ivar resolves by
+   holder_ivar_side: the object's field, or the class-level global
+   (cls_slot) of a class method, a class body or main. */
 int holder_of_node(const Compiler *c, int node, HolderRef *out);
+/* The object ivar node `node` names, by the one rule the analysis and the
+   emitters share: an instance of *cid (IVS_INST) inside an
+   instance_eval/exec splice (the receiver's class: the analysis's map for
+   the node, else the splice being emitted) or in an instance method; the
+   class *cid itself (IVS_CLASS) in a class method or a class or module
+   body (with the blocks written there); main, the Toplevel pseudo-class's
+   class side, anywhere else. 0, with *cid -1, when the node has no scope
+   or there is no class to hold it. */
+int holder_ivar_side(const Compiler *c, int node, int *cid);
 int const_path_on_class_value(const Compiler *c, int id, TyKind prt);   /* a path read off a Class value: no one slot */
 int holder_of_node_slot(const Compiler *c, int node, HolderRef *out);   /* no Repr */
 /* holder_of_node, in the class body `body` the caller says (codegen passes

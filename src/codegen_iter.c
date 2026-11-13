@@ -323,10 +323,8 @@ int local_is_handle(Compiler *c, int a) {
 /* --share-strings: a read of an ivar whose slot is the rule's handle */
 int ivar_read_is_handle(Compiler *c, int a) {
   if (a < 0 || nt_kind(c->nt, a) != NK_InstanceVariableReadNode) return 0;
-  const char *nm = nt_str(c->nt, a, "name");
-  int cid = nm ? strbuf_ivar_owner(c, a) : -1;
-  int iv = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-  return iv >= 0 && repr_of_ivar(c, cid, iv).share;
+  HolderRef h;
+  return holder_of_node_slot(c, a, &h) && h.idx >= 0 && repr_of_ivar(c, h.cid, h.idx).share;
 }
 /* A local that is the shared handle, as a reference to the handle itself
    rather than the copy a plain read of it takes. 0 when it is none. */

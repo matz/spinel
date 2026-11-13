@@ -3006,12 +3006,8 @@ static int ct_main_own(Compiler *c, int id, const char *name) {
   int s = elab_main_singleton_at(c, name, p, &d);
   if (s == ELAB_UNKNOWN || (s == ELAB_YES && d && d->scope > 0 && c->scopes[d->scope].class_id < 0)) return 1;
   if (s != ELAB_NO) return -1;
-  ElabVersion vs[8];
-  int si = comp_main_method(c, name), n = elab_history_versions(c, -1, 1, name, vs, 8);
-  if (n < 0) return 1;   /* (more versions than vs holds, or no record: it cannot tell) */
-  for (int i = 0; i < n; i++)
-    if (vs[i].v->scope == si) return 0;
-  return 1;
+  /* (no record: it cannot tell) */
+  return elab_history_holds_scope(c, -1, 1, name, comp_main_method(c, name)) != 1;
 }
 /* Does call id run on main (ct_runs_on_main) and look on main first? At a
    load point, only where main's own method of the name answers there

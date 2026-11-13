@@ -14,3 +14,5 @@ NameError to_s
 :NoMethodError
 main f5 9
 NameError f5
+main f6 9
+Object#f6

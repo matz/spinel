@@ -1,6 +1,7 @@
 # An undef on main's singleton class stops the method lookup there: a call
 # on main raises, though Object, a top-level def or the core (main's own
-# to_s and inspect) has a method of the name behind it.
+# to_s and inspect) has a method of the name behind it. A removal passes the
+# lookup on to Object's method, however many versions main's method had.
 
 class Object
   def f1 = "Object#f1"
@@ -8,6 +9,7 @@ class Object
   def f3 = "Object#f3"
   def f4 = "Object#f4"
   def f5 = "Object#f5"
+  def f6 = "Object#f6"
 end
 
 def self.f1 = "main f1"
@@ -68,7 +70,7 @@ puts((to_s rescue "NameError to_s"))
 p((inspect rescue :NameError))
 p((self.inspect rescue :NoMethodError))
 
-# past eight versions of main's method
+# past eight versions of main's method: an undef, a removal
 def self.f5 = "main f5 1"
 def self.f5 = "main f5 2"
 def self.f5 = "main f5 3"
@@ -83,3 +85,17 @@ class << self
   undef_method :f5
 end
 puts((f5 rescue "NameError f5"))
+def self.f6 = "main f6 1"
+def self.f6 = "main f6 2"
+def self.f6 = "main f6 3"
+def self.f6 = "main f6 4"
+def self.f6 = "main f6 5"
+def self.f6 = "main f6 6"
+def self.f6 = "main f6 7"
+def self.f6 = "main f6 8"
+def self.f6 = "main f6 9"
+puts f6
+class << self
+  remove_method :f6
+end
+puts f6

@@ -4645,6 +4645,14 @@ int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVe
   LoadRecord *r = c->lrec;
   return r && r->recorded ? lr_hist_versions(c, lr_hist(r, cls, sg != 0, name, 0), out, 0, cap) : -1;
 }
+int elab_history_holds_scope(Compiler *c, int cls, int sg, const char *name, int scope) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded) return -1;
+  const LrHist *h = lr_hist(r, cls, sg != 0, name, 0);
+  for (int j = 0; h && j < h->n; j++)
+    if (lr_is_version(&h->v[j]) && h->v[j].scope == scope) return 1;
+  return 0;
+}
 int elab_main_object_one_entry(Compiler *c, const char *name) {
   LoadRecord *r = c->lrec;
   const LrHist *h = r && r->recorded ? lr_hist(r, LR_MAIN, 0, name, 0) : NULL;

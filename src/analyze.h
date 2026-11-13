@@ -670,6 +670,9 @@ int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int
 /* ...and the versions of cls's own history of `name` alone, numbered as
    there */
 int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+/* ...and whether one of them is the method scope `scope` made of (its def
+   or alias: LrDef.scope): 1, 0, or -1 with no record */
+int elab_history_holds_scope(Compiler *c, int cls, int sg, const char *name, int scope);
 /* ...and whether main's history of `name` and Object's are one entry of
    Object's method table, each holding a version (a top-level def and a
    reopening of Object's): their versions write one cell, and a call on main

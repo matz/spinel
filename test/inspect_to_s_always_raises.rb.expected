@@ -15,3 +15,12 @@ TypeError: ts
 TypeError: ts
 TypeError: ts
 end
+KeyError: key not found: #<F2:X>
+KeyError: key not found: #<G2:X>
+KeyError: key not found: #<F2:X>
+KeyError: key not found: custom-h
+KeyError: key not found: #<J2:X @a=1>
+KeyError: key not found: #<L2:X>
+KeyError: key not found: :zz
+KeyError: key not found: #<F2:X>
+9

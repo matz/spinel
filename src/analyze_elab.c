@@ -10007,10 +10007,13 @@ static int lr_attr_last_kind(Compiler *c, const LrHist *h, int *attr) {
   return last;
 }
 
-/* Does a class side's history hold an accessor version and end in a def? */
-static int lr_attr_then_def(const LrHist *h) {
-  int attr = 0, last = lr_attr_last_kind(NULL, h, &attr);
-  return attr && last == LR_DEF;
+/* Does a history (either side) mix accessor versions and def versions, in
+   either order? */
+static int lr_attr_mixed(const LrHist *h) {
+  int attr = 0, def = 0;
+  lr_attr_last_kind(NULL, h, &attr);
+  for (int j = 0; h && j < h->n; j++) def |= lr_is_version(&h->v[j]) && h->v[j].kind == LR_DEF;
+  return attr && def;
 }
 
 /* See analyze.h. */
@@ -10020,7 +10023,7 @@ ElabEntry *elab_replaced_attrs(Compiler *c, int *n) {
   int k = 0, cap = 0;
   for (int i = 0; r && r->recorded && i < r->nhist; i++) {
     const LrHist *h = &r->hist[i];
-    if (h->a < 0 || !h->b || !lr_attr_then_def(h)) continue;
+    if (h->a < 0 || !lr_attr_mixed(h)) continue;
     for (int j = 0; j < h->n; j++) {
       const LrDef *d = &h->v[j];
       if ((d->kind != LR_READER && d->kind != LR_WRITER) || !lr_is_version(d)) continue;

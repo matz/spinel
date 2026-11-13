@@ -959,12 +959,14 @@ ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n);
    LrDef.absent), once the accessors are registered; each statement carries
    its NameError message ("alias_absent") for the emitter. */
 void elab_absent_aliases(Compiler *c);
-/* The class-side accessor versions of each history that ends in a def
-   (`class << self; attr_writer :cfg; end`, then `def self.cfg=`): a call
-   that runs while one is live runs the accessor, any other the def, so
-   each is a version of its own, a method register_attr_versions makes and
+/* The accessor versions of each history, on either side, that mixes
+   accessors and defs in either order (`class << self; attr_writer :cfg;
+   end`, then `def self.cfg=`; `def x`, then `attr_reader :x`): a call that
+   runs while one is live runs the accessor, any other the def, so each is
+   a version of its own, a method register_attr_versions makes and
    elab_attr_scope links to it (LrDef.scope); *n of them, the caller frees
-   the array. An accessor no def follows stays its class's slot alone. */
+   the array. An accessor of a history no def is in stays its class's slot
+   or field alone. */
 ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
 /* does class cls's own side hold such an accessor version of name? */

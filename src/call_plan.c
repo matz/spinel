@@ -3119,8 +3119,9 @@ int cplan_sg_version(Compiler *c, int id, int ci, const char *name) {
   return r;
 }
 /* See call_plan.h. */
-int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
+int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name, int mi) {
   char slot[256];
+  if (mi < 0 || !c->scopes[mi].attr_version || !c->scopes[mi].is_cmethod) return 0;
   const char *nm = id >= 0 && nt_kind(c->nt, id) == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;
   return nm && name && sp_streq(nm, name) && cplan_sg_accessor(c, id, ci, name, slot, sizeof slot) == CP_SG_SLOT;
 }

@@ -20909,7 +20909,7 @@ static void cr_mark_version(Compiler *c, int id, const char *nm, int k, unsigned
   if (nt_kind(c->nt, id) == NK_CallNode && is_method_object_maker(nt_str(c->nt, id, "name"))) flags |= CT_CAPTURE;
   int mi = call_target(c, id, k, nm, flags, NULL);
   char mark[24];
-  if (mi < 0 || (c->scopes[mi].attr_version && cplan_sg_slot_call(c, id, k, nm))) return;
+  if (mi < 0 || cplan_sg_slot_call(c, id, k, nm, mi)) return;
   snprintf(mark, sizeof mark, "\x01%d", mi);
   cr_add_name(m->out, m->n, m->cap, mark);
 }
@@ -21221,7 +21221,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     int k = cn ? const_node_class_index(c, r) : -1;
     int mi = k >= 0 ? call_target(c, id, k, nm, CT_CMETHOD, NULL) : -1;
     /* (a call the plan compiles to the accessor's slot reaches nothing) */
-    if (mi >= 0 && c->scopes[mi].attr_version && cplan_sg_slot_call(c, id, k, nm)) names[0] = NULL;
+    if (cplan_sg_slot_call(c, id, k, nm, mi)) names[0] = NULL;
     else if (mi >= 0) { snprintf(resolved, sizeof resolved, "\x01%d", mi); names[0] = resolved; }
   }
   /* a call on main that finds main's own method reaches that one, not an

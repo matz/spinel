@@ -1359,11 +1359,13 @@ int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot,
    no version (each emitter then keeps its answer without versions).
    CP_SG_NONE where no def replaces the accessor. */
 int cplan_sg_version(Compiler *c, int id, int ci, const char *name);
-/* Does call node id, written with `name` (not a send or a capture of it),
-   run no method on class ci: the plan's answer for it is the class's
+/* Does call node id, written with `name` (not a send or a capture of it)
+   and bound to version mi, run no method on class ci: mi is a class side's
+   accessor version and the plan's answer for the call is the class's
    accessor slot (cplan_sg_accessor). The reach pass then reaches no scope
-   from it, though the version it binds to is the accessor's own. */
-int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name);
+   from it, though the version it binds to is the accessor's own. An
+   instance side's accessor version is a method the call reaches. */
+int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name, int mi);
 /* The class whose own class methods `respond_to?` call id asks about: a
    constant receiver's, or self's in a class method or a class body; -1 for
    any other receiver, an instance's, and for a call of another shape

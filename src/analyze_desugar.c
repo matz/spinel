@@ -33076,8 +33076,28 @@ int prune_unnamed_methods(Compiler *c) {
       }
     }
     if (nd->content && !anh_has(&named, nd->content)) anh_add(&named, nd->content);
+    /* the calls CRuby makes for a node that its text does not spell (a
+       backtick literal's `, an interpolation's to_s, a when's ===,
+       tools/implied_calls.yml) name their methods all the same */
+    if (nt_implied_possible(nt, id)) {
+      NtImplied im[16];
+      int ni = nt_implied_calls(nt, id, im, 16);
+      for (int j = 0; j < ni && j < 16; j++)
+        if (im[j].name && !anh_has(&named, im[j].name)) anh_add(&named, im[j].name);
+    }
   }
+  /* a super names the method of its def's name, in an ancestor */
   const int *par = comp_parent_map(c);
+  static const NodeKind SUPERS[] = { NK_SuperNode, NK_ForwardingSuperNode };
+  for (int si = 0; si < 2; si++)
+    NT_FOREACH_KIND(nt, SUPERS[si], sp) {
+      for (int p = par[sp]; p >= 0; p = par[p])
+        if (nt_kind(nt, p) == NK_DefNode) {
+          const char *dn = nt_str(nt, p, "name");
+          if (dn && !anh_has(&named, dn)) anh_add(&named, dn);
+          break;
+        }
+    }
   PumBody pb = { nt, &defined, arg_cb };
   int blanked = 0, *drop = NULL, ndrop = 0, cdrop = 0;
   NT_FOREACH_KIND(nt, NK_DefNode, d) {

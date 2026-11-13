@@ -9788,11 +9788,21 @@ void ver_cells_settle(Compiler *c) {
   if (!(c->ver_cell_dropped = calloc((size_t)c->ngvars + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int any = 0;   /* (a program with no cell walks nothing) */
   for (int i = 0; i < c->ngvars; i++) any |= c->ver_cell_dropped[i] = c->gvars[i].ver_cell;
+  /* (a Method's maker copies the tests of the entry it captures into its
+     own arity and parameters, cplan_method_arms: where the program makes
+     one, an entry's reads count as the C's though no call reaches it) */
+  static const char *const MAKERS[] = { "method", "public_method", "singleton_method", "instance_method",
+                                        "public_instance_method", NULL };
+  int makes = 0;
+  for (int m = 0; any && !makes && MAKERS[m]; m++)
+    for (int id = an_calls_named_first(c, MAKERS[m]); id >= 0 && !makes; id = an_calls_named_next(id))
+      makes = ver_scope_written(comp_scope_of(c, id));
   for (int id = 0; any && id < nt->count; id++) {
     const char *nm = nt_str(nt, id, "name");
     NodeKind k = nt_kind(nt, id);
     const LocalVar *g = nm && nm[0] == '$' ? comp_gvar(c, nm + 1) : NULL;
-    if (!g || !g->ver_cell || !ver_scope_written(comp_scope_of(c, id))) continue;
+    const Scope *in = g && g->ver_cell ? comp_scope_of(c, id) : NULL;
+    if (!g || !g->ver_cell || !(ver_scope_written(in) || (makes && in->entry != ENTRY_NONE))) continue;
     if (k != NK_GlobalVariableWriteNode || !nt_int(nt, id, "ver_cell", 0) || !an_node_dropped(c, id)) ver_cell_keep(c, nm);
   }
   for (int id = any ? an_calls_named_first(c, RESPOND_TO_NAME) : -1; id >= 0; id = an_calls_named_next(id)) {

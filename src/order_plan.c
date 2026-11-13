@@ -218,10 +218,10 @@ int order_call_runs_no_code(Compiler *c, int id) {
 /* ---- the record ---- */
 
 /* What the subtree of a code operand may do (order_sum): assign state
-   (subtree_may_reassign_state), have an effect (subtree_has_side_effect),
-   run a proc (subtree_may_run_proc), make an implicit call that may run a
-   method of the program's, or write a local. */
-enum { OS_KNOWN = 1, OS_REASSIGN = 2, OS_SIDE = 4, OS_PROC = 8, OS_IMPL = 16, OS_LOCAL = 32 };
+   (subtree_may_reassign_state), run a proc (subtree_may_run_proc), make an
+   implicit call that may run a method of the program's, or write a
+   local. */
+enum { OS_KNOWN = 1, OS_REASSIGN = 2, OS_PROC = 4, OS_IMPL = 8, OS_LOCAL = 16 };
 /* The nearest code operand to the right of the read being decided that
    may change it, by what the read is (facts_rebinder); NONE for none. */
 typedef struct { int any, state, cell; } OrderNext;
@@ -388,24 +388,23 @@ static void order_next_set(OrderFacts *f, int k, int j) {
   f->next[k] = j;
 }
 /* The OS_ bits of the subtree at `id`, from each node's own answers
-   (node_may_reassign_state, node_has_side_effect, node_may_run_proc; an
-   implicit call that may run a method of the program's,
-   ic_node_may_call_program, which a call that runs no code itself,
-   order_call_runs_no_code, does not make; a local's write), each node once
-   (f->sum). */
+   (node_may_reassign_state, node_may_run_proc; an implicit call that may
+   run a method of the program's, ic_node_may_call_program, which a call
+   that runs no code itself, order_call_runs_no_code, does not make; a
+   local's write), each node once (f->sum). */
 static unsigned order_sum(Compiler *c, OrderFacts *f, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;
   int m = id < f->n;
   if (m && f->sum[id]) return f->sum[id];
   NodeKind k = nt_kind(nt, id);
-  int own[5] = {
-    node_may_reassign_state(c, id), node_has_side_effect(c, id), node_may_run_proc(c, id),
+  int own[4] = {
+    node_may_reassign_state(c, id), node_may_run_proc(c, id),
     !(k == NK_CallNode && order_call_runs_no_code(c, id)) && ic_node_may_call_program(c, id) ? 1 : -1,
     comp_is_local_write(k) ? 1 : -1,
   };
   unsigned r = OS_KNOWN, ask = 0;
-  for (int b = 0; b < 5; b++) {
+  for (int b = 0; b < 4; b++) {
     if (own[b] > 0) r |= OS_REASSIGN << b;
     else if (own[b] < 0) ask |= OS_REASSIGN << b;
   }
@@ -504,7 +503,7 @@ static int order_ivar_class(Compiler *c, const OrderFacts *f, int x) {
 static void facts_next_at(Compiler *c, OrderFacts *f, const OpList *l, int j, int cls, OrderNext *nx) {
   unsigned s = order_sum(c, f, l->node[j]);
   nx->any = j;
-  if ((s & OS_REASSIGN && s & OS_SIDE) || s & OS_IMPL) nx->state = j;
+  if (s & (OS_REASSIGN | OS_IMPL)) nx->state = j;
   if (s & (OS_PROC | OS_IMPL)) nx->cell = j;
   order_note_local_writes(c, f, l->node[j], j);
   for (int k = 0; k < f->nivk; k++)
@@ -517,12 +516,15 @@ static int order_min(int a, int b) { return a < b ? a : b; }
    that writes it, or, when a proc assigns its cell, one that may run a
    proc. An instance variable: in a def of its class, outside a block, one
    that may assign it (a method of self's that writes it); anywhere else
-   one with an effect that may assign state. A global or a class variable:
-   such an effect. A literal: none. Anything else read (a constant, an
-   element, a field, arithmetic over reads): any code. An implicit call
-   that may run a method of the program's counts as all of these but a
-   local's write. The emission form (rebound_walk) asks the same of the
-   variables, with the view's bindings and its self. */
+   one that may assign state (node_may_reassign_state: a write or a target
+   of one, `rescue => @@x`, or a call that may run code). A global or a
+   class variable: the same. A literal: none. Anything else read (a
+   constant, an element, a field, arithmetic over reads): any code. An
+   implicit call that may run a method of the program's counts as all of
+   these but a local's write. The emission form (rebound_walk) asks the
+   same of the variables, with the view's bindings and its self, and asks
+   an effect (subtree_has_side_effect) of a global's or a class
+   variable's too. */
 static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const OrderNext *nx) {
   const NodeTable *nt = c->nt;
   int r = ORDER_NONE;

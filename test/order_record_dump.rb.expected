@@ -151,3 +151,12 @@ c1_shift_to_int.rb:12 call run: 0 k INLINE across | 1 O.new AHEAD code | guard=c
 c1_shift_to_int.rb:12 call new: none (tail)
 c1_shift_to_int.rb:13 call p: none (tail)
 c1_shift_to_int.rb:13 call plain: none (pure)
+== c2_rescue_cvar.rb
+c2_rescue_cvar.rb:3 array: 0 @@x HOLD(by 1) across | 1 Parentheses AHEAD code | guard=call steps=0
+c2_rescue_cvar.rb:3 call /: none (pure)
+c2_rescue_cvar.rb:4 array: 0 @@x HOLD(by 1) across | 1 Parentheses AHEAD code | guard=call steps=0
+c2_rescue_cvar.rb:4 array: none (pure)
+c2_rescue_cvar.rb:6 call p: none (tail)
+c2_rescue_cvar.rb:6 call m: none (tail)
+c2_rescue_cvar.rb:7 call p: none (tail)
+c2_rescue_cvar.rb:7 call f: none (tail)

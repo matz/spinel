@@ -170,6 +170,15 @@ PROGRAMS = [
     p k.run(O.new(k))
     p k.plain(2)
   RUBY
+  ["c2_rescue_cvar.rb", <<~'RUBY'],
+    class C
+      @@x = 1
+      def self.m(d) = [@@x, (begin; 1 / d; rescue => @@x; end)]
+      def self.f = [@@x, (for @@x in [5]; end)]
+    end
+    p C.m(0)
+    p C.f
+  RUBY
 ]
 
 dir = File.join(Dir.tmpdir, "spinel_order_dump_#{Process.pid}")

@@ -2720,8 +2720,22 @@ static int sp_src_code_any(const char *src, int (*hit)(const char *src, const ch
   }
   return 0;
 }
+/* `:to_set` as a symbol literal: respond_to?(:to_set), send(:to_set),
+   public_send, method(:to_set) and map(&:to_set) all name the method without
+   a `.to_set` call, so a program that spells it only that way never spliced
+   the set package in and answered false (respond_to?) or died with a
+   NoMethodError at run time (the others), where CRuby 4.0 -- Set is core
+   there -- answers true and works (Kilau K-042). The word must end at the
+   name: `:to_set_x` is another symbol. A false positive only wastes. */
+static int sp_to_set_sym_at(const char *p) {
+  if (strncmp(p, ":to_set", 7) != 0) return 0;
+  char next = p[7];
+  return !((next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') ||
+           (next >= '0' && next <= '9') || next == '_' || next == '?' || next == '!' || next == '=');
+}
 static int sp_set_hit(const char *src, const char *p) {
-  return (strncmp(p, "Set", 3) == 0 && sp_set_word_at(src, p)) || strncmp(p, ".to_set", 7) == 0;
+  return (strncmp(p, "Set", 3) == 0 && sp_set_word_at(src, p)) || strncmp(p, ".to_set", 7) == 0 ||
+         sp_to_set_sym_at(p);
 }
 static int source_references_set(const char *src) {
   return sp_src_code_any(src, sp_set_hit);

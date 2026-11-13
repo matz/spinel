@@ -20334,10 +20334,31 @@ static void sp_srange_sym_float_step_gen(sp_Fiber *f) {
   (void)f;
   sp_raise_cls("NoMethodError", "undefined method '+' for an instance of Symbol");
 }
+/* An endless Range of Symbols gives its begin before that error: the walk
+   of CRuby yields the begin, then adds the stride to it. The capture is
+   the begin. */
+static void sp_srange_sym_begin_step_gen(sp_Fiber *f) {
+  sp_sym *cap = (sp_sym *)f->user_data;
+  sp_Fiber_yield(sp_box_sym(*cap));
+  sp_raise_cls("NoMethodError", "undefined method '+' for an instance of Symbol");
+}
 static sp_Enumerator *sp_srange_step_enum(sp_RbVal src, sp_RbVal stride, const char *op) SP_UNUSED;
 static sp_Enumerator *sp_srange_step_enum(sp_RbVal src, sp_RbVal stride, const char *op) {
   SP_GC_ROOT_RBVAL(src); SP_GC_ROOT_RBVAL(stride);
-  int sym = SP_SRANGE_OF(src.v.p).sym;
+  sp_StrRange sr = SP_SRANGE_OF(src.v.p);
+  int sym = sr.sym;
+  if (sym && sr.first && !sr.last &&
+      (stride.tag == SP_TAG_NIL || stride.tag == SP_TAG_BOOL || stride.tag == SP_TAG_SYM || stride.tag == SP_TAG_FLT)) {
+    sp_sym begin = sp_sym_intern(sr.first);
+    sp_sym *cap = (sp_sym *)sp_gc_alloc(sizeof *cap, NULL, NULL);
+    SP_GC_ROOT(cap);
+    *cap = begin;
+    sp_Enumerator *e = sp_Enumerator_new_gen(sp_srange_sym_begin_step_gen, cap, sp_box_nil());
+    SP_GC_ROOT(e);
+    const char *arg = stride.tag == SP_TAG_FLT ? sp_float_to_s(stride.v.f) : sp_poly_inspect(stride);
+    SP_GC_ROOT_STR(arg);
+    return sp_enum_with_src(e, src, sp_str_concat(sp_str_concat(sp_str_concat(op, SPL("(")), arg), SPL(")")));
+  }
   /* a boxed stride that is nil, true, false or a Symbol: the TypeError of
      the walk, worded as the typed call words it; a Range of Symbols has
      the NoMethodError of Symbol#+ */

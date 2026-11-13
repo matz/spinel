@@ -27,3 +27,14 @@
 "NoMethodError: undefined method '+' for an instance of Symbol"
 "NoMethodError: undefined method '+' for an instance of Symbol"
 "NoMethodError: undefined method '+' for an instance of Symbol"
+[:a]
+"NoMethodError: undefined method '+' for an instance of Symbol"
+[:a]
+"NoMethodError: undefined method '+' for an instance of Symbol"
+[:a]
+"#<Enumerator: :a..:step(1.5)>"
+"#<Enumerator: :a..:step(nil)>"
+"#<Enumerator: :a..:step(:s)>"
+nil
+:a
+"NoMethodError: undefined method '+' for an instance of Symbol"

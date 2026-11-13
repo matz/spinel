@@ -24105,6 +24105,43 @@ static void emit_raise_placeholder(Compiler *c, int id, Buf *b) {
   }
   else buf_printf(b, ", %s)", dflt);
 }
+/* A face entry's arm for a version closed to the call that bound the entry
+   (cplan_pinned_vis): the NoMethodError CRuby raises for a private (or
+   protected) method called with an explicit receiver. The entry is a root's
+   method, whose self is a boxed value, so the raise names its receiver at
+   run time and stages it for #receiver, with the arguments the entry was
+   handed for #args (emit_object_reopen_vis_refusal's boxed form). 1 when it
+   emitted. */
+static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
+  int vis = cplan_pinned_vis(c, id);
+  if (!vis) return 0;
+  const NodeTable *nt = c->nt;
+  const char *vnm = nt_str(nt, id, "name");
+  int vac = 0; const int *vav = call_args(nt, id, &vac);
+  /* the entry's own `*rest, **kw` (a splat entry's arms forward them): the
+     list is built here, the rest and the keywords when there are any */
+  int spread = nt_argv_has(nt, vav, vac, NT_ARG_SPLAT);
+  int staged = !spread && !nt_argv_has(nt, vav, vac, NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
+  int tv = ++g_tmp, ta = ++g_tmp;
+  Buf args; memset(&args, 0, sizeof args);
+  if (staged) {
+    buf_printf(&args, "%d, (sp_RbVal[]){", vac);
+    for (int k = 0; k < vac; k++) { if (k) buf_puts(&args, ", "); emit_boxed(c, vav[k], &args); }
+    buf_puts(&args, vac ? "}" : "sp_box_nil()}");
+  }
+  buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = self; ", tv);
+  if (spread)
+    buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); "
+                  "for (sp_int _i = 0; _i < sp_PolyArray_length(lv___condr); _i++) sp_PolyArray_push(_t%d, sp_PolyArray_get(lv___condr, _i)); "
+                  "if (lv___condk && sp_SymPolyHash_length(lv___condk)) sp_PolyArray_push(_t%d, sp_box_obj(lv___condk, SP_BUILTIN_SYM_POLY_HASH)); "
+                  "sp_exc_stage_key(sp_box_poly_array(_t%d)); ", ta, ta, ta, ta, ta);
+  emit_vis_msg_boxed(vis, vnm, tv, args.p, b);
+  buf_puts(b, "; }))");
+  free(args.p);
+  emit_raise_placeholder(c, id, b);
+  if (g_plan_check) ucall_refused(id);
+  return 1;
+}
 /* An operand ahead of a raise (emit_missing_raise), as a statement after
    its own prelude: its boxed value into temp t, rooted unless the box
    proves it holds no heap pointer (repr_box_holds_heap), for t > 0, else
@@ -30605,6 +30642,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     emit_call_reboxed(c, id, nrv, b);
     return;
   }
+  if (emit_pinned_vis_raise(c, id, b)) return;
   if (emit_autoload_register(c, id, b)) return;
   if (emit_or_take_back(c, id, b, emit_range_literal_cover)) return;
   if (emit_call_on_missing_builtin_path(c, id, b)) return;

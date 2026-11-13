@@ -1,0 +1,36 @@
+[:obj, 1, 2]
+[:obj, 4, 5]
+[:obj, 6, 7]
+NoMethodError: private method 'off' called for nil
+[:off, nil, [8, 9]]
+NoMethodError: private method 'off' called for an instance of Integer
+[:off, 1, [8, 9]]
+NoMethodError: private method 'off' called for an instance of Float
+[:off, 2.5, [8, 9]]
+NoMethodError: private method 'off' called for an instance of String
+[:off, "s", [8, 9]]
+NoMethodError: private method 'off' called for an instance of Symbol
+[:off, :sym, [8, 9]]
+NoMethodError: private method 'off' called for an instance of Array
+[:off, [1], [8, 9]]
+NoMethodError: private method 'lp' called for nil
+[:lp, nil, []]
+NoMethodError: private method 'lp' called for an instance of Integer
+[:lp, 7, []]
+2
+2
+NoMethodError: private method 'ps' called for nil
+[:ps, nil, []]
+2
+NoMethodError: private method 'blk' called for nil
+[:blk, nil, [2]]
+NoMethodError: private method 'sp' called for nil
+[:sp, nil, [1, 2]]
+NoMethodError: private method 'sp' called for nil
+[:sp, nil, [3, 4]]
+NoMethodError: private method 'sp' called for nil
+[:sp, nil, [5, {k: 6}]]
+NoMethodError: private method 'sp' called for an instance of Float
+[:sp, 2.5, [9, 10, 11]]
+NoMethodError: private method 'sp' called for an instance of Integer
+[:sp, 1, []]

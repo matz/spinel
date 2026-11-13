@@ -3196,3 +3196,8 @@ int kernel_private_method(const char *name) {
 #undef X
   return 0;
 }
+
+int is_block_value_dropped_iter(const char *n) {
+  return is_block_loop_method(n) || is_each_walk(n) || is_each_window(n) || is_str_each_iter(n) ||
+         is_hash_key_value_each(n) || sp_streq(n, "each_pair") || sp_streq(n, "each_with_object");
+}

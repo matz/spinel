@@ -104,12 +104,10 @@ typedef struct { int *pos; char *done; } DUPos;
 int *du_parent_map(const NodeTable *nt);
 int du_read_maybe_unset(const NodeTable *nt, const int *par, DUPos *dp, int rd, const char *nm);
 void du_memo_free(void);
-/* The edges an_value_dropped (and cow_user_block_value, which asks of the
-   block it ends at) climbs: where a value is passed on to the statement or
-   the block that holds it. */
+/* The edges an_value_dropped climbs: where a value is passed on to the
+   statement or the block that holds it. */
 enum { AN_DROP_CLIMB = VPS_ALL };
-int an_value_dropped(const NodeTable *nt, const int *parent, int node);
-int cow_user_block_value(Compiler *c, const int *parent, int id);
+int an_value_dropped(Compiler *c, const int *parent, int node);
 /* The String rule for a local or parameter slot: it holds the handle (analyze_pass.c) */
 int slot_take_string_handle(Compiler *c, LocalVar *lv);
 /* A runtime protocol name: the emitted program can call the method with

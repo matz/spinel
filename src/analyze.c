@@ -6139,7 +6139,7 @@ int desugar_const_set_write_at(Compiler *c, LowerCtx *lc, int id) {
   long long at[3] = { nt_int(nt, id, "node_line", 0), nt_int(nt, id, "node_file", 0), nt_int(nt, id, "node_col", 0) };
   /* used as a value, the call answers v, which the constant then holds:
      `(M::N = v; M::N)` */
-  int used = !an_value_dropped(nt, lower_parents(c, lc), id);
+  int used = !an_value_dropped(c, lower_parents(c, lc), id);
   nt_node_set_arr(nt, a, "arguments", NULL, 0);   /* the value moves to the write */
   if (used) {
     int s = nt_new_node(nt, "StatementsNode");
@@ -17385,7 +17385,7 @@ static int narrow_int_table_ivars(Compiler *c, int in_round) {
                reference to it that this scan does not follow */
             if (!sp_streq(un, "[]=")) {
               if (!parent_of) parent_of = an_parent_map(nt);
-              if (!parent_of || !an_value_dropped(nt, parent_of, u)) break;
+              if (!parent_of || !an_value_dropped(c, parent_of, u)) break;
             }
           }
           used = 1; break;
@@ -27436,7 +27436,7 @@ static int bl_stmts(Compiler *c, int st, const char *name, int depth, int use, i
 }
 /* A call: an append to the local (its value, the same String, only
    dropped, appended to again or answered), or a call whose literal block's
-   value its iterator drops (an_iter_discards_block). A `return` in that
+   value its iterator drops (cplan_block_value_ignored). A `return` in that
    block leaves the method; in another call's block, which may run as a
    lambda (`lambda`, `define_method`, a block kept and called later), it
    may answer the block's caller instead. */
@@ -27449,7 +27449,7 @@ static int bl_call(Compiler *c, int n, const char *name, int depth, int use, int
   }
   int bk = nt_ref(nt, n, "block");
   if (bk < 0 || nt_kind(nt, bk) != NK_BlockNode) return bl_children(c, n, -1, name, depth, ret);
-  int disc = an_iter_discards_block(c, n);
+  int disc = cplan_block_value_ignored(c, n);
   if (bl_names_local(nt, nt_ref(nt, bk, "parameters"), name)) return 0;
   return bl_children(c, n, bk, name, depth, ret) &&
          bl_stmts(c, nt_ref(nt, bk, "body"), name, depth + 1, disc ? BL_DROP : BL_OTHER, disc ? ret : BL_OTHER);
@@ -40991,7 +40991,7 @@ static void wnh_escape_scan(Compiler *c, WnhSlots *slots, int *answered, int cop
     if (answered && wnh_is_answer(c, rs, b[n - 1])) { *answered = 1; continue; }
     /* a read whose value is dropped (the body of a begin with an `else`, which
        the else's value replaces) hands nothing on */
-    if (an_value_dropped(nt, comp_parent_map(c), b[n - 1])) continue;
+    if (an_value_dropped(c, comp_parent_map(c), b[n - 1])) continue;
     /* or one a box takes: `keep = (seen) || {}` with `keep` a box */
     VpUp up;
     if (vp_climb(nt, comp_parent_map(c), b[n - 1], VP_AND_LEFT | VPS_ALL, &up) == VPU_ENDED && up.parent >= 0 &&
@@ -44505,7 +44505,7 @@ static void split_kwsplat_calls(Compiler *c, int from) {
     int an = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "arguments") : -1, m = 0;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &m) : NULL;
     if (m < 1 || nt_kind(nt, av[m - 1]) != NK_KeywordHashNode || par[id] < 0 || nt_kind(nt, par[id]) != NK_StatementsNode) continue;
-    if (an_value_dropped(nt, par, id)) spar[id] = par[id] + 1;
+    if (an_value_dropped(c, par, id)) spar[id] = par[id] + 1;
   }
   for (int id = from; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "kwsplit", 0)) continue;
@@ -47558,213 +47558,6 @@ static int sa_returned_args_t(Compiler *c, int call, int *out, int cap, int poly
   }
   return got;
 }
-/* ---- does an iterator drop its block's value? ----
-   A call of the each family (each, each_with_index, times, ...) answers
-   its receiver or nil, whatever its block answers: a builtin's does, and
-   so does each method of the program of that name whose every yield sits
-   where its value is dropped and whose block parameter, if any, is only
-   handed on (`&blk`) to such an iterator. A method asked again while it is
-   being asked (a cycle) drops it unless something else keeps it. */
-static int iter_disc_call(Compiler *c, int call, int depth);
-/* Does every yield of the subtree at n sit where its value is dropped
-   (drop: whether n's own value is)? A loop's body is dropped. */
-static int iter_disc_yields(Compiler *c, int n, int drop, int depth) {
-  const NodeTable *nt = c->nt;
-  if (n < 0) return 1;
-  NodeKind k = nt_kind(nt, n);
-  if (k == NK_DefNode) return 1;
-  /* a lambda's yield is the method's block's, and the lambda may answer
-     what it got: its body's value is taken as kept */
-  if (k == NK_LambdaNode) return iter_disc_yields(c, nt_ref(nt, n, "body"), 0, depth);
-  if (k == NK_YieldNode) return drop && iter_disc_yields(c, nt_ref(nt, n, "arguments"), 0, depth);
-  if (k == NK_StatementsNode) {
-    int bn = 0; const int *bb = nt_arr(nt, n, "body", &bn);
-    for (int i = 0; i < bn; i++) if (!iter_disc_yields(c, bb[i], i + 1 < bn ? 1 : drop, depth)) return 0;
-    return 1;
-  }
-  if (k == NK_WhileNode || k == NK_UntilNode)
-    return iter_disc_yields(c, nt_ref(nt, n, "predicate"), 0, depth) &&
-           iter_disc_yields(c, nt_ref(nt, n, "statements"), 1, depth);
-  if (k == NK_IfNode || k == NK_UnlessNode)
-    return iter_disc_yields(c, nt_ref(nt, n, "predicate"), 0, depth) &&
-           iter_disc_yields(c, nt_ref(nt, n, "statements"), drop, depth) &&
-           iter_disc_yields(c, nt_ref(nt, n, k == NK_IfNode ? "subsequent" : "else_clause"), drop, depth);
-  if (k == NK_ElseNode) return iter_disc_yields(c, nt_ref(nt, n, "statements"), drop, depth);
-  if (k == NK_ParenthesesNode) return iter_disc_yields(c, nt_ref(nt, n, "body"), drop, depth);
-  int bk = k == NK_CallNode ? nt_ref(nt, n, "block") : -1;
-  if (bk >= 0 && nt_kind(nt, bk) != NK_BlockNode) bk = -1;
-  for (int i = 0; i < nt_num_refs(nt, n); i++) {
-    int r = nt_ref_at(nt, n, i);
-    if (r != bk && !iter_disc_yields(c, r, 0, depth)) return 0;
-  }
-  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
-    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
-    for (int j = 0; j < an; j++) if (!iter_disc_yields(c, av[j], 0, depth)) return 0;
-  }
-  return bk < 0 || iter_disc_yields(c, nt_ref(nt, bk, "body"), iter_disc_call(c, n, depth + 1), depth);
-}
-/* Is every use of block parameter bp in the subtree at n a `&bp` handed to
-   a call whose iterator drops its block's value? */
-static int iter_disc_blk_fwd(Compiler *c, int n, const char *bp, int depth) {
-  const NodeTable *nt = c->nt;
-  if (n < 0) return 1;
-  NodeKind k = nt_kind(nt, n);
-  if (k == NK_DefNode) return 1;
-  if (k == NK_LocalVariableReadNode && sp_streq(nt_str(nt, n, "name"), bp)) return 0;
-  int skip = -1;
-  if (k == NK_CallNode) {
-    int b = nt_ref(nt, n, "block");
-    int e = b >= 0 && nt_kind(nt, b) == NK_BlockArgumentNode ? nt_ref(nt, b, "expression") : -1;
-    if (e >= 0 && nt_kind(nt, e) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, e, "name"), bp)) {
-      if (!iter_disc_call(c, n, depth + 1)) return 0;
-      skip = b;
-    }
-  }
-  for (int i = 0; i < nt_num_refs(nt, n); i++) {
-    int r = nt_ref_at(nt, n, i);
-    if (r != skip && !iter_disc_blk_fwd(c, r, bp, depth)) return 0;
-  }
-  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
-    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
-    for (int j = 0; j < an; j++) if (!iter_disc_blk_fwd(c, av[j], bp, depth)) return 0;
-  }
-  return 1;
-}
-/* Is t the type of a value of a kind the analysis knows that is no
-   Enumerator: an Array, a Hash, a Range, an object of a class of the
-   program's? -1 for a builtin's, its class for an object, -3 for none. */
-static int iter_disc_known_kind(TyKind t) {
-  if (ty_is_object(t)) return ty_object_class(t);
-  if (ty_is_array(t) || ty_is_hash(t) || t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE) return -1;
-  return -3;
-}
-/* The methods receiverless call n in an instance method can run: on each
-   class made whose instances run that method, the one its chain has (a
-   class with none raises NoMethodError); -1 where method_missing may
-   answer instead, or they are more than cap. */
-static int iter_disc_self_targets(Compiler *c, int n, int *out, int cap) {
-  Scope *cur = comp_scope_of(c, n);
-  int ci = cur ? (int)(cur - c->scopes) : -1;
-  const char *nm = nt_str(c->nt, n, "name");
-  if (ci <= 0 || !nm || cur->is_cmethod || cur->class_id < 0 || !cur->name || cur->def_node < 0) return -1;
-  int k = 0;
-  for (int cid = 0; cid < c->nclasses; cid++) {
-    if (!c->classes[cid].instantiated && !c->classes[cid].is_builtin_const) continue;
-    if (comp_method_in_chain(c, cid, cur->name, NULL) != ci) continue;
-    int mi = call_target(c, n, cid, nm, 0, NULL);
-    /* (a class with none raises NoMethodError, unless method_missing answers) */
-    if (mi < 0) {
-      if (comp_method_in_chain(c, cid, "method_missing", NULL) >= 0) return -1;
-      continue;
-    }
-    int seen = 0;
-    for (int i = 0; i < k && !seen; i++) seen = out[i] == mi;
-    if (seen) continue;
-    if (k >= cap) return -1;
-    out[k++] = mi;
-  }
-  return k;
-}
-/* A boxed receiver r that is a call (no block) of methods of the program
-   only -- the targets the plan lists, or a receiverless call's on each
-   class made that runs the method it is in -- each answering a value of a
-   kind the analysis knows that is no Enumerator (iter_disc_known_kind):
-   the class iter_disc_call asks the methods of (-1 for a builtin's, -2 for
-   any, where the answers are of more than one class), or -3. */
-static int iter_disc_call_recv(Compiler *c, int r) {
-  const NodeTable *nt = c->nt;
-  r = nt_paren_single(nt, r);
-  if (r < 0 || nt_kind(nt, r) != NK_CallNode || nt_ref(nt, r, "block") >= 0) return -3;
-  const char *nm = nt_str(nt, r, "name");
-  /* (no builtin answers it: on self, none of Object's or Kernel's; on a
-     receiver, one of a class of the program's) */
-  int rr = nt_ref(nt, r, "receiver");
-  if (!nm || (rr < 0 ? object_public_method_name(nm) || bop_share_kernel(nm, cplan_builtin_call(c, r))
-                     : !ty_is_object(infer_type(c, rr))))
-    return -3;
-  int *tg = malloc(sizeof(int) * (size_t)(c->nscopes + 1));
-  if (!tg) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int n = cplan_targets(c, r, tg, CPT_MAX);
-  if (n == CPT_UNKNOWN && nt_ref(nt, r, "receiver") < 0) n = iter_disc_self_targets(c, r, tg, c->nscopes + 1);
-  int cls = n > 0 ? -4 : -3;
-  for (int i = 0; i < n && cls != -3; i++) {
-    int k = iter_disc_known_kind((TyKind)c->scopes[tg[i]].ret);
-    if (k == -3) cls = -3;
-    else if (cls == -4) cls = k;
-    else if (cls != k) cls = -2;
-  }
-  free(tg);
-  return cls;
-}
-static int iter_disc_call(Compiler *c, int call, int depth) {
-  static const char *const names[] = {
-    "each", "each_with_index", "each_with_object", "each_char", "each_byte", "each_line", "each_key",
-    "each_value", "each_pair", "reverse_each", "each_slice", "each_cons", "each_entry", "times", "upto",
-    "downto", "step", NULL };
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, call, "name");
-  int k = 0;
-  while (nm && names[k] && !sp_streq(names[k], nm)) k++;
-  if (!nm || !names[k] || depth > 16) return 0;
-  /* the receiver has to be no Enumerator, whose each answers what its
-     method does with the block's values (`a.map.each { }`): one of a kind
-     the analysis knows, or self. A boxed receiver may be one. */
-  int r = nt_ref(nt, call, "receiver");
-  /* the methods of that name the call can reach: on a value of a builtin
-     kind (an Array, a Hash, a Range) no instance method of a class of the
-     program's; on an object of the program's, none of a class off its
-     class's line. A builtin class's (reopened), a module's and a class
-     method (whose receiver is a class) are reachable from either; on
-     self, any is */
-  int rcls = -2;
-  if (r >= 0) {
-    TyKind rt = infer_type(c, r);
-    rcls = ty_is_object(rt) ? ty_object_class(rt) : -1;
-    /* (a boxed receiver that is a call of the program's methods answering
-       each a known kind, no Enumerator: iter_disc_call_recv) */
-    if (rt == TY_POLY || rt == TY_UNKNOWN) rcls = iter_disc_call_recv(c, r);
-    else if (rt == TY_ENUMERATOR) return 0;
-    if (rcls == -3) return 0;
-  }
-  static int busy[64], nbusy;
-  for (int mi = 0; mi < c->nscopes; mi++) {
-    Scope *m = &c->scopes[mi];
-    if (!m->name || m->def_node < 0 || !sp_streq(m->name, nm)) continue;
-    if (rcls != -2 && m->class_id >= 0 && !m->is_cmethod) {
-      ClassInfo *mc = &c->classes[m->class_id];
-      int open = !mc->name || comp_class_is_module(c, mc) || is_builtin_class_name(mc->name) ||
-                 is_object_root(mc->name);
-      if (!open && (rcls < 0 || (m->class_id != rcls && !is_descendant(c, rcls, m->class_id) &&
-                                 !is_descendant(c, m->class_id, rcls)))) continue;
-    }
-    int inb = 0;
-    for (int q = 0; q < nbusy; q++) inb |= busy[q] == mi;
-    if (inb) continue;
-    if (nbusy >= 64 || nt_kind(nt, m->def_node) != NK_DefNode) return 0;
-    busy[nbusy++] = mi;
-    int ok = 1;
-    /* a `...` forwarder hands its block on unseen (to a super that may
-       yield it): kept */
-    int prm = nt_ref(nt, m->def_node, "parameters");
-    int kwr = prm >= 0 ? nt_ref(nt, prm, "keyword_rest") : -1;
-    if (kwr >= 0 && nt_kind(nt, kwr) == NK_ForwardingParameterNode) ok = 0;
-    if (ok && m->blk_param) {
-      int bpn = prm >= 0 ? nt_ref(nt, prm, "block") : -1;
-      const char *bp = bpn >= 0 ? nt_str(nt, bpn, "name") : NULL;
-      ok = bp && iter_disc_blk_fwd(c, nt_ref(nt, m->def_node, "body"), bp, depth);
-    }
-    ok = ok && iter_disc_yields(c, nt_ref(nt, m->def_node, "body"), 0, depth);
-    nbusy--;
-    if (!ok) return 0;
-  }
-  return 1;
-}
-/* analyze.h */
-int an_iter_discards_block(Compiler *c, int call) {
-  return call >= 0 && nt_kind(c->nt, call) == NK_CallNode && iter_disc_call(c, call, 0);
-}
-
-
 
 int builtin_instance_method_known(const char *cls, const char *m);
 /* Does a String answer `nm` with its built-in method: one String has, that

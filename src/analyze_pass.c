@@ -17754,15 +17754,6 @@ static int rows_slot_elem_reads(const NodeTable *nt, Compiler *c, const int *par
   return 1;
 }
 
-/* The value of the last statement of the block of `call` is thrown away
-   when the call is an iterator that ignores its block's value (`each`,
-   `times`): a method of the program's own by that name may answer what its
-   block answers (`def each = yield`). */
-static int rows_block_drops(Compiler *c, int call) {
-  const char *iter = nt_str(c->nt, call, "name");
-  return iter && is_block_loop_method(iter) && !an_user_defines_method(c, iter);
-}
-
 /* Whether the value of method `dn` can be taken other than by a call of
    its name or a `super`: the name is spelled (rows_name_spelled: an alias,
    method(:dn), instance_method), `x.dn ||= v` reads through it, or it is a
@@ -17804,7 +17795,7 @@ static int rows_value_dropped(Compiler *c, const int *par, int w, const char **s
   if (vp_up_loop(nt, &up) >= 0 || vp_up_effect_clause(nt, &up)) return 1;
   if (nt_kind(nt, up.parent) == NK_BlockNode) {
     int call = vp_up_block_call(nt, par, &up);
-    return call >= 0 && rows_block_drops(c, call);
+    return call >= 0 && cplan_block_value_ignored(c, call);
   }
   int def = vp_up_def(nt, &up);
   const char *dn = def >= 0 ? nt_str(nt, def, "name") : NULL;

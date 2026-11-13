@@ -135,6 +135,7 @@ int is_catch_name(const char *n); /* catch: a tagged non-local jump target */
 int is_throw_name(const char *n); /* throw: a tagged non-local jump */
 int is_diverging_call(const char *n); /* raise fail throw exit exit! abort: a Kernel call that never returns */
 int is_block_loop_method(const char *n); /* times each upto downto step loop each_with_index: a block run an unbounded number of times */
+int is_block_value_dropped_iter(const char *n); /* the above, each_entry reverse_each each_slice each_cons each_char each_line each_byte each_codepoint each_key each_value each_pair each_with_object: a builtin iterator that answers its receiver, a memo or nil, never its block's value */
 
 int is_each_window(const char *n); /* each_cons each_slice: consecutive or disjoint element windows */
 int is_sum_name(const char *n);

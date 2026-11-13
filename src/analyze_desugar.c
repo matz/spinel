@@ -9808,7 +9808,8 @@ int desugar_array_at(Compiler *c) {
    it: the plain store types the attribute by its operator, so an Integer
    slot given a boxed operand truncates it (`s.pos += 2.5` stores 2), where
    the write call keeps the attribute boxed. */
-static int cow_statement_dropped(const NodeTable *nt, const int *parent, int id) {
+static int cow_statement_dropped(Compiler *c, const int *parent, int id) {
+  const NodeTable *nt = c->nt;
   int st = parent[id];
   if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
   if (!vp_is_value_edge(nt, st, id, VPS_NONE)) return 1;
@@ -9818,23 +9819,7 @@ static int cow_statement_dropped(const NodeTable *nt, const int *parent, int id)
   if (ok == NK_WhileNode || ok == NK_UntilNode) return 1;
   if (ok != NK_BlockNode) return 0;
   int bc = parent[owner];
-  const char *bn = bc >= 0 && nt_kind(nt, bc) == NK_CallNode ? nt_str(nt, bc, "name") : NULL;
-  return bn && is_block_loop_method(bn);
-}
-
-/* The last statement of a block whose call any user class defines (a
-   user `each`), reached as an_value_dropped climbs: an_value_dropped reads
-   only the call's name, but that method can answer the block's value. */
-int cow_user_block_value(Compiler *c, const int *parent, int id) {
-  const NodeTable *nt = c->nt;
-  VpUp up;
-  vp_climb(nt, parent, id, AN_DROP_CLIMB, &up);
-  int call = vp_up_block_call(nt, parent, &up);
-  const char *bn = call >= 0 ? nt_str(nt, call, "name") : NULL;
-  if (!bn) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (call_target(c, call, k, bn, 0, NULL) >= 0) return 1;
-  return 0;
+  return bc >= 0 && cplan_block_value_ignored(c, bc);
 }
 
 /* `recv.attr op= value` where the writer is a hand-written `def attr=`.
@@ -9883,7 +9868,7 @@ int desugar_call_op_write(Compiler *c) {
     if (!has_def_writer) {
       if (!parent) parent = an_parent_map(nt);
       if (!parent) continue;
-      if (cow_statement_dropped(nt, parent, id) && !cow_user_block_value(c, parent, id)) continue;
+      if (cow_statement_dropped(c, parent, id)) continue;
       /* defined?(w.n += 1) is "assignment": as the writer call it read "method".
          desugar_defined_method_call has looked through any parentheses
          around it, so the defined? names it as its value. */
@@ -24225,12 +24210,13 @@ static int cbv_value(Compiler *c, const int *par, int id) {
    use takes would turn a program that compiles into a refusal: only a
    class or module X is followed through the arms, any other is taken
    where it stands (sc_value_taken_at_once). */
-static int cbv_taken(const NodeTable *nt, const int *par, int id) {
+static int cbv_taken(Compiler *c, const int *par, int id) {
+  const NodeTable *nt = c->nt;
   VpUp up;
   int b, s = cbv_last(nt, id, &b), ex = nt_ref(nt, id, "expression");
   int taken = cbv_self_sclass(nt, id, s) && !sc_recv_is_class(nt, par, id, ex) ? sc_value_taken_at_once(nt, par, id)
                                                                                 : sc_value_taken(nt, par, id);
-  if (!taken || an_value_dropped(nt, par, id)) return 0;
+  if (!taken || an_value_dropped(c, par, id)) return 0;
   vp_climb(nt, par, id, AN_DROP_CLIMB, &up);
   int call = vp_up_block_call(nt, par, &up), recv = call >= 0 ? nt_ref(nt, call, "receiver") : -1;
   return !(recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
@@ -24278,7 +24264,7 @@ static int cbv_hides_directive(const NodeTable *nt, int p, int id) {
 }
 int desugar_class_body_values_left(Compiler *c, LowerCtx *lc, int id) {
   const int *par = lower_parents(c, lc);
-  return par[id] >= 0 && cbv_valued(c->nt, id, 0) && cbv_taken(c->nt, par, id) && !cbv_hides_directive(c->nt, par[id], id);
+  return par[id] >= 0 && cbv_valued(c->nt, id, 0) && cbv_taken(c, par, id) && !cbv_hides_directive(c->nt, par[id], id);
 }
 int desugar_class_body_values_at(Compiler *c, LowerCtx *lc, int id) {
   if (!desugar_class_body_values_left(c, lc, id)) return 0;
@@ -29954,7 +29940,7 @@ int desugar_index_assign_value(Compiler *c) {
     if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     /* a detached store (desugar_masgn_store_evidence's type evidence) has no parent */
     if (parent[id] < 0) continue;
-    if (an_value_dropped(nt, parent, id) && !cow_user_block_value(c, parent, id)) continue;
+    if (an_value_dropped(c, parent, id)) continue;
     /* defined?(r[k] = v) keeps the call it names */
     if (nt_kind(nt, parent[id]) == NK_DefinedNode) continue;
     /* nt_new_node can move the table: copy what is read from it first */

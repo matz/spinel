@@ -7082,6 +7082,10 @@ void mc_number_versions(Compiler *c) {
   for (int s = 1; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     if (sc->entry && sc->entry != ENTRY_NAMED && sc->reachable) mc_number_entry(c, &dn, s);
+    /* a replaced version's proc form (an initialize version's,
+       make_yield_proc_forms) is spelled with its source's number: its
+       source comes first in the table */
+    if (sc->is_proc_form && sc->pf_source && !sc->version_n) sc->version_n = c->scopes[sc->pf_source - 1].version_n;
     if (!sc->replaced || !sc->reachable || sc->version_n || sc->main_n) continue;
     if (sc->class_id < 0) sc->version_n = mc_number_top(c, &dn, sc, "%s__redef%d", &top);
     else sc->version_n = ++cls;
@@ -7344,6 +7348,11 @@ int scope_is_shadowed(Compiler *c, int s) {
   /* a replaced method version, and a version entry, is a function of its
      own while a call bound to it reaches it (compute_reachable) */
   if (c->scopes[s].replaced || c->scopes[s].entry) return !c->scopes[s].reachable;
+  /* so is a replaced version's proc form (an initialize version's,
+     make_yield_proc_forms) while its source is: the table's clone after it
+     has its name but not its function */
+  int src = proc_form_source(c, s);
+  if (src >= 0 && c->scopes[src].replaced) return !c->scopes[src].reachable;
   /* Before the scopes settle, the scan's answer holds while the scope
      index is frozen (the inference fixpoint among others): a scope is then
      only appended, and the indexed ones keep their names and classes

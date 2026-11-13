@@ -3456,14 +3456,15 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
   else {
     TyKind crt = infer_type(c, crecv);
     if (ty_is_object(crt)) rmi = call_target(c, cid, ty_object_class(crt), cn, 0, NULL);
-    /* `Klass.new { block }`: the block feeds the class's initialize. A
-       scoped receiver (`NS::Klass`) resolves by its leaf name, the key
-       classes are indexed under. */
-    else if (cn && sp_streq(cn, "new") && nt_type(nt, crecv) &&
+    /* `Klass.new { block }`: the block feeds the initialize the plan
+       answers the site with (cplan_new_initialize), the version current
+       there. A scoped receiver (`NS::Klass`) resolves by its leaf name,
+       the key classes are indexed under. */
+    else if (is_new_name(cn) && nt_type(nt, crecv) &&
              (nt_kind(nt, crecv) == NK_ConstantReadNode ||
               nt_kind(nt, crecv) == NK_ConstantPathNode)) {
       int nci = const_node_class_index(c, crecv);
-      if (nci >= 0) rmi = call_target(c, cid, nci, "initialize", 0, NULL);
+      if (nci >= 0) rmi = cplan_new_initialize(c, cid, nci, NULL);
     }
     /* `Klass.m { block }` / `Mod.m { block }` / `NS::Klass.m { block }`: a
        class/module self-method (singleton). Resolve the constant and look

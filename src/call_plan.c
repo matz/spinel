@@ -2199,12 +2199,19 @@ static int new_init_absent(Compiler *c, int id, int ci) {
    exception's or record's own), else the window's version (the steps of
    cplan_implied_target past its row); an entry is not taken, as none is
    made for initialize (ver_named_one). A site in a block whose run time
-   the record does not place keeps the table's (elab_in_unplaced_block). */
+   the record does not place keeps the table's (elab_in_unplaced_block).
+   The question's own reads are the plan's (--method-table-check), whatever
+   node is the frame where a reader asks it of site id; an answer that
+   stands on the table for want of a proof is reported as call_target's
+   are. */
 int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
+  mtab_enter(c);
   int tm = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
+  int undef = tm >= 0 && id >= 0 && comp_is_undeffed_in_chain(c, ci, "initialize");
+  mtab_leave(c);
   *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = -1 };
-  if (tm < 0 || id < 0 || comp_is_undeffed_in_chain(c, ci, "initialize")) return tm;
+  if (tm < 0 || id < 0 || undef) return tm;
   /* (one version on the chain: the table's, the only one a site meets
      where there is one) */
   int first = 0, body = 0, late = 0, nv = ver_chain_count(c, ci, 0, "initialize", &first, &body, &late);
@@ -2223,6 +2230,7 @@ int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
   if (!absent && (vi < 0 || m->kind != ML_METHOD)) {
     if (m->kind != ML_TABLE) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_MANY, .def_class = -1 };
     vi = tm;
+    if (g_method_table_check && nv != 1) mtab_table(c, id, ci, 0, "initialize", m->why);
   }
   /* (asking may have grown the table or rebuilt the record: the slot again) */
   e = new_sites_slot(c, id, ci);

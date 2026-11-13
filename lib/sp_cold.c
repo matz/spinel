@@ -5268,7 +5268,7 @@ sp_RbVal sp_box_srange(sp_StrRange v) {
    sp_endless_range_gen), so #next, #first(n) and a lazy chain over it need no
    member Array, which an endless range cannot make. The capture holds the
    begin, which its scan marks. */
-typedef struct { const char *first; sp_int step; } sp_endless_srange_cap;
+typedef struct { const char *first; sp_int step; int sym; } sp_endless_srange_cap;
 static void sp_endless_srange_cap_scan(void *p) {
   sp_endless_srange_cap *cap = (sp_endless_srange_cap *)p;
   if (cap->first) sp_mark_string(cap->first);
@@ -5278,7 +5278,9 @@ static void sp_endless_srange_gen(sp_Fiber *f) {
   const char *cur = cap->first;
   SP_GC_ROOT_STR(cur);
   for (;;) {
-    sp_Fiber_yield(sp_box_str(sp_str_from_bytes(cur, sp_str_byte_len(cur))));
+    /* a Range of Symbols yields the Symbol of the name */
+    if (cap->sym) sp_Fiber_yield(sp_box_sym(sp_json_sym_intern_fn(cur)));   /* the program's interner */
+    else sp_Fiber_yield(sp_box_str(sp_str_from_bytes(cur, sp_str_byte_len(cur))));
     cur = sp_str_succ_n(cur, cap->step);
   }
 }
@@ -5288,12 +5290,13 @@ sp_Enumerator *sp_srange_endless_enum(sp_RbVal box, sp_int step) {
   SP_GC_ROOT_RBVAL(box);
   /* the begin as it is now (a copy, under --share-strings: the walk outlives
      the handle's bytes) is held across the capture's allocation */
-  const char *first = sp_srange_held(*(sp_StrRange *)box.v.p).first;
+  sp_StrRange held = sp_srange_held(*(sp_StrRange *)box.v.p);
+  const char *first = held.first;
   SP_GC_ROOT_STR(first);
   if (!first) sp_raise_cls("TypeError", "can't iterate from NilClass");
   sp_endless_srange_cap *cap = (sp_endless_srange_cap *)sp_gc_alloc(sizeof *cap, NULL, sp_endless_srange_cap_scan);
   SP_GC_ROOT(cap);
-  cap->first = first; cap->step = step;
+  cap->first = first; cap->step = step; cap->sym = held.sym;
   sp_Enumerator *e = sp_Enumerator_new_gen(sp_endless_srange_gen, cap, sp_box_nil());
   e->source = box; e->has_src = TRUE;   /* it inspects as the Range's own */
   e->size_nil = TRUE;   /* and has no size, as a String Range's own is nil */
@@ -5322,7 +5325,15 @@ sp_Enumerator *sp_srange_stepped_enum(sp_RbVal src, sp_int n, const char *label,
     sp_StrArray *v = sp_StrArray_new();
     SP_GC_ROOT(v);
     for (sp_int i = 0; i < sp_StrArray_length(all); i += n) sp_StrArray_push(v, sp_StrArray_get(all, i));
-    e = sp_Enumerator_new_from_items(sp_StrArray_to_poly_fmt(v));
+    sp_PolyArray *items;
+    if (r.sym) {   /* the members of a Range of Symbols are Symbols (the program's interner) */
+      items = sp_PolyArray_new();
+      SP_GC_ROOT(items);
+      for (sp_int i = 0; i < sp_StrArray_length(v); i++)
+        sp_PolyArray_push(items, sp_box_sym(sp_json_sym_intern_fn(sp_StrArray_get(v, i))));
+    }
+    else items = sp_StrArray_to_poly_fmt(v);
+    e = sp_Enumerator_new_from_items(items);
   }
   else {
     if (n <= 0) sp_raise_cls("ArgumentError", "step can't be 0");

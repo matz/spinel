@@ -48,6 +48,9 @@ static const PolyFace ty_poly_face_tbl[] = {
   {"step", PF_INT | PF_FLOAT | PF_RANGE | PF_FRANGE, 1, 2, 0},
   /* with no argument at all, a number's endless walk by 1 */
   {"step", PF_INT | PF_FLOAT, 0, 0, 0},
+  /* a String Range's blockless step answers an Enumerator, built by its
+     own rows: with no row here a boxed one was a NoMethodError */
+  {"step", PF_SRANGE, 0, 1, 0},
   /* A Range of each kind owns step and bsearch with a block: unboxed to its
      own by-value struct, the typed emitter walks it. A blockless step(n)
      takes the row above; blockless bsearch answers an Enumerator no typed

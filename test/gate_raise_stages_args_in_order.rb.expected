@@ -1,0 +1,32 @@
+t 1
+t 2
+[1, [nil, nil]]
+mk 0
+t 3
+t 2
+t 4
+[Foo, [3, [nil, nil], [4]]]
+mk 1
+t 3
+t 2
+t 4
+[Bar, [3, [nil, nil], [4]]]
+t 5
+t 6
+t 7
+t 1
+[5, [6, 7], [0]]
+t 2
+[1, [nil, nil], 5]
+[1, 6]
+[1.5, 0.5, 0.5]
+t 1
+t 2
+[[nil, nil]]
+t 3
+[1, [[nil, nil, nil]]]
+[NameError, "ab"]
+NameError
+NameError
+NameError
+0

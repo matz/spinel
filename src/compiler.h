@@ -1904,7 +1904,7 @@ typedef struct {
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),
      or both (ver_mm_at) */
-  struct VerLate { char *name; int cls, sg, mi, ar, mm, span; } *ver_late;   /* span: a call past the build that spans versions */
+  struct VerLate { char *name; int cls, sg, mi, ar, mm, span, face; } *ver_late;   /* span: a call past the build that spans versions; face: the entry's it binds (VF_*) */
   int nver_late;
   int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */

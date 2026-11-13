@@ -34,3 +34,7 @@ NoMethodError: private method 'sp' called for an instance of Float
 [:sp, 2.5, [9, 10, 11]]
 NoMethodError: private method 'sp' called for an instance of Integer
 [:sp, 1, []]
+:private
+:private
+2
+2

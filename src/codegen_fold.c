@@ -3858,7 +3858,10 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   /* A demanded String memo uses the Array fold's handle accumulator.
      Range elements come from a counter; the memo never needs an Array. */
   int range = rt == TY_RANGE && repr_of(c, id).demand;
-  if (!ty_is_array(rt) && !range) return 0;
+  /* an Array of one class (narrow_object_arrays) binds each element as its
+     sp_X *, read from the pointer array as a walk's is */
+  int objs = ty_is_ptr_array(rt) && ty_is_object(rr.elem);
+  if (!ty_is_array(rt) && !range && !objs) return 0;
   /* `[[ints],...].inject { |a, b| a & b }`: the inner int arrays are boxed in a
      poly array; fold them as int arrays (unboxing each element). The poly array
      itself has no array_kind, so detect this before the typed-array bail. */

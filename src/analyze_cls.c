@@ -5251,6 +5251,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     for (int v = 0; v < nt->count; v++) c->cls_fact[v] = cf_set_of(&f, v);
     c->cls_fact_n = nt->count;
     c->cls_pool = f.pool; c->ncls_pool = f.npool;
+    c->cls_fact_ncls = c->nclasses;
 #ifdef SP_EMIT_TRACE
     emit_trace_sets(c, f.closed ? "closed" : f.directed ? "open" : "unified");
 #endif
@@ -5599,7 +5600,9 @@ int cls_fact_excludes(Compiler *c, int recv, int k) {
      parameters are untyped, and an untyped argument it hands on widens a
      live method's parameter to a box (#9514). */
   if (s->n == 0 && !s->bv && !s->os) return 0;
-  if (cls_set_has(s, k)) return 0;
+  /* (a class registered after the facts are solved is in no set, and its
+     number is a Class object's member there: cls_fact_ncls) */
+  if (k >= c->cls_fact_ncls || cls_set_has(s, k)) return 0;
   return 1;
 }
 

@@ -17977,7 +17977,9 @@ static int oa_recv_may_reach(Compiler *c, int recv, const OAS *s) {
   for (int i = -1; i < nd; i++) {
     int k = i < 0 ? ci : ds[i];
     if (i >= 0 && c->classes[k].unreferenced) continue;
-    if (cm ? !cls_fact_bounded(c, k) || cls_set_has(f, k + c->nclasses) : !cls_fact_excludes(c, recv, k)) return 1;
+    if (cm ? !cls_fact_bounded(c, k) || k >= c->cls_fact_ncls || cls_set_has(f, k + c->cls_fact_ncls)
+           : !cls_fact_excludes(c, recv, k))
+      return 1;
   }
   return 0;
 }

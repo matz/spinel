@@ -31,6 +31,8 @@ class Foo: body#1
 class P: body#6
 class D: body#17
 entity Foo: owner main leaf Foo
+entity P: owner main leaf P
+entity D: owner main leaf D
 const Foo: write#1
 Foo.x: def#2 end=yes
 Foo.y: def#3 end=yes

@@ -43,6 +43,7 @@ class Raised: body#9 body#27 include Chime#12
 class Called: body#13 body#29 include Chime#16
 class Bell: body#22 body#33 include Chime#24
 entity Chime: owner main leaf Chime
+entity Point: owner main leaf Point
 entity Fault: owner main leaf Fault
 entity Raised: owner main leaf Raised
 entity Called: owner main leaf Called

@@ -1376,7 +1376,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     const char *self_cls = NULL;
     char selfbuf[48];
     if (recv < 0 && encl) {
-      if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) self_cls = encl->yields && g_self ? g_self : "_sp_cls";
+      if (cmethod_takes_self_cls(c, encl)) self_cls = encl->yields && g_self ? g_self : "_sp_cls";
       else if (encl->class_id >= 0) { snprintf(selfbuf, sizeof selfbuf, "((sp_Class){%d})", encl->class_id); self_cls = selfbuf; }
     }
     TyKind nty = infer_type(c, argv[0]);
@@ -4047,7 +4047,7 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
     /* a spliced class method has its receiving class at the site; any
        other that takes it reads it from _sp_cls */
     if (c->scopes[si].yields && g_self && g_emitting_class_id >= 0) ci = g_emitting_class_id;
-    else dyn = cmethod_takes_self_cls(c, si);
+    else dyn = cmethod_takes_self_cls(c, &c->scopes[si]);
   }
   /* a module's: its own and its includes' */
   if (comp_class_is_module(c, &c->classes[ci])) {
@@ -4478,7 +4478,7 @@ static void emit_exc_cls_name_pick(Compiler *c, int id, const char *name, int tk
   for (int q = 0; q < xn; q++) {
     Scope *s = &c->scopes[xm[q]];
     char call[256];
-    if (cmethod_takes_self_cls(c, xm[q])) snprintf(call, sizeof call, "%s(_t%d)", mc_method(c, s), tk);
+    if (cmethod_takes_self_cls(c, s)) snprintf(call, sizeof call, "%s(_t%d)", mc_method(c, s), tk);
     else snprintf(call, sizeof call, "%s()", mc_method(c, s));
     TyKind kr = (TyKind)s->ret;
     buf_printf(b, " case %d: _t%d = ", q, tr);
@@ -5740,7 +5740,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             }
             for (int a = 0; subs && plain && a < dargc; a++)
               if (subtree_has_side_effect(c, dargv[a])) plain = 0;
-            int arms = subs && plain && cmethod_takes_self_cls(c, (int)(encl - c->scopes)) && !(encl->yields && g_self);
+            int arms = subs && plain && cmethod_takes_self_cls(c, encl) && !(encl->yields && g_self);
             if (!subs || arms) {
               if (arms) {
                 buf_puts(b, "(");
@@ -5764,7 +5764,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
            arguments, so only arguments with no effect are spelled more than
            once; a subclass the plain constructor cannot build keeps the
            static one. */
-        if (cmethod_takes_self_cls(c, (int)(encl - c->scopes)) && !(encl->yields && g_self) &&
+        if (cmethod_takes_self_cls(c, encl) && !(encl->yields && g_self) &&
             !ncls->is_value_type) {
           int nargs0 = 0; const int *av0 = call_args(nt, id, &nargs0);
           int plain = nt_ref(nt, id, "block") < 0;
@@ -5818,8 +5818,8 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
            declared: its receiving class is the self the inliner bound
            (#5092). */
         const char *lead2 = "";
-        if (cmethod_takes_self_cls(c, smi)) {
-          if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) {
+        if (cmethod_takes_self_cls(c, ms)) {
+          if (cmethod_takes_self_cls(c, encl)) {
             buf_puts(&cb, encl->yields && g_self ? g_self : cmethod_cls_token(c, encl));
             lead2 = ", ";
           }
@@ -6042,7 +6042,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
              runtime class: `self.class.label` from a Base method on a Child
              names Child in the body. Naming the static class (cid) answered
              Base for every subclass instance. */
-          int rt_cls = cmethod_takes_self_cls(c, defmi) && !comp_ty_value_obj(c, rrt) &&
+          int rt_cls = cmethod_takes_self_cls(c, &c->scopes[defmi]) && !comp_ty_value_obj(c, rrt) &&
                        class_has_subclass(c, cid);
           if (rt_cls) {
             int self_recv = sp_streq(rty ? rty : "", "SelfNode");
@@ -6219,7 +6219,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     Scope *encl = comp_scope_of(c, id);
     if (encl && encl->is_cmethod && encl->class_id >= 0 &&
         call_target(c, id, encl->class_id, name, CT_CMETHOD, NULL) < 0) {
-      if (cmethod_takes_self_cls(c, (int)(encl - c->scopes)))
+      if (cmethod_takes_self_cls(c, encl))
         buf_printf(b, "%s(%s)", comp_class_reader_fn(c, name, cplan_pinned_builtin(c, id)), encl->yields && g_self ? g_self : "_sp_cls");
       else if (comp_class_anonymous(c, encl->class_id))
         buf_printf(b, "%s((sp_Class){%d})", comp_class_reader_fn(c, name, cplan_pinned_builtin(c, id)), encl->class_id);
@@ -6681,7 +6681,7 @@ int emit_refl_im_params_call(Compiler *c, int id, Buf *b) {
   char selfbuf[48];
   const char *self_cls = NULL;
   if (recv < 0 && encl) {
-    if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) self_cls = encl->yields && g_self ? g_self : "_sp_cls";
+    if (cmethod_takes_self_cls(c, encl)) self_cls = encl->yields && g_self ? g_self : "_sp_cls";
     else if (encl->class_id >= 0) { snprintf(selfbuf, sizeof selfbuf, "((sp_Class){%d})", encl->class_id); self_cls = selfbuf; }
   }
   if (recv < 0 && !self_cls) return 0;

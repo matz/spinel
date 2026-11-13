@@ -420,7 +420,7 @@ static int poll_pure_shape(Compiler *c, int si) {
   if (s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->nrequired != s->nparams) return 0;
   if (s->ret != TY_INT && s->ret != TY_FLOAT && s->ret != TY_BOOL) return 0;
   if (method_is_void(s) || sp_streq(s->name, "initialize")) return 0;   /* the wrapper returns the value */
-  if (scope_has_begin(c, si) || cmethod_takes_self_cls(c, si)) return 0;
+  if (scope_has_begin(c, si) || cmethod_takes_self_cls(c, s)) return 0;
   if (s->class_id >= 0 && !s->is_cmethod) {
     const ClassInfo *ci = &c->classes[s->class_id];
     if (ci->is_value_type || ci->is_struct || ci->is_native_class) return 0;
@@ -4257,10 +4257,11 @@ int method_is_void(Scope *s) {
    care. */
 static int8_t *g_cm_selfcls = NULL;
 static int g_cm_selfcls_n = -1;
-int cmethod_takes_self_cls(Compiler *c, int si) {
-  if (si < 0 || si >= c->nscopes) return 0;
-  Scope *s = &c->scopes[si];
+int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
+  if (!s) return 0;
   if (!s->is_cmethod || s->class_id < 0 || s->body < 0) return 0;
+  /* (the memo, the nodes' scope table and the lookups below are all keyed by the index) */
+  int si = (int)(s - c->scopes);
   if (g_cm_selfcls_n != c->nscopes) {
     free(g_cm_selfcls);
     g_cm_selfcls = (int8_t *)calloc((size_t)c->nscopes, 1);
@@ -4293,7 +4294,7 @@ int cmethod_takes_self_cls(Compiler *c, int si) {
           int cmi = call_target(c, nid, s->class_id, nm, CT_CMETHOD, NULL);
           if (cmi >= 0 && cmi != si) {
             g_cm_selfcls[si] = 0;
-            if (cmethod_takes_self_cls(c, cmi)) ans = 1;
+            if (cmethod_takes_self_cls(c, &c->scopes[cmi])) ans = 1;
             g_cm_selfcls[si] = -1;
           }
         }
@@ -4315,7 +4316,7 @@ static int g_cls_tok_mi = -1;
 static char g_cls_tok[64];
 
 const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, Buf *b) {
-  if (!cmethod_takes_self_cls(c, mi)) return "";
+  if (mi < 0 || !cmethod_takes_self_cls(c, &c->scopes[mi])) return "";
   int rc = recv_cls >= 0 || recv_cls <= -100 ? recv_cls : c->scopes[mi].class_id;
   if (rc == c->scopes[mi].class_id && class_reopen_cmethod(c, -1, -1, c->scopes[mi].name) == mi) rc = builtin_class_id("Class");
   buf_printf(b, "((sp_Class){%d, NULL})", rc);
@@ -5774,7 +5775,7 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   buf_puts(b, mc_method(c, s));
   buf_puts(b, "(");
   int wrote = 0;
-  if (cmethod_takes_self_cls(c, (int)(s - c->scopes))) {
+  if (cmethod_takes_self_cls(c, s)) {
     buf_puts(b, "sp_Class _sp_cls");
     wrote = 1;
   }
@@ -7916,7 +7917,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   const char *saved_self9 = g_self;
   char cm_self9[32];
   if (s->class_id >= 0 && s->is_cmethod) {
-    if (cmethod_takes_self_cls(c, (int)(s - c->scopes)))
+    if (cmethod_takes_self_cls(c, s))
       snprintf(cm_self9, sizeof cm_self9, "_sp_cls");
     else
       snprintf(cm_self9, sizeof cm_self9, "((sp_Class){%d})", s->class_id);
@@ -9251,7 +9252,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
   /* A class method that takes its receiving class as _sp_cls hands it to the
      body in the capture struct too: the body is a function of its own, where
      _sp_cls is not in scope (a `to_enum` in such a method). */
-  int cap_cls = encl && encl->is_cmethod && cmethod_takes_self_cls(c, (int)(encl - c->scopes));
+  int cap_cls = encl && encl->is_cmethod && cmethod_takes_self_cls(c, encl);
 
   /* Emit capture struct + GC scan function when there are captured vars or self */
   if (ncap > 0 || cap_self || cap_cls) {
@@ -10329,7 +10330,7 @@ static void emit_proc_param_slot(Compiler *c, Scope *bs, LocalVar *lv, Buf *pb, 
    receiving class the capture struct carries in (cap_cls) when the method
    takes one, so a subclass's call sees itself; else the method's own class. */
 static const char *proc_cmethod_self(Compiler *c, Scope *bs, char *out, size_t n) {
-  if (cmethod_takes_self_cls(c, (int)(bs - c->scopes))) return "_sp_cls";
+  if (cmethod_takes_self_cls(c, bs)) return "_sp_cls";
   snprintf(out, n, "((sp_Class){%d})", bs->class_id);
   return out;
 }
@@ -10790,7 +10791,7 @@ else if (orecv >= 0 && onm) {
      referenced an identifier that is not in scope. Carry it in the capture
      struct, the way instance self is carried (#3797). */
   int cap_cls = ie_cls < 0 && bs && bs->is_cmethod &&
-                cmethod_takes_self_cls(c, (int)(bs - c->scopes));
+                cmethod_takes_self_cls(c, bs);
   int self_is_value = cap_self && c->classes[scls].is_value_type;
   /* an Object / Array / Hash / Numeric reopening holds self boxed (its
      methods take `sp_RbVal self`): captured as the boxed value */
@@ -13018,7 +13019,7 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
        allocates that class */
     /* (the token `self` reads there: a yielding method inlined at its
        caller reads g_self, a parameter default the call's class) */
-    if (cmethod_takes_self_cls(c, (int)(s - c->scopes)))
+    if (cmethod_takes_self_cls(c, s))
       snprintf(sel, sizeof sel, "(%s).cls_id", s->yields && g_self ? g_self : cmethod_cls_token(c, s));
   }
   else if (!comp_ty_value_obj(c, ty_object(base))) {
@@ -16509,9 +16510,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
        filters `super` that way) */
     if (cmi < 0 && sp_streq(uname, "subclasses") && nt_ref(c->nt, id, "arguments") < 0) {
       int ta = ++g_tmp, tc = ++g_tmp;
-      int si = (int)(s - c->scopes);
       buf_printf(b, "({ sp_Class _t%d = ", tc);
-      if (cmethod_takes_self_cls(c, si)) buf_puts(b, cmethod_cls_token(c, s));
+      if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
       buf_printf(b, "; sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
       for (int k = 0; k < c->nclasses; k++) {
@@ -16533,9 +16533,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
         (sp_streq(uname, "ancestors") ||
          (sp_streq(uname, "superclass") && !comp_class_is_module(c, &c->classes[s->class_id])))) {
       int tc = ++g_tmp;
-      int si = (int)(s - c->scopes);
       buf_printf(b, "({ sp_Class _t%d = ", tc);
-      if (cmethod_takes_self_cls(c, si)) buf_puts(b, cmethod_cls_token(c, s));
+      if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
       Repr sr = repr_of(c, id);
       if (sp_streq(uname, "ancestors"))
@@ -16572,10 +16571,9 @@ void emit_super(Compiler *c, int id, Buf *b) {
       }
       if (ok) {
         int tc = ++g_tmp, tm = ++g_tmp;
-        int si = (int)(s - c->scopes);
         Repr sr = repr_of(c, id);
         buf_printf(b, "%s({ sp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", tc);
-        if (cmethod_takes_self_cls(c, si)) buf_puts(b, cmethod_cls_token(c, s));
+        if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
         else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
         buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
                       "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); "
@@ -16598,20 +16596,20 @@ void emit_super(Compiler *c, int id, Buf *b) {
     if (g_plan_check) ucall_observe(c, id, cmi, cdef, 0);
     buf_printf(b, "%s(", mc_method(c, &c->scopes[cmi]));
     /* `super` in a class method keeps the receiving class: forward ours. */
-    if (cmethod_takes_self_cls(c, cmi))
+    if (cmethod_takes_self_cls(c, &c->scopes[cmi]))
     {
       /* a body that does not take its receiving class is only ever run on
          its own class: pass that, not "none", or the parent's body builds
          and names the parent (#5995) */
       char own[48];
       snprintf(own, sizeof own, "((sp_Class){%d, NULL})", s->class_id);
-      buf_printf(b, "%s%s", cmethod_takes_self_cls(c, (int)(s - c->scopes)) ? "_sp_cls" : own,
+      buf_printf(b, "%s%s", cmethod_takes_self_cls(c, s) ? "_sp_cls" : own,
                  c->scopes[cmi].nparams > 0 ? ", " : "");
     }
     if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[cmi], "", b);
     else emit_args_filled(c, cmi, nt_ref(c->nt, id, "arguments"), "", b);
     emit_super_block_arg(c, id, s, &c->scopes[cmi],
-                         c->scopes[cmi].nparams > 0 || cmethod_takes_self_cls(c, cmi), b);
+                         c->scopes[cmi].nparams > 0 || cmethod_takes_self_cls(c, &c->scopes[cmi]), b);
     buf_puts(b, ")");
     return;
   }
@@ -20821,7 +20819,7 @@ static void ext_generate_cruby_shim(Compiler *c) {
               c->classes[sc->class_id].name, sc->name);
       exit(1);
     }
-    if (cmethod_takes_self_cls(c, s9)) {
+    if (cmethod_takes_self_cls(c, sc)) {
       fprintf(stderr, "spinel: --ext cruby: %s.%s: a subclass-dispatched class "
                       "method cannot be an entry\n",
               c->classes[sc->class_id].name, sc->name);
@@ -21068,7 +21066,7 @@ static void ext_emit_method_thunk(Compiler *c, int ci, int s, Buf *b) {
   const char *sep = "";
   if (sc->is_cmethod) {
     /* a class method a subclass may call takes the class it was called on */
-    if (cmethod_takes_self_cls(c, s)) { buf_puts(&call, "(sp_Class){ self.cls_id, 0 }"); sep = ", "; }
+    if (cmethod_takes_self_cls(c, sc)) { buf_puts(&call, "(sp_Class){ self.cls_id, 0 }"); sep = ", "; }
   }
   else {
     if (def != ci && !vt) buf_printf(&call, "(%s *)", class_ctype(c, def));

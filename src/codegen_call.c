@@ -7997,7 +7997,7 @@ int method_legacy_int_abi(Compiler *c, int mi, int recv_bound, char *out_sig, si
      descendant exists and the body reads self/name (cmethod_takes_self_cls)
      would take the first real argument as that class -- every argument shifts
      by one. The poly Method path passes no such leading argument (#4395). */
-  if (cmethod_takes_self_cls(c, mi)) return 0;
+  if (cmethod_takes_self_cls(c, m)) return 0;
   /* A keyword-rest or post-rest parameter changes the arity the C signature
      reads: a call passing fewer args than the signature has leaves the callee
      reading an undefined register instead of raising. */
@@ -8081,7 +8081,7 @@ int method_poly_abi(Compiler *c, int mi, int recv_bound, int *out_fixed, int *ou
      and box arm in the callers, exactly as on the legacy side */
   if (!method_bm_ret_kind(c, m, out_ret)) return 0;
   if (m->blk_param && m->blk_param[0] && !m->yields) return 0;
-  if (cmethod_takes_self_cls(c, mi)) return 0;
+  if (cmethod_takes_self_cls(c, m)) return 0;
   if (m->kwrest_idx >= 0 || m->npost_rest > 0) return 0;
   if (m->rest_idx >= 0) return 0;
   if (method_def_has_keywords(c, m)) return 0;
@@ -8126,7 +8126,7 @@ const char *emit_method_thunk(Compiler *c, int mi, int recv_bound, int *out_min,
     int shift = (recv_bound && tm->class_id < 0 && !tm->is_cmethod) ? 1 : 0;
     int ok = 0, tmin = 0, tmax = 0;
     char nm[48]; snprintf(nm, sizeof nm, "_bmt_%d_%d", mi, recv_bound ? 1 : 0);
-    if (!cmethod_takes_self_cls(c, mi) && tm->body >= 0 && tm->name && !tm->cs_synth)
+    if (!cmethod_takes_self_cls(c, tm) && tm->body >= 0 && tm->name && !tm->cs_synth)
       ok = emit_method_tramp_fn(c, tm, shift, nm, 1, -1, &tmin, &tmax);
     g_bmt_name[key] = strdup(ok ? nm : "");
     g_bmt_min[key] = tmin; g_bmt_max[key] = tmax;
@@ -20356,7 +20356,7 @@ void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b)
   if (!cm->blk_param || !cm->blk_param[0] || cm->yields) return;
   int blk0 = nt_ref(c->nt, id, "block");
   int blk_node = resolve_forwarded_block(c, blk0);
-  if (cm->nparams > 0 || cmethod_takes_self_cls(c, (int)(cm - c->scopes))) buf_puts(b, ", ");
+  if (cm->nparams > 0 || cmethod_takes_self_cls(c, cm)) buf_puts(b, ", ");
   /* a forwarded block inside a body inlined for a caller that handed it a
      real proc (`fw(&pr)`) is that proc (forwarded_real_proc) */
   const char *fwd = forwarded_real_proc(blk0, blk_node);
@@ -33552,7 +33552,7 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
   buf_puts(&cast, " (*)(");
   int np = 0;
   if (self_ful) { buf_puts(&cast, boxed_self ? "sp_RbVal" : "void *"); np++; }
-  else if (cmethod_takes_self_cls(c, target)) { buf_puts(&cast, "sp_Class"); np++; }
+  else if (cmethod_takes_self_cls(c, tm)) { buf_puts(&cast, "sp_Class"); np++; }
   for (int k = 0; k < tm->nparams; k++) {
     if (np++) buf_puts(&cast, ", ");
     LocalVar *pp = tm->pnames[k] ? scope_local(tm, tm->pnames[k]) : NULL;

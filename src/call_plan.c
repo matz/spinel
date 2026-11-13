@@ -9240,10 +9240,13 @@ static int ver_cell_node(Compiler *c, const char *cell, int at, int v) {
   int line = (int)nt_int(nt, at, "node_line", 0), tv = nt_new_int(nt, v), g = nt_new_node(nt, "GlobalVariableWriteNode");
   nt_node_set_str(nt, g, "name", cell);
   nt_node_set_ref(nt, g, "value", tv);
+  nt_node_set_int(nt, g, "ver_cell", 1);
   nt_node_set_int(nt, tv, "node_line", line);
   nt_node_set_int(nt, g, "node_line", line);
   /* (the cell holds an Integer from the entry file's first statement on, and nothing can read it before: its seed) */
-  comp_gvar_intern(c, cell + 1)->gvar_seeded = 2;
+  LocalVar *gv = comp_gvar_intern(c, cell + 1);
+  gv->gvar_seeded = 2;
+  gv->ver_cell = 1;
   comp_grow_node_arrays(c);
   c->nscope[g] = c->nscope[tv] = c->nscope[at];
   return g;
@@ -9349,6 +9352,71 @@ static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
     (*wp)[(*nwp)++] = x;
   }
   free(of);
+}
+/* Does the C write scope s out: reached, or a proc-form clone (emission
+   writes the live ones, proc_form_live; all of them count here) */
+static int ver_scope_written(const Scope *s) {
+  return !s || s->reachable || s->is_proc_form;
+}
+/* (keep the cell `$name` names: ver_cells_settle) */
+static void ver_cell_keep(Compiler *c, const char *name) {
+  const LocalVar *g = comp_gvar(c, name + 1);
+  int i = g ? (int)(g - c->gvars) : -1;
+  if (i >= 0 && i < c->nver_cell_dropped) c->ver_cell_dropped[i] = 0;
+}
+/* (keep the cells call id reads to answer whether cls has class method name, every visibility: a respond_to?'s,
+   cplan_cmethod_presence, or a class-side list's, cplan_list_cells; own versions or the chain's as the list
+   asks, cplan_list_class) */
+static void ver_presence_keep(Compiler *c, int id, const char *name, int cls, void *arg) {
+  (void)arg;
+  int own = 0;
+  CplanCells cs;
+  if (cplan_list_class(c, id, &own) < 0) own = 0;
+  if (!cplan_cmethod_presence(c, id, cls, name, 1, own, &cs)) return;
+  for (int i = 0; i < cs.n; i++) ver_cell_keep(c, cs.cell[i]);
+}
+/* See call_plan.h. A cell is kept where the C reads it: a read in a
+   scope the C writes (an entry's arms, a prepend guard's, a conditional
+   def's dispatcher), the cells a written respond_to? or class-side list
+   asks (ver_presence_keep), a write of the program's own
+   to a global of its name, or a write of the plan's (ver_cell_node marks
+   it) whose value is not thrown away (an_node_dropped). Every other cell
+   is read by nothing
+   the program runs, though entries a call bound before the last
+   reachability, or a survey's, made it. Entries stay: a respond_to?
+   reads the cells of one no call reaches. */
+void ver_cells_settle(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  free(c->ver_cell_dropped);
+  c->nver_cell_dropped = c->ngvars;
+  if (!(c->ver_cell_dropped = calloc((size_t)c->ngvars + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int any = 0;   /* (a program with no cell walks nothing) */
+  for (int i = 0; i < c->ngvars; i++) any |= c->ver_cell_dropped[i] = c->gvars[i].ver_cell;
+  for (int id = 0; any && id < nt->count; id++) {
+    const char *nm = nt_str(nt, id, "name");
+    NodeKind k = nt_kind(nt, id);
+    const LocalVar *g = nm && nm[0] == '$' ? comp_gvar(c, nm + 1) : NULL;
+    if (!g || !g->ver_cell || !ver_scope_written(comp_scope_of(c, id))) continue;
+    if (k != NK_GlobalVariableWriteNode || !nt_int(nt, id, "ver_cell", 0) || !an_node_dropped(c, id)) ver_cell_keep(c, nm);
+  }
+  for (int id = any ? an_calls_named_first(c, RESPOND_TO_NAME) : -1; id >= 0; id = an_calls_named_next(id)) {
+    int pc = cplan_presence_class(c, id);
+    const char *qm = pc >= 0 && ver_scope_written(comp_scope_of(c, id)) ? method_sym_arg(c, id) : NULL;
+    if (qm) ver_presence_keep(c, id, qm, pc, NULL);
+  }
+  for (int id = any ? an_calls_named_first(c, SINGLETON_METHODS_NAME) : -1; id >= 0; id = an_calls_named_next(id))
+    if (ver_scope_written(comp_scope_of(c, id))) list_asks(c, id, ver_presence_keep, NULL);
+}
+/* See call_plan.h. */
+int cplan_cell_dropped(const Compiler *c, const LocalVar *g) {
+  int i = g ? (int)(g - c->gvars) : -1;
+  return i >= 0 && i < c->nver_cell_dropped && c->ver_cell_dropped[i];
+}
+/* See call_plan.h. */
+int cplan_cell_write_dropped(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  return nt_kind(nt, id) == NK_GlobalVariableWriteNode && nt_int(nt, id, "ver_cell", 0) &&
+         cplan_cell_dropped(c, comp_gvar(c, nt_str(nt, id, "name") + 1));
 }
 static int ver_cells_put(Compiler *c);
 void ver_cells_write(Compiler *c) {

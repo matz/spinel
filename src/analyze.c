@@ -55400,6 +55400,8 @@ void analyze_program(Compiler *c) {
   /* once more on the settled types, which tell a builtin receiver's call
      from a program method's (cr_recv_builtin_value) */
   AN_STEP_V("compute_reachable", compute_reachable(c, 2));
+  /* the cells the reached code reads, now that no entry is made or reached anew */
+  AN_STEP_V("ver_cells_settle", ver_cells_settle(c));
   /* The census again, on what this pass reached: it opens the instances of
      a class reached code is typed with (an object built only where nothing
      runs), and a construction in one of its methods, now reached, builds

@@ -16992,6 +16992,8 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   emit_trace_node(c, id, 's');
 #endif
   if (g_repr_check) repr_check_ask(c, id);
+  /* a version cell no emitted code reads is not written (ver_cells_settle) */
+  if (cplan_cell_write_dropped(c, id)) return;
   emit_line_directive(c, id, b);
   if (nt_kind(c->nt, id) == NK_LoadNode) { emit_with_prelude(c, id, b, indent, emit_load_stmt); return; }   /* (a computed path's temps) */
   if (emit_const_recv_stmt_wrap(c, id, b, indent, 0)) return;

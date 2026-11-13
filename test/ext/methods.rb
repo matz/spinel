@@ -118,10 +118,10 @@ module ExtMethods
       c.dyn
     end
 
-    # a method the table leaves out (an optional parameter) that nothing
+    # a method the table leaves out (a keyword parameter) that nothing
     # names: its define_method defines nothing, as before the flag, so the
     # to_s it would define does not refuse the compile
-    def self.unused(x = 1)
+    def self.unused(x: 1)
       define_method(:to_s) { "x#{x}" }
     end
   end

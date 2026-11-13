@@ -1,0 +1,10 @@
+where/0 where/-2 .pick/1 .pick/2 show/0 order/-1 lim/1
+"where(nil, 0) where(1, 0) where(1, 3) order(0) order(3) lim 1"
+raised ArgumentError: wrong number of arguments (given 0, expected 1)
+3
+3
+raised ArgumentError: wrong number of arguments (given 0, expected 1..2)
+raised ArgumentError: wrong number of arguments (given 3, expected 1..2)
+no method hid
+no method kw
+no method blk

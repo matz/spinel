@@ -594,8 +594,13 @@ the class has no such method; and `sp_ext_methods(cls_id)`, the table of a
 class (each row a name, its arity, the class that defines it, whether it
 is a singleton method, and the thunk). The table holds the methods a `def`
 or a `def self.` defines, inherited ones included, and the `attr_*`
-readers and writers; a method with an optional, rest, keyword or block
-parameter stays out of it, as does a private or protected one, and one
+readers and writers. A method with optional or rest parameters has one row
+for each count of arguments it takes: `def m(a, b = 1)` has the rows `m`
+of arity 1 and of arity 2, and a rest parameter makes a row of a negative
+arity, `-(n + 1)` for `n` arguments or more, as `Method#arity` counts. A
+method with a keyword or block parameter, or with a required parameter
+after an optional one, stays out of the table, as does a private or
+protected one, and one
 with a parameter whose kind the thunk cannot check a host's argument
 against (a Range, a Time, a Symbol, an IO, ...). When two classes of the
 program have one name (`A::Base`, `B::Base`), name the one you export by

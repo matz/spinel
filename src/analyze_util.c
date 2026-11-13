@@ -7036,19 +7036,30 @@ int ext_class_exported(Compiler *c, int class_id) {
 /* Whether the method of scope si has a shape the thunk calls, seen from
    class_id (the class it is answered for): public there, not initialize,
    fixed positional parameters (no optional, rest, keyword or block
-   parameter, no yield). */
+   parameter, no yield). A method with optional or rest parameters is
+   called through its forwarders, which have that shape
+   (desugar_ext_forwarders). */
 static int ext_method_shape(Compiler *c, int class_id, int si) {
   if (si <= 0 || si >= c->nscopes || class_id < 0 || class_id >= c->nclasses) return 0;
   Scope *sc = &c->scopes[si];
   if (!sc->name || sc->class_id < 0 || is_initialize_name(sc->name)) return 0;
   if (sc->replaced || sc->entry != ENTRY_NONE) return 0;
+  /* a forwarder stands for the method it calls: that method is public,
+     and the class answers the one the forwarder was written beside */
+  const char *vis_name = ext_fwd_orig(sc->name, NULL, NULL);
+  if (vis_name) {
+    int osi = sc->is_cmethod ? comp_cmethod_in_chain(c, class_id, vis_name, NULL)
+                             : comp_method_in_chain(c, class_id, vis_name, NULL);
+    if (osi < 0 || c->scopes[osi].class_id != sc->class_id) return 0;
+  }
+  else vis_name = sc->name;
   if (sc->is_cmethod) {
     int at = -1;
-    if (comp_cmethod_vis_declared(c, class_id, sc->name, &at) != SP_VIS_PUBLIC) return 0;
+    if (comp_cmethod_vis_declared(c, class_id, vis_name, &at) != SP_VIS_PUBLIC) return 0;
   }
   else {
     if (comp_class_is_module(c, &c->classes[class_id])) return 0;   /* no instance */
-    if (comp_method_vis_in_chain(c, class_id, sc->name) != SP_VIS_PUBLIC) return 0;
+    if (comp_method_vis_in_chain(c, class_id, vis_name) != SP_VIS_PUBLIC) return 0;
   }
   if (sc->rest_idx >= 0 || sc->kwrest_idx >= 0 || sc->nrequired != sc->nparams || sc->ps_nkw > 0 ||
       (sc->blk_param && sc->blk_param[0]) || sc->yields)
@@ -7115,6 +7126,34 @@ static int ext_listed_descendant(Compiler *c, const char *name) {
     }
   }
   return found;
+}
+
+/* Whether the list names the class definition of that key, or a class
+   under it: the definitions whose methods a table can hold. */
+int ext_class_def_wanted(Compiler *c, const char *key) {
+  if (!g_ext_classes || !*g_ext_classes || !key) return 0;
+  return ext_name_listed(key) || ext_listed_descendant(c, key);
+}
+
+/* A forwarder of desugar_ext_forwarders is named
+   `spinel_ext_fwd__<n>__<name>` (n fixed arguments) or
+   `spinel_ext_fwdr__<n>__<name>` (n fixed arguments, then the rest in an
+   Array). Answers <name> with n in *nfixed and the rest flag in *rest, or
+   NULL for another name. */
+const char *ext_fwd_orig(const char *name, int *nfixed, int *rest) {
+  if (!name || strncmp(name, "spinel_ext_fwd", 14)) return NULL;
+  const char *p = name + 14;
+  int r = *p == 'r';
+  if (r) p++;
+  if (p[0] != '_' || p[1] != '_') return NULL;
+  p += 2;
+  int n = 0;
+  if (*p < '0' || *p > '9') return NULL;
+  while (*p >= '0' && *p <= '9') n = n * 10 + (*p++ - '0');
+  if (p[0] != '_' || p[1] != '_' || !p[2]) return NULL;
+  if (nfixed) *nfixed = n;
+  if (rest) *rest = r;
+  return p + 2;
 }
 
 /* Whether a host can call the method of scope si by name, so that it runs

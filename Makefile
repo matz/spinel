@@ -1797,6 +1797,15 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	  else echo "ext-test: FAIL (--ext-class subclass host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/methods_opt.rb -c --no-line-map --ext-init Init_ext_methods_opt \
+	      --ext-entry ExtOpt.make --ext-class ExtOpt::Rel -o "$$tmp/m.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (--ext-class optional parameter emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_opt_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mohost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/mohost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected_methods_opt && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class optional parameter host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_opt "$$tmp/out" || true; ok=0; }; \
+	  else echo "ext-test: FAIL (--ext-class optional parameter host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/dup_leaf.rb -c --no-line-map --ext-init Init_ext_dup \
 	      --ext-entry ExtDup.go --ext-class ExtDupB::Base -o "$$tmp/d.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class path emission with two classes of one leaf name)"; ok=0; \

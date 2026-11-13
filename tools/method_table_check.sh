@@ -35,6 +35,8 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
 FAIL_FAMILIES="super"
+# the lists family also keeps its static rule: the method list builders and arms read no table themselves
+"$ROOT/tools/lists_readers_check.sh" || exit 1
 FAMILIES="call implied presence super send lists other pass"
 for f in $FAIL_FAMILIES; do
   case " $FAMILIES " in *" $f "*) ;; *) echo "method-table-check: FAIL_FAMILIES names $f, not one of: $FAMILIES" >&2; exit 2 ;; esac

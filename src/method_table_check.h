@@ -33,7 +33,7 @@ enum { MTS_INST, MTS_CMETH, MTS_SELF };
 
 /* the frame and the brackets open now: what a node frame saves and what an
    unwind to an abandoned emission restores (EmitUnitState) */
-typedef struct { int frame, depth; } MtabMark;
+typedef struct { int frame, depth, build; } MtabMark;
 
 struct MethodTableCheck *mtab_new(void);
 void mtab_free(struct MethodTableCheck *m);
@@ -43,6 +43,7 @@ void mtab_read(Compiler *c, MtPrim prim, int cls, int side, const char *name);
    (ML_TABLE) for the MLW_* reason why */
 void mtab_table(Compiler *c, int id, int cls, unsigned flags, const char *name, int why);
 void mtab_depth(Compiler *c, int by);
+void mtab_build_depth(Compiler *c, int by);
 MtabMark mtab_mark(Compiler *c);
 void mtab_unwind(Compiler *c, MtabMark was);
 MtabMark mtab_frame_set(Compiler *c, int id);   /* node id is the frame now, outside any bracket; the state before */
@@ -50,9 +51,14 @@ void mtab_report(Compiler *c);
 
 static inline void mtab_enter(Compiler *c) { if (g_method_table_check) mtab_depth(c, 1); }
 static inline void mtab_leave(Compiler *c) { if (g_method_table_check) mtab_depth(c, -1); }
+/* The window of a method list's builders (the refl_* functions that assemble a list's names and
+   refl_emit_sym_array): a read made unbracketed inside it is the list's own read of a table, family lists; one
+   made under the list's node outside it is the call's. */
+static inline void mtab_build_enter(Compiler *c) { if (g_method_table_check) mtab_build_depth(c, 1); }
+static inline void mtab_build_leave(Compiler *c) { if (g_method_table_check) mtab_build_depth(c, -1); }
 /* A node frame: the brackets open around it cover their own reads only, so
    a node inferred or emitted inside one has its reads counted. */
-static inline MtabMark mtab_push(Compiler *c, int id) { return g_method_table_check ? mtab_frame_set(c, id) : (MtabMark){ -1, 0 }; }
+static inline MtabMark mtab_push(Compiler *c, int id) { return g_method_table_check ? mtab_frame_set(c, id) : (MtabMark){ -1, 0, 0 }; }
 static inline void mtab_pop(Compiler *c, MtabMark was) { if (g_method_table_check) mtab_unwind(c, was); }
 
 #endif

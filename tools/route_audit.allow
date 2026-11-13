@@ -314,7 +314,7 @@ src/call_plan.c ver_named_one the method an includer holds of a module's open hi
 src/call_plan.c pr_alias the class's alias entry of a name
 src/call_plan.c pr_prep_body the class's body a prepended module's method displaced
 src/call_plan.c module_defines a module's own definition of a listed name
-src/call_plan.c cplan_module_listable a name a module's list asks
+src/call_plan.c module_listable a name a module's list asks
 src/call_plan.c module_own a module's own definition of a listed name
 src/compiler.c comp_time_reopen_defines whether the program's reopen of Time defines a name, so a Time subclass's call of it is not taken for Time's in-place conversion or copy
 src/analyze.c rms_builtin_receiver whether a fold's receiver class defines reduce/inject itself, so the fold is the builtin's

@@ -19412,7 +19412,9 @@ static void refl_cand_note(void *ud, const char *nm, int vis) {
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv,
                                       int with_modules, ReflNames *r) {
   ReflCand n = { c, r, pub, prot, priv };
+  mtab_build_enter(c);
   cplan_list_candidates(c, ci, with_modules ? 0 : CT_OWN, refl_cand_note, &n);
+  mtab_build_leave(c);
 }
 /* Enumerable's instance methods in CRuby, all public */
 static const char *const enumerable_method_names[] = {
@@ -19437,11 +19439,12 @@ static int enumerable_method_name(const char *m) {
    `singleton_only` stops at the singleton links (Object#singleton_methods). */
 static void refl_object_methods(Compiler *c, int cid, int pub, int prot, int singleton_only,
                                 ReflNames *r) {
+  mtab_build_enter(c);
   for (int k = cid, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     if (singleton_only && !c->classes[k].is_singleton_of) break;
     refl_own_instance_methods(c, k, pub, prot, 0, 1, r);
   }
-  if (singleton_only) return;
+  if (singleton_only) { mtab_build_leave(c); return; }
   static const char *const structm[] = {
     "==", "[]", "[]=", "deconstruct", "deconstruct_keys", "dig", "each", "each_pair",
     "eql?", "filter", "hash", "inspect", "length", "members", "select", "size",
@@ -19471,6 +19474,7 @@ static void refl_object_methods(Compiler *c, int cid, int pub, int prot, int sin
     objm };
   for (int t = 0; t < 4; t++)
     for (int i = 0; core[t] && core[t][i]; i++) refl_note_row(r, core[t][i], pub);
+  mtab_build_leave(c);
 }
 
 /* Klass.instance_methods / public_instance_methods with inherited methods
@@ -19491,12 +19495,16 @@ static void refl_module_note(void *ud, const char *nm, int vis) {
    question, cplan_module_methods). */
 void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r) {
   ReflCand n = { c, r, 1, prot, 0 };
+  mtab_build_enter(c);
   cplan_module_methods(c, m, 0, refl_module_note, &n);
+  mtab_build_leave(c);
 }
 /* Mod.{,public_,private_,protected_}instance_methods(false): the names the module itself answers for. */
 void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r) {
   ReflCand n = { c, r, pub, prot, priv };
+  mtab_build_enter(c);
   cplan_module_methods(c, m, 1, refl_module_note, &n);
+  mtab_build_leave(c);
 }
 
 /* A class-side candidate: singleton_methods lists the public and protected
@@ -19509,7 +19517,9 @@ static void refl_cmethod_cand_note(void *ud, const char *nm, int vis) {
    its superclasses and extended modules. */
 void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r) {
   ReflCand n = { c, r, 1, 1, 0 };
+  mtab_build_enter(c);
   cplan_list_candidates(c, ci, CT_CMETHOD | (all ? 0 : CT_OWN), refl_cmethod_cand_note, &n);
+  mtab_build_leave(c);
 }
 
 static int cells_testable(Compiler *c, const CplanCells *cs);
@@ -19520,11 +19530,12 @@ static void emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b);
    that no method of it is live at the list's call (cplan_list_omits); a
    row's is the row's. */
 void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
+  mtab_build_enter(c);
   int ta = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
   for (int i = 0; i < r->n; i++) {
     if (!(r->show[i] & REFL_SHOWN)) continue;
-    if (cid >= 0 && comp_is_undeffed_in_chain(c, cid, r->v[i])) continue;
+    if (cplan_undefined(c, cid, 0, r->v[i])) continue;
     /* a class-side name whose versions the record cannot order against the list: listed where one of its
        cells says it is live (cplan_cmethod_presence), as a respond_to? there answers; public versions only */
     CplanCells cs;
@@ -19543,6 +19554,7 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
     buf_puts(b, "))); ");
   }
   buf_printf(b, "_t%d; })", ta);
+  mtab_build_leave(c);
 }
 
 /* The names obj.methods(false) / public_methods(false) /
@@ -19552,11 +19564,13 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
 static void refl_object_own_methods(Compiler *c, int cid, const char *name, ReflNames *r) {
   int pub_only = sp_streq(name, "public_methods");
   int k = cid;
+  mtab_build_enter(c);
   if (c->classes[cid].is_singleton_of) {
     refl_own_instance_methods(c, cid, 1, !pub_only, 0, 0, r);
     k = c->classes[cid].is_singleton_of - 1;
   }
   if (pub_only && k >= 0) refl_own_instance_methods(c, k, 1, 0, 0, 0, r);
+  mtab_build_leave(c);
 }
 
 /* The list emit_object_methods_reflection answers for an instance of cid,
@@ -19685,6 +19699,7 @@ static void refl_core_note(void *ud, const char *m, int vis) {
 }
 static void refl_value_methods(Compiler *c, const char *cls, int prot, ReflNames *r) {
   ReflCoreNote n = { r, prot };
+  mtab_build_enter(c);
   for (const char *p = core_class_ancestors(cls); p && *p;) {
     const char *e = strchr(p, ' ');
     size_t l = e ? (size_t)(e - p) : strlen(p);
@@ -19696,6 +19711,7 @@ static void refl_value_methods(Compiler *c, const char *cls, int prot, ReflNames
     core_own_methods_each(p, l, refl_core_note, &n);
     p += l + (e ? 1 : 0);
   }
+  mtab_build_leave(c);
 }
 
 /* The builtin classes a value's #methods lists (an_value_methods_class),
@@ -19762,7 +19778,7 @@ void emit_value_methods_helpers(Compiler *c, const char *const *texts, int ntext
       int leaf = comp_builtin_class_named(c, value_methods_classes[i]);
       buf_printf(b, "  case %d: { static const char *const t[] = { ", 2 * i + prot);
       for (int j = 0; j < r.n; j++) {
-        if (!(r.show[j] & REFL_SHOWN) || (leaf >= 0 && comp_is_undeffed_in_chain(c, leaf, r.v[j]))) continue;
+        if (!(r.show[j] & REFL_SHOWN) || cplan_undefined(c, leaf, 0, r.v[j])) continue;
         emit_str_literal(b, r.v[j]);
         buf_puts(b, ", ");
       }

@@ -3997,7 +3997,8 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
   int prot = sp_streq(name, "instance_methods");
   if (!prot && !sp_streq(name, "public_instance_methods")) return 0;
   if (argc > 1 || (argc == 1 && nt_kind(nt, argv[0]) != NK_TrueNode)) return 0;
-  int ci = recv >= 0 ? view_class_is(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, si = -1, dyn = 0;
+  int ci = recv >= 0 ? view_class_is(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, dyn = 0;
+  const Scope *cm = NULL;
   /* a constant path (`Outer::Mod`) names its class by the leaf, as constant
      paths resolve here; a class-tag arm's receiver, the class it names */
   if (ci >= 0) ;
@@ -4007,7 +4008,7 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
     Scope *s = comp_scope_of(c, id);
     if (s && s->is_cmethod && s->class_id >= 0 && call_target(c, id, s->class_id, name, CT_CMETHOD, NULL) < 0) {
       ci = s->class_id;
-      si = (int)(s - c->scopes);
+      cm = s;
     }
     /* a class body's self names the class whose body holds it */
     else if (recv >= 0 && (ci = class_body_self_ci(c, recv)) >= 0 &&
@@ -4043,15 +4044,15 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
     return 1;
   }
   if (ci < 0) return 0;
-  if (si >= 0) {
+  if (cm) {
     /* a spliced class method has its receiving class at the site; any
        other that takes it reads it from _sp_cls */
-    if (c->scopes[si].yields && g_self && g_emitting_class_id >= 0) ci = g_emitting_class_id;
-    else dyn = cmethod_takes_self_cls(c, si);
+    if (cm->yields && g_self && g_emitting_class_id >= 0) ci = g_emitting_class_id;
+    else dyn = cmethod_takes_self_cls(c, (int)(cm - c->scopes));
   }
   /* a module's: its own and its includes' */
   if (comp_class_is_module(c, &c->classes[ci])) {
-    if (si >= 0 || !cplan_module_listable(c, ci, name)) return 0;
+    if (cm || !cplan_module_listable(c, ci, name)) return 0;
     ReflNames r = {0};
     refl_at(&r, id, ci, 0);
     refl_module_instance_methods(c, ci, prot, &r);

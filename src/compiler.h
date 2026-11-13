@@ -120,6 +120,8 @@ static inline void comp_touch_key(int key) {
 #define CLS_BK_OTHER CORE_N
 #define CLS_BK_WORDS ((CORE_N + 64) / 64)
 typedef struct { unsigned char all, bv, os, pr, bc; unsigned long long bk[CLS_BK_WORDS]; int n, nw; unsigned long long *w; int *wi; } ClsSet;
+/* A hashed name set (keys borrowed, not copied); zero-initialize to start (anh_*, analyze_internal.h). */
+typedef struct { const char **key; int *next, *head, n, cap, nb; } ANameHash;
 static inline int cls_bk_has(const ClsSet *s, int k) { return (int)((s->bk[k >> 6] >> (k & 63)) & 1); }
 /* the position of the first word at word index q or past it */
 static inline int cls_set_word_from(const ClsSet *s, int q) {
@@ -1478,11 +1480,16 @@ typedef struct {
      and freed when the period ends */
   struct DefOwners { int *kd, *kc, *head, *tail, *next, cap, nscopes; } def_owners;
   /* the dynamic send's candidate memo (analyze_desugar.c, dsn_memo_begin):
-     each class's names, the program's instance-method names, and the names
-     every object answers, kept from one run of the passes to the next while
-     nothing they read has moved (the stamps); freed with the compiler */
+     each class's names, the call plan's list for each class, the program's
+     instance-method names, and the names every object answers, kept from
+     one run of the passes to the next while nothing they read has moved
+     (the stamps); freed with the compiler. lits is the set of literal names dsend_candidates took from the program's
+     source (its keys point into that answer, valid until the caller frees
+     it), which the pass reads after it. */
   struct DsnMemo { int on, ncls, nscp, keyed; unsigned sgen, shape, tgen;
-                   char ***names; int *n; char **inames; int ninames; int *every; int nevery; } dsn;
+                   char ***names; int *n; char **inames; int ninames; int *every; int nevery;
+                   char ***own; int *nown;
+                   ANameHash lits; } dsn;
   /* the top-level scope of each file root (nt_root), by graph id: 0 for the
      entry (analyze_program.c) */
   int *file_scope;
@@ -2011,8 +2018,8 @@ enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
 AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);
 void comp_free(Compiler *c);
-/* the dynamic send's candidate memo (Compiler.dsn), dropped (analyze_desugar.c) */
-void dsn_memo_free(Compiler *c);
+/* the dynamic send's candidate memo and literal set (Compiler.dsn), dropped (analyze_desugar.c) */
+void dsn_free(Compiler *c);
 void ic_free(Compiler *c);   /* implicit_calls.c */
 void yvt_free(Compiler *c);  /* analyze_util.c */
 /* Is `name` one of the n strings in `list`? (0 for a NULL name) */

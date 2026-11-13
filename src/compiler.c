@@ -522,7 +522,7 @@ void comp_free(Compiler *c) {
   free(c->cext_classes);
   share_facts_free(c);
   share_plan_free(c);
-  dsn_memo_free(c);
+  dsn_free(c);
   free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own);
   builtin_given_free(c);
   ic_free(c);

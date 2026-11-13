@@ -2008,7 +2008,7 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
   /* (only where the body's value is read: a class statement whose value is
      dropped, as nearly every one is, has its last statement's value read
      by no one) */
-  int read = j == bn - 1 && !(list == class_def_body(nt, frame) && an_value_dropped(nt, comp_parent_map(c), frame));
+  int read = j == bn - 1 && !(list == class_def_body(nt, frame) && an_value_dropped(c, comp_parent_map(c), frame));
   if (ok && read) ok = last >= 0 && ct_fx_answers(nt, &e, &e.fx[last]);
   if (!ok) {
     if (ran) ct_state_note(c, h, call, &e, seeded, seed_nw);

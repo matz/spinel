@@ -216,6 +216,9 @@ extern int g_dump_load_record;   /* --dump-load-record */
    before p is UNKNOWN. A p with no point (a method body) asks as of the
    end of the load phase. */
 enum { ELAB_NO, ELAB_YES, ELAB_UNKNOWN };
+/* (an answer of the method lookups that read an undef: the lookup stops
+   there, the name is undefined: elab_main_singleton_at) */
+enum { ELAB_STOP = 3 };
 enum { LR_MAY_IN = 2 };   /* LrDef.may */
 /* When a call's block (or an END body) runs, from the syntax alone
    (elab_block_runs): not now, at a time the syntax does not tell (a later
@@ -331,8 +334,9 @@ void const_writes_free(Compiler *c);
    table: ELAB_YES with *out a program's `def self.m` (or alias) there, or
    with *out NULL the core's own singleton method (main_singleton_method:
    `to_s`, `inspect`) that main has from the start; ELAB_NO when the
-   singleton holds no method of the name, ELAB_UNKNOWN when the record
-   cannot say. */
+   singleton holds no method of the name, ELAB_STOP where an undef there
+   (main's own, a prepended or an extended module's) stops the lookup, the
+   core's methods' too, ELAB_UNKNOWN when the record cannot say. */
 int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrDef **out);
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A
@@ -666,6 +670,9 @@ int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int
 /* ...and the versions of cls's own history of `name` alone, numbered as
    there */
 int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+/* ...and whether one of them is the method scope `scope` made of (its def
+   or alias: LrDef.scope): 1, 0, or -1 with no record */
+int elab_history_holds_scope(Compiler *c, int cls, int sg, const char *name, int scope);
 /* ...and whether main's history of `name` and Object's are one entry of
    Object's method table, each holding a version (a top-level def and a
    reopening of Object's): their versions write one cell, and a call on main

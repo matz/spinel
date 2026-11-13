@@ -2998,7 +2998,7 @@ static int ct_main_builtin_call(Compiler *c, int id, const char *nm) {
   static const int roots[] = { CORE_OBJECT, CORE_BASIC_OBJECT };
   const LrDef *d = NULL;
   int s = elab_main_singleton_at(c, nm, elab_point_of(c, id), &d);
-  if (s == ELAB_UNKNOWN || (s == ELAB_YES && d) || call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) return 0;
+  if (s == ELAB_UNKNOWN || s == ELAB_STOP || (s == ELAB_YES && d) || call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) return 0;
   int bo = comp_core_class(c, CORE_BASIC_OBJECT);
   for (int i = 0; i < 2; i++) {
     int k = comp_core_class(c, roots[i]);
@@ -3027,7 +3027,8 @@ static int ct_runs_on_main(Compiler *c, int id) {
 /* What main's singleton answers for `name` at call id's point
    (elab_main_singleton_at): 1, main's own method (or the record cannot
    tell, or the point is no load point); 0, none, so Object's chain
-   answers; -1, another's (an extended module's, the core's). None only
+   answers (an undef too, which stops the call where ct_main_stopped says
+   so); -1, another's (an extended module's, the core's). None only
    where the record places the def the table holds: one in a body the walk
    does not place (a block given in a call's arguments) makes no entry. */
 static int ct_main_own(Compiler *c, int id, const char *name) {
@@ -3036,13 +3037,11 @@ static int ct_main_own(Compiler *c, int id, const char *name) {
   if (p.region < 0) return 1;
   int s = elab_main_singleton_at(c, name, p, &d);
   if (s == ELAB_UNKNOWN || (s == ELAB_YES && d && d->scope > 0 && c->scopes[d->scope].class_id < 0)) return 1;
-  if (s != ELAB_NO) return -1;
-  ElabVersion vs[8];
-  int si = comp_main_method(c, name), n = elab_history_versions(c, -1, 1, name, vs, 8);
-  if (n < 0) return 1;   /* (more versions than vs holds, or no record: it cannot tell) */
-  for (int i = 0; i < n; i++)
-    if (vs[i].v->scope == si) return 0;
-  return 1;
+  /* (an undef: where a program method_missing keeps it from stopping the
+     call, ct_main_stopped, main's own method is gone all the same) */
+  if (s != ELAB_NO && s != ELAB_STOP) return -1;
+  /* (no record: it cannot tell) */
+  return elab_history_holds_scope(c, -1, 1, name, comp_main_method(c, name)) != 1;
 }
 /* Does call id run on main (ct_runs_on_main) and look on main first? At a
    load point, only where main's own method of the name answers there
@@ -3050,6 +3049,20 @@ static int ct_main_own(Compiler *c, int id, const char *name) {
    an extended module's or the core's answers. */
 static int ct_on_main(Compiler *c, int id, const char *name) {
   return ct_runs_on_main(c, id) && ct_main_own(c, id, name) == 1;
+}
+/* Does call id, at a load point, run on main (ct_runs_on_main) where an
+   undef of `name` on main's singleton stops the lookup
+   (elab_main_singleton_at's ELAB_STOP): no method of Object's chain nor a
+   builtin's (the core's to_s and inspect) answers it, so it raises, as a
+   call ct_undefined_at proves undefined does, where no program
+   method_missing may answer it instead. */
+static int ct_main_stopped(Compiler *c, int id, const char *name) {
+  const LrDef *d = NULL;
+  LoadPoint p = elab_point_of(c, id);
+  if (p.region < 0 || elab_main_singleton_at(c, name, p, &d) != ELAB_STOP) return 0;
+  /* (a program method_missing main reaches, its singleton's or Object's,
+     answers the call instead: not told apart here, so none stops) */
+  return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, 0) < 0 && ct_runs_on_main(c, id);
 }
 /* The method call id reaches when it can reach only main's own method of
    `name`: a call on main (ct_on_main) at a load point where main's method
@@ -3100,10 +3113,15 @@ int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst) {
    (ct_on_main), as CRuby's lookup there; its versions are then main's
    chain's, which ends in Object's (*flags gains CT_CMETHOD). Where main's
    singleton answers by the core's `to_s` or `inspect`, none
-   (ML_SINGLETON). */
+   (ML_SINGLETON); where an undef there stops the lookup
+   (ct_main_stopped), none (ML_NONE). */
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
   if (*flags & CT_INCLUDED) return comp_included_method_index(c, name, id);
   const LrDef *d = NULL;
+  if ((*flags & CT_TOP) && id >= 0 && ct_main_stopped(c, id, name)) {
+    if (ml) ml->kind = ML_NONE;
+    return -1;
+  }
   if ((*flags & CT_TOP) && id >= 0 && main_singleton_method(name) && ct_runs_on_main(c, id) &&
       elab_main_singleton_at(c, name, elab_point_of(c, id), &d) == ELAB_YES && !d) {
     if (ml) ml->kind = ML_SINGLETON;
@@ -3890,7 +3908,15 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   int recv = name ? nt_ref(nt, id, "receiver") : -1;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   int cr = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
-  if (!name || (recv >= 0 && !cr && rk != NK_SelfNode) || an_scopes_named_first(c, name) < 0) return CM_NONE;
+  if (!name || (recv >= 0 && !cr && rk != NK_SelfNode)) return CM_NONE;
+  /* (a call on main that an undef of main's singleton stops: neither a
+     method of the program's nor a builtin's answers it) */
+  if (!cr && ct_main_stopped(c, id, name)) {
+    if (anon) *anon = -1;
+    cm_self_name(c, -1, self_text, cap);
+    return nt_vcall(nt, id) ? CM_NAMEERROR : CM_NOMETHOD;
+  }
+  if (an_scopes_named_first(c, name) < 0) return CM_NONE;
   int ci = cr ? cplan_const_recv_class(c, id, recv, NULL) : cplan_self_class(c, id);
   if (ci < -1 || ci >= c->nclasses || (cr && ci < 0)) return CM_NONE;
   /* a method the tables answer for self, which the record proves is not

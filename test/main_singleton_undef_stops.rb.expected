@@ -1,0 +1,19 @@
+main f1
+NameError f1
+NoMethodError f1 main
+["NameError in a block"]
+main f1 again
+main f2 1
+NoMethodError f2
+NameError f3
+NameError f4
+Object#f4
+NameError g1
+NameError to_s
+:NameError
+:NameError
+:NoMethodError
+main f5 9
+NameError f5
+main f6 9
+Object#f6

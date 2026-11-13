@@ -248,6 +248,20 @@ void anh_add(ANameHash *st, const char *nm) {
   st->key[st->n] = nm; st->next[st->n] = st->head[b]; st->head[b] = st->n; st->n++;
 }
 void anh_free(ANameHash *st) { free(st->key); free(st->next); free(st->head); }
+/* dst, empty, holds src's names: the same keys (pointers src's owner keeps
+   alive), chains and order, so each ask answers as src does */
+void anh_copy(ANameHash *dst, const ANameHash *src) {
+  memset(dst, 0, sizeof *dst);
+  if (!src->nb) return;
+  dst->nb = src->nb; dst->n = src->n; dst->cap = src->n > 0 ? src->n : 1;
+  dst->head = malloc(sizeof(int) * (size_t)dst->nb);
+  dst->key = malloc(sizeof(char *) * (size_t)dst->cap);
+  dst->next = malloc(sizeof(int) * (size_t)dst->cap);
+  if (!dst->head || !dst->key || !dst->next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(dst->head, src->head, sizeof(int) * (size_t)dst->nb);
+  memcpy(dst->key, src->key, sizeof(char *) * (size_t)dst->n);
+  memcpy(dst->next, src->next, sizeof(int) * (size_t)dst->n);
+}
 
 /* The program as written, read ahead of every desugar (analyze_program's
    first step). It notes each name the program gives a method by a def or may

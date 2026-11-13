@@ -1497,6 +1497,12 @@ typedef struct {
   struct DsnMemo { int on, ncls, nscp, keyed; unsigned sgen, shape, tgen;
                    char ***names; int *n; char **inames; int ninames; int *every; int nevery;
                    char ***own; int *nown;
+                   /* every class's names but a module's, in class order, each
+                      once, send's family left out (dsn_all_names), with the set
+                      of them (all_seen) and the set of every name, send's
+                      family among them (all_any, its keys); built once */
+                   char **all; int nall, all_built; ANameHash all_seen, all_any;
+                   char **all_any_keys; int nall_any;
                    ANameHash lits; } dsn;
   /* the top-level scope of each file root (nt_root), by graph id: 0 for the
      entry (analyze_program.c) */

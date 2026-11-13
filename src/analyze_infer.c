@@ -2045,6 +2045,29 @@ static int infer_const_int_node(const NodeTable *nt, int id, long long *out) {
   return 1;
 }
 
+/* Call id in Queue's timed form: pop / shift / deq with at most non_block,
+   or push / enq / << with the object and at most non_block, then `timeout:`
+   as the only keyword. No Array or Hash method takes that keyword, so on a
+   boxed receiver the call is the Queue's (emit_poly_queue_timeout). The
+   timeout's node, or -1. */
+int an_queue_timeout_arg(const NodeTable *nt, int id) {
+  const char *name = nt_str(nt, id, "name");
+  int ca = nt_ref(nt, id, "arguments"), argc = 0;
+  const int *argv = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
+  if (!name || nt_ref(nt, id, "block") >= 0 || nt_argv_has_splat(nt, argv, argc)) return -1;
+  int kwh = nt_argv_kwh(nt, argv, argc), n = 0;
+  const int *el = kwh >= 0 ? nt_arr(nt, kwh, "elements", &n) : NULL;
+  if (n != 1 || nt_kind(nt, el[0]) != NK_AssocNode) return -1;
+  int key = nt_ref(nt, el[0], "key");
+  const char *kn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+  if (!kn || !sp_streq(kn, "timeout")) return -1;
+  int pos = argc - 1;
+  int pop = is_pop_shift(name) || sp_streq(name, "deq");
+  int push = sp_streq(name, "push") || sp_streq(name, "enq") || sp_streq(name, "<<");
+  if (!((pop && pos <= 1) || (push && pos >= 1 && pos <= 2))) return -1;
+  return nt_ref(nt, el[0], "value");
+}
+
 /* 1 or -1 when `id` is that Integer literal, parenthesized or not (`(-1)`);
    0 otherwise. A power of either with a negative exponent is an Integer in
    CRuby, not the Rational any other base gives. */
@@ -7970,6 +7993,12 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
   if (recv >= 0 && rt == TY_POLY && (argc >= 1 || !sp_streq(name, "prepend")) &&
       (sp_streq(name, "push") || sp_streq(name, "append") ||
        sp_streq(name, "unshift") || sp_streq(name, "prepend")))
+    { *out = TY_POLY; return 1; }
+
+  /* Queue's timed pop on a boxed receiver answers a value, or nil when the
+     wait times out; its timed push the queue, or nil (an_queue_timeout_arg).
+     Read as Array#pop's count, the keyword typed the call an Array. */
+  if (recv >= 0 && rt == TY_POLY && an_queue_timeout_arg(nt, id) >= 0)
     { *out = TY_POLY; return 1; }
 
   /* Array#pop(n) / #shift(n) on a boxed array answer an Array of the removed

@@ -25827,7 +25827,8 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
        appends each, and anything else has no push (sp_poly_shl would
        concatenate onto a String) */
     int splat = nt_argv_has_splat(nt, argv, argc);
-    if (!has_user && sp_streq(name, "push") && argc != 1 && !splat) {
+    /* (Queue's timed push is the value form's: emit_poly_queue_timeout) */
+    if (!has_user && sp_streq(name, "push") && argc != 1 && !splat && an_queue_timeout_arg(nt, id) < 0) {
       int tr = ++g_tmp, ta = ++g_tmp;
       emit_indent(b, indent);
       buf_printf(b, "{ sp_RbVal _t%d = ", tr); emit_expr(c, recv, b);

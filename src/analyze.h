@@ -1008,6 +1008,9 @@ int an_super_backtick_shape(Compiler *c, int id, const Scope *s, int *arg);
 int an_prog_meta_by_value(void);
 /* 1 or -1 when `id` is that Integer literal, parenthesized or not; 0 otherwise */
 int an_unit_int_literal(const NodeTable *nt, int id);
+/* the timeout: value of a call in Queue's timed pop / push form, -1 otherwise
+   (analyze_infer.c) */
+int an_queue_timeout_arg(const NodeTable *nt, int id);
 /* a push onto a typed Array a builtin call just built, given an element of
    another kind: it answers the general Array (analyze_infer.c) */
 int an_push_widens_fresh(Compiler *c, int id);

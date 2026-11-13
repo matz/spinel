@@ -1,3 +1,4 @@
+# spinel: not-cruby -- the spinel-native FFI DSL; the .expected is authored
 # An ffi_func is its module's singleton method: `M.name` with an explicit
 # receiver reaches it even when the program also has a top-level def of the
 # same name (Object's private method). The explicit-receiver refusal for a

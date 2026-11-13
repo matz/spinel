@@ -792,17 +792,22 @@ static const BuiltinOp bop_rows[] = {
     "({ sp_RbVal _t$t = sp_box_complex($r); SP_GC_ROOT_RBVAL(_t$t); sp_RbVal _t$u = $b0; SP_GC_ROOT_RBVAL(_t$u);"
     " (sp_PolyArray *)sp_poly_coerce(_t$t, _t$u).v.p; })" },
   /* == against a non-numeric value is always false (!= true); the operand
-     still evaluates for its side effects (#2557) */
+     still evaluates for its side effects (#2557). A boxed operand is a
+     number or not at run time: one that is no number is unequal, where
+     the conversion to Float raised. */
+  { TY_COMPLEX, "==",          1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE,
+    "({ sp_Complex _t$t = $r; sp_RbVal _t$u = $b0; sp_poly_tower_p(_t$u) && sp_complex_eq(_t$t, sp_poly_as_complex(_t$u)); })", BOP_K(TY_POLY) },
   { TY_COMPLEX, "==",          1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE, "(sp_complex_eq($r, $c0))", CX_NUM },
   { TY_COMPLEX, "==",          1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (void)($b0), 0)" },
   { TY_COMPLEX, "==",          0, 127, BF_ANY, TY_BOOL,       BOPE_NONE },
-  /* Complex#=== is Kernel#===, which is #==; a boxed operand that is no
-     number is simply unequal, where #== converted it to Float and raised */
+  /* Complex#=== is Kernel#===, which is #== */
   { TY_COMPLEX, "===",         1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE,
     "({ sp_Complex _t$t = $r; sp_RbVal _t$u = $b0; sp_poly_tower_p(_t$u) && sp_complex_eq(_t$t, sp_poly_as_complex(_t$u)); })", BOP_K(TY_POLY) },
   { TY_COMPLEX, "===",         1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE, "(sp_complex_eq($r, $c0))", CX_NUM },
   { TY_COMPLEX, "===",         1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (void)($b0), 0)" },
   { TY_COMPLEX, "===",         0, 127, BF_ANY, TY_BOOL,       BOPE_NONE },
+  { TY_COMPLEX, "!=",          1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE,
+    "({ sp_Complex _t$t = $r; sp_RbVal _t$u = $b0; !(sp_poly_tower_p(_t$u) && sp_complex_eq(_t$t, sp_poly_as_complex(_t$u))); })", BOP_K(TY_POLY) },
   { TY_COMPLEX, "!=",          1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE, "(!sp_complex_eq($r, $c0))", CX_NUM },
   { TY_COMPLEX, "!=",          1,   1, BF_ANY, TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (void)($b0), 1)" },
   { TY_COMPLEX, "!=",          0, 127, BF_ANY, TY_BOOL,       BOPE_NONE },

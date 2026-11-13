@@ -2060,18 +2060,29 @@ int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
   if (e->id < 0) { *e = (struct NewSiteSlot){ id, ci, vi, *m }; c->new_sites->used++; }
   return vi;
 }
-/* See call_plan.h. The class as the raise's lowering names it
-   (emit_call_raise_arms): the constant's class, by name. */
-int cplan_raise_initialize(Compiler *c, int id) {
+/* The exception class a Kernel#raise id builds, as its lowering names it
+   (emit_call_raise_arms): the constant's class, by name; -1 for none, with
+   *val set where its first argument is a value that may hold a class at
+   run time (class_recv_may_be_dynamic) */
+static int ct_raise_class(Compiler *c, int id, int *val) {
   const NodeTable *nt = c->nt;
+  *val = 0;
   if (!cplan_kernel_raise(c, id)) return -1;
   int args = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
   NodeKind k = ac > 0 ? nt_kind(nt, av[0]) : NK_NONE;
-  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) {
+    *val = ac > 0 && class_recv_may_be_dynamic(c, av[0]);
+    return -1;
+  }
   const char *cn = const_node_match_class_name(c, av[0]);
   int xc = comp_class_index(c, cn ? cn : nt_str(nt, av[0], "name"));
-  return xc >= 0 && class_is_exc_subclass(c, xc) ? cplan_new_initialize(c, id, xc, NULL) : -1;
+  return xc >= 0 && class_is_exc_subclass(c, xc) ? xc : -1;
+}
+/* See call_plan.h. The class ct_raise_class names. */
+int cplan_raise_initialize(Compiler *c, int id) {
+  int val, xc = ct_raise_class(c, id, &val);
+  return xc >= 0 ? cplan_new_initialize(c, id, xc, NULL) : -1;
 }
 /* The window step of cplan_implied_target, for a call node id makes */
 static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m) {
@@ -2136,13 +2147,68 @@ static int new_inits_list(Compiler *c, int ci, int *out, int *whole) {
    stand (elab_stamp, nscopes, nclasses): each ivar fact of each class asks
    them, and a class of many ivars asked the record its history and span
    once an ivar. pool[lo[k]] is how many, the next whether that is whole,
-   then the methods; lo[k] < 0 where not asked yet. */
-struct NewInits { int *lo, *pool, ncls, nscopes, npool, cpool; ElabStamp stamp; };
+   then the methods; lo[k] < 0 where not asked yet. sites[0..nsites), the
+   census of construction sites (new_census), taken at the first ask that
+   needs it; nsites < 0 before. */
+struct NewSite;
+struct NewInits { int *lo, *pool, ncls, nscopes, npool, cpool, nsites; struct NewSite *sites; ElabStamp stamp; };
 void new_inits_free(Compiler *c) {
   struct NewInits *m = c->new_inits;
   if (!m) return;
-  free(m->lo); free(m->pool); free(m);
+  free(m->lo); free(m->pool); free(m->sites); free(m);
   c->new_inits = NULL;
+}
+/* A construction site of the census: node id builds an instance of class
+   ci, and with own of each class below it; NEW_ANY, of any class its
+   receiver may hold at run time; NEW_ANY_EXC, of any exception class. */
+struct NewSite { int id, ci, own; };
+enum { NEW_ANY = -1, NEW_ANY_EXC = -2 };
+static int cplan_new_class(Compiler *c, int id, int *own);
+static int ct_raise_class(Compiler *c, int id, int *val);
+/* The census of the program's construction sites, beside compute_instantiated's
+   walk: each `new` the builtin Class#new may answer (the class
+   cplan_new_class names, or NEW_ANY where only the run time gives the
+   receiver's class, class_recv_may_be_dynamic), each super that reaches it
+   from a class method `new` (comp_super_is_class_new: that class and those
+   below) and each Kernel#raise of a class (ct_raise_class, NEW_ANY_EXC for
+   a value). By the nodes' shapes alone, reached or not: no type, so a
+   reader in the type fixpoint may ask. */
+static void new_census(Compiler *c, struct NewInits *m) {
+  const NodeTable *nt = c->nt;
+  int cap = 0, val = 0;
+  m->nsites = 0;
+  for (int id = 0; id < nt->count; id++) {
+    struct NewSite s = { id, NEW_ANY, 0 };
+    int r = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
+    if (comp_super_is_class_new(c, id)) s = (struct NewSite){ id, comp_scope_of(c, id)->class_id, 1 };
+    else if (nt_kind(nt, id) != NK_CallNode) continue;
+    else if (is_new_name(nt_str(nt, id, "name"))) {
+      int ci = cplan_new_class(c, id, &s.own);
+      if (ci < 0 && (r < 0 || !class_recv_may_be_dynamic(c, r))) continue;
+      if (ci >= 0) s.ci = ci;
+    }
+    else if (cplan_kernel_raise(c, id)) {
+      int xc = ct_raise_class(c, id, &val);
+      if (xc < 0 && !val) continue;
+      s.ci = xc >= 0 ? xc : NEW_ANY_EXC;
+    }
+    else continue;
+    if (m->nsites == cap && !(m->sites = realloc(m->sites, sizeof *m->sites * (size_t)(cap = cap ? 2 * cap : 16)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    m->sites[m->nsites++] = s;
+  }
+}
+/* Does a site of the census build an instance of class k where the plan
+   answers no initialize of the program's (cplan_new_initialize: one that
+   comes later)? Such an instance has none of what k's initialize sets. */
+static int new_census_none(Compiler *c, struct NewInits *m, int k) {
+  if (m->nsites < 0) new_census(c, m);
+  for (int i = 0; i < m->nsites; i++) {
+    const struct NewSite *s = &m->sites[i];
+    int builds = s->ci == NEW_ANY ? 1 : s->ci == NEW_ANY_EXC ? class_is_exc_subclass(c, k) :
+                 k == s->ci || (s->own && is_descendant(c, k, s->ci));
+    if (builds && cplan_new_initialize(c, s->id, k, NULL) < 0) return 1;
+  }
+  return 0;
 }
 /* See call_plan.h. */
 int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole) {
@@ -2153,12 +2219,14 @@ int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole) {
   if (!m) {
     if (!(c->new_inits = m = calloc(1, sizeof *m)) || !(m->lo = malloc(sizeof(int) * (size_t)c->nclasses))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (int k = 0; k < c->nclasses; k++) m->lo[k] = -1;
+    m->nsites = -1;
     m->stamp = elab_stamp(c);
     m->nscopes = c->nscopes;
     m->ncls = c->nclasses;
   }
   if (m->lo[ci] < 0) {
     int ms[VER_MAX_ARMS], w, n = new_inits_list(c, ci, ms, &w);
+    if (n > 0 && w && new_census_none(c, m, ci)) w = 0;
     if (m->npool + n + 2 > m->cpool) {
       m->cpool = m->npool + n + 2 > 2 * m->cpool ? m->npool + n + 2 : 2 * m->cpool;
       if (!(m->pool = realloc(m->pool, sizeof(int) * (size_t)m->cpool))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

@@ -1,0 +1,22 @@
+== the receiver as an argument
+"lalala"
+["lala!la", "lala!la", true]
+[6, #<Encoding:UTF-8>]
+"gggggg"
+"iiiizii"
+"oooooo"
+["ararar"]
+"popopo"
+"mmpypymm"
+"pppppp"
+["jaja-ja", "jaja-ja", true]
+== arguments that run code
+"laxalax"
+"laxlaxa"
+"lax\u0001\u0002"
+[[108, 97, 108, 97, 98, 0, 255], 2]
+== errors
+FrozenError
+[TypeError, "wrong argument type NilClass (expected String or Integer)", "la"]
+== allocating arguments
+[7837, "hh2hhx\a7hhx\a"]

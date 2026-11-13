@@ -1557,6 +1557,13 @@ void emit_str_append_arg(Compiler *c, int arg, const char *rtext, Buf *b);
 /* ...for a consumer that takes every argument before it appends any: a
    String argument is read as a copy (emit_str_expr_own). */
 void emit_str_append_arg_own(Compiler *c, int arg, const char *rtext, Buf *b);
+/* Is argument `arg` of an append of `argc` that takes every argument before
+   it appends any (concat, append_as_bytes) staged as a copy? One of several
+   is, since its String may be the receiver the first append grows, or one a
+   later argument changes. A new String no name holds yet (share_value_fresh:
+   a literal, `x + y`, a method answering its own local's String) is neither,
+   and is staged as it is. */
+int str_append_arg_staged_own(Compiler *c, int argc, int arg);
 void emit_str_force_encoding(Compiler *c, const char *name, const char *r, const int *argv, int argc, Buf *b);
 int rest_shortfall_required(Compiler *c, Scope *m);
 /* Emit a hash key, unboxing a poly value to the typed-hash's key type. */

@@ -25080,26 +25080,21 @@ static int strbuf_recv_hold(Compiler *c, int recv, const char *name, int argc, c
 /* emit_array_mutate_stmt_body's String appends (<< and concat) and its bang
    methods, with and without arguments (answers 1 emitted, 0 declined, -1 to
    go on) */
-/* Is argument `arg` of a concat of `argc` staged as a copy? One of several
-   is, since every one is taken before any is appended and its String may be
-   the receiver the first append grows, or one a later argument changes. A
-   new String no name holds yet (share_value_fresh: a literal, `x + y`, a
-   method answering its own local's String) is neither, and is staged as it
-   is. */
-static int concat_arg_own(Compiler *c, int argc, int arg) {
+/* See codegen_internal.h. */
+int str_append_arg_staged_own(Compiler *c, int argc, int arg) {
   return argc > 1 && !share_value_fresh(c, arg, 0);
 }
 /* concat(a, b, ...) onto the handle `sref`: every argument taken before
    anything is appended, as CRuby does (one of several is staged as a copy,
-   concat_arg_own, so `s.concat(s, s)` appends the String as it was), then
-   the frozen check, then the appends in order */
+   str_append_arg_staged_own, so `s.concat(s, s)` appends the String as it
+   was), then the frozen check, then the appends in order */
 void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *argv, Buf *b, int indent) {
   /* the last argument whose staging can allocate: its own evaluation, a
      conversion's answer, or the copy it is staged as */
   int last_alloc = -1;
   for (int a = argc - 1; a >= 0; a--) {
     Repr r = repr_of(c, argv[a]);
-    if (r.as_ty != TY_STRING || concat_arg_own(c, argc, argv[a]) ||
+    if (r.as_ty != TY_STRING || str_append_arg_staged_own(c, argc, argv[a]) ||
         (!arg_ran_first(argv[a], 0) && operand_may_allocate(c, argv[a]))) {
       last_alloc = a;
       break;
@@ -25122,7 +25117,7 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
   if (argc > 1) g_one_held = 0;
   for (int a = 0; a < argc; a++) {
     int boxed = repr_of(c, argv[a]).kind == RK_BOXED;
-    int own = concat_arg_own(c, argc, argv[a]);
+    int own = str_append_arg_staged_own(c, argc, argv[a]);
     buf_printf(b, " const char *_t%d = %s", base + a, boxed ? "sp_str_concat(" : "");
     if (own) emit_str_append_arg_own(c, argv[a], rt.p, b);
     else emit_str_append_arg(c, argv[a], rt.p, b);

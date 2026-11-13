@@ -4452,7 +4452,7 @@ static int lr_mixin_class(Compiler *c, LrMixin *m) {
    first M1 stays behind M2 (the record holds a call's modules the last
    first). A prepend is a no-op only among the class's earlier prepends (CRuby
    prepends a module the class includes). main's top-level include is an include into Object: its ancestors
-   are the program's reopening of Object's. */
+   are the program's reopening of Object's; main's extend is its singleton's, whose chain holds the extends. */
 static int lr_mixin_dup(Compiler *c, int cls, int sg, LrClass *k, int i) {
   LrMixin *m = &k->mix[i];
   if (lr_mixin_class(c, m) < 0) return ELAB_NO;
@@ -4465,7 +4465,7 @@ static int lr_mixin_dup(Compiler *c, int cls, int sg, LrClass *k, int i) {
       if ((pre || e->node == m->node) && e->kind == m->kind && lr_mixin_class(c, e) >= 0)
         o = e->mod == m->mod || lr_search(c, e->mod, 0, NULL, m->mod, p, 0, 0, NULL, 0) == ELAB_YES ? ELAB_YES : ELAB_NO;
     }
-    if (o != ELAB_YES && !pre) o = lr_search(c, cls == LR_MAIN && lr_core(c->lrec, CORE_OBJECT) >= 0 ? lr_core(c->lrec, CORE_OBJECT) : cls, sg, NULL, m->mod, p, 0, 0, NULL, 0);
+    if (o != ELAB_YES && !pre) o = lr_search(c, cls == LR_MAIN && !sg && lr_core(c->lrec, CORE_OBJECT) >= 0 ? lr_core(c->lrec, CORE_OBJECT) : cls, sg, NULL, m->mod, p, 0, 0, NULL, 0);
     m->dup = (unsigned char)(1 + o);
   }
   return m->dup - 1;
@@ -4490,11 +4490,18 @@ static void lr_mixin_dups_settle(Compiler *c) {
    first); a singleton's prepends, own methods and extends. ELAB_YES found,
    LR_STOP an undef stops the search there, ELAB_NO go on to the next,
    ELAB_UNKNOWN for a class the record does not hold (lr_class);
-   *unsure is set where an entry or a mixin may have happened. */
-static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth, int *unsure, int shadow) {
+   *unsure is set where an entry or a mixin may have happened. how: with
+   LR_SHADOW, not the includes or extends; with LR_MIXIN_STOPS, a mixin's
+   undef stops the search too (LR_STOP), as in CRuby. Without it the search
+   goes on past a mixin's undef: the method table's copy of the module's
+   method holds no undef, and a call on an instance keeps the table's
+   target, so a stop there would bind that copy where an ancestor's method,
+   the search's answer past it, binds now. */
+enum { LR_SHADOW = 1, LR_MIXIN_STOPS = 2 };
+static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth, int *unsure, unsigned how) {
   LrClass *k = lr_class(c->lrec, cls);
   if (!k) return ELAB_UNKNOWN;
-  for (int pass = 0; pass < (shadow ? 2 : 3); pass++) {   /* prepends, own, includes or extends (with shadow, not these) */
+  for (int pass = 0; pass < (how & LR_SHADOW ? 2 : 3); pass++) {   /* prepends, own, includes or extends */
     if (pass == 1) {
       /* (Object's own table holds main's top-level entries with its own,
          the later answering: lr_table_twin; main's own step, which
@@ -4516,8 +4523,13 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
       int dup = lr_mixin_dup(c, cls, sg, k, i);
       if (dup == ELAB_YES) continue;
       if (dup == ELAB_UNKNOWN) *unsure = 1;
-      int o = lr_mixin_class(c, m) < 0 ? ELAB_UNKNOWN : !name && m->mod == mod ? ELAB_YES : lr_search(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1);
-      if (o == ELAB_YES && b == ELAB_YES) return ELAB_YES;
+      /* (a module's search is its own step, as it has no superclass; with
+         LR_MIXIN_STOPS it keeps an undef's stop, which lr_search's end drops) */
+      int o = lr_mixin_class(c, m) < 0 ? ELAB_UNKNOWN : !name && m->mod == mod ? ELAB_YES
+            : !(how & LR_MIXIN_STOPS) ? lr_search(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1)
+            : depth >= lr_chain_bound(c) ? ELAB_UNKNOWN
+            : lr_search_one(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1, unsure, LR_MIXIN_STOPS);
+      if ((o == ELAB_YES || o == LR_STOP) && b == ELAB_YES) return o;
       if (o != ELAB_NO) *unsure = 1;
     }
   }
@@ -4996,19 +5008,22 @@ int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrD
   if (out) *out = NULL;
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
   int late = p.region < 0, unsure = 0;
-  /* its prepends, then its own table (with shadow: not its extends) */
-  int o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, 1);
+  /* its prepends, then its own table (LR_SHADOW: not its extends); a
+     mixin's undef stops the lookup, as main's own does */
+  int o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, LR_SHADOW | LR_MIXIN_STOPS);
   if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
   if (o == ELAB_YES) return ELAB_YES;
   if (out) *out = NULL;
   if (o == LR_STOP) return ELAB_STOP;   /* an undef there: no method, and none behind it */
-  /* an own table no entry has touched by p holds the core's to_s and
-     inspect, ahead of the extends; a removal took it (or the program's
-     def that replaced it) away, and the search goes on past it */
+  /* an own table no entry has touched by p holds the core's methods of
+     main's (main_self_method: to_s and inspect, and the private include,
+     public, private, define_method, ...), ahead of the extends; a removal
+     took one (or the program's def that replaced it) away, and the search
+     goes on past it */
   const LrDef *v = NULL;
   lr_own(c, lr_hist(c->lrec, LR_MAIN, 1, name, 0), NULL, p, late, 0, &v);
-  if (!v && main_singleton_method(name)) return ELAB_YES;
-  o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, 0);
+  if (!v && main_self_method(name)) return ELAB_YES;
+  o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, LR_MIXIN_STOPS);
   if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
   if (o == ELAB_YES) return ELAB_YES;
   if (out) *out = NULL;
@@ -5016,7 +5031,7 @@ int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrD
   /* (a point that may run before and after the removal, late: a method's
      body, reads the core's where nothing past it answers, as live at the
      load's start) */
-  return late && o == ELAB_NO && main_singleton_method(name) ? ELAB_YES : ELAB_NO;
+  return late && o == ELAB_NO && main_self_method(name) ? ELAB_YES : ELAB_NO;
 }
 int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p) {
   LoadRecord *r = c->lrec;
@@ -5028,7 +5043,7 @@ int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p) {
 int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
   const LrDef *v = NULL;
-  int unsure = 0, o = lr_search_one(c, cls, 0, name, -1, p, p.region < 0, 0, &v, 0, &unsure, 1);
+  int unsure = 0, o = lr_search_one(c, cls, 0, name, -1, p, p.region < 0, 0, &v, 0, &unsure, LR_SHADOW);
   /* a definition under a condition (a branch, a rescue, a modifier; or the
      dispatcher a lone one is lowered to) or in an iterator's body may not
      have run, unless p comes after it in the branch or body that holds it
@@ -8802,7 +8817,7 @@ int elab_fire_after(Compiler *c, int list, int j) {
       LoadPoint before = { p.region, e, -1 };
       int unsure = 0;
       live = !dead && !lr_event_repeats(r, first, i, e) &&
-             lr_search_one(c, v->cls, v->sg, v->name, -1, before, p.region < 0, 0, NULL, 0, &unsure, 1) != LR_STOP &&
+             lr_search_one(c, v->cls, v->sg, v->name, -1, before, p.region < 0, 0, NULL, 0, &unsure, LR_SHADOW) != LR_STOP &&
              (elab_method_at(c, v->cls, v->name, v->sg, before, NULL) != ELAB_NO || lr_core_method(v->sg, v->name));
       dead |= !live;
     }

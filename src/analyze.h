@@ -343,11 +343,12 @@ int const_writes_next(Compiler *c, int node);
 void const_writes_free(Compiler *c);
 /* What main's own singleton answers for `name` at p, ahead of Object's
    table: ELAB_YES with *out a program's `def self.m` (or alias) there, or
-   with *out NULL the core's own singleton method (main_singleton_method:
-   `to_s`, `inspect`) that main has from the start; ELAB_NO when the
-   singleton holds no method of the name, ELAB_STOP where an undef there
-   (main's own, a prepended or an extended module's) stops the lookup, the
-   core's methods' too, ELAB_UNKNOWN when the record cannot say. */
+   with *out NULL the core's own method of main's (main_self_method:
+   `to_s`, `inspect`, `include`, `private`, ...) that main has from the
+   start; ELAB_NO when the singleton holds no method of the name,
+   ELAB_STOP where an undef there (main's own, a prepended or an extended
+   module's) stops the lookup, the core's methods' too, ELAB_UNKNOWN when
+   the record cannot say. */
 int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrDef **out);
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A

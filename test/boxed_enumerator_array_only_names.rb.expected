@@ -1,0 +1,17 @@
+[2, 5]
+[3, 4]
+undefined method 'last' for an instance of Enumerator
+undefined method 'last' for an instance of Enumerator
+undefined method 'last' for an instance of Enumerator
+1
+"undefined method 'last' for an instance of Enumerator"
+"1-2"
+"undefined method 'join' for an instance of Enumerator"
+1
+"undefined method 'at' for an instance of Enumerator"
+[1, 2]
+"undefined method 'flatten' for an instance of Enumerator"
+Integer
+"undefined method 'sample' for an instance of Enumerator"
+[1]
+"undefined method 'values_at' for an instance of Enumerator"

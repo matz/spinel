@@ -90,6 +90,7 @@ const char *(*sp_obj_to_json_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_struct_values_fn)(sp_RbVal) = NULL;
 const char *const *sp_poly_root_lacks_names = NULL;
+const char *const *sp_poly_enum_lacks_names = NULL;
 sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_ary_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_deconstruct_fn)(sp_RbVal) = NULL;

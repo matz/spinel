@@ -21151,6 +21151,9 @@ static int reopened_owns(Compiler *c, const char *cls, const char *name) {
   int bc = comp_builtin_class_named(c, cls);
   return bc >= 0 && comp_method_in_chain(c, bc, name, NULL) >= 0;
 }
+int builtin_reopen_owns(Compiler *c, const char *cls, const char *name) {
+  return reopened_owns(c, cls, name);
+}
 
 /* The singleton defs a program writes on a constant -- `def S1.m`, or a
    def or define_method under `class << S1` or `class << self` in its body,

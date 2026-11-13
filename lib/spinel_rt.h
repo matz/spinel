@@ -5526,6 +5526,14 @@ static SP_UNUSED int sp_poly_root_defines(const char *m) {
     if (strcmp(*n, m) == 0) return 1;
   return 0;
 }
+/* 1 when a reopened Enumerator or Enumerable defines m, an Array name an
+   Enumerator lacks (sp_poly_enum_lacks_names): the check below leaves it to
+   the old route. */
+static SP_UNUSED int sp_poly_enum_defines(const char *m) {
+  for (const char *const *n = sp_poly_enum_lacks_names; n && *n; n++)
+    if (strcmp(*n, m) == 0) return 1;
+  return 0;
+}
 /* An Enumerable name (count, first, include?, member?) on a boxed value:
    nil, a number, a boolean, and a builtin with no #size that has no #each
    either (all of sp_poly_sizeless_builtin but a Dir and ARGF, which include
@@ -5549,8 +5557,8 @@ static SP_INLINE SP_UNUSED int sp_poly_no_enum(sp_RbVal v) {
    reached through a boxed receiver. The span helpers read any collection as
    its elements, so a Hash answered its [k, v] pairs and a String or Range its
    members where CRuby raises NoMethodError. `range_ok` lets a Range through
-   for the names Range defines (last, last(n)). A user object or an
-   Enumerator is left to the helper. */
+   for the names Range defines (last, last(n)). A user object whose class
+   defines m is dispatched before this. */
 static SP_INLINE sp_RbVal sp_poly_ary_chk(sp_RbVal v, const char *m, int range_ok) {
   sp_poly_coll_chk(v, m);
   /* a builtin with no #size has none of these (Thread#join is its own) */
@@ -5564,6 +5572,11 @@ static SP_INLINE sp_RbVal sp_poly_ary_chk(sp_RbVal v, const char *m, int range_o
       ((v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO) ||
        (strcmp(m, "values_at") == 0 ? sp_poly_is_user_obj(v) && sp_poly_struct_size(v) < 0
                                     : sp_poly_is_user_obj(v) || sp_poly_struct_size(v) >= 0)))
+    sp_raise_poly_nomethod(m, v);
+  /* an Enumerator has none of these names either: the helper took its
+     members, so `e.last` answered like the Array behind it */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR && !sp_poly_root_defines(m) &&
+      !sp_poly_enum_defines(m))
     sp_raise_poly_nomethod(m, v);
   if (v.tag == SP_TAG_STR || v.tag == SP_TAG_SYM || sp_poly_is_strbuf(v) ||
       (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) ||

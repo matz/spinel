@@ -18471,6 +18471,19 @@ void emit_regex_section(Compiler *c, Buf *b) {
       }
     if (any) buf_puts(b, ", NULL }; sp_poly_root_lacks_names = rl; }\n");
   }
+  {
+    /* the Array names a boxed Enumerator lacks (sp_poly_ary_chk) that a
+       reopened Enumerator or Enumerable defines */
+    static const char *const elacks[] = { "last", "join", "sample", "shuffle", "flatten", "at", "pack",
+                                          "rotate", "values_at", NULL };
+    int any = 0;
+    for (int i = 0; elacks[i]; i++)
+      if (builtin_reopen_owns(c, "Enumerator", elacks[i]) || builtin_reopen_owns(c, "Enumerable", elacks[i])) {
+        buf_printf(b, "%s\"%s\"", any ? ", " : "  { static const char *const el[] = { ", elacks[i]);
+        any = 1;
+      }
+    if (any) buf_puts(b, ", NULL }; sp_poly_enum_lacks_names = el; }\n");
+  }
   if (obj_to_a_any(c))
     buf_puts(b, "  sp_obj_to_a_fn = sp_obj_to_a;\n");
   if (obj_to_ary_any(c))

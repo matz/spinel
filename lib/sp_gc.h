@@ -716,6 +716,9 @@ extern sp_RbVal (*sp_obj_struct_values_fn)(sp_RbVal);
    Object, Kernel or BasicObject defines: that method answers the name, so
    the run-time checks leave it to the old route. NULL when there is none. */
 extern const char *const *sp_poly_root_lacks_names;
+/* The same for the Array names an Enumerator lacks that a reopened
+   Enumerator or Enumerable defines. NULL when there is none. */
+extern const char *const *sp_poly_enum_lacks_names;
 /* user-object #to_a for container-read poly receivers (#3234): installed by
    the generated prologue when any instantiated class defines a no-arg to_a */
 extern sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal);

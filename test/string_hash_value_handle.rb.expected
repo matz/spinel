@@ -1,0 +1,82 @@
+"x1"
+true
+"y2"
+"z3"
+"x14"
+"x14"
+"p!"
+true
+true
+{"a" => "x14e", "b" => "y2e", "c" => "z3e"}
+{"a" => "x14epv", "b" => "y2ev", "c" => "z3ev"}
+"x14epv"
+{1 => "p!1", 2 => "q2"}
+"p!1"
+"y2evm"
+"x14epvs"
+true
+"x14epvsM"
+true
+"x14epvsMo"
+{"k" => "one+"}
+"one+#"
+{"k" => "one+#", "j" => "one+#"}
+"one+#L"
+"one+#LN"
+"one+#LN"
+{3 => "one+#LNI", 4 => "one+#LNI"}
+"one+#LNI"
+"dflt"
+true
+"dflt!"
+true
+"one"
+"y4"
+"y4"
+true
+"x5"
+"x"
+false
+{"a" => "x5x5", "b" => "y4"}
+{1 => "5-z"}
+"c01"
+"d01"
+NoMethodError
+{"k" => "D1"}
+"D1"
+FrozenError
+"x5x5!"
+"x1"
+"y2"
+"x13"
+"x134"
+{"a" => "x134", "b" => "y2"}
+{"a" => "x", "b" => nil}
+{"a" => "x"}
+1
+"xc"
+{"a" => "xc"}
+{"a" => "xc"}
+nil
+{1 => "v1"}
+{1 => "v1"}
+{1 => "v1"}
+{"y" => "y"}
+"D"
+nil
+{"a" => "x"}
+nil
+nil
+{1 => 2}
+{"s" => 2}
+FrozenError
+40
+40
+"made0!"
+true
+"made2"
+"lit"
+30
+"in+-.."
+{"m" => "in+-..", "m2" => "in+-.."}
+true

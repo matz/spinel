@@ -2751,8 +2751,14 @@ int view_mark(void);
    class every value of a builtin arm is (String's pre-arm), NULL where the
    arm takes any builtin's value: the class whose lookup decides whether
    the arm's call reaches the program's Object method
-   (cplan_arm_object_target). */
-typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; const char *arm_cls; } ArmCtx;
+   (cplan_arm_object_target). dsend names the innermost dynamic send being
+   emitted (emit_dynamic_send), a frame on its caller's stack that links the
+   ones it is emitted inside of: an arm that reaches a yielding method
+   expands its body, which may hold the same send, and the send is not
+   emitted again inside its own arms. */
+typedef struct DsendFrame { int id, depth; const struct DsendFrame *up; } DsendFrame;
+typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; const char *arm_cls;
+                 const DsendFrame *dsend; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)
@@ -2760,6 +2766,8 @@ extern ArmCtx g_arm;
 int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm);
 /* the arm context with call id's gap watched into *hit (ArmCtx.gap_watch), popped by view_pop */
 int view_push_gap_watch(int id, int *hit);
+/* the arm context with frame f the innermost dynamic send (ArmCtx.dsend), popped by view_pop */
+int view_push_dsend(const DsendFrame *f);
 /* A node pinned to one face kind for the inference asked under it,
    pushed and popped like a view (view_pop) and put back by view_unwind
    (face_of, analyze.h). */

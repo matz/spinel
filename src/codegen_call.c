@@ -4953,8 +4953,6 @@ static void emit_dyn_name_sym(Compiler *c, int sym, Buf *b) {
    chain `name == :m1 ? recv.m1(args) : ... : raise NoMethodError`, boxing each
    arm (the result is poly). Arms whose call did not resolve on the receiver
    (UNKNOWN type -- wrong name or arity for this receiver) are dropped. */
-static int g_dsend_active[64];
-static int g_dsend_depth = 0;
 static int dsend_name_diverges(Compiler *c, const char *nm) {
   for (int s = 0; s < c->nscopes; s++)
     if (c->scopes[s].name && sp_streq(c->scopes[s].name, nm) && stmts_diverge(c, c->scopes[s].body)) return 1;
@@ -4977,9 +4975,11 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
      without end. Inside its own arms the send is not emitted again; the
      arm that led here is dropped by the probe, as an arm that cannot be
      emitted is. */
-  for (int d = 0; d < g_dsend_depth; d++) if (g_dsend_active[d] == id) return 0;
-  if (g_dsend_depth >= 64) return 0;
-  g_dsend_active[g_dsend_depth++] = id;
+  for (const DsendFrame *f = g_arm.dsend; f; f = f->up) if (f->id == id) return 0;
+  int dsend_depth = g_arm.dsend ? g_arm.dsend->depth : 0;
+  if (dsend_depth >= 64) return 0;
+  DsendFrame dsend_frame = { id, dsend_depth + 1, g_arm.dsend };
+  int dsend_view = view_push_dsend(&dsend_frame);
   int sym = argv[0], mo = sp_streq(nt_str(nt, id, "name"), "method");
   int t = ++g_tmp, recv = nt_ref(nt, id, "receiver"), sv_nargov = g_n_argov;
   TyKind rt = recv >= 0 ? repr_of(c, recv).as_ty : TY_UNKNOWN;
@@ -5187,7 +5187,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
     buf_printf(b, ")); _r%d = sp_box_nil(); } } _r%d; })", t, t);
   }
   else buf_printf(b, "{ sp_raise_cls(\"NoMethodError\", sp_sprintf(\"undefined method '%%s'\", sp_sym_to_s(_t%d))); _r%d = sp_box_nil(); } } _r%d; })", t, t, t);
-  g_dsend_depth--;
+  view_pop(c, dsend_view);
   view_unbind(sv_nargov);
   return 1;
 }

@@ -50,8 +50,9 @@
    declines its own re-entry, g_pd_skip and g_prbd_skip, and
    g_poly_builtin_arm, under which no user class owns a name), and
    view_push_gap_watch for the call whose own gap an arm reads as the
-   builtin declining (ArmCtx.gap_watch). Neither is a view of a node: they
-   count toward neither view_depth nor view_epoch. */
+   builtin declining (ArmCtx.gap_watch), and view_push_dsend for the
+   dynamic send whose arms are being emitted (ArmCtx.dsend). None is a view
+   of a node: they count toward neither view_depth nor view_epoch. */
 
 #define SP_NODE_FACT_OWNER 1
 #include "codegen_internal.h"
@@ -71,7 +72,7 @@ static int view_sp;
 static int view_nodes;   /* the entries that view a node (all but VK_ARM) */
 static unsigned view_epoch_n;
 
-ArmCtx g_arm = { -1, -1, 0, -1, -1, -1, -1, NULL, NULL };
+ArmCtx g_arm = { -1, -1, 0, -1, -1, -1, -1, NULL, NULL, NULL };
 
 /* Argument-hoist overrides: emit_args_filled pre-evaluates GC-hazardous
    call arguments into rooted temps; emit_expr then substitutes the temp
@@ -288,6 +289,12 @@ int view_push_gap_watch(int id, int *hit) {
   int tok = view_save_arm();
   g_arm.gap_watch = id;
   g_arm.gap_hit = hit;
+  return tok;
+}
+
+int view_push_dsend(const DsendFrame *f) {
+  int tok = view_save_arm();
+  g_arm.dsend = f;
   return tok;
 }
 

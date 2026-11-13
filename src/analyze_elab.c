@@ -4737,11 +4737,22 @@ static int lr_vis_call_ahead(Compiler *c, const LrHist *h, const LrHist *t, cons
    (lr_vis_call_ahead). A send whose name the record cannot read is asked
    through its arms, the calls of each name the fixpoint makes for it
    (desugar_dynamic_send), once they are made.
-   Anything else (a word that may run, in a loop, a branch, a method body,
-   after a statement that may raise; a call that may run between the def
-   and the word; a word whose version the record cannot tell) leaves the
-   def's, as the arms took it before: telling those apart takes a run-time
-   visibility. */
+   Anything else (a word that may run, in a loop, a branch, after a
+   statement that may raise; a call that may run between the def and the
+   word; a word whose version the record cannot tell) is known only at run
+   time (-1): the arm reads the visibility cell its writes keep
+   (elab_version_word), where every word of the name in the two histories
+   has a point a write goes beside (lr_vis_cellable). Where one has none (a
+   word in a method body or a builder's block), the def's, as the arms took
+   it before. */
+static int lr_vis_cellable(Compiler *c, const LrHist *h, const LrHist *t) {
+  for (int k = 0; k < 2; k++)
+    for (int i = 0, n = k ? (t ? t->n : 0) : h->n; i < n; i++) {
+      const LrDef *w = k ? &t->v[i] : &h->v[i];
+      if (w->kind == LR_VIS && (w->unplaced || w->body || elab_point_of(c, w->node).region < 0)) return 0;
+    }
+  return 1;
+}
 static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unmapped) {
   const NodeTable *nt = c->nt;
   const LrHist *t = lr_table_twin(c, h);
@@ -4755,7 +4766,7 @@ static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unm
       LoadPoint p = elab_point_of(c, w->node);
       int o = w->unplaced || w->body || p.region < 0 ? ELAB_UNKNOWN : lr_own(c, h, t, p, 0, 0, &at);
       if (o == ELAB_NO || o == LR_STOP || (o == ELAB_YES && at != v)) continue;   /* (it runs on another version, or on none) */
-      if (o != ELAB_YES || w->may || elab_point_partial(c, w->node)) return v->vis;
+      if (o != ELAB_YES || w->may || elab_point_partial(c, w->node)) return lr_vis_cellable(c, h, t) ? -1 : v->vis;
       changed |= w->vis != v->vis;
       if (pw.region < 0 || elab_cmp(pw, p) == PROG_BEFORE) pw = p, vis = w->vis;
     }
@@ -4763,7 +4774,7 @@ static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unm
   for (int id = an_calls_named_first(c, h->name); id >= 0; id = an_calls_named_next(id))
     if (nt_kind(nt, id) == NK_CallNode && sp_streq(nt_str(nt, id, "name"), h->name) &&
         (nt_ref(nt, id, "receiver") >= 0 || nt_str(nt, id, "vis_enforce")) && lr_vis_call_ahead(c, h, t, v, pv, pw, id, unmapped))
-      return v->vis;
+      return lr_vis_cellable(c, h, t) ? -1 : v->vis;
   /* (and a send of the name by a literal Symbol, `x.public_send(:m)`, as
      lr_readers reads one) */
   int *sends = NULL, ns = an_calls_named_if(c, is_send_family, nt->count, &sends), ahead = 0;
@@ -4772,19 +4783,29 @@ static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unm
     ahead = by && sp_streq(by, h->name) && lr_vis_call_ahead(c, h, t, v, pv, pw, sends[k], unmapped);
   }
   free(sends);
-  return ahead ? v->vis : vis;
+  return !ahead ? vis : lr_vis_cellable(c, h, t) ? -1 : v->vis;
 }
 int elab_version_vis(Compiler *c, const ElabVersion *ev) {
   LoadRecord *r = c->lrec;
   LrHist *h = r && r->recorded && ev->hist >= 0 && ev->hist < r->nhist ? &r->hist[ev->hist] : NULL;
   if (!h || ev->v < h->v || ev->v >= h->v + h->n) return ev->v->vis;
   LrDef *v = &h->v[ev->v - h->v];
-  if (v->arm_vis) return v->arm_vis - 1;
-  /* (an answer that met a call with no point yet is the def's for now,
-     and asked again once the map places the call) */
+  if (v->arm_vis) return v->arm_vis - 2;
+  /* (an answer that met a call with no point yet is not kept: it is
+     asked again once the map places the call) */
   int unmapped = 0, vis = lr_version_vis(c, h, v, &unmapped);
-  if (!unmapped) v->arm_vis = (unsigned char)(vis + 1);
+  if (!unmapped) v->arm_vis = (unsigned char)(vis + 2);
   return vis;
+}
+int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int *vis) {
+  LoadRecord *r = c->lrec;
+  const LrHist *h = r && r->recorded && ev->hist >= 0 && ev->hist < r->nhist ? &r->hist[ev->hist] : NULL;
+  const LrHist *t = lr_table_twin(c, h);
+  const LrDef *w = !h || i < 0 ? NULL : i < h->n ? &h->v[i] : t && i - h->n < t->n ? &t->v[i - h->n] : NULL;
+  if (!w) return -1;
+  if (w->kind != LR_VIS) return 0;
+  *node = w->node, *vis = w->vis;
+  return 1;
 }
 int elab_main_history_marked(Compiler *c, const char *name, const char *mark) {
   ElabVersion vs[32];

@@ -267,7 +267,8 @@ typedef struct {
                            method, so it is no version and no entry
                            (elab_absent_aliases) */
   unsigned char arm_vis; /* a version's: the visibility its face arm takes
-                            (elab_version_vis), plus 1; 0 not asked yet */
+                            (elab_version_vis, -1 for the run's), plus 2;
+                            0 not asked yet */
 } LrDef;
 enum { LR_UNPLACED_LATER = 2 };   /* LrDef.unplaced */
 typedef struct { int node, body; } LrOpen;
@@ -681,9 +682,16 @@ int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVe
 int elab_main_object_one_entry(Compiler *c, const char *name);
 /* ...and the visibility (SP_VIS_*) version ev's arm of a face entry takes:
    its def's, or that of a visibility word the record proves runs on the
-   version ahead of every call that may meet it. Asked once per version
-   (LrDef.arm_vis). */
+   version ahead of every call that may meet it; -1 where only the run
+   tells, a word the record cannot place on the version or ahead of its
+   calls, which the arm reads of the version's visibility cell. Asked once
+   per version (LrDef.arm_vis). */
 int elab_version_vis(Compiler *c, const ElabVersion *ev);
+/* ...and the visibility words that write that cell (`public :m`, in the
+   version's history or the one that is one table entry with it), by the
+   index i of the two histories' entries: 1 for a word (its node and
+   visibility in *node, *vis), 0 for another entry, -1 past the last. */
+int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int *vis);
 /* ...and whether Object's own history of `name` (its reopenings' defs, not
    main's top-level ones) holds a live version at p: ELAB_YES, ELAB_NO, or
    ELAB_UNKNOWN where the record cannot say */

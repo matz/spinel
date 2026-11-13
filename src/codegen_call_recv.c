@@ -17723,7 +17723,7 @@ static int class_ivar_slot(Compiler *c, int k, const char *sym, char *out, size_
     *t = TY_POLY;
     return 1;
   }
-  int iv = comp_ivar_index(ci, sym);
+  int iv = comp_class_ivar_index(ci, sym);
   if (iv < 0) return 0;
   *t = ci->ivar_types[iv] == TY_UNKNOWN ? TY_INT : ci->ivar_types[iv];
   if (*t == TY_STRBUF) return 0;
@@ -17957,7 +17957,7 @@ static void emit_toplevel_ivar_get_by_name(Compiler *c, const char *syv, const c
   buf_printf(b, "{ const char *_n = sp_sym_to_s(%s); (void)_n; ", syv);
   for (int iv = 0; iv < ci->nivars; iv++) {
     const char *sym = ci->ivars[iv];
-    if (!sym || sym[0] != '@') continue;
+    if (!sym || sym[0] != '@' || !comp_ivar_on(ci, iv, IVS_CLASS)) continue;
     char slot[300]; snprintf(slot, sizeof slot, "civ_Toplevel_%s", iv_c(sym + 1));
     TyKind mt = ci->ivar_types[iv];
     buf_printf(b, "%sif (strcmp(_n, \"%s\") == 0) %s = ", any ? "else " : "", sym, out);
@@ -18093,7 +18093,7 @@ static void emit_toplevel_ivar_set_by_name(Compiler *c, int tv, const char *syv,
   buf_printf(b, "{ const char *_n = sp_sym_to_s(%s); (void)_n; ", syv);
   for (int iv = 0; iv < ci->nivars; iv++) {
     const char *sym = ci->ivars[iv];
-    if (!sym || sym[0] != '@') continue;
+    if (!sym || sym[0] != '@' || !comp_ivar_on(ci, iv, IVS_CLASS)) continue;
     TyKind mt = ci->ivar_types[iv];
     buf_printf(b, "%sif (strcmp(_n, \"%s\") == 0) civ_Toplevel_%s = ", any ? "else " : "", sym, iv_c(sym + 1));
     if (civ_is_oint(c, main_ci, iv)) buf_printf(b, "%s(%s)", oint_unbox(mt), val);
@@ -18434,7 +18434,7 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
       buf_puts(b, " case SP_BUILTIN_OBJECT: ");
       /* main's ordinary ivars live in the same statics its top-level reads use. */
       int main_ci = c->toplevel_class;
-      int main_iv = main_ci >= 0 ? comp_ivar_index(&c->classes[main_ci], sym) : -1;
+      int main_iv = main_ci >= 0 ? comp_class_ivar_index(&c->classes[main_ci], sym) : -1;
       if (main_iv >= 0) {
         char slot[300]; snprintf(slot, sizeof slot, "civ_Toplevel_%s", iv_c(sym + 1));
         buf_printf(b, "if (_t%d.v.p == sp_main_obj) _ivg%d = ", tv, tv);

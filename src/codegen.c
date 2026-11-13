@@ -24083,10 +24083,12 @@ char *codegen_program(const NodeTable *nt) {
   }
 
   /* module/class-level instance variables (accessed from a `def self.X`):
-     one file-scope static per (class, @ivar). */
+     one file-scope static per (class, @ivar) the class object holds (an
+     instance's ivar is its field) */
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
     for (int j = 0; j < ci->nivars; j++) {
+      if (!comp_ivar_on(ci, j, IVS_CLASS)) continue;
       TyKind t = ci->ivar_types[j] == TY_UNKNOWN ? TY_INT : ci->ivar_types[j];
       /* static initializers must be constant.  Class-level ivars start as nil:
          int → an sp_oint holding nil (SP_OINT_NIL), string → NULL,
@@ -24295,6 +24297,7 @@ char *codegen_program(const NodeTable *nt) {
     for (int i = 0; i < c->nclasses; i++) {
       ClassInfo *ci = &c->classes[i];
       for (int j = 0; j < ci->nivars; j++) {
+        if (!comp_ivar_on(ci, j, IVS_CLASS)) continue;
         TyKind t = ci->ivar_types[j] == TY_UNKNOWN ? TY_INT : ci->ivar_types[j];
         const char *iv = iv_c(ci->ivars[j] + 1);
         char name[512]; snprintf(name, sizeof name, "civ_%s_%s", ci->name, iv);

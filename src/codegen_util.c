@@ -3429,7 +3429,7 @@ int civ_defined_probed(Compiler *c, const char *nm) {
    nothing asks (civ_defined_probed). */
 const char *civ_set_mark(Compiler *c, int cid, const char *nm, char *buf, size_t cap) {
   if (cid < 0 || cid >= c->nclasses || !nm || nm[0] != '@' || nm[1] == '@') return NULL;
-  if (comp_ivar_index(&c->classes[cid], nm) < 0 || !civ_defined_probed(c, nm)) return NULL;
+  if (comp_class_ivar_index(&c->classes[cid], nm) < 0 || !civ_defined_probed(c, nm)) return NULL;
   /* a long class name outgrows the caller's buffer: as ivar_set_mark, a
      mark that does not fit is made on the heap, whole */
   const char *cn = c->classes[cid].name, *iv = iv_c(nm + 1);
@@ -8666,7 +8666,7 @@ int ivar_node_slot(Compiler *c, int node, int *cid, int *iv) {
     }
     return 0;
   }
-  int i = comp_ivar_index(&c->classes[k], nm);
+  int i = comp_class_ivar_index(&c->classes[k], nm);
   if (i < 0) return 0;
   *cid = k; *iv = i;
   return 2;

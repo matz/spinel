@@ -4350,7 +4350,7 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          assigned or not is its set flag, asked at run time */
       int gcid;
       if (holder_ivar_side(c, v, &gcid) != IVS_CLASS) gcid = -1;
-      if (gcid >= 0 && inm && comp_ivar_index(&c->classes[gcid], inm) >= 0 && civ_defined_probed(c, inm)) {
+      if (gcid >= 0 && inm && comp_class_ivar_index(&c->classes[gcid], inm) >= 0 && civ_defined_probed(c, inm)) {
         buf_printf(b, "(civ_%s_%s__set ? SPL(\"instance-variable\") : NULL)", c->classes[gcid].name, iv_c(inm + 1));
         return 1;
       }

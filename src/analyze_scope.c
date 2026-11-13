@@ -11089,6 +11089,31 @@ static int class_defines_member(Compiler *c, int ci, const char *name) {
   return 0;
 }
 
+/* Does module mod define instance method or attribute name (a writer
+   `x=` as attr_writer / attr_accessor :x)? */
+static int module_defines_member(Compiler *c, int mod, const char *name) {
+  if (mod < 0 || mod >= c->nclasses) return 0;
+  if (comp_method_in_chain(c, mod, name, NULL) >= 0 || comp_reader_in_chain(c, mod, name, NULL)) return 1;
+  size_t ln = strlen(name);
+  char base[300];
+  if (ln < 2 || name[ln - 1] != '=' || ln - 1 >= sizeof base) return 0;
+  memcpy(base, name, ln - 1); base[ln - 1] = 0;
+  return comp_writer_in_chain(c, mod, base, NULL) != 0;
+}
+/* 1 when a module class cls prepends defines name. The load record knows
+   each prepend before register_prepends fills prepended_mods, which runs
+   after the first inherit_members. */
+static int prepend_defines(Compiler *c, int cls, const char *name) {
+  const ClassInfo *k = &c->classes[cls];
+  for (int m = 0; m < k->nprepended_mods; m++)
+    if (k->prepended_mods[m] != cls && module_defines_member(c, k->prepended_mods[m], name)) return 1;
+  int n = 0;
+  const LrMixin *mx = elab_class_mixins(c, cls, &n);
+  for (int i = 0; mx && i < n; i++)
+    if (mx[i].kind == LR_PREPEND && mx[i].mod != cls && module_defines_member(c, mx[i].mod, name)) return 1;
+  return 0;
+}
+
 /* Merge inherited ivar/reader/writer NAMES into subclasses so the struct
    layout is [parent ivars..., own ivars...] (cast-compatible). Types are
    propagated later in the fixpoint. Parent-first order. */
@@ -11243,13 +11268,16 @@ void inherit_members(Compiler *c) {
       /* a reader the parent's own later def (or alias) replaces is not the
          parent's method any more: the def answers the child too */
       if (!ci->is_struct && elab_inst_attr_replaced(c, p, pc->readers[k])) continue;
+      /* nor is one a module the parent prepends defines: the module's
+         method stands in front of it for the child too */
+      if (!ci->is_struct && prepend_defines(c, p, pc->readers[k])) continue;
       if (!class_defines_member(c, i, pc->readers[k]) && (!undeffed || ci->is_struct))
         comp_add_reader(ci, pc->readers[k]);
     }
     for (int k = 0; k < pc->nwriters; k++) {
       char wn[300];
       snprintf(wn, sizeof wn, "%s=", pc->writers[k]);
-      if (!ci->is_struct && elab_inst_attr_replaced(c, p, wn)) continue;
+      if (!ci->is_struct && (elab_inst_attr_replaced(c, p, wn) || prepend_defines(c, p, wn))) continue;
       if (!class_defines_member(c, i, wn)) comp_add_writer(ci, pc->writers[k]);
     }
     }

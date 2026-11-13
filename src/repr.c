@@ -25,14 +25,6 @@ static int reader_ivar_has_nilbit(Compiler *c, int cid, const char *nm) {
   return iv >= 0 && ivar_has_nilbit(c, k, iv);
 }
 
-/* the number of parent hops from class cid up to class k (a large value
-   when k is not an ancestor) */
-static int class_chain_depth(Compiler *c, int cid, int k) {
-  int d = 0;
-  for (int x = cid; x >= 0 && x < c->nclasses; x = c->classes[x].parent, d++) if (x == k) return d;
-  return 1 << 20;
-}
-
 /* Call `call` on an object of class `cid` dispatches to `mi` or to a
    subclass's own `nm`: can one of them answer nil -- its answer is an oint,
    or it answers nil itself (`def nop = nil` beside an override answering
@@ -307,15 +299,15 @@ static int node_is_oint_asked(Compiler *c, int node) {
     else if (ty_is_object(rt)) {
       int cid = ty_object_class(rt);
       MethodLookup ml = { .def_class = -1 };
-      int rdef = -1;
       mi = call_target(c, node, cid, nm, 0, &ml);
       /* an attr reader is its ivar's read: the ivar's oint when the ivar
          carries a nil bit, the plain field otherwise (whatever the reader's
          own return mark says: the field has no other form) -- unless a
-         method written out nearer in the chain overrides the reader */
-      if (an2 == 0 && blk < 0 && comp_reader_in_chain(c, cid, nm, &rdef) &&
-          (mi < 0 || (ml.def_class != cid &&
-                      class_chain_depth(c, cid, rdef < 0 ? cid : rdef) <= class_chain_depth(c, cid, ml.def_class < 0 ? cid : ml.def_class))))
+         method written out nearer in the chain, or in the same class,
+         overrides the reader (comp_resolve_member, as the call's emit
+         decides it) */
+      if (an2 == 0 && blk < 0 && comp_reader_in_chain(c, cid, nm, NULL) &&
+          (mi < 0 || comp_resolve_member(c, cid, nm, 0, NULL, NULL) == SP_MEMBER_ATTR))
         return reader_ivar_has_nilbit(c, cid, nm) || dispatch_answers_nil(c, node, cid, nm, -1);
     }
     else if (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) {

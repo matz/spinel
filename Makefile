@@ -5484,7 +5484,7 @@ plan-check-test: $(SPINEL)
 	@tools/plan_check.sh
 
 # #10866 step 1: the reads of the method tables made outside call_target, over
-# the corpus (not part of `make gate`)
+# the corpus, with each family's sites (`make gate` runs it as gate-method-table)
 method-table-check: $(SPINEL)
 	@tools/method_table_check.sh
 
@@ -5553,7 +5553,7 @@ gate-full:
 # happens elsewhere at the same commit (the maintainer's merge cycle runs it
 # on a second machine beside the CI lanes). A plain `make gate` runs it.
 GATE_RUBYSPEC ?= 1
-gate-legs: $(if $(filter 0,$(GATE_RUBYSPEC)),,gate-rubyspec) gate-test gate-bench gate-optcarrot gate-rubyboy gate-pkg-ondemand gate-props
+gate-legs: $(if $(filter 0,$(GATE_RUBYSPEC)),,gate-rubyspec) gate-test gate-bench gate-optcarrot gate-rubyboy gate-pkg-ondemand gate-props gate-method-table
 # The corpus leg's C optimization level: -O1 under gcc, -O0 under clang, as
 # the CI lanes have it (ci.yml's "Run tests"): gcc's -O1 prunes spinel_rt.h's
 # unreferenced statics and compiles faster than its -O0, while clang's -O1
@@ -6452,6 +6452,20 @@ gate-rubyboy:
 	+@$(MAKE) --no-print-directory rubyboy
 gate-rubyspec:
 	+@$(MAKE) --no-print-directory rubyspec-gate RUBYSPEC_JOBS=$(or $(RUBYSPEC_JOBS),$(NPROC))
+# The method-table check (tools/method_table_check.sh): a family #10866 has
+# moved onto call_target (FAIL_FAMILIES) has no read of the tables left
+# outside it, and no program fails only under --method-table-check. Without
+# it in the gate a merge reopened the super family unseen. Like the rubyspec
+# leg its compiles run through xargs, outside the job server, on every core
+# (METHOD_TABLE_CHECK_JOBS), each under the time limit, so a compile that
+# loops fails the leg instead of hanging the gate. It reads
+# build/optcarrot-single.rb, which the optcarrot leg writes, so it runs after
+# that leg. The result cache does not cover it: what it checks is spinel's
+# own run, the step the cache never skips.
+.PHONY: gate-method-table
+gate-method-table: gate-optcarrot | $(SPINEL_TIMEOUT)
+	@METHOD_TABLE_CHECK_JOBS=$(or $(METHOD_TABLE_CHECK_JOBS),$(NPROC)) METHOD_TABLE_CHECK_TIMEOUT=$(SPINEL_TIMEOUT) \
+	  tools/method_table_check.sh -q
 
 # ---- Install ----
 

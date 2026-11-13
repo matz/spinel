@@ -1539,6 +1539,8 @@ void emit_poly_user_arms_n(Compiler *c, int id, const char *name, const PolyUser
   free(arms);
 }
 
+int g_poly_pub_keep = 0;
+
 /* One user-class arm of a poly dispatch with arguments: `case k:` calling
    `call`, its value (mret, from the method or its proc form ms) into the
    result temp _t<tr> as the call's type ret takes it. The conversion
@@ -1584,6 +1586,9 @@ int emit_poly_user_arm_n(Compiler *c, int id, int k, const char *call, TyKind mr
        zero-argument arm) */
     else if (plan_put_strsub(c, ret, mret, call, b)) {}
     else plan_put_plain(so, ret, call, b);
+    /* (a dispatch whose String a pickup takes keeps what this arm
+       published: a builtin arm after it publishes nothing) */
+    if (g_poly_pub_keep) buf_printf(b, "; _t%d = _sp_ret_strbuf", g_poly_pub_keep);
   }
   buf_puts(b, "; break;");
   return conv;

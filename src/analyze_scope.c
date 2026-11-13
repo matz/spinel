@@ -1405,28 +1405,56 @@ void refuse_native_singleton_reopen(Compiler *c, Scope *s) {
   refuse_native_class_reopen(c, s->def_node, recv, ci, encl >= 0 && block_body_class(c->nt, encl), nt_str(c->nt, recv, "name"));
 }
 
-/* Whether the program defines or aliases a define_method of its own (a def,
-   a singleton def, `alias` or `alias_method`), whose call with a computed name
-   is then an ordinary call. Asked once per compile: the first computed-name
-   call scans the node table and the answer is kept on the Compiler. */
-int an_user_define_method(Compiler *c) {
-  if (c->user_define_method) return c->user_define_method == 2;
+/* Where the program defines or aliases a define_method of its own (a def,
+   a singleton def, `alias` or `alias_method`), whose call with a computed
+   name is then an ordinary call: the UDM_ kinds, by the self a receiverless
+   define_method could reach it from. A `def self.define_method`, one in a
+   `class << self`, or one in a reopened Module or Class answers the self
+   of a class body or a class method (UDM_CLASS_SELF); one in an ordinary
+   class's body answers an instance of that class, the self of its instance
+   methods (UDM_INSTANCE_SELF); a module's (extended or included), a
+   reopened Object's or BasicObject's, a top-level def's (Object's private
+   method) and an alias answer either (UDM_ANY_SELF). Asked once per
+   compile: the first computed-name call scans the node table and the
+   kinds are kept on the Compiler. */
+int an_user_define_method_kinds(Compiler *c) {
+  if (c->user_define_method) return c->user_define_method - 1;
   const NodeTable *nt = c->nt;
-  int found = 0;
-  NT_FOREACH_KIND(nt, NK_DefNode, d)
-    if (is_define_method_name(nt_str(nt, d, "name"))) found = 1;
+  int kinds = 0, *par = NULL;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    if (!is_define_method_name(nt_str(nt, d, "name"))) continue;
+    if (nt_ref(nt, d, "receiver") >= 0) { kinds |= UDM_CLASS_SELF; continue; }
+    if (!par) par = an_parent_map(nt);
+    int h = par[d];
+    while (h >= 0 && nt_kind(nt, h) != NK_ClassNode && nt_kind(nt, h) != NK_ModuleNode &&
+           nt_kind(nt, h) != NK_SingletonClassNode) h = par[h];
+    const char *k = h >= 0 && nt_kind(nt, h) == NK_ClassNode ? const_key_at(c, nt_ref(nt, h, "constant_path")) : NULL;
+    if (h < 0 || nt_kind(nt, h) == NK_ModuleNode) kinds |= UDM_ANY_SELF;
+    else if (nt_kind(nt, h) == NK_SingletonClassNode) kinds |= UDM_CLASS_SELF;
+    else if (k && (sp_streq(k, "Module") || sp_streq(k, "Class"))) kinds |= UDM_CLASS_SELF;
+    else if (k && (sp_streq(k, "Object") || sp_streq(k, "BasicObject"))) kinds |= UDM_ANY_SELF;
+    else kinds |= UDM_INSTANCE_SELF;
+  }
+  free(par);
   NT_FOREACH_KIND(nt, NK_AliasMethodNode, a) {
     int nn = nt_ref(nt, a, "new_name");
-    if (nn >= 0 && is_define_method_name(nt_str(nt, nn, "value"))) found = 1;
+    if (nn >= 0 && is_define_method_name(nt_str(nt, nn, "value"))) kinds |= UDM_ANY_SELF;
   }
   NT_FOREACH_KIND(nt, NK_CallNode, k) {
     int an = nt_ref(nt, k, "arguments"), ac = 0;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     if (ac > 0 && is_alias_method_name(nt_str(nt, k, "name")) &&
-        is_define_method_name(nt_str(nt, av[0], "value"))) found = 1;
+        is_define_method_name(nt_str(nt, av[0], "value"))) kinds |= UDM_ANY_SELF;
   }
-  c->user_define_method = found ? 2 : 1;
-  return found;
+  c->user_define_method = kinds + 1;
+  return kinds;
+}
+int an_user_define_method(Compiler *c) { return an_user_define_method_kinds(c) != 0; }
+/* ...one that a receiverless define_method whose self is a class (class_self:
+   a class body's or a class method's) or an instance could reach */
+int an_user_define_method_reaches(Compiler *c, int class_self) {
+  int kinds = an_user_define_method_kinds(c);
+  return (kinds & UDM_ANY_SELF) || (kinds & (class_self ? UDM_CLASS_SELF : UDM_INSTANCE_SELF));
 }
 
 /* Does nothing in the program name the method `name`: no call of it, and no
@@ -1947,7 +1975,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
          rule) */
       if (ac == 2 && bx == -2 && scope_idx == 0 && nt_kind(c->nt, av[1]) == NK_LocalVariableReadNode) proc_ref = 1;
       if (ac > 0 && (proc_ref || (nt_kind(c->nt, av[0]) != NK_SymbolNode && nt_kind(c->nt, av[0]) != NK_StringNode)) &&
-          !an_user_define_method(c)) {
+          !an_user_define_method_reaches(c, scope_idx == 0 || c->scopes[scope_idx].is_cmethod)) {
         NodeTable *nt = (NodeTable *)c->nt;
         int ds = detached_scope(c);
         file_detached(c, nt_ref(nt, id, "block"), ds, 0);

@@ -5684,6 +5684,30 @@ static int object_method_name(const char *nm) {
    its chain, a module's, a subclass's, an alias, attr or Struct member
    (spelled as a Symbol), or a method every object has. A call in a branch
    that never runs registers nothing (walk_scope). */
+/* Could the program's own define_method (an_user_define_method_kinds) answer
+   the receiverless define_method in host's body? One a module, a reopened
+   Object or a top level defines, or an alias, could reach any self. In a
+   class method self is the class object: a `def self.define_method` up its
+   chain (comp_cmethod_in_chain) or a reopened Module's or Class's answers;
+   in an instance method self is an instance, answered by its chain. One
+   defined elsewhere -- an options object's accessor named define_method,
+   where a config's method_missing names are written out -- answers neither:
+   the call reaches Module#define_method, and the method registered is the
+   one it defines. */
+static int cplan_own_define_method_answers(Compiler *c, int host) {
+  const Scope *hs = &c->scopes[host];
+  int k = hs->class_id, kinds = an_user_define_method_kinds(c);
+  if (k < 0 || k >= c->nclasses || k == c->toplevel_class || (kinds & UDM_ANY_SELF)) return 1;
+  if (!(kinds & (hs->is_cmethod ? UDM_CLASS_SELF : UDM_INSTANCE_SELF))) return 0;
+  if (hs->is_cmethod ? comp_cmethod_in_chain(c, k, "define_method", NULL) >= 0
+                     : comp_method_in_chain(c, k, "define_method", NULL) >= 0) return 1;
+  for (int j = 0; hs->is_cmethod && j < c->nclasses; j++) {
+    const char *n = c->classes[j].name;
+    if (n && (sp_streq(n, "Module") || sp_streq(n, "Class")) && is_builtin_reopen(n) &&
+        comp_method_in_class(c, j, "define_method") >= 0) return 1;
+  }
+  return 0;
+}
 int cplan_define_method_early(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int host = (int)nt_int(nt, id, "dm_host", 0) - 1, dm = (int)nt_int(nt, id, "dm_scope", 0) - 1;
@@ -5720,8 +5744,9 @@ int cplan_define_method_early(Compiler *c, int id) {
   }
   /* the block is registered whichever define_method the call reaches, and a
      program's own may answer it without defining anything: then a call of
-     the name would find a method CRuby never defines */
-  if (an_user_define_method(c))
+     the name would find a method CRuby never defines (not one of the
+     program's that cannot answer this call, cplan_own_define_method_answers) */
+  if (an_user_define_method(c) && cplan_own_define_method_answers(c, host))
     for (int k = comp_kind_first(c, NK_CallNode); k >= 0; k = comp_kind_next(c, k)) {
       const char *v = nt_kind(nt, k) == NK_CallNode ? nt_str(nt, k, "name") : NULL;
       if (v && sp_streq(v, ds->name)) return 1;

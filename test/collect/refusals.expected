@@ -812,6 +812,10 @@ spinel: 1 refusal, nothing written
 == test/reject/define_method_each_integer_name.rb [promote] rc=1
 spinel: test/reject/define_method_each_integer_name.rb:3: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
+== test/reject/define_method_early_own_define_method_answers.rb [default] rc=1
+spinel: test/reject/define_method_early_own_define_method_answers.rb:9: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_early_own_define_method_answers.rb [promote] rc=1
+spinel: test/reject/define_method_early_own_define_method_answers.rb:9: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/define_method_handed_block.rb [default] rc=1
 spinel: test/reject/define_method_handed_block.rb:7: Module#define_method with `&` of a block or Proc that is not a literal (`&block`, a parameter, a constant, a call's result), or with a Proc or Method passed as its body, is not supported: the defined method's body is known only at run time. Pass a block literal to define_method instead
 spinel: 1 refusal, nothing written

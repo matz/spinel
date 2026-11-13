@@ -13388,6 +13388,25 @@ static sp_StrArray *sp_poly_as_str_array(sp_RbVal v) {
   return a;
 }
 
+/* Exception#set_backtrace's argument: nil, a String (a one-line
+   backtrace) or an Array of Strings; anything else is CRuby's TypeError */
+static sp_StrArray *sp_exc_backtrace_arg(sp_RbVal v) {
+  static const char bad[] = "backtrace must be an Array of String or an Array of Thread::Backtrace::Location";
+  if (v.tag == SP_TAG_NIL) return (sp_StrArray *)0;
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STR_ARRAY) return (sp_StrArray *)v.v.p;
+  if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v)) {
+    SP_GC_ROOT_RBVAL(v);
+    sp_StrArray *a = sp_StrArray_new(); SP_GC_ROOT(a);
+    sp_StrArray_push_e(a, sp_poly_elem_e(v));
+    return a;
+  }
+  if (v.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(v.cls_id)) sp_raise_cls("TypeError", bad);
+  sp_int n = sp_poly_length(v);
+  for (sp_int i = 0; i < n; i++)
+    { sp_RbVal e = sp_poly_arr_get(v, i); if (!(e.tag == SP_TAG_STR || sp_poly_is_strbuf(e))) sp_raise_cls("TypeError", bad); }
+  return sp_poly_as_str_array(v);
+}
+
 /* poly_arr_get/set for PolyPolyHash with integer index key. */
 /* multi-assign element read: `a, b = v` destructures only when the boxed
    value is an Array (Ruby's to_ary semantics); any other runtime kind is a

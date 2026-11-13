@@ -12363,6 +12363,23 @@ int desugar_raise_own_exception(Compiler *c) {
     int kw = nt_kind(nt, av[ac - 1]) == NK_KeywordHashNode, npos = ac - kw;
     if (npos < 1 || npos > 3) continue;
     if (nt_int(nt, id, "raise_own_kept", 0)) continue;
+    /* `raise X, m, k: v` with a key other than a lone `cause:` passes the
+       hash as one more positional argument: X, m and the hash as the
+       backtrace, whose set_backtrace raises the TypeError (and
+       `raise "m", k: v` is `raise "m", {k: v}`, a String as the class) */
+    int ofi = nm[0] == 'f';
+    if (kw && npos <= 2 && !raise_kw_cause_only(nt, av[ac - 1]) && owned[ofi] < 0)
+      owned[ofi] = raise_name_program_defined(c, nm);
+    if (kw && npos <= 2 && !raise_kw_cause_only(nt, av[ac - 1]) && !owned[ofi]) {
+      int kh = av[ac - 1], kn = 0;
+      const int *ke = nt_arr(nt, kh, "elements", &kn);
+      int *kc = kn > 0 ? malloc(sizeof(int) * kn) : NULL;
+      for (int j = 0; j < kn; j++) kc[j] = ke[j];
+      nt_node_reset(nt, kh, "HashNode");
+      nt_node_set_arr(nt, kh, "elements", kc, kn);
+      free(kc);
+      kw = 0; npos++;
+    }
     if (npos == 3) {
       int fi = nm[0] == 'f';
       if (owned[fi] < 0) owned[fi] = raise_name_program_defined(c, nm);

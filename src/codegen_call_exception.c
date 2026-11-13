@@ -371,7 +371,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
          run time knows (a `callstack.map(&:to_s)` of an untyped
          parameter) is converted from its box */
       if (repr_of(c, argv[0]).elem == TY_STRING) emit_expr(c, argv[0], b);
-      else { buf_puts(b, "sp_poly_as_str_array("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
+      else { buf_puts(b, "sp_exc_backtrace_arg("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
       buf_puts(b, "); })");
       return 1;
     }
@@ -393,7 +393,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       emit_boxed(c, argv[0], b);
       buf_printf(b, "; if (!(_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION"
                     " || sp_is_exc_subclass_cls(_t%d.cls_id)))) sp_raise_poly_nomethod(\"set_backtrace\", _t%d); "
-                    "sp_Exception_set_backtrace((sp_Exception *)_t%d.v.p, sp_poly_as_str_array(_t%d)); })",
+                    "sp_Exception_set_backtrace((sp_Exception *)_t%d.v.p, sp_exc_backtrace_arg(_t%d)); })",
                  t, t, t, t, t, t, ta);
       return 1;
     }

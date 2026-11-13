@@ -1,0 +1,15 @@
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+TypeError: exception class/object expected
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+RuntimeError: {zz: 2}
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+RuntimeError: w
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
+["one line"]
+["a:1", "b:2"]
+["kept", ["f:9"]]

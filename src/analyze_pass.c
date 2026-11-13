@@ -20406,7 +20406,10 @@ int infer_return_types(Compiler *c) {
                                 ak == NK_ConstantPathNode))
                          ? key_name(c, pav[0]) : NULL;
       int kcid = kn ? const_node_class_index(c, pav[0]) : -1;
-      if (kcid < 0) continue;
+      /* a plain user class only: a module's value is any includer, and a
+         reopened builtin's values keep the builtin's type (#3109) */
+      if (kcid < 0 || comp_class_is_module(c, &c->classes[kcid]) ||
+          is_builtin_reopen(kn)) continue;
       /* single-statement then-arm returning the SAME variable */
       int stm = nt_ref(nt, id, "statements");
       int sn = 0; const int *sb = stm >= 0 ? nt_arr(nt, stm, "body", &sn) : NULL;

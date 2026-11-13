@@ -45,6 +45,11 @@ typedef struct {
   char *content;       /* F content, NULL if none */
   SpStrField *s; int ns, cs;
   SpIntField *i; int ni, ci;
+  /* the four position ints nearly every node has (node_line, node_file,
+     node_col, node_bi: nt_pos_slot), held here instead of among i: as
+     fields they were 3.2 of a node's 3.7 ints, each with its own copy of
+     the key, a third of the table's bytes. posmask bit k: slot k is set */
+  int pos[4]; unsigned char posmask;
   SpRefField *r; int nr, cr;
   SpArrField *a; int na, ca;
   int kind;            /* cached NodeKind+1; 0 = not yet computed (see nt_kind) */
@@ -407,10 +412,22 @@ static inline size_t nt_str_len(const NodeTable *nt, int id, const char *key) {
     if (nd->s[j].disc == d && sp_streq(nd->s[j].key, key)) return nd->s[j].val_len;
   return 0;
 }
+static const char *const NT_POS_KEYS[4] = { "node_line", "node_file", "node_col", "node_bi" };
+/* The slot a position key is held in (SpNode.pos), -1 for any other key.
+   With a literal key, as the callers pass, it folds to a constant. */
+static inline int nt_pos_slot(const char *key) {
+  if (sp_streq(key, "node_line")) return 0;
+  if (sp_streq(key, "node_file")) return 1;
+  if (sp_streq(key, "node_col")) return 2;
+  if (sp_streq(key, "node_bi")) return 3;
+  return -1;
+}
 static inline long long nt_int(const NodeTable *nt, int id, const char *key, long long dflt) {
   NT_WORK();
   if (id < 0 || id >= nt->count) return dflt;
   const SpNode *nd = &nt->nodes[id];
+  int ps = nt_pos_slot(key);
+  if (ps >= 0) return (nd->posmask >> ps) & 1 ? nd->pos[ps] : dflt;
   unsigned d = sp_field_disc(key);
   for (int j = 0; j < nd->ni; j++)
     if (nd->i[j].disc == d && sp_streq(nd->i[j].key, key)) return nd->i[j].val;

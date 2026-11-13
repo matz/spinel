@@ -44983,6 +44983,7 @@ static int bo_shallow_copy(NodeTable *nt, int id) {
   const SpNode *nd = &nt->nodes[id];
   for (int j = 0; j < nd->ns; j++) nt_node_set_str(nt, nc, nd->s[j].key, nd->s[j].val);
   nd = &nt->nodes[id];
+  for (int k = 0; k < 4; k++) if ((nd->posmask >> k) & 1) nt_node_set_int(nt, nc, NT_POS_KEYS[k], nd->pos[k]);
   for (int j = 0; j < nd->ni; j++) nt_node_set_int(nt, nc, nd->i[j].key, nd->i[j].val);
   nt_node_set_int(nt, nc, "node_in_place", 1);
   nd = &nt->nodes[id];

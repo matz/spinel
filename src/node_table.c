@@ -72,6 +72,13 @@ static void node_add_str(SpNode *nd, const char *key, size_t klen, char *val /*o
 }
 
 static void node_add_int(SpNode *nd, const char *key, size_t klen, long long v) {
+  /* (a position key's slot; a second put of it, as of any key, is not the
+     one a read finds) */
+  int ps = nt_pos_slot(key);
+  if (ps >= 0) {
+    if (!((nd->posmask >> ps) & 1)) { nd->pos[ps] = (int)v; nd->posmask |= (unsigned char)(1u << ps); }
+    return;
+  }
   ensure_cap((void **)&nd->i, &nd->ci, nd->ni + 1, sizeof(SpIntField));
   nd->i[nd->ni].key = dup_n(key, klen);
   nd->i[nd->ni].disc = SP_FIELD_DISC(key, klen);
@@ -300,6 +307,12 @@ unsigned long long nt_content_hash(const NodeTable *nt) {
       h = nt_hash_str(h, nd->s[j].key);
       h = nt_hash_bytes(h, nd->s[j].val, nd->s[j].val_len);
     }
+    for (int k = 0; k < 4; k++)
+      if ((nd->posmask >> k) & 1) {
+        long long v = nd->pos[k];
+        h = nt_hash_str(h, NT_POS_KEYS[k]);
+        h = nt_hash_bytes(h, &v, sizeof v);
+      }
     for (int j = 0; j < nd->ni; j++) {
       h = nt_hash_str(h, nd->i[j].key);
       h = nt_hash_bytes(h, &nd->i[j].val, sizeof nd->i[j].val);
@@ -337,6 +350,7 @@ void nt_dump(const NodeTable *nt, FILE *out) {
       dump_escaped(out, nd->s[j].val, nd->s[j].val_len);
       fputc('\n', out);
     }
+    for (int k = 0; k < 4; k++) if ((nd->posmask >> k) & 1) fprintf(out, "I %d %s %d\n", id, NT_POS_KEYS[k], nd->pos[k]);
     for (int j = 0; j < nd->ni; j++) fprintf(out, "I %d %s %lld\n", id, nd->i[j].key, nd->i[j].val);
     if (nd->content) fprintf(out, "F %d value %s\n", id, nd->content);
     for (int j = 0; j < nd->nr; j++) fprintf(out, "R %d %s %d\n", id, nd->r[j].key, nd->r[j].ref);
@@ -442,6 +456,7 @@ int nt_clone_subtree(NodeTable *nt, int root) {
         dst->s[j].val_len = src->s[j].val_len;
         dst->s[j].val = dup_n(src->s[j].val, src->s[j].val_len);
       } }
+    memcpy(dst->pos, src->pos, sizeof dst->pos); dst->posmask = src->posmask;
     dst->ni = dst->ci = src->ni;
     if (src->ni) { dst->i = nt_alloc(sizeof(SpIntField) * (size_t)src->ni);
       for (int j = 0; j < src->ni; j++) { dst->i[j].key = dup_n(src->i[j].key, strlen(src->i[j].key)); dst->i[j].disc = src->i[j].disc; dst->i[j].val = src->i[j].val; } }
@@ -560,6 +575,7 @@ void nt_node_reset(NodeTable *nt, int id, const char *type) {
   for (int j = 0; j < nd->nr; j++) free(nd->r[j].key);
   for (int j = 0; j < nd->na; j++) { free(nd->a[j].key); free(nd->a[j].ids); }
   nd->ns = nd->ni = nd->nr = nd->na = 0;
+  nd->posmask = 0;
   nd->kind = 0;
   if (type) node_set_type(nt, nd, type, strlen(type));
   nki_retyped(nt, id, was);
@@ -641,6 +657,13 @@ void nt_node_restore_str(NodeTable *nt, int id, const char *key, char *held) {
 void nt_node_set_int(NodeTable *nt, int id, const char *key, long long val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return;
+  int ps = nt_pos_slot(key);
+  if (ps >= 0) {
+    if (!((nd->posmask >> ps) & 1) || nd->pos[ps] != (int)val) {
+      nd->pos[ps] = (int)val; nd->posmask |= (unsigned char)(1u << ps); nt->edits++;
+    }
+    return;
+  }
   for (int j = 0; j < nd->ni; j++)
     if (sp_streq(nd->i[j].key, key)) {
       if (nd->i[j].val != val) { nd->i[j].val = val; nt->edits++; }
@@ -1034,6 +1057,7 @@ void nt_renumber(NodeTable *nt, const int *order) {
     for (int j = 0; j < nd->nr; j++) if (nd->r[j].ref >= 0 && nd->r[j].ref < n) nd->r[j].ref = perm[nd->r[j].ref];
     for (int j = 0; j < nd->na; j++)
       for (int q = 0; q < nd->a[j].n; q++) if (nd->a[j].ids[q] >= 0 && nd->a[j].ids[q] < n) nd->a[j].ids[q] = perm[nd->a[j].ids[q]];
+    if (((nd->posmask >> 3) & 1) && nd->pos[3] > 0 && nd->pos[3] <= n) nd->pos[3] = perm[nd->pos[3] - 1] + 1;
     for (int j = 0; j < nd->ni; j++) {
       if (sp_streq(nd->i[j].key, "node_bi") && nd->i[j].val > 0 && nd->i[j].val <= n) nd->i[j].val = perm[nd->i[j].val - 1] + 1;
       if (sp_streq(nd->i[j].key, "load_by") && nd->i[j].val >= 0 && nd->i[j].val < n) nd->i[j].val = perm[nd->i[j].val];
@@ -1141,6 +1165,7 @@ int nt_import_subtree(NodeTable *dst, const NodeTable *src, int root) {
     char *v = dup_n(sn->s[j].val, sn->s[j].val_len);
     node_add_str(&dst->nodes[id], sn->s[j].key, strlen(sn->s[j].key), v, sn->s[j].val_len);
   }
+  for (int k = 0; k < 4; k++) if ((sn->posmask >> k) & 1) nt_node_set_int(dst, id, NT_POS_KEYS[k], sn->pos[k]);
   for (int j = 0; j < sn->ni; j++) nt_node_set_int(dst, id, sn->i[j].key, sn->i[j].val);
   for (int j = 0; j < sn->nr; j++) {
     int ch = sn->r[j].ref >= 0 ? nt_import_subtree(dst, src, sn->r[j].ref) : -1;

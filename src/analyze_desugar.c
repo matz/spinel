@@ -15949,7 +15949,8 @@ static int cdef_arity(const NodeTable *nt, int def) {
 static int cdef_same(const NodeTable *nt, int a, int b) {
   if (a < 0 || b < 0) return a == b;
   const SpNode *x = &nt->nodes[a], *y = &nt->nodes[b];
-  if (nt_kind(nt, a) != nt_kind(nt, b) || x->ns != y->ns || x->ni != y->ni || x->nr != y->nr || x->na != y->na ||
+  if (nt_kind(nt, a) != nt_kind(nt, b) || x->ns != y->ns || x->ni != y->ni || x->posmask != y->posmask || x->nr != y->nr ||
+      x->na != y->na ||
       (x->content ? !y->content || strcmp(x->content, y->content) : y->content != NULL)) return 0;
   for (int j = 0; j < x->ns; j++)
     if (strcmp(x->s[j].key, y->s[j].key) || x->s[j].val_len != y->s[j].val_len ||
@@ -18295,6 +18296,7 @@ static int spl_arm_on(NodeTable *nt, int id, int recv, const int *args, int argc
   int call = nt_new_node(nt, "CallNode");
   if (call < 0) return -1;
   const SpNode *src = &nt->nodes[id];
+  for (int k = 0; k < 4; k++) if ((src->posmask >> k) & 1) nt_node_set_int(nt, call, NT_POS_KEYS[k], src->pos[k]);
   for (int i = 0; i < src->ni; i++) nt_node_set_int(nt, call, src->i[i].key, src->i[i].val);
   nt_node_set_str(nt, call, "name", nt_str(nt, id, "name"));
   nt_node_set_ref(nt, call, "receiver", recv);

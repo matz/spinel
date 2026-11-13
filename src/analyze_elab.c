@@ -4031,7 +4031,7 @@ static int lr_target_runs_block(Compiler *c, int call) {
 /* The live version of history h at p (late: as of the load's end; LR_ONCE:
    at p on the first run of the bodies around it, which may run again):
    ELAB_YES, ELAB_NO (none: ask on), LR_STOP (undefined here), ELAB_UNKNOWN. */
-enum { LR_STOP = 3, LR_ONCE = 2 };
+enum { LR_STOP = ELAB_STOP, LR_ONCE = 2 };
 /* Has may version v run when p does: is p after v in the statement list
    holding v's statement, or in a body nested in a later statement of that
    list (the same branch has run v)? Climbs the statements whose bodies
@@ -4698,7 +4698,7 @@ int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrD
   if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
   if (o == ELAB_YES) return ELAB_YES;
   if (out) *out = NULL;
-  if (o == LR_STOP) return ELAB_NO;   /* an undef there: none */
+  if (o == LR_STOP) return ELAB_STOP;   /* an undef there: no method, and none behind it */
   /* an own table no entry has touched by p holds the core's to_s and
      inspect, ahead of the extends; a removal took it (or the program's
      def that replaced it) away, and the search goes on past it */
@@ -4709,6 +4709,7 @@ int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrD
   if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
   if (o == ELAB_YES) return ELAB_YES;
   if (out) *out = NULL;
+  if (o == LR_STOP) return ELAB_STOP;   /* (an extended module's undef) */
   /* (a point that may run before and after the removal, late: a method's
      body, reads the core's where nothing past it answers, as live at the
      load's start) */

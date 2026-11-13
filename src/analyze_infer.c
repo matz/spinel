@@ -4062,6 +4062,12 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
          dispatch's builtin arm meets their returns). */
       if (!an_poly_cands_live(c, pcs, npc, name)) pcs = comp_poly_candidates(c, name, &npc);
       char ivn_same[256] = "";   /* "@name" for a reader under its own name */
+      /* A call a desugar marked builtin (nt_mark_builtin_call) answers what the
+         builtin alone answers, as it is emitted: no class's own method of the
+         name is a candidate (a program's `instance_of?` returning a bool typed
+         the compiler's own test one by luck, and an `equal?` of a class its
+         union of returns) */
+      if (!an_builtin_only && cplan_builtin_call(c, id)) { *out = an_builtin_answer(c, id); return 1; }
       int live = !an_builtin_only && an_poly_name_live(c, name);
       for (int pi = 0; pi < npc; pi++) {
         int k = pcs[pi].cls;

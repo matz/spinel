@@ -16322,6 +16322,16 @@ int disp_when_unspread(Compiler *c, int call) {
   nt_node_set_ref(nt, iff, "subsequent", el);
   return iff;
 }
+/* ...and `if <sel> == val then <then> else <els> end`, an arm that tests a
+   cell beside its own (a version entry's visibility cell) */
+int disp_cell_test(NodeTable *nt, const char *sel, int val, int then, int els) {
+  int iff = nt_new_node(nt, "IfNode"), el = nt_new_node(nt, "ElseNode");
+  nt_node_set_ref(nt, iff, "predicate", fwd_new_call(nt, cdef_local(nt, "GlobalVariableReadNode", sel), "==", nt_new_int(nt, val)));
+  nt_node_set_ref(nt, iff, "statements", cdef_stmts(nt, then));
+  nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, els));
+  nt_node_set_ref(nt, iff, "subsequent", el);
+  return iff;
+}
 /* ...and `super(<args>)`, the same arguments passed on to the method the
    ancestors answer; `method_missing(:name, <args>)` */
 int disp_super_call(NodeTable *nt, int ar, int blk) {

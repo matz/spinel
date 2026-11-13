@@ -95,3 +95,17 @@ x = [9, 10]
     report(e)
   end
 end
+
+# a public_send of a name known only at run time takes the same arms: its
+# arm for each name is made after the entries were, and asks for the
+# entry of its face then
+def dn = 1
+def dgo(n) = (nil.public_send(n) rescue :private)
+nm = [:dn].first
+2.times do
+  p dgo(:dn)
+  p((2.public_send(nm) rescue :private))
+  class Object
+    def dn = 2
+  end
+end

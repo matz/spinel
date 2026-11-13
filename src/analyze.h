@@ -248,7 +248,12 @@ typedef struct {
                            is the singleton of; unused in other versions */
   unsigned char unplaced; /* in a body the walk does not place (a builder's
                              block, lr_body_defs): no version, and no query
-                             at a point sees it */
+                             at a point sees it; LR_UNPLACED_LATER for a
+                             visibility word that runs at a time the record
+                             does not order (lr_unplaced_words), which also
+                             applies at no point nor as the load ends, and
+                             leaves which entry is live as it was
+                             (lr_hist_unarmed) */
   int body;             /* a version a method body makes (lr_body_versions):
                            the def whose body holds it; such a version has
                            no load point but an extent, from the first
@@ -264,7 +269,11 @@ typedef struct {
                            where it runs: it raises there and makes no
                            method, so it is no version and no entry
                            (elab_absent_aliases) */
+  unsigned char arm_vis; /* a version's: the visibility its face arm takes
+                            (elab_version_vis, -1 for the run's), plus 2;
+                            0 not asked yet */
 } LrDef;
+enum { LR_UNPLACED_LATER = 2 };   /* LrDef.unplaced */
 typedef struct { int node, body; } LrOpen;
 typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND, LR_SG_PREPEND } LrMixKind;   /* LR_SG_PREPEND: a prepend of the singleton class, ahead of its own methods */
 /* kind: LrMixKind; mod: the module's class, -2 one the record does not
@@ -684,6 +693,18 @@ int elab_history_holds_scope(Compiler *c, int cls, int sg, const char *name, int
    reopening of Object's): their versions write one cell, and a call on main
    meets them along Object's chain */
 int elab_main_object_one_entry(Compiler *c, const char *name);
+/* ...and the visibility (SP_VIS_*) version ev's arm of a face entry takes:
+   its def's, or that of a visibility word the record proves runs on the
+   version ahead of every call that may meet it; -1 where only the run
+   tells, a word the record cannot place on the version or ahead of its
+   calls, which the arm reads of the version's visibility cell. Asked once
+   per version (LrDef.arm_vis). */
+int elab_version_vis(Compiler *c, const ElabVersion *ev);
+/* ...and the visibility words that write that cell (`public :m`, in the
+   version's history or the one that is one table entry with it), by the
+   index i of the two histories' entries: 1 for a word (its node and
+   visibility in *node, *vis), 0 for another entry, -1 past the last. */
+int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int *vis);
 /* ...and whether Object's own history of `name` (its reopenings' defs, not
    main's top-level ones) holds a live version at p: ELAB_YES, ELAB_NO, or
    ELAB_UNKNOWN where the record cannot say */

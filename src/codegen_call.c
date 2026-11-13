@@ -4993,6 +4993,90 @@ static void emit_dyn_name_sym(Compiler *c, int sym, Buf *b) {
   }
 }
 
+/* One arm of a run-time-name send (emit_dynamic_send): the case of the
+   switch over the name's symbol for arm, a call of the arm's name, unless
+   a case of its name came first (seen) or the arm does not resolve or
+   cannot be emitted. */
+static void emit_dynamic_send_arm(Compiler *c, int arm, int t, int mo, int *seen, int *nseen, Buf *b) {
+  const NodeTable *nt = c->nt;
+  TyKind at = repr_of(c, arm).as_ty;
+  const char *nm = nt_str(nt, arm, "dyn_name");
+  if (!nm) return;
+  /* the first arm of a name is the one taken: a later one is no case */
+  { int sid = comp_sym_intern(c, nm), dup = 0;
+    for (int q = 0; q < *nseen && !dup; q++) dup = seen[q] == sid;
+    if (dup) return; }
+  if (at == TY_UNKNOWN || at == TY_VOID) {
+    /* did not resolve on this receiver/arity; a method of the program the
+       arm reached is kept, whatever its body's value: one that always
+       raises (an Array operator given a nil operand) has no type */
+    if (cplan_user(c, arm).mi < 0) return;
+    at = TY_NIL;
+  }
+  if (mo && method_obj_target_mi(c, arm) < 0) return;
+  /* An arm whose argument contradicts the callee's --rbs seed raises when
+     the name selects it; the typed call would reinterpret the value
+     (check_seed_contradictions, #6672). */
+  { const char *se = nt_str(nt, arm, "seed_type_error");
+    if (se) {
+      buf_printf(b, "case %d: { sp_raise_cls(\"TypeError\", \"", comp_sym_intern(c, nm));
+      emit_c_escaped(b, se);
+      buf_printf(b, "\"); _r%d = sp_box_nil(); break; }\n", t);
+      seen[(*nseen)++] = comp_sym_intern(c, nm);
+      return;
+    } }
+  /* Emit the arm into private buffers under a silent probe: a method that
+     resolves by type but not by codegen (e.g. wrong arity for a builtin)
+     longjmps out of emit and the arm is simply dropped. Its preludes are
+     captured to `pre` and replayed inside the arm's own branch so they run
+     only when this arm is taken. */
+  Buf pre = {0, 0, 0}, body = {0, 0, 0};
+  int sv_arm_argov = g_n_argov;
+  ArmProbe ap; arm_probe_begin(c, &ap, &pre);
+  volatile int ok;
+  int mi = cplan_user(c, arm).mi;
+  int self_ret = repr_self_handle(c, mi) && repr_call_returns_handle(c, arm);
+  /* an arm answering an Integer or Float that may be nil boxes its oint:
+     unwrapped first, its nil raised TypeError where the send answers nil */
+  int arm_oint = !self_ret && oint_kind(at) && node_may_be_nil(c, arm);
+  /* --share-strings: an arm answering a String the plan gives the handle
+     is boxed as that handle (the one the target holds or publishes), as
+     a direct call of the method is: its bytes boxed were a copy, and a
+     change through the answer missed the target's String. One the plan
+     wraps (a new String, a literal) is boxed as the new handle it is, so
+     the answer's copies name one String. */
+  int arm_form = !self_ret && (at == TY_STRING || at == TY_STRBUF)
+                 ? share_plan_of(c, arm, share_plan_role(c, arm), NULL).form : SPF_BYTES;
+  int arm_str = arm_form == SPF_HANDLE || arm_form == SPF_WRAP;
+  if (setjmp(g_unsup_recover) == 0) {
+    if (self_ret) emit_strbuf_handle_of(c, arm, &body);
+    else if (arm_oint) emit_oint_expr(c, arm, at, &body);
+    else if (arm_str) emit_str_form_box(c, arm, &body);
+    else emit_expr(c, arm, &body);
+    ok = 1;
+  }
+  else { ok = 0; arm_probe_dropped(&ap); }
+  arm_probe_end(c, &ap, ok);
+  view_unbind(sv_arm_argov);
+  /* the receiver's bytes an arm that does not answer its String reads
+     are a read, not a copy: one node stands for the receiver of every arm,
+     and the check would report the first arm that reads it */
+  if (ok) {
+    /* the arm's name as the compile-time symbol it is, the way a literal
+       `:name` is emitted: interning it here cost a table probe per arm per
+       call (#4854). A name interned at run time resolves to the same id. */
+    buf_printf(b, "case %d: { ", comp_sym_intern(c, nm));
+    if (pre.p && pre.len) buf_puts(b, pre.p);
+    buf_printf(b, "_r%d = ", t);
+    if (arm_oint) buf_printf(b, "%s(%s)", oint_box(at), body.p ? body.p : "sp_oint_nil()");
+    else if (arm_str) buf_puts(b, body.p ? body.p : "sp_box_nil()");
+    else emit_boxed_text(c, self_ret ? TY_STRBUF : at, body.p ? body.p : "0", b);
+    buf_puts(b, "; break; }\n");
+    seen[(*nseen)++] = comp_sym_intern(c, nm);
+  }
+  free(pre.p); free(body.p);
+}
+
 /* Dynamic `recv.send(name, args)` over a runtime name: desugar_dynamic_send
    stashed one synthesized `recv.m(args)` arm per candidate method name. Emit a
    chain `name == :m1 ? recv.m1(args) : ... : raise NoMethodError`, boxing each
@@ -5123,83 +5207,11 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
   free(sockr.p);
   int *seen = calloc((size_t)(narm > 0 ? narm : 1), sizeof(int)), nseen = 0;
   for (int k = 0; k < narm; k++) {
-    int arm = arms[k];
-    TyKind at = repr_of(c, arm).as_ty;
-    const char *nm = nt_str(nt, arm, "dyn_name");
-    if (!nm) continue;
-    /* the first arm of a name is the one taken: a later one is no case */
-    { int sid = comp_sym_intern(c, nm), dup = 0;
-      for (int q = 0; q < nseen && !dup; q++) dup = seen[q] == sid;
-      if (dup) continue; }
-    if (at == TY_UNKNOWN || at == TY_VOID) {
-      /* did not resolve on this receiver/arity; a method of the program the
-         arm reached is kept, whatever its body's value: one that always
-         raises (an Array operator given a nil operand) has no type */
-      if (cplan_user(c, arm).mi < 0) continue;
-      at = TY_NIL;
-    }
-    if (mo && method_obj_target_mi(c, arm) < 0) continue;
-    /* An arm whose argument contradicts the callee's --rbs seed raises when
-       the name selects it; the typed call would reinterpret the value
-       (check_seed_contradictions, #6672). */
-    { const char *se = nt_str(nt, arm, "seed_type_error");
-      if (se) {
-        buf_printf(b, "case %d: { sp_raise_cls(\"TypeError\", \"", comp_sym_intern(c, nm));
-        emit_c_escaped(b, se);
-        buf_printf(b, "\"); _r%d = sp_box_nil(); break; }\n", t);
-        seen[nseen++] = comp_sym_intern(c, nm);
-        continue;
-      } }
-    /* Emit the arm into private buffers under a silent probe: a method that
-       resolves by type but not by codegen (e.g. wrong arity for a builtin)
-       longjmps out of emit and the arm is simply dropped. Its preludes are
-       captured to `pre` and replayed inside the arm's own branch so they run
-       only when this arm is taken. */
-    Buf pre = {0, 0, 0}, body = {0, 0, 0};
-    int sv_arm_argov = g_n_argov;
-    ArmProbe ap; arm_probe_begin(c, &ap, &pre);
-    volatile int ok;
-    int mi = cplan_user(c, arm).mi;
-    int self_ret = repr_self_handle(c, mi) && repr_call_returns_handle(c, arm);
-    /* an arm answering an Integer or Float that may be nil boxes its oint:
-       unwrapped first, its nil raised TypeError where the send answers nil */
-    int arm_oint = !self_ret && oint_kind(at) && node_may_be_nil(c, arm);
-    /* --share-strings: an arm answering a String the plan gives the handle
-       is boxed as that handle (the one the target holds or publishes), as
-       a direct call of the method is: its bytes boxed were a copy, and a
-       change through the answer missed the target's String. One the plan
-       wraps (a new String, a literal) is boxed as the new handle it is, so
-       the answer's copies name one String. */
-    int arm_form = !self_ret && (at == TY_STRING || at == TY_STRBUF)
-                   ? share_plan_of(c, arm, share_plan_role(c, arm), NULL).form : SPF_BYTES;
-    int arm_str = arm_form == SPF_HANDLE || arm_form == SPF_WRAP;
-    if (setjmp(g_unsup_recover) == 0) {
-      if (self_ret) emit_strbuf_handle_of(c, arm, &body);
-      else if (arm_oint) emit_oint_expr(c, arm, at, &body);
-      else if (arm_str) emit_str_form_box(c, arm, &body);
-      else emit_expr(c, arm, &body);
-      ok = 1;
-    }
-    else { ok = 0; arm_probe_dropped(&ap); }
-    arm_probe_end(c, &ap, ok);
-    view_unbind(sv_arm_argov);
-    /* the receiver's bytes an arm that does not answer its String reads
-       are a read, not a copy: one node stands for the receiver of every arm,
-       and the check would report the first arm that reads it */
-    if (ok) {
-      /* the arm's name as the compile-time symbol it is, the way a literal
-         `:name` is emitted: interning it here cost a table probe per arm per
-         call (#4854). A name interned at run time resolves to the same id. */
-      buf_printf(b, "case %d: { ", comp_sym_intern(c, nm));
-      if (pre.p && pre.len) buf_puts(b, pre.p);
-      buf_printf(b, "_r%d = ", t);
-      if (arm_oint) buf_printf(b, "%s(%s)", oint_box(at), body.p ? body.p : "sp_oint_nil()");
-      else if (arm_str) buf_puts(b, body.p ? body.p : "sp_box_nil()");
-      else emit_boxed_text(c, self_ret ? TY_STRBUF : at, body.p ? body.p : "0", b);
-      buf_puts(b, "; break; }\n");
-      seen[nseen++] = comp_sym_intern(c, nm);
-    }
-    free(pre.p); free(body.p);
+    /* the arm is the frame of what is asked of it (--method-table-check):
+       those questions are its call's, not the send's */
+    MtabMark mt_was = mtab_push(c, arms[k]);
+    emit_dynamic_send_arm(c, arms[k], t, mo, seen, &nseen, b);
+    mtab_pop(c, mt_was);
   }
   free(seen);
   buf_puts(b, "default: ");

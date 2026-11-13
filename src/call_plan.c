@@ -1964,18 +1964,24 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
   if (!r) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   *n = 0;
   for (int k = 0; k < c->nclasses; k++) {
+    /* (the accessor lists only narrow the classes asked, every class as the
+       candidates are: no answer is read off them here) */
+    mtab_enter(c);
     int reader = comp_reader_in_chain(c, k, sym, NULL), writer = !reader && wr && comp_writer_in_chain(c, k, base, NULL), mi;
+    mtab_leave(c);
     CplanClassArmKind kind = reader ? CP_CARM_READER : CP_CARM_WRITER;
     CplanAccessor acc = { -1, -1, -1 };
     /* an accessor the capture meets (a later def of the name does not
        replace it), else the def or entry the capture finds, else the
-       class's accessor as the tables have it */
+       class's accessor as the tables have it: a table answer
+       (--method-table-check) */
     if ((reader || writer) && mn >= 0) ct_accessor_met(c, mn, k, sym, &acc);
     if (acc.owner >= 0) mi = -1;
     else {
       mi = call_target(c, mn, k, sym, CT_CAPTURE, NULL);
       if (mi >= 0) kind = c->scopes[mi].entry != ENTRY_NONE ? CP_CARM_ENTRY : CP_CARM_METHOD;
       else if (!reader && !writer) continue;
+      else if (g_method_table_check) mtab_table(c, mn, k, 0, sym, MLW_ACCESSOR);
     }
     if (*n == cap) {
       cap *= 2;
@@ -1996,11 +2002,20 @@ static int ct_accessor_class(Compiler *c, int cls, const char *name) {
                                                          : comp_reader_in_chain(c, cls, name, &dc);
   return found ? dc : -1;
 }
-/* (the Struct or the Data whose member cls's `name` is, the class
-   answering it on cls's chain; -1 for none) */
+/* (the Struct or the Data on cls's superclass chain whose member `name`
+   is, a writer's as `x=` (a Struct's alone): by the members its Struct.new
+   or Data.define gave it, which no attr_* call versions; asked where the
+   record has no version of the name; -1 for none) */
 static int ct_struct_member(Compiler *c, int cls, const char *name) {
-  int dc = ct_accessor_class(c, cls, name);
-  return dc >= 0 && (c->classes[dc].is_struct || c->classes[dc].is_data) ? dc : -1;
+  char base[256];
+  int wr = setter_base_name(name, base, sizeof base);
+  for (int k = cls; k >= 0 && k < c->nclasses; k = c->classes[k].parent) {
+    const ClassInfo *ci = &c->classes[k];
+    if (!ci->is_struct && (wr || !ci->is_data)) continue;
+    for (int j = 0; j < ci->nmembers; j++)
+      if (ci->ivars[j] && sp_streq(ci->ivars[j] + 1, wr ? base : name)) return k;
+  }
+  return -1;
 }
 /* (is v an attr_* call's version that surely ran where it stands?) */
 static int ct_attr_version(const LrDef *v) {
@@ -2184,12 +2199,19 @@ static int new_init_absent(Compiler *c, int id, int ci) {
    exception's or record's own), else the window's version (the steps of
    cplan_implied_target past its row); an entry is not taken, as none is
    made for initialize (ver_named_one). A site in a block whose run time
-   the record does not place keeps the table's (elab_in_unplaced_block). */
+   the record does not place keeps the table's (elab_in_unplaced_block).
+   The question's own reads are the plan's (--method-table-check), whatever
+   node is the frame where a reader asks it of site id; an answer that
+   stands on the table for want of a proof is reported as call_target's
+   are. */
 int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
+  mtab_enter(c);
   int tm = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
+  int undef = tm >= 0 && id >= 0 && comp_is_undeffed_in_chain(c, ci, "initialize");
+  mtab_leave(c);
   *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = -1 };
-  if (tm < 0 || id < 0 || comp_is_undeffed_in_chain(c, ci, "initialize")) return tm;
+  if (tm < 0 || id < 0 || undef) return tm;
   /* (one version on the chain: the table's, the only one a site meets
      where there is one) */
   int first = 0, body = 0, late = 0, nv = ver_chain_count(c, ci, 0, "initialize", &first, &body, &late);
@@ -2208,6 +2230,7 @@ int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
   if (!absent && (vi < 0 || m->kind != ML_METHOD)) {
     if (m->kind != ML_TABLE) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_MANY, .def_class = -1 };
     vi = tm;
+    if (g_method_table_check && nv != 1) mtab_table(c, id, ci, 0, "initialize", m->why);
   }
   /* (asking may have grown the table or rebuilt the record: the slot again) */
   e = new_sites_slot(c, id, ci);

@@ -12504,7 +12504,8 @@ static int pivs_callable_lit(Compiler *c, int v) {
     return r < 0 ? is_proc_constructor(un) : is_proc_new(rn, un);
   Scope *s = un && r < 0 && b < 0 && ac == 1 && nt_kind(nt, av[0]) == NK_SymbolNode && is_method_ref_name(un)
              ? comp_scope_of(c, v) : NULL;
-  return s && s->class_id < 0 && comp_method_index(c, nt_str(nt, av[0], "value")) >= 0;
+  /* (the top-level def the capture meets: main's Method of it) */
+  return s && s->class_id < 0 && call_target(c, v, -1, nt_str(nt, av[0], "value"), CT_CAPTURE | CT_TOP, NULL) >= 0;
 }
 static int pivs_value_walk(Compiler *c, int v, char *set, int depth);
 /* The walk of value v. It is a whole-program walk whose memo the first node that asks fills, so the check names v

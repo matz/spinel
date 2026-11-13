@@ -5265,8 +5265,10 @@ const char *method_sym_arg(Compiler *c, int node) {
 
 /* Does call node's receiver hold an object whose class's chain has a
    program def of `method` (an instance method the program wrote, not the
-   builtin's)? Only a receiver typed as one object class is asked, or no
-   receiver in an instance method, whose self is an object of its class. */
+   builtin's) that the call meets: the plan's target of the call
+   (call_target), so a def made after the call does not answer it? Only a
+   receiver typed as one object class is asked, or no receiver in an
+   instance method, whose self is an object of its class. */
 int method_user_override_recv(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, node, "receiver"), k;
@@ -5285,7 +5287,7 @@ int method_user_override_recv(Compiler *c, int node) {
     k = ty_object_class(rt);
   }
   if (k < 0 || k >= c->nclasses) return 0;
-  int mi = comp_method_in_chain(c, k, "method", NULL);
+  int mi = call_target(c, node, k, "method", 0, NULL);
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0);
 }

@@ -5091,10 +5091,8 @@ static void mf_copy_arms(Compiler *c, int cls, int disp, int at, int own) {
    under that name, else the module function the name stood for (an alias
    of one is a singleton alias of it) or a copy of the method it stood for.
    A define_method under the bare word gets a copy too, and its instance
-   method stays one: a module function's one scope is reached from an
-   includer by a bare call only (desugar_module_function_call), and the
-   method is the includer's to send. A copy under a run-time condition is
-   taken as made, as the tree reading took it. The arms of a conditional
+   method stays one: the method is the includer's to send. A copy under
+   a run-time condition is taken as made, as the tree reading took it. The arms of a conditional
    def (`m#__cond1`, ...) are not taken from the record: a copy of the
    dispatcher gives the module its arms (mf_copy_arms), and so does a
    bare module_function over an if/else chain every branch of which
@@ -8012,71 +8010,6 @@ static int inc_super_reached(Compiler *c, int mi, int cls, const char *name) {
   return scope_body_has_super(c, mi) || elab_history_absent(c, cls, 0, name);
 }
 
-/* True when the scope body reads or writes an instance variable. A module
-   instance method that touches an ivar must be re-attributed (cloned) to the
-   includer so the ivar types against the includer's slot, not a separate
-   module-owned slot: a module cannot be instantiated, so in CRuby its methods
-   always run on the includer's instance and there is a single ivar. With a
-   shared body the module slot (typed only from module-side usage) and the
-   includer slot diverge, and the transplanted method -- emitted taking the
-   includer as self -- reads self's includer-typed ivar through the module type. */
-static int scope_body_uses_ivar(Compiler *c, int scope_idx) {
-  const NodeTable *nt = c->nt;
-  for (int id = 0; id < nt->count; id++) {
-    if (c->nscope[id] != scope_idx) continue;
-    NodeKind k = nt_kind(nt, id);
-    if (k == NK_InstanceVariableReadNode ||
-        k == NK_InstanceVariableWriteNode ||
-        k == NK_InstanceVariableOperatorWriteNode ||
-        k == NK_InstanceVariableOrWriteNode ||
-        k == NK_InstanceVariableAndWriteNode ||
-        k == NK_InstanceVariableTargetNode)
-      return 1;
-  }
-  return 0;
-}
-
-/* A `module_function` method is registered class-level (is_cmethod), so the
-   include transplant below skipped it and a receiverless call to it was
-   rewritten onto the module (`Rt.peek`). That is sound only for a body that
-   does not depend on its receiver, and the rewrite's comment claimed exactly
-   that -- wrongly. Through an includer CRuby runs such a method on the
-   INSTANCE: `@x` is the instance's ivar, `self` is the instance, and a
-   receiverless sibling call dispatches on the instance's class, where the
-   includer may override it. Spinel gave the module's own storage (a
-   `civ_<Mod>_<name>` global), the Module object, and the module's sibling.
-
-   Which bodies care: an ivar, a self, or a receiverless call. A body with none
-   of those runs the same either way and keeps the single shared copy. */
-static int module_function_self_dependent(Compiler *c, int scope_idx) {
-  const NodeTable *nt = c->nt;
-  if (scope_body_uses_ivar(c, scope_idx)) return 1;
-  for (int id = 0; id < nt->count; id++) {
-    if (c->nscope[id] != scope_idx) continue;
-    NodeKind k = nt_kind(nt, id);
-    if (k == NK_SelfNode) return 1;
-    if (k == NK_CallNode && nt_ref(nt, id, "receiver") < 0) return 1;
-  }
-  return 0;
-}
-
-/* Does module mod have a singleton method named nm other than the
-   module_function copy mf (`def M.a` or `def self.a` after the
-   module_function, a `class << self` def)? Then the module function's
-   singleton is not its instance method any more: a receiverless call in an
-   includer must reach the includer's copy, not the module's singleton
-   (desugar_module_function_call rewrites it onto the module unless the
-   includer holds a copy of its own). */
-static int module_function_singleton_replaced(Compiler *c, int mod, const char *nm, int mf) {
-  for (int si = 0; si < c->nscopes; si++) {
-    const Scope *s = &c->scopes[si];
-    if (si != mf && s->class_id == mod && s->is_cmethod && !s->is_module_function &&
-        s->name && sp_streq(s->name, nm))
-      return 1;
-  }
-  return 0;
-}
-
 /* Give a copied method its own default values: clone each one and walk it
    into the copy. Shared, a default reading an earlier parameter
    (`def m(p1 = 51, p2 = p1)`) was typed against the source method's
@@ -8435,11 +8368,10 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
   for (int ms = 0; ms < snap; ms++) {
     Scope *src = &c->scopes[ms];
     if (src->class_id != mod_id || !src->name) continue;
-    /* a module_function method whose body depends on its receiver needs a
-       per-includer copy; everything else class-level stays module-side */
-    if (src->is_cmethod &&
-        !(src->is_module_function && (module_function_self_dependent(c, ms) ||
-                                      module_function_singleton_replaced(c, mod_id, src->name, ms))))
+    /* a module function is the module's private instance method too, so
+       an includer gets a copy, as of an instance method; every other
+       class-level method stays module-side */
+    if (src->is_cmethod && !src->is_module_function)
       continue;
     /* a module function a later instance def of the name replaced (`def a`
        after `module_function :a`): the includer gets that public def, not
@@ -8461,7 +8393,15 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        hidden name of this class's own, as the class's spelling of the same
        name may be taken, standing in front of nothing; include_chain_copy
        carries the chain */
-    int own = src->shadow ? -1 : comp_method_in_class(c, ci, src->name), behind = -1;
+    /* (a module's own module function is its instance method too, in front
+       of what the module includes; a top-level def is Object's own private
+       method, main's singleton method is not) */
+    int oc = -1, own = src->shadow ? -1 : comp_self_method_in_chain(c, ci, src->name, &oc), behind = -1;
+    if (oc != ci) own = -1;
+    if (own < 0 && !src->shadow && ci == comp_core_class(c, CORE_OBJECT)) {
+      int top = comp_method_index(c, src->name);
+      if (top >= 0 && !c->scopes[top].is_cmethod) own = top;
+    }
     int guarded = guard && !src->is_cmethod && !src->shadow;
     if (src->shadow) {
       /* (one the class has already, from the module mixed in before that
@@ -8598,7 +8538,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        self to the includer -- a shared body would resolve that self to the
        module and mis-splice; or
        (d) the body touches an ivar, which must type against the includer's
-       slot rather than a divergent module-owned slot (scope_body_uses_ivar); or
+       slot rather than a divergent module-owned slot; or
        (e) the method takes a &block param. A block-taking module method must be
        inlinable per includer so a forwarded block literal threads through the
        call chain and can be spliced (a collector builder `col(&b) = build(tag,

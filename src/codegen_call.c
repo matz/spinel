@@ -33840,10 +33840,13 @@ int object_private_method_name(const char *qm) {
    attr_writer (`x=`) its body declared. */
 int root_reopen_defines_own(Compiler *c, int k, const char *qm) {
   ClassInfo *ci = &c->classes[k];
-  /* (not a copy that an include made: Object's copy of a Kernel method is
+  /* (a module function of Kernel's own is its instance method too; a copy
+     an include made is the root's, as the module stands in front of the
+     roots after it, but not Object's copy of a Kernel method: that is
      Kernel's) */
-  int mi = comp_method_in_class(c, k, qm);
-  if ((mi >= 0 && c->scopes[mi].origin_module_ci == 0) || comp_is_reader(ci, qm)) return 1;
+  int dk = -1, mi = comp_self_method_in_chain(c, k, qm, &dk), om = mi >= 0 ? c->scopes[mi].origin_module_ci - 1 : -1;
+  if (mi >= 0 && dk == k && (om < 0 || !is_object_root(c->classes[om].name))) return 1;
+  if (comp_is_reader(ci, qm)) return 1;
   if (!name_is_plain_setter(qm)) return 0;
   char base[260];
   size_t ln = strlen(qm);
@@ -34366,17 +34369,20 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
     else if (respond_to_runtime_reaches(c, rt)) return -1;
   }
   /* A builtin value reaches a method of a program's Object (Kernel,
-     BasicObject) reopening that
-     its own class lacks: Object's, by its visibility there (a protected or
+     BasicObject) reopening that its own class lacks (true and false: both
+     their classes): Object's, by its visibility there (a protected or
      private one only to include_all) */
   if (!resolved && recv >= 0 && !ty_is_object(rt) && rt != TY_CLASS && rt != TY_IO &&
       rt != TY_POLY && rt != TY_UNKNOWN) {
-    const char *bn = builtin_class_of_type(rt);
-    int bcls = bn ? core_of_type(rt) : -1;
-    int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
-    int rv = bn ? root_reopen_method_vis(c, -1, qm) : -1;
-    if (rv >= 0 && !builtin_method_known(bn, qm) &&
-        (bci < 0 || is_object_root(c->classes[bci].name) || comp_method_in_chain(c, bci, qm, NULL) < 0)) {
+    int bv = rt == TY_BOOL, rv = -1;
+    const int cores[2] = { bv ? CORE_TRUECLASS : builtin_class_of_type(rt) ? core_of_type(rt) : -1, bv ? CORE_FALSECLASS : -1 };
+    if (cores[0] >= 0) rv = root_reopen_method_vis(c, -1, qm);
+    for (int i = 0; i < 2 && rv >= 0 && cores[i] >= 0; i++) {
+      int bci = comp_core_class(c, cores[i]);
+      if (builtin_method_known(core_class_name(cores[i]), qm) ||
+          (bci >= 0 && !is_object_root(c->classes[bci].name) && comp_method_in_chain(c, bci, qm, NULL) >= 0)) rv = -1;
+    }
+    if (rv >= 0) {
       if (rv == SP_VIS_PUBLIC) resolved = yes = 1;
       else if (foldable) { resolved = 1; yes = include_all; }
       else return -1;

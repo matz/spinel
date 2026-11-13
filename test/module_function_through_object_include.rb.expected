@@ -1,0 +1,18 @@
+8
+42
+"helper"
+NoMethodError
+10
+"helper"
+[false, true]
+[false, false, false]
+true
+16
+"outer"
+"outer"
+"outer"
+"inner"
+[:top, :top]
+[:top, :top]
+[:top, :top]
+:module_function

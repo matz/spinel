@@ -8577,6 +8577,24 @@ static void seed_class_ivar(Compiler *c, int cur_ci, const char *a1, const char 
   }
 }
 
+/* The signature seeded on module function ms goes with the copies the
+   include pass made of it (include_module_methods): the signature belongs
+   to the def, and an includer's receiverless call runs its copy. A copy in
+   a class whose override family shares the return takes the parameter
+   types only, as the def itself does. */
+static void seed_module_function_copies(Compiler *c, const Scope *ms, const char *ret, const char *params,
+                                        const char *where, const char *head, int from_rbs) {
+  if (!ms || !ms->is_module_function) return;
+  for (int si = 1; si < c->nscopes; si++) {
+    Scope *s = &c->scopes[si];
+    if (s == ms || !s->is_include_copy || s->def_node != ms->def_node) continue;
+    char *pcopy = params ? strdup(params) : NULL;
+    seed_method(c, s, method_in_override_family(c, s->class_id, comp_scope_user_name(s), 0) ? NULL : ret,
+                pcopy, where, head, from_rbs);
+    free(pcopy);
+  }
+}
+
 /* ---- inline RBS (docs/inline-rbs.md) ----
    The parser attaches each applied annotation to its node as attributes
    (rbs_ret / rbs_params on a def, rbs_ivar on an attr_* call,
@@ -8929,6 +8947,7 @@ static void apply_inline_rbs(Compiler *c) {
           char *pcopy = params ? strdup(params) : NULL;
           seed_method(c, ms, fam ? NULL : ret, pcopy, where, head, 0);
           free(pcopy);
+          seed_module_function_copies(c, ms, ret, params, where, head, 0);
           /* and the module's own class-side copy, from `extend self` */
           for (int si = 1; si < c->nscopes; si++) {
             Scope *s = &c->scopes[si];
@@ -9076,6 +9095,7 @@ static void apply_rbs_seeds(Compiler *c, const char *path) {
         if (ms && !inline_pin_agrees(c, ms, -1, NULL, a2, a3, src, 1)) continue;
         if (ms) seed_warn_unknown_classes(c, class_id, "#", a1, a2, a3);
         seed_method(c, ms, method_in_override_family(c, class_id, a1, 0) ? NULL : a2, a3, src, NULL, 1);
+        seed_module_function_copies(c, ms, a2, a3, src, NULL, 1);
       }
     }
     else if (sp_streq(kw, "cmeth") && a1 && a2 && cur_ci >= 0) {
@@ -9084,6 +9104,7 @@ static void apply_rbs_seeds(Compiler *c, const char *path) {
       if (ms && !inline_pin_agrees(c, ms, -1, NULL, a2, a3, src, 1)) continue;
       if (ms) seed_warn_unknown_classes(c, cur_ci, ".", a1, a2, a3);
       seed_method(c, ms, method_in_override_family(c, cur_ci, a1, 1) ? NULL : a2, a3, src, NULL, 1);
+      seed_module_function_copies(c, ms, a2, a3, src, NULL, 1);
     }
     else if (sp_streq(kw, "src") && a1) {
       snprintf(src, sizeof src, "%s", a1);   /* --positions: the .rbs line the next seed is from */
@@ -15196,134 +15217,6 @@ static int desugar_method_block_arg(Compiler *c) {
    answers, and spinel carries a stat as the File handle itself: rewrite the
    constructor to the class method rather than resolving a Stat class that has
    no definition (#3766). */
-/* `module_function` makes each method BOTH a module method and a private
-   instance method of every includer. Spinel models it as the module method
-   alone wherever it can, and rewrites a receiverless call inside an includer
-   onto the module call the emitter already serves rather than cloning the
-   method in (#3734).
-
-   That holds only for a body which does not depend on its receiver. This
-   comment used to claim no such body can -- "its self is the module in one
-   spelling and the instance in the other" -- which is the reason the two
-   spellings differ, not a reason they agree: through the includer CRuby runs
-   the method on the INSTANCE, so `@x` is the instance's ivar, `self` is the
-   instance, and a receiverless sibling call dispatches on the instance's
-   class (#4603). A body that does any of those is cloned into the includer
-   by the include transplant (module_function_self_dependent), which gives it
-   a real entry in the includer's chain -- and the comp_method_in_chain test
-   at the top of the loop below then declines to rewrite its call. The
-   rewrite still serves every body that genuinely does not care. */
-/* The module_function scopes by name, for one run of the pass below: per
-   name (its index in mfn_names) the chain of the modules that have a
-   module_function of it. The pass asked every receiverless call's class
-   chain for its name, and each module on the way scanned every scope of the
-   program for one; a large program spent minutes on the one call it rewrote.
-   With the names in hand a call named as no module_function is passed over
-   before any lookup. Built at each run: the pass adds no scope. */
-static ANameHash mfn_names;
-static int *mfn_first, *mfn_next, *mfn_mod, mfn_n, mfn_cap;
-static void mfn_build(Compiler *c) {
-  anh_free(&mfn_names); memset(&mfn_names, 0, sizeof mfn_names);
-  free(mfn_first); mfn_first = NULL; mfn_n = 0;
-  for (int si = 1; si < c->nscopes; si++) {
-    const Scope *ms = &c->scopes[si];
-    if (ms->class_id < 0 || !ms->is_module_function || !ms->name) continue;
-    int i = anh_find(&mfn_names, ms->name);
-    if (i < 0) {
-      anh_add(&mfn_names, ms->name); i = mfn_names.n - 1;
-      mfn_first = realloc(mfn_first, sizeof *mfn_first * (size_t)mfn_names.n);
-      mfn_first[i] = -1;
-    }
-    if (mfn_n == mfn_cap) {
-      mfn_cap = mfn_cap ? mfn_cap * 2 : 64;
-      mfn_next = realloc(mfn_next, sizeof *mfn_next * (size_t)mfn_cap);
-      mfn_mod = realloc(mfn_mod, sizeof *mfn_mod * (size_t)mfn_cap);
-    }
-    mfn_mod[mfn_n] = ms->class_id; mfn_next[mfn_n] = mfn_first[i]; mfn_first[i] = mfn_n++;
-  }
-  /* ...and the instance aliases of those names a class holds (an include
-     copies a module's alias, not its module function), with no module of
-     their own: the call resolves the alias first */
-  for (int k = 0; k < c->nclasses && mfn_names.n; k++) {
-    const ClassInfo *kc = &c->classes[k];
-    for (int a = 0; a < kc->naliases; a++) {
-      if ((kc->alias_sg && kc->alias_sg[a]) || !kc->alias_new[a] || !kc->alias_old[a] ||
-          anh_find(&mfn_names, kc->alias_old[a]) < 0 || anh_find(&mfn_names, kc->alias_new[a]) >= 0) continue;
-      anh_add(&mfn_names, kc->alias_new[a]);
-      int *nf = realloc(mfn_first, sizeof *mfn_first * (size_t)mfn_names.n);
-      if (!nf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      mfn_first = nf;
-      mfn_first[mfn_names.n - 1] = -1;
-    }
-  }
-}
-/* does module m have a module_function named nm (mfn_build ran)? */
-static int mfn_module_has(int m, const char *nm) {
-  int i = anh_find(&mfn_names, nm);
-  for (int e = i >= 0 ? mfn_first[i] : -1; e >= 0; e = mfn_next[e]) if (mfn_mod[e] == m) return 1;
-  return 0;
-}
-/* The first module, in the ancestor order module m and the modules it
-   includes take (m, then its includes from the last made), that has a
-   module_function named nm; -1 for none. depth only stops an include
-   cycle: no chain of distinct modules is longer than the class count. */
-static int module_function_owner(Compiler *c, int m, const char *nm, int depth) {
-  if (m < 0 || m >= c->nclasses || depth > c->nclasses) return -1;
-  if (mfn_module_has(m, nm)) return m;
-  const ClassInfo *mi = &c->classes[m];
-  for (int j = mi->nincluded_mods - 1; j >= 0; j--) {
-    int r = module_function_owner(c, mi->included_mods[j], nm, depth + 1);
-    if (r >= 0) return r;
-  }
-  return -1;
-}
-static int desugar_module_function_call(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0;
-  int n0 = nt->count;
-  mfn_build(c);
-  if (mfn_names.n == 0) return 0;
-  for (int id = 0; id < n0; id++) {
-    if (nt_kind(nt, id) != NK_CallNode) continue;
-    if (nt_ref(nt, id, "receiver") >= 0) continue;
-    const char *cn = nt_str(nt, id, "name"), *nm = cn;
-    int ni = cn ? anh_find(&mfn_names, cn) : -1;
-    if (ni < 0) continue;
-    Scope *sc = comp_scope_of(c, id);
-    if (!sc || sc->class_id < 0 || sc->class_id >= c->nclasses) continue;
-    /* a name no module has a module_function of is the class's alias of one
-       its module brings: the call runs that module function */
-    int alias = mfn_first[ni] < 0;
-    if (alias && (!(nm = comp_resolve_alias(c, sc->class_id, cn)) || (ni = anh_find(&mfn_names, nm)) < 0 || mfn_first[ni] < 0)) continue;
-    if (call_target(c, id, sc->class_id, nm, CT_CMETHOD, NULL) >= 0) continue;
-    /* a local of this name is a variable read, not a call */
-    if (scope_local(sc, cn)) continue;
-    /* the module whose module_function it is, included by the class or a
-       superclass directly or through a module it includes (`module B;
-       include A; end`, then `include B`), the first in the ancestor order
-       (a class, then its includes from the last made, then its superclass).
-       A class on the way that has the name itself -- its own method or
-       reader, or a copy an include put in its table -- answers the call. */
-    int mod = -1, own = 0;
-    for (int k = sc->class_id; k >= 0 && mod < 0 && !own; k = c->classes[k].parent) {
-      ClassInfo *cl = &c->classes[k];
-      if (call_target(c, id, k, nm, CT_OWN, NULL) >= 0 || comp_is_reader(cl, nm)) { own = 1; break; }
-      for (int j = cl->nincluded_mods - 1; j >= 0 && mod < 0; j--)
-        mod = module_function_owner(c, cl->included_mods[j], nm, 0);
-    }
-    if (mod < 0) continue;
-    int mc = nt_new_node(nt, "ConstantReadNode");
-    if (mc < 0) continue;
-    nt_node_set_str(nt, mc, "name", c->classes[mod].name);
-    nt_node_set_ref(nt, id, "receiver", mc);
-    if (alias) nt_node_set_str(nt, id, "name", nm);
-    comp_grow_node_arrays(c);
-    c->nscope[mc] = c->nscope[id];
-    changed = 1;
-  }
-  return changed;
-}
-
 /* Marshal.restore -> Marshal.load: the same method by another name, read
    in one spelling by every pass that recognizes a load (an object made
    without its initialize, any class minted). A program that opens a
@@ -51085,7 +50978,6 @@ static const char *const an_tree_only_passes[] = {
   "desugar_lazy_terminal",
   "desugar_main_self_call",
   "desugar_method_call_runtime_name",
-  "desugar_module_function_call",
   "desugar_reduce_method_symbol",
   "desugar_step_kwargs",
   "desugar_sym_to_proc_call",
@@ -51304,7 +51196,6 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_lazy_terminal", desugar_lazy_terminal(c));            /* lz.sum -> lz.to_a.sum */
     ch |= AN_PASS("desugar_string_upto", desugar_string_upto(c));              /* "a".upto("c") -> ("a".."c").each */
     ch |= AN_PASS("desugar_file_stat_new", desugar_file_stat_new(c));            /* File::Stat.new(p) -> File.stat(p) */
-    ch |= AN_PASS("desugar_module_function_call", desugar_module_function_call(c));     /* helper(x) in an includer -> M.helper(x) */
     ch |= AN_PASS("desugar_method_block_arg", desugar_method_block_arg(c));         /* m(&method(:x)) -> m(&method(:x).to_proc) */
     ch |= AN_PASS("desugar_curry_block_arg", desugar_curry_block_arg(c));          /* iter(&curried) -> iter { |e| curried[e] } */
     ch |= AN_PASS("desugar_yielder_block_arg", desugar_yielder_block_arg(c));        /* src.each(&y) -> src.each { |e| y << e } */

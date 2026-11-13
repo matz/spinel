@@ -16803,11 +16803,11 @@ static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, i
    walk whose block takes the row apart (ROW_WALK_SPLITS, bit 16). An object
    array takes the walks -- each, reverse_each, each_entry,
    each_with_index, map, collect -- whose emitters bind an sp_X * element
-   (#4846), and a reduce or an inject (bit 32), whose fold binds one too; a
-   zip (bit 2) keeps it boxed, its emitter walking only numeric rows. An
+   (#4846), a reduce or an inject (bit 32), whose fold binds one too, and a
+   zip (bit 2), which binds the receiver's element and its operand's. An
    each-family walk answers its receiver: one whose value is used hands the
-   array on (bit 8). A map answers a new array, a fold its accumulator.
-   Answers 0 for any other call. */
+   array on (bit 8). A map answers a new array, a fold its accumulator, a
+   block zip nil. Answers 0 for any other call. */
 static int oa_walk_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *claimed, const char *walk_disc, int nc) {
   const char *name = nt_str(c->nt, id, "name");
   int walk = nested_row_iter_call(c, id), splits = walk == ROW_WALK_SPLITS;
@@ -17352,7 +17352,8 @@ static int narrowed_local_other_writes_fit(Compiler *c, int s, const char *nm, T
 
 /* The parameter of a walk over a narrowed object array -- `xs.each { |x| }`,
    reverse_each, each_entry, each_with_index's first, map, collect, the
-   filters, and a reduce's or an inject's second -- binds an element, as
+   filters, a reduce's or an inject's second, and a zip's first or second
+   where that side is such an array -- binds an element, as
    `x = xs[i]` does in
    narrow_locals_from_arrays: it takes the element class, so its reads
    unbox. A block parameter is a local of the enclosing scope, so every
@@ -17409,14 +17410,22 @@ static int narrow_walk_block_params(Compiler *c) {
     if (ca >= 0) nt_arr(nt, ca, "arguments", &cac);
     int fold = cn && is_reduce_alias(cn) && cac <= 1 && blk != id && ty_is_obj_array(rt) && !extra &&
                np == 2 && !block_param_is_multi(c, blk, 0) && !block_param_is_multi(c, blk, 1);
+    /* a zip with one operand binds the receiver's element first and the
+       operand's second (nil past a shorter operand's end), each pinned
+       where its side is an object array */
+    TyKind zt = cn && is_zip_name(cn) && cac == 1 ? infer_type(c, nt_arr(nt, ca, "arguments", &cac)[0]) : TY_UNKNOWN;
+    int zip = cn && is_zip_name(cn) && cac == 1 && blk != id && !extra && np == 2 &&
+              !block_param_is_multi(c, blk, 0) && !block_param_is_multi(c, blk, 1) &&
+              (ty_is_obj_array(rt) || ty_is_obj_array(zt));
     for (int pi = 0; pi < np; pi++) {
       const char *nm = block_param_name(c, blk, pi);
       LocalVar *lv = nm ? scope_local(bs, nm) : NULL;
       if (!lv) continue;
       int gi = off[s] + (int)(lv - bs->locals);
       if (gi < off[s] || gi >= off[s + 1]) continue;
-      if (!((walk && pi == 0) || (fold && pi == 1))) { bad[gi] = 1; continue; }
-      TyKind ec = ty_array_elem(rt);
+      TyKind side = zip ? (pi == 0 ? rt : zt) : rt;
+      if (!((walk && pi == 0) || (fold && pi == 1) || (zip && pi < 2 && ty_is_obj_array(side)))) { bad[gi] = 1; continue; }
+      TyKind ec = ty_array_elem(side);
       if (elem[gi] == TY_UNKNOWN) elem[gi] = ec;
       else if (elem[gi] != ec) bad[gi] = 1;
     }
@@ -18376,16 +18385,16 @@ static unsigned char *oa_dead_block_given_arms(Compiler *c, int nc) {
 static int oa_component_narrows(Compiler *c, const OAS *s) {
   if (!s->alive || s->cls == -1 || s->cls == -2 || s->cls == OA_CLS_PIA) return 0;
   /* A block iterator is kept for a numeric row, and for an object element
-     only when it is one of the walks (bit 1) or a reduce or an inject (bit
-     32): a zip (bit 2), or a block that takes the row apart (bit 16), on an
-     object array would narrow a table those emitters do not walk. */
+     only when it is one of the walks (bit 1), a reduce or an inject (bit
+     32), or a zip (bit 2): a block that takes the row apart (bit 16), on an
+     object array would narrow a table its emitter does not walk. */
   /* ... and only while nothing yet unsupported comes with it: a walk whose
      value is used (bit 8), or an element class that is itself Enumerable,
      whose Enumerable methods have no emitter on a typed receiver. An
      element class with its own `each` but no Enumerable has no such
      methods, and its `each` is an ordinary method call on the element. */
   if (!OA_CLS_IS_NESTED(s->cls) &&
-      ((s->row_iter & 26) || (s->row_iter && s->cls >= 0 && an_class_includes_enumerable(c, s->cls))))
+      ((s->row_iter & 24) || (s->row_iter && s->cls >= 0 && an_class_includes_enumerable(c, s->cls))))
     return 0;
   /* a nested scalar array: the codegen supports index/push/[]=/length/
      first/last but not the boxed sort/min/max comparators yet, so a
@@ -18485,7 +18494,7 @@ static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const
     if (oa_tmi < 0) {
       if (k == 0 && name && sp_streq(name, "zip") && nested_row_iter_call(c, id)) {
         claimed[a] = 1;
-        sl[S].row_iter |= 2;   /* a zip's argument: numeric rows only (#4846) */
+        sl[S].row_iter |= 2;   /* a zip's argument, its element bound as the receiver's is */
         continue;
       }
       if (oa_printer_takes_args(c, id, walk_disc, nc) &&

@@ -45329,7 +45329,8 @@ static void psb_iter_params(Compiler *c) {
     if (!cn || blk < 0 || recv < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
     if (!sp_streq(cn, "each") && !sp_streq(cn, "map") && !sp_streq(cn, "collect") &&
         !sp_streq(cn, "flat_map") && !sp_streq(cn, "each_with_index") && !sp_streq(cn, "select") &&
-        !sp_streq(cn, "filter") && !sp_streq(cn, "reject") && !sp_streq(cn, "find"))
+        !sp_streq(cn, "filter") && !sp_streq(cn, "reject") && !sp_streq(cn, "find") &&
+        !sp_streq(cn, "each_with_object"))
       continue;
     int bp = nt_ref(nt, blk, "parameters");
     int ps = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
@@ -45452,7 +45453,7 @@ static int psb_symbol_proc(Compiler *c, Scope *sc, const char *name, int nv, con
 }
 
 /* Is call `id` an Array's, a Hash's or a String's builtin that takes a block
-   operand without calling it? */
+   operand without calling it? A reopen's own method of the name may call it. */
 static int psb_block_unused(Compiler *c, int id) {
   static const char *const N[] = { "push", "append", "unshift", "prepend", "insert", "concat",
                                    "store", "[]=", NULL };
@@ -45461,7 +45462,8 @@ static int psb_block_unused(Compiler *c, int id) {
   int recv = nt_ref(nt, id, "receiver");
   if (!nm || recv < 0 || !str_in(nm, N)) return 0;
   TyKind rt = infer_type(c, recv);
-  return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING;
+  if (!ty_is_array(rt) && !ty_is_hash(rt) && rt != TY_STRING) return 0;
+  return cplan_builtin_call(c, id) || comp_builtin_kind_reopen_mi(c, rt, nm) < 0;
 }
 
 static int desugar_poly_symbol_block_arg(Compiler *c) {

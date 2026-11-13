@@ -10,7 +10,7 @@ r0 #1 f0 ClassNode Gate line 15
   r0 #8 f0 BeginNode line 20
     r0 #9 f0 DefNode first_in_begin line 21
     r0 #10 f0 CallNode Integer line 22
-    r0 #11 f0 DefNode from_begin line 23
+    r0 #11 may f0 DefNode from_begin line 23
     r0 #12 may f0 NilNode line 25
   r0 #13 f0 DefNode folded line 27
   r0 #14 f0 IfNode line 28
@@ -59,7 +59,7 @@ $__cond_def1: write#4 may
 Gate#run_time: def#5 end=yes
 Gate#from_block: def#7 end=yes open
 Gate#first_in_begin: def#9 end=yes
-Gate#from_begin: def#11 end=yes open
+Gate#from_begin: def#11 may end=unknown open
 Gate#folded: def#13 end=yes
 Gate#twice#__cond2: def#15 may end=unknown open
 $__cond_def2: write#16 may write#19

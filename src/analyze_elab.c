@@ -408,10 +408,12 @@ int elab_write_value_kind(NodeKind k, int *may) {
    may not run, nor may a case's branch past its first or a when's
    condition past its first, and the next arm of an elsif ladder or a
    rescue chain is on the path; a statement of a begin body with rescue
-   clauses may run partly, but for those ahead of the first that may raise
-   what the clauses catch, which run whenever the begin does
-   (prog_rescue_sure); that first one runs too, and its own statement lists
-   answer again; a branch whose condition is a constant (`x if true`,
+   clauses may not run, where a raise the rescue takes skips the rest of
+   the body (a later statement of the body has run what it follows,
+   lr_may_dominates), but for those ahead of the first that may raise what
+   the clauses catch, which run whenever the begin does (prog_rescue_sure),
+   and that first one, which runs maybe partly, its own statement lists
+   answering again; a branch whose condition is a constant (`x if true`,
    nt_pred_const, which the scope walk folds too) runs whenever the
    condition is reached, and the arms after one that always runs never do,
    which the record keeps as may not run; a rescue clause that runs
@@ -432,13 +434,14 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
   if (pp->kind == EP_LIST) {
     q.kind = EP_NEW; q.list = p;
     /* (a rescued begin's statement past those that run whenever the begin
-       does, prog_rescue_sure; the first that may raise runs, maybe partly,
-       and its own lists answer again) */
+       does, prog_rescue_sure: a raise may skip it; the first that may
+       raise runs, maybe partly, and its own lists answer again) */
     int rs = q.rescued ? prog_rescue_sure(nt, ch) : PROG_RS_SURE;
     /* (counted from the frame in the begin's own frame only: a class body
        opened in the first that may raise runs whole, as one opened in
-       any statement of the body does: LrStmt.fpartial) */
+       any statement of the body does: LrStmt.fpartial, fmay) */
     if (rs != PROG_RS_SURE) q.partial = 1, q.fpartial |= q.rescued == 1;
+    if (rs == PROG_RS_MAY) q.may = 1, q.fmay |= q.rescued == 1;
     if (rs != PROG_RS_STARTS) q.rescued = 0;
     return q;
   }

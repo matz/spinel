@@ -1,0 +1,17 @@
+:rescued
+"main.f"
+:argument_error
+1
+1
+1
+2
+2
+NameError
+:first
+"b"
+"a"
+"b"
+"b"
+NameError
+NoMethodError
+"main"

@@ -87,7 +87,10 @@ CORPUSKEY=$({
   printf '%s\n' "$CORPUS"
   printf '%s\n' "$CORPUS" | git hash-object --stdin-paths
 } | git hash-object --stdin)
-REFBASE=$ROOT/build/cident/$SHA${FLAGKEY:+-$FLAGKEY}
+# r2: the reference C as this cident leaves it, where a literal holding the
+# tree's path carries the hash of its renamed bytes. A reference an older
+# cident cached has another name, so it is neither used nor reused.
+REFBASE=$ROOT/build/cident/$SHA-r2${FLAGKEY:+-$FLAGKEY}
 REFDIR=$REFBASE-$CORPUSKEY
 # A cold cache has one builder. Hold the lock through comparison so no
 # other run can remove or read its outputs while they are being written.
@@ -181,10 +184,34 @@ if [ ! -f "$REFDIR/.done" ]; then
   for d in packages/*/test; do mkdir -p "$WT/$d" && cp -r "$d/." "$WT/$d/"; done
   [ -f "$OC" ] && mkdir -p "$WT/build" && cp "$OC" "$WT/$OC"
   emit "$WT/bin/spinel" "$WT" "$REFDIR" "$ONLY"
-  # no sed -i: BSD sed takes its argument as a backup suffix (a reused file
-  # names $ROOT already and is left as it is)
+  # The reference tree's path has this tree's length, so renaming it makes
+  # the bytes equal. A frozen literal's header also holds the FNV-1a hash of
+  # its bytes (fzl_str_hash, #11516). Where that hash is the one of the bytes
+  # as written, the literal gets the hash of its renamed bytes; any other
+  # hash is left as written. Only here are both byte strings at hand: once
+  # renamed, the reference no longer holds the bytes its hash was taken of.
+  # A file copied from a reused reference names $ROOT already and is skipped.
+  # The rename writes a .tmp file, so one that fails leaves the file whole
+  # and stops cident.
   for c in "$REFDIR"/*.c; do
-    [ -f "$c" ] && grep -qF "$WT" "$c" && LC_ALL=C sed "s|$WT|$ROOT|g" "$c" > "$c.tmp" && mv "$c.tmp" "$c"
+    [ -f "$c" ] && grep -qF "$WT" "$c" || continue
+    CIDENT_WT=$WT CIDENT_ROOT=$ROOT LC_ALL=C perl -pe '
+      BEGIN { ($wt, $rt) = @ENV{qw(CIDENT_WT CIDENT_ROOT)}; %ce = (n => "\n", t => "\t", r => "\r", "\\" => "\\", "\"" => "\"") }
+      sub dec { my ($e, $o) = (shift, "");
+        while ($e =~ /\G(?:\\([0-3][0-7]{2})|\\(.)|([^\\]+))/gs) {
+          if (defined $1) { $o .= chr oct $1 } elsif (defined $2) { return undef unless exists $ce{$2}; $o .= $ce{$2} } else { $o .= $3 } }
+        $o }
+      sub fnv { my ($hi, $lo) = (0xcbf29ce4, 0x84222325);
+        for my $b (unpack "C*", shift) { $lo ^= $b; my $l = $lo * 0x1b3;
+          ($hi, $lo) = (($hi * 0x1b3 + ($l >> 32) + ($lo << 8)) & 0xffffffff, $l & 0xffffffff) }
+        my $v = ($hi << 32) | $lo; $v ? $v : 1 }
+      if (index($_, $wt) >= 0) {
+        s#, (\d+), 0x([0-9a-f]+)ULL \}, 0xf1, "((?:[^"\\]|\\.)*)" \};# my ($n, $h, $e) = ($1, $2, $3); my $d = dec($e);
+          if (defined $d && sprintf("%x", fnv($d)) eq $h) { (my $r = $e) =~ s/\Q$wt\E/$rt/g; $h = sprintf("%x", fnv(dec($r))) }
+          ", $n, 0x${h}ULL }, 0xf1, \"$e\" };" #ge;
+        s/\Q$wt\E/$rt/g }' < "$c" > "$c.tmp" && mv "$c.tmp" "$c" || {
+      echo "cident: cannot rename the reference tree in $c" >&2
+      rm -f "$MANIFEST" ${ONLY:+"$ONLY"}; git worktree remove --force "$WT" >/dev/null 2>&1; exit 2; }
   done
   git worktree remove --force "$WT" >/dev/null 2>&1
   mv "$MANIFEST" "$REFDIR/.manifest"; [ -n "$ONLY" ] && rm -f "$ONLY"

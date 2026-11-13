@@ -3023,12 +3023,15 @@ static int rsl_hash_literal(Compiler *c, int node, int depth, int values) {
       else if (nt_kind(nt, a) == NK_DefNode || nt_kind(nt, a) == NK_BlockNode || nt_kind(nt, a) == NK_SingletonClassNode) return -1;
     if (pp < 0) { if (owner >= 0) return -1; }
     else {
-      /* the class the path's parent names, as the load record resolves the
-         reference, is the one the write's body opened (elab_header_class):
-         `Outer::Lock::DEFAULTS` does not read a top-level Lock's, whatever
-         the last names are */
+      /* the class the path's parent names where the read runs, as the load
+         record resolves the reference (elab_class_ref_at: none for a name
+         written only later), is the one the write's body opened
+         (elab_header_class): `Outer::Lock::DEFAULTS` does not read a
+         top-level Lock's, whatever the last names are */
       NodeKind pk = nt_kind(nt, pp);
-      int pc = pk == NK_ConstantReadNode || pk == NK_ConstantPathNode ? elab_class_named(c, pp) : -1;
+      int core = -1;
+      int pc = pk == NK_ConstantReadNode || pk == NK_ConstantPathNode ? elab_class_ref_at(c, pp, &core) : -1;
+      if (core >= 0) pc = -1;
       int oc = owner >= 0 ? elab_header_class(c, owner, NULL, NULL) : -1;
       if (pc < 0 || oc < 0 || pc != oc) return -1;
     }

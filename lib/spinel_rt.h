@@ -2289,7 +2289,8 @@ static sp_bool sp_io_responds(sp_File *f, const char *m, int typed) {
   /* Not in iom: CRuby answers false for both until io/console is required. */
 #ifdef SP_FEATURE_IO_CONSOLE
   {
-    static const char *const consolem[] = { "winsize", "winsize=", NULL };
+    static const char *const consolem[] = { "noecho", "raw", "winsize", "winsize=",
+      NULL };
     if (sp_str_in_list(m, consolem)) return 1;
   }
 #endif

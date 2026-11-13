@@ -1477,6 +1477,12 @@ typedef struct {
      are of; next NULL for none made. Made at an asking period's first ask
      and freed when the period ends */
   struct DefOwners { int *kd, *kc, *head, *tail, *next, cap, nscopes; } def_owners;
+  /* the dynamic send's candidate memo (analyze_desugar.c, dsn_memo_begin):
+     each class's names, the program's instance-method names, and the names
+     every object answers, kept from one run of the passes to the next while
+     nothing they read has moved (the stamps); freed with the compiler */
+  struct DsnMemo { int on, ncls, nscp, keyed; unsigned sgen, shape, tgen;
+                   char ***names; int *n; char **inames; int ninames; int *every; int nevery; } dsn;
   /* the top-level scope of each file root (nt_root), by graph id: 0 for the
      entry (analyze_program.c) */
   int *file_scope;
@@ -2005,6 +2011,8 @@ enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
 AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);
 void comp_free(Compiler *c);
+/* the dynamic send's candidate memo (Compiler.dsn), dropped (analyze_desugar.c) */
+void dsn_memo_free(Compiler *c);
 void ic_free(Compiler *c);   /* implicit_calls.c */
 void yvt_free(Compiler *c);  /* analyze_util.c */
 /* Is `name` one of the n strings in `list`? (0 for a NULL name) */

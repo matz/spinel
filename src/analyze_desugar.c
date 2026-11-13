@@ -7413,26 +7413,24 @@ static const char *const object_methods[] = { "to_s", "inspect", "class", "hash"
    and class counts, as the chain lookup's memo is kept), the parents and
    aliases (comp_class_shape_gen), and the readers and writers
    (comp_table_gen). */
-static struct { int on, ncls, nscp, keyed; unsigned sgen, shape, tgen; const Compiler *c;
-                char ***names; int *n; char **inames; int ninames; int *every; int nevery; } g_dsn;
 static void dsn_inames_free(char **in, int n) {
   for (int i = 0; i < n; i++) free(in[i]);
   free(in);
 }
-static void dsn_memo_free(void) {
-  if (g_dsn.names) {
-    for (int i = 0; i < g_dsn.ncls * 2 + 2; i++) {
-      if (g_dsn.n[i] < 0) continue;
-      for (int j = 0; j < g_dsn.n[i]; j++) free(g_dsn.names[i][j]);
-      free(g_dsn.names[i]);
+void dsn_memo_free(Compiler *c) {
+  if (c->dsn.names) {
+    for (int i = 0; i < c->dsn.ncls * 2 + 2; i++) {
+      if (c->dsn.n[i] < 0) continue;
+      for (int j = 0; j < c->dsn.n[i]; j++) free(c->dsn.names[i][j]);
+      free(c->dsn.names[i]);
     }
   }
-  free(g_dsn.names); free(g_dsn.n);
-  dsn_inames_free(g_dsn.inames, g_dsn.ninames);
-  free(g_dsn.every);
-  g_dsn.names = NULL; g_dsn.n = NULL; g_dsn.ncls = g_dsn.nscp = 0;
-  g_dsn.inames = NULL; g_dsn.ninames = 0;
-  g_dsn.every = NULL; g_dsn.nevery = 0;
+  free(c->dsn.names); free(c->dsn.n);
+  dsn_inames_free(c->dsn.inames, c->dsn.ninames);
+  free(c->dsn.every);
+  c->dsn.names = NULL; c->dsn.n = NULL; c->dsn.ncls = c->dsn.nscp = 0;
+  c->dsn.inames = NULL; c->dsn.ninames = 0;
+  c->dsn.every = NULL; c->dsn.nevery = 0;
 }
 /* The distinct names of the program's instance methods -- a named scope in
    a class, or a top-level def, that is not a class method -- in the order
@@ -7475,41 +7473,41 @@ static int dsend_name_is_helper(Compiler *c, int cls, const char *m) {
 }
 /* The memo, sized for this table (reset when the table grew) */
 static void dsn_memo_sync(Compiler *c) {
-  if (g_dsn.ncls == c->nclasses && g_dsn.nscp == c->nscopes && g_dsn.names) return;
-  dsn_memo_free();
-  g_dsn.ncls = c->nclasses; g_dsn.nscp = c->nscopes;
-  g_dsn.c = c; g_dsn.keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
-  g_dsn.sgen = comp_scope_index_gen(); g_dsn.shape = comp_class_shape_gen(); g_dsn.tgen = comp_table_gen;
-  g_dsn.names = calloc((size_t)(g_dsn.ncls * 2 + 2), sizeof *g_dsn.names);
-  g_dsn.n = malloc(sizeof *g_dsn.n * (size_t)(g_dsn.ncls * 2 + 2));
-  if (!g_dsn.names || !g_dsn.n) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < g_dsn.ncls * 2 + 2; i++) g_dsn.n[i] = -1;
+  if (c->dsn.ncls == c->nclasses && c->dsn.nscp == c->nscopes && c->dsn.names) return;
+  dsn_memo_free(c);
+  c->dsn.ncls = c->nclasses; c->dsn.nscp = c->nscopes;
+  c->dsn.keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
+  c->dsn.sgen = comp_scope_index_gen(); c->dsn.shape = comp_class_shape_gen(); c->dsn.tgen = comp_table_gen;
+  c->dsn.names = calloc((size_t)(c->dsn.ncls * 2 + 2), sizeof *c->dsn.names);
+  c->dsn.n = malloc(sizeof *c->dsn.n * (size_t)(c->dsn.ncls * 2 + 2));
+  if (!c->dsn.names || !c->dsn.n) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < c->dsn.ncls * 2 + 2; i++) c->dsn.n[i] = -1;
 }
 /* Has nothing the memo's answers read moved since it was made? */
 static int dsn_memo_kept(Compiler *c) {
-  return g_dsn.names && g_dsn.keyed && g_dsn.c == c && comp_scope_index_is_frozen() && !comp_scope_moving() &&
-         g_dsn.sgen == comp_scope_index_gen() && g_dsn.shape == comp_class_shape_gen() &&
-         g_dsn.tgen == comp_table_gen && g_dsn.ncls == c->nclasses && g_dsn.nscp == c->nscopes;
+  return c->dsn.names && c->dsn.keyed && comp_scope_index_is_frozen() && !comp_scope_moving() &&
+         c->dsn.sgen == comp_scope_index_gen() && c->dsn.shape == comp_class_shape_gen() &&
+         c->dsn.tgen == comp_table_gen && c->dsn.ncls == c->nclasses && c->dsn.nscp == c->nscopes;
 }
 /* A run of the passes that ask it: the memo on, the one a run before left
    taken up when it still holds, and left for the next when it still does */
 static void dsn_memo_begin(Compiler *c) {
-  if (!dsn_memo_kept(c)) dsn_memo_free();
-  g_dsn.on = 1;
+  if (!dsn_memo_kept(c)) dsn_memo_free(c);
+  c->dsn.on = 1;
 }
 static void dsn_memo_end(Compiler *c) {
-  g_dsn.on = 0;
-  if (!dsn_memo_kept(c)) dsn_memo_free();
+  c->dsn.on = 0;
+  if (!dsn_memo_kept(c)) dsn_memo_free(c);
 }
 /* The instance-method names (dsn_inames_build): the memo's while the pass
    runs, else a list of the asker's own, which it frees (*owned) */
 static char **dsn_inames(Compiler *c, int *nin, int *owned) {
-  *owned = !g_dsn.on;
+  *owned = !c->dsn.on;
   if (*owned) return dsn_inames_build(c, nin);
   dsn_memo_sync(c);
-  if (!g_dsn.inames) g_dsn.inames = dsn_inames_build(c, &g_dsn.ninames);
-  *nin = g_dsn.ninames;
-  return g_dsn.inames;
+  if (!c->dsn.inames) c->dsn.inames = dsn_inames_build(c, &c->dsn.ninames);
+  *nin = c->dsn.ninames;
+  return c->dsn.inames;
 }
 /* What the program defines for every object, in Object or Kernel or at the
    top level, which class cls's own chain does not reach (cls < 0: a
@@ -7532,15 +7530,15 @@ static void dsend_add_every_object_names(Compiler *c, int cls, char **in, int ni
      and per name (most of a held run of the pass). For Object itself its
      chain's names are among the class's own already, and `seen` skips them,
      as the test of `oc != cls` did. */
-  if (g_dsn.on && in == g_dsn.inames) {
-    if (!g_dsn.every) {
-      g_dsn.every = malloc(sizeof(int) * (size_t)(nin > 0 ? nin : 1));
-      if (!g_dsn.every) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      g_dsn.nevery = 0;
+  if (c->dsn.on && in == c->dsn.inames) {
+    if (!c->dsn.every) {
+      c->dsn.every = malloc(sizeof(int) * (size_t)(nin > 0 ? nin : 1));
+      if (!c->dsn.every) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      c->dsn.nevery = 0;
       for (int i = 0; i < nin; i++)
-        if (dsend_every_object_name(c, oc, in[i])) g_dsn.every[g_dsn.nevery++] = i;
+        if (dsend_every_object_name(c, oc, in[i])) c->dsn.every[c->dsn.nevery++] = i;
     }
-    for (int j = 0; j < g_dsn.nevery; j++) dsend_add_name(names, n, cap, seen, in[g_dsn.every[j]]);
+    for (int j = 0; j < c->dsn.nevery; j++) dsend_add_name(names, n, cap, seen, in[c->dsn.every[j]]);
     return;
   }
   for (int i = 0; i < nin; i++)
@@ -7548,13 +7546,13 @@ static void dsend_add_every_object_names(Compiler *c, int cls, char **in, int ni
 }
 static int dsend_receiver_names_uncached(Compiler *c, int cls, int subclasses, char ***out);
 static int dsend_receiver_names(Compiler *c, int cls, int subclasses, char ***out) {
-  if (!g_dsn.on) return dsend_receiver_names_uncached(c, cls, subclasses, out);
+  if (!c->dsn.on) return dsend_receiver_names_uncached(c, cls, subclasses, out);
   dsn_memo_sync(c);
-  int slot = (cls < 0 ? g_dsn.ncls : cls) * 2 + (subclasses ? 1 : 0);
-  if (g_dsn.n[slot] < 0) g_dsn.n[slot] = dsend_receiver_names_uncached(c, cls, subclasses, &g_dsn.names[slot]);
-  int n = g_dsn.n[slot];
+  int slot = (cls < 0 ? c->dsn.ncls : cls) * 2 + (subclasses ? 1 : 0);
+  if (c->dsn.n[slot] < 0) c->dsn.n[slot] = dsend_receiver_names_uncached(c, cls, subclasses, &c->dsn.names[slot]);
+  int n = c->dsn.n[slot];
   char **copy = (char **)malloc(sizeof(char *) * (size_t)(n > 0 ? n : 1));
-  for (int j = 0; j < n; j++) copy[j] = strdup(g_dsn.names[slot][j]);
+  for (int j = 0; j < n; j++) copy[j] = strdup(c->dsn.names[slot][j]);
   *out = copy;
   return n;
 }

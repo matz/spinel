@@ -4465,7 +4465,13 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
        which dispatches on the array kind. `push`/`<<`/`append` return the
        receiver, so yield it when the result is used (chained). */
     buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY: case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: case SP_BUILTIN_PTR_ARRAY:");
-    for (int a = 0; a < argc; a++) {
+    /* Queue's timed push (an_queue_timeout_arg): an Array's push takes the
+       keywords as one more element, its << one argument only */
+    int q_timed = (sp_streq(name, "push") || sp_streq(name, "<<")) && splat_a < 0 && kw && kw->kwall < 0 &&
+                  kw->kwn == 1 && an_queue_timeout_arg(nt, id) >= 0;
+    if (q_timed && name[0] == '<')
+      buf_printf(b, " sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, expected 1)\");", argc);
+    for (int a = 0; a < argc && !(q_timed && name[0] == '<'); a++) {
       if (nt_kind(nt, argv[a]) == NK_SplatNode) {
         int ti = ++g_tmp;
         buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
@@ -4481,16 +4487,34 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     }
     if (ret == TY_POLY) buf_printf(b, " _t%d = _t%d;", tr, tv);
     buf_puts(b, " break;");
+    /* A Queue's timed push answers the queue, or nil when the wait for
+       room timed out; the runtime names any other value's error */
+    if (q_timed) {
+      /* the object, non_block (nil when not given) and the timeout */
+      int tk[3] = { atmp[0], pos_argc == 2 ? atmp[1] : -1, kw->kwtmp[0] };
+      TyKind ty[3] = { atmp_ty[0], pos_argc == 2 ? atmp_ty[1] : TY_NIL, kw->kwty[0] };
+      buf_puts(b, " default: ");
+      if (ret == TY_POLY) buf_printf(b, "_t%d = ", tr);
+      buf_printf(b, "sp_poly_queue_push_timeout(_t%d, \"%s\"", tv, name);
+      for (int k = 0; k < 3; k++) {
+        if (k == 1) buf_printf(b, ", %d", pos_argc == 2);
+        if (tk[k] < 0) { buf_puts(b, ", sp_box_nil()"); continue; }
+        char tn[32]; snprintf(tn, sizeof tn, "_t%d", tk[k]);
+        buf_puts(b, ", ");
+        if (ty[k] == TY_POLY) buf_puts(b, tn); else emit_boxed_text(c, ty[k], tn, b);
+      }
+      buf_puts(b, "); break;");
+    }
     /* This branch is kept out of the shared default below, so a receiver
        no arm claimed left the result at its nil initializer: `nil.push(1)`
        answered nil with nothing raised (#4485). A Queue is the one other
        builtin with a push, and sp_poly_shl owns it. */
-    buf_printf(b, " default: if (!(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_QUEUE))"
-                  " sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d));", tv, tv, name, tv);
+    else buf_printf(b, " default: if (!(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_QUEUE))"
+                       " sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d));", tv, tv, name, tv);
     /* push with other than one argument on a queue: SizedQueue#push(obj,
        non_block) is one push with a flag, and a count the queue does not
        take is its ArgumentError, named by its own range */
-    int q_flag = sp_streq(name, "push") && argc != 1 && splat_a < 0;
+    int q_flag = !q_timed && sp_streq(name, "push") && argc != 1 && splat_a < 0;
     if (q_flag) {
       int tq = ++g_tmp;
       buf_printf(b, " { sp_RbVal _t%d[%d] = {", tq, argc > 0 ? argc : 1);
@@ -4504,7 +4528,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       if (argc == 0) buf_puts(b, " sp_box_nil()");
       buf_printf(b, " }; sp_poly_queue_push_n(_t%d, %d, _t%d); }", tv, argc, tq);
     }
-    for (int a = 0; a < argc && !q_flag; a++) {
+    for (int a = 0; a < argc && !q_flag && !q_timed; a++) {
       if (nt_kind(nt, argv[a]) == NK_SplatNode) {
         int ti = ++g_tmp;
         buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
@@ -4518,8 +4542,10 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       if (kb) buf_puts(b, " }");
       free(ab.p);
     }
-    if (ret == TY_POLY) buf_printf(b, " _t%d = _t%d;", tr, tv);
-    buf_puts(b, " break;");
+    if (!q_timed) {
+      if (ret == TY_POLY) buf_printf(b, " _t%d = _t%d;", tr, tv);
+      buf_puts(b, " break;");
+    }
   }
   if (is_ppack) {
     int upk = sp_streq(name, "unpack1");

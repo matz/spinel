@@ -1,0 +1,49 @@
+pop(true, timeout:): ArgumentError: can't set a timeout if non_block is enabled
+pop(true, timeout: nil): ThreadError: queue empty
+pop(false, timeout:): 4
+shift(nil, timeout:): 5
+deq(true, timeout: nil): 6
+pop(timeout: 0): nil
+pop(timeout: -1): nil
+pop(timeout: Rational): nil
+closed, an item left: 9
+closed, empty: nil
+push full: nil
+push(false) full: nil
+enq full: nil
+<< full: nil
+push(true, timeout:): ArgumentError: can't set a timeout if non_block is enabled
+push timeout: nil, room: 1
+push room: 1
+push closed: ClosedQueueError: queue closed
+Queue push(x, timeout:): ArgumentError: wrong number of arguments (given 2, expected 1)
+Queue enq(x, timeout:): ArgumentError: wrong number of arguments (given 2, expected 1)
+Queue push(x, false, timeout:): ArgumentError: wrong number of arguments (given 3, expected 1)
+Queue <<(x, timeout:): ArgumentError: wrong number of arguments (given 2, expected 1)
+pop makes room: 1
+waiting push: 1
+Array pop: TypeError: no implicit conversion of Hash into Integer
+Array shift: TypeError: no implicit conversion of Hash into Integer
+Array pop(true, timeout:): ArgumentError: wrong number of arguments (given 2, expected 0..1)
+Array deq: NoMethodError: undefined method 'deq' for an instance of Array
+Array push: [1, "a", 2, {timeout: 1}]
+Array push(x, false, timeout:): [1, "a", 2, false, {timeout: 1}]
+Array enq: NoMethodError: undefined method 'enq' for an instance of Array
+Array <<: ArgumentError: wrong number of arguments (given 2, expected 1)
+String <<: ArgumentError: wrong number of arguments (given 2, expected 1)
+nil <<: NoMethodError: undefined method '<<' for nil
+Hash shift: ArgumentError: wrong number of arguments (given 1, expected 0)
+Hash shift(true, timeout:): ArgumentError: wrong number of arguments (given 2, expected 0)
+Hash pop: NoMethodError: undefined method 'pop' for an instance of Hash
+String pop: NoMethodError: undefined method 'pop' for an instance of String
+nil pop: NoMethodError: undefined method 'pop' for nil
+Integer pop: NoMethodError: undefined method 'pop' for an instance of Integer
+typed String timeout: TypeError: no implicit conversion to float from string
+typed false timeout: TypeError: no implicit conversion to float from false
+typed push true timeout: TypeError: no implicit conversion to float from true
+boxed String timeout: TypeError: no implicit conversion to float from string
+boxed true timeout: TypeError: no implicit conversion to float from true
+boxed push String timeout: TypeError: no implicit conversion to float from string
+:x
+[:recv, :non_block, :timeout]
+0

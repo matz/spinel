@@ -1,0 +1,42 @@
+Thread arg Mailbox: [:pop, 0.5]
+Thread arg Queue: nil
+Thread arg Queue, an item: :item
+Mailbox pop: [:pop, 0.01]
+Mailbox shift: [:shift, 0.01]
+Mailbox deq(false): [:deq, false, 0.01]
+Mailbox push: :self
+Mailbox push(false): :self
+Mailbox enq: :self
+Mailbox <<: :self
+Thread::Queue pop: nil
+Thread::Queue shift: nil
+Thread::Queue deq(false): nil
+Thread::Queue push: ArgumentError: wrong number of arguments (given 2, expected 1)
+Thread::Queue push(false): ArgumentError: wrong number of arguments (given 3, expected 1)
+Thread::Queue enq: ArgumentError: wrong number of arguments (given 2, expected 1)
+Thread::Queue <<: ArgumentError: wrong number of arguments (given 2, expected 1)
+Thread::Queue push statement: ArgumentError: wrong number of arguments (given 2, expected 1)
+Thread::SizedQueue pop: 0
+Thread::SizedQueue shift: nil
+Thread::SizedQueue deq(false): nil
+Thread::SizedQueue push: :self
+Thread::SizedQueue push(false): nil
+Thread::SizedQueue enq: nil
+Thread::SizedQueue <<: nil
+Array pop: TypeError: no implicit conversion of Hash into Integer
+Array shift: TypeError: no implicit conversion of Hash into Integer
+Array deq(false): NoMethodError: undefined method 'deq' for an instance of Array
+Array push: :self
+Array push(false): :self
+Array enq: NoMethodError: undefined method 'enq' for an instance of Array
+Array <<: ArgumentError: wrong number of arguments (given 2, expected 1)
+String pop: NoMethodError: undefined method 'pop' for an instance of String
+String shift: NoMethodError: undefined method 'shift' for an instance of String
+String deq(false): NoMethodError: undefined method 'deq' for an instance of String
+String push: NoMethodError: undefined method 'push' for an instance of String
+String push(false): NoMethodError: undefined method 'push' for an instance of String
+String enq: NoMethodError: undefined method 'enq' for an instance of String
+String <<: ArgumentError: wrong number of arguments (given 2, expected 1)
+String push statement: NoMethodError: undefined method 'push' for an instance of String
+[[:push, 1, nil, {timeout: 0.01}], [:push, 2, false, {timeout: 0.01}], [:enq, 3, {timeout: 0.01}], [:<<, 5, {timeout: 0.01}], [:push, 4, nil, {timeout: 0.01}]]
+1

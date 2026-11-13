@@ -207,7 +207,7 @@ int emit_op_queue_push(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "_timeout%d.tag == SP_TAG_NIL ? ", to);
     if (nb >= 0) buf_printf(b, "(sp_poly_truthy(_nb%d) ? (sp_Queue_push_nb(_t%d, _v%d), _t%d) : (sp_Queue_push(_t%d, _v%d), _t%d)) : ", nb, t, v, t, t, v, t);
     else buf_printf(b, "(sp_Queue_push(_t%d, _v%d), _t%d) : ", t, v, t);
-    buf_printf(b, "(sp_Queue_push_timeout(_t%d, _v%d, sp_poly_to_f_with_rational(_timeout%d)) ? _t%d : NULL); })",
+    buf_printf(b, "(sp_Queue_push_timeout(_t%d, _v%d, sp_queue_timeout_f(_timeout%d)) ? _t%d : NULL); })",
                t, v, to, t);
     return 1;
   }
@@ -262,10 +262,64 @@ int emit_op_queue_pop(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "_timeout%d.tag == SP_TAG_NIL ? ", to);
     if (nb >= 0) buf_printf(b, "(sp_poly_truthy(_nb%d) ? sp_Queue_pop_nb(_q%d) : sp_Queue_pop(_q%d)) : ", nb, q, q);
     else buf_printf(b, "sp_Queue_pop(_q%d) : ", q);
-    buf_printf(b, "sp_Queue_pop_timeout(_q%d, sp_poly_to_f_with_rational(_timeout%d)); })", q, to);
+    buf_printf(b, "sp_Queue_pop_timeout(_q%d, sp_queue_timeout_f(_timeout%d)); })", q, to);
     return 1;
   }
   return 0;
+}
+
+/* Queue's timed pop and push on a boxed receiver (an_queue_timeout_arg): a
+   Thread's argument or a Fiber's resume value as the block takes it, or an
+   element of a mixed Array. The receiver and the arguments are read once,
+   in order, and the runtime asks whether it holds a Queue
+   (sp_poly_queue_pop_timeout, sp_poly_queue_push_timeout). The boxed
+   dispatch's other arms read the keyword Hash as Array#pop's count or as
+   non_block. An Array's push takes the keywords as one more element, a
+   Hash, as CRuby's does; its << takes one argument. */
+int emit_poly_queue_timeout(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
+  if (recv < 0 || rt != TY_POLY) return 0;
+  int to_arg = an_queue_timeout_arg(nt, id);
+  if (to_arg < 0 || poly_name_user_claimed(c, name, argc)) return 0;
+  int push = !is_pop_shift(name) && !sp_streq(name, "deq");
+  int pos = argc - 1, has_nb = pos == (push ? 2 : 1);
+  int tr = ++g_tmp, tx = push ? ++g_tmp : -1, tn = has_nb ? ++g_tmp : -1, tt = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_boxed(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tr);
+  if (push) {
+    buf_printf(b, "sp_RbVal _t%d = ", tx); emit_boxed(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tx);
+  }
+  if (has_nb) {
+    buf_printf(b, "sp_RbVal _t%d = ", tn); emit_boxed(c, argv[pos - 1], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tn);
+  }
+  buf_printf(b, "sp_RbVal _t%d = ", tt); emit_boxed(c, to_arg, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tt);
+  char nbv[32];
+  if (has_nb) snprintf(nbv, sizeof nbv, "_t%d", tn); else snprintf(nbv, sizeof nbv, "sp_box_nil()");
+  Buf qv; memset(&qv, 0, sizeof qv);
+  if (!push)
+    buf_printf(&qv, "sp_poly_queue_pop_timeout(_t%d, \"%s\", %d, %s, _t%d)", tr, name, has_nb, nbv, tt);
+  else if (!sp_streq(name, "push"))
+    buf_printf(&qv, "sp_poly_queue_push_timeout(_t%d, \"%s\", _t%d, %d, %s, _t%d)", tr, name, tx, has_nb, nbv, tt);
+  else {
+    int tv = ++g_tmp, th = ++g_tmp;
+    buf_printf(&qv, "({ sp_RbVal _t%d; if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)) {"
+                    " sp_poly_shl(_t%d, _t%d);", tv, tr, tr, tr, tx);
+    if (has_nb) buf_printf(&qv, " sp_poly_shl(_t%d, _t%d);", tr, tn);
+    buf_printf(&qv, " sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d);"
+                    " sp_SymPolyHash_set(_t%d, (sp_sym)%d, _t%d);"
+                    " sp_poly_shl(_t%d, sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH)); _t%d = _t%d; }"
+                    " else _t%d = sp_poly_queue_push_timeout(_t%d, \"push\", _t%d, %d, %s, _t%d); _t%d; })",
+               th, th, th, comp_sym_intern(c, "timeout"), tt,
+               tr, th, tv, tr, tv, tr, tx, has_nb, nbv, tt, tv);
+  }
+  Repr wr = repr_of(c, id);
+  if (wr.kind == RK_BOXED) buf_puts(b, qv.p);
+  else emit_unbox_text(c, wr.as_ty, qv.p, b);
+  buf_puts(b, "; })");
+  free(qv.p);
+  return 1;
 }
 
 /* fn(recv, values, count) for Fiber#resume / #transfer on a typed fiber.

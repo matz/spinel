@@ -16731,6 +16731,56 @@ static int sp_poly_queue_push_n(sp_RbVal v, int argc, const sp_RbVal *args) {
                                                 argc, sized ? "1..2" : "1"));
   return 1;
 }
+/* A Queue's timeout in seconds, converted as CRuby's does (rb_num2dbl): a
+   String, true or false is no Float, though sp_poly_to_f would read one. */
+static inline sp_float sp_queue_timeout_f(sp_RbVal t) {
+  if (t.tag == SP_TAG_STR || (t.tag == SP_TAG_OBJ && t.cls_id == SP_BUILTIN_STRBUF))
+    sp_raise_cls("TypeError", "no implicit conversion to float from string");
+  if (t.tag == SP_TAG_BOOL)
+    sp_raise_cls("TypeError", t.v.b ? "no implicit conversion to float from true"
+                                    : "no implicit conversion to float from false");
+  return sp_poly_to_f_with_rational(t);
+}
+/* pop / shift / deq(non_block = false, timeout: t) on a boxed receiver, as
+   the typed arm (emit_op_queue_pop) answers it: a value, or nil when the
+   wait timed out. Only a Queue takes the keyword: an Array's pop and shift
+   read the Hash as their count, or as one argument too many after
+   non_block, a Hash's shift takes no argument, and anything else has no
+   such method. */
+static sp_RbVal sp_poly_queue_pop_timeout(sp_RbVal v, const char *name, int has_nb, sp_RbVal nb, sp_RbVal timeout) SP_UNUSED;
+static sp_RbVal sp_poly_queue_pop_timeout(sp_RbVal v, const char *name, int has_nb, sp_RbVal nb, sp_RbVal timeout) {
+  if (v.tag == SP_TAG_OBJ && name[0] != 'd' && sp_poly_is_array_kind(v.cls_id)) {
+    if (has_nb) sp_raise_cls("ArgumentError", "wrong number of arguments (given 2, expected 0..1)");
+    sp_raise_cls("TypeError", "no implicit conversion of Hash into Integer");
+  }
+  if (v.tag == SP_TAG_OBJ && name[0] == 's' && sp_poly_is_hash_kind(v.cls_id))
+    sp_raise_cls("ArgumentError", has_nb ? "wrong number of arguments (given 2, expected 0)"
+                                         : "wrong number of arguments (given 1, expected 0)");
+  sp_queue *q = sp_poly_as_queue(v, name);
+  int nbt = has_nb && sp_poly_truthy(nb);
+  if (nbt && sp_poly_truthy(timeout)) sp_raise_cls("ArgumentError", "can't set a timeout if non_block is enabled");
+  if (timeout.tag == SP_TAG_NIL) return nbt ? sp_Queue_pop_nb(q) : sp_Queue_pop(q);
+  return sp_Queue_pop_timeout(q, sp_queue_timeout_f(timeout));
+}
+/* push / enq / <<(obj, non_block = false, timeout: t) on a boxed Queue, as
+   the typed arm (emit_op_queue_push) answers it: the queue, or nil when the
+   wait for room timed out. A Queue without a max takes the object alone
+   (sp_Queue_push_options_check); any other builtin's << takes one. */
+static sp_RbVal sp_poly_queue_push_timeout(sp_RbVal v, const char *name, sp_RbVal x, int has_nb, sp_RbVal nb, sp_RbVal timeout) SP_UNUSED;
+static sp_RbVal sp_poly_queue_push_timeout(sp_RbVal v, const char *name, sp_RbVal x, int has_nb, sp_RbVal nb, sp_RbVal timeout) {
+  if (name[0] == '<' && !(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_QUEUE) && sp_poly_responds_builtin(v, name))
+    sp_raise_cls("ArgumentError", has_nb ? "wrong number of arguments (given 3, expected 1)"
+                                         : "wrong number of arguments (given 2, expected 1)");
+  sp_queue *q = sp_poly_as_queue(v, name);
+  sp_Queue_push_options_check(q, has_nb, 1);
+  int nbt = has_nb && sp_poly_truthy(nb);
+  if (nbt && sp_poly_truthy(timeout)) sp_raise_cls("ArgumentError", "can't set a timeout if non_block is enabled");
+  if (timeout.tag == SP_TAG_NIL) {
+    if (nbt) sp_Queue_push_nb(q, x); else sp_Queue_push(q, x);
+    return v;
+  }
+  return sp_Queue_push_timeout(q, x, sp_queue_timeout_f(timeout)) ? v : sp_box_nil();
+}
 /* The Array arms of sp_poly_shl, for a caller that has no use for its other
    arms: 1 when v, an object, is an Array of one of these kinds and x was
    appended. sp_poly_shl keeps its own: taken out of it, they cost a loop of

@@ -125,6 +125,9 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   /* shuffle / sample given `random:` on a boxed Array (emit_array_random_kw):
      the count arm below read the keyword hash as the count */
   if (emit_array_random_kw(c, id, b, nt, name, recv, argc, argv, rt)) return 1;
+  /* and Queue's `timeout:` (emit_poly_queue_timeout), read as Array#pop's
+     count or as non_block below */
+  if (emit_poly_queue_timeout(c, id, b, nt, name, recv, argc, argv, rt)) return 1;
   if (rt == TY_POLY && emit_builtin_op(c, id, recv, BOP_BOXED_FALLBACK, name, b)) return 1;
   /* The keyword arm can decline sample(random: ...). Preserve its legacy
      fallback until keyword dispatch can handle all the accepted shapes. */

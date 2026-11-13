@@ -8104,6 +8104,7 @@ static int case_oint_labels_typed(Compiler *c, const int *whens, int nw) {
   return 1;
 }
 static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b);
+static int operand_op_may_raise(Compiler *c, int id);
 /* One such label against the typed subject `_tN` beside its flag `_oN` */
 static void case_oint_label(Compiler *c, int cond, int t, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -11361,8 +11362,9 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
   else if (eq_family(pt) && eq_family(comp_ntype(c, cond)) && eq_family(pt) != eq_family(comp_ntype(c, cond))) {
     /* a when value of a different comparable family never matches; one
        that runs code (`when public(:m)`, `when f(x)`) still runs, as CRuby
-       evaluates it before === answers */
-    if (poly_inert(c, cond)) buf_puts(b, "0");
+       evaluates it before === answers, and an operator in it that raises
+       (`when 1 / 0`) still raises */
+    if (poly_inert(c, cond) && !operand_op_may_raise(c, cond)) buf_puts(b, "0");
     else { buf_printf(b, "((void)_t%d, (void)(", t); emit_expr_for_effect(c, cond, b); buf_puts(b, "), 0)"); }
   }
   else if (nt_kind(c->nt, cond) == NK_SplatNode) {

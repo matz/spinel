@@ -2029,7 +2029,8 @@ const char *builtin_function_owner(const char *m) {
 
 /* respond_to?: whether the receiver itself answers a name, publicly or
    with include_all any */
-int is_respond_to_name(const char *n) { return n && sp_streq(n, "respond_to?"); }
+const char RESPOND_TO_NAME[] = "respond_to?";
+int is_respond_to_name(const char *n) { return n && sp_streq(n, RESPOND_TO_NAME); }
 /* A question whether a receiver has a method: of one by name (1), or a
    list of its methods: one that answers the whole program (2), or one a
    receiver's own chain decides (3) */
@@ -2056,7 +2057,8 @@ int is_class_ivar_accessor_name(const char *n) {
   return 0;
 }
 /* A list of an object's own singleton methods (a class's, asked of the class) */
-int is_singleton_method_list(const char *n) { return n && sp_streq(n, "singleton_methods"); }
+const char SINGLETON_METHODS_NAME[] = "singleton_methods";
+int is_singleton_method_list(const char *n) { return n && sp_streq(n, SINGLETON_METHODS_NAME); }
 /* A list of a class's instance methods, asked of the class or module itself
    (the others, asked of a class, list its class methods) */
 int is_instance_method_list(const char *n) {

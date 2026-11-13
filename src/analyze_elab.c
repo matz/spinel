@@ -141,6 +141,7 @@ struct LoadRecord {
   char **refl_cell; int nrefl_cell, crefl_cell;      /* ...a respond_to? the version cells may answer */
   char **refl_capt; int nrefl_capt, crefl_capt;      /* ...a Method's maker that takes the entry, as a call */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
+  unsigned char refl_cell_list;         /* ...a class's class-side method list the version cells may answer, of any class method name */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
   /* the method histories by name (lr_vers_index), as of nentries entries */
   long nentries, indexed;
@@ -1952,7 +1953,9 @@ static void lr_reopens_take(Compiler *c) {
    list of methods or a name the record cannot read may be any (refl_any).
    A respond_to? the version cells may answer (respond_to_cells_shape), and
    a defined? of a call on a constant or self, which becomes one, go to
-   refl_cell instead, and a Method's maker of that shape
+   refl_cell instead, and a class-side list on a constant (list_cells_shape)
+   to refl_cell_list (its cells, of every class method it may list; it names
+   no instance method), and a Method's maker of that shape
    (capture_cells_shape) to refl_capt: of a class's own class method, they
    read the cells of the entry its call takes (cplan_cmethod_presence), or
    take the entry. Every other reader but a Method's maker answers from
@@ -1991,6 +1994,10 @@ static void lr_refl_take(Compiler *c) {
     const char *rn = call_sent_name(nt, n, &a);
     if (!rn) {
       if (ac) lr_refl_add(r, NULL, LR_REFL_TABLE, 3);   /* (a send with no argument reads no name) */
+      continue;
+    }
+    if (list_cells_shape(nt, n) && sp_streq(rn, nt_str(nt, n, "name"))) {   /* (reads every class method's cells; an instance method it does not name) */
+      r->refl_cell_list = 1;
       continue;
     }
     if ((pq = is_method_presence_query(rn)))
@@ -3374,7 +3381,7 @@ static int lr_refl_has(char *const *l, int n, const char *name) {
    undefines or removes it (cplan_cmethod_presence declines them)? */
 static int lr_refl_cell_table(Compiler *c, const char *name, int cside) {
   LoadRecord *r = c->lrec;
-  if (!lr_refl_has(r->refl_cell, r->nrefl_cell, name)) return 0;
+  if (!lr_refl_has(r->refl_cell, r->nrefl_cell, name) && !(cside && r->refl_cell_list)) return 0;
   if (!cside || respond_to_missing_defined(c)) return 1;
   const LrVers *x = lr_vers(r, name);
   for (int h = x ? x->first : -1; h >= 0; h = r->hist[h].nlink)
@@ -3392,10 +3399,19 @@ static const LrDef *lr_first_version(const LrHist *h) {
 static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) {
   const LoadRecord *r = c->lrec;
   int cside = h->a >= 0 && h->b;
-  if (!lr_first_version(h) || r->refl_any || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
+  if (!lr_first_version(h) || r->refl_any || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
       (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside)) return 0;
   return (cside && (bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name))) ||
          !(builtin_object_method_known(x->name) || builtin_instance_name_known(x->name));
+}
+/* May class-side list call id list the class methods of class a: is a on the chain of the class the list names,
+   or a module, whose methods an extend brings in (or a class the list names the record cannot place)? */
+static int lr_list_may_list(Compiler *c, int id, int a) {
+  int core, k = lr_class_ref_at(c, nt_ref(c->nt, id, "receiver"), &core);
+  if (k < LR_MAIN || comp_class_is_module(c, &c->classes[a])) return 1;
+  for (int d = 0; k >= LR_MAIN && d <= lr_chain_bound(c); d++, k = lr_super(c, k))
+    if (k == a) return 1;
+  return 0;
 }
 /* The late bit of every method history (LrHist.late), once for all of
    them, as of the entries recorded: a call of the name may run before the
@@ -3420,7 +3436,8 @@ static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) 
    where the reader answers the method is there, and raise where the
    table's answer runs the def. A class's own class-side history is
    asked all the same where the reader is a respond_to? the cells answer
-   (refl_cell), which reads them as the call does
+   (refl_cell), or a class-side list on a constant (refl_cell_list, of every
+   history its class may list: lr_list_may_list), which read them as the call does
    (cplan_cmethod_presence), unless the table answers it after all
    (lr_refl_cell_table), or a Method's maker that takes the entry
    (refl_capt), which binds as the call does. One the record cannot read
@@ -3450,11 +3467,12 @@ static void lr_late_make(Compiler *c) {
     int nn = call_node_names(c, id, nm);
     ElabWindow w;
     int win = -1;   /* the node's window: not opened yet, none, or open */
-    for (int k = 0; k < nn; k++) {
-      LrVers *x = lr_vers(r, nm[k]);
+    int all = r->refl_cell_list && list_cells_shape(c->nt, id);   /* (a class-side list asks every name it may list) */
+    for (int k = 0; k < (all ? r->nvers : nn); k++) {
+      LrVers *x = all ? &r->vers[k] : lr_vers(r, nm[k]);
       for (int h = x ? x->first : -1; h >= 0 && x->pend; h = r->hist[h].nlink) {
         LrHist *y = &r->hist[h];
-        if (y->late != 1) continue;
+        if (y->late != 1 || (all && !(y->a >= 0 && y->b && lr_list_may_list(c, id, y->a)))) continue;
         LoadPoint q = elab_point_of(c, lr_first_version(y)->node);
         if (q.region < 0) continue;
         if (win < 0) win = elab_call_window(c, id, &w) == ELAB_YES;
@@ -3496,7 +3514,7 @@ int elab_method_reflected(Compiler *c, const char *name, int sg) {
   LoadRecord *r = c->lrec;
   if (!r || !r->recorded || !name) return 0;
   sg = sg != 0;
-  return r->refl_any || lr_refl_has(r->refl_table[sg], r->nrefl_table[sg], name) ||
+  return r->refl_any || (!sg && r->refl_cell_list) || lr_refl_has(r->refl_table[sg], r->nrefl_table[sg], name) ||
          (sg && lr_refl_has(r->refl_table[0], r->nrefl_table[0], name) && lr_singleton_mixed(r)) ||
          lr_refl_cell_table(c, name, sg);
 }
@@ -3504,7 +3522,7 @@ int elab_method_reflected(Compiler *c, const char *name, int sg) {
 int elab_method_asked(Compiler *c, const char *name) {
   const LoadRecord *r = c->lrec;
   if (!r || !r->recorded || !name) return 0;
-  return r->refl_any || lr_refl_has(r->refl, r->nrefl, name) || lr_refl_has(r->refl_cell, r->nrefl_cell, name) ||
+  return r->refl_any || r->refl_cell_list || lr_refl_has(r->refl, r->nrefl, name) || lr_refl_has(r->refl_cell, r->nrefl_cell, name) ||
          lr_refl_has(r->refl_capt, r->nrefl_capt, name);
 }
 

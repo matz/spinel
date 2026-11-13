@@ -2824,6 +2824,30 @@ int cplan_presence_class(Compiler *c, int id) {
   if (s && s->class_id >= 0) return s->is_cmethod ? s->class_id : -1;
   return s && c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1;
 }
+static int cplan_presence_asks(Compiler *c, int id, int cls, const char *name);
+/* See call_plan.h. */
+int cplan_list_class(Compiler *c, int id, int *own) {
+  const NodeTable *nt = c->nt;
+  if (!list_cells_shape(nt, id)) return -1;
+  int ac = 0;
+  const int *av = call_args(nt, id, &ac);
+  *own = ac == 1 && nt_kind(nt, av[0]) == NK_FalseNode;
+  int ci = class_recv_static_ci(c, nt_ref(nt, id, "receiver"));
+  return ci >= 0 && !c->classes[ci].is_builtin_const ? ci : -1;
+}
+/* The names class-side list id asks the cells of: each candidate of the list the cells may answer
+   (cplan_presence_asks) */
+typedef struct { Compiler *c; int id, cls; void (*fn)(Compiler *, int, const char *, int, void *); void *arg; } ListAsk;
+static void list_ask_name(void *ud, const char *name, int vis) {
+  ListAsk *a = ud;
+  (void)vis;
+  if (cplan_presence_asks(a->c, a->id, a->cls, name)) a->fn(a->c, a->id, name, a->cls, a->arg);
+}
+static void list_asks(Compiler *c, int id, void (*fn)(Compiler *, int, const char *, int, void *), void *arg) {
+  int own, cls = cplan_list_class(c, id, &own);
+  ListAsk a = { c, id, cls, fn, arg };
+  if (cls >= 0) cplan_list_candidates(c, cls, CT_CMETHOD | (own ? CT_OWN : 0), list_ask_name, &a);
+}
 /* Does respond_to? call id ask the version cells of cls's class method
    name: one the record cannot order there, in a program whose
    respond_to? asks only the methods (respond_to_missing_defined), where
@@ -2834,12 +2858,12 @@ static int cplan_presence_asks(Compiler *c, int id, int cls, const char *name) {
          !respond_to_missing_defined(c) && !elab_method_reflected(c, name, 1);
 }
 /* See call_plan.h. */
-int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, CplanCells *out) {
+int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out) {
   ElabVersion vs[VER_MAX_ARMS];
   if (!cplan_presence_asks(c, id, cls, name)) return 0;
   int e = call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL);
   if (e < 0 || c->scopes[e].entry != ENTRY_DISPATCH) return 0;
-  int nv = elab_chain_versions(c, cls, 1, name, vs, VER_MAX_ARMS);
+  int nv = own ? elab_history_versions(c, cls, 1, name, vs, VER_MAX_ARMS) : elab_chain_versions(c, cls, 1, name, vs, VER_MAX_ARMS);
   out->n = 0;
   for (int i = 0; i < nv; i++) {
     if (vs[i].v->kind == LR_REMOVE || vs[i].v->kind == LR_UNDEF) return 0;
@@ -2850,6 +2874,14 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
   /* (with none live, what the call runs: the entry's else arm) */
   out->els = cplan_entry_finds(c, e) >= (include_all ? VER_FINDS_HIDDEN : VER_FINDS_PUBLIC);
   return 1;
+}
+/* See call_plan.h. */
+int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, CplanCells *out) {
+  CplanCells all;
+  /* some public version has cells, and every version is public: a list shows public and protected methods, so a
+     version with another visibility is the table's to answer */
+  return cplan_cmethod_presence(c, id, cls, name, 0, own, out) && out->n > 0 &&
+         cplan_cmethod_presence(c, id, cls, name, 1, own, &all) && all.n == out->n;
 }
 /* See call_plan.h. */
 int cplan_entry_finds(const Compiler *c, int e) {
@@ -8980,6 +9012,11 @@ static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char 
   if (*hooks < 0) *hooks = an_user_defines_method(c, METHOD_MISSING_NAME) || respond_to_missing_defined(c);
   return !*hooks;
 }
+static void list_ver_need(Compiler *c, int id, const char *name, int cls, void *arg) { ver_need(c, id, name, cls, CT_CMETHOD, arg); }
+static void list_ver_target(Compiler *c, int id, const char *name, int cls, void *arg) {
+  (void)arg;
+  call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL);
+}
 void ver_entries_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   const char *names[2];
@@ -9013,6 +9050,7 @@ void ver_entries_build(Compiler *c) {
        entry a call of the name would take there (cplan_cmethod_presence) */
     int pc = cplan_presence_class(c, id);
     if (pc >= 0 && cplan_presence_asks(c, id, pc, method_sym_arg(c, id))) ver_need(c, id, method_sym_arg(c, id), pc, CT_CMETHOD, &o);
+    list_asks(c, id, list_ver_need, &o);   /* (a class-side list asks the same of each name it may list) */
     ct_implied_classes(c, id, ct_version_named, ver_need, &o);
     for (int i = 0, nn = call_node_names(c, id, names); i < nn; i++) {
       if (!names[i]) continue;
@@ -9386,11 +9424,13 @@ int ver_entries_demand(Compiler *c) {
     if (!c->ver_defer[i].taken && an_calls_named_first(c, c->ver_defer[i].name) >= 0) any = c->ver_defer[i].taken = 1;
   /* a respond_to? the cells answer asks the entry a call of the name
      would take where it runs, as such a call asks it (cplan_presence_class) */
-  for (int id = an_calls_named_first(c, "respond_to?"); id >= 0; id = an_calls_named_next(id)) {
+  for (int id = an_calls_named_first(c, RESPOND_TO_NAME); id >= 0; id = an_calls_named_next(id)) {
     int pc = cplan_presence_class(c, id);
     const char *nm = pc >= 0 ? method_sym_arg(c, id) : NULL;
     if (nm && cplan_presence_asks(c, id, pc, nm)) call_target(c, id, pc, nm, CT_CMETHOD | CT_CAPTURE, NULL);
   }
+  for (int id = an_calls_named_first(c, SINGLETON_METHODS_NAME); id >= 0; id = an_calls_named_next(id))
+    list_asks(c, id, list_ver_target, NULL);   /* (a class-side list asks the cells of each name it may list, as respond_to? does) */
   late = c->nver_late;
   if (!any && !late) return 0;
   const NodeTable *nt = c->nt;

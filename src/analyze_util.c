@@ -6869,6 +6869,14 @@ int respond_to_cells_shape(const NodeTable *nt, int id) {
          (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
 }
 /* See analyze_internal.h. */
+int list_cells_shape(const NodeTable *nt, int id) {
+  int ac = 0, recv = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
+  if (recv < 0 || !is_singleton_method_list(nt_str(nt, id, "name")) || nt_ref(nt, id, "block") >= 0) return 0;
+  const int *av = call_args(nt, id, &ac);
+  NodeKind rk = nt_kind(nt, recv), ak = ac == 1 ? nt_kind(nt, av[0]) : NK_TrueNode;
+  return ac <= 1 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && (ak == NK_TrueNode || ak == NK_FalseNode);
+}
+/* See analyze_internal.h. */
 int capture_cells_shape(const NodeTable *nt, int id) {
   int ac = 0;
   const int *av = nt_kind(nt, id) == NK_CallNode && is_bound_method_maker(nt_str(nt, id, "name")) &&

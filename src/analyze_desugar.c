@@ -5685,6 +5685,7 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
     /* the pass that makes `K.now` a K ran before this arm existed */
     if (!builtin_class_id(arms[i])) an_rewrite_array_subclass_new(c, arm);
     int test = fwd_new_call(nt, nt_clone_subtree(nt, recv), "equal?", kc);
+    nt_mark_builtin_call(nt, test);   /* the compiler's identity test: a program's own `equal?` on the value's class does not answer it */
     int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
     int el = nt_new_node(nt, "ElseNode"), ifn = nt_new_node(nt, "IfNode");
     nt_node_set_arr(nt, ys, "body", &arm, 1);

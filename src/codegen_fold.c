@@ -3928,7 +3928,11 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   if (!ty_is_array(acc_ty) && !ty_is_hash(acc_ty)) {
     Repr br = repr_of(c, bb[bn - 1]);
     TyKind bt = br.as_ty;
-    if (ty_is_numeric(bt)) acc_ty = ty_promote_numeric(acc_ty, bt);
+    /* With no seed over an Array of one class, the accumulator starts as an
+       element: a block answering anything else rides boxed, as the
+       inference has it (infer_array_reduce), the first element boxed too. */
+    if (objs && init < 0 && (br.kind == RK_BOXED || bt != et)) acc_ty = TY_POLY;
+    else if (ty_is_numeric(bt)) acc_ty = ty_promote_numeric(acc_ty, bt);
     /* Folding a POLY element array: the block's value is boxed, and the
        seed's slot cannot take it back -- a numeric seed would truncate
        (#2982), an object or value-type seed cannot hold an sp_RbVal at all
@@ -3939,12 +3943,12 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
       acc_ty = TY_POLY;
     /* Even over a concretely-typed (int/float) element array, a block whose
        value is boxed (a Rational/Complex, or poly because a fold OPERAND is
-       poly -- a parameter called with Integer and Rational call sites) cannot
-       fold back into a scalar numeric accumulator slot -- keep the
-       accumulator boxed (#3220, #3308). */
+       poly -- a parameter called with Integer and Rational call sites), or
+       an object, cannot fold back into a scalar numeric accumulator slot --
+       keep the accumulator boxed (#3220, #3308). */
     else if (acc_ty != TY_POLY && init >= 0 && ty_is_numeric(acc_ty) &&
              (bt == TY_RATIONAL || bt == TY_COMPLEX || br.kind == RK_BOXED ||
-              bt == TY_BIGINT))
+              bt == TY_BIGINT || ty_is_object(bt)))
       acc_ty = TY_POLY;
     /* With no seed the accumulator starts at the first element and kept that
        type however the block answered. A body that is an UNRESOLVED call --

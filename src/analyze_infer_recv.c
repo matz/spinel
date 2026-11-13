@@ -784,12 +784,12 @@ int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out) {
                     bt == TY_COMPLEX || bt == TY_BIGINT)) it = TY_POLY;
           /* a block yielding a boxed value (a Rational/Complex, or poly
              because a fold OPERAND is poly -- a parameter called with
-             Integer and Rational call sites) cannot fold back into a
-             scalar numeric seed slot, even over an int/float array
-             (#3220, #3308) */
+             Integer and Rational call sites), or an object (an element of
+             an Array of one class), cannot fold back into a scalar numeric
+             seed slot, even over an int/float array (#3220, #3308) */
           else if (it != TY_POLY && ty_is_numeric(it) &&
                    (bt == TY_RATIONAL || bt == TY_COMPLEX ||
-                    bt == TY_POLY || bt == TY_BIGINT)) it = TY_POLY;
+                    bt == TY_POLY || bt == TY_BIGINT || ty_is_object(bt))) it = TY_POLY;
         }
         /* An ARRAY seed is reassigned to the block's value too. A boxed
            result -- `a + r` over a poly element -- cannot go back into the
@@ -887,8 +887,11 @@ int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out) {
       /* With no init the accumulator starts as the first element, so a
          block value shaped differently than that element rides boxed: a
          fold of Hashes through #merge cannot store a hash pointer in the
-         boxed slot the first element occupies. */
-      if (bt != TY_UNKNOWN && bt != TY_POLY && ty_array_elem(rt) == TY_POLY) { *out = TY_POLY; return 1; }
+         boxed slot the first element occupies, nor a String the slot of an
+         Array of one class's element. */
+      if (bt != TY_UNKNOWN && bt != TY_POLY &&
+          (ty_array_elem(rt) == TY_POLY || (ty_is_obj_array(rt) && bt != ty_array_elem(rt))))
+        { *out = TY_POLY; return 1; }
       if (bt != TY_UNKNOWN) { *out = bt; return 1; }
       /* Settled and still unknown: the body is an unresolved call, whose
          value is the boxed NoMethodError raise (`inject(:nope)` desugars

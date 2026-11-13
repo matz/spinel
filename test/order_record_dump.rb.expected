@@ -160,3 +160,24 @@ c2_rescue_cvar.rb:6 call p: none (tail)
 c2_rescue_cvar.rb:6 call m: none (tail)
 c2_rescue_cvar.rb:7 call p: none (tail)
 c2_rescue_cvar.rb:7 call f: none (tail)
+== c3_reader_literal_recv.rb
+c3_reader_literal_recv.rb:2 call attr_reader: none (pure)
+c3_reader_literal_recv.rb:6 call attr_reader: none (pure)
+c3_reader_literal_recv.rb:10 call bump: none (tail)
+c3_reader_literal_recv.rb:10 call bump: none (tail)
+c3_reader_literal_recv.rb:10 call bump: none (tail)
+c3_reader_literal_recv.rb:15 array: 0 @@x HOLD(by 1) across | 1 o.w AHEAD code | guard=call steps=0
+c3_reader_literal_recv.rb:15 call w: none (pure)
+c3_reader_literal_recv.rb:16 array: none (tail)
+c3_reader_literal_recv.rb:16 call w: none (pure)
+c3_reader_literal_recv.rb:18 call p: none (tail)
+c3_reader_literal_recv.rb:18 call m: 0 C AHEAD code across | 1 K.new AHEAD code | guard=call steps=0
+c3_reader_literal_recv.rb:18 call new: none (tail)
+c3_reader_literal_recv.rb:19 call p: none (tail)
+c3_reader_literal_recv.rb:19 call m: none (tail)
+c3_reader_literal_recv.rb:20 call p: none (tail)
+c3_reader_literal_recv.rb:20 call n: 0 C AHEAD code across | 1 K.new AHEAD code | guard=call steps=0
+c3_reader_literal_recv.rb:20 call new: none (tail)
+c3_reader_literal_recv.rb:21 call p: none (tail)
+c3_reader_literal_recv.rb:21 call n: 0 C AHEAD code across | 1 L.new AHEAD code | guard=call steps=0
+c3_reader_literal_recv.rb:21 call new: none (tail)

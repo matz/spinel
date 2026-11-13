@@ -168,11 +168,12 @@ void oplist_free(OpList *l) {
 /* Is this call a reader on a boxed receiver that every class the receiver
    can hold answers by a public attr_reader or Struct member, with no `def`
    of the name winning over it? The dispatch then reads a field in each arm
-   and runs no code of the program's. A builtin value among them (a nil)
-   answers with its own method or raises NoMethodError, which runs none
-   either when no builtin has the name or every one that has it reads a
-   value, the program defines no method of the name a builtin could take,
-   and no method_missing. */
+   and runs no code of the program's. A builtin value among them (bv, or a
+   class of the builtin part bk alone, as a literal's Integer or String
+   seeds it) answers with its own method or raises NoMethodError, which
+   runs none either when no builtin has the name or every one that has it
+   reads a value, the program defines no method of the name a builtin
+   could take, and no method_missing. */
 static int call_is_poly_field_read(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
@@ -182,9 +183,9 @@ static int call_is_poly_field_read(Compiler *c, int id) {
   const ClsSet *s = cls_fact_node(c, recv);
   if (!s || s->all || s->os || s->n == 0) return 0;
   if (an_user_defines_method(c, "method_missing")) return 0;
-  if (s->bv && (an_user_defines_method(c, nm) ||
-                (!is_plain_builtin_reader(nm) &&
-                 (builtin_object_method_known(nm) || builtin_instance_name_known(nm)))))
+  if ((s->bv || cls_bk_any(s)) && (an_user_defines_method(c, nm) ||
+                                   (!is_plain_builtin_reader(nm) &&
+                                    (builtin_object_method_known(nm) || builtin_instance_name_known(nm)))))
     return 0;
   for (int k = cls_set_next(s, -1); k >= 0; k = cls_set_next(s, k)) {
     if (k >= c->nclasses || c->classes[k].is_native_class) return 0;

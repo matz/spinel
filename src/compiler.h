@@ -124,6 +124,11 @@ typedef struct { unsigned char all, bv, os, pr, bc; unsigned long long bk[CLS_BK
 /* A hashed name set (keys borrowed, not copied); zero-initialize to start (anh_*, analyze_internal.h). */
 typedef struct { const char **key; int *next, *head, n, cap, nb; } ANameHash;
 static inline int cls_bk_has(const ClsSet *s, int k) { return (int)((s->bk[k >> 6] >> (k & 63)) & 1); }
+/* does the builtin part by class hold any class (a literal's seed has it with bv 0)? */
+static inline int cls_bk_any(const ClsSet *s) {
+  for (int i = 0; i < CLS_BK_WORDS; i++) if (s->bk[i]) return 1;
+  return 0;
+}
 /* the position of the first word at word index q or past it */
 static inline int cls_set_word_from(const ClsSet *s, int q) {
   int lo = 0, hi = s->nw;

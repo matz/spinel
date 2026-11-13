@@ -179,6 +179,29 @@ PROGRAMS = [
     p C.m(0)
     p C.f
   RUBY
+  ["c3_reader_literal_recv.rb", <<~'RUBY'],
+    class K
+      attr_reader :w
+      def initialize = (@w = 1)
+    end
+    class L
+      attr_reader :w
+      def initialize = (@w = 2)
+    end
+    class Integer
+      def w = (C.bump; 0)
+    end
+    class C
+      @@x = 1
+      def self.bump = (@@x = 9)
+      def self.m(o) = [@@x, o.w]
+      def self.n(o) = [@@x, o.w]
+    end
+    p C.m(K.new)
+    p C.m(3)
+    p C.n(K.new)
+    p C.n(L.new)
+  RUBY
 ]
 
 dir = File.join(Dir.tmpdir, "spinel_order_dump_#{Process.pid}")

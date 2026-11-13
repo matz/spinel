@@ -2457,10 +2457,14 @@ static int ver_def_vis(Compiler *c, int rcls, const char *name, int def) {
    closed to it or all open (the plan then answers the call as it does
    without versions of its own: it raises, or runs the entry). */
 static int ct_face_for(Compiler *c, int rcls, int sg, const char *name, unsigned flags) {
-  int face = ct_flags_face(flags);
+  int face = ct_flags_face(flags), oc = comp_core_class(c, CORE_OBJECT);
+  /* (only Object's versions are told apart, ver_arms_closed: another class
+     answers none without a lookup, which every class a call may land on
+     asked once per call) */
+  if (!face || sg || rcls != oc) return VF_NONE;
   /* (a method_missing every object reaches answers the call instead) */
-  if (face && cplan_mm_method(c, comp_core_class(c, CORE_OBJECT), 0) >= 0) return VF_NONE;
-  return face && !sg && ver_arms_closed(c, rcls, name, face, NULL) == -1 ? face : VF_NONE;
+  if (cplan_mm_method(c, oc, 0) >= 0) return VF_NONE;
+  return ver_arms_closed(c, rcls, name, face, NULL) == -1 ? face : VF_NONE;
 }
 /* The version of `name` call id runs, when the method has more than one
    (#9898), or one the call may run before (elab_versions_late): a call at

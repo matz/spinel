@@ -67,6 +67,7 @@ class << self
   undef_method :inspect
 end
 puts((to_s rescue "NameError to_s"))
+p((to_s rescue :NameError))
 p((inspect rescue :NameError))
 p((self.inspect rescue :NoMethodError))
 

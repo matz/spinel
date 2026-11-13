@@ -2995,8 +2995,8 @@ static int ct_runs_on_main(Compiler *c, int id) {
 /* What main's singleton answers for `name` at call id's point
    (elab_main_singleton_at): 1, main's own method (or the record cannot
    tell, or the point is no load point); 0, none, so Object's chain
-   answers; -1, another's (an extended module's, the core's), or an undef
-   that stops the lookup (ct_main_stopped). None only
+   answers (an undef too, which stops the call where ct_main_stopped says
+   so); -1, another's (an extended module's, the core's). None only
    where the record places the def the table holds: one in a body the walk
    does not place (a block given in a call's arguments) makes no entry. */
 static int ct_main_own(Compiler *c, int id, const char *name) {
@@ -3005,7 +3005,9 @@ static int ct_main_own(Compiler *c, int id, const char *name) {
   if (p.region < 0) return 1;
   int s = elab_main_singleton_at(c, name, p, &d);
   if (s == ELAB_UNKNOWN || (s == ELAB_YES && d && d->scope > 0 && c->scopes[d->scope].class_id < 0)) return 1;
-  if (s != ELAB_NO) return -1;
+  /* (an undef: where a program method_missing keeps it from stopping the
+     call, ct_main_stopped, main's own method is gone all the same) */
+  if (s != ELAB_NO && s != ELAB_STOP) return -1;
   /* (no record: it cannot tell) */
   return elab_history_holds_scope(c, -1, 1, name, comp_main_method(c, name)) != 1;
 }
@@ -3020,11 +3022,15 @@ static int ct_on_main(Compiler *c, int id, const char *name) {
    undef of `name` on main's singleton stops the lookup
    (elab_main_singleton_at's ELAB_STOP): no method of Object's chain nor a
    builtin's (the core's to_s and inspect) answers it, so it raises, as a
-   call ct_undefined_at proves undefined does. */
+   call ct_undefined_at proves undefined does, where no program
+   method_missing may answer it instead. */
 static int ct_main_stopped(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
   LoadPoint p = elab_point_of(c, id);
-  return p.region >= 0 && elab_main_singleton_at(c, name, p, &d) == ELAB_STOP && ct_runs_on_main(c, id);
+  if (p.region < 0 || elab_main_singleton_at(c, name, p, &d) != ELAB_STOP) return 0;
+  /* (a program method_missing main reaches, its singleton's or Object's,
+     answers the call instead: not told apart here, so none stops) */
+  return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, 0) < 0 && ct_runs_on_main(c, id);
 }
 /* The method call id reaches when it can reach only main's own method of
    `name`: a call on main (ct_on_main) at a load point where main's method

@@ -11,6 +11,7 @@ Object#f4
 NameError g1
 NameError to_s
 :NameError
+:NameError
 :NoMethodError
 main f5 9
 NameError f5

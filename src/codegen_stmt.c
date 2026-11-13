@@ -4252,11 +4252,13 @@ int strbuf_chain_over_handle(Compiler *c, int v) {
 /* --share-strings: is v `x.to_s` on a box or a variable's handle (either may
    be nil), which a box takes as the receiver's own String, nil's ""
    (sp_poly_to_s_box, sp_strbuf_to_s_box)? No method of the program's own
-   name. */
+   name, and not a call the plan answers as finding no method (cplan_missing:
+   main's after an undef of its to_s), which raises. */
 int strbuf_poly_to_s(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode || !nt_str(nt, v, "name") ||
-      !sp_streq(nt_str(nt, v, "name"), "to_s") || nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0)
+  char self[160];
+  if (v < 0 || nt_kind(nt, v) != NK_CallNode || !is_to_s_name(nt_str(nt, v, "name")) ||
+      nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0 || cplan_missing(c, v, self, sizeof self, NULL) != CM_NONE)
     return 0;
   int r = nt_ref(nt, v, "receiver");
   /* A narrowed String's resolved conversion keeps its boxed slot even

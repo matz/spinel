@@ -26,6 +26,12 @@
 # shadow's or clone's) is another family's: implied, or presence for a
 # respond_to? that supers.
 #
+# A read under a send, a Method maker or an &:sym is the send family's where
+# it asks of the name the node sends or captures. Its own name (`send`,
+# `method`) is the call's, as any call's is, and another name counts as
+# under any call. A run-time name's arms are calls of their own, each the
+# frame of what is asked of it.
+#
 # --list FILE: the programs to compile, one per line, in place of the corpus
 # (test/*.rb, packages/*/test/*.rb, benchmark/*.rb, build/optcarrot-single.rb).
 # -v: every reader file:line and pass, not the top 20.
@@ -34,7 +40,7 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
-FAIL_FAMILIES="super lists"
+FAIL_FAMILIES="super send lists"
 # the lists family also keeps its static rule: the method list builders and arms read no table themselves
 "$ROOT/tools/lists_readers_check.sh" || exit 1
 FAMILIES="call implied presence super send lists other pass"

@@ -1963,6 +1963,7 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
   int wr = setter_base_name(sym, base, sizeof base), framed = mn >= 0 ? elab_plan_enter(c, mn) : 0;
   if (!r) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   *n = 0;
+  mtab_enter(c);   /* (the capture's arms ask every class, as the candidates do) */
   for (int k = 0; k < c->nclasses; k++) {
     int reader = comp_reader_in_chain(c, k, sym, NULL), writer = !reader && wr && comp_writer_in_chain(c, k, base, NULL), mi;
     CplanClassArmKind kind = reader ? CP_CARM_READER : CP_CARM_WRITER;
@@ -1984,6 +1985,7 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
     }
     r[(*n)++] = (CplanClassArm){ k, mi, kind };
   }
+  mtab_leave(c);
   if (framed) elab_plan_leave(c);
   return r;
 }

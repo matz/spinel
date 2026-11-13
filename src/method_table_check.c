@@ -172,6 +172,19 @@ static int super_reads_own_name(Compiler *c, int fn, const char *name) {
   return (shadow && sp_streq(shadow, name)) || (u && sp_streq(u, name)) || (s->name && sp_streq(s->name, name));
 }
 
+/* Is `name` one the send or Method maker at fn sends or captures: a literal
+   send's name, a maker's Symbol (call_node_names past the node's own)? Not
+   where it is the node's own name too (`method(:method)`, an arm of a
+   run-time name): the call's question of its own name asks it as well. */
+static int send_reads_target(Compiler *c, int fn, const char *name) {
+  const char *own[2];
+  int n = call_node_names(c, fn, own);
+  if (n > 0 && own[0] && sp_streq(own[0], name)) return 0;
+  for (int i = 1; i < n; i++)
+    if (own[i] && sp_streq(own[i], name)) return 1;
+  return 0;
+}
+
 /* The family of the reader: what the node being inferred or emitted is, by
    the names it calls (call_node_names) and the predicates of
    builtin_names.c. A node with no frame is a pass: family "pass", with the
@@ -189,12 +202,19 @@ static const char *reader_family(Compiler *c, int fn, const char *name, int buil
   }
   if (k == NK_BlockArgumentNode) {   /* &:sym calls the name; any other &obj calls its to_proc */
     int ex = nt_ref(nt, fn, "expression");
-    return ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode ? "send" : "implied";
+    const char *sym = ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode ? nt_str(nt, ex, "value") : NULL;
+    return sym && sp_streq(sym, name) ? "send" : "implied";
   }
   if (k == NK_DefinedNode) return "presence";
   const char *nm = k == NK_CallNode ? nt_str(nt, fn, "name") : NULL;
   if (nm) {
-    if (is_send_family(nm) || is_method_object_maker(nm)) return "send";
+    /* a send or a Method maker is the family's reader where it asks of the
+       name it sends or captures; its own name (`send`, `method`) is the
+       call's, as any call's is, and another name counts as under any call
+       (method_missing, a conversion: implied). A run-time name's arms are
+       calls of their own, each the frame of what is asked of it
+       (emit_dynamic_send_arm). */
+    if ((is_send_family(nm) || is_method_object_maker(nm)) && send_reads_target(c, fn, name)) return "send";
     if (is_respond_to_name(nm) || is_method_defined_query(nm)) return "presence";
     /* a read under a list's node is the list's own where a builder made it (the window of mtab_build_enter), the
        call's where the plan's resolution of the list's call did */

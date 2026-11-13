@@ -17552,16 +17552,30 @@ static int oa_read_is_param(Compiler *c, int node) {
 
 /* The row kind a map's block answers (OA_CLS_IA / OA_CLS_FA), or -1: its
    tail and every valued next or break are one kind of scalar row, and a
-   literal row has every element typed (oa_obj_class_of). An object, a
-   boxed value or an empty `[]` is no evidence: the emitters that read an
-   object table built by a map still want the boxed element. Nor is a block
-   that breaks: the map then answers the break's value, not a table. */
+   literal row has every element typed (oa_obj_class_of). An object is
+   oa_map_obj_evidence's; a boxed value or an empty `[]` is no evidence.
+   Nor is a block that breaks: the map then answers the break's value, not
+   a table. */
 static int oa_map_row_evidence(Compiler *c, int block, int tail) {
   if (tail < 0 || block_body_breaks(c->nt, nt_ref(c->nt, block, "body"))) return -1;
   TyKind et = infer_map_block_elem_ty(c, block);
   int ec = oa_obj_class_of(c, tail);
   if (!OA_CLS_IS_NESTED(ec) || et != (ec == OA_CLS_IA ? TY_INT_ARRAY : TY_FLOAT_ARRAY)) return -1;
   return ec;
+}
+
+/* The class a map's block answers, or -1: its tail is typed as one class
+   (oa_elem_evidence, read as an `Array.new(n) { }` generator's tail is),
+   and the block has no `next` and does not break. */
+static int oa_map_obj_evidence(Compiler *c, OAS *sl, int S, int block, int tail, const int *read_slot) {
+  const NodeTable *nt = c->nt;
+  int body = nt_ref(nt, block, "body");
+  int nx[1];
+  if (tail < 0 || body < 0 || block_body_breaks(nt, body) || an_block_nexts(nt, body, nx, 1) != 0 ||
+      !ty_is_object(infer_type(c, tail)))
+    return -1;
+  int ec = oa_elem_evidence(c, sl, S, tail, read_slot);
+  return ec >= 0 ? ec : -1;
 }
 
 /* Is s `dup` or `clone`, whose answer is a copy of the receiver's own
@@ -17713,12 +17727,9 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
        slot dies. The while-loop spelling never needed this because its rows
        come from its own `Array.new(0, 0.0)` generator.
 
-       Deliberately only this shape. Keeping every map source alive also
-       narrows `[...].map { Obj.new(s) }` to an object table, and the places
-       that consume one -- `min`, `join`, interpolation -- still want the boxed
-       element, so the C stopped compiling. The rows here are already unboxed
-       pointers read out of a narrowed table, which is what makes this shape
-       the one that pays.
+       Beside this edge, a map's block is element evidence only for the
+       shapes below: a row of one scalar kind, or one class
+       (oa_map_obj_evidence). Every other map source kills the slot.
 
        The receiver must be an ARRAY. `h.map { |k, v| cols[v] }` answers the
        same rows, but its emitter has no pointer-array container to collect
@@ -17776,6 +17787,15 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
          row gives, and the map builds it in place as above */
       int ec = joined ? -1 : oa_map_row_evidence(c, mb, mtail);
       if (OA_CLS_IS_NESTED(ec)) { sl[S].cls = oa_cls_join(sl[S].cls, ec); oa_note_src(S, v); }
+      /* `(1..n).map { Neuron.new }`: a block that answers one class builds
+         an Array of it, the evidence an `Array.new(n) { Neuron.new }`
+         generator gives, built in place as above. Only a tail typed as the
+         class itself -- not a boxed value, which the build would have to
+         unbox -- and no `next` or `break`, whose values would be elements
+         (or the map's value) too. */
+      else if (!joined && (ec = oa_map_obj_evidence(c, sl, S, mb, mtail, read_slot)) >= 0) {
+        sl[S].cls = oa_cls_join(sl[S].cls, ec); oa_note_src(S, v);
+      }
       else if (!joined) sl[S].alive = 0;   /* every other map source, as before */
     }
     /* a call whose own value is a tracked slot: join the two. */

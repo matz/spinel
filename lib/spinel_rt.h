@@ -11076,9 +11076,29 @@ static SP_NOINLINE SP_COLD void sp_raise_frozen_obj(sp_RbVal v, const char *what
 /* Raise Hash#fetch's KeyError with MRI's "key not found: <key.inspect>" text.
    Boxing the key lets one helper serve every key type (symbol, string, int,
    ...) via sp_poly_inspect. */
+int sp_exc_protect(void (*fn)(void *), void *ctx);   /* lib/sp_exc.c */
+struct sp_key_insp { sp_RbVal key; const char *text; };
+static void sp_key_insp_run(void *p) {
+  struct sp_key_insp *k = (struct sp_key_insp *)p;
+  k->text = sp_poly_inspect(k->key);
+}
+/* A program object's own #inspect that raises does not replace the
+   KeyError: the key is named by its default #<Name:0x...>, as CRuby's. */
 SP_NORETURN static void sp_raise_key_not_found(sp_RbVal key) {
+  /* The caller staged the receiver; a raise inside the key's inspect clears it. */
+  sp_RbVal recv = sp_pending_exc_recv;
+  int has_recv = sp_pending_exc_flags & 1;
+  SP_GC_ROOT_RBVAL(key);
+  SP_GC_ROOT_RBVAL(recv);
+  struct sp_key_insp k = { key, NULL };
+  const char *ins;
+  if (key.tag != SP_TAG_OBJ || !key.v.p) ins = sp_poly_inspect(key);
+  else if (!sp_exc_protect(sp_key_insp_run, &k)) ins = k.text;
+  else ins = sp_sprintf("#<%s:0x%016llx>", sp_poly_class_name(key), (unsigned long long)(uintptr_t)key.v.p);
+  SP_GC_ROOT_STR(ins);
+  if (has_recv) sp_exc_stage_recv(recv);
   sp_exc_stage_key(key);
-  sp_raise_cls("KeyError", sp_sprintf("key not found: %s", sp_poly_inspect(key)));
+  sp_raise_cls("KeyError", sp_sprintf("key not found: %s", ins));
 }
 /* Array#join for a mixed-element (poly) array: to_s each element via
    sp_poly_to_s and concatenate with sep. Mirrors sp_StrArray_join for

@@ -1,0 +1,30 @@
+ArgumentError: boom
+TypeError: ts
+TypeError: ts
+baz!
+ArgumentError: boom
+RuntimeError: mod
+RuntimeError: cls
+RuntimeError: clsts
+RuntimeError: st
+ArgumentError: boom
+ArgumentError: boom
+TypeError: ts
+ArgumentError: boom
+TypeError: ts
+TypeError: ts
+TypeError: ts
+end
+KeyError: key not found: #<F2:X>
+KeyError: key not found: #<G2:X>
+KeyError: key not found: #<F2:X>
+KeyError: key not found: custom-h
+KeyError: key not found: #<J2:X @a=1>
+KeyError: key not found: #<L2:X>
+KeyError: key not found: :zz
+KeyError: key not found: #<F2:X>
+9
+F2 true true
+H2 true true
+R2 true true
+String true true

@@ -126,6 +126,7 @@ src/call_plan.c cplan_mm_chain =METHOD_MISSING_NAME method_missing, which a call
 src/call_plan.c cplan_dispatch_miss =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
 src/call_plan.c cplan_capture_misses a capture's Symbol argument's method, and the method_missing and respond_to_missing? that answer for it, not one call's name
 src/call_plan.c capture_hook_reach =RESPOND_TO_MISSING_NAME the respond_to_missing? a capture asks where it finds no method, on a class and the classes under it, not one call's name
+src/codegen.c class_opens_cmp the comparison operators' names in cmp_lack_ops
 src/codegen.c codegen_program the operators' and protocol methods' names
 src/codegen.c conv_bridge_callee the conversion protocol's names
 src/codegen.c display_method_scope the display protocol's names

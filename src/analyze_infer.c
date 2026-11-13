@@ -7671,13 +7671,17 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
     if ((is_sort_family(name)) && argc == 0) { *out = rt; return 1; }
     if ((is_minmax_query(name)) && argc == 0) { *out = ty_object(ecls); return 1; }
     /* the block iterators the narrowing pass admits (nested_row_iter_call):
-       each and its kin answer the receiver, map the block's values (#4846) */
+       each and its kin answer the receiver, map the block's values (#4846),
+       a fold its accumulator */
     { int oblk = nt_ref(nt, id, "block");
       if (oblk >= 0 && nt_kind(nt, oblk) == NK_BlockNode) {
         if (is_each_walk_or_with_index(name) && argc == 0)
           { *out = rt; return 1; }
         if ((is_map_alias(name)) && argc == 0)
           { *out = infer_map_block_ty(c, id, oblk); return 1; }
+        /* a reduce or an inject folds as over any Array (#4846's walks,
+           emit_reduce_block_expr binding the sp_X * element) */
+        if (is_reduce_alias(name) && argc <= 1) return infer_array_reduce(c, id, rt, out);
         /* the filters: one with a bang answers the array or nil, boxed,
            and one without a bang a new array of the same class */
         if (is_select_reject_bang(name) && argc == 0) { *out = TY_POLY; return 1; }

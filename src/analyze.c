@@ -16803,20 +16803,21 @@ static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, i
    walk whose block takes the row apart (ROW_WALK_SPLITS, bit 16). An object
    array takes the walks -- each, reverse_each, each_entry,
    each_with_index, map, collect -- whose emitters bind an sp_X * element
-   (#4846); a reduce, an inject or a zip (bit 2) keeps it boxed, those
-   emitters walking only numeric rows. An each-family walk answers its
-   receiver: one whose value is used hands the array on (bit 8). A map
-   answers a new array. Answers 0 for any other call. */
+   (#4846), and a reduce or an inject (bit 32), whose fold binds one too; a
+   zip (bit 2) keeps it boxed, its emitter walking only numeric rows. An
+   each-family walk answers its receiver: one whose value is used hands the
+   array on (bit 8). A map answers a new array, a fold its accumulator.
+   Answers 0 for any other call. */
 static int oa_walk_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *claimed, const char *walk_disc, int nc) {
   const char *name = nt_str(c->nt, id, "name");
   int walk = nested_row_iter_call(c, id), splits = walk == ROW_WALK_SPLITS;
   if (walk == ROW_WALK_NONE) return 0;
   claimed[recv] = 1;
-  int fold = name && (sp_streq(name, "reduce") || sp_streq(name, "inject") || sp_streq(name, "zip"));
+  int red = name && is_reduce_alias(name), zip = name && sp_streq(name, "zip"), fold = red || zip;
   if (splits) sl[S].row_iter |= 16;
   else {
     sl[S].row_escape = 1;   /* the block binds each row */
-    sl[S].row_iter |= fold ? 2 : 1;
+    sl[S].row_iter |= zip ? 2 : red ? 32 : 1;
     /* and what the block does to the row it binds decides whether a table
        may type its rows: a store of another kind keeps it boxed */
     const NodeTable *nt = c->nt;
@@ -17350,8 +17351,9 @@ static int narrowed_local_other_writes_fit(Compiler *c, int s, const char *nm, T
 }
 
 /* The parameter of a walk over a narrowed object array -- `xs.each { |x| }`,
-   reverse_each, each_entry, each_with_index's first, map, collect and the
-   filters -- binds an element, as `x = xs[i]` does in
+   reverse_each, each_entry, each_with_index's first, map, collect, the
+   filters, and a reduce's or an inject's second -- binds an element, as
+   `x = xs[i]` does in
    narrow_locals_from_arrays: it takes the element class, so its reads
    unbox. A block parameter is a local of the enclosing scope, so every
    block or lambda that binds it must be such a walk of the same class, and
@@ -17400,13 +17402,20 @@ static int narrow_walk_block_params(Compiler *c) {
     int walk = cn && (is_each_walk_or_with_index(cn) || is_map_alias(cn) || oa_filter_call(c, id)) &&
                ca < 0 && blk != id && (ty_is_obj_array(rt) || table) && !extra &&
                (np == 1 || (np == 2 && sp_streq(cn, "each_with_index"))) && !block_param_is_multi(c, blk, 0);
+    /* a reduce or an inject over an object array, its seed given or not,
+       binds the element as its second parameter (emit_reduce_block_expr);
+       the accumulator holds the block's values and is left to them */
+    int cac = 0;
+    if (ca >= 0) nt_arr(nt, ca, "arguments", &cac);
+    int fold = cn && is_reduce_alias(cn) && cac <= 1 && blk != id && ty_is_obj_array(rt) && !extra &&
+               np == 2 && !block_param_is_multi(c, blk, 0) && !block_param_is_multi(c, blk, 1);
     for (int pi = 0; pi < np; pi++) {
       const char *nm = block_param_name(c, blk, pi);
       LocalVar *lv = nm ? scope_local(bs, nm) : NULL;
       if (!lv) continue;
       int gi = off[s] + (int)(lv - bs->locals);
       if (gi < off[s] || gi >= off[s + 1]) continue;
-      if (!walk || pi != 0) { bad[gi] = 1; continue; }
+      if (!((walk && pi == 0) || (fold && pi == 1))) { bad[gi] = 1; continue; }
       TyKind ec = ty_array_elem(rt);
       if (elem[gi] == TY_UNKNOWN) elem[gi] = ec;
       else if (elem[gi] != ec) bad[gi] = 1;
@@ -18367,9 +18376,9 @@ static unsigned char *oa_dead_block_given_arms(Compiler *c, int nc) {
 static int oa_component_narrows(Compiler *c, const OAS *s) {
   if (!s->alive || s->cls == -1 || s->cls == -2 || s->cls == OA_CLS_PIA) return 0;
   /* A block iterator is kept for a numeric row, and for an object element
-     only when it is one of the walks (bit 1): a reduce, an inject or a zip
-     (bit 2), or a block that takes the row apart (bit 16), on an object
-     array would narrow a table those emitters do not walk. */
+     only when it is one of the walks (bit 1) or a reduce or an inject (bit
+     32): a zip (bit 2), or a block that takes the row apart (bit 16), on an
+     object array would narrow a table those emitters do not walk. */
   /* ... and only while nothing yet unsupported comes with it: a walk whose
      value is used (bit 8), or an element class that is itself Enumerable,
      whose Enumerable methods have no emitter on a typed receiver. An

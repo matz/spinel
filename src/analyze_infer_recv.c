@@ -691,6 +691,216 @@ TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int value) {
 }
 
 /* Array receivers: the array face of infer_call */
+/* What a reduce or an inject on Array kind rt answers (infer_array_call's
+   arm), its own function so a narrowed Array of one class, whose element
+   the fold binds as its sp_X *, takes the same rule (infer_call). */
+int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  int args = nt_ref(nt, id, "arguments");
+  int argc = 0;
+  const int *argv = NULL;
+  if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
+  /* inject(&:&|:||:-) over a literal array of int arrays: set operation
+     folding the inner arrays -> an int array. */
+  if (rt == TY_POLY_ARRAY && comp_is_nested_int_array_literal(c, recv)) {
+    int blk = nt_call_block_arg(nt, id);
+    const char *sop = NULL;
+    if (blk >= 0) {
+      int ex = nt_ref(nt, blk, "expression");
+      if (ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode) sop = nt_str(nt, ex, "value");
+    }
+    if (sop && (is_bit_set_operator(sop))) { *out = TY_INT_ARRAY; return 1; }
+  }
+  /* When an init argument is provided, the return type matches the init type.
+     inject(:op) is the no-init operator form -- the sole symbol arg is the
+     operator, NOT an init value, so skip the "return argv[0] type" path. */
+  if (argc > 0 && argv) {
+    /* A runtime (non-literal) symbol operator -- `reduce(sym)` or
+       `reduce(init, sym)` where sym is a `|sym|` block param -- folds
+       through sp_poly_binop_sym, yielding a boxed poly regardless of the
+       init type. (The block-fold form uses the block, not a sym operator.) */
+    if (nt_ref(nt, id, "block") < 0 && !sym_static_value(c, argv[argc - 1])) {
+      TyKind opt = infer_type(c, argv[argc - 1]);
+      /* any other operand too: a String names the operator, and the rest
+         raise TypeError (sp_poly_inject_op) */
+      if (opt != TY_UNKNOWN) { *out = TY_POLY; return 1; }
+    }
+    /* `reduce(id, :>>)` composes callables: the fold runs through the
+       generic symbol-operator helper, whose result is boxed, so typing it
+       from the Proc seed left `.call` reading a boxed value as an
+       sp_Proc * (#3884). */
+    if (argc == 2 && nt_ref(nt, id, "block") < 0) {
+      const char *sv2 = sym_static_value(c, argv[1]);
+      if (sv2 && (is_shift_op(sv2)) &&
+          infer_type(c, argv[0]) == TY_PROC) { *out = TY_POLY; return 1; }
+    }
+    NodeKind a0k = nt_kind(nt, argv[0]);
+    /* a symbol literal, or a local statically holding one (s = :+) -- and
+       only when there is no block: `inject(:s, &:+)` gives the operator in
+       the block, which makes the lone Symbol the SEED, not the operator
+       (Enumerable#inject's own rule). Read as an operator it typed the
+       call from the elements while the emitter folded from the seed. */
+    int is_sym_op = argc == 1 && nt_ref(nt, id, "block") < 0 &&
+                    sym_static_value(c, argv[0]) != NULL;
+    /* `reduce(nil) { |acc, t| acc.nil? ? t : acc + t }` -- the idiom for a
+       fold with no natural identity. The seed says nothing about the
+       accumulator except that it starts empty, so the fold is boxed: a
+       TY_NIL accumulator has no C representation at all (#3356). */
+    if (!is_sym_op && nt_ref(nt, id, "block") >= 0 &&
+        nt_kind(nt, argv[0]) == NK_NilNode)
+      { *out = TY_POLY; return 1; }
+    if (!is_sym_op) {
+      TyKind it = infer_type(c, argv[0]);
+      /* An empty array-literal seed accumulates an array: poly, since the
+         block decides the element mix (`reduce([]) { |a, x| a << x }`). */
+      if (it == TY_UNKNOWN && a0k == NK_ArrayNode) {
+        int sen = 0; nt_arr(nt, argv[0], "elements", &sen);
+        if (sen == 0) it = TY_POLY_ARRAY;
+      }
+      /* An empty `{}` seed accumulates a general boxed-key/value hash, like
+         each_with_object({}); the block decides the key/value mix (#2958). */
+      else if (it == TY_UNKNOWN && a0k == NK_HashNode) {
+        int sen = 0; nt_arr(nt, argv[0], "elements", &sen);
+        if (sen == 0) it = TY_POLY_POLY_HASH;
+      }
+      if (it != TY_UNKNOWN) {
+        /* The accumulator is reassigned to the block body each iteration,
+           so an int seed folded over floats accumulates float. An array
+           seed never numeric-promotes (`a << x` pre-types as an int shift
+           before the accumulator's type shadows the block param). */
+        int rblk = nt_ref(nt, id, "block");
+        int rbody = rblk >= 0 ? nt_ref(nt, rblk, "body") : -1;
+        int rbn = 0; const int *rbb = rbody >= 0 ? nt_arr(nt, rbody, "body", &rbn) : NULL;
+        if (rbn > 0 && !ty_is_array(it) && !ty_is_hash(it)) {
+          TyKind bt = infer_type(c, rbb[rbn - 1]);
+          if (ty_is_numeric(bt)) it = ty_promote_numeric(it, bt);
+          /* A boxed block result (a poly element mixing into the fold, as
+             on a user Enumerable's materialized element array) cannot be
+             narrowed back to the seed's type without truncating: an int
+             seed folded over floats came out an Integer (#2982). */
+          else if (it != TY_POLY && ty_array_elem(rt) == TY_POLY &&
+                   (bt == TY_POLY || ty_is_object(bt) || bt == TY_RATIONAL ||
+                    bt == TY_COMPLEX || bt == TY_BIGINT)) it = TY_POLY;
+          /* a block yielding a boxed value (a Rational/Complex, or poly
+             because a fold OPERAND is poly -- a parameter called with
+             Integer and Rational call sites) cannot fold back into a
+             scalar numeric seed slot, even over an int/float array
+             (#3220, #3308) */
+          else if (it != TY_POLY && ty_is_numeric(it) &&
+                   (bt == TY_RATIONAL || bt == TY_COMPLEX ||
+                    bt == TY_POLY || bt == TY_BIGINT)) it = TY_POLY;
+        }
+        /* An ARRAY seed is reassigned to the block's value too. A boxed
+           result -- `a + r` over a poly element -- cannot go back into the
+           seed's typed array slot, and the C compiler rejected the whole
+           program; an empty `[]` seed escaped only because it already types
+           poly (#3854). */
+        if (rbn > 0 && ty_is_array(it) && it != TY_POLY_ARRAY) {
+          TyKind abt = infer_type(c, rbb[rbn - 1]);
+          if (abt == TY_POLY) it = TY_POLY;
+          else if (ty_is_array(abt) && abt != it) it = TY_POLY_ARRAY;
+        }
+        /* reduce(init, :op) symbol-operator form has no block, so the block
+           promotion above cannot fire: an int seed folded over floats with
+           `:+` still came out Integer. Promote a numeric seed by the element
+           type when the operator is arithmetic (#3181). */
+        else if (rbn == 0 && ty_is_numeric(it)) {
+          const char *sop = fold_seed_op_sym(c, id, argc, argv);
+          TyKind et = ty_array_elem(rt);
+          int arith = sop && is_arith_op(sop);
+          /* `&`, `|` and `^` keep a Bignum element's width: an int seed
+             folded over one does not fit an sp_int either */
+          int boxes = arith || (sop && is_bit_op(sop));
+          /* A seed of another class is not an accumulator this element type
+             can hold at all: `[1, 2, 3].reduce(0.5, :+)` accumulates Float
+             and a Bignum seed does not fit an sp_int. Those fold boxed, and
+             the promotion below then only ever widens Integer to Float. An
+             ERASED element type says nothing about the seed's class, so it
+             is left to the two rules below, which have their own answer. */
+          if (sop && et != TY_POLY && !fold_seed_typed(it, et)) it = TY_POLY;
+          else if (arith && ty_is_numeric(et))
+            it = ty_promote_numeric(it, et);
+          /* fold over a literal array of boxed Rationals/Complex with an
+             arithmetic operator: the accumulator promotes to the boxed
+             element and the result is a boxed poly (#3220). A plain poly
+             array's element type is unknown, so gate on the literal. */
+          else if (boxes && rt == TY_POLY_ARRAY && recv >= 0 &&
+                   nt_kind(nt, recv) == NK_ArrayNode) {
+            int ren = 0; const int *rev = nt_arr(nt, recv, "elements", &ren);
+            int boxed_num = 0;
+            for (int e = 0; rev && e < ren; e++) {
+              TyKind eet = infer_type(c, rev[e]);
+              /* (a boxed element is any number at all: a Rational read
+                 out of a mixed Array folded into 0 as an Integer) */
+              if (eet == TY_RATIONAL || eet == TY_COMPLEX || eet == TY_POLY || eet == TY_BIGINT) { boxed_num = 1; break; }
+            }
+            if (boxed_num) it = TY_POLY;
+          }
+          /* fold over a poly array whose element type is erased (e.g. from
+             a zip.map): the elements may be Float/Rational/etc., so an int
+             seed cannot unbox the boxed accumulator without reinterpreting
+             the bits. Keep the result boxed (#3238). */
+          else if (boxes && et == TY_POLY) it = TY_POLY;
+        }
+        /* The same rule for a seed that is not a number at all -- a String,
+           nil, true/false, a Rational. `[1, 2].reduce("x", :*)` accumulates
+           a String ("xx"), and `[1, 2].reduce(nil, :+)` raises from nil's
+           own missing `+`; both were read out of an sp_int slot, so nil
+           came back as the sum and a String stopped the C build. */
+        else if (rbn == 0 && fold_seed_op_sym(c, id, argc, argv) &&
+                 ty_array_elem(rt) != TY_POLY &&
+                 !fold_seed_typed(it, ty_array_elem(rt)))
+          it = TY_POLY;
+        /* A hash/array/object seed whose block body reassigns the
+           accumulator to a boxed poly value (e.g. a method that returns
+           poly because it is also used in a poly context elsewhere) widens
+           the fold to poly: the concrete seed slot cannot hold the boxed
+           block result each iteration (#3240). A body that simply returns
+           the accumulator param (`h[x]=...; h`) is the seed's own type --
+           it only infers poly because the block param is poly -- so it must
+           not trip the widening. */
+        if (rbn > 0 && it != TY_POLY &&
+            (ty_is_hash(it) || ty_is_array(it) || ty_is_object(it))) {
+          int rblk2 = nt_ref(nt, id, "block");
+          const char *accp = rblk2 >= 0 ? block_param_name(c, rblk2, 0) : NULL;
+          if (!reduce_tail_from_acc(c, rbb[rbn - 1], accp) &&
+              infer_type(c, rbb[rbn - 1]) == TY_POLY)
+            it = TY_POLY;
+        }
+        { *out = it; return 1; }
+      }
+    }
+  }
+  /* empty array literal `[]` with sym op: codegen treats as int_array → returns int */
+  if (recv >= 0 && nt_kind(nt, recv) == NK_ArrayNode) {
+    int en = 0; nt_arr(nt, recv, "elements", &en);
+    if (en == 0) { *out = TY_INT; return 1; }
+  }
+  /* Block body last expression determines the return type when available. */
+  int blk = nt_ref(nt, id, "block");
+  if (blk >= 0) {
+    int body = nt_ref(nt, blk, "body");
+    int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    if (bn > 0) {
+      TyKind bt = infer_type(c, bb[bn - 1]);
+      /* With no init the accumulator starts as the first element, so a
+         block value shaped differently than that element rides boxed: a
+         fold of Hashes through #merge cannot store a hash pointer in the
+         boxed slot the first element occupies. */
+      if (bt != TY_UNKNOWN && bt != TY_POLY && ty_array_elem(rt) == TY_POLY) { *out = TY_POLY; return 1; }
+      if (bt != TY_UNKNOWN) { *out = bt; return 1; }
+      /* Settled and still unknown: the body is an unresolved call, whose
+         value is the boxed NoMethodError raise (`inject(:nope)` desugars
+         to one). The element-typed accumulator cannot take that, and the
+         program did not build (#3831). While inference is still
+         optimistic this only means "not yet typed". */
+      if (!g_infer_optimistic) { *out = TY_POLY; return 1; }
+    }
+  }
+  { *out = ty_array_elem(rt); return 1; }
+}
+
 int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -867,206 +1077,7 @@ int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       }
       { *out = fold_sum_type(TY_INT, ty_array_elem(rt), g_promote_mode); return 1; }
     }
-    if (is_reduce_alias(name)) {
-      /* inject(&:&|:||:-) over a literal array of int arrays: set operation
-         folding the inner arrays -> an int array. */
-      if (rt == TY_POLY_ARRAY && comp_is_nested_int_array_literal(c, recv)) {
-        int blk = nt_call_block_arg(nt, id);
-        const char *sop = NULL;
-        if (blk >= 0) {
-          int ex = nt_ref(nt, blk, "expression");
-          if (ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode) sop = nt_str(nt, ex, "value");
-        }
-        if (sop && (is_bit_set_operator(sop))) { *out = TY_INT_ARRAY; return 1; }
-      }
-      /* When an init argument is provided, the return type matches the init type.
-         inject(:op) is the no-init operator form -- the sole symbol arg is the
-         operator, NOT an init value, so skip the "return argv[0] type" path. */
-      if (argc > 0 && argv) {
-        /* A runtime (non-literal) symbol operator -- `reduce(sym)` or
-           `reduce(init, sym)` where sym is a `|sym|` block param -- folds
-           through sp_poly_binop_sym, yielding a boxed poly regardless of the
-           init type. (The block-fold form uses the block, not a sym operator.) */
-        if (nt_ref(nt, id, "block") < 0 && !sym_static_value(c, argv[argc - 1])) {
-          TyKind opt = infer_type(c, argv[argc - 1]);
-          /* any other operand too: a String names the operator, and the rest
-             raise TypeError (sp_poly_inject_op) */
-          if (opt != TY_UNKNOWN) { *out = TY_POLY; return 1; }
-        }
-        /* `reduce(id, :>>)` composes callables: the fold runs through the
-           generic symbol-operator helper, whose result is boxed, so typing it
-           from the Proc seed left `.call` reading a boxed value as an
-           sp_Proc * (#3884). */
-        if (argc == 2 && nt_ref(nt, id, "block") < 0) {
-          const char *sv2 = sym_static_value(c, argv[1]);
-          if (sv2 && (is_shift_op(sv2)) &&
-              infer_type(c, argv[0]) == TY_PROC) { *out = TY_POLY; return 1; }
-        }
-        NodeKind a0k = nt_kind(nt, argv[0]);
-        /* a symbol literal, or a local statically holding one (s = :+) -- and
-           only when there is no block: `inject(:s, &:+)` gives the operator in
-           the block, which makes the lone Symbol the SEED, not the operator
-           (Enumerable#inject's own rule). Read as an operator it typed the
-           call from the elements while the emitter folded from the seed. */
-        int is_sym_op = argc == 1 && nt_ref(nt, id, "block") < 0 &&
-                        sym_static_value(c, argv[0]) != NULL;
-        /* `reduce(nil) { |acc, t| acc.nil? ? t : acc + t }` -- the idiom for a
-           fold with no natural identity. The seed says nothing about the
-           accumulator except that it starts empty, so the fold is boxed: a
-           TY_NIL accumulator has no C representation at all (#3356). */
-        if (!is_sym_op && nt_ref(nt, id, "block") >= 0 &&
-            nt_kind(nt, argv[0]) == NK_NilNode)
-          { *out = TY_POLY; return 1; }
-        if (!is_sym_op) {
-          TyKind it = infer_type(c, argv[0]);
-          /* An empty array-literal seed accumulates an array: poly, since the
-             block decides the element mix (`reduce([]) { |a, x| a << x }`). */
-          if (it == TY_UNKNOWN && a0k == NK_ArrayNode) {
-            int sen = 0; nt_arr(nt, argv[0], "elements", &sen);
-            if (sen == 0) it = TY_POLY_ARRAY;
-          }
-          /* An empty `{}` seed accumulates a general boxed-key/value hash, like
-             each_with_object({}); the block decides the key/value mix (#2958). */
-          else if (it == TY_UNKNOWN && a0k == NK_HashNode) {
-            int sen = 0; nt_arr(nt, argv[0], "elements", &sen);
-            if (sen == 0) it = TY_POLY_POLY_HASH;
-          }
-          if (it != TY_UNKNOWN) {
-            /* The accumulator is reassigned to the block body each iteration,
-               so an int seed folded over floats accumulates float. An array
-               seed never numeric-promotes (`a << x` pre-types as an int shift
-               before the accumulator's type shadows the block param). */
-            int rblk = nt_ref(nt, id, "block");
-            int rbody = rblk >= 0 ? nt_ref(nt, rblk, "body") : -1;
-            int rbn = 0; const int *rbb = rbody >= 0 ? nt_arr(nt, rbody, "body", &rbn) : NULL;
-            if (rbn > 0 && !ty_is_array(it) && !ty_is_hash(it)) {
-              TyKind bt = infer_type(c, rbb[rbn - 1]);
-              if (ty_is_numeric(bt)) it = ty_promote_numeric(it, bt);
-              /* A boxed block result (a poly element mixing into the fold, as
-                 on a user Enumerable's materialized element array) cannot be
-                 narrowed back to the seed's type without truncating: an int
-                 seed folded over floats came out an Integer (#2982). */
-              else if (it != TY_POLY && ty_array_elem(rt) == TY_POLY &&
-                       (bt == TY_POLY || ty_is_object(bt) || bt == TY_RATIONAL ||
-                        bt == TY_COMPLEX || bt == TY_BIGINT)) it = TY_POLY;
-              /* a block yielding a boxed value (a Rational/Complex, or poly
-                 because a fold OPERAND is poly -- a parameter called with
-                 Integer and Rational call sites) cannot fold back into a
-                 scalar numeric seed slot, even over an int/float array
-                 (#3220, #3308) */
-              else if (it != TY_POLY && ty_is_numeric(it) &&
-                       (bt == TY_RATIONAL || bt == TY_COMPLEX ||
-                        bt == TY_POLY || bt == TY_BIGINT)) it = TY_POLY;
-            }
-            /* An ARRAY seed is reassigned to the block's value too. A boxed
-               result -- `a + r` over a poly element -- cannot go back into the
-               seed's typed array slot, and the C compiler rejected the whole
-               program; an empty `[]` seed escaped only because it already types
-               poly (#3854). */
-            if (rbn > 0 && ty_is_array(it) && it != TY_POLY_ARRAY) {
-              TyKind abt = infer_type(c, rbb[rbn - 1]);
-              if (abt == TY_POLY) it = TY_POLY;
-              else if (ty_is_array(abt) && abt != it) it = TY_POLY_ARRAY;
-            }
-            /* reduce(init, :op) symbol-operator form has no block, so the block
-               promotion above cannot fire: an int seed folded over floats with
-               `:+` still came out Integer. Promote a numeric seed by the element
-               type when the operator is arithmetic (#3181). */
-            else if (rbn == 0 && ty_is_numeric(it)) {
-              const char *sop = fold_seed_op_sym(c, id, argc, argv);
-              TyKind et = ty_array_elem(rt);
-              int arith = sop && is_arith_op(sop);
-              /* `&`, `|` and `^` keep a Bignum element's width: an int seed
-                 folded over one does not fit an sp_int either */
-              int boxes = arith || (sop && is_bit_op(sop));
-              /* A seed of another class is not an accumulator this element type
-                 can hold at all: `[1, 2, 3].reduce(0.5, :+)` accumulates Float
-                 and a Bignum seed does not fit an sp_int. Those fold boxed, and
-                 the promotion below then only ever widens Integer to Float. An
-                 ERASED element type says nothing about the seed's class, so it
-                 is left to the two rules below, which have their own answer. */
-              if (sop && et != TY_POLY && !fold_seed_typed(it, et)) it = TY_POLY;
-              else if (arith && ty_is_numeric(et))
-                it = ty_promote_numeric(it, et);
-              /* fold over a literal array of boxed Rationals/Complex with an
-                 arithmetic operator: the accumulator promotes to the boxed
-                 element and the result is a boxed poly (#3220). A plain poly
-                 array's element type is unknown, so gate on the literal. */
-              else if (boxes && rt == TY_POLY_ARRAY && recv >= 0 &&
-                       nt_kind(nt, recv) == NK_ArrayNode) {
-                int ren = 0; const int *rev = nt_arr(nt, recv, "elements", &ren);
-                int boxed_num = 0;
-                for (int e = 0; rev && e < ren; e++) {
-                  TyKind eet = infer_type(c, rev[e]);
-                  /* (a boxed element is any number at all: a Rational read
-                     out of a mixed Array folded into 0 as an Integer) */
-                  if (eet == TY_RATIONAL || eet == TY_COMPLEX || eet == TY_POLY || eet == TY_BIGINT) { boxed_num = 1; break; }
-                }
-                if (boxed_num) it = TY_POLY;
-              }
-              /* fold over a poly array whose element type is erased (e.g. from
-                 a zip.map): the elements may be Float/Rational/etc., so an int
-                 seed cannot unbox the boxed accumulator without reinterpreting
-                 the bits. Keep the result boxed (#3238). */
-              else if (boxes && et == TY_POLY) it = TY_POLY;
-            }
-            /* The same rule for a seed that is not a number at all -- a String,
-               nil, true/false, a Rational. `[1, 2].reduce("x", :*)` accumulates
-               a String ("xx"), and `[1, 2].reduce(nil, :+)` raises from nil's
-               own missing `+`; both were read out of an sp_int slot, so nil
-               came back as the sum and a String stopped the C build. */
-            else if (rbn == 0 && fold_seed_op_sym(c, id, argc, argv) &&
-                     ty_array_elem(rt) != TY_POLY &&
-                     !fold_seed_typed(it, ty_array_elem(rt)))
-              it = TY_POLY;
-            /* A hash/array/object seed whose block body reassigns the
-               accumulator to a boxed poly value (e.g. a method that returns
-               poly because it is also used in a poly context elsewhere) widens
-               the fold to poly: the concrete seed slot cannot hold the boxed
-               block result each iteration (#3240). A body that simply returns
-               the accumulator param (`h[x]=...; h`) is the seed's own type --
-               it only infers poly because the block param is poly -- so it must
-               not trip the widening. */
-            if (rbn > 0 && it != TY_POLY &&
-                (ty_is_hash(it) || ty_is_array(it) || ty_is_object(it))) {
-              int rblk2 = nt_ref(nt, id, "block");
-              const char *accp = rblk2 >= 0 ? block_param_name(c, rblk2, 0) : NULL;
-              if (!reduce_tail_from_acc(c, rbb[rbn - 1], accp) &&
-                  infer_type(c, rbb[rbn - 1]) == TY_POLY)
-                it = TY_POLY;
-            }
-            { *out = it; return 1; }
-          }
-        }
-      }
-      /* empty array literal `[]` with sym op: codegen treats as int_array → returns int */
-      if (recv >= 0 && nt_kind(nt, recv) == NK_ArrayNode) {
-        int en = 0; nt_arr(nt, recv, "elements", &en);
-        if (en == 0) { *out = TY_INT; return 1; }
-      }
-      /* Block body last expression determines the return type when available. */
-      int blk = nt_ref(nt, id, "block");
-      if (blk >= 0) {
-        int body = nt_ref(nt, blk, "body");
-        int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-        if (bn > 0) {
-          TyKind bt = infer_type(c, bb[bn - 1]);
-          /* With no init the accumulator starts as the first element, so a
-             block value shaped differently than that element rides boxed: a
-             fold of Hashes through #merge cannot store a hash pointer in the
-             boxed slot the first element occupies. */
-          if (bt != TY_UNKNOWN && bt != TY_POLY && ty_array_elem(rt) == TY_POLY) { *out = TY_POLY; return 1; }
-          if (bt != TY_UNKNOWN) { *out = bt; return 1; }
-          /* Settled and still unknown: the body is an unresolved call, whose
-             value is the boxed NoMethodError raise (`inject(:nope)` desugars
-             to one). The element-typed accumulator cannot take that, and the
-             program did not build (#3831). While inference is still
-             optimistic this only means "not yet typed". */
-          if (!g_infer_optimistic) { *out = TY_POLY; return 1; }
-        }
-      }
-      { *out = ty_array_elem(rt); return 1; }
-    }
+    if (is_reduce_alias(name)) return infer_array_reduce(c, id, rt, out);
     /* sample(n) takes n elements -> a subarray, an Integer n being the row's.
        sample(random: rng) is the single-element form, not a count -- a sole
        keyword-hash arg selects one element (falls to the element arm) (#2970).

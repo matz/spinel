@@ -413,6 +413,15 @@ void ct_implied_classes(Compiler *c, int id, int (*versioned)(Compiler *, const 
    reaches, and the run-time cells they read (#9898) */
 void ver_entries_build(Compiler *c);
 void ver_prepend_cell_name(int cell, char out[32]);
+/* Once the last reachability has run: which version cells no emitted code
+   reads, so the C writes none of them (Compiler.ver_cell_dropped) */
+void ver_cells_settle(Compiler *c);
+/* Is global g such a cell? */
+int cplan_cell_dropped(const Compiler *c, const LocalVar *g);
+/* Is node id a write of such a cell the plan made (ver_cell_node), which the
+   C leaves out? A write of the program's own to a global of a cell's name is
+   written. */
+int cplan_cell_write_dropped(Compiler *c, int id);
 /* `cell = v` put in statement list `list` at its statement `at` (after it
    when after): the write, for the caller to record (elab_record_write) */
 int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int v);

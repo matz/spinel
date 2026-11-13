@@ -23917,7 +23917,7 @@ char *codegen_program(const NodeTable *nt) {
      ahead of the proc functions so a proc body may reference them by name. */
   for (int i = 0; i < c->ngvars; i++) {
     LocalVar *lv = &c->gvars[i];
-    if (!is_scalar_ret(lv->type)) continue;
+    if (!is_scalar_ret(lv->type) || cplan_cell_dropped(c, lv)) continue;   /* (a version cell nothing reads) */
     buf_puts(&b, "static ");
     int goint = gvar_is_oint(c, lv);
     if (goint) buf_puts(&b, oint_ctype(lv->type)); else emit_ctype(c, lv->type, &b);
@@ -23991,7 +23991,7 @@ char *codegen_program(const NodeTable *nt) {
     Buf mk; memset(&mk, 0, sizeof mk);
     for (int i = 0; i < c->ngvars; i++) {
       LocalVar *lv = &c->gvars[i];
-      if (!is_scalar_ret(lv->type)) continue;
+      if (!is_scalar_ret(lv->type) || cplan_cell_dropped(c, lv)) continue;
       char name[512]; snprintf(name, sizeof name, "gv_%s", lv->name);
       emit_global_mark_line(c, lv->type, name, &mk);
     }

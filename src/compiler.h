@@ -333,6 +333,8 @@ typedef struct {
   int gvar_seeded; /* (globals) gvar_seeded_before_read's answer, asked once:
                       0 not asked yet, 1 a read can see its first nil, 2 a
                       non-nil value is written before anything can read it */
+  unsigned char ver_cell; /* (globals) a version cell the call plan made
+                             (ver_cell_node), not a global of the program's */
   int or_written; /* some write to this local is a `||=`, which can run before
                      any definite assignment (`v ||= 5; v += 2`, a definite
                      write in one branch only, a block local reset each
@@ -1919,6 +1921,11 @@ typedef struct {
      (desugar_call_op_write's setter name) */
   struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face; } *ver_entries;
   int nver_entries;
+  /* per global (c->gvars' index, the first nver_cell_dropped of them): 1 for
+     a version cell no emitted code reads, whose declaration and writes the C
+     leaves out (call_plan.c, ver_cells_settle) */
+  unsigned char *ver_cell_dropped;
+  int nver_cell_dropped;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),

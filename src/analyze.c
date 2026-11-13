@@ -17412,10 +17412,13 @@ static int narrow_walk_block_params(Compiler *c) {
                np == 2 && !block_param_is_multi(c, blk, 0) && !block_param_is_multi(c, blk, 1);
     /* a zip with one operand binds the receiver's element first and the
        operand's second (nil past a shorter operand's end), each pinned
-       where its side is an object array */
+       where its side is an object array. Only Array#zip, on a typed Array
+       the program leaves as it is: a zip of the program's own may yield
+       anything into either parameter. */
     TyKind zt = cn && is_zip_name(cn) && cac == 1 ? infer_type(c, nt_arr(nt, ca, "arguments", &cac)[0]) : TY_UNKNOWN;
     int zip = cn && is_zip_name(cn) && cac == 1 && blk != id && !extra && np == 2 &&
               !block_param_is_multi(c, blk, 0) && !block_param_is_multi(c, blk, 1) &&
+              (ty_is_array(rt) || ty_is_obj_array(rt)) && !share_builtin_overridden(c, "Array", cn) &&
               (ty_is_obj_array(rt) || ty_is_obj_array(zt));
     for (int pi = 0; pi < np; pi++) {
       const char *nm = block_param_name(c, blk, pi);

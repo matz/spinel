@@ -5,7 +5,8 @@
 # whether it runs code and whether code runs after it (across), or `none`
 # for a list with nothing to bind. The shapes are the minimal programs of
 # the operand-order groups, and reads beside a part whose implicit to_s,
-# to_proc or **-splat may run a method of the program's.
+# to_proc, to_int (an Integer's operator over an object) or **-splat may
+# run a method of the program's.
 require "tmpdir"
 
 PROGRAMS = [
@@ -153,6 +154,21 @@ PROGRAMS = [
       [b]
     end
     p m5
+  RUBY
+  ["c1_shift_to_int.rb", <<~'RUBY'],
+    class O
+      def initialize(k) = @k = k
+      def to_int; @k.bump; 2; end
+    end
+    class K
+      def initialize; @x = 1; end
+      def bump; @x = 9; end
+      def run(o) = [@x, 1 << o]
+      def plain(n) = [@x, 1 << n]
+    end
+    k = K.new
+    p k.run(O.new(k))
+    p k.plain(2)
   RUBY
 ]
 

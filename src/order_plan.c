@@ -51,7 +51,7 @@ static int pure_walk_node(Compiler *c, int id, const OrderWalk *w) {
       break;
     case NK_CallNode: {
       int alloc = 0;
-      if (!order_typed_index(c, id) && !call_is_scalar_op(c, id) &&
+      if (!order_typed_index(c, id) && !scalar_op_runs_no_code(c, id) &&
           !(call_is_field_read(c, id, w->alloc ? &alloc : NULL) && !alloc))
         return 0;
       break;
@@ -202,7 +202,7 @@ static int call_is_poly_field_read(Compiler *c, int id) {
    poly Array of Arrays). */
 int order_call_runs_no_code(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (call_is_scalar_op(c, id) || order_typed_index(c, id)) return 1;
+  if (scalar_op_runs_no_code(c, id) || order_typed_index(c, id)) return 1;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   int a = nt_ref(nt, id, "arguments"); int ac = 0;

@@ -139,3 +139,15 @@ b5.rb:30 call m4: none (pure)
 b5.rb:34 call foo: 0 a INLINE across | 1 b HOLD(by 2) across | 2 Parentheses AHEAD code | guard=recv steps=0
 b5.rb:35 array: none (pure)
 b5.rb:37 call p: none (tail)
+== c1_shift_to_int.rb
+c1_shift_to_int.rb:3 call bump: none (pure)
+c1_shift_to_int.rb:8 array: 0 @x HOLD(by 1) across | 1 (..).<< AHEAD code | guard=call steps=0
+c1_shift_to_int.rb:8 call <<: none (pure)
+c1_shift_to_int.rb:9 array: none (pure)
+c1_shift_to_int.rb:9 call <<: none (pure)
+c1_shift_to_int.rb:11 call new: none (tail)
+c1_shift_to_int.rb:12 call p: none (tail)
+c1_shift_to_int.rb:12 call run: 0 k INLINE across | 1 O.new AHEAD code | guard=call steps=0
+c1_shift_to_int.rb:12 call new: none (tail)
+c1_shift_to_int.rb:13 call p: none (tail)
+c1_shift_to_int.rb:13 call plain: none (pure)

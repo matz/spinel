@@ -5,6 +5,7 @@
 #include "holder.h"
 #include "value_pos.h"
 #include "builtin_ops.h"
+#include "implicit_calls.h"
 #include "codegen_call_arms.h"
 #include <ctype.h>
 
@@ -803,6 +804,14 @@ int scalar_op_over_numbers(Compiler *c, int id) {
   for (int i = 0; i < ac; i++)
     if (comp_ntype(c, av[i]) != TY_INT && comp_ntype(c, av[i]) != TY_FLOAT) return 0;
   return 1;
+}
+/* ...whose operand reaches no method of the program's: `1 << obj` runs
+   obj.to_int and `1 | obj` obj.coerce, the calls the implicit-call table
+   names, when the program defines one and the operand may be its object
+   (ic_node_may_call_program). What the operand-order record and the pure
+   walk take. */
+int scalar_op_runs_no_code(Compiler *c, int id) {
+  return call_is_scalar_op(c, id) && !ic_node_may_call_program(c, id);
 }
 /* Can a builtin operator over scalars (call_is_scalar_op) raise? A
    quotient of two Integers and any modulo (a Float one too) raise

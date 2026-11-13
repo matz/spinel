@@ -25976,11 +25976,13 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       buf_printf(g_pre, "sp_%sArray *_t%d = ", k, th); emit_expr(c, recv, g_pre);
       buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", th);
     }
-    /* a value given a new handle on its way in (typed_elem_hold_may_make)
-       comes after the receiver and the index, read into rooted temps first
-       where either can allocate */
-    int ti = typed_elem_hold_may_make(c, argv[1], rt) &&
-             (operand_may_allocate(c, recv) || operand_may_allocate(c, argv[0])) ? ++g_tmp : 0;
+    /* the receiver is read before the index (CRuby's order), so where both
+       can allocate the receiver is rooted in a temp while the index runs;
+       a value given a new handle on its way in (typed_elem_hold_may_make)
+       comes after both, so there one that can allocate is enough */
+    int r_alloc = operand_may_allocate(c, recv), i_alloc = operand_may_allocate(c, argv[0]);
+    int ti = (typed_elem_hold_may_make(c, argv[1], rt) && (r_alloc || i_alloc)) ||
+             (r_alloc && i_alloc) ? ++g_tmp : 0;
     if (ti) {
       if (!hold) {
         th = ++g_tmp;

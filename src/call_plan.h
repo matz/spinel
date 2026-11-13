@@ -123,6 +123,20 @@ int cplan_reopen_target(Compiler *c, CallPlan p);
    twin of cplan_root_reopen, for the desugars that run before types exist
    (it holds for a receiver whose builtin class owns the name too). */
 int cplan_object_method_named(Compiler *c, const char *name);
+/* Does call `call`, which takes a block, answer no value of its block? A
+   builtin iterator of its name does (is_block_loop_method: each, times,
+   loop, ...), and a method of the program's of the name the plan binds it
+   to where each of its yields is thrown away (`def each = @n.times { |i|
+   yield i }`), not one that may read a yield's value (`def each =
+   p(yield)`) or takes its block. Where the receiver is not typed (a
+   desugar before types, a boxed receiver): where no method of the
+   program's has the name. A call a desugar wrote for the builtin's own
+   (cplan_builtin_call) runs it. */
+int cplan_block_value_ignored(Compiler *c, int call);
+/* ...where it runs a builtin iterator, not a method of the program's: what
+   a yield's value asks (an_yield_dropped), so that the question does not
+   recurse into another method's yields */
+int cplan_builtin_block_value_ignored(Compiler *c, int call);
 int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
 /* ...and the methods a super in s that no call stands for may run, into
    to[VER_MAX_ARMS]: that one, or each version a layer of a mixin's copies

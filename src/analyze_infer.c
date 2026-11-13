@@ -1431,10 +1431,12 @@ int *an_parent_map(const NodeTable *nt) {
 
 /* Whether the value of `node` is thrown away: a statement that is not the
    value of its sequence, or the last one of a loop body or of the block of
-   an iterator that does not answer the block's value, climbing from the
-   node through the places a value is passed on (vp_climb, over
-   AN_DROP_CLIMB). */
-int an_value_dropped(const NodeTable *nt, const int *parent, int node) {
+   a call that runs an iterator answering no value of its block
+   (cplan_block_value_ignored), climbing from the node through the places a
+   value is passed on (vp_climb, over AN_DROP_CLIMB). parent is c->nt's, or
+   a lowering's map of it. */
+static int an_dropped_at(Compiler *c, const int *parent, int node, int program_iterators) {
+  const NodeTable *nt = c->nt;
   VpUp up;
   VpUpKind ended = vp_climb(nt, parent, node, AN_DROP_CLIMB, &up);
   /* the left operand of `||` is tested, whatever the operator answers */
@@ -1446,11 +1448,15 @@ int an_value_dropped(const NodeTable *nt, const int *parent, int node) {
   /* a begin's body beside an else, and an ensure clause, are run for their effect */
   if (vp_up_effect_clause(nt, &up)) return 1;
   int call = vp_up_block_call(nt, parent, &up);
-  const char *bn = call >= 0 ? nt_str(nt, call, "name") : NULL;
-  return bn && is_block_loop_method(bn);
+  return call >= 0 && (program_iterators ? cplan_block_value_ignored(c, call) : cplan_builtin_block_value_ignored(c, call));
 }
+int an_value_dropped(Compiler *c, const int *parent, int node) { return an_dropped_at(c, parent, node, 1); }
+/* Is yield node y's value thrown away (an_value_dropped), where the block
+   it ends in is a builtin iterator's: a program iterator's would ask its
+   method's yields again (cplan_block_value_ignored) */
+int an_yield_dropped(Compiler *c, int y) { return an_dropped_at(c, comp_parent_map(c), y, 0); }
 int an_node_dropped(Compiler *c, int n) {
-  return n >= 0 && n < c->nt->count && an_value_dropped(c->nt, comp_parent_map(c), n);
+  return n >= 0 && n < c->nt->count && an_value_dropped(c, comp_parent_map(c), n);
 }
 /* The outermost node whose value node n's value is, climbing through the
    arms of conditionals and the right of `&&` or `||` (vp_climb over
@@ -1902,7 +1908,7 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
     if ((sp_streq(cn, "each") || sp_streq(cn, "each_with_index") || sp_streq(cn, "each_index") ||
          sp_streq(cn, "reverse_each")) && nt_ref(nt, call, "block") < 0) { saw = 0; break; }
     /* the answer is the table: it must be dropped */
-    if (!an_value_dropped(nt, parent, call)) saw = 0;
+    if (!an_value_dropped(c, parent, call)) saw = 0;
   }
   free(parent);
   return saw;

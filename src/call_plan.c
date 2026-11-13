@@ -328,6 +328,59 @@ int cplan_object_method_named(Compiler *c, const char *name) {
   }
   return 0;
 }
+/* Does a method of the program's have the name: one of a class's, a
+   class method, a top-level one, or an alias (an_user_defines_method) */
+static int cplan_program_names(Compiler *c, const char *name) {
+  if (an_user_defines_method(c, name)) return 1;
+  for (int si = 1; si < c->nscopes; si++)
+    if (c->scopes[si].name && !c->scopes[si].is_proc_form && sp_streq(c->scopes[si].name, name)) return 1;
+  return 0;
+}
+/* Does node n of method s's body read a value of s's block: a yield whose
+   value is not thrown away (an_yield_dropped), or a super handed the block
+   (super_forwards_caller_block)? A nested def, class or module is not s's
+   body; a block in it is (its nodes are its method's). */
+static int cplan_body_reads_block(Compiler *c, int s, int n) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return 0;
+  if ((k == NK_YieldNode && c->nscope[n] == s && !an_yield_dropped(c, n)) || super_forwards_caller_block(c, n)) return 1;
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) {
+    int ch = nt_ref_at(nt, n, i);
+    if (ch >= 0 && cplan_body_reads_block(c, s, ch)) return 1;
+  }
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++)
+      if (ids[j] >= 0 && cplan_body_reads_block(c, s, ids[j])) return 1;
+  }
+  return 0;
+}
+/* Does program method s throw away every value its block answers: it takes
+   no block parameter (`&blk`, `&`) and its body reads none
+   (cplan_body_reads_block)? */
+static int cplan_method_drops_block_values(Compiler *c, int s) {
+  const Scope *sc = &c->scopes[s];
+  return !sc->blk_param && (sc->body < 0 || !cplan_body_reads_block(c, s, sc->body));
+}
+/* cplan_block_value_ignored's answer; with program 0, a call the plan
+   binds to a method of the program's takes the block's value */
+static int cplan_block_value_ignored_by(Compiler *c, int call, int program) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+  if (!name || !is_block_loop_method(name)) return 0;
+  if (cplan_builtin_call(c, call)) return 1;
+  int recv = nt_ref(nt, call, "receiver");
+  TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  if (rt == TY_UNKNOWN || rt == TY_POLY) return !cplan_program_names(c, name);
+  CallPlan p = cplan_user_fresh(c, call);
+  if (p.dispatch == CP_DIRECT && p.mi >= 0) return program && cplan_method_drops_block_values(c, p.mi);
+  return p.mi < 0 && p.dispatch == CP_NONE && cplan_reopen_binding(p) < 0;
+}
+/* See call_plan.h. */
+int cplan_block_value_ignored(Compiler *c, int call) { return cplan_block_value_ignored_by(c, call, 1); }
+/* See call_plan.h. */
+int cplan_builtin_block_value_ignored(Compiler *c, int call) { return cplan_block_value_ignored_by(c, call, 0); }
 /* Is core slot s one of the roots a program's method on a builtin
    receiver is found on, past the builtin's own classes: NilClass, Numeric,
    Object, Kernel, BasicObject? */

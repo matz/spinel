@@ -6139,7 +6139,7 @@ int desugar_const_set_write_at(Compiler *c, LowerCtx *lc, int id) {
   long long at[3] = { nt_int(nt, id, "node_line", 0), nt_int(nt, id, "node_file", 0), nt_int(nt, id, "node_col", 0) };
   /* used as a value, the call answers v, which the constant then holds:
      `(M::N = v; M::N)` */
-  int used = !an_value_dropped(nt, lower_parents(c, lc), id);
+  int used = !an_value_dropped(c, lower_parents(c, lc), id);
   nt_node_set_arr(nt, a, "arguments", NULL, 0);   /* the value moves to the write */
   if (used) {
     int s = nt_new_node(nt, "StatementsNode");
@@ -17385,7 +17385,7 @@ static int narrow_int_table_ivars(Compiler *c, int in_round) {
                reference to it that this scan does not follow */
             if (!sp_streq(un, "[]=")) {
               if (!parent_of) parent_of = an_parent_map(nt);
-              if (!parent_of || !an_value_dropped(nt, parent_of, u)) break;
+              if (!parent_of || !an_value_dropped(c, parent_of, u)) break;
             }
           }
           used = 1; break;
@@ -40956,7 +40956,7 @@ static void wnh_escape_scan(Compiler *c, WnhSlots *slots, int *answered, int cop
     if (answered && wnh_is_answer(c, rs, b[n - 1])) { *answered = 1; continue; }
     /* a read whose value is dropped (the body of a begin with an `else`, which
        the else's value replaces) hands nothing on */
-    if (an_value_dropped(nt, comp_parent_map(c), b[n - 1])) continue;
+    if (an_value_dropped(c, comp_parent_map(c), b[n - 1])) continue;
     /* or one a box takes: `keep = (seen) || {}` with `keep` a box */
     VpUp up;
     if (vp_climb(nt, comp_parent_map(c), b[n - 1], VP_AND_LEFT | VPS_ALL, &up) == VPU_ENDED && up.parent >= 0 &&
@@ -44470,7 +44470,7 @@ static void split_kwsplat_calls(Compiler *c, int from) {
     int an = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "arguments") : -1, m = 0;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &m) : NULL;
     if (m < 1 || nt_kind(nt, av[m - 1]) != NK_KeywordHashNode || par[id] < 0 || nt_kind(nt, par[id]) != NK_StatementsNode) continue;
-    if (an_value_dropped(nt, par, id)) spar[id] = par[id] + 1;
+    if (an_value_dropped(c, par, id)) spar[id] = par[id] + 1;
   }
   for (int id = from; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "kwsplit", 0)) continue;

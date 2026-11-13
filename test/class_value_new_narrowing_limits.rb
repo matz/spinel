@@ -38,6 +38,12 @@ def pick2(name)
   klass < Base && again.call ? klass : nil
 end
 p pick2("Sub").new(2).kind
+def pick3(name)
+  klass = Object.const_get(name)
+  again = -> { klass = Other; true }
+  klass < Base && (again.call; true) ? klass : nil
+end
+p pick3("Sub").new(3).kind
 
 # `new(...)` forwards two arguments to a two-argument initialize
 def build(name, ...) = Object.const_get(name).new(...)

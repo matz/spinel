@@ -4004,6 +4004,11 @@ static int cf_subclass_test(CF *f, int pred, int stmts) {
   while (ns > 0) {
     int p = stack[--ns];
     NodeKind pk = nt_kind(nt, p);
+    /* (any conjunct after the test, a parenthesized sequence among them) */
+    if (test >= 0) {
+      if (subtree_has_side_effect(c, p)) return -1;
+      continue;
+    }
     if (pk == NK_ParenthesesNode) {
       int pb = nt_ref(nt, p, "body"), pn = 0;
       const int *pv = pb >= 0 && nt_kind(nt, pb) == NK_StatementsNode ? nt_arr(nt, pb, "body", &pn) : NULL;
@@ -4012,10 +4017,6 @@ static int cf_subclass_test(CF *f, int pred, int stmts) {
     }
     if (pk == NK_AndNode) {
       if (ns < 31) { stack[ns++] = nt_ref(nt, p, "right"); stack[ns++] = nt_ref(nt, p, "left"); }
-      continue;
-    }
-    if (test >= 0) {
-      if (subtree_has_side_effect(c, p)) return -1;
       continue;
     }
     const char *cn = pk == NK_CallNode ? nt_str(nt, p, "name") : NULL;

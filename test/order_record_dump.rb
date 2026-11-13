@@ -1,3 +1,4 @@
+# spinel: not-cruby -- the .expected is spinel's own --dump-order output
 # --dump-order=all prints the operand-order record: one sorted line per
 # operand list, with where each operand is evaluated (AHEAD: it runs code
 # and goes in its place ahead of the consumer; HOLD: a read a later

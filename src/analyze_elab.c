@@ -3287,7 +3287,8 @@ static void lr_settle_regions(Compiler *c) {
       for (int j = 0; h && j < h->n; j++)
         if (h->v[j].node == t->node && (h->v[j].kind == LR_ALIAS || h->v[j].kind == LR_DEF) && h->v[j].target) {
           tg = h->v[j].target;
-          int ov = tg ? lr_vis_at(c, t->cls, tg, t->sg, elab_point_of(c, t->node)) : -1;
+          int ov = tg && !t->sg ? lr_original_vis(c, t->cls, tg, t->node) : -1;   /* as lr_method asks it: a builtin's visibility is no history */
+          if (ov < 0 && tg) ov = lr_vis_at(c, t->cls, tg, t->sg, elab_point_of(c, t->node));
           h->v[j].vis = (unsigned char)(ov >= 0 ? ov : t->vis0);
         }
     }
@@ -10856,6 +10857,12 @@ static int lr_bv_own(void *ud, int cls, int sg) {
     const LrDef *md = NULL, *od = NULL;
     int later = elab_main_object_later(c, b->name, b->p, 0, &md, &od);
     if (later < 0) return LR_W_STOP;
+    /* an Object entry that may not have run (`if cond; class Object; public :puts; end; end`) after the last sure one is
+       dropped above, and the walk would go on to Kernel's method: no answer, so the alias keeps its section's visibility */
+    int oc = comp_core_class(c, CORE_OBJECT);
+    const LrHist *oh = oc >= 0 ? lr_hist(c->lrec, oc, 0, b->name, 0) : NULL;
+    const LrDef *sure = NULL;
+    if (oh && lr_last_before(c, oh, lr_table_twin(c, oh), b->p, 0, 0, &sure) == ELAB_UNKNOWN) return LR_W_STOP;
     d = later == 1 ? md : later == 2 ? od : NULL;
     if (d && nt_int(c->nt, d->node, "kernel_def", 0)) {
       /* a def of a reopened Kernel stands at the top level (main's, private) and in Object's reopening (a copy) too: it is

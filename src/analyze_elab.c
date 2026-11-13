@@ -407,15 +407,19 @@ int elab_write_value_kind(NodeKind k, int *may) {
    which the statement opened; a branch, a loop's body and a rescue clause
    may not run, nor may a case's branch past its first or a when's
    condition past its first, and the next arm of an elsif ladder or a
-   rescue chain is on the path; a branch whose condition is a constant
-   (`x if true`, nt_pred_const, which the scope walk folds too) runs
-   whenever the condition is reached, and the arms after one that always
-   runs never do, which the record keeps as may not run; a rescue clause
-   that runs whenever its begin completes (prog_rescue_runs: a require of
-   no file in the body raises) runs as such a branch does; a value written
-   under `||=` / `&&=` or after `rescue` may not run, as the right side of
-   `&&` and `||` does; a block run at once by a call the record does not
-   know (a program method may yield to it, or keep it) may not run, and an
+   rescue chain is on the path; a statement of a begin body with rescue
+   clauses may run partly, but for those ahead of the first that may raise
+   what the clauses catch, which run whenever the begin does
+   (prog_rescue_sure); that first one runs too, and its own statement lists
+   answer again; a branch whose condition is a constant (`x if true`,
+   nt_pred_const, which the scope walk folds too) runs whenever the
+   condition is reached, and the arms after one that always runs never do,
+   which the record keeps as may not run; a rescue clause that runs
+   whenever its begin completes (prog_rescue_runs: a require of no file in
+   the body raises) runs as such a branch does; a value written under
+   `||=` / `&&=` or after `rescue` may not run, as the right side of `&&`
+   and `||` does; a block run at once by a call the record does not know
+   (a program method may yield to it, or keep it) may not run, and an
    iterator's may run partly (zero times, or several). */
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
   const NodeTable *nt = c->nt;
@@ -423,14 +427,26 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
   NodeKind k = nt_kind(nt, p);
   q.kind = EP_NODE; q.defer = 0; q.sure = 0;
   if (pp->e < 0 || ch < 0) return q;
-  if (k == NK_DefNode) q.bits |= LR_LATE | LR_BODY;
-  else if (k == NK_LambdaNode || (k == NK_BlockNode && pp->defer)) q.bits |= LR_LATE;
-  if (pp->kind == EP_LIST) { q.kind = EP_NEW; q.list = p; return q; }
+  if (k == NK_DefNode) q.bits |= LR_LATE | LR_BODY, q.rescued = 0;   /* (a body run later: prog_rescue_mark_in) */
+  else if (k == NK_LambdaNode || (k == NK_BlockNode && pp->defer)) q.bits |= LR_LATE, q.rescued = 0;
+  if (pp->kind == EP_LIST) {
+    q.kind = EP_NEW; q.list = p;
+    /* (a rescued begin's statement past those that run whenever the begin
+       does, prog_rescue_sure; the first that may raise runs, maybe partly,
+       and its own lists answer again) */
+    int rs = q.rescued ? prog_rescue_sure(nt, ch) : PROG_RS_SURE;
+    /* (counted from the frame in the begin's own frame only: a class body
+       opened in the first that may raise runs whole, as one opened in
+       any statement of the body does: LrStmt.fpartial) */
+    if (rs != PROG_RS_SURE) q.partial = 1, q.fpartial |= q.rescued == 1;
+    if (rs != PROG_RS_STARTS) q.rescued = 0;
+    return q;
+  }
   int spine = pp->kind == EP_SPINE;
   if (!spine && k != NK_CallNode) return q;
   switch (k) {
     case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode:
-      if (spine && ch == nt_ref(nt, p, "body")) { q.frame = pp->e; q.fmay = q.fpartial = 0; return elab_body_pos(nt, ch, q); }
+      if (spine && ch == nt_ref(nt, p, "body")) { q.frame = pp->e; q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; return elab_body_pos(nt, ch, q); }
       break;
     case NK_PreExecutionNode: case NK_EnsureNode:
       if (spine && ch == nt_ref(nt, p, "statements")) return elab_body_pos(nt, ch, q);
@@ -477,9 +493,10 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
     }
     case NK_BeginNode:
       if (spine && ch == nt_ref(nt, p, "statements")) {
-        q.partial |= nt_ref(nt, p, "rescue_clause") >= 0;
-        q.fpartial |= nt_ref(nt, p, "rescue_clause") >= 0;
-        if (nt_ref(nt, p, "rescue_clause") >= 0) q.rep = pp->e;   /* `retry` runs it again */
+        if (nt_ref(nt, p, "rescue_clause") >= 0) {
+          q.rescued = 1;
+          q.rep = pp->e;   /* `retry` runs it again */
+        }
         return elab_body_pos(nt, ch, q);
       }
       if (spine) q.kind = EP_SPINE;   /* its rescue clauses, else and ensure */
@@ -500,7 +517,7 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
       if (!spine) { q.defer = runs == ELAB_BLK_UNKNOWN; break; }
       q.kind = EP_SPINE;
       if (runs == ELAB_BLK_UNKNOWN) q.may = q.fmay = q.kept = 1;
-      if (elab_opens_frame(nt, p)) { q.frame = pp->e; q.fmay = q.fpartial = 0; }
+      if (elab_opens_frame(nt, p)) { q.frame = pp->e; q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; }
       else { q.partial = q.fpartial = 1; q.rep = pp->e; }   /* an iterator's: zero times, or several */
       break;
     }

@@ -1,53 +1,55 @@
-load record: 43 points, 1 regions
-r0 #0 f0 ProgramNode line 13
-r0 #1 f0 ClassNode Gate line 13
-  r0 #2 f0 IfNode line 14
-    r0 #3 may f0 DefNode run_time#__cond1 line 15
-    r0 #4 may f0 GlobalVariableWriteNode $__cond_def1 line 15
-  r0 #5 f0 DefNode run_time line 15
-  r0 #6 f0 CallNode each line 17
-    r0 #7 f0 DefNode from_block line 17
-  r0 #8 f0 BeginNode line 18
-    r0 #9 f0 DefNode from_begin line 19
-    r0 #10 may f0 NilNode line 21
-  r0 #11 f0 DefNode folded line 23
-  r0 #12 f0 IfNode line 24
-    r0 #13 may f0 DefNode twice#__cond2 line 24
-    r0 #14 may f0 GlobalVariableWriteNode $__cond_def2 line 24
-  r0 #15 f0 DefNode twice#__cond3 line 25
-  r0 #16 f0 DefNode twice line 25
-  r0 #17 f0 GlobalVariableWriteNode $__cond_def2 line 25
-r0 #18 f0 IfNode line 30
-  r0 #19 may f0 ClassNode Framed line 31
-    r0 #20 may f0 DefNode framed line 32
-    r0 #21 may f0 IfNode line 33
-      r0 #22 may f0 DefNode inner#__cond4 line 34
-      r0 #23 may f0 GlobalVariableWriteNode $__cond_def3 line 34
-    r0 #24 may f0 DefNode inner line 34
-r0 #25 f0 ClassNode Branch line 42
-  r0 #26 f0 IfNode line 43
-    r0 #27 may f0 DefNode tag#__cond5 line 44
-    r0 #28 may f0 GlobalVariableWriteNode $__cond_def4 line 44
-    r0 #29 may f0 CallNode p line 45
-    r0 #30 may f0 CallNode define_method line 46
-    r0 #31 may f0 AliasMethodNode line 47
-    r0 #32 may f0 CallNode each line 48
-      r0 #33 may f0 AliasMethodNode line 48
-    r0 #34 may f0 AliasMethodNode line 50
-  r0 #35 f0 DefNode tag line 44
-  r0 #36 f0 AliasMethodNode line 52
-r0 #37 f0 LocalVariableWriteNode g line 55
-r0 #38 f0 CallNode p line 56
-r0 #39 f0 LocalVariableWriteNode f line 57
-r0 #40 f0 CallNode p line 58
-r0 #41 f0 LocalVariableWriteNode b line 59
-r0 #42 f0 CallNode p line 60
-block each line 17: now
-block define_method line 46: later
-block each line 48: now
+load record: 45 points, 1 regions
+r0 #0 f0 ProgramNode line 15
+r0 #1 f0 ClassNode Gate line 15
+  r0 #2 f0 IfNode line 16
+    r0 #3 may f0 DefNode run_time#__cond1 line 17
+    r0 #4 may f0 GlobalVariableWriteNode $__cond_def1 line 17
+  r0 #5 f0 DefNode run_time line 17
+  r0 #6 f0 CallNode each line 19
+    r0 #7 f0 DefNode from_block line 19
+  r0 #8 f0 BeginNode line 20
+    r0 #9 f0 DefNode first_in_begin line 21
+    r0 #10 f0 CallNode Integer line 22
+    r0 #11 f0 DefNode from_begin line 23
+    r0 #12 may f0 NilNode line 25
+  r0 #13 f0 DefNode folded line 27
+  r0 #14 f0 IfNode line 28
+    r0 #15 may f0 DefNode twice#__cond2 line 28
+    r0 #16 may f0 GlobalVariableWriteNode $__cond_def2 line 28
+  r0 #17 f0 DefNode twice#__cond3 line 29
+  r0 #18 f0 DefNode twice line 29
+  r0 #19 f0 GlobalVariableWriteNode $__cond_def2 line 29
+r0 #20 f0 IfNode line 34
+  r0 #21 may f0 ClassNode Framed line 35
+    r0 #22 may f0 DefNode framed line 36
+    r0 #23 may f0 IfNode line 37
+      r0 #24 may f0 DefNode inner#__cond4 line 38
+      r0 #25 may f0 GlobalVariableWriteNode $__cond_def3 line 38
+    r0 #26 may f0 DefNode inner line 38
+r0 #27 f0 ClassNode Branch line 46
+  r0 #28 f0 IfNode line 47
+    r0 #29 may f0 DefNode tag#__cond5 line 48
+    r0 #30 may f0 GlobalVariableWriteNode $__cond_def4 line 48
+    r0 #31 may f0 CallNode p line 49
+    r0 #32 may f0 CallNode define_method line 50
+    r0 #33 may f0 AliasMethodNode line 51
+    r0 #34 may f0 CallNode each line 52
+      r0 #35 may f0 AliasMethodNode line 52
+    r0 #36 may f0 AliasMethodNode line 54
+  r0 #37 f0 DefNode tag line 48
+  r0 #38 f0 AliasMethodNode line 56
+r0 #39 f0 LocalVariableWriteNode g line 59
+r0 #40 f0 CallNode p line 60
+r0 #41 f0 LocalVariableWriteNode f line 61
+r0 #42 f0 CallNode p line 62
+r0 #43 f0 LocalVariableWriteNode b line 63
+r0 #44 f0 CallNode p line 64
+block each line 19: now
+block define_method line 50: later
+block each line 52: now
 class Gate: body#1
-class Framed: body#19
-class Branch: body#25
+class Framed: body#21
+class Branch: body#27
 entity Gate: owner main leaf Gate
 entity Framed: owner main leaf Framed
 entity Branch: owner main leaf Branch
@@ -56,23 +58,24 @@ Gate#run_time#__cond1: def#3 may end=unknown open
 $__cond_def1: write#4 may
 Gate#run_time: def#5 end=yes
 Gate#from_block: def#7 end=yes open
-Gate#from_begin: def#9 end=yes open
-Gate#folded: def#11 end=yes
-Gate#twice#__cond2: def#13 may end=unknown open
-$__cond_def2: write#14 may write#17
-Gate#twice#__cond3: def#15 end=yes
-Gate#twice: def#16 end=yes
-const Framed: write#19 may
-Framed#framed: def#20 may end=unknown
-Framed#inner#__cond4: def#22 may end=unknown open
-$__cond_def3: write#23 may
-Framed#inner: def#24 may end=unknown
-const Branch: write#25
-Branch.tag#__cond5: def#27 may end=unknown open
-$__cond_def4: write#28 may
-Branch#hi: define_method#30 may end=unknown open
-Branch#hello: alias#31 may (hi: define_method#30) end=unknown open
-Branch#hey: alias#33 may (hi: define_method#30) end=unknown open
-Branch#other: alias#34 may (hi: unknown) end=unknown open
-Branch.tag: def#35 end=yes
-Branch#late: alias#36 (hi: unknown) end=yes
+Gate#first_in_begin: def#9 end=yes
+Gate#from_begin: def#11 end=yes open
+Gate#folded: def#13 end=yes
+Gate#twice#__cond2: def#15 may end=unknown open
+$__cond_def2: write#16 may write#19
+Gate#twice#__cond3: def#17 end=yes
+Gate#twice: def#18 end=yes
+const Framed: write#21 may
+Framed#framed: def#22 may end=unknown
+Framed#inner#__cond4: def#24 may end=unknown open
+$__cond_def3: write#25 may
+Framed#inner: def#26 may end=unknown
+const Branch: write#27
+Branch.tag#__cond5: def#29 may end=unknown open
+$__cond_def4: write#30 may
+Branch#hi: define_method#32 may end=unknown open
+Branch#hello: alias#33 may (hi: define_method#32) end=unknown open
+Branch#hey: alias#35 may (hi: define_method#32) end=unknown open
+Branch#other: alias#36 may (hi: unknown) end=unknown open
+Branch.tag: def#37 end=yes
+Branch#late: alias#38 (hi: unknown) end=yes

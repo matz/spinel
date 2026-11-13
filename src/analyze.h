@@ -155,6 +155,8 @@ int prog_load_ncand(const NodeTable *nt, int load);
 int prog_load_cand(const NodeTable *nt, int load, int k);
 int prog_load_open(const NodeTable *nt, int load);
 int prog_rescue_runs(const NodeTable *nt, int rescue);
+enum { PROG_RS_MAY, PROG_RS_STARTS, PROG_RS_SURE };
+int prog_rescue_sure(const NodeTable *nt, int st);
 int prog_load_path_seeded(const NodeTable *nt);
 void prog_top_stmts(const Compiler *c, void (*fn)(void *ud, int stmt), void *ud);
 int *prog_top_seq(const Compiler *c, int *n, int **file);

@@ -441,11 +441,15 @@ void walk_scope(Compiler *c, int id, int scope_idx, int class_id);
    main's file) holding it; fpartial: partial, counted from the frame. sure:
    an else clause that runs whenever its
    condition is reached (the condition's predicate is a constant false,
-   nt_pred_const). */
+   nt_pred_const). rescued: the body of a begin with rescue clauses, whose
+   statements may run partly but for those that run whenever the begin
+   does (prog_rescue_sure), or a list in the first of them that may raise,
+   which runs: 1 in the begin's own frame, 2 in a frame opened under it (a
+   class body), whose statements are partial only from outside it. */
 typedef struct {
   int e, file, top, frame, depth, rep;
   int list;   /* the statement list the node is an element of (a StatementsNode), -1 for a lone expression */
-  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept;
+  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept, rescued;
 } ElabPos;
 enum { EP_NODE, EP_SPINE, EP_LIST, EP_NEW };
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp);

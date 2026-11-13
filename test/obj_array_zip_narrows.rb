@@ -42,6 +42,17 @@ class Layer
   def add_nil = (@cells << nil; @weights << Weight.new(1.0); nil)
 end
 
+# a zip of the program's own on another class, handed the Array: its block
+# takes whatever that zip yields, not the Array's element
+class Pairs
+  def zip(xs) = (yield 1, "one"; yield 2, xs[0]; self)
+end
+class Holder
+  def initialize = (@cells = Array.new(3) { |i| Neuron.new(i * 1.0) })
+  def kinds = (out = []; Pairs.new.zip(@cells) { |i, s| out << s.class }; out)
+end
+p Holder.new.kinds
+
 l = Layer.new(4)
 l.load([1, 2, 3, 4])
 p l.values, l.dot([1.0, 0.5, 0.25, 0.125]), l.weighted, l.pairs, l.skipping, l.until_big

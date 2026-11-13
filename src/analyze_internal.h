@@ -345,6 +345,11 @@ int an_name_binder_free(Compiler *c, const char *name);
 int an_native_defines_method(Compiler *c, const char *name);
 int an_user_recv_defines_method(Compiler *c, const char *name);
 int an_user_define_method(Compiler *c);
+/* where the program's own define_method sits (an_user_define_method_kinds):
+   the self a receiverless define_method could reach it from */
+enum { UDM_CLASS_SELF = 1, UDM_INSTANCE_SELF = 2, UDM_ANY_SELF = 4 };
+int an_user_define_method_kinds(Compiler *c);
+int an_user_define_method_reaches(Compiler *c, int class_self);
 extern int g_yvt_unify_all;
 /* The return type of a call to method `mi`. A method whose body is just a
    bare `yield` returns the block's value -- and since it inlines per call

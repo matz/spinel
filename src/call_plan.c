@@ -8657,20 +8657,58 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
    cell tells it): mi's class's own, or the module's, whose instance
    methods an extend's class-side copies copy. In the chain's order.
    How many, 0 where one is not on the chain (mi stands alone). */
+/* The scopes of one (class, side, name), for mixin_copy_versions's walk: a
+   hashed index over the scopes, in chains, held while the scope index is
+   frozen (every scope's class, side and name then hold, and scopes are only
+   appended: comp_scope_index_gen) and rebuilt when the count or that
+   changes. The walk over every scope it replaces, once per ask, was a
+   quarter of an application's compile. Unfrozen, the walk scans as before. */
+static int *mcv_head, *mcv_next, mcv_nb, mcv_n = -1;
+static unsigned mcv_gen;
+static unsigned mcv_hash(int class_id, const char *name, int is_cm) {
+  unsigned h = 2166136261u;
+  for (const char *p = name; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+  h ^= (unsigned)class_id * 2654435761u;
+  return h ^ (is_cm ? 0x9e3779b9u : 0);
+}
+/* the first scope of the chain that holds (class_id, is_cm, name)'s scopes,
+   which the caller filters (a chain is shared by whatever hashes alike), or
+   -2 for no index: the scan */
+static int mcv_first(Compiler *c, int class_id, const char *name, int is_cm) {
+  if (!comp_scope_index_is_frozen() || !name) return -2;
+  if (mcv_n != c->nscopes || mcv_gen != comp_scope_index_gen() || !mcv_nb) {
+    free(mcv_head); free(mcv_next);
+    mcv_nb = c->nscopes > 0 ? c->nscopes : 1;
+    mcv_head = malloc(sizeof(int) * (size_t)mcv_nb);
+    mcv_next = malloc(sizeof(int) * (size_t)mcv_nb);
+    if (!mcv_head || !mcv_next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int b = 0; b < mcv_nb; b++) mcv_head[b] = -1;
+    for (int s = 0; s < c->nscopes; s++) {
+      const Scope *k = &c->scopes[s];
+      if (!k->name) { mcv_next[s] = -1; continue; }
+      unsigned b = mcv_hash(k->class_id, k->name, k->is_cmethod) % (unsigned)mcv_nb;
+      mcv_next[s] = mcv_head[b]; mcv_head[b] = s;
+    }
+    mcv_n = c->nscopes; mcv_gen = comp_scope_index_gen();
+  }
+  return mcv_head[mcv_hash(class_id, name, is_cm) % (unsigned)mcv_nb];
+}
 static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs) {
   const Scope *m = &c->scopes[mi];
   ElabVersion cv[VER_MAX_ARMS];
   int side = m->is_extend_copy && from == m->origin_module_ci - 1 ? 0 : m->is_cmethod;
   int n = 0, ns = 0, nv = elab_chain_versions(c, from, side, comp_scope_user_name(m), cv, VER_MAX_ARMS), at[VER_MAX_ARMS];
   for (int i = 0; i < nv; i++) at[i] = -1;
-  /* (one walk: the copies under mi's name, and each version's first one) */
-  for (int s = 0; s < c->nscopes; s++) {
+  /* (one walk: the copies under mi's name, and each version's first one;
+     the chain holds them in descending order, so the first is the lowest) */
+  int first = mcv_first(c, m->class_id, m->name, m->is_cmethod);
+  for (int s = first == -2 ? 0 : first; s >= 0 && s < c->nscopes; s = first == -2 ? s + 1 : mcv_next[s]) {
     const Scope *k = &c->scopes[s];
     if (k->class_id != m->class_id || k->is_cmethod != m->is_cmethod || k->mixin_guarded != m->mixin_guarded ||
         k->guard_behind != m->guard_behind || !k->name || !sp_streq(k->name, m->name)) continue;
     ns += !k->entry;
     for (int i = 0; i < nv; i++)
-      if (at[i] < 0 && cv[i].v->kind == LR_DEF && k->def_node == cv[i].v->node) at[i] = s;
+      if ((at[i] < 0 || s < at[i]) && cv[i].v->kind == LR_DEF && k->def_node == cv[i].v->node) at[i] = s;
   }
   for (int i = 0; i < nv; i++) {
     /* (a module included again lists its versions again: one copy each) */

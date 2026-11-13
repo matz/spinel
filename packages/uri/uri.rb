@@ -1284,13 +1284,12 @@ module URI
     out
   end
 
-  # The value of one hex digit character, or nil for anything else.
-  def self.hex_digit(c)
-    return nil unless c
-    o = c.ord
-    return o - 48 if o >= 48 && o <= 57
-    return o - 55 if o >= 65 && o <= 70
-    return o - 87 if o >= 97 && o <= 102
+  # The value of the hex digit byte +b+, or nil for any other byte (or nil).
+  def self.hex_value(b)
+    return nil unless b
+    return b - 48 if b >= 48 && b <= 57
+    return b - 55 if b >= 65 && b <= 70
+    return b - 87 if b >= 97 && b <= 102
     nil
   end
 
@@ -1312,49 +1311,53 @@ module URI
   # Each "%" and two hex digits as that byte, and with +plus+ each "+" as a
   # space; any other "%" is CRuby's ArgumentError.
   def self.percent_decode(str, enc, plus)
-    out = String.new
-    s = str.to_s
-    i = 0
-    while i < s.length
-      ch = s[i]
-      if plus && ch == "+"
-        out << " "
-        i += 1
-      elsif ch == "%"
-        # a % not followed by two hex digits is CRuby's ArgumentError
-        h1 = hex_digit(s[i + 1])
-        h2 = hex_digit(s[i + 2])
-        raise ArgumentError, "invalid %-encoding (#{s})" unless h1 && h2
-        out << (h1 * 16 + h2).chr
-        i += 3
-      else
-        out << ch
-        i += 1
-      end
-    end
-    out.force_encoding(enc)
+    percent_decode_bytes(str.to_s, plus, true).force_encoding(enc)
   end
 
   # The www-form decoding of one key or value: "+" is a space and a "%" with two
   # hex digits is that byte. Unlike decode_www_form_component, a "%" that is not
   # followed by two hex digits is left as it is, not an error.
   def self.decode_www_form_lenient(s, enc = Encoding::UTF_8)
-    out = String.new
+    percent_decode_bytes(s, true, false).force_encoding(enc).scrub
+  end
+
+  # The bytes of +s+ with each "%" and two hex digits as that byte and, with
+  # +plus+, each "+" as a space, as a binary String. With +strict+ any other
+  # "%" is CRuby's ArgumentError; without it the "%" is kept. The text is
+  # walked by byte and copied a run at a time, so the time is linear in its
+  # length whatever characters it holds.
+  def self.percent_decode_bytes(s, plus, strict)
+    b = s.b
+    n = b.bytesize
+    out = "".b
+    run = 0
     i = 0
-    while i < s.length
-      ch = s[i]
-      if ch == "+"
+    while i < n
+      c = b.getbyte(i)
+      if c == 37 # "%"
+        h1 = hex_value(b.getbyte(i + 1))
+        h2 = hex_value(b.getbyte(i + 2))
+        if h1 && h2
+          out << b.byteslice(run, i - run) if i > run
+          out << (h1 * 16 + h2).chr
+          i += 3
+          run = i
+        elsif strict
+          raise ArgumentError, "invalid %-encoding (#{s})"
+        else
+          i += 1
+        end
+      elsif plus && c == 43 # "+"
+        out << b.byteslice(run, i - run) if i > run
         out << " "
         i += 1
-      elsif ch == "%" && hex_digit(s[i + 1]) && hex_digit(s[i + 2])
-        out << (hex_digit(s[i + 1]) * 16 + hex_digit(s[i + 2])).chr
-        i += 3
+        run = i
       else
-        out << ch
         i += 1
       end
     end
-    out.force_encoding(enc).scrub
+    out << b.byteslice(run, n - run) if n > run
+    out
   end
 
   # `URI.decode_www_form("a=1&b=x+y")` -> [["a", "1"], ["b", "x y"]]. Keys and

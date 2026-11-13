@@ -4603,12 +4603,27 @@ int elab_method_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p, 
 int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrDef **out) {
   if (out) *out = NULL;
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
-  int unsure = 0, o = lr_search_one(c, LR_MAIN, 1, name, -1, p, p.region < 0, 0, out, 0, &unsure, 0);
-  if (unsure) return ELAB_UNKNOWN;
+  int late = p.region < 0, unsure = 0;
+  /* its prepends, then its own table (with shadow: not its extends) */
+  int o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, 1);
+  if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
   if (o == ELAB_YES) return ELAB_YES;
   if (out) *out = NULL;
-  /* (an undef there stops the search: none; else the core's, from the start) */
-  return o == ELAB_NO && main_singleton_method(name) ? ELAB_YES : o == ELAB_UNKNOWN ? ELAB_UNKNOWN : ELAB_NO;
+  if (o == LR_STOP) return ELAB_NO;   /* an undef there: none */
+  /* an own table no entry has touched by p holds the core's to_s and
+     inspect, ahead of the extends; a removal took it (or the program's
+     def that replaced it) away, and the search goes on past it */
+  const LrDef *v = NULL;
+  lr_own(c, lr_hist(c->lrec, LR_MAIN, 1, name, 0), p, late, 0, &v);
+  if (!v && main_singleton_method(name)) return ELAB_YES;
+  o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, 0);
+  if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+  if (o == ELAB_YES) return ELAB_YES;
+  if (out) *out = NULL;
+  /* (a point that may run before and after the removal, late: a method's
+     body, reads the core's where nothing past it answers, as live at the
+     load's start) */
+  return late && o == ELAB_NO && main_singleton_method(name) ? ELAB_YES : ELAB_NO;
 }
 int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;

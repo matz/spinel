@@ -2510,6 +2510,16 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
                    !((flags & CT_CMETHOD) && elab_record_cmethod(c, cls, name)));
 }
+/* May a method of the program's take a call of `nm` over from the
+   builtin's: an instance method of the name in any class or module (a
+   reopening of a builtin class, of Object or Kernel, a module included or
+   prepended into one), a class method, main's own, or a method_missing a
+   call of it could reach? (NULL: not known, so it may.) */
+static int ct_program_may_take(Compiler *c, const char *nm) {
+  int ncm = 0;
+  return !nm || an_user_defines_method(c, nm) || an_user_defines_method(c, METHOD_MISSING_NAME) ||
+         comp_main_method(c, nm) >= 0 || (comp_cmethod_candidates(c, nm, &ncm), ncm > 0);
+}
 /* Does the copy a class-side alias of the name makes (Scope.alias_of) in a
    class of ci's chain below the one declaring the name's `class << self`
    accessor stand in front of the accessor ci inherits? The alias is that
@@ -2685,9 +2695,7 @@ static int cplan_record_new_gap(Compiler *c, int id) {
    call, new: is_opaque_reaching_call) may run later on another object
    (`o.instance_exec(&b)`), so its self is not known. */
 static int ct_block_keeps_self(Compiler *c, const char *rn, const char *nm) {
-  int ncm = 0;
-  if (!nm || an_user_defines_method(c, nm) || an_user_defines_method(c, METHOD_MISSING_NAME) ||
-      comp_main_method(c, nm) >= 0 || (comp_cmethod_candidates(c, nm, &ncm), ncm > 0)) return 0;
+  if (ct_program_may_take(c, nm)) return 0;
   return is_async_code_entry(rn, nm) || !is_opaque_reaching_call(nm);
 }
 /* The nearest call around node whose literal block may run with another
@@ -2713,28 +2721,73 @@ static int ct_block_self_call(Compiler *c, int node) {
   }
   return -1;
 }
+static int ct_runs_on_main(Compiler *c, int id);
+/* Does call id on main, of `nm`, reach the builtin: no method of the
+   program's on main's chain answers it? Main's singleton holds none at
+   the call's point (elab_main_singleton_at: main's own, an extended
+   module's), and the plan binds none on main (call_target: a top-level
+   def) nor on Object's chain ahead of the builtin's, which BasicObject's
+   own table holds (an Object, Kernel or BasicObject def, a module's mixed
+   into Object or Kernel or prepended to BasicObject; not one BasicObject
+   includes, which sits behind it). A class's own method of the name, a
+   class method or a method_missing elsewhere cannot answer a call on
+   main. */
+static int ct_main_builtin_call(Compiler *c, int id, const char *nm) {
+  static const int roots[] = { CORE_OBJECT, CORE_BASIC_OBJECT };
+  const LrDef *d = NULL;
+  int s = elab_main_singleton_at(c, nm, elab_point_of(c, id), &d);
+  if (s == ELAB_UNKNOWN || (s == ELAB_YES && d) || call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) return 0;
+  int bo = comp_core_class(c, CORE_BASIC_OBJECT);
+  for (int i = 0; i < 2; i++) {
+    int k = comp_core_class(c, roots[i]);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = k >= 0 ? call_target(c, id, k, nm, 0, &ml) : -1;
+    if (mi >= 0 && (ml.def_class != bo || !c->scopes[mi].is_include_copy)) return 0;
+  }
+  return 1;
+}
 /* Does call id run with main as self: receiverless or on `self`, in a
    file's top-level statements (a block there too, where its self is
-   known: ct_block_self_call, and an instance_eval's or instance_exec's on
-   main) or in a method of main's own; not in a top-level `def`, which runs
-   on whatever object called it. */
+   known: ct_block_self_call, and the builtin instance_eval's or
+   instance_exec's on main: ct_main_builtin_call) or in a method of main's
+   own; not in a top-level `def`, which runs on whatever object called
+   it. */
 static int ct_runs_on_main(Compiler *c, int id) {
   if (nt_kind(c->nt, id) != NK_CallNode) return 0;
   int recv = nt_ref(c->nt, id, "receiver");
   if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return 0;
   int ie = ct_block_self_call(c, id);
-  if (ie >= 0)
-    return nt_kind(c->nt, ie) == NK_CallNode && is_instance_eval_family(nt_str(c->nt, ie, "name")) && ct_runs_on_main(c, ie);
+  const char *ien = ie >= 0 && nt_kind(c->nt, ie) == NK_CallNode ? nt_str(c->nt, ie, "name") : NULL;
+  if (ie >= 0) return ien && is_instance_eval_family(ien) && ct_runs_on_main(c, ie) && ct_main_builtin_call(c, ie, ien);
   const Scope *s = comp_scope_of(c, id);
   return self_is_main(c, id) && (prog_is_top_scope(c, s) || s->is_cmethod);
 }
-/* Does call id run on main (ct_runs_on_main) and look on main first? At a
-   load point, only once main's method of the name is defined there. */
-static int ct_on_main(Compiler *c, int id, const char *name) {
+/* What main's singleton answers for `name` at call id's point
+   (elab_main_singleton_at): 1, main's own method (or the record cannot
+   tell, or the point is no load point); 0, none, so Object's chain
+   answers; -1, another's (an extended module's, the core's). None only
+   where the record places the def the table holds: one in a body the walk
+   does not place (a block given in a call's arguments) makes no entry. */
+static int ct_main_own(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
-  if (!ct_runs_on_main(c, id)) return 0;
   LoadPoint p = elab_point_of(c, id);
-  return p.region < 0 || elab_method_at(c, -1, name, 1, p, &d) != ELAB_NO;
+  if (p.region < 0) return 1;
+  int s = elab_main_singleton_at(c, name, p, &d);
+  if (s == ELAB_UNKNOWN || (s == ELAB_YES && d && d->scope > 0 && c->scopes[d->scope].class_id < 0)) return 1;
+  if (s != ELAB_NO) return -1;
+  ElabVersion vs[8];
+  int si = comp_main_method(c, name), n = elab_history_versions(c, -1, 1, name, vs, 8);
+  if (n < 0) return 1;   /* (more versions than vs holds, or no record: it cannot tell) */
+  for (int i = 0; i < n; i++)
+    if (vs[i].v->scope == si) return 0;
+  return 1;
+}
+/* Does call id run on main (ct_runs_on_main) and look on main first? At a
+   load point, only where main's own method of the name answers there
+   (ct_main_own): not once it is removed, before it is defined, nor where
+   an extended module's or the core's answers. */
+static int ct_on_main(Compiler *c, int id, const char *name) {
+  return ct_runs_on_main(c, id) && ct_main_own(c, id, name) == 1;
 }
 /* The method call id reaches when it can reach only main's own method of
    `name`: a call on main (ct_on_main) at a load point where main's method
@@ -2795,7 +2848,12 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
     return -1;
   }
   int si = (*flags & CT_TOP) && id >= 0 ? comp_main_method(c, name) : -1;
-  int mi = si >= 0 && ct_on_main(c, id, name) ? si : ct_table(c, cls, name, *flags, ml ? &ml->def_class : NULL);
+  int own = si >= 0 && ct_runs_on_main(c, id) ? ct_main_own(c, id, name) : -1;
+  int mi = own == 1 ? si : ct_table(c, cls, name, *flags, ml ? &ml->def_class : NULL);
+  /* (a call on main where main's singleton holds no method, main's own
+     removed or not yet defined, does not take it: Object's chain answers,
+     as with none) */
+  if (!own && mi >= 0 && c->scopes[mi].is_cmethod && c->scopes[mi].class_id < 0) return -1;
   if ((*flags & CT_TOP) && mi >= 0 && c->scopes[mi].is_cmethod) *flags |= CT_CMETHOD;
   return mi;
 }
@@ -3576,9 +3634,13 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
      class body's receiverless call's) top-level functions */
   int cm = ci >= 0 && call_target(c, -1, ci, name, CT_CMETHOD, NULL) >= 0;
   int top = (ci < 0 || recv < 0) && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0;
+  int oc = top && ci < 0 ? comp_core_class(c, CORE_OBJECT) : -1;
   if ((!cm && !top) || (cm && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) ||
       (top && call_target(c, id, -1, name, CT_TOP, NULL) >= 0))
     return CM_NONE;
+  /* (a call on main that main's own method does not answer where it runs,
+     removed or not yet defined, reaches Object's chain: ct_lookup) */
+  if (oc >= 0 && call_target(c, id, oc, name, 0, NULL) >= 0) return CM_NONE;
   if (cm_builtin_answers(c, ci, name)) return CM_NONE;
   if (anon) *anon = cm_self_name(c, ci, self_text, cap) ? -1 : ci;
   return nt_vcall(nt, id) ? CM_NAMEERROR : CM_NOMETHOD;

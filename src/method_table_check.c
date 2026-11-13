@@ -18,6 +18,8 @@ typedef struct {
   int node, side, cls, prim, why;   /* why: 0 for a read, else MLW_* */
   int build;                        /* a read made inside the list builders' window */
   char *name, *phase;               /* phase: the pass when no node was open */
+  char *fname, *ftgt;               /* a call frame's own name and the one it sends or captures, as they were
+                                       when the read was made (a pass may retarget the call later); NULL else */
 } MtSite;
 
 struct MethodTableCheck {
@@ -37,7 +39,7 @@ struct MethodTableCheck *mtab_new(void) {
 
 void mtab_free(struct MethodTableCheck *m) {
   if (!m) return;
-  for (int i = 0; i < m->n; i++) { free(m->site[i].name); free(m->site[i].phase); }
+  for (int i = 0; i < m->n; i++) { free(m->site[i].name); free(m->site[i].phase); free(m->site[i].fname); free(m->site[i].ftgt); }
   free(m->site); free(m->ix); free(m);
 }
 
@@ -71,12 +73,19 @@ static unsigned site_hash(const MtSite *s) {
   if (s->why) h ^= (unsigned)s->cls * 2246822519u;
   for (const char *q = s->name; *q; q++) h = h * 31u + (unsigned char)*q;
   for (const char *q = s->node < 0 ? s->phase : ""; *q; q++) h = h * 31u + (unsigned char)*q;
+  for (const char *q = s->fname ? s->fname : ""; *q; q++) h = h * 37u + (unsigned char)*q;
   return h;
+}
+
+/* (equal strings, or both NULL) */
+static int str_same(const char *a, const char *b) {
+  return a == b || (a && b && sp_streq(a, b));
 }
 
 static int site_same(const MtSite *a, const MtSite *b) {
   return a->node == b->node && a->side == b->side && a->why == b->why && a->build == b->build && (!a->why || a->cls == b->cls) &&
-         sp_streq(a->name, b->name) && (a->node >= 0 || sp_streq(a->phase, b->phase));
+         sp_streq(a->name, b->name) && (a->node >= 0 || sp_streq(a->phase, b->phase)) && str_same(a->fname, b->fname) &&
+         str_same(a->ftgt, b->ftgt);
 }
 
 static void mtab_grow(struct MethodTableCheck *m) {
@@ -104,18 +113,40 @@ static void mtab_note(Compiler *c, MtSite s) {
     m->site = realloc(m->site, sizeof *m->site * (size_t)m->cap);
     if (!m->site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
+  const char *fname = s.fname, *ftgt = s.ftgt;
   s.name = strdup(s.name);
   s.phase = strdup(s.phase);
-  if (!s.name || !s.phase) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  s.fname = fname ? strdup(fname) : NULL;
+  s.ftgt = ftgt ? strdup(ftgt) : NULL;
+  if (!s.name || !s.phase || (fname && !s.fname) || (ftgt && !s.ftgt)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   m->site[m->n] = s;
   m->ix[j] = ++m->n;
+}
+
+/* A call frame's own name and the one it sends or captures (call_node_names:
+   a literal send's name, a maker's Symbol, or for a maker retargeted at a
+   builtin's `__bam_` wrapper the name its Symbol had, bam_sym), as they
+   are now: a later pass may retarget the call (a send at its literal name,
+   public_method made a method), and the read is the call's as it was. */
+static void frame_call_names(Compiler *c, int fn, const char **own, const char **tgt) {
+  const NodeTable *nt = c->nt;
+  const char *nm[2];
+  int n = call_node_names(c, fn, nm);
+  *own = n > 0 ? nm[0] : NULL;
+  *tgt = n > 1 ? nm[1] : NULL;
+  int args = nt_ref(nt, fn, "arguments"), an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  const char *was = an > 0 && nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "bam_sym") : NULL;
+  if (was && *own && is_method_object_maker(*own)) *tgt = was;
 }
 
 void mtab_read(Compiler *c, MtPrim prim, int cls, int side, const char *name) {
   struct MethodTableCheck *m = c->mtab;
   if (!m || m->depth > 0 || !name) return;
-  mtab_note(c, (MtSite){ .node = m->frame, .side = side, .cls = cls, .prim = (int)prim, .build = m->build > 0, .name = (char *)name,
-                         .phase = (char *)c->nt->pass });
+  const char *own = NULL, *tgt = NULL;
+  if (m->frame >= 0 && nt_kind(c->nt, m->frame) == NK_CallNode) frame_call_names(c, m->frame, &own, &tgt);
+  mtab_note(c, (MtSite){ .node = m->frame, .side = side, .cls = cls, .prim = (int)prim, .build = m->build > 0,
+                         .name = (char *)name, .phase = (char *)c->nt->pass, .fname = (char *)own, .ftgt = (char *)tgt });
 }
 
 void mtab_table(Compiler *c, int id, int cls, unsigned flags, const char *name, int why) {
@@ -152,6 +183,7 @@ static const char *why_name(int why) {
   case MLW_DISAGREE: return "disagree";
   case MLW_NEVER: return "never";
   case MLW_UNASKED: return "unasked";
+  case MLW_ACCESSOR: return "accessor";
   }
   return "?";
 }
@@ -172,25 +204,33 @@ static int super_reads_own_name(Compiler *c, int fn, const char *name) {
   return (shadow && sp_streq(shadow, name)) || (u && sp_streq(u, name)) || (s->name && sp_streq(s->name, name));
 }
 
-/* Is `name` one the send or Method maker at fn sends or captures: a literal
-   send's name, a maker's Symbol (call_node_names past the node's own)? Not
-   where it is the node's own name too (`method(:method)`, an arm of a
-   run-time name): the call's question of its own name asks it as well. */
-static int send_reads_target(Compiler *c, int fn, const char *name) {
-  const char *own[2];
-  int n = call_node_names(c, fn, own);
-  if (n > 0 && own[0] && sp_streq(own[0], name)) return 0;
-  for (int i = 1; i < n; i++)
-    if (own[i] && sp_streq(own[i], name)) return 1;
-  return 0;
-}
-
 /* The family of the reader: what the node being inferred or emitted is, by
    the names it calls (call_node_names) and the predicates of
-   builtin_names.c. A node with no frame is a pass: family "pass", with the
-   name of the pass it ran in in a field of its own. */
-static const char *reader_family(Compiler *c, int fn, const char *name, int build) {
+   builtin_names.c; a call by the names it had when the read was made
+   (frame_call_names). A node with no frame is a pass: family "pass", with
+   the name of the pass it ran in in a field of its own. */
+static const char *reader_family(Compiler *c, const MtSite *s) {
   const NodeTable *nt = c->nt;
+  int fn = s->node;
+  const char *name = s->name;
+  if (s->fname) {
+    const char *nm = s->fname;
+    int own = sp_streq(nm, name), tgt = s->ftgt && sp_streq(s->ftgt, name);
+    /* a send or a Method maker is the family's reader where it asks of the
+       name it sends or captures; its own name (`send`, `method`) is the
+       call's, as any call's is, also where the captured name is the same
+       (`method(:method)`, an arm of a run-time name: the call's question of
+       its own name asks it as well), and another name counts as under any
+       call (method_missing, a conversion: implied). A run-time name's arms
+       are calls of their own, each the frame of what is asked of it
+       (emit_dynamic_send_arm). */
+    if ((is_send_family(nm) || is_method_object_maker(nm)) && tgt && !own) return "send";
+    if (is_respond_to_name(nm) || is_method_defined_query(nm)) return "presence";
+    /* a read under a list's node is the list's own where a builder made it (the window of mtab_build_enter), the
+       call's where the plan's resolution of the list's call did */
+    if (is_instance_method_list(nm) || is_method_presence_query(nm) >= 2) return s->build ? "lists" : "call";
+    return own || tgt ? "call" : "implied";
+  }
   NodeKind k = nt_kind(nt, fn);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
     if (super_reads_own_name(c, fn, name)) return "super";
@@ -206,20 +246,6 @@ static const char *reader_family(Compiler *c, int fn, const char *name, int buil
     return sym && sp_streq(sym, name) ? "send" : "implied";
   }
   if (k == NK_DefinedNode) return "presence";
-  const char *nm = k == NK_CallNode ? nt_str(nt, fn, "name") : NULL;
-  if (nm) {
-    /* a send or a Method maker is the family's reader where it asks of the
-       name it sends or captures; its own name (`send`, `method`) is the
-       call's, as any call's is, and another name counts as under any call
-       (method_missing, a conversion: implied). A run-time name's arms are
-       calls of their own, each the frame of what is asked of it
-       (emit_dynamic_send_arm). */
-    if ((is_send_family(nm) || is_method_object_maker(nm)) && send_reads_target(c, fn, name)) return "send";
-    if (is_respond_to_name(nm) || is_method_defined_query(nm)) return "presence";
-    /* a read under a list's node is the list's own where a builder made it (the window of mtab_build_enter), the
-       call's where the plan's resolution of the list's call did */
-    if (is_instance_method_list(nm) || is_method_presence_query(nm) >= 2) return build ? "lists" : "call";
-  }
   const char *own[2];
   int n = call_node_names(c, fn, own);
   for (int i = 0; i < n; i++)
@@ -252,7 +278,7 @@ void mtab_report(Compiler *c) {
   for (int i = 0; i < m->n; i++) {
     const MtSite *s = &m->site[i];
     if (s->why) fprintf(stderr, "method-table-check: table %s ", why_name(s->why));
-    else if (s->node >= 0) fprintf(stderr, "method-table-check: read %s - ", reader_family(c, s->node, s->name, s->build));
+    else if (s->node >= 0) fprintf(stderr, "method-table-check: read %s - ", reader_family(c, s));
     else fprintf(stderr, "method-table-check: read pass %s ", s->phase);
     print_where(c, s->node, stderr);
     fputc(' ', stderr);

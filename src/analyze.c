@@ -11482,7 +11482,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
       int kargsn = nt_ref(nt, id, "arguments");
       int kan = 0;
       const int *kav = kargsn >= 0 ? nt_arr(nt, kargsn, "arguments", &kan) : NULL;
-      if (kan == 1 && kav) nt_node_set_str(nt, kav[0], "value", kwname);
+      if (kan == 1 && kav) {
+        nt_node_set_str(nt, kav[0], "bam_sym", ksym);   /* the name the program captured */
+        nt_node_set_str(nt, kav[0], "value", kwname);
+      }
       changed = 1;
       continue;
     }
@@ -11730,7 +11733,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
     int argsn = nt_ref(nt, id, "arguments");
     int an = 0;
     const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
-    if (an == 1 && av) nt_node_set_str(nt, av[0], "value", wname);
+    if (an == 1 && av) {
+      nt_node_set_str(nt, av[0], "bam_sym", sym);   /* the name the program captured */
+      nt_node_set_str(nt, av[0], "value", wname);
+    }
     changed = 1;
   }
   bam_tab_free();

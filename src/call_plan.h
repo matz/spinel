@@ -295,8 +295,10 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON }
    or the window's version is not the one an explicit call of the name
    binds (DISAGREE); a body that never runs (NEVER); a versioned name answered
    without asking the record, as for a call with no node or a name the node
-   does not itself call (UNASKED) */
-typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED } MlWhy;
+   does not itself call (UNASKED); a Method's arm on a class whose accessor
+   the tables have and whose capture meets neither a version of it nor a
+   def (cplan_capture_class_arms: ACCESSOR) */
+typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR } MlWhy;
 typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);

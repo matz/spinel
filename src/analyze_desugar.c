@@ -12201,6 +12201,14 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
   free(own);
   return 1;
 }
+/* Is every element of keyword hash kw a written `key => value` pair (no
+   `**h`, whose keys only the run time knows: an empty one passes nothing,
+   one holding `cause:` alone is the cause)? */
+static int raise_kw_all_pairs(const NodeTable *nt, int kw) {
+  int n = 0; const int *els = nt_arr(nt, kw, "elements", &n);
+  for (int j = 0; j < n; j++) if (nt_kind(nt, els[j]) != NK_AssocNode) return 0;
+  return n > 0;
+}
 /* Is keyword hash kw of a raise `cause: x` alone? A hash with any other
    key (or a `**` operand) is one more positional argument to raise, which
    keeps the raise as written. */
@@ -12368,9 +12376,9 @@ int desugar_raise_own_exception(Compiler *c) {
        backtrace, whose set_backtrace raises the TypeError (and
        `raise "m", k: v` is `raise "m", {k: v}`, a String as the class) */
     int ofi = nm[0] == 'f';
-    if (kw && npos <= 2 && !raise_kw_cause_only(nt, av[ac - 1]) && owned[ofi] < 0)
-      owned[ofi] = raise_name_program_defined(c, nm);
-    if (kw && npos <= 2 && !raise_kw_cause_only(nt, av[ac - 1]) && !owned[ofi]) {
+    int kwpos = kw && npos <= 2 && raise_kw_all_pairs(nt, av[ac - 1]) && !raise_kw_cause_only(nt, av[ac - 1]);
+    if (kwpos && owned[ofi] < 0) owned[ofi] = raise_name_program_defined(c, nm);
+    if (kwpos && !owned[ofi]) {
       int kh = av[ac - 1], kn = 0;
       const int *ke = nt_arr(nt, kh, "elements", &kn);
       int *kc = kn > 0 ? malloc(sizeof(int) * kn) : NULL;

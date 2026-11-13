@@ -18,6 +18,9 @@ t { raise(RuntimeError, "w", 5) }
 t { fail(ArgumentError, "w", {a: 1}) }
 t { raise(RuntimeError, "w", ["a", 1]) }
 t { raise(RuntimeError, "w", cause: nil) }
+def f(**kw) = raise(RuntimeError, "w", **kw)
+t { f }
+t { f(cause: nil) }
 
 e = RuntimeError.new("x")
 t { e.set_backtrace(5) }

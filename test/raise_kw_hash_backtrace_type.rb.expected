@@ -7,6 +7,8 @@ TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace
 TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
 TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
 RuntimeError: w
+RuntimeError: w
+RuntimeError: w
 TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
 TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location
 TypeError: backtrace must be an Array of String or an Array of Thread::Backtrace::Location

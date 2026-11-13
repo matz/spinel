@@ -3014,55 +3014,17 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
                    !((flags & CT_CMETHOD) && elab_record_cmethod(c, cls, name)));
 }
-/* May a method of the program's take a call of `nm` over from the
-   builtin's: an instance method of the name in any class or module (a
-   reopening of a builtin class, of Object or Kernel, a module included or
-   prepended into one), a class method, main's own, or a method_missing a
-   call of it could reach? (NULL: not known, so it may.) */
-static int ct_program_may_take(Compiler *c, const char *nm) {
-  int ncm = 0;
-  return !nm || an_user_defines_method(c, nm) || an_user_defines_method(c, METHOD_MISSING_NAME) ||
-         comp_main_method(c, nm) >= 0 || (comp_cmethod_candidates(c, nm, &ncm), ncm > 0);
-}
-/* Is every block between node id and the body it runs in (a def's, a
-   class body's, a file's) run at once where its call runs: one the record
-   proves runs so (elab_block_runs: ELAB_BLK_NOW, a builtin iterator's on
-   a literal of a builtin class no reopening answers the name on, or a
-   method of the program's whose body runs it before it answers), or one
-   it takes to run so by its call's name (ELAB_BLK_ASSUMED: an iterator's
-   name, tap, then) where no method of the program's can take that call
-   over (ct_program_may_take) and no lazy enumerator keeps it (a name of
-   is_lazy_chain_name: `l.map { }` on a Lazy held in a variable runs when
-   the chain is forced)? A lambda, an END body, the block of any other
-   call, or of one a program method of its name may answer (and keep the
-   block for later), may run after id's point. */
-static int ct_blocks_run_at_once(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  int n = 0;
-  const int *par = elab_node_parents(c, &n);
-  for (int p = id >= 0 && id < n ? par[id] : -1, k = 0; p >= 0 && p < n && k < n; p = par[p], k++) {
-    NodeKind pk = nt_kind(nt, p);
-    if (pk == NK_DefNode || pk == NK_ClassNode || pk == NK_ModuleNode || pk == NK_SingletonClassNode) return 1;
-    if (pk == NK_LambdaNode || pk == NK_PostExecutionNode) return 0;
-    if (pk != NK_BlockNode) continue;
-    int call = par[p], w;
-    if (call < 0 || call >= n || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != p ||
-        ((w = elab_block_runs(c, call)) != ELAB_BLK_NOW && (w != ELAB_BLK_ASSUMED || is_lazy_chain_name(nt_str(nt, call, "name")) || ct_program_may_take(c, nt_str(nt, call, "name")))))
-      return 0;
-  }
-  return 1;
-}
 /* Does call id run before every version of `name` on cls's route (flags
    and mi as ct_undefined_at's), as the record proves it: none is live at
    its point (ct_undefined_at), it does not run any time after it
    (ct_after_point), and every block around it runs at once
-   (ct_blocks_run_at_once)? A presence question there finds none at
+   (elab_blocks_run_at_once)? A presence question there finds none at
    every run (call_target's MLW_RECORD for a name with no method scope,
    and cplan_cmethod_later). */
 static int ct_before_versions(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi) {
   if (!ct_undefined_at(c, id, cls, name, flags, mi)) return 0;
   int framed = elab_plan_enter(c, id);
-  int before = !ct_after_point(c, id) && ct_blocks_run_at_once(c, id);
+  int before = !ct_after_point(c, id) && elab_blocks_run_at_once(c, id);
   if (framed) elab_plan_leave(c);
   return before;
 }
@@ -3269,7 +3231,7 @@ static int cplan_record_new_gap(Compiler *c, int id) {
    call, new: is_opaque_reaching_call) may run later on another object
    (`o.instance_exec(&b)`), so its self is not known. */
 static int ct_block_keeps_self(Compiler *c, const char *rn, const char *nm) {
-  if (ct_program_may_take(c, nm)) return 0;
+  if (elab_program_may_take(c, nm)) return 0;
   return is_async_code_entry(rn, nm) || !is_opaque_reaching_call(nm);
 }
 /* The nearest call around node whose literal block may run with another
@@ -8049,7 +8011,7 @@ static int cplan_root_def_runs_first(Compiler *c, int call, int owner, const cha
   *vis = -1;
   for (int k = 0; k < n; k++) {
     LoadPoint sp = elab_point_of(c, sites[k]);
-    if (sp.region < 0 || !elab_blocks_run_now(c, sites[k]) || elab_reached_method_at(c, owner, name, sp) != ELAB_YES) return 0;
+    if (sp.region < 0 || !elab_blocks_run_at_once(c, sites[k]) || elab_reached_method_at(c, owner, name, sp) != ELAB_YES) return 0;
     int v = elab_method_vis_at(c, owner, name, 0, sp);
     if (v < 0 || (k && v != *vis)) return 0;
     *vis = v;

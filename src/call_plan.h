@@ -304,7 +304,8 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON }
    it runs, as nothing proves it runs after a def; for a name the tables
    hold no method scope of (an accessor's), asked only under CT_REACH, the
    record proves the call runs before every version of it
-   (ct_before_versions). 0 for a none the tables give */
+   (ct_before_versions). Any other why on an ML_NONE (0, or UNASKED from
+   cplan_new_initialize) is a none the tables give */
 typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD } MlWhy;
 typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
@@ -1270,19 +1271,20 @@ int cplan_self_class(Compiler *c, int id);
    builtin the class itself answers (`U.name`) keeps its receiver and
    reaches the builtin through call_target's answer. */
 int cplan_self_builtin(Compiler *c, int id);
-/* Is every class method `name` of program class cls defined after call id,
-   as the record proves at the call's load point (call_target's answer for
-   a call there)? A reflection asked there (`C.respond_to?(:z)` before
-   `def C.z`) then finds none. 0 unless the call has a point and runs when
-   its statement does: not in a method body, a lambda or an END body, nor
-   in a block that may run after its point, and in a block only when every
-   block around it runs at once (ct_before_versions, the proof a method
-   list's accessor asks too: a builtin iterator on a literal, a program
-   method whose body runs it before answering, or an iterator's name no
-   method of the program's can take over); 0 too for a class whose chain
-   the record does not know. The respond_to? a `defined?(C.z)`
-   is answered by (desugar_defined_method_call) asks at the point of the
-   call `C.z` (the defined?'s). */
+/* Is every class method `name` of program class cls defined after call id
+   runs, as the record proves it (ct_before_versions, the proof a method
+   list's accessor asks too)? A reflection asked there (`C.respond_to?(:z)`
+   before `def C.z`) then finds none. The proof holds where none is live
+   where the call runs (at its load point; in a method body, at every call
+   of the method, all before the def), the call runs at no time after that
+   (not in a lambda, an END body or a block kept for later), and every
+   block between it and the body it runs in runs at once
+   (elab_blocks_run_at_once: a builtin iterator's on a literal, one a
+   program method runs before answering, or one an iterator's name runs
+   that no method of the program's nor a lazy enumerator takes over); 0
+   for a class whose chain the record does not know. The respond_to? a
+   `defined?(C.z)` is answered by (desugar_defined_method_call) asks at
+   the point of the call `C.z` (the defined?'s). */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
 /* The class an alias that node id meets as cls's `name` (singleton when sg)
    was made in, as Method#owner names it (*own_sg: on its singleton); -1 for

@@ -194,6 +194,7 @@ struct LoadRecord {
   struct LrReader { const char *name; int node, key, next; unsigned char kind, sg, copy; } *rdr; int nrdr, crdr, *rdr_head; struct { int n; unsigned ver; } rdr_of;
   int follow;                /* the aliases lr_class_of is following, to cap a chain */
   signed char *bread; int nbread;   /* [nbread] by def node: lr_def_block's reading + 3, 1 while it is read, 0 for not read yet */
+  signed char *once; int nonce; unsigned long once_of;   /* [nonce] by node, in the call plan's frame: elab_blocks_run_at_once's answer + 1, 0 for not asked yet; of the histories at hgen once_of */
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
   ElabSurface *surf; int *surf_at;   /* elab_class_surface's, by class side: [2 * (cls + 1) + sg] .. [+ 1] */
   int *dscope, ndscope;      /* [ndscope] by node: the method scope the scope walk made of a def or define_method (elab_def_scope), 0 for none */
@@ -2846,6 +2847,7 @@ static void lr_record_drop(LoadRecord *r) {
   r->anc.ready = 0;   /* (the mixins' duplicate answers are dropped with them) */
   free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
   free(r->bread); r->bread = NULL; r->nbread = 0;   /* (read through the dropped histories) */
+  free(r->once); r->once = NULL; r->nonce = 0;
 }
 
 static char *lr_dump_text(Compiler *c);
@@ -3723,21 +3725,52 @@ int elab_runs_with(Compiler *c, int node, int def) {
 }
 
 /* Does node run when its statement does, for certain: is every block
-   around it one that runs at once where its call runs (elab_block_runs:
-   ELAB_BLK_NOW, a builtin iterator on a literal), with no END body around
-   it, up to a file's root? A block taken to run at once (ELAB_BLK_ASSUMED)
-   or not known may run later (a program's `each` may keep it), and a node
-   whose climb does not reach a root is not known either. */
-int elab_blocks_run_now(Compiler *c, int node) {
+   between it and the body it runs in (a def's, or a file's root) one that
+   runs at once where its call runs, with no lambda or END body between?
+   The record proves a block runs so (elab_block_runs: ELAB_BLK_NOW, a
+   builtin iterator's on a literal of a builtin class no reopening answers
+   the name on, or a method of the program's whose body runs it before it
+   answers), or takes it to by its call's name (ELAB_BLK_ASSUMED: an
+   iterator, tap, then, class_eval and kin, a class builder); such a block
+   counts where no method of the program's can take the call over
+   (elab_program_may_take) and no lazy enumerator keeps it (a name of
+   is_lazy_chain_name: `l.map { }` on a Lazy held in a variable runs when
+   the chain is forced). Any other block may run later, and a node whose
+   climb reaches no root is not known. In the call plan's frame, whose
+   parents stay as they are, the answer is kept per node (r->once) as of
+   the histories it was read through (hgen). */
+int elab_blocks_run_at_once(Compiler *c, int node) {
   int n;
   const int *par = elab_node_parents(c, &n);
-  int v = node;
-  for (int p; v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p) {
-    NodeKind k = nt_kind(c->nt, p);
-    if (k == NK_PostExecutionNode) return 0;
-    if (k == NK_BlockNode && (par[p] < 0 || elab_block_runs(c, par[p]) != ELAB_BLK_NOW)) return 0;
+  LoadRecord *r = c->lrec;
+  if (node < 0 || node >= n) return 0;
+  if (r->plan_depth && (r->once_of != r->hgen || r->nonce < n)) {
+    signed char *m = realloc(r->once, (size_t)n);
+    if (!m) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int from = r->once_of != r->hgen ? 0 : r->nonce;
+    memset(m + from, 0, (size_t)(n - from));
+    r->once = m; r->nonce = n; r->once_of = r->hgen;
   }
-  return v >= 0 && v < n && par[v] < 0 && nt_kind(c->nt, v) == NK_ProgramNode;
+  if (r->plan_depth && r->once[node]) return r->once[node] - 1;
+  int v = node, at = -1;
+  for (int p; at < 0 && (p = par[v]) >= 0 && p < n; v = p) {
+    NodeKind k = nt_kind(c->nt, p);
+    int call = k == NK_BlockNode ? par[p] : -1, w;
+    const char *nm = call >= 0 && call < n && nt_kind(c->nt, call) == NK_CallNode && nt_ref(c->nt, call, "block") == p ? nt_str(c->nt, call, "name") : NULL;
+    if (k == NK_DefNode) at = 1;
+    else if (k == NK_LambdaNode || k == NK_PostExecutionNode) at = 0;
+    else if (k == NK_BlockNode && (!nm || ((w = elab_block_runs(c, call)) != ELAB_BLK_NOW &&
+                                           (w != ELAB_BLK_ASSUMED || is_lazy_chain_name(nm) || elab_program_may_take(c, nm)))))
+      at = 0;
+  }
+  if (at < 0) at = par[v] < 0 && nt_kind(c->nt, v) == NK_ProgramNode;
+  if (r->plan_depth) r->once[node] = (signed char)(at + 1);
+  return at;
+}
+
+/* See analyze.h. */
+int elab_program_may_take(Compiler *c, const char *nm) {
+  return !nm || elab_names_method(c, nm) || elab_names_method(c, METHOD_MISSING_NAME);
 }
 
 /* The record's readings of a method body's block (lr_def_block): kept for
@@ -5707,15 +5740,12 @@ static void lr_rta_reach_by(LrRta *t, int hi) {
 }
 /* Does call id run when statement t->s runs, and at no other time: a node
    of the statement's own (no def around it), in no lambda and in no block
-   but one that runs at once (elab_blocks_run_now), the statement in no
+   but one that runs at once (elab_blocks_run_at_once), the statement in no
    body that runs again (a loop's)? */
 static int lr_rta_once(LrRta *t, int id) {
   const LrStmt *st = &t->r->st[t->s];
   NodeKind sk = nt_kind(t->c->nt, st->node);
-  if (t->key[id] != t->s || st->rep >= 0 || sk == NK_WhileNode || sk == NK_UntilNode || !elab_blocks_run_now(t->c, id)) return 0;
-  const int *par = comp_parent_map(t->c);
-  for (int p = par[id]; p >= 0 && p != st->node; p = par[p]) if (nt_kind(t->c->nt, p) == NK_LambdaNode) return 0;
-  return 1;
+  return t->key[id] == t->s && st->rep < 0 && sk != NK_WhileNode && sk != NK_UntilNode && elab_blocks_run_at_once(t->c, id);
 }
 /* every name (disp 0: every instance method of E, every singleton
    method), or what the runtime may call back (disp 1: the implicitly

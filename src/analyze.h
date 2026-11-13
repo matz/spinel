@@ -515,10 +515,14 @@ void elab_mark_versions(Compiler *c);
 /* does node run whenever the body of def node `def` runs: is it inside that
    body with no lambda, nested def or deferred block between? */
 int elab_runs_with(Compiler *c, int node, int def);
-/* does node run when its statement does, for certain: every block around
-   it runs at once (ELAB_BLK_NOW), no END body around it, and the climb
-   reaches a file's root? */
-int elab_blocks_run_now(Compiler *c, int node);
+/* does node run when its statement does, for certain: every block between
+   it and the body it runs in (a def's, or a file's root) runs at once
+   where its call runs, with no lambda or END body between? */
+int elab_blocks_run_at_once(Compiler *c, int node);
+/* may a method of the program's take a call of nm over from the builtin's:
+   one it defines by that name anywhere (elab_names_method), or a
+   method_missing? (NULL: not known, so it may.) */
+int elab_program_may_take(Compiler *c, const char *nm);
 /* the scope walk made method scope `scope` of def or define_method node
    `node`: the record's version of it holds it (LrDef.scope) */
 void elab_def_scope(Compiler *c, int node, int scope);

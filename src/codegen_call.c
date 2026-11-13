@@ -2320,17 +2320,24 @@ int emit_poly_cls_value_prearm(Compiler *c, int id, const char *name, int argc,
   snprintf(rcls8, sizeof rcls8, "sp_unbox_class(_t%d)", tv);
   snprintf(rraise8, sizeof rraise8, "sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d))", name, tv);
   int rdef8 = 0;
+  int ngr8 = 0;
+  char **gtext8 = malloc(sizeof(char *) * (size_t)nc8);
+  Buf *glab8 = malloc(sizeof(Buf) * (size_t)nc8);
   for (int i = 0; i < nc8; i++) {
     int rarm8 = emit_reopen_arm_test(c, cmi8[i], name, rcls8, rraise8, b);
-    if (!rarm8) buf_printf(b, " case %d: ", ccls8[i]);
     rdef8 |= rarm8;
     if (cexp8[i][0]) {
+      if (!rarm8) buf_printf(b, " case %d: ", ccls8[i]);
       emit_poly_arity_raise(b, cexp8[i]);
       buf_puts(b, " break;");
       if (g_plan_check) pa_observe_at(id, PA_ARITY, PA_KEY_CLASS_VALUE + ccls8[i], cmi8[i], TY_UNKNOWN, PC_VOID);
       continue;
     }
     Scope *ks = &c->scopes[cmi8[i]];
+    /* a plain arm's text is held, so the classes whose arms read the same
+       share one (below) */
+    Buf ab; memset(&ab, 0, sizeof ab);
+    Buf *ob = rarm8 ? b : &ab;
     TyKind kr = (TyKind)ks->ret;
     Buf cb; memset(&cb, 0, sizeof cb);
     Buf pre; memset(&pre, 0, sizeof pre);
@@ -2352,19 +2359,19 @@ int emit_poly_cls_value_prearm(Compiler *c, int id, const char *name, int argc,
     }
     free(pre.p);
     int pconv = PC_SAME;
-    if (tr < 0 || method_is_void(ks)) { buf_puts(b, cb.p ? cb.p : ""); pconv = PC_VOID; }
+    if (tr < 0 || method_is_void(ks)) { buf_puts(ob, cb.p ? cb.p : ""); pconv = PC_VOID; }
     else {
-      buf_printf(b, "_t%d = ", tr);
+      buf_printf(ob, "_t%d = ", tr);
       /* a class method answering its oint (method_ret_is_oint): boxed with
          its nil (emit_poly_user_box), unwrapped into a plain slot; a plain
          answer is lifted into a slot that holds the oint */
       int ko = oint_kind(kr) && method_ret_is_oint(ks), so = oint_kind(ret) && node_is_oint(c, id);
-      if (ret == TY_POLY && kr != TY_POLY) { emit_poly_user_box(c, id, ks, cb.p ? cb.p : "", b); pconv = PC_BOX; }
+      if (ret == TY_POLY && kr != TY_POLY) { emit_poly_user_box(c, id, ks, cb.p ? cb.p : "", ob); pconv = PC_BOX; }
       /* a typed Array into the boxed Array the call joined it in
          (an_class_concrete): a module's `def self.split = ["n", s]` beside
          another's mixed one */
       else if (ret == TY_POLY_ARRAY && (kr == TY_INT_ARRAY || kr == TY_STR_ARRAY || kr == TY_FLOAT_ARRAY)) {
-        buf_printf(b, "%s(%s)", kr == TY_INT_ARRAY ? "sp_IntArray_to_poly" :
+        buf_printf(ob, "%s(%s)", kr == TY_INT_ARRAY ? "sp_IntArray_to_poly" :
                                 kr == TY_STR_ARRAY ? "sp_StrArray_to_poly_handles" :
                                 "sp_FloatArray_to_poly",
                    cb.p ? cb.p : "NULL");
@@ -2372,16 +2379,49 @@ int emit_poly_cls_value_prearm(Compiler *c, int id, const char *name, int argc,
       }
       /* (a slot that holds the oint takes a boxed answer with its nil:
          emit_unbox_text answers the plain scalar) */
-      else if (ret != TY_POLY && kr == TY_POLY && so) { buf_printf(b, "%s(%s)", oint_unbox(ret), cb.p ? cb.p : "sp_box_nil()"); pconv = PC_UNBOX; }
-      else if (ret != TY_POLY && kr == TY_POLY) { emit_unbox_text(c, ret, cb.p ? cb.p : "", b); pconv = PC_UNBOX; }
-      else if (ko && !so) buf_printf(b, "%s(%s)", oint_arg(kr), cb.p ? cb.p : "");
-      else if (!ko && so && oint_kind(kr)) buf_printf(b, "%s(%s)", oint_of(kr), cb.p ? cb.p : "");
-      else buf_puts(b, cb.p ? cb.p : "");
+      else if (ret != TY_POLY && kr == TY_POLY && so) { buf_printf(ob, "%s(%s)", oint_unbox(ret), cb.p ? cb.p : "sp_box_nil()"); pconv = PC_UNBOX; }
+      else if (ret != TY_POLY && kr == TY_POLY) { emit_unbox_text(c, ret, cb.p ? cb.p : "", ob); pconv = PC_UNBOX; }
+      else if (ko && !so) buf_printf(ob, "%s(%s)", oint_arg(kr), cb.p ? cb.p : "");
+      else if (!ko && so && oint_kind(kr)) buf_printf(ob, "%s(%s)", oint_of(kr), cb.p ? cb.p : "");
+      else buf_puts(ob, cb.p ? cb.p : "");
     }
-    buf_puts(b, "; break;");
+    buf_puts(ob, "; break;");
     free(cb.p);
     if (g_plan_check) pa_observe_at(id, PA_USER, PA_KEY_CLASS_VALUE + ccls8[i], cmi8[i], kr, pconv);
+    if (!rarm8) {
+      /* An inherited class method is one C function for every class, which
+         its arm hands the class it selected: read as the switch's own key,
+         the arms of those classes are one text, and are emitted once under
+         their labels together. Each arm called a forced-inline method a copy
+         of its own. */
+      char lit[64], key[64];
+      snprintf(lit, sizeof lit, "((sp_Class){%d, NULL})", ccls8[i]);
+      snprintf(key, sizeof key, "((sp_Class){_t%d.cls_id, NULL})", tv);
+      Buf nb; memset(&nb, 0, sizeof nb);
+      const char *at = ab.p ? ab.p : "";
+      for (const char *q; (q = strstr(at, lit)); at = q + strlen(lit)) {
+        buf_printf(&nb, "%.*s", (int)(q - at), at);
+        buf_puts(&nb, key);
+      }
+      buf_puts(&nb, at);
+      int g = -1;
+      for (int j = 0; j < ngr8 && g < 0; j++) if (sp_streq(gtext8[j], nb.p ? nb.p : "")) g = j;
+      if (g < 0) {
+        g = ngr8++;
+        gtext8[g] = nb.p ? nb.p : strdup("");
+        memset(&glab8[g], 0, sizeof glab8[g]);
+        nb.p = NULL;
+      }
+      buf_printf(&glab8[g], " case %d:", ccls8[i]);
+      free(nb.p);
+      free(ab.p);
+    }
   }
+  for (int j = 0; j < ngr8; j++) {
+    buf_printf(b, "%s %s", glab8[j].p, gtext8[j]);
+    free(glab8[j].p); free(gtext8[j]);
+  }
+  free(glab8); free(gtext8);
   /* a Struct or Data class with no `self.members` of its own answers its
      member names (the generated sp_cls_members), as emit_poly_call's arm
      answers a class value when no class method takes the name */
@@ -2400,6 +2440,10 @@ int emit_poly_cls_value_prearm(Compiler *c, int id, const char *name, int argc,
   else if (!rdef8) buf_printf(b, " default: %s; break;", rraise8);
   buf_puts(b, " } }\nelse ");
   free(ccls8); free(cmi8); free(cexp8);
+  /* what the dispatch emits from here on is the else of the tag test: no
+     Class value reaches it, as none reaches the re-entry of the builtin
+     arm (g_cls_tag_skip; the dispatch's caller puts the marker back) */
+  g_cls_tag_skip = id;
   return 1;
 }
 
@@ -9098,8 +9142,12 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
       if (ok2 && nb2->p && !arm_raises_nomethod_for(nb2->p, name)) own_raise = 0;
       free(nb2->p); free(nb2); free(pre2);
     } }
-  if (!ib.p || emitted_no_method(ib.p) ||
-      strncmp(ib.p, "sp_raise_poly_nomethod(", 23) == 0 || own_raise) {
+  /* ...unless what the arm hoists raises first: the builtin's own check of
+     its arguments (Array#delete given none) is its answer, ahead of the
+     NoMethodError the re-entry ends in for the other values */
+  int pre_raises = arm_pre && strstr(arm_pre, "sp_raise_cls(\"ArgumentError\"");
+  if (!ib.p || ((emitted_no_method(ib.p) ||
+      strncmp(ib.p, "sp_raise_poly_nomethod(", 23) == 0 || own_raise) && !pre_raises)) {
     free(ib.p); free(arm_pre); return 0;
   }
   /* the re-entered emission can land on Object's own method, which may
@@ -10910,6 +10958,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, " _t%d = %s; ", tr, is_scalar_ret(ret) ? default_value_from_compiler(c, ret) : "0");
       }
       int pa_frame0 = g_plan_check ? pa_begin(id) : -1;
+      int sv_csd0 = g_cls_tag_skip;
       emit_poly_prearms0(c, id, name, &ps, ret, tv, tr, b);
       int blk_tmp0 = emit_poly_prearms0_blk(c, id, name, &ps, ret, tv, tr, b);
       /* a genuine String in a slot whose name a user class owns (#4816) */
@@ -10937,6 +10986,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       obj_default_done = emit_poly_defaults0(c, id, recv, name, &ps, ret, tv, tr, obj_default_done, b);
       if (g_plan_check) pa_resume(pa_frame0);
       emit_poly_last_default(c, id, recv, name, 0, NULL, NULL, NULL, ret, tv, tr, obj_default_done, b);
+      g_cls_tag_skip = sv_csd0;
       if (g_plan_check) pa_end(c, pa_frame0, cplan_poly(c, id));
       { int pid0[2] = { tv, blk_tmp0 };
         TyKind pty0[2] = { TY_POLY, TY_PROC };   /* the block's proc, when one was built */
@@ -11336,6 +11386,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (setter_late && htmp[0]) ran_first_bind(argv[0], atmp[0], htmp[0]);
       ptemps.kwh_tmp = emit_poly_callable_kwh_decl(c, name, &ps, &ptemps, &kw, b);
       emit_poly_prearms_n(c, name, &ps, &ptemps, b);
+      int sv_csd2 = g_cls_tag_skip;
       int blk_tmp2 = emit_poly_prearms_n_blk(c, id, name, &ps, &ptemps, atmp, atmp_ty, &kw, htmp,
                                              is_setter_val, splat_a, splat_last, stk, b);
       /* The plan supplies the switch key form. */
@@ -11441,6 +11492,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       free(kwty);
       view_unbind(kwmark);
       c->args_in_call = recv;
+      g_cls_tag_skip = sv_csd2;
       return 1;
     }
   }

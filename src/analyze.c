@@ -18861,6 +18861,29 @@ static void oa_call_value_uses(Compiler *c, OAS *sl, const int *read_slot, char 
   for (int k = 0; k < g_oa_carg_n; k++)
     if (g_oa_carg_node[k] >= 0) sl[g_oa_carg_slot[k]].alive = 0;
 }
+/* A parameter's default is one more value it may hold, classified like a
+   local's write and, a literal, built at the narrowed kind as a caller's
+   literal argument is (oa_call_edges). Left out, a parameter every caller
+   passes `[Info.new]` narrowed to the object array while its `= [Info.new]`
+   default stayed the poly array: infer_default_param_types joined the two
+   to the poly scalar, the write pass put the pin back, and the fixpoint ran
+   to its cap. An empty `[]` default is infer_default_param_types' own to
+   build at the parameter's kind. */
+static void oa_param_defaults(Compiler *c, OAS *sl, int n, const int *read_slot, const int *call_ret,
+                              char *claimed, const unsigned char *dead) {
+  const NodeTable *nt = c->nt;
+  for (int i = 0; i < n; i++) {
+    LocalVar *plv = sl[i].lv;
+    if (!plv || !plv->is_param || !plv->name) continue;
+    Scope *M = &c->scopes[sl[i].sidx];
+    int v = -1;
+    for (int k = 0; k < M->nparams; k++)
+      if (M->pnames[k] && sp_streq(M->pnames[k], plv->name)) { v = M->pdefault[k]; break; }
+    if (v < 0 || (dead && dead[v]) || is_empty_array_literal(nt, v, c->node_cap)) continue;
+    oa_classify_value(c, sl, n, read_slot, call_ret, claimed, i, v);
+    if (nt_kind(nt, v) == NK_ArrayNode) oa_note_src(i, v);
+  }
+}
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -19463,6 +19486,9 @@ static int narrow_object_arrays(Compiler *c) {
     if (S < 0) continue;
     oa_classify_value(c, sl, n, read_slot, call_ret, claimed, S, nt_ref(nt, id, "value"));
   }
+
+  /* 5'. a parameter's default: one more of its sources */
+  oa_param_defaults(c, sl, n, read_slot, call_ret, claimed, dead);
 
   /* 5a. InstanceVariableWriteNode sources, the same way; a write from a
          method of another class (or a singleton method) is unvetted. */

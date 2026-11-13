@@ -35,6 +35,7 @@ void buf_puts(Buf *b, const char *s);
 void buf_erase(Buf *b, size_t off, size_t n);
 void buf_insert_at(Buf *b, size_t at, const char *text);   /* text into b at byte offset at */
 extern int g_no_root_elision;
+extern const char *g_orw_store_guard;
 extern int g_no_root_frame;
 extern int g_inline_hot;
 extern int g_no_write_barrier;
@@ -1639,7 +1640,7 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
    `mark` as emit_slot_orw_value's */
 void emit_ivar_orw_value(Compiler *c, int id, TyKind t, int elems_handle, const char *ref, int v, int is_or,
                          const char *mark, Buf *b);
-void emit_attr_orw_value(Compiler *c, int cid, int iv, const char *pfx, TyKind t, int elems_handle,
+void emit_attr_orw_value(Compiler *c, int cid, int iv, const char *recv, const char *pfx, TyKind t, int elems_handle,
                          const char *ref, int v, int is_or, const char *mark, Buf *b);
 int ivar_orw_niltest(Compiler *c, int id, const char *ref, char *out, size_t cap, int *cid, int *iv, char *pfx, size_t pcap);
 int emit_empty_literal_as(Compiler *c, int v, TyKind slot, Buf *b);

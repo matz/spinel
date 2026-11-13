@@ -1,0 +1,19 @@
+or poly: FrozenError
+or str: FrozenError
+or int: FrozenError
+or arr: FrozenError
+and nil: ok nil
+value: FrozenError
+self in method: FrozenError
+op int: FrozenError
+op str: FrozenError
+op value: FrozenError
+sub: FrozenError
+def reader: FrozenError
+struct: FrozenError
+struct set: ok 2
+or set: ok 1
+or set str: ok "a"
+param frozen: FrozenError
+param: ok 11
+[1, 5, 3, "ac"]

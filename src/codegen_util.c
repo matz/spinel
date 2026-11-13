@@ -8786,15 +8786,22 @@ void emit_ivar_orw_value(Compiler *c, int id, TyKind t, int elems_handle, const 
   else emit_slot_orw_value(c, t, elems_handle, ref, v, is_or, mark, b);
 }
 /* `obj.x ||= v` through the attribute's field (class cid, ivar iv, receiver
-   prefix pfx such as "_t3->") */
-void emit_attr_orw_value(Compiler *c, int cid, int iv, const char *pfx, TyKind t, int elems_handle,
+   temp recv such as "_t3", prefix pfx such as "_t3->"). The store is the
+   writer's `@x = v`: a frozen receiver refuses it, where the store runs. */
+void emit_attr_orw_value(Compiler *c, int cid, int iv, const char *recv, const char *pfx, TyKind t, int elems_handle,
                          const char *ref, int v, int is_or, const char *mark, Buf *b) {
   char nt[300];
+  Buf fz; memset(&fz, 0, sizeof fz);
+  emit_frozen_obj_guard(c, cid, recv, &fz);
+  const char *sv_guard = g_orw_store_guard;
+  g_orw_store_guard = fz.p;
   if (oint_kind(t) && iv >= 0 && ivar_has_nilbit(c, cid, iv)) {
     ivar_nilbit_test(c, cid, iv, pfx, nt, sizeof nt);
     emit_slot_orw_value_o(c, t, 0, ref, v, is_or, nt, cid, iv, pfx, mark, b);
   }
   else emit_slot_orw_value(c, t, elems_handle, ref, v, is_or, mark, b);
+  g_orw_store_guard = sv_guard;
+  free(fz.p);
 }
 /* The nil test of ivar iv of class cid behind `ref` ("self->iv_x", the
    field) for an or-write statement: the bit, the oint's flag, or NULL */

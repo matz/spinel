@@ -1475,7 +1475,7 @@ void emit_orw_guard(Compiler *c, int v, TyKind slot, const char *cond, const cha
    freshly wrapped), its setup spliced inside the guard. */
 /* What the store of an object's own slot runs first, where the store is taken (the frozen guard `@x = v` takes),
    set by the ivar's value form around the slot's store (emit_ivar_orw_value, the shared-handle forms); NULL for any other slot. */
-static const char *g_orw_store_guard = NULL;
+const char *g_orw_store_guard = NULL;
 void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *b) {
   Buf vpre; memset(&vpre, 0, sizeof vpre);
   Buf vval; memset(&vval, 0, sizeof vval);
@@ -1890,6 +1890,11 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     free(vpre.p); free(vval.p); }
   if (vt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tw);
   else if (!is_scalar_ret(vt) && !comp_ty_value_obj(c, vt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", tw);
+  /* an attr writer is the ivar's store, `@x = v`: a frozen receiver refuses it */
+  if (wk != SP_MEMBER_METHOD && wvis == SP_VIS_PUBLIC) {
+    char fobj[64]; snprintf(fobj, sizeof fobj, "((sp_%s *)_t%d)", c->classes[cid].c_name, tr);
+    emit_frozen_obj_guard(c, cid, fobj, b);
+  }
   buf_puts(b, "(void)(");
   if (wvis != SP_VIS_PUBLIC) {
     char rv[32]; snprintf(rv, sizeof rv, "_t%d", tr);
@@ -7368,7 +7373,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
          after the write, nil exactly when the bit says so (`&&=` over nil) */
       int ao = oint_kind(ivt) && iidx >= 0 && ivar_has_nilbit(c, class_id, iidx) && node_is_oint(c, id);
       if (ao) buf_puts(b, "(void)");
-      emit_attr_orw_value(c, class_id, iidx, apfx, ivt, iidx >= 0 && repr_of_ivar(c, class_id, iidx).elems_handle, lhs, v, is_or, m, b);
+      emit_attr_orw_value(c, class_id, iidx, tn, apfx, ivt, iidx >= 0 && repr_of_ivar(c, class_id, iidx).elems_handle, lhs, v, is_or, m, b);
       if (ao) {
         char ant[300]; ivar_nilbit_test(c, class_id, iidx, apfx, ant, sizeof ant);
         buf_printf(b, "; %s ? %s : %s(%s)", ant, oint_nil(ivt), oint_of(ivt), lhs);

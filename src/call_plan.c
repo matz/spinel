@@ -10012,6 +10012,20 @@ int cplan_cell_dropped(const Compiler *c, const LocalVar *g) {
   return i >= 0 && i < c->nver_cell_dropped && c->ver_cell_dropped[i];
 }
 /* See call_plan.h. */
+int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v) {
+  for (int i = 0; i < c->nver_vis_after; i++) {
+    const struct VerVisAfter *a = &c->ver_vis_after[i];
+    if (a->node != id || k--) continue;
+    char cell[32];
+    ver_vis_cell_name(a->cell, cell);
+    *g = comp_gvar(c, cell + 1);
+    if (*g && cplan_cell_dropped(c, *g)) *g = NULL;
+    *v = a->v;
+    return 1;
+  }
+  return 0;
+}
+/* See call_plan.h. */
 int cplan_cell_write_dropped(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   return nt_kind(nt, id) == NK_GlobalVariableWriteNode && nt_int(nt, id, "ver_cell", 0) &&
@@ -10021,6 +10035,17 @@ static int ver_cells_put(Compiler *c);
 void ver_cells_write(Compiler *c) {
   ver_cells_put(c);
   ver_memo_drop(c);   /* (the versions kept before the writes are asked again) */
+}
+/* (a word inside an expression's write of visibility cell `cell`, once per
+   word and cell: cplan_vis_cell_after) */
+static void ver_vis_after_add(Compiler *c, int node, int cell, int v) {
+  int n = c->nver_vis_after;
+  for (int i = 0; i < n; i++)
+    if (c->ver_vis_after[i].node == node && c->ver_vis_after[i].cell == cell) return;
+  if (!(n & (n - 1)) && !(c->ver_vis_after = realloc(c->ver_vis_after, sizeof *c->ver_vis_after * (size_t)(n ? 2 * n : 1)))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  c->ver_vis_after[c->nver_vis_after++] = (struct VerVisAfter){ node, cell, v };
 }
 /* ...how many it wrote */
 static int ver_cells_put(Compiler *c) {
@@ -10058,13 +10083,17 @@ static int ver_cells_put(Compiler *c) {
        its cell's visibility cell: written beside each version's write,
        with its def's visibility, and after each visibility word of the
        name, with the word's (elab_version_word); ahead of one whose value
-       is read, `x = (public :m if c)`, which the write would answer) */
+       is read, `x = (public :m if c)`, which the write would answer; a
+       word inside an expression, `c && public(:m)`, may not run when its
+       statement does, so its own call writes it as it runs, which the
+       word's node keeps: cplan_vis_cell_after) */
     int rt = 0;
     for (int j = 0; e->face && j < nv; j++) rt |= elab_version_vis(c, &vs[j]) < 0;
     for (int j = 0; rt && j < nv; j++)
       for (int k = 0, wn, wv, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv)) >= 0; k++) {
         int st = o ? ver_write_stmt(nt, par, wn) : -1;
         if (st < 0 || par[st] < 0 || !ver_cell_once(&cells, wn, -2 - vs[j].cell) || !pass) continue;
+        if (nt_kind(nt, par[wn]) != NK_StatementsNode) { ver_vis_after_add(c, wn, vs[j].cell, wv); continue; }
         ver_write_add(&w, &nw, (VerWrite){ par[st], st, wn, wv, vs[j].cell, an_value_dropped(c, par, st), 0, -1, 0, 1 });
         if (vs[j].cell >= nh) nh = vs[j].cell + 1;
       }

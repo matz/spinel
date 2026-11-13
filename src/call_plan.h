@@ -424,6 +424,13 @@ int cplan_cell_dropped(const Compiler *c, const LocalVar *g);
    C leaves out? A write of the program's own to a global of a cell's name is
    written. */
 int cplan_cell_write_dropped(Compiler *c, int id);
+/* The k-th (from 0) of the visibility cells visibility word `id` writes as
+   its own call runs (*g), and the value it writes there (*v): where the
+   word stands inside an expression (`c && public(:m, :n)`), which may not
+   run when its statement does, so no write beside the statement can stand
+   for it (ver_cells_put). *g is NULL for a cell no emitted code reads. 0
+   past the last, and for any other node. */
+int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v);
 /* `cell = v` put in statement list `list` at its statement `at` (after it
    when after): the write, for the caller to record (elab_record_write) */
 int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int v);

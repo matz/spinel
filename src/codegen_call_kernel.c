@@ -172,17 +172,24 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
      at analysis time and the def is emitted with the class; the value is the
      name, the Array of names, or nil for the bare form (the class itself for
      private_class_method). */
+  /* (a word inside an expression, `c && public(:m)`, writes its
+     visibility cell as it runs, cplan_vis_cell_after: ahead of its value,
+     which reads nothing) */
   {
-    int vk = vis_decl_call(c, id);
-    if (vk == VIS_DECL_NIL) { buf_puts(b, "0"); return 1; }
-    if (vk == VIS_DECL_SELF) { buf_printf(b, "((sp_Class){%d})", self_class_body(c, id)); return 1; }
-    if (vk == VIS_DECL_SYM) {
+    int vk = vis_decl_call(c, id), cw = 0;
+    if (vk) {
+      Buf wb; memset(&wb, 0, sizeof wb);
+      if ((cw = emit_vis_cell_write(c, id, &wb))) buf_printf(b, "(%s, ", wb.p);
+      free(wb.p);
+    }
+    if (vk == VIS_DECL_NIL) buf_puts(b, "0");
+    else if (vk == VIS_DECL_SELF) buf_printf(b, "((sp_Class){%d})", self_class_body(c, id));
+    else if (vk == VIS_DECL_SYM) {
       const char *vn = nt_kind(nt, argv[0]) == NK_DefNode ? nt_str(nt, argv[0], "name")
                                                           : nt_str(nt, argv[0], "value");
       buf_printf(b, "((sp_sym)%d)", comp_sym_intern(c, vn ? vn : ""));
-      return 1;
     }
-    if (vk == VIS_DECL_ARRAY) {
+    else if (vk == VIS_DECL_ARRAY) {
       int en = argc; const int *ev = argv;
       if (argc == 1 && nt_kind(nt, argv[0]) == NK_ArrayNode) ev = nt_arr(nt, argv[0], "elements", &en);
       int ta = ++g_tmp;
@@ -193,8 +200,9 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym((sp_sym)%d));", ta, comp_sym_intern(c, vn ? vn : ""));
       }
       buf_printf(b, " _t%d; })", ta);
-      return 1;
     }
+    if (cw) buf_puts(b, ")");
+    if (vk) return 1;
   }
 
   /* `r = attr_accessor :a` in a class body: the definitions were made at

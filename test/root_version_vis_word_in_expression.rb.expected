@@ -1,0 +1,36 @@
+false
+:private
+:private
+:private
+:private
+:private
+:private
+:private
+:private
+2
+2
+2
+2
+2
+2
+2
+2
+[1, 1, [false]]
+1
+2
+1
+1
+1
+1
+1
+1
+2
+2
+2
+2
+2
+2
+[1, :d4, nil]
+[1, 1, 1, 1, 1, 1, 1, 1, :private, :private]
+[2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+[:e5, :e6]

@@ -146,7 +146,6 @@ typedef struct CF {
      contents are its contents (one level, as in Das's one-level flow). */
   int **psucc, *npsucc, *cpsucc;        /* per element: the elements its objects reach (a share) */
   int **pts, *npts, *cpts;              /* per element: the objects it may hold, sorted */
-  unsigned long long **pbit; int *npbit; /* ... and as a bitset, to ask one (npbit words) */
   int *sent; unsigned char *sentp;      /* per element: the set, and whether a container the walk does not track, last sent on */
   int **pdel, *npdel, *cpdel;           /* per element: the objects added since it was last sent on */
   int **ld, *nld, *cld, **st, *nst, *cst;   /* per element: the loads out of it, the stores into it */
@@ -458,7 +457,7 @@ static void cf_grow_directed(CF *f) {
   CF_GROW(f->succ); CF_GROW(f->nsucc); CF_GROW(f->csucc);
   CF_GROW(f->psucc); CF_GROW(f->npsucc); CF_GROW(f->cpsucc);
   CF_GROW(f->inwl); CF_GROW(f->orig);
-  CF_GROW(f->pts); CF_GROW(f->npts); CF_GROW(f->cpts); CF_GROW(f->pbit); CF_GROW(f->npbit); CF_GROW(f->sent); CF_GROW(f->sentp);
+  CF_GROW(f->pts); CF_GROW(f->npts); CF_GROW(f->cpts); CF_GROW(f->sent); CF_GROW(f->sentp);
   CF_GROW(f->pdel); CF_GROW(f->npdel); CF_GROW(f->cpdel);
   CF_GROW(f->ld); CF_GROW(f->nld); CF_GROW(f->cld);
   CF_GROW(f->st); CF_GROW(f->nst); CF_GROW(f->cst);
@@ -469,7 +468,7 @@ static void cf_grow_directed(CF *f) {
     f->succ[i] = NULL; f->nsucc[i] = 0; f->csucc[i] = 0;
     f->psucc[i] = NULL; f->npsucc[i] = 0; f->cpsucc[i] = 0;
     f->inwl[i] = 0; f->orig[i] = 0;
-    f->pts[i] = NULL; f->npts[i] = 0; f->cpts[i] = 0; f->pbit[i] = NULL; f->npbit[i] = 0; f->sent[i] = CF_EMPTY; f->sentp[i] = 0;
+    f->pts[i] = NULL; f->npts[i] = 0; f->cpts[i] = 0; f->sent[i] = CF_EMPTY; f->sentp[i] = 0;
     f->pdel[i] = NULL; f->npdel[i] = 0; f->cpdel[i] = 0;
     f->ld[i] = NULL; f->nld[i] = 0; f->cld[i] = 0;
     f->st[i] = NULL; f->nst[i] = 0; f->cst[i] = 0;
@@ -525,9 +524,14 @@ static void cf_ptop_set_at(CF *f, int x, int line) {
   for (int i = 0; i < f->nst[x]; i++) cf_escape(f, f->st[x][i]);
   cf_wl_push(f, x);
 }
+/* (by the sorted list: a bitset per element, as wide as the objects,
+   grew with the elements times the objects, 320 MB of a 2,000-method
+   program's 590) */
 static int cf_pts_has(CF *f, int x, int o) {
-  int q = o >> 6;
-  return q < f->npbit[x] && ((f->pbit[x][q] >> (o & 63)) & 1);
+  int lo = 0, hi = f->npts[x];
+  const int *p = f->pts[x];
+  while (lo < hi) { int m = (lo + hi) / 2; if (p[m] < o) lo = m + 1; else hi = m; }
+  return lo < f->npts[x] && p[lo] == o;
 }
 static void cf_edge(CF *f, int src, int dst);
 static void cf_obj_edge(CF *f, int x, int o, int out);
@@ -555,14 +559,6 @@ static void cf_pts_add(CF *f, int x, int o) {
     { int ko = f->obj_cont[o]; cf_edge(f, ko, ks); cf_edge(f, ks, ko); }
     o = sm;     /* the summary is added like any object: it reaches on, loads and stores apply to it */
   }
-  if ((o >> 6) >= f->npbit[x]) {
-    int nw = (o >> 6) + 1 + (f->nobj >> 6);
-    unsigned long long *b = realloc(f->pbit[x], sizeof *b * (size_t)nw);
-    if (!b) cf_oom();
-    memset(b + f->npbit[x], 0, sizeof *b * (size_t)(nw - f->npbit[x]));
-    f->pbit[x] = b; f->npbit[x] = nw;
-  }
-  f->pbit[x][o >> 6] |= 1ULL << (o & 63);
   { int lo = 0, hi = f->npts[x];
     while (lo < hi) { int m = (lo + hi) / 2; if (f->pts[x][m] < o) lo = m + 1; else hi = m; }
     cf_push_int(&f->pts[x], &f->npts[x], &f->cpts[x], o);
@@ -5429,8 +5425,8 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     free(f.orig);
     for (int i = 0; i < f.dcap; i++) free(f.succ[i]);
     free(f.succ); free(f.nsucc); free(f.csucc); free(f.inwl); free(f.wl); free(f.eh);
-    for (int i = 0; i < f.dcap; i++) { free(f.psucc[i]); free(f.pts[i]); free(f.pbit[i]); free(f.pdel[i]); free(f.ld[i]); free(f.st[i]); }
-    free(f.pbit); free(f.npbit); free(f.sent); free(f.sentp);
+    for (int i = 0; i < f.dcap; i++) { free(f.psucc[i]); free(f.pts[i]); free(f.pdel[i]); free(f.ld[i]); free(f.st[i]); }
+    free(f.sent); free(f.sentp);
     free(f.pdel); free(f.npdel); free(f.cpdel);
     free(f.psucc); free(f.npsucc); free(f.cpsucc); free(f.pts); free(f.npts); free(f.cpts);
     free(f.ld); free(f.nld); free(f.cld); free(f.st); free(f.nst); free(f.cst); free(f.oe_out); free(f.oe_in);

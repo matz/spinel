@@ -9763,7 +9763,7 @@ static int ver_cells_put(Compiler *c) {
       for (int k = 0, wn, wv, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv)) >= 0; k++) {
         int st = o ? ver_write_stmt(nt, par, wn) : -1;
         if (st < 0 || par[st] < 0 || !ver_cell_once(&cells, wn, -2 - vs[j].cell) || !pass) continue;
-        ver_write_add(&w, &nw, (VerWrite){ par[st], st, wn, wv, vs[j].cell, an_value_dropped(nt, par, st), 0, -1, 0, 1 });
+        ver_write_add(&w, &nw, (VerWrite){ par[st], st, wn, wv, vs[j].cell, an_value_dropped(c, par, st), 0, -1, 0, 1 });
         if (vs[j].cell >= nh) nh = vs[j].cell + 1;
       }
     for (int j = 0; j < nv; j++) {

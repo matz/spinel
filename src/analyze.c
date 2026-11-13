@@ -54572,10 +54572,15 @@ static void an_phase_value_types(Compiler *c) {
           Scope *fs = comp_scope_of(c, id);
           if (fs && fs->class_id >= 0 && !fs->is_cmethod) q = fs->class_id;
         }
-        if (q >= 0 && q < c->nclasses) {
-          c->classes[q].is_value_type = 0;
-          c->classes[q].freeze_observed = 1;
-        }
+        /* the receiver (or self) may be an instance of a subclass: a
+           freeze in Base#initialize freezes a Child's instance too, so
+           Child's ivar stores take the guard as well */
+        if (q >= 0 && q < c->nclasses)
+          for (int q2 = 0; q2 < c->nclasses; q2++)
+            if (q2 == q || is_descendant(c, q2, q)) {
+              c->classes[q2].is_value_type = 0;
+              c->classes[q2].freeze_observed = 1;
+            }
       }
     }
     /* (one String representation: a String ivar is by value only when

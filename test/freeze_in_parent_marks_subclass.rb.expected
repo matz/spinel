@@ -1,0 +1,7 @@
+exception leaf: FrozenError
+exception grandchild: FrozenError
+plain child: FrozenError
+self.freeze in parent: FrozenError
+or-write after lock: no error
+1
+5

@@ -42498,7 +42498,7 @@ static void mark_nullable_int_locals(Compiler *c) {
       for (int q = 0; q < nloop; q++) {
       int k = every ? q : ks[q];
       if (k < 0 || !(c->classes[k].is_struct || c->classes[k].is_data) ||
-          comp_method_in_chain(c, k, "initialize", NULL) >= 0) continue;
+          cplan_new_initialize(c, rk == NK_SelfNode ? -1 : id, k, NULL) >= 0) continue;
       ClassInfo *ci = &c->classes[k];
       int ca = nt_ref(nt, id, "arguments");
       int an = 0; const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;

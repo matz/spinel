@@ -1,0 +1,26 @@
+[nil, nil, 1, 1.5]
+[nil, nil]
+nil
+2
+[1, 2]
+[10, 20]
+1
+7
+#<data D a=1, b=2>
+#<data D a=1, b=4>
+#<data D a=7, b=10>
+"first"
+"[second]"
+"E"
+"[dflt]"
+nil
+6
+[1, 2]
+[10, 20]
+"m"
+"[m]"
+CL
+nil
+["wrong number of arguments (given 1, expected 0)", ArgumentError, "wrong number of arguments (given 2, expected 0)", "CF", "{z: 1}"]
+5
+"<x>"

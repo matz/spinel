@@ -507,11 +507,21 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
 /* The initialize the builtin Class#new runs when node id (a `new` the
    program's `new` does not answer, a `raise K`) builds an instance of
    class ci: the version the record proves where id runs (*ml ML_METHOD),
-   else the table's method (ML_TABLE; ML_NONE and -1 where ci has no
-   initialize of the program's). Every reader of a construction site asks
-   it, so the site's arity, arguments, block and call name one method. ml
-   may be NULL. */
+   else the table's method (ML_TABLE); ML_NONE and -1 where ci has no
+   initialize of the program's, or the record proves none where id runs (a
+   def that comes later): the builtin construction. Every reader of a
+   static construction site asks it, so the site's arity, arguments, block
+   and call name one method; the arms of a `new` on a Class value, and its
+   block decisions, ask cplan_new_arm_initialize, which may answer the
+   table's for a class no run of the site can build. A reader whose
+   receiver is a self in a class method asks with id -1, the table's
+   answer: self may be a class under ci. ml may be NULL. */
 int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml);
+/* The initialize the arm for class ci of a `new` on a Class value (call
+   id) runs: the site's (cplan_new_initialize), else the table's where ci
+   is opened at no statement the call may run at (its window): no run
+   takes that arm, which keeps the constructor's own */
+int cplan_new_arm_initialize(Compiler *c, int id, int ci);
 /* Every initialize a builtin `new` of class ci may run, wherever it runs:
    the table's method, then each other version of it the record holds (a
    replaced one, in the history of the class that defines it) that an

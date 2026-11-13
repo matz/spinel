@@ -212,11 +212,11 @@ void emit_ctor_arm_case(Compiler *c, int ci, int initm, int rt2, int self_t, con
 void struct_nil_fill_stmts(Compiler *c, int ci, int given, const char *obj, Buf *out);
 void emit_ctor_arm_param(Compiler *c, Scope *is, int j, const ArgLayout *L, const int *atmp, Buf *pdpre, Buf *out);
 void emit_ctor_block_slot(Compiler *c, int id, int initm, const char *lead, Buf *b);
-int emit_ctor_splice_arm(Compiler *c, int id, int ci, int initm, int rt2, Buf *b);
+int emit_ctor_splice_arm(Compiler *c, int id, int ci, int rt2, Buf *b);
 void emit_exc_msg_arg(Compiler *c, int arg, Buf *b);
 void emit_exc_new_msg(Compiler *c, const char *cn, int arg, Buf *b);
-int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2, Buf *b);
-int emit_exc_sub_new_arm_splat(Compiler *c, int ci, int tsa, const char *pre, int rt2, Buf *b);
+int emit_exc_sub_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int rt2, Buf *b);
+int emit_exc_sub_new_arm_splat(Compiler *c, int id, int ci, int tsa, const char *pre, int rt2, Buf *b);
 int emit_syserr_family_new(Compiler *c, int id, const char *cn, int argc, const int *argv, Buf *b);
 int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int hoisted, int rt2, Buf *b);
 extern int g_ctor_blk_tmp;

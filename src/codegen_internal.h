@@ -2286,6 +2286,7 @@ int each_split_applies(Compiler *c, int id);
    Hash, Range, String Range or Enumerator (codegen_poly_plan.c) */
 void emit_penum_kind_test(Buf *b, int tv);
 void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b);
+void emit_struct_members_ctor_name(Compiler *c, int cid, Buf *b);
 void emit_pool_fwd(Compiler *c, int cid);
 /* a body written to g_procs ahead of the constructors begins and ends (emit_pool_fwd) */
 void ahead_body_enter(Compiler *c);

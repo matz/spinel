@@ -2031,27 +2031,49 @@ static struct NewSiteSlot *new_sites_slot(Compiler *c, int id, int ci) {
   while (m->slot[j].id >= 0 && (m->slot[j].id != id || m->slot[j].ci != ci)) j = (j + 1) & (m->cap - 1);
   return &m->slot[j];
 }
-/* See call_plan.h. Class#new's initialize: the window's version (the
-   steps of cplan_implied_target past its row); an entry is not taken, as
-   none is made for initialize (ver_named_one). A site in a block whose run
-   time the record does not place keeps the table's (elab_in_unplaced_block). */
+/* Does call id, a construction of class ci, run where the record proves no
+   initialize of the program's on ci's chain: at its point (elab_call_method,
+   which also proves no code the record cannot order supplies one), or at
+   each state of its window, where it may run more than once (as
+   ct_every_span asks it), with no code the record has not seen; and not
+   where ci is not opened yet (elab_class_live_at), as a `new` there cannot
+   build it */
+static int new_init_absent(Compiler *c, int id, int ci) {
+  const LrDef *ds[2];
+  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, "initialize", 0, 0), absent = at == ELAB_NO;
+  if (at == ELAB_UNKNOWN && !elab_runs_unseen(c))
+    absent = elab_call_span(c, id, ci, "initialize", 0, ct_after_point(c, id), NULL, ds, 2) == 1 && !ds[0];
+  absent = absent && elab_class_live_at(c, ci, 1, elab_point_of(c, id));
+  if (framed) elab_plan_leave(c);
+  return absent;
+}
+/* See call_plan.h. Class#new's initialize: none where the record proves
+   none there (new_init_absent: BasicObject's runs, or the builtin
+   exception's or record's own), else the window's version (the steps of
+   cplan_implied_target past its row); an entry is not taken, as none is
+   made for initialize (ver_named_one). A site in a block whose run time
+   the record does not place keeps the table's (elab_in_unplaced_block). */
 int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
   int tm = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
   *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = -1 };
   if (tm < 0 || id < 0 || comp_is_undeffed_in_chain(c, ci, "initialize")) return tm;
-  /* (one version on the chain: the table's, the only one a site meets) */
-  int first = 0, body = 0, late = 0;
-  if (ver_chain_count(c, ci, 0, "initialize", &first, &body, &late) == 1) return tm;
+  /* (one version on the chain: the table's, the only one a site meets
+     where there is one) */
+  int first = 0, body = 0, late = 0, nv = ver_chain_count(c, ci, 0, "initialize", &first, &body, &late);
   struct NewSiteSlot *e = new_sites_slot(c, id, ci);
   if (e->id >= 0) { *m = e->m; return e->vi; }
   /* (a site in a block the record does not place, kept, assumed or given
      to a call it cannot read, may run on either side of a reopening: it
-     cannot tell, and keeps the table's) */
-  int vi = -1;
-  if (elab_in_unplaced_block(c, id)) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNPLACED, .def_class = -1 };
+     cannot tell, and keeps the table's; so does one where the record holds
+     no version of the table's method, nv 0, as for a def a method body
+     makes: it may be made before the site runs) */
+  int vi = -1, unplaced = elab_in_unplaced_block(c, id), absent = !unplaced && nv != 0 && new_init_absent(c, id, ci);
+  if (absent) *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
+  else if (nv == 1) vi = tm;
+  else if (unplaced) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNPLACED, .def_class = -1 };
   else vi = ct_implied_at(c, id, ci, "initialize", m);
-  if (vi < 0 || m->kind != ML_METHOD) {
+  if (!absent && (vi < 0 || m->kind != ML_METHOD)) {
     if (m->kind != ML_TABLE) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_MANY, .def_class = -1 };
     vi = tm;
   }
@@ -2083,6 +2105,18 @@ static int ct_raise_class(Compiler *c, int id, int *val) {
 int cplan_raise_initialize(Compiler *c, int id) {
   int val, xc = ct_raise_class(c, id, &val);
   return xc >= 0 ? cplan_new_initialize(c, id, xc, NULL) : -1;
+}
+/* See call_plan.h. A class not opened yet at the last statement of the
+   site's window (elab_class_live_at) is opened at none of them. */
+int cplan_new_arm_initialize(Compiler *c, int id, int ci) {
+  ElabWindow w;
+  int framed = elab_plan_enter(c, id), live = 1;
+  if (elab_call_window(c, id, &w) == ELAB_YES && !w.never) {
+    if (ct_after_point(c, id)) elab_window_open(c, &w);
+    live = w.from.region != w.to.region || elab_class_live_at(c, ci, 1, (LoadPoint){ w.to.region, w.to.seq - 1, -1 });
+  }
+  if (framed) elab_plan_leave(c);
+  return cplan_new_initialize(c, live ? id : -1, ci, NULL);
 }
 /* The window step of cplan_implied_target, for a call node id makes */
 static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m) {
@@ -4606,11 +4640,12 @@ CallPlan cplan_user_fresh(Compiler *c, int id) {
   return cplan_dep(res);
 }
 
-/* The class a constructor call builds: a constant receiver's or a local's
-   that holds one class (class_recv_static_ci), or the class its method
-   runs for, as inference types it (bare or `self.new` in a class method,
-   `self.class.new` in an instance method). *own is set for the last kind,
-   which a subclass receiving the method builds its own of. */
+/* The class a constructor call builds: a constant receiver's, a local's
+   that holds one class or a class body's self (class_recv_static_ci), or
+   the class its method runs for, as inference types it (bare or
+   `self.new` in a class method, `self.class.new` in an instance method).
+   *own is set for the last kind, which a subclass receiving the method
+   builds its own of. */
 static int cplan_new_class(Compiler *c, int id, int *own) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, id, "receiver");
@@ -4618,6 +4653,10 @@ static int cplan_new_class(Compiler *c, int id, int *own) {
   *own = 0;
   if (k == NK_ConstantReadNode || k == NK_ConstantPathNode || k == NK_LocalVariableReadNode) return class_recv_static_ci(c, r);
   Scope *s = comp_scope_of(c, id);
+  if (k == NK_SelfNode && !(s && s->is_cmethod)) {
+    int b = class_recv_static_ci(c, r);
+    return b >= 0 && !comp_class_is_module(c, &c->classes[b]) ? b : -1;
+  }
   int ci = -1;
   if (s && s->is_cmethod && (r < 0 || k == NK_SelfNode)) ci = s->class_id;
   else if (s && !s->is_cmethod && k == NK_CallNode && nt_ref(nt, r, "receiver") >= 0 &&

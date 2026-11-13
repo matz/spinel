@@ -1,0 +1,23 @@
+struct or undefined method 'work' for nil
+struct and undefined method 'work' for nil
+2
+or undefined method 'work' for nil
+and undefined method 'work' for nil
+or value undefined method 'work' for nil
+and value undefined method 'list' for nil
+op undefined method 'n' for nil
+nil
+nil
+call undefined method 'work' for nil 1
+[3, 2]
+8
+8
+8
+bump undefined method 'work' for nil
+5
+hash undefined method 'name' for nil
+"n"
+each undefined method 'work' for nil
+2
+[1]
+after

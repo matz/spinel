@@ -23021,6 +23021,11 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent);
     buf_puts(b, "{ ");
     emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, "; ");
+    /* A receiver that can be nil is NULL here: CRuby's `acc.work ||= 1`
+       on nil raises NoMethodError for the reader, and `acc&.work ||= 1`
+       does nothing. The slot reads below would dereference the NULL. */
+    int recv_nil = !recv_never_nil(c, recv), safe = recv_nil && nt_safe_nav(nt, id);
+    if (recv_nil && !safe) nil_recv_check(attr, tr, b);
     /* The receiver is a typed object pointer, so the slot is read through
        it, and the guard is the ivar's own: a pointer-backed attribute that
        was never assigned is NULL, not truthy (#5428). */
@@ -23028,6 +23033,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     char apfx[32]; snprintf(apfx, sizeof apfx, "_t%d->", tr);
     char tn[32], mk[300]; snprintf(tn, sizeof tn, "_t%d", tr);
     const char *m = iidx >= 0 ? ivar_set_mark(c, class_id, ivn, tn, "->", mk, sizeof mk) : NULL;
+    if (safe) buf_printf(b, "if (_t%d) ", tr);
     buf_puts(b, "(void)"); emit_attr_orw_value(c, class_id, iidx, apfx, ivt, iidx >= 0 && repr_of_ivar(c, class_id, iidx).elems_handle, lhs, v, is_or, m, b); buf_puts(b, "; }\n");
     return;
   }

@@ -7352,6 +7352,9 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       int tr = ++g_tmp;
       buf_puts(b, "({ ");
       emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, "; ");
+      /* a receiver that can be nil: CRuby raises NoMethodError for the
+         reader (the statement form says more) */
+      if (!recv_never_nil(c, recv)) nil_recv_check(attr, tr, b);
       char lhs[300]; snprintf(lhs, sizeof lhs, "_t%d->iv_%s", tr, iv_c(attr));
       char apfx[32]; snprintf(apfx, sizeof apfx, "_t%d->", tr);
       char tn[32], mk[300]; snprintf(tn, sizeof tn, "_t%d", tr);

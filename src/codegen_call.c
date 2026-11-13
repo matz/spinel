@@ -4953,11 +4953,6 @@ static void emit_dyn_name_sym(Compiler *c, int sym, Buf *b) {
    chain `name == :m1 ? recv.m1(args) : ... : raise NoMethodError`, boxing each
    arm (the result is poly). Arms whose call did not resolve on the receiver
    (UNKNOWN type -- wrong name or arity for this receiver) are dropped. */
-static int dsend_name_diverges(Compiler *c, const char *nm) {
-  for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].name && sp_streq(c->scopes[s].name, nm) && stmts_diverge(c, c->scopes[s].body)) return 1;
-  return 0;
-}
 static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   int narm = 0; const int *arms = nt_arr(nt, id, "dyn_send_arms", &narm);
@@ -5095,7 +5090,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
       /* did not resolve on this receiver/arity; a method of the program the
          arm reached is kept, whatever its body's value: one that always
          raises (an Array operator given a nil operand) has no type */
-      if (cplan_user(c, arm).mi < 0 && !dsend_name_diverges(c, nm)) continue;
+      if (cplan_user(c, arm).mi < 0) continue;
       at = TY_NIL;
     }
     if (mo && method_obj_target_mi(c, arm) < 0) continue;

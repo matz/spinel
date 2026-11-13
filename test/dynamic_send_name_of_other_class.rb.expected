@@ -1,0 +1,28 @@
+NoMethodError: undefined method 'terminate' for an instance of A recv=A name=:terminate
+NoMethodError: undefined method 'terminate' for an instance of B recv=B name=:terminate
+NoMethodError: undefined method 'cboom' for an instance of A recv=A name=:cboom
+NoMethodError: undefined method 'cboom' for an instance of B recv=B name=:cboom
+NoMethodError: undefined method 'm' for an instance of A recv=A name=:m
+2
+1
+NoMethodError: undefined method 'other' for an instance of B recv=B name=:other
+NoMethodError: undefined method 'boom' for an instance of A recv=A name=:boom
+RuntimeError: boom
+NoMethodError: undefined method 'arg_boom' for an instance of A recv=A name=:arg_boom
+ArgumentError: wrong number of arguments (given 0, expected 1)
+NoMethodError: undefined method 'terminate' for an instance of A recv=A name=:terminate
+NoMethodError: undefined method 'cboom' for an instance of A recv=A name=:cboom
+NoMethodError: undefined method 'boom' for an instance of A recv=A name=:boom
+NoMethodError: undefined method 'm' for an instance of A recv=A name=:m
+1
+undefined method 'terminate' for an instance of A A :terminate
+undefined method 'cboom' for an instance of A A :cboom
+undefined method 'boom' for an instance of A A :boom
+undefined method 'm' for an instance of A A :m
+1
+NoMethodError: undefined method 'terminate' for an instance of B recv=B name=:terminate
+NoMethodError: undefined method 'cboom' for an instance of B recv=B name=:cboom
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+NoMethodError: undefined method 'other' for an instance of B recv=B name=:other
+RuntimeError: ab 1

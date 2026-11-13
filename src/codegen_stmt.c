@@ -11105,6 +11105,31 @@ static int when_complex_num(TyKind t) {
   return t == TY_COMPLEX || t == TY_INT || t == TY_FLOAT || t == TY_RATIONAL;
 }
 
+/* A when value's own set-up (what its test hoists: an Array it builds, a
+   call's temporaries) runs inside its test, after the values before it and
+   only when they do not match: hoisted above the case, it ran ahead of
+   them, and after a match. The test written since `at` becomes `({
+   <set-up> <test>; })`; a test with no set-up stays as written. Only where
+   the case has a prelude to hoist to (g_pre). */
+typedef struct { size_t at; Buf pre; Buf *sv; int open; } WhenPre;
+static void when_pre_open(WhenPre *wp, Buf *b) {
+  wp->open = g_pre != NULL;
+  if (!wp->open) return;
+  memset(&wp->pre, 0, sizeof wp->pre);
+  wp->at = b->len; wp->sv = g_pre; g_pre = &wp->pre;
+}
+static void when_pre_close(WhenPre *wp, Buf *b) {
+  if (!wp->open) return;
+  g_pre = wp->sv; wp->open = 0;
+  if (wp->pre.len) {
+    char *test = strdup(b->p + wp->at);
+    if (!test) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    b->len = wp->at; b->p[b->len] = '\0';
+    buf_puts(b, "({ "); buf_puts(b, wp->pre.p); buf_puts(b, test); buf_puts(b, "; })");
+    free(test);
+  }
+  free(wp->pre.p);
+}
 static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   int reidx = re_lit_index(c, cond);
   /* `when nil` on an Integer or Float scrutinee matches its nil flag:
@@ -11435,8 +11460,11 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
     const int *conds = nt_arr(nt, wn, "conditions", &wc);
     emit_indent(b, indent);
     buf_puts(b, w == 0 ? "if (" : "else if (");
+    WhenPre wp = { 0 };
     for (int j = 0; j < wc; j++) {
+      when_pre_close(&wp, b);
       if (j) buf_puts(b, " || ");
+      when_pre_open(&wp, b);
       if (emit_undefined_const_test(c, conds[j], TY_BOOL, b)) continue;
       if (oint_typed) { case_oint_label(c, conds[j], t, b); continue; }
       if (pred >= 0) {
@@ -11655,6 +11683,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
         buf_puts(b, ")");
       }
     }
+    when_pre_close(&wp, b);
     buf_puts(b, ") {\n");
     emit_stmts(c, nt_ref(nt, wn, "statements"), b, indent + 1);
     emit_indent(b, indent);
@@ -11992,8 +12021,11 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
     int wc = 0;
     const int *conds = nt_arr(nt, wn, "conditions", &wc);
     buf_puts(b, w == 0 ? "if (" : "else if (");
+    WhenPre wp = { 0 };
     for (int j = 0; j < wc; j++) {
+      when_pre_close(&wp, b);
       if (j) buf_puts(b, " || ");
+      when_pre_open(&wp, b);
       if (emit_undefined_const_test(c, conds[j], TY_BOOL, b)) continue;
       if (oint_typed) { case_oint_label(c, conds[j], t, b); continue; }
       if (pred >= 0) {
@@ -12076,6 +12108,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
         buf_puts(b, ")");
       }
     }
+    when_pre_close(&wp, b);
     buf_puts(b, ") { ");
     emit_case_branch_value(c, nt_ref(nt, wn, "statements"), rt, cr, b);
     buf_puts(b, "}\n");   /* newline: the next arm's `else if` must not join the brace */

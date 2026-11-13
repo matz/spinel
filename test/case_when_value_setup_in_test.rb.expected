@@ -1,0 +1,12 @@
+:one
+[:fs]
+:none
+[:fs, :fss]
+:one
+[:f3]
+:two
+[:f3, :fss]
+:one
+[:fs]
+:two
+[:f3, :fss]

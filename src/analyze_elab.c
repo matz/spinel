@@ -4798,9 +4798,10 @@ static int lr_vis_call_ahead(Compiler *c, const LrHist *h, const LrHist *t, cons
    it is proved where it runs once, surely and whole, at its point, and
    every call with a receiver, or send of the name by a literal Symbol,
    that may meet v through the arms first runs after the word
-   (lr_vis_call_ahead). A send whose name the record cannot read is asked
-   through its arms, the calls of each name the fixpoint makes for it
-   (desugar_dynamic_send), once they are made.
+   (lr_vis_call_ahead). A send whose name the record cannot read counts
+   as a call of the name where it stands: the calls of each name the
+   fixpoint makes for it (desugar_dynamic_send) stand there, and an answer
+   kept before they are made has to hold for them.
    Anything else (a word that may run, in a loop, a branch, after a
    statement that may raise; a call that may run between the def and the
    word; a word whose version the record cannot tell) is known only at run
@@ -4849,11 +4850,11 @@ static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unm
         (nt_ref(nt, id, "receiver") >= 0 || nt_str(nt, id, "vis_enforce")) && lr_vis_call_ahead(c, h, t, v, pv, pw, id, unmapped))
       return lr_vis_cellable(c, h, t) ? -1 : v->vis;
   /* (and a send of the name by a literal Symbol, `x.public_send(:m)`, as
-     lr_readers reads one) */
+     lr_readers reads one, or of a name the record cannot read) */
   int *sends = NULL, ns = an_calls_named_if(c, is_send_family, nt->count, &sends), ahead = 0;
   for (int k = 0; k < ns && !ahead; k++) {
     const char *by = call_sent_name(nt, sends[k], NULL);
-    ahead = by && sp_streq(by, h->name) && lr_vis_call_ahead(c, h, t, v, pv, pw, sends[k], unmapped);
+    ahead = (!by || sp_streq(by, h->name)) && lr_vis_call_ahead(c, h, t, v, pv, pw, sends[k], unmapped);
   }
   free(sends);
   return !ahead ? vis : lr_vis_cellable(c, h, t) ? -1 : v->vis;

@@ -8055,6 +8055,21 @@ static int lr_later_alias(Compiler *c, int owner, const char *name) {
    not have run, one in another region, a header at no point), the last
    write that may have run before it. Returns the write the header's name
    aliases (a ConstantWriteNode), -1 for none. */
+/* What owner held of leaf before point p, for a header's or a builder's
+   entity (elab_const_own_at): Object's constants are the top level's, so
+   a header in `class Object`'s body and one at the top level name one
+   constant; where the one owner holds nothing, the other is asked. */
+static int lr_class_by_written_path(Compiler *c, int p);
+static int lr_entity_own_at(Compiler *c, int owner, const char *leaf, LoadPoint p, const LrDef **d) {
+  int v = elab_const_own_at(c, owner, leaf, p, d);
+  int obj = comp_core_class(c, CORE_OBJECT);
+  if (v == ELAB_NO && (owner == LR_MAIN || (obj >= 0 && owner == obj))) {
+    const LrDef *d2 = NULL;
+    int v2 = elab_const_own_at(c, owner == LR_MAIN ? obj : LR_MAIN, leaf, p, &d2);
+    if (v2 != ELAB_NO) { *d = d2; return v2; }
+  }
+  return v;
+}
 int elab_header_entity(Compiler *c, int node, const ElabPos *pos) {
   LoadRecord *r = c->lrec;
   const NodeTable *nt = c->nt;
@@ -8073,9 +8088,12 @@ int elab_header_entity(Compiler *c, int node, const ElabPos *pos) {
   free(h->leaf);
   if (!(h->leaf = strdup(lr_written_name(nt, cp)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   h->owner = k == NK_ConstantReadNode ? lr_cref(c, r->at[node]) : par < 0 ? LR_MAIN : lr_class_ref_at(c, par, NULL);
+  /* (a path through a builtin the program does not reopen, `module
+     Comparable::Ext::Group`: the class of the program its Ruby name names) */
+  if (h->owner < LR_MAIN && par >= 0) h->owner = lr_class_by_written_path(c, par);
   if (h->owner < LR_MAIN) h->owner = LR_UNKNOWN_CLASS;
   const LrDef *d = NULL;
-  h->verdict = elab_const_own_at(c, h->owner, h->leaf, elab_point_of(c, node), &d);
+  h->verdict = lr_entity_own_at(c, h->owner, h->leaf, elab_point_of(c, node), &d);
   h->found = d ? d->node : -1;
   h->want = d ? lr_class_of(c, d, NULL) : h->verdict == ELAB_NO ? LR_NEW : LR_UNKNOWN_CLASS;
   /* Object's constant of a builtin's name the program has not written yet
@@ -8114,7 +8132,21 @@ void elab_builder_entity(Compiler *c, int node, const ElabPos *pos) {
     owner = par < 0 ? LR_MAIN : lr_class_ref_at(c, par, NULL);
   }
   else return;
-  lr_header(r, node, 1)->owner = owner < LR_MAIN ? LR_UNKNOWN_CLASS : owner;
+  LrHeader *h = lr_header(r, node, 1);
+  h->owner = owner < LR_MAIN ? LR_UNKNOWN_CLASS : owner;
+  /* ...and, as a header's, what the owner held of the leaf before it: the
+     class a write of the name there made, which registration finds
+     again (`X = Class.new unless defined?(X)` after an X), or nothing, a
+     new class */
+  int t = k == NK_ConstantPathWriteNode ? nt_ref(nt, node, "target") : node;
+  const char *leaf = t >= 0 ? lr_written_name(nt, t) : NULL;
+  if (!leaf) return;
+  free(h->leaf);
+  if (!(h->leaf = strdup(leaf))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  const LrDef *d = NULL;
+  h->verdict = lr_entity_own_at(c, h->owner, h->leaf, elab_point_of(c, node), &d);
+  h->found = d ? d->node : -1;
+  h->want = d ? lr_class_of(c, d, NULL) : h->verdict == ELAB_NO ? LR_NEW : LR_UNKNOWN_CLASS;
 }
 
 static const char *lr_class_name(Compiler *c, int cls) {

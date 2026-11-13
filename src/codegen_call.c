@@ -24143,13 +24143,27 @@ static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
   int spread = nt_argv_has(nt, vav, vac, NT_ARG_SPLAT);
   int staged = !spread && !nt_argv_has(nt, vav, vac, NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
   int tv = ++g_tmp, ta = ++g_tmp;
-  Buf args; memset(&args, 0, sizeof args);
+  Buf args, ops; memset(&args, 0, sizeof args); memset(&ops, 0, sizeof ops);
   if (staged) {
+    /* the entry's parameters are rooted by its prologue, so an argument is
+       only built where its box makes a fresh heap cell (a Range's copy): that
+       one goes into a rooted temp, as the next box's allocation may collect it
+       before sp_stage_args_msg roots the list */
     buf_printf(&args, "%d, (sp_RbVal[]){", vac);
-    for (int k = 0; k < vac; k++) { if (k) buf_puts(&args, ", "); emit_boxed(c, vav[k], &args); }
+    for (int k = 0; k < vac; k++) {
+      if (k) buf_puts(&args, ", ");
+      if (!repr_box_allocates(c, repr_of(c, vav[k]))) { emit_boxed(c, vav[k], &args); continue; }
+      Buf ab; memset(&ab, 0, sizeof ab);
+      emit_boxed(c, vav[k], &ab);
+      int t = ++g_tmp;
+      buf_printf(&ops, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", t, ab.p ? ab.p : "sp_box_nil()", t);
+      buf_printf(&args, "_t%d", t);
+      free(ab.p);
+    }
     buf_puts(&args, vac ? "}" : "sp_box_nil()}");
   }
   buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = self; ", tv);
+  if (ops.p) buf_puts(b, ops.p);
   if (spread)
     buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); "
                   "for (sp_int _i = 0; _i < sp_PolyArray_length(lv___condr); _i++) sp_PolyArray_push(_t%d, sp_PolyArray_get(lv___condr, _i)); "
@@ -24157,7 +24171,7 @@ static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
                   "sp_exc_stage_key(sp_box_poly_array(_t%d)); ", ta, ta, ta, ta, ta);
   emit_vis_msg_boxed(vis, vnm, tv, args.p, b);
   buf_puts(b, "; }))");
-  free(args.p);
+  free(args.p); free(ops.p);
   emit_raise_placeholder(c, id, b);
   if (g_plan_check) ucall_refused(id);
   return 1;

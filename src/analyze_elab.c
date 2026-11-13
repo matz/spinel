@@ -6541,7 +6541,12 @@ static int lr_live_from(Compiler *c, int cls, int sg, int region) {
     LoadPoint wp = elab_point_of(c, d);
     if (wp.region == b.region && wp.seq < b.seq) b = wp;
   }
-  return b.region != region ? -1 : sg || r->rinst[cls + 1] < b.seq ? b.seq : r->rinst[cls + 1];
+  /* (a record builder's write, `S = Struct.new(:a) do ... end`, makes the
+     class there and no object of it: one may exist from the next
+     statement on, its block's first, unless making the class runs a hook
+     of the program's, the superclass's inherited, which is given the class) */
+  int inst = b.seq + (b.region >= 0 && class_def_record(c->nt, d) >= 0 && elab_point_of(c, d).seq == b.seq && !lr_class_hook(c, "inherited", 1));
+  return b.region != region ? -1 : sg ? b.seq : r->rinst[cls + 1] < inst ? inst : r->rinst[cls + 1];
 }
 int elab_class_live_at(Compiler *c, int cls, int sg, LoadPoint p) {
   LoadRecord *r = elab_fresh(c);

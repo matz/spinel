@@ -12610,11 +12610,12 @@ char *ctor_self_text(Compiler *c, int cid, int initm, int t) {
 }
 
 /* The initialize half: runs initialize initm on the object in `_tN`
-   (ctor_self_text), `args` each led by ", ". */
+   (ctor_self_text), `args` each led by ", "; none for initm -1, a site
+   the plan answers no initialize of the program's at (BasicObject's runs). */
 static void ctor_init_call(Compiler *c, int cid, int initm, int t, const char *args, Buf *b) {
   int is_val = comp_ty_value_obj(c, ty_object(cid));
   char *self = ctor_self_text(c, cid, initm, t);
-  buf_printf(b, "%s(%s%s%s); ", mc_method(c, &c->scopes[initm]), is_val ? "&" : "", self, args);
+  if (initm >= 0) buf_printf(b, "%s(%s%s%s); ", mc_method(c, &c->scopes[initm]), is_val ? "&" : "", self, args);
   free(self);
   /* These paths bypass the constructor wrapper, which freezes a Data. */
   if (c->classes[cid].is_data) buf_printf(b, "sp_gc_freeze(_t%d); ", t);
@@ -12638,6 +12639,20 @@ const char *g_arm_member_fills = NULL;
 void emit_ctor_arm_case(Compiler *c, int ci, int initm, int rt2, int self_t, const char *pre,
                                const char *args, int given, Buf *b) {
   const char *cn = c->classes[ci].c_name;
+  /* A version the constructor does not run (ctor_new_runs: the site's plan
+     answers none, or another one) runs on the object allocated here, as
+     emit_ctor_alloc_init runs it; a Struct's none is its members
+     constructor (emit_struct_members_ctor_name). */
+  int members = initm < 0 && c->classes[ci].is_struct;
+  Buf apre; memset(&apre, 0, sizeof apre);
+  if (self_t < 0 && !members && !ctor_new_runs(c, ci, initm)) {
+    if (pre) buf_puts(&apre, pre);
+    self_t = ctor_alloc_decl(c, ci, &apre);
+    pre = apre.p;
+  }
+  Buf ctor; memset(&ctor, 0, sizeof ctor);
+  if (members) emit_struct_members_ctor_name(c, ci, &ctor);
+  else buf_printf(&ctor, "sp_%s_new", cn);
   /* a Struct built from `given` arguments: the members past them are nil,
      their nil bytes set as the direct `S.new` sets them (#9093) */
   Buf fills; memset(&fills, 0, sizeof fills);
@@ -12645,10 +12660,10 @@ void emit_ctor_arm_case(Compiler *c, int ci, int initm, int rt2, int self_t, con
   if (g_arm_member_fills && g_arm_member_fills[0] && self_t < 0 && !c->classes[ci].is_value_type)
     buf_puts(&fills, g_arm_member_fills);
   if (fills.p) {
-    buf_printf(b, "case %d: { %ssp_%s *_s = sp_%s_new(%s); %s_t%d=sp_box_obj(_s,", ci, pre ? pre : "", cn, cn, args, fills.p, rt2);
+    buf_printf(b, "case %d: { %ssp_%s *_s = %s(%s); %s_t%d=sp_box_obj(_s,", ci, pre ? pre : "", cn, ctor.p, args, fills.p, rt2);
     arysub_box_id(c, ty_object(ci), b);
     buf_puts(b, "); } break;");
-    free(fills.p);
+    free(fills.p); free(ctor.p); free(apre.p);
     return;
   }
   buf_printf(b, "case %d: ", ci);
@@ -12661,7 +12676,7 @@ void emit_ctor_arm_case(Compiler *c, int ci, int initm, int rt2, int self_t, con
     free(ia.p);
     buf_printf(&obj, "_t%d", self_t);
   }
-  else buf_printf(&obj, "sp_%s_new(%s)", cn, args);
+  else buf_printf(&obj, "%s(%s)", ctor.p, args);
   if (c->classes[ci].is_value_type) buf_printf(b, "_t%d=sp_box_vobj_%s(%s);", rt2, cn, obj.p);
   else {
     /* an Array subclass instance is boxed as its Array (arysub_box_id) */
@@ -12670,7 +12685,7 @@ void emit_ctor_arm_case(Compiler *c, int ci, int initm, int rt2, int self_t, con
     buf_puts(b, ");");
   }
   buf_puts(b, pre ? " } break;" : " break;");
-  free(obj.p);
+  free(obj.p); free(ctor.p); free(apre.p);
 }
 
 /* `Klass.new(args)` where an omitted default reads the instance: allocate the
@@ -12912,7 +12927,9 @@ static void emit_struct_spread_new(Compiler *c, ClassInfo *cls, const char *arr,
   }
   else
     buf_printf(b, " if (_t%d > %d) sp_raise_cls(\"ArgumentError\", (&(\"\\xff\" \"struct size differs\")[1]));", tln, cls->nmembers);
-  buf_printf(b, " sp_%s_new(", cls->c_name);
+  buf_puts(b, " ");
+  emit_struct_members_ctor_name(c, (int)(cls - c->classes), b);
+  buf_puts(b, "(");
   for (int a = 0; a < cls->nmembers; a++) {
     if (a) buf_puts(b, ", ");
     char elem[96];
@@ -13244,7 +13261,9 @@ static int ctor_init_uses_block(Compiler *c, int initm) {
    yielding initialize runs it with the new object as self, a body the
    caller's self need not be able to compile. The builtin arms (`Array.new(n)
    { }`, `Hash.new { }`) take the proc too, so a dispatch no class splices
-   into makes it for them. */
+   into makes it for them. Each class's initialize here is the one its arm
+   runs (cplan_new_arm_initialize): none at a site before the class defines
+   one. */
 int ctor_block_splices(Compiler *c, int id);
 int hoist_ctor_block(Compiler *c, int id, Buf *b) {
   int sv = g_ctor_blk_tmp;
@@ -13252,7 +13271,7 @@ int hoist_ctor_block(Compiler *c, int id, Buf *b) {
   if (nt_ref(c->nt, id, "block") < 0) return sv;
   int takes = 0;
   for (int k = 0; k < c->nclasses && !takes; k++) {
-    int im = comp_method_in_chain(c, k, "initialize", NULL);
+    int im = cplan_new_arm_initialize(c, id, k);
     takes = ctor_init_takes_block(c, im) && ctor_init_uses_block(c, im);
   }
   if (!takes && ctor_block_splices(c, id)) return sv;
@@ -13273,7 +13292,7 @@ static int ctor_block_spliceable(Compiler *c, int id) {
 int ctor_block_splices(Compiler *c, int id) {
   if (!ctor_block_spliceable(c, id)) return 0;
   for (int k = 0; k < c->nclasses; k++) {
-    int im = comp_method_in_chain(c, k, "initialize", NULL);
+    int im = cplan_new_arm_initialize(c, id, k);
     if (im >= 0 && c->scopes[im].yields && !c->classes[k].is_struct) return 1;
   }
   return 0;
@@ -13295,7 +13314,7 @@ int ctor_block_dispatchable(Compiler *c, int id) {
     /* (only a class the call can construct: a module's initialize, or one
        of a class this receiver is never, has no arm of this dispatch) */
     if (comp_class_is_module(c, &c->classes[k]) || !dynamic_new_may_reach(c, id, k)) continue;
-    int im = comp_method_in_chain(c, k, "initialize", NULL);
+    int im = cplan_new_arm_initialize(c, id, k);
     if (im >= 0 && c->scopes[im].yields && !ctor_block_by_proc(c, id, k)) return 0;
   }
   return 1;
@@ -13336,8 +13355,14 @@ void emit_ctor_block_slot(Compiler *c, int id, int initm, const char *lead, Buf 
   emit_ctor_block_value(c, id, b);
 }
 
-int emit_ctor_splice_arm(Compiler *c, int id, int ci, int initm, int rt2, Buf *b) {
-  if (initm < 0 || !c->scopes[initm].yields || c->classes[ci].is_struct ||
+/* The arm of a dynamic `new` (call id) for class ci that splices the
+   yielding initialize the plan answers for the arm (cplan_new_arm_initialize),
+   as emit_ctor_yield_inline does at a static one with the site's: 0, for
+   the caller to lay the arm out, when that answer is none, does not yield,
+   or is not the site's (an arm no value reaches) */
+int emit_ctor_splice_arm(Compiler *c, int id, int ci, int rt2, Buf *b) {
+  int initm = cplan_new_arm_initialize(c, id, ci);
+  if (initm < 0 || initm != cplan_new_initialize(c, id, ci, NULL) || !c->scopes[initm].yields || c->classes[ci].is_struct ||
       comp_class_is_module(c, &c->classes[ci])) return 0;
   /* a proc known only at run time (`k.new(x, &pr)`, the `&` a `...`
      forward passes) goes to the initialize's proc form, as at a static site */
@@ -13690,10 +13715,12 @@ static void emit_builtin_new_arms_text(Compiler *c, const char *pre, const char 
    its own initialize: built as the static `MyError.new(msg)` is. The
    arguments are `argc_txt` boxed values at `argv_txt` (a count known only at
    run time for a spread array), the message `a0` the first of them; `pre`
-   runs first in the arm. With `argc` >= 0 the count is that constant. */
-static int exc_sub_new_arm_text(Compiler *c, int ci, int argc, const char *argc_txt, const char *argv_txt,
+   runs first in the arm. With `argc` >= 0 the count is that constant. The
+   initialize is the one the plan answers at the `new` (call id): none
+   before the class defines one. */
+static int exc_sub_new_arm_text(Compiler *c, int id, int ci, int argc, const char *argc_txt, const char *argv_txt,
                                 const char *a0, const char *pre, int rt2, Buf *b) {
-  if (!class_is_exc_subclass(c, ci) || comp_method_in_chain(c, ci, "initialize", NULL) >= 0) return 0;
+  if (!class_is_exc_subclass(c, ci) || cplan_new_arm_initialize(c, id, ci) >= 0) return 0;
   const char *cn = class_ruby_name(c, ci); if (!cn) cn = c->classes[ci].name;
   if (class_is_sysexit(c, ci)) {
     Buf alloc; memset(&alloc, 0, sizeof alloc);
@@ -13735,7 +13762,7 @@ static int exc_sub_new_arm_text(Compiler *c, int ci, int argc, const char *argc_
                rt2, cn, exc_builtin_parent(c, ci), ci);
   return 1;
 }
-int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2, Buf *b) {
+int emit_exc_sub_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int rt2, Buf *b) {
   Buf av; memset(&av, 0, sizeof av);
   buf_puts(&av, "(sp_RbVal[]){");
   for (int a = 0; a < argc; a++) buf_printf(&av, "%s_t%d", a ? ", " : "", atmp[a]);
@@ -13743,18 +13770,18 @@ int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2
   char an[24], a0[24] = "";
   snprintf(an, sizeof an, "%d", argc);
   if (argc > 0) snprintf(a0, sizeof a0, "_t%d", atmp[0]);
-  int r = exc_sub_new_arm_text(c, ci, argc, an, av.p, a0, "", rt2, b);
+  int r = exc_sub_new_arm_text(c, id, ci, argc, an, av.p, a0, "", rt2, b);
   free(av.p);
   return r;
 }
 /* The same arm for `k.new(*args)`: the elements of the spread array `_t<tsa>`
    are the arguments; `pre` makes that array. */
-int emit_exc_sub_new_arm_splat(Compiler *c, int ci, int tsa, const char *pre, int rt2, Buf *b) {
+int emit_exc_sub_new_arm_splat(Compiler *c, int id, int ci, int tsa, const char *pre, int rt2, Buf *b) {
   char an[32], av[32], a0[96];
   snprintf(an, sizeof an, "_t%d->len", tsa);
   snprintf(av, sizeof av, "_t%d->data", tsa);
   snprintf(a0, sizeof a0, "(_t%d->len > 0 ? _t%d->data[0] : sp_box_nil())", tsa, tsa);
-  return exc_sub_new_arm_text(c, ci, -1, an, av, a0, pre, rt2, b);
+  return exc_sub_new_arm_text(c, id, ci, -1, an, av, a0, pre, rt2, b);
 }
 
 /* `raise k, msg` / `raise k` with the class in a variable is `raise k.new(msg)`,
@@ -13876,6 +13903,20 @@ void emit_class_value_new_switch(Compiler *c, int rt2, int kt, int boxed, Buf *b
 }
 
 int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
+/* Push argument arg, boxed and rooted, onto the arguments array _t<tsa>
+   (tsa < 0: evaluate it only); its statements stay in b. */
+static void emit_ctor_arg_push(Compiler *c, int arg, int tsa, Buf *b) {
+  Buf vpre; memset(&vpre, 0, sizeof vpre);
+  Buf v; memset(&v, 0, sizeof v);
+  Buf *sv_pre = g_pre; g_pre = &vpre;
+  emit_boxed(c, arg, &v);
+  g_pre = sv_pre;
+  int t = ++g_tmp;
+  buf_printf(b, "%s sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", vpre.p ? vpre.p : "", t, v.p ? v.p : "sp_box_nil()", t);
+  if (tsa >= 0) buf_printf(b, "sp_PolyArray_push(_t%d, _t%d); ", tsa, t);
+  free(vpre.p); free(v.p);
+}
+
 void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
   const NodeTable *nt = c->nt;
   int argc; const int *argv = call_args(nt, id, &argc);
@@ -13907,7 +13948,9 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
     if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
     if (emit_user_new_arm(c, id, ci, argc, NULL, 0, rt2, b)) continue;
     if (!class_has_ctor(&c->classes[ci])) continue;
-    int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+    /* the initialize the plan answers at the site: none before the class
+       defines one */
+    int initm = cplan_new_arm_initialize(c, id, ci);
     /* A Struct or Data class's generated constructor, reached with a sole
        `*args`, a sole keyword hash, or both spread (`k.new(*r, **h)`, as a
        forward passes them on): the arm builds it as the static
@@ -13950,49 +13993,101 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
       free(apre.p); free(val.p);
       continue;
     }
-    /* No initialize at all: `k.new(*[])` constructs, and any element is one
-       argument too many. */
+    /* No initialize at all: the arguments go into one array as an
+       initialize that takes none receives them -- the spread's elements or
+       the positionals, then one Hash for literal keywords, or for keywords
+       spread from a Hash that is not empty. `k.new(*[])` and `k.new(**{})`
+       construct, and any element is one argument too many. (An arm for
+       arguments other than a spread is laid out only for a class the call
+       can construct, whose builtin initialize takes no argument -- one, the
+       message, for an exception class -- as ctor_arity_error says: not for
+       an Array subclass, say.) */
     if (initm < 0) {
-      if (spl < 0 || !splat_operand_ok(c, spl) ||
+      int np = spl >= 0 ? 0 : argc, kwh = spl >= 0 ? kw_hash : -1, kn = 0, plain = 1, lit = 0;
+      if (np > 0 && nt_kind(nt, argv[np - 1]) == NK_KeywordHashNode) {
+        kwh = argv[--np];
+        lit = !kwh_only_spreads(nt, kwh);
+      }
+      for (int a = 0; a < np; a++) {
+        int ak = nt_kind(nt, argv[a]);
+        if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_ForwardingArgumentsNode) plain = 0;
+      }
+      if (kwh >= 0) nt_arr(nt, kwh, "elements", &kn);
+      int exc = class_is_exc_subclass(c, ci);
+      char am[160];
+      if ((spl >= 0 ? !splat_operand_ok(c, spl)
+                    : !plain || argc == 0 || !dynamic_new_may_reach(c, id, ci) ||
+                      !ctor_arity_error(c, ci, -1, exc ? 2 : 1, am, sizeof am)) ||
           comp_class_is_module(c, &c->classes[ci]) || comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
-      /* an exception class takes the spread array's first element as its
-         message, as Exception#initialize(msg = nil) does */
-      if (class_is_exc_subclass(c, ci)) {
+      /* an exception class takes the array's first element as its message,
+         as Exception#initialize(msg = nil) does; a non-empty `**h` after the
+         positionals is one more, a Hash (one spread only, and no literal
+         keywords: no arm builds that Hash) */
+      if (exc) {
+        if (lit || (spl < 0 && kn > 1)) continue;
         int tsa = ++g_tmp;
         Buf spre; memset(&spre, 0, sizeof spre);
         Buf sv; memset(&sv, 0, sizeof sv);
         Buf *sv_pre = g_pre; g_pre = &spre;
-        emit_splat_operand_array(c, spl, &sv);
+        if (spl >= 0) emit_splat_operand_array(c, spl, &sv);
         g_pre = sv_pre;
         Buf pre; memset(&pre, 0, sizeof pre);
         buf_printf(&pre, "%s sp_PolyArray *_t%d = %s; SP_GC_ROOT(_t%d); ",
                    spre.p ? spre.p : "", tsa, sv.p ? sv.p : "sp_PolyArray_new()", tsa);
-        if (sole_splat < 0) {
-          char len[48]; snprintf(len, sizeof len, "_t%d->len", tsa);
-          emit_kwsplat_empty_check(c, id, kw_hash, len, &pre);
+        for (int a = 0; a < np; a++) emit_ctor_arg_push(c, argv[a], tsa, &pre);
+        if (spl < 0 && kn == 1) {
+          int ht = ++g_tmp;
+          buf_printf(&pre, "sp_RbVal _t%d = ", ht);
+          emit_kwsplat_boxed(c, id, nt_arr(nt, kwh, "elements", &kn)[0], &pre);
+          buf_printf(&pre, "; SP_GC_ROOT_RBVAL(_t%d); if (sp_poly_length(_t%d) != 0) sp_PolyArray_push(_t%d, _t%d); ",
+                     ht, ht, tsa, ht);
         }
-        emit_exc_sub_new_arm_splat(c, ci, tsa, pre.p, rt2, b);
+        else if (kwh >= 0) {
+          char len[48]; snprintf(len, sizeof len, "_t%d->len", tsa);
+          emit_kwsplat_empty_check(c, id, kwh, len, &pre);
+        }
+        emit_exc_sub_new_arm_splat(c, id, ci, tsa, pre.p, rt2, b);
         free(spre.p); free(sv.p); free(pre.p);
         continue;
       }
       int tsa = ++g_tmp;
       buf_printf(b, "case %d: { sp_PolyArray *_t%d = ", ci, tsa);
-      emit_splat_operand_array(c, spl, b);
+      if (spl >= 0) emit_splat_operand_array(c, spl, b);
+      else buf_puts(b, "sp_PolyArray_new()");
       buf_printf(b, "; SP_GC_ROOT(_t%d); ", tsa);
-      if (sole_splat < 0) {
+      for (int a = 0; a < np; a++) emit_ctor_arg_push(c, argv[a], tsa, b);
+      if (lit) {
+        const int *els = nt_arr(nt, kwh, "elements", &kn);
+        for (int e = 0; e < kn; e++) {
+          int key = nt_kind(nt, els[e]) == NK_AssocNode ? nt_ref(nt, els[e], "key") : -1;
+          int val = nt_ref(nt, els[e], "value");
+          if (key >= 0) emit_ctor_arg_push(c, key, -1, b);
+          if (val >= 0) emit_ctor_arg_push(c, val, -1, b);
+        }
+        char given[48]; snprintf(given, sizeof given, "sp_PolyArray_length(_t%d) + 1", tsa);
+        emit_arity_raise(b, given, 0, 0, NULL);
+        buf_puts(b, "; ");
+      }
+      else if (kwh >= 0) {
         char len[48]; snprintf(len, sizeof len, "sp_PolyArray_length(_t%d)", tsa);
-        emit_kwsplat_empty_check(c, id, kw_hash, len, b);
+        emit_kwsplat_empty_check(c, id, kwh, len, b);
       }
       { char given[48]; snprintf(given, sizeof given, "sp_PolyArray_length(_t%d)", tsa);
         emit_arity_check(b, given, 0, 0, NULL);
         buf_printf(b, "; _t%d=", rt2); }
+      /* (an initialize the constructor runs and the site does not: the
+         object alone) */
+      Buf obj; memset(&obj, 0, sizeof obj);
+      if (ctor_new_runs(c, ci, -1)) buf_printf(&obj, "sp_%s_new()", c->classes[ci].c_name);
+      else emit_obj_alloc_expr(c, ci, &obj);
       if (c->classes[ci].is_value_type)
-        buf_printf(b, "sp_box_vobj_%s(sp_%s_new()); } break; ", c->classes[ci].c_name, c->classes[ci].c_name);
+        buf_printf(b, "sp_box_vobj_%s(%s); } break; ", c->classes[ci].c_name, obj.p);
       else {
-        buf_printf(b, "sp_box_obj(sp_%s_new(), ", c->classes[ci].c_name);
+        buf_printf(b, "sp_box_obj(%s, ", obj.p);
         arysub_box_id(c, ty_object(ci), b);
         buf_puts(b, "); } break; ");
       }
+      free(obj.p);
       continue;
     }
     /* A `**h` alone funding a positional the call is short of binds only
@@ -14031,7 +14126,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
        could pass them in the wrong C type. A splat binds every class, and
        keeps every arm. */
     if (!nt_argv_has_splat(nt, argv, argc) && !dynamic_new_may_reach(c, id, ci)) continue;
-    if (emit_ctor_splice_arm(c, id, ci, initm, rt2, b)) continue;
+    if (emit_ctor_splice_arm(c, id, ci, rt2, b)) continue;
     /* the layout's own statements (a keyword check, a hoisted argument)
        belong to this arm: ahead of the switch every arm's check ran for
        every class, and one class's keywords were unknown to the next */
@@ -14067,8 +14162,9 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
         }
       }
     }
-    /* a default reading the instance runs on the allocated object */
-    if (ctor_needs_self_defaults(c, initm, 0)) {
+    /* a default reading the instance runs on the allocated object, and so
+       does a version the constructor does not run */
+    if (!ctor_new_runs(c, ci, initm) || ctor_needs_self_defaults(c, initm, 0)) {
       g_pre = sv_pre;
       buf_printf(b, "case %d: { %s _t%d=", ci, apre.p ? apre.p : "", rt2);
       buf_printf(b, c->classes[ci].is_value_type ? "sp_box_vobj_%s(" : "sp_box_obj(",
@@ -14780,7 +14876,8 @@ int emit_struct_new_early(Compiler *c, int ci, int argc, const int *argv, int kw
           emit_str_literal(g_pre, msg.p);
           buf_puts(g_pre, ");\n");
         }
-        buf_printf(b, "sp_%s_new(", cls->c_name);
+        emit_struct_members_ctor_name(c, (int)(cls - c->classes), b);
+        buf_puts(b, "(");
         for (int a = 0; a < cls->nmembers; a++) {
           if (a) buf_puts(b, ", ");
           if (!msg.p) buf_printf(b, "_t%d", pt[a]);
@@ -14809,7 +14906,9 @@ int emit_struct_new_early(Compiler *c, int ci, int argc, const int *argv, int kw
       }
       buf_puts(b, "sp_raise_cls(\"ArgumentError\", ");
       emit_str_literal(b, msg.p);
-      buf_printf(b, "); sp_%s_new(", cls->c_name);
+      buf_puts(b, "); ");
+      emit_struct_members_ctor_name(c, (int)(cls - c->classes), b);
+      buf_puts(b, "(");
       for (int a = 0; a < cls->nmembers; a++) { if (a) buf_puts(b, ", "); buf_puts(b, default_value_from_compiler(c, cls->ivar_types[a])); }
       buf_puts(b, "); })");
       free(msg.p);
@@ -14828,7 +14927,8 @@ int emit_struct_new_early(Compiler *c, int ci, int argc, const int *argv, int kw
     buf_puts(b, "({ ");
     for (int a2 = 0; a2 < argc; a2++) { buf_puts(b, "(void)("); emit_boxed(c, argv[a2], b); buf_puts(b, "); "); }
     buf_puts(b, "sp_raise_cls(\"ArgumentError\", (&(\"\\xff\" \"struct size differs\")[1])); ");
-    buf_printf(b, "sp_%s_new(", cls->c_name);
+    emit_struct_members_ctor_name(c, (int)(cls - c->classes), b);
+    buf_puts(b, "(");
     for (int a2 = 0; a2 < cls->nmembers; a2++) {
       if (a2) buf_puts(b, ", ");
       buf_puts(b, default_value_from_compiler(c, cls->ivar_types[a2]));
@@ -15128,7 +15228,8 @@ static int emit_struct_new_call_members(Compiler *c, int id, int ci, int argc, c
         made += arg_read_converts(c, mt, vnode) ||
                 (operand_may_allocate(c, vnode) && !subtree_is_plain_value(c, vnode));
     }
-    buf_printf(b, "sp_%s_new(", cls->c_name);
+    emit_struct_members_ctor_name(c, (int)(cls - c->classes), b);
+    buf_puts(b, "(");
     for (int a = 0; a < cls->nmembers; a++) {
       if (a) buf_puts(b, ", ");
       int vnode = -1;

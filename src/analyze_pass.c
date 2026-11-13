@@ -20532,6 +20532,22 @@ int infer_return_types(Compiler *c) {
     if (unified != TY_VOID) { scope_set_ret(sc, unified); changed = 1; }
   }
 
+  /* A program's own #inspect or #to_s whose body always raises infers a
+     void return. Its callers render a String: `p x`, "#{x}", and pp or
+     inspect of a container that holds x. Void gave them none, so `p x`
+     failed the C build and the container's render left the method out
+     (it printed the default #<K:0x...> instead of raising). The value is
+     unreachable, so the String the callers expect is the return. */
+  for (int s = 1; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->ret != TY_VOID || sc->class_id < 0 || !sc->name || sc->nparams != 0) continue;
+    if (!sp_streq(sc->name, "inspect") && !sp_streq(sc->name, "to_s")) continue;
+    if (sc->ret_specialized || sc->ret_rbs_seeded || sc->cs_synth) continue;
+    if (sc->ret_oa_pin != TY_UNKNOWN) continue;
+    if (!scope_always_raises(c, s)) continue;
+    scope_set_ret(sc, TY_STRING); changed = 1;
+  }
+
   /* A method whose body ends in a call nothing resolves infers a void return:
      codegen turns that tail into a NoMethodError raise, so the value is never
      produced. But a caller that READS the value (`@text = j.text`) still needs

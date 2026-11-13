@@ -33098,18 +33098,33 @@ int prune_unnamed_methods(Compiler *c) {
   static const char *const HOOKS[] = { "method_added", "singleton_method_added", "method_removed",
     "singleton_method_removed", "method_undefined", "singleton_method_undefined", NULL };
   NT_FOREACH_KIND(nt, NK_DefNode, d) if (pum_in(nt_str(nt, d, "name"), HOOKS)) return 0;
+  /* ...or installed by its name (`define_singleton_method(:method_added)`,
+     `alias method_added my_hook`); and a listing or a dynamic call named
+     by a Symbol (`send(:instance_methods)`, `:respond_to?.to_proc`, `alias
+     rt respond_to?`): an alias's names are Symbols too */
+  NT_FOREACH_KIND(nt, NK_SymbolNode, y) {
+    const char *v = nt_str(nt, y, "value");
+    if (pum_in(v, HOOKS) || pum_listing_call(v) || pum_dynamic_call(v)) return 0;
+  }
+  /* a Symbol made at run time names any method: `[x].map(&sym)` and
+     `sym.to_proc` call what it names */
+  if (comp_kind_first(c, NK_InterpolatedSymbolNode) >= 0) return 0;
   /* a name made at run time, or a listing: every method may be found */
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *m = nt_str(nt, id, "name");
     if (!m) continue;
-    if (pum_listing_call(m)) return 0;
+    if (pum_listing_call(m) || sp_streq(m, "to_sym") || sp_streq(m, "intern")) return 0;
     if (!pum_dynamic_call(m)) continue;
+    /* (the name is the first argument: the others are the method's own,
+       `Helper.send(:twice, v)` finds twice whatever v holds; a call with
+       none takes its name from where the parser put it, `&:respond_to?`'s
+       block parameter) */
     int args = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    for (int a = 0; a < an; a++) {
-      NodeKind ak = nt_kind(nt, av[a]);
-      if (ak != NK_SymbolNode && ak != NK_StringNode && ak != NK_TrueNode && ak != NK_FalseNode) return 0;
-    }
+    NodeKind ak = an > 0 ? nt_kind(nt, av[0]) : NK_NilNode;
+    if (ak != NK_SymbolNode && ak != NK_StringNode) return 0;
+    const char *v = nt_str(nt, av[0], ak == NK_SymbolNode ? "value" : "content");
+    if (pum_in(v, HOOKS) || pum_listing_call(v) || pum_dynamic_call(v)) return 0;
   }
   /* every name a node holds, but a def's own; and the names the program
      defines (its defs, and every symbol or string it may define one by) */

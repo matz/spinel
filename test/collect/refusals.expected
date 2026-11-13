@@ -1740,17 +1740,23 @@ spinel: 1 refusal, nothing written
 == test/reject/self_call_in_block_still_reaches_class_method.rb [promote] rc=1
 spinel: test/reject/self_call_in_block_still_reaches_class_method.rb:8: undefined method '[]=' for a Class: no class in the program defines a class method '[]=' (NoMethodError)
 spinel: 1 refusal, nothing written
+== test/reject/send_class_side_super_does_more.rb [default] rc=1
+spinel: test/reject/send_class_side_super_does_more.rb:9: Logged.send: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` that passes its parameters straight to `super` is supported, in a program with no other `send` of its own)
+spinel: 1 refusal, nothing written
+== test/reject/send_class_side_super_does_more.rb [promote] rc=1
+spinel: test/reject/send_class_side_super_does_more.rb:9: Logged.send: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` that passes its parameters straight to `super` is supported, in a program with no other `send` of its own)
+spinel: 1 refusal, nothing written
 == test/reject/send_override_bare_super_beside_own.rb [default] rc=1
-spinel: test/reject/send_override_bare_super_beside_own.rb:8: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` whose whole body is `super` is supported, in a program with no other `send` of its own)
+spinel: test/reject/send_override_bare_super_beside_own.rb:8: Plain.send: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` that passes its parameters straight to `super` is supported, in a program with no other `send` of its own)
 spinel: 1 refusal, nothing written
 == test/reject/send_override_bare_super_beside_own.rb [promote] rc=1
-spinel: test/reject/send_override_bare_super_beside_own.rb:8: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` whose whole body is `super` is supported, in a program with no other `send` of its own)
+spinel: test/reject/send_override_bare_super_beside_own.rb:8: Plain.send: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` that passes its parameters straight to `super` is supported, in a program with no other `send` of its own)
 spinel: 1 refusal, nothing written
 == test/reject/send_override_super_does_more.rb [default] rc=1
-spinel: test/reject/send_override_super_does_more.rb:10: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` whose whole body is `super` is supported, in a program with no other `send` of its own)
+spinel: test/reject/send_override_super_does_more.rb:10: Logged.send: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` that passes its parameters straight to `super` is supported, in a program with no other `send` of its own)
 spinel: 1 refusal, nothing written
 == test/reject/send_override_super_does_more.rb [promote] rc=1
-spinel: test/reject/send_override_super_does_more.rb:10: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` whose whole body is `super` is supported, in a program with no other `send` of its own)
+spinel: test/reject/send_override_super_does_more.rb:10: Logged.send: unsupported `super` in a program-defined `send`: it reaches Object#send, which a program method cannot call yet (only a `send` that passes its parameters straight to `super` is supported, in a program with no other `send` of its own)
 spinel: 1 refusal, nothing written
 == test/reject/setter_symbol_block_builtin.rb [default] rc=1
 spinel: test/reject/setter_symbol_block_builtin.rb:6: a setter Symbol (`&:name=`) as the block of a builtin method is not supported

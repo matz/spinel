@@ -769,6 +769,48 @@ static int cr_live_slot_read(CrLive *lv, int r) {
   return nm && anh_find(&lv->seg, nm) < 0 && const_node_class_index(lv->c, r) < 0;
 }
 
+static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist);
+/* The event of a call whose name is `call` (the code at `id`, a CallNode, in
+   scope s with self the class `cls` or -1): on a class constant, on self, or
+   on a value the program may hold a class in. Answers the receiver node a
+   constant names (the caller does not collect it again), else -1. */
+static int cr_live_call_event(CrLive *lv, int s, int id, const char *call, int cls, int persist) {
+  Compiler *c = lv->c;
+  const NodeTable *nt = c->nt;
+  int skip = -1;
+  int r = nt_ref(nt, id, "receiver");
+  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_ProgramNode;
+  const Scope *sc = &c->scopes[s];
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+    /* a `new` the call plan answers with the builtin constructor (one
+       that runs before the class's own `def self.new` is made) builds
+       an instance: the call names the class as a value */
+    int nc = call && is_new_name(call) ? const_node_class_index(c, r) : -1;
+    if (nc >= 0 && !c->classes[nc].is_struct && comp_cmethod_in_chain(c, nc, "new", NULL) >= 0 && cplan_user_new(c, id, nc) < 0) call = "";
+    cr_live_add(lv, s, CR_CONST_CALL, cr_live_read_name(c, r), call, -1, persist);
+    int p = rk == NK_ConstantPathNode ? nt_ref(nt, r, "parent") : -1;
+    if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode && nt_kind(nt, p) != NK_ConstantPathNode)
+      cr_live_collect(lv, s, p, cls, persist);
+    skip = r;
+  }
+  else if (rk == NK_SelfNode && cls >= 0 && !nt_int(nt, r, "sclass_value", 0)) {
+    /* (a `new` the plan answers with the builtin constructor, as on the constant) */
+    if (call && is_new_name(call) && !c->classes[cls].is_struct && comp_cmethod_in_chain(c, cls, "new", NULL) >= 0 &&
+        cplan_user_new(c, id, cls) < 0) call = "";
+    cr_live_add(lv, s, CR_BODY_CALL, NULL, call, cls, persist);
+  }
+  else if ((r < 0 || rk == NK_SelfNode) && cls >= 0)
+    cr_live_add(lv, s, CR_SELF_CALL, NULL, call, cls, 0);
+  else if ((r < 0 || rk == NK_SelfNode) && sc->is_cmethod && sc->class_id >= 0)
+    cr_live_add(lv, s, CR_SELF_CALL, NULL, call, sc->class_id, 0);
+  else if (rk == NK_CallNode && !sc->is_cmethod && sc->class_id >= 0 && sp_streq(nt_str(nt, r, "name"), "class") &&
+           nt_ref(nt, r, "receiver") >= 0 && nt_kind(nt, nt_ref(nt, r, "receiver")) == NK_SelfNode)
+    cr_live_add(lv, s, CR_SELF_CALL, NULL, call, sc->class_id, 0);
+  else if (r >= 0 || s == 0)
+    cr_live_add(lv, s, CR_DYN_CALL, NULL, call, -1, 0);
+  return skip;
+}
+
 /* The classes the code at `id` names in scope s, and the calls it makes that
    can reach a singleton method, not entering a nested def. `cls` is the
    class whose body the code is in, where self is that class, or -1.
@@ -797,37 +839,12 @@ static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist) {
   int skip = -1;
   if (cr_live_slot_write(nt, id)) persist = 1;
   if (k == NK_CallNode) {
-    int r = nt_ref(nt, id, "receiver");
-    NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_ProgramNode;
-    const Scope *sc = &c->scopes[s];
-    const char *call = cr_live_call_name(nt, id);
-    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-      /* a `new` the call plan answers with the builtin constructor (one
-         that runs before the class's own `def self.new` is made) builds
-         an instance: the call names the class as a value */
-      int nc = call && sp_streq(call, "new") ? const_node_class_index(c, r) : -1;
-      if (nc >= 0 && !c->classes[nc].is_struct && comp_cmethod_in_chain(c, nc, "new", NULL) >= 0 && cplan_user_new(c, id, nc) < 0) call = "";
-      cr_live_add(lv, s, CR_CONST_CALL, cr_live_read_name(c, r), call, -1, persist);
-      int p = rk == NK_ConstantPathNode ? nt_ref(nt, r, "parent") : -1;
-      if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode && nt_kind(nt, p) != NK_ConstantPathNode)
-        cr_live_collect(lv, s, p, cls, persist);
-      skip = r;
-    }
-    else if (rk == NK_SelfNode && cls >= 0 && !nt_int(nt, r, "sclass_value", 0)) {
-      /* (a `new` the plan answers with the builtin constructor, as on the constant) */
-      if (call && sp_streq(call, "new") && !c->classes[cls].is_struct && comp_cmethod_in_chain(c, cls, "new", NULL) >= 0 &&
-          cplan_user_new(c, id, cls) < 0) call = "";
-      cr_live_add(lv, s, CR_BODY_CALL, NULL, call, cls, persist);
-    }
-    else if ((r < 0 || rk == NK_SelfNode) && cls >= 0)
-      cr_live_add(lv, s, CR_SELF_CALL, NULL, call, cls, 0);
-    else if ((r < 0 || rk == NK_SelfNode) && sc->is_cmethod && sc->class_id >= 0)
-      cr_live_add(lv, s, CR_SELF_CALL, NULL, call, sc->class_id, 0);
-    else if (rk == NK_CallNode && !sc->is_cmethod && sc->class_id >= 0 && sp_streq(nt_str(nt, r, "name"), "class") &&
-             nt_ref(nt, r, "receiver") >= 0 && nt_kind(nt, nt_ref(nt, r, "receiver")) == NK_SelfNode)
-      cr_live_add(lv, s, CR_SELF_CALL, NULL, call, sc->class_id, 0);
-    else if (r >= 0 || s == 0)
-      cr_live_add(lv, s, CR_DYN_CALL, NULL, call, -1, 0);
+    /* a send's Symbol names the method it calls, and a `send` of the
+       program's own (a class's `def self.send`) answers the call: the call's
+       own name runs too */
+    const char *call = cr_live_call_name(nt, id), *own = nt_str(nt, id, "name");
+    skip = cr_live_call_event(lv, s, id, call, cls, persist);
+    if (own && call != own && is_send_family(own)) cr_live_call_event(lv, s, id, own, cls, persist);
   }
   /* a call on a slot hands its arguments to it: their reads persist, the
      receiver's as it was */
@@ -2289,14 +2306,15 @@ static int a_scope_forwards_block_to_poly(Compiler *c, int mi) {
   return 0;
 }
 
-/* `recv.new` with recv naming a class: 1, with the initialize it runs in
-   *init (-1 for none). 0 for any other receiver. */
-static int an_const_new_init(Compiler *c, int recv, int *init) {
+/* `recv.new` (call id) with recv naming a class: 1, with the initialize it
+   runs there in *init (cplan_new_initialize; -1 for none). 0 for any other
+   receiver. */
+static int an_const_new_init(Compiler *c, int id, int recv, int *init) {
   int rk = recv >= 0 ? nt_kind(c->nt, recv) : -1;
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return 0;
   int ci = const_node_class_index(c, recv);
   if (ci < 0) return 0;
-  *init = comp_method_in_chain(c, ci, "initialize", NULL);
+  *init = cplan_new_initialize(c, id, ci, NULL);
   return 1;
 }
 
@@ -2305,7 +2323,7 @@ static int an_const_new_init(Compiler *c, int recv, int *init) {
    literal block it was given, which has to be lifted for that */
 static int ctor_new_forwards_to_cycle(Compiler *c, int nid, const char *tn) {
   int init = -1;
-  return sp_streq(tn, "new") && an_const_new_init(c, nt_ref(c->nt, nid, "receiver"), &init) &&
+  return is_new_name(tn) && an_const_new_init(c, nid, nt_ref(c->nt, nid, "receiver"), &init) &&
          ctor_site_on_cycle(c, nid, init);
 }
 /* Does initialize `init` forward its block to such a `new`? */
@@ -2358,7 +2376,7 @@ static int a_scope_forwards_block_to_lowered(Compiler *c, int mi) {
     int tmi = -1;
     /* a `new` of a class whose initialize forwards the block on into a
        cycle of constructors, one link as below */
-    if (sp_streq(tn, "new") && an_const_new_init(c, recv, &tmi)) {
+    if (is_new_name(tn) && an_const_new_init(c, nid, recv, &tmi)) {
       if (tmi >= 0 && tmi != mi && ctor_init_forwards_to_cycle(c, tmi)) return 1;
       continue;
     }
@@ -2448,7 +2466,7 @@ static int a_block_call_target(Compiler *c, int id, int roots, int *cls, int *cl
   Scope *cs = comp_scope_of(c, id);
   if (ci >= 0) {
     mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
-    if (mi < 0 && is_new_name(name)) mi = comp_method_in_chain(c, ci, "initialize", NULL);
+    if (mi < 0 && is_new_name(name)) mi = cplan_new_initialize(c, id, ci, NULL);
   }
   else if (rk == NK_SelfNode && is_new_name(name) && cs && cs->is_cmethod && cs->class_id >= 0 &&
            comp_cmethod_in_chain(c, cs->class_id, "new", NULL) < 0) {
@@ -4670,7 +4688,7 @@ static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, 
 static int ie_forward_target(Compiler *c, int call, int cls, int cm, const char *name, int receiverless) {
   if (!name) return -1;
   int mi = cls < 0 ? -1 : call_target(c, call, cls, name, cm ? CT_CMETHOD : 0, NULL);
-  if (mi < 0 && cm && cls >= 0 && sp_streq(name, "new")) mi = comp_method_in_chain(c, cls, "initialize", NULL);
+  if (mi < 0 && cm && cls >= 0 && is_new_name(name)) mi = cplan_new_initialize(c, call, cls, NULL);
   if (mi < 0 && receiverless) {
     mi = call_target(c, call, -1, name, CT_TOP, NULL);
     if (mi >= 0 && c->scopes[mi].class_id >= 0) mi = -1;
@@ -5067,13 +5085,13 @@ static void ie_rself_literal(Compiler *c, int lit) {
   nt_node_set_int(nt, body, "ie_rself_at", (at >= 0 ? at : bt) + 1);
 }
 
-static int ie_new_takes_block(Compiler *c, int recv) {
+static int ie_new_takes_block(Compiler *c, int id, int recv) {
   const NodeTable *nt = c->nt;
   NodeKind rk = nt_kind(nt, recv);
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? const_node_class_index(c, recv) : -1;
   if (ci < 0) return -1;
   int mi = comp_cmethod_in_chain(c, ci, "new", NULL);
-  if (mi < 0) mi = comp_method_in_chain(c, ci, "initialize", NULL);
+  if (mi < 0) mi = cplan_new_initialize(c, id, ci, NULL);
   return mi >= 0 && c->scopes[mi].blk_param;
 }
 
@@ -5096,7 +5114,7 @@ static void ie_rself_mark_literals(Compiler *c) {
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || !nm) continue;
     int take = r < 0 && (sp_streq(nm, "lambda") || sp_streq(nm, "proc"));
     take |= r >= 0 && sp_streq(nm, "new") && nt_kind(nt, r) == NK_ConstantReadNode && sp_streq(nt_str(nt, r, "name"), "Proc");
-    int known = !take && r >= 0 && sp_streq(nm, "new") ? ie_new_takes_block(c, r) : -1;
+    int known = !take && r >= 0 && is_new_name(nm) ? ie_new_takes_block(c, id, r) : -1;
     if (known >= 0) take = known;
     for (int s = 0; s < c->nscopes && !take && known < 0; s++)
       take = c->scopes[s].name && c->scopes[s].blk_param && sp_streq(c->scopes[s].name, sp_streq(nm, "new") ? "initialize" : nm);
@@ -17115,7 +17133,7 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
       else if (nt_kind(nt, recv) == NK_ConstantReadNode) {
         int rci = const_node_class_index(c, recv);
         if (rci >= 0)
-          mi = sp_streq(name, "new") ? comp_method_in_chain(c, rci, "initialize", NULL)
+          mi = is_new_name(name) ? cplan_new_initialize(c, id, rci, NULL)
                                      : call_target(c, id, rci, name, CT_CMETHOD, NULL);
       }
     }
@@ -17977,7 +17995,9 @@ static int oa_recv_may_reach(Compiler *c, int recv, const OAS *s) {
   for (int i = -1; i < nd; i++) {
     int k = i < 0 ? ci : ds[i];
     if (i >= 0 && c->classes[k].unreferenced) continue;
-    if (cm ? !cls_fact_bounded(c, k) || cls_set_has(f, k + c->nclasses) : !cls_fact_excludes(c, recv, k)) return 1;
+    if (cm ? !cls_fact_bounded(c, k) || k >= c->cls_fact_ncls || cls_set_has(f, k + c->cls_fact_ncls)
+           : !cls_fact_excludes(c, recv, k))
+      return 1;
   }
   return 0;
 }
@@ -19414,7 +19434,7 @@ static int narrow_object_arrays(Compiler *c) {
         if (oa_tmi < 0 && sp_streq(name, "new")) {
           Scope *ncs = comp_scope_of(c, id);
           if (ncs && ncs->is_cmethod && ncs->class_id >= 0)
-            oa_tmi = comp_method_in_chain(c, ncs->class_id, "initialize", NULL);
+            oa_tmi = cplan_new_initialize(c, id, ncs->class_id, NULL);
         }
       }
       else if (nt_type(nt, recv) &&
@@ -19431,7 +19451,7 @@ static int narrow_object_arrays(Compiler *c) {
            the ivar inside `initialize` narrowed. A class that defines its own
            `self.new` is found above and keeps it. */
         if (oa_tmi < 0 && rci >= 0 && sp_streq(name, "new"))
-          oa_tmi = comp_method_in_chain(c, rci, "initialize", NULL);
+          oa_tmi = cplan_new_initialize(c, id, rci, NULL);
       }
       else {
         TyKind ort = infer_type(c, recv);
@@ -22635,7 +22655,7 @@ static int an_call_target_mi(Compiler *c, int id) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   if (sp_streq(nm, "new") && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     TyKind ct = comp_ntype(c, id);
-    return ty_is_object(ct) ? comp_method_in_chain(c, ty_object_class(ct), "initialize", NULL) : -1;
+    return ty_is_object(ct) ? cplan_new_initialize(c, id, ty_object_class(ct), NULL) : -1;
   }
   if (rk == NK_SelfNode) {
     /* by name alone, `run(u) { ... }` at the top level found K#run, a
@@ -28578,7 +28598,7 @@ static void an_call_targets_of(Compiler *c, int u, ACallTargets *t) {
   /* asked of THIS class, not the whole program: a dynamic `new` elsewhere only
      matters where its shape could construct this one */
   if (an_class_dynamic_new_risk(c, cid)) return;
-  int mi = comp_method_in_chain(c, cid, "initialize", NULL);
+  int mi = cplan_new_initialize(c, u, cid, NULL);
   if (mi < 0 || mi >= c->nscopes) return;
   Scope *m2 = &c->scopes[mi];
   if (!m2->name || m2->class_id < 0 || m2->is_cmethod) return;
@@ -29190,7 +29210,7 @@ static int an_call_targets_scope(Compiler *c, int u, int mi2, Scope *m2) {
   /* the same per-class question an_call_targets_of asks, at the same point:
      the two answer for the same set or the index and the predicate diverge */
   if (an_class_dynamic_new_risk(c, cid)) return 0;
-  return comp_method_in_chain(c, cid, "initialize", NULL) == mi2;
+  return cplan_new_initialize(c, u, cid, NULL) == mi2;
 }
 
 /* The parameter twin of narrow_locals_from_arrays.
@@ -32886,7 +32906,9 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
   for (int d = -1; d < nd && n < cap; d++) {
     int k = d < 0 ? cls : ds[d];
     if (comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
-    int mi = comp_method_in_chain(c, k, "initialize", NULL);
+    /* (a `new` in a class method builds self, which may be a subclass: the
+       constructor's switch, whose arms run the table's) */
+    int mi = cplan_new_initialize(c, sub ? -1 : u, k, NULL);
     if (mi < 0 || c->scopes[mi].is_cmethod) continue;
     int dup = 0;
     for (int e = 0; e < n && !dup; e++) dup = out[e] == mi;
@@ -34397,7 +34419,7 @@ static int promote_spread_string_args(Compiler *c) {
     int ctor = -1, r = nt_ref(nt, n, "receiver");
     if (sp_streq(nm, "new") && r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
       int ci = key_name(c, r) ? const_node_class_index(c, r) : -1;
-      ctor = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
+      ctor = ci >= 0 ? cplan_new_initialize(c, n, ci, NULL) : -1;
     }
     int first = ctor >= 0 ? ctor : dyn_scopes_named(c, nm);
     if (!splat && ctor < 0) first = spread_rest_from(c, rest_from, first);
@@ -34515,7 +34537,7 @@ static int fwd_call_target(Compiler *c, int u) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   if (sp_streq(nm, "new") && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     TyKind ct = comp_ntype(c, u);
-    return ty_is_object(ct) ? comp_method_in_chain(c, ty_object_class(ct), "initialize", NULL) : -1;
+    return ty_is_object(ct) ? cplan_new_initialize(c, u, ty_object_class(ct), NULL) : -1;
   }
   if (rk == NK_SelfNode) {
     Scope *es = comp_scope_of(c, u);
@@ -42539,7 +42561,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         Scope *bs = comp_scope_of(c, id);
         int bk = bs->def_node >= 0 ? (bs->is_cmethod ? bs->class_id : -1)
                : (c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1);
-        if (bk >= 0) mi = comp_method_in_chain(c, bk, "initialize", NULL);
+        if (bk >= 0) mi = cplan_new_initialize(c, bs->def_node >= 0 ? -1 : id, bk, NULL);
       }
       if (mi < 0 && recv >= 0) {
         TyKind rt = infer_type(c, recv);
@@ -42575,7 +42597,7 @@ static void mark_nullable_int_locals(Compiler *c) {
           const char *cnm = nt_str(nt, id, "name");
           int rci = const_node_class_index(c, recv);
           if (rci >= 0)
-            mi = sp_streq(cnm, "new") ? comp_method_in_chain(c, rci, "initialize", NULL)
+            mi = is_new_name(cnm) ? cplan_new_initialize(c, id, rci, NULL)
                                       : call_target(c, id, rci, cnm, CT_CMETHOD, NULL);
         }
       }
@@ -45902,7 +45924,7 @@ static int ctor_graph_target(Compiler *c, int id) {
        its initialize */
     if (sp_streq(name, "new")) {
       t = ci >= 0 ? comp_cmethod_in_chain(c, ci, "new", NULL) : -1;
-      if (t < 0 && ci >= 0) t = comp_method_in_chain(c, ci, "initialize", NULL);
+      if (t < 0 && ci >= 0) t = cplan_new_initialize(c, recv < 0 || rk == NK_SelfNode ? -1 : id, ci, NULL);
     }
     else if (recv < 0 || rk == NK_SelfNode) t = comp_self_call_mi(c, id, name);
     else if (ci >= 0) t = call_target(c, id, ci, name, CT_CMETHOD, NULL);
@@ -49966,7 +49988,7 @@ static void an_phase_block_inline(Compiler *c) {
           /* `Klass.new(&b)` with no `def self.new` hands the block to
              initialize, which may store it */
           if (fci >= 0 && fmi < 0 && sp_streq(fn, "new"))
-            fmi = comp_method_in_chain(c, fci, "initialize", NULL);
+            fmi = cplan_new_initialize(c, p, fci, NULL);
         }
         /* This pass runs before the receiver's type settles, so an unresolved
            receiver falls back to the name: any block-taking method that could
@@ -53039,7 +53061,7 @@ static void an_phase_method_backstops(Compiler *c) {
             if (rt == TY_POLY || rt == TY_UNKNOWN || rt == TY_CLASS) called = 1;
             continue;
           }
-          if (cid >= 0 && comp_method_in_chain(c, cid, "initialize", NULL) == s) called = 1;
+          if (cid >= 0 && cplan_new_initialize(c, id, cid, NULL) == s) called = 1;
         }
       }
       if (!called) continue;

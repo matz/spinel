@@ -187,7 +187,8 @@ void ffi_check_buffer_bounds(Compiler *c, int id, int arg, const char *kind, int
 extern int g_setter_value_inner;
 int emit_cmethod_setter_assign(Compiler *c, int id, Buf *b);
 int ctor_alloc_decl(Compiler *c, int cid, Buf *b);
-char *ctor_self_text(Compiler *c, int cid, int t);
+char *ctor_self_text(Compiler *c, int cid, int initm, int t);
+int ctor_new_runs(Compiler *c, int cid, int initm);
 void ctor_arity_add(CtorArityArms *g, int ci, const char *msg);
 void ctor_arity_emit(CtorArityArms *g, Buf *b);
 int ctor_arity_error(Compiler *c, int ci, int initm, int argc, char *msg, size_t n);
@@ -207,7 +208,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b);
    object's is its class's, so anything else
    switches on -1, no arm's label, and takes the default's NoMethodError. */
 void emit_class_value_new_switch(Compiler *c, int rt2, int kt, int boxed, Buf *b);
-void emit_ctor_arm_case(Compiler *c, int ci, int rt2, int self_t, const char *pre, const char *args, int given, Buf *b);
+void emit_ctor_arm_case(Compiler *c, int ci, int initm, int rt2, int self_t, const char *pre, const char *args, int given, Buf *b);
 void struct_nil_fill_stmts(Compiler *c, int ci, int given, const char *obj, Buf *out);
 void emit_ctor_arm_param(Compiler *c, Scope *is, int j, const ArgLayout *L, const int *atmp, Buf *pdpre, Buf *out);
 void emit_ctor_block_slot(Compiler *c, int id, int initm, const char *lead, Buf *b);

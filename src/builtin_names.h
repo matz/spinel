@@ -37,6 +37,7 @@ int is_inspect_name(const char *n);       /* inspect */
 int is_object_class_name(const char *n);   /* Object alone: the top level's constants */
 int is_object_root(const char *n);    /* Object Kernel BasicObject: the classes every object has */
 int is_send_family(const char *n);    /* send __send__ public_send */
+int is_public_send(const char *n);    /* public_send, which enforces visibility */
 int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes keywords in CRuby (clone, round, lines ...) */
 /* Does a CRuby fact of a method of `feature` hold for this program: a core
    method's (feature NULL) always, a library's (io/console) where the

@@ -4628,7 +4628,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
            methods must dispatch); the exception-shaped queries route through
            the base helpers like a specialized rescue var does */
         if (class_inherits_builtin_exception(c, ci))
-          { *out = (comp_method_in_chain(c, ci, "initialize", NULL), ty_object(ci)); return 1; }
+          { *out = ty_object(ci); return 1; }
         int ucnew = cplan_user_new(c, id, ci);
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
@@ -4685,7 +4685,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
            methods must dispatch); the exception-shaped queries route through
            the base helpers like a specialized rescue var does */
         if (class_inherits_builtin_exception(c, ci))
-          { *out = (comp_method_in_chain(c, ci, "initialize", NULL), ty_object(ci)); return 1; }
+          { *out = ty_object(ci); return 1; }
         int ucnew = cplan_user_new(c, id, ci);
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
@@ -11833,7 +11833,8 @@ TyKind infer_uncached(Compiler *c, int id) {
     int iv = nm ? comp_ivar_index(ci, nm) : -1;
     /* an ivar only nil is written to has no slot (it holds nothing): the
        write answers its value, the nil (`def root = @root ||= nil`, which
-       typed the method void and its caller's `root.nil?` unknown) */
+       typed the method void and its caller's `root.nil?` unknown)
+       (register_locals now gives `@x ||= v` a slot, so this is mostly the `&&=` form) */
     /* (an instance method's only: a class body's ivar is the class's own) */
     if (iv < 0 && nk != NK_InstanceVariableOperatorWriteNode && s->class_id >= 0 && !s->is_cmethod &&
         infer_type(c, nt_ref(nt, id, "value")) == TY_NIL && !infer_ivar_slot_below(c, wcls, nm))

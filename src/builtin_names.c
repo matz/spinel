@@ -134,7 +134,10 @@ int is_object_root(const char *n) {
 }
 
 int is_send_family(const char *n) {
-  return sp_streq(n, "send") || sp_streq(n, "__send__") || sp_streq(n, "public_send");
+  return sp_streq(n, "send") || sp_streq(n, "__send__") || is_public_send(n);
+}
+int is_public_send(const char *n) {
+  return sp_streq(n, "public_send");
 }
 
 /* The calls whose arguments name a method by a value (a Symbol, a String,

@@ -1,0 +1,16 @@
+[]
+false
+nil
+[:@cached]
+#<Memo:X @cached=nil>
+true
+7
+true
+[:@seen]
+[:@extra]
+[:@cached, :@other]
+[:@cached]
+nil
+[]
+nil
+"instance-variable"

@@ -1,0 +1,12 @@
+[:ksend, :m]
+:km
+[:scsend, :m]
+[:dmsend, :m]
+[:dmsend, :m]
+[:psend, :m]
+:psm
+[:psend, :m]
+[:usend, :m]
+[:usend, :+, 1]
+:qm
+:qm

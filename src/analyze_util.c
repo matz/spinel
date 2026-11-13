@@ -3548,10 +3548,14 @@ static int bsv_foreign(TyKind t, TyKind want) {
 
 /* What block_store_value_ty gathers from a block's values: the first of a
    kind bsv_foreign takes for `want`, and whether one is an Integer (1)
-   and one a Float (2). */
+   and one a Float (2). A nil found first gives way to a later value of
+   another kind: `x == 1 ? nil : :tag` on an Integer Array answered nil,
+   the Array widened only to a nullable Integer, and the Symbol was
+   stored as an Integer. The kind that holds the Symbol holds nil too. */
 typedef struct { TyKind want, found; unsigned num; } BsvArms;
 static void bsv_leaf(BsvArms *a, TyKind t) {
-  if (a->found == TY_UNKNOWN && bsv_foreign(t, a->want)) a->found = t;
+  if ((a->found == TY_UNKNOWN || (a->found == TY_NIL && t != TY_NIL)) && bsv_foreign(t, a->want))
+    a->found = t;
   if (t == TY_INT) a->num |= 1;
   else if (t == TY_FLOAT) a->num |= 2;
 }
@@ -3623,7 +3627,8 @@ static void block_next_arms(Compiler *c, int node, BsvArms *a) {
    `next 1` beside `next "s"` to the boxed kind, which the store evidence
    leaves alone. So the typed Array stayed, and the nil raised TypeError or
    the String did not compile. The first value (tail or `next`, arm by arm)
-   of such a kind is answered, and the Array widens as it does for a block
+   of such a kind is answered (a nil gives way to a later value of another
+   kind, see bsv_leaf), and the Array widens as it does for a block
    with that one value. An `elem` not known yet (TY_UNKNOWN or TY_POLY: a
    row read out of a table) answers so only for values of mixed kinds, with
    one no Array of numbers or objects holds. `joined` otherwise. `*num`
@@ -5298,7 +5303,14 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
     int mi = comp_self_call_mi(c, node, sym);
     if (mi < 0) return cplan_capture_missing(c, node);
     k = c->scopes[mi].class_id, side = k >= 0 && c->scopes[mi].is_cmethod;
-    if (k < 0) return call_target(c, node, k, sym, CT_CAPTURE | CT_TOP, NULL);
+    if (k < 0) {
+      /* (a version of Object's that main's top-level ask meets is the
+         capture's on Object: ML_OBJECT) */
+      MethodLookup tl = { .def_class = -1 };
+      int t = call_target(c, node, k, sym, CT_CAPTURE | CT_TOP, &tl);
+      if (t >= 0 || tl.kind != ML_OBJECT) return t;
+      k = comp_core_class(c, CORE_OBJECT);
+    }
     goto found;
   }
   /* `self.method(:m)` in a class method: self is the class */
@@ -5311,7 +5323,7 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
      (desugar_builtin_method_obj) -- for an object accessor the wrapper is a
      TOP-LEVEL def, not in the object's own class chain, so resolve it there. */
   if (sym[0] == '_' && sym[1] == '_' && sym[2] == 'b' && sym[3] == 'a' && sym[4] == 'm')
-    return comp_method_index(c, sym);
+    return call_target(c, node, -1, sym, CT_CAPTURE | CT_TOP, NULL);
   if (ty_is_object(rt)) { k = ty_object_class(rt); goto found; }
   /* Klass.method(:cmeth) / Module.method(:mf): the class-side method */
   if (rt == TY_CLASS && (nt_kind(nt, recv) == NK_ConstantReadNode ||
@@ -6588,7 +6600,7 @@ static void si_call_targets(Compiler *c, SiFacts *f, int from, int id, const cha
   if (r >= 0 && sp_streq(nm, "new") && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
     int k = const_node_class_index(c, r);
     if (k >= 0) {
-      int mi = comp_method_in_chain(c, k, "initialize", NULL);
+      int mi = cplan_new_initialize(c, id, k, NULL);
       if (mi >= 0) si_target(f, from, mi, hit);
       return;
     }

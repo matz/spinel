@@ -255,7 +255,7 @@ static int new_site_reaches(Compiler *c, int id, int init) {
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode)
     return 0;
   int cid = const_node_class_index(c, recv);
-  return cid >= 0 && comp_method_in_chain(c, cid, "initialize", NULL) == init;
+  return cid >= 0 && cplan_new_initialize(c, id, cid, NULL) == init;
 }
 
 /* `def initialize(...)` is reached through `Klass.new(...)`, never a call named
@@ -2424,6 +2424,12 @@ void register_locals(Compiler *c) {
     if (k == NK_InstanceVariableWriteNode ||
         k == NK_InstanceVariableReadNode ||
         k == NK_InstanceVariableOperatorWriteNode ||
+        /* `@x ||= v` always writes on its first run (the ivar starts nil),
+           so it defines the ivar as a plain write does: `@c ||= nil` alone
+           left the class no slot, and instance_variables, inspect and
+           instance_variable_defined? never saw @c. (`@x &&= v` writes only
+           a truthy ivar, which some other write made.) */
+        k == NK_InstanceVariableOrWriteNode ||
         /* the multi-assign target form (`@a, @b = ...`) also defines the ivar,
            so it must be interned for the struct field (#3273). */
         k == NK_InstanceVariableTargetNode) {
@@ -2927,6 +2933,96 @@ static int rsl_frozen_literal(const NodeTable *nt, int v) {
   return mn && sp_streq(mn, "freeze") && nt_ref(nt, v, "arguments") < 0 && r >= 0 &&
          nt_kind(nt, r) == NK_ArrayNode && !rsl_own_method(nt, "Array", "freeze");
 }
+/* The program's own Hash method of the name, or one of Object's or
+   Kernel's, answers in place of the builtin's */
+static int rsl_no_own_hash_method(const NodeTable *nt, const char *m) {
+  return !rsl_own_method(nt, "Hash", m) && !rsl_own_method(nt, "Object", m) && !rsl_own_method(nt, "Kernel", m);
+}
+/* Does read r of a literal Hash constant leave the Hash as it is? A call on
+   it that only reads it (keys, size, key?, ...), one that answers a value
+   of it (`[]`, fetch, dig, values), or a `**` of it. With values, the
+   values the read answers must be lists it keeps (rsl_read_keeps_list: a splat, a transform the resolver
+   reads), so the symbol lists it holds stay as written too. A `[]` or
+   fetch of a symbol key whose value in literal h is a scalar (a number, a
+   symbol, nil, true, false) answers a value nothing can change in place. */
+static int rsl_scalar_at(const NodeTable *nt, int h, int p) {
+  int args = nt_ref(nt, p, "arguments"), an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  const char *want = an == 1 && nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
+  int hn = 0, val = -1;
+  const int *els = want ? nt_arr(nt, h, "elements", &hn) : NULL;
+  for (int e = 0; e < hn; e++) {
+    int key = nt_ref(nt, els[e], "key");
+    const char *kn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+    if (!kn) return 0;
+    if (sp_streq(kn, want)) val = nt_ref(nt, els[e], "value");
+  }
+  NodeKind vk = val >= 0 ? nt_kind(nt, val) : NK_NilNode;
+  return val >= 0 && (vk == NK_IntegerNode || vk == NK_FloatNode || vk == NK_SymbolNode || vk == NK_NilNode ||
+                      vk == NK_TrueNode || vk == NK_FalseNode);
+}
+static int rsl_read_keeps_hash(Compiler *c, const int *par, int r, int h, int values) {
+  const NodeTable *nt = c->nt;
+  int p = par[r];
+  /* (`**OPTS` copies the pairs into a new Hash) */
+  if (!values && p >= 0 && nt_kind(nt, p) == NK_AssocSplatNode) return 1;
+  if (p < 0 || nt_kind(nt, p) != NK_CallNode || nt_ref(nt, p, "receiver") != r || nt_ref(nt, p, "block") >= 0) return 0;
+  const char *m = nt_str(nt, p, "name");
+  static const char *const READ[] = { "keys", "size", "length", "empty?", "key?", "has_key?", "include?", "member?", NULL };
+  static const char *const VALUE[] = { "[]", "fetch", "dig", "values", NULL };
+  if (!m || !rsl_no_own_hash_method(nt, m)) return 0;
+  for (int i = 0; READ[i]; i++) if (sp_streq(m, READ[i])) return 1;
+  if ((sp_streq(m, "[]") || sp_streq(m, "fetch")) && rsl_scalar_at(nt, h, p)) return 1;
+  for (int i = 0; VALUE[i]; i++) if (sp_streq(m, VALUE[i])) return !values || rsl_read_keeps_list(c, par, p);
+  return 0;
+}
+/* The literal Hash (a HashNode) that node stands for: the literal, its
+   `.freeze`, or a constant the program writes once with one, whose every
+   read leaves it as written (rsl_read_keeps_hash, with values: the lists
+   it holds as well; `X::OPTS` reaches it by another node kind). -1 for
+   anything else, or a literal with a `**`. */
+static int rsl_hash_literal(Compiler *c, int node, int depth, int values) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || depth > 8) return -1;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_HashNode) {
+    int en = 0; const int *els = nt_arr(nt, node, "elements", &en);
+    for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) != NK_AssocNode) return -1;
+    return node;
+  }
+  if (k == NK_CallNode) {
+    const char *mn = nt_str(nt, node, "name");
+    if (!mn || !sp_streq(mn, "freeze") || nt_ref(nt, node, "arguments") >= 0 || nt_ref(nt, node, "block") >= 0 ||
+        !rsl_no_own_hash_method(nt, "freeze")) return -1;
+    return rsl_hash_literal(c, nt_ref(nt, node, "receiver"), depth + 1, values);
+  }
+  if (k != NK_ConstantReadNode) return -1;
+  const char *cn = nt_str(nt, node, "name");
+  int src = -1;
+  for (int w = 0; cn && w < nt->count; w++) {
+    NodeKind wk = nt_kind(nt, w);
+    if (wk != NK_ConstantWriteNode && wk != NK_ConstantOperatorWriteNode && wk != NK_ConstantOrWriteNode &&
+        wk != NK_ConstantAndWriteNode && wk != NK_ConstantTargetNode) continue;
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, cn)) continue;
+    if (src >= 0 || wk != NK_ConstantWriteNode) return -1;
+    src = nt_ref(nt, w, "value");
+  }
+  if (src < 0) return -1;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, r) {
+    const char *rn = nt_str(nt, r, "name");
+    if (rn && sp_streq(rn, cn)) return -1;
+  }
+  int h = rsl_hash_literal(c, src, depth + 1, values);
+  const int *par = NULL;
+  if (h >= 0) NT_FOREACH_KIND(nt, NK_ConstantReadNode, r) {
+    const char *rn = nt_str(nt, r, "name");
+    if (!rn || !sp_streq(rn, cn)) continue;
+    if (!par) par = comp_parent_map(c);
+    if (!rsl_read_keeps_hash(c, par, r, h, values)) return -1;
+  }
+  return h;
+}
 int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return -1;
@@ -3023,6 +3119,38 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
       int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
       rsl_strings = was;
       return n;
+    }
+    /* `*OPTS.keys` and `*OPTS[:name]` of a literal Hash (#11711): its
+       symbol keys, in order, or the symbol list one symbol key holds */
+    if ((sp_streq(mn, "keys") && an == 0) || (sp_streq(mn, "[]") && an == 1)) {
+      int h = nt_ref(nt, node, "block") < 0 && rsl_no_own_hash_method(nt, mn) ? rsl_hash_literal(c, recv, depth + 1, an == 1) : -1;
+      if (h >= 0) {
+        int hn = 0; const int *els = nt_arr(nt, h, "elements", &hn);
+        if (an == 0) {
+          int w = 0;
+          for (int e = 0; e < hn; e++) {
+            int key = nt_ref(nt, els[e], "key");
+            const char *kn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+            if (!kn) return -1;
+            int dup = 0;
+            for (int j = 0; j < w; j++) if (sp_streq(out[j], kn)) { dup = 1; break; }
+            if (dup) continue;
+            if (w >= cap) return -1;
+            out[w++] = kn;
+          }
+          return w;
+        }
+        const int *av = nt_arr(nt, args, "arguments", &an);
+        const char *want = nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
+        int val = -1;
+        for (int e = 0; want && e < hn; e++) {
+          int key = nt_ref(nt, els[e], "key");
+          const char *kn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+          if (!kn) return -1;   /* (a key of another kind may equal it) */
+          if (sp_streq(kn, want)) val = nt_ref(nt, els[e], "value");   /* the last one wins */
+        }
+        return val >= 0 ? resolve_symbol_list(c, val, out, cap, depth + 1) : -1;
+      }
     }
     int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
     if (n < 0) return -1;
@@ -3352,11 +3480,12 @@ static int sg_block_handoff(const NodeTable *nt, int n, const char *blk) {
   return rn && sp_streq(rn, blk);
 }
 
-/* Does class `ci`'s initialize hand its block the new object, and nothing
-   else: every hand-off in it passes `self` first? */
-static int sg_initialize_yields_self(Compiler *c, int ci) {
+/* Does the initialize of class `ci` a `new` (call id) runs there hand its
+   block the new object, and nothing else: every hand-off in it passes
+   `self` first? */
+static int sg_initialize_yields_self(Compiler *c, int id, int ci) {
   const NodeTable *nt = c->nt;
-  int mi = comp_method_in_chain(c, ci, "initialize", NULL);
+  int mi = cplan_new_initialize(c, id, ci, NULL);
   if (mi < 0 || c->scopes[mi].body < 0) return 0;
   const char *blk = c->scopes[mi].blk_param;
   if (blk && !blk[0]) blk = NULL;
@@ -3411,7 +3540,7 @@ static int sg_block_param_new(Compiler *c, int id, const char *name, int *out_ci
     if (nt_kind(nt, n) == NK_CallNode && nt_ref(nt, n, "block") == blk) { call = n; break; }
   if (call < 0) return -1;
   int ci = sg_new_class_ci(c, call);
-  if (ci < 0 || !sg_initialize_yields_self(c, ci)) return -1;
+  if (ci < 0 || !sg_initialize_yields_self(c, call, ci)) return -1;
   *out_ci = ci;
   return call;
 }
@@ -11874,7 +12003,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       int rc = rn ? const_node_class_index(c, r) : -1;
       if (rc < 0) { if (rn && is_builtin_class_name(rn)) continue; return 0; }
       if (comp_cmethod_in_chain(c, rc, "new", NULL) >= 0) return 0;
-      if (comp_method_in_chain(c, rc, "initialize", NULL) != (int)(s - c->scopes)) continue;
+      if (cplan_new_initialize(c, u, rc, NULL) != (int)(s - c->scopes)) continue;
     }
     if (!pn) {
       int r = nt_ref(nt, u, "receiver");

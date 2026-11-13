@@ -509,14 +509,22 @@ int desugar_main_singleton_calls(Compiler *c) {
   return ntodo > 0;
 }
 
+/* (in class or module body `body`, does call id's name find a method of the
+   class's own side first: its class methods, or Class's or Module's?) */
+static int cbody_class_side_answers(Compiler *c, int id, int body, const char *nm) {
+  return comp_cbody_call_mi(c, id, nm) >= 0 ||
+         builtin_answers_ahead_of(comp_class_is_module(c, &c->classes[body]) ? "Module" : "Class", nm, "Object");
+}
 /* A method the program adds to Object (`class Object; def helper ...`) is
    every object's, so a receiverless `helper` in another class's instance
    method is `self.helper` (#5779). A class's chain stops short of Object, so
    the bare call found nothing there: a plain one raised NameError at run
    time and a yielding one was refused, where `self.helper` already reaches
-   Object's method. Give it self, at the top level too, where self is main.
-   A module's method runs on its includer and an instance_eval block on its
-   receiver; both are left as they were. */
+   Object's method. Give it self, at the top level too, where self is main,
+   and in a class or module body, where self is the class (when neither its
+   class methods nor Class's or Module's own answer the name, which CRuby's
+   lookup meets first). A module's method runs on its includer and an
+   instance_eval block on its receiver; both are left as they were. */
 int desugar_bare_object_reopen_calls(Compiler *c) {
   int obj = comp_core_class(c, CORE_OBJECT);
   if (obj < 0) return 0;
@@ -527,18 +535,18 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     /* (a builtin_only call is the builtin's, whatever Object defines) */
     if (!nm || cplan_builtin_call(c, id) || call_target(c, id, obj, nm, CT_OWN, NULL) < 0) continue;
-    /* in a class body self is the class, and in an instance_eval block
-       the receiver */
+    /* (in an instance_eval block self is the receiver) */
     Scope *sc = comp_scope_of(c, id);
-    if (((!sc || !sc->name) && c->node_cbody[id] >= 0) || ie_class_of(c, id) >= 0) continue;
-    int cls = sc ? sc->class_id : -1;
+    if (ie_class_of(c, id) >= 0) continue;
+    int body = (!sc || !sc->name) ? c->node_cbody[id] : -1, cls = sc ? sc->class_id : -1;
+    if (body >= 0 && cbody_class_side_answers(c, id, body, nm)) continue;
     if (sc && sc->is_cmethod) continue;
     if (cls >= 0) {
       if (cls == obj || comp_class_is_module(c, &c->classes[cls])) continue;
       if (call_target(c, id, cls, nm, 0, NULL) >= 0) continue;
     }
-    /* at the top level self is main, an Object; a top-level `def` of the
-       name is the one the bare call means */
+    /* at the top level self is main, an Object; there and in a class
+       body, a top-level `def` of the name is the one the bare call means */
     else if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) continue;
     int sn = nt_new_node(nt, "SelfNode");
     if (sn < 0) continue;
@@ -5147,8 +5155,77 @@ int desugar_enumerable_chain(Compiler *c) {
   return changed;
 }
 
+/* Are the names a and b one name (or both none: an anonymous `*`, `&`)? */
+static int same_param_name(const char *a, const char *b) {
+  return (!a || !*a) ? (!b || !*b) : (b && sp_streq(a, b));
+}
+/* Is node `a`, an argument of a super, the read of the parameter named
+   `name` (or, for `*` and `&`, the anonymous one)? */
+static int super_arg_reads_param(const NodeTable *nt, int a, const char *name) {
+  if (a < 0) return !name || !*name;
+  return nt_kind(nt, a) == NK_LocalVariableReadNode && name && *name && sp_streq(nt_str(nt, a, "name"), name);
+}
+/* Is `sup`, the SuperNode that is the whole body of the def `def`, a call
+   that hands the method's own parameters to the method above it as they
+   came: each required and post parameter read by its name, the rest as a
+   splat of its own, a `**kw` as `**kw`, `...` as `...`, the block as the
+   block parameter's `&` or not at all (a super passes the block it was
+   given)? A `**nil` adds no argument. That is what a bare `super` does.
+   Optionals and explicit keywords are no pass-through here (a default
+   fills in what the caller left out; a keyword is passed as a pair). */
+static int super_passes_params(const NodeTable *nt, int def, int sup) {
+  int pm = nt_ref(nt, def, "parameters");
+  int nreq = 0, npost = 0, nopt = 0, nkw = 0;
+  const int *req = NULL, *post = NULL;
+  if (pm >= 0) {
+    req = nt_arr(nt, pm, "requireds", &nreq);
+    post = nt_arr(nt, pm, "posts", &npost);
+    nt_arr(nt, pm, "optionals", &nopt);
+    nt_arr(nt, pm, "keywords", &nkw);
+  }
+  int rest = pm >= 0 ? nt_ref(nt, pm, "rest") : -1;
+  int kwr = pm >= 0 ? nt_ref(nt, pm, "keyword_rest") : -1;
+  int blk = pm >= 0 ? nt_ref(nt, pm, "block") : -1;
+  if (nopt || nkw) return 0;
+  int fwd = kwr >= 0 && nt_kind(nt, kwr) == NK_ForwardingParameterNode;
+  int kwrest = kwr >= 0 && nt_kind(nt, kwr) == NK_KeywordRestParameterNode;
+  /* a `**nil` takes no keyword and hands on none */
+  int nokw = kwr >= 0 && nt_kind(nt, kwr) == NK_NoKeywordsParameterNode;
+  if (kwr >= 0 && !fwd && !kwrest && !nokw) return 0;
+  int ai = nt_ref(nt, sup, "arguments"), na = 0;
+  const int *av = ai >= 0 ? nt_arr(nt, ai, "arguments", &na) : NULL;
+  int want = nreq + (rest >= 0) + npost + kwrest + fwd, k = 0;
+  if (na != want) return 0;
+  for (int i = 0; i < nreq; i++, k++)
+    if (!super_arg_reads_param(nt, av[k], nt_str(nt, req[i], "name"))) return 0;
+  if (rest >= 0) {
+    if (nt_kind(nt, av[k]) != NK_SplatNode || !super_arg_reads_param(nt, nt_ref(nt, av[k], "expression"), nt_str(nt, rest, "name"))) return 0;
+    k++;
+  }
+  for (int i = 0; i < npost; i++, k++)
+    if (!super_arg_reads_param(nt, av[k], nt_str(nt, post[i], "name"))) return 0;
+  if (kwrest) {
+    /* `**kw` handed on as `**kw`: the one splat of a keyword hash */
+    int hn = 0, h = av[k++];
+    const int *el = nt_kind(nt, h) == NK_KeywordHashNode ? nt_arr(nt, h, "elements", &hn) : NULL;
+    if (hn != 1 || nt_kind(nt, el[0]) != NK_AssocSplatNode ||
+        !super_arg_reads_param(nt, nt_ref(nt, el[0], "value"), nt_str(nt, kwr, "name"))) return 0;
+  }
+  if (fwd) {
+    if (nt_kind(nt, av[k]) != NK_ForwardingArgumentsNode) return 0;
+    k++;
+  }
+  /* the block: none written, or the parameter's own */
+  int sb = nt_ref(nt, sup, "block");
+  if (sb < 0) return 1;
+  return !fwd && blk >= 0 && nt_kind(nt, sb) == NK_BlockArgumentNode &&
+         super_arg_reads_param(nt, nt_ref(nt, sb, "expression"), nt_str(nt, blk, "name"));
+}
+
 /* Is the program's method `mi` (send, __send__ or public_send) one whose whole
-   body is a bare `super`? It answers exactly what the method above it does --
+   body is a `super` that passes its parameters on unchanged: a bare `super`,
+   or a `super(...)` handing over the method's own parameters
+   (super_passes_params)? It answers exactly what the method above it does --
    Object's when none does (ruby/spec's super_spec: a module's
    `def __send__(name, *args, &block) = super`, included into a class) -- so it
    is no method of the program's own for the questions below. */
@@ -5161,7 +5238,9 @@ int send_def_just_supers(Compiler *c, int mi) {
     int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
     body = bn == 1 ? bb[0] : -1;
   }
-  return body >= 0 && nt_kind(nt, body) == NK_ForwardingSuperNode && nt_ref(nt, body, "block") < 0;
+  if (body < 0) return 0;
+  if (nt_kind(nt, body) == NK_ForwardingSuperNode) return nt_ref(nt, body, "block") < 0;
+  return nt_kind(nt, body) == NK_SuperNode && super_passes_params(nt, def, body);
 }
 
 /* Does the chain of class `cid` (its singleton chain when `cm`) reach a method
@@ -5182,21 +5261,32 @@ static int send_own_in_chain(Compiler *c, int call, int cid, const char *name, i
    call `id` rather than Object's? In Ruby a class's `def send` is that class's:
    the bubbletea gem's Runner#send(message) sits in the same program as Thor's
    and tty-reader's runtime-name sends, which are Object#send all the same.
-   Taken as the program's when the program defines the name at the top level
-   (Object's then, for every receiver), when the call has no receiver (or self)
-   and the enclosing class's chain defines it, when the receiver's class does,
-   or when the receiver is known only at run time and any class of the program
-   defines it (no flow says which classes reach it). A method that only calls
-   super is not one (send_def_just_supers). */
-/* Does the program define `name` (send, __send__ or public_send) anywhere,
-   past the methods that only call super? 2 for a top-level def (Object's,
-   so every receiver's), 1 for a class's or module's, 0 for none. */
-int send_family_program_owns(Compiler *c, const char *name) {
-  int tmi = comp_method_index(c, name);
-  if (tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi)) return 2;
-  for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_class(c, k, name);
-    if (mi >= 0 && !send_def_just_supers(c, mi)) return 1;
+   Taken as the program's when a top-level def of the name answers the call
+   (Object's then, for every receiver: send_top_answers), when the call has no
+   receiver (or self) and the enclosing class's chain defines it, when the
+   receiver's class does, or when the receiver is known only at run time and
+   any class of the program defines it (no flow says which classes reach it).
+   A method that only calls super is not one (send_def_just_supers). */
+/* Does a top-level def of `name` answer call `id`: a def the call meets
+   (call_target's CT_TOP), past one that only calls super? Object's, so every
+   receiver's. */
+static int send_top_answers(Compiler *c, int id, const char *name) {
+  int tmi = call_target(c, id, -1, name, CT_TOP, NULL);
+  return tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi);
+}
+
+/* Does a class of the program answer call `id` with a send of its own, on its
+   instances or on the class itself (the classes whose chain answers the name
+   on each side, or every class while the chain memo cannot be trusted)? For
+   a receiver whose class no flow tells. */
+static int send_any_class_owns(Compiler *c, int id, const char *name) {
+  for (int side = 0; side < 2; side++) {
+    int n;
+    const int *rs = comp_name_responders(c, name, side, &n);
+    for (int i = 0, k = 0; rs ? i < n : k < c->nclasses; i++, k++) {
+      if (rs) k = rs[2 * i];
+      if (send_own_in_chain(c, id, k, name, side)) return 1;
+    }
   }
   return 0;
 }
@@ -5207,7 +5297,7 @@ int send_family_program_owns(Compiler *c, const char *name) {
    no class set for the value, any class's send may answer. */
 static int send_poly_user_answers(Compiler *c, int id, int recv, const char *name) {
   const ClsSet *s = cls_fact_node(c, recv);
-  if (!s || s->all) return 1;
+  if (!s || s->all) return send_any_class_owns(c, id, name);
   for (int k = cls_set_next(s, -1); k >= 0; k = cls_set_next(s, k)) {
     int cm = k >= c->nclasses;
     if (send_own_in_chain(c, id, cm ? k - c->nclasses : k, name, cm)) return 1;
@@ -5220,20 +5310,43 @@ static int send_poly_user_answers(Compiler *c, int id, int recv, const char *nam
 }
 
 static int send_family_user_answers(Compiler *c, int id, int recv, const char *name) {
-  int own = send_family_program_owns(c, name);
-  if (own != 1) return own == 2;
+  if (send_top_answers(c, id, name)) return 1;
   if (recv < 0 || nt_kind(c->nt, recv) == NK_SelfNode) {
     Scope *sc = comp_scope_of(c, id);
-    if (!sc || sc->class_id < 0) return 0;
+    if (!sc || sc->class_id < 0) {
+      /* in a class's own body self is the class (comp_cbody_call_mi) */
+      int cb = c->node_cbody[id];
+      return cb >= 0 && !(sc && sc->name) && send_own_in_chain(c, id, cb, name, 1);
+    }
     return send_own_in_chain(c, id, sc->class_id, name, sc->is_cmethod);
   }
   TyKind rt = infer_type(c, recv);
   if (ty_is_object(rt)) return send_own_in_chain(c, id, ty_object_class(rt), name, 0);
+  /* a class or module the program names: its singleton chain's send */
+  if (rt == TY_CLASS) {
+    int ci = class_recv_static_ci(c, recv);
+    return ci >= 0 && send_own_in_chain(c, id, ci, name, 1);
+  }
   if (rt == TY_POLY || rt == TY_UNKNOWN) return send_poly_user_answers(c, id, recv, name);
   /* a builtin receiver: the program's only through a reopening of its class */
   int bcls = builtin_class_of_type(rt) ? core_of_type(rt) : -1;
   int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
   return bci >= 0 && send_own_in_chain(c, id, bci, name, 0);
+}
+
+/* Does the program define `name` (send, __send__ or public_send) anywhere,
+   past the methods that only call super: a top-level def or a class's or a
+   module's own? A question about the name, not a call (the `super` refusal in
+   a method that only calls super: while no other override exists every send
+   lowers past it, send_family_user_answers). */
+int send_family_defined_anywhere(Compiler *c, const char *name) {
+  int tmi = comp_method_index(c, name);
+  if (tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi)) return 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    int mi = comp_method_in_class(c, k, name);
+    if (mi >= 0 && !send_def_just_supers(c, mi)) return 1;
+  }
+  return 0;
 }
 
 int desugar_implicit_send(Compiler *c) {
@@ -5356,7 +5469,7 @@ static int sus_class_const(Compiler *c, int ci) {
 static int send_split_by_owner(Compiler *c, int id, const char *nm) {
   NodeTable *nt = (NodeTable *)c->nt;
   int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0 || nt_ref(nt, id, "block") >= 0 || send_family_program_owns(c, nm) != 1) return 0;
+  if (recv < 0 || nt_ref(nt, id, "block") >= 0 || send_top_answers(c, id, nm)) return 0;
   TyKind rt = infer_type(c, recv);
   if (rt != TY_POLY && rt != TY_UNKNOWN) return 0;
   int args = nt_ref(nt, id, "arguments"), argc = 0;
@@ -5374,7 +5487,17 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
     if (mi < 0 || send_def_just_supers(c, mi) || !class_ruby_name(c, k)) continue;
     owners[nown++] = k;
   }
-  if (nown == 0) { free(owners); return 0; }
+  /* the classes and modules whose own singleton chain answers it: a Class
+     value of theirs (or of a subclass) is the owner's too */
+  int *cowners = malloc(sizeof(int) * (size_t)(c->nclasses + 1)), ncown = 0;
+  if (!cowners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  { int nr;
+    const int *rs = comp_name_responders(c, nm, 1, &nr);
+    for (int i = 0, k = 0; rs ? i < nr : k < c->nclasses; i++, k++) {
+      if (rs) k = rs[2 * i];
+      if (class_ruby_name(c, k) && send_own_in_chain(c, id, k, nm, 1)) cowners[ncown++] = k;
+    } }
+  if (nown == 0 && ncown == 0) { free(owners); free(cowners); return 0; }
   char mbuf[256], tname[64];
   snprintf(mbuf, sizeof mbuf, "%s", mname);
   snprintf(tname, sizeof tname, "__sus_%s", comp_node_tag(c, id));
@@ -5411,15 +5534,35 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
   /* `r&.send(:m)` answers nil for a nil receiver on either arm */
   if (nt_safe_nav(nt, id)) nt_set_safe_nav(nt, direct, 1);
   int cond = -1;
-  for (int i = 0; i < nown; i++) {
+  for (int i = 0; i < nown + ncown; i++) {
     int tr = nt_new_node(nt, "LocalVariableReadNode");
     nt_node_set_str(nt, tr, "name", tname); nt_node_set_int(nt, tr, "depth", 0);
-    int kc = sus_class_const(c, owners[i]);
-    if (kc < 0) { free(owners); return 0; }
-    int test = fwd_new_call(nt, tr, "is_a?", kc);
+    int cls = i < nown ? owners[i] : cowners[i - nown];
+    int kc = sus_class_const(c, cls);
+    if (kc < 0) { free(owners); free(cowners); return 0; }
+    /* an instance owner: `t.is_a?(K)`. A class or module owner: `Module === t`
+       first (a test on the constant Module, which no method of a class of the
+       value, an `is_a?` or `<=` it defines, can answer), then for a class K
+       `t <= K` (K itself or a class below it, which inherits its singleton
+       send) and for a module K `t.equal?(K)` (K's singleton methods are K's
+       own: a class including K does not have them) */
+    int test;
+    if (i < nown) test = fwd_new_call(nt, tr, "is_a?", kc);
+    else {
+      int tr2 = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, tr2, "name", tname); nt_node_set_int(nt, tr2, "depth", 0);
+      int mod = nt_new_node(nt, "ConstantReadNode");
+      nt_node_set_str(nt, mod, "name", "Module");
+      int isc = fwd_new_call(nt, mod, "===", tr);
+      int same = fwd_new_call(nt, tr2, comp_class_is_module(c, &c->classes[cls]) ? "equal?" : "<=", kc);
+      int an = nt_new_node(nt, "AndNode");
+      nt_node_set_ref(nt, an, "left", isc); nt_node_set_ref(nt, an, "right", same);
+      test = an;
+    }
     if (cond < 0) cond = test;
     else { int o = nt_new_node(nt, "OrNode"); nt_node_set_ref(nt, o, "left", cond); nt_node_set_ref(nt, o, "right", test); cond = o; }
   }
+  free(cowners);
   int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
   int el = nt_new_node(nt, "ElseNode"), ifn = nt_new_node(nt, "IfNode");
   nt_node_set_arr(nt, ys, "body", &keep, 1);
@@ -9881,7 +10024,10 @@ int desugar_call_or_write_reopen(Compiler *c) {
    top-level function already serves. It went through main's dispatch,
    where the def is not, and raised NoMethodError (#5061). The rule is
    syntactic, as CRuby's is: only a bare `self` node, not `(self)` and not
-   a local holding it. */
+   a local holding it. A class or module body's `self.m` is the same
+   receiverless call there where Object's own history holds a version of
+   the name at the call, as Object's table then answers the call by its one
+   entry; before any, the call stays as it was. */
 int desugar_main_self_call(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -9909,7 +10055,13 @@ int desugar_main_self_call(Compiler *c) {
        Reflected calls retain their own visibility policy at emission. */
     if (recv < 0 || nt_kind(nt, recv) != NK_SelfNode) continue;
     if (nt_safe_nav(nt, id)) continue;
-    if (!self_is_main(c, recv) || nt_int(nt, recv, "ie_self", 0)) continue;
+    if (nt_int(nt, recv, "ie_self", 0)) continue;
+    /* (and a class or module body's: when neither its class methods nor
+       Class's or Module's own answer the name, and an Object def of it is
+       live there) */
+    int body = self_is_main(c, recv) ? -2 : self_class_body(c, recv);
+    if (body == -1 || (body >= 0 && (cbody_class_side_answers(c, id, body, name) ||
+                                     elab_object_own_version_at(c, name, elab_point_of(c, id)) != ELAB_YES))) continue;
     if (call_target(c, id, -1, name, CT_TOP, NULL) < 0) continue;   /* no top-level def */
     if (!nt_ignore_visibility(nt, id) && !nt_str(nt, id, "send_blind") &&
         !nt_str(nt, id, "vis_enforce") && !cplan_has_method_missing(c, id, -1, 0)) continue;
@@ -11862,9 +12014,6 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
   int ncand = 0;
   const PolyCand *cands = comp_cmethod_candidates(c, "exception", &ncand);
   if (ncand <= 0) return 0;
-  /* the test is the builtin identity: a program's own `equal?` keeps the
-     raise as written */
-  if (raise_name_program_defined(c, "equal?")) return 0;
   int *own = malloc(sizeof(int) * (size_t)ncand);
   if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   /* a class whose method cannot take the call here (a module, a class
@@ -11916,7 +12065,11 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
     else test = nt_clone_subtree(nt, recv);
     int iff = first ? id : nt_new_node(nt, "IfNode"), st = nt_new_node(nt, "StatementsNode");
     nt_node_set_arr(nt, st, "body", &arm, 1);
-    nt_node_set_ref(nt, iff, "predicate", fwd_new_call(nt, test, "equal?", nt_clone_subtree(nt, k)));
+    /* the builtin identity: a program's own `equal?` (on Object, Module,
+       Class or the class itself) does not answer the test */
+    int eq = fwd_new_call(nt, test, "equal?", nt_clone_subtree(nt, k));
+    nt_node_set_int(nt, eq, "builtin_only", 1);
+    nt_node_set_ref(nt, iff, "predicate", eq);
     nt_node_set_ref(nt, iff, "statements", st);
     if (!first) nt_node_set_ref(nt, cur, "subsequent", iff);
     cur = iff;

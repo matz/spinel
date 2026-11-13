@@ -2976,7 +2976,7 @@ static int local_is_kept_block_param(Compiler *c, Scope *sc, const char *nm) {
     if (sp_streq(mn, "new")) {
       const char *cn = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
       int ci = cn ? const_node_class_index(c, recv) : -1;
-      int si = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
+      int si = ci >= 0 ? cplan_new_initialize(c, call, ci, NULL) : -1;
       if (si < 0) return 0;
       Scope *d = &c->scopes[si];
       return !d->yields && d->blk_param && d->blk_param[0];
@@ -11072,7 +11072,7 @@ static int struct_new_types_members_at(Compiler *c, int id, int ci, int given_on
   ClassInfo *cls = &c->classes[ci];
   /* A user initialize receives the arguments; its `super` sets the members
      (struct_super_types_members). */
-  int imi = comp_method_in_chain(c, ci, "initialize", NULL);
+  int imi = cplan_new_initialize(c, id, ci, NULL);
   if (imi >= 0) return bind_call_params(c, id, imi);
   int args = nt_ref(nt, id, "arguments");
   int an = 0;
@@ -11822,7 +11822,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         const char *rcn = key_name(c, rav[0]);
         int rci = rcn ? const_node_class_index(c, rav[0]) : -1;
         if (rci >= 0 && class_is_exc_subclass(c, rci)) {
-          int imi = comp_method_in_chain(c, rci, "initialize", NULL);
+          int imi = cplan_new_initialize(c, id, rci, NULL);
           /* the message is `Cls.new(arg)`'s one argument, into the
              parameter its layout funds: `initialize(a = 5, b)` takes it in b */
           Scope *im = imi >= 0 ? &c->scopes[imi] : NULL;
@@ -12167,7 +12167,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           if (ucnew >= 0)
             changed |= bind_call_params(c, id, ucnew);
           else
-            changed |= bind_call_params(c, id, comp_method_in_chain(c, ci, "initialize", NULL));
+            changed |= bind_call_params(c, id, cplan_new_initialize(c, id, ci, NULL));
         }
         else if (ci >= 0)
           changed |= bind_call_params(c, id, call_target(c, id, ci, name, CT_CMETHOD, NULL));
@@ -12199,7 +12199,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
             if (ucnew >= 0)
               changed |= bind_call_params(c, id, ucnew);
             else
-              changed |= bind_call_params(c, id, comp_method_in_chain(c, ci, "initialize", NULL));
+              changed |= bind_call_params(c, id, cplan_new_initialize(c, id, ci, NULL));
           }
           else
             changed |= bind_call_params(c, id, call_target(c, id, ci, name, CT_CMETHOD, NULL));
@@ -13530,7 +13530,7 @@ static int block_reach(Compiler *c, int si, const BlockSig *s, TyKind *pos,
     else if (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) {
       int ci = const_node_class_index(c, recv);
       if (ci >= 0) t = call_target(c, f, ci, fn, CT_CMETHOD, NULL);
-      if (ci >= 0 && t < 0 && sp_streq(fn, "new")) t = comp_method_in_chain(c, ci, "initialize", NULL);
+      if (ci >= 0 && t < 0 && is_new_name(fn)) t = cplan_new_initialize(c, f, ci, NULL);
     }
     else {
       TyKind rt = infer_type(c, recv);
@@ -18272,7 +18272,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
       else if (sp_streq(name, "new") && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
         int cid = nt_str(nt, recv, "name") ? const_node_class_index(c, recv) : -1;
-        if (cid >= 0) ymi = comp_method_in_chain(c, cid, "initialize", NULL);
+        if (cid >= 0) ymi = cplan_new_initialize(c, id, cid, NULL);
       }
       else if (ty_is_object(infer_type(c, recv))) ymi = call_target(c, id, ty_object_class(infer_type(c, recv)), name, 0, NULL);
       else ymi = const_recv_cmethod_mi(c, id, recv, name);
@@ -18441,7 +18441,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
       if (mi < 0 && sp_streq(name, "new") && recv_is_const) {
         const char *cname = nt_str(nt, recv, "name");
         int cid = const_node_class_index(c, recv);
-        if (cid >= 0) mi = comp_method_in_chain(c, cid, "initialize", NULL);
+        if (cid >= 0) mi = cplan_new_initialize(c, id, cid, NULL);
       }
       /* Class.method { ... }: look up the class method. This is where the
          block's parameters get their types from what the method YIELDS, so
@@ -20834,9 +20834,11 @@ static void cr_mark_version(Compiler *c, int id, const char *nm, int k, unsigned
 static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char ***out, int *n, int *cap) {
   const char *names[2];
   CrMarks m = { out, n, cap };
-  /* a builtin `new`: the initialize methods the plan says it enters */
-  if (ct_version_marked(c, "initialize") && is_new_name(key_name(c, id))) {
-    int init[CPT_MAX], ni = cplan_entries(c, id, init, CPT_MAX);
+  /* a builtin `new`: the initialize methods the plan says it enters; a
+     `raise K`: the one K.new runs there */
+  if (ct_version_marked(c, "initialize")) {
+    int init[CPT_MAX], ni = is_new_name(key_name(c, id)) ? cplan_entries(c, id, init, CPT_MAX) : 0;
+    if (ni == 0 && (init[0] = cplan_raise_initialize(c, id)) >= 0) ni = 1;
     for (int i = 0; i < ni && is_initialize_name(c->scopes[init[i]].name); i++) {
       char mark[24];
       snprintf(mark, sizeof mark, "\x01%d", init[i]);

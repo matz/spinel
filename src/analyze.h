@@ -579,6 +579,11 @@ int elab_in_kept_block(Compiler *c, int id);
    (elab_block_runs: a lazy chain's) or in an END body: it may run any time
    after its point too */
 int elab_runs_later(Compiler *c, int id);
+/* ...and whether node id is in a block whose run time the record does not
+   place for certain (elab_block_runs: any answer but ELAB_BLK_NOW, a
+   block kept, assumed to run now, given to a call the record cannot read,
+   or run later) or in an END body, with no def or lambda between */
+int elab_in_unplaced_block(Compiler *c, int id);
 void elab_window_open(Compiler *c, ElabWindow *w);
 /* the versions of cls's method `name` (singleton when sg) a call running
    over window w can reach, each once, into out[0..cap) (NULL: none): the
@@ -642,11 +647,14 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
    first (prepends, own, includes, then the superclass's; where a
    singleton's chain ends, the instance methods it goes on into: for
    main's own singleton, Object's), into
-   out[0..cap): each with its history (hist, the run-time cell its
-   statement writes, call_plan.c's version entries) and its number there,
-   1-based. How many; -1 when a class on the chain is one the record does
-   not hold, a mixin's module is not known, or past cap. */
-typedef struct { const LrDef *v; int hist, n; } ElabVersion;
+   out[0..cap): each with its history (hist), the run-time cell its
+   statement writes (cell, call_plan.c's version entries: its history's,
+   or for main's and Object's histories of a name, which are one entry of
+   Object's table, the one both write) and its number there, 1-based, in
+   the record's order over both. How many; -1 when a class on the chain is
+   one the record does not hold, a mixin's module is not known, or past
+   cap. */
+typedef struct { const LrDef *v; int hist, cell, n; } ElabVersion;
 int elab_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
 /* the late bit of the histories of `name` that versions vs[0..n) are in
    (elab_chain_versions): 2 where a call may run ahead of the first version
@@ -658,6 +666,15 @@ int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int
 /* ...and the versions of cls's own history of `name` alone, numbered as
    there */
 int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+/* ...and whether main's history of `name` and Object's are one entry of
+   Object's method table, each holding a version (a top-level def and a
+   reopening of Object's): their versions write one cell, and a call on main
+   meets them along Object's chain */
+int elab_main_object_one_entry(Compiler *c, const char *name);
+/* ...and whether Object's own history of `name` (its reopenings' defs, not
+   main's top-level ones) holds a live version at p: ELAB_YES, ELAB_NO, or
+   ELAB_UNKNOWN where the record cannot say */
+int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p);
 /* ...and whether main's top-level history of `name` holds a version whose node carries the int mark `mark` (set by a desugar) */
 int elab_main_history_marked(Compiler *c, const char *name, const char *mark);
 /* The state of the record and the node table an answer of elab_chain_versions
@@ -840,12 +857,14 @@ int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint
 /* the visibility bit (1 public, 2 protected, 4 private) of main's own
    method `name` where node runs: a top-level def or alias, a method of
    Object's own; 0 where main has none there; -1 where the record cannot
-   tell (node in a method body, a def under a condition, an undef) */
+   tell (node in a method body, a def under a condition, an undef, an
+   Object entry of the name under a condition, an entry of either that may
+   run again before node) */
 int elab_main_method_vis_at(Compiler *c, int node, const char *name);
 /* Is main's def of `name` (a top-level def or alias) the live entry of
    Object's method table where node runs, rather than Object's own def?
    The later of the two answers: 1 main's, 0 Object's, -1 where the record
-   cannot tell. */
+   cannot tell (as elab_main_method_vis_at). */
 int elab_main_def_live_at(Compiler *c, int node, const char *name);
 /* ... when no change of it follows: elab_method_vis_at's answer at p, or -1
    where an entry of the name's histories along cls's superclass chain at or

@@ -1481,6 +1481,9 @@ int head_held_box(Compiler *c, int node);
    it (an immediate, a pointer the head's temp roots), the box is declared
    without a root of its own. Answers the temp the arm reads. */
 int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, const char *sep, Buf *b);
+/* `recv.equal?(arg)` as the builtin identity, whatever the program
+   defines: both operands boxed, the receiver first, sp_poly_equal */
+void emit_value_identity(Compiler *c, int recv, int arg, Buf *b);
 /* The hold of String `node` that a slot or a container keeps, as its
    handle: `sp_String *_t<t> = SP_STR_HDL(<handle>);` and, when `root`, its
    root, into b. The bytes are taken where the hold is read (SP_STR_B), so
@@ -2284,6 +2287,9 @@ int each_split_applies(Compiler *c, int id);
 void emit_penum_kind_test(Buf *b, int tv);
 void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b);
 void emit_pool_fwd(Compiler *c, int cid);
+/* a body written to g_procs ahead of the constructors begins and ends (emit_pool_fwd) */
+void ahead_body_enter(Compiler *c);
+void ahead_body_leave(Compiler *c);
 void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b);
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out);
 int declare_default_locals(Compiler *c, Scope *m, int dnode);
@@ -3039,6 +3045,8 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
 const char *case_map_suffix(Compiler *c, int argc, const int *argv);
 int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b);
 int user_defines_or_reads(Compiler *c, const char *name);
+/* does an instance method of that name call super? (codegen_call.c) */
+int user_defines_calls_super(Compiler *c, const char *name);
 int splat_mutator_block_ok(Compiler *c, int id);
 int poly_cls_value_owns(Compiler *c, int id, const char *name);
 int base_arg_may_gc(Compiler *c, int arg);

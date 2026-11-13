@@ -180,6 +180,18 @@ int cplan_builtin_reopen_def(Compiler *c, int site, const char *cls, const char 
    the final one (a `public :sym` that follows does not count)? Not where the
    record cannot tell it. */
 int cplan_reopen_def_public(Compiler *c, int site, int mi, const char *sym);
+/* How a Method of `sym` that node mn makes stands for each class of the
+   program a boxed receiver may be of at run time, in ascending class order:
+   CP_CARM_METHOD the def's scope the capture meets there (call_target's
+   capture on the class); CP_CARM_ENTRY the scope of a version entry, where
+   the capture finds one a run-time test of its cells picks (the arms of
+   cplan_method_arms); CP_CARM_READER or CP_CARM_WRITER the attribute the
+   capture met, or the class's own where no def is. A class with none has no
+   arm (the receiver of it raises NameError). *n their count; the caller
+   frees the list. */
+typedef enum { CP_CARM_METHOD, CP_CARM_READER, CP_CARM_WRITER, CP_CARM_ENTRY } CplanClassArmKind;
+typedef struct { int cls, mi; CplanClassArmKind kind; } CplanClassArm;
+CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, int *n);
 /* The method scope call `id` runs when it asks for `name`: on cls's
    instance side through its chain, CT_CMETHOD on its class side, CT_OWN
    in cls's own table only, CT_TOP among the top-level functions (cls not
@@ -201,8 +213,18 @@ int cplan_reopen_def_public(Compiler *c, int site, int mi, const char *sym);
    a name the node does not itself call but makes CRuby call (a row of
    tools/implied_calls.yml), which passes the gate on the node's own names.
    CT_INCLUDED asks the method a module the top level includes brings, as
-   seen from node id (cls is not read); the record is not asked for it yet. */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64 };
+   seen from node id (cls is not read); the record is not asked for it yet.
+   CT_PUBLIC marks a call that enforces visibility (an explicit receiver
+   that is not self, public_send): where the arms of the entry it binds
+   differ in visibility, it binds the face entry that raises for the
+   private ones (VF_PRIVATE), or with CT_PROTECTED also for the protected
+   ones (VF_PUBLIC: public_send, or a caller to which a protected owner is
+   not open). */
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256 };
+/* The face of a version entry (VerEntry.face): 0 the entry every arm of
+   which runs its version, VF_PRIVATE one whose arms of a private version
+   raise, VF_PUBLIC one whose arms of a private or a protected version do */
+enum { VF_NONE, VF_PRIVATE, VF_PUBLIC };
 /* The names call node id itself calls, into out: a call's or an attribute
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method
@@ -233,7 +255,10 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    runs ahead of); ML_ENTRY, the scope of an entry (or the copies' entry)
    whose cells tell at run time; ML_NONE, no method, or a call the record
    proves runs before every version (and the builtin an entry's else arm
-   pins); ML_TABLE, the record gave no proof and the answer is the table's
+   pins); ML_OBJECT, a call on main's ask (CT_TOP) that meets a version of
+   Object's (ct_top_chain): no method of its own, as the call's ask on
+   Object binds it, with self as receiver; ML_TABLE, the record gave no
+   proof and the answer is the table's
    last definition, for the reason in why. n: how many versions the call's
    window reaches (elab_method_span), 0 when no window was asked, -1 when
    the answer is the table's for want of a version or an entry, or because
@@ -243,13 +268,15 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    the class whose table holds the method, written only where one is found,
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
-   the class a super's lookup started from, written by those two only. Only
-   cplan_resolve_super, cplan_presence and cplan_main_singleton_call read
-   kind, and nothing reads why yet. ML_SINGLETON: a call on main that main's
-   own singleton answers by the core's method it has from the start (`to_s`,
-   `inspect`: elab_main_singleton_at), ahead of Object's table; no method of
-   the program's. */
-typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE, ML_SINGLETON } MlKind;
+   the class a super's lookup started from, written by those two only.
+   kind is read by cplan_resolve_super, cplan_presence, cplan_implied_target,
+   cplan_boxed_to_ary_classes and cplan_main_singleton_call, and ML_OBJECT by
+   cplan_missing and method_obj_lookup; why only by the method-table check
+   (mtab_table). ML_SINGLETON: a call on main that main's own singleton
+   answers by the core's method it has from the start (`to_s`, `inspect`:
+   elab_main_singleton_at), ahead of Object's table; no method of the
+   program's. */
+typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
    with no version, and no entry (MANY); a version the plan cannot map
@@ -359,6 +386,7 @@ int ct_version_marked(Compiler *c, const char *nm);
 void ver_hold_free(Compiler *c);
 void ver_chain_free(Compiler *c);
 void new_inits_free(Compiler *c);
+void new_sites_free(Compiler *c);
 /* the method call id reaches when it can reach only main's own method of
    name, -1 for none (a call on main where main's method is defined) */
 int ct_main_target(Compiler *c, int id, const char *name);
@@ -389,6 +417,17 @@ int cplan_pinned_builtin(const Compiler *c, int id);
 /* Is call id an entry's arm (or else arm) call, pinned to the method it
    runs or to the builtin (ver_entry_targets lists the methods)? */
 int cplan_pinned(const Compiler *c, int id);
+/* ...and the visibility (SP_VIS_PRIVATE or SP_VIS_PROTECTED) that a face
+   entry's arm for that version raises with, instead of running it; 0 for
+   an arm that runs, and for any other node */
+int cplan_pinned_vis(const Compiler *c, int id);
+/* flags = 0 (a call's instance-chain ask) with CT_PUBLIC (and CT_PROTECTED)
+   added where call id enforces visibility (an explicit receiver that is not
+   self, public_send) and has no block; any other flags as they are. call_target asks with
+   them, so that every reader that asks which method such a call runs gets
+   the entry the plan made for it (ct_face_for), and the survey of the
+   entries (ver_need) asks the same. */
+unsigned ct_vis_flags(Compiler *c, int id, unsigned flags);
 /* the methods entry scope e's arms call, its else arm's last: at most
    VER_MAX_ARMS + 1; an open history's else arm, which calls none, as its
    last version (the method a Method object of it captured before) */
@@ -465,6 +504,14 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
    (no row, or an undef on the chain) */
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
+/* The initialize the builtin Class#new runs when node id (a `new` the
+   program's `new` does not answer, a `raise K`) builds an instance of
+   class ci: the version the record proves where id runs (*ml ML_METHOD),
+   else the table's method (ML_TABLE; ML_NONE and -1 where ci has no
+   initialize of the program's). Every reader of a construction site asks
+   it, so the site's arity, arguments, block and call name one method. ml
+   may be NULL. */
+int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml);
 /* Every initialize a builtin `new` of class ci may run, wherever it runs:
    the table's method, then each other version of it the record holds (a
    replaced one, in the history of the class that defines it) that an
@@ -481,6 +528,10 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
    table's method alone with *whole 0, which a memo of the facts
    (ivar_assigned_in_initialize) would keep as "not set". */
 int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole);
+/* The initialize a Kernel `raise K` or `raise K, msg` (call id) runs, K a
+   constant naming an exception class of the program's: K.new's there
+   (cplan_new_initialize); -1 for any other call */
+int cplan_raise_initialize(Compiler *c, int id);
 /* The to_ary of the program's through which a value of type t converts
    where node `at` takes it apart (the implied to_ary call a row makes on
    operand op: a multiple assignment's value, the element a nested target
@@ -1097,9 +1148,17 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
    builtin classes and modules in its chain otherwise (refl_builtin_vis);
    with inherit 0 its own only. For Object itself, main's own method of
    the name where node runs counts first (elab_main_method_vis_at): a
-   top-level def is Object's. 0 for none; -1 where the rows do not hold
-   the class. */
+   top-level def is Object's; where main's history and Object's are one
+   entry, its later version (cplan_program_method_vis), an alias in Object
+   of a builtin's name among them. 0 for none; -1 where the rows do not
+   hold the class. */
 int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit);
+/* The visibility (SP_VIS_*) a reflection call node that finds program
+   method m of class ci (its own, or along its chain with inherit) reads:
+   for Object's reopening, where main's history of m and Object's are one
+   entry (elab_main_object_one_entry), the later version of either, as the
+   load record orders them; else the class's table's. */
+int cplan_program_method_vis(Compiler *c, int node, int ci, const char *m, int inherit);
 /* The raise of call id's dispatch on self from class cid when cid's chain
    holds no method of its name and only descendants do: the switch's arms
    are theirs, and self of any other class (cid's own instance, a

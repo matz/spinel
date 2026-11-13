@@ -5719,7 +5719,9 @@ int cls_fact_excludes(Compiler *c, int recv, int k) {
      parameters are untyped, and an untyped argument it hands on widens a
      live method's parameter to a box (#9514). */
   if (s->n == 0 && !s->bv && !s->os) return 0;
-  if (cls_set_has(s, k)) return 0;
+  /* (a class registered after the facts are solved is in no set, and its
+     number is a Class object's member there: cls_fact_ncls) */
+  if (k >= c->cls_fact_ncls || cls_set_has(s, k)) return 0;
   return 1;
 }
 /* See compiler.h. */

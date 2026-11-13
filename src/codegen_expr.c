@@ -1746,6 +1746,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     int trv = ++g_tmp; char rv[32]; snprintf(rv, sizeof rv, "_t%d", trv);
     char head[400]; snprintf(head, sizeof head, "undefined method '%s' for an instance of ", attr);
     buf_puts(b, "({ "); emit_ctype(c, rt, b); buf_printf(b, " %s = ", rv); emit_expr(c, recv, b); buf_puts(b, "; ");
+    if (!recv_never_nil(c, recv)) nil_recv_check(attr, trv, b);
     emit_orw_raise(c, head, cid, rt, rv, b);
     buf_printf(b, "; %s; })", oint_kind(want) && node_is_oint(c, id) ? oint_nil(want)
                                                                     : default_value_from_compiler(c, want));
@@ -1767,6 +1768,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   if (rvis != SP_VIS_PUBLIC) {
     int trv = ++g_tmp; char rv[32]; snprintf(rv, sizeof rv, "_t%d", trv);
     buf_puts(b, "({ "); emit_ctype(c, rt, b); buf_printf(b, " %s = ", rv); emit_expr(c, recv, b); buf_puts(b, "; ");
+    if (!recv_never_nil(c, recv)) nil_recv_check(attr, trv, b);
     emit_orw_vis_raise(c, rvis, attr, cid, rt, rv, b);
     buf_printf(b, "; %s; })", oint_kind(want) && node_is_oint(c, id) ? oint_nil(want)
                                                                     : default_value_from_compiler(c, want));
@@ -1798,6 +1800,9 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   int ro = (rk == SP_MEMBER_METHOD && oint_kind(rdt) && method_ret_is_oint(&c->scopes[rmi])) || rnb >= 0;
   buf_puts(b, "({ ");
   emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, "; ");
+  /* a receiver that can be nil raises for the reader first, as CRuby's
+     `nil.v ||= 1` does; the reader and the writer take a NULL self */
+  if (!recv_never_nil(c, recv)) nil_recv_check(attr, tr, b);
   if (!comp_ty_value_obj(c, rt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", tr);
   /* the reader, once */
   if (ro) buf_puts(b, oint_ctype(rdt)); else emit_ctype(c, rdt, b);

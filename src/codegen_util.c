@@ -782,6 +782,28 @@ int call_is_scalar_op(Compiler *c, int id) {
   int scalar_v = (vt == TY_INT || vt == TY_FLOAT || vt == TY_BOOL);
   return scalar_r && scalar_v;
 }
+/* call_is_scalar_op asks the receiver and the result, not the operand. An
+   Integer's or a Float's operator hands an operand of another class to that
+   operand's own coerce, to_int or ==, the program's code, so a reader asks
+   one of these too. */
+/* ...whose one operand is a number or a boolean: what a plain C value and a
+   format argument take, with no conversion that could allocate. */
+int scalar_op_over_scalars(Compiler *c, int id) {
+  int ac = 0;
+  const int *av = call_args(c->nt, id, &ac);
+  TyKind t = ac == 1 ? comp_ntype(c, av[0]) : TY_UNKNOWN;
+  return call_is_scalar_op(c, id) && (t == TY_INT || t == TY_FLOAT || t == TY_BOOL);
+}
+/* ...of Integers and Floats alone, the receiver and every operand: the
+   operators the pure-argument walks take (arg_runs_nothing). */
+int scalar_op_over_numbers(Compiler *c, int id) {
+  if (!call_is_scalar_op(c, id) || comp_ntype(c, nt_ref(c->nt, id, "receiver")) == TY_BOOL) return 0;
+  int ac = 0;
+  const int *av = call_args(c->nt, id, &ac);
+  for (int i = 0; i < ac; i++)
+    if (comp_ntype(c, av[i]) != TY_INT && comp_ntype(c, av[i]) != TY_FLOAT) return 0;
+  return 1;
+}
 /* Can a builtin operator over scalars (call_is_scalar_op) raise? A
    quotient of two Integers and any modulo (a Float one too) raise
    ZeroDivisionError at a divisor that may be zero, which only a nonzero

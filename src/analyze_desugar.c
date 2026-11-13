@@ -33076,6 +33076,8 @@ int prune_unnamed_methods(Compiler *c) {
       }
     }
     if (nd->content && !anh_has(&named, nd->content)) anh_add(&named, nd->content);
+    /* a backtick literal is a call of `` ` `` on self, which a program may define */
+    if ((k == NK_XStringNode || k == NK_InterpolatedXStringNode) && !anh_has(&named, "`")) anh_add(&named, "`");
   }
   const int *par = comp_parent_map(c);
   PumBody pb = { nt, &defined, arg_cb };

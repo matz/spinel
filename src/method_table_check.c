@@ -16,11 +16,13 @@ int g_method_table_check = 0;
    class, name, why). */
 typedef struct {
   int node, side, cls, prim, why;   /* why: 0 for a read, else MLW_* */
+  int build;                        /* a read made inside the list builders' window */
   char *name, *phase;               /* phase: the pass when no node was open */
 } MtSite;
 
 struct MethodTableCheck {
   int depth, frame;     /* brackets open; the node being inferred or emitted */
+  int build;            /* list builders' windows open */
   MtSite *site;
   int n, cap;
   int *ix, ixcap;       /* open hash over site: index + 1, 0 empty */
@@ -43,25 +45,29 @@ void mtab_depth(Compiler *c, int by) {
   if (c->mtab) c->mtab->depth += by;
 }
 
+void mtab_build_depth(Compiler *c, int by) {
+  if (c->mtab) c->mtab->build += by;
+}
+
 MtabMark mtab_mark(Compiler *c) {
   struct MethodTableCheck *m = c->mtab;
-  return m ? (MtabMark){ m->frame, m->depth } : (MtabMark){ -1, 0 };
+  return m ? (MtabMark){ m->frame, m->depth, m->build } : (MtabMark){ -1, 0, 0 };
 }
 
 void mtab_unwind(Compiler *c, MtabMark was) {
   struct MethodTableCheck *m = c->mtab;
-  if (m) { m->frame = was.frame; m->depth = was.depth; }
+  if (m) { m->frame = was.frame; m->depth = was.depth; m->build = was.build; }
 }
 
 MtabMark mtab_frame_set(Compiler *c, int id) {
   struct MethodTableCheck *m = c->mtab;
   MtabMark was = mtab_mark(c);
-  if (m) { m->frame = id; m->depth = 0; }
+  if (m) { m->frame = id; m->depth = 0; m->build = 0; }
   return was;
 }
 
 static unsigned site_hash(const MtSite *s) {
-  unsigned h = (unsigned)s->node * 2654435761u ^ (unsigned)s->side * 40503u ^ (unsigned)s->why * 97u;
+  unsigned h = (unsigned)s->node * 2654435761u ^ (unsigned)s->side * 40503u ^ (unsigned)s->why * 97u ^ (unsigned)s->build * 31337u;
   if (s->why) h ^= (unsigned)s->cls * 2246822519u;
   for (const char *q = s->name; *q; q++) h = h * 31u + (unsigned char)*q;
   for (const char *q = s->node < 0 ? s->phase : ""; *q; q++) h = h * 31u + (unsigned char)*q;
@@ -69,7 +75,7 @@ static unsigned site_hash(const MtSite *s) {
 }
 
 static int site_same(const MtSite *a, const MtSite *b) {
-  return a->node == b->node && a->side == b->side && a->why == b->why && (!a->why || a->cls == b->cls) &&
+  return a->node == b->node && a->side == b->side && a->why == b->why && a->build == b->build && (!a->why || a->cls == b->cls) &&
          sp_streq(a->name, b->name) && (a->node >= 0 || sp_streq(a->phase, b->phase));
 }
 
@@ -108,7 +114,7 @@ static void mtab_note(Compiler *c, MtSite s) {
 void mtab_read(Compiler *c, MtPrim prim, int cls, int side, const char *name) {
   struct MethodTableCheck *m = c->mtab;
   if (!m || m->depth > 0 || !name) return;
-  mtab_note(c, (MtSite){ .node = m->frame, .side = side, .cls = cls, .prim = (int)prim, .name = (char *)name,
+  mtab_note(c, (MtSite){ .node = m->frame, .side = side, .cls = cls, .prim = (int)prim, .build = m->build > 0, .name = (char *)name,
                          .phase = (char *)c->nt->pass });
 }
 
@@ -170,7 +176,7 @@ static int super_reads_own_name(Compiler *c, int fn, const char *name) {
    the names it calls (call_node_names) and the predicates of
    builtin_names.c. A node with no frame is a pass: family "pass", with the
    name of the pass it ran in in a field of its own. */
-static const char *reader_family(Compiler *c, int fn, const char *name) {
+static const char *reader_family(Compiler *c, int fn, const char *name, int build) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, fn);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
@@ -190,7 +196,9 @@ static const char *reader_family(Compiler *c, int fn, const char *name) {
   if (nm) {
     if (is_send_family(nm) || is_method_object_maker(nm)) return "send";
     if (is_respond_to_name(nm) || is_method_defined_query(nm)) return "presence";
-    if (is_instance_method_list(nm) || is_method_presence_query(nm) >= 2) return "lists";
+    /* a read under a list's node is the list's own where a builder made it (the window of mtab_build_enter), the
+       call's where the plan's resolution of the list's call did */
+    if (is_instance_method_list(nm) || is_method_presence_query(nm) >= 2) return build ? "lists" : "call";
   }
   const char *own[2];
   int n = call_node_names(c, fn, own);
@@ -224,7 +232,7 @@ void mtab_report(Compiler *c) {
   for (int i = 0; i < m->n; i++) {
     const MtSite *s = &m->site[i];
     if (s->why) fprintf(stderr, "method-table-check: table %s ", why_name(s->why));
-    else if (s->node >= 0) fprintf(stderr, "method-table-check: read %s - ", reader_family(c, s->node, s->name));
+    else if (s->node >= 0) fprintf(stderr, "method-table-check: read %s - ", reader_family(c, s->node, s->name, s->build));
     else fprintf(stderr, "method-table-check: read pass %s ", s->phase);
     print_where(c, s->node, stderr);
     fputc(' ', stderr);

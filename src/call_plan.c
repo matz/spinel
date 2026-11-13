@@ -3460,6 +3460,21 @@ static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, in
          (comp_is_reader(k, name) && pr_accessor_own(c, cls, name, 0, 0)) ||
          (wr && comp_is_writer(k, base) && pr_accessor_own(c, cls, base, 1, 0)) || pr_alias(c, cls, side, name);
 }
+/* Does an undef_method of name stand on cls's chain, on the instance side (whatever builtin answers the name)? */
+static int pr_undef(Compiler *c, int cls, unsigned side, const char *name) {
+  return !(side & CT_CMETHOD) && cls >= 0 && comp_is_undeffed_in_chain(c, cls, name);
+}
+/* The final tables' answer for name on cls's side: what they hold (pr_in_table), the visibility (ct_vis) and, on the
+   instance side, whether an undef_method on the chain takes the name away, whatever builtin answers it (until an
+   undef answers at the point, the table's). Returns the table's method, as ct_table finds it. */
+static int pr_table(Compiler *c, int cls, unsigned side, const char *name, CplanPresence *out) {
+  mtab_enter(c);
+  int mi = ct_table(c, cls, name, side, NULL);
+  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, mi), .vis = ct_vis(c, cls, name, side),
+                          .undef = pr_undef(c, cls, side, name) };
+  mtab_leave(c);
+  return mi;
+}
 /* Is presence site id in a block its call may run after it answers, as
    the types tell: the block of a call on a receiver typed no one kind
    (poly or unknown; a lazy enumerator has no type of its own: `l =
@@ -3488,8 +3503,7 @@ static int pr_in_untyped_block(Compiler *c, int id) {
 /* See call_plan.h. */
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
   MethodLookup ml = { .def_class = -1 };
-  int tmi = ct_table(c, cls, name, side, NULL);
-  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, tmi), .vis = ct_vis(c, cls, name, side) };
+  int tmi = pr_table(c, cls, side, name, out);
   if (pr_in_untyped_block(c, id)) return PR_TABLE;
   call_target(c, id, cls, name, side | CT_REACH, &ml);
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
@@ -3498,7 +3512,14 @@ PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const c
 }
 /* See call_plan.h. */
 void cplan_table_presence(Compiler *c, int cls, unsigned side, const char *name, CplanPresence *out) {
-  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, ct_table(c, cls, name, side, NULL)), .vis = ct_vis(c, cls, name, side) };
+  pr_table(c, cls, side, name, out);
+}
+/* See call_plan.h. */
+int cplan_undefined(Compiler *c, int cls, unsigned side, const char *name) {
+  mtab_enter(c);
+  int u = pr_undef(c, cls, side, name);
+  mtab_leave(c);
+  return u;
 }
 /* See call_plan.h. */
 int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name) {
@@ -3563,8 +3584,10 @@ static void list_cmethod_candidates(Compiler *c, int cls, unsigned side, CplanCa
 }
 /* See call_plan.h. */
 void cplan_list_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud) {
+  mtab_enter(c);
   if (side & CT_CMETHOD) list_cmethod_candidates(c, cls, side, fn, ud);
   else list_instance_candidates(c, cls, side, fn, ud);
+  mtab_leave(c);
 }
 /* ---- a module's instance-method list ----
    A module's list is its own definitions and those of the modules it includes, each name as the nearest of them that
@@ -3674,8 +3697,7 @@ static int module_body_stmt(Compiler *c, int ci, int id) {
   return 0;
 }
 
-/* See call_plan.h. */
-int cplan_module_listable(Compiler *c, int m, const char *name) {
+static int module_listable(Compiler *c, int m, const char *name) {
   const NodeTable *nt = c->nt;
   if (m < 0 || m >= c->nclasses) return 0;
   ClassInfo *mc = &c->classes[m];
@@ -3784,12 +3806,20 @@ static void module_name_add(ModNames *a, const char *nm) {
   }
   a->v[a->n++] = strdup(nm);
 }
+/* See call_plan.h. */
+int cplan_module_listable(Compiler *c, int m, const char *name) {
+  mtab_enter(c);   /* (the question's own reads are the plan's) */
+  int r = module_listable(c, m, name);
+  mtab_leave(c);
+  return r;
+}
 static void module_candidate(void *ud, const char *nm, int vis) {
   (void)vis;
   module_name_add(ud, nm);
 }
 /* See call_plan.h. */
 void cplan_module_methods(Compiler *c, int m, int own, CplanCandFn fn, void *ud) {
+  mtab_enter(c);
   int order[256], n = 0;
   ModNames all = { c, NULL, 0, 0 };
   module_order(c, m, order, &n, 256);
@@ -3816,6 +3846,7 @@ void cplan_module_methods(Compiler *c, int m, int own, CplanCandFn fn, void *ud)
   }
   for (int i = 0; i < all.n; i++) free(all.v[i]);
   free(all.v);
+  mtab_leave(c);
 }
 
 

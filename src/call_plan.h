@@ -1329,13 +1329,18 @@ int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, Cp
    class's; an alias, a prepend's renamed body and a class-side accessor are,
    as the class's own entries); out->vis the visibility the call checks of
    it: the final table's, public where it declares none, until visibility is
-   per version; the class's own entry's under CT_OWN. */
+   per version; the class's own entry's under CT_OWN. out->undef is 1 where
+   an `undef_method` or `undef` of the name stands on the class's chain (the
+   final tables'; a list leaves the name out), 0 otherwise. */
 typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
-typedef struct { int table, vis; } CplanPresence;
+typedef struct { int table, vis, undef; } CplanPresence;
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);
-/* The table part of that answer alone, with no site (table and vis; the
-   record is not asked): what a list holds before any point is asked. */
+/* The table part of that answer alone, with no site (table, vis and undef;
+   the record is not asked): what a list holds before any point is asked. */
 void cplan_table_presence(Compiler *c, int cls, unsigned side, const char *name, CplanPresence *out);
+/* The undef part of that answer alone (out->undef of cplan_table_presence, which is built from it): does an
+   undef_method of name stand on cls's chain, on the instance side (0 on the class side and for cls < 0)? */
+int cplan_undefined(Compiler *c, int cls, unsigned side, const char *name);
 /* Does method-list call id leave out name, a candidate the final tables
    list for cls's side (side as cplan_presence's: CT_CMETHOD for
    singleton_methods, CT_OWN for a `false` form): where the question proves

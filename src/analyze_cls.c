@@ -2183,6 +2183,17 @@ static void cf_builtin_rule(CF *f, int v, int recv_el, const int *argv, int argc
   /* Exception#cause is the exception being handled when this one was
      raised: one of any class, not its receiver's */
   if (nm && sp_streq(nm, "cause") && argc == 0) cf_add_set(f, v, f->exc_set);
+  /* enum.to_set is Set.new(enum.to_a) once the program has the set package's
+     Set (analyze.c, LR_TO_SET, which runs after these facts): its answer is
+     one of Set's instances, so a poly call on it keeps Set's arms. Read as
+     only a builtin value, `[[1, 1]].map { |a| a.to_set }[0].size` left Set
+     out of the receiver's classes (cls_fact_excludes) and answered NoMethodError
+     (Kilau K-044). A superset is safe: it only adds a class a poly receiver may
+     hold, and where the rewrite declines the call stays the builtin's. */
+  if (nm && sp_streq(nm, "to_set") && argc == 0) {
+    int sk = comp_builtin_class_named(f->c, "Set");
+    if (sk >= 0 && sk < f->c->nclasses) cf_add_set(f, v, f->desc[sk]);
+  }
   /* (directed) Thread#value is what the thread's block answered, which was
      handed to the runtime (cf_poison_class_call) */
   if (nm && sp_streq(nm, "value") && argc == 0 && CF_CLOSED(f) && f->rtc >= 0) cf_edge(f, f->rtc, v);

@@ -4764,21 +4764,73 @@ void emit_bytesplice_bytes(Compiler *c, const int *argv, int argc, const char *r
    bytes, and a user object's as the String slot reads them. A boxed value
    and every other kind (a Bignum, nil, a Float, an Array) are sorted at run
    time by sp_poly_append_bytes_arg, held ahead of the call as a String
-   slot's conversion is, so its TypeError comes before any byte is appended. */
-static void emit_append_bytes_arg(Compiler *c, int arg, Buf *b) {
+   slot's conversion is, so its TypeError comes before any byte is appended.
+   own: a String's bytes are a copy (str_append_arg_staged_own). */
+static void emit_append_bytes_arg(Compiler *c, int arg, int own, Buf *b) {
   TyKind t = comp_ntype(c, arg);
   if (t == TY_INT) { buf_puts(b, "sp_int_chr(0xff & ("); emit_int_expr(c, arg, b); buf_puts(b, "))"); return; }
   int poly = yield_site_type(c, arg) == TY_POLY;
   if (!poly && (t == TY_STRING || t == TY_STRBUF || (!conv_wrong_cls_name(t) && t != TY_NIL && t != TY_BOOL))) {
-    emit_str_expr(c, arg, b);
+    if (own) emit_str_expr_own(c, arg, b);
+    else emit_str_expr(c, arg, b);
     return;
   }
   int tmp; Buf *hb = conv_hold_begin(b, &tmp);
   Buf *ob = hb ? hb : b;
-  buf_puts(ob, "sp_poly_append_bytes_arg(");
+  buf_puts(ob, own ? "sp_str_concat(sp_poly_append_bytes_arg(" : "sp_poly_append_bytes_arg(");
   if (poly) emit_expr(c, arg, ob); else emit_boxed(c, arg, ob);
-  buf_puts(ob, ")");
+  buf_puts(ob, own ? "), \"\")" : ")");
   if (hb) conv_hold_end(tmp);
+}
+/* Is argument `arg` of an append_as_bytes of `argc` staged as a copy? A
+   String one of several some name holds (str_append_arg_staged_own); an
+   Integer is its own new byte. */
+static int append_bytes_arg_own(Compiler *c, int argc, int arg) {
+  return repr_of(c, arg).as_ty != TY_INT && str_append_arg_staged_own(c, argc, arg);
+}
+/* append_as_bytes(a, b, ...) onto the handle _t<th>. CRuby measures every
+   argument before it copies any, so where the order shows each is taken
+   first, a String one of several as a copy (append_bytes_arg_own:
+   `s.append_as_bytes(s, s)` appends the String as it was, twice), rooted
+   while a later one is made, and then appended in order. The order shows
+   for such a String and for an argument after the first that runs code
+   where it stands (`s.append_as_bytes(1, (s << "x"; 2))` appends both
+   bytes after the x; one that ran ahead of the call has run already); any
+   other argument is appended as it is read. */
+static void emit_append_bytes_handle(Compiler *c, int th, int argc, const int *argv, Buf *b) {
+  int staged = 0;
+  for (int a = 0; a < argc && !staged; a++)
+    staged = append_bytes_arg_own(c, argc, argv[a]) ||
+             (a > 0 && !arg_ran_first(argv[a], 0) && subtree_has_side_effect(c, argv[a]));
+  if (!staged) {
+    for (int a = 0; a < argc; a++) {
+      buf_printf(b, " sp_String_append_bytes(_t%d, ", th);
+      emit_append_bytes_arg(c, argv[a], 0, b);
+      buf_puts(b, ");");
+    }
+    return;
+  }
+  /* the last argument whose staging can allocate: an Integer's byte, a
+     boxed one's conversion, a copy, or its own evaluation */
+  int last_alloc = -1;
+  for (int a = argc - 1; a >= 0 && last_alloc < 0; a--)
+    if (repr_of(c, argv[a]).as_ty != TY_STRING || append_bytes_arg_own(c, argc, argv[a]) ||
+        operand_may_allocate(c, argv[a]))
+      last_alloc = a;
+  int base = g_tmp + 1; g_tmp += argc;
+  /* (each is kept as the copy it is staged as, as concat's are:
+     emit_str_concat_handle) */
+  int held0 = g_one_held;
+  g_one_held = 0;
+  for (int a = 0; a < argc; a++) {
+    buf_printf(b, " const char *_t%d = ", base + a);
+    emit_append_bytes_arg(c, argv[a], append_bytes_arg_own(c, argc, argv[a]), b);
+    buf_puts(b, ";");
+    if (a < last_alloc && !(nt_kind(c->nt, argv[a]) == NK_StringNode && !operand_may_allocate(c, argv[a])))
+      buf_printf(b, " SP_GC_ROOT_STR(_t%d);", base + a);
+  }
+  g_one_held = held0;
+  for (int a = 0; a < argc; a++) buf_printf(b, " sp_String_append_bytes(_t%d, _t%d);", th, base + a);
 }
 
 /* A String mutator: the value-form bangs, the in-place mutators, append_as_bytes, bytesplice (emit_array_call's arms, in their order) */
@@ -5151,11 +5203,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);", tm2, lbAB.p ? lbAB.p : srefAB.p);
         free(lbAB.p); free(srefAB.p);
         emit_route_recv_root(c, hrAB, tm2, 0, NULL, TY_UNKNOWN, b);
-        for (int a9 = 0; a9 < argc; a9++) {
-          buf_printf(b, " sp_String_append_bytes(_t%d, ", tm2);
-          emit_append_bytes_arg(c, argv[a9], b);
-          buf_puts(b, ");");
-        }
+        emit_append_bytes_handle(c, tm2, argc, argv, b);
         buf_printf(b, " sp_strbuf_read_pub(_t%d); })", tm2);
         { *out = 1; return 1; }
       } }
@@ -5170,7 +5218,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
     buf_puts(b, "sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, "); ");
     buf_printf(b, "const char *_t%d = sp_str_append_bytes(", tn9);
     emit_expr(c, recv, b); buf_puts(b, ", ");
-    emit_append_bytes_arg(c, argv[0], b);
+    emit_append_bytes_arg(c, argv[0], 0, b);
     buf_puts(b, ")");
     /* each step answers a new String, held only in the temp while the next
        argument is made: an Integer's byte (sp_int_chr) or any argument that
@@ -5182,7 +5230,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
       }
     for (int a9 = 1; a9 < argc; a9++) {
       buf_printf(b, "; _t%d = sp_str_append_bytes(_t%d, ", tn9, tn9);
-      emit_append_bytes_arg(c, argv[a9], b);
+      emit_append_bytes_arg(c, argv[a9], 0, b);
       buf_puts(b, ")");
     }
     buf_puts(b, "; ");

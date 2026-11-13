@@ -3754,9 +3754,11 @@ void emit_route_recv_root(Compiler *c, int hr, int t, int argc, const int *argv,
   if (alloc) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
 }
 /* Does route v (emit_strbuf_route) answer a String, never nil: `+s` (which
-   raises for a nil s) and `String(s)`? Every other one can answer nil. */
+   raises for a nil s), `String(s)` and an exception's text? Every other one
+   can answer nil. */
 static int strbuf_route_nonnil(Compiler *c, int v) {
-  if (strbuf_route_exc_message(c, v)) return 1;
+  /* `e&.message` answers nil for a nil e, as the route does (`cause&.message`) */
+  if (strbuf_route_exc_message(c, v)) return !nt_safe_nav(c->nt, nt_paren_single(c->nt, v));
   /* A fresh user return may be nil, unlike the builtin conversion. */
   if (repr_boxed_to_s_operand(c, nt_paren_single(c->nt, v)) >= 0) return 0;
   /* `s&.to_s` answers nil for a nil s, where `s.to_s` answers "". */
@@ -3879,8 +3881,10 @@ int emit_recv_route_handle(Compiler *c, int id, int recv, Buf *b) {
     }
   }
   /* a `&.` call skips a nil receiver, which the raise below would not:
-     its guard takes the receiver (emit_call_safe_nav_arms) */
-  if (!nonnil && nt_safe_nav(c->nt, id)) {
+     its guard takes the receiver (emit_call_safe_nav_arms). Under its
+     guard (g_sn_skip: emit_bang_on_held's on a held receiver) the
+     receiver is not nil. */
+  if (!nonnil && nt_safe_nav(c->nt, id) && g_sn_skip != id) {
     free(hb.p);
     if (pre && g_pre == pre && pre->len > pre_mark) { pre->len = pre_mark; pre->p[pre_mark] = '\0'; }
     return 0;
@@ -4449,6 +4453,15 @@ static int tap_block_hoists(Compiler *c, int v) {
   int blk = nt_ref(c->nt, v, "block");
   return g_pre && nm && is_tap_name(nm) && blk >= 0 && nt_kind(c->nt, blk) == NK_BlockNode && !nt_safe_nav(c->nt, v);
 }
+/* Does bang v leave a nil receiver to the call itself: a safe-navigation
+   call (`g(s)&.upcase!`), which answers nil for it (emit_bang_on_held), or
+   a method nil has too (tap, itself), which nil answers? Any other bang
+   held on its receiver (emit_bang_held_open) raises NoMethodError for nil
+   at the hold, or cannot meet one. */
+static int bang_held_nil_passes(Compiler *c, int v) {
+  const char *vn = nt_str(c->nt, v, "name");
+  return nt_safe_nav(c->nt, v) || (vn && is_nil_method(vn));
+}
 /* The receiver handle of bang v held in _t<th> and rooted, opened as `({
    sp_String *_t<th> = <handle>; ...` in b: ahead of the statement instead
    (g_pre) when v is gsub!/sub!'s or scan's block form, whose loop runs
@@ -4460,8 +4473,7 @@ static void emit_bang_held_open(Compiler *c, int v, int th, const char *href, in
                                 Buf *b) {
   Buf *hb = sb_block_hoists(c, v) || scan_block_hoists(c, v) || tap_block_hoists(c, v) ? g_pre : b;
   /* (nil has a tap and an itself of its own: they answer nil) */
-  const char *vn = nt_str(c->nt, v, "name");
-  int check = !nonnil && !nt_safe_nav(c->nt, v) && !(vn && is_nil_method(vn));
+  int check = !nonnil && !bang_held_nil_passes(c, v);
   buf_puts(b, "({ ");
   size_t at = hb->len;
   if (hb != b) emit_indent(hb, g_indent);
@@ -5123,9 +5135,15 @@ static void emit_bang_self_form(Compiler *c, int v, int pub, int form, Buf *b) {
     else ran_first_bind_read(r, th);
     /* the route tests the held receiver for nil itself (emit_bang_held_open,
        or after the arguments when they run first): a guard of the call's
-       own would go ahead of the hold and read its temp undeclared (#10017) */
+       own would go ahead of the hold and read its temp undeclared (#10017),
+       and the plan's nil target (cplan_nil) would hold the receiver a second
+       time, as its bytes, under which a method that changes its receiver
+       finds no handle (strbuf_recv_handle) and changes nothing. The call is
+       marked as tested for both. */
     int sv_ng = g_ivar_nil_guarded_id; g_ivar_nil_guarded_id = v;
+    int nil_view = !bang_held_nil_passes(c, v) ? view_push_call_nil_tested(c, v) : -1;
     emit_bang_on_held(c, v, th, b);
+    if (nil_view >= 0) view_pop(c, nil_view);
     g_ivar_nil_guarded_id = sv_ng;
     view_unbind(mark);
     if (as_h) { view_pop(c, st); view_pop(c, sv); }
@@ -25084,26 +25102,21 @@ static int strbuf_recv_hold(Compiler *c, int recv, const char *name, int argc, c
 /* emit_array_mutate_stmt_body's String appends (<< and concat) and its bang
    methods, with and without arguments (answers 1 emitted, 0 declined, -1 to
    go on) */
-/* Is argument `arg` of a concat of `argc` staged as a copy? One of several
-   is, since every one is taken before any is appended and its String may be
-   the receiver the first append grows, or one a later argument changes. A
-   new String no name holds yet (share_value_fresh: a literal, `x + y`, a
-   method answering its own local's String) is neither, and is staged as it
-   is. */
-static int concat_arg_own(Compiler *c, int argc, int arg) {
+/* See codegen_internal.h. */
+int str_append_arg_staged_own(Compiler *c, int argc, int arg) {
   return argc > 1 && !share_value_fresh(c, arg, 0);
 }
 /* concat(a, b, ...) onto the handle `sref`: every argument taken before
    anything is appended, as CRuby does (one of several is staged as a copy,
-   concat_arg_own, so `s.concat(s, s)` appends the String as it was), then
-   the frozen check, then the appends in order */
+   str_append_arg_staged_own, so `s.concat(s, s)` appends the String as it
+   was), then the frozen check, then the appends in order */
 void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *argv, Buf *b, int indent) {
   /* the last argument whose staging can allocate: its own evaluation, a
      conversion's answer, or the copy it is staged as */
   int last_alloc = -1;
   for (int a = argc - 1; a >= 0; a--) {
     Repr r = repr_of(c, argv[a]);
-    if (r.as_ty != TY_STRING || concat_arg_own(c, argc, argv[a]) ||
+    if (r.as_ty != TY_STRING || str_append_arg_staged_own(c, argc, argv[a]) ||
         (!arg_ran_first(argv[a], 0) && operand_may_allocate(c, argv[a]))) {
       last_alloc = a;
       break;
@@ -25126,7 +25139,7 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
   if (argc > 1) g_one_held = 0;
   for (int a = 0; a < argc; a++) {
     int boxed = repr_of(c, argv[a]).kind == RK_BOXED;
-    int own = concat_arg_own(c, argc, argv[a]);
+    int own = str_append_arg_staged_own(c, argc, argv[a]);
     buf_printf(b, " const char *_t%d = %s", base + a, boxed ? "sp_str_concat(" : "");
     if (own) emit_str_append_arg_own(c, argv[a], rt.p, b);
     else emit_str_append_arg(c, argv[a], rt.p, b);

@@ -335,11 +335,14 @@ int ivar_read_is_handle(Compiler *c, int a) {
    takes a fresh handle of a String element, which keeps a frozen one
    frozen, or the handle a boxed element holds; any other takes `src`.
    Without the rule a parameter whose slot is a mutable String is bound
-   the same way: the element is no sp_String * either. */
+   the same way: the element is no sp_String * either. A `src` of type
+   TY_STRBUF is the handle a typed container holds (elem_held): the
+   handle itself into a handle slot, its bytes into any other. */
 void emit_strbuf_param_bind(Compiler *c, const LocalVar *pv, TyKind want, const char *src, Buf *b) {
   int h = repr_of_slot(c, pv).kind == RK_STRBUF;
+  if (want == TY_STRBUF) buf_printf(b, h ? "%s" : "SP_STR_B(%s)", src);
   /* (one representation: the source may be the element itself, SP_STR_HDL) */
-  if (h && want == TY_STRING) buf_printf(b, "SP_STR_HDL(%s)", src);
+  else if (h && want == TY_STRING) buf_printf(b, "SP_STR_HDL(%s)", src);
   else if (h && want == TY_POLY) buf_printf(b, "sp_poly_as_strbuf(%s)", src);
   else buf_puts(b, src);
 }
@@ -4850,7 +4853,13 @@ int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const cha
     emit_indent(b, indent + 1);
     buf_printf(b, "sp_PolyArray_push(_t%d, ", tp);
     if (iter_hash_vnil(c, recv, rt)) buf_printf(b, "sp_box_oint(%s)", hash_order_oval(rt, t, ti));
-    else emit_boxed_text(c, hvt, hash_order_val(rt, t, ti), b);
+    else if (rt == TY_POLY_POLY_HASH) buf_puts(b, hash_order_val(rt, t, ti));
+    else {
+      char hs2[32], ks2[64];
+      snprintf(hs2, sizeof hs2, "_t%d", t);
+      snprintf(ks2, sizeof ks2, "_t%d->order[_t%d]", t, ti);
+      emit_hash_val_box_text(c, rt, hs2, ks2, b);
+    }
     buf_puts(b, ");\n");
     char vals[32]; snprintf(vals, sizeof vals, "_t%d", tp);
     emit_boxed_step_binds(c, block, vals, b, indent + 1, 0);
@@ -4875,9 +4884,17 @@ int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const cha
     buf_puts(b, ";\n");
   }
   else if (vp) {
-    emit_indent(b, indent + 1); emit_ctype(c, hvt, b);
-    buf_printf(b, " lv_%s = %s;", vp, hash_order_val(rt, t, ti));
+    /* a value of a Hash that holds the handle (elem_held) binds as that
+       handle into a parameter whose slot is one, its bytes into any other */
+    int vh = typed_elem_held(rt) == TY_STRBUF && repr_of_slot(c, vlv).kind == RK_STRBUF;
+    emit_indent(b, indent + 1);
+    if (vh) buf_puts(b, "sp_String *"); else emit_ctype(c, hvt, b);
+    buf_printf(b, " lv_%s = ", vp);
+    if (typed_elem_held(rt) == TY_STRBUF) emit_strbuf_param_bind(c, vlv, TY_STRBUF, hash_order_val(rt, t, ti), b);
+    else buf_puts(b, hash_order_val(rt, t, ti));
+    buf_puts(b, ";");
     if (hvt == TY_POLY) buf_printf(b, " SP_GC_ROOT_RBVAL(lv_%s);", vp);
+    else if (vh) buf_printf(b, " SP_GC_ROOT(lv_%s);", vp);
     else if (hvt == TY_STRING) buf_printf(b, " SP_GC_ROOT_STR(lv_%s);", vp);
     buf_puts(b, "\n");
   }
@@ -7250,12 +7267,15 @@ static int iter_hash_arms(Compiler *c, Buf *b, int indent, int block, const char
         char kx[256], vx[288];
         int vn = iter_hash_vnil(c, recv, rt);
         snprintf(kx, sizeof kx, "%s->order[_t%d]", rb.p, t);
-        snprintf(vx, sizeof vx, "sp_%sHash_%s(%s, %s->order[_t%d])", hn, vn ? "vget" : "get", rb.p, rb.p, t);
+        snprintf(vx, sizeof vx, "sp_%sHash_%s%s(%s, %s->order[_t%d])", hn, vn ? "vget" : "get",
+                 vn ? "" : typed_elem_store_sfx(rt), rb.p, rb.p, t);
         Buf bx; memset(&bx, 0, sizeof bx);
         emit_boxed_text(c, ty_hash_key(rt), kx, &bx);
         buf_printf(b, "sp_PolyArray_push(_t%d, %s); ", tpp, bx.p ? bx.p : ""); free(bx.p);
         memset(&bx, 0, sizeof bx);
-        if (vn) buf_printf(&bx, "sp_box_oint(%s)", vx); else emit_boxed_text(c, ty_hash_val(rt), vx, &bx);
+        if (vn) buf_printf(&bx, "sp_box_oint(%s)", vx);
+        else if (typed_elem_held(rt) == TY_STRBUF) buf_printf(&bx, "%s%s)", typed_elem_box_open(rt), vx);
+        else emit_boxed_text(c, ty_hash_val(rt), vx, &bx);
         buf_printf(b, "sp_PolyArray_push(_t%d, %s); ", tpp, bx.p ? bx.p : ""); free(bx.p);
       }
       buf_printf(b, "sp_box_poly_array(_t%d); })", tpp);
@@ -7295,7 +7315,10 @@ static int iter_hash_arms(Compiler *c, Buf *b, int indent, int block, const char
       if (rt == TY_POLY_POLY_HASH)
         snprintf(src1, sizeof src1, "%s->vals[%s->order[_t%d]]", rb.p, rb.p, t);
       else
-        snprintf(src1, sizeof src1, "sp_%sHash_%s(%s, %s->order[_t%d])", hn, vn1 ? "vget" : "get", rb.p, rb.p, t);
+        snprintf(src1, sizeof src1, "sp_%sHash_%s%s(%s, %s->order[_t%d])", hn, vn1 ? "vget" : "get",
+                 vn1 ? "" : typed_elem_store_sfx(rt), rb.p, rb.p, t);
+      /* (a Hash that holds the handle: its value is the handle, elem_held) */
+      if (typed_elem_held(rt) == TY_STRBUF) want1 = TY_STRBUF;
       emit_indent(b, indent + 1);
       buf_printf(b, "lv_%s = ", p1);
       /* a value that can be nil (D3b-ii): already the oint */
@@ -7309,6 +7332,7 @@ static int iter_hash_arms(Compiler *c, Buf *b, int indent, int block, const char
       /* a boxed value into a typed parameter: unboxed to its type */
       else if (want1 == TY_POLY && pv1 && pv1->type != TY_POLY && pv1->type != TY_UNKNOWN && !box1)
         emit_unbox_text(c, pv1->type, src1, b);
+      else if (box1 && want1 == TY_STRBUF) buf_printf(b, "%s%s)", typed_elem_box_open(rt), src1);
       else if (box1) emit_boxed_text(c, want1, src1, b); else emit_strbuf_param_bind(c, pv1, want1, src1, b);
       buf_puts(b, ";\n");
     }
@@ -7358,14 +7382,19 @@ static int iter_hash_arms(Compiler *c, Buf *b, int indent, int block, const char
         else
           snprintf(src, sizeof src, "%s->keys[%s->order[_t%d]]", rb.p, rb.p, t);
       }
-      else if (is_val)
-        snprintf(src, sizeof src, "sp_%sHash_%s(%s, %s->order[_t%d])", hn,
-                 iter_hash_vnil(c, recv, rt) ? "vget" : "get", rb.p, rb.p, t);
+      else if (is_val) {
+        int vn = iter_hash_vnil(c, recv, rt);
+        snprintf(src, sizeof src, "sp_%sHash_%s%s(%s, %s->order[_t%d])", hn, vn ? "vget" : "get",
+                 vn ? "" : typed_elem_store_sfx(rt), rb.p, rb.p, t);
+        /* (a Hash that holds the handle: its value is the handle, elem_held) */
+        if (typed_elem_held(rt) == TY_STRBUF) want = TY_STRBUF;
+      }
       else
         snprintf(src, sizeof src, "%s->order[_t%d]", rb.p, t);
       emit_indent(b, indent + 1);
       buf_printf(b, "lv_%s = ", p0);
       if (is_val && iter_hash_vnil(c, recv, rt)) iter_bind_hash_oval(c, pv, src, b);
+      else if (box && want == TY_STRBUF) buf_printf(b, "%s%s)", typed_elem_box_open(rt), src);
       else if (box) emit_boxed_text(c, want, src, b);
       else if (unbox) emit_unbox_text(c, pv->type, src, b);
       else emit_strbuf_param_bind(c, pv, want, src, b);

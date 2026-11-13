@@ -24627,8 +24627,9 @@ const char *hash_box_cls(TyKind t) {
 
 /* The key and the value at position `_t<ti>` of the iteration order of the
    hash `_t<tr>`, as C text: a typed variant keeps the key itself in order[],
-   the general hash a slot index into its keys[] and vals[]. Four rotating
-   buffers, so a key and a value can meet on one buf_printf line. */
+   the general hash a slot index into its keys[] and vals[]; the value as
+   the Hash holds it, the handle for one that holds it (elem_held). Four
+   rotating buffers, so a key and a value can meet on one buf_printf line. */
 const char *hash_order_key(TyKind t, int tr, int ti) {
   static char bufs[4][96]; static int n = 0;
   char *o = bufs[n++ & 3];
@@ -24641,7 +24642,8 @@ const char *hash_order_val(TyKind t, int tr, int ti) {
   static char bufs[4][96]; static int n = 0;
   char *o = bufs[n++ & 3];
   if (t == TY_POLY_POLY_HASH) snprintf(o, sizeof bufs[0], "_t%d->vals[_t%d->order[_t%d]]", tr, tr, ti);
-  else snprintf(o, sizeof bufs[0], "sp_%sHash_get(_t%d, _t%d->order[_t%d])", ty_hash_cname(t), tr, tr, ti);
+  else snprintf(o, sizeof bufs[0], "sp_%sHash_get%s(_t%d, _t%d->order[_t%d])", ty_hash_cname(t),
+                typed_elem_store_sfx(t), tr, tr, ti);
   return o;
 }
 /* The same value of an Integer-valued typed Hash that may hold a nil

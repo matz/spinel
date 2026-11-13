@@ -2008,14 +2008,15 @@ int g_re_init_needed = 0;
    the array it lands in (unshift, insert, fill) as able to hold one.
 
    How the element is held is the container's ty_traits row (rt, the
-   Array's kind): its elem_held column names the kind, and its elem_sfx
-   the suffix of the runtime entries that store it. A String Array holds
-   the String's handle (sp_strelem), stored through the `_e` entries: the
-   value is taken as its handle where it is written (emit_typed_elem_hold),
-   so a String in hand is stored as itself rather than handed over as its
-   bytes for the runtime to find the handle again (sp_strelem_fx). */
+   Array's kind, or the Hash's whose value it is): its elem_held column
+   names the kind, and its elem_sfx the suffix of the runtime entries that
+   store it. A String Array, and a Hash of String values, hold the String's
+   handle (sp_strelem), stored through the `_e` entries: the value is taken
+   as its handle where it is written (emit_typed_elem_hold), so a String in
+   hand is stored as itself rather than handed over as its bytes for the
+   runtime to find the handle again (sp_strelem_fx). */
 void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b) {
-  TyKind et = ty_array_elem(rt);
+  TyKind et = typed_elem_kind(rt);
   Repr vr = repr_of(c, node);
   TyKind vt = vr.as_ty;
   Buf v; memset(&v, 0, sizeof v);
@@ -2037,15 +2038,21 @@ void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b) {
   else emit_typed_elem_hold(c, node, rt, v.p ? v.p : "", b);
   free(v.p);
 }
-/* The suffix of the element-store entries of typed Array kind rt (the
-   elem_sfx column), or NULL for a kind that is no typed Array */
+/* The element kind of typed container kind rt: an Array's element, a
+   Hash's value */
+TyKind typed_elem_kind(TyKind rt) {
+  return ty_is_hash(rt) ? ty_hash_val(rt) : ty_array_elem(rt);
+}
+/* The suffix of the element-store entries of typed container kind rt (the
+   elem_sfx column: a typed Array, a Hash of String values), or NULL for a
+   kind that has none */
 const char *typed_elem_sfx(TyKind rt) {
   const TyTraits *tr = ty_traits_of(rt);
   return tr ? tr->elem_sfx : NULL;
 }
-/* The kind typed Array kind rt holds its element as (the elem_held
+/* The kind typed container kind rt holds its element as (the elem_held
    column): the element's own kind, or the handle (TY_STRBUF) for a String
-   element; TY_UNKNOWN for a kind that is no typed Array */
+   element or a Hash's String value; TY_UNKNOWN for a kind that has none */
 TyKind typed_elem_held(TyKind rt) {
   const TyTraits *tr = ty_traits_of(rt);
   return tr ? (TyKind)tr->elem_held : TY_UNKNOWN;
@@ -2054,6 +2061,13 @@ TyKind typed_elem_held(TyKind rt) {
 const char *typed_elem_store_sfx(TyKind rt) {
   const char *s = typed_elem_sfx(rt);
   return s ? s : "";
+}
+/* The box of a String element, of a container kind rt whose element (or
+   value) is String, read by its `_e` entry: where it is held as the handle
+   the handle's own box (SP_SEBOX, nil for NULL), which keeps its identity,
+   else the box of its bytes. Opens the box; the caller closes it with ")". */
+const char *typed_elem_box_open(TyKind rt) {
+  return typed_elem_held(rt) == TY_STRBUF ? "SP_SEBOX(" : "sp_box_str(";
 }
 /* Value node into an element of typed Array kind rt, as its slot converts
    or refuses it (emit_coerce), the face aside: where the element is held as
@@ -2065,7 +2079,7 @@ const char *typed_elem_store_sfx(TyKind rt) {
    already: the answer is 1 then, and the text is not handed to
    emit_typed_elem_hold; 0 for every other text. */
 int emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, Buf *b) {
-  TyKind et = ty_array_elem(rt), from = TY_UNKNOWN;
+  TyKind et = typed_elem_kind(rt), from = TY_UNKNOWN;
   if (typed_elem_held(rt) == TY_STRBUF && repr_coerce_plan(c, node, et, CO_HOLD, &from) == CF_FIT &&
       (from == TY_STRING || from == TY_STRBUF)) {
     if (repr_of(c, node).kind != RK_BOXED && one_str_elem_call(c, node, TY_UNKNOWN)) {
@@ -3964,15 +3978,15 @@ void strh_elem_handle_text(Compiler *c, int v, Buf *b) {
   for (int i = g_n_argov - 1; i >= 0 && !bound; i--) bound = g_argov_node[i] == call || g_argov_node[i] == v;
   if (!bound && recv >= 0 && typed_elem_held(repr_of(c, recv).as_ty) == TY_STRBUF &&
       one_str_elem_call(c, call, TY_UNKNOWN)) {
-    /* a read of an Array that holds the handle, as written (no sequence in
-       parentheses), is the element as the Array holds it: the read's own
-       text (typed_elem_read_raw) */
+    /* a read of an Array, or of a Hash's value, that holds the handle, as
+       written (no sequence in parentheses), is the element as the
+       container holds it: the read's own text (typed_elem_read_raw) */
     g_one_elem_raw = call;
     emit_expr(c, call, b);
   }
   else {
-    /* (a String Hash's read answers the value's bytes, or a temp it is
-       bound to of either face; the handle is its owner, SP_STR_HDL) */
+    /* (a read in a parenthesised sequence, or a temp an emitter bound it
+       to, of either face; the handle is its owner, SP_STR_HDL) */
     g_one_elem_raw = v;
     buf_puts(b, "SP_STR_HDL(");
     emit_expr(c, v, b);
@@ -3980,8 +3994,9 @@ void strh_elem_handle_text(Compiler *c, int v, Buf *b) {
   }
   g_one_elem_raw = save;
 }
-/* Is node id's read of an element of typed Array kind rt written as the
-   handle the Array holds (elem_held), sp_String *: the raw read
+/* Is node id's read of an element of typed container kind rt (an Array's
+   element, a Hash's value) written as the handle the container holds
+   (elem_held), sp_String *: the raw read
    g_one_elem_raw names, whose consumer (emit_expr, strh_elem_handle_text)
    takes the face it wants of it? Any other read of such an Array is the
    element's bytes. The one place an emitter asks which of the two C types

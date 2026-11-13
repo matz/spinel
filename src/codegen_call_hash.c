@@ -176,8 +176,10 @@ int emit_op_hash_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
     /* an Integer-valued hash answers a miss as its default or nil (oget) */
     if (vt == TY_INT) buf_printf(&g_procs, "sp_box_oint(sp_%sHash_oget(_h, %s))", hn, keyexpr);
     else {
-      snprintf(_ge, sizeof _ge, "sp_%sHash_get(_h, %s)", hn, keyexpr);
-      emit_boxed_text(c, vt, _ge, &g_procs);
+      /* (a String value boxed as the Hash holds it, the handle's own box) */
+      snprintf(_ge, sizeof _ge, "sp_%sHash_get%s(_h, %s)", hn, typed_elem_store_sfx(rt), keyexpr);
+      if (typed_elem_held(rt) == TY_STRBUF) buf_printf(&g_procs, "%s%s)", typed_elem_box_open(rt), _ge);
+      else emit_boxed_text(c, vt, _ge, &g_procs);
     } }
   buf_puts(&g_procs, ";\n  return 0;\n}\n");
   buf_printf(b, "sp_proc_new_meta((void *)_hashproc_%s, (void *)(", pn);
@@ -209,13 +211,16 @@ int emit_op_hash_aref(Compiler *c, const BopCtx *x, Buf *b) {
       !hash_nil_key_stored(c, argv[0], hash_kt)) {
     TyKind vt = ty_hash_val(rt);
     int t = ++g_tmp;
+    /* (a String value is the default as the Hash holds it, the handle) */
+    int rd = typed_elem_read_open(rt, x->id, b);
     buf_printf(b, "({ %s _t%d = ", c_type_name(rt), t); emit_expr(c, recv, b); buf_puts(b, "; ");
     buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "); ");  /* the key still evaluates */
     if (vt == TY_INT) { oint_open(c, x->id, TY_INT, b); buf_printf(b, "({ %s _d%d = _t%d; (_d%d && !_d%d->default_nil) ? sp_oint_of(_d%d->default_v) : sp_oint_nil(); }); })", c_type_name(rt), t, t, t, t, t); oint_close(c, x->id, b); }
     /* absent means the hash's default, which is nil unless one was
        given -- not the empty string (#3790) */
-    else if (vt == TY_STRING) buf_printf(b, "_t%d ? _t%d->default_v : NULL; })", t, t);
+    else if (vt == TY_STRING) buf_printf(b, "_t%d ? _t%d->default_v : (sp_String *)NULL; })", t, t);
     else buf_printf(b, "_t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
+    if (rd) buf_puts(b, ")");
     return 1;
   }
   if (rt == TY_POLY_POLY_HASH) {
@@ -224,11 +229,14 @@ int emit_op_hash_aref(Compiler *c, const BopCtx *x, Buf *b) {
   }
   else {
     /* an int-valued hash answers a miss as nil beside the value (oget);
-       a string-valued one as NULL (get) */
+       a string-valued one as NULL (get), the value as the Hash holds it
+       (the handle, under the _e entries) */
     int oint = ty_hash_val(rt) == TY_INT;
     if (oint) oint_open(c, x->id, TY_INT, b);
-    buf_printf(b, "sp_%sHash_%s%s(", hn, oint ? "oget" : "get", hash_okey_sfx(c, argv[0], ty_hash_key(rt)));
+    int rd = typed_elem_read_open(rt, x->id, b);
+    buf_printf(b, "sp_%sHash_%s%s%s(", hn, oint ? "oget" : "get", hash_okey_sfx(c, argv[0], ty_hash_key(rt)), typed_elem_store_sfx(rt));
     emit_expr(c, recv, b); buf_puts(b, ", "); emit_hash_key_o(c, argv[0], ty_hash_key(rt), b); buf_puts(b, ")");
+    if (rd) buf_puts(b, ")");
     if (oint) oint_close(c, x->id, b);
   }
   return 1;
@@ -361,11 +369,15 @@ int emit_op_hash_fetch(Compiler *c, const BopCtx *x, Buf *b) {
   /* a hash whose values may be nil (DESIGN.md D3b-ii) answers the hit with
      its nil, as an oint */
   int vo = oint_kind(vt) && node_is_oint(c, x->id);
-  const char *miss_v = vo ? "sp_oint_nil()" : vt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, vt);
+  /* (a String value is read as the Hash holds it, the handle: its miss
+     arm is the handle's NULL, so the conditional keeps the handle's type) */
+  const char *miss_v = vo ? "sp_oint_nil()" : vt == TY_POLY ? "sp_box_nil()" :
+                       typed_elem_held(rt) == TY_STRBUF ? "(sp_String *)NULL" : default_value_from_compiler(c, vt);
   int th = ++g_tmp, tk = ++g_tmp;
   char keytmp[32], htmp[32];
   snprintf(keytmp, sizeof keytmp, "_t%d", tk);
   snprintf(htmp, sizeof htmp, "_t%d", th);
+  int rd = typed_elem_read_open(rt, x->id, b);
   buf_printf(b, "({ %s _t%d = ", c_type_name(rt), th); emit_expr(c, recv, b);
   buf_printf(b, "; SP_GC_ROOT(_t%d)", th);   /* rooted across the key, as the array arms are */
   if (hash_key_misses(c, argv[0], ty_hash_key(rt)) && !hash_nil_key_stored(c, argv[0], ty_hash_key(rt))) {
@@ -375,6 +387,7 @@ int emit_op_hash_fetch(Compiler *c, const BopCtx *x, Buf *b) {
     buf_puts(b, "; sp_exc_stage_recv(");
     emit_boxed_text(c, rt, htmp, b);
     buf_printf(b, "); sp_raise_key_not_found(_t%d); %s; })", tk, miss_v);
+    if (rd) buf_puts(b, ")");
     return 1;
   }
   /* a boxed key on a typed table: the KeyError names the key as it was,
@@ -407,8 +420,8 @@ int emit_op_hash_fetch(Compiler *c, const BopCtx *x, Buf *b) {
   if (vo && ks[0])
     buf_printf(b, "; sp_%sHash_has_key_okey(_t%d, _t%d) ? sp_%sHash_vget(_t%d, _t%d.v) : (", hn, th, tk, hn, th, tk);
   else
-    buf_printf(b, "; sp_%sHash_has_key%s(_t%d, _t%d) ? sp_%sHash_%s%s(_t%d, _t%d) : (",
-               hn, ks, th, tk, hn, vo ? "vget" : "get", vo ? "" : ks, th, tk);
+    buf_printf(b, "; sp_%sHash_has_key%s(_t%d, _t%d) ? sp_%sHash_%s%s%s(_t%d, _t%d) : (",
+               hn, ks, th, tk, hn, vo ? "vget" : "get", vo ? "" : ks, typed_elem_store_sfx(rt), th, tk);
   buf_puts(b, "sp_exc_stage_recv(");
   emit_boxed_text(c, rt, htmp, b);
   buf_puts(b, "), sp_raise_key_not_found(");
@@ -416,6 +429,7 @@ int emit_op_hash_fetch(Compiler *c, const BopCtx *x, Buf *b) {
   else if (ks[0]) buf_printf(b, "%s(_t%d)", oint_box(kt), tk);
   else emit_boxed_text(c, kt, keytmp, b);
   buf_printf(b, "), %s); })", miss_v);
+  if (rd) buf_puts(b, ")");
   return 1;
 }
 
@@ -683,7 +697,7 @@ int emit_op_hash_shift(Compiler *c, const BopCtx *x, Buf *b) {
   else if (vt == TY_POLY) buf_printf(b, " sp_PolyArray_push(_t%d, sp_%sHash_get(_t%d, _t%d));", tp, hn, th, tk);
   else if (vt == TY_INT && hash_vals_nullable(c, recv)) buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_oint(sp_%sHash_vget(_t%d, _t%d)));", tp, hn, th, tk);
   else if (vt == TY_INT) buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(sp_%sHash_get(_t%d, _t%d)));", tp, hn, th, tk);
-  else buf_printf(b, " sp_PolyArray_push(_t%d, %ssp_%sHash_get%s(_t%d, _t%d)));", tp, ONE_HV_BOXO(hn), hn, ONE_HV_GE(hn), th, tk);
+  else buf_printf(b, " sp_PolyArray_push(_t%d, %ssp_%sHash_get%s(_t%d, _t%d)));", tp, typed_elem_box_open(rt), hn, typed_elem_store_sfx(rt), th, tk);
   buf_printf(b, " _t%d = sp_box_poly_array(_t%d);", tr, tp);
   buf_printf(b, " sp_%sHash_delete%s(_t%d, _t%d); }", hn, rt == TY_STR_POLY_HASH ? "_bytes" : "", th, tk);
   buf_printf(b, " _t%d; })", tr);
@@ -721,15 +735,21 @@ int emit_op_hash_delete(Compiler *c, const BopCtx *x, Buf *b) {
   else if (vt == TY_INT)
     buf_printf(b, "; sp_oint _t%d = sp_%sHash_has_key%s(_t%d, _t%d) ? sp_oint_of(sp_%sHash_get%s(_t%d, _t%d)) : sp_oint_nil();",
                tv, hn, ks, th, tk, hn, ks, th, tk);
-  else
-    /* (one representation: a String value is the handle, read here as its bytes face) */
-    buf_printf(b, "; %s _t%d = sp_%sHash_has_key%s(_t%d, _t%d) ? %ssp_%sHash_get%s(_t%d, _t%d)%s : %s;",
-               c_type_name(vt), tv, hn, ks, th, tk, vt == TY_STRING ? "SP_STR_B(" : "", hn, ks, th, tk,
-               vt == TY_STRING ? ")" : "",
-               vt == TY_POLY ? "sp_box_nil()" : vt == TY_STRING ? "NULL" : default_value_from_compiler(c, vt));
+  else {
+    /* a String value is taken as the Hash holds it, the handle (the _e
+       entries), the call's answer that handle or its bytes
+       (typed_elem_read_open) */
+    TyKind ht = typed_elem_held(rt) == TY_STRBUF ? TY_STRBUF : vt;
+    buf_printf(b, "; %s _t%d = sp_%sHash_has_key%s(_t%d, _t%d) ? sp_%sHash_get%s%s(_t%d, _t%d) : %s;",
+               c_type_name(ht), tv, hn, ks, th, tk, hn, ks, typed_elem_store_sfx(rt), th, tk,
+               vt == TY_POLY ? "sp_box_nil()" : ht == TY_STRBUF ? "NULL" : default_value_from_compiler(c, vt));
+  }
   buf_printf(b, " sp_%sHash_delete%s(_t%d, _t%d); ", hn, rt == TY_STR_POLY_HASH ? "_bytes" : ks, th, tk);
   if (vt == TY_INT) { oint_open(c, x->id, TY_INT, b); buf_printf(b, "_t%d", tv); oint_close(c, x->id, b); buf_puts(b, "; })"); }
-  else buf_printf(b, "_t%d; })", tv);
+  else {
+    int rd = typed_elem_read_open(rt, x->id, b);
+    buf_printf(b, "_t%d%s; })", tv, rd ? ")" : "");
+  }
   return 1;
 }
 
@@ -778,7 +798,7 @@ int emit_op_hash_invert(Compiler *c, const BopCtx *x, Buf *b) {
       buf_printf(b, " sp_RbVal _v%d = sp_box_int(sp_%sHash_get(_t%d, _t%d->order[_t%d]));", ti, hn, th, th, ti);
     }
     else {
-      buf_printf(b, " sp_RbVal _v%d = %ssp_%sHash_get%s(_t%d, _t%d->order[_t%d]));", ti, ONE_HV_BOXO(hn), hn, ONE_HV_GE(hn), th, th, ti);
+      buf_printf(b, " sp_RbVal _v%d = %ssp_%sHash_get%s(_t%d, _t%d->order[_t%d]));", ti, typed_elem_box_open(rt), hn, typed_elem_store_sfx(rt), th, th, ti);
     }
     buf_printf(b, " sp_PolyPolyHash_set(_t%d, _v%d, _k%d); }", tr, ti, ti);
     buf_printf(b, " _t%d; })", tr);
@@ -824,7 +844,7 @@ int emit_op_hash_flatten(Compiler *c, const BopCtx *x, Buf *b) {
   else if (vt == TY_INT)
     buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(sp_%sHash_get(_t%d, _t%d->order[_t%d])));", tr, hn, th, th, ti);
   else
-    buf_printf(b, " sp_PolyArray_push(_t%d, %ssp_%sHash_get%s(_t%d, _t%d->order[_t%d])));", tr, ONE_HV_BOXO(hn), hn, ONE_HV_GE(hn), th, th, ti);
+    buf_printf(b, " sp_PolyArray_push(_t%d, %ssp_%sHash_get%s(_t%d, _t%d->order[_t%d])));", tr, typed_elem_box_open(rt), hn, typed_elem_store_sfx(rt), th, th, ti);
   buf_printf(b, " } _t%d; })", tr);
   return 1;
 }
@@ -983,7 +1003,9 @@ int emit_op_hash_assoc(Compiler *c, const BopCtx *x, Buf *b) {
   if (rt == TY_POLY_POLY_HASH)
     snprintf(vget, sizeof vget, "_t%d->vals[_t%d->order[_t%d]]", th, th, ti);
   else
-    snprintf(vget, sizeof vget, "sp_%sHash_%s(_t%d, _t%d->order[_t%d])", hn, avn ? "vget" : "get", th, th, ti);
+    snprintf(vget, sizeof vget, "sp_%sHash_%s%s(_t%d, _t%d->order[_t%d])", hn, avn ? "vget" : "get", typed_elem_store_sfx(rt), th, th, ti);
+  /* (a String value is boxed as the Hash holds it, the handle's own box) */
+  const char *sbox = typed_elem_box_open(rt);
   buf_printf(b, "({ sp_%sHash *_t%d = ", hn, th); emit_expr(c, recv, b); buf_puts(b, ";");
   if (env) buf_printf(b, " SP_GC_ROOT(_t%d);", th);
   /* store argument */
@@ -1024,7 +1046,7 @@ int emit_op_hash_assoc(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, " sp_RbVal _rv%d = ", ti);
     if (vt == TY_POLY) buf_printf(b, "%s;", vget);
     else if (vt == TY_INT) buf_printf(b, "%s(%s);", ibox, vget);
-    else buf_printf(b, "sp_box_str(%s);", vget);
+    else buf_printf(b, "%s%s);", sbox, vget);
     buf_printf(b, " if (sp_poly_rb_equal(_rv%d, _t%d)) {", ti, ta);
   }
   /* build pair */
@@ -1045,7 +1067,7 @@ int emit_op_hash_assoc(Compiler *c, const BopCtx *x, Buf *b) {
   else if (vt == TY_INT)
     buf_printf(b, " sp_PolyArray_push(_t%d, %s(%s));", tr, ibox, vget);
   else
-    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(%s));", tr, vget);
+    buf_printf(b, " sp_PolyArray_push(_t%d, %s%s));", tr, sbox, vget);
   buf_printf(b, " break; } } _t%d; })", tr);  /* NULL = nil in poly context */
   return 1;
 }

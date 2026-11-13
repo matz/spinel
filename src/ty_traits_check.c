@@ -93,6 +93,13 @@ static TyTraits trait_from_functions(Compiler *c, TyKind t) {
     r.elem_sfx = e == TY_STRING ? "_e" : "";
     r.elem_held = (unsigned char)(e == TY_STRING ? TY_STRBUF : e);
   }
+  /* a typed Hash of String values holds each value the same way, as the
+     handle under the _e entries; the Hashes of other values keep theirs
+     as they always have, under entries of their own (oget, vget, oset) */
+  else if (ty_is_hash(t) && ty_hash_val(t) == TY_STRING) {
+    r.elem_sfx = "_e";
+    r.elem_held = (unsigned char)TY_STRBUF;
+  }
   return r;
 }
 

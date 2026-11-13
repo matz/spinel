@@ -55502,6 +55502,8 @@ void analyze_program(Compiler *c) {
   { handle_arg_tab_init(c, &hat); c->share_args = &hat; }
   repr_seal(c);
   { c->share_args = NULL; handle_arg_tab_free(&hat); }
+  /* no pass between the record's phase and the seal moved its inputs */
+  order_facts_check(c);
   /* the block bodies codegen types per arm, typed here once (#7483) */
   AN_PHASE("arm_facts", an_arm_facts(c));
   if (elab_check_on(c)) elab_check_visibility(c);

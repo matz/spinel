@@ -77,10 +77,17 @@ typedef struct { int owner; unsigned char kind, guard, steps; int first, n; } Op
 
 /* The analysis phase operand_order (analyze.c): the rows of every list in
    the program's tree (the file roots and each scope's def and body), into
-   c->order. After the last type change, before the String
-   marks; nothing it reads is written after it before the seal. */
+   c->order. After the last type change, before the String marks; nothing
+   it reads is written after it before the seal (SPINEL_ORDER_CHECK
+   checks). */
 void order_facts_build(Compiler *c);
 void order_facts_free(Compiler *c);
+/* SPINEL_ORDER_CHECK (read once, when the phase runs): the rows built
+   again at the seal must be the ones the phase built, and every list in
+   the tree at the seal that the phase's nodes hold must have been seen by
+   it; a difference names the owner and fails the compile. Nothing without
+   the variable. */
+void order_facts_check(Compiler *c);
 /* Does the subtree run code or have an effect (the walk, asking neither of
    emission's questions)? From the phase's column. */
 int order_runs_code(Compiler *c, int node);

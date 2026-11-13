@@ -260,6 +260,7 @@ typedef struct OrderFacts {
   int capnext;
   int *touched, ntouched, captouched;   /* the next[] entries the list set */
   int *ivk, nivk, capivk; /* the instance variables the list reads in its def (names index) */
+  unsigned char check;    /* SPINEL_ORDER_CHECK, read when the phase runs */
 } OrderFacts;
 
 int g_dump_order = 0;
@@ -676,6 +677,7 @@ static OrderFacts *order_facts_make(Compiler *c) {
 void order_facts_build(Compiler *c) {
   order_facts_free(c);
   c->order = order_facts_make(c);
+  c->order->check = getenv("SPINEL_ORDER_CHECK") != NULL;
 }
 
 /* ---- lookups ---- */
@@ -826,4 +828,57 @@ char *order_dump(Compiler *c) {
   free(v);
   if (!out.p) buf_puts(&out, "");
   return out.p;
+}
+
+/* ---- SPINEL_ORDER_CHECK ---- */
+
+/* do the rows of one owner in two builds differ (NULL: no row)? */
+static int order_rows_differ(const OrderFacts *a, const OpOrder *ra, const OrderFacts *b, const OpOrder *rb) {
+  if (!ra || !rb) return ra != rb;
+  if (ra->kind != rb->kind || ra->guard != rb->guard || ra->steps != rb->steps || ra->n != rb->n) return 1;
+  for (int i = 0; i < ra->n; i++) {
+    const OpSlot *x = &a->slot[ra->first + i], *y = &b->slot[rb->first + i];
+    if (x->node != y->node || x->at != y->at || x->flags != y->flags || x->by != y->by) return 1;
+  }
+  return 0;
+}
+static void order_check_report(const OrderFacts *f, const OpOrder *r, const char *who) {
+  fprintf(stderr, "  %s:", who);
+  if (!r) { fprintf(stderr, " no row\n"); return; }
+  for (int i = 0; i < r->n; i++) {
+    const OpSlot *s = &f->slot[r->first + i];
+    fprintf(stderr, " %d %s%s%s", i, order_at_name(s->at), s->flags & OPF_CODE ? " code" : "",
+            s->flags & OPF_ACROSS ? " across" : "");
+  }
+  fputc('\n', stderr);
+}
+/* See order_plan.h. */
+void order_facts_check(Compiler *c) {
+  OrderFacts *was = c->order;
+  if (!was || !was->check) return;
+  OrderFacts *now = order_facts_make(c);
+  int bad = 0;
+  for (int id = 0; id < now->n; id++) {
+    /* a list of the phase's nodes in the tree now must have been seen */
+    if (id < was->n && was->row_of[id] == -2 && now->row_of[id] != -2) {
+      bad++;
+      fprintf(stderr, "spinel: SPINEL_ORDER_CHECK: the list of node %d (%s, line %lld) is in the tree at the seal and the phase did not see it\n",
+              id, nt_type(c->nt, id) ? nt_type(c->nt, id) : "?", (long long)nt_int(c->nt, id, "node_line", 0));
+      continue;
+    }
+    /* (a node made after the phase has no row there) */
+    const OpOrder *a = id < was->n && was->row_of[id] >= 0 ? &was->row[was->row_of[id]] : NULL;
+    const OpOrder *b = now->row_of[id] >= 0 ? &now->row[now->row_of[id]] : NULL;
+    if (!order_rows_differ(was, a, now, b)) continue;
+    bad++;
+    fprintf(stderr, "spinel: SPINEL_ORDER_CHECK: the row of node %d (%s, line %lld) moved between the phase and the seal\n",
+            id, nt_type(c->nt, id) ? nt_type(c->nt, id) : "?", (long long)nt_int(c->nt, id, "node_line", 0));
+    order_check_report(was, a, "phase");
+    order_check_report(now, b, "seal");
+  }
+  order_facts_del(now);
+  if (bad) {
+    fprintf(stderr, "spinel: SPINEL_ORDER_CHECK: %d list%s differ%s\n", bad, bad == 1 ? "" : "s", bad == 1 ? "s" : "");
+    exit(1);
+  }
 }

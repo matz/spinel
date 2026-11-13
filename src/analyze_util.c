@@ -1882,11 +1882,56 @@ static int chain_is_lazy_valued_1(Compiler *c, int node) {
    chain in the same scope, return the chain node so a forcing call on the
    variable can fuse it as if written inline; else -1. Models sym_static_value.
    (#2932) */
+/* The local names a lazy chain may be written to: a plain write's value
+   whose receivers lead to a blockless `lazy` call, or to a read of a name
+   of the set (chain_is_lazy_valued's walk, with no scope asked, so more
+   names than it answers for). Rebuilt when the node table changes. The
+   reads asked about name another local nearly always, and the writes of
+   their name, across every method of the program, were walked each time:
+   a 4,000-method program spent more on it than its whole growth in the
+   other passes (#11708). */
+static ANameHash g_lzw_names;
+static const NodeTable *g_lzw_nt;
+static unsigned g_lzw_ver;
+static int g_lzw_cnt = -1;
+static int lzw_value_leads_lazy(const NodeTable *nt, int v, const ANameHash *names) {
+  for (int cur = v, hops = 0; cur >= 0 && hops < 64; hops++) {
+    NodeKind k = nt_kind(nt, cur);
+    if (k == NK_LocalVariableReadNode) {
+      const char *rn = nt_str(nt, cur, "name");
+      return rn && anh_has(names, rn);
+    }
+    if (k != NK_CallNode) return 0;
+    const char *nm = nt_str(nt, cur, "name");
+    if (nm && sp_streq(nm, "lazy") && nt_ref(nt, cur, "block") < 0) return 1;
+    cur = nt_ref(nt, cur, "receiver");
+  }
+  return 0;
+}
+static int lazy_written_name(Compiler *c, const char *vn) {
+  const NodeTable *nt = c->nt;
+  if (g_lzw_nt != nt || g_lzw_ver != nt->version || g_lzw_cnt != nt->count) {
+    anh_free(&g_lzw_names); memset(&g_lzw_names, 0, sizeof g_lzw_names);
+    for (int grew = 1; grew; ) {
+      grew = 0;
+      for (int w = comp_kind_first(c, NK_LocalVariableWriteNode); w >= 0; w = comp_kind_next(c, w)) {
+        const char *wn = nt_str(nt, w, "name");
+        if (!wn || anh_has(&g_lzw_names, wn) || !lzw_value_leads_lazy(nt, nt_ref(nt, w, "value"), &g_lzw_names)) continue;
+        anh_add(&g_lzw_names, wn);
+        grew = 1;
+      }
+    }
+    g_lzw_nt = nt; g_lzw_ver = nt->version; g_lzw_cnt = nt->count;
+  }
+  return anh_has(&g_lzw_names, vn);
+}
 int lazy_alias_chain(Compiler *c, int var_read) {
   const NodeTable *nt = c->nt;
   if (var_read < 0 || nt_kind(nt, var_read) != NK_LocalVariableReadNode) return -1;
   const char *vn = nt_str(nt, var_read, "name");
   if (!vn) return -1;
+  /* (no write of the name can hold a lazy chain: none is the one) */
+  if (!lazy_written_name(c, vn)) return -1;
   Scope *sc = comp_scope_of(c, var_read);
   /* The plain writes first, through the name index: the answer is -1 unless
      there is exactly one, in this scope, whose value is a lazy chain. The

@@ -2,6 +2,7 @@
    (see call_plan.h). */
 
 #include <assert.h>
+#include <limits.h>
 #include "codegen_internal.h"
 #include "codegen_poly.h"
 #include "analyze_internal.h"
@@ -328,59 +329,133 @@ int cplan_object_method_named(Compiler *c, const char *name) {
   }
   return 0;
 }
-/* Does a method of the program's have the name: one of a class's, a
-   class method, a top-level one, or an alias (an_user_defines_method) */
-static int cplan_program_names(Compiler *c, const char *name) {
-  if (an_user_defines_method(c, name)) return 1;
-  for (int si = 1; si < c->nscopes; si++)
-    if (c->scopes[si].name && !c->scopes[si].is_proc_form && sp_streq(c->scopes[si].name, name)) return 1;
-  return 0;
+/* ---- does a call's iterator throw its block's values away? ----
+   A builtin iterator of the each family (is_block_value_dropped_iter) does,
+   on any receiver but an Enumerator, whose each answers what its method
+   does with them (`a.map.each { }`). A method of the program's the call
+   enters does where it never reads one: no yield of its whose value is
+   taken, no super handed its block, and its block parameter, if any, only
+   handed on (`&blk`, `&`) to a call whose iterator throws them away. A
+   method is asked once while nothing changes (Scope.bvi_*, numbered by
+   Compiler.bvi_epoch); a method asked again while it is being asked (a
+   cycle) is taken as throwing them away, an answer kept only where it rests
+   on no method still being asked further out. */
+enum { BVI_BUSY = 1, BVI_DROPS, BVI_READS };
+static int cplan_bvi_call(Compiler *c, int call);
+/* Is method s's block handed on at call n: `&bp`, or a bare `&` where s
+   takes an anonymous one (bp "")? */
+static int cplan_bvi_forwards(const NodeTable *nt, const char *bp, int n) {
+  int b = bp && nt_kind(nt, n) == NK_CallNode ? nt_ref(nt, n, "block") : -1;
+  if (b < 0 || nt_kind(nt, b) != NK_BlockArgumentNode) return 0;
+  int e = nt_ref(nt, b, "expression");
+  return bp[0] ? e >= 0 && nt_kind(nt, e) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, e, "name"), bp) : e < 0;
 }
-/* Does node n of method s's body read a value of s's block: a yield whose
-   value is not thrown away (an_yield_dropped), or a super handed the block
-   (super_forwards_caller_block)? A nested def, class or module is not s's
-   body; a block in it is (its nodes are its method's). */
-static int cplan_body_reads_block(Compiler *c, int s, int n) {
+/* Does node n of method s's body (block parameter bp) throw away every
+   value of s's block it can reach? A nested def, class or module is not
+   s's body; a block in it is (its nodes are its method's). */
+static int cplan_bvi_body(Compiler *c, int s, const char *bp, int n) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, n);
-  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return 0;
-  if ((k == NK_YieldNode && c->nscope[n] == s && !an_yield_dropped(c, n)) || super_forwards_caller_block(c, n)) return 1;
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return 1;
+  if (k == NK_YieldNode && c->nscope[n] == s && !an_value_dropped(c, comp_parent_map(c), n)) return 0;
+  if (super_forwards_caller_block(c, n)) return 0;
+  if (bp && bp[0] && k == NK_LocalVariableReadNode && sp_streq(nt_str(nt, n, "name"), bp)) return 0;
+  int skip = -1;
+  if (cplan_bvi_forwards(nt, bp, n)) {
+    if (!cplan_bvi_call(c, n)) return 0;
+    skip = nt_ref(nt, n, "block");
+  }
   for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) {
     int ch = nt_ref_at(nt, n, i);
-    if (ch >= 0 && cplan_body_reads_block(c, s, ch)) return 1;
+    if (ch >= 0 && ch != skip && !cplan_bvi_body(c, s, bp, ch)) return 0;
   }
   for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
     for (int j = 0; j < m; j++)
-      if (ids[j] >= 0 && cplan_body_reads_block(c, s, ids[j])) return 1;
+      if (ids[j] >= 0 && !cplan_bvi_body(c, s, bp, ids[j])) return 0;
   }
-  return 0;
+  return 1;
 }
-/* Does program method s throw away every value its block answers: it takes
-   no block parameter (`&blk`, `&`) and its body reads none
-   (cplan_body_reads_block)? */
-static int cplan_method_drops_block_values(Compiler *c, int s) {
-  const Scope *sc = &c->scopes[s];
-  return !sc->blk_param && (sc->body < 0 || !cplan_body_reads_block(c, s, sc->body));
+/* Does program method s throw away every value its block answers? A `...`
+   parameter hands the block on unseen. */
+static int cplan_bvi_method(Compiler *c, int s) {
+  const NodeTable *nt = c->nt;
+  Scope *sc = &c->scopes[s];
+  if (sc->bvi_epoch == c->bvi_epoch) {
+    if (sc->bvi_state != BVI_BUSY) return sc->bvi_state == BVI_DROPS;
+    if (sc->bvi_depth < c->bvi_low) c->bvi_low = sc->bvi_depth;
+    return 1;
+  }
+  int prm = sc->def_node >= 0 && nt_kind(nt, sc->def_node) == NK_DefNode ? nt_ref(nt, sc->def_node, "parameters") : -1;
+  int kwr = prm >= 0 ? nt_ref(nt, prm, "keyword_rest") : -1;
+  if (kwr >= 0 && nt_kind(nt, kwr) == NK_ForwardingParameterNode) return 0;
+  int low = c->bvi_low;
+  sc->bvi_epoch = c->bvi_epoch;
+  sc->bvi_state = BVI_BUSY;
+  sc->bvi_depth = ++c->bvi_mdepth;
+  c->bvi_low = INT_MAX;
+  int drops = sc->body < 0 || cplan_bvi_body(c, s, sc->blk_param, sc->body);
+  c->bvi_mdepth--;
+  /* (an answer that took a method further out as throwing them away waits
+     for that method's own) */
+  if (drops && c->bvi_low < sc->bvi_depth) sc->bvi_epoch = 0;
+  else sc->bvi_state = drops ? BVI_DROPS : BVI_READS;
+  if (c->bvi_low >= sc->bvi_depth) c->bvi_low = low;
+  else if (low < c->bvi_low) c->bvi_low = low;
+  return drops;
 }
-/* cplan_block_value_ignored's answer; with program 0, a call the plan
-   binds to a method of the program's takes the block's value */
-static int cplan_block_value_ignored_by(Compiler *c, int call, int program) {
+/* Does every method of the program's the call may enter throw its block's
+   values away, where the plan lists none: each method of the names that
+   hold them (cplan_entries_bound_names) and a method_missing? */
+static int cplan_bvi_named(Compiler *c, int call) {
+  const char *names[3];
+  int nn = cplan_entries_bound_names(c, call, names);
+  names[nn++] = METHOD_MISSING_NAME;
+  for (int i = 0; i < nn; i++)
+    for (int s = an_scopes_named_first(c, names[i]); s >= 1; s = an_scopes_named_next(c, names[i], s))
+      if (!c->scopes[s].is_proc_form && !cplan_bvi_method(c, s)) return 0;
+  return 1;
+}
+static int cplan_bvi_call(Compiler *c, int call) {
   const NodeTable *nt = c->nt;
   const char *name = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
-  if (!name || !is_block_loop_method(name)) return 0;
+  if (!name || !is_block_value_dropped_iter(name)) return 0;
   if (cplan_builtin_call(c, call)) return 1;
   int recv = nt_ref(nt, call, "receiver");
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
-  if (rt == TY_UNKNOWN || rt == TY_POLY) return !cplan_program_names(c, name);
-  CallPlan p = cplan_user_fresh(c, call);
-  if (p.dispatch == CP_DIRECT && p.mi >= 0) return program && cplan_method_drops_block_values(c, p.mi);
-  return p.mi < 0 && p.dispatch == CP_NONE && cplan_reopen_binding(p) < 0;
+  if (rt == TY_ENUMERATOR) return 0;
+  /* (a receiver of no type yet, before inference, has no plan to keep) */
+  int tg[CPT_MAX], n = rt == TY_UNKNOWN ? CPT_UNKNOWN : cplan_entries(c, call, tg, CPT_MAX);
+  if (n == CPT_UNKNOWN) return cplan_bvi_named(c, call);
+  for (int i = 0; i < n; i++)
+    if (tg[i] >= 1 && !cplan_bvi_method(c, tg[i])) return 0;
+  return 1;
 }
 /* See call_plan.h. */
-int cplan_block_value_ignored(Compiler *c, int call) { return cplan_block_value_ignored_by(c, call, 1); }
-/* See call_plan.h. */
-int cplan_builtin_block_value_ignored(Compiler *c, int call) { return cplan_block_value_ignored_by(c, call, 0); }
+int cplan_block_value_ignored(Compiler *c, int call) {
+  /* (the methods' answers stand while no node, type or method has changed
+     since they were found, as infer_type's do, and only while the scope
+     index is frozen: before, a pass may rename a scope, which moves
+     nothing a stamp can read; one ask still asks each method once) */
+  if (c->bvi_calls++ == 0) {
+    const NodeTable *nt = c->nt;
+    unsigned gen = comp_scope_index_gen();
+    if (!comp_scope_index_is_frozen() || c->bvi_stamp.ty != comp_ty_edits || c->bvi_stamp.edits != nt->edits ||
+        c->bvi_stamp.version != nt->version || c->bvi_stamp.nscopes != c->nscopes ||
+        c->bvi_stamp.scope_gen != gen) {
+      c->bvi_epoch++;
+      c->bvi_stamp.ty = comp_ty_edits;
+      c->bvi_stamp.edits = nt->edits;
+      c->bvi_stamp.version = nt->version;
+      c->bvi_stamp.nscopes = c->nscopes;
+      c->bvi_stamp.scope_gen = gen;
+    }
+    c->bvi_low = INT_MAX;
+  }
+  int r = cplan_bvi_call(c, call);
+  c->bvi_calls--;
+  return r;
+}
 /* Is core slot s one of the roots a program's method on a builtin
    receiver is found on, past the builtin's own classes: NilClass, Numeric,
    Object, Kernel, BasicObject? */

@@ -1,8 +1,10 @@
 # A block's last statement is the value of the block, which a method of
 # the program's of an iterator's name may take (`def each = p(yield)`):
 # the builtin each, times, loop, step, upto, downto and each_with_index
-# throw it away, and so does a method of the program's that throws away
-# each of its yields' values (Lines#each below).
+# throw it away (each_char, reverse_each, each_with_object and the rest of
+# the each family too), and so does a method of the program's that throws
+# away each of its yields' values (Lines#each below) or hands its block on
+# only to such an iterator (Held#each), not to one that reads it (Fwd#each).
 
 class Pair
   def to_ary = [1, 2]
@@ -51,7 +53,24 @@ Lines.new(3).each { |i| r << i if i > 0 }
 p r
 Lines.new(1).each { a, b = Pair.new; p [a, b] }
 
+class Held
+  def initialize = @a = [7]
+  def each(&b) = @a.each(&b)
+  def reverse_each(&) = @a.reverse_each(&)
+end
+p Held.new.each { a, b = Pair.new }
+p Held.new.reverse_each { a, b = Pair.new }
+
+class Fwd
+  def each(&b) = Box.new.each(&b)
+  def each_with_index(&) = Box.new.each(&)
+end
+Fwd.new.each { a, b = Pair.new }
+Fwd.new.each_with_index { |x, i| a, b = Pair.new }
+
 # a builtin iterator still answers its receiver
 r = [1, 2].each { |x| x * 2 }
 p r
 p((1..2).each { |x| x })
+p "ab".each_char { |c| a, b = Pair.new }
+p [3].each_with_object([]) { |x, m| a, b = Pair.new }

@@ -1435,7 +1435,7 @@ int *an_parent_map(const NodeTable *nt) {
    (cplan_block_value_ignored), climbing from the node through the places a
    value is passed on (vp_climb, over AN_DROP_CLIMB). parent is c->nt's, or
    a lowering's map of it. */
-static int an_dropped_at(Compiler *c, const int *parent, int node, int program_iterators) {
+int an_value_dropped(Compiler *c, const int *parent, int node) {
   const NodeTable *nt = c->nt;
   VpUp up;
   VpUpKind ended = vp_climb(nt, parent, node, AN_DROP_CLIMB, &up);
@@ -1448,13 +1448,8 @@ static int an_dropped_at(Compiler *c, const int *parent, int node, int program_i
   /* a begin's body beside an else, and an ensure clause, are run for their effect */
   if (vp_up_effect_clause(nt, &up)) return 1;
   int call = vp_up_block_call(nt, parent, &up);
-  return call >= 0 && (program_iterators ? cplan_block_value_ignored(c, call) : cplan_builtin_block_value_ignored(c, call));
+  return call >= 0 && cplan_block_value_ignored(c, call);
 }
-int an_value_dropped(Compiler *c, const int *parent, int node) { return an_dropped_at(c, parent, node, 1); }
-/* Is yield node y's value thrown away (an_value_dropped), where the block
-   it ends in is a builtin iterator's: a program iterator's would ask its
-   method's yields again (cplan_block_value_ignored) */
-int an_yield_dropped(Compiler *c, int y) { return an_dropped_at(c, comp_parent_map(c), y, 0); }
 int an_node_dropped(Compiler *c, int n) {
   return n >= 0 && n < c->nt->count && an_value_dropped(c, comp_parent_map(c), n);
 }

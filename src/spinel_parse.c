@@ -2886,6 +2886,11 @@ int sp_feature_enabled(const char *name) {
 int sp_feature_required(const char *name) {
   return name && sp_req_find(name) >= 0;
 }
+/* How many features the program has required: a set that only grows, so
+   an answer made from them holds while the count stays (bmt_loaded). */
+int sp_features_required_count(void) {
+  return sp_req_feats_n;
+}
 
 /* Feature search roots from `-I <dir>` (like ruby -I). A plain `require "X"`
    that is not a bundled lib or native feature is looked up here, in order, as

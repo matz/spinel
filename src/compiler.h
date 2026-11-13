@@ -33,6 +33,7 @@ int sp_requires_non_boot_feature(void);
 void sp_feature_mark(const char *name);
 int sp_feature_enabled(const char *name);
 int        sp_feature_required(const char *name); /* require was actually written (gate-independent) */
+int        sp_features_required_count(void);
 /* Add a `-I <dir>` feature search root (see resolve_plain_requires). */
 void sp_add_feature_root(const char *dir);
 

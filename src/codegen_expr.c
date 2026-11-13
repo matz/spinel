@@ -2890,7 +2890,8 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
          the method can run on: it is nil, so `||=` answers the value it runs
          (the nil it writes, a frozen receiver refusing the write) and `&&=`
          answers nil without running it. Read as a field, the C named a
-         member the struct does not have. */
+         member the struct does not have.
+         (register_locals now gives `@x ||= v` a slot, so this is mostly the `&&=` form) */
       /* (an instance method's only: a class body's ivar is the class's, its
          storage a civ_ static) */
       else if (cws3 && cws3->class_id >= 0 && !cws3->is_cmethod && !tl3 && comp_ntype(c, v) == TY_NIL &&
@@ -4335,7 +4336,8 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
       for (int kk = 0; kk < nt->count && !res; kk++) {
         NodeKind kt_k = nt_kind(nt, kk);
-        if (kt_k == NK_InstanceVariableWriteNode &&
+        /* `@x ||= v` writes it on its first run, as a plain write does */
+        if ((kt_k == NK_InstanceVariableWriteNode || kt_k == NK_InstanceVariableOrWriteNode) &&
             inm && nt_str(nt, kk, "name") && sp_streq(nt_str(nt, kk, "name"), inm))
           res = "instance-variable";
         /* a reflective `instance_variable_set(:@x, v)` writes it too */

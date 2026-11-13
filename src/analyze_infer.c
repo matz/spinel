@@ -11833,7 +11833,8 @@ TyKind infer_uncached(Compiler *c, int id) {
     int iv = nm ? comp_ivar_index(ci, nm) : -1;
     /* an ivar only nil is written to has no slot (it holds nothing): the
        write answers its value, the nil (`def root = @root ||= nil`, which
-       typed the method void and its caller's `root.nil?` unknown) */
+       typed the method void and its caller's `root.nil?` unknown)
+       (register_locals now gives `@x ||= v` a slot, so this is mostly the `&&=` form) */
     /* (an instance method's only: a class body's ivar is the class's own) */
     if (iv < 0 && nk != NK_InstanceVariableOperatorWriteNode && s->class_id >= 0 && !s->is_cmethod &&
         infer_type(c, nt_ref(nt, id, "value")) == TY_NIL && !infer_ivar_slot_below(c, wcls, nm))

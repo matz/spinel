@@ -1,0 +1,14 @@
+A: inst
+A: two
+C: C-ex:sub
+TypeError: exception class/object expected
+TypeError: exception class/object expected
+A: A-ex:ivar
+C: C-ex:call
+A: A-ex:tern
+A: A-ex:gvar
+A: A-ex:param
+KeyError: param
+A: i2
+nil
+nil

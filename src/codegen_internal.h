@@ -1481,6 +1481,9 @@ int head_held_box(Compiler *c, int node);
    it (an immediate, a pointer the head's temp roots), the box is declared
    without a root of its own. Answers the temp the arm reads. */
 int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, const char *sep, Buf *b);
+/* `recv.equal?(arg)` as the builtin identity, whatever the program
+   defines: both operands boxed, the receiver first, sp_poly_equal */
+void emit_value_identity(Compiler *c, int recv, int arg, Buf *b);
 /* The hold of String `node` that a slot or a container keeps, as its
    handle: `sp_String *_t<t> = SP_STR_HDL(<handle>);` and, when `root`, its
    root, into b. The bytes are taken where the hold is read (SP_STR_B), so

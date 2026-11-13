@@ -11862,9 +11862,6 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
   int ncand = 0;
   const PolyCand *cands = comp_cmethod_candidates(c, "exception", &ncand);
   if (ncand <= 0) return 0;
-  /* the test is the builtin identity: a program's own `equal?` keeps the
-     raise as written */
-  if (raise_name_program_defined(c, "equal?")) return 0;
   int *own = malloc(sizeof(int) * (size_t)ncand);
   if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   /* a class whose method cannot take the call here (a module, a class
@@ -11916,7 +11913,11 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
     else test = nt_clone_subtree(nt, recv);
     int iff = first ? id : nt_new_node(nt, "IfNode"), st = nt_new_node(nt, "StatementsNode");
     nt_node_set_arr(nt, st, "body", &arm, 1);
-    nt_node_set_ref(nt, iff, "predicate", fwd_new_call(nt, test, "equal?", nt_clone_subtree(nt, k)));
+    /* the builtin identity: a program's own `equal?` (on Object, Module,
+       Class or the class itself) does not answer the test */
+    int eq = fwd_new_call(nt, test, "equal?", nt_clone_subtree(nt, k));
+    nt_node_set_int(nt, eq, "builtin_only", 1);
+    nt_node_set_ref(nt, iff, "predicate", eq);
     nt_node_set_ref(nt, iff, "statements", st);
     if (!first) nt_node_set_ref(nt, cur, "subsequent", iff);
     cur = iff;

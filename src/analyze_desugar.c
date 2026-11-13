@@ -7442,6 +7442,12 @@ static void dsn_memo_free(Compiler *c) {
   }
   free(c->dsn.own); free(c->dsn.nown);
   c->dsn.own = NULL; c->dsn.nown = NULL;
+  dsn_inames_free(c->dsn.all, c->dsn.nall);
+  dsn_inames_free(c->dsn.all_any_keys, c->dsn.nall_any);
+  anh_free(&c->dsn.all_seen); memset(&c->dsn.all_seen, 0, sizeof c->dsn.all_seen);
+  anh_free(&c->dsn.all_any); memset(&c->dsn.all_any, 0, sizeof c->dsn.all_any);
+  c->dsn.all = NULL; c->dsn.nall = 0; c->dsn.all_built = 0;
+  c->dsn.all_any_keys = NULL; c->dsn.nall_any = 0;
   c->dsn.names = NULL; c->dsn.n = NULL; c->dsn.ncls = c->dsn.nscp = 0;
   c->dsn.inames = NULL; c->dsn.ninames = 0;
   c->dsn.every = NULL; c->dsn.nevery = 0;
@@ -7579,6 +7585,44 @@ static int dsend_receiver_names(Compiler *c, int cls, int subclasses, char ***ou
   for (int j = 0; j < n; j++) copy[j] = strdup(c->dsn.names[slot][j]);
   *out = copy;
   return n;
+}
+/* The names a send on a receiver of no known kind dispatches over ahead of
+   the program's other names: every class's but a module's
+   (dsend_receiver_names, the class's own), in class order, each at its
+   first class, send's family left out (dsend_add_name), with the set of
+   them (*seen) and the set of every name, send's family among them (*any:
+   what the literals of a send are picked by). The memo's, built once
+   while the pass runs: 1, and the list in *all; 0 with the memo off, when
+   the asker walks the classes itself. Each site walked every class's list
+   through its own set to build this: (classes x names) a site, most of
+   the pass on an application with a few thousand classes. The list is the
+   walk's answer when no class is excluded; a site that excludes some
+   walks as before. */
+static int dsn_all_names(Compiler *c, char ***all, int *n, const ANameHash **seen, const ANameHash **any) {
+  if (!c->dsn.on) return 0;
+  dsn_memo_sync(c);
+  if (!c->dsn.all_built) {
+    int cap = 0, kcap = 0;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (comp_class_is_module(c, &c->classes[k])) continue;
+      char **kn = NULL; int nk = dsend_receiver_names(c, k, 0, &kn);
+      for (int j = 0; j < nk; j++) {
+        dsend_add_name(&c->dsn.all, &c->dsn.nall, &cap, &c->dsn.all_seen, kn[j]);
+        if (anh_has(&c->dsn.all_any, kn[j])) { free(kn[j]); continue; }
+        if (c->dsn.nall_any == kcap) {
+          kcap = kcap ? kcap * 2 : 256;
+          c->dsn.all_any_keys = realloc(c->dsn.all_any_keys, sizeof(char *) * (size_t)kcap);
+          if (!c->dsn.all_any_keys) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        }
+        c->dsn.all_any_keys[c->dsn.nall_any++] = kn[j];
+        anh_add(&c->dsn.all_any, kn[j]);
+      }
+      free(kn);
+    }
+    c->dsn.all_built = 1;
+  }
+  *all = c->dsn.all; *n = c->dsn.nall; *seen = &c->dsn.all_seen; *any = &c->dsn.all_any;
+  return 1;
 }
 /* The names the call plan lists for one class (cplan_list_candidates): its
    defs, the copies of an included module's, its aliases and the readers and
@@ -8419,16 +8463,24 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       TyKind rt = infer_type(c, recv);
       ANameHash answers; memset(&answers, 0, sizeof answers);
       dsend_param_literals(c, dsend_name_local(c, argv[0]), &answers);
-      for (int d = 0; d < c->nclasses && (ty_is_object(rt) || rt == TY_POLY || rt == TY_UNKNOWN); d++) {
-        if (ty_is_object(rt) ? d != ty_object_class(rt) : comp_class_is_module(c, &c->classes[d])) continue;
-        char **rn = NULL; int nrn = dsend_receiver_names(c, d, ty_is_object(rt), &rn);
+      /* (a receiver of no known kind answers every class's names: the memo's set, dsn_all_names) */
+      const ANameHash *all_seen = NULL, *all_any = NULL; char **all = NULL; int nall = 0;
+      if (ty_is_object(rt)) {
+        char **rn = NULL; int nrn = dsend_receiver_names(c, ty_object_class(rt), 1, &rn);
         for (int k = 0; k < nrn; k++) { if (!anh_has(&answers, rn[k])) anh_add(&answers, rn[k]); else free(rn[k]); }
         free(rn);
       }
+      else if ((rt == TY_POLY || rt == TY_UNKNOWN) && !dsn_all_names(c, &all, &nall, &all_seen, &all_any))
+        for (int d = 0; d < c->nclasses; d++) {
+          if (comp_class_is_module(c, &c->classes[d])) continue;
+          char **rn = NULL; int nrn = dsend_receiver_names(c, d, 0, &rn);
+          for (int k = 0; k < nrn; k++) { if (!anh_has(&answers, rn[k])) anh_add(&answers, rn[k]); else free(rn[k]); }
+          free(rn);
+        }
       for (int k = 0; k < nlit; k++)
-        if (anh_has(&answers, lits[k])) picked[npick++] = lits[k];
+        if (anh_has(&answers, lits[k]) || (all_any && anh_has(all_any, lits[k]))) picked[npick++] = lits[k];
       for (int k = 0; k < nlit && npick < 256; k++)
-        if (!anh_has(&answers, lits[k])) picked[npick++] = lits[k];
+        if (!anh_has(&answers, lits[k]) && !(all_any && anh_has(all_any, lits[k]))) picked[npick++] = lits[k];
       for (int k = 0; k < answers.n; k++) free((char *)answers.key[k]);
       anh_free(&answers);
       use = picked; nuse = npick;
@@ -8448,7 +8500,17 @@ static int desugar_dynamic_send_inner(Compiler *c) {
            (cls_fact_excludes): on `Object.const_get(x).new(req)` those
            that take `req`, not every class's (each arm costs code, and
            keeps the methods it reaches) */
-        for (int k = 0; k < c->nclasses; k++) {
+        int excl = 0;
+        for (int k = 0; k < c->nclasses && !excl; k++)
+          excl = !comp_class_is_module(c, &c->classes[k]) && cls_fact_excludes(c, recv, k);
+        char **all = NULL; int nall = 0; const ANameHash *all_seen = NULL, *all_any = NULL;
+        if (!excl && dsn_all_names(c, &all, &nall, &all_seen, &all_any)) {
+          /* no class excluded: the walk below's answer, kept from site to site (dsn_all_names) */
+          own = realloc(own, sizeof(char *) * (size_t)(nown + nall > 0 ? nown + nall : 1)); cap = nown + nall;
+          for (int j = 0; j < nall; j++) own[nown++] = strdup(all[j]);
+          anh_copy(&seen, all_seen);
+        }
+        else for (int k = 0; k < c->nclasses; k++) {
           if (comp_class_is_module(c, &c->classes[k])) continue;
           if (cls_fact_excludes(c, recv, k)) continue;
           char **kn = NULL; int nk = dsend_receiver_names(c, k, 0, &kn);
@@ -8513,13 +8575,18 @@ static int desugar_dynamic_send_inner(Compiler *c) {
         /* a receiver whose type is not settled yet may hold an object of
            the program as well: its classes' methods are arms too, as for a
            receiver of no known kind */
-        if (dsend_recv_unsettled(c, recv, 0))
-          for (int k = 0; k < c->nclasses; k++) {
+        if (dsend_recv_unsettled(c, recv, 0)) {
+          /* (every class's names, in the order the walk gave them: dsn_all_names) */
+          char **all = NULL; int nall = 0; const ANameHash *all_seen = NULL, *all_any = NULL;
+          if (dsn_all_names(c, &all, &nall, &all_seen, &all_any))
+            for (int j = 0; j < nall; j++) dsend_add_name(&own, &nown, &cap, &seen, all[j]);
+          else for (int k = 0; k < c->nclasses; k++) {
             if (comp_class_is_module(c, &c->classes[k])) continue;
             char **kn = NULL; int nk = dsend_receiver_names(c, k, 0, &kn);
             for (int j = 0; j < nk; j++) { dsend_add_name(&own, &nown, &cap, &seen, kn[j]); free(kn[j]); }
             free(kn);
           }
+        }
         anh_free(&seen);
         if (nown == 0) continue;
       }

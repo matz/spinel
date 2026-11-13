@@ -1146,6 +1146,7 @@ int anh_has(const ANameHash *st, const char *nm);
 int anh_find(const ANameHash *st, const char *nm);   /* insertion index, or -1 */
 void anh_add(ANameHash *st, const char *nm);
 void anh_free(ANameHash *st);
+void anh_copy(ANameHash *dst, const ANameHash *src);   /* dst, empty, takes src's names (keys shared) */
 void cr_class_only_names(Compiler *c, ANameHash *out);   /* the names only plain classes' methods hold */
 /* The block-passing call sites, and the supers, of the node table, indexed
    for yield_value_type and its kin (yvt_build, analyze_util.c): built once

@@ -4051,7 +4051,7 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
   }
   /* a module's: its own and its includes' */
   if (comp_class_is_module(c, &c->classes[ci])) {
-    if (si >= 0 || !an_module_methods_listable(c, ci, name)) return 0;
+    if (si >= 0 || !cplan_module_listable(c, ci, name)) return 0;
     ReflNames r = {0};
     refl_at(&r, id, ci, 0);
     refl_module_instance_methods(c, ci, prot, &r);
@@ -4550,7 +4550,7 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
     refl_at(&r, id, ci2, CT_OWN);
     /* a module's own: what it answers for itself, not what an
        include copied in */
-    if (comp_class_is_module(c, &c->classes[ci2]) && an_module_methods_listable(c, ci2, name))
+    if (comp_class_is_module(c, &c->classes[ci2]) && cplan_module_listable(c, ci2, name))
       refl_module_own_methods(c, ci2, im_pub, im_prot, im_priv, &r);
     else
       refl_own_instance_methods(c, ci2, im_pub, im_prot, im_priv, 0, &r);
@@ -4576,7 +4576,7 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
       if (!cv[k]) continue;
       ReflNames r = {0};
       refl_at(&r, id, k, CT_OWN);
-      if (comp_class_is_module(c, &c->classes[k]) && an_module_methods_listable(c, k, name))
+      if (comp_class_is_module(c, &c->classes[k]) && cplan_module_listable(c, k, name))
         refl_module_own_methods(c, k, im_pub, im_prot, im_priv, &r);
       else
         refl_own_instance_methods(c, k, im_pub, im_prot, im_priv, 0, &r);

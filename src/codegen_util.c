@@ -740,11 +740,17 @@ int subtree_may_allocate(const NodeTable *nt, int id) {
    rule made the handle) renders as a fresh copy of the live buffer, not as
    the slot itself. A read marked to hand out the handle (strbuf_box)
    copies nothing. The checks are strbuf_slot_text's, without the emission
-   it does, on the read inside any parentheses (`(a) == b`). */
+   it does, on the read inside any parentheses (`(a) == b`). A node the
+   binder ran into a temp first answers no: reading its temp allocates
+   nothing, though its evaluation did (subtree_may_allocate asks that). */
 int operand_may_allocate(Compiler *c, int id) {
+  int inner = nt_paren_single(c->nt, id);
+  /* a node the binder ran into a temp first is read as that temp, which
+     allocates nothing, whatever its subtree does */
+  if (view_ran_first(id) || (inner >= 0 && view_ran_first(inner))) return 0;
   if (subtree_may_allocate(c->nt, id)) return 1;
-  id = nt_paren_single(c->nt, id);
-  if (id < 0 || view_ran_first(id) || repr_of(c, id).handle) return 0;
+  id = inner;
+  if (id < 0 || repr_of(c, id).handle) return 0;
   if (strbuf_local_name(c, id)) return 1;
   if (repr_self_shared(c, id)) return 1;
   if (repr_static_read_kind(nt_kind(c->nt, id)) && repr_of(c, id).share) return 1;

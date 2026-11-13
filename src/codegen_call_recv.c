@@ -18811,8 +18811,12 @@ static int emit_poly_scan_block(Compiler *c, int id, Buf *b, const NodeTable *nt
    Hold even plain reads before later arguments can reassign their slots. */
 static void emit_poly_str_transform(Compiler *c, int recv, int argc, const int *argv,
                                     const char *name, const char *fn, unsigned int_args, Buf *b) {
-  int alloc = operand_may_allocate(c, recv);
-  for (int i = 0; i < argc; i++) alloc += operand_may_allocate(c, argv[i]);
+  /* The count is of the operands' evaluations: one an outer binding ran
+     already is its temp, which allocates nothing to read, but its
+     evaluation did, and a read left in place beside it (`$pat` before a
+     later `x.rebind` argument) is held before the others run. */
+  int alloc = subtree_may_allocate(c->nt, recv) || operand_may_allocate(c, recv);
+  for (int i = 0; i < argc; i++) alloc += subtree_may_allocate(c->nt, argv[i]) || operand_may_allocate(c, argv[i]);
   /* a boxed String argument's check can raise TypeError: the receiver's
      NoMethodError is asked first, as CRuby asks it before the call */
   for (int i = 0; i < argc; i++)

@@ -8754,9 +8754,13 @@ static int desugar_dynamic_method_inner(Compiler *c) {
     /* the builtin's own (a program `method`'s super, builtin_only): its arms
        are the builtin's too, whatever the class defines */
     int bonly = cplan_builtin_call(c, id);
-    if ((cls < 0 && rt != TY_POLY) || (own_method && !bonly)) continue;
+    /* a class receiver (`self.method(name)` in a `def self.`, doorkeeper's
+       `Token.from_request`) answers its own class methods, as its send does */
+    int class_recv = rt == TY_CLASS ? dsend_class_recv(c, id, recv) : -1;
+    if (class_recv >= 0) own_method = comp_cmethod_in_chain(c, class_recv, "method", NULL) >= 0;
+    if ((cls < 0 && rt != TY_POLY && class_recv < 0) || (own_method && !bonly)) continue;
     char **own = NULL;
-    int nown = dsend_receiver_names(c, cls, 1, &own), base = nt->count;
+    int nown = class_recv >= 0 ? dsend_class_names(c, class_recv, &own) : dsend_receiver_names(c, cls, 1, &own), base = nt->count;
     int *arms = (int *)malloc(sizeof(int) * (size_t)(nown > 0 ? nown : 1));
     for (int k = 0; k < nown; k++) {
       int sym = nt_new_node(nt, "SymbolNode"), na = nt_new_node(nt, "ArgumentsNode");

@@ -23021,6 +23021,11 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent);
     buf_puts(b, "{ ");
     emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, "; ");
+    /* A receiver that can be nil is NULL here: CRuby's `acc.work ||= 1`
+       on nil raises NoMethodError for the reader, and the slot reads below
+       would dereference the NULL. (`acc&.work ||= 1` was rewritten into a
+       nil test around a plain one by desugar_safe_nav_attr_write_at.) */
+    if (!recv_never_nil(c, recv)) nil_recv_check(attr, tr, b);
     /* The receiver is a typed object pointer, so the slot is read through
        it, and the guard is the ivar's own: a pointer-backed attribute that
        was never assigned is NULL, not truthy (#5428). */

@@ -1,0 +1,30 @@
+0 or undefined method 'v' for nil
+0 and undefined method 'v' for nil
+0 or value undefined method 'v' for nil
+1 or undefined method 'v' for nil
+1 and undefined method 'v' for nil
+1 or value undefined method 'v' for nil
+2 or undefined method 'v' for nil
+2 and undefined method 'v' for nil
+2 or value undefined method 'v' for nil
+3 or undefined method 'v' for nil
+3 and undefined method 'v' for nil
+3 or value undefined method 'v' for nil
+4 or undefined method 'v' for nil
+4 and undefined method 'v' for nil
+4 or value undefined method 'v' for nil
+Both undefined method 'v' for nil
+Both value undefined method 'v' for nil
+ReadAttr undefined method 'v' for nil
+ReadAttr value undefined method 'v' for nil
+WriteAttr undefined method 'v' for nil
+Priv undefined method 'v' for nil
+NoReader undefined method 'v' for nil
+NoReader value undefined method 'v' for nil
+Both#v=
+3
+4
+4
+5
+private method 'v' called for an instance of Priv
+after

@@ -6792,13 +6792,15 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
   }
 
   /* array.zip(other) { |a, b| ... } -- block form, returns nil */
-  if (is_zip_name(name) && (ty_is_array(rt) || rt == TY_POLY) && block >= 0) {
+  /* (an Array of one class, narrow_object_arrays, is walked as a typed one:
+     its element read as its sp_X *, nil past its end) */
+  if (is_zip_name(name) && (ty_is_array(rt) || ty_is_obj_array(rt) || rt == TY_POLY) && block >= 0) {
     int zargs_n = nt_ref(nt, id, "arguments");
     int zargc = 0; const int *zargv = zargs_n >= 0 ? nt_arr(nt, zargs_n, "arguments", &zargc) : NULL;
     /* The receiver, too, can be an array only at run time (a row read out of a
        poly table): walk it through the boxed accessors. Without this the call
        fell to the runtime dispatch, which has no zip arm at all. */
-    int recv_poly = !ty_is_array(rt);
+    int recv_poly = !ty_is_array(rt) && !ty_is_obj_array(rt);
     const char *k = recv_poly ? "Poly" : array_iter_kind(rt);
     int zsplat = nt_argv_has_splat(nt, zargv, zargc);
     if (k && (zargc != 1 || zsplat)) {
@@ -6807,14 +6809,15 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
     }
     if (k && zargc == 1 && zargv) {
       TyKind a0t = repr_of(c, zargv[0]).as_ty;
-      const char *k2 = ty_is_array(a0t) ? array_iter_kind(a0t) : NULL;
+      int a0_typed = ty_is_array(a0t) || ty_is_obj_array(a0t);
+      const char *k2 = a0_typed ? array_iter_kind(a0t) : NULL;
       /* The other operand may be an array only at run time (a poly element of
          a table of rows). Read it through the boxed accessor rather than
          handing an sp_RbVal to the typed one. */
       int arg_poly = (k2 == NULL);
       if (!k2) k2 = k;
       TyKind et = recv_poly ? TY_POLY : ty_array_elem(rt);
-      TyKind et2 = ty_is_array(a0t) ? ty_array_elem(a0t) : (arg_poly ? TY_POLY : et);
+      TyKind et2 = a0_typed ? ty_array_elem(a0t) : (arg_poly ? TY_POLY : et);
       const char *p1n = block_param_name(c, block, 1); if (p1n) p1n = rename_local(p1n);
       int t = ++g_tmp;
       Buf rb; memset(&rb, 0, sizeof rb);
@@ -6842,7 +6845,7 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         /* (a receiver or operand the block may rebind is read once: the
            walk is over the objects the call was made with) */
         hoist_loop_recv_as(c, rt, &rb, b, indent, !hcv_node_stable(c, body, block, recv));
-        if (ty_is_array(a0t)) hoist_loop_recv_as(c, a0t, &ob, b, indent, !hcv_node_stable(c, body, block, zargv[0]));
+        if (a0_typed) hoist_loop_recv_as(c, a0t, &ob, b, indent, !hcv_node_stable(c, body, block, zargv[0]));
       }
       /* An operand that is no typed array is taken as CRuby's block zip
          takes it, once ahead of the walk (sp_zip_block_arg, as

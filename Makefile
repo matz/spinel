@@ -4606,6 +4606,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	awk '/^struct sp_Bin_s \{/,/^\}/' "$$tmp/oar.c" | grep -Fq 'sp_PtrArray * iv_cells;' || { echo "infer-test: FAIL (a reduce or an inject over an Array of one class kept it boxed)"; ok=0; }; \
 	$(SPINEL) test/is_a_user_class_guard_narrows.rb -c --no-line-map -o "$$tmp/iug.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (is_a_user_class_guard_narrows: -c)"; ok=0; }; \
 	grep -q 'sp_Int_tag((sp_Int \*)(sp_Int \*)sp_poly_unbox_cls(lv_x' "$$tmp/iug.c" || { echo "infer-test: FAIL (is_a?(Int) left a guarded call on a user class in boxed dispatch)"; ok=0; }; \
+	$(SPINEL) test/obj_array_zip_narrows.rb -c --no-line-map -o "$$tmp/oaz.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile obj_array_zip_narrows)"; exit 1; }; \
+	[ "$$(awk '/^struct sp_Layer_s \{/,/^\}/' "$$tmp/oaz.c" | grep -c 'sp_PtrArray \* iv_')" = 2 ] || { echo "infer-test: FAIL (a zip over an Array of one class, as receiver or operand, kept it boxed)"; ok=0; }; \
 	$(SPINEL) test/object_method_ivar_receivers.rb -c --no-line-map -o "$$tmp/oir.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_method_ivar_receivers: -c)"; ok=0; }; \
 	grep -q 'static sp_PointValue sp_PointValue_new(' "$$tmp/oir.c" && ! grep -q 'iv_unused;' "$$tmp/oir.c" || { echo "infer-test: FAIL (an Object setter changes unrelated layouts)"; ok=0; }; \
 	$(SPINEL) test/hash_store_boxed_unbounded.rb -c --no-line-map -o "$$tmp/hbu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_store_boxed_unbounded: -c)"; ok=0; }; \

@@ -1563,6 +1563,22 @@ static void nf_bind_block(NF *f, int id, int blk, int mi, int **yields, int *nyi
   else {
     /* a builtin iteration: its elements, where they can be nil */
     nf_bind_elems(f, id, blk);
+    /* a zip over object arrays binds the receiver's element first, nil
+       where the receiver can hold one, and the operand's second, nil past
+       the operand's end too (as the boxed ones are) */
+    int za = cn && is_zip_name(cn) ? nt_ref(nt, id, "arguments") : -1, zn = 0;
+    const int *zv = za >= 0 ? nt_arr(nt, za, "arguments", &zn) : NULL;
+    int zr = zn == 1 ? nt_ref(nt, id, "receiver") : -1;
+    if (zr >= 0 && ty_is_obj_array(comp_ntype(c, zr)) && nf_elem(f, zr, 0)) {
+      LocalVar *lv = nf_block_param(f, blk, 0);
+      if (lv && nf_open(lv->obj_may_nil) && (nf_tracked(c, lv->type) || lv->type == TY_POLY))
+        nf_set(f, &lv->obj_may_nil, NFW_ELEM_NIL);
+    }
+    if (zn == 1 && ty_is_obj_array(comp_ntype(c, zv[0]))) {
+      LocalVar *lv = nf_block_param(f, blk, 1);
+      if (lv && nf_open(lv->obj_may_nil) && (nf_tracked(c, lv->type) || lv->type == TY_POLY))
+        nf_set(f, &lv->obj_may_nil, NFW_NIL);
+    }
     return;
   }
   if (!all && acc < 0) nf_bind_yield_elems(f, id, blk, mi, from_recv, yields, nyields);

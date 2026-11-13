@@ -5545,9 +5545,14 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
        value, an `is_a?` or `<=` it defines, can answer), then for a class K
        `t <= K` (K itself or a class below it, which inherits its singleton
        send) and for a module K `t.equal?(K)` (K's singleton methods are K's
-       own: a class including K does not have them) */
+       own: a class including K does not have them). Every call of
+       the test is marked builtin: the compiler wrote them, and a program's
+       own method of the name must not answer them. A module owner's
+       `self.equal?` and a value's own `is_a?` answered them, and so
+       sent the call to the wrong arm; `===` and `<=` are marked as the
+       rest are, with no answer of a program's observed. */
     int test;
-    if (i < nown) test = fwd_new_call(nt, tr, "is_a?", kc);
+    if (i < nown) { test = fwd_new_call(nt, tr, "is_a?", kc); nt_mark_builtin_call(nt, test); }
     else {
       int tr2 = nt_new_node(nt, "LocalVariableReadNode");
       nt_node_set_str(nt, tr2, "name", tname); nt_node_set_int(nt, tr2, "depth", 0);
@@ -5555,6 +5560,7 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
       nt_node_set_str(nt, mod, "name", "Module");
       int isc = fwd_new_call(nt, mod, "===", tr);
       int same = fwd_new_call(nt, tr2, comp_class_is_module(c, &c->classes[cls]) ? "equal?" : "<=", kc);
+      nt_mark_builtin_call(nt, isc); nt_mark_builtin_call(nt, same);   /* the program's own `self.equal?` or `self.<=` is not asked */
       int an = nt_new_node(nt, "AndNode");
       nt_node_set_ref(nt, an, "left", isc); nt_node_set_ref(nt, an, "right", same);
       test = an;

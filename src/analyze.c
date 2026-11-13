@@ -18061,6 +18061,28 @@ static char *oa_walk_disc(Compiler *c, int nc) {
     int bn = 0; const int *bl = nt_arr(nt, body, "body", &bn);
     if (bn > 0 && bl[bn - 1] >= 0 && bl[bn - 1] < nc) walk_disc[bl[bn - 1]] = 1;
   }
+  /* The lambda desugar_block_capture_wrap wraps a block's body in, called
+     at once (`{ |s| ->(__cap_s) { body }.call(s) }`), answers that body's
+     last statement as the block's value: where the call's value is thrown
+     away, so is the statement's. A walk ending such a body read as handed on,
+     and a builtin walk's block wrapped this way kept the walked Array boxed
+     (`a.each { |s| b.each { |d| s.v += d.v } }` wraps once any class of the
+     program defines a yielding `each`). Wrappers nest, so to a fixpoint. */
+  for (int again = 1; again; ) {
+    again = 0;
+    for (int id = 0; id < nt->count && id < nc; id++) {
+      if (!walk_disc[id] || nt_kind(nt, id) != NK_CallNode) continue;
+      int lam = nt_ref(nt, id, "receiver");
+      if (lam < 0 || nt_kind(nt, lam) != NK_LambdaNode || !nt_int(nt, lam, "cap_iife", 0)) continue;
+      int lb = nt_ref(nt, lam, "body");
+      if (lb < 0 || nt_kind(nt, lb) != NK_StatementsNode) continue;
+      int bn = 0; const int *bl = nt_arr(nt, lb, "body", &bn);
+      if (bn > 0 && bl[bn - 1] >= 0 && bl[bn - 1] < nc && !walk_disc[bl[bn - 1]]) {
+        walk_disc[bl[bn - 1]] = 1;
+        again = 1;
+      }
+    }
+  }
   /* tail[s]: the last statement of method s, or -1 */
   int ns = c->nscopes ? c->nscopes : 1;
   int *tail = (int *)malloc(sizeof(int) * (size_t)ns);

@@ -245,7 +245,10 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    runs ahead of); ML_ENTRY, the scope of an entry (or the copies' entry)
    whose cells tell at run time; ML_NONE, no method, or a call the record
    proves runs before every version (and the builtin an entry's else arm
-   pins); ML_TABLE, the record gave no proof and the answer is the table's
+   pins); ML_OBJECT, a call on main's ask (CT_TOP) that meets a version of
+   Object's (ct_top_chain): no method of its own, as the call's ask on
+   Object binds it, with self as receiver; ML_TABLE, the record gave no
+   proof and the answer is the table's
    last definition, for the reason in why. n: how many versions the call's
    window reaches (elab_method_span), 0 when no window was asked, -1 when
    the answer is the table's for want of a version or an entry, or because
@@ -255,13 +258,15 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    the class whose table holds the method, written only where one is found,
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
-   the class a super's lookup started from, written by those two only. Only
-   cplan_resolve_super, cplan_presence and cplan_main_singleton_call read
-   kind, and nothing reads why yet. ML_SINGLETON: a call on main that main's
-   own singleton answers by the core's method it has from the start (`to_s`,
-   `inspect`: elab_main_singleton_at), ahead of Object's table; no method of
-   the program's. */
-typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE, ML_SINGLETON } MlKind;
+   the class a super's lookup started from, written by those two only.
+   kind is read by cplan_resolve_super, cplan_presence, cplan_implied_target,
+   cplan_boxed_to_ary_classes and cplan_main_singleton_call, and ML_OBJECT by
+   cplan_missing and method_obj_lookup; why only by the method-table check
+   (mtab_table). ML_SINGLETON: a call on main that main's own singleton
+   answers by the core's method it has from the start (`to_s`, `inspect`:
+   elab_main_singleton_at), ahead of Object's table; no method of the
+   program's. */
+typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
    with no version, and no entry (MANY); a version the plan cannot map
@@ -1109,9 +1114,17 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
    builtin classes and modules in its chain otherwise (refl_builtin_vis);
    with inherit 0 its own only. For Object itself, main's own method of
    the name where node runs counts first (elab_main_method_vis_at): a
-   top-level def is Object's. 0 for none; -1 where the rows do not hold
-   the class. */
+   top-level def is Object's; where main's history and Object's are one
+   entry, its later version (cplan_program_method_vis), an alias in Object
+   of a builtin's name among them. 0 for none; -1 where the rows do not
+   hold the class. */
 int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit);
+/* The visibility (SP_VIS_*) a reflection call node that finds program
+   method m of class ci (its own, or along its chain with inherit) reads:
+   for Object's reopening, where main's history of m and Object's are one
+   entry (elab_main_object_one_entry), the later version of either, as the
+   load record orders them; else the class's table's. */
+int cplan_program_method_vis(Compiler *c, int node, int ci, const char *m, int inherit);
 /* The raise of call id's dispatch on self from class cid when cid's chain
    holds no method of its name and only descendants do: the switch's arms
    are theirs, and self of any other class (cid's own instance, a

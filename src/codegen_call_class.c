@@ -589,6 +589,16 @@ int core_method_vis(const char *cls, const char *m, int inherit, const char **ow
   return 0;
 }
 
+/* The SP_VIS_* of a core_method_vis bit (1 public, 2 protected, 4
+   private); -1 for none (0 or -1) */
+int core_vis_of_bit(int bit) {
+  return bit == 4 ? SP_VIS_PRIVATE : bit == 2 ? SP_VIS_PROTECTED : bit == 1 ? SP_VIS_PUBLIC : -1;
+}
+/* ...and core_method_vis's bit of SP_VIS_* vis; -1 for none */
+int core_bit_of_vis(int vis) {
+  return vis == SP_VIS_PRIVATE ? 4 : vis == SP_VIS_PROTECTED ? 2 : vis == SP_VIS_PUBLIC ? 1 : -1;
+}
+
 int core_method_undefined(const char *cls, const char *m) {
   return cls && m && core_own_vis(cls, strlen(cls), m, NULL) == CORE_VIS_UNDEF;
 }
@@ -1335,8 +1345,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (bv >= 0) {
         int yes = ((bv & 1) && md_pub) || ((bv & 2) && md_prot) || ((bv & 4) && md_priv);
         if (found) {
-          int v = inherit ? comp_method_vis_in_chain(c, ci, qm)
-                          : comp_method_vis(&c->classes[ci], qm);
+          int v = cplan_program_method_vis(c, id, ci, qm, inherit);
           yes = (v == SP_VIS_PUBLIC && md_pub) || (v == SP_VIS_PROTECTED && md_prot) ||
                 (v == SP_VIS_PRIVATE && md_priv);
         }

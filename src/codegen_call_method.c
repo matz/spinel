@@ -2401,6 +2401,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     if (self_rooted) buf_printf(b, "_t%d", self_tmp);
     else if (recv >= 0 && repr_of(c, recv).as_ty == TY_CLASS) buf_puts(b, "NULL");
     else if (recv >= 0) { buf_puts(b, "(void *)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
+    /* (on main, Object's method binds main: ML_OBJECT, method_obj_lookup) */
+    else if (self_bound && self_is_main_raw(c, id)) { buf_puts(b, "sp_main_self().v.p"); self_kind = "SP_BM_SELF_MAIN"; }
     else if (self_bound) { buf_printf(b, "(void *)%s", g_self); self_kind = "SP_BM_SELF_OBJ"; }
     else buf_puts(b, "NULL");
     buf_printf(b, ", %s, ", self_kind);

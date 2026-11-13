@@ -83,6 +83,7 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg);
 #define SP_BM_SELF_STR  2
 #define SP_BM_SELF_SYM  4   /* a Symbol, held as its id: boxed back as a Symbol, not an Integer */
 #define SP_BM_SELF_BOOL 3   /* true or false, held as 1 or 0: no reference either, but a value #receiver answers */
+#define SP_BM_SELF_MAIN 5   /* main, the top level's self (sp_main_obj, a root of its own): boxed back as sp_main_self() */
 /* How the legacy sp_int C return is boxed back into a Ruby value. Any method
    whose C return fits the register records its kind here: a plain Integer, a
    `const char *` String, a nullable `sp_Bigint *`, a void/nil, a bool, a
@@ -303,6 +304,7 @@ static inline sp_RbVal sp_bm_self_boxed(const sp_BoundMethod *m) {
     case SP_BM_SELF_STR:  return sp_box_str((const char *)m->self);
     case SP_BM_SELF_BOOL: return sp_box_bool((sp_bool)(uintptr_t)m->self);
     case SP_BM_SELF_SYM:  return sp_box_sym((sp_sym)(uintptr_t)m->self);
+    case SP_BM_SELF_MAIN: return sp_main_self();
     default:              return sp_box_int((sp_int)(uintptr_t)m->self);
   }
 }

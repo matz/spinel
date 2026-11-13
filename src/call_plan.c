@@ -1284,8 +1284,8 @@ static int ct_entry_of(const Compiler *c, int guard, int rcls, int sg, const cha
   int i = ver_entry_ix(c, guard, 0, rcls, sg, name, ar);
   return i >= 0 ? c->ver_entries[i].scope : -1;
 }
-static void ver_cell_name(int hist, char out[32]) {
-  snprintf(out, 32, "$__spinel_ver_%d", hist + 1);
+static void ver_cell_name(int cell, char out[32]) {
+  snprintf(out, 32, "$__spinel_ver_%d", cell + 1);
 }
 /* The name of the cell a later prepend's statement sets (Scope.mixin_guarded) */
 void ver_prepend_cell_name(int cell, char out[32]) {
@@ -1438,8 +1438,8 @@ static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32
          pre-prepend fallback selected by a module definition's cell. */
       if (c->scopes[s].mixin_guarded) continue;
       if (arm) {
-        ver_cell_name(vs[i].hist, sel[n]);
-        arm[n] = (DispArm){ sel[n], vs[i].n, name, vs[i].hist + 1 };
+        ver_cell_name(vs[i].cell, sel[n]);
+        arm[n] = (DispArm){ sel[n], vs[i].n, name, vs[i].cell + 1 };
       }
       to[n++] = s;
     }
@@ -1500,6 +1500,14 @@ int cplan_pinned(const Compiler *c, int id) { return ct_pin_of(c, id) != -1; }
    holds no such method: the call's top-level ask (CT_TOP) binds it. */
 static int ct_top_version(const Compiler *c, int vi, unsigned flags) {
   return !(flags & CT_TOP) && c->scopes[vi].class_id < 0;
+}
+/* The class whose chain holds the versions a call on main (CT_TOP) meets
+   of `name` on side sg: Object's, where main's top-level history and
+   Object's are one entry of its table (elab_main_object_one_entry), whose
+   entry the call then takes with main as self; else main's own (-1) */
+static int ct_top_chain(Compiler *c, const char *name, int sg) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  return !sg && oc >= 0 && elab_main_object_one_entry(c, name) ? oc : -1;
 }
 /* (mixed through the multiply and shifts of a finalizer: the keys run over
    small ranges, and the sum or xor of their products fell in long runs) */
@@ -2270,7 +2278,7 @@ static int ct_builtin_versions_holder(Compiler *c, int rcls, const char *name) {
    copies' entry, whose n is 2; kind and why (MethodLookup). */
 static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n);
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, MethodLookup *ml) {
-  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
+  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? ct_top_chain(c, name, sg) : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
   /* (a program class under a reopened builtin that holds every version: the builtin's chain) */
   { int bh = !sg && rcls >= 0 ? ct_builtin_versions_holder(c, rcls, name) : -1; if (bh >= 0) rcls = bh; }
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
@@ -2387,8 +2395,17 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     if (!n) ml->n = -1;
     return mi;
   }
-  if (ct_top_version(c, vi, flags)) {
+  /* (a capture on Object's chain takes it: `Object.instance_method(:m)`
+     names the one entry, Object's, whichever history defined it) */
+  if (ct_top_version(c, vi, flags) && !(flags & CT_CAPTURE)) {
     ml->kind = ML_NONE;
+    return -1;
+  }
+  /* (and the other way: a method of Object's, or its entry, that a call
+     on main meets along Object's chain is bound by the call's ask on
+     Object, which passes main as self) */
+  if (rcls >= 0 && (flags & CT_TOP) && c->scopes[vi].class_id >= 0) {
+    ml->kind = ML_OBJECT;
     return -1;
   }
   if (!(flags & CT_TOP)) ml->def_class = dc;
@@ -2493,7 +2510,7 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   if (!(flags & (CT_CMETHOD | CT_TOP)) || !elab_method_versions(c, name)) return 0;
   /* (a capture that cannot state the NameError keeps the table's method
      on a chain a method body makes a version on, as in ct_version_at) */
-  int rcls = flags & CT_TOP ? -1 : cls, sg = (flags & CT_CMETHOD) != 0, first_def = 0, body = 0, cl = 0;
+  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? ct_top_chain(c, name, sg) : cls, first_def = 0, body = 0, cl = 0;
   if (ct_capture_keeps_table(c, id, rcls, sg, name, flags, 0) && (ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), body))
     return 0;
   /* CT_OWN asks of the method the tables hold as cls's own (mi): for its
@@ -2614,7 +2631,7 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
   for (int i = 0; i < nv; i++) {
     if (vs[i].v->kind == LR_REMOVE || vs[i].v->kind == LR_UNDEF) return 0;
     if (!include_all && vs[i].v->vis != SP_VIS_PUBLIC) continue;
-    ver_cell_name(vs[i].hist, out->cell[out->n]);
+    ver_cell_name(vs[i].cell, out->cell[out->n]);
     out->val[out->n++] = vs[i].n;
   }
   /* (with none live, what the call runs: the entry's else arm) */
@@ -3635,8 +3652,9 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   int cm = ci >= 0 && call_target(c, -1, ci, name, CT_CMETHOD, NULL) >= 0;
   int top = (ci < 0 || recv < 0) && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0;
   int oc = top && ci < 0 ? comp_core_class(c, CORE_OBJECT) : -1;
+  MethodLookup tl = { .def_class = -1 };   /* (ML_OBJECT: Object's method answers the call) */
   if ((!cm && !top) || (cm && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) ||
-      (top && call_target(c, id, -1, name, CT_TOP, NULL) >= 0))
+      (top && (call_target(c, id, -1, name, CT_TOP, &tl) >= 0 || tl.kind == ML_OBJECT)))
     return CM_NONE;
   /* (a call on main that main's own method does not answer where it runs,
      removed or not yet defined, reaches Object's chain: ct_lookup) */
@@ -4052,14 +4070,31 @@ int cplan_capture_misses(Compiler *c, int id, int k, const char *sym) {
   if (framed) elab_plan_leave(c);
   return live;
 }
+/* The visibility (SP_VIS_*) of program method m of Object's reopening ci
+   where reflection call node runs, when main's history of m and Object's
+   are one entry (elab_main_object_one_entry): the later version of either
+   answers, as the load record orders them. -1 for any other class or name,
+   and where the record cannot answer (the class's table does then). */
+static int cplan_object_entry_vis(Compiler *c, int node, int ci, const char *m) {
+  if (ci < 0 || ci != comp_core_class(c, CORE_OBJECT) || !elab_main_object_one_entry(c, m)) return -1;
+  return elab_method_vis_at(c, ci, m, 0, elab_point_of(c, node));
+}
 /* See call_plan.h. */
 int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit) {
   const ClassInfo *ki = ci >= 0 ? &c->classes[ci] : NULL;
+  /* (an alias in Object of a builtin's name, with main's entries of it) */
+  int ov = cplan_object_entry_vis(c, node, ci, m);
+  if (ov >= 0) return core_bit_of_vis(ov);
   int bv = ki ? refl_builtin_vis(c, ci, m, inherit, NULL) : core_method_vis(cls, m, inherit, NULL);
   /* main's defs are Object's own methods, ahead of its and Kernel's rows */
   const char *on = ki ? (ki->is_builtin_const && ki->enclosing_class < 0 ? ki->name : NULL) : cls;
   int mv = bv >= 0 && on && is_object_class_name(on) ? elab_main_method_vis_at(c, node, m) : -1;
   return mv > 0 ? mv : bv;
+}
+/* See call_plan.h. */
+int cplan_program_method_vis(Compiler *c, int node, int ci, const char *m, int inherit) {
+  int v = cplan_object_entry_vis(c, node, ci, m);
+  return v >= 0 ? v : inherit ? comp_method_vis_in_chain(c, ci, m) : comp_method_vis(&c->classes[ci], m);
 }
 /* Does call id's form reach a Kernel function (they are private)? Receiverless,
    `self.`, or a send (the retargeted call) whose receiver's class does not own
@@ -7605,7 +7640,7 @@ static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int
   return 0;
 }
 /* The version entry of name on rcls's chain (side sg) for ar arguments:
-   an arm per version, nearest history first, each testing its history's
+   an arm per version, nearest history first, each testing its version's
    cell; asked for a call that may meet no version (q), its else arm what
    the lookup finds past every version of the chain (ver_absent_else),
    when they share a visibility. Its arms call class into's scope of each
@@ -7629,8 +7664,8 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
     blk |= c->scopes[s].blk_param || c->scopes[s].yields;
     spliced &= c->scopes[s].yields;
     vis &= vs[i].v->vis == vs[0].v->vis;
-    ver_cell_name(vs[i].hist, sel[na]);
-    arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].hist + 1 };
+    ver_cell_name(vs[i].cell, sel[na]);
+    arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].cell + 1 };
     to[na++] = s;
     if (nt_int(c->nt, c->scopes[s].def_node, "concat_builtin_version", 0)) fallback = s;
     same &= ver_same_source(c->nt, c->scopes[s].def_node, c->scopes[mi].def_node);
@@ -7729,8 +7764,8 @@ static int guard_layer_versions(Compiler *c, int mi, int from, int ar) {
   for (int k = 0; k < nv; k++) {
     blk |= c->scopes[to[k]].blk_param || c->scopes[to[k]].yields;
     spliced &= c->scopes[to[k]].yields;
-    ver_cell_name(vs[k].hist, sel[k]);
-    arm[k] = (DispArm){ sel[k], vs[k].n, c->scopes[to[k]].name, vs[k].hist + 1 };
+    ver_cell_name(vs[k].cell, sel[k]);
+    arm[k] = (DispArm){ sel[k], vs[k].n, c->scopes[to[k]].name, vs[k].cell + 1 };
   }
   const Scope *m = &c->scopes[mi];
   return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, nv, to[nv - 1], -1);
@@ -7896,8 +7931,8 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   char *spell = NULL;
   for (int i = 0; i < nv; i++) {
     spliced &= c->scopes[to[i]].yields || !c->scopes[to[i]].blk_param;   /* (one with no &b lets it go no further) */
-    ver_cell_name(w->vs[i].hist, sel[i]);
-    arm[i] = (DispArm){ sel[i], w->vs[i].n, w->name, w->vs[i].hist + 1 };
+    ver_cell_name(w->vs[i].cell, sel[i]);
+    arm[i] = (DispArm){ sel[i], w->vs[i].n, w->name, w->vs[i].cell + 1 };
     if (c->scopes[to[i]].shadow == SHADOW_PREP && !spell) spell = strdup(c->scopes[to[i]].name);
   }
   int els, like = c->scopes[to[nv - 1]].def_node;
@@ -8591,6 +8626,7 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
            (mi = ct_lookup(c, id, k, nm, &flags, NULL)) < 0 || c->scopes[mi].mixin_guarded || !ct_versioned(c, mi, nm)) asked = 0;
   else {
     sg = (flags & CT_CMETHOD) != 0;
+    rcls = ct_top_chain(c, nm, sg);
     ar = ver_call_arity(c, id, rcls, sg, nm, mi);
   }
   if (asked) {
@@ -8815,7 +8851,7 @@ int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int
 }
 /* ...and the cells' writes: after each statement that makes a version an
    entry arms (ahead of it when it is a def, an alias or an undef), the write of
-   the version's number to its history's cell (0 for a remove_method's,
+   the version's number to its cell (ElabVersion.cell; 0 for a remove_method's,
    which passes the search on), in the same statement list; and 0 ahead of
    the entry file's first statement (unless that statement makes one of the
    cell's versions), so that the cell holds an Integer wherever an entry
@@ -8824,7 +8860,7 @@ int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int
    own history's versions. The writes are placed list by list, one rebuild
    of each list's statements: ahead of a statement in the order made, after
    it in the reverse order, as one insertion at a time placed them. */
-typedef struct { int list, stmt, node, n, hist, after, k, g, body; } VerWrite;   /* body: a method body's version (LrDef.body) */
+typedef struct { int list, stmt, node, n, cell, after, k, g, body; } VerWrite;   /* body: a method body's version (LrDef.body) */
 /* The statement of a list a cell write of the version def `node` makes
    goes beside: the def's own; for a def in a class_eval-family block,
    whose defs the reopen registers and whose call runs none of its
@@ -8854,14 +8890,14 @@ static int ver_write_cmp(const void *a, const void *b) {
    a cell of its own (`module_function :a, :b` copies both names at its
    node; a bare module_function def is the instance method's version and the
    singleton's copy; `attr_accessor :x` makes a reader and a writer) */
-typedef struct { int *at; struct { int hist, next; } *e; int n; } VerCellsAt;
-/* 1 the first time node writes the cell of history hist (recording it),
+typedef struct { int *at; struct { int cell, next; } *e; int n; } VerCellsAt;
+/* 1 the first time node writes cell (ElabVersion.cell, recording it),
    else 0 */
-static int ver_cell_once(VerCellsAt *m, int node, int hist) {
+static int ver_cell_once(VerCellsAt *m, int node, int cell) {
   for (int k = m->at[node]; k; k = m->e[k - 1].next)
-    if (m->e[k - 1].hist == hist) return 0;
+    if (m->e[k - 1].cell == cell) return 0;
   if (!(m->n & (m->n - 1)) && !(m->e = realloc(m->e, sizeof *m->e * (size_t)(m->n ? 2 * m->n : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  m->e[m->n].hist = hist;
+  m->e[m->n].cell = cell;
   m->e[m->n].next = m->at[node];
   m->at[node] = ++m->n;
   return 1;
@@ -8898,7 +8934,7 @@ static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
       if ((o = nt_clone_source(nt, o)) < 0 || o >= nt->count) break;
       k = of[o];
     }
-    if (!k || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0 || !ver_cell_once(cells, d, (*wp)[k - 1].hist)) continue;
+    if (!k || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0 || !ver_cell_once(cells, d, (*wp)[k - 1].cell)) continue;
     if (!(*nwp & (*nwp - 1)) && !(*wp = realloc(*wp, sizeof **wp * (size_t)(*nwp ? 2 * *nwp : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     VerWrite x = (*wp)[k - 1];
     x.list = par[st]; x.stmt = st; x.node = d;
@@ -8948,26 +8984,26 @@ static int ver_cells_put(Compiler *c) {
       if (e->guard == VER_ENTRY_GUARD || e->guard == VER_ENTRY_LAYER) {
         int reads = 0;
         for (int k = 0; k < na; k++)
-          reads |= nt_int(nt, tests[k], "ver_hist", 0) == vs[j].hist + 1;
+          reads |= nt_int(nt, tests[k], "ver_hist", 0) == vs[j].cell + 1;
         if (!reads) continue;   /* prepend cells are written at their statements */
       }
       int node = vs[j].v->node, st = ver_write_stmt(nt, par, node);
-      if (st < 0 || par[st] < 0 || !ver_cell_once(&cells, node, vs[j].hist)) continue;
+      if (st < 0 || par[st] < 0 || !ver_cell_once(&cells, node, vs[j].cell)) continue;
       if (!pass) continue;
       if (!(nw & (nw - 1)) && !(w = realloc(w, sizeof *w * (size_t)(nw ? 2 * nw : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       /* (ahead of a statement that runs no program code: after one that ends a branch, the write would be the branch's value) */
-      w[nw++] = (VerWrite){ par[st], st, node, vs[j].v->kind == LR_REMOVE ? 0 : vs[j].n, vs[j].hist,
+      w[nw++] = (VerWrite){ par[st], st, node, vs[j].v->kind == LR_REMOVE ? 0 : vs[j].n, vs[j].cell,
                             !ver_stmt_runs_no_code(nt, st), 0, -1, vs[j].v->body != 0 };
-      if (vs[j].hist >= nh) nh = vs[j].hist + 1;
+      if (vs[j].cell >= nh) nh = vs[j].cell + 1;
       /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
          method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
       if (nt_int(nt, node, "cond_lone_disp", 0)) {
         NT_FOREACH_KIND(nt, NK_DefNode, d) {
           if (!nt_int(nt, d, "cond_arm", 0) || nt_int(nt, d, "cond_disp", -1) != node) continue;
           int ast = ver_write_stmt(nt, par, d);
-          if (ast < 0 || par[ast] < 0 || !ver_cell_once(&cells, d, vs[j].hist)) continue;
+          if (ast < 0 || par[ast] < 0 || !ver_cell_once(&cells, d, vs[j].cell)) continue;
           if (!(nw & (nw - 1)) && !(w = realloc(w, sizeof *w * (size_t)(nw ? 2 * nw : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-          w[nw++] = (VerWrite){ par[ast], ast, d, vs[j].n, vs[j].hist, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
+          w[nw++] = (VerWrite){ par[ast], ast, d, vs[j].n, vs[j].cell, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
         }
       }
     }
@@ -8979,13 +9015,13 @@ static int ver_cells_put(Compiler *c) {
   int at0 = ntop ? first[0] : -1, nz = 0;
   VerWrite *all = malloc(sizeof *all * (size_t)(2 * nw + 1));
   if (!hz || !all) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int k = 0; k < nw; k++) if (w[k].stmt == at0) hz[w[k].hist] = 1;
+  for (int k = 0; k < nw; k++) if (w[k].stmt == at0) hz[w[k].cell] = 1;
   for (int k = 0; k < nw; k++) {   /* (made in the order one insertion at a time made them) */
     char cell[32];
-    ver_cell_name(w[k].hist, cell);
-    if (at0 >= 0 && !hz[w[k].hist]) {
-      hz[w[k].hist] = 1;
-      all[nz] = (VerWrite){ top, at0, -1, 0, w[k].hist, 0, nz, ver_cell_node(c, cell, at0, 0) };
+    ver_cell_name(w[k].cell, cell);
+    if (at0 >= 0 && !hz[w[k].cell]) {
+      hz[w[k].cell] = 1;
+      all[nz] = (VerWrite){ top, at0, -1, 0, w[k].cell, 0, nz, ver_cell_node(c, cell, at0, 0) };
       nz++;
     }
     all[nz] = w[k];

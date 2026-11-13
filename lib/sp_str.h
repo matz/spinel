@@ -210,6 +210,7 @@ sp_int sp_str_rindex(const char*s,const char*sub);
 sp_oint sp_str_rindex_from(const char*s,const char*sub,sp_int pos);
 sp_oint sp_str_byteindex(const char*s,const char*sub);
 sp_oint sp_str_byteindex_from(const char*s,const char*sub,sp_int start);
+void sp_str_byte_pos_check(const char*s,sp_int bl,sp_int pos);
 sp_oint sp_str_byterindex(const char*s,const char*sub);
 sp_oint sp_str_byterindex_from(const char*s,const char*sub,sp_int pos);
 const char*sp_str_sub_range(const char*s,sp_int start,sp_int len);

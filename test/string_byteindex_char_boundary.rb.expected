@@ -1,0 +1,18 @@
+idx 0: 7 | 0 | 7 | 0
+idx 1: 7 | 0 | 7 | 0
+idx 2: IndexError: offset 2 does not land on character boundary | IndexError: offset 2 does not land on character boundary | IndexError: offset 2 does not land on character boundary | IndexError: offset 2 does not land on character boundary
+idx 3: 7 | 0 | 7 | 0
+idx 4: 7 | 0 | 7 | 0
+idx 5: IndexError: offset 5 does not land on character boundary | IndexError: offset 5 does not land on character boundary | IndexError: offset 5 does not land on character boundary | IndexError: offset 5 does not land on character boundary
+idx 6: IndexError: offset 6 does not land on character boundary | IndexError: offset 6 does not land on character boundary | IndexError: offset 6 does not land on character boundary | IndexError: offset 6 does not land on character boundary
+idx 7: 7 | 0 | 7 | 0
+idx 8: nil | 0 | nil | 0
+idx 9: nil | 0 | nil | 0
+7
+IndexError: offset 6 does not land on character boundary
+0
+IndexError: offset 4 does not land on character boundary
+5
+1
+1
+IndexError: offset 2 does not land on character boundary

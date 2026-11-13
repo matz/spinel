@@ -25,7 +25,7 @@ class Y1
   attr_reader :r
   def initialize(a = 1) = (@r = yield(a))
 end
-p((Y1.new rescue "LocalJumpError"))
+begin; Y1.new; rescue LocalJumpError => e; p e.class.name; end
 p Y1.new { |x| x + 10 }.r
 class Y1
   def initialize(a = 2) = (@r = a * 5)
@@ -36,7 +36,7 @@ class Y4
   attr_reader :r
   def initialize(a = 1) = (@r = yield(a))
 end
-p((Y4.new rescue "LocalJumpError"))
+begin; Y4.new; rescue LocalJumpError => e; p e.class.name; end
 class Y4
   def initialize(a = 2) = (@r = a * 5)
 end

@@ -1,0 +1,11 @@
+"can't convert B to String (B#to_str gives Integer)"
+nil
+nil
+"g"
+"h"
+"can't convert I to String (I#to_str gives Integer)"
+TypeError
+"can't convert T to String (T#to_str gives Array)"
+"u"
+"plain"
+nil

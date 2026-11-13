@@ -55083,9 +55083,11 @@ static void an_phase_value_types(Compiler *c) {
     }
     /* (one String representation: a String ivar is by value only when
        every write gives it a frozen literal, which no name can change) */
+    /* (an instance's write: a class-level ivar is the class object's,
+       holder_ivar_side) */
     if (ty_k == NK_InstanceVariableWriteNode) {
-      Scope *s = comp_scope_of(c, id);
-      int q = s ? s->class_id : -1;
+      int q;
+      if (holder_ivar_side(c, id, &q) != IVS_INST) q = -1;
       const char *ivn = nt_str(c->nt, id, "name");
       int val = nt_ref(c->nt, id, "value");
       if (q >= 0 && q < c->nclasses && c->classes[q].is_value_type && ivn &&
@@ -55095,17 +55097,20 @@ static void an_phase_value_types(Compiler *c) {
           if (sp_streq(qc->ivars[j], ivn) && qc->ivar_types[j] == TY_STRBUF) { qc->is_value_type = 0; break; }
       }
     }
-    /* immutable check: an ivar write outside `initialize` defeats value type */
+    /* immutable check: an instance's ivar write outside `initialize`
+       defeats value type (a class method's or a class body's write is the
+       class object's, holder_ivar_side) */
     if (ty_k == NK_InstanceVariableWriteNode ||
         ty_k == NK_InstanceVariableOperatorWriteNode ||
         ty_k == NK_InstanceVariableOrWriteNode ||
         ty_k == NK_InstanceVariableAndWriteNode ||
         ty_k == NK_InstanceVariableTargetNode) {
       Scope *s = comp_scope_of(c, id);
-      if (s && s->class_id >= 0 && s->class_id < c->nclasses &&
-          c->classes[s->class_id].is_value_type &&
+      int q;
+      if (s && holder_ivar_side(c, id, &q) == IVS_INST && q >= 0 && q < c->nclasses &&
+          c->classes[q].is_value_type &&
           (!s->name || !sp_streq(s->name, "initialize")))
-        c->classes[s->class_id].is_value_type = 0;
+        c->classes[q].is_value_type = 0;
       /* a block on a boxed receiver writes the instance of each class it
          runs on (the arms of emit_ie_poly), which a by-value one would take
          on its copy */
@@ -55120,7 +55125,8 @@ static void an_phase_value_types(Compiler *c) {
         int ivr = nt_ref(c->nt, id, "receiver");
         if (ivr < 0 || (nt_kind(c->nt, ivr) == NK_SelfNode && comp_ntype(c, ivr) != TY_POLY)) {
           Scope *s = comp_scope_of(c, id);
-          if (s && s->class_id >= 0 && s->class_id < c->nclasses &&
+          /* (in a class method, self is the class: its own ivar) */
+          if (s && s->class_id >= 0 && s->class_id < c->nclasses && !s->is_cmethod &&
               (!s->name || !sp_streq(s->name, "initialize")))
             c->classes[s->class_id].is_value_type = 0;
         }

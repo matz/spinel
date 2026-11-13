@@ -3270,8 +3270,9 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
 
 /* Whether the final tables hold name on cls's side as a method of it: the
    method mi the table lookup found, an accessor or an alias; mi is the
-   generated iterator of a Struct or a Data class, or a module's copy under
-   CT_OWN, no method of the class's. Under CT_OWN the
+   generated iterator of a Struct or a Data class (unless CT_REACH: what a
+   call of the name runs, not what a reflection list shows), or a module's
+   copy under CT_OWN, no method of the class's. Under CT_OWN the
    class's own entries: its defs, a prepend's renamed body, its aliases and
    the accessors it introduces. */
 static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, int mi) {
@@ -3285,7 +3286,7 @@ static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, in
   }
   int wr = setter_base_name(name, base, sizeof base);
   if (!(side & CT_OWN))
-    return (mi >= 0 && !method_hidden_from_reflection(c, cls, name) && !scope_is_struct_synth(c, mi)) || comp_reader_in_chain(c, cls, name, NULL) ||
+    return (mi >= 0 && !method_hidden_from_reflection(c, cls, name) && ((side & CT_REACH) || !scope_is_struct_synth(c, mi))) || comp_reader_in_chain(c, cls, name, NULL) ||
            (wr && comp_writer_in_chain(c, cls, base, NULL)) || pr_alias(c, cls, side, name);
   return (mi >= 0 && !scope_is_struct_synth(c, mi) && c->scopes[mi].origin_module_ci == 0) ||
          pr_prep_body(c, cls, name) >= 0 ||

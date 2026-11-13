@@ -7401,7 +7401,8 @@ static const char *const object_methods[] = { "to_s", "inspect", "class", "hash"
   "itself", "object_id", NULL };
 /* While desugar_dynamic_send runs, each class's names are computed once:
    an untyped receiver's send asks every class, and every such send asked
-   again (dsend_receiver_names_uncached walks every method per class). The
+   again (dsend_receiver_names_uncached walks each class's chain, and the
+   plan lists a class by walking the scopes: dsend_cplan_names holds that). The
    memo is dropped if the class or scope table grows meanwhile. Callers own
    what they get back, as before.
 
@@ -7413,35 +7414,45 @@ static const char *const object_methods[] = { "to_s", "inspect", "class", "hash"
    and class counts, as the chain lookup's memo is kept), the parents and
    aliases (comp_class_shape_gen), and the readers and writers
    (comp_table_gen). */
-static struct { int on, ncls, nscp, keyed; unsigned sgen, shape, tgen; const Compiler *c;
-                char ***names; int *n; char **inames; int ninames; int *every; int nevery; } g_dsn;
 static void dsn_inames_free(char **in, int n) {
   for (int i = 0; i < n; i++) free(in[i]);
   free(in);
 }
-static void dsn_memo_free(void) {
-  if (g_dsn.names) {
-    for (int i = 0; i < g_dsn.ncls * 2 + 2; i++) {
-      if (g_dsn.n[i] < 0) continue;
-      for (int j = 0; j < g_dsn.n[i]; j++) free(g_dsn.names[i][j]);
-      free(g_dsn.names[i]);
+static void dsn_memo_free(Compiler *c) {
+  if (c->dsn.names) {
+    for (int i = 0; i < c->dsn.ncls * 2 + 2; i++) {
+      if (c->dsn.n[i] < 0) continue;
+      for (int j = 0; j < c->dsn.n[i]; j++) free(c->dsn.names[i][j]);
+      free(c->dsn.names[i]);
     }
   }
-  free(g_dsn.names); free(g_dsn.n);
-  dsn_inames_free(g_dsn.inames, g_dsn.ninames);
-  free(g_dsn.every);
-  g_dsn.names = NULL; g_dsn.n = NULL; g_dsn.ncls = g_dsn.nscp = 0;
-  g_dsn.inames = NULL; g_dsn.ninames = 0;
-  g_dsn.every = NULL; g_dsn.nevery = 0;
+  free(c->dsn.names); free(c->dsn.n);
+  dsn_inames_free(c->dsn.inames, c->dsn.ninames);
+  free(c->dsn.every);
+  if (c->dsn.own) {
+    for (int i = 0; i < c->dsn.ncls; i++)
+      if (c->dsn.nown[i] >= 0) dsn_inames_free(c->dsn.own[i], c->dsn.nown[i]);
+  }
+  free(c->dsn.own); free(c->dsn.nown);
+  c->dsn.own = NULL; c->dsn.nown = NULL;
+  c->dsn.names = NULL; c->dsn.n = NULL; c->dsn.ncls = c->dsn.nscp = 0;
+  c->dsn.inames = NULL; c->dsn.ninames = 0;
+  c->dsn.every = NULL; c->dsn.nevery = 0;
+}
+/* Everything Compiler.dsn holds, at the compiler's end */
+void dsn_free(Compiler *c) {
+  dsn_memo_free(c);
+  anh_free(&c->dsn.lits);
 }
 /* The distinct names of the program's instance methods -- a named scope in
    a class, or a top-level def, that is not a class method -- in the order
    the scopes first bear them, less initialize and initialize_copy: the
-   names dsend_receiver_names_uncached asks of a class's chain. It asked them
-   walking every scope once per class, and anew for every class of the set
-   (a Rails application: 118,000 scopes, over its modules or a class's
-   descendants, for every send on an untyped receiver -- most of the pass);
-   the list is one, built once per memo, or once per ask without it. */
+   names dsend_add_every_object_names asks of Object's chain and the top
+   level. They were asked walking every scope once per class, and anew for
+   every class of the set (a Rails application: 118,000 scopes, over its
+   modules or a class's descendants, for every send on an untyped receiver
+   -- most of the pass); the list is one, built once per memo, or once per
+   ask without it. */
 static char **dsn_inames_build(Compiler *c, int *n) {
   char **in = NULL; int cnt = 0, cap = 0;
   ANameHash seen; memset(&seen, 0, sizeof seen);
@@ -7475,41 +7486,45 @@ static int dsend_name_is_helper(Compiler *c, int cls, const char *m) {
 }
 /* The memo, sized for this table (reset when the table grew) */
 static void dsn_memo_sync(Compiler *c) {
-  if (g_dsn.ncls == c->nclasses && g_dsn.nscp == c->nscopes && g_dsn.names) return;
-  dsn_memo_free();
-  g_dsn.ncls = c->nclasses; g_dsn.nscp = c->nscopes;
-  g_dsn.c = c; g_dsn.keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
-  g_dsn.sgen = comp_scope_index_gen(); g_dsn.shape = comp_class_shape_gen(); g_dsn.tgen = comp_table_gen;
-  g_dsn.names = calloc((size_t)(g_dsn.ncls * 2 + 2), sizeof *g_dsn.names);
-  g_dsn.n = malloc(sizeof *g_dsn.n * (size_t)(g_dsn.ncls * 2 + 2));
-  if (!g_dsn.names || !g_dsn.n) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < g_dsn.ncls * 2 + 2; i++) g_dsn.n[i] = -1;
+  if (c->dsn.ncls == c->nclasses && c->dsn.nscp == c->nscopes && c->dsn.names) return;
+  dsn_memo_free(c);
+  c->dsn.ncls = c->nclasses; c->dsn.nscp = c->nscopes;
+  c->dsn.keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
+  c->dsn.sgen = comp_scope_index_gen(); c->dsn.shape = comp_class_shape_gen(); c->dsn.tgen = comp_table_gen;
+  c->dsn.names = calloc((size_t)(c->dsn.ncls * 2 + 2), sizeof *c->dsn.names);
+  c->dsn.n = malloc(sizeof *c->dsn.n * (size_t)(c->dsn.ncls * 2 + 2));
+  if (!c->dsn.names || !c->dsn.n) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < c->dsn.ncls * 2 + 2; i++) c->dsn.n[i] = -1;
+  c->dsn.own = calloc((size_t)(c->dsn.ncls + 1), sizeof *c->dsn.own);
+  c->dsn.nown = malloc(sizeof *c->dsn.nown * (size_t)(c->dsn.ncls + 1));
+  if (!c->dsn.own || !c->dsn.nown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i <= c->dsn.ncls; i++) c->dsn.nown[i] = -1;
 }
 /* Has nothing the memo's answers read moved since it was made? */
 static int dsn_memo_kept(Compiler *c) {
-  return g_dsn.names && g_dsn.keyed && g_dsn.c == c && comp_scope_index_is_frozen() && !comp_scope_moving() &&
-         g_dsn.sgen == comp_scope_index_gen() && g_dsn.shape == comp_class_shape_gen() &&
-         g_dsn.tgen == comp_table_gen && g_dsn.ncls == c->nclasses && g_dsn.nscp == c->nscopes;
+  return c->dsn.names && c->dsn.keyed && comp_scope_index_is_frozen() && !comp_scope_moving() &&
+         c->dsn.sgen == comp_scope_index_gen() && c->dsn.shape == comp_class_shape_gen() &&
+         c->dsn.tgen == comp_table_gen && c->dsn.ncls == c->nclasses && c->dsn.nscp == c->nscopes;
 }
 /* A run of the passes that ask it: the memo on, the one a run before left
    taken up when it still holds, and left for the next when it still does */
 static void dsn_memo_begin(Compiler *c) {
-  if (!dsn_memo_kept(c)) dsn_memo_free();
-  g_dsn.on = 1;
+  if (!dsn_memo_kept(c)) dsn_memo_free(c);
+  c->dsn.on = 1;
 }
 static void dsn_memo_end(Compiler *c) {
-  g_dsn.on = 0;
-  if (!dsn_memo_kept(c)) dsn_memo_free();
+  c->dsn.on = 0;
+  if (!dsn_memo_kept(c)) dsn_memo_free(c);
 }
 /* The instance-method names (dsn_inames_build): the memo's while the pass
    runs, else a list of the asker's own, which it frees (*owned) */
 static char **dsn_inames(Compiler *c, int *nin, int *owned) {
-  *owned = !g_dsn.on;
+  *owned = !c->dsn.on;
   if (*owned) return dsn_inames_build(c, nin);
   dsn_memo_sync(c);
-  if (!g_dsn.inames) g_dsn.inames = dsn_inames_build(c, &g_dsn.ninames);
-  *nin = g_dsn.ninames;
-  return g_dsn.inames;
+  if (!c->dsn.inames) c->dsn.inames = dsn_inames_build(c, &c->dsn.ninames);
+  *nin = c->dsn.ninames;
+  return c->dsn.inames;
 }
 /* What the program defines for every object, in Object or Kernel or at the
    top level, which class cls's own chain does not reach (cls < 0: a
@@ -7532,15 +7547,15 @@ static void dsend_add_every_object_names(Compiler *c, int cls, char **in, int ni
      and per name (most of a held run of the pass). For Object itself its
      chain's names are among the class's own already, and `seen` skips them,
      as the test of `oc != cls` did. */
-  if (g_dsn.on && in == g_dsn.inames) {
-    if (!g_dsn.every) {
-      g_dsn.every = malloc(sizeof(int) * (size_t)(nin > 0 ? nin : 1));
-      if (!g_dsn.every) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      g_dsn.nevery = 0;
+  if (c->dsn.on && in == c->dsn.inames) {
+    if (!c->dsn.every) {
+      c->dsn.every = malloc(sizeof(int) * (size_t)(nin > 0 ? nin : 1));
+      if (!c->dsn.every) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      c->dsn.nevery = 0;
       for (int i = 0; i < nin; i++)
-        if (dsend_every_object_name(c, oc, in[i])) g_dsn.every[g_dsn.nevery++] = i;
+        if (dsend_every_object_name(c, oc, in[i])) c->dsn.every[c->dsn.nevery++] = i;
     }
-    for (int j = 0; j < g_dsn.nevery; j++) dsend_add_name(names, n, cap, seen, in[g_dsn.every[j]]);
+    for (int j = 0; j < c->dsn.nevery; j++) dsend_add_name(names, n, cap, seen, in[c->dsn.every[j]]);
     return;
   }
   for (int i = 0; i < nin; i++)
@@ -7548,15 +7563,45 @@ static void dsend_add_every_object_names(Compiler *c, int cls, char **in, int ni
 }
 static int dsend_receiver_names_uncached(Compiler *c, int cls, int subclasses, char ***out);
 static int dsend_receiver_names(Compiler *c, int cls, int subclasses, char ***out) {
-  if (!g_dsn.on) return dsend_receiver_names_uncached(c, cls, subclasses, out);
+  if (!c->dsn.on) return dsend_receiver_names_uncached(c, cls, subclasses, out);
   dsn_memo_sync(c);
-  int slot = (cls < 0 ? g_dsn.ncls : cls) * 2 + (subclasses ? 1 : 0);
-  if (g_dsn.n[slot] < 0) g_dsn.n[slot] = dsend_receiver_names_uncached(c, cls, subclasses, &g_dsn.names[slot]);
-  int n = g_dsn.n[slot];
+  int slot = (cls < 0 ? c->dsn.ncls : cls) * 2 + (subclasses ? 1 : 0);
+  if (c->dsn.n[slot] < 0) c->dsn.n[slot] = dsend_receiver_names_uncached(c, cls, subclasses, &c->dsn.names[slot]);
+  int n = c->dsn.n[slot];
   char **copy = (char **)malloc(sizeof(char *) * (size_t)(n > 0 ? n : 1));
-  for (int j = 0; j < n; j++) copy[j] = strdup(g_dsn.names[slot][j]);
+  for (int j = 0; j < n; j++) copy[j] = strdup(c->dsn.names[slot][j]);
   *out = copy;
   return n;
+}
+/* The names the call plan lists for one class (cplan_list_candidates): its
+   defs, the copies of an included module's, its aliases and the readers and
+   writers it introduces, each asked the plan's question, as a call reaches
+   them (CT_REACH: a Struct's generated iterators count). A send reaches a
+   private one too, so the visibility is not asked. */
+typedef struct { char ***names; int *n, *cap; ANameHash *seen; } DsendSink;
+static void dsend_note_candidate(void *ud, const char *nm, int vis) {
+  const DsendSink *k = ud;
+  (void)vis;
+  if (is_initialize_family(nm)) return;
+  dsend_add_name(k->names, k->n, k->cap, k->seen, nm);
+}
+static int dsend_class_names_uncached(Compiler *c, int cls, char ***out) {
+  char **names = NULL; int n = 0, cap = 0;
+  ANameHash seen; memset(&seen, 0, sizeof seen);
+  DsendSink sink = { &names, &n, &cap, &seen };
+  cplan_list_candidates(c, cls, CT_REACH, dsend_note_candidate, &sink);
+  anh_free(&seen);
+  *out = names;
+  return n;
+}
+/* ...held with the memo while the pass runs: every class asks its whole
+   chain, and the plan lists a class by walking the scopes once. *out is the
+   memo's (valid until it is dropped). */
+static int dsend_cplan_names(Compiler *c, int cls, char ***out) {
+  dsn_memo_sync(c);
+  if (c->dsn.nown[cls] < 0) c->dsn.nown[cls] = dsend_class_names_uncached(c, cls, &c->dsn.own[cls]);
+  *out = c->dsn.own[cls];
+  return c->dsn.nown[cls];
 }
 static int dsend_receiver_names_uncached(Compiler *c, int cls, int subclasses, char ***out) {
   char **names = NULL; int n = 0, cap = 0;
@@ -7564,19 +7609,12 @@ static int dsend_receiver_names_uncached(Compiler *c, int cls, int subclasses, c
   int nin = 0, owned; char **in = dsn_inames(c, &nin, &owned);
   for (int d = 0; d < c->nclasses; d++) {
     if (cls < 0 ? comp_class_is_module(c, &c->classes[d]) : d != cls && !(subclasses && is_descendant(c, d, cls))) continue;
-    /* (the chain answers a name the same for every scope that has it: one
-       lookup per name) */
-    for (int i = 0; i < nin; i++)
-      if (comp_method_in_chain(c, d, in[i], NULL) >= 0) dsend_add_name(&names, &n, &cap, &seen, in[i]);
     for (int k = d; k >= 0 && k < c->nclasses; k = c->classes[k].parent) {
-      ClassInfo *cl = &c->classes[k];
-      for (int r = 0; r < cl->nreaders; r++) dsend_add_name(&names, &n, &cap, &seen, cl->readers[r]);
-      for (int w = 0; w < cl->nwriters; w++) {
-        char wn[256];
-        snprintf(wn, sizeof wn, "%s=", cl->writers[w]);
-        dsend_add_name(&names, &n, &cap, &seen, wn);
-      }
-      for (int a = 0; a < cl->naliases; a++) dsend_add_name(&names, &n, &cap, &seen, cl->alias_new[a]);
+      char **kn = NULL; int nk;
+      if (c->dsn.on) nk = dsend_cplan_names(c, k, &kn);
+      else nk = dsend_class_names_uncached(c, k, &kn);
+      for (int j = 0; j < nk; j++) dsend_add_name(&names, &n, &cap, &seen, kn[j]);
+      if (!c->dsn.on) dsn_inames_free(kn, nk);
     }
   }
   if (cls >= 0) dsend_add_every_object_names(c, cls, in, nin, &names, &n, &cap, &seen);
@@ -7774,10 +7812,6 @@ static int dsend_defined_arity_excludes(Compiler *c, const char *name, int argc)
   return defined;
 }
 
-/* The candidates dsend_candidates took from the program's literals (keys
-   point into its answer, valid until the caller frees that). */
-static ANameHash g_dsend_lits;
-
 /* The copy of each builtin (or own Enumerable) method that a call a pass
    writes after desugar_builtins takes, made there: one per name, shared by
    every such call, -1 where none was made */
@@ -7829,7 +7863,7 @@ char **dsend_candidates(Compiler *c, int *out_n) {
      round (rubys/roundhouse#72). */
   char **cand = NULL; int ncand = 0, candcap = 0;
   ANameHash cand_set; memset(&cand_set, 0, sizeof cand_set);
-  anh_free(&g_dsend_lits); memset(&g_dsend_lits, 0, sizeof g_dsend_lits);
+  anh_free(&c->dsn.lits); memset(&c->dsn.lits, 0, sizeof c->dsn.lits);
   for (int id = 0; id < n0; id++) {
     NodeKind ty_k = nt_kind(nt, id);
     const char *v = NULL;
@@ -7847,7 +7881,7 @@ char **dsend_candidates(Compiler *c, int *out_n) {
     if (ncand == candcap) { candcap = candcap ? candcap * 2 : 16; cand = (char **)realloc(cand, sizeof(char *) * candcap); }
     cand[ncand++] = strdup(v);
     anh_add(&cand_set, cand[ncand - 1]);
-    anh_add(&g_dsend_lits, cand[ncand - 1]);
+    anh_add(&c->dsn.lits, cand[ncand - 1]);
   }
   /* ... and the names the program DEFINES: its defs, class methods, attr
      readers and writers (as `x=`). A writer reached as `public_send("#{name}=",
@@ -7901,9 +7935,9 @@ char **dsend_candidates(Compiler *c, int *out_n) {
     if (rci < 0) continue;
     for (int s = 0; s < c->nscopes; s++) {
       const char *sn = c->scopes[s].name;
-      if (!sn || c->scopes[s].class_id != rci || c->scopes[s].is_cmethod || anh_has(&g_dsend_lits, sn)) continue;
+      if (!sn || c->scopes[s].class_id != rci || c->scopes[s].is_cmethod || anh_has(&c->dsn.lits, sn)) continue;
       for (int k = 0; k < ncand; k++)
-        if (sp_streq(cand[k], sn)) { anh_add(&g_dsend_lits, cand[k]); break; }
+        if (sp_streq(cand[k], sn)) { anh_add(&c->dsn.lits, cand[k]); break; }
     }
   }
   anh_free(&cand_set);
@@ -8359,7 +8393,7 @@ static int desugar_dynamic_send_inner(Compiler *c) {
     int nlit = 0;
     if (!computed) {
       for (int k = 0; k < ncand; k++)
-        if (anh_has(&g_dsend_lits, cand[k])) lits[nlit++] = cand[k];
+        if (anh_has(&c->dsn.lits, cand[k])) lits[nlit++] = cand[k];
       use = lits; nuse = nlit;
       /* a local that only ever holds literal names holds one of those */
       if (dsend_local_names(c, dsend_name_local(c, argv[0]), &own, &nown)) {

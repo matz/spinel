@@ -1331,7 +1331,10 @@ int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *na
    copies included; a chain's walk is its caller's, which lists the core
    surfaces between classes. What a list leaves out of what it holds (the
    compiler's synthesized helpers, a class-side private method) is the
-   list's, not the question's. */
+   list's, not the question's. With CT_REACH, the names a call can run
+   rather than the ones a reflection list shows: the generated iterators
+   of a Struct or a Data class are among them (the compiler's helpers
+   still are not). */
 typedef void (*CplanCandFn)(void *ud, const char *name, int vis);
 void cplan_list_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud);
 /* What version entry scope e's else arm finds while no version of its

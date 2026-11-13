@@ -47,3 +47,6 @@ boxed push String timeout: TypeError: no implicit conversion to float from strin
 :x
 [:recv, :non_block, :timeout]
 0
+nil
+7
+nil

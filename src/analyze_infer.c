@@ -2054,7 +2054,7 @@ int an_queue_timeout_arg(const NodeTable *nt, int id) {
   const char *name = nt_str(nt, id, "name");
   int ca = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
-  if (!name || nt_ref(nt, id, "block") >= 0 || nt_argv_has_splat(nt, argv, argc)) return -1;
+  if (!name || nt_argv_has_splat(nt, argv, argc)) return -1;
   int kwh = nt_argv_kwh(nt, argv, argc), n = 0;
   const int *el = kwh >= 0 ? nt_arr(nt, kwh, "elements", &n) : NULL;
   if (n != 1 || nt_kind(nt, el[0]) != NK_AssocNode) return -1;

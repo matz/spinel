@@ -90,3 +90,12 @@ bad = 0
   bad += 1 unless sq.pop == "val-" + i.to_s
 end
 p bad
+
+# A block on the timed form: Queue#pop does not yield, so the call times out
+# or answers as it does without one.
+bq = Thread::Queue.new
+bx = [bq, nil][ARGV.size]
+p bx.pop(timeout: 0) { :unused }
+bq << 7
+p bx.pop(timeout: 0) { :unused }
+p bx.shift(timeout: 0) { :unused }

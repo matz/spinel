@@ -3309,7 +3309,7 @@ static void lr_settle_regions(Compiler *c) {
    define_method, an attr, an alias, a module_function copy, an undef or
    remove), not a visibility change. lr_vers_index indexes the histories as
    they stand, again once more entries have been recorded. */
-typedef struct LrVers { const char *name; int first, nver, next, pend, alias; unsigned char captured, replaced, late; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet; alias: the first alias of the name, in LoadRecord.valias, -1 for none */
+typedef struct LrVers { const char *name; int first, nver, next, pend, alias; unsigned char captured, replaced, late, visvar; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; visvar: elab_method_vis_varies's, the same; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet; alias: the first alias of the name, in LoadRecord.valias, -1 for none */
 
 static int lr_is_version(const LrDef *v) { return v->kind <= LR_REMOVE && !v->unplaced && !v->absent; }
 
@@ -3530,6 +3530,26 @@ int elab_method_replaced(Compiler *c, const char *name) {
   LoadRecord *r = c->lrec;
   const LrVers *x = r && r->recorded ? lr_vers(r, name) : NULL;
   return x && x->replaced;
+}
+
+/* See analyze.h. */
+int elab_method_vis_varies(Compiler *c, const char *name) {
+  LoadRecord *r = c->lrec;
+  LrVers *x = r && r->recorded ? lr_vers(r, name) : NULL;
+  if (!x) return 0;
+  if (!x->visvar) {
+    int vary = 0, vis = -1;
+    for (int i = x->first; i >= 0 && !vary; i = r->hist[i].nlink)
+      for (int j = 0; j < r->hist[i].n && !vary; j++) {
+        const LrDef *v = &r->hist[i].v[j];
+        /* (an undef or remove gives no method to have one) */
+        if (v->kind == LR_UNDEF || v->kind == LR_REMOVE) continue;
+        if (v->kind == LR_VIS || (vis >= 0 && v->vis != vis)) vary = 1;
+        vis = v->vis;
+      }
+    x->visvar = vary ? 2 : 1;
+  }
+  return x->visvar == 2;
 }
 
 int elab_method_holder(Compiler *c, const char *name, int i, int *cls, int *sg) {
@@ -6459,7 +6479,8 @@ int elab_call_span(Compiler *c, int id, int cls, const char *name, int sg, int o
 
 /* ---- the readers of a version (elab_version_met) ----
    Who may meet a version on cls's singleton chain: each call of the name
-   the map was made of, and each Method's maker naming it (`C.method(:v)`),
+   the map was made of, a send naming it (`C.send(:v)`), and each Method's
+   maker naming it (`C.method(:v)`),
    whose self may be cls or a class under it. lr_readers files each once
    per walk by the classes its self may be, under the keys a question about
    cls looks up:
@@ -6658,12 +6679,15 @@ static void lr_readers(Compiler *c, LoadRecord *r) {
   lr_holders_make(c, &hd);
   for (int id = 0; id < r->n; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
-    const char *nm = nt_str(nt, id, "name"), *keys[2] = { nm, nm && is_method_object_maker(nm) ? method_sym_arg(c, id) : NULL };
+    /* (its name, and the one a Method's maker or a send of a literal name
+       takes, as the call plan binds it) */
+    const char *keys[2];
+    int nk = call_node_names(c, id, keys);
     int recv = nt_ref(nt, id, "receiver");
     NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
     int k = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? lr_class_ref_at(c, recv, NULL)
           : rk == NK_SelfNode ? elab_self_value_at(c, id) : LR_UNKNOWN_CLASS;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < nk; i++) {
       if (!keys[i]) continue;
       lr_reader_add(r, keys[i], id, RD_ANY, -2, 0, 0);
       if (k >= 0) lr_reader_under(c, r, keys[i], id, k, 0, 0);
@@ -6714,14 +6738,12 @@ static int lr_readers_meet(Compiler *c, LoadRecord *r, int kind, int key, int cl
   }
   return 0;
 }
-/* Does the program reach the version made at def node `def` on cls's
-   chain (its singleton's when sg) under `name`: does the call plan bind a
-   call of the name, or a Method's maker naming it, whose self may be cls
-   or a class under it (lr_readers) to it or to an entry holding it, from
-   the versions the call may meet (elab_call_meet, lr_call_meets), or does
-   an alias of the name on cls or a class under it capture it where it is
-   made? */
-int elab_version_met(Compiler *c, int cls, int sg, const char *name, int def) {
+/* Does the call plan bind a call of `name`, or a Method's maker naming it,
+   whose self may be cls or a class under it (lr_readers), to the version
+   made at def node `def` on cls's chain (its singleton's when sg) or to an
+   entry holding it, from the versions the call may meet (elab_call_meet,
+   lr_call_meets)? */
+int elab_version_called(Compiler *c, int cls, int sg, const char *name, int def) {
   LoadRecord *r = elab_fresh(c);
   if (!r->recorded || !name || def < 0 || cls < 0) return 0;
   sg = sg ? 1 : 0;
@@ -6731,8 +6753,18 @@ int elab_version_met(Compiler *c, int cls, int sg, const char *name, int def) {
   int met = lr_readers_meet(c, r, RD_UNDER, cls, cls, sg, name, def);
   for (int a = cls, d = 0; sg && !met && a >= LR_MAIN && d < lr_chain_bound(c); a = lr_super(c, a), d++)
     met = lr_readers_meet(c, r, RD_AT, a, cls, sg, name, def);
-  if (!met) met = lr_readers_meet(c, r, RD_ANY, -2, cls, sg, name, def);
+  return met || lr_readers_meet(c, r, RD_ANY, -2, cls, sg, name, def);
+}
+/* Does the program reach that version: does a call reach it
+   (elab_version_called), or does an alias of the name on cls or a class
+   under it capture it where it is made? */
+int elab_version_met(Compiler *c, int cls, int sg, const char *name, int def) {
+  if (elab_version_called(c, cls, sg, name, def)) return 1;
+  LoadRecord *r = elab_fresh(c);
+  if (!r->recorded || !name || def < 0 || cls < 0) return 0;
+  sg = sg ? 1 : 0;
   const LrVers *x = lr_vers(r, name);
+  int met = 0;
   for (int a = x ? x->alias : -1; a >= 0 && !met; a = r->valias[a].next) {
     const LrHist *h = &r->hist[r->valias[a].hist];
     const LrDef *d = NULL;

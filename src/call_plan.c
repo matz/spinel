@@ -369,8 +369,7 @@ int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
   if (mc < 0) return 0;
   if (exc || builtin_answers_ahead_of("Object", name, NULL)) {
     /* (the visibility at the call, which a later `public` or `private` does not change) */
-    int vis = elab_method_vis_at(c, mc, name, 0, elab_point_of(c, id));
-    if ((vis < 0 ? comp_method_vis_declared(c, mc, name, NULL) : vis) != SP_VIS_PUBLIC) return 0;
+    if (cplan_method_vis(c, id, mc, name, CPV_ROOT, NULL) != SP_VIS_PUBLIC) return 0;
   }
   /* (one closed to the call binds none: it raises) */
   if (cplan_root_closed(c, id, NULL) >= 0) return 0;
@@ -7089,13 +7088,35 @@ int cplan_super_needs_method_missing(Compiler *c, int id) {
   return 0;
 }
 
+/* Is call id, at its point p, bound to the version of class ci's `name`
+   the record has live there: it runs at p (not later, nor in a block a
+   target may keep), and the method the plan binds it to is the record's
+   there, not a builtin's ahead of it? */
+static int cplan_bound_at_point(Compiler *c, int id, int ci, const char *name, int sg, LoadPoint p) {
+  if (p.region < 0 || elab_runs_later(c, id) || elab_in_kept_block(c, id)) return 0;
+  int mi = call_target(c, id, ci, name, sg ? CT_CMETHOD : 0, NULL);
+  const LrDef *d = NULL;
+  return mi >= 0 && elab_method_at(c, ci, name, sg, p, &d) == ELAB_YES && d && d->node == c->scopes[mi].def_node;
+}
+/* See call_plan.h. */
+int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, int *at) {
+  int sg = (flags & CPV_CMETHOD) != 0, root = (flags & CPV_ROOT) != 0;
+  int vis = sg ? comp_cmethod_vis_declared(c, ci, name, at) : comp_method_vis_declared(c, ci, name, at);
+  if (ci < 0 || !name || (!root && (!ct_version_named(c, name) || !elab_method_vis_varies(c, name)))) return vis;
+  LoadPoint p = elab_point_of(c, id);
+  int here = elab_method_vis_at(c, ci, name, sg, p);
+  /* (the binding is asked only where the answers differ) */
+  if (here < 0 || here == vis || (!root && !cplan_bound_at_point(c, id, ci, name, sg, p))) return vis;
+  return here;
+}
+
 /* Whether the boxed class arm calls the method rather than raising for
    its visibility. Explicit self may call private methods too.
    The class-body self stamp identifies the caller of a protected call. */
 int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name) {
   if (nt_ignore_visibility(c->nt, id)) return 1;
   int owner = -1;
-  int vis = comp_cmethod_vis_declared(c, ci, name, &owner);
+  int vis = cplan_method_vis(c, id, ci, name, CPV_CMETHOD, &owner);
   if (vis == SP_VIS_PROTECTED && !nt_str(c->nt, id, "vis_enforce")) {
     if (nt_kind(c->nt, nt_ref(c->nt, id, "receiver")) == NK_SelfNode ||
         nt_int(c->nt, id, "self_call", 0)) return 1;
@@ -7384,9 +7405,9 @@ static int cplan_root_vis(Compiler *c, int call, int k, const char *name) {
     if (mv < 1 && at < 0) vis = SP_VIS_PRIVATE;
   }
   else {
-    vis = elab_method_vis_at(c, k, name, 0, elab_point_of(c, call));
-    if (vis < 0 && !placed && !cplan_root_def_ran(c, call, k, name)) return -1;
-    if (vis < 0) vis = comp_method_vis_declared(c, k, name, NULL);
+    /* (as the record has it at the call, the roots' lookup having bound it) */
+    if (!placed && elab_method_vis_at(c, k, name, 0, elab_point_of(c, call)) < 0 && !cplan_root_def_ran(c, call, k, name)) return -1;
+    vis = cplan_method_vis(c, call, k, name, CPV_ROOT, NULL);
   }
   return cplan_root_vis_open(c, call, k, name, vis);
 }

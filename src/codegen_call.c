@@ -1496,7 +1496,7 @@ static void emit_io_vis_msg(int vis, const char *name, const char *handle, Buf *
    handle's kind at run time, and a kind none of them serves raises
    NoMethodError as CRuby does. When the reopenings answer different
    types the call is boxed (io_reopen_ret_mixed), each answer boxed. */
-static int io_reopen_call_vis(Compiler *c, int k, const char *nm, int plain, int caller);
+static int io_reopen_call_vis(Compiler *c, int id, int k, const char *nm, int plain, int caller);
 static int io_builtin_name(const char *m);
 int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw);
 void unhoist_dispatch_args(Compiler *c, int n, int *sv, int *vw);
@@ -1564,7 +1564,7 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
      CRF_IO_REOPEN) */
   refuse_from_plan(c, id, CRF_IO_REOPEN, "refuse-io-reopen");
   for (int i = 0; i < n; i++) {
-    if (plain && io_reopen_call_vis(c, ks[i], name, 1, caller) != SP_VIS_PUBLIC) all_public = 0;
+    if (plain && io_reopen_call_vis(c, id, ks[i], name, 1, caller) != SP_VIS_PUBLIC) all_public = 0;
   }
   if (n == 1 && all_public && sp_streq(c->classes[ks[0]].name, "IO")) {
     int mi = call_target(c, id, ks[0], name, 0, NULL);
@@ -1605,7 +1605,7 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
     emit_args_filled(c, kmi, args, ", ", &cb);
     buf_puts(&cb, ")");
     Buf vb; memset(&vb, 0, sizeof vb);
-    int vis = plain ? io_reopen_call_vis(c, ks[i], name, 1, caller) : SP_VIS_PUBLIC;
+    int vis = plain ? io_reopen_call_vis(c, id, ks[i], name, 1, caller) : SP_VIS_PUBLIC;
     if (vis != SP_VIS_PUBLIC)
     {
       buf_puts(&vb, "(sp_raise_cls(\"NoMethodError\", ");
@@ -23315,7 +23315,7 @@ static int emit_cmethod_vis_refusal(Compiler *c, int id, int vrecv, const char *
   int cid = class_recv_static_ci(c, vrecv);
   if (cid < 0) cid = self_class_static_ci(c, vrecv);
   if (cid < 0 || cid >= c->nclasses || cplan_cmethod_visible(c, id, cid, vnm)) return 0;
-  int vis = comp_cmethod_vis_declared(c, cid, vnm, NULL);
+  int vis = cplan_method_vis(c, id, cid, vnm, CPV_CMETHOD, NULL);
   const char *vrn = class_ruby_name(c, cid) ? class_ruby_name(c, cid) : c->classes[cid].name;
   int is_mod = comp_class_is_module(c, &c->classes[cid]);
   buf_puts(b, "(");
@@ -23624,7 +23624,7 @@ static int call_vis_exempt(const NodeTable *nt, int id, int recv) {
    caller whose self is an instance of the declaring class. */
 int method_vis_for_caller(Compiler *c, int id, int vcid, const char *vnm) {
   int owner = -1;
-  int vis = comp_method_vis_declared(c, vcid, vnm, &owner);
+  int vis = cplan_method_vis(c, id, vcid, vnm, 0, &owner);
   /* A self receiver is the caller, including inside a rebound block. */
   if (vis == SP_VIS_PROTECTED && nt_kind(c->nt, nt_ref(c->nt, id, "receiver")) == NK_SelfNode &&
       !nt_str(c->nt, id, "vis_enforce")) return SP_VIS_PUBLIC;
@@ -23677,13 +23677,16 @@ int emit_vis_refusal(Compiler *c, int id, Buf *b) {
    method). Mirrors the ConstantReadNode/class-method branch of
    respond_to_static_answer, which already consults this table for
    `Array.foo`; this lets the instance form (`[1].foo`) and the plain
-   direct-call check below share it too. */
-static int builtin_reopen_vis_class(Compiler *c, TyKind rt, const char *name) {
+   direct-call check below share it too. For call id the visibility is the
+   one the call meets (cplan_method_vis); id -1, a reflection's question,
+   asks the table's. */
+static int builtin_reopen_vis_class(Compiler *c, int id, TyKind rt, const char *name) {
   if (!name || ty_is_object(rt)) return -1;
   int bcls = builtin_class_of_type(rt) ? core_of_type(rt) : -1;
   int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
   if (bci < 0) return -1;
-  return comp_method_vis_declared(c, bci, name, NULL) == SP_VIS_PUBLIC ? -1 : bci;
+  int vis = id >= 0 ? cplan_method_vis(c, id, bci, name, 0, NULL) : comp_method_vis_declared(c, bci, name, NULL);
+  return vis == SP_VIS_PUBLIC ? -1 : bci;
 }
 static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -23697,7 +23700,7 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
   if (vrecv >= 0) {
     TyKind vrt = comp_ntype(c, vrecv);
     if (ty_is_object(vrt)) vcid = ty_object_class(vrt);
-    else vcid = builtin_reopen_vis_class(c, vrt, vnm);
+    else vcid = builtin_reopen_vis_class(c, id, vrt, vnm);
     if (plain && nt_kind(nt, vrecv) == NK_SelfNode) {
       /* a class body's self is that class: its class methods' visibility
          (literal `self.` is let through there, nt_ignore_visibility) */
@@ -23724,7 +23727,7 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
   if (!vnm || (vcid < 0 && !at_main)) return 0;
   int vis = top_priv ? SP_VIS_PRIVATE
           : plain ? method_vis_for_caller(c, id, vcid, vnm)
-                  : comp_method_vis_declared(c, vcid, vnm, NULL);
+                  : cplan_method_vis(c, id, vcid, vnm, 0, NULL);
   if (vis == SP_VIS_PUBLIC) return 0;
   const char *vrn = at_main ? "main" : class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
   buf_puts(b, "(");
@@ -23762,11 +23765,12 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
    switch runs. The switch's arms call the method whatever its visibility, so
    `[obj].any? { |x| x.hid? }`, whose block parameter is boxed, ran a private
    method (#4920). Emits nothing when no class refuses. */
-/* The visibility an IO reopening's method `nm` (on class k) has for a
-   call: public when it is, or protected and the caller is that class's. */
-static int io_reopen_call_vis(Compiler *c, int k, const char *nm, int plain, int caller) {
+/* The visibility an IO reopening's method `nm` (on class k) has for call
+   id (cplan_method_vis): public when it is, or protected and the caller is
+   that class's. */
+static int io_reopen_call_vis(Compiler *c, int id, int k, const char *nm, int plain, int caller) {
   int owner = -1;
-  int vis = comp_method_vis_declared(c, k, nm, &owner);
+  int vis = cplan_method_vis(c, id, k, nm, 0, &owner);
   if (vis == SP_VIS_PROTECTED && plain && caller >= 0 && owner >= 0 && io_family_descends(c, caller, owner))
     vis = SP_VIS_PUBLIC;
   return vis;
@@ -23948,7 +23952,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
     /* a protected method is open to the caller by the same rules as a
        typed receiver's call (method_vis_for_caller): a descendant, a class
        including the declaring module, a call inside that module */
-    int vis = plain ? method_vis_for_caller(c, id, k, vnm) : comp_method_vis_declared(c, k, vnm, NULL);
+    int vis = plain ? method_vis_for_caller(c, id, k, vnm) : cplan_method_vis(c, id, k, vnm, 0, NULL);
     if (vis == SP_VIS_PUBLIC) continue;
     const char *vrn = class_ruby_name(c, k) ? class_ruby_name(c, k) : c->classes[k].name;
     {
@@ -23969,7 +23973,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
     for (int k = 0; k < c->nclasses; k++) {
       if (k == comp_core_class(c, CORE_OBJECT) || !class_is_builtin_reopen(c, k) ||
           comp_class_is_module(c, &c->classes[k]) || cplan_has_method_missing(c, id, k, 0)) continue;
-      int vis = plain ? method_vis_for_caller(c, id, k, vnm) : comp_method_vis_declared(c, k, vnm, NULL);
+      int vis = plain ? method_vis_for_caller(c, id, k, vnm) : cplan_method_vis(c, id, k, vnm, 0, NULL);
       if (vis == SP_VIS_PUBLIC) continue;
       if (tk < 0) {
         tk = ++g_tmp;
@@ -23989,7 +23993,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
   /* a boxed IO handle, by the reopening its kind picks */
   int ks[16], n = io_reopen_defs(c, vnm, 0, ks, 16);
   for (int i = 0; i < n; i++) {
-    int vis = io_reopen_call_vis(c, ks[i], vnm, plain, caller);
+    int vis = io_reopen_call_vis(c, id, ks[i], vnm, plain, caller);
     if (vis == SP_VIS_PUBLIC) continue;
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO && ", tv, tv);
     emit_io_pick(c, tv, vnm, 0, b);
@@ -25190,7 +25194,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
               /* ...but self may call its own private methods: a boxed self
                  (a kept block's, which instance_exec may rebind) as well */
               if (!cplan_cmethod_visible(c, id, ccls[k], nm)) {
-                int vis = comp_cmethod_vis_declared(c, ccls[k], nm, NULL);
+                int vis = cplan_method_vis(c, id, ccls[k], nm, CPV_CMETHOD, NULL);
                 const char *vrn = class_ruby_name(c, ccls[k]) ? class_ruby_name(c, ccls[k]) : c->classes[ccls[k]].name;
                 int is_mod = comp_class_is_module(c, &c->classes[ccls[k]]);
                 buf_printf(b, "(sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"%s method '%s' called for %s %s\")[1])), sp_box_nil()) : ",
@@ -30661,7 +30665,7 @@ static int bool_side_closed_vis(Compiler *c, int id, int recv, int mi) {
   const char *nm = c->scopes[mi].name;
   int ci = c->scopes[mi].class_id;
   if (!nm || ci < 0 || ci >= c->nclasses) return SP_VIS_PUBLIC;
-  if (nt_str(nt, id, "vis_enforce")) return comp_method_vis_declared(c, ci, nm, NULL);
+  if (nt_str(nt, id, "vis_enforce")) return cplan_method_vis(c, id, ci, nm, 0, NULL);
   if (call_vis_exempt(nt, id, recv) || cplan_has_method_missing(c, id, ci, 0)) return SP_VIS_PUBLIC;
   return method_vis_for_caller(c, id, ci, nm);
 }
@@ -30957,7 +30961,7 @@ static int builtin_reopen_call_closed(Compiler *c, int id) {
   if (sn_guard_pending(c, id)) return 0;
   /* public_send refuses a closed method on self too */
   if (!nt_str(nt, id, "vis_enforce") && call_vis_exempt(nt, id, recv)) return 0;
-  int ci = builtin_reopen_vis_class(c, comp_ntype(c, recv), nm);
+  int ci = builtin_reopen_vis_class(c, id, comp_ntype(c, recv), nm);
   return ci >= 0 && !cplan_has_method_missing(c, id, ci, 0);
 }
 static void emit_call_inner(Compiler *c, int id, Buf *b) {
@@ -34489,7 +34493,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
      all predate builtin-reopening visibility tracking and don't consult it.
      Checked here, first, so a reopened name wins over all of them (K-028
      follow-up, kilau docs/CATALOG.md). */
-  if (!resolved && recv >= 0 && builtin_reopen_vis_class(c, rt, qm) >= 0) {
+  if (!resolved && recv >= 0 && builtin_reopen_vis_class(c, -1, rt, qm) >= 0) {
     if (!foldable) return -1;
     resolved = 1; yes = include_all;
   }

@@ -9872,7 +9872,10 @@ int propagate_prep_params(Compiler *c) {
         changed |= bind_call_params(c, id, to_mi);
         nsup++;
       }
-      if (nsup > 0) continue;
+      /* (a copy's super is the node its source's scope holds: its
+         parameters type the shadow slot by slot; a chain no super runs,
+         one kept for a version a call meets, types nothing) */
+      if (nsup > 0 || !scope_calls_super(c, from_mi)) continue;
       int n = fs->nparams < ts->nparams ? fs->nparams : ts->nparams;
       for (int i = 0; i < n; i++) {
         LocalVar *fp = scope_local(fs, fs->pnames[i]);

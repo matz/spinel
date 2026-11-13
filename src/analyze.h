@@ -473,6 +473,11 @@ int elab_method_versions(Compiler *c, const char *name);
    main's) history of it hold more than one version, or an alias, which
    names the version it captured? */
 int elab_method_replaced(Compiler *c, const char *name);
+/* may the visibility of `name` differ between two points of the load: does
+   one of its histories hold a visibility change of it (`private :m`), or
+   do the methods its versions give have more than one visibility (a
+   module's private one and a class's public one)? */
+int elab_method_vis_varies(Compiler *c, const char *name);
 /* does a call of `name` run, or open the window of the bodies around it,
    ahead of the first version of one of its histories, where the name is
    absent on that class and side? */
@@ -636,8 +641,9 @@ int elab_call_span(Compiler *c, int id, int cls, const char *name, int sg, int o
 /* does the program reach the version made at def node `def` on cls's
    chain (its singleton's when sg) under `name`: is a call of the name, or
    a Method's maker naming it, whose self may be cls or a class under it,
-   bound to it by the versions it may meet (elab_call_meet), or does an
-   alias capture it? */
+   bound to it by the versions it may meet (elab_call_meet:
+   elab_version_called), or does an alias capture it (elab_version_met)? */
+int elab_version_called(Compiler *c, int cls, int sg, const char *name, int def);
 int elab_version_met(Compiler *c, int cls, int sg, const char *name, int def);
 /* does cls's chain (its singleton's when sg) hold still for `name` from p
    to the load's end: each mixin of a module that has or may have the name

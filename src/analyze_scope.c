@@ -8033,6 +8033,15 @@ static int scope_body_has_super(Compiler *c, int scope_idx) {
 static int inc_super_reached(Compiler *c, int mi, int cls, const char *name) {
   return scope_body_has_super(c, mi) || elab_history_absent(c, cls, 0, name);
 }
+/* Does the program reach module method ms behind class ci's own method
+   own of its name (on the class side when sg): a super in own's body, or
+   a call that meets the module's version before own replaces it
+   (elab_version_called: the call plan maps that version to the copy)? An
+   include or an extend keeps the copy, under a hidden name, behind own
+   in the class's chain only then. */
+static int mixin_reached_behind_own(Compiler *c, int ci, int sg, int own, int ms) {
+  return scope_body_has_super(c, own) || elab_version_called(c, ci, sg, c->scopes[ms].name, c->scopes[ms].def_node);
+}
 
 /* True when the scope body reads or writes an instance variable. A module
    instance method that touches an ivar must be re-attributed (cloned) to the
@@ -8563,17 +8572,21 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
       /* The class overrides the module method. If the override calls super,
          the module method is the super target: copy it under a shadow name
          and chain to it so emit_super reaches it via the prepend-super path.
-         An alias the module makes of it reaches it too: then it is copied
-         under a shadow name only, which the alias names
-         (register_include_attrs). Otherwise the module method is simply
-         shadowed -- nothing to emit. */
-      int super_reaches = inc_super_reached(c, own, ci, src->name);
-      if (!super_reaches && !module_aliases_name(&c->classes[mod_id], src->name) &&
+         A call that meets the module's version before the override's def
+         runs (mixin_reached_behind_own) reaches it too, which the call plan
+         maps that version to: then it is chained the same way, as the
+         override's super would reach it, so it is reached wherever the
+         name is (compute_reachable), as an extend's copy is. An alias the
+         module makes of it reaches it too: then it is copied under a
+         shadow name only, which the alias names (register_include_attrs).
+         Otherwise the module method is simply shadowed -- nothing to emit. */
+      int behind_own = elab_history_absent(c, ci, 0, src->name) || mixin_reached_behind_own(c, ci, 0, own, ms);
+      if (!behind_own && !module_aliases_name(&c->classes[mod_id], src->name) &&
           !class_aliases_name(&c->classes[ci], src->name)) {
         if (!src->is_module_function) src->is_transplanted_source = 1;
         continue;
       }
-      const char *existing = super_reaches ? comp_prep_chain_target(c, ci, src->name) : NULL;
+      const char *existing = behind_own ? comp_prep_chain_target(c, ci, src->name) : NULL;
       /* spaces keep the shadow unwritable in Ruby source, so an explicit
          `obj.__inc_0_tag` finds nothing and raises; mc() folds them back
          to underscores, so the C symbol is unchanged (#3738) */
@@ -8596,7 +8609,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
         comp_prep_chain_add(cif, inc_shadow, prev);
         free(prev);
       }
-      else if (super_reaches) {
+      else if (behind_own) {
         comp_prep_chain_add(&c->classes[ci], src->name, inc_shadow);
       }
       dst_name = inc_shadow;
@@ -9618,14 +9631,14 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
        sits behind it: a super in the own method reaches the module's,
        copied in under a shadow name, in front of any module extended
        earlier. So does a call that meets the module's version before the
-       own method replaces it (elab_version_met): the call plan maps that
-       version to the copy. With neither, nothing can reach the copy. */
+       own method replaces it: the call plan maps that version to the copy
+       (mixin_reached_behind_own). With neither, nothing can reach the copy. */
     char *own_name = NULL;
     int guard = 0, behind_mi = -1;
     char behind[256] = "";
     if (own >= 0 && !c->scopes[own].is_extend_copy && !prepend) {
       extend_alias_refuse_own(c, mod_id, ci, src->name);
-      if (!scope_body_has_super(c, own) && !elab_version_met(c, ci, 1, src->name, src->def_node)) continue;
+      if (!mixin_reached_behind_own(c, ci, 1, own, ms)) continue;
       ClassInfo *cif = &c->classes[ci];
       char key[320];
       snprintf(behind, sizeof behind, "__inc %d %s", cif->prep_shadow_count++, src->name);

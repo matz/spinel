@@ -9,6 +9,7 @@ static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
 #include "implied_calls.h"
 #include "codegen_call_arms.h"
 #include "value_pos.h"
+#include <ctype.h>
 
 /* A constant write ends on the constant itself where the write stands as a
    value (comp_const_write_valued) but the statement form ends on something

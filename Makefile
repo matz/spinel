@@ -347,8 +347,14 @@ build/csrc:
 # -Werror=return-type: a compiler function that falls off its end returns
 # garbage under -O2, and the CFLAGS this is built with may turn the warning
 # off (-Wno-all); a moved rule once lost its last return this way.
+# -Werror=implicit-function-declaration: -Wno-all also silences the
+# diagnostic for a call no included header declares. Such a call compiles
+# as `int f()`, which cuts a pointer result and is a signature mismatch at a
+# wasm link; calls like this came back within weeks of #10241 declaring
+# them all. The rules below for spinel_parse.c, rbs_map.c and
+# re_lit_check.c carry it too.
 build/csrc/%.o: src/%.c $(SPINEL_HDRS) | build/csrc
-	$(CC) $(CFLAGS) -Werror=return-type -Isrc -Ibuild/csrc -c $< -o $@
+	$(CC) $(CFLAGS) -Werror=return-type -Werror=implicit-function-declaration -Isrc -Ibuild/csrc -c $< -o $@
 
 # Build revision, embedded in `spinel --version` (and spin's probe records).
 # cmp-guarded so only a HEAD move recompiles main.o, not every build.
@@ -443,15 +449,15 @@ build/csrc/codegen_util.o: build/csrc/sp_rt_names.h
 FORCE:
 
 build/csrc/sp_parse_lib.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/inline_rbs.c src/rbs_map.h src/node_table.h src/types.h $(PRISM_LIB) $(PLATFORM_HDRS) | build/csrc
-	$(CC) $(CFLAGS) -I$(PRISM_INC) $(INLINE_RBS_CFLAGS) -c src/spinel_parse.c -o $@
+	$(CC) $(CFLAGS) -Werror=implicit-function-declaration -I$(PRISM_INC) $(INLINE_RBS_CFLAGS) -c src/spinel_parse.c -o $@
 build/csrc/rbs_map.o: src/rbs_map.c src/rbs_map.h $(PLATFORM_HDRS) | build/csrc
-	$(CC) -c $(CFLAGS) -I$(RBS_INC) src/rbs_map.c -o $@
+	$(CC) -c $(CFLAGS) -Werror=implicit-function-declaration -I$(RBS_INC) src/rbs_map.c -o $@
 
 # Exercise the fallback even when vendor/rbs is present, without replacing
 # the parser object used by the ordinary compiler.
 SPINEL_NO_RBS = build/spinel-no-rbs
 build/csrc/sp_parse_no_rbs.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/node_table.h src/types.h $(PRISM_LIB) $(PLATFORM_HDRS) | build/csrc
-	$(CC) $(CFLAGS) -I$(PRISM_INC) -U SPINEL_INLINE_RBS -c src/spinel_parse.c -o $@
+	$(CC) $(CFLAGS) -Werror=implicit-function-declaration -I$(PRISM_INC) -U SPINEL_INLINE_RBS -c src/spinel_parse.c -o $@
 
 # The compiler links the regexp engine so it can compile a literal at build
 # time and refuse one the engine cannot read, where it used to reach the
@@ -461,7 +467,7 @@ build/csrc/sp_parse_no_rbs.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c
 # mruby API and re_spinel.c is spinel's side of it
 RE_HDRS = $(wildcard lib/regexp/*.h lib/regexp/*.inc lib/regexp/shim/*.h lib/regexp/shim/mruby/*.h)
 build/csrc/re_lit_check.o: src/re_lit_check.c $(RE_HDRS) | build/csrc
-	$(CC) $(CFLAGS) -Ilib/regexp -Ilib/regexp/shim -c src/re_lit_check.c -o $@
+	$(CC) $(CFLAGS) -Werror=implicit-function-declaration -Ilib/regexp -Ilib/regexp/shim -c src/re_lit_check.c -o $@
 
 # Defined HERE, above the first rule that names it. GNU make expands a rule's
 # prerequisites when the rule is READ, so with this further down the file the

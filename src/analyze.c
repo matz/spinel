@@ -769,6 +769,48 @@ static int cr_live_slot_read(CrLive *lv, int r) {
   return nm && anh_find(&lv->seg, nm) < 0 && const_node_class_index(lv->c, r) < 0;
 }
 
+static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist);
+/* The event of a call whose name is `call` (the code at `id`, a CallNode, in
+   scope s with self the class `cls` or -1): on a class constant, on self, or
+   on a value the program may hold a class in. Answers the receiver node a
+   constant names (the caller does not collect it again), else -1. */
+static int cr_live_call_event(CrLive *lv, int s, int id, const char *call, int cls, int persist) {
+  Compiler *c = lv->c;
+  const NodeTable *nt = c->nt;
+  int skip = -1;
+  int r = nt_ref(nt, id, "receiver");
+  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_ProgramNode;
+  const Scope *sc = &c->scopes[s];
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+    /* a `new` the call plan answers with the builtin constructor (one
+       that runs before the class's own `def self.new` is made) builds
+       an instance: the call names the class as a value */
+    int nc = call && is_new_name(call) ? const_node_class_index(c, r) : -1;
+    if (nc >= 0 && !c->classes[nc].is_struct && comp_cmethod_in_chain(c, nc, "new", NULL) >= 0 && cplan_user_new(c, id, nc) < 0) call = "";
+    cr_live_add(lv, s, CR_CONST_CALL, cr_live_read_name(c, r), call, -1, persist);
+    int p = rk == NK_ConstantPathNode ? nt_ref(nt, r, "parent") : -1;
+    if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode && nt_kind(nt, p) != NK_ConstantPathNode)
+      cr_live_collect(lv, s, p, cls, persist);
+    skip = r;
+  }
+  else if (rk == NK_SelfNode && cls >= 0 && !nt_int(nt, r, "sclass_value", 0)) {
+    /* (a `new` the plan answers with the builtin constructor, as on the constant) */
+    if (call && is_new_name(call) && !c->classes[cls].is_struct && comp_cmethod_in_chain(c, cls, "new", NULL) >= 0 &&
+        cplan_user_new(c, id, cls) < 0) call = "";
+    cr_live_add(lv, s, CR_BODY_CALL, NULL, call, cls, persist);
+  }
+  else if ((r < 0 || rk == NK_SelfNode) && cls >= 0)
+    cr_live_add(lv, s, CR_SELF_CALL, NULL, call, cls, 0);
+  else if ((r < 0 || rk == NK_SelfNode) && sc->is_cmethod && sc->class_id >= 0)
+    cr_live_add(lv, s, CR_SELF_CALL, NULL, call, sc->class_id, 0);
+  else if (rk == NK_CallNode && !sc->is_cmethod && sc->class_id >= 0 && sp_streq(nt_str(nt, r, "name"), "class") &&
+           nt_ref(nt, r, "receiver") >= 0 && nt_kind(nt, nt_ref(nt, r, "receiver")) == NK_SelfNode)
+    cr_live_add(lv, s, CR_SELF_CALL, NULL, call, sc->class_id, 0);
+  else if (r >= 0 || s == 0)
+    cr_live_add(lv, s, CR_DYN_CALL, NULL, call, -1, 0);
+  return skip;
+}
+
 /* The classes the code at `id` names in scope s, and the calls it makes that
    can reach a singleton method, not entering a nested def. `cls` is the
    class whose body the code is in, where self is that class, or -1.
@@ -797,37 +839,12 @@ static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist) {
   int skip = -1;
   if (cr_live_slot_write(nt, id)) persist = 1;
   if (k == NK_CallNode) {
-    int r = nt_ref(nt, id, "receiver");
-    NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_ProgramNode;
-    const Scope *sc = &c->scopes[s];
-    const char *call = cr_live_call_name(nt, id);
-    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-      /* a `new` the call plan answers with the builtin constructor (one
-         that runs before the class's own `def self.new` is made) builds
-         an instance: the call names the class as a value */
-      int nc = call && sp_streq(call, "new") ? const_node_class_index(c, r) : -1;
-      if (nc >= 0 && !c->classes[nc].is_struct && comp_cmethod_in_chain(c, nc, "new", NULL) >= 0 && cplan_user_new(c, id, nc) < 0) call = "";
-      cr_live_add(lv, s, CR_CONST_CALL, cr_live_read_name(c, r), call, -1, persist);
-      int p = rk == NK_ConstantPathNode ? nt_ref(nt, r, "parent") : -1;
-      if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode && nt_kind(nt, p) != NK_ConstantPathNode)
-        cr_live_collect(lv, s, p, cls, persist);
-      skip = r;
-    }
-    else if (rk == NK_SelfNode && cls >= 0 && !nt_int(nt, r, "sclass_value", 0)) {
-      /* (a `new` the plan answers with the builtin constructor, as on the constant) */
-      if (call && sp_streq(call, "new") && !c->classes[cls].is_struct && comp_cmethod_in_chain(c, cls, "new", NULL) >= 0 &&
-          cplan_user_new(c, id, cls) < 0) call = "";
-      cr_live_add(lv, s, CR_BODY_CALL, NULL, call, cls, persist);
-    }
-    else if ((r < 0 || rk == NK_SelfNode) && cls >= 0)
-      cr_live_add(lv, s, CR_SELF_CALL, NULL, call, cls, 0);
-    else if ((r < 0 || rk == NK_SelfNode) && sc->is_cmethod && sc->class_id >= 0)
-      cr_live_add(lv, s, CR_SELF_CALL, NULL, call, sc->class_id, 0);
-    else if (rk == NK_CallNode && !sc->is_cmethod && sc->class_id >= 0 && sp_streq(nt_str(nt, r, "name"), "class") &&
-             nt_ref(nt, r, "receiver") >= 0 && nt_kind(nt, nt_ref(nt, r, "receiver")) == NK_SelfNode)
-      cr_live_add(lv, s, CR_SELF_CALL, NULL, call, sc->class_id, 0);
-    else if (r >= 0 || s == 0)
-      cr_live_add(lv, s, CR_DYN_CALL, NULL, call, -1, 0);
+    /* a send's Symbol names the method it calls, and a `send` of the
+       program's own (a class's `def self.send`) answers the call: the call's
+       own name runs too */
+    const char *call = cr_live_call_name(nt, id), *own = nt_str(nt, id, "name");
+    skip = cr_live_call_event(lv, s, id, call, cls, persist);
+    if (own && call != own && is_send_family(own)) cr_live_call_event(lv, s, id, own, cls, persist);
   }
   /* a call on a slot hands its arguments to it: their reads persist, the
      receiver's as it was */

@@ -17058,21 +17058,6 @@ void emit_super(Compiler *c, int id, Buf *b) {
        BasicObject's or Kernel's (comp_super_object_builtin): the same object,
        false, the frozen bit, the object itself or Kernel's row's answer */
     if (uname && emit_super_object_builtin(c, id, s, uname, b)) return;
-    /* `super` from the program's own send, __send__ or public_send that no
-       ancestor of the program defines is Object's: it dispatches on the name
-       at run time, which no emitted code here does, so it is refused rather
-       than answered by a NoMethodError CRuby does not raise. An override
-       whose whole body is `super` is let through while no other override
-       exists (send_family_defined_anywhere): every send then lowers past it
-       (send_family_user_answers), so its body never runs. */
-    if (uname && is_send_family(uname) &&
-        (!send_def_just_supers(c, (int)(s - c->scopes)) || send_family_defined_anywhere(c, uname))) {
-      static char msg[320];
-      snprintf(msg, sizeof msg, "unsupported `super` in a program-defined `%s`: "
-               "it reaches Object#%s, which a program method cannot call yet "
-               "(only a `%s` whose whole body is `super` is supported, in a program with no other `%s` of its own)", uname, uname, uname, uname);
-      unsupported_feature(c, id, msg);
-    }
     /* No superclass method anywhere (parent chain, included-module shadow, and
        the exception-initialize special case all missed). CRuby raises
        NoMethodError at runtime, so emit that rather than rejecting at compile

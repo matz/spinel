@@ -5155,8 +5155,77 @@ int desugar_enumerable_chain(Compiler *c) {
   return changed;
 }
 
+/* Are the names a and b one name (or both none: an anonymous `*`, `&`)? */
+static int same_param_name(const char *a, const char *b) {
+  return (!a || !*a) ? (!b || !*b) : (b && sp_streq(a, b));
+}
+/* Is node `a`, an argument of a super, the read of the parameter named
+   `name` (or, for `*` and `&`, the anonymous one)? */
+static int super_arg_reads_param(const NodeTable *nt, int a, const char *name) {
+  if (a < 0) return !name || !*name;
+  return nt_kind(nt, a) == NK_LocalVariableReadNode && name && *name && sp_streq(nt_str(nt, a, "name"), name);
+}
+/* Is `sup`, the SuperNode that is the whole body of the def `def`, a call
+   that hands the method's own parameters to the method above it as they
+   came: each required and post parameter read by its name, the rest as a
+   splat of its own, a `**kw` as `**kw`, `...` as `...`, the block as the
+   block parameter's `&` or not at all (a super passes the block it was
+   given)? A `**nil` adds no argument. That is what a bare `super` does.
+   Optionals and explicit keywords are no pass-through here (a default
+   fills in what the caller left out; a keyword is passed as a pair). */
+static int super_passes_params(const NodeTable *nt, int def, int sup) {
+  int pm = nt_ref(nt, def, "parameters");
+  int nreq = 0, npost = 0, nopt = 0, nkw = 0;
+  const int *req = NULL, *post = NULL;
+  if (pm >= 0) {
+    req = nt_arr(nt, pm, "requireds", &nreq);
+    post = nt_arr(nt, pm, "posts", &npost);
+    nt_arr(nt, pm, "optionals", &nopt);
+    nt_arr(nt, pm, "keywords", &nkw);
+  }
+  int rest = pm >= 0 ? nt_ref(nt, pm, "rest") : -1;
+  int kwr = pm >= 0 ? nt_ref(nt, pm, "keyword_rest") : -1;
+  int blk = pm >= 0 ? nt_ref(nt, pm, "block") : -1;
+  if (nopt || nkw) return 0;
+  int fwd = kwr >= 0 && nt_kind(nt, kwr) == NK_ForwardingParameterNode;
+  int kwrest = kwr >= 0 && nt_kind(nt, kwr) == NK_KeywordRestParameterNode;
+  /* a `**nil` takes no keyword and hands on none */
+  int nokw = kwr >= 0 && nt_kind(nt, kwr) == NK_NoKeywordsParameterNode;
+  if (kwr >= 0 && !fwd && !kwrest && !nokw) return 0;
+  int ai = nt_ref(nt, sup, "arguments"), na = 0;
+  const int *av = ai >= 0 ? nt_arr(nt, ai, "arguments", &na) : NULL;
+  int want = nreq + (rest >= 0) + npost + kwrest + fwd, k = 0;
+  if (na != want) return 0;
+  for (int i = 0; i < nreq; i++, k++)
+    if (!super_arg_reads_param(nt, av[k], nt_str(nt, req[i], "name"))) return 0;
+  if (rest >= 0) {
+    if (nt_kind(nt, av[k]) != NK_SplatNode || !super_arg_reads_param(nt, nt_ref(nt, av[k], "expression"), nt_str(nt, rest, "name"))) return 0;
+    k++;
+  }
+  for (int i = 0; i < npost; i++, k++)
+    if (!super_arg_reads_param(nt, av[k], nt_str(nt, post[i], "name"))) return 0;
+  if (kwrest) {
+    /* `**kw` handed on as `**kw`: the one splat of a keyword hash */
+    int hn = 0, h = av[k++];
+    const int *el = nt_kind(nt, h) == NK_KeywordHashNode ? nt_arr(nt, h, "elements", &hn) : NULL;
+    if (hn != 1 || nt_kind(nt, el[0]) != NK_AssocSplatNode ||
+        !super_arg_reads_param(nt, nt_ref(nt, el[0], "value"), nt_str(nt, kwr, "name"))) return 0;
+  }
+  if (fwd) {
+    if (nt_kind(nt, av[k]) != NK_ForwardingArgumentsNode) return 0;
+    k++;
+  }
+  /* the block: none written, or the parameter's own */
+  int sb = nt_ref(nt, sup, "block");
+  if (sb < 0) return 1;
+  return !fwd && blk >= 0 && nt_kind(nt, sb) == NK_BlockArgumentNode &&
+         super_arg_reads_param(nt, nt_ref(nt, sb, "expression"), nt_str(nt, blk, "name"));
+}
+
 /* Is the program's method `mi` (send, __send__ or public_send) one whose whole
-   body is a bare `super`? It answers exactly what the method above it does --
+   body is a `super` that passes its parameters on unchanged: a bare `super`,
+   or a `super(...)` handing over the method's own parameters
+   (super_passes_params)? It answers exactly what the method above it does --
    Object's when none does (ruby/spec's super_spec: a module's
    `def __send__(name, *args, &block) = super`, included into a class) -- so it
    is no method of the program's own for the questions below. */
@@ -5169,7 +5238,9 @@ int send_def_just_supers(Compiler *c, int mi) {
     int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
     body = bn == 1 ? bb[0] : -1;
   }
-  return body >= 0 && nt_kind(nt, body) == NK_ForwardingSuperNode && nt_ref(nt, body, "block") < 0;
+  if (body < 0) return 0;
+  if (nt_kind(nt, body) == NK_ForwardingSuperNode) return nt_ref(nt, body, "block") < 0;
+  return nt_kind(nt, body) == NK_SuperNode && super_passes_params(nt, def, body);
 }
 
 /* Does the chain of class `cid` (its singleton chain when `cm`) reach a method
@@ -5204,15 +5275,18 @@ static int send_top_answers(Compiler *c, int id, const char *name) {
   return tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi);
 }
 
-/* Does a class of the program answer call `id` with a send of its own (the
-   classes whose chain answers the name, or every class while the chain memo
-   cannot be trusted)? For a receiver whose class no flow tells. */
+/* Does a class of the program answer call `id` with a send of its own, on its
+   instances or on the class itself (the classes whose chain answers the name
+   on each side, or every class while the chain memo cannot be trusted)? For
+   a receiver whose class no flow tells. */
 static int send_any_class_owns(Compiler *c, int id, const char *name) {
-  int n;
-  const int *rs = comp_name_responders(c, name, 0, &n);
-  for (int i = 0, k = 0; rs ? i < n : k < c->nclasses; i++, k++) {
-    if (rs) k = rs[2 * i];
-    if (send_own_in_chain(c, id, k, name, 0)) return 1;
+  for (int side = 0; side < 2; side++) {
+    int n;
+    const int *rs = comp_name_responders(c, name, side, &n);
+    for (int i = 0, k = 0; rs ? i < n : k < c->nclasses; i++, k++) {
+      if (rs) k = rs[2 * i];
+      if (send_own_in_chain(c, id, k, name, side)) return 1;
+    }
   }
   return 0;
 }
@@ -5239,11 +5313,20 @@ static int send_family_user_answers(Compiler *c, int id, int recv, const char *n
   if (send_top_answers(c, id, name)) return 1;
   if (recv < 0 || nt_kind(c->nt, recv) == NK_SelfNode) {
     Scope *sc = comp_scope_of(c, id);
-    if (!sc || sc->class_id < 0) return 0;
+    if (!sc || sc->class_id < 0) {
+      /* in a class's own body self is the class (comp_cbody_call_mi) */
+      int cb = c->node_cbody[id];
+      return cb >= 0 && !(sc && sc->name) && send_own_in_chain(c, id, cb, name, 1);
+    }
     return send_own_in_chain(c, id, sc->class_id, name, sc->is_cmethod);
   }
   TyKind rt = infer_type(c, recv);
   if (ty_is_object(rt)) return send_own_in_chain(c, id, ty_object_class(rt), name, 0);
+  /* a class or module the program names: its singleton chain's send */
+  if (rt == TY_CLASS) {
+    int ci = class_recv_static_ci(c, recv);
+    return ci >= 0 && send_own_in_chain(c, id, ci, name, 1);
+  }
   if (rt == TY_POLY || rt == TY_UNKNOWN) return send_poly_user_answers(c, id, recv, name);
   /* a builtin receiver: the program's only through a reopening of its class */
   int bcls = builtin_class_of_type(rt) ? core_of_type(rt) : -1;
@@ -5404,7 +5487,17 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
     if (mi < 0 || send_def_just_supers(c, mi) || !class_ruby_name(c, k)) continue;
     owners[nown++] = k;
   }
-  if (nown == 0) { free(owners); return 0; }
+  /* the classes and modules whose own singleton chain answers it: a Class
+     value of theirs (or of a subclass) is the owner's too */
+  int *cowners = malloc(sizeof(int) * (size_t)(c->nclasses + 1)), ncown = 0;
+  if (!cowners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  { int nr;
+    const int *rs = comp_name_responders(c, nm, 1, &nr);
+    for (int i = 0, k = 0; rs ? i < nr : k < c->nclasses; i++, k++) {
+      if (rs) k = rs[2 * i];
+      if (class_ruby_name(c, k) && send_own_in_chain(c, id, k, nm, 1)) cowners[ncown++] = k;
+    } }
+  if (nown == 0 && ncown == 0) { free(owners); free(cowners); return 0; }
   char mbuf[256], tname[64];
   snprintf(mbuf, sizeof mbuf, "%s", mname);
   snprintf(tname, sizeof tname, "__sus_%s", comp_node_tag(c, id));
@@ -5441,15 +5534,35 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
   /* `r&.send(:m)` answers nil for a nil receiver on either arm */
   if (nt_safe_nav(nt, id)) nt_set_safe_nav(nt, direct, 1);
   int cond = -1;
-  for (int i = 0; i < nown; i++) {
+  for (int i = 0; i < nown + ncown; i++) {
     int tr = nt_new_node(nt, "LocalVariableReadNode");
     nt_node_set_str(nt, tr, "name", tname); nt_node_set_int(nt, tr, "depth", 0);
-    int kc = sus_class_const(c, owners[i]);
-    if (kc < 0) { free(owners); return 0; }
-    int test = fwd_new_call(nt, tr, "is_a?", kc);
+    int cls = i < nown ? owners[i] : cowners[i - nown];
+    int kc = sus_class_const(c, cls);
+    if (kc < 0) { free(owners); free(cowners); return 0; }
+    /* an instance owner: `t.is_a?(K)`. A class or module owner: `Module === t`
+       first (a test on the constant Module, which no method of a class of the
+       value, an `is_a?` or `<=` it defines, can answer), then for a class K
+       `t <= K` (K itself or a class below it, which inherits its singleton
+       send) and for a module K `t.equal?(K)` (K's singleton methods are K's
+       own: a class including K does not have them) */
+    int test;
+    if (i < nown) test = fwd_new_call(nt, tr, "is_a?", kc);
+    else {
+      int tr2 = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, tr2, "name", tname); nt_node_set_int(nt, tr2, "depth", 0);
+      int mod = nt_new_node(nt, "ConstantReadNode");
+      nt_node_set_str(nt, mod, "name", "Module");
+      int isc = fwd_new_call(nt, mod, "===", tr);
+      int same = fwd_new_call(nt, tr2, comp_class_is_module(c, &c->classes[cls]) ? "equal?" : "<=", kc);
+      int an = nt_new_node(nt, "AndNode");
+      nt_node_set_ref(nt, an, "left", isc); nt_node_set_ref(nt, an, "right", same);
+      test = an;
+    }
     if (cond < 0) cond = test;
     else { int o = nt_new_node(nt, "OrNode"); nt_node_set_ref(nt, o, "left", cond); nt_node_set_ref(nt, o, "right", test); cond = o; }
   }
+  free(cowners);
   int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
   int el = nt_new_node(nt, "ElseNode"), ifn = nt_new_node(nt, "IfNode");
   nt_node_set_arr(nt, ys, "body", &keep, 1);

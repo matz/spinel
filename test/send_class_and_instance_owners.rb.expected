@@ -1,0 +1,13 @@
+[:ksend, :m]
+[:isend, :m]
+[:esend, :m]
+[:esend, :m]
+:pm
+NoMethodError
+[:psend, :m]
+[:psend, :m]
+:pm
+[:ksend, :m]
+:pm
+[:psend, :m]
+[:bsend, :m]

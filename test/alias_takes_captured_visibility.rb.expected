@@ -1,0 +1,14 @@
+[:ins, :ob, :own2]
+[:own, :own3, :pp2, :pp3, :pr2]
+[false, true, true]
+[true, false]
+[true, false]
+[:bar2]
+[:baz, :foo2]
+[:bar2]
+[:pp3]
+[:pp2, :pp4]
+[:ap, :ra, :rr, :ss]
+[]
+true
+false

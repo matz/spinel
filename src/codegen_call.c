@@ -19478,17 +19478,6 @@ static int refl_vis_wanted(int v, int pub, int prot, int priv) {
          (v == SP_VIS_PRIVATE && priv);
 }
 
-/* The visibility `ci` gives its own method `m`: its own declaration, else
-   the including module's for a copied-in method, else public. */
-static int refl_own_vis(Compiler *c, int ci, int si, const char *m) {
-  ClassInfo *k = &c->classes[ci];
-  for (int i = 0; i < k->nvis; i++)
-    if (sp_streq(k->vis_names[i], m)) return k->vis_kinds[i];
-  int om = si >= 0 ? c->scopes[si].origin_module_ci - 1 : -1;
-  if (om >= 0 && om < c->nclasses) return comp_method_vis(&c->classes[om], m);
-  return SP_VIS_PUBLIC;
-}
-
 /* `class T < Struct.new(:a)` is registered as the struct itself, but its
    member accessors belong to the anonymous superclass. */
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m) {
@@ -19590,84 +19579,23 @@ void refl_class_instance_methods(Compiler *c, int ci, int pub, int prot, ReflNam
   refl_object_methods(c, ci, pub, prot, 0, r);
 }
 
-/* Mod.instance_methods / public_instance_methods with the inherited ones
-   (no argument, or `true`): what the module and the modules it includes
-   define, each name as the nearest of them that answers for it has it --
-   defined (an_module_defines), given a visibility, or undefined. Only for a
-   module an_module_methods_listable passes, whose includes form a tree in
-   which no two unrelated modules answer for one name, so an includer comes
-   before what it includes and sibling order does not matter. */
-static void refl_module_order(Compiler *c, int m, int *order, int *n, int cap) {
-  for (int j = 0; j < *n; j++) if (order[j] == m) return;
-  if (*n >= cap || m < 0 || m >= c->nclasses) return;
-  order[(*n)++] = m;
-  ClassInfo *kc = &c->classes[m];
-  for (int i = kc->nincluded_mods - 1; i >= 0; i--) refl_module_order(c, kc->included_mods[i], order, n, cap);
+/* A name of a module's list, noted shown where its visibility is one the form asks (the plan has left out the
+   compiler's helpers). */
+static void refl_module_note(void *ud, const char *nm, int vis) {
+  ReflCand *n = ud;
+  refl_note(n->r, nm, refl_vis_wanted(vis, n->pub, n->prot, n->priv));
 }
-/* 1 when module m itself answers for nm (its own definition, or a
-   visibility line for one a module it includes defines), -1 when it
-   undefines it, 0 when it leaves it to the modules it includes. *vis is the
-   visibility it gives. The visibility table holds class-level methods'
-   lines too, so a line counts only for an instance method below it. */
-static int refl_module_own(Compiler *c, int m, const int *order, int norder, int at,
-                           const char *nm, int *vis) {
-  ClassInfo *kc = &c->classes[m];
-  for (int u = 0; u < kc->nundefs; u++) if (sp_streq(kc->undefs[u], nm)) return -1;
-  if (an_module_defines(c, m, nm, vis)) {
-    if (*vis < 0) *vis = refl_own_vis(c, m, comp_method_in_class(c, m, nm), nm);
-    return 1;
-  }
-  for (int i = 0; i < kc->nvis; i++) {
-    if (!sp_streq(kc->vis_names[i], nm)) continue;
-    for (int j = at + 1; j < norder; j++) {
-      int v2 = 0;
-      if (comp_module_includes(c, m, order[j], 0) && an_module_defines(c, order[j], nm, &v2))
-        { *vis = kc->vis_kinds[i]; return 1; }
-    }
-    break;
-  }
-  return 0;
-}
-/* Mod.{,public_,private_,protected_}instance_methods(false): the names the
-   module itself answers for -- its own definitions and the visibility lines
-   it gives an included method (a `private :m` makes the module's own copy). */
-void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r) {
-  int order[256], n = 0;
-  refl_module_order(c, m, order, &n, 256);
-  ReflNames all = {0};
-  for (int j = 0; j < n; j++) {
-    refl_own_instance_methods(c, order[j], 1, 1, 1, 1, &all);
-    for (int i = 0; i < c->classes[order[j]].nvis; i++) refl_note(&all, c->classes[order[j]].vis_names[i], 1);
-  }
-  for (int i = 0; i < all.n; i++) {
-    int vis = SP_VIS_PUBLIC;
-    if (refl_module_own(c, m, order, n, 0, all.v[i], &vis) > 0)
-      refl_note(r, all.v[i], refl_vis_wanted(vis, pub, prot, priv));
-  }
-  refl_free(&all);
-}
+/* Mod.instance_methods / public_instance_methods with the inherited ones (no argument, or `true`): what the module
+   and the modules it includes define, each name as the nearest of them that answers for it has it (the call plan's
+   question, cplan_module_methods). */
 void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r) {
-  int order[256], n = 0;
-  refl_module_order(c, m, order, &n, 256);
-  /* every name any of them mentions, then each one's answer */
-  ReflNames all = {0};
-  for (int j = 0; j < n; j++) {
-    int k = order[j];
-    ClassInfo *kc = &c->classes[k];
-    refl_own_instance_methods(c, k, 1, 1, 1, 1, &all);
-    for (int i = 0; i < kc->nvis; i++) refl_note(&all, kc->vis_names[i], 1);
-  }
-  for (int i = 0; i < all.n; i++) {
-    const char *nm = all.v[i];
-    for (int j = 0; j < n; j++) {
-      int vis = SP_VIS_PUBLIC;
-      int a = refl_module_own(c, order[j], order, n, j, nm, &vis);
-      if (a == 0) continue;
-      refl_note(r, nm, a > 0 && refl_vis_wanted(vis, 1, prot, 0));
-      break;
-    }
-  }
-  refl_free(&all);
+  ReflCand n = { c, r, 1, prot, 0 };
+  cplan_module_methods(c, m, 0, refl_module_note, &n);
+}
+/* Mod.{,public_,private_,protected_}instance_methods(false): the names the module itself answers for. */
+void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r) {
+  ReflCand n = { c, r, pub, prot, priv };
+  cplan_module_methods(c, m, 1, refl_module_note, &n);
 }
 
 /* A class-side candidate: singleton_methods lists the public and protected

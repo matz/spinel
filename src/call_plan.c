@@ -3420,6 +3420,258 @@ void cplan_list_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, 
   if (side & CT_CMETHOD) list_cmethod_candidates(c, cls, side, fn, ud);
   else list_instance_candidates(c, cls, side, fn, ud);
 }
+/* ---- a module's instance-method list ----
+   A module's list is its own definitions and those of the modules it includes, each name as the nearest of them that
+   answers for it has it. The call plan owns the model (it reads the module's undef and visibility tables once, here):
+   cplan_module_listable says whether the lookup order is plain enough to list ahead of time, cplan_module_methods
+   enumerates the names with the answer's visibility. */
+/* The visibility `ci` gives its own method `m`: its own declaration, else
+   the including module's for a copied-in method, else public. */
+static int module_own_vis(Compiler *c, int ci, int si, const char *m) {
+  ClassInfo *k = &c->classes[ci];
+  for (int i = 0; i < k->nvis; i++)
+    if (sp_streq(k->vis_names[i], m)) return k->vis_kinds[i];
+  int om = si >= 0 ? c->scopes[si].origin_module_ci - 1 : -1;
+  if (om >= 0 && om < c->nclasses) return comp_method_vis(&c->classes[om], m);
+  return SP_VIS_PUBLIC;
+}
+
+/* Does module m itself define nm as an instance method: a def of its own (a
+   module_function's private instance side too), or an accessor or alias no
+   module it includes carries as well (an include copies those into the
+   includer's lists, as it copies defs into its table)? *vis is the
+   visibility it gives, -1 for a def (the caller reads the def's). */
+static int module_carries(Compiler *c, int m, const char *nm) {
+  ClassInfo *kc = &c->classes[m];
+  char base[256];
+  if (setter_base_name(nm, base, sizeof base)) {
+    if (comp_is_writer(kc, base)) return 1;
+  }
+  else if (comp_is_reader(kc, nm)) return 1;
+  for (int i = 0; i < kc->naliases; i++) if (kc->alias_new[i] && sp_streq(kc->alias_new[i], nm)) return 1;
+  return 0;
+}
+static int module_defines(Compiler *c, int m, const char *nm, int *vis) {
+  int si = comp_method_in_class(c, m, nm);
+  if (si >= 0 && c->scopes[si].origin_module_ci == 0) {
+    *vis = c->scopes[si].is_module_function || c->scopes[si].is_cmethod ? SP_VIS_PRIVATE : -1;
+    return 1;
+  }
+  for (int k = 0; k < c->nscopes; k++) {
+    Scope *s = &c->scopes[k];
+    if (s->class_id == m && s->is_module_function && s->name && sp_streq(s->name, nm) &&
+        s->origin_module_ci == 0) { *vis = SP_VIS_PRIVATE; return 1; }
+  }
+  if (!module_carries(c, m, nm)) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (k != m && comp_module_includes(c, m, k, 0) && module_carries(c, k, nm)) return 0;
+  *vis = comp_method_vis(&c->classes[m], nm);
+  return 1;
+}
+
+/* Mod.instance_methods / public_instance_methods with the inherited ones:
+   listable ahead of time when the lookup order is plain. The module and the
+   modules it includes (each reached through one include only) are defined
+   by `module` bodies (not Module.new) and mix in nothing but each other,
+   through an include that is a statement of the body itself -- not one in a
+   conditional, a begin or a method, not a builtin (Comparable), not a
+   prepend -- and no two of them that are not one another's ancestor
+   define, undefine or give a visibility to the same name, nor does one
+   both define and undefine it. Then each name's answer is the nearest
+   module's whatever order sibling includes take. The module has no
+   class-level method of `name` of its own or from a module it extends. */
+static int module_tree(Compiler *c, int m, int *mods, int *n, int cap) {
+  const NodeTable *nt = c->nt;
+  if (m < 0 || m >= c->nclasses || *n >= cap) return 0;
+  for (int j = 0; j < *n; j++) if (mods[j] == m) return 0;   /* reached twice */
+  ClassInfo *mc = &c->classes[m];
+  if (!comp_class_is_module(c, mc) || mc->is_native_class || mc->nincluded_mod_names > 0) return 0;
+  mods[(*n)++] = m;
+  int nb = 0;
+  const LrOpen *ob = elab_class_bodies(c, m, &nb);
+  for (int b = 0; b < nb; b++) {
+    int sn = 0;
+    const int *stmts = ob[b].body >= 0 ? nt_arr(nt, ob[b].body, "body", &sn) : NULL;
+    for (int k = 0; k < sn; k++) {
+      int prep = 0; const int *aa;
+      int an = mixin_stmt_args(nt, stmts[k], &prep, &aa);
+      if (an < 0) continue;
+      if (prep || an == 0) return 0;
+      for (int j = 0; j < an; j++) {
+        NodeKind ak = nt_kind(nt, aa[j]);
+        int im = ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? class_recv_static_ci(c, aa[j]) : -1;
+        if (im < 0 || !module_tree(c, im, mods, n, cap)) return 0;
+      }
+    }
+  }
+  return 1;
+}
+static int module_answers(Compiler *c, int m, const char *nm, int *undef) {
+  ClassInfo *kc = &c->classes[m];
+  int v;
+  int def = module_defines(c, m, nm, &v);
+  *undef = 0;
+  for (int u = 0; u < kc->nundefs; u++) if (sp_streq(kc->undefs[u], nm)) *undef = 1;
+  if (def || *undef) return 1;
+  for (int i = 0; i < kc->nvis; i++) if (sp_streq(kc->vis_names[i], nm)) return 1;
+  return 0;
+}
+/* Is id a statement of one of class ci's bodies' own statement lists? */
+static int module_body_stmt(Compiler *c, int ci, int id) {
+  int nb = 0;
+  const LrOpen *ob = elab_class_bodies(c, ci, &nb);
+  for (int b = 0; b < nb; b++) {
+    int sn = 0;
+    const int *stmts = ob[b].body >= 0 ? nt_arr(c->nt, ob[b].body, "body", &sn) : NULL;
+    for (int k = 0; k < sn; k++) if (stmts[k] == id) return 1;
+  }
+  return 0;
+}
+
+/* See call_plan.h. */
+int cplan_module_listable(Compiler *c, int m, const char *name) {
+  const NodeTable *nt = c->nt;
+  if (m < 0 || m >= c->nclasses) return 0;
+  ClassInfo *mc = &c->classes[m];
+  if (comp_cmethod_in_chain(c, m, name, NULL) >= 0) return 0;
+  for (int e = 0; e < mc->nextended_mods; e++)
+    if (comp_method_in_class(c, mc->extended_mods[e], name) >= 0) return 0;
+  int mods[64], n = 0;
+  int ok = module_tree(c, m, mods, &n, 64);
+  /* an include or prepend anywhere but a body's own statement list */
+  for (int id = 0; ok && id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !(is_include_name(nm) || is_prepend_name(nm))) continue;
+    int rcv = nt_ref(nt, id, "receiver");
+    if (rcv >= 0 && nt_kind(nt, rcv) != NK_SelfNode) continue;   /* refused on its own */
+    int owner = c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1;
+    if (owner < 0) { Scope *sc = comp_scope_of(c, id); owner = sc ? sc->class_id : -1; }
+    int in_mods = 0;
+    for (int j = 0; j < n; j++) if (mods[j] == owner) in_mods = 1;
+    if (!in_mods || (rcv < 0 && module_body_stmt(c, owner, id))) continue;
+    ok = 0;
+  }
+  if (!ok) return 0;
+  /* no two unrelated modules answer for one name */
+  for (int j = 0; j < n; j++) {
+    ClassInfo *kc = &c->classes[mods[j]];
+    int nnames = 0;
+    const char *names[1024];
+    for (int si = 0; si < c->nscopes && nnames < 1024; si++)
+      if (c->scopes[si].class_id == mods[j] && c->scopes[si].name) names[nnames++] = c->scopes[si].name;
+    for (int i = 0; i < kc->nreaders && nnames < 1024; i++) names[nnames++] = kc->readers[i];
+    for (int i = 0; i < kc->naliases && nnames < 1024; i++) if (kc->alias_new[i]) names[nnames++] = kc->alias_new[i];
+    for (int i = 0; i < kc->nvis && nnames < 1024; i++) names[nnames++] = kc->vis_names[i];
+    for (int i = 0; i < kc->nundefs && nnames < 1024; i++) names[nnames++] = kc->undefs[i];
+    if (nnames >= 1024) return 0;
+    for (int q = 0; q < nnames; q++) {
+      int ua, ub;
+      if (!module_answers(c, mods[j], names[q], &ua)) continue;
+      int va;
+      if (ua && module_defines(c, mods[j], names[q], &va)) return 0;
+      for (int j2 = j + 1; j2 < n; j2++)
+        if (module_answers(c, mods[j2], names[q], &ub) &&
+            !comp_module_includes(c, mods[j], mods[j2], 0) && !comp_module_includes(c, mods[j2], mods[j], 0))
+          return 0;
+    }
+    /* a writer's name is its reader's plus `=` */
+    for (int i = 0; i < kc->nwriters; i++) {
+      char wn[256]; snprintf(wn, sizeof wn, "%s=", kc->writers[i]);
+      int ua, ub;
+      if (!module_answers(c, mods[j], wn, &ua)) continue;
+      for (int j2 = j + 1; j2 < n; j2++)
+        if (module_answers(c, mods[j2], wn, &ub) &&
+            !comp_module_includes(c, mods[j], mods[j2], 0) && !comp_module_includes(c, mods[j2], mods[j], 0))
+          return 0;
+    }
+  }
+  return 1;
+}
+
+/* Mod.instance_methods / public_instance_methods with the inherited ones
+   (no argument, or `true`): what the module and the modules it includes
+   define, each name as the nearest of them that answers for it has it --
+   defined (module_defines), given a visibility, or undefined. Only for a
+   module cplan_module_listable passes, whose includes form a tree in
+   which no two unrelated modules answer for one name, so an includer comes
+   before what it includes and sibling order does not matter. */
+static void module_order(Compiler *c, int m, int *order, int *n, int cap) {
+  for (int j = 0; j < *n; j++) if (order[j] == m) return;
+  if (*n >= cap || m < 0 || m >= c->nclasses) return;
+  order[(*n)++] = m;
+  ClassInfo *kc = &c->classes[m];
+  for (int i = kc->nincluded_mods - 1; i >= 0; i--) module_order(c, kc->included_mods[i], order, n, cap);
+}
+/* 1 when module m itself answers for nm (its own definition, or a
+   visibility line for one a module it includes defines), -1 when it
+   undefines it, 0 when it leaves it to the modules it includes. *vis is the
+   visibility it gives. The visibility table holds class-level methods'
+   lines too, so a line counts only for an instance method below it. */
+static int module_own(Compiler *c, int m, const int *order, int norder, int at,
+                           const char *nm, int *vis) {
+  ClassInfo *kc = &c->classes[m];
+  for (int u = 0; u < kc->nundefs; u++) if (sp_streq(kc->undefs[u], nm)) return -1;
+  if (module_defines(c, m, nm, vis)) {
+    if (*vis < 0) *vis = module_own_vis(c, m, comp_method_in_class(c, m, nm), nm);
+    return 1;
+  }
+  for (int i = 0; i < kc->nvis; i++) {
+    if (!sp_streq(kc->vis_names[i], nm)) continue;
+    for (int j = at + 1; j < norder; j++) {
+      int v2 = 0;
+      if (comp_module_includes(c, m, order[j], 0) && module_defines(c, order[j], nm, &v2))
+        { *vis = kc->vis_kinds[i]; return 1; }
+    }
+    break;
+  }
+  return 0;
+}
+/* A name the module's lists may hold, once (its first sighting keeps the order) */
+typedef struct { Compiler *c; char **v; int n, cap; } ModNames;
+static void module_name_add(ModNames *a, const char *nm) {
+  if (name_is_synth_method(a->c, nm)) return;   /* (the compiler's synthesized helpers are no method of the module's: candidates and visibility lines alike) */
+  for (int i = 0; i < a->n; i++) if (sp_streq(a->v[i], nm)) return;
+  if (a->n >= a->cap) {
+    a->cap = a->cap ? a->cap * 2 : 32;
+    if (!(a->v = realloc(a->v, sizeof(char *) * (size_t)a->cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  a->v[a->n++] = strdup(nm);
+}
+static void module_candidate(void *ud, const char *nm, int vis) {
+  (void)vis;
+  module_name_add(ud, nm);
+}
+/* See call_plan.h. */
+void cplan_module_methods(Compiler *c, int m, int own, CplanCandFn fn, void *ud) {
+  int order[256], n = 0;
+  ModNames all = { c, NULL, 0, 0 };
+  module_order(c, m, order, &n, 256);
+  /* every name any of them mentions, then each one's answer */
+  for (int j = 0; j < n; j++) {
+    ClassInfo *kc = &c->classes[order[j]];
+    cplan_list_candidates(c, order[j], 0, module_candidate, &all);
+    for (int i = 0; i < kc->nvis; i++) module_name_add(&all, kc->vis_names[i]);
+  }
+  for (int i = 0; i < all.n; i++) {
+    const char *nm = all.v[i];
+    int vis = SP_VIS_PUBLIC;
+    if (own) {
+      if (module_own(c, m, order, n, 0, nm, &vis) > 0) fn(ud, nm, vis);
+      continue;
+    }
+    for (int j = 0; j < n; j++) {
+      vis = SP_VIS_PUBLIC;
+      int a = module_own(c, order[j], order, n, j, nm, &vis);
+      if (a == 0) continue;
+      fn(ud, nm, a > 0 ? vis : -1);   /* (-1: undefined, which hides the name) */
+      break;
+    }
+  }
+  for (int i = 0; i < all.n; i++) free(all.v[i]);
+  free(all.v);
+}
+
 
 int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
   const NodeTable *nt = c->nt;

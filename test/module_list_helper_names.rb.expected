@@ -1,0 +1,8 @@
+[:e, :each, :inspect, :to_s, :v]
+[:v=]
+[:e, :each, :to_s, :v]
+[:inspect]
+[:g]
+[:f]
+[:f]
+[:f, :g]

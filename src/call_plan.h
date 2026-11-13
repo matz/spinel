@@ -1354,6 +1354,16 @@ int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *na
    still are not). */
 typedef void (*CplanCandFn)(void *ud, const char *name, int vis);
 void cplan_list_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud);
+/* Is module m's instance-method list (`Mod.instance_methods`, `Mod.instance_methods(false)`, their public, private and
+   protected forms) listable ahead of time: the module and the modules it includes are defined by `module` bodies
+   and mix in nothing but each other through statements of the body itself, no two of them that are not one
+   another's ancestor define, undefine or give a visibility to the same name, and the module has no class-level method
+   of `name` of its own or from a module it extends? Then each name's answer is the nearest module's. */
+int cplan_module_listable(Compiler *c, int m, const char *name);
+/* The names of module m's instance-method list, each with the visibility its answer gives it (SP_VIS_*, -1 for a
+   name the nearest answering module undefines, which hides it); with own, the names m itself answers for: its own
+   definitions and the visibility lines it gives an included method. Only for a module cplan_module_listable passes. */
+void cplan_module_methods(Compiler *c, int m, int own, CplanCandFn fn, void *ud);
 /* What version entry scope e's else arm finds while no version of its
    chain is live, as respond_to? and a Method's maker see it
    (VerEntry.finds): a public method, a private or protected one, or none

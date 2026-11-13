@@ -7,6 +7,7 @@
 #include "implicit_calls.h"
 #include "builtin_ops.h"
 #include "repr.h"
+#include "order_plan.h"
 #include "decide.h"
 #include "call_plan.h"
 #include "share.h"
@@ -55483,6 +55484,9 @@ void analyze_program(Compiler *c) {
   if (getenv("SP_FIXPOINT_LOG"))
     fprintf(stderr, "[fp] rounds=%d%s\n", g_fixpoint_rounds,
             g_fixpoint_capped ? " (CAP -- did not converge)" : "");
+  /* the operand-order record: where each operand of a list is evaluated,
+     from the settled types, before the String marks read it */
+  AN_PHASE("operand_order", order_facts_build(c));
   /* a String-keyed Hash's key borrows a handle's bytes, read off the final
      types and flags */
   share_mark_borrows(c);

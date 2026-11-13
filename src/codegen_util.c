@@ -817,9 +817,9 @@ int call_unused_block(Compiler *c, int id) {
   return nt_kind(nt, blk) == NK_BlockArgumentNode && !subtree_has_side_effect(c, blk) ? blk : -1;
 }
 
-int subtree_has_side_effect(Compiler *c, int id) {
+/* See codegen_internal.h. */
+int node_has_side_effect(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (id < 0) return 0;
   const char *ty = nt_type(nt, id);
   NodeKind k = nt_kind(nt, id);
   if (!ty) return 0;
@@ -833,6 +833,13 @@ int subtree_has_side_effect(Compiler *c, int id) {
   /* a bare Array.new / Hash.new is as empty and as unobservable as the
      literal `[]` / `{}`, which is no effect */
   if (k == NK_CallNode && !call_is_scalar_op(c, id) && !node_is_empty_container(c, id)) return 1;
+  return -1;
+}
+int subtree_has_side_effect(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;
+  int own = node_has_side_effect(c, id);
+  if (own >= 0) return own;
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
     if (subtree_has_side_effect(c, nt_ref_at(nt, id, i))) return 1;
@@ -849,9 +856,8 @@ int subtree_has_side_effect(Compiler *c, int id) {
    follows the one method the classes from `cls` down define for it, up to
    a few calls deep; anything else that runs code of the program's -- a
    call on another object, a yield, a super, a block -- may write it. */
-int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth) {
+int node_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth) {
   const NodeTable *nt = c->nt;
-  if (id < 0) return 0;
   const char *ty = nt_type(nt, id);
   NodeKind k = nt_kind(nt, id);
   if (!ty) return 0;
@@ -870,6 +876,13 @@ int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int dep
     if (mi < 0 || c->scopes[mi].def_node < 0 || dispatch_impl_count(c, id, cls, nm) != 1) return 1;
     if (subtree_may_write_ivar(c, nt_ref(nt, c->scopes[mi].def_node, "body"), iv, cls, depth + 1)) return 1;
   }
+  return -1;
+}
+int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;
+  int own = node_may_write_ivar(c, id, iv, cls, depth);
+  if (own >= 0) return own;
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
     if (subtree_may_write_ivar(c, nt_ref_at(nt, id, i), iv, cls, depth)) return 1;

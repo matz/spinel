@@ -30,6 +30,7 @@
 #include "unit_cache.h"
 #include "decide.h"
 #include "method_table_check.h"
+#include "order_plan.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -609,11 +610,15 @@ static int parse_flag(const char *a) {
   return 0;
 }
 /* The dumps of an analysis answer, printed once the analysis has it:
-   --dump-repr (the representations, as the compile settles them) and
+   --dump-repr (the representations, as the compile settles them),
+   --dump-order (the operand-order record, --dump-order=all with the lists
+   that have no row) and
    --dump-load-record (the load phase's points, after the scope walk). 1
    when `a` is one of them. */
 static int analysis_dump_flag(const char *a) {
   if (sp_streq(a, "--dump-repr")) return g_dump_repr = 1;
+  if (sp_streq(a, "--dump-order")) return g_dump_order = 1;
+  if (sp_streq(a, "--dump-order=all")) return g_dump_order = 2;
   if (sp_streq(a, "--dump-implicit")) return g_dump_implicit = 1;
   return sp_streq(a, "--dump-load-record") ? (g_dump_load_record = 1) : 0;
 }

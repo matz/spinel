@@ -1,0 +1,141 @@
+== g10_interp_matz2.rb
+g10_interp_matz2.rb:1 call +@: none (tail)
+g10_interp_matz2.rb:2 call p: none (tail)
+g10_interp_matz2.rb:2 interp: 0 EmbeddedStatements AHEAD code across | 1 EmbeddedStatements AHEAD code | guard=call steps=0
+g10_interp_matz2.rb:2 call to_s: none (tail)
+g10_interp_matz2.rb:2 call upcase!: none (pure)
+g10_interp_matz2.rb:2 call <<: 0 s INLINE across | 1 String AHEAD code | guard=call steps=0
+== g11_aset_value.rb
+g11_aset_value.rb:1 call <<: 0 @s INLINE across | 1 String AHEAD code | guard=call steps=0
+g11_aset_value.rb:1 call +@: none (tail)
+g11_aset_value.rb:2 call +@: none (tail)
+g11_aset_value.rb:3 call p: none (tail)
+g11_aset_value.rb:3 call []=: 0 m AHEAD code | 1 2 INLINE | 2 @s INLINE | guard=call steps=0
+== g1_center_proc_mut.rb
+g1_center_proc_mut.rb:1 call +@: none (tail)
+g1_center_proc_mut.rb:2 call <<: 0 s INLINE across | 1 String AHEAD code | guard=call steps=0
+g1_center_proc_mut.rb:3 call p: none (tail)
+g1_center_proc_mut.rb:3 call center: 0 s INLINE across | 1 2 INLINE across | 2 g.call AHEAD code | guard=call steps=0
+g1_center_proc_mut.rb:3 call call: none (pure)
+== g1_center_reas.rb
+g1_center_reas.rb:2 call +@: none (tail)
+g1_center_reas.rb:3 call p: none (tail)
+g1_center_reas.rb:3 call center: 0 s HOLD(by 1) across | 1 Parentheses AHEAD code across | 2 (..).+@ AHEAD code | guard=call steps=0
+g1_center_reas.rb:3 call +@: none (tail)
+g1_center_reas.rb:3 call +@: none (tail)
+== g2_blockpass.rb
+g2_blockpass.rb:0 call upcase: none (pure)
+g2_blockpass.rb:0 call ==: none (pure)
+g2_blockpass.rb:1 call call: none (pure)
+g2_blockpass.rb:2 call +@: none (tail)
+g2_blockpass.rb:3 call p: none (tail)
+g2_blockpass.rb:3 call fb: 0 s INLINE across | 1 BlockArgument AHEAD code | guard=call steps=0
+g2_blockpass.rb:3 call +@: none (tail)
+== g3_match_order.rb
+g3_match_order.rb:2 call p: none (tail)
+g3_match_order.rb:2 call =~: 0 Parentheses AHEAD code across | 1 Parentheses AHEAD code | guard=call steps=0
+g3_match_order.rb:2 call <<: none (tail)
+g3_match_order.rb:2 call +@: none (tail)
+g3_match_order.rb:2 call <<: none (tail)
+g3_match_order.rb:3 call p: none (tail)
+== g4_mutator_recv.rb
+g4_mutator_recv.rb:2 call +@: none (tail)
+g4_mutator_recv.rb:3 call +@: none (tail)
+g4_mutator_recv.rb:4 call p: none (tail)
+g4_mutator_recv.rb:4 call insert: 0 s HOLD(by 1) across | 1 g.call AHEAD code across | 2 String AHEAD code | guard=call steps=0
+g4_mutator_recv.rb:4 call call: none (pure)
+== g5_user_recv.rb
+g5_user_recv.rb:3 interp: 0 EmbeddedStatements AHEAD code across | 1 EmbeddedStatements AHEAD code | guard=call steps=0
+g5_user_recv.rb:5 call new: none (tail)
+g5_user_recv.rb:6 call p: none (tail)
+g5_user_recv.rb:6 call k: 0 o HOLD(by 1) across | 1 Parentheses AHEAD code | guard=call steps=0
+g5_user_recv.rb:6 call new: none (tail)
+== g6_opasgn_answer.rb
+g6_opasgn_answer.rb:1 array: none (pure)
+g6_opasgn_answer.rb:2 call p: none (tail)
+g6_opasgn_answer.rb:2 array: none (pure)
+== g7_blockpass_nil.rb
+g7_blockpass_nil.rb:1 array: none (tail)
+g7_blockpass_nil.rb:2 call p: none (tail)
+g7_blockpass_nil.rb:2 call fb: none (tail)
+g7_blockpass_nil.rb:2 call puts: none (tail)
+== g7_fetch_default.rb
+g7_fetch_default.rb:1 array: none (pure)
+g7_fetch_default.rb:2 call p: none (tail)
+g7_fetch_default.rb:2 call fetch: 0 a INLINE across | 1 2 INLINE across | 2 Parentheses AHEAD code | guard=call steps=0
+g7_fetch_default.rb:2 call puts: none (tail)
+== g8_push_interleave.rb
+g8_push_interleave.rb:1 array: none (pure)
+g8_push_interleave.rb:2 call p: none (tail)
+g8_push_interleave.rb:2 call push: 0 a INLINE across | 1 2 INLINE across | 2 Parentheses AHEAD code | guard=call steps=0
+g8_push_interleave.rb:2 call <<: none (pure)
+== g9_splat_late.rb
+g9_splat_late.rb:2 array: none (pure)
+g9_splat_late.rb:3 call p: none (tail)
+g9_splat_late.rb:3 call f: 0 Splat AHEAD code across | 1 Parentheses AHEAD code | guard=call steps=0
+g9_splat_late.rb:3 call <<: none (pure)
+== b1.rb
+b1.rb:3 call bump: none (pure)
+b1.rb:6 call attr_reader: none (pure)
+b1.rb:10 call f: 0 @a HOLD(by 1) across | 1 InterpolatedString AHEAD code | guard=call steps=0
+b1.rb:10 interp: none (tail)
+b1.rb:11 array: 0 @a HOLD(by 1) across | 1 InterpolatedString AHEAD code | guard=call steps=0
+b1.rb:11 interp: none (tail)
+b1.rb:13 call new: none (tail)
+b1.rb:14 call new: none (tail)
+b1.rb:15 call p: none (tail)
+b1.rb:15 call g1: none (pure)
+b1.rb:16 call p: none (tail)
+b1.rb:16 call g2: none (pure)
+== b4.rb
+b4.rb:0 call to_proc: none (pure)
+b4.rb:0 call to_hash: none (pure)
+b4.rb:2 array: none (pure)
+b4.rb:3 array: none (pure)
+b4.rb:4 array: 0 xs INLINE across | 1 kw INLINE across | 2 If AHEAD code | guard=call steps=0
+b4.rb:4 call call: none (pure)
+b4.rb:6 hash: none (pure)
+b4.rb:8 call f: 0 @a HOLD(by 1) across | 1 InterpolatedString AHEAD code | guard=call steps=0
+b4.rb:8 interp: none (tail)
+b4.rb:9 call f: 0 @a HOLD(by 1) across | 1 AssocSplat AHEAD code | guard=call steps=0
+b4.rb:10 call f: 0 @a HOLD(by 1) across | 1 BlockArgument AHEAD code | guard=call steps=0
+b4.rb:11 array: 0 @a HOLD(by 1) across | 1 InterpolatedString AHEAD code | guard=call steps=0
+b4.rb:11 interp: none (tail)
+b4.rb:12 hash: 0 Symbol INLINE across | 1 @a HOLD(by 3) across | 2 Symbol INLINE across | 3 InterpolatedString AHEAD code | guard=call steps=0
+b4.rb:12 interp: none (tail)
+b4.rb:14 call p: none (tail)
+b4.rb:14 call g1: none (tail)
+b4.rb:14 call new: none (tail)
+b4.rb:15 call p: none (tail)
+b4.rb:15 call g2: none (tail)
+b4.rb:15 call new: none (tail)
+b4.rb:16 call p: none (tail)
+b4.rb:16 call g3: none (tail)
+b4.rb:16 call new: none (tail)
+b4.rb:17 call p: none (tail)
+b4.rb:17 call g4: none (tail)
+b4.rb:17 call new: none (tail)
+b4.rb:18 call p: none (tail)
+b4.rb:18 call g5: none (tail)
+b4.rb:18 call new: none (tail)
+== b5.rb
+b5.rb:3 call call: none (pure)
+b5.rb:8 call new: none (tail)
+b5.rb:9 array: 0 x HOLD(by 1) across | 1 InterpolatedString AHEAD code | guard=call steps=0
+b5.rb:9 interp: none (tail)
+b5.rb:11 call p: none (tail)
+b5.rb:13 array: none (pure)
+b5.rb:14 array: none (pure)
+b5.rb:15 call new: none (tail)
+b5.rb:16 array: 0 x HOLD(by 1) across | 1 InterpolatedString AHEAD code | 2 3 INLINE | guard=call steps=0
+b5.rb:16 interp: none (tail)
+b5.rb:18 call p: none (tail)
+b5.rb:23 array: 0 y INLINE across | 1 pr.call AHEAD code | 2 x INLINE | guard=call steps=0
+b5.rb:23 call call: none (pure)
+b5.rb:25 call p: none (tail)
+b5.rb:28 array: 0 If AHEAD code across | 1 Parentheses AHEAD code | guard=call steps=0
+b5.rb:30 call p: none (tail)
+b5.rb:30 call m4: none (pure)
+b5.rb:34 call foo: 0 a INLINE across | 1 b HOLD(by 2) across | 2 Parentheses AHEAD code | guard=recv steps=0
+b5.rb:35 array: none (pure)
+b5.rb:37 call p: none (tail)

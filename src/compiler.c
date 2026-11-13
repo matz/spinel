@@ -3,6 +3,7 @@
 #include "compiler.h"
 #include "share.h"
 #include "repr.h"
+#include "order_plan.h"
 #include "analyze.h"
 #include "analyze_internal.h"
 #include "builtin_names.h"
@@ -523,6 +524,7 @@ void comp_free(Compiler *c) {
   share_facts_free(c);
   share_plan_free(c);
   dsn_free(c);
+  order_facts_free(c);
   free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own);
   builtin_given_free(c);
   ic_free(c);

@@ -25995,10 +25995,12 @@ static int text_is_raise_token(const char *txt) {
    `def` of the name winning over it? The same test the reader arm makes, so a
    call this answers for really is `(recv)->iv_x`. *allocates is set when the
    read builds a copy: a shared-handle String slot reads out as a fresh String
-   unless a mark hands out the handle or the live buffer. */
+   unless a mark hands out the handle or the live buffer. A NULL allocates
+   leaves the String marks unread (the operand-order record's walk, which
+   runs before they are final). */
 int call_is_field_read(Compiler *c, int id, int *allocates) {
   const NodeTable *nt = c->nt;
-  *allocates = 0;
+  if (allocates) *allocates = 0;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!nm || recv < 0 || nt_ref(nt, id, "block") >= 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
@@ -26015,7 +26017,7 @@ int call_is_field_read(Compiler *c, int id, int *allocates) {
   ClassInfo *owner = &c->classes[rdc >= 0 ? rdc : cid];
   int iv = comp_ivar_index(owner, ivn);
   Repr rp = repr_of(c, id);
-  if (iv >= 0 && owner->ivar_types[iv] == TY_STRBUF && !rp.handle && !rp.demand &&
+  if (allocates && iv >= 0 && owner->ivar_types[iv] == TY_STRBUF && !rp.handle && !rp.demand &&
       !(rp.read_raw && decide_node(c->nt, id, "strbuf-raw", NULL)))
     *allocates = 1;
   return 1;
@@ -26418,50 +26420,13 @@ int operand_is_held_read(Compiler *c, int id) {
   return (kt == TY_SYMBOL || kt == TY_STRING || kt == TY_INT) && !operand_may_allocate(c, av[0]) &&
          !prog_has_hash_default_block(c);
 }
-/* Is this call a reader on a boxed receiver that every class the receiver
-   can hold answers by a public attr_reader or Struct member, with no `def`
-   of the name winning over it? The dispatch then reads a field in each arm
-   and runs no code of the program's. A builtin value among them (a nil)
-   answers with its own method or raises NoMethodError, which runs none
-   either when no builtin has the name or every one that has it reads a
-   value, the program defines no method of the name a builtin could take,
-   and no method_missing. */
-static int call_is_poly_field_read(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, id, "name");
-  int recv = nt_ref(nt, id, "receiver");
-  if (!nm || recv < 0 || nt_ref(nt, id, "block") >= 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
-  if (comp_ntype(c, recv) != TY_POLY) return 0;
-  const ClsSet *s = cls_fact_node(c, recv);
-  if (!s || s->all || s->os || s->n == 0) return 0;
-  if (an_user_defines_method(c, "method_missing")) return 0;
-  if (s->bv && (an_user_defines_method(c, nm) ||
-                (!is_plain_builtin_reader(nm) &&
-                 (builtin_object_method_known(nm) || builtin_instance_name_known(nm)))))
-    return 0;
-  for (int k = cls_set_next(s, -1); k >= 0; k = cls_set_next(s, k)) {
-    if (k >= c->nclasses || c->classes[k].is_native_class) return 0;
-    int rdc = -1, mdc = -1;
-    if (!comp_reader_in_chain(c, k, nm, &rdc)) return 0;
-    if (comp_resolve_member(c, k, nm, 0, &mdc, NULL) != SP_MEMBER_ATTR) return 0;
-    if (comp_method_vis_in_chain(c, k, nm) != SP_VIS_PUBLIC) return 0;
-  }
-  return 1;
-}
-
 /* Can evaluating this subtree store a new value into an ivar, a class
    variable or a global? A write to one does, and so can anything that runs
    Ruby code the subtree does not show -- a user method, a yield, a super.
-   What cannot: arithmetic over scalars, an index read of a typed array
-   (`@ref[addr & 3]`), a plain field read (`m.cols`), a reader every class
-   of a boxed receiver answers by an attr_reader (`node.name`, #10252), and
-   an index read of a boxed value in a program with no user `[]` and no Hash
-   default block, recursively; nothing in any of them runs code. Every other
-   call counts, conservatively: a builtin handed a user object can call back
-   into it. */
-int subtree_may_reassign_state(Compiler *c, int id) {
+   A call that runs none (order_call_runs_no_code) cannot, recursively;
+   every other call counts, conservatively. */
+int node_may_reassign_state(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (id < 0) return 0;
   const char *ty = nt_type(nt, id);
   if (!ty) return 0;
   NodeKind k = nt_kind(nt, id);
@@ -26470,25 +26435,14 @@ int subtree_may_reassign_state(Compiler *c, int id) {
        strncmp(ty, "GlobalVariable", 14) == 0) &&
       (strstr(ty, "WriteNode") || strstr(ty, "TargetNode")))
     return 1;
-  if (k == NK_CallNode && !call_is_scalar_op(c, id)) {
-    const char *nm = nt_str(nt, id, "name");
-    int recv = nt_ref(nt, id, "receiver");
-    int a = nt_ref(nt, id, "arguments"); int ac = 0;
-    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-    int typed_index = nm && sp_streq(nm, "[]") && recv >= 0 && ac == 1 &&
-                      nt_ref(nt, id, "block") < 0 &&
-                      ty_is_array(comp_ntype(c, recv)) && comp_ntype(c, av[0]) == TY_INT;
-    /* An index read of a boxed value runs Ruby code only through a user
-       `[]` or a Hash's default block; with neither in the program it is a
-       lookup (`@bg_pattern_lut[@bg_pattern]`, a poly array of arrays). */
-    int boxed_index = nm && sp_streq(nm, "[]") && recv >= 0 && ac == 1 &&
-                      nt_ref(nt, id, "block") < 0 && repr_of(c, recv).kind == RK_BOXED &&
-                      !any_class_defines(c, "[]") && !prog_has_hash_default_block(c);
-    int alloc = 0;
-    if (!typed_index && !boxed_index && !call_is_field_read(c, id, &alloc) &&
-        !call_is_poly_field_read(c, id))
-      return 1;
-  }
+  if (k == NK_CallNode && !order_call_runs_no_code(c, id)) return 1;
+  return -1;
+}
+int subtree_may_reassign_state(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;
+  int own = node_may_reassign_state(c, id);
+  if (own >= 0) return own;
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
     if (subtree_may_reassign_state(c, nt_ref_at(nt, id, i))) return 1;
@@ -26518,9 +26472,8 @@ int ty_runs_no_code(TyKind t) {
 }
 
 /* See codegen_internal.h. */
-int subtree_may_run_proc(Compiler *c, int id) {
+int node_may_run_proc(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (id < 0) return 0;
   switch (nt_kind(nt, id)) {
     case NK_YieldNode: case NK_SuperNode: case NK_ForwardingSuperNode:
     case NK_BlockNode: case NK_LambdaNode: case NK_BlockArgumentNode:
@@ -26544,6 +26497,12 @@ int subtree_may_run_proc(Compiler *c, int id) {
     default:
       break;
   }
+  return -1;
+}
+int subtree_may_run_proc(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;
+  if (node_may_run_proc(c, id) > 0) return 1;
   for (int i = 0; i < nt_num_refs(nt, id); i++)
     if (subtree_may_run_proc(c, nt_ref_at(nt, id, i))) return 1;
   for (int i = 0; i < nt_num_arrs(nt, id); i++) {

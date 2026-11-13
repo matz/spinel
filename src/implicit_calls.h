@@ -56,6 +56,15 @@ int ic_core_callback(const char *name, int class_side);
    program's. Before inference, or when the types do not settle it, yes. */
 int ic_operand_may_hold(Compiler *c, const IcCall *k);
 
+/* Does node `id` itself make CRuby call a method the program defines,
+   without the program naming the call (an interpolation's to_s, `&obj`'s
+   to_proc, a splat's to_a, a builtin's callback), on a value that may be
+   one of the program's objects (ic_operand_may_hold)? Such a call may run
+   any of the program's methods. A call that runs a method of the
+   program's runs no builtin, so its callbacks are not asked. Its operands
+   are not: the operand-order record walks them (order_sum). */
+int ic_node_may_call_program(Compiler *c, int id);
+
 /* The node of the value a block answers: the last statement of its body, -1
    for an empty one */
 int ic_block_value(const NodeTable *nt, int blk);

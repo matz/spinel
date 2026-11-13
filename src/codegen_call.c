@@ -24198,6 +24198,100 @@ static void emit_raise_placeholder(Compiler *c, int id, Buf *b) {
   }
   else buf_printf(b, ", %s)", dflt);
 }
+/* The arguments a raise stages for NoMethodError#args, as the text
+   `N, (sp_RbVal[]){...}` into list. A box is built in the list, except one
+   that builds a fresh heap cell (repr_box_allocates, and holds one: a Range's
+   copy, not a literal's static handle): that goes into a rooted temporary, its
+   statement into pre ahead of the list, as the allocation of the next box may
+   collect it before the message roots the list. The values themselves are an
+   entry's parameters (rooted by its prologue) or a call's operands; an
+   operand's own fresh value, passed through boxed, is not rooted here.
+   ordered: the arguments are expressions of a call, which run left to right:
+   once one goes into a temporary, every one does, in order, and each whose
+   box holds heap is rooted (a call's result passed through boxed is held
+   while the next argument allocates). An entry's parameters are reads and
+   need no order. */
+static void emit_staged_args(Compiler *c, int argc, const int *argv, int ordered, Buf *pre, Buf *list) {
+  int any = 0;
+  for (int k = 0; k < argc; k++) any |= repr_box_allocates(c, repr_of(c, argv[k])) && repr_box_holds_heap(c, argv[k]);
+  buf_printf(list, "%d, (sp_RbVal[]){", argc);
+  for (int k = 0; k < argc; k++) {
+    if (k) buf_puts(list, ", ");
+    int holds = repr_box_holds_heap(c, argv[k]);
+    int root = holds && (repr_box_allocates(c, repr_of(c, argv[k])) || (any && ordered));
+    if (!root && !(any && ordered)) { emit_boxed(c, argv[k], list); continue; }
+    Buf ab; memset(&ab, 0, sizeof ab);
+    emit_boxed(c, argv[k], &ab);
+    int t = ++g_tmp;
+    buf_printf(pre, "sp_RbVal _t%d = %s; ", t, ab.p ? ab.p : "sp_box_nil()");
+    if (root) buf_printf(pre, "SP_GC_ROOT_RBVAL(_t%d); ", t);
+    buf_printf(list, "_t%d", t);
+    free(ab.p);
+  }
+  buf_puts(list, argc ? "}" : "sp_box_nil()}");
+}
+/* The receiver text rb, held in a temporary written to b ahead of the arguments'
+   temporaries (rooted when its box holds heap), and rb becomes the temporary:
+   CRuby evaluates the receiver first, and an argument may reassign what it
+   names (`a.qux((a = A.new; 1..2))`). */
+static void emit_hold_receiver(Compiler *c, int recv, Buf *rb, Buf *b) {
+  int t = ++g_tmp;
+  buf_printf(b, "sp_RbVal _t%d = %s; ", t, rb->p ? rb->p : "sp_box_nil()");
+  if (repr_box_holds_heap(c, recv)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
+  free(rb->p); memset(rb, 0, sizeof *rb);
+  buf_printf(rb, "_t%d", t);
+}
+/* `sp_nomethod_msg[_args]("nm", recv[, N, (sp_RbVal[]){...}])`, the message of
+   a call no class answers, with the staged arguments of emit_staged_args: their
+   rooted temporaries ahead of it, in a statement expression. The receiver runs
+   before the arguments: where an argument goes into a temporary, it goes into
+   one first (emit_hold_receiver), as an argument may assign it. */
+static void emit_gate_msg_args(Compiler *c, const char *nm, int recv, int gstage, int gac, const int *gav, Buf *b) {
+  Buf rb, pre, list; memset(&rb, 0, sizeof rb); memset(&pre, 0, sizeof pre); memset(&list, 0, sizeof list);
+  emit_boxed(c, recv, &rb);
+  if (gstage) emit_staged_args(c, gac, gav, 1, &pre, &list);
+  if (pre.p) {
+    buf_puts(b, "({ ");
+    emit_hold_receiver(c, recv, &rb, b);
+    buf_puts(b, pre.p);
+  }
+  buf_printf(b, "sp_nomethod_msg%s(\"%s\", %s", gstage ? "_args" : "", nm ? nm : "?", rb.p ? rb.p : "sp_box_nil()");
+  if (gstage) buf_printf(b, ", %s", list.p);
+  buf_puts(b, pre.p ? "); })" : ")");
+  free(rb.p); free(pre.p); free(list.p);
+}
+/* The message of the raise for a call that finds no method (the typed gate),
+   gmsg its text and recv its receiver: staged on the exception with the
+   arguments (sp_stage_recv_args_msg, the receiver when it is side-effect-free
+   to name again or held in the temp rrt of recv_run). The staged arguments are emit_staged_args'.
+   Inside the message argument, so the coercion sites recognize the leading
+   sp_raise_nomethod token by its text. */
+static void emit_gate_msg(Compiler *c, const char *gmsg, int recv, int recv_run, int rrt, int recv_stageable,
+                          int gstage, int gac, const int *gav, Buf *b) {
+  Buf rb, pre, lst; memset(&rb, 0, sizeof rb); memset(&pre, 0, sizeof pre); memset(&lst, 0, sizeof lst);
+  if (recv_run) {
+    buf_printf(b, "({ sp_RbVal _t%d = ", rrt); emit_boxed(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", rrt);
+  }
+  else if (recv_stageable) emit_boxed(c, recv, &rb);
+  if (gstage) emit_staged_args(c, gac, gav, 1, &pre, &lst);
+  if (pre.p) {
+    buf_puts(b, "({ ");
+    if (!recv_run && recv_stageable) emit_hold_receiver(c, recv, &rb, b);
+    buf_puts(b, pre.p);
+  }
+  if (recv_stageable) {
+    buf_printf(b, "%s(%s, ", gstage ? "sp_stage_recv_args_msg" : "sp_stage_recv_msg", gmsg);
+    if (recv_run) buf_printf(b, "_t%d", rrt); else buf_puts(b, rb.p ? rb.p : "sp_box_nil()");
+    if (gstage) buf_printf(b, ", %s", lst.p);
+    buf_puts(b, ")");
+  }
+  else if (gstage) buf_printf(b, "sp_stage_args_msg(%s, %s)", gmsg, lst.p);
+  else buf_puts(b, gmsg);
+  if (pre.p) buf_puts(b, "; })");
+  if (recv_run) buf_puts(b, "; })");
+  free(rb.p); free(pre.p); free(lst.p);
+}
 /* A face entry's arm for a version closed to the call that bound the entry
    (cplan_pinned_vis): the NoMethodError CRuby raises for a private (or
    protected) method called with an explicit receiver. The entry is a root's
@@ -24217,24 +24311,7 @@ static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
   int staged = !spread && !nt_argv_has(nt, vav, vac, NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
   int tv = ++g_tmp, ta = ++g_tmp;
   Buf args, ops; memset(&args, 0, sizeof args); memset(&ops, 0, sizeof ops);
-  if (staged) {
-    /* the entry's parameters are rooted by its prologue, so an argument is
-       only built where its box makes a fresh heap cell (a Range's copy): that
-       one goes into a rooted temp, as the next box's allocation may collect it
-       before sp_stage_args_msg roots the list */
-    buf_printf(&args, "%d, (sp_RbVal[]){", vac);
-    for (int k = 0; k < vac; k++) {
-      if (k) buf_puts(&args, ", ");
-      if (!repr_box_allocates(c, repr_of(c, vav[k]))) { emit_boxed(c, vav[k], &args); continue; }
-      Buf ab; memset(&ab, 0, sizeof ab);
-      emit_boxed(c, vav[k], &ab);
-      int t = ++g_tmp;
-      buf_printf(&ops, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", t, ab.p ? ab.p : "sp_box_nil()", t);
-      buf_printf(&args, "_t%d", t);
-      free(ab.p);
-    }
-    buf_puts(&args, vac ? "}" : "sp_box_nil()}");
-  }
+  if (staged) emit_staged_args(c, vac, vav, 0, &ops, &args);
   buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = self; ", tv);
   if (ops.p) buf_puts(b, ops.p);
   if (spread)
@@ -25337,12 +25414,6 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
              a splat/block/kwarg shape keeps the plain message */
           int gac = 0; const int *gav = call_args(nt, id, &gac);
           int gstage = !nt_argv_has(nt, gav, gac, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS);
-          #define EMIT_GATE_ARGS() do { \
-            buf_printf(b, ", %d, (sp_RbVal[]){", gac); \
-            for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
-            if (gac == 0) buf_puts(b, "sp_box_nil()"); \
-            buf_puts(b, "}"); \
-          } while (0)
           if (sp_streq(dflt, "sp_box_nil()") && !ret_scalar) {
             /* a boxed Integer or Float answers from its kind's row first,
                into a slot that holds a boxed value: the raise token below
@@ -25351,19 +25422,15 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
             if (gstage && grt == TY_POLY && rr.kind == RK_BOXED)
               poly_scalar_arms_open(c, id, &psa, b);
             else memset(&psa, 0, sizeof psa);
-            buf_printf(b, "sp_raise_nomethod(sp_nomethod_msg%s(\"%s\", ",
-                       gstage ? "_args" : "", nm ? nm : "?");
-            emit_boxed(c, recv, b);
-            if (gstage) EMIT_GATE_ARGS();
-            buf_puts(b, "))");
+            buf_puts(b, "sp_raise_nomethod(");
+            emit_gate_msg_args(c, nm, recv, gstage, gac, gav, b);
+            buf_puts(b, ")");
             poly_scalar_arms_close(c, &psa, b);
           }
           else {
-            buf_printf(b, "(sp_raise_cls(\"NoMethodError\", sp_nomethod_msg%s(\"%s\", ",
-                       gstage ? "_args" : "", nm ? nm : "?");
-            emit_boxed(c, recv, b);
-            if (gstage) EMIT_GATE_ARGS();
-            buf_printf(b, ")), %s)", ret_scalar ? default_value_from_compiler(c, ret) : dflt);
+            buf_puts(b, "(sp_raise_cls(\"NoMethodError\", ");
+            emit_gate_msg_args(c, nm, recv, gstage, gac, gav, b);
+            buf_printf(b, "), %s)", ret_scalar ? default_value_from_compiler(c, ret) : dflt);
           }
           return 1;
         }
@@ -25446,60 +25513,16 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
           int recv_run = recv >= 0 && !recv_stageable && !recv_evaluated;
           int rrt = recv_run ? ++g_tmp : -1;
           if (recv_run) recv_stageable = 1;
-          #define EMIT_GATE_MSG() do { \
-            if (recv_run) { \
-              buf_printf(b, "({ sp_RbVal _t%d = ", rrt); emit_boxed(c, recv, b); \
-              buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", rrt); \
-            } \
-            const char *_stagefn = gstage ? "sp_stage_recv_args_msg" : "sp_stage_recv_msg"; \
-            if (recv_stageable) { \
-              buf_printf(b, "%s(%s, ", _stagefn, gmsg); \
-              if (recv_run) buf_printf(b, "_t%d", rrt); else emit_boxed(c, recv, b); \
-              if (gstage) { \
-                buf_printf(b, ", %d, (sp_RbVal[]){", gac); \
-                for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
-                if (gac == 0) buf_puts(b, "sp_box_nil()"); \
-                buf_puts(b, "}"); \
-              } \
-              buf_puts(b, ")"); \
-            } \
-            else if (gstage) { \
-              buf_printf(b, "sp_stage_args_msg(%s, %d, (sp_RbVal[]){", gmsg, gac); \
-              for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
-              if (gac == 0) buf_puts(b, "sp_box_nil()"); \
-              buf_puts(b, "})"); \
-            } \
-            else buf_puts(b, gmsg); \
-            if (recv_run) buf_puts(b, "; })"); \
-          } while (0)
-          /* A receiver the message could not stage is still evaluated, once,
-             ahead of the raise, as CRuby evaluates it before the method is
-             looked up: `Foo.new.bar` never ran Foo.new, so its side effects
-             were lost, and a receiver that is itself an unresolved call
-             (`f.bar.size`) never raised its own NoMethodError -- the outer
-             one named 'size' on "unknown" instead of 'bar' on Foo. */
-          /* It goes inside the message argument, ahead of the message (whose
-             staged arguments come after it), and not around the raise: the
-             coercion sites recognize the sp_raise_nomethod token by its text. */
-          int recv_effect = recv >= 0 && !recv_stageable && !recv_evaluated;
-          #define EMIT_GATE_RECV_MSG() do { \
-            if (recv_effect) { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); } \
-            EMIT_GATE_MSG(); \
-            if (recv_effect) buf_puts(b, ")"); \
-          } while (0)
           if (sp_streq(dflt, "sp_box_nil()")) {
             buf_puts(b, "sp_raise_nomethod(");
-            EMIT_GATE_RECV_MSG();
+            emit_gate_msg(c, gmsg, recv, recv_run, rrt, recv_stageable, gstage, gac, gav, b);
             buf_puts(b, ")");
           }
           else {
             buf_puts(b, "(sp_raise_cls(\"NoMethodError\", ");
-            EMIT_GATE_RECV_MSG();
+            emit_gate_msg(c, gmsg, recv, recv_run, rrt, recv_stageable, gstage, gac, gav, b);
             buf_printf(b, "), %s)", dflt);
           }
-          #undef EMIT_GATE_RECV_MSG
-          #undef EMIT_GATE_MSG
-          #undef EMIT_GATE_ARGS
         }
         return 1;
       }

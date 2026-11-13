@@ -533,8 +533,18 @@ static const char *method_builtin_ident(Compiler *c, int mn, int mi, int unbound
   return buf;
 }
 
-/* Where method mi stands, for #source_location: 1 and its def's file and
-   line, 0 for none (nil: a C extension's method has none), or -1 where no
+/* The file and line of the def node dn, from the node position the #line
+   machinery uses (under --no-line-map the line is 0) */
+static void node_source_pos(const NodeTable *nt, int dn, const char **file, int *line) {
+  const char *f = nt_file_path(nt, (int)nt_int(nt, dn, "node_file", 0));
+  *file = f && *f ? f : nt->source_file ? nt->source_file : "";
+  *line = (int)nt_int(nt, dn, "node_line", 0);
+}
+
+/* Where method mi stands, for #source_location, the one owner of the
+   answer: 1 and its def's file and line, 0 for none (nil: a C extension's
+   method, whose def node is the declarations' and marked cext_extension,
+   CRuby gives none), or -1 where no
    fact tells: a builtin's wrapper (desugar_builtin_method_obj, bam_sym)
    stands for a method CRuby writes in C (nil) or in Ruby (an
    `<internal:...>` pair), which nothing records, and *file and *line are
@@ -558,9 +568,7 @@ static int method_source_pos(Compiler *c, int mi, const char **file, int *line) 
      (cplan_accessor_met), so there is none */
   int acc = mi >= 0 ? c->scopes[mi].accessor_of - 1 : -1, home = acc >= 0 ? c->node_cbody[acc] : -1;
   if (home >= 0 && comp_class_is_module(c, &c->classes[home])) return 0;
-  const char *f = nt_file_path(nt, (int)nt_int(nt, dn, "node_file", 0));
-  *file = f && *f ? f : nt->source_file ? nt->source_file : "";
-  *line = (int)nt_int(nt, dn, "node_line", 0);
+  node_source_pos(nt, dn, file, line);
   return known;
 }
 /* A #source_location's path: frozen, as CRuby's is */
@@ -904,13 +912,12 @@ int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
-/* `_t<tr> = [file, line];` of the def node dk, or NULL for none */
-static void emit_method_source_pair(const NodeTable *nt, int tr, int dk, Buf *b) {
-  if (dk < 0) { buf_printf(b, "_t%d = NULL;", tr); return; }
-  const char *fk = nt_file_path(nt, (int)nt_int(nt, dk, "node_file", 0));
+/* `_t<tr> = [file, line];`, or NULL for file NULL (none) */
+static void emit_method_source_pair(int tr, const char *file, int line, Buf *b) {
+  if (!file) { buf_printf(b, "_t%d = NULL;", tr); return; }
   buf_printf(b, "_t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str(", tr, tr);
-  emit_source_path_literal(b, fk && *fk ? fk : nt->source_file ? nt->source_file : "");
-  buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL));", tr, (int)nt_int(nt, dk, "node_line", 0));
+  emit_source_path_literal(b, file);
+  buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL));", tr, line);
 }
 
 /* Method#source_location: [file, line] of the target's def, from the same
@@ -936,19 +943,24 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
       int k = arms4[i4].cls;
       if (comp_class_is_module(c, &c->classes[k])) continue;
       int entry = arms4[i4].kind == CP_CARM_ENTRY;
-      int dk = arms4[i4].kind == CP_CARM_METHOD && !entry ? c->scopes[arms4[i4].mi].def_node : -1;
+      const char *fk = NULL;
+      int lk = 0;
       /* an attr method stands where the accessor the bind site meets
          answers (cplan_accessor_met): its attr_* call, or none (a Struct's
          member, an alias of a module's accessor) */
       if (arms4[i4].kind == CP_CARM_READER || arms4[i4].kind == CP_CARM_WRITER) {
         CplanAccessor acc;
         cplan_accessor_met(c, mn, k, sym4, &acc);
-        dk = acc.pos == 1 ? acc.node : -1;
+        if (acc.pos == 1) node_source_pos(nt, acc.node, &fk, &lk);
       }
-      else if (!entry && (dk < 0 || nt_int(nt, dk, "bam_poly", 0))) continue;
+      else if (!entry) {
+        int dm = arms4[i4].kind == CP_CARM_METHOD ? c->scopes[arms4[i4].mi].def_node : -1;
+        if (dm < 0 || nt_int(nt, dm, "bam_poly", 0)) continue;
+        if (!method_source_pos(c, arms4[i4].mi, &fk, &lk)) fk = NULL;
+      }
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) { ", tv4, tv4, k);
       if (!entry) {
-        emit_method_source_pair(nt, tr4, dk, b);
+        emit_method_source_pair(tr4, fk, lk, b);
         buf_puts(b, " }\nelse ");
         continue;
       }
@@ -957,14 +969,16 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
       int closed = 0;
       for (int v = 0; v < nv && !closed; v++) {
         const int *t = &tests[2 * v];
-        int dv = to[v] >= 0 ? c->scopes[to[v]].def_node : -1;
+        int dv = to[v] >= 0 ? c->scopes[to[v]].def_node : -1, lv = 0;
+        const char *fv = NULL;
+        if (dv < 0 || nt_int(nt, dv, "bam_poly", 0) || !method_source_pos(c, to[v], &fv, &lv)) fv = NULL;
         if (t[0] >= 0 || t[1] >= 0) {
           buf_puts(b, "if (");
           emit_arm_cells_test(c, t, b);
           buf_puts(b, ") { ");
         }
         else closed = 1;
-        emit_method_source_pair(nt, tr4, dv >= 0 && !nt_int(nt, dv, "bam_poly", 0) ? dv : -1, b);
+        emit_method_source_pair(tr4, fv, lv, b);
         buf_puts(b, " }\nelse ");
       }
       if (!closed) buf_printf(b, "{ _t%d = NULL; } }\nelse ", tr4);
@@ -979,6 +993,9 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
       Scope *sc = &c->scopes[s4];
       if (!sc->name || strcmp(sc->name, sym4) != 0 || sc->is_proc_form) continue;
       if (sc->def_node < 0 || nt_int(nt, sc->def_node, "bam_poly", 0)) continue;
+      const char *fo;
+      int lo;
+      if (!method_source_pos(c, s4, &fo, &lo)) continue;
       ClassInfo *ci = sc->class_id >= 0 && sc->class_id < c->nclasses ? &c->classes[sc->class_id] : NULL;
       own4 = !ci || comp_class_is_module(c, ci) || ci->is_builtin_const;
     }

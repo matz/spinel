@@ -181,6 +181,20 @@ p box.get
 untouched = [2, 3]
 p untouched
 p box.method(:store).source_location.nil?
+# a boxed receiver (a C method's object or a Ruby class's) holds the same: a C
+# method has no Ruby position, whichever way the Method is made
+class CextPlain
+  def store(value) = value
+end
+boxed = [box, CextPlain.new][ARGV.size]
+p boxed.method(:store).source_location
+p [CextPlain.new, box][ARGV.size].method(:store).source_location.class
+# ... and one reached through a module a builtin class includes
+class Integer
+  include CextHelpers
+end
+via_module = [3, box][ARGV.size]
+p via_module.method(:from_module).source_location
 
 left = CextLeft::Box.new
 right = CextRight::Box.new

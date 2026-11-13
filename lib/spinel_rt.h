@@ -703,7 +703,11 @@ static void *sp_gc_alloc_pool(size_t sz, void(*scn)(void*), void(*recycle)(sp_gc
    the pool hit stays off the heap mutex -- and the exact plain push in the
    single-threaded one (see sp_gc.h). */
 static void sp_gc_pool_relink(sp_gc_hdr *h) {
-  h->marked = 0; h->old = 0; h->dirty = 0;
+  /* every bit a fresh header starts with: the dead object's `frozen` (and
+     `aged`) carried over made the next object of the class frozen, which is
+     what the malloc fallback (the slab off: SPINEL_GC_SLAB=0, MCU targets)
+     reuses pooled headers for */
+  h->marked = 0; h->old = 0; h->dirty = 0; h->frozen = 0; h->aged = 0;
   if (sp_slab_owns(h)) sp_slab_relive(h);
   else SP_GC_HEAP_PUSH(h);
   sp_gc_bytes_add(h->size);

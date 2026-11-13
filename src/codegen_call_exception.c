@@ -215,8 +215,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
        reader judges its class as it does a base-typed one's -- the call fell
        to the object dispatch, which knew none of them */
     if (argc == 0 && exc_gated_acc_fn(name) && nt_ref(nt, id, "block") < 0 &&
-        call_target(c, id, ty_object_class(comp_ntype(c, recv)), name, 0, NULL) < 0 &&
-        !comp_reader_in_chain(c, ty_object_class(comp_ntype(c, recv)), name, NULL)) {
+        !call_answers(c, id, ty_object_class(comp_ntype(c, recv)), name, 0, NULL)) {
       if (sp_streq(name, "reason") || sp_streq(name, "tag") || sp_streq(name, "key") ||
           sp_streq(name, "name"))
         g_uses_symbols = 1;  /* staged names intern back to symbols */

@@ -227,7 +227,7 @@ static const char *interp_reader_var(Compiler *c, int call, char *buf, size_t ca
   Scope *sc = comp_scope_of(c, call);
   if (p.mi < 0 && nm && (r < 0 || nt_kind(nt, r) == NK_SelfNode) && nt_ref(nt, call, "arguments") < 0 &&
       nt_ref(nt, call, "block") < 0 && sc && sc->class_id >= 0 && !sc->is_cmethod &&
-      comp_reader_in_chain(c, sc->class_id, nm, NULL)) {
+      call_attr_target(c, -1, sc->class_id, nm, 0, NULL)) {
     snprintf(buf, cap, "@%s", nm);
     return buf;
   }
@@ -4495,8 +4495,7 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* an implicit-self call inside a class resolves through the
          enclosing class's method chain (readers included) */
       else if (cn && comp_scope_of(c, id) && comp_scope_of(c, id)->class_id >= 0 &&
-               (call_target(c, v, comp_scope_of(c, id)->class_id, cn, 0, NULL) >= 0 ||
-                comp_reader_in_chain(c, comp_scope_of(c, id)->class_id, cn, NULL)))
+               (call_answers(c, v, comp_scope_of(c, id)->class_id, cn, 0, NULL)))
         res = "method";
       else if (cn && defined_bare_builtin(c, id, cn)) res = "method";
       /* builtin kernel functions the compiler always resolves */

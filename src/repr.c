@@ -16,8 +16,9 @@
 /* The reader method `nm` resolved on class cid: the ivar it answers, when
    that ivar carries a nil bit (its read is an sp_oint). */
 static int reader_ivar_has_nilbit(Compiler *c, int cid, const char *nm) {
-  int defc = -1;
-  if (cid < 0 || cid >= c->nclasses || !nm || !comp_reader_in_chain(c, cid, nm, &defc)) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  if (cid < 0 || cid >= c->nclasses || !nm || !call_attr_target(c, -1, cid, nm, 0, &ml)) return 0;
+  int defc = ml.def_class;
   char ivb[300];
   snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, cid, nm));
   int k = defc >= 0 ? defc : cid;
@@ -311,11 +312,8 @@ static int node_is_oint_asked(Compiler *c, int node) {
       /* an attr reader is its ivar's read: the ivar's oint when the ivar
          carries a nil bit, the plain field otherwise (whatever the reader's
          own return mark says: the field has no other form) -- unless a
-         method written out nearer in the chain, or in the same class,
-         overrides the reader (call_target answers it: an attribute that
-         wins comes back with no scope) */
-      if (an2 == 0 && blk < 0 && comp_reader_in_chain(c, cid, nm, NULL) &&
-          mi < 0)
+         method written out nearer in the chain overrides the reader */
+      if (an2 == 0 && blk < 0 && mi < 0 && ml.kind == ML_ATTR)
         return reader_ivar_has_nilbit(c, cid, nm) || dispatch_answers_nil(c, node, cid, nm, -1);
     }
     else if (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) {

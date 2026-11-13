@@ -5641,7 +5641,7 @@ static int sg_parent_answers_as_object(Compiler *c, int par, const char *n) {
   /* `!=` and `===` answer by the class's `==` */
   int eqs = sp_streq(n, "==") || sp_streq(n, "!=") || sp_streq(n, "===");
   if (eqs && !sp_streq(n, "==") && !sg_parent_answers_as_object(c, par, "==")) return 0;
-  if (comp_method_in_chain(c, par, n, NULL) >= 0 || comp_reader_in_chain(c, par, n, NULL) ||
+  if (call_answers(c, -1, par, n, 0, NULL) ||
       class_implicit_responds(c, par, n) || (eqs && class_is_comparable(c, par)))
     return 0;
   for (int p = par, d = 0; p >= 0 && d <= c->nclasses; d++) {

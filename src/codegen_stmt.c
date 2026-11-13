@@ -17716,8 +17716,9 @@ static int masgn_writer_takes_nil(Compiler *c, int tgt) {
   char base[256], ivn[260];
   if (!setter_base_name(nm, base, sizeof base)) return 1;
   snprintf(ivn, sizeof ivn, "@%s", base);
-  int wdc = -1; comp_writer_in_chain(c, crc, base, &wdc);
-  int wcls = wdc >= 0 ? wdc : crc, ix = comp_ivar_index(&c->classes[wcls], ivn);
+  MethodLookup wml = { .def_class = -1 };
+  call_target(c, -1, crc, base, CT_WRITER, &wml);
+  int wcls = wml.kind == ML_ATTR && wml.def_class >= 0 ? wml.def_class : crc, ix = comp_ivar_index(&c->classes[wcls], ivn);
   TyKind ivt = ix >= 0 ? c->classes[wcls].ivar_types[ix] : TY_UNKNOWN;
   return ix < 0 || ivt == TY_POLY || (oint_kind(ivt) && ivar_has_nilbit(c, wcls, ix));
 }
@@ -18341,8 +18342,9 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
       /* attr_writer convention: name matches the backing ivar */
       char base[256]; snprintf(base, sizeof base, "%.*s", (int)(snl - 1), nm);
       char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", base);
-      int wdc = -1; comp_writer_in_chain(c, crc, base, &wdc);
-      int wcls = wdc >= 0 ? wdc : crc;
+      MethodLookup wml = { .def_class = -1 };
+      call_target(c, -1, crc, base, CT_WRITER, &wml);
+      int wcls = wml.kind == ML_ATTR && wml.def_class >= 0 ? wml.def_class : crc;
       int ix = comp_ivar_index(&c->classes[wcls], ivn);
       TyKind ivt = ix >= 0 ? c->classes[wcls].ivar_types[ix] : vt;
       /* the receiver is held once for the assigned mark */
@@ -20113,19 +20115,21 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
         { unsupported(c, id, "multiple assignment call target non-object"); continue; }
       char base2[256]; memcpy(base2, setnm, snlen - 1); base2[snlen - 1] = '\0';
       int rc2 = ty_object_class(rt2);
-      int wr2 = comp_writer_in_chain(c, rc2, base2, NULL);
+      MethodLookup wml2 = { .def_class = -1 };
+      int wmi2 = call_target(c, lefts[i], rc2, base2, CT_WRITER, &wml2), wr2 = wmi2 < 0 && wml2.kind == ML_ATTR;
       if (!wr2 || masgn_writer_overridden(c, rc2, setnm)) {
-        /* a writer defined with `def x=`, or bound with `native_method :x=`,
-           runs as a call, and so does an attr writer a descendant defines
-           its own `x=` for */
+        /* a writer defined with `def x=` (in the class, a module it includes
+           or an ancestor, whichever the plan ranks first), or bound with
+           `native_method :x=`, runs as a call, and so does an attr writer a
+           descendant defines its own `x=` for */
         char rv[32]; snprintf(rv, sizeof rv, "_t%d", tmps[i]);
-        if (!wr2 && call_target(c, lefts[i], rc2, setnm, 0, NULL) < 0 && comp_native_method_find(c, rc2, setnm, 1, 0) < 0)
+        if (!wr2 && wmi2 < 0 && comp_native_method_find(c, rc2, setnm, 1, 0) < 0)
           unsupported(c, id, "multiple assignment call target no writer");
         else masgn_store(c, id, mt, lefts[i], masgn_nil_el(c, els[i]) ? NULL : rv, tmpts[i], tmps[i], ttr[i], ttk[i], indent, b);
         continue;
       }
       char ivn2[260]; snprintf(ivn2, sizeof ivn2, "@%s", base2);
-      int defc2 = -1; comp_writer_in_chain(c, rc2, base2, &defc2);
+      int defc2 = wml2.def_class;
       int iv2 = comp_ivar_index(&c->classes[defc2 < 0 ? rc2 : defc2], ivn2);
       TyKind ivt2 = iv2 >= 0 ? c->classes[defc2 < 0 ? rc2 : defc2].ivar_types[iv2] : TY_UNKNOWN;
       int wcls2 = defc2 < 0 ? rc2 : defc2;
@@ -20767,7 +20771,9 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
             if (an >= 1) {
               int rc = ty_object_class(rt);
               char ivn[sizeof base + 1]; snprintf(ivn, sizeof ivn, "@%s", base);
-              int defc = -1; comp_writer_in_chain(c, rc, base, &defc);
+              MethodLookup wml = { .def_class = -1 };
+              call_target(c, -1, rc, base, CT_WRITER, &wml);
+              int defc = wml.kind == ML_ATTR ? wml.def_class : -1;
               int iv = comp_ivar_index(&c->classes[defc < 0 ? rc : defc], ivn);
               TyKind ivt = iv >= 0 ? c->classes[defc < 0 ? rc : defc].ivar_types[iv] : TY_UNKNOWN;
               emit_indent(b, indent);

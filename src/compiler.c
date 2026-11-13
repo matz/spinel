@@ -2272,14 +2272,6 @@ int comp_name_responder(Compiler *c, int cls, const char *name, unsigned side) {
 }
 
 /* See compiler.h. */
-int comp_class_answers(Compiler *c, int k, const char *name) {
-  mtab_enter(c);
-  int ans = comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL);
-  mtab_leave(c);
-  return ans;
-}
-
-/* See compiler.h. */
 int comp_name_writer_any(Compiler *c, const char *base) {
   int ans = 0;
   mtab_enter(c);

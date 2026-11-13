@@ -133,8 +133,9 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
   int oci = comp_core_class(c, CORE_OBJECT);
   if (rm->yields || rm->is_cmethod || (rm->class_id >= 0 && rm->class_id != oci) || scls == oci) return 0;
   /* the chain of scls itself answers first */
-  int own = call_target(c, id, scls, name, 0, NULL);
-  if ((own >= 0 && own != root_mi) || comp_reader_in_chain(c, scls, name, NULL)) return 0;
+  MethodLookup oml = { .def_class = -1 };
+  int own = call_target(c, id, scls, name, 0, &oml);
+  if ((own >= 0 && own != root_mi) || oml.kind == ML_ATTR) return 0;
   int nd = 0, found = 0;
   const int *ds = comp_descendants(c, scls, &nd);
   for (int i = 0; i < nd; i++) {
@@ -966,7 +967,8 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     }
     /* a reader a subclass overrides with a method: the switch reaches the
        override for that subclass */
-    if (comp_reader_in_chain(c, cid, name, NULL)) {
+    int reader = call_attr_target(c, -1, cid, name, 0, NULL);
+    if (reader) {
       int nd = 0;
       const int *ds = comp_descendants(c, cid, &nd);
       for (int i = 0; i < nd; i++) {
@@ -977,8 +979,9 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     if (class_is_exc_subclass(c, cid)) cplan_exc_reopen(c, id, name, p);
     /* (an attribute of the class or a Struct's member answers its name first) */
     char abase[256];
-    if (p->mi < 0 && !(comp_reader_in_chain(c, cid, name, NULL) ||
-                       (setter_base_name(name, abase, sizeof abase) && comp_writer_in_chain(c, cid, abase, NULL)))) {
+    int attr_answers = reader || (p->mi < 0 && setter_base_name(name, abase, sizeof abase) &&
+                                  call_attr_target(c, -1, cid, abase, CT_WRITER, NULL));
+    if (p->mi < 0 && !attr_answers) {
       cplan_root_reopen(c, id, name, cplan_builtin_name_of(c, cid), CORE_OBJECT, p);
       /* `self.m` (or a bare m the analysis gave self) reaching Object's
          method that a descendant of self's class overrides: a switch on
@@ -990,7 +993,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
         return;
       }
     }
-    if (p->mi < 0 && !comp_reader_in_chain(c, cid, name, NULL) && !c->classes[cid].is_native_class)
+    if (p->mi < 0 && !reader && !c->classes[cid].is_native_class)
       cplan_descendant_call(c, id, cid, name, 0, p);
     return;
   }
@@ -5455,17 +5458,18 @@ static int ct_template_self(Compiler *c, int id, int *out) {
   if (!name || nt_ref(nt, id, "receiver") >= 0 || cplan_builtin_call(c, id)) return -2;
   Scope *sc = comp_scope_of(c, id);
   int cid = sc ? sc->class_id : -1;
-  if (!sc || sc->is_cmethod || cid < 0 || cid >= c->nclasses || call_target(c, id, cid, name, 0, NULL) >= 0)
+  MethodLookup aml = { .def_class = -1 };
+  if (!sc || sc->is_cmethod || cid < 0 || cid >= c->nclasses || call_target(c, id, cid, name, 0, &aml) >= 0)
     return -2;
   /* (an attribute of the chain is the call's own member: emit_implicit_self_member) */
   size_t len = strlen(name);
-  if (comp_reader_in_chain(c, cid, name, NULL)) return -2;
+  if (aml.kind == ML_ATTR) return -2;
   if (len > 1 && name[len - 1] == '=') {
     char base[256];
     if (len - 1 >= sizeof base) return -2;
     memcpy(base, name, len - 1);
     base[len - 1] = '\0';
-    if (comp_writer_in_chain(c, cid, base, NULL)) return -2;
+    if (call_attr_target(c, id, cid, base, CT_WRITER, &aml)) return -2;
   }
   int n = 0;
   for (int k = 0; k < c->nclasses; k++) {
@@ -8069,7 +8073,7 @@ PolyPlan cplan_poly_sub(Compiler *c, int id) {
     int anc = 0;
     for (int p2 = c->classes[k].parent; p2 >= 0; p2 = c->classes[p2].parent)
       if (p2 == bcid) { anc = 1; break; }
-    if (anc && (call_target(c, id, k, name, 0, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL))) {
+    if (anc && (call_answers(c, id, k, name, 0, NULL))) {
       cpoly_family(&sp, &cap, PB_SUBDISPATCH);
       break;
     }
@@ -8609,7 +8613,7 @@ int cplan_nil(Compiler *c, int id) {
      send as any object does (`nil.send(:Integer, "12")`) */
   if (nt_int(nt, id, "dyn_arm", 0) && ty_is_object(rt)) {
     int k = ty_object_class(rt);
-    if (call_target(c, id, k, nm, 0, NULL) < 0 && !comp_reader_in_chain(c, k, nm, NULL)) return CN_NONE;
+    if (!call_answers(c, id, k, nm, 0, NULL)) return CN_NONE;
   }
   /* the typed String bang emitter tests a receiver it does not write back
      into a variable itself (sp_nil_recv), and marks the plain form it emits

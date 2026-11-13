@@ -1989,7 +1989,7 @@ int poly_key_prim(Compiler *c, int call, const char *name, int argc, int kwh, in
   const int *pks = comp_prim_reopen_classes(c, &npk);
   for (int ki = 0; ki < npk; ki++) {
     int k = pks[ki];
-    if (!comp_class_answers(c, k, name)) continue;
+    if (!call_answers(c, -1, k, name, 0, NULL)) continue;
     int pmi = call_target(c, call, k, name, 0, NULL);
     char pexp[600];
     if (pmi < 0) continue;

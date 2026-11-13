@@ -48,7 +48,6 @@ src/compiler.c comp_method_overridden which subclasses override the name
 src/compiler.c comp_name_answered which classes answer the name
 src/compiler.c comp_name_responder which classes answer the name
 src/compiler.c comp_name_writer_any which classes answer the name
-src/compiler.c comp_class_answers which classes answer the name
 src/compiler.c comp_native_answer_class which classes answer the name
 src/compiler.c comp_native_binding_class which classes answer the name
 src/compiler.c comp_poly_arm_defines which classes answer the name

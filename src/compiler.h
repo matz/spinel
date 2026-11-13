@@ -626,6 +626,11 @@ typedef struct {
                             site answers by folding. A real value use has no
                             such answer -- the block must be an sp_Proc *. */
   char *blk_param;  /* name of the `&block` parameter, or NULL (anon -> "") */
+  /* cplan_block_value_ignored's answer for this method while
+     Compiler.bvi_epoch stands: BVI_BUSY while it is asked, at method depth
+     bvi_depth */
+  int bvi_epoch, bvi_depth;
+  unsigned char bvi_state;
 
   /* Compile-time `define_method` unrolling: a method synthesized from
      `[lits].each { |v| define_method("m_#{v}") { body } }`. Within this
@@ -1999,6 +2004,12 @@ typedef struct {
     int *own;
     int cap;
   } ie_map;
+  /* cplan_block_value_ignored's answers (call_plan.c): their number, which
+     moves with the node table, the types, the methods or their index
+     (bvi_stamp); how many asks are open, how many methods deep one is, and
+     the shallowest method still being asked that an answer rested on */
+  int bvi_epoch, bvi_calls, bvi_mdepth, bvi_low;
+  struct { unsigned long ty, edits; unsigned version, scope_gen; int nscopes; } bvi_stamp;
 } Compiler;
 enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
 

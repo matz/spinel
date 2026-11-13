@@ -108,7 +108,6 @@ void du_memo_free(void);
    statement or the block that holds it. */
 enum { AN_DROP_CLIMB = VPS_ALL };
 int an_value_dropped(Compiler *c, const int *parent, int node);
-int an_yield_dropped(Compiler *c, int y);
 /* The String rule for a local or parameter slot: it holds the handle (analyze_pass.c) */
 int slot_take_string_handle(Compiler *c, LocalVar *lv);
 /* A runtime protocol name: the emitted program can call the method with

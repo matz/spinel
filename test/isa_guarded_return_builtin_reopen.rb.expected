@@ -1,0 +1,15 @@
+"a"
+"B!"
+"not a String"
+"D!"
+"not exactly a String"
+[1, 2]
+4
+"not an Array"
+1970
+"not a Time"
+"std"
+"not an error"
+"hi ann"
+"hi bob"
+"not a Greet"

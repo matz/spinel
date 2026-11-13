@@ -47,6 +47,7 @@ class S: body#15
 class StructAnon_p5build_2r0pvl251a0pvl251: body#-1
 entity C: owner main leaf C
 entity K: owner main leaf K
+entity S: owner main leaf S
 const C: write#1
 C.made: def#4 end=yes
 const K: write#5

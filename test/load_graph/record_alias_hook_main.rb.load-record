@@ -14,6 +14,7 @@ r0 #11 f0 CallNode p line 14
 block new line 9: assumed
 class Struct: body#3
 class Pt: body#7
+entity Pt: owner main leaf Pt
 Struct.on_added: def#4 end=yes
 Struct.method_added: alias#6 (on_added: def#4) end=yes
 const Pt: write#7

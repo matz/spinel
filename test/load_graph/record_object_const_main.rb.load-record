@@ -80,7 +80,9 @@ class SpinelAnonClass2: body#58
 entity K: owner main leaf K
 entity M: owner main leaf M
 entity N: owner main leaf N
+entity N__Object: owner N leaf Object
 entity SpinelAnonClass1: owner main leaf SpinelAnonClass1
+entity S39: owner main leaf S39
 entity SpinelAnonClass2: owner main leaf SpinelAnonClass2
 const A: write#1
 const B: write#2

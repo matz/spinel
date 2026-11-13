@@ -1,0 +1,7 @@
+A#show r1
+A#index r2
+B#show r3
+NoMethodError index
+NoMethodError pair_only
+ArgumentError wrong number of arguments (given 1, expected 2)
+ArgumentError wrong number of arguments (given 1, expected 0)

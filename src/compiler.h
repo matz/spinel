@@ -2601,6 +2601,9 @@ int cls_fact_bounded(Compiler *c, int k);
    known, k is bounded, and k is not in it? A call on recv then never
    reaches k's method, so the binding and the dispatch may leave it out. */
 int cls_fact_excludes(Compiler *c, int recv, int k);
+/* ...and as a Class object: may recv's value not be class k itself (a
+   `new` on it then builds no k)? */
+int cls_fact_excludes_class_value(Compiler *c, int recv, int k);
 /* May node's value be an OpenStruct (an OpenStruct.new reaches it, or the
    walk has no answer for it), in a program that requires "ostruct"? */
 int cls_fact_may_ostruct(Compiler *c, int node);

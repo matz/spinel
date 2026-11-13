@@ -3621,6 +3621,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
       if (g_poly_new_only && !g_poly_new_only[ci]) continue;
+      /* (nor a class the receiver's fact says it never is: `k < Base ? k : nil`) */
+      if (cls_fact_excludes_class_value(c, recv, ci)) continue;
       /* a class built by its own `self.new` may never be instantiated at all */
       if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, b)) continue;
       if (emit_cv_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;

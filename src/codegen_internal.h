@@ -1768,7 +1768,8 @@ void emit_typed_elem_hold(Compiler *c, int node, TyKind rt, const char *text, Bu
 int emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, Buf *b);
 TyKind typed_elem_kind(TyKind rt);
 const char *typed_elem_sfx(TyKind rt);
-const char *typed_elem_box_open(TyKind rt);
+void emit_held_boxed_text(Compiler *c, TyKind held, const char *text, Buf *b);
+int hash_int_vals_nil(Compiler *c, int recv, TyKind rt);
 const char *typed_elem_store_sfx(TyKind rt);
 TyKind typed_elem_held(TyKind rt);
 int typed_elem_hold_may_make(Compiler *c, int node, TyKind rt);

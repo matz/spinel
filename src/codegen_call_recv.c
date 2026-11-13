@@ -6250,12 +6250,8 @@ static void emit_hash_val_boxed(Compiler *c, int recv, TyKind rt, const char *h,
    it holds, else the value read and boxed (emit_boxed_text) */
 void emit_hash_val_box_text(Compiler *c, TyKind rt, const char *h, const char *k, Buf *b) {
   const char *hn = ty_hash_cname(rt);
-  if (typed_elem_held(rt) == TY_STRBUF) {
-    buf_printf(b, "%ssp_%sHash_get%s(%s, %s))", typed_elem_box_open(rt), hn, typed_elem_store_sfx(rt), h, k);
-    return;
-  }
-  char g[160]; snprintf(g, sizeof g, "sp_%sHash_get(%s, %s)", hn, h, k);
-  emit_boxed_text(c, ty_hash_val(rt), g, b);
+  char g[160]; snprintf(g, sizeof g, "sp_%sHash_get%s(%s, %s)", hn, typed_elem_store_sfx(rt), h, k);
+  emit_held_boxed_text(c, typed_elem_held(rt), g, b);
 }
 
 /* Emit a statement-expression materializing a hash's entries as a PolyArray of
@@ -6279,8 +6275,10 @@ void emit_hash_pairs_expr(Compiler *c, int recv, TyKind rt, const char *hn, Buf 
     char hs[24], ks[48]; snprintf(hs, sizeof hs, "_t%d", th); snprintf(ks, sizeof ks, "_t%d->order[_t%d]", th, ti);
     buf_printf(b, " sp_PolyArray_push(_t%d, ", tp); emit_hash_val_boxed(c, recv, rt, hs, ks, b); buf_puts(b, ");");
   }
-  else
-    buf_printf(b, " sp_PolyArray_push(_t%d, %ssp_%sHash_get%s(_t%d, _t%d->order[_t%d])));", tp, typed_elem_box_open(rt), hn, typed_elem_store_sfx(rt), th, th, ti);
+  else {
+    char gx[160]; snprintf(gx, sizeof gx, "sp_%sHash_get%s(_t%d, _t%d->order[_t%d])", hn, typed_elem_store_sfx(rt), th, th, ti);
+    buf_printf(b, " sp_PolyArray_push(_t%d, ", tp); emit_held_boxed_text(c, typed_elem_held(rt), gx, b); buf_puts(b, ");");
+  }
   buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d));", tr, tp);
   buf_printf(b, " } _t%d; })", tr);
 }

@@ -4794,14 +4794,10 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
   if ((is_aref || is_fetch) && comp_ntype(c, argv[0]) == TY_STRING) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_AREF_STR, -1, TY_UNKNOWN, PC_SAME);
     TyKind trt = is_scalar_ret(ret) ? ret : TY_INT;  /* the result temp's type */
-    static const struct { const char *cls; TyKind ht; } HV[] = {
-      {"SP_BUILTIN_STR_STR_HASH", TY_STR_STR_HASH},
-      {"SP_BUILTIN_STR_INT_HASH", TY_STR_INT_HASH},
-      {"SP_BUILTIN_STR_POLY_HASH", TY_STR_POLY_HASH},
-    };
+    static const TyKind HV[] = { TY_STR_STR_HASH, TY_STR_INT_HASH, TY_STR_POLY_HASH };
     for (unsigned hvi = 0; hvi < sizeof HV / sizeof HV[0]; hvi++) {
-      TyKind ht = HV[hvi].ht;
-      const char *hn = ty_hash_cname(ht);
+      TyKind ht = HV[hvi];
+      const char *hn = ty_hash_cname(ht), *hcls = hash_box_cls(ht);
       /* only a variant whose value fits the result temp can be emitted */
       if (ret != TY_POLY && ty_hash_val(ht) != trt) continue;
       char hx[200], getx[200];
@@ -4812,12 +4808,12 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
          in front of `[]` it answered nil for a Hash.new("") (#5544) */
       if (is_aref) {
         char gx[96]; snprintf(gx, sizeof gx, "sp_poly_get_str(_t%d, %s)", tv, strarg);
-        buf_printf(b, " case %s: _t%d = ", HV[hvi].cls, tr);
+        buf_printf(b, " case %s: _t%d = ", hcls, tr);
         if (ret == TY_POLY) buf_puts(b, gx); else emit_unbox_text(c, trt, gx, b);
         buf_puts(b, "; break;");
         continue;
       }
-      buf_printf(b, " case %s: _t%d = sp_%sHash_has_key(%s, %s) ? ", HV[hvi].cls, tr, hn, hx, strarg);
+      buf_printf(b, " case %s: _t%d = sp_%sHash_has_key(%s, %s) ? ", hcls, tr, hn, hx, strarg);
       /* (boxed: a String value as the Hash holds it, the handle's own box) */
       if (ret == TY_POLY) emit_hash_val_box_text(c, ht, hx, strarg, b); else buf_puts(b, getx);
       buf_puts(b, " : ");

@@ -2062,12 +2062,19 @@ const char *typed_elem_store_sfx(TyKind rt) {
   const char *s = typed_elem_sfx(rt);
   return s ? s : "";
 }
-/* The box of a String element, of a container kind rt whose element (or
-   value) is String, read by its `_e` entry: where it is held as the handle
-   the handle's own box (SP_SEBOX, nil for NULL), which keeps its identity,
-   else the box of its bytes. Opens the box; the caller closes it with ")". */
-const char *typed_elem_box_open(TyKind rt) {
-  return typed_elem_held(rt) == TY_STRBUF ? "SP_SEBOX(" : "sp_box_str(";
+/* Can a value of an Integer-valued typed Hash (kind rt, receiver recv) be
+   nil? Where analyze marked the Hash as able to hold one (hash_vals_nullable,
+   D3b-ii) its values are read through `_vget`, with the nil. */
+int hash_int_vals_nil(Compiler *c, int recv, TyKind rt) {
+  return (rt == TY_STR_INT_HASH || rt == TY_INT_INT_HASH) && hash_vals_nullable(c, recv);
+}
+/* text, an element (or value) read from a typed container as the container
+   holds it (typed_elem_held), boxed: a String one, held as the handle, boxes
+   as the handle's own box (SP_SEBOX, nil for NULL), which keeps its
+   identity; any other as emit_boxed_text boxes its kind. */
+void emit_held_boxed_text(Compiler *c, TyKind held, const char *text, Buf *b) {
+  if (held == TY_STRBUF) buf_printf(b, "SP_SEBOX(%s)", text);
+  else emit_boxed_text(c, held, text, b);
 }
 /* Value node into an element of typed Array kind rt, as its slot converts
    or refuses it (emit_coerce), the face aside: where the element is held as

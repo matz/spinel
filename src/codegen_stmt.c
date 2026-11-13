@@ -24663,11 +24663,6 @@ static int hash_store_oset(Compiler *c, int val, TyKind rt) {
   if (rt != TY_STR_INT_HASH && rt != TY_INT_INT_HASH) return 0;
   return nt_kind(c->nt, val) == NK_NilNode || node_has_oint_form(c, val) || repr_of(c, val).kind == RK_BOXED;
 }
-/* The kind a store into typed Hash kind rt holds its value as: the handle
-   for a Hash of String values (elem_held), else the value's own kind */
-static TyKind hash_store_held(TyKind rt) {
-  return typed_elem_held(rt) == TY_STRBUF ? TY_STRBUF : ty_hash_val(rt);
-}
 /* The value of a hash store, as the kind's set takes it (as an oint for
    hash_store_oset's `_oset`, as the handle for the `_e` set of a Hash of
    String values). */
@@ -25666,7 +25661,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         buf_printf(b, "%s _t%d = ", c_type_name(kt), tk); emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, "; ");
         if (operand_may_allocate(c, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, b); buf_puts(b, " "); }
         int vo = hash_store_oset(c, argv[1], rt);
-        const char *vct = vo ? "sp_oint" : c_type_name(hash_store_held(rt));
+        const char *vct = vo ? "sp_oint" : c_type_name(typed_elem_held(rt));
         buf_printf(b, "%s _t%d = ", vct ? vct : "sp_RbVal", tv); emit_hash_store_val(c, argv[1], rt, b);
         const char *hbc = hash_box_cls(rt);
         buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s); ", tr, tr, hbc ? hbc : "0");
@@ -25681,7 +25676,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       int tv = -1;
       if (strbuf_read_copies(c, argv[0]) &&
           (operand_may_allocate(c, argv[1]) || typed_elem_hold_may_make(c, argv[1], rt))) {
-        TyKind vt = hash_store_held(rt);
+        TyKind vt = typed_elem_held(rt);
         tv = ++g_tmp;
         buf_printf(b, "{ %s _t%d = ", c_type_name(vt), tv); emit_hash_store_val(c, argv[1], rt, b);
         buf_puts(b, "; "); emit_gc_root_tmp(c, vt, tv, b); buf_puts(b, " ");
@@ -26476,8 +26471,12 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     else if ((rt == TY_STR_INT_HASH || rt == TY_INT_INT_HASH) && vt == TY_INT)
       snprintf(slot, sizeof slot, "sp_oint_val(sp_%sHash_oget%s(_t%d, %s), \"%s\")", hn, rs, ta, rk, op);
     else if (hbox)
-      snprintf(slot, sizeof slot, "%ssp_%sHash_get%s%s(_t%d, %s))", typed_elem_box_open(rt), hn, rs,
-               typed_elem_store_sfx(rt), ta, rk);
+    {
+      char gx[256]; Buf bx; memset(&bx, 0, sizeof bx);
+      snprintf(gx, sizeof gx, "sp_%sHash_get%s%s(_t%d, %s)", hn, rs, typed_elem_store_sfx(rt), ta, rk);
+      emit_held_boxed_text(c, typed_elem_held(rt), gx, &bx);
+      snprintf(slot, sizeof slot, "%s", bx.p ? bx.p : ""); free(bx.p);
+    }
     else
       snprintf(slot, sizeof slot, "sp_%sHash_get%s(_t%d, %s)", hn, rs, ta, rk);
     if (eff) iow_capture_slot(c, hbox ? TY_POLY : vt, slot, sizeof slot, b);

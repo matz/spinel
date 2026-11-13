@@ -5095,6 +5095,9 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	for v in lv_a lv_b lv_c lv_d lv_e lv_h lv_k lv_l lv_m lv_n; do grep -q "sp_PolyArray \* $$v = NULL;" "$$tmp/nerp.c" || { echo "infer-test: FAIL (a table of empty rows whose row escapes or takes another kind narrowed: $$v)"; ok=0; }; done; \
 	grep -q 'sp_PolyArray \* iv_rows;' "$$tmp/nerp.c" && grep -q 'sp_PolyArray \* iv_cells;' "$$tmp/nerp.c" || { echo "infer-test: FAIL (a table whose row a method's read value hands on narrowed)"; ok=0; }; \
 	[ "$$(grep -A2 'sp_IntArray \*_t[0-9]* = sp_IntArray_new();' "$$tmp/nerp.c" | grep -c 'sp_PtrArray_push')" -ge 2 ] && [ "$$(grep -A2 'sp_FloatArray \*_t[0-9]* = sp_FloatArray_new();' "$$tmp/nerp.c" | grep -c 'sp_PtrArray_push')" -ge 1 ] || { echo "infer-test: FAIL (a narrowed table of empty rows built its rows boxed)"; ok=0; }; \
+	$(SPINEL) test/super_value_read_narrows.rb -c --no-line-map -o "$$tmp/svr.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile super_value_read_narrows)"; exit 1; }; \
+	awk '/^struct sp_Net_s \{/,/^\}/' "$$tmp/svr.c" | grep -Fq 'sp_PtrArray * iv_b;' || { echo "infer-test: FAIL (a super in another class's initialize kept the Array a walk ending initialize answers boxed)"; ok=0; }; \
+	awk '/^struct sp_Shelf_s \{/,/^\}/' "$$tmp/svr.c" | grep -Fq 'sp_PolyArray * iv_items;' || { echo "infer-test: FAIL (the Array a super whose value is used answers narrowed)"; ok=0; }; \
 	$(SPINEL) test/infer/map_table_rows.rb -c --no-line-map -o "$$tmp/mtr.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile map_table_rows)"; exit 1; }; \
 	grep -Eq 'sp_PtrArray \* *lv_picked' "$$tmp/mtr.c" || { echo "infer-test: FAIL (a table of rows built by map lost its typed representation)"; grep -oE 'sp_[A-Za-z]+Array \* *lv_picked' "$$tmp/mtr.c" | head -1; ok=0; }; \
 	grep -Eq 'sp_PtrArray \* *iv_rows;' "$$tmp/mtr.c" || { echo "infer-test: FAIL (the ivar holding a mapped table stayed boxed)"; ok=0; }; \

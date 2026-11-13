@@ -143,11 +143,7 @@ enum {
 };
 /* The class id of builtin class `n`, -1 for a name that has none (a row of
    id 0, or no row). The id of a builtin's class value, which the class-value
-   switches (a new, a class method) arm on. */
-static inline int sp_builtin_class_id_of(const char *n) {
-#define X(k, nm, id, flags) if ((id) != 0 && n[0] == (nm)[0] && !strcmp(n, nm)) return (id);
-  SP_BUILTIN_CLASSES(X)
-#undef X
-  return -1;
-}
+   switches (a new, a class method) arm on. Looked up through a hash of the
+   rows built on first use (lib/sp_poly_cold.c). */
+int sp_builtin_class_id_of(const char *n);
 #endif

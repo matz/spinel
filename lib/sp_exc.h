@@ -26,6 +26,7 @@
 #include "sp_types.h"   /* sp_int, sp_bool */
 #include "sp_gc.h"      /* sp_RbVal, sp_gc_alloc, sp_gc_mark, sp_mark_string */
 #include "sp_alloc.h"   /* sp_box_nil/int, sp_str_empty, sp_raise_cls, sp_sprintf */
+#include "sp_builtin_classes.h"   /* SP_BCLS_*: the class ids an exception carries */
 #include <signal.h>     /* SIGINT for sp_exc_new's Interrupt#signo default */
 
 typedef struct sp_Exception_s {
@@ -42,6 +43,14 @@ typedef struct sp_Exception_s {
                                   receiver (nil.foo), so the box cannot say (#3036) */
   sp_bool has_key;            /* likewise for KeyError#key (#3030) */
   sp_bool priv_call;          /* NoMethodError#private_call? (#3042) */
+  int cls_id;                 /* cls_name's builtin class id (SP_BCLS_*) when it names a builtin
+                                 exception class, else 0: class questions about a builtin compare
+                                 ids (sp_exc_id_is_a) and only a class of the program's, or a name
+                                 without an id, walks names. Set where the exception is made
+                                 (sp_exc_set_cls_id); an instance the generated code builds for a
+                                 class of the program's leaves it 0. The generated subclass structs
+                                 mirror this field (codegen.c, emit_class_struct), between priv_call
+                                 and backtrace. */
   sp_StrArray *backtrace;     /* an attached backtrace set by #set_backtrace; nil
                                  means "no caller ever set one" (CRuby answers
                                  nil for the unset case). The GC mark visits it
@@ -82,9 +91,29 @@ extern SP_TLS unsigned char sp_pending_exc_flags;
 extern SP_TLS const char *sp_pending_exc_name;
 
 int sp_exc_cls_matches(const char *raised, const char *target);
+/* Does the builtin exception class `cid` descend from the builtin exception
+   class `tid` (SP_BCLS_* ids)? 1 or 0 when the id hierarchy answers, -1 when
+   it does not (an id of 0, a class without an id, a target that is no
+   exception class): the caller then walks names. */
+int sp_exc_id_is_a(int cid, int tid);
+/* e's class against the builtin exception class `tid` named `name`: by id
+   where the ids answer, else by name. */
+static inline int sp_exc_is_cls(const sp_Exception *e, int tid, const char *name) {
+  if (e->cls_id == tid) return 1;
+  if (e->cls_id) {
+    int r = sp_exc_id_is_a(e->cls_id, tid);
+    if (r >= 0) return r;
+  }
+  return sp_exc_cls_matches(e->cls_name, name);
+}
 sp_bool sp_exc_has_acc(sp_Exception *e, const char *acc);   /* has the class-gated accessor */
 int sp_exc_nearest_cls(const char *raised, const char *const *targets, int n);
-SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc);
+SP_COLD void sp_exc_acc_gate_slow(sp_Exception *e, int tid, const char *cls, const char *acc);
+/* The accessor `acc` is defined on builtin exception class `cls` (id `tid`):
+   an exception of exactly that class passes with one compare. */
+static inline void sp_exc_acc_gate(sp_Exception *e, int tid, const char *cls, const char *acc) {
+  if (!e || e->cls_id != tid) sp_exc_acc_gate_slow(e, tid, cls, acc);
+}
 int sp_exc_is_standard_error(const char *raised);
 sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg);
 /* the object an ensure holds for the exception passing through it */

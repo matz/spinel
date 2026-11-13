@@ -1,0 +1,67 @@
+nil
+[:b, {a: 1}]
+[:undefined_thing_xyz, NameError]
+[:nope, [1, 2], 3, false]
+["lit", FrozenError]
+[nil, nil]
+[:nope, nil]
+[3, false]
+[Errno::ENOENT, 2, true]
+nil
+true
+true
+true
+false
+[:zz, {z: 1}, true, false]
+:foo
+true
+nil
+false
+true
+Lib::StopIteration
+"NoMethodError undefined method 'result' for an instance of Lib::StopIteration"
+false
+false
+"NoMethodError undefined method 'key' for an instance of Lib::KeyError"
+"NoMethodError undefined method 'result' for an instance of RuntimeError"
+"NoMethodError undefined method 'args' for an instance of RuntimeError"
+"NoMethodError undefined method 'private_call?' for an instance of RuntimeError"
+"NoMethodError undefined method 'reason' for an instance of RuntimeError"
+"NoMethodError undefined method 'tag' for an instance of RuntimeError"
+"NoMethodError undefined method 'status' for an instance of RuntimeError"
+"NoMethodError undefined method 'signo' for an instance of RuntimeError"
+"NoMethodError undefined method 'name' for an instance of StandardError"
+"NoMethodError undefined method 'key' for an instance of ArgumentError"
+"NoMethodError undefined method 'receiver' for an instance of IndexError"
+"NoMethodError undefined method 'key' for an instance of StopIteration"
+"NoMethodError undefined method 'result' for an instance of KeyError"
+StopIteration: StopIteration IndexError StandardError Exception
+IndexError: IndexError StandardError Exception
+KeyError: IndexError KeyError StandardError Exception
+NameError: NameError StandardError Exception
+NoMethodError: NameError NoMethodError StandardError Exception
+FrozenError: FrozenError RuntimeError StandardError Exception
+RuntimeError: RuntimeError StandardError Exception
+StandardError: StandardError Exception
+Exception: Exception
+ArgumentError: StandardError Exception ArgumentError
+UncaughtThrowError: StandardError Exception ArgumentError UncaughtThrowError
+SystemExit: Exception SystemExit
+ScriptError: Exception ScriptError
+NotImplementedError: Exception ScriptError NotImplementedError
+LoadError: Exception ScriptError LoadError
+ZeroDivisionError: StandardError Exception ZeroDivisionError
+FloatDomainError: StandardError Exception FloatDomainError RangeError
+RangeError: StandardError Exception RangeError
+Interrupt: Exception Interrupt SignalException
+SignalException: Exception SignalException
+EOFError: StandardError Exception EOFError IOError
+IOError: StandardError Exception IOError
+ClosedQueueError: StopIteration IndexError StandardError Exception ClosedQueueError
+LocalJumpError: StandardError Exception LocalJumpError
+[:index, :key, :name, :runtime, :std, :script, :index, :exc, :std, :index, :key]
+[Integer, false, :no]
+[StopIteration, true, nil]
+[Symbol, false, :no]
+[KeyError, false, :no]
+[Deeper, true, nil]

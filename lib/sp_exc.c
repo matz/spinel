@@ -33,6 +33,142 @@ const char *const *sp_exc_modules_of_name(const char *cls) {
   return 0;
 }
 
+/* The builtin exception hierarchy, as {class, direct superclass} pairs: the
+   one source of the name walk (sp_exc_parent_of_name, shared by
+   Exception#is_a? and the by-name #superclass lookup, #3031) and of the id
+   hierarchy below. */
+static const char *const SP_EXC_HIER[][2] = {
+  {"RuntimeError",          "StandardError"},
+  {"ArgumentError",         "StandardError"},
+  {"TypeError",             "StandardError"},
+  {"NameError",             "StandardError"},
+  {"NoMethodError",         "NameError"},
+  {"IndexError",            "StandardError"},
+  {"KeyError",              "IndexError"},
+  {"RangeError",            "StandardError"},
+  {"IOError",               "StandardError"},
+  {"IO::TimeoutError",      "IOError"},
+  /* the socket library's: a lookup that fails is the subclass */
+  {"SocketError",           "StandardError"},
+  {"Socket::ResolutionError", "SocketError"},
+  {"EOFError",              "IOError"},
+  {"ZeroDivisionError",     "StandardError"},
+  {"NotImplementedError",   "ScriptError"},
+  {"StopIteration",         "IndexError"},
+  {"FloatDomainError",      "RangeError"},
+  {"Math::DomainError",      "StandardError"},
+  {"FrozenError",           "RuntimeError"},
+  {"EncodingError",         "StandardError"},
+  {"Encoding::UndefinedConversionError", "EncodingError"},
+  {"Encoding::InvalidByteSequenceError", "EncodingError"},
+  {"Encoding::CompatibilityError",       "EncodingError"},
+  {"Encoding::ConverterNotFoundError",   "EncodingError"},
+  /* a LoadError is a ScriptError: `rescue StandardError` and `rescue => e`
+     let it through, as sp_exc_is_standard_error already said */
+  {"LoadError",             "ScriptError"},
+  {"RegexpError",           "StandardError"},
+  {"StringScanner::Error",  "StandardError"},
+  /* the json package raises these by name; NestingError is what a document
+     too deep to serialize raises, and `rescue JSON::ParserError` catches it
+     in CRuby because it is a ParserError */
+  {"JSON::NestingError",    "JSON::ParserError"},
+  /* the json package's errors descend from StandardError through JSONError, as
+     CRuby's do: an explicit `rescue StandardError` and `is_a?(StandardError)` say so (#7797) */
+  {"JSON::JSONError",       "StandardError"},
+  {"JSON::ParserError",     "JSON::JSONError"},
+  /* a Float JSON has no spelling for (Infinity, NaN) is refused with it */
+  {"JSON::GeneratorError",  "JSON::JSONError"},
+  /* IO::Buffer's errors (lib/sp_iobuffer.c raises them by name): all
+     RuntimeError subclasses in CRuby, except MaskError < ArgumentError */
+  {"IO::Buffer::AccessError",      "RuntimeError"},
+  {"IO::Buffer::LockedError",      "RuntimeError"},
+  {"IO::Buffer::AllocationError",  "RuntimeError"},
+  {"IO::Buffer::InvalidatedError", "RuntimeError"},
+  {"IO::Buffer::MaskError",        "ArgumentError"},
+  {"FiberError",            "StandardError"},
+  {"UncaughtThrowError",    "ArgumentError"},
+  {"SyntaxError",           "ScriptError"},
+  {"ScriptError",           "Exception"},
+  {"StandardError",         "Exception"},
+  {"SecurityError",         "Exception"},
+  {"SignalException",       "Exception"},
+  {"Interrupt",             "SignalException"},
+  {"ThreadError",           "StandardError"},
+  {"ClosedQueueError",      "StopIteration"},
+  {"NoMatchingPatternError", "StandardError"},
+  {"NoMatchingPatternKeyError", "NoMatchingPatternError"},
+  {"LocalJumpError",        "StandardError"},   /* (#3025) */
+  {"SystemExit",            "Exception"},
+  {"SystemStackError",      "Exception"},
+  {"NoMemoryError",         "Exception"},
+  {"SystemCallError",       "StandardError"},
+  /* The non-blocking readiness exceptions. Each is an Errno subclass that
+     also includes IO::WaitReadable / IO::WaitWritable (see
+     sp_exc_modules_of_name) -- the module is why a single-parent chain could
+     not express them: WaitWritable is included by classes under two
+     different Errno parents. */
+  {"IO::EAGAINWaitReadable",      "Errno::EAGAIN"},
+  {"IO::EAGAINWaitWritable",      "Errno::EAGAIN"},
+  {"IO::EINPROGRESSWaitReadable", "Errno::EINPROGRESS"},
+  {"IO::EINPROGRESSWaitWritable", "Errno::EINPROGRESS"},
+  {NULL, NULL}
+};
+
+/* The same hierarchy by class id. sp_exc_parent_id[-id] is the id of the
+   parent of the builtin exception class `id` (SP_BCLS_*), 0 for an id that is
+   no exception class or whose parent has no id, the class's own id for
+   Exception. Generated on first use from SP_EXC_HIER and the class list
+   (sp_builtin_classes.h): every pair whose two ends both have an id. A chain
+   through a class without an id stops at a 0 entry, which answers "not known"
+   and sends the question to the name walk, so an id answer is never a guess. */
+#define SP_EXC_ID_SPAN 192
+#define X(k, n, id, flags) _Static_assert((id) > -SP_EXC_ID_SPAN, "raise SP_EXC_ID_SPAN");
+SP_BUILTIN_CLASSES(X)
+#undef X
+static short sp_exc_parent_id[SP_EXC_ID_SPAN];
+/* The kept name (sp_exc_class_name) of each builtin exception class, by the
+   same ids, filled on first use: a class name question about a builtin
+   exception then costs a load, not a locked table walk. */
+static const char *sp_exc_id_name[SP_EXC_ID_SPAN];
+static int sp_exc_hier_state;   /* 0 not built, 1 a thread is building it, 2 built */
+/* Built on the first question that reads it, so a program that never raises
+   pays nothing at start; one thread builds, the others wait for it. */
+static void sp_exc_id_hier_build(void) {
+  int none = 0;
+  if (!SP_ATOMIC_CAS(&sp_exc_hier_state, &none, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    while (SP_ATOMIC_LOAD(&sp_exc_hier_state, __ATOMIC_ACQUIRE) != 2) {}
+    return;
+  }
+  sp_exc_parent_id[-SP_BCLS_EXCEPTION] = SP_BCLS_EXCEPTION;
+  for (int i = 0; SP_EXC_HIER[i][0]; i++) {
+    int c = sp_builtin_class_id_of(SP_EXC_HIER[i][0]), p = sp_builtin_class_id_of(SP_EXC_HIER[i][1]);
+    if (c < -1 && p < -1) sp_exc_parent_id[-c] = (short)p;
+  }
+  SP_ATOMIC_STORE(&sp_exc_hier_state, 2, __ATOMIC_RELEASE);
+}
+static inline void sp_exc_id_hier(void) {
+  if (SP_ATOMIC_LOAD(&sp_exc_hier_state, __ATOMIC_ACQUIRE) != 2) sp_exc_id_hier_build();
+}
+int sp_exc_id_is_a(int cid, int tid) {
+  sp_exc_id_hier();
+  if (cid >= 0 || tid >= -1 || -tid >= SP_EXC_ID_SPAN || !sp_exc_parent_id[-tid]) return -1;
+  for (int depth = 0; depth < 30 && cid < -1 && -cid < SP_EXC_ID_SPAN; depth++) {
+    int p = sp_exc_parent_id[-cid];
+    if (!p) return -1;
+    if (cid == tid) return 1;
+    if (p == cid) return 0;
+    cid = p;
+  }
+  return -1;
+}
+/* e's cls_id for its cls_name: the builtin exception class's id, 0 for any
+   other name (a class of the program's, an Errno:: family member) */
+static void sp_exc_set_cls_id(sp_Exception *e) {
+  sp_exc_id_hier();
+  int id = e->cls_name ? sp_builtin_class_id_of(e->cls_name) : -1;
+  e->cls_id = id < -1 && -id < SP_EXC_ID_SPAN && sp_exc_parent_id[-id] ? id : 0;
+}
+
 /* Does `cls` itself, through any module it includes, answer to `target`? */
 static int sp_exc_level_matches(const char *cls, const char *target) {
   if (!strcmp(cls, target)) return 1;
@@ -98,8 +234,8 @@ int sp_exc_nearest_cls(const char *raised, const char *const *targets, int n) {
 /* Class-gated introspection accessors (#2753-#2756, #2770): each answers only
    on its CRuby-defining class (walking the name-carried hierarchy) and raises
    NoMethodError elsewhere, matching per-class method definitions. */
-SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc) {SP_GC_ROOT(e);
-  if (e && sp_exc_cls_matches(e->cls_name, cls)) return;
+SP_COLD void sp_exc_acc_gate_slow(sp_Exception *e, int tid, const char *cls, const char *acc) {SP_GC_ROOT(e);
+  if (e && sp_exc_is_cls(e, tid, cls)) return;
   /* Preserve the failed call's receiver and empty argument list before
      formatting/raising allocates. The staged values are GC roots. */
   sp_exc_stage_recv(sp_box_nullable_obj(e, SP_BUILTIN_EXCEPTION));
@@ -314,6 +450,7 @@ void *sp_exc_ensure_obj(void **obj, const char **msg, const char *cls) {
 void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h); if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_alloc_named(sz, cls_name);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
+  sp_exc_set_cls_id(e);
   e->result = sp_box_nil();   /* memset left tag 0 (int 0); StopIteration#result wants nil */
   e->xname = sp_box_nil();
   e->xkey = sp_box_nil();
@@ -398,6 +535,7 @@ sp_RbVal sp_Exception_set_backtrace(sp_Exception *e, sp_StrArray *bt) {
 sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h); if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_alloc_named(sizeof(sp_Exception), cls_name);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
+  sp_exc_set_cls_id(e);
   e->parent_cls_name = NULL;
   e->msg = NULL;    /* set below; scan-safe if the copy triggers a GC */
   e->cause = NULL;  /* set all fields explicitly; sp_exc_gc_scan reads cause */
@@ -556,6 +694,12 @@ const char *sp_exc_class_name(volatile sp_Exception *ve) {
   const char *name, *r = NULL;
   if (!e) return SPL("NilClass");   /* a slot that holds nil (the callers that print it test the pointer first) */
   if (!e->cls_name) return SPL("RuntimeError");
+  /* a builtin class's kept name, found by its id once the table below has it */
+  int idx = e->cls_id ? -e->cls_id : 0;
+  if (idx > 0 && idx < SP_EXC_ID_SPAN) {
+    const char *k = SP_ATOMIC_LOAD(&sp_exc_id_name[idx], __ATOMIC_ACQUIRE);
+    if (k) return k;
+  }
   name = e->cls_name;
   /* A name with no header is a literal, or a copy kept here: its address
      names it, and the table is keyed by address. A heap name (a class
@@ -605,6 +749,8 @@ const char *sp_exc_class_name(volatile sp_Exception *ve) {
   }
   SP_HEAP_UNLOCK();
 #undef SP_KEPT_SLOT
+  /* the kept copy is the name's one copy, so every thread stores the same pointer */
+  if (r && idx > 0 && idx < SP_EXC_ID_SPAN) SP_ATOMIC_STORE(&sp_exc_id_name[idx], r, __ATOMIC_RELEASE);
   return r ? r : sp_str_dup_external(e->cls_name);   /* out of memory */
 }
 const char *sp_exc_msg_text(volatile sp_Exception *ve) {
@@ -995,7 +1141,7 @@ const char *sp_syserr_text(int has_num, sp_int num, const char *func, const char
    ran; NoMethodError off the family, as CRuby defines the reader on
    SystemCallError alone. */
 sp_RbVal sp_exc_errno_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "SystemCallError", "errno");
+  sp_exc_acc_gate(e, SP_BCLS_SYSTEMCALLERROR, "SystemCallError", "errno");
   return e->xkey;
 }
 /* Socket::ResolutionError, raised for a name getaddrinfo could not resolve,
@@ -1009,91 +1155,14 @@ SP_NORETURN void sp_raise_resolution_error(int code, const char *msg) {
 /* Socket::ResolutionError#error_code: the EAI_* code, nil on one the
    program made itself, as CRuby's. */
 sp_RbVal sp_exc_error_code_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "Socket::ResolutionError", "error_code");
+  sp_exc_acc_gate(e, SP_BCLS_SOCKET_RESOLUTIONERROR, "Socket::ResolutionError", "error_code");
   return e->xkey;
 }
-/* The builtin exception hierarchy, as {class, direct superclass} pairs. Shared
-   by Exception#is_a? and the by-name #superclass lookup (#3031). */
+/* A builtin class's direct superclass by name (SP_EXC_HIER, above). */
 const char *sp_exc_parent_of_name(const char *cls) {
   if (!cls) return NULL;
-  static const char *const HIER[][2] = {
-    {"RuntimeError",          "StandardError"},
-    {"ArgumentError",         "StandardError"},
-    {"TypeError",             "StandardError"},
-    {"NameError",             "StandardError"},
-    {"NoMethodError",         "NameError"},
-    {"IndexError",            "StandardError"},
-    {"KeyError",              "IndexError"},
-    {"RangeError",            "StandardError"},
-    {"IOError",               "StandardError"},
-    {"IO::TimeoutError",      "IOError"},
-    /* the socket library's: a lookup that fails is the subclass */
-    {"SocketError",           "StandardError"},
-    {"Socket::ResolutionError", "SocketError"},
-    {"EOFError",              "IOError"},
-    {"ZeroDivisionError",     "StandardError"},
-    {"NotImplementedError",   "ScriptError"},
-    {"StopIteration",         "IndexError"},
-    {"FloatDomainError",      "RangeError"},
-    {"Math::DomainError",      "StandardError"},
-    {"FrozenError",           "RuntimeError"},
-    {"EncodingError",         "StandardError"},
-    {"Encoding::UndefinedConversionError", "EncodingError"},
-    {"Encoding::InvalidByteSequenceError", "EncodingError"},
-    {"Encoding::CompatibilityError",       "EncodingError"},
-    {"Encoding::ConverterNotFoundError",   "EncodingError"},
-    /* a LoadError is a ScriptError: `rescue StandardError` and `rescue => e`
-       let it through, as sp_exc_is_standard_error already said */
-    {"LoadError",             "ScriptError"},
-    {"RegexpError",           "StandardError"},
-    {"StringScanner::Error",  "StandardError"},
-    /* the json package raises these by name; NestingError is what a document
-       too deep to serialize raises, and `rescue JSON::ParserError` catches it
-       in CRuby because it is a ParserError */
-    {"JSON::NestingError",    "JSON::ParserError"},
-    /* the json package's errors descend from StandardError through JSONError, as
-       CRuby's do: an explicit `rescue StandardError` and `is_a?(StandardError)` say so (#7797) */
-    {"JSON::JSONError",       "StandardError"},
-    {"JSON::ParserError",     "JSON::JSONError"},
-    /* a Float JSON has no spelling for (Infinity, NaN) is refused with it */
-    {"JSON::GeneratorError",  "JSON::JSONError"},
-    /* IO::Buffer's errors (lib/sp_iobuffer.c raises them by name): all
-       RuntimeError subclasses in CRuby, except MaskError < ArgumentError */
-    {"IO::Buffer::AccessError",      "RuntimeError"},
-    {"IO::Buffer::LockedError",      "RuntimeError"},
-    {"IO::Buffer::AllocationError",  "RuntimeError"},
-    {"IO::Buffer::InvalidatedError", "RuntimeError"},
-    {"IO::Buffer::MaskError",        "ArgumentError"},
-    {"FiberError",            "StandardError"},
-    {"UncaughtThrowError",    "ArgumentError"},
-    {"SyntaxError",           "ScriptError"},
-    {"ScriptError",           "Exception"},
-    {"StandardError",         "Exception"},
-    {"SecurityError",         "Exception"},
-    {"SignalException",       "Exception"},
-    {"Interrupt",             "SignalException"},
-    {"ThreadError",           "StandardError"},
-    {"ClosedQueueError",      "StopIteration"},
-    {"NoMatchingPatternError", "StandardError"},
-    {"NoMatchingPatternKeyError", "NoMatchingPatternError"},
-    {"LocalJumpError",        "StandardError"},   /* (#3025) */
-    {"SystemExit",            "Exception"},
-    {"SystemStackError",      "Exception"},
-    {"NoMemoryError",         "Exception"},
-    {"SystemCallError",       "StandardError"},
-    /* The non-blocking readiness exceptions. Each is an Errno subclass that
-       also includes IO::WaitReadable / IO::WaitWritable (see
-       sp_exc_modules_of_name) -- the module is why a single-parent chain could
-       not express them: WaitWritable is included by classes under two
-       different Errno parents. */
-    {"IO::EAGAINWaitReadable",      "Errno::EAGAIN"},
-    {"IO::EAGAINWaitWritable",      "Errno::EAGAIN"},
-    {"IO::EINPROGRESSWaitReadable", "Errno::EINPROGRESS"},
-    {"IO::EINPROGRESSWaitWritable", "Errno::EINPROGRESS"},
-    {NULL, NULL}
-  };
-  for (int i = 0; HIER[i][0]; i++)
-    if (!strcmp(cls, HIER[i][0])) return HIER[i][1];
+  for (int i = 0; SP_EXC_HIER[i][0]; i++)
+    if (!strcmp(cls, SP_EXC_HIER[i][0])) return SP_EXC_HIER[i][1];
   /* Every Errno::* is a SystemCallError, as in CRuby. The names are open --
      sp_file_raise_errno picks one from errno at run time -- so this is a
      prefix rule rather than a table row, and `rescue SystemCallError` catches
@@ -1129,24 +1198,24 @@ sp_bool sp_exc_has_acc(sp_Exception *e, const char *acc) {
    type is class-erased at compile time, so the check is a runtime one. */
 sp_RbVal sp_exc_name_acc(sp_Exception *e) {SP_GC_ROOT(e);
   if (!e) return sp_box_nil();
-  sp_exc_acc_gate(e, "NameError", "name");
+  sp_exc_acc_gate(e, SP_BCLS_NAMEERROR, "NameError", "name");
   return e->xname;
 }
 /* Exception accessors on a POLY receiver (an exception rescued into a
    union-typed local): unbox and delegate; a non-exception value is CRuby's
    NoMethodError (#3120, #3122). */
 sp_RbVal sp_exc_key_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "KeyError", "key");
+  sp_exc_acc_gate(e, SP_BCLS_KEYERROR, "KeyError", "key");
   /* KeyError.new("m") records no key, and CRuby raises rather than
      answering nil -- nil is a legal key (#3030) */
   if (e && !e->has_key) sp_raise_cls("ArgumentError", "no key is available");
   return e->xkey;
 }
 sp_RbVal sp_exc_receiver_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  if (!(e && (sp_exc_cls_matches(e->cls_name, "NameError") ||
-              sp_exc_cls_matches(e->cls_name, "KeyError") ||
-              sp_exc_cls_matches(e->cls_name, "FrozenError"))))
-    sp_exc_acc_gate(e, "NameError", "receiver");
+  if (!(e && (sp_exc_is_cls(e, SP_BCLS_NAMEERROR, "NameError") ||
+              sp_exc_is_cls(e, SP_BCLS_KEYERROR, "KeyError") ||
+              sp_exc_is_cls(e, SP_BCLS_FROZENERROR, "FrozenError"))))
+    sp_exc_acc_gate(e, SP_BCLS_NAMEERROR, "NameError", "receiver");
   /* an explicitly built NameError.new(msg, name) never recorded one, and
      CRuby raises rather than answering nil -- nil is a legal receiver (#3036) */
   if (e && !e->has_recv) sp_raise_cls("ArgumentError", "no receiver is available");
@@ -1155,43 +1224,43 @@ sp_RbVal sp_exc_receiver_acc(sp_Exception *e) {SP_GC_ROOT(e);
 /* LoadError#path: the feature a require that loaded nothing was given
    (sp_raise_load_error); nil for one raised by hand, as in CRuby */
 sp_RbVal sp_exc_path_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "LoadError", "path");
+  sp_exc_acc_gate(e, SP_BCLS_LOADERROR, "LoadError", "path");
   return e->has_key ? e->xkey : sp_box_nil();
 }
 sp_RbVal sp_exc_result_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "StopIteration", "result");
+  sp_exc_acc_gate(e, SP_BCLS_STOPITERATION, "StopIteration", "result");
   return e->result;
 }
 sp_RbVal sp_exc_args_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "NoMethodError", "args");
+  sp_exc_acc_gate(e, SP_BCLS_NOMETHODERROR, "NoMethodError", "args");
   return e->xkey;
 }
 sp_bool sp_exc_private_call_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "NoMethodError", "private_call?");
+  sp_exc_acc_gate(e, SP_BCLS_NOMETHODERROR, "NoMethodError", "private_call?");
   return e ? e->priv_call : 0;   /* set only by the explicit .new (#3042) */
 }
 sp_RbVal sp_exc_exit_value_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "LocalJumpError", "exit_value");
+  sp_exc_acc_gate(e, SP_BCLS_LOCALJUMPERROR, "LocalJumpError", "exit_value");
   return e->result;
 }
 sp_RbVal sp_exc_throw_value_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "UncaughtThrowError", "value");
+  sp_exc_acc_gate(e, SP_BCLS_UNCAUGHTTHROWERROR, "UncaughtThrowError", "value");
   return e->result;
 }
 sp_int sp_exc_status_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "SystemExit", "status");
+  sp_exc_acc_gate(e, SP_BCLS_SYSTEMEXIT, "SystemExit", "status");
   return (sp_int)sp_exc_exit_status(e);
 }
 sp_bool sp_exc_success_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "SystemExit", "success?");
+  sp_exc_acc_gate(e, SP_BCLS_SYSTEMEXIT, "SystemExit", "success?");
   return sp_exc_exit_status(e) == 0;
 }
 sp_int sp_exc_signo_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "SignalException", "signo");
+  sp_exc_acc_gate(e, SP_BCLS_SIGNALEXCEPTION, "SignalException", "signo");
   return (e->xkey.tag == SP_TAG_INT) ? e->xkey.v.i : 0;
 }
 const char *sp_exc_signm_acc(sp_Exception *e) {SP_GC_ROOT(e);
-  sp_exc_acc_gate(e, "SignalException", "signm");
+  sp_exc_acc_gate(e, SP_BCLS_SIGNALEXCEPTION, "SignalException", "signm");
   return sp_exc_message(e);
 }
 
@@ -1345,6 +1414,11 @@ sp_int sp_exc_is_a(volatile sp_Exception *ve, const char *cn) {
      matcher rescue arms use. Without it #is_a?(SomeModule) said false where
      `rescue SomeModule` said yes (#3366 follow-up). */
   cn = sp_exc_canonical_name(cn);
+  /* a builtin exception asked about a builtin exception class: the ids answer */
+  if (e->cls_id) {
+    int r = sp_exc_id_is_a(e->cls_id, sp_builtin_class_id_of(cn));
+    if (r >= 0) return r;
+  }
   if (sp_exc_cls_matches(e->cls_name, cn)) return 1;
   /* find the exception's class chain and check if cn appears in it */
   const char *cls = e->cls_name;

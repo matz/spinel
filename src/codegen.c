@@ -12224,6 +12224,7 @@ void emit_class_struct(Compiler *c, ClassInfo *ci, Buf *b) {
     buf_puts(b, "  sp_bool has_recv;\n");
     buf_puts(b, "  sp_bool has_key;\n");
     buf_puts(b, "  sp_bool priv_call;\n");
+    buf_puts(b, "  int cls_id;\n");
     buf_puts(b, "  sp_StrArray *backtrace;\n");
     buf_puts(b, "  void *msg_h;\n");
     /* the nil bytes follow the base fields: the runtime reads msg_h through

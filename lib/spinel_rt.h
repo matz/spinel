@@ -18278,11 +18278,11 @@ static sp_RbVal sp_poly_exc_acc_m(sp_RbVal v, const char *which) {
   return sp_poly_exc_acc(v, which);
 }
 static sp_RbVal sp_exc_reason_acc(sp_Exception *e) {
-  sp_exc_acc_gate(e, "LocalJumpError", "reason");
+  sp_exc_acc_gate(e, SP_BCLS_LOCALJUMPERROR, "LocalJumpError", "reason");
   return sp_exc_sym_slot(e->xkey);
 }
 static sp_RbVal sp_exc_tag_acc(sp_Exception *e) {
-  sp_exc_acc_gate(e, "UncaughtThrowError", "tag");
+  sp_exc_acc_gate(e, SP_BCLS_UNCAUGHTTHROWERROR, "UncaughtThrowError", "tag");
   return sp_exc_sym_slot(e->xkey);
 }
 

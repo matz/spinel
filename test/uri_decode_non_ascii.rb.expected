@@ -7,4 +7,3 @@ false
 [ArgumentError, "invalid %-encoding (é%zz)"]
 400004
 true
-linear

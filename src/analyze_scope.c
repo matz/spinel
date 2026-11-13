@@ -2996,9 +2996,9 @@ static int rsl_hash_literal(Compiler *c, int node, int depth, int values) {
         !rsl_no_own_hash_method(nt, "freeze")) return -1;
     return rsl_hash_literal(c, nt_ref(nt, node, "receiver"), depth + 1, values);
   }
-  if (k != NK_ConstantReadNode) return -1;
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
   const char *cn = nt_str(nt, node, "name");
-  int src = -1;
+  int src = -1, wnode = -1;
   for (int w = 0; cn && w < nt->count; w++) {
     NodeKind wk = nt_kind(nt, w);
     if (wk != NK_ConstantWriteNode && wk != NK_ConstantOperatorWriteNode && wk != NK_ConstantOrWriteNode &&
@@ -3007,20 +3007,42 @@ static int rsl_hash_literal(Compiler *c, int node, int depth, int values) {
     if (!wn || !sp_streq(wn, cn)) continue;
     if (src >= 0 || wk != NK_ConstantWriteNode) return -1;
     src = nt_ref(nt, w, "value");
+    wnode = w;
   }
   if (src < 0) return -1;
-  NT_FOREACH_KIND(nt, NK_ConstantPathNode, r) {
-    const char *rn = nt_str(nt, r, "name");
-    if (rn && sp_streq(rn, cn)) return -1;
+  const int *par = comp_parent_map(c);
+  /* `Lock::DEFAULTS` (#11729): the one write of the name stands in the body
+     of a class or module the path's parent names by its last name, or at a
+     file's top level for `::DEFAULTS`; a path to another namespace is not
+     read (CRuby answers it with a NameError, or with an ancestor's) */
+  if (k == NK_ConstantPathNode) {
+    int pp = nt_ref(nt, node, "parent"), owner = -1;
+    for (int a = par[wnode]; a >= 0 && owner < 0; a = par[a])
+      if (nt_kind(nt, a) == NK_ClassNode || nt_kind(nt, a) == NK_ModuleNode) owner = a;
+      else if (nt_kind(nt, a) == NK_DefNode || nt_kind(nt, a) == NK_BlockNode || nt_kind(nt, a) == NK_SingletonClassNode) return -1;
+    if (pp < 0) { if (owner >= 0) return -1; }
+    else {
+      NodeKind pk = nt_kind(nt, pp);
+      const char *pn = pk == NK_ConstantReadNode || pk == NK_ConstantPathNode ? nt_str(nt, pp, "name") : NULL;
+      int ocp = owner >= 0 ? nt_ref(nt, owner, "constant_path") : -1;
+      const char *on = ocp >= 0 ? nt_str(nt, ocp, "name") : NULL;
+      if (!pn || !on || !sp_streq(pn, on)) return -1;
+    }
   }
   int h = rsl_hash_literal(c, src, depth + 1, values);
-  const int *par = NULL;
-  if (h >= 0) NT_FOREACH_KIND(nt, NK_ConstantReadNode, r) {
-    const char *rn = nt_str(nt, r, "name");
-    if (!rn || !sp_streq(rn, cn)) continue;
-    if (!par) par = comp_parent_map(c);
-    if (!rsl_read_keeps_hash(c, par, r, h, values)) return -1;
-  }
+  /* every read of it, bare or by a path (a path that is a write's target,
+     `Lock::DEFAULTS = ...`, is no read that keeps it) */
+  static const NodeKind READS[] = { NK_ConstantReadNode, NK_ConstantPathNode };
+  for (int ri = 0; h >= 0 && ri < 2; ri++)
+    NT_FOREACH_KIND(nt, READS[ri], r) {
+      const char *rn = nt_str(nt, r, "name");
+      if (!rn || !sp_streq(rn, cn)) continue;
+      /* (the parent of a path read, `Outer::Lock` in `Outer::Lock::X`, is a
+         read of another constant) */
+      if (ri == 0 && par[r] >= 0 && nt_kind(nt, par[r]) == NK_ConstantPathNode && nt_ref(nt, par[r], "parent") == r) continue;
+      if (ri == 1 && par[r] >= 0 && nt_kind(nt, par[r]) == NK_ConstantPathNode && nt_ref(nt, par[r], "parent") == r) continue;
+      if (!rsl_read_keeps_hash(c, par, r, h, values)) return -1;
+    }
   return h;
 }
 int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {

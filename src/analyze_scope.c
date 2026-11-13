@@ -9382,6 +9382,28 @@ static int super_lands_on_attr(Compiler *c, int ci, const char *base, int want_w
   return 0;
 }
 
+/* Does class ci's own body declare the accessor uname (a writer as `x=`),
+   still the class's last version of the name as the load phase ends? A
+   prepended module's copy with no def of the class behind it (no shadow)
+   reaches that accessor with `super`: CRuby looks in the class itself
+   right after the prepended module. A Struct's or a Data's member, which no
+   call declares, counts where the class builds the record itself (a Data
+   member has no writer). */
+static int class_own_attr_live(Compiler *c, int ci, const char *uname, const char *base, int want_write) {
+  ClassInfo *k = &c->classes[ci];
+  if (k->is_struct && !(want_write && k->is_data) && !(k->parent >= 0 && c->classes[k->parent].is_struct)) {
+    char iv[260];
+    snprintf(iv, sizeof iv, "@%s", base);
+    if (comp_member_index(k, iv) >= 0) return !elab_inst_attr_replaced(c, ci, uname);
+  }
+  int n = 0;
+  const ElabSurface *v = elab_class_surface(c, ci, 0, &n);
+  for (int i = 0; i < n; i++)
+    if (sp_streq(v[i].name, uname) && (want_write ? v[i].writer : v[i].reader))
+      return !elab_inst_attr_replaced(c, ci, uname);
+  return 0;
+}
+
 /* `super` from a method overriding an attribute calls the generated reader or
    writer, which has no function of its own: it reads or writes the backing
    ivar. Rewrite the super into that ivar access in place, so the write types
@@ -9440,7 +9462,9 @@ void rewrite_attr_supers(Compiler *c) {
       if (nreq + nopt != (is_write ? 1 : 0) || s->nparams != nreq + nopt) continue;
       if (is_write) fwd_name = s->pnames[0];
     }
-    if (!super_lands_on_attr(c, s->class_id, base, is_write)) continue;
+    /* (a prepended module's copy reaches the class's own accessor first) */
+    if (!(s->is_prepend_copy && class_own_attr_live(c, s->class_id, uname, base, is_write)) &&
+        !super_lands_on_attr(c, s->class_id, base, is_write)) continue;
     char ivn[260];
     snprintf(ivn, sizeof ivn, "@%s", base);
     int line = (int)nt_int(nt, id, "node_line", 0);

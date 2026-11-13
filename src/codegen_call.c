@@ -23384,6 +23384,17 @@ static int object_reopen_class_value_owns(Compiler *c, int id, int oci, const ch
   }
   return 0;
 }
+/* A module's ffi_func or native function of `name` is its singleton method
+   (`M.name`): an explicit-receiver call reaches it, not Object's private
+   top-level def of the same name. */
+static int module_ffi_or_native_owns(Compiler *c, int ci, const char *name) {
+  const char *mod = c->classes[ci].name;
+  if (!mod || !name) return 0;
+  for (int i = 0; i < c->n_ffi_funcs; i++)
+    if (sp_streq(c->ffi_funcs[i].mod, mod) && sp_streq(c->ffi_funcs[i].name, name)) return 1;
+  return c->n_native_funcs > 0 && comp_native_find(c, mod, name) >= 0;
+}
+
 /* A private (or protected) method of the program's at the roots, a
    top-level def's or an Object, Kernel, Numeric or BasicObject reopening's
    (cplan_root_closed), called with an explicit receiver whose own class
@@ -23441,7 +23452,8 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
       cname = cvname; named = 1;
     }
     else if (ci < 0 || ci >= c->nclasses) return 0;
-    else if (call_target(c, id, ci, vnm, CT_CMETHOD, NULL) >= 0 || object_reopen_class_value_owns(c, id, oci, vnm, 0, ci))
+    else if (call_target(c, id, ci, vnm, CT_CMETHOD, NULL) >= 0 || object_reopen_class_value_owns(c, id, oci, vnm, 0, ci) ||
+             module_ffi_or_native_owns(c, ci, vnm))
       return 0;
     else {
     /* a class value answers Class's and Module's public methods (K.name)

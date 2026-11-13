@@ -15274,9 +15274,10 @@ static int emit_try_convert_obj_to_str(Compiler *c, int arg, TyKind at, Buf *b) 
   if (mi >= 0 && comp_is_undeffed_in_chain(c, cid, "to_str")) return 0;
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
-  /* a String or poly #to_str is the bridge's (sp_poly_check_str); an alias
-     or a #to_str with parameters keeps the old path (class_has_to_str_shape) */
-  if (m->ret == TY_STRING || m->ret == TY_POLY || !sp_streq(m->name, "to_str") ||
+  /* a String #to_str is the bridge's (sp_poly_check_str); an alias or a
+     #to_str with parameters keeps the old path (class_has_to_str_shape). A
+     poly one is called here too: the bridge answered nil for its Integer */
+  if (m->ret == TY_STRING || !sp_streq(m->name, "to_str") ||
       m->nparams != 0 || m->rest_idx >= 0 || m->kwrest_idx >= 0 || m->blk_param || m->yields ||
       m->is_cmethod || def < 0) return 0;
   /* only a method emitted under its own C name (a block-taking #to_str is

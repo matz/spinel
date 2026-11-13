@@ -334,6 +334,9 @@ SPINEL_OBJ  += build/csrc/decide.o
 # --method-table-check: the reads of the method tables made outside call_target.
 SPINEL_HDRS += src/method_table_check.h
 SPINEL_OBJ  += build/csrc/method_table_check.o
+# The operand-order record (order_plan.c; --dump-order).
+SPINEL_HDRS += src/order_plan.h
+SPINEL_OBJ  += build/csrc/order_plan.o
 # --incremental: the hashes that name a unit and key its cached object.
 SPINEL_HDRS += src/sha256.h
 SPINEL_OBJ  += build/csrc/sha256.o

@@ -1805,6 +1805,9 @@ typedef struct {
      arguments to (a proc form, or a method with a `&blk` it calls), or 0 */
   int proc_arg_src;
   struct ShareFacts *share;
+  /* the operand-order record (order_plan.c): per operand list, where each
+     operand is evaluated; built by the analysis phase operand_order */
+  struct OrderFacts *order;
   /* the String plan's memo (share_plan.c): per node, its need, the role of
      its consumer, and its type when the need was asked, filled at seal under
      --share-strings, and the node table's version then */
@@ -2090,6 +2093,10 @@ int comp_is_local_write(NodeKind k);
    it, a self call whose method may, or anything else that runs code
    (codegen_util.c) */
 int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth);
+/* ...its answer at `id` itself: 1 yes, 0 no for the whole subtree, -1 ask
+   the node's operands (a self call's method body is asked here, one level
+   deeper). The operand-order record composes it over a memo. */
+int node_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth);
 int comp_lvw_first(Compiler *c, const char *name);
 int comp_module_includes(Compiler *c, int m, int mod, int depth);
 int comp_class_singleton_has_module(Compiler *c, int ci, int mod);

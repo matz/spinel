@@ -1,6 +1,7 @@
 #include <limits.h>
 #include <ctype.h>
 #include "codegen_internal.h"
+#include "order_plan.h"
 #include "call_plan.h"
 #include "method_table_check.h"
 #include "implied_calls.h"
@@ -23636,6 +23637,8 @@ char *codegen_program(const NodeTable *nt) {
   if (g_dump_traits) { ty_traits_dump(c); exit(0); }
   /* --dump-repr: the analysis's answer, printed once the compile passes */
   char *repr_text = g_dump_repr ? repr_dump(c) : NULL;
+  /* --dump-order: the record, printed the same way */
+  char *order_text = g_dump_order ? order_dump(c) : NULL;
   if (g_check_traits) exit(ty_traits_check(c) ? 1 : 0);
   g_scopes_settled = 1;   /* scope_is_shadowed may answer from its table now */
   mc_number_versions(c);
@@ -24587,7 +24590,11 @@ char *codegen_program(const NodeTable *nt) {
     if (types_out) fprintf(stderr, "Wrote %s\n", types_out);
     exit(1);
   }
-  if (repr_text) { fputs(repr_text, stdout); exit(0); }
+  if (repr_text || order_text) {
+    if (repr_text) fputs(repr_text, stdout);
+    if (order_text) fputs(order_text, stdout);
+    exit(0);
+  }
   if (g_plan_check) ucall_report(c);
   if (g_repr_check) repr_channel_report(c);
   sp_timing_end(tcg, "cg_finish", "");

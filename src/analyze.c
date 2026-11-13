@@ -7,6 +7,7 @@
 #include "implicit_calls.h"
 #include "builtin_ops.h"
 #include "repr.h"
+#include "order_plan.h"
 #include "decide.h"
 #include "call_plan.h"
 #include "share.h"
@@ -55483,6 +55484,9 @@ void analyze_program(Compiler *c) {
   if (getenv("SP_FIXPOINT_LOG"))
     fprintf(stderr, "[fp] rounds=%d%s\n", g_fixpoint_rounds,
             g_fixpoint_capped ? " (CAP -- did not converge)" : "");
+  /* the operand-order record: where each operand of a list is evaluated,
+     from the settled types, before the String marks read it */
+  AN_PHASE("operand_order", order_facts_build(c));
   /* a String-keyed Hash's key borrows a handle's bytes, read off the final
      types and flags */
   share_mark_borrows(c);
@@ -55498,6 +55502,8 @@ void analyze_program(Compiler *c) {
   { handle_arg_tab_init(c, &hat); c->share_args = &hat; }
   repr_seal(c);
   { c->share_args = NULL; handle_arg_tab_free(&hat); }
+  /* no pass between the record's phase and the seal moved its inputs */
+  order_facts_check(c);
   /* the block bodies codegen types per arm, typed here once (#7483) */
   AN_PHASE("arm_facts", an_arm_facts(c));
   if (elab_check_on(c)) elab_check_visibility(c);

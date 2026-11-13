@@ -676,18 +676,24 @@ extern int  g_cls_tag_skip;   /* poly-dispatch builtin-arm re-entry marker */
 int subtree_may_allocate(const NodeTable *nt, int id);
 int subtree_allocates(const NodeTable *nt, int id);
 int subtree_has_side_effect(Compiler *c, int id);
+/* Each subtree_* walk below as its node's own answer: 1 yes, 0 no for the
+   whole subtree, -1 ask the node's operands. The operand-order record
+   composes them over a memo, each node once. */
+int node_has_side_effect(Compiler *c, int id);
 int call_unused_block(Compiler *c, int id);
 int loop_has_valued_break(Compiler *c, int root);
 /* Can evaluating the subtree store into an ivar, class variable or global? A
    write to one, or anything that runs Ruby code it does not show; not scalar
    arithmetic, a typed-array read or a plain field read (codegen_call.c). */
 int subtree_may_reassign_state(Compiler *c, int id);
+int node_may_reassign_state(Compiler *c, int id);
 /* Can evaluating the subtree run a proc or block of the program's? A
    yield, a super, a block, a call of a method the program defines (or of a
    name it defines on any class), and a builtin handed anything but numbers,
    Strings, Symbols, their ranges and typed Arrays can; a builtin over those
    alone, with no block, cannot: `total + i.to_s` (codegen_call.c). */
 int subtree_may_run_proc(Compiler *c, int id);
+int node_may_run_proc(Compiler *c, int id);
 /* a builtin reading a value of kind t runs no program code */
 int ty_runs_no_code(TyKind t);
 /* --share-strings: a watched scan's handle and length before its loop, and
@@ -717,7 +723,8 @@ void plain_note_parsed(Compiler *c);
 int program_defines_unseen(Compiler *c);
 int operand_is_held_read(Compiler *c, int id);
 /* Is the call a reader the emitter lowers to a plain field read? *allocates is
-   set when the read builds a copy (a shared String slot). codegen_call.c */
+   set when the read builds a copy (a shared String slot); NULL asks no such
+   thing. codegen_call.c */
 int call_is_field_read(Compiler *c, int id, int *allocates);
 /* Is the receiverless call a class's own attr reader, lowered to a plain
    read of self's slot? codegen_call.c */

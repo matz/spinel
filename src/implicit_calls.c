@@ -337,6 +337,23 @@ int ic_operand_may_hold(Compiler *c, const IcCall *k) {
   }
 }
 
+/* See implicit_calls.h. */
+int ic_node_may_call_program(Compiler *c, int id) {
+  IcCall buf[64], *calls = buf;
+  int k = ic_node_calls(c, id, buf, 64);
+  if (k == 0 || (nt_kind(c->nt, id) == NK_CallNode && ic_runs_program_method(c, id))) return 0;
+  if (k == IC_ANY) return 1;
+  if (k > 64) {
+    calls = malloc(sizeof *calls * (size_t)k);
+    if (!calls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    ic_node_calls(c, id, calls, k);
+  }
+  int r = 0;
+  for (int i = 0; i < k && !r; i++) r = ic_defined(c, calls[i].name) && ic_operand_may_hold(c, &calls[i]);
+  if (calls != buf) free(calls);
+  return r;
+}
+
 /* the text for --dump-implicit: the node and what it calls */
 void ic_cause(Compiler *c, int node, const IcCall *k, char *buf, size_t n) {
   const NodeTable *nt = c->nt;

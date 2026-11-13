@@ -63,3 +63,13 @@ begin; {1 => 2}.fetch(L2.new); rescue => e; puts "#{e.class}: #{e.message.sub(/0
 begin; {"a" => 2}.fetch(:zz); rescue => e; puts "#{e.class}: #{e.message}"; end
 begin; {F2.new => 1}.fetch(F2.new); rescue => e; puts "#{e.class}: #{e.message.sub(/0x\h+/, 'X')}"; end
 p({1 => 2}.fetch(F2.new, 9))
+
+# KeyError#key and #receiver stay set when the key's inspect raises
+# (or rescues a raise of its own)
+class R2; def inspect; begin; raise "x"; rescue; end; "r2"; end; end
+[F2.new, H2.new, R2.new, "s"].each do |key|
+  begin; {1 => 2}.fetch(key)
+  rescue KeyError => e
+    puts "#{e.key.class} #{e.key.equal?(key)} #{e.receiver == {1 => 2}}"
+  end
+end

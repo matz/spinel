@@ -24,3 +24,7 @@ KeyError: key not found: #<L2:X>
 KeyError: key not found: :zz
 KeyError: key not found: #<F2:X>
 9
+F2 true true
+H2 true true
+R2 true true
+String true true

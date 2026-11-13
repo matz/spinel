@@ -5,6 +5,7 @@
 #include "share.h"
 #include "value_pos.h"
 #include "holder.h"
+#include "method_table_check.h"
 #include <stdint.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -12440,7 +12441,17 @@ static int pivs_callable_lit(Compiler *c, int v) {
              ? comp_scope_of(c, v) : NULL;
   return s && s->class_id < 0 && comp_method_index(c, nt_str(nt, av[0], "value")) >= 0;
 }
+static int pivs_value_walk(Compiler *c, int v, char *set, int depth);
+/* The walk of value v. It is a whole-program walk whose memo the first node that asks fills, so the check names v
+   itself the frame of what it reads (a read of a class method of a class the value names is the value's own, not
+   that of the node that happened to ask). */
 static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
+  MtabMark mk = mtab_push(c, v);
+  int ok = pivs_value_walk(c, v, set, depth);
+  mtab_pop(c, mk);
+  return ok;
+}
+static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
   const NodeTable *nt = c->nt;
   int br = pivs_branches(c, v, set, depth, 0);
   if (br >= 0) return br;

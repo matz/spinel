@@ -8040,6 +8040,10 @@ static int inc_super_reached(Compiler *c, int mi, int cls, const char *name) {
    include or an extend keeps the copy, under a hidden name, behind own
    in the class's chain only then. */
 static int mixin_reached_behind_own(Compiler *c, int ci, int sg, int own, int ms) {
+  /* (on the class side, an alias that captures the version reaches it as
+     well, elab_version_met: `alias n m` in a subclass's singleton, whose
+     copy's super starts from the extend's copy) */
+  if (sg) return scope_body_has_super(c, own) || elab_version_met(c, ci, sg, c->scopes[ms].name, c->scopes[ms].def_node);
   return scope_body_has_super(c, own) || elab_version_called(c, ci, sg, c->scopes[ms].name, c->scopes[ms].def_node);
 }
 

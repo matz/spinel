@@ -1870,7 +1870,7 @@ static char **cmc_name; static unsigned char *cmc_cm; static int **cmc_ans;
 static int **cmc_resp; static int *cmc_nresp;   /* per slot: the responders (comp_name_responders), -1 unbuilt */
 static int cmc_cap = 0, cmc_n = 0;
 static unsigned cmc_epoch;   /* bumped when a slot's index can move: a clear, a growth */
-static const Compiler *cmc_c; static unsigned cmc_gen, cmc_shape_at;
+static const Compiler *cmc_c; static unsigned cmc_gen, cmc_shape_at, cmc_table_at;
 static int cmc_nscopes = -1, cmc_nclasses = -1;
 static void cmc_clear(void) {
   for (int i = 0; i < cmc_cap; i++) if (cmc_name && cmc_name[i]) { free(cmc_name[i]); free(cmc_ans[i]); free(cmc_resp[i]); }
@@ -1878,14 +1878,17 @@ static void cmc_clear(void) {
   cmc_name = NULL; cmc_cm = NULL; cmc_ans = NULL; cmc_resp = NULL; cmc_nresp = NULL; cmc_cap = cmc_n = 0;
   cmc_epoch++;
 }
+/* (is_cm is 0 the instance side, 1 the class side, 2 a capture's, and 3 and 4
+   the reader and writer chains of accessor_chain; a reader or a writer added
+   (comp_table_gen) drops the answers too.) */
 /* The slot of (name, is_cm), made when missing, or -1 when the memo cannot
    be trusted now. */
 static int cmc_slot_idx(Compiler *c, const char *name, int is_cm) {
   if (!sm_frozen || mv_n || !name || c->nclasses <= 0) return -1;
   if (cmc_c != c || cmc_gen != sm_gen || cmc_shape_at != cmc_shape ||
-      cmc_nscopes != c->nscopes || cmc_nclasses != c->nclasses) {
+      cmc_nscopes != c->nscopes || cmc_nclasses != c->nclasses || cmc_table_at != comp_table_gen) {
     cmc_clear();
-    cmc_c = c; cmc_gen = sm_gen; cmc_shape_at = cmc_shape;
+    cmc_c = c; cmc_gen = sm_gen; cmc_shape_at = cmc_shape; cmc_table_at = comp_table_gen;
     cmc_nscopes = c->nscopes; cmc_nclasses = c->nclasses;
   }
   if (cmc_n * 2 >= cmc_cap) {
@@ -3135,12 +3138,12 @@ unsigned comp_table_gen = 0;   /* bumped when a reader, writer or alias table gr
 void comp_add_reader(ClassInfo *ci, const char *name) {
   comp_table_gen++;
   name_add_ix(&ci->readers, &ci->nreaders, &ci->creaders, &ci->readers_ix, name);
-  comp_touch_class(ci->idx);
+  comp_touch_global_r(6);    /* a new reader is a change of the table (accessor_chain) */
 }
 void comp_add_writer(ClassInfo *ci, const char *name) {
   comp_table_gen++;
   name_add_ix(&ci->writers, &ci->nwriters, &ci->cwriters, &ci->writers_ix, name);
-  comp_touch_class(ci->idx);
+  comp_touch_global_r(6);    /* a new writer is a change of the table (accessor_chain) */
 }
 int comp_is_reader(ClassInfo *ci, const char *name) { return name_idx_find(&ci->readers_ix, ci->readers, ci->nreaders, name) >= 0; }
 void comp_add_own_reader(ClassInfo *ci, const char *name) {
@@ -3324,35 +3327,19 @@ void comp_add_alias(ClassInfo *ci, const char *new_name, const char *old_name) {
   comp_add_alias_from(ci, new_name, old_name, -1);
 }
 
-/* An attribute and an explicit method can both own one name. CRuby's
-   attr_accessor defines an ordinary method, so a `def` at an equal-or-more-
-   derived class replaces it: the more-derived definition wins, and a same-class
-   tie goes to the method. Every emission site used to compose this policy from
-   the chain queries itself, and the sites that composed only half of it emitted
-   a call to the override typed as the attribute, or a switch with no arm for
-   the method at all (#3907, #3909, #3910). */
+/* An attribute and an explicit method can both own one name; call_target
+   (ct_member) arbitrates, and this answers its two tables' question as a
+   three-valued kind for the sites not yet asking it. */
 int comp_resolve_member(Compiler *c, int class_id, const char *name, int want_write,
                         int *def_class, int *method_index) {
+  MethodLookup ml = { .def_class = -1 };
   if (def_class) *def_class = -1;
   if (method_index) *method_index = -1;
   if (!name || class_id < 0 || class_id >= c->nclasses) return SP_MEMBER_NONE;
-  char mbuf[300];
-  const char *mname = name;
-  if (want_write) { snprintf(mbuf, sizeof mbuf, "%s=", name); mname = mbuf; }
-  int adc = -1, mdc = -1;
-  int has_attr = want_write ? comp_writer_in_chain(c, class_id, name, &adc)
-                            : comp_reader_in_chain(c, class_id, name, &adc);
-  int mi = comp_method_in_chain(c, class_id, mname, &mdc);
-  if (mi < 0 && !has_attr) return SP_MEMBER_NONE;
-  int attr_wins = has_attr;
-  if (has_attr && mi >= 0) {
-    for (int k = class_id; k >= 0; k = c->classes[k].parent) {
-      if (k == mdc) { attr_wins = 0; break; }
-      if (k == adc) { attr_wins = 1; break; }
-    }
-  }
-  if (attr_wins) { if (def_class) *def_class = adc; return SP_MEMBER_ATTR; }
-  if (def_class) *def_class = mdc;
+  int mi = call_target(c, -1, class_id, name, want_write ? CT_WRITER : 0, &ml);
+  if (def_class) *def_class = ml.def_class;
+  if (ml.kind == ML_ATTR) return SP_MEMBER_ATTR;
+  if (mi < 0) return SP_MEMBER_NONE;
   if (method_index) *method_index = mi;
   return SP_MEMBER_METHOD;
 }
@@ -3706,16 +3693,46 @@ int comp_native_method_find_typed(Compiler *c, int class_id, const char *name, i
   return rest_match >= 0 ? rest_match : loose;
 }
 
-int comp_reader_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
-  if (g_method_table_check) mtab_read(c, MT_READER_IN_CHAIN, class_id, MTS_INST, name);
-  name = comp_resolve_alias(c, class_id, name);
-  /* (every class asked, a miss included: a reader added to one of them
-     later changes the answer) */
-  for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent) {
-    IMEMO_DEP_CLASS(cid);
-    if (comp_is_reader(&c->classes[cid], name)) { if (def_class) *def_class = cid; return 1; }
+/* Can any class of class_id's chain answer an accessor ask? A reader (a
+   writer's ask: a writer) is found only in a class that lists one; a name
+   resolves through an alias only where a class of the chain has aliases or
+   brings a module (whose aliases it resolves through). A chain with none
+   of these answers no ask, so the ask touches no memo: most calls of a
+   program that has few accessors. */
+static int accessor_chain_possible(const Compiler *c, int class_id, int writer) {
+  for (int k = class_id; k >= 0; k = c->classes[k].parent) {
+    const ClassInfo *ci = &c->classes[k];
+    if ((writer ? ci->nwriters : ci->nreaders) || ci->naliases || ci->nincluded_mods || ci->nprepended_mods) return 1;
   }
   return 0;
+}
+/* The nearest class of class_id's chain that declares an attribute reader
+   (writer: `writer`) of `name`, and whether any does. A reader's name is
+   followed through the aliases (`alias loc location`); a writer's is the
+   attribute's base, and an alias of it is the reader's: `alias to_s name`
+   defines no `to_s=`, so it is not followed there. The answer is the table's
+   alone, kept as chain_lookup's is, for every class asked (a call asks it
+   at every instance call, and the walk resolved the aliases and read every
+   class of a deep chain each time). A reader or writer added moves the
+   program's version (comp_add_reader), as a new method's slot does, so an
+   inference that asked keeps no per-class dependency on the chain. */
+static int accessor_chain(Compiler *c, int class_id, const char *name, int *def_class, int writer) {
+  if (class_id >= 0 && class_id < c->nclasses && !accessor_chain_possible(c, class_id, writer)) return 0;
+  int *a = class_id >= 0 && class_id < c->nclasses ? cmc_slot(c, name, writer ? 4 : 3) : NULL;
+  int found = 0, dc = -1;
+  if (a && a[2 * class_id] != -2) { found = a[2 * class_id]; dc = a[2 * class_id + 1]; }
+  else {
+    const char *rn = writer ? name : comp_resolve_alias(c, class_id, name);
+    for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent)
+      if (writer ? comp_is_writer(&c->classes[cid], rn) : comp_is_reader(&c->classes[cid], rn)) { found = 1; dc = cid; break; }
+    if (a) { a[2 * class_id] = found; a[2 * class_id + 1] = dc; }
+  }
+  if (found && def_class) *def_class = dc;
+  return found;
+}
+int comp_reader_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
+  if (g_method_table_check) mtab_read(c, MT_READER_IN_CHAIN, class_id, MTS_INST, name);
+  return accessor_chain(c, class_id, name, def_class, 0);
 }
 /* Whether a strict subclass of class_id answers `name` with a method or a
    reader of its own chain: a slot typed class_id may hold that subclass,
@@ -3734,11 +3751,7 @@ int comp_subclass_answers(Compiler *c, int class_id, const char *name) {
 }
 int comp_writer_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
   if (g_method_table_check) mtab_read(c, MT_WRITER_IN_CHAIN, class_id, MTS_INST, name);
-  /* `name` is the attribute's base, and an alias of it is the reader's:
-     `alias to_s name` defines no `to_s=`, so it is not followed here */
-  for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent)
-    if (comp_is_writer(&c->classes[cid], name)) { if (def_class) *def_class = cid; return 1; }
-  return 0;
+  return accessor_chain(c, class_id, name, def_class, 1);
 }
 
 /* Whether the program answers `name` at one level of the lookup, class or

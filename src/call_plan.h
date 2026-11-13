@@ -230,12 +230,17 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
    differ in visibility, it binds the face entry that raises for the
    private ones (VF_PRIVATE), or with CT_PROTECTED also for the protected
    ones (VF_PUBLIC: public_send, or a caller to which a protected owner is
-   not open). */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256, CT_NOFACE = 512 };
+   not open).
+   CT_WRITER asks the instance side's writer: name is the attribute's base
+   (`x`), and the call is the setter `x=` (an attr_writer's, or a def's of
+   that name); without it, name is the method's own name, and a plain
+   name that happens to end in `=` finds no attribute. */
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256, CT_NOFACE = 512, CT_WRITER = 1024 };
 /* CT_NOFACE asks the instance lookup with no visibility face, as a call
    that enforces nothing does: a private def is found. It is the one flag
-   that says so by itself; every other flag also leaves the face off, by
-   being a flag (ct_vis_flags). */
+   that says so by itself; every other flag but CT_WRITER (which asks the
+   writer of a call that enforces what the call does) also leaves the face
+   off, by being a flag (ct_vis_flags). */
 /* The face of a version entry (VerEntry.face): 0 the entry every arm of
    which runs its version, VF_PRIVATE one whose arms of a private version
    raise, VF_PUBLIC one whose arms of a private or a protected version do;
@@ -295,8 +300,12 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    ML_SINGLETON: a call on main that main's own singleton answers by the
    core's method it has from the start (`to_s`, `inspect`:
    elab_main_singleton_at), ahead of Object's table; no method of the
-   program's. */
-typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON } MlKind;
+   program's. ML_ATTR: an attribute answers (attr_reader, attr_writer, a
+   Struct member) and no method of the instance side's chain ranks ahead of
+   it, as CRuby's lookup finds the nearer definition (a def of the same
+   class wins a tie); the scope is -1, def_class the class that declares
+   the attribute. Asked with CT_WRITER, the writer. */
+typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, ML_ATTR } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
    with no version, and no entry (MANY); a version the plan cannot map
@@ -318,6 +327,13 @@ typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE
 typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
+/* Does an attribute (attr_reader, attr_writer, a Struct member) answer this
+   ask: call_target's answer has no scope and its kind is ML_ATTR? *out
+   (optional) is call_target's, so def_class names the class declaring it. */
+int call_attr_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out);
+/* Does a method or an attribute answer this ask (call_target's scope, or
+   ML_ATTR)? Its negation is "nothing of the program's answers". */
+int call_answers(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out);
 /* A super's parent-chain target, asked from class par under name; ml (NULL
    for the scope only) is call_target's, with from par (the lookup's start,
    whatever class answered: ml->def_class) */
@@ -466,12 +482,12 @@ int cplan_pinned(const Compiler *c, int id);
    entry's arm for that version raises with, instead of running it; 0 for
    an arm that runs, and for any other node */
 int cplan_pinned_vis(const Compiler *c, int id);
-/* flags = 0 (a call's instance-chain ask) with CT_PUBLIC (and CT_PROTECTED)
-   added where call id enforces visibility (an explicit receiver that is not
-   self, public_send) and has no block; any other flags as they are. call_target asks with
-   them, so that every reader that asks which method such a call runs gets
-   the entry the plan made for it (ct_face_for), and the survey of the
-   entries (ver_need) asks the same. */
+/* flags = 0 or CT_WRITER (a call's instance-chain ask) with CT_PUBLIC (and
+   CT_PROTECTED) added where call id enforces visibility (an explicit receiver
+   that is not self, public_send) and has no block; any other flags as they
+   are. call_target asks with them, so that every reader that asks which
+   method such a call runs gets the entry the plan made for it (ct_face_for),
+   and the survey of the entries (ver_need) asks the same. */
 unsigned ct_vis_flags(Compiler *c, int id, unsigned flags);
 /* the methods entry scope e's arms call, its else arm's last: at most
    VER_MAX_ARMS + 1; an open history's else arm, which calls none, as its

@@ -301,8 +301,8 @@ unsigned ct_vis_flags(Compiler *c, int id, unsigned flags) {
      CT_TOP, CT_REACH, CT_CAPTURE, CT_IMPLIED and CT_INCLUDED are asks of a
      name that take it as it is, whatever the call enforces) */
   if (flags & CT_NOFACE) return flags;
-  if (flags || id < 0 || nt_ref(c->nt, id, "block") >= 0) return flags;
-  return ct_enforce_flags(c, id);
+  if ((flags & ~CT_WRITER) || id < 0 || nt_ref(c->nt, id, "block") >= 0) return flags;
+  return flags | ct_enforce_flags(c, id);
 }
 
 /* A program's own method on builtin class root (CORE_OBJECT, CORE_NUMERIC,
@@ -3412,8 +3412,40 @@ int ct_main_target(Compiler *c, int id, const char *name) {
   if (p.region < 0 || elab_method_at(c, -1, name, 1, p, &d) != ELAB_YES) return -1;
   return call_target(c, id, -1, name, CT_TOP, NULL);
 }
-/* the table's answer for `name` on cls, as call_target asks it */
-static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int *def_class) {
+/* An attribute and an explicit method can both own one name. CRuby's
+   attr_accessor defines an ordinary method, so a `def` at an equal-or-more-
+   derived class replaces it: the more-derived definition wins, and a same-class
+   tie goes to the method. Every emission site used to compose this policy from
+   the chain queries itself, and the sites that composed only half of it emitted
+   a call to the override typed as the attribute, or a switch with no arm for
+   the method at all (#3907, #3909, #3910). Where the attribute wins, *attr is
+   set, the scope is -1 and *def_class the class that declares it. */
+static int ct_member(Compiler *c, int cls, const char *name, unsigned flags, int *def_class, int *attr) {
+  char base[256];
+  int wr = (flags & CT_WRITER) && setter_base_name(name, base, sizeof base);
+  int adc = -1, mdc = -1;
+  int has_attr = wr ? comp_writer_in_chain(c, cls, base, &adc) : comp_reader_in_chain(c, cls, name, &adc);
+  int mi = comp_method_in_chain(c, cls, name, &mdc);
+  int attr_wins = has_attr;
+  if (has_attr && mi >= 0) {
+    for (int k = cls; k >= 0; k = c->classes[k].parent) {
+      if (k == mdc) { attr_wins = 0; break; }
+      if (k == adc) { attr_wins = 1; break; }
+    }
+  }
+  if (attr_wins) {
+    *attr = 1;
+    if (def_class) *def_class = adc;
+    return -1;
+  }
+  if (mi >= 0 && def_class) *def_class = mdc;
+  return mi;
+}
+/* the table's answer for `name` on cls, as call_target asks it; *attr (when
+   asked) is set where an attribute answers it (ct_member) */
+static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int *def_class, int *attr) {
+  int none = 0;
+  if (!attr) attr = &none;
   if (flags & CT_TOP) return comp_method_index(c, name);
   if (flags & CT_OWN) {
     int mi = flags & CT_CMETHOD ? comp_cmethod_in_class(c, cls, name) : comp_method_in_class(c, cls, name);
@@ -3422,8 +3454,9 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
   }
   /* a Method's capture (method, instance_method, an alias) takes a private
      instance method too, as a receiverless call does: a module function */
-  return flags & CT_CMETHOD ? comp_cmethod_in_chain(c, cls, name, def_class)
-       : flags & CT_CAPTURE ? comp_self_method_in_chain(c, cls, name, def_class) : comp_method_in_chain(c, cls, name, def_class);
+  if (flags & CT_CMETHOD) return comp_cmethod_in_chain(c, cls, name, def_class);
+  if (flags & CT_CAPTURE) return comp_self_method_in_chain(c, cls, name, def_class);
+  return ct_member(c, cls, name, flags, def_class, attr);
 }
 /* The method call id runs on candidate pc of its boxed dispatch: the
    table's, or for a name with versions the one call_target binds on pc's
@@ -3465,7 +3498,9 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
   }
   int si = (*flags & CT_TOP) && id >= 0 ? comp_main_method(c, name) : -1;
   int own = si >= 0 && ct_runs_on_main(c, id) ? ct_main_own(c, id, name) : -1;
-  int mi = own == 1 ? si : ct_table(c, cls, name, *flags, ml ? &ml->def_class : NULL);
+  int attr = 0;
+  int mi = own == 1 ? si : ct_table(c, cls, name, *flags, ml ? &ml->def_class : NULL, &attr);
+  if (attr && ml) ml->kind = ML_ATTR;
   /* (a call on main where main's singleton holds no method, main's own
      removed or not yet defined, does not take it: Object's chain answers,
      as with none) */
@@ -3552,6 +3587,12 @@ static int ct_vis(Compiler *c, int cls, const char *name, unsigned flags) {
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
   MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
   int dc0 = ml->def_class, mi = -1, pin, r;
+  char setter[300];
+  /* (a writer's name is its attribute's base: the call is the setter) */
+  if (flags & CT_WRITER) {
+    snprintf(setter, sizeof setter, "%s=", name);
+    name = setter;
+  }
   mtab_enter(c);
   flags = ct_vis_flags(c, id, flags);
   *ml = (MethodLookup){ .def_class = dc0 };
@@ -3562,7 +3603,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (flags & CT_INCLUDED) ||
            (!(flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) && !ct_calls(c, id, name))) {
     if (mi < 0) {
-      if (ml->kind != ML_SINGLETON) ml->kind = ML_NONE;
+      if (ml->kind != ML_SINGLETON && ml->kind != ML_ATTR) ml->kind = ML_NONE;
       /* (a reach ask, whose reader tells a none the record proves from one
          the tables give: an accessor has no method scope, so the record's
          proof is asked here, where the call runs before every version) */
@@ -3637,6 +3678,16 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;
 }
+/* See call_plan.h. */
+int call_attr_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
+  MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
+  return call_target(c, id, cls, name, flags, ml) < 0 && ml->kind == ML_ATTR;
+}
+/* See call_plan.h. */
+int call_answers(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
+  MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
+  return call_target(c, id, cls, name, flags, ml) >= 0 || ml->kind == ML_ATTR;
+}
 
 
 /* Whether the final tables hold name on cls's side as a method of it: the
@@ -3673,7 +3724,7 @@ static int pr_undef(Compiler *c, int cls, unsigned side, const char *name) {
    undef answers at the point, the table's). Returns the table's method, as ct_table finds it. */
 static int pr_table(Compiler *c, int cls, unsigned side, const char *name, CplanPresence *out) {
   mtab_enter(c);
-  int mi = ct_table(c, cls, name, side, NULL);
+  int mi = ct_table(c, cls, name, side, NULL, NULL);
   *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, mi), .vis = ct_vis(c, cls, name, side),
                           .undef = pr_undef(c, cls, side, name) };
   mtab_leave(c);

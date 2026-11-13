@@ -32845,3 +32845,229 @@ int desugar_builtin_reopen_named_superclass(Compiler *c) {
   }
   return changed;
 }
+
+/* ---- methods nothing names (#11708) ----
+   A method whose name the program never spells (as a call's name, an alias
+   target, a symbol, a string, any name a node holds) is reached by no call:
+   compute_reachable leaves it out of the C. The analysis still read it,
+   every round of the fixpoint, and the passes before it made copies of the
+   builtins it calls; 4,000 of them added 17 s to a 30-line program. Such a
+   method is blanked before the analysis when reading it can tell the
+   reached code nothing (the two things the fixpoint reads an unreached
+   method for, 249d4e2bf): it writes no instance, class or global variable
+   and no constant, and no call in it can bind a parameter of a method of
+   the program (its callees are names the program does not define, and no
+   builtin it calls may call back into one), and it reads no slot either
+   (the ivar layout reads them). Left alone wherever a name may
+   be made at run time or methods are listed (a send of a computed name,
+   instance_methods, a method_added hook, eval, an --ext-entry), and for a
+   name a builtin may call
+   (to_s, each, <=>, initialize). The last statement of a body stays: its
+   value is the body's. */
+
+static int pum_in(const char *m, const char *const *set) {
+  for (int i = 0; m && set[i]; i++) if (sp_streq(m, set[i])) return 1;
+  return 0;
+}
+/* the calls that may find a method by a name made at run time, or list
+   methods: with an argument that is not a literal name (or with any, for a
+   listing), every method may be the one */
+static int pum_dynamic_call(const char *m) {
+  static const char *const DYN[] = { "send", "__send__", "public_send", "method", "public_method", "singleton_method",
+    "instance_method", "public_instance_method", "respond_to?", "method_defined?", "public_method_defined?",
+    "private_method_defined?", "protected_method_defined?", "define_method", "alias_method", "remove_method",
+    "undef_method", "try", "try!", NULL };
+  return pum_in(m, DYN);
+}
+static int pum_listing_call(const char *m) {
+  static const char *const LIST[] = { "instance_methods", "public_instance_methods", "private_instance_methods",
+    "protected_instance_methods", "methods", "public_methods", "private_methods", "protected_methods",
+    "singleton_methods", "eval", "instance_eval", "class_eval", "module_eval", "instance_exec", "class_exec",
+    "module_exec", "binding", "method_missing", "respond_to_missing?", "method_added", "singleton_method_added",
+    "ObjectSpace", NULL };
+  return pum_in(m, LIST);
+}
+/* a name builtin code may call on a value of the program's: never blanked */
+static int pum_callback_name(const char *m) {
+  static const char *const CB[] = { "initialize", "initialize_copy", "initialize_dup", "initialize_clone", "to_s",
+    "inspect", "to_str", "to_ary", "to_a", "to_h", "to_hash", "to_proc", "to_sym", "to_int", "to_i", "to_f", "to_r",
+    "to_c", "to_io", "to_path", "to_json", "to_set", "call", "each", "each_pair", "<=>", "==", "eql?", "equal?", "hash",
+    "===", "=~", "coerce", "method_missing", "respond_to_missing?", "respond_to?", "inherited", "included", "extended",
+    "prepended", "method_added", "method_removed", "method_undefined", "singleton_method_added", "const_missing",
+    "marshal_dump", "marshal_load", "_dump", "_load", "encode_with", "init_with", "succ", "size", "length",
+    "message", "exception", "backtrace", "full_message", "detailed_message", "close", "write", "read", "flush",
+    "puts", "print", "<<", "freeze", "dup", "clone", "pretty_print", "pretty_print_cycle", "pretty_inspect",
+    "instance_variables_to_inspect", "deconstruct", "deconstruct_keys", "begin", "end", "exclude_end?", "-@",
+    "+@", "!", "!=", "at_exit", "finalize", NULL };
+  return pum_in(m, CB) || builtin_method_known_any(m);
+}
+/* the callees with arguments a builtin may call back on the program's
+   values (sort's <=>, a Hash's eql?, case's ===, Enumerable's each): where
+   the program defines one, a call in a blanked method could bind it */
+static int pum_arg_callback(const char *m) {
+  static const char *const CB[] = { "<=>", "==", "eql?", "===", "=~", "coerce", "each", "each_pair", "call",
+    "method_missing", "respond_to_missing?", "initialize_copy", "<", ">", "<=", ">=", "+", "-", "*", "/", "%", "**",
+    "[]", "[]=", "<<", "to_proc", "!=", NULL };
+  return pum_in(m, CB);
+}
+/* the builtin calls that act on the program itself or run code of its
+   own: a slot, a constant, a method, a load, or a construction (`new`
+   runs an initialize, `raise` an exception's) */
+static int pum_effect_call(const char *m) {
+  static const char *const FX[] = { "instance_variable_set", "class_variable_set", "const_set", "remove_const",
+    "global_variable_set", "define_singleton_method", "attr", "attr_reader", "attr_writer", "attr_accessor",
+    "include", "extend", "prepend", "private", "public", "protected", "module_function", "private_constant",
+    "public_constant", "private_class_method", "public_class_method", "require", "require_relative", "load",
+    "autoload", "new", "allocate", "raise", "fail", "exception", "super", "using", "refine", "trap", "at_exit",
+    "set_trace_func", "trace_var", "instance_variable_get", "class_variable_get", "const_get", "Struct", "Data",
+    NULL };
+  return pum_in(m, FX);
+}
+typedef struct { const NodeTable *nt; const ANameHash *defined; int arg_cb; } PumBody;
+/* may reading body subtree n tell the reached code anything? */
+static int pum_body_speaks(const PumBody *pb, int n) {
+  const NodeTable *nt = pb->nt;
+  if (n < 0) return 0;
+  switch (nt_kind(nt, n)) {
+  case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode: case NK_InstanceVariableOrWriteNode:
+  case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
+  case NK_ClassVariableWriteNode: case NK_ClassVariableOperatorWriteNode: case NK_ClassVariableOrWriteNode:
+  case NK_ClassVariableAndWriteNode: case NK_ClassVariableTargetNode:
+  case NK_GlobalVariableWriteNode: case NK_GlobalVariableOperatorWriteNode: case NK_GlobalVariableOrWriteNode:
+  case NK_GlobalVariableAndWriteNode: case NK_GlobalVariableTargetNode:
+  case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode: case NK_ConstantOrWriteNode:
+  case NK_ConstantAndWriteNode: case NK_ConstantTargetNode: case NK_ConstantPathWriteNode:
+  case NK_ConstantPathOperatorWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+  case NK_ConstantPathTargetNode:
+  /* (a slot's read too: the passes lay a class's ivars out by the reads
+     of its methods as well as its writes) */
+  case NK_InstanceVariableReadNode: case NK_ClassVariableReadNode: case NK_GlobalVariableReadNode:
+  case NK_DefNode: case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode:
+  case NK_AliasMethodNode: case NK_AliasGlobalVariableNode: case NK_UndefNode:
+  case NK_SuperNode: case NK_ForwardingSuperNode: case NK_ForwardingArgumentsNode:
+  case NK_CallOperatorWriteNode: case NK_CallOrWriteNode: case NK_CallAndWriteNode: case NK_CallTargetNode:
+  case NK_IndexOperatorWriteNode: case NK_IndexOrWriteNode: case NK_IndexAndWriteNode: case NK_IndexTargetNode:
+  case NK_ForNode: case NK_PreExecutionNode: case NK_PostExecutionNode:
+  case NK_XStringNode: case NK_InterpolatedXStringNode:
+  /* (a require, under --load-model=graph: it adds its file to the program) */
+  case NK_LoadNode:
+    return 1;
+  case NK_CallNode: {
+    const char *m = nt_str(nt, n, "name");
+    if (!m || pum_effect_call(m) || pum_dynamic_call(m) || pum_listing_call(m) || anh_has(pb->defined, m)) return 1;
+    /* (`x.y = v` is y='s: the program's attr_writer or Struct member y) */
+    size_t ml = strlen(m);
+    if (ml > 1 && m[ml - 1] == '=' && ml < 128) {
+      char base[128]; memcpy(base, m, ml - 1); base[ml - 1] = 0;
+      if (anh_has(pb->defined, base)) return 1;
+    }
+    /* a builtin that may call one of the program's back with an argument */
+    if (pb->arg_cb) return 1;
+    break;
+  }
+  default: break;
+  }
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) if (pum_body_speaks(pb, nt_ref_at(nt, n, i))) return 1;
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int k = 0; k < m; k++) if (pum_body_speaks(pb, ids[k])) return 1;
+  }
+  return 0;
+}
+int prune_unnamed_methods(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  /* (an --ext-entry or --ext-class method is a root nothing names) */
+  /* (and --dump-load-record and --warn-widen, which tell of the program
+     as written: a never-bound parameter is a method nothing calls) */
+  if (getenv("SPINEL_KEEP_UNNAMED") || c->n_cext_extensions || (g_ext_entries && *g_ext_entries) ||
+      (g_ext_classes && *g_ext_classes) || g_dump_load_record || g_opt_warn_widen)
+    return 0;
+  /* a hook that hears of each method defined: every def runs it */
+  static const char *const HOOKS[] = { "method_added", "singleton_method_added", "method_removed",
+    "singleton_method_removed", "method_undefined", "singleton_method_undefined", NULL };
+  NT_FOREACH_KIND(nt, NK_DefNode, d) if (pum_in(nt_str(nt, d, "name"), HOOKS)) return 0;
+  /* a name made at run time, or a listing: every method may be found */
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *m = nt_str(nt, id, "name");
+    if (!m) continue;
+    if (pum_listing_call(m)) return 0;
+    if (!pum_dynamic_call(m)) continue;
+    int args = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    for (int a = 0; a < an; a++) {
+      NodeKind ak = nt_kind(nt, av[a]);
+      if (ak != NK_SymbolNode && ak != NK_StringNode && ak != NK_TrueNode && ak != NK_FalseNode) return 0;
+    }
+  }
+  /* every name a node holds, but a def's own; and the names the program
+     defines (its defs, and every symbol or string it may define one by) */
+  ANameHash named = {0}, defined = {0};
+  int arg_cb = 0;
+  for (int id = 0; id < nt->count; id++) {
+    const SpNode *nd = &nt->nodes[id];
+    if (!nd->type) continue;
+    NodeKind k = nt_kind(nt, id);
+    /* (a builtin's def, spliced from builtins/, is the builtin's: a call
+       to it is a builtin call, copied for its site where it is lowered) */
+    if (k == NK_DefNode && !nt_int(nt, id, "node_bi", 0)) {
+      const char *dn = nt_str(nt, id, "name");
+      if (dn) {
+        if (!anh_has(&defined, dn)) anh_add(&defined, dn);
+        if (pum_arg_callback(dn)) arg_cb = 1;
+      }
+    }
+    for (int j = 0; j < nd->ns; j++) {
+      const char *v = nd->s[j].val;
+      if (!v || (k == NK_DefNode && sp_streq(nd->s[j].key, "name"))) continue;
+      if (!anh_has(&named, v)) anh_add(&named, v);
+      if ((k == NK_SymbolNode || k == NK_StringNode) && !anh_has(&defined, v)) {
+        anh_add(&defined, v);
+        if (pum_arg_callback(v)) arg_cb = 1;
+      }
+    }
+    if (nd->content && !anh_has(&named, nd->content)) anh_add(&named, nd->content);
+  }
+  const int *par = comp_parent_map(c);
+  PumBody pb = { nt, &defined, arg_cb };
+  int blanked = 0, *drop = NULL, ndrop = 0, cdrop = 0;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (!dn || nt_int(nt, d, "node_bi", 0) || anh_has(&named, dn) || pum_callback_name(dn)) continue;
+    /* a statement of a class or module body, or of a file's top level, and
+       not its last */
+    int st = par[d], owner = st >= 0 ? par[st] : -1;
+    if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) continue;
+    NodeKind ok = owner >= 0 ? nt_kind(nt, owner) : NK_ProgramNode;
+    if (owner >= 0 && ok != NK_ClassNode && ok != NK_ModuleNode && ok != NK_ProgramNode) continue;
+    int bn = 0; const int *bb = nt_arr(nt, st, "body", &bn);
+    if (bn < 1 || bb[bn - 1] == d) continue;
+    int recv = nt_ref(nt, d, "receiver");
+    if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) continue;
+    if (pum_body_speaks(&pb, nt_ref(nt, d, "parameters")) || pum_body_speaks(&pb, nt_ref(nt, d, "body"))) continue;
+    if (ndrop == cdrop) {
+      cdrop = cdrop ? cdrop * 2 : 64;
+      drop = realloc(drop, sizeof(int) * (size_t)cdrop);
+      if (!drop) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    drop[ndrop++] = d;
+  }
+  /* (after the walk over the defs: blanking one retypes it) Each leaves
+     its body's statements, and its nodes turn NilNodes, which the passes
+     that walk the table by kind skip. */
+  for (int i = 0; i < ndrop; i++) {
+    int d = drop[i], st = par[d], bn = 0;
+    const int *bb = nt_arr(nt, st, "body", &bn);
+    int *keep = malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1)), kn = 0;
+    if (!keep) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int j = 0; j < bn; j++) if (bb[j] != d) keep[kn++] = bb[j];
+    nt_node_set_arr(nt, st, "body", keep, kn);
+    free(keep);
+    nt_subtree_blank(nt, d);
+    blanked++;
+  }
+  free(drop);
+  anh_free(&named); anh_free(&defined);
+  return blanked;
+}

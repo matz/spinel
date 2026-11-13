@@ -55567,6 +55567,7 @@ static void refuse_end_beside_own_at_exit(Compiler *c) {
 void analyze_program(Compiler *c) {
   refuse_end_beside_own_at_exit(c);
   double tm_an = sp_timing_now();
+  AN_STEP_V("prune_unnamed_methods", prune_unnamed_methods(c));   /* (before any pass reads or copies them) */
   g_an_src_nodes = c->nt->count;
   an_note_written_names(c);
   AN_STEP_V("mark_path_builders", mark_path_builders(c));       /* while the names are as written */

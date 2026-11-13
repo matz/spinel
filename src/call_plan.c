@@ -3014,15 +3014,19 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
                    !((flags & CT_CMETHOD) && elab_record_cmethod(c, cls, name)));
 }
-/* May a method of the program's take a call of `nm` over from the
-   builtin's: an instance method of the name in any class or module (a
-   reopening of a builtin class, of Object or Kernel, a module included or
-   prepended into one), a class method, main's own, or a method_missing a
-   call of it could reach? (NULL: not known, so it may.) */
-static int ct_program_may_take(Compiler *c, const char *nm) {
-  int ncm = 0;
-  return !nm || an_user_defines_method(c, nm) || an_user_defines_method(c, METHOD_MISSING_NAME) ||
-         comp_main_method(c, nm) >= 0 || (comp_cmethod_candidates(c, nm, &ncm), ncm > 0);
+/* Does call id run before every version of `name` on cls's route (flags
+   and mi as ct_undefined_at's), as the record proves it: none is live at
+   its point (ct_undefined_at), it does not run any time after it
+   (ct_after_point), and every block around it runs at once
+   (elab_blocks_run_at_once)? A presence question there finds none at
+   every run (call_target's MLW_RECORD for a name with no method scope,
+   and cplan_cmethod_later). */
+static int ct_before_versions(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi) {
+  if (!ct_undefined_at(c, id, cls, name, flags, mi)) return 0;
+  int framed = elab_plan_enter(c, id);
+  int before = !ct_after_point(c, id) && elab_blocks_run_at_once(c, id);
+  if (framed) elab_plan_leave(c);
+  return before;
 }
 /* Does the copy a class-side alias of the name makes (Scope.alias_of) in a
    class of ci's chain below the one declaring the name's `class << self`
@@ -3080,11 +3084,7 @@ int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
   int asked = id >= 0 ? (int)nt_int(c->nt, id, "defined_ask", 0) : 0;
   if (asked) id = asked - 1;   /* defined?'s respond_to?: at the call it asks of */
-  if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1)) return 0;
-  int framed = elab_plan_enter(c, id);
-  int now = elab_blocks_run_now(c, id);
-  if (framed) elab_plan_leave(c);
-  return now;
+  return id >= 0 && cls >= 0 && ct_before_versions(c, id, cls, name, CT_CMETHOD, -1);
 }
 /* See call_plan.h. */
 int cplan_presence_class(Compiler *c, int id) {
@@ -3231,7 +3231,7 @@ static int cplan_record_new_gap(Compiler *c, int id) {
    call, new: is_opaque_reaching_call) may run later on another object
    (`o.instance_exec(&b)`), so its self is not known. */
 static int ct_block_keeps_self(Compiler *c, const char *rn, const char *nm) {
-  if (ct_program_may_take(c, nm)) return 0;
+  if (elab_program_may_take(c, nm)) return 0;
   return is_async_code_entry(rn, nm) || !is_opaque_reaching_call(nm);
 }
 /* The nearest call around node whose literal block may run with another
@@ -3501,6 +3501,10 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
            (!(flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) && !ct_calls(c, id, name))) {
     if (mi < 0) {
       if (ml->kind != ML_SINGLETON) ml->kind = ML_NONE;
+      /* (a reach ask, whose reader tells a none the record proves from one
+         the tables give: an accessor has no method scope, so the record's
+         proof is asked here, where the call runs before every version) */
+      if (ml->kind == ML_NONE && (flags & CT_REACH) && id >= 0 && ct_before_versions(c, id, cls, name, flags, -1)) ml->why = MLW_RECORD;
     }
     else if (ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
       ml->kind = ML_TABLE;
@@ -3529,11 +3533,11 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
        entry's else arm answers only a call that may run before them. One at
        a point that may run any time after it (ct_after_point) takes the
        entry, whose cells tell at run time; with no entry, it raises too:
-       nothing proves it runs after a def */
+       nothing proves it runs after a def (MLW_RECORD) */
     int vi = ct_versioned(c, mi, name) && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, ml) : -1;
     if (vi >= 0 && c->scopes[vi].entry) r = vi;
     else {
-      *ml = (MethodLookup){ .kind = ML_NONE, .def_class = dc0 };
+      *ml = (MethodLookup){ .kind = ML_NONE, .why = MLW_RECORD, .def_class = dc0 };
       r = -1;
     }
   }
@@ -3628,11 +3632,11 @@ static int pr_in_untyped_block(Compiler *c, int id) {
 /* See call_plan.h. */
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
   MethodLookup ml = { .def_class = -1 };
-  int tmi = pr_table(c, cls, side, name, out);
+  pr_table(c, cls, side, name, out);
   if (pr_in_untyped_block(c, id)) return PR_TABLE;
   call_target(c, id, cls, name, side | CT_REACH, &ml);
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
-  if (ml.kind == ML_NONE && tmi >= 0) return PR_ABSENT;   /* (the record: none where id runs) */
+  if (ml.kind == ML_NONE && ml.why == MLW_RECORD) return PR_ABSENT;   /* (the record's none) */
   return out->table ? PR_PRESENT : PR_ABSENT;
 }
 /* See call_plan.h. */
@@ -8007,7 +8011,7 @@ static int cplan_root_def_runs_first(Compiler *c, int call, int owner, const cha
   *vis = -1;
   for (int k = 0; k < n; k++) {
     LoadPoint sp = elab_point_of(c, sites[k]);
-    if (sp.region < 0 || !elab_blocks_run_now(c, sites[k]) || elab_reached_method_at(c, owner, name, sp) != ELAB_YES) return 0;
+    if (sp.region < 0 || !elab_blocks_run_at_once(c, sites[k]) || elab_reached_method_at(c, owner, name, sp) != ELAB_YES) return 0;
     int v = elab_method_vis_at(c, owner, name, 0, sp);
     if (v < 0 || (k && v != *vis)) return 0;
     *vis = v;

@@ -282,9 +282,10 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    the class a super's lookup started from, written by those two only.
    kind is read by cplan_resolve_super, cplan_presence, cplan_implied_target,
    cplan_boxed_to_ary_classes and cplan_main_singleton_call, and ML_OBJECT by
-   cplan_missing and method_obj_lookup; why only by the method-table check
-   (mtab_table). ML_SINGLETON: a call on main that main's own singleton
-   answers by the core's method it has from the start (`to_s`, `inspect`:
+   cplan_missing and method_obj_lookup; why by the method-table check
+   (mtab_table), and an ML_NONE's (MLW_RECORD) by cplan_presence.
+   ML_SINGLETON: a call on main that main's own singleton answers by the
+   core's method it has from the start (`to_s`, `inspect`:
    elab_main_singleton_at), ahead of Object's table; no method of the
    program's. */
 typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON } MlKind;
@@ -297,8 +298,15 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON }
    without asking the record, as for a call with no node or a name the node
    does not itself call (UNASKED); a Method's arm on a class whose accessor
    the tables have and whose capture meets neither a version of it nor a
-   def (cplan_capture_class_arms: ACCESSOR) */
-typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR } MlWhy;
+   def (cplan_capture_class_arms: ACCESSOR). For ML_NONE: the record's none
+   (RECORD): for a method, none is live at the call's point and the call
+   takes no version entry to tell a later run, so it raises there wherever
+   it runs, as nothing proves it runs after a def; for a name the tables
+   hold no method scope of (an accessor's), asked only under CT_REACH, the
+   record proves the call runs before every version of it
+   (ct_before_versions). Any other why on an ML_NONE (0, or UNASKED from
+   cplan_new_initialize) is a none the tables give */
+typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD } MlWhy;
 typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
@@ -1263,16 +1271,20 @@ int cplan_self_class(Compiler *c, int id);
    builtin the class itself answers (`U.name`) keeps its receiver and
    reaches the builtin through call_target's answer. */
 int cplan_self_builtin(Compiler *c, int id);
-/* Is every class method `name` of program class cls defined after call id,
-   as the record proves at the call's load point (call_target's answer for
-   a call there)? A reflection asked there (`C.respond_to?(:z)` before
-   `def C.z`) then finds none. 0 unless the call has a point and runs when
-   its statement does: not in a method body, a lambda or an END body, and
-   in a block only when every block around it is certain to run at once
-   (elab_blocks_run_now: a builtin iterator on a literal); 0 too for a class
-   whose chain the record does not know. The respond_to? a `defined?(C.z)`
-   is answered by (desugar_defined_method_call) asks at the point of the
-   call `C.z` (the defined?'s). */
+/* Is every class method `name` of program class cls defined after call id
+   runs, as the record proves it (ct_before_versions, the proof a method
+   list's accessor asks too)? A reflection asked there (`C.respond_to?(:z)`
+   before `def C.z`) then finds none. The proof holds where none is live
+   where the call runs (at its load point; in a method body, at every call
+   of the method, all before the def), the call runs at no time after that
+   (not in a lambda, an END body or a block kept for later), and every
+   block between it and the body it runs in runs at once
+   (elab_blocks_run_at_once: a builtin iterator's on a literal, one a
+   program method runs before answering, or one an iterator's name runs
+   that no method of the program's nor a lazy enumerator takes over); 0
+   for a class whose chain the record does not know. The respond_to? a
+   `defined?(C.z)` is answered by (desugar_defined_method_call) asks at
+   the point of the call `C.z` (the defined?'s). */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
 /* The class an alias that node id meets as cls's `name` (singleton when sg)
    was made in, as Method#owner names it (*own_sg: on its singleton); -1 for
@@ -1349,17 +1361,18 @@ int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, Cp
    for an instance's chain, CT_CMETHOD for the class side, with CT_OWN for
    cls's own methods alone). PR_PRESENT: a method or an accessor; PR_ABSENT:
    none (the builtin tiers may answer), as the tables have it or because the
-   record proves none is live where id runs; PR_TABLE: the record gives no
-   proof and the reader keeps the final tables' answer, as in a block a
-   call on a receiver of no one type may run later. out->table is that
-   answer for every kind (a hidden method, a Struct's or Data class's
-   generated iterator and, under CT_OWN, a module's copy are no method of the
-   class's; an alias, a prepend's renamed body and a class-side accessor are,
-   as the class's own entries); out->vis the visibility the call checks of
-   it: the final table's, public where it declares none, until visibility is
-   per version; the class's own entry's under CT_OWN. out->undef is 1 where
-   an `undef_method` or `undef` of the name stands on the class's chain (the
-   final tables'; a list leaves the name out), 0 otherwise. */
+   record proves none is live where id runs (call_target's MLW_RECORD);
+   PR_TABLE: the record gives no proof and the reader keeps the final
+   tables' answer, as in a block a call on a receiver of no one type may
+   run later. out->table is that answer for every kind (a hidden method, a
+   Struct's or Data class's generated iterator and, under CT_OWN, a
+   module's copy are no method of the class's; an alias, a prepend's
+   renamed body and a class-side accessor are, as the class's own entries);
+   out->vis the visibility the call checks of it: the final table's, public
+   where it declares none, until visibility is per version; the class's own
+   entry's under CT_OWN. out->undef is 1 where an `undef_method` or
+   `undef` of the name stands on the class's chain (the final tables'; a
+   list leaves the name out), 0 otherwise. */
 typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
 typedef struct { int table, vis, undef; } CplanPresence;
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);

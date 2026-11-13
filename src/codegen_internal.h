@@ -1266,6 +1266,10 @@ const char *rename_local(const char *nm);
 
 void emit_expr(Compiler *c, int id, Buf *b);
 void emit_expr_for_effect(Compiler *c, int node, Buf *b);
+/* Can evaluating `node` run none of the program's own code (codegen_call.c)?
+   It may allocate, but writes no variable and calls no method of the
+   program's, implicitly or explicitly. */
+int poly_inert(Compiler *c, int node);
 int effect_view_open(Compiler *c, int node);
 void emit_expr_as_value_of(Compiler *c, int node, int owner, Buf *b);
 void effect_view_close(Compiler *c, int v);

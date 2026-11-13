@@ -10036,8 +10036,6 @@ static int later_operand_runs(Compiler *c, const int *ops, int n, int kwh, int k
   return 0;
 }
 
-static int poly_inert(Compiler *c, int node);
-
 /* Is `key` a hash key whose #hash and #eql? are the builtin ones: a
    Symbol, String or Integer, read or written, that runs nothing itself? */
 static int poly_key_inert(Compiler *c, int key) {
@@ -10046,12 +10044,12 @@ static int poly_key_inert(Compiler *c, int key) {
   return kt == TY_SYMBOL || kt == TY_STRING || kt == TY_INT;
 }
 
-/* Can evaluating `node` run none of the program's own code? A read, a
-   literal, an operator on scalars, and Arrays and Hashes of these. They
-   may allocate, but write no variable. Anything else is taken to run
-   code, implicitly as well as explicitly: an interpolation calls #to_s, a
-   hash key #hash, a `*` #to_a, a `**` #to_hash, a Range's ends #<=>. */
-static int poly_inert(Compiler *c, int node) {
+/* See codegen_internal.h. A read, a literal, an operator on scalars, and
+   Arrays and Hashes of these. They may allocate, but write no variable.
+   Anything else is taken to run code, implicitly as well as explicitly: an
+   interpolation calls #to_s, a hash key #hash, a `*` #to_a, a `**`
+   #to_hash, a Range's ends #<=>. */
+int poly_inert(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   if (view_ran_first(node)) return 1;
   node = nt_paren_single(c->nt, node);
@@ -20250,6 +20248,18 @@ static void emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
   for (int i = 0; i < cs->n; i++)
     buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL)) || " : "gv_%s == %d || ",
                cs->cell[i] + 1, cs->val[i]);
+}
+/* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
+   read it (emit_cells_test) */
+int emit_vis_cell_write(Compiler *c, int id, Buf *b) {
+  const LocalVar *g;
+  int v = 0, n = 0;
+  for (int k = 0; cplan_vis_cell_after(c, id, k, &g, &v); k++) {
+    if (!g) continue;
+    if (n++) buf_puts(b, ", ");
+    buf_printf(b, repr_slot_kind(c, g) == RK_BOXED ? "gv_%s = sp_box_int(%dLL)" : "gv_%s = %dLL", g->name, v);
+  }
+  return n > 0;
 }
 int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b) {
   int all = argc >= 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode, ci = cplan_presence_class(c, id);

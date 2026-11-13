@@ -10,3 +10,8 @@
 [:fs]
 :two
 [:f3, :fss]
+:two
+[:f2]
+[:f2, :fss]
+nil
+[:f2, :fss]

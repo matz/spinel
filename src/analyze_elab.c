@@ -404,17 +404,18 @@ int elab_write_value_kind(NodeKind k, int *may) {
    On a statement's path: a class body, and the block of a call that runs
    it as one (class_eval and kin, a class builder), is a frame of its own,
    which the statement opened; a branch, a loop's body and a rescue clause
-   may not run, and the next arm of an elsif ladder or a rescue chain is
-   on the path; a branch whose condition is a constant (`x if true`,
-   nt_pred_const, which the scope walk folds too) runs whenever the
-   condition is reached, and the arms after one that always runs never do,
-   which the record keeps as may not run; a rescue clause that runs
-   whenever its begin completes (prog_rescue_runs: a require of no file in
-   the body raises) runs as such a branch does; a value written under `||=` /
-   `&&=` or after `rescue` may not run, as the right side of `&&` and `||`
-   does; a block run at once by a call the record does not know (a program
-   method may yield to it, or keep it) may not run, and an iterator's may
-   run partly (zero times, or several). */
+   may not run, nor may a case's branch past its first or a when's
+   condition past its first, and the next arm of an elsif ladder or a
+   rescue chain is on the path; a branch whose condition is a constant
+   (`x if true`, nt_pred_const, which the scope walk folds too) runs
+   whenever the condition is reached, and the arms after one that always
+   runs never do, which the record keeps as may not run; a rescue clause
+   that runs whenever its begin completes (prog_rescue_runs: a require of
+   no file in the body raises) runs as such a branch does; a value written
+   under `||=` / `&&=` or after `rescue` may not run, as the right side of
+   `&&` and `||` does; a block run at once by a call the record does not
+   know (a program method may yield to it, or keep it) may not run, and an
+   iterator's may run partly (zero times, or several). */
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
   const NodeTable *nt = c->nt;
   ElabPos q = *pp;
@@ -457,11 +458,22 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
         if (!falls && k != NK_RescueNode) q.may = q.fmay = 1;
         q.sure = falls && nt_kind(nt, ch) == NK_ElseNode;
       }
+      /* a when's condition past its first runs only when those before it fail */
+      if (spine && k == NK_WhenNode) {
+        int nw = 0; const int *wc = nt_arr(nt, p, "conditions", &nw);
+        if (nw && ch != wc[0] && ch != nt_ref(nt, p, "statements")) q.may = q.fmay = 1;
+      }
       break;
     }
-    case NK_CaseNode: case NK_CaseMatchNode:   /* its branches and its else */
-      if (spine && ch != nt_ref(nt, p, "predicate")) q.kind = EP_SPINE;
+    case NK_CaseNode: case NK_CaseMatchNode: {   /* its branches and its else */
+      if (!spine || ch == nt_ref(nt, p, "predicate")) break;
+      q.kind = EP_SPINE;
+      /* (a branch past the first is reached only when the ones before it
+         fail: its conditions may not run) */
+      int nb = 0; const int *b = nt_arr(nt, p, "conditions", &nb);
+      if (!nb || ch != b[0]) q.may = q.fmay = 1;
       break;
+    }
     case NK_BeginNode:
       if (spine && ch == nt_ref(nt, p, "statements")) {
         q.partial |= nt_ref(nt, p, "rescue_clause") >= 0;
@@ -4794,14 +4806,23 @@ static int lr_vis_call_ahead(Compiler *c, const LrHist *h, const LrHist *t, cons
    word; a word whose version the record cannot tell) is known only at run
    time (-1): the arm reads the visibility cell its writes keep
    (elab_version_word), where every word of the name in the two histories
-   has a point a write goes beside (lr_vis_cellable). Where one has none (a
-   word in a method body or a builder's block), the def's, as the arms took
-   it before. */
+   has a write that runs when it does (lr_vis_cellable): a word that is a
+   statement of a list has one next to it, and a word inside an expression
+   (`c && public(:m)`, `x = (c and public(:m))`, which may not run when the
+   statement holding it does) whose own call gives its value
+   (vis_decl_call) writes the cell as it runs (cplan_vis_cell_after).
+   Where one has none (a word in a method body or a builder's block), the
+   def's, as the arms took it before. */
 static int lr_vis_cellable(Compiler *c, const LrHist *h, const LrHist *t) {
+  int np = 0;
+  const int *par = elab_node_parents(c, &np);
   for (int k = 0; k < 2; k++)
     for (int i = 0, n = k ? (t ? t->n : 0) : h->n; i < n; i++) {
       const LrDef *w = k ? &t->v[i] : &h->v[i];
-      if (w->kind == LR_VIS && (w->unplaced || w->body || elab_point_of(c, w->node).region < 0)) return 0;
+      if (w->kind != LR_VIS) continue;
+      int up = w->node >= 0 && w->node < np ? par[w->node] : -1;
+      if (w->unplaced || w->body || elab_point_of(c, w->node).region < 0 || up < 0 ||
+          (nt_kind(c->nt, up) != NK_StatementsNode && !vis_decl_call(c, w->node))) return 0;
     }
   return 1;
 }

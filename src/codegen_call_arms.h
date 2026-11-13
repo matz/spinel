@@ -152,6 +152,11 @@ int nil_responds_static(Compiler *c, const char *qm, int argc, const int *argv, 
    written to b. 0, writing nothing, for a call the plan does not answer
    so; with b NULL, only asked. */
 int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b);
+/* The writes visibility word `id` makes to its visibility cells as its own
+   call runs (cplan_vis_cell_after), as an expression with no value of its
+   own, `gv_<cell> = <v>, ...`, written to b. 0, writing nothing, for a
+   word that writes none. */
+int emit_vis_cell_write(Compiler *c, int id, Buf *b);
 int respond_to_user_defined(Compiler *c, int id, int recv);
 extern const char *const respond_universal[];
 extern const char *const respond_universal_all[]; /* public and private */

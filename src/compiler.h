@@ -1926,6 +1926,11 @@ typedef struct {
      leaves out (call_plan.c, ver_cells_settle) */
   unsigned char *ver_cell_dropped;
   int nver_cell_dropped;
+  /* the visibility cells a visibility word inside an expression writes as
+     its own call runs (`c && public(:m, :n)`), one per cell, with the
+     value (call_plan.c, ver_cells_put; cplan_vis_cell_after) */
+  struct VerVisAfter { int node, cell, v; } *ver_vis_after;
+  int nver_vis_after;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),

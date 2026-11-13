@@ -48,3 +48,29 @@ y = case 5
     when [fss.size].first..9 then :two
     end
 p y, $log
+
+# a value of another family than the subject's (a String against an
+# Integer) never matches, but still runs in its turn, as CRuby evaluates it
+def f2 = ($log << :f2; 2)
+$log = []
+case 2
+when 1 then p :one
+when f2 then p :two
+when [fss].first then p :three
+end
+p $log
+
+$log = []
+case 3
+when 1 then p :one
+when f2 then p :two
+when [fss].first then p :three
+end
+p $log
+
+$log = []
+z = case 3
+    when f2 then :two
+    when [fss].first then :three
+    end
+p z, $log

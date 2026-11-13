@@ -11260,8 +11260,11 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
     buf_puts(b, "), 0)");
   }
   else if (eq_family(pt) && eq_family(comp_ntype(c, cond)) && eq_family(pt) != eq_family(comp_ntype(c, cond))) {
-    /* a when value of a different comparable family never matches */
-    buf_puts(b, "0");
+    /* a when value of a different comparable family never matches; one
+       that runs code (`when public(:m)`, `when f(x)`) still runs, as CRuby
+       evaluates it before === answers */
+    if (poly_inert(c, cond)) buf_puts(b, "0");
+    else { buf_printf(b, "((void)_t%d, (void)(", t); emit_expr_for_effect(c, cond, b); buf_puts(b, "), 0)"); }
   }
   else if (nt_kind(c->nt, cond) == NK_SplatNode) {
     /* `when *arr`: membership via value equality (see the int-path arm) */
@@ -20614,6 +20617,11 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
           }
         }
       }
+      /* (a word inside an expression emitted as a statement writes its
+         visibility cell: cplan_vis_cell_after) */
+      Buf wb; memset(&wb, 0, sizeof wb);
+      if (emit_vis_cell_write(c, id, &wb)) { emit_indent(b, indent); buf_printf(b, "%s;\n", wb.p); }
+      free(wb.p);
       return 1;
     }
   }

@@ -11027,7 +11027,7 @@ static int class_answers_own(Compiler *c, int cid, const char *name) {
   int builtin = 0;
   const char *tn = comp_resolve_alias_ex(c, cid, name, NULL, &builtin);
   if (builtin || !tn || !sp_streq(tn, name)) return 1;
-  return comp_resolve_member(c, cid, name, 0, NULL, NULL) != SP_MEMBER_NONE;
+  return call_answers(c, -1, cid, name, 0, NULL);
 }
 
 /* `Array(x)` where x is a Hash or String subclass instance whose class
@@ -29944,11 +29944,10 @@ static int ix_index_call(NodeTable *nt, const char *name, int recv, int a0, int 
    ivar themselves would make the two differ, and keep the call as written. */
 static const char *rdw_reader_ivar(Compiler *c, int call, int cls, int cmeth, const char *mname) {
   const NodeTable *nt = c->nt;
-  int mi = call_target(c, call, cls, mname, cmeth ? CT_CMETHOD : 0, NULL);
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, call, cls, mname, cmeth ? CT_CMETHOD : 0, &ml);
   if (mi < 0) {
-    if (cmeth) return NULL;
-    int def_cls = -1, mix = -1;
-    if (comp_resolve_member(c, cls, mname, 0, &def_cls, &mix) != SP_MEMBER_ATTR) return NULL;
+    if (cmeth || ml.kind != ML_ATTR) return NULL;
     static char ivb[128];
     if (strlen(mname) >= sizeof ivb - 2) return NULL;
     ivb[0] = '@'; strcpy(ivb + 1, mname);

@@ -11669,7 +11669,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
          Struct.new(:members) answers the member, not the member names. The
          iterator this file synthesizes for a struct is a method and is served
          by the object path below. */
-      comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_NONE)) return 0;
+      !call_answers(c, -1, ty_object_class(rt), name, 0, NULL))) return 0;
   ClassInfo *sc = &c->classes[ty_object_class(rt)];
   /* #inspect / #to_s -> the generated (or user-overridden) struct/data stringifier */
   if ((is_text_conversion(name)) && argc == 0) {
@@ -12904,11 +12904,12 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      freeze sets it and returns self; frozen? reads it. Mutation of a frozen
      plain object's ivars is NOT trapped (raw C stores); the flag round-trip
      is what reflection-driven code observes. */
+  MethodLookup fml = { .def_class = -1 };
   if (recv >= 0 && ty_is_object(rt) && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (is_freeze_family(name)) &&
-      call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0 &&
+      call_target(c, id, ty_object_class(rt), name, 0, &fml) < 0 &&
       /* a generated reader of the name owns it, as in CRuby (#4190) */
-      comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) != SP_MEMBER_ATTR) {
+      fml.kind != ML_ATTR) {
     if (comp_ty_value_obj(c, rt)) {
       /* A value-type object (sp_X by value, no heap GC header to carry the
          frozen bit): freeze is a self-returning no-op and frozen? is false,
@@ -13303,9 +13304,9 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
        same-class `def x`) overrides it via normal dispatch rather than
        reading the field. Whichever definition sits in the more-derived class
        wins; on a same-class tie the explicit method wins. */
-    int rdc = -1, mdc = -1;
+    int rdc = -1;
     if (comp_reader_in_chain(c, cid, name, &rdc)) {
-      int reader_wins = comp_resolve_member(c, cid, name, 0, &mdc, NULL) == SP_MEMBER_ATTR;
+      int reader_wins = call_attr_target(c, -1, cid, name, 0, NULL);
       if (reader_wins) {
         /* a reader is zero-arity: excess arguments are CRuby's ArgumentError
            (a Struct member read with an argument answered the member). A

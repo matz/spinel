@@ -17190,11 +17190,11 @@ int boxed_writer_holds_handle(Compiler *c, const char *base, int v) {
   snprintf(ivn, sizeof ivn, "@%s", base);
   int held = -1;
   for (int k = 0; k < c->nclasses && held < 1; k++) {
-    int wmdc = -1, kmi = -1;
-    int kind = comp_resolve_member(c, k, base, 1, &wmdc, &kmi);
-    if (kind == SP_MEMBER_METHOD && !scope_has_callable_symbol(c, kmi))
-      kind = comp_writer_in_chain(c, k, base, &wmdc) ? SP_MEMBER_ATTR : SP_MEMBER_NONE;
-    int iv = kind == SP_MEMBER_ATTR ? comp_ivar_index(&c->classes[k], ivn) : -1;
+    MethodLookup wml = { .def_class = -1 };
+    int kmi = call_target(c, -1, k, base, CT_WRITER, &wml), wmdc = wml.def_class;
+    int attr = wml.kind == ML_ATTR;
+    if (kmi >= 0 && !scope_has_callable_symbol(c, kmi)) attr = comp_writer_in_chain(c, k, base, &wmdc);
+    int iv = attr ? comp_ivar_index(&c->classes[k], ivn) : -1;
     if (iv >= 0 && c->classes[k].ivar_types[iv] == TY_STRBUF) held = c->classes[k].ivar_str_shared[iv] ? 1 : 0;
   }
   return held;
@@ -17251,12 +17251,15 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
         continue;
       }
     }
-    int wmdc = -1, kmi = -1;
-    int kind = comp_resolve_member(c, k, base, 1, &wmdc, &kmi);
-    if (kind == SP_MEMBER_METHOD && !scope_has_callable_symbol(c, kmi))
-      kind = comp_writer_in_chain(c, k, base, &wmdc) ? SP_MEMBER_ATTR : SP_MEMBER_NONE;
-    if (kind == SP_MEMBER_NONE) continue;
-    int writer_wins = (kind == SP_MEMBER_ATTR);
+    MethodLookup wml = { .def_class = -1 };
+    int kmi = call_target(c, -1, k, base, CT_WRITER, &wml), wmdc = wml.def_class;
+    int attr = wml.kind == ML_ATTR;
+    if (kmi >= 0 && !scope_has_callable_symbol(c, kmi)) {
+      attr = comp_writer_in_chain(c, k, base, &wmdc);
+      if (!attr) kmi = -1;
+    }
+    if (kmi < 0 && !attr) continue;
+    int writer_wins = attr;
     /* --share-strings: inside a dispatch's builtin arm, an explicit writer's
        class was the dispatch's own arm (no user class owns the name here) */
     if (!writer_wins && g_poly_builtin_arm) continue;
@@ -20751,8 +20754,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
              same-class `def x=`). When overridden, fall through to normal
              dispatch. The more-derived definition wins; a same-class tie
              goes to the explicit method. */
-          int writer_wins =
-              comp_resolve_member(c, ty_object_class(rt), base, 1, NULL, NULL) == SP_MEMBER_ATTR;
+          int writer_wins = call_attr_target(c, -1, ty_object_class(rt), base, CT_WRITER, NULL);
           int nk = comp_native_answer_class(c, ty_object_class(rt), nm);
           if (writer_wins) {
             /* `private :x=` on the writer: the refusal, as a statement */
@@ -27182,7 +27184,7 @@ int strbuf_poly_user_boxes(Compiler *c, int v) {
     for (int i = 0; i < p.n && !hit; i++) hit = p.arm[i].key == ks[j];
     if (!hit && (ks[j] < 0 || ks[j] >= c->nclasses || name_is_plain_setter(nm) ||
                  comp_method_in_chain(c, ks[j], "method_missing", NULL) >= 0 ||
-                 comp_resolve_member(c, ks[j], nm, 0, NULL, NULL) != SP_MEMBER_NONE))
+                 call_answers(c, -1, ks[j], nm, 0, NULL)))
       return 0;
   }
   return 1;

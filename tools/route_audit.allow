@@ -262,7 +262,6 @@ src/compiler.c chain_lookup the chain walk itself
 src/compiler.c cls_user_display_mi a class's method of the name
 src/compiler.c comp_arysub_name_is_array a class's method of the name
 src/compiler.c comp_builtin_kind_reopen_mi a class's method of the name
-src/compiler.c comp_resolve_member a class's method of the name
 
 # the plan check: an independent check of resolution, so it asks the tables
 # by name what resolution should have found rather than asking call_target

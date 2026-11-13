@@ -13154,7 +13154,7 @@ int struct_aset_receiver(Compiler *c, int id, int *cls) {
 static int struct_aset_class(Compiler *c, int k) {
   ClassInfo *ci = &c->classes[k];
   return ci->is_struct && !ci->is_data && !ci->is_native_class && ci->nmembers > 0 &&
-         comp_resolve_member(c, k, "[]=", 0, NULL, NULL) == SP_MEMBER_NONE;
+         !call_answers(c, -1, k, "[]=", 0, NULL);
 }
 /* See analyze_internal.h. */
 int struct_aset_may_reach(Compiler *c, int id) {
@@ -13576,15 +13576,16 @@ int infer_ivar_types(Compiler *c) {
            owns a matching ivar, attribute the write to that family. Inherited
            writers are copied onto every subclass, so count the highest class
            whose effective writer is still an attribute, not each copy. An
-           explicit writer method breaks the family: comp_resolve_member keeps
+           explicit writer method breaks the family: call_target keeps
            that override out of the synthesized-attribute candidates. (Skip
            when unrelated families remain ambiguous; widening a same-named
            ivar there would be unsound to attribute.) ty_unify only widens. */
         int only = -1;
+        MethodLookup wml = { .def_class = -1 };
         for (int ci2 = 0; ci2 < c->nclasses; ci2++) {
           ClassInfo *candidate = &c->classes[ci2];
           if (comp_class_is_module(c, candidate) ||
-              comp_resolve_member(c, ci2, base, 1, NULL, NULL) != SP_MEMBER_ATTR ||
+              !call_attr_target(c, -1, ci2, base, CT_WRITER, &wml) ||
               comp_ivar_index(candidate, ivname) < 0)
             continue;
 
@@ -13596,7 +13597,7 @@ int infer_ivar_types(Compiler *c) {
           int family = ci2;
           for (int parent = candidate->parent; parent >= 0;
                parent = c->classes[parent].parent) {
-            if (comp_resolve_member(c, parent, base, 1, NULL, NULL) != SP_MEMBER_ATTR)
+            if (!call_attr_target(c, -1, parent, base, CT_WRITER, &wml))
               break;
             family = parent;
           }
@@ -13612,7 +13613,7 @@ int infer_ivar_types(Compiler *c) {
           for (int ci2 = 0; ci2 < c->nclasses; ci2++) {
             ClassInfo *candidate = &c->classes[ci2];
             if (comp_class_is_module(c, candidate) ||
-                comp_resolve_member(c, ci2, base, 1, NULL, NULL) != SP_MEMBER_ATTR)
+                !call_attr_target(c, -1, ci2, base, CT_WRITER, &wml))
               continue;
             int iv = comp_ivar_index(candidate, ivname);
             if (iv < 0 || class_ivar_pinned(candidate, ivname) || candidate->ivar_types[iv] == TY_UNKNOWN) continue;

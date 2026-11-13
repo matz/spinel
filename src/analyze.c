@@ -17093,11 +17093,11 @@ static void oa_row_use(Compiler *c, OAS *sl, int S, int rd, const int *par, cons
 static const char *an_reader_ivar_name(Compiler *c, int call, const char *mname, int cls) {
   if (cls < 0 || !mname) return NULL;
   /* attr_reader is synthesized, so it has no scope to read a body out of:
-     comp_resolve_member is what knows the name is an attribute, and its
-     backing ivar is the name with an @ in front (see the attr_reader
-     backing-ivar rule). */
-  { int def_cls = -1, mix = -1;
-    if (comp_resolve_member(c, cls, mname, 0, &def_cls, &mix) == SP_MEMBER_ATTR) {
+     call_target is what knows the name is an attribute, and its backing
+     ivar is the name with an @ in front (see the attr_reader backing-ivar
+     rule). */
+  { MethodLookup ml = { .def_class = -1 };
+    if (call_attr_target(c, -1, cls, mname, 0, &ml)) {
       static char ivb[128];
       if (strlen(mname) < sizeof ivb - 2) {
         ivb[0] = '@'; strcpy(ivb + 1, mname);
@@ -18082,16 +18082,17 @@ int is_descendant(Compiler *c, int k, int anc);
    program spells one), killed every class's @b. The slot covers the ivar in
    every subclass, so a subclass's own `b` reaches it too. */
 static int oa_one_class_may_answer(Compiler *c, int ci, const char *name) {
-  if (comp_resolve_member(c, ci, name, 0, NULL, NULL) != SP_MEMBER_NONE) return 1;
+  MethodLookup ml = { .def_class = -1 };
+  if (call_answers(c, -1, ci, name, 0, &ml)) return 1;
   const char *rn = comp_resolve_alias(c, ci, name);
-  if (rn && !sp_streq(rn, name) && comp_resolve_member(c, ci, rn, 0, NULL, NULL) != SP_MEMBER_NONE) return 1;
+  if (rn && !sp_streq(rn, name) && (call_answers(c, -1, ci, rn, 0, &ml))) return 1;
   return comp_method_in_chain(c, ci, "method_missing", NULL) >= 0;
 }
 static int oa_class_may_answer(Compiler *c, int ci, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
     if ((k == ci || is_descendant(c, k, ci)) && oa_one_class_may_answer(c, k, name)) return 1;
   int oc = comp_core_class(c, CORE_OBJECT);
-  return oc >= 0 && oc != ci && comp_resolve_member(c, oc, name, 0, NULL, NULL) != SP_MEMBER_NONE;
+  return oc >= 0 && oc != ci && (call_answers(c, -1, oc, name, 0, NULL));
 }
 /* Can a call on the boxed value recv reach slot s: may the value be an
    instance of the class whose ivar or method s is, or of a class under it?
@@ -25820,7 +25821,7 @@ int cext_demand_reader(Compiler *c, int call) {
   for (int k = 0; k < c->nclasses; k++) {
     int owner = -1;
     if (cls_fact_excludes(c, recv, k) ||
-        comp_resolve_member(c, k, name, 0, NULL, NULL) != SP_MEMBER_ATTR ||
+        !call_attr_target(c, -1, k, name, 0, NULL) ||
         !comp_reader_in_chain(c, k, name, &owner)) continue;
     changed |= strbuf_promote_ivar(c, owner, ivar);
   }
@@ -30178,11 +30179,12 @@ static int mark_reader_identity_operands(Compiler *c) {
       if (iv < 0 || !c->classes[defc].ivar_str_shared[iv]) continue;
       /* (not where the receiver's class answers the name with a def of a
          class other than the reader's, a subclass's over the reader) */
-      { int orv = nt_ref(nt, opnd, "receiver"), mdc = -1;
+      { int orv = nt_ref(nt, opnd, "receiver");
+        MethodLookup ml = { .def_class = -1 };
         TyKind ort = orv >= 0 ? comp_ntype(c, orv) : TY_UNKNOWN;
         int ocid = ty_is_object(ort) ? ty_object_class(ort) : -1;
         if (ocid >= 0 && ocid < c->nclasses &&
-            comp_resolve_member(c, ocid, nt_str(nt, opnd, "name"), 0, &mdc, NULL) == SP_MEMBER_METHOD && mdc != defc)
+            call_target(c, -1, ocid, nt_str(nt, opnd, "name"), 0, &ml) >= 0 && ml.def_class != defc)
           continue; }
       comp_set_strbuf_handle_demand(c, opnd, 1);
       changed = 1;
@@ -30355,21 +30357,22 @@ static const char *poly_recv_ivar(Compiler *c, int r, char *buf, size_t cap) {
      the defining class's either way, so the attribute each class reads is
      compared by the name its aliases resolve to. */
   const char *an = comp_resolve_alias(c, cid, nm);
-  int kind = SP_MEMBER_NONE, dc = -1, mi = -1;
+  int attr = 0, dc = -1, mi = -1;
   for (int j = 0; j < c->nclasses; j++) {
     int a = j;
     while (a >= 0 && a != cid) a = c->classes[a].parent;
     if (a != cid) continue;
-    int jd = -1, jm = -1;
-    int jk = comp_resolve_member(c, j, nm, 0, &jd, &jm);
-    if (jk == SP_MEMBER_NONE || jd < 0 || jd >= c->nclasses) return NULL;
-    if (j == cid) { kind = jk; dc = jd; mi = jm; }
-    else if (jk != kind || jd != dc || (jk == SP_MEMBER_METHOD && jm != mi) ||
-             (jk == SP_MEMBER_ATTR && !sp_streq(comp_resolve_alias(c, j, nm), an))) return NULL;
+    MethodLookup jml = { .def_class = -1 };
+    int jm = call_target(c, -1, j, nm, 0, &jml);
+    int jd = jml.def_class, jattr = jml.kind == ML_ATTR;
+    if ((jm < 0 && !jattr) || jd < 0 || jd >= c->nclasses) return NULL;
+    if (j == cid) { attr = jattr; dc = jd; mi = jm; }
+    else if (jattr != attr || jd != dc || (!jattr && jm != mi) ||
+             (jattr && !sp_streq(comp_resolve_alias(c, j, nm), an))) return NULL;
   }
-  if (kind == SP_MEMBER_NONE || c->classes[dc].is_struct || c->classes[dc].is_data || c->classes[dc].is_native_class)
+  if (dc < 0 || c->classes[dc].is_struct || c->classes[dc].is_data || c->classes[dc].is_native_class)
     return NULL;
-  if (kind == SP_MEMBER_ATTR)
+  if (attr)
     return snprintf(buf, cap, "@%s", an) < (int)cap ? buf : NULL;
   /* (a `return` elsewhere in the method answers another value) */
   if (mi < 0 || mi >= c->nscopes || comp_ret_first(c, mi) >= 0) return NULL;
@@ -30468,9 +30471,9 @@ static int poly_attr_place(Compiler *c, int call, const char *base, int want_wri
     if (!ty_is_object(t)) return -1;
     cid = ty_object_class(t);
   }
-  int dc = -1, mi = -1;
-  if (cid < 0 || comp_resolve_member(c, cid, base, want_write, &dc, &mi) != SP_MEMBER_ATTR || dc < 0) return -1;
-  return dc * 2;
+  MethodLookup ml = { .def_class = -1 };
+  if (cid < 0 || !call_attr_target(c, -1, cid, base, want_write ? CT_WRITER : 0, &ml) || ml.def_class < 0) return -1;
+  return ml.def_class * 2;
 }
 static void poly_store_app_build(Compiler *c, NodeKind rk, PolyStoreApp *t) {
   const NodeTable *nt = c->nt;
@@ -48342,7 +48345,7 @@ static void share_struct_aset_handles(Compiler *c) {
        whose arm boxes the handle (a String slot's arm takes the bytes) */
     if (boxed_member) snprintf(uiv, sizeof uiv, "@%s", ub);
     for (int k = 0; k < c->nclasses && boxed_member; k++) {
-      if (comp_resolve_member(c, k, ub, 1, NULL, NULL) != SP_MEMBER_ATTR) continue;
+      if (!call_attr_target(c, -1, k, ub, CT_WRITER, NULL)) continue;
       int m = c->classes[k].is_struct ? comp_member_index(&c->classes[k], uiv) : -1;
       boxed_member = m >= 0 && c->classes[k].ivar_types[m] == TY_POLY;
     }

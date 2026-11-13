@@ -970,8 +970,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
       int nd = 0;
       const int *ds = comp_descendants(c, cid, &nd);
       for (int i = 0; i < nd; i++) {
-        int kmi = -1;
-        if (ds[i] != cid) comp_resolve_member(c, ds[i], name, 0, NULL, &kmi);
+        int kmi = ds[i] != cid ? call_target(c, -1, ds[i], name, 0, NULL) : -1;
         if (kmi >= 0) { cplan_set(p, kmi, cid, UC_INST, CP_SWITCH); return; }
       }
     }
@@ -6058,7 +6057,7 @@ int cplan_record_sclass_early(Compiler *c, int id) {
 static int cplan_recv_own_member(Compiler *c, int id, const char *name) {
   int r = nt_ref(c->nt, id, "receiver");
   TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
-  return ty_is_object(rt) && comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) != SP_MEMBER_NONE;
+  return ty_is_object(rt) && (call_answers(c, -1, ty_object_class(rt), name, 0, NULL));
 }
 
 /* Does presence query id (is_method_presence_query, kind 1) ask about a
@@ -6806,7 +6805,7 @@ int cplan_struct_aset(Compiler *c, int cid, const char *name, int argc) {
   ClassInfo *k = &c->classes[cid];
   return argc == 2 && (is_element_access(name) && is_store_alias(name)) && k->instantiated &&
          k->is_struct && !k->is_data && !k->is_native_class &&
-         comp_resolve_member(c, cid, name, 0, NULL, NULL) == SP_MEMBER_NONE;
+         !call_answers(c, -1, cid, name, 0, NULL);
 }
 
 /* The user-class arms of a zero-argument poly dispatch, in emission order.
@@ -6875,10 +6874,10 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
         cpoly_add(p, &cap, PA_ARITY, k, mi, TY_UNKNOWN, PC_VOID);
         continue;
       } }
-    /* comp_resolve_member ranks a def and a reader by which class defines
+    /* call_target ranks a def and a reader by which class defines
        them nearer; the reader below takes the arm when it wins (#7248). */
     if (mi >= 0 && c->scopes[mi].nrequired == 0 &&
-        comp_resolve_member(c, k, name, 0, NULL, NULL) != SP_MEMBER_ATTR &&
+        (!call_attr_target(c, -1, k, name, 0, NULL)) &&
         (scope_has_callable_symbol(c, mi) || scope_needs_proc_form(c, mi)) &&
         !(c->classes[defcls].name && sp_streq(c->classes[defcls].name, "Class"))) {
       /* A proc form is a separately inferred clone, so its own return type

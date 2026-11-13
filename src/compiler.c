@@ -3327,23 +3327,6 @@ void comp_add_alias(ClassInfo *ci, const char *new_name, const char *old_name) {
   comp_add_alias_from(ci, new_name, old_name, -1);
 }
 
-/* An attribute and an explicit method can both own one name; call_target
-   (ct_member) arbitrates, and this answers its two tables' question as a
-   three-valued kind for the sites not yet asking it. */
-int comp_resolve_member(Compiler *c, int class_id, const char *name, int want_write,
-                        int *def_class, int *method_index) {
-  MethodLookup ml = { .def_class = -1 };
-  if (def_class) *def_class = -1;
-  if (method_index) *method_index = -1;
-  if (!name || class_id < 0 || class_id >= c->nclasses) return SP_MEMBER_NONE;
-  int mi = call_target(c, -1, class_id, name, want_write ? CT_WRITER : 0, &ml);
-  if (def_class) *def_class = ml.def_class;
-  if (ml.kind == ML_ATTR) return SP_MEMBER_ATTR;
-  if (mi < 0) return SP_MEMBER_NONE;
-  if (method_index) *method_index = mi;
-  return SP_MEMBER_METHOD;
-}
-
 /* An instance method's lookup reads the instance aliases only: a singleton
    alias (`class << self; alias_method :stamp, :now`) names a class method,
    and an instance call of the same name must not take it. */

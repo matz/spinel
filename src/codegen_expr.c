@@ -1721,9 +1721,10 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   TyKind rt = comp_ntype(c, recv);
   if (!ty_is_object(rt)) return 0;
   int cid = ty_object_class(rt);
-  int rmi = -1, wmi = -1, rdc = -1, wdc = -1;
-  int rk = comp_resolve_member(c, cid, attr, 0, &rdc, &rmi);
-  int wk = comp_resolve_member(c, cid, attr, 1, &wdc, &wmi);
+  MethodLookup rml = { .def_class = -1 }, wml = { .def_class = -1 };
+  int rmi = call_target(c, -1, cid, attr, 0, &rml);
+  int wmi = call_target(c, -1, cid, attr, CT_WRITER, &wml);
+  int rdc = rml.def_class, wdc = wml.def_class;
   /* The pair calls each half directly, past the visibility check an
      ordinary call makes, so on an explicit receiver a half the caller may
      not call raises NoMethodError in its place, as CRuby does: the reader
@@ -1736,7 +1737,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   /* No reader at all -- no method, no attribute, no method_missing to
      answer it -- is the reader call's NoMethodError, raised before the
      value runs. The field-store way below has no ivar to store into. */
-  if (rk == SP_MEMBER_NONE && comp_method_in_chain(c, cid, "method_missing", NULL) < 0) {
+  if (rmi < 0 && rml.kind != ML_ATTR && comp_method_in_chain(c, cid, "method_missing", NULL) < 0) {
     TyKind want = repr_of(c, id).as_ty;
     if (want == TY_UNKNOWN || want == TY_VOID) want = TY_POLY;
     int trv = ++g_tmp; char rv[32]; snprintf(rv, sizeof rv, "_t%d", trv);
@@ -1748,16 +1749,15 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
                                                                     : default_value_from_compiler(c, want));
     return 1;
   }
-  if (rk != SP_MEMBER_METHOD && wk != SP_MEMBER_METHOD &&
+  if (rmi < 0 && wmi < 0 &&
       rvis == SP_VIS_PUBLIC && wvis == SP_VIS_PUBLIC) return 0;
   /* a method half takes the class that defines it, an ancestor of the
      receiver's (MethodAttr#block_params= on an AnyMethod) */
-  const char *rcn = c->classes[rk == SP_MEMBER_METHOD && rdc >= 0 ? rdc : cid].c_name;
-  const char *wcn = c->classes[wk == SP_MEMBER_METHOD && wdc >= 0 ? wdc : cid].c_name;
+  const char *rcn = c->classes[rmi >= 0 && rdc >= 0 ? rdc : cid].c_name;
+  const char *wcn = c->classes[wmi >= 0 && wdc >= 0 ? wdc : cid].c_name;
   /* Both halves have to exist for the pair to run; a missing one is
      NoMethodError in CRuby, which the ordinary call path reports. */
-  if (rk == SP_MEMBER_NONE || wk == SP_MEMBER_NONE) return 0;
-  if ((rk == SP_MEMBER_METHOD && rmi < 0) || (wk == SP_MEMBER_METHOD && wmi < 0)) return 0;
+  if ((rmi < 0 && rml.kind != ML_ATTR) || (wmi < 0 && wml.kind != ML_ATTR)) return 0;
 
   TyKind want = repr_of(c, id).as_ty;
   if (want == TY_UNKNOWN || want == TY_VOID) want = TY_POLY;
@@ -1770,13 +1770,13 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
                                                                     : default_value_from_compiler(c, want));
     return 1;
   }
-  TyKind rdt = (rk == SP_MEMBER_METHOD) ? (TyKind)c->scopes[rmi].ret : TY_UNKNOWN;
+  TyKind rdt = rmi >= 0 ? (TyKind)c->scopes[rmi].ret : TY_UNKNOWN;
   int rnb = -1;   /* a generated reader's ivar that keeps its nil in a nil bit */
   /* A generated reader is the ivar itself, read straight off the struct, so
      the temp takes the ivar's own type. Taking the expression's type put a
      boxed ivar into an sp_int when the def writer had no other call site to
      type its parameter (#4827); the arms below convert to `want`. */
-  if (rk != SP_MEMBER_METHOD) {
+  if (rmi < 0) {
     char rivn[300]; snprintf(rivn, sizeof rivn, "@%s", attr);
     int riv = comp_ivar_index(&c->classes[cid], rivn);
     TyKind ivt = riv >= 0 ? c->classes[cid].ivar_types[riv] : TY_UNKNOWN;
@@ -1793,7 +1793,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   int tr = ++g_tmp, tv = ++g_tmp, tw = ++g_tmp;
   /* a reader written out that answers its nil beside the value: the temp is
      that oint, the test its flag; a plain number reader is never nil */
-  int ro = (rk == SP_MEMBER_METHOD && oint_kind(rdt) && method_ret_is_oint(&c->scopes[rmi])) || rnb >= 0;
+  int ro = (rmi >= 0 && oint_kind(rdt) && method_ret_is_oint(&c->scopes[rmi])) || rnb >= 0;
   buf_puts(b, "({ ");
   emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, "; ");
   /* a receiver that can be nil raises for the reader first, as CRuby's
@@ -1803,7 +1803,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   /* the reader, once */
   if (ro) buf_puts(b, oint_ctype(rdt)); else emit_ctype(c, rdt, b);
   buf_printf(b, " _t%d = ", tv);
-  if (rk == SP_MEMBER_METHOD) {
+  if (rmi >= 0) {
     Buf rb; memset(&rb, 0, sizeof rb);
     buf_puts(&rb, mc_method(c, &c->scopes[rmi]));
     buf_printf(&rb, "((sp_%s *)_t%d)", rcn, tr);
@@ -1869,7 +1869,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
      stays in its oint form through the call and the answer: unwrapped, a
      nil raised before the writer could take it (`self.n &&= other`) */
   LocalVar *wpv = NULL;
-  if (wk == SP_MEMBER_METHOD && wvis == SP_VIS_PUBLIC) {
+  if (wmi >= 0 && wvis == SP_VIS_PUBLIC) {
     Scope *ws = &c->scopes[wmi];
     wpv = (ws->nparams > 0 && ws->pnames[0]) ? scope_local(ws, ws->pnames[0]) : NULL;
   }
@@ -1887,7 +1887,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   if (vt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tw);
   else if (!is_scalar_ret(vt) && !comp_ty_value_obj(c, vt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", tw);
   /* an attr writer is the ivar's store, `@x = v`: a frozen receiver refuses it */
-  if (wk != SP_MEMBER_METHOD && wvis == SP_VIS_PUBLIC) {
+  if (wmi < 0 && wvis == SP_VIS_PUBLIC) {
     char fobj[64]; snprintf(fobj, sizeof fobj, "((sp_%s *)_t%d)", c->classes[cid].c_name, tr);
     emit_frozen_obj_guard(c, cid, fobj, b);
   }
@@ -1896,7 +1896,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     char rv[32]; snprintf(rv, sizeof rv, "_t%d", tr);
     emit_orw_vis_raise(c, wvis, wn, cid, rt, rv, b);
   }
-  else if (wk == SP_MEMBER_METHOD) {
+  else if (wmi >= 0) {
     buf_puts(b, mc_method(c, &c->scopes[wmi]));
     buf_printf(b, "((sp_%s *)_t%d, ", wcn, tr);
     { Scope *ws = &c->scopes[wmi];
@@ -1925,7 +1925,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     else buf_puts(b, sw);
   }
   buf_puts(b, "); ");
-  if (wk != SP_MEMBER_METHOD && wvis == SP_VIS_PUBLIC) {
+  if (wmi < 0 && wvis == SP_VIS_PUBLIC) {
     char ivn[300], obj[64], mk[400];
     snprintf(ivn, sizeof ivn, "@%s", attr);
     snprintf(obj, sizeof obj, "((sp_%s *)_t%d)", c->classes[cid].c_name, tr);

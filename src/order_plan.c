@@ -189,9 +189,9 @@ static int call_is_poly_field_read(Compiler *c, int id) {
     return 0;
   for (int k = cls_set_next(s, -1); k >= 0; k = cls_set_next(s, k)) {
     if (k >= c->nclasses || c->classes[k].is_native_class) return 0;
-    int rdc = -1, mdc = -1;
+    int rdc = -1;
     if (!comp_reader_in_chain(c, k, nm, &rdc)) return 0;
-    if (comp_resolve_member(c, k, nm, 0, &mdc, NULL) != SP_MEMBER_ATTR) return 0;
+    if (!call_attr_target(c, -1, k, nm, 0, NULL)) return 0;
     if (comp_method_vis_in_chain(c, k, nm) != SP_VIS_PUBLIC) return 0;
   }
   return 1;

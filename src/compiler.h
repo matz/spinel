@@ -2872,15 +2872,6 @@ int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap);
 const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id);
 /* Resolve `name` through the class's (chain-aware) alias table to the
    underlying method/attr name. Returns `name` unchanged if not aliased. */
-/* What a name means on a class: nothing, an attribute (attr_reader/writer,
-   Struct member, ...), or an explicit method. Both tables can own one name;
-   comp_resolve_member arbitrates once for every emission site. */
-enum { SP_MEMBER_NONE = 0, SP_MEMBER_ATTR, SP_MEMBER_METHOD };
-/* `name` is the bare name for a read and the BASE name for a write (the method
-   consulted is then `name=`). Reports the defining class and, for a method, its
-   scope index. */
-int         comp_resolve_member(Compiler *c, int class_id, const char *name, int want_write,
-                                int *def_class, int *method_index);
 const char *comp_resolve_alias(Compiler *c, int class_id, const char *name);
 const char *comp_resolve_alias_at(Compiler *c, int class_id, const char *name, int *start_cls);
 const char *comp_resolve_cm_alias_at(Compiler *c, int class_id, const char *name, int *start_cls);

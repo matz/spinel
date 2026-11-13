@@ -17019,8 +17019,9 @@ static int eq_empty_array_literal(Compiler *c, int n) {
 /* a class whose instances compare with something other than Object#==: its
    own ==, a <=> (Comparable#== answers by it), or a native class's == */
 static int eq_class_has_own_eq(Compiler *c, int cid) {
-  return comp_resolve_member(c, cid, "==", 0, NULL, NULL) != SP_MEMBER_NONE ||
-         comp_resolve_member(c, cid, "<=>", 0, NULL, NULL) != SP_MEMBER_NONE ||
+  MethodLookup ml = { .def_class = -1 };
+  return call_answers(c, -1, cid, "==", 0, &ml) ||
+         call_answers(c, -1, cid, "<=>", 0, &ml) ||
          (c->classes[cid].is_native_class && comp_native_method_find(c, cid, "==", 1, 0) >= 0);
 }
 /* Comparable#== on a class with a `<=>` and no `==`: `(a <=> b) == 0`, but
@@ -17265,13 +17266,14 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
   TyKind rt = recv >= 0 ? rr.as_ty : TY_UNKNOWN;
   Repr a0r = repr_of(c, argc >= 1 ? argv[0] : -1);
   TyKind a0 = argc >= 1 ? a0r.as_ty : TY_UNKNOWN;
+  MethodLookup ml = { .def_class = -1 };
   /* Object#equal? is pointer identity and is never overridden, so a plain user
      object (e.g. a package's Set) answers it even with no user-defined method
      (#2629). A pointer-backed arg compares by address; anything else (a scalar,
      or a value-type object with no stable identity) is never the same object. */
   if (argc == 1 && sp_streq(name, "equal?") && recv >= 0 && ty_is_object(rt) &&
       !comp_ty_value_obj(c, rt) &&
-      comp_resolve_member(c, ty_object_class(rt), "equal?", 0, NULL, NULL) == SP_MEMBER_NONE) {
+      !call_answers(c, -1, ty_object_class(rt), "equal?", 0, &ml)) {
     if (ty_is_object(a0) && !comp_ty_value_obj(c, a0)) {
       buf_puts(b, "((void *)("); emit_expr(c, recv, b); buf_puts(b, ") == (void *)(");
       emit_expr(c, argv[0], b); buf_puts(b, "))");
@@ -17584,7 +17586,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       int ra = ty_is_array(rt) || ty_is_obj_array(rt) || eq_empty_array_literal(c, recv);
       int aa = ty_is_array(a0) || ty_is_obj_array(a0) || eq_empty_array_literal(c, argv[0]);
       if ((ra && ty_is_object(a0) &&
-           comp_resolve_member(c, ty_object_class(a0), "to_ary", 0, NULL, NULL) == SP_MEMBER_NONE) ||
+           !call_answers(c, -1, ty_object_class(a0), "to_ary", 0, &ml)) ||
           (aa && ty_is_object(rt) && !eq_class_has_own_eq(c, ty_object_class(rt)))) {
         buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (");
         emit_expr_for_effect(c, argv[0], b); buf_printf(b, "), %d)", eq ? 0 : 1);
@@ -26045,9 +26047,9 @@ int call_is_field_read(Compiler *c, int id, int *allocates) {
   if (!ty_is_object(rt)) return 0;
   int cid = ty_object_class(rt);
   if (cid < 0 || cid >= c->nclasses || c->classes[cid].is_native_class) return 0;
-  int rdc = -1, mdc = -1;
+  int rdc = -1;
   if (!comp_reader_in_chain(c, cid, nm, &rdc)) return 0;
-  if (comp_resolve_member(c, cid, nm, 0, &mdc, NULL) != SP_MEMBER_ATTR) return 0;
+  if (!call_attr_target(c, -1, cid, nm, 0, NULL)) return 0;
   /* a read that dispatches on the runtime class is a call */
   if (!comp_ty_value_obj(c, rt) && reader_override_ty(c, id, cid, nm) != TY_UNKNOWN) return 0;
   char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, cid, nm));
@@ -27930,7 +27932,7 @@ int ivar_nil_recv_guard(Compiler *c, int id, int *recv_out) {
   if (!g_debug && !(rr.may_nil && cplan_nil_written(nil_fact_why(c, recv)))) {
     if (!ivar_only_memo_written(c, ivn)) return 0;
     /* an attribute writer fills it from outside */
-    if (comp_resolve_member(c, cid, ivn + 1, 1, NULL, NULL) == SP_MEMBER_ATTR) return 0;
+    if (call_attr_target(c, -1, cid, ivn + 1, CT_WRITER, NULL)) return 0;
   }
   *recv_out = recv;
   return 1;
@@ -28718,12 +28720,13 @@ static void nil_target_recv_text(Compiler *c, int r, const char *rtext, Buf *b) 
    receiver as the method it names? */
 static int class_answers_name(Compiler *c, int call, int k, const char *name) {
   if (!name) return 0;
+  MethodLookup ml = { .def_class = -1 };
   if (call_target(c, call, k, name, 0, NULL) >= 0) return 1;
-  if (comp_resolve_member(c, k, name, 0, NULL, NULL) != SP_MEMBER_NONE) return 1;
+  if (call_answers(c, -1, k, name, 0, &ml)) return 1;
   int builtin = 0;
   const char *tn = comp_resolve_alias_ex(c, k, name, NULL, &builtin);
   return !builtin && !sp_streq(tn, name) &&
-         (call_target(c, call, k, tn, 0, NULL) >= 0 || comp_resolve_member(c, k, tn, 0, NULL, NULL) != SP_MEMBER_NONE);
+         (call_target(c, call, k, tn, 0, NULL) >= 0 || call_answers(c, -1, k, tn, 0, &ml));
 }
 /* Call id in value position with nil's answer beside it: the receiver and
    the arguments held in Ruby's order, then the answer for a NULL receiver
@@ -35863,7 +35866,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
       if (argsr >= 0) nt_arr(nt0, argsr, "arguments", &acr);
       TyKind rt0 = comp_ntype(c, recv0);
       if (acr == 0 && ty_is_object(rt0) &&
-          comp_resolve_member(c, ty_object_class(rt0), nm0, 0, NULL, NULL) == SP_MEMBER_ATTR) {
+          call_attr_target(c, -1, ty_object_class(rt0), nm0, 0, NULL)) {
         if (emit_or_take_back(c, id, b, emit_value_recv_call)) return;
       }
     }

@@ -1890,7 +1890,7 @@ typedef struct { TyRef slot; unsigned char local, reader; int cid, iv; } AliasSi
    member's setter), or any send or instance_variable_set may. */
 static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
   static const char *const dyn[] = { "send", "public_send", "__send__", "instance_variable_set", NULL };
-  if (comp_resolve_member(c, cls, ivn + 1, 1, NULL, NULL) == SP_MEMBER_NONE) return 0;
+  if (!call_answers(c, -1, cls, ivn + 1, CT_WRITER, NULL)) return 0;
   char setter[300];
   snprintf(setter, sizeof setter, "%s=", ivn + 1);
   /* a call of the writer's name whose receiver may be an object of the
@@ -1921,8 +1921,10 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
      parameter (ivar_writes_fresh) */
   if (nt_kind(c->nt, n) == NK_CallNode) {
     const char *ivn = NULL;
-    int cls = ivar_src_slot(c, n, &ivn), dc = -1;
-    if (cls < 0 || comp_resolve_member(c, cls, ivn + 1, 0, &dc, NULL) != SP_MEMBER_ATTR || dc < 0) return 0;
+    int cls = ivar_src_slot(c, n, &ivn);
+    MethodLookup rml = { .def_class = -1 };
+    if (cls < 0 || !call_attr_target(c, -1, cls, ivn + 1, 0, &rml) || rml.def_class < 0) return 0;
+    int dc = rml.def_class;
     ClassInfo *ci = &c->classes[dc];
     int iv = comp_ivar_index(ci, ivn);
     /* a Struct member of a Struct with no initialize of its own is set by
@@ -7373,8 +7375,7 @@ int ivar_src_slot(Compiler *c, int v, const char **ivn) {
     TyKind rt = infer_type(c, r);
     if (ty_is_object(rt)) cls = ty_object_class(rt);
   }
-  int def_cls = -1, mix = -1;
-  if (cls < 0 || comp_resolve_member(c, cls, nm, 0, &def_cls, &mix) != SP_MEMBER_ATTR) return -1;
+  if (cls < 0 || !call_attr_target(c, -1, cls, nm, 0, NULL)) return -1;
   ivb[0] = '@'; strcpy(ivb + 1, nm);
   *ivn = ivb;
   return cls;
@@ -7624,9 +7625,8 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   if (icls >= 0) {
     ClassInfo *ci = &c->classes[icls];
     int ivi = comp_ivar_index(ci, ivn);
-    int wdc = -1, wmi = -1;
     if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap ||
-        comp_resolve_member(c, icls, ivn + 1, 1, &wdc, &wmi) == SP_MEMBER_ATTR ||
+        (call_attr_target(c, -1, icls, ivn + 1, CT_WRITER, NULL)) ||
         !ivar_writes_fresh(c, icls, ivn, 0, NULL)) return 0;
     if (!apply) return 1;
     int ch = 0;
@@ -11308,9 +11308,8 @@ static int infer_conditional_writer_param(Compiler *c, int id) {
   if (recv < 0 || val < 0 || !name) return 0;
   TyKind rt = infer_type(c, recv);
   if (!ty_is_object(rt)) return 0;
-  int mi = -1;
-  if (comp_resolve_member(c, ty_object_class(rt), name, 1, NULL, &mi) != SP_MEMBER_METHOD || mi < 0)
-    return 0;
+  int mi = call_target(c, -1, ty_object_class(rt), name, CT_WRITER, NULL);
+  if (mi < 0) return 0;
   Scope *ws = &c->scopes[mi];
   LocalVar *pv = ws->nparams > 0 && ws->pnames[0] ? scope_local(ws, ws->pnames[0]) : NULL;
   if (!pv || pv->rbs_seeded) return 0;
@@ -14215,7 +14214,7 @@ static int struct_to_h_with_block(Compiler *c, int id) {
   if (!nm || !sp_streq(nm, "to_h") || recv < 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
   TyKind rt = infer_type(c, recv);
   if (!ty_is_object(rt) || !c->classes[ty_object_class(rt)].is_struct) return 0;
-  return comp_resolve_member(c, ty_object_class(rt), nm, 0, NULL, NULL) == SP_MEMBER_NONE;
+  return !call_answers(c, -1, ty_object_class(rt), nm, 0, NULL);
 }
 
 /* A CallNode at the source position of `like`. */

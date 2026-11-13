@@ -1262,8 +1262,9 @@ int infer_arysub_call(Compiler *c, int id, TyKind *out) {
    arbitration: the ivar's type in the class that defines the reader, through
    any alias. */
 int attr_reader_ty(Compiler *c, int cid, const char *name, TyKind *out) {
-  int rdcls = -1;
-  if (comp_resolve_member(c, cid, name, 0, &rdcls, NULL) != SP_MEMBER_ATTR) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  if (!call_attr_target(c, -1, cid, name, 0, &ml)) return 0;
+  int rdcls = ml.def_class;
   const char *rname = comp_resolve_alias(c, cid, name);
   char ivn[256];
   snprintf(ivn, sizeof ivn, "@%s", rname);
@@ -1447,13 +1448,13 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       int wdefc = -1;
       /* only while the attribute's writer is the one the call reaches: an
          explicit `def x=` at an equal-or-more-derived class wins, as the
-         emitter decides (comp_resolve_member), and its value is the
+         emitter decides (call_target), and its value is the
          argument as written (the rule below). Typed from the attribute's
          boxed slot instead, the expression read as poly while the emitter
          handed back the raw argument (`def x=(v) = super` under
          --int-overflow=promote). */
       if (comp_writer_in_chain(c, cid, base, &wdefc) && argc >= 1 &&
-          comp_resolve_member(c, cid, base, 1, NULL, NULL) == SP_MEMBER_ATTR) {
+          call_attr_target(c, -1, cid, base, CT_WRITER, NULL)) {
         TyKind rhsk = infer_type(c, argv[0]);
         /* (a handle local's value is its String face, as an ivar write's is) */
         if (rhsk == TY_STRBUF) rhsk = TY_STRING;

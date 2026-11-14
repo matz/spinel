@@ -35368,6 +35368,7 @@ static char *pf_init_versions(Compiler *c, int n0) {
 }
 
 int make_yield_proc_forms(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   NodeTable *nt = (NodeTable *)c->nt;
   int made = 0, n0 = c->nscopes;
   mark_ctor_cycles(c);
@@ -35510,6 +35511,7 @@ int make_yield_proc_forms(Compiler *c) {
     }
   }
   free(init_versions);
+  mtab_leave(c);
   return made;
 }
 
@@ -44813,6 +44815,7 @@ static MixinFileFrom *mixin_files_from(Compiler *c) {
   return ff;
 }
 static void refuse_mixin_after_calls(Compiler *c) {
+  mtab_enter(c);   /* (refusal: it asks a call's question of the tables as they stand, and fills none) */
   const NodeTable *nt = c->nt;
   /* the classes' includes and prepends, as the load record has them, in the
      order they run; one that may not run is left out, as is a core class's
@@ -44937,6 +44940,7 @@ static void refuse_mixin_after_calls(Compiler *c) {
     }
   }
   free(ev); free(run); free(ff);
+  mtab_leave(c);
 }
 
 /* Can evaluating `e` do anything observable? A read of a local, an ivar or a
@@ -48600,6 +48604,7 @@ static int reinit_reaches(Compiler *c, int si, int k, int depth) {
 }
 
 static void refuse_reinit_mismatch(Compiler *c) {
+  mtab_enter(c);   /* (refusal: it asks a call's question of the tables as they stand, and fills none) */
   const NodeTable *nt = c->nt;
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].instantiated) continue;
@@ -48620,6 +48625,7 @@ static void refuse_reinit_mismatch(Compiler *c) {
         "call that from both.");
     }
   }
+  mtab_leave(c);
 }
 
 /* Does constant `k` name a class of the program whose chain of superclass

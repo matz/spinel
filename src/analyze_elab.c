@@ -107,6 +107,7 @@ struct LoadRecord {
   unsigned char *bits;       /* [n] LR_* */
   int n, ncap, nregion;
   struct ElabWalk *walk;     /* the registration's walk, while it runs (elab_walk_enter) */
+  ANameHash cn_name, cn_leaf; int *cn_cls, cn_n, cn_cap, cn_done;   /* the classes registered so far, each by its Ruby name and by the last segment of it, in class order (lr_walk_class_by_name) */
   unsigned ver;              /* the node table the map is of */
   int check, shown;
   LrCheck fam[LR_CHECK_MAX];
@@ -1493,6 +1494,12 @@ void elab_names_end(ElabNames *nx) {
   ani_free(&nx->byleaf);
   nx->hdr_unknown = nx->hdr_built = nx->cls_built = 0;
 }
+/* The last segment of a Ruby name. */
+static const char *lr_ruby_leaf(const char *rn) {
+  const char *l = rn;
+  for (const char *q = strstr(rn, "::"); q; q = strstr(q + 2, "::")) l = q + 2;
+  return l;
+}
 /* The program's classes by Ruby name and by the last segment of it, in
    class order within a name. Built on the first ask, as the scans it
    replaces ran from it: class_ruby_name keeps the name it first builds. */
@@ -1500,11 +1507,10 @@ static void lr_names_classes(Compiler *c, ElabNames *nx) {
   if (nx->cls_built) return;
   nx->cls_built = 1;
   for (int k = 0; k < c->nclasses; k++) {
-    const char *rn = class_ruby_name(c, k), *l = rn;
+    const char *rn = class_ruby_name(c, k);
     if (!rn) continue;
-    for (const char *q = strstr(rn, "::"); q; q = strstr(q + 2, "::")) l = q + 2;
     ani_add(&nx->byname, rn, k);
-    ani_add(&nx->byleaf, l, k);
+    ani_add(&nx->byleaf, lr_ruby_leaf(rn), k);
   }
   ani_sort(&nx->byname);
   ani_sort(&nx->byleaf);
@@ -1517,24 +1523,66 @@ static int lr_class_by_name(const ANameIndex *x, const char *name, int *n) {
   if (n) *n = cnt;
   return cnt ? x->e[lo].v : LR_UNKNOWN_CLASS;
 }
-/* The first class of the program whose Ruby name (leaf: the last segment of
-   it) is name, LR_UNKNOWN_CLASS for none; *n, when given, how many have it.
-   With the lookups (nx) a bisection; without them, for a caller that asks
-   once while the walk is still registering classes, the scan of every class. */
-static int lr_find_class(Compiler *c, ElabNames *nx, int leaf, const char *name, int *n) {
-  if (nx) {
-    lr_names_classes(c, nx);
-    return lr_class_by_name(leaf ? &nx->byleaf : &nx->byname, name, n);
-  }
-  int cnt = 0, first = LR_UNKNOWN_CLASS;
-  for (int k = 0; k < c->nclasses; k++) {
-    const char *rn = class_ruby_name(c, k), *l = rn;
+/* The classes the walk has registered, by Ruby name and by its last
+   segment, for the walk's own lookups (elab_header_entity asks once per
+   header, while classes are still being registered, so an index built after
+   the walk cannot serve it). Each ask extends them to the classes registered
+   since the last, in class order. The index answers as the scan it replaces
+   because nothing renames or re-encloses a class during the walk: a class
+   gets its enclosing class and its Ruby path as it is registered, and the
+   qualification renames classes after the walk, so the name read for a class
+   when it is first asked about is the name it keeps (a top-level class
+   answers its own name, uncached, which no step of the walk changes
+   either). An entry whose class no longer carries the name is skipped
+   (lr_walk_class_by_name); the one case that check cannot catch is a class
+   that gains a name after it was indexed, which the walk does not do: it
+   registers a class under the name it keeps (a builder `X = Class.new`
+   registers the class as X, as it is written). The names are the index's
+   own copies. */
+static void lr_walk_classes(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  for (int k = r->cn_done; k < c->nclasses; k++) {
+    const char *rn = class_ruby_name(c, k);
     if (!rn) continue;
-    if (leaf) for (const char *q = strstr(rn, "::"); q; q = strstr(q + 2, "::")) l = q + 2;
-    if (sp_streq(leaf ? l : rn, name) && !cnt++) first = k;
+    char *own = strdup(rn);
+    if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (r->cn_n == r->cn_cap) {
+      r->cn_cap = r->cn_cap ? r->cn_cap * 2 : 64;
+      r->cn_cls = realloc(r->cn_cls, sizeof *r->cn_cls * (size_t)r->cn_cap);
+      if (!r->cn_cls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    r->cn_cls[r->cn_n++] = k;
+    anh_add(&r->cn_name, own);
+    anh_add(&r->cn_leaf, lr_ruby_leaf(own));
+  }
+  r->cn_done = c->nclasses;
+}
+/* The first class registered whose Ruby name (leaf: the last segment of it)
+   is name, LR_UNKNOWN_CLASS for none; *n, when given, how many have it. A
+   class whose name has changed since it was indexed is not one. */
+static int lr_walk_class_by_name(Compiler *c, int leaf, const char *name, int *n) {
+  LoadRecord *r = c->lrec;
+  const ANameHash *h = leaf ? &r->cn_leaf : &r->cn_name;
+  int cnt = 0, first = LR_UNKNOWN_CLASS;
+  lr_walk_classes(c);
+  for (int i = h->nb ? h->head[sp_strhash(name) % (unsigned)h->nb] : -1; i >= 0; i = h->next[i]) {
+    if (!sp_streq(h->key[i], name)) continue;
+    int k = r->cn_cls[i];
+    const char *rn = class_ruby_name(c, k);
+    if (!rn || !sp_streq(leaf ? lr_ruby_leaf(rn) : rn, name)) continue;
+    if (!cnt++ || k < first) first = k;
   }
   if (n) *n = cnt;
   return first;
+}
+/* The first class of the program whose Ruby name (leaf: the last segment of
+   it) is name, LR_UNKNOWN_CLASS for none; *n, when given, how many have it.
+   With the lookups (nx) a bisection; without them, for the walk's lookups,
+   the classes registered so far (lr_walk_class_by_name). */
+static int lr_find_class(Compiler *c, ElabNames *nx, int leaf, const char *name, int *n) {
+  if (!nx) return lr_walk_class_by_name(c, leaf, name, n);
+  lr_names_classes(c, nx);
+  return lr_class_by_name(leaf ? &nx->byleaf : &nx->byname, name, n);
 }
 /* A path from a core constant the program does not reopen as a class
    (`Regexp::Syntax::Token`) is absolute: the class whose header spells
@@ -10562,6 +10610,8 @@ void elab_free(Compiler *c) {
   for (int i = 0; r->check && i < LR_CHECK_MAX && r->fam[i].reader; i++)
     fprintf(stderr, "spinel-elab-check: family=\"%s\" asked=%ld differ=%ld\n", r->fam[i].reader, r->fam[i].asked, r->fam[i].differ);
   lr_record_drop(r);
+  for (int i = 0; i < r->cn_name.n; i++) free((char *)r->cn_name.key[i]);
+  anh_free(&r->cn_name); anh_free(&r->cn_leaf); free(r->cn_cls);
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
   free(r->plan.rend); free(r->plan.rinst); free(r->plan.urun); free(r->plan.rentry);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);

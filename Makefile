@@ -6059,8 +6059,8 @@ CLASS_MACRO_STATE_LIMIT ?= 2.2
 # scan of every write for each is N^2. The parent map's walk counts a unit per
 # node (an_parent_map), so a pass that rebuilds the map once per node reads
 # N^2 here too. The walk's lookup of a header's owner under a builtin's path
-# (elab_header_entity, counted as elab_header_owner) scans every class for
-# each such header: N^2, and the leg is over its limit until it is an index.
+# (elab_header_entity, counted as elab_header_owner) reads the classes
+# registered so far by name (LoadRecord) for each such header, not every class.
 # The read of that class (String::H<i>.h) asks the load record for it by the
 # Ruby path it spells (lr_class_by_core_path, lr_class_by_written_path_at),
 # and the class pass renames the reads it asks about

@@ -1650,14 +1650,18 @@ const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
   /* a %p or %s formats by inspect / to_s, which allocate: a list the call
      made for this (an Array of Floats boxed for it) was freed partway */
   SP_GC_ROOT_STR(fmt); SP_GC_ROOT(a);
-  size_t cap = strlen(fmt) + 64;
+  /* the format's bytes, a NUL among them: CRuby copies one like any other
+     byte, where reading it as a C string ended the format there */
+  size_t flen = sp_str_byte_len(fmt);
+  const char *pend = fmt + flen;
+  size_t cap = flen + 64;
   char *buf = (char *)malloc(cap);
   if (!buf) { perror("malloc"); exit(1); }
   size_t out = 0; sp_int idx = 0; const char *p = fmt;
   /* CRuby refuses to mix numbered (%1$s), sequential (%s) and named (%<a>d)
      references in one format string (#3723) */
   sp_bool used_numbered = FALSE, used_sequential = FALSE, used_named = FALSE;
-  while (*p) {
+  while (p < pend) {
     if (*p != '%') {
       if (out + 1 >= cap) { cap = cap * 2; buf = (char *)realloc(buf, cap); }
       buf[out++] = *p++; continue;
@@ -1688,7 +1692,7 @@ const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
        follows; %{name} is the conversion itself, the value's to_s, padded as
        a %s when flags came before it. */
     sp_RbVal named_v = sp_box_nil(); sp_bool have_named = FALSE, brace_named = FALSE;
-    while (*p && sl < sizeof(spec) - 8) {
+    while (p < pend && sl < sizeof(spec) - 8) {
       char c = *p;
       if (c == '*') {
         /* dynamic width / precision: the next positional argument supplies the
@@ -1737,7 +1741,7 @@ const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
       continue;
     }
     /* a trailing bare `%` is a malformed format, not a literal (#3723) */
-    if (!brace_named && !*p) { free(buf); sp_raise_cls("ArgumentError", "incomplete format specifier; use %% (double %) instead"); }
+    if (!brace_named && p >= pend) { free(buf); sp_raise_cls("ArgumentError", "incomplete format specifier; use %% (double %) instead"); }
     char conv = brace_named ? 's' : *p++; spec[sl++] = conv;
     /* Ruby's %u is %d: it prints a negative as -N rather than wrapping */
     if (conv == 'u') { conv = 'd'; spec[sl - 1] = 'd'; }

@@ -4812,9 +4812,9 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     if (repr_of(c, argv[0]).kind == RK_BOXED) snprintf(fa, sizeof fa, "sp_poly_arg_str_chk(_t%d)", atmp[0]);
     else snprintf(fa, sizeof fa, "%s", strarg);
     if (ret == TY_POLY)
-      buf_printf(b, " case SP_BUILTIN_TIME: _t%d = sp_box_str(sp_time_strftime((sp_Time *)_t%d.v.p, %s)); break;", tr, tv, fa);
+      buf_printf(b, " case SP_BUILTIN_TIME: _t%d = sp_box_str(sp_time_strftime_s((sp_Time *)_t%d.v.p, %s)); break;", tr, tv, fa);
     else
-      buf_printf(b, " case SP_BUILTIN_TIME: _t%d = sp_time_strftime((sp_Time *)_t%d.v.p, %s); break;", tr, tv, fa);
+      buf_printf(b, " case SP_BUILTIN_TIME: _t%d = sp_time_strftime_s((sp_Time *)_t%d.v.p, %s); break;", tr, tv, fa);
     /* with user arms in the switch, the default is theirs to emit */
     if (ps->ncand == 0)
       buf_printf(b, " default: sp_raise_cls(\"NoMethodError\", sp_nomethod_msg(\"strftime\", _t%d)); break;", tv);

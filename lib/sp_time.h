@@ -163,6 +163,7 @@ sp_Time *sp_time_add_i(const sp_Time *t, int64_t secs);
 sp_Time *sp_time_sub_i(const sp_Time *t, int64_t secs);
 double sp_time_sub_t(const sp_Time *a, const sp_Time *b);
 const char *sp_time_strftime(const sp_Time *t, const char *fmt);
+const char *sp_time_strftime_s(const sp_Time *t, const char *fmt);   /* fmt by its byte length */
 const char *sp_time_iso8601(const sp_Time *t);
 const char *sp_time_httpdate(const sp_Time *t);
 const char *sp_time_rfc2822(const sp_Time *t);

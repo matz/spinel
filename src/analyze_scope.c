@@ -1575,6 +1575,17 @@ static void wcn_add(char *out, size_t cap, const char *t) { strncat(out, t, cap 
 static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap, char *rb, size_t rcap) {
   const NodeTable *nt = c->nt;
   if (np < 0 || !nt_int(nt, np, "qc_qual", 0) || cap < 2) return 0;
+  int owner = scope_qualified_name(c, id, np, (int)nt_int(nt, np, "qc_salt", 0), out, cap, rb, rcap);
+  /* the readers after the walk find the name on the node */
+  nt_node_set_str((NodeTable *)nt, np, "qc_name", out);
+  nt_node_set_int((NodeTable *)nt, np, "qc_owner", owner + 2);
+  return 1;
+}
+/* The qualified name of header id (its constant path np) with salt
+   leading underscores, built as walk_class_c_name describes; its Ruby
+   path in rb when asked. The owner the name is built from. */
+int scope_qualified_name(Compiler *c, int id, int np, int salt, char *out, size_t cap, char *rb, size_t rcap) {
+  const NodeTable *nt = c->nt;
   int owner = -2;
   elab_header_class(c, id, &owner, NULL);
   NodeKind nk = nt_kind(nt, np);
@@ -1589,7 +1600,7 @@ static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap,
     owner = pc >= 0 && !c->classes[pc].is_builtin_const ? pc : -1;
   }
   out[0] = 0;
-  for (int k = 0; k < (int)nt_int(nt, np, "qc_salt", 0); k++) wcn_add(out, cap, "_");
+  for (int k = 0; k < salt; k++) wcn_add(out, cap, "_");
   const char *seg[QC_MAXDEPTH + 1]; int ns = 0;
   for (int k = owner; k >= 0 && ns <= QC_MAXDEPTH; k = c->classes[k].enclosing_class) {
     const char *rn = class_ruby_name(c, k), *q = rn;
@@ -1599,15 +1610,13 @@ static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap,
   while (ns > 0) { wcn_add(out, cap, seg[--ns]); wcn_add(out, cap, "__"); }
   const char *leaf = nt_str(nt, np, "name");
   if (leaf) wcn_add(out, cap, leaf);
-  /* the readers after the walk find the name on the node */
-  nt_node_set_str((NodeTable *)nt, np, "qc_name", out);
   /* and its Ruby path, when asked: the owner's, then the leaf */
   if (rb && rcap > 1) {
     rb[0] = 0;
     if (owner >= 0) { wcn_add(rb, rcap, class_ruby_name(c, owner)); wcn_add(rb, rcap, "::"); }
     if (leaf) wcn_add(rb, rcap, leaf);
   }
-  return 1;
+  return owner;
 }
 
 /* `class C < S` (or `C = Class.new(S) do ... end`) where the constant S
@@ -1748,6 +1757,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       }
     }
     else if (nt_kind(c->nt, sexpr) == NK_ConstantReadNode || nt_kind(c->nt, sexpr) == NK_ConstantPathNode) {
+      elab_place_path(c, id, sexpr, &w.pos);   /* (the record names the class there) */
       int ci = singleton_const_class(c, sexpr, class_id);
       native_reopen = ci == -2;
       if (ci >= 0 || native_reopen) {
@@ -2004,8 +2014,10 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       dm_cmethod = 1;
       NodeKind dsm_rk = nt_kind(c->nt, dm_recv);
       if (dm_recv < 0) dm_cls = class_id;
-      else if (dsm_rk == NK_ConstantReadNode || dsm_rk == NK_ConstantPathNode)
+      else if (dsm_rk == NK_ConstantReadNode || dsm_rk == NK_ConstantPathNode) {
+        elab_place_path(c, id, dm_recv, &w.pos);   /* (the record names the class there) */
         dm_cls = singleton_const_class(c, dm_recv, class_id);
+      }
       else if (dsm_rk == NK_SelfNode) dm_cls = class_id;
       else dm_cls = -1;
       dm_ok = dm_cls >= 0 || dm_cls == -2;

@@ -7094,6 +7094,131 @@ void qualify_colliding_classes(Compiler *c) {
   if (!any) { qc_free_headers(); free(ws); }
 }
 
+/* The rule that decides, after the walk, whether header id (of class k)
+   takes a qualified name: it is nested (its entity's owner is a class or
+   module other than Object, a path headed by a builtin's name only where
+   a segment or a lexical header stands between), and its leaf is also
+   another class's, a builtin's, or a value constant's the record keys
+   apart from it. qc_rule_prepare indexes the classes' leaves and the
+   constant writes once (keys: elab_const_key_map's, by node), so each
+   header's question walks only its own leaf's entries. */
+static struct {
+  ANameHash leaves;  int *lcls, ncls;          /* each class's leaf, its class */
+  ANameHash wnames;  int *wnode, *wown, nw;    /* the constant writes by name, each write's owner */
+  ANameHash wkeys;                             /* the writes' keys (the name where none) */
+  ANameHash natives;                           /* native_struct's "A::B::C" names */
+  char **keys;
+} qcr;
+static const char *qcr_leaf(Compiler *c, int k) {
+  const char *rn = class_ruby_name(c, k), *q = rn;
+  for (const char *p = rn ? strstr(rn, "::") : NULL; p; p = strstr(p + 2, "::")) q = p + 2;
+  return q;
+}
+void qc_rule_prepare(Compiler *c, char **keys) {
+  const NodeTable *nt = c->nt;
+  memset(&qcr, 0, sizeof qcr);
+  qcr.keys = keys;
+  qcr.lcls = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
+  for (int j = 0; j < c->nclasses; j++)
+    if (!c->classes[j].is_builtin_const && class_ruby_name(c, j)) { qcr.lcls[qcr.ncls++] = j; anh_add(&qcr.leaves, qcr_leaf(c, j)); }
+  int cap = 0;
+  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn) continue;
+    /* (the owner it is written under: its innermost header's class, Object's at the top) */
+    int wo = comp_core_class(c, CORE_OBJECT);
+    for (int a = comp_parent_map(c)[w]; a >= 0; a = comp_parent_map(c)[a])
+      if (nt_kind(nt, a) == NK_ClassNode || nt_kind(nt, a) == NK_ModuleNode) { wo = elab_header_class(c, a, NULL, NULL); break; }
+      else if (nt_kind(nt, a) == NK_SingletonClassNode) { wo = -3; break; }
+    if (qcr.nw == cap) {
+      cap = cap ? cap * 2 : 64;
+      qcr.wnode = realloc(qcr.wnode, sizeof(int) * (size_t)cap);
+      qcr.wown = realloc(qcr.wown, sizeof(int) * (size_t)cap);
+    }
+    qcr.wnode[qcr.nw] = w; qcr.wown[qcr.nw++] = wo;
+    anh_add(&qcr.wnames, wn);
+    anh_add(&qcr.wkeys, keys && keys[w] ? keys[w] : wn);
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, ns) {
+    const char *nm = nt_str(nt, ns, "name");
+    if (!nm || !sp_streq(nm, "native_struct") || nt_ref(nt, ns, "receiver") >= 0) continue;
+    int args = nt_ref(nt, ns, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    const char *cn = an > 0 && nt_kind(nt, av[0]) == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
+    if (cn && strstr(cn, "::")) anh_add(&qcr.natives, cn);
+  }
+}
+void qc_rule_release(void) {
+  anh_free(&qcr.leaves); anh_free(&qcr.wnames); anh_free(&qcr.wkeys); anh_free(&qcr.natives);
+  free(qcr.lcls); free(qcr.wnode); free(qcr.wown);
+  memset(&qcr, 0, sizeof qcr);
+}
+int qc_rule_qualifies(Compiler *c, int id, int k) {
+  const NodeTable *nt = c->nt;
+  /* (a header, or a builder's write: class_def_path is its name's node) */
+  int cp = class_def_path(nt, id);
+  /* (a Struct.new or Data.define write, which class_def_path leaves out) */
+  if (cp < 0 && nt_kind(nt, id) == NK_ConstantWriteNode) cp = id;
+  if (cp < 0 && nt_kind(nt, id) == NK_ConstantPathWriteNode) cp = nt_ref(nt, id, "target");
+  if (cp < 0 || k < 0 || k >= c->nclasses) return 0;
+  int owner = -2;
+  const char *leaf = NULL;
+  if (elab_header_class(c, id, &owner, &leaf) != k || !leaf) return 0;
+  int is_mod = class_def_is_module(nt, id);
+  int pp = nt_kind(nt, cp) == NK_ConstantPathNode || nt_kind(nt, cp) == NK_ConstantPathTargetNode ? nt_ref(nt, cp, "parent") : -1;
+  int nested = (owner >= 0 && owner != comp_core_class(c, CORE_OBJECT)) || (owner < -1 && pp >= 0);
+  if (pp >= 0) {
+    int hd = pp, segs = 1;
+    while (nt_kind(nt, hd) == NK_ConstantPathNode && nt_ref(nt, hd, "parent") >= 0) { hd = nt_ref(nt, hd, "parent"); segs++; }
+    const char *hn = nt_kind(nt, hd) == NK_ConstantReadNode ? nt_str(nt, hd, "name") : NULL;
+    if (hn && (is_builtin_class_name(hn) || is_builtin_module_name(hn)) && segs == 1) {
+      int lex = 0;
+      for (int a = comp_parent_map(c)[id]; a >= 0 && !lex; a = comp_parent_map(c)[a])
+        if (nt_kind(nt, a) == NK_ClassNode || nt_kind(nt, a) == NK_ModuleNode) lex = 1;
+      nested = lex;
+    }
+  }
+  if (!nested) return 0;
+  int others = 0;
+  for (int i = anh_find(&qcr.leaves, leaf); i >= 0 && !others; i = qcr.leaves.next[i])
+    if (sp_streq(qcr.leaves.key[i], leaf) && qcr.lcls[i] != k) others = 1;
+  int builtin = builtin_class_id(leaf) != 0 || (is_builtin_class_name(leaf) && !is_builtin_module_name(leaf)) ||
+                (is_builtin_module_name(leaf) && !is_mod) || is_untabled_native_class_name(leaf) ||
+                is_builtin_exception_name(leaf);
+  /* the header's own path as the record keys a value constant of it */
+  char qn[512]; size_t qo = 0; qn[0] = 0;
+  { const char *rn = class_ruby_name(c, k); int head = 1;
+    for (const char *p = rn; p && *p; head = 0) {
+      const char *q = strstr(p, "::"); size_t l = q ? (size_t)(q - p) : strlen(p);
+      char seg[128]; snprintf(seg, sizeof seg, "%.*s", (int)l, p);
+      p += l; if (q) p += 2;
+      if (head && q && (builtin_class_id(seg) != 0 || is_builtin_class_name(seg) || is_builtin_module_name(seg))) continue;
+      if (qo + l + 3 >= sizeof qn) break;
+      if (qo) { qn[qo++] = '_'; qn[qo++] = '_'; }
+      memcpy(qn + qo, seg, l); qo += l; qn[qo] = 0;
+    } }
+  /* a value constant whose key is this header's own path (`C64 =
+     Data.define` beside another module's C64, reopened by `class C64`);
+     a constant of the leaf that holds no class, written under another
+     owner, whose key is the bare leaf; or the leaf written both under
+     the header's owner and under another */
+  int plain = strstr(qn, "__") && anh_has(&qcr.wkeys, qn);
+  int own_w = 0, other_w = 0, ko = owner >= 0 ? owner : comp_core_class(c, CORE_OBJECT);
+  for (int i = anh_find(&qcr.wnames, leaf); i >= 0 && !plain; i = qcr.wnames.next[i]) {
+    if (!sp_streq(qcr.wnames.key[i], leaf)) continue;
+    int w = qcr.wnode[i], wo = qcr.wown[i];
+    if (wo == ko) own_w = 1; else other_w = 1;
+    if (class_def_builder(nt, w) >= 0 || class_def_is_record_call(nt, nt_ref(nt, w, "value"))) continue;
+    const char *key = qcr.keys && qcr.keys[w] ? qcr.keys[w] : leaf;
+    if (sp_streq(key, leaf) && wo != ko) plain = 1;
+  }
+  if (own_w && other_w) plain = 1;
+  if (!(others || builtin || plain)) return 0;
+  /* (the native class itself, under the path its declaration spells) */
+  if (class_ruby_name(c, k) && anh_has(&qcr.natives, class_ruby_name(c, k))) return 0;
+  return 1;
+}
+
 /* Are there reads qualify_colliding_reads will key, after the walk? */
 int qualify_reads_pending(void) { return qc_defer_ws != NULL; }
 
@@ -49265,6 +49390,7 @@ static void an_phase_desugar_register(Compiler *c) {
   host_begin(&hs, &lc);
   scope_read_keys_from(c);   /* (the reads qualify keys after the walk: read_key_name) */
   AN_STEP_V("elab_program", elab_program(c, &hs));   /* walk_scope of each file's top level, and the load record */
+  elab_prov_apply(c);   /* the nested classes take their names, by the rule (qc_rule_qualifies) */
   scope_read_keys_from(NULL);
   qualify_colliding_reads(c);
   /* a def in a `K.instance_eval { }` block defines K's class method (the

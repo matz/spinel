@@ -8127,6 +8127,19 @@ static int lr_entity_own_at(Compiler *c, int owner, const char *leaf, LoadPoint 
   }
   return v;
 }
+/* The constant path `path` of node (a `class << A::B` header's), placed
+   now at node's child position, as the walk places it next: the record
+   resolves it there (elab_class_ref_at) before the walk reaches it */
+void elab_place_path(Compiler *c, int node, int path, const ElabPos *pos) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  if (!r || !r->walk || pos->e < 0 || path < 0) return;
+  lr_fit(r, nt->count);
+  ElabPos q = elab_child(c, node, path, pos);
+  for (int x = path; x >= 0 && (nt_kind(nt, x) == NK_ConstantPathNode || nt_kind(nt, x) == NK_ConstantReadNode);
+       x = nt_kind(nt, x) == NK_ConstantPathNode ? nt_ref(nt, x, "parent") : -1)
+    lr_place(r, x, &q);
+}
 int elab_header_entity(Compiler *c, int node, const ElabPos *pos) {
   LoadRecord *r = c->lrec;
   const NodeTable *nt = c->nt;
@@ -8802,6 +8815,105 @@ int elab_fire_after(Compiler *c, int list, int j) {
   return total;
 }
 
+/* The classes the walk made under a provisional name (elab_rec_open):
+   each one's class, the node that carries its name, its header, and the
+   name the walk would have given it; by that name in g_prov_names */
+static int *g_prov_cls, *g_prov_np, *g_prov_hdr; static char **g_prov_name; static int g_nprov;
+static ANameHash g_prov_names;
+static void elab_prov_note(Compiler *c, int ci, const char *name, int np, int hdr) {
+  (void)c;
+  g_prov_cls = realloc(g_prov_cls, sizeof(int) * (size_t)(g_nprov + 1));
+  g_prov_np = realloc(g_prov_np, sizeof(int) * (size_t)(g_nprov + 1));
+  g_prov_hdr = realloc(g_prov_hdr, sizeof(int) * (size_t)(g_nprov + 1));
+  g_prov_name = realloc(g_prov_name, sizeof(char *) * (size_t)(g_nprov + 1));
+  if (!g_prov_cls || !g_prov_np || !g_prov_hdr || !g_prov_name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  g_prov_cls[g_nprov] = ci; g_prov_np[g_nprov] = np; g_prov_hdr[g_nprov] = hdr; g_prov_name[g_nprov] = strdup(name);
+  anh_add(&g_prov_names, g_prov_name[g_nprov++]);
+}
+static void elab_prov_drop_derived(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++)
+    if (c->classes[k].ruby_name_derived) { free(c->classes[k].ruby_name_cache); c->classes[k].ruby_name_cache = NULL; c->classes[k].ruby_name_derived = 0; }
+}
+/* The class of name cname, a provisional class by the name it takes after
+   the walk too: the lowest index, as comp_class_index answers */
+static int elab_prov_index(Compiler *c, const char *cname) {
+  int ci = comp_class_index(c, cname);
+  for (int i = anh_find(&g_prov_names, cname); i >= 0; i = g_prov_names.next[i])
+    if (sp_streq(g_prov_names.key[i], cname) && (ci < 0 || g_prov_cls[i] < ci)) ci = g_prov_cls[i];
+  return ci;
+}
+/* After the walk: each provisional class takes its name. Every one takes
+   its leaf first, so that the Ruby paths the rule reads are built of the
+   leaves; then the rule (qc_rule_qualifies) decides which are qualified,
+   and those take the name built from their owner's final path, parents
+   first (the classes were made in that order), with a leading underscore
+   for each time the name is another class's. The headers' qc_name follows
+   the class. SPINEL_QC_RULE_CHECK reports where the rule and qualify's
+   mark disagree. */
+void elab_prov_apply(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  elab_prov_drop_derived(c);
+  if (!g_nprov) return;
+  const char *chk = getenv("SPINEL_QC_RULE_CHECK");
+  for (int i = 0; i < g_nprov; i++) {
+    const char *leaf = g_prov_np[i] >= 0 ? nt_str(nt, g_prov_np[i], "name") : NULL;
+    comp_class_rename(c, g_prov_cls[i], leaf ? leaf : g_prov_name[i]);
+  }
+  comp_class_relink(c);
+  elab_prov_drop_derived(c);
+  char **keys = elab_const_key_map(c);
+  qc_rule_prepare(c, keys);
+  unsigned char *q = calloc((size_t)g_nprov + 1, 1);
+  if (!q) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < g_nprov; i++) {
+    q[i] = (unsigned char)qc_rule_qualifies(c, g_prov_hdr[i], g_prov_cls[i]);
+    int mark = g_prov_np[i] >= 0 && nt_int(nt, g_prov_np[i], "qc_qual", 0);
+    if (chk && q[i] != mark)
+      fprintf(stderr, "qc-rule: %s:%lld %s rule=%d mark=%d\n", nt_file_path(nt, (int)nt_int(nt, g_prov_hdr[i], "node_file", 0)),
+              nt_int(nt, g_prov_hdr[i], "node_line", 0), class_ruby_name(c, g_prov_cls[i]), q[i], mark);
+  }
+  qc_rule_release();
+  for (int i = 0; i < nt->count; i++) free(keys[i]);
+  free(keys);
+  ANameHash done = { 0 };   /* the names given here */
+  for (int i = 0; i < g_nprov; i++) {
+    int ci = g_prov_cls[i], np = g_prov_np[i];
+    if (!q[i]) {
+      if (chk && np >= 0 && nt_str(nt, np, "qc_name"))
+        fprintf(stderr, "qc-rule: %s keeps a qualified name the walk stamped\n", class_ruby_name(c, ci));
+      continue;
+    }
+    char out[600], rb[600];
+    for (int salt = 0; ; salt++) {
+      scope_qualified_name(c, g_prov_hdr[i], np, salt, out, sizeof out, rb, sizeof rb);
+      int o = comp_class_index(c, out);
+      if (!((o >= 0 && o != ci) || anh_has(&done, out)) || salt > 8) break;
+    }
+    comp_class_rename(c, ci, out);
+    anh_add(&done, c->classes[ci].name);
+    nt_node_set_str(nt, np, "qc_name", out);
+    free(c->classes[ci].ruby_name_cache);
+    c->classes[ci].ruby_name_cache = strdup(rb);
+    c->classes[ci].ruby_name_derived = 0;
+  }
+  comp_class_relink(c);
+  anh_free(&done);
+  free(q);
+  elab_prov_drop_derived(c);
+  /* (another header of a provisional class names it by qc_name too: the
+     name its class has now) */
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    int np = k == NK_ClassNode || k == NK_ModuleNode ? nt_ref(nt, id, "constant_path") : id;
+    if (np < 0 || !nt_str(nt, np, "qc_name")) continue;
+    int ci = elab_header_class(c, id, NULL, NULL);
+    if (ci >= 0 && ci < c->nclasses && c->classes[ci].name && !sp_streq(nt_str(nt, np, "qc_name"), c->classes[ci].name))
+      nt_node_set_str(nt, np, "qc_name", c->classes[ci].name);
+  }
+  anh_free(&g_prov_names); memset(&g_prov_names, 0, sizeof g_prov_names);
+  for (int i = 0; i < g_nprov; i++) free(g_prov_name[i]);
+  g_nprov = 0;
+}
 /* The class the class or module header at node opens, as registration
    holds it under cname (the walk's spelling; rname, the Ruby path of a
    qualified one, NULL for the name as written): a new one, made here, whose
@@ -8818,11 +8930,21 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *
      alias, a write that may not have run), the class of its name */
   const LrHeader *h = c->lrec && c->lrec->walk ? lr_header(c->lrec, node, 0) : NULL;
   int ci = h && h->want >= 0 && h->want < c->nclasses ? h->want
-         : h && h->want == LR_NEW && comp_class_index(c, cname) < 0 ? -1
-         : comp_class_index(c, cname);
+         : h && h->want == LR_NEW && elab_prov_index(c, cname) < 0 ? -1
+         : elab_prov_index(c, cname);
   int made = ci < 0;
   if (made) {
-    comp_class_new(c, cname, node);
+    /* a nested class (the entity's owner, as the record holds it, is a
+       class or module other than Object), or one the walk named by a
+       qualified path, walks under a provisional name of its own:
+       elab_prov_apply names it after the walk, by the rule */
+    int nested_hdr = h && h->owner >= 0 && h->owner < c->nclasses && h->owner != comp_core_class(c, CORE_OBJECT);
+    if ((rname && strstr(cname, "__")) || nested_hdr) {
+      char prov[700]; snprintf(prov, sizeof prov, "%s_qcp%d", cname, c->nclasses);
+      comp_class_new(c, prov, node);
+      elab_prov_note(c, c->nclasses - 1, cname, cp >= 0 ? cp : node, node);
+    }
+    else comp_class_new(c, cname, node);
     ci = c->nclasses - 1;
     c->classes[ci].enclosing_class = encl; comp_class_path_moved();
     /* a qualified name comes with the Ruby path the walk resolved the
@@ -10689,13 +10811,10 @@ static void lr_set_ckey(NodeTable *nt, int node, const char *key) {
   nt_node_set_str(nt, node, "ckey_at", was);
   free(was);
 }
-void elab_const_keys(Compiler *c) {
+/* The record's constant entities, sorted by leaf and then owner path, each
+   value entity with its key (a class's entity has none) */
+static LrKeyEnt *lr_key_entities(Compiler *c, int *pne) {
   LoadRecord *r = c->lrec;
-  const char *e = getenv("SPINEL_CONST_KEY_CHECK");
-  int check = e && *e;
-  if (!r || !r->recorded) return;
-  LrKeyRename *q = NULL; int nq = 0, cq = 0;
-  const NodeTable *nt = c->nt;
   LrKeyEnt *es = calloc((size_t)r->nhist + 1, sizeof *es);
   int ne = 0;
   char buf[512];
@@ -10709,7 +10828,6 @@ void elab_const_keys(Compiler *c) {
   }
   lr_key_hists = r->hist;
   qsort(es, (size_t)ne, sizeof *es, lr_key_ent_cmp);
-  long same = 0, differ = 0;
   for (int i = 0, g0 = 0, g1 = 0; i < ne; i++) {
     const LrHist *h = &r->hist[es[i].h];
     /* the entities of the leaf, [g0, g1): es is sorted by leaf, then path */
@@ -10733,6 +10851,47 @@ void elab_const_keys(Compiler *c) {
     else if (collide && nested) snprintf(key, sizeof key, "%s__%s", es[i].path, h->name);
     else snprintf(key, sizeof key, "%s", h->name);
     es[i].key = strdup(key);
+  }
+  *pne = ne;
+  return es;
+}
+/* By node, the key of the value constant a write of the record writes
+   (the key elab_const_keys gives it), NULL elsewhere: an array of
+   nt->count entries the caller frees with its strings */
+char **elab_const_key_map(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  char **m = calloc((size_t)nt->count + 1, sizeof *m);
+  if (!m) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (!r || !r->recorded) return m;
+  int ne = 0;
+  LrKeyEnt *es = lr_key_entities(c, &ne);
+  for (int i = 0; i < ne; i++) {
+    const LrHist *h = &r->hist[es[i].h];
+    for (int v = 0; es[i].key && v < h->n; v++) {
+      int n = h->v[v].node, kn = n >= 0 ? lr_key_node(nt, n) : -1;
+      if (n >= 0 && n < nt->count && !m[n]) m[n] = strdup(es[i].key);
+      if (kn >= 0 && kn < nt->count && !m[kn]) m[kn] = strdup(es[i].key);
+    }
+  }
+  for (int i = 0; i < ne; i++) { free(es[i].path); free(es[i].key); }
+  free(es);
+  return m;
+}
+void elab_const_keys(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  const char *e = getenv("SPINEL_CONST_KEY_CHECK");
+  int check = e && *e;
+  if (!r || !r->recorded) return;
+  LrKeyRename *q = NULL; int nq = 0, cq = 0;
+  const NodeTable *nt = c->nt;
+  int ne = 0;
+  LrKeyEnt *es = lr_key_entities(c, &ne);
+  long same = 0, differ = 0;
+  for (int i = 0; i < ne; i++) {
+    const LrHist *h = &r->hist[es[i].h];
+    const char *key = es[i].key;
+    if (!key) continue;
     for (int v = 0; v < h->n; v++) {
       int kn = h->v[v].node >= 0 ? lr_key_node(nt, h->v[v].node) : -1;
       if (kn < 0) continue;

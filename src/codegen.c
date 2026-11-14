@@ -11840,6 +11840,7 @@ const char *class_ruby_name(Compiler *c, int ci) {
     strncat(buf, seg, sizeof(buf) - strlen(buf) - 1);
   }
   c->classes[ci].ruby_name_cache = strdup(buf);
+  c->classes[ci].ruby_name_derived = 1;
   return c->classes[ci].ruby_name_cache;
 }
 

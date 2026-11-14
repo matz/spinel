@@ -1130,6 +1130,7 @@ typedef struct {
   int nprep_chain, cprep_chain;
   int prep_shadow_count; /* next shadow index to assign */
   int enclosing_class;   /* index of enclosing module/class, or -1 for top-level */
+  unsigned char ruby_name_derived;   /* (ruby_name_cache is class_ruby_name's, built from the names) */
   char *ruby_name_cache; /* the qualified Ruby name, built once by
                             class_ruby_name. Cached so the pointer it returns
                             STAYS VALID: it used to be a shared static buffer,
@@ -2309,6 +2310,8 @@ int const_seg_builtin(Compiler *c, int id);
 
 /* Classes. */
 ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node);
+void comp_class_rename(Compiler *c, int i, const char *name);
+void comp_class_relink(Compiler *c);
 void       comp_class_nested(Compiler *c, int k, int encl);   /* class k lies inside class encl: not the builtin its leaf names */
 int        comp_class_in_namespace(const Compiler *c, int k);   /* does class k lie inside a class or module other than Object, whose body is the top level's? */
 int comp_toplevel_class_make(Compiler *c);

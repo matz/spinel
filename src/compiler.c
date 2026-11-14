@@ -1339,6 +1339,25 @@ ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node) {
   return ci;
 }
 
+/* The name chains, linked again after comp_class_rename */
+void comp_class_relink(Compiler *c) {
+  for (int b = 0; b < c->class_buckets; b++) c->class_head[b] = -1;
+  for (int k = 0; k < c->nclasses; k++) class_hash_link(c, k);
+}
+/* Class i takes the name `name` in place of the one comp_class_new gave it,
+   and the C name made of it. A lookup by name finds it under the new
+   name once comp_class_relink has run (one relink for many renames). */
+void comp_class_rename(Compiler *c, int i, const char *name) {
+  ClassInfo *ci = &c->classes[i];
+  free(ci->name);
+  ci->name = strdup(name);
+  free(ci->c_name);
+  ci->c_name = NULL;
+  ci->c_name = sp_class_c_name(c, name);
+  ci->is_builtin_const = is_builtin_class_name(name) || is_builtin_module_const_name(name);
+  comp_touch_class(i);
+}
+
 /* The compiler's top-level pseudo-class is made only when first needed. */
 int comp_toplevel_class_make(Compiler *c) {
   if (c->toplevel_class < 0) c->toplevel_class = comp_class_new(c, "Toplevel", -1)->idx;

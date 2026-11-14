@@ -26935,6 +26935,36 @@ static int range_lit_ends_ordered(Compiler *c, int v, int last) {
   return subtree_has_side_effect(c, lo) || subtree_has_side_effect(c, hi);
 }
 
+/* Does the subtree call a method on an Array or a Hash (`k[-2]`, `k.size`,
+   `x.first`)? Such a read runs no code, but it sees a change to the
+   container that happens beside it, by whatever name it reads it. */
+int subtree_reads_container(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;
+  if (nt_kind(nt, id) == NK_CallNode) {
+    int r = nt_ref(nt, id, "receiver");
+    TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
+    if (ty_is_array(rt) || ty_is_ptr_array(rt) || ty_is_hash(rt)) return 1;
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) if (subtree_reads_container(c, nt_ref_at(nt, id, i))) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) if (subtree_reads_container(c, ids[j])) return 1;
+  }
+  return 0;
+}
+/* Is call id a push or an append of several arguments, which its arms
+   write as one push per argument, each read where its push is? */
+int pushes_args_one_by_one(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || (!sp_streq(nm, "push") && !sp_streq(nm, "append")) || nt_ref(nt, id, "receiver") < 0) return 0;
+  int a = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+  return ac > 1 && !nt_argv_has_splat(nt, av, ac);
+}
 static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   /* The buffer arm holds its operands, including the handle a keyword
      may replace, before it checks or converts any of them. */
@@ -27043,6 +27073,16 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      (operand_held_for_later). */
   int held[nmax], nheld = 0;
   operands_held_for_later(c, operand, nop, recv >= 0, held);
+  /* A push or an append of several arguments pushes each before the next
+     is read, so an argument that reads an Array or a Hash -- one the
+     operand-order record calls a pure read, `k[-2]`, `k.size` -- is bound
+     first, in order, as CRuby reads every argument before the push: left
+     in place, `k.push(k[-2], k[-2])` read its second argument from the
+     Array the first push had grown. */
+  int push_reads = 0;
+  if (pushes_args_one_by_one(c, id))
+    for (int i = recv >= 0; i < nop; i++)
+      if (subtree_reads_container(c, operand[i])) held[i] = push_reads = 1;
   int nheld_value = 0;
   for (int i = 0; i < nop; i++) {
     nheld += held[i];
@@ -27251,8 +27291,9 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      binding them rooted each value on every iteration of a loop that only
      reads; the root pins the temp in memory and cost 1.7x on such a loop.
      Not when an operand converts: the conversion runs user code, in a hold
-     ahead of the call. */
-  if (!converts) {
+     ahead of the call. Nor for a push of several arguments that reads
+     its container (push_reads): the push itself moves what they read. */
+  if (!converts && !push_reads) {
     int pure = 1;
     for (int i = 0; i < nop && pure; i++)
       if (!subtree_is_pure_read(c, operand[i])) pure = 0;

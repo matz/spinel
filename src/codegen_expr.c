@@ -3125,12 +3125,14 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
       buf_printf(&ref, "civ_%s_%s", c->classes[cs->class_id].name, iv_c(nm + 1));  /* module/class-level ivar */
       is_static = 1;
     }
-    else if (cs && cs->class_id < 0 && g_ie_class_id >= 0) {
+    else if (cs && (cs->class_id < 0 ? g_ie_class_id >= 0 : ie_class_of(c, id) >= 0)) {
       /* inside instance_eval block: access ivar via receiver pointer; one
          the receiver's class never writes is nil, as on that object (the
-         struct has no field for it) */
+         struct has no field for it). In a method the block's scope is the
+         method's, and the receiver's class is the node's (ie_class_of: a
+         poly receiver's arm retypes it per class). */
       int has = 0;
-      for (int k = g_ie_class_id; k >= 0 && !has; k = c->classes[k].parent)
+      for (int k = cs->class_id < 0 ? g_ie_class_id : ie_class_of(c, id); k >= 0 && !has; k = c->classes[k].parent)
         has = comp_ivar_index(&c->classes[k], nm) >= 0;
       if (!has) is_nil = 1;
       else { snprintf(pfx, sizeof pfx, "%s%s", g_self, g_self_deref); buf_printf(&ref, "%siv_%s", pfx, iv_c(nm + 1)); }

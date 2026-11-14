@@ -11947,9 +11947,8 @@ TyKind infer_uncached(Compiler *c, int id) {
       TyKind pr = TY_UNKNOWN;
       for (int i = 0; i < npk; i++) {
         ClassInfo *pci = &c->classes[pk[i]];
-        int piv = comp_ivar_index(pci, nm);
-        if (piv < 0) continue;
-        TyKind t = pci->ivar_types[piv] == TY_STRBUF ? TY_STRING : pci->ivar_types[piv];
+        int piv = comp_ivar_index(pci, nm);   /* (nil in a class without it) */
+        TyKind t = piv < 0 ? TY_NIL : pci->ivar_types[piv] == TY_STRBUF ? TY_STRING : pci->ivar_types[piv];
         pr = pr == TY_UNKNOWN ? t : ty_unify(pr, t);
       }
       if (npk > 0) return pr;
@@ -11966,8 +11965,8 @@ TyKind infer_uncached(Compiler *c, int id) {
     int iv = nm ? comp_ivar_index(ci, nm) : -1;
     if (iv < 0) {
       /* an instance_eval/exec body reads its receiver's: one the receiver's
-         class never writes is nil there (emit_expr reads it so) */
-      int ie = s->class_id < 0 && (an_ie_class_id >= 0 || ie_class_of(c, id) >= 0);
+         class never writes is nil there, in a method too (emit_expr) */
+      int ie = ie_class_of(c, id) >= 0 || (s->class_id < 0 && an_ie_class_id >= 0);
       for (int k = ci->parent; ie && nm && k >= 0; k = c->classes[k].parent)
         if (comp_ivar_index(&c->classes[k], nm) >= 0) ie = 0;
       return ie && nm ? TY_NIL : TY_UNKNOWN;

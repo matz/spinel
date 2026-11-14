@@ -1413,6 +1413,7 @@ int *an_parent_map(const NodeTable *nt) {
   if (!parent) return NULL;
   for (int id = 0; id < nt->count; id++) parent[id] = -1;
   for (int id = 0; id < nt->count; id++) {
+    NT_WORK();   /* (a rebuilt map is a walk of the table, which the scale test counts) */
     int nr = nt_num_refs(nt, id);
     for (int i = 0; i < nr; i++) {
       int ch = nt_ref_at(nt, id, i);

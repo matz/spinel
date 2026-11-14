@@ -20120,6 +20120,15 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
     int tk = empty_body ? 0 : an_empty_container_kind(c, sc->body);
     if (r == TY_UNKNOWN && an_empty_container_disagrees(tk, ret_acc[s])) r = TY_POLY;
     r = ty_unify(r, ret_acc[s]);
+    /* ...and where nothing else settles a type (`return [] if d == 0;
+       m(d - 1) + [d]`, whose tail waits on the method's own value), once
+       the rounds are no longer optimistic the empty literal is the value,
+       as it is for an if/else arm (an_empty_arm_join): left UNKNOWN the
+       method became a void C function and the recursive call answered
+       nil. Only one kind of empty literal, and a tail that is not one. */
+    int ek = ret_empty ? ret_empty[s] : 0;
+    if (r == TY_UNKNOWN && !g_infer_optimistic && !tk && (ek == 1 || ek == 2))
+      r = ek == 1 ? TY_POLY_ARRAY : TY_POLY_POLY_HASH;
   }
   if (has_ret && has_ret[s] && ret_empty && ret_empty[s] &&
       (an_empty_container_disagrees(ret_empty[s] & 1, r) ||

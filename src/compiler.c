@@ -588,7 +588,10 @@ void comp_free(Compiler *c) {
   free(c->ver_vis_after); c->ver_vis_after = NULL; c->nver_vis_after = 0;
   free(c->ver_guards); c->ver_guards = NULL; c->nver_guards = 0;
   for (int i = 0; i < c->nver_vis_reads; i++) free(c->ver_vis_reads[i].name);
-  free(c->ver_vis_reads); c->ver_vis_reads = NULL; c->nver_vis_reads = c->ver_vis_read_new = 0; c->vis_cell_closed = 0; c->ver_vis_guard_stamp = 0;
+  free(c->ver_vis_reads); c->ver_vis_reads = NULL; c->nver_vis_reads = c->ver_vis_read_new = 0;
+  free(c->ver_vis_call_cell); c->ver_vis_call_cell = NULL; c->ver_vis_call_cap = 0;
+  free(c->ver_vis_scope_mark); c->ver_vis_scope_mark = NULL; c->ver_vis_scope_cap = 0;
+  free(c->ver_vis_hist_seen); c->ver_vis_hist_seen = NULL; c->ver_vis_hist_cap = 0; c->ver_vis_guard_stamp = 0;
   for (int i = 0; i < c->nrbp_slots; i++) free(c->rbp_slot_names[i]);
   free(c->rbp_slot_names); free(c->rbp_slot_lens); c->rbp_slot_names = NULL; c->rbp_slot_lens = NULL; c->nrbp_slots = 0;
   if (c->bp_name) for (unsigned i = 0; i <= c->bp_mask; i++) free(c->bp_name[i]);
@@ -2266,6 +2269,22 @@ int comp_name_answered(Compiler *c, const char *name, int is_cm) {
     ans = (is_cm ? comp_cmethod_in_chain(c, k, name, NULL) : comp_method_in_chain(c, k, name, NULL)) >= 0;
   mtab_leave(c);
   return ans;
+}
+
+/* See compiler.h. */
+int comp_name_answered_any_side(Compiler *c, const char *name) {
+  char wbase[256]; wbase[0] = '\0';
+  int is_wr = setter_base_name(name, wbase, sizeof wbase);
+  if (comp_name_answered(c, name, 0) || comp_name_answered(c, name, 1) || comp_name_reader_any(c, name) ||
+      (is_wr && comp_name_writer_any(c, wbase))) return 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    ClassInfo *ci = &c->classes[k];
+    /* (a native class's methods are its declared bindings, not scopes; a singleton accessor is a static
+       of the class, not a scope: `class << self; attr_reader`, singleton_class.attr_*) */
+    if (ci->is_native_class && comp_native_method_find(c, k, name, 0, 0) >= 0) return 1;
+    if (comp_is_sg_reader(ci, name) || comp_is_sg_civ(ci, name) || (is_wr && (comp_is_sg_writer(ci, wbase) || comp_is_sg_civ(ci, wbase)))) return 1;
+  }
+  return 0;
 }
 
 /* See compiler.h. */

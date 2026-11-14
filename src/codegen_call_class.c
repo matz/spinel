@@ -522,10 +522,11 @@ static const struct { const char *cls, *anc; } core_cls_ancestors[] = {
 #undef CCU
 #undef CCA
 
+/* (the method's name is compared ahead of the class's: a few entries share it, and the table is long) */
 static int core_own_vis(const char *cls, size_t cl, const char *m, const char **owner) {
   for (int i = 0; core_cls_methods[i].cls; i++)
-    if (strlen(core_cls_methods[i].cls) == cl && !strncmp(core_cls_methods[i].cls, cls, cl) &&
-        sp_streq(core_cls_methods[i].m, m)) {
+    if (core_cls_methods[i].m[0] == m[0] && sp_streq(core_cls_methods[i].m, m) &&
+        !strncmp(core_cls_methods[i].cls, cls, cl) && !core_cls_methods[i].cls[cl]) {
       if (owner && core_cls_methods[i].vis != CORE_VIS_UNDEF) *owner = core_cls_methods[i].cls;
       return core_cls_methods[i].vis;
     }
@@ -941,9 +942,6 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       qm = nt_str(nt, argv[0], "content");
       if (!qm) qm = nt_str(nt, argv[0], "unescaped");
     }
-    /* an exception answers a name a builtin exception's reopening defines
-       only when its runtime class is under that reopening: asked at run
-       time, the builtin surface beside it */
     /* main's def whose visibility only the run tells (a word under a condition, in a loop): every value
        answers by its cell, and a private one to a true include_all */
     const LocalVar *tg = qm && recv >= 0 && argc <= 2 && !ty_is_object(rt) && !any_class_responds(c, qm) ? cplan_top_def_cell(c, id, qm) : NULL;
@@ -958,6 +956,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (boxed) buf_puts(b, ")");
       return 1;
     }
+    /* an exception answers a name a builtin exception's reopening defines
+       only when its runtime class is under that reopening: asked at run
+       time, the builtin surface beside it */
     int xr[8], xn = 0;
     if (qm && recv >= 0 && rt == TY_EXCEPTION && argc == 1) xn = exc_reopen_definers(c, qm, xr, 8);
     if (xn > 0) {
@@ -6379,12 +6380,13 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   return 0;
 }
 
+static int emit_root_reopen_call_plain(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv, int ci, int mi);
 /* A call a visibility cell guards (CallPlan.vis_cell): main's def, which the lookup binds where
    its visibility only the run tells, runs unless the cell holds private, where the call
-   raises the private method's NoMethodError as a closed call does (emit_vis_refusal, asked
-   as if the lookup had said private). Answers whether it wrote the call; 0 leaves it to the
-   unguarded form (a cell no emitted code reads) */
-int emit_vis_cell_call(Compiler *c, int id, const CallPlan *p, Buf *b, const NodeTable *nt, int recv) {
+   raises the private method's NoMethodError as a closed call does (emit_vis_refusal_guard,
+   the plan's private arm). Answers whether it wrote the call; 0 leaves it to the unguarded
+   form (a cell no emitted code reads) */
+static int emit_vis_cell_call(Compiler *c, int id, const CallPlan *p, Buf *b, const NodeTable *nt, int recv) {
   const LocalVar *g = cplan_vis_cell_var(c, p);
   if (!g) return 0;
   Buf call, refuse;
@@ -6393,12 +6395,9 @@ int emit_vis_cell_call(Compiler *c, int id, const CallPlan *p, Buf *b, const Nod
   int held = subtree_has_side_effect(c, recv), mark = g_n_argov;
   if (held) {
     argov_reserve();
-    view_bind_temp(recv, hold_operand_pre(c, recv, comp_ntype(c, recv), 0, ++g_tmp, 1));
+    view_bind_temp(recv, hold_operand_pre(c, recv, repr_of(c, recv).as_ty, 0, ++g_tmp, 1));
   }
-  c->vis_cell_closed = id + 1;
-  int refused = emit_vis_refusal(c, id, &refuse);
-  c->vis_cell_closed = 0;
-  int made = refused && emit_root_reopen_call(c, id, &call, nt, recv, p->owner_ci, p->mi);
+  int made = emit_vis_refusal_guard(c, id, &refuse) && emit_root_reopen_call_plain(c, id, &call, nt, recv, p->owner_ci, p->mi);
   if (held) view_unbind(mark);
   if (!made) {
     free(call.p); free(refuse.p);
@@ -6417,6 +6416,10 @@ int emit_vis_cell_call(Compiler *c, int id, const CallPlan *p, Buf *b, const Nod
    through its proc form (#5779), with the call's block or without one: it
    has no symbol of its own, being spliced where it can. */
 int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv, int ci, int mi) {
+  const CallPlan p = cplan_user(c, id);
+  return p.mi == mi && p.vis_cell && emit_vis_cell_call(c, id, &p, b, nt, recv) ? 1 : emit_root_reopen_call_plain(c, id, b, nt, recv, ci, mi);
+}
+static int emit_root_reopen_call_plain(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv, int ci, int mi) {
   if (emit_reopen_block_call(c, id, recv, mi, NULL, b)) return 1;
   if (g_plan_check) ucall_observe(c, id, mi, ci, 0);
   /* a top-level def takes no self: the receiver runs for its effect, then the call */

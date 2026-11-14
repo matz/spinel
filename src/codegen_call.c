@@ -23490,7 +23490,7 @@ static void emit_vis_msg_boxed(int vis, const char *vnm, int tv, const char *arg
   if (args) buf_printf(b, "SP_GC_ROOT_STR(_t%d); sp_stage_args_msg(_t%d, %s); })", tm, tm, args);
   else buf_printf(b, "_t%d; })", tm);
 }
-static int emit_vis_refusal_x(Compiler *c, int id, Buf *b);
+static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard);
 static void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
 static void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
 static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
@@ -23600,8 +23600,8 @@ static int module_ffi_or_native_owns(Compiler *c, int ci, const char *name) {
    receiver, nil, true and false, and one that may be nil, name themselves
    at run time. */
 static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind vrt, int vcid,
-                                          const char *vnm, int stamped, Buf *b) {
-  int oci = comp_core_class(c, CORE_OBJECT), vis = SP_VIS_PUBLIC, mi = cplan_root_closed(c, id, &vis);
+                                          const char *vnm, int stamped, int guard, Buf *b) {
+  int oci = comp_core_class(c, CORE_OBJECT), vis = SP_VIS_PUBLIC, mi = guard ? cplan_guard_closed(c, id, &vis) : cplan_root_closed(c, id, &vis);
   if (mi < 0) return 0;
   /* `x&.public_send(:top)` may hold nil, which it never calls on; `x&.top`
      raises past its nil guard */
@@ -23816,9 +23816,13 @@ int method_vis_for_caller(Compiler *c, int id, int vcid, const char *vnm) {
 
 /* --plan-check: a call refused for its visibility binds no method */
 int emit_vis_refusal(Compiler *c, int id, Buf *b) {
-  int r = emit_vis_refusal_x(c, id, b);
+  int r = emit_vis_refusal_x(c, id, b, 0);
   if (r && g_plan_check) ucall_refused(id);
   return r;
+}
+/* See codegen_call_arms.h. */
+int emit_vis_refusal_guard(Compiler *c, int id, Buf *b) {
+  return emit_vis_refusal_x(c, id, b, 1);
 }
 /* The class index a builtin-typed receiver's OWN class reopening declares
    name's visibility at, when the program reopened it with an explicit
@@ -23840,7 +23844,7 @@ static int builtin_reopen_vis_class(Compiler *c, int id, TyKind rt, const char *
   int vis = id >= 0 ? cplan_method_vis(c, id, bci, name, 0, NULL) : comp_method_vis_declared(c, bci, name, NULL);
   return vis == SP_VIS_PUBLIC ? -1 : bci;
 }
-static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
+static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard) {
   const NodeTable *nt = c->nt;
   int vrecv = nt_ref(nt, id, "receiver");
   int stamped = nt_str(nt, id, "vis_enforce") != NULL;
@@ -23864,7 +23868,7 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
     }
     /* public_send refuses Object's private method on any receiver, self too */
     if (((plain && nt_kind(nt, vrecv) != NK_SelfNode && !nt_int(nt, id, "self_call", 0)) || stamped) &&
-        emit_object_reopen_vis_refusal(c, id, vrecv, vrt, vcid, vnm, stamped, b)) return 1;
+        emit_object_reopen_vis_refusal(c, id, vrecv, vrt, vcid, vnm, stamped, guard, b)) return 1;
   }
   else {
     Scope *vs = comp_scope_of(c, id);
@@ -36021,7 +36025,6 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
        with the call as g_sn_skip) */
     if (cplan_root_reopen_call(c, id, &rp) && rp.dispatch == CP_DIRECT && (id == g_brk_skip_id || !call_breaks(c, id)) && !sn_guard_pending(c, id)) {
       if (g_plan_check) cplan_served("root-reopen");
-      if (rp.vis_cell && emit_vis_cell_call(c, id, &rp, b, nt, nt_ref(nt, id, "receiver"))) return;
       if (emit_root_reopen_call(c, id, b, nt, nt_ref(nt, id, "receiver"), rp.owner_ci, rp.mi)) return;
     }
   }

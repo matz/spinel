@@ -100,12 +100,7 @@ typedef struct {
    runs, which takes no self. The kinds of reopening below that, a builtin
    class's own, bind by the receiver's type. */
 int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
-/* Does the body of top-level def scope s read self (a self, an instance variable, a
-   super, or a call with no receiver that asks self's own methods)? Such a def called on an explicit
-   receiver runs as an instance method of Object with that receiver as self
-   (Scope.self_form); one that does not, as the def's own function does. */
-int cplan_top_def_reads_self(Compiler *c, int s);
-/* ...and is call id's plan p such a binding that answers the call ahead
+/* Is call id's plan p a root reopening's binding (cplan_root_reopen) that answers the call ahead
    of the builtin arms (not an alias that captured the builtin's method,
    nor an exception accessor picked at run time, nor a private or
    protected method of a name a builtin has, nor one closed to the call)?
@@ -1202,6 +1197,10 @@ int cplan_class_answers_ahead_of_object(Compiler *c, int call, int k, const char
    dependencies (a class's method_missing, its chain), so a type that
    rests on its answer is asked again when they move. */
 int cplan_root_closed(Compiler *c, int id, int *vis);
+/* The private arm of a call a visibility cell guards (CallPlan.vis_cell): the def's scope, and
+   SP_VIS_PRIVATE in *vis, as cplan_root_closed answers a call closed to its receiver; -1 for any
+   other call. The refusal the guard raises where the cell says private is the closed call's */
+int cplan_guard_closed(Compiler *c, int id, int *vis);
 int cplan_nil_program_served(Compiler *c, int id);  /* codegen_call.c: nil's method's answer has the call's type */
 /* Is a nil fact's source `why` (nil_fact_why) a nil the program writes --
    a literal, a missing else, a safe navigation, a slot read before its

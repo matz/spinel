@@ -307,44 +307,113 @@ unsigned ct_vis_flags(Compiler *c, int id, unsigned flags) {
   return flags | ct_enforce_flags(c, id);
 }
 
-/* Does the body of top-level def s read self: a `self`, an instance variable, a
-   super, or a call with no receiver that is neither a top-level def nor one of
-   Kernel's functions (it asks self's own methods, `inspect`, `frozen?`)? Each
-   node reads the scope it stands in (Compiler.nscope), blocks and defaults
-   included, so one pass over the nodes marks every scope; the marks are asked again
-   only for another tree. */
-int cplan_top_def_reads_self(Compiler *c, int s) {
+static int cplan_root_def_ran(Compiler *c, int call, int k, const char *name);
+/* Is scope s a top-level def of the program (not a method of a class, a
+   class method, or a version entry)? */
+static int cplan_is_top_def_scope(const Compiler *c, int s) {
+  return s >= 1 && s < c->nscopes && c->scopes[s].class_id < 0 && !c->scopes[s].is_cmethod && c->scopes[s].entry == ENTRY_NONE;
+}
+static void cplan_top_edge_add(int **edges, int *n, int *cap, int from, int to) {
+  if (*n == *cap) {
+    *cap = *cap ? 2 * *cap : 16;
+    if (!(*edges = realloc(*edges, sizeof(int) * 2 * (size_t)*cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  (*edges)[2 * *n] = from;
+  (*edges)[2 * *n + 1] = to;
+  (*n)++;
+}
+/* May the body of top-level def s read self: a `self`, an instance variable,
+   a super, or a call with no receiver whose lookup could end at a method of
+   self's own class (it is asked on self ahead of Object): a name some class
+   or module of the program answers (a def, an attribute, a member), a name a
+   builtin class below Object has, or a name that is neither a top-level def
+   of the program nor one of Kernel's functions that never consult self
+   (`inspect`, `send`, `method`, `binding`, an included module's method, a
+   method_missing); or a call of a top-level def that may read self, which
+   runs on the same self (a recursion included)? A yield, a block argument and
+   `...` do not read it: the block's self is the caller's, and a callee the
+   block or the arguments go to has its own edge. Where the answer is
+   unsure, it reads self. Each node reads the scope it stands in
+   (Compiler.nscope), blocks and defaults included. One pass over the nodes
+   marks the scopes and lists the calls between defs, an edge to EVERY version
+   of the callee's name; the marks are then carried to the callers over the
+   reversed edges with one worklist, so the cost is linear in the nodes. They
+   are asked again only for another tree. */
+static void cplan_top_self_marks(Compiler *c) {
   const NodeTable *nt = c->nt;
-  if (s < 1 || s >= c->nscopes) return 0;
   unsigned long stamp = (unsigned long)nt->count * 1000003ul ^ (unsigned long)c->nscopes * 31ul ^ (unsigned long)nt->edits ^ (unsigned long)nt->version * 7ul;
-  if (!c->top_self_marks || c->top_self_stamp != stamp) {
-    free(c->top_self_marks);
-    if (!(c->top_self_marks = calloc((size_t)c->nscopes + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    c->top_self_stamp = stamp;
-    for (int id = 0; id < nt->count; id++) {
-      int sc = id < c->node_cap ? c->nscope[id] : 0;
-      if (sc < 1 || sc >= c->nscopes || c->top_self_marks[sc] || c->scopes[sc].class_id >= 0 || c->scopes[sc].is_cmethod || c->scopes[sc].entry != ENTRY_NONE) continue;   /* (a version entry is no def of the program's) */
-      NodeKind k = nt_kind(nt, id);
-      int reads = 0;
-      switch (k) {
-      case NK_SelfNode: case NK_SuperNode: case NK_ForwardingSuperNode:
-      case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
-      case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
-        reads = 1; break;
-      case NK_CallNode: {
-        const char *nm = nt_str(nt, id, "name");
-        reads = nm && nt_ref(nt, id, "receiver") < 0 && !is_kernel_module_function(nm) && call_target(c, -1, -1, nm, CT_TOP, NULL) < 0;
-        break;
+  if (c->top_self_marks && c->top_self_stamp == stamp) return;
+  free(c->top_self_marks);
+  if (!(c->top_self_marks = calloc((size_t)c->nscopes + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  c->top_self_stamp = stamp;
+  unsigned char *mk = c->top_self_marks;
+  int *edges = NULL, ne = 0, cap = 0;
+  /* the scopes of one def node (a def and the copies of it an alias makes) share its body: they are one
+     scope here, the first of them */
+  int *canon = malloc(sizeof(int) * ((size_t)c->nscopes + 1)), *first = malloc(sizeof(int) * ((size_t)nt->count + 1));
+  if (!canon || !first) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int d = 0; d <= nt->count; d++) first[d] = 0;
+  for (int s = 0; s <= c->nscopes; s++) {
+    int d = c->scopes[s < c->nscopes ? s : 0].def_node;
+    canon[s] = s;
+    if (s >= 1 && s < c->nscopes && cplan_is_top_def_scope(c, s) && d >= 0 && d < nt->count) canon[s] = first[d] ? first[d] : (first[d] = s);
+  }
+  free(first);
+  for (int id = 0; id < nt->count; id++) {
+    int sc = id < c->node_cap ? c->nscope[id] : 0;
+    if (!cplan_is_top_def_scope(c, sc)) continue;
+    sc = canon[sc];
+    switch (nt_kind(nt, id)) {
+    case NK_SelfNode: case NK_SuperNode: case NK_ForwardingSuperNode:
+    case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
+    case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
+      mk[sc] = 1; break;
+    case NK_CallNode: {
+      const char *nm = nt_str(nt, id, "name");
+      if (!nm) { mk[sc] = 1; break; }
+      if (nt_ref(nt, id, "receiver") >= 0) break;
+      if (comp_name_answered_any_side(c, nm) || builtin_name_below_object(nm)) { mk[sc] = 1; break; }
+      int found = 0;
+      for (int t = an_scopes_named_first(c, nm); t >= 0; t = an_scopes_named_next(c, nm, t))
+        if (cplan_is_top_def_scope(c, t)) { found = 1; if (canon[t] != sc) cplan_top_edge_add(&edges, &ne, &cap, sc, canon[t]); }
+      if (!found) {
+        int tm = call_target(c, -1, -1, nm, CT_TOP, NULL);   /* (an alias of a def) */
+        if (tm >= 0 && cplan_is_top_def_scope(c, tm)) { found = 1; if (canon[tm] != sc) cplan_top_edge_add(&edges, &ne, &cap, sc, canon[tm]); }
       }
-      default: break;
-      }
-      c->top_self_marks[sc] = (unsigned char)reads;
+      if (!found && !kernel_function_ignores_self(nm)) mk[sc] = 1;
+      break;
+    }
+    default: break;
     }
   }
-  return c->top_self_marks[s];
+  /* the callers of a scope: a compressed list over the reversed edges */
+  int *start = calloc((size_t)c->nscopes + 2, sizeof(int)), *by = malloc(sizeof(int) * ((size_t)ne + 1)), *wl = malloc(sizeof(int) * ((size_t)c->nscopes + 1));
+  if (!start || !by || !wl) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int e = 0; e < ne; e++) start[edges[2 * e + 1] + 1]++;
+  for (int s = 0; s <= c->nscopes; s++) start[s + 1] += start[s];
+  int *fill = malloc(sizeof(int) * ((size_t)c->nscopes + 1));
+  if (!fill) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(fill, start, sizeof(int) * ((size_t)c->nscopes + 1));
+  for (int e = 0; e < ne; e++) by[fill[edges[2 * e + 1]]++] = edges[2 * e];
+  int nw = 0;
+  for (int s = 1; s < c->nscopes; s++) if (mk[s]) wl[nw++] = s;
+  while (nw > 0) {   /* (a caller of a def that may read self may read it) */
+    int s = wl[--nw];
+    for (int i = start[s]; i < start[s + 1]; i++) if (!mk[by[i]]) { mk[by[i]] = 1; wl[nw++] = by[i]; }
+  }
+  for (int s = 1; s < c->nscopes; s++) mk[s] = mk[canon[s]];
+  free(canon); free(fill); free(wl); free(by); free(start); free(edges);
+}
+/* May any version of the top-level defs named `name`, or the def an alias of that name stands for, read self? Asked before
+   the lookup, so a def that stays private to a receiver costs nothing more. */
+static int cplan_top_name_reads_self(Compiler *c, const char *name) {
+  cplan_top_self_marks(c);
+  for (int t = an_scopes_named_first(c, name); t >= 0; t = an_scopes_named_next(c, name, t))
+    if (cplan_is_top_def_scope(c, t) && c->top_self_marks[t]) return 1;
+  int tm = call_target(c, -1, -1, name, CT_TOP, NULL);   /* (an alias names a def under another name) */
+  return tm >= 0 && cplan_is_top_def_scope(c, tm) && c->top_self_marks[tm];
 }
 
-static int cplan_root_def_ran(Compiler *c, int call, int k, const char *name);
 static void ver_vis_read_add(Compiler *c, int call, const char *name, int cell);
 /* The visibility the record has for main's only version of `name` (the
    histories of one version, with no reopened Object's twin: the lone
@@ -387,6 +456,9 @@ static int cplan_root_top_def(Compiler *c, int call, const char *name, const cha
   int recv = nt_ref(nt, call, "receiver");
   if (cell) *cell = 0;
   if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode || call_target(c, -1, -1, name, CT_TOP, NULL) < 0) return -1;
+  /* a def that may read self stays private to a receiver (master's answer): main's self is
+     not the receiver's */
+  if (cplan_top_name_reads_self(c, name)) return -1;
   int v = -1, rm = cplan_root_method(c, call, cls, name, &v);
   if (rm < 0 || c->scopes[rm].class_id >= 0 || v == SP_VIS_PRIVATE || v == SP_VIS_PROTECTED) return -1;
   /* (a public method of a builtin of the name answers the call, as it did
@@ -401,10 +473,7 @@ static int cplan_root_top_def(Compiler *c, int call, const char *name, const cha
     for (int i = 0; i < an; i++) if (subtree_has_side_effect(c, av[i])) return -1;
     *cell = cl + 1;
   }
-  int tm = call_target(c, call, -1, name, CT_TOP, NULL);
-  /* (a def that reads self runs on main's self only: for another receiver its call is left to the
-     builtin's answer, as before) */
-  return tm >= 0 && cplan_top_def_reads_self(c, tm) ? -1 : tm;
+  return call_target(c, call, -1, name, CT_TOP, NULL);
 }
 
 /* A program's own method on builtin class root (CORE_OBJECT, CORE_NUMERIC,
@@ -434,7 +503,7 @@ static void cplan_root_reopen(Compiler *c, int call, const char *name, const cha
   else if (mi < 0 && root == CORE_OBJECT) {
     int cell, tm = cplan_root_top_def(c, call, name, cls, &cell);
     if (tm >= 0) {
-      cplan_set(p, tm, -1, UC_REOPEN, CP_DIRECT);
+      cplan_set(p, tm, c->scopes[tm].class_id, UC_REOPEN, CP_DIRECT);
       p->vis_cell = cell;
       if (cell) ver_vis_read_add(c, call, name, cell - 1);
     }
@@ -1141,7 +1210,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     if (p->mi < 0 && !builtin_name_below_object(name)) {
       int cell, tm = cplan_root_top_def(c, id, name, core_class_name(CORE_OBJECT), &cell);
       if (tm >= 0) {
-        cplan_set(p, tm, -1, UC_REOPEN, CP_DIRECT);
+        cplan_set(p, tm, c->scopes[tm].class_id, UC_REOPEN, CP_DIRECT);
         p->vis_cell = cell;
         if (cell) ver_vis_read_add(c, id, name, cell - 1);
       }
@@ -8504,6 +8573,13 @@ int cplan_class_answers_ahead_of_object(Compiler *c, int call, int k, const char
          cplan_has_method_missing(c, call, k, 0);
 }
 /* See call_plan.h. */
+int cplan_guard_closed(Compiler *c, int id, int *vis) {
+  const CallPlan p = cplan_user(c, id);
+  if (p.mi < 0 || !p.vis_cell) return -1;
+  if (vis) *vis = SP_VIS_PRIVATE;
+  return p.mi;
+}
+/* See call_plan.h. */
 int cplan_root_closed(Compiler *c, int id, int *vis) {
   const NodeTable *nt = c->nt;
   const char *name = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
@@ -8512,13 +8588,6 @@ int cplan_root_closed(Compiler *c, int id, int *vis) {
   /* (a call that skips visibility, `send`'s, and one on self run the
      method; public_send refuses on any receiver) */
   if (!cplan_call_enforces_vis(c, id)) return -1;
-  /* (the refusal a visibility guard raises where its cell says private: the call is closed
-     to its receiver then, as the def's own bound version) */
-  if (c->vis_cell_closed == id + 1) {
-    int mi = cplan_user(c, id).mi;
-    if (mi >= 0 && vis) *vis = SP_VIS_PRIVATE;
-    return mi;
-  }
   TyKind rt = comp_ntype(c, recv);
   /* (`nil&.m` calls nothing) */
   if (rt == TY_NIL && nt_safe_nav(nt, id)) return -1;
@@ -10756,8 +10825,26 @@ static void ver_presence_mark(Compiler *c) {
    ver_guard_writes), once per call and cell */
 static void ver_vis_read_add(Compiler *c, int call, const char *name, int cell) {
   int n = c->nver_vis_reads;
-  for (int i = 0; i < n; i++)
-    if (c->ver_vis_reads[i].call == call && c->ver_vis_reads[i].cell == cell) return;
+  if (call >= 0) {   /* (one cell a call: its node holds it) */
+    if (call >= c->ver_vis_call_cap) {
+      int ncap = c->node_cap > call ? c->node_cap : call + 1;
+      if (!(c->ver_vis_call_cell = realloc(c->ver_vis_call_cell, sizeof(int) * (size_t)ncap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memset(c->ver_vis_call_cell + c->ver_vis_call_cap, 0, sizeof(int) * (size_t)(ncap - c->ver_vis_call_cap));
+      c->ver_vis_call_cap = ncap;
+    }
+    if (c->ver_vis_call_cell[call] == cell + 1) return;
+    c->ver_vis_call_cell[call] = cell + 1;
+  }
+  else {   /* (and a history once: its cell holds it) */
+    if (cell >= c->ver_vis_hist_cap) {
+      int ncap = 2 * cell + 8;
+      if (!(c->ver_vis_hist_seen = realloc(c->ver_vis_hist_seen, (size_t)ncap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memset(c->ver_vis_hist_seen + c->ver_vis_hist_cap, 0, (size_t)(ncap - c->ver_vis_hist_cap));
+      c->ver_vis_hist_cap = ncap;
+    }
+    if (c->ver_vis_hist_seen[cell]) return;
+    c->ver_vis_hist_seen[cell] = 1;
+  }
   if (!(n & (n - 1)) && !(c->ver_vis_reads = realloc(c->ver_vis_reads, sizeof *c->ver_vis_reads * (size_t)(n ? 2 * n : 1)))) {
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
@@ -10777,17 +10864,23 @@ static void ver_vis_guard_hists(Compiler *c) {
   unsigned long stamp = ((unsigned long)nt->count * 1000003ul ^ (unsigned long)c->nscopes) * 1000003ul ^ (unsigned long)nt->edits * 31ul ^ (unsigned long)nt->version;
   if (c->ver_vis_guard_stamp == stamp) return;
   c->ver_vis_guard_stamp = stamp;
+  if (c->ver_vis_scope_cap < c->nscopes) {
+    int ncap = c->nscopes;
+    if (!(c->ver_vis_scope_mark = realloc(c->ver_vis_scope_mark, (size_t)ncap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(c->ver_vis_scope_mark + c->ver_vis_scope_cap, 0, (size_t)(ncap - c->ver_vis_scope_cap));
+    c->ver_vis_scope_cap = ncap;
+  }
   for (int s = 1; s < c->nscopes; s++) {
     const Scope *sc = &c->scopes[s];
-    if (sc->class_id >= 0 || sc->is_cmethod || !sc->name || sc->def_node < 0 || sc->is_proc_form || sc->replaced) continue;
-    int cell = -1, known = 0;
+    if (c->ver_vis_scope_mark[s] || sc->class_id >= 0 || sc->is_cmethod || !sc->name || sc->def_node < 0 || sc->is_proc_form || sc->replaced) continue;
+    int cell = -1;
     if (an_calls_named_first(c, sc->name) < 0) continue;
-    for (int i = 0; i < c->nver_vis_reads && !known; i++) known = c->ver_vis_reads[i].call < 0 && sp_streq(c->ver_vis_reads[i].name, sc->name);
-    if (known || cplan_top_lone_vis(c, sc->name, &cell) != -1 || cell < 0) continue;
+    if (cplan_top_lone_vis(c, sc->name, &cell) != -1 || cell < 0) { c->ver_vis_scope_mark[s] = 2; continue; }
     for (int id = an_calls_named_first(c, sc->name); id >= 0; id = an_calls_named_next(id)) {
       int recv = nt_kind(nt, id) == NK_CallNode && sp_streq(nt_str(nt, id, "name"), sc->name) ? nt_ref(nt, id, "receiver") : -1;
       if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) continue;
       ver_vis_read_add(c, -1, sc->name, cell);
+      c->ver_vis_scope_mark[s] = 1;
       break;
     }
   }

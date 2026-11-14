@@ -9,7 +9,7 @@ def plain = 1
 def adds(a, b = 2, *rest, k: 3) = [a, b, rest, k]
 def nothing = nil
 def maybe(x) = x ? 1 : nil
-def put_it(s) = puts(s)
+def put_it(s) = $stdout.write(s, "\n")
 def with_block(&b) = b ? b.call : :none
 def yields(x) = block_given? ? yield(x) : :noblock
 def twice = [yield, yield]

@@ -35761,13 +35761,6 @@ static int pf_scope_named(Compiler *c, const Scope *src, const char *name) {
   if (src->class_id < 0) return comp_method_index(c, name);
   return (src->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, src->class_id, name);
 }
-/* The initialize versions that run by a proc form of their own, marked in
-   a table of the n0 scopes there are (the caller frees it): a version some
-   construction may run in place of the table's (cplan_new_initializers),
-   where an exception class's construction builds it (`E.new`, `raise E`,
-   `E.exception` all run the constructor, which does not splice), or where
-   a `new` the plan answers it at passes a proc (`K.new(&pr)`). A plain
-   `new` with no block splices the version, as it splices the table's. */
 static char *pf_top_receiver_versions(Compiler *c, int n0) {
   const NodeTable *nt = c->nt;
   char *mark = calloc(n0 > 0 ? (size_t)n0 : 1, 1);
@@ -35791,6 +35784,13 @@ static char *pf_top_receiver_versions(Compiler *c, int n0) {
   anh_free(&yielding);
   return mark;
 }
+/* The initialize versions that run by a proc form of their own, marked in
+   a table of the n0 scopes there are (the caller frees it): a version some
+   construction may run in place of the table's (cplan_new_initializers),
+   where an exception class's construction builds it (`E.new`, `raise E`,
+   `E.exception` all run the constructor, which does not splice), or where
+   a `new` the plan answers it at passes a proc (`K.new(&pr)`). A plain
+   `new` with no block splices the version, as it splices the table's. */
 static char *pf_init_versions(Compiler *c, int n0) {
   const NodeTable *nt = c->nt;
   char *mark = calloc(n0 > 0 ? (size_t)n0 : 1, 1);

@@ -9940,8 +9940,10 @@ int desugar_call_op_write(Compiler *c) {
     /* attr_writer: keep the store, unless something reads the op-assign's
        value (a method's tail, `x = (w.n += 1)`, a block's last statement,
        also in the block of a user `each`), which the writer call carries
-       and the store does not */
-    if (!has_def_writer) {
+       and the store does not. A `**=` is no such store: its power may answer
+       a Rational, which the ordinary writer call widens the attribute for
+       (mark_int_pow_signed marks the power the rewrite makes a call) */
+    if (!has_def_writer && !is_pow_op(op)) {
       if (!parent) parent = an_parent_map(nt);
       if (!parent) continue;
       if (cow_statement_dropped(c, parent, id)) continue;

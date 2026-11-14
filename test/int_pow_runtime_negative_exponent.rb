@@ -3,7 +3,8 @@
 # (1/2)), an Integer for a base of 1 or -1, ZeroDivisionError for 0 ** a
 # negative. The exponent here is not a literal, so it was an sp_int power
 # that raised RangeError "negative exponent". `b ** e`, `b.pow(e)` and
-# `x **= e` are the same power. The values come from ARGV.size (0 at run
+# `x **= e` (on a local, an instance variable, a global, a class variable and
+# an attribute) are the same power. The values come from ARGV.size (0 at run
 # time) and from parameters, so the compiler cannot fold them.
 
 # a local, the three signs of the exponent
@@ -62,6 +63,29 @@ p w ** -1, w.pow(-2)
 u = ARGV.size + 3
 u **= -1
 p u
+
+# `**=` on an instance variable, a global, a class variable and an attribute
+class C
+  def initialize = @x = 2
+  def go(k) = (@x **= k; @x)
+end
+p C.new.go(ARGV.size - 1)
+p C.new.go(ARGV.size + 3)
+$x = 2
+$x **= ARGV.size - 1
+p $x
+class Box
+  attr_accessor :v
+  def initialize = @v = 2
+end
+bx = Box.new
+bx.v **= ARGV.size - 2
+p bx.v
+class K
+  @@x = 2
+  def self.go(k) = (@@x **= k; @@x)
+end
+p K.go(ARGV.size - 1)
 
 # a power that is discarded raises nothing
 2 ** e

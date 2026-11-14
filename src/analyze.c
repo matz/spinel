@@ -39146,6 +39146,11 @@ static int pow_exp_marks(Compiler *c, int id, int exp) {
   comp_set_pow_signed(c, id, 1);
   return 1;
 }
+/* Does the operator write `id` hold an Integer to raise: its holder's slot? */
+static int pow_write_base_int(Compiler *c, int id) {
+  HolderRef h;
+  return holder_of_node(c, id, &h) && h.r.as_ty == TY_INT;
+}
 /* The fixpoint pass that decides the mark for every Integer power
    (`b ** e`, `b.pow(e)`, `x **= e`). The fact cannot be asked from the
    `**` inference rule itself: the nil-narrowing facts are computed lazily
@@ -39155,7 +39160,8 @@ static int pow_exp_marks(Compiler *c, int id, int exp) {
    ever gets set, so the types it drives only widen and the fixpoint still
    converges. It is read by infer_int_pow_type. Nothing is marked under
    --int-overflow=promote, where every power not both constants is already
-   boxed, nor before the round's facts exist. Linear in the power sites. */
+   boxed, nor before the round's facts exist. Linear in the powers and the
+   operator writes (their operator is the first test). */
 static int mark_int_pow_signed(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (g_promote_mode) return 0;
@@ -39169,12 +39175,13 @@ static int mark_int_pow_signed(Compiler *c) {
       ch |= pow_exp_marks(c, id, av[0]);
     }
   }
-  for (int id = comp_kind_first(c, NK_LocalVariableOperatorWriteNode); id >= 0; id = comp_kind_next(c, id)) {
-    if (!is_pow_op(nt_str(nt, id, "binary_operator"))) continue;
-    const char *nm = nt_str(nt, id, "name");
-    LocalVar *lv = nm ? scope_local(comp_scope_of(c, id), nm) : NULL;
-    if (!lv || lv->type != TY_INT) continue;
-    ch |= pow_exp_marks(c, id, nt_ref(nt, id, "value"));
+  const NodeKind writes[] = { NK_LocalVariableOperatorWriteNode, NK_InstanceVariableOperatorWriteNode,
+                              NK_GlobalVariableOperatorWriteNode, NK_ClassVariableOperatorWriteNode };
+  for (size_t k = 0; k < sizeof writes / sizeof *writes; k++) {
+    for (int id = comp_kind_first(c, writes[k]); id >= 0; id = comp_kind_next(c, id)) {
+      if (!is_pow_op(nt_str(nt, id, "binary_operator")) || !pow_write_base_int(c, id)) continue;
+      ch |= pow_exp_marks(c, id, nt_ref(nt, id, "value"));
+    }
   }
   return ch;
 }

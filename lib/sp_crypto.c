@@ -75,28 +75,60 @@ static const uint32_t sp_crypto_sha256_k[64] = {
 #define SPC_CH(x,y,z)  (((x) & (y)) ^ (~(x) & (z)))
 #define SPC_MAJ(x,y,z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
 
+/* One round: t1 into d, the new a into h. The caller passes the eight words
+ * in the order the round sees them, so instead of moving every word one place
+ * along after each round, eight calls in a row each name them one place on. */
+static SP_INLINE void sp_crypto_sha256_round(uint32_t a, uint32_t b, uint32_t c, uint32_t *d,
+                                             uint32_t e, uint32_t f, uint32_t g, uint32_t *h,
+                                             uint32_t kw) {
+    uint32_t t1 = *h + SPC_S1(e) + SPC_CH(e,f,g) + kw;
+    *d += t1;
+    *h = t1 + SPC_S0(a) + SPC_MAJ(a,b,c);
+}
+
+/* Message word i of a block's rounds 16 * j + i: the block's own for the first
+ * sixteen, then each computed in place over the sixteen before it. */
+static SP_INLINE uint32_t sp_crypto_sha256_word(uint32_t w[16], int j, int i) {
+    if (j)
+        w[i] += SPC_s1(w[(i + 14) & 15]) + w[(i + 9) & 15] + SPC_s0(w[(i + 1) & 15]);
+    return w[i];
+}
+
 /* One block in portable C. Kept a function of its own: where the CPU lacks
  * the SHA extensions below, a build runs this as it did before they were
- * here, behind one test a call. */
-static SP_NOINLINE void sp_crypto_sha256_block(uint32_t H[8], const uint8_t b[64]) {
-    uint32_t w[64], sa, sb, sc, sd, se, sf, sg, sh, t1, t2;
-    int i;
+ * here, behind one test a call. Sixteen rounds are written out a pass, over
+ * a schedule of sixteen words rather than sixty-four: gcc -O2 keeps a loop
+ * of one round, with its eight moves and a 256-byte schedule in memory, two
+ * to three times slower. */
+static SP_NOINLINE void sp_crypto_sha256_block(uint32_t H[8], const uint8_t p[64]) {
+    uint32_t w[16];
+    uint32_t a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    int i, j;
     for (i = 0; i < 16; i++) {
-        w[i] = ((uint32_t)b[i*4] << 24) | ((uint32_t)b[i*4+1] << 16) |
-               ((uint32_t)b[i*4+2] << 8) |  (uint32_t)b[i*4+3];
+        w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16) |
+               ((uint32_t)p[i*4+2] << 8) |  (uint32_t)p[i*4+3];
     }
-    for (i = 16; i < 64; i++) {
-        w[i] = SPC_s1(w[i-2]) + w[i-7] + SPC_s0(w[i-15]) + w[i-16];
+    for (j = 0; j < 4; j++) {
+        const uint32_t *k = sp_crypto_sha256_k + 16 * j;
+        sp_crypto_sha256_round(a, b, c, &d, e, f, g, &h, k[0]  + sp_crypto_sha256_word(w, j, 0));
+        sp_crypto_sha256_round(h, a, b, &c, d, e, f, &g, k[1]  + sp_crypto_sha256_word(w, j, 1));
+        sp_crypto_sha256_round(g, h, a, &b, c, d, e, &f, k[2]  + sp_crypto_sha256_word(w, j, 2));
+        sp_crypto_sha256_round(f, g, h, &a, b, c, d, &e, k[3]  + sp_crypto_sha256_word(w, j, 3));
+        sp_crypto_sha256_round(e, f, g, &h, a, b, c, &d, k[4]  + sp_crypto_sha256_word(w, j, 4));
+        sp_crypto_sha256_round(d, e, f, &g, h, a, b, &c, k[5]  + sp_crypto_sha256_word(w, j, 5));
+        sp_crypto_sha256_round(c, d, e, &f, g, h, a, &b, k[6]  + sp_crypto_sha256_word(w, j, 6));
+        sp_crypto_sha256_round(b, c, d, &e, f, g, h, &a, k[7]  + sp_crypto_sha256_word(w, j, 7));
+        sp_crypto_sha256_round(a, b, c, &d, e, f, g, &h, k[8]  + sp_crypto_sha256_word(w, j, 8));
+        sp_crypto_sha256_round(h, a, b, &c, d, e, f, &g, k[9]  + sp_crypto_sha256_word(w, j, 9));
+        sp_crypto_sha256_round(g, h, a, &b, c, d, e, &f, k[10] + sp_crypto_sha256_word(w, j, 10));
+        sp_crypto_sha256_round(f, g, h, &a, b, c, d, &e, k[11] + sp_crypto_sha256_word(w, j, 11));
+        sp_crypto_sha256_round(e, f, g, &h, a, b, c, &d, k[12] + sp_crypto_sha256_word(w, j, 12));
+        sp_crypto_sha256_round(d, e, f, &g, h, a, b, &c, k[13] + sp_crypto_sha256_word(w, j, 13));
+        sp_crypto_sha256_round(c, d, e, &f, g, h, a, &b, k[14] + sp_crypto_sha256_word(w, j, 14));
+        sp_crypto_sha256_round(b, c, d, &e, f, g, h, &a, k[15] + sp_crypto_sha256_word(w, j, 15));
     }
-    sa=H[0]; sb=H[1]; sc=H[2]; sd=H[3]; se=H[4]; sf=H[5]; sg=H[6]; sh=H[7];
-    for (i = 0; i < 64; i++) {
-        t1 = sh + SPC_S1(se) + SPC_CH(se,sf,sg) + sp_crypto_sha256_k[i] + w[i];
-        t2 = SPC_S0(sa) + SPC_MAJ(sa,sb,sc);
-        sh = sg; sg = sf; sf = se; se = sd + t1;
-        sd = sc; sc = sb; sb = sa; sa = t1 + t2;
-    }
-    H[0]+=sa; H[1]+=sb; H[2]+=sc; H[3]+=sd;
-    H[4]+=se; H[5]+=sf; H[6]+=sg; H[7]+=sh;
+    H[0]+=a; H[1]+=b; H[2]+=c; H[3]+=d;
+    H[4]+=e; H[5]+=f; H[6]+=g; H[7]+=h;
 }
 
 #if SP_HAVE_X86_SHA

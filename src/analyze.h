@@ -1234,6 +1234,8 @@ int nullable_int_value_raw(Compiler *c, int id);
 int nn_ivar_write_keeps_clear(Compiler *c, int id);
 /* `a[i]` on a pointer array proven to read within it (no nil past the end) */
 int an_elem_read_in_bounds(Compiler *c, int id);
+/* is the Integer expression `id` shown >= 0 by the nil-narrowing facts (a literal, a local the walk knew non-negative, `hi - lo` of ordered locals, a sum or product of such, abs, a builtin container's size)? */
+int an_int_nonneg(Compiler *c, int id);
 /* is position pos of a multiple assignment's value, read from a constant Array of a proven length, within it and no nil (a position from the end is not asked)? */
 int masgn_const_elem_in_range(Compiler *c, int value, long long pos);
 int scalar_nil_only_call(Compiler *c, int id, TyKind rt);

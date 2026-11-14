@@ -823,9 +823,10 @@ void gvar_writes_free(Compiler *c);   /* the names gvar_has_write kept (analyze_
 /* What a pass that asks elab_class_named for many reads holds (built on
    the first ask that needs it, freed by elab_names_end; zero-initialize to
    start): the program's class headers by the Ruby path each spells, which a
-   path through a builtin (`Regexp::Syntax::Token`) is matched against, so
-   that no read scans every header. The record must not change while it is
-   used. */
+   path through a builtin (`Regexp::Syntax::Token`) is matched against, and
+   its classes by Ruby name and by leaf (elab_const_keys), so that no read
+   scans every header or class. The record and the classes must not change
+   while it is used. */
 typedef struct ElabNames ElabNames;
 void elab_names_end(ElabNames *nx);
 int elab_class_named(Compiler *c, ElabNames *nx, int node);   /* the program class a constant read names wherever its lookup finds one, -1 for none known */

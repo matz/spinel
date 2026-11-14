@@ -1489,7 +1489,52 @@ static void lr_names_headers(Compiler *c, ElabNames *nx) {
 void elab_names_end(ElabNames *nx) {
   for (int i = 0; i < nx->hdr.n; i++) free((char *)nx->hdr.e[i].name);
   ani_free(&nx->hdr);
-  nx->hdr_unknown = nx->hdr_built = 0;
+  ani_free(&nx->byname);
+  ani_free(&nx->byleaf);
+  nx->hdr_unknown = nx->hdr_built = nx->cls_built = 0;
+}
+/* The program's classes by Ruby name and by the last segment of it, in
+   class order within a name. Built on the first ask, as the scans it
+   replaces ran from it: class_ruby_name keeps the name it first builds. */
+static void lr_names_classes(Compiler *c, ElabNames *nx) {
+  if (nx->cls_built) return;
+  nx->cls_built = 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *rn = class_ruby_name(c, k), *l = rn;
+    if (!rn) continue;
+    for (const char *q = strstr(rn, "::"); q; q = strstr(q + 2, "::")) l = q + 2;
+    ani_add(&nx->byname, rn, k);
+    ani_add(&nx->byleaf, l, k);
+  }
+  ani_sort(&nx->byname);
+  ani_sort(&nx->byleaf);
+}
+/* The first class of an index by name, LR_UNKNOWN_CLASS for none; *n, when
+   given, the number of classes of the name. */
+static int lr_class_by_name(const ANameIndex *x, const char *name, int *n) {
+  int lo = ani_first(x, name), cnt = 0;
+  for (int q = lo; q < x->n && sp_streq(x->e[q].name, name); q++) cnt++;
+  if (n) *n = cnt;
+  return cnt ? x->e[lo].v : LR_UNKNOWN_CLASS;
+}
+/* The first class of the program whose Ruby name (leaf: the last segment of
+   it) is name, LR_UNKNOWN_CLASS for none; *n, when given, how many have it.
+   With the lookups (nx) a bisection; without them, for a caller that asks
+   once while the walk is still registering classes, the scan of every class. */
+static int lr_find_class(Compiler *c, ElabNames *nx, int leaf, const char *name, int *n) {
+  if (nx) {
+    lr_names_classes(c, nx);
+    return lr_class_by_name(leaf ? &nx->byleaf : &nx->byname, name, n);
+  }
+  int cnt = 0, first = LR_UNKNOWN_CLASS;
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *rn = class_ruby_name(c, k), *l = rn;
+    if (!rn) continue;
+    if (leaf) for (const char *q = strstr(rn, "::"); q; q = strstr(q + 2, "::")) l = q + 2;
+    if (sp_streq(leaf ? l : rn, name) && !cnt++) first = k;
+  }
+  if (n) *n = cnt;
+  return first;
 }
 /* A path from a core constant the program does not reopen as a class
    (`Regexp::Syntax::Token`) is absolute: the class whose header spells
@@ -8195,7 +8240,7 @@ static int lr_later_alias(Compiler *c, int owner, const char *name) {
    entity (elab_const_own_at): Object's constants are the top level's, so
    a header in `class Object`'s body and one at the top level name one
    constant; where the one owner holds nothing, the other is asked. */
-static int lr_class_by_written_path(Compiler *c, int p);
+static int lr_class_by_written_path_at(Compiler *c, ElabNames *nx, int p, int read);
 static int lr_entity_own_at(Compiler *c, int owner, const char *leaf, LoadPoint p, const LrDef **d) {
   int v = elab_const_own_at(c, owner, leaf, p, d);
   int obj = comp_core_class(c, CORE_OBJECT);
@@ -8240,7 +8285,7 @@ int elab_header_entity(Compiler *c, int node, const ElabPos *pos) {
   /* (a path through a builtin the program does not reopen, `module
      Comparable::Ext::Group`: the class of the program its Ruby name names) */
   unsigned long long ow = nt_work_now();   /* (the scale test counts the walk's header lookups as a step) */
-  if (h->owner < LR_MAIN && par >= 0) h->owner = lr_class_by_written_path(c, par);
+  if (h->owner < LR_MAIN && par >= 0) h->owner = lr_class_by_written_path_at(c, NULL, par, -1);
   nt_work_step("elab_header_owner", ow);
   if (h->owner < LR_MAIN) h->owner = LR_UNKNOWN_CLASS;
   const LrDef *d = NULL;
@@ -10885,11 +10930,9 @@ static int lr_holder_path_write(Compiler *c, const LrHist *h) {
 /* The class of the program's whose Ruby name is the path p spells (a path
    through a builtin the program does not reopen, `Regexp::Syntax::Token`,
    which the record cannot step through), LR_UNKNOWN_CLASS for none */
-static int lr_class_by_written_path_at(Compiler *c, int p, int read);
-static int lr_class_by_written_path(Compiler *c, int p) { return lr_class_by_written_path_at(c, p, -1); }
 /* ...where a relative path names a class under one of read's lexical scopes
    (`Constants::Open` in `module SQLite3`'s class Database), innermost first */
-static int lr_class_by_written_path_at(Compiler *c, int p, int read) {
+static int lr_class_by_written_path_at(Compiler *c, ElabNames *nx, int p, int read) {
   const NodeTable *nt = c->nt;
   char path[512] = "", seg[QC_MAXDEPTH + 2][128];
   int n = 0;
@@ -10913,17 +10956,14 @@ static int lr_class_by_written_path_at(Compiler *c, int p, int read) {
     const char *cn = ci >= 0 ? class_ruby_name(c, ci) : NULL;
     if (!cn) continue;
     char full[640]; snprintf(full, sizeof full, "%s::%s", cn, path);
-    for (int k = 0; k < c->nclasses; k++) {
-      const char *rn = class_ruby_name(c, k);
-      if (rn && sp_streq(rn, full)) return k;
-    }
+    int k = lr_find_class(c, nx, 0, full, NULL);
+    if (k >= 0) return k;
   }
-  int leaf = LR_UNKNOWN_CLASS, nleaf = 0;
-  for (int k = 0; path[0] && k < c->nclasses; k++) {
-    const char *rn = class_ruby_name(c, k), *l = rn;
-    if (rn && sp_streq(rn, path)) return k;
-    for (const char *q = rn ? strstr(rn, "::") : NULL; q; q = strstr(q + 2, "::")) l = q + 2;
-    if (n == 1 && l && sp_streq(l, path)) { leaf = k; nleaf++; }
+  int nleaf = 0, leaf = LR_UNKNOWN_CLASS;
+  if (path[0]) {
+    int k = lr_find_class(c, nx, 0, path, NULL);
+    if (k >= 0) return k;
+    if (n == 1) leaf = lr_find_class(c, nx, 1, path, &nleaf);
   }
   /* a bare name (`UnicodeProperty`, found through an ancestor's module the
      record cannot place either): the one class of the program by that leaf */
@@ -10936,14 +10976,14 @@ static int lr_class_by_written_path_at(Compiler *c, int p, int read) {
    class's ancestors and Object's, the first history of the name with any
    write, sure or not. A scoped read (`A::X`) looks in A and its
    superclasses. NULL where none is. */
-static const LrHist *lr_const_cand(Compiler *c, int node, const char *name) {
+static const LrHist *lr_const_cand(Compiler *c, ElabNames *nx, int node, const char *name) {
   LoadRecord *r = c->lrec;
   const NodeTable *nt = c->nt;
   const LrHist *h;
   if (!name) return NULL;
   if (nt_kind(nt, node) == NK_ConstantPathNode && !lr_root_read(nt, node)) {
     int par = nt_ref(nt, node, "parent"), pc = par >= 0 ? lr_class_ref_at(c, par, NULL) : LR_MAIN;
-    if (pc < LR_MAIN && par >= 0) pc = lr_class_by_written_path_at(c, par, node);
+    if (pc < LR_MAIN && par >= 0) pc = lr_class_by_written_path_at(c, nx, par, node);
     for (int d = 0; pc >= LR_MAIN && d < 64; pc = pc == LR_MAIN ? LR_UNKNOWN_CLASS : lr_super(c, pc), d++)
       if ((h = lr_hist(r, LR_KEY_CONST, lr_const_owner(pc), name, 0)) && h->n) return h;
     return NULL;
@@ -11055,6 +11095,7 @@ void elab_const_keys(Compiler *c) {
   if (!r || !r->recorded) return;
   LrKeyRename *q = NULL; int nq = 0, cq = 0;
   const NodeTable *nt = c->nt;
+  ElabNames nx = {0};   /* (the classes by name, for the reads the record cannot bind: lr_const_cand) */
   int ne = 0;
   LrKeyEnt *es = lr_key_entities(c, &ne);
   long same = 0, differ = 0;
@@ -11109,7 +11150,7 @@ void elab_const_keys(Compiler *c) {
       if (o == ELAB_NO) rno++; else runk++;
       /* a read the record cannot bind yet names the entity the lookup
          meets first (lr_const_cand) */
-      const LrHist *ch = lr_const_cand(c, id, nm);
+      const LrHist *ch = lr_const_cand(c, &nx, id, nm);
       for (int i = 0; ch && i < ne; i++)
         if (&r->hist[es[i].h] == ch) {
           if (!es[i].cls_ent && es[i].key) rent[id] = i + 1;
@@ -11172,6 +11213,8 @@ void elab_const_keys(Compiler *c) {
   for (int i = 0; i < nq; i++) { lr_set_ckey((NodeTable *)nt, q[i].node, q[i].key); free(q[i].key); }
   free(q);
   free(ent); free(skip);
+  elab_names_end(&nx);
+  elab_names_end(&nx);
   for (int i = 0; i < ne; i++) { free(es[i].path); free(es[i].key); }
   free(es);
 }

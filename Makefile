@@ -6058,7 +6058,14 @@ CLASS_MACRO_STATE_LIMIT ?= 2.2
 # checked against the other writes of its name (qualify_colliding_classes): a
 # scan of every write for each is N^2. The parent map's walk counts a unit per
 # node (an_parent_map), so a pass that rebuilds the map once per node reads
-# N^2 here too.
+# N^2 here too. The walk's lookup of a header's owner under a builtin's path
+# (elab_header_entity, counted as elab_header_owner) scans every class for
+# each such header: N^2, and the leg is over its limit until it is an index.
+# The read of that class (String::H<i>.h) asks the load record for it by the
+# Ruby path it spells (lr_class_by_core_path, lr_class_by_written_path_at),
+# and the class pass renames the reads it asks about
+# (qualify_colliding_reads): each of those was N^2, and each is an index or a
+# rename after the questions.
 CONST_COLLISIONS_LIMIT ?= 2.2
 # Module functions (test/scale/module_functions.sh), compiled to C at N=100
 # and N=200, in both load models: N modules of ten functions after a bare

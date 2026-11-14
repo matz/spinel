@@ -6,11 +6,15 @@
 # class's nested In collides with the others in both. A builder B<i> =
 # Class.new beside a header class B<i> is checked against the headers and
 # writes of its name (qc_refuse_conditional_builder). A class String::H<i>
-# under a builtin parent is checked against the other writes of its name. The
-# load record keys each write and each read after the walk (elab_const_keys)
-# from the entity it names, so the work grows with N; a read keyed by scanning
-# every write of its name grows as N^2. make scale-test takes the work of
-# those steps alone (spinel-work-step) in the colliding form.
+# under a builtin parent is checked against the other writes of its name. Its
+# read (String::H<i>.h) asks the load record for the class by the Ruby path it
+# spells (lr_class_by_core_path, lr_class_by_written_path_at), after which the
+# class pass renames the read, which rebuilt the parent map (an_parent_map,
+# which the work counter counts). The load record keys each write and each
+# read after the walk (elab_const_keys) from the entity it names, so the work
+# grows with N; a read keyed by scanning every write of its name grows as N^2.
+# make scale-test takes the work of those steps alone (spinel-work-step) in
+# the colliding form.
 [ $# -eq 1 ] && set -- $1   # "N mode" as one argument too
 N=${1:-10}; MODE=${2:-colliding}
 awk -v N="$N" -v MODE="$MODE" 'BEGIN {
@@ -27,7 +31,7 @@ awk -v N="$N" -v MODE="$MODE" 'BEGIN {
   print "t = 0"
   for (i = 0; i < N; i++) {
     c = MODE == "distinct" ? sprintf("SIZE_%d", i) : "SIZE"
-    printf "t += C%d.size + C%d::In.size + C%d::%s + B%d.b\n", i, i, i, c, i
+    printf "t += C%d.size + C%d::In.size + C%d::%s + B%d.b + String::H%d.h\n", i, i, i, c, i, i
   }
   print "p t"
 }'

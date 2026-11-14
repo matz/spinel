@@ -8699,6 +8699,16 @@ static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *nam
    or to_s. Nor the class side of a class a record builder made, or of one
    inheriting from it (elab_record_class_of): its builtin's class methods
    are the ones elab_record_cmethod names, and Class's. */
+int builtin_method_arity(const char *cls, const char *m, int *out);
+/* Does the builtin class a reopened class stands for (its chain's builtin
+   root, cu_class_root) have an instance method `name` taking ar
+   arguments, by CRuby's arity table? */
+static int ver_builtin_instance_answers(Compiler *c, int cls, const char *name, int ar) {
+  const char *root = cls >= 0 ? cu_class_root(c, cls) : NULL;
+  int a = 0;
+  if (!root || is_object_base_name(root) || !builtin_method_arity(root, name, &a)) return 0;
+  return a == ar || (a < 0 && ar >= -a - 1);
+}
 static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int ar, int blk) {
   if (sg && (bop_class_answers(name, ar, blk) || elab_record_class_of(c, cls) >= 0)) return 0;
   if (cls >= 0 && class_builtin_parent(c, cls) != builtin_class_at(CORE_OBJECT)->id) return 1;
@@ -8761,6 +8771,9 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
   }
   /* (an open history's else arm with an undef on the chain: not told) */
   if (q && na == nd && nd && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, dto, nd, vs[nv - 1].hist, vs[0].v->vis, ar, blk, mm);
+  /* (on a reopened builtin's instance side, a method the builtin itself
+     has: with no version run, the builtin's own, #11819) */
+  else if (q && na == nd && nd && vis && !sg && ver_builtin_instance_answers(c, rcls, name, ar)) kind = VK_BUILTIN;
   if (kind != VK_KEEP) els = ver_absent_else(c, kind, rcls, sg, name, dto, nd, ar, &blk, &spliced);
   if (absent) *absent = els >= 0;
   *finds = ver_else_finds(c, kind, rcls, sg, name, nd > 0 ? vs[0].v->vis : SP_VIS_PUBLIC, nd ? dto[nd - 1] : -1);
@@ -9161,8 +9174,10 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
     /* (a record class's builtin that takes none, with `*r, **k` passed on:
        called where both are empty, as CRuby passes it no argument then) */
     int bare = w->ar < 0 && !is_record_class_cmethod_with_args(name);
-    /* (an instance side's, a Kernel row's, private: called without a receiver) */
-    int call = sg ? disp_self_call(nt, name, bare ? 0 : w->ar, w->blk) : disp_forward_call(nt, name, w->ar, w->blk);
+    /* (an instance side's, a Kernel row's, private: called without a
+       receiver; a reopened builtin's own public method, on self) */
+    int own = !sg && w->cls >= 0 && w->ar >= 0 && !bop_kernel_answers(name, -1, 0) && ver_builtin_instance_answers(c, w->cls, name, w->ar);
+    int call = sg || own ? disp_self_call(nt, name, bare ? 0 : w->ar, w->blk) : disp_forward_call(nt, name, w->ar, w->blk);
     ver_pin(c, call, CT_PIN_BUILTIN, 0);
     return bare ? disp_when_unspread(c, call) : call;
   }
@@ -9304,6 +9319,9 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   if (sg && cls >= 0 && ((ar >= 0 && bop_class_answers(name, ar, blk)) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
   /* (an instance-side name a Kernel row answers: the row, called without a receiver at ar arguments, which it refuses where it takes no such count) */
   if (!sg && cls >= 0 && ar >= 0 && bop_kernel_answers(name, -1, 0)) return VK_BUILTIN;
+  /* (an instance-side method of the builtin a reopened class stands for:
+     with no version run, the builtin's own, #11819) */
+  if (!sg && cls >= 0 && ar >= 0 && ver_builtin_instance_answers(c, cls, name, ar)) return VK_BUILTIN;
   if (cplan_other_answers(c, cls, sg, name, 1)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);

@@ -16709,6 +16709,15 @@ static int cdef_group_exhaustive(const NodeTable *nt, const CondDef *g, int ng) 
   return 1;
 }
 
+int builtin_method_arity(const char *cls, const char *m, int *out);
+/* Does class body cls reopen a builtin class (a top-level `class Array`)
+   whose own instance methods include `name`, by CRuby's arity table? */
+static int cdef_builtin_reopen_answers(Compiler *c, int cls, const char *name) {
+  const char *cn = class_def_key(c, cls);
+  int a = 0;
+  return cn && !strstr(cn, "__") && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) &&
+         !is_object_base_name(cn) && builtin_method_arity(cn, name, &a);
+}
 int desugar_conditional_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   CondDef *v = NULL;
@@ -16755,6 +16764,9 @@ int desugar_conditional_defs(Compiler *c) {
     int left = g[0].cls == -2 || (ng == 1 && !g[0].here);
     /* (a Kernel row's name, respond_to_missing?, answers behind an instance-side def in a class or module body only) */
     if (!left && ng == 1 && (cdef_name_inherited(nt, base, d0) || (g[0].cls >= 0 && !g[0].cm && bop_kernel_answers(base, -1, 0)))) left = 2;
+    /* (...and an instance method of the builtin class the body reopens:
+       `class Array; if c; def size`, whose else is Array's own size) */
+    if (!left && ng == 1 && g[0].cls >= 0 && !g[0].cm && cdef_builtin_reopen_answers(c, g[0].cls, base)) left = 2;
     if (ng == 1 && g[0].here && (g[0].cls == -2 || left == 2)) nt_node_set_int(nt, d0, "cond_lone", 1);
     if (left) { free(base); continue; }
     if (bad || (ng >= 2 && same)) { free(base); continue; }

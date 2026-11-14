@@ -7117,7 +7117,13 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         int asc = arg0t == TY_INT || arg0t == TY_FLOAT || arg0t == TY_STRING || arg0t == TY_SYMBOL;
         if (ksc && asc && kt != arg0t) {
           buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[0], b);
-          if (oint_kind(vt)) { buf_puts(b, "); "); oint_open(c, id, vt, b); buf_puts(b, oint_nil(vt)); oint_close(c, id, b); buf_puts(b, "; })"); }
+          /* more keys: CRuby takes them all, and the answer is the walk's
+             boxed nil, whatever the hash's values are */
+          if (argc >= 2) {
+            for (int di = 1; di < argc; di++) { buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[di], b); }
+            buf_puts(b, "); sp_box_nil(); })");
+          }
+          else if (oint_kind(vt)) { buf_puts(b, "); "); oint_open(c, id, vt, b); buf_puts(b, oint_nil(vt)); oint_close(c, id, b); buf_puts(b, "; })"); }
           else if (vt == TY_STRING) buf_puts(b, "); NULL; })");
           else buf_puts(b, "); sp_box_nil(); })");
           return 1;

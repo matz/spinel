@@ -40,6 +40,7 @@ struct sp_IOBuffer_s {
   uint32_t flags;
   void *map_base;            /* IO::Buffer.map: the mmap'd region `data` points into
                                 (page-aligned), NULL for a malloc'd allocation */
+  struct sp_String_s *borrowed_string; /* kept and unlocked by the block owner */
   size_t map_len;            /* ...and its length, for munmap */
 };
 
@@ -204,7 +205,8 @@ static inline sp_int sp_iob_put_f(uint8_t *d, sp_int wl, sp_int ty, sp_int off, 
 /* how many of a view's len bytes a write may store into: none of a
    read-only buffer's (a slice carries its root's READONLY) */
 static inline sp_int sp_iob_view_wlen(sp_IOBuffer *b, sp_int len) {
-  return b && !(b->flags & SP_IOB_READONLY) ? len : 0;
+  return b && !(b->flags & SP_IOB_READONLY) &&
+         !(b->source && b->source->borrowed_string) ? len : 0;
 }
 /* an owned buffer's bytes: a slice's data is NULL (see the struct), so a
    slice takes the out-of-line write */
@@ -244,6 +246,8 @@ sp_IOBuffer *sp_IOBuffer_transfer(sp_IOBuffer *b);
 sp_IOBuffer *sp_IOBuffer_free_m(sp_IOBuffer *b);
 sp_IOBuffer *sp_IOBuffer_dup_m(sp_IOBuffer *b);
 sp_IOBuffer *sp_IOBuffer_become_for(sp_IOBuffer *b, const char *s);
+sp_IOBuffer *sp_IOBuffer_borrow_string(sp_IOBuffer *owner, const char *s);
+sp_IOBuffer *sp_IOBuffer_end_borrow(sp_IOBuffer *owner);
 
 /* comparison */
 sp_int sp_IOBuffer_cmp(sp_IOBuffer *b, sp_RbVal other);

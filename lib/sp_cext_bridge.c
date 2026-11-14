@@ -564,7 +564,7 @@ VALUE rb_str_export_to_enc(VALUE value,rb_encoding *to) { return string_in_encod
 static sp_String *string(VALUE value) {
     sp_RbVal r=sp_cext_rbval(value);
     if(r.tag==SP_TAG_OBJ && r.cls_id==SP_BUILTIN_STRBUF)return r.v.p;
-    if(r.tag==SP_TAG_STR && sp_str_is_frozen_val(r.v.s))sp_raise_frozen_str(r.v.s);
+    if(r.tag==SP_TAG_STR)sp_str_check_mutable(r.v.s);
     rb_raise(rb_eTypeError,"expected a shared String");
 }
 VALUE rb_str_freeze(VALUE v) {

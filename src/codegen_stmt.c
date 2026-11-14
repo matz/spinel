@@ -20954,8 +20954,8 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
             if (repr_of_slot(c, llv).kind == RK_STRBUF) {
               emit_indent(b, indent);
               /* (a local a block captures lives in its cell) */
-              if (llv->is_cell) buf_printf(b, "sp_gc_freeze((void *)(*_cell_%s));\n", rename_local(lnm));
-              else buf_printf(b, "sp_gc_freeze((void *)lv_%s);\n", rename_local(lnm));
+              if (llv->is_cell) buf_printf(b, "sp_String_freeze(*_cell_%s);\n", rename_local(lnm));
+              else buf_printf(b, "sp_String_freeze(lv_%s);\n", rename_local(lnm));
               return 1;
             }
           }
@@ -25012,7 +25012,7 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
           int taR = ++g_tmp;
           buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); const char *_t%d = ", tbR, srefR2.p, taR);
           emit_expr_face(c, argv[0], TY_STRING, b);   /* (one representation: its bytes, whatever the face) */
-          buf_printf(b, "; if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data); "
+          buf_printf(b, "; if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data); "
                         "sp_String_set_bin_enc(_t%d, sp_str_arg_not_nil(_t%d)); }\n", tbR, tbR, tbR, taR);
           free(srefR2.p);
           return 1;
@@ -25209,7 +25209,7 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
   }
   g_one_held = held0;
   free(rt.p);
-  buf_printf(b, " if (sp_String_is_frozen(%s)) sp_raise_frozen_str((%s)->data);\n", sref, sref);
+  buf_printf(b, " if (sp_String_is_immutable(%s)) sp_raise_frozen_str((%s)->data);\n", sref, sref);
   for (int a = 0; a < argc; a++) {
     emit_indent(b, indent + 1);
     buf_printf(b, "sp_String_append_bin(%s, _t%d);\n", sref, base + a);

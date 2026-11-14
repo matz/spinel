@@ -1,0 +1,19 @@
+[true, false, 6]
+"aZZdef"
+true
+"aZZXYf"
+Specified offset+length is bigger than the buffer size!
+can't modify string; temporarily locked
+can't modify string; temporarily locked
+can't modify string; temporarily locked
+[:answer, true, 0, false]
+"aZZXYf!"
+from block
+"ABZXYf!"
+[true, "xyz"]
+Buffer is not writable!
+[false, 0, ""]
+[:broken, [97, 90, 99]]
+90
+:returned
+[97, 90, 99, 33]

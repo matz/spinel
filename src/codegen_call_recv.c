@@ -5001,6 +5001,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
          mutability check reads a NULL as */
       if (!lvw) buf_printf(b, "if (!_t%d) sp_nil_recv(\"%s\"); ", to, sb_bang);
       /* an in-place mutator on a frozen string raises FrozenError (#3003) */
+      buf_printf(b, "if (sp_str_is_locked(_t%d)) sp_raise_locked_str(); ", to);
       if (!sb_same_ok) buf_printf(b, "if (sp_str_is_frozen_val(_t%d)) sp_raise_frozen_str(_t%d); ", to, to);
       int subm2 = sb_sub;   /* gsub!/sub!: nil means no substitution, see above */
       if (subm2) buf_puts(g_pre ? g_pre : b, "sp_re_sub_matched = 0; ");
@@ -5163,7 +5164,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
           int taR = ++g_tmp;
           buf_printf(b, " const char *_t%d = ", taR);
           emit_str_expr(c, argv[0], b);
-          buf_printf(b, "; if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);", tbR, tbR);
+          buf_printf(b, "; if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data);", tbR, tbR);
           buf_printf(b, " sp_String_set_bin_enc(_t%d, sp_str_arg_not_nil(_t%d)", tbR, taR);   /* the argument's encoding too */
           /* marked to hand out the handle (`r = obj.buf.replace(x)`): the
              receiver itself, as for the appends */
@@ -5200,7 +5201,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
     Buf lb0; memset(&lb0, 0, sizeof lb0);
     if (!strbuf_recv_handle_any(c, id, recv, &sref0, &lb0)) return 0;
     int t0 = ++g_tmp;
-    buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
+    buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data);"
                   " sp_strbuf_read_pub(_t%d); })", t0, lb0.p ? lb0.p : sref0.p, t0, t0, t0);
     free(lb0.p); free(sref0.p);
     { *out = 1; return 1; }
@@ -11007,7 +11008,7 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
         emit_int_expr(c, avS[1], b);
         /* (one representation: the handle's own payload is written in
            place, sp_String_setbyte) */
-        buf_printf(b, "; if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
+        buf_printf(b, "; if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data);"
                       " sp_String_setbyte(_t%d, _i%d, _v%d); })", tH, tH, tH, tH, tH);
         return 1;
       }
@@ -11021,14 +11022,14 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
         emit_int_expr(c, avS[0], b);
         buf_printf(b, "; sp_int _v%d = ", tH);
         emit_int_expr(c, avS[1], b);
-        buf_printf(b, "; if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
+        buf_printf(b, "; if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data);"
                       " sp_String_setbyte(_t%d, _i%d, _v%d); })", tH, tH, tH, tH, tH);
         return 1;
       }
       if (haveB) {
         int tH = ++g_tmp;
         buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);"
-                      " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
+                      " if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data);"
                       " const char *_p%d = sp_String_cstr(_t%d); sp_int _v%d = ",
                    tH, srefB.p, tH, tH, tH, tH, tH);
         free(srefB.p);
@@ -13976,7 +13977,7 @@ static void emit_strbuf_encode_bang(Compiler *c, const char *ref, int hr, const 
   emit_route_recv_root(c, hr, th, 0, NULL, TY_STRING, b);
   int ta = encode_args_hold(c, argv, argc, &npos, b);
   buf_printf(b, " if (!_t%d) sp_nil_recv(\"encode!\");"
-                " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
+                " if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data);"
                 " sp_String_encode_into(_t%d, sp_str_encode(sp_String_cstr(_t%d), ", th, th, th, th, th);
   emit_encode_args(ta, npos, b);
   buf_printf(b, ")); sp_strbuf_read_pub(_t%d); })", th);
@@ -18971,7 +18972,7 @@ static void emit_poly_encoding_mutator(Compiler *c, const char *name, int recv, 
     int ta = encode_hold(c, "sp_RbVal", "SP_GC_ROOT_RBVAL", rv.p ? rv.p : "", recv, argv, argc, tv, &npos, b);
     free(rv.p);
     buf_printf(b, " if (sp_poly_is_strbuf(_t%d)) { sp_String *_h%d = (sp_String *)_t%d.v.p;"
-                  " if (sp_String_is_frozen(_h%d)) sp_raise_frozen_str(_h%d->data);"
+                  " if (sp_String_is_immutable(_h%d)) sp_raise_frozen_str(_h%d->data);"
                   " sp_String_encode_into(_h%d, sp_str_encode(sp_String_cstr(_h%d), ",
                tv, tv, tv, tv, tv, tv, tv);
     emit_encode_args(ta, npos, b);

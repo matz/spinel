@@ -9,6 +9,7 @@
    range plus Bignums up to the unsigned bound. Messages mirror CRuby's,
    including the "integer ... to" (fixnum) / "bignum ... into" wording. */
 #include "sp_iobuffer.h"
+#include "sp_string.h"
 #include "sp_io.h"       /* the IO integration: sp_File, the readiness parks */
 #include <stdlib.h>
 #include <string.h>
@@ -53,8 +54,13 @@ static int iob_slice_invalid(sp_IOBuffer *b);
 static void iob_readonly(sp_IOBuffer *b) {
   if (b->flags & SP_IOB_READONLY) sp_raise_cls("IO::Buffer::AccessError", "Buffer is not writable!");
 }
+static void iob_string_changed(sp_IOBuffer *b) {
+  if (b->source && b->source->borrowed_string)
+    sp_fd_publish(b->source->borrowed_string);
+}
 static void iob_writable_slice(sp_IOBuffer *b) {
   if (iob_slice_invalid(b)) sp_raise_cls("IO::Buffer::InvalidatedError", "Buffer is invalid!");
+  iob_string_changed(b);
 }
 static void iob_writable(sp_IOBuffer *b) {
   iob_readonly(b);
@@ -327,6 +333,7 @@ static sp_int iob_set_core(sp_IOBuffer *b, int ty, int64_t off, sp_RbVal val) {
 static void iob_scan(void *p) {
   sp_IOBuffer *b = (sp_IOBuffer *)p;
   if (b->source) sp_gc_mark(b->source);
+  if (b->borrowed_string) sp_gc_mark(b->borrowed_string);
 }
 /* The bytes this buffer's own malloc holds: a slice's data is NULL, a
    mapping is the file's pages, not the heap's. They are counted to the
@@ -334,13 +341,13 @@ static void iob_scan(void *p) {
    a buffer weighed its header alone, so a program churning large buffers
    grew by gigabytes without a collection. */
 static size_t iob_owned(sp_IOBuffer *b) {
-  return b->data && !b->map_base ? (size_t)b->size : 0;
+  return b->data && !b->map_base && !b->borrowed_string ? (size_t)b->size : 0;
 }
 /* Give the allocation back: munmap for a mapped file, free otherwise. */
 static void iob_release(sp_IOBuffer *b) {
   sp_gc_payload_resize(b, iob_owned(b), 0);
   if (b->map_base) { munmap(b->map_base, b->map_len); b->map_base = NULL; b->map_len = 0; }
-  else free(b->data);
+  else if (!b->borrowed_string) free(b->data);
   b->data = NULL;
 }
 void sp_IOBuffer_fin(void *p) {
@@ -404,6 +411,42 @@ sp_IOBuffer *sp_IOBuffer_become_for(sp_IOBuffer *b, const char *s) {
   sp_gc_payload_resize(b, 0, n);
   b->flags = SP_IOB_EXTERNAL | SP_IOB_READONLY | SP_IOB_SLICE;
   return b;
+}
+
+/* The private owner lives through the entire block, even if the yielded
+   buffer is freed or transferred. Derived views resolve through it and
+   become invalid when the block ends. */
+sp_IOBuffer *sp_IOBuffer_borrow_string(sp_IOBuffer *owner, const char *s) {
+  SP_GC_ROOT(owner);
+  SP_GC_ROOT_STR(s);
+  if (owner->data || owner->source) iob_arg("Borrow owner is already in use");
+  sp_String *string = sp_String_new_shared(s);
+  SP_GC_ROOT(string);
+  if (string->temporarily_locked) sp_raise_locked_str();
+  sp_IOBuffer *view = iob_alloc_obj(owner->cls_id);
+  const int readonly = sp_String_is_frozen(string);
+  if (!readonly) string->temporarily_locked = 1;
+  sp_gc_wb(owner);
+  owner->borrowed_string = string;
+  owner->data = (uint8_t *)string->data;
+  owner->size = string->len;
+  view->source = owner;
+  view->size = owner->size;
+  view->flags = SP_IOB_EXTERNAL | (readonly ? SP_IOB_READONLY : 0);
+  return view;
+}
+
+sp_IOBuffer *sp_IOBuffer_end_borrow(sp_IOBuffer *owner) {
+  sp_String *string = owner->borrowed_string;
+  if (!string) return owner;
+  if (string->temporarily_locked) {
+    sp_fd_publish(string);
+    string->temporarily_locked = 0;
+  }
+  owner->borrowed_string = NULL;
+  owner->data = NULL;
+  owner->size = 0;
+  return owner;
 }
 
 /* ---- generic + typed accessors ---- */
@@ -991,6 +1034,7 @@ static uint8_t *iob_io_span(sp_IOBuffer *b, sp_int *length, sp_int offset, int w
   *length = b->size - offset;
   if (writing && (b->flags & SP_IOB_READONLY)) sp_raise_cls("IO::Buffer::AccessError", "Buffer is not writable!");
   if (!base) sp_raise_cls("IO::Buffer::AccessError", "Buffer is not allocated!");
+  if (writing) iob_string_changed(b);
   return base + offset;
 }
 sp_int sp_IOBuffer_read_io(sp_IOBuffer *b, sp_RbVal io, sp_int length, sp_int offset) {

@@ -1639,10 +1639,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/rescue_modifiers_nested_too_deep.rb:6: this expression nests more levels of conditionals, rescue modifiers or blocks than the compiler's emission stack holds; bind an inner part to a local or a method
 spinel: 1 refusal, nothing written
 == test/reject/respond_to_missing_blank_slate_kernel_below.rb [default] rc=1
-spinel: test/reject/respond_to_missing_blank_slate_kernel_below.rb:13: a def under a condition only the run time decides, of a name another method answers (a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did not run is not known at compile time; see docs/limitations.md
+spinel: test/reject/respond_to_missing_blank_slate_kernel_below.rb:13: a def under a condition only the run time decides, in a class without Kernel, called on a subclass that includes Kernel, is not supported: Kernel's method answers in front of the def whether the branch ran or not, and the def's entry stands for the def; see docs/limitations.md
 spinel: 1 refusal, nothing written
 == test/reject/respond_to_missing_blank_slate_kernel_below.rb [promote] rc=1
-spinel: test/reject/respond_to_missing_blank_slate_kernel_below.rb:13: a def under a condition only the run time decides, of a name another method answers (a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did not run is not known at compile time; see docs/limitations.md
+spinel: test/reject/respond_to_missing_blank_slate_kernel_below.rb:13: a def under a condition only the run time decides, in a class without Kernel, called on a subclass that includes Kernel, is not supported: Kernel's method answers in front of the def whether the branch ran or not, and the def's entry stands for the def; see docs/limitations.md
 spinel: 1 refusal, nothing written
 == test/reject/retry_in_ensure.rb [default] rc=1
 spinel: test/reject/retry_in_ensure.rb:12: Invalid retry (SyntaxError)

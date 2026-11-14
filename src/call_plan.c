@@ -6423,8 +6423,14 @@ static int ver_list_held(Compiler *c, int id) {
   }
   return 0;
 }
-/* what a call is refused with where it reaches a def under a run-time condition that no cell tells ran (cond_def_override, cplan_bycount_gap) */
-static const char *cond_def_override_why(void) {
+/* what a call is refused with where it reaches a def under a run-time condition that no cell tells ran (cond_def_override,
+   cplan_bycount_gap); front: the class the call binds mixes Kernel in below the def's class (BYCOUNT_FRONT) */
+enum { BYCOUNT_GAP = 1, BYCOUNT_FRONT };
+static const char *cond_def_override_why(int front) {
+  if (front)
+    return "a def under a condition only the run time decides, in a class without Kernel, called on a subclass that "
+           "includes Kernel, is not supported: Kernel's method answers in front of the def whether the branch ran or not, "
+           "and the def's entry stands for the def; see docs/limitations.md";
   return "a def under a condition only the run time decides, of a name another method answers "
          "(a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did "
          "not run is not known at compile time; see docs/limitations.md";
@@ -6441,7 +6447,7 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
   if (is_raise_alias(name) && nt_int(nt, id, "class_new_capture", 0) && cplan_reachable(c, id))
     return "Class.new or Module.new with a block that captures outer locals is not supported; see docs/limitations.md";
   if (is_raise_alias(name) && nt_int(nt, id, "cond_def_override", 0) && cplan_reachable(c, id))
-    return cond_def_override_why();
+    return cond_def_override_why(0);
   int pq = is_method_presence_query(name);
   if ((nt_int(nt, id, "cond_def_reflect", 0) || (pq == 1 && ver_refl_named(c, id)) ||
        ((pq == 2 ? c->nver_refl || c->ncond_lone_disp || (c->ncond_disp && ver_list_held(c, id)) : pq == 3 && ver_list_held(c, id)) && !cplan_recv_own_member(c, id, name))) &&
@@ -6898,7 +6904,8 @@ static void cplan_bycount_ask(Compiler *c, int id, const char *nm, int k, unsign
   /* (a held def's entry in a class without Kernel, on a class k whose chain mixes Kernel in below it: CRuby's lookup meets
      Kernel's method in front of the history, which the entry does not stand for) */
   int front = refl && !row && ver_kernel_row_behind(c, k, nm);
-  if (by || held || front) *(int *)arg = 1;
+  if (by || held) *(int *)arg = BYCOUNT_GAP;
+  else if (front && !*(int *)arg) *(int *)arg = BYCOUNT_FRONT;
 }
 /* ...and the super of a prepended module's copy, which reaches the class's own version (ct_version_classes asks it of no class) */
 static int cplan_bycount_shadow_super(Compiler *c, const Scope *in, const char *nm) {
@@ -6914,7 +6921,7 @@ static int cplan_bycount_gap(Compiler *c, int id) {
   int gap = 0;
   if ((!c->nver_bycount && !c->nver_refl && !c->nver_refl_priv) || (k != NK_CallNode && !in) || !nm ||
       !(ver_bycount_named(c, nm) || bop_kernel_answers(nm, -1, 0) || ct_version_named(c, nm)) || !cplan_reachable(c, id)) return 0;
-  if (in && in->shadow == SHADOW_PREP && cplan_bycount_shadow_super(c, in, nm)) return 1;
+  if (in && in->shadow == SHADOW_PREP && cplan_bycount_shadow_super(c, in, nm)) return BYCOUNT_GAP;
   ct_version_classes(c, id, nm, cplan_bycount_ask, &gap);
   return gap;
 }
@@ -6930,8 +6937,9 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
   NodeKind k = nt_kind(c->nt, id);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    if (cplan_bycount_gap(c, id)) {
-      cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(), buf, cap);
+    int gap = cplan_bycount_gap(c, id);
+    if (gap) {
+      cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(gap == BYCOUNT_FRONT), buf, cap);
       return;
     }
     const CallPlan sp = cplan_user(c, id);
@@ -6975,8 +6983,9 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_CAPTURE, CR_FEATURE, msg, buf, cap);
     return;
   }
-  if (!what && cplan_bycount_gap(c, id)) {
-    cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(), buf, cap);
+  int gap = what ? 0 : cplan_bycount_gap(c, id);
+  if (gap) {
+    cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(gap == BYCOUNT_FRONT), buf, cap);
     return;
   }
   if (!what && cplan_capture_gap(c, id)) {
@@ -9719,8 +9728,10 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   /* (a record class's own builtin takes `*r, **k` passed on too: ar -1) */
   if (sg && cls >= 0 && ((ar >= 0 && bop_class_answers(name, ar, blk)) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
   /* (an instance-side name a Kernel row answers behind the versions: the row, called without a receiver at ar arguments,
-     which it refuses where it takes no such count. A class without Kernel has neither the row nor another builtin's
-     method of a Kernel row's name behind them: ver_kernel_row_behind) */
+     which it refuses where it takes no such count. A class without Kernel has no row behind them (ver_kernel_row_behind),
+     and cplan_other_answers, which reads such a name as Kernel's or Object's, is not asked there (bare). BasicObject's own
+     methods of a Kernel row's name, instance_eval and instance_exec, are not read here: such a class answers NoMethodError
+     for them past the versions, a gap) */
   int row = !sg && ver_kernel_row_behind(c, cls, name), bare = !sg && cls >= 0 && !row && bop_kernel_answers(name, -1, 0);
   if (row && ar >= 0) return VK_BUILTIN;
   /* (an instance-side method of the builtin a reopened class stands for:

@@ -6051,7 +6051,10 @@ CLASS_MACRO_STATE_LIMIT ?= 2.2
 # elab_header_owner, qualify_colliding_reads, elab_const_keys), which
 # spinel-work prints per step. The whole compile's work hid them, being more
 # than a hundred times theirs. The load record keys each write and read after
-# the walk from its entity (elab_const_keys), so they grow with N.
+# the walk from its entity (elab_const_keys), so they grow with N. A builder
+# B<i> = Class.new beside a header class B<i> is checked against the headers
+# and writes of its name (qc_refuse_conditional_builder): a scan of every one
+# for each builder is N^2.
 CONST_COLLISIONS_LIMIT ?= 2.2
 # Module functions (test/scale/module_functions.sh), compiled to C at N=100
 # and N=200, in both load models: N modules of ten functions after a bare

@@ -263,6 +263,31 @@ void anh_copy(ANameHash *dst, const ANameHash *src) {
   memcpy(dst->key, src->key, sizeof(char *) * (size_t)dst->n);
   memcpy(dst->next, src->next, sizeof(int) * (size_t)dst->n);
 }
+void ani_add(ANameIndex *x, const char *name, int v) {
+  if (x->n == x->cap) {
+    x->cap = x->cap ? x->cap * 2 : 64;
+    x->e = realloc(x->e, sizeof *x->e * (size_t)x->cap);
+    if (!x->e) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  x->e[x->n] = (ANameInt){ name, v, x->n };
+  x->n++;
+}
+static int ani_order(const void *a, const void *b) {
+  const ANameInt *x = a, *y = b;
+  int r = strcmp(x->name, y->name);
+  return r ? r : (x->ord > y->ord) - (x->ord < y->ord);
+}
+void ani_sort(ANameIndex *x) { qsort(x->e, (size_t)x->n, sizeof *x->e, ani_order); }
+int ani_first(const ANameIndex *x, const char *name) {
+  int lo = 0, hi = x->n;
+  while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (strcmp(x->e[mid].name, name) < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+void ani_free(ANameIndex *x) { free(x->e); x->e = NULL; x->n = x->cap = 0; }
 
 /* The program as written, read ahead of every desugar (analyze_program's
    first step). It notes each name the program gives a method by a def or may
@@ -6764,12 +6789,42 @@ static int qc_runs_with(const NodeTable *nt, const int *par, int hd, int st, int
   }
   return 0;
 }
+/* The class and module headers by the name qc_refuse_conditional_builder
+   matches (key_name of a plain constant path), by the name the unless form
+   matches (nt_key_name of any path), and the constant writes by name: the
+   questions asked of each builder write (which headers and which other
+   writes carry its name) scanned every header (and write) of the program
+   per builder, N^2 for N builders beside N headers
+   (test/scale/const_collisions.sh). The entries of a name are in the order
+   the program's walk met them, so a refusal is reported where it always
+   was. */
+typedef struct { ANameIndex hd, hdu, wr; } QCBuilderIdx;
+static void qc_builder_idx_build(Compiler *c, QCBuilderIdx *bx) {
+  const NodeTable *nt = c->nt;
+  static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
+  for (int h = 0; h < 2; h++)
+    NT_FOREACH_KIND(nt, HK[h], hd) {
+      int cp = nt_ref(nt, hd, "constant_path");
+      if (cp < 0) continue;
+      const char *kn = nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
+      if (kn) ani_add(&bx->hd, kn, hd);
+      const char *un = nt_key_name(nt, cp);
+      if (un) ani_add(&bx->hdu, un, hd);
+    }
+  ani_sort(&bx->hd); ani_sort(&bx->hdu);
+  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {
+    const char *on = nt_str(nt, o, "name");
+    if (on) ani_add(&bx->wr, on, o);
+  }
+  ani_sort(&bx->wr);
+}
+static void qc_builder_idx_free(QCBuilderIdx *bx) { ani_free(&bx->hd); ani_free(&bx->hdu); ani_free(&bx->wr); }
 /* `Bar = Class.new { } unless defined?(Bar)` (cond, the unless) ahead of
    header hd in the same statements, where no other write of Bar and no
    other class or module Bar is in a body the write can see (its own body,
    an enclosing body or the top level): the write runs, and the header
    reopens what it built. */
-static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, int cond,
+static int qc_unless_defined_runs(const NodeTable *nt, const int *par, const QCBuilderIdx *bx, int w, int cond,
                                   int hd, int body, const char *wn) {
   if (nt_kind(nt, cond) != NK_UnlessNode) return 0;
   int pr = nt_ref(nt, cond, "predicate");
@@ -6781,22 +6836,18 @@ static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, in
   if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_runs_with(nt, par, hd, cs, cond) ||
       !qc_written_before(nt, w, hd))
     return 0;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {
-    const char *on = nt_str(nt, o, "name");
-    if (o == w || !on || !sp_streq(on, wn)) continue;
+  for (int q = ani_first(&bx->wr, wn); q < bx->wr.n && sp_streq(bx->wr.e[q].name, wn); q++) {
+    int o = bx->wr.e[q].v;
+    if (o == w) continue;
     int ob = qc_enclosing_body(nt, par, o);
     for (int e = body; e >= 0; e = qc_enclosing_body(nt, par, e)) if (e == ob) return 0;
   }
-  static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
-  for (int h = 0; h < 2; h++)
-    NT_FOREACH_KIND(nt, HK[h], o) {
-      int cp = nt_ref(nt, o, "constant_path");
-      const char *on = cp >= 0 ? nt_key_name(nt, cp) : NULL;
-      if (!on || !sp_streq(on, wn)) continue;
-      int ob = qc_enclosing_body(nt, par, o);
-      if (ob == body) { if (!qc_written_before(nt, w, o)) return 0; continue; }
-      for (int e = body; e >= 0; e = qc_enclosing_body(nt, par, e)) if (e == ob) return 0;
-    }
+  for (int q = ani_first(&bx->hdu, wn); q < bx->hdu.n && sp_streq(bx->hdu.e[q].name, wn); q++) {
+    int o = bx->hdu.e[q].v;
+    int ob = qc_enclosing_body(nt, par, o);
+    if (ob == body) { if (!qc_written_before(nt, w, o)) return 0; continue; }
+    for (int e = body; e >= 0; e = qc_enclosing_body(nt, par, e)) if (e == ob) return 0;
+  }
   return 1;
 }
 /* Does header hd come ahead of builder write w in the run? In one file,
@@ -6834,42 +6885,40 @@ static int qc_header_runs_first(Compiler *c, const int *par, int hd, int w) {
 static void qc_refuse_conditional_builder(Compiler *c) {
   const NodeTable *nt = c->nt;
   const int *par = NULL;
+  QCBuilderIdx bx = {{0}};
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
     const char *wn = nt_str(nt, w, "name");
     if (!wn || class_def_builder(nt, w) < 0) continue;
-    if (!par) par = comp_parent_map(c);
+    if (!par) { par = comp_parent_map(c); qc_builder_idx_build(c, &bx); }
     int st = par[w];
     if (st >= 0 && nt_kind(nt, st) != NK_StatementsNode) st = -1;
     int body = qc_enclosing_body(nt, par, w);
-    static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
-    for (int h = 0; h < 2; h++)
-      NT_FOREACH_KIND(nt, HK[h], hd) {
-        int cp = nt_ref(nt, hd, "constant_path");
-        if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !key_name(c, cp) ||
-            !sp_streq(key_name(c, cp), wn) || qc_enclosing_body(nt, par, hd) != body)
-          continue;
-        /* A header that runs first makes its own class, and the write then
-           puts the built class in its place: the header's methods are not
-           the built class's. The passes would merge the two. */
-        if (qc_header_runs_first(c, par, hd, w)) {
-          char msg[512];
-          snprintf(msg, sizeof msg, "a `class %s` or `module %s` ahead of a %s = Class.new or Module.new "
-                   "in the same body is not supported: the write replaces the header's class with the "
-                   "built one, and spinel would merge the two; rename one of them", wn, wn, wn);
-          unsupported_feature(c, w, msg);
-          continue;
-        }
-        if (st >= 0 && qc_runs_with(nt, par, hd, st, w)) continue;
-        int cond = st >= 0 ? par[st] : -1;
-        if (cond >= 0 && qc_unless_defined_runs(nt, par, w, cond, hd, body, wn)) continue;
+    for (int q = ani_first(&bx.hd, wn); q < bx.hd.n && sp_streq(bx.hd.e[q].name, wn); q++) {
+      int hd = bx.hd.e[q].v;
+      if (qc_enclosing_body(nt, par, hd) != body) continue;
+      /* A header that runs first makes its own class, and the write then
+         puts the built class in its place: the header's methods are not
+         the built class's. The passes would merge the two. */
+      if (qc_header_runs_first(c, par, hd, w)) {
         char msg[512];
-        snprintf(msg, sizeof msg, "a %s = Class.new or Module.new that may run without a "
-                 "`class %s` or `module %s` in the same body, or the header without it, is not "
-                 "supported: spinel cannot tell whether the header reopens the built class; write "
-                 "the two together or rename one of them", wn, wn, wn);
+        snprintf(msg, sizeof msg, "a `class %s` or `module %s` ahead of a %s = Class.new or Module.new "
+                 "in the same body is not supported: the write replaces the header's class with the "
+                 "built one, and spinel would merge the two; rename one of them", wn, wn, wn);
         unsupported_feature(c, w, msg);
+        continue;
       }
+      if (st >= 0 && qc_runs_with(nt, par, hd, st, w)) continue;
+      int cond = st >= 0 ? par[st] : -1;
+      if (cond >= 0 && qc_unless_defined_runs(nt, par, &bx, w, cond, hd, body, wn)) continue;
+      char msg[512];
+      snprintf(msg, sizeof msg, "a %s = Class.new or Module.new that may run without a "
+               "`class %s` or `module %s` in the same body, or the header without it, is not "
+               "supported: spinel cannot tell whether the header reopens the built class; write "
+               "the two together or rename one of them", wn, wn, wn);
+      unsupported_feature(c, w, msg);
+    }
   }
+  qc_builder_idx_free(&bx);
 }
 
 void qualify_colliding_classes(Compiler *c) {

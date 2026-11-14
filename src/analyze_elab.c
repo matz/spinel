@@ -8818,11 +8818,14 @@ int elab_fire_after(Compiler *c, int list, int j) {
 /* The classes the walk made under a provisional name (elab_rec_open):
    each one's class, the node that carries its name, its header, and the
    name the walk would have given it; by that name in g_prov_names */
-static int *g_prov_cls, *g_prov_np, *g_prov_hdr; static char **g_prov_name; static int g_nprov;
+static int *g_prov_cls, *g_prov_np, *g_prov_hdr, *g_prov_owner; static char **g_prov_name; static int g_nprov;
 static ANameHash g_prov_names;
 static int *g_prov_of, g_prov_of_cap;   /* by class: its entry + 1, 0 for a class with its own name */
-static void elab_prov_note(Compiler *c, int ci, const char *name, int np, int hdr) {
+static void elab_prov_note(Compiler *c, int ci, const char *name, int np, int hdr, int owner) {
   (void)c;
+  g_prov_owner = realloc(g_prov_owner, sizeof(int) * (size_t)(g_nprov + 1));
+  if (!g_prov_owner) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  g_prov_owner[g_nprov] = owner;
   g_prov_cls = realloc(g_prov_cls, sizeof(int) * (size_t)(g_nprov + 1));
   g_prov_np = realloc(g_prov_np, sizeof(int) * (size_t)(g_nprov + 1));
   g_prov_hdr = realloc(g_prov_hdr, sizeof(int) * (size_t)(g_nprov + 1));
@@ -8851,12 +8854,22 @@ const char *elab_class_walk_name(const Compiler *c, int k) {
   if (k < 0 || k >= c->nclasses) return NULL;
   return k < g_prov_of_cap && g_prov_of[k] > 0 && g_prov_of[k] <= g_nprov ? g_prov_name[g_prov_of[k] - 1] : c->classes[k].name;
 }
-/* The class of name cname, a provisional class by the name it takes after
-   the walk too: the lowest index, as comp_class_index answers */
-static int elab_prov_index(Compiler *c, const char *cname) {
+/* Does class k walk under a provisional name? Such a class is nested in a
+   class or module of the program, so it is never a builtin, whatever its
+   leaf (`module Lib::Hash`) */
+int elab_class_provisional(const Compiler *c, int k) {
+  return k >= 0 && k < c->nclasses && elab_class_walk_name(c, k) != c->classes[k].name;
+}
+/* The class of name cname a header of owner `owner` (the record's) can
+   reopen by its name: a class that goes by its own name, or a provisional
+   one the walk gave cname under the same owner (a provisional class goes
+   by its leaf, which classes of other owners share); with no owner the
+   record holds, any of them. The lowest index, as comp_class_index answers */
+static int elab_prov_index(Compiler *c, const char *cname, int owner) {
   int ci = comp_class_index(c, cname);
   for (int i = anh_find(&g_prov_names, cname); i >= 0; i = g_prov_names.next[i])
-    if (sp_streq(g_prov_names.key[i], cname) && (ci < 0 || g_prov_cls[i] < ci)) ci = g_prov_cls[i];
+    if (sp_streq(g_prov_names.key[i], cname) && (owner == LR_UNKNOWN_CLASS || g_prov_owner[i] == owner) &&
+        (ci < 0 || g_prov_cls[i] < ci)) ci = g_prov_cls[i];
   return ci;
 }
 /* After the walk: each provisional class takes its name. Every one takes
@@ -8893,6 +8906,8 @@ void elab_prov_apply(Compiler *c) {
   for (int i = 0; i < nt->count; i++) free(keys[i]);
   free(keys);
   ANameHash done = { 0 };   /* the names given here */
+  unsigned char *qcls = calloc((size_t)c->nclasses + 1, 1);   /* by class: qualified here */
+  if (!qcls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < g_nprov; i++) {
     int ci = g_prov_cls[i], np = g_prov_np[i];
     if (!q[i]) {
@@ -8907,6 +8922,7 @@ void elab_prov_apply(Compiler *c) {
       if (!((o >= 0 && o != ci) || anh_has(&done, out)) || salt > 8) break;
     }
     comp_class_rename(c, ci, out);
+    qcls[ci] = 1;
     anh_add(&done, c->classes[ci].name);
     nt_node_set_str(nt, np, "qc_name", out);
     free(c->classes[ci].ruby_name_cache);
@@ -8917,16 +8933,19 @@ void elab_prov_apply(Compiler *c) {
   anh_free(&done);
   free(q);
   elab_prov_drop_derived(c);
-  /* (another header of a provisional class names it by qc_name too: the
-     name its class has now) */
+  /* every header and builder of a qualified class carries its name
+     (qc_name), for the readers after the walk (qualify_colliding_reads) */
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
-    int np = k == NK_ClassNode || k == NK_ModuleNode ? nt_ref(nt, id, "constant_path") : id;
-    if (np < 0 || !nt_str(nt, np, "qc_name")) continue;
+    if (k != NK_ClassNode && k != NK_ModuleNode && k != NK_ConstantWriteNode && k != NK_ConstantPathWriteNode) continue;
     int ci = elab_header_class(c, id, NULL, NULL);
-    if (ci >= 0 && ci < c->nclasses && c->classes[ci].name && !sp_streq(nt_str(nt, np, "qc_name"), c->classes[ci].name))
+    if (ci < 0 || ci >= c->nclasses || !qcls[ci] || !c->classes[ci].name) continue;
+    int np = k == NK_ClassNode || k == NK_ModuleNode ? nt_ref(nt, id, "constant_path")
+           : k == NK_ConstantPathWriteNode ? nt_ref(nt, id, "target") : id;
+    if (np >= 0 && !sp_streq(nt_str(nt, np, "qc_name") ? nt_str(nt, np, "qc_name") : "", c->classes[ci].name))
       nt_node_set_str(nt, np, "qc_name", c->classes[ci].name);
   }
+  free(qcls);
   anh_free(&g_prov_names); memset(&g_prov_names, 0, sizeof g_prov_names);
   for (int i = 0; i < g_nprov; i++) { free(g_prov_name[i]); if (g_prov_cls[i] < g_prov_of_cap) g_prov_of[g_prov_cls[i]] = 0; }
   g_nprov = 0;
@@ -8946,20 +8965,35 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *
      reopens, or none for a new one; where the record does not know (an
      alias, a write that may not have run), the class of its name */
   const LrHeader *h = c->lrec && c->lrec->walk ? lr_header(c->lrec, node, 0) : NULL;
+  /* (nested: the entity's owner, as the record holds it, is a class or
+     module other than Object) */
+  int nested_hdr = h && h->owner >= 0 && h->owner < c->nclasses && h->owner != comp_core_class(c, CORE_OBJECT);
+  int hown = h ? h->owner : LR_UNKNOWN_CLASS;
+  /* (an owner the record holds where it knows the header's entity; where
+     it does not, a body the load phase never places, as a lambda's, its
+     owner is no filter) */
+  int fown = h && h->want == LR_NEW ? hown : LR_UNKNOWN_CLASS;
+  /* a nested header the record says opens a new class makes one: during
+     the walk its leaf can be another class's name (`class NS::Base`
+     beside a top-level Base). A top-level one may still reopen the class
+     of its name, which an opening the record has no point for (a proc's
+     `class Foo` under the load graph) made */
   int ci = h && h->want >= 0 && h->want < c->nclasses ? h->want
-         : h && h->want == LR_NEW && elab_prov_index(c, cname) < 0 ? -1
-         : elab_prov_index(c, cname);
+         : h && h->want == LR_NEW && (nested_hdr || elab_prov_index(c, cname, fown) < 0) ? -1
+         /* (a builtin's reopening at the top level: never a nested class
+            that goes by the builtin's leaf during the walk) */
+         : h && h->want == LR_BUILTIN ? comp_class_index(c, cname)
+         : elab_prov_index(c, cname, fown);
   int made = ci < 0;
   if (made) {
     /* a nested class (the entity's owner, as the record holds it, is a
        class or module other than Object), or one the walk named by a
        qualified path, walks under a provisional name of its own:
        elab_prov_apply names it after the walk, by the rule */
-    int nested_hdr = h && h->owner >= 0 && h->owner < c->nclasses && h->owner != comp_core_class(c, CORE_OBJECT);
     if ((rname && strstr(cname, "__")) || nested_hdr) {
       char prov[700]; snprintf(prov, sizeof prov, "%s_qcp%d", cname, c->nclasses);
       comp_class_new(c, prov, node);
-      elab_prov_note(c, c->nclasses - 1, cname, cp >= 0 ? cp : node, node);
+      elab_prov_note(c, c->nclasses - 1, cname, cp >= 0 ? cp : node, node, hown);
     }
     else comp_class_new(c, cname, node);
     ci = c->nclasses - 1;

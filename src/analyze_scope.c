@@ -1568,27 +1568,14 @@ void header_parent_encloses(Compiler *c, int par, int child, const char *leaf, i
 
 
 static void wcn_add(char *out, size_t cap, const char *t) { strncat(out, t, cap - strlen(out) - 1); }
-/* The C name of the class the header or builder `id` opens, when the
-   qualify pass found its leaf colliding (its name node `np` carries the
-   salt it gave, and the name it stamped): the class's owner, as the
-   record holds it, and the owner's enclosing chain, each by the last name
-   of its Ruby path, then the leaf, joined by `__` after the salt's
-   underscores (`_Outer__Foo`). A compact header under a builtin
-   (`module Comparable::Ext`) is nested in nothing, so the builtin is no
-   part of the name. Its Ruby path in rb when asked (A::B::Foo). 0, with
-   out and rb untouched, for a name the pass left as written. */
-static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap, char *rb, size_t rcap) {
-  const NodeTable *nt = c->nt;
-  if (np < 0 || !nt_int(nt, np, "qc_qual", 0) || cap < 2) return 0;
-  int owner = scope_qualified_name(c, id, np, (int)nt_int(nt, np, "qc_salt", 0), out, cap, rb, rcap);
-  /* the readers after the walk find the name on the node */
-  nt_node_set_str((NodeTable *)nt, np, "qc_name", out);
-  nt_node_set_int((NodeTable *)nt, np, "qc_owner", owner + 2);
-  return 1;
-}
-/* The qualified name of header id (its constant path np) with salt
-   leading underscores, built as walk_class_c_name describes; its Ruby
-   path in rb when asked. The owner the name is built from. */
+/* The qualified C name of the class the header or builder `id` opens (its
+   name node `np`), as elab_prov_apply gives it after the walk: salt
+   leading underscores, then the class's owner, as the record holds it,
+   and the owner's enclosing chain, each by the last name of its Ruby
+   path, then the leaf, joined by `__` (`_Outer__Foo`). A compact header
+   under a builtin (`module Comparable::Ext`) is nested in nothing, so the
+   builtin is no part of the name. Its Ruby path in rb when asked
+   (A::B::Foo). The owner the name is built from. */
 int scope_qualified_name(Compiler *c, int id, int np, int salt, char *out, size_t cap, char *rb, size_t rcap) {
   const NodeTable *nt = c->nt;
   int owner = -2;
@@ -1702,10 +1689,8 @@ static int record_write_class(Compiler *c, int id, int hdr) {
   int ci = elab_header_class(c, id, NULL, NULL);
   if (ci >= 0) return ci;   /* a subtree two lists share, walked again */
   if (nt_kind(c->nt, id) == NK_ConstantWriteNode) {
-    char wname[600], wruby[600];
-    int qualified = walk_class_c_name(c, id, id, wname, sizeof wname, wruby, sizeof wruby);
-    const char *cname = qualified ? wname : nt_str(c->nt, id, "name");
-    return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, qualified ? wruby : NULL, hdr) : -1;
+    const char *cname = nt_str(c->nt, id, "name");
+    return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, NULL, hdr) : -1;
   }
   char an[48];
   snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id));
@@ -1808,9 +1793,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   if (ty_k == NK_ClassNode || ty_k == NK_ModuleNode) {
     int cp = nt_ref(c->nt, id, "constant_path");
     int alias = elab_header_entity(c, id, &w.pos);
-    char wname[600], wruby[600];
-    int qualified = walk_class_c_name(c, id, cp, wname, sizeof wname, wruby, sizeof wruby);
-    const char *cname = qualified ? wname : cp >= 0 ? key_name(c, cp) : NULL;
+    const char *cname = cp >= 0 ? key_name(c, cp) : NULL;
     int cls_toplevel = class_id < 0 && cp >= 0 &&
                        nt_kind(c->nt, cp) == NK_ConstantReadNode;
     /* An earlier pass mangles a nested name to `Outer__Inner`: test the leaf. */
@@ -1825,7 +1808,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
        C type is the bare tail name and still collides -- refuse that loudly
        too, as unsupported rather than TypeError. */
     if (ty_k == NK_ModuleNode && cname &&
-        ((is_builtin_class_name(cname) && !is_builtin_module_name(cname)) ||
+        ((is_builtin_class_name(cname) && !is_builtin_module_name(cname) && !qc_rule_nested(c, id)) ||
          (is_untabled_native_class_name(cls_leaf) && !header_qualified(c, id, cp, w.cblock)))) {
       int ln = (int)nt_int(c->nt, id, "node_line", 0);
       const char *file = c->nt->source_file ? c->nt->source_file : "source.rb";
@@ -1872,7 +1855,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     }
     if (nt_kind(c->nt, id) == NK_ClassNode && cname)
       refuse_native_class_reopen(c, id, id, cp, class_id, w.cblock, cls_leaf);
-    child_class = elab_rec_open(c, id, cp, cname, qualified ? wruby : NULL, class_cref(c, class_id, w.cblock));
+    child_class = elab_rec_open(c, id, cp, cname, NULL, class_cref(c, class_id, w.cblock));
   }
   /* `X = Class.new(S) do ... end`, `A::B = Module.new do ... end`: the class
      is made at the write, as a header's, and the block is walked with the
@@ -1880,10 +1863,8 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   else if (class_def_builder(c->nt, id) >= 0) {
     int cp = class_def_path(c->nt, id);
     elab_builder_entity(c, id, &w.pos);
-    char wname[600], wruby[600];
-    int qualified = walk_class_c_name(c, id, cp, wname, sizeof wname, wruby, sizeof wruby);
-    const char *bname = qualified ? wname : class_def_key(c, id);
-    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, bname, qualified ? wruby : NULL, class_cref(c, class_id, w.cblock));
+    const char *bname = class_def_key(c, id);
+    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, bname, NULL, class_cref(c, class_id, w.cblock));
   }
   /* `P = Struct.new(:a) do ... end`, `k = Data.define(:a)`: likewise */
   else if (class_def_record(c->nt, id) >= 0) {

@@ -1449,6 +1449,9 @@ typedef struct {
   SP_TY_FIELD char *empty_arr_recv; /* [node_cap] empty `[]` used as a direct receiver/interpolation -> TY_POLY_ARRAY */
   SP_TY_FIELD char *empty_hash_recv; /* [node_cap] empty `{}` used as a direct receiver/interpolation -> TY_STR_POLY_HASH */
   SP_TY_FIELD char *empty_hash_arg;  /* [node_cap] empty `{}` passed as a user-method arg -> TY_POLY_POLY_HASH */
+  SP_TY_FIELD char *pow_signed;      /* [node_cap] an Integer power (`b ** e`, `b.pow(e)`, `x **= e`) whose run-time exponent the
+                                       facts do not show >= 0: it may be negative, so the power is a boxed Integer or Rational
+                                       (mark_int_pow_signed; only ever set) */
   char *store_misfit_arg; /* [node_cap] a typed array passed to a boxed parameter
                           the method stores an element into that the array
                           cannot hold: codegen refuses it unless the binding
@@ -2992,6 +2995,7 @@ static inline uint64_t comp_node_marks_digest(const Compiler *c, uint64_t h, int
   if (c->empty_arr_recv) h = mix(h, c->empty_arr_recv, (size_t)n * sizeof *c->empty_arr_recv);
   if (c->empty_hash_recv) h = mix(h, c->empty_hash_recv, (size_t)n * sizeof *c->empty_hash_recv);
   if (c->empty_hash_arg) h = mix(h, c->empty_hash_arg, (size_t)n * sizeof *c->empty_hash_arg);
+  if (c->pow_signed) h = mix(h, c->pow_signed, (size_t)n * sizeof *c->pow_signed);
   if (c->store_misfit_arg) h = mix(h, c->store_misfit_arg, (size_t)n * sizeof *c->store_misfit_arg);
   if (c->ivar_widen_src) h = mix(h, c->ivar_widen_src, (size_t)n * sizeof *c->ivar_widen_src);
   if (c->hash_want) h = mix(h, c->hash_want, (size_t)n * sizeof *c->hash_want);
@@ -3021,6 +3025,11 @@ static inline char comp_set_empty_hash_arg(Compiler *c, int id, char v) {
   if (c->empty_hash_arg[id] != v) { ((char *)c->empty_hash_arg)[id] = v; comp_touch_node(c, id); }
   return v;
 }
+static inline char comp_set_pow_signed(Compiler *c, int id, char v) {
+  if (c->pow_signed[id] != v) { ((char *)c->pow_signed)[id] = v; comp_touch_node(c, id); }
+  return v;
+}
+static inline int comp_pow_signed(const Compiler *c, int id) { return comp_node_in(c, id) && c->pow_signed[id]; }
 static inline TyKind comp_set_hash_want(Compiler *c, int id, TyKind v) {
   if (c->hash_want[id] != v) { ((TyKind *)c->hash_want)[id] = v; comp_touch_node(c, id); }
   return v;

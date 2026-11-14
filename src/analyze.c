@@ -39133,6 +39133,52 @@ int an_int_nonneg(Compiler *c, int id) {
   return !for_each_value_position(c->nt, id, VPS_IF | VPS_UNLESS, an_int_nonneg_leaf, c);
 }
 
+/* An Integer power's exponent: an Integer that is no literal (a literal one
+   is typed by its own sign, infer_int_pow_type). Marks the power when the
+   facts do not show the exponent >= 0 (or the decision is denied): its result
+   is then boxed and answered by the exponent's sign (a Rational for a
+   negative one, CRuby's answer; the plain Integer path raised RangeError). */
+static int pow_exp_marks(Compiler *c, int id, int exp) {
+  const NodeTable *nt = c->nt;
+  if (exp < 0 || nt_kind(nt, exp) == NK_IntegerNode || infer_type(c, exp) != TY_INT) return 0;
+  if (comp_pow_signed(c, id) || !nn_fresh()) return 0;
+  if (an_int_nonneg(c, exp) && decide_node(nt, id, "pow-int", NULL)) return 0;
+  comp_set_pow_signed(c, id, 1);
+  return 1;
+}
+/* The fixpoint pass that decides the mark for every Integer power
+   (`b ** e`, `b.pow(e)`, `x **= e`). The fact cannot be asked from the
+   `**` inference rule itself: the nil-narrowing facts are computed lazily
+   during inference and read the powers' types (nullable_int_value), so the
+   rule asking them would see the facts busy in one query and finished in
+   the next, and the node's type would flip inside a round. The mark only
+   ever gets set, so the types it drives only widen and the fixpoint still
+   converges. It is read by infer_int_pow_type. Nothing is marked under
+   --int-overflow=promote, where every power not both constants is already
+   boxed, nor before the round's facts exist. Linear in the power sites. */
+static int mark_int_pow_signed(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (g_promote_mode) return 0;
+  int ch = 0;
+  for (int pass = 0; pass < 2; pass++) {
+    for (int id = an_calls_named_first(c, pass ? "pow" : "**"); id >= 0; id = an_calls_named_next(id)) {
+      int recv = nt_ref(nt, id, "receiver");
+      int ca = nt_ref(nt, id, "arguments"); int an = 0;
+      const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      if (recv < 0 || an != 1 || nt_ref(nt, id, "block") >= 0 || infer_type(c, recv) != TY_INT) continue;
+      ch |= pow_exp_marks(c, id, av[0]);
+    }
+  }
+  for (int id = comp_kind_first(c, NK_LocalVariableOperatorWriteNode); id >= 0; id = comp_kind_next(c, id)) {
+    if (!is_pow_op(nt_str(nt, id, "binary_operator"))) continue;
+    const char *nm = nt_str(nt, id, "name");
+    LocalVar *lv = nm ? scope_local(comp_scope_of(c, id), nm) : NULL;
+    if (!lv || lv->type != TY_INT) continue;
+    ch |= pow_exp_marks(c, id, nt_ref(nt, id, "value"));
+  }
+  return ch;
+}
+
 static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
   const NodeTable *nt = c->nt;
   if (id < 0 || id >= nn_cap) return;
@@ -51748,6 +51794,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     if (!g_infer_getter_write_pending)
       ch |= AN_PASS("fold_static_is_a", fold_static_is_a(c));               /* if v.is_a?(Array) on a typed local: one arm */
     ch |= AN_PASS("infer_block_params", infer_block_params(c));
+    ch |= AN_PASS("mark_int_pow_signed", mark_int_pow_signed(c));            /* an Integer power's exponent that may be negative: boxed */
     ch |= AN_PASS("infer_for_index", infer_for_index(c));
     ch |= AN_PASS("infer_catch_block_params", infer_catch_block_params(c));
     /* Resolve constant types before ivar inference: a destructured constant

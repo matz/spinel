@@ -6507,8 +6507,11 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
     /* Integer ** <negative literal>: a Rational in CRuby (2 ** -2 == (1/4)).
-       The non-literal-exponent form types poly and resolves in sp_poly_pow. */
-    if (crt == TY_INT && argc == 1 && sp_streq(name, "**") &&
+       The non-literal-exponent form types poly and resolves in sp_poly_pow, as
+       does a run-time base (it can be 1 or -1, whose power is an Integer): the
+       literal base is the one the plain Rational answers. */
+    if (crt == TY_INT && argc == 1 && is_pow_op(name) &&
+        (repr_of(c, id).kind != RK_BOXED || nt_kind(nt, recv) == NK_IntegerNode) &&
         nt_kind(nt, argv[0]) == NK_IntegerNode &&
         !nt_str(nt, argv[0], "bigval") && nt_int(nt, argv[0], "value", 0) < 0) {
       long long ex = (long long)nt_int(nt, argv[0], "value", 0);
@@ -18801,13 +18804,15 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
     }
-    /* --int-overflow=promote: an int `**` the inference could not prove
-       exact is typed TY_POLY (the `<<` rule): sp_poly_pow promotes past the
-       word and boxes the rest. Keyed on the cached node type, as `<<` is, so
-       the two halves of the compiler cannot drift; the re-derivation below
-       would otherwise hand the pair back to the raising int helper. The
-       receiver boxes its nil as nil, which has no `**`. */
-    if (g_promote_mode && is_pow_op(name) && rt == TY_INT && rr.kind == RK_BOXED) {
+    /* an int `**` the inference typed boxed (infer_int_pow_type: under
+       --int-overflow=promote one it could not prove exact, in any mode one
+       whose run-time exponent may be negative) is sp_poly_pow: it promotes
+       past the word, answers a Rational for a negative exponent and boxes the
+       rest. Keyed on the node's representation, as `<<` is, so the two halves
+       of the compiler cannot drift; the re-derivation below would otherwise
+       hand the pair back to the raising int helper. The receiver boxes its
+       nil as nil, which has no `**`. */
+    if (is_pow_op(name) && rt == TY_INT && rr.kind == RK_BOXED) {
       buf_puts(b, "sp_poly_pow_recv("); emit_boxed(c, recv, b);
       buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
       return 1;

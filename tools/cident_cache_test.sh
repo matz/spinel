@@ -18,6 +18,18 @@ while [ "$#" -gt 0 ]; do
 done
 # a program reads the support file it names, as a require_relative does
 if grep -q 'support/input' "$input"; then cat "$input" test/support/input.txt > "$out"; else cat "$input" > "$out"; fi
+# CIDENT_TEST_LITERAL: a frozen literal of the program's own path, as
+# __FILE__ gives one, whose header holds the FNV-1a hash of its bytes
+# (fzl_emit_defs). The hash is computed here apart from cident's. =wrong:
+# the reference's compiler (not this tree's) writes a hash one off.
+if [ -n "${CIDENT_TEST_LITERAL-}" ]; then
+  off=0
+  [ "$CIDENT_TEST_LITERAL" = wrong ] && [ "$0" != "$CIDENT_TEST_TMP/tree/bin/spinel" ] && off=1
+  perl -e 'my ($p, $off, $h) = @ARGV; my $n = length $p;
+    { use integer; $h = -3750763034362895579; $h = ($h ^ $_) * 1099511628211 for unpack "C*", $p; $h += $off }
+    printf "static struct { sp_str_hdr h; unsigned char m; char d[%d]; } _fzl_0 = { { 0, %d | SP_STR_SIZE_ASCII7, %d, 0x%xULL }, 0xf1, \"%s\" };\n",
+      $n + 1, $n + 1, $n, $h || 1, $p' "$PWD/$input" "$off" >> "$out"
+fi
 COMPILER
 chmod +x "$T/tree/bin/spinel"
 printf 'puts 1 # support/input\n' > "$T/tree/test/a.rb"
@@ -70,6 +82,15 @@ if [ "$1" = corpus ]; then
   rm test/b.rb
   check removed
   printf 'builds: '; find "$T" -name 'build-*' | wc -l | tr -d ' '
+elif [ "$1" = literal ]; then
+  # The rename of the reference tree's path reaches the hash in the header
+  # of a literal that holds the path, not only its bytes.
+  export CIDENT_TEST_LITERAL=1
+  check literal
+  # a hash the reference's compiler got wrong is not renamed into a right one
+  # (a new reference: the cached one holds the right hash)
+  rm -rf build/cident; CIDENT_TEST_LITERAL=wrong
+  check 'wrong hash'
 elif [ "$1" = abandoned ]; then
   # A run killed with SIGKILL runs no cleanup. The next run must still get
   # the lock once the killed run's own processes are gone.

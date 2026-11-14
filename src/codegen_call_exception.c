@@ -370,7 +370,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       /* the runtime stores a String Array: an Array whose kind only the
          run time knows (a `callstack.map(&:to_s)` of an untyped
          parameter) is converted from its box */
-      if (repr_of(c, argv[0]).elem == TY_STRING) emit_expr(c, argv[0], b);
+      if (repr_of(c, argv[0]).elem == TY_STRING) { buf_puts(b, "sp_exc_backtrace_strs("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else { buf_puts(b, "sp_exc_backtrace_arg("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
       buf_puts(b, "); })");
       return 1;

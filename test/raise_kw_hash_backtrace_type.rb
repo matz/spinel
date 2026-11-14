@@ -35,3 +35,6 @@ begin
 rescue => r
   p [r.message, r.backtrace]
 end
+g = ["f:1", "g:2"]
+g[3] = "h:3"
+t { e.set_backtrace(g) }

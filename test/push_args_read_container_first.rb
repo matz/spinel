@@ -137,6 +137,16 @@ p rb
 rc = [0, 1]
 try_it { rc.insert(1, 7, 1 / 0) }
 p rc
+# a constant that may be unset raises NameError before anything is pushed;
+# one always defined is read where it stands
+MAYBE = 5 if ARGV.size > 99
+cn = [0]
+try_it { cn.push(1, MAYBE) }
+p cn
+ALWAYS = 7
+cd = [0]
+cd.push(1, ALWAYS)
+p cd
 # a splat beside a container read
 sp = [0, 1]
 sp.push(sp[-2], *[sp[-1]])

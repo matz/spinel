@@ -26936,14 +26936,17 @@ static int range_lit_ends_ordered(Compiler *c, int v, int last) {
   return subtree_has_side_effect(c, lo) || subtree_has_side_effect(c, hi);
 }
 
-/* Is an argument of kind k a plain value: a literal or a read of a
-   variable or a constant, which reads the same whenever it runs, reads no
-   container and raises nothing? */
-static int push_arg_is_plain(NodeKind k) {
+/* Is argument n a plain value: a literal or a read of a variable, or of a
+   constant the program always defines first (the operand-order record's
+   pure constant read: one that may be unset raises NameError), which reads
+   the same whenever it runs, reads no container and raises nothing? */
+static int push_arg_is_plain(Compiler *c, int n) {
+  NodeKind k = nt_kind(c->nt, n);
+  if (k == NK_ConstantReadNode) return subtree_code_is_pure_read(c, n);
   return k == NK_IntegerNode || k == NK_FloatNode || k == NK_StringNode || k == NK_SymbolNode ||
          k == NK_NilNode || k == NK_TrueNode || k == NK_FalseNode || k == NK_SelfNode ||
          k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode ||
-         k == NK_GlobalVariableReadNode || k == NK_ConstantReadNode;
+         k == NK_GlobalVariableReadNode;
 }
 /* Is call id a push or an append of several arguments, or an insert of
    several values, which its arms write as one push or insert per value,
@@ -26964,7 +26967,7 @@ int push_args_read_before_pushes(Compiler *c, int id) {
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   if (ac <= first || nt_argv_has_splat(nt, av, ac)) return 0;
   for (int i = first; i < ac; i++)
-    if (!push_arg_is_plain(nt_kind(nt, av[i]))) return 1;
+    if (!push_arg_is_plain(c, av[i])) return 1;
   return 0;
 }
 static int emit_operands_in_order(Compiler *c, int id, Buf *b) {

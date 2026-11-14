@@ -16517,6 +16517,15 @@ static int ple_npw = 0;
    literal even though the container/arg holds a reference, not the literal
    itself (#3175). */
 static void ple_mark_escaped(Compiler *c, int x);
+/* Do ivar nodes `a` and `b` name the same slot (holder_of_node)? A module
+   or class body's `@b = ->(c) { }` runs in a scope of no class, yet its
+   @b is the one the body's singleton methods (`def self.b = @b`) read: the
+   scope's class alone kept the two apart. */
+static int ivar_same_holder(Compiler *c, int a, int b) {
+  HolderRef ha, hb;
+  return holder_of_node_slot(c, a, &ha) && holder_of_node_slot(c, b, &hb) &&
+         ha.cid >= 0 && ha.cid == hb.cid && ha.cls_slot == hb.cls_slot;
+}
 typedef struct { Compiler *c; int self; } PleMark;
 static int ple_mark_leaf(const VpLeaf *leaf, void *ud) {
   PleMark *m = ud;
@@ -16562,7 +16571,8 @@ static void ple_mark_escaped(Compiler *c, int x) {
   if (!vn) return;
   for (int i = 0; i < ple_npw; i++) {
     if (ple_pw[i * 4] != want_kind) continue;
-    if (want_kind != 1 && ple_pw[i * 4 + 1] != want_idx) continue;
+    if (want_kind != 1 && ple_pw[i * 4 + 1] != want_idx &&
+        !(want_kind == 2 && ivar_same_holder(c, ple_pw[i * 4 + 2], x))) continue;
     const char *wn = nt_str(nt, ple_pw[i * 4 + 2], "name");
     if (!wn || !sp_streq(wn, vn)) continue;
     ple_escaped[ple_pw[i * 4 + 3]] = 1;
@@ -16570,10 +16580,13 @@ static void ple_mark_escaped(Compiler *c, int x) {
 }
 /* The proc literals among the value positions of a value, and how many
    positions there are */
-typedef struct { Compiler *c; int *lit; int nlit, cap, nleaf; } PleLeaves;
+typedef struct { Compiler *c; int *lit; int nlit, cap, nleaf, ivars; } PleLeaves;
 static int ple_leaf(const VpLeaf *leaf, void *ud) {
   PleLeaves *p = ud;
   p->nleaf++;
+  /* (an ivar read among a tail's values: ple_mark_tail_literals) */
+  if (p->ivars && leaf->kind == VPK_EXPR && nt_kind(p->c->nt, leaf->node) == NK_InstanceVariableReadNode)
+    ple_mark_escaped(p->c, leaf->node);
   if (leaf->kind != VPK_EXPR ||
       !(nt_kind(p->c->nt, leaf->node) == NK_LambdaNode || is_proc_create(p->c, leaf->node))) return 0;
   if (p->nlit == p->cap) {
@@ -16586,10 +16599,14 @@ static int ple_leaf(const VpLeaf *leaf, void *ud) {
   return 0;
 }
 /* The proc literals among the value positions of `tail` (the value a method,
-   a lambda or a block answers) escape: the caller has the type-erased proc. */
+   a lambda or a block answers) escape: the caller has the type-erased proc.
+   So do the literals an ivar there holds: `def self.b = @b` hands out the
+   lambda the body wrote to @b, and its caller's `V.b.call(obj)` names no
+   literal, so the parameter kept the Integer default and read the object
+   as an Integer. */
 static void ple_mark_tail_literals(Compiler *c, int tail) {
   if (tail < 0 || tail >= ple_ntc) return;
-  PleLeaves pl = { c, NULL, 0, 0, 0 };
+  PleLeaves pl = { c, NULL, 0, 0, 0, 1 };
   for_each_value_position(c->nt, tail, VP_AND_LEFT | VPS_ALL, ple_leaf, &pl);
   for (int q = 0; q < pl.nlit; q++) ple_escaped[pl.lit[q]] = 1;
   free(pl.lit);
@@ -16640,6 +16657,25 @@ static void ple_build(Compiler *c) {
       }
       free(pl.lit);
     }
+  }
+  /* An attr_reader answers its ivar as a method's tail does (`class << self;
+     attr_reader :b; end` for a body's `@b = ->(c) { }`, or an instance's
+     `attr_reader :b` for one `initialize` writes): the caller of `V.b` has
+     the type-erased proc, so the literal escapes. An instance ivar's reader
+     may be declared by any class that has the slot (a subclass's). */
+  for (int i = 0; i < ple_npw; i++) {
+    if (ple_pw[i * 4] != 2) continue;
+    HolderRef h;
+    int w = ple_pw[i * 4 + 2];
+    if (!holder_of_node_slot(c, w, &h) || h.cid < 0 || !h.name || h.name[0] != '@') continue;
+    const char *rn = h.name + 1;
+    int hit = 0;
+    if (h.cls_slot) hit = comp_is_sg_reader(&c->classes[h.cid], rn);
+    else
+      for (int k = 0; k < c->nclasses && !hit; k++)
+        hit = comp_is_reader(&c->classes[k], rn) &&
+              (k == h.cid || comp_ivar_index(&c->classes[k], h.name) >= 0);
+    if (hit) ple_escaped[ple_pw[i * 4 + 3]] = 1;
   }
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     int ca = nt_ref(nt, id, "arguments");
@@ -18717,7 +18753,7 @@ static int cs_type_proc_name(Compiler *c, int recv, const int *argv, int argc, i
     }
     else if (want_kind == 2) {
       Scope *ws = comp_scope_of(c, w);
-      if (!ws || ws->class_id != call_cls) continue;
+      if (!ws || (ws->class_id != call_cls && !ivar_same_holder(c, w, recv))) continue;
     }
     const char *wname = nt_str(nt, w, "name");
     if (!wname || !sp_streq(wname, varname)) continue;

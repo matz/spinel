@@ -439,6 +439,20 @@ int emit_op_hash_to_s(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
+/* The receiver of typed Hash call x: through sp_nil_recv_named, which
+   raises NoMethodError under the call's name as written, where the nil fact
+   says it may be nil (#9347); as it is where it is never nil, where it is
+   read as tested (inside the call's nil arm), or where the call is a safe
+   navigation. */
+static void emit_hash_recv_named(Compiler *c, const BopCtx *x, Buf *b) {
+  int named = !recv_never_nil(c, x->recv) && !nt_safe_nav(c->nt, x->id) &&
+              !repr_of(c, x->recv).nil_tested;
+  if (named) buf_puts(b, "sp_nil_recv_named(");
+  if (x->rtext) buf_puts(b, x->rtext);
+  else emit_expr(c, x->recv, b);
+  if (named) buf_printf(b, ", \"%s\")", x->name);
+}
+
 /* Can a value of typed Hash kind rt (receiver recv), one not of boxed
    values, be nil? A String value is held as its handle, whose NULL is nil
    (elem_held), and an Integer value carries its nil where analyze marked
@@ -465,7 +479,7 @@ int emit_op_hash_compact_bang(Compiler *c, const BopCtx *x, Buf *b) {
   const char *hnc = ty_hash_cname(rt);
   if (!hnc) return 0;
   int th = ++g_tmp, tf = ++g_tmp, ti = ++g_tmp, tv = ++g_tmp, tc2 = ++g_tmp;
-  buf_printf(b, "({ sp_%sHash *_t%d = ", hnc, th); emit_expr(c, recv, b);
+  buf_printf(b, "({ sp_%sHash *_t%d = ", hnc, th); emit_hash_recv_named(c, x, b);
   buf_printf(b, "; SP_GC_ROOT(_t%d); if (_t%d && sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);",
              th, th, th, th, hash_box_cls(rt));
   int poly = ty_hash_val(rt) == TY_POLY;
@@ -883,15 +897,12 @@ int emit_op_hash_nil_recv(Compiler *c, const BopCtx *x, Buf *b) {
   const char *hn = ty_hash_cname(x->rt);
   if (!hn) return 0;
   int empty = sp_streq(x->name, "empty?");
-  int named = !recv_never_nil(c, x->recv) && !nt_safe_nav(c->nt, x->id);
   /* a length where the call's slot holds its nil is lifted, as the template did */
   int lift = !empty && node_is_oint(c, x->id);
   if (lift) buf_printf(b, "%s(", oint_of(TY_INT));
   if (empty) buf_puts(b, "(");
-  buf_printf(b, "sp_%sHash_length(%s", hn, named ? "sp_nil_recv_named(" : "");
-  if (x->rtext) buf_puts(b, x->rtext);
-  else emit_expr(c, x->recv, b);
-  if (named) buf_printf(b, ", \"%s\")", x->name);
+  buf_printf(b, "sp_%sHash_length(", hn);
+  emit_hash_recv_named(c, x, b);
   buf_puts(b, ")");
   if (empty) buf_puts(b, " == 0)");
   if (lift) buf_puts(b, ")");
@@ -1106,12 +1117,12 @@ int emit_op_hash_compact(Compiler *c, const BopCtx *x, Buf *b) {
   TyKind vt = ty_hash_val(rt);
   if (vt != TY_POLY && !hash_typed_val_may_nil(c, recv, rt)) {
     /* values that cannot be nil: compact is dup */
-    buf_printf(b, "sp_%sHash_dup(", hn); emit_expr(c, recv, b); buf_puts(b, ")");
+    buf_printf(b, "sp_%sHash_dup(", hn); emit_hash_recv_named(c, x, b); buf_puts(b, ")");
   }
   else if (vt != TY_POLY) {
     /* a copy of the pairs whose value is not nil, keeping the default */
     int th = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp;
-    buf_printf(b, "({ sp_%sHash *_t%d = ", hn, th); emit_expr(c, recv, b);
+    buf_printf(b, "({ sp_%sHash *_t%d = ", hn, th); emit_hash_recv_named(c, x, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);", th, hn, tr, hn, tr);
     buf_printf(b, " _t%d->default_v = _t%d->default_v;", tr, th);
     if (oint_kind(vt)) buf_printf(b, " _t%d->default_nil = _t%d->default_nil;", tr, th);
@@ -1121,7 +1132,7 @@ int emit_op_hash_compact(Compiler *c, const BopCtx *x, Buf *b) {
   }
   else if (rt == TY_POLY_POLY_HASH) {
     int th = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp;
-    buf_printf(b, "({ sp_PolyPolyHash *_t%d = ", th); emit_expr(c, recv, b);
+    buf_printf(b, "({ sp_PolyPolyHash *_t%d = ", th); emit_hash_recv_named(c, x, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); sp_PolyPolyHash *_t%d = sp_PolyPolyHash_new(); SP_GC_ROOT(_t%d);", th, tr, tr);
     /* compact keeps the default and default proc, like dup */
     buf_printf(b, " _t%d->default_v = _t%d->default_v; _t%d->dproc = _t%d->dproc; _t%d->dproc_self = _t%d->dproc_self;", tr, th, tr, th, tr, th);
@@ -1133,7 +1144,7 @@ int emit_op_hash_compact(Compiler *c, const BopCtx *x, Buf *b) {
   else {
     /* SYM_POLY_HASH or other poly-valued hash */
     int th = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp;
-    buf_printf(b, "({ sp_%sHash *_t%d = ", hn, th); emit_expr(c, recv, b);
+    buf_printf(b, "({ sp_%sHash *_t%d = ", hn, th); emit_hash_recv_named(c, x, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);", th, hn, tr, hn, tr);
     buf_printf(b, " _t%d->default_v = _t%d->default_v; _t%d->dproc = _t%d->dproc; _t%d->dproc_self = _t%d->dproc_self;", tr, th, tr, th, tr, th);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {", ti, ti, th, ti);

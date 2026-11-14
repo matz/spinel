@@ -56,59 +56,61 @@ module Digest
       Digest::FileResult.new(hexdigest(data), digest(data), base64digest(data))
     end
   end
-  # What `Digest::<Algo>.new` answers. CRuby's instance keeps the running
-  # hash state; this one keeps the bytes given to `update` and hashes them
-  # when a digest is asked for, so the answers are the same and the memory
-  # grows with the input.
+  # The runtime's incremental hashing (lib/sp_crypto.c): a state is the
+  # chaining value, the byte count and the partial block, in a binary String
+  # of 104 bytes or fewer; the empty String is the initial state. Each call
+  # answers a new state rather than changing the one given.
+  module Native
+    native_lib "digest"
+    native_func :sha256_update, [:string, :string], :cbinstr, "sp_crypto_sha256_update"
+    native_func :sha256_final,  [:string],          :cbinstr, "sp_crypto_sha256_final"
+    native_func :sha1_update,   [:string, :string], :cbinstr, "sp_crypto_sha1_update"
+    native_func :sha1_final,    [:string],          :cbinstr, "sp_crypto_sha1_final"
+    native_func :md5_update,    [:string, :string], :cbinstr, "sp_crypto_md5_update"
+    native_func :md5_final,     [:string],          :cbinstr, "sp_crypto_md5_final"
+  end
+
+  # What `Digest::<Algo>.new` answers. It keeps the running hash state, as
+  # CRuby's instance does: an update hashes the whole blocks it completes
+  # and keeps the rest, so the memory stays the same however much is fed,
+  # and a digest hashes only the last block or two. A copy (dup, clone)
+  # shares the state String, which no update changes in place (#11348), so
+  # a copy of an object that has hashed a key's block starts from there.
   class Instance
     def initialize(algorithm)
       @algorithm = algorithm
-      @data = "".b
+      @state = "".b
     end
-
-    # a copy (dup, clone) takes its own state: update appends to @data in
-    # place, so a shared one changed the original too (#11348)
-    def initialize_copy(other)
-      @data = other.__data.dup
-    end
-
-    protected def __data = @data
 
     def update(string)
-      @data << string.b
+      @state =
+        case @algorithm
+        when :sha256 then Native.sha256_update(@state, string.b)
+        when :sha1 then Native.sha1_update(@state, string.b)
+        else Native.md5_update(@state, string.b)
+        end
       self
     end
 
     def <<(string) = update(string)
 
     def reset
-      @data = "".b
+      @state = "".b
       self
-    end
-
-    def hexdigest
-      case @algorithm
-      when :sha256 then SHA256.hexdigest(@data)
-      when :sha1 then SHA1.hexdigest(@data)
-      else MD5.hexdigest(@data)
-      end
     end
 
     def digest
       case @algorithm
-      when :sha256 then SHA256.digest(@data)
-      when :sha1 then SHA1.digest(@data)
-      else MD5.digest(@data)
+      when :sha256 then Native.sha256_final(@state)
+      when :sha1 then Native.sha1_final(@state)
+      else Native.md5_final(@state)
       end
     end
 
-    def base64digest
-      case @algorithm
-      when :sha256 then SHA256.base64digest(@data)
-      when :sha1 then SHA1.base64digest(@data)
-      else MD5.base64digest(@data)
-      end
-    end
+    # unpack1 and pack answer a String the interpolation types
+    def hexdigest = "#{digest.unpack1("H*")}"
+
+    def base64digest = "#{[digest].pack("m0")}"
   end
 
   # What `Digest::<Algo>.file(path)` answers. CRuby answers an instance of

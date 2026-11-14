@@ -94,6 +94,21 @@ ins3 = [0, 1]
 ins3.insert(-1, 7, ins3.size)
 p ins3
 
+# a nil, a literal or a local beside them keeps its place
+nb = [0, 1]
+nb.push(nil, nb[-2])
+p nb
+nc = [0, 1]
+nc.append(nc.size, nil, nc.size)
+p nc
+
+# a String held by a variable is pushed as itself: a later argument that
+# appends to it shows in the pushed element
+sa = ["seed"]
+str = +"x"
+sa.push(str, (str << ("y" * 4096); "z"), sa.size)
+p sa[1].size, sa[2], sa[3]
+
 # pushes that read no container keep their order too
 q = [1]
 q.push(2, 3)

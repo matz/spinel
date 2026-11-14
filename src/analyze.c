@@ -32246,6 +32246,10 @@ static void dyn_reach_value(Compiler *c, int v, int k, int depth, DynReach *r) {
       if (g_dyn.blkpost[mi] == 2) r->app = 1;
       return;
     }
+    /* a parameter also holds what its caller handed it, which is not
+       followed here, whether or not the body writes it too */
+    LocalVar *lv = scope_local(vs, vn);
+    if (!lv || lv->is_param || lv->is_block_param) r->unknown = 1;
     /* every value written to it (a Method-valued local was taken above, by
        method_recv_nodes; a `m.to_proc` written here is the call's arm) */
     int saw = 0;

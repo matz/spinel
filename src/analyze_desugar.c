@@ -9942,17 +9942,20 @@ int desugar_call_op_write(Compiler *c) {
        also in the block of a user `each`), which the writer call carries
        and the store does not. A `**=` is no such store: its power may answer
        a Rational, which the ordinary writer call widens the attribute for
-       (mark_int_pow_signed marks the power the rewrite makes a call) */
-    if (!has_def_writer && !is_pow_op(op)) {
-      if (!parent) parent = an_parent_map(nt);
-      if (!parent) continue;
-      if (cow_statement_dropped(c, parent, id)) continue;
+       (mark_int_pow_signed marks the power the rewrite makes a call). Under
+       defined? nothing runs, so either stays as written */
+    if (!has_def_writer) {
       /* defined?(w.n += 1) is "assignment": as the writer call it read "method".
          desugar_defined_method_call has looked through any parentheses
          around it, so the defined? names it as its value. */
       int under_defined = 0;
       NT_FOREACH_KIND(nt, NK_DefinedNode, d) if (nt_ref(nt, d, "value") == id) under_defined = 1;
       if (under_defined) continue;
+      if (!is_pow_op(op)) {
+        if (!parent) parent = an_parent_map(nt);
+        if (!parent) continue;
+        if (cow_statement_dropped(c, parent, id)) continue;
+      }
     }
     char opname[64]; snprintf(opname, sizeof opname, "%s", op);
     if (!simple) {

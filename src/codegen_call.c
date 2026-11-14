@@ -17481,12 +17481,14 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
     equality_skip_nil:;
     /* Struct instances compare by member value (CRuby Struct#==); a user
        override on the struct class still wins via the dispatch below. eql?
-       shares the arm. */
+       shares the arm, with the boxed members compared by eql? (CRuby
+       Struct#eql?): `S.new(1).eql?(S.new(1.0))` is false. */
     if (ty_is_object(rt) && rt == a0) {
       int scid = ty_object_class(rt);
       if (scid >= 0 && scid < c->nclasses && c->classes[scid].is_struct &&
           comp_method_in_chain(c, scid, "==", NULL) < 0) {
         ClassInfo *sci = &c->classes[scid];
+        const char *peq = name && sp_streq(name, "eql?") ? "sp_poly_eql" : "sp_poly_eq";
         int ta = ++g_tmp, tb2 = ++g_tmp;
         buf_puts(b, eq ? "(" : "(!(");
         buf_printf(b, "({ sp_%s *_t%d = ", sci->c_name, ta); emit_expr(c, recv, b);
@@ -17513,14 +17515,14 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
           case TY_STRING:
             buf_printf(b, " && sp_str_eq(_t%d->iv_%s, _t%d->iv_%s)", ta, ivn, tb2, ivn); break;
           case TY_POLY:
-            buf_printf(b, " && sp_poly_eq(_t%d->iv_%s, _t%d->iv_%s)", ta, ivn, tb2, ivn); break;
+            buf_printf(b, " && %s(_t%d->iv_%s, _t%d->iv_%s)", peq, ta, ivn, tb2, ivn); break;
           default: {
             /* boxed comparison covers arrays/hashes/objects uniformly */
             Buf ba; memset(&ba, 0, sizeof ba);
             char lx[128], rx[128];
             snprintf(lx, sizeof lx, "_t%d->iv_%s", ta, ivn);
             snprintf(rx, sizeof rx, "_t%d->iv_%s", tb2, ivn);
-            buf_puts(b, " && sp_poly_eq(");
+            buf_printf(b, " && %s(", peq);
             emit_boxed_text(c, ivt, lx, b);
             buf_puts(b, ", ");
             emit_boxed_text(c, ivt, rx, b);

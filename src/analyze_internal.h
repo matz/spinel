@@ -800,6 +800,7 @@ const LowerRow *lower_row_nt(const NodeTable *nt, int id, int family);   /* the 
 int desugar_kernel_reopen(Compiler *c);
 int desugar_singleton_class_mixin(Compiler *c);
 int desugar_explicit_receiver_mixin(Compiler *c);
+int desugar_table_loop_defines(Compiler *c);
 int desugar_attr_const_splat(Compiler *c);
 int desugar_sclass_readers_through_class(Compiler *c);
 int desugar_constant_path_self_alias(Compiler *c);

@@ -26996,21 +26996,6 @@ int push_args_read_before_pushes(Compiler *c, int id) {
     if (!push_arg_is_plain(c, av[i])) return 1;
   return 0;
 }
-/* Does an operand after `v` in the list (operand[0..nop)) allocate or run
-   code, so that a collection may run between `v`'s binding and the call's
-   use of it? An operand that ran first is its temp and does neither, and a
-   String slot's read is taken in the call without a copy. */
-static int operand_allocated_after(Compiler *c, const int *operand, int nop, int v) {
-  int pos = -1;
-  for (int k = 0; k < nop; k++) if (operand[k] == v) pos = k;
-  if (pos < 0) return 1;
-  for (int k = pos + 1; k < nop; k++) {
-    int w = operand[k];
-    if (view_ran_first(w)) continue;
-    if (subtree_may_allocate(c->nt, w) || order_runs_code(c, w)) return 1;
-  }
-  return 0;
-}
 static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   /* The buffer arm holds its operands, including the handle a keyword
      may replace, before it checks or converts any of them. */
@@ -27503,14 +27488,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     else if (comp_ty_value_obj(c, ty[i])) { emit_gc_root_tmp_refs(c, ty[i], tmp[i], b); buf_puts(b, " "); }
     /* (a frozen literal, `(f; "lit")` held for its statements' order,
        answers the one static object, which no collection frees: no root) */
-    /* (an operand master would not bind, bound for the String group alone,
-       is rooted as master roots a held operand: when an operand after it may
-       allocate or run code before the call takes it; with none, nothing
-       runs between the binding and the use, and a temp that already holds
-       a rooted value needs no second root) */
-    else if (needs_root(ty[i]) && !share_frozen_literal(c, node[i]) &&
-             !(held_for_group && !operand_allocated_after(c, operand, nop, node[i])))
-      buf_printf(b, "SP_GC_ROOT(_t%d); ", tmp[i]);
+    else if (needs_root(ty[i]) && !share_frozen_literal(c, node[i])) buf_printf(b, "SP_GC_ROOT(_t%d); ", tmp[i]);
     free(opb[i].p);
   }
   /* (a held route that answered nil, a bang's: its arguments ran, and the

@@ -8771,6 +8771,9 @@ static void seed_module_function_copies(Compiler *c, const Scope *ms, const char
     seed_method(c, s, method_in_override_family(c, s->class_id, comp_scope_user_name(s), 0) ? NULL : ret,
                 pcopy, where, head, from_rbs);
     free(pcopy);
+    /* an annotation on the def is one on each copy: a later --rbs
+       signature for the includer's method meets it (inline_pin_agrees) */
+    if (!from_rbs) inline_pin_record(s, -1, NULL, ret, params, where, head);
   }
 }
 

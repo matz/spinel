@@ -3804,22 +3804,16 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
          through sp_poly_to_s and re-boxes the result, so the value stays
          poly (mirrors the codegen list in codegen_call_recv.c). */
       if (argc == 0 &&
-          (sp_streq(name, "strip") || sp_streq(name, "reverse") ||
-           sp_streq(name, "chomp") || sp_streq(name, "chop") ||
+          (sp_streq(name, "reverse") ||
            sp_streq(name, "succ") || sp_streq(name, "next") || sp_streq(name, "peek") ||
            sp_streq(name, "chr") ||
-           /* `strip` was here and its one-sided siblings were not, which is
-              what most of this line is: a String reaching the dispatch
-              through a poly slot answered NoMethodError for a method String
-              has. `to_str` matters most of them -- it is the implicit
-              conversion protocol, so a poly slot holding a String has to
-              answer it. The answers stay boxed, which is why they are POLY
-              here: `ascii_only?` is a boxed boolean and reads as one. */
-           sp_streq(name, "lstrip") || sp_streq(name, "rstrip") ||
-           sp_streq(name, "to_str") || sp_streq(name, "ascii_only?") ||
+           /* reverse, succ, next, peek and chr are answered by another
+              builtin too (an Array, an Integer, an Enumerator); the
+              predicates below are boxed booleans and read as one. The
+              String-only transforms are rows (builtin_ops.c, TY_POLY). */
+           sp_streq(name, "ascii_only?") ||
            sp_streq(name, "ascii_compatible?") || sp_streq(name, "dummy?") ||
-           sp_streq(name, "valid_encoding?") || sp_streq(name, "encode") ||
-           sp_streq(name, "scrub") || sp_streq(name, "b") || sp_streq(name, "dump")))
+           sp_streq(name, "valid_encoding?")))
         { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
       /* ...and the same names where they take arguments. unpack answers a
          boxed array, byteslice a boxed String or nil; the codegen arm for

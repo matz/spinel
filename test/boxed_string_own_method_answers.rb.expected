@@ -1,0 +1,10 @@
+[" caf\xC3\xA9 \n", "café", " café \n"]
+[42, :stripped, "blob"]
+42
+:stripped
+4
+" caf\xC3\xA9 \n"
+"café"
+7
+"note-b!"
+" caf\xC3\xA9 \n!"

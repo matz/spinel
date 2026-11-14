@@ -6876,7 +6876,8 @@ static int cplan_top_self_gap(Compiler *c, int id) {
 
 /* Does call id bind, on a class it may reach, what no cell tells whether it ran (a call the plan cannot bind at its count):
    the version of a history held by count itself, where no entry of its count was made for it, or a copy of it (an alias),
-   or the entry of a held def at a count it does not take (the entry's parameters are the def's, ver_named_make)? */
+   or the entry of a held def at a count it does not take (the entry's parameters are the def's, ver_named_make), or one whose
+   else arm is no Kernel row on a class whose chain has Kernel in front of it? */
 static void cplan_bycount_ask(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   MethodLookup ml = { .def_class = -1 };
   int r = call_target(c, id, k, nm, flags, &ml);
@@ -6891,8 +6892,12 @@ static void cplan_bycount_ask(Compiler *c, int id, const char *nm, int k, unsign
             ad && ad->kind == LR_ALIAS;
   int kw = via && nt_kind(c->nt, ad->node) == NK_AliasMethodNode;
   int by = nt_int(c->nt, t->def_node, "cond_def_bycount", 0) && !kw && (ml.kind == ML_TABLE || !t->replaced || via),
-      n = ver_call_n(c, id), held = t->entry == ENTRY_NAMED && ver_kernel_row_behind(c, t->class_id, nm) && nt_int(c->nt, t->def_node, "cond_def_refl", 0) && n >= 0 && n != ver_plain_arity(c, r);
-  if (by || held) *(int *)arg = 1;
+      n = ver_call_n(c, id), refl = t->entry == ENTRY_NAMED && bop_kernel_answers(nm, -1, 0) && nt_int(c->nt, t->def_node, "cond_def_refl", 0),
+      row = refl && ver_kernel_row_behind(c, t->class_id, nm), held = row && n >= 0 && n != ver_plain_arity(c, r);
+  /* (a held def's entry in a class without Kernel, on a class k whose chain mixes Kernel in below it: CRuby's lookup meets
+     Kernel's method in front of the history, which the entry does not stand for) */
+  int front = refl && !row && ver_kernel_row_behind(c, k, nm);
+  if (by || held || front) *(int *)arg = 1;
 }
 /* ...and the super of a prepended module's copy, which reaches the class's own version (ct_version_classes asks it of no class) */
 static int cplan_bycount_shadow_super(Compiler *c, const Scope *in, const char *nm) {

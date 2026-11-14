@@ -258,24 +258,13 @@ static bool map_class_instance(rbs_parser_t *p, rbs_types_class_instance_t *ci,
     sbuf_init(&name);
     name_of_type_name(p, ci->name, &name);
 
-    /* Primitive lookup uses the leaf name only. After name_of_type_name
-     * the separator is "_" (translated from RBS's "::"), so the leaf
-     * is the substring after the last "_". Conservative: only treat
-     * the trailing segment as the primitive name; a class actually
-     * named `Foo_Integer` would shadow the primitive, but that's
-     * extremely unlikely in practice. */
-    const char *primitive = NULL;
-    {
-        const char *leaf = name.buf;
-        size_t leaf_len = name.len;
-        for (size_t i = 0; i < name.len; i++) {
-            if (name.buf[i] == '_') {
-                leaf = name.buf + i + 1;
-                leaf_len = name.len - (i + 1);
-            }
-        }
-        primitive = primitive_tag(leaf, leaf_len);
-    }
+    /* A builtin only when the name has no namespace, or only the root
+     * one (`::String`): `Jobs::Store::String` is the class it names.
+     * The whole name is matched, not the text after its last "_",
+     * which name_of_type_name also puts between segments. */
+    bool unqualified = ci->name == NULL || ci->name->rbs_namespace == NULL
+        || ci->name->rbs_namespace->path == NULL || ci->name->rbs_namespace->path->length == 0;
+    const char *primitive = unqualified ? primitive_tag(name.buf, name.len) : NULL;
 
     size_t argc = ci->args != NULL ? ci->args->length : 0;
 

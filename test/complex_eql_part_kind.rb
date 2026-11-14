@@ -51,3 +51,7 @@ p "1+2i".to_c.eql?(Complex(1, 2))
 # the same object is eql? to itself, even with a NaN part
 a = [Complex(Float::NAN, 0), 1]
 p a[0].eql?(a[0])
+# a Complex divided by an Integer: a part it does not divide is a Rational
+p (Complex(5, 9) / 2).eql?(Complex(Rational(5, 2), Rational(9, 2)))
+p Complex(4, 8) / 2, (Complex(4, 8) / 2).real.class
+p Complex(1.5, 2) / 2

@@ -5391,7 +5391,10 @@ void build_ie_map(Compiler *c) {
         if (tb < 0) continue;
         pend[tb] = pend[tb] == -1 || pend[tb] == cls ? cls : -2 - id;
         mark_ie_own(c, tb, pend[tb]);
-        if (rb) ie_rb_mark(nt, rb_new, rb_n, tb, IE_RB_IN);
+        if (rb) {
+          ie_rb_mark(nt, rb_new, rb_n, tb, IE_RB_IN);
+          ie_rb_mark(nt, rb_new, rb_n, ie_body_params(c, tb), IE_RB_IN);
+        }
       }
     }
     if (body < 0) continue;

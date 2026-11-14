@@ -23,3 +23,8 @@ end
 p W.new.go(A.new)
 p W.new.go_exec(A.new)
 p W.new.set(A.new)
+
+# a default of a proc held in a local runs on the receiver too
+class DA; def initialize = (@d = 4); def who = :da; end
+dp = proc { |v = self, w = @d| [v.who, w] }
+p DA.new.instance_exec(&dp)

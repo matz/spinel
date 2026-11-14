@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A push or an append of several arguments pushes each one before the next
 # is read, and an argument that reads the Array being pushed onto -- an
 # element, its size, its last -- is a pure read the operand order left in
@@ -82,6 +83,31 @@ lc = [0, 1]
 tail = -> { lc[-1] }
 lc.append(9, tail.call)
 p lc
+
+# an insert of several values stores them one at a time too
+ins = [0, 1]
+ins.insert(1, ins[-1], ins[-2])
+p ins
+ins2 = [0, 1]
+p ins2.insert(2, 5, last_of(ins2))
+ins3 = [0, 1]
+ins3.insert(-1, 7, ins3.size)
+p ins3
+
+# a nil, a literal or a local beside them keeps its place
+nb = [0, 1]
+nb.push(nil, nb[-2])
+p nb
+nc = [0, 1]
+nc.append(nc.size, nil, nc.size)
+p nc
+
+# a String held by a variable is pushed as itself: a later argument that
+# appends to it shows in the pushed element
+sa = ["seed"]
+str = +"x"
+sa.push(str, (str << ("y" * 4096); "z"), sa.size)
+p sa[1].size, sa[2], sa[3]
 
 # pushes that read no container keep their order too
 q = [1]

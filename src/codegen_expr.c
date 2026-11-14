@@ -5848,7 +5848,7 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     int one, e_yields = 0, e_nil = 0;
     switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
     case VP1_NODE:
-      e_yields = nt_kind(nt, one) == NK_YieldNode;
+      e_yields = is_yield_or_blk_param_call(c, one);
       e_nil = nt_kind(nt, one) == NK_NilNode;
       break;
     case VP1_NIL: e_nil = 1; break;
@@ -7124,7 +7124,10 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     if (repr_of(c, id).kind == RK_BOXED) {
       Repr pttr = repr_of(c, bd[n - 1]);
       TyKind ptt = pttr.as_ty;
-      if (pttr.kind != RK_BOXED && ptt != TY_UNKNOWN && ptt != TY_VOID && ptt != TY_NIL) {
+      /* (a tail typed nil here, a `blk.call` whose block at this site
+         answers nil, is run for its effect and the box is nil's: its C
+         value is a bare 0) */
+      if (pttr.kind != RK_BOXED && ptt != TY_UNKNOWN && ptt != TY_VOID) {
         Buf inner; memset(&inner, 0, sizeof inner);
         if (n == 1) { buf_puts(&inner, "("); emit_expr(c, bd[0], &inner); buf_puts(&inner, ")"); }
         else {
@@ -7133,7 +7136,8 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
           emit_expr(c, bd[n - 1], &inner);
           buf_puts(&inner, "; })");
         }
-        emit_boxed_text(c, ptt, inner.p ? inner.p : "0", b);
+        if (ptt == TY_NIL) buf_printf(b, "((void)%s, sp_box_nil())", inner.p ? inner.p : "0");
+        else emit_boxed_text(c, ptt, inner.p ? inner.p : "0", b);
         free(inner.p);
         return;
       }

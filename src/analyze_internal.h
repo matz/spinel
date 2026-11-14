@@ -295,6 +295,7 @@ int super_forwards_caller_block(Compiler *c, int id);
 /* 1 if `node` is `<&block-param>.call(...)` / .() / [] for method mi -- the
    explicit-call equivalent of `yield`, inlined the same way. */
 int is_blk_param_call(Compiler *c, int node, int mi);
+int is_yield_or_blk_param_call(Compiler *c, int node);
 /* 1 if `node` is an instance_eval / instance_exec handing the method's own block on
    as the value the method ends with: inlined, it answers each site's block value. */
 int ie_forwards_block_tail(Compiler *c, int node);

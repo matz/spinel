@@ -12486,7 +12486,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        (#3130). Answer the boxed union until the try resolves; if it never
        does (the NoMethodError gate's raise-all token), poly still holds the
        rescue arm's value correctly. */
-    /* a yield whose block answers nil is a value, nil beside the rescue's:
+    /* a yield (or a `blk.call`) whose block answers nil is a value, nil beside the rescue's:
        the join the arms of an `if` make (a slot that cannot hold a nil, a
        Range or a bool, is boxed). Any other nil-typed expression is taken
        as one that diverges (a raise the folder has turned into a call).
@@ -12495,7 +12495,7 @@ TyKind infer_uncached(Compiler *c, int id) {
       int one;
       switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
       case VP1_NODE:
-        if (nt_kind(nt, one) == NK_YieldNode || nt_kind(nt, one) == NK_NilNode) return ty_unify(et, rt);
+        if (is_yield_or_blk_param_call(c, one) || nt_kind(nt, one) == NK_NilNode) return ty_unify(et, rt);
         break;
       case VP1_NIL: return ty_unify(et, rt);
       case VP1_MANY: break;

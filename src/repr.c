@@ -87,9 +87,10 @@ static int node_is_oint_asked(Compiler *c, int node) {
   case NK_InstanceVariableReadNode: {
     /* inside an instance_eval / instance_exec splice whose receiver's class
        has no such ivar (or a receiver that is no object): the read is nil
-       there, whatever the analysis says of the name elsewhere */
+       there, whatever the analysis says of the name elsewhere -- short of
+       a nested block run on a receiver of its own class (ie_class_of) */
     if (oint_kind(comp_ntype(c, node))) {
-      if (g_ie_nil_ivars) return 1;
+      if (ie_nil_ivar_read(c, node)) return 1;
       Scope *ics = comp_scope_of(c, node);
       int iec = ie_class_of(c, node);
       if (iec < 0 && ics && ics->class_id < 0 && !ics->is_cmethod) iec = g_ie_class_id;

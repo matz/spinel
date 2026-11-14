@@ -3441,9 +3441,21 @@ void propagate_bigint_cascade(Compiler *c) {
    an instance_eval/exec block, the receiver's class id; -1 elsewhere. Lets
    bare calls/ivar refs in the block resolve against the receiver's class
    during inference (codegen mirrors this via an_ie_class_id). */
+/* The parameters of the block whose body is `body`, whose defaults run on
+   the receiver too: no outer walk reaches them once it stops at the block, so
+   every mark of a body (mark_ie_own, the arm's retype) is theirs as well. */
+static int ie_body_params(Compiler *c, int body) {
+  return c->ie_map.prm && body >= 0 && body < c->ie_map.cap ? c->ie_map.prm[body] : -1;
+}
 static void mark_ie_own(Compiler *c, int body, int cls) {
   if (body >= 0 && body < c->ie_map.cap) c->ie_map.own[body] = cls;
   mark_ie_subtree(c, body, cls);
+  mark_ie_subtree(c, ie_body_params(c, body), cls);
+}
+/* Is a child node the block a nested instance_eval/exec runs on a receiver
+   of its own (ie_own_recv_block)? The markers below leave it to that call. */
+static int ie_nested_own_block(Compiler *c, int node) {
+  return node >= 0 && node < c->ie_map.cap && (c->ie_map.rb[node] & IE_RB_ROOT);
 }
 static void mark_ie_nonobj(Compiler *c, int node) {
   if (node < 0 || node >= c->ie_map.cap) return;
@@ -3451,12 +3463,21 @@ static void mark_ie_nonobj(Compiler *c, int node) {
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return;
   if (!c->ie_map.nonobj[node]) { c->ie_map.nonobj[node] = 1; comp_touch_node(c, node); }
   int nr = nt_num_refs(c->nt, node);
-  for (int i = 0; i < nr; i++) mark_ie_nonobj(c, nt_ref_at(c->nt, node, i));
+  for (int i = 0; i < nr; i++)
+    if (!ie_nested_own_block(c, nt_ref_at(c->nt, node, i))) mark_ie_nonobj(c, nt_ref_at(c->nt, node, i));
   int na = nt_num_arrs(c->nt, node);
-  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n); for (int j = 0; j < n; j++) mark_ie_nonobj(c, ids[j]); }
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n);
+    for (int j = 0; j < n; j++) if (!ie_nested_own_block(c, ids[j])) mark_ie_nonobj(c, ids[j]);
+  }
 }
 int ie_nonobj_node(Compiler *c, int node) {
   return c->ie_map.nonobj && node >= 0 && node < c->ie_map.cap && c->ie_map.nonobj[node];
+}
+/* Does a node run on a self other than its scope's (IE_RB_IN of
+   ie_rebound_marks)? */
+int ie_rebound_node(Compiler *c, int node) {
+  return node >= 0 && node < c->ie_map.cap && (c->ie_map.rb[node] & IE_RB_IN);
 }
 
 void mark_ie_subtree(Compiler *c, int node, int cls) {
@@ -3467,10 +3488,16 @@ void mark_ie_subtree(Compiler *c, int node, int cls) {
   /* a nested def/class starts a fresh self; don't bleed the rebind into it */
   if (ty_k == NK_DefNode || ty_k == NK_ClassNode || ty_k == NK_ModuleNode) return;
   if (c->ie_map.cls[node] != cls) { c->ie_map.cls[node] = cls; comp_touch_node(c, node); }
+  /* ... nor into the block a nested instance_eval/exec runs on a receiver
+     of its own, a `&` proc's too: that call marks it (build_ie_map) */
   int nr = nt_num_refs(c->nt, node);
-  for (int i = 0; i < nr; i++) mark_ie_subtree(c, nt_ref_at(c->nt, node, i), cls);
+  for (int i = 0; i < nr; i++)
+    if (!ie_nested_own_block(c, nt_ref_at(c->nt, node, i))) mark_ie_subtree(c, nt_ref_at(c->nt, node, i), cls);
   int na = nt_num_arrs(c->nt, node);
-  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n); for (int k = 0; k < n; k++) mark_ie_subtree(c, ids[k], cls); }
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n);
+    for (int k = 0; k < n; k++) if (!ie_nested_own_block(c, ids[k])) mark_ie_subtree(c, ids[k], cls);
+  }
 }
 
 /* `ENV` is compile-time modeled only as a call RECEIVER (`ENV[...]`,
@@ -4381,10 +4408,11 @@ static int ie_poly_class_ok(Compiler *c, int k) {
          builtin_class_id(c->classes[k].name) == 0;
 }
 
-/* The classes a poly receiver can run an instance_eval/exec body as: those
+/* The classes the poly receiver of call (an instance_eval/exec, or a
+   method that runs body as one) can run body as: those
    answering every self call that some class, and no top-level def, answers
    (*need: the first). 0 when the body makes no such call. */
-int ie_poly_self_classes(Compiler *c, const char *name, int body, int *out, int max,
+int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int *out, int max,
                          const char **need) {
   const char *names[64];
   int nn = ie_self_call_names(c, body, names, 0, 64);
@@ -4398,7 +4426,9 @@ int ie_poly_self_classes(Compiler *c, const char *name, int body, int *out, int 
   }
   /* A body that makes no such call but reads or writes ivars on its self
    (`object.instance_exec { @content = block }`, Phlex's SGML.new) runs on
-   the classes that own every one of them. */
+   the classes the receiver can be, where the analysis bounds them
+   (poly_recv_classes): a write gives a class the ivar it did not own. Else
+   on the classes that own every one of them. */
   const char *ivs[64]; int niv = 0;
   if (nask == 0) {
     niv = ie_ivar_names(c, body, ivs, 0, 64);
@@ -4406,7 +4436,13 @@ int ie_poly_self_classes(Compiler *c, const char *name, int body, int *out, int 
     if (need) *need = name;
   }
   else if (need) *need = names[ask[0]];
-  int n = 0;
+  int n = 0, nrc = 0;
+  const int *rc = nask == 0 ? poly_recv_classes(c, call, &nrc) : NULL;
+  if (rc) {
+    for (int i = 0; i < nrc && n < max; i++)
+      if (ie_poly_class_ok(c, rc[i]) && comp_method_in_chain(c, rc[i], name, NULL) < 0) out[n++] = rc[i];
+    return n;
+  }
   for (int k = 0; k < c->nclasses && n < max; k++) {
     if (!ie_poly_class_ok(c, k) || comp_method_in_chain(c, k, name, NULL) >= 0) continue;
     int all = 1;
@@ -4421,12 +4457,14 @@ static int ie_poly_mark(Compiler *c, int id, TyKind rt) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
   int blk = nt_ref(nt, id, "block");
-  if (rt != TY_POLY || !nm || blk < 0 || nt_kind(nt, blk) != NK_BlockNode ||
-      (!sp_streq(nm, "instance_eval") && !sp_streq(nm, "instance_exec"))) return -1;
+  if (rt != TY_POLY || !nm || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || !is_instance_eval_family(nm)) return -1;
   int k[2];
-  int n = ie_poly_self_classes(c, nm, nt_ref(nt, blk, "body"), k, 2, NULL);
-  if (n == 0) return -2 - id;  /* self is still rebound when no call constrains it */
-  return n == 1 ? k[0] : n > 1 ? -2 - id : -1;
+  int n = ie_poly_self_classes(c, id, nm, nt_ref(nt, blk, "body"), k, 2, NULL);
+  /* One class only when the receiver can be nothing else: a builtin value,
+     or any value where the analysis does not bound it (poly_recv_builtin),
+     takes the non-object arm, and the classes are then a guess. Else self is
+     still rebound, to each class or none. */
+  return n == 1 && !poly_recv_builtin(c, id) ? k[0] : -2 - id;
 }
 
 /* The names the shadow rename invents (`k__bp12` for a keyword `k`), each with
@@ -4627,8 +4665,8 @@ int ie_tramp_effective_arg(Compiler *c, int caller_id, int p) {
   return arg;  /* ivar / literal / other: evaluated in the rebound-self context */
 }
 
-static int ie_forward_target(Compiler *c, int call, int cls, int cm, const char *name, int receiverless);
-static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int blk);
+static int ie_forward_target(Compiler *c, int call, int cls, int cm, const char *name, int receiverless, int *rb);
+static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int blk, int *rb);
 static int ie_forward_hops;
 
 /* Not re-walked per call: a poly receiver re-walks every class's method at every hop, exponential in the hop depth. */
@@ -4673,7 +4711,8 @@ static int *ie_forward_memo_slot(int mi, int key) {
   return &ie_forward_memo[h].val;
 }
 
-static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, int depth) {
+/* (*rb set when a hop hands the block to a receiver other than its own self) */
+static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, int depth, int *rb) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 64) return -1;
   NodeKind k = nt_kind(nt, node);
@@ -4689,29 +4728,31 @@ static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, 
         TyKind rt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
         int cm = r < 0 ? s->is_cmethod : rt == TY_CLASS;
         int rcls = r < 0 ? self_cls : ty_is_object(rt) ? ty_object_class(rt) : cm ? class_recv_static_ci(c, r) : -1;
+        int other = r >= 0 && nt_kind(nt, r) != NK_SelfNode;
         if (is_instance_eval_family(cn)) {
-          if (!cm && (r < 0 || rcls >= 0)) return rcls;
+          if (!cm && (r < 0 || rcls >= 0)) { *rb |= other; return rcls; }
         }
         else if (ie_forward_hops < 8) {
+          int hop = 0;
           ie_forward_hops++;
-          int t = ie_forward_target(c, node, rcls, cm, cn, r < 0);
-          if (t < 0 && rt == TY_POLY) t = ie_class_value_target(c, node, r, rt, barg);
+          int t = ie_forward_target(c, node, rcls, cm, cn, r < 0, &hop);
+          if (t < 0 && rt == TY_POLY) t = ie_class_value_target(c, node, r, rt, barg, &hop);
           ie_forward_hops--;
-          if (t >= 0) return t;
+          if (t >= 0) { *rb |= other | hop; return t; }
         }
       }
     }
   }
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) {
-    int f = ie_forward_find(c, nt_ref_at(nt, node, i), s, self_cls, depth + 1);
+    int f = ie_forward_find(c, nt_ref_at(nt, node, i), s, self_cls, depth + 1, rb);
     if (f >= 0) return f;
   }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
     for (int j = 0; j < n; j++) {
-      int f = ie_forward_find(c, ids[j], s, self_cls, depth + 1);
+      int f = ie_forward_find(c, ids[j], s, self_cls, depth + 1, rb);
       if (f >= 0) return f;
     }
   }
@@ -4720,8 +4761,9 @@ static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, 
 
 /* A method on `cls` that hands its own block to `X.instance_eval/exec(&blk)`
    runs a call site's literal block with self = X: the class of X, or -1.
-   `name` is what call `call` runs on `cls`. */
-static int ie_forward_target(Compiler *c, int call, int cls, int cm, const char *name, int receiverless) {
+   `name` is what call `call` runs on `cls`. *rb is set when X is not the
+   method's own self, or a hop on the way hands the block to another. */
+static int ie_forward_target(Compiler *c, int call, int cls, int cm, const char *name, int receiverless, int *rb) {
   if (!name) return -1;
   int mi = cls < 0 ? -1 : call_target(c, call, cls, name, cm ? CT_CMETHOD : 0, NULL);
   if (mi < 0 && cm && cls >= 0 && is_new_name(name)) mi = cplan_new_initialize(c, call, cls, NULL);
@@ -4732,11 +4774,17 @@ static int ie_forward_target(Compiler *c, int call, int cls, int cm, const char 
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
   if (!s->blk_param || s->body < 0) return -1;
+  /* (memoized as the target and the rebind together, 2 * t + other) */
   int *memo = ie_forward_memo_slot(mi, (cls + 1) * 16 + ie_forward_hops);
-  if (memo && *memo != INT_MIN) return *memo;
-  int t = ie_forward_find(c, s->body, s, cls, 0);
+  if (memo && *memo != INT_MIN) {
+    if (*memo >= 0) *rb |= *memo & 1;
+    return *memo < 0 ? *memo : *memo >> 1;
+  }
+  int other = 0;
+  int t = ie_forward_find(c, s->body, s, cls, 0, &other);
   memo = ie_forward_memo_slot(mi, (cls + 1) * 16 + ie_forward_hops);
-  if (memo) *memo = t;
+  if (memo) *memo = t < 0 ? t : 2 * t + other;
+  if (t >= 0) *rb |= other;
   return t;
 }
 
@@ -4748,21 +4796,41 @@ static int ie_receiverless_self_class(Compiler *c, int id) {
   return (s && s->class_id >= 0 && !s->is_cmethod) ? s->class_id : -1;
 }
 
-int ie_block_body(Compiler *c, int blk) {
+/* The block (a BlockNode, or a LambdaNode) of the proc literal local read x
+   holds: the value of its one write in its scope, -1 for another local. */
+static int ie_local_proc_block(Compiler *c, int x) {
   const NodeTable *nt = c->nt;
-  int x = nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
-  if (x < 0 || nt_kind(nt, x) != NK_LocalVariableReadNode) return nt_ref(nt, blk, "body");
   Scope *sc = comp_scope_of(c, x);
   const char *vn = nt_str(nt, x, "name");
-  int body = -1;
+  int pb = -1;
+  if (!sc || !vn) return -1;
   for (int w = comp_lvw_first_sc(c, (int)(sc - c->scopes), vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
     const char *wn = nt_str(nt, w, "name");
     if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
     int v = nt_ref(nt, w, "value");
-    if (body >= 0 || !is_proc_create(c, v)) return -1;
-    body = nt_ref(nt, nt_kind(nt, v) == NK_LambdaNode ? v : nt_ref(nt, v, "block"), "body");
+    if (pb >= 0 || !is_proc_create(c, v)) return -1;
+    pb = nt_kind(nt, v) == NK_LambdaNode ? v : nt_ref(nt, v, "block");
   }
-  return body;
+  return pb;
+}
+int ie_block_body(Compiler *c, int blk) {
+  const NodeTable *nt = c->nt;
+  int x = nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
+  if (x < 0 || nt_kind(nt, x) != NK_LocalVariableReadNode) return nt_ref(nt, blk, "body");
+  int pb = ie_local_proc_block(c, x);
+  return pb >= 0 ? nt_ref(nt, pb, "body") : -1;
+}
+/* See analyze_internal.h. */
+int ie_own_recv_block(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, call, "name");
+  int recv = nt_ref(nt, call, "receiver"), blk = nt_ref(nt, call, "block");
+  if (!nm || !is_instance_eval_family(nm) || recv < 0 || nt_kind(nt, recv) == NK_SelfNode || blk < 0) return -1;
+  if (nt_kind(nt, blk) != NK_BlockArgumentNode) return blk;
+  int x = nt_ref(nt, blk, "expression");
+  if (x < 0) return -1;
+  if (is_proc_create(c, x)) return nt_kind(nt, x) == NK_LambdaNode ? x : nt_ref(nt, x, "block");
+  return nt_kind(nt, x) == NK_LocalVariableReadNode ? ie_local_proc_block(c, x) : -1;
 }
 
 /* The literal blocks a `&x` handed to instance_eval / instance_exec can be,
@@ -4891,11 +4959,12 @@ static int ie_name_may_forward(Compiler *c, const char *nm) {
   }
   return anh_has(&g_ief_names, nm);
 }
-static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int blk) {
+/* (*rb as ie_forward_target's, for the targets taken) */
+static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int blk, int *rb) {
   const char *nm = nt_str(c->nt, id, "name");
   int arg = nt_kind(c->nt, blk) == NK_BlockArgumentNode, cls = -1;
   if (rt == TY_CLASS && is_instance_eval_family(nm)) return -2 - id;
-  if (rt == TY_CLASS) return ie_forward_target(c, id, class_recv_static_ci(c, recv), 1, nm, 0);
+  if (rt == TY_CLASS) return ie_forward_target(c, id, class_recv_static_ci(c, recv), 1, nm, 0, rb);
   int may = rt == TY_POLY && ie_name_may_forward(c, nm);
   /* The classes whose chain answers the name, on each side, in place of
      every class on both: a class whose chain does not answer forwards
@@ -4914,13 +4983,13 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
     if (n > 0 && !ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (int i = 0; i < n; i++) ks[i] = rs[2 * i];
     for (int i = 0; i < n && cls >= -1; i++) {
-      int t = ie_forward_target(c, id, ks[i], side, nm, 0);
+      int t = ie_forward_target(c, id, ks[i], side, nm, 0, rb);
       if (t >= 0) cls = cls == -1 || cls == t ? t : -2 - id;
     }
     free(ks);
   }
   for (int k = 0; may && !listed && cls >= -1 && k < 2 * c->nclasses; k++) {
-    int t = ie_forward_target(c, id, k / 2, k % 2, nm, 0);
+    int t = ie_forward_target(c, id, k / 2, k % 2, nm, 0, rb);
     if (t >= 0) cls = cls == -1 || cls == t ? t : -2 - id;
   }
   const char *names[64];
@@ -5170,18 +5239,71 @@ static void ie_map_fit(Compiler *c) {
   int *gc = realloc(c->ie_map.cls, sizeof(int) * (size_t)nt->count);
   unsigned char *gn = gc ? realloc(c->ie_map.nonobj, (size_t)nt->count) : NULL;
   int *go = gn ? realloc(c->ie_map.own, sizeof(int) * (size_t)nt->count) : NULL;
-  if (!go) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = c->ie_map.cap; i < nt->count; i++) { gc[i] = -1; gn[i] = 0; go[i] = -1; }
+  unsigned char *gr = go ? realloc(c->ie_map.rb, (size_t)nt->count) : NULL;
+  int *gp = gr ? realloc(c->ie_map.prm, sizeof(int) * (size_t)nt->count) : NULL;
+  if (!gp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = c->ie_map.cap; i < nt->count; i++) { gc[i] = -1; gn[i] = 0; go[i] = -1; gr[i] = 0; gp[i] = -1; }
+  c->ie_map.prm = gp;
   c->ie_map.cls = gc;
   c->ie_map.nonobj = gn;
   c->ie_map.own = go;
+  c->ie_map.rb = gr;
   c->ie_map.cap = nt->count;
+}
+
+/* Flag node's subtree, short of a def, class or module, in rebound marks rb
+   (of n entries). */
+static void ie_rb_mark(const NodeTable *nt, unsigned char *rb, int n, int node, unsigned char flags) {
+  if (node < 0 || node >= n || (rb[node] & flags) == flags) return;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
+  rb[node] |= flags;
+  for (int i = 0, nr = nt_num_refs(nt, node); i < nr; i++) ie_rb_mark(nt, rb, n, nt_ref_at(nt, node, i), flags);
+  for (int i = 0, na = nt_num_arrs(nt, node); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
+    for (int j = 0; j < m; j++) ie_rb_mark(nt, rb, n, ids[j], flags);
+  }
+}
+/* The rebound marks the block structure gives: each block an instance_eval /
+   exec on a receiver of its own runs (ie_own_recv_block) is a ROOT, its nodes
+   OWN and IN. (the block itself, so its parameters' defaults count, which run
+   on the receiver too) */
+static void ie_rb_scan(Compiler *c, unsigned char *rb, int n) {
+  NT_FOREACH_KIND(c->nt, NK_CallNode, call) {
+    int b = ie_own_recv_block(c, call);
+    if (b < 0 || b >= n) continue;
+    rb[b] |= IE_RB_ROOT;
+    ie_rb_mark(c->nt, rb, n, b, IE_RB_IN | IE_RB_OWN);
+  }
+}
+/* See analyze_internal.h. */
+const unsigned char *ie_rebound_marks(Compiler *c) {
+  if (c->ie_map.rb_scan != c->nt->count) {
+    ie_map_fit(c);
+    ie_rb_scan(c, c->ie_map.rb, c->ie_map.cap);
+    c->ie_map.rb_scan = c->nt->count;
+    c->ie_map.rb_ver++;
+  }
+  return c->ie_map.rb;
 }
 
 /* (Re)build the instance_eval/exec node→class map from current receiver types. */
 void build_ie_map(Compiler *c) {
   const NodeTable *nt = c->nt;
   ie_map_fit(c);
+  /* the rebound marks are read afresh, into their own table until the end
+     (a walk the build asks reads the last ones, under their version): the
+     structure's, then each resolved call's that hands a block to a receiver
+     other than self (rb) */
+  ie_rebound_marks(c);
+  /* (the parameters of each block, by its body) */
+  for (int i = 0; i < c->ie_map.cap; i++) c->ie_map.prm[i] = -1;
+  NT_FOREACH_KIND(nt, NK_BlockNode, bl) { int bd = nt_ref(nt, bl, "body"); if (bd >= 0 && bd < c->ie_map.cap) c->ie_map.prm[bd] = nt_ref(nt, bl, "parameters"); }
+  NT_FOREACH_KIND(nt, NK_LambdaNode, bl) { int bd = nt_ref(nt, bl, "body"); if (bd >= 0 && bd < c->ie_map.cap) c->ie_map.prm[bd] = nt_ref(nt, bl, "parameters"); }
+  int rb_n = c->ie_map.cap;
+  unsigned char *rb_new = calloc((size_t)rb_n, 1);
+  if (!rb_new) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  ie_rb_scan(c, rb_new, rb_n);
   /* (each entry that changes moves its node's scope: the build runs
      inferences of its own, which read the map as it stands) */
   for (int i = 0; i < c->ie_map.cap; i++)
@@ -5206,24 +5328,23 @@ void build_ie_map(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || (!pass && nt_kind(nt, blk) != NK_BlockArgumentNode)) continue;
-    int cls;
+    int cls, rb = recv >= 0 && nt_kind(nt, recv) != NK_SelfNode;
     if (recv < 0) {
       /* receiverless instance_eval/exec inside an instance method: self. */
       cls = ie_implicit_self_class(c, id);
-      if (cls < 0) cls = ie_forward_target(c, id, ie_receiverless_self_class(c, id), 0, nm, 1);
-      if (cls < 0 && id < c->node_cap) cls = ie_forward_target(c, id, c->node_cbody[id], 1, nm, 0);
+      if (cls < 0) cls = ie_forward_target(c, id, ie_receiverless_self_class(c, id), 0, nm, 1, &rb);
+      if (cls < 0 && id < c->node_cap) cls = ie_forward_target(c, id, c->node_cbody[id], 1, nm, 0, &rb);
       if (cls < 0) continue;
     }
     else {
       TyKind rt = infer_type(c, recv);
       cls = ty_is_object(rt) ? ty_object_class(rt) : ie_poly_mark(c, id, rt);
-      if (cls == -1 && !ty_is_object(rt)) cls = ie_class_value_target(c, id, recv, rt, blk);
+      if (cls == -1 && !ty_is_object(rt)) cls = ie_class_value_target(c, id, recv, rt, blk, &rb);
       /* (a boxed receiver no class of the program's can be -- Object.new --
          counts too: ie_poly_mark found none, or found the self rebound with
          no class it must be, -2 - id; either way its ivars can read nil.
          The mark is the nil question's alone, so it only widens.) */
-      if (cls < 0 && pass && rt != TY_UNKNOWN && !ty_is_object(rt) &&
-          (sp_streq(nm, "instance_eval") || sp_streq(nm, "instance_exec")) &&
+      if (cls < 0 && pass && rt != TY_UNKNOWN && !ty_is_object(rt) && is_instance_eval_family(nm) &&
           nt_kind(nt, blk) == NK_BlockNode)
         mark_ie_nonobj(c, blk);
       if (cls == -1 && !pass && !nt_int(nt, id, "ie_usite", 0) && ie_untraced_site(c, id)) {
@@ -5231,18 +5352,20 @@ void build_ie_map(Compiler *c) {
         ie_rself_mark_literals(c);
       }
       if (cls == -1) continue;
-      if (ty_is_object(rt) && !sp_streq(nm, "instance_eval") && !sp_streq(nm, "instance_exec")) {
+      if (ty_is_object(rt) && !is_instance_eval_family(nm)) {
         /* not a direct instance_eval/exec: maybe a trampoline method on `cls`? */
         if (!comp_trampoline_kind(c, call_target(c, id, cls, nm, 0, NULL))) {
-          cls = ie_forward_target(c, id, cls, 0, nm, 0);
+          cls = ie_forward_target(c, id, cls, 0, nm, 0, &rb);
           if (cls < 0) continue;
         }
       }
     }
     int body = ie_block_body(c, blk);
     if (body < 0 && !pass && nt_kind(nt, blk) == NK_BlockArgumentNode && is_instance_eval_family(nm)) {
+      int was = ie_param_n;
       int tr = ie_param_literals(c, blk, cls);
       if (tr >= 0) nt_node_set_int((NodeTable *)nt, id, "ie_param_traced", tr + 1);
+      for (int i = was; rb && i < ie_param_n; i++) ie_rb_mark(nt, rb_new, rb_n, ie_param_marks[i][0], IE_RB_IN);
     }
     if (body < 0 && pass && nt_kind(nt, blk) == NK_BlockArgumentNode && is_instance_eval_family(nm)) {
       int traced[16];
@@ -5252,9 +5375,11 @@ void build_ie_map(Compiler *c) {
         if (tb < 0) continue;
         pend[tb] = pend[tb] == -1 || pend[tb] == cls ? cls : -2 - id;
         mark_ie_own(c, tb, pend[tb]);
+        if (rb) ie_rb_mark(nt, rb_new, rb_n, tb, IE_RB_IN);
       }
     }
     if (body < 0) continue;
+    if (rb) ie_rb_mark(nt, rb_new, rb_n, nt_kind(nt, blk) == NK_BlockNode ? blk : body, IE_RB_IN);
     if (pass) pend[body] = pend[body] == -1 || pend[body] == cls ? cls : -2 - id;
     mark_ie_own(c, body, pass ? pend[body] : cls);
   }
@@ -5262,6 +5387,11 @@ void build_ie_map(Compiler *c) {
   for (int i = 0; i < ie_param_n; i++) mark_ie_own(c, ie_param_marks[i][0], ie_param_marks[i][1]);
   ie_param_n = 0;
   free(pend);
+  if (memcmp(rb_new, c->ie_map.rb, (size_t)rb_n)) {
+    memcpy(c->ie_map.rb, rb_new, (size_t)rb_n);
+    c->ie_map.rb_ver++;
+  }
+  free(rb_new);
 }
 
 /* The receiver class for a node inside an instance_eval/exec block, or -1. */
@@ -5289,7 +5419,8 @@ int *ie_body_retype(Compiler *c, int body, int cls) {
   snap[0] = n;
   for (int i = 0; i < n; i++) { snap[1 + i] = (int)comp_ntype_settled(c, i); snap[1 + n + i] = c->ie_map.cls[i]; }
   mark_ie_subtree(c, body, cls);
-  if (cls >= 0) infer_subtree(c, body);
+  mark_ie_subtree(c, ie_body_params(c, body), cls);
+  if (cls >= 0) { infer_subtree(c, body); infer_subtree(c, ie_body_params(c, body)); }
   return snap;
 }
 
@@ -5309,7 +5440,7 @@ int ie_poly_classes_at(Compiler *c, int node, int *out, int max) {
   if (v >= -1) return 0;
   int call = -2 - v;
   int blk = nt_ref(c->nt, call, "block");
-  return ie_poly_self_classes(c, nt_str(c->nt, call, "name"), nt_ref(c->nt, blk, "body"), out, max, NULL);
+  return ie_poly_self_classes(c, call, nt_str(c->nt, call, "name"), nt_ref(c->nt, blk, "body"), out, max, NULL);
 }
 
 /* Whether `self` at node is top-level self, the main object (#4926): no
@@ -54946,6 +55077,11 @@ static void an_phase_value_types(Compiler *c) {
           c->classes[s->class_id].is_value_type &&
           (!s->name || !sp_streq(s->name, "initialize")))
         c->classes[s->class_id].is_value_type = 0;
+      /* a block on a boxed receiver writes the instance of each class it
+         runs on (the arms of emit_ie_poly), which a by-value one would take
+         on its copy */
+      int pk[64], npk = ie_poly_classes_at(c, id, pk, 64);
+      for (int i = 0; i < npk; i++) c->classes[pk[i]].is_value_type = 0;
     }
     /* `instance_variable_set` on self mutates the receiver just like `@x = v`;
        a by-value class would take the write on a copy and silently drop it. */

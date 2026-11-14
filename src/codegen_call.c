@@ -33097,7 +33097,7 @@ int emit_ie_poly(Compiler *c, int id, Buf *b) {
   int body = nt_ref(nt, blk, "body");
   int cand[64];
   const char *need = NULL;
-  int nc = ie_poly_self_classes(c, name, body, cand, 64, &need);
+  int nc = ie_poly_self_classes(c, id, name, body, cand, 64, &need);
   if (nc <= 0) return 0;
   Repr rr = repr_of(c, id);
   TyKind ret = rr.as_ty;

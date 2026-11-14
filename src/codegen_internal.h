@@ -909,6 +909,10 @@ extern int g_ie_discard_value;
 /* an instance_eval/exec body run on a receiver without ivars: they read nil
    (the call id + 1, 0 when off) */
 extern int g_ie_nil_ivars;
+/* Does an ivar read run on that non-object arm, so it is nil? Not the
+   read of a nested block run on a receiver of its own class (ie_class_of),
+   which reads that object's slot. */
+int ie_nil_ivar_read(Compiler *c, int node);
 /* While emitting a rescue handler: the C var names holding the caught
    exception's class/message, so a bare `raise` can re-raise. */
 extern const char *g_rescue_cls, *g_rescue_msg;

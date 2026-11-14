@@ -11479,6 +11479,25 @@ static TyKind super_object_type(Compiler *c, const Scope *s, const char *uname, 
   return kind == SUPER_OBJ_SELF ? (repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id))
        : kind == SUPER_OBJ_ROW ? comp_super_kernel_row(c, s, uname, id)->result : TY_BOOL;
 }
+/* The ivar nm at node id inside an instance_eval/exec block on a boxed
+   receiver: the meeting of the slots of the classes the receiver can be,
+   nil for one without the slot (*out); 0 when the receiver is not boxed. A
+   read is nil also on a receiver no class stands for (poly_recv_builtin),
+   which the non-object arm runs the block on. */
+static int ie_poly_ivar_ty(Compiler *c, int id, const char *nm, int read, TyKind *out) {
+  int v = ie_class_of(c, id);
+  if (v >= -1) return 0;
+  int pk[64], npk = ie_poly_classes_at(c, id, pk, 64);
+  TyKind pr = read && npk > 0 && poly_recv_builtin(c, -2 - v) ? TY_NIL : TY_UNKNOWN;
+  for (int i = 0; i < npk; i++) {
+    ClassInfo *pci = &c->classes[pk[i]];
+    int piv = comp_ivar_index(pci, nm);
+    TyKind t = piv < 0 ? TY_NIL : pci->ivar_types[piv] == TY_STRBUF ? TY_STRING : pci->ivar_types[piv];
+    pr = pr == TY_UNKNOWN ? t : ty_unify(pr, t);
+  }
+  *out = pr;
+  return npk > 0;
+}
 TyKind infer_uncached(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -11709,6 +11728,10 @@ TyKind infer_uncached(Compiler *c, int id) {
        writes (emit_expr's write takes it first), else an_ie_class_id where
        the block scope has no class_id */
     int wcls = ie_class_of(c, id) >= 0 ? ie_class_of(c, id) : s->class_id >= 0 ? s->class_id : an_ie_class_id;
+    /* ... and on a boxed receiver, the slot of each class it can hold, as a
+       read there answers */
+    TyKind pw;
+    if (nm && ie_poly_ivar_ty(c, id, nm, 0, &pw)) return pw;
     /* a toplevel method's `@x ||= v` / `@x &&= v` / `@x += v` answers the
        Toplevel slot, which the value alone does not type (`(@a ||= []) << 1`,
        a boxed `@i += 1` read back as the slot); so does a plain write of an
@@ -11942,18 +11965,8 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* an instance_eval/exec body in a method reads the receiver's ivar */
     if (ie_class_of(c, id) >= 0) cls_id = ie_class_of(c, id);
     /* ... and on a boxed receiver, the ivar of each class it can hold */
-    if (ie_class_of(c, id) < -1 && nm) {
-      int pk[64], npk = ie_poly_classes_at(c, id, pk, 64);
-      TyKind pr = TY_UNKNOWN;
-      for (int i = 0; i < npk; i++) {
-        ClassInfo *pci = &c->classes[pk[i]];
-        int piv = comp_ivar_index(pci, nm);
-        if (piv < 0) continue;
-        TyKind t = pci->ivar_types[piv] == TY_STRBUF ? TY_STRING : pci->ivar_types[piv];
-        pr = pr == TY_UNKNOWN ? t : ty_unify(pr, t);
-      }
-      if (npk > 0) return pr;
-    }
+    TyKind pr;
+    if (nm && ie_poly_ivar_ty(c, id, nm, 1, &pr)) return pr;
     /* a block or a proc written in a class or module body reads the body
        class's own slot (the civ_ static), as the write rule above and the
        read emitter take it; left to the Toplevel's, a lambda kept in a
@@ -11966,8 +11979,8 @@ TyKind infer_uncached(Compiler *c, int id) {
     int iv = nm ? comp_ivar_index(ci, nm) : -1;
     if (iv < 0) {
       /* an instance_eval/exec body reads its receiver's: one the receiver's
-         class never writes is nil there (emit_expr reads it so) */
-      int ie = s->class_id < 0 && (an_ie_class_id >= 0 || ie_class_of(c, id) >= 0);
+         class never writes is nil there, in a method too (emit_expr) */
+      int ie = ie_class_of(c, id) >= 0 || (s->class_id < 0 && an_ie_class_id >= 0);
       for (int k = ci->parent; ie && nm && k >= 0; k = c->classes[k].parent)
         if (comp_ivar_index(&c->classes[k], nm) >= 0) ie = 0;
       return ie && nm ? TY_NIL : TY_UNKNOWN;

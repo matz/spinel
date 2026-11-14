@@ -9687,7 +9687,7 @@ static int rebound_walk(Compiler *c, int x, int after, int bound) {
     case NK_LocalVariableReadNode: {
       const char *nm = nt_str(nt, x, "name");
       if (!nm) return 0;
-      if (subtree_writes_local(c, after, nm)) return 1;
+      if (subtree_writes_var(c, after, nm, VW_LOCAL)) return 1;
       /* A proc that assigns the local through its cell rebinds it wherever
          it is called from: `m2(v, la.call)` for `la = -> { v = 0; 5 }` read
          v beside the call, in C's order, and bound the 0. Anything that
@@ -9714,6 +9714,15 @@ static int rebound_walk(Compiler *c, int x, int after, int bound) {
     }
     case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode:
       return subtree_may_reassign_state(c, after) && subtree_has_side_effect(c, after);
+    /* a constant an argument assigns (`C.m(C = 2)`) is read before it, as
+       CRuby evaluates the receiver first. The walk reads the whole argument,
+       a proc body written in it included (`C.m(proc { C = 2 }.call)`); a
+       proc defined elsewhere and called from it is not followed, and a
+       method's body assigns no constant */
+    case NK_ConstantReadNode: {
+      const char *nm = nt_str(nt, x, "name");
+      return nm && subtree_writes_var(c, after, nm, VW_CONST);
+    }
     /* a block's body reads when it runs, not where it is written */
     case NK_BlockNode: case NK_LambdaNode: return 0;
     default: {
@@ -10801,7 +10810,7 @@ void emit_pd_cell_copyback(Compiler *c, Scope *m, int uid, char names[][64]) {
     LocalVar *cp = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
     if (!cp || !cp->is_cell) continue;
     for (int j = i + 1; j < m->nparams; j++)
-      if (m->pdefault && m->pdefault[j] >= 0 && subtree_writes_local(c, m->pdefault[j], m->pnames[i])) {
+      if (m->pdefault && m->pdefault[j] >= 0 && subtree_writes_var(c, m->pdefault[j], m->pnames[i], VW_LOCAL)) {
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "%s = %s*_cell__pd%d_%d;\n", names[i],
                    cp->type == TY_PROC ? "(sp_Proc *)(uintptr_t)" : "", uid, i);
@@ -10821,7 +10830,7 @@ int default_refs_earlier_param(Compiler *c, Scope *m) {
     if (!m->pdefault || m->pdefault[i] < 0) continue;
     for (int j = 0; j < i; j++)
       if (m->pnames[j] && (subtree_reads_local(nt, m->pdefault[i], m->pnames[j]) ||
-                           subtree_writes_local(c, m->pdefault[i], m->pnames[j])))
+                           subtree_writes_var(c, m->pdefault[i], m->pnames[j], VW_LOCAL)))
         return 1;
   }
   return 0;
@@ -11575,7 +11584,7 @@ static int gather_lead_arg(Compiler *c, Scope *m, const int *argv, int argc, int
   int nd = 0, *dfl = call_site_defaults(c, m, kwh, &nd), rebound = 0;
   for (int j = i + 1; j < argc + nd && !rebound; j++) {
     int after = j < argc ? argv[j] : dfl[j - argc];
-    if (vn) rebound = subtree_writes_local(c, after, vn) ||
+    if (vn) rebound = subtree_writes_var(c, after, vn, VW_LOCAL) ||
                       (lv && lv->is_cell && subtree_has_side_effect(c, after));
     else if (xk == NK_InstanceVariableReadNode) rebound = subtree_has_side_effect(c, after);
     else rebound = read_rebound_by(c, x, after);
@@ -13416,7 +13425,7 @@ int read_of_fixed_param(Compiler *c, int node) {
   Scope *s = NULL;
   LocalVar *lv = read_of_rooted_local(c, node, &s);
   return lv && lv->is_param && s->def_node >= 0 &&
-         !subtree_writes_local(c, s->def_node, nt_str(c->nt, node, "name"));
+         !subtree_writes_var(c, s->def_node, nt_str(c->nt, node, "name"), VW_LOCAL);
 }
 
 /* A read of a local nothing in the statement around it can rebind, when the
@@ -13996,7 +14005,7 @@ else {
       LocalVar *cp = scope_local(pm, pm->pnames[k]);
       int cell = cp && cp->is_cell;
       for (int j = k + 1; j < pm->nparams; j++)
-        if (pm->pdefault && pm->pdefault[j] >= 0 && subtree_writes_local(c, pm->pdefault[j], pm->pnames[k])) {
+        if (pm->pdefault && pm->pdefault[j] >= 0 && subtree_writes_var(c, pm->pdefault[j], pm->pnames[k], VW_LOCAL)) {
           emit_indent(g_pre, g_indent);
           if (!cell) buf_printf(g_pre, "_t%d = lv__pd%d_%d;\n", atmp[k], pd_uid, k);
           else if (cp->type == TY_PROC) buf_printf(g_pre, "_t%d = (sp_Proc *)(uintptr_t)*_cell__pd%d_%d;\n", atmp[k], pd_uid, k);

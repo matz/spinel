@@ -802,7 +802,6 @@ int missing_call_in_order(Compiler *c, int v, OrderRun *run);
 int missing_call_raised(Compiler *c, int v);
 /* Whether the subtree at `id` assigns the local `nm`: a write, an op-write
    or a multiple-assignment target by that name. */
-int subtree_writes_local(Compiler *c, int id, const char *nm);
 int iter_recv_bind_once(Compiler *c, int node);
 /* When a yielding method is inlined, g_yield_block_fallback holds the block
    that was active in the CALLER's context so nested `yield`s inside the

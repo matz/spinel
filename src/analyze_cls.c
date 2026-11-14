@@ -4045,7 +4045,7 @@ static int cf_subclass_test(CF *f, int pred, int stmts) {
     if (kc < 0 || comp_class_is_module(c, &c->classes[kc])) continue;
     test = kc; strict = sp_streq(cn, "<");
   }
-  if (test < 0 || subtree_writes_local(c, pred, xn)) return -1;
+  if (test < 0 || subtree_writes_var(c, pred, xn, VW_LOCAL)) return -1;
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_method_in_chain(c, k, "<", NULL) >= 0 || comp_method_in_chain(c, k, "<=", NULL) >= 0 ||
         comp_method_in_chain(c, k, "<=>", NULL) >= 0 || comp_cmethod_in_chain(c, k, "<", NULL) >= 0 ||

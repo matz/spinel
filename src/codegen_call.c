@@ -4077,7 +4077,7 @@ static int lazy_src_stable_local(Compiler *c, int n, int write) {
     NodeKind k = nt_kind(nt, p);
     if (k == NK_DefNode || k == NK_LambdaNode) break;
     if ((k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode) &&
-        subtree_writes_local(c, p, vn))
+        subtree_writes_var(c, p, vn, VW_LOCAL))
       return 0;
   }
   return 1;
@@ -28199,8 +28199,8 @@ static void nil_target_operands(Compiler *c, int id, int boxed, NilOperands *o) 
        rty == TY_IO || (rty == TY_POLY))) {
     const char *ln = nt_str(nt, r, "name");
     int blk = nt_ref(nt, id, "block");
-    for (int i = 0; ln && i < an && !rebound; i++) rebound = subtree_writes_local(c, av[i], ln);
-    if (ln && blk >= 0 && !rebound) rebound = subtree_writes_local(c, blk, ln);
+    for (int i = 0; ln && i < an && !rebound; i++) rebound = subtree_writes_var(c, av[i], ln, VW_LOCAL);
+    if (ln && blk >= 0 && !rebound) rebound = subtree_writes_var(c, blk, ln, VW_LOCAL);
     /* (an argument that may run a closure assigning the local rebinds it
        too, read_rebound_by: `v.to_s(la.call)` for `la = -> { v = 0; 5 }`.
        The head bound the call alone, and the arm read the local after it,

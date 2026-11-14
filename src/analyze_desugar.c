@@ -8196,12 +8196,12 @@ static int dsend_recv_rebound(Compiler *c, const NodeTable *nt, int recv, const 
   if (!nm) return 0;
   for (int i = 0; i < argc; i++) {
     if (k == NK_LocalVariableReadNode) {
-      if (subtree_writes_local(c, argv[i], nm)) return 1;
+      if (subtree_writes_var(c, argv[i], nm, VW_LOCAL)) return 1;
       /* ...or a proc that assigns it through its cell, which anything that
          may run one calls */
       if (subtree_may_run_proc(c, argv[i])) {
         for (int n = 0; n < nt->count; n++)
-          if ((nt_kind(nt, n) == NK_LambdaNode || nt_kind(nt, n) == NK_BlockNode) && subtree_writes_local(c, n, nm)) return 1;
+          if ((nt_kind(nt, n) == NK_LambdaNode || nt_kind(nt, n) == NK_BlockNode) && subtree_writes_var(c, n, nm, VW_LOCAL)) return 1;
       }
     }
     else if (k == NK_InstanceVariableReadNode || k == NK_ClassVariableReadNode || k == NK_GlobalVariableReadNode) {

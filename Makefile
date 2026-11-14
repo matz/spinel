@@ -5203,6 +5203,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for self_feeding_write_converges)"; ok=0;; \
 	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (a local written from a call on itself widened and narrowed every other round: the fixpoint ran to its cap)"; ok=0; };; \
 	esac; \
+	$(SPINEL) test/tail_builtin_unbound_arg_narrows.rb -c --no-line-map -o "$$tmp/tbu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (tail_builtin_unbound_arg_narrows: -c)"; ok=0; }; \
+	[ "$$(grep -cE '^static [^(]*\b(sp_step|sp_acc|sp_Power_mul)\([^)]*sp_FloatArray \* lv_u' "$$tmp/tbu.c")" -ge 3 ] || { echo "infer-test: FAIL (a builtin's call on an argument no call had bound yet typed its method's return boxed, and a loop through it stayed boxed)"; ok=0; }; \
 	rounds=$$(SP_FIXPOINT_LOG=1 $(SPINEL) test/infer/builder_param_write_converges.rb -c --no-line-map -o "$$tmp/bpw.c" 2>&1 | sed -n 's/^\[fp\] rounds=\([0-9]*\).*/\1/p' | tail -1); \
 	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for builder_param_write_converges)"; ok=0;; \
 	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (a builder block parameter's prepended write, numbered after the body, fed its reads a round late: the fixpoint ran to its cap)"; ok=0; };; \

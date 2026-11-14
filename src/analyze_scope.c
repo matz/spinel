@@ -2429,6 +2429,10 @@ void register_method_visibility(Compiler *c) {
 
 void register_locals(Compiler *c) {
   const NodeTable *nt = c->nt;
+  /* (an ivar of a block an instance_eval/exec runs on a receiver of its own
+     is that receiver's, which infer_ivar_types interns once its class is
+     known, holder_ivar_side: the structure's rebound marks) */
+  const unsigned char *rb = ie_rebound_marks(c);
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
     NodeKind k = nt_kind(nt, id);
@@ -2459,7 +2463,8 @@ void register_locals(Compiler *c) {
         k == NK_InstanceVariableTargetNode) {
       const char *nm = nt_str(nt, id, "name");
       Scope *s = comp_scope_of(c, id);
-      if (nm && s->class_id >= 0) comp_ivar_intern(&c->classes[s->class_id], nm, s->is_cmethod ? IVS_CLASS : IVS_INST);
+      if (nm && s->class_id >= 0 && !(id < c->ie_map.cap && (rb[id] & IE_RB_OWN)))
+        comp_ivar_intern(&c->classes[s->class_id], nm, s->is_cmethod ? IVS_CLASS : IVS_INST);
     }
   }
   /* Parameters are bound on entry, so their `||=` never sees the slot
@@ -8047,6 +8052,7 @@ int scope_own_defaults(Compiler *c, int di) {
 
 static void intern_scope_ivars(Compiler *c, int ms, int ci) {
   const NodeTable *nt = c->nt;
+  const unsigned char *rb = ie_rebound_marks(c);   /* (as register_locals) */
   for (int id2 = 0; id2 < nt->count; id2++) {
     if (c->nscope[id2] != ms) continue;
     const char *bty = nt_type(nt, id2);
@@ -8057,7 +8063,8 @@ static void intern_scope_ivars(Compiler *c, int ms, int ci) {
         bk == NK_InstanceVariableOperatorWriteNode ||
         bk == NK_InstanceVariableOrWriteNode) {
       const char *ivnm = nt_str(nt, id2, "name");
-      if (ivnm) comp_ivar_intern(&c->classes[ci], ivnm, c->scopes[ms].is_cmethod ? IVS_CLASS : IVS_INST);
+      if (ivnm && !(id2 < c->ie_map.cap && (rb[id2] & IE_RB_OWN)))
+        comp_ivar_intern(&c->classes[ci], ivnm, c->scopes[ms].is_cmethod ? IVS_CLASS : IVS_INST);
     }
   }
 }

@@ -24950,6 +24950,10 @@ static int push_stmt_takes_value_form(Compiler *c, int id) {
      elements raise ArgumentError, which the value form judges (the
      statement arms push every argument) */
   if (sp_streq(nm, "<<") && (argc != 1 || nt_argv_has_splat(nt, argv, argc))) return 1;
+  /* several arguments of which a later one can see an earlier push: each is
+     read before the first push (emit_operands_in_order binds them), where
+     the statement arm would read it after the pushes ahead of it */
+  if (push_args_read_before_pushes(c, id)) return 1;
   if (read_rebound_by(c, recv, args)) {
     const char *iv = nt_kind(nt, recv) == NK_InstanceVariableReadNode ? nt_str(nt, recv, "name") : NULL;
     if (!iv || ivar_direct_writes(nt, args, iv, 0)) return 1;

@@ -834,7 +834,7 @@ static OrderFacts *order_facts_make(Compiler *c) {
   order_local_writes(c, f);
   OpList l; memset(&l, 0, sizeof l);
   for (int id = 0; id < nt->count; id++) {
-    if (f->par[id] == -2 || !oplist_of(c, id, &l) || l.n == 0) continue;
+    if (f->par[id] == -2 || !oplist_of(c, id, &l)) continue;
     facts_decide(c, f, id, &l);
   }
   oplist_free(&l);

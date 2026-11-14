@@ -3,10 +3,10 @@
 # and goes in its place ahead of the consumer; HOLD: a read a later
 # operand may change, taken in its place; INLINE: read at the consumer),
 # whether it runs code and whether code runs after it (across), or `none`
-# for a list with nothing to bind. The shapes are the minimal programs of
-# the operand-order groups, and reads beside a part whose implicit to_s,
-# to_proc, to_int (an Integer's operator over an object) or **-splat may
-# run a method of the program's.
+# for a list with nothing to bind (an empty one too). The shapes are the
+# minimal programs of the operand-order groups, and reads beside a part
+# whose implicit to_s, to_proc, to_int (an Integer's operator over an
+# object) or **-splat may run a method of the program's.
 require "tmpdir"
 
 PROGRAMS = [
@@ -219,6 +219,12 @@ PROGRAMS = [
       def run = [@a, @b, three, set_a, (@b = 5)]
     end
     p K.new.run
+  RUBY
+  ["c5_empty_lists.rb", <<~'RUBY'],
+    def foo = 1
+    a = []
+    h = {}
+    p a, h, foo
   RUBY
 ]
 

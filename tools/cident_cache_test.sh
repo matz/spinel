@@ -70,6 +70,15 @@ check() {
     echo "$1: identical"
   else echo "$1: stale"; fi
 }
+# A comparison that found its one program different: exit 1 with one
+# differing program and no refusal change. `check` calls an infrastructure
+# error (exit 2) stale as well, so it cannot tell the two apart.
+differs() {
+  local rc=0; run || rc=$?
+  if [ "$rc" = 1 ] && grep -q ' 1 differ, 0 refusal changes' "$T/out"; then
+    echo "$1: differs"
+  else echo "$1: exit $rc"; fi
+}
 if [ "$1" = corpus ]; then
   check cold
   check warm
@@ -90,7 +99,7 @@ elif [ "$1" = literal ]; then
   # a hash the reference's compiler got wrong is not renamed into a right one
   # (a new reference: the cached one holds the right hash)
   rm -rf build/cident; CIDENT_TEST_LITERAL=wrong
-  check 'wrong hash'
+  differs 'wrong hash'
 elif [ "$1" = abandoned ]; then
   # A run killed with SIGKILL runs no cleanup. The next run must still get
   # the lock once the killed run's own processes are gone.

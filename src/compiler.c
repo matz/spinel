@@ -5299,7 +5299,7 @@ int class_is_blank_slate(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
     int sc = class_def_super(c->nt, c->classes[k].def_node);
     const char *sn = sc >= 0 ? key_name(c, sc) : NULL;
-    if (sn && sp_streq(sn, "BasicObject")) return 1;
+    if (sn && is_basic_object_name(sn)) return 1;
     if (sn && c->classes[k].parent < 0) return 0;   /* rooted at another builtin */
   }
   return 0;
@@ -5340,6 +5340,43 @@ int class_lacks_kernel(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent)
     if (def_body_includes_kernel(c, c->classes[k].name, 0)) return 0;
   return 1;
+}
+
+/* class_lacks_kernel for the class named `nm`, before the class table exists
+   (the lowerings ahead of it, which read the class nodes). The name must
+   name one class: every node of it (a reopen is one) sits in the same
+   enclosing class or module node, and none is a module; a name two scopes
+   carry (P::Q and Q) is not known to lack Kernel. Its superclass, as the
+   first node that writes one gives it, is BasicObject written as such, or a
+   program class that lacks Kernel in turn; and no body on the chain includes
+   Kernel. A class node named BasicObject is the root itself. */
+static int class_name_lacks_kernel(Compiler *c, const int *par, const char *nm, int hop) {
+  const NodeTable *nt = c->nt;
+  int sup = -1, encl = -2, found = 0;
+  if (hop > 16 || !nm || def_body_includes_kernel(c, nm, 0)) return 0;
+  for (int q = 0; q < 2; q++)
+    NT_FOREACH_KIND(nt, q ? NK_ModuleNode : NK_ClassNode, id) {
+      const char *cn = key_name(c, nt_ref(nt, id, "constant_path"));
+      if (!cn || !sp_streq(cn, nm)) continue;
+      int up = par[id];
+      while (up >= 0 && nt_kind(nt, up) != NK_ClassNode && nt_kind(nt, up) != NK_ModuleNode) up = par[up];
+      if (q || (found && up != encl)) return 0;
+      if (sup < 0) sup = class_def_super(nt, id);
+      encl = up;
+      found = 1;
+    }
+  if (!found) return 0;
+  if (is_basic_object_name(nm)) return encl < 0;
+  if (sup < 0) return 0;
+  NodeKind sk = nt_kind(nt, sup);
+  if (sk == NK_ConstantPathNode && nt_ref(nt, sup, "parent") >= 0) return 0;
+  if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) return 0;
+  const char *sn = key_name(c, sup);
+  return sn && (is_basic_object_name(sn) ? !def_body_includes_kernel(c, sn, 0) : class_name_lacks_kernel(c, par, sn, hop + 1));
+}
+int class_node_lacks_kernel(Compiler *c, int cnode) {
+  if (cnode < 0 || nt_kind(c->nt, cnode) != NK_ClassNode) return 0;
+  return class_name_lacks_kernel(c, comp_parent_map(c), key_name(c, nt_ref(c->nt, cnode, "constant_path")), 0);
 }
 
 /* Find a method named `name` in any top-level included module.

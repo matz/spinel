@@ -16773,8 +16773,8 @@ int desugar_conditional_defs(Compiler *c) {
        `if` of its body is marked cond_lone: what the entry cannot answer
        for it is refused (ver_named_one, ver_refl_named) */
     int left = g[0].cls == -2 || (ng == 1 && !g[0].here);
-    /* (a Kernel row's name, respond_to_missing?, answers behind an instance-side def in a class or module body only) */
-    if (!left && ng == 1 && (cdef_name_inherited(nt, base, d0) || (g[0].cls >= 0 && !g[0].cm && bop_kernel_answers(base, -1, 0)))) left = 2;
+    /* (a Kernel row's name, respond_to_missing?, answers behind an instance-side def in a class or module body that has Kernel only: a blank slate's NoMethodError is its table's, as any def's) */
+    if (!left && ng == 1 && (cdef_name_inherited(nt, base, d0) || (g[0].cls >= 0 && !g[0].cm && bop_kernel_answers(base, -1, 0) && !class_node_lacks_kernel(c, g[0].cls)))) left = 2;
     /* (...and an instance method of the builtin class the body reopens:
        `class Array; if c; def size`, whose else is Array's own size) */
     if (!left && ng == 1 && g[0].cls >= 0 && !g[0].cm && cdef_builtin_reopen_answers(c, g[0].cls, base)) left = 2;

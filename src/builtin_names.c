@@ -1412,6 +1412,10 @@ int is_object_base_name(const char *n) {
   return sp_streq(n, "Object") || sp_streq(n, "BasicObject");
 }
 
+int is_basic_object_name(const char *n) {
+  return sp_streq(n, "BasicObject");
+}
+
 /* The first row of each name, through a table hashed on the first ask: the
    lookup compared the name with every row, and is asked of class names per
    call (is_builtin_reopen, of each class a poly block dispatch weighs). */

@@ -42,11 +42,13 @@ is a user guarantee.
   published when it goes idle, a collection counts it as parked without
   waking it, and it parks for real only if it wakes while one is running.
   The same is true of a worker inside an `ffi_func` declared `blocking: true`
-  (see [FFI.md](FFI.md)). The green threads that share that worker wait for
-  the call to return: a thread stays for life on the worker it first ran on,
-  and no other worker runs it. A call declared `offload: true` instead runs
-  on an offload thread, and the caller waits as for I/O, leaving its worker
-  to the others (Spinel's own; the C function runs on another OS thread).
+  (see [FFI.md](FFI.md)). The green threads that share that worker wait
+  while the call runs C: a thread stays for life on the worker it first ran
+  on, and no other worker runs it. A callback from the call that sleeps or
+  waits on I/O parks its thread and lets them run meanwhile. A call declared
+  `offload: true` instead runs on an offload thread, and the caller waits as
+  for I/O, leaving its worker to the others (Spinel's own; the C function runs
+  on another OS thread).
 - **Preemption.** A monitor thread timeslices CPU-bound threads (~10 ms
   quantum, `RUBY_THREAD_TIMESLICE`) so a thread that loops without yielding
   cannot starve its siblings.

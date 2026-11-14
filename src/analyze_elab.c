@@ -3671,9 +3671,9 @@ static const LrDef *lr_first_version(const LrHist *h) {
 }
 /* Is version v of name, on the instance side unless cside, recorded under a
    condition, of a name a Kernel row answers (respond_to_missing?)? A call may
-   meet it unmade at any count: the name's entry has the row for its else arm
-   (ver_named_kind), and takes the version by its cell at each count the
-   calls pass (ver_named_add) */
+   meet it unmade at any count: the name's entry has the row for its else arm,
+   or NoMethodError in a class without Kernel (ver_named_kind), and takes the
+   version by its cell at each count the calls pass (ver_named_add) */
 int elab_version_held_row(const LrDef *v, const char *name, int cside) {
   return !cside && v->may && bop_kernel_answers(name, -1, 0);
 }
@@ -10954,6 +10954,45 @@ static int lr_reaches_object(Compiler *c, int cls) {
     a = lr_super(c, a);
   }
   return ELAB_UNKNOWN;
+}
+
+/* May the include or prepend calls the record holds on cls, the
+   instance side's, bring Kernel in: one names Kernel (through an alias
+   too) or a module of the program that may in turn, or a module the
+   record cannot name (a builtin one, Comparable, has no Kernel)? A
+   mixin that may not run counts as one that runs. */
+static int lr_mixes_kernel(Compiler *c, int cls, int depth) {
+  int n = 0, ke = comp_core_class(c, CORE_KERNEL);
+  const LrMixin *mx = elab_class_mixins(c, cls, &n);
+  for (int j = 0; j < n; j++) {
+    if (elab_mix_on_singleton(mx[j].kind)) continue;
+    int core = -1, m = mx[j].mod >= 0 ? mx[j].mod : elab_class_ref_at(c, mx[j].ref, &core);
+    if (core == CORE_KERNEL || (m >= 0 && m == ke)) return 1;
+    if (m < 0 ? core < 0 : depth >= lr_chain_bound(c) || lr_mixes_kernel(c, m, depth + 1)) return 1;
+  }
+  return 0;
+}
+/* See analyze.h. The chain is the record's: each header's superclass as
+   resolved where it stands, through constant aliases and paths; a
+   superclass it holds no class of is BasicObject when the reference names
+   that core class (BasicObject itself is the root where the program
+   reopens it). */
+int elab_class_lacks_kernel(Compiler *c, int cls) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded) return 0;
+  for (int a = cls, g = 0; g < lr_chain_bound(c); g++) {
+    if (a < 0 || a >= c->nclasses || a == comp_core_class(c, CORE_OBJECT) || comp_class_is_module(c, &c->classes[a]) ||
+        lr_mixes_kernel(c, a, 0)) return 0;
+    if (a == comp_core_class(c, CORE_BASIC_OBJECT)) return 1;
+    LrClass *k = lr_class(r, a);
+    if (k && k->has_sup && lr_later(c, &k->sup, k->sup_ref) < 0) {
+      int core = -1;
+      (void)elab_class_ref_at(c, k->sup_ref, &core);
+      return core == CORE_BASIC_OBJECT;
+    }
+    a = lr_super(c, a);
+  }
+  return 0;
 }
 
 /* The main-scope registration a read of `name` scoped by class owner reaches

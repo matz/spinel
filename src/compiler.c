@@ -5360,65 +5360,6 @@ int class_lacks_kernel(Compiler *c, int ci) {
   return 1;
 }
 
-/* class_lacks_kernel for the class named `nm`, before the class table exists
-   (the lowerings ahead of it, which read the class nodes). The name must
-   name one class: every node of it (a reopen is one) sits in the same
-   enclosing class or module node, none is a module, and none is written
-   under another constant (`class P::Q`, whose namespace this does not
-   resolve); a name two scopes carry (P::Q and Q) is not known to lack
-   Kernel. Its superclass, as the first node that writes one gives it, is
-   BasicObject written as such (bare only where no class or module of that
-   name is declared below the top level, which a bare read in its scope
-   would find: basic_object_shadowed), or a program class that lacks Kernel
-   in turn; and no body on the chain includes Kernel. A class node named
-   BasicObject is the root itself. */
-/* Is a class or module named BasicObject declared below the top level (in a
-   class or module body, or as `P::BasicObject`)? */
-static int basic_object_shadowed(Compiler *c, const int *par) {
-  const NodeTable *nt = c->nt;
-  for (int q = 0; q < 2; q++)
-    NT_FOREACH_KIND(nt, q ? NK_ModuleNode : NK_ClassNode, id) {
-      int cp = nt_ref(nt, id, "constant_path");
-      if (!is_basic_object_name(key_name(c, cp))) continue;
-      if (nt_kind(nt, cp) == NK_ConstantPathNode && nt_ref(nt, cp, "parent") >= 0) return 1;
-      for (int up = par[id]; up >= 0; up = par[up])
-        if (nt_kind(nt, up) == NK_ClassNode || nt_kind(nt, up) == NK_ModuleNode) return 1;
-    }
-  return 0;
-}
-static int class_name_lacks_kernel(Compiler *c, const int *par, const char *nm, int hop) {
-  const NodeTable *nt = c->nt;
-  int sup = -1, encl = -2, found = 0;
-  if (hop > 16 || !nm || def_body_includes_kernel(c, nm, 0)) return 0;
-  for (int q = 0; q < 2; q++)
-    NT_FOREACH_KIND(nt, q ? NK_ModuleNode : NK_ClassNode, id) {
-      int cp = nt_ref(nt, id, "constant_path");
-      const char *cn = key_name(c, cp);
-      if (!cn || !sp_streq(cn, nm)) continue;
-      if (nt_kind(nt, cp) == NK_ConstantPathNode && nt_ref(nt, cp, "parent") >= 0) return 0;
-      int up = par[id];
-      while (up >= 0 && nt_kind(nt, up) != NK_ClassNode && nt_kind(nt, up) != NK_ModuleNode) up = par[up];
-      if (q || (found && up != encl)) return 0;
-      if (sup < 0) sup = class_def_super(nt, id);
-      encl = up;
-      found = 1;
-    }
-  if (!found) return 0;
-  if (is_basic_object_name(nm)) return encl < 0;
-  if (sup < 0) return 0;
-  NodeKind sk = nt_kind(nt, sup);
-  if (sk == NK_ConstantPathNode && nt_ref(nt, sup, "parent") >= 0) return 0;
-  if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) return 0;
-  const char *sn = key_name(c, sup);
-  if (sn && is_basic_object_name(sn))
-    return (sk == NK_ConstantPathNode || !basic_object_shadowed(c, par)) && !def_body_includes_kernel(c, sn, 0);
-  return sn && class_name_lacks_kernel(c, par, sn, hop + 1);
-}
-int class_node_lacks_kernel(Compiler *c, int cnode) {
-  if (cnode < 0 || nt_kind(c->nt, cnode) != NK_ClassNode) return 0;
-  return class_name_lacks_kernel(c, comp_parent_map(c), key_name(c, nt_ref(c->nt, cnode, "constant_path")), 0);
-}
-
 /* Find a method named `name` in any top-level included module.
    module_function methods are class-level (is_cmethod=1), so check both
    (toplevel_mod_method).

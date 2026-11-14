@@ -1770,11 +1770,17 @@ static int ver_call_n(Compiler *c, int id) {
   for (int i = 0; i < ac; i++) if (nt_kind(nt, av[i]) == NK_ForwardingArgumentsNode) n = -1;
   return n;
 }
-/* Is scope s a version held under a condition (a lone def, cond_lone) of an instance-side name a Kernel row answers? Its
-   entry's else arm is the row, which takes the call's count itself, whether or not the version takes it: the entry is
-   at the call's count, and each arm's call raises the ArgumentError its own count meets */
-static int ver_held_row(const Compiler *c, const Scope *s) {
-  return s->def_node >= 0 && !s->is_cmethod && s->class_id >= 0 && nt_int(c->nt, s->def_node, "cond_lone", 0) && bop_kernel_answers(s->name, -1, 0);
+/* Does a Kernel row answer `name` behind an instance-side version of class cls where none has run: a Kernel row's name, in a
+   class that has Kernel? A class whose chain the record holds ending at BasicObject, with no Kernel mixed in, has none
+   (elab_class_lacks_kernel): the else arm there is what the chain finds past the versions, NoMethodError at the last */
+static int ver_kernel_row_behind(Compiler *c, int cls, const char *name) {
+  return cls >= 0 && bop_kernel_answers(name, -1, 0) && !elab_class_lacks_kernel(c, cls);
+}
+/* Is scope s a version held under a condition (a lone def, cond_lone) of an instance-side name a Kernel row answers behind
+   it (ver_kernel_row_behind)? Its entry's else arm is the row, which takes the call's count itself, whether or not the
+   version takes it: the entry is at the call's count, and each arm's call raises the ArgumentError its own count meets */
+static int ver_held_row(Compiler *c, const Scope *s) {
+  return s->def_node >= 0 && !s->is_cmethod && nt_int(c->nt, s->def_node, "cond_lone", 0) && ver_kernel_row_behind(c, s->class_id, s->name);
 }
 static int ver_arity(Compiler *c, int id, const int *to, int nto) {
   int n = ver_call_n(c, id);
@@ -6885,7 +6891,7 @@ static void cplan_bycount_ask(Compiler *c, int id, const char *nm, int k, unsign
             ad && ad->kind == LR_ALIAS;
   int kw = via && nt_kind(c->nt, ad->node) == NK_AliasMethodNode;
   int by = nt_int(c->nt, t->def_node, "cond_def_bycount", 0) && !kw && (ml.kind == ML_TABLE || !t->replaced || via),
-      n = ver_call_n(c, id), held = t->entry == ENTRY_NAMED && bop_kernel_answers(nm, -1, 0) && nt_int(c->nt, t->def_node, "cond_def_refl", 0) && n >= 0 && n != ver_plain_arity(c, r);
+      n = ver_call_n(c, id), held = t->entry == ENTRY_NAMED && ver_kernel_row_behind(c, t->class_id, nm) && nt_int(c->nt, t->def_node, "cond_def_refl", 0) && n >= 0 && n != ver_plain_arity(c, r);
   if (by || held) *(int *)arg = 1;
 }
 /* ...and the super of a prepended module's copy, which reaches the class's own version (ct_version_classes asks it of no class) */
@@ -9706,12 +9712,15 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
   /* (a record class's own builtin takes `*r, **k` passed on too: ar -1) */
   if (sg && cls >= 0 && ((ar >= 0 && bop_class_answers(name, ar, blk)) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
-  /* (an instance-side name a Kernel row answers: the row, called without a receiver at ar arguments, which it refuses where it takes no such count) */
-  if (!sg && cls >= 0 && ar >= 0 && bop_kernel_answers(name, -1, 0)) return VK_BUILTIN;
+  /* (an instance-side name a Kernel row answers behind the versions: the row, called without a receiver at ar arguments,
+     which it refuses where it takes no such count. A class without Kernel has neither the row nor another builtin's
+     method of a Kernel row's name behind them: ver_kernel_row_behind) */
+  int row = !sg && ver_kernel_row_behind(c, cls, name), bare = !sg && cls >= 0 && !row && bop_kernel_answers(name, -1, 0);
+  if (row && ar >= 0) return VK_BUILTIN;
   /* (an instance-side method of the builtin a reopened class stands for:
      with no version run, the builtin's own, #11819) */
   if (!sg && cls >= 0 && ar >= 0 && ver_builtin_instance_answers(c, cls, name, ar)) return VK_BUILTIN;
-  if (cplan_other_answers(c, cls, sg, name, 1)) return VK_KEEP;
+  if (!bare && cplan_other_answers(c, cls, sg, name, 1)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
   for (int j = 0; j < nc; j++) if (cv[j].hist == hist) last = j;
@@ -9833,10 +9842,11 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
   Compiler *c = q->c;
   int blk = 0, ar = ver_arity(c, -1, to, nv), els = VK_NOMETHOD, eb;
   for (int i = 0; i < nv; i++) blk |= c->scopes[to[i]].blk_param || c->scopes[to[i]].yields;
-  /* a held history of a name a Kernel row answers, taking no one count (ar -1: an optional or a rest
-     parameter), has no entry of its own, whose else arm would pass `*r, **k` on to a row that takes
-     none: each call's count makes one (ver_late_make), its else arm the row at that count */
-  int bycount = held && !refuse && ar < 0 && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0);
+  /* a held history of a name a Kernel row answers behind it (ver_kernel_row_behind), taking no one
+     count (ar -1: an optional or a rest parameter), has no entry of its own, whose else arm would pass
+     `*r, **k` on to a row that takes none: each call's count makes one (ver_late_make), its else arm
+     the row at that count */
+  int bycount = held && !refuse && ar < 0 && !sg && ver_kernel_row_behind(c, cls, name);
   if (!refuse && !bycount) els = ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
   if (els == VK_KEEP && !held) return;
   if (els == VK_KEEP) refuse = "cond_def_override";

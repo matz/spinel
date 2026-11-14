@@ -2265,7 +2265,6 @@ int    comp_ffi_const_at(Compiler *c, int node, int *out);
 int    comp_included_method_index(Compiler *c, const char *name, int call_id);
 int    class_is_blank_slate(Compiler *c, int ci);   /* explicit `< BasicObject` descent */
 int    class_lacks_kernel(Compiler *c, int ci);     /* blank slate with no `include Kernel` */
-int    class_node_lacks_kernel(Compiler *c, int cnode);   /* ...of the class node, before the class table */
 int    comp_toplevel_mod_defines(Compiler *c, const char *name, int extend);
 
 /* Locals within a scope. */

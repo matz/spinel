@@ -2107,6 +2107,12 @@ int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int dep
    the node's operands (a self call's method body is asked here, one level
    deeper). The operand-order record composes it over a memo. */
 int node_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth);
+/* Both questions' one rule, for every instance variable at once: each name
+   the node (subtree) may write is handed to `add`, which answers nonzero to
+   stop; 1 when it may write any or `add` stopped it, else as above. */
+typedef int (*IvarWriteFn)(void *ctx, const char *iv);
+int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx);
+int subtree_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx);
 int comp_lvw_first(Compiler *c, const char *name);
 int comp_module_includes(Compiler *c, int m, int mod, int depth);
 int comp_class_singleton_has_module(Compiler *c, int ci, int mod);

@@ -883,18 +883,18 @@ int subtree_has_side_effect(Compiler *c, int id) {
   }
   return 0;
 }
-/* See codegen_internal.h. A write names the variable; a call on self
-   follows the one method the classes from `cls` down define for it, up to
-   a few calls deep; anything else that runs code of the program's -- a
-   call on another object, a yield, a super, a block -- may write it. */
-int node_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth) {
+/* See compiler.h. A write names the variable; a call on self follows the
+   one method the classes from `cls` down define for it, up to a few calls
+   deep; anything else that runs code of the program's -- a call on another
+   object, a yield, a super, a block -- may write any. */
+int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
   NodeKind k = nt_kind(nt, id);
   if (!ty) return 0;
   if (!strncmp(ty, "InstanceVariable", 16) && (strstr(ty, "Write") || strstr(ty, "Target"))) {
     const char *wn = nt_str(nt, id, "name");
-    if (!wn || sp_streq(wn, iv)) return 1;
+    if (!wn || add(ctx, wn)) return 1;
   }
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_YieldNode ||
       k == NK_BlockNode || k == NK_LambdaNode || k == NK_BlockArgumentNode)
@@ -905,26 +905,36 @@ int node_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth)
     if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) return 1;
     int mi = cls >= 0 && nm && depth < 3 ? call_target(c, id, cls, nm, 0, NULL) : -1;
     if (mi < 0 || c->scopes[mi].def_node < 0 || dispatch_impl_count(c, id, cls, nm) != 1) return 1;
-    if (subtree_may_write_ivar(c, nt_ref(nt, c->scopes[mi].def_node, "body"), iv, cls, depth + 1)) return 1;
+    if (subtree_ivar_writes(c, nt_ref(nt, c->scopes[mi].def_node, "body"), cls, depth + 1, add, ctx)) return 1;
   }
   return -1;
 }
-int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth) {
+int subtree_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;
-  int own = node_may_write_ivar(c, id, iv, cls, depth);
+  int own = node_ivar_writes(c, id, cls, depth, add, ctx);
   if (own >= 0) return own;
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
-    if (subtree_may_write_ivar(c, nt_ref_at(nt, id, i), iv, cls, depth)) return 1;
+    if (subtree_ivar_writes(c, nt_ref_at(nt, id, i), cls, depth, add, ctx)) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0;
     const int *ids = nt_arr_at(nt, id, i, &n);
     for (int j = 0; j < n; j++)
-      if (subtree_may_write_ivar(c, ids[j], iv, cls, depth)) return 1;
+      if (subtree_ivar_writes(c, ids[j], cls, depth, add, ctx)) return 1;
   }
   return 0;
+}
+/* the one name asked: stop at its write */
+static int ivar_write_is(void *iv, const char *wn) {
+  return sp_streq(wn, (const char *)iv);
+}
+int node_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth) {
+  return node_ivar_writes(c, id, cls, depth, ivar_write_is, (void *)iv);
+}
+int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth) {
+  return subtree_ivar_writes(c, id, cls, depth, ivar_write_is, (void *)iv);
 }
 int  g_tmp = 0;
 int  g_one_held = 0;

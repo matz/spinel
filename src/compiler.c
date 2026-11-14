@@ -525,7 +525,7 @@ void comp_free(Compiler *c) {
   share_plan_free(c);
   dsn_free(c);
   order_facts_free(c);
-  free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own); free(c->ie_map.rb);
+  free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own); free(c->ie_map.rb); free(c->ie_map.prm);
   builtin_given_free(c);
   ic_free(c);
   cplan_to_ary_entries_free(c);

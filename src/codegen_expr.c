@@ -3085,7 +3085,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
        plain String it holds becomes the shared handle and is stored back
        first, as a POLY local's marked read is (poly_strbuf_lift); an
        instance's field store takes its write barrier from gc_wb_insert. */
-    if (rp.poly_lift && !g_ie_nil_ivars && rp.kind == RK_BOXED) {
+    if (rp.poly_lift && !ie_nil_ivar_read(c, id) && rp.kind == RK_BOXED) {
       int vl = view_push_repr(c, id, VR_POLY_LIFT, 0);
       Buf rl; memset(&rl, 0, sizeof rl);
       emit_expr_node(c, id, &rl);
@@ -3094,7 +3094,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
       free(rl.p);
       return 1;
     }
-    if (g_ie_nil_ivars) {
+    if (ie_nil_ivar_read(c, id)) {
       TyKind it = repr_of(c, id).as_ty;
       /* the read's form: its oint where the dispatcher takes one */
       int want_ni = g_oint_read; g_oint_read = 0;

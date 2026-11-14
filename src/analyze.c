@@ -3441,9 +3441,21 @@ void propagate_bigint_cascade(Compiler *c) {
    an instance_eval/exec block, the receiver's class id; -1 elsewhere. Lets
    bare calls/ivar refs in the block resolve against the receiver's class
    during inference (codegen mirrors this via an_ie_class_id). */
+/* The parameters of the block whose body is `body`, whose defaults run on
+   the receiver too: no outer walk reaches them once it stops at the block, so
+   every mark of a body (mark_ie_own, the arm's retype) is theirs as well. */
+static int ie_body_params(Compiler *c, int body) {
+  return c->ie_map.prm && body >= 0 && body < c->ie_map.cap ? c->ie_map.prm[body] : -1;
+}
 static void mark_ie_own(Compiler *c, int body, int cls) {
   if (body >= 0 && body < c->ie_map.cap) c->ie_map.own[body] = cls;
   mark_ie_subtree(c, body, cls);
+  mark_ie_subtree(c, ie_body_params(c, body), cls);
+}
+/* Is a child node the block a nested instance_eval/exec runs on a receiver
+   of its own (ie_own_recv_block)? The markers below leave it to that call. */
+static int ie_nested_own_block(Compiler *c, int node) {
+  return node >= 0 && node < c->ie_map.cap && (c->ie_map.rb[node] & IE_RB_ROOT);
 }
 static void mark_ie_nonobj(Compiler *c, int node) {
   if (node < 0 || node >= c->ie_map.cap) return;
@@ -3451,9 +3463,13 @@ static void mark_ie_nonobj(Compiler *c, int node) {
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return;
   if (!c->ie_map.nonobj[node]) { c->ie_map.nonobj[node] = 1; comp_touch_node(c, node); }
   int nr = nt_num_refs(c->nt, node);
-  for (int i = 0; i < nr; i++) mark_ie_nonobj(c, nt_ref_at(c->nt, node, i));
+  for (int i = 0; i < nr; i++)
+    if (!ie_nested_own_block(c, nt_ref_at(c->nt, node, i))) mark_ie_nonobj(c, nt_ref_at(c->nt, node, i));
   int na = nt_num_arrs(c->nt, node);
-  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n); for (int j = 0; j < n; j++) mark_ie_nonobj(c, ids[j]); }
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n);
+    for (int j = 0; j < n; j++) if (!ie_nested_own_block(c, ids[j])) mark_ie_nonobj(c, ids[j]);
+  }
 }
 int ie_nonobj_node(Compiler *c, int node) {
   return c->ie_map.nonobj && node >= 0 && node < c->ie_map.cap && c->ie_map.nonobj[node];
@@ -3472,10 +3488,16 @@ void mark_ie_subtree(Compiler *c, int node, int cls) {
   /* a nested def/class starts a fresh self; don't bleed the rebind into it */
   if (ty_k == NK_DefNode || ty_k == NK_ClassNode || ty_k == NK_ModuleNode) return;
   if (c->ie_map.cls[node] != cls) { c->ie_map.cls[node] = cls; comp_touch_node(c, node); }
+  /* ... nor into the block a nested instance_eval/exec runs on a receiver
+     of its own, a `&` proc's too: that call marks it (build_ie_map) */
   int nr = nt_num_refs(c->nt, node);
-  for (int i = 0; i < nr; i++) mark_ie_subtree(c, nt_ref_at(c->nt, node, i), cls);
+  for (int i = 0; i < nr; i++)
+    if (!ie_nested_own_block(c, nt_ref_at(c->nt, node, i))) mark_ie_subtree(c, nt_ref_at(c->nt, node, i), cls);
   int na = nt_num_arrs(c->nt, node);
-  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n); for (int k = 0; k < n; k++) mark_ie_subtree(c, ids[k], cls); }
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n);
+    for (int k = 0; k < n; k++) if (!ie_nested_own_block(c, ids[k])) mark_ie_subtree(c, ids[k], cls);
+  }
 }
 
 /* `ENV` is compile-time modeled only as a call RECEIVER (`ENV[...]`,
@@ -5218,8 +5240,10 @@ static void ie_map_fit(Compiler *c) {
   unsigned char *gn = gc ? realloc(c->ie_map.nonobj, (size_t)nt->count) : NULL;
   int *go = gn ? realloc(c->ie_map.own, sizeof(int) * (size_t)nt->count) : NULL;
   unsigned char *gr = go ? realloc(c->ie_map.rb, (size_t)nt->count) : NULL;
-  if (!gr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = c->ie_map.cap; i < nt->count; i++) { gc[i] = -1; gn[i] = 0; go[i] = -1; gr[i] = 0; }
+  int *gp = gr ? realloc(c->ie_map.prm, sizeof(int) * (size_t)nt->count) : NULL;
+  if (!gp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = c->ie_map.cap; i < nt->count; i++) { gc[i] = -1; gn[i] = 0; go[i] = -1; gr[i] = 0; gp[i] = -1; }
+  c->ie_map.prm = gp;
   c->ie_map.cls = gc;
   c->ie_map.nonobj = gn;
   c->ie_map.own = go;
@@ -5272,6 +5296,10 @@ void build_ie_map(Compiler *c) {
      structure's, then each resolved call's that hands a block to a receiver
      other than self (rb) */
   ie_rebound_marks(c);
+  /* (the parameters of each block, by its body) */
+  for (int i = 0; i < c->ie_map.cap; i++) c->ie_map.prm[i] = -1;
+  NT_FOREACH_KIND(nt, NK_BlockNode, bl) { int bd = nt_ref(nt, bl, "body"); if (bd >= 0 && bd < c->ie_map.cap) c->ie_map.prm[bd] = nt_ref(nt, bl, "parameters"); }
+  NT_FOREACH_KIND(nt, NK_LambdaNode, bl) { int bd = nt_ref(nt, bl, "body"); if (bd >= 0 && bd < c->ie_map.cap) c->ie_map.prm[bd] = nt_ref(nt, bl, "parameters"); }
   int rb_n = c->ie_map.cap;
   unsigned char *rb_new = calloc((size_t)rb_n, 1);
   if (!rb_new) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -5391,7 +5419,8 @@ int *ie_body_retype(Compiler *c, int body, int cls) {
   snap[0] = n;
   for (int i = 0; i < n; i++) { snap[1 + i] = (int)comp_ntype_settled(c, i); snap[1 + n + i] = c->ie_map.cls[i]; }
   mark_ie_subtree(c, body, cls);
-  if (cls >= 0) infer_subtree(c, body);
+  mark_ie_subtree(c, ie_body_params(c, body), cls);
+  if (cls >= 0) { infer_subtree(c, body); infer_subtree(c, ie_body_params(c, body)); }
   return snap;
 }
 

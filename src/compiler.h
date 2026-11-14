@@ -2054,13 +2054,15 @@ typedef struct {
      on, -1 for a body that only sits inside such a block, whose class it shares
      in cls. rb flags (IE_RB_*) the nodes whose self is rebound to another
      object (ie_rebound_marks); rb_ver counts the times those flags changed,
-     rb_scan is the node count the block structure was last read at. All
-     four have cap entries. */
+     rb_scan is the node count the block structure was last read at. prm
+     is, by a block's body, its parameters' node (-1 where none). All
+     five have cap entries. */
   struct {
     int *cls;
     unsigned char *nonobj;
     int *own;
     unsigned char *rb;
+    int *prm;
     unsigned rb_ver;
     int rb_scan;
     int cap;

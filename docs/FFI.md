@@ -207,7 +207,7 @@ that only joins runs on the one helper, so one long call there (a SQLite
 step waiting on a lock, a resolver that does not answer) holds every other
 thread for as long. More workers spread the threads over more helpers;
 waiting in Ruby instead (a `sleep`, or an I/O wait) parks the thread in the
-scheduler and frees the worker.
+scheduler and frees the worker, and so does `offload: true` (below).
 
 An `ffi_callback` from inside such a call comes back into the world for the
 method and goes out again when it has returned. That holds for one handed to
@@ -217,6 +217,41 @@ run Ruby. The method runs like any other: it allocates, starts threads and
 raises, and a raise unwinds out of the call as it does from a plain one. A
 String the method returns to C is the program's to keep alive: once the worker
 is out again, a collection can take it.
+
+### `offload: true` (Spinel's own)
+
+A trailing `offload: true` runs the C function on another OS thread, one of
+a pool the runtime keeps for these calls, while the calling thread waits for
+it as it waits for I/O: its worker runs the other threads meanwhile, as CRuby
+runs other threads while a call is outside the GVL.
+
+```ruby
+ffi_func :sqlite3_step, [:ptr], :int, offload: true
+```
+
+**This is not the ffi gem's or Fiddle's behaviour.** CRuby runs a call that
+releases the GVL on the thread that called it; here the C function runs on a
+different OS thread from the Ruby thread, and from one call to the next.
+Declare a function `offload: true` only when nothing in it depends on the
+thread it runs on:
+
+- state C keeps per thread is the offload thread's, not the caller's:
+  OpenSSL's error queue (`ERR_get_error` in a later call sees nothing),
+  thread-local variables of the library, an OpenGL context, a GUI toolkit
+  that must be called from the thread that made its objects;
+- a lock taken in one offloaded call and released in another is released by
+  another thread;
+- the other threads now run while the call runs, so a library object two
+  threads share must be safe to use from both (CRuby has the same rule).
+
+`errno` is the exception: the value the call left is set on the caller's
+thread when it returns. Each call costs a hand-off to the pool and back, so
+it is for calls that wait, not for short ones. `offload: true` implies
+`blocking: true` (a collection does not wait for the call). A `#raise` or
+`#kill` sent to the waiting thread is delivered once the call has returned.
+A variadic function, and a program with an `ffi_callback` (the offload thread
+cannot run Ruby), are refused. Without the threaded runtime the call runs in
+place.
 
 ### Passing an `IO::Buffer`
 

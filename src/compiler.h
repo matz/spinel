@@ -1212,6 +1212,11 @@ typedef struct {
                       (sp_native_enter/leave): a collection does not wait for it.
                       An ffi_callback from inside it comes back in for the method
                       (sp_native_callback_enter/leave) */
+  int offload;     /* `offload: true` (spinel's own, not the ffi gem's): the C
+                      function runs on another OS thread (sp_offload_call), and
+                      the calling green thread waits as on I/O, its worker free
+                      for the others; implies blocking. Its declaration's
+                      node + 1, 0 for none */
   int via_fp;      /* a literal attach_function of the bundled ffi package: the
                       callee is the function pointer the attach resolves at run
                       time (FFI::Native.note_fp), not an extern (#11362) */

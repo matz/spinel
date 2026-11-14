@@ -6412,7 +6412,7 @@ void register_ffi_decls(Compiler *c) {
         }
         /* a trailing `blocking: true` (the ffi gem's own keyword): the call
            leaves the world while it runs, see FfiFunc.blocking */
-        int blocking = 0;
+        int blocking = 0, offload = 0;
         if (nt_argv_kwh(nt, args, an) >= 0) {
           int kn = 0; const int *kel = nt_arr(nt, args[an - 1], "elements", &kn);
           for (int ki = 0; ki < kn; ki++) {
@@ -6420,6 +6420,9 @@ void register_ffi_decls(Compiler *c) {
             const char *ks = kk >= 0 ? ffi_arg_str(nt, kk) : NULL;
             if (ks && sp_streq(ks, "blocking") && kv >= 0 && nt_kind(nt, kv) == NK_TrueNode)
               blocking = 1;
+            /* spinel's own `offload: true`: the call runs on another OS thread */
+            if (ks && sp_streq(ks, "offload") && kv >= 0 && nt_kind(nt, kv) == NK_TrueNode)
+              offload = 1;
           }
           an--;
         }
@@ -6467,7 +6470,8 @@ void register_ffi_decls(Compiler *c) {
         c->ffi_funcs[fi].ret   = strdup(ret_spec);
         c->ffi_funcs[fi].args  = arg_specs;
         c->ffi_funcs[fi].nargs = en;
-        c->ffi_funcs[fi].blocking = blocking;
+        c->ffi_funcs[fi].blocking = blocking || offload;
+        c->ffi_funcs[fi].offload = offload ? s + 1 : 0;   /* (its declaration, for the refusal below) */
         c->ffi_funcs[fi].via_fp = 0;
         continue;
       }
@@ -6610,6 +6614,12 @@ void register_ffi_decls(Compiler *c) {
       }
     }
   }
+  /* an offloaded call runs on another OS thread, where a callback from C
+     cannot run Ruby */
+  for (int fi = 0; c->n_ffi_callbacks > 0 && fi < c->n_ffi_funcs; fi++)
+    if (c->ffi_funcs[fi].offload)
+      ffi_decl_error(c, c->ffi_funcs[fi].offload - 1, "`offload: true` in a program with an ffi_callback is not supported: "
+                     "the C function runs on another OS thread, where a callback cannot run Ruby");
   bare_native_func_calls(c);
 }
 

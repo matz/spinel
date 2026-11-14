@@ -44,7 +44,9 @@ is a user guarantee.
   The same is true of a worker inside an `ffi_func` declared `blocking: true`
   (see [FFI.md](FFI.md)). The green threads that share that worker wait for
   the call to return: a thread stays for life on the worker it first ran on,
-  and no other worker runs it.
+  and no other worker runs it. A call declared `offload: true` instead runs
+  on an offload thread, and the caller waits as for I/O, leaving its worker
+  to the others (Spinel's own; the C function runs on another OS thread).
 - **Preemption.** A monitor thread timeslices CPU-bound threads (~10 ms
   quantum, `RUBY_THREAD_TIMESLICE`) so a thread that loops without yielding
   cannot starve its siblings.

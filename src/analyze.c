@@ -31551,6 +31551,7 @@ static int dyn_block_reaches(Compiler *c, int n, int mi) {
    `new` calls that reach it. */
 #define DYN_OPEN 0x40000000u
 static void dyn_reach_value(Compiler *c, int v, int k, int depth, DynReach *r);
+static void dyn_callable_index(Compiler *c);
 /* Can call `n` not reach method mi of a user class? Its receiver is an Array
    or a Hash, which has the method only if Array or Hash is reopened or a
    module adds it: `@parts.each(&blk)` inside `def each(&blk)` is Array#each,
@@ -31856,6 +31857,78 @@ static int dyn_reach_arm(const VpLeaf *leaf, void *ud) {
   else if (leaf->kind != VPK_NIL) dyn_reach_value(a->c, leaf->node, a->k, a->depth, a->r);
   return 0;
 }
+/* What a call's one method can answer: the values its body's tail and its
+   `return`s hand back, each followed as the receiver of the call is. A call
+   the plan does not bind to one method whatever the receiver, or a method
+   whose returns are not all seen, is unknown. */
+static int dyn_reach_tail_leaf(const VpLeaf *leaf, void *ud) {
+  DynArms *a = ud;
+  if (leaf->kind == VPK_NIL) return 0;
+  if (leaf->kind == VPK_GAVE_UP) { a->r->unknown = 1; return 0; }
+  if (nt_kind(a->c->nt, leaf->node) == NK_ReturnNode) return 0;   /* with the returns */
+  if (leaf->kind != VPK_EXPR) { a->r->unknown = 1; return 0; }
+  dyn_reach_value(a->c, leaf->node, a->k, a->depth, a->r);
+  return 0;
+}
+static void dyn_reach_returns(Compiler *c, int call, int k, int depth, DynReach *r) {
+  const NodeTable *nt = c->nt;
+  CallPlan p = cplan_user_fresh(c, call);
+  if (p.dispatch != CP_DIRECT || p.mi < 0 || p.mi >= c->nscopes) { r->unknown = 1; return; }
+  dyn_callable_index(c);
+  Scope *m = &c->scopes[p.mi];
+  if (m->body < 0 || m->cs_synth || m->is_lowered_yield || g_dyn.returns_open ||
+      m->def_node < 0 || nt_kind(nt, m->def_node) != NK_DefNode || p.mi >= g_dyn.nscope) {
+    r->unknown = 1;
+    return;
+  }
+  DynArms a = { c, k, depth + 1, r };
+  for_each_value_position(nt, m->body, VPS_IF | VPS_UNLESS | VPS_BEGIN, dyn_reach_tail_leaf, &a);
+  for (int rn = g_dyn.rhead[p.mi]; rn >= 0; rn = g_dyn.rnext[rn]) {
+    int ra = nt_ref(nt, rn, "arguments"), ac = 0;
+    const int *av = ra >= 0 ? nt_arr(nt, ra, "arguments", &ac) : NULL;
+    if (ac == 0) continue;
+    if (ac != 1 || nt_kind(nt, av[0]) == NK_SplatNode) { r->unknown = 1; continue; }
+    dyn_reach_value(c, av[0], k, depth + 1, r);
+  }
+}
+/* What an instance variable can hold: every value written to an ivar of its
+   name anywhere in the program, whatever object it is on. A write the scan
+   cannot follow (an attribute writer the compiler makes, `||=` and the other
+   write forms, a multiple write, instance_variable_set, a method named by a
+   name the program computes), or none at all, is unknown. */
+static void dyn_reach_ivar(Compiler *c, int v, int k, int depth, DynReach *r) {
+  const NodeTable *nt = c->nt;
+  const char *ivn = nt_str(nt, v, "name");
+  if (!ivn || ivn[0] != '@' || ivn[1] == '@') { r->unknown = 1; return; }
+  dyn_callable_index(c);
+  if (g_dyn.open_names || anh_find(&g_dyn.lnames, "instance_variable_set") >= 0 ||
+      anh_find(&g_dyn.cnames, "instance_variable_set") >= 0) { r->unknown = 1; return; }
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    const ClassInfo *cl = &c->classes[ci];
+    for (int w = 0; w < cl->nwriters; w++)
+      if (cl->writers[w] && sp_streq(cl->writers[w], ivn + 1)) { r->unknown = 1; return; }
+    for (int w = 0; w < cl->nsg_writers; w++)
+      if (cl->sg_writers[w] && sp_streq(cl->sg_writers[w], ivn + 1)) { r->unknown = 1; return; }
+  }
+  static const NodeKind other[] = { NK_InstanceVariableOrWriteNode, NK_InstanceVariableAndWriteNode,
+    NK_InstanceVariableOperatorWriteNode, NK_InstanceVariableTargetNode };
+  for (size_t i = 0; i < sizeof other / sizeof other[0]; i++)
+    for (int w = comp_kind_first(c, other[i]); w >= 0; w = comp_kind_next(c, w)) {
+      if (nt_kind(nt, w) != other[i]) continue;
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || sp_streq(wn, ivn)) { r->unknown = 1; return; }
+    }
+  int saw = 0;
+  for (int w = comp_kind_first(c, NK_InstanceVariableWriteNode); w >= 0; w = comp_kind_next(c, w)) {
+    if (nt_kind(nt, w) != NK_InstanceVariableWriteNode) continue;
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, ivn)) continue;
+    saw = 1;
+    dyn_reach_value(c, nt_ref(nt, w, "value"), k, depth + 1, r);
+  }
+  if (!saw) r->unknown = 1;
+}
+
 static void dyn_reach_value(Compiler *c, int v, int k, int depth, DynReach *r) {
   const NodeTable *nt = c->nt;
   if (v < 0 || depth > 4) { r->unknown = 1; return; }
@@ -31919,9 +31992,11 @@ static void dyn_reach_value(Compiler *c, int v, int k, int depth, DynReach *r) {
       free(mns);
       return;
     }
-    r->unknown = 1;
+    /* a reader (`Views.builder`): what its one method returns */
+    dyn_reach_returns(c, v, k, depth, r);
     return;
   }
+  if (vk == NK_InstanceVariableReadNode) { dyn_reach_ivar(c, v, k, depth, r); return; }
   if (vk == NK_LocalVariableReadNode) {
     const char *vn = nt_str(nt, v, "name");
     Scope *vs = vn ? comp_scope_of(c, v) : NULL;

@@ -4737,7 +4737,9 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   { Buf tb; memset(&tb, 0, sizeof tb);
     Buf inner; memset(&inner, 0, sizeof inner);
     Buf *sv_pre = g_pre; g_pre = &inner;
-    emit_expr(c, bb[bn - 1], &tb);
+    /* a boxed accumulator takes a concrete tail (`1r`) boxed */
+    if (acc_ty == TY_POLY) emit_boxed(c, bb[bn - 1], &tb);
+    else emit_expr(c, bb[bn - 1], &tb);
     g_pre = sv_pre;
     if (inner.p) buf_puts(b, inner.p);
     buf_printf(b, "_t%d = ", tacc);

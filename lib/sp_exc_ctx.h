@@ -73,6 +73,15 @@ typedef struct {
                                         restored the OTHER fiber's watermark: a raise's dead root
                                         stayed on the list and the next collection read a stack
                                         slot that was no longer a string (#4546) */
+  int live;                          /* 1 from sp_exc_ctx_load until the next sp_exc_ctx_save:
+                                        the fiber is running and its handler state lives in
+                                        the worker's globals, so what is here is a stale copy
+                                        of its last switch-out. A worker parked at a safepoint
+                                        or out in a blocking native call publishes the live
+                                        state itself (sp_safepoint_publish_hook); the stale
+                                        copy's proc-return chain names nodes on C frames that
+                                        have since returned, and a collection that walked it
+                                        read whatever the stack holds there now */
 } sp_exc_ctx_t;
 
 void *sp_exc_ctx_new(void);

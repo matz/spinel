@@ -1526,7 +1526,9 @@ void sp_exc_ctx_free(void *p) {
 }
 void sp_exc_ctx_mark(void *p) {            /* GC: mark a suspended fiber's carried exc objects */
   sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
-  if (!x) return;
+  /* a running fiber's context is a stale copy (see `live`): its live
+     handler state is the worker's, published when the worker parked */
+  if (!x || x->live) return;
   for (int i = 0; i < x->en; i++) if (x->eo[i]) sp_gc_mark(x->eo[i]);
   /* a suspended fiber's proc-return chain (nodes on its preserved C stack) may
      carry an in-flight return value; mark each so it survives a GC during yield. */
@@ -1606,6 +1608,7 @@ SP_TLS sp_proc_home *sp_proc_ret_head = NULL;
    context and out of the incoming one's. */
 void sp_exc_ctx_save(void *p) {            /* current globals -> ctx */
   sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
+  x->live = 0;
   int n = sp_exc_top;
   if (n > x->ecap) { x->ecap = n;
     x->es = (jmp_buf *)realloc(x->es, sizeof(jmp_buf) * n);
@@ -1678,6 +1681,7 @@ void sp_exc_ctx_save(void *p) {            /* current globals -> ctx */
 }
 void sp_exc_ctx_load(void *p) {            /* ctx -> current globals */
   sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
+  x->live = 1;
 #ifdef SP_CEXT
   for (int i = 0; i < x->en; ++i) sp_exc_cextmark[i] = x->cext_marks[i];
   sp_cext_arena_context_load(&x->cext_arena);

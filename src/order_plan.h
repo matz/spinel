@@ -15,7 +15,7 @@
    a temp, which reads that temp whatever its shape (emission's bindings,
    view_ran_first); `alloc` counts a field read that builds a copy as code
    (an allocation: emission's question, which reads the String marks). The
-   record asks neither. */
+   record asks neither, and asks `code` instead. */
 typedef struct {
   int (*ran)(int node);
   int alloc;
@@ -23,6 +23,13 @@ typedef struct {
      per node below memo_n: only for a walk that asks neither question */
   unsigned char *memo;
   int memo_n;
+  /* when set, the record's question, whether code of the program runs or
+     an effect happens: an operand that only reads or builds a value runs
+     none -- a global's read, a constant's read with no effect
+     (an_const_read_effect), a frozen literal standing alone
+     (share_frozen_literal_alone), a block or a lambda literal (its body
+     runs when called, and that call is code) */
+  int code;
 } OrderWalk;
 
 /* Does evaluating the subtree at `id` run no code and store nothing --

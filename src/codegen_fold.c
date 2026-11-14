@@ -7713,8 +7713,10 @@ int ran_first_handle(int node) {
     /* (a String read of the handle, ran_first_bind_read's) */
     int rh = ran_first_read_handle(node);
     if (rh >= 0) return rh;
+    /* (one representation: a temp that holds the handle reads as its
+       bytes, SP_STR_B, and is still the handle) */
     int t;
-    if (sscanf(g_argov_text[i], "_t%d", &t) != 1) return -1;
+    if (sscanf(g_argov_text[i], "_t%d", &t) != 1 && sscanf(g_argov_text[i], "SP_STR_B(_t%d)", &t) != 1) return -1;
     for (int j = 0; j < g_n_ran_hnd; j++)
       if (g_ran_hnd[j].idx == i && g_ran_hnd[j].node == node && g_ran_hnd[j].t == t)
         return g_ran_hnd[j].th;
@@ -9607,6 +9609,17 @@ void hold_string_handle_decl(Compiler *c, int node, int t, int root, Buf *b) {
 }
 
 /* See codegen_internal.h. */
+int hold_string_handle(Compiler *c, int node, Buf *b) {
+  if (g_n_argov >= MAX_ARG_OVERRIDE) return -1;
+  int t = ++g_tmp;
+  hold_string_handle_decl(c, node, t, 1, b);
+  buf_puts(b, " ");
+  ran_first_bind(node, t, t);
+  snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "SP_STR_B(_t%d)", t);
+  return g_n_argov - 1;
+}
+
+/* See codegen_internal.h. */
 int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, const char *sep, Buf *b) {
   /* a value with no C slot of its own (nil) is held boxed */
   if (!boxed && (ty == TY_NIL || ty == TY_VOID || ty == TY_UNKNOWN)) { boxed = 1; ty = TY_POLY; }
@@ -9945,8 +9958,7 @@ static int emit_arg_handle_first(Compiler *c, int v, int rebound) {
 
 /* See codegen_internal.h. A copy an argument reads (arg_reads_copy) beside
    another argument that allocates in the call -- another such copy, or an
-   effect the call runs in place -- is at risk the same way as an operand
-   of a builtin's call (operand_copy_at_risk): nothing holds it until the
+   effect the call runs in place -- is at risk: nothing holds it until the
    call takes it, and a collection the other one runs frees it. It runs
    first, into its rooted temp, with the arguments. An effect that runs
    first itself is bound ahead of the call, and a value with no effect (an

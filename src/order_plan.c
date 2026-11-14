@@ -2,6 +2,7 @@
 #include "codegen_internal.h"
 #include "analyze.h"
 #include "order_plan.h"
+#include "share.h"
 #include "implicit_calls.h"
 #include "codegen_call_arms.h"
 #include "share.h"
@@ -45,8 +46,31 @@ int order_pure_walk(Compiler *c, int id, const OrderWalk *w) {
   if (m) w->memo[id] = r ? 1 : 2;
   return r;
 }
+/* Does `id`, an operand the record asks about (w->code), only read or
+   build a value? */
+static int walk_value_only(Compiler *c, int id, const OrderWalk *w) {
+  switch (nt_kind(c->nt, id)) {
+    case NK_GlobalVariableReadNode: case NK_BlockNode: case NK_LambdaNode:
+    case NK_RegularExpressionNode:
+      return 1;
+    case NK_ConstantReadNode: case NK_ConstantPathNode: {
+      ConstReadEffect e = an_const_read_effect(c, id);
+      if (e.presence || e.autoload || e.class_presence) return 0;
+      /* (a path evaluates its parent before it reads the leaf: `pick::PAT`
+         runs `pick`) */
+      return nt_kind(c->nt, id) != NK_ConstantPathNode || order_pure_walk(c, nt_ref(c->nt, id, "parent"), w);
+    }
+    /* (a frozen literal, `"lit"` or `"lit".freeze`; never a statement
+       list, whose other statements run) */
+    case NK_StringNode: case NK_InterpolatedStringNode: case NK_CallNode:
+      return share_frozen_literal_alone(c, id);
+    default:
+      return 0;
+  }
+}
 static int pure_walk_node(Compiler *c, int id, const OrderWalk *w) {
   const NodeTable *nt = c->nt;
+  if (w->code && walk_value_only(c, id, w)) return 1;
   switch (nt_kind(nt, id)) {
     case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
     case NK_ClassVariableReadNode: case NK_SelfNode: case NK_IntegerNode:
@@ -65,6 +89,21 @@ static int pure_walk_node(Compiler *c, int id, const OrderWalk *w) {
     }
     case NK_ParenthesesNode: case NK_StatementsNode: case NK_ArgumentsNode:
       break;
+    /* (the record's: an Array literal builds its value from its parts,
+       and so do a Range whose ends compare with a builtin's <=> and a
+       Hash, or a call's keyword hash, whose keys hash with a builtin's
+       #hash, which run nothing of the program's; the parts are asked) */
+    case NK_ArrayNode: case NK_HashNode: case NK_KeywordHashNode:
+      if (!w->code) return 0;
+      break;
+    case NK_RangeNode: case NK_AssocNode: {
+      int k = nt_kind(nt, id) == NK_RangeNode;
+      int lo = nt_ref(nt, id, k ? "left" : "key"), hi = k ? nt_ref(nt, id, "right") : -1;
+      if (!w->code || (lo >= 0 && !ty_runs_no_code(comp_ntype(c, lo))) ||
+          (hi >= 0 && !ty_runs_no_code(comp_ntype(c, hi))))
+        return 0;
+      break;
+    }
     case NK_CallNode: {
       int alloc = 0;
       if (!order_typed_index(c, id) && !order_typed_len(c, id) && !scalar_op_runs_no_code(c, id) &&
@@ -235,13 +274,12 @@ int order_call_runs_no_code(Compiler *c, int id) {
 /* ---- the record ---- */
 
 /* What the subtree of a code operand may do (order_sum): assign state
-   (subtree_may_reassign_state), run a proc (subtree_may_run_proc), make an
-   implicit call that may run a method of the program's, or write a
-   local. */
-enum { OS_KNOWN = 1, OS_REASSIGN = 2, OS_PROC = 4, OS_IMPL = 8, OS_LOCAL = 16 };
+   (subtree_may_reassign_state), make an implicit call that may run a
+   method of the program's, or write a local. */
+enum { OS_KNOWN = 1, OS_REASSIGN = 2, OS_IMPL = 4, OS_LOCAL = 8 };
 /* The nearest code operand to the right of the read being decided that
    may change it, by what the read is (facts_rebinder); NONE for none. */
-typedef struct { int any, state, cell, ivar; } OrderNext;
+typedef struct { int any, state, ivar; } OrderNext;
 enum { ORDER_NONE = INT_MAX };
 /* The writes of the program's variables by where they are in the tree:
    each a pre-order place and a names index, sorted by place (bypos) and by
@@ -399,13 +437,13 @@ void order_facts_free(Compiler *c) {
 }
 
 static int facts_runs_code(Compiler *c, OrderFacts *f, int node) {
-  OrderWalk w = { NULL, 0, f->code, f->n };
+  OrderWalk w = { NULL, 0, f->code, f->n, 1 };
   return !order_pure_walk(c, node, &w);
 }
 /* See order_plan.h. */
 int order_runs_code(Compiler *c, int node) {
   if (c->order && node >= 0 && node < c->order->n) return facts_runs_code(c, c->order, node);
-  OrderWalk w = { NULL, 0, NULL, 0 };
+  OrderWalk w = { NULL, 0, NULL, 0, 1 };
   return !order_pure_walk(c, node, &w);
 }
 
@@ -536,7 +574,7 @@ static void order_next_set(OrderFacts *f, int k, int j) {
   f->next[k] = j;
 }
 /* The OS_ bits of the subtree at `id`, from each node's own answers
-   (node_may_reassign_state, node_may_run_proc; an implicit call that may
+   (node_may_reassign_state; an implicit call that may
    run a method of the program's, ic_node_may_call_program, which a call
    that runs no code itself, order_call_runs_no_code, does not make; a
    local's write), each node once (f->sum). */
@@ -546,13 +584,13 @@ static unsigned order_sum(Compiler *c, OrderFacts *f, int id) {
   int m = id < f->n;
   if (m && f->sum[id]) return f->sum[id];
   NodeKind k = nt_kind(nt, id);
-  int own[4] = {
-    node_may_reassign_state(c, id), node_may_run_proc(c, id),
+  int own[3] = {
+    node_may_reassign_state(c, id),
     !(k == NK_CallNode && order_call_runs_no_code(c, id)) && ic_node_may_call_program(c, id) ? 1 : -1,
     comp_is_local_write(k) ? 1 : -1,
   };
   unsigned r = OS_KNOWN, ask = 0;
-  for (int b = 0; b < 4; b++) {
+  for (int b = 0; b < 3; b++) {
     if (own[b] > 0) r |= OS_REASSIGN << b;
     else if (own[b] < 0) ask |= OS_REASSIGN << b;
   }
@@ -670,7 +708,6 @@ static void facts_next_at(Compiler *c, OrderFacts *f, const OpList *l, int j, in
   unsigned s = order_sum(c, f, x);
   nx->any = j;
   if (s & (OS_REASSIGN | OS_IMPL)) nx->state = j;
-  if (s & (OS_PROC | OS_IMPL)) nx->cell = j;
   /* each local the list reads that it writes */
   if (s & OS_LOCAL) order_next_writes(f, &f->lw, x, f->lck, f->nlck, j);
   /* each instance variable the list reads in its def that it may assign:
@@ -687,21 +724,25 @@ static void facts_next_at(Compiler *c, OrderFacts *f, const OpList *l, int j, in
 static int order_min(int a, int b) { return a < b ? a : b; }
 /* The nearest code operand to the right that may change what read `x`
    reads (nx and next[], as facts_next_at left them), or -1. A local: one
-   that writes it, or, when a proc assigns its cell, one that may run a
-   proc. An instance variable: in a def of its class, outside a block, one
-   that may assign it (a method of self's that writes it); anywhere else
-   one that may assign state (node_may_reassign_state: a write or a target
-   of one, `rescue => @@x`, or a call that may run code). A global or a
-   class variable: the same. A literal: none. Anything else read (a
-   constant, an element, a field, arithmetic over reads): any code. An
-   implicit call that may run a method of the program's counts as all of
-   these but a local's write. The emission form (rebound_walk) asks the
-   same of the variables, with the view's bindings and its self, and asks
-   an effect (subtree_has_side_effect) of a global's or a class
-   variable's too. */
+   that writes it, or any, when a proc assigns its cell. An instance
+   variable: in a def of its class, outside a block, one that may assign
+   it (a method of self's that writes it); anywhere else one that may
+   assign state (node_may_reassign_state: a write or a target of one,
+   `rescue => @@x`, or a call that may run code). A global or a class
+   variable: the same. A literal (a frozen String or a Regexp one too), a
+   block or a lambda literal: none. Anything else read (a constant, an
+   element, a field, arithmetic over reads, an Array, Hash or Range
+   literal): any code. An implicit call that may run a method of the
+   program's counts as all of these but a local's write. The emission form
+   (rebound_walk) asks the same of the variables, with the view's bindings
+   and its self, and asks an effect (subtree_has_side_effect) of a
+   global's or a class variable's too, but for a proc's cell only of a
+   call that may run a proc (subtree_may_run_proc), which misses an
+   interpolation's implicit to_s. */
 static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const OrderNext *nx) {
   const NodeTable *nt = c->nt;
   int r = ORDER_NONE;
+  if (share_frozen_literal_alone(c, x)) return -1;
   switch (nt_kind(nt, x)) {
     case NK_LocalVariableReadNode: {
       const char *nm = nt_str(nt, x, "name");
@@ -710,7 +751,8 @@ static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const Orde
       r = f->next[k];
       Scope *xs = comp_scope_of(c, x);
       LocalVar *lv = xs ? scope_local(xs, nm) : NULL;
-      if (lv && lv->is_cell && lv->proc_rebinds) r = order_min(r, nx->cell);
+      /* (any code may call the proc: an implicit to_s or to_str too) */
+      if (lv && lv->is_cell && lv->proc_rebinds) r = order_min(r, nx->any);
       break;
     }
     case NK_InstanceVariableReadNode: {
@@ -723,7 +765,8 @@ static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const Orde
       r = nx->state;
       break;
     case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode:
-    case NK_FalseNode: case NK_SymbolNode: case NK_SelfNode:
+    case NK_FalseNode: case NK_SymbolNode: case NK_SelfNode: case NK_BlockNode: case NK_LambdaNode:
+    case NK_RegularExpressionNode:
       return -1;
     default:
       r = nx->any;
@@ -732,13 +775,14 @@ static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const Orde
   return r == ORDER_NONE ? -1 : r;
 }
 /* Is operand `x`, which runs no code, a value no code to its right can
-   change (facts_rebinder): a literal, or a variable's read of a scalar
-   (rule 1)? An element or a field read is not: a later call may store into
-   its container. */
+   change (facts_rebinder): a literal (a frozen String or a Regexp one
+   too), or a variable's read of a scalar (rule 1)? An element or a field
+   read is not: a later call may store into its container. */
 static int order_immutable(Compiler *c, OrderFacts *f, int x, int cls, const OrderNext *nx) {
+  if (share_frozen_literal_alone(c, x)) return 1;
   switch (nt_kind(c->nt, x)) {
     case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode:
-    case NK_FalseNode: case NK_SymbolNode: case NK_SelfNode:
+    case NK_FalseNode: case NK_SymbolNode: case NK_SelfNode: case NK_RegularExpressionNode:
       return 1;
     case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
     case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode: {
@@ -800,7 +844,7 @@ static void facts_decide(Compiler *c, OrderFacts *f, int owner, const OpList *l)
     cls = xc;
     order_list_name(f, &f->ivk, &f->nivk, &f->capivk, order_name(f, iv));
   }
-  OrderNext nx = { ORDER_NONE, ORDER_NONE, ORDER_NONE, ORDER_NONE };
+  OrderNext nx = { ORDER_NONE, ORDER_NONE, ORDER_NONE };
   facts_next_at(c, f, l, last, cls, &nx);
   int tail = 1;
   for (int i = 0; i < last && tail; i++)

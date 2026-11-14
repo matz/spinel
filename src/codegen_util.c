@@ -890,7 +890,9 @@ int subtree_has_side_effect(Compiler *c, int id) {
 /* See compiler.h. A write names the variable; a call on self follows the
    one method the classes from `cls` down define for it, up to a few calls
    deep; anything else that runs code of the program's -- a call on another
-   object, a yield, a super, a block -- may write any. */
+   object, a yield, a super, a block, a scalar operator over an operand whose
+   to_int or coerce is the program's (scalar_op_runs_no_code) -- may write
+   any. */
 int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -903,7 +905,7 @@ int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, v
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_YieldNode ||
       k == NK_BlockNode || k == NK_LambdaNode || k == NK_BlockArgumentNode)
     return 1;
-  if (k == NK_CallNode && !call_is_scalar_op(c, id)) {
+  if (k == NK_CallNode && !scalar_op_runs_no_code(c, id)) {
     int recv = nt_ref(nt, id, "receiver");
     const char *nm = nt_str(nt, id, "name");
     if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) return 1;

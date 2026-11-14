@@ -2018,6 +2018,40 @@ int attr_assign_slot(Compiler *c, int id, int *cid, int *iv) {
   return *iv >= 0;
 }
 
+/* The ivar slot of an attribute's `obj.x ||= v` or `obj.x &&= v` (node id)
+   that reads and stores the field itself: the reader and the writer are
+   both attr accessors the caller may call. Its class in *cid and ivar index
+   in *iv, or 0 for any other node: a half written out is called and one the
+   caller may not call raises (emit_call_or_write_via_methods), and a
+   receiver of no one class takes the two calls (desugar_call_or_write_reopen).
+   The write's value is what the field holds after it (the slot's String
+   too, under --share-strings: repr_write_share). The receiver's class is
+   read off its Repr's stored type, which is the node's type itself
+   (repr_of sets as_ty from comp_ntype and nothing else): the type the
+   write's emitter reads for the field it stores through, so the field
+   named here is that one. */
+int attr_orw_slot(Compiler *c, int id, int *cid, int *iv) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, id);
+  int recv = nt_ref(nt, id, "receiver");
+  const char *attr = nt_str(nt, id, "name");
+  if ((k != NK_CallOrWriteNode && k != NK_CallAndWriteNode) || recv < 0 || !attr || nt_ref(nt, id, "value") < 0) return 0;
+  TyKind rt = repr_of(c, recv).as_ty;
+  char wn[300], ivn[300];
+  if (!ty_is_object(rt) || (size_t)snprintf(wn, sizeof wn, "%s=", attr) >= sizeof wn) return 0;
+  int rc = ty_object_class(rt);
+  if (comp_resolve_member(c, rc, attr, 0, NULL, NULL) != SP_MEMBER_ATTR ||
+      comp_resolve_member(c, rc, attr, 1, NULL, NULL) != SP_MEMBER_ATTR)
+    return 0;
+  if (!nt_ignore_visibility(nt, id) && (method_vis_for_caller(c, id, rc, attr) != SP_VIS_PUBLIC ||
+                                        method_vis_for_caller(c, id, rc, wn) != SP_VIS_PUBLIC))
+    return 0;
+  snprintf(ivn, sizeof ivn, "@%s", attr);
+  *cid = rc;
+  *iv = comp_ivar_index(&c->classes[rc], ivn);
+  return *iv >= 0;
+}
+
 /* Is call id an attribute assignment of one plain String to an explicit
    `def x=(v)` (one required parameter, the one method the call reaches)?
    Its value is the String the writer was handed, as the handle it is a

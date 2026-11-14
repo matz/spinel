@@ -784,6 +784,13 @@ int repr_write_share(const Compiler *c, int node) {
     return attr_assign_slot(mc, node, &cid, &iv) ? repr_of_ivar(c, cid, iv).share
                                                  : user_assign_handle(mc, node) || native_assign_keeps(mc, node) != NULL;
   }
+  /* an attribute's `obj.x ||= v` or `obj.x &&= v` through its field: the
+     value is what the field holds after it, as an ivar's `||=` is its
+     slot's */
+  if (k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) {
+    int cid, iv;
+    return attr_orw_slot(mc, node, &cid, &iv) && repr_of_ivar(c, cid, iv).share;
+  }
   return 0;
 }
 

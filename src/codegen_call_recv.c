@@ -3,6 +3,7 @@
    movement, no logic change. */
 
 #include "codegen_internal.h"
+#include "order_plan.h"
 
 int g_ivg_box_node = -1;
 #include "call_plan.h"
@@ -4900,13 +4901,21 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
              they are held there too, ahead of it, as the plain receiver's
              are (held below) */
           Buf *hb = rd_call && sb_block_hoists(c, id) ? g_pre : b;
+          /* an argument that runs code may change the receiver in place
+             (and move its payload): the arguments are bound ahead of the
+             plain form, which reads the receiver's bytes from the handle
+             after them (the String group, string_group_at), and the bytes
+             the change is told by are the receiver's once it ran */
+          int late = 0;
+          for (int a = 0; a < argc && hb == b && !late; a++) late = order_runs_code(c, argv[a]);
           buf_puts(b, "({ ");
           size_t hat = hb->len;
           if (hb != b) emit_indent(hb, g_indent);
           buf_printf(hb, "sp_String *_t%d = SP_STR_HDL(%s);", tsb, lbB.p ? lbB.p : srefB.p);
           free(lbB.p); free(srefB.p);
           emit_route_recv_root(c, hrB, tsb, 0, NULL, TY_UNKNOWN, hb);
-          buf_printf(hb, " const char *_t%d = sp_String_cstr(_t%d); (void)_t%d;%s", tob, tsb, tob, hb != b ? "\n" : " ");
+          if (late) buf_puts(hb, " ");
+          else buf_printf(hb, " const char *_t%d = sp_String_cstr(_t%d); (void)_t%d;%s", tob, tsb, tob, hb != b ? "\n" : " ");
           /* (the handle read held ahead is the receiver's, written back
              below, as the enclosing bang declares it in the statement) */
           /* gsub!/sub! answer nil when no SUBSTITUTION was made, which the
@@ -4928,6 +4937,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
             nC = 2;
             if (was_sb) { view_push(c, recv, TY_STRING); nC = 3; }
             view_bind_temp(recv, tob);
+            if (late) snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "SP_STR_B(_t%d)", tsb);
           }
           /* a sibling, an operand or the block may run a sub of its own: the
              call enters the runtime through its wrapper, and a block form answers
@@ -4958,6 +4968,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
              itself and every successful mutation answered nil (#4014). */
           int tchg = ++g_tmp;
           buf_printf(b, "const char *_t%d = %s; ", tnb, nbB.p ? nbB.p : "");
+          if (late) buf_printf(b, "const char *_t%d = sp_String_cstr(_t%d); (void)_t%d; ", tob, tsb, tob);
           if (sb_nil_nc || sb_same_ok)
             buf_printf(b, "int _t%d = !sp_str_eq(_t%d, _t%d)%s; ", tchg, tob, tnb, smB);
           if (sb_same_ok) buf_printf(b, "if (_t%d) ", tchg);
@@ -10322,8 +10333,14 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      the value cannot alias the handle (#3227). A method that only looks at
      the bytes and answers a scalar or a freshly built string keeps nothing,
      so it can read the live buffer instead -- `text[i]` in a scan loop was
-     copying the whole subject on every character. */
-  if (rt == TY_STRING && name && is_string_read_only_method(name))
+     copying the whole subject on every character. A receiver the operand
+     order holds as its handle ahead of the arguments
+     (emit_operands_in_order), or a bang holds ahead of its plain form, is
+     read from that hold, as its bytes: the slot may name another String by
+     the time the call runs. */
+  int rth = rt == TY_STRING && arg_ran_first(recv, 0) ? ran_first_handle(recv) : -1;
+  if (rth >= 0) buf_printf(&rs, "SP_STR_B(_t%d)", rth);
+  else if (rt == TY_STRING && name && is_string_read_only_method(name) && !arg_ran_first(recv, 0))
     emit_strbuf_read_ref(c, recv, &rs);
   /* a receiver that can be nil is rendered as its unwrapped oint, never as
      the checked plain read: the `$N` arms take the oint back out of it */
@@ -10405,14 +10422,21 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      that hoists a loop (a block call) binds the receiver there, so the held
      temp is declared at that point rather than inside the expression */
   size_t g_pre_mark = g_pre ? g_pre->len : 0;
-  /* A String receiver that is a fresh copy (a shared slot's reader) and is
-     never nil still needs the bound, rooted temp when an argument may
-     allocate: the guard below is the only path that holds it (g_noguard:
-     the hold without the nil test). An argument that is a pure read --
-     `s.getbyte(j * p + k)` -- builds nothing (operand_allocates_beside):
-     held for it, the receiver's bytes were fetched and rooted on every
-     iteration of a loop that reads them from its header cache. */
+  /* A String receiver that is a fresh value (a call's answer) only the
+     call's argument list holds, and is never nil, still needs the bound,
+     rooted temp when an argument may allocate: the guard below is the only
+     path that holds it (g_noguard: the hold without the nil test). A String
+     slot's read needs none: the slot holds its String, and an operand that
+     changes it or rebinds the slot is ordered ahead of the call, which holds
+     the slot's handle (emit_operands_in_order); nor does a receiver held so
+     already. An argument that is a pure read -- `s.getbyte(j * p + k)` --
+     builds nothing (operand_allocates_beside): held for it, the receiver
+     was fetched and rooted on every iteration of a loop that reads it. */
   int g_noguard = 0;
+  /* (a String receiver held beside an argument that runs code is held as
+     its handle, read as SP_STR_B where the arms read it; see the hold) */
+  int g_hdl = 0;
+  for (int ai = 0; rt == TY_STRING && ai < argc; ai++) g_hdl |= order_runs_code(c, argv[ai]);
   /* (--share-strings: `yield.equal?(x)` at a site whose block answers a
      String a holder keeps reads the yield's handle once, in equal?'s own
      arm (str_arms_convert): held here as its bytes, the handle was lost) */
@@ -10422,14 +10446,15 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      the arguments where CRuby reads it there, or take a shared String's
      handle: encode_hold) */
   int enc_holds = rt == TY_STRING && name && (sp_streq(name, "encode") || sp_streq(name, "encode!")) && argc <= 3;
-  if (rt == TY_STRING && name && recv >= 0 && operand_may_allocate(c, recv) && !y_ident && !enc_holds &&
+  if (rt == TY_STRING && name && recv >= 0 && subtree_may_allocate(nt, recv) && !arg_ran_first(recv, 0) &&
+      !y_ident && !enc_holds &&
       repr_of(c, recv).as_ty != TY_STRBUF &&   /* a handle is no fresh copy, and no const char * */
       !((!nil_answers_name(name)) && recv_may_be_sentinel(c, recv))) {
     for (int ai = 0; ai < argc && !g_noguard; ai++) g_noguard = operand_allocates_beside(c, argv[ai]);
     if (nt_safe_nav(nt, id)) g_noguard = 0;
     if (g_noguard) {
       g_tmpid = ++g_tmp;
-      snprintf(g_rname, sizeof g_rname, "_t%d", g_tmpid);
+      snprintf(g_rname, sizeof g_rname, g_hdl ? "SP_STR_B(_t%d)" : "_t%d", g_tmpid);
       g_outer_b = b; b = &gbody; r = g_rname;
       if (g_conv_hold) g_conv_hold->guarded = 1;
     }
@@ -10443,7 +10468,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
          text at all, so a guard spliced into that text would vanish. The
          arms emit into gbody and the guard wraps whatever they produced. */
       g_tmpid = ++g_tmp;
-      snprintf(g_rname, sizeof g_rname, "_t%d", g_tmpid);
+      snprintf(g_rname, sizeof g_rname, g_hdl ? "SP_STR_B(_t%d)" : "_t%d", g_tmpid);
       g_outer_b = b; b = &gbody; r = g_rname;
       /* conversions the arms emit belong BELOW the guard's nil check --
          CRuby raises its NoMethodError without asking #to_str -- so the
@@ -10941,18 +10966,22 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     if (handled) {
       /* the String's nil is the NULL pointer; an Integer's is its oint's
          flag, read through sp_oint_val (nil's NoMethodError). A String
-         receiver can be a fresh copy (a shared slot's reader, a method's
-         result) that only this temp holds: it is rooted when an argument,
-         evaluated inside the call below, may allocate. */
+         receiver can be a fresh value (a method's result) that only this
+         temp holds: it is rooted when an argument, evaluated inside the
+         call below, may allocate. Beside an argument that runs code (the
+         record's order_runs_code), which may change the String in place,
+         it is held as its handle (the receiver's text is of either face),
+         and its bytes are taken where the arms read it, after the
+         arguments ran; beside none, its bytes are what the arms read. */
       int g_root = 0;
       if (rt == TY_STRING)
         for (int ai = 0; ai < argc && !g_root; ai++) g_root = operand_allocates_beside(c, argv[ai]);
+      const char *g_decl = g_hdl ? "sp_String *_t%d = SP_STR_HDL(%s);" : "const char *_t%d = SP_STR_B(%s);";
       if (rt == TY_STRING && g_pre && pre_names_tmp(g_pre, g_pre_mark, g_tmpid)) {
         /* the body's prelude reads the held temp: declare it there */
         Buf hd; memset(&hd, 0, sizeof hd);
-        /* (one-String mode: the receiver's text may be a held handle) */
-        buf_printf(&hd, "const char *_t%d = SP_STR_B(%s); SP_GC_ROOT(_t%d);",
-                   g_tmpid, rs.p ? rs.p : "", g_tmpid);
+        buf_printf(&hd, g_decl, g_tmpid, rs.p ? rs.p : "");
+        buf_printf(&hd, " SP_GC_ROOT(_t%d);", g_tmpid);
         if (!g_noguard) buf_printf(&hd, " if (!_t%d) sp_nil_recv_raise(\"%s\");", g_tmpid, name);
         buf_puts(&hd, "\n");
         buf_insert_at(g_pre, g_pre_mark, hd.p);
@@ -10960,7 +10989,9 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_puts(b, "({ ");
       }
       else if (rt == TY_STRING) {
-        buf_printf(b, "({ const char *_t%d = SP_STR_B(%s); ", g_tmpid, rs.p ? rs.p : "");
+        buf_puts(b, "({ ");
+        buf_printf(b, g_decl, g_tmpid, rs.p ? rs.p : "");
+        buf_puts(b, " ");
         if (g_root) buf_printf(b, "SP_GC_ROOT(_t%d); ", g_tmpid);
         if (!g_noguard) buf_printf(b, "if (!_t%d) sp_nil_recv_raise(\"%s\"); ", g_tmpid, name);
       }

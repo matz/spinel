@@ -7378,7 +7378,20 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
          after the write, nil exactly when the bit says so (`&&=` over nil) */
       int ao = oint_kind(ivt) && iidx >= 0 && ivar_has_nilbit(c, class_id, iidx) && node_is_oint(c, id);
       if (ao) buf_puts(b, "(void)");
-      emit_attr_orw_value(c, class_id, iidx, tn, apfx, ivt, iidx >= 0 && repr_of_ivar(c, class_id, iidx).elems_handle, lhs, v, is_or, m, b);
+      /* where the field holds the rule's handle and the handle is taken
+         (the handle mark): the field's handle itself, as an ivar's `||=` */
+      if (repr_of(c, id).handle && repr_write_share(c, id)) {
+        /* the store is the writer's `@x = v`: a frozen receiver refuses it,
+           where the store runs (as emit_attr_orw_value) */
+        Buf fz; memset(&fz, 0, sizeof fz);
+        emit_frozen_obj_guard(c, class_id, tn, &fz);
+        const char *sv_guard = g_orw_store_guard;
+        g_orw_store_guard = fz.p;
+        emit_strbuf_orw_share_value(c, id, lhs, v, is_or, -1, NULL, m, b);
+        g_orw_store_guard = sv_guard;
+        free(fz.p);
+      }
+      else emit_attr_orw_value(c, class_id, iidx, tn, apfx, ivt, iidx >= 0 && repr_of_ivar(c, class_id, iidx).elems_handle, lhs, v, is_or, m, b);
       if (ao) {
         char ant[300]; ivar_nilbit_test(c, class_id, iidx, apfx, ant, sizeof ant);
         buf_printf(b, "; %s ? %s : %s(%s)", ant, oint_nil(ivt), oint_of(ivt), lhs);

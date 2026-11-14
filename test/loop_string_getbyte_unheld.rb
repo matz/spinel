@@ -2,7 +2,8 @@
 # index builds nothing, so the receiver is read where the call needs it --
 # in a loop that holds the String's bytes, only in the out-of-range arm --
 # and not fetched and rooted ahead of the index on every iteration. An
-# index that does build something keeps the receiver held and rooted.
+# index that does build something runs first, into a temp, and the
+# receiver is read in the call after it.
 Thread.new { 0 }.join
 
 class Ctx
@@ -68,7 +69,7 @@ def uncached(ctx, n)
   s
 end
 
-# an index that allocates (an Array literal) keeps the receiver rooted
+# an index that allocates (an Array literal) runs ahead of the receiver's read
 def built(ctx, n)
   rows = ctx.rows
   s = 0

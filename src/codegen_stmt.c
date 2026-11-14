@@ -1,4 +1,5 @@
 #include "codegen_internal.h"
+#include "order_plan.h"
 static void emit_ivar_lhs_otext(Compiler *c, int cid, int iv, const char *ivn, const char *lhs, const char *otext, Buf *b);
 static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
 #include "repr.h"
@@ -1863,9 +1864,11 @@ int strbuf_bang_chain(Compiler *c, int v) {
   int args[32], base = str_alias_chain_base(c, v);
   return strbuf_chain_bang_base(c, v, base) && strbuf_chain_links_m(c, v, base, args, 1) > 0;
 }
-/* --share-strings: v (through parentheses) is an attribute assignment on a
-   handle, whose value is the one String it was handed (repr_write_share):
-   a leaf a handle route reads as that handle (emit_strbuf_write_handle). */
+/* --share-strings: v (through parentheses) is an attribute's write on a
+   handle (`o.x = s`, whose value is the one String it was handed, or
+   `o.x ||= s` and `o.x &&= s`, whose value is the String the field holds
+   after it: repr_write_share): a leaf a handle route reads as that handle
+   (emit_strbuf_write_handle). */
 /* ...on a receiver whose class is known only at run time? */
 static int strbuf_assign_boxed_recv(Compiler *c, int v) {
   int r = nt_ref(c->nt, nt_paren_single(c->nt, v), "receiver");
@@ -1874,7 +1877,8 @@ static int strbuf_assign_boxed_recv(Compiler *c, int v) {
 }
 int strbuf_assign_leaf(Compiler *c, int v) {
   v = nt_paren_single(c->nt, v);
-  return v >= 0 && nt_kind(c->nt, v) == NK_CallNode && repr_write_share(c, v);
+  NodeKind k = v >= 0 ? nt_kind(c->nt, v) : NK_NONE;
+  return (k == NK_CallNode || k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) && repr_write_share(c, v);
 }
 /* --share-strings: v (through parentheses) is `freeze` over a leaf, a chain
    over one or another such freeze, which answers that handle, frozen (as it
@@ -3856,7 +3860,11 @@ int emit_recv_route_handle(Compiler *c, int id, int recv, Buf *b) {
   /* (a held chain's shadow has none: its shim holds the handle and writes
      the shadow back, emit_held_self_answer_shim) */
   if (sb_shadowed_reader(c, nt_paren_single(c->nt, recv))) return 0;
+  /* (a head holds the expression a receiver's parentheses wrap, as
+     emit_bang_self_form's route form does: a call distributed over a
+     conditional's arms keeps an arm's own parentheses as its receiver) */
   int th = ran_first_handle(recv);
+  if (th < 0) th = ran_first_handle(nt_paren_single(c->nt, recv));
   if (th >= 0) { buf_printf(b, "_t%d", th); return 1; }
   /* a receiver a head ran into its bytes alone has no handle to give (the
      operand-order rewrite's trial binding has run nothing: the route runs
@@ -25030,6 +25038,21 @@ void emit_str_frozen_check(Compiler *c, int recv, Buf *b) {
   buf_puts(b, "if ("); emit_expr(c, recv, b); buf_puts(b, ") sp_str_check_mutable(");
   emit_expr(c, recv, b); buf_puts(b, ");");
 }
+/* The String argument of a mutator that takes its receiver's bytes from
+   the handle held in the statement: one that runs code (order_runs_code)
+   may change the receiver in place, so it runs first, into a rooted temp,
+   and the bytes are read after it, as CRuby reads the String once its
+   arguments ran (C leaves the order of a call's operands open). Answers
+   that temp, or -1 with nothing emitted: the argument is rendered in the
+   call. */
+static int str_mut_arg_first(Compiler *c, int arg, Buf *b) {
+  if (!order_runs_code(c, arg)) return -1;
+  int t = ++g_tmp;
+  buf_printf(b, "const char *_t%d = ", t);
+  emit_str_expr(c, arg, b);
+  buf_printf(b, "; SP_GC_ROOT_STR(_t%d); ", t);
+  return t;
+}
 /* emit_array_mutate_stmt_body's String mutators done by reassigning the
    receiver: replace, prepend, concat, delete_prefix! /
    delete_suffix! (answers 1 emitted, 0 declined, -1 to go on) */
@@ -25066,9 +25089,11 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
           free(srefR2.p);
           return 1;
         }
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); sp_String_set_bin(_t%d, ", tbR, srefR2.p, tbR);
+        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); ", tbR, srefR2.p);
         free(srefR2.p);
-        buf_puts(b, "sp_str_concat("); emit_str_expr(c, argv[0], b);
+        int taP = str_mut_arg_first(c, argv[0], b);
+        buf_printf(b, "sp_String_set_bin(_t%d, sp_str_concat(", tbR);
+        if (taP >= 0) buf_printf(b, "_t%d", taP); else emit_str_expr(c, argv[0], b);
         buf_printf(b, ", sp_String_cstr(_t%d))", tbR);
         buf_puts(b, "); }\n");
         return 1;
@@ -25105,10 +25130,11 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
         const char *base3 = sp_streq(name, "delete_prefix!") ? "delete_prefix" : "delete_suffix";
         int tbD = ++g_tmp;
         emit_indent(b, indent);
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); sp_String_set_bin(_t%d, sp_str_%s(sp_String_cstr(_t%d), ",
-                   tbD, srefD.p, tbD, base3, tbD);
+        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); ", tbD, srefD.p);
         free(srefD.p);
-        emit_expr(c, argv[0], b);
+        int taD = str_mut_arg_first(c, argv[0], b);
+        buf_printf(b, "sp_String_set_bin(_t%d, sp_str_%s(sp_String_cstr(_t%d), ", tbD, base3, tbD);
+        if (taD >= 0) buf_printf(b, "_t%d", taD); else emit_expr(c, argv[0], b);
         buf_puts(b, ")); }\n");
         return 1;
       }

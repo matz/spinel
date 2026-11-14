@@ -4132,6 +4132,161 @@ static void emit_cell_decl(Compiler *c, Scope *s, LocalVar *lv, Buf *b) {
       return;
 }
 
+/* ---- deferred cells ----
+   A method whose body opens with guards (`return x if cond`) and creates a
+   real closure further down allocated every captured local's cell at entry,
+   so a call the guards turned away paid for cells no closure ever took
+   (100k early returns made 200k cells). Such a cell is now made after the
+   guards, at the body's top level, which every later statement -- every
+   closure creation among them -- comes after. Until then `_cell_x` points
+   at a stack slot of the cell's type that holds the local (a parameter's
+   incoming value, or its starting nil), rooted as an ordinary local, so a
+   guard's reads go through `*_cell_x` unchanged; at the switch the slot's
+   value moves into a fresh heap cell, rooted through `_cellh_x` (NULL until
+   then, which marks nothing), and `_cell_x` takes it.
+
+   The guards are held to a small shape that cannot let the stack address
+   escape or need the barrier a cell store takes: an `if`/`unless` with no
+   else whose body is one `return`, built of reads, literals and calls with
+   no block (none of the names that reach the frame: binding, eval, ...). */
+static int g_cdefer_stmts = -1, g_cdefer_at = -1;
+static Scope *g_cdefer_scope = NULL;
+static Buf *g_cdefer_buf = NULL;
+static Buf g_cdefer_text;
+
+static int cdefer_plain_node(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 1;
+  switch (nt_kind(nt, id)) {
+  case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
+  case NK_ConstantReadNode: case NK_ConstantPathNode: case NK_SelfNode:
+  case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_IntegerNode:
+  case NK_FloatNode: case NK_StringNode: case NK_SymbolNode:
+  case NK_AndNode: case NK_OrNode: case NK_ParenthesesNode:
+  case NK_ArgumentsNode: case NK_StatementsNode: case NK_ArrayNode:
+    break;
+  case NK_CallNode: {
+    if (nt_ref(nt, id, "block") >= 0) return 0;
+    static const char *const FRAME[] = {
+      "binding", "eval", "local_variables", "proc", "lambda", "define_method",
+      "instance_eval", "instance_exec", "class_eval", "module_eval", "class_exec",
+      "module_exec", "send", "__send__", "public_send", "method", "block_given?",
+      "to_enum", "enum_for", NULL };
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) return 0;
+    for (int i = 0; FRAME[i]; i++) if (sp_streq(nm, FRAME[i])) return 0;
+    break;
+  }
+  default: return 0;
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) if (!cdefer_plain_node(c, nt_ref_at(nt, id, i))) return 0;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int k = 0; k < n; k++) if (!cdefer_plain_node(c, ids[k])) return 0;
+  }
+  return 1;
+}
+
+/* `return x if cond` / `return x unless cond`, of plain nodes */
+static int cdefer_guard_stmt(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, id);
+  if (k != NK_IfNode && k != NK_UnlessNode) return 0;
+  if (nt_ref(nt, id, "subsequent") >= 0 || nt_ref(nt, id, "else_clause") >= 0) return 0;
+  if (!cdefer_plain_node(c, nt_ref(nt, id, "predicate"))) return 0;
+  int st = nt_ref(nt, id, "statements");
+  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
+  int n = 0; const int *v = nt_arr(nt, st, "body", &n);
+  if (n != 1 || nt_kind(nt, v[0]) != NK_ReturnNode) return 0;
+  return cdefer_plain_node(c, nt_ref(nt, v[0], "arguments"));
+}
+
+/* How many guard statements open method `s`'s body, when at least one does
+   and something follows them; 0 otherwise */
+static int cdefer_guard_count(Compiler *c, Scope *s) {
+  const NodeTable *nt = c->nt;
+  if (!s->name || s->def_node < 0 || nt_kind(nt, s->def_node) != NK_DefNode) return 0;
+  if (s->dm_subst_name || s->body < 0 || nt_kind(nt, s->body) != NK_StatementsNode) return 0;
+  int n = 0; const int *v = nt_arr(nt, s->body, "body", &n);
+  int g = 0;
+  while (g < n && cdefer_guard_stmt(c, v[g])) g++;
+  return g < n ? g : 0;
+}
+
+/* Can `lv`'s cell wait for the switch? Its kind's slot must be one a plain
+   local roots the same way: an Integer, Boolean, Symbol, Float or nilable
+   number, a boxed value, or a rootable heap pointer. A Proc (laundered
+   through an int) and a by-value struct keep the entry allocation. */
+static int cdefer_local_ok(Compiler *c, Scope *s, LocalVar *lv) {
+  if (lv->cell_shadow || lv->type == TY_PROC || cell_value_struct(lv->type)) return 0;
+  if (s->blk_param && lv->name && sp_streq(lv->name, s->blk_param)) return 0;
+  if (slot_is_oint(lv) || lv->type == TY_FLOAT || lv->type == TY_POLY) return 1;
+  if (cell_is_typed_ptr(c, lv)) return ty_gc_rootable(c, lv->type);
+  return lv->type == TY_INT || lv->type == TY_BOOL || lv->type == TY_SYMBOL;
+}
+
+/* The deferred form of emit_cell_decl: the stack slot, the NULL heap cell
+   and the pointer at the slot here, the allocation into g_cdefer_text. */
+static void emit_cell_decl_deferred(Compiler *c, Scope *s, LocalVar *lv, Buf *b) {
+  (void)s;
+  const char *nm = lv->name;
+  Buf et; memset(&et, 0, sizeof et);
+  emit_cell_elem_type(c, lv, &et);
+  const char *ty = et.p ? et.p : "sp_int";
+  const char *scan = "NULL";
+  if (lv->type == TY_POLY) scan = "sp_cell_scan_rbval";
+  else if (!slot_is_oint(lv) && lv->type != TY_FLOAT && cell_is_typed_ptr(c, lv)) scan = cell_scan_fn(lv->type);
+  /* (a String parameter's own root, as the entry allocation keeps it) */
+  if (lv->is_param && repr_of_slot(c, lv).as_ty == TY_STRING) {
+    char name[512]; snprintf(name, sizeof name, "lv_%s", nm);
+    buf_puts(b, "    ");
+    emit_gc_root_var(c, repr_of_slot(c, lv).as_ty, name, b);
+    buf_puts(b, "\n");
+  }
+  buf_printf(b, "    %s _cellv_%s = ", ty, nm);
+  if (lv->is_param) buf_printf(b, "lv_%s", nm);
+  else if (slot_is_oint(lv)) buf_puts(b, local_init_value(c, lv));
+  else if (lv->type == TY_FLOAT) buf_puts(b, "0.0");
+  else if (lv->type == TY_POLY) buf_puts(b, "sp_box_nil()");
+  else if (cell_is_typed_ptr(c, lv)) buf_puts(b, "NULL");
+  else buf_puts(b, "0");
+  buf_puts(b, ";\n");
+  if (lv->type == TY_POLY || (!slot_is_oint(lv) && lv->type != TY_FLOAT && cell_is_typed_ptr(c, lv))) {
+    char name[512]; snprintf(name, sizeof name, "_cellv_%s", nm);
+    buf_puts(b, "    ");
+    emit_gc_root_var(c, lv->type, name, b);
+    buf_puts(b, "\n");
+  }
+  buf_printf(b, "    %s *_cellh_%s = NULL;\n", ty, nm);
+  buf_printf(b, "    SP_GC_ROOT(_cellh_%s);\n", nm);
+  buf_printf(b, "    %s *_cell_%s = &_cellv_%s;\n", ty, nm, nm);
+  /* (one line naming `_cell_x` beside its scan, as the entry allocation's
+     does: gc_wb_cells reads which cells hold references from it) */
+  buf_printf(&g_cdefer_text, "_cell_%s = _cellh_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, %s);"
+                             " *_cell_%s = _cellv_%s;\n", nm, nm, ty, ty, scan, nm, nm);
+  free(et.p);
+}
+
+/* emit_stmts' hook: the switch, ahead of the first statement past the
+   guards of the method being emitted */
+void emit_cell_defer_switch(Compiler *c, int id, int k, Buf *b, int indent) {
+  (void)c;
+  if (id != g_cdefer_stmts || k != g_cdefer_at || b != g_cdefer_buf || indent != 1) return;
+  if (!g_cdefer_text.p) return;
+  emit_indent(b, indent);
+  buf_puts(b, "/* the closure cells, past the guards */\n");
+  const char *p = g_cdefer_text.p;
+  while (*p) {
+    const char *nl = strchr(p, '\n');
+    size_t n = nl ? (size_t)(nl - p) + 1 : strlen(p);
+    emit_indent(b, indent);
+    buf_putn(b, p, n);
+    p += n;
+  }
+}
+
 void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
   emit_scope_decls_ends(c, s, b, NULL);
 }
@@ -4172,7 +4327,11 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends) {
     /* Captured-by-closure local: lives in a heap cell so the proc and this
        scope share storage. A param's incoming value is copied into the cell;
        a body local starts at 0. Int and proc cells supported. */
-    if (lv->is_cell) { emit_cell_decl(c, s, lv, b); continue; }
+    if (lv->is_cell) {
+      if (s == g_cdefer_scope && cdefer_local_ok(c, s, lv)) emit_cell_decl_deferred(c, s, lv, b);
+      else emit_cell_decl(c, s, lv, b);
+      continue;
+    }
     if (lv->is_param && has_begin && (all_vol || name_list_has(volnames, nvol, lv->name))) {
       /* a parameter the body reassigns inside a begin and reads after the
          rescue or a retry's longjmp: a volatile local copy of the incoming
@@ -7883,7 +8042,16 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   size_t gc_save_len = b->len - gc_save_off;
   if (repr_self_handle(c, (int)(s - c->scopes))) buf_puts(b, "    SP_GC_ROOT(self);\n");
   else if (method_self_root(c, s)) buf_printf(b, "    %s(self);\n", method_self_root(c, s));
+  /* a body that opens with guards makes its closure cells past them */
+  int cdefer_at = cdefer_guard_count(c, s);
+  Scope *sv_cdscope = g_cdefer_scope; int sv_cdstmts = g_cdefer_stmts, sv_cdat = g_cdefer_at;
+  Buf *sv_cdbuf = g_cdefer_buf; Buf sv_cdtext = g_cdefer_text;
+  memset(&g_cdefer_text, 0, sizeof g_cdefer_text);
+  g_cdefer_scope = cdefer_at > 0 ? s : NULL;
   emit_scope_decls(c, s, b);
+  g_cdefer_scope = NULL;
+  g_cdefer_stmts = g_cdefer_text.p ? s->body : -1;
+  g_cdefer_at = cdefer_at; g_cdefer_buf = b;
   /* a method's entry is a safe point for pending finalizers (sp_gc.h) */
   if (g_uses_finalizers) buf_puts(b, "    SP_FIN_POLL();\n");
   /* and for a delivered Signal.trap */
@@ -8034,6 +8202,9 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
     else buf_printf(b, "%s;\n", default_value_from_compiler(c, s->ret));
   }
   g_result_var = sv_rv2; g_result_poly = sv_rp2; g_result_ty = sv_rty2; g_result_oint = sv_ro2;
+  free(g_cdefer_text.p);
+  g_cdefer_text = sv_cdtext; g_cdefer_scope = sv_cdscope; g_cdefer_stmts = sv_cdstmts;
+  g_cdefer_at = sv_cdat; g_cdefer_buf = sv_cdbuf;
   g_method_pr_label = NULL; g_method_pr_var = NULL;
   g_fn_pr_label = NULL; g_fn_pr_var = NULL; g_fn_ret_type = TY_UNKNOWN; g_fn_ret_oint = 0;
   g_self_deref = saved_deref;

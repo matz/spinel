@@ -55104,8 +55104,8 @@ static void an_phase_value_types(Compiler *c) {
           if (sp_streq(qc->ivars[j], ivn) && qc->ivar_types[j] == TY_STRBUF) { qc->is_value_type = 0; break; }
       }
     }
-    /* immutable check: an instance's ivar write outside `initialize`
-       defeats value type (a class method's or a class body's write is the
+    /* immutable check: an instance's ivar write outside its own class's
+       `initialize` defeats value type (a class method's or a class body's write is the
        class object's, holder_ivar_side) */
     if (ty_k == NK_InstanceVariableWriteNode ||
         ty_k == NK_InstanceVariableOperatorWriteNode ||
@@ -55116,7 +55116,7 @@ static void an_phase_value_types(Compiler *c) {
       int q;
       if (s && holder_ivar_side(c, id, &q) == IVS_INST && q >= 0 && q < c->nclasses &&
           c->classes[q].is_value_type &&
-          (!s->name || !sp_streq(s->name, "initialize")))
+          (!s->name || !is_initialize_name(s->name) || s->class_id != q))
         c->classes[q].is_value_type = 0;
       /* a block on a boxed receiver writes the instance of each class it
          runs on (the arms of emit_ie_poly), which a by-value one would take

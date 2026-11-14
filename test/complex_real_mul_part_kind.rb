@@ -1,3 +1,4 @@
+# spinel: int64
 # Complex * a real number multiplies each part, so each part keeps its
 # own kind: Complex(1.0, 2) * 3 is (3.0+6i), not (3.0+6.0i).
 n = Float::NAN

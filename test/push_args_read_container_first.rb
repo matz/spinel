@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A push or an append of several arguments pushes each one before the next
 # is read, and an argument that reads the Array being pushed onto -- an
 # element, its size, its last -- is a pure read the operand order left in

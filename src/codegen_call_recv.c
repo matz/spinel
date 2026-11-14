@@ -15790,6 +15790,10 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   TyKind as = ty_poly_face_kind(kind);
   int v = view_push(c, recv, as);
   int fv = view_push_face(recv, as);
+  /* a container face's receiver reader raised for any other value, nil
+     too, so the value its row reads is never nil (VR_NIL_TESTED): the row
+     does not test it again */
+  int nv = kind == PF_ARRAY || kind == PF_HASH || kind == PF_ENUM ? view_push_repr(c, recv, VR_NIL_TESTED, 1) : -1;
   int av[4], an = face_view_index_ranges(c, id, av, 4);
   TyKind nat = cg_natural_type(c, id);
   if (kind == PF_HASH && repr_of(c, id).demand && strbuf_hash_default_arg(c, id) >= 0) nat = TY_STRBUF;
@@ -15868,6 +15872,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
     free(cb.p); cb = ob;
   }
   while (an > 0) view_pop(c, av[--an]);
+  if (nv >= 0) view_pop(c, nv);
   view_pop(c, fv);
   view_pop(c, v);
   if (sv_shadow >= 0) view_pop(c, sv_shadow);

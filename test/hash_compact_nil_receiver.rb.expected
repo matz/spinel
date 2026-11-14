@@ -1,0 +1,19 @@
+[NoMethodError, :compact]
+[NoMethodError, :compact!]
+[NoMethodError, :compact]
+[NoMethodError, :compact!]
+[NoMethodError, :compact]
+[NoMethodError, :compact!]
+nil
+nil
+{1 => 2}
+nil
+{"a" => "x"}
+nil
+{}
+{}
+{1 => 2}
+{"a" => "x"}
+[NoMethodError, :compact]
+{1 => 2}
+nil

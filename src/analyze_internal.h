@@ -461,6 +461,7 @@ char **elab_const_key_map(Compiler *c);
 void qc_rule_prepare(Compiler *c, char **keys);
 void qc_rule_release(void);
 int qc_rule_qualifies(Compiler *c, int id, int k);
+int qc_rule_nested(Compiler *c, int id);
 void elab_builder_entity(Compiler *c, int node, const ElabPos *pos);
 void elab_header_opened(Compiler *c, int node, int cls, int made);
 int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *rname, int encl);

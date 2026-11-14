@@ -7153,18 +7153,25 @@ void qc_rule_release(void) {
   free(qcr.lcls); free(qcr.wnode); free(qcr.wown);
   memset(&qcr, 0, sizeof qcr);
 }
-int qc_rule_qualifies(Compiler *c, int id, int k) {
-  const NodeTable *nt = c->nt;
-  /* (a header, or a builder's write: class_def_path is its name's node) */
+/* The name node of definition id: a header's path, a builder's write or
+   its path target (class_def_path), or a Struct.new or Data.define write */
+static int qcr_name_node(const NodeTable *nt, int id) {
   int cp = class_def_path(nt, id);
-  /* (a Struct.new or Data.define write, which class_def_path leaves out) */
   if (cp < 0 && nt_kind(nt, id) == NK_ConstantWriteNode) cp = id;
   if (cp < 0 && nt_kind(nt, id) == NK_ConstantPathWriteNode) cp = nt_ref(nt, id, "target");
-  if (cp < 0 || k < 0 || k >= c->nclasses) return 0;
+  return cp;
+}
+/* Is definition id nested, as the rule reads it: its entity's owner is a
+   class or module other than Object, or the record holds none and the
+   name is a path; a path headed by a builtin's name (`class Integer::Box`)
+   only where a segment or a lexical header stands between. The walk asks
+   it at a header it has placed (header_qualified). */
+int qc_rule_nested(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int cp = qcr_name_node(nt, id);
+  if (cp < 0) return 0;
   int owner = -2;
-  const char *leaf = NULL;
-  if (elab_header_class(c, id, &owner, &leaf) != k || !leaf) return 0;
-  int is_mod = class_def_is_module(nt, id);
+  elab_header_class(c, id, &owner, NULL);
   int pp = nt_kind(nt, cp) == NK_ConstantPathNode || nt_kind(nt, cp) == NK_ConstantPathTargetNode ? nt_ref(nt, cp, "parent") : -1;
   int nested = (owner >= 0 && owner != comp_core_class(c, CORE_OBJECT)) || (owner < -1 && pp >= 0);
   if (pp >= 0) {
@@ -7178,7 +7185,17 @@ int qc_rule_qualifies(Compiler *c, int id, int k) {
       nested = lex;
     }
   }
-  if (!nested) return 0;
+  return nested;
+}
+int qc_rule_qualifies(Compiler *c, int id, int k) {
+  const NodeTable *nt = c->nt;
+  int cp = qcr_name_node(nt, id);
+  if (cp < 0 || k < 0 || k >= c->nclasses) return 0;
+  int owner = -2;
+  const char *leaf = NULL;
+  if (elab_header_class(c, id, &owner, &leaf) != k || !leaf) return 0;
+  int is_mod = class_def_is_module(nt, id);
+  if (!qc_rule_nested(c, id)) return 0;
   int others = 0;
   for (int i = anh_find(&qcr.leaves, leaf); i >= 0 && !others; i = qcr.leaves.next[i])
     if (sp_streq(qcr.leaves.key[i], leaf) && qcr.lcls[i] != k) others = 1;

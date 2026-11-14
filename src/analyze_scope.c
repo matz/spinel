@@ -1349,22 +1349,27 @@ static int block_body_class(const NodeTable *nt, int def_node) {
   return nt_int(nt, def_node, "block_made_body", 0) || class_def_builder(nt, def_node) >= 0;
 }
 
-/* Did qualify_colliding_classes rename this class or module header to its
-   `Outer__Leaf` key, so that its C name is its own, not the builtin's? Not
+/* Does class or module header id take a qualified `Outer__Leaf` name, so
+   that its C name is its own, not the builtin's (a leaf the builtin's own
+   checks match: the rule qualifies such a header wherever it is nested,
+   qc_rule_nested)? Not
    when the body the header is in is a `Class.new do ... end` or
    `Module.new do ... end` block (in_block, also when rewritten to a header):
    a block opens no constant scope, so the name is the builtin's there, as
    CRuby reads it. A header reopening a builder's class (`class A::B` after
    `A::B = Class.new do ... end`) opens one, whatever made the class. */
-static int header_qualified(Compiler *c, int cp, int in_block) {
-  if (cp < 0 || !nt_int(c->nt, cp, "qc_qual", 0)) return 0;
-  return !in_block;
+static int header_qualified(Compiler *c, int id, int cp, int in_block) {
+  if (id < 0 || cp < 0 || in_block) return 0;
+  int rule = qc_rule_nested(c, id);
+  if (getenv("SPINEL_QC_RULE_CHECK") && rule != (nt_int(c->nt, cp, "qc_qual", 0) != 0))
+    fprintf(stderr, "qc-rule: header_qualified line %lld rule=%d\n", nt_int(c->nt, id, "node_line", 0), rule);
+  return rule;
 }
 
 /* Class bodies and direct singleton definitions obey the same reopen limits. */
-static void refuse_native_class_reopen(Compiler *c, int id, int cp, int class_id, int in_block, const char *leaf) {
+static void refuse_native_class_reopen(Compiler *c, int id, int hdr, int cp, int class_id, int in_block, const char *leaf) {
   const char *nat = reopened_native_class(c, cp, class_id, leaf);
-  if (!nat && is_untabled_native_class_name(leaf) && !header_qualified(c, cp, in_block)) {
+  if (!nat && is_untabled_native_class_name(leaf) && !header_qualified(c, hdr, cp, in_block)) {
     int ln = (int)nt_int(c->nt, id, "node_line", 0);
     const char *file = c->nt->source_file ? c->nt->source_file : "source.rb";
     fprintf(stderr, "spinel: %s:%d: unsupported class name '%s': "
@@ -1402,7 +1407,7 @@ void refuse_native_singleton_reopen(Compiler *c, Scope *s) {
   if (recv < 0) return;
   int ci = (int)nt_int(c->nt, s->def_node, "singleton_reopen_class", -1);
   int encl = ci >= 0 && ci < c->nclasses ? c->classes[ci].def_node : -1;
-  refuse_native_class_reopen(c, s->def_node, recv, ci, encl >= 0 && block_body_class(c->nt, encl), nt_str(c->nt, recv, "name"));
+  refuse_native_class_reopen(c, s->def_node, -1, recv, ci, encl >= 0 && block_body_class(c->nt, encl), nt_str(c->nt, recv, "name"));
 }
 
 /* Where the program defines or aliases a define_method of its own (a def,
@@ -1821,7 +1826,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
        too, as unsupported rather than TypeError. */
     if (ty_k == NK_ModuleNode && cname &&
         ((is_builtin_class_name(cname) && !is_builtin_module_name(cname)) ||
-         (is_untabled_native_class_name(cls_leaf) && !header_qualified(c, cp, w.cblock)))) {
+         (is_untabled_native_class_name(cls_leaf) && !header_qualified(c, id, cp, w.cblock)))) {
       int ln = (int)nt_int(c->nt, id, "node_line", 0);
       const char *file = c->nt->source_file ? c->nt->source_file : "source.rb";
       if (cls_toplevel)
@@ -1866,7 +1871,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       }
     }
     if (nt_kind(c->nt, id) == NK_ClassNode && cname)
-      refuse_native_class_reopen(c, id, cp, class_id, w.cblock, cls_leaf);
+      refuse_native_class_reopen(c, id, id, cp, class_id, w.cblock, cls_leaf);
     child_class = elab_rec_open(c, id, cp, cname, qualified ? wruby : NULL, class_cref(c, class_id, w.cblock));
   }
   /* `X = Class.new(S) do ... end`, `A::B = Module.new do ... end`: the class

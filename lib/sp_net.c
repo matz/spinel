@@ -153,9 +153,22 @@ void sp_net_set_nodelay(int fd) {
 
 /* ---------- TCP socket lifecycle ---------- */
 
+/* The backlog a server listens with when none is given: SOMAXCONN, as CRuby's
+   TCPServer.new and UNIXServer.new pass it (ext/socket/ipsocket.c,
+   unixsocket.c). The kernel caps it at its own limit (net.core.somaxconn on
+   Linux, kern.ipc.somaxconn on macOS), so this asks for that limit; a smaller
+   fixed number left a listener's queue short of what the host allows. */
+#ifndef SOMAXCONN
+#define SOMAXCONN 128
+#endif
+static int sp_net_backlog(int backlog) {
+    return backlog > 0 ? backlog : SOMAXCONN;
+}
+
 /* TCPServer.new(host, port): like sp_net_listen but bound to a specific
    address, resolved through getaddrinfo (so "localhost" works). A NULL/empty
-   host binds INADDR_ANY. Returns the listening fd, or -1. (#2922) */
+   host binds INADDR_ANY. A backlog of 0 is SOMAXCONN. Returns the listening
+   fd, or -1. (#2922) */
 int sp_net_listen_host(const char *host, int port, int backlog) {
     if (port < 0 || port > 65535) return -1;
     signal(SIGPIPE, SIG_IGN);
@@ -174,7 +187,7 @@ int sp_net_listen_host(const char *host, int port, int backlog) {
         int one = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
         if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 &&
-            listen(fd, backlog > 0 ? backlog : 1024) == 0) break;
+            listen(fd, sp_net_backlog(backlog)) == 0) break;
         err = errno;
         close(fd);
         fd = -1;
@@ -335,7 +348,7 @@ int sp_net_listen(int port, int reuseport) {
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return -1; }
-    if (listen(fd, 1024) < 0) { close(fd); return -1; }
+    if (listen(fd, SOMAXCONN) < 0) { close(fd); return -1; }
     return fd;
 }
 
@@ -519,7 +532,7 @@ int sp_net_unix_listen(const char *path, int backlog) {SP_GC_ROOT_STR(path);
     int fd = sp_net_socket_cloexec(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
-    if (listen(fd, backlog > 0 ? backlog : 128) != 0) { close(fd); return -1; }
+    if (listen(fd, sp_net_backlog(backlog)) != 0) { close(fd); return -1; }
     return fd;
 }
 int sp_net_unix_connect(const char *path) {SP_GC_ROOT_STR(path);

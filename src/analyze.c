@@ -6498,22 +6498,21 @@ static int qc_name_order(const void *a, const void *b) {
    scanned all of os, N^2 for N constants of N names beside N classes
    (test/scale/const_collisions.sh). os stays as it is while the index is
    asked. */
-typedef struct { const QCWrite *os; int *by_name, *by_node, n; } QCIndex;
+typedef struct { const QCWrite *os; ANameIndex names; int *by_node, n; } QCIndex;
 static int qc_int_order(const void *a, const void *b) {
   int x = *(const int *)a, y = *(const int *)b;
   return x < y ? -1 : x > y;
 }
 static void qci_build(QCIndex *x, const QCWrite *os, int on) {
   x->os = os; x->n = on;
-  x->by_name = malloc(sizeof(int) * (size_t)(on ? on : 1));
   x->by_node = malloc(sizeof(int) * (size_t)(on ? on : 1));
-  if (!x->by_name || !x->by_node) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < on; i++) { x->by_name[i] = i; x->by_node[i] = os[i].node; }
-  qc_order_ws = os;
-  qsort(x->by_name, (size_t)on, sizeof(int), qc_write_order);
+  if (!x->by_node) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memset(&x->names, 0, sizeof x->names);
+  for (int i = 0; i < on; i++) { x->by_node[i] = os[i].node; ani_add(&x->names, os[i].name, i); }
+  ani_sort(&x->names);
   qsort(x->by_node, (size_t)on, sizeof(int), qc_int_order);
 }
-static void qci_free(QCIndex *x) { free(x->by_name); free(x->by_node); }
+static void qci_free(QCIndex *x) { ani_free(&x->names); free(x->by_node); }
 /* Is `w` the same node as an entry of the index (a `Point = Struct.new(...)`,
    both a constant write and a class definition)? */
 static int qc_is_class_write(const QCWrite *w, const QCIndex *x) {
@@ -6523,14 +6522,8 @@ static int qc_is_class_write(const QCWrite *w, const QCIndex *x) {
    index -- the same leaf under a different module path? An entry that is
    the same node is the write itself, not another definition. */
 static int qc_leaf_elsewhere(const QCWrite *w, const QCIndex *x) {
-  int lo = 0, hi = x->n;   /* the first entry of w's name */
-  while (lo < hi) {
-    int mid = lo + (hi - lo) / 2;
-    if (strcmp(x->os[x->by_name[mid]].name, w->name) < 0) lo = mid + 1;
-    else hi = mid;
-  }
-  for (int q = lo; q < x->n && sp_streq(x->os[x->by_name[q]].name, w->name); q++) {
-    const QCWrite *o = &x->os[x->by_name[q]];
+  for (int q = ani_first(&x->names, w->name); q < x->names.n && sp_streq(x->names.e[q].name, w->name); q++) {
+    const QCWrite *o = &x->os[x->names.e[q].v];
     if (o->node == w->node) continue;
     if (o->depth != w->depth) return 1;
     for (int k = 0; k < w->depth; k++) if (!sp_streq(o->path[k], w->path[k])) return 1;
@@ -6936,10 +6929,13 @@ void qualify_colliding_classes(Compiler *c) {
      with it. When the class is nested, any other definition of the leaf
      makes the passes qualify it, and a read of its path then reaches the
      other one. A top-level class is left alone beside a nested one. */
+  QCIndex wx;
+  qci_build(&wx, ws, wn);
   for (int i = 0; i < wn; i++) {
     if (!ws[i].head[0]) continue;
-    for (int j = 0; j < wn; j++) {
-      if (j == i || !sp_streq(ws[j].name, ws[i].name)) continue;
+    for (int q = ani_first(&wx.names, ws[i].name); q < wx.names.n && sp_streq(wx.names.e[q].name, ws[i].name); q++) {
+      int j = wx.names.e[q].v;
+      if (j == i) continue;
       int same_body = qc_path_eq(ws[i].path, ws[i].depth, ws[j].path, ws[j].depth);
       if (same_body && sp_streq(ws[j].head, ws[i].head)) continue;
       if (!same_body && ws[i].depth == 0) continue;
@@ -6950,6 +6946,7 @@ void qualify_colliding_classes(Compiler *c) {
       unsupported_feature(c, ws[i].node, msg);
     }
   }
+  qci_free(&wx);
   /* (which nested classes take a qualified name is decided after the
      walk, by qc_rule_qualifies: elab_prov_apply) */
   qc_free_headers();

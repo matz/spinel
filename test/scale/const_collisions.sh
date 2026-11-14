@@ -5,11 +5,12 @@
 # distinct" class i's is SIZE_i, the same program with no collision. Every
 # class's nested In collides with the others in both. A builder B<i> =
 # Class.new beside a header class B<i> is checked against the headers and
-# writes of its name (qc_refuse_conditional_builder). The load record keys
-# each write and each read after the walk (elab_const_keys) from the entity it
-# names, so the work grows with N; a read keyed by scanning every write of its
-# name grows as N^2. make scale-test takes the work of those steps alone
-# (spinel-work-step) in the colliding form.
+# writes of its name (qc_refuse_conditional_builder). A class String::H<i>
+# under a builtin parent is checked against the other writes of its name. The
+# load record keys each write and each read after the walk (elab_const_keys)
+# from the entity it names, so the work grows with N; a read keyed by scanning
+# every write of its name grows as N^2. make scale-test takes the work of
+# those steps alone (spinel-work-step) in the colliding form.
 [ $# -eq 1 ] && set -- $1   # "N mode" as one argument too
 N=${1:-10}; MODE=${2:-colliding}
 awk -v N="$N" -v MODE="$MODE" 'BEGIN {
@@ -21,6 +22,7 @@ awk -v N="$N" -v MODE="$MODE" 'BEGIN {
     printf "  class In\n    def self.size = %s\n  end\n", c
     printf "end\n"
     printf "B%d = Class.new\nclass B%d\n  def self.b = %d\nend\n", i, i, i
+    printf "class String::H%d\n  def self.h = %d\nend\n", i, i
   }
   print "t = 0"
   for (i = 0; i < N; i++) {

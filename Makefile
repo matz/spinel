@@ -6054,7 +6054,9 @@ CLASS_MACRO_STATE_LIMIT ?= 2.2
 # the walk from its entity (elab_const_keys), so they grow with N. A builder
 # B<i> = Class.new beside a header class B<i> is checked against the headers
 # and writes of its name (qc_refuse_conditional_builder): a scan of every one
-# for each builder is N^2.
+# for each builder is N^2. A class String::H<i> under a builtin parent is
+# checked against the other writes of its name (qualify_colliding_classes): a
+# scan of every write for each is N^2.
 CONST_COLLISIONS_LIMIT ?= 2.2
 # Module functions (test/scale/module_functions.sh), compiled to C at N=100
 # and N=200, in both load models: N modules of ten functions after a bare

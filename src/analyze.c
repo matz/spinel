@@ -4351,10 +4351,6 @@ static int ie_ivar_names(Compiler *c, int node, const char **names, int n, int m
   return n;
 }
 
-static int ie_class_answers(Compiler *c, int k, const char *nm) {
-  return comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_reader_in_chain(c, k, nm, NULL);
-}
-
 static int ie_poly_class_ok(Compiler *c, int k) {
   return !c->classes[k].is_native_class && c->classes[k].ctor_reachable &&
          builtin_class_id(c->classes[k].name) == 0;
@@ -4372,7 +4368,7 @@ int ie_poly_self_classes(Compiler *c, const char *name, int body, int *out, int 
   for (int i = 0; i < nn; i++) {
     if (comp_method_index(c, names[i]) >= 0) continue;
     for (int k = 0; k < c->nclasses; k++) {
-      if (ie_poly_class_ok(c, k) && ie_class_answers(c, k, names[i])) { ask[nask++] = i; break; }
+      if (ie_poly_class_ok(c, k) && comp_class_answers(c, k, names[i])) { ask[nask++] = i; break; }
     }
   }
   /* A body that makes no such call but reads or writes ivars on its self
@@ -4389,7 +4385,7 @@ int ie_poly_self_classes(Compiler *c, const char *name, int body, int *out, int 
   for (int k = 0; k < c->nclasses && n < max; k++) {
     if (!ie_poly_class_ok(c, k) || comp_method_in_chain(c, k, name, NULL) >= 0) continue;
     int all = 1;
-    for (int i = 0; i < nask && all; i++) all = ie_class_answers(c, k, names[ask[i]]);
+    for (int i = 0; i < nask && all; i++) all = comp_class_answers(c, k, names[ask[i]]);
     for (int i = 0; i < niv && all; i++) all = comp_ivar_index(&c->classes[k], ivs[i]) >= 0;
     if (all) out[n++] = k;
   }
@@ -4905,8 +4901,8 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
   const char *names[64];
   int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, 0, 64) : 0;
   for (int i = 0; i < nn; i++)
-    for (int k = 0; k < c->nclasses && !ie_class_answers(c, cls, names[i]) && comp_method_index(c, names[i]) < 0; k++)
-      if (ie_poly_class_ok(c, k) && ie_class_answers(c, k, names[i])) return -1;
+    for (int k = 0; k < c->nclasses && !comp_class_answers(c, cls, names[i]) && comp_method_index(c, names[i]) < 0; k++)
+      if (ie_poly_class_ok(c, k) && comp_class_answers(c, k, names[i])) return -1;
   return cls < -1 && !arg && sp_streq(nm, "new") ? -1 : cls;
 }
 

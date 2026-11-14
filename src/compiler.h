@@ -2575,6 +2575,10 @@ int        comp_name_answered(Compiler *c, const char *name, int is_cm);
    own table only with CT_OWN (an override), the top-level functions for
    cls < 0. No record is asked: a candidate, not what one call runs. */
 int        comp_name_responder(Compiler *c, int cls, const char *name, unsigned side);
+/* Does class k's chain hold a method or an attribute reader of `name`: one
+   of the name's candidates for a boxed dispatch (comp_poly_candidates' test,
+   asked of one class), as a def or an attr_reader gives an arm? */
+int        comp_class_answers(Compiler *c, int k, const char *name);
 /* Does any class's chain answer an attribute writer of base? */
 int        comp_name_writer_any(Compiler *c, const char *base);
 /* does Object's program define a method of the name? */

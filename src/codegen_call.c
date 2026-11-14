@@ -1426,10 +1426,8 @@ int poly_exc_cand(Compiler *c, const char *name) {
   IMEMO_DEP_GLOBAL();   /* (the candidates are read over every class) */
   int nxs = 0;
   const int *xs = comp_exc_subclasses(c, &nxs);
-  for (int i = 0; i < nxs; i++) {
-    int k = xs[i];
-    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
-  }
+  for (int i = 0; i < nxs; i++)
+    if (comp_class_answers(c, xs[i], name)) return 1;
   return 0;
 }
 
@@ -1672,8 +1670,7 @@ void emit_poly_dispatch_key(Compiler *c, int tv, int key_guard, int prim_cand, i
 static int poly_key_reopen(Compiler *c, int cls, const char *nm) {
   int idx = comp_core_class(c, cls);
   if (idx < 0 || !nm) return idx;
-  if (comp_method_in_chain(c, idx, nm, NULL) >= 0 || comp_reader_in_chain(c, idx, nm, NULL)) return idx;
-  return -1;
+  return comp_class_answers(c, idx, nm) ? idx : -1;
 }
 /* The dispatch key, with a boxed exception of a class that has no method of
    its own for pick_name (when given) re-keyed to the builtin exception
@@ -1713,7 +1710,7 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
       buf_printf(b, ") && (_k%d == 0x7fffffff", kt);
       for (int k = 0; k < c->nclasses; k++) {
         if (!class_has_exc_name(c, k) && !class_is_exc_subclass(c, k)) continue;
-        if (comp_method_in_chain(c, k, pick_name, NULL) >= 0 || comp_reader_in_chain(c, k, pick_name, NULL)) continue;
+        if (comp_class_answers(c, k, pick_name)) continue;
         buf_printf(b, " || _k%d == %d", kt, k);
       }
       buf_puts(b, ")) { ");
@@ -3052,9 +3049,7 @@ int poly_name_cmethod_claimed(Compiler *c, const char *name) {
    down for it themselves. */
 int exc_subclass_defines(Compiler *c, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
-    if (class_is_exc_subclass(c, k) &&
-        (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)))
-      return 1;
+    if (class_is_exc_subclass(c, k) && comp_class_answers(c, k, name)) return 1;
   return 0;
 }
 

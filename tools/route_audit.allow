@@ -19,7 +19,6 @@ files: src/codegen_stmt.c src/codegen_str.c src/codegen_util.c src/codegen_view.
 # which classes answer a name, over every class: a poly receiver's arms
 src/analyze.c a_dispatch_arm_takes_block which classes answer the name
 src/analyze.c compute_reachable comp_method_in_chain a send's name, in every class
-src/analyze.c ie_class_answers which classes answer the name
 src/analyze.c ie_class_value_target which classes answer the name
 src/analyze_desugar.c send_any_class_owns which classes answer a send-family name
 src/analyze.c ie_poly_self_classes which classes answer the name
@@ -43,7 +42,6 @@ src/analyze_scope.c poly_recv_defines which classes answer the name
 src/analyze_util.c send_blind_recv_owns comp_name_responders which classes answer the name
 src/codegen.c exc_reopen_definers which reopened exception classes answer the name
 src/codegen_call.c emit_poly_dispatch_key_pick which exception classes answer the name
-src/codegen_call.c poly_exc_cand which exception classes answer the name
 src/codegen_stmt.c masgn_writer_overridden which subclasses override the writer
 src/compiler.c cc_build which classes answer the name
 src/compiler.c comp_strsub_own_classes which String subclasses answer the name
@@ -51,6 +49,7 @@ src/compiler.c comp_method_overridden which subclasses override the name
 src/compiler.c comp_name_answered which classes answer the name
 src/compiler.c comp_name_responder which classes answer the name
 src/compiler.c comp_name_writer_any which classes answer the name
+src/compiler.c comp_class_answers which classes answer the name
 src/compiler.c comp_native_answer_class which classes answer the name
 src/compiler.c comp_native_binding_class which classes answer the name
 src/compiler.c comp_poly_arm_defines which classes answer the name
@@ -84,10 +83,8 @@ src/codegen_call.c emit_class_value_responds_helper comp_cmethod_in_chain each c
 src/codegen_call.c emit_reopen_arm_test comp_cmethod_in_chain which classes define a class Class reopening's name otherwise
 src/codegen_call.c class_method_named a name's presence as a class method
 src/codegen_call.c diag_user_defines a name's presence
-src/codegen_call.c exc_subclass_defines a name's presence on an exception class
 src/codegen_call.c format_method_is_own a name's presence in a reopened Array or Hash
 src/codegen_call.c obj_member_shadows a name's presence
-src/codegen_call.c poly_key_reopen a name's presence in a reopened class
 src/codegen_call.c poly_name_cmethod_claimed a name's presence as a class method
 src/codegen_call.c recv_user_defines a name's presence
 src/codegen_call.c reopened_owns a name's presence in a reopened builtin

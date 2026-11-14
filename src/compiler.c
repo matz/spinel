@@ -2235,6 +2235,14 @@ int comp_name_responder(Compiler *c, int cls, const char *name, unsigned side) {
 }
 
 /* See compiler.h. */
+int comp_class_answers(Compiler *c, int k, const char *name) {
+  mtab_enter(c);
+  int ans = comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL);
+  mtab_leave(c);
+  return ans;
+}
+
+/* See compiler.h. */
 int comp_name_writer_any(Compiler *c, const char *base) {
   int ans = 0;
   mtab_enter(c);
@@ -3529,14 +3537,20 @@ int comp_native_method_find(Compiler *c, int class_id, const char *name, int arg
    answers it first. -1 for an arm of the program's methods. */
 int comp_native_binding_class(Compiler *c, int k, const char *name) {
   if (k < 0 || k >= c->nclasses) return -1;
+  mtab_enter(c);   /* (the arm's candidate: which class's bindings may serve k) */
+  int ans;
   /* a Ruby-side def on a native class answers for the class's objects the
      program makes (#9903); with no construction of them in reachable code
      the class contributes its bindings alone, as before: the def is not
      emitted then, and its arm stood the builtin arms down (#9931, #4504) */
   if (c->classes[k].is_native_class)
-    return comp_method_in_chain(c, k, name, NULL) >= 0 && c->classes[k].ctor_site ? -1 : k;
-  int r = comp_native_answer_class(c, k, name);
-  return r >= 0 && comp_native_method_find(c, r, name, 0, 0) >= 0 ? r : -1;
+    ans = comp_method_in_chain(c, k, name, NULL) >= 0 && c->classes[k].ctor_site ? -1 : k;
+  else {
+    int r = comp_native_answer_class(c, k, name);
+    ans = r >= 0 && comp_native_method_find(c, r, name, 0, 0) >= 0 ? r : -1;
+  }
+  mtab_leave(c);
+  return ans;
 }
 /* The native class whose binding answers `name` on an instance of class
    cid: cid itself for a native class, and for a subclass of one (#9269)
@@ -3560,10 +3574,11 @@ int comp_native_answer_class(Compiler *c, int cid, const char *name) {
    the native class's boxed objects. Every candidate counter asks here so
    inference, builtin gates and emitted switches count the same arms. */
 int comp_poly_arm_defines(Compiler *c, int k, const char *name) {
+  mtab_enter(c);   /* (the arm's candidate: whether k may answer the name) */
   int nk = comp_native_binding_class(c, k, name);
-  if (nk >= 0)
-    return comp_native_method_find(c, nk, name, 0, 0) >= 0;
-  return comp_method_in_chain(c, k, name, NULL) >= 0;
+  int ans = nk >= 0 ? comp_native_method_find(c, nk, name, 0, 0) >= 0 : comp_method_in_chain(c, k, name, NULL) >= 0;
+  mtab_leave(c);
+  return ans;
 }
 
 /* The arity-pinned form, for the builtin-arm gates that know the call's
@@ -3574,12 +3589,15 @@ int comp_poly_arm_defines(Compiler *c, int k, const char *name) {
    `getbyte` binding otherwise counted for `s.getbyte(i)` on a poly String
    and stood the builtin arm down again (#4432). */
 int comp_poly_arm_defines_n(Compiler *c, int k, const char *name, int argc) {
-  int nk = comp_native_binding_class(c, k, name);
+  mtab_enter(c);   /* (the arm's candidate, as comp_poly_arm_defines) */
+  int nk = comp_native_binding_class(c, k, name), ans;
   if (nk >= 0) {
     int nmi = comp_native_method_find(c, nk, name, argc, 0);
-    return nmi >= 0 && native_takes(&c->native_methods[nmi], argc);
+    ans = nmi >= 0 && native_takes(&c->native_methods[nmi], argc);
   }
-  return comp_method_in_chain(c, k, name, NULL) >= 0;
+  else ans = comp_method_in_chain(c, k, name, NULL) >= 0;
+  mtab_leave(c);
+  return ans;
 }
 
 /* IO::Buffer's type-symbol table, index-compatible with lib/sp_iobuffer.h's

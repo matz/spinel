@@ -3662,7 +3662,10 @@ static inline sp_RbVal sp_poly_bsub_obj(sp_RbVal v) {
    answers (0 when no program `<=>` takes the pair) */
 static int sp_poly_bsub_cmp(sp_RbVal a, sp_RbVal b, sp_int *r, sp_bool *comparable);
 /* set when sp_poly_bsub_cmp ran the class's own <=>: its nil stays "not comparable" */
-static int sp_poly_bsub_ran;
+/* per OS thread: it is cleared and read around one comparison, which no
+   other green thread's code runs inside unless a program <=> runs, and
+   that one sets it on its own way out (#11846) */
+static SP_TLS int sp_poly_bsub_ran;
 static sp_RbVal sp_poly_add(sp_RbVal a, sp_RbVal b) { /* Two plain numbers are what a boxed arithmetic loop actually holds, and the tower checks below cannot match either tag: answer them first rather than after eight of them (#3984). */ if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f + b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return SP_POLY_INT_OP(add, a.v.i, b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f + (sp_float)b.v.i); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((sp_float)a.v.i + b.v.f); /* a user object on either side belongs to the binop hook and the coerce protocol, not to the tower branches below -- those match on the RECEIVER kind and would convert the object to a number of that kind */ if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) && sp_poly_is_user_obj(b)) b = sp_poly_ary_operand(b); if (SP_UNLIKELY(sp_poly_is_user_obj(a) || sp_poly_is_user_obj(b))) return sp_poly_binop_bad("+", a, b); /* A shared-mutable string handle behaves as its live string VALUE for every non-mutating operator, so it has to become one BEFORE the rules below read its kind -- reached as a handle it is neither a String nor a number, and the guard reported a missing method for an operator String has. */ if (SP_UNLIKELY(sp_poly_is_strbuf(a) || sp_poly_is_strbuf(b))) return sp_poly_add(sp_poly_strbuf_deref(a), sp_poly_strbuf_deref(b)); /* Time arithmetic takes any real number of the tower -- an offset may be a Rational or a Bignum -- so it answers before the guard below, which would otherwise call the pair a coercion failure. */ if (SP_UNLIKELY(a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_TIME && a.v.p)) { if (b.tag == SP_TAG_INT) return sp_box_timev(sp_timev_add_i(*(sp_Time *)a.v.p, b.v.i)); if (sp_poly_tower_p(b) && !(b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)) return sp_box_timev(sp_timev_add_f(*(sp_Time *)a.v.p, sp_poly_to_f_with_rational(b))); /* anything else is CRuby's TypeError, as on the typed path */ if (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_TIME) sp_raise_cls("TypeError", "time + time?"); sp_raise_cls("TypeError", sp_sprintf("can't convert %s into an exact number", sp_poly_class_name(b))); } if (SP_UNLIKELY(sp_poly_tower_mismatch(a, b))) return sp_poly_binop_bad("+", a, b); if ((a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX) || (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)) return sp_box_complex(sp_complex_add(sp_poly_as_complex(a), sp_poly_as_complex(b))); if (sp_poly_brat_pair(a, b)) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f(a) + sp_poly_to_f(b)); return sp_brat_add_poly(a, b); } if ((sp_poly_is_rational(a) || sp_poly_is_rational(b)) && a.tag != SP_TAG_FLT && b.tag != SP_TAG_FLT) return SP_POLY_RAT_OP(add, 0, a, b); if ((sp_poly_is_rational(a) || sp_poly_is_rational(b)) && (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT)) return sp_box_float(sp_poly_to_f_with_rational(a) + sp_poly_to_f_with_rational(b)); if (a.tag == SP_TAG_BIGINT || b.tag == SP_TAG_BIGINT) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f(a) + sp_poly_to_f(b)); return sp_box_bigint(sp_bigint_add(sp_poly_as_bigint(a), sp_poly_as_bigint(b))); } if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return SP_POLY_INT_OP(add, a.v.i, b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f + b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((sp_float)a.v.i + b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f + (sp_float)b.v.i); if (a.tag == SP_TAG_STR && b.tag == SP_TAG_STR) return sp_box_str_new(sp_str_concat(a.v.s, b.v.s)); if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) && b.tag == SP_TAG_OBJ && sp_poly_is_array_kind(b.cls_id)) { SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b); sp_PolyArray *pa = sp_poly_to_poly_array(a); SP_GC_ROOT(pa); sp_PolyArray *pb = sp_poly_to_poly_array(b); SP_GC_ROOT(pb); return sp_box_poly_array(sp_PolyArray_concat(pa, pb)); } return sp_poly_binop_bad("+", a, b); }
 static sp_RbVal sp_poly_sub(sp_RbVal a, sp_RbVal b) { /* Two plain numbers are what a boxed arithmetic loop actually holds, and the tower checks below cannot match either tag: answer them first rather than after eight of them (#3984). */ if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f - b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return SP_POLY_INT_OP(sub, a.v.i, b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f - (sp_float)b.v.i); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((sp_float)a.v.i - b.v.f); /* a user object on either side belongs to the binop hook and the coerce protocol, not to the tower branches below -- those match on the RECEIVER kind and would convert the object to a number of that kind */ if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) && sp_poly_is_user_obj(b)) b = sp_poly_ary_operand(b); if (SP_UNLIKELY(sp_poly_is_user_obj(a) || sp_poly_is_user_obj(b))) return sp_poly_binop_bad("-", a, b); /* A shared-mutable string handle behaves as its live string VALUE for every non-mutating operator, so it has to become one BEFORE the rules below read its kind -- reached as a handle it is neither a String nor a number, and the guard reported a missing method for an operator String has. */ if (SP_UNLIKELY(sp_poly_is_strbuf(a) || sp_poly_is_strbuf(b))) return sp_poly_sub(sp_poly_strbuf_deref(a), sp_poly_strbuf_deref(b)); /* see sp_poly_add: Time answers before the guard, and Time - Time is a Float count of seconds. */ if (SP_UNLIKELY(a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_TIME && a.v.p)) { if (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_TIME && b.v.p) return sp_box_float(sp_timev_sub_t(*(sp_Time *)a.v.p, *(sp_Time *)b.v.p)); if (b.tag == SP_TAG_INT) return sp_box_timev(sp_timev_sub_i(*(sp_Time *)a.v.p, b.v.i)); if (sp_poly_tower_p(b) && !(b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)) return sp_box_timev(sp_timev_add_f(*(sp_Time *)a.v.p, -sp_poly_to_f_with_rational(b))); } if (SP_UNLIKELY(sp_poly_tower_mismatch(a, b))) return sp_poly_binop_bad("-", a, b); if ((a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX) || (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)) return sp_box_complex(sp_complex_sub(sp_poly_as_complex(a), sp_poly_as_complex(b))); if (sp_poly_brat_pair(a, b)) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f(a) - sp_poly_to_f(b)); return sp_brat_sub_poly(a, b); } if ((sp_poly_is_rational(a) || sp_poly_is_rational(b)) && a.tag != SP_TAG_FLT && b.tag != SP_TAG_FLT) return SP_POLY_RAT_OP(sub, 1, a, b); if ((sp_poly_is_rational(a) || sp_poly_is_rational(b)) && (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT)) return sp_box_float(sp_poly_to_f_with_rational(a) - sp_poly_to_f_with_rational(b)); if (a.tag == SP_TAG_BIGINT || b.tag == SP_TAG_BIGINT) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f(a) - sp_poly_to_f(b)); return sp_box_bigint(sp_bigint_sub(sp_poly_as_bigint(a), sp_poly_as_bigint(b))); } if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return SP_POLY_INT_OP(sub, a.v.i, b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f - b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((sp_float)a.v.i - b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f - (sp_float)b.v.i);
   /* two Arrays: the set difference, mirroring the concat branch sp_poly_add
@@ -10664,13 +10667,15 @@ static sp_int sp_poly_order_cmp(sp_RbVal a, sp_RbVal b, sp_bool *ok) {
   if (!*ok && a.tag == SP_TAG_NIL && b.tag == SP_TAG_NIL) { *ok = TRUE; r = 0; }
   return r;
 }
-static int _sp_sort_incomparable;
-static sp_RbVal _sp_sort_inc_a, _sp_sort_inc_b;
-static int _sp_poly_cmp_rec(const void *pa, const void *pb) {
-  if (_sp_sort_incomparable) return 0;
+/* One sort's state: whether it met a pair it cannot order, and which. Held
+   by the call, not in a static: threads sorting at once read each other's
+   pair, and stopped or raised in each other's sort (#11846). */
+typedef struct { int incomparable; sp_RbVal a, b; } sp_sort_ctx;
+static int _sp_poly_cmp_rec(const void *pa, const void *pb, sp_sort_ctx *x) {
+  if (x->incomparable) return 0;
   sp_bool ok = FALSE;
   sp_int r = sp_poly_order_cmp(*(const sp_RbVal *)pa, *(const sp_RbVal *)pb, &ok);
-  if (!ok) { _sp_sort_incomparable = 1; _sp_sort_inc_a = *(const sp_RbVal *)pa; _sp_sort_inc_b = *(const sp_RbVal *)pb; return 0; }
+  if (!ok) { x->incomparable = 1; x->a = *(const sp_RbVal *)pa; x->b = *(const sp_RbVal *)pb; return 0; }
   /* the sign only: a <=> answer of 2**32 must not turn into 0 as an int */
   return (r > 0) - (r < 0);
 }
@@ -10682,7 +10687,7 @@ static int _sp_poly_cmp_rec(const void *pa, const void *pb) {
    are rooted PolyArrays, so every element stays GC-reachable while the
    comparator (which can allocate) runs; stale slots in the buffer being
    overwritten are still valid boxed values, so scanning them is safe. */
-static void _sp_poly_msort(sp_PolyArray *a, int (*cmp)(const void *, const void *)) {
+static void _sp_poly_msort(sp_PolyArray *a, int (*cmp)(const void *, const void *, sp_sort_ctx *), sp_sort_ctx *x) {
   if (!a || a->len < 2) return;
   SP_GC_ROOT(a);
   sp_PolyArray *tmp = sp_PolyArray_dup(a);
@@ -10694,7 +10699,7 @@ static void _sp_poly_msort(sp_PolyArray *a, int (*cmp)(const void *, const void 
       sp_int hi = lo + 2 * w < a->len ? lo + 2 * w : a->len;
       sp_int i = lo, j = mid, k = lo;
       while (i < mid && j < hi)
-        dst[k++] = cmp(&src[i], &src[j]) <= 0 ? src[i++] : src[j++];
+        dst[k++] = cmp(&src[i], &src[j], x) <= 0 ? src[i++] : src[j++];
       while (i < mid) dst[k++] = src[i++];
       while (j < hi) dst[k++] = src[j++];
     }
@@ -10760,17 +10765,13 @@ static void sp_PolyArray_sort_bang(sp_PolyArray *a) {
      copy made by sp_PolyArray_sort. */
   SP_GC_ROOT(a);
   if (a->len > 1) {
-    /* save/restore the flag and the offending pair so a comparison that
-       re-enters sort cannot clobber this call's state. */
-    int prev = _sp_sort_incomparable;
-    sp_RbVal prev_a = _sp_sort_inc_a, prev_b = _sp_sort_inc_b;
-    _sp_sort_incomparable = 0;
-    _sp_poly_msort(a, _sp_poly_cmp_rec);
-    int inc = _sp_sort_incomparable;
-    sp_RbVal ia = _sp_sort_inc_a, ib = _sp_sort_inc_b;
-    _sp_sort_incomparable = prev;
-    _sp_sort_inc_a = prev_a;
-    _sp_sort_inc_b = prev_b;
+    /* the call's own state: a comparison that re-enters sort, or another
+       thread's sort, has its own */
+    sp_sort_ctx x = { 0, sp_box_nil(), sp_box_nil() };
+    SP_GC_ROOT_RBVAL(x.a); SP_GC_ROOT_RBVAL(x.b);
+    _sp_poly_msort(a, _sp_poly_cmp_rec, &x);
+    int inc = x.incomparable;
+    sp_RbVal ia = x.a, ib = x.b;
     if (inc) sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(ia), sp_cmperr_desc(ib)));
   }
 }
@@ -10945,18 +10946,17 @@ static void *sp_PtrArray_minmax_obj(sp_PtrArray *a, int cls_id, int want_max) {s
 /* Compare two boxed arrays element-wise (Array#<=> semantics): first differing
    comparable element decides, else the shorter array sorts first. Used to order
    Hash#sort's [key, value] pairs. */
-static int _sp_pair_cmp_incomparable;  /* set when two pairs cannot be ordered */
-static int _sp_poly_pair_cmp(const void *pa, const void *pb) {
+static int _sp_poly_pair_cmp(const void *pa, const void *pb, sp_sort_ctx *x) {
   /* Once a pair is found incomparable the sort result is discarded and we
      raise, so skip the remaining comparisons (and any work they would do). */
-  if (_sp_pair_cmp_incomparable) return 0;
+  if (x->incomparable) return 0;
   sp_RbVal a = *(const sp_RbVal *)pa, b = *(const sp_RbVal *)pb;
   sp_int na = sp_poly_arr_len(a), nb = sp_poly_arr_len(b);
   sp_int n = na < nb ? na : nb;
   for (sp_int i = 0; i < n; i++) {
     sp_bool ok = FALSE;
     sp_int r = sp_poly_cmp(sp_poly_arr_get(a, i), sp_poly_arr_get(b, i), &ok);
-    if (!ok) { _sp_pair_cmp_incomparable = 1; return 0; }
+    if (!ok) { x->incomparable = 1; return 0; }
     if (r != 0) return r < 0 ? -1 : 1;
   }
   return (na > nb) - (na < nb);
@@ -10967,13 +10967,10 @@ static sp_PolyArray *sp_PolyArray_sort_pairs(sp_PolyArray *a) {
   SP_GC_ROOT(a);
   sp_PolyArray *b = sp_PolyArray_dup(a);
   if (b && b->len > 1) {
-    /* Save/restore the flag around the sort so a comparison that re-enters
-       sort_pairs (e.g. via a nested sort) cannot clobber this call's state. */
-    int prev = _sp_pair_cmp_incomparable;
-    _sp_pair_cmp_incomparable = 0;
-    _sp_poly_msort(b, _sp_poly_pair_cmp);
-    int incomparable = _sp_pair_cmp_incomparable;
-    _sp_pair_cmp_incomparable = prev;
+    /* the call's own state (sp_sort_ctx) */
+    sp_sort_ctx x = { 0, sp_box_nil(), sp_box_nil() };
+    _sp_poly_msort(b, _sp_poly_pair_cmp, &x);
+    int incomparable = x.incomparable;
     if (incomparable)
       sp_raise_cls("ArgumentError", "comparison of Array with Array failed");
   }
@@ -10981,7 +10978,8 @@ static sp_PolyArray *sp_PolyArray_sort_pairs(sp_PolyArray *a) {
 }
 /* Schwartzian helper for Hash#sort_by: `a` is an array of [sort_key, value]
    tuples; sort it by the comparable sort_key and return the values in order. */
-static int _sp_poly_first_cmp(const void *pa, const void *pb) {
+static int _sp_poly_first_cmp(const void *pa, const void *pb, sp_sort_ctx *x) {
+  (void)x;
   sp_bool ok = FALSE;
   sp_int r = sp_poly_cmp(sp_poly_arr_get(*(const sp_RbVal *)pa, 0),
                           sp_poly_arr_get(*(const sp_RbVal *)pb, 0), &ok);
@@ -10990,7 +10988,7 @@ static int _sp_poly_first_cmp(const void *pa, const void *pb) {
 static sp_PolyArray *sp_PolyArray_sort_by_first(sp_PolyArray *a) {
   SP_GC_ROOT(a);
   sp_PolyArray *b = sp_PolyArray_dup(a); SP_GC_ROOT(b);
-  if (b && b->len > 1) _sp_poly_msort(b, _sp_poly_first_cmp);
+  if (b && b->len > 1) { sp_sort_ctx x = { 0, sp_box_nil(), sp_box_nil() }; _sp_poly_msort(b, _sp_poly_first_cmp, &x); }
   sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r);
   for (sp_int i = 0; b && i < b->len; i++) sp_PolyArray_push(r, sp_poly_arr_get(b->data[i], 1));
   return r;

@@ -3290,7 +3290,7 @@ int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int n
     int s = builtin_core_class_slot(owners[i]);
     if (no_class_values && (s == CORE_MODULE || s == CORE_CLASS)) continue;
     nprog += comp_class_index(c, owners[i]) >= 0;
-    ntag += builtin_class_boxed_by_tag(owners[i]);
+    ntag += builtin_boxed_by_tag(s);
   }
   /* a builtin class by its class id, which the value's class name comes
      with (sp_poly_class_name_id); a class of the program's under one by

@@ -38,7 +38,6 @@ int is_object_class_name(const char *n);   /* Object alone: the top level's cons
 int is_object_root(const char *n);    /* Object Kernel BasicObject: the classes every object has */
 int is_send_family(const char *n);    /* send __send__ public_send */
 int is_public_send(const char *n);    /* public_send, which enforces visibility */
-int builtin_class_boxed_by_tag(const char *n);   /* Integer Float String Symbol NilClass TrueClass FalseClass Class Module Encoding: a boxed value of it carries a tag of its own, not SP_TAG_OBJ */
 int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes keywords in CRuby (clone, round, lines ...) */
 /* Does a CRuby fact of a method of `feature` hold for this program: a core
    method's (feature NULL) always, a library's (io/console) where the
@@ -723,13 +722,17 @@ int boot_package_rank_of_path(const char *path, size_t len);   /* the same for s
    Data, below which a program's class is an object of its own; BC_SG_BOOT
    a module CRuby 4.0 boots with its singleton class made (its module
    functions'), as Comparable and Enumerable are not; BC_OSTRUCT
-   OpenStruct, a constant only after `require "ostruct"` (builtin_row). */
-enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64 };
+   OpenStruct, a constant only after `require "ostruct"` (builtin_row);
+   BC_TAGGED a class whose boxed value carries a tag of its own
+   (SP_TAG_INT, SP_TAG_CLASS, SP_TAG_ENCODING ...), not SP_TAG_OBJ. */
+enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64,
+       BC_TAGGED = 128 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */
 int is_plain_builtin_superclass(int id);       /* BC_PLAIN or an exception: gives a program's subclass no method of an Enumerable walk */
 int builtin_singleton_at_boot(int slot);      /* BC_SG_BOOT of row slot (CORE_*): the module's singleton class exists before the program runs */
+int builtin_boxed_by_tag(int slot);           /* BC_TAGGED of row slot (CORE_*): a boxed value of the class carries a tag of its own, not SP_TAG_OBJ */
 /* names the compile-time evaluation and its questions ask about (ct_eval.c,
    analyze_ct.c) */
 int is_class_const_name(const char *n);    /* Class: the constant Class.new is called on */

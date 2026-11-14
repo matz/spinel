@@ -1594,12 +1594,6 @@ static int builtin_name_in(const char *name, const char *const *names) {
     if (sp_streq(name, names[i])) return 1;
   return 0;
 }
-int builtin_class_boxed_by_tag(const char *n) {
-  static const char *const T[] = { "Integer", "Float", "String", "Symbol", "NilClass", "TrueClass", "FalseClass",
-                                   "Class", "Module", "Encoding", NULL };
-  return builtin_name_in(n, T);
-}
-
 
 /* The globals the runtime sets, by name without the `$` (the punctuation ones
    are told by their spelling): their values are the runtime's objects, not
@@ -2989,6 +2983,10 @@ const BuiltinClass *builtin_class_at(int i) {
 int builtin_singleton_at_boot(int slot) {
   const BuiltinClass *r = builtin_class_at(slot);
   return r && (r->flags & BC_SG_BOOT);
+}
+int builtin_boxed_by_tag(int slot) {
+  const BuiltinClass *r = builtin_class_at(slot);
+  return r && (r->flags & BC_TAGGED);
 }
 /* Is a yielding method a program's reopening of builtin class `core`
    (CORE_*) defines called through its proc form, with the call's block as a

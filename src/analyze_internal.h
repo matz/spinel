@@ -1189,6 +1189,12 @@ void ani_add(ANameIndex *x, const char *name, int v);
 void ani_sort(ANameIndex *x);
 int ani_first(const ANameIndex *x, const char *name);   /* the first entry of name, x->n for none */
 void ani_free(ANameIndex *x);
+/* The lookups of the record's class questions (analyze_elab.c), held by the
+   pass that asks them: hdr, the class headers by the Ruby path each spells
+   (a class number each, -1 for a header whose class is not registered), and
+   hdr_unknown, set when a qualified header's class is not registered yet,
+   which makes every answer unknown. The names are the index's own copies. */
+struct ElabNames { ANameIndex hdr; int hdr_unknown, hdr_built; };
 /* The qualified names the class pass gave constants written under a module
    path ("Mod__LIMIT"), and each tail after a "__": see qc_leaf_qualified. */
 struct QcConstNames { ANameHash quals, leaves; };

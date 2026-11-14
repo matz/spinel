@@ -1459,40 +1459,64 @@ static int lr_core_path_text(Compiler *c, int node, char *buf, size_t cap) {
   for (int i = ns - 1; i >= 0 && len < (int)cap; i--) len += snprintf(buf + len, cap - (size_t)len, "::%s", seg[i] ? seg[i] : "");
   return len < (int)cap;
 }
+/* The headers by the Ruby path each spells, for lr_class_by_core_path, built
+   on the first question that reaches it: a header's class keeps the Ruby
+   path it resolved to when it is qualified, else its compact path's own text.
+   hdr_unknown: a qualified header whose class is not registered yet, whose
+   path is then not known, which makes every answer unknown. */
+static void lr_names_headers(Compiler *c, ElabNames *nx) {
+  const NodeTable *nt = c->nt;
+  char hp[512];
+  if (nx->hdr_built) return;
+  nx->hdr_built = 1;
+  static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
+  for (int hk = 0; hk < 2; hk++)
+    NT_FOREACH_KIND(nt, HK[hk], h) {
+      int cp = nt_ref(nt, h, "constant_path");
+      /* a qualified header's class keeps the Ruby path it resolved to */
+      int qual = cp >= 0 && nt_str(nt, cp, "qc_name") != NULL;
+      int qk = qual ? elab_header_class(c, h, NULL, NULL) : -1;
+      if (qual && qk < 0) { nx->hdr_unknown = 1; continue; }   /* (not registered yet: its path is not known) */
+      const char *rn = qual ? class_ruby_name(c, qk) : NULL;
+      if (!rn && cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode && lr_core_path_text(c, cp, hp, sizeof hp)) rn = hp;
+      if (!rn) continue;
+      char *own = strdup(rn);   /* (rn may be the buffer hp) */
+      if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      ani_add(&nx->hdr, own, qual ? qk : elab_header_class(c, h, NULL, NULL));
+    }
+  ani_sort(&nx->hdr);
+}
+void elab_names_end(ElabNames *nx) {
+  for (int i = 0; i < nx->hdr.n; i++) free((char *)nx->hdr.e[i].name);
+  ani_free(&nx->hdr);
+  nx->hdr_unknown = nx->hdr_built = 0;
+}
 /* A path from a core constant the program does not reopen as a class
    (`Regexp::Syntax::Token`) is absolute: the class whose header spells
-   that Ruby path (a qualified header's class's, or a compact header's
-   own path), else the class its parent's class writes the name as */
+   that Ruby path (the headers by path, nx), else the class its parent's
+   class writes the name as */
 static int lr_class_written_as(Compiler *c, int owner, const char *name);
-static int lr_class_by_core_path(Compiler *c, int node, int depth) {
+static int lr_class_by_core_path(Compiler *c, ElabNames *nx, int node, int depth) {
   const NodeTable *nt = c->nt;
-  char path[512], hp[512];
+  char path[512];
   if (depth > 8 || !lr_core_path_text(c, node, path, sizeof path)) return LR_UNKNOWN_CLASS;
+  lr_names_headers(c, nx);
+  if (nx->hdr_unknown) return LR_UNKNOWN_CLASS;
   int one = LR_UNKNOWN_CLASS;
-  for (int h = 0; h < nt->count; h++) {
-    NodeKind hk = nt_kind(nt, h);
-    if (hk != NK_ClassNode && hk != NK_ModuleNode) continue;
-    int cp = nt_ref(nt, h, "constant_path");
-    /* a qualified header's class keeps the Ruby path it resolved to */
-    int qual = cp >= 0 && nt_str(nt, cp, "qc_name") != NULL;
-    int qk = qual ? elab_header_class(c, h, NULL, NULL) : -1;
-    if (qual && qk < 0) return LR_UNKNOWN_CLASS;   /* (not registered yet: its path is not known) */
-    const char *rn = qual ? class_ruby_name(c, qk) : NULL;
-    if (!rn && cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode && lr_core_path_text(c, cp, hp, sizeof hp)) rn = hp;
-    if (!rn || !sp_streq(rn, path)) continue;
-    int k = elab_header_class(c, h, NULL, NULL);
+  for (int q = ani_first(&nx->hdr, path); q < nx->hdr.n && sp_streq(nx->hdr.e[q].name, path); q++) {
+    int k = nx->hdr.e[q].v;
     if (k < 0 || (one >= 0 && one != k)) return LR_UNKNOWN_CLASS;
     one = k;
   }
   if (one >= 0) return one;
   int par = nt_ref(nt, node, "parent");
   if (par < 0 || nt_kind(nt, par) != NK_ConstantPathNode) return LR_UNKNOWN_CLASS;
-  int pc = lr_class_by_core_path(c, par, depth + 1);
+  int pc = lr_class_by_core_path(c, nx, par, depth + 1);
   if (pc < 0) return LR_UNKNOWN_CLASS;
   int o = lr_class_written_as(c, pc, lr_written_name(nt, node));
   return o == LR_LATER ? LR_UNKNOWN_CLASS : o;
 }
-static int lr_class_named(Compiler *c, int node, int depth, int core_ok) {
+static int lr_class_named(Compiler *c, ElabNames *nx, int node, int depth, int core_ok) {
   const NodeTable *nt = c->nt;
   int core = -1, ci = elab_class_ref_at(c, node, &core);
   if (ci != LR_UNKNOWN_CLASS) return ci < LR_MAIN || (core >= 0 && !core_ok) ? LR_UNKNOWN_CLASS : ci;
@@ -1501,8 +1525,8 @@ static int lr_class_named(Compiler *c, int node, int depth, int core_ok) {
   if (depth > 8 || !nm) return LR_UNKNOWN_CLASS;
   if (k == NK_ConstantPathNode) {
     int par = nt_ref(nt, node, "parent");
-    int pc = par < 0 ? LR_MAIN : lr_class_named(c, par, depth + 1, 1);
-    if (pc < LR_MAIN) return lr_class_by_core_path(c, node, depth);
+    int pc = par < 0 ? LR_MAIN : lr_class_named(c, nx, par, depth + 1, 1);
+    if (pc < LR_MAIN) return lr_class_by_core_path(c, nx, node, depth);
     int o = lr_class_written_as(c, pc, nm);
     return o == LR_LATER ? LR_UNKNOWN_CLASS : o;
   }
@@ -1522,8 +1546,8 @@ static int lr_class_named(Compiler *c, int node, int depth, int core_ok) {
   int o = lr_class_written_as(c, LR_MAIN, nm);
   return o == LR_LATER ? LR_UNKNOWN_CLASS : o;
 }
-int elab_class_named(Compiler *c, int node) {
-  int ci = c->lrec ? lr_class_named(c, node, 0, 0) : LR_UNKNOWN_CLASS;
+int elab_class_named(Compiler *c, ElabNames *nx, int node) {
+  int ci = c->lrec ? lr_class_named(c, nx, node, 0, 0) : LR_UNKNOWN_CLASS;
   return ci >= 0 ? ci : -1;
 }
 int elab_class_candidates(Compiler *c, int node, int **out) {

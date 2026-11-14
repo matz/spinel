@@ -820,7 +820,15 @@ int elab_class_ref_at(Compiler *c, int node, int *core);
    (`Object.new`), or a constant holding one? */
 int elab_value_not_module(Compiler *c, int node);
 void gvar_writes_free(Compiler *c);   /* the names gvar_has_write kept (analyze_infer.c) */
-int elab_class_named(Compiler *c, int node);   /* the program class a constant read names wherever its lookup finds one, -1 for none known */
+/* What a pass that asks elab_class_named for many reads holds (built on
+   the first ask that needs it, freed by elab_names_end; zero-initialize to
+   start): the program's class headers by the Ruby path each spells, which a
+   path through a builtin (`Regexp::Syntax::Token`) is matched against, so
+   that no read scans every header. The record must not change while it is
+   used. */
+typedef struct ElabNames ElabNames;
+void elab_names_end(ElabNames *nx);
+int elab_class_named(Compiler *c, ElabNames *nx, int node);   /* the program class a constant read names wherever its lookup finds one, -1 for none known */
 int elab_class_candidates(Compiler *c, int node, int **out);   /* the classes a constant read the record cannot settle may name, in a buffer *out the caller frees; -1 for no bounded answer */
 /* the node -> class map: the class class or module header `node` opens,
    as registration decided it there (below -1: none); *owner and *leaf,

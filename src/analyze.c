@@ -7119,6 +7119,7 @@ void qualify_colliding_reads(Compiler *c) {
   if (nl > 0) {
     qc_value_reads(c, leaves, nl);
     qc_build_reverse_flags(c);
+    ElabNames nx = {0};
     /* The reads are renamed after all are asked about: a rename bumps the
        node table's version, and the parent map the next question climbs
        (lr_class_named) is rebuilt for it, once per renamed read. A renamed
@@ -7133,7 +7134,7 @@ void qualify_colliding_reads(Compiler *c) {
       NodeKind k = nt_kind(nt, i);
       if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || (qc_def_cpath && qc_def_cpath[i])) continue;
       const char *w = nt_str(nt, i, "name");
-      int ci = elab_class_named(c, i);
+      int ci = elab_class_named(c, &nx, i);
       const char *cn = ci >= 0 ? c->classes[ci].name : NULL;
       if (!cn || !w || sp_streq(cn, w) || !sp_streq(qc_c_leaf(cn), w)) continue;
       if (nrn == crn) {
@@ -7144,6 +7145,7 @@ void qualify_colliding_reads(Compiler *c) {
       }
       rn[nrn] = i; rcn[nrn++] = cn;
     }
+    elab_names_end(&nx);
     for (int q = 0; q < nrn; q++) {
       qc_keep_orig_name(nt, rn[q]);
       nt_node_set_str((NodeTable *)nt, rn[q], "qc_name", rcn[q]);

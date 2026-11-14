@@ -8375,6 +8375,29 @@ void kw_key_inspect(const char *kn, int is_sym, char *out, size_t n) {
   else out[n - 1] = 0;
 }
 
+static size_t pre_line_start(const Buf *pre) {
+  size_t ls = pre->len;
+  while (ls > 0 && pre->p[ls - 1] != '\n') ls--;
+  return ls;
+}
+
+/* splices `hoist` in where the line at `ls` starts, appends `val` to that
+   line, and frees both */
+static void pre_line_splice(Buf *pre, size_t ls, Buf *hoist, Buf *val) {
+  if (hoist->len > 0) {
+    size_t tail = pre->len - ls;
+    char *saved = malloc(tail + 1);
+    memcpy(saved, pre->p + ls, tail); saved[tail] = 0;
+    pre->len = ls; pre->p[ls] = 0;
+    buf_puts(pre, hoist->p);
+    if (pre->len > 0 && pre->p[pre->len - 1] != '\n') buf_puts(pre, "\n");
+    buf_putn(pre, saved, tail);
+    free(saved);
+  }
+  if (val->p) buf_puts(pre, val->p);
+  free(val->p); free(hoist->p);
+}
+
 /* An emitter asked to write into g_pre itself, after a partial line
    (`buf_printf(g_pre, "sp_int _t3 = "); emit_int_expr(c, v, g_pre)`): what
    the expression hoists would land in the middle of that line -- an
@@ -8384,25 +8407,13 @@ void kw_key_inspect(const char *kn, int is_sym, char *out, size_t n) {
    line starts, and the value is appended to the line. */
 void emit_into_pre_line(Compiler *c, void (*fn)(Compiler *, int, Buf *), int node) {
   Buf *pre = g_pre;
-  size_t ls = pre->len;
-  while (ls > 0 && pre->p[ls - 1] != '\n') ls--;
+  size_t ls = pre_line_start(pre);
   Buf val; memset(&val, 0, sizeof val);
   Buf hoist; memset(&hoist, 0, sizeof hoist);
   g_pre = &hoist;
   fn(c, node, &val);
   g_pre = pre;
-  if (hoist.len > 0) {
-    size_t tail = pre->len - ls;
-    char *saved = malloc(tail + 1);
-    memcpy(saved, pre->p + ls, tail); saved[tail] = 0;
-    pre->len = ls; pre->p[ls] = 0;
-    buf_puts(pre, hoist.p);
-    if (pre->len > 0 && pre->p[pre->len - 1] != '\n') buf_puts(pre, "\n");
-    buf_putn(pre, saved, tail);
-    free(saved);
-  }
-  if (val.p) buf_puts(pre, val.p);
-  free(val.p); free(hoist.p);
+  pre_line_splice(pre, ls, &hoist, &val);
 }
 
 /* ---- nil out of band: sp_oint / sp_ofloat (codegen_internal.h) ---- */
@@ -8971,10 +8982,14 @@ int node_has_oint_form(Compiler *c, int node) {
 void emit_oint_expr(Compiler *c, int node, TyKind t, Buf *b) {
   if (b == g_pre) {
     /* as emit_into_pre_line, with the kind threaded through */
-    Buf tmp; memset(&tmp, 0, sizeof tmp);
-    emit_oint_expr(c, node, t, &tmp);
-    buf_puts(b, tmp.p ? tmp.p : "");
-    free(tmp.p);
+    Buf *pre = g_pre;
+    size_t ls = pre_line_start(pre);
+    Buf val; memset(&val, 0, sizeof val);
+    Buf hoist; memset(&hoist, 0, sizeof hoist);
+    g_pre = &hoist;
+    emit_oint_expr(c, node, t, &val);
+    g_pre = pre;
+    pre_line_splice(pre, ls, &hoist, &val);
     return;
   }
   if (!oint_kind(t)) t = TY_INT;

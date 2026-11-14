@@ -17285,10 +17285,13 @@ static int infer_zip_block_params(Compiler *c, int id, int block, const char *p0
   }
   Scope *zs = comp_scope_of(c, block);
   const char *zp1s = block_param_name(c, block, 1);
-  LocalVar *ep0 = scope_local_intern(zs, p0); ep0->is_block_param = 1;
   /* a SOLO param receives the boxed TUPLE ([e1, e2]); two params
-     auto-splat it */
-  if (lv_widen(ep0, zp1s ? ty_array_elem(rt) : TY_POLY)) changed = 1;
+     auto-splat it. The first of two, pinned to the element class of an
+     object array the receiver narrows to (narrow_walk_block_params), keeps
+     its pin while the receiver still reads boxed, as the other params do:
+     widening it here and pinning it there changed it every round, and the
+     fixpoint ran to its cap. */
+  if (bp_widen(zs, p0, zp1s ? ty_array_elem(rt) : TY_POLY)) changed = 1;
   const char *zp1 = zp1s;
   if (zp1) {
     int zargs = nt_ref(nt, id, "arguments");

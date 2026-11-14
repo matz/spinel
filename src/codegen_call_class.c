@@ -5905,7 +5905,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           call_target(c, id, iencl->class_id, name, 0, NULL) >= 0)
         goto skip_toplevel_include;
     }
-    int imi = comp_included_method_index(c, name, id);
+    int imi = call_target(c, id, -1, name, CT_INCLUDED, NULL);
     if (imi >= 0) {
       Scope *ms = &c->scopes[imi];
       if (g_plan_check) ucall_observe(c, id, imi, ms->class_id, 0);

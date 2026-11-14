@@ -11879,7 +11879,7 @@ static int expand_literal_splat_args(Compiler *c) {
       if (!lit) continue; }
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) {
-      if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || comp_included_method_index(c, nm, id) >= 0)
+      if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || call_target(c, id, -1, nm, CT_INCLUDED, NULL) >= 0)
         continue;   /* a user method: native splat path */
     }
     else {
@@ -16548,7 +16548,7 @@ static int oa_printer_takes_args(Compiler *c, int id, const char *walk_disc, int
   int answers_arg = sp_streq(nm, "p") || sp_streq(nm, "pp");
   if (!answers_arg && !sp_streq(nm, "puts") && !sp_streq(nm, "print")) return 0;
   if (answers_arg && !(id < nc && walk_disc[id])) return 0;
-  if (comp_method_index(c, nm) >= 0 || comp_self_call_mi(c, id, nm) >= 0) return 0;
+  if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || comp_self_call_mi(c, id, nm) >= 0) return 0;
   if (share_builtin_overridden(c, "Array", "inspect") || share_builtin_overridden(c, "Array", "to_s")) return 0;
   int args = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
@@ -27299,7 +27299,7 @@ static int an_tail_tap_blind(Compiler *c, int n) {
   int recv = nt_ref(nt, n, "receiver"), blk = nt_ref(nt, n, "block");
   if (recv < 0 || !is_tap_name(nt_str(nt, n, "name")) || nt_ref(nt, n, "arguments") >= 0 || blk < 0 ||
       nt_kind(nt, blk) != NK_BlockNode || nt_ref(nt, blk, "parameters") >= 0 || nt_safe_nav(nt, n) ||
-      call_breaks(c, n) || comp_method_index(c, "tap") >= 0) return 0;
+      call_breaks(c, n) || call_target(c, n, -1, "tap", CT_TOP, NULL) >= 0) return 0;
   TyKind rt = comp_ntype(c, recv);
   if (rt != TY_STRING && rt != TY_STRBUF) return 0;
   int si = comp_core_class(c, CORE_STRING);
@@ -28464,7 +28464,7 @@ static void an_call_targets_nonunique(Compiler *c, int u, const char *un, ACallT
   if (rk == NK_SelfNode) {
     int mi = comp_self_call_mi(c, u, un);
     if (mi < 0 && rc < 0) mi = comp_cbody_call_mi(c, u, un);
-    if (mi < 0) mi = comp_included_method_index(c, un, u);
+    if (mi < 0) mi = call_target(c, u, -1, un, CT_INCLUDED, NULL);
     act_add(t, mi);
     Scope *self = comp_scope_of(c, u);
     int any = mi >= 0;

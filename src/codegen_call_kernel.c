@@ -1443,7 +1443,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
      Kernel.`("cmd"), and self's in a poly self dispatch's builtin default */
   if (sp_streq(name, "`") && argc == 1 && nt_ref(nt, id, "block") < 0 && nt_kind(nt, argv[0]) != NK_SplatNode &&
       (infer_type(c, argv[0]) == TY_STRING || infer_type(c, argv[0]) == TY_STRBUF) &&
-      (recv < 0 ? !bare_call_class_owned(c, id) && comp_included_method_index(c, name, id) < 0
+      (recv < 0 ? !bare_call_class_owned(c, id) && call_target(c, id, -1, name, CT_INCLUDED, NULL) < 0
                 : an_kernel_backtick_recv(c, id, recv, 0, g_poly_builtin_arm && g_pd_skip == id))) {
     /* self in the default can be a BasicObject subclass's instance, which
        has no Kernel#`: it raises, as CRuby does */

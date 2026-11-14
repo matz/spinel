@@ -21473,8 +21473,8 @@ static int singleton_def_of(Compiler *c, const char *cn, const char *name) {
 
 /* A top-level def or alias: Object's private instance method, which CRuby
    refuses on any receiver as a NoMethodError, never as a count. */
-static int toplevel_def(Compiler *c, const char *name) {
-  int mi = comp_method_index(c, name);
+static int toplevel_def(Compiler *c, int id, const char *name) {
+  int mi = call_target(c, id, -1, name, CT_TOP, NULL);
   return mi >= 0 && !c->scopes[mi].is_cmethod;
 }
 
@@ -21638,7 +21638,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
           (is_class_const_name(surface) && reopened_owns(c, id, "Module", name)) ||
           reopened_owns(c, id, "Object", name) || reopened_owns(c, id, "Kernel", name)) return 0;
       if (!arity_spec_row(itbl, surface, name, with_block, argc, exp, n) &&
-          (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, name)))
+          (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, id, name)))
         return 0;
     }
     else if (!own) return 0;
@@ -21698,7 +21698,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
                      : rt == TY_QUEUE ? "SizedQueue" : NULL;
     if (reopened_owns(c, id, bcn, name) || reopened_owns(c, id, owner, name) ||
         (twin && reopened_owns(c, id, twin, name)) ||
-        (sp_streq(owner, "Object") && toplevel_def(c, name))) return 0;
+        (is_object_class_name(owner) && toplevel_def(c, id, name))) return 0;
   }
   *given = argc;
   return 1;

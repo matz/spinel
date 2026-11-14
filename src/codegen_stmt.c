@@ -1793,7 +1793,7 @@ static int strbuf_route_operand(Compiler *c, int v) {
   if (conversion >= 0) return conversion;
   /* Kernel#String, as its arm takes it: no method of the program's own */
   int x = is_unary_plus(nm) && argc == 0 && blk < 0 ? recv
-        : is_string_class_name(nm) && recv < 0 && argc == 1 && blk < 0 && comp_method_index(c, nm) < 0 &&
+        : is_string_class_name(nm) && recv < 0 && argc == 1 && blk < 0 && call_target(c, v, -1, nm, CT_TOP, NULL) < 0 &&
           !bare_call_class_owned(c, v) ? argv[0] : -1;
   TyKind xt = x >= 0 ? comp_ntype(c, x) : TY_UNKNOWN;
   /* String's BSH_ARGS route keeps a String held in a box too. Other
@@ -1821,7 +1821,7 @@ int strbuf_self_route_slot(Compiler *c, int v, int *uplus, Buf *out) {
   int x = strbuf_uplus_operand(c, v);
   *uplus = x >= 0;
   if (x < 0 && nm && is_string_class_name(nm) && nt_ref(nt, v, "receiver") < 0 && argc == 1 &&
-      nt_ref(nt, v, "block") < 0 && comp_method_index(c, nm) < 0 && !bare_call_class_owned(c, v))
+      nt_ref(nt, v, "block") < 0 && call_target(c, v, -1, nm, CT_TOP, NULL) < 0 && !bare_call_class_owned(c, v))
     x = argv[0];
   /* A receiver-returning conversion or freeze keeps the existing handle
      too. Ask the builtin's return fact before accepting a freeze-family
@@ -1942,7 +1942,7 @@ int strbuf_tail_plain(Compiler *c, int v) {
   NodeKind k = nt_kind(c->nt, v);
   const char *nm = k == NK_CallNode ? nt_str(c->nt, v, "name") : NULL;
   if (nm && is_raise_alias(nm) && nt_ref(c->nt, v, "receiver") < 0 &&
-      !bare_call_class_owned(c, v) && comp_method_index(c, nm) < 0)
+      !bare_call_class_owned(c, v) && call_target(c, v, -1, nm, CT_TOP, NULL) < 0)
     return 1;
   /* a String mutator that answers its receiver hands on that receiver's
      handle (strbuf_tail_self_mutator) */
@@ -2197,7 +2197,7 @@ int strbuf_route_loop(Compiler *c, int v) {
   const char *nm = nt_str(nt, v, "name");
   int blk = nt_ref(nt, v, "block");
   return nm && is_loop_name(nm) && nt_ref(nt, v, "receiver") < 0 && nt_ref(nt, v, "arguments") < 0 &&
-         blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && comp_method_index(c, nm) < 0 &&
+         blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && call_target(c, v, -1, nm, CT_TOP, NULL) < 0 &&
          !bare_call_class_owned(c, v);
 }
 /* Does the subtree at n (not a nested method's) hold a `return`? */
@@ -2721,7 +2721,7 @@ int strbuf_route_boxed_exc_message(Compiler *c, int v) {
   TyKind vt = comp_ntype(c, v);
   return nm && is_exception_message(nm) && !is_to_s_name(nm) && recv >= 0 && nt_ref(nt, v, "arguments") < 0 &&
          nt_ref(nt, v, "block") < 0 && (vt == TY_STRING || vt == TY_STRBUF) && repr_of(c, recv).kind == RK_BOXED &&
-         comp_method_index(c, nm) < 0 && cplan_targets(c, v, tg, CPT_MAX) == 0 && !exc_has_user_msg_override(c);
+         call_target(c, v, -1, nm, CT_TOP, NULL) < 0 && cplan_targets(c, v, tg, CPT_MAX) == 0 && !exc_has_user_msg_override(c);
 }
 /* --share-strings: `e.message` / `e.to_s` as an operand compared by identity
    (equal?, object_id). Its identity is the box sp_poly_equal and

@@ -2091,7 +2091,7 @@ static int emit_promote_rat_exact(Compiler *c, int id, Buf *b) {
     buf_puts(b, ")");
     return 1;
   }
-  if (sp_streq(nm, "Rational") && argc == 1 && recv < 0 && comp_method_index(c, "Rational") < 0 &&
+  if (is_rational_class_name(nm) && argc == 1 && recv < 0 && call_target(c, id, -1, nm, CT_TOP, NULL) < 0 &&
       (comp_ntype(c, argv[0]) == TY_STRING || comp_ntype(c, argv[0]) == TY_STRBUF)) {
     buf_puts(b, "sp_str_to_r_strict_v("); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
     return 1;

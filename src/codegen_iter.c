@@ -554,7 +554,7 @@ static void inline_target_lookup(Compiler *c, int id, const char *name, int recv
        called through the module. One that touches an instance variable is
        left to that arm, which refuses it: main holds no module state. */
     if (t->mi < 0) {
-      int imi = comp_included_method_index(c, name, id);
+      int imi = call_target(c, id, -1, name, CT_INCLUDED, NULL);
       if (imi >= 0 && !scope_uses_ivars(c, imi)) {
         t->mi = imi;
         if (c->scopes[imi].is_cmethod) t->cm_class = c->scopes[imi].class_id;
@@ -1575,7 +1575,7 @@ static int block_tail_needs_value_form(Compiler *c, int id) {
      void; the expression form holds it in a slot of its own (and nil where
      no break has a value) */
   if (nt_ref(nt, id, "receiver") < 0 && sp_streq(nm, "loop") && nt_ref(nt, id, "block") >= 0 &&
-      nt_ref(nt, id, "arguments") < 0 && comp_method_index(c, "loop") < 0) return 1;
+      nt_ref(nt, id, "arguments") < 0 && call_target(c, id, -1, "loop", CT_TOP, NULL) < 0) return 1;
   /* a String mutator that answers its receiver (concat, replace, insert,
      prepend): the statement form changes the String and has no value,
      and the block answers the String (#8400) */
@@ -3730,7 +3730,7 @@ int call_targets_yielding_method(Compiler *c, int id) {
        E } }` under `include T` gave "invalid argument type 'void' to unary
        expression" at check's `unless yield`. */
     if (mi < 0) {
-      int imi = comp_included_method_index(c, name, id);
+      int imi = call_target(c, id, -1, name, CT_INCLUDED, NULL);
       if (imi >= 0 && !scope_uses_ivars(c, imi)) mi = imi;
     }
   }

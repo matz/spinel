@@ -12045,7 +12045,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         else mi = comp_cbody_call_mi(c, id, name);
       }
       if (mi < 0) mi = call_target(c, id, -1, name, CT_TOP, NULL);
-      if (mi < 0) mi = comp_included_method_index(c, name, id);
+      if (mi < 0) mi = call_target(c, id, -1, name, CT_INCLUDED, NULL);
       changed |= bind_call_params(c, id, mi);
       /* Propagate to descendant classes that directly override the same method.
          When Base#foo calls bar(arg), and Sub overrides bar, Sub#bar must also
@@ -15076,7 +15076,7 @@ int desugar_dir_surface(Compiler *c) {
     }
     /* Kernel#open(path, ...) is File.open when no user method shadows it (#2816) */
     if (nm && recv < 0 && sp_streq(nm, "open") &&
-        comp_method_index(c, "open") < 0 &&
+        call_target(c, id, -1, "open", CT_TOP, NULL) < 0 &&
         /* ...and no enclosing chain owns it either: comp_method_index sees
            only a TOP-LEVEL def, so a module's own `open` lost to File.open
            when a sibling called it bare (#4592) */
@@ -19676,7 +19676,7 @@ int backprop_call_target(Compiler *c, int call_id) {
     /* self's class methods first in a class method, then its instance
        chain, then a top-level def, as inference resolves the call */
     int mi = comp_self_call_mi(c, call_id, name);
-    if (mi < 0) mi = comp_included_method_index(c, name, call_id);
+    if (mi < 0) mi = call_target(c, call_id, -1, name, CT_INCLUDED, NULL);
     return mi;
   }
   NodeKind rk = nt_kind(nt, recv);

@@ -1391,6 +1391,7 @@ int is_match_family(const char *n) {
   return sp_streq(n, "=~") || sp_streq(n, "!~") || sp_streq(n, "match?") || sp_streq(n, "match");
 }
 
+int is_rational_class_name(const char *n) { return n && sp_streq(n, "Rational"); }
 int is_integer_class_name(const char *n) {
   return sp_streq(n, "Integer") || sp_streq(n, "Fixnum");
 }

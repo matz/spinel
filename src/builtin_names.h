@@ -361,6 +361,7 @@ int is_array_push_family(const char *n); /* << append prepend push unshift */
 int is_io_class_name(const char *n); /* File IO */
 int is_immediate_class_name(const char *n); /* FalseClass NilClass TrueClass */
 int is_object_base_name(const char *n); /* BasicObject Object */
+int is_basic_object_name(const char *n); /* BasicObject alone: the root a blank slate descends from */
 /* The classes a class's singleton chain ends in, which the load record
    holds by the header that reopens each (builtin_core_class_slot), are among
    these builtin rows. The list generates the builtin table and core-class

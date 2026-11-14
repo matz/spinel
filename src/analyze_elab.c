@@ -2788,9 +2788,10 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       else lr_method(x, cls, sg, an_, node, is_undef_method_name(nm) ? LR_UNDEF : LR_REMOVE, *vs, may, NULL);
     }
   }
+  /* (main's own define_method defines a public method whatever the section's visibility, as in CRuby) */
   if (dm && ac > 0)
     lr_method(x, cls, sg || is_define_singleton_method_name(nm), vis_arg_name(nt, av[0]), node, LR_DEFINE_METHOD,
-              is_define_singleton_method_name(nm) ? BVIS_PUBLIC : st, may, NULL);
+              is_define_singleton_method_name(nm) || (cls == LR_MAIN && !sg) ? BVIS_PUBLIC : st, may, NULL);
   if (is_alias_method_name(nm) && ac == 2)
     lr_method(x, cls, sg, vis_arg_name(nt, av[0]), node, LR_ALIAS, *vs, may, vis_arg_name(nt, av[1]));
   /* code the record cannot follow, run on a class (lr_opaque_call) */
@@ -9814,7 +9815,7 @@ int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
   if (p.region < 0 || !name) return -1;
   int at = elab_method_at(c, LR_MAIN, name, 0, p, &d);
   if (at == ELAB_NO) return d ? -1 : 0;   /* (an undef or a removal: not read here) */
-  if (at != ELAB_YES || !d || (d->kind != LR_DEF && d->kind != LR_ALIAS) ||
+  if (at != ELAB_YES || !d || (d->kind != LR_DEF && d->kind != LR_DEFINE_METHOD && d->kind != LR_ALIAS) ||
       elab_own_method_at(c, LR_MAIN, name, p) != ELAB_YES)
     return -1;
   int v = elab_method_vis_at(c, LR_MAIN, name, 0, p);

@@ -1721,9 +1721,11 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   TyKind rt = comp_ntype(c, recv);
   if (!ty_is_object(rt)) return 0;
   int cid = ty_object_class(rt);
+  /* (each half as the version live at this write, as the two calls it
+     stands for would bind: the node is asked, not the table's last) */
   MethodLookup rml = { .def_class = -1 }, wml = { .def_class = -1 };
-  int rmi = call_target(c, -1, cid, attr, 0, &rml);
-  int wmi = call_target(c, -1, cid, attr, CT_WRITER, &wml);
+  int rmi = call_target(c, id, cid, attr, 0, &rml);
+  int wmi = call_target(c, id, cid, attr, CT_WRITER, &wml);
   int rdc = rml.def_class, wdc = wml.def_class;
   /* The pair calls each half directly, past the visibility check an
      ordinary call makes, so on an explicit receiver a half the caller may
@@ -1783,7 +1785,10 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     if (ivt != TY_UNKNOWN && ivt != TY_VOID && ivt != TY_NIL) rdt = ivt;
     if (riv >= 0 && rdt == ivt && oint_kind(ivt) && ivar_has_nilbit(c, cid, riv)) rnb = riv;
   }
-  if (rdt == TY_UNKNOWN || rdt == TY_VOID) rdt = want;
+  /* (a reader written out that only answers nil has no value to hold, its
+     C function is void: the slot is the poly one, filled with nil) */
+  int rnil = rmi >= 0 && (rdt == TY_NIL || rdt == TY_VOID);
+  if (rdt == TY_UNKNOWN || rdt == TY_VOID || rdt == TY_NIL) rdt = rnil ? TY_POLY : want;
   TyKind vt = repr_of(c, v).as_ty;
   /* TY_NIL joins them: emit_ctype spells it `void`, so a literal nil on the
      right declared a void temp. nil is a value here (`u.g ||= nil` is nil in
@@ -1809,7 +1814,8 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     buf_printf(&rb, "((sp_%s *)_t%d)", rcn, tr);
     TyKind got = (TyKind)c->scopes[rmi].ret;
     if (got == TY_UNKNOWN || got == TY_VOID) got = rdt;
-    if (got == rdt) buf_puts(b, rb.p ? rb.p : "");
+    if (rnil && rdt == TY_POLY) buf_printf(b, "(%s, sp_box_nil())", rb.p ? rb.p : "");
+    else if (got == rdt) buf_puts(b, rb.p ? rb.p : "");
     else if (rdt == TY_POLY) emit_boxed_text(c, got, rb.p ? rb.p : "", b);
     else emit_unbox_text(c, rdt, rb.p ? rb.p : "", b);
     free(rb.p);
@@ -1842,8 +1848,10 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     /* a plain reader under a node that answers the oint: lifted */
     else if (!ro && wo && rdt == want) snprintf(sv, sizeof sv, "%s(_t%d)", oint_of(want), tv);
     else snprintf(sv, sizeof sv, "_t%d", tv);
+    /* (a nil-only reader never takes this arm: a value of the node's own type stands in) */
+    if (rnil && want != TY_POLY) buf_puts(b, wo ? oint_nil(want) : default_value_from_compiler(c, want));
     /* a boxed answer takes the reader's oint whole: its nil boxes as nil, not 0 */
-    if (ro && !wo && want == TY_POLY && rdt != TY_POLY) buf_printf(b, "%s(_t%d)", oint_box(rdt), tv);
+    else if (ro && !wo && want == TY_POLY && rdt != TY_POLY) buf_printf(b, "%s(_t%d)", oint_box(rdt), tv);
     else if (rdt == want) buf_puts(b, sv);
     else if (want == TY_POLY) emit_boxed_text(c, rdt, sv, b);
     /* (one-String mode: the other face of the same String) */

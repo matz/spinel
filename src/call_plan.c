@@ -1361,7 +1361,8 @@ int call_node_names(Compiler *c, int id, const char *out[2]) {
   int n = 0;
   if (k == NK_CallNode || k == NK_CallTargetNode) out[n++] = nt_str(nt, id, "name");
   else if (k == NK_CallOperatorWriteNode || k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) {
-    out[n++] = nt_str(nt, id, "read_name");
+    /* (the node table keeps Prism's `read_name` as `name`) */
+    out[n++] = nt_str(nt, id, "name");
     out[n++] = nt_str(nt, id, "write_name");
   }
   else if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {

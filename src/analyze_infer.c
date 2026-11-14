@@ -10978,8 +10978,9 @@ static TyKind infer_conditional_attr_write(Compiler *c, int id) {
        stores an Integer while the expression answers what was assigned).
        Unify the two arms, the way the emitter does (#4148). */
     MethodLookup rml = { .def_class = -1 }, wml = { .def_class = -1 };
-    int rmi2 = call_target(c, -1, cid2, attr, 0, &rml);
-    int wmi2 = call_target(c, -1, cid2, attr, CT_WRITER, &wml);
+    /* (each half as the version live at this write: the node is asked) */
+    int rmi2 = call_target(c, id, cid2, attr, 0, &rml);
+    int wmi2 = call_target(c, id, cid2, attr, CT_WRITER, &wml);
     if (rmi2 >= 0 || wmi2 >= 0) {
       int v3 = nt_ref(nt, id, "value");
       TyKind at = v3 >= 0 ? infer_type(c, v3) : TY_UNKNOWN;

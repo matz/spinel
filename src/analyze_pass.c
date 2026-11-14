@@ -11300,7 +11300,7 @@ static int infer_conditional_writer_param(Compiler *c, int id) {
   if (recv < 0 || val < 0 || !name) return 0;
   TyKind rt = infer_type(c, recv);
   if (!ty_is_object(rt)) return 0;
-  int mi = call_target(c, -1, ty_object_class(rt), name, CT_WRITER, NULL);
+  int mi = call_target(c, id, ty_object_class(rt), name, CT_WRITER, NULL);
   if (mi < 0) return 0;
   Scope *ws = &c->scopes[mi];
   LocalVar *pv = ws->nparams > 0 && ws->pnames[0] ? scope_local(ws, ws->pnames[0]) : NULL;

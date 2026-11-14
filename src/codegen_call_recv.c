@@ -10039,6 +10039,20 @@ static int int_arms_round_divide(Compiler *c, int id, Buf *b, const NodeTable *n
     buf_printf(b, "sp_poly_to_poly_array(sp_poly_divmod(sp_box_int(%s), ", r);
     emit_expr(c, argv[0], b); buf_puts(b, "))");
   }
+  /* a Bignum divisor: the pair Integer#divmod makes, whose modulo of a
+     negative receiver is past the word; the IntArray arm below narrowed the
+     divisor and raised RangeError */
+  else if (is_divmod_name(name) && argc == 1 && comp_ntype(c, argv[0]) == TY_BIGINT &&
+           comp_ntype(c, id) == TY_POLY_ARRAY) {
+    buf_printf(b, "sp_poly_to_poly_array(sp_poly_divmod(sp_box_int(%s), sp_box_bigint(", r);
+    emit_expr(c, argv[0], b); buf_puts(b, ")))");
+  }
+  /* modulo by a Bignum is `%`'s Bignum */
+  else if (is_modulo_name(name) && argc == 1 && comp_ntype(c, argv[0]) == TY_BIGINT &&
+           comp_ntype(c, id) == TY_BIGINT) {
+    buf_printf(b, "sp_bigint_mod(sp_bigint_new_int(%s), ", r);
+    emit_expr(c, argv[0], b); buf_puts(b, ")");
+  }
   else if (sp_streq(name, "divmod") && argc == 1 &&
            comp_ntype(c, argv[0]) != TY_RATIONAL) {
     /* the quotient and the modulo each read the receiver, so hold it in a

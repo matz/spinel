@@ -2683,6 +2683,8 @@ int method_scope_arity(Compiler *c, int target, int *out) {
        builtin */
     const char *own = NULL;
     if (cs && rd != -2 && (bam_owner(c, target, &own), own) && builtin_method_arity(own, cs, out)) return 1;
+    /* ...and one of Enumerable's own, which no class's table lists */
+    if (cs && rd != -2 && own && is_enumerable_module_name(own) && builtin_enumerable_arity(cs, out)) return 1;
   }
   int pn = nt_ref(nt, c->scopes[target].def_node, "parameters");
   int n_req = 0, n_opt = 0, n_post = 0;

@@ -78,7 +78,9 @@ void holder_ivar(const Compiler *c, int node, int cid, int cls_slot, HolderRef *
   out->name = nt_str(c->nt, node, "name");
   out->cid = cid;
   out->cls_slot = (unsigned char)(cls_slot != 0);
-  out->idx = cid >= 0 && out->name ? comp_ivar_index(&c->classes[cid], out->name) : -1;
+  /* (the side's own entry: a class-level ivar is no instance's field) */
+  ClassInfo *ci = cid >= 0 && out->name ? &((Compiler *)c)->classes[cid] : NULL;
+  out->idx = !ci ? -1 : cls_slot ? comp_class_ivar_index(ci, out->name) : comp_inst_ivar_index(ci, out->name);
   if (!g_holder_bare) out->r = repr_of_holder(c, out);
 }
 
@@ -117,6 +119,30 @@ int holder_of_node_slot(const Compiler *c, int node, HolderRef *out) {
   return r;
 }
 
+int holder_ivar_side(const Compiler *c, int node, int *cid) {
+  Compiler *mc = (Compiler *)c;
+  *cid = -1;
+  /* (--share-strings: an ivar in an instance_eval/exec splice is the
+     rebound receiver's, whatever scope the block sits in: `K.new(s)
+     .instance_exec { @name }` read the surrounding scope's slot facts for
+     K's @name) */
+  int iec = ie_class_of(mc, node);
+  if (iec >= 0) { *cid = iec; return IVS_INST; }
+  Scope *s = comp_scope_of(mc, node);
+  if (!s) return 0;
+  /* (the splice being emitted: a block an instance_eval trampoline inlines
+     at its call runs on the trampoline's receiver; a method of a class
+     inlined into it, whose scope is its class's, reads its own ivars) */
+  if (g_ie_class_id >= 0 && s->class_id < 0 && !s->is_cmethod) { *cid = g_ie_class_id; return IVS_INST; }
+  if (s->is_cmethod) { *cid = s->class_id; return s->class_id >= 0 ? IVS_CLASS : 0; }
+  if (s->class_id >= 0) { *cid = s->class_id; return IVS_INST; }
+  /* a block or a proc written in a class or module body holds the body
+     class's own slot */
+  int body = holder_cbody(c, node);
+  *cid = body >= 0 ? body : c->toplevel_class;
+  return *cid >= 0 ? IVS_CLASS : 0;
+}
+
 int holder_of_node_in(const Compiler *c, int node, int body, HolderRef *out) {
   Compiler *mc = (Compiler *)c;
   HolderKind hk = node >= 0 ? holder_kind_of(nt_kind(c->nt, node)) : HK_NONE;
@@ -127,16 +153,9 @@ int holder_of_node_in(const Compiler *c, int node, int body, HolderRef *out) {
   out->cid = out->idx = -1;
   if (!nm) return 0;
   if (hk == HK_IVAR) {
-    /* the read side's rule, which repr_of and the String-handle readers
-       follow: a class method's ivar is its class's global, a top-level
-       method's the Toplevel's */
-    int cid = strbuf_ivar_owner(mc, node);
-    if (cid < 0) return 0;
-    Scope *s = comp_scope_of(mc, node);
-    /* (--share-strings: an instance_eval/exec splice's ivar is its
-       receiver object's slot, whatever scope the block sits in) */
-    int ie = (ie_class_of(mc, node) >= 0 || g_ie_class_id >= 0);
-    holder_ivar(c, node, cid, !ie && (s->class_id < 0 || s->is_cmethod), out);
+    int cid, side = holder_ivar_side(c, node, &cid);
+    if (!side) return 0;
+    holder_ivar(c, node, cid, side == IVS_CLASS, out);
     return 1;
   }
   out->kind = (unsigned char)hk;

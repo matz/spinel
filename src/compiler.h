@@ -864,6 +864,13 @@ typedef struct {
   int parent;          /* superclass index, or -1 */
   char **ivars;        /* instance variable names, incl. leading '@' */
   NameIdx ivars_ix;    /* comp_ivar_index's index of ivars */
+  unsigned char *ivar_side; /* per ivar, which object holds it (IVS_*): an
+                               instance (its field iv_<x>), the class object
+                               itself or main for the Toplevel pseudo-class
+                               (the static civ_<Class>_<x>), or both, when
+                               the program names it on both. In Ruby they
+                               are different variables; a name used on one
+                               side lays out nothing on the other. */
   SP_TY_FIELD TyKind *ivar_types;
   unsigned char *ivar_str_shared; /* (#3227) the slot is a shared-mutable
                                      string handle (sp_String *): survives
@@ -2052,11 +2059,21 @@ typedef struct {
      program's (nil, a number, a String), so its ivars are nil; and the class a
      block body's own instance_eval / exec call (or a forwarder to one) runs it
      on, -1 for a body that only sits inside such a block, whose class it shares
-     in cls. All three have cap entries. */
+     in cls; and whether the receiver has no type yet this round, so the
+     block's ivars wait for its class. rb flags (IE_RB_*) the nodes whose
+     self is rebound to another object (ie_rebound_marks); rb_ver counts the
+     times those flags changed, rb_scan is the node count the block
+     structure was last read at. prm is, by a block's body, its parameters'
+     node (-1 where none). All six have cap entries. */
   struct {
     int *cls;
     unsigned char *nonobj;
     int *own;
+    unsigned char *pending;
+    unsigned char *rb;
+    int *prm;
+    unsigned rb_ver;
+    int rb_scan;
     int cap;
   } ie_map;
   /* cplan_block_value_ignored's answers (call_plan.c): their number, which
@@ -2067,6 +2084,7 @@ typedef struct {
   struct { unsigned long ty, edits; unsigned version, scope_gen; int nscopes; } bvi_stamp;
 } Compiler;
 enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
+enum { IE_RB_IN = 1, IE_RB_OWN = 2, IE_RB_ROOT = 4 };
 
 AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);
@@ -2149,7 +2167,10 @@ void comp_ivarg_invalidate(Compiler *c);
 int comp_ivarg_next(const Compiler *c, int e);
 int comp_ivarg_call(const Compiler *c, int e);
 int comp_ivarg_arg(const Compiler *c, int e);
-/* The owning class of an ivar read or write node, or -1. */
+/* The class whose ivar table holds the ivar a read or write node names, by
+   holder_ivar_side (an instance_eval block's receiver, a class method's or
+   a class or module body's class, main's Toplevel), or -1. Its entry is
+   the name's in that table: the two sides of one name share it. */
 int comp_ivar_owner(Compiler *c, int node);
 /* The PRES_* facts of an ivar name (Compiler.pres_names), and adding one */
 int comp_pres_flags(const Compiler *c, const char *ivn);
@@ -2476,7 +2497,13 @@ const char *time_strict_parser_call(Compiler *c, int id);
 int        class_eval_reopen_class(Compiler *c, int id, int enclosing_class);
 int        class_reopen_cmethod(Compiler *c, int call, int recv, const char *name); /* a method the program adds to Class, run by `call` (-1: no call) */
 int        comp_ivar_index(ClassInfo *ci, const char *name);  /* -1 if none */
-int        comp_ivar_intern(ClassInfo *ci, const char *name); /* find or add; returns index */
+/* The objects an ivar of a class can be held by (ClassInfo.ivar_side) */
+enum { IVS_INST = 1, IVS_CLASS = 2 };
+int        comp_ivar_intern(ClassInfo *ci, const char *name, int side); /* find or add, on side (IVS_*); returns index */
+int        comp_ivar_on(const ClassInfo *ci, int iv, int side);   /* is ivar iv held on side (IVS_*)? */
+int        comp_inst_ivar_index(ClassInfo *ci, const char *name); /* an instance's field for name, -1 if none */
+int        comp_class_ivar_index(ClassInfo *ci, const char *name); /* the class object's own ivar, -1 if none */
+int        comp_inst_ivar_count(const ClassInfo *ci);             /* how many ivars an instance lays out */
 int        comp_member_intern(ClassInfo *ci, const char *name);
 int        comp_member_index(ClassInfo *ci, const char *name);
 int        comp_cvar_index(ClassInfo *ci, const char *name);  /* class var; -1 if none */

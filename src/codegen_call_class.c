@@ -3953,8 +3953,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
           Buf mh; memset(&mh, 0, sizeof mh);
           int mk, hm = !class_is_syserr(c, ci) && argc >= 1 && comp_ntype(c, argv[0]) == TY_STRING &&
                        exc_msg_hold(c, argv[0], b, &mh, &mk);
-          if (hm) buf_printf(b, "((sp_%s *)sp_exc_attach_msg(", c->classes[ci].nivars > 0 ? c->classes[ci].c_name : "Exception");
-          if (c->classes[ci].nivars > 0)
+          if (hm) buf_printf(b, "((sp_%s *)sp_exc_attach_msg(", comp_inst_ivar_count(&c->classes[ci]) > 0 ? c->classes[ci].c_name : "Exception");
+          if (comp_inst_ivar_count(&c->classes[ci]) > 0)
             buf_printf(b, "((sp_%s *)sp_exc_new_sub_sized(sizeof(sp_%s), \"%s\", ",
                        c->classes[ci].c_name, c->classes[ci].c_name, cn2);
           else
@@ -3965,7 +3965,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
             emit_syserr_call(c, id, "sp_syserr_msg_a", lead, argc, argv, b);
           }
           else emit_exc_msg_arg(c, argc >= 1 ? argv[0] : -1, b);
-          buf_puts(b, c->classes[ci].nivars > 0 ? "))" : ")");
+          buf_puts(b, comp_inst_ivar_count(&c->classes[ci]) > 0 ? "))" : ")");
           if (hm) buf_printf(b, ", %s))", mh.p);
           if (hm) exc_msg_release(b, mk);
           free(mh.p);

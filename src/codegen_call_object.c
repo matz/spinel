@@ -3252,10 +3252,10 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       emit_ivar_name_error(c, b, ivn, argv[0]); buf_puts(b, ", (sp_bool)0)");
       return 1;
     }
-    int have = comp_ivar_index(&c->classes[dcid], ivn) >= 0;
+    /* (an object's own: a class-level ivar is the class object's) */
+    int div = comp_inst_ivar_index(&c->classes[dcid], ivn), have = div >= 0;
     /* one nothing has set yet is not defined (ivar_set_kind) */
-    if (have && ((ivar_set_kind(c, dcid, ivn) & 1) ||
-                 poly_ivar_unset_marked(c, dcid, comp_ivar_index(&c->classes[dcid], ivn)))) {
+    if (have && ((ivar_set_kind(c, dcid, ivn) & 1) || poly_ivar_unset_marked(c, dcid, div))) {
       int tro = ++g_tmp;
       char ex[160], tb[256];
       snprintf(ex, sizeof ex, "_t%d->iv_%s", tro, iv_c(ivn + 1));
@@ -3288,14 +3288,14 @@ void emit_ivar_list_fill(Compiler *c, int k, const char *obj, const char *arr, i
     buf_puts(b, " ");
     emit_ivar_order_open(c, k, obj, b);
   }
-  int *ord = ivar_listing_order_new(c, k);
+  int nord, *ord = ivar_listing_order_new(c, k, &nord);
   /* Data/Struct members are NOT @-instance variables in CRuby (#2849) */
-  for (int jj = ivc->is_struct ? ivc->nmembers : 0; jj < ivc->nivars; jj++) {
+  for (int jj = ivc->is_struct ? ivc->nmembers : 0; jj < nord; jj++) {
     int ji = ord[jj];
     char ex[200], tb[300];
     snprintf(ex, sizeof ex, "%s->iv_%s", obj, iv_c(ivc->ivars[ji] + 1));
     const char *set = ranked ? NULL : ivar_set_test(c, k, ivc->ivars[ji], ex, tb, sizeof tb);
-    if (ranked) buf_printf(b, "case %d:", ji);
+    if (ranked) buf_printf(b, "case %d:", jj);
     if (set) buf_printf(b, " if %s", set);
     buf_printf(b, " sp_PolyArray_push(%s, sp_box_sym(sp_sym_intern(\"%s\")));", arr, ivc->ivars[ji]);
     if (ranked) buf_puts(b, " break; ");
@@ -3320,13 +3320,13 @@ static int ivar_list_mixed(Compiler *c, int recv, int cid) {
         comp_cmethod_in_chain(c, cid, "new", NULL) < 0) return 0;
   }
   int ranked = ivar_ranked(c, cid);
-  int *base = ivar_listing_order_new(c, cid), mixed = 0;
+  int nbase, *base = ivar_listing_order_new(c, cid, &nbase), mixed = 0;
   for (int d = 0; d < c->nclasses && !mixed; d++) {
     if (d == cid || !is_descendant(c, d, cid) || !c->classes[d].instantiated) continue;
-    if (c->classes[d].nivars != ci->nivars) { mixed = 1; break; }
+    if (comp_inst_ivar_count(&c->classes[d]) != nbase) { mixed = 1; break; }
     if (ranked) continue;
-    int *od = ivar_listing_order_new(c, d);
-    for (int i = 0; i < ci->nivars && !mixed; i++) mixed = base[i] != od[i];
+    int nod, *od = ivar_listing_order_new(c, d, &nod);
+    for (int i = 0; i < nbase && !mixed; i++) mixed = base[i] != od[i];
     free(od);
   }
   free(base);
@@ -3342,6 +3342,7 @@ int emit_object_ivar_list(Compiler *c, int recv, int ivcid, Buf *b) {
      slot is read off the receiver, held once */
   int any1 = 0, tracked = 0;
   for (int ji = ivc->is_struct ? ivc->nmembers : 0; ji < ivc->nivars; ji++) {
+    if (!comp_ivar_on(ivc, ji, IVS_INST)) continue;
     int kind = ivar_set_kind(c, ivcid, ivc->ivars[ji]);
     any1 |= kind & 1;
     tracked |= kind == 3;
@@ -3359,7 +3360,8 @@ int emit_object_ivar_list(Compiler *c, int recv, int ivcid, Buf *b) {
     for (int d = 0; d < c->nclasses; d++) {
       if (d != ivcid && (!is_descendant(c, d, ivcid) || !c->classes[d].instantiated)) continue;
       reads |= ivar_ranked(c, d) | c->classes[d].computed_ivar_set;
-      for (int j = 0; j < c->classes[d].nivars; j++) reads |= ivar_set_kind(c, d, c->classes[d].ivars[j]) & 1;
+      for (int j = 0; j < c->classes[d].nivars; j++)
+        if (comp_ivar_on(&c->classes[d], j, IVS_INST)) reads |= ivar_set_kind(c, d, c->classes[d].ivars[j]) & 1;
     }
     buf_printf(b, "({ sp_%s *_t%d = ", ivc->c_name, tro); emit_expr(c, recv, b);
     buf_printf(b, "; int _t%dc = _t%d->cls_id;", tro, tro);
@@ -3394,14 +3396,14 @@ int emit_object_ivar_list(Compiler *c, int recv, int ivcid, Buf *b) {
     char ob[32]; snprintf(ob, sizeof ob, "_t%d", tro);
     emit_ivar_order_open(c, ivcid, ob, b);
   }
-  int *ord = ivar_listing_order_new(c, ivcid);
+  int nord, *ord = ivar_listing_order_new(c, ivcid, &nord);
   /* Data/Struct members are NOT @-instance variables in CRuby (#2849) */
-  for (int jj = ivc->is_struct ? ivc->nmembers : 0; jj < ivc->nivars; jj++) {
+  for (int jj = ivc->is_struct ? ivc->nmembers : 0; jj < nord; jj++) {
     int ji = ord[jj];
     char ex[160], tb[256];
     snprintf(ex, sizeof ex, "_t%d->iv_%s", tro, iv_c(ivc->ivars[ji] + 1));
     const char *set = any1 && !ranked ? ivar_set_test(c, ivcid, ivc->ivars[ji], ex, tb, sizeof tb) : NULL;
-    if (ranked) buf_printf(b, "case %d: ", ji);
+    if (ranked) buf_printf(b, "case %d: ", jj);
     if (set) buf_printf(b, "if %s ", set);
     buf_printf(b, "sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(\"%s\"))); ", tia, ivc->ivars[ji]);
     if (ranked) buf_puts(b, "break; ");
@@ -3605,7 +3607,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
     /* Data/Struct members live in the layout but are NOT @-instance
        variables in CRuby: a get answers nil, not the member (#2849) */
     for (int i = c->classes[cid].is_struct ? c->classes[cid].nmembers : 0; i < c->classes[cid].nivars; i++)
-      if (sp_streq(c->classes[cid].ivars[i], sym)) { mi = i; break; }
+      if (comp_ivar_on(&c->classes[cid], i, IVS_INST) && sp_streq(c->classes[cid].ivars[i], sym)) { mi = i; break; }
     if (mi >= 0) {
       /* A value object is passed by value, so a field write only sticks when
          the receiver is an lvalue (a local / ivar / self); a pointer object

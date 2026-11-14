@@ -1500,18 +1500,13 @@ int emit_strbuf_ivar_write_handle(Compiler *c, int v, Buf *b) {
   const NodeTable *nt = c->nt;
   int w = strbuf_ivar_alias_value(nt, v);
   if (w < 0 || nt_kind(nt, w) == NK_InstanceVariableReadNode) return 0;
-  const char *nm = nt_str(nt, w, "name");
-  int cid = strbuf_ivar_owner(c, w);
-  if (!nm || cid < 0) return 0;
-  int iv = comp_ivar_index(&c->classes[cid], nm);
-  if (iv < 0 || c->classes[cid].ivar_types[iv] != TY_STRBUF) return 0;
-  char ref[300];
-  Scope *cs = comp_scope_of(c, w);
-  if (cs && cs->class_id < 0) snprintf(ref, sizeof ref, "civ_Toplevel_%s", iv_c(nm + 1));
-  /* a class method's ivar is its class's C global, as strbuf_slot_text
-     names it; self there is the class value */
-  else if (cs && cs->is_cmethod) snprintf(ref, sizeof ref, "civ_%s_%s", c->classes[cid].name, iv_c(nm + 1));
-  else snprintf(ref, sizeof ref, "%s%siv_%s", g_self, g_self_deref, iv_c(nm + 1));
+  HolderRef h;
+  if (!holder_of_node_slot(c, w, &h) || h.idx < 0 || c->classes[h.cid].ivar_types[h.idx] != TY_STRBUF) return 0;
+  /* the slot the write names (a class-level ivar is its class's C
+     global, as strbuf_slot_text names it) */
+  Buf rb; memset(&rb, 0, sizeof rb);
+  holder_slot_buf(c, &h, &rb);
+  const char *ref = rb.p;
   buf_puts(b, "({ ");
   if (nt_kind(nt, w) == NK_InstanceVariableWriteNode) emit_stmt_inner(c, w, b, 0);
   else {
@@ -1523,6 +1518,7 @@ int emit_strbuf_ivar_write_handle(Compiler *c, int v, Buf *b) {
     if (m) buf_printf(b, " %s", m);
   }
   buf_printf(b, " %s; })", ref);
+  free(rb.p);
   return 1;
 }
 
@@ -2048,7 +2044,8 @@ static int defined_bare_builtin(Compiler *c, int id, const char *cn) {
    form writes, in `out`. 0 when the write is not one. */
 static int ivar_class_body_slot(Compiler *c, int id, Scope *s, char *out, size_t cap) {
   const char *nm = nt_str(c->nt, id, "name");
-  if (!nm || g_class_body_id < 0 || civ_class_of(c, id, s) != g_class_body_id) return 0;
+  int k;
+  if (!nm || g_class_body_id < 0 || holder_ivar_side(c, id, &k) != IVS_CLASS || k != g_class_body_id) return 0;
   snprintf(out, cap, "civ_%s_%s", c->classes[g_class_body_id].name, iv_c(nm + 1));
   return 1;
 }
@@ -3085,7 +3082,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
        plain String it holds becomes the shared handle and is stored back
        first, as a POLY local's marked read is (poly_strbuf_lift); an
        instance's field store takes its write barrier from gc_wb_insert. */
-    if (rp.poly_lift && !g_ie_nil_ivars && rp.kind == RK_BOXED) {
+    if (rp.poly_lift && !ie_nil_ivar_read(c, id) && rp.kind == RK_BOXED) {
       int vl = view_push_repr(c, id, VR_POLY_LIFT, 0);
       Buf rl; memset(&rl, 0, sizeof rl);
       emit_expr_node(c, id, &rl);
@@ -3094,7 +3091,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
       free(rl.p);
       return 1;
     }
-    if (g_ie_nil_ivars) {
+    if (ie_nil_ivar_read(c, id)) {
       TyKind it = repr_of(c, id).as_ty;
       /* the read's form: its oint where the dispatcher takes one */
       int want_ni = g_oint_read; g_oint_read = 0;
@@ -3121,42 +3118,29 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     char pfx[128]; pfx[0] = 0;
     int is_static = 0, is_nil = 0;
     Buf ref; memset(&ref, 0, sizeof ref);
-    if (cs && cs->is_cmethod && cs->class_id >= 0) {
-      buf_printf(&ref, "civ_%s_%s", c->classes[cs->class_id].name, iv_c(nm + 1));  /* module/class-level ivar */
-      is_static = 1;
+    /* which object the read names is holder_ivar_side's answer: the class's
+       own static (a class method, a class or module body with the blocks
+       written there, main), nil when the class holds no such ivar; or a
+       field of the instance (an instance method, an instance_eval splice's
+       receiver), nil when neither the class nor an ancestor lays one out
+       (the struct has no field for it, and the class's own ivar of that
+       name is not the object's) */
+    HolderRef h;
+    if (!holder_of_node_slot(c, id, &h)) {
+      snprintf(pfx, sizeof pfx, "%s%s", g_self, g_self_deref);
+      buf_printf(&ref, "%siv_%s", pfx, iv_c(nm + 1));
     }
-    else if (cs && cs->class_id < 0 && g_ie_class_id >= 0) {
-      /* inside instance_eval block: access ivar via receiver pointer; one
-         the receiver's class never writes is nil, as on that object (the
-         struct has no field for it) */
-      int has = 0;
-      for (int k = g_ie_class_id; k >= 0 && !has; k = c->classes[k].parent)
-        has = comp_ivar_index(&c->classes[k], nm) >= 0;
-      if (!has) is_nil = 1;
-      else { snprintf(pfx, sizeof pfx, "%s%s", g_self, g_self_deref); buf_printf(&ref, "%siv_%s", pfx, iv_c(nm + 1)); }
-    }
-    else if (cs && cs->class_id < 0 && holder_cbody(c, id) >= 0 && ie_class_of(c, id) < 0) {
-      /* A block or a proc written in a class or module body (`%w(a b).each
-         do |m| ... lambda { @x } ... end`): its scope is no class's, but
-         the ivar is the body class's own, as the write emitters take it
-         (civ_class_of) and as a lambda written straight in the body reads
-         it. Taken for the top level's, the read named `self` where no
-         self exists, or an undeclared Toplevel slot. One the class never
-         names is nil, as on the class object. */
-      int cb = holder_cbody(c, id);
-      if (comp_ivar_index(&c->classes[cb], nm) >= 0) {
-        buf_printf(&ref, "civ_%s_%s", c->classes[cb].name, iv_c(nm + 1));
-        is_static = 1;
-      }
+    else if (h.cls_slot) {
+      if (h.idx >= 0) { holder_slot_buf(c, &h, &ref); is_static = 1; }
       else is_nil = 1;
     }
-    else if (cs && cs->class_id < 0) {
-      /* top-level method: ivar stored as file-scope global in Toplevel pseudo-class */
-      int tl = c->toplevel_class;
-      if (tl >= 0) { buf_printf(&ref, "civ_Toplevel_%s", iv_c(nm + 1)); is_static = 1; }
-      else { snprintf(pfx, sizeof pfx, "%s%s", g_self, g_self_deref); buf_printf(&ref, "%siv_%s", pfx, iv_c(nm + 1)); }
+    else {
+      int has = 0;
+      for (int k = h.cid; k >= 0 && !has; k = c->classes[k].parent)
+        has = comp_inst_ivar_index(&c->classes[k], nm) >= 0;
+      if (!has) is_nil = 1;
+      else { snprintf(pfx, sizeof pfx, "%s%s", g_self, g_self_deref); holder_slot_buf(c, &h, &ref); }
     }
-    else { snprintf(pfx, sizeof pfx, "%s%s", g_self, g_self_deref); buf_printf(&ref, "%siv_%s", pfx, iv_c(nm + 1)); }
     if (is_nil) {
       TyKind it = repr_of(c, id).as_ty;
       /* the read's form: its oint where the dispatcher takes one (the
@@ -4364,18 +4348,19 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* a class-level ivar (a class method's, a class body's, the top
          level's) is its civ_ slot, which starts nil and can be stored nil:
          assigned or not is its set flag, asked at run time */
-      Scope *ds = comp_scope_of(c, v);
-      int gcid = ds ? civ_class_of(c, v, ds) : -1;
-      if (gcid >= 0 && inm && comp_ivar_index(&c->classes[gcid], inm) >= 0 && civ_defined_probed(c, inm)) {
+      int gcid;
+      if (holder_ivar_side(c, v, &gcid) != IVS_CLASS) gcid = -1;
+      if (gcid >= 0 && inm && comp_class_ivar_index(&c->classes[gcid], inm) >= 0 && civ_defined_probed(c, inm)) {
         buf_printf(b, "(civ_%s_%s__set ? SPL(\"instance-variable\") : NULL)", c->classes[gcid].name, iv_c(inm + 1));
         return 1;
       }
       /* in an instance method, a slot nothing has set yet is not defined
          (ivar_set_kind): asked of self at run time */
+      Scope *ds = comp_scope_of(c, v);
       int dcid = ds && !ds->is_cmethod && ds->class_id >= 0 && g_ie_class_id < 0 ? ds->class_id : -1;
-      if (res && dcid >= 0 && comp_ivar_index(&c->classes[dcid], inm) >= 0 &&
+      if (res && dcid >= 0 && comp_inst_ivar_index(&c->classes[dcid], inm) >= 0 &&
           ((ivar_set_kind(c, dcid, inm) & 1) ||
-           poly_ivar_unset_marked(c, dcid, comp_ivar_index(&c->classes[dcid], inm)))) {
+           poly_ivar_unset_marked(c, dcid, comp_inst_ivar_index(&c->classes[dcid], inm)))) {
         char ex[200], tb[300];
         snprintf(ex, sizeof ex, "%s%siv_%s", g_self, g_self_deref, iv_c(inm + 1));
         buf_printf(b, "(%s ? SPL(\"instance-variable\") : NULL)", ivar_set_test(c, dcid, inm, ex, tb, sizeof tb));

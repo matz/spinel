@@ -52,6 +52,28 @@ n = Node.new
 n.won; n.lost; n.won; n.won
 p n.rate, n.wins, n.visits
 
+# a class-level ivar, a toplevel one, `||=` before `+=`, and a division by zero
+class Counter
+  @total = 0.0
+  def self.bump = (@total += 1)
+  def self.total = @total
+end
+Counter.bump; Counter.bump
+p Counter.total
+@t = 0.5
+def tick = (@t += 2)
+tick; tick
+p @t
+class Lazy
+  def go = ((@v ||= 0.25); @v += 3; @v)
+end
+p Lazy.new.go
+class Div
+  def initialize = (@d = 1.0)
+  def go = (@d /= 0; @d)
+end
+p Div.new.go
+
 # a shift on a Float slot raises NoMethodError, as in CRuby
 class Shift
   def initialize = (@s = 1.0)

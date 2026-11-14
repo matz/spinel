@@ -1265,6 +1265,18 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
   }
 
+  /* Hash[h] of one Hash: a new Hash of its pairs, where h.to_h (the
+     rewrite) answers h itself; the copy takes no default, as CRuby's */
+  if (recv >= 0 && sp_streq(name, "to_h") && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      nt_int(nt, id, "hash_brackets", 0) && ty_is_hash(comp_ntype(c, recv)) &&
+      ty_hash_cname(comp_ntype(c, recv)) && comp_ntype(c, id) == comp_ntype(c, recv)) {
+    const char *hn = ty_hash_cname(comp_ntype(c, recv));
+    int t = ++g_tmp;
+    buf_printf(b, "({ sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d); sp_%sHash_replace(_t%d, ",
+               hn, t, hn, t, hn, t);
+    emit_expr(c, recv, b); buf_puts(b, "); })");
+    return 1;
+  }
   /* freeze / frozen? on hashes use the GC-header frozen bit, and to_h is the
      hash itself: builtin-op rows of the same stage */
   if (recv >= 0 && ty_is_hash(comp_ntype(c, recv)) &&

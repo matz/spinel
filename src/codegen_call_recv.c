@@ -19480,6 +19480,18 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
   }
+  /* Hash[x] of a value known only at run time: Hash[]'s reading of its one
+     argument (a Hash copied, a list of pairs read laxly), where x.to_h, the
+     rewrite, answers a Hash itself */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "to_h") &&
+      nt_ref(nt, id, "block") < 0 && nt_int(nt, id, "hash_brackets", 0) &&
+      repr_of(c, id).kind == RK_BOXED) {
+    int ta = ++g_tmp;
+    buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, ", ta, ta, ta);
+    emit_expr(c, recv, b);
+    buf_printf(b, "); sp_hash_brackets_splat(sp_box_poly_array(_t%d)); })", ta);
+    return 1;
+  }
   /* nil-aware conversions on a boxed receiver (a nil local widens to poly).
      The call's settled type may predate the widening (the receiver inferred
      TY_NIL on an early fixpoint pass and typed a captured local concretely);

@@ -48,3 +48,9 @@ class NewsFeed < Feed
   def items = ["a", "b"]
 end
 p NewsFeed.new.titles(false)
+
+# A return in the raise's argument leaves before the raise runs.
+def source(x)
+  (raise([1].each { return x })).select { |d| d }
+end
+p source(nil).nil?

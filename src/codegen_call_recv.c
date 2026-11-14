@@ -17064,30 +17064,6 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     { *out = 1; return 1; }
   }
   if (emit_builtin_op_stage(c, id, recv, rt, name, 1, b)) { *out = 1; return 1; }
-  if (sp_streq(name, "strip"))      { buf_puts(b, "sp_box_str(sp_str_strip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"strip\")))"); { *out = 1; return 1; } }
-  /* `strip` had an arm and its one-sided siblings did not, which is the
-     shape of most of what follows: a String reaching the dispatch through a
-     poly slot answered NoMethodError naming String, for a method String
-     has. Each of these already works on a concrete receiver and the runtime
-     function is the one that arm calls. */
-  if (sp_streq(name, "lstrip"))     { buf_puts(b, "sp_box_str(sp_str_lstrip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"lstrip\")))"); { *out = 1; return 1; } }
-  if (sp_streq(name, "rstrip"))     { buf_puts(b, "sp_box_str(sp_str_rstrip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"rstrip\")))"); { *out = 1; return 1; } }
-  /* to_str is the implicit-conversion protocol, so a poly slot holding a
-     String has to answer it: sp_poly_recv_s raises for anything else, which
-     is what a non-String must do here. */
-  if (sp_streq(name, "to_str") && argc == 0) {
-    /* --share-strings: a String's to_str is the String itself, so a box
-       holding one answers that box, as to_s does (sp_poly_to_s_box). */
-    {
-      int t = ++g_tmp;
-      buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b);
-      buf_printf(b, "; const char *_s%d = sp_poly_recv_s(_t%d, \"to_str\"); "
-                    "(_t%d.tag == SP_TAG_STR && _t%d.v.s) || sp_poly_is_strbuf(_t%d) ? _t%d : sp_box_str(_s%d); })",
-                 t, t, t, t, t, t, t);
-      { *out = 1; return 1; }
-    }
-    buf_puts(b, "sp_box_str(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"to_str\"))"); { *out = 1; return 1; }
-  }
   if (sp_streq(name, "ascii_only?") && argc == 0) {
     buf_puts(b, "sp_box_bool(sp_str_ascii_only(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"ascii_only?\")))"); { *out = 1; return 1; }
   }
@@ -17098,21 +17074,6 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   if (sp_streq(name, "valid_encoding?") && argc == 0) {
     buf_puts(b, "sp_box_bool(sp_str_valid_encoding(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"valid_encoding?\")))"); { *out = 1; return 1; }
   }
-  /* encode is a no-op on the concrete arm -- every string here is UTF-8 --
-     so the poly one only has to unbox and re-box, and raise for a
-     non-String the way the others do. */
-  if (sp_streq(name, "encode") && argc == 0) {
-    buf_puts(b, "sp_box_str(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"encode\"))"); { *out = 1; return 1; }
-  }
-  if (sp_streq(name, "b") && argc == 0) {   /* a binary copy, as the String arm answers (#4441) */
-    buf_puts(b, "sp_box_str(sp_str_b(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"b\")))"); { *out = 1; return 1; }
-  }
-  if (sp_streq(name, "scrub") && argc == 0) {
-    buf_puts(b, "sp_box_str(sp_str_scrub(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"scrub\"), 0))"); { *out = 1; return 1; }
-  }
-  if (sp_streq(name, "dump") && argc == 0) {   /* the quoted form, as the String arm answers */
-    buf_puts(b, "sp_box_str(sp_str_dump(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"dump\")))"); { *out = 1; return 1; }
-  }
   if (sp_streq(name, "reverse"))    { buf_puts(b, "sp_poly_reverse("); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; } }
   /* `encoding` on a boxed String: the concrete arm has answered it since
      #723, and the poly dispatch had no entry -- so a String read out of a
@@ -17122,8 +17083,6 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     buf_puts(b, "sp_poly_encoding("); emit_expr(c, recv, b); buf_puts(b, ")");
     { *out = 1; return 1; }
   }
-  if (sp_streq(name, "chomp"))      { buf_puts(b, "sp_box_str(sp_str_chomp(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"chomp\")))"); { *out = 1; return 1; } }
-  if (sp_streq(name, "chop"))       { buf_puts(b, "sp_box_str(sp_str_chop(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"chop\")))"); { *out = 1; return 1; } }
   /* The one-String-argument transforms, which the table above covers only for
      the zero-argument shapes. A String arriving through a poly slot -- a
      Fiber#resume value, a container read -- had no arm for these and raised

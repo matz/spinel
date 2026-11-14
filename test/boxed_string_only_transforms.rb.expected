@@ -1,0 +1,25 @@
+[736, 7, "\" caf\\u00E9 \\n\"", 7, "café", "café \n", " café", " café ", " café ", 7]
+[659, 6, "\"ab\\xFFcd\\n\"", 6, "ab\xFFcd", "ab\xFFcd\n", "ab\xFFcd", "ab\xFFcd", "ab\xFFcd", 6]
+#<Encoding:BINARY (ASCII-8BIT)>
+8
+false
+" café \n"
+" caf\xC3\xA9 \n!"
+true
+#<Encoding:UTF-8>
+"grown"
+true
+b scrub dump encode strip lstrip rstrip chomp chop to_str 
+b scrub dump encode strip lstrip rstrip chomp chop to_str 
+b scrub dump encode strip lstrip rstrip chomp chop to_str 
+42
+:stripped
+" caf\xC3\xA9 \n"
+"café"
+"note-b!"
+4
+" caf\xC3\xA9 \n!"
+7
+false
+false
+true

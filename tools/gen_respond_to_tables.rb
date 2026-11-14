@@ -64,10 +64,12 @@ module GenRespondToTables
 
   # BuiltinRowGen::FAMILIES attributes every TY_POLY row to String (and
   # Symbol), same misattribution FALSE_POSITIVE["String"] above excludes
-  # "pack" from -- "dump"/"undump" are real String methods, not Symbol's
-  # (CRuby: :sym.respond_to?(:dump) is false), and "pack" isn't a String
-  # or Symbol method at all (it's Array#pack's row).
-  SYMBOL_FALSE_POSITIVE = %w[dump undump pack].freeze
+  # "pack" from -- "dump"/"undump" and the other boxed String transforms
+  # below are real String methods, not Symbol's (CRuby:
+  # :sym.respond_to?(:dump) is false), and "pack" isn't a String or Symbol
+  # method at all (it's Array#pack's row).
+  SYMBOL_FALSE_POSITIVE = %w[dump undump pack b scrub encode strip lstrip rstrip
+                             chomp chop to_str].freeze
 
   class GenError < StandardError; end
 

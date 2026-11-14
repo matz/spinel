@@ -20,7 +20,7 @@
  * Process.spawn(cmd, *args, opts) -> child pid
  * Process.waitpid2(pid) -> [pid, raw_status]
  *
- * opts is a PolyArray of 8 elements in this order:
+ * opts is a PolyArray with these slots (the last two are optional):
  *   [0] in_fd        - Integer fd (>= 0), -1 for false/nil/absent. An IO
  *                      was resolved to its fd by the codegen; a String
  *                      path was opened here, by sp_process_open_redirect,
@@ -37,9 +37,8 @@
  *                      its copies, and on every raise this file makes
  *                      before the fork.
  *                      A caller's IO or Integer fd is never in the mask.
- *   [8] env          - optional: the Hash a call gave before the command,
- *                      or nil. The codegen adds the slot only where the
- *                      first argument can be a Hash.
+ *   [8] env          - the Hash a call gave before the command, or nil.
+ *   [9] unsetenv_others - true clears inherited entries; false/nil keeps them.
  *
  * An IO value in opts[0..2] is resolved to its fd by the codegen (which
  * has access to sp_File_fileno); a String value reaches the runtime
@@ -237,14 +236,14 @@ static void sp_spawn_env_check(sp_RbVal env, int *owned) {
   }
 }
 
-/* The child's environment for a checked Hash, built as CRuby builds it: this
+/* The child's environment for a checked Hash (or nil): unless cleared, this
    process's environment less every name the Hash mentions, then each name
    whose value is a String. One block, the entries after the pointers; NULL
    when out of memory. */
-static char **sp_spawn_envp(sp_RbVal env) {
-  sp_int n = sp_json_len_fn(env);
+static char **sp_spawn_envp(sp_RbVal env, int unsetenv_others) {
+  sp_int n = env.tag == SP_TAG_NIL ? 0 : sp_json_len_fn(env);
   size_t nenv = 0, bytes = 0;
-  while (environ && environ[nenv]) nenv++;
+  while (!unsetenv_others && environ && environ[nenv]) nenv++;
   for (sp_int i = 0; i < n; i++) {
     sp_RbVal key, val;
     sp_json_hpair_fn(env, i, &key, &val);
@@ -291,7 +290,7 @@ int sp_system_prog_env_args(sp_RbVal env, const char *prog, int argc, const char
   if (env.tag == SP_TAG_NIL) return sp_system_prog_envp(prog, argc, argv, NULL);
   SP_GC_ROOT_RBVAL(env);
   sp_system_env_check(env);
-  char **envp = sp_spawn_envp(env);
+  char **envp = sp_spawn_envp(env, 0);
   if (!envp) sp_raise_cls("NoMemoryError", "out of memory");
   int ok = sp_system_prog_envp(prog, argc, argv, envp);
   free(envp);
@@ -366,6 +365,10 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     sp_process_spawn_fail(owned, "TypeError", "chdir must be a String");
 
   sp_RbVal env = opts->len > 8 ? opts->data[8] : sp_box_nil();
+  sp_RbVal clear = opts->len > 9 ? opts->data[9] : sp_box_nil();
+  if (clear.tag != SP_TAG_NIL && clear.tag != SP_TAG_BOOL)
+    sp_process_spawn_fail(owned, "ArgumentError", "expected true or false as unsetenv_others");
+  int unsetenv_others = clear.tag == SP_TAG_BOOL && clear.v.b;
   if (env.tag != SP_TAG_NIL) sp_spawn_env_check(env, owned);
 
   /* Resolve cmd + args into argv. */
@@ -449,10 +452,16 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
   }
 
   char **envp = NULL;
-  if (env.tag != SP_TAG_NIL && !(envp = sp_spawn_envp(env))) {
+  if ((env.tag != SP_TAG_NIL || unsetenv_others) && !(envp = sp_spawn_envp(env, unsetenv_others))) {
     free(argv);
     sp_process_spawn_fail(owned, "NoMemoryError", "out of memory");
   }
+#if !defined(_WIN32)
+  /* A missing child PATH still uses the parent's for command lookup. */
+  const char *search_path = unsetenv_others ? getenv("PATH") : NULL;
+  if (unsetenv_others) for (char **e = envp; *e; e++)
+    if (strncmp(*e, "PATH=", 5) == 0) search_path = NULL;
+#endif
 
 #if defined(_WIN32)
   /* posix_spawn, where there is no fork (lib/win32 answers it over
@@ -579,10 +588,23 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
       _exit(127);
     }
     close_redirect_srcs(in_fd, out_fd, err_fd);
-    /* execvp searches the PATH of the environment it passes on, as CRuby
-       searches the child's */
     if (envp) environ = envp;
-    execvp(prog, argv);
+    if (search_path && !strchr(prog, '/')) {
+      for (const char *p = search_path;;) {
+        const char *end = strchr(p, ':');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        char path[PATH_MAX];
+        if (len + strlen(prog) + 2 > sizeof path) errno = ENAMETOOLONG;
+        else {
+          snprintf(path, sizeof path, "%.*s/%s", (int)(len ? len : 1), len ? p : ".", prog);
+          execvp(path, argv);
+        }
+        if (errno != EACCES && errno != ENOENT && errno != ENOTDIR && errno != ENAMETOOLONG) break;
+        if (!end) { errno = ENOENT; break; }
+        p = end + 1;
+      }
+    }
+    else execvp(prog, argv);
     /* exec returned: failure. Send the errno to the parent. */
     int fail[2] = { errno, 0 };
     (void)!write(err_pipe[1], fail, sizeof fail);

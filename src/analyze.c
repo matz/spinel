@@ -26,6 +26,7 @@ int g_wrap_mode = 0;
 int g_no_bigint = 0;
 /* --exceptions=abort (src/main.c): the constructs that need a frame to catch an exception are refused */
 int g_exc_abort = 0;
+int g_target_wasi = 0;
 int g_gc_none = 0;
 int g_plan_check = 0;
 int g_arm_check = 0;

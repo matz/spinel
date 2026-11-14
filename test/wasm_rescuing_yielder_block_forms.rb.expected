@@ -1,0 +1,22 @@
+ensure
+:broke
+ensure
+[:done, 11]
+ensure
+:returned
+ensure
+42
+ensure
+[:rescued, "boom"]
+ensure
+[:done, Caller]
+[12, 21]
+:bad
+[12, :div, 3]
+7
+:quiet
+2
+:gave_up
+:no_block
+5
+:rescued

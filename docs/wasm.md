@@ -102,7 +102,15 @@ program and the runtime are compiled without the sjlj lowering and without
   top-level program with many `begin`/`rescue` blocks and hundreds of
   locals can exceed the cap in `main` (the engine says
   `function body size count exceeds limit`). A method is a function of
-  its own: moving such code into methods is the fix.
+  its own: moving such code into methods is the fix. For the same reason a
+  method of the program that yields and has a `rescue`, an `ensure` or a
+  rescue modifier takes its block as a proc on this target (`&blk`,
+  `blk.call`), where elsewhere it is copied into each caller with the
+  block: copied, the `setjmp` went into every caller, and a caller with a
+  long block grew with its calls times its live values. A method that
+  asks `block_given?`, or reads its block through a block-less `proc`,
+  `lambda` or `binding`, or forwards it with `...` or `&`, keeps the
+  copied form.
 
 ## The pieces
 

@@ -546,8 +546,10 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
       if (call_target(c, id, cls, nm, 0, NULL) >= 0) continue;
     }
     /* at the top level self is main, an Object; there and in a class
-       body, a top-level `def` of the name is the one the bare call means */
-    else if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) continue;
+       body, a top-level `def` of the name is the one the bare call means,
+       and in top-level code so is a module main extends (main's singleton
+       class, asked ahead of Object) */
+    else if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || comp_main_extend_defines(c, id, nm)) continue;
     int sn = nt_new_node(nt, "SelfNode");
     if (sn < 0) continue;
     comp_grow_node_arrays(c);

@@ -2333,6 +2333,7 @@ int elab_class_provisional(const Compiler *c, int k);         /* does class k wa
 void       comp_class_nested(Compiler *c, int k, int encl);   /* class k lies inside class encl: not the builtin its leaf names */
 int        comp_class_in_namespace(const Compiler *c, int k);   /* does class k lie inside a class or module other than Object, whose body is the top level's? */
 int comp_toplevel_class_make(Compiler *c);
+int comp_main_extend_defines(Compiler *c, int call_id, const char *name);
 int        comp_class_index(Compiler *c, const char *name);   /* -1 if none */
 /* The first-created class for a CORE_* slot, -1 if no class has been made
    or the slot is negative. */

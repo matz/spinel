@@ -4659,6 +4659,9 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	! awk '/^static.*sp_setting\(.*\) \{/,/^}/' "$$tmp/nfa.c" | grep -q 'sp_Money_to_i' || { echo "infer-test: FAIL (a native_func's twin answered what another call handed it, and a parsed setting's to_i dispatched to Money, #10303)"; ok=0; }; \
 	$(SPINEL) test/range_index_anything_receiver.rb -c --no-line-map -o "$$tmp/ria.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (range_index_anything_receiver: -c)"; ok=0; }; \
 	! grep -q 'sp_RbVal sp_Regs__lb_rb(' "$$tmp/ria.c" || { echo "infer-test: FAIL (a Range on a value from anywhere boxed every [] method's element read)"; ok=0; }; \
+	$(SPINEL) test/poly_cmp_typed_len_in_place.rb -c --no-line-map -o "$$tmp/pctl.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_cmp_typed_len_in_place: -c)"; ok=0; }; \
+	awk '/^[a-z].* sp_walk\(.*\{$$/,/^}/' "$$tmp/pctl.c" | grep -q '= lv_pc;$$' && { echo "infer-test: FAIL (a boxed comparison against a typed Array's size held its receiver in the frame on every pass)"; ok=0; }; \
+	[ "$$(awk '/^[a-z].* sp_ordered\(.*\{$$/,/^}/' "$$tmp/pctl.c" | grep -cE '_gcf\.v\[[0-9]+\] = lv_[xy];')" -ge 2 ] || { echo "infer-test: FAIL (a boxed comparison whose argument writes its receiver no longer reads the receiver first)"; ok=0; }; \
 	$(SPINEL) test/poly_reader_box_key.rb -c --no-line-map -o "$$tmp/prk.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_reader_box_key: -c)"; ok=0; }; \
 	grep -q 'sp_PolyPolyHash_get(lv_env, ({' "$$tmp/prk.c" || { echo "infer-test: FAIL (a boxed receiver's String reader was unboxed and boxed again as a boxed Hash key, #10302)"; ok=0; }; \
 	$(SPINEL) test/ivar_table_reader_name_elsewhere.rb -c --no-line-map -o "$$tmp/itn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_table_reader_name_elsewhere: -c)"; ok=0; }; \

@@ -4,6 +4,7 @@
 #include "order_plan.h"
 #include "implicit_calls.h"
 #include "codegen_call_arms.h"
+#include "share.h"
 #include <limits.h>
 
 /* See order_plan.h. Operands that all answer yes need no ordering and no
@@ -20,6 +21,21 @@ static int order_typed_index(Compiler *c, int id) {
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   return nm && is_aref_name(nm) && recv >= 0 && ac == 1 && nt_ref(nt, id, "block") < 0 &&
          ty_is_array(comp_ntype(c, recv)) && comp_ntype(c, av[0]) == TY_INT;
+}
+/* ...or its count (`size`, `length`, `empty?`), or a typed Hash's: the
+   builtin reads a field, so where the program gives Array or Hash no method
+   of the name (a reopen, or a module put ahead of it) the read runs no code,
+   as the index read does. A String's is left out: a shared String slot's
+   read can be a copy. */
+static int order_typed_len(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (!nm || recv < 0 || nt_ref(nt, id, "arguments") >= 0 || nt_ref(nt, id, "block") >= 0) return 0;
+  if (!sp_streq(nm, "size") && !sp_streq(nm, "length") && !sp_streq(nm, "empty?")) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  const char *cls = ty_is_array(rt) || ty_is_ptr_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash" : NULL;
+  return cls && !share_builtin_overridden(c, cls, nm);
 }
 int order_pure_walk(Compiler *c, int id, const OrderWalk *w) {
   if (id < 0 || (w->ran && w->ran(id))) return 1;
@@ -51,7 +67,7 @@ static int pure_walk_node(Compiler *c, int id, const OrderWalk *w) {
       break;
     case NK_CallNode: {
       int alloc = 0;
-      if (!order_typed_index(c, id) && !scalar_op_runs_no_code(c, id) &&
+      if (!order_typed_index(c, id) && !order_typed_len(c, id) && !scalar_op_runs_no_code(c, id) &&
           !(call_is_field_read(c, id, w->alloc ? &alloc : NULL) && !alloc))
         return 0;
       break;
@@ -203,7 +219,7 @@ static int call_is_poly_field_read(Compiler *c, int id) {
    poly Array of Arrays). */
 int order_call_runs_no_code(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (scalar_op_runs_no_code(c, id) || order_typed_index(c, id)) return 1;
+  if (scalar_op_runs_no_code(c, id) || order_typed_index(c, id) || order_typed_len(c, id)) return 1;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   int a = nt_ref(nt, id, "arguments"); int ac = 0;

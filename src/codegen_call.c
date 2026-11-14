@@ -3846,9 +3846,16 @@ int poly_binop_recv_temp(Compiler *c, int recv, int arg, Buf *b, int *stmt_expr)
    argument allocates without running Ruby (an interpolation): that
    allocation collected it, which emit_str_eq_ordered's rooted temp prevents
    for the typed String twin. `lead` is text the call takes ahead of the two
-   operands ("" for none). */
+   operands ("" for none).
+
+   An argument whose calls run none of the program's code and store nothing
+   (arg_runs_nothing, the operand-order record's pure reads: `pc <
+   cmds.size` on a typed Array) cannot overwrite the receiver, and is left
+   in place: the hoist made `while pc < cmds.size`, pc boxed, store pc into
+   the frame and read it back on every pass. */
+static int arg_runs_nothing(Compiler *c, int n);
 void emit_poly_call2_ordered(Compiler *c, const char *fn, const char *lead, int recv, int arg, Buf *b) {
-  if (node_may_run_ruby(c->nt, arg) ||
+  if ((node_may_run_ruby(c->nt, arg) && !arg_runs_nothing(c, arg)) ||
       (operand_may_allocate(c, recv) && operand_may_allocate(c, arg))) {
     int se = 0;
     int t = poly_binop_recv_temp(c, recv, arg, b, &se);

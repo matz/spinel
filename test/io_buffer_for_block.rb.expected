@@ -17,3 +17,14 @@ Buffer is not writable!
 90
 :returned
 [97, 90, 99, 33]
+[true, "b", 98]
+"Z"
+"aYc"
+false
+IO::Buffer::InvalidatedError
+[true, "abc"]
+false
+IO::Buffer::InvalidatedError
+[true, "b"]
+IO::Buffer::AccessError
+[true, "b"]

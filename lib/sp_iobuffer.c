@@ -52,7 +52,8 @@ static int iob_slice_invalid(sp_IOBuffer *b);
    CRuby validates them as reads (iob_io_span). The typed setters split it
    (iob_value_wptr) so that a write looks at the slice once. */
 static void iob_readonly(sp_IOBuffer *b) {
-  if (b->flags & SP_IOB_READONLY) sp_raise_cls("IO::Buffer::AccessError", "Buffer is not writable!");
+  if ((b->flags & SP_IOB_READONLY) || (b->source && sp_gc_is_frozen(b->source->borrowed_string)))
+    sp_raise_cls("IO::Buffer::AccessError", "Buffer is not writable!");
 }
 static void iob_string_changed(sp_IOBuffer *b) {
   if (b->source && b->source->borrowed_string)
@@ -102,20 +103,18 @@ static const char *iob_val_name(sp_RbVal v) {
 /* ---- base pointer + bounds ---- */
 
 static uint8_t *iob_base(sp_IOBuffer *b) {
-  if (b->source) return b->source->data ? b->source->data + b->off : NULL;
-  return b->data;
+  return b->source ? sp_iob_slice_base(b) : b->data;
 }
 
-/* A slice whose root was freed, transferred, or shrunk below the view's
-   range must not be read through: CRuby raises InvalidatedError there, and
-   the stale base would be NULL or past the live allocation. */
+/* A slice can lose its backing bytes when its source changes. */
 static int iob_slice_invalid(sp_IOBuffer *b) {
-  return b->source && (!b->source->data || b->off > b->source->size - b->size);
+  return b->source && !sp_iob_slice_base(b);
 }
 static uint8_t *iob_ptr(sp_IOBuffer *b) {
-  if (iob_slice_invalid(b))
+  uint8_t *base = iob_base(b);
+  if (b->source && !base)
     sp_raise_cls("IO::Buffer::InvalidatedError", "Buffer has been invalidated!");
-  return iob_base(b);
+  return base;
 }
 
 /* Overflow-safe: `off + len > size` wraps for large operands, so compare
@@ -341,13 +340,13 @@ static void iob_scan(void *p) {
    a buffer weighed its header alone, so a program churning large buffers
    grew by gigabytes without a collection. */
 static size_t iob_owned(sp_IOBuffer *b) {
-  return b->data && !b->map_base && !b->borrowed_string ? (size_t)b->size : 0;
+  return b->data && !b->map_base ? (size_t)b->size : 0;
 }
 /* Give the allocation back: munmap for a mapped file, free otherwise. */
 static void iob_release(sp_IOBuffer *b) {
   sp_gc_payload_resize(b, iob_owned(b), 0);
   if (b->map_base) { munmap(b->map_base, b->map_len); b->map_base = NULL; b->map_len = 0; }
-  else if (!b->borrowed_string) free(b->data);
+  else free(b->data);
   b->data = NULL;
 }
 void sp_IOBuffer_fin(void *p) {
@@ -413,13 +412,12 @@ sp_IOBuffer *sp_IOBuffer_become_for(sp_IOBuffer *b, const char *s) {
   return b;
 }
 
-/* The private owner lives through the entire block, even if the yielded
-   buffer is freed or transferred. Derived views resolve through it and
-   become invalid when the block ends. */
+/* The private root releases the temporary String lock at block exit.
+   Slices and transfers keep the root, and through it the String, alive. */
 sp_IOBuffer *sp_IOBuffer_borrow_string(sp_IOBuffer *owner, const char *s) {
   SP_GC_ROOT(owner);
   SP_GC_ROOT_STR(s);
-  if (owner->data || owner->source) iob_arg("Borrow owner is already in use");
+  if (owner->data || owner->source || owner->borrowed_string) iob_arg("Borrow owner is already in use");
   sp_String *string = sp_String_new_shared(s);
   SP_GC_ROOT(string);
   if (string->temporarily_locked) sp_raise_locked_str();
@@ -428,10 +426,9 @@ sp_IOBuffer *sp_IOBuffer_borrow_string(sp_IOBuffer *owner, const char *s) {
   if (!readonly) string->temporarily_locked = 1;
   sp_gc_wb(owner);
   owner->borrowed_string = string;
-  owner->data = (uint8_t *)string->data;
-  owner->size = string->len;
+  owner->string_capacity = string->cap;
   view->source = owner;
-  view->size = owner->size;
+  view->size = string->len;
   view->flags = SP_IOB_EXTERNAL | (readonly ? SP_IOB_READONLY : 0);
   return view;
 }
@@ -443,9 +440,6 @@ sp_IOBuffer *sp_IOBuffer_end_borrow(sp_IOBuffer *owner) {
     sp_fd_publish(string);
     string->temporarily_locked = 0;
   }
-  owner->borrowed_string = NULL;
-  owner->data = NULL;
-  owner->size = 0;
   return owner;
 }
 
@@ -522,7 +516,8 @@ static const char *iob_get_string(sp_IOBuffer *b, int64_t off, int64_t len, int 
   if (len < 0) iob_arg("Length can't be negative!");
   if (off > b->size || len > b->size - off) iob_arg("Specified offset+length is bigger than the buffer size!");
   char *r = sp_str_alloc_raw((size_t)len + 1);
-  if (len > 0) memcpy(r, iob_ptr(b) + off, (size_t)len);
+  const uint8_t *base = iob_ptr(b);
+  if (len > 0) memcpy(r, base + off, (size_t)len);
   r[len] = '\0';
   sp_str_set_len(r, (size_t)len);
   sp_str_mark_binary(r);
@@ -805,9 +800,11 @@ const char *sp_IOBuffer_hexdump2(sp_IOBuffer *b, sp_int off, sp_int len) { retur
 const char *sp_IOBuffer_hexdump3(sp_IOBuffer *b, sp_int off, sp_int len, sp_int width) { return iob_hexdump(b, off, len, width, 1); }
 
 static size_t iob_header(sp_IOBuffer *b, char *out, size_t cap) {
-  uint8_t *base = iob_base(b);
+  /* Show a slice's address even when a buffer resize put it out of range. */
+  uintptr_t base = b->source && b->source->data
+      ? (uintptr_t)b->source->data + (uintptr_t)b->off : (uintptr_t)iob_base(b);
   size_t n = (size_t)snprintf(out, cap, "#<IO::Buffer 0x%016llx+%lld",
-                              (unsigned long long)(uintptr_t)base, (long long)b->size);
+                              (unsigned long long)base, (long long)b->size);
   static const struct { uint32_t bit; const char *name; } FLAGS[] = {
     {0, "NULL"}, {SP_IOB_EXTERNAL, "EXTERNAL"}, {SP_IOB_INTERNAL, "INTERNAL"},
     {SP_IOB_MAPPED, "MAPPED"}, {SP_IOB_SHARED, "SHARED"}, {SP_IOB_LOCKED, "LOCKED"},
@@ -962,10 +959,13 @@ sp_IOBuffer *sp_IOBuffer_unlock(sp_IOBuffer *b) {
    a writing slot, "Buffer has been invalidated!" in :buffer_in), and
    AccessError for a read-only buffer in a slot other than :buffer_in. A
    nil (a buffer-typed local that holds none) is NULL, as it is for :ptr. */
-void *sp_IOBuffer_ffi_base(sp_IOBuffer *b, sp_int writing) {
+void *sp_IOBuffer_ffi_base(sp_IOBuffer *b, sp_int writing, void **string_data) {
   if (!b) return NULL;
   if (writing) iob_writable(b);
   uint8_t *p = iob_ptr(b);          /* an invalidated slice raises first */
+  /* Keep this allocation alive even if a callback moves the String.
+     The caller's raw GC root also marks retired String allocations. */
+  if (b->source && b->source->borrowed_string) *string_data = p - b->off;
   return b->size > 0 ? p : NULL;    /* a zero-size view is a null buffer too */
 }
 /* Held across a `blocking: true` call, during which other threads run: the
@@ -994,9 +994,9 @@ void sp_IOBuffer_ffi_release_v(sp_RbVal v, sp_int cls_id, sp_int m) {
 }
 /* a boxed pointer argument: an IO::Buffer (class `cls_id`) gives its base,
    anything else its raw pointer as before */
-void *sp_IOBuffer_ffi_ptr(sp_RbVal v, sp_int cls_id, sp_int writing) {
+void *sp_IOBuffer_ffi_ptr(sp_RbVal v, sp_int cls_id, sp_int writing, void **string_data) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == cls_id && v.v.p)
-    return sp_IOBuffer_ffi_base((sp_IOBuffer *)v.v.p, writing);
+    return sp_IOBuffer_ffi_base((sp_IOBuffer *)v.v.p, writing, string_data);
   return v.v.p;
 }
 
@@ -1032,7 +1032,7 @@ static uint8_t *iob_io_span(sp_IOBuffer *b, sp_int *length, sp_int offset, int w
      only bounds the check, so `b.read(io, 5)` into a 16-byte buffer reads
      16, and `b.write(io, 5)` from an 11-byte one writes 11 */
   *length = b->size - offset;
-  if (writing && (b->flags & SP_IOB_READONLY)) sp_raise_cls("IO::Buffer::AccessError", "Buffer is not writable!");
+  if (writing) iob_readonly(b);
   if (!base) sp_raise_cls("IO::Buffer::AccessError", "Buffer is not allocated!");
   if (writing) iob_string_changed(b);
   return base + offset;
@@ -1076,7 +1076,11 @@ sp_int sp_IOBuffer_write_io(sp_IOBuffer *b, sp_RbVal io, sp_int length, sp_int o
     ssize_t n = write(fd, at, (size_t)length);
     if (n >= 0) return (sp_int)n;
     if (errno == EINTR) continue;
-    if (errno == EAGAIN || errno == EWOULDBLOCK) { sp_io_wait_writable(f); continue; }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      sp_io_wait_writable(f);
+      at = iob_io_span(b, &length, offset, 0);
+      continue;
+    }
     return -(sp_int)errno;
   }
 }

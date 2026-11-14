@@ -2570,6 +2570,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           int ptr_slot = asi && sp_streq(asi->c_type, "void *");
           int iob_writing = !sp_streq(spec, "buffer_in");
           if (ptr_slot && iob_cls >= 0 && (at == ty_object(iob_cls) || (ar.kind == RK_BOXED && use_temps))) {
+            buf_printf(&base_buf, "void * _bs%d_%d = NULL; SP_GC_ROOT(_bs%d_%d); ", tb, ai, tb, ai);
             if (ar.kind == RK_BOXED) {
               buf_printf(&pre_buf, "sp_RbVal _bk%d_%d = ", tb, ai);
               emit_expr(c, argv[ai], &pre_buf);
@@ -2582,8 +2583,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
                                    "sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into a C pointer\", "
                                    "sp_poly_class_name(_bk%d_%d))); ",
                          tb, ai, tb, ai, tb, ai, tb, ai, tb, ai);
-              buf_printf(&base_buf, "void * _b%d_%d = sp_IOBuffer_ffi_ptr(_bk%d_%d, %d, %d); ",
-                         tb, ai, tb, ai, iob_cls, iob_writing);
+              buf_printf(&base_buf, "void * _b%d_%d = sp_IOBuffer_ffi_ptr(_bk%d_%d, %d, %d, &_bs%d_%d); ",
+                         tb, ai, tb, ai, iob_cls, iob_writing, tb, ai);
               buf_printf(&hold_buf, "sp_int _bh%d_%d = sp_IOBuffer_ffi_hold_v(_bk%d_%d, %d); ", tb, ai, tb, ai, iob_cls);
               buf_printf(&rel_buf, "sp_IOBuffer_ffi_release_v(_bk%d_%d, %d, _bh%d_%d); ", tb, ai, iob_cls, tb, ai);
             }
@@ -2591,8 +2592,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
               buf_printf(&pre_buf, "sp_IOBuffer *_bk%d_%d = ", tb, ai);
               emit_expr(c, argv[ai], &pre_buf);
               buf_printf(&pre_buf, "; SP_GC_ROOT(_bk%d_%d); ", tb, ai);
-              buf_printf(&base_buf, "void * _b%d_%d = sp_IOBuffer_ffi_base(_bk%d_%d, %d); ",
-                         tb, ai, tb, ai, iob_writing);
+              buf_printf(&base_buf, "void * _b%d_%d = sp_IOBuffer_ffi_base(_bk%d_%d, %d, &_bs%d_%d); ",
+                         tb, ai, tb, ai, iob_writing, tb, ai);
               buf_printf(&hold_buf, "sp_int _bh%d_%d = sp_IOBuffer_ffi_hold(_bk%d_%d); ", tb, ai, tb, ai);
               buf_printf(&rel_buf, "sp_IOBuffer_ffi_release(_bk%d_%d, _bh%d_%d); ", tb, ai, tb, ai);
             }

@@ -75,3 +75,58 @@ p [answer, binary.bytes]
 p leave_buffer(binary)
 binary << "!"
 p binary.bytes
+
+# Slices and transfers retain the String, even after the temporary lock ends.
+def first_byte(buffer)
+  i = 0
+  value = 0
+  while i < 1
+    value = buffer.get_value(:U8, i)
+    i += 1
+  end
+  value
+end
+
+bytes = +"abc"
+slice = IO::Buffer.for(bytes) { |buffer| buffer.slice(1, 1) }
+p [slice.valid?, slice.get_string, first_byte(slice)]
+bytes.setbyte(1, 90)
+p slice.get_string
+slice.set_value(:U8, 0, 89)
+p bytes
+bytes.replace("a")
+p slice.valid?
+begin
+  first_byte(slice)
+rescue IO::Buffer::InvalidatedError => error
+  p error.class
+end
+
+bytes = +"abc"
+transferred = IO::Buffer.for(bytes) { |buffer| buffer.transfer }
+p [transferred.valid?, transferred.get_string]
+bytes << "x" * 8192
+p transferred.valid?
+begin
+  transferred.get_value(:U8, 0)
+rescue IO::Buffer::InvalidatedError => error
+  p error.class
+end
+
+bytes = +"abc"
+slice = IO::Buffer.for(bytes) { |buffer| buffer.slice(1, 1) }
+bytes.freeze
+p [slice.valid?, slice.get_string]
+begin
+  slice.set_value(:U8, 0, 90)
+rescue IO::Buffer::AccessError => error
+  p error.class
+end
+
+def slice_of_temporary
+  IO::Buffer.for(+"abc") { |buffer| buffer.slice(1, 1) }
+end
+
+slice = slice_of_temporary
+GC.start
+p [slice.valid?, slice.get_string]

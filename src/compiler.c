@@ -529,6 +529,7 @@ void comp_free(Compiler *c) {
   builtin_given_free(c);
   ic_free(c);
   cplan_to_ary_entries_free(c);
+  qc_const_names_free(c);
   yvt_free(c);
   free(c->bsl_gen);
   free(c->bsl_val);

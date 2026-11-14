@@ -6424,16 +6424,34 @@ static void qc_keep_orig_name(const NodeTable *nt, int node) {
 
 /* The qualified names qc_value_collisions gives a constant written under a
    module path */
-static char **qc_const_quals; static int qc_nconst_quals;
-/* Was some constant of this leaf name given one? */
-int qc_leaf_qualified(const char *leaf) {
-  size_t ll = strlen(leaf);
-  for (int i = 0; i < qc_nconst_quals; i++) {
-    size_t l = strlen(qc_const_quals[i]);
-    if (l > ll + 2 && sp_streq(qc_const_quals[i] + l - ll, leaf) && !strncmp(qc_const_quals[i] + l - ll - 2, "__", 2))
-      return 1;
+/* The qualified names themselves, and each tail after a "__" of one, held
+   by the Compiler (Compiler.qc_consts) for the question below, which the
+   readers of constants ask after the class pass. Freed with it. */
+static struct QcConstNames *qc_const_names(Compiler *c) {
+  if (!c->qc_consts) {
+    c->qc_consts = calloc(1, sizeof *c->qc_consts);
+    if (!c->qc_consts) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
-  return 0;
+  return c->qc_consts;
+}
+/* Was some constant of this leaf name given one? A name is "Mod__Leaf": the
+   leaf asked about is any tail after a "__" that something precedes. It is
+   asked of each constant set in the program, so it looks a set up rather
+   than scanning every name given (test/scale/const_collisions.sh). */
+int qc_leaf_qualified(Compiler *c, const char *leaf) { return c->qc_consts && anh_has(&c->qc_consts->leaves, leaf); }
+static void qc_const_qual_add(Compiler *c, const char *qn) {
+  struct QcConstNames *q = qc_const_names(c);
+  anh_add(&q->quals, qn);
+  for (const char *p = qn + 1; p[0] && p[1] && p[2]; p++)
+    if (p[0] == '_' && p[1] == '_' && !anh_has(&q->leaves, p + 2)) anh_add(&q->leaves, p + 2);
+}
+void qc_const_names_free(Compiler *c) {
+  if (!c->qc_consts) return;
+  for (int i = 0; i < c->qc_consts->quals.n; i++) free((char *)c->qc_consts->quals.key[i]);
+  anh_free(&c->qc_consts->quals);
+  anh_free(&c->qc_consts->leaves);
+  free(c->qc_consts);
+  c->qc_consts = NULL;
 }
 
 /* Writes ordered by name, then by module path: the writes of one name are
@@ -6598,8 +6616,9 @@ static void qc_value_collisions(Compiler *c) {
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      qc_const_quals = realloc(qc_const_quals, sizeof(char *) * (size_t)(qc_nconst_quals + 1));
-      qc_const_quals[qc_nconst_quals++] = strdup(qn);
+      char *own = strdup(qn);
+      if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      qc_const_qual_add(c, own);
     }
   }
   qc_free_headers();

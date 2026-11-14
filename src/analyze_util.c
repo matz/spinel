@@ -2377,7 +2377,7 @@ int const_set_slot(Compiler *c, int call, const char *n, const char **key) {
     *key = comp_const(c, n) ? n : NULL;
   } else if (cn) {
     *key = const_value_owned_key(c, ci, n);
-  } else if (qc_leaf_qualified(n)) {
+  } else if (qc_leaf_qualified(c, n)) {
     return CS_AMBIG;
   } else {
     *key = comp_const(c, n) ? n : NULL;
@@ -2442,7 +2442,7 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
   }
   LocalVar *cv = comp_const(c, cgn);
   /* the common case, one constant of that leaf and no class: no body scan */
-  if (cv && cv->type != TY_UNKNOWN && !qc_leaf_qualified(cgn) && !class_leaf_any(c, cgn) &&
+  if (cv && cv->type != TY_UNKNOWN && !qc_leaf_qualified(c, cgn) && !class_leaf_any(c, cgn) &&
       cg_flat_seen(c, rk, cgn)) return cgn;
   /* R's ancestors in CRuby's order: the modules R prepends and includes
      come before its superclass. Past them (Object), the superclass walk. */

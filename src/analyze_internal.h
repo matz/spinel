@@ -1178,6 +1178,9 @@ int anh_find(const ANameHash *st, const char *nm);   /* insertion index, or -1 *
 void anh_add(ANameHash *st, const char *nm);
 void anh_free(ANameHash *st);
 void anh_copy(ANameHash *dst, const ANameHash *src);   /* dst, empty, takes src's names (keys shared) */
+/* The qualified names the class pass gave constants written under a module
+   path ("Mod__LIMIT"), and each tail after a "__": see qc_leaf_qualified. */
+struct QcConstNames { ANameHash quals, leaves; };
 void cr_class_only_names(Compiler *c, ANameHash *out);   /* the names only plain classes' methods hold */
 /* The block-passing call sites, and the supers, of the node table, indexed
    for yield_value_type and its kin (yvt_build, analyze_util.c): built once

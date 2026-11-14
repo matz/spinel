@@ -9334,6 +9334,12 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (aci >= 0 && c->classes[aci].naliases > 0 && !cplan_builtin_call(c, id)) {
       int bi = 0;
       const char *rn = comp_resolve_alias_ex(c, aci, name, NULL, &bi);
+      /* (an alias of the program's own defs made more than once, one of
+         them maybe under a condition: which target it names is the
+         record's to say where the call runs, so the call keeps its name
+         and asks the alias's versions, call_target's entry) */
+      ElabVersion avs[2];
+      if (rn && !bi && !sp_streq(rn, name) && elab_chain_versions(c, aci, 0, name, avs, 2) >= 2) rn = NULL;
       if (rn && !sp_streq(rn, name)) {
         if (!an_pure_reads) nt_node_set_str((NodeTable *)nt, id, "name", rn);
         name = an_pure_reads ? rn : nt_str(nt, id, "name");

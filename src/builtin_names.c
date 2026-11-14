@@ -256,6 +256,10 @@ int is_name_error_class(const char *n) {
 int is_no_method_error_class(const char *n) {
   return n && sp_streq(n, "NoMethodError");
 }
+/* ...NameError itself, which a variable-like call that finds no method raises */
+int is_name_error_root_class(const char *n) {
+  return n && sp_streq(n, "NameError");
+}
 
 int is_set_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "intersection") || sp_streq(n, "|") || sp_streq(n, "union") ||
@@ -1618,6 +1622,8 @@ int is_file_load_name(const char *n) {
 int is_load_error_catch_name(const char *n) {
   return n && (sp_streq(n, "LoadError") || sp_streq(n, "ScriptError") || sp_streq(n, "Exception"));
 }
+/* ...LoadError alone, the one builtin class a `rescue LoadError` catches */
+int is_load_error_name(const char *n) { return n && sp_streq(n, "LoadError"); }
 /* ...and the ScriptError family: ScriptError and the classes below it */
 int is_script_error_name(const char *n) {
   return n && (sp_streq(n, "ScriptError") || sp_streq(n, "LoadError") || sp_streq(n, "NotImplementedError") ||

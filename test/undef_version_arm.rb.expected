@@ -1,0 +1,30 @@
+NameError
+NoMethodError
+NoMethodError
+NoMethodError
+NameError
+NameError
+"main.f2"
+"main.f2"
+NoMethodError
+NameError
+NoMethodError
+NoMethodError
+NameError
+1
+2
+2
+NoMethodError
+"main.k"
+NameError
+NameError
+"main.r2"
+[:q, [1], "undefined method 'q' for main"]
+[:m, [5], "undefined method 'm' for an instance of E"]
+false
+NoMethodError
+false
+NoMethodError
+NameError
+NoMethodError
+NoMethodError

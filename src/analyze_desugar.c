@@ -16238,41 +16238,47 @@ static int class_defines_initialize(const NodeTable *nt, int cls) {
   return 0;
 }
 
-/* Does the program give the builtin NoMethodError an initialize of its own: a
-   `class NoMethodError` at the top level of a file, or a `class ::NoMethodError`
-   at any nesting (a root-anchored path, as desugar_root_scoped_constants
-   leaves it)? CRuby never runs it for the error a failed call raises. (A
-   NoMethodError a module defines is not the builtin: the arm raises
-   ::NoMethodError, which it does not touch.) Asked of the tree: the load
-   record that holds the fact is made after this pass has run. */
-static int nomethod_own_init(Compiler *c) {
-  if (c->nomethod_init) return c->nomethod_init == 2;
+/* Does the program give the builtin NoMethodError (with vcall, NameError)
+   an initialize of its own: a `class NoMethodError` at the top level of a
+   file, or a `class ::NoMethodError` at any nesting (a root-anchored path,
+   as desugar_root_scoped_constants leaves it)? CRuby never runs it for the
+   error a failed call raises. (A NoMethodError a module defines is not the
+   builtin: the arm raises ::NoMethodError, which it does not touch.) Asked
+   of the tree: the load record that holds the fact is made after this pass
+   has run. */
+static int nomethod_own_init(Compiler *c, int vcall) {
+  int *memo = vcall ? &c->nameerror_init : &c->nomethod_init;
+  if (*memo) return *memo == 2;
   const NodeTable *nt = c->nt;
-  c->nomethod_init = 1;
-  for (int id = 0; id < nt->count && c->nomethod_init == 1; id++) {
+  int (*is_cls)(const char *) = vcall ? is_name_error_root_class : is_no_method_error_class;
+  *memo = 1;
+  for (int id = 0; id < nt->count && *memo == 1; id++) {
     int cp = nt_kind(nt, id) == NK_ClassNode ? nt_ref(nt, id, "constant_path") : -1;
     const char *cn = cp >= 0 ? key_name(c, cp) : NULL;
-    if (!cn || !is_no_method_error_class(cn)) continue;
+    if (!cn || !is_cls(cn)) continue;
     int root = nt_kind(nt, cp) == NK_ConstantPathNode ? nt_ref(nt, cp, "parent") < 0 : nt_int(nt, cp, "root_anchored", 0);
-    if (root && class_defines_initialize(nt, id)) c->nomethod_init = 2;
+    if (root && class_defines_initialize(nt, id)) *memo = 2;
   }
-  for (int r = 0; r < nt_nroots(nt) && c->nomethod_init == 1; r++) {
+  for (int r = 0; r < nt_nroots(nt) && *memo == 1; r++) {
     int tn = 0; const int *top = nt_arr(nt, prog_root_stmts(c, r), "body", &tn);
     for (int t = 0; t < tn; t++) {
       int cp = nt_kind(nt, top[t]) == NK_ClassNode ? nt_ref(nt, top[t], "constant_path") : -1;
       const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
-      if (cn && is_no_method_error_class(cn) && class_defines_initialize(nt, top[t])) c->nomethod_init = 2;
+      if (cn && is_cls(cn) && class_defines_initialize(nt, top[t])) *memo = 2;
     }
   }
-  return c->nomethod_init == 2;
+  return *memo == 2;
 }
 
-static int disp_raise_with(Compiler *c, const char *name, int em, int ar) {
+/* (vcall: `raise NameError.new(msg, :name, receiver: self)`, which takes
+   no arguments: a variable-like call has none) */
+static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vcall) {
   NodeTable *nt = (NodeTable *)c->nt;
+  const char *cls = vcall ? "NameError" : "NoMethodError";
   char pn[32];
-  if (nomethod_own_init(c)) {   /* (raise NoMethodError, msg: the program's initialize stays what it was) */
+  if (nomethod_own_init(c, vcall)) {   /* (raise NoMethodError, msg: the program's initialize stays what it was) */
     int rc = nt_new_node(nt, "ConstantReadNode"), ra[2] = { rc, em }, rargs = nt_new_node(nt, "ArgumentsNode");
-    nt_node_set_str(nt, rc, "name", "NoMethodError");
+    nt_node_set_str(nt, rc, "name", cls);
     nt_node_set_arr(nt, rargs, "arguments", ra, 2);
     int raise = fwd_new_call(nt, -1, "raise", -1);
     nt_node_set_ref(nt, raise, "arguments", rargs);
@@ -16280,7 +16286,7 @@ static int disp_raise_with(Compiler *c, const char *name, int em, int ar) {
   }
   /* ::NoMethodError, spelled as desugar_root_scoped_constants left it for the
      program's own: a path where a class or module body defines the name */
-  int shadowed = rsc_shadowed(c->rsc_names, c->n_rsc_names, "NoMethodError");
+  int shadowed = rsc_shadowed(c->rsc_names, c->n_rsc_names, cls);
   int ec = nt_new_node(nt, shadowed ? "ConstantPathNode" : "ConstantReadNode"), sym = nt_new_node(nt, "SymbolNode"), args = nt_new_node(nt, "ArrayNode");
   int key = nt_new_node(nt, "SymbolNode"), as = nt_new_node(nt, "AssocNode"), kh = nt_new_node(nt, "KeywordHashNode");
   int ne = ar < 0 ? 2 : ar, ev[ne > 0 ? ne : 1];
@@ -16294,7 +16300,7 @@ static int disp_raise_with(Compiler *c, const char *name, int em, int ar) {
     nt_node_set_arr(nt, ev[1], "elements", &rs, 1);
   }
   nt_node_set_arr(nt, args, "elements", ev, ne);
-  nt_node_set_str(nt, ec, "name", "NoMethodError");
+  nt_node_set_str(nt, ec, "name", cls);
   if (shadowed) nt_node_set_ref(nt, ec, "parent", -1);   /* ::NoMethodError, which a nested definition of the name must not capture */
   nt_node_set_str(nt, sym, "value", name);
   nt_node_set_str(nt, key, "value", "receiver");
@@ -16303,18 +16309,19 @@ static int disp_raise_with(Compiler *c, const char *name, int em, int ar) {
   nt_node_set_ref(nt, as, "value", nt_new_node(nt, "SelfNode"));
   nt_node_set_arr(nt, kh, "elements", &as, 1);
   int na[4] = { em, sym, args, kh }, nargs = nt_new_node(nt, "ArgumentsNode"), made = fwd_new_call(nt, ec, "new", -1);
-  nt_node_set_arr(nt, nargs, "arguments", na, 4);
+  if (vcall) na[2] = kh;
+  nt_node_set_arr(nt, nargs, "arguments", na, vcall ? 3 : 4);
   nt_node_set_ref(nt, made, "arguments", nargs);
-  nt_node_set_int(nt, made, "disp_nomethod", 1);   /* the raise the code generator may lower out of line (emit_raise_nomethod_new) */
+  if (!vcall) nt_node_set_int(nt, made, "disp_nomethod", 1);   /* the raise the code generator may lower out of line (emit_raise_nomethod_new) */
   return fwd_new_call(nt, -1, "raise", made);
 }
-int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar) {
+int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar, int vcall) {
   NodeTable *nt = (NodeTable *)c->nt;
   int em = nt_new_node(nt, "StringNode");
   nt_node_set_str(nt, em, "content", msg);
-  return disp_raise_with(c, name, em, ar);
+  return disp_raise_with(c, name, em, ar, vcall);
 }
-int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar) {
+int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall) {
   NodeTable *nt = (NodeTable *)c->nt;
   int em = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode");
   int es = nt_new_node(nt, "EmbeddedStatementsNode"), self = nt_new_node(nt, "SelfNode");
@@ -16324,7 +16331,7 @@ int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, i
   nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, who));
   int parts[2] = { hd, es };
   nt_node_set_arr(nt, em, "parts", parts, 2);
-  return disp_raise_with(c, name, em, ar);
+  return disp_raise_with(c, name, em, ar, vcall);
 }
 
 /* `callee(<args>)`, a dispatcher arm's call: the dispatcher's ar required
@@ -16433,6 +16440,37 @@ int disp_method_missing_call(NodeTable *nt, const char *name, int ar, int blk) {
   return call;
 }
 
+/* `<arm.sel> == <arm.val>`, an arm's test of its version's cell */
+static int disp_arm_test(NodeTable *nt, const DispArm *arm) {
+  int t = fwd_new_call(nt, cdef_local(nt, "GlobalVariableReadNode", arm->sel), "==", nt_new_int(nt, arm->val));
+  if (arm->hist) nt_node_set_int(nt, t, "ver_hist", arm->hist);
+  return t;
+}
+/* `if <arm[0]'s test> || ... then <then> end` */
+int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then) {
+  int test = disp_arm_test(nt, &arm[0]), ifn = nt_new_node(nt, "IfNode");
+  for (int k = 1; k < narm; k++) {
+    int o = nt_new_node(nt, "OrNode");
+    nt_node_set_ref(nt, o, "left", test);
+    nt_node_set_ref(nt, o, "right", disp_arm_test(nt, &arm[k]));
+    test = o;
+  }
+  nt_node_set_ref(nt, ifn, "predicate", test);
+  nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, then));
+  return ifn;
+}
+/* `(<st[0]>; ...; <expr>)` */
+int disp_ahead(NodeTable *nt, const int *st, int n, int expr) {
+  int *b = malloc(sizeof(int) * (size_t)(n + 1)), s = nt_new_node(nt, "StatementsNode"), p = nt_new_node(nt, "ParenthesesNode");
+  if (!b) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(b, st, sizeof(int) * (size_t)n);
+  b[n] = expr;
+  nt_node_set_arr(nt, s, "body", b, n + 1);
+  nt_node_set_ref(nt, p, "body", s);
+  free(b);
+  return p;
+}
+
 /* A dispatcher: a def named `name` (on self when sg) at `like`'s place,
    whose body is
 
@@ -16452,11 +16490,9 @@ int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, in
   int chain = narm ? nt_new_node(nt, "ElseNode") : els;   /* (no arm: the else arm is the body) */
   if (narm) nt_node_set_ref(nt, chain, "statements", cdef_stmts(nt, els));
   for (int k = narm - 1; k >= 0; k--) {
-    int call = disp_forward_call(nt, arm[k].callee, ar, blk);
+    int call = arm[k].stmt ? arm[k].stmt - 1 : disp_forward_call(nt, arm[k].callee, ar, blk);
     int ifn = nt_new_node(nt, "IfNode");
-    nt_node_set_ref(nt, ifn, "predicate", fwd_new_call(nt, cdef_local(nt, "GlobalVariableReadNode", arm[k].sel), "==",
-                                                       nt_new_int(nt, arm[k].val)));
-    if (arm[k].hist) nt_node_set_int(nt, nt_ref(nt, ifn, "predicate"), "ver_hist", arm[k].hist);
+    nt_node_set_ref(nt, ifn, "predicate", disp_arm_test(nt, &arm[k]));
     nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, call));
     nt_node_set_ref(nt, ifn, "subsequent", chain);
     chain = ifn;
@@ -16759,7 +16795,7 @@ int desugar_conditional_defs(Compiler *c) {
     }
     /* a class's or module's hook (included, inherited, method_added and
        the like) left undefined is the core's, a no-op: super reaches it */
-    int els = g[0].cm && is_module_hook_name(base) ? disp_super_call(nt, ar, blk) : disp_raise_no_method(c, base, msg, ar);
+    int els = g[0].cm && is_module_hook_name(base) ? disp_super_call(nt, ar, blk) : disp_raise_no_method(c, base, msg, ar, 0);
     int def = disp_def_build(nt, g[ng - 1].def, base, nt_ref(nt, g[ng - 1].def, "receiver") >= 0, ar, blk,
                              arm, ng, els);
     free(arm);
@@ -16769,6 +16805,9 @@ int desugar_conditional_defs(Compiler *c) {
        (ver_list_held), and the record answers such a def as possibly
        made, not made (elab_own_method_at) */
     nt_node_set_int(nt, def, "cond_lone_disp", 1);
+    /* (its else arm raises NoMethodError; a variable-like call's twin raises
+       NameError: ver_vcall_twins) */
+    if (!(g[0].cm && is_module_hook_name(base))) nt_node_set_int(nt, def, "cond_raise_els", 1);
     /* each arm names the dispatcher it is an arm of: where an arm runs, the
        dispatcher's history has the method (ver_cells_write) */
     for (int k = 0; k < ng; k++) nt_node_set_int(nt, g[k].def, "cond_disp", def);

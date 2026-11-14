@@ -407,15 +407,21 @@ int elab_write_value_kind(NodeKind k, int *may) {
    which the statement opened; a branch, a loop's body and a rescue clause
    may not run, nor may a case's branch past its first or a when's
    condition past its first, and the next arm of an elsif ladder or a
-   rescue chain is on the path; a branch whose condition is a constant
-   (`x if true`, nt_pred_const, which the scope walk folds too) runs
-   whenever the condition is reached, and the arms after one that always
-   runs never do, which the record keeps as may not run; a rescue clause
-   that runs whenever its begin completes (prog_rescue_runs: a require of
-   no file in the body raises) runs as such a branch does; a value written
-   under `||=` / `&&=` or after `rescue` may not run, as the right side of
-   `&&` and `||` does; a block run at once by a call the record does not
-   know (a program method may yield to it, or keep it) may not run, and an
+   rescue chain is on the path; a statement of a begin body with rescue
+   clauses may not run, where a raise the rescue takes skips the rest of
+   the body (a later statement of the body has run what it follows,
+   lr_may_dominates), but for those ahead of the first that may raise what
+   the clauses catch, which run whenever the begin does (prog_rescue_sure),
+   and that first one, which runs maybe partly, its own statement lists
+   answering again; a branch whose condition is a constant (`x if true`,
+   nt_pred_const, which the scope walk folds too) runs whenever the
+   condition is reached, and the arms after one that always runs never do,
+   which the record keeps as may not run; a rescue clause that runs
+   whenever its begin completes (prog_rescue_runs: a require of no file in
+   the body raises) runs as such a branch does; a value written under
+   `||=` / `&&=` or after `rescue` may not run, as the right side of `&&`
+   and `||` does; a block run at once by a call the record does not know
+   (a program method may yield to it, or keep it) may not run, and an
    iterator's may run partly (zero times, or several). */
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
   const NodeTable *nt = c->nt;
@@ -423,14 +429,27 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
   NodeKind k = nt_kind(nt, p);
   q.kind = EP_NODE; q.defer = 0; q.sure = 0;
   if (pp->e < 0 || ch < 0) return q;
-  if (k == NK_DefNode) q.bits |= LR_LATE | LR_BODY;
-  else if (k == NK_LambdaNode || (k == NK_BlockNode && pp->defer)) q.bits |= LR_LATE;
-  if (pp->kind == EP_LIST) { q.kind = EP_NEW; q.list = p; return q; }
+  if (k == NK_DefNode) q.bits |= LR_LATE | LR_BODY, q.rescued = 0;   /* (a body run later: prog_rescue_mark_in) */
+  else if (k == NK_LambdaNode || (k == NK_BlockNode && pp->defer)) q.bits |= LR_LATE, q.rescued = 0;
+  if (pp->kind == EP_LIST) {
+    q.kind = EP_NEW; q.list = p;
+    /* (a rescued begin's statement past those that run whenever the begin
+       does, prog_rescue_sure: a raise may skip it; the first that may
+       raise runs, maybe partly, and its own lists answer again) */
+    int rs = q.rescued ? prog_rescue_sure(nt, ch) : PROG_RS_SURE;
+    /* (counted from the frame in the begin's own frame only: a class body
+       opened in the first that may raise runs whole, as one opened in
+       any statement of the body does: LrStmt.fpartial, fmay) */
+    if (rs != PROG_RS_SURE) q.partial = 1, q.fpartial |= q.rescued == 1;
+    if (rs == PROG_RS_MAY) q.may = 1, q.fmay |= q.rescued == 1;
+    if (rs != PROG_RS_STARTS) q.rescued = 0;
+    return q;
+  }
   int spine = pp->kind == EP_SPINE;
   if (!spine && k != NK_CallNode) return q;
   switch (k) {
     case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode:
-      if (spine && ch == nt_ref(nt, p, "body")) { q.frame = pp->e; q.fmay = q.fpartial = 0; return elab_body_pos(nt, ch, q); }
+      if (spine && ch == nt_ref(nt, p, "body")) { q.frame = pp->e; q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; return elab_body_pos(nt, ch, q); }
       break;
     case NK_PreExecutionNode: case NK_EnsureNode:
       if (spine && ch == nt_ref(nt, p, "statements")) return elab_body_pos(nt, ch, q);
@@ -477,9 +496,10 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
     }
     case NK_BeginNode:
       if (spine && ch == nt_ref(nt, p, "statements")) {
-        q.partial |= nt_ref(nt, p, "rescue_clause") >= 0;
-        q.fpartial |= nt_ref(nt, p, "rescue_clause") >= 0;
-        if (nt_ref(nt, p, "rescue_clause") >= 0) q.rep = pp->e;   /* `retry` runs it again */
+        if (nt_ref(nt, p, "rescue_clause") >= 0) {
+          q.rescued = 1;
+          q.rep = pp->e;   /* `retry` runs it again */
+        }
         return elab_body_pos(nt, ch, q);
       }
       if (spine) q.kind = EP_SPINE;   /* its rescue clauses, else and ensure */
@@ -500,7 +520,7 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
       if (!spine) { q.defer = runs == ELAB_BLK_UNKNOWN; break; }
       q.kind = EP_SPINE;
       if (runs == ELAB_BLK_UNKNOWN) q.may = q.fmay = q.kept = 1;
-      if (elab_opens_frame(nt, p)) { q.frame = pp->e; q.fmay = q.fpartial = 0; }
+      if (elab_opens_frame(nt, p)) { q.frame = pp->e; q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; }
       else { q.partial = q.fpartial = 1; q.rep = pp->e; }   /* an iterator's: zero times, or several */
       break;
     }
@@ -3467,7 +3487,8 @@ static int lr_refl_has(char *const *l, int n, const char *name) {
    the table after all: where the side is not a class's own class side
    (cside 0), in a program that defines respond_to_missing?
    (respond_to_missing_defined), or where one of the name's versions
-   undefines or removes it (cplan_cmethod_presence declines them)? */
+   removes it (cplan_cmethod_presence declines a remove; an undef's cell
+   says the method is gone while it is live)? */
 static int lr_refl_cell_table(Compiler *c, const char *name, int cside) {
   LoadRecord *r = c->lrec;
   if (!lr_refl_has(r->refl_cell, r->nrefl_cell, name) && !(cside && r->refl_cell_list)) return 0;
@@ -3475,7 +3496,7 @@ static int lr_refl_cell_table(Compiler *c, const char *name, int cside) {
   const LrVers *x = lr_vers(r, name);
   for (int h = x ? x->first : -1; h >= 0; h = r->hist[h].nlink)
     for (int j = 0; j < r->hist[h].n; j++)
-      if (r->hist[h].v[j].kind == LR_UNDEF || r->hist[h].v[j].kind == LR_REMOVE) return 1;
+      if (r->hist[h].v[j].kind == LR_REMOVE) return 1;
   return 0;
 }
 /* the first version of history h, NULL for none */
@@ -4431,7 +4452,7 @@ static int lr_mixin_class(Compiler *c, LrMixin *m) {
    first M1 stays behind M2 (the record holds a call's modules the last
    first). A prepend is a no-op only among the class's earlier prepends (CRuby
    prepends a module the class includes). main's top-level include is an include into Object: its ancestors
-   are the program's reopening of Object's. */
+   are the program's reopening of Object's; main's extend is its singleton's, whose chain holds the extends. */
 static int lr_mixin_dup(Compiler *c, int cls, int sg, LrClass *k, int i) {
   LrMixin *m = &k->mix[i];
   if (lr_mixin_class(c, m) < 0) return ELAB_NO;
@@ -4444,7 +4465,7 @@ static int lr_mixin_dup(Compiler *c, int cls, int sg, LrClass *k, int i) {
       if ((pre || e->node == m->node) && e->kind == m->kind && lr_mixin_class(c, e) >= 0)
         o = e->mod == m->mod || lr_search(c, e->mod, 0, NULL, m->mod, p, 0, 0, NULL, 0) == ELAB_YES ? ELAB_YES : ELAB_NO;
     }
-    if (o != ELAB_YES && !pre) o = lr_search(c, cls == LR_MAIN && lr_core(c->lrec, CORE_OBJECT) >= 0 ? lr_core(c->lrec, CORE_OBJECT) : cls, sg, NULL, m->mod, p, 0, 0, NULL, 0);
+    if (o != ELAB_YES && !pre) o = lr_search(c, cls == LR_MAIN && !sg && lr_core(c->lrec, CORE_OBJECT) >= 0 ? lr_core(c->lrec, CORE_OBJECT) : cls, sg, NULL, m->mod, p, 0, 0, NULL, 0);
     m->dup = (unsigned char)(1 + o);
   }
   return m->dup - 1;
@@ -4469,11 +4490,18 @@ static void lr_mixin_dups_settle(Compiler *c) {
    first); a singleton's prepends, own methods and extends. ELAB_YES found,
    LR_STOP an undef stops the search there, ELAB_NO go on to the next,
    ELAB_UNKNOWN for a class the record does not hold (lr_class);
-   *unsure is set where an entry or a mixin may have happened. */
-static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth, int *unsure, int shadow) {
+   *unsure is set where an entry or a mixin may have happened. how: with
+   LR_SHADOW, not the includes or extends; with LR_MIXIN_STOPS, a mixin's
+   undef stops the search too (LR_STOP), as in CRuby. Without it the search
+   goes on past a mixin's undef: the method table's copy of the module's
+   method holds no undef, and a call on an instance keeps the table's
+   target, so a stop there would bind that copy where an ancestor's method,
+   the search's answer past it, binds now. */
+enum { LR_SHADOW = 1, LR_MIXIN_STOPS = 2 };
+static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth, int *unsure, unsigned how) {
   LrClass *k = lr_class(c->lrec, cls);
   if (!k) return ELAB_UNKNOWN;
-  for (int pass = 0; pass < (shadow ? 2 : 3); pass++) {   /* prepends, own, includes or extends (with shadow, not these) */
+  for (int pass = 0; pass < (how & LR_SHADOW ? 2 : 3); pass++) {   /* prepends, own, includes or extends */
     if (pass == 1) {
       /* (Object's own table holds main's top-level entries with its own,
          the later answering: lr_table_twin; main's own step, which
@@ -4495,8 +4523,13 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
       int dup = lr_mixin_dup(c, cls, sg, k, i);
       if (dup == ELAB_YES) continue;
       if (dup == ELAB_UNKNOWN) *unsure = 1;
-      int o = lr_mixin_class(c, m) < 0 ? ELAB_UNKNOWN : !name && m->mod == mod ? ELAB_YES : lr_search(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1);
-      if (o == ELAB_YES && b == ELAB_YES) return ELAB_YES;
+      /* (a module's search is its own step, as it has no superclass; with
+         LR_MIXIN_STOPS it keeps an undef's stop, which lr_search's end drops) */
+      int o = lr_mixin_class(c, m) < 0 ? ELAB_UNKNOWN : !name && m->mod == mod ? ELAB_YES
+            : !(how & LR_MIXIN_STOPS) ? lr_search(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1)
+            : depth >= lr_chain_bound(c) ? ELAB_UNKNOWN
+            : lr_search_one(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1, unsure, LR_MIXIN_STOPS);
+      if ((o == ELAB_YES || o == LR_STOP) && b == ELAB_YES) return o;
       if (o != ELAB_NO) *unsure = 1;
     }
   }
@@ -4975,19 +5008,22 @@ int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrD
   if (out) *out = NULL;
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
   int late = p.region < 0, unsure = 0;
-  /* its prepends, then its own table (with shadow: not its extends) */
-  int o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, 1);
+  /* its prepends, then its own table (LR_SHADOW: not its extends); a
+     mixin's undef stops the lookup, as main's own does */
+  int o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, LR_SHADOW | LR_MIXIN_STOPS);
   if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
   if (o == ELAB_YES) return ELAB_YES;
   if (out) *out = NULL;
   if (o == LR_STOP) return ELAB_STOP;   /* an undef there: no method, and none behind it */
-  /* an own table no entry has touched by p holds the core's to_s and
-     inspect, ahead of the extends; a removal took it (or the program's
-     def that replaced it) away, and the search goes on past it */
+  /* an own table no entry has touched by p holds the core's methods of
+     main's (main_self_method: to_s and inspect, and the private include,
+     public, private, define_method, ...), ahead of the extends; a removal
+     took one (or the program's def that replaced it) away, and the search
+     goes on past it */
   const LrDef *v = NULL;
   lr_own(c, lr_hist(c->lrec, LR_MAIN, 1, name, 0), NULL, p, late, 0, &v);
-  if (!v && main_singleton_method(name)) return ELAB_YES;
-  o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, 0);
+  if (!v && main_self_method(name)) return ELAB_YES;
+  o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, LR_MIXIN_STOPS);
   if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
   if (o == ELAB_YES) return ELAB_YES;
   if (out) *out = NULL;
@@ -4995,7 +5031,7 @@ int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrD
   /* (a point that may run before and after the removal, late: a method's
      body, reads the core's where nothing past it answers, as live at the
      load's start) */
-  return late && o == ELAB_NO && main_singleton_method(name) ? ELAB_YES : ELAB_NO;
+  return late && o == ELAB_NO && main_self_method(name) ? ELAB_YES : ELAB_NO;
 }
 int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p) {
   LoadRecord *r = c->lrec;
@@ -5007,7 +5043,7 @@ int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p) {
 int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
   const LrDef *v = NULL;
-  int unsure = 0, o = lr_search_one(c, cls, 0, name, -1, p, p.region < 0, 0, &v, 0, &unsure, 1);
+  int unsure = 0, o = lr_search_one(c, cls, 0, name, -1, p, p.region < 0, 0, &v, 0, &unsure, LR_SHADOW);
   /* a definition under a condition (a branch, a rescue, a modifier; or the
      dispatcher a lone one is lowered to) or in an iterator's body may not
      have run, unless p comes after it in the branch or body that holds it
@@ -8781,7 +8817,7 @@ int elab_fire_after(Compiler *c, int list, int j) {
       LoadPoint before = { p.region, e, -1 };
       int unsure = 0;
       live = !dead && !lr_event_repeats(r, first, i, e) &&
-             lr_search_one(c, v->cls, v->sg, v->name, -1, before, p.region < 0, 0, NULL, 0, &unsure, 1) != LR_STOP &&
+             lr_search_one(c, v->cls, v->sg, v->name, -1, before, p.region < 0, 0, NULL, 0, &unsure, LR_SHADOW) != LR_STOP &&
              (elab_method_at(c, v->cls, v->name, v->sg, before, NULL) != ELAB_NO || lr_core_method(v->sg, v->name));
       dead |= !live;
     }

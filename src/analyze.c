@@ -43358,6 +43358,78 @@ static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pf
   pre[(*npre)++] = kwb_lv(nt, sc, tn, value);
   return kwb_lv(nt, NULL, tn, -1);
 }
+/* Hold the operands of call id that run code in locals, in CRuby's order
+   (the arguments, a splat's and a `**`'s conversion, `&`'s to_proc: all
+   ahead of the lookup), the writes into pre (at most cap) for the caller
+   to run ahead of the call, which then reads the locals: a check that
+   stands for the lookup (ver_main_undef_guards) goes between. A local or
+   ivar read ahead of an operand that runs code is held too, as that code
+   may change it (as split_kwsplat_calls and the splat dispatch hold
+   them); the other leaves (splat_leaf_node) stay where they are. A splat
+   is held as `[*x]`, a `**` as `{**x}`, a `&` that is no Symbol literal
+   as its conversion (`__blk_conv`). Answers how many writes, in *prep
+   (malloc'd, with room for one statement more), -1 for an operand form it
+   does not hold (`...`). */
+int sd_hold_call_operands(Compiler *c, int id, int **prep) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  Scope *sc = comp_scope_of(c, id);
+  int an = nt_ref(nt, id, "arguments"), n = 0, blk = nt_ref(nt, id, "block"), npre = 0, cap = 1;
+  const int *av0 = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
+  for (int k = 0; k < n; k++) {
+    int en = 0;
+    if (nt_kind(nt, av0[k]) == NK_KeywordHashNode) nt_arr(nt, av0[k], "elements", &en);
+    cap += en ? en : 1;
+  }
+  int *slot = malloc(sizeof(int) * (size_t)cap), ns = 0, last = -1, *pre = malloc(sizeof(int) * (size_t)(cap + 1));   /* (the nodes whose value is held, in order) */
+  if (!slot || !pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  *prep = pre;
+  for (int k = 0; k < n; k++) {
+    NodeKind ak = nt_kind(nt, av0[k]);
+    if (ak == NK_ForwardingArgumentsNode) { free(slot); return -1; }
+    if (ak != NK_KeywordHashNode) { slot[ns++] = av0[k]; continue; }
+    int en = 0;
+    const int *el = nt_arr(nt, av0[k], "elements", &en);
+    for (int j = 0; j < en; j++) {
+      if (nt_kind(nt, el[j]) == NK_AssocNode && !splat_leaf_node(nt, nt_ref(nt, el[j], "key"))) { free(slot); return -1; }
+      slot[ns++] = el[j];
+    }
+  }
+  int bexp = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
+  if (bexp >= 0 && nt_kind(nt, bexp) != NK_SymbolNode) slot[ns++] = blk;
+  for (int k = 0; k < ns; k++) {
+    NodeKind sk = nt_kind(nt, slot[k]);
+    int v = sk == NK_AssocNode ? nt_ref(nt, slot[k], "value") : slot[k];
+    if (sk == NK_SplatNode || sk == NK_AssocSplatNode || sk == NK_BlockArgumentNode || !splat_leaf_node(nt, v)) last = k;
+  }
+  for (int k = 0; k < ns; k++) {
+    NodeKind sk = nt_kind(nt, slot[k]);
+    if (sk == NK_SplatNode || sk == NK_AssocSplatNode || sk == NK_BlockArgumentNode) {
+      const char *f = sk == NK_AssocSplatNode ? "value" : "expression";
+      int x = nt_ref(nt, slot[k], f), conv;
+      if (x < 0) continue;   /* (an anonymous `*`, `**` or `&`: the method's own, passed on) */
+      if (sk == NK_BlockArgumentNode) {
+        conv = sd_bcall(nt, "__blk_conv", -1, &x, 1);
+        c->uses_blk_conv = 1;
+      }
+      else {
+        int w = nt_new_node(nt, sk == NK_SplatNode ? "SplatNode" : "AssocSplatNode");
+        nt_node_set_ref(nt, w, f, x);
+        conv = nt_new_node(nt, sk == NK_SplatNode ? "ArrayNode" : "HashNode");
+        nt_node_set_arr(nt, conv, "elements", &w, 1);
+      }
+      nt_node_set_ref(nt, slot[k], f, sd_hold(c, nt, sc, id, "ugo", k, conv, pre, &npre));
+      continue;
+    }
+    int v = sk == NK_AssocNode ? nt_ref(nt, slot[k], "value") : slot[k];
+    NodeKind vk = nt_kind(nt, v);
+    if (splat_leaf_node(nt, v) && !(k < last && (vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode))) continue;
+    int r = sd_hold(c, nt, sc, id, "ugo", k, v, pre, &npre);
+    if (sk == NK_AssocNode) nt_node_set_ref(nt, slot[k], "value", r);
+    else nt_replace_child(nt, an, v, r);
+  }
+  free(slot);
+  return npre;
+}
 static int kwb_const(NodeTable *nt, const char *name) {
   int k = nt_new_node(nt, "ConstantReadNode");
   nt_node_set_str(nt, k, "name", name);

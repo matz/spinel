@@ -19750,7 +19750,7 @@ void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r) {
 }
 
 static int cells_testable(Compiler *c, const CplanCells *cs);
-static void emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b);
+static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b);
 /* Emit the listed names of `r` as a PolyArray of symbols. Interned at run
    time: a name the source never spells is not in the generated symbol
    table. A name of the program's is left out where the call plan proves
@@ -19769,8 +19769,10 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
     if (r->at && (r->at_side & CT_CMETHOD) && !(r->show[i] & REFL_ROW) &&
         cplan_list_cells(c, r->at - 1, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, &cs) && cells_testable(c, &cs)) {
       buf_puts(b, "if (");
-      emit_cells_test(c, &cs, b);
-      buf_printf(b, "0) sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", ta);
+      int open = emit_cells_test(c, &cs, b);
+      buf_puts(b, "0");
+      while (open-- > 0) buf_puts(b, ")");
+      buf_printf(b, ") sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", ta);
       emit_str_literal(b, r->v[i]);
       buf_puts(b, "))); ");
       continue;
@@ -20373,11 +20375,18 @@ static int cells_testable(Compiler *c, const CplanCells *cs) {
   }
   return 1;
 }
-/* ...the test that some version is live: each cell equals its version, ored, ahead of the caller's last operand */
-static void emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
-  for (int i = 0; i < cs->n; i++)
-    buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL)) || " : "gv_%s == %d || ",
+/* ...the test that some version is live: each cell equals its version, ored, ahead of the caller's last operand; an
+   undef's cell, live, answers 0 ahead of the farther cells (`c == u ? 0 : (...`). How many parentheses the caller
+   closes after its last operand. */
+static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
+  int open = 0;
+  for (int i = 0; i < cs->n; i++) {
+    buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
                cs->cell[i] + 1, cs->val[i]);
+    buf_puts(b, cs->gone[i] ? " ? 0 : (" : " || ");
+    open += cs->gone[i];
+  }
+  return open;
 }
 /* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
    read it (emit_cells_test) */
@@ -20397,8 +20406,9 @@ int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const i
   if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, 0, &cs) || !cells_testable(c, &cs)) return 0;
   if (!b) return 1;
   buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(" : "(");
-  emit_cells_test(c, &cs, b);
-  buf_printf(b, "%d)", cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci]))));
+  int open = emit_cells_test(c, &cs, b);
+  buf_printf(b, "%d", cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci]))));
+  while (open-- >= 0) buf_puts(b, ")");
   return 1;
 }
 

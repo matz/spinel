@@ -127,6 +127,15 @@ int prog_load_open(const NodeTable *nt, int load) {
 int prog_rescue_runs(const NodeTable *nt, int rescue) {
   return rescue >= 0 && nt_kind(nt, rescue) == NK_RescueNode ? (int)nt_int(nt, rescue, "rescue_runs", -1) : -1;
 }
+/* How statement st of a rescued begin's body runs where the begin does
+   (`rescue_sure`, prog_note_rescues): PROG_RS_SURE whole, and is left by
+   its end; PROG_RS_STARTS for sure, but a raise in it may cut it short
+   (the first that may raise: its own statement lists answer again);
+   PROG_RS_MAY not for sure, as a statement of a list nothing marked. */
+int prog_rescue_sure(const NodeTable *nt, int st) {
+  int r = st >= 0 ? (int)nt_int(nt, st, "rescue_sure", 0) : 0;
+  return r ? r - 1 : PROG_RS_MAY;
+}
 /* Does the program need the run-time $LOAD_PATH to start as CRuby's does
    (sp_load_path_seed)? Under --load-model=graph (the entry's root carries the
    directories), where it has a require of a set of files, which searches the
@@ -907,6 +916,195 @@ static int prog_may_give_hook(const Compiler *c) {
   return 0;
 }
 
+/* Is statement st taken to raise nothing (prog_note_rescues): a def, a
+   literal, or a variable's or a constant's write of one? Not quite
+   CRuby's: a def on a receiver that takes no singleton method (`def
+   x.foo` with x an Integer) and a write of a special global that checks
+   its value (`$~ = 1`, `$/ = 1`, `$stdout = 1`) raise a TypeError, which
+   is not told apart. */
+static int prog_stmt_quiet(const NodeTable *nt, int st) {
+  switch (nt_kind(nt, st)) {
+    case NK_DefNode: case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode:
+    case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_SelfNode: return 1;
+    case NK_LocalVariableWriteNode: case NK_InstanceVariableWriteNode: case NK_GlobalVariableWriteNode:
+    case NK_ConstantWriteNode: return prog_stmt_quiet(nt, nt_ref(nt, st, "value"));
+    default: return 0;
+  }
+}
+
+/* May node n, where it runs, raise a LoadError (prog_note_rescues)? A
+   require of no file or of a path computed when it runs
+   (is_load_how_missing, is_load_how_set), or a require by a call (a send
+   of one, or of a name it computes); a require of a file whose own
+   statements may; where the program names LoadError other than in a
+   rescue clause's list (le: it may make one, or a class below it), a
+   raise of anything but a builtin exception class other than LoadError,
+   named by a constant the program does not write (a String's raises
+   RuntimeError); and a jump that leaves the body otherwise: a throw, and
+   with jumps a break, next, redo or return outside a block or a loop of
+   its own, which a block or a loop around the begin may take, past the
+   rest of the body, to a later point. A def's body does not run where the
+   def stands. file: per root, 0 not asked, 1 being asked, 2 no, 3 yes;
+   seen: the nodes already asked, which hold none (prog_bodies_load_src). */
+typedef struct { Compiler *c; unsigned char *file; int jumps, le; unsigned char *seen; } LoadSrc;
+static int prog_load_src(LoadSrc *s, int n);
+static int prog_load_src_kids(LoadSrc *s, int n) {
+  const NodeTable *nt = s->c->nt;
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) if (prog_load_src(s, nt_ref_at(nt, n, i))) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0;
+    const int *v = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (prog_load_src(s, v[j])) return 1;
+  }
+  return 0;
+}
+/* ...the statements of root r, the file a require loads (its own jumps
+   end the file) */
+static int prog_file_load_src(LoadSrc *s, int r) {
+  if (r <= 0 || r >= nt_nroots(s->c->nt)) return 0;
+  if (!s->file[r]) {
+    int j = s->jumps;
+    s->file[r] = 1;
+    s->jumps = 0;
+    s->file[r] = prog_load_src(s, prog_root_stmts(s->c, r)) ? 3 : 2;
+    s->jumps = j;
+  }
+  return s->file[r] == 3;
+}
+/* ...the class a raise's first argument names by a constant (`raise K`,
+   `raise K, msg`, `raise K.new(msg)`), NULL for any other */
+static const char *prog_raise_class(const NodeTable *nt, int a) {
+  if (nt_kind(nt, a) == NK_CallNode && is_new_name(nt_str(nt, a, "name"))) a = nt_ref(nt, a, "receiver");
+  NodeKind k = a >= 0 ? nt_kind(nt, a) : NK_NilNode;
+  return k == NK_ConstantReadNode || (k == NK_ConstantPathNode && nt_ref(nt, a, "parent") < 0) ? nt_str(nt, a, "name") : NULL;
+}
+static int prog_load_src(LoadSrc *s, int n) {
+  const NodeTable *nt = s->c->nt;
+  if (n < 0 || (s->seen && s->seen[n])) return 0;
+  if (s->seen) s->seen[n] = 1;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_DefNode) return 0;
+  if (s->jumps && (k == NK_BreakNode || k == NK_NextNode || k == NK_RedoNode || k == NK_ReturnNode)) return 1;
+  if (k == NK_BlockNode || k == NK_LambdaNode || k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode) {
+    int j = s->jumps, r;
+    s->jumps = 0;
+    r = prog_load_src_kids(s, n);
+    s->jumps = j;
+    return r;
+  }
+  if (k == NK_LoadNode) {
+    const char *how = nt_str(nt, n, "how");
+    if (is_load_how_missing(how) || is_load_how_set(how) || prog_file_load_src(s, (int)nt_int(nt, n, "target_file", -1))) return 1;
+  }
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, n, "name");
+    int ac = 0;
+    const int *av = call_args(nt, n, &ac);
+    NodeKind ak = ac ? nt_kind(nt, av[0]) : NK_NilNode;
+    const char *sv = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
+    if (is_require_name(nm) || is_load_name(nm) || is_throw_name(nm) ||
+        (is_send_family(nm) && (!sv || is_require_name(sv) || is_load_name(sv)))) return 1;
+    if (s->le && is_raise_alias(nm)) {
+      const char *cn = ac ? prog_raise_class(nt, av[0]) : NULL;
+      if (ak != NK_StringNode && ak != NK_InterpolatedStringNode &&
+          !(cn && is_builtin_exception_name(cn) && !is_load_error_name(cn) && !elab_source_writes_const(s->c, cn, 0))) return 1;
+    }
+  }
+  return prog_load_src_kids(s, n);
+}
+/* ...of the body of some node of kind k: a method or a block a call may
+   run, from a statement of any form (its jumps end the call) */
+static int prog_bodies_load_src(LoadSrc *s, NodeKind k) {
+  int n = 0;
+  const int *v = nt_nodes_of_kind(s->c->nt, k, &n);
+  for (int i = 0; i < n; i++) if (prog_load_src(s, nt_ref(s->c->nt, v[i], "body"))) return 1;
+  return 0;
+}
+
+/* Does the program name LoadError other than in a rescue clause's list (a
+   `LoadError.new`, a raise of it, a class below it), or reach a constant
+   by a name it computes (a const_get, an eval:
+   is_constant_or_object_reflection)? Only then may a raise make a
+   LoadError: a require is what makes one otherwise (prog_load_src). */
+static int prog_names_load_error(Compiler *c, const int *parent) {
+  const NodeTable *nt = c->nt;
+  for (int pass = 0; pass < 2; pass++) {
+    int n = 0;
+    const int *v = nt_nodes_of_kind(nt, pass ? NK_ConstantPathNode : NK_ConstantReadNode, &n);
+    for (int i = 0; i < n; i++) {
+      int id = v[i], p = parent[id], m = 0;
+      if (!is_load_error_name(nt_str(nt, id, "name")) || (pass && nt_ref(nt, id, "parent") >= 0)) continue;
+      const int *ex = p >= 0 && nt_kind(nt, p) == NK_RescueNode ? nt_arr(nt, p, "exceptions", &m) : NULL;
+      int listed = 0;
+      for (int j = 0; j < m && !listed; j++) listed = ex[j] == id;
+      if (!listed) return 1;
+    }
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, id)
+    if (is_constant_or_object_reflection(nt_str(nt, id, "name"))) return 1;
+  return 0;
+}
+
+/* Does rescue clause rc catch LoadError alone: every class it names is
+   LoadError, by a name the program does not write where the clause looks
+   it up (prog_rescue_name_written)? Unlike rescue_runs, a program that
+   writes a constant by a name it computes (elab_consts_by_value) is not
+   taken to write LoadError's: such a write of a builtin class's name
+   where a clause looks it up is not told apart. */
+static int prog_rescue_load_only(Compiler *c, const int *parent, int rc) {
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *v = nt_arr(nt, rc, "exceptions", &n);
+  for (int i = 0; i < n; i++) {
+    NodeKind k = nt_kind(nt, v[i]);
+    const char *nm = k == NK_ConstantReadNode || (k == NK_ConstantPathNode && nt_ref(nt, v[i], "parent") < 0)
+                     ? nt_str(nt, v[i], "name") : NULL;
+    if (!is_load_error_name(nm) || prog_rescue_name_written(c, parent, rc, nm)) return 0;
+  }
+  return n > 0;
+}
+
+/* Mark statement list v (m of them) of a rescued begin's body, or of a
+   statement of it that starts for sure (prog_rescue_sure): sure up to the
+   first that may raise (load: a LoadError, prog_load_src; else any,
+   prog_stmt_quiet), which starts, its own lists marked in turn, and may
+   after it. A statement of a begin nested in another's body is marked by
+   both, and holds the lesser mark. */
+static void prog_rescue_mark_in(LoadSrc *s, int load, int n);
+static void prog_rescue_put(NodeTable *nt, int st, int rs) {
+  int was = (int)nt_int(nt, st, "rescue_sure", 0);
+  if (!was || rs + 1 < was) nt_node_set_int(nt, st, "rescue_sure", rs + 1);
+}
+static void prog_rescue_mark(LoadSrc *s, int load, const int *v, int m) {
+  NodeTable *nt = (NodeTable *)s->c->nt;
+  int i = 0;
+  for (; i < m && (load ? !prog_load_src(s, v[i]) : prog_stmt_quiet(nt, v[i])); i++) prog_rescue_put(nt, v[i], PROG_RS_SURE);
+  if (i < m) {
+    prog_rescue_put(nt, v[i], PROG_RS_STARTS);
+    prog_rescue_mark_in(s, load, v[i++]);
+  }
+  for (; i < m; i++) prog_rescue_put(nt, v[i], PROG_RS_MAY);
+}
+/* ...the statement lists node n runs where it stands (not a def's or a
+   lambda's body) */
+static void prog_rescue_mark_in(LoadSrc *s, int load, int n) {
+  const NodeTable *nt = s->c->nt;
+  NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NilNode;
+  if (n < 0 || k == NK_DefNode || k == NK_LambdaNode) return;
+  if (k == NK_StatementsNode) {
+    int m = 0;
+    const int *v = nt_arr(nt, n, "body", &m);
+    prog_rescue_mark(s, load, v, m);
+    return;
+  }
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) prog_rescue_mark_in(s, load, nt_ref_at(nt, n, i));
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0;
+    const int *v = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) prog_rescue_mark_in(s, load, v[j]);
+  }
+}
+
 /* Whether each rescue clause runs (`rescue_runs`, prog_rescue_runs), from
    the requires its begin's body runs, as the compiled program runs them:
      - 1: the begin's first clause, which catches a LoadError and has no
@@ -926,36 +1124,68 @@ static int prog_may_give_hook(const Compiler *c) {
        one by a name it computes (elab_consts_by_value; an autoload or a
        const_missing makes only a name nothing holds, and these names are
        always Object's).
+   And which statements of a rescued begin's body run whenever the begin
+   does and is left by its end (`rescue_sure`, prog_rescue_sure): those
+   ahead of the first that may raise what the clauses catch. Where every
+   class they name is LoadError (prog_rescue_load_only), that is the first
+   that may raise a LoadError (prog_load_src), or the first at all where a
+   method or a block of the program may raise one, which a call may run
+   from a statement of any form. That takes any other raise to leave the
+   begin, and with it every later point on its path, which holds only
+   where nothing around the begin takes the raise: a rescue modifier on
+   the begin, or a begin with a clause around the require of its file,
+   that takes it reaches the later points with the statements after the
+   raise counted as run (not told apart). Otherwise it is the first that
+   is not quiet (prog_stmt_quiet). That first one starts for sure (a
+   call's own effect, an undef's, taken as run), and the statement lists
+   it runs are marked so in turn (prog_rescue_mark). These are asked in
+   both load models,
+   rescue_runs only in the graph one, which keeps the requires.
    Asked ahead of the reach (prog_reach), which reads it. */
 static void prog_note_rescues(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int nrc = 0;
   (void)nt_nodes_of_kind(nt, NK_RescueNode, &nrc);
-  if (!nrc || elab_consts_by_value(c, 0)) return;
+  if (!nrc) return;
+  int byval = elab_consts_by_value(c, 0), graph = prog_graph(c);
   const int *parent = comp_parent_map(c);
   int hooks = prog_may_give_hook(c);
   unsigned char *retry = calloc((size_t)nt->count + 1, 1);
-  if (!retry) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  LoadSrc src = { c, calloc((size_t)nt_nroots(nt) + 1, 1), 0, prog_names_load_error(c, parent) };
+  if (!retry || !src.file) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   NT_FOREACH_KIND(nt, NK_RetryNode, id) {   /* the clause each `retry` is in */
     int a = parent[id];
     while (a >= 0 && nt_kind(nt, a) != NK_RescueNode) a = parent[a];
     if (a >= 0) retry[a] = 1;
   }
+  /* (one walk: a body nested in another is asked once) */
+  if (!(src.seen = calloc((size_t)nt->count + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int calls = prog_bodies_load_src(&src, NK_DefNode) || prog_bodies_load_src(&src, NK_BlockNode) ||
+              prog_bodies_load_src(&src, NK_LambdaNode);
+  free(src.seen);
+  src.seen = NULL;
   NT_FOREACH_KIND(nt, NK_BeginNode, b) {
-    int body = nt_ref(nt, b, "statements"), m = 0, quiet = !hooks;
+    int body = nt_ref(nt, b, "statements"), m = 0, quiet = !hooks, load = !calls;
     const int *v = body >= 0 ? nt_arr(nt, body, "body", &m) : NULL;
     int raises = m > 0 && nt_kind(nt, v[0]) == NK_LoadNode && is_load_how_missing(nt_str(nt, v[0], "how"));
     for (int i = 0; i < m; i++) {
       int t = nt_kind(nt, v[i]) == NK_LoadNode ? (int)nt_int(nt, v[i], "target_file", -1) : -1;
       quiet &= t > 0 && t < nt_nroots(nt) && prog_defines_only(c, t);
     }
-    for (int rc = nt_ref(nt, b, "rescue_clause"), first = 1; rc >= 0; rc = nt_ref(nt, rc, "subsequent"), first = 0) {
+    int rc0 = nt_ref(nt, b, "rescue_clause");
+    for (int rc = rc0, first = 1; rc >= 0; rc = nt_ref(nt, rc, "subsequent"), first = 0) {
+      load &= prog_rescue_load_only(c, parent, rc);
+      if (byval || !graph) continue;
       int names = prog_rescue_names(c, parent, rc);
       int runs = first && raises && (names & PROG_RC_LOAD) && !retry[rc] ? 1 : quiet && (names & PROG_RC_SCRIPT) ? 0 : -1;
       if (runs >= 0) nt_node_set_int(nt, rc, "rescue_runs", runs);
     }
+    src.jumps = 1;
+    if (rc0 >= 0) prog_rescue_mark(&src, load, v, m);
+    src.jumps = 0;
   }
   free(retry);
+  free(src.file);
 }
 
 /* The warning a require of no file gets where the program runs it (seen,
@@ -1017,11 +1247,11 @@ static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, cons
 void prog_settle_files(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n = nt_nroots(nt);
+  prog_note_rescues(c);   /* (both models: a rescued body's sure statements) */
   if (!prog_graph(c)) return;
   unsigned char *seen = calloc((size_t)nt->count + 1, 1), *live = calloc((size_t)n, 1), *ok = calloc((size_t)n, 1);
   int *nsite = calloc((size_t)n, sizeof(int)), *site = calloc((size_t)n, sizeof(int)), *at = calloc((size_t)n, sizeof(int));
   if (!seen || !live || !ok || !nsite || !site || !at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  prog_note_rescues(c);
   prog_reach(c, seen, live);
   prog_warn_missing(c, seen);
   if (n < 2) { free(seen); free(live); free(ok); free(nsite); free(site); free(at); return; }

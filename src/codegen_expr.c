@@ -5845,11 +5845,12 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     /* An empty container's type reads UNKNOWN for want of an element type; it
        still produces a value, so it must be assigned rather than emitted for
        effect and discarded (#3495). */
-    int one, e_yields = 0, e_nil = 0;
+    int one, e_yields = 0, e_nil = 0, e_val = e;
     switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
     case VP1_NODE:
       e_yields = is_yield_or_blk_param_call(c, one);
       e_nil = nt_kind(nt, one) == NK_NilNode;
+      e_val = one;
       break;
     case VP1_NIL: e_nil = 1; break;
     case VP1_MANY: break;
@@ -5863,9 +5864,10 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
        that raise helper returns, which need not match the merged slot (the
        constant-folded `nil.clone(freeze: false)` yields an int against an
        sp_Class slot). Control never reaches the assignment, so treat it as
-       diverging and emit it for effect alone. (#3021) */
+       diverging and emit it for effect alone. (#3021) The call may be the
+       value of statements ahead of it (`(x; call)`), which run all the same. */
     if (!e_diverges && e >= 0 && rt != TY_POLY && et != rt && !(hdem && et == TY_STRING) &&
-        !ty_is_numeric(rt) && nt_kind(nt, e) == NK_CallNode)
+        !ty_is_numeric(rt) && nt_kind(nt, e_val) == NK_CallNode)
       e_diverges = 1;
     buf_puts(b, "  ");
     /* the expression arm's own preludes (an inline-spliced body, a rooted

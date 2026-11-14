@@ -2697,6 +2697,15 @@ static void emit_capture_absent_raise(Compiler *c, int id, const CallPlan *plan,
   buf_printf(b, "\" \"' for class '%s%s%s'\")[1]));", open, cn ? cn : c->classes[plan->owner_ci].name, close);
 }
 
+/* ...and for a capture on main, whose singleton class CRuby names by
+   main's default inspect (`#<Class:#<Object:0x...>>`) */
+static void emit_main_capture_absent_raise(Compiler *c, int id, Buf *b) {
+  const char *mn = method_sym_arg(c, id);
+  buf_puts(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%s' for class '#<Class:#<Object:0x%016llx>>'\", \"");
+  emit_c_escaped(b, mn ? mn : "");
+  buf_puts(b, "\", (unsigned long long)(uintptr_t)sp_main_self().v.p));");
+}
+
 int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   refuse_from_plan(c, id, CRF_CAPTURE, "refuse-capture");
   CallPlan plan = cplan_method_call(c, id);
@@ -2744,7 +2753,13 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       continue;
     }
     /* (no method there, CPLAN_ARM_NONE: the maker's NameError, as where no
-       entry is made) */
+       entry is made; on main's entry, naming main's singleton class) */
+    if (to[i] == CPLAN_ARM_NONE && c->scopes[mi].class_id < 0) {
+      buf_puts(b, "{ ");
+      emit_main_capture_absent_raise(c, id, b);
+      buf_printf(b, " _t%d = NULL; }\n", tr);
+      continue;
+    }
     buf_printf(b, "{ _t%d = ", tr);
     if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]))) {
       if (vr >= 0) view_unbind(vr);

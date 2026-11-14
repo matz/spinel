@@ -1560,8 +1560,9 @@ static int ver_call_arity(Compiler *c, int id, int rcls, int sg, const char *nam
   int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
   to[nto++] = mi;
   for (int i = 0; i < nv; i++) {
+    /* (an undef's arm raises for any arguments, a remove has none) */
     int s = vs[i].v->kind == LR_REMOVE || vs[i].v->kind == LR_UNDEF ? -1 : ct_def_version(c, rcls, name, sg, vs[i].v, &dc);
-    if (s >= 0) to[nto++] = s;   /* (no entry arms another: ver_entry_make) */
+    if (s >= 0) to[nto++] = s;
   }
   return ver_arity(c, id, to, nto);
 }
@@ -2668,9 +2669,15 @@ static int ct_builtin_versions_holder(Compiler *c, int rcls, const char *name) {
   }
   return h != rcls && c->classes[h].is_builtin_const && !is_object_base_name(c->classes[h].name) ? h : -1;
 }
+/* Does a visibility close a version to a call of face? (Not to one that
+   enforces none, nor to a variable-like call's, VF_VCALL, which is open
+   to every version.) */
+static int ver_face_closes(int face) {
+  return face == VF_PRIVATE || face == VF_PUBLIC;
+}
 /* Is a version of visibility vis closed to a call of face? */
 static int ver_closed_to(int vis, int face) {
-  return vis == SP_VIS_PRIVATE || (face == VF_PUBLIC && vis == SP_VIS_PROTECTED);
+  return ver_face_closes(face) && (vis == SP_VIS_PRIVATE || (face == VF_PUBLIC && vis == SP_VIS_PROTECTED));
 }
 static int cplan_mm_method(Compiler *c, int ci, int cmethod);
 /* The face a call asked with flags binds (VF_NONE: it enforces nothing) */
@@ -2682,19 +2689,19 @@ static int ct_flags_face(unsigned flags) {
    word's the record proves), all closed to a call of face (1, *vis the
    first one's visibility), all open (0), or some of each (-1, also where
    one's is the run's and an entry arms it)? -2 where they cannot be told
-   apart: an undef, no version, or one that is not Object's or the top
-   level's. */
+   apart: no version, or one that is not Object's or the top level's. (An
+   undef's arm raises for every face: ver_entry_make.) */
 static int ver_arms_closed(Compiler *c, int rcls, const char *name, int face, int *vis) {
   int closed = 0, open = 0, oc = comp_core_class(c, CORE_OBJECT);
   ElabVersion vs[VER_MAX_ARMS];
   int nv = rcls == oc ? elab_chain_versions(c, rcls, 0, name, vs, VER_MAX_ARMS) : 0;
   for (int i = 0; i < nv; i++) {
-    if (vs[i].v->kind == LR_REMOVE) continue;
+    if (vs[i].v->kind == LR_REMOVE || vs[i].v->kind == LR_UNDEF) continue;
     /* (only Object's and the top level's own versions: a version of
        another root has a self of its own type, which the entry's boxed
        self cannot be passed to) */
     int sc = vs[i].v->scope, ci = sc > 0 && sc < c->nscopes ? c->scopes[sc].class_id : -2;
-    if (vs[i].v->kind == LR_UNDEF || (ci != -1 && ci != oc)) return -2;
+    if (ci != -1 && ci != oc) return -2;
     /* (one whose visibility only the run tells is both, where an entry
        arms it and tests its cell: over two or more versions; a lone one
        has no entry, and keeps its def's) */
@@ -2735,6 +2742,21 @@ static int ct_face_for(Compiler *c, int rcls, int sg, const char *name, unsigned
   /* (a method_missing every object reaches answers the call instead) */
   if (cplan_mm_method(c, oc, 0) >= 0) return VF_NONE;
   return ver_arms_closed(c, rcls, name, face, NULL) == -1 ? face : VF_NONE;
+}
+/* Does rcls's chain (its side sg) hold an undef of name? */
+static int ver_chain_undef(Compiler *c, int rcls, int sg, const char *name) {
+  ElabVersion vs[VER_MAX_ARMS];
+  int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
+  for (int i = 0; i < nv; i++)
+    if (vs[i].v->kind == LR_UNDEF) return 1;
+  return 0;
+}
+/* The face of the entry call id binds on rcls's chain (side sg): a
+   variable-like call's (nt_vcall) where the chain holds an undef, whose arm
+   raises NameError for it (VF_VCALL); else ct_face_for's */
+static int ct_call_face(Compiler *c, int id, int rcls, int sg, const char *name, unsigned flags) {
+  if (id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) && ver_chain_undef(c, rcls, sg, name)) return VF_VCALL;
+  return ct_face_for(c, rcls, sg, name, flags);
 }
 /* The version of `name` call id runs, when the method has more than one
    (#9898), or one the call may run before (elab_versions_late): a call at
@@ -2846,7 +2868,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     /* the entry, where the chain holds still over the window: asked of
        an entry that was made, or by the entries' build (span); for a
        call that only meets no version, one that answers for none */
-    int ar = ver_call_arity(c, id, rcls, sg, name, mi), face = ct_face_for(c, rcls, sg, name, flags);
+    int ar = ver_call_arity(c, id, rcls, sg, name, mi), face = ct_call_face(c, id, rcls, sg, name, flags);
     int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar, face), own = ix;
     if (ix < 0 && face) ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar, VF_NONE);   /* (no face entry made: the entry every arm of which runs) */
     int many = n >= 2 || n == ELAB_SPAN_ANY;
@@ -3140,9 +3162,11 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
   int nv = own ? elab_history_versions(c, cls, 1, name, vs, VER_MAX_ARMS) : elab_chain_versions(c, cls, 1, name, vs, VER_MAX_ARMS);
   out->n = 0;
   for (int i = 0; i < nv; i++) {
-    if (vs[i].v->kind == LR_REMOVE || vs[i].v->kind == LR_UNDEF) return 0;
-    if (!include_all && vs[i].v->vis != SP_VIS_PUBLIC) continue;
+    if (vs[i].v->kind == LR_REMOVE) return 0;
+    int gone = vs[i].v->kind == LR_UNDEF;
+    if (!gone && !include_all && vs[i].v->vis != SP_VIS_PUBLIC) continue;
     ver_cell_name(vs[i].cell, out->cell[out->n]);
+    out->gone[out->n] = (unsigned char)gone;
     out->val[out->n++] = vs[i].n;
   }
   /* (with none live, what the call runs: the entry's else arm) */
@@ -3153,7 +3177,7 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
 int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, CplanCells *out) {
   CplanCells all;
   /* some public version has cells, and every version is public: a list shows public and protected methods, so a
-     version with another visibility is the table's to answer */
+     version with another visibility is the table's to answer (an undef's cell counts in both) */
   return cplan_cmethod_presence(c, id, cls, name, 0, own, out) && out->n > 0 &&
          cplan_cmethod_presence(c, id, cls, name, 1, own, &all) && all.n == out->n;
 }
@@ -3337,6 +3361,24 @@ static int ct_main_stopped(Compiler *c, int id, const char *name) {
   /* (a program method_missing main reaches, its singleton's or Object's,
      answers the call instead: not told apart here, so none stops) */
   return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, 0) < 0 && ct_runs_on_main(c, id);
+}
+static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml);
+/* Does call id, by its own name on main (ct_runs_on_main), meet an undef
+   of `name` on main's chain that may or may not have run: at no load
+   point, or at one where the record cannot say (elab_main_singleton_at's
+   ELAB_UNKNOWN), of a builtin main answers (builtin_self_method_known)
+   that no program method does? Where it ran, the call stops as one
+   ct_main_stopped stops (where no program method_missing answers it), so
+   the plan puts the call behind the undef's cell (ver_main_undef_guards).
+   Not a call an entry's arm pins. */
+static int ct_main_builtin_undef(Compiler *c, int id, const char *name) {
+  const LrDef *d = NULL;
+  unsigned f = CT_TOP;
+  if (!builtin_self_method_known(name, BSELF_MAIN) || ct_pin_of(c, id) != -1 || !ver_chain_undef(c, -1, 1, name) ||
+      comp_main_method(c, METHOD_MISSING_NAME) >= 0 || cplan_mm_method(c, -1, 0) >= 0 || !ct_runs_on_main(c, id) ||
+      ct_lookup(c, id, -1, name, &f, NULL) >= 0) return 0;
+  LoadPoint p = elab_point_of(c, id);
+  return p.region < 0 || elab_main_singleton_at(c, name, p, &d) == ELAB_UNKNOWN;
 }
 /* The method call id reaches when it can reach only main's own method of
    `name`: a call on main (ct_on_main) at a load point where main's method
@@ -3522,6 +3564,13 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
       ml->kind = ML_NONE;
       r = -1;
     }
+    /* (an arm of main's own entry, which holds no self, pinned to Object's
+       version: the call's ask on Object binds it with main as self, as
+       ct_version_at's) */
+    else if ((flags & CT_TOP) && c->scopes[pin].class_id >= 0 && comp_scope_of(c, id) && comp_scope_of(c, id)->class_id < 0) {
+      ml->kind = ML_OBJECT;
+      r = -1;
+    }
     else {
       ml->def_class = c->scopes[pin].class_id;
       r = pin;
@@ -3554,6 +3603,11 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
       r = mi;
     }
   }
+  /* (a variable-like call of a conditional def's dispatcher: its twin, ver_vcall_twins) */
+  const Scope *rs = r >= 0 ? &c->scopes[r] : NULL;
+  int tw = rs && id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) && rs->def_node >= 0 && nt_int(c->nt, rs->def_node, "cond_raise_els", 0)
+           ? ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rs->class_id, rs->is_cmethod, name, 0, VF_VCALL) : -1;
+  if (tw >= 0) r = c->ver_entries[tw].scope;
   if (r >= 0 && c->scopes[r].entry && ml->kind != ML_ENTRY) {   /* (an entry answered by name too) */
     ml->kind = ML_ENTRY;
     ml->why = 0;
@@ -4496,6 +4550,13 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   if (cm_builtin_answers(c, ci, name)) return CM_NONE;
   if (anon) *anon = cm_self_name(c, ci, self_text, cap) ? -1 : ci;
   return nt_vcall(nt, id) ? CM_NAMEERROR : CM_NOMETHOD;
+}
+/* See call_plan.h. */
+int cplan_undef_stops(Compiler *c, int id, int cls, const char *name) {
+  MethodLookup ml = { .def_class = -1 };
+  if (!comp_is_undeffed_in_chain(c, cls, name)) return 0;
+  int e = call_target(c, id, cls, name, 0, &ml);
+  return e < 0 || ml.kind != ML_ENTRY || c->scopes[e].entry != ENTRY_DISPATCH;
 }
 /* The builtin class a program class's class side inherits from (Object
    unless it names another), for the singleton methods it answers; NULL where
@@ -8514,6 +8575,27 @@ static void ver_list_put(NodeTable *nt, int list, int at, int after, int g) {
 typedef struct VerArmVis { int raise, cell_face; } VerArmVis;
 static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int ar, int blk, int spliced,
                           const DispArm *arm, const int *to, const VerArmVis *avis, int na, int els_to, int els);
+/* The raise of a call of `name` that finds no method on cls's side sg
+   (main for -1), in an entry of ar parameters: NoMethodError, or with vcall
+   (a variable-like call's entry, VF_VCALL) NameError, whose message names
+   the receiver's class by its Ruby name, read at run time when cls has
+   subclasses, is a module or is a Class.new class (which may have no name,
+   or take one only at run time) */
+static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, int ar, int vcall) {
+  char msg[512];
+  const char *what = vcall ? "undefined local variable or method" : "undefined method";
+  int mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]), nd = 0;
+  comp_sym_intern(c, name);   /* (the error's name, a Symbol made after the literals were interned) */
+  if (cls >= 0) comp_descendants(c, cls, &nd);
+  if (cls < 0) snprintf(msg, sizeof msg, "%s '%s' for main", what, name);
+  else if (nd || (mod && !sg) || comp_class_anonymous(c, cls)) {
+    snprintf(msg, sizeof msg, "%s '%s' for %s", what, name, sg ? "class " : "an instance of ");
+    return disp_raise_no_method_self(c, name, msg, !sg, ar, vcall);
+  }
+  else if (sg) snprintf(msg, sizeof msg, "%s '%s' for %s %s", what, name, mod ? "module" : "class", class_ruby_name(c, cls));
+  else snprintf(msg, sizeof msg, "%s '%s' for an instance of %s", what, name, class_ruby_name(c, cls));
+  return disp_raise_no_method(c, name, msg, ar, vcall);
+}
 /* What an open history's entry runs when no version has run yet, decided
    for every history before any entry is made (ver_named_kind):
    VK_SUPER the method super reaches; VK_IVAR an inherited reader's
@@ -8559,37 +8641,65 @@ static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int
    methods also where an extend copies them to into's class side. With a
    face, the arm of a version closed to it raises instead of running it
    (VerPin.vis), and that of a version whose visibility only the run tells
-   asks its visibility cell first (ver_vis_arm). -1 for none. */
+   asks its visibility cell first (ver_vis_arm). An undef's arm raises what
+   a call finding no method does (ver_no_method_raise: NameError for a
+   variable-like call's face). -1 for none. */
 static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int into, int sg, const char *name, int mi, int ar, int mm,
                           int face, int *absent, int *finds) {
   ElabVersion vs[VER_MAX_ARMS];
   DispArm arm[VER_MAX_ARMS];
   VerArmVis avis[VER_MAX_ARMS];
-  int to[VER_MAX_ARMS], na = 0, blk = c->scopes[mi].blk_param || c->scopes[mi].yields, dc, same = 1, vis = 1, els = -1, fallback = mi, kind = VK_KEEP;
+  int to[VER_MAX_ARMS], dto[VER_MAX_ARMS], na = 0, nd = 0, blk = c->scopes[mi].blk_param || c->scopes[mi].yields, dc, same = 1, vis = 1, els = -1, fallback = mi, kind = VK_KEEP;
   int spliced = c->scopes[mi].yields;
   char sel[VER_MAX_ARMS][32];
   int nv = elab_chain_versions(c, rcls, rcls != into ? 0 : sg, name, vs, VER_MAX_ARMS);
   for (int i = 0; i < nv; i++) {
     if (vs[i].v->kind == LR_REMOVE) continue;   /* its write passes the search on */
-    int s = vs[i].v->kind == LR_UNDEF ? -1 : ct_def_version(c, into, name, sg, vs[i].v, &dc);
+    ver_cell_name(vs[i].cell, sel[na]);
+    /* (an undef's arm: its raise, made once the entry is known to be made) */
+    if (vs[i].v->kind == LR_UNDEF) {
+      arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].cell + 1, -1 };
+      avis[na] = (VerArmVis){ 0, 0 };
+      to[na++] = -1;
+      same = 0;
+      continue;
+    }
+    int s = ct_def_version(c, into, name, sg, vs[i].v, &dc);
+    /* (main's chain ends in Object's: its versions are Object's methods,
+       which an arm's call on main reaches with main as self, ct_lookup) */
+    int obj = s < 0 && into < 0 && sg;
+    if (obj) s = ct_def_version(c, comp_core_class(c, CORE_OBJECT), name, 0, vs[i].v, &dc);
     if (s < 0 || c->scopes[s].is_transplanted_source || (!c->scopes[s].replaced && scope_is_shadowed(c, s)))
       return -1;
+    vs[nd] = vs[i];   /* (the defs, for the else arm's facts) */
+    dto[nd++] = s;
     blk |= c->scopes[s].blk_param || c->scopes[s].yields;
     spliced &= c->scopes[s].yields;
     vis &= vs[i].v->vis == vs[0].v->vis;
-    ver_cell_name(vs[i].cell, sel[na]);
-    arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].cell + 1 };
-    int fv = face ? elab_version_vis(c, &vs[i]) : SP_VIS_PUBLIC;
+    arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].cell + 1, -obj };   /* (-1: an Object version's `self.name` call, made below) */
+    /* (a face no visibility closes takes no visibility arm: ver_face_closes) */
+    int fv = ver_face_closes(face) ? elab_version_vis(c, &vs[i]) : SP_VIS_PUBLIC;
     avis[na] = (VerArmVis){ fv >= 0 && ver_closed_to(fv, face) ? fv : 0, fv < 0 ? face : 0 };
     to[na++] = s;
     if (nt_int(c->nt, c->scopes[s].def_node, "concat_builtin_version", 0)) fallback = s;
     same &= ver_same_source(c->nt, c->scopes[s].def_node, c->scopes[mi].def_node);
   }
-  if (q && na && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, to, na, vs[nv - 1].hist, vs[0].v->vis, ar, blk, mm);
-  if (kind != VK_KEEP) els = ver_absent_else(c, kind, rcls, sg, name, to, na, ar, &blk, &spliced);
+  /* (an open history's else arm with an undef on the chain: not told) */
+  if (q && na == nd && nd && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, dto, nd, vs[nv - 1].hist, vs[0].v->vis, ar, blk, mm);
+  if (kind != VK_KEEP) els = ver_absent_else(c, kind, rcls, sg, name, dto, nd, ar, &blk, &spliced);
   if (absent) *absent = els >= 0;
-  *finds = ver_else_finds(c, kind, rcls, sg, name, nv > 0 ? vs[0].v->vis : SP_VIS_PUBLIC, na ? to[na - 1] : -1);
-  if (els < 0 && (q || nv < 2 || !na || (same && !face))) return -1;   /* (asked for its else arm only: ver_late_make stores no scope for an entry without one) */
+  *finds = ver_else_finds(c, kind, rcls, sg, name, nd > 0 ? vs[0].v->vis : SP_VIS_PUBLIC, nd ? dto[nd - 1] : -1);
+  if (els < 0 && (q || nv < 2 || !nd || (same && !face))) return -1;   /* (asked for its else arm only: ver_late_make stores no scope for an entry without one) */
+  for (int k = 0; k < na; k++)
+    if (to[k] < 0) {
+      arm[k].stmt = 1 + ver_no_method_raise(c, into, sg, name, ar, face == VF_VCALL);
+      nt_node_set_int((NodeTable *)c->nt, arm[k].stmt - 1, "undef_arm", 1);   /* (cplan_method_arms) */
+    }
+    else if (arm[k].stmt < 0) {
+      int call = disp_self_call((NodeTable *)c->nt, name, ar, blk);
+      nt_set_ignore_visibility((NodeTable *)c->nt, call, 1);
+      arm[k].stmt = 1 + call;
+    }
   return ver_entry_emit(c, into, sg, name, ar, blk, spliced, arm, to, face ? avis : NULL, na, fallback, els);
 }
 /* A face entry's arm call `call` of a version whose visibility only the
@@ -8644,10 +8754,12 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
      spliced (an_phase_block_inline's rule for a forwarder) */
   c->scopes[e].yields = spliced;
   comp_touch_scope(c->scopes[e].idx);
-  for (int k = 0, at = ver_first_stmt(nt, body); k < na; k++, at = nt_ref(nt, at, "subsequent"))
+  for (int k = 0, at = ver_first_stmt(nt, body); k < na; k++, at = nt_ref(nt, at, "subsequent")) {
+    if (to[k] < 0) continue;   /* (an undef's arm raises: no version to pin) */
     if (avis && avis[k].cell_face)
       for (int j = 0; j < vn[k]; j++) ver_pin(c, vc[k][j], to[k], vv[k][j]);
     else ver_pin(c, ver_first_stmt(nt, nt_ref(nt, at, "statements")), to[k], avis ? avis[k].raise : 0);
+  }
   if (pin && ev.cell_face)
     for (int j = 0; j < vn[na]; j++) ver_pin(c, vc[na][j], els_to, vv[na][j]);
   else if (pin) ver_pin(c, els, els_to, ev.raise);
@@ -8923,7 +9035,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
     if (c->scopes[to[i]].shadow == SHADOW_PREP && !spell) spell = strdup(c->scopes[to[i]].name);
   }
   int els, like = c->scopes[to[nv - 1]].def_node;
-  if (w->refuse) nt_node_set_int(nt, els = disp_raise_no_method(c, w->name, w->name, 0), w->refuse, 1);
+  if (w->refuse) nt_node_set_int(nt, els = disp_raise_no_method(c, w->name, w->name, 0, 0), w->refuse, 1);
   else els = ver_named_else(c, w);
   /* (at the last version, where a refusal names it) */
   static const char *const at[] = { "node_line", "node_file", "node_col" };
@@ -8949,8 +9061,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
 static int ver_named_else(Compiler *c, const VerNamed *w) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *name = w->name;
-  int cls = w->cls, sg = w->sg, nd = 0;
-  char msg[512];
+  int cls = w->cls, sg = w->sg;
   switch (w->els) {
   case VK_SUPER: return disp_super_call(nt, w->ar, w->blk);
   case VK_TEXT: return disp_super_call(nt, 0, 0);
@@ -8972,17 +9083,7 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   }
   default: break;
   }
-  int mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
-  comp_sym_intern(c, name);   /* (the error's name, a Symbol made after the literals were interned) */
-  if (cls >= 0) comp_descendants(c, cls, &nd);
-  if (cls < 0) snprintf(msg, sizeof msg, "undefined method '%s' for main", name);
-  else if (nd || (mod && !sg) || comp_class_anonymous(c, cls)) {
-    snprintf(msg, sizeof msg, "undefined method '%s' for %s", name, sg ? "class " : "an instance of ");
-    return disp_raise_no_method_self(c, name, msg, !sg, w->ar);
-  }
-  else if (sg) snprintf(msg, sizeof msg, "undefined method '%s' for %s %s", name, mod ? "module" : "class", class_ruby_name(c, cls));
-  else snprintf(msg, sizeof msg, "undefined method '%s' for an instance of %s", name, class_ruby_name(c, cls));
-  return disp_raise_no_method(c, name, msg, w->ar);
+  return ver_no_method_raise(c, cls, sg, name, w->ar, 0);
 }
 /* Does a builtin module that class k mixes in on the side sg, or a module
    of the program it mixes in, and so on, have a method `name` in CRuby's
@@ -9406,7 +9507,7 @@ static void ver_named_refuse_defs(Compiler *c, const VerNamed *w) {
     if (!nt_int(nt, d, "cond_lone", 0)) continue;
     while (st >= 0 && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
     if (st < 0 || par[st] < 0) continue;
-    nt_node_set_int(nt, r = disp_raise_no_method(c, w->name, w->name, 0), w->refuse, 1);
+    nt_node_set_int(nt, r = disp_raise_no_method(c, w->name, w->name, 0, 0), w->refuse, 1);
     for (int j = 0; j < 3; j++) nt_node_set_int(nt, r, at[j], nt_int(nt, d, at[j], 0));
     comp_grow_node_arrays(c);
     for (int k = n0; k < nt->count; k++) c->nscope[k] = c->nscope[st];
@@ -9423,6 +9524,14 @@ int ver_entry_targets(const Compiler *c, int e, int *out, int *tests) {
   }
   if (n > 1 && out[n - 1] < 0 && c->scopes[e].entry == ENTRY_NAMED) out[n - 1] = out[n - 2];
   return n;
+}
+/* Is arm k of entry e an undef's, which raises (ver_entry_make)? */
+static int ver_arm_undef(const Compiler *c, int e, int k) {
+  const NodeTable *nt = c->nt;
+  int at = ver_first_stmt(nt, nt_ref(nt, c->scopes[e].def_node, "body"));
+  for (; at >= 0 && k > 0 && nt_kind(nt, at) == NK_IfNode; k--) at = nt_ref(nt, at, "subsequent");
+  int st = at >= 0 && !k ? ver_first_stmt(nt, nt_ref(nt, at, "statements")) : -1;
+  return st >= 0 && nt_int(nt, st, "undef_arm", 0);
 }
 int cplan_target_runs(const Compiler *c, int t, int mi) {
   if (t < 0 || t == mi) return t >= 0;
@@ -9482,7 +9591,7 @@ int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests) {
     if (ns || m >= 2 * (VER_MAX_ARMS + 1)) continue;
     int sup = to[k] >= 0 && c->scopes[to[k]].super_behind ? cplan_super_target(c, -1, &c->scopes[to[k]], NULL) : -1;
     if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = -1;
-    out[m++] = sup >= 0 ? sup : to[k] >= 0 ? to[k] : capture_else_arm(c, e, cap);
+    out[m++] = sup >= 0 ? sup : to[k] >= 0 ? to[k] : ver_arm_undef(c, e, k) && cap >= 0 ? CPLAN_ARM_NONE : capture_else_arm(c, e, cap);
   }
   return m;
 }
@@ -9602,6 +9711,9 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
   /* (a call that enforces visibility binds the face entry where the
      versions differ in it: call_target asks with the same flags) */
   flags = ct_vis_flags(c, id, flags);
+  /* (an implied call takes no entry where an undef of the name is on the
+     chain: cplan_implied_target) */
+  if ((flags & CT_IMPLIED) && k >= 0 && comp_is_undeffed_in_chain(c, k, nm)) return;
   mtab_enter(c);
   /* (an entry arms two or more versions of the chain: with fewer, or a
      chain the record does not hold, no call is asked. A call on main may
@@ -9609,7 +9721,7 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
      copy has its guard entries: ver_entries_build) */
   if (!(flags & CT_TOP)) {
     VerPre *p = ver_pre(c, arg, id, nm, k, flags);
-    face = p->ok ? ct_face_for(c, k, p->sg, nm, flags) : VF_NONE;
+    face = p->ok ? ct_call_face(c, id, k, p->sg, nm, flags) : VF_NONE;
     asked = p->ok && !ver_pre_needed(c, arg, p, face);
     mi = p->mi; sg = p->sg; ar = p->ar;
   }
@@ -9619,6 +9731,9 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
     sg = (flags & CT_CMETHOD) != 0;
     rcls = ct_top_chain(c, nm, sg);
     ar = ver_call_arity(c, id, rcls, sg, nm, mi);
+    /* (main's chain has no visibility face entry; a variable-like call's
+       where it holds an undef) */
+    if (ct_call_face(c, id, rcls, sg, nm, flags) == VF_VCALL) face = VF_VCALL;
   }
   if (asked) {
     ct_version(c, id, k, nm, flags, mi, &ml);
@@ -9735,6 +9850,121 @@ static void list_ver_target(Compiler *c, int id, const char *name, int cls, void
   (void)arg;
   call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL);
 }
+/* The twin of a conditional def's dispatcher (desugar_conditional_defs)
+   whose else arm raises: the same arms, its else arm the NameError a
+   variable-like call raises (ver_no_method_raise), the method such a call
+   binds (call_target): the dispatcher's class's VF_VCALL entry, as a
+   version entry's. Made where a variable-like call names the dispatcher. */
+static void ver_vcall_twins(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char **vn = NULL;
+  int nvn = 0, any = 0;
+  for (int d = 0; d < c->nscopes && !any; d++) any = c->scopes[d].def_node >= 0 && nt_int(nt, c->scopes[d].def_node, "cond_raise_els", 0);
+  if (!any) return;
+  /* (the names variable-like calls call, sorted: one walk of the calls) */
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    if (!nt_vcall(nt, id) || !nt_str(nt, id, "name")) continue;
+    if (!(nvn & (nvn - 1)) && !(vn = realloc(vn, sizeof *vn * (size_t)(nvn ? 2 * nvn : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    vn[nvn++] = nt_str(nt, id, "name");
+  }
+  if (nvn) qsort(vn, (size_t)nvn, sizeof *vn, ver_name_cmp);
+  for (int d = 0, n0 = c->nscopes; d < n0; d++) {
+    int dn = c->scopes[d].def_node;
+    const char *name = c->scopes[d].name;
+    if (dn < 0 || !name || !nt_int(nt, dn, "cond_raise_els", 0) || !nvn || !bsearch(&name, vn, (size_t)nvn, sizeof *vn, ver_name_cmp)) continue;
+    int def = nt_clone_subtree(nt, dn), st = ver_first_stmt(nt, nt_ref(nt, def, "body"));
+    while (st >= 0 && nt_kind(nt, st) == NK_IfNode) st = nt_ref(nt, st, "subsequent");
+    if (st < 0 || nt_kind(nt, st) != NK_ElseNode) continue;
+    int raise = ver_no_method_raise(c, c->scopes[d].class_id, c->scopes[d].is_cmethod, name, 0, 1);
+    nt_node_set_arr(nt, nt_ref(nt, st, "statements"), "body", &raise, 1);
+    nt_node_set_int(nt, def, "cond_lone_disp", 0);   /* (the dispatcher's own facts stay its own) */
+    nt_node_set_int(nt, def, "cond_raise_els", 0);
+    nt_node_set_int(nt, def, "cond_twin", 1);   /* (its arms test the dispatcher's selector: no cell of its own, ver_cells_put) */
+    /* (a class method's: one of a `class << self` body, a module_function's
+       copy, which the clone's own def does not say) */
+    if (c->scopes[d].is_cmethod && nt_ref(nt, def, "receiver") < 0) nt_node_set_ref(nt, def, "receiver", nt_new_node(nt, "SelfNode"));
+    int e = c->nscopes;
+    comp_grow_node_arrays(c);
+    walk_scope(c, def, c->nscope[dn], c->scopes[d].class_id);
+    c->scopes[e].entry = ENTRY_DISPATCH;
+    comp_touch_scope(c->scopes[e].idx);
+    ver_entry_add(c, name, (struct VerEntry){ NULL, VER_ENTRY_CHAIN, c->scopes[d].class_id, c->scopes[d].is_cmethod, 0, e, .face = VF_VCALL });
+  }
+  free(vn);
+}
+/* Put each call ct_main_builtin_undef answers behind the cells of the
+   undefs on main's chain (disp_cell_guard): its operands that run code
+   are held first, in CRuby's order (sd_hold_call_operands: ahead of the
+   lookup, as CRuby evaluates them), then `raise ... if <an undef ran>`,
+   then the call over the held operands: ahead of it in its statement
+   list, or `(<those>; <the call>)` where it is a value (disp_ahead), and
+   in an interpolation's part, whose statements the emitter runs after
+   the setup of the part's value. The raise is the one an entry's undef arm raises (ver_no_method_raise:
+   NameError for a variable-like call). The call itself keeps the
+   builtin's binding and lowering. A call that is the receiver of another
+   is guarded with that one, outermost: the receiver runs first, and a
+   lowering that reads its receiver's call (`binding.x`) still sees it.
+   Not a call under defined?, which answers for the call itself. The calls
+   are found with one parent map and guarded deepest first, so a call in
+   another's operands is guarded before that one holds it. Each name's
+   cells are written as an entry's chain's (Compiler.ver_guards,
+   ver_cells_put). */
+typedef struct { int id, top, depth; } VerGuardAt;
+static int ver_guard_at_cmp(const void *a, const void *b) {
+  const VerGuardAt *x = a, *y = b;
+  return x->depth != y->depth ? y->depth - x->depth : x->id - y->id;
+}
+static void ver_main_undef_guards(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  ElabVersion vs[VER_MAX_ARMS];
+  DispArm arm[VER_MAX_ARMS];
+  char sel[VER_MAX_ARMS][32];
+  int *par = NULL, nat = 0;
+  VerGuardAt *at = NULL;
+  for (int id = 0, n0 = nt->count; id < n0; id++) {
+    const char *name = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+    if (!name || !ct_main_builtin_undef(c, id, name)) continue;
+    if (!par && !(par = du_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    /* (No two such calls share a top: one runs on main, receiverless or on
+       self (ct_runs_on_main), so it is the innermost call of its receiver
+       chain, and a chain holds one. A guard replaces only its own top in
+       that top's parent, the parent's other children staying where they
+       are, and a call in another's operands is the deeper, guarded first,
+       so the map still holds for every top after it.) */
+    int top = id, depth = 0;
+    while (par[top] >= 0 && nt_kind(nt, par[top]) == NK_CallNode && nt_ref(nt, par[top], "receiver") == top) top = par[top];
+    if (par[top] < 0 || nt_kind(nt, par[top]) == NK_DefinedNode) continue;
+    for (int a = id; a >= 0; a = par[a]) depth++;
+    if (!(nat & (nat - 1)) && !(at = realloc(at, sizeof *at * (size_t)(nat ? 2 * nat : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    at[nat++] = (VerGuardAt){ id, top, depth };
+  }
+  if (nat) qsort(at, (size_t)nat, sizeof *at, ver_guard_at_cmp);
+  for (int g = 0; g < nat; g++) {
+    int id = at[g].id, top = at[g].top, na = 0, *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
+    const char *name = nt_str(nt, id, "name");
+    if (np < 0) { free(pre); continue; }   /* (left as the table answers it) */
+    for (int i = 0, nv = elab_chain_versions(c, -1, 1, name, vs, VER_MAX_ARMS); i < nv; i++) {
+      if (vs[i].v->kind != LR_UNDEF) continue;
+      ver_cell_name(vs[i].cell, sel[na]);
+      arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].cell + 1, 0 };
+      na++;
+    }
+    pre[np++] = disp_cell_guard(nt, arm, na, ver_no_method_raise(c, -1, 1, name, 0, nt_vcall(nt, id)));
+    int pl = par[top], in_list = nt_kind(nt, pl) == NK_StatementsNode && par[pl] >= 0 && nt_kind(nt, par[pl]) != NK_EmbeddedStatementsNode;
+    if (in_list) for (int k = 0; k < np; k++) ver_list_put(nt, pl, top, 0, pre[k]);
+    else nt_replace_child(nt, pl, top, disp_ahead(nt, pre, np, top));
+    free(pre);
+    int k = 0;
+    while (k < c->nver_guards && !sp_streq(c->ver_guards[k].name, name)) k++;
+    if (k < c->nver_guards) continue;
+    if (!(k & (k - 1)) && !(c->ver_guards = realloc(c->ver_guards, sizeof *c->ver_guards * (size_t)(k ? 2 * k : 1)))) {
+      fprintf(stderr, "spinel: out of memory\n"); exit(1);
+    }
+    c->ver_guards[c->nver_guards++] = (struct VerGuard){ name, 0 };
+  }
+  free(at);
+  free(par);
+}
 void ver_entries_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   const char *names[2];
@@ -9757,6 +9987,7 @@ void ver_entries_build(Compiler *c) {
                   ver_arity(c, -1, to, guard_chain(c, s, to, NULL, NULL)), name };
     if (!ver_need_has(c, &o, w)) ver_need_add(&o, w);
   }
+  ver_main_undef_guards(c);
   /* the open histories' entries first: the table answers them, and no call
      of their names asks an entry of the chain behind them */
   ver_named_asks(c, 0);
@@ -9808,6 +10039,7 @@ void ver_entries_build(Compiler *c) {
     ver_entry_add(c, e >= 0 && o.v[i].guard != VER_ENTRY_LAYER ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from, .behind = behind + 1, .face = o.v[i].face });
   }
   free(o.v); free(o.ix); free(o.pre);
+  ver_vcall_twins(c);
   ver_entries_index(c);
   /* The table answers the general entry. Copies keep their own super
      chain under a shadow name; argument-specific entries stay hidden. */
@@ -10035,6 +10267,36 @@ int cplan_cell_write_dropped(Compiler *c, int id) {
   return nt_kind(nt, id) == NK_GlobalVariableWriteNode && nt_int(nt, id, "ver_cell", 0) &&
          cplan_cell_dropped(c, comp_gvar(c, nt_str(nt, id, "name") + 1));
 }
+/* ...the write of version v's cell at its statement, and with rt that of
+   its visibility cell (with pass 0 only their places taken: written
+   before), into *w; *nh past the cells written */
+static void ver_write_version(NodeTable *nt, const int *par, VerCellsAt *cells, const ElabVersion *v, int rt, int pass, VerWrite **wp, int *nwp, int *nh) {
+  int node = v->v->node, st = ver_write_stmt(nt, par, node);
+  if (st < 0 || par[st] < 0) return;
+  /* (each cell once: an entry without a face may have written the
+     version's; an undef has no visibility to write) */
+  int vw = rt && v->v->kind != LR_REMOVE && v->v->kind != LR_UNDEF && ver_cell_once(cells, node, -2 - v->cell);
+  int cw = ver_cell_once(cells, node, v->cell);
+  if ((!cw && !vw) || !pass) return;
+  /* (ahead of a statement that runs no program code: after one that ends a branch, the write would be the branch's value) */
+  VerWrite x = { par[st], st, node, v->v->kind == LR_REMOVE ? 0 : v->n, v->cell, !ver_stmt_runs_no_code(nt, st), 0, -1, v->v->body != 0 };
+  if (cw) ver_write_add(wp, nwp, x);
+  if (vw) x.n = v->v->vis, x.vis = 1, ver_write_add(wp, nwp, x);
+  if (v->cell >= *nh) *nh = v->cell + 1;
+  /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
+     method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
+  if (nt_int(nt, node, "cond_lone_disp", 0)) {
+    NT_FOREACH_KIND(nt, NK_DefNode, d) {
+      if (!nt_int(nt, d, "cond_arm", 0) || nt_int(nt, d, "cond_disp", -1) != node) continue;
+      int ast = ver_write_stmt(nt, par, d);
+      if (ast < 0 || par[ast] < 0) continue;
+      int acw = ver_cell_once(cells, d, v->cell), avw = vw && ver_cell_once(cells, d, -2 - v->cell);
+      VerWrite y = { par[ast], ast, d, v->n, v->cell, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
+      if (acw) ver_write_add(wp, nwp, y);
+      if (avw) y.n = v->v->vis, y.vis = 1, ver_write_add(wp, nwp, y);
+    }
+  }
+}
 static int ver_cells_put(Compiler *c);
 void ver_cells_write(Compiler *c) {
   ver_cells_put(c);
@@ -10061,15 +10323,16 @@ static int ver_cells_put(Compiler *c) {
   /* (the parents the program's tree reaches: a class_eval block spliced
      into its class body still names its statements, and the statement a
      write goes beside is the class body's) */
-  int *par = c->nver_entries ? du_parent_map(nt) : NULL;
-  VerCellsAt cells = { c->nver_entries ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL, NULL, 0 };
-  if (c->nver_entries && (!cells.at || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int pass = 0; pass < 2; pass++)   /* (the entries written before first: a cell is written once) */
+  int any = c->nver_entries || c->nver_guards, *par = any ? du_parent_map(nt) : NULL;
+  VerCellsAt cells = { any ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL, NULL, 0 };
+  if (any && (!cells.at || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int pass = 0; pass < 2; pass++) {   /* (the entries written before first: a cell is written once) */
   for (int i = 0; i < c->nver_entries; i++) {
     struct VerEntry *e = &c->ver_entries[i];
     /* (not only the entries reached now: a send's arms, made in the fixpoint, reach methods whose calls bind entries this first pass leaves unreached) */
     if (e->scope < 0 || e->cells == pass) continue;
     e->cells = 1;
+    if (nt_int(nt, c->scopes[e->scope].def_node, "cond_twin", 0)) continue;
     int arms[VER_MAX_ARMS + 1], tests[2 * (VER_MAX_ARMS + 1)];
     int na = e->guard == VER_ENTRY_GUARD || e->guard == VER_ENTRY_LAYER ? ver_entry_targets(c, e->scope, arms, tests) : 0;
     /* (and an arm's own, of the entry over a mixin's versions:
@@ -10092,7 +10355,7 @@ static int ver_cells_put(Compiler *c) {
        statement does, so its own call writes it as it runs, which the
        word's node keeps: cplan_vis_cell_after) */
     int rt = 0;
-    for (int j = 0; e->face && j < nv; j++) rt |= elab_version_vis(c, &vs[j]) < 0;
+    for (int j = 0; ver_face_closes(e->face) && j < nv; j++) rt |= elab_version_vis(c, &vs[j]) < 0;
     for (int j = 0; rt && j < nv; j++)
       for (int k = 0, wn, wv, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv)) >= 0; k++) {
         int st = o ? ver_write_stmt(nt, par, wn) : -1;
@@ -10108,31 +10371,15 @@ static int ver_cells_put(Compiler *c) {
           reads |= nt_int(nt, tests[k], "ver_hist", 0) == vs[j].cell + 1;
         if (!reads) continue;   /* prepend cells are written at their statements */
       }
-      int node = vs[j].v->node, st = ver_write_stmt(nt, par, node);
-      if (st < 0 || par[st] < 0) continue;
-      /* (each cell once: an entry without a face may have written the version's) */
-      int vw = rt && vs[j].v->kind != LR_REMOVE && ver_cell_once(&cells, node, -2 - vs[j].cell);
-      int cw = ver_cell_once(&cells, node, vs[j].cell);
-      if ((!cw && !vw) || !pass) continue;
-      /* (ahead of a statement that runs no program code: after one that ends a branch, the write would be the branch's value) */
-      VerWrite x = { par[st], st, node, vs[j].v->kind == LR_REMOVE ? 0 : vs[j].n, vs[j].cell, !ver_stmt_runs_no_code(nt, st), 0, -1, vs[j].v->body != 0 };
-      if (cw) ver_write_add(&w, &nw, x);
-      if (vw) x.n = vs[j].v->vis, x.vis = 1, ver_write_add(&w, &nw, x);
-      if (vs[j].cell >= nh) nh = vs[j].cell + 1;
-      /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
-         method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
-      if (nt_int(nt, node, "cond_lone_disp", 0)) {
-        NT_FOREACH_KIND(nt, NK_DefNode, d) {
-          if (!nt_int(nt, d, "cond_arm", 0) || nt_int(nt, d, "cond_disp", -1) != node) continue;
-          int ast = ver_write_stmt(nt, par, d);
-          if (ast < 0 || par[ast] < 0) continue;
-          int acw = ver_cell_once(&cells, d, vs[j].cell), avw = vw && ver_cell_once(&cells, d, -2 - vs[j].cell);
-          VerWrite y = { par[ast], ast, d, vs[j].n, vs[j].cell, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
-          if (acw) ver_write_add(&w, &nw, y);
-          if (avw) y.n = vs[j].v->vis, y.vis = 1, ver_write_add(&w, &nw, y);
-        }
-      }
+      ver_write_version(nt, par, &cells, &vs[j], rt, pass, &w, &nw, &nh);
     }
+  }
+  for (int i = 0; i < c->nver_guards; i++) {   /* (and the cells a guard at a call reads: ver_main_undef_guards) */
+    if (c->ver_guards[i].cells == pass) continue;
+    c->ver_guards[i].cells = 1;
+    for (int j = 0, nv = elab_chain_versions(c, -1, 1, c->ver_guards[i].name, vs, VER_MAX_ARMS); j < nv; j++)
+      ver_write_version(nt, par, &cells, &vs[j], 0, pass, &w, &nw, &nh);
+  }
   }
   ver_copy_writes(c, par, &cells, &w, &nw);
   free(cells.at); free(cells.e); free(par);

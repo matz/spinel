@@ -1,0 +1,38 @@
+"main"
+NameError
+NoMethodError
+NoMethodError
+NameError
+"main"
+"main"
+"main"
+NoMethodError
+NoMethodError
+false
+kept
+kept in a block
+4
+5
+[4, 5]
+nil
+{k: 1}
+true
+false
+6
+7
+NoMethodError
+NoMethodError
+NameError
+NoMethodError
+NoMethodError
+["%d", 1, "%d", :to_a, "%d", :to_hash, "%d", 2, :to_proc]
+[:a, :err, :b]
+[:a, "%s", 3, :b]
+:err
+:err
+["5", "%s", 4]
+:err
+["%s", "6"]
+:err
+["%d %d", 7]
+7

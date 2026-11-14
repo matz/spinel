@@ -441,11 +441,15 @@ void walk_scope(Compiler *c, int id, int scope_idx, int class_id);
    main's file) holding it; fpartial: partial, counted from the frame. sure:
    an else clause that runs whenever its
    condition is reached (the condition's predicate is a constant false,
-   nt_pred_const). */
+   nt_pred_const). rescued: the body of a begin with rescue clauses, whose
+   statements may not run but for those that run whenever the begin does
+   (prog_rescue_sure), or a list in the first of them that may raise,
+   which runs: 1 in the begin's own frame, 2 in a frame opened under it (a
+   class body), whose statements may not run only from outside it. */
 typedef struct {
   int e, file, top, frame, depth, rep;
   int list;   /* the statement list the node is an element of (a StatementsNode), -1 for a lone expression */
-  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept;
+  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept, rescued;
 } ElabPos;
 enum { EP_NODE, EP_SPINE, EP_LIST, EP_NEW };
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp);
@@ -1044,12 +1048,24 @@ int attr_as_def(NodeTable *nt, int call, const char *base, int writer);   /* `de
 /* A dispatcher def over arms `<sel> == <val>` calling `callee` with the
    def's parameters passed on, and an else arm (disp_def_build,
    analyze_desugar.c); for that arm `raise NoMethodError.new(msg, :name,
-   [<args>], receiver: self)`, the args the def's ar parameters */
-typedef struct { const char *sel; int val; const char *callee; int hist; } DispArm;
+   [<args>], receiver: self)`, the args the def's ar parameters (with
+   vcall, the NameError a variable-like call raises: disp_raise_no_method's
+   vcall). An arm whose stmt is set (1 + a node) runs that statement in
+   place of the call: a version entry's arm for an undef raises there */
+typedef struct { const char *sel; int val; const char *callee; int hist, stmt; } DispArm;
 int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, int blk,
                    const DispArm *arm, int narm, int els);
-int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar);
-int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar);
+/* `if <arm[0].sel> == <arm[0].val> || ... then <then> end`, a statement
+   ahead of a call kept as it is behind its versions' cells, and `(<st[0]>;
+   ...; <expr>)` (analyze_desugar.c) */
+int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then);
+int disp_ahead(NodeTable *nt, const int *st, int n, int expr);
+/* The operands of call id that run code held in locals in CRuby's order,
+   their writes into *pre, malloc'd with room for one more (analyze.c): how
+   many, -1 for a form not held */
+int sd_hold_call_operands(Compiler *c, int id, int **pre);
+int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar, int vcall);
+int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_when_unspread(Compiler *c, int call);

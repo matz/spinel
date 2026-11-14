@@ -81,6 +81,7 @@ int is_tap_name(const char *n);       /* tap */
 int is_quantifier(const char *n);     /* all? any? none? one? */
 int is_name_error_class(const char *n);   /* NameError NoMethodError: .new(msg, name, ...) */
 int is_no_method_error_class(const char *n);   /* NoMethodError: .new(msg, name, args, ...) */
+int is_name_error_root_class(const char *n);   /* NameError alone: a variable-like call's error */
 int is_set_op(const char *n);         /* & intersection | union - difference */
 int is_combination_family(const char *n);  /* combination permutation repeated_combination repeated_permutation */
 /* the visibility word a call names: module_function first, so that a
@@ -438,6 +439,7 @@ int is_constless_builtin_name(const char *n);  /* a builtin class or module with
 int is_autoload_name(const char *n);
 int is_file_load_name(const char *n);    /* require require_relative load autoload: a call that runs a file's text */
 int is_load_error_catch_name(const char *n);   /* LoadError ScriptError Exception */
+int is_load_error_name(const char *n);         /* LoadError alone */
 int is_script_error_name(const char *n);       /* ScriptError LoadError NotImplementedError SyntaxError */
 int is_load_how_missing(const char *how);
 int is_load_how_set(const char *how);

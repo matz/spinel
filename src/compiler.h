@@ -1962,6 +1962,7 @@ typedef struct {
   char **rsc_names;   /* the names a class or module body defines, which `::Name` must not be read as the bare Name for (analyze_desugar.c, desugar_root_scoped_constants) */
   int n_rsc_names;
   int nomethod_init;   /* 1 none, 2 a class NoMethodError defines an initialize (analyze_desugar.c, disp_raise_with); 0 not asked yet */
+  int nameerror_init;  /* ...the same of a class NameError, for the error a variable-like call raises */
   int ncond_lone_disp;  /* those of them a lone def at the top level, in a module or in Object or BasicObject is lowered to (call_plan.c, feature_limit) */
   /* the open histories no reader names yet, sorted by name (call_plan.c,
      ver_named_one): made once a call names one, taken 1 when asked for and
@@ -1983,6 +1984,11 @@ typedef struct {
   unsigned ver_ix_nb;
   struct VerPin { int node, scope, vis; } *ver_pins;
   int nver_pins;
+  /* the names of main's builtins whose calls the plan put behind an
+     undef's cell (ver_main_undef_guards), whose cells are written as an
+     entry's chain's are, once (cells) */
+  struct VerGuard { const char *name; int cells; } *ver_guards;
+  int nver_guards;
   /* the entries are made (ver_entries_build): the versions the calls get
      are kept, and a call that reaches a later prepend's copy binds its
      guard entry */

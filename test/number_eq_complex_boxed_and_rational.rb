@@ -32,3 +32,6 @@ p a == c, a != c, c == a
 p [2**53, "s"].first == c
 p [Complex(1, 2), 1].first == Complex(1, 2)
 p [Float::NAN, 1].first == Complex(Float::NAN, 0)
+q = [Rational(2**53 + 1, 1), "s"].first
+p q == Complex(2**53, 0), Rational(2**53 + 1, 1) == Complex(2**53, 0)
+p Rational(2**53 + 1, 1) != Complex(2**53, 0), Rational(2**53 + 1, 1) == Complex(2.0**53, 0)

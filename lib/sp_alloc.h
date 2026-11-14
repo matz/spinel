@@ -1341,6 +1341,7 @@ typedef struct { sp_Bigint *num, *den; } sp_BigRational;
 int sp_bigint_sign(sp_Bigint *b);
 sp_Bigint *sp_bigint_sub(sp_Bigint *a, sp_Bigint *b);
 sp_Bigint *sp_bigint_new_int(int64_t v);
+sp_Bigint *sp_bigint_new_double(double d);
 int64_t sp_bigint_to_int(sp_Bigint *b);
 intptr_t sp_bigint_bit_length(sp_Bigint *b);
 sp_Bigint *sp_bigint_gcd(sp_Bigint *a, sp_Bigint *b);

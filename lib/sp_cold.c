@@ -5983,8 +5983,14 @@ sp_bool sp_StrArray_eq(sp_StrArray*a,sp_StrArray*b){SP_GC_ROOT(a);SP_GC_ROOT(b);
    anything else keeps the Float class. The INTPTR guard mirrors
    sp_complex_mag: casting an out-of-range double to sp_int is UB. */
 sp_RbVal sp_complex_comp_v(sp_float v, int is_f) {
-  if (!is_f && v >= -(sp_float)INTPTR_MAX && v <= (sp_float)INTPTR_MAX && v == (sp_float)(sp_int)v)
-    return sp_box_int((sp_int)v);
+  /* An Integer part is an Integer whatever its size: an Integer when it
+     fits the slot, else a Bignum (the part past 2**63 after a product, or
+     past 2**31 on a 32-bit build), never the Float that holds it. The range
+     test comes before any cast, since a cast out of range is undefined. */
+  if (!is_f && isfinite(v) && v == floor(v)) {
+    if (v >= -9223372036854775808.0 && v < 9223372036854775808.0) return sp_box_i64((int64_t)v);
+    return sp_box_bigint(sp_bigint_new_double(v));
+  }
   return sp_box_float(v);
 }
 /* CRuby Complex#abs: Integer only via the zero-component shortcut (|other|)

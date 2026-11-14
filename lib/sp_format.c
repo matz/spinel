@@ -20,10 +20,16 @@ static int sp_complex_mag(char *out, size_t sz, sp_float v, int is_f) {
   if (isinf(v)) return snprintf(out, sz, "Infinity");
   if (isnan(v)) return snprintf(out, sz, "NaN");
   if (is_f) return snprintf(out, sz, "%s", sp_float_to_s(v));
-  /* a float outside sp_int's range makes (sp_int)v undefined behavior; only
-     integer-print a whole value that fits, else fall through to %g. */
-  if (v >= -(sp_float)INTPTR_MAX && v <= (sp_float)INTPTR_MAX && v == (sp_int)v)
-    return snprintf(out, sz, "%lld", (long long)v);
+  /* a whole Integer part prints as an Integer whatever its size: past
+     2**63 (a product) or past 2**31 (a 32-bit build) through a Bignum.
+     v is a finite magnitude here, and the range test comes before the
+     cast, since a cast out of range is undefined. */
+  if (v == floor(v)) {
+    if (v < 9223372036854775808.0) return snprintf(out, sz, "%lld", (long long)v);
+    sp_Bigint *b = sp_bigint_new_double(v);
+    SP_GC_ROOT(b);
+    return snprintf(out, sz, "%s", sp_bigint_to_s(b));
+  }
   { char fb[32]; sp_format_float(v, fb, sizeof fb, 'g', -2, '\0'); return snprintf(out, sz, "%s", fb); }
 }
 /* Append the imaginary part ("+<mag>i" / "-<mag>i") to buf. MRI inserts a `*`
@@ -31,7 +37,7 @@ static int sp_complex_mag(char *out, size_t sz, sp_float v, int is_f) {
    while a plain number is written as `10i`. */
 static int sp_complex_imag(char *buf, int n, size_t sz, sp_float im, int is_f) {   /* buf: a stack buffer, as above */
   if (n < 0 || (size_t)n >= sz) return 0;
-  char mag[64];
+  char mag[352];
   /* The sign of a Float part is its sign bit, which is set for -0.0 (that is
      not < 0): "1-0.0i", not "1+-0.0*i". A NaN is written "+NaN*i" whatever
      its sign bit, as CRuby does. An Integer-classed part has no -0. */
@@ -41,7 +47,7 @@ static int sp_complex_imag(char *buf, int n, size_t sz, sp_float im, int is_f) {
   return snprintf(buf + n, sz - (size_t)n, "%c%s%si", neg ? '-' : '+', mag, sep);
 }
 const char *sp_complex_inspect(sp_Complex c) {
-  char buf[128], re[64];
+  char buf[768], re[352];
   sp_complex_mag(re, sizeof re, c.re < 0 ? -c.re : c.re, c.fl & SP_CPLX_RE_F);
   int n = snprintf(buf, sizeof buf, "(%s%s", c.re < 0 ? "-" : "", re);
   if (n < 0) n = 0; else if (n >= (int)sizeof buf) n = (int)sizeof buf - 1;
@@ -55,7 +61,7 @@ const char *sp_complex_inspect(sp_Complex c) {
 }
 /* Complex#to_s: bare `re+imi` (no surrounding parens, unlike #inspect). */
 const char *sp_complex_to_s(sp_Complex c) {
-  char buf[128], re[64];
+  char buf[768], re[352];
   sp_complex_mag(re, sizeof re, c.re < 0 ? -c.re : c.re, c.fl & SP_CPLX_RE_F);
   int n = snprintf(buf, sizeof buf, "%s%s", c.re < 0 ? "-" : "", re);
   if (n < 0) n = 0; else if (n >= (int)sizeof buf) n = (int)sizeof buf - 1;

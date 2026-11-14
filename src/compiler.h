@@ -2566,6 +2566,17 @@ int        comp_name_reader_any(Compiler *c, const char *name);
    asks it for every argument-less call on a receiver that can be anything,
    at every solve. */
 const int *comp_name_reader_owners(Compiler *c, const char *name, int *n);
+/* Does any class's chain answer `name` (on the class side when is_cm)?
+   comp_name_responders' count, asked where the list cannot be built too: the
+   candidate owner of "is the name defined by a class of the program". */
+int        comp_name_answered(Compiler *c, const char *name, int is_cm);
+/* The scope class cls's chain finds for `name` as one of the name's
+   responders, or -1 where it is not one: its class side with CT_CMETHOD, its
+   own table only with CT_OWN (an override), the top-level functions for
+   cls < 0. No record is asked: a candidate, not what one call runs. */
+int        comp_name_responder(Compiler *c, int cls, const char *name, unsigned side);
+/* Does any class's chain answer an attribute writer of base? */
+int        comp_name_writer_any(Compiler *c, const char *base);
 /* does Object's program define a method of the name? */
 static inline int comp_object_defines(Compiler *c, const char *name) {
   int oc = comp_core_class(c, CORE_OBJECT);

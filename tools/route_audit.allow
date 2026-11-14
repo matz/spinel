@@ -18,8 +18,6 @@ files: src/codegen_stmt.c src/codegen_str.c src/codegen_util.c src/codegen_view.
 
 # which classes answer a name, over every class: a poly receiver's arms
 src/analyze.c a_dispatch_arm_takes_block which classes answer the name
-src/analyze.c act_add_overrides which subclasses override the name
-src/analyze.c act_has_override which subclasses override the name
 src/analyze.c compute_reachable comp_method_in_chain a send's name, in every class
 src/analyze.c ie_class_answers which classes answer the name
 src/analyze.c ie_class_value_target which classes answer the name
@@ -50,6 +48,9 @@ src/codegen_stmt.c masgn_writer_overridden which subclasses override the writer
 src/compiler.c cc_build which classes answer the name
 src/compiler.c comp_strsub_own_classes which String subclasses answer the name
 src/compiler.c comp_method_overridden which subclasses override the name
+src/compiler.c comp_name_answered which classes answer the name
+src/compiler.c comp_name_responder which classes answer the name
+src/compiler.c comp_name_writer_any which classes answer the name
 src/compiler.c comp_native_answer_class which classes answer the name
 src/compiler.c comp_native_binding_class which classes answer the name
 src/compiler.c comp_poly_arm_defines which classes answer the name
@@ -75,14 +76,10 @@ src/analyze_infer.c kept_enum_reopen_defines a name's presence
 src/analyze_infer.c std_stream_foreign_writer a name's presence
 src/analyze_pass.c array_push_reopened a name's presence in a reopened Array
 src/analyze_util.c an_blank_slates_lacking a name's presence
-src/analyze_util.c an_user_defines_method a name's presence
-src/analyze_util.c an_user_recv_defines_method a name's presence
-src/analyze_util.c an_zero_arg_builtin_shadowed a name's presence
 src/analyze_util.c io_reopen_class a name's presence in an IO reopening
 src/analyze_util.c io_reopen_defs a name's presence in an IO reopening
 src/analyze_util.c io_reopen_ret_mixed a name's presence in an IO reopening
 src/codegen.c exc_class_defines a name's presence on an exception class
-src/codegen_call.c any_class_defines a name's presence
 src/codegen_call.c emit_class_value_responds_helper comp_cmethod_in_chain each class's own class methods, for respond_to? with a run-time name
 src/codegen_call.c emit_reopen_arm_test comp_cmethod_in_chain which classes define a class Class reopening's name otherwise
 src/codegen_call.c class_method_named a name's presence as a class method
@@ -211,7 +208,6 @@ src/compiler.c comp_super_shadow super, by its def's name
 src/analyze_desugar.c desugar_dynamic_send_inner a dynamic send's candidate names
 src/analyze_desugar.c dsend_class_names a dynamic send's candidate names
 src/analyze_desugar.c dsend_receiver_names_uncached a dynamic send's candidate names
-src/analyze_desugar.c dsend_every_object_name a dynamic send's candidate names
 src/analyze_scope.c pivs_callable_lit a Symbol argument's method
 src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method

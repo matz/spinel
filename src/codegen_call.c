@@ -19459,15 +19459,12 @@ void emit_brk_wrapped_call(Compiler *c, int id, Buf *b) {
 int any_class_defines(Compiler *c, const char *qm) {
   char wbase[256]; wbase[0] = '\0';
   int is_wr = setter_base_name(qm, wbase, sizeof wbase);
+  if (comp_name_answered(c, qm, 0) || comp_name_reader_any(c, qm) || (is_wr && comp_name_writer_any(c, wbase))) return 1;
   for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, qm, NULL) >= 0 ||
-        comp_reader_in_chain(c, k, qm, NULL) ||
-        (is_wr && comp_writer_in_chain(c, k, wbase, NULL)) ||
-        /* a native class's methods are its declared bindings, not scopes:
-           without this a native object in a poly slot answered false to
-           respond_to? for every method it has (#4504) */
-        (c->classes[k].is_native_class && comp_native_method_find(c, k, qm, 0, 0) >= 0))
-      return 1;
+    /* a native class's methods are its declared bindings, not scopes:
+       without this a native object in a poly slot answered false to
+       respond_to? for every method it has (#4504) */
+    if (c->classes[k].is_native_class && comp_native_method_find(c, k, qm, 0, 0) >= 0) return 1;
   return 0;
 }
 /* Does the class, an ancestor, or a module one of them includes include

@@ -2209,6 +2209,40 @@ const int *comp_name_reader_owners(Compiler *c, const char *name, int *n) {
   return list;
 }
 
+/* See compiler.h. The list while the chain memo can be trusted, else one scan
+   of every class, bracketed as the owners of the candidate sets are. */
+int comp_name_answered(Compiler *c, const char *name, int is_cm) {
+  int n;
+  comp_name_responders(c, name, is_cm, &n);
+  if (n >= 0) return n > 0;
+  int ans = 0;
+  mtab_enter(c);
+  for (int k = 0; k < c->nclasses && !ans; k++)
+    ans = (is_cm ? comp_cmethod_in_chain(c, k, name, NULL) : comp_method_in_chain(c, k, name, NULL)) >= 0;
+  mtab_leave(c);
+  return ans;
+}
+
+/* See compiler.h. */
+int comp_name_responder(Compiler *c, int cls, const char *name, unsigned side) {
+  mtab_enter(c);
+  int cm = (side & CT_CMETHOD) != 0;
+  int mi = cls < 0 ? comp_method_index(c, name)
+         : side & CT_OWN ? (cm ? comp_cmethod_in_class(c, cls, name) : comp_method_in_class(c, cls, name))
+         : cm ? comp_cmethod_in_chain(c, cls, name, NULL) : comp_method_in_chain(c, cls, name, NULL);
+  mtab_leave(c);
+  return mi;
+}
+
+/* See compiler.h. */
+int comp_name_writer_any(Compiler *c, const char *base) {
+  int ans = 0;
+  mtab_enter(c);
+  for (int k = 0; k < c->nclasses && !ans; k++) ans = comp_writer_in_chain(c, k, base, NULL);
+  mtab_leave(c);
+  return ans;
+}
+
 int comp_ary_root(Compiler *c, int cid) {
   return cid >= 0 && cid < c->nclasses ? c->classes[cid].ary_root - 1 : -1;
 }

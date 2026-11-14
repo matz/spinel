@@ -28318,20 +28318,20 @@ static void act_add_overrides(Compiler *c, ACallTargets *t, int cid, const char 
     Scope *w = &c->scopes[t->want];
     if (w->class_id >= 0 && w->class_id != cid && !w->is_cmethod == !cm &&
         cr_class_is_ancestor(c, cid, w->class_id) &&
-        (cm ? comp_cmethod_in_class(c, w->class_id, un) : comp_method_in_class(c, w->class_id, un)) == t->want)
+        comp_name_responder(c, w->class_id, un, CT_OWN | (cm ? CT_CMETHOD : 0)) == t->want)
       t->hit = 1;
     return;
   }
   int nd = 0; const int *ds = comp_descendants(c, cid, &nd);
   for (int d = 0; d < nd && ds; d++)
-    act_add(t, cm ? comp_cmethod_in_class(c, ds[d], un) : comp_method_in_class(c, ds[d], un));
+    act_add(t, comp_name_responder(c, ds[d], un, CT_OWN | (cm ? CT_CMETHOD : 0)));
 }
 
 /* Does a class below `cid` define `un` (a class method when `cm`)? */
 static int act_has_override(Compiler *c, int cid, const char *un, int cm) {
   int nd = 0; const int *ds = comp_descendants(c, cid, &nd);
   for (int d = 0; d < nd && ds; d++)
-    if ((cm ? comp_cmethod_in_class(c, ds[d], un) : comp_method_in_class(c, ds[d], un)) >= 0) return 1;
+    if (comp_name_responder(c, ds[d], un, CT_OWN | (cm ? CT_CMETHOD : 0)) >= 0) return 1;
   return 0;
 }
 
@@ -28464,7 +28464,7 @@ static void an_call_targets_nonunique(Compiler *c, int u, const char *un, ACallT
   if (rk == NK_SelfNode) {
     int mi = comp_self_call_mi(c, u, un);
     if (mi < 0 && rc < 0) mi = comp_cbody_call_mi(c, u, un);
-    if (mi < 0) mi = comp_included_method_index(c, un, u);
+    if (mi < 0) mi = call_target(c, u, -1, un, CT_INCLUDED, NULL);
     act_add(t, mi);
     Scope *self = comp_scope_of(c, u);
     int any = mi >= 0;

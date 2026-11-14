@@ -1,0 +1,25 @@
+[[true, false, true], [false, true, false], [false, true, false], [false, true, false], [true, false, true]]
+[[true, false, true], [false, true, false], [false, true, false], [false, true, false], [true, false, true]]
+[[true, false, true], [false, true, false], [false, true, false], [false, true, false], [true, false, true]]
+[[false, true, false], [false, true, false], [false, true, false], [true, false, true], [false, true, false]]
+[[false, true, false], [false, true, false], [true, false, true], [false, true, false], [false, true, false]]
+[[false, true, false], [false, true, false], [true, false, true], [false, true, false], [false, true, false]]
+[[false, true, false], [false, true, false], [false, true, false], [false, true, false], [false, true, false]]
+[[false, true, false], [false, true, false], [false, true, false], [false, true, false], [false, true, false]]
+[[false, true, false], [false, true, false], [false, true, false], [false, true, false], [false, true, false]]
+[[false, true, false], [false, true, false], [false, true, false], [false, true, false], [false, true, false]]
+true
+0
+false
+true
+true
+false
+:hit
+true
+false
+true
+false
+true
+true
+3
+2

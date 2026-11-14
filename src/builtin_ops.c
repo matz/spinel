@@ -1048,14 +1048,17 @@ static const BuiltinOp bop_rows[] = {
   { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_to_f($r) == $f0)", BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_eq($r, $q0))", RAT_IR },
   { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_poly_eq(sp_box_rational($r), $b0))", BOP_K(TY_POLY) | BOP_K(TY_UNKNOWN) },
+  { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_complex_eq((sp_Complex){sp_rational_to_f($r), 0.0, SP_CPLX_RE_F}, $c0))", BOP_K(TY_COMPLEX) },
   { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($b0), 0)" },
   { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_to_f($r) == $f0)", BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_eq($r, $q0))", RAT_IR },
   { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_poly_eq(sp_box_rational($r), $b0))", BOP_K(TY_POLY) | BOP_K(TY_UNKNOWN) },
+  { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_complex_eq((sp_Complex){sp_rational_to_f($r), 0.0, SP_CPLX_RE_F}, $c0))", BOP_K(TY_COMPLEX) },
   { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($b0), 0)" },
   { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_to_f($r) != $f0)", BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(!sp_rational_eq($r, $q0))", RAT_IR },
   { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(!sp_poly_eq(sp_box_rational($r), $b0))", BOP_K(TY_POLY) | BOP_K(TY_UNKNOWN) },
+  { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(!sp_complex_eq((sp_Complex){sp_rational_to_f($r), 0.0, SP_CPLX_RE_F}, $c0))", BOP_K(TY_COMPLEX) },
   { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($b0), 1)" },
   /* Comparable#between? / #clamp via <=> (#2563): clamp between two
      Rationals answers the receiver or a bound; with another bound the

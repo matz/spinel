@@ -27089,16 +27089,23 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   operands_held_for_later(c, operand, nop, recv >= 0, held);
   /* A push or an append of several arguments pushes each before the next
      is read, so where a later argument can see an earlier push
-     (push_args_read_before_pushes) every argument that reads a container
-     or may run code is bound first, in order, as CRuby reads them all
-     before the push (a literal, a constant or a local keeps its place: it
-     reads the same wherever it runs, and a nil one has no C value to bind): left in place,
+     (push_args_read_before_pushes) every argument is bound first, in
+     order, as CRuby reads them all before the push -- an expression over a
+     variable too, which a later argument can reassign (`a.push(x + 1,
+     (x = 5; a.size))`): left in place,
      `k.push(k[-2], k[-2])` read its second argument from the Array the first
      push had grown, and `a.push(5, last(a))` ran last on it. */
   int push_reads = push_args_read_before_pushes(c, id);
   if (push_reads)
-    for (int i = recv >= 0; i < nop; i++)
-      if (subtree_reads_container(c, operand[i]) || subtree_has_side_effect(c, operand[i])) held[i] = 1;
+    for (int i = recv >= 0; i < nop; i++) {
+      /* (but a value with no C value of its own -- a literal nil -- which
+         nothing can change, and a shared String slot, which its copy path
+         reads last) */
+      TyKind vt = repr_of(c, operand[i]).as_ty;
+      if ((vt == TY_NIL || vt == TY_VOID || vt == TY_UNKNOWN) && !subtree_has_side_effect(c, operand[i])) continue;
+      if (strbuf_slot_has(c, operand[i])) continue;
+      held[i] = 1;
+    }
   int nheld_value = 0;
   for (int i = 0; i < nop; i++) {
     nheld += held[i];

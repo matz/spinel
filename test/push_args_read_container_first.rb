@@ -109,6 +109,22 @@ str = +"x"
 sa.push(str, (str << ("y" * 4096); "z"), sa.size)
 p sa[1].size, sa[2], sa[3]
 
+# an expression over a variable a later argument reassigns is read first
+vx = 1
+va = [0]
+va.push(vx + 1, (vx = 5; va.length))
+p va
+vz = 2
+vc = [0]
+vc.push(vz * 3, (vz = 9; vc.size), vz)
+p vc
+class Bump
+  def initialize = (@n = 1; @a = [0])
+  def bump = (@n = 7; @a.size)
+  def go = (@a.push(@n + 1, bump); @a)
+end
+p Bump.new.go
+
 # pushes that read no container keep their order too
 q = [1]
 q.push(2, 3)

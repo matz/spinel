@@ -25,6 +25,16 @@ true
 ["key"]
 "☺"
 #<Encoding:UTF-8>
+FrozenError
+"seed"
+true
+100001
+"B"
+#<Encoding:BINARY (ASCII-8BIT)>
+"utfC"
+#<Encoding:BINARY (ASCII-8BIT)>
+"textD"
+#<Encoding:UTF-8>
 180000
 9999.5
 #<Encoding:BINARY (ASCII-8BIT)>

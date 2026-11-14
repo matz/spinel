@@ -82,6 +82,38 @@ ub = "".b
 [0x263a].pack("U", buffer: ub)
 p ub, ub.encoding
 
+# an element's to_int runs while packing: a buffer it freezes takes no
+# bytes and raises FrozenError; one it grows, re-encodes or replaces takes
+# the packed bytes on what it is then
+FZ = +"seed"
+class Freezer
+  def to_int = (FZ.freeze; 65)
+end
+begin
+  [Freezer.new].pack("C", buffer: FZ)
+rescue FrozenError => e
+  p e.class
+end
+p FZ, FZ.frozen?
+GR = "".b
+class Grower
+  def to_int = (GR << ("z" * 100_000); 66)
+end
+[Grower.new].pack("C", buffer: GR)
+p GR.bytesize, GR.byteslice(-1, 1), GR.encoding
+EN = +"utf"
+class Recoder
+  def to_int = (EN.force_encoding(Encoding::BINARY); 67)
+end
+[Recoder.new].pack("C", buffer: EN)
+p EN, EN.encoding
+RP = "".b
+class Replacer
+  def to_int = (RP.replace(+"text"); 68)
+end
+[Replacer.new].pack("C", buffer: RP)
+p RP, RP.encoding
+
 # a long message built a pack at a time
 msg = "".b
 20_000.times { |i| msg << 0x59; [i * 0.5].pack("E", buffer: msg) }

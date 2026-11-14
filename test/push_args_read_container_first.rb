@@ -49,6 +49,15 @@ z = [0]
 z.push(h.size, h[:a], z.size)
 p z
 
+# a lambda among the arguments, and a Struct member's Array
+l = [0, 1]
+l.push(-> { l.size }, l.size)
+p l.size, l[2].call, l[3]
+Pair = Struct.new(:items)
+pr = Pair.new([1, 2])
+pr.items.push(pr.items[-2], pr.items[-2])
+p pr.items
+
 # an ivar
 class Stack
   def initialize = (@items = [5, 6])

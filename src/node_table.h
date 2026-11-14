@@ -211,6 +211,14 @@ typedef enum {
 #else
 #define NT_WORK() ((void)0)
 #endif
+/* ...and of one step: the units since `since` (nt_work_now at the step's
+   start), printed on stderr as `spinel-work-step: <name> <units>`, so the
+   test can take the work of the step a program shape stresses apart from
+   the rest of the compile. In a normal build nt_work_now answers 0 and
+   nt_work_step prints nothing. Not nt_set_pass: its name tags the nodes a
+   pass appends. */
+unsigned long long nt_work_now(void);
+void nt_work_step(const char *name, unsigned long long since);
 
 /* Integer node-type, computed once per node and cached. NK_NONE if the node
    has no type or an unrecognized one. */

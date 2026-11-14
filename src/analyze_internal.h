@@ -1182,6 +1182,29 @@ int anh_find(const ANameHash *st, const char *nm);   /* insertion index, or -1 *
 void anh_add(ANameHash *st, const char *nm);
 void anh_free(ANameHash *st);
 void anh_copy(ANameHash *dst, const ANameHash *src);   /* dst, empty, takes src's names (keys shared) */
+/* Names with a number each (a node, a class, a write), added in any order
+   and sorted by name once (ani_sort); the entries of one name then follow
+   each other, in the order they were added. A scan of every entry for the
+   ones of a name, once per ask, was N^2 for N asks (ani_first finds the
+   first by bisection). Names are borrowed; zero-initialize to start. */
+typedef struct { const char *name; int v, ord; } ANameInt;
+typedef struct { ANameInt *e; int n, cap; } ANameIndex;
+void ani_add(ANameIndex *x, const char *name, int v);
+void ani_sort(ANameIndex *x);
+int ani_first(const ANameIndex *x, const char *name);   /* the first entry of name, x->n for none */
+void ani_free(ANameIndex *x);
+/* The lookups of the record's class questions (analyze_elab.c), held by the
+   pass that asks them, each built on the first question that needs it:
+   hdr, the class headers by the Ruby path each spells (a class number each,
+   -1 for a header whose class is not registered), and hdr_unknown, set when
+   a qualified header's class is not registered yet, which makes every
+   answer unknown; byname and byleaf, the classes by Ruby name and by the
+   last segment of it, in class order. The header names are the index's own
+   copies; the class names are the classes'. */
+struct ElabNames { ANameIndex hdr; int hdr_unknown, hdr_built; ANameIndex byname, byleaf; int cls_built; };
+/* The qualified names the class pass gave constants written under a module
+   path ("Mod__LIMIT"), and each tail after a "__": see qc_leaf_qualified. */
+struct QcConstNames { ANameHash quals, leaves; };
 void cr_class_only_names(Compiler *c, ANameHash *out);   /* the names only plain classes' methods hold */
 /* The block-passing call sites, and the supers, of the node table, indexed
    for yield_value_type and its kin (yvt_build, analyze_util.c): built once

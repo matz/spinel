@@ -263,6 +263,31 @@ void anh_copy(ANameHash *dst, const ANameHash *src) {
   memcpy(dst->key, src->key, sizeof(char *) * (size_t)dst->n);
   memcpy(dst->next, src->next, sizeof(int) * (size_t)dst->n);
 }
+void ani_add(ANameIndex *x, const char *name, int v) {
+  if (x->n == x->cap) {
+    x->cap = x->cap ? x->cap * 2 : 64;
+    x->e = realloc(x->e, sizeof *x->e * (size_t)x->cap);
+    if (!x->e) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  x->e[x->n] = (ANameInt){ name, v, x->n };
+  x->n++;
+}
+static int ani_order(const void *a, const void *b) {
+  const ANameInt *x = a, *y = b;
+  int r = strcmp(x->name, y->name);
+  return r ? r : (x->ord > y->ord) - (x->ord < y->ord);
+}
+void ani_sort(ANameIndex *x) { qsort(x->e, (size_t)x->n, sizeof *x->e, ani_order); }
+int ani_first(const ANameIndex *x, const char *name) {
+  int lo = 0, hi = x->n;
+  while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (strcmp(x->e[mid].name, name) < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+void ani_free(ANameIndex *x) { free(x->e); x->e = NULL; x->n = x->cap = 0; }
 
 /* The program as written, read ahead of every desugar (analyze_program's
    first step). It notes each name the program gives a method by a def or may
@@ -6420,16 +6445,34 @@ static void qc_keep_orig_name(const NodeTable *nt, int node) {
 
 /* The qualified names qc_value_collisions gives a constant written under a
    module path */
-static char **qc_const_quals; static int qc_nconst_quals;
-/* Was some constant of this leaf name given one? */
-int qc_leaf_qualified(const char *leaf) {
-  size_t ll = strlen(leaf);
-  for (int i = 0; i < qc_nconst_quals; i++) {
-    size_t l = strlen(qc_const_quals[i]);
-    if (l > ll + 2 && sp_streq(qc_const_quals[i] + l - ll, leaf) && !strncmp(qc_const_quals[i] + l - ll - 2, "__", 2))
-      return 1;
+/* The qualified names themselves, and each tail after a "__" of one, held
+   by the Compiler (Compiler.qc_consts) for the question below, which the
+   readers of constants ask after the class pass. Freed with it. */
+static struct QcConstNames *qc_const_names(Compiler *c) {
+  if (!c->qc_consts) {
+    c->qc_consts = calloc(1, sizeof *c->qc_consts);
+    if (!c->qc_consts) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
-  return 0;
+  return c->qc_consts;
+}
+/* Was some constant of this leaf name given one? A name is "Mod__Leaf": the
+   leaf asked about is any tail after a "__" that something precedes. It is
+   asked of each constant set in the program, so it looks a set up rather
+   than scanning every name given (test/scale/const_collisions.sh). */
+int qc_leaf_qualified(Compiler *c, const char *leaf) { return c->qc_consts && anh_has(&c->qc_consts->leaves, leaf); }
+static void qc_const_qual_add(Compiler *c, const char *qn) {
+  struct QcConstNames *q = qc_const_names(c);
+  anh_add(&q->quals, qn);
+  for (const char *p = qn + 1; p[0] && p[1] && p[2]; p++)
+    if (p[0] == '_' && p[1] == '_' && !anh_has(&q->leaves, p + 2)) anh_add(&q->leaves, p + 2);
+}
+void qc_const_names_free(Compiler *c) {
+  if (!c->qc_consts) return;
+  for (int i = 0; i < c->qc_consts->quals.n; i++) free((char *)c->qc_consts->quals.key[i]);
+  anh_free(&c->qc_consts->quals);
+  anh_free(&c->qc_consts->leaves);
+  free(c->qc_consts);
+  c->qc_consts = NULL;
 }
 
 /* Writes ordered by name, then by module path: the writes of one name are
@@ -6451,22 +6494,21 @@ static int qc_name_order(const void *a, const void *b) {
    scanned all of os, N^2 for N constants of N names beside N classes
    (test/scale/const_collisions.sh). os stays as it is while the index is
    asked. */
-typedef struct { const QCWrite *os; int *by_name, *by_node, n; } QCIndex;
+typedef struct { const QCWrite *os; ANameIndex names; int *by_node, n; } QCIndex;
 static int qc_int_order(const void *a, const void *b) {
   int x = *(const int *)a, y = *(const int *)b;
   return x < y ? -1 : x > y;
 }
 static void qci_build(QCIndex *x, const QCWrite *os, int on) {
   x->os = os; x->n = on;
-  x->by_name = malloc(sizeof(int) * (size_t)(on ? on : 1));
   x->by_node = malloc(sizeof(int) * (size_t)(on ? on : 1));
-  if (!x->by_name || !x->by_node) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < on; i++) { x->by_name[i] = i; x->by_node[i] = os[i].node; }
-  qc_order_ws = os;
-  qsort(x->by_name, (size_t)on, sizeof(int), qc_write_order);
+  if (!x->by_node) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memset(&x->names, 0, sizeof x->names);
+  for (int i = 0; i < on; i++) { x->by_node[i] = os[i].node; ani_add(&x->names, os[i].name, i); }
+  ani_sort(&x->names);
   qsort(x->by_node, (size_t)on, sizeof(int), qc_int_order);
 }
-static void qci_free(QCIndex *x) { free(x->by_name); free(x->by_node); }
+static void qci_free(QCIndex *x) { ani_free(&x->names); free(x->by_node); }
 /* Is `w` the same node as an entry of the index (a `Point = Struct.new(...)`,
    both a constant write and a class definition)? */
 static int qc_is_class_write(const QCWrite *w, const QCIndex *x) {
@@ -6476,14 +6518,8 @@ static int qc_is_class_write(const QCWrite *w, const QCIndex *x) {
    index -- the same leaf under a different module path? An entry that is
    the same node is the write itself, not another definition. */
 static int qc_leaf_elsewhere(const QCWrite *w, const QCIndex *x) {
-  int lo = 0, hi = x->n;   /* the first entry of w's name */
-  while (lo < hi) {
-    int mid = lo + (hi - lo) / 2;
-    if (strcmp(x->os[x->by_name[mid]].name, w->name) < 0) lo = mid + 1;
-    else hi = mid;
-  }
-  for (int q = lo; q < x->n && sp_streq(x->os[x->by_name[q]].name, w->name); q++) {
-    const QCWrite *o = &x->os[x->by_name[q]];
+  for (int q = ani_first(&x->names, w->name); q < x->names.n && sp_streq(x->names.e[q].name, w->name); q++) {
+    const QCWrite *o = &x->os[x->names.e[q].v];
     if (o->node == w->node) continue;
     if (o->depth != w->depth) return 1;
     for (int k = 0; k < w->depth; k++) if (!sp_streq(o->path[k], w->path[k])) return 1;
@@ -6594,8 +6630,9 @@ static void qc_value_collisions(Compiler *c) {
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      qc_const_quals = realloc(qc_const_quals, sizeof(char *) * (size_t)(qc_nconst_quals + 1));
-      qc_const_quals[qc_nconst_quals++] = strdup(qn);
+      char *own = strdup(qn);
+      if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      qc_const_qual_add(c, own);
     }
   }
   qc_free_headers();
@@ -6741,12 +6778,42 @@ static int qc_runs_with(const NodeTable *nt, const int *par, int hd, int st, int
   }
   return 0;
 }
+/* The class and module headers by the name qc_refuse_conditional_builder
+   matches (key_name of a plain constant path), by the name the unless form
+   matches (nt_key_name of any path), and the constant writes by name: the
+   questions asked of each builder write (which headers and which other
+   writes carry its name) scanned every header (and write) of the program
+   per builder, N^2 for N builders beside N headers
+   (test/scale/const_collisions.sh). The entries of a name are in the order
+   the program's walk met them, so a refusal is reported where it always
+   was. */
+typedef struct { ANameIndex hd, hdu, wr; } QCBuilderIdx;
+static void qc_builder_idx_build(Compiler *c, QCBuilderIdx *bx) {
+  const NodeTable *nt = c->nt;
+  static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
+  for (int h = 0; h < 2; h++)
+    NT_FOREACH_KIND(nt, HK[h], hd) {
+      int cp = nt_ref(nt, hd, "constant_path");
+      if (cp < 0) continue;
+      const char *kn = nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
+      if (kn) ani_add(&bx->hd, kn, hd);
+      const char *un = nt_key_name(nt, cp);
+      if (un) ani_add(&bx->hdu, un, hd);
+    }
+  ani_sort(&bx->hd); ani_sort(&bx->hdu);
+  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {
+    const char *on = nt_str(nt, o, "name");
+    if (on) ani_add(&bx->wr, on, o);
+  }
+  ani_sort(&bx->wr);
+}
+static void qc_builder_idx_free(QCBuilderIdx *bx) { ani_free(&bx->hd); ani_free(&bx->hdu); ani_free(&bx->wr); }
 /* `Bar = Class.new { } unless defined?(Bar)` (cond, the unless) ahead of
    header hd in the same statements, where no other write of Bar and no
    other class or module Bar is in a body the write can see (its own body,
    an enclosing body or the top level): the write runs, and the header
    reopens what it built. */
-static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, int cond,
+static int qc_unless_defined_runs(const NodeTable *nt, const int *par, const QCBuilderIdx *bx, int w, int cond,
                                   int hd, int body, const char *wn) {
   if (nt_kind(nt, cond) != NK_UnlessNode) return 0;
   int pr = nt_ref(nt, cond, "predicate");
@@ -6758,22 +6825,18 @@ static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, in
   if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_runs_with(nt, par, hd, cs, cond) ||
       !qc_written_before(nt, w, hd))
     return 0;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {
-    const char *on = nt_str(nt, o, "name");
-    if (o == w || !on || !sp_streq(on, wn)) continue;
+  for (int q = ani_first(&bx->wr, wn); q < bx->wr.n && sp_streq(bx->wr.e[q].name, wn); q++) {
+    int o = bx->wr.e[q].v;
+    if (o == w) continue;
     int ob = qc_enclosing_body(nt, par, o);
     for (int e = body; e >= 0; e = qc_enclosing_body(nt, par, e)) if (e == ob) return 0;
   }
-  static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
-  for (int h = 0; h < 2; h++)
-    NT_FOREACH_KIND(nt, HK[h], o) {
-      int cp = nt_ref(nt, o, "constant_path");
-      const char *on = cp >= 0 ? nt_key_name(nt, cp) : NULL;
-      if (!on || !sp_streq(on, wn)) continue;
-      int ob = qc_enclosing_body(nt, par, o);
-      if (ob == body) { if (!qc_written_before(nt, w, o)) return 0; continue; }
-      for (int e = body; e >= 0; e = qc_enclosing_body(nt, par, e)) if (e == ob) return 0;
-    }
+  for (int q = ani_first(&bx->hdu, wn); q < bx->hdu.n && sp_streq(bx->hdu.e[q].name, wn); q++) {
+    int o = bx->hdu.e[q].v;
+    int ob = qc_enclosing_body(nt, par, o);
+    if (ob == body) { if (!qc_written_before(nt, w, o)) return 0; continue; }
+    for (int e = body; e >= 0; e = qc_enclosing_body(nt, par, e)) if (e == ob) return 0;
+  }
   return 1;
 }
 /* Does header hd come ahead of builder write w in the run? In one file,
@@ -6811,42 +6874,40 @@ static int qc_header_runs_first(Compiler *c, const int *par, int hd, int w) {
 static void qc_refuse_conditional_builder(Compiler *c) {
   const NodeTable *nt = c->nt;
   const int *par = NULL;
+  QCBuilderIdx bx = {{0}};
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
     const char *wn = nt_str(nt, w, "name");
     if (!wn || class_def_builder(nt, w) < 0) continue;
-    if (!par) par = comp_parent_map(c);
+    if (!par) { par = comp_parent_map(c); qc_builder_idx_build(c, &bx); }
     int st = par[w];
     if (st >= 0 && nt_kind(nt, st) != NK_StatementsNode) st = -1;
     int body = qc_enclosing_body(nt, par, w);
-    static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
-    for (int h = 0; h < 2; h++)
-      NT_FOREACH_KIND(nt, HK[h], hd) {
-        int cp = nt_ref(nt, hd, "constant_path");
-        if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !key_name(c, cp) ||
-            !sp_streq(key_name(c, cp), wn) || qc_enclosing_body(nt, par, hd) != body)
-          continue;
-        /* A header that runs first makes its own class, and the write then
-           puts the built class in its place: the header's methods are not
-           the built class's. The passes would merge the two. */
-        if (qc_header_runs_first(c, par, hd, w)) {
-          char msg[512];
-          snprintf(msg, sizeof msg, "a `class %s` or `module %s` ahead of a %s = Class.new or Module.new "
-                   "in the same body is not supported: the write replaces the header's class with the "
-                   "built one, and spinel would merge the two; rename one of them", wn, wn, wn);
-          unsupported_feature(c, w, msg);
-          continue;
-        }
-        if (st >= 0 && qc_runs_with(nt, par, hd, st, w)) continue;
-        int cond = st >= 0 ? par[st] : -1;
-        if (cond >= 0 && qc_unless_defined_runs(nt, par, w, cond, hd, body, wn)) continue;
+    for (int q = ani_first(&bx.hd, wn); q < bx.hd.n && sp_streq(bx.hd.e[q].name, wn); q++) {
+      int hd = bx.hd.e[q].v;
+      if (qc_enclosing_body(nt, par, hd) != body) continue;
+      /* A header that runs first makes its own class, and the write then
+         puts the built class in its place: the header's methods are not
+         the built class's. The passes would merge the two. */
+      if (qc_header_runs_first(c, par, hd, w)) {
         char msg[512];
-        snprintf(msg, sizeof msg, "a %s = Class.new or Module.new that may run without a "
-                 "`class %s` or `module %s` in the same body, or the header without it, is not "
-                 "supported: spinel cannot tell whether the header reopens the built class; write "
-                 "the two together or rename one of them", wn, wn, wn);
+        snprintf(msg, sizeof msg, "a `class %s` or `module %s` ahead of a %s = Class.new or Module.new "
+                 "in the same body is not supported: the write replaces the header's class with the "
+                 "built one, and spinel would merge the two; rename one of them", wn, wn, wn);
         unsupported_feature(c, w, msg);
+        continue;
       }
+      if (st >= 0 && qc_runs_with(nt, par, hd, st, w)) continue;
+      int cond = st >= 0 ? par[st] : -1;
+      if (cond >= 0 && qc_unless_defined_runs(nt, par, &bx, w, cond, hd, body, wn)) continue;
+      char msg[512];
+      snprintf(msg, sizeof msg, "a %s = Class.new or Module.new that may run without a "
+               "`class %s` or `module %s` in the same body, or the header without it, is not "
+               "supported: spinel cannot tell whether the header reopens the built class; write "
+               "the two together or rename one of them", wn, wn, wn);
+      unsupported_feature(c, w, msg);
+    }
   }
+  qc_builder_idx_free(&bx);
 }
 
 void qualify_colliding_classes(Compiler *c) {
@@ -6864,10 +6925,13 @@ void qualify_colliding_classes(Compiler *c) {
      with it. When the class is nested, any other definition of the leaf
      makes the passes qualify it, and a read of its path then reaches the
      other one. A top-level class is left alone beside a nested one. */
+  QCIndex wx;
+  qci_build(&wx, ws, wn);
   for (int i = 0; i < wn; i++) {
     if (!ws[i].head[0]) continue;
-    for (int j = 0; j < wn; j++) {
-      if (j == i || !sp_streq(ws[j].name, ws[i].name)) continue;
+    for (int q = ani_first(&wx.names, ws[i].name); q < wx.names.n && sp_streq(wx.names.e[q].name, ws[i].name); q++) {
+      int j = wx.names.e[q].v;
+      if (j == i) continue;
       int same_body = qc_path_eq(ws[i].path, ws[i].depth, ws[j].path, ws[j].depth);
       if (same_body && sp_streq(ws[j].head, ws[i].head)) continue;
       if (!same_body && ws[i].depth == 0) continue;
@@ -6878,6 +6942,7 @@ void qualify_colliding_classes(Compiler *c) {
       unsupported_feature(c, ws[i].node, msg);
     }
   }
+  qci_free(&wx);
   /* (which nested classes take a qualified name is decided after the
      walk, by qc_rule_qualifies: elab_prov_apply) */
   qc_free_headers();
@@ -7050,16 +7115,38 @@ void qualify_colliding_reads(Compiler *c) {
   if (nl > 0) {
     qc_value_reads(c, leaves, nl);
     qc_build_reverse_flags(c);
+    ElabNames nx = {0};
+    /* The reads are renamed after all are asked about: a rename bumps the
+       node table's version, and the parent map the next question climbs
+       (lr_class_named) is rebuilt for it, once per renamed read. A renamed
+       read is seen by a question only as a builder's receiver
+       (class_def_builder, through read_key_name) or in a deferred block
+       (elab_block_when, through key_name); renaming after the questions
+       makes each see such a receiver as the registration walk saw it,
+       whichever order the reads are met in. */
+    int *rn = NULL, nrn = 0, crn = 0;
+    const char **rcn = NULL;
     for (int i = 0; i < nt->count; i++) {
       NodeKind k = nt_kind(nt, i);
       if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || (qc_def_cpath && qc_def_cpath[i])) continue;
       const char *w = nt_str(nt, i, "name");
-      int ci = elab_class_named(c, i);
+      int ci = elab_class_named(c, &nx, i);
       const char *cn = ci >= 0 ? c->classes[ci].name : NULL;
       if (!cn || !w || sp_streq(cn, w) || !sp_streq(qc_c_leaf(cn), w)) continue;
-      qc_keep_orig_name(nt, i);
-      nt_node_set_str((NodeTable *)nt, i, "qc_name", cn);
+      if (nrn == crn) {
+        crn = crn ? crn * 2 : 64;
+        rn = realloc(rn, sizeof *rn * (size_t)crn);
+        rcn = realloc(rcn, sizeof *rcn * (size_t)crn);
+        if (!rn || !rcn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      rn[nrn] = i; rcn[nrn++] = cn;
     }
+    elab_names_end(&nx);
+    for (int q = 0; q < nrn; q++) {
+      qc_keep_orig_name(nt, rn[q]);
+      nt_node_set_str((NodeTable *)nt, rn[q], "qc_name", rcn[q]);
+    }
+    free(rn); free(rcn);
     qc_free_reverse_flags();
   }
   elab_prov_free_leaves();
@@ -49225,6 +49312,13 @@ int desugar_rescue_block_bodies_at(Compiler *c, LowerCtx *lc, int id) {
   comp_grow_node_arrays(c);
   return 1;
 }
+/* Run one step; spinel-work prints the work it took (nt_work_step), which
+   make scale-test reads for the steps a program shape stresses. */
+static void an_work_step(Compiler *c, const char *name, void (*step)(Compiler *)) {
+  unsigned long long w = nt_work_now();
+  step(c);
+  nt_work_step(name, w);
+}
 static void an_phase_desugar_register(Compiler *c) {
   comp_poly_candidates_reset();
   comp_descendants_reset();
@@ -49399,16 +49493,16 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_ENUMERATOR_PRODUCE);         /* Enumerator.produce -> fiber generator */
   lower_run(c, &lc, LW_PARAM_DEFAULT_ASSIGNS_LOCAL); /* def m(p = (x = e)) reading x -> sentinel + callee guard */
   lower_run(c, &lc, LW_RECURSIVE_PARAM_DEFAULTS);   /* def m(x, y = m(..)) -> default helper method */
-  qualify_colliding_classes(c);
+  an_work_step(c, "qualify_colliding_classes", qualify_colliding_classes);
   /* the walk is a step of its own: a form it runs splices through the host,
      which lowers each splice as it is made; the rows a splice leaves to the
      program run once, at the walk's end */
   host_begin(&hs, &lc);
   scope_read_keys_from(c);   /* (the reads qualify keys after the walk: read_key_name) */
   AN_STEP_V("elab_program", elab_program(c, &hs));   /* walk_scope of each file's top level, and the load record */
-  elab_prov_apply(c);   /* the nested classes take their names, by the rule (qc_rule_qualifies) */
+  an_work_step(c, "elab_prov_apply", elab_prov_apply);   /* the nested classes take their names, by the rule (qc_rule_qualifies) */
   scope_read_keys_from(NULL);
-  qualify_colliding_reads(c);
+  an_work_step(c, "qualify_colliding_reads", qualify_colliding_reads);
   /* a def in a `K.instance_eval { }` block defines K's class method (the
      record's frame): the scope walk filed its scope before the record saw the
      def, so it is moved here, as `def self.m` in K's body is placed */
@@ -49433,7 +49527,7 @@ static void an_phase_desugar_register(Compiler *c) {
   host_end(c, &hs);
   lower_finish(c, &lc);   /* SPINEL_LOWER_CHECK: the report, and no C */
   prog_refuse_loads(c);
-  elab_const_keys(c);
+  an_work_step(c, "elab_const_keys", elab_const_keys);
   if (g_dump_load_record) { elab_dump(c, stdout); exit(0); }   /* the load phase's points, as the walk leaves them */
   AN_STEP_V("expand_static_splat_args", expand_static_splat_args(c, 0, c->nt->count));
   AN_STEP_V("register_singleton_defs", register_singleton_defs(c));   /* def CONST.m / def x.m -> synthesized subclass */

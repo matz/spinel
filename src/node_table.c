@@ -827,6 +827,21 @@ static const SpNode *node_at(const NodeTable *nt, int id) {
 #ifdef SP_WORK_COUNT
 unsigned long long g_nt_work = 0;
 #endif
+unsigned long long nt_work_now(void) {
+#ifdef SP_WORK_COUNT
+  return g_nt_work;
+#else
+  return 0;
+#endif
+}
+void nt_work_step(const char *name, unsigned long long since) {
+#ifdef SP_WORK_COUNT
+  fprintf(stderr, "spinel-work-step: %s %llu\n", name, g_nt_work - since);
+#else
+  (void)name;
+  (void)since;
+#endif
+}
 const char *nt_type(const NodeTable *nt, int id) {
   NT_WORK();
   const SpNode *nd = node_at(nt, id);

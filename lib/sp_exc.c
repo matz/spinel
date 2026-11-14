@@ -5,6 +5,7 @@
 #include "sp_exc_ctx.h"
 #include <errno.h>
 #include <string.h>
+#include <stddef.h>
 #include "sp_compat.h"
 
 /* (here, not in sp_poly_cold.c: the table is written on its first lookup,
@@ -13,15 +14,23 @@
    whose name hashes to slot h (open addressing), 0 for an empty slot. Built on
    the first lookup from the rows that have an id, so it cannot drift from the
    list; a lookup is one hash of the name and, for a hit, one compare. */
-/* the names are stored in the rows (not pointed to), so the table needs no
-   load-time relocation */
-#define SP_BCLS_NAME_MAX 48
-#define X(k, nm, id, flags) _Static_assert(sizeof(nm) <= SP_BCLS_NAME_MAX, "raise SP_BCLS_NAME_MAX");
+/* the names are packed into one struct of exact-size char arrays and a row
+   holds its name's offset there, so the table needs no load-time relocation
+   and carries no padding (fixed-width name rows were ~6 KB, four times the
+   names: that matters on a 64 KB-flash part) */
+#define X(k, nm, id, flags) char k[sizeof(nm)];
+struct sp_bcls_names_t { SP_BUILTIN_CLASSES(X) };
+#undef X
+#define X(k, nm, id, flags) nm,
+static const struct sp_bcls_names_t sp_bcls_names = { SP_BUILTIN_CLASSES(X) };
+#undef X
+#define X(k, nm, id, flags) _Static_assert(offsetof(struct sp_bcls_names_t, k) <= 0xffff && (id) >= -32768 && (id) <= 32767, "widen sp_bcls_rows");
 SP_BUILTIN_CLASSES(X)
 #undef X
-#define X(k, nm, id, flags) {nm, id},
-static const struct { char name[SP_BCLS_NAME_MAX]; int id; } sp_bcls_rows[] = { SP_BUILTIN_CLASSES(X) };
+#define X(k, nm, id, flags) {offsetof(struct sp_bcls_names_t, k), id},
+static const struct { unsigned short off; short id; } sp_bcls_rows[] = { SP_BUILTIN_CLASSES(X) };
 #undef X
+#define SP_BCLS_NAME(i) ((const char *)&sp_bcls_names + sp_bcls_rows[i].off)
 #define SP_BCLS_NROWS ((int)(sizeof sp_bcls_rows / sizeof sp_bcls_rows[0]))
 #define SP_BCLS_SLOTS 256   /* a power of two, over twice the rows */
 _Static_assert(SP_BCLS_SLOTS >= 2 * (int)(sizeof sp_bcls_rows / sizeof sp_bcls_rows[0]), "raise SP_BCLS_SLOTS");
@@ -40,7 +49,7 @@ static void sp_bcls_build(void) {
   }
   for (int i = 0; i < SP_BCLS_NROWS; i++) {
     if (!sp_bcls_rows[i].id) continue;
-    unsigned h = sp_bcls_hash(sp_bcls_rows[i].name);
+    unsigned h = sp_bcls_hash(SP_BCLS_NAME(i));
     while (sp_bcls_slot[h]) h = (h + 1) & (SP_BCLS_SLOTS - 1);
     sp_bcls_slot[h] = (unsigned char)(i + 1);
   }
@@ -49,7 +58,7 @@ static void sp_bcls_build(void) {
 int sp_builtin_class_id_of(const char *n) {
   if (SP_ATOMIC_LOAD(&sp_bcls_state, __ATOMIC_ACQUIRE) != 2) sp_bcls_build();
   for (unsigned h = sp_bcls_hash(n); sp_bcls_slot[h]; h = (h + 1) & (SP_BCLS_SLOTS - 1))
-    if (!strcmp(n, sp_bcls_rows[sp_bcls_slot[h] - 1].name)) return sp_bcls_rows[sp_bcls_slot[h] - 1].id;
+    if (!strcmp(n, SP_BCLS_NAME(sp_bcls_slot[h] - 1))) return sp_bcls_rows[sp_bcls_slot[h] - 1].id;
   return -1;
 }
 
@@ -162,17 +171,22 @@ static const char *const SP_EXC_HIER[][2] = {
   {NULL, NULL}
 };
 
-/* The same hierarchy by class id. sp_exc_parent_id[-id] is the id of the
+/* The same hierarchy by class id. sp_exc_parent_id[SP_EXC_IX(id)] is the id of the
    parent of the builtin exception class `id` (SP_BCLS_*), 0 for an id that is
    no exception class or whose parent has no id, the class's own id for
    Exception. Generated on first use from SP_EXC_HIER and the class list
    (sp_builtin_classes.h): every pair whose two ends both have an id. A chain
    through a class without an id stops at a 0 entry, which answers "not known"
    and sends the question to the name walk, so an id answer is never a guess. */
-#define SP_EXC_ID_SPAN 192
-#define X(k, n, id, flags) _Static_assert((id) > -SP_EXC_ID_SPAN, "raise SP_EXC_ID_SPAN");
+/* indexed by -id - SP_EXC_ID_LO: the class ids start at -100, so the tables
+   hold only the span the ids use (half the RAM of indexing by -id) */
+#define SP_EXC_ID_LO 100
+#define SP_EXC_ID_SPAN 96
+#define X(k, n, id, flags) _Static_assert((id) == 0 || ((id) <= -SP_EXC_ID_LO && (id) > -SP_EXC_ID_LO - SP_EXC_ID_SPAN), "move SP_EXC_ID_LO or raise SP_EXC_ID_SPAN");
 SP_BUILTIN_CLASSES(X)
 #undef X
+#define SP_EXC_IX(id) (-(id) - SP_EXC_ID_LO)
+#define SP_EXC_IX_OK(id) ((id) <= -SP_EXC_ID_LO && SP_EXC_IX(id) < SP_EXC_ID_SPAN)
 static short sp_exc_parent_id[SP_EXC_ID_SPAN];
 /* The kept name (sp_exc_class_name) of each builtin exception class, by the
    same ids, filled on first use: a class name question about a builtin
@@ -187,10 +201,10 @@ static void sp_exc_id_hier_build(void) {
     while (SP_ATOMIC_LOAD(&sp_exc_hier_state, __ATOMIC_ACQUIRE) != 2) {}
     return;
   }
-  sp_exc_parent_id[-SP_BCLS_EXCEPTION] = SP_BCLS_EXCEPTION;
+  sp_exc_parent_id[SP_EXC_IX(SP_BCLS_EXCEPTION)] = SP_BCLS_EXCEPTION;
   for (int i = 0; SP_EXC_HIER[i][0]; i++) {
     int c = sp_builtin_class_id_of(SP_EXC_HIER[i][0]), p = sp_builtin_class_id_of(SP_EXC_HIER[i][1]);
-    if (c < -1 && p < -1) sp_exc_parent_id[-c] = (short)p;
+    if (SP_EXC_IX_OK(c) && SP_EXC_IX_OK(p)) sp_exc_parent_id[SP_EXC_IX(c)] = (short)p;
   }
   SP_ATOMIC_STORE(&sp_exc_hier_state, 2, __ATOMIC_RELEASE);
 }
@@ -199,9 +213,9 @@ static inline void sp_exc_id_hier(void) {
 }
 int sp_exc_id_is_a(int cid, int tid) {
   sp_exc_id_hier();
-  if (cid >= 0 || tid >= -1 || -tid >= SP_EXC_ID_SPAN || !sp_exc_parent_id[-tid]) return -1;
-  for (int depth = 0; depth < 30 && cid < -1 && -cid < SP_EXC_ID_SPAN; depth++) {
-    int p = sp_exc_parent_id[-cid];
+  if (!SP_EXC_IX_OK(tid) || !sp_exc_parent_id[SP_EXC_IX(tid)]) return -1;
+  for (int depth = 0; depth < 30 && SP_EXC_IX_OK(cid); depth++) {
+    int p = sp_exc_parent_id[SP_EXC_IX(cid)];
     if (!p) return -1;
     if (cid == tid) return 1;
     if (p == cid) return 0;
@@ -214,7 +228,7 @@ int sp_exc_id_is_a(int cid, int tid) {
 static void sp_exc_set_cls_id(sp_Exception *e) {
   sp_exc_id_hier();
   int id = e->cls_name ? sp_builtin_class_id_of(e->cls_name) : -1;
-  e->cls_id = id < -1 && -id < SP_EXC_ID_SPAN && sp_exc_parent_id[-id] ? id : 0;
+  e->cls_id = SP_EXC_IX_OK(id) && sp_exc_parent_id[SP_EXC_IX(id)] ? id : 0;
 }
 
 /* Does `cls` itself, through any module it includes, answer to `target`? */
@@ -743,8 +757,8 @@ const char *sp_exc_class_name(volatile sp_Exception *ve) {
   if (!e) return SPL("NilClass");   /* a slot that holds nil (the callers that print it test the pointer first) */
   if (!e->cls_name) return SPL("RuntimeError");
   /* a builtin class's kept name, found by its id once the table below has it */
-  int idx = e->cls_id ? -e->cls_id : 0;
-  if (idx > 0 && idx < SP_EXC_ID_SPAN) {
+  int idx = SP_EXC_IX_OK(e->cls_id) ? SP_EXC_IX(e->cls_id) : -1;
+  if (idx >= 0) {
     const char *k = SP_ATOMIC_LOAD(&sp_exc_id_name[idx], __ATOMIC_ACQUIRE);
     if (k) return k;
   }
@@ -798,7 +812,7 @@ const char *sp_exc_class_name(volatile sp_Exception *ve) {
   SP_HEAP_UNLOCK();
 #undef SP_KEPT_SLOT
   /* the kept copy is the name's one copy, so every thread stores the same pointer */
-  if (r && idx > 0 && idx < SP_EXC_ID_SPAN) SP_ATOMIC_STORE(&sp_exc_id_name[idx], r, __ATOMIC_RELEASE);
+  if (r && idx >= 0) SP_ATOMIC_STORE(&sp_exc_id_name[idx], r, __ATOMIC_RELEASE);
   return r ? r : sp_str_dup_external(e->cls_name);   /* out of memory */
 }
 const char *sp_exc_msg_text(volatile sp_Exception *ve) {

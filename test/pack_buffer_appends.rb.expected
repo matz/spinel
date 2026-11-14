@@ -15,6 +15,16 @@ true
 400
 true
 99
+"head"
+"head\u0001"
+"\x01"
+"\x01"
+"\x01\x02"
+true
+"key\x03"
+["key"]
+"☺"
+#<Encoding:UTF-8>
 180000
 9999.5
 #<Encoding:BINARY (ASCII-8BIT)>

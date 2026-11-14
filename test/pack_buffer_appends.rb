@@ -60,6 +60,28 @@ alias_buf = e.buf
 100.times { |i| e.put(i) }
 p e.buf.bytesize, alias_buf.equal?(e.buf), e.buf.byteslice(396, 4).unpack1("N")
 
+# the bytes go on this buffer only: a String made from it or sharing its
+# bytes earlier does not see them, nor does a Hash key copied from it
+lit = "head"
+x = +lit
+[1].pack("C", buffer: x)
+p lit, x
+a = "".b
+[1].pack("C", buffer: a)
+c = a.dup
+sub = a.byteslice(0, 1)
+d = a
+[2].pack("C", buffer: a)
+p c, sub, d, d.equal?(a)
+k = "key".b
+h = { k => 1 }
+[3].pack("C", buffer: k)
+p k, h.keys
+# a binary buffer packed with U becomes UTF-8, as the format selects
+ub = "".b
+[0x263a].pack("U", buffer: ub)
+p ub, ub.encoding
+
 # a long message built a pack at a time
 msg = "".b
 20_000.times { |i| msg << 0x59; [i * 0.5].pack("E", buffer: msg) }

@@ -6360,7 +6360,9 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
 int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv, int ci, int mi) {
   if (emit_reopen_block_call(c, id, recv, mi, NULL, b)) return 1;
   if (g_plan_check) ucall_observe(c, id, mi, ci, 0);
-  if (ci == comp_core_class(c, CORE_NILCLASS)) {
+  /* a top-level def takes no self: the receiver runs for its effect, then the call */
+  int top = c->scopes[mi].class_id < 0;
+  if (!top && ci == comp_core_class(c, CORE_NILCLASS)) {
     /* (self is the `int self` the bool reopens take) */
     buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_printf(b, "), %s(0", mc_method(c, &c->scopes[mi]));
@@ -6369,7 +6371,7 @@ int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int 
     buf_puts(b, "))");
     return 1;
   }
-  if (ci == comp_core_class(c, CORE_NUMERIC)) {
+  if (!top && ci == comp_core_class(c, CORE_NUMERIC)) {
     size_t at = b->len;
     buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
     int open = emit_reopen_recv_in_order(c, id, mi, recv, 1, NULL, at, b);
@@ -6383,10 +6385,16 @@ int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int 
   int void3 = method_is_void(&c->scopes[mi]) && want3 != TY_VOID && want3 != TY_UNKNOWN && want3 != TY_NIL;
   if (void3) buf_puts(b, "(");
   Buf call = {0};
-  buf_printf(&call, "%s(", mc_method(c, &c->scopes[mi]));
-  int open = emit_reopen_recv_args(c, id, mi, recv, 1, NULL, 0, &call);
-  emit_trailing_blk_arg(c, &c->scopes[mi], id, -1, &call);
-  buf_puts(&call, open ? "); })" : ")");
+  if (top) {
+    emit_top_recv_effect(c, recv);
+    emit_method_call(c, id, &call);
+  }
+  else {
+    buf_printf(&call, "%s(", mc_method(c, &c->scopes[mi]));
+    int open = emit_reopen_recv_args(c, id, mi, recv, 1, NULL, 0, &call);
+    emit_trailing_blk_arg(c, &c->scopes[mi], id, -1, &call);
+    buf_puts(&call, open ? "); })" : ")");
+  }
   /* (the value-less one's slot takes the nil below, not a coerced one) */
   if (void3) buf_puts(b, call.p);
   /* a method answering an Integer or Float with its nil beside it

@@ -35216,6 +35216,19 @@ static int reopen_mixed_later(Compiler *c, int id, int mi) {
   int om = c->scopes[mi].origin_module_ci - 1;
   return om >= 0 && elab_mixed_at(c, c->scopes[mi].class_id, 0, om, elab_point_of(c, id)) == ELAB_NO;
 }
+/* The explicit receiver of a call to a top-level def, which takes no self:
+   it runs for its effect, as a statement ahead of the arguments, which are
+   held in the frame ahead of the call (in an expression it would run in the
+   order the C compiler picked, after them), and not at all where it has no
+   effect. */
+void emit_top_recv_effect(Compiler *c, int recv) {
+  if (!subtree_has_side_effect(c, recv)) return;
+  Buf rx; memset(&rx, 0, sizeof rx);
+  emit_expr_for_effect(c, recv, &rx);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "(void)(%s);\n", rx.p ? rx.p : "0");
+  free(rx.p);
+}
 /* A reopened builtin's yielding method reached with the call's block: it
    has no symbol of its own, being spliced where it can, so the call goes to
    its proc form with the block as a proc (#5779). `recv_text` is the
@@ -35235,9 +35248,19 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
   }
   Buf oc; memset(&oc, 0, sizeof oc);
   if (g_plan_check) ucall_observe(c, id, pf, c->scopes[pf].class_id, 0);
+  /* a top-level def takes no self: its receiver runs for its effect, ahead of the arguments */
+  int top = c->scopes[pf].class_id < 0;
+  if (top) emit_top_recv_effect(c, nt_ref(nt, id, "receiver"));
   buf_puts(&oc, mc_method(c, &c->scopes[pf]));
   int open = 0;
-  if (recv_text) {
+  if (top) {
+    buf_puts(&oc, "(");
+    emit_args_filled(c, pf, nt_ref(nt, id, "arguments"), "", &oc);
+    if (c->scopes[pf].nparams > 0) buf_puts(&oc, ", ");
+    if (tp >= 0) buf_printf(&oc, "_t%d)", tp);
+    else buf_puts(&oc, "NULL)");
+  }
+  else if (recv_text) {
     buf_printf(&oc, "(%s", recv_text);
     emit_args_filled(c, pf, nt_ref(nt, id, "arguments"), ", ", &oc);
   }
@@ -35248,8 +35271,10 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
     buf_puts(&oc, "(");
     open = emit_reopen_recv_args(c, id, pf, nt_ref(nt, id, "receiver"), boxed, box_fn, 0, &oc);
   }
-  if (tp >= 0) buf_printf(&oc, ", _t%d)", tp);
-  else buf_puts(&oc, ", NULL)");
+  if (!top) {
+    if (tp >= 0) buf_printf(&oc, ", _t%d)", tp);
+    else buf_puts(&oc, ", NULL)");
+  }
   if (open) buf_puts(&oc, "; })");
   Repr wr = repr_of(c, id);
   TyKind want = wr.as_ty, pr = (TyKind)c->scopes[pf].ret;
@@ -35274,6 +35299,12 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   const NodeTable *nt = c->nt;
   int pf = c->scopes[mi].yields ? scope_proc_form_of(c, mi) : -1;
   if (pf < 0) return 0;
+  /* (a top-level def's: no class to test the checks below against, which a class not reopened, -1, would match) */
+  if (c->scopes[mi].class_id < 0) {
+    int tblk = nt_ref(nt, id, "block") >= 0 ? resolve_forwarded_block(c, nt_ref(nt, id, "block")) : -1;
+    emit_reopen_pf_call(c, id, pf, tblk, NULL, NULL, b);
+    return 1;
+  }
   if (reopen_mixed_later(c, id, mi))
     unsupported_feature(c, id, "a call of a method a module mixes into a builtin class, made before the program includes the module, is not supported by AOT compilation");
   /* (an Integer's is a new route: a Float's, Symbol's, Range's and Time's

@@ -94,9 +94,16 @@ typedef struct {
 
 /* Is plan p a program's method on a root of the builtin classes (Object,
    or Numeric or NilClass ahead of it), one that answers every receiver the
-   lookup reaches it for (cplan_root_reopen)? The kinds of reopening below
-   that, a builtin class's own, bind by the receiver's type. */
+   lookup reaches it for (cplan_root_reopen)? A top-level def the lookup
+   finds open to an explicit receiver is one: Object's method from where it
+   runs, which takes no self. The kinds of reopening below that, a builtin
+   class's own, bind by the receiver's type. */
 int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
+/* Does the body of top-level def scope s read self (a self, an instance variable, a
+   super, or a call with no receiver that asks self's own methods)? Such a def called on an explicit
+   receiver runs as an instance method of Object with that receiver as self
+   (Scope.self_form); one that does not, as the def's own function does. */
+int cplan_top_def_reads_self(Compiler *c, int s);
 /* ...and is call id's plan p such a binding that answers the call ahead
    of the builtin arms (not an alias that captured the builtin's method,
    nor an exception accessor picked at run time, nor a private or

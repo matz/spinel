@@ -35768,6 +35768,29 @@ static int pf_scope_named(Compiler *c, const Scope *src, const char *name) {
    `E.exception` all run the constructor, which does not splice), or where
    a `new` the plan answers it at passes a proc (`K.new(&pr)`). A plain
    `new` with no block splices the version, as it splices the table's. */
+static char *pf_top_receiver_versions(Compiler *c, int n0) {
+  const NodeTable *nt = c->nt;
+  char *mark = calloc(n0 > 0 ? (size_t)n0 : 1, 1);
+  if (!mark) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* (the names a top-level def yields under, any version of them: a call
+     asks the plan only for one of those) */
+  ANameHash yielding; memset(&yielding, 0, sizeof yielding);
+  for (int s = 1; s < n0; s++) {
+    const Scope *sc = &c->scopes[s];
+    if (sc->class_id < 0 && !sc->is_cmethod && sc->yields && sc->name) anh_add(&yielding, sc->name);
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *name = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    if (!name || recv < 0 || nt_kind(nt, recv) == NK_SelfNode) continue;
+    int tm = call_target(c, -1, -1, name, CT_TOP, NULL);
+    if (tm < 0 || !c->scopes[tm].name || !anh_has(&yielding, c->scopes[tm].name)) continue;
+    const CallPlan p = cplan_user_fresh(c, id);
+    if (p.mi >= 0 && p.mi < n0 && cplan_root_reopen_call(c, id, &p) && c->scopes[p.mi].class_id < 0) mark[p.mi] = 1;
+  }
+  anh_free(&yielding);
+  return mark;
+}
 static char *pf_init_versions(Compiler *c, int n0) {
   const NodeTable *nt = c->nt;
   char *mark = calloc(n0 > 0 ? (size_t)n0 : 1, 1);
@@ -35797,6 +35820,7 @@ int make_yield_proc_forms(Compiler *c) {
   int made = 0, n0 = c->nscopes;
   mark_ctor_cycles(c);
   char *init_versions = pf_init_versions(c, n0);
+  char *top_recv = pf_top_receiver_versions(c, n0);
   for (int next = 1; next < c->nscopes; next++) {
     int s = next;
     Scope *src = &c->scopes[s];
@@ -35816,9 +35840,12 @@ int make_yield_proc_forms(Compiler *c) {
     /* reachability is decided after this pass, so do not consult it: an
        unused clone is a static function the C compiler drops. */
     if (!src->yields) continue;
-    /* a top-level method is cloned only for a Method object of it */
+    /* a top-level method is cloned only for a Method object of it, or a
+       call on an explicit receiver that the plan binds it for (version s
+       too, which the table's last one is not) */
+    int top_bound = s < n0 && top_recv[s];
     if (src->class_id < 0) {
-      if (src->is_cmethod || !src->name || !pf_method_obj(c, src->name)) continue;
+      if (src->is_cmethod || !src->name || !(top_bound || pf_method_obj(c, src->name))) continue;
     }
     /* a by-value or Struct constructor is built by its own emitter, which
        does not run the clone (ctor_init_proc_form) */
@@ -35849,7 +35876,7 @@ int make_yield_proc_forms(Compiler *c) {
        package's transport where every other call site ran the program's
        stub in front of it (#4502). An initialize version is not called by
        its name: the sites the plan answers it at call its clone. */
-    if (pf_scope_named(c, src, src->name) != s && !init_version) {
+    if (pf_scope_named(c, src, src->name) != s && !init_version && !top_bound) {
       src->pf_by_name = 1;
       continue;
     }
@@ -35935,6 +35962,7 @@ int make_yield_proc_forms(Compiler *c) {
     }
   }
   free(init_versions);
+  free(top_recv);
   mtab_leave(c);
   return made;
 }

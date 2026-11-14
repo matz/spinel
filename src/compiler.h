@@ -1952,6 +1952,8 @@ typedef struct {
      is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
      the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
+  unsigned char *top_self_marks;      /* per scope: its top-level def reads self (call_plan.c, cplan_top_def_reads_self) */
+  unsigned long top_self_stamp;
   struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis; } *ver_entries;
   int nver_entries;
   /* per global (c->gvars' index, the first nver_cell_dropped of them): 1 for

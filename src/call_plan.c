@@ -306,6 +306,66 @@ unsigned ct_vis_flags(Compiler *c, int id, unsigned flags) {
   return flags | ct_enforce_flags(c, id);
 }
 
+/* Does the body of top-level def s read self: a `self`, an instance variable, a
+   super, or a call with no receiver that is neither a top-level def nor one of
+   Kernel's functions (it asks self's own methods, `inspect`, `frozen?`)? Each
+   node reads the scope it stands in (Compiler.nscope), blocks and defaults
+   included, so one pass over the nodes marks every scope; the marks are asked again
+   only for another tree. */
+int cplan_top_def_reads_self(Compiler *c, int s) {
+  const NodeTable *nt = c->nt;
+  if (s < 1 || s >= c->nscopes) return 0;
+  unsigned long stamp = (unsigned long)nt->count * 1000003ul ^ (unsigned long)c->nscopes * 31ul ^ (unsigned long)nt->edits ^ (unsigned long)nt->version * 7ul;
+  if (!c->top_self_marks || c->top_self_stamp != stamp) {
+    free(c->top_self_marks);
+    if (!(c->top_self_marks = calloc((size_t)c->nscopes + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    c->top_self_stamp = stamp;
+    for (int id = 0; id < nt->count; id++) {
+      int sc = id < c->node_cap ? c->nscope[id] : 0;
+      if (sc < 1 || sc >= c->nscopes || c->top_self_marks[sc] || c->scopes[sc].class_id >= 0 || c->scopes[sc].is_cmethod || c->scopes[sc].entry != ENTRY_NONE) continue;   /* (a version entry is no def of the program's) */
+      NodeKind k = nt_kind(nt, id);
+      int reads = 0;
+      switch (k) {
+      case NK_SelfNode: case NK_SuperNode: case NK_ForwardingSuperNode:
+      case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
+      case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
+        reads = 1; break;
+      case NK_CallNode: {
+        const char *nm = nt_str(nt, id, "name");
+        reads = nm && nt_ref(nt, id, "receiver") < 0 && !is_kernel_module_function(nm) && call_target(c, -1, -1, nm, CT_TOP, NULL) < 0;
+        break;
+      }
+      default: break;
+      }
+      c->top_self_marks[sc] = (unsigned char)reads;
+    }
+  }
+  return c->top_self_marks[s];
+}
+
+/* The live version of the top-level def `name` that call `call`, which has
+   an explicit receiver, runs where the root lookup finds the def open to it:
+   public at the call, as the load record has it there (cplan_root_method).
+   A top-level def is Object's method from where it runs, and takes no self.
+   -1 for a call on self, which is the def's own call, and for a def closed
+   to the call, or one whose visibility only the run tells. The version is
+   the call's (the table's last one is another def where the program defines
+   the name again), asked after the lookup, which makes no version demand. */
+static int cplan_root_top_def(Compiler *c, int call, const char *name, const char *cls) {
+  int recv = nt_ref(c->nt, call, "receiver");
+  if (recv < 0 || nt_kind(c->nt, recv) == NK_SelfNode || call_target(c, -1, -1, name, CT_TOP, NULL) < 0) return -1;
+  /* (a public method of a builtin of the name answers the call, as it did
+     before: the program's def of a builtin's name, which has no self but
+     main, is left to it) */
+  if (core_vis_of_bit(core_method_vis(cls, name, 1, NULL)) == SP_VIS_PUBLIC) return -1;
+  int v = -1, rm = cplan_root_method(c, call, cls, name, &v);
+  if (rm < 0 || c->scopes[rm].class_id >= 0 || v != SP_VIS_PUBLIC) return -1;
+  int tm = call_target(c, call, -1, name, CT_TOP, NULL);
+  /* (a def that reads self runs on main's self only: for another receiver its call is left to the
+     builtin's answer, as before) */
+  return tm >= 0 && cplan_top_def_reads_self(c, tm) ? -1 : tm;
+}
+
 /* A program's own method on builtin class root (CORE_OBJECT, CORE_NUMERIC,
    CORE_NILCLASS) that call `call` runs, on an instance of builtin class cls
    (a program object's: its chain's builtin root; NULL: one the root does not
@@ -328,6 +388,12 @@ static void cplan_root_reopen(Compiler *c, int call, const char *name, const cha
   /* (Object's lookup also finds its modules' methods and the top level's,
      which a Numeric's or a NilClass's must not stand for) */
   if (mi >= 0 && (root == CORE_OBJECT || c->scopes[mi].class_id == rci)) cplan_set(p, mi, rci, UC_REOPEN, CP_DIRECT);
+  /* no method of Object's table: the top level's def, which the lookup finds
+     open to the call, ends it */
+  else if (mi < 0 && root == CORE_OBJECT) {
+    int tm = cplan_root_top_def(c, call, name, cls);
+    if (tm >= 0) cplan_set(p, tm, -1, UC_REOPEN, CP_DIRECT);
+  }
 }
 
 static int ct_runs_on_main(Compiler *c, int id);
@@ -479,17 +545,25 @@ static int cplan_is_root_class(Compiler *c, int ci) {
   int s = ci >= 0 && ci < c->nclasses && c->classes[ci].name ? builtin_core_class_slot(c->classes[ci].name) : -1;
   return s >= 0 && comp_core_class(c, s) == ci && cplan_root_slot(s);
 }
+/* Is plan p a top-level def bound to an explicit receiver (cplan_root_top_def)?
+   It has no owner class, and no self but main's. */
+static int cplan_root_reopen_top(Compiler *c, const CallPlan *p) {
+  return p->mi >= 0 && p->via == UC_REOPEN && c->scopes[p->mi].class_id < 0;
+}
 /* See call_plan.h. */
 int cplan_root_reopen_owner(Compiler *c, const CallPlan *p) {
-  return p->via == UC_REOPEN && cplan_is_root_class(c, p->owner_ci);
+  return p->via == UC_REOPEN && (cplan_is_root_class(c, p->owner_ci) || cplan_root_reopen_top(c, p));
 }
 /* See call_plan.h. */
 int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
   const char *name = nt_str(c->nt, id, "name");
   if (!name || cplan_builtin_call(c, id)) return 0;
-  if (p->mi < 0 || !cplan_root_reopen_owner(c, p)) return 0;
+  if (p->mi < 0) return 0;
+  /* (a top-level def bound for an explicit receiver: Object's method from where it runs) */
+  int top = cplan_root_reopen_top(c, p);
+  if (!cplan_root_reopen_owner(c, p)) return 0;
   /* (p's facts are read before the asks below, which can rewrite it) */
-  int mc = c->scopes[p->mi].class_id, at_object = p->owner_ci == comp_core_class(c, CORE_OBJECT);
+  int mc = c->scopes[p->mi].class_id, at_object = top || p->owner_ci == comp_core_class(c, CORE_OBJECT);
   /* (a class-gated exception accessor the program adds to Object is picked
      by an exception's class at run time) */
   int recv = nt_ref(c->nt, id, "receiver");
@@ -506,7 +580,7 @@ int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
      themselves), so every reader leaves it to them where a call of the name
      would otherwise reach a builtin's method: Kernel's tap, dup, frozen?.
      One no builtin has is typed by the program's method, as before. */
-  if (mc < 0) return 0;
+  if (mc < 0) return top && cplan_root_closed(c, id, NULL) < 0;
   if (exc || builtin_answers_ahead_of("Object", name, NULL)) {
     /* (the visibility at the call, which a later `public` or `private` does not change) */
     if (cplan_method_vis(c, id, mc, name, CPV_ROOT, NULL) != SP_VIS_PUBLIC) return 0;

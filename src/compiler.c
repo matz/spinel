@@ -584,6 +584,7 @@ void comp_free(Compiler *c) {
   c->ver_ix = c->ver_ix_next = c->ver_names = c->ver_names_next = NULL; c->ver_ix_nb = 0;
   free(c->ver_pins); c->ver_pins = NULL; c->nver_pins = 0;
   free(c->ver_cell_dropped); c->ver_cell_dropped = NULL; c->nver_cell_dropped = 0;
+  free(c->top_self_marks); c->top_self_marks = NULL; c->top_self_stamp = 0;
   free(c->ver_vis_after); c->ver_vis_after = NULL; c->nver_vis_after = 0;
   free(c->ver_guards); c->ver_guards = NULL; c->nver_guards = 0;
   for (int i = 0; i < c->nrbp_slots; i++) free(c->rbp_slot_names[i]);

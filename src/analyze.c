@@ -7119,6 +7119,16 @@ void qualify_colliding_reads(Compiler *c) {
   if (nl > 0) {
     qc_value_reads(c, leaves, nl);
     qc_build_reverse_flags(c);
+    /* The reads are renamed after all are asked about: a rename bumps the
+       node table's version, and the parent map the next question climbs
+       (lr_class_named) is rebuilt for it, once per renamed read. A renamed
+       read is seen by a question only as a builder's receiver
+       (class_def_builder, through read_key_name) or in a deferred block
+       (elab_block_when, through key_name); renaming after the questions
+       makes each see such a receiver as the registration walk saw it,
+       whichever order the reads are met in. */
+    int *rn = NULL, nrn = 0, crn = 0;
+    const char **rcn = NULL;
     for (int i = 0; i < nt->count; i++) {
       NodeKind k = nt_kind(nt, i);
       if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || (qc_def_cpath && qc_def_cpath[i])) continue;
@@ -7126,9 +7136,19 @@ void qualify_colliding_reads(Compiler *c) {
       int ci = elab_class_named(c, i);
       const char *cn = ci >= 0 ? c->classes[ci].name : NULL;
       if (!cn || !w || sp_streq(cn, w) || !sp_streq(qc_c_leaf(cn), w)) continue;
-      qc_keep_orig_name(nt, i);
-      nt_node_set_str((NodeTable *)nt, i, "qc_name", cn);
+      if (nrn == crn) {
+        crn = crn ? crn * 2 : 64;
+        rn = realloc(rn, sizeof *rn * (size_t)crn);
+        rcn = realloc(rcn, sizeof *rcn * (size_t)crn);
+        if (!rn || !rcn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      rn[nrn] = i; rcn[nrn++] = cn;
     }
+    for (int q = 0; q < nrn; q++) {
+      qc_keep_orig_name(nt, rn[q]);
+      nt_node_set_str((NodeTable *)nt, rn[q], "qc_name", rcn[q]);
+    }
+    free(rn); free(rcn);
     qc_free_reverse_flags();
   }
   elab_prov_free_leaves();

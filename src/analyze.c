@@ -11586,8 +11586,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
        infers as Integer here: a plain wrapper had no self slot for it, and
        binding raised NoMethodError naming the wrapper. A Float takes the
        same shape: the self slot is a pointer, and a double cast to one did
-       not compile. */
-    int poly_self = rt == TY_POLY || rt == TY_FLOAT || (g_promote_mode && (rt == TY_INT || rt == TY_BIGINT));
+       not compile. So does a Range of Integers, which is a value too (an
+       sp_Range): `(1..3).method(:size)` cast the struct to the pointer and
+       the C did not compile, for any name. */
+    int poly_self = rt == TY_POLY || rt == TY_FLOAT || rt == TY_RANGE || (g_promote_mode && (rt == TY_INT || rt == TY_BIGINT));
     /* the typed-array (kind, op) trampoline path owns these */
     if (ty_is_array(rt) && sp_streq(sym, "push")) continue;
     /* main's own `to_s` (cplan_main_singleton_call) comes ahead of a

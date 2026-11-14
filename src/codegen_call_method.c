@@ -2402,6 +2402,11 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     buf_puts(b, mi >= 0 || bop ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
     if (self_rooted) buf_printf(b, "_t%d", self_tmp);
     else if (recv >= 0 && repr_of(c, recv).as_ty == TY_CLASS) buf_puts(b, "NULL");
+    /* (a Range is a value, not a pointer the self slot takes: one bound here
+       has no wrapper, so the bind raises; its receiver runs for its effects) */
+    else if (recv >= 0 && repr_of(c, recv).as_ty == TY_RANGE && repr_of(c, recv).kind != RK_BOXED) {
+      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void *)NULL)");
+    }
     else if (recv >= 0) { buf_puts(b, "(void *)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
     /* (on main, Object's method binds main: ML_OBJECT, method_obj_lookup) */
     else if (self_bound && self_is_main_raw(c, id)) { buf_puts(b, "sp_main_self().v.p"); self_kind = "SP_BM_SELF_MAIN"; }

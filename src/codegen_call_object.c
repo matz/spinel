@@ -1265,6 +1265,18 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
   }
 
+  /* Hash[h] of one Hash: a new Hash of its pairs, where h.to_h (the
+     rewrite) answers h itself; the copy takes no default, as CRuby's */
+  if (recv >= 0 && sp_streq(name, "to_h") && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      nt_int(nt, id, "hash_brackets", 0) && ty_is_hash(comp_ntype(c, recv)) &&
+      ty_hash_cname(comp_ntype(c, recv)) && comp_ntype(c, id) == comp_ntype(c, recv)) {
+    const char *hn = ty_hash_cname(comp_ntype(c, recv));
+    int t = ++g_tmp;
+    buf_printf(b, "({ sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d); sp_%sHash_replace(_t%d, ",
+               hn, t, hn, t, hn, t);
+    emit_expr(c, recv, b); buf_puts(b, "); })");
+    return 1;
+  }
   /* freeze / frozen? on hashes use the GC-header frozen bit, and to_h is the
      hash itself: builtin-op rows of the same stage */
   if (recv >= 0 && ty_is_hash(comp_ntype(c, recv)) &&
@@ -2334,7 +2346,12 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       /* a typed array or hash is a pointer too, and a slice past the end
          (`a[4..]&.size`) or a container miss hands it NULL (#4524) */
       int sn_cont = needs_root(rrt) && rrt != TY_POLY && rrt != TY_STRING && !ty_is_object(rrt);
-      if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont) && g_sn_skip != id) {
+      /* any other pointer whose NULL is nil (a Regexp, a Proc, an Exception
+         a nil-defaulted parameter holds): the guard was dropped and the
+         call ran on the nil (#11851) */
+      int sn_ptr = ty_null_is_nil(rrt) && rrt != TY_POLY && rrt != TY_STRING &&
+                   rrr.kind != RK_VOBJ && node_may_be_null_nil(c, recv);
+      if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont || sn_ptr) && g_sn_skip != id) {
         int tsn2 = ++g_tmp;
         /* (an attribute assignment marked to hand out its handle answers it,
            and so does a String Array's element read written as the handle
@@ -2404,9 +2421,11 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         else if (sn_scalar)
           buf_printf(g_pre, "%s _sn%d = %s; %s _snv%d = _sn%d.v;\n", oint_ctype(rrt), tsn2,
                      rsn.p ? rsn.p : oint_nil(rrt), c_type_name(rrt), tsn2, tsn2);
-        else if (sn_cont) {
+        else if (sn_cont || sn_ptr) {
           emit_ctype(c, rrt, g_pre);
-          buf_printf(g_pre, " _sn%d = %s; SP_GC_ROOT(_sn%d);\n", tsn2, rsn.p ? rsn.p : "NULL", tsn2);
+          buf_printf(g_pre, " _sn%d = %s;", tsn2, rsn.p ? rsn.p : "NULL");
+          if (needs_root(rrt)) buf_printf(g_pre, " SP_GC_ROOT(_sn%d);", tsn2);
+          buf_puts(g_pre, "\n");
         }
         else
           buf_printf(g_pre, "const char *_sn%d = %s; SP_GC_ROOT_STR(_sn%d);\n",

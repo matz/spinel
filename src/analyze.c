@@ -32246,6 +32246,10 @@ static void dyn_reach_value(Compiler *c, int v, int k, int depth, DynReach *r) {
       if (g_dyn.blkpost[mi] == 2) r->app = 1;
       return;
     }
+    /* a parameter also holds what its caller handed it, which is not
+       followed here, whether or not the body writes it too */
+    LocalVar *lv = scope_local(vs, vn);
+    if (!lv || lv->is_param || lv->is_block_param) r->unknown = 1;
     /* every value written to it (a Method-valued local was taken above, by
        method_recv_nodes; a `m.to_proc` written here is the call's arm) */
     int saw = 0;
@@ -43430,6 +43434,16 @@ static int splat_builtin_spec_range(Compiler *c, int id, const char *name, int *
   /* the tables are instance methods': a class's (`File.unlink(*paths)`)
      is no row of theirs */
   int r = nt_ref(nt, id, "receiver");
+  /* ...but a builtin module's or class's own (Math.sqrt(*a), Integer.sqrt):
+     its row in the class methods' table, where no class of the program
+     takes the constant's name */
+  if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode) {
+    const char *cn = nt_str(nt, r, "name");
+    if (!cn || comp_class_index(c, cn) >= 0 || !builtin_cmethod_span(cn, name, &l, &h) || h > l + 3) return 0;
+    if (lo) *lo = l;
+    if (hi) *hi = h;
+    return 1;
+  }
   if (r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) return 0;
   /* (between?'s arms compare the receiver with the elements' boxes as
      integers, which the C build rejects: it keeps its splat call) */
@@ -43594,7 +43608,8 @@ static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pf
    (the arguments, a splat's and a `**`'s conversion, `&`'s to_proc: all
    ahead of the lookup), the writes into pre (at most cap) for the caller
    to run ahead of the call, which then reads the locals: a check that
-   stands for the lookup (ver_main_undef_guards) goes between. A local or
+   stands for the lookup (ver_main_undef_guards) goes between. A keyword
+   pair's key is an operand of its own, ahead of its value. A local or
    ivar read ahead of an operand that runs code is held too, as that code
    may change it (as split_kwsplat_calls and the splat dispatch hold
    them); the other leaves (splat_leaf_node) stay where they are. A splat
@@ -43612,7 +43627,7 @@ int sd_hold_call_operands(Compiler *c, int id, int **prep) {
     if (nt_kind(nt, av0[k]) == NK_KeywordHashNode) nt_arr(nt, av0[k], "elements", &en);
     cap += en ? en : 1;
   }
-  int *slot = malloc(sizeof(int) * (size_t)cap), ns = 0, last = -1, *pre = malloc(sizeof(int) * (size_t)(cap + 1));   /* (the nodes whose value is held, in order) */
+  int *slot = malloc(sizeof(int) * (size_t)cap), ns = 0, last = -1, *pre = malloc(sizeof(int) * (size_t)(2 * cap + 1));   /* (the nodes whose value is held, in order; a pair's key and value) */
   if (!slot || !pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   *prep = pre;
   for (int k = 0; k < n; k++) {
@@ -43622,16 +43637,17 @@ int sd_hold_call_operands(Compiler *c, int id, int **prep) {
     int en = 0;
     const int *el = nt_arr(nt, av0[k], "elements", &en);
     for (int j = 0; j < en; j++) {
-      if (nt_kind(nt, el[j]) == NK_AssocNode && !splat_leaf_node(nt, nt_ref(nt, el[j], "key"))) { free(slot); return -1; }
       slot[ns++] = el[j];
     }
   }
   int bexp = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
   if (bexp >= 0 && nt_kind(nt, bexp) != NK_SymbolNode) slot[ns++] = blk;
+  /* (operands in CRuby's order: 2k is slot k's key, 2k+1 its value or itself) */
   for (int k = 0; k < ns; k++) {
     NodeKind sk = nt_kind(nt, slot[k]);
     int v = sk == NK_AssocNode ? nt_ref(nt, slot[k], "value") : slot[k];
-    if (sk == NK_SplatNode || sk == NK_AssocSplatNode || sk == NK_BlockArgumentNode || !splat_leaf_node(nt, v)) last = k;
+    if (sk == NK_AssocNode && !splat_leaf_node(nt, nt_ref(nt, slot[k], "key"))) last = 2 * k;
+    if (sk == NK_SplatNode || sk == NK_AssocSplatNode || sk == NK_BlockArgumentNode || !splat_leaf_node(nt, v)) last = 2 * k + 1;
   }
   for (int k = 0; k < ns; k++) {
     NodeKind sk = nt_kind(nt, slot[k]);
@@ -43652,9 +43668,15 @@ int sd_hold_call_operands(Compiler *c, int id, int **prep) {
       nt_node_set_ref(nt, slot[k], f, sd_hold(c, nt, sc, id, "ugo", k, conv, pre, &npre));
       continue;
     }
+    if (sk == NK_AssocNode) {
+      int key = nt_ref(nt, slot[k], "key");
+      NodeKind kk = nt_kind(nt, key);
+      if (!splat_leaf_node(nt, key) || (2 * k < last && (kk == NK_LocalVariableReadNode || kk == NK_InstanceVariableReadNode)))
+        nt_node_set_ref(nt, slot[k], "key", sd_hold(c, nt, sc, id, "ugk", k, key, pre, &npre));
+    }
     int v = sk == NK_AssocNode ? nt_ref(nt, slot[k], "value") : slot[k];
     NodeKind vk = nt_kind(nt, v);
-    if (splat_leaf_node(nt, v) && !(k < last && (vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode))) continue;
+    if (splat_leaf_node(nt, v) && !(2 * k + 1 < last && (vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode))) continue;
     int r = sd_hold(c, nt, sc, id, "ugo", k, v, pre, &npre);
     if (sk == NK_AssocNode) nt_node_set_ref(nt, slot[k], "value", r);
     else nt_replace_child(nt, an, v, r);
@@ -49607,6 +49629,7 @@ static void an_phase_desugar_register(Compiler *c) {
   host_begin(&hs, &lc);
   AN_STEP_V("desugar_extend_enumerable", desugar_extend_enumerable(c, &hs));
   host_end(c, &hs);
+  AN_STEP_V("desugar_table_loop_defines", desugar_table_loop_defines(c));       /* COLORS.each { |k, v| define_method(k) { v } } -> one copy per entry */
   AN_STEP_V("desugar_attr_const_splat", desugar_attr_const_splat(c));           /* attr_accessor(*FLAGS), FLAGS = %i[a b] -> attr_accessor(:a, :b) */
   AN_STEP_V("desugar_sclass_readers_through_class", desugar_sclass_readers_through_class(c)); /* class << self; attr_reader :x read as obj.class.x -> def x = @x */
   AN_STEP_V("desugar_fiber_prepended_init", desugar_fiber_prepended_init(c));       /* a prepended Fiber#initialize -> __spinel_init run on the new fiber */

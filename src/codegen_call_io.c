@@ -296,8 +296,11 @@ static int io_read_nonblock_outbuf(Compiler *c, int id) {
   if (recv < 0 || nt_ref(nt, id, "block") >= 0 || nt_argv_has_splat(nt, argv, argc)) return 0;
   Repr rr = repr_of(c, recv);
   if (rr.as_ty != TY_IO && rr.kind != RK_BOXED) return 0;
+  /* Native classes can also define this method in Ruby (StringIO).
+     Those arms are not included in cplan_targets. */
+  if (rr.kind == RK_BOXED && poly_name_user_claimed(c, name, argc)) return 0;
   int targets[CPT_MAX];
-  return cplan_targets(c, id, targets, CPT_MAX) == 0;
+  return g_poly_builtin_arm || cplan_targets(c, id, targets, CPT_MAX) == 0;
 }
 
 /* The value-form read uses the existing representations for the receiver
@@ -972,16 +975,10 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        declined the arm, and a socket beside an SSLSocket that owns the
        same name (write_nonblock, addr) raised NoMethodError. */
     for (int k = 0; k < c->nclasses && !iocand && !g_poly_builtin_arm; k++) {
-      /* a native class's methods are its declared bindings, which is the
-         rule the poly dispatch counts candidates by: a Ruby-side def on it
-         (IO::Buffer#write over an IO, #4474) is not a candidate there, so
-         it must not send the call there either, or the dispatch declines
-         and `fds[1].write(s)` on a real IO raises NoMethodError again. The
-         old blanket test disabled this whole arm whenever ANY native class
-         existed -- IO::Buffer's implicit splice made that every program
-         touching it. */
+      /* Count the same native bindings and Ruby overrides as the boxed
+         dispatch, only for this name and argument count. */
       if (c->classes[k].is_native_class) {
-        if (comp_native_method_find(c, k, name, argc, 0) >= 0) iocand = 1;
+        if (comp_poly_arm_defines_n(c, k, name, argc)) iocand = 1;
         continue;
       }
       if (call_target(c, id, k, name, 0, NULL) >= 0 ||

@@ -193,7 +193,7 @@ const char *sp_StringIO_getc(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); 
      mark, or a borrowed String's header */
   int binary = sio_is_binary(s);
   int64_t cl = sio_char_len(s->buf + s->pos, s->len - s->pos, binary);
-  char *gc = sp_str_alloc_raw(cl + 1); memcpy(gc, s->buf + s->pos, cl); gc[cl] = '\0'; sp_str_set_len(gc, (size_t)cl); s->pos += cl; return gc; }
+  char *gc = sp_str_alloc_raw(cl + 1); memcpy(gc, s->buf + s->pos, cl); gc[cl] = '\0'; sp_str_set_len(gc, (size_t)cl); if (binary) sp_str_mark_binary(gc); s->pos += cl; return gc; }
 sp_RbVal sp_StringIO_getbyte(sp_StringIO *s) { sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return sp_box_nil(); return sp_box_int((int64_t)(unsigned char)s->buf[s->pos++]); }
 /* readbyte and readchar: getbyte and getc that raise EOFError at the end */
 sp_int sp_StringIO_readbyte(sp_StringIO *s) { sio_check_read(s); sio_sync(s); if (s->pos >= s->len) sp_raise_cls("EOFError", "end of file reached"); return (int64_t)(unsigned char)s->buf[s->pos++]; }

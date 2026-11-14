@@ -4253,7 +4253,8 @@ static void emit_cell_decl_deferred(Compiler *c, Scope *s, LocalVar *lv, Buf *b)
   else if (cell_is_typed_ptr(c, lv)) buf_puts(b, "NULL");
   else buf_puts(b, "0");
   buf_puts(b, ";\n");
-  if (lv->type == TY_POLY || (!slot_is_oint(lv) && lv->type != TY_FLOAT && cell_is_typed_ptr(c, lv))) {
+  int scanned = lv->type == TY_POLY || (!slot_is_oint(lv) && lv->type != TY_FLOAT && cell_is_typed_ptr(c, lv));
+  if (scanned) {
     char name[512]; snprintf(name, sizeof name, "_cellv_%s", nm);
     buf_puts(b, "    ");
     emit_gc_root_var(c, lv->type, name, b);
@@ -4265,7 +4266,14 @@ static void emit_cell_decl_deferred(Compiler *c, Scope *s, LocalVar *lv, Buf *b)
   /* (one line naming `_cell_x` beside its scan, as the entry allocation's
      does: gc_wb_cells reads which cells hold references from it) */
   buf_printf(&g_cdefer_text, "_cell_%s = _cellh_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, %s);"
-                             " *_cell_%s = _cellv_%s;\n", nm, nm, ty, ty, scan, nm, nm);
+                             " *_cell_%s = _cellv_%s;", nm, nm, ty, ty, scan, nm, nm);
+  /* Past the switch nothing reads the slot, but its root lasts until the
+     method returns: a captured parameter the body then reassigns kept its
+     first value alive that long, which the entry allocation never held.
+     A slot the collector reads is emptied once its value is in the cell. */
+  if (scanned)
+    buf_printf(&g_cdefer_text, " _cellv_%s = %s;", nm, lv->type == TY_POLY ? "sp_box_nil()" : "NULL");
+  buf_puts(&g_cdefer_text, "\n");
   free(et.p);
 }
 

@@ -2019,7 +2019,7 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
        first arg; remaining args are flattened into a positional array;
        the LAST arg is treated as opts only if it is a Hash literal.
        The opts hash is unpacked at the call site: for each known key
-       (:in, :out, :err, :pgroup, :rlimit_cpu, :rlimit_as, :chdir) we
+       (:in, :out, :err, :pgroup, :rlimit_cpu, :rlimit_as, :chdir, :unsetenv_others) we
        emit a sp_poly_hash_get_pair_val call, resolve the value to a
        primitive (Integer fd, true, Integer, String), and push it into
        a flat PolyArray. The runtime (sp_process_spawn) takes the
@@ -2119,6 +2119,8 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
       buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", topts, topts);
       int town = ++g_tmp;
       buf_printf(b, " int _t%d[3] = { -1, -1, -1 };", town);
+      int tunset = ++g_tmp;
+      buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);", tunset, tunset);
       if (last_is_opts) {
         int tth = ++g_tmp;
         int tkv = ++g_tmp;
@@ -2126,6 +2128,8 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
         buf_printf(b, " sp_RbVal _t%d = ", tth);
         emit_boxed(c, argv[argc - 1], b);
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tth);
+        buf_printf(b, " { sp_bool _t%d; _t%d = sp_poly_hash_get_pair_val(_t%d, "
+                      "sp_box_sym(sp_sym_intern(\"unsetenv_others\")), &_t%d); }", tfd, tunset, tth, tfd);
         /* For the three fd slots (in/out/err): look up the value and
            resolve it (emit_spawn_fd_options). The C block is emitted
            three times with the slot changed -- a top-level static
@@ -2193,8 +2197,10 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
          slot, so it closes the parent's copies and never a caller's IO. */
       buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int((_t%d[0] >= 0) | ((_t%d[1] >= 0) << 1) | ((_t%d[2] >= 0) << 2)));",
                  topts, town, town, town);
-      /* Slot 8, when the call can have one: the environment Hash, or nil */
+      /* Slots 8 and 9: the environment Hash and unsetenv_others option. */
       if (tenv) buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", topts, tenv);
+      else buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", topts);
+      buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", topts, tunset);
       if (is_exec)   /* Kernel#exec: the process becomes the command, or raises its Errno */
         buf_printf(b, " sp_process_exec(_t%d, sp_box_poly_array(_t%d)); sp_int _r = 0; (void)_t%d;", tcmd, targs, topts);
       else

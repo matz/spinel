@@ -32260,6 +32260,361 @@ static int attr_splat_expand(NodeTable *nt, SceConsts *x, int body, int i, int s
   free(out);
   return 1;
 }
+/* ---- a class body's loop over a literal table, unrolled -----------------
+   `COLORS.each do |color, code| define_method(color) { ..code.. } end`, with
+   COLORS a constant the body holds a Hash or an Array of literals (frozen or
+   not), or the literal written in place: the loop becomes one copy of its
+   block's body per entry, each read of a block variable the entry's literal.
+   Every name define_method is then given is a literal, and a loop nested in
+   the body over such a table (`"#{fg}_on_#{bg}"`) unrolls on the next round.
+   Only a loop whose block holds no `next`, `break`, `redo` or `retry` of its
+   own and writes none of its variables, and which defines a method, is
+   unrolled; the constant is written once, in the body ahead of the loop, and
+   read elsewhere only where nothing can change it (anywhere, frozen). The
+   loop's value, the table, is the last statement it leaves. A literal Array
+   with one define_method and one variable keeps collect_dm_each_unroll's
+   route, as before. */
+
+/* a literal an entry may be: copied into each place its variable is read */
+static int dmu_leaf_literal(const NodeTable *nt, int v) {
+  switch (nt_kind(nt, v)) {
+    case NK_SymbolNode: case NK_StringNode: case NK_IntegerNode: case NK_FloatNode:
+    case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
+      return 1;
+    default:
+      return 0;
+  }
+}
+/* the Hash or Array literal of literals v is, through a `.freeze`; -1 if
+   none. *frozen: the table was frozen */
+static int dmu_table_literal(const NodeTable *nt, int v, int *frozen) {
+  *frozen = 0;
+  const char *cn = v >= 0 && nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
+  if (cn && sp_streq(cn, "freeze") && nt_ref(nt, v, "receiver") >= 0 &&
+      nt_ref(nt, v, "arguments") < 0 && nt_ref(nt, v, "block") < 0) {
+    v = nt_ref(nt, v, "receiver"); *frozen = 1;
+  }
+  if (v < 0) return -1;
+  int en = 0; const int *el;
+  switch (nt_kind(nt, v)) {
+    case NK_ArrayNode:
+      el = nt_arr(nt, v, "elements", &en);
+      for (int i = 0; i < en; i++) if (!dmu_leaf_literal(nt, el[i])) return -1;
+      return v;
+    case NK_HashNode:
+      el = nt_arr(nt, v, "elements", &en);
+      for (int i = 0; i < en; i++) {
+        if (nt_kind(nt, el[i]) != NK_AssocNode) return -1;
+        int kk = nt_ref(nt, el[i], "key"), vv = nt_ref(nt, el[i], "value");
+        if (kk < 0 || vv < 0 || !dmu_leaf_literal(nt, kk) || !dmu_leaf_literal(nt, vv)) return -1;
+      }
+      return v;
+    default:
+      return -1;
+  }
+}
+/* a call that reads a table and changes nothing of it */
+static int dmu_reader_name(const char *nm) {
+  static const char *const R[] = { "each", "each_pair", "each_key", "each_value", "each_with_index",
+    "keys", "values", "key?", "has_key?", "include?", "member?", "fetch", "[]", "size", "length",
+    "map", "select", "reject", "find", "any?", "all?", "count", "to_a", "first", "frozen?", NULL };
+  return nm && str_in(nm, R);
+}
+/* Is w the one write of constant cn, and every other reference of it but
+   skip one that cannot change the table it holds? (parents: the call each
+   read is the receiver of, -1 for none) */
+/* Is st a statement of a class or module body other than body? */
+static int dmu_other_body_stmt(const NodeTable *nt, int st, int body) {
+  for (int id = 0; id < nt->count; id++) {
+    if (!class_def_opens_frame(nt, id)) continue;
+    int b = class_def_body(nt, id);
+    if (b < 0 || b == body || nt_kind(nt, b) != NK_StatementsNode) continue;
+    int bn = 0; const int *bb = nt_arr(nt, b, "body", &bn);
+    for (int i = 0; i < bn; i++) if (bb[i] == st) return 1;
+  }
+  return 0;
+}
+static int dmu_const_settled(const NodeTable *nt, const int *recv_of, int n0, int body, const char *cn, int w,
+                             int skip, int frozen) {
+  for (int id = 0; id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    int t = k == NK_ConstantPathWriteNode ? nt_ref(nt, id, "target") : -1;
+    const char *nm = t >= 0 ? nt_str(nt, t, "name")
+                   : (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode ||
+                      k == NK_ConstantOperatorWriteNode || k == NK_ConstantAndWriteNode ||
+                      k == NK_ConstantReadNode || k == NK_ConstantTargetNode) ? nt_str(nt, id, "name") : NULL;
+    if (!nm || !sp_streq(nm, cn) || id == w || id == skip) continue;
+    /* another class's or module's own constant of the name, written as a
+       statement of its body: not this one */
+    if (k == NK_ConstantWriteNode && dmu_other_body_stmt(nt, id, body)) continue;
+    if (k != NK_ConstantReadNode) return 0;
+    if (frozen) continue;
+    /* a read of the unfrozen table only as the receiver of a reader */
+    int par = recv_of[id];
+    if (par < 0 || !dmu_reader_name(nt_str(nt, par, "name"))) return 0;
+  }
+  return 1;
+}
+static int dmu_is_name(const char *nm, const char *const *names, int nn) {
+  for (int i = 0; nm && i < nn; i++) if (sp_streq(nm, names[i])) return 1;
+  return 0;
+}
+/* Does node hold a `next`, `break`, `redo` or `retry` of the loop's own
+   block (depth 0: none inside a block or a method of the body), or a write
+   of one of the names? A method's body is its own scope. */
+static int dmu_blocked(const NodeTable *nt, int node, const char *const *names, int nn, int depth) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode) return 0;
+  if (depth == 0 && (k == NK_NextNode || k == NK_BreakNode || k == NK_RedoNode || k == NK_RetryNode)) return 1;
+  /* (a while or until inside: its own break and next are taken as the
+     block's, which only declines the loop) */
+  if ((k == NK_LocalVariableWriteNode || k == NK_LocalVariableOperatorWriteNode ||
+       k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode ||
+       k == NK_LocalVariableTargetNode) && dmu_is_name(nt_str(nt, node, "name"), names, nn)) return 1;
+  int d = depth + (k == NK_BlockNode || k == NK_LambdaNode);
+  for (int j = 0; j < nt_num_refs(nt, node); j++)
+    if (dmu_blocked(nt, nt_ref_at(nt, node, j), names, nn, d)) return 1;
+  for (int j = 0; j < nt_num_arrs(nt, node); j++) {
+    int an = 0; const int *ids = nt_arr_at(nt, node, j, &an);
+    for (int m = 0; m < an; m++) if (dmu_blocked(nt, ids[m], names, nn, d)) return 1;
+  }
+  return 0;
+}
+/* How many define_methods node calls (outside a method of the body), each
+   a name and a block literal, the form a literal name makes a method of;
+   -1 where one is another (a Proc or a Method as the body, `&blk`), which
+   unrolled would only be refused once per entry */
+static int dmu_defines(const NodeTable *nt, int node) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode) return 0;
+  int n = 0;
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, node, "name");
+    if (nm && sp_streq(nm, "define_method")) {
+      int args = nt_ref(nt, node, "arguments"), an = 0, blk = nt_ref(nt, node, "block");
+      if (args >= 0) (void)nt_arr(nt, args, "arguments", &an);
+      if (an != 1 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -1;
+      n = 1;
+    }
+  }
+  for (int j = 0; j < nt_num_refs(nt, node); j++) {
+    int d = dmu_defines(nt, nt_ref_at(nt, node, j));
+    if (d < 0) return -1;
+    n += d;
+  }
+  for (int j = 0; j < nt_num_arrs(nt, node); j++) {
+    int an = 0; const int *ids = nt_arr_at(nt, node, j, &an);
+    for (int m = 0; m < an; m++) {
+      int d = dmu_defines(nt, ids[m]);
+      if (d < 0) return -1;
+      n += d;
+    }
+  }
+  return n;
+}
+/* Does the parameter list under node name nm (a block's own variable,
+   which shadows the loop's)? */
+static int dmu_params_name(const NodeTable *nt, int node, const char *nm) {
+  if (node < 0) return 0;
+  const char *pn = nt_str(nt, node, "name");
+  if (pn && sp_streq(pn, nm)) return 1;
+  for (int j = 0; j < nt_num_refs(nt, node); j++) if (dmu_params_name(nt, nt_ref_at(nt, node, j), nm)) return 1;
+  for (int j = 0; j < nt_num_arrs(nt, node); j++) {
+    int an = 0; const int *ids = nt_arr_at(nt, node, j, &an);
+    for (int m = 0; m < an; m++) if (dmu_params_name(nt, ids[m], nm)) return 1;
+  }
+  return 0;
+}
+/* Put a copy of lits[i] where node's subtree reads names[i] (live[i]: the
+   name is not shadowed here) */
+static void dmu_subst(NodeTable *nt, int node, const char *const *names, const int *lits, int nn,
+                      const int *live) {
+  if (node < 0 || nt_kind(nt, node) == NK_DefNode) return;
+  int own[4];
+  const int *lv = live;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_BlockNode || k == NK_LambdaNode) {
+    int pr = nt_ref(nt, node, "parameters");
+    for (int i = 0; i < nn; i++) own[i] = live[i] && !dmu_params_name(nt, pr, names[i]);
+    lv = own;
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int j = 0; j < nr; j++) {
+    int ch = nt_ref_at(nt, node, j);
+    if (ch < 0) continue;
+    if (nt_kind(nt, ch) == NK_LocalVariableReadNode) {
+      const char *nm = nt_str(nt, ch, "name");
+      for (int i = 0; nm && i < nn; i++)
+        if (lv[i] && sp_streq(nm, names[i])) { nt_replace_child(nt, node, ch, nt_clone_subtree(nt, lits[i])); break; }
+      continue;
+    }
+    dmu_subst(nt, ch, names, lits, nn, lv);
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int j = 0; j < na; j++) {
+    int an = 0; const int *ids0 = nt_arr_at(nt, node, j, &an);
+    int *ids = (int *)malloc(sizeof(int) * (size_t)(an > 0 ? an : 1));
+    if (!ids) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (an > 0) memcpy(ids, ids0, sizeof(int) * (size_t)an);
+    for (int m = 0; m < an; m++) {
+      int ch = ids[m];
+      if (ch < 0) continue;
+      if (nt_kind(nt, ch) == NK_LocalVariableReadNode) {
+        const char *nm = nt_str(nt, ch, "name");
+        for (int i = 0; nm && i < nn; i++)
+          if (lv[i] && sp_streq(nm, names[i])) { nt_replace_child(nt, node, ch, nt_clone_subtree(nt, lits[i])); break; }
+        continue;
+      }
+      dmu_subst(nt, ch, names, lits, nn, lv);
+    }
+    free(ids);
+  }
+}
+/* A define_method in an unrolled copy whose name is now a literal written
+   in pieces (`"on_#{:red}"`): the name as one Symbol, as a literal name is */
+static void dmu_fold_names(Compiler *c, int node) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (node < 0 || nt_kind(nt, node) == NK_DefNode) return;
+  if (nt_kind(nt, node) == NK_CallNode && nt_str(nt, node, "name") &&
+      sp_streq(nt_str(nt, node, "name"), "define_method") && nt_ref(nt, node, "receiver") < 0) {
+    int args = nt_ref(nt, node, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    NodeKind k = an >= 1 ? nt_kind(nt, av[0]) : NK_NONE;
+    if (k == NK_InterpolatedStringNode || k == NK_InterpolatedSymbolNode) {
+      char *nm = dm_eval_name(c, av[0], NULL, -1);
+      if (nm) {
+        int sym = nt_new_node(nt, "SymbolNode");
+        if (sym >= 0) {
+          nt_node_set_str(nt, sym, "value", nm);
+          nt_node_set_int(nt, sym, "node_line", nt_int(nt, av[0], "node_line", 0));
+          nt_node_set_int(nt, sym, "node_file", nt_int(nt, av[0], "node_file", 0));
+          nt_replace_child(nt, args, av[0], sym);
+          comp_grow_node_arrays(c);
+        }
+        free(nm);
+      }
+    }
+  }
+  for (int j = 0; j < nt_num_refs(nt, node); j++) dmu_fold_names(c, nt_ref_at(nt, node, j));
+  for (int j = 0; j < nt_num_arrs(nt, node); j++) {
+    int an = 0; const int *ids0 = nt_arr_at(nt, node, j, &an);
+    int *ids = (int *)malloc(sizeof(int) * (size_t)(an > 0 ? an : 1));
+    if (!ids) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (an > 0) memcpy(ids, ids0, sizeof(int) * (size_t)an);
+    for (int m = 0; m < an; m++) dmu_fold_names(c, ids[m]);
+    free(ids);
+  }
+}
+/* The loop statement st of a class body, unrolled into *out (its
+   statements, then the table): 1, or 0 where it is no such loop. body and
+   at: the body and st's index there, the table's constant looked up ahead
+   of it. */
+static int dmu_unroll_one(Compiler *c, const int *recv_of, int n0, int body, int at, int st, int **out, int *no) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (nt_kind(nt, st) != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, st, "name");
+  if (!nm || !(sp_streq(nm, "each") || sp_streq(nm, "each_pair")) || nt_ref(nt, st, "arguments") >= 0) return 0;
+  int blk = nt_ref(nt, st, "block"), r = nt_ref(nt, st, "receiver");
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || r < 0) return 0;
+  int frozen = 0, tv = -1;
+  if (nt_kind(nt, r) == NK_ConstantReadNode) {
+    const char *cn = nt_str(nt, r, "name");
+    int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+    int w = -1;
+    for (int i = 0; i < at && cn; i++)
+      if (nt_kind(nt, bb[i]) == NK_ConstantWriteNode && nt_str(nt, bb[i], "name") &&
+          sp_streq(nt_str(nt, bb[i], "name"), cn)) w = bb[i];
+    if (w < 0) return 0;
+    tv = dmu_table_literal(nt, nt_ref(nt, w, "value"), &frozen);
+    if (tv < 0 || !dmu_const_settled(nt, recv_of, n0, body, cn, w, r, frozen)) return 0;
+  }
+  else tv = dmu_table_literal(nt, r, &frozen);
+  if (tv < 0) return 0;
+  int hash = nt_kind(nt, tv) == NK_HashNode;
+  if (!hash && sp_streq(nm, "each_pair")) return 0;
+  /* the block's variables: required ones only, one for an Array's entry,
+     the key and the value for a Hash's */
+  int bp = nt_ref(nt, blk, "parameters");
+  int ps = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
+  if (bp >= 0 && nt_kind(nt, bp) != NK_BlockParametersNode) return 0;
+  int rn = 0; const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+  static const char *const OTHER[] = { "optionals", "posts", "keywords", NULL };
+  for (int i = 0; ps >= 0 && OTHER[i]; i++) { int n = 0; (void)nt_arr(nt, ps, OTHER[i], &n); if (n) return 0; }
+  if (ps >= 0 && (nt_ref(nt, ps, "rest") >= 0 || nt_ref(nt, ps, "keyword_rest") >= 0 || nt_ref(nt, ps, "block") >= 0)) return 0;
+  if (rn != (hash ? 2 : 1)) return 0;
+  const char *names[2];
+  for (int i = 0; i < rn; i++) {
+    if (nt_kind(nt, rq[i]) != NK_RequiredParameterNode || !(names[i] = nt_str(nt, rq[i], "name"))) return 0;
+  }
+  int bbody = nt_ref(nt, blk, "body");
+  if (bbody < 0 || nt_kind(nt, bbody) != NK_StatementsNode) return 0;
+  /* a literal Array whose block is one define_method stays where it was */
+  { int sn = 0; const int *ss = nt_arr(nt, bbody, "body", &sn);
+    if (!hash && nt_kind(nt, r) == NK_ArrayNode && sn == 1 && nt_kind(nt, ss[0]) == NK_CallNode &&
+        nt_str(nt, ss[0], "name") && sp_streq(nt_str(nt, ss[0], "name"), "define_method")) return 0; }
+  if (dmu_defines(nt, bbody) <= 0 || dmu_blocked(nt, bbody, names, rn, 0)) return 0;
+  int en = 0; const int *el0 = nt_arr(nt, tv, "elements", &en);
+  int *el = (int *)malloc(sizeof(int) * (size_t)(en > 0 ? en : 1));
+  if (!el) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (en > 0) memcpy(el, el0, sizeof(int) * (size_t)en);
+  int live[2] = { 1, 1 };
+  for (int e = 0; e < en; e++) {
+    int lits[2];
+    if (hash) { lits[0] = nt_ref(nt, el[e], "key"); lits[1] = nt_ref(nt, el[e], "value"); }
+    else lits[0] = el[e];
+    int copy = nt_clone_subtree(nt, bbody);
+    comp_grow_node_arrays(c);
+    dmu_subst(nt, copy, names, lits, rn, live);
+    comp_grow_node_arrays(c);
+    dmu_fold_names(c, copy);
+    int cn = 0; const int *cs = nt_arr(nt, copy, "body", &cn);
+    for (int m = 0; m < cn; m++) xc_push(out, no, cs[m]);
+  }
+  free(el);
+  xc_push(out, no, r);   /* the loop's value: the table */
+  return 1;
+}
+int desugar_table_loop_defines(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  for (int round = 0; round < 8; round++) {
+    int any = 0;
+    int n0 = nt->count;
+    /* the call each node is the receiver of */
+    int *recv_of = (int *)malloc(sizeof(int) * (size_t)(n0 > 0 ? n0 : 1));
+    if (!recv_of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < n0; i++) recv_of[i] = -1;
+    for (int i = 0; i < n0; i++)
+      if (nt_kind(nt, i) == NK_CallNode) { int r = nt_ref(nt, i, "receiver"); if (r >= 0 && r < n0) recv_of[r] = i; }
+    for (int id = 0; id < n0; id++) {
+      if (!class_def_opens_frame(nt, id)) continue;
+      int body = class_def_body(nt, id);
+      if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
+      int bn = 0; const int *bb0 = nt_arr(nt, body, "body", &bn);
+      int *bb = (int *)malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1));
+      if (!bb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      if (bn > 0) memcpy(bb, bb0, sizeof(int) * (size_t)bn);
+      int *out = NULL, no = 0, hit = 0;
+      for (int i = 0; i < bn; i++) {
+        int *part = NULL, np = 0;
+        if (!hit && bb[i] < n0 && dmu_unroll_one(c, recv_of, n0, body, i, bb[i], &part, &np)) {
+          for (int m = 0; m < np; m++) xc_push(&out, &no, part[m]);
+          hit = 1;
+        }
+        else xc_push(&out, &no, bb[i]);
+        free(part);
+      }
+      if (hit) { nt_node_set_arr(nt, body, "body", out, no); any = changed = 1; }
+      free(out); free(bb);
+    }
+    free(recv_of);
+    if (!any) break;
+  }
+  return changed;
+}
+
 int desugar_attr_const_splat(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

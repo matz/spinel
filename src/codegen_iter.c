@@ -4087,6 +4087,11 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0) return 0;
   TyKind et = repr_of(c, recv).as_ty;
+  /* `x&.then { }` on a pointer whose NULL is nil (a Regexp, a Proc, an
+     Exception a nil-defaulted parameter holds): the safe-navigation guard
+     comes first and re-enters here for the non-nil arm (#11851) */
+  if (nt_safe_nav(nt, id) && g_sn_skip != id && ty_null_is_nil(et) && et != TY_POLY &&
+      et != TY_STRING && !ty_is_object(et) && node_may_be_null_nil(c, recv)) return 0;
   /* an object whose class writes its own tap / then is called */
   if (ty_is_object(et) && call_target(c, id, ty_object_class(et), name, 0, NULL) >= 0) return 0;
   /* a boxed receiver that may be one goes through the dispatch, whose

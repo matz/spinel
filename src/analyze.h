@@ -204,6 +204,8 @@ void elab_free(Compiler *c);
 void elab_note_const_writes(Compiler *c);   /* the source's constant writes, before any pass */
 void elab_note_spliced_const_write(Compiler *c, int node);   /* ...and one a form of the walk splices in (#10791) */
 int elab_source_writes_const(Compiler *c, const char *name, int top);   /* ...one of them writes `name` (top: where the top level finds it) */
+int elab_source_values_const(Compiler *c, const char *name);   /* ...one of them gives `name` a value (`K = e.class`), not a class or module header */
+int elab_source_const_opaque(Compiler *c, const char *name);   /* ...one of them gives `name` a value that no constant spells (`K = e.class`), not an alias of a constant or `Class.new(C)` */
 int elab_consts_by_value(Compiler *c, int unheld);   /* may it write a constant by a name it computes (const_set, eval; unheld: autoload, const_missing)? */
 int elab_lexical_header(const NodeTable *nt, const int *par, int id);   /* the header whose body is id's lexical scope, -1 for the top level */
 extern int g_dump_load_record;   /* --dump-load-record */

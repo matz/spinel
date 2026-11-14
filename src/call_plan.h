@@ -1359,16 +1359,20 @@ int cplan_presence_class(Compiler *c, int id);
    call against a version (a method body's def, which may run any number
    of times). Each cell holds one of the chain's versions while that
    version is the method, in the chain's order, nearest history first;
-   gone[k] where cell k's version is an undef, which while live says the
-   method is gone whatever a farther history holds; only public ones
-   unless include_all; and els,
+   ans[k], what the method's presence is while cell k's version is live: 1
+   for a def, 0 for an undef, which says the method is gone whatever a
+   farther history holds, and 0 for a def that is not public (the
+   visibility its arm takes, elab_version_vis: a later `private :s` counts)
+   unless include_all; where that visibility is known only at run time (-1)
+   vis[k] names the visibility cell the live version's answer is read from
+   (public: 1; ans[k] 0), written beside the version's cell; and els,
    whether the entry's else arm, which the call runs while none is live,
    finds the method so (cplan_entry_finds). 1 with the
    cells in *out, 0 where the answer is the table's or the record's at the
    point (cplan_cmethod_later), for a chain whose entry arms a remove, and
    in a program that defines respond_to_missing?
    (respond_to_missing_defined). */
-typedef struct { int n; char cell[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char gone[VER_MAX_ARMS]; int els; } CplanCells;
+typedef struct { int n; char cell[VER_MAX_ARMS][32]; char vis[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char ans[VER_MAX_ARMS]; int els; } CplanCells;
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out);
 /* The class whose own or inherited class methods class-side list call id lists, when the cells may answer it
    (a `C.singleton_methods` on a constant, list_cells_shape; *own for the `(false)` form); -1 for any other. The

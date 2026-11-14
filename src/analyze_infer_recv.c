@@ -322,6 +322,13 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       comp_ntype(c, argv[0]) == TY_FLOAT) { *out = TY_POLY_ARRAY; return 1; }
   if (rt == TY_INT && sp_streq(name, "modulo") && argc == 1 &&
       comp_ntype(c, argv[0]) == TY_FLOAT) { *out = TY_FLOAT; return 1; }
+  /* a Bignum divisor: the modulo of a negative receiver is past the word
+     (-7.modulo(2**64)), so it is a Bignum as `%` answers, and divmod's pair
+     holds one */
+  if (rt == TY_INT && argc == 1 && comp_ntype(c, argv[0]) == TY_BIGINT) {
+    if (sp_streq(name, "modulo")) { *out = TY_BIGINT; return 1; }
+    if (sp_streq(name, "divmod")) { *out = TY_POLY_ARRAY; return 1; }
+  }
   if (rt == TY_INT && sp_streq(name, "remainder") && argc == 1 &&
       comp_ntype(c, argv[0]) == TY_FLOAT) { *out = TY_FLOAT; return 1; }
   if (rt == TY_FLOAT && argc == 1 && comp_ntype(c, argv[0]) == TY_RATIONAL &&

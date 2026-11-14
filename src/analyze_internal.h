@@ -164,6 +164,7 @@ int builtin_recv_owner_classes(const char *name, const char **out, int cap);
 int poly_splat_keyed(const char *name);
 int an_bi_generic_splat(Compiler *c, int id);
 int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi);
+int builtin_cmethod_span(const char *cls, const char *name, int *lo, int *hi);
 int builtin_arity_violation(Compiler *c, int id, int non_nil);
 int builtin_count_refused_boxed(Compiler *c, int id);
 int io_library_count_refused(Compiler *c, int id, const struct BuiltinOp *op, const char *name);
@@ -799,6 +800,7 @@ const LowerRow *lower_row_nt(const NodeTable *nt, int id, int family);   /* the 
 int desugar_kernel_reopen(Compiler *c);
 int desugar_singleton_class_mixin(Compiler *c);
 int desugar_explicit_receiver_mixin(Compiler *c);
+int desugar_table_loop_defines(Compiler *c);
 int desugar_attr_const_splat(Compiler *c);
 int desugar_sclass_readers_through_class(Compiler *c);
 int desugar_constant_path_self_alias(Compiler *c);

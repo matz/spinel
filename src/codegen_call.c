@@ -3846,9 +3846,16 @@ int poly_binop_recv_temp(Compiler *c, int recv, int arg, Buf *b, int *stmt_expr)
    argument allocates without running Ruby (an interpolation): that
    allocation collected it, which emit_str_eq_ordered's rooted temp prevents
    for the typed String twin. `lead` is text the call takes ahead of the two
-   operands ("" for none). */
+   operands ("" for none).
+
+   An argument whose calls run none of the program's code and store nothing
+   (arg_runs_nothing, the operand-order record's pure reads: `pc <
+   cmds.size` on a typed Array) cannot overwrite the receiver, and is left
+   in place: the hoist made `while pc < cmds.size`, pc boxed, store pc into
+   the frame and read it back on every pass. */
+static int arg_runs_nothing(Compiler *c, int n);
 void emit_poly_call2_ordered(Compiler *c, const char *fn, const char *lead, int recv, int arg, Buf *b) {
-  if (node_may_run_ruby(c->nt, arg) ||
+  if ((node_may_run_ruby(c->nt, arg) && !arg_runs_nothing(c, arg)) ||
       (operand_may_allocate(c, recv) && operand_may_allocate(c, arg))) {
     int se = 0;
     int t = poly_binop_recv_temp(c, recv, arg, b, &se);
@@ -6315,6 +6322,14 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     if ((crt == TY_INT || crt == TY_FLOAT) && argc == 1 && comp_ntype(c, argv[0]) == TY_COMPLEX) {
       if (is_basic_arith(name)) {
         const char *fn = name[0] == '+' ? "add" : name[0] == '-' ? "sub" : name[0] == '*' ? "mul" : "div";
+        /* a real times a Complex multiplies each part (Complex#* with a
+           real), so each part keeps its kind: 3 * Complex(1.0, 2) is (3.0+6i);
+           see sp_complex_imul for a Bignum-sized Integer */
+        if (name[0] == '*') {
+          buf_puts(b, crt == TY_FLOAT ? "sp_complex_fmul((sp_float)(" : "sp_complex_imul((int64_t)(");
+          emit_expr(c, recv, b); buf_puts(b, "), "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+          return 1;
+        }
         buf_printf(b, "sp_complex_%s(((sp_Complex){(sp_float)(", fn); emit_expr(c, recv, b);
         buf_printf(b, "), 0, %d}), ", crt == TY_FLOAT ? 1 : 0); emit_expr(c, argv[0], b); buf_puts(b, ")");
         return 1;
@@ -20364,19 +20379,34 @@ static int cells_testable(Compiler *c, const CplanCells *cs) {
     LocalVar *g = comp_gvar(c, cs->cell[i] + 1);
     ReprKind k = g ? repr_slot_kind(c, g) : RK_NONE;
     if (k != RK_SCALAR && k != RK_BOXED) return 0;
+    LocalVar *v = cs->vis[i][0] ? comp_gvar(c, cs->vis[i] + 1) : NULL;
+    if (cs->vis[i][0] && (!v || (repr_slot_kind(c, v) != RK_SCALAR && repr_slot_kind(c, v) != RK_BOXED) || cplan_cell_dropped(c, v))) return 0;
   }
   return 1;
 }
-/* ...the test that some version is live: each cell equals its version, ored, ahead of the caller's last operand; an
-   undef's cell, live, answers 0 ahead of the farther cells (`c == u ? 0 : (...`). How many parentheses the caller
-   closes after its last operand. */
+/* ...the test that some version is live, ahead of the caller's last operand: each cell up to the last one that
+   answers 0 (an undef's, a private version's, or a version's whose visibility cell tells) answers its own
+   (`c == v ? ans : (`: the def's 1, the undef's 0, or `vis == public`), so a live version ahead of one is not
+   swallowed by its test; the cells after it are ored. How many parentheses the caller closes after its last
+   operand. */
 static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
-  int open = 0;
+  int open = 0, last = -1;
+  for (int i = 0; i < cs->n; i++) if (!cs->ans[i] || cs->vis[i][0]) last = i;
   for (int i = 0; i < cs->n; i++) {
     buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
                cs->cell[i] + 1, cs->val[i]);
-    buf_puts(b, cs->gone[i] ? " ? 0 : (" : " || ");
-    open += cs->gone[i];
+    if (i > last) buf_puts(b, " || ");
+    else if (cs->vis[i][0]) {
+      buf_puts(b, " ? (");
+      buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->vis[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
+                 cs->vis[i] + 1, SP_VIS_PUBLIC);
+      buf_puts(b, ") : (");
+      open++;
+    }
+    else {
+      buf_printf(b, " ? %d : (", cs->ans[i]);
+      open++;
+    }
   }
   return open;
 }
@@ -21093,6 +21123,18 @@ const char *builtin_method_params(const char *owner, const char *m, int *in_c) {
 int builtin_cmethod_name_known(const char *m) {
   for (int i = 0; m && sp_builtin_cmeth_arity_spec_tbl[i].cls; i++)
     if (sp_builtin_cmeth_arity_spec_tbl[i].m && sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].m, m)) return 1;
+  return 0;
+}
+/* The counts a builtin class or module's own class method cls.name takes
+   (Math.sqrt, Integer.sqrt), blockless: 1 where the table proves a bounded
+   range */
+int builtin_cmethod_span(const char *cls, const char *name, int *lo, int *hi) {
+  for (int i = 0; cls && name && sp_builtin_cmeth_arity_spec_tbl[i].cls; i++) {
+    const SpAritySpec *r = &sp_builtin_cmeth_arity_spec_tbl[i];
+    if (!sp_streq(r->cls, cls) || !r->m || !sp_streq(r->m, name)) continue;
+    *lo = r->min; *hi = r->max;
+    return r->min >= 0 && r->max >= 0;
+  }
   return 0;
 }
 int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi) {

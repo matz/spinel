@@ -68,6 +68,19 @@ class Route
     [count, bump]
   end
 
+  # captured parameters (an Array, a boxed value) the body reassigns past
+  # the guards, read before, in and after the block
+  def swap(list, tag)
+    return [] if list.empty?
+    first = list.size
+    list = list + ["new"]
+    tag = tag.to_s
+    seen = []
+    @segments.each { |s| seen << "#{s}#{list.size}#{tag}" }
+    list = list.reverse
+    [first, seen, list, tag]
+  end
+
   # Float, nilable and boxed captures
   def mix(f, k)
     return 0.0 unless f
@@ -95,6 +108,9 @@ end
   p b.call
   p r.mix(nil, 1)
   p r.mix(2.0, :k)
+  p r.swap([], 1)
+  p r.swap(["a", "b"], 7)
+  p r.swap(["c"], :t)
 end
 
 r = Route.new(Bag.new(["z"]))

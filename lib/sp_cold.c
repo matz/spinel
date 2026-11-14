@@ -2501,6 +2501,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     memcpy(r, buf, n); r[n] = 0;
     free(buf);
     sp_str_set_len(r, n);
+    if (sp_File_reads_binary(f)) sp_str_mark_binary(r);   /* a socket's line is BINARY */
     f->lineno++;
     return r;
   }
@@ -2549,6 +2550,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   char *r = sp_str_alloc(len);
   memcpy(r, buf, len); r[len] = 0;
   sp_str_set_len(r, len);
+  if (sp_File_reads_binary(f)) sp_str_mark_binary(r);
   f->lineno++;
   return r;
 }

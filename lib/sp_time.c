@@ -538,7 +538,22 @@ static size_t sp_time_year_then(char *buf, size_t cap, const struct tm *b, const
    mktime), %P (lowercase am/pm), the %:z/%::z colon offsets, and width/flag
    modifiers (%3S, %6N, %10Y). Walk the format, compute those directly, and
    pad; delegate a bare standard directive to strftime. (#2635, #2636) */
-const char *sp_timev_strftime(sp_Time t, const char *fmt) {SP_GC_ROOT_STR(fmt);
+static const char *sp_timev_strftime_n(sp_Time t, const char *fmt, size_t flen);
+const char *sp_timev_strftime(sp_Time t, const char *fmt) { return sp_timev_strftime_n(t, fmt, strlen(fmt)); }
+/* a program's format String, a NUL among its bytes: CRuby copies one like
+   any other byte, where reading it as a C string ended the format there */
+const char *sp_time_strftime_s(const sp_Time *t, const char *fmt) {
+  const char *r = sp_timev_strftime_n(*t, fmt, sp_str_byte_len(fmt));
+  /* a BINARY format answers a BINARY String, as CRuby's */
+  if (sp_str_is_binary(fmt)) {
+    size_t n = sp_str_byte_len(r);
+    char *b = sp_str_alloc(n); memcpy(b, r, n); sp_str_mark_binary(b);
+    return b;
+  }
+  return r;
+}
+static const char *sp_timev_strftime_n(sp_Time t, const char *fmt, size_t flen) {SP_GC_ROOT_STR(fmt);
+  const char *fend = fmt + flen;
   /* is_utc is a 3-state kind, not a flag: kind 2 is a fixed offset whose
      civil fields are the UTC ones shifted by utc_off. Reading it as a
      boolean sent kind 2 down the gmtime branch, so every field directive
@@ -550,7 +565,7 @@ const char *sp_timev_strftime(sp_Time t, const char *fmt) {SP_GC_ROOT_STR(fmt);
      handed a thread another thread's result (#11352) */
   static SP_TLS char out[8192];
   size_t oi = 0;
-  for (const char *p = fmt; *p && oi < sizeof(out) - 128; p++) {
+  for (const char *p = fmt; p < fend && oi < sizeof(out) - 128; p++) {
     if (*p != '%') { out[oi++] = *p; continue; }
     const char *tok = p++;
     int upcase = 0, downcase = 0, pad0 = 0, padsp = 0, nopad = 0, colon = 0;
@@ -723,6 +738,7 @@ const char *sp_timev_strftime(sp_Time t, const char *fmt) {SP_GC_ROOT_STR(fmt);
     for (size_t k = v0; k < vl && oi < sizeof(out) - 2; k++) out[oi++] = val[k];
   }
   out[oi] = 0;
+  if (memchr(out, 0, oi)) { char *r = sp_str_alloc(oi); memcpy(r, out, oi); return r; }
   return sp_str_dup_external(out);
 }
 

@@ -7117,7 +7117,13 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         int asc = arg0t == TY_INT || arg0t == TY_FLOAT || arg0t == TY_STRING || arg0t == TY_SYMBOL;
         if (ksc && asc && kt != arg0t) {
           buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[0], b);
-          if (oint_kind(vt)) { buf_puts(b, "); "); oint_open(c, id, vt, b); buf_puts(b, oint_nil(vt)); oint_close(c, id, b); buf_puts(b, "; })"); }
+          /* more keys: CRuby takes them all, and the answer is the walk's
+             boxed nil, whatever the hash's values are */
+          if (argc >= 2) {
+            for (int di = 1; di < argc; di++) { buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[di], b); }
+            buf_puts(b, "); sp_box_nil(); })");
+          }
+          else if (oint_kind(vt)) { buf_puts(b, "); "); oint_open(c, id, vt, b); buf_puts(b, oint_nil(vt)); oint_close(c, id, b); buf_puts(b, "; })"); }
           else if (vt == TY_STRING) buf_puts(b, "); NULL; })");
           else buf_puts(b, "); sp_box_nil(); })");
           return 1;
@@ -10032,6 +10038,20 @@ static int int_arms_round_divide(Compiler *c, int id, Buf *b, const NodeTable *n
            repr_of(c, argv[0]).kind == RK_BOXED && comp_ntype(c, id) == TY_POLY_ARRAY) {
     buf_printf(b, "sp_poly_to_poly_array(sp_poly_divmod(sp_box_int(%s), ", r);
     emit_expr(c, argv[0], b); buf_puts(b, "))");
+  }
+  /* a Bignum divisor: the pair Integer#divmod makes, whose modulo of a
+     negative receiver is past the word; the IntArray arm below narrowed the
+     divisor and raised RangeError */
+  else if (is_divmod_name(name) && argc == 1 && comp_ntype(c, argv[0]) == TY_BIGINT &&
+           comp_ntype(c, id) == TY_POLY_ARRAY) {
+    buf_printf(b, "sp_poly_to_poly_array(sp_poly_divmod(sp_box_int(%s), sp_box_bigint(", r);
+    emit_expr(c, argv[0], b); buf_puts(b, ")))");
+  }
+  /* modulo by a Bignum is `%`'s Bignum */
+  else if (is_modulo_name(name) && argc == 1 && comp_ntype(c, argv[0]) == TY_BIGINT &&
+           comp_ntype(c, id) == TY_BIGINT) {
+    buf_printf(b, "sp_bigint_mod(sp_bigint_new_int(%s), ", r);
+    emit_expr(c, argv[0], b); buf_puts(b, ")");
   }
   else if (sp_streq(name, "divmod") && argc == 1 &&
            comp_ntype(c, argv[0]) != TY_RATIONAL) {
@@ -19418,6 +19438,18 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       emit_poly_str_transform_answer(c, id, recv, argc, argv, name, name, b);
       return 1;
     }
+  }
+  /* Hash[x] of a value known only at run time: Hash[]'s reading of its one
+     argument (a Hash copied, a list of pairs read laxly), where x.to_h, the
+     rewrite, answers a Hash itself */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "to_h") &&
+      nt_ref(nt, id, "block") < 0 && nt_int(nt, id, "hash_brackets", 0) &&
+      repr_of(c, id).kind == RK_BOXED) {
+    int ta = ++g_tmp;
+    buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, ", ta, ta, ta);
+    emit_expr(c, recv, b);
+    buf_printf(b, "); sp_hash_brackets_splat(sp_box_poly_array(_t%d)); })", ta);
+    return 1;
   }
   /* nil-aware conversions on a boxed receiver (a nil local widens to poly).
      The call's settled type may predate the widening (the receiver inferred

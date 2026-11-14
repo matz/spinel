@@ -343,8 +343,22 @@ typedef struct sp_mar_rd_s {
    own results reachable from nothing: under a minor mark they are freed and
    the next back-reference reads a corpse. Published here and marked through
    the collector's globals hook, which is the same treatment the regex globals
-   get. Reentrant loads chain through `prev`. */
+   get. Reentrant loads chain through `prev`, and so do the loads other
+   threads run at the same time: one list for the process, which the
+   collector walks whole. A reader is linked and unlinked under this lock,
+   and leaves by unlinking itself, not by setting the head back to its
+   prev, which dropped (or brought back, freed) another thread's reader
+   (#11845). Nothing in the locked regions allocates, so no thread waits
+   there on a collection. */
 static sp_mar_rd *sp_mar_active = NULL;
+#ifdef SP_THREADS
+static pthread_mutex_t sp_mar_lock = PTHREAD_MUTEX_INITIALIZER;
+#define SP_MAR_LOCK()   pthread_mutex_lock(&sp_mar_lock)
+#define SP_MAR_UNLOCK() pthread_mutex_unlock(&sp_mar_lock)
+#else
+#define SP_MAR_LOCK()   ((void)0)
+#define SP_MAR_UNLOCK() ((void)0)
+#endif
 void sp_marshal_mark_active(void) {
   for (sp_mar_rd *r = sp_mar_active; r; r = r->prev) {
     sp_mark_string(r->s);
@@ -605,7 +619,10 @@ void *sp_exc_cur_obj(void);
 void sp_fiber_reraise(const char *cls, const char *msg, void *obj);
 /* A reader leaves the active chain and frees its tables. */
 static void sp_mar_rd_done(sp_mar_rd *r) {
-  sp_mar_active = r->prev;
+  SP_MAR_LOCK();
+  for (sp_mar_rd **pp = &sp_mar_active; *pp; pp = &(*pp)->prev)
+    if (*pp == r) { *pp = r->prev; break; }
+  SP_MAR_UNLOCK();
   for (int i = 0; i < r->nsym; i++) free(r->syms[i]);
   free(r->syms); free(r->objs); free(r);
 }
@@ -617,7 +634,9 @@ sp_RbVal sp_marshal_load(const char *s, sp_int len) {
   SP_GC_ROOT_STR(s);
   sp_mar_rd *r = (sp_mar_rd *)calloc(1, sizeof *r);
   r->s = s ? s : ""; r->len = s ? (size_t)len : 0;
+  SP_MAR_LOCK();
   r->prev = sp_mar_active; sp_mar_active = r;
+  SP_MAR_UNLOCK();
   if (r->len >= 2) r->pos = 2;  /* skip the 4.8 version header */
   /* A raise inside the parse (an unknown class, a format error, a value a
      loader cannot convert) longjmps past the return below, and the reader

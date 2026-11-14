@@ -306,11 +306,13 @@ static void emit_hash_p0_rhs(Compiler *c, Repr hr, const char *hn,
     else {
       char kx[96], vx[128];
       snprintf(kx, sizeof kx, "_t%d->order[_t%d]", trecv, ti);
-      snprintf(vx, sizeof vx, "sp_%sHash_get(_t%d, _t%d->order[_t%d])", hn, trecv, trecv, ti);
+      snprintf(vx, sizeof vx, "sp_%sHash_get%s(_t%d, _t%d->order[_t%d])", hn, typed_elem_store_sfx(hr.as_ty),
+               trecv, trecv, ti);
       Buf bk; memset(&bk, 0, sizeof bk); emit_boxed_text(c, kt, kx, &bk);
       Buf bv; memset(&bv, 0, sizeof bv);
       if (g_hash_vnil && oint_kind(vt)) hash_vnil_val(&bv, hn, trecv, ti, 0, 1);
-      else emit_boxed_text(c, vt, vx, &bv);
+      /* (a Hash that holds the handle boxes the handle, elem_held) */
+      else emit_held_boxed_text(c, typed_elem_held(hr.as_ty), vx, &bv);
       buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s); sp_PolyArray_push(_t%d, %s); ",
                  tpp, bk.p ? bk.p : "sp_box_nil()", tpp, bv.p ? bv.p : "sp_box_nil()");
       free(bk.p); free(bv.p);
@@ -408,10 +410,13 @@ static char *emit_hash_block_eval(Compiler *c, int block, Repr hr, const char *h
     }
     else if (hb0) {
       char src[160];
+      /* (a value of a Hash that holds the handle is the handle, elem_held) */
+      TyKind w0 = !p0_is_key && typed_elem_held(hr.as_ty) == TY_STRBUF ? TY_STRBUF : TY_STRING;
       if (p0_is_key) snprintf(src, sizeof src, "_t%d->order[_t%d]", trecv, ti);
-      else snprintf(src, sizeof src, "sp_%sHash_get(_t%d, _t%d->order[_t%d])", hn, trecv, trecv, ti);
+      else snprintf(src, sizeof src, "sp_%sHash_get%s(_t%d, _t%d->order[_t%d])", hn, typed_elem_store_sfx(hr.as_ty),
+                    trecv, trecv, ti);
       buf_printf(g_pre, "lv_%s = ", p0);
-      emit_strbuf_param_bind(c, p0_lv, TY_STRING, src, g_pre);
+      emit_strbuf_param_bind(c, p0_lv, w0, src, g_pre);
       buf_puts(g_pre, ";\n");
     }
     else {
@@ -440,9 +445,11 @@ static char *emit_hash_block_eval(Compiler *c, int block, Repr hr, const char *h
     }
     else if (hb1) {
       char src[160];
-      snprintf(src, sizeof src, "sp_%sHash_get(_t%d, _t%d->order[_t%d])", hn, trecv, trecv, ti);
+      snprintf(src, sizeof src, "sp_%sHash_get%s(_t%d, _t%d->order[_t%d])", hn, typed_elem_store_sfx(hr.as_ty),
+               trecv, trecv, ti);
       buf_printf(g_pre, "lv_%s = ", p1);
-      emit_strbuf_param_bind(c, p1_lv, TY_STRING, src, g_pre);
+      /* (a value of a Hash that holds the handle is the handle, elem_held) */
+      emit_strbuf_param_bind(c, p1_lv, typed_elem_held(hr.as_ty) == TY_STRBUF ? TY_STRBUF : TY_STRING, src, g_pre);
       buf_puts(g_pre, ";\n");
     }
     else {
@@ -593,8 +600,10 @@ int emit_hash_collect_expr(Compiler *c, int id, Buf *b) {
     }
     else {
       int cvn = oint_kind(rr.val) && hash_vals_nullable(c, recv);   /* the value with its nil (D3b-ii) */
-      buf_printf(g_pre, "sp_%sHash_%s(_t%d, _t%d->order[_t%d], sp_%sHash_%s(_t%d, _t%d->order[_t%d])); }",
-                 hn, cvn ? "oset" : "set", tres, trecv, ti, hn, cvn ? "vget" : "get", trecv, trecv, ti);   /* a key the walk is on is present */
+      /* (a String value copied as the handle the Hash holds, elem_held) */
+      const char *cs = cvn ? "" : typed_elem_store_sfx(rr.as_ty);
+      buf_printf(g_pre, "sp_%sHash_%s%s(_t%d, _t%d->order[_t%d], sp_%sHash_%s%s(_t%d, _t%d->order[_t%d])); }",
+                 hn, cvn ? "oset" : "set", cs, tres, trecv, ti, hn, cvn ? "vget" : "get", cs, trecv, trecv, ti);   /* a key the walk is on is present */
     }
     buf_puts(g_pre, "\n");
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
@@ -639,7 +648,7 @@ int emit_hash_collect_expr(Compiler *c, int id, Buf *b) {
 
 /* Emit, into g_pre at `indent`, `_t<dest> = sp_PolyArray_new();` then push entry
    `ti`'s boxed key and value. `dest` must already be a rooted sp_PolyArray*. */
-static void emit_hash_pair_at(Repr hr, const char *hn,
+static void emit_hash_pair_at(Compiler *c, Repr hr, const char *hn,
                               int trecv, int ti, int dest, int indent) {
   TyKind kt = hr.key, vt = hr.val;
   emit_indent(g_pre, indent);
@@ -660,7 +669,10 @@ static void emit_hash_pair_at(Repr hr, const char *hn,
     buf_printf(g_pre, " sp_PolyArray_push(_t%d, %s(sp_%sHash_%s(_t%d, _t%d->order[_t%d])));", dest,
                g_hash_vnil ? "sp_box_oint" : "sp_box_int", hn, g_hash_vnil ? "vget" : "get", trecv, trecv, ti);
   else
-    buf_printf(g_pre, " sp_PolyArray_push(_t%d, %ssp_%sHash_get%s(_t%d, _t%d->order[_t%d])));", dest, ONE_HV_BOXO(hn), hn, ONE_HV_GE(hn), trecv, trecv, ti);
+  {
+    char gx[160]; snprintf(gx, sizeof gx, "sp_%sHash_get%s(_t%d, _t%d->order[_t%d])", hn, typed_elem_store_sfx(hr.as_ty), trecv, trecv, ti);
+    buf_printf(g_pre, " sp_PolyArray_push(_t%d, ", dest); emit_held_boxed_text(c, typed_elem_held(hr.as_ty), gx, g_pre); buf_puts(g_pre, ");");
+  }
   buf_puts(g_pre, "\n");
 }
 
@@ -738,7 +750,7 @@ int emit_hash_reduce_search_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "if (_t%d >= 0) {\n", twin);
   HASH_VNIL_OF(c, id);
-  emit_hash_pair_at(rr, hn, trecv, twin, tres, g_indent + 1);
+  emit_hash_pair_at(c, rr, hn, trecv, twin, tres, g_indent + 1);
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
   buf_printf(b, "_t%d", tres);
   return 1;
@@ -797,7 +809,7 @@ int emit_hash_sort_by_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "sp_PolyArray *_t%d = NULL; SP_GC_ROOT(_t%d);\n", tpair, tpair);
   HASH_VNIL_OF(c, id);
-  emit_hash_pair_at(rr, hn, trecv, ti, tpair, g_indent + 1);
+  emit_hash_pair_at(c, rr, hn, trecv, ti, tpair, g_indent + 1);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d));\n", tup, tpair);
   emit_indent(g_pre, g_indent + 1);
@@ -1057,9 +1069,11 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
          representation, as the other hash block walks bind it. */
       char src[128];
       if (keys) snprintf(src, sizeof src, "_t%d", tk);
-      else snprintf(src, sizeof src, "sp_%sHash_get(_t%d, _t%d)", shn, ts, tk);
+      else snprintf(src, sizeof src, "sp_%sHash_get%s(_t%d, _t%d)", shn, typed_elem_store_sfx(rr.as_ty), ts, tk);
       buf_printf(g_pre, "lv_%s = ", p0);
-      emit_strbuf_param_bind(c, p0_lv_tv, keys ? skt : svt, src, g_pre);
+      /* (a value of a Hash that holds the handle is the handle, elem_held) */
+      emit_strbuf_param_bind(c, p0_lv_tv, keys ? skt : typed_elem_held(rr.as_ty),
+                             src, g_pre);
       buf_puts(g_pre, ";\n");
     }
     else if (keys) {
@@ -1078,9 +1092,10 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
                    so ? "" : needs_box_assign ? "sp_box_oint(" : "sp_oint_arg(", shn, ts, tk, so ? "" : ")");
       }
       else if (needs_box_assign) {
-        char gv[128]; snprintf(gv, sizeof gv, "sp_%sHash_get(_t%d, _t%d)", shn, ts, tk);
+        char gv[128]; snprintf(gv, sizeof gv, "sp_%sHash_get%s(_t%d, _t%d)", shn, typed_elem_store_sfx(rr.as_ty), ts, tk);
         Buf bx; memset(&bx, 0, sizeof bx);
-        emit_boxed_text(c, svt, gv, &bx);
+        /* (a Hash that holds the handle boxes the handle, elem_held) */
+        emit_held_boxed_text(c, typed_elem_held(rr.as_ty), gv, &bx);
         buf_printf(g_pre, "lv_%s = %s;\n", p0, bx.p ? bx.p : ""); free(bx.p);
       }
       else buf_printf(g_pre, "lv_%s = sp_%sHash_get(_t%d, _t%d);\n", p0, shn, ts, tk);
@@ -1137,7 +1152,11 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   /* the value stored carries its nil: the source's (transform_keys) or the
      block's (an oint-formed or boxed result, transform_values) */
   int oset_k = keys && svn && dvn && dr.val == svt;
-  emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_%sHash_%s(_t%d, ", dhn, oset_k || oset_v ? "oset" : "set", td);
+  /* transform_keys between two Hashes that hold the handle copies the
+     value as that handle (elem_held) */
+  const char *cs = keys && !oset_k && typed_elem_held(dt) == TY_STRBUF && typed_elem_held(rr.as_ty) == TY_STRBUF
+                   ? typed_elem_store_sfx(dt) : "";
+  emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_%sHash_%s%s(_t%d, ", dhn, oset_k || oset_v ? "oset" : "set", cs, td);
   if (keys) {
     /* new key = block result; unbox if block returned poly but key type is typed */
     const char *vbp = vb.p ? vb.p : "0";
@@ -1156,9 +1175,13 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
     if (repr_hash_is(rr, TY_POLY, TY_POLY))
       buf_printf(g_pre, "_t%d->vals[_t%d->order[_t%d]]", ts, ts, ti);
     else if (dvt == TY_POLY && svt != TY_POLY && svn) buf_printf(g_pre, "sp_box_oint(sp_%sHash_vget(_t%d, _t%d))", shn, ts, tk);
+    /* (a Hash that holds the handle boxes the handle, elem_held) */
+    else if (dvt == TY_POLY && typed_elem_held(rr.as_ty) == TY_STRBUF)
+    { char gx[96]; snprintf(gx, sizeof gx, "sp_%sHash_get_e(_t%d, _t%d)", shn, ts, tk);
+      emit_held_boxed_text(c, typed_elem_held(rr.as_ty), gx, g_pre); }
     else if (dvt == TY_POLY && svt != TY_POLY) { Buf bx; memset(&bx, 0, sizeof bx); char g[64]; snprintf(g, sizeof g, "sp_%sHash_get(_t%d, _t%d)", shn, ts, tk); emit_boxed_text(c, svt, g, &bx); buf_puts(g_pre, bx.p ? bx.p : ""); free(bx.p); }
     else if (oset_k) buf_printf(g_pre, "sp_%sHash_vget(_t%d, _t%d)", shn, ts, tk);
-    else buf_printf(g_pre, "sp_%sHash_get(_t%d, _t%d)", shn, ts, tk);
+    else buf_printf(g_pre, "sp_%sHash_get%s(_t%d, _t%d)", shn, cs, ts, tk);
   }
   else {
     /* key carried over; new value = block result (box/unbox to match dest type) */
@@ -2702,8 +2725,11 @@ static int emit_hash_chunk_first_class(Compiler *c, int pr, Repr hr, int block, 
   }
   else {
     snprintf(ksrc, sizeof ksrc, "_t%d->order[_t%d]", th, ti);
-    snprintf(vsrc, sizeof vsrc, "sp_%sHash_get(_t%d, _t%d->order[_t%d])", hn, th, th, ti);
+    snprintf(vsrc, sizeof vsrc, "sp_%sHash_get%s(_t%d, _t%d->order[_t%d])", hn, typed_elem_store_sfx(hr.as_ty),
+             th, th, ti);
   }
+  /* (a Hash that holds the handle: its value is the handle, elem_held) */
+  int vh = typed_elem_held(hr.as_ty) == TY_STRBUF;
   Scope *bsc = comp_scope_of(c, block);
   LocalVar *lv0 = bsc ? scope_local(bsc, p0n) : NULL;
   LocalVar *lv1 = bsc ? scope_local(bsc, p1n) : NULL;
@@ -2718,7 +2744,8 @@ static int emit_hash_chunk_first_class(Compiler *c, int pr, Repr hr, int block, 
   buf_puts(g_pre, ";\n");
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "lv_%s = ", p1);
-  if (box1) emit_boxed_text(c, vt, vsrc, g_pre);
+  if (box1) emit_held_boxed_text(c, typed_elem_held(hr.as_ty), vsrc, g_pre);
+  else if (vh) emit_strbuf_param_bind(c, lv1, TY_STRBUF, vsrc, g_pre);
   else if (lv1 && one_str_to_open(g_pre, lv1->type, "lv_%s", p1)) { buf_puts(g_pre, vsrc); buf_puts(g_pre, ")"); }
   else buf_puts(g_pre, vsrc);
   buf_puts(g_pre, ";\n");

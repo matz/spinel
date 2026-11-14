@@ -85,11 +85,12 @@ static TyTraits trait_from_functions(Compiler *c, TyKind t) {
   r.struct_valued = (unsigned char)ty_is_struct_valued(t);
   r.scalar_ret = (unsigned char)is_scalar_ret(t);
   r.store_class = (unsigned char)repr_store_class(c, t);
-  /* a typed Array of scalar elements stores each element as its element
+  /* a typed Array's elements and a typed Hash's values store each as its
      kind is held: a String one through the handle entries (the _e names)
-     and as the handle; the others by value, under their own entries */
-  if (ty_is_array(t) && !ty_is_array(ty_array_elem(t))) {
-    TyKind e = ty_array_elem(t);
+     and as the handle; the others by value, under their own entries (a
+     Hash's Integer values also under oget, vget, oset) */
+  if ((ty_is_array(t) && !ty_is_array(ty_array_elem(t))) || ty_is_hash(t)) {
+    TyKind e = typed_elem_kind(t);
     r.elem_sfx = e == TY_STRING ? "_e" : "";
     r.elem_held = (unsigned char)(e == TY_STRING ? TY_STRBUF : e);
   }

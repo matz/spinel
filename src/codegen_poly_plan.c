@@ -4825,29 +4825,28 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
   if ((is_aref || is_fetch) && comp_ntype(c, argv[0]) == TY_STRING) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_AREF_STR, -1, TY_UNKNOWN, PC_SAME);
     TyKind trt = is_scalar_ret(ret) ? ret : TY_INT;  /* the result temp's type */
-    static const struct { const char *cls, *hn; TyKind vt; } HV[] = {
-      {"SP_BUILTIN_STR_STR_HASH", "StrStr", TY_STRING},
-      {"SP_BUILTIN_STR_INT_HASH", "StrInt", TY_INT},
-      {"SP_BUILTIN_STR_POLY_HASH", "StrPoly", TY_POLY},
-    };
+    static const TyKind HV[] = { TY_STR_STR_HASH, TY_STR_INT_HASH, TY_STR_POLY_HASH };
     for (unsigned hvi = 0; hvi < sizeof HV / sizeof HV[0]; hvi++) {
+      TyKind ht = HV[hvi];
+      const char *hn = ty_hash_cname(ht), *hcls = hash_box_cls(ht);
       /* only a variant whose value fits the result temp can be emitted */
-      if (ret != TY_POLY && HV[hvi].vt != trt) continue;
-      char getx[200];
-      snprintf(getx, sizeof getx, "sp_%sHash_get((sp_%sHash *)_t%d.v.p, %s)", HV[hvi].hn, HV[hvi].hn, tv, strarg);
+      if (ret != TY_POLY && ty_hash_val(ht) != trt) continue;
+      char hx[200], getx[200];
+      snprintf(hx, sizeof hx, "(sp_%sHash *)_t%d.v.p", hn, tv);
+      snprintf(getx, sizeof getx, "sp_%sHash_get(%s, %s)", hn, hx, strarg);
       /* `[]` answers the hash's default on a miss, which the storage's
          own read already knows: the has_key gate below is fetch's, and
          in front of `[]` it answered nil for a Hash.new("") (#5544) */
       if (is_aref) {
         char gx[96]; snprintf(gx, sizeof gx, "sp_poly_get_str(_t%d, %s)", tv, strarg);
-        buf_printf(b, " case %s: _t%d = ", HV[hvi].cls, tr);
+        buf_printf(b, " case %s: _t%d = ", hcls, tr);
         if (ret == TY_POLY) buf_puts(b, gx); else emit_unbox_text(c, trt, gx, b);
         buf_puts(b, "; break;");
         continue;
       }
-      buf_printf(b, " case %s: _t%d = sp_%sHash_has_key((sp_%sHash *)_t%d.v.p, %s) ? ",
-                 HV[hvi].cls, tr, HV[hvi].hn, HV[hvi].hn, tv, strarg);
-      if (ret == TY_POLY) emit_boxed_text(c, HV[hvi].vt, getx, b); else buf_puts(b, getx);
+      buf_printf(b, " case %s: _t%d = sp_%sHash_has_key(%s, %s) ? ", hcls, tr, hn, hx, strarg);
+      /* (boxed: a String value as the Hash holds it, the handle's own box) */
+      if (ret == TY_POLY) emit_hash_val_box_text(c, ht, hx, strarg, b); else buf_puts(b, getx);
       buf_puts(b, " : ");
       if (is_fetch) emit_poly_fetch_absent(c, argc, atmp, argc == 2 ? atmp_ty[1] : TY_UNKNOWN, argv[0], ret, trt, b);
       else buf_puts(b, ret == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, trt));

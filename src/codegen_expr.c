@@ -5079,8 +5079,17 @@ else {
         emit_boxed_operand(c, ops, n - j, 0, &vb);
         free(ops);
       }
+      /* a String value is held as its handle (elem_held), as an Array
+         literal's element is */
+      else if (typed_elem_held(ht) == TY_STRBUF) {
+        Buf ev; memset(&ev, 0, sizeof ev);
+        if (emit_typed_elem_coerce(c, val, ht, "a Hash literal's value", &ev)) buf_puts(&vb, ev.p ? ev.p : "");
+        else emit_typed_elem_hold(c, val, ht, ev.p ? ev.p : "", &vb);
+        free(ev.p);
+      }
       else if (ty_is_hash(ht)) emit_coerce(c, val, ty_hash_val(ht), CO_HOLD, "a Hash literal's value", &vb);
       else emit_expr(c, val, &vb);
+      int vheld = typed_elem_held(ht) == TY_STRBUF;
       emit_indent(g_pre, g_indent);
       /* A pair's key and value are the set's sibling arguments, as a store's
          are: a key that can allocate goes into a rooted temp ahead of the
@@ -5096,13 +5105,14 @@ else {
          a value that allocates, the value is built first, into a rooted
          temp, and the key read last, in the set itself */
       int tv = -1;
-      if (tk < 0 && ty_is_hash(ht) && strbuf_read_copies(c, key) && operand_may_allocate(c, val)) {
-        TyKind vt = (sym_poly || poly_poly) ? TY_POLY : ty_hash_val(ht);
+      if (tk < 0 && ty_is_hash(ht) && strbuf_read_copies(c, key) &&
+          (operand_may_allocate(c, val) || typed_elem_hold_may_make(c, val, ht))) {
+        TyKind vt = (sym_poly || poly_poly) ? TY_POLY : vheld ? TY_STRBUF : ty_hash_val(ht);
         tv = ++g_tmp;
         buf_printf(g_pre, "{ %s _t%d = %s; ", vt == TY_POLY ? "sp_RbVal" : c_type_name(vt), tv, vb.p ? vb.p : "");
         emit_gc_root_tmp(c, vt, tv, g_pre); buf_puts(g_pre, " ");
       }
-      buf_printf(g_pre, "sp_%sHash_set(_t%d, ", hn, t);
+      buf_printf(g_pre, "sp_%sHash_set%s(_t%d, ", hn, typed_elem_store_sfx(ht), t);
       if (tk >= 0) buf_printf(g_pre, "_t%d", tk); else buf_puts(g_pre, kb.p ? kb.p : "");
       buf_puts(g_pre, ", ");
       if (tv >= 0) buf_printf(g_pre, "_t%d", tv); else buf_puts(g_pre, vb.p ? vb.p : "");
@@ -6850,7 +6860,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
         buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
         emit_guarded_poly_slot_assign(c, iv, tc2, b);
         buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", ta2, ta2, hash_box_cls(irt));
-        buf_printf(b, " sp_%sHash_set(_t%d, _t%d, %s_t%d%s); } _t%d; })", hn, ta2, tb2, ONE_HV_O(hn), tc2, ONE_HV_C(hn), tc2);
+        buf_printf(b, " sp_%sHash_set(_t%d, _t%d, _t%d); } _t%d; })", hn, ta2, tb2, tc2, tc2);
       }
       else if (oint_kind(vt)) {
         /* an Integer or Float slot is read with its nil (a miss, a nil
@@ -6870,26 +6880,30 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
         if (node_is_oint(c, id)) buf_printf(b, "_t%d; })", tc2);
         else buf_printf(b, "%s(_t%d); })", oint_arg(vt), tc2);
       }
+      else if (typed_elem_held(irt) == TY_STRBUF) {
+        /* a String value is the handle the Hash holds (elem_held): the slot
+           is read as that handle, a miss takes the value's (emit_typed_elem_hold),
+           which the Hash stores, and the expression answers its bytes */
+        buf_printf(b, "sp_String *_t%d = sp_%sHash_get%s%s(_t%d, %s);", tc2, hn, rs, typed_elem_store_sfx(irt), ta2, rk);
+        buf_printf(b, " if (%s_t%d) { ", is_or2 ? "!" : "", tc2);
+        Buf rvb; memset(&rvb, 0, sizeof rvb);
+        Buf *svp = g_pre; g_pre = b;
+        emit_expr(c, iv, &rvb);
+        g_pre = svp;
+        buf_printf(b, "_t%d = ", tc2);
+        emit_typed_elem_hold(c, iv, irt, rvb.p ? rvb.p : "NULL", b);
+        free(rvb.p);
+        buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", ta2, ta2, hash_box_cls(irt));
+        buf_printf(b, " sp_%sHash_set%s(_t%d, %s, _t%d); } SP_STR_B(_t%d); })", hn, typed_elem_store_sfx(irt), ta2, sk, tc2, tc2);
+      }
       else {
         buf_printf(b, "%s _t%d = sp_%sHash_get%s(_t%d, %s);", c_type_name(vt), tc2, hn, rs, ta2, rk);
         buf_puts(b, " if (");
         emit_slot_nil_test(c, vt, tc2, is_or2, b);
         buf_puts(b, ") { ");
-        /* (one-String mode: the String stored is the answer's own -- a new
-           one gets its handle first, and the view of it is both what the
-           Hash takes, its owner, and what the expression answers; the value
-           is taken in either face) */
-        if (ONE_HV_O(hn)[0]) {
-          Buf rvb; memset(&rvb, 0, sizeof rvb);
-          Buf *svp = g_pre; g_pre = b;
-          emit_expr(c, iv, &rvb);
-          g_pre = svp;
-          buf_printf(b, "_t%d = SP_STR_B(SP_STR_HDL(%s))", tc2, rvb.p ? rvb.p : "NULL");
-          free(rvb.p);
-        }
-        else emit_guarded_slot_assign(c, iv, tc2, b);
+        emit_guarded_slot_assign(c, iv, tc2, b);
         buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", ta2, ta2, hash_box_cls(irt));
-        buf_printf(b, " sp_%sHash_set(_t%d, %s, %s_t%d%s); } _t%d; })", hn, ta2, sk, ONE_HV_O(hn), tc2, ONE_HV_C(hn), tc2);
+        buf_printf(b, " sp_%sHash_set(_t%d, %s, _t%d); } _t%d; })", hn, ta2, sk, tc2, tc2);
       }
     }
     else if (irt == TY_POLY) {

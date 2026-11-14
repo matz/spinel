@@ -436,8 +436,8 @@ typedef struct {
   unsigned char scalar_ret;   /* is_scalar_ret */
   unsigned char store_class;  /* repr_store_class (SC_*) */
   unsigned char box_form;     /* the form --repr-check records for box_text (RF_*) */
-  const char *elem_sfx;       /* typed_elem_sfx: a typed Array's element-store entries */
-  unsigned char elem_held;    /* typed_elem_held: the kind its element is held as */
+  const char *elem_sfx;       /* typed_elem_sfx: the element-store entries of a typed Array or a String Hash's values */
+  unsigned char elem_held;    /* typed_elem_held: the kind its element (a Hash's value) is held as */
 } TyTraits;
 #define TY_TRAITS_N ((int)TY_OBJ_RANGE + 1)
 extern const TyTraits ty_traits[TY_TRAITS_N];

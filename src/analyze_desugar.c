@@ -22782,6 +22782,116 @@ int desugar_send_aliases(Compiler *c) {
   return changed;
 }
 
+/* --ext-class: the table of a class holds methods of fixed positional
+   parameters only (ext_method_shape). A method with optional or rest
+   parameters gets forwarders of that shape beside it, one for each count
+   of arguments it takes:
+
+     def where(cond = nil, *args)
+     def spinel_ext_fwd__0__where = where
+     def spinel_ext_fwdr__1__where(a0, r) = where(a0, *r)
+
+   The table names each row by the method the forwarder calls
+   (ext_fwd_orig), and the thunk of an `fwdr` forwarder makes the Array of
+   the arguments after the fixed ones. The call inside a forwarder is a
+   call of the program, so the defaults and the rest Array are those of any
+   call. A method with a keyword or block parameter, or a required
+   parameter after the optional ones, gets none. */
+static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfixed, int rest, int singleton) {
+  char nw[320];
+  snprintf(nw, sizeof nw, "spinel_ext_fwd%s__%d__%s", rest ? "r" : "", nfixed, name);
+  int n = nfixed + (rest ? 1 : 0);
+  int d = fwd_new_node_like(nt, like, "DefNode");
+  int call = fwd_new_node_like(nt, like, "CallNode");
+  if (d < 0 || call < 0) return -1;
+  nt_node_set_str(nt, call, "name", name);
+  nt_node_set_ref(nt, call, "receiver", -1);
+  if (n > 0) {
+    int ps = fwd_new_node_like(nt, like, "ParametersNode");
+    int args = fwd_new_node_like(nt, like, "ArgumentsNode");
+    int *req = malloc(sizeof(int) * (size_t)n), *av = malloc(sizeof(int) * (size_t)n);
+    if (!req || !av) { fprintf(stderr, "out of memory\n"); exit(1); }
+    for (int i = 0; i < n; i++) {
+      char pn[40];
+      snprintf(pn, sizeof pn, "spinel_ext_a%d__", i);
+      req[i] = fwd_new_node_like(nt, like, "RequiredParameterNode");
+      nt_node_set_str(nt, req[i], "name", pn);
+      av[i] = local_read_like(nt, like, pn);
+      if (rest && i == n - 1) {
+        int sp = fwd_new_node_like(nt, like, "SplatNode");
+        nt_node_set_ref(nt, sp, "expression", av[i]);
+        av[i] = sp;
+      }
+    }
+    nt_node_set_arr(nt, ps, "requireds", req, n);
+    nt_node_set_arr(nt, args, "arguments", av, n);
+    nt_node_set_ref(nt, d, "parameters", ps);
+    nt_node_set_ref(nt, call, "arguments", args);
+    free(req);
+    free(av);
+  }
+  int bd = fwd_new_node_like(nt, like, "StatementsNode");
+  nt_node_set_arr(nt, bd, "body", &call, 1);
+  nt_node_set_str(nt, d, "name", nw);
+  nt_node_set_ref(nt, d, "body", bd);
+  nt_node_set_ref(nt, d, "receiver", singleton ? fwd_new_node_like(nt, like, "SelfNode") : -1);
+  return d;
+}
+
+int desugar_ext_forwarders(Compiler *c) {
+  if (!g_ext_classes || !*g_ext_classes) return 0;
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  for (int m = 0; m < n0; m++) {
+    if (!class_def_opens_cref(nt, m)) continue;
+    const char *cls = class_def_key(c, m);
+    int body = class_def_body(nt, m);
+    if (!cls || body < 0 || nt_kind(nt, body) != NK_StatementsNode || !ext_class_def_wanted(c, cls)) continue;
+    int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+    for (int k = 0; k < n; k++) {
+      int s = st[k];
+      if (nt_kind(nt, s) != NK_DefNode) continue;
+      const char *name = nt_str(nt, s, "name");
+      int rc = nt_ref(nt, s, "receiver"), ps = nt_ref(nt, s, "parameters");
+      if (!name || ps < 0 || ext_fwd_orig(name, NULL, NULL) || is_initialize_name(name)) continue;
+      if (rc >= 0 && nt_kind(nt, rc) != NK_SelfNode) continue;
+      int nr = 0, no = 0, np = 0, nk = 0;
+      nt_arr(nt, ps, "requireds", &nr);
+      nt_arr(nt, ps, "optionals", &no);
+      nt_arr(nt, ps, "posts", &np);
+      nt_arr(nt, ps, "keywords", &nk);
+      int rest = nt_ref(nt, ps, "rest") >= 0;
+      if ((no == 0 && !rest) || np > 0 || nk > 0 || nt_ref(nt, ps, "keyword_rest") >= 0 || nt_ref(nt, ps, "block") >= 0)
+        continue;
+      /* the fixed counts: nr .. nr+no, the last one only with no rest;
+         then the rest forwarder */
+      int nf = no + (rest ? 0 : 1), nfw = nf + (rest ? 1 : 0);
+      char nmc[256];
+      snprintf(nmc, sizeof nmc, "%s", name);
+      int *fw = malloc(sizeof(int) * (size_t)nfw);
+      if (!fw) { fprintf(stderr, "out of memory\n"); exit(1); }
+      for (int j = 0; j < nf; j++) fw[j] = ext_forwarder_like(nt, s, nmc, nr + j, 0, rc >= 0);
+      if (rest) fw[nf] = ext_forwarder_like(nt, s, nmc, nr + no, 1, rc >= 0);
+      /* the forwarders after the def (st is read again: the new nodes may
+         have moved the table's arrays) */
+      st = nt_arr(nt, body, "body", &n);
+      int *out = malloc(sizeof(int) * (size_t)(n + nfw));
+      if (!out) { fprintf(stderr, "out of memory\n"); exit(1); }
+      memcpy(out, st, sizeof(int) * (size_t)(k + 1));
+      memcpy(out + k + 1, fw, sizeof(int) * (size_t)nfw);
+      memcpy(out + k + 1 + nfw, st + k + 1, sizeof(int) * (size_t)(n - k - 1));
+      nt_node_set_arr(nt, body, "body", out, n + nfw);
+      free(out);
+      free(fw);
+      st = nt_arr(nt, body, "body", &n);
+      k += nfw;
+      changed = 1;
+    }
+  }
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
+}
+
 int builtin_method_arity(const char *cls, const char *m, int *out);
 /* The builtin alias_builtin_rooted finds at the root of cls's chain, or NULL. */
 static const char *alias_builtin_root(const NodeTable *nt, const char *cls, const char *meth, int n0) {

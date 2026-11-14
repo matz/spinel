@@ -21012,7 +21012,9 @@ static void ext_emit_contract_decls(Buf *hb) {
                "   not exported), each row the method's name, its arity, the id of the\n"
                "   class that defines it, whether it is a singleton method (one of the\n"
                "   class value, else of an instance) and its thunk; a row of NULLs ends\n"
-               "   it. sp_ext_send calls the method `name` of recv (a boxed object, or a\n"
+               "   it. A method with optional or rest parameters has a row for each count\n"
+               "   of arguments it takes; an arity -(n + 1) takes n arguments or more.\n"
+               "   sp_ext_send calls the method `name` of recv (a boxed object, or a\n"
                "   boxed class value for a singleton method) with argc boxed arguments,\n"
                "   writes the boxed result to *out and answers 1; 0 when recv's class\n"
                "   has no such method. A wrong count of arguments raises ArgumentError,\n"
@@ -21055,10 +21057,19 @@ static void ext_emit_method_thunk(Compiler *c, int ci, int s, Buf *b) {
     emit_unbox_text(c, st, "self", b);
     buf_puts(b, ";\n");
   }
+  /* a forwarder of a rest parameter (desugar_ext_forwarders): its last
+     parameter is the Array of the arguments after the fixed ones */
+  int fw_rest = 0;
+  if (ext_fwd_orig(sc->name, NULL, &fw_rest) && fw_rest && sc->nparams > 0)
+    buf_printf(b, "  sp_PolyArray *_rest = sp_PolyArray_new();\n  SP_GC_ROOT(_rest);\n"
+                  "  for (int _i = %d; _i < argc; _i++) sp_PolyArray_push(_rest, argv[_i]);\n"
+                  "  sp_RbVal _restv = sp_box_poly_array(_rest);\n", sc->nparams - 1);
+  else fw_rest = 0;
   for (int p = 0; p < sc->nparams; p++) {
     LocalVar *lv = scope_local(sc, sc->pnames[p]);
     char ex[32], nm[16];
     snprintf(ex, sizeof ex, "argv[%d]", p);
+    if (fw_rest && p == sc->nparams - 1) snprintf(ex, sizeof ex, "_restv");
     snprintf(nm, sizeof nm, "_a%d", p);
     buf_puts(b, "  ");
     /* a call in the program is typed, so the plain unbox checks nothing; a
@@ -21219,12 +21230,19 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
       int def = -1;
       if (sc->is_cmethod) comp_cmethod_in_chain(c, ci, sc->name, &def);
       else comp_method_in_chain(c, ci, sc->name, &def);
+      /* a forwarder's row has the name of the method it calls; one of a
+         rest parameter has the arity -(n + 1) for n fixed arguments, as
+         Method#arity counts */
+      int fw_rest = 0;
+      const char *orig = ext_fwd_orig(sc->name, NULL, &fw_rest);
+      const char *rname = orig ? orig : sc->name;
       buf_puts(&rows, "  { ");
-      emit_str_literal(&rows, sc->name);
-      buf_printf(&rows, ", %d, %d, %d, sp_extm_%d_%d },\n", sc->nparams, def < 0 ? ci : def, sc->is_cmethod ? 1 : 0, ci, s);
+      emit_str_literal(&rows, rname);
+      buf_printf(&rows, ", %d, %d, %d, sp_extm_%d_%d },\n", orig && fw_rest ? -sc->nparams : sc->nparams,
+                 def < 0 ? ci : def, sc->is_cmethod ? 1 : 0, ci, s);
       if (sc->is_cmethod) continue;   /* an attr shares no name with an instance method */
       if (nn == cap) { cap = cap ? cap * 2 : 16; names = realloc(names, sizeof *names * (size_t)cap); }
-      names[nn++] = strdup(sc->name);
+      names[nn++] = strdup(rname);
     }
     if (!comp_class_is_module(c, &c->classes[ci])) ext_emit_attr_rows(c, ci, &names, &nn, &cap, b, &rows);
     buf_printf(b, "static const sp_ext_method sp_extm_tab_%d[] = {\n%s  { 0, 0, 0, 0, 0 }\n};\n", ci, rows.p ? rows.p : "");
@@ -21242,12 +21260,22 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
               "  if (singleton ? recv.cls_id == SP_CLASS_BY_NAME : (recv.tag != SP_TAG_OBJ || !recv.v.p)) return 0;\n"
               "  const sp_ext_method *m = sp_ext_methods((int)recv.cls_id);\n"
               "  if (!m) return 0;\n"
+              "  /* a name can have a row for each count of arguments, and one of a\n"
+              "     negative arity -(n + 1) that takes n arguments or more */\n"
+              "  int seen = 0, lo = 0, hi = 0;\n"
               "  for (; m->name; m++) {\n"
               "    if (m->singleton != singleton || strcmp(m->name, name)) continue;\n"
-              "    if (argc != m->argc) sp_raise_arity(argc, m->argc, m->argc, 0);\n"
-              "    *out = m->fn(recv, argc, argv);\n"
-              "    return 1;\n"
+              "    int fixed = m->argc < 0 ? -m->argc - 1 : m->argc;\n"
+              "    if (m->argc < 0 ? argc >= fixed : argc == fixed) {\n"
+              "      *out = m->fn(recv, argc, argv);\n"
+              "      return 1;\n"
+              "    }\n"
+              "    if (!seen || fixed < lo) lo = fixed;\n"
+              "    if (m->argc < 0) hi = -1;\n"
+              "    else if (hi >= 0 && (!seen || fixed > hi)) hi = fixed;\n"
+              "    seen = 1;\n"
               "  }\n"
+              "  if (seen) sp_raise_arity(argc, lo, hi, 0);\n"
               "  return 0;\n}\n");
 }
 

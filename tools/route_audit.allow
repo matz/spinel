@@ -217,6 +217,7 @@ src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method
 src/analyze_util.c method_obj_lookup a Method object's method
 src/analyze_util.c ext_method_exported the method a class answers for an exported name (--ext-class)
+src/analyze_util.c ext_method_shape the method a class answers for the name a forwarder calls (--ext-class)
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name
 src/codegen_call.c obj_responds_answer a Symbol argument's method (respond_to?)

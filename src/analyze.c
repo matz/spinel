@@ -49313,7 +49313,8 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_ENCODING_QUERIES);          /* Encoding.default_internal -> nil, find("x") -> a constant */
   lower_run(c, &lc, LW_ALIAS_METHOD_STRING_NAMES); /* alias_method "k", "y" -> alias_method :k, :y */
   lower_run(c, &lc, LW_ALIAS_METHOD_VALUES);       /* r = alias_method :a, :b -> alias_method :a, :b; r = :a */
-  AN_STEP_V("desugar_send_aliases", desugar_send_aliases(c));                   /* alias send_action send -> def send_action(*a, **k, &b) = __send__(*a, **k, &b) */
+  AN_STEP_V("desugar_ext_forwarders", desugar_ext_forwarders(c));               /* --ext-class: def m(a = 1, *r) gets forwarders of fixed arguments */
+  AN_STEP_V("desugar_send_aliases", desugar_send_aliases(c));                 /* alias send_action send -> def send_action(*a, **k, &b) = __send__(*a, **k, &b) */
   AN_STEP_V("desugar_inherited_aliases", desugar_inherited_aliases(c));         /* alias_method :next, :builtin_m on a chain rooted at Array, Hash or String -> a forwarding def, until such an alias binds from the record */
   AN_STEP_V("desugar_readers_over_inherited_defs", desugar_readers_over_inherited_defs(c)); /* def r in Base; attr_reader :r in Sub < Base -> Sub: def r = @r */
   lower_run(c, &lc, LW_REASSIGNED_BLOCK_PARAMS);   /* |p| p = other -> |p__bpin| p = p__bpin; p = other */

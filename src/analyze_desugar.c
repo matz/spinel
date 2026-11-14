@@ -16733,7 +16733,18 @@ int desugar_conditional_defs(Compiler *c) {
     if (v[i].def < 0 || !v[i].cond) continue;
     char *base = strdup(nt_str(nt, v[i].def, "name"));
     int ng = 0, bad = 0, blk = 0, same = 1, d0 = v[i].def, ar = cdef_arity(nt, d0);
-    for (int j = 0; j < n; j++) {
+    /* the group ends before a plain def of the name in a reopen after its
+       last def under a condition: that def is a new version of its own,
+       which the dispatcher, placed at the group, does not stand in for (an
+       alias of the name made between them holds the group's) */
+    int jend = n, jl = -1;
+    for (int j = n - 1; j >= i && jl < 0; j--)
+      if (v[j].def >= 0 && v[j].cond && v[j].cm == v[i].cm && !strcmp(v[j].path, v[i].path) &&
+          sp_streq(nt_str(nt, v[j].def, "name"), base)) jl = j;
+    for (int j = jl + 1; j < n && jend == n; j++)
+      if (v[j].def >= 0 && v[j].cls != v[jl].cls && v[j].cm == v[i].cm && !strcmp(v[j].path, v[i].path) &&
+          sp_streq(nt_str(nt, v[j].def, "name"), base)) jend = j;
+    for (int j = 0; j < jend; j++) {
       if (v[j].def < 0 || v[j].cm != v[i].cm || strcmp(v[j].path, v[i].path) ||
           !sp_streq(nt_str(nt, v[j].def, "name"), base)) continue;
       int hi = fwd_subtree_max(nt, v[j].def);
@@ -16803,7 +16814,7 @@ int desugar_conditional_defs(Compiler *c) {
          it, with nothing between that might rebind the name. The
          dispatcher the name becomes would reach the arm that aliases it
          and call itself. */
-      for (int a = gi[k] + 1; a < n && (k == ng - 1 || a < gi[k + 1]); a++) {
+      for (int a = gi[k] + 1; a < (k == ng - 1 ? jend : gi[k + 1]); a++) {
         int nw, od = v[a].al >= 0 ? cdef_alias(nt, v[a].al, &nw) : -1;
         int own = v[a].cm == g[k].cm && !strcmp(v[a].path, g[k].path), same = od >= 0 && own;
         if (v[a].lf >= 0 && cdef_may_bind(nt, v[a].lf, base, own, g[k].cm)) break;

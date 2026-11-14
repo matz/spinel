@@ -3605,7 +3605,8 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   }
   /* (a variable-like call of a conditional def's dispatcher: its twin, ver_vcall_twins) */
   const Scope *rs = r >= 0 ? &c->scopes[r] : NULL;
-  int tw = rs && id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) && rs->def_node >= 0 && nt_int(c->nt, rs->def_node, "cond_raise_els", 0)
+  int tw = rs && c->nvcall_twins && id >= 0 && rs->def_node >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) &&
+           nt_int(c->nt, rs->def_node, "cond_raise_els", 0)
            ? ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rs->class_id, rs->is_cmethod, name, 0, VF_VCALL) : -1;
   if (tw >= 0) r = c->ver_entries[tw].scope;
   if (r >= 0 && c->scopes[r].entry && ml->kind != ML_ENTRY) {   /* (an entry answered by name too) */
@@ -9889,6 +9890,7 @@ static void ver_vcall_twins(Compiler *c) {
     c->scopes[e].entry = ENTRY_DISPATCH;
     comp_touch_scope(c->scopes[e].idx);
     ver_entry_add(c, name, (struct VerEntry){ NULL, VER_ENTRY_CHAIN, c->scopes[d].class_id, c->scopes[d].is_cmethod, 0, e, .face = VF_VCALL });
+    c->nvcall_twins++;
   }
   free(vn);
 }

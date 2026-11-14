@@ -20371,19 +20371,34 @@ static int cells_testable(Compiler *c, const CplanCells *cs) {
     LocalVar *g = comp_gvar(c, cs->cell[i] + 1);
     ReprKind k = g ? repr_slot_kind(c, g) : RK_NONE;
     if (k != RK_SCALAR && k != RK_BOXED) return 0;
+    LocalVar *v = cs->vis[i][0] ? comp_gvar(c, cs->vis[i] + 1) : NULL;
+    if (cs->vis[i][0] && (!v || (repr_slot_kind(c, v) != RK_SCALAR && repr_slot_kind(c, v) != RK_BOXED) || cplan_cell_dropped(c, v))) return 0;
   }
   return 1;
 }
-/* ...the test that some version is live: each cell equals its version, ored, ahead of the caller's last operand; an
-   undef's cell, live, answers 0 ahead of the farther cells (`c == u ? 0 : (...`). How many parentheses the caller
-   closes after its last operand. */
+/* ...the test that some version is live, ahead of the caller's last operand: each cell up to the last one that
+   answers 0 (an undef's, a private version's, or a version's whose visibility cell tells) answers its own
+   (`c == v ? ans : (`: the def's 1, the undef's 0, or `vis == public`), so a live version ahead of one is not
+   swallowed by its test; the cells after it are ored. How many parentheses the caller closes after its last
+   operand. */
 static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
-  int open = 0;
+  int open = 0, last = -1;
+  for (int i = 0; i < cs->n; i++) if (!cs->ans[i] || cs->vis[i][0]) last = i;
   for (int i = 0; i < cs->n; i++) {
     buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
                cs->cell[i] + 1, cs->val[i]);
-    buf_puts(b, cs->gone[i] ? " ? 0 : (" : " || ");
-    open += cs->gone[i];
+    if (i > last) buf_puts(b, " || ");
+    else if (cs->vis[i][0]) {
+      buf_puts(b, " ? (");
+      buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->vis[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
+                 cs->vis[i] + 1, SP_VIS_PUBLIC);
+      buf_puts(b, ") : (");
+      open++;
+    }
+    else {
+      buf_printf(b, " ? %d : (", cs->ans[i]);
+      open++;
+    }
   }
   return open;
 }

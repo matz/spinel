@@ -43608,7 +43608,8 @@ static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pf
    (the arguments, a splat's and a `**`'s conversion, `&`'s to_proc: all
    ahead of the lookup), the writes into pre (at most cap) for the caller
    to run ahead of the call, which then reads the locals: a check that
-   stands for the lookup (ver_main_undef_guards) goes between. A local or
+   stands for the lookup (ver_main_undef_guards) goes between. A keyword
+   pair's key is an operand of its own, ahead of its value. A local or
    ivar read ahead of an operand that runs code is held too, as that code
    may change it (as split_kwsplat_calls and the splat dispatch hold
    them); the other leaves (splat_leaf_node) stay where they are. A splat
@@ -43626,7 +43627,7 @@ int sd_hold_call_operands(Compiler *c, int id, int **prep) {
     if (nt_kind(nt, av0[k]) == NK_KeywordHashNode) nt_arr(nt, av0[k], "elements", &en);
     cap += en ? en : 1;
   }
-  int *slot = malloc(sizeof(int) * (size_t)cap), ns = 0, last = -1, *pre = malloc(sizeof(int) * (size_t)(cap + 1));   /* (the nodes whose value is held, in order) */
+  int *slot = malloc(sizeof(int) * (size_t)cap), ns = 0, last = -1, *pre = malloc(sizeof(int) * (size_t)(2 * cap + 1));   /* (the nodes whose value is held, in order; a pair's key and value) */
   if (!slot || !pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   *prep = pre;
   for (int k = 0; k < n; k++) {
@@ -43636,16 +43637,17 @@ int sd_hold_call_operands(Compiler *c, int id, int **prep) {
     int en = 0;
     const int *el = nt_arr(nt, av0[k], "elements", &en);
     for (int j = 0; j < en; j++) {
-      if (nt_kind(nt, el[j]) == NK_AssocNode && !splat_leaf_node(nt, nt_ref(nt, el[j], "key"))) { free(slot); return -1; }
       slot[ns++] = el[j];
     }
   }
   int bexp = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
   if (bexp >= 0 && nt_kind(nt, bexp) != NK_SymbolNode) slot[ns++] = blk;
+  /* (operands in CRuby's order: 2k is slot k's key, 2k+1 its value or itself) */
   for (int k = 0; k < ns; k++) {
     NodeKind sk = nt_kind(nt, slot[k]);
     int v = sk == NK_AssocNode ? nt_ref(nt, slot[k], "value") : slot[k];
-    if (sk == NK_SplatNode || sk == NK_AssocSplatNode || sk == NK_BlockArgumentNode || !splat_leaf_node(nt, v)) last = k;
+    if (sk == NK_AssocNode && !splat_leaf_node(nt, nt_ref(nt, slot[k], "key"))) last = 2 * k;
+    if (sk == NK_SplatNode || sk == NK_AssocSplatNode || sk == NK_BlockArgumentNode || !splat_leaf_node(nt, v)) last = 2 * k + 1;
   }
   for (int k = 0; k < ns; k++) {
     NodeKind sk = nt_kind(nt, slot[k]);
@@ -43666,9 +43668,15 @@ int sd_hold_call_operands(Compiler *c, int id, int **prep) {
       nt_node_set_ref(nt, slot[k], f, sd_hold(c, nt, sc, id, "ugo", k, conv, pre, &npre));
       continue;
     }
+    if (sk == NK_AssocNode) {
+      int key = nt_ref(nt, slot[k], "key");
+      NodeKind kk = nt_kind(nt, key);
+      if (!splat_leaf_node(nt, key) || (2 * k < last && (kk == NK_LocalVariableReadNode || kk == NK_InstanceVariableReadNode)))
+        nt_node_set_ref(nt, slot[k], "key", sd_hold(c, nt, sc, id, "ugk", k, key, pre, &npre));
+    }
     int v = sk == NK_AssocNode ? nt_ref(nt, slot[k], "value") : slot[k];
     NodeKind vk = nt_kind(nt, v);
-    if (splat_leaf_node(nt, v) && !(k < last && (vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode))) continue;
+    if (splat_leaf_node(nt, v) && !(2 * k + 1 < last && (vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode))) continue;
     int r = sd_hold(c, nt, sc, id, "ugo", k, v, pre, &npre);
     if (sk == NK_AssocNode) nt_node_set_ref(nt, slot[k], "value", r);
     else nt_replace_child(nt, an, v, r);

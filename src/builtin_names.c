@@ -3139,8 +3139,21 @@ int is_hook_protocol_name(const char *n) {
   return n && (sp_streq(n, "append_features") || sp_streq(n, "extend_object") || sp_streq(n, "prepend_features"));
 }
 
+/* $!: the exception being handled, nil outside a rescue. */
+int is_errinfo_gvar_name(const char *n) { return n && sp_streq(n, "$!"); }
+
 int is_port_gvar_name(const char *n) {
   return n && (sp_streq(n, "$stdout") || sp_streq(n, "$stderr") || sp_streq(n, "$>"));
+}
+/* The globals whose write CRuby checks (a TypeError for a value of the wrong class: `$~ = 1`, `$/ = 1`, `$. = "x"`,
+   `$stdout = 1`) or refuses (a NameError: `$$`, `$?`, `$LOAD_PATH` and the rest are read-only), by their name with
+   the `$`. A write of one may raise, whatever the value (`$@ = 1` raises too, an ArgumentError, or a TypeError in a
+   rescue, but it is not read-only). */
+int is_checked_gvar_name(const char *n) {
+  static const char *const names[] = { "$~", "$/", "$\\", "$,", "$;", "$-0", "$-F", "$-i", "$.", "$$", "$?", "$*", "$<",
+                                       "$!", "$@", "$FILENAME", "$-W", "$-a", "$-l", "$-p", NULL };
+  return n && (builtin_name_in(n, names) || is_port_gvar_name(n) || is_program_name_global(n) || is_load_path_global(n) ||
+               is_loaded_features_global(n));
 }
 
 int synth_stands_for(const char *name, int i, const char **proto) {

@@ -3173,6 +3173,11 @@ static int cplan_presence_asks(Compiler *c, int id, int cls, const char *name) {
   return id >= 0 && cls >= 0 && ct_version_named(c, name) && !cplan_cmethod_later(c, id, cls, name) &&
          !respond_to_missing_defined(c) && !elab_method_reflected(c, name, 1);
 }
+static int ver_entry_vis(const Compiler *c, int scope) {
+  for (int i = 0; i < c->nver_entries; i++)
+    if (c->ver_entries[i].scope == scope) return c->ver_entries[i].vis;
+  return 0;
+}
 /* See call_plan.h. */
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out) {
   ElabVersion vs[VER_MAX_ARMS];
@@ -3183,10 +3188,15 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
   out->n = 0;
   for (int i = 0; i < nv; i++) {
     if (vs[i].v->kind == LR_REMOVE) return 0;
-    int gone = vs[i].v->kind == LR_UNDEF;
-    if (!gone && !include_all && vs[i].v->vis != SP_VIS_PUBLIC) continue;
+    int gone = vs[i].v->kind == LR_UNDEF;   /* (a live undef answers 0, a live def 1) */
+    /* (the visibility its arm takes, a later `private :s` among it; one only the run knows, -1, is read from its
+       visibility cell, which the entry writes for a respond_to? that reads it, ver_presence_mark) */
+    int vis = gone || include_all ? SP_VIS_PUBLIC : elab_version_vis(c, &vs[i]);
+    if (vis < 0 && !ver_entry_vis(c, e)) return 0;
     ver_cell_name(vs[i].cell, out->cell[out->n]);
-    out->gone[out->n] = (unsigned char)gone;
+    out->vis[out->n][0] = 0;
+    if (vis < 0) ver_vis_cell_name(vs[i].cell, out->vis[out->n]);
+    out->ans[out->n] = (unsigned char)(!gone && vis == SP_VIS_PUBLIC);
     out->val[out->n++] = vs[i].n;
   }
   /* (with none live, what the call runs: the entry's else arm) */
@@ -3196,10 +3206,13 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
 /* See call_plan.h. */
 int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, CplanCells *out) {
   CplanCells all;
-  /* some public version has cells, and every version is public: a list shows public and protected methods, so a
-     version with another visibility is the table's to answer (an undef's cell counts in both) */
-  return cplan_cmethod_presence(c, id, cls, name, 0, own, out) && out->n > 0 &&
-         cplan_cmethod_presence(c, id, cls, name, 1, own, &all) && all.n == out->n;
+  /* some version has cells, and each answers the same with or without the private ones: a list shows public and
+     protected methods, so a version with another visibility is the table's to answer (an undef's cell counts in
+     both) */
+  if (!cplan_cmethod_presence(c, id, cls, name, 0, own, out) || out->n == 0 ||
+      !cplan_cmethod_presence(c, id, cls, name, 1, own, &all) || all.n != out->n) return 0;
+  for (int k = 0; k < out->n; k++) if (out->ans[k] != all.ans[k]) return 0;
+  return 1;
 }
 /* See call_plan.h. */
 int cplan_entry_finds(const Compiler *c, int e) {
@@ -10280,23 +10293,30 @@ static int ver_stmt_runs_no_code(const NodeTable *nt, int st) {
    write carries that write */
 static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerWrite **wp, int *nwp) {
   const NodeTable *nt = c->nt;
-  int nw0 = *nwp, *of = nw0 ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL;
+  int nw0 = *nwp, *of = nw0 ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL, *nx = nw0 ? calloc((size_t)nw0, sizeof(int)) : NULL;
   if (!nw0) return;
-  if (!of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int k = 0; k < nw0; k++) if ((*wp)[k].node >= 0 && (*wp)[k].body) of[(*wp)[k].node] = k + 1;
+  if (!of || !nx) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* (a body def may have two writes, its version cell's and its visibility cell's: of[] holds the first, nx[]
+     the next of the same node, and a clone takes each, once per cell) */
+  for (int k = nw0 - 1; k >= 0; k--)
+    if ((*wp)[k].node >= 0 && (*wp)[k].body) { nx[k] = of[(*wp)[k].node]; of[(*wp)[k].node] = k + 1; }
   NT_FOREACH_KIND(nt, NK_DefNode, d) {
     int o = d, k = 0, st;
     for (int depth = 0; depth < 64 && !k; depth++) {
       if ((o = nt_clone_source(nt, o)) < 0 || o >= nt->count) break;
       k = of[o];
     }
-    if (!k || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0 || !ver_cell_once(cells, d, (*wp)[k - 1].cell)) continue;
-    VerWrite x = (*wp)[k - 1];
-    x.list = par[st]; x.stmt = st; x.node = d;
-    x.after = !ver_stmt_runs_no_code(nt, st);
-    ver_write_add(wp, nwp, x);
+    if (!k || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0) continue;
+    for (int j = k; j; j = nx[j - 1]) {
+      VerWrite x = (*wp)[j - 1];
+      if (!ver_cell_once(cells, d, x.vis ? -2 - x.cell : x.cell)) continue;
+      x.list = par[st]; x.stmt = st; x.node = d;
+      x.after = !ver_stmt_runs_no_code(nt, st);
+      ver_write_add(wp, nwp, x);
+    }
   }
   free(of);
+  free(nx);
 }
 /* Does the C write scope s out: reached, or a proc-form clone (emission
    writes the live ones, proc_form_live; all of them count here) */
@@ -10319,6 +10339,9 @@ static void ver_presence_keep(Compiler *c, int id, const char *name, int cls, vo
   if (cplan_list_class(c, id, &own) < 0) own = 0;
   if (!cplan_cmethod_presence(c, id, cls, name, 1, own, &cs)) return;
   for (int i = 0; i < cs.n; i++) ver_cell_keep(c, cs.cell[i]);
+  /* (and a respond_to?'s visibility cells, which it reads where a version's visibility is the run's) */
+  if (!cplan_cmethod_presence(c, id, cls, name, 0, own, &cs)) return;
+  for (int i = 0; i < cs.n; i++) if (cs.vis[i][0]) ver_cell_keep(c, cs.vis[i]);
 }
 /* See call_plan.h. A cell is kept where the C reads it: a read in a
    scope the C writes (an entry's arms, a prepend guard's, a conditional
@@ -10433,6 +10456,18 @@ static void ver_vis_after_add(Compiler *c, int node, int cell, int v) {
   }
   c->ver_vis_after[c->nver_vis_after++] = (struct VerVisAfter){ node, cell, v };
 }
+/* (mark the entry each written respond_to? of a class method reads the cells of, cplan_cmethod_presence: its
+   versions' visibility cells are written, as a face that closes would have them, so the test of a version whose
+   visibility only the run knows reads one. The entries all exist: asked here as the emission asks) */
+static void ver_presence_mark(Compiler *c) {
+  for (int id = an_calls_named_first(c, RESPOND_TO_NAME); id >= 0; id = an_calls_named_next(id)) {
+    int pc = cplan_presence_class(c, id);
+    const char *qm = pc >= 0 && ver_scope_written(comp_scope_of(c, id)) ? method_sym_arg(c, id) : NULL;
+    int e = qm && cplan_presence_asks(c, id, pc, qm) ? call_target(c, id, pc, qm, CT_CMETHOD | CT_CAPTURE, NULL) : -1;
+    for (int i = 0; e >= 0 && i < c->nver_entries; i++)
+      if (c->ver_entries[i].scope == e) c->ver_entries[i].vis = 1;
+  }
+}
 /* ...how many it wrote */
 static int ver_cells_put(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -10445,6 +10480,7 @@ static int ver_cells_put(Compiler *c) {
      write goes beside is the class body's) */
   int any = c->nver_entries || c->nver_guards, *par = any ? du_parent_map(nt) : NULL;
   VerCellsAt cells = { any ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL, NULL, 0 };
+  if (any) ver_presence_mark(c);
   if (any && (!cells.at || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int pass = 0; pass < 2; pass++) {   /* (the entries written before first: a cell is written once) */
   for (int i = 0; i < c->nver_entries; i++) {
@@ -10475,7 +10511,7 @@ static int ver_cells_put(Compiler *c) {
        statement does, so its own call writes it as it runs, which the
        word's node keeps: cplan_vis_cell_after) */
     int rt = 0;
-    for (int j = 0; ver_face_closes(e->face) && j < nv; j++) rt |= elab_version_vis(c, &vs[j]) < 0;
+    for (int j = 0; (ver_face_closes(e->face) || e->vis) && j < nv; j++) rt |= elab_version_vis(c, &vs[j]) < 0;
     for (int j = 0; rt && j < nv; j++)
       for (int k = 0, wn, wv, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv)) >= 0; k++) {
         int st = o ? ver_write_stmt(nt, par, wn) : -1;

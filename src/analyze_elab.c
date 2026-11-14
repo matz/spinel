@@ -9419,18 +9419,23 @@ static int lr_write_path(const NodeTable *nt, int w) {
   return p >= 0 && (p == w || nt_kind(nt, p) == NK_ConstantPathNode) ? p : -1;
 }
 
+/* Does the source give constant `name` a value by a write other than a class or module header
+   (`O = Object`, `ERR = e`, `K = e.class`)? */
+static int lr_src_valued(const LoadRecord *r, const NodeTable *nt, const char *name) {
+  for (int i = 0; i < r->nsrcw; i++) {
+    NodeKind wk = nt_kind(nt, r->srcw[i].node);
+    if (wk != NK_ClassNode && wk != NK_ModuleNode && sp_streq(r->srcw[i].name, name)) return 1;
+  }
+  return 0;
+}
+
 /* May constant cp (a header's name, a path's parent) hold Object? Where it
    is no constant, is Object's name, or is a name a write other than a
    header gives (`O = Object; class O`) */
 static int lr_may_name_object(const LoadRecord *r, const NodeTable *nt, int cp) {
   NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NONE;
   const char *leaf = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? lr_written_name(nt, cp) : NULL;
-  if (!leaf || is_object_class_name(leaf)) return 1;
-  for (int i = 0; i < r->nsrcw; i++) {
-    NodeKind wk = nt_kind(nt, r->srcw[i].node);
-    if (wk != NK_ClassNode && wk != NK_ModuleNode && sp_streq(r->srcw[i].name, leaf)) return 1;
-  }
-  return 0;
+  return !leaf || is_object_class_name(leaf) || lr_src_valued(r, nt, leaf);
 }
 
 /* Does the program's source write constant `name` (a write of any form, a
@@ -9457,6 +9462,40 @@ int elab_source_writes_const(Compiler *c, const char *name, int top) {
     if (in_top) return 1;
   }
   return 0;
+}
+
+/* Does the source give `name` a value that no constant spells: a write other than a header whose value is not a
+   constant (`E = PKeyError`: that constant's own writes asked in turn, to a bound), nor `Class.new` or
+   `Class.new(C)` of one? A class made of constants alone is below the classes the program names, so below
+   LoadError only where the program spells it. */
+static int lr_src_opaque(const LoadRecord *r, const NodeTable *nt, const char *name, int depth) {
+  if (depth <= 0) return 1;
+  for (int i = 0; i < r->nsrcw; i++) {
+    int w = r->srcw[i].node;
+    NodeKind wk = nt_kind(nt, w);
+    if (wk == NK_ClassNode || wk == NK_ModuleNode || !sp_streq(r->srcw[i].name, name)) continue;
+    int v = wk == NK_ConstantWriteNode || wk == NK_ConstantPathWriteNode ? nt_ref(nt, w, "value") : -1;
+    if (v >= 0 && nt_kind(nt, v) == NK_CallNode && sp_streq(nt_str(nt, v, "name"), "new")) {
+      int rc = nt_ref(nt, v, "receiver"), ac = 0;
+      const int *av = call_args(nt, v, &ac);
+      if (rc < 0 || nt_kind(nt, rc) != NK_ConstantReadNode || !sp_streq(nt_str(nt, rc, "name"), "Class") || ac > 1) return 1;
+      v = ac ? av[0] : -1;
+      if (!ac) continue;
+    }
+    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+    if (vk != NK_ConstantReadNode && vk != NK_ConstantPathNode) return 1;
+    if (lr_src_opaque(r, nt, nt_str(nt, v, "name"), depth - 1)) return 1;
+  }
+  return 0;
+}
+/* See analyze.h. */
+int elab_source_const_opaque(Compiler *c, const char *name) {
+  return lr_src_opaque(lr_get(c), c->nt, name, 8);
+}
+
+/* See analyze.h. */
+int elab_source_values_const(Compiler *c, const char *name) {
+  return lr_src_valued(lr_get(c), c->nt, name);
 }
 
 /* May the program write a constant, one already held included, under a

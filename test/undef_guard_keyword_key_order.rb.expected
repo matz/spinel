@@ -1,0 +1,11 @@
+{before: :after}
+{before: :after}
+{k: :v}
+{"k" => 1}
+:after
+[:k, :v]
+[NoMethodError, :after]
+NoMethodError
+NoMethodError
+[:k, :v]
+NoMethodError

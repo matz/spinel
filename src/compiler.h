@@ -1943,11 +1943,13 @@ typedef struct {
      1 + the method a guard entry's method_missing else arm stands for,
      the one behind the mixins that finds no method (guard_entry_make),
      0 for none; face: VF_NONE, or the visibility the arms of the versions
-     that are closed to it raise for (call_plan.h). Each name
+     that are closed to it raise for (call_plan.h); vis, 1 where a class method's respond_to? reads the
+     entry's cells (cplan_cmethod_presence), so its versions' visibility cells are written whatever the face
+     (ver_presence_mark). Each name
      is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
      the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis; } *ver_entries;
   int nver_entries;
   /* per global (c->gvars' index, the first nver_cell_dropped of them): 1 for
      a version cell no emitted code reads, whose declaration and writes the C

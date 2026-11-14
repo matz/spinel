@@ -750,7 +750,9 @@ int is_cvar_get_name(const char *n);       /* class_variable_get */
 int is_cvar_defined_name(const char *n);   /* class_variable_defined? */
 int is_cvar_reflection_name(const char *n);   /* class_variable_get class_variable_set class_variable_defined? */
 int is_hook_protocol_name(const char *n);  /* append_features extend_object prepend_features: what include, extend and prepend send before their hooks */
+int is_errinfo_gvar_name(const char *n); /* $!, the exception being handled */
 int is_port_gvar_name(const char *n);      /* $stdout $stderr $>: assigning an object makes it the port output goes to */
+int is_checked_gvar_name(const char *n);   /* a global whose write CRuby checks or refuses (with the $): $~ $/ $\ $, $; $. $-0 $-F $-i $stdout $stderr $> $0 $PROGRAM_NAME, $@ (an ArgumentError), and the read-only $$ $? $* $: $" $< $! $FILENAME $LOAD_PATH $LOADED_FEATURES $-I $-W $-a $-l $-p */
 
 /* A name the compiler synthesizes for a protocol method (the no-argument
    display wrappers `__noarg to_s` and `__noarg inspect`, the Enumerable

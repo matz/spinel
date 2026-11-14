@@ -231,11 +231,17 @@ module OpenSSL
   # `#hexdigest`), which Active Support's MessageVerifier and Action
   # Controller's CSRF token use, keying once and `dup`-ing per message.
   class HMAC
-    # The algorithm is checked where the key is set, as CRuby checks it;
-    # the data is kept and the MAC computed over all of it when asked, over
-    # the same one-shot functions. #update answers a new String rather than
-    # appending, so a `dup` (whose ivars are the original's) never shares
-    # the data it goes on to add to.
+    # The algorithm is checked where the key is set, as CRuby checks it.
+    # For SHA256 and SHA1, which the runtime hashes a piece at a time, the
+    # padded key is hashed here, once: the inner hash's state after the
+    # key's block, and the outer one's. #update carries the inner state on
+    # over the data, and #digest finishes it and runs the outer hash over
+    # it from its own state -- two blocks for a short message instead of
+    # four, as CRuby's HMAC context keeps them. SHA384 and SHA512 keep the
+    # data and compute the MAC over all of it when asked. #update answers a
+    # new String rather than appending, so a `dup` (whose ivars are the
+    # original's) never shares the data it goes on to add to: a `dup` of a
+    # keyed object costs no rehash of the key.
     def initialize(key, digest)
       @algo = HMAC.algorithm(digest)
       unless @algo == "SHA256" || @algo == "SHA1" || @algo == "SHA384" || @algo == "SHA512"
@@ -243,17 +249,39 @@ module OpenSSL
       end
       @key = OpenSSL.send(:comparison_string, key)
       @data = ""
+      @keyed = @algo == "SHA256" || @algo == "SHA1"
+      @inner_key = String.new(encoding: Encoding::BINARY)
+      @outer_key = String.new(encoding: Encoding::BINARY)
+      if @keyed
+        block = @key.b
+        block = Digest.raw(@algo, block) if block.bytesize > 64
+        block = block + ("\0" * (64 - block.bytesize))
+        @inner_key = Digest.step(@algo, String.new(encoding: Encoding::BINARY), pad(block, 0x36))
+        @outer_key = Digest.step(@algo, String.new(encoding: Encoding::BINARY), pad(block, 0x5c))
+      end
+      @inner = @inner_key
+    end
+
+    # The 64-byte key block XORed with ipad (0x36) or opad (0x5c).
+    private def pad(block, byte)
+      block.bytes.map { |b| b ^ byte }.pack("C*")
     end
 
     def update(data)
-      @data = @data + OpenSSL.send(:comparison_string, data)
+      data = OpenSSL.send(:comparison_string, data)
+      if @keyed
+        @inner = Digest.step(@algo, @inner, data)
+      else
+        @data = @data + data
+      end
       self
     end
 
     def <<(data) = update(data)
 
-    def digest = HMAC.digest(@algo, @key, @data)
-    def hexdigest = HMAC.hexdigest(@algo, @key, @data)
+    def digest = mac
+
+    def hexdigest = "#{mac.unpack1("H*")}"
     def base64digest = [digest].pack("m0")
 
     # As CRuby: inspect and to_s show the MAC (never the key or the data),
@@ -261,7 +289,7 @@ module OpenSSL
     # that is not an HMAC is not equal, a String with the same hex included.
     # (CRuby's are aliases of this class's #hexdigest, so a subclass's own
     # #hexdigest does not change them; the interpolation types it a String)
-    def inspect = "#{HMAC.hexdigest(@algo, @key, @data)}"
+    def inspect = "#{mac.unpack1("H*")}"
     alias to_s inspect
 
     def ==(other)
@@ -274,7 +302,16 @@ module OpenSSL
 
     def reset
       @data = ""
+      @inner = @inner_key
       self
+    end
+
+    # The MAC of what the object has been fed; #digest, #hexdigest and
+    # #inspect all read it, so a subclass's own #digest changes none of the
+    # others, as in CRuby.
+    private def mac
+      return HMAC.digest(@algo, @key, @data) unless @keyed
+      Digest.finish(@algo, Digest.step(@algo, @outer_key, Digest.finish(@algo, @inner)))
     end
 
     # CRuby takes the algorithm first, as a String or a Digest instance

@@ -26955,20 +26955,26 @@ int subtree_reads_container(Compiler *c, int id) {
   }
   return 0;
 }
-/* Is call id a push or an append of several arguments, which its arms
-   write as one push per argument, each read where its push is, with an
-   argument after the first that can see an earlier push: one that reads an
-   Array or a Hash (`k[-2]`, `k.size`), or one that may run code, which can
-   reach the Array by any name (`last(a)`, a method reading the ivar, a
-   proc)? CRuby reads every argument before it pushes. */
+/* Is call id a push or an append of several arguments, or an insert of
+   several values, which its arms write as one push or insert per value,
+   each read where its store is, with a value after the first that can see
+   an earlier store: one that reads an Array or a Hash (`k[-2]`, `k.size`),
+   or one that may run code, which can reach the Array by any name
+   (`last(a)`, a method reading the ivar, a proc)? CRuby reads every
+   argument before it stores. (An insert's position runs first, and so does
+   its first value.) */
 int push_args_read_before_pushes(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
-  if (!nm || (!sp_streq(nm, "push") && !sp_streq(nm, "append")) || nt_ref(nt, id, "receiver") < 0) return 0;
+  if (!nm || nt_ref(nt, id, "receiver") < 0) return 0;
+  int first;   /* the first argument a store may come before */
+  if (sp_streq(nm, "push") || sp_streq(nm, "append")) first = 1;
+  else if (sp_streq(nm, "insert")) first = 2;
+  else return 0;
   int a = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-  if (ac < 2 || nt_argv_has_splat(nt, av, ac)) return 0;
-  for (int i = 1; i < ac; i++)
+  if (ac <= first || nt_argv_has_splat(nt, av, ac)) return 0;
+  for (int i = first; i < ac; i++)
     if (subtree_reads_container(c, av[i]) || subtree_has_side_effect(c, av[i])) return 1;
   return 0;
 }

@@ -83,6 +83,16 @@ tail = -> { lc[-1] }
 lc.append(9, tail.call)
 p lc
 
+# an insert of several values stores them one at a time too
+ins = [0, 1]
+ins.insert(1, ins[-1], ins[-2])
+p ins
+ins2 = [0, 1]
+p ins2.insert(2, 5, last_of(ins2))
+ins3 = [0, 1]
+ins3.insert(-1, 7, ins3.size)
+p ins3
+
 # pushes that read no container keep their order too
 q = [1]
 q.push(2, 3)

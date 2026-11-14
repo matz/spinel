@@ -4958,81 +4958,7 @@ void settle_object_builtin_aliases(Compiler *c) {
       }
     }
   }
-}
-
-/* The module an include or prepend argument names, or -1 */
-static int mixin_arg_module(Compiler *c, int arg) {
-  NodeKind ak = nt_kind(c->nt, arg);
-  const char *mn = (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) ? nt_str(c->nt, arg, "name") : NULL;
-  if (!mn) return -1;
-  int mod = const_node_class_index(c, arg);
-  if (mod < 0) { const char *al = resolve_class_alias(c, mn); if (al) mod = comp_class_index(c, al); }
-  return mod;
-}
-
-/* The def node of the method `od` that class k answers at node `at`, where
-   an alias of it appears, as CRuby's lookup finds it then: a module the
-   class prepended before it, the class's own def before it, a module it
-   included before it (the later first), then the superclass. -1 when the
-   class does not answer the name there, or the answer is not a def. The
-   bodies are the class's, in source order. */
-static int alias_def_in_effect(Compiler *c, int k, const char *od, const char *nw, int at) {
-  const NodeTable *nt = c->nt;
-  int inc_def = -1, inc_at = -1, pre_def = -1, pre_at = -1, nb = 0, competing = 0;
-  const LrOpen *ob = elab_class_bodies(c, k, &nb);
-  for (int b = 0; b < nb; b++) {
-    int n = 0;
-    const int *stmts = ob[b].body >= 0 ? nt_arr(nt, ob[b].body, "body", &n) : NULL;
-    for (int j = 0; j < n; j++) {
-      int st = stmts[j];
-      int prep = 0; const int *av;
-      int an = mixin_stmt_args(nt, st, &prep, &av);
-      if (an < 0) continue;
-      /* `include A, B` puts A in front */
-      for (int q = an - 1; q >= 0; q--) {
-        int mod = mixin_arg_module(c, av[q]);
-        int mm = mod >= 0 ? comp_method_in_chain(c, mod, od, NULL) : -1;
-        if (mod >= 0 && comp_method_in_chain(c, mod, nw, NULL) >= 0) competing = 1;
-        if (mm < 0) continue;
-        if (prog_cmp_run(c, st, at, at, "the alias reading") >= 0) continue;
-        /* the latest mixin ahead of the alias, the class's bodies in any
-           file (prog_cmp); the same statement again for `A` of `include A, B` */
-        if (prep) { if (pre_at < 0 || prog_cmp_run(c, st, pre_at, at, "the alias reading") >= 0) { pre_at = st; pre_def = c->scopes[mm].def_node; } }
-        else if (inc_at < 0 || prog_cmp_run(c, st, inc_at, at, "the alias reading") >= 0) { inc_at = st; inc_def = c->scopes[mm].def_node; }
-      }
-    }
-  }
-  if (pre_def >= 0) return pre_def;
-  int own = -1, candidates = 0, lone = -1;
-  for (int si = 1; si < c->nscopes; si++) {
-    Scope *sc = &c->scopes[si];
-    if (sc->class_id != k || sc->is_cmethod || sc->is_include_copy || sc->def_node < 0 ||
-        nt_kind(nt, sc->def_node) != NK_DefNode) continue;
-    const char *dn = nt_str(nt, sc->def_node, "name");
-    if (!dn || !sp_streq(dn, od)) continue;
-    candidates++;
-    lone = si;
-  }
-  /* With no competing mixin or ancestor, the lone def is the answer unless
-     it is known to come after the alias. A mixin defining the alias name
-     also competes, even when it does not define the target name. */
-  if (candidates == 1 && !competing && inc_def < 0 &&
-      (c->classes[k].parent < 0 || comp_method_in_chain(c, c->classes[k].parent, od, NULL) < 0) &&
-      elab_order(c, c->scopes[lone].def_node, at) != PROG_AFTER) return c->scopes[lone].def_node;
-  for (int si = 1; si < c->nscopes; si++) {
-    Scope *sc = &c->scopes[si];
-    if (sc->class_id != k || sc->is_cmethod || sc->is_include_copy || sc->def_node < 0 ||
-        nt_kind(nt, sc->def_node) != NK_DefNode) continue;
-    const char *dn = nt_str(nt, sc->def_node, "name");
-    if (!dn || !sp_streq(dn, od)) continue;
-    if (prog_cmp_run(c, sc->def_node, at, at, "the alias reading") >= 0) continue;
-    if (own < 0 || prog_cmp_run(c, sc->def_node, own, at, "the alias reading") > 0) own = sc->def_node;
-  }
-  if (own >= 0) return own;
-  if (inc_def >= 0) return inc_def;
-  int par = c->classes[k].parent;
-  int pm = par >= 0 ? comp_method_in_chain(c, par, od, NULL) : -1;
-  return pm >= 0 ? c->scopes[pm].def_node : -1;
+  mtab_leave(c);
 }
 
 /* An alias names the method in effect where it appears. The alias table
@@ -5210,7 +5136,12 @@ void settle_mixin_aliases(Compiler *c) {
       if (fm < 0) continue;
       char od[256];
       snprintf(od, sizeof od, "%s", cls->alias_old[i]);
-      int want = alias_def_in_effect(c, k, od, nw, at);
+      /* the def the alias captures: the version live at its point, which
+         the plan answers (CT_CAPTURE at the alias node); an entry's arms
+         are the run time's */
+      MethodLookup cap = { .def_class = -1 };
+      int cmi = call_target(c, at, k, od, CT_CAPTURE, &cap);
+      int want = cmi >= 0 && cap.kind != ML_ENTRY ? c->scopes[cmi].def_node : -1;
       if (want < 0) continue;
       int ok = c->scopes[fm].def_node == want;
       if (!ok) {
@@ -9854,7 +9785,7 @@ static int module_prepend_list(Compiler *c, int mod_id, int *out, int max) {
    and register_extends take the mixins from the load record and bring the
    prepended modules themselves (body_mixins); the rewrite is for the
    passes that still read the calls' arguments (an_module_tree,
-   an_enum_reaches_v, alias_def_in_effect, among others). */
+   an_enum_reaches_v, among others). */
 void desugar_module_prepends(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int any = 0;

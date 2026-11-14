@@ -2818,7 +2818,10 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   int at = m.at;
   ElabWindow w = m.w;
   d = m.d;
-  if (at == ELAB_YES) vi = ct_def_version(c, rcls, name, sg, d, &dc);
+  if (at == ELAB_YES) {
+    vi = ct_def_version(c, rcls, name, sg, d, &dc);
+    if (vi < 0 && (flags & CT_CAPTURE) && d && d->kind == LR_DEF && rcls >= 0) vi = comp_shadowed_body(c, rcls, sg, d->node, &dc);
+  }
   else if (at == ELAB_NO) none = late && !d && elab_class_live_at(c, rcls, sg, p);   /* (not an undef's, nor on a class no call can run on yet) */
   else if (m.win == ELAB_YES) {
     n = m.n;

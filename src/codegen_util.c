@@ -5931,9 +5931,17 @@ int call_never_returns(Compiler *c, int id) {
   /* a call on such a receiver never runs, whatever its own type
      (`m.version - 1 > 2`: the `-` raises before `>` is reached) */
   if (recv >= 0 && call_never_returns(c, recv)) return 1;
-  if (comp_ntype(c, id) != TY_VOID) return 0;
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return 0;
+  /* nor a self call to a method every value position of which raises
+     (`def engines = (raise "x").select { ... }`), which the analysis left
+     untyped rather than void. Not one an override answers in its place
+     (abstract_raise_override_return): the call's type is the family's then. */
+  if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && comp_ntype(c, id) == TY_UNKNOWN) {
+    int smi = comp_self_call_mi(c, id, nm);
+    if (smi >= 0 && scope_always_raises(c, smi)) return 1;
+  }
+  if (comp_ntype(c, id) != TY_VOID) return 0;
   if (recv < 0 && (is_raise_alias(nm))) return 1;
   int mi = -1;
   if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) mi = comp_self_call_mi(c, id, nm);

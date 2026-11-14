@@ -1121,7 +1121,7 @@ else {
     }
   }
   if (out_len == in_len) {
-    return sp_str_one_answer(src);
+    return sp_str_dup(src);   /* a new String, as CRuby answers, never the argument */
   }
   char *buf = sp_str_alloc(out_len);
   size_t j = 0;

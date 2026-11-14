@@ -1226,6 +1226,16 @@ int emit_op_array_flatten(Compiler *c, const BopCtx *x, Buf *b) {
                  t, t2, lk, t, t2, t2);
       return 1;
     }
+    /* a new Array, as CRuby's flatten always answers (a frozen receiver's
+       too): the receiver itself was answered, and a push onto it raised
+       FrozenError or changed the original */
+    if (k) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_expr(c, recv, b);
+      buf_printf(b, "; if (!_t%d) sp_raise_nomethod(sp_nomethod_msg(\"flatten\", sp_box_nil()));"
+                    " sp_%sArray_dup(_t%d); })", t, k, t);
+      return 1;
+    }
     emit_expr(c, recv, b); return 1;
   }
   if ((sp_streq(name, "flatten!") || sp_streq(name, "flatten")) && argc == 1) {

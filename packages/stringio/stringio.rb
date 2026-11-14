@@ -120,7 +120,7 @@ class StringIO
   # parameter is passed, and the caller's buffer stopped seeing the replace.
   def readpartial(maxlen, outbuf = nil)
     raise ArgumentError, "negative length #{maxlen} given" if maxlen < 0
-    s = maxlen == 0 ? "" : read(maxlen)
+    s = maxlen == 0 ? String.new : read(maxlen)   # a new BINARY String, as CRuby's
     if s.nil?
       outbuf.replace("") if outbuf
       raise EOFError, "end of file reached"
@@ -133,7 +133,7 @@ class StringIO
 
   def read_nonblock(maxlen, outbuf = nil, exception: true)
     raise ArgumentError, "negative length #{maxlen} given" if maxlen < 0
-    s = maxlen == 0 ? "" : read(maxlen)
+    s = maxlen == 0 ? String.new : read(maxlen)   # a new BINARY String, as CRuby's
     if s.nil?
       outbuf.replace("") if outbuf
       raise EOFError, "end of file reached" if exception

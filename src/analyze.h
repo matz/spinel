@@ -492,6 +492,9 @@ int elab_method_replaced(Compiler *c, const char *name);
    do the methods its versions give have more than one visibility (a
    module's private one and a class's public one)? */
 int elab_method_vis_varies(Compiler *c, const char *name);
+/* Does the subtree at id write the variable nm of kind (a local, or a constant)? (codegen_stmt.c) */
+enum { VW_LOCAL, VW_CONST };
+int subtree_writes_var(Compiler *c, int id, const char *nm, int kind);
 /* does a call of `name` run, or open the window of the bodies around it,
    ahead of the first version of one of its histories, where the name is
    absent on that class and side? */

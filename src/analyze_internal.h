@@ -625,7 +625,6 @@ int strbuf_iter_box_tail(Compiler *c, int v);                    /* codegen_stmt
 int strbuf_route_clamp(Compiler *c, int v, int *ops);           /* codegen_stmt.c */
 int subtree_may_reassign_state(Compiler *c, int id);             /* codegen_call.c */
 int subtree_may_run_proc(Compiler *c, int id);                   /* codegen_call.c */
-int subtree_writes_local(Compiler *c, int id, const char *nm);   /* codegen_stmt.c */
 /* The type a READ of ivar slot `iv` yields (a shared-mutable string slot
    reads as a plain String). Shared with the receiver-face helpers. */
 TyKind ivar_value_ty(ClassInfo *ci, int iv);

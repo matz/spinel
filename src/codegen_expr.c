@@ -6236,9 +6236,9 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
       const char *ln = nt_kind(nt, left) == NK_LocalVariableReadNode ? nt_str(nt, left, "name") : NULL;
       const char *rn = nt_kind(nt, right) == NK_LocalVariableReadNode ? nt_str(nt, right, "name") : NULL;
       int lkept = !lmk && ln && !subtree_reads_local(nt, right, ln) &&
-                  !subtree_writes_local(c, right, ln) && !subtree_may_run_proc(c, right);
+                  !subtree_writes_var(c, right, ln, VW_LOCAL) && !subtree_may_run_proc(c, right);
       int rkept = !rmk && rn && !subtree_reads_local(nt, left, rn) &&
-                  !subtree_writes_local(c, left, rn) && !subtree_may_run_proc(c, left);
+                  !subtree_writes_var(c, left, rn, VW_LOCAL) && !subtree_may_run_proc(c, left);
       if (!lran && !lcon && !lkept && (rrun || (lmk && rmk))) lt = ++g_tmp;
       if (!rran && !rcon && !rkept && (lrun || (lmk && rmk))) rt = ++g_tmp;
     }

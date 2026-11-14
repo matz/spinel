@@ -4077,7 +4077,7 @@ static int lazy_src_stable_local(Compiler *c, int n, int write) {
     NodeKind k = nt_kind(nt, p);
     if (k == NK_DefNode || k == NK_LambdaNode) break;
     if ((k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode) &&
-        subtree_writes_local(c, p, vn))
+        subtree_writes_var(c, p, vn, VW_LOCAL))
       return 0;
   }
   return 1;
@@ -23926,7 +23926,10 @@ static int io_reopen_call_vis(Compiler *c, int id, int k, const char *nm, int pl
    call's target, emits nothing for it. A program of many classes paid that
    loop at every boxed call (#10546). The set is built once the analysis is
    done (g_scopes_settled), when the tables it reads are the analysis's
-   last; asked sooner, every name may refuse. */
+   last; asked sooner, every name may refuse. A name whose visibility
+   differs between points of the load (elab_method_vis_varies) may refuse
+   too: the table holds its last entry only, which a call made before the
+   change does not see. */
 static const char **pvr_name; static int pvr_cap, pvr_nclasses = -1;
 static const Compiler *pvr_c;
 static void pvr_add(const char *nm) {
@@ -23940,6 +23943,9 @@ static void pvr_add(const char *nm) {
 }
 static int vis_name_may_refuse(Compiler *c, const char *nm) {
   if (!g_scopes_settled) return 1;
+  /* (a name whose visibility differs between points of the load: the table
+     below holds its last entry only, which a call made before it misses) */
+  if (elab_method_vis_varies(c, nm)) return 1;
   if (pvr_c != c || pvr_nclasses != c->nclasses) {
     int n = 0;
     for (int k = 0; k < c->nclasses; k++)
@@ -28147,8 +28153,8 @@ static void nil_target_operands(Compiler *c, int id, int boxed, NilOperands *o) 
        rty == TY_IO || (rty == TY_POLY))) {
     const char *ln = nt_str(nt, r, "name");
     int blk = nt_ref(nt, id, "block");
-    for (int i = 0; ln && i < an && !rebound; i++) rebound = subtree_writes_local(c, av[i], ln);
-    if (ln && blk >= 0 && !rebound) rebound = subtree_writes_local(c, blk, ln);
+    for (int i = 0; ln && i < an && !rebound; i++) rebound = subtree_writes_var(c, av[i], ln, VW_LOCAL);
+    if (ln && blk >= 0 && !rebound) rebound = subtree_writes_var(c, blk, ln, VW_LOCAL);
     /* (an argument that may run a closure assigning the local rebinds it
        too, read_rebound_by: `v.to_s(la.call)` for `la = -> { v = 0; 5 }`.
        The head bound the call alone, and the arm read the local after it,

@@ -4884,7 +4884,7 @@ static int route_block_rebinds_base(Compiler *c, int v) {
     if (n == v && g_pre && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
         nt_paren_single(c->nt, nt_ref(nt, v, "receiver")) == base)
       continue;
-    if (blk >= 0 && subtree_writes_local(c, blk, nm)) return 1;
+    if (blk >= 0 && subtree_writes_var(c, blk, nm, VW_LOCAL)) return 1;
   }
   return 0;
 }
@@ -6504,26 +6504,49 @@ int emit_poly_op_assign(Compiler *c, const char *lval, const char *op, int v,
   return 1;
 }
 
-/* Whether the subtree at `id` assigns the local `nm`: a write, an
-   op-write or a multiple-assignment target by that name. */
-int subtree_writes_local(Compiler *c, int id, const char *nm) {
+/* Whether the subtree at `id` assigns the variable `nm` of `kind`: a
+   write, an or-write, an and-write, an op-write or a multiple-assignment
+   target of that name. A constant's path forms (`A::K = 1`, `::K += 1`,
+   `A::K, b = ...`) are the constant's kinds too: a path write's leaf is its
+   target's name, a path target's its own. */
+int subtree_writes_var(Compiler *c, int id, const char *nm, int kind) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;
-  const char *ty = nt_type(nt, id);
-  if (!ty) return 0;
-  if (!strncmp(ty, "LocalVariable", 13) && (strstr(ty, "Write") || strstr(ty, "Target"))) {
-    const char *wn = nt_str(nt, id, "name");
-    if (wn && sp_streq(wn, nm)) return 1;
+  switch (nt_kind(nt, id)) {
+    case NK_LocalVariableWriteNode: case NK_LocalVariableOrWriteNode: case NK_LocalVariableAndWriteNode:
+    case NK_LocalVariableOperatorWriteNode: case NK_LocalVariableTargetNode:
+      if (kind == VW_LOCAL) {
+        const char *wn = nt_str(nt, id, "name");
+        if (wn && sp_streq(wn, nm)) return 1;
+      }
+      break;
+    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+    case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
+      if (kind == VW_CONST) {
+        const char *wn = nt_str(nt, id, "name");
+        if (wn && sp_streq(wn, nm)) return 1;
+      }
+      break;
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    case NK_ConstantPathOperatorWriteNode:
+      if (kind == VW_CONST) {
+        int t = nt_ref(nt, id, "target");
+        const char *wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
+        if (wn && sp_streq(wn, nm)) return 1;
+      }
+      break;
+    default:
+      break;
   }
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
-    if (subtree_writes_local(c, nt_ref_at(nt, id, i), nm)) return 1;
+    if (subtree_writes_var(c, nt_ref_at(nt, id, i), nm, kind)) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0;
     const int *ids = nt_arr_at(nt, id, i, &n);
     for (int j = 0; j < n; j++)
-      if (subtree_writes_local(c, ids[j], nm)) return 1;
+      if (subtree_writes_var(c, ids[j], nm, kind)) return 1;
   }
   return 0;
 }
@@ -6622,7 +6645,7 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
                (g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm));
   /* the rhs can reassign the local: directly, or through a closure over it */
   int cap = t != TY_UNKNOWN && t != TY_PROC &&
-            (subtree_writes_local(c, v, nm) || (celled && subtree_has_side_effect(c, v)));
+            (subtree_writes_var(c, v, nm, VW_LOCAL) || (celled && subtree_has_side_effect(c, v)));
   char rtn[32];
 
   /* Ruby takes s's String, then runs the RHS, then concatenates what
@@ -26528,7 +26551,7 @@ static int iow_recv_local_held(Compiler *c, int recv, int key, int v) {
   snprintf(want, sizeof want, "lv_%s", nm);
   int plain = rb.p && sp_streq(rb.p, want);
   free(rb.p);
-  return plain && !subtree_writes_local(c, key, nm) && !subtree_writes_local(c, v, nm);
+  return plain && !subtree_writes_var(c, key, nm, VW_LOCAL) && !subtree_writes_var(c, v, nm, VW_LOCAL);
 }
 
 void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {

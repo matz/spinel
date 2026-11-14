@@ -1,0 +1,11 @@
+write: receiver 1, 2 args
+2
+lambda and Array.new: receiver [1], 2 args
+[2]
+multiple assignment: receiver 7, 2 args
+8
+untouched: receiver 20, 2 args
+other constant: receiver 20, 2 args
+20
+5
+[1]

@@ -1151,7 +1151,7 @@ int case_in_lambda_param(Compiler *c, int lam) {
   if (nt_kind(nt, reqs[0]) != NK_RequiredParameterNode || !nt_str(nt, reqs[0], "name")) return -1;
   if (lambda_body_jumps(nt, body, 0)) return -1;
   /* a body that writes its parameter keeps master's path: the parameter is typed from the subject */
-  if (subtree_writes_local(c, body, nt_str(nt, reqs[0], "name"))) return -1;
+  if (subtree_writes_var(c, body, nt_str(nt, reqs[0], "name"), VW_LOCAL)) return -1;
   int pci = comp_class_index(c, "Proc"), dc = -1;
   if (pci >= 0 && comp_method_in_chain(c, pci, "===", &dc) >= 0 && dc >= 0) {
     const char *dn = c->classes[dc].name;
@@ -13820,24 +13820,6 @@ static void rehome_block_body(Compiler *c, int body, int encl) {
 }
 
 static void subtree_rename_local(NodeTable *nt, int root, const char *oldn, const char *newn, int depth);
-/* Is local `name` written anywhere under `root`? */
-static int exec_subtree_writes_local(const NodeTable *nt, int root, const char *name, int depth) {
-  if (root < 0 || depth > 200) return 0;
-  NodeKind k = nt_kind(nt, root);
-  if ((k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode || k == NK_LocalVariableOperatorWriteNode ||
-       k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode) &&
-      nt_str(nt, root, "name") && sp_streq(nt_str(nt, root, "name"), name)) return 1;
-  int nr = nt_num_refs(nt, root);
-  for (int i = 0; i < nr; i++)
-    if (exec_subtree_writes_local(nt, nt_ref_at(nt, root, i), name, depth + 1)) return 1;
-  int na = nt_num_arrs(nt, root);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *ids = nt_arr_at(nt, root, i, &n);
-    for (int j = 0; j < n; j++)
-      if (exec_subtree_writes_local(nt, ids[j], name, depth + 1)) return 1;
-  }
-  return 0;
-}
 /* Does the code under `root` append to local `name` in place or hand it to
    a call? */
 static int exec_subtree_lends_local(const NodeTable *nt, int root, const char *name, int depth) {
@@ -13876,7 +13858,7 @@ static int exec_param_reads_arg(Compiler *c, int body, const char *pn, int arg) 
   const char *an = nt_str(nt, arg, "name");
   TyKind at = infer_type(c, arg);
   if (!an || (at != TY_STRING && at != TY_STRBUF)) return 0;
-  if (exec_subtree_writes_local(nt, body, pn, 0) || exec_subtree_writes_local(nt, body, an, 0)) return 0;
+  if (subtree_writes_var(c, body, pn, VW_LOCAL) || subtree_writes_var(c, body, an, VW_LOCAL)) return 0;
   return exec_subtree_lends_local(nt, body, pn, 0);
 }
 

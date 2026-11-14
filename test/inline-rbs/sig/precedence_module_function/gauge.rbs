@@ -1,0 +1,3 @@
+class Gauge
+  def read: (String) -> String
+end

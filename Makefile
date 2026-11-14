@@ -4633,6 +4633,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	! grep -q 'sp_PolyPolyHash_new' "$$tmp/hbu.c" || { echo "infer-test: FAIL (an unbounded boxed store widened a known Hash)"; ok=0; }; \
 	$(SPINEL) test/container_alias_untracked_local.rb -c --no-line-map -o "$$tmp/cau.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (container_alias_untracked_local: -c)"; ok=0; }; \
 	awk '/^struct sp_Area_s \{/,/^\}/' "$$tmp/cau.c" | grep -Fq 'sp_StrArray * iv_except;' || { echo "infer-test: FAIL (a local that may hold an untracked container joined an alias group and widened an Array[String])"; ok=0; }; \
+	$(SPINEL) test/ivar_push_unsettled_block_value.rb -c --no-line-map -o "$$tmp/ipu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_push_unsettled_block_value: -c)"; ok=0; }; \
+	awk '/^struct sp_Jar_s \{/,/^\}/' "$$tmp/ipu.c" | grep -Fq 'sp_StrStrHash * iv_values;' || { echo "infer-test: FAIL (a push of a block value not typed yet made an ivar the poly Array and widened a Hash[String, String])"; ok=0; }; \
 	$(SPINEL) test/struct_member_index_op_write_box.rb -c --no-line-map -o "$$tmp/smo.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (struct_member_index_op_write_box: -c)"; ok=0; }; \
 	[ "$$(awk '/^struct sp_Point_s \{/,/^\}/' "$$tmp/smo.c" | grep -c 'sp_int iv_[xy];')" = 2 ] && awk '/^struct sp_Pair_s \{/,/^\}/' "$$tmp/smo.c" | grep -q 'sp_RbVal iv_a;' && awk '/^struct sp_Cell_s \{/,/^\}/' "$$tmp/smo.c" | grep -q 'sp_RbVal iv_v;' || { echo "infer-test: FAIL (an index op-write through a box typed a Struct the box cannot hold, or not one it can)"; ok=0; }; \
 	$(SPINEL) test/index_read_unsettled_local.rb -c --no-line-map -o "$$tmp/iru.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_read_unsettled_local: -c)"; ok=0; }; \

@@ -38244,11 +38244,14 @@ typedef struct {
 } NNF;
 
 static Compiler *nn_c;
-static unsigned char *nn_nonnil;   /* per node: a local read proven non-nil */
-static unsigned char *nn_inb;      /* per node: an `a[i]` proven to read an element */
+/* per node, the answers the walk recorded (one byte, a bit each) */
+enum {
+  NNB_NONNIL = 1,   /* a local or ivar read proven non-nil */
+  NNB_INB    = 2,   /* an `a[i]` proven to read an element */
+  NNB_IVWOK  = 4    /* an `@x = v` of a non-nil v where @x was non-nil */
+};
+static unsigned char *nn_flags;
 static int *nn_cand;               /* per node: an in-bounds `a[i]`, slot + 1 */
-static unsigned char *nn_wrok;     /* per node: an `a[i] = v` whose index is in range */
-static unsigned char *nn_ivwok;    /* per node: an `@x = v` of a non-nil v where @x was non-nil */
 static int nn_cap;
 static int nn_ready;               /* the bitmaps describe the current state */
 static int nn_busy;                /* the facts are being recomputed */
@@ -38256,6 +38259,7 @@ static int nn_inferring;           /* recomputed during type inference */
 static unsigned nn_epoch = 1, nn_done_epoch;
 
 static void nn_compute_now(Compiler *c, int reuse);
+static void nn_mark(int id, unsigned char bit) { nn_flags[id] |= bit; }
 
 /* During inference the facts are recomputed lazily, once per round, on the
    first question asked of them; the nullable marking recomputes them at the
@@ -38269,16 +38273,18 @@ static int nn_fresh(void) {
    used is a decision (src/decide.c), keyed by the read's position and, for a
    local, the name it was written with: a refused one leaves the read as
    possibly nil, which is what it was before the fact was proven. */
+static int nn_marked(int id, unsigned char bit) {
+  return id >= 0 && nn_fresh() && id < nn_cap && (nn_flags[id] & bit);
+}
 static int nn_read_nonnil(Compiler *c, int id, const char *name) {
-  if (!(id >= 0 && nn_fresh() && id < nn_cap && nn_nonnil[id])) return 0;
+  if (!nn_marked(id, NNB_NONNIL)) return 0;
   if (!g_decide_on) return 1;
   char written[300];
   snprintf(written, sizeof written, "%.*s", (int)block_param_written_len(c, name), name);
   return decide_node(c->nt, id, "nn-read", written);
 }
 static int nn_index_inbounds(Compiler *c, int id) {
-  return id >= 0 && nn_fresh() && id < nn_cap && nn_inb[id] &&
-         decide_node(c->nt, id, "nn-inb", NULL);
+  return nn_marked(id, NNB_INB) && decide_node(c->nt, id, "nn-inb", NULL);
 }
 /* `a[i]` on an array of pointers that the facts show reads within it: an
    element, never the nil past the end (whether the element itself can be
@@ -38291,13 +38297,11 @@ int an_elem_read_in_bounds(Compiler *c, int id) {
 /* An ivar read after a use that raised on its nil, with no write of it and
    no call that could make one between (nn_visit): its nil was tested */
 static int nn_ivar_read_nonnil(Compiler *c, int id) {
-  return id >= 0 && nn_fresh() && id < nn_cap && nn_nonnil[id] &&
-         decide_node(c->nt, id, "nn-ivread", nt_str(c->nt, id, "name"));
+  return nn_marked(id, NNB_NONNIL) && decide_node(c->nt, id, "nn-ivread", nt_str(c->nt, id, "name"));
 }
 /* `@x = v`: v is non-nil and so was @x, so its nil byte is already clear */
 int nn_ivar_write_keeps_clear(Compiler *c, int id) {
-  return id >= 0 && nn_fresh() && id < nn_cap && nn_ivwok[id] &&
-         decide_node(c->nt, id, "nn-ivwok", nt_str(c->nt, id, "name"));
+  return nn_marked(id, NNB_IVWOK) && decide_node(c->nt, id, "nn-ivwok", nt_str(c->nt, id, "name"));
 }
 /* nullable_int_value as the slot's own marks answer it, without the facts:
    what the variable can hold anywhere, rather than at this read. */
@@ -38842,15 +38846,15 @@ static int nn_rel_of(Compiler *c, int cond, const NNF *f, NNRel *out) {
   return 1;
 }
 
-/* `a[i]` (`a[i] = v` with set) naming slot and index i the facts relate */
-static int nn_index_in_range(Compiler *c, int id, const NNF *f, int set) {
+/* `a[i]` naming slot and index i the facts relate */
+static int nn_index_in_range(Compiler *c, int id, const NNF *f) {
   const NodeTable *nt = c->nt;
   if (f->bot) return 0;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   int ca = nt_ref(nt, id, "arguments"); int an = 0;
   const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
-  if (!nm || recv < 0 || !sp_streq(nm, set ? "[]=" : "[]") || an != (set ? 2 : 1) ||
+  if (!nm || recv < 0 || !is_aref_name(nm) || an != 1 ||
       nt_ref(nt, id, "block") >= 0 || nt_kind(nt, av[0]) != NK_LocalVariableReadNode) return 0;
   LocalVar *iv = nn_local_of(c, av[0]);
   int slot = nn_slot_of(c, recv);
@@ -39035,7 +39039,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     return;
   case NK_LocalVariableReadNode: {
     LocalVar *lv = nn_local_of(c, id);
-    if (!nn_dry && lv && nn_has(f, lv)) nn_nonnil[id] = 1;
+    if (!nn_dry && lv && nn_has(f, lv)) nn_mark(id, NNB_NONNIL);
     return;
   }
   case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
@@ -39043,7 +39047,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     return;
   case NK_InstanceVariableReadNode: {
     int iv = nn_ivar(nt_str(nt, id, "name"));
-    if (!nn_dry && iv >= 0 && f->ni && nn_hasiv(f, iv)) nn_nonnil[id] = 1;
+    if (!nn_dry && iv >= 0 && f->ni && nn_hasiv(f, iv)) nn_mark(id, NNB_NONNIL);
     return;
   }
   case NK_InstanceVariableWriteNode: {
@@ -39052,7 +39056,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     int iv = nn_ivar(nt_str(nt, id, "name"));
     if (iv >= 0) {
       int nonnil = !nn_no_ivar_facts && nn_nonnil_value(c, v);
-      if (!nn_dry && nonnil && !f->bot && nn_hasiv(f, iv)) nn_ivwok[id] = 1;
+      if (!nn_dry && nonnil && !f->bot && nn_hasiv(f, iv)) nn_mark(id, NNB_IVWOK);
       nn_kill_rel_slot(f, 2 * iv + 1); nn_killiv(f, iv); nn_logpush(NN_LOG_IVAR, NULL, 2 * iv + 1, 0);
       if (nonnil) nn_addiv(f, iv);
     }
@@ -39170,9 +39174,8 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     int amark = nn_nlog;
     nn_visit_args(c, nt_ref(nt, id, "arguments"), f, ctx);
     if (!nn_dry) {
-      int s = nn_index_in_range(c, id, f, 0);
+      int s = nn_index_in_range(c, id, f);
       if (s) nn_cand[id] = s;
-      if (nn_index_in_range(c, id, f, 1)) nn_wrok[id] = 1;
     }
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
@@ -39383,12 +39386,12 @@ static void nn_reset(void) {
 }
 
 static void nn_alloc(int cap) {
-  free(nn_nonnil); free(nn_inb); free(nn_cand); free(nn_wrok); free(nn_ivwok); free(nn_par); free(nn_ctx);
+  free(nn_flags); free(nn_cand); free(nn_par); free(nn_ctx);
   free(nn_seq); free(nn_send); free(nn_ctxpar); free(nn_ctxdep); free(nn_stlist); free(nn_stidx);
   free(nn_loopout); free(nn_retry); free(nn_jump); free(nn_defbody); free(nn_frame);
   size_t n = (size_t)cap + 1;
   nn_cap = cap;
-  nn_nonnil = malloc(n); nn_inb = malloc(n); nn_wrok = malloc(n); nn_ivwok = malloc(n); nn_retry = malloc(n);
+  nn_flags = malloc(n); nn_retry = malloc(n);
   nn_jump = malloc(n); nn_defbody = malloc(n); nn_frame = malloc(sizeof(int) * n);
   nn_cand = malloc(sizeof(int) * n); nn_par = malloc(sizeof(int) * n); nn_ctx = malloc(sizeof(int) * n);
   nn_seq = malloc(sizeof(int) * n); nn_send = malloc(sizeof(int) * n); nn_ctxpar = malloc(sizeof(int) * n);
@@ -39516,7 +39519,7 @@ static void nn_structure(Compiler *c) {
 static void nn_facts(Compiler *c) {
   const NodeTable *nt = c->nt;
   size_t n = (size_t)nn_cap + 1;
-  memset(nn_nonnil, 0, n); memset(nn_inb, 0, n); memset(nn_wrok, 0, n); memset(nn_ivwok, 0, n);
+  memset(nn_flags, 0, n);
   memset(nn_cand, 0, sizeof(int) * n);
   for (int k = 0; k < nn_nvars; k++) {
     NNVar *v = &nn_vars[k];
@@ -39543,7 +39546,7 @@ static void nn_facts(Compiler *c) {
      end left, can be in it at run time (elem_nil_reach_expr) */
   for (int id = 0; id < nn_cap; id++) {
     if (!nn_cand[id] || !nn_int_array(comp_ntype(c, nt_ref(nt, id, "receiver")))) continue;
-    if (!elem_nil_reach_expr(c, nt_ref(nt, id, "receiver"))) nn_inb[id] = 1;
+    if (!elem_nil_reach_expr(c, nt_ref(nt, id, "receiver"))) nn_mark(id, NNB_INB);
   }
 }
 

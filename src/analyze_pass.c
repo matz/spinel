@@ -5368,7 +5368,7 @@ static TyKind local_write_ty(Compiler *c, int id, int stashed) {
     if (ct == TY_STRING) newt = TY_STRING;
     /* A boxed addend can promote the accumulator at run time as well. */
     else if (ty_is_numeric(ct) && (ty_is_numeric(vt) || vt == TY_POLY))
-      newt = infer_op_assign_type(c, ct, nt_ref(nt, id, "value"));
+      newt = infer_op_assign_type(c, ct, id);
     /* `cmd += ["-c", dir]` with elements of another kind: a poly Array, as
        the binary `cmd = cmd + [...]` gives (infer_type's op-write rule) */
     else if (ty_is_array(ct) && ty_is_array(vt) && vt != ct &&

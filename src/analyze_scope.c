@@ -7017,6 +7017,8 @@ int infer_global_const_types(Compiler *c) {
       TyKind cur = lv ? lv->type : TY_UNKNOWN;
       TyKind v = infer_type(c, nt_ref(nt, id, "value"));
       if (cur == TY_STRING) vt = TY_STRING;
+      else if (cur == TY_INT && v == TY_INT)
+        vt = infer_op_assign_type(c, cur, id);   /* (`$x **= e` may be boxed) */
       else if (ty_is_numeric(cur) && ty_is_numeric(v))
         /* an Integer past 64 bits on either side widens the slot to Bignum,
            as a local's `x -= 2**63` does: kept an Integer, the Bignum operand
@@ -11466,6 +11468,8 @@ static int cvar_note_write(Compiler *c, int cid, int id, int nil_only) {
                 ((sp_streq(op, "|") || sp_streq(op, "&") || sp_streq(op, "-") ||
                   sp_streq(op, "+")) && vt == cur)))
       vt = cur;
+    else if (cur == TY_INT && vt == TY_INT)
+      vt = infer_op_assign_type(c, cur, id);   /* (`@@x **= e` may be boxed) */
     if (vt == TY_NIL || vt == TY_UNKNOWN) return changed;
   }
   else {
@@ -13482,6 +13486,10 @@ int infer_ivar_types(Compiler *c) {
                       sp_streq(op2, "+")) && vt == ci->ivar_types[iv])))
           vt = ci->ivar_types[iv];
       }
+      /* `@x **= e` on an Integer slot: the power's own result, a boxed value
+         where the exponent may be negative */
+      if (ty_k == NK_InstanceVariableOperatorWriteNode && ci->ivar_types[iv] == TY_INT && vt == TY_INT)
+        vt = infer_op_assign_type(c, TY_INT, id);
       if (ty_k != NK_InstanceVariableOperatorWriteNode)
         vt = empty_container_write(c, vnode, vt, ci->ivar_types[iv]);
       /* A Time slot's `+= n` / `-= n` with a numeric operand answers a Time

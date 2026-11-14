@@ -38247,21 +38247,30 @@ typedef struct { LocalVar *i; int slot; } NNRel;
    neither is written and no call that can shrink an array has run (a
    growth-only builtin keeps it: nn_growth_call) */
 typedef struct { LocalVar *n; int slot; } NNLen;
+/* `lo <= hi` between two Integer locals (from `lo <= hi`, `lo < hi`, their
+   mirrored forms, or the falsy arm of the converse): hi - lo >= 0 while
+   neither is written */
+typedef struct { LocalVar *lo, *hi; } NNLe;
 typedef struct {
   int bot;                 /* unreachable: every fact holds */
   int n; LocalVar *v[NN_MAXF];         /* locals known non-nil */
   int nn; LocalVar *nonneg[NN_MAXF];   /* integer locals known >= 0 */
   int nr; NNRel r[NN_MAXR];
   int nl; NNLen len[NN_MAXR];         /* `n = a.size` locals */
+  int nle; NNLe le[NN_MAXR];          /* `lo <= hi` Integer locals */
   int ni; int iv[NN_MAXF];             /* self's ivars (nn_ivar) known non-nil */
 } NNF;
 
 static Compiler *nn_c;
-static unsigned char *nn_nonnil;   /* per node: a local read proven non-nil */
-static unsigned char *nn_inb;      /* per node: an `a[i]` proven to read an element */
+/* per node, the answers the walk recorded (one byte, a bit each) */
+enum {
+  NNB_NONNIL = 1,   /* a local or ivar read proven non-nil */
+  NNB_INB    = 2,   /* an `a[i]` proven to read an element */
+  NNB_IVWOK  = 4,   /* an `@x = v` of a non-nil v where @x was non-nil */
+  NNB_SIGN   = 8    /* a local read known >= 0, or a `hi - lo` of ordered locals (an_int_nonneg) */
+};
+static unsigned char *nn_flags;
 static int *nn_cand;               /* per node: an in-bounds `a[i]`, slot + 1 */
-static unsigned char *nn_wrok;     /* per node: an `a[i] = v` whose index is in range */
-static unsigned char *nn_ivwok;    /* per node: an `@x = v` of a non-nil v where @x was non-nil */
 static int nn_cap;
 static int nn_ready;               /* the bitmaps describe the current state */
 static int nn_busy;                /* the facts are being recomputed */
@@ -38269,6 +38278,7 @@ static int nn_inferring;           /* recomputed during type inference */
 static unsigned nn_epoch = 1, nn_done_epoch;
 
 static void nn_compute_now(Compiler *c, int reuse);
+static void nn_mark(int id, unsigned char bit) { nn_flags[id] |= bit; }
 
 /* During inference the facts are recomputed lazily, once per round, on the
    first question asked of them; the nullable marking recomputes them at the
@@ -38282,16 +38292,18 @@ static int nn_fresh(void) {
    used is a decision (src/decide.c), keyed by the read's position and, for a
    local, the name it was written with: a refused one leaves the read as
    possibly nil, which is what it was before the fact was proven. */
+static int nn_marked(int id, unsigned char bit) {
+  return id >= 0 && nn_fresh() && id < nn_cap && (nn_flags[id] & bit);
+}
 static int nn_read_nonnil(Compiler *c, int id, const char *name) {
-  if (!(id >= 0 && nn_fresh() && id < nn_cap && nn_nonnil[id])) return 0;
+  if (!nn_marked(id, NNB_NONNIL)) return 0;
   if (!g_decide_on) return 1;
   char written[300];
   snprintf(written, sizeof written, "%.*s", (int)block_param_written_len(c, name), name);
   return decide_node(c->nt, id, "nn-read", written);
 }
 static int nn_index_inbounds(Compiler *c, int id) {
-  return id >= 0 && nn_fresh() && id < nn_cap && nn_inb[id] &&
-         decide_node(c->nt, id, "nn-inb", NULL);
+  return nn_marked(id, NNB_INB) && decide_node(c->nt, id, "nn-inb", NULL);
 }
 /* `a[i]` on an array of pointers that the facts show reads within it: an
    element, never the nil past the end (whether the element itself can be
@@ -38304,13 +38316,11 @@ int an_elem_read_in_bounds(Compiler *c, int id) {
 /* An ivar read after a use that raised on its nil, with no write of it and
    no call that could make one between (nn_visit): its nil was tested */
 static int nn_ivar_read_nonnil(Compiler *c, int id) {
-  return id >= 0 && nn_fresh() && id < nn_cap && nn_nonnil[id] &&
-         decide_node(c->nt, id, "nn-ivread", nt_str(c->nt, id, "name"));
+  return nn_marked(id, NNB_NONNIL) && decide_node(c->nt, id, "nn-ivread", nt_str(c->nt, id, "name"));
 }
 /* `@x = v`: v is non-nil and so was @x, so its nil byte is already clear */
 int nn_ivar_write_keeps_clear(Compiler *c, int id) {
-  return id >= 0 && nn_fresh() && id < nn_cap && nn_ivwok[id] &&
-         decide_node(c->nt, id, "nn-ivwok", nt_str(c->nt, id, "name"));
+  return nn_marked(id, NNB_IVWOK) && decide_node(c->nt, id, "nn-ivwok", nt_str(c->nt, id, "name"));
 }
 /* nullable_int_value as the slot's own marks answer it, without the facts:
    what the variable can hold anywhere, rather than at this read. */
@@ -38613,6 +38623,18 @@ static void nn_kill(NNF *f, LocalVar *lv) {
   for (int i = 0; i < f->nl; ) {
     if (f->len[i].n == lv || (k >= 0 && f->len[i].slot == 2 * k)) f->len[i] = f->len[--f->nl]; else i++;
   }
+  for (int i = 0; i < f->nle; ) {
+    if (f->le[i].lo == lv || f->le[i].hi == lv) f->le[i] = f->le[--f->nle]; else i++;
+  }
+}
+static int nn_hasle(const NNF *f, LocalVar *lo, LocalVar *hi) {
+  if (f->bot) return 1;
+  for (int i = 0; i < f->nle; i++) if (f->le[i].lo == lo && f->le[i].hi == hi) return 1;
+  return 0;
+}
+static void nn_addle(NNF *f, LocalVar *lo, LocalVar *hi) {
+  if (f->bot || !lo || !hi || lo == hi || nn_hasle(f, lo, hi) || f->nle == NN_MAXR) return;
+  f->le[f->nle].lo = lo; f->le[f->nle].hi = hi; f->nle++;
 }
 static void nn_meet(NNF *a, const NNF *b) {
   if (b->bot) return;
@@ -38629,6 +38651,9 @@ static void nn_meet(NNF *a, const NNF *b) {
     int keep = 0;
     for (int j = 0; j < b->nl; j++) if (b->len[j].n == a->len[i].n && b->len[j].slot == a->len[i].slot) keep = 1;
     if (!keep) a->len[i] = a->len[--a->nl]; else i++;
+  }
+  for (int i = 0; i < a->nle; ) {
+    if (!nn_hasle(b, a->le[i].lo, a->le[i].hi)) a->le[i] = a->le[--a->nle]; else i++;
   }
 }
 
@@ -38662,6 +38687,12 @@ static void nn_call_kill(NNF *f, int ctx, int pure) {
     int k = nn_var(f->nonneg[i]);
     if (k < 0 || nn_vars[k].allw_ctx != ctx || nn_vars[k].owner != ctx) f->nonneg[i] = f->nonneg[--f->nn]; else i++;
   }
+  /* an ordered pair holds across the call by the same rule, for both locals */
+  for (int i = 0; i < f->nle; ) {
+    int a = nn_var(f->le[i].lo), b = nn_var(f->le[i].hi);
+    if (a < 0 || b < 0 || nn_vars[a].allw_ctx != ctx || nn_vars[a].owner != ctx ||
+        nn_vars[b].allw_ctx != ctx || nn_vars[b].owner != ctx) f->le[i] = f->le[--f->nle]; else i++;
+  }
 }
 
 static void nn_write_kill(NNF *f, LocalVar *lv, int incr) {
@@ -38673,6 +38704,8 @@ static void nn_write_kill(NNF *f, LocalVar *lv, int incr) {
 static int nn_numeric(TyKind t) {
   return t == TY_INT || t == TY_FLOAT || (nn_inferring && t == TY_UNKNOWN);
 }
+/* An Integer slot, or during inference one not typed yet. */
+static int nn_int_ty(TyKind t) { return t == TY_INT || (nn_inferring && t == TY_UNKNOWN); }
 static int nn_int_array(TyKind t) {
   return t == TY_INT_ARRAY || t == TY_FLOAT_ARRAY || (nn_inferring && t == TY_UNKNOWN);
 }
@@ -38855,15 +38888,15 @@ static int nn_rel_of(Compiler *c, int cond, const NNF *f, NNRel *out) {
   return 1;
 }
 
-/* `a[i]` (`a[i] = v` with set) naming slot and index i the facts relate */
-static int nn_index_in_range(Compiler *c, int id, const NNF *f, int set) {
+/* `a[i]` naming slot and index i the facts relate */
+static int nn_index_in_range(Compiler *c, int id, const NNF *f) {
   const NodeTable *nt = c->nt;
   if (f->bot) return 0;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   int ca = nt_ref(nt, id, "arguments"); int an = 0;
   const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
-  if (!nm || recv < 0 || !sp_streq(nm, set ? "[]=" : "[]") || an != (set ? 2 : 1) ||
+  if (!nm || recv < 0 || !is_aref_name(nm) || an != 1 ||
       nt_ref(nt, id, "block") >= 0 || nt_kind(nt, av[0]) != NK_LocalVariableReadNode) return 0;
   LocalVar *iv = nn_local_of(c, av[0]);
   int slot = nn_slot_of(c, recv);
@@ -38903,6 +38936,25 @@ static void nn_operands_nonnil(Compiler *c, int id, NNF *f, int ctx, int amark) 
   if (rl) nn_add(f, rl);
   if ((at == TY_INT || at == TY_FLOAT) && nt_kind(nt, av[0]) == NK_LocalVariableReadNode)
     nn_add(f, nn_local_of(c, av[0]));
+}
+
+/* `lo <= hi`, `lo < hi`, `hi >= lo`, `hi > lo` on two Integer locals: the
+   pair the truthy arm orders (the falsy arm orders it the other way). A
+   `<` or `<=` the program defines on Integer gives no fact. */
+static int nn_le_of(Compiler *c, int cond, LocalVar **lo, LocalVar **hi) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, cond, "name");
+  int recv = nt_ref(nt, cond, "receiver");
+  int ca = nt_ref(nt, cond, "arguments"); int an = 0;
+  const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+  if (!nm || recv < 0 || an != 1 || nt_safe_nav(nt, cond) || !is_order_op(nm) ||
+      comp_builtin_kind_reopen_mi(c, cond, TY_INT, nm) >= 0) return 0;
+  int asc = is_ascending_order_op(nm);
+  int l = asc ? recv : av[0], h = asc ? av[0] : recv;
+  if (nt_kind(nt, l) != NK_LocalVariableReadNode || nt_kind(nt, h) != NK_LocalVariableReadNode) return 0;
+  if (!nn_int_ty(comp_ntype(c, l)) || !nn_int_ty(comp_ntype(c, h))) return 0;
+  *lo = nn_local_of(c, l); *hi = nn_local_of(c, h);
+  return *lo && *hi;
 }
 
 /* Visit a condition: the facts that hold when it is truthy (t) and falsy (e). */
@@ -38947,10 +38999,14 @@ static void nn_cond(Compiler *c, int id, const NNF *in, NNF *t, NNF *e, int ctx)
       return;
     }
     NNRel r;
-    if (nn_rel_of(c, id, in, &r)) {
+    LocalVar *lo = NULL, *hi = NULL;
+    int ordered = nn_le_of(c, id, &lo, &hi);
+    int rel = nn_rel_of(c, id, in, &r);
+    if (rel || ordered) {
       *t = *in; nn_visit(c, id, t, ctx);
       *e = *t;
-      if (!t->bot && nn_hasnn(t, r.i) && t->nr < NN_MAXR) t->r[t->nr++] = r;
+      if (rel && !t->bot && nn_hasnn(t, r.i) && t->nr < NN_MAXR) t->r[t->nr++] = r;
+      if (ordered) { nn_addle(t, lo, hi); nn_addle(e, hi, lo); }
       return;
     }
   }
@@ -39039,6 +39095,110 @@ static void nn_visit_args(Compiler *c, int ca, NNF *f, int ctx) {
   }
 }
 
+/* `hi - lo` on two Integer locals the facts order */
+static int nn_diff_ordered(Compiler *c, int id, const NNF *f) {
+  const NodeTable *nt = c->nt;
+  if (f->bot || nt_ref(nt, id, "block") >= 0 || nt_safe_nav(nt, id)) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  int ca = nt_ref(nt, id, "arguments"); int an = 0;
+  const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+  if (!nm || !is_minus_op(nm) || recv < 0 || an != 1 || comp_builtin_kind_reopen_mi(c, id, TY_INT, nm) >= 0 ||
+      nt_kind(nt, recv) != NK_LocalVariableReadNode || nt_kind(nt, av[0]) != NK_LocalVariableReadNode) return 0;
+  return nn_hasle(f, nn_local_of(c, av[0]), nn_local_of(c, recv));
+}
+
+/* An Integer expression the facts show is >= 0: a literal, a local read the
+   walk knew non-negative, a `hi - lo` of ordered locals, a sum or product of
+   such, an abs, a builtin container's size. Asked of a `**` exponent (the
+   decision pass), where a negative one makes the power a Rational. An
+   operator the program defines on Integer proves nothing. The leaf answers
+   nonzero when it cannot show the value non-negative. */
+static int an_int_nonneg_leaf(const VpLeaf *leaf, void *ud) {
+  Compiler *c = ud;
+  const NodeTable *nt = c->nt;
+  int id = leaf->node;
+  if (leaf->kind != VPK_EXPR) return 1;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_IntegerNode) return nt_str(nt, id, "bigval") || nt_int(nt, id, "value", -1) < 0;
+  if (k == NK_LocalVariableReadNode) return !nn_marked(id, NNB_SIGN);
+  if (k != NK_CallNode || nt_ref(nt, id, "block") >= 0 || nt_safe_nav(nt, id)) return 1;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  int ca = nt_ref(nt, id, "arguments"); int an = 0;
+  const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+  if (!nm || recv < 0) return 1;
+  TyKind rt = infer_type(c, recv);
+  /* (during inference an operand not typed yet counts as the kind asked: the
+     answer can then only be withdrawn in a later round, which widens) */
+  if (an == 0 && is_len_alias(nm) && (ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING ||
+                                      (nn_inferring && rt == TY_UNKNOWN)) &&
+      !an_user_defines_or_reads(c, nm)) return 0;
+  if (!nn_int_ty(rt) || comp_builtin_kind_reopen_mi(c, id, TY_INT, nm) >= 0) return 1;
+  if (an == 0 && is_abs_name(nm)) return 0;
+  if (an != 1 || !nn_int_ty(infer_type(c, av[0]))) return 1;
+  if (is_minus_op(nm)) return !nn_marked(id, NNB_SIGN);
+  if (is_plus_op(nm) || is_mul_op(nm)) return !an_int_nonneg(c, recv) || !an_int_nonneg(c, av[0]);
+  return 1;
+}
+int an_int_nonneg(Compiler *c, int id) {
+  if (id < 0) return 0;
+  return !for_each_value_position(c->nt, id, VPS_IF | VPS_UNLESS, an_int_nonneg_leaf, c);
+}
+
+/* An Integer power's exponent: an Integer that is no literal (a literal one
+   is typed by its own sign, infer_int_pow_type). Marks the power when the
+   facts do not show the exponent >= 0 (or the decision is denied): its result
+   is then boxed and answered by the exponent's sign (a Rational for a
+   negative one, CRuby's answer; the plain Integer path raised RangeError). */
+static int pow_exp_marks(Compiler *c, int id, int exp) {
+  const NodeTable *nt = c->nt;
+  if (exp < 0 || nt_kind(nt, exp) == NK_IntegerNode || infer_type(c, exp) != TY_INT) return 0;
+  if (comp_pow_signed(c, id) || !nn_fresh()) return 0;
+  if (an_int_nonneg(c, exp) && decide_node(nt, id, "pow-int", NULL)) return 0;
+  comp_set_pow_signed(c, id, 1);
+  return 1;
+}
+/* Does the operator write `id` hold an Integer to raise: its holder's slot? */
+static int pow_write_base_int(Compiler *c, int id) {
+  HolderRef h;
+  return holder_of_node(c, id, &h) && h.r.as_ty == TY_INT;
+}
+/* The fixpoint pass that decides the mark for every Integer power
+   (`b ** e`, `b.pow(e)`, `x **= e`). The fact cannot be asked from the
+   `**` inference rule itself: the nil-narrowing facts are computed lazily
+   during inference and read the powers' types (nullable_int_value), so the
+   rule asking them would see the facts busy in one query and finished in
+   the next, and the node's type would flip inside a round. The mark only
+   ever gets set, so the types it drives only widen and the fixpoint still
+   converges. It is read by infer_int_pow_type. Nothing is marked under
+   --int-overflow=promote, where every power not both constants is already
+   boxed, nor before the round's facts exist. Linear in the powers and the
+   operator writes (their operator is the first test). */
+static int mark_int_pow_signed(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (g_promote_mode) return 0;
+  int ch = 0;
+  for (int pass = 0; pass < 2; pass++) {
+    for (int id = an_calls_named_first(c, pass ? "pow" : "**"); id >= 0; id = an_calls_named_next(id)) {
+      int recv = nt_ref(nt, id, "receiver");
+      int ca = nt_ref(nt, id, "arguments"); int an = 0;
+      const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      if (recv < 0 || an != 1 || nt_ref(nt, id, "block") >= 0 || infer_type(c, recv) != TY_INT) continue;
+      ch |= pow_exp_marks(c, id, av[0]);
+    }
+  }
+  const NodeKind writes[] = { NK_LocalVariableOperatorWriteNode, NK_InstanceVariableOperatorWriteNode,
+                              NK_GlobalVariableOperatorWriteNode, NK_ClassVariableOperatorWriteNode };
+  for (size_t k = 0; k < sizeof writes / sizeof *writes; k++) {
+    for (int id = comp_kind_first(c, writes[k]); id >= 0; id = comp_kind_next(c, id)) {
+      if (!is_pow_op(nt_str(nt, id, "binary_operator")) || !pow_write_base_int(c, id)) continue;
+      ch |= pow_exp_marks(c, id, nt_ref(nt, id, "value"));
+    }
+  }
+  return ch;
+}
+
 static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
   const NodeTable *nt = c->nt;
   if (id < 0 || id >= nn_cap) return;
@@ -39048,7 +39208,8 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     return;
   case NK_LocalVariableReadNode: {
     LocalVar *lv = nn_local_of(c, id);
-    if (!nn_dry && lv && nn_has(f, lv)) nn_nonnil[id] = 1;
+    if (!nn_dry && lv && nn_has(f, lv)) nn_mark(id, NNB_NONNIL);
+    if (!nn_dry && lv && !f->bot && nn_hasnn(f, lv)) nn_mark(id, NNB_SIGN);
     return;
   }
   case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
@@ -39056,7 +39217,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     return;
   case NK_InstanceVariableReadNode: {
     int iv = nn_ivar(nt_str(nt, id, "name"));
-    if (!nn_dry && iv >= 0 && f->ni && nn_hasiv(f, iv)) nn_nonnil[id] = 1;
+    if (!nn_dry && iv >= 0 && f->ni && nn_hasiv(f, iv)) nn_mark(id, NNB_NONNIL);
     return;
   }
   case NK_InstanceVariableWriteNode: {
@@ -39065,7 +39226,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     int iv = nn_ivar(nt_str(nt, id, "name"));
     if (iv >= 0) {
       int nonnil = !nn_no_ivar_facts && nn_nonnil_value(c, v);
-      if (!nn_dry && nonnil && !f->bot && nn_hasiv(f, iv)) nn_ivwok[id] = 1;
+      if (!nn_dry && nonnil && !f->bot && nn_hasiv(f, iv)) nn_mark(id, NNB_IVWOK);
       nn_kill_rel_slot(f, 2 * iv + 1); nn_killiv(f, iv); nn_logpush(NN_LOG_IVAR, NULL, 2 * iv + 1, 0);
       if (nonnil) nn_addiv(f, iv);
     }
@@ -39183,9 +39344,9 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     int amark = nn_nlog;
     nn_visit_args(c, nt_ref(nt, id, "arguments"), f, ctx);
     if (!nn_dry) {
-      int s = nn_index_in_range(c, id, f, 0);
+      int s = nn_index_in_range(c, id, f);
       if (s) nn_cand[id] = s;
-      if (nn_index_in_range(c, id, f, 1)) nn_wrok[id] = 1;
+      if (nn_diff_ordered(c, id, f)) nn_mark(id, NNB_SIGN);
     }
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
@@ -39230,7 +39391,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     /* control flow the walk does not follow: nothing survives it */
     if (k == NK_BeginNode || k == NK_CaseNode || k == NK_CaseMatchNode || k == NK_ForNode ||
         k == NK_RescueModifierNode) {
-      f->n = 0; f->nr = 0; f->nl = 0; f->nn = 0; f->ni = 0;
+      f->n = 0; f->nr = 0; f->nl = 0; f->nn = 0; f->ni = 0; f->nle = 0;
     }
     /* an ivar written other than by `@x = v` (`@x op= v`, `||=`, a
        multiple-assignment target): what was known of it is gone */
@@ -39374,7 +39535,7 @@ static int nn_iter_index(Compiler *c, int param) {
   }
   TyKind rt = comp_ntype(c, recv);
   if (pos == 0 && is_int_step(nm) &&
-      (rt == TY_INT || (nn_inferring && rt == TY_UNKNOWN))) return 1;
+      nn_int_ty(rt)) return 1;
   if (pos == 0 && sp_streq(nm, "each_index")) return 1;
   if (pos == 1 && sp_streq(nm, "each_with_index")) return 1;
   if (pos == 0 && rk == NK_RangeNode && (sp_streq(nm, "each") || sp_streq(nm, "map") || sp_streq(nm, "collect")))
@@ -39396,12 +39557,12 @@ static void nn_reset(void) {
 }
 
 static void nn_alloc(int cap) {
-  free(nn_nonnil); free(nn_inb); free(nn_cand); free(nn_wrok); free(nn_ivwok); free(nn_par); free(nn_ctx);
+  free(nn_flags); free(nn_cand); free(nn_par); free(nn_ctx);
   free(nn_seq); free(nn_send); free(nn_ctxpar); free(nn_ctxdep); free(nn_stlist); free(nn_stidx);
   free(nn_loopout); free(nn_retry); free(nn_jump); free(nn_defbody); free(nn_frame);
   size_t n = (size_t)cap + 1;
   nn_cap = cap;
-  nn_nonnil = malloc(n); nn_inb = malloc(n); nn_wrok = malloc(n); nn_ivwok = malloc(n); nn_retry = malloc(n);
+  nn_flags = malloc(n); nn_retry = malloc(n);
   nn_jump = malloc(n); nn_defbody = malloc(n); nn_frame = malloc(sizeof(int) * n);
   nn_cand = malloc(sizeof(int) * n); nn_par = malloc(sizeof(int) * n); nn_ctx = malloc(sizeof(int) * n);
   nn_seq = malloc(sizeof(int) * n); nn_send = malloc(sizeof(int) * n); nn_ctxpar = malloc(sizeof(int) * n);
@@ -39529,7 +39690,7 @@ static void nn_structure(Compiler *c) {
 static void nn_facts(Compiler *c) {
   const NodeTable *nt = c->nt;
   size_t n = (size_t)nn_cap + 1;
-  memset(nn_nonnil, 0, n); memset(nn_inb, 0, n); memset(nn_wrok, 0, n); memset(nn_ivwok, 0, n);
+  memset(nn_flags, 0, n);
   memset(nn_cand, 0, sizeof(int) * n);
   for (int k = 0; k < nn_nvars; k++) {
     NNVar *v = &nn_vars[k];
@@ -39556,7 +39717,7 @@ static void nn_facts(Compiler *c) {
      end left, can be in it at run time (elem_nil_reach_expr) */
   for (int id = 0; id < nn_cap; id++) {
     if (!nn_cand[id] || !nn_int_array(comp_ntype(c, nt_ref(nt, id, "receiver")))) continue;
-    if (!elem_nil_reach_expr(c, nt_ref(nt, id, "receiver"))) nn_inb[id] = 1;
+    if (!elem_nil_reach_expr(c, nt_ref(nt, id, "receiver"))) nn_mark(id, NNB_INB);
   }
 }
 
@@ -51670,6 +51831,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     if (!g_infer_getter_write_pending)
       ch |= AN_PASS("fold_static_is_a", fold_static_is_a(c));               /* if v.is_a?(Array) on a typed local: one arm */
     ch |= AN_PASS("infer_block_params", infer_block_params(c));
+    ch |= AN_PASS("mark_int_pow_signed", mark_int_pow_signed(c));            /* an Integer power's exponent that may be negative: boxed */
     ch |= AN_PASS("infer_for_index", infer_for_index(c));
     ch |= AN_PASS("infer_catch_block_params", infer_catch_block_params(c));
     /* Resolve constant types before ivar inference: a destructured constant

@@ -170,6 +170,8 @@ Compiler *comp_new(const NodeTable *nt) {
   c->empty_arr_recv = calloc((size_t)n, 1);
   c->empty_hash_recv = calloc((size_t)n, 1);
   c->empty_hash_arg = calloc((size_t)n, 1);
+  c->pow_signed = calloc((size_t)n, 1);
+  if (!c->pow_signed) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->store_misfit_arg = calloc((size_t)n, 1);
   c->ivar_widen_src = calloc((size_t)n, 1);
   c->hash_want = calloc((size_t)n, sizeof(TyKind));
@@ -494,6 +496,8 @@ void comp_grow_node_arrays(Compiler *c) {
   c->empty_arr_recv = realloc((char *)c->empty_arr_recv, (size_t)n);
   c->empty_hash_recv = realloc((char *)c->empty_hash_recv, (size_t)n);
   c->empty_hash_arg = realloc((char *)c->empty_hash_arg, (size_t)n);
+  c->pow_signed = realloc((char *)c->pow_signed, (size_t)n);
+  if (!c->pow_signed) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->store_misfit_arg = realloc(c->store_misfit_arg, (size_t)n);
   c->ivar_widen_src = realloc(c->ivar_widen_src, (size_t)n);
   c->hash_want = realloc((TyKind *)c->hash_want, sizeof(TyKind) * (size_t)n);
@@ -505,7 +509,7 @@ void comp_grow_node_arrays(Compiler *c) {
   for (int i = c->node_cap; i < n; i++) c->bop_inf[i] = NULL;
   c->ucall_inf = realloc(c->ucall_inf, sizeof *c->ucall_inf * (size_t)n);
   memset(c->ucall_inf + c->node_cap, 0, sizeof *c->ucall_inf * (size_t)(n - c->node_cap));
-  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; ((unsigned char *)c->strbuf_handle_demand)[i] = 0; c->strbuf_read_raw[i] = 0; ((unsigned char *)c->poly_strbuf_lift)[i] = 0; ((unsigned char *)c->nil_tested)[i] = 0; ((unsigned char *)c->head_held)[i] = 0; ((unsigned char *)c->value_discarded)[i] = 0; ((unsigned char *)c->str_shadow)[i] = 0; }
+  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; ((char *)c->pow_signed)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; ((unsigned char *)c->strbuf_handle_demand)[i] = 0; c->strbuf_read_raw[i] = 0; ((unsigned char *)c->poly_strbuf_lift)[i] = 0; ((unsigned char *)c->nil_tested)[i] = 0; ((unsigned char *)c->head_held)[i] = 0; ((unsigned char *)c->value_discarded)[i] = 0; ((unsigned char *)c->str_shadow)[i] = 0; }
   c->node_cap = n;
 }
 
@@ -692,6 +696,7 @@ void comp_free(Compiler *c) {
   free(c->autoloads); free(c->auto_at);
   free((char *)c->empty_arr_recv);
   free((char *)c->empty_hash_recv);
+  free((char *)c->pow_signed);
   free(c->store_misfit_arg);
   free(c->ivar_widen_src);
   free((TyKind *)c->hash_want);

@@ -634,7 +634,9 @@ int range_object_face(const char *name);  /* Object's face of a Float / String r
 int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_arysub_call(Compiler *c, int id, TyKind *out);
-TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int value);
+TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int write);
+/* what an Integer power (`b ** e`, `b.pow(e)`, `x **= e`) is beyond a plain Integer, or TY_UNKNOWN; recv -1 for the op-write */
+TyKind infer_int_pow_type(Compiler *c, int id, int recv, int exp);
 int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out);

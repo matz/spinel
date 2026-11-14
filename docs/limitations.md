@@ -904,24 +904,6 @@ computed on as CRuby does; so is a `Float` NaN of any payload. The price is
 the flag beside the word: two registers for a nullable parameter or return,
 one bit per nullable scalar ivar, the bitmap on an array that holds nils.
 
-#### `Integer#**` with a negative exponent
-
-CRuby evaluates a negative integer exponent to a `Rational`. Spinel matches
-it whenever the sign is knowable: a literal negative exponent types the
-result `Rational` statically (`2 ** -1 # => (1/2)`, `0 ** -1` raises
-`ZeroDivisionError` as in CRuby), and the poly-dispatched path (a
-poly-typed base or exponent, e.g. promote-mode parameters) picks `Integer`
-or `Rational` from the sign at run time. The residual divergence is a
-statically int-typed runtime exponent (`x ** y` with plain int locals):
-typing it a sometimes-`Rational` would force the result poly and cascade
-through every int-arithmetic consumer, so a negative value there still
-raises `RangeError` rather than silently truncating. A base of 1 or -1 is
-an Integer in CRuby (`(-1) ** -3 # => -1`): Spinel answers it for a literal
-base and on the poly-dispatched path, and, outside `--int-overflow=promote`,
-the `Rational` for an int-typed runtime base (`x ** -1` with `x = 1` is
-`(1/1)`). `Integer#pow(negative,
-mod)` raises `RangeError` with CRuby's message.
-
 #### `Integer#**` / `Rational#**` with a `Rational` exponent
 
 CRuby returns an exact `Rational` when the exponent is integer-valued

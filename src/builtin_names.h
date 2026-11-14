@@ -621,6 +621,10 @@ const char *builtin_operator_delegate(const char *name);
 int is_mul_op(const char *n); /* * */
 int is_pow_op(const char *n); /* ** */
 int is_minus_op(const char *n); /* - */
+int is_order_op(const char *n); /* < <= > >= */
+int is_ascending_order_op(const char *n); /* < <=: the receiver is the lesser side (is_order_op's other half is > >=) */
+int is_abs_name(const char *n); /* abs magnitude */
+int is_pred_name(const char *n); /* pred */
 int is_clone_name(const char *n); /* clone */
 int is_cover_name(const char *n); /* cover? */
 int is_flatten_name(const char *n); /* flatten */

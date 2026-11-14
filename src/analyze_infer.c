@@ -2102,6 +2102,33 @@ static int infer_int_pow_overflows(long long base, long long exp) {
   return 0;
 }
 
+/* What an Integer power is beyond a plain Integer, for the three spellings of
+   it: `b ** e` and `b.pow(e)` (recv is the base) and `x **= e` (recv is -1:
+   the local holds the base, never a constant). The exponent `exp` is an
+   Integer. TY_UNKNOWN: a plain Integer, which the caller's later rules
+   type. CRuby answers a Rational for a negative exponent and an Integer for a
+   base of 1 or -1, so the answer follows the exponent's sign:
+     - a negative literal exponent: Integer for a literal 1 / -1 base,
+       Rational for another constant base, boxed for a run-time base (it can
+       be 1 or -1: sp_poly_pow resolves it);
+     - --int-overflow=promote: boxed unless both are constants (the pair can
+       leave the word), the Bignum for a constant pair that does;
+     - a run-time exponent that mark_int_pow_signed found the facts do not
+       show >= 0: boxed, and the result is by the exponent's sign at run
+       time. An exponent shown >= 0 keeps the plain Integer. */
+TyKind infer_int_pow_type(Compiler *c, int id, int recv, int exp) {
+  const NodeTable *nt = c->nt;
+  long long base, e;
+  int cbase = recv >= 0 && infer_const_int_node(nt, recv, &base);
+  int cexp = infer_const_int_node(nt, exp, &e);
+  if (cexp && e < 0) return recv >= 0 && an_unit_int_literal(nt, recv) ? TY_INT : cbase ? TY_RATIONAL : TY_POLY;
+  if (g_promote_mode) {
+    if (!(cbase && cexp)) return TY_POLY;
+    return infer_int_pow_overflows(base, e) ? TY_BIGINT : TY_UNKNOWN;
+  }
+  return !cexp && comp_pow_signed(c, id) ? TY_POLY : TY_UNKNOWN;
+}
+
 /* Whether base << amount does not fit the target's word (a Bignum in CRuby --
    `1 << 64` is 2**64, not a wrapped/UB C shift). */
 static int infer_int_shl_overflows(long long base, long long amount) {
@@ -5654,22 +5681,17 @@ static int infer_int_float_recv_call(Compiler *c, int id, const NodeTable *nt, c
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
       if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
     }
-    /* pow with a literal negative exponent yields the exact Rational, but
-       an Integer for a base of 1 or -1 */
-    if (sp_streq(name, "pow") && argc == 1 &&
-        nt_kind(nt, argv[0]) == NK_IntegerNode &&
-        nt_int(nt, argv[0], "value", 0) < 0) { *out = an_unit_int_literal(nt, recv) ? TY_INT : TY_RATIONAL; return 1; }
-    if (sp_streq(name, "pow") && argc == 1 && infer_type(c, argv[0]) == TY_FLOAT) { *out = TY_FLOAT; return 1; }
-    /* --int-overflow=promote: pow(n) is `**`: a pair that is not both known
-       constants can leave the word and promotes (sp_poly_int_pow); a
-       constant pair that overflows is the Bignum, the rest an sp_int */
-    if (g_promote_mode && sp_streq(name, "pow") && argc == 1 &&
-        (infer_type(c, argv[0]) == TY_INT || infer_type(c, argv[0]) == TY_POLY)) {
-      long long pb, pe;
-      if (!(infer_const_int_node(nt, recv, &pb) && infer_const_int_node(nt, argv[0], &pe))) { *out = TY_POLY; return 1; }
-      if (pe >= 0 && infer_int_pow_overflows(pb, pe)) { *out = TY_BIGINT; return 1; }
+    /* pow(n) is `**`: the Integer power rule answers a Rational, a boxed
+       value or the Bignum where the plain Integer does not hold */
+    if (is_pow_name(name) && argc == 1) {
+      TyKind et = infer_type(c, argv[0]);
+      if (et == TY_FLOAT) { *out = TY_FLOAT; return 1; }
+      if (et == TY_INT || (g_promote_mode && et == TY_POLY)) {
+        TyKind pt = infer_int_pow_type(c, id, recv, argv[0]);
+        if (pt != TY_UNKNOWN) { *out = pt; return 1; }
+      }
     }
-    if (sp_streq(name, "pow") && argc >= 1) { *out = TY_INT; return 1; }
+    if (is_pow_name(name) && argc >= 1) { *out = TY_INT; return 1; }
     /* clamp keeps the applied operand's class: a Float bound can be returned, so
        the mixed int-receiver/float-bound form is poly; pure-int stays Integer. */
     if (sp_streq(name, "clamp")) {
@@ -9644,28 +9666,16 @@ static TyKind infer_call_inner(Compiler *c, int id) {
         infer_int_pow_overflows(base, exp))
       return TY_BIGINT;
   }
-  /* Integer ** <negative literal>: a Rational in CRuby, typed statically. A
-     runtime exponent keeps the static Integer result (typing it poly would
-     cascade through every int-arithmetic consumer -- see limitations.md); the
-     negative case raises loudly, and the poly-dispatched path (promote-mode
-     params) resolves the class at runtime in sp_poly_pow. */
+  /* Integer ** <Integer>: infer_int_pow_type answers a Rational for a negative
+     literal and a boxed value for a run-time exponent the facts do not show
+     >= 0 (sp_poly_pow resolves the class by the exponent's sign at run time). */
   /* The cheap operand-type and name gates come BEFORE infer_type(c, recv): that
      receiver re-inference recurses through infer_call, so calling it for every
      1-arg call node makes a wide call graph explode (#2707). */
-  if (a0 == TY_INT && sp_streq(name, "**") && recv >= 0 && argc == 1 &&
+  if (a0 == TY_INT && is_pow_op(name) && recv >= 0 && argc == 1 &&
       infer_type(c, recv) == TY_INT) {
-    long long base, exp;
-    int cexp = infer_const_int_node(nt, argv[0], &exp);
-    if (cexp && exp < 0) return an_unit_int_literal(nt, recv) ? TY_INT : TY_RATIONAL;
-    /* --int-overflow=promote: an int `**` whose operands are not both known
-       constants can escape the word at run time and promote to a Bignum
-       (codegen lowers it to sp_poly_pow), the `<<` rule below. A const-const
-       pair is exact -- an overflowing one answered TY_BIGINT above, the rest
-       fit an int. A typed exponent -- a block parameter, an element -- kept
-       the int helper, which raises in the mode whose contract is to promote
-       (#4679). */
-    if (g_promote_mode && !(cexp && infer_const_int_node(nt, recv, &base)))
-      return TY_POLY;
+    TyKind pt = infer_int_pow_type(c, id, recv, argv[0]);
+    if (pt != TY_UNKNOWN) return pt;
   }
   /* Integer with a Rational/Complex operand: ** Complex is Complex; ** Rational
      is a Float (by design, see codegen); fdiv is Float, div is the Integer floor. */
@@ -11775,7 +11785,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        is: the operator answers a new String (`s += x`) */
     if (ct2 == TY_STRING || ct2 == TY_STRBUF) return TY_STRING;
     if (ty_is_numeric(ct2) && (ty_is_numeric(vt2) || vt2 == TY_POLY))
-      return infer_op_assign_type(c, ct2, nt_ref(nt, id, "value"));
+      return infer_op_assign_type(c, ct2, id);
     /* `cmd += ["-c", dir]` with elements of another kind than the local's
        (a String Array and a boxed one): the concatenation answers a poly
        Array, as `cmd = cmd + [...]` does, and the local widens to hold it */

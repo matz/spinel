@@ -36,6 +36,13 @@ void one_elem_bind_slot(LocalVar *lv, TyKind bt) {
 /* The call a boxed receiver's arm re-enters (emit_face_arm) takes the
    answer as it is too: the arm boxes a nil as nil. */
 int g_face_oint_id = -1, g_face_oint_got = 0;   /* got: the oint's kind */
+/* A block's value that cannot go back into a numeric seed's slot (#3220,
+   #3308): a boxed value, a Rational, a Complex or an object. The fold accumulates boxed.
+   (A Bignum is numeric: the slot widens to it, ty_promote_numeric.) Asked by
+   the Array inject and the each.with_index one. */
+static int inject_value_leaves_seed_slot(TyKind acc_ty, Repr br) {
+  return ty_is_numeric(acc_ty) && (br.kind == RK_BOXED || br.as_ty == TY_RATIONAL || br.as_ty == TY_COMPLEX || ty_is_object(br.as_ty));
+}
 static int oint_kept(Compiler *c, int id, TyKind t) {
   if (id == g_face_oint_id) { if (t != TY_UNKNOWN) g_face_oint_got = t; return 1; }
   return node_is_oint(c, id);
@@ -3973,9 +3980,7 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
        poly -- a parameter called with Integer and Rational call sites), or
        an object, cannot fold back into a scalar numeric accumulator slot --
        keep the accumulator boxed (#3220, #3308). */
-    else if (acc_ty != TY_POLY && init >= 0 && ty_is_numeric(acc_ty) &&
-             (bt == TY_RATIONAL || bt == TY_COMPLEX || br.kind == RK_BOXED ||
-              bt == TY_BIGINT || ty_is_object(bt)))
+    else if (acc_ty != TY_POLY && init >= 0 && inject_value_leaves_seed_slot(acc_ty, br))
       acc_ty = TY_POLY;
     /* With no seed the accumulator starts at the first element and kept that
        type however the block answered. A body that is an UNRESOLVED call --
@@ -4627,7 +4632,9 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   int init = (argc > 0 && argv) ? argv[0] : -1;
   TyKind acc_ty = elem_t;
   if (init >= 0) { TyKind it = repr_of(c, init).as_ty; if (it != TY_UNKNOWN) acc_ty = it; }
-  { TyKind bt = comp_ntype(c, bb[bn - 1]); if (ty_is_numeric(bt)) acc_ty = ty_promote_numeric(acc_ty, bt); }
+  { Repr br = repr_of(c, bb[bn - 1]);
+    if (acc_ty != br.as_ty && inject_value_leaves_seed_slot(acc_ty, br)) acc_ty = TY_POLY;
+    else if (ty_is_numeric(br.as_ty)) acc_ty = ty_promote_numeric(acc_ty, br.as_ty); }
   const char *p0 = rename_local(p0o);
   TyKind pair_ty = (elem_t == TY_INT) ? TY_INT_ARRAY : TY_POLY_ARRAY;
   /* --int-overflow=promote: the body is re-inferred under the parameter
@@ -4663,6 +4670,7 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " ");
   emit_ctype(c, acc_ty, b); buf_printf(b, " _t%d = ", tacc);
   if (init >= 0 && acc_ty == TY_POLY && repr_of(c, init).kind != RK_BOXED) emit_boxed(c, init, b);
+  else if (init >= 0 && acc_ty == TY_BIGINT) emit_bigint_operand(c, init, b);   /* an Integer seed, past the word */
   else if (init >= 0) emit_expr(c, init, b);
   else buf_puts(b, acc_ty == TY_POLY ? "sp_box_nil()" : "0");
   buf_puts(b, "; ");
@@ -4729,7 +4737,9 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   { Buf tb; memset(&tb, 0, sizeof tb);
     Buf inner; memset(&inner, 0, sizeof inner);
     Buf *sv_pre = g_pre; g_pre = &inner;
-    emit_expr(c, bb[bn - 1], &tb);
+    /* a boxed accumulator takes a concrete tail (`1r`) boxed */
+    if (acc_ty == TY_POLY) emit_boxed(c, bb[bn - 1], &tb);
+    else emit_expr(c, bb[bn - 1], &tb);
     g_pre = sv_pre;
     if (inner.p) buf_puts(b, inner.p);
     buf_printf(b, "_t%d = ", tacc);

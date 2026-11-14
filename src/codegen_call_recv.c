@@ -9630,17 +9630,22 @@ static int str_arms_pattern(Compiler *c, int id, Buf *b, const NodeTable *nt, co
 /* An Integer receiver's clamp, digits, allbits? / anybits? / nobits?,
    ceildiv, pow, coerce, eql? and equal? (emit_scalar_recv_arms's Integer
    chain; answers 1 when a branch was taken) */
-/* --int-overflow=promote typed the call poly: its value can leave the word
-   (2**63 - 1 + 1, |-2**63|, a power), so the boxed helper answers it, ahead
+/* The inference typed the call boxed: a power whose exponent may be negative
+   (a Rational), or under --int-overflow=promote a value that can leave the
+   word (2**63 - 1 + 1, |-2**63|, a power). The boxed helper answers it, ahead
    of the rows that compute in sp_int. Answers 1 when it emitted. */
-static int int_arms_promote(Compiler *c, int id, Buf *b, const char *name, int argc, const int *argv, const char *r) {
-  if (!g_promote_mode || repr_of(c, id).kind != RK_BOXED) return 0;
-  if (argc == 0 && (sp_streq(name, "succ") || sp_streq(name, "next"))) { buf_printf(b, "sp_poly_succ_m(sp_box_int(%s), 0)", r); return 1; }
-  if (argc == 0 && sp_streq(name, "pred")) { buf_printf(b, "sp_poly_int_pred(sp_box_int(%s))", r); return 1; }
-  if (argc == 0 && (sp_streq(name, "abs") || sp_streq(name, "magnitude"))) { buf_printf(b, "sp_poly_abs(sp_box_int(%s))", r); return 1; }
-  if (is_pow_name(name) && argc == 1 && (comp_ntype(c, argv[0]) == TY_INT || repr_of(c, argv[0]).kind == RK_BOXED)) {
-    buf_printf(b, "sp_poly_int_pow(sp_box_int(%s), ", r); emit_boxed(c, argv[0], b); buf_puts(b, ")"); return 1;
+static int int_arms_boxed(Compiler *c, int id, Buf *b, const char *name, int argc, const int *argv, const char *r) {
+  if (repr_of(c, id).kind != RK_BOXED) return 0;
+  if (is_pow_name(name) && argc == 1) {
+    Repr er = repr_of(c, argv[0]);
+    if (er.as_ty == TY_INT || er.kind == RK_BOXED) {
+      buf_printf(b, "sp_poly_int_pow(sp_box_int(%s), ", r); emit_boxed(c, argv[0], b); buf_puts(b, ")"); return 1;
+    }
   }
+  if (!g_promote_mode) return 0;
+  if (argc == 0 && is_succ_alias(name)) { buf_printf(b, "sp_poly_succ_m(sp_box_int(%s), 0)", r); return 1; }
+  if (argc == 0 && is_pred_name(name)) { buf_printf(b, "sp_poly_int_pred(sp_box_int(%s))", r); return 1; }
+  if (argc == 0 && is_abs_name(name)) { buf_printf(b, "sp_poly_abs(sp_box_int(%s))", r); return 1; }
   return 0;
 }
 
@@ -10507,8 +10512,9 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
   }
   else if (rt == TY_INT) {
     /* the arms that read only the receiver and the arguments: builtin-op
-       rows (builtin_ops.c), behind the promote-mode answers that leave the word */
-    if (int_arms_promote(c, id, b, name, argc, argv, r)) ;
+       rows (builtin_ops.c), behind the boxed answers (a power that may be a
+       Rational, the promote-mode ones that leave the word) */
+    if (int_arms_boxed(c, id, b, name, argc, argv, r)) ;
     else if (emit_builtin_op_text(c, id, recv, rt, name, r, b)) ;
     else if (int_arms_round_divide(c, id, b, nt, name, argc, argv, r)) ;
     else if (int_arms_clamp_pow(c, id, b, nt, name, recv, argc, argv, a0, r)) ;

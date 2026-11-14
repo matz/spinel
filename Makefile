@@ -1943,7 +1943,7 @@ test-run: decisions-test
 # Each kind also has its row in the table in tools/README.md.
 DECISION_TESTS = $(shell grep -l '^\# spinel: decisions$$' test/*.rb test/fixtures/decisions/*.rb)
 DECISION_KINDS = aon-get case-root fetch-inert fetch-slot gc-save hc-cobound index-sum inline-force masgn-root nn-inb nn-read no-alloc \
-                 pd-hoist push-slot root-elide root-frame strbuf-raw
+                 pd-hoist pow-int push-slot root-elide root-frame strbuf-raw
 decisions-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-decisions.XXXXXX); : > "$$tmp/none"; \
 	if $(SPINEL) --decisions="$$tmp/absent" test/fixtures/decisions/sites.rb -c -o "$$tmp/o.c" >"$$tmp/o.out" 2>&1; then \

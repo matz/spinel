@@ -680,8 +680,15 @@ static int fill_value_fits(Compiler *c, int call, TyKind rt) {
 /* A Float consumer accepts either result of a seedless Float Array sum:
    Integer zero when empty, Float otherwise. Ask the builtin row so an
    overridden sum keeps its ordinary boxed-result promotion. */
-TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int value) {
+TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int write) {
+  int value = nt_ref(c->nt, write, "value");
   TyKind rhs = infer_type(c, value);
+  /* `x **= e` is the power of the local by e: a Rational or boxed value where
+     the Integer power is one */
+  if (lhs == TY_INT && rhs == TY_INT && is_pow_op(nt_str(c->nt, write, "binary_operator"))) {
+    TyKind pt = infer_int_pow_type(c, write, -1, value);
+    if (pt != TY_UNKNOWN) return pt;
+  }
   if (lhs == TY_FLOAT && rhs == TY_POLY && nt_kind(c->nt, value) == NK_CallNode) {
     int recv = nt_ref(c->nt, value, "receiver");
     if (recv >= 0 && infer_type(c, recv) == TY_FLOAT_ARRAY) {

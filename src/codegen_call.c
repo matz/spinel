@@ -10102,13 +10102,8 @@ int poly_inert(Compiler *c, int node) {
        (`1 == obj` asks obj). An operator the program reopens on Integer
        or Float is renamed to its method before this (`__int_^__N`), so
        it is a call like any other here. */
-    if (!call_is_scalar_op(c, node) || !poly_inert(c, nt_ref(nt, node, "receiver"))) return 0;
-    const int *av = call_args(nt, node, &n);
-    for (int i = 0; i < n; i++) {
-      TyKind at = comp_ntype(c, av[i]);
-      if ((at != TY_INT && at != TY_FLOAT && at != TY_BOOL) || !poly_inert(c, av[i])) return 0;
-    }
-    return 1;
+    if (!scalar_op_over_scalars(c, node) || !poly_inert(c, nt_ref(nt, node, "receiver"))) return 0;
+    return poly_inert(c, call_args(nt, node, &n)[0]);
   }
   default:
     return 0;
@@ -12174,13 +12169,7 @@ static int arg_runs_nothing(Compiler *c, int n) {
       const char *nm = nt_str(nt, n, "name");
       if (!subtree_is_pure_read(c, n) ||
           (r >= 0 && nm && comp_builtin_kind_reopen_mi(c, comp_ntype(c, r), nm) >= 0)) return 0;
-      if (call_is_scalar_op(c, n)) {
-        int a = nt_ref(nt, n, "arguments"), ac = 0;
-        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-        if (comp_ntype(c, r) == TY_BOOL) return 0;
-        for (int i = 0; i < ac; i++)
-          if (comp_ntype(c, av[i]) != TY_INT && comp_ntype(c, av[i]) != TY_FLOAT) return 0;
-      }
+      if (call_is_scalar_op(c, n) && !scalar_op_over_numbers(c, n)) return 0;
       break;
     }
     case NK_AssocNode: {
@@ -26312,16 +26301,6 @@ static int plain_name_answer(Compiler *c, const char *nm, int reader) {
   if ((kept[used].name = strdup(nm)) != NULL) { kept[used].reader = (char)reader; kept[used++].answer = (char)ans; }
   return ans;
 }
-/* Is the operator's operand typed a number or a boolean? An Integer's or a
-   Float's operator hands an operand of any other class to that operand's
-   own `coerce`, or to its `==`: the program's code. */
-static int plain_operand_is_scalar(Compiler *c, int call) {
-  const NodeTable *nt = c->nt;
-  int a = nt_ref(nt, call, "arguments"), ac = 0;
-  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-  TyKind t = ac == 1 ? comp_ntype(c, av[0]) : TY_UNKNOWN;
-  return t == TY_INT || t == TY_FLOAT || t == TY_BOOL;
-}
 static int plain_name_is_builtin(Compiler *c, const char *nm) {
   return plain_name_answer(c, nm, 0);
 }
@@ -26340,7 +26319,7 @@ static int plain_calls_own(Compiler *c, int a) {
     int alloc = 0;
     if (!nm) return 1;
     if (!plain_name_answer(c, nm, call_is_field_read(c, a, &alloc))) return 1;
-    if (call_is_scalar_op(c, a) && !plain_operand_is_scalar(c, a)) return 1;
+    if (call_is_scalar_op(c, a) && !scalar_op_over_scalars(c, a)) return 1;
   }
   int nr = nt_num_refs(nt, a);
   for (int i = 0; i < nr; i++)
@@ -26403,7 +26382,7 @@ int subtree_is_plain_value(Compiler *c, int id) {
              !operand_may_allocate(c, recv);
       /* an operator on scalars whose operand is one of the forms here */
       else if (ac == 1)
-        ok = call_is_scalar_op(c, id) && plain_operand_is_scalar(c, id) && subtree_is_plain_value(c, av[0]);
+        ok = scalar_op_over_scalars(c, id) && subtree_is_plain_value(c, av[0]);
       return ok && plain_name_is_builtin(c, nm);
     }
     default:
@@ -27620,16 +27599,6 @@ static int format_is_held(Compiler *c, int v) {
 static int format_ran_first(int recv, int r) {
   return arg_ran_first(recv, 0) || arg_ran_first(r, 0);
 }
-/* Is the operator's operand typed a number or a boolean? An Integer's or a
-   Float's operator hands an operand of any other class to that operand's
-   own `coerce`, or to its `==`: the program's code. */
-static int format_operand_is_scalar(Compiler *c, int call) {
-  const NodeTable *nt = c->nt;
-  int a = nt_ref(nt, call, "arguments"), ac = 0;
-  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-  TyKind t = ac == 1 ? comp_ntype(c, av[0]) : TY_UNKNOWN;
-  return t == TY_INT || t == TY_FLOAT || t == TY_BOOL;
-}
 /* Is a call of `nm` on a builtin's value provably the builtin's own? Only
    where the program as written gives no class a method of that name
    (an_prog_never_gives, analyze.c): no def and no Symbol of the name, no
@@ -27651,7 +27620,7 @@ static int format_arg_calls_own(Compiler *c, int a) {
   if (nt_kind(nt, a) == NK_CallNode) {
     const char *nm = nt_str(nt, a, "name");
     if (!nm || !format_name_is_builtin(nm)) return 1;
-    if (call_is_scalar_op(c, a) && !format_operand_is_scalar(c, a)) return 1;
+    if (call_is_scalar_op(c, a) && !scalar_op_over_scalars(c, a)) return 1;
   }
   int nr = nt_num_refs(nt, a);
   for (int i = 0; i < nr; i++)
@@ -35528,13 +35497,7 @@ static int sn_arg_runs_nothing(Compiler *c, int n) {
       const char *nm = nt_str(nt, n, "name");
       if (!subtree_is_pure_read(c, n) ||
           (r >= 0 && nm && comp_builtin_kind_reopen_mi(c, comp_ntype(c, r), nm) >= 0)) return 0;
-      if (call_is_scalar_op(c, n)) {
-        int a = nt_ref(nt, n, "arguments"), ac = 0;
-        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-        if (comp_ntype(c, r) == TY_BOOL) return 0;
-        for (int i = 0; i < ac; i++)
-          if (comp_ntype(c, av[i]) != TY_INT && comp_ntype(c, av[i]) != TY_FLOAT) return 0;
-      }
+      if (call_is_scalar_op(c, n) && !scalar_op_over_numbers(c, n)) return 0;
       break;
     }
     case NK_AssocNode: {

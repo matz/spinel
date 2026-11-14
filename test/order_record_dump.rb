@@ -4,9 +4,10 @@
 # and goes in its place ahead of the consumer; HOLD: a read a later
 # operand may change, taken in its place; INLINE: read at the consumer),
 # whether it runs code and whether code runs after it (across), or `none`
-# for a list with nothing to bind. The shapes are the minimal programs of
-# the operand-order groups, and reads beside a part whose implicit to_s,
-# to_proc or **-splat may run a method of the program's.
+# for a list with nothing to bind (an empty one too). The shapes are the
+# minimal programs of the operand-order groups, and reads beside a part
+# whose implicit to_s, to_proc, to_int (an Integer's operator over an
+# object) or **-splat may run a method of the program's.
 require "tmpdir"
 
 PROGRAMS = [
@@ -154,6 +155,77 @@ PROGRAMS = [
       [b]
     end
     p m5
+  RUBY
+  ["c1_shift_to_int.rb", <<~'RUBY'],
+    class O
+      def initialize(k) = @k = k
+      def to_int; @k.bump; 2; end
+    end
+    class K
+      def initialize; @x = 1; end
+      def bump; @x = 9; end
+      def run(o) = [@x, 1 << o]
+      def plain(n) = [@x, 1 << n]
+    end
+    k = K.new
+    p k.run(O.new(k))
+    p k.plain(2)
+  RUBY
+  ["c2_rescue_cvar.rb", <<~'RUBY'],
+    class C
+      @@x = 1
+      def self.m(d) = [@@x, (begin; 1 / d; rescue => @@x; end)]
+      def self.f = [@@x, (for @@x in [5]; end)]
+    end
+    p C.m(0)
+    p C.f
+  RUBY
+  ["c3_reader_literal_recv.rb", <<~'RUBY'],
+    class K
+      attr_reader :w
+      def initialize = (@w = 1)
+    end
+    class L
+      attr_reader :w
+      def initialize = (@w = 2)
+    end
+    class Integer
+      def w = (C.bump; 0)
+    end
+    class C
+      @@x = 1
+      def self.bump = (@@x = 9)
+      def self.m(o) = [@@x, o.w]
+      def self.n(o) = [@@x, o.w]
+    end
+    p C.m(K.new)
+    p C.m(3)
+    p C.n(K.new)
+    p C.n(L.new)
+  RUBY
+  ["c4_local_write_chain.rb", <<~'RUBY'],
+    def f(a) = a
+    def g(a, b) = [a, b]
+    x = 0
+    a = 1
+    p f(f(f(x = 1)))
+    p g(a, g(a, g(a, (a = 2))))
+    p [a, x]
+  RUBY
+  ["c4_ivar_writes.rb", <<~'RUBY'],
+    class K
+      def initialize = (@a = 1; @b = 2; @c = 3)
+      def set_a = (@a = 9)
+      def three = (@c = 1; @c = 2; @c = 3)
+      def run = [@a, @b, three, set_a, (@b = 5)]
+    end
+    p K.new.run
+  RUBY
+  ["c5_empty_lists.rb", <<~'RUBY'],
+    def foo = 1
+    a = []
+    h = {}
+    p a, h, foo
   RUBY
 ]
 

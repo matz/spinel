@@ -124,6 +124,11 @@ typedef struct { unsigned char all, bv, os, pr, bc; unsigned long long bk[CLS_BK
 /* A hashed name set (keys borrowed, not copied); zero-initialize to start (anh_*, analyze_internal.h). */
 typedef struct { const char **key; int *next, *head, n, cap, nb; } ANameHash;
 static inline int cls_bk_has(const ClsSet *s, int k) { return (int)((s->bk[k >> 6] >> (k & 63)) & 1); }
+/* does the builtin part by class hold any class (a literal's seed has it with bv 0)? */
+static inline int cls_bk_any(const ClsSet *s) {
+  for (int i = 0; i < CLS_BK_WORDS; i++) if (s->bk[i]) return 1;
+  return 0;
+}
 /* the position of the first word at word index q or past it */
 static inline int cls_set_word_from(const ClsSet *s, int q) {
   int lo = 0, hi = s->nw;
@@ -2101,8 +2106,14 @@ int comp_is_local_write(NodeKind k);
 int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth);
 /* ...its answer at `id` itself: 1 yes, 0 no for the whole subtree, -1 ask
    the node's operands (a self call's method body is asked here, one level
-   deeper). The operand-order record composes it over a memo. */
+   deeper). */
 int node_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth);
+/* Both questions' one rule, for every instance variable at once: each name
+   the node (subtree) may write is handed to `add`, which answers nonzero to
+   stop; 1 when it may write any or `add` stopped it, else as above. */
+typedef int (*IvarWriteFn)(void *ctx, const char *iv);
+int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx);
+int subtree_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx);
 int comp_lvw_first(Compiler *c, const char *name);
 int comp_module_includes(Compiler *c, int m, int mod, int depth);
 int comp_class_singleton_has_module(Compiler *c, int ci, int mod);

@@ -1055,6 +1055,15 @@ int attr_as_def(NodeTable *nt, int call, const char *base, int writer);   /* `de
 typedef struct { const char *sel; int val; const char *callee; int hist, stmt; } DispArm;
 int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, int blk,
                    const DispArm *arm, int narm, int els);
+/* `if <arm[0].sel> == <arm[0].val> || ... then <then> end`, a statement
+   ahead of a call kept as it is behind its versions' cells, and `(<st[0]>;
+   ...; <expr>)` (analyze_desugar.c) */
+int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then);
+int disp_ahead(NodeTable *nt, const int *st, int n, int expr);
+/* The operands of call id that run code held in locals in CRuby's order,
+   their writes into *pre, malloc'd with room for one more (analyze.c): how
+   many, -1 for a form not held */
+int sd_hold_call_operands(Compiler *c, int id, int **pre);
 int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar, int vcall);
 int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);

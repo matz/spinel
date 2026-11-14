@@ -1979,6 +1979,11 @@ typedef struct {
   unsigned ver_ix_nb;
   struct VerPin { int node, scope, vis; } *ver_pins;
   int nver_pins;
+  /* the names of main's builtins whose calls the plan put behind an
+     undef's cell (ver_main_undef_guards), whose cells are written as an
+     entry's chain's are, once (cells) */
+  struct VerGuard { const char *name; int cells; } *ver_guards;
+  int nver_guards;
   /* the entries are made (ver_entries_build): the versions the calls get
      are kept, and a call that reaches a later prepend's copy binds its
      guard entry */

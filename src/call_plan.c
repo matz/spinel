@@ -3362,6 +3362,24 @@ static int ct_main_stopped(Compiler *c, int id, const char *name) {
      answers the call instead: not told apart here, so none stops) */
   return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, 0) < 0 && ct_runs_on_main(c, id);
 }
+static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml);
+/* Does call id, by its own name on main (ct_runs_on_main), meet an undef
+   of `name` on main's chain that may or may not have run: at no load
+   point, or at one where the record cannot say (elab_main_singleton_at's
+   ELAB_UNKNOWN), of a builtin main answers (builtin_self_method_known)
+   that no program method does? Where it ran, the call stops as one
+   ct_main_stopped stops (where no program method_missing answers it), so
+   the plan puts the call behind the undef's cell (ver_main_undef_guards).
+   Not a call an entry's arm pins. */
+static int ct_main_builtin_undef(Compiler *c, int id, const char *name) {
+  const LrDef *d = NULL;
+  unsigned f = CT_TOP;
+  if (!builtin_self_method_known(name, BSELF_MAIN) || ct_pin_of(c, id) != -1 || !ver_chain_undef(c, -1, 1, name) ||
+      comp_main_method(c, METHOD_MISSING_NAME) >= 0 || cplan_mm_method(c, -1, 0) >= 0 || !ct_runs_on_main(c, id) ||
+      ct_lookup(c, id, -1, name, &f, NULL) >= 0) return 0;
+  LoadPoint p = elab_point_of(c, id);
+  return p.region < 0 || elab_main_singleton_at(c, name, p, &d) == ELAB_UNKNOWN;
+}
 /* The method call id reaches when it can reach only main's own method of
    `name`: a call on main (ct_on_main) at a load point where main's method
    is defined, which CRuby's lookup finds ahead of Object's. -1 for any
@@ -9874,6 +9892,79 @@ static void ver_vcall_twins(Compiler *c) {
   }
   free(vn);
 }
+/* Put each call ct_main_builtin_undef answers behind the cells of the
+   undefs on main's chain (disp_cell_guard): its operands that run code
+   are held first, in CRuby's order (sd_hold_call_operands: ahead of the
+   lookup, as CRuby evaluates them), then `raise ... if <an undef ran>`,
+   then the call over the held operands: ahead of it in its statement
+   list, or `(<those>; <the call>)` where it is a value (disp_ahead), and
+   in an interpolation's part, whose statements the emitter runs after
+   the setup of the part's value. The raise is the one an entry's undef arm raises (ver_no_method_raise:
+   NameError for a variable-like call). The call itself keeps the
+   builtin's binding and lowering. A call that is the receiver of another
+   is guarded with that one, outermost: the receiver runs first, and a
+   lowering that reads its receiver's call (`binding.x`) still sees it.
+   Not a call under defined?, which answers for the call itself. The calls
+   are found with one parent map and guarded deepest first, so a call in
+   another's operands is guarded before that one holds it. Each name's
+   cells are written as an entry's chain's (Compiler.ver_guards,
+   ver_cells_put). */
+typedef struct { int id, top, depth; } VerGuardAt;
+static int ver_guard_at_cmp(const void *a, const void *b) {
+  const VerGuardAt *x = a, *y = b;
+  return x->depth != y->depth ? y->depth - x->depth : x->id - y->id;
+}
+static void ver_main_undef_guards(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  ElabVersion vs[VER_MAX_ARMS];
+  DispArm arm[VER_MAX_ARMS];
+  char sel[VER_MAX_ARMS][32];
+  int *par = NULL, nat = 0;
+  VerGuardAt *at = NULL;
+  for (int id = 0, n0 = nt->count; id < n0; id++) {
+    const char *name = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+    if (!name || !ct_main_builtin_undef(c, id, name)) continue;
+    if (!par && !(par = du_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    /* (No two such calls share a top: one runs on main, receiverless or on
+       self (ct_runs_on_main), so it is the innermost call of its receiver
+       chain, and a chain holds one. A guard replaces only its own top in
+       that top's parent, the parent's other children staying where they
+       are, and a call in another's operands is the deeper, guarded first,
+       so the map still holds for every top after it.) */
+    int top = id, depth = 0;
+    while (par[top] >= 0 && nt_kind(nt, par[top]) == NK_CallNode && nt_ref(nt, par[top], "receiver") == top) top = par[top];
+    if (par[top] < 0 || nt_kind(nt, par[top]) == NK_DefinedNode) continue;
+    for (int a = id; a >= 0; a = par[a]) depth++;
+    if (!(nat & (nat - 1)) && !(at = realloc(at, sizeof *at * (size_t)(nat ? 2 * nat : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    at[nat++] = (VerGuardAt){ id, top, depth };
+  }
+  if (nat) qsort(at, (size_t)nat, sizeof *at, ver_guard_at_cmp);
+  for (int g = 0; g < nat; g++) {
+    int id = at[g].id, top = at[g].top, na = 0, *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
+    const char *name = nt_str(nt, id, "name");
+    if (np < 0) { free(pre); continue; }   /* (left as the table answers it) */
+    for (int i = 0, nv = elab_chain_versions(c, -1, 1, name, vs, VER_MAX_ARMS); i < nv; i++) {
+      if (vs[i].v->kind != LR_UNDEF) continue;
+      ver_cell_name(vs[i].cell, sel[na]);
+      arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].cell + 1, 0 };
+      na++;
+    }
+    pre[np++] = disp_cell_guard(nt, arm, na, ver_no_method_raise(c, -1, 1, name, 0, nt_vcall(nt, id)));
+    int pl = par[top], in_list = nt_kind(nt, pl) == NK_StatementsNode && par[pl] >= 0 && nt_kind(nt, par[pl]) != NK_EmbeddedStatementsNode;
+    if (in_list) for (int k = 0; k < np; k++) ver_list_put(nt, pl, top, 0, pre[k]);
+    else nt_replace_child(nt, pl, top, disp_ahead(nt, pre, np, top));
+    free(pre);
+    int k = 0;
+    while (k < c->nver_guards && !sp_streq(c->ver_guards[k].name, name)) k++;
+    if (k < c->nver_guards) continue;
+    if (!(k & (k - 1)) && !(c->ver_guards = realloc(c->ver_guards, sizeof *c->ver_guards * (size_t)(k ? 2 * k : 1)))) {
+      fprintf(stderr, "spinel: out of memory\n"); exit(1);
+    }
+    c->ver_guards[c->nver_guards++] = (struct VerGuard){ name, 0 };
+  }
+  free(at);
+  free(par);
+}
 void ver_entries_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   const char *names[2];
@@ -9896,6 +9987,7 @@ void ver_entries_build(Compiler *c) {
                   ver_arity(c, -1, to, guard_chain(c, s, to, NULL, NULL)), name };
     if (!ver_need_has(c, &o, w)) ver_need_add(&o, w);
   }
+  ver_main_undef_guards(c);
   /* the open histories' entries first: the table answers them, and no call
      of their names asks an entry of the chain behind them */
   ver_named_asks(c, 0);
@@ -10175,6 +10267,36 @@ int cplan_cell_write_dropped(Compiler *c, int id) {
   return nt_kind(nt, id) == NK_GlobalVariableWriteNode && nt_int(nt, id, "ver_cell", 0) &&
          cplan_cell_dropped(c, comp_gvar(c, nt_str(nt, id, "name") + 1));
 }
+/* ...the write of version v's cell at its statement, and with rt that of
+   its visibility cell (with pass 0 only their places taken: written
+   before), into *w; *nh past the cells written */
+static void ver_write_version(NodeTable *nt, const int *par, VerCellsAt *cells, const ElabVersion *v, int rt, int pass, VerWrite **wp, int *nwp, int *nh) {
+  int node = v->v->node, st = ver_write_stmt(nt, par, node);
+  if (st < 0 || par[st] < 0) return;
+  /* (each cell once: an entry without a face may have written the
+     version's; an undef has no visibility to write) */
+  int vw = rt && v->v->kind != LR_REMOVE && v->v->kind != LR_UNDEF && ver_cell_once(cells, node, -2 - v->cell);
+  int cw = ver_cell_once(cells, node, v->cell);
+  if ((!cw && !vw) || !pass) return;
+  /* (ahead of a statement that runs no program code: after one that ends a branch, the write would be the branch's value) */
+  VerWrite x = { par[st], st, node, v->v->kind == LR_REMOVE ? 0 : v->n, v->cell, !ver_stmt_runs_no_code(nt, st), 0, -1, v->v->body != 0 };
+  if (cw) ver_write_add(wp, nwp, x);
+  if (vw) x.n = v->v->vis, x.vis = 1, ver_write_add(wp, nwp, x);
+  if (v->cell >= *nh) *nh = v->cell + 1;
+  /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
+     method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
+  if (nt_int(nt, node, "cond_lone_disp", 0)) {
+    NT_FOREACH_KIND(nt, NK_DefNode, d) {
+      if (!nt_int(nt, d, "cond_arm", 0) || nt_int(nt, d, "cond_disp", -1) != node) continue;
+      int ast = ver_write_stmt(nt, par, d);
+      if (ast < 0 || par[ast] < 0) continue;
+      int acw = ver_cell_once(cells, d, v->cell), avw = vw && ver_cell_once(cells, d, -2 - v->cell);
+      VerWrite y = { par[ast], ast, d, v->n, v->cell, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
+      if (acw) ver_write_add(wp, nwp, y);
+      if (avw) y.n = v->v->vis, y.vis = 1, ver_write_add(wp, nwp, y);
+    }
+  }
+}
 static int ver_cells_put(Compiler *c);
 void ver_cells_write(Compiler *c) {
   ver_cells_put(c);
@@ -10201,10 +10323,10 @@ static int ver_cells_put(Compiler *c) {
   /* (the parents the program's tree reaches: a class_eval block spliced
      into its class body still names its statements, and the statement a
      write goes beside is the class body's) */
-  int *par = c->nver_entries ? du_parent_map(nt) : NULL;
-  VerCellsAt cells = { c->nver_entries ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL, NULL, 0 };
-  if (c->nver_entries && (!cells.at || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int pass = 0; pass < 2; pass++)   /* (the entries written before first: a cell is written once) */
+  int any = c->nver_entries || c->nver_guards, *par = any ? du_parent_map(nt) : NULL;
+  VerCellsAt cells = { any ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL, NULL, 0 };
+  if (any && (!cells.at || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int pass = 0; pass < 2; pass++) {   /* (the entries written before first: a cell is written once) */
   for (int i = 0; i < c->nver_entries; i++) {
     struct VerEntry *e = &c->ver_entries[i];
     /* (not only the entries reached now: a send's arms, made in the fixpoint, reach methods whose calls bind entries this first pass leaves unreached) */
@@ -10249,32 +10371,15 @@ static int ver_cells_put(Compiler *c) {
           reads |= nt_int(nt, tests[k], "ver_hist", 0) == vs[j].cell + 1;
         if (!reads) continue;   /* prepend cells are written at their statements */
       }
-      int node = vs[j].v->node, st = ver_write_stmt(nt, par, node);
-      if (st < 0 || par[st] < 0) continue;
-      /* (each cell once: an entry without a face may have written the
-         version's; an undef has no visibility to write) */
-      int vw = rt && vs[j].v->kind != LR_REMOVE && vs[j].v->kind != LR_UNDEF && ver_cell_once(&cells, node, -2 - vs[j].cell);
-      int cw = ver_cell_once(&cells, node, vs[j].cell);
-      if ((!cw && !vw) || !pass) continue;
-      /* (ahead of a statement that runs no program code: after one that ends a branch, the write would be the branch's value) */
-      VerWrite x = { par[st], st, node, vs[j].v->kind == LR_REMOVE ? 0 : vs[j].n, vs[j].cell, !ver_stmt_runs_no_code(nt, st), 0, -1, vs[j].v->body != 0 };
-      if (cw) ver_write_add(&w, &nw, x);
-      if (vw) x.n = vs[j].v->vis, x.vis = 1, ver_write_add(&w, &nw, x);
-      if (vs[j].cell >= nh) nh = vs[j].cell + 1;
-      /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
-         method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
-      if (nt_int(nt, node, "cond_lone_disp", 0)) {
-        NT_FOREACH_KIND(nt, NK_DefNode, d) {
-          if (!nt_int(nt, d, "cond_arm", 0) || nt_int(nt, d, "cond_disp", -1) != node) continue;
-          int ast = ver_write_stmt(nt, par, d);
-          if (ast < 0 || par[ast] < 0) continue;
-          int acw = ver_cell_once(&cells, d, vs[j].cell), avw = vw && ver_cell_once(&cells, d, -2 - vs[j].cell);
-          VerWrite y = { par[ast], ast, d, vs[j].n, vs[j].cell, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
-          if (acw) ver_write_add(&w, &nw, y);
-          if (avw) y.n = vs[j].v->vis, y.vis = 1, ver_write_add(&w, &nw, y);
-        }
-      }
+      ver_write_version(nt, par, &cells, &vs[j], rt, pass, &w, &nw, &nh);
     }
+  }
+  for (int i = 0; i < c->nver_guards; i++) {   /* (and the cells a guard at a call reads: ver_main_undef_guards) */
+    if (c->ver_guards[i].cells == pass) continue;
+    c->ver_guards[i].cells = 1;
+    for (int j = 0, nv = elab_chain_versions(c, -1, 1, c->ver_guards[i].name, vs, VER_MAX_ARMS); j < nv; j++)
+      ver_write_version(nt, par, &cells, &vs[j], 0, pass, &w, &nw, &nh);
+  }
   }
   ver_copy_writes(c, par, &cells, &w, &nw);
   free(cells.at); free(cells.e); free(par);

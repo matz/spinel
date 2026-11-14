@@ -16438,6 +16438,37 @@ int disp_method_missing_call(NodeTable *nt, const char *name, int ar, int blk) {
   return call;
 }
 
+/* `<arm.sel> == <arm.val>`, an arm's test of its version's cell */
+static int disp_arm_test(NodeTable *nt, const DispArm *arm) {
+  int t = fwd_new_call(nt, cdef_local(nt, "GlobalVariableReadNode", arm->sel), "==", nt_new_int(nt, arm->val));
+  if (arm->hist) nt_node_set_int(nt, t, "ver_hist", arm->hist);
+  return t;
+}
+/* `if <arm[0]'s test> || ... then <then> end` */
+int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then) {
+  int test = disp_arm_test(nt, &arm[0]), ifn = nt_new_node(nt, "IfNode");
+  for (int k = 1; k < narm; k++) {
+    int o = nt_new_node(nt, "OrNode");
+    nt_node_set_ref(nt, o, "left", test);
+    nt_node_set_ref(nt, o, "right", disp_arm_test(nt, &arm[k]));
+    test = o;
+  }
+  nt_node_set_ref(nt, ifn, "predicate", test);
+  nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, then));
+  return ifn;
+}
+/* `(<st[0]>; ...; <expr>)` */
+int disp_ahead(NodeTable *nt, const int *st, int n, int expr) {
+  int *b = malloc(sizeof(int) * (size_t)(n + 1)), s = nt_new_node(nt, "StatementsNode"), p = nt_new_node(nt, "ParenthesesNode");
+  if (!b) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(b, st, sizeof(int) * (size_t)n);
+  b[n] = expr;
+  nt_node_set_arr(nt, s, "body", b, n + 1);
+  nt_node_set_ref(nt, p, "body", s);
+  free(b);
+  return p;
+}
+
 /* A dispatcher: a def named `name` (on self when sg) at `like`'s place,
    whose body is
 
@@ -16459,9 +16490,7 @@ int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, in
   for (int k = narm - 1; k >= 0; k--) {
     int call = arm[k].stmt ? arm[k].stmt - 1 : disp_forward_call(nt, arm[k].callee, ar, blk);
     int ifn = nt_new_node(nt, "IfNode");
-    nt_node_set_ref(nt, ifn, "predicate", fwd_new_call(nt, cdef_local(nt, "GlobalVariableReadNode", arm[k].sel), "==",
-                                                       nt_new_int(nt, arm[k].val)));
-    if (arm[k].hist) nt_node_set_int(nt, nt_ref(nt, ifn, "predicate"), "ver_hist", arm[k].hist);
+    nt_node_set_ref(nt, ifn, "predicate", disp_arm_test(nt, &arm[k]));
     nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, call));
     nt_node_set_ref(nt, ifn, "subsequent", chain);
     chain = ifn;

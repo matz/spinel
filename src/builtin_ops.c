@@ -3245,15 +3245,19 @@ int bop_flags(TyKind rt, const char *name) {
 /* The rows are sorted by kind, so a name's rows lie apart: the scan is over
    the table, with the first letter tested before the name. A library's row
    says what CRuby's method takes only where its fact holds
-   (builtin_library_fact_holds). */
-static int bop_name_rows(const char *name, int want_kw) {
-  if (!name) return 0;
-  for (int i = 0; i < BOP_NROWS; i++) {
-    const BuiltinOp *r = &bop_rows[i];
-    if (r->name[0] != name[0] || !sp_streq(r->name, name)) continue;
-    if (!builtin_library_fact_holds(r->feature)) continue;
-    if (!!(r->flags & BOPF_KEYWORDS) == want_kw) return 1;
+   (builtin_library_fact_holds). The next row of `name` after row *i (-1 to
+   start) whose library the program has, NULL past the last. */
+static const BuiltinOp *bop_name_row_next(const char *name, int *i) {
+  while (name && ++*i < BOP_NROWS) {
+    const BuiltinOp *r = &bop_rows[*i];
+    if (r->name[0] == name[0] && sp_streq(r->name, name) && builtin_library_fact_holds(r->feature)) return r;
   }
+  return NULL;
+}
+static int bop_name_rows(const char *name, int want_kw) {
+  const BuiltinOp *r;
+  for (int i = -1; (r = bop_name_row_next(name, &i));)
+    if (!!(r->flags & BOPF_KEYWORDS) == want_kw) return 1;
   return 0;
 }
 int bop_name_kwless(const char *name) { return bop_name_rows(name, 0); }
@@ -3273,25 +3277,24 @@ int bop_kernel_answers(const char *name, int argc, int has_block) {
   return 0;
 }
 
-/* See builtin_ops.h. */
-const char *bop_row_class(const BuiltinOp *r) {
-  if (r->flags & (BOPF_INTERNAL | BOPF_BASIC_OBJECT)) return NULL;
-  switch (r->recv) {
-  case TY_POLY: case BOP_KERNEL: case BOP_IVAR_LESS: case TY_CLASS: return NULL;
-  case BOP_ANY_ARRAY: return "Array";
-  case BOP_ANY_HASH: return "Hash";
-  case TY_IO: return "IO";
-  default: return core_class_name(core_of_type(r->recv));
-  }
+/* Is the row a method of a builtin class below Object, one a send to a
+   value of it reaches ahead of a top-level def: of a kind the core classes
+   name (core_of_type: an IO's rows are every IO's, a File and a socket
+   among them), or of every Array or Hash kind? Not Object's own surface
+   (TY_POLY, BOP_KERNEL, BOP_IVAR_LESS), Module's (TY_CLASS,
+   bop_class_answers), BasicObject's (BOPF_BASIC_OBJECT) or the compiler's
+   own (BOPF_INTERNAL). */
+static int bop_row_below_object(const BuiltinOp *r) {
+  if ((r->flags & (BOPF_INTERNAL | BOPF_BASIC_OBJECT)) || r->recv == TY_CLASS) return 0;
+  return r->recv == BOP_ANY_ARRAY || r->recv == BOP_ANY_HASH || core_of_type(r->recv) >= 0;
 }
 
 /* See builtin_ops.h. */
 int bop_below_object_answers(const char *name) {
-  for (int i = 0; name && !builtin_object_method_known(name) && i < BOP_NROWS; i++) {
-    const BuiltinOp *r = &bop_rows[i];
-    if (r->name[0] == name[0] && sp_streq(r->name, name) && bop_row_class(r) &&
-        builtin_library_fact_holds(r->feature)) return 1;
-  }
+  const BuiltinOp *r;
+  if (!name || builtin_object_method_known(name)) return 0;
+  for (int i = -1; (r = bop_name_row_next(name, &i));)
+    if (bop_row_below_object(r)) return 1;
   return 0;
 }
 

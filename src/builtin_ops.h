@@ -468,14 +468,6 @@ int bop_flags(TyKind rt, const char *name);
 int bop_name_kwless(const char *name);
 /* Is there a row of `name` that takes keywords (BOPF_KEYWORDS)? */
 int bop_name_keywords(const char *name);
-/* The builtin class below Object whose instances the row is a method of
-   ("Integer", "Array" for an Array kind, "IO" for the rows every IO answers,
-   a File and a socket among them), NULL for the rows that are not a send's
-   to a value of one: Object's own surface (TY_POLY, BOP_KERNEL,
-   BOP_IVAR_LESS), Module's (TY_CLASS, bop_class_answers), BasicObject's
-   (BOPF_BASIC_OBJECT), the compiler's own (BOPF_INTERNAL), and a kind no
-   builtin class states. */
-const char *bop_row_class(const BuiltinOp *r);
 /* Does a builtin class below Object have a row of `name`, a method it
    defines as the compiler implements it (StopIteration#result, IO#write),
    in a library the program has (builtin_library_fact_holds)?

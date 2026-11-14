@@ -201,9 +201,12 @@ The single-threaded runtime ignores the keyword.
 The worker itself stays in the call: `blocking: true` frees the other
 workers from waiting for it, not the green threads that share it. A thread
 stays for life on the worker it first ran on ([thread.md](thread.md)), so
-the others there wait until the call returns, as under
-`SPINEL_WORKERS=1`. With `SPINEL_WORKERS=2`, every thread started by a main
-that only joins runs on the one helper, so one long call there (a SQLite
+the others there wait while the call runs C, as under `SPINEL_WORKERS=1`.
+They run again whenever the call is back in Ruby and that Ruby waits: an
+`ffi_callback` (below) that sleeps or waits on I/O parks its thread, and the
+worker runs the others until the callback resumes. With
+`SPINEL_WORKERS=2`, every thread started by a main that only joins runs on
+the one helper, so one long call there (a SQLite
 step waiting on a lock, a resolver that does not answer) holds every other
 thread for as long. More workers spread the threads over more helpers;
 waiting in Ruby instead (a `sleep`, or an I/O wait) parks the thread in the

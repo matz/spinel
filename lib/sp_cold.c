@@ -439,8 +439,17 @@ static double sp_c_num(const char *p, char **end) {
   *end = (char *)q;
   return v;
 }
+/* A part the parse read as a Float ("1.0", "2e3") or as a Rational ("1/2",
+   which a Complex keeps in its Float slot, as Complex(Rational(1, 2), 0)
+   does): the part-kind flag the Complex carries, so "1.0+2i".to_c is
+   (1.0+2i) and eql? to Complex(1.0, 2). */
+static int sp_c_num_is_f(const char *p, const char *end) {
+  for (; p < end; p++) if (*p == '.' || *p == 'e' || *p == 'E' || *p == '/') return 1;
+  return 0;
+}
 static sp_Complex sp_str_to_c_impl(const char *s, int strict) {
   double re = 0, im = 0;
+  unsigned char fl = 0;
   int parsed = 0;
   const char *fin = s;   /* first byte NOT consumed by the parse */
   if (s) {
@@ -454,14 +463,16 @@ static sp_Complex sp_str_to_c_impl(const char *s, int strict) {
       parsed = 1;
       /* rational-syntax component "n/d" */
       if (*end == '/') { const char *dp = end + 1; char *de = NULL; double d = sp_c_num(dp, &de); if (de != dp) { sp_str_to_c_zero_den(dp, d); a /= d; end = de; } }
-      if (*end == 'i') { im = a; fin = end + 1; }
+      int af = sp_c_num_is_f(p, end);
+      if (*end == 'i') { im = a; fin = end + 1; if (af) fl |= SP_CPLX_IM_F; }
       else {
         re = a;
+        if (af) fl |= SP_CPLX_RE_F;
         const char *q = end;
         double b2 = sp_c_num(q, &end);
         if (end != q) {
           if (*end == '/') { const char *dp = end + 1; char *de = NULL; double d = sp_c_num(dp, &de); if (de != dp) { sp_str_to_c_zero_den(dp, d); b2 /= d; end = de; } }
-          if (*end == 'i') { im = b2; fin = end + 1; }
+          if (*end == 'i') { im = b2; fin = end + 1; if (sp_c_num_is_f(q, end)) fl |= SP_CPLX_IM_F; }
           else fin = q;   /* an imaginary number without the 'i' suffix ("1+2") is invalid */
         }
         else if ((*q == '+' || *q == '-') && q[1] == 'i') { im = (*q == '-') ? -1.0 : 1.0; fin = q + 2; }
@@ -484,7 +495,7 @@ static sp_Complex sp_str_to_c_impl(const char *s, int strict) {
     if (sp_convert_soft) { sp_convert_failed = 1; return (sp_Complex){ 0.0, 0.0 }; }
     sp_raise_cls("ArgumentError", sp_sprintf("invalid value for convert(): \"%s\"", s ? s : ""));
   }
-  return (sp_Complex){ (sp_float)re, (sp_float)im };
+  return (sp_Complex){ (sp_float)re, (sp_float)im, fl };
 }
 /* String#to_c: a leading complex, the rest ignored, (0+0i) when none. */
 sp_Complex sp_str_to_c(const char *s) { return sp_str_to_c_impl(s, 0); }

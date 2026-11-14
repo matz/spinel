@@ -33,3 +33,15 @@ false
 true
 true
 0
+true
+true
+1
+true
+(1.0+2i)
+(1+2.5i)
+(0+300.0i)
+(2-1.0i)
+(7+0i)
+(1+2i)
+true
+true

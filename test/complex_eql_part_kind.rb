@@ -41,3 +41,13 @@ p D.new(Complex(1, 0)).eql?(D.new(Complex(1.0, 0)))
 p D.new(Complex(1, 0)).eql?(D.new(Complex(1, 0)))
 p D.new(Complex(1, 0)) == D.new(Complex(1.0, 0))
 p [Complex(1,0), Complex(1.0, 0)].index(Complex(1.0, 0))
+# a String's parts keep their kinds
+p ["1.0+2i".to_c, 1].first.eql?(Complex(1.0, 2))
+p({"1.0+2i".to_c => 1}.key?(Complex(1.0, 2)))
+p ["1.0+2i".to_c, Complex(1.0, 2)].uniq.size
+p Complex("1.5").eql?(Complex(1.5, 0))
+p "1.0+2i".to_c, "1+2.5i".to_c, "3e2i".to_c, "2-1.0i".to_c, "7".to_c, Complex("1+2i")
+p "1+2i".to_c.eql?(Complex(1, 2))
+# the same object is eql? to itself, even with a NaN part
+a = [Complex(Float::NAN, 0), 1]
+p a[0].eql?(a[0])

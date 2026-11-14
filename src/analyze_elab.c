@@ -8170,14 +8170,23 @@ static int lr_cref(Compiler *c, int e) {
   return LR_MAIN;
 }
 
+/* The next of the source's constant writes of `name` after index i (-1: the first), or -1 for none; with
+   `values`, only writes that give it a value (`O = Object`, `ERR = e`, `K = e.class`), not class or module headers */
+static int lr_srcw_next(const LoadRecord *r, const NodeTable *nt, const char *name, int i, int values) {
+  for (i++; i < r->nsrcw; i++) {
+    NodeKind wk = nt_kind(nt, r->srcw[i].node);
+    if (sp_streq(r->srcw[i].name, name) && !(values && (wk == NK_ClassNode || wk == NK_ModuleNode))) return i;
+  }
+  return -1;
+}
+
 /* An unknown singleton owner has no constant table the record can search.
    A source write in such a body can hide an enclosing constant; after
    lexical lookup, a source write can belong to an unsearched ancestor. */
 static int lr_singleton_const_written(Compiler *c, const char *name, int own) {
   const LoadRecord *r = c->lrec;
   const int *par = NULL;
-  for (int i = 0; i < r->nsrcw; i++) {
-    if (!sp_streq(r->srcw[i].name, name)) continue;
+  for (int i = lr_srcw_next(r, c->nt, name, -1, 0); i >= 0; i = lr_srcw_next(r, c->nt, name, i, 0)) {
     if (!own) return 1;
     if (!par) par = comp_parent_map(c);
     for (int a = par[r->srcw[i].node]; a >= 0; a = par[a]) {
@@ -8273,9 +8282,9 @@ static int lr_later_alias(Compiler *c, int owner, const char *name) {
   LoadRecord *r = c->lrec;
   const NodeTable *nt = c->nt;
   const int *par = NULL;
-  for (int i = 0; i < r->nsrcw; i++) {
+  for (int i = lr_srcw_next(r, nt, name, -1, 0); i >= 0; i = lr_srcw_next(r, nt, name, i, 0)) {
     int w = r->srcw[i].node, in = LR_MAIN;
-    if (!sp_streq(r->srcw[i].name, name) || nt_kind(nt, w) != NK_ConstantWriteNode || !sp_streq(lr_written_name(nt, w), name)) continue;
+    if (nt_kind(nt, w) != NK_ConstantWriteNode || !sp_streq(lr_written_name(nt, w), name)) continue;
     if (!par) par = comp_parent_map(c);
     int a = elab_lexical_header(nt, par, w);
     if (a >= 0) in = nt_kind(nt, a) == NK_SingletonClassNode ? LR_UNKNOWN_CLASS : elab_header_class(c, a, NULL, NULL);
@@ -9419,23 +9428,13 @@ static int lr_write_path(const NodeTable *nt, int w) {
   return p >= 0 && (p == w || nt_kind(nt, p) == NK_ConstantPathNode) ? p : -1;
 }
 
-/* Does the source give constant `name` a value by a write other than a class or module header
-   (`O = Object`, `ERR = e`, `K = e.class`)? */
-static int lr_src_valued(const LoadRecord *r, const NodeTable *nt, const char *name) {
-  for (int i = 0; i < r->nsrcw; i++) {
-    NodeKind wk = nt_kind(nt, r->srcw[i].node);
-    if (wk != NK_ClassNode && wk != NK_ModuleNode && sp_streq(r->srcw[i].name, name)) return 1;
-  }
-  return 0;
-}
-
 /* May constant cp (a header's name, a path's parent) hold Object? Where it
    is no constant, is Object's name, or is a name a write other than a
    header gives (`O = Object; class O`) */
 static int lr_may_name_object(const LoadRecord *r, const NodeTable *nt, int cp) {
   NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NONE;
   const char *leaf = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? lr_written_name(nt, cp) : NULL;
-  return !leaf || is_object_class_name(leaf) || lr_src_valued(r, nt, leaf);
+  return !leaf || is_object_class_name(leaf) || lr_srcw_next(r, nt, leaf, -1, 1) >= 0;
 }
 
 /* Does the program's source write constant `name` (a write of any form, a
@@ -9451,8 +9450,7 @@ int elab_source_writes_const(Compiler *c, const char *name, int top) {
   LoadRecord *r = lr_get(c);
   const NodeTable *nt = c->nt;
   const int *par = top ? comp_parent_map(c) : NULL;
-  for (int i = 0; i < r->nsrcw; i++) {
-    if (!sp_streq(r->srcw[i].name, name)) continue;
+  for (int i = lr_srcw_next(r, nt, name, -1, 0); i >= 0; i = lr_srcw_next(r, nt, name, i, 0)) {
     int w = r->srcw[i].node, p = top ? lr_write_path(nt, w) : -1, in_top = 1;
     if (p >= 0) in_top = nt_ref(nt, p, "parent") < 0 || lr_may_name_object(r, nt, nt_ref(nt, p, "parent"));
     else if (top) {
@@ -9470,15 +9468,14 @@ int elab_source_writes_const(Compiler *c, const char *name, int top) {
    LoadError only where the program spells it. */
 static int lr_src_opaque(const LoadRecord *r, const NodeTable *nt, const char *name, int depth) {
   if (depth <= 0) return 1;
-  for (int i = 0; i < r->nsrcw; i++) {
+  for (int i = lr_srcw_next(r, nt, name, -1, 1); i >= 0; i = lr_srcw_next(r, nt, name, i, 1)) {
     int w = r->srcw[i].node;
     NodeKind wk = nt_kind(nt, w);
-    if (wk == NK_ClassNode || wk == NK_ModuleNode || !sp_streq(r->srcw[i].name, name)) continue;
     int v = wk == NK_ConstantWriteNode || wk == NK_ConstantPathWriteNode ? nt_ref(nt, w, "value") : -1;
-    if (v >= 0 && nt_kind(nt, v) == NK_CallNode && sp_streq(nt_str(nt, v, "name"), "new")) {
+    if (v >= 0 && nt_kind(nt, v) == NK_CallNode && is_new_name(nt_str(nt, v, "name"))) {
       int rc = nt_ref(nt, v, "receiver"), ac = 0;
       const int *av = call_args(nt, v, &ac);
-      if (rc < 0 || nt_kind(nt, rc) != NK_ConstantReadNode || !sp_streq(nt_str(nt, rc, "name"), "Class") || ac > 1) return 1;
+      if (rc < 0 || nt_kind(nt, rc) != NK_ConstantReadNode || !is_class_const_name(nt_str(nt, rc, "name")) || ac > 1) return 1;
       v = ac ? av[0] : -1;
       if (!ac) continue;
     }
@@ -9495,7 +9492,7 @@ int elab_source_const_opaque(Compiler *c, const char *name) {
 
 /* See analyze.h. */
 int elab_source_values_const(Compiler *c, const char *name) {
-  return lr_src_valued(lr_get(c), c->nt, name);
+  return lr_srcw_next(lr_get(c), c->nt, name, -1, 1) >= 0;
 }
 
 /* May the program write a constant, one already held included, under a

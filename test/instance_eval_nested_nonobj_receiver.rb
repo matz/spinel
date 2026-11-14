@@ -13,3 +13,8 @@ p([A.new, A2.new].map { |o| o.instance_eval { pr = proc { @a }; [@a, B.new.insta
 # a literal block
 p([A.new, A2.new, 5].map { |o| o.instance_eval { [@a, B.new.instance_exec { @a }] } })
 p([A.new, 5].map { |o| o.instance_eval { [@a, B.new.instance_exec { |q = @a| [q, @a] }] } })
+
+# an ivar written only in a nested block (its own receiver's) does not stop
+# the outer body from running on the non-object receiver of a mixed set
+class Z; def initialize = (@z = 0); attr_reader :z; end
+p([A.new, B.new, 5].map { |o| o.instance_eval { s = inspect; c = Z.new; c.instance_eval { @z = 3 }; [@a, s.size > 0, c.z] } })

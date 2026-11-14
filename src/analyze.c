@@ -4421,6 +4421,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
                          const char **need) {
   const char *names[64];
   int nn = ie_self_call_names(c, body, names, 0, 64);
+  nn = ie_self_call_names(c, ie_body_params(c, body), names, nn, 64);
   if (nn == 64) return 0;
   int ask[64], nask = 0;
   for (int i = 0; i < nn; i++) {
@@ -4437,6 +4438,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   const char *ivs[64]; int niv = 0;
   if (nask == 0) {
     niv = ie_ivar_names(c, body, ivs, 0, 64);
+    niv = ie_ivar_names(c, ie_body_params(c, body), ivs, niv, 64);
     if (niv == 0 || niv == 64) return 0;
     if (need) *need = name;
   }
@@ -5389,7 +5391,10 @@ void build_ie_map(Compiler *c) {
         if (tb < 0) continue;
         pend[tb] = pend[tb] == -1 || pend[tb] == cls ? cls : -2 - id;
         mark_ie_own(c, tb, pend[tb]);
-        if (rb) ie_rb_mark(nt, rb_new, rb_n, tb, IE_RB_IN);
+        if (rb) {
+          ie_rb_mark(nt, rb_new, rb_n, tb, IE_RB_IN);
+          ie_rb_mark(nt, rb_new, rb_n, ie_body_params(c, tb), IE_RB_IN);
+        }
       }
     }
     if (body < 0) continue;
@@ -42224,6 +42229,27 @@ static int mark_with_kw_nullable(Compiler *c, int cid, const int *ke, int kn) {
   }
   return changed;
 }
+/* An Integer or Float ivar slot that can hold nil keeps it in its nil byte:
+   marked so, once. 1 when the slot changed. */
+static int ivar_slot_mark_nullable(ClassInfo *ci, int iv) {
+  if (ci->ivar_nullable_int[iv]) return 0;
+  if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) return 0;
+  ci->ivar_nullable_int[iv] = 1;
+  comp_touch_class(ci->idx);
+  return 1;
+}
+/* An ivar target of a multiple assignment that can land nil: its slot in each
+   class it stores into (ivar_node_classes, a boxed receiver's too) holds the
+   nil. 1 when a slot changed. */
+static int ivar_target_nullable(Compiler *c, int t) {
+  int cl[64], ncl = ivar_node_classes(c, t, cl, 64, NULL, NULL), changed = 0;
+  for (int q = 0; q < ncl; q++) {
+    ClassInfo *qc = &c->classes[cl[q]];
+    int qiv = comp_ivar_index(qc, nt_str(c->nt, t, "name"));
+    if (qiv >= 0) changed |= ivar_slot_mark_nullable(qc, qiv);
+  }
+  return changed;
+}
 static void mark_nullable_int_locals(Compiler *c) {
   const NodeTable *nt = c->nt; MethodLookup ml = { .def_class = -1 };
   /* A scalar local a read can reach before any write starts as its nil and
@@ -42657,11 +42683,8 @@ static void mark_nullable_int_locals(Compiler *c) {
           ClassInfo *ci = NULL; int iv = -1, is_cv = 0;
           if (tk == NK_ClassVariableTargetNode) { iv = cvar_slot(c, t, &ci); is_cv = 1; }
           else if (tk == NK_InstanceVariableTargetNode) {
-            Scope *s = comp_scope_of(c, t);
-            int cid = s ? s->class_id : -1;
-            if (ie_class_of(c, t) >= 0) cid = ie_class_of(c, t);
-            if (cid < 0) cid = c->toplevel_class;
-            if (cid >= 0 && cid < c->nclasses) { ci = &c->classes[cid]; iv = comp_ivar_index(ci, nt_str(nt, t, "name")); }
+            changed |= ivar_target_nullable(c, t);
+            continue;
           }
           else {
             int trc = nt_ref(nt, t, "receiver");
@@ -42686,11 +42709,7 @@ static void mark_nullable_int_locals(Compiler *c) {
             if (ci->cvar_types[iv] != TY_INT && ci->cvar_types[iv] != TY_FLOAT) continue;
             ci->cvar_nullable_int[iv] = 1; changed = 1;
           }
-          else {
-            if (ci->ivar_nullable_int[iv]) continue;
-            if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) continue;
-            { ci->ivar_nullable_int[iv] = 1; comp_touch_class(ci->idx); } changed = 1;
-          }
+          else changed |= ivar_slot_mark_nullable(ci, iv);
         }
       }
     }
@@ -55294,8 +55313,8 @@ static void an_phase_value_types(Compiler *c) {
           if (sp_streq(qc->ivars[j], ivn) && qc->ivar_types[j] == TY_STRBUF) { qc->is_value_type = 0; break; }
       }
     }
-    /* immutable check: an instance's ivar write outside `initialize`
-       defeats value type (a class method's or a class body's write is the
+    /* immutable check: an instance's ivar write outside its own class's
+       `initialize` defeats value type (a class method's or a class body's write is the
        class object's, holder_ivar_side) */
     if (ty_k == NK_InstanceVariableWriteNode ||
         ty_k == NK_InstanceVariableOperatorWriteNode ||
@@ -55306,7 +55325,7 @@ static void an_phase_value_types(Compiler *c) {
       int q;
       if (s && holder_ivar_side(c, id, &q) == IVS_INST && q >= 0 && q < c->nclasses &&
           c->classes[q].is_value_type &&
-          (!s->name || !sp_streq(s->name, "initialize")))
+          (!s->name || !is_initialize_name(s->name) || s->class_id != q))
         c->classes[q].is_value_type = 0;
       /* a block on a boxed receiver writes the instance of each class it
          runs on (the arms of emit_ie_poly), which a by-value one would take

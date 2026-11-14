@@ -3135,15 +3135,20 @@ static int masgn_attr_take(Compiler *c, int tgt, TyKind elem) {
   return changed;
 }
 
-/* The class whose slot an ivar target tgt of a multiple write in scope ms
-   writes: the method's, outside a method the class body's, or the top
-   level's (the Toplevel pseudo-class), as an `@x = v` write's is. -1 for
-   none yet. */
-static int masgn_ivar_cls(Compiler *c, Scope *ms, int tgt) {
-  int icid = ms ? ms->class_id : -1;
-  if (icid < 0 && c->node_cbody && tgt < c->node_cap) icid = c->node_cbody[tgt];
-  if (icid < 0) icid = c->toplevel_class;
-  return icid;
+/* An ivar target of a multiple write takes `elem`'s type into each slot it
+   writes (ivar_node_classes, as an `@x = v` write's; a pinned ivar keeps
+   its own); 1 when a slot's type changed. */
+static int masgn_ivar_unify(Compiler *c, int tgt, TyKind elem) {
+  const char *nm = nt_str(c->nt, tgt, "name");
+  int cl[64], n = nm ? ivar_node_classes(c, tgt, cl, 64, NULL, NULL) : 0, changed = 0;
+  for (int i = 0; i < n; i++) {
+    ClassInfo *ci = &c->classes[cl[i]];
+    int ix = comp_ivar_index(ci, nm);
+    if (ix < 0 || class_ivar_pinned(ci, nm)) continue;
+    TyKind mg = ty_unify(ci->ivar_types[ix], elem);
+    if (mg != ci->ivar_types[ix]) { ivar_set_type(ci, ix, mg); changed = 1; }
+  }
+  return changed;
 }
 
 static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKind elem) {
@@ -3156,18 +3161,8 @@ static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKi
       LocalVar *lv = lnm ? scope_local(ms, lnm) : NULL;
       changed |= masgn_local_take(c, lv, elem, tgts[i]);
     }
-    else if (sp_streq(lty_ms, "InstanceVariableTargetNode") && ms) {
-      /* outside a method: the class body's slot, or the top level's */
-      int icid = masgn_ivar_cls(c, ms, tgts[i]);
-      if (icid < 0) continue;
-      const char *ivnm = nt_str(nt, tgts[i], "name");
-      int iv_ms = ivnm ? comp_ivar_index(&c->classes[icid], ivnm) : -1;
-      if (iv_ms < 0 || class_ivar_pinned(&c->classes[icid], ivnm)) continue;
-      TyKind mg = ty_unify(c->classes[icid].ivar_types[iv_ms], elem);
-      if (mg != c->classes[icid].ivar_types[iv_ms]) {
-        ivar_set_type(&c->classes[icid], iv_ms, mg); changed = 1;
-      }
-    }
+    else if (nt_kind(nt, tgts[i]) == NK_InstanceVariableTargetNode)
+      changed |= masgn_ivar_unify(c, tgts[i], elem);
     else if (sp_streq(lty_ms, "GlobalVariableTargetNode")) {
       const char *gnm = nt_str(nt, tgts[i], "name");
       const char *grn = gnm ? comp_resolve_gvar(c, gnm + 1) : NULL;
@@ -4822,17 +4817,8 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
    the change detector for these slots (same rule as slot_reset). */
             changed |= masgn_local_take(c, lv, elems[i], value);
           }
-          else if (sp_streq(lty_mr, "InstanceVariableTargetNode") && ms_mr &&
-                   masgn_ivar_cls(c, ms_mr, lefts[i]) >= 0) {
-            int icid = masgn_ivar_cls(c, ms_mr, lefts[i]);
-            const char *ivnm = nt_str(nt, lefts[i], "name");
-            int ivx = ivnm ? comp_ivar_index(&c->classes[icid], ivnm) : -1;
-            if (ivx < 0 || class_ivar_pinned(&c->classes[icid], ivnm)) continue;
-            TyKind mg = ty_unify(c->classes[icid].ivar_types[ivx], elems[i]);
-            if (mg != c->classes[icid].ivar_types[ivx]) {
-              ivar_set_type(&c->classes[icid], ivx, mg); changed = 1;
-            }
-          }
+          else if (nt_kind(nt, lefts[i]) == NK_InstanceVariableTargetNode)
+            changed |= masgn_ivar_unify(c, lefts[i], elems[i]);
           else if (sp_streq(lty_mr, "GlobalVariableTargetNode") || sp_streq(lty_mr, "ClassVariableTargetNode"))
             changed |= masgn_unify_elem(c, ms_mr, &lefts[i], 1, elems[i]);
           else if (sp_streq(lty_mr, "ConstantTargetNode") || sp_streq(lty_mr, "ConstantPathTargetNode")) {
@@ -5008,17 +4994,9 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
         if (lv_widen(cv, et)) changed = 1;
       }
       else if (lk == NK_InstanceVariableTargetNode) {
-        int iv_cid = masgn_ivar_cls(c, comp_scope_of(c, id), lefts[i]);
-        if (iv_cid < 0) continue;
-        const char *ivnm = nt_str(nt, lefts[i], "name");
-        int iv_idx = ivnm ? comp_ivar_index(&c->classes[iv_cid], ivnm) : -1;
-        if (iv_idx < 0 || class_ivar_pinned(&c->classes[iv_cid], ivnm)) continue;
         TyKind et = infer_type(c, els[i]);
         if (et == TY_NIL) et = TY_POLY;
-        TyKind mg = ty_unify(c->classes[iv_cid].ivar_types[iv_idx], et);
-        if (mg != c->classes[iv_cid].ivar_types[iv_idx]) {
-          ivar_set_type(&c->classes[iv_cid], iv_idx, mg); changed = 1;
-        }
+        changed |= masgn_ivar_unify(c, lefts[i], et);
       }
       else if (lk == NK_GlobalVariableTargetNode || lk == NK_ClassVariableTargetNode) {
         TyKind et = infer_type(c, els[i]);
@@ -5092,17 +5070,8 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
       }
       else if (rty3_k == NK_GlobalVariableTargetNode || rty3_k == NK_ClassVariableTargetNode)
         changed |= masgn_unify_elem(c, comp_scope_of(c, id), &rights[j], 1, et);
-      else if (rty3_k == NK_InstanceVariableTargetNode) {
-        int iv_cid3 = masgn_ivar_cls(c, comp_scope_of(c, id), rights[j]);
-        if (iv_cid3 < 0) continue;
-        const char *ivnm3 = nt_str(nt, rights[j], "name");
-        int iv_idx3 = ivnm3 ? comp_ivar_index(&c->classes[iv_cid3], ivnm3) : -1;
-        if (iv_idx3 < 0 || class_ivar_pinned(&c->classes[iv_cid3], ivnm3)) continue;
-        TyKind mg4 = ty_unify(c->classes[iv_cid3].ivar_types[iv_idx3], et);
-        if (mg4 != c->classes[iv_cid3].ivar_types[iv_idx3]) {
-          ivar_set_type(&c->classes[iv_cid3], iv_idx3, mg4); changed = 1;
-        }
-      }
+      else if (rty3_k == NK_InstanceVariableTargetNode)
+        changed |= masgn_ivar_unify(c, rights[j], et);
     }
     /* rest (splat) target: elements [ln, en-rn) become a typed array */
     int rest_nid = nt_ref(nt, id, "rest");

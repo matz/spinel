@@ -2346,7 +2346,12 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       /* a typed array or hash is a pointer too, and a slice past the end
          (`a[4..]&.size`) or a container miss hands it NULL (#4524) */
       int sn_cont = needs_root(rrt) && rrt != TY_POLY && rrt != TY_STRING && !ty_is_object(rrt);
-      if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont) && g_sn_skip != id) {
+      /* any other pointer whose NULL is nil (a Regexp, a Proc, an Exception
+         a nil-defaulted parameter holds): the guard was dropped and the
+         call ran on the nil (#11851) */
+      int sn_ptr = ty_null_is_nil(rrt) && rrt != TY_POLY && rrt != TY_STRING &&
+                   rrr.kind != RK_VOBJ && node_may_be_null_nil(c, recv);
+      if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont || sn_ptr) && g_sn_skip != id) {
         int tsn2 = ++g_tmp;
         /* (an attribute assignment marked to hand out its handle answers it,
            and so does a String Array's element read written as the handle
@@ -2416,9 +2421,11 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         else if (sn_scalar)
           buf_printf(g_pre, "%s _sn%d = %s; %s _snv%d = _sn%d.v;\n", oint_ctype(rrt), tsn2,
                      rsn.p ? rsn.p : oint_nil(rrt), c_type_name(rrt), tsn2, tsn2);
-        else if (sn_cont) {
+        else if (sn_cont || sn_ptr) {
           emit_ctype(c, rrt, g_pre);
-          buf_printf(g_pre, " _sn%d = %s; SP_GC_ROOT(_sn%d);\n", tsn2, rsn.p ? rsn.p : "NULL", tsn2);
+          buf_printf(g_pre, " _sn%d = %s;", tsn2, rsn.p ? rsn.p : "NULL");
+          if (needs_root(rrt)) buf_printf(g_pre, " SP_GC_ROOT(_sn%d);", tsn2);
+          buf_puts(g_pre, "\n");
         }
         else
           buf_printf(g_pre, "const char *_sn%d = %s; SP_GC_ROOT_STR(_sn%d);\n",

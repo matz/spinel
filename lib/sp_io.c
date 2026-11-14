@@ -1504,7 +1504,7 @@ sp_File *sp_sock_udp_new(sp_int family) {
 }
 sp_File *sp_sock_unix_server(const char *path) {SP_GC_ROOT_STR(path);
   extern int sp_net_unix_listen(const char *path, int backlog);
-  int fd = sp_net_unix_listen(path, 128);
+  int fd = sp_net_unix_listen(path, 0);   /* 0: SOMAXCONN, as CRuby */
   if (fd < 0) sp_file_raise_errno("bind", path ? path : "");
   sp_File *f = sp_io_fdopen_sock(fd, SPL("unixserver"));
   return f;

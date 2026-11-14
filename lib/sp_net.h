@@ -38,9 +38,10 @@ int sp_net_install_term_handlers(void);
 int sp_net_shutdown_requested(void);
 
 /* ---- TCP socket lifecycle ----
- * listen: bind+listen on `port` (INADDR_ANY); reuseport!=0 sets
- *   SO_REUSEPORT for kernel accept load-balancing across prefork
- *   workers. Disables Nagle + ignores SIGPIPE. Returns the listen fd.
+ * listen: bind+listen on `port` (INADDR_ANY), backlog SOMAXCONN;
+ *   reuseport!=0 sets SO_REUSEPORT for kernel accept load-balancing
+ *   across prefork workers. Disables Nagle + ignores SIGPIPE. Returns
+ *   the listen fd.
  * accept: blocking accept; returns -1 if a term signal arrived
  *   (checked before blocking and on EINTR), else the connection fd.
  * accept_nb: non-blocking accept; -1 with errno EAGAIN/EWOULDBLOCK if

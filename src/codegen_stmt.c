@@ -24349,7 +24349,10 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   else if (!g_result_var && !want_poly && !is_subst && g_ret_type != TY_POLY && g_ret_type != TY_VOID &&
            call_never_returns(c, id)) {
     buf_puts(b, "((void)("); emit_expr_for_effect(c, id, b); buf_puts(b, "), ");
-    emit_ret_nil(c, g_ret_type, b); buf_puts(b, ")");
+    /* (a by-value object slot takes a struct, as a raising tail's does) */
+    if (comp_ty_value_obj(c, g_ret_type)) buf_puts(b, raise_tail_value_c(c, g_ret_type));
+    else emit_ret_nil(c, g_ret_type, b);
+    buf_puts(b, ")");
   }
   /* a poly tail value feeding a narrower (non-poly) return slot -- a scalar
      method(:sym) target, or an RBS-typed String/object method whose body yields

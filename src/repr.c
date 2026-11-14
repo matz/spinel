@@ -862,16 +862,6 @@ static int repr_leaf_not_raise(const VpLeaf *lf, void *ud) {
   Compiler *c = ud;
   if (lf->kind != VPK_EXPR) return 1;
   int n = lf->node;
-  /* nor a call on a raise's value (`(raise "x").select { ... }`): the raise
-     runs first, and the call never does */
-  for (;;) {
-    if (nt_kind(c->nt, n) != NK_CallNode) break;
-    int r = nt_ref(c->nt, n, "receiver");
-    if (r < 0) break;
-    r = nt_paren_single(c->nt, r);
-    if (r < 0 || nt_kind(c->nt, r) != NK_CallNode) break;
-    n = r;
-  }
   const char *nm = nt_kind(c->nt, n) == NK_CallNode && nt_ref(c->nt, n, "receiver") < 0 ? nt_str(c->nt, n, "name") : NULL;
   return !(nm && is_raise_alias(nm) && !bare_call_class_owned(c, n));
 }

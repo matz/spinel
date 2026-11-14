@@ -35,3 +35,16 @@ begin
 rescue => e
   puts e.message
 end
+
+# A subclass override answers in its place: the self call returns there.
+class Feed
+  def items = (raise "abstract").select { |d| d }
+  def titles(x)
+    return [] if x
+    items.map { |d| "#{d}!" }
+  end
+end
+class NewsFeed < Feed
+  def items = ["a", "b"]
+end
+p NewsFeed.new.titles(false)

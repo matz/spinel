@@ -5924,6 +5924,44 @@ int call_unanswered_boxed(Compiler *c, int id) {
   Repr rr = repr_of(c, recv);
   return rr.kind == RK_BOXED || rr.as_ty == TY_NIL || call_unanswered_boxed(c, recv);
 }
+/* Is mi's body exactly one statement, a call chain whose innermost receiver
+   is a receiverless raise (`(raise "x").select { ... }.map { ... }`)? */
+static int body_is_call_on_raise(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  int body = c->scopes[mi].body;
+  if (body < 0) return 0;
+  int n = body;
+  if (nt_kind(nt, body) == NK_StatementsNode) {
+    int cnt = 0;
+    const int *stmts = nt_arr(nt, body, "body", &cnt);
+    if (cnt != 1) return 0;
+    n = stmts[0];
+  }
+  if (nt_kind(nt, n) != NK_CallNode || nt_ref(nt, n, "receiver") < 0) return 0;
+  while (nt_kind(nt, n) == NK_CallNode) {
+    int r = nt_ref(nt, n, "receiver");
+    if (r < 0) {
+      const char *rn = nt_str(nt, n, "name");
+      return rn && is_raise_alias(rn) && !bare_call_class_owned(c, n);
+    }
+    n = nt_paren_single(nt, r);
+  }
+  return 0;
+}
+
+/* Does a class below mi's own define `nm`, which a self call in mi's class may dispatch to? */
+static int overridden_below(Compiler *c, int id, int mi, const char *nm) {
+  int owner = c->scopes[mi].class_id;
+  if (owner < 0) return 0;
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    if (ci == owner || !is_descendant(c, ci, owner)) continue;
+    MethodLookup ml = { .def_class = -1 };
+    int m = call_target(c, id, ci, nm, 0, &ml);
+    if (m >= 0 && m != mi) return 1;
+  }
+  return 0;
+}
+
 int call_never_returns(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || nt_kind(nt, id) != NK_CallNode) return 0;
@@ -5933,13 +5971,14 @@ int call_never_returns(Compiler *c, int id) {
   if (recv >= 0 && call_never_returns(c, recv)) return 1;
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return 0;
-  /* nor a self call to a method every value position of which raises
-     (`def engines = (raise "x").select { ... }`), which the analysis left
-     untyped rather than void. Not one an override answers in its place
-     (abstract_raise_override_return): the call's type is the family's then. */
+  /* nor an untyped self call to a method whose one statement is a call on a
+     raise's value (`def engines = (raise "x").select { ... }`): the raise
+     runs first, and the method never answers. Not one a subclass overrides
+     (abstract_raise_override_return): dispatch may reach a body that
+     returns. */
   if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && comp_ntype(c, id) == TY_UNKNOWN) {
     int smi = comp_self_call_mi(c, id, nm);
-    if (smi >= 0 && scope_always_raises(c, smi)) return 1;
+    if (smi >= 0 && body_is_call_on_raise(c, smi) && !overridden_below(c, id, smi, nm)) return 1;
   }
   if (comp_ntype(c, id) != TY_VOID) return 0;
   if (recv < 0 && (is_raise_alias(nm))) return 1;

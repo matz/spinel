@@ -26,3 +26,8 @@ C7 = 20
 show("untouched") { C7.missing(C1 + 1, 1..2) }
 show("other constant") { C7.missing((C1 = 5), 1..2) }
 p C7, C1
+
+# a qualified write of the receiver's name in an argument: the path write's
+# leaf is its target's name
+QK = [1]
+p QK.take((::QK = [2]; 1))

@@ -6498,9 +6498,9 @@ int emit_poly_op_assign(Compiler *c, const char *lval, const char *op, int v,
 
 /* Whether the subtree at `id` assigns the variable `nm` of `kind`: a
    write, an or-write, an and-write, an op-write or a multiple-assignment
-   target of that name. A constant's path forms (`A::K = 1`) are the
-   constant's kinds too; a path write names no leaf of its own, so only a
-   path target (`A::K, b = ...`) matches. */
+   target of that name. A constant's path forms (`A::K = 1`, `::K += 1`,
+   `A::K, b = ...`) are the constant's kinds too: a path write's leaf is its
+   target's name, a path target's its own. */
 int subtree_writes_var(Compiler *c, int id, const char *nm, int kind) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;
@@ -6513,11 +6513,17 @@ int subtree_writes_var(Compiler *c, int id, const char *nm, int kind) {
       }
       break;
     case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
-    case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode:
-    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
-    case NK_ConstantPathOperatorWriteNode: case NK_ConstantPathTargetNode:
+    case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
       if (kind == VW_CONST) {
         const char *wn = nt_str(nt, id, "name");
+        if (wn && sp_streq(wn, nm)) return 1;
+      }
+      break;
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    case NK_ConstantPathOperatorWriteNode:
+      if (kind == VW_CONST) {
+        int t = nt_ref(nt, id, "target");
+        const char *wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
         if (wn && sp_streq(wn, nm)) return 1;
       }
       break;

@@ -2393,8 +2393,10 @@ static TyRef ivar_evidence_slot(Compiler *c, const LWIndex *ivw, int ivar_cls_id
      the merge then destroyed the Queue with (#4211). Consult the ivar's
      own direct writes first: a settled non-array write means this push
      is no array evidence at all, and an array write of another element
-     kind means the slot is the poly array from the start. */
-  if (is_push && ci->ivar_types[iv] == TY_UNKNOWN && inm) {
+     kind means the slot is the poly array from the start. A value not
+     typed yet is no evidence either (fold_evidence skips it): read as
+     another kind than the write's, it made the slot the poly array. */
+  if (is_push && ci->ivar_types[iv] == TY_UNKNOWN && *vt != TY_UNKNOWN && inm) {
     int nonarray_write = 0, other_kind_write = 0;
     TyKind want0 = ty_array_of(*vt);
     for (int _r = ivw_index_first(ivw, inm); _r >= 0; _r = ivw->next[_r]) {

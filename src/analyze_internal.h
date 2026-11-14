@@ -799,8 +799,8 @@ int desugar_handle_ivars(Compiler *c);
 int desugar_fiber_prepended_init(Compiler *c);
 int desugar_handle_reopen_self_recv(Compiler *c);
 int desugar_call_or_write_reopen(Compiler *c);
-int desugar_table_loops(Compiler *c);         /* analyze_ct.c */
 int ct_method_defined(const NodeTable *nt, const char *meth);   /* the program defines `meth` anywhere (analyze_ct.c) */
+int ct_in_walk_loop_block(const NodeTable *nt, const int *parent, int call);   /* a call in a loop the walk may run (analyze_ct.c) */
 
 /* ---- the lowering table (analyze_lower.c, #9898) ----
    The rewrites the load stage makes are the rows of one table, run by one

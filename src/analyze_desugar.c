@@ -24868,6 +24868,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
     int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     int super_node = (!is_module && ac >= 1) ? av[0] : -1;
     int refused = builder_refused_kind(nt, id);
+    if (refused && blk < 0 && ct_in_walk_loop_block(nt, parent, id)) continue;
     if (refused) {
       int par = parent[id];
       int pw = par >= 0 && (nt_kind(nt, par) == NK_ConstantWriteNode || nt_kind(nt, par) == NK_ConstantPathWriteNode) &&

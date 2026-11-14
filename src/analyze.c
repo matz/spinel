@@ -49049,9 +49049,6 @@ static void an_phase_desugar_register(Compiler *c) {
   host_begin(&hs, &lc);
   AN_STEP_V("desugar_static_class_eval", desugar_static_class_eval(c, &hs));
   host_end(c, &hs);
-  /* a class body's loop over a constant table that defines constants and
-     classes, run now: its classes are written ones for every pass below */
-  AN_STEP_V("desugar_table_loops", desugar_table_loops(c));
   /* `m(&nil)` is the blockless call */
   lower_run(c, &lc, LW_NIL_BLOCK_ARG);
   lower_run(c, &lc, LW_CONST_SET_WRITE);            /* M.const_set(:N, v) -> M::N = v, a constant write to every pass */

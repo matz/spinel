@@ -28,24 +28,23 @@
    class: nothing of the loop is left for the generated program to run.
 
    The loop runs here only when nothing else can make it answer otherwise.
-   Each condition is one question below. Before the walk (a loop that makes
-   a class) each is a scan of the whole node table. In the walk (a loop that
-   makes none, ct_table_loop_form) each is asked at the loop's point: the
-   methods by the load record, and the table's uses by the nodes that may
-   run before the loop, since CRuby has run it by the time a later one
-   runs, and the constants' values by the nodes that may run before the
-   loop (a later value replaces the loop's, as the written-out statements
-   it becomes are the source's writes: elab_note_spliced_const_write).
+   Each condition is one question below, asked at the loop's point in the
+   walk (ct_table_loop_form): the methods by the load record, and the
+   table's uses by the nodes that may run before the loop, since CRuby has
+   run it by the time a later one runs, and the constants' values by the
+   nodes that may run before the loop (a later value replaces the loop's,
+   as the written-out statements it becomes are the source's writes:
+   elab_note_spliced_const_write).
 
      ct_table_only_read        the table's constant is written once and only
                                read, by calls that leave it as it is
      ct_const_given_elsewhere  a constant the loop sets is given a value
                                anywhere else in the program
      ct_core_method_changed    the program changes a core method the loop ran
-     ct_method_defined         the program defines a method of a name that
-                               runs whatever the receiver (the inherited and
-                               const_added hooks, const_set,
-                               instance_variable_set)
+     ct_loop_inherited_at      an inherited hook answers at the point (the
+                               record's, or a definer it cannot read that
+                               may run before); const_set, const_added and
+                               instance_variable_set are the frame's own
 
    The loop must be a statement of a class or module body, `H.each` or
    `H.each_pair` with a block of two parameters, H a constant the body
@@ -80,6 +79,28 @@ static int ct_eq(const char *a, const char *b) { return a && b && sp_streq(a, b)
 static int ct_loops_in_analysis(const NodeTable *nt) {
   const char *sw = getenv("SPINEL_TABLE_LOOPS");
   return nt_int(nt, nt->root_id, "load_file", -1) >= 0 || ct_eq(sw, "analysis");
+}
+
+/* Does `call` stand in the block of a loop the walk may run
+   (ct_table_loop_form: `H.each { |k, v| ... }`, H a constant, a statement
+   of a class or module body)? A pass ahead of the walk leaves such a call
+   as written, for the walk's evaluator to run (a Class.new of a local
+   superclass); where the walk does not run the loop, it is the call it
+   was. parent: the parent map. */
+int ct_in_walk_loop_block(const NodeTable *nt, const int *parent, int call) {
+  if (!ct_loops_in_analysis(nt)) return 0;
+  for (int x = call; x >= 0; x = parent[x]) {
+    if (nt_kind(nt, x) != NK_BlockNode) continue;
+    int lp = parent[x];
+    if (lp < 0 || nt_kind(nt, lp) != NK_CallNode || nt_ref(nt, lp, "block") != x) return 0;
+    int recv = nt_ref(nt, lp, "receiver");
+    const char *m = nt_str(nt, lp, "name");
+    if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode || nt_ref(nt, lp, "arguments") >= 0 || !m || !is_each_or_pair(m)) return 0;
+    int list = parent[lp], frame = list >= 0 ? parent[list] : -1;
+    return list >= 0 && nt_kind(nt, list) == NK_StatementsNode && frame >= 0 &&
+           class_def_opens_frame(nt, frame) && class_def_body(nt, frame) == list;
+  }
+  return 0;
 }
 
 /* ---- the questions ---- */
@@ -216,8 +237,7 @@ typedef struct CtConstIdx CtConstIdx;
 static const int *ct_const_idx_ids(CtConstIdx *x, const char *leaf, int *n);
 static const int *ct_const_idx_unspelled(CtConstIdx *x, int *n);
 /* The record's answers at a loop the walk runs (ct_table_loop_form): the
-   frame's class and the loop's point; NULL before the walk, where the
-   questions are scans of the program. */
+   frame's class and the loop's point. */
 typedef struct { Compiler *c; int cls; LoadPoint p; CtConstIdx *idx; } CtLoopAt;
 /* In the walk: does node id run after the loop, so that CRuby has run the
    loop by then? It does when it is in a statement after the loop's own in
@@ -387,6 +407,7 @@ static int ct_core_method_changed(const NodeTable *nt, const int *parent, int co
   }
   return 0;
 }
+
 
 /* Does the program define a method `meth` anywhere, on any receiver: a def,
    an alias, or a definer call that names it or names a method the scan
@@ -666,6 +687,33 @@ static void ct_effects_write(NodeTable *nt, const CtEnv *e, int **out, int *n, i
    is answered. *parent is the table's parent map, made here when a loop
    first gets past its shape (and again after an expansion grew the table). */
 static int ct_loop_core_changed_at(const CtLoopAt *at, const CtRan *ran, int n);
+/* Is a method `meth` defined by one of the definers that may run before
+   the loop: a def,
+   alias or definer call (its name read as ct_call_names reads it, an
+   unreadable name counting as any) that does not run only after it */
+static int ct_method_defined_before(const NodeTable *nt, const int *parent, int count, const CtLoopAt *at, const char *meth) {
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    int hit = (k == NK_DefNode && ct_eq(nt_str(nt, id, "name"), meth)) ||
+              (k == NK_AliasMethodNode && ct_eq(nt_str(nt, nt_ref(nt, id, "new_name"), "value"), meth)) ||
+              (k == NK_CallNode && ct_call_names(nt, id, meth));
+    if (hit && (id >= count || !ct_runs_after(nt, parent, at, id))) return 1;   /* (a node the map has not: may run before) */
+  }
+  return 0;
+}
+/* Does an inherited hook answer at the loop's point? The record's methods
+   there (a singleton one of any class, or Class's), and the definers it
+   cannot read (`define_singleton_method(name)`, a send of one) that may
+   run before the loop */
+static int ct_loop_inherited_at(const NodeTable *nt, const int *parent, int count, const CtLoopAt *at) {
+  if (ct_method_defined_before(nt, parent, count, at, "inherited")) return 1;
+  Compiler *c = at->c;
+  int cls = comp_core_class(c, CORE_CLASS_REOPEN);
+  if (cls >= 0 && elab_method_at(c, cls, "inherited", 0, at->p, NULL) != ELAB_NO) return 1;
+  for (int k = 0; k < c->nclasses; k++)
+    if (elab_method_at(c, k, "inherited", 1, at->p, NULL) != ELAB_NO) return 1;
+  return 0;
+}
 static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *before, int i,
                        int **out, int *n, int *cap, const CtLoopAt *at) {
   int st = before[i];
@@ -687,20 +735,13 @@ static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *befo
   for (int j = 0; j < i; j++)
     if (nt_kind(nt, before[j]) == NK_ConstantWriteNode && ct_eq(nt_str(nt, before[j], "name"), tname)) def = before[j];
   if (def < 0 || nt_kind(nt, nt_ref(nt, def, "value")) != NK_HashNode) return 0;
-  if (!at && (!*parent || *pcount != nt->count)) {
-    free(*parent);
-    *parent = an_parent_map(nt); *pcount = nt->count;
-    if (!*parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  if (at && st >= *pcount) return 0;   /* (a statement the walk spliced: no parent the map holds) */
+  if (st >= *pcount) return 0;   /* (a statement the walk spliced: no parent the map holds) */
   /* the modules the body's constants go in: the class's own path */
   char outer[1024];
   /* (in the walk the map holds the nodes there were when the walk's facts
      were made: the statements it has spliced since are no table's uses) */
   if (!ct_lexical_path(nt, *parent, st, outer, sizeof outer)) return 0;
-  /* (before the walk, the table's uses are asked once the loop is known
-     to make a class, the one kind it runs there: below) */
-  if (at && !ct_table_only_read(nt, *parent, *pcount, tname, st, at)) return 0;
+  if (!ct_table_only_read(nt, *parent, *pcount, tname, st, at)) return 0;
   int hv = nt_ref(nt, def, "value"), en = 0;
   Mv *keys = NULL, *vals = NULL;
   CtEnv e; memset(&e, 0, sizeof e);
@@ -720,26 +761,28 @@ static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *befo
          ct_env_set(&e, nt_str(nt, req[0], "name"), kv) && ct_env_set(&e, nt_str(nt, req[1], "name"), vv) &&
          ct_exec(nt, &e, body);
   }
-  /* A loop that makes a class runs before the walk, and one that makes
-     none in the walk, at its point (#10791): a class it made in the walk
-     would register by qualify's spelling and merge with a later one of
-     the same leaf (the class half of retiring qualify, #10793). */
-  if (ok && (at ? e.ncls > 0 : e.ncls == 0)) ok = 0;
-  if (ok && !at) ok = ct_table_only_read(nt, *parent, *pcount, tname, st, NULL);
+  /* The loop runs in the walk, at its point (#10791): a class it makes
+     takes its name after the walk, as a header's does (elab_prov_apply). */
   /* nothing may make what ran answer otherwise: anywhere in the program,
      before the walk; at the loop's point, in it */
-  if (ok) ok = at ? !ct_loop_core_changed_at(at, e.ran, e.nran) : !ct_core_method_changed(nt, *parent, *pcount, e.ran, e.nran);
+  if (ok) ok = !ct_loop_core_changed_at(at, e.ran, e.nran);
   int sets = 0, ivs = 0;
   for (int f = 0; f < e.nfx; f++) { sets |= e.fx[f].k == CT_FX_CONST_SET; ivs |= e.fx[f].k == CT_FX_IVAR_SET; }
-  if (ok && e.ncls) ok = !ct_method_defined(nt, "inherited");   /* CRuby calls it while the class has no name */
-  if (ok && sets && !at) ok = !ct_method_defined(nt, "const_set") && !ct_method_defined(nt, "const_added");
-  if (ok && ivs && !at) ok = !ct_method_defined(nt, "instance_variable_set");
+  /* CRuby calls inherited while the class has no name: none may answer
+     it at the loop's point (a singleton one of any class, or Class's) */
+  if (ok && e.ncls) ok = !ct_loop_inherited_at(nt, *parent, *pcount, at);
   /* (the frame's own const_set and const_added at the point: a call on
      self reaches them, whatever another class defines) */
-  if (ok && sets && at)
+  if (ok && sets)
     ok = elab_method_at(at->c, at->cls, "const_set", 1, at->p, NULL) == ELAB_NO &&
          elab_method_at(at->c, at->cls, "const_added", 1, at->p, NULL) == ELAB_NO;
-  if (ok && ivs && at) ok = elab_method_at(at->c, at->cls, "instance_variable_set", 1, at->p, NULL) == ELAB_NO;
+  if (ok && ivs) ok = elab_method_at(at->c, at->cls, "instance_variable_set", 1, at->p, NULL) == ELAB_NO;
+  /* a class the loop names where the constant already holds a value: CRuby
+     replaces the constant (with a warning), where a class header would
+     reopen the class it holds */
+  for (int f = 0; ok && f < e.nfx; f++)
+    if (e.fx[f].k == CT_FX_CONST_SET && e.fx[f].val.k == CT_CLASS &&
+        elab_const_own_at(at->c, at->cls, e.fx[f].name, at->p, NULL) != ELAB_NO) ok = 0;
   if (ok) ok = ct_effects_writable(nt, *parent, *pcount, &e, outer, st, at);
   if (ok) {
     int base = nt->count;
@@ -761,41 +804,6 @@ static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *befo
   return ok;
 }
 
-/* Every class and module body's table loops run (above), in place. */
-int desugar_table_loops(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  if (!ct_loops_in_analysis(nt)) return 0;
-  int n0 = nt->count, changed = 0;
-  int *parent = NULL, pcount = 0;
-  for (int id = 0; id < n0; id++) {
-    NodeKind k = nt_kind(nt, id);
-    int body = k == NK_ClassNode || k == NK_ModuleNode ? nt_ref(nt, id, "body") : -1;
-    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-    int bn = 0;
-    const int *bb0 = nt_arr(nt, body, "body", &bn);
-    int *bb = malloc(sizeof(int) * ((size_t)bn + 1));
-    if (!bb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    if (bn) memcpy(bb, bb0, sizeof(int) * (size_t)bn);
-    int *nb = NULL, nn = 0, ncap = 0, any = 0;
-    for (int i = 0; i < bn; i++) {
-      int st = bb[i];
-      if (!ct_try_loop(nt, &parent, &pcount, bb, i, &nb, &nn, &ncap, NULL)) { ct_push(&nb, &nn, &ncap, st); continue; }
-      /* the body as it now reads, the statements after the loop still to
-         come: a later loop's questions find what this one defined in its
-         place, under this class (its parent map is made again) */
-      int done = nn;
-      for (int j = i + 1; j < bn; j++) ct_push(&nb, &nn, &ncap, bb[j]);
-      nt_node_set_arr(nt, body, "body", nb, nn);
-      nn = done;
-      any = 1;
-    }
-    if (any) { nt_node_set_arr(nt, body, "body", nb, nn); changed = 1; }
-    free(nb); free(bb);
-  }
-  free(parent);
-  if (changed) comp_grow_node_arrays(c);
-  return changed;
-}
 
 /* ---- class-body macros, a form of the walk (#9898) ----
 

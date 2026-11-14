@@ -49,6 +49,7 @@
 #include "builtin_names.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
+#include "holder.h"
 #include "implicit_calls.h"
 #include "timing.h"
 #include <limits.h>

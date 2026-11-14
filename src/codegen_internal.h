@@ -2540,6 +2540,8 @@ int sclass_value_call(Compiler *c, int id);
 int scope_body_last(Compiler *c, int mi);
 int str_in(const char *s, const char *const *set);
 TyKind an_self_node_type(Compiler *c, int id);
+int return_in_lambda(Compiler *c, int rid);
+int method_user_override_recv(Compiler *c, int node);
 /* arg1's kind and whether a one-argument Range literal's own bound is
    Float-typed -- see the canonical declaration in analyze_internal.h,
    where it is defined (analyze_infer.c). const-safe, so this file's own

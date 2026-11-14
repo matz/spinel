@@ -134,10 +134,18 @@ sp_Complex sp_complex_div_real(sp_Complex a, sp_float b) {
   sp_Complex c; c.re = a.re / b; c.im = a.im / b; c.fl = SP_CPLX_RE_F | SP_CPLX_IM_F; return c;
 }
 /* Complex divided by an Integer follows integer zero-division rules: dividing
-   by 0 raises ZeroDivisionError, as in MRI (a Float divisor gives Infinity). */
+   by 0 raises ZeroDivisionError, as in MRI (a Float divisor gives Infinity).
+   An Integer part stays an Integer when b divides it, else it becomes a
+   Rational (Integer#quo), which a Complex keeps in its Float slot with the
+   Float flag, as Complex(Rational(5, 2), 0) does: so Complex(5, 9) / 2 is
+   eql? to Complex(Rational(5, 2), Rational(9, 2)), and Complex(4, 8) / 2 is
+   (2+4i). */
 sp_Complex sp_complex_div_int(sp_Complex a, sp_int b) {
   if (b == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
-  sp_Complex c; c.re = a.re / (sp_float)b; c.im = a.im / (sp_float)b; c.fl = a.fl; return c;
+  sp_Complex c; c.re = a.re / (sp_float)b; c.im = a.im / (sp_float)b; c.fl = a.fl;
+  if (c.re != floor(c.re)) c.fl |= SP_CPLX_RE_F;
+  if (c.im != floor(c.im)) c.fl |= SP_CPLX_IM_F;
+  return c;
 }
 sp_Complex sp_complex_neg(sp_Complex a) { sp_Complex c; c.re = -a.re; c.im = -a.im; c.fl = a.fl; return c; }
 sp_float sp_complex_abs2(sp_Complex a) { return (a.re * a.re) + (a.im * a.im); }

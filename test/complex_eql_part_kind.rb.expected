@@ -1,0 +1,51 @@
+false
+true
+false
+false
+true
+false
+true
+false
+false
+true
+[(1+0i), (1.0+0i)]
+false
+2
+false
+true
+[(1+0i), (1.0+0i), (1+0.0i)]
+{(1+0i) => 2, (1.0+0i) => 1, (1+0.0i) => 1}
+[(1+0i), (1.0+0i), (1+0.0i)]
+3
+{(1+0i) => Integer, (1.0+0i) => Float, (1+0.0i) => Integer}
+false
+false
+false
+true
+false
+true
+2
+true
+1
+:k
+nil
+false
+true
+true
+0
+true
+true
+1
+true
+(1.0+2i)
+(1+2.5i)
+(0+300.0i)
+(2-1.0i)
+(7+0i)
+(1+2i)
+true
+true
+true
+(2+4i)
+Integer
+(0.75+1i)

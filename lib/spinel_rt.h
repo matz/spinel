@@ -6898,6 +6898,14 @@ static sp_bool sp_range_frange_eq(sp_Range r, sp_FloatRange f) {
 /* A Complex's real part as the real it stands for: an Integer part (no
    SP_CPLX_RE_F) as an Integer while it fits, so a Rational or an Integer
    compares against it exactly; else the Float */
+/* Complex#eql?: each part eql? to the other's, so the values and the kind
+   of each part (Integer or Float) agree: Complex(1, 0) is == to
+   Complex(1.0, 0) but not eql? to it. The boxed eql?, the Hash key eql?
+   and the strict eql? share it (the Complex hash mixes the same kinds in). */
+static SP_UNUSED sp_bool sp_complex_eql(const sp_Complex *x, const sp_Complex *y) {
+  return x->re == y->re && x->im == y->im &&
+         (x->fl & (SP_CPLX_RE_F | SP_CPLX_IM_F)) == (y->fl & (SP_CPLX_RE_F | SP_CPLX_IM_F));
+}
 static SP_UNUSED sp_RbVal sp_complex_re_box(sp_Complex z) {
   if (!(z.fl & SP_CPLX_RE_F) && z.re >= -9223372036854775808.0 &&
       z.re < 9223372036854775808.0 && z.re == (sp_float)(long long)z.re)
@@ -11998,7 +12006,8 @@ static sp_int sp_rbval_hash_key(sp_RbVal v) {
         /* a -0.0 part hashes as 0.0: Complex(-0.0, 1) is eql? to Complex(0.0, 1) */
         if (cx->re == 0.0) br = 0;
         if (cx->im == 0.0) bi = 0;
-        return (sp_int)((uintptr_t)(br * 31u) ^ (uintptr_t)bi);
+        /* the part kinds mix in: Complex(1, 0) and Complex(1.0, 0) are not eql? */
+        return (sp_int)((uintptr_t)(br * 31u) ^ (uintptr_t)bi ^ ((uintptr_t)(cx->fl & (SP_CPLX_RE_F | SP_CPLX_IM_F)) * 0x9e3779b9u));
       }
       /* The other values eql? compares by content hash by it, so that equal
          ones meet in uniq and the set operations, which match by hash first:
@@ -12154,7 +12163,8 @@ static sp_bool sp_rbval_eql_key(sp_RbVal a, sp_RbVal b) {
         /* value-based so an equal Complex serves as one Hash key (#2615),
            paired with the value-based hash above */
         sp_Complex *ca = (sp_Complex *)a.v.p, *cb = (sp_Complex *)b.v.p;
-        return (ca && cb) ? (ca->re == cb->re && ca->im == cb->im) : (ca == cb);
+        /* (the part kinds too: Complex(1, 0) and Complex(1.0, 0) are two keys) */
+        return (ca && cb) ? sp_complex_eql(ca, cb) : (ca == cb);
       }
       if (sp_obj_eql_hook) {
         /* a Struct key that holds itself reaches its own eql? through the hook */
@@ -14399,6 +14409,11 @@ static sp_bool sp_poly_eql(sp_RbVal a, sp_RbVal b) {
     int a_cx = a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX;
     int b_cx = b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX;
     if (a_rat != b_rat || a_cx != b_cx) return FALSE;
+    /* Complex#eql? compares each part with eql?, so an Integer part is not
+       eql? to the same Float part: Complex(1, 0) is == to Complex(1.0, 0)
+       but not eql? to it (the typed eql? compares the part kinds too) */
+    if (a_cx && a.v.p && b.v.p)
+      return a.v.p == b.v.p || sp_complex_eql((sp_Complex *)a.v.p, (sp_Complex *)b.v.p);
   }
   /* Array#eql? answers false for anything that is not an Array: unlike ==, it
      does not defer to an operand that answers to_ary */
@@ -14517,9 +14532,7 @@ static sp_bool sp_poly_eql_strict_obj(sp_RbVal a, sp_RbVal b) {
   if (a.cls_id != b.cls_id || !a.v.p || !b.v.p) return FALSE;
   switch (a.cls_id) {
     case SP_BUILTIN_COMPLEX: {   /* each part's class too: Complex(1, 0) is not eql? to Complex(1.0, 0) */
-      sp_Complex *x = (sp_Complex *)a.v.p, *y = (sp_Complex *)b.v.p;
-      return x->re == y->re && x->im == y->im &&
-             (x->fl & (SP_CPLX_RE_F | SP_CPLX_IM_F)) == (y->fl & (SP_CPLX_RE_F | SP_CPLX_IM_F));
+      return sp_complex_eql((sp_Complex *)a.v.p, (sp_Complex *)b.v.p);
     }
     case SP_BUILTIN_TIME: {
       sp_Time *x = (sp_Time *)a.v.p, *y = (sp_Time *)b.v.p;

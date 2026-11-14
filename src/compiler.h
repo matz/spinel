@@ -2659,9 +2659,10 @@ int        ext_class_def_wanted(Compiler *c, const char *key);
 const char *ext_fwd_orig(const char *name, int *nfixed, int *rest);
 int        ext_ty_crosses(TyKind t);
 int        comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at);
-/* Detect an instance_eval/exec trampoline (def m(args,&b); instance_eval/exec(args,&b); end).
-   Returns 1 (eval) / 2 (exec) / 0; sets *def_class to the defining class. */
-int        comp_trampoline_kind(Compiler *c, int class_id, const char *name, int *def_class);
+/* Is method mi (the one the plan answered for a call, -1 for none) an
+   instance_eval/exec trampoline (def m(args,&b); instance_eval/exec(args,&b); end)?
+   Returns 1 (eval) / 2 (exec) / 0. */
+int        comp_trampoline_kind(Compiler *c, int mi);
 /* Stage-1 fold for module singleton accessors holding a constant. */
 int        comp_sg_const_binding(Compiler *c, int class_id, const char *base);
 int        comp_sg_reader_const(Compiler *c, int call_id); /* const class idx for `Class.reader`, or -1 */

@@ -5809,7 +5809,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               ClassInfo *kc = &c->classes[k];
               int ik = comp_method_in_chain(c, k, "initialize", NULL);
               if (kc->is_value_type || kc->is_struct || kc->is_native_class || ik < 0 || c->scopes[ik].yields ||
-                  comp_cmethod_in_chain(c, k, "new", NULL) >= 0) plain = 0;
+                  call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) plain = 0;
               subs++;
             }
             for (int a = 0; subs && plain && a < dargc; a++)
@@ -5851,7 +5851,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             int ik = comp_method_in_chain(c, k, "initialize", NULL);
             if (kc->is_value_type || kc->is_struct || kc->is_native_class ||
                 (ik >= 0 && c->scopes[ik].yields) ||
-                comp_cmethod_in_chain(c, k, "new", NULL) >= 0) { plain = 0; break; }
+                call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) { plain = 0; break; }
             nsub++;
           }
           if (plain && nsub > 0) {
@@ -5971,7 +5971,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           call_target(c, id, iencl->class_id, name, 0, NULL) >= 0)
         goto skip_toplevel_include;
     }
-    int imi = comp_included_method_index(c, name, id);
+    int imi = call_target(c, id, -1, name, CT_INCLUDED, NULL);
     if (imi >= 0) {
       Scope *ms = &c->scopes[imi];
       if (g_plan_check) ucall_observe(c, id, imi, ms->class_id, 0);

@@ -32,7 +32,6 @@ src/analyze_cls.c cf_byname which classes answer the name
 src/analyze_cls.c cf_kpred_classes which classes answer the name
 src/analyze_desugar.c dsend_name_is_helper which subclasses answer the name
 src/analyze_desugar.c user_block_method which classes answer the name
-src/analyze_infer.c an_user_read_ty the return of every class's method of the name
 src/analyze_infer.c an_user_ret_disagrees the return of every class's method of the name
 src/analyze_infer.c infer_poly_operand_call comp_name_responders which classes answer the name
 src/analyze_pass.c class_owns_getter which classes define the getter
@@ -264,7 +263,6 @@ src/compiler.c cls_user_display_mi a class's method of the name
 src/compiler.c comp_arysub_name_is_array a class's method of the name
 src/compiler.c comp_builtin_kind_reopen_mi a class's method of the name
 src/compiler.c comp_resolve_member a class's method of the name
-src/compiler.c comp_trampoline_kind a class's method of the name
 
 # the plan check: an independent check of resolution, so it asks the tables
 # by name what resolution should have found rather than asking call_target

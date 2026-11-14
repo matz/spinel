@@ -2663,12 +2663,10 @@ int comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *a
    single `instance_eval(&block)` / `instance_exec(args, &block)` that forwards
    the method's own `&block` parameter. A call `recv.M(args) { ... }` to such a
    method is compiled exactly like `recv.instance_eval/exec(args) { ... }`.
-   Returns 1 for an instance_eval trampoline, 2 for instance_exec, 0 otherwise.
-   When non-zero and def_class is non-NULL, it receives the defining class. */
-int comp_trampoline_kind(Compiler *c, int class_id, const char *name, int *def_class) {
+   Of method mi, the one the call plan answered for the call (-1: none).
+   Returns 1 for an instance_eval trampoline, 2 for instance_exec, 0 otherwise. */
+int comp_trampoline_kind(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
-  int dc = -1;
-  int mi = comp_method_in_chain(c, class_id, name, &dc);
   if (mi < 0) return 0;
   Scope *s = &c->scopes[mi];
   if (!s->blk_param || !s->blk_param[0]) return 0;  /* needs a named &block */
@@ -2690,7 +2688,6 @@ int comp_trampoline_kind(Compiler *c, int class_id, const char *name, int *def_c
   if (bexpr < 0) return 0;
   const char *bvn = nt_str(nt, bexpr, "name");
   if (!bvn || !sp_streq(bvn, s->blk_param)) return 0;
-  if (def_class) *def_class = dc;
   return kind;
 }
 

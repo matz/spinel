@@ -269,7 +269,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
     if (ieb >= 0 && ty_is_object(iert) && nt_kind(nt, ieb) == NK_BlockNode &&
         (is_instance_eval_family(nm)
            ? call_target(c, node, ty_object_class(iert), nm, 0, NULL) < 0
-           : comp_trampoline_kind(c, ty_object_class(iert), nm, NULL) != 0)) {
+           : comp_trampoline_kind(c, call_target(c, node, ty_object_class(iert), nm, 0, NULL)) != 0)) {
       int bb = nt_ref(nt, ieb, "body");
       int bn = 0; const int *bs = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
       return (bn > 0 && node_is_oint(c, bs[bn - 1])) ||

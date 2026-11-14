@@ -20992,7 +20992,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
       TyKind srt = comp_ntype(c, srecv);
       int is_ie = is_instance_eval_family(snm);
       int discard = (is_ie && ty_is_object(srt)) ||
-                    (ty_is_object(srt) && comp_trampoline_kind(c, ty_object_class(srt), snm, NULL));
+                    (ty_is_object(srt) && comp_trampoline_kind(c, call_target(c, id, ty_object_class(srt), snm, 0, NULL)));
       if (discard) {
         int sv = g_ie_discard_value; g_ie_discard_value = 1;
         emit_indent(b, indent);

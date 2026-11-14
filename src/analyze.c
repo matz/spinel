@@ -2654,7 +2654,7 @@ else {
   /* instance_eval/exec trampolines splice their block at the call site rather
      than lifting it to a proc, so they are not lifted-block captures. */
   if (m->class_id >= 0 && !m->is_cmethod && m->name && sp_streq(m->name, name) &&
-      comp_trampoline_kind(c, m->class_id, m->name, NULL)) return 0;
+      comp_trampoline_kind(c, mi)) return 0;
   return 1;
 }
 
@@ -5208,7 +5208,7 @@ void build_ie_map(Compiler *c) {
       if (cls == -1) continue;
       if (ty_is_object(rt) && !sp_streq(nm, "instance_eval") && !sp_streq(nm, "instance_exec")) {
         /* not a direct instance_eval/exec: maybe a trampoline method on `cls`? */
-        if (!comp_trampoline_kind(c, cls, nm, NULL)) {
+        if (!comp_trampoline_kind(c, call_target(c, id, cls, nm, 0, NULL))) {
           cls = ie_forward_target(c, id, cls, 0, nm, 0);
           if (cls < 0) continue;
         }
@@ -49887,8 +49887,12 @@ static void an_phase_block_inline(Compiler *c) {
     if (!m->blk_param) continue;
     /* instance_eval/exec trampolines are inlined at call sites by their own
        dedicated splice; don't treat the &block forward as a yield here. */
+    /* The method asked about is the class's answer of the name, not this
+       scope: for a versioned name the call reaches the version entry, so the
+       scope itself is the wrong thing to ask until the plan answers whether a
+       version scope's calls are spliced. */
     if (m->class_id >= 0 && !m->is_cmethod && m->name &&
-        comp_trampoline_kind(c, m->class_id, m->name, NULL)) continue;
+        comp_trampoline_kind(c, comp_name_responder(c, m->class_id, m->name, 0))) continue;
     /* Anonymous `&`: nameless, so it can only be forwarded -- always safe
        to inline (there is no escaping read to worry about). */
     if (!m->blk_param[0]) { m->yields = 1; continue; }
@@ -54058,7 +54062,7 @@ static void an_phase_storage(Compiler *c) {
     if (is_ie2) {
       if (call_target(c, id, cls2, nm2, 0, NULL) >= 0) continue;
     }
-    else if (!comp_trampoline_kind(c, cls2, nm2, NULL)) continue;
+    else if (!comp_trampoline_kind(c, call_target(c, id, cls2, nm2, 0, NULL))) continue;
     int bdy2 = nt_ref(c->nt, blk2, "body");
     if (bdy2 < 0) continue;
     int bn2 = 0; const int *bb2 = nt_arr(c->nt, bdy2, "body", &bn2);

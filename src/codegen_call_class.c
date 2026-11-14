@@ -471,13 +471,13 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
     /* a private one too when the second argument is true (_a) */
     Buf ab;
     memset(&ab, 0, sizeof ab);
-    emit_io_pick(c, tv, ms->name, 0, &ab);
+    emit_io_pick(c, -1, tv, ms->name, 0, &ab);
     int pt = ++g_tmp;
     char pn[24]; snprintf(pn, sizeof pn, "_p%d", pt);
     buf_printf(b, " || (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO && !strcmp(_n%d, \"", tv, tv, tv);
     emit_c_escaped(b, ms->name);
     buf_printf(b, "\") && ({ int %s = %s; %s != 0x7fffffff && (_a%d || ", pn, ab.p, pn, tv);
-    emit_io_pick_public(c, ms->name, pn, b);
+    emit_io_pick_public(c, -1, ms->name, pn, b);
     buf_puts(b, "); }))");
     free(ab.p);
   }
@@ -5971,7 +5971,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           call_target(c, id, iencl->class_id, name, 0, NULL) >= 0)
         goto skip_toplevel_include;
     }
-    int imi = comp_included_method_index(c, name, id);
+    int imi = call_target(c, id, -1, name, CT_INCLUDED, NULL);
     if (imi >= 0) {
       Scope *ms = &c->scopes[imi];
       if (g_plan_check) ucall_observe(c, id, imi, ms->class_id, 0);
@@ -6391,7 +6391,7 @@ int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     default: break;
     }
     if (oc_cn >= 0) {
-      int oc_ci = rt == TY_IO ? io_reopen_class(c, name) : comp_core_class(c, oc_cn);
+      int oc_ci = rt == TY_IO ? io_reopen_class(c, id, name) : comp_core_class(c, oc_cn);
       if (oc_ci >= 0) {
         int oc_mi = call_target(c, id, oc_ci, name, 0, NULL);
         if (oc_mi >= 0 && rt == TY_IO) { emit_io_reopen_call(c, id, recv, name, b); return 1; }

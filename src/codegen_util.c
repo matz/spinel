@@ -1304,7 +1304,7 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
   if (!sp_yield_site_type(c, recv, &rt)) return 0;
   /* a site whose class reopens the name: the reopen's return type, for an
      Array or Hash as for a scalar (yield_recv_chain_kind says why) */
-  { int rmi = cplan_builtin_call(c, id) ? -1 : comp_builtin_kind_reopen_mi((Compiler *)c, rt, op);
+  { int rmi = cplan_builtin_call(c, id) ? -1 : comp_builtin_kind_reopen_mi((Compiler *)c, id, rt, op);
     if (rmi >= 0) {
       TyKind rr = c->scopes[rmi].ret;
       if (rr == TY_UNKNOWN || rr == TY_VOID) return 0;

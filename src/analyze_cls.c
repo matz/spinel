@@ -3625,7 +3625,7 @@ static void cf_call(CF *f, int v) {
        main's), so its method answers a bare call no class or top-level def
        did: the one the call binds (comp_included_method_index) */
     if (!found) {
-      int mi = comp_included_method_index(c, nm, v);
+      int mi = call_target(c, v, -1, nm, CT_INCLUDED, NULL);
       if (mi >= 0 && cf_user_target(f, v, mi, argv, argc, blk)) found = 1;
     }
     if (found) return;

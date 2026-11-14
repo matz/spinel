@@ -2525,11 +2525,11 @@ int        class_eqq_answers_value(Compiler *c);
 int        io_family_name(const char *n);
 int        io_family_class(Compiler *c, int k);
 /* The reopened IO-family class whose method `name` a typed IO calls, or -1. */
-int        io_reopen_class(Compiler *c, const char *name);
+int        io_reopen_class(Compiler *c, int id, const char *name);
 extern int g_io_skip_reopen, g_io_skip_node;
-int        io_reopen_leaves_builtin(Compiler *c, const char *name);
-int        io_reopen_defs(Compiler *c, const char *name, int public_only, int *ks, int max);
-int        io_reopen_ret_mixed(Compiler *c, const char *name);
+int        io_reopen_leaves_builtin(Compiler *c, int id, const char *name);
+int        io_reopen_defs(Compiler *c, int id, const char *name, int public_only, int *ks, int max);
+int        io_reopen_ret_mixed(Compiler *c, int id, const char *name);
 int        io_family_descends(Compiler *c, int k, int owner);
 const char *io_super_name(const char *k);
 /* Like comp_method_in_class but walks the superclass chain. On success,
@@ -2574,11 +2574,6 @@ int        comp_name_reader_any(Compiler *c, const char *name);
    asks it for every argument-less call on a receiver that can be anything,
    at every solve. */
 const int *comp_name_reader_owners(Compiler *c, const char *name, int *n);
-/* does Object's program define a method of the name? */
-static inline int comp_object_defines(Compiler *c, const char *name) {
-  int oc = comp_core_class(c, CORE_OBJECT);
-  return oc >= 0 && comp_method_in_chain(c, oc, name, NULL) >= 0;
-}
 int        send_def_just_supers(Compiler *c, int mi);          /* analyze_desugar.c */
 int        send_family_defined_anywhere(Compiler *c, const char *name);   /* analyze_desugar.c */
 /* Array subclasses (#7449, ClassInfo.ary_root): the root of class cid's
@@ -2594,7 +2589,7 @@ TyKind     comp_ary_kind(Compiler *c, int cid);
 /* Whether Array answers a call named n on an instance of Array subclass
    cid: no method, reader or writer of the class chain takes the name, it
    asks nothing about the object itself, and Array has it. */
-int        comp_arysub_name_is_array(Compiler *c, int cid, const char *n);
+int        comp_arysub_name_is_array(Compiler *c, int id, int cid, const char *n);
 /* Call `id` on rt (an Array subclass instance) is Array's, answered as the
    embedded Array's kind *kind; what Array answers, as the builtin-op rows
    say (bop_answers_self: BOPF_SELF, BOPF_SELF_OR_NIL, BOPF_SELF_EXACT...);
@@ -2617,10 +2612,10 @@ int        comp_arysub_emb(Compiler *c, int cid);
 int        comp_arysub_str_boxed(const char *n);
 int        comp_arysub_builtin(Compiler *c, int cid);
 /* a name the builtin cid's chain embeds answers (comp_array_method_name, or Hash's) */
-int        comp_arysub_builtin_name(Compiler *c, int cid, const char *n);
+int        comp_arysub_builtin_name(Compiler *c, int id, int cid, const char *n);
 int        comp_arysub_reopen(Compiler *c, int cid);
-int        comp_builtin_kind_reopen_mi(Compiler *c, TyKind t, const char *name);
-int        comp_builtin_name_reopened(Compiler *c, const char *name);
+int        comp_builtin_kind_reopen_mi(Compiler *c, int id, TyKind t, const char *name);
+int        comp_builtin_name_reopened(Compiler *c, int id, const char *name);
 int        comp_yield_chain_reopened(Compiler *c, int call);
 /* Record method `name`'s visibility on a class (overwrite-or-append). */
 void       comp_method_vis_set(ClassInfo *ci, const char *name, int kind);

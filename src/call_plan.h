@@ -231,7 +231,11 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
    private ones (VF_PRIVATE), or with CT_PROTECTED also for the protected
    ones (VF_PUBLIC: public_send, or a caller to which a protected owner is
    not open). */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256 };
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256, CT_NOFACE = 512 };
+/* CT_NOFACE asks the instance lookup with no visibility face, as a call
+   that enforces nothing does: a private def is found. It is the one flag
+   that says so by itself; every other flag also leaves the face off, by
+   being a flag (ct_vis_flags). */
 /* The face of a version entry (VerEntry.face): 0 the entry every arm of
    which runs its version, VF_PRIVATE one whose arms of a private version
    raise, VF_PUBLIC one whose arms of a private or a protected version do;
@@ -514,6 +518,12 @@ int cplan_main_text_call(const Compiler *c, int id);
    binds the builtin's own method (the super of a program's own reflection,
    rewritten to self's builtin) is not answered by either. */
 int comp_call_reaches_own_any(Compiler *c, int id, const char *name);
+/* The program's method that call id's lookup meets on builtin class `core`
+   (CORE_*): a reopening's, or one it inherits, as call_target answers it
+   for the name; -1 where the builtin answers, and where the program has no
+   such class. A top-level def is not in a class's table: it is asked with
+   CT_TOP (or cplan_root_method, which asks both). */
+int cplan_core_method(Compiler *c, int id, int core, const char *name);
 int comp_call_reaches_own(Compiler *c, int id, int class_id, const char *name);
 /* A call on a constant receiver recv: the program's singleton method it
    binds (fresh: resolved as cplan_user_fresh is), or, where it binds none,

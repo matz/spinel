@@ -1441,8 +1441,8 @@ static void emit_poly_dispatch_key_top(Compiler *c, int tv, int key_guard, int p
    that define `name` (public ones only when asked): the one the handle's
    kind is nearest to, or 0x7fffffff. Emits nothing and answers 0 when no
    reopening defines it. */
-static int emit_io_pick_of(Compiler *c, const char *handle, const char *name, int public_only, Buf *b) {
-  int ks[16], n = io_reopen_defs(c, name, public_only, ks, 16);
+static int emit_io_pick_of(Compiler *c, int id, const char *handle, const char *name, int public_only, Buf *b) {
+  int ks[16], n = io_reopen_defs(c, id, name, public_only, ks, 16);
   if (!n) return 0;
   buf_printf(b, "sp_io_pick_class(%s, (const char *const[]){", handle);
   for (int i = 0; i < n; i++) buf_printf(b, "\"%s\", ", c->classes[ks[i]].name);
@@ -1452,17 +1452,17 @@ static int emit_io_pick_of(Compiler *c, const char *handle, const char *name, in
   return n;
 }
 /* ... for the boxed handle in _t<tv> */
-int emit_io_pick(Compiler *c, int tv, const char *name, int public_only, Buf *b) {
+int emit_io_pick(Compiler *c, int id, int tv, const char *name, int public_only, Buf *b) {
   char h[48];
   snprintf(h, sizeof h, "(sp_File *)_t%d.v.p", tv);
-  return emit_io_pick_of(c, h, name, public_only, b);
+  return emit_io_pick_of(c, id, h, name, public_only, b);
 }
 /* ` || <the boxed IO in _t<tv> has reopened method qm>`, or nothing when no
    IO reopening defines it. */
 /* `(_p == k1 || _p == k2 ...)` over the reopenings of qm that are public:
    the reopening the pick chose answers only if it is one of them. */
-void emit_io_pick_public(Compiler *c, const char *qm, const char *pick, Buf *b) {
-  int ks[16], n = io_reopen_defs(c, qm, 0, ks, 16);
+void emit_io_pick_public(Compiler *c, int id, const char *qm, const char *pick, Buf *b) {
+  int ks[16], n = io_reopen_defs(c, id, qm, 0, ks, 16);
   buf_puts(b, "(0");
   for (int i = 0; i < n; i++)
     if (comp_method_vis_in_chain(c, ks[i], qm) == SP_VIS_PUBLIC) buf_printf(b, " || %s == %d", pick, ks[i]);
@@ -1472,14 +1472,14 @@ void emit_io_reopen_responds(Compiler *c, int tv, const char *qm, int include_al
   /* the nearest reopening by kind, then its visibility: a public IO#foo
      does not answer for a socket whose nearer IPSocket#foo is private */
   Buf ib; memset(&ib, 0, sizeof ib);
-  if (emit_io_pick(c, tv, qm, 0, &ib)) {
+  if (emit_io_pick(c, -1, tv, qm, 0, &ib)) {
     int pt = ++g_tmp;
     buf_printf(b, " || (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO && "
                   "({ int _p%d = %s; _p%d != 0x7fffffff", tv, tv, pt, ib.p, pt);
     if (!include_all) {
       char pn[24]; snprintf(pn, sizeof pn, "_p%d", pt);
       buf_puts(b, " && ");
-      emit_io_pick_public(c, qm, pn, b);
+      emit_io_pick_public(c, -1, qm, pn, b);
     }
     buf_puts(b, "; }))");
   }
@@ -1549,7 +1549,7 @@ static char *emit_io_builtin_call(Compiler *c, int id, int recv, int tv, int wan
 }
 void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b) {
   const NodeTable *nt = c->nt;
-  int ks[16], n = io_reopen_defs(c, name, 0, ks, 16);
+  int ks[16], n = io_reopen_defs(c, id, name, 0, ks, 16);
   int args = nt_ref(nt, id, "arguments");
   /* an explicit receiver reaches only a public method, as at a boxed one
      (emit_poly_vis_precheck); send and self calls reach any */
@@ -1596,7 +1596,7 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
   snprintf(h, sizeof h, "_r%d", tv);
   buf_printf(b, "({ sp_File *_r%d = _t%d", tv, trv);
   buf_printf(b, "; int _k%d = ", tv);
-  emit_io_pick_of(c, h, name, 0, b);
+  emit_io_pick_of(c, id, h, name, 0, b);
   buf_puts(b, "; ");
   for (int i = 0; i < n; i++) {
     int kmi = call_target(c, id, ks[i], name, 0, NULL);
@@ -1657,7 +1657,7 @@ static void emit_poly_dispatch_key_top(Compiler *c, int tv, int key_guard, int p
   /* a class that leaves the name to Array keys by its Array's kind, to
      the builtin arms (comp_arysub_name_is_array) */
   for (int k = 0; pick_name && k < c->nclasses; k++)
-    if (comp_arysub_name_is_array(c, k, pick_name)) buf_printf(b, " && _t%d != %d", kt, k);
+    if (comp_arysub_name_is_array(c, -1, k, pick_name)) buf_printf(b, " && _t%d != %d", kt, k);
   buf_printf(b, " ? _t%d : ", kt);
   emit_poly_dispatch_key_pick(c, tv, key_guard, prim_cand, exc_cand, pick_name, b);
   buf_puts(b, "; })");
@@ -1685,7 +1685,7 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
   static int io_done = 0;
   if (pick_name && !io_done) {
     Buf ib; memset(&ib, 0, sizeof ib);
-    if (emit_io_pick(c, tv, pick_name, 0, &ib)) {
+    if (emit_io_pick(c, -1, tv, pick_name, 0, &ib)) {
       buf_printf(b, "((_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO) ? %s : ", tv, tv, ib.p);
       io_done = 1;
       emit_poly_dispatch_key_pick(c, tv, key_guard, prim_cand, exc_cand, pick_name, b);
@@ -3118,9 +3118,9 @@ int native_class_defines(Compiler *c, const char *name) {
 
 /* does the program's reopening of String define `name` (as a method or a
    reader)? The only program definition a typed String receiver can reach. */
-int string_reopen_defines(Compiler *c, const char *name) {
+int string_reopen_defines(Compiler *c, int id, const char *name) {
   int si = comp_core_class(c, CORE_STRING);
-  return si >= 0 && (comp_method_in_chain(c, si, name, NULL) >= 0 || comp_reader_in_chain(c, si, name, NULL));
+  return si >= 0 && (call_target(c, id, si, name, 0, NULL) >= 0 || comp_reader_in_chain(c, si, name, NULL));
 }
 
 static int user_defines_or_reads_walk(Compiler *c, const char *name) {
@@ -3900,7 +3900,7 @@ static int str_encoding_recv(Compiler *c, int node) {
     return -1;
   int argc = 0; call_args(nt, node, &argc);
   int r = nt_ref(nt, node, "receiver");
-  if (argc != 0 || r < 0 || comp_ntype(c, r) != TY_STRING || string_reopen_defines(c, "encoding")) return -1;
+  if (argc != 0 || r < 0 || comp_ntype(c, r) != TY_STRING || string_reopen_defines(c, node, "encoding")) return -1;
   int rk = nt_kind(nt, r);
   return rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode ? r : -1;
 }
@@ -7079,7 +7079,7 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     if ((sp_streq(name, "utime") || sp_streq(name, "stime") ||
          sp_streq(name, "cutime") || sp_streq(name, "cstime")) &&
         (repr_of(c, id).as_ty == TY_FLOAT || g_poly_builtin_arm) &&
-        !reopened_owns(c, "Object", name) && !reopened_owns(c, "Kernel", name)) {
+        !reopened_owns(c, id, "Object", name) && !reopened_owns(c, id, "Kernel", name)) {
       int tv = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
       buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TMS"
@@ -12141,7 +12141,7 @@ static int recv_new_string(Compiler *c, int n, int depth) {
   if (pl.mi < 0) {
     int made = 0;
     if (rt == TY_INT || rt == TY_FLOAT)
-      made = (sp_streq(nm, "to_s") || sp_streq(nm, "inspect")) && comp_builtin_kind_reopen_mi(c, rt, nm) < 0;
+      made = (is_to_s_name(nm) || is_inspect_name(nm)) && comp_builtin_kind_reopen_mi(c, n, rt, nm) < 0;
     else
       for (int k = 0; !made && makes[k]; k++) made = sp_streq(nm, makes[k]) && str_fresh_value(c, n);
     return made && an_prog_never_gives(nm, 0);
@@ -12168,7 +12168,7 @@ static int arg_runs_nothing(Compiler *c, int n) {
       int r = nt_ref(nt, n, "receiver");
       const char *nm = nt_str(nt, n, "name");
       if (!subtree_is_pure_read(c, n) ||
-          (r >= 0 && nm && comp_builtin_kind_reopen_mi(c, comp_ntype(c, r), nm) >= 0)) return 0;
+          (r >= 0 && nm && comp_builtin_kind_reopen_mi(c, n, comp_ntype(c, r), nm) >= 0)) return 0;
       if (call_is_scalar_op(c, n) && !scalar_op_over_numbers(c, n)) return 0;
       break;
     }
@@ -12182,7 +12182,7 @@ static int arg_runs_nothing(Compiler *c, int n) {
       const int *bv = st >= 0 ? nt_arr(nt, st, "body", &bn) : NULL;
       TyKind t = bn > 0 ? comp_ntype(c, bv[bn - 1]) : TY_STRING;
       if (t != TY_STRING && ((t != TY_INT && t != TY_FLOAT && t != TY_BOOL && t != TY_SYMBOL) ||
-                             comp_builtin_kind_reopen_mi(c, t, "to_s") >= 0)) return 0;
+                             comp_builtin_kind_reopen_mi(c, n, t, "to_s") >= 0)) return 0;
       break;
     }
     case NK_ParenthesesNode: case NK_StatementsNode: case NK_ArrayNode: case NK_HashNode:
@@ -21334,9 +21334,9 @@ int builtin_arity_admits(const char *cls, const char *name, int argc) {
 /* Whether a reopened builtin -- Object, Kernel, Class, Module, the
    receiver's own or the other class its kind stands for -- defines the
    name: a def there keeps its dispatch, whatever the count. */
-int reopened_owns(Compiler *c, const char *cls, const char *name) {
+int reopened_owns(Compiler *c, int id, const char *cls, const char *name) {
   int bc = comp_builtin_class_named(c, cls);
-  return bc >= 0 && comp_method_in_chain(c, bc, name, NULL) >= 0;
+  return bc >= 0 && call_target(c, id, bc, name, 0, NULL) >= 0;
 }
 
 /* The singleton defs a program writes on a constant -- `def S1.m`, or a
@@ -21483,8 +21483,8 @@ static int singleton_def_of(Compiler *c, const char *cn, const char *name) {
 
 /* A top-level def or alias: Object's private instance method, which CRuby
    refuses on any receiver as a NoMethodError, never as a count. */
-static int toplevel_def(Compiler *c, const char *name) {
-  int mi = comp_method_index(c, name);
+static int toplevel_def(Compiler *c, int id, const char *name) {
+  int mi = call_target(c, id, -1, name, CT_TOP, NULL);
   return mi >= 0 && !c->scopes[mi].is_cmethod;
 }
 
@@ -21607,7 +21607,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
                            comp_reader_in_chain(c, ecls, name, NULL)))
       return 0;
     if (call_target(c, id, -1, name, CT_TOP, NULL) >= 0 ||
-        reopened_owns(c, "Kernel", name) || reopened_owns(c, "Object", name)) return 0;
+        reopened_owns(c, id, "Kernel", name) || reopened_owns(c, id, "Object", name)) return 0;
     if (kwh && !hash_counted(c, id, "Kernel", name, 1, &argc)) return 0;
     if (!arity_spec_row(ctbl, "Kernel", name, with_block, argc, exp, n) || !exp[0]) return 0;
     *eval_recv = 0;
@@ -21644,11 +21644,11 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     int own = !surface || class_is_builtin_reopen(c, uc) ? class_arity_spec_row(c, id, cn, name, with_block, &argc, kwh, exp, n) : 0;
     if (surface && !own) {
       if (kwh) return 0;   /* (Class's and Module's rows do not say which take keywords) */
-      if (reopened_owns(c, surface, name) ||
-          (sp_streq(surface, "Class") && reopened_owns(c, "Module", name)) ||
-          reopened_owns(c, "Object", name) || reopened_owns(c, "Kernel", name)) return 0;
+      if (reopened_owns(c, id, surface, name) ||
+          (is_class_const_name(surface) && reopened_owns(c, id, "Module", name)) ||
+          reopened_owns(c, id, "Object", name) || reopened_owns(c, id, "Kernel", name)) return 0;
       if (!arity_spec_row(itbl, surface, name, with_block, argc, exp, n) &&
-          (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, name)))
+          (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, id, name)))
         return 0;
     }
     else if (!own) return 0;
@@ -21706,9 +21706,9 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
        which CRuby refuses as a NoMethodError, not a count */
     const char *twin = rt == TY_BOOL ? "FalseClass" : rt == TY_IO ? "IO"
                      : rt == TY_QUEUE ? "SizedQueue" : NULL;
-    if (reopened_owns(c, bcn, name) || reopened_owns(c, owner, name) ||
-        (twin && reopened_owns(c, twin, name)) ||
-        (sp_streq(owner, "Object") && toplevel_def(c, name))) return 0;
+    if (reopened_owns(c, id, bcn, name) || reopened_owns(c, id, owner, name) ||
+        (twin && reopened_owns(c, id, twin, name)) ||
+        (is_object_class_name(owner) && toplevel_def(c, id, name))) return 0;
   }
   *given = argc;
   return 1;
@@ -21719,7 +21719,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
 #define POLY_ARITY_BUILTINS 10
 #define POLY_ARITY_MAX 16
 static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const char **tests, char exps[][32]);
-static int poly_arity_rows(Compiler *c, const char *name, int with_block, int argc, int kwh, int partial,
+static int poly_arity_rows(Compiler *c, int id, const char *name, int with_block, int argc, int kwh, int partial,
                            const char **tests, char exps[][32]);
 int builtin_arity_violation(Compiler *c, int id, int non_nil) {
   char exp[32]; int eval_recv, given;
@@ -22006,7 +22006,7 @@ static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const
   if (comp_any_class_accessor(c, name)) return 0;
   for (int k = 0; nmm < 0 && k < c->nclasses; k++)
     if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
-  return poly_arity_rows(c, name, with_block, argc, kwh, 0, tests, exps);
+  return poly_arity_rows(c, id, name, with_block, argc, kwh, 0, tests, exps);
 }
 
 /* The builtin and native classes a boxed receiver of `name` can be, each
@@ -22014,7 +22014,7 @@ static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const
    `argc` arguments: how many, or 0 where one takes the count or a reopened
    class may. `partial`: the classes that refuse it, beside others that
    take it. */
-static int poly_arity_rows(Compiler *c, const char *name, int with_block, int argc, int kwh, int partial,
+static int poly_arity_rows(Compiler *c, int id, const char *name, int with_block, int argc, int kwh, int partial,
                            const char **tests, char exps[][32]) {
   static const char *const CLS[POLY_ARITY_BUILTINS] = {
     "String", "Integer", "Float", "Symbol", "Array", "Hash", "Range",
@@ -22031,13 +22031,13 @@ static int poly_arity_rows(Compiler *c, const char *name, int with_block, int ar
     "_t%d.tag == SP_TAG_BOOL && _t%d.tag == SP_TAG_BOOL",
     "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id >= 0" };
   const SpAritySpec *itbl = sp_builtin_arity_spec_tbl;
-  if (reopened_owns(c, "Object", name) || reopened_owns(c, "Kernel", name) ||
-      reopened_owns(c, "Comparable", name) || reopened_owns(c, "Enumerable", name) ||
-      reopened_owns(c, "FalseClass", name) || reopened_owns(c, "Numeric", name))
+  if (reopened_owns(c, id, "Object", name) || reopened_owns(c, id, "Kernel", name) ||
+      reopened_owns(c, id, "Comparable", name) || reopened_owns(c, id, "Enumerable", name) ||
+      reopened_owns(c, id, "FalseClass", name) || reopened_owns(c, id, "Numeric", name))
     return 0;
   int n = 0;
   for (int q = 0; q < POLY_ARITY_BUILTINS; q++) {
-    if (reopened_owns(c, CLS[q], name)) return 0;
+    if (reopened_owns(c, id, CLS[q], name)) return 0;
     char exp[32]; exp[0] = 0;
     int row = (q < POLY_ARITY_BUILTINS - 1 && arity_spec_row(itbl, CLS[q], name, with_block, argc, exp, sizeof exp)) ||
               arity_spec_row(itbl, "Object", name, with_block, argc, exp, sizeof exp);
@@ -22091,7 +22091,7 @@ static int poly_arity_rows(Compiler *c, const char *name, int with_block, int ar
    counts the classes take together. */
 static void bi_generic_arity_raise(Compiler *c, const char *name, int rep, int tv, const char *fallback, Buf *b) {
   const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
-  int nr = rep >= 0 ? poly_arity_rows(c, name, 0, rep, 0, 1, tests, exps) : 0;
+  int nr = rep >= 0 ? poly_arity_rows(c, -1, name, 0, rep, 0, 1, tests, exps) : 0;
   for (int q = 0; q < nr; q++) {
     buf_puts(b, q ? " else if (" : " if (");
     buf_printf(b, tests[q], tv, tv);
@@ -24097,12 +24097,12 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
   }
   if (plain || stamped) emit_object_reopen_vis_precheck(c, id, tv, vnm, b);
   /* a boxed IO handle, by the reopening its kind picks */
-  int ks[16], n = io_reopen_defs(c, vnm, 0, ks, 16);
+  int ks[16], n = io_reopen_defs(c, id, vnm, 0, ks, 16);
   for (int i = 0; i < n; i++) {
     int vis = io_reopen_call_vis(c, id, ks[i], vnm, plain, caller);
     if (vis == SP_VIS_PUBLIC) continue;
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO && ", tv, tv);
-    emit_io_pick(c, tv, vnm, 0, b);
+    emit_io_pick(c, id, tv, vnm, 0, b);
     char h[48];
     snprintf(h, sizeof h, "(sp_File *)_t%d.v.p", tv);
     buf_printf(b, " == %d) { sp_exc_stage_recv(_t%d); sp_raise_cls(\"NoMethodError\", ", ks[i], tv);
@@ -34125,7 +34125,7 @@ static int obj_responds_answer(Compiler *c, int cid, const char *qm) {
               comp_reader_in_chain(c, cid, qm, NULL) ||
               (is_wr && comp_writer_in_chain(c, cid, wbase, NULL));
   /* an Array (Hash) subclass instance answers Array's (Hash's) names (#7449) */
-  if (!found && comp_ty_ary_root(c, ty_object(cid)) >= 0 && comp_arysub_builtin_name(c, cid, qm)) return 2;
+  if (!found && comp_ty_ary_root(c, ty_object(cid)) >= 0 && comp_arysub_builtin_name(c, -1, cid, qm)) return 2;
   /* Both a native class and its subclasses answer the public bindings.
      A source visibility declaration applies just as it does to a def. */
   int nk = comp_native_binding_class(c, cid, qm);
@@ -34567,7 +34567,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
   for (int u = 0; !resolved && uni[u]; u++) if (sp_streq(qm, uni[u])) { yes = resolved = 1; break; }
   /* an Array (Hash) subclass instance answers Array's (Hash's) names (#7449) */
   if (!resolved && recv >= 0 && comp_ty_ary_root(c, rt) >= 0 &&
-      comp_arysub_builtin_name(c, ty_object_class(rt), qm))
+      comp_arysub_builtin_name(c, -1, ty_object_class(rt), qm))
     { yes = resolved = 1; }
   /* A top-level def (a hoisted `module Kernel` method among them) is a
      private method of Object, so every receiver answers it to include_all:
@@ -35517,7 +35517,7 @@ static int sn_arg_runs_nothing(Compiler *c, int n) {
       int r = nt_ref(nt, n, "receiver");
       const char *nm = nt_str(nt, n, "name");
       if (!subtree_is_pure_read(c, n) ||
-          (r >= 0 && nm && comp_builtin_kind_reopen_mi(c, comp_ntype(c, r), nm) >= 0)) return 0;
+          (r >= 0 && nm && comp_builtin_kind_reopen_mi(c, n, comp_ntype(c, r), nm) >= 0)) return 0;
       if (call_is_scalar_op(c, n) && !scalar_op_over_numbers(c, n)) return 0;
       break;
     }
@@ -35788,7 +35788,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
                       : rtR == TY_IO ? "File"
                       : rtR == TY_CLASS ? "Class" : NULL;
       if (ocR) {
-        int ciR = rtR == TY_IO ? io_reopen_class(c, nmR) : comp_core_class(c, builtin_core_class_slot(ocR));
+        int ciR = rtR == TY_IO ? io_reopen_class(c, id, nmR) : comp_core_class(c, builtin_core_class_slot(ocR));
         int miR = ciR >= 0 ? call_target(c, id, ciR, nmR, 0, NULL) : -1;
         if (miR >= 0 && emit_reopen_call_first(c, id, recvR, rtR, nmR, miR, b)) return;
         if (miR >= 0) { emit_reopen_primitive_call_o(c, id, ciR, miR, recvR, nmR, b); return; }
@@ -35896,7 +35896,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     if (erecv >= 0 && (ert == TY_RANGE || ert == TY_TIME || ert == TY_IO || ert == TY_CLASS) &&
         nt_ref(c->nt, id, "block") < 0 && !cplan_builtin_call(c, id)) {
       const char *ename = nt_str(c->nt, id, "name");
-      int eci = ert == TY_IO ? io_reopen_class(c, ename)
+      int eci = ert == TY_IO ? io_reopen_class(c, id, ename)
               : comp_core_class(c, ert == TY_RANGE ? CORE_RANGE : ert == TY_TIME ? CORE_TIME : CORE_CLASS);
       int emi = (eci >= 0 && ename) ? call_target(c, id, eci, ename, 0, NULL) : -1;
       if (emi >= 0 && ert == TY_IO) { emit_io_reopen_call(c, id, erecv, ename, b); return; }

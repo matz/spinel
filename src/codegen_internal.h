@@ -1316,7 +1316,7 @@ int reopened_builtin_chain_id(Compiler *c, int ci);
 int is_exc_name(const char *n);
 int class_is_exc_subclass(Compiler *c, int ci);
 int class_is_builtin_reopen(Compiler *c, int ci);   /* is_builtin_reopen of class ci, kept per class table */
-int exc_class_defines(Compiler *c, const char *name);
+int exc_class_defines(Compiler *c, int id, const char *name);
 int class_is_exc_reopen(Compiler *c, int ci);
 int super_reaches_exc_text(Compiler *c, int id, int reopen);
 int exc_message_super_to_s(Compiler *c, int id, int *out, int cap);
@@ -3086,7 +3086,7 @@ int splat_mutator_block_ok(Compiler *c, int id);
 int poly_cls_value_owns(Compiler *c, int id, const char *name);
 int base_arg_may_gc(Compiler *c, int arg);
 void emit_base_arg(Compiler *c, int arg, int t, char *bv, size_t n, Buf *b);
-int string_reopen_defines(Compiler *c, const char *name);
+int string_reopen_defines(Compiler *c, int id, const char *name);
 int native_class_defines(Compiler *c, const char *name);
 const char *array_index_bad_class(Compiler *c, int id);
 /* the poly dispatch helpers other files read; the rest of its helpers

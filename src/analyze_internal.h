@@ -1264,7 +1264,7 @@ int class_is_exc_reopen(Compiler *c, int ci);
    shared with a bundled extension's __cext_link (analyze_cext.c) */
 void ffi_semi_append(char **slot, const char *add);
 void *ffi_grow(void *p, int n, int *cap, int init, size_t sz);
-int exc_class_defines(Compiler *c, const char *name);
+int exc_class_defines(Compiler *c, int id, const char *name);
 int super_reaches_exc_text(Compiler *c, int id, int reopen);
 int exc_message_super_to_s(Compiler *c, int id, int *out, int cap);
 int exc_subclass_defines(Compiler *c, const char *name);

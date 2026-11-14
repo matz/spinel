@@ -439,12 +439,12 @@ int desugar_ie_bare_object_calls(Compiler *c) {
     int ro = nm ? comp_arysub_reopen(c, cls) : -1;
     int enumr = nm && !hit && !is_arysub_kernel_name(nm) && ie_enum_reopen_answers(c, cls, nm) &&
                 !comp_is_undeffed_in_chain(c, cls, nm);
-    int own = nm && (comp_arysub_name_is_array(c, cls, nm) || enumr ||
+    int own = nm && (comp_arysub_name_is_array(c, id, cls, nm) || enumr ||
                      (comp_ary_is_str(c, cls) && sp_streq(nm, "dup"))) &&
               !comp_is_undeffed_in_chain(c, cls, nm) &&
               (!is_arysub_kernel_name(nm) || (ro >= 0 && comp_method_in_class(c, ro, nm) >= 0));
     if (nm && !own && call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) continue;
-    int builtin = !hit && nm && (comp_arysub_name_is_array(c, cls, nm) || enumr);
+    int builtin = !hit && nm && (comp_arysub_name_is_array(c, id, cls, nm) || enumr);
     if (!builtin && (!hit || call_target(c, id, cls, nm, 0, NULL) >= 0)) continue;
     int sn = nt_new_node(nt, "SelfNode");
     if (sn < 0) continue;
@@ -5958,7 +5958,7 @@ int step_kw_own_method(Compiler *c, int id) {
     return 0;
   }
   int num = ty_is_numeric(rt) || rt == TY_RATIONAL || rt == TY_BIGINT;
-  return !num || comp_builtin_kind_reopen_mi(c, rt, "step") >= 0;
+  return !num || comp_builtin_kind_reopen_mi(c, id, rt, "step") >= 0;
 }
 
 void step_kw_positional(Compiler *c, NodeTable *nt, int id, int args, int to_v, int by_v, int by_first) {
@@ -8292,9 +8292,9 @@ static int dsend_poly_builtin_classes(Compiler *c, const char **out, int cap) {
    (cls_fact_excludes; a class method, by the class's Class object), one no
    builtin answers, and no class it may hold answers through
    method_missing? */
-static int dsend_name_only_outside(Compiler *c, int recv, const char *name) {
+static int dsend_name_only_outside(Compiler *c, int id, int recv, const char *name) {
   int lo = 0, hi = -1;
-  if (builtin_recv_arity_span(name, &lo, &hi) || comp_object_defines(c, name)) return 0;
+  if (builtin_recv_arity_span(name, &lo, &hi) || cplan_core_method(c, id, CORE_OBJECT, name) >= 0) return 0;
   int any = 0;
   for (int k = 0; k < c->nclasses; k++)
     if (!cls_fact_excludes(c, recv, k) && comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
@@ -8525,7 +8525,7 @@ static int desugar_dynamic_send_inner(Compiler *c) {
            dispatch's default does) */
         int rbound = !cls_fact_unbounded(c, recv);
         for (int k = 0; k < ncand && k < 256; k++) {
-          if (rbound && !anh_has(&seen, cand[k]) && dsend_name_only_outside(c, recv, cand[k])) continue;
+          if (rbound && !anh_has(&seen, cand[k]) && dsend_name_only_outside(c, id, recv, cand[k])) continue;
           dsend_add_name(&own, &nown, &cap, &seen, cand[k]);
         }
         /* and the builtins' methods: a boxed value is an Integer or a String
@@ -18508,7 +18508,7 @@ int desugar_builtin_splat_forward(Compiler *c) {
     int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && key_name(c, recv) &&
                sp_streq(key_name(c, recv), "Time") &&
                /* (a reopen of Time leaves Time.new alone unless it defines its own) */
-               (comp_core_class(c, CORE_TIME) < 0 || comp_cmethod_in_chain(c, comp_core_class(c, CORE_TIME), "new", NULL) < 0) &&
+               (comp_core_class(c, CORE_TIME) < 0 || call_target(c, id, comp_core_class(c, CORE_TIME), "new", CT_CMETHOD, NULL) < 0) &&
                sp_streq(nm, "new") && nt_ref(nt, id, "block") < 0 && rest && ms && ty_is_array(infer_type(c, sv));
     if (!tnew && (!rest || !ms || ms->rest_idx < 0 || ms->rest_idx >= ms->nparams || !ms->pnames ||
         !ms->pnames[ms->rest_idx] || !sp_streq(ms->pnames[ms->rest_idx], rest))) continue;

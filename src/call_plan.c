@@ -182,12 +182,17 @@ int cplan_main_singleton_call(Compiler *c, int id) {
 
 /* See call_plan.h. */
 int comp_call_reaches_own_any(Compiler *c, int id, const char *name) {
-  return !cplan_builtin_call(c, id) && comp_object_defines(c, name);
+  return !cplan_builtin_call(c, id) && cplan_core_method(c, id, CORE_OBJECT, name) >= 0;
+}
+/* See call_plan.h. */
+int cplan_core_method(Compiler *c, int id, int core, const char *name) {
+  int k = comp_core_class(c, core);
+  return k >= 0 ? call_target(c, id, k, name, 0, NULL) : -1;
 }
 /* See call_plan.h. */
 int comp_call_reaches_own(Compiler *c, int id, int class_id, const char *name) {
   if (cplan_builtin_call(c, id)) return 0;
-  return call_target(c, id, class_id, name, 0, NULL) >= 0 || comp_object_defines(c, name);
+  return call_target(c, id, class_id, name, 0, NULL) >= 0 || cplan_core_method(c, id, CORE_OBJECT, name) >= 0;
 }
 
 static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
@@ -291,6 +296,11 @@ static unsigned ct_enforce_flags(Compiler *c, int id) {
 /* See call_plan.h. A call with a block binds no entry (a yielding method is
    called through the proc form of one version), so it asks with none. */
 unsigned ct_vis_flags(Compiler *c, int id, unsigned flags) {
+  /* (what each flag does to the face: CT_PUBLIC and CT_PROTECTED are the
+     face itself; CT_NOFACE says the ask has none; CT_OWN, CT_CMETHOD,
+     CT_TOP, CT_REACH, CT_CAPTURE, CT_IMPLIED and CT_INCLUDED are asks of a
+     name that take it as it is, whatever the call enforces) */
+  if (flags & CT_NOFACE) return flags;
   if (flags || id < 0 || nt_ref(c->nt, id, "block") >= 0) return flags;
   return ct_enforce_flags(c, id);
 }
@@ -1008,10 +1018,10 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   const char *rname = nt_str(nt, id, "orig_name") ? nt_str(nt, id, "orig_name") : name;
   /* an IO handle's reopen: the File, IO or socket class that defines it */
   if (rt == TY_IO) {
-    int eci = io_reopen_class(c, name);
+    int eci = io_reopen_class(c, id, name);
     int emi = eci >= 0 ? call_target(c, id, eci, name, 0, NULL) : -1;
     if (emi >= 0) {
-      cplan_set(p, emi, eci, UC_REOPEN, io_reopen_ret_mixed(c, name) ? CP_SWITCH : CP_DIRECT);
+      cplan_set(p, emi, eci, UC_REOPEN, io_reopen_ret_mixed(c, id, name) ? CP_SWITCH : CP_DIRECT);
       return;
     }
   }
@@ -1160,7 +1170,7 @@ int cplan_virtual_member(Compiler *c, int id, const CallPlan *p, int mi, PolyBlo
   if (p->via == UC_REOPEN) {
     int recv = nt_ref(c->nt, id, "receiver");
     if (recv >= 0 && comp_ntype(c, recv) == TY_IO) {
-      int ks[16], nk = io_reopen_defs(c, name, 0, ks, 16);
+      int ks[16], nk = io_reopen_defs(c, id, name, 0, ks, 16);
       for (int i = 0; i < nk; i++)
         if (call_target(c, id, ks[i], name, 0, NULL) == mi) return 1;
     }
@@ -6501,9 +6511,9 @@ static int cplan_io_reopen_yields(Compiler *c, int id) {
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name || recv < 0 || comp_ntype(c, recv) != TY_IO) return 0;
-  int ci = io_reopen_class(c, name);
+  int ci = io_reopen_class(c, id, name);
   if (ci < 0 || call_target(c, id, ci, name, 0, NULL) < 0) return 0;
-  int ks[16], n = io_reopen_defs(c, name, 0, ks, 16);
+  int ks[16], n = io_reopen_defs(c, id, name, 0, ks, 16);
   for (int i = 0; i < n; i++) {
     Scope *km = &c->scopes[call_target(c, id, ks[i], name, 0, NULL)];
     if (km->yields || (km->blk_param && km->blk_param[0])) return 1;
@@ -7979,9 +7989,9 @@ int cplan_nil_scalar_boxed(Compiler *c, int id, const char *name, int recv, TyKi
   /* (a block into Object's method of the name that yields keeps the old
      path, as cplan_nil_scalar_reach) */
   int oc = comp_core_class(c, CORE_OBJECT), nk = comp_core_class(c, CORE_NILCLASS);
-  int omi = oc >= 0 ? comp_method_in_chain(c, oc, name, NULL) : -1;
+  int omi = cplan_core_method(c, id, CORE_OBJECT, name);
   if (nt_ref(nt, id, "block") >= 0 && omi >= 0 && c->scopes[omi].yields) return 0;
-  if ((nk >= 0 ? comp_method_in_chain(c, nk, name, NULL) : -1) < 0 || comp_method_vis_declared(c, nk, name, NULL) != SP_VIS_PUBLIC) return 0;
+  if (cplan_core_method(c, id, CORE_NILCLASS, name) < 0 || comp_method_vis_declared(c, nk, name, NULL) != SP_VIS_PUBLIC) return 0;
   /* beside a public method the program adds to Object, an Integer or a
      Float answers boxed before the analysis settles whether it may be nil:
      an Array the answer is pushed into is built boxed from the start, not

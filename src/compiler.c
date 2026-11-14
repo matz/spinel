@@ -2287,7 +2287,7 @@ int comp_array_method_name(const char *n) {
 /* The same for the builtin class cid's chain embeds, Array or Hash, and a
    method the program's reopen of that builtin adds (`class Hash; def
    symbolize_keys`): the builtin's dispatch takes it with self boxed. */
-int comp_arysub_builtin_name(Compiler *c, int cid, const char *n) {
+int comp_arysub_builtin_name(Compiler *c, int id, int cid, const char *n) {
   /* ...and an alias that reopen adds of a name it answers (activesupport's
      `class Hash; alias_method :blank?, :empty?`), which the builtin's
      dispatch resolves as it does on the builtin itself */
@@ -2297,23 +2297,23 @@ int comp_arysub_builtin_name(Compiler *c, int cid, const char *n) {
     const char *rn = comp_resolve_alias_ex(c, ro, n, NULL, NULL);
     if (rn && n && !sp_streq(rn, n)) {
       depth++;
-      int r = comp_arysub_builtin_name(c, cid, rn);
+      int r = comp_arysub_builtin_name(c, id, cid, rn);
       depth--;
       if (r) return 1;
     }
   }
   int hash = comp_ary_is_hash(c, cid);
   if (comp_ary_is_str(c, cid)) {
-    if (comp_builtin_kind_reopen_mi(c, TY_STRING, n) >= 0) return 1;
+    if (comp_builtin_kind_reopen_mi(c, id, TY_STRING, n) >= 0) return 1;
     return builtin_instance_method_known("String", n) || is_arysub_kernel_name(n);
   }
   /* a Time subclass's construction writes its Time through __sp_time_set
      (rewrite_array_subclass_new) */
   if (comp_ary_is_time(c, cid)) {
-    if (comp_builtin_kind_reopen_mi(c, TY_TIME, n) >= 0) return 1;
+    if (comp_builtin_kind_reopen_mi(c, id, TY_TIME, n) >= 0) return 1;
     return builtin_instance_method_known("Time", n) || sp_streq(n, "__sp_time_set") || is_arysub_kernel_name(n);
   }
-  if (comp_builtin_kind_reopen_mi(c, hash ? TY_POLY_POLY_HASH : TY_POLY_ARRAY, n) >= 0) return 1;
+  if (comp_builtin_kind_reopen_mi(c, id, hash ? TY_POLY_POLY_HASH : TY_POLY_ARRAY, n) >= 0) return 1;
   if (!hash) return comp_array_method_name(n);
   return builtin_instance_method_known("Hash", n) || is_arysub_kernel_name(n);
 }
@@ -2349,31 +2349,32 @@ const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n) {
   return ks;
 }
 /* Whether a call named n on an instance of Array subclass cid is Array's:
-   no method, reader or writer of the class chain takes the name, it asks
-   nothing about the object itself, and Array (or Enumerable, which Array
-   includes) has it. */
-int comp_arysub_name_is_array(Compiler *c, int cid, const char *n) {
+   no method, reader or writer of the class chain takes the name (as
+   call_target answers call id; -1 for no call), it asks nothing about the
+   object itself, and Array (or Enumerable, which Array includes) has it. */
+int comp_arysub_name_is_array(Compiler *c, int id, int cid, const char *n) {
   if (comp_ary_root(c, cid) < 0 || !n) return 0;
   /* a method of the builtin's reopen is the builtin's */
-  int dc = -1, ro = comp_arysub_reopen(c, cid);
-  if (((comp_method_in_chain(c, cid, n, &dc) >= 0 && (ro < 0 || dc != ro)) ||
+  MethodLookup ml = { .def_class = -1 };
+  int ro = comp_arysub_reopen(c, cid);
+  if (((call_target(c, id, cid, n, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) ||
        comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, cid, n)) return 0;
   char base[256];
   if (setter_base_name(n, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return 0;
   /* != is BasicObject's, which calls == and negates it: a class with its
      own == answers != with that == (the call plan's delegate) */
   if (sp_streq(n, "!=")) {
-    int dq = -1;
-    if (comp_method_in_chain(c, cid, "==", &dq) >= 0 && (ro < 0 || dq != ro)) return 0;
+    MethodLookup eq = { .def_class = -1 };
+    if (call_target(c, id, cid, "==", 0, &eq) >= 0 && (ro < 0 || eq.def_class != ro)) return 0;
   }
   /* Time's comparisons come from Comparable, which asks <=>: a Time
      subclass defining its own <=> answers them with it */
   if (c->classes[cid].ary_time && (is_cmp_op(n) || sp_streq(n, "==") || sp_streq(n, "!=") ||
                                    sp_streq(n, "between?") || sp_streq(n, "clamp"))) {
-    int dc2 = -1, ro2 = comp_arysub_reopen(c, cid);
-    if (comp_method_in_chain(c, cid, "<=>", &dc2) >= 0 && (ro2 < 0 || dc2 != ro2)) return 0;
+    MethodLookup cmp = { .def_class = -1 };
+    if (call_target(c, id, cid, "<=>", 0, &cmp) >= 0 && (ro < 0 || cmp.def_class != ro)) return 0;
   }
-  return !is_arysub_object_name(n) && comp_arysub_builtin_name(c, cid, n);
+  return !is_arysub_object_name(n) && comp_arysub_builtin_name(c, id, cid, n);
 }
 /* Whether call `id` on a receiver of type rt, an Array subclass instance, is
    Array's (comp_arysub_name_is_array), or a `super` into Array was rewritten
@@ -2383,7 +2384,7 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   if (comp_ary_root(c, cid) < 0 || nt_kind(c->nt, id) != NK_CallNode) return 0;
   const char *n = nt_str(c->nt, id, "name");
   if (!n) return 0;
-  if (!cplan_builtin_call(c, id) && !comp_arysub_name_is_array(c, cid, n)) return 0;
+  if (!cplan_builtin_call(c, id) && !comp_arysub_name_is_array(c, id, cid, n)) return 0;
   *kind = comp_ary_kind(c, cid);
   /* A String subclass instance's String is a handle (TY_STRBUF). A call
      that changes it, or answers it, takes it boxed (the poly String arms
@@ -2468,27 +2469,28 @@ int comp_arysub_kernel_array(Compiler *c, int id) {
 /* The method a program's reopen of a builtin kind's own class defines under
    `name` (`class Array; def first ...`), or -1: the class itself, not an
    ancestor, since an Object reopen does not displace Array#first. */
-int comp_builtin_kind_reopen_mi(Compiler *c, TyKind t, const char *name) {
+int comp_builtin_kind_reopen_mi(Compiler *c, int id, TyKind t, const char *name) {
   int cn = t == TY_INT || t == TY_FLOAT || t == TY_STRING || t == TY_SYMBOL ||
            ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t) || t == TY_ENUMERATOR
            ? core_of_type(t) : -1;
   if (cn < 0 || !name) return -1;
   int ci = comp_core_class(c, cn);
   if (ci < 0) return -1;
-  int dc = -1, mi = comp_method_in_chain(c, ci, name, &dc);
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, id, ci, name, 0, &ml);
   /* under the name itself: an alias resolving to the reopen's name is not it */
-  return mi >= 0 && dc == ci && c->scopes[mi].name && sp_streq(c->scopes[mi].name, name) ? mi : -1;
+  return mi >= 0 && ml.def_class == ci && c->scopes[mi].name && sp_streq(c->scopes[mi].name, name) ? mi : -1;
 }
 
 /* Whether any builtin kind's own class is reopened with a method of `name`
    (comp_builtin_kind_reopen_mi for some kind). A yield site typed per site
    needs every site's answer once one of them is a reopen's, which the
    per-site table (ty_recv_builtin_result) does not carry for most names. */
-int comp_builtin_name_reopened(Compiler *c, const char *name) {
+int comp_builtin_name_reopened(Compiler *c, int id, const char *name) {
   static const TyKind kinds[] = { TY_INT, TY_FLOAT, TY_STRING, TY_SYMBOL, TY_INT_ARRAY, TY_STR_INT_HASH };
   if (!name) return 0;
   for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++)
-    if (comp_builtin_kind_reopen_mi(c, kinds[k], name) >= 0) return 1;
+    if (comp_builtin_kind_reopen_mi(c, id, kinds[k], name) >= 0) return 1;
   return 0;
 }
 
@@ -2501,7 +2503,7 @@ int comp_yield_chain_reopened(Compiler *c, int call) {
   for (int n = call, depth = 0; n >= 0 && depth < 16; depth++) {
     if (nt_kind(nt, n) == NK_YieldNode) return 0;
     if (nt_kind(nt, n) != NK_CallNode) return 0;
-    if (!cplan_builtin_call(c, n) && comp_builtin_name_reopened(c, nt_str(nt, n, "name"))) return 1;
+    if (!cplan_builtin_call(c, n) && comp_builtin_name_reopened(c, n, nt_str(nt, n, "name"))) return 1;
     n = nt_ref(nt, n, "receiver");
   }
   return 0;

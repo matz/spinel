@@ -330,7 +330,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
     /* a builtin value's method the program reopened its class with
        (`class Symbol; def mark = ...`) */
     if (mi < 0 && !io_bi && r >= 0 && rt != TY_POLY && rt != TY_UNKNOWN && !ty_is_object(rt))
-      mi = comp_builtin_kind_reopen_mi(c, rt, nm);
+      mi = comp_builtin_kind_reopen_mi(c, node, rt, nm);
     /* ... or the one the plan binds to the call (a root class's, a poly
        receiver's included): its return form is the call's */
     if (mi < 0 && !io_bi && r >= 0 && !ty_is_object(rt))

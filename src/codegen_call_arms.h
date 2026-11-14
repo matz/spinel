@@ -129,8 +129,8 @@ void class_value_responds_runtime(int tv, Buf *b);
 void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int ntexts, Buf *protos, Buf *defs);
 extern const char *const comparable_names[];
 int const_name_is_wrong(const char *s);
-int emit_io_pick(Compiler *c, int tv, const char *name, int public_only, Buf *b);
-void emit_io_pick_public(Compiler *c, const char *qm, const char *pick, Buf *b);
+int emit_io_pick(Compiler *c, int id, int tv, const char *name, int public_only, Buf *b);
+void emit_io_pick_public(Compiler *c, int id, const char *qm, const char *pick, Buf *b);
 void emit_io_reopen_responds(Compiler *c, int tv, const char *qm, int include_all, Buf *b);
 void emit_poly_dispatch_key(Compiler *c, int tv, int cls0_cand, int prim_cand, int exc_cand, Buf *b);
 void emit_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv);
@@ -165,8 +165,8 @@ const char *const *object_private_method_names(void); /* NULL-terminated */
 int respond_to_runtime_reaches(Compiler *c, TyKind rt);
 int root_reopen_defines(Compiler *c, const char *qm);
 /* 1 when the program's reopen of the builtin class or module `cls` (its
-   chain) defines `name` */
-int reopened_owns(Compiler *c, const char *cls, const char *name);
+   chain) defines `name`, as call_target answers call id (-1: no call asks) */
+int reopened_owns(Compiler *c, int id, const char *cls, const char *name);
 int bool_side_responds(Compiler *c, const char *qm, int include_all, int foldable, int *ta, int *fa);
 int root_reopen_defines_own(Compiler *c, int k, const char *qm);   /* a root reopening k defines qm itself (def, attr_reader, attr_writer) */
 int root_reopen_method_vis(Compiler *c, int cid, const char *qm);   /* an Object, Kernel or BasicObject reopening's method qm: its visibility, or -1 */

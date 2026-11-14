@@ -18176,7 +18176,7 @@ static void emit_poly_ivar_set_computed(Compiler *c, int id, int recv, TyKind rt
 
 static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   /* an exception class of the program's that defines the method answers it */
-  if (rt == TY_EXCEPTION && exc_class_defines(c, name)) return 0;
+  if (rt == TY_EXCEPTION && exc_class_defines(c, id, name)) return 0;
   /* a literal name that is no instance variable name (`"bad"`, `:@1`):
      CRuby's NameError on any receiver, after the receiver and the other
      arguments are evaluated. Falling through reached no arm, and the call
@@ -18957,8 +18957,8 @@ static void emit_poly_str_transform_answer(Compiler *c, int id, int recv, int ar
    `@s.match?(pattern)`, the pattern widened to a boxed value by a poly
    dispatch elsewhere, fell to NoMethodError for the String), and only a
    reopening of String that defines the name answers instead. */
-static int match_arm_user_claimed(Compiler *c, const char *name, TyKind rt, int argc) {
-  if (rt == TY_STRING || rt == TY_STRBUF) return string_reopen_defines(c, name);
+static int match_arm_user_claimed(Compiler *c, int id, const char *name, TyKind rt, int argc) {
+  if (rt == TY_STRING || rt == TY_STRBUF) return string_reopen_defines(c, id, name);
   if (user_defines_or_reads(c, name)) return 1;
   return rt == TY_POLY && sp_streq(name, "match?") && poly_name_user_claimed(c, name, argc);
 }
@@ -19562,7 +19562,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      the call by every arm: the bare bool went into that poly slot and the C
      did not compile. The dispatch below serves the builtin kinds too. */
   if (recv >= 0 && (argc == 1 || match_at) && nt_ref(nt, id, "block") < 0 &&
-      !match_arm_user_claimed(c, name, rt, argc) &&
+      !match_arm_user_claimed(c, id, name, rt, argc) &&
       (sp_streq(name, "match?") || sp_streq(name, "match") || sp_streq(name, "=~") || sp_streq(name, "!~")) &&
       (rt == TY_POLY || ((rt == TY_STRING || rt == TY_STRBUF) &&
                          comp_ntype(c, argv[0]) == TY_POLY))) {

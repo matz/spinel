@@ -2894,7 +2894,7 @@ int emit_cycle_bounded_expr(Compiler *c, int id, Buf *b) {
   const char *name = nt_str(nt, id, "name");
   if (!name || (!sp_streq(name, "first") && !sp_streq(name, "take"))) return 0;
   /* a program's own Enumerator#first / #take runs instead of the bounded fold */
-  if (comp_builtin_kind_reopen_mi(c, TY_ENUMERATOR, name) >= 0) return 0;
+  if (comp_builtin_kind_reopen_mi(c, id, TY_ENUMERATOR, name) >= 0) return 0;
   int args = nt_ref(nt, id, "arguments");
   int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
   if (ac != 1) return 0;

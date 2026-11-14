@@ -2953,7 +2953,7 @@ static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) 
      (emit_cycle_bounded_expr) boxes them to match. */
   if (rk == TY_ENUMERATOR && (ac == 1 && (sp_streq(nt_str(nt, node, "name"), "first") ||
       sp_streq(nt_str(nt, node, "name"), "take"))) && yield_is_cycle_recv(nt, node) &&
-      comp_builtin_kind_reopen_mi(c, TY_ENUMERATOR, nt_str(nt, node, "name")) < 0) { *out = TY_POLY_ARRAY; return 1; }
+      comp_builtin_kind_reopen_mi(c, node, TY_ENUMERATOR, nt_str(nt, node, "name")) < 0) { *out = TY_POLY_ARRAY; return 1; }
   /* Was `ac == 1` only (dig/[]/sample's own 1-arg needs); widened to any
      ac >= 1 so clamp's 2-arg form also gets its first bound's kind --
      every other existing arm here only ever matched ac == 1 anyway, so
@@ -2971,7 +2971,7 @@ static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) 
      C compile error). */
   { const char *rn = nt_str(nt, node, "name");
     /* a call an alias captured the builtin for (builtin_only) runs the builtin */
-    int rmi = cplan_builtin_call(c, node) ? -1 : comp_builtin_kind_reopen_mi(c, rk, rn);
+    int rmi = cplan_builtin_call(c, node) ? -1 : comp_builtin_kind_reopen_mi(c, node, rk, rn);
     if (rmi >= 0) {
       /* still settling in an early round is not a reason to decline: the
          site is answered by the reopen either way, and codegen reads the
@@ -3152,11 +3152,6 @@ static TyKind kconv_hash_kind(Compiler *c, int arg) {
   }
   if (at == TY_POLY) return TY_POLY;             /* nil-or-hash decided at runtime */
   return TY_POLY_POLY_HASH;                      /* Hash(nil) / Hash([]) -> {} */
-}
-
-static int an_reopen_method(Compiler *c, int cls, const char *name) {
-  int oc_ci = comp_core_class(c, cls);
-  return oc_ci >= 0 ? comp_method_in_chain(c, oc_ci, name, NULL) : -1;
 }
 
 int class_has_subclass(Compiler *c, int ocid);
@@ -7054,10 +7049,10 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
     default: break;
     }
     if (oc_cn >= 0) {
-      int oc_ci = rt == TY_IO ? io_reopen_class(c, name) : comp_core_class(c, oc_cn);
+      int oc_ci = rt == TY_IO ? io_reopen_class(c, id, name) : comp_core_class(c, oc_cn);
       if (oc_ci >= 0) {
         int oc_mi = call_target(c, id, oc_ci, name, 0, NULL);
-        if (oc_mi >= 0 && rt == TY_IO && io_reopen_ret_mixed(c, name)) { *out = an_planned_call_ret(c, id, TY_POLY); return 1; }
+        if (oc_mi >= 0 && rt == TY_IO && io_reopen_ret_mixed(c, id, name)) { *out = an_planned_call_ret(c, id, TY_POLY); return 1; }
         if (oc_mi >= 0 && !cplan_reopen_runs_builtin(c, id, oc_mi)) { *out = an_user_call(c, id, oc_mi, UC_REOPEN, oc_ci); return 1; }
       }
     }
@@ -7072,7 +7067,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
      classes answers from its layout, a builtin one from the runtime's map,
      which holds any value, so a read is boxed */
   if (recv >= 0 && rt == TY_EXCEPTION && sp_streq(name, "instance_variable_get") && argc == 1 &&
-      !exc_class_defines(c, name)) {
+      !exc_class_defines(c, id, name)) {
     *out = TY_POLY; return 1;   /* a literal name, or a computed one (#8219) */
   }
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "instance_variable_get") && argc >= 1) {
@@ -7110,13 +7105,13 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
   }
   /* instance_variable_defined? and instance_variables on a POLY receiver:
      answered per class, a bare Object from its own table */
-  if (recv >= 0 && (rt == TY_POLY || (rt == TY_EXCEPTION && !exc_class_defines(c, name))) &&
+  if (recv >= 0 && (rt == TY_POLY || (rt == TY_EXCEPTION && !exc_class_defines(c, id, name))) &&
       sp_streq(name, "instance_variable_defined?") && argc == 1) {
     /* a literal name, or a computed one (#8219); a class's own method of the
        name answers what it likes */
     { *out = poly_recv_defines(c, id, name) ? TY_POLY : TY_BOOL; return 1; }
   }
-  if (recv >= 0 && (rt == TY_POLY || (rt == TY_EXCEPTION && !exc_class_defines(c, name))) &&
+  if (recv >= 0 && (rt == TY_POLY || (rt == TY_EXCEPTION && !exc_class_defines(c, id, name))) &&
       sp_streq(name, "instance_variables") && argc == 0 &&
       nt_ref(nt, id, "block") < 0)
     { *out = poly_recv_defines(c, id, name) ? TY_POLY : TY_POLY_ARRAY; return 1; }
@@ -7125,7 +7120,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
      builtin class's own ivar access answers the row's whatever the receiver
      kind, and a read of a value whose ivars the runtime's map can hold is
      whatever was stored, once the program can store one. */
-  if (recv >= 0 && (ty_builtin_ivar_less(rt) || is_bivar_access(name)) && !comp_object_defines(c, name)) {
+  if (recv >= 0 && (ty_builtin_ivar_less(rt) || is_bivar_access(name)) && cplan_core_method(c, id, CORE_OBJECT, name) < 0) {
     const BuiltinOp *op = an_bop_find(c, id, BOP_IVAR_LESS, name, argc, nt_ref(nt, id, "block") >= 0);
     if (op && !is_bivar_access(name) && op->result == TY_NIL && c->bivar_table && ty_bivar_keyed(rt))
       { *out = TY_POLY; return 1; }
@@ -7141,7 +7136,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
 
   /* instance_variable_set(:@x, v) on a POLY receiver answers v, boxed (the
      codegen twin stores it per class) */
-  if (recv >= 0 && (rt == TY_POLY || (rt == TY_EXCEPTION && !exc_class_defines(c, name))) &&
+  if (recv >= 0 && (rt == TY_POLY || (rt == TY_EXCEPTION && !exc_class_defines(c, id, name))) &&
       sp_streq(name, "instance_variable_set") && argc == 2) {
     *out = TY_POLY; return 1;   /* a literal name, or a computed one (#8219) */
   }
@@ -8024,7 +8019,7 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
     int cargs = nt_ref(nt, recv, "arguments");
     int cac = 0; if (cargs >= 0) nt_arr(nt, cargs, "arguments", &cac);
     int pr = nt_ref(nt, recv, "receiver");
-    if (cac == 0 && pr >= 0 && comp_builtin_kind_reopen_mi(c, TY_ENUMERATOR, name) < 0) {
+    if (cac == 0 && pr >= 0 && comp_builtin_kind_reopen_mi(c, id, TY_ENUMERATOR, name) < 0) {
       TyKind rt2 = infer_type(c, pr); if (ty_is_array(rt2)) { *out = rt2; return 1; }
     }
   }
@@ -8236,32 +8231,38 @@ static int infer_last_resort_call(Compiler *c, int id, const NodeTable *nt, cons
   if (recv >= 0) {
     /* Array reopening: any array-typed receiver */
     if (ty_is_array(rt)) {
-      int oc_mi = an_reopen_method(c, CORE_ARRAY, name);
+      int oc_mi = cplan_core_method(c, id, CORE_ARRAY, name);
       if (oc_mi >= 0) { *out = c->scopes[oc_mi].ret; return 1; }
     }
     /* Hash reopening: any hash-typed receiver */
     if (ty_is_hash(rt)) {
-      int oc_mi = an_reopen_method(c, CORE_HASH, name);
+      int oc_mi = cplan_core_method(c, id, CORE_HASH, name);
       if (oc_mi >= 0) { *out = c->scopes[oc_mi].ret; return 1; }
     }
     /* Numeric reopening: integers and floats */
     if (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) {
-      int oc_mi = an_reopen_method(c, CORE_NUMERIC, name);
+      int oc_mi = cplan_core_method(c, id, CORE_NUMERIC, name);
       if (oc_mi >= 0) { *out = c->scopes[oc_mi].ret; return 1; }
     }
     /* FalseClass methods (TrueClass already checked earlier for TY_BOOL) */
     if (rt == TY_BOOL) {
-      int oc_mi = an_reopen_method(c, CORE_FALSECLASS, name);
+      int oc_mi = cplan_core_method(c, id, CORE_FALSECLASS, name);
       if (oc_mi >= 0) { *out = c->scopes[oc_mi].ret; return 1; }
     }
     /* NilClass methods on a receiver known to be nil */
     if (rt == TY_NIL) {
-      int oc_mi = an_reopen_method(c, CORE_NILCLASS, name);
+      int oc_mi = cplan_core_method(c, id, CORE_NILCLASS, name);
       if (oc_mi >= 0) { *out = c->scopes[oc_mi].ret; return 1; }
     }
     /* Object reopening: universal fallback for any receiver type */
     {
-      int oc_mi = an_reopen_method(c, CORE_OBJECT, name);
+      /* (the method the call meets at the roots, a private top-level def too:
+         its raise is cplan_root_closed's. Two asks: a top-level def is no
+         method of Object's table for the plan, only of the top level's, and
+         no one question covers both) */
+      int oc_ci = comp_core_class(c, CORE_OBJECT);
+      int oc_mi = oc_ci >= 0 ? call_target(c, id, oc_ci, name, CT_NOFACE, NULL) : -1;
+      if (oc_mi < 0 && oc_ci >= 0) oc_mi = call_target(c, id, -1, name, CT_TOP, NULL);
       /* a yielding one given a block answers what its proc form does,
          a boxed value (#5779) */
       if (oc_mi >= 0 && c->scopes[oc_mi].yields && nt_ref(c->nt, id, "block") >= 0) { *out = TY_POLY; return 1; }
@@ -9063,7 +9064,7 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
   if (!name || (!sp_streq(name, "methods") && !sp_streq(name, "public_methods") &&
                 !sp_streq(name, "singleton_methods"))) return 0;
   if (nt_ref(c->nt, id, "block") >= 0 || an_object_methods_all_arg(c, -1, argc, argv) < 0 ||
-      comp_object_defines(c, name)) return 0;
+      cplan_core_method(c, id, CORE_OBJECT, name) >= 0) return 0;
   int nk = 0;
   const int *ks = poly_recv_classes(c, id, &nk);
   int n = ks ? nk : c->nclasses, any = 0;
@@ -9550,13 +9551,13 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      their place further down, where their rules have long been ordered. */
   if (recv >= 0 && (rt == TY_RANGE || rt == TY_TIME || rt == TY_IO || rt == TY_CLASS) &&
       !bonly && !cplan_builtin_call(c, id)) {
-    int eci = rt == TY_IO ? io_reopen_class(c, name)
+    int eci = rt == TY_IO ? io_reopen_class(c, id, name)
             : comp_core_class(c, rt == TY_RANGE ? CORE_RANGE : rt == TY_TIME ? CORE_TIME : CORE_CLASS);
     int emi = eci >= 0 ? call_target(c, id, eci, name, 0, NULL) : -1;
-    if (emi >= 0 && rt == TY_IO && io_reopen_ret_mixed(c, name)) return an_planned_call_ret(c, id, TY_POLY);
+    if (emi >= 0 && rt == TY_IO && io_reopen_ret_mixed(c, id, name)) return an_planned_call_ret(c, id, TY_POLY);
     /* a kind no reopening serves gets the builtin's answer: boxed when the
        two answer different types */
-    if (emi >= 0 && rt == TY_IO && io_reopen_leaves_builtin(c, name)) {
+    if (emi >= 0 && rt == TY_IO && io_reopen_leaves_builtin(c, id, name)) {
       TyKind ur = an_user_call(c, id, emi, UC_REOPEN, eci);
       int sv_skip = g_io_skip_reopen, sv_skip_node = g_io_skip_node;
       g_io_skip_reopen = 1; g_io_skip_node = id;
@@ -11252,7 +11253,7 @@ static TyKind infer_empty_array_reopen(Compiler *c, int id) {
   if (comp_core_class(c, CORE_ARRAY) < 0) return TY_UNKNOWN;
   int call = comp_recv_parent(c, id);
   if (call >= 0 && !cplan_builtin_call(c, call) &&
-      comp_builtin_kind_reopen_mi(c, TY_POLY_ARRAY, nt_str(c->nt, call, "name")) >= 0)
+      comp_builtin_kind_reopen_mi(c, call, TY_POLY_ARRAY, nt_str(c->nt, call, "name")) >= 0)
     return TY_POLY_ARRAY;
   return TY_UNKNOWN;
 }

@@ -1,0 +1,13 @@
+class Jobs
+class Jobs_Store
+class Jobs_Store_String
+meth value string -
+class Jobs_Store_Integer
+meth count int -
+class Jobs_Ticket
+meth code obj_Jobs_Store_String -
+meth total obj_Jobs_Store_Integer -
+meth label string -
+class Plain
+meth name string -
+meth size int -

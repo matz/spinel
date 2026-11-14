@@ -3,3 +3,5 @@
 2
 3
 nomethod
+[:s, Integer]
+[:s, Float]

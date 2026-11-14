@@ -39,7 +39,7 @@ entity Own__Thread: owner Own leaf Thread
 const Cfg: write#1
 Thread#x: def#3 runs=#8 def#5 runs=#8 end=yes
 Thread#x=: def#6 end=yes
-Fiber#tag: def#12 may end=unknown open
+Fiber#tag: def#12 may end=unknown
 const Own: write#17
 Thread#own_x: def#19 end=yes
 Thread#own_x=: def#20 end=yes

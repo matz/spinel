@@ -466,7 +466,7 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
       /* (a reopening of a builtin class, `if c; class Array`: the class is
          there whether or not the body runs, so a condition around the body
          is its defs' own, as one in the body is: LrStmt.bmay) */
-      if (spine && ch == nt_ref(nt, p, "body")) { q.frame = pp->e; q.bmay = q.may && elab_builtin_reopen(c, p); q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; return elab_body_pos(nt, ch, q); }
+      if (spine && ch == nt_ref(nt, p, "body")) { q.frame = pp->e; q.bmay = q.may && (elab_builtin_reopen(c, p) || nt_int(nt, p, "cond_reopen", 0)); q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; return elab_body_pos(nt, ch, q); }
       break;
     case NK_PreExecutionNode: case NK_EnsureNode:
       if (spine && ch == nt_ref(nt, p, "statements")) return elab_body_pos(nt, ch, q);
@@ -1010,13 +1010,14 @@ static int lr_stmt_applied(const LrStmt *s, int unplaced, int may) {
   return may && s && (s->fmay || !s->may) ? 2 : 1;
 }
 
-/* lr_stmt_applied for a def (or define_method) at s: one in a top-level
-   reopening of a builtin class under a condition (LrStmt.bmay) is one under
-   a condition of its body, 2, where the reopened class is there whether or
-   not the body ran */
-static int lr_def_applied(const LrStmt *s, int unplaced, int may) {
+/* lr_stmt_applied for def node def (or a define_method) at s: one in a
+   top-level reopening under a condition of a class that is there either
+   way (LrStmt.bmay) is one under a condition of its body, 2, where the
+   conditional-defs pass left it to the record (cond_lone); one it made an
+   arm of its dispatcher is defined whenever the body runs, as before */
+static int lr_def_applied(Compiler *c, int def, const LrStmt *s, int unplaced, int may) {
   int a = lr_stmt_applied(s, unplaced, may);
-  return a == 1 && s && s->region >= 0 && s->bmay ? 2 : a;
+  return a == 1 && s && s->region >= 0 && s->bmay && nt_int(c->nt, def, "cond_lone", 0) ? 2 : a;
 }
 
 /* The point from which node can run: its statement's, and for a node in a
@@ -3484,7 +3485,7 @@ int elab_def_applied(Compiler *c, int def) {
   const LrStmt *s = lr_stmt_of(r, def);
   if (!s || s->region < 0) return 1;
   if (s->fpartial && s->rep >= 0 && dm_each_inner(c->nt, r->st[s->rep].node) == def) s = &r->st[s->rep];
-  return lr_def_applied(s, 0, s->may) == 1;
+  return lr_def_applied(c, def, s, 0, s->may) == 1;
 }
 
 /* Is def node `def` on an object: on a receiver neither self nor a
@@ -9854,7 +9855,7 @@ int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, Lo
 static int lr_applied(Compiler *c, const LrDef *v) {
   LoadRecord *r = elab_fresh(c);
   if (v->absent || v->unplaced == LR_UNPLACED_LATER) return 0;
-  if (v->kind == LR_DEF || v->kind == LR_DEFINE_METHOD) return lr_def_applied(lr_stmt_of(r, v->node), v->unplaced, v->may);
+  if (v->kind == LR_DEF || v->kind == LR_DEFINE_METHOD) return lr_def_applied(c, v->node, lr_stmt_of(r, v->node), v->unplaced, v->may);
   return lr_stmt_applied(lr_stmt_of(r, v->node), v->unplaced, v->may);
 }
 

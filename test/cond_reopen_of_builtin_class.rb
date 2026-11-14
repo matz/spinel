@@ -30,3 +30,14 @@ begin
 rescue NoMethodError
   puts "nomethod"
 end
+
+# a def the program gave the builtin before, beside one under a condition
+class Numeric
+  def secs = [:s, self.class]
+end
+if ENV["SPINEL_NO_SUCH_VARIABLE"]
+  class Numeric
+    def secs = [:s2, self.class]
+  end
+end
+p 1.secs, 2.5.secs

@@ -15999,6 +15999,27 @@ static int cdef_builtin_class(const Compiler *c, int id) {
   const char *cn = class_def_key(c, id);
   return cn && !strstr(cn, "__") && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) && !is_object_base_name(cn);
 }
+/* The paths of the classes a top-level body opened under no condition so
+   far in cdef_walk's order (a reopening under one after it finds the class
+   there either way); reset by desugar_conditional_defs */
+static char **cdef_opens;
+static int cdef_nopens;
+static int cdef_opened_before(const char *path) {
+  for (int i = 0; i < cdef_nopens; i++) if (sp_streq(cdef_opens[i], path)) return 1;
+  return 0;
+}
+static void cdef_note_open(const char *path) {
+  if (cdef_opened_before(path)) return;
+  char **nv = realloc(cdef_opens, sizeof(char *) * (size_t)(cdef_nopens + 1));
+  if (!nv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  cdef_opens = nv;
+  cdef_opens[cdef_nopens++] = strdup(path);
+}
+static void cdef_opens_free(void) {
+  for (int i = 0; i < cdef_nopens; i++) free(cdef_opens[i]);
+  free(cdef_opens);
+  cdef_opens = NULL; cdef_nopens = 0;
+}
 static void cdef_walk(const Compiler *c, NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
   NodeKind k = nt_kind(nt, id);
   switch (k) {
@@ -16038,10 +16059,17 @@ static void cdef_walk(const Compiler *c, NodeTable *nt, int id, CondDef x, CondD
     char p[1024];
     snprintf(p, sizeof p, "%s", x.path);
     cdef_path(c, nt, nt_ref(nt, id, "constant_path"), p, sizeof p);
-    /* (a top-level reopening of a builtin class, `if c; class Array`, is
-       there whether or not its body runs: a condition around the body is
-       its defs' own, as one in the body is; elab_child keeps it too) */
-    int keep = x.cls == -1 && x.here && cdef_builtin_class(c, id);
+    /* (a top-level reopening of a builtin class, `if c; class Array`, or
+       of a program class a top-level body opened before under no
+       condition, is there whether or not its body runs: a condition
+       around the body is its defs' own, as one in the body is; the class
+       node is marked cond_reopen for the load record, elab_child) */
+    /* (not Object, Kernel or BasicObject: a def there is a top-level
+       name's version, which the record holds under its condition already) */
+    const char *ck = class_def_key(c, id);
+    int keep = x.cls == -1 && x.here && (cdef_builtin_class(c, id) || (cdef_opened_before(p) && !(ck && is_object_base_name(ck))));
+    if (keep) nt_node_set_int(nt, id, "cond_reopen", 1);
+    if (x.cls == -1 && !x.cond) cdef_note_open(p);
     x.path = p; x.cls = id; x.cm = 0; x.top = -1; x.here = keep;
     cdef_walk(c, nt, nt_ref(nt, id, "body"), x, v, n);
     break;
@@ -16743,6 +16771,7 @@ int desugar_conditional_defs(Compiler *c) {
   int nlone = 0;
   for (int r = 0; r < nt_nroots(nt); r++)   /* each file's top level */
     cdef_walk(c, nt, prog_root_stmts(c, r), (CondDef){ -1, -1, -1, -1, 0, 0, -1, "", "", 0, -1, -1, -1 }, &v, &n);
+  cdef_opens_free();
   CondDef *g = malloc(sizeof(CondDef) * (size_t)(n > 0 ? n : 1));
   int *gi = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
   if (!g || !gi) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

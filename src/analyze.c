@@ -46544,6 +46544,29 @@ static int arysub_zsuper_args(Compiler *c, int at, Scope *s) {
    the class's own `def self.new` (init 2) it is Class#new with no
    initialize of the program to run: `self.allocate`, else
    `self.allocate.replace(Array.new(args) { blk })`. */
+/* Argument list args (an entries) of a Hash subclass's super into
+   initialize without its last argument when that is a bare `capacity: v`
+   keyword whose v has nothing to run (hash_new_capacity_pure); -1 for an
+   empty rest. Anything else is answered as it is; *kept is set when the
+   last argument is a bare `capacity: v` whose v has something to run. */
+static int hash_super_drop_capacity(Compiler *c, int at, int args, int *an, int *kept) {
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+  if (n < 1 || n > 64 || nt_kind(nt, av[n - 1]) != NK_KeywordHashNode) return args;
+  int en = 0;
+  const int *el = nt_arr(nt, av[n - 1], "elements", &en);
+  if (en != 1 || nt_kind(nt, el[0]) != NK_AssocNode) return args;
+  int key = nt_ref(nt, el[0], "key"), val = nt_ref(nt, el[0], "value");
+  if (key < 0 || nt_kind(nt, key) != NK_SymbolNode || !nt_str(nt, key, "value") ||
+      !sp_streq(nt_str(nt, key, "value"), "capacity") || val < 0) return args;
+  if (!hash_new_capacity_pure(c, val, 0)) { *kept = 1; return args; }
+  *an = n - 1;
+  if (n == 1) return -1;
+  int keep[64];
+  memcpy(keep, av, sizeof(int) * (size_t)(n - 1));
+  return arysub_args(c, at, keep, n - 1);
+}
 static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int init, int args, int blk) {
   Scope *s = comp_scope_of(c, at);
   const char *bn = s ? core_class_name(comp_arysub_builtin(c, s->class_id)) : "Array";
@@ -46554,6 +46577,12 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
   char *mn = strdup(mname);
   if (init == 2 && an == 0 && blk < 0) { arysub_set_call(c, n, self, "allocate", -1, -1); free(mn); return; }
   if (init == 2 && (self = arysub_new_call(c, at, self, "allocate", -1, -1)) < 0) { free(mn); return; }
+  /* A `capacity:` keyword only sizes the table, so a value with nothing to
+     run is dropped first, as desugar_hash_new_capacity drops it from
+     Hash.new: kept, the super went to the replace arm below and lost the
+     entries the initialize wrote ahead of it. */
+  int cap_kept = 0;
+  if (init == 1 && sp_streq(bn, "Hash")) args = hash_super_drop_capacity(c, at, args, &an, &cap_kept);
   if (!init) {
     arysub_set_call(c, n, self, mn, args, blk);
     nt_mark_builtin_call((NodeTable *)c->nt, n);
@@ -46562,6 +46591,19 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
      of its super (hashie's Mash: `deep_update(source_hash); super(default)`)
      and sets only the default or the default proc; Array#initialize replaces
      the elements, as the arms after these do */
+  /* A capacity value with something to run still runs, after the default:
+     the super keeps the entries and takes the default (or the default proc)
+     of `Hash.new(args) { blk }`, which runs it */
+  else if (cap_kept) {
+    /* (an argument list of its own: the capacity desugar edits it in place,
+       and the arm with the forwarded block and the one without share args) */
+    int keep[64];
+    memcpy(keep, nt_arr(c->nt, args, "arguments", &an), sizeof(int) * (size_t)an);
+    int made = arysub_builtin_call(c, at, bn, "new", arysub_args(c, at, keep, an), blk);
+    const char *get = blk >= 0 ? "default_proc" : "default";
+    int dv = made >= 0 ? arysub_new_call(c, at, made, get, -1, -1) : -1;
+    if (dv >= 0) arysub_set_call(c, n, self, blk >= 0 ? "default_proc=" : "default=", arysub_args(c, at, &dv, 1), -1);
+  }
   else if (init == 1 && sp_streq(bn, "Hash") && blk < 0 && (an == 0 ||
            (an == 1 && nt_kind(c->nt, nt_arr(c->nt, args, "arguments", &an)[0]) != NK_KeywordHashNode))) {
     int dv = an == 0 ? arysub_node(c, "NilNode", at) : -1;

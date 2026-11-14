@@ -4650,8 +4650,9 @@ static void sp_req_site_note(SpReqSiteScan *s, const pm_call_node_t *call) {
  * when that file exists; a `%w(...).each` loop around it is unrolled, one
  * require per line of the loop and the rest on its last line, the lines
  * padded so the ones after it keep their numbers. The require must be a
- * statement on its own line (only a comment may follow), and a path built
- * on __FILE__ is left alone: its literals are relative to the file.
+ * statement on its own line (only a comment may follow). `__FILE__` may
+ * only stand under `File.dirname`, or as `File.expand_path("../x",
+ * __FILE__)`, whose literal is relative to the file.
  *
  * `autoload :Name, "path"` with a literal path (#5696): the whole program is
  * compiled, so the file is loaded eagerly. In the entry file the call
@@ -4686,14 +4687,42 @@ typedef struct {
   const char *var, *val;     /* a loop's block parameter and the word it stands for */
   char *out; size_t o, cap;
   int n, bad;
+  int up;                    /* `File.expand_path(lit, __FILE__)`: lit's first `..` is the file's own dir */
 } SpJoin;
 
+/* `File.dirname(__FILE__)`: the requiring file's directory, as `__dir__` is. */
+static int sp_join_is_file_dir(const pm_parser_t *pp, const pm_node_t *n) {
+  if (PM_NODE_TYPE(n) != PM_CALL_NODE) return 0;
+  const pm_call_node_t *c = (const pm_call_node_t *)n;
+  return sp_pm_name_is(pp, c->name, "dirname") && c->receiver &&
+         PM_NODE_TYPE(c->receiver) == PM_CONSTANT_READ_NODE &&
+         sp_pm_name_is(pp, ((const pm_constant_read_node_t *)c->receiver)->name, "File") &&
+         c->arguments && c->arguments->arguments.size == 1 &&
+         PM_NODE_TYPE(c->arguments->arguments.nodes[0]) == PM_SOURCE_FILE_NODE;
+}
+
+static bool sp_join_visit(const pm_node_t *node, void *data);
+
 /* The quoted literals of a computed require's argument, joined by '/', with
-   the loop's parameter standing for its word ('.' and '/' pieces dropped). */
+   the loop's parameter standing for its word ('.' and '/' pieces dropped).
+   `__dir__` and `File.dirname(__FILE__)` stand for the requiring file's
+   directory, the one the joined path is taken from. */
 static bool sp_join_visit(const pm_node_t *node, void *data) {
   SpJoin *j = data;
   const char *piece = NULL; size_t plen = 0;
   switch (PM_NODE_TYPE(node)) {
+  case PM_CALL_NODE: {
+    if (sp_join_is_file_dir(j->parser, node)) return false;
+    const pm_call_node_t *c = (const pm_call_node_t *)node;
+    if (sp_pm_name_is(j->parser, c->name, "expand_path") && c->arguments && c->arguments->arguments.size == 2 &&
+        PM_NODE_TYPE(c->arguments->arguments.nodes[1]) == PM_SOURCE_FILE_NODE) {
+      if (j->n) { j->bad = 1; return false; }
+      j->up = 1;
+      pm_visit_node(c->arguments->arguments.nodes[0], sp_join_visit, j);
+      return false;
+    }
+    return true;
+  }
   case PM_STRING_NODE: {
     const pm_string_node_t *sn = (const pm_string_node_t *)node;
     if (!sn->opening_loc.start || (*sn->opening_loc.start != '"' && *sn->opening_loc.start != '\'')) return false;
@@ -4711,7 +4740,8 @@ static bool sp_join_visit(const pm_node_t *node, void *data) {
   default:
     return true;
   }
-  if (!piece || !plen || (plen == 1 && (piece[0] == '.' || piece[0] == '/'))) return false;
+  while (plen && piece[0] == '/') { piece++; plen--; }   /* `File.dirname(__FILE__) + "/x"` */
+  if (!piece || !plen || (plen == 1 && piece[0] == '.')) return false;
   if (j->o + plen + 2 >= j->cap) { j->bad = 1; return false; }
   if (j->n++) j->out[j->o++] = '/';
   memcpy(j->out + j->o, piece, plen);
@@ -4736,10 +4766,14 @@ static int sp_req_computed(const SpReqSiteScan *s, const pm_call_node_t *c, cons
     if (comment && *q == '#') break;
     if (*q != ' ' && *q != '\t' && *q != '\r') return 0;
   }
-  SpJoin j = { s->parser, var, val, out, 0, cap, 0, 0 };
+  SpJoin j = { s->parser, var, val, out, 0, cap, 0, 0, 0 };
   out[0] = 0;
   pm_visit_node(arg, sp_join_visit, &j);
   if (j.bad || !j.n) return 0;
+  if (j.up) {                              /* relative to the file: `../x` is `x` beside it */
+    if (strncmp(out, "../", 3) != 0) return 0;
+    memmove(out, out + 3, j.o - 3 + 1); j.o -= 3;
+  }
   if (j.o > 3 && strcmp(out + j.o - 3, ".rb") == 0) out[j.o - 3] = 0;   /* require_relative adds it back */
   char full[1100];
   snprintf(full, sizeof full, "%s/%s.rb", s->dir, out);

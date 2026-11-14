@@ -1,0 +1,25 @@
+# A type name written with a namespace is the class it names, even when its
+# last segment is a builtin's name: `Jobs::Store::String` is not `String`.
+# A bare name and a root-qualified one (`::String`) are still the builtin.
+module Jobs
+  module Store
+    class String
+      def value: () -> ::String
+    end
+
+    class Integer
+      def count: () -> ::Integer
+    end
+  end
+
+  class Ticket
+    def code: () -> Jobs::Store::String
+    def total: () -> Jobs::Store::Integer
+    def label: () -> ::String
+  end
+end
+
+class Plain
+  def name: () -> String
+  def size: () -> Integer
+end

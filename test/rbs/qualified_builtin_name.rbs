@@ -1,6 +1,8 @@
 # A type name written with a namespace is the class it names, even when its
 # last segment is a builtin's name: `Jobs::Store::String` is not `String`.
 # A bare name and a root-qualified one (`::String`) are still the builtin.
+# The same holds for the generic containers: `Jobs::Store::Array[Integer]`
+# and `RowArray[Integer]` are not `Array[Integer]`.
 module Jobs
   module Store
     class String
@@ -10,16 +12,34 @@ module Jobs
     class Integer
       def count: () -> ::Integer
     end
+
+    class Array[T]
+      def first: () -> T
+    end
+
+    class Hash[K, V]
+      def fetch: (K) -> V
+    end
   end
 
   class Ticket
     def code: () -> Jobs::Store::String
     def total: () -> Jobs::Store::Integer
     def label: () -> ::String
+    def rows: () -> Jobs::Store::Array[Integer]
+    def table: () -> Jobs::Store::Hash[Symbol, Integer]
+    def ids: () -> ::Array[Integer]
+    def counts: () -> ::Hash[Symbol, Integer]
   end
+end
+
+class RowArray[T]
+  def first: () -> T
 end
 
 class Plain
   def name: () -> String
   def size: () -> Integer
+  def rows: () -> RowArray[Integer]
+  def ids: () -> Array[Integer]
 end

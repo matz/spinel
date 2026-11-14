@@ -261,7 +261,9 @@ static bool map_class_instance(rbs_parser_t *p, rbs_types_class_instance_t *ci,
     /* A builtin only when the name has no namespace, or only the root
      * one (`::String`): `Jobs::Store::String` is the class it names.
      * The whole name is matched, not the text after its last "_",
-     * which name_of_type_name also puts between segments. */
+     * which name_of_type_name also puts between segments; the same
+     * holds for `Array[T]` and `Hash[K, V]` below, so neither
+     * `Jobs::Array[T]` nor `RowArray[T]` is the builtin container. */
     bool unqualified = ci->name == NULL || ci->name->rbs_namespace == NULL
         || ci->name->rbs_namespace->path == NULL || ci->name->rbs_namespace->path->length == 0;
     const char *primitive = unqualified ? primitive_tag(name.buf, name.len) : NULL;
@@ -285,7 +287,7 @@ static bool map_class_instance(rbs_parser_t *p, rbs_types_class_instance_t *ci,
     }
 
     /* Array[T] */
-    if (name.len >= 5 && strcmp(name.buf + name.len - 5, "Array") == 0 && argc == 1) {
+    if (unqualified && strcmp(name.buf, "Array") == 0 && argc == 1) {
         sbuf_t elem;
         sbuf_init(&elem);
         if (!map_type_arg(p, ci->args->head->node, enclosing_scope, &elem)) {
@@ -317,7 +319,7 @@ else {
     }
 
     /* Hash[K, V] */
-    if (name.len >= 4 && strcmp(name.buf + name.len - 4, "Hash") == 0 && argc == 2) {
+    if (unqualified && strcmp(name.buf, "Hash") == 0 && argc == 2) {
         sbuf_t k, v;
         sbuf_init(&k); sbuf_init(&v);
         if (!map_type_arg(p, ci->args->head->node, enclosing_scope, &k)

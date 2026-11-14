@@ -4,10 +4,22 @@ class Jobs_Store_String
 meth value string -
 class Jobs_Store_Integer
 meth count int -
+class Jobs_Store_Array
+meth first - -
+class Jobs_Store_Hash
+meth fetch - -
 class Jobs_Ticket
 meth code obj_Jobs_Store_String -
 meth total obj_Jobs_Store_Integer -
 meth label string -
+meth rows - -
+meth table - -
+meth ids int_array -
+meth counts sym_poly_hash -
+class RowArray
+meth first - -
 class Plain
 meth name string -
 meth size int -
+meth rows - -
+meth ids int_array -

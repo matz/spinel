@@ -4861,6 +4861,9 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	grep -E '^#define _SP_HCR' "$$tmp/lahc.c" | grep -q 'lv_cur\b' && { echo "infer-test: FAIL (an array local the loop reassigns was read through a cached header)"; ok=0; }; \
 	grep -E '^#define _SP_HCR' "$$tmp/lahc.c" | grep -q 'self->iv_v\b' && { echo "infer-test: FAIL (an ivar the loop writes was read through a cached header)"; ok=0; }; \
 	grep -qE '^#define _SP_HCR[0-9]+\(\) .*lv_qv.*lv_qk.*lv_qs' "$$tmp/lahc.c" || { echo "infer-test: FAIL (a class test on a scalar kept a loop from caching its arrays' headers)"; ok=0; }; \
+	$(SPINEL) test/range_step_header_cache.rb -c --no-line-map -o "$$tmp/rshc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (range_step_header_cache: -c)"; ok=0; }; \
+	awk '/^[a-z].* sp_sieve\(.*\{$$/,/^}/' "$$tmp/rshc.c" | grep -qE '_hcd[0-9]+_[0-9]+\[_t[0-9]+\] = _t[0-9]+; else sp_IntArray_set\(lv_primes' || { echo "infer-test: FAIL (an Integer Range's step(k) { } still reads its array's header at every store, and the upto around it lost its cache)"; ok=0; }; \
+	awk '/^[a-z].* sp_swaps\(.*\{$$/,/^}/' "$$tmp/rshc.c" | grep -q '^#define _SP_HCR' && { echo "infer-test: FAIL (a step loop that reassigns its array local read it through a cached header)"; ok=0; }; \
 	$(SPINEL) test/loop_string_getbyte_unheld.rb -c --no-line-map -o "$$tmp/lsgu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_string_getbyte_unheld: -c)"; ok=0; }; \
 	awk '/^[a-z].* sp_(total|edges|uncached)\(.*\{$$/,/^}/' "$$tmp/lsgu.c" | grep -cE 'getbyte_opt\((sp_String_cstr|SP_STR_B)\(lv_rows\), ' | grep -qx 3 || { echo "infer-test: FAIL (String#getbyte with an arithmetic index does not read its receiver where the call needs it)"; ok=0; }; \
 	awk '/^[a-z].* sp_(total|edges|uncached)\(.*\{$$/,/^}/' "$$tmp/lsgu.c" | grep -q 'SP_GC_ROOT(_t' && { echo "infer-test: FAIL (String#getbyte with an arithmetic index fetches and roots its receiver's bytes ahead of the index)"; ok=0; }; \

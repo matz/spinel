@@ -4421,6 +4421,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
                          const char **need) {
   const char *names[64];
   int nn = ie_self_call_names(c, body, names, 0, 64);
+  nn = ie_self_call_names(c, ie_body_params(c, body), names, nn, 64);
   if (nn == 64) return 0;
   int ask[64], nask = 0;
   for (int i = 0; i < nn; i++) {
@@ -4437,6 +4438,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   const char *ivs[64]; int niv = 0;
   if (nask == 0) {
     niv = ie_ivar_names(c, body, ivs, 0, 64);
+    niv = ie_ivar_names(c, ie_body_params(c, body), ivs, niv, 64);
     if (niv == 0 || niv == 64) return 0;
     if (need) *need = name;
   }

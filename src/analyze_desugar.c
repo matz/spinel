@@ -7550,8 +7550,8 @@ static char **dsn_inames(Compiler *c, int *nin, int *owned) {
 /* Is name i of `in` defined for every object: by Object's chain or a
    top-level def (not main's own `def self.k`)? */
 static int dsend_every_object_name(Compiler *c, int oc, const char *nm) {
-  int tm = comp_method_index(c, nm);
-  return (oc >= 0 && comp_method_in_chain(c, oc, nm, NULL) >= 0) || (tm >= 0 && !c->scopes[tm].is_cmethod);
+  int tm = comp_name_responder(c, -1, nm, 0);
+  return (oc >= 0 && comp_name_responder(c, oc, nm, 0) >= 0) || (tm >= 0 && !c->scopes[tm].is_cmethod);
 }
 static void dsend_add_every_object_names(Compiler *c, int cls, char **in, int nin,
                                          char ***names, int *n, int *cap, ANameHash *seen) {

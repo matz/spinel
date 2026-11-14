@@ -472,7 +472,7 @@ static int share_plan_supply_at(Compiler *c, int v, int *op, int depth) {
 static int share_plan_method_reached(Compiler *c, int mi, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
     if ((c->classes[k].instantiated || c->classes[k].is_builtin_const) &&
-        comp_method_in_chain(c, k, name, NULL) == mi) return 1;
+        comp_name_responder(c, k, name, 0) == mi) return 1;
   return 0;
 }
 /* Is call u an exception's message or to_s, whose targets the plan lists
@@ -494,7 +494,7 @@ static int share_plan_below_has(Compiler *c, int cid, const char *name) {
   for (int k = 0; k < c->nclasses; k++) {
     if (k != cid && !is_descendant(c, k, cid)) continue;
     if (!c->classes[k].instantiated && !c->classes[k].is_builtin_const) continue;
-    if (comp_method_in_chain(c, k, name, NULL) < 0) return 0;
+    if (comp_name_responder(c, k, name, 0) < 0) return 0;
   }
   return 1;
 }
@@ -517,7 +517,7 @@ static int share_plan_recv_answers_by_targets(Compiler *c, int u, const char *na
     const int *cls = poly_recv_classes(c, u, &nc);
     if (!cls) return 0;
     for (int i = 0; i < nc; i++)
-      if (comp_method_in_chain(c, cls[i], name, NULL) < 0) return 0;
+      if (comp_name_responder(c, cls[i], name, 0) < 0) return 0;
     return 1;
   }
   return !ty_is_object(rt) || share_plan_below_has(c, ty_object_class(rt), name);

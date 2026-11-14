@@ -5710,7 +5710,7 @@ int infer_write_types(Compiler *c) {
     if (!is_ie) {
       TyKind vrt = infer_type(c, vrecv);
       int tramp = ty_is_object(vrt) &&
-                  comp_trampoline_kind(c, ty_object_class(vrt), vnm, NULL);
+                  comp_trampoline_kind(c, call_target(c, val_id, ty_object_class(vrt), vnm, 0, NULL));
       /* An iterator block that assigns a local has the same shape: the block
          body's locals sit at higher node ids than this write, so the main loop
          derived the element type with them still reset to UNKNOWN and the slot
@@ -18951,7 +18951,7 @@ int infer_block_params(Compiler *c) {
     else {
       if (!ty_is_object(rt)) continue;
       if (!sp_streq(cname, "instance_eval") &&
-          comp_trampoline_kind(c, ty_object_class(rt), cname, NULL) != 1) continue;
+          comp_trampoline_kind(c, call_target(c, id, ty_object_class(rt), cname, 0, NULL)) != 1) continue;
     }
     int blk = nt_ref(nt, id, "block");
     if (blk < 0) continue;
@@ -18996,7 +18996,7 @@ int infer_block_params(Compiler *c) {
     else if (!sp_streq(cname, "instance_exec")) {
       TyKind xrt = infer_type(c, xrecv);
       if (!ty_is_object(xrt) ||
-          comp_trampoline_kind(c, ty_object_class(xrt), cname, NULL) != 2) continue;
+          comp_trampoline_kind(c, call_target(c, id, ty_object_class(xrt), cname, 0, NULL)) != 2) continue;
     }
     int blk = nt_ref(nt, id, "block");
     if (blk < 0) continue;

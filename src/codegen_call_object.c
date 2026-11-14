@@ -788,7 +788,7 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       ie_self_cls = g_emitting_class_id;
   }
   if (!ie_direct && recv >= 0 && nt_ref(nt, id, "block") >= 0 && ty_is_object(comp_ntype(c, recv)))
-    ie_tramp = comp_trampoline_kind(c, ty_object_class(comp_ntype(c, recv)), name, NULL);
+    ie_tramp = comp_trampoline_kind(c, call_target(c, id, ty_object_class(comp_ntype(c, recv)), name, 0, NULL));
   /* a RECEIVERLESS call to a trampoline method inside an instance method:
      self is the receiver (`go { ... }` where `def go(&b) = instance_exec(&b)`).
      Without this the call lowers to the real method, whose body is the
@@ -796,7 +796,7 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
   if (!ie_direct && !ie_tramp && recv < 0 && nt_ref(nt, id, "block") >= 0) {
     Scope *trs = comp_scope_of(c, id);
     if (trs && trs->class_id >= 0 && !trs->is_cmethod) {
-      ie_tramp = comp_trampoline_kind(c, trs->class_id, name, NULL);
+      ie_tramp = comp_trampoline_kind(c, call_target(c, id, trs->class_id, name, 0, NULL));
       if (ie_tramp) ie_self_cls = trs->class_id;
     }
   }

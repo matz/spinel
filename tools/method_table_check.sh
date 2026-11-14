@@ -73,6 +73,12 @@ if [ "$QUIET" = 1 ]; then
 else
   "$ROOT/tools/lists_readers_check.sh" || stop 1 "tools/lists_readers_check.sh"
 fi
+# and the definers (construction): the passes that put methods in the tables stand inside the check's bracket, and the list is exact
+if [ "$QUIET" = 1 ]; then
+  cr=$("$ROOT/tools/construction_readers_check.sh" 2>&1) || { printf "%s\n" "$cr"; stop 1 "tools/construction_readers_check.sh"; }
+else
+  "$ROOT/tools/construction_readers_check.sh" || stop 1 "tools/construction_readers_check.sh"
+fi
 SP=$ROOT/bin/spinel
 if [ -n "$LIST" ] && [ ! -r "$LIST" ]; then stop 2 "cannot read $LIST"; fi
 [ -x "$SP" ] || stop 2 "build bin/spinel first"

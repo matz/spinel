@@ -4212,10 +4212,7 @@ int an_native_defines_method(Compiler *c, const char *name) {
    it does not take the name from a builtin (`def uniq(o) = o.uniq`). */
 int an_user_recv_defines_method(Compiler *c, const char *name) {
   if (!an_user_defines_method(c, name)) return 0;
-  if (comp_method_index(c, name) < 0) return 1;
-  for (int uk = 0; uk < c->nclasses; uk++)
-    if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
-  return 0;
+  return comp_name_responder(c, -1, name, 0) < 0 || comp_name_answered(c, name, 0);
 }
 /* A call of merge!, update or fetch_values with no argument is a Hash or Array
    method only when the program defines no method of that name: with one (on
@@ -4228,9 +4225,7 @@ int an_zero_arg_builtin_shadowed(Compiler *c, const char *name, int argc) {
   /* asked directly, not through an_user_defines_method: the builtin-only
      derivation (a user class owning the name beside a builtin receiver) must
      keep the program's definition in view too */
-  for (int uk = 0; uk < c->nclasses; uk++)
-    if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
-  return udm_aliased_name(c, name);
+  return comp_name_answered(c, name, 0) || udm_aliased_name(c, name);
 }
 int an_user_defines_method(Compiler *c, const char *name) {
   if (an_builtin_only_p()) return 0;   /* deriving the builtin-only answer (#3459) */
@@ -4239,9 +4234,7 @@ int an_user_defines_method(Compiler *c, const char *name) {
   if (!comp_scope_index_is_frozen()) {
     /* scope shape may still change without the counts moving (renames);
        don't consult or populate the memo outside the frozen fixpoint. */
-    for (int uk = 0; uk < c->nclasses; uk++)
-      if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
-    return comp_method_index(c, name) >= 0;
+    return comp_name_answered(c, name, 0) || comp_name_responder(c, -1, name, 0) >= 0;
   }
   unsigned gen = comp_scope_index_gen();
   /* A frozen index only grows: the builtins' rewrites add a method per
@@ -4284,8 +4277,7 @@ int an_user_defines_method(Compiler *c, const char *name) {
   if (udm_aliased_name(c, name)) {
     /* the name is an alias source somewhere: per-class resolution can redirect
        it, so only the full scan answers exactly (rare -- memoized above) */
-    for (int uk = 0; uk < c->nclasses; uk++)
-      if (comp_method_in_chain(c, uk, name, NULL) >= 0) { ans = 1; break; }
+    ans = comp_name_answered(c, name, 0);
   }
   else {
     /* no alias redirects this name anywhere, so resolution is the identity for
@@ -4293,7 +4285,7 @@ int an_user_defines_method(Compiler *c, const char *name) {
        class as the chain start) */
     ans = udm_defined_name(c, name);
   }
-  if (!ans) ans = comp_method_index(c, name) >= 0;
+  if (!ans) ans = comp_name_responder(c, -1, name, 0) >= 0;
   if (again >= 0) { udm_ans[again] = (signed char)ans; return ans; }
   /* a full memo grows, and its buckets with it (as an_user_defines_or_reads'
      does): past 4,096 names it stopped recording, and every later name

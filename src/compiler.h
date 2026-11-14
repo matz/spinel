@@ -2574,6 +2574,21 @@ int        comp_name_reader_any(Compiler *c, const char *name);
    asks it for every argument-less call on a receiver that can be anything,
    at every solve. */
 const int *comp_name_reader_owners(Compiler *c, const char *name, int *n);
+/* Does any class's chain answer `name` (on the class side when is_cm)?
+   comp_name_responders' count, asked where the list cannot be built too: the
+   candidate owner of "is the name defined by a class of the program". */
+int        comp_name_answered(Compiler *c, const char *name, int is_cm);
+/* The scope class cls's chain finds for `name` as one of the name's
+   responders, or -1 where it is not one: its class side with CT_CMETHOD, its
+   own table only with CT_OWN (an override), the top-level functions for
+   cls < 0. No record is asked: a candidate, not what one call runs. */
+int        comp_name_responder(Compiler *c, int cls, const char *name, unsigned side);
+/* Does class k's chain hold a method or an attribute reader of `name`: one
+   of the name's candidates for a boxed dispatch (comp_poly_candidates' test,
+   asked of one class), as a def or an attr_reader gives an arm? */
+int        comp_class_answers(Compiler *c, int k, const char *name);
+/* Does any class's chain answer an attribute writer of base? */
+int        comp_name_writer_any(Compiler *c, const char *base);
 int        send_def_just_supers(Compiler *c, int mi);          /* analyze_desugar.c */
 int        send_family_defined_anywhere(Compiler *c, const char *name);   /* analyze_desugar.c */
 /* Array subclasses (#7449, ClassInfo.ary_root): the root of class cid's
@@ -2647,9 +2662,10 @@ int        ext_class_def_wanted(Compiler *c, const char *key);
 const char *ext_fwd_orig(const char *name, int *nfixed, int *rest);
 int        ext_ty_crosses(TyKind t);
 int        comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at);
-/* Detect an instance_eval/exec trampoline (def m(args,&b); instance_eval/exec(args,&b); end).
-   Returns 1 (eval) / 2 (exec) / 0; sets *def_class to the defining class. */
-int        comp_trampoline_kind(Compiler *c, int class_id, const char *name, int *def_class);
+/* Is method mi (the one the plan answered for a call, -1 for none) an
+   instance_eval/exec trampoline (def m(args,&b); instance_eval/exec(args,&b); end)?
+   Returns 1 (eval) / 2 (exec) / 0. */
+int        comp_trampoline_kind(Compiler *c, int mi);
 /* Stage-1 fold for module singleton accessors holding a constant. */
 int        comp_sg_const_binding(Compiler *c, int class_id, const char *base);
 int        comp_sg_reader_const(Compiler *c, int call_id); /* const class idx for `Class.reader`, or -1 */

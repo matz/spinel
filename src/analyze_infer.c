@@ -2629,7 +2629,13 @@ static TyKind an_user_read_ty(Compiler *c, int id, const char *name, int argc) {
       continue;
     }
     if (live && !an_poly_class_live(c, k)) continue;
-    int mi = comp_method_in_chain(c, k, name, NULL);
+    /* the class's arm: the table's candidate, and the method the call runs
+       on it (a version, for a name with versions) */
+    int mi = comp_name_responder(c, k, name, 0);
+    if (mi >= 0) {
+      PolyCand arm = { .cls = k, .mi = mi, .rdcls = -1, .native = 0 };
+      mi = cplan_cand_target(c, id, name, &arm, 0);
+    }
     if (mi >= 0 && c->scopes[mi].ret != TY_UNKNOWN) {
       r = found ? ty_unify(r, c->scopes[mi].ret) : (TyKind)c->scopes[mi].ret;
       found = 1;
@@ -8160,7 +8166,7 @@ static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, con
     else if (nt_int(nt, id, "ie_usite", 0)) { *out = TY_POLY; return 1; }
   }
   if (!ie_kind && recv >= 0 && ty_is_object(rt) && nt_ref(nt, id, "block") >= 0)
-    ie_kind = comp_trampoline_kind(c, ty_object_class(rt), name, NULL) != 0;
+    ie_kind = comp_trampoline_kind(c, call_target(c, id, ty_object_class(rt), name, 0, NULL)) != 0;
   /* receiverless instance_eval/exec inside an instance method resolves to self */
   if (!ie_kind && recv < 0 && ie_implicit_self_class(c, id) >= 0) ie_kind = 1;
   if (ie_kind) {

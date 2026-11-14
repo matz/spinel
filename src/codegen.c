@@ -7903,7 +7903,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   const char *sg_refused = sg_refused_msg(c, s->def_node);
   if (sg_refused ||
       (s->class_id >= 0 && !s->is_cmethod && s->name && c->classes[s->class_id].is_value_type &&
-       comp_trampoline_kind(c, s->class_id, s->name, NULL))) {
+       comp_trampoline_kind(c, (int)(s - c->scopes)))) {
     emit_method_signature(c, s, b);
     buf_printf(b, " {\n  sp_raise_cls(\"NotImplementedError\", \"%s\");\n",
                sg_refused ? sg_refused : "instance_eval of a proc on a by-value object");

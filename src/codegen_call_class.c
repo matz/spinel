@@ -5809,7 +5809,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               ClassInfo *kc = &c->classes[k];
               int ik = comp_method_in_chain(c, k, "initialize", NULL);
               if (kc->is_value_type || kc->is_struct || kc->is_native_class || ik < 0 || c->scopes[ik].yields ||
-                  comp_cmethod_in_chain(c, k, "new", NULL) >= 0) plain = 0;
+                  call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) plain = 0;
               subs++;
             }
             for (int a = 0; subs && plain && a < dargc; a++)
@@ -5851,7 +5851,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             int ik = comp_method_in_chain(c, k, "initialize", NULL);
             if (kc->is_value_type || kc->is_struct || kc->is_native_class ||
                 (ik >= 0 && c->scopes[ik].yields) ||
-                comp_cmethod_in_chain(c, k, "new", NULL) >= 0) { plain = 0; break; }
+                call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) { plain = 0; break; }
             nsub++;
           }
           if (plain && nsub > 0) {

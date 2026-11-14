@@ -1225,6 +1225,12 @@ static void emit_obj_struct_copy(Compiler *c, int cid, int to, int td, Buf *b) {
              class_needs_scan(dci) ? "__gc_scan" : "", td, to);
   if (any) buf_puts(b, "} } ");
 }
+/* Does Object's own chain, as the program reopens it, hold an instance
+   method `name` (its own def or a module it includes)? */
+static int main_object_chain_defines(Compiler *c, const char *name) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  return oc >= 0 && oc < c->nclasses && comp_method_in_chain(c, oc, name, NULL) >= 0;
+}
 int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc) {
   if (recv >= 0 && (comp_ntype(c, recv) == TY_RANGE || comp_ntype(c, recv) == TY_FLOAT_RANGE ||
                    comp_ntype(c, recv) == TY_STR_RANGE) &&
@@ -1614,7 +1620,11 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       !(!cplan_builtin_call(c, id) && ty_is_object(comp_ntype(c, recv)) &&
         comp_resolve_member(c, ty_object_class(comp_ntype(c, recv)), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
       !(argc == 0 && repr_of(c, recv).kind == RK_BOXED && user_defines_or_reads(c, name) &&
-        (!is_itself_name(name) || !user_defines_calls_super(c, name)))) {
+        (!is_itself_name(name) || !user_defines_calls_super(c, name))) &&
+      /* main is an Object: a method Object's chain holds (a module
+         `Object.include` gave it, `Mine#clone`) answers ahead of Kernel's */
+      !(!cplan_builtin_call(c, id) && nt_kind(nt, recv) == NK_SelfNode && self_is_main_raw(c, recv) &&
+        main_object_chain_defines(c, name))) {
     int args = nt_ref(nt, id, "arguments");
     int argc0 = 0; if (args >= 0) nt_arr(nt, args, "arguments", &argc0);
     /* hash, string, array, and native-bound object dup/clone require real

@@ -5336,6 +5336,21 @@ static int comp_included_method_index_1(Compiler *c, const char *name, int call_
   return -1;
 }
 
+/* Does a module main extends hold `name`, for a bare call in top-level code
+   (main's singleton class, asked ahead of Object's chain)? */
+int comp_main_extend_defines(Compiler *c, int call_id, const char *name) {
+  if (!name || call_id < 0 || !self_is_main(c, call_id) || main_call_site(c, call_id) != 0) return 0;
+  /* (not in a block: one an instance_exec runs has another self) */
+  int np = 0;
+  const int *par = elab_node_parents(c, &np);
+  for (int v = call_id; par && v >= 0 && v < np; v = par[v]) {
+    NodeKind k = nt_kind(c->nt, v);
+    if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
+  }
+  for (int k = 0; k < c->ntoplevel_includes; k++)
+    if (c->toplevel_extends[k] && toplevel_mod_method(c, k, name, 1) >= 0) return 1;
+  return 0;
+}
 /* Whether a module the top level includes (extend 0) or main extends
    (extend 1) has an instance method `name`. */
 int comp_toplevel_mod_defines(Compiler *c, const char *name, int extend) {

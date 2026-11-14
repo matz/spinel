@@ -42,8 +42,11 @@ for ent in $FUNCS $REFUSALS; do
   res=$(awk -v fn="$fn" '
     !inb && $0 ~ "^(static )?[a-z].*[ *]" fn "[(]" && $0 !~ /;$/ { inb = 1; found = 1 }
     inb && /mtab_enter[(]c[)];/ { e++ }
+    inb && e > l && /(^|[^A-Za-z0-9_])return([^A-Za-z0-9_]|$)/ && $0 !~ /^[ \t]*(\/[*]|[*])/ {
+      # a return ahead of the leave on its own line leaves with the bracket open
+      rp = match($0, /(^|[^A-Za-z0-9_])return([^A-Za-z0-9_]|$)/); lp = index($0, "mtab_leave(c);")
+      if (lp == 0 || rp < lp) r = r " " NR }
     inb && /mtab_leave[(]c[)];/ { l++ }
-    inb && e > l && /(^|[^A-Za-z0-9_])return([^A-Za-z0-9_]|$)/ && $0 !~ /^[ \t]*(\/[*]|[*])/ { r = r " " NR }
     inb && /^}/ { inb = 0 }
     END { if (!found) print "function not found"; else if (e < 1 || e != l) print "bracket opened " e + 0 " and closed " l + 0 " times"
           else if (r != "") print "returns with the bracket open at line" r }' "$f")

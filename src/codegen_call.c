@@ -26956,14 +26956,21 @@ int subtree_reads_container(Compiler *c, int id) {
   return 0;
 }
 /* Is call id a push or an append of several arguments, which its arms
-   write as one push per argument, each read where its push is? */
-int pushes_args_one_by_one(Compiler *c, int id) {
+   write as one push per argument, each read where its push is, with an
+   argument after the first that can see an earlier push: one that reads an
+   Array or a Hash (`k[-2]`, `k.size`), or one that may run code, which can
+   reach the Array by any name (`last(a)`, a method reading the ivar, a
+   proc)? CRuby reads every argument before it pushes. */
+int push_args_read_before_pushes(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
   if (!nm || (!sp_streq(nm, "push") && !sp_streq(nm, "append")) || nt_ref(nt, id, "receiver") < 0) return 0;
   int a = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-  return ac > 1 && !nt_argv_has_splat(nt, av, ac);
+  if (ac < 2 || nt_argv_has_splat(nt, av, ac)) return 0;
+  for (int i = 1; i < ac; i++)
+    if (subtree_reads_container(c, av[i]) || subtree_has_side_effect(c, av[i])) return 1;
+  return 0;
 }
 static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   /* The buffer arm holds its operands, including the handle a keyword
@@ -27074,15 +27081,14 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   int held[nmax], nheld = 0;
   operands_held_for_later(c, operand, nop, recv >= 0, held);
   /* A push or an append of several arguments pushes each before the next
-     is read, so an argument that reads an Array or a Hash -- one the
-     operand-order record calls a pure read, `k[-2]`, `k.size` -- is bound
-     first, in order, as CRuby reads every argument before the push: left
-     in place, `k.push(k[-2], k[-2])` read its second argument from the
-     Array the first push had grown. */
-  int push_reads = 0;
-  if (pushes_args_one_by_one(c, id))
-    for (int i = recv >= 0; i < nop; i++)
-      if (subtree_reads_container(c, operand[i])) held[i] = push_reads = 1;
+     is read, so where a later argument can see an earlier push
+     (push_args_read_before_pushes) every argument is bound first, in
+     order, as CRuby reads them all before the push: left in place,
+     `k.push(k[-2], k[-2])` read its second argument from the Array the first
+     push had grown, and `a.push(5, last(a))` ran last on it. */
+  int push_reads = push_args_read_before_pushes(c, id);
+  if (push_reads)
+    for (int i = recv >= 0; i < nop; i++) held[i] = 1;
   int nheld_value = 0;
   for (int i = 0; i < nop; i++) {
     nheld += held[i];

@@ -2,8 +2,9 @@
 # is read, and an argument that reads the Array being pushed onto -- an
 # element, its size, its last -- is a pure read the operand order left in
 # place, so it read the Array the earlier pushes had grown: `k.push(k[-2],
-# k[-2])` pushed the element it had just pushed. CRuby reads every argument
-# first. Each such argument is now read before the first push.
+# k[-2])` pushed the element it had just pushed, and a later argument that
+# runs code (`a.push(5, last(a))`) ran on it too. CRuby reads every argument
+# first. Each argument is now read before the first push.
 
 k = [0, 1]
 k.push(k[-2], k[-2])
@@ -64,6 +65,23 @@ class Stack
   def dup_second = (@items.push(@items[-2], @items[-2]); @items)
 end
 p Stack.new.dup_second
+
+# a later argument that runs code reaching the Array: a method handed it,
+# a method reading the ivar, a lambda over the local
+def last_of(xs) = xs[-1]
+e = [0, 1]
+e.push(5, last_of(e))
+p e
+class Queue2
+  def initialize = (@items = [0, 1])
+  def peek = @items[-1]
+  def go = (@items.push(5, peek); @items)
+end
+p Queue2.new.go
+lc = [0, 1]
+tail = -> { lc[-1] }
+lc.append(9, tail.call)
+p lc
 
 # pushes that read no container keep their order too
 q = [1]

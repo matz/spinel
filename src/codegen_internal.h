@@ -697,9 +697,9 @@ void emit_scan_rtcheck_open(Compiler *c, int id, int recv, Buf *pre, int indent,
    plain field reads, all the way down (codegen_call.c)? */
 int subtree_is_pure_read(Compiler *c, int id);
 /* codegen_call.c: a call on an Array or a Hash in the subtree; a push or an
-   append of several arguments, pushed one at a time */
+   append of several arguments, a later one of which can see an earlier push */
 int subtree_reads_container(Compiler *c, int id);
-int pushes_args_one_by_one(Compiler *c, int id);
+int push_args_read_before_pushes(Compiler *c, int id);
 /* The same question about the node's own code, whether or not it already ran
    into a temp: for a question about what the whole statement runs, not what
    reading the node here runs. */

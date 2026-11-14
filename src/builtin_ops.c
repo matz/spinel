@@ -3232,6 +3232,20 @@ int bop_name_kwless(const char *name) { return bop_name_rows(name, 0); }
 int bop_name_keywords(const char *name) { return bop_name_rows(name, 1); }
 
 /* See builtin_ops.h. */
+int bop_kernel_answers(const char *name, int argc, int has_block) {
+  if (!name) return 0;
+  if (argc >= 0) {
+    const BuiltinOp *r = bop_find(BOP_KERNEL, name, argc, has_block);
+    return r && !(r->flags & BOPF_INTERNAL);
+  }
+  for (int i = 0; i < BOP_NROWS; i++) {
+    const BuiltinOp *r = &bop_rows[i];
+    if (r->recv == BOP_KERNEL && r->name[0] == name[0] && !(r->flags & BOPF_INTERNAL) && sp_streq(r->name, name)) return 1;
+  }
+  return 0;
+}
+
+/* See builtin_ops.h. */
 int bop_class_answers(const char *name, int argc, int has_block) {
   const BuiltinOp *r = argc >= 0 ? bop_find(TY_CLASS, name, argc, has_block) : NULL;
   return r && !(r->flags & BOPF_PRIVATE);

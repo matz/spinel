@@ -1957,7 +1957,8 @@ typedef struct {
      or both (ver_mm_at) */
   struct VerLate { char *name; int cls, sg, mi, ar, mm, span, face; } *ver_late;   /* span: a call past the build that spans versions; face: the entry's it binds (VF_*) */
   int nver_late;
-  int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
+  int nver_refl;   /* the public histories whose name reflection does not answer (call_plan.c, ver_refl_named), the private ones in nver_refl_priv: a public list names none of those */
+  int nver_refl_priv, nver_bycount;   /* ...and the histories held by count, whose versions carry the mark (ver_named_make) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */
   char **rsc_names;   /* the names a class or module body defines, which `::Name` must not be read as the bare Name for (analyze_desugar.c, desugar_root_scoped_constants) */
   int n_rsc_names;

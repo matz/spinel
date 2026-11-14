@@ -9180,8 +9180,12 @@ static int rtm_class_side(Compiler *c, int id, int recv) {
    or every version over the window it may run in one of the program's
    (none absent)? Not yet defined there is fine while no object it answers
    for can exist yet (a class opened later). A call ahead of the def (`p
-   r.respond_to?(:x); class R; def respond_to_missing?`) or a def under a
-   condition leaves the call to the method-table answer, as before. So do
+   r.respond_to?(:x); class R; def respond_to_missing?`) leaves the call to
+   the method-table answer, as before, and so does a def under a condition,
+   unless it is a lone one the record holds (cond_lone): the call asks its
+   entry, which tests the def's cell where the call runs and answers
+   Kernel's false when the def did not. A version entry is no def of the
+   program's, and is asked of none. So do
    a class object's call (a class's own `def self.respond_to_missing?` is
    not asked), a top-level def and one on a singleton (`def
    o.respond_to_missing?`, extend). */
@@ -9200,14 +9204,17 @@ static int rtm_live_at(Compiler *c, int id) {
   for (int s = an_scopes_named_first(c, RESPOND_TO_MISSING_NAME); s >= 0;
        s = an_scopes_named_next(c, RESPOND_TO_MISSING_NAME, s)) {
     const Scope *sc = &c->scopes[s];
-    if (sc->def_node < 0 || sc->is_cmethod) continue;   /* (a class's own: asked of no instance) */
-    if (sc->class_id < 0 || !elab_def_applied(c, sc->def_node)) return 0;
+    if (sc->def_node < 0 || sc->is_cmethod || sc->entry) continue;   /* (a class's own: asked of no instance; a version entry is no def of the program's) */
+    int held = nt_int(c->nt, sc->def_node, "cond_lone", 0);   /* (a held def's entry tests its cell where the call runs, and its else arm is Kernel's false) */
+    if (sc->class_id < 0 || (!held && !elab_def_applied(c, sc->def_node))) return 0;
     if (!rtm_may_reach(c, cid, sc->class_id)) continue;
     ElabMeet m; const LrDef *out[8];
     elab_call_meet(c, id, sc->class_id, RESPOND_TO_MISSING_NAME, 0, 0, &m, out, 8);
     if (m.at == ELAB_YES && m.d) continue;
     if (m.at == ELAB_NO && !rtm_holders_live(c, sc->class_id, elab_point_of(c, id))) continue;
-    if (m.at != ELAB_UNKNOWN || m.win != ELAB_YES || m.n < 1 || m.n > 8) return 0;
+    if (m.at != ELAB_UNKNOWN || m.win != ELAB_YES) return 0;
+    if (held) continue;
+    if (m.n < 1 || m.n > 8) return 0;
     for (int i = 0; i < m.n; i++) if (!out[i]) return 0;
   }
   return 1;
@@ -16746,7 +16753,8 @@ int desugar_conditional_defs(Compiler *c) {
        `if` of its body is marked cond_lone: what the entry cannot answer
        for it is refused (ver_named_one, ver_refl_named) */
     int left = g[0].cls == -2 || (ng == 1 && !g[0].here);
-    if (!left && ng == 1 && cdef_name_inherited(nt, base, d0)) left = 2;
+    /* (a Kernel row's name, respond_to_missing?, answers behind an instance-side def in a class or module body only) */
+    if (!left && ng == 1 && (cdef_name_inherited(nt, base, d0) || (g[0].cls >= 0 && !g[0].cm && bop_kernel_answers(base, -1, 0)))) left = 2;
     if (ng == 1 && g[0].here && (g[0].cls == -2 || left == 2)) nt_node_set_int(nt, d0, "cond_lone", 1);
     if (left) { free(base); continue; }
     if (bad || (ng >= 2 && same)) { free(base); continue; }

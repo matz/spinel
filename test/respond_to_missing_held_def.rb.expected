@@ -1,0 +1,33 @@
+false
+false
+false
+true
+false
+true
+false
+true
+false
+true
+false
+true
+"wrong number of arguments (given 1, expected 2)"
+[true, true, false]
+true
+false
+true
+false
+true
+true
+false
+true
+false
+"private method 'respond_to_missing?' called for an instance of Hidden"
+[true, false, false, false]
+true
+false
+[]
+false
+"wrong number of arguments (given 0, expected 1..2)"
+"wrong number of arguments (given 3, expected 1..2)"
+"wrong number of arguments (given 0, expected 2)"
+"wrong number of arguments (given 3, expected 2)"

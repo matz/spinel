@@ -24013,6 +24013,16 @@ const char *sp_StrArray_pack(sp_StrArray *arr, const char *fmt);
 sp_PolyArray *sp_str_unpack(const char *str, const char *fmt);
 sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff);
 
+/* Does a pack format address bytes it did not write? `@` moves the cursor
+   to an offset from the buffer's start and `X` backs it up, so with a buffer
+   they can reach the bytes already in it; every other directive only
+   appends. A `@` or `X` inside a `#` comment is counted too, which only
+   sends that format the longer way. */
+static inline int sp_pack_fmt_seeks(const char *fmt) {
+  for (const char *p = fmt; *p; p++) if (*p == '@' || *p == 'X') return 1;
+  return 0;
+}
+
 /* The keyword form starts its cursor after the buffer's existing bytes.
    A nil buffer asks for a fresh String; every other buffer must be a String. */
 static sp_RbVal sp_poly_pack_buffer(sp_RbVal recv, sp_RbVal format, sp_RbVal buffer) {
@@ -24033,6 +24043,23 @@ static sp_RbVal sp_poly_pack_buffer(sp_RbVal recv, sp_RbVal format, sp_RbVal buf
     sp_str_check_mutable(initial);
   }
   SP_GC_ROOT_STR(initial);
+  /* A String handle whose format only appends takes the packed bytes on
+     its end, as CRuby's pack does. Packing behind the buffer's bytes and
+     writing the whole String back copied the buffer on every call, so a
+     message built by repeated packs cost the square of its length. The
+     bytes are packed before any reaches the buffer, as the full pack does.
+     The buffer keeps its encoding unless the format selects UTF-8, as
+     the full pack decides (sp_PolyArray_pack_buffer): the packed bytes are
+     binary unless it does, and the buffer's flag is read before the append
+     moves its bytes. */
+  if (sp_poly_is_strbuf(buffer) && !sp_pack_fmt_seeks(fmt)) {
+    const char *r = sp_PolyArray_pack_buffer(sp_poly_to_poly_array(recv), fmt, NULL);
+    SP_GC_ROOT_STR(r);
+    int binary = sp_str_is_binary(r) && sp_str_is_binary(initial);
+    sp_fd_append_len((sp_String *)buffer.v.p, r, (int64_t)sp_str_byte_len(r));
+    sp_String_force_encoding((sp_String *)buffer.v.p, binary);
+    return buffer;
+  }
   const char *r = sp_PolyArray_pack_buffer(sp_poly_to_poly_array(recv), fmt, initial);
   SP_GC_ROOT_STR(r);
   if (sp_poly_is_strbuf(buffer)) {

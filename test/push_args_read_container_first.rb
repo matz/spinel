@@ -125,6 +125,23 @@ class Bump
 end
 p Bump.new.go
 
+# a later argument that raises leaves the Array as it was, as in CRuby,
+# which reads every argument before it stores
+def try_it = yield rescue p($!.class)
+ra = [0, 1]
+try_it { ra.push(7, 1 / 0) }
+p ra
+rb = [0, 1]
+try_it { rb.push(7, Integer("zz")) }
+p rb
+rc = [0, 1]
+try_it { rc.insert(1, 7, 1 / 0) }
+p rc
+# a splat beside a container read
+sp = [0, 1]
+sp.push(sp[-2], *[sp[-1]])
+p sp
+
 # pushes that read no container keep their order too
 q = [1]
 q.push(2, 3)

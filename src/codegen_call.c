@@ -26936,34 +26936,22 @@ static int range_lit_ends_ordered(Compiler *c, int v, int last) {
   return subtree_has_side_effect(c, lo) || subtree_has_side_effect(c, hi);
 }
 
-/* Does the subtree call a method on an Array or a Hash (`k[-2]`, `k.size`,
-   `x.first`)? Such a read runs no code, but it sees a change to the
-   container that happens beside it, by whatever name it reads it. */
-int subtree_reads_container(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  if (id < 0) return 0;
-  if (nt_kind(nt, id) == NK_CallNode) {
-    int r = nt_ref(nt, id, "receiver");
-    TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
-    if (ty_is_array(rt) || ty_is_ptr_array(rt) || ty_is_hash(rt)) return 1;
-  }
-  int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) if (subtree_reads_container(c, nt_ref_at(nt, id, i))) return 1;
-  int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int j = 0; j < n; j++) if (subtree_reads_container(c, ids[j])) return 1;
-  }
-  return 0;
+/* Is an argument of kind k a plain value: a literal or a read of a
+   variable or a constant, which reads the same whenever it runs, reads no
+   container and raises nothing? */
+static int push_arg_is_plain(NodeKind k) {
+  return k == NK_IntegerNode || k == NK_FloatNode || k == NK_StringNode || k == NK_SymbolNode ||
+         k == NK_NilNode || k == NK_TrueNode || k == NK_FalseNode || k == NK_SelfNode ||
+         k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode ||
+         k == NK_GlobalVariableReadNode || k == NK_ConstantReadNode;
 }
 /* Is call id a push or an append of several arguments, or an insert of
    several values, which its arms write as one push or insert per value,
-   each read where its store is, with a value after the first that can see
-   an earlier store: one that reads an Array or a Hash (`k[-2]`, `k.size`),
-   or one that may run code, which can reach the Array by any name
-   (`last(a)`, a method reading the ivar, a proc)? CRuby reads every
-   argument before it stores. (An insert's position runs first, and so does
-   its first value.) */
+   each read where its store is, with a value after the first that is no
+   plain value: one that can see an earlier store (`k[-2]`, `k.size`, a
+   call reaching the Array by any name) or raise after it (`1 / 0`), which
+   in CRuby stores nothing? CRuby reads every argument before it stores.
+   (An insert's position runs first, and so does its first value.) */
 int push_args_read_before_pushes(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
@@ -26976,7 +26964,7 @@ int push_args_read_before_pushes(Compiler *c, int id) {
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   if (ac <= first || nt_argv_has_splat(nt, av, ac)) return 0;
   for (int i = first; i < ac; i++)
-    if (subtree_reads_container(c, av[i]) || subtree_has_side_effect(c, av[i])) return 1;
+    if (!push_arg_is_plain(nt_kind(nt, av[i]))) return 1;
   return 0;
 }
 static int emit_operands_in_order(Compiler *c, int id, Buf *b) {

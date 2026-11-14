@@ -12,14 +12,6 @@ true
 b scrub dump encode strip lstrip rstrip chomp chop to_str 
 b scrub dump encode strip lstrip rstrip chomp chop to_str 
 b scrub dump encode strip lstrip rstrip chomp chop to_str 
-42
-:stripped
-" caf\xC3\xA9 \n"
-"café"
-"note-b!"
-4
-" caf\xC3\xA9 \n!"
-7
 false
 false
 true

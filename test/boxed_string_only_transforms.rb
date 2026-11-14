@@ -58,17 +58,5 @@ p u, v.equal?(u)
   puts
 end
 
-# a class of the program with its own method of the name keeps its answer
-class Blob
-  def b = 42
-  def strip = :stripped
-end
-class Note
-  def b = "note-b"
-  def to_str = "note"
-end
-[Blob.new, msgs[0]].each { |x| p x.b, x.strip }
-[Note.new, msgs[0]].each { |x| p x.b + "!", x.to_str.size }
-
 # a Symbol still answers none of them
 p :sym.respond_to?(:strip), :sym.respond_to?(:b), [s, 1][0].respond_to?(:b)

@@ -6187,11 +6187,12 @@ int io_family_class(Compiler *c, int k) {
    builtin it overrides: the reopenings are out of sight for that call
    alone, not for the calls in its arguments. */
 int g_io_skip_reopen = 0, g_io_skip_node = -1;
-int io_reopen_class(Compiler *c, const char *name) {
+int io_reopen_class(Compiler *c, int id, const char *name) {
   if (!name || g_io_skip_reopen) return -1;
   for (int i = 0; io_family[i] >= 0; i++) {
-    int k = comp_core_class(c, io_family[i]), def = -1;
-    if (k >= 0 && comp_method_in_chain(c, k, name, &def) >= 0 && io_family_class(c, def)) return def;
+    int k = comp_core_class(c, io_family[i]);
+    MethodLookup ml = { .def_class = -1 };
+    if (k >= 0 && call_target(c, id, k, name, 0, &ml) >= 0 && io_family_class(c, ml.def_class)) return ml.def_class;
   }
   return -1;
 }
@@ -6216,12 +6217,13 @@ static const int *io_family_classes(Compiler *c, int *n) {
   *n = iofc_n;
   return iofc_ids;
 }
-int io_reopen_defs(Compiler *c, const char *name, int public_only, int *ks, int max) {
+int io_reopen_defs(Compiler *c, int id, const char *name, int public_only, int *ks, int max) {
   int n = 0, nf = 0;
   const int *fam = io_family_classes(c, &nf);
   for (int i = 0; i < nf && n < max; i++) {
-    int k = fam[i], def = -1;
-    if (comp_method_in_chain(c, k, name, &def) < 0 || def != k) continue;
+    int k = fam[i];
+    MethodLookup ml = { .def_class = -1 };
+    if (call_target(c, id, k, name, 0, &ml) < 0 || ml.def_class != k) continue;
     if (public_only && comp_method_vis_in_chain(c, k, name) != SP_VIS_PUBLIC) continue;
     ks[n++] = k;
   }
@@ -6229,11 +6231,11 @@ int io_reopen_defs(Compiler *c, const char *name, int public_only, int *ks, int 
 }
 /* Do the reopenings defining `name` answer different types? A typed IO's
    call is then boxed, each kind's answer boxed into it. */
-int io_reopen_ret_mixed(Compiler *c, const char *name) {
-  int ks[16], n = io_reopen_defs(c, name, 0, ks, 16);
+int io_reopen_ret_mixed(Compiler *c, int id, const char *name) {
+  int ks[16], n = io_reopen_defs(c, id, name, 0, ks, 16);
   for (int i = 1; i < n; i++)
-    if (c->scopes[comp_method_in_chain(c, ks[i], name, NULL)].ret !=
-        c->scopes[comp_method_in_chain(c, ks[0], name, NULL)].ret) return 1;
+    if (c->scopes[call_target(c, id, ks[i], name, 0, NULL)].ret !=
+        c->scopes[call_target(c, id, ks[0], name, 0, NULL)].ret) return 1;
   return 0;
 }
 /* The builtin superclass of an IO-family class, as lib/sp_io.c walks a
@@ -6255,8 +6257,8 @@ int io_family_descends(Compiler *c, int k, int owner) {
 }
 /* Does some IO kind reach no reopening of `name` (no IO#name among them),
    so that the builtin answers for it? */
-int io_reopen_leaves_builtin(Compiler *c, const char *name) {
-  int ks[16], n = io_reopen_defs(c, name, 0, ks, 16);
+int io_reopen_leaves_builtin(Compiler *c, int id, const char *name) {
+  int ks[16], n = io_reopen_defs(c, id, name, 0, ks, 16);
   for (int i = 0; i < n; i++) if (sp_streq(c->classes[ks[i]].name, "IO")) return 0;
   return n > 0;
 }

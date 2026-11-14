@@ -11851,11 +11851,12 @@ int class_is_exc_subclass(Compiler *c, int ci) {
   return ans;
 }
 
-/* True when one of the program's exception classes defines `name` itself:
-   reflection on an exception then has to call it, not answer for it. */
-int exc_class_defines(Compiler *c, const char *name) {
+/* True when one of the program's exception classes defines `name` itself
+   (as call id's lookup finds it there: call_target on the class's own
+   table): reflection on an exception then has to call it, not answer for it. */
+int exc_class_defines(Compiler *c, int id, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_class(c, k, name) >= 0 && class_is_exc_subclass(c, k)) return 1;
+    if (class_is_exc_subclass(c, k) && call_target(c, id, k, name, CT_OWN, NULL) >= 0) return 1;
   return 0;
 }
 
@@ -18698,10 +18699,10 @@ void emit_regex_section(Compiler *c, Buf *b) {
        defines, or all of them when one defines method_missing */
     static const char *const lacks[] = { "last", "join", "sample", "shuffle", "shuffle!", "flatten", "at", "pack",
                                          "rotate", "values_at", NULL };
-    int mm = reopened_owns(c, "Enumerator", "method_missing") || reopened_owns(c, "Enumerable", "method_missing");
+    int mm = reopened_owns(c, -1, "Enumerator", "method_missing") || reopened_owns(c, -1, "Enumerable", "method_missing");
     int any = 0;
     for (int i = 0; lacks[i]; i++)
-      if (mm || reopened_owns(c, "Enumerator", lacks[i]) || reopened_owns(c, "Enumerable", lacks[i])) {
+      if (mm || reopened_owns(c, -1, "Enumerator", lacks[i]) || reopened_owns(c, -1, "Enumerable", lacks[i])) {
         buf_printf(b, "%s\"%s\"", any ? ", " : "  { static const char *const el[] = { ", lacks[i]);
         any = 1;
       }

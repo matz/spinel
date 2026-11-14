@@ -3225,7 +3225,7 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     buf_puts(b, "), stdout))");
     return 1;
   }
-  if (recv >= 0 && (ty_builtin_ivar_less(rt) || is_bivar_access(name)) && !comp_object_defines(c, name) &&
+  if (recv >= 0 && (ty_builtin_ivar_less(rt) || is_bivar_access(name)) && cplan_core_method(c, id, CORE_OBJECT, name) < 0 &&
       emit_builtin_op(c, id, recv, BOP_IVAR_LESS, name, b)) return 1;
   if (recv >= 0 && rt == TY_EXCEPTION && emit_exc_ivar_call(c, id, name, recv, b)) return 1;
   /* instance_variable_defined?(:@x / '@x') on a statically-typed object:

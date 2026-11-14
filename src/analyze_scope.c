@@ -12801,7 +12801,7 @@ const int *poly_recv_classes(Compiler *c, int call, int *n) {
 /* See analyze.h. */
 int poly_recv_defines(Compiler *c, int call, const char *name) {
   if (an_builtin_only_p()) return 0;   /* deriving the builtin-only answer (#3459) */
-  if (comp_object_defines(c, name)) return 1;   /* every value is an Object */
+  if (cplan_core_method(c, call, CORE_OBJECT, name) >= 0) return 1;   /* every value is an Object */
   int nk = 0;
   const int *ks = poly_recv_classes(c, call, &nk);
   for (int k = 0; k < c->nclasses; k++) {
@@ -13051,7 +13051,7 @@ static int infer_ivar_set_call(Compiler *c, int id, NilWrites *writes) {
           /* an exception may be any of the program's exception classes,
              whose ivars live in its layout: each takes the slot, so the
              write (keyed by the runtime class) has a field to land in */
-          else if (rt == TY_EXCEPTION && !exc_class_defines(c, "instance_variable_set")) {
+          else if (rt == TY_EXCEPTION && !exc_class_defines(c, id, "instance_variable_set")) {
             TyKind evt = infer_type(c, sav[1]);
             for (int k = 0; k < c->nclasses; k++) {
               if (!class_is_exc_subclass(c, k)) continue;
@@ -13132,7 +13132,7 @@ static int infer_ivar_set_call(Compiler *c, int id, NilWrites *writes) {
           int hit;
           if (self_recv) hit = k == scid;
           else if (ty_is_object(rt)) hit = k == ty_object_class(rt);
-          else if (rt == TY_EXCEPTION) hit = !exc_class_defines(c, "instance_variable_set") && class_is_exc_subclass(c, k);
+          else if (rt == TY_EXCEPTION) hit = !exc_class_defines(c, id, "instance_variable_set") && class_is_exc_subclass(c, k);
           else if (rt == TY_POLY) hit = poly_ivar_set_class(c, k) && poly_ivar_set_reaches(c, id, k);
           else hit = 0;
           if (!hit || k >= c->nclasses) continue;

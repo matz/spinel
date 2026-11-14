@@ -412,9 +412,9 @@ static int emit_isa_runtime_flag_class(Compiler *c, const NodeTable *nt, const c
    the dispatch's box, while this asked for a def of the name itself,
    found none, and the static class test below put a bare C truth value
    where the box was expected. */
-static int kind_query_overridden(Compiler *c, const char *name) {
+static int kind_query_overridden(Compiler *c, int id, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
-    if (!is_builtin_reopen(c->classes[k].name) && comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
+    if (!is_builtin_reopen(c->classes[k].name) && call_target(c, id, k, name, 0, NULL) >= 0) return 1;
   return 0;
 }
 /* Is kind query `id` on a boxed receiver the general dispatch's? When a
@@ -424,7 +424,7 @@ static int kind_query_overridden(Compiler *c, const char *name) {
    builtin test -- by emitting this same call again as its builtin arm
    (g_pd_skip), which the tests below are then for. */
 static int kind_query_to_dispatch(Compiler *c, int id, const char *name, TyKind rt) {
-  return rt == TY_POLY && g_pd_skip != id && kind_query_overridden(c, name);
+  return rt == TY_POLY && g_pd_skip != id && kind_query_overridden(c, id, name);
 }
 
 /* Does `<`, `<=`, `>` or `>=` (`name`) find no method on a receiver of the

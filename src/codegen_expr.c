@@ -2078,13 +2078,13 @@ static int emit_promote_rat_exact(Compiler *c, int id, Buf *b) {
   const int *argv = call_args(nt, id, &argc);
   if (!nm) return 0;
   if (sp_streq(nm, "to_r") && argc == 0 && recv >= 0 && comp_ntype(c, recv) == TY_FLOAT &&
-      comp_method_in_chain(c, comp_core_class(c, CORE_FLOAT), "to_r", NULL) < 0) {
+      cplan_core_method(c, id, CORE_FLOAT, "to_r") < 0) {
     /* boxed, so a Float that may be nil answers nil's (0/1) */
     buf_puts(b, "sp_poly_to_r_m("); emit_boxed(c, recv, b); buf_puts(b, ")");
     return 1;
   }
   if (sp_streq(nm, "rationalize") && argc <= 1 && recv >= 0 && comp_ntype(c, recv) == TY_FLOAT &&
-      comp_method_in_chain(c, comp_core_class(c, CORE_FLOAT), "rationalize", NULL) < 0) {
+      cplan_core_method(c, id, CORE_FLOAT, "rationalize") < 0) {
     buf_puts(b, "sp_poly_rationalize_m("); emit_boxed(c, recv, b);
     buf_printf(b, ", %d, ", argc);
     if (argc) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_nil()");

@@ -1762,7 +1762,7 @@ int str_fresh_value(Compiler *c, int n) {
   if (nt_kind(nt, n) != NK_CallNode || nt_ref(nt, n, "block") >= 0 || comp_ntype(c, n) != TY_STRING) return 0;
   int r = nt_ref(nt, n, "receiver");
   const char *nm = nt_str(nt, n, "name");
-  if (r < 0 || !nm || comp_ntype(c, r) != TY_STRING || comp_builtin_kind_reopen_mi(c, TY_STRING, nm) >= 0)
+  if (r < 0 || !nm || comp_ntype(c, r) != TY_STRING || comp_builtin_kind_reopen_mi(c, n, TY_STRING, nm) >= 0)
     return 0;
   int self = bop_answers_self(TY_STRING, nm, call_plain_argc(c, n), 0);
   if (self & BOPF_SELF_CLASS) {

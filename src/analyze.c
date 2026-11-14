@@ -10442,7 +10442,7 @@ int desugar_hash_merge_fold(Compiler *c) {
     int own = 0;
     if (ty_is_object(t)) own = class_takes_merge_argc(c, ty_object_class(t), nm, an);
     else if (ty_is_hash(t)) {
-      int mi = comp_builtin_kind_reopen_mi(c, t, nm);
+      int mi = comp_builtin_kind_reopen_mi(c, id, t, nm);
       own = mi >= 0 && scope_takes_argc(c, mi, nm, an);
     }
     /* a value of either kind: the dispatch's merge! / update arms take every
@@ -14191,10 +14191,10 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     int scid = ty_is_object(hrt) ? ty_object_class(hrt) : -1;
     int sub = hrc >= 0 && scid >= 0 && comp_ary_is_hash(c, scid) &&
               (cplan_builtin_call(c, id) ||
-               (comp_arysub_name_is_array(c, scid, nm) && !comp_is_undeffed_in_chain(c, scid, nm) &&
+               (comp_arysub_name_is_array(c, id, scid, nm) && !comp_is_undeffed_in_chain(c, scid, nm) &&
                 (comp_method_vis_in_chain(c, scid, nm) == SP_VIS_PUBLIC ||
                  nt_kind(nt, hrc) == NK_SelfNode))) &&
-              comp_builtin_kind_reopen_mi(c, TY_POLY_POLY_HASH, "[]=") < 0;
+              comp_builtin_kind_reopen_mi(c, id, TY_POLY_POLY_HASH, "[]=") < 0;
     if (hrc >= 0 && hac == 2 && nt_ref(nt, id, "block") < 0 &&
         (ty_is_hash(hrt) || sub) && an_reopen_owner(c, id, CORE_HASH) < 0) {
       nt_node_set_str(nt, id, "name", "[]=");
@@ -40211,10 +40211,9 @@ static int ps_param_index(Compiler *c, Scope *m, int n) {
   for (int k = 0; nm && k < m->nparams && k < 16; k++) if (m->pnames[k] && sp_streq(m->pnames[k], nm)) return k;
   return -1;
 }
-static int ps_op_reopened(Compiler *c, const char *op) {
-  int nc = comp_core_class(c, CORE_NILCLASS);
-  if (nc >= 0 && comp_method_in_chain(c, nc, op, NULL) >= 0) return 1;
-  return comp_builtin_kind_reopen_mi(c, TY_INT, op) >= 0 || comp_builtin_kind_reopen_mi(c, TY_FLOAT, op) >= 0;
+static int ps_op_reopened(Compiler *c, int id, const char *op) {
+  if (cplan_core_method(c, id, CORE_NILCLASS, op) >= 0) return 1;
+  return comp_builtin_kind_reopen_mi(c, id, TY_INT, op) >= 0 || comp_builtin_kind_reopen_mi(c, id, TY_FLOAT, op) >= 0;
 }
 /* Walk n in evaluation order, recording each parameter's first use; 0 once
    something not understood is reached (every parameter not yet seen is
@@ -40249,7 +40248,7 @@ static int ps_walk(Compiler *c, Scope *m, int n, PStrict *ps, char *seen, int *o
   if (!op || r < 0 || an != 1 || nt_ref(nt, n, "block") >= 0) return 0;
   static const char *const RECV_OPS[] = { "+", "-", "*", "/", "%", "**", "<", ">", "<=", ">=", "<<", ">>", NULL };
   static const char *const ARG_OPS[] = { "+", "-", "*", "/", "%", "**", NULL };
-  if (!str_in(op, RECV_OPS) || ps_op_reopened(c, op)) return 0;
+  if (!str_in(op, RECV_OPS) || ps_op_reopened(c, n, op)) return 0;
   TyKind rt = comp_ntype(c, r);
   if (rt != TY_INT && rt != TY_FLOAT) return 0;
   /* the receiver evaluates first, then the argument, then the operator
@@ -43124,7 +43123,7 @@ static int splat_recv_is_builtin_subclass(Compiler *c, int id, const char *name)
     if (s && !s->is_cmethod) k = s->class_id;
   }
   else if (ty_is_object(comp_ntype(c, r))) k = ty_object_class(comp_ntype(c, r));
-  return k >= 0 && comp_arysub_name_is_array(c, k, name);
+  return k >= 0 && comp_arysub_name_is_array(c, id, k, name);
 }
 /* The argument counts a builtin takes, over every builtin receiver that has
    the method: `fetch` is Hash's and Array's (key, default), `[]` is Hash's
@@ -45500,7 +45499,7 @@ static int psb_block_unused(Compiler *c, int id) {
   if (!nm || recv < 0 || !str_in(nm, N)) return 0;
   TyKind rt = infer_type(c, recv);
   if (!ty_is_array(rt) && !ty_is_hash(rt) && rt != TY_STRING) return 0;
-  return cplan_builtin_call(c, id) || comp_builtin_kind_reopen_mi(c, rt, nm) < 0;
+  return cplan_builtin_call(c, id) || comp_builtin_kind_reopen_mi(c, id, rt, nm) < 0;
 }
 
 static int desugar_poly_symbol_block_arg(Compiler *c) {
@@ -46694,7 +46693,7 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
     if (self >= 0) { arysub_set_call(c, id, self, "itself", -1, -1); nt_set_ignore_visibility((NodeTable *)c->nt, id, 1); }
     return;
   }
-  if (!init && !comp_arysub_builtin_name(c, st->class_id, mname)) return;
+  if (!init && !comp_arysub_builtin_name(c, id, st->class_id, mname)) return;
   int args = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
     args = arysub_zsuper_args(c, id, s);
@@ -46789,7 +46788,7 @@ static void rewrite_array_subclass_self_call(Compiler *c, int id) {
   int ro = comp_arysub_reopen(c, k);
   if ((call_target(c, id, k, nm, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) ||
       comp_reader_in_chain(c, k, nm, NULL)) return;
-  if (!comp_arysub_builtin_name(c, k, nm)) return;
+  if (!comp_arysub_builtin_name(c, id, k, nm)) return;
   int self = arysub_node(c, "SelfNode", id);
   if (self >= 0) nt_node_set_ref((NodeTable *)c->nt, id, "receiver", self);
 }
@@ -46922,7 +46921,7 @@ static void arysub_keep_builtin_only(Compiler *c, int m0, const char *name) {
     if (name ? !sp_streq(nm, name) : 0) continue;
     if (!name) {
       Scope *s = comp_scope_of(c, n);
-      if (!s || comp_ary_root(c, s->class_id) < 0 || !comp_arysub_builtin_name(c, s->class_id, nm)) continue;
+      if (!s || comp_ary_root(c, s->class_id) < 0 || !comp_arysub_builtin_name(c, n, s->class_id, nm)) continue;
     }
     nt_mark_builtin_call(nt, n);
   }

@@ -587,6 +587,8 @@ void comp_free(Compiler *c) {
   free(c->top_self_marks); c->top_self_marks = NULL; c->top_self_stamp = 0;
   free(c->ver_vis_after); c->ver_vis_after = NULL; c->nver_vis_after = 0;
   free(c->ver_guards); c->ver_guards = NULL; c->nver_guards = 0;
+  for (int i = 0; i < c->nver_vis_reads; i++) free(c->ver_vis_reads[i].name);
+  free(c->ver_vis_reads); c->ver_vis_reads = NULL; c->nver_vis_reads = c->ver_vis_read_new = 0; c->vis_cell_closed = 0; c->ver_vis_guard_stamp = 0;
   for (int i = 0; i < c->nrbp_slots; i++) free(c->rbp_slot_names[i]);
   free(c->rbp_slot_names); free(c->rbp_slot_lens); c->rbp_slot_names = NULL; c->rbp_slot_lens = NULL; c->nrbp_slots = 0;
   if (c->bp_name) for (unsigned i = 0; i <= c->bp_mask; i++) free(c->bp_name[i]);

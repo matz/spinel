@@ -944,6 +944,20 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     /* an exception answers a name a builtin exception's reopening defines
        only when its runtime class is under that reopening: asked at run
        time, the builtin surface beside it */
+    /* main's def whose visibility only the run tells (a word under a condition, in a loop): every value
+       answers by its cell, and a private one to a true include_all */
+    const LocalVar *tg = qm && recv >= 0 && argc <= 2 && !ty_is_object(rt) && !any_class_responds(c, qm) ? cplan_top_def_cell(c, id, qm) : NULL;
+    if (tg) {
+      int boxed = repr_of(c, id).kind == RK_BOXED;
+      if (boxed) buf_puts(b, "sp_box_bool(");
+      buf_puts(b, "((void)(");
+      emit_expr_for_effect(c, recv, b);
+      buf_printf(b, repr_slot_kind(c, tg) == RK_BOXED ? "), sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "), (gv_%s == %dLL)", tg->name, SP_VIS_PUBLIC);
+      if (argc >= 2) { buf_puts(b, " || ("); emit_cond(c, argv[1], b); buf_puts(b, ")"); }
+      buf_puts(b, ")");
+      if (boxed) buf_puts(b, ")");
+      return 1;
+    }
     int xr[8], xn = 0;
     if (qm && recv >= 0 && rt == TY_EXCEPTION && argc == 1) xn = exc_reopen_definers(c, qm, xr, 8);
     if (xn > 0) {
@@ -6363,6 +6377,37 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
   }
   return 0;
+}
+
+/* A call a visibility cell guards (CallPlan.vis_cell): main's def, which the lookup binds where
+   its visibility only the run tells, runs unless the cell holds private, where the call
+   raises the private method's NoMethodError as a closed call does (emit_vis_refusal, asked
+   as if the lookup had said private). Answers whether it wrote the call; 0 leaves it to the
+   unguarded form (a cell no emitted code reads) */
+int emit_vis_cell_call(Compiler *c, int id, const CallPlan *p, Buf *b, const NodeTable *nt, int recv) {
+  const LocalVar *g = cplan_vis_cell_var(c, p);
+  if (!g) return 0;
+  Buf call, refuse;
+  memset(&call, 0, sizeof call); memset(&refuse, 0, sizeof refuse);
+  /* (a receiver with an effect is held first, as both arms read it) */
+  int held = subtree_has_side_effect(c, recv), mark = g_n_argov;
+  if (held) {
+    argov_reserve();
+    view_bind_temp(recv, hold_operand_pre(c, recv, comp_ntype(c, recv), 0, ++g_tmp, 1));
+  }
+  c->vis_cell_closed = id + 1;
+  int refused = emit_vis_refusal(c, id, &refuse);
+  c->vis_cell_closed = 0;
+  int made = refused && emit_root_reopen_call(c, id, &call, nt, recv, p->owner_ci, p->mi);
+  if (held) view_unbind(mark);
+  if (!made) {
+    free(call.p); free(refuse.p);
+    return 0;
+  }
+  buf_printf(b, repr_slot_kind(c, g) == RK_BOXED ? "(sp_poly_eq(gv_%s, sp_box_int(%dLL)) ? %s : %s)" : "(gv_%s == %dLL ? %s : %s)",
+             g->name, SP_VIS_PRIVATE, refuse.p, call.p);
+  free(call.p); free(refuse.p);
+  return 1;
 }
 
 /* A program's method mi on a root class ci (NilClass, Numeric or Object)

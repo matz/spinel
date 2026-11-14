@@ -1966,6 +1966,14 @@ typedef struct {
      value (call_plan.c, ver_cells_put; cplan_vis_cell_after) */
   struct VerVisAfter { int node, cell, v; } *ver_vis_after;
   int nver_vis_after;
+  /* the visibility cells a call guard reads (CallPlan.vis_cell), one per call
+     and cell: the history's name, its cell, the call; written: its cell's
+     writes are placed (call_plan.c, ver_cells_put). closed: the call (+ 1) whose
+     private refusal the guard is emitting, which cplan_root_closed answers
+     as closed to */
+  struct VerVisRead { char *name; int cell, call, written; } *ver_vis_reads;
+  int nver_vis_reads, ver_vis_read_new, vis_cell_closed;
+  unsigned long ver_vis_guard_stamp;   /* the tree's state ver_vis_guard_hists last read (nodes, scopes, edits, version) */
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),

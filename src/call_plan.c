@@ -209,6 +209,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
   p->core_hook = 0;
   p->answers_receiver = 0;
+  p->vis_cell = 0;
 }
 
 /* The core id of the class a builtin receiver kind is reopened as, or -1. */
@@ -343,23 +344,63 @@ int cplan_top_def_reads_self(Compiler *c, int s) {
   return c->top_self_marks[s];
 }
 
+static int cplan_root_def_ran(Compiler *c, int call, int k, const char *name);
+static void ver_vis_read_add(Compiler *c, int call, const char *name, int cell);
+/* The visibility the record has for main's only version of `name` (the
+   histories of one version, with no reopened Object's twin: the lone
+   version's answer, which a face entry does not make): its arm's
+   (elab_version_vis), a visibility where the record proves it, -1 where
+   only the run tells and every visibility word of the name has a write that
+   keeps the cell *cell (lr_vis_cellable); -2 for any other history. */
+static int cplan_top_lone_vis(Compiler *c, const char *name, int *cell) {
+  ElabVersion vs[2];
+  if (elab_main_object_one_entry(c, name) || elab_history_versions(c, -1 /* main */, 0, name, vs, 2) != 1) return -2;
+  if (cell) *cell = vs[0].cell;
+  return elab_version_vis(c, &vs[0]);
+}
+/* Has main's def of `name` surely run where call `call` runs, as its one
+   version, never to be undefined again? Placed in the load, the record's
+   own answer, no condition between; with no place, at every state of the
+   statements it may run in (cplan_root_def_ran). */
+static int cplan_top_def_surely_live(Compiler *c, int call, const char *name) {
+  const LrDef *d = NULL;
+  LoadPoint p = elab_point_of(c, call);
+  if (p.region < 0) return cplan_root_def_ran(c, call, -1, name);
+  return elab_method_at(c, -1 /* main */, name, 0, p, &d) == ELAB_YES && d && !d->may;
+}
 /* The live version of the top-level def `name` that call `call`, which has
    an explicit receiver, runs where the root lookup finds the def open to it:
    public at the call, as the load record has it there (cplan_root_method).
    A top-level def is Object's method from where it runs, and takes no self.
    -1 for a call on self, which is the def's own call, and for a def closed
-   to the call, or one whose visibility only the run tells. The version is
-   the call's (the table's last one is another def where the program defines
-   the name again), asked after the lookup, which makes no version demand. */
-static int cplan_root_top_def(Compiler *c, int call, const char *name, const char *cls) {
-  int recv = nt_ref(c->nt, call, "receiver");
-  if (recv < 0 || nt_kind(c->nt, recv) == NK_SelfNode || call_target(c, -1, -1, name, CT_TOP, NULL) < 0) return -1;
+   to the call. Where the lookup cannot tell the visibility, and the def is
+   main's only version, which has surely run where the call does, with a word
+   that only the run orders against the call, the def is bound with the
+   visibility cell that guards the call (*cell, the history cell + 1:
+   cplan_top_lone_vis); a call whose operands have an effect is not (the
+   guard's two arms would each run them: the receiver is held first), nor is
+   one with a block. The version is the call's
+   (the table's last one is another def where the program defines the name
+   again), asked after the lookup, which makes no version demand. */
+static int cplan_root_top_def(Compiler *c, int call, const char *name, const char *cls, int *cell) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, call, "receiver");
+  if (cell) *cell = 0;
+  if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode || call_target(c, -1, -1, name, CT_TOP, NULL) < 0) return -1;
+  int v = -1, rm = cplan_root_method(c, call, cls, name, &v);
+  if (rm < 0 || c->scopes[rm].class_id >= 0 || v == SP_VIS_PRIVATE || v == SP_VIS_PROTECTED) return -1;
   /* (a public method of a builtin of the name answers the call, as it did
      before: the program's def of a builtin's name, which has no self but
-     main, is left to it) */
+     main, is left to it; asked last, of the few calls the lookup binds) */
   if (core_vis_of_bit(core_method_vis(cls, name, 1, NULL)) == SP_VIS_PUBLIC) return -1;
-  int v = -1, rm = cplan_root_method(c, call, cls, name, &v);
-  if (rm < 0 || c->scopes[rm].class_id >= 0 || v != SP_VIS_PUBLIC) return -1;
+  if (v != SP_VIS_PUBLIC) {
+    int cl = -1;
+    if (v != -1 || !cell || cplan_top_lone_vis(c, name, &cl) != -1 || cl < 0 || !cplan_top_def_surely_live(c, call, name) ||
+        nt_ref(nt, call, "block") >= 0) return -1;
+    int an = 0; const int *av = call_args(nt, call, &an);
+    for (int i = 0; i < an; i++) if (subtree_has_side_effect(c, av[i])) return -1;
+    *cell = cl + 1;
+  }
   int tm = call_target(c, call, -1, name, CT_TOP, NULL);
   /* (a def that reads self runs on main's self only: for another receiver its call is left to the
      builtin's answer, as before) */
@@ -391,8 +432,12 @@ static void cplan_root_reopen(Compiler *c, int call, const char *name, const cha
   /* no method of Object's table: the top level's def, which the lookup finds
      open to the call, ends it */
   else if (mi < 0 && root == CORE_OBJECT) {
-    int tm = cplan_root_top_def(c, call, name, cls);
-    if (tm >= 0) cplan_set(p, tm, -1, UC_REOPEN, CP_DIRECT);
+    int cell, tm = cplan_root_top_def(c, call, name, cls, &cell);
+    if (tm >= 0) {
+      cplan_set(p, tm, -1, UC_REOPEN, CP_DIRECT);
+      p->vis_cell = cell;
+      if (cell) ver_vis_read_add(c, call, name, cell - 1);
+    }
   }
 }
 
@@ -1094,8 +1139,12 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
        (whose method a value of it reaches first): every value is Object's,
        and the top level's def is open to the call */
     if (p->mi < 0 && !builtin_name_below_object(name)) {
-      int tm = cplan_root_top_def(c, id, name, core_class_name(CORE_OBJECT));
-      if (tm >= 0) cplan_set(p, tm, -1, UC_REOPEN, CP_DIRECT);
+      int cell, tm = cplan_root_top_def(c, id, name, core_class_name(CORE_OBJECT), &cell);
+      if (tm >= 0) {
+        cplan_set(p, tm, -1, UC_REOPEN, CP_DIRECT);
+        p->vis_cell = cell;
+        if (cell) ver_vis_read_add(c, id, name, cell - 1);
+      }
     }
     return;
   }
@@ -8299,13 +8348,24 @@ static int cplan_root_vis(Compiler *c, int call, int k, const char *name) {
     vis = mv == 1 ? SP_VIS_PUBLIC : mv == 2 ? SP_VIS_PROTECTED : mv == 4 ? SP_VIS_PRIVATE : -1;
     /* (a call with no place in the load takes the declared one, where
        the def ran before it and may not run again) */
-    if (vis < 0 && (placed || !cplan_root_def_ran(c, call, k, name))) return -1;
+    if (vis < 0 && (placed || !cplan_root_def_ran(c, call, k, name))) {
+      /* (the version's own arm visibility, where the record proves it for
+         the one version) */
+      int lv = cplan_top_def_surely_live(c, call, name) ? cplan_top_lone_vis(c, name, NULL) : -2;
+      return lv >= 0 ? cplan_root_vis_open(c, call, k, name, lv) : -1;
+    }
     ElabVersion vs[8];
     int n = vis < 0 ? elab_history_versions(c, -1 /* main */, 0, name, vs, 8) : 0;
     for (int i = 0; i < n; i++) if (vs[i].v->may) return -1;
     if (n < 0) return -1;
+    /* (a call with no place takes the visibility the def's arm has: the declared
+       one gives way to a word that only the run orders against the call, which
+       the version's cell tells) */
+    int lv = vis < 0 ? cplan_top_lone_vis(c, name, NULL) : -2;
+    if (lv == -1) return -1;
+    if (lv >= 0) vis = lv;
     if (vis < 0) vis = oc >= 0 ? comp_method_vis_declared(c, oc, name, &at) : SP_VIS_PRIVATE;
-    if (mv < 1 && at < 0) vis = SP_VIS_PRIVATE;
+    if (mv < 1 && at < 0 && lv < 0) vis = SP_VIS_PRIVATE;
   }
   else {
     /* (as the record has it at the call, the roots' lookup having bound it) */
@@ -8452,6 +8512,13 @@ int cplan_root_closed(Compiler *c, int id, int *vis) {
   /* (a call that skips visibility, `send`'s, and one on self run the
      method; public_send refuses on any receiver) */
   if (!cplan_call_enforces_vis(c, id)) return -1;
+  /* (the refusal a visibility guard raises where its cell says private: the call is closed
+     to its receiver then, as the def's own bound version) */
+  if (c->vis_cell_closed == id + 1) {
+    int mi = cplan_user(c, id).mi;
+    if (mi >= 0 && vis) *vis = SP_VIS_PRIVATE;
+    return mi;
+  }
   TyKind rt = comp_ntype(c, recv);
   /* (`nil&.m` calls nothing) */
   if (rt == TY_NIL && nt_safe_nav(nt, id)) return -1;
@@ -8502,6 +8569,19 @@ int cplan_top_def_vis(Compiler *c, int call, const char *name) {
   if (!name || call_target(c, -1, -1, name, CT_TOP, NULL) < 0) return -1;
   int v = -1, mi = cplan_root_method(c, call, core_class_name(CORE_OBJECT), name, &v);
   return mi >= 0 && c->scopes[mi].class_id < 0 ? v : -1;
+}
+
+/* See call_plan.h. */
+const LocalVar *cplan_top_def_cell(Compiler *c, int call, const char *name) {
+  int v = -1, cell = -1;
+  if (!name || call_target(c, -1, -1, name, CT_TOP, NULL) < 0 || builtin_name_below_object(name)) return NULL;
+  int mi = cplan_root_method(c, call, core_class_name(CORE_OBJECT), name, &v);
+  if (mi < 0 || c->scopes[mi].class_id >= 0 || v != -1 || cplan_top_lone_vis(c, name, &cell) != -1 || cell < 0 ||
+      !cplan_top_def_surely_live(c, call, name)) return NULL;
+  CallPlan g;
+  cplan_set(&g, -1, -1, UC_NONE, CP_NONE);
+  g.vis_cell = cell + 1;
+  return cplan_vis_cell_var(c, &g);
 }
 
 int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcls) {
@@ -10573,6 +10653,12 @@ void ver_cells_settle(Compiler *c) {
     if (!g || !g->ver_cell || !(ver_scope_written(in) || (makes && in->entry != ENTRY_NONE))) continue;
     if (k != NK_GlobalVariableWriteNode || !nt_int(nt, id, "ver_cell", 0) || !an_node_dropped(c, id)) ver_cell_keep(c, nm);
   }
+  /* (a guarded call's cell: kept where the call is in a scope the C writes) */
+  for (int i = 0; any && i < c->nver_vis_reads; i++) {
+    char cell[32];
+    ver_vis_cell_name(c->ver_vis_reads[i].cell, cell);
+    if (c->ver_vis_reads[i].call >= 0 && ver_scope_written(comp_scope_of(c, c->ver_vis_reads[i].call))) ver_cell_keep(c, cell);
+  }
   for (int id = any ? an_calls_named_first(c, RESPOND_TO_NAME) : -1; id >= 0; id = an_calls_named_next(id)) {
     int pc = cplan_presence_class(c, id);
     const char *qm = pc >= 0 && ver_scope_written(comp_scope_of(c, id)) ? method_sym_arg(c, id) : NULL;
@@ -10664,6 +10750,99 @@ static void ver_presence_mark(Compiler *c) {
       if (c->ver_entries[i].scope == e) c->ver_entries[i].vis = 1;
   }
 }
+/* A guard's cell: the visibility cell of history cell `cell` (of the top-level def
+   `name`), where a call reads it for its guard (CallPlan.vis_cell: call >= 0, which
+   keeps the cell, ver_cells_settle), or which the history's versions write (call -1,
+   ver_guard_writes), once per call and cell */
+static void ver_vis_read_add(Compiler *c, int call, const char *name, int cell) {
+  int n = c->nver_vis_reads;
+  for (int i = 0; i < n; i++)
+    if (c->ver_vis_reads[i].call == call && c->ver_vis_reads[i].cell == cell) return;
+  if (!(n & (n - 1)) && !(c->ver_vis_reads = realloc(c->ver_vis_reads, sizeof *c->ver_vis_reads * (size_t)(n ? 2 * n : 1)))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  char *nm = strdup(name);
+  if (!nm) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  c->ver_vis_reads[c->nver_vis_reads++] = (struct VerVisRead){ nm, cell, call, 0 };
+  if (call < 0) c->ver_vis_read_new = 1;
+}
+/* The histories a call on an explicit receiver may be guarded by (cplan_root_top_def), made
+   before the calls' plans are asked: each top-level def of one version, with no twin, whose
+   visibility only the run tells, and which some call of the name with a receiver other
+   than self names, has its cell written (ver_cells_put); a cell no guard reads is
+   dropped (ver_cells_settle) */
+static void ver_vis_guard_hists(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  /* (the same tree asks the same: a round that changed nothing walks nothing) */
+  unsigned long stamp = ((unsigned long)nt->count * 1000003ul ^ (unsigned long)c->nscopes) * 1000003ul ^ (unsigned long)nt->edits * 31ul ^ (unsigned long)nt->version;
+  if (c->ver_vis_guard_stamp == stamp) return;
+  c->ver_vis_guard_stamp = stamp;
+  for (int s = 1; s < c->nscopes; s++) {
+    const Scope *sc = &c->scopes[s];
+    if (sc->class_id >= 0 || sc->is_cmethod || !sc->name || sc->def_node < 0 || sc->is_proc_form || sc->replaced) continue;
+    int cell = -1, known = 0;
+    if (an_calls_named_first(c, sc->name) < 0) continue;
+    for (int i = 0; i < c->nver_vis_reads && !known; i++) known = c->ver_vis_reads[i].call < 0 && sp_streq(c->ver_vis_reads[i].name, sc->name);
+    if (known || cplan_top_lone_vis(c, sc->name, &cell) != -1 || cell < 0) continue;
+    for (int id = an_calls_named_first(c, sc->name); id >= 0; id = an_calls_named_next(id)) {
+      int recv = nt_kind(nt, id) == NK_CallNode && sp_streq(nt_str(nt, id, "name"), sc->name) ? nt_ref(nt, id, "receiver") : -1;
+      if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) continue;
+      ver_vis_read_add(c, -1, sc->name, cell);
+      break;
+    }
+  }
+  /* (and a respond_to? of such a name, which reads the cell for its answer, cplan_top_def_cell) */
+  for (int id = an_calls_named_first(c, RESPOND_TO_NAME); id >= 0; id = an_calls_named_next(id)) {
+    const char *qm = nt_kind(nt, id) == NK_CallNode ? method_sym_arg(c, id) : NULL;
+    int cell = -1;
+    if (!qm || nt_ref(nt, id, "receiver") < 0 || cplan_top_lone_vis(c, qm, &cell) != -1 || cell < 0 ||
+        call_target(c, -1, -1, qm, CT_TOP, NULL) < 0) continue;
+    ver_vis_read_add(c, -1, qm, cell);
+    ver_vis_read_add(c, id, qm, cell);
+  }
+}
+/* See call_plan.h. */
+const LocalVar *cplan_vis_cell_var(Compiler *c, const CallPlan *p) {
+  char cell[32];
+  if (p->vis_cell <= 0) return NULL;
+  ver_vis_cell_name(p->vis_cell - 1, cell);
+  const LocalVar *g = comp_gvar(c, cell + 1);
+  return g && !cplan_cell_dropped(c, g) ? g : NULL;
+}
+/* The writes of the visibility cells of versions vs[0..nv) after each visibility word of
+   their names, with the word's visibility (elab_version_word): beside the word's statement,
+   or, for a word inside an expression, the word's own call (cplan_vis_cell_after). Each
+   once (pass 1 places them; pass 0 only claims the ones already placed) */
+static void ver_word_writes(Compiler *c, const int *par, VerCellsAt *cells, VerWrite **w, int *nw, int *nh,
+                            const ElabVersion *vs, int nv, int pass) {
+  const NodeTable *nt = c->nt;
+  for (int j = 0; j < nv; j++)
+    for (int k = 0, wn, wv, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv)) >= 0; k++) {
+      int st = o ? ver_write_stmt(nt, par, wn) : -1;
+      if (st < 0 || par[st] < 0 || !ver_cell_once(cells, wn, -2 - vs[j].cell) || !pass) continue;
+      if (nt_kind(nt, par[wn]) != NK_StatementsNode) { ver_vis_after_add(c, wn, vs[j].cell, wv); continue; }
+      ver_write_add(w, nw, (VerWrite){ par[st], st, wn, wv, vs[j].cell, an_value_dropped(c, par, st), 0, -1, 0, 1 });
+      if (vs[j].cell >= *nh) *nh = vs[j].cell + 1;
+    }
+}
+/* ...and a guarded call's (CallPlan.vis_cell): the history's lone version writes its def's
+   visibility ahead of its def, as an entry's face does, and each word of the name after it */
+static void ver_guard_writes(Compiler *c, const int *par, VerCellsAt *cells, VerWrite **w, int *nw, int *nh, int pass) {
+  const NodeTable *nt = c->nt;
+  ElabVersion vs[VER_MAX_ARMS];
+  for (int i = 0; i < c->nver_vis_reads; i++) {
+    struct VerVisRead *r = &c->ver_vis_reads[i];
+    if (r->call >= 0 || r->written == pass) continue;   /* (written ones claim their keys first, then the new ones write) */
+    r->written = 1;
+    int nv = elab_history_versions(c, -1 /* main */, 0, r->name, vs, VER_MAX_ARMS);
+    if (nv != 1 || vs[0].cell != r->cell) continue;
+    ver_word_writes(c, par, cells, w, nw, nh, vs, nv, pass);
+    int node = vs[0].v->node, st = ver_write_stmt(nt, par, node);
+    if (st < 0 || par[st] < 0 || !ver_cell_once(cells, node, -2 - vs[0].cell) || !pass) continue;
+    ver_write_add(w, nw, (VerWrite){ par[st], st, node, vs[0].v->vis, vs[0].cell, !ver_stmt_runs_no_code(nt, st), 0, -1, vs[0].v->body != 0, 1 });
+    if (vs[0].cell >= *nh) *nh = vs[0].cell + 1;
+  }
+}
 /* ...how many it wrote */
 static int ver_cells_put(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -10674,7 +10853,7 @@ static int ver_cells_put(Compiler *c) {
   /* (the parents the program's tree reaches: a class_eval block spliced
      into its class body still names its statements, and the statement a
      write goes beside is the class body's) */
-  int any = c->nver_entries || c->nver_guards, *par = any ? du_parent_map(nt) : NULL;
+  int any = c->nver_entries || c->nver_guards || c->nver_vis_reads, *par = any ? du_parent_map(nt) : NULL;
   VerCellsAt cells = { any ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL, NULL, 0 };
   if (any) ver_presence_mark(c);
   if (any && (!cells.at || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -10708,14 +10887,7 @@ static int ver_cells_put(Compiler *c) {
        word's node keeps: cplan_vis_cell_after) */
     int rt = 0;
     for (int j = 0; (ver_face_closes(e->face) || e->vis) && j < nv; j++) rt |= elab_version_vis(c, &vs[j]) < 0;
-    for (int j = 0; rt && j < nv; j++)
-      for (int k = 0, wn, wv, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv)) >= 0; k++) {
-        int st = o ? ver_write_stmt(nt, par, wn) : -1;
-        if (st < 0 || par[st] < 0 || !ver_cell_once(&cells, wn, -2 - vs[j].cell) || !pass) continue;
-        if (nt_kind(nt, par[wn]) != NK_StatementsNode) { ver_vis_after_add(c, wn, vs[j].cell, wv); continue; }
-        ver_write_add(&w, &nw, (VerWrite){ par[st], st, wn, wv, vs[j].cell, an_value_dropped(c, par, st), 0, -1, 0, 1 });
-        if (vs[j].cell >= nh) nh = vs[j].cell + 1;
-      }
+    if (rt) ver_word_writes(c, par, &cells, &w, &nw, &nh, vs, nv, pass);
     for (int j = 0; j < nv; j++) {
       if (e->guard == VER_ENTRY_GUARD || e->guard == VER_ENTRY_LAYER) {
         int reads = 0;
@@ -10732,7 +10904,9 @@ static int ver_cells_put(Compiler *c) {
     for (int j = 0, nv = elab_chain_versions(c, -1, 1, c->ver_guards[i].name, vs, VER_MAX_ARMS); j < nv; j++)
       ver_write_version(nt, par, &cells, &vs[j], 0, pass, &w, &nw, &nh);
   }
+  if (c->nver_vis_reads) ver_guard_writes(c, par, &cells, &w, &nw, &nh, pass);   /* (and a guarded call's, CallPlan.vis_cell) */
   }
+  c->ver_vis_read_new = 0;
   ver_copy_writes(c, par, &cells, &w, &nw);
   free(cells.at); free(cells.e); free(par);
   /* the zero writes: one per cell, at its first write, none where the first statement writes it */
@@ -10867,6 +11041,7 @@ static unsigned long ver_entries_sum(const Compiler *c) {
    again, and noted the same calls for the next. */
 int ver_entries_demand(Compiler *c) {
   int any = 0, e0 = c->nver_entries, late;
+  ver_vis_guard_hists(c);
   for (int i = 0; i < c->nver_defer; i++)
     if (!c->ver_defer[i].taken && an_calls_named_first(c, c->ver_defer[i].name) >= 0) any = c->ver_defer[i].taken = 1;
   /* a respond_to? the cells answer asks the entry a call of the name
@@ -10879,7 +11054,7 @@ int ver_entries_demand(Compiler *c) {
   for (int id = an_calls_named_first(c, SINGLETON_METHODS_NAME); id >= 0; id = an_calls_named_next(id))
     list_asks(c, id, list_ver_target, NULL);   /* (a class-side list asks the cells of each name it may list, as respond_to? does) */
   late = c->nver_late;
-  if (!any && !late) return 0;
+  if (!any && !late && !c->ver_vis_read_new) return 0;
   const NodeTable *nt = c->nt;
   unsigned long sum0 = ver_entries_sum(c), edits0 = nt->edits;
   unsigned ver0 = nt->version;

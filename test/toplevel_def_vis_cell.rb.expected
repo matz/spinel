@@ -1,0 +1,29 @@
+"private method 'm7' called for an instance of Integer"
+"private method 'm7' called for an instance of Integer"
+1
+1
+1
+1
+1
+"private method 'm2' called for an instance of Integer"
+"private method 'm2' called for nil"
+"private method 'm2' called for an instance of Foo"
+3
+5
+6
+"private method 'm4' called for an instance of Integer"
+7
+[:got, 1]
+"private method 'hidden_arg' called for an instance of Foo"
+[:r, :s]
+[1, 1, 1, 1, 1]
+[:private, :private, :private, :private, :private]
+"private method 'm8' called for nil"
+8
+8
+true
+false
+true
+true
+true
+false

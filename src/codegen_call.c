@@ -36021,6 +36021,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
        with the call as g_sn_skip) */
     if (cplan_root_reopen_call(c, id, &rp) && rp.dispatch == CP_DIRECT && (id == g_brk_skip_id || !call_breaks(c, id)) && !sn_guard_pending(c, id)) {
       if (g_plan_check) cplan_served("root-reopen");
+      if (rp.vis_cell && emit_vis_cell_call(c, id, &rp, b, nt, nt_ref(nt, id, "receiver"))) return;
       if (emit_root_reopen_call(c, id, b, nt, nt_ref(nt, id, "receiver"), rp.owner_ci, rp.mi)) return;
     }
   }

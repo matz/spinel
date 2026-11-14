@@ -90,6 +90,7 @@ typedef struct {
   unsigned char core_hook; /* a super in a class method that reaches only a core hook's no-op: nothing of the program's answers it, and emit_super answers nil */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */
+  int vis_cell;             /* the history cell + 1 whose visibility cell guards the call (a top-level def's visibility only the run tells, cplan_root_top_def), 0 for none */
 } CallPlan;
 
 /* Is plan p a program's method on a root of the builtin classes (Object,
@@ -460,6 +461,10 @@ void ver_prepend_cell_name(int cell, char out[32]);
 /* Once the last reachability has run: which version cells no emitted code
    reads, so the C writes none of them (Compiler.ver_cell_dropped) */
 void ver_cells_settle(Compiler *c);
+/* The global holding the visibility of the history a guarded call reads
+   (CallPlan.vis_cell): an Integer, SP_VIS_PRIVATE where the live version is private. NULL
+   for a call with no guard, and for a cell no emitted code reads (ver_cells_settle) */
+const LocalVar *cplan_vis_cell_var(Compiler *c, const CallPlan *p);
 /* Is global g such a cell? */
 int cplan_cell_dropped(const Compiler *c, const LocalVar *g);
 /* Is node id a write of such a cell the plan made (ver_cell_node), which the
@@ -1155,6 +1160,11 @@ int cplan_nil_program_responds(Compiler *c, int call, const char *name, int incl
    such def, or the record cannot tell. The question of the reflection readers
    (respond_to?). */
 int cplan_top_def_vis(Compiler *c, int call, const char *name);
+/* ...and the cell that holds it where only the run tells (cplan_top_def_vis answers -1): main's def
+   `name`, its one version, has run where call `call` runs, with a word whose order against the
+   call the run decides. The global holds SP_VIS_* (CallPlan.vis_cell); NULL for any other
+   def, and for a cell no emitted code reads. The respond_to? readers ask it */
+const LocalVar *cplan_top_def_cell(Compiler *c, int call, const char *name);
 /* The program's method CRuby's lookup of `name` on an instance of
    builtin class cls reaches first at the roots (NilClass, Numeric,
    Object -- a top-level def is Object's from where it runs, and the later

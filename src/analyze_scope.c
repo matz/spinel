@@ -13478,6 +13478,16 @@ int infer_ivar_types(Compiler *c) {
                       sp_streq(op2, "+")) && vt == ci->ivar_types[iv])))
           vt = ci->ivar_types[iv];
       }
+      /* A numeric slot's arithmetic op-write (+ - * / % **) answers the two
+         operands' promotion, as a local's does (infer_op_assign_type):
+         `@wins = 0.0` bumped by `@wins += 1` stays a Float. Unifying the
+         Integer operand instead boxed the slot and every read of it. A shift
+         or bitwise op-write keeps the operand's type: a Float has none of
+         those methods, and its boxed slot raises NoMethodError as CRuby does. */
+      else if (ty_k == NK_InstanceVariableOperatorWriteNode && ty_is_numeric(ci->ivar_types[iv]) &&
+               (ty_is_numeric(vt) || vt == TY_POLY) &&
+               is_arith_op(nt_str(nt, id, "binary_operator")))
+        vt = infer_op_assign_type(c, ci->ivar_types[iv], vnode);
       if (ty_k != NK_InstanceVariableOperatorWriteNode)
         vt = empty_container_write(c, vnode, vt, ci->ivar_types[iv]);
       /* A Time slot's `+= n` / `-= n` with a numeric operand answers a Time

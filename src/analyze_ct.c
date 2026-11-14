@@ -1945,7 +1945,7 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
   /* the class, and what its call can meet at its point */
   int cls = elab_self_at(c, call);
   LoadPoint p = elab_point_of(c, call);
-  if (cls < 0 || is_builtin_class_name(c->classes[cls].name) || is_builtin_module_name(c->classes[cls].name) ||
+  if (cls < 0 || is_builtin_class_name(elab_class_walk_name(c, cls)) || is_builtin_module_name(elab_class_walk_name(c, cls)) ||
       elab_opaque_before_bar_state(c, cls, p) != ELAB_NO || elab_body_visibility_at(c, call) != BVIS_PUBLIC ||
       elab_method_at(c, cls, "method_added", 1, p, NULL) != ELAB_NO)
     return -1;

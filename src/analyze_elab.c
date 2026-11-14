@@ -8820,6 +8820,7 @@ int elab_fire_after(Compiler *c, int list, int j) {
    name the walk would have given it; by that name in g_prov_names */
 static int *g_prov_cls, *g_prov_np, *g_prov_hdr; static char **g_prov_name; static int g_nprov;
 static ANameHash g_prov_names;
+static int *g_prov_of, g_prov_of_cap;   /* by class: its entry + 1, 0 for a class with its own name */
 static void elab_prov_note(Compiler *c, int ci, const char *name, int np, int hdr) {
   (void)c;
   g_prov_cls = realloc(g_prov_cls, sizeof(int) * (size_t)(g_nprov + 1));
@@ -8828,7 +8829,15 @@ static void elab_prov_note(Compiler *c, int ci, const char *name, int np, int hd
   g_prov_name = realloc(g_prov_name, sizeof(char *) * (size_t)(g_nprov + 1));
   if (!g_prov_cls || !g_prov_np || !g_prov_hdr || !g_prov_name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   g_prov_cls[g_nprov] = ci; g_prov_np[g_nprov] = np; g_prov_hdr[g_nprov] = hdr; g_prov_name[g_nprov] = strdup(name);
-  anh_add(&g_prov_names, g_prov_name[g_nprov++]);
+  anh_add(&g_prov_names, g_prov_name[g_nprov]);
+  if (ci >= g_prov_of_cap) {
+    int nc = (ci + 1) * 2;
+    g_prov_of = realloc(g_prov_of, sizeof(int) * (size_t)nc);
+    if (!g_prov_of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(g_prov_of + g_prov_of_cap, 0, sizeof(int) * (size_t)(nc - g_prov_of_cap));
+    g_prov_of_cap = nc;
+  }
+  g_prov_of[ci] = ++g_nprov;
 }
 static void elab_prov_drop_derived(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++)
@@ -8836,11 +8845,11 @@ static void elab_prov_drop_derived(Compiler *c) {
 }
 /* The name class k goes by during the walk: the name the walk gave it,
    for a class that walks under a provisional one (a reader that matches
-   the names the source writes, ext_scope_host_callable) */
+   the names the source writes: class_ruby_name's segments,
+   ext_scope_host_callable) */
 const char *elab_class_walk_name(const Compiler *c, int k) {
   if (k < 0 || k >= c->nclasses) return NULL;
-  for (int i = 0; i < g_nprov; i++) if (g_prov_cls[i] == k) return g_prov_name[i];
-  return c->classes[k].name;
+  return k < g_prov_of_cap && g_prov_of[k] > 0 && g_prov_of[k] <= g_nprov ? g_prov_name[g_prov_of[k] - 1] : c->classes[k].name;
 }
 /* The class of name cname, a provisional class by the name it takes after
    the walk too: the lowest index, as comp_class_index answers */
@@ -8919,7 +8928,7 @@ void elab_prov_apply(Compiler *c) {
       nt_node_set_str(nt, np, "qc_name", c->classes[ci].name);
   }
   anh_free(&g_prov_names); memset(&g_prov_names, 0, sizeof g_prov_names);
-  for (int i = 0; i < g_nprov; i++) free(g_prov_name[i]);
+  for (int i = 0; i < g_nprov; i++) { free(g_prov_name[i]); if (g_prov_cls[i] < g_prov_of_cap) g_prov_of[g_prov_cls[i]] = 0; }
   g_nprov = 0;
 }
 /* The class the class or module header at node opens, as registration

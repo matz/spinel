@@ -465,7 +465,6 @@ void elab_builder_entity(Compiler *c, int node, const ElabPos *pos);
 void elab_header_opened(Compiler *c, int node, int cls, int made);
 int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *rname, int encl);
 void elab_prov_apply(Compiler *c);
-const char *elab_class_walk_name(const Compiler *c, int k);
 void header_parent_encloses(Compiler *c, int par, int child, const char *leaf, int named);
 void elab_load_sites(Compiler *c, int stmt, void (*fn)(void *ud, int load, int in_place), void *ud);
 void walk_scope_stmt(Compiler *c, int stmt, int k, int scope_idx, ElabPos pos);

@@ -11833,7 +11833,7 @@ const char *class_ruby_name(Compiler *c, int ci) {
   char buf[256];
   buf[0] = '\0';
   for (int i = depth - 1; i >= 0; i--) {
-    const char *seg = c->classes[chain[i]].name;
+    const char *seg = elab_class_walk_name(c, chain[i]);
     if (i == depth - 1 && i > 0 && c->classes[chain[i]].ruby_name_cache) seg = c->classes[chain[i]].ruby_name_cache;
     else if (!seg) continue;
     if (buf[0]) strncat(buf, "::", sizeof(buf) - strlen(buf) - 1);

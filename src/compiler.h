@@ -2312,6 +2312,7 @@ int const_seg_builtin(Compiler *c, int id);
 ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node);
 void comp_class_rename(Compiler *c, int i, const char *name);
 void comp_class_relink(Compiler *c);
+const char *elab_class_walk_name(const Compiler *c, int k);   /* the name the walk gives class k (analyze_elab.c) */
 void       comp_class_nested(Compiler *c, int k, int encl);   /* class k lies inside class encl: not the builtin its leaf names */
 int        comp_class_in_namespace(const Compiler *c, int k);   /* does class k lie inside a class or module other than Object, whose body is the top level's? */
 int comp_toplevel_class_make(Compiler *c);

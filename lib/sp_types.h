@@ -333,7 +333,7 @@ typedef struct{void**data;sp_int len;sp_int cap;void(*scan_elem)(void*);int32_t 
 /* the element of a String Array (and a String Hash's value): the handle
    (SP_SEB spells the bytes face) */
 /* the shared String handle (sp_string.h) */
-struct sp_String_s { char *data; int64_t len; int64_t cap; unsigned binary; };
+struct sp_String_s { char *data; int64_t len; int64_t cap; unsigned binary; unsigned temporarily_locked; };
 /* A frozen literal is one static String object: a GC header and the handle,
    beside its static bytes ([sp_str_hdr][0xf1][bytes][NUL]), whose header
    links to the handle, tagged with bit 0 to tell it from the aligned links
@@ -356,7 +356,7 @@ typedef struct sp_StringLiteral { sp_gc_hdr g; struct sp_String_s s; } sp_String
 /* The constant initializer of literal object `o` over its bytes `d`, `len`
    bytes long: a static's initializer cannot be a function's answer. */
 #define SP_STRING_LITERAL_INIT(o, d, len) \
-  { { .next = &(o).g, .frozen = 1, .pinned = 1, .old = 1 }, { (char *)(d), (len), (len) + 1, 0 } }
+  { { .next = &(o).g, .frozen = 1, .pinned = 1, .old = 1 }, { (char *)(d), (len), (len) + 1, 0, 0 } }
 typedef struct sp_String_s *sp_strelem;
 /* head: the slots a shift stepped past (SP_ARR_BUF, above) */
 typedef struct{sp_strelem*data;sp_int len;sp_int cap;int32_t frozen;int32_t head;sp_strelem inline_data[SP_STRARR_INLINE];}sp_StrArray;

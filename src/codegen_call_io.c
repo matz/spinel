@@ -408,7 +408,7 @@ static void emit_io_read_nonblock_buffer(Compiler *c, int id, int handle, Buf *b
   if (shared) buf_printf(b, "_t%d = sp_poly_strbuf_lift(_t%d); ", held[1], held[1]);
   buf_printf(b, "const char *_t%d = sp_poly_nil_p(_t%d) ? NULL : sp_poly_arg_str_chk(_t%d); "
                 "SP_GC_ROOT_STR(_t%d); if (_t%d && sp_poly_is_strbuf(_t%d) && "
-                "sp_String_is_frozen((sp_String *)_t%d.v.p)) sp_raise_frozen_str(_t%d); "
+                "sp_String_is_immutable((sp_String *)_t%d.v.p)) sp_raise_frozen_str(_t%d); "
                 "if (_t%d) sp_str_check_mutable(_t%d); ",
              ts, held[1], held[1], ts, ts, held[1], held[1], ts, ts, ts);
   if (argc == 3) {

@@ -81,6 +81,8 @@ module IOBufferPackage
   native_method :__lock,    [], :self, "sp_IOBuffer_lock"
   native_method :__unlock,  [], :self, "sp_IOBuffer_unlock"
   native_method :__become_for, [:string], :self, "sp_IOBuffer_become_for"
+  native_method :__borrow_string, [:string], :self, "sp_IOBuffer_borrow_string"
+  native_method :__end_borrow, [], :self, "sp_IOBuffer_end_borrow"
   # The IO integration: the Ruby-side read/write/pread/pwrite below hold the
   # lock around these; a negative length or size stands for nil.
   native_method :__read_io,   [:any, :int, :int], :int, "sp_IOBuffer_read_io"
@@ -109,16 +111,19 @@ class IO::Buffer
   DEFAULT_SIZE = 65536
   PAGE_SIZE = IOBufferPackage.__page_size
 
-  # IO::Buffer.for(string) answers a READONLY copy of the string's bytes.
-  # CRuby's is a zero-copy view; Spinel strings are immutable, so a copy is
-  # observably the same -- except the BLOCK form, whose whole point is
-  # writing through into the String. That cannot be represented here, so it
-  # refuses loudly rather than silently dropping the writes.
+  # With a block, lend the String's current bytes for the duration of
+  # the yield. The non-block form keeps its read-only snapshot.
   def self.for(string)
-    if block_given?
-      raise NotImplementedError, "IO::Buffer.for with a block (writing through into the String) is not supported"
+    return new(0).__become_for(string) unless block_given?
+
+    owner = new(0)
+    buffer = owner.__borrow_string(string)
+    begin
+      yield buffer
+    ensure
+      owner.__end_borrow
+      buffer.free
     end
-    new(0).__become_for(string)
   end
 
   # IO::Buffer.map(file, size = nil, offset = 0, flags = 0): a view of the

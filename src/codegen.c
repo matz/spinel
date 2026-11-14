@@ -22601,8 +22601,8 @@ static void emit_ffi_decls(Compiler *c, Buf *b) {
     }
     /* IO::Buffer as an ffi_func pointer argument (codegen_call.c) */
     if (cf->n_ffi_funcs > 0 && ffi_iobuffer_class(cf) >= 0) {
-      buf_puts(b, "extern void *sp_IOBuffer_ffi_base(sp_IOBuffer *, sp_int);\n"
-                   "extern void *sp_IOBuffer_ffi_ptr(sp_RbVal, sp_int, sp_int);\n"
+      buf_puts(b, "extern void *sp_IOBuffer_ffi_base(sp_IOBuffer *, sp_int, void **);\n"
+                   "extern void *sp_IOBuffer_ffi_ptr(sp_RbVal, sp_int, sp_int, void **);\n"
                    "extern sp_int sp_IOBuffer_ffi_hold(sp_IOBuffer *);\n"
                    "extern void sp_IOBuffer_ffi_release(sp_IOBuffer *, sp_int);\n"
                    "extern sp_int sp_IOBuffer_ffi_hold_v(sp_RbVal, sp_int);\n"

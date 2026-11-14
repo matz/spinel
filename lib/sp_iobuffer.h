@@ -13,7 +13,8 @@
    (marked by the GC scan hook, so the backing allocation outlives every
    view) and resolves its base pointer through `source->data + off` on every
    access -- a source resize can move the allocation and the views stay
-   valid, where CRuby's stored-pointer slices would dangle. */
+   valid. For a String source, a view keeps the String alive and validates
+   that the original allocation and the view's range are still current. */
 #include "sp_types.h"
 #include "sp_gc.h"
 #include "sp_alloc.h"
@@ -40,6 +41,8 @@ struct sp_IOBuffer_s {
   uint32_t flags;
   void *map_base;            /* IO::Buffer.map: the mmap'd region `data` points into
                                 (page-aligned), NULL for a malloc'd allocation */
+  struct sp_String_s *borrowed_string; /* String retained by the private root */
+  int64_t string_capacity;   /* String growth moves its bytes and increases this */
   size_t map_len;            /* ...and its length, for munmap */
 };
 
@@ -138,6 +141,18 @@ static inline double sp_IOBuffer_load_f(sp_IOBuffer *b, sp_int ty, sp_int off) {
 }
 /* IO::Buffer#size, inline for the same program (a slice's is its own) */
 static inline sp_int sp_IOBuffer_size_inline(sp_IOBuffer *b) { return (sp_int)b->size; }
+static inline uint8_t *sp_iob_slice_base(sp_IOBuffer *b) {
+  sp_IOBuffer *source = b->source;
+  struct sp_String_s *string = source->borrowed_string;
+  if (string) {
+    char *data = string->data;
+    if (string->cap != source->string_capacity || b->off > string->len - b->size)
+      return NULL;
+    return (uint8_t *)data + b->off;
+  }
+  if (!source->data || b->off > source->size - b->size) return NULL;
+  return source->data + b->off;
+}
 /* A loop's cached view of a buffer (the header cache, src/codegen_stmt.c):
    the bytes a read of b sees and how many -- an owned buffer's, or a valid
    slice's within its source. NULL and 0 for nil, a freed or transferred
@@ -148,11 +163,9 @@ static inline uint8_t *sp_iob_view(sp_IOBuffer *b, sp_int *len) {
   *len = 0;
   if (!b) return NULL;
   if (b->data) { *len = b->size; return b->data; }
-  if (b->source && b->source->data && b->off <= b->source->size - b->size) {
-    *len = b->size;
-    return b->source->data + b->off;
-  }
-  return NULL;
+  uint8_t *data = b->source ? sp_iob_slice_base(b) : NULL;
+  if (data) *len = b->size;
+  return data;
 }
 /* Does a value of type ty at off lie within a view of len bytes? */
 static inline int sp_iob_fits(sp_int len, sp_int off, sp_int ty) {
@@ -204,7 +217,8 @@ static inline sp_int sp_iob_put_f(uint8_t *d, sp_int wl, sp_int ty, sp_int off, 
 /* how many of a view's len bytes a write may store into: none of a
    read-only buffer's (a slice carries its root's READONLY) */
 static inline sp_int sp_iob_view_wlen(sp_IOBuffer *b, sp_int len) {
-  return b && !(b->flags & SP_IOB_READONLY) ? len : 0;
+  return b && !(b->flags & SP_IOB_READONLY) &&
+         !(b->source && b->source->borrowed_string) ? len : 0;
 }
 /* an owned buffer's bytes: a slice's data is NULL (see the struct), so a
    slice takes the out-of-line write */
@@ -244,6 +258,8 @@ sp_IOBuffer *sp_IOBuffer_transfer(sp_IOBuffer *b);
 sp_IOBuffer *sp_IOBuffer_free_m(sp_IOBuffer *b);
 sp_IOBuffer *sp_IOBuffer_dup_m(sp_IOBuffer *b);
 sp_IOBuffer *sp_IOBuffer_become_for(sp_IOBuffer *b, const char *s);
+sp_IOBuffer *sp_IOBuffer_borrow_string(sp_IOBuffer *owner, const char *s);
+sp_IOBuffer *sp_IOBuffer_end_borrow(sp_IOBuffer *owner);
 
 /* comparison */
 sp_int sp_IOBuffer_cmp(sp_IOBuffer *b, sp_RbVal other);
@@ -299,8 +315,8 @@ sp_IOBuffer *sp_IOBuffer_become_map(sp_IOBuffer *b, sp_RbVal io, sp_int size, sp
 /* FFI: the base address C receives for a buffer in an ffi_func pointer
    argument; `writing` is 0 only for :buffer_in. The _ptr form takes a boxed
    argument and passes anything but an IO::Buffer through as its pointer. */
-void *sp_IOBuffer_ffi_base(sp_IOBuffer *b, sp_int writing);
-void *sp_IOBuffer_ffi_ptr(sp_RbVal v, sp_int cls_id, sp_int writing);
+void *sp_IOBuffer_ffi_base(sp_IOBuffer *b, sp_int writing, void **string_data);
+void *sp_IOBuffer_ffi_ptr(sp_RbVal v, sp_int cls_id, sp_int writing, void **string_data);
 sp_int sp_IOBuffer_ffi_hold(sp_IOBuffer *b);
 void sp_IOBuffer_ffi_release(sp_IOBuffer *b, sp_int m);
 sp_int sp_IOBuffer_ffi_hold_v(sp_RbVal v, sp_int cls_id);

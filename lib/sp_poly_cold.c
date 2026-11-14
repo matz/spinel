@@ -928,7 +928,7 @@ sp_RbVal sp_poly_clear(sp_RbVal v)
     case SP_BUILTIN_PTR_ARRAY:      ((sp_PtrArray *)v.v.p)->len = 0; break;
     case SP_BUILTIN_STRBUF: {
       sp_String *_m = (sp_String *)v.v.p;
-      if (sp_String_is_frozen(_m)) { sp_raise_frozen_str(_m->data); break; }
+      if (sp_String_is_immutable(_m)) { sp_raise_frozen_str(_m->data); break; }
       _m->len = 0; _m->data[0] = 0; sp_fd_publish(_m);
       break;
     }

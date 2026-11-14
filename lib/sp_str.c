@@ -234,7 +234,10 @@ const char *sp_str_plus_lit(const char *a, const char *lit, size_t ll) {
 /* FrozenError naming the receiver, matching CRuby's
    "can't modify frozen String: \"abc\"" message shape. */
 void sp_exc_stage_recv(sp_RbVal v);   /* generated TU: stages FrozenError#receiver */
-void sp_raise_frozen_str(const char*s){SP_GC_ROOT_STR(s);const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat(&("\xff" "can't modify frozen String: ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str(s));sp_raise_cls("FrozenError",msg);}
+void sp_raise_locked_str(void) {
+  sp_raise_cls("RuntimeError", "can't modify string; temporarily locked");
+}
+void sp_raise_frozen_str(const char*s){if(sp_str_is_locked(s))sp_raise_locked_str();SP_GC_ROOT_STR(s);const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat(&("\xff" "can't modify frozen String: ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str(s));sp_raise_cls("FrozenError",msg);}
 /* Unicode case mapping, CRuby's (#11345): the tables are generated from CRuby
    by tools/gen_unicase_map.rb. A one-codepoint mapping is a range lookup, a
    run of codepoints that map by one delta (every one of them, or every other

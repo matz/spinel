@@ -33,7 +33,10 @@ static inline sp_String *sp_String_of_literal(const char *s) {
 
 /* Per-mutable-string freeze flag rides in the GC header alongside `marked`. */
 static inline sp_bool sp_String_is_frozen(sp_String*s){if(!s)return TRUE;sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));return h->frozen;}
-static inline sp_String*sp_String_freeze(sp_String*s){if(s){sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));h->frozen=1;}return s;}
+static inline sp_bool sp_String_is_immutable(sp_String *s) {
+  return sp_String_is_frozen(s) || (s && s->temporarily_locked);
+}
+static inline sp_String*sp_String_freeze(sp_String*s){if(s){if(s->temporarily_locked)sp_raise_locked_str();sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));h->frozen=1;}return s;}
 
 /* A mutable String's payload carries the same length-bearing sp_str_hdr that
    0xfe/0xfc heap strings use, so an escaped const char* is binary-safe (the
@@ -155,12 +158,12 @@ static inline void sp_fd_append_len(sp_String*s,const char*t,int64_t tl){
   if(off>=0)t=s->data+off;
   memmove(s->data+s->len,t,(size_t)tl);s->len+=tl;s->data[s->len]=0;sp_fd_publish(s);
 }
-static inline void sp_String_append(sp_String*s,const char*t){if (SP_UNLIKELY(!s)) sp_nil_recv("<<"); if (!t)return;if(sp_String_is_frozen(s)){sp_raise_frozen_str(s->data);return;}sp_fd_append_len(s,t,(int64_t)strlen(t));}
+static inline void sp_String_append(sp_String*s,const char*t){if (SP_UNLIKELY(!s)) sp_nil_recv("<<"); if (!t)return;if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}sp_fd_append_len(s,t,(int64_t)strlen(t));}
 /* Binary-safe append: sizes the operand with the header length so an embedded
    NUL is preserved (Ruby String#<< / concat on a marked spinel string). */
 /* Replace the buffer contents in place (the handle stays stable, so every
    alias and container holding it observes the new value; #3227). */
-static inline void sp_String_set_bin(sp_String*s,const char*t){if(!s||!t)return;if(sp_String_is_frozen(s)){sp_raise_frozen_str(s->data);return;}s->len=0;sp_fd_append_len(s,t,(int64_t)sp_str_byte_len(t));}
+static inline void sp_String_set_bin(sp_String*s,const char*t){if(!s||!t)return;if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}s->len=0;sp_fd_append_len(s,t,(int64_t)sp_str_byte_len(t));}
 /* The bytes a read put into its (len, outbuf) buffer: binary-safe, and the
    buffer becomes ASCII-8BIT, as CRuby's readpartial/sysread/read_nonblock
    leave it. */
@@ -190,12 +193,12 @@ static inline void sp_String_append_enc(sp_String*s,const char*t,size_t tl){
     }
 }
 /* the first tl bytes of t: the append form of an interpolation (emit_interp_append) */
-static inline void sp_String_append_n(sp_String*s,const char*t,size_t tl){if (SP_UNLIKELY(!s)) sp_nil_recv("<<"); if (!t)return;if(sp_String_is_frozen(s)){sp_raise_frozen_str(s->data);return;}sp_String_append_enc(s,t,tl);sp_fd_append_len(s,t,(int64_t)tl);}
+static inline void sp_String_append_n(sp_String*s,const char*t,size_t tl){if (SP_UNLIKELY(!s)) sp_nil_recv("<<"); if (!t)return;if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}sp_String_append_enc(s,t,tl);sp_fd_append_len(s,t,(int64_t)tl);}
 /* append_as_bytes preserves the handle's encoding as well as embedded NULs. */
-static inline void sp_String_append_bytes(sp_String*s,const char*t){if (SP_UNLIKELY(!s)) sp_nil_recv("<<"); if (!t)return;if(sp_String_is_frozen(s)){sp_raise_frozen_str(s->data);return;}sp_fd_append_len(s,t,(int64_t)sp_str_byte_len(t));}
+static inline void sp_String_append_bytes(sp_String*s,const char*t){if (SP_UNLIKELY(!s)) sp_nil_recv("<<"); if (!t)return;if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}sp_fd_append_len(s,t,(int64_t)sp_str_byte_len(t));}
 static inline void sp_String_append_bin(sp_String*s,const char*t){
   if (SP_UNLIKELY(!s)) sp_nil_recv("<<"); if (!t)return;
-  if(sp_String_is_frozen(s)){sp_raise_frozen_str(s->data);return;}
+  if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}
   size_t tl=sp_str_byte_len(t);
   sp_String_append_enc(s,t,tl);
   sp_fd_append_len(s,t,(int64_t)tl);
@@ -355,7 +358,7 @@ static inline sp_String*sp_String_new_unfrozen(const char*s){
    into the bytes now; mode 1 sets it, 0 clears it, -1 (another encoding)
    leaves it. A frozen String refuses either way, as CRuby does (#3334). */
 static inline sp_String*sp_String_force_encoding(sp_String*s,int mode){
-  if(sp_String_is_frozen(s)){sp_raise_frozen_str(s->data);return s;}
+  if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return s;}
   if(mode<0)return s;
   s->binary=(unsigned)mode;
   sp_str_hdr*h=(sp_str_hdr*)sp_fd_base(s->data);

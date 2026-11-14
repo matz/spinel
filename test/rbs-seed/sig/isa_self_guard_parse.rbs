@@ -1,0 +1,8 @@
+module IsaGuardNet
+  class Link
+    def self.parse: (String text) -> IsaGuardNet::Link
+    def self.coerce: (String text) -> IsaGuardNet::Link
+    def initialize: (String text) -> void
+    def text: () -> String
+  end
+end

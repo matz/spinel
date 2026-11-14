@@ -36138,14 +36138,24 @@ static void check_seed_contradictions(Compiler *c) {
     /* every value the method can answer with: the body's tail, and each
        explicit return inside this scope -- a conditional one branch at a time */
     int sites[64]; unsigned reach[64]; int nsites = 0;
+    int narrow[64];   /* by site: the class a `return v if v.is_a?(K)` answers, or -1 */
     seed_ret_branch_sites(nt, sc->body, sites, reach, &nsites, 64);
+    for (int k = 0; k < 64; k++) narrow[k] = -1;
     NT_FOREACH_KIND(nt, NK_ReturnNode, id) {
       if (nsites >= 64) break;
       if (c->nscope[id] != s) continue;
       int rv = nt_ref(nt, id, "arguments");
       if (rv < 0) continue;
       int an = 0; const int *av = nt_arr(nt, rv, "arguments", &an);
-      if (av && an == 1) seed_ret_branch_sites(nt, av[0], sites, reach, &nsites, 64);
+      if (!av || an != 1) continue;
+      int from = nsites;
+      seed_ret_branch_sites(nt, av[0], sites, reach, &nsites, 64);
+      /* (the guard's IfNode: the return is the only statement of its then-arm) */
+      const int *par = comp_parent_map(c);
+      int st = par[id], g = st >= 0 ? par[st] : -1, rn = -1;
+      int kc = g >= 0 ? isa_guard_class(c, g, &rn) : -1;
+      if (kc >= 0 && rn == id)
+        for (int k = from; k < nsites; k++) narrow[k] = kc;
     }
     for (int k = 0; k < nsites; k++) {
       /* The left of `||` answers only when truthy and the left of `&&` only
@@ -36195,7 +36205,10 @@ static void check_seed_contradictions(Compiler *c) {
         }
         }
       }
-      TyKind val = infer_type(c, sites[k]);
+      /* `return v if v.is_a?(K)` answers a K whatever v's static type: a
+         String parameter is never a user class K, and the return does not
+         run for it (#3259's narrowing, judged here as there) */
+      TyKind val = narrow[k] >= 0 ? ty_object(narrow[k]) : infer_type(c, sites[k]);
       /* the seeded String Array return settled in its poly form, the boxes
          holding the shared handles (ret_elems_shared): a String Array the
          body answers is wrapped into it, the same Ruby type (#9626) */

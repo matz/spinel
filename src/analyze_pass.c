@@ -20368,6 +20368,51 @@ static int irt_settle_callers(Compiler *c, IrtCtx *x) {
   return changed;
 }
 
+/* `return v if v.is_a?(K)` (kind_of?, instance_of?): the return can only
+   ever answer a K. The class K, a plain user class (a module's value is
+   any includer, a reopened builtin's keeps the builtin's type, #3109), and
+   in *ret the return, for the IfNode id of that one-statement shape; -1
+   for any other. K is a constant, or self in a class method (`return text
+   if text.is_a?(self)` in `def self.parse`), the method's class. */
+int isa_guard_class(Compiler *c, int id, int *ret) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_IfNode) return -1;
+  int pred = nt_ref(nt, id, "predicate");
+  if (pred < 0 || nt_kind(nt, pred) != NK_CallNode) return -1;
+  const char *pn = nt_str(nt, pred, "name");
+  if (!pn || !is_kind_query(pn)) return -1;
+  int prec = nt_ref(nt, pred, "receiver");
+  if (prec < 0 || nt_kind(nt, prec) != NK_LocalVariableReadNode) return -1;
+  const char *vn = nt_str(nt, prec, "name");
+  int pargs = nt_ref(nt, pred, "arguments");
+  int pan = 0; const int *pav = pargs >= 0 ? nt_arr(nt, pargs, "arguments", &pan) : NULL;
+  if (pan != 1 || !pav) return -1;
+  NodeKind ak = nt_kind(nt, pav[0]);
+  int kcid = -1;
+  if (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) {
+    const char *kn = key_name(c, pav[0]);
+    kcid = kn ? const_node_class_index(c, pav[0]) : -1;
+    if (kcid >= 0 && is_builtin_reopen(kn)) return -1;
+  }
+  else if (ak == NK_SelfNode) {
+    Scope *sc = comp_scope_of(c, id);
+    kcid = sc && sc->is_cmethod ? sc->class_id : -1;
+    if (kcid >= 0 && kcid < c->nclasses && is_builtin_reopen(c->classes[kcid].name)) return -1;
+  }
+  if (kcid < 0 || kcid >= c->nclasses || comp_class_is_module(c, &c->classes[kcid])) return -1;
+  /* single-statement then-arm returning the SAME variable */
+  int stm = nt_ref(nt, id, "statements");
+  int sn = 0; const int *sb = stm >= 0 ? nt_arr(nt, stm, "body", &sn) : NULL;
+  if (sn != 1 || !sb || nt_kind(nt, sb[0]) != NK_ReturnNode) return -1;
+  int ra = nt_ref(nt, sb[0], "arguments");
+  int ran = 0; const int *rav = ra >= 0 ? nt_arr(nt, ra, "arguments", &ran) : NULL;
+  if (ran != 1 || !rav || nt_kind(nt, rav[0]) != NK_LocalVariableReadNode) return -1;
+  const char *rn = nt_str(nt, rav[0], "name");
+  if (!vn || !rn || !sp_streq(vn, rn)) return -1;
+  if (ret) *ret = sb[0];
+  return kcid;
+}
+
 int infer_return_types(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -20393,43 +20438,11 @@ int infer_return_types(Compiler *c) {
      method named after a builtin (URI#join) on the union collapsed to the
      builtin String signature (#3259). */
   TyKind *ret_narrow = (TyKind *)calloc((size_t)(nt->count > 0 ? nt->count : 1), sizeof(TyKind));
-  if (ret_narrow) {
-    for (int id = 0; id < nt->count; id++) {
-      if (nt_kind(nt, id) != NK_IfNode) continue;
-      int pred = nt_ref(nt, id, "predicate");
-      NodeKind pk = nt_kind(nt, pred);
-      if (pk != NK_CallNode) continue;
-      const char *pn = nt_str(nt, pred, "name");
-      if (!pn || !is_kind_query(pn)) continue;
-      int prec = nt_ref(nt, pred, "receiver");
-      if (prec < 0 ||
-          nt_kind(nt, prec) != NK_LocalVariableReadNode) continue;
-      const char *vn = nt_str(nt, prec, "name");
-      int pargs = nt_ref(nt, pred, "arguments");
-      int pan = 0; const int *pav = pargs >= 0 ? nt_arr(nt, pargs, "arguments", &pan) : NULL;
-      if (pan != 1 || !pav) continue;
-      NodeKind ak = nt_kind(nt, pav[0]);
-      const char *kn = ((ak == NK_ConstantReadNode ||
-                                ak == NK_ConstantPathNode))
-                         ? key_name(c, pav[0]) : NULL;
-      int kcid = kn ? const_node_class_index(c, pav[0]) : -1;
-      /* a plain user class only: a module's value is any includer, and a
-         reopened builtin's values keep the builtin's type (#3109) */
-      if (kcid < 0 || comp_class_is_module(c, &c->classes[kcid]) ||
-          is_builtin_reopen(kn)) continue;
-      /* single-statement then-arm returning the SAME variable */
-      int stm = nt_ref(nt, id, "statements");
-      int sn = 0; const int *sb = stm >= 0 ? nt_arr(nt, stm, "body", &sn) : NULL;
-      if (sn != 1 || !sb || nt_kind(nt, sb[0]) != NK_ReturnNode) continue;
-      int ra = nt_ref(nt, sb[0], "arguments");
-      int ran = 0; const int *rav = ra >= 0 ? nt_arr(nt, ra, "arguments", &ran) : NULL;
-      if (ran != 1 || !rav ||
-          nt_kind(nt, rav[0]) != NK_LocalVariableReadNode) continue;
-      const char *rn = nt_str(nt, rav[0], "name");
-      if (!vn || !rn || !sp_streq(vn, rn)) continue;
-      ret_narrow[sb[0]] = ty_object(kcid);
+  if (ret_narrow)
+    NT_FOREACH_KIND(nt, NK_IfNode, id) {
+      int rn = -1, kcid = isa_guard_class(c, id, &rn);
+      if (kcid >= 0) ret_narrow[rn] = ty_object(kcid);
     }
-  }
   if (ret_acc && has_ret) {
     /* `return x unless block_given?` (or `if !block_given?`) in a yielding
        method: the return a BLOCKLESS call answers. Its type is kept apart

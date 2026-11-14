@@ -461,6 +461,7 @@ char **elab_const_key_map(Compiler *c);
 void qc_rule_prepare(Compiler *c, char **keys);
 void qc_rule_release(void);
 int qc_rule_qualifies(Compiler *c, int id, int k);
+int isa_guard_class(Compiler *c, int id, int *ret);   /* `return v if v.is_a?(K)`: K (analyze_pass.c) */
 int qc_rule_nested(Compiler *c, int id);
 void elab_builder_entity(Compiler *c, int node, const ElabPos *pos);
 void elab_header_opened(Compiler *c, int node, int cls, int made);

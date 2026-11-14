@@ -6898,10 +6898,7 @@ static sp_bool sp_range_frange_eq(sp_Range r, sp_FloatRange f) {
    SP_CPLX_RE_F) as an Integer while it fits, so a Rational or an Integer
    compares against it exactly; else the Float */
 static SP_UNUSED sp_RbVal sp_complex_re_box(sp_Complex z) {
-  if (!(z.fl & SP_CPLX_RE_F) && z.re >= -9223372036854775808.0 &&
-      z.re < 9223372036854775808.0 && z.re == (sp_float)(long long)z.re)
-    return sp_box_int((sp_int)z.re);
-  return sp_box_float(z.re);
+  return sp_complex_comp_v(z.re, z.fl & SP_CPLX_RE_F);
 }
 static SP_NOINLINE sp_bool sp_poly_eq_slow(sp_RbVal a, sp_RbVal b) {
   /* a user class's own == answers before any builtin reading, the way its

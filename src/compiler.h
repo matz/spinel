@@ -2614,10 +2614,6 @@ int        comp_name_answered(Compiler *c, const char *name, int is_cm);
    own table only with CT_OWN (an override), the top-level functions for
    cls < 0. No record is asked: a candidate, not what one call runs. */
 int        comp_name_responder(Compiler *c, int cls, const char *name, unsigned side);
-/* Does class k's chain hold a method or an attribute reader of `name`: one
-   of the name's candidates for a boxed dispatch (comp_poly_candidates' test,
-   asked of one class), as a def or an attr_reader gives an arm? */
-int        comp_class_answers(Compiler *c, int k, const char *name);
 /* Does any class's chain answer an attribute writer of base? */
 int        comp_name_writer_any(Compiler *c, const char *base);
 int        send_def_just_supers(Compiler *c, int mi);          /* analyze_desugar.c */
@@ -2874,15 +2870,6 @@ int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap);
 const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id);
 /* Resolve `name` through the class's (chain-aware) alias table to the
    underlying method/attr name. Returns `name` unchanged if not aliased. */
-/* What a name means on a class: nothing, an attribute (attr_reader/writer,
-   Struct member, ...), or an explicit method. Both tables can own one name;
-   comp_resolve_member arbitrates once for every emission site. */
-enum { SP_MEMBER_NONE = 0, SP_MEMBER_ATTR, SP_MEMBER_METHOD };
-/* `name` is the bare name for a read and the BASE name for a write (the method
-   consulted is then `name=`). Reports the defining class and, for a method, its
-   scope index. */
-int         comp_resolve_member(Compiler *c, int class_id, const char *name, int want_write,
-                                int *def_class, int *method_index);
 const char *comp_resolve_alias(Compiler *c, int class_id, const char *name);
 const char *comp_resolve_alias_at(Compiler *c, int class_id, const char *name, int *start_cls);
 const char *comp_resolve_cm_alias_at(Compiler *c, int class_id, const char *name, int *start_cls);

@@ -2892,7 +2892,7 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
        dispatch's class-value arm answers) */
     int has_user_arity = 0;
     for (int _k = 0; _k < c->nclasses && !has_user_arity; _k++)
-      if (comp_resolve_member(c, _k, name, 0, NULL, NULL) || call_target(c, id, _k, name, CT_CMETHOD, NULL) >= 0)
+      if (call_answers(c, -1, _k, name, 0, NULL) || call_target(c, id, _k, name, CT_CMETHOD, NULL) >= 0)
         has_user_arity = 1;
     if (!has_user_arity) {
       /* the site may be typed boxed (a C extension's stub answers a box):

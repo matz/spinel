@@ -4504,15 +4504,18 @@ static int cmethod_names_ivar(Compiler *c, int ci, const char *ivname) {
   return 0;
 }
 
-/* Each class-side accessor version a def after it replaces
-   (elab_replaced_attrs) as the method it is, `def self.x = @x` or
-   `def self.x=(value) = (@x = value)`, walked beside the call that
-   declares it: its scope is the version's (elab_attr_scope), which the
-   plan binds a call to where the accessor is live, and for which the
-   class's slot stands in at that call (cplan_sg_accessor). Its `@x` makes
-   the slot the class-level ivar's (register_attrs), the one the def
-   writes, and goes into the class's ivars now, which declare that slot,
-   whatever the rest of the program names. */
+/* Each accessor version of a history that mixes accessors and defs
+   (elab_replaced_attrs) as the method it is, `def x = @x` or
+   `def x=(value) = (@x = value)` (`def self.x` on the class side), walked
+   beside the call that declares it: its scope is the version's
+   (elab_attr_scope), which the plan binds a call to where the accessor is
+   live. On the class side the class's slot stands in at that call
+   (cplan_sg_accessor); on the instance side the call is a call of the
+   method. Its `@x` makes the slot the class-level ivar's on the class
+   side (register_attrs), the one the def writes, and goes into the
+   class's ivars now, which declare that slot, whatever the rest of the
+   program names. A Struct's or a Data's member has no attr_* call and is
+   not made one. */
 void register_attr_versions(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n = 0;
@@ -4522,15 +4525,16 @@ void register_attr_versions(Compiler *c) {
     int w = a[i].kind == LR_WRITER, e = c->nscopes;
     char base[256], ivname[260];
     if (w ? !setter_base_name(a[i].name, base, sizeof base) : snprintf(base, sizeof base, "%s", a[i].name) >= (int)sizeof base) continue;
+    snprintf(ivname, sizeof ivname, "@%s", base);
+    if (comp_member_index(&c->classes[a[i].cls], ivname) >= 0) continue;   /* (a Struct's or a Data's member) */
     int def = attr_as_def(nt, a[i].node, base, w);
     if (def < 0) continue;
-    nt_node_set_ref(nt, def, "receiver", nt_new_node(nt, "SelfNode"));
+    if (a[i].sg) nt_node_set_ref(nt, def, "receiver", nt_new_node(nt, "SelfNode"));
     comp_grow_node_arrays(c);
     walk_scope(c, def, c->nscope[a[i].node], a[i].cls);
     if (e >= c->nscopes || c->scopes[e].def_node != def) continue;
     { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
-    snprintf(ivname, sizeof ivname, "@%s", base);
-    comp_ivar_intern(&c->classes[a[i].cls], ivname, IVS_CLASS);
+    comp_ivar_intern(&c->classes[a[i].cls], ivname, a[i].sg ? IVS_CLASS : IVS_INST);
     elab_attr_scope(c, &a[i], e);
   }
   free(a);
@@ -5224,7 +5228,7 @@ static const LrDef *alias_accessor_version(Compiler *c, const ElabEntry *e) {
   LoadPoint p = elab_point_of(c, e->node);
   const LrDef *d = NULL;
   if (e->sg || p.region < 0 || elab_method_at(c, e->cls, e->target, 0, p, &d) != ELAB_YES || !d ||
-      (d->kind != LR_READER && d->kind != LR_WRITER) || d->may || d->unplaced || d->scope) return NULL;
+      (d->kind != LR_READER && d->kind != LR_WRITER) || d->may || d->unplaced) return NULL;
   return d;
 }
 
@@ -9458,7 +9462,7 @@ void rewrite_self_attr_empty_writes(Compiler *c) {
     int ci = s->class_id;
     ClassInfo *cls = &c->classes[ci];
     if (comp_class_is_module(c, cls) || cls->is_struct || cls->is_native_class) continue;
-    if (!comp_writer_in_chain(c, ci, base, NULL) || call_target(c, id, ci, name, 0, NULL) >= 0) continue;
+    if (!call_attr_target(c, id, ci, base, CT_WRITER, NULL)) continue;
     if (comp_prep_chain_target(c, ci, name)) continue;
     int over = 0;
     for (int k = 0; k < c->nclasses && !over; k++)
@@ -13154,7 +13158,7 @@ int struct_aset_receiver(Compiler *c, int id, int *cls) {
 static int struct_aset_class(Compiler *c, int k) {
   ClassInfo *ci = &c->classes[k];
   return ci->is_struct && !ci->is_data && !ci->is_native_class && ci->nmembers > 0 &&
-         comp_resolve_member(c, k, "[]=", 0, NULL, NULL) == SP_MEMBER_NONE;
+         !call_answers(c, -1, k, "[]=", 0, NULL);
 }
 /* See analyze_internal.h. */
 int struct_aset_may_reach(Compiler *c, int id) {
@@ -13576,15 +13580,16 @@ int infer_ivar_types(Compiler *c) {
            owns a matching ivar, attribute the write to that family. Inherited
            writers are copied onto every subclass, so count the highest class
            whose effective writer is still an attribute, not each copy. An
-           explicit writer method breaks the family: comp_resolve_member keeps
+           explicit writer method breaks the family: call_target keeps
            that override out of the synthesized-attribute candidates. (Skip
            when unrelated families remain ambiguous; widening a same-named
            ivar there would be unsound to attribute.) ty_unify only widens. */
         int only = -1;
+        MethodLookup wml = { .def_class = -1 };
         for (int ci2 = 0; ci2 < c->nclasses; ci2++) {
           ClassInfo *candidate = &c->classes[ci2];
           if (comp_class_is_module(c, candidate) ||
-              comp_resolve_member(c, ci2, base, 1, NULL, NULL) != SP_MEMBER_ATTR ||
+              !call_attr_target(c, -1, ci2, base, CT_WRITER, &wml) ||
               comp_ivar_index(candidate, ivname) < 0)
             continue;
 
@@ -13596,7 +13601,7 @@ int infer_ivar_types(Compiler *c) {
           int family = ci2;
           for (int parent = candidate->parent; parent >= 0;
                parent = c->classes[parent].parent) {
-            if (comp_resolve_member(c, parent, base, 1, NULL, NULL) != SP_MEMBER_ATTR)
+            if (!call_attr_target(c, -1, parent, base, CT_WRITER, &wml))
               break;
             family = parent;
           }
@@ -13612,7 +13617,7 @@ int infer_ivar_types(Compiler *c) {
           for (int ci2 = 0; ci2 < c->nclasses; ci2++) {
             ClassInfo *candidate = &c->classes[ci2];
             if (comp_class_is_module(c, candidate) ||
-                comp_resolve_member(c, ci2, base, 1, NULL, NULL) != SP_MEMBER_ATTR)
+                !call_attr_target(c, -1, ci2, base, CT_WRITER, &wml))
               continue;
             int iv = comp_ivar_index(candidate, ivname);
             if (iv < 0 || class_ivar_pinned(candidate, ivname) || candidate->ivar_types[iv] == TY_UNKNOWN) continue;

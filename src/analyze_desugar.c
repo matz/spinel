@@ -570,7 +570,7 @@ int desugar_descendant_reader_calls(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     Scope *sc = comp_scope_of(c, id);
     if (!nm || !sc || !sc->name || sc->is_cmethod || sc->class_id < 0) continue;
-    if (call_target(c, id, sc->class_id, nm, 0, NULL) >= 0 || comp_reader_in_chain(c, sc->class_id, nm, NULL)) continue;
+    if (call_answers(c, id, sc->class_id, nm, 0, NULL)) continue;
     int nd = 0, hit = 0;
     const int *ds = comp_descendants(c, sc->class_id, &nd);
     for (int i = 0; i < nd && !hit; i++) hit = comp_reader_in_chain(c, ds[i], nm, NULL);
@@ -11027,7 +11027,7 @@ static int class_answers_own(Compiler *c, int cid, const char *name) {
   int builtin = 0;
   const char *tn = comp_resolve_alias_ex(c, cid, name, NULL, &builtin);
   if (builtin || !tn || !sp_streq(tn, name)) return 1;
-  return comp_resolve_member(c, cid, name, 0, NULL, NULL) != SP_MEMBER_NONE;
+  return call_answers(c, -1, cid, name, 0, NULL);
 }
 
 /* `Array(x)` where x is a Hash or String subclass instance whose class
@@ -18885,7 +18885,7 @@ int enumerator_own_with_object(Compiler *c, int id) {
   int ci = comp_core_class(c, CORE_ENUMERATOR);
   if (ci < 0) return 0;
   const char *rn = comp_resolve_alias(c, ci, "with_object");
-  if (comp_method_in_chain(c, ci, "with_object", NULL) < 0 && !comp_reader_in_chain(c, ci, "with_object", NULL) &&
+  if (!call_answers(c, -1, ci, "with_object", 0, NULL) &&
       (!rn || sp_streq(rn, "with_object"))) return 0;
   if (!nt_int(c->nt, id, "wo_refused", 0)) {
     nt_node_set_int((NodeTable *)c->nt, id, "wo_refused", 1);
@@ -29944,11 +29944,10 @@ static int ix_index_call(NodeTable *nt, const char *name, int recv, int a0, int 
    ivar themselves would make the two differ, and keep the call as written. */
 static const char *rdw_reader_ivar(Compiler *c, int call, int cls, int cmeth, const char *mname) {
   const NodeTable *nt = c->nt;
-  int mi = call_target(c, call, cls, mname, cmeth ? CT_CMETHOD : 0, NULL);
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, call, cls, mname, cmeth ? CT_CMETHOD : 0, &ml);
   if (mi < 0) {
-    if (cmeth) return NULL;
-    int def_cls = -1, mix = -1;
-    if (comp_resolve_member(c, cls, mname, 0, &def_cls, &mix) != SP_MEMBER_ATTR) return NULL;
+    if (cmeth || ml.kind != ML_ATTR) return NULL;
     static char ivb[128];
     if (strlen(mname) >= sizeof ivb - 2) return NULL;
     ivb[0] = '@'; strcpy(ivb + 1, mname);
@@ -31373,8 +31372,7 @@ int rewrite_ffi_dynamic_calls(Compiler *c) {
         if (ffi_sclass_defines(c, s->class_id, name)) continue;
       }
       else if (s && s->class_id >= 0) {
-        if (call_target(c, id, s->class_id, name, 0, NULL) >= 0 ||
-            comp_reader_in_chain(c, s->class_id, name, NULL)) continue;
+        if (call_answers(c, id, s->class_id, name, 0, NULL)) continue;
       }
       if (obj >= 0 && call_target(c, id, obj, name, 0, NULL) >= 0) continue;
       Scope *reach_s = s;

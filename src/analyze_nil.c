@@ -306,7 +306,8 @@ static int nf_ivar_def(NF *f, int n, const char *ivn, int mi, int depth) {
     /* `self.x = v` through an attr writer of x */
     size_t cl = strlen(cn);
     if (cl > 1 && cn[cl - 1] == '=' && !strncmp(cn, ivn + 1, cl - 1) && ivn[cl] == 0 &&
-        c->scopes[mi].class_id >= 0 && comp_writer_in_chain(c, c->scopes[mi].class_id, ivn + 1, NULL))
+        c->scopes[mi].class_id >= 0 &&
+        call_attr_target(c, -1, c->scopes[mi].class_id, ivn + 1, CT_WRITER, NULL))
       return 1;
     /* one of self's own methods, called with no block */
     int tmi = nf_plan(f, n, NULL, NULL);
@@ -789,7 +790,7 @@ static int nf_call(NF *f, int v) {
       Scope *s = comp_scope_of(c, v);
       cls = s && !s->is_cmethod ? s->class_id : -1;
     }
-    if (cls >= 0 && comp_reader_in_chain(c, cls, nm, NULL)) {
+    if (cls >= 0 && call_attr_target(c, -1, cls, nm, 0, NULL)) {
       char ivn[256];
       snprintf(ivn, sizeof ivn, "@%s", nm);
       return nf_ivar(f, cls, ivn);
@@ -949,12 +950,14 @@ static int nf_elem_slot_op(NF *f, int v, int bits) {
     fl = &nf_ivar_slot(f, NF_CVAR, nm)->ewr;
     break;
   case NK_CallNode: {
-    int r = nt_ref(nt, v, "receiver"), dc = -1;
+    int r = nt_ref(nt, v, "receiver");
     TyKind rt = comp_ntype(c, r);
     char ivn[256];
+    MethodLookup rml = { .def_class = -1 };
     if (r < 0 || !ty_is_object(rt) || nt_ref(nt, v, "arguments") >= 0 ||
-        !comp_reader_in_chain(c, ty_object_class(rt), nm, &dc) || dc < 0)
+        !call_attr_target(c, -1, ty_object_class(rt), nm, 0, &rml) || rml.def_class < 0)
       return -1;
+    int dc = rml.def_class;
     snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, ty_object_class(rt), nm));
     return nf_elem_ivar_op(f, dc, ivn, bits);
   }
@@ -1722,8 +1725,10 @@ static void nf_calls(NF *f, int **yields, int *nyields) {
     /* an attr writer: its ivar */
     char base[256];
     if (mi < 0 && an == 1 && r >= 0 && ty_is_object(comp_ntype(c, r)) && setter_base_name(cn, base, sizeof base)) {
+      MethodLookup wml = { .def_class = -1 };
       int dc = -1;
-      if (comp_writer_in_chain(c, ty_object_class(comp_ntype(c, r)), base, &dc) && dc >= 0) {
+      if (call_attr_target(c, -1, ty_object_class(comp_ntype(c, r)), base, CT_WRITER, &wml) &&
+          (dc = wml.def_class) >= 0) {
         char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", base);
         nf_ivar_write(f, dc, ivn, nf_expr(f, av[0]));
         /* the ivar and the written Array are one Array */

@@ -873,7 +873,9 @@ int share_method_reaching_blocks(const Compiler *c, int mi, int *out, int cap) {
    non-arity registry query keeps real bindings regardless of signature. */
 static int sh_native_placeholder(Compiler *c, const PolyCand *p, const char *name) {
   if (!p->native || p->mi >= 0 || p->rdcls >= 0) return 0;
-  if (comp_reader_in_chain(c, p->cls, name, NULL)) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  call_target(c, -1, p->cls, name, 0, &ml);
+  if (ml.kind == ML_ATTR) return 0;
   return !comp_poly_arm_defines(c, p->cls, name);
 }
 /* A boxed call's builtin arms answer a value of their own when the
@@ -1810,11 +1812,11 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
     int rv = nt_ref(c->nt, u, "receiver");
     TyKind rt = rv >= 0 ? comp_ntype((Compiler *)c, rv) : TY_UNKNOWN;
     const char *rn = nt_str(c->nt, u, "name");
-    int kd = -1;
-    if (rn && ty_is_object(rt) && comp_reader_in_chain((Compiler *)c, ty_object_class(rt), rn, &kd) &&
+    MethodLookup rml = { .def_class = -1 };
+    if (rn && ty_is_object(rt) && call_attr_target((Compiler *)c, -1, ty_object_class(rt), rn, 0, &rml) &&
         ({ int _tg[CPT_MAX]; cplan_targets((Compiler *)c, u, _tg, CPT_MAX) == 0; })) {
       char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", rn);
-      ClassInfo *ci = &c->classes[kd >= 0 ? kd : ty_object_class(rt)];
+      ClassInfo *ci = &c->classes[rml.def_class >= 0 ? rml.def_class : ty_object_class(rt)];
       int ix = comp_ivar_index(ci, ivn);
       if (ix >= 0 && ci->ivar_types[ix] == TY_POLY) return SPK_READER;
     }

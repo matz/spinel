@@ -693,7 +693,7 @@ static int name_is_literal(Compiler *c, const char *name) {
    Object, Kernel or BasicObject, a top-level def or include), or a
    literal of the name may define it reflectively. */
 static int obj_may_answer(Compiler *c, int cid, const char *name) {
-  if (comp_method_in_chain(c, cid, name, NULL) >= 0 || comp_reader_in_chain(c, cid, name, NULL) ||
+  if (call_answers(c, -1, cid, name, 0, NULL) ||
       comp_subclass_answers(c, cid, name) || root_reopen_defines(c, name) ||
       comp_method_index(c, name) >= 0)
     return 1;
@@ -11720,7 +11720,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
          Struct.new(:members) answers the member, not the member names. The
          iterator this file synthesizes for a struct is a method and is served
          by the object path below. */
-      comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_NONE)) return 0;
+      !call_answers(c, -1, ty_object_class(rt), name, 0, NULL))) return 0;
   ClassInfo *sc = &c->classes[ty_object_class(rt)];
   /* #inspect / #to_s -> the generated (or user-overridden) struct/data stringifier */
   if ((is_text_conversion(name)) && argc == 0) {
@@ -12955,11 +12955,12 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      freeze sets it and returns self; frozen? reads it. Mutation of a frozen
      plain object's ivars is NOT trapped (raw C stores); the flag round-trip
      is what reflection-driven code observes. */
+  MethodLookup fml = { .def_class = -1 };
   if (recv >= 0 && ty_is_object(rt) && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (is_freeze_family(name)) &&
-      call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0 &&
+      call_target(c, id, ty_object_class(rt), name, 0, &fml) < 0 &&
       /* a generated reader of the name owns it, as in CRuby (#4190) */
-      comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) != SP_MEMBER_ATTR) {
+      fml.kind != ML_ATTR) {
     if (comp_ty_value_obj(c, rt)) {
       /* A value-type object (sp_X by value, no heap GC header to carry the
          frozen bit): freeze is a self-returning no-op and frozen? is false,
@@ -13354,142 +13355,141 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
        same-class `def x`) overrides it via normal dispatch rather than
        reading the field. Whichever definition sits in the more-derived class
        wins; on a same-class tie the explicit method wins. */
-    int rdc = -1, mdc = -1;
-    if (comp_reader_in_chain(c, cid, name, &rdc)) {
-      int reader_wins = comp_resolve_member(c, cid, name, 0, &mdc, NULL) == SP_MEMBER_ATTR;
-      if (reader_wins) {
-        /* a reader is zero-arity: excess arguments are CRuby's ArgumentError
-           (a Struct member read with an argument answered the member). A
-           splat / keyword-hash / forwarding argument can be empty at run
-           time -- zero arguments to CRuby -- so those stay unguarded. */
-        int rdr_dynamic = nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING | NT_ARG_BLOCK);
-        if (argc > 0 && !rdr_dynamic) {
-          TyKind rrty2 = repr_of(c, id).as_ty;
-          buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); ");
-          for (int ra = 0; ra < argc; ra++) {
-            buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[ra], b); buf_puts(b, "); ");
-          }
-          buf_printf(b, "sp_raise_cls(\"ArgumentError\","
-                        " \"wrong number of arguments (given %d, expected 0)\"); %s; })",
-                     argc, raise_tail_c(c, id, rrty2));
-          return 1;
+    MethodLookup rml = { .def_class = -1 };
+    int rdc = -1;
+    if (call_attr_target(c, -1, cid, name, 0, &rml)) {
+      rdc = rml.def_class;
+      /* a reader is zero-arity: excess arguments are CRuby's ArgumentError
+         (a Struct member read with an argument answered the member). A
+         splat / keyword-hash / forwarding argument can be empty at run
+         time -- zero arguments to CRuby -- so those stay unguarded. */
+      int rdr_dynamic = nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING | NT_ARG_BLOCK);
+      if (argc > 0 && !rdr_dynamic) {
+        TyKind rrty2 = repr_of(c, id).as_ty;
+        buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); ");
+        for (int ra = 0; ra < argc; ra++) {
+          buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[ra], b); buf_puts(b, "); ");
         }
-        const char *rn2 = comp_resolve_alias(c, cid, name);
-        /* A receiver typed for this class can hold an instance of a subclass
-           whose `def` overrides the reader: `self` in one of the class's own
-           methods, or an object such a method answers. The read then
-           dispatches on the runtime class, as a receiverless call to the
-           reader does, and the receiver is evaluated once. */
-        /* --share-strings: the read as the handle (a demand, or the read
-           marked as the handle) or as a box, of a String slot a
-           descendant's def overrides: each arm's handle, as a receiverless
-           read takes it (emit_reader_override_handle). Read as the slot's
-           handle alone the override was skipped (`[self.h]` answered the
-           field), and as its copy the String lost its identity. */
-        if (!comp_ty_value_obj(c, rt)) {
-          char hivn[300]; snprintf(hivn, sizeof hivn, "@%s", rn2);
-          int hk = rdc >= 0 ? rdc : cid;
-          int hiv = comp_ivar_index(&c->classes[hk], hivn);
-          Repr hrp = repr_of(c, id);
-          int hboxed = hrp.as_ty == TY_POLY;
-          if (hiv >= 0 && c->classes[hk].ivar_types[hiv] == TY_STRBUF && (hrp.handle || hrp.demand || hboxed) &&
-              reader_override_handle_arms(c, id, cid, name, hboxed)) {
-            NodeKind hrk = nt_kind(nt, recv);
-            int hsimple = (hrk == NK_LocalVariableReadNode ||
-                                  hrk == NK_InstanceVariableReadNode || hrk == NK_SelfNode);
-            int ht = hsimple ? -1 : ++g_tmp;
-            Buf hs; memset(&hs, 0, sizeof hs);
-            if (hsimple) hs = expr_buf(c, recv);
-            else buf_printf(&hs, "_t%d", ht);
-            Buf hr; memset(&hr, 0, sizeof hr);
-            buf_printf(&hr, "(%s)->iv_%s", hs.p, iv_c(rn2));
-            if (!hsimple) {
-              buf_puts(b, "({ "); emit_ctype(c, rt, b);
-              buf_printf(b, " _t%d = ", ht); emit_expr(c, recv, b);
-              buf_printf(b, "; SP_GC_ROOT(_t%d); ", ht);
-            }
-            emit_reader_override_handle(c, id, cid, name, hs.p, hr.p, hboxed, b);
-            if (!hsimple) buf_puts(b, "; })");
-            free(hs.p); free(hr.p);
-            return 1;
-          }
-        }
-        TyKind ovty = comp_ty_value_obj(c, rt) ? TY_UNKNOWN : reader_override_ty(c, id, cid, name);
-        if (ovty != TY_UNKNOWN) {
-          NodeKind ovrk = nt_kind(nt, recv);
-          int ov_simple = (ovrk == NK_LocalVariableReadNode ||
-                                   ovrk == NK_InstanceVariableReadNode || ovrk == NK_SelfNode);
-          int ovt = ov_simple ? -1 : ++g_tmp;
-          Buf ovs; memset(&ovs, 0, sizeof ovs);
-          if (ov_simple) ovs = expr_buf(c, recv);
-          else buf_printf(&ovs, "_t%d", ovt);
-          Buf ovr; memset(&ovr, 0, sizeof ovr);
-          /* a field with a nil bit is read with it where the call's
-             consumer wants the oint, as below */
-          int ovk = rdc >= 0 ? rdc : cid;
-          char ovivn[300]; snprintf(ovivn, sizeof ovivn, "@%s", rn2);
-          int oviv = comp_ivar_index(&c->classes[ovk], ovivn);
-          int ov_oint = oviv >= 0 && node_is_oint(c, id) && ivar_has_nilbit(c, ovk, oviv);
-          if (ov_oint) {
-            char objp[320], bit[400];
-            snprintf(objp, sizeof objp, "(%s)->", ovs.p);
-            ivar_nilbit_test(c, ovk, oviv, objp, bit, sizeof bit);
-            buf_printf(&ovr, "((%s){ %siv_%s, (%s) != 0 })", oint_ctype(ovty), objp, iv_c(rn2), bit);
-          }
-          else buf_printf(&ovr, "(%s)->iv_%s", ovs.p, iv_c(rn2));
-          if (!ov_simple) {
-            buf_puts(b, "({ "); emit_ctype(c, rt, b);
-            buf_printf(b, " _t%d = ", ovt); emit_expr(c, recv, b);
-            buf_printf(b, "; SP_GC_ROOT(_t%d); ", ovt);
-          }
-          emit_reader_override_dispatch(c, id, cid, name, ovs.p, ovr.p, ovty, ov_oint, b);
-          if (!ov_simple) buf_puts(b, "; })");
-          free(ovs.p); free(ovr.p);
-          return 1;
-        }
-        /* a shared-mutable string slot reads out as a GC COPY of the current
-           contents (the raw sp_String* handle must not leak into a plain
-           string context); a demand-marked read hands out the handle (#3227) */
-        char ivfull[300]; snprintf(ivfull, sizeof ivfull, "@%s", rn2);
-        int rdiv = comp_ivar_index(&c->classes[rdc >= 0 ? rdc : cid], ivfull);
-        if (rdiv >= 0 &&
-            c->classes[rdc >= 0 ? rdc : cid].ivar_types[rdiv] == TY_STRBUF) {
-          int tvR = ++g_tmp;
-          buf_printf(b, "({ sp_String *_t%d = (", tvR);
-          emit_expr(c, recv, b);
-          buf_printf(b, ")%siv_%s; ", comp_ty_value_obj(c, rt) ? "." : "->", iv_c(rn2));
-          /* either mark is the same demand: strbuf_box carries it with the
-             node's type, strbuf_handle_demand without it (see compiler.h) */
-          if (repr_of(c, id).handle || repr_of(c, id).demand)
-            buf_printf(b, "_t%d; })", tvR);
-          /* the only consumer READS the bytes and keeps no pointer past the
-             call, so the live buffer serves it. The copy below is O(len) and
-             this read is typically in a loop: `ctx.buf.getbyte(i)` over a
-             200 KB buffer copied the whole string once per row. Same type,
-             same const char * -- the live buffer rather than a snapshot. */
-          else if (repr_of(c, id).read_raw && decide_node(c->nt, id, "strbuf-raw", NULL))
-            buf_printf(b, "_t%d ? sp_String_cstr(_t%d) : NULL; })", tvR, tvR);
-          else
-            { str_read_handle_tmp(b, tvR, 0); buf_puts(b, "; })"); }
-          return 1;
-        }
-        /* a field with a nil bit is read with it where the call's consumer
-           wants the oint (node_is_oint answers the reader by that bit) */
-        if (rdiv >= 0 && node_is_oint(c, id) &&
-            ivar_has_nilbit(c, rdc >= 0 ? rdc : cid, rdiv)) {
-          int rcls = rdc >= 0 ? rdc : cid;
-          TyKind rivt = c->classes[rcls].ivar_types[rdiv];
-          int trd = ++g_tmp;
-          char objp[48]; snprintf(objp, sizeof objp, "_t%d%s", trd, comp_ty_value_obj(c, rt) ? "." : "->");
-          char bit[400]; ivar_nilbit_test(c, rcls, rdiv, objp, bit, sizeof bit);
-          buf_puts(b, "({ "); emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", trd); emit_expr(c, recv, b);
-          buf_printf(b, "; ((%s){ %siv_%s, (%s) != 0 }); })", oint_ctype(rivt), objp, iv_c(rn2), bit);
-          return 1;
-        }
-        buf_puts(b, "("); emit_expr(c, recv, b);
-        buf_printf(b, ")%siv_%s", comp_ty_value_obj(c, rt) ? "." : "->", iv_c(rn2));
+        buf_printf(b, "sp_raise_cls(\"ArgumentError\","
+                      " \"wrong number of arguments (given %d, expected 0)\"); %s; })",
+                   argc, raise_tail_c(c, id, rrty2));
         return 1;
       }
+      const char *rn2 = comp_resolve_alias(c, cid, name);
+      /* A receiver typed for this class can hold an instance of a subclass
+         whose `def` overrides the reader: `self` in one of the class's own
+         methods, or an object such a method answers. The read then
+         dispatches on the runtime class, as a receiverless call to the
+         reader does, and the receiver is evaluated once. */
+      /* --share-strings: the read as the handle (a demand, or the read
+         marked as the handle) or as a box, of a String slot a
+         descendant's def overrides: each arm's handle, as a receiverless
+         read takes it (emit_reader_override_handle). Read as the slot's
+         handle alone the override was skipped (`[self.h]` answered the
+         field), and as its copy the String lost its identity. */
+      if (!comp_ty_value_obj(c, rt)) {
+        char hivn[300]; snprintf(hivn, sizeof hivn, "@%s", rn2);
+        int hk = rdc >= 0 ? rdc : cid;
+        int hiv = comp_ivar_index(&c->classes[hk], hivn);
+        Repr hrp = repr_of(c, id);
+        int hboxed = hrp.as_ty == TY_POLY;
+        if (hiv >= 0 && c->classes[hk].ivar_types[hiv] == TY_STRBUF && (hrp.handle || hrp.demand || hboxed) &&
+            reader_override_handle_arms(c, id, cid, name, hboxed)) {
+          NodeKind hrk = nt_kind(nt, recv);
+          int hsimple = (hrk == NK_LocalVariableReadNode ||
+                                hrk == NK_InstanceVariableReadNode || hrk == NK_SelfNode);
+          int ht = hsimple ? -1 : ++g_tmp;
+          Buf hs; memset(&hs, 0, sizeof hs);
+          if (hsimple) hs = expr_buf(c, recv);
+          else buf_printf(&hs, "_t%d", ht);
+          Buf hr; memset(&hr, 0, sizeof hr);
+          buf_printf(&hr, "(%s)->iv_%s", hs.p, iv_c(rn2));
+          if (!hsimple) {
+            buf_puts(b, "({ "); emit_ctype(c, rt, b);
+            buf_printf(b, " _t%d = ", ht); emit_expr(c, recv, b);
+            buf_printf(b, "; SP_GC_ROOT(_t%d); ", ht);
+          }
+          emit_reader_override_handle(c, id, cid, name, hs.p, hr.p, hboxed, b);
+          if (!hsimple) buf_puts(b, "; })");
+          free(hs.p); free(hr.p);
+          return 1;
+        }
+      }
+      TyKind ovty = comp_ty_value_obj(c, rt) ? TY_UNKNOWN : reader_override_ty(c, id, cid, name);
+      if (ovty != TY_UNKNOWN) {
+        NodeKind ovrk = nt_kind(nt, recv);
+        int ov_simple = (ovrk == NK_LocalVariableReadNode ||
+                                 ovrk == NK_InstanceVariableReadNode || ovrk == NK_SelfNode);
+        int ovt = ov_simple ? -1 : ++g_tmp;
+        Buf ovs; memset(&ovs, 0, sizeof ovs);
+        if (ov_simple) ovs = expr_buf(c, recv);
+        else buf_printf(&ovs, "_t%d", ovt);
+        Buf ovr; memset(&ovr, 0, sizeof ovr);
+        /* a field with a nil bit is read with it where the call's
+           consumer wants the oint, as below */
+        int ovk = rdc >= 0 ? rdc : cid;
+        char ovivn[300]; snprintf(ovivn, sizeof ovivn, "@%s", rn2);
+        int oviv = comp_ivar_index(&c->classes[ovk], ovivn);
+        int ov_oint = oviv >= 0 && node_is_oint(c, id) && ivar_has_nilbit(c, ovk, oviv);
+        if (ov_oint) {
+          char objp[320], bit[400];
+          snprintf(objp, sizeof objp, "(%s)->", ovs.p);
+          ivar_nilbit_test(c, ovk, oviv, objp, bit, sizeof bit);
+          buf_printf(&ovr, "((%s){ %siv_%s, (%s) != 0 })", oint_ctype(ovty), objp, iv_c(rn2), bit);
+        }
+        else buf_printf(&ovr, "(%s)->iv_%s", ovs.p, iv_c(rn2));
+        if (!ov_simple) {
+          buf_puts(b, "({ "); emit_ctype(c, rt, b);
+          buf_printf(b, " _t%d = ", ovt); emit_expr(c, recv, b);
+          buf_printf(b, "; SP_GC_ROOT(_t%d); ", ovt);
+        }
+        emit_reader_override_dispatch(c, id, cid, name, ovs.p, ovr.p, ovty, ov_oint, b);
+        if (!ov_simple) buf_puts(b, "; })");
+        free(ovs.p); free(ovr.p);
+        return 1;
+      }
+      /* a shared-mutable string slot reads out as a GC COPY of the current
+         contents (the raw sp_String* handle must not leak into a plain
+         string context); a demand-marked read hands out the handle (#3227) */
+      char ivfull[300]; snprintf(ivfull, sizeof ivfull, "@%s", rn2);
+      int rdiv = comp_ivar_index(&c->classes[rdc >= 0 ? rdc : cid], ivfull);
+      if (rdiv >= 0 &&
+          c->classes[rdc >= 0 ? rdc : cid].ivar_types[rdiv] == TY_STRBUF) {
+        int tvR = ++g_tmp;
+        buf_printf(b, "({ sp_String *_t%d = (", tvR);
+        emit_expr(c, recv, b);
+        buf_printf(b, ")%siv_%s; ", comp_ty_value_obj(c, rt) ? "." : "->", iv_c(rn2));
+        /* either mark is the same demand: strbuf_box carries it with the
+           node's type, strbuf_handle_demand without it (see compiler.h) */
+        if (repr_of(c, id).handle || repr_of(c, id).demand)
+          buf_printf(b, "_t%d; })", tvR);
+        /* the only consumer READS the bytes and keeps no pointer past the
+           call, so the live buffer serves it. The copy below is O(len) and
+           this read is typically in a loop: `ctx.buf.getbyte(i)` over a
+           200 KB buffer copied the whole string once per row. Same type,
+           same const char * -- the live buffer rather than a snapshot. */
+        else if (repr_of(c, id).read_raw && decide_node(c->nt, id, "strbuf-raw", NULL))
+          buf_printf(b, "_t%d ? sp_String_cstr(_t%d) : NULL; })", tvR, tvR);
+        else
+          { str_read_handle_tmp(b, tvR, 0); buf_puts(b, "; })"); }
+        return 1;
+      }
+      /* a field with a nil bit is read with it where the call's consumer
+         wants the oint (node_is_oint answers the reader by that bit) */
+      if (rdiv >= 0 && node_is_oint(c, id) &&
+          ivar_has_nilbit(c, rdc >= 0 ? rdc : cid, rdiv)) {
+        int rcls = rdc >= 0 ? rdc : cid;
+        TyKind rivt = c->classes[rcls].ivar_types[rdiv];
+        int trd = ++g_tmp;
+        char objp[48]; snprintf(objp, sizeof objp, "_t%d%s", trd, comp_ty_value_obj(c, rt) ? "." : "->");
+        char bit[400]; ivar_nilbit_test(c, rcls, rdiv, objp, bit, sizeof bit);
+        buf_puts(b, "({ "); emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", trd); emit_expr(c, recv, b);
+        buf_printf(b, "; ((%s){ %siv_%s, (%s) != 0 }); })", oint_ctype(rivt), objp, iv_c(rn2), bit);
+        return 1;
+      }
+      buf_puts(b, "("); emit_expr(c, recv, b);
+      buf_printf(b, ")%siv_%s", comp_ty_value_obj(c, rt) ? "." : "->", iv_c(rn2));
+      return 1;
     }
     /* Resolve through the plan for this receiver and emitted name.
        Aliases that captured a builtin have no user target in this context. */

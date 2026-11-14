@@ -238,7 +238,7 @@ int respond_to_runtime_reaches(Compiler *c, TyKind rt) {
    priv when k's chain does not answer it and u is the first root with it. */
 static void object_reopen_responds_name(Compiler *c, int k, const int *roots, int u, const char *nm,
                                         Buf *pub, Buf *priv) {
-  if (k >= 0 && (comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_reader_in_chain(c, k, nm, NULL) ||
+  if (k >= 0 && (call_answers(c, -1, k, nm, 0, NULL) ||
                  comp_is_undeffed_in_chain(c, k, nm))) return;
   /* the first root that defines it answers (Object over Kernel) */
   for (int v = 0; v < u; v++) {

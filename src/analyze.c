@@ -4426,7 +4426,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   for (int i = 0; i < nn; i++) {
     if (comp_method_index(c, names[i]) >= 0) continue;
     for (int k = 0; k < c->nclasses; k++) {
-      if (ie_poly_class_ok(c, k) && comp_class_answers(c, k, names[i])) { ask[nask++] = i; break; }
+      if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) { ask[nask++] = i; break; }
     }
   }
   /* A body that makes no such call but reads or writes ivars on its self
@@ -4451,7 +4451,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   for (int k = 0; k < c->nclasses && n < max; k++) {
     if (!ie_poly_class_ok(c, k) || comp_method_in_chain(c, k, name, NULL) >= 0) continue;
     int all = 1;
-    for (int i = 0; i < nask && all; i++) all = comp_class_answers(c, k, names[ask[i]]);
+    for (int i = 0; i < nask && all; i++) all = call_answers(c, -1, k, names[ask[i]], 0, NULL);
     for (int i = 0; i < niv && all; i++) all = comp_ivar_index(&c->classes[k], ivs[i]) >= 0;
     if (all) out[n++] = k;
   }
@@ -5000,8 +5000,8 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
   const char *names[64];
   int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, 0, 64) : 0;
   for (int i = 0; i < nn; i++)
-    for (int k = 0; k < c->nclasses && !comp_class_answers(c, cls, names[i]) && comp_method_index(c, names[i]) < 0; k++)
-      if (ie_poly_class_ok(c, k) && comp_class_answers(c, k, names[i])) return -1;
+    for (int k = 0; k < c->nclasses && !call_answers(c, -1, cls, names[i], 0, NULL) && comp_method_index(c, names[i]) < 0; k++)
+      if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) return -1;
   return cls < -1 && !arg && sp_streq(nm, "new") ? -1 : cls;
 }
 
@@ -11699,13 +11699,14 @@ static int desugar_builtin_method_obj(Compiler *c) {
     if (ty_is_object(rt)) {
       int ocid = ty_object_class(rt);
       int obj_accessor = 0;
-      if (ocid >= 0 && comp_method_in_chain(c, ocid, sym, NULL) < 0) {
+      if (ocid >= 0) {
         char basew[256];
-        if (setter_base_name(sym, basew, sizeof basew)) {
-          if (comp_writer_in_chain(c, ocid, basew, &owner_ci)) { obj_accessor = 1; binop = 1; }
-        }
-        else if (comp_reader_in_chain(c, ocid, sym, &owner_ci)) {
+        MethodLookup aml = { .def_class = -1 };
+        int wr = setter_base_name(sym, basew, sizeof basew);
+        if (call_attr_target(c, -1, ocid, wr ? basew : sym, wr ? CT_WRITER : 0, &aml)) {
           obj_accessor = 1;
+          owner_ci = aml.def_class;
+          if (wr) binop = 1;
         }
       }
       if (!obj_accessor) continue;                    /* real def / non-accessor: handled elsewhere */
@@ -17093,11 +17094,11 @@ static void oa_row_use(Compiler *c, OAS *sl, int S, int rd, const int *par, cons
 static const char *an_reader_ivar_name(Compiler *c, int call, const char *mname, int cls) {
   if (cls < 0 || !mname) return NULL;
   /* attr_reader is synthesized, so it has no scope to read a body out of:
-     comp_resolve_member is what knows the name is an attribute, and its
-     backing ivar is the name with an @ in front (see the attr_reader
-     backing-ivar rule). */
-  { int def_cls = -1, mix = -1;
-    if (comp_resolve_member(c, cls, mname, 0, &def_cls, &mix) == SP_MEMBER_ATTR) {
+     call_target is what knows the name is an attribute, and its backing
+     ivar is the name with an @ in front (see the attr_reader backing-ivar
+     rule). */
+  { MethodLookup ml = { .def_class = -1 };
+    if (call_attr_target(c, -1, cls, mname, 0, &ml)) {
       static char ivb[128];
       if (strlen(mname) < sizeof ivb - 2) {
         ivb[0] = '@'; strcpy(ivb + 1, mname);
@@ -18082,16 +18083,17 @@ int is_descendant(Compiler *c, int k, int anc);
    program spells one), killed every class's @b. The slot covers the ivar in
    every subclass, so a subclass's own `b` reaches it too. */
 static int oa_one_class_may_answer(Compiler *c, int ci, const char *name) {
-  if (comp_resolve_member(c, ci, name, 0, NULL, NULL) != SP_MEMBER_NONE) return 1;
+  MethodLookup ml = { .def_class = -1 };
+  if (call_answers(c, -1, ci, name, 0, &ml)) return 1;
   const char *rn = comp_resolve_alias(c, ci, name);
-  if (rn && !sp_streq(rn, name) && comp_resolve_member(c, ci, rn, 0, NULL, NULL) != SP_MEMBER_NONE) return 1;
+  if (rn && !sp_streq(rn, name) && (call_answers(c, -1, ci, rn, 0, &ml))) return 1;
   return comp_method_in_chain(c, ci, "method_missing", NULL) >= 0;
 }
 static int oa_class_may_answer(Compiler *c, int ci, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
     if ((k == ci || is_descendant(c, k, ci)) && oa_one_class_may_answer(c, k, name)) return 1;
   int oc = comp_core_class(c, CORE_OBJECT);
-  return oc >= 0 && oc != ci && comp_resolve_member(c, oc, name, 0, NULL, NULL) != SP_MEMBER_NONE;
+  return oc >= 0 && oc != ci && (call_answers(c, -1, oc, name, 0, NULL));
 }
 /* Can a call on the boxed value recv reach slot s: may the value be an
    instance of the class whose ivar or method s is, or of a class under it?
@@ -18951,10 +18953,11 @@ static int oa_fact_reader_class(Compiler *c, int id, int recv, const char *nm) {
   const ClsSet *s = recv >= 0 ? cls_fact_node(c, recv) : NULL;
   if (!s || s->all || s->os || (s->bv && builtin_method_known_any(nm))) return -1;
   int k = -1;
+  MethodLookup ml = { .def_class = -1 };
   for (int m = cls_set_next(s, -1); m >= 0; m = cls_set_next(s, m)) {
     if (m >= c->nclasses || !cls_fact_bounded(c, m)) return -1;
-    if (call_target(c, id, m, nm, 0, NULL) >= 0) return -1;
-    if (!comp_reader_in_chain(c, m, nm, NULL)) continue;
+    if (call_target(c, id, m, nm, 0, &ml) >= 0) return -1;
+    if (ml.kind != ML_ATTR) continue;
     if (k >= 0) return -1;
     k = m;
   }
@@ -19075,7 +19078,7 @@ static void oa_param_defaults(Compiler *c, OAS *sl, int n, const int *read_slot,
 }
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
-  int changed = 0;
+  int changed = 0; MethodLookup ml = { .def_class = -1 };
   /* Start every round from the same shape. A slot narrowed last round holds
      its pointer-array type, which would keep it out of the candidate list
      below and split its component; put it back on the poly array and let the
@@ -19404,7 +19407,7 @@ static int narrow_object_arrays(Compiler *c) {
       int rci = -1;
       if (recv >= 0) { TyKind rt = infer_type(c, recv); rci = ty_is_object(rt) ? ty_object_class(rt) : rt == TY_POLY || rt == TY_UNKNOWN ? oa_fact_reader_class(c, id, recv, nm) : -1; }
       else { Scope *sc = comp_scope_of(c, id); if (sc && !sc->is_cmethod) rci = sc->class_id; }
-      if (rci < 0 || !comp_reader_in_chain(c, rci, nm, NULL)) continue;
+      if (rci < 0 || !call_attr_target(c, -1, rci, nm, 0, &ml)) continue;
       int i = OA_IVSLOT(rci, ivn);
       /* the synthesized attr_reader only: an explicit `def x; @x; end` is a
          method with a return slot, reached through call_ret in step 4 */
@@ -19632,13 +19635,13 @@ static int narrow_object_arrays(Compiler *c) {
       else {
         TyKind ort = infer_type(c, recv);
         if (ty_is_object(ort)) {
-          oa_tmi = call_target(c, id, ty_object_class(ort), name, 0, NULL);
+          oa_tmi = call_target(c, id, ty_object_class(ort), name, 0, &ml);
           /* an attribute reader of the class is no method scope: the call
              reads the ivar, with no parameter to bind and no slot of its
              own, so it is no edge and no kill (`d.amount` on a Deal beside
              a class method `Fn.amount`, whose parameter the name's kill
              took, #10700) */
-          if (oa_tmi < 0 && argc == 0 && comp_reader_in_chain(c, ty_object_class(ort), name, NULL)) continue;
+          if (oa_tmi < 0 && argc == 0 && ml.kind == ML_ATTR) continue;
         }
         else if (ort == TY_POLY || ort == TY_UNKNOWN || ort == TY_NIL) {
           /* An element of a slot is boxed only while the slot is: the
@@ -19868,12 +19871,12 @@ static int narrow_object_arrays(Compiler *c) {
     for (int p = 0; p < npend; p++) {
       int r = oa_uf_find(sl, pend[p].slot), k = rcls[r];
       const char *pn = nt_str(nt, pend[p].id, "name");
-      tmis[p] = !rdead[r] && k >= 0 && k < c->nclasses ? call_target(c, pend[p].id, k, pn, 0, NULL) : -1;
+      tmis[p] = !rdead[r] && k >= 0 && k < c->nclasses ? call_target(c, pend[p].id, k, pn, 0, &ml) : -1;
       if (tmis[p] >= 0) pend[p].cls = k;
       /* an attribute reader of the element's class (as above): the call
          reads the element's ivar, a read of its slot that nothing vetted */
       else if (!rdead[r] && k >= 0 && k < c->nclasses && nt_ref(nt, pend[p].id, "arguments") < 0 &&
-               comp_reader_in_chain(c, k, pn, NULL)) { reads[p] = 1; pend[p].cls = k; }
+               ml.kind == ML_ATTR) { reads[p] = 1; pend[p].cls = k; }
     }
     for (int p = 0; p < npend; p++) {
       int id = pend[p].id, args = nt_ref(nt, id, "arguments"), argc = 0;
@@ -23549,12 +23552,13 @@ static const char *an_reader_ivar_of(Compiler *c, int node, int *defc,
   const char *mn = nt_str(nt, node, "name");
   if (!mn) return NULL;
   *defc = rcid;
-  if (comp_reader_in_chain(c, rcid, mn, defc)) {
+  MethodLookup ml = { .def_class = *defc };
+  int rmi = call_target(c, node, rcid, mn, 0, &ml);
+  if (rmi < 0 && ml.kind == ML_ATTR) {
+    *defc = ml.def_class;
     snprintf(buf, cap, "@%s", comp_resolve_alias(c, rcid, mn));
     return buf;
   }
-  MethodLookup ml = { .def_class = *defc };
-  int rmi = call_target(c, node, rcid, mn, 0, &ml);
   *defc = ml.def_class;
   if (rmi < 0) return NULL;
   int last2 = scope_body_last(c, rmi);
@@ -25817,12 +25821,11 @@ int cext_demand_reader(Compiler *c, int call) {
   char *ivar = malloc(size);
   if (!ivar) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   snprintf(ivar, size, "@%s", name);
+  MethodLookup ml = { .def_class = -1 };
   for (int k = 0; k < c->nclasses; k++) {
-    int owner = -1;
     if (cls_fact_excludes(c, recv, k) ||
-        comp_resolve_member(c, k, name, 0, NULL, NULL) != SP_MEMBER_ATTR ||
-        !comp_reader_in_chain(c, k, name, &owner)) continue;
-    changed |= strbuf_promote_ivar(c, owner, ivar);
+        !call_attr_target(c, -1, k, name, 0, &ml)) continue;
+    changed |= strbuf_promote_ivar(c, ml.def_class, ivar);
   }
   free(ivar);
   return changed;
@@ -29744,8 +29747,9 @@ static int param_borrow_attr_read(Compiler *c, int n) {
   const char *name = nt_str(nt, n, "name");
   if (argc != 0 || recv < 0 || !name || !ty_is_object(comp_ntype(c, recv))) return 0;
   int cid = ty_object_class(comp_ntype(c, recv)), defc = cid;
-  if (cid < 0 || cid >= c->nclasses || !comp_reader_in_chain(c, cid, name, &defc)) return 0;
-  if (call_target(c, n, cid, name, 0, NULL) >= 0) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  if (cid < 0 || cid >= c->nclasses || !call_attr_target(c, n, cid, name, 0, &ml)) return 0;
+  defc = ml.def_class;
   int nd = 0; const int *ds = comp_descendants(c, cid, &nd);
   for (int d = 0; d < nd && ds; d++)
     if (call_target(c, n, ds[d], name, CT_OWN, NULL) >= 0) return 0;
@@ -30178,11 +30182,12 @@ static int mark_reader_identity_operands(Compiler *c) {
       if (iv < 0 || !c->classes[defc].ivar_str_shared[iv]) continue;
       /* (not where the receiver's class answers the name with a def of a
          class other than the reader's, a subclass's over the reader) */
-      { int orv = nt_ref(nt, opnd, "receiver"), mdc = -1;
+      { int orv = nt_ref(nt, opnd, "receiver");
+        MethodLookup ml = { .def_class = -1 };
         TyKind ort = orv >= 0 ? comp_ntype(c, orv) : TY_UNKNOWN;
         int ocid = ty_is_object(ort) ? ty_object_class(ort) : -1;
         if (ocid >= 0 && ocid < c->nclasses &&
-            comp_resolve_member(c, ocid, nt_str(nt, opnd, "name"), 0, &mdc, NULL) == SP_MEMBER_METHOD && mdc != defc)
+            call_target(c, -1, ocid, nt_str(nt, opnd, "name"), 0, &ml) >= 0 && ml.def_class != defc)
           continue; }
       comp_set_strbuf_handle_demand(c, opnd, 1);
       changed = 1;
@@ -30355,21 +30360,22 @@ static const char *poly_recv_ivar(Compiler *c, int r, char *buf, size_t cap) {
      the defining class's either way, so the attribute each class reads is
      compared by the name its aliases resolve to. */
   const char *an = comp_resolve_alias(c, cid, nm);
-  int kind = SP_MEMBER_NONE, dc = -1, mi = -1;
+  int attr = 0, dc = -1, mi = -1;
   for (int j = 0; j < c->nclasses; j++) {
     int a = j;
     while (a >= 0 && a != cid) a = c->classes[a].parent;
     if (a != cid) continue;
-    int jd = -1, jm = -1;
-    int jk = comp_resolve_member(c, j, nm, 0, &jd, &jm);
-    if (jk == SP_MEMBER_NONE || jd < 0 || jd >= c->nclasses) return NULL;
-    if (j == cid) { kind = jk; dc = jd; mi = jm; }
-    else if (jk != kind || jd != dc || (jk == SP_MEMBER_METHOD && jm != mi) ||
-             (jk == SP_MEMBER_ATTR && !sp_streq(comp_resolve_alias(c, j, nm), an))) return NULL;
+    MethodLookup jml = { .def_class = -1 };
+    int jm = call_target(c, -1, j, nm, 0, &jml);
+    int jd = jml.def_class, jattr = jml.kind == ML_ATTR;
+    if ((jm < 0 && !jattr) || jd < 0 || jd >= c->nclasses) return NULL;
+    if (j == cid) { attr = jattr; dc = jd; mi = jm; }
+    else if (jattr != attr || jd != dc || (!jattr && jm != mi) ||
+             (jattr && !sp_streq(comp_resolve_alias(c, j, nm), an))) return NULL;
   }
-  if (kind == SP_MEMBER_NONE || c->classes[dc].is_struct || c->classes[dc].is_data || c->classes[dc].is_native_class)
+  if (dc < 0 || c->classes[dc].is_struct || c->classes[dc].is_data || c->classes[dc].is_native_class)
     return NULL;
-  if (kind == SP_MEMBER_ATTR)
+  if (attr)
     return snprintf(buf, cap, "@%s", an) < (int)cap ? buf : NULL;
   /* (a `return` elsewhere in the method answers another value) */
   if (mi < 0 || mi >= c->nscopes || comp_ret_first(c, mi) >= 0) return NULL;
@@ -30468,9 +30474,9 @@ static int poly_attr_place(Compiler *c, int call, const char *base, int want_wri
     if (!ty_is_object(t)) return -1;
     cid = ty_object_class(t);
   }
-  int dc = -1, mi = -1;
-  if (cid < 0 || comp_resolve_member(c, cid, base, want_write, &dc, &mi) != SP_MEMBER_ATTR || dc < 0) return -1;
-  return dc * 2;
+  MethodLookup ml = { .def_class = -1 };
+  if (cid < 0 || !call_attr_target(c, -1, cid, base, want_write ? CT_WRITER : 0, &ml) || ml.def_class < 0) return -1;
+  return ml.def_class * 2;
 }
 static void poly_store_app_build(Compiler *c, NodeKind rk, PolyStoreApp *t) {
   const NodeTable *nt = c->nt;
@@ -35227,8 +35233,9 @@ static int promote_ivar_handle_stores(Compiler *c) {
       const int *argv = al >= 0 ? nt_arr(nt, al, "arguments", &argc) : NULL;
       char base[256], ivn[258];
       if (argc != 1 || !setter_base_name(nm, base, sizeof base)) continue;
-      int defc = -1;
-      if (!comp_writer_in_chain(c, ty_object_class(rt), base, &defc) || defc < 0) continue;
+      MethodLookup wml = { .def_class = -1 };
+      if (!call_attr_target(c, -1, ty_object_class(rt), base, CT_WRITER, &wml) || wml.def_class < 0) continue;
+      int defc = wml.def_class;
       snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, defc, base));
       int iv = comp_ivar_index(&c->classes[defc], ivn);
       if (iv >= 0 && c->classes[defc].ivar_types[iv] == TY_STRBUF && c->classes[defc].ivar_str_shared[iv])
@@ -36534,7 +36541,7 @@ int file_stat_nil_call(Compiler *c, int v) {
   /* a boxed receiver: only where no class of the program answers the name
      (its dispatch is the IO's) */
   for (int k = 0; k < c->nclasses; k++)
-    if (call_target(c, v, k, nm, 0, NULL) >= 0 || comp_reader_in_chain(c, k, nm, NULL)) return 0;
+    if (call_answers(c, v, k, nm, 0, NULL)) return 0;
   return 1;
 }
 
@@ -36966,13 +36973,15 @@ static int object_call_ivar(Compiler *c, int call, ClassInfo **out, int *mi) {
     if (cs && cs->class_id >= 0 && !cs->is_cmethod) cid = cs->class_id;
   }
   if (cid < 0) return -1;
-  *mi = call_target(c, call, cid, nm, 0, NULL);
+  MethodLookup ml = { .def_class = -1 };
+  *mi = call_target(c, call, cid, nm, 0, &ml);
   if (*mi > 0) {
     int tail = scope_body_last(c, *mi);
     return tail >= 0 && nt_kind(nt, tail) == NK_InstanceVariableReadNode ?
            nullable_elem_ivar(c, tail, out) : -1;
   }
-  if (!comp_reader_in_chain(c, cid, nm, &defc) || defc < 0) {
+  defc = ml.def_class;
+  if (ml.kind != ML_ATTR || defc < 0) {
     /* a Struct / Data member's reader */
     ClassInfo *sci = NULL;
     int siv = struct_member_slot(c, cid, nm, &sci);
@@ -38716,7 +38725,7 @@ static int nn_pure_call(Compiler *c, int id) {
      its ivar and runs nothing */
   if (ty_is_object(rt) && nt_ref(nt, id, "arguments") < 0) {
     int k = ty_object_class(rt);
-    return comp_reader_in_chain(c, k, nm, NULL) && call_target(c, id, k, nm, 0, NULL) < 0;
+    return call_attr_target(c, id, k, nm, 0, NULL);
   }
   return 0;
 }
@@ -39963,9 +39972,9 @@ int nullable_int_value(Compiler *c, int v) {
            Float one some write left nil, or a Float one initialize need not
            assign. Asking only the Float once let `A.new(nil).x > 0` of an
            Integer ivar compare its nil as a number. */
-        int rdc = -1;
-        if (ty_is_object(rt) && comp_reader_in_chain(c, ty_object_class(rt), cn, &rdc)) {
-          int k = rdc >= 0 ? rdc : ty_object_class(rt);
+        MethodLookup rml = { .def_class = -1 };
+        if (ty_is_object(rt) && call_attr_target(c, -1, ty_object_class(rt), cn, 0, &rml)) {
+          int k = rml.def_class >= 0 ? rml.def_class : ty_object_class(rt);
           char ivb[300];
           snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, ty_object_class(rt), cn));
           int iv = comp_ivar_index(&c->classes[k], ivb);
@@ -40038,9 +40047,9 @@ int nullable_int_value(Compiler *c, int v) {
     if (rcv < 0 && cn) {
       Scope *cs = comp_scope_of(c, v);
       int scid = cs ? cs->class_id : -1;
-      int rdc = -1;
-      if (scid >= 0 && comp_reader_in_chain(c, scid, cn, &rdc)) {
-        int k = rdc >= 0 ? rdc : scid;
+      MethodLookup rml = { .def_class = -1 };
+      if (scid >= 0 && call_attr_target(c, -1, scid, cn, 0, &rml)) {
+        int k = rml.def_class >= 0 ? rml.def_class : scid;
         char ivb[300];
         snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, scid, cn));
         int iv = comp_ivar_index(&c->classes[k], ivb);
@@ -42052,7 +42061,7 @@ static int mark_with_kw_nullable(Compiler *c, int cid, const int *ke, int kn) {
   return changed;
 }
 static void mark_nullable_int_locals(Compiler *c) {
-  const NodeTable *nt = c->nt;
+  const NodeTable *nt = c->nt; MethodLookup ml = { .def_class = -1 };
   /* A scalar local a read can reach before any write starts as its nil and
      carries it (du_read_maybe_unset); the rounds below spread the mark */
   {
@@ -42496,13 +42505,13 @@ static void mark_nullable_int_locals(Compiler *c) {
             size_t wl = wn ? strlen(wn) : 0;
             TyKind rt = trc >= 0 ? infer_type(c, trc) : TY_UNKNOWN;
             if (!ty_is_object(rt) || wl < 2 || wl > 255) continue;
-            int cid = ty_object_class(rt), defc = -1;
+            int cid = ty_object_class(rt);
             char base[256];
             if (!setter_base_name(wn, base, sizeof base)) memcpy(base, wn, wl + 1);
-            if (comp_writer_in_chain(c, cid, base, &defc)) {
+            if (call_attr_target(c, -1, cid, base, CT_WRITER, &ml)) {
               char ivb[300];
               snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, cid, base));
-              ci = &c->classes[defc >= 0 ? defc : cid];
+              ci = &c->classes[ml.def_class >= 0 ? ml.def_class : cid];
               iv = comp_ivar_index(ci, ivb);
             }
             else iv = struct_member_slot(c, cid, base, &ci);
@@ -42534,12 +42543,12 @@ static void mark_nullable_int_locals(Compiler *c) {
       if (!setter_base_name(wn, base, sizeof base)) continue;
       TyKind rt = infer_type(c, recv);
       if (!ty_is_object(rt)) continue;
-      int cid = ty_object_class(rt), defc = -1;
+      int cid = ty_object_class(rt);
       ClassInfo *ci = NULL; int iv = -1;
-      if (comp_writer_in_chain(c, cid, base, &defc)) {
+      if (call_attr_target(c, -1, cid, base, CT_WRITER, &ml)) {
         char ivb[300];
         snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, cid, base));
-        ci = &c->classes[defc >= 0 ? defc : cid];
+        ci = &c->classes[ml.def_class >= 0 ? ml.def_class : cid];
         iv = comp_ivar_index(ci, ivb);
       }
       if (iv < 0 || !ci || ci->ivar_nullable_int[iv]) continue;
@@ -42564,12 +42573,11 @@ static void mark_nullable_int_locals(Compiler *c) {
          takes it, as `s[:x] = v` below does (#8769) */
       for (int cid = ty_is_object(rt) ? ty_object_class(rt) : 0; cid < c->nclasses; cid++) {
         if (ty_is_object(rt) && cid != ty_object_class(rt)) break;
-        int defc = -1;
         ClassInfo *ci = NULL; int iv = -1;
-        if (comp_writer_in_chain(c, cid, base, &defc)) {
+        if (call_attr_target(c, -1, cid, base, CT_WRITER, &ml)) {
           char ivb[300];
           snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, cid, base));
-          ci = &c->classes[defc >= 0 ? defc : cid];
+          ci = &c->classes[ml.def_class >= 0 ? ml.def_class : cid];
           iv = comp_ivar_index(ci, ivb);
         }
         else if (call_target(c, id, cid, wn, 0, NULL) < 0) iv = struct_member_slot(c, cid, base, &ci);
@@ -47167,8 +47175,7 @@ static void rewrite_array_subclass_self_call(Compiler *c, int id) {
   /* a method of the builtin's reopen is the builtin's, called on self boxed */
   MethodLookup ml = { .def_class = -1 };
   int ro = comp_arysub_reopen(c, k);
-  if ((call_target(c, id, k, nm, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) ||
-      comp_reader_in_chain(c, k, nm, NULL)) return;
+  if ((call_target(c, id, k, nm, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) || ml.kind == ML_ATTR) return;
   if (!comp_arysub_builtin_name(c, id, k, nm)) return;
   int self = arysub_node(c, "SelfNode", id);
   if (self >= 0) nt_node_set_ref((NodeTable *)c->nt, id, "receiver", self);
@@ -48364,7 +48371,7 @@ static void share_struct_aset_handles(Compiler *c) {
        whose arm boxes the handle (a String slot's arm takes the bytes) */
     if (boxed_member) snprintf(uiv, sizeof uiv, "@%s", ub);
     for (int k = 0; k < c->nclasses && boxed_member; k++) {
-      if (comp_resolve_member(c, k, ub, 1, NULL, NULL) != SP_MEMBER_ATTR) continue;
+      if (!call_attr_target(c, -1, k, ub, CT_WRITER, NULL)) continue;
       int m = c->classes[k].is_struct ? comp_member_index(&c->classes[k], uiv) : -1;
       boxed_member = m >= 0 && c->classes[k].ivar_types[m] == TY_POLY;
     }
@@ -55378,8 +55385,9 @@ static void an_phase_reconcile_check(Compiler *c) {
           if (ty_is_object(rt3) && ty_object_class(rt3) != ci3) continue;
           if (!ty_is_object(rt3) && rt3 != TY_POLY) break;
           if (!ty_is_object(rt3) && !c->classes[ci3].instantiated) continue;
-          int pdc3 = -1;
-          if (!comp_reader_in_chain(c, ci3, vnm, &pdc3)) continue;
+          MethodLookup pml3 = { .def_class = -1 };
+          if (!call_attr_target(c, -1, ci3, vnm, 0, &pml3)) continue;
+          int pdc3 = pml3.def_class;
           char ivn3[300]; snprintf(ivn3, sizeof ivn3, "@%s", comp_resolve_alias(c, pdc3, vnm));
           int ix3 = comp_ivar_index(&c->classes[pdc3], ivn3);
           if (ix3 < 0) continue;

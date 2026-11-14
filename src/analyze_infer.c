@@ -2415,7 +2415,7 @@ int an_object_methods_listable(Compiler *c, int cid, const char *name) {
   if (comp_method_in_chain(c, cid, name, NULL) >= 0) return 0;
   /* nor where it answers the name with a reader of its own: a Struct member
      or an attr named `methods` (#10345) */
-  if (comp_resolve_member(c, cid, name, 0, NULL, NULL) != SP_MEMBER_NONE) return 0;
+  if (call_answers(c, -1, cid, name, 0, NULL)) return 0;
   for (int k = cid, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     if (c->classes[k].is_native_class) return 0;
     if (c->classes[k].parent < 0 && !c->classes[k].is_struct) {
@@ -2859,8 +2859,7 @@ int an_bare_call_class_owned(Compiler *c, int id) {
   int cid = sc ? sc->class_id : -1;
   if (cid < 0 || cid >= c->nclasses) return 0;
   if (sc->is_cmethod) return call_target(c, id, cid, name, CT_CMETHOD, NULL) >= 0;
-  return call_target(c, id, cid, name, 0, NULL) >= 0 ||
-         comp_reader_in_chain(c, cid, name, NULL);
+  return call_answers(c, id, cid, name, 0, NULL);
 }
 
 static TyKind infer_call_inner(Compiler *c, int id);
@@ -6346,7 +6345,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
          so does a method the class defines itself, whose value is what its
          body answers -- `def dup = self.class.new(...)` answers boxed (#5461) */
       !(ty_is_object(rt) &&
-        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
+        (call_answers(c, -1, ty_object_class(rt), name, 0, NULL))) &&
       !(rt == TY_POLY && an_user_defines_method(c, name)) &&
       /* (nor where TrueClass or FalseClass defines it: the reopen rule below
          types each value's side, cplan_bool_sides) */
@@ -6585,8 +6584,10 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
         int cmi = call_target(c, id, self->class_id, name, CT_CMETHOD, NULL);
         if (cmi >= 0) { *out = an_self_call_ret(c, self, name, cmi, id); return 1; }
       }
-      { int rdcls2 = -1;
-        if (comp_reader_in_chain(c, self->class_id, name, &rdcls2)) {
+      { MethodLookup rml2 = { .def_class = -1 };
+        int rdcls2 = -1;
+        if (call_attr_target(c, -1, self->class_id, name, 0, &rml2)) {
+          rdcls2 = rml2.def_class;
           const char *rname2 = comp_resolve_alias(c, self->class_id, name);
           char ivn[256];
           snprintf(ivn, sizeof ivn, "@%s", rname2);
@@ -6940,7 +6941,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
          (#3794), and so does a member accessor: Struct.new(:members) reads
          the member, not the member names -- mirrors the same guard in the
          emitter */
-      comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_NONE) {
+      !call_answers(c, -1, ty_object_class(rt), name, 0, NULL)) {
     ClassInfo *sc = &c->classes[ty_object_class(rt)];
     if (sp_streq(name, "with") && sc->is_data) { *out = rt; return 1; }  /* copy-update returns the same type */
     if (sp_streq(name, "to_a") || sp_streq(name, "values") ||
@@ -7359,7 +7360,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
      Integer here split the two halves and the build stopped (#4190). */
   if ((sp_streq(name, "object_id") || sp_streq(name, "__id__")) && recv >= 0 && argc == 0) {
     if (ty_is_object(rt) &&
-        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_ATTR)
+        call_attr_target(c, -1, ty_object_class(rt), name, 0, NULL))
       { /* fall through to the member-read rule below */ }
     else { *out = TY_INT; return 1; }
   }
@@ -9078,7 +9079,7 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
   for (int i = 0; i < n; i++) {
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 0;
+    if (call_answers(c, -1, k, name, 0, NULL)) return 0;
     if (an_object_methods_listable(c, k, name)) any = 1;
   }
   return any;
@@ -9451,11 +9452,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
          override, so the type must hold each of their returns. Answering
          the base's declared return alone typed `@snap = attributes` a
          Hash where the switch answered sp_RbVal (#4600). */
-      /* a reader nearer than the def it overrides answers instead, as the
-         emitted read does (the implicit-self arm below types it) (#7303) */
-      if (omi >= 0 && !osc->is_cmethod && ocls >= 0 &&
-          comp_resolve_member(c, ocls, name, 0, NULL, NULL) == SP_MEMBER_ATTR)
-        omi = -1;
+      /* (a reader nearer than the def it overrides answers instead, as the
+         emitted read does: call_target gives no scope there, #7303) */
       if (omi >= 0 && omi < c->nscopes && !c->scopes[omi].yields && osc)
         return an_self_call_ret(c, osc, name, omi, id);
     }
@@ -9798,7 +9796,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   /* nil receiver: type inference for NilClass methods */
   if (recv >= 0 && sp_streq(name, "display") && argc == 0 &&
       !(ty_is_object(rt) &&
-        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
+        (call_answers(c, -1, ty_object_class(rt), name, 0, NULL))) &&
       !(rt == TY_POLY && an_user_defines_method(c, name)))
     return TY_NIL;
   if (recv >= 0 && sp_streq(name, "instance_variable_defined?") && argc == 1 &&
@@ -10979,14 +10977,15 @@ static TyKind infer_conditional_attr_write(Compiler *c, int id) {
        neither need be the backing ivar's type (`def v=(x); @v = x * 10; end`
        stores an Integer while the expression answers what was assigned).
        Unify the two arms, the way the emitter does (#4148). */
-    int rmi2 = -1, wmi2 = -1;
-    int rk2 = comp_resolve_member(c, cid2, attr, 0, NULL, &rmi2);
-    int wk2 = comp_resolve_member(c, cid2, attr, 1, NULL, &wmi2);
-    if (rk2 == SP_MEMBER_METHOD || wk2 == SP_MEMBER_METHOD) {
+    MethodLookup rml = { .def_class = -1 }, wml = { .def_class = -1 };
+    /* (each half as the version live at this write: the node is asked) */
+    int rmi2 = call_target(c, id, cid2, attr, 0, &rml);
+    int wmi2 = call_target(c, id, cid2, attr, CT_WRITER, &wml);
+    if (rmi2 >= 0 || wmi2 >= 0) {
       int v3 = nt_ref(nt, id, "value");
       TyKind at = v3 >= 0 ? infer_type(c, v3) : TY_UNKNOWN;
-      TyKind rr = (rk2 == SP_MEMBER_METHOD && rmi2 >= 0) ? (TyKind)c->scopes[rmi2].ret : TY_UNKNOWN;
-      if (rk2 == SP_MEMBER_ATTR) {
+      TyKind rr = rmi2 >= 0 ? (TyKind)c->scopes[rmi2].ret : TY_UNKNOWN;
+      if (rml.kind == ML_ATTR) {
         char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", attr);
         int iv = comp_ivar_index(&c->classes[cid2], ivn);
         if (iv >= 0) rr = ivar_value_ty(&c->classes[cid2], iv);

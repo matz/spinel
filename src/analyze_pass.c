@@ -1890,7 +1890,7 @@ typedef struct { TyRef slot; unsigned char local, reader; int cid, iv; } AliasSi
    member's setter), or any send or instance_variable_set may. */
 static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
   static const char *const dyn[] = { "send", "public_send", "__send__", "instance_variable_set", NULL };
-  if (comp_resolve_member(c, cls, ivn + 1, 1, NULL, NULL) == SP_MEMBER_NONE) return 0;
+  if (!call_answers(c, -1, cls, ivn + 1, CT_WRITER, NULL)) return 0;
   char setter[300];
   snprintf(setter, sizeof setter, "%s=", ivn + 1);
   /* a call of the writer's name whose receiver may be an object of the
@@ -1921,8 +1921,10 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
      parameter (ivar_writes_fresh) */
   if (nt_kind(c->nt, n) == NK_CallNode) {
     const char *ivn = NULL;
-    int cls = ivar_src_slot(c, n, &ivn), dc = -1;
-    if (cls < 0 || comp_resolve_member(c, cls, ivn + 1, 0, &dc, NULL) != SP_MEMBER_ATTR || dc < 0) return 0;
+    int cls = ivar_src_slot(c, n, &ivn);
+    MethodLookup rml = { .def_class = -1 };
+    if (cls < 0 || !call_attr_target(c, -1, cls, ivn + 1, 0, &rml) || rml.def_class < 0) return 0;
+    int dc = rml.def_class;
     ClassInfo *ci = &c->classes[dc];
     int iv = comp_ivar_index(ci, ivn);
     /* a Struct member of a Struct with no initialize of its own is set by
@@ -2574,26 +2576,18 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
       }
       else {
         MethodLookup ml = { .def_class = -1 };
-        int rdef = -1;
         mi = call_target(c, call, from, mname, 0, &ml);
-        int rd = comp_reader_in_chain(c, from, mname, &rdef);
-        /* a class carries its parent's readers as its own, so a method there
-           over an inherited reader is the override, not a tie */
-        int pdef = ml.def_class >= 0 ? c->classes[ml.def_class].parent : -1;
-        int over = mi >= 0 && rd && ml.def_class == rdef && pdef >= 0 &&
-                   comp_reader_in_chain(c, pdef, mname, NULL);
-        if (mi >= 0 && (!rd || over || (ml.def_class != rdef && is_descendant(c, ml.def_class, rdef)))) {
+        if (mi >= 0) {
           defcls = ml.def_class;
           niv = getter_exit_ivars(c, mi, ivs, 8);
         }
-        else if (rd && (mi < 0 || (ml.def_class != rdef && is_descendant(c, rdef, ml.def_class)))) {
+        else if (ml.kind == ML_ATTR) {
           snprintf(rbuf, sizeof rbuf, "@%s", comp_resolve_alias(c, from, mname));
-          defcls = rdef;
+          defcls = ml.def_class;
           ivs[0] = rbuf;
           niv = 1;
           break;
         }
-        else mi = -1;
       }
       if (mi < 0 || niv > 0 || defcls < 0) break;
       if (!is_bare_super(c, scope_body_last(c, mi))) break;
@@ -2630,8 +2624,8 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
 /* Does class `k` itself define the instance getter `mname`, as a method or
    an attr_reader (not one it inherits)? */
 static int class_owns_getter(Compiler *c, int k, const char *mname) {
-  int kd = -1;
-  if (comp_reader_in_chain(c, k, mname, &kd)) return kd == k;
+  MethodLookup ml = { .def_class = -1 };
+  if (call_attr_target(c, -1, k, mname, 0, &ml)) return ml.def_class == k;
   return comp_method_in_class(c, k, mname) >= 0;
 }
 
@@ -3124,16 +3118,16 @@ static int masgn_attr_take(Compiler *c, int tgt, TyKind elem) {
   if (rt != TY_POLY && only < 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (only >= 0 && k != only && !is_descendant(c, k, only)) continue;
-    int wdc = -1;
-    int wmi = call_target(c, tgt, k, nm, 0, NULL);
+    MethodLookup wml = { .def_class = -1 };
+    int wmi = call_target(c, tgt, k, nm, 0, &wml);
     if (wmi >= 0) {
       Scope *ws = &c->scopes[wmi];
       LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;
       if (wp) changed |= slot_take(c, wp, elem, -1);
       continue;
     }
-    if (!comp_writer_in_chain(c, k, base, &wdc)) continue;
-    int wcls = wdc >= 0 ? wdc : k, iv = comp_ivar_index(&c->classes[wcls], ivn);
+    if (!call_attr_target(c, tgt, k, base, CT_WRITER, &wml)) continue;
+    int wcls = wml.def_class >= 0 ? wml.def_class : k, iv = comp_ivar_index(&c->classes[wcls], ivn);
     if (iv < 0 || class_ivar_pinned(&c->classes[wcls], ivn)) continue;
     TyKind mg = ty_unify(c->classes[wcls].ivar_types[iv], elem);
     if (mg != c->classes[wcls].ivar_types[iv]) { ivar_set_type(&c->classes[wcls], iv, mg); changed = 1; }
@@ -4460,7 +4454,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
                 if (last < 0 || nt_kind(nt, last) != NK_InstanceVariableReadNode) continue;
                 ivn = nt_str(nt, last, "name");
               }
-              else if (comp_reader_in_chain(c, k, mname, &kd)) {
+              else if (ml.kind == ML_ATTR) {
                 snprintf(rbuf, sizeof rbuf, "@%s", mname);
                 ivn = rbuf;
               }
@@ -7373,8 +7367,7 @@ int ivar_src_slot(Compiler *c, int v, const char **ivn) {
     TyKind rt = infer_type(c, r);
     if (ty_is_object(rt)) cls = ty_object_class(rt);
   }
-  int def_cls = -1, mix = -1;
-  if (cls < 0 || comp_resolve_member(c, cls, nm, 0, &def_cls, &mix) != SP_MEMBER_ATTR) return -1;
+  if (cls < 0 || !call_attr_target(c, -1, cls, nm, 0, NULL)) return -1;
   ivb[0] = '@'; strcpy(ivb + 1, nm);
   *ivn = ivb;
   return cls;
@@ -7624,9 +7617,8 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   if (icls >= 0) {
     ClassInfo *ci = &c->classes[icls];
     int ivi = comp_ivar_index(ci, ivn);
-    int wdc = -1, wmi = -1;
     if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap ||
-        comp_resolve_member(c, icls, ivn + 1, 1, &wdc, &wmi) == SP_MEMBER_ATTR ||
+        (call_attr_target(c, -1, icls, ivn + 1, CT_WRITER, NULL)) ||
         !ivar_writes_fresh(c, icls, ivn, 0, NULL)) return 0;
     if (!apply) return 1;
     int ch = 0;
@@ -11308,9 +11300,8 @@ static int infer_conditional_writer_param(Compiler *c, int id) {
   if (recv < 0 || val < 0 || !name) return 0;
   TyKind rt = infer_type(c, recv);
   if (!ty_is_object(rt)) return 0;
-  int mi = -1;
-  if (comp_resolve_member(c, ty_object_class(rt), name, 1, NULL, &mi) != SP_MEMBER_METHOD || mi < 0)
-    return 0;
+  int mi = call_target(c, id, ty_object_class(rt), name, CT_WRITER, NULL);
+  if (mi < 0) return 0;
   Scope *ws = &c->scopes[mi];
   LocalVar *pv = ws->nparams > 0 && ws->pnames[0] ? scope_local(ws, ws->pnames[0]) : NULL;
   if (!pv || pv->rbs_seeded) return 0;
@@ -14215,7 +14206,7 @@ static int struct_to_h_with_block(Compiler *c, int id) {
   if (!nm || !sp_streq(nm, "to_h") || recv < 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
   TyKind rt = infer_type(c, recv);
   if (!ty_is_object(rt) || !c->classes[ty_object_class(rt)].is_struct) return 0;
-  return comp_resolve_member(c, ty_object_class(rt), nm, 0, NULL, NULL) == SP_MEMBER_NONE;
+  return !call_answers(c, -1, ty_object_class(rt), nm, 0, NULL);
 }
 
 /* A CallNode at the source position of `like`. */
@@ -19581,18 +19572,17 @@ static int scope_tail_unresolved_call(Compiler *c, int s) {
      user class defining the same name is not a candidate here (the receiver is
      statically a String / Integer / ...), and treating it as one put the
      method back to void as soon as any library happened to share the name. */
-  { const char *bn = rt == TY_STRING || rt == TY_STRBUF ? "String"
+  { MethodLookup ml = { .def_class = -1 };
+    const char *bn = rt == TY_STRING || rt == TY_STRBUF ? "String"
                    : rt == TY_INT || rt == TY_BIGINT ? "Integer"
                    : rt == TY_FLOAT ? "Float"
                    : rt == TY_SYMBOL ? "Symbol" : NULL;
     if (bn) {
       int bc = comp_builtin_class_named(c, bn);
-      if (bc >= 0 && (call_target(c, last, bc, nm, 0, NULL) >= 0 ||
-                      comp_reader_in_chain(c, bc, nm, NULL))) return 0;
+      if (bc >= 0 && (call_answers(c, last, bc, nm, 0, &ml))) return 0;
     }
     int oc = comp_core_class(c, CORE_OBJECT);
-    if (oc >= 0 && (call_target(c, last, oc, nm, 0, NULL) >= 0 ||
-                    comp_reader_in_chain(c, oc, nm, NULL))) return 0;
+    if (oc >= 0 && (call_answers(c, last, oc, nm, 0, &ml))) return 0;
   }
   return 1;
 }
@@ -20919,7 +20909,7 @@ static void cr_mark_version(Compiler *c, int id, const char *nm, int k, unsigned
   if (nt_kind(c->nt, id) == NK_CallNode && is_method_object_maker(nt_str(c->nt, id, "name"))) flags |= CT_CAPTURE;
   int mi = call_target(c, id, k, nm, flags, NULL);
   char mark[24];
-  if (mi < 0 || (c->scopes[mi].attr_version && cplan_sg_slot_call(c, id, k, nm))) return;
+  if (mi < 0 || cplan_sg_slot_call(c, id, k, nm, mi)) return;
   snprintf(mark, sizeof mark, "\x01%d", mi);
   cr_add_name(m->out, m->n, m->cap, mark);
 }
@@ -21231,7 +21221,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     int k = cn ? const_node_class_index(c, r) : -1;
     int mi = k >= 0 ? call_target(c, id, k, nm, CT_CMETHOD, NULL) : -1;
     /* (a call the plan compiles to the accessor's slot reaches nothing) */
-    if (mi >= 0 && c->scopes[mi].attr_version && cplan_sg_slot_call(c, id, k, nm)) names[0] = NULL;
+    if (cplan_sg_slot_call(c, id, k, nm, mi)) names[0] = NULL;
     else if (mi >= 0) { snprintf(resolved, sizeof resolved, "\x01%d", mi); names[0] = resolved; }
   }
   /* a call on main that finds main's own method reaches that one, not an

@@ -48,7 +48,6 @@ src/compiler.c comp_method_overridden which subclasses override the name
 src/compiler.c comp_name_answered which classes answer the name
 src/compiler.c comp_name_responder which classes answer the name
 src/compiler.c comp_name_writer_any which classes answer the name
-src/compiler.c comp_class_answers which classes answer the name
 src/compiler.c comp_native_answer_class which classes answer the name
 src/compiler.c comp_native_binding_class which classes answer the name
 src/compiler.c comp_poly_arm_defines which classes answer the name
@@ -262,7 +261,6 @@ src/compiler.c chain_lookup the chain walk itself
 src/compiler.c cls_user_display_mi a class's method of the name
 src/compiler.c comp_arysub_name_is_array a class's method of the name
 src/compiler.c comp_builtin_kind_reopen_mi a class's method of the name
-src/compiler.c comp_resolve_member a class's method of the name
 
 # the plan check: an independent check of resolution, so it asks the tables
 # by name what resolution should have found rather than asking call_target
@@ -309,6 +307,7 @@ src/call_plan.c pr_prep_body the class's body a prepended module's method displa
 src/call_plan.c module_defines a module's own definition of a listed name
 src/call_plan.c module_listable a name a module's list asks
 src/call_plan.c module_own a module's own definition of a listed name
+src/call_plan.c ct_member comp_method_in_chain the table's method of the name, which call_target ranks an attribute against (the plan's own table answer, not a call's target)
 src/compiler.c comp_time_reopen_defines whether the program's reopen of Time defines a name, so a Time subclass's call of it is not taken for Time's in-place conversion or copy
 src/analyze.c rms_builtin_receiver whether a fold's receiver class defines reduce/inject itself, so the fold is the builtin's
 src/codegen_call.c class_value_builtin_answers whether a reopened Class or Module defines a Module method's name, so the builtin answers a class value

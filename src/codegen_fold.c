@@ -13233,8 +13233,9 @@ int reader_override_arms(Compiler *c, int id, int cid, const char *name, TyKind 
    for a shared-mutable String slot, whose read is a copy the dispatch's
    default arm does not make. */
 TyKind reader_override_ty(Compiler *c, int id, int cid, const char *name) {
-  int rdc = -1;
-  if (!comp_reader_in_chain(c, cid, name, &rdc)) return TY_UNKNOWN;
+  MethodLookup ml = { .def_class = -1 };
+  if (!call_attr_target(c, -1, cid, name, 0, &ml)) return TY_UNKNOWN;
+  int rdc = ml.def_class;
   /* an alias of a reader: a def of the ORIGINAL name in a subclass does not
      override the alias, and comp_method_in_chain would follow the alias to it */
   { const char *al = comp_resolve_alias(c, cid, name);

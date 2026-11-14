@@ -1427,7 +1427,7 @@ int poly_exc_cand(Compiler *c, const char *name) {
   int nxs = 0;
   const int *xs = comp_exc_subclasses(c, &nxs);
   for (int i = 0; i < nxs; i++)
-    if (comp_class_answers(c, xs[i], name)) return 1;
+    if (call_answers(c, -1, xs[i], name, 0, NULL)) return 1;
   return 0;
 }
 
@@ -1670,7 +1670,7 @@ void emit_poly_dispatch_key(Compiler *c, int tv, int key_guard, int prim_cand, i
 static int poly_key_reopen(Compiler *c, int cls, const char *nm) {
   int idx = comp_core_class(c, cls);
   if (idx < 0 || !nm) return idx;
-  return comp_class_answers(c, idx, nm) ? idx : -1;
+  return call_answers(c, -1, idx, nm, 0, NULL) ? idx : -1;
 }
 /* The dispatch key, with a boxed exception of a class that has no method of
    its own for pick_name (when given) re-keyed to the builtin exception
@@ -1710,7 +1710,7 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
       buf_printf(b, ") && (_k%d == 0x7fffffff", kt);
       for (int k = 0; k < c->nclasses; k++) {
         if (!class_has_exc_name(c, k) && !class_is_exc_subclass(c, k)) continue;
-        if (comp_class_answers(c, k, pick_name)) continue;
+        if (call_answers(c, -1, k, pick_name, 0, NULL)) continue;
         buf_printf(b, " || _k%d == %d", kt, k);
       }
       buf_puts(b, ")) { ");
@@ -3049,7 +3049,7 @@ int poly_name_cmethod_claimed(Compiler *c, const char *name) {
    down for it themselves. */
 int exc_subclass_defines(Compiler *c, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
-    if (class_is_exc_subclass(c, k) && comp_class_answers(c, k, name)) return 1;
+    if (class_is_exc_subclass(c, k) && call_answers(c, -1, k, name, 0, NULL)) return 1;
   return 0;
 }
 
@@ -3115,7 +3115,7 @@ int native_class_defines(Compiler *c, const char *name) {
    reader)? The only program definition a typed String receiver can reach. */
 int string_reopen_defines(Compiler *c, int id, const char *name) {
   int si = comp_core_class(c, CORE_STRING);
-  return si >= 0 && (call_target(c, id, si, name, 0, NULL) >= 0 || comp_reader_in_chain(c, si, name, NULL));
+  return si >= 0 && call_answers(c, id, si, name, 0, NULL);
 }
 
 static int user_defines_or_reads_walk(Compiler *c, const char *name) {
@@ -16935,8 +16935,7 @@ int obj_member_shadows(Compiler *c, TyKind rt, const char *nm) {
   if (!ty_is_object(rt)) return 0;
   int cid = ty_object_class(rt);
   if (cid < 0 || cid >= c->nclasses) return 0;
-  return comp_reader_in_chain(c, cid, nm, NULL) ||
-         comp_method_in_chain(c, cid, nm, NULL) >= 0;
+  return call_answers(c, -1, cid, nm, 0, NULL);
 }
 
 /* The unified `<=>` return type across a Comparable class and its descendants,
@@ -17034,8 +17033,9 @@ static int eq_empty_array_literal(Compiler *c, int n) {
 /* a class whose instances compare with something other than Object#==: its
    own ==, a <=> (Comparable#== answers by it), or a native class's == */
 static int eq_class_has_own_eq(Compiler *c, int cid) {
-  return comp_resolve_member(c, cid, "==", 0, NULL, NULL) != SP_MEMBER_NONE ||
-         comp_resolve_member(c, cid, "<=>", 0, NULL, NULL) != SP_MEMBER_NONE ||
+  MethodLookup ml = { .def_class = -1 };
+  return call_answers(c, -1, cid, "==", 0, &ml) ||
+         call_answers(c, -1, cid, "<=>", 0, &ml) ||
          (c->classes[cid].is_native_class && comp_native_method_find(c, cid, "==", 1, 0) >= 0);
 }
 /* Comparable#== on a class with a `<=>` and no `==`: `(a <=> b) == 0`, but
@@ -17280,13 +17280,14 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
   TyKind rt = recv >= 0 ? rr.as_ty : TY_UNKNOWN;
   Repr a0r = repr_of(c, argc >= 1 ? argv[0] : -1);
   TyKind a0 = argc >= 1 ? a0r.as_ty : TY_UNKNOWN;
+  MethodLookup ml = { .def_class = -1 };
   /* Object#equal? is pointer identity and is never overridden, so a plain user
      object (e.g. a package's Set) answers it even with no user-defined method
      (#2629). A pointer-backed arg compares by address; anything else (a scalar,
      or a value-type object with no stable identity) is never the same object. */
   if (argc == 1 && sp_streq(name, "equal?") && recv >= 0 && ty_is_object(rt) &&
       !comp_ty_value_obj(c, rt) &&
-      comp_resolve_member(c, ty_object_class(rt), "equal?", 0, NULL, NULL) == SP_MEMBER_NONE) {
+      !call_answers(c, -1, ty_object_class(rt), "equal?", 0, &ml)) {
     if (ty_is_object(a0) && !comp_ty_value_obj(c, a0)) {
       buf_puts(b, "((void *)("); emit_expr(c, recv, b); buf_puts(b, ") == (void *)(");
       emit_expr(c, argv[0], b); buf_puts(b, "))");
@@ -17599,7 +17600,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       int ra = ty_is_array(rt) || ty_is_obj_array(rt) || eq_empty_array_literal(c, recv);
       int aa = ty_is_array(a0) || ty_is_obj_array(a0) || eq_empty_array_literal(c, argv[0]);
       if ((ra && ty_is_object(a0) &&
-           comp_resolve_member(c, ty_object_class(a0), "to_ary", 0, NULL, NULL) == SP_MEMBER_NONE) ||
+           !call_answers(c, -1, ty_object_class(a0), "to_ary", 0, &ml)) ||
           (aa && ty_is_object(rt) && !eq_class_has_own_eq(c, ty_object_class(rt)))) {
         buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (");
         emit_expr_for_effect(c, argv[0], b); buf_printf(b, "), %d)", eq ? 0 : 1);
@@ -21637,8 +21638,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     int ecls = esc ? esc->class_id : -1;
     if (ecls >= 0 && ecls < c->nclasses &&
         (esc->is_cmethod ? call_target(c, id, ecls, name, CT_CMETHOD, NULL) >= 0
-                         : call_target(c, id, ecls, name, 0, NULL) >= 0 ||
-                           comp_reader_in_chain(c, ecls, name, NULL)))
+                         : call_answers(c, id, ecls, name, 0, NULL)))
       return 0;
     if (call_target(c, id, -1, name, CT_TOP, NULL) >= 0 ||
         reopened_owns(c, id, "Kernel", name) || reopened_owns(c, id, "Object", name)) return 0;
@@ -21665,8 +21665,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       if (call_target(c, id, uc, name, CT_CMETHOD, NULL) >= 0 ||
           comp_is_sg_reader(&c->classes[uc], name) || singleton_def_of(c, cn, name) ||
           (mod && singleton_def_of(c, cn, "extend self") &&
-           (call_target(c, id, uc, name, 0, NULL) >= 0 ||
-            comp_reader_in_chain(c, uc, name, NULL))))
+           (call_answers(c, id, uc, name, 0, NULL))))
         return 0;
       if (c->classes[uc].is_struct) cn = "StructClass";
       else if (c->classes[uc].is_data) cn = "DataClass";
@@ -21719,8 +21718,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     if (!bcn && ty_is_object(rt)) {
       int ocid = ty_object_class(rt);
       if (ocid >= 0 && ocid < c->nclasses &&
-          call_target(c, id, ocid, name, 0, NULL) < 0 &&
-          !comp_reader_in_chain(c, ocid, name, NULL) &&
+          !call_answers(c, id, ocid, name, 0, NULL) &&
           !comp_writer_in_chain(c, ocid, name, NULL))
         bcn = c->classes[ocid].is_native_class ? c->classes[ocid].name
             : c->classes[ocid].is_struct ? "Struct"
@@ -26087,9 +26085,9 @@ int call_is_field_read(Compiler *c, int id, int *allocates) {
   if (!ty_is_object(rt)) return 0;
   int cid = ty_object_class(rt);
   if (cid < 0 || cid >= c->nclasses || c->classes[cid].is_native_class) return 0;
-  int rdc = -1, mdc = -1;
-  if (!comp_reader_in_chain(c, cid, nm, &rdc)) return 0;
-  if (comp_resolve_member(c, cid, nm, 0, &mdc, NULL) != SP_MEMBER_ATTR) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  if (!call_attr_target(c, -1, cid, nm, 0, &ml)) return 0;
+  int rdc = ml.def_class;
   /* a read that dispatches on the runtime class is a call */
   if (!comp_ty_value_obj(c, rt) && reader_override_ty(c, id, cid, nm) != TY_UNKNOWN) return 0;
   char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, cid, nm));
@@ -27616,7 +27614,7 @@ static void emit_reopen_primitive_call_o(Compiler *c, int id, int ci, int mi, in
 
 static int format_method_is_own(Compiler *c, int cls, const char *nm) {
   int ci = comp_core_class(c, cls);
-  return ci >= 0 && (comp_method_in_chain(c, ci, nm, NULL) >= 0 || comp_reader_in_chain(c, ci, nm, NULL));
+  return ci >= 0 && (call_answers(c, -1, ci, nm, 0, NULL));
 }
 /* Is the format read out of a slot that a variable, a constant or self
    holds: an attr_reader's or a Struct member's field, an Array's element by
@@ -27916,7 +27914,7 @@ int ivar_nil_recv_guard(Compiler *c, int id, int *recv_out) {
     /* a user object slot: only a method of its class, as for a param */
     if (rr.kind == RK_VOBJ) return 0;
     int ocid = ty_object_class(rt);
-    if (call_target(c, id, ocid, nm, 0, NULL) < 0 && !comp_reader_in_chain(c, ocid, nm, NULL))
+    if (!call_answers(c, id, ocid, nm, 0, NULL))
       return 0;
   }
   else if (!ty_is_array(rt) && !ty_is_hash(rt) && rt != TY_STRING) return 0;
@@ -27939,7 +27937,7 @@ int ivar_nil_recv_guard(Compiler *c, int id, int *recv_out) {
   if (!g_debug && !(rr.may_nil && cplan_nil_written(nil_fact_why(c, recv)))) {
     if (!ivar_only_memo_written(c, ivn)) return 0;
     /* an attribute writer fills it from outside */
-    if (comp_resolve_member(c, cid, ivn + 1, 1, NULL, NULL) == SP_MEMBER_ATTR) return 0;
+    if (call_attr_target(c, -1, cid, ivn + 1, CT_WRITER, NULL)) return 0;
   }
   *recv_out = recv;
   return 1;
@@ -28729,12 +28727,13 @@ static void nil_target_recv_text(Compiler *c, int r, const char *rtext, Buf *b) 
    receiver as the method it names? */
 static int class_answers_name(Compiler *c, int call, int k, const char *name) {
   if (!name) return 0;
+  MethodLookup ml = { .def_class = -1 };
   if (call_target(c, call, k, name, 0, NULL) >= 0) return 1;
-  if (comp_resolve_member(c, k, name, 0, NULL, NULL) != SP_MEMBER_NONE) return 1;
+  if (call_answers(c, -1, k, name, 0, &ml)) return 1;
   int builtin = 0;
   const char *tn = comp_resolve_alias_ex(c, k, name, NULL, &builtin);
   return !builtin && !sp_streq(tn, name) &&
-         (call_target(c, call, k, tn, 0, NULL) >= 0 || comp_resolve_member(c, k, tn, 0, NULL, NULL) != SP_MEMBER_NONE);
+         (call_target(c, call, k, tn, 0, NULL) >= 0 || call_answers(c, -1, k, tn, 0, &ml));
 }
 /* Call id in value position with nil's answer beside it: the receiver and
    the arguments held in Ruby's order, then the answer for a NULL receiver
@@ -31683,8 +31682,7 @@ int bare_call_class_owned(Compiler *c, int id) {
           : (g_emitting_class_id >= 0) ? g_emitting_class_id : sc->class_id;
   if (cid < 0 || cid >= c->nclasses) return 0;
   if (sc->is_cmethod) return call_target(c, id, cid, name, CT_CMETHOD, NULL) >= 0;
-  return call_target(c, id, cid, name, 0, NULL) >= 0 ||
-         comp_reader_in_chain(c, cid, name, NULL);
+  return call_answers(c, id, cid, name, 0, NULL);
 }
 
 /* A receiverless call to a builtin reopen's OWN method (`def present? =
@@ -31735,14 +31733,9 @@ int implicit_self_reader_cid(Compiler *c, int id) {
   int dispatch_cid = (g_ie_class_id >= 0) ? g_ie_class_id
                    : (g_emitting_class_id >= 0) ? g_emitting_class_id : self->class_id;
   if (dispatch_cid < 0) return -1;
-  MethodLookup ml = { .def_class = -1 };
-  int rd_cls = -1;
-  if (!comp_reader_in_chain(c, dispatch_cid, name, &rd_cls)) return -1;
-  /* a def in the reader's class or below it overrides the reader: `def start`
-     in a class that includes a module's `attr_reader :start` */
-  if (call_target(c, id, dispatch_cid, name, 0, &ml) >= 0 &&
-      (ml.def_class == rd_cls || is_descendant(c, ml.def_class, rd_cls)))
-    return -1;
+  /* (a def in the reader's class or below it overrides the reader: `def start`
+     in a class that includes a module's `attr_reader :start`; the plan ranks them) */
+  if (!call_attr_target(c, id, dispatch_cid, name, 0, NULL)) return -1;
   return dispatch_cid;
 }
 
@@ -35901,7 +35894,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
       if (argsr >= 0) nt_arr(nt0, argsr, "arguments", &acr);
       TyKind rt0 = comp_ntype(c, recv0);
       if (acr == 0 && ty_is_object(rt0) &&
-          comp_resolve_member(c, ty_object_class(rt0), nm0, 0, NULL, NULL) == SP_MEMBER_ATTR) {
+          call_attr_target(c, -1, ty_object_class(rt0), nm0, 0, NULL)) {
         if (emit_or_take_back(c, id, b, emit_value_recv_call)) return;
       }
     }

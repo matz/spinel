@@ -3946,12 +3946,13 @@ static int strbuf_bang_self_local_at(const Compiler *c, int v) {
    that also holds nil or another class), so its read is an sp_RbVal that
    holds the handle? */
 static int strbuf_reader_field_boxed(Compiler *c, int n) {
-  int recv = nt_ref(c->nt, n, "receiver"), cid, defc = -1;
+  int recv = nt_ref(c->nt, n, "receiver"), cid;
+  MethodLookup ml = { .def_class = -1 };
   const char *name = nt_str(c->nt, n, "name");
   if (recv < 0 || !name || nt_ref(c->nt, n, "arguments") >= 0) return 0;
   TyKind rt = comp_ntype(c, recv);
-  if (!ty_is_object(rt) || !comp_reader_in_chain(c, (cid = ty_object_class(rt)), name, &defc)) return 0;
-  if (comp_method_in_chain(c, cid, name, NULL) >= 0) return 0;
+  if (!ty_is_object(rt) || !call_attr_target(c, -1, (cid = ty_object_class(rt)), name, 0, &ml)) return 0;
+  int defc = ml.def_class;
   char ivn[300];
   snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, cid, name));
   ClassInfo *ci = &c->classes[defc >= 0 ? defc : cid];

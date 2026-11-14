@@ -1148,7 +1148,13 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
    on NilClass, Object, Kernel or BasicObject (-1 for none; 0 when an undef
    hides it). include_all is 1 or 0 when known, -1 when only the run time
    knows it: a private method then gives 2 (the include_all decides). */
-int cplan_nil_program_responds(Compiler *c, const char *name, int include_all);
+int cplan_nil_program_responds(Compiler *c, int call, const char *name, int include_all);
+/* The visibility (SP_VIS_*) of main's top-level def `name`, Object's method,
+   where call `call` runs, as the root lookup has it (cplan_root_method): a
+   def is private until a word makes it public. -1 where the program has no
+   such def, or the record cannot tell. The question of the reflection readers
+   (respond_to?). */
+int cplan_top_def_vis(Compiler *c, int call, const char *name);
 /* The program's method CRuby's lookup of `name` on an instance of
    builtin class cls reaches first at the roots (NilClass, Numeric,
    Object -- a top-level def is Object's from where it runs, and the later

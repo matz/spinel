@@ -23877,7 +23877,10 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
   int at_main = top_priv && (vrecv < 0 || plain);
   if (vnm && vcid < 0 && vrecv >= 0 && !at_main) return emit_cmethod_vis_refusal(c, id, vrecv, vnm, b);
   if (!vnm || (vcid < 0 && !at_main)) return 0;
-  int vis = top_priv ? SP_VIS_PRIVATE
+  /* (main's def is private until a word makes it open, as the root lookup has it at the call; where it cannot tell, private) */
+  int top_vis = -1;
+  if (top_priv) cplan_root_method(c, id, core_class_name(CORE_OBJECT), vnm, &top_vis);
+  int vis = top_priv ? (top_vis >= 0 ? top_vis : SP_VIS_PRIVATE)
           : plain ? method_vis_for_caller(c, id, vcid, vnm)
                   : cplan_method_vis(c, id, vcid, vnm, 0, NULL);
   if (vis == SP_VIS_PUBLIC) return 0;
@@ -34660,6 +34663,8 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
     int bv = rt == TY_BOOL, rv = -1;
     const int cores[2] = { bv ? CORE_TRUECLASS : builtin_class_of_type(rt) ? core_of_type(rt) : -1, bv ? CORE_FALSECLASS : -1 };
     if (cores[0] >= 0) rv = root_reopen_method_vis(c, -1, qm);
+    /* ...or by the top level's def, Object's method from where it runs */
+    if (cores[0] >= 0 && rv < 0 && !builtin_method_known(core_class_name(cores[0]), qm)) rv = cplan_top_def_vis(c, id, qm);
     for (int i = 0; i < 2 && rv >= 0 && cores[i] >= 0; i++) {
       int bci = comp_core_class(c, cores[i]);
       if (builtin_method_known(core_class_name(cores[i]), qm) ||
@@ -34892,6 +34897,12 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
           resolved = 1; yes = a;
         }
       }
+      /* main's own top-level def answers by its visibility where the call runs (public, or any
+         with a true include_all) */
+      else if (ss && foldable && !(c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0) &&
+               cplan_top_def_vis(c, id, qm) >= 0) {
+        resolved = 1; yes = cplan_top_def_vis(c, id, qm) == SP_VIS_PUBLIC || include_all;
+      }
       /* in a class body, self is the class object: as in a class method
          (`ruby2_keywords(:m) if respond_to?(:ruby2_keywords, true)`) */
       else if (ss && c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0) {
@@ -34947,13 +34958,13 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
    NilClass, Object, Kernel or BasicObject (*prog set), a public one or any
    one with a true include_all (2: a private one where only the run time
    knows the include_all); else by its builtin surface */
-int nil_responds_static(Compiler *c, const char *qm, int argc, const int *argv, int *prog) {
+int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int *argv, int *prog) {
   int ia = 0;
   if (argc == 2) {
     NodeKind k = nt_kind(c->nt, argv[1]);
     ia = k == NK_TrueNode ? 1 : k == NK_FalseNode || k == NK_NilNode ? 0 : -1;
   }
-  int r = argc <= 2 ? cplan_nil_program_responds(c, qm, ia) : -1;
+  int r = argc <= 2 ? cplan_nil_program_responds(c, id, qm, ia) : -1;
   *prog = r >= 0;
   return r >= 0 ? r : nil_answers_name(qm) || sp_streq(qm, "rationalize");
 }
@@ -34980,7 +34991,7 @@ int static_respond_to_cond(Compiler *c, int pred) {
   int ans = respond_to_static_answer(c, pred, recv, rt, qm, ac, av);
   /* a heap object slot may hold nil, which answers only its own surface:
      the branch is not folded where the answer turns on that */
-  int nil_prog = 0, nil_too = nil_responds_static(c, qm, ac, av, &nil_prog);
+  int nil_prog = 0, nil_too = nil_responds_static(c, pred, qm, ac, av, &nil_prog);
   if (ans >= 0 && g_rto_nil_obj && ans != nil_too) return -1;
   /* a String, Integer or Float that may be nil, where nil answers
      otherwise by a method of the program's: not folded */

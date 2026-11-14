@@ -785,9 +785,10 @@ static int emit_boxed_responds_builtin_absent(Compiler *c, int recv, const char 
 
 /* respond_to?, method_defined? and its kin, const_set / const_get / const_defined? */
 /* The visibility of qm's method on the first of Object (a top-level def
-   is a private Object method), Kernel and BasicObject that defines it;
+   is a private Object method until a word makes it public, as the root
+   lookup has it at call id), Kernel and BasicObject that defines it;
    -1 when an undef on Object hides it */
-static int root_method_vis(Compiler *c, const char *qm) {
+static int root_method_vis(Compiler *c, int id, const char *qm) {
   static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   char wbase[256];
   int is_wr = setter_base_name(qm, wbase, sizeof wbase);
@@ -798,7 +799,10 @@ static int root_method_vis(Compiler *c, const char *qm) {
     if (k >= 0 && (comp_method_in_class(c, k, qm) >= 0 || comp_is_reader(&c->classes[k], qm) ||
                    (is_wr && comp_is_writer(&c->classes[k], wbase))))
       return comp_method_vis_declared(c, k, qm, NULL);
-    if (roots[i] == CORE_OBJECT && call_target(c, -1, -1, qm, CT_TOP, NULL) >= 0) return SP_VIS_PRIVATE;
+    if (roots[i] == CORE_OBJECT && call_target(c, -1, -1, qm, CT_TOP, NULL) >= 0) {
+      int tv = cplan_top_def_vis(c, id, qm);
+      return tv >= 0 ? tv : SP_VIS_PRIVATE;
+    }
   }
   return SP_VIS_PUBLIC;
 }
@@ -864,8 +868,8 @@ static int flag_split_root_only(Compiler *c, const char *qm) {
 }
 /* the answer nil gives in a nil-able slot's nil arm: `_ia<ia>` the
    run-time include_all, 0 for none */
-static void emit_nil_side_answer(Compiler *c, const char *qm, int argc, const int *argv, int ia, Buf *b) {
-  int nil_prog, nil_too = nil_responds_static(c, qm, argc, argv, &nil_prog);
+static void emit_nil_side_answer(Compiler *c, int id, const char *qm, int argc, const int *argv, int ia, Buf *b) {
+  int nil_prog, nil_too = nil_responds_static(c, id, qm, argc, argv, &nil_prog);
   if (ia && nil_too == 2) buf_printf(b, "_ia%d", ia);
   else if (nil_prog) buf_printf(b, "%d", nil_too);
   else {
@@ -922,7 +926,7 @@ static int emit_respond_to_flag_split(Compiler *c, int id, int recv, TyKind rt, 
     if (num) emit_slot_truthy(rt, ref, b);
     else buf_printf(b, "%s != NULL", ref);
     buf_printf(b, " ? (_ia%d ? %d : %d) : ", t, an[1], an[0]);
-    emit_nil_side_answer(c, qm, argc, argv, t, b);
+    emit_nil_side_answer(c, id, qm, argc, argv, t, b);
   } else buf_printf(b, "(_ia%d ? %d : %d)", t, an[1], an[0]);
   buf_puts(b, "; })");
   if (boxed) buf_puts(b, ")");
@@ -986,7 +990,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
     if (qm) {
       int ans = respond_to_static_answer(c, id, recv, rt, qm, argc, argv);
-      int nil_prog, nil_too = nil_responds_static(c, qm, argc, argv, &nil_prog);
+      int nil_prog, nil_too = nil_responds_static(c, id, qm, argc, argv, &nil_prog);
       /* (a String slot that may hold nil holds it as NULL, as an object's) */
       int nil_str = ans >= 0 && !g_rto_nil_obj && recv >= 0 && nil_prog &&
                     (rt == TY_STRING || rt == TY_STRBUF) && repr_of(c, recv).may_nil;
@@ -1014,7 +1018,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (ia) { buf_printf(b, "int _ia%d = ", ia); emit_cond(c, argv[1], b); buf_puts(b, "; "); }
         emit_slot_truthy(rt, ref, b);
         buf_printf(b, " ? %d : ", ans);
-        emit_nil_side_answer(c, qm, argc, argv, ia, b);
+        emit_nil_side_answer(c, id, qm, argc, argv, ia, b);
         buf_puts(b, "; })");
         return 1;
       }
@@ -1081,11 +1085,21 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
       if (recv >= 0) {
         if (0) { }
+        /* a public top-level def is Object's public method: every value a boxed receiver may hold
+           answers it (no class of the program has one of the name) */
+        else if ((rt == TY_POLY || rt == TY_UNKNOWN) && !any_class_responds(c, qm) &&
+                 cplan_top_def_vis(c, id, qm) == SP_VIS_PUBLIC) {
+          int boxed = repr_of(c, id).kind == RK_BOXED;
+          buf_puts(b, boxed ? "sp_box_bool(((void)(" : "(((void)(");
+          emit_expr_for_effect(c, recv, b);
+          buf_puts(b, "), 1))");
+          return 1;
+        }
         else if ((rt == TY_CLASS && class_value_responds(c, 0, qm, NULL)) ||
                  ((rt == TY_POLY || rt == TY_UNKNOWN) && !any_class_responds(c, qm))) {
           /* a nil the poly value holds answers by the program's NilClass
              (Object, Kernel) where it defines, undefines or hides the name */
-          int nil_prog = 0, nil_ans = rt == TY_CLASS ? 0 : nil_responds_static(c, qm, argc, argv, &nil_prog);
+          int nil_prog = 0, nil_ans = rt == TY_CLASS ? 0 : nil_responds_static(c, id, qm, argc, argv, &nil_prog);
           /* (an include_all only the run time knows, which a private name
              of the program's NilClass, Object or Kernel answers by: read once) */
           NodeKind iak = argc >= 2 ? nt_kind(nt, argv[1]) : NK_TrueNode;
@@ -1101,7 +1115,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             if (ia_once) { buf_printf(b, "int _ia%d = ", tv); emit_cond(c, argv[1], b); buf_puts(b, "; "); }
             if (nil_arm) {
               buf_printf(b, "_t%d.tag == SP_TAG_NIL ? (sp_bool)(", tv);
-              emit_nil_side_answer(c, qm, argc, argv, ia_once ? tv : 0, b);
+              emit_nil_side_answer(c, id, qm, argc, argv, ia_once ? tv : 0, b);
               buf_puts(b, ") : ");
             }
             buf_printf(b, "sp_poly_responds_builtin(_t%d", tv);
@@ -1139,10 +1153,10 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           /* a nil the value holds answers by the program's NilClass (Object,
              Kernel) where it defines, undefines or hides the name: the
              builtin surface below does not know a private or undefined one */
-          { int nil_prog = 0, nil_ans = nil_responds_static(c, qm, argc, argv, &nil_prog);
+          { int nil_prog = 0, nil_ans = nil_responds_static(c, id, qm, argc, argv, &nil_prog);
             if (nil_prog && (nil_ans != 2 || ia_once)) {
               buf_printf(b, "_t%d.tag == SP_TAG_NIL ? (sp_bool)(", tv);
-              emit_nil_side_answer(c, qm, argc, argv, ia_once ? tv : 0, b);
+              emit_nil_side_answer(c, id, qm, argc, argv, ia_once ? tv : 0, b);
               buf_puts(b, ") : ");
             } }
           buf_puts(b, "(");
@@ -1228,7 +1242,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
              BasicObject that defines it: a private one only to a true
              include_all. A class with its own term above answers by it. */
           if (root_seen) {
-            int vis = root_method_vis(c, qm);
+            int vis = root_method_vis(c, id, qm);
             buf_printf(b, "%s(", first ? "" : " || ");
             if (vis < 0) buf_puts(b, "0");
             else if (vis == SP_VIS_PUBLIC) buf_puts(b, "1");

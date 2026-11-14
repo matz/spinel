@@ -1090,6 +1090,13 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
         }
     }
     cplan_resolve_poly(c, id, name, p, pcs, npc);
+    /* no class of the program answers, and no builtin class below Object
+       (whose method a value of it reaches first): every value is Object's,
+       and the top level's def is open to the call */
+    if (p->mi < 0 && !builtin_name_below_object(name)) {
+      int tm = cplan_root_top_def(c, id, name, core_class_name(CORE_OBJECT));
+      if (tm >= 0) cplan_set(p, tm, -1, UC_REOPEN, CP_DIRECT);
+    }
     return;
   }
   /* a reopening of the exception classes that defines the name stands for
@@ -8490,6 +8497,13 @@ int cplan_root_closed(Compiler *c, int id, int *vis) {
   return mi;
 }
 
+/* See call_plan.h. */
+int cplan_top_def_vis(Compiler *c, int call, const char *name) {
+  if (!name || call_target(c, -1, -1, name, CT_TOP, NULL) < 0) return -1;
+  int v = -1, mi = cplan_root_method(c, call, core_class_name(CORE_OBJECT), name, &v);
+  return mi >= 0 && c->scopes[mi].class_id < 0 ? v : -1;
+}
+
 int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcls) {
   int v, mi = cplan_root_method(c, call, core_class_name(CORE_NILCLASS), name, &v);
   int k = mi >= 0 ? c->scopes[mi].class_id : -1;
@@ -8498,11 +8512,12 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
 }
 
 /* nil's answer to respond_to?(name) by a method of the program's: the
-   first of NilClass, Object (a top-level def is a private Object method),
+   first of NilClass, Object (a top-level def is a private Object method
+   until a word at the call makes it public),
    Kernel and BasicObject that defines it answers, true when that method is
    public or include_all is set (a literal `true` 2nd argument); -1 when
    none of them defines it. */
-int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
+int cplan_nil_program_responds(Compiler *c, int call, const char *name, int include_all) {
   static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   /* an undef on NilClass or Object (above the first definer) hides the
      lower owners' method */
@@ -8517,7 +8532,7 @@ int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
     int k = comp_core_class(c, owners[i]);
     if (k < 0 || call_target(c, -1, k, name, 0, NULL) < 0) {
       if (owners[i] == CORE_OBJECT && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0)
-        return ia;
+        return cplan_top_def_vis(c, call, name) == SP_VIS_PUBLIC ? 1 : ia;
       continue;
     }
     return comp_method_vis_declared(c, k, name, NULL) == SP_VIS_PUBLIC ? 1 : ia;

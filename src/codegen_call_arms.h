@@ -145,7 +145,7 @@ int method_hidden_from_reflection(Compiler *c, int cid, const char *m);
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m);
 int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv);
 /* nil's static answer to respond_to?(qm, ...); *prog: by a method of the program's */
-int nil_responds_static(Compiler *c, const char *qm, int argc, const int *argv, int *prog);
+int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int *argv, int *prog);
 /* respond_to? call id (its argc arguments argv, asking qm) of a class's own
    class method whose answer the version cells hold (cplan_cmethod_presence):
    one of the versions' cells, or what the class answers with none of them,

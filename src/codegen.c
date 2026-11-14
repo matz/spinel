@@ -4834,7 +4834,6 @@ static int method_inline_hint(Compiler *c, Scope *s) {
 static unsigned char *g_fi_state = NULL;   /* 0 unknown, 1 forced, 2 not */
 static int g_fi_nscopes = 0;
 static const NodeTable *g_fi_nt = NULL;
-static int g_fi_ntcount = 0;
 
 /* The scopes by name, each chain in ascending scope order: fi_callees is asked
    for every call of every body the cycle check walks, recursively, and a scan
@@ -5306,10 +5305,11 @@ static void fi_build(Compiler *c) {
   fi_memo_reset(1);
   free(g_fi_state);
   g_fi_state = (unsigned char *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), 1);
-  g_fi_nscopes = c->nscopes; g_fi_nt = nt; g_fi_ntcount = nt->count;
-  if (!g_fi_state) return;
+  g_fi_nscopes = c->nscopes; g_fi_nt = nt;
+  if (!g_fi_state) { fi_memo_reset(0); return; }
   unsigned char *cand = (unsigned char *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), 1);
-  if (!cand) return;
+  /* no state rather than an all-zero one, so the next ask builds again */
+  if (!cand) { free(g_fi_state); g_fi_state = NULL; fi_memo_reset(0); return; }
   int ncand = 0;
   for (int si = 0; si < c->nscopes; si++) {
     Scope *m = &c->scopes[si];
@@ -5559,7 +5559,15 @@ static int method_inline_force(Compiler *c, Scope *s) {
   if (!g_inline_hot) return 0;
   if (g_debug || g_incremental) return 0;
   const NodeTable *nt = c->nt;
-  if (g_fi_nt != nt || g_fi_ntcount != nt->count || g_fi_nscopes != c->nscopes || !g_fi_state)
+  /* One set per program, fixed at the first ask: the prototypes'. It used to
+     be rebuilt whenever the node table grew, and emitting the C grows it all
+     along (the call a generic builtin entry is written from, bi_generic_fn,
+     a refused method's raise body, deferred_raise_body): Campfire's 10,252
+     scopes rebuilt it 177 times. Those nodes count toward the hint's totals,
+     so a later build could answer differently and leave a definition
+     disagreeing with its own prototype. Now every definition agrees with its
+     prototype; only a new table or a new scope count asks again. */
+  if (g_fi_nt != nt || g_fi_nscopes != c->nscopes || !g_fi_state)
     fi_build(c);
   if (!g_fi_state) return 0;
   int si = (int)(s - c->scopes);

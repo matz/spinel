@@ -42,7 +42,9 @@ is a user guarantee.
   published when it goes idle, a collection counts it as parked without
   waking it, and it parks for real only if it wakes while one is running.
   The same is true of a worker inside an `ffi_func` declared `blocking: true`
-  (see [FFI.md](FFI.md)).
+  (see [FFI.md](FFI.md)). The green threads that share that worker wait for
+  the call to return: a thread stays for life on the worker it first ran on,
+  and no other worker runs it.
 - **Preemption.** A monitor thread timeslices CPU-bound threads (~10 ms
   quantum, `RUBY_THREAD_TIMESLICE`) so a thread that loops without yielding
   cannot starve its siblings.

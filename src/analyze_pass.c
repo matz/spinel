@@ -19554,6 +19554,17 @@ static int scope_tail_unresolved_call(Compiler *c, int s) {
   if (recv < 0) return 0;
   TyKind lt = infer_type(c, last);
   if (lt != TY_VOID && lt != TY_UNKNOWN) return 0;
+  /* While the guesses are held at bottom, an argument not typed yet can
+     still give a builtin's answer its type: `1.0 / i` in a method no call
+     has bound `i` of yet is a Float division, not a call nothing resolves.
+     Typed POLY for that round, the return reached its callers, and where a
+     caller hands the value back as an argument (`u = [h(u)]`, `@v = f(@u)`)
+     the parameter, which only widens, kept the whole loop boxed. */
+  if (g_infer_optimistic) {
+    int la = nt_ref(nt, last, "arguments"), lac = 0;
+    const int *lav = la >= 0 ? nt_arr(nt, la, "arguments", &lac) : NULL;
+    for (int k = 0; k < lac; k++) if (infer_type(c, lav[k]) == TY_UNKNOWN) return 0;
+  }
   /* A builtin-typed receiver: the name is either one of that type's methods
      (and would have a type) or nothing at all. An object/poly/unknown receiver
      is not decided here -- the fixpoint may still settle it. */

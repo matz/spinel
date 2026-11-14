@@ -447,6 +447,13 @@ int is_load_path_write(const char *n) {
   return is_array_push_family(n) || is_concat_name(n);
 }
 
+/* The names whose call on a boxed receiver is written as Object's own
+   builtin (the receiver's identity, hash key or instance variables)
+   rather than as a dispatch over the classes that define the name
+   (emit_call_identity_arms, emit_poly_ivar_list). */
+int is_poly_object_surface_name(const char *n) {
+  return sp_streq(n, "hash") || sp_streq(n, "object_id") || sp_streq(n, "__id__") || sp_streq(n, "instance_variables");
+}
 /* A call whose answer tells an object from a copy of it: its identity, or
    whether it is frozen (a copy of a String later frozen is not). */
 int is_identity_query(const char *n) {

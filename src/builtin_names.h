@@ -125,6 +125,7 @@ int is_quantifier_or_count(const char *n);  /* all? any? none? one? count: is_qu
 int is_array_self_mutator0(const char *n);   /* push append unshift: a bare call answering the Array itself */
 int is_push_unshift(const char *n);   /* << push append unshift: is_push_alias's names and unshift */
 int is_load_path_write(const char *n); /* << push append unshift prepend concat: the calls that add to $LOAD_PATH */
+int is_poly_object_surface_name(const char *n); /* hash object_id __id__ instance_variables: a boxed receiver's call is emitted as Object's builtin, whatever a reopened builtin defines */
 int is_identity_query(const char *n); /* equal? object_id __id__ frozen?: tells an object from its copy */
 int is_len_alias(const char *n);      /* length size */
 int is_length_spelling(const char *n); /* size count empty? */

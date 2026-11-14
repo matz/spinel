@@ -3319,6 +3319,15 @@ int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int n
   return n;
 }
 
+/* The class key of arm k of a send split's plan that the split's test takes
+   (-1: none): a class of the program's, and a reopened builtin's unless the
+   call is one the builtin's own emission answers (PPF_SURFACE). */
+static int split_arm_key(Compiler *c, const PolyPlan *arms, int k, int surface) {
+  int key = arms->arm[k].key;
+  if (key < 0 || key >= c->nclasses) return -1;
+  return surface && class_is_builtin_reopen(c, key) ? -1 : key;
+}
+
 int emit_send_blind(Compiler *c, int id, Buf *b) {
   if (nt_str(c->nt, id, "send_blind")) {
     const CallPlan plan = cplan_user(c, id);
@@ -3339,41 +3348,32 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
         int sv_argov = g_n_argov;
         view_bind_temp(srcv, tv);
         if (sav && sac > 0) emit_args_in_source_order(c, sav, sac, g_pre);
-        buf_printf(b, "(((_t%d.tag == SP_TAG_OBJ && (0", tv);
+        /* The values the dispatch's arms take are the ones whose key (the
+           switch's, emit_poly_plan_key) is an arm's: a program object by
+           its class id, a value of a builtin the program reopens (`class
+           Integer; def m`) by the class its key names, the reopening's or
+           Numeric's. The test reads that key, so no value reaches the
+           dispatch that no arm takes (a Rational beside a Numeric
+           reopening), and none that one takes goes to the top-level def. */
+        /* (with no class arm, no value takes it: the key is not read) */
         const PolyPlan arms = cplan_poly_arms(c, id);
-        /* (a reopened Object, Kernel or BasicObject stays a class-id test:
-           its methods are every value's, a top-level def among them) */
-        int nre = 0;
-        for (int k = 0; k < arms.n; k++) {
-          int key = arms.arm[k].key;
-          if (key < 0 || key >= c->nclasses) continue;
-          if (!class_is_builtin_reopen(c, key) || is_object_root(c->classes[key].name))
-            buf_printf(b, " || _t%d.cls_id == %d", tv, key);
-          else if (cls_fact_may_hold_builtin(c, srcv, builtin_core_class_slot(c->classes[key].name))) nre++;
+        /* (a name the builtin emission of Object's surface answers, ahead of
+           the dispatch, ignores a reopened builtin's method: that arm is no
+           emission of the call, so its values stay where they went) */
+        int surface = (arms.flags & PPF_SURFACE) != 0;
+        int nkeys = 0;
+        for (int k = 0; k < arms.n; k++) nkeys += split_arm_key(c, &arms, k, surface) >= 0;
+        if (nkeys) {
+          int kt = ++g_tmp;
+          buf_printf(b, "((({ int _t%d = ", kt);
+          emit_poly_plan_key(c, arms.flags & ~PPF_SEEN, tv, nt_str(c->nt, id, "name"), b);
+          buf_printf(b, "; (0");
+          for (int k = 0; k < arms.n; k++)
+            if (split_arm_key(c, &arms, k, surface) >= 0)
+              buf_printf(b, " || _t%d == %d", kt, arms.arm[k].key);
+          buf_puts(b, "); })");
         }
-        buf_puts(b, "))");
-        /* a builtin class the program reopens (`class Integer; def m`) has
-           its arm too: a value of it carries no class id of the program's,
-           so the runtime ancestry answers (a program object is tested by
-           its class id above) */
-        if (nre) {
-          char tvn[24];
-          snprintf(tvn, sizeof tvn, "_t%d", tv);
-          buf_printf(b, " || (!(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id >= 0) && (0", tv, tv);
-          for (int k = 0; k < arms.n; k++) {
-            int key = arms.arm[k].key;
-            if (key >= 0 && key < c->nclasses && class_is_builtin_reopen(c, key) &&
-                !is_object_root(c->classes[key].name) &&
-                cls_fact_may_hold_builtin(c, srcv, builtin_core_class_slot(c->classes[key].name))) {
-              buf_puts(b, " || ");
-              /* (a reopened Integer's arm takes a machine integer for self:
-                 a Bignum reaches the top-level def, as it did) */
-              if (key == comp_core_class(c, CORE_INTEGER)) buf_printf(b, "%s.tag == SP_TAG_INT", tvn);
-              else if (!emit_poly_isa_test(c, c->classes[key].name, tvn, 0, b)) buf_puts(b, "0");
-            }
-          }
-          buf_puts(b, "))");
-        }
+        else buf_puts(b, "(((0)");
         /* a builtin value whose class below Object answers the name
            (Integer#to_s) takes the dispatch too: its method comes before
            the top-level def */

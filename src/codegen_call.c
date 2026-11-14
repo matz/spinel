@@ -1663,6 +1663,11 @@ static void emit_poly_dispatch_key_top(Compiler *c, int tv, int key_guard, int p
 void emit_poly_dispatch_key(Compiler *c, int tv, int key_guard, int prim_cand, int exc_cand, Buf *b) {
   emit_poly_dispatch_key_top(c, tv, key_guard, prim_cand, exc_cand, NULL, b);
 }
+/* See codegen_call_arms.h. */
+void emit_poly_plan_key(Compiler *c, unsigned form, int tv, const char *name, Buf *b) {
+  emit_poly_dispatch_key_top(c, tv, (form & (PPF_KEY_CLS0 | PPF_KEY_CLSV)) != 0, (form & PPF_KEY_PRIM) != 0,
+                             (form & PPF_KEY_EXC) != 0, name, b);
+}
 
 /* The reopening of builtin `cls` an OBJ box of it keys to in a dispatch of
    `nm`: the program's class, when it has the method (or the dispatch is
@@ -11008,8 +11013,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* a genuine String in a slot whose name a user class owns (#4816) */
       emit_poly_str_prearm(c, id, recv, name, 0, NULL, NULL, NULL, ret, tv, tr, b);
       buf_puts(b, "switch (");
-      emit_poly_dispatch_key_top(c, tv, (form & (PPF_KEY_CLS0 | PPF_KEY_CLSV)) != 0, (form & PPF_KEY_PRIM) != 0,
-                                  (form & PPF_KEY_EXC) != 0, name, b);
+      emit_poly_plan_key(c, form, tv, name, b);
       buf_puts(b, ") {");
       if (g_plan_check) pa_resume(pa_frame0);
       if (g_plan_check) pa_flags(form);
@@ -11459,8 +11463,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* where this switch starts, so its end can tell whether any arm below
          wrote the `default:` label (see the builtin default at the close) */
       size_t sw_start = b->len;
-      emit_poly_dispatch_key_top(c, tv, (form & (PPF_KEY_CLS0 | PPF_KEY_CLSV)) != 0, (form & PPF_KEY_PRIM) != 0,
-                                  (form & PPF_KEY_EXC) != 0, name, b);
+      emit_poly_plan_key(c, form, tv, name, b);
       buf_puts(b, ") {");
       if (g_plan_check) pa_resume(pa_frame);
       if (g_plan_check) pa_flags(form);

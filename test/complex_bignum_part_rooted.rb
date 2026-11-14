@@ -20,3 +20,10 @@ x = [2**64, "s"].first
 p x == c
 p c == x
 p [Complex(3, 0), "s"].first == 3
+# A Rational == / != / === a typed Complex boxes both sides: each is rooted
+# while the other is made.
+r = 3r
+p r == c
+p r != c
+p r === c
+p Rational(6, 2) == Complex(3, 0)

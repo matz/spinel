@@ -6923,6 +6923,16 @@ static SP_UNUSED sp_bool sp_complex_eql(const sp_Complex *x, const sp_Complex *y
 static SP_UNUSED sp_RbVal sp_complex_re_box(sp_Complex z) {
   return sp_complex_comp_v(z.re, z.fl & SP_CPLX_RE_F);
 }
+/* Rational == Complex (the typed operator rows): the Complex's real part
+   against the Rational when the imaginary part is 0. A real part past
+   2**63 is a new Bignum and the boxed Rational is a new object: both are
+   rooted, since the second allocation can collect the first. */
+static SP_UNUSED sp_bool sp_rational_eq_complex(sp_Rational q, sp_Complex z) {
+  if (z.im != 0) return FALSE;
+  sp_RbVal re = sp_complex_re_box(z); SP_GC_ROOT_RBVAL(re);
+  sp_RbVal qv = sp_box_rational(q); SP_GC_ROOT_RBVAL(qv);
+  return sp_poly_eq(qv, re);
+}
 static SP_NOINLINE sp_bool sp_poly_eq_slow(sp_RbVal a, sp_RbVal b) {
   /* a user class's own == answers before any builtin reading, the way its
      other operators now do; the field-wise hook below stays the default for

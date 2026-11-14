@@ -119,6 +119,38 @@ sp_Complex sp_complex_polar(sp_float m, sp_float a, int m_is_f) {
 }
 sp_Complex sp_complex_add(sp_Complex a, sp_Complex b) { sp_Complex c; c.re = a.re + b.re; c.im = a.im + b.im; c.fl = a.fl | b.fl; return c; }
 sp_Complex sp_complex_mul(sp_Complex a, sp_Complex b) { sp_Complex c; c.re = (a.re * b.re) - (a.im * b.im); c.im = (a.re * b.im) + (a.im * b.re); c.fl = (a.fl | b.fl) ? (SP_CPLX_RE_F | SP_CPLX_IM_F) : 0; return c; }
+/* Complex * a real number (Integer, Float or Rational): each part times the
+   real, as CRuby's Complex#* does for a real argument, so each part keeps
+   its own kind: Complex(1.0, 2) * 3 is (3.0+6i). The Complex * Complex
+   formula above made both parts Float when either side had a Float part.
+   is_f: the real is a Float (or a Rational, which a part keeps in its Float
+   slot). */
+sp_Complex sp_complex_mul_r(sp_Complex a, sp_float v, int is_f) {
+  sp_Complex c; c.re = a.re * v; c.im = a.im * v;
+  c.fl = (unsigned char)(a.fl | (is_f ? (SP_CPLX_RE_F | SP_CPLX_IM_F) : 0));
+  return c;
+}
+/* An Integer (evaluated first) times a Complex. CRuby multiplies each part
+   only for a Fixnum (-2**62 <= n < 2**62): 3 * Complex(1.0, 2) is (3.0+6i).
+   A larger Integer becomes Complex(n, 0) and runs the Complex formula, so a
+   Float part makes both parts Float. */
+sp_Complex sp_complex_imul(int64_t n, sp_Complex a) {
+  if (n < -4611686018427387904LL || n > 4611686018427387903LL) {
+    sp_Complex r; r.re = (sp_float)n; r.im = 0; r.fl = 0;
+    return sp_complex_mul(r, a);
+  }
+  return sp_complex_mul_r(a, (sp_float)n, 0);
+}
+/* A Float or a Rational (evaluated first) times a Complex: CRuby runs the
+   Complex formula. The kinds are the per-part ones (both parts Float), but
+   the exact 0 of Complex(v, 0) times a NaN part is NaN:
+   3.0 * Complex(NaN, 1) is (NaN+NaN*i). */
+sp_Complex sp_complex_fmul(sp_float v, sp_Complex a) {
+  sp_Complex c = sp_complex_mul_r(a, v, 1);
+  if (isnan(a.re)) c.im = a.re;
+  if (isnan(a.im)) c.re = a.im;
+  return c;
+}
 sp_Complex sp_complex_conjugate(sp_Complex a) { sp_Complex c; c.re = a.re; c.im = -a.im; c.fl = a.fl; return c; }
 sp_Complex sp_complex_sub(sp_Complex a, sp_Complex b) { sp_Complex c; c.re = a.re - b.re; c.im = a.im - b.im; c.fl = a.fl | b.fl; return c; }
 sp_Complex sp_complex_div(sp_Complex a, sp_Complex b) {

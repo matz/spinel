@@ -6315,6 +6315,14 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     if ((crt == TY_INT || crt == TY_FLOAT) && argc == 1 && comp_ntype(c, argv[0]) == TY_COMPLEX) {
       if (is_basic_arith(name)) {
         const char *fn = name[0] == '+' ? "add" : name[0] == '-' ? "sub" : name[0] == '*' ? "mul" : "div";
+        /* a real times a Complex multiplies each part (Complex#* with a
+           real), so each part keeps its kind: 3 * Complex(1.0, 2) is (3.0+6i);
+           see sp_complex_imul for a Bignum-sized Integer */
+        if (name[0] == '*') {
+          buf_puts(b, crt == TY_FLOAT ? "sp_complex_fmul((sp_float)(" : "sp_complex_imul((int64_t)(");
+          emit_expr(c, recv, b); buf_puts(b, "), "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+          return 1;
+        }
         buf_printf(b, "sp_complex_%s(((sp_Complex){(sp_float)(", fn); emit_expr(c, recv, b);
         buf_printf(b, "), 0, %d}), ", crt == TY_FLOAT ? 1 : 0); emit_expr(c, argv[0], b); buf_puts(b, ")");
         return 1;

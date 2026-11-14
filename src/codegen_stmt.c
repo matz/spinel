@@ -6669,6 +6669,14 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
     return;
   }
   if (emit_scalar_op_assign(c, lval, t, op, v, cap, lv && slot_is_oint(lv), 0, b)) return;
+  if (t == TY_COMPLEX && sp_streq(op, "*") &&
+      (comp_ntype(c, v) == TY_INT || comp_ntype(c, v) == TY_FLOAT)) {
+    /* `z *= 3`: each part times the real, as `z * 3` is */
+    buf_printf(b, "%s = sp_complex_mul_r(%s, (sp_float)(", lval,
+               lv_op_assign_src(c, lval, t, cap, rtn, sizeof rtn));
+    emit_expr(c, v, b); buf_printf(b, "), %d);\n", comp_ntype(c, v) == TY_FLOAT ? 1 : 0);
+    return;
+  }
   if (t == TY_COMPLEX && (is_add_or_mul(op))) {
     /* coerce the rhs like the binary path does: an Integer, a Float or a boxed
        value all have to reach sp_complex_* as an sp_Complex */

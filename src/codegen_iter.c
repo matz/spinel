@@ -2608,8 +2608,13 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
 static int block_tail_raises_untyped(Compiler *c, int tail, TyKind want_ty) {
   if (want_ty == TY_UNKNOWN || want_ty == TY_VOID || want_ty == TY_NIL) return 0;
   if (const_read_raises(c, tail)) return 1;
-  return (want_ty != TY_POLY || g_promote_mode) &&
-         nt_kind(c->nt, tail) == NK_CallNode && comp_ntype(c, tail) == TY_UNKNOWN;
+  if (nt_kind(c->nt, tail) != NK_CallNode || comp_ntype(c, tail) != TY_UNKNOWN) return 0;
+  /* a boxed slot takes the gate's raise as it is, but not a call that
+     answers no value (a `super` with no method above, `(const char *)0`
+     after it), one that never returns, or one no class answers (`nil.at(0)`,
+     its placeholder 0) */
+  return want_ty != TY_POLY || g_promote_mode ||
+         call_answers_no_value(c, tail) || call_never_returns(c, tail) || call_unanswered_boxed(c, tail);
 }
 
 static int block_tail_lacks_value(Compiler *c, int id, int poly) {

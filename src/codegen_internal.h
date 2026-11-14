@@ -2530,6 +2530,7 @@ int an_scopes_named_next(Compiler *c, const char *nm, int s);
 int block_given_tail_then_last(Compiler *c, int last);
 int call_forwards_own_block(Compiler *c, int cid);
 int is_blk_param_call(Compiler *c, int node, int mi);
+int is_yield_or_blk_param_call(Compiler *c, int node);
 int ie_block_body(Compiler *c, int blk);
 int sclass_value_call(Compiler *c, int id);
 int scope_body_last(Compiler *c, int mi);

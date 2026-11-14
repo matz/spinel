@@ -2969,6 +2969,15 @@ int is_blk_param_call(Compiler *c, int node, int mi) {
   const char *bp = c->scopes[mi].blk_param;
   return rn && bp && bp[0] && sp_streq(rn, bp);
 }
+/* A yield, or the call of its method's own `&blk` (`blk.call`, the explicit
+   form of yield): its value is what the site's block answers. */
+int is_yield_or_blk_param_call(Compiler *c, int node) {
+  if (node < 0) return 0;
+  if (nt_kind(c->nt, node) == NK_YieldNode) return 1;
+  Scope *s = comp_scope_of(c, node);
+  int mi = s ? (int)(s - c->scopes) : -1;
+  return mi > 0 && is_blk_param_call(c, node, mi);
+}
 /* Is the `return` written in a lambda (`-> { return 1 }`, `lambda { return 1 }`)?
    It leaves the lambda, not the method the lambda is written in. */
 int return_in_lambda(Compiler *c, int rid) {

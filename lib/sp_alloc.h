@@ -1374,7 +1374,7 @@ sp_Bigint *sp_brat_round_b(sp_BigRational *r);
    count for no real gain, so those two stay put instead. */
 sp_RbVal sp_marv_arr_new(void);
 void sp_marv_arr_push(sp_RbVal a, sp_RbVal v);
-sp_RbVal sp_marv_box_complex(sp_float re, sp_float im);
+sp_RbVal sp_marv_box_complex(sp_float re, sp_float im, int fl);
 sp_RbVal sp_marv_box_rational(sp_int n, sp_int d);
 void sp_marv_raise(const char *cls, const char *msg);
 

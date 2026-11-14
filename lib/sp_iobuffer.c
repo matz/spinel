@@ -811,7 +811,7 @@ static size_t iob_header(sp_IOBuffer *b, char *out, size_t cap) {
     {SP_IOB_PRIVATE, "PRIVATE"}, {SP_IOB_READONLY, "READONLY"}, {SP_IOB_SLICE, "SLICE"},
   };
   for (size_t i = 0; i < sizeof FLAGS / sizeof FLAGS[0]; i++) {
-    int on = i == 0 ? base == NULL : (b->flags & FLAGS[i].bit) != 0;
+    int on = i == 0 ? base == 0 : (b->flags & FLAGS[i].bit) != 0;
     if (on) n += (size_t)snprintf(out + n, cap - n, " %s", FLAGS[i].name);
   }
   n += (size_t)snprintf(out + n, cap - n, ">");

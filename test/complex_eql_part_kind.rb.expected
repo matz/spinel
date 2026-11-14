@@ -49,3 +49,18 @@ true
 (2+4i)
 Integer
 (0.75+1i)
+(1+2i)
+Integer
+true
+true
+(1.5+2i)
+true
+Integer
+[(3+0.5i)]
+(-3+4.0i)
+2
+{(1+0i) => :i, (1.0+0i) => :f}
+:i
+:f
+18
+21

@@ -44,7 +44,7 @@ typedef struct {
   void     (*arr_push)(sp_RbVal arr, sp_RbVal v);
   sp_RbVal (*hash_new)(void);
   void     (*hash_set)(sp_RbVal h, sp_RbVal k, sp_RbVal v);
-  sp_RbVal (*box_complex)(sp_float re, sp_float im);
+  sp_RbVal (*box_complex)(sp_float re, sp_float im, int fl);   /* fl: SP_CPLX_RE_F / SP_CPLX_IM_F */
   sp_RbVal (*box_rational)(sp_int num, sp_int den);
   int      (*obj_dump)(sp_mar_buf *b, int cls_id, void *p);   /* generated; writes `o` */
   /* into nil: a new object of the class; into an object: its ivars set

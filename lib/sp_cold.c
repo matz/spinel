@@ -6557,7 +6557,8 @@ sp_float sp_brat_to_f(sp_BigRational *r) {SP_GC_ROOT(r);
    generated sym_intern / obj_dump / obj_load. */
 sp_RbVal sp_marv_arr_new(void) { return sp_box_poly_array(sp_PolyArray_new()); }
 void sp_marv_arr_push(sp_RbVal a, sp_RbVal v) {SP_GC_ROOT_RBVAL(a);SP_GC_ROOT_RBVAL(v); sp_PolyArray_push((sp_PolyArray *)a.v.p, v); }
-sp_RbVal sp_marv_box_complex(sp_float re, sp_float im) { sp_Complex c; c.re = re; c.im = im; return sp_box_complex(c); }
+/* a loaded Complex keeps each part's kind (fl), which its eql?, hash and inspect read */
+sp_RbVal sp_marv_box_complex(sp_float re, sp_float im, int fl) { sp_Complex c; c.re = re; c.im = im; c.fl = (unsigned char)fl; return sp_box_complex(c); }
 sp_RbVal sp_marv_box_rational(sp_int n, sp_int d) { return sp_box_rational(sp_rational_new(n, d)); }
 void sp_marv_raise(const char *cls, const char *msg) {SP_GC_ROOT_STR(msg); sp_raise_cls(cls, msg); }
 

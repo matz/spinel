@@ -55,3 +55,15 @@ p a[0].eql?(a[0])
 p (Complex(5, 9) / 2).eql?(Complex(Rational(5, 2), Rational(9, 2)))
 p Complex(4, 8) / 2, (Complex(4, 8) / 2).real.class
 p Complex(1.5, 2) / 2
+# Marshal keeps each part's kind
+s = Marshal.dump(Complex(1, 2))
+z = Marshal.load(s)
+p z, z.real.class, z.eql?(Complex(1, 2)), z.hash == Complex(1, 2).hash
+w = Marshal.load(Marshal.dump(Complex(1.5, 2)))
+p w, w.eql?(Complex(1.5, 2)), w.imaginary.class
+p Marshal.load(Marshal.dump([Complex(3, 0.5)]))
+p Marshal.load(Marshal.dump(Complex(-3, 4.0)))
+p Marshal.load(Marshal.dump([Complex(1, 0), Complex(1.0, 0)])).uniq.size
+h = Marshal.load(Marshal.dump({Complex(1, 0) => :i, Complex(1.0, 0) => :f}))
+p h, h[Complex(1, 0)], h[Complex(1.0, 0)]
+p Marshal.dump(Complex(1, 2)).bytesize, Marshal.dump(Complex(1, 2.5)).bytesize

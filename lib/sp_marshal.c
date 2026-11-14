@@ -31,6 +31,14 @@ static sp_RbVal mk_nil(void)        { sp_RbVal r; r.tag = SP_TAG_NIL;  r.cls_id 
 static sp_RbVal mk_bool(sp_bool b) { sp_RbVal r; r.tag = SP_TAG_BOOL; r.cls_id = 0; r.v.i = (b != 0); return r; }  /* full union word: bool equality reads v.i */
 static sp_RbVal mk_int(sp_int n)   { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = n; return r; }
 static sp_RbVal mk_float(sp_float f){ sp_RbVal r; r.tag = SP_TAG_FLT;  r.cls_id = 0; r.v.f = f; return r; }
+/* A Complex part as Marshal writes it: an Integer part (no Float flag) that
+   fits the slot as an Integer, anything else as a Float */
+static sp_RbVal sp_mar_cplx_part(sp_float v, int is_f) {
+  if (!is_f && v == floor(v) && v >= -9223372036854775808.0 && v < 9223372036854775808.0 &&
+      (sp_float)(sp_int)(int64_t)v == v)
+    return mk_int((sp_int)(int64_t)v);
+  return mk_float(v);
+}
 static sp_RbVal mk_str(const char *s){ sp_RbVal r; r.tag = SP_TAG_STR;  r.cls_id = 0; r.v.s = s; return r; }
 static sp_RbVal mk_sym(sp_sym s)    { sp_RbVal r; r.tag = SP_TAG_SYM;  r.cls_id = 0; r.v.i = (sp_int)s; return r; }
 static sp_RbVal mk_strbuf(void *h)  { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = SP_BUILTIN_STRBUF; r.v.p = h; return r; }
@@ -233,11 +241,14 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
     case SP_TAG_OBJ:
       if (v.cls_id == SP_BUILTIN_COMPLEX) {
         if (sp_mar_seen(b, v.v.p)) break;
-        sp_float *c = (sp_float *)v.v.p;  /* sp_Complex = {re, im} */
+        const sp_Complex *c = (const sp_Complex *)v.v.p;
         sp_mar_b(b, 'U'); sp_mar_sym(b, "Complex");
         sp_mar_seen(b, NULL);
         sp_mar_b(b, '['); sp_mar_long(b, 2);
-        sp_mar_w(b, mk_float(c[0])); sp_mar_w(b, mk_float(c[1]));
+        /* each part as its own kind, as CRuby writes it: an Integer part as
+           an Integer, so Complex(1, 2) loads back as (1+2i), eql? to it */
+        sp_mar_w(b, sp_mar_cplx_part(c->re, c->fl & SP_CPLX_RE_F));
+        sp_mar_w(b, sp_mar_cplx_part(c->im, c->fl & SP_CPLX_IM_F));
       }
       else if (v.cls_id == SP_BUILTIN_RATIONAL) {
         if (sp_mar_seen(b, v.v.p)) break;
@@ -514,7 +525,7 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
       sp_RbVal a0 = mk_nil(), a1 = mk_nil();
       if (data.tag == SP_TAG_OBJ) { a0 = sp_json_aref_fn(data, 0); a1 = sp_json_aref_fn(data, 1); }
       sp_RbVal v;
-      if (!strcmp(cn, "Complex")) v = sp_marshal_v.box_complex(poly_f(a0), poly_f(a1));
+      if (!strcmp(cn, "Complex")) v = sp_marshal_v.box_complex(poly_f(a0), poly_f(a1), (a0.tag == SP_TAG_FLT ? SP_CPLX_RE_F : 0) | (a1.tag == SP_TAG_FLT ? SP_CPLX_IM_F : 0));
       else if (!strcmp(cn, "Rational")) v = sp_marshal_v.box_rational(poly_i(a0), poly_i(a1));
       else { mar_raise("ArgumentError", "unsupported user class in Marshal.load"); v = mk_nil(); }
       r->objs[id] = v; return v;

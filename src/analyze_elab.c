@@ -8872,6 +8872,31 @@ static int elab_prov_index(Compiler *c, const char *cname, int owner) {
         (ci < 0 || g_prov_cls[i] < ci)) ci = g_prov_cls[i];
   return ci;
 }
+static int elab_prov_of(int k) { return k >= 0 && k < g_prov_of_cap && g_prov_of[k] > 0; }
+/* A qualified name the program's own class already has takes a leading
+   underscore (the salt), and the leaf is no key for it. When a top-level
+   class or module of the program has the leaf too, either name would
+   merge two classes: refused. (Asked only where the name is taken: the
+   headers are looked through for the top-level one's.) */
+static void elab_prov_refuse_salted(Compiler *c, int i, const char *qn) {
+  const NodeTable *nt = c->nt;
+  const char *leaf = g_prov_np[i] >= 0 ? nt_str(nt, g_prov_np[i], "name") : NULL;
+  int top = -1;   /* (the provisional classes go by their leaves here too) */
+  for (int k = 0; leaf && k < c->nclasses && top < 0; k++)
+    if (!elab_prov_of(k) && c->classes[k].name && sp_streq(c->classes[k].name, leaf)) top = k;
+  if (top < 0) return;
+  int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
+  for (int dh = 0; dh < ndk; dh++)
+    NT_FOREACH_KIND(nt, dk[dh], id) {
+      if (!(class_def_is_class(nt, id) || class_def_is_module(nt, id)) || elab_header_class(c, id, NULL, NULL) != top) continue;
+      char msg[768];
+      snprintf(msg, sizeof msg, "a class or module named %s under a module path takes the "
+               "internal name %s, which the program's own class %s already has, and a "
+               "top-level %s is defined too; rename one of them", leaf, qn, qn, leaf);
+      unsupported_feature(c, g_prov_hdr[i], msg);
+      return;
+    }
+}
 /* After the walk: each provisional class takes its name. Every one takes
    its leaf first, so that the Ruby paths the rule reads are built of the
    leaves; then the rule (qc_rule_qualifies) decides which are qualified,
@@ -8919,6 +8944,8 @@ void elab_prov_apply(Compiler *c) {
     for (int salt = 0; ; salt++) {
       scope_qualified_name(c, g_prov_hdr[i], np, salt, out, sizeof out, rb, sizeof rb);
       int o = comp_class_index(c, out);
+      if (salt == 0 && o >= 0 && o != ci && !elab_prov_of(o) && !anh_has(&done, out))
+        elab_prov_refuse_salted(c, i, out);
       if (!((o >= 0 && o != ci) || anh_has(&done, out)) || salt > 8) break;
     }
     comp_class_rename(c, ci, out);

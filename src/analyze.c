@@ -7054,19 +7054,11 @@ void qualify_colliding_classes(Compiler *c) {
        module of its own (`class Foo__Mutex` beside `class Foo::Mutex`),
        the name takes a leading underscore, as often as it needs to be
        new. The leaf is no key for it: another definition of the leaf
-       (`Bar::Mutex`) would merge with it. A top-level definition of the
-       leaf is still refused. */
+       (`Bar::Mutex`) would merge with it. (A top-level definition of the
+       leaf beside it is refused after the walk: elab_prov_apply.) */
     if (collide && ws[i].depth > 0) {
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
       if (qc_class_name_defined(c, qn)) {
-        for (int j = 0; j < wn; j++)
-          if (j != i && ws[j].depth == 0 && sp_streq(ws[j].name, ws[i].name)) {
-            char msg[768];
-            snprintf(msg, sizeof msg, "a class or module named %s under a module path takes the "
-                     "internal name %s, which the program's own class %s already has, and a "
-                     "top-level %s is defined too; rename one of them", ws[i].name, qn, qn, ws[i].name);
-            unsupported_feature(c, ws[i].node, msg);
-          }
         while (qc_class_name_defined(c, qn)) {
           ws[i].salt++;
           qc_qualified_name(qn, sizeof qn, &ws[i]);

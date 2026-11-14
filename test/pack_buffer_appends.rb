@@ -1,0 +1,120 @@
+# spinel: gc-stress
+# pack(fmt, buffer: b) puts the packed bytes on the end of b. It packed
+# behind a copy of b's bytes and wrote the whole String back, so a message
+# built by repeated packs into one buffer cost the square of its length.
+# The bytes now go on the end; a format with @ or X, which can reach the
+# bytes already in the buffer, takes the full path as before.
+
+def show(tag, s) = p([tag, s, s.encoding, s.bytesize])
+
+b = +"ab"                      # a UTF-8 buffer
+r = [1, 2].pack("C*", buffer: b)
+show(:c_star, b); p r.equal?(b)
+u = +"x"
+[0x263a].pack("U", buffer: u)
+show(:u_fmt, u)
+bb = "".b
+[1.5].pack("E", buffer: bb); [7].pack("n", buffer: bb); ["hi"].pack("a3", buffer: bb)
+show(:mixed, bb)
+w = "".b
+[300, 5].pack("w*", buffer: w)
+show(:ber, w)
+x = +"head"
+[1].pack("xC", buffer: x)
+show(:pad, x)
+
+# cursor directives reach into the buffer's own bytes
+at = +"abcdef"
+[0x41].pack("@2C", buffer: at)
+show(:at, at)
+bx = +"abcdef"
+[0x5a].pack("XC", buffer: bx)
+show(:back, bx)
+
+# a frozen buffer raises, a non-String buffer raises TypeError
+begin
+  [1].pack("C", buffer: "frozen".freeze)
+rescue FrozenError => e
+  p [:frozen, e.class]
+end
+begin
+  [1].pack("C", buffer: 5)
+rescue TypeError => e
+  p [:type, e.message]
+end
+
+# typed receivers: Integer, Float and String arrays, and a mixed one
+ib = "".b; [1, 2, 3].pack("C3", buffer: ib); show(:ints, ib)
+fb = "".b; [1.5, 2.5].pack("e2", buffer: fb); show(:floats, fb)
+sb = "".b; ["ab", "cd"].pack("A3A3", buffer: sb); show(:strs, sb)
+mb = "".b; [1, "z", 2.0].pack("Ca1e", buffer: mb); show(:mixed_ary, mb)
+
+# a buffer held in an ivar, grown across calls, and another name for it
+class Enc
+  def initialize = (@buf = "".b)
+  def put(v) = ([v].pack("N", buffer: @buf); self)
+  attr_reader :buf
+end
+e = Enc.new
+alias_buf = e.buf
+100.times { |i| e.put(i) }
+p e.buf.bytesize, alias_buf.equal?(e.buf), e.buf.byteslice(396, 4).unpack1("N")
+
+# the bytes go on this buffer only: a String made from it or sharing its
+# bytes earlier does not see them, nor does a Hash key copied from it
+lit = "head"
+x = +lit
+[1].pack("C", buffer: x)
+p lit, x
+a = "".b
+[1].pack("C", buffer: a)
+c = a.dup
+sub = a.byteslice(0, 1)
+d = a
+[2].pack("C", buffer: a)
+p c, sub, d, d.equal?(a)
+k = "key".b
+h = { k => 1 }
+[3].pack("C", buffer: k)
+p k, h.keys
+# a binary buffer packed with U becomes UTF-8, as the format selects
+ub = "".b
+[0x263a].pack("U", buffer: ub)
+p ub, ub.encoding
+
+# an element's to_int runs while packing: a buffer it freezes takes no
+# bytes and raises FrozenError; one it grows, re-encodes or replaces takes
+# the packed bytes on what it is then
+FZ = +"seed"
+class Freezer
+  def to_int = (FZ.freeze; 65)
+end
+begin
+  [Freezer.new].pack("C", buffer: FZ)
+rescue FrozenError => e
+  p e.class
+end
+p FZ, FZ.frozen?
+GR = "".b
+class Grower
+  def to_int = (GR << ("z" * 100_000); 66)
+end
+[Grower.new].pack("C", buffer: GR)
+p GR.bytesize, GR.byteslice(-1, 1), GR.encoding
+EN = +"utf"
+class Recoder
+  def to_int = (EN.force_encoding(Encoding::BINARY); 67)
+end
+[Recoder.new].pack("C", buffer: EN)
+p EN, EN.encoding
+RP = "".b
+class Replacer
+  def to_int = (RP.replace(+"text"); 68)
+end
+[Replacer.new].pack("C", buffer: RP)
+p RP, RP.encoding
+
+# a long message built a pack at a time
+msg = "".b
+20_000.times { |i| msg << 0x59; [i * 0.5].pack("E", buffer: msg) }
+p msg.bytesize, msg.byteslice(9 * 19_999 + 1, 8).unpack1("E"), msg.encoding

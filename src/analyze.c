@@ -43430,6 +43430,16 @@ static int splat_builtin_spec_range(Compiler *c, int id, const char *name, int *
   /* the tables are instance methods': a class's (`File.unlink(*paths)`)
      is no row of theirs */
   int r = nt_ref(nt, id, "receiver");
+  /* ...but a builtin module's or class's own (Math.sqrt(*a), Integer.sqrt):
+     its row in the class methods' table, where no class of the program
+     takes the constant's name */
+  if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode) {
+    const char *cn = nt_str(nt, r, "name");
+    if (!cn || comp_class_index(c, cn) >= 0 || !builtin_cmethod_span(cn, name, &l, &h) || h > l + 3) return 0;
+    if (lo) *lo = l;
+    if (hi) *hi = h;
+    return 1;
+  }
   if (r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) return 0;
   /* (between?'s arms compare the receiver with the elements' boxes as
      integers, which the C build rejects: it keeps its splat call) */

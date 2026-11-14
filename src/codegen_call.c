@@ -21095,6 +21095,18 @@ int builtin_cmethod_name_known(const char *m) {
     if (sp_builtin_cmeth_arity_spec_tbl[i].m && sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].m, m)) return 1;
   return 0;
 }
+/* The counts a builtin class or module's own class method cls.name takes
+   (Math.sqrt, Integer.sqrt), blockless: 1 where the table proves a bounded
+   range */
+int builtin_cmethod_span(const char *cls, const char *name, int *lo, int *hi) {
+  for (int i = 0; cls && name && sp_builtin_cmeth_arity_spec_tbl[i].cls; i++) {
+    const SpAritySpec *r = &sp_builtin_cmeth_arity_spec_tbl[i];
+    if (!sp_streq(r->cls, cls) || !r->m || !sp_streq(r->m, name)) continue;
+    *lo = r->min; *hi = r->max;
+    return r->min >= 0 && r->max >= 0;
+  }
+  return 0;
+}
 int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi) {
   for (int i = 0; sp_builtin_cmeth_arity_spec_tbl[i].cls; i++) {
     const SpAritySpec *r = &sp_builtin_cmeth_arity_spec_tbl[i];

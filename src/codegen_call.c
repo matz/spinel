@@ -9153,14 +9153,9 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
     else if (wrap_h && !is_raise) buf_printf(&ib, "SP_STR_HDL(%s)", nb->p);
     /* an arm typed boxed (a generic entry's, or the builtin arm of a send
        split, whose call joins the top-level def's answer) is boxed by the C
-       type it has */
-    else if ((g_arm.count_arm || g_arm.send_split == id) && ret == TY_POLY && bt == TY_POLY && !is_raise) {
-      /* a name every builtin row of answers nil (IO#puts, #print): the
-         emitter's value form is a placeholder Integer, so the arm answers
-         nil after running it */
-      if (g_arm.send_split == id && bop_send_answers_nil(name)) buf_printf(&ib, "({ (void)(%s); sp_box_nil(); })", nb->p);
-      else buf_printf(&ib, "SP_BI_BOX(%s)", nb->p);
-    }
+       type it has (a boxed IO's puts or print already answers nil) */
+    else if ((g_arm.count_arm || g_arm.send_split == id) && ret == TY_POLY && bt == TY_POLY && !is_raise)
+      buf_printf(&ib, "SP_BI_BOX(%s)", nb->p);
     else buf_puts(&ib, nb->p);
   }
   free(nb->p); free(nb);

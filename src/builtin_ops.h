@@ -483,10 +483,6 @@ const char *bop_row_class(const BuiltinOp *r);
    on that kind is emitted, not that the class defines it, and does not
    count. */
 int bop_below_object_answers(const char *name);
-/* Does every row of `name` that belongs to a builtin class below Object
-   (bop_row_class), in a library the program has, answer nil, and is there
-   one (IO#puts, IO#print)? */
-int bop_send_answers_nil(const char *name);
 /* Does the builtin answer `name` on a class (or module) itself, taking argc
    arguments and a block when has_block, where no method of the program's
    of the name runs yet: Module's own, as its builtin-op rows (TY_CLASS)

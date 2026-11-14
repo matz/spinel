@@ -3296,19 +3296,6 @@ int bop_below_object_answers(const char *name) {
 }
 
 /* See builtin_ops.h. */
-int bop_send_answers_nil(const char *name) {
-  int any = 0;
-  for (int i = 0; name && i < BOP_NROWS; i++) {
-    const BuiltinOp *r = &bop_rows[i];
-    if (r->name[0] != name[0] || !sp_streq(r->name, name) || !bop_row_class(r) ||
-        !builtin_library_fact_holds(r->feature)) continue;
-    if (r->result != TY_NIL) return 0;
-    any = 1;
-  }
-  return any;
-}
-
-/* See builtin_ops.h. */
 int bop_class_answers(const char *name, int argc, int has_block) {
   const BuiltinOp *r = argc >= 0 ? bop_find(TY_CLASS, name, argc, has_block) : NULL;
   return r && !(r->flags & BOPF_PRIVATE);

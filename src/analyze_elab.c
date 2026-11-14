@@ -8834,6 +8834,14 @@ static void elab_prov_drop_derived(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++)
     if (c->classes[k].ruby_name_derived) { free(c->classes[k].ruby_name_cache); c->classes[k].ruby_name_cache = NULL; c->classes[k].ruby_name_derived = 0; }
 }
+/* The name class k goes by during the walk: the name the walk gave it,
+   for a class that walks under a provisional one (a reader that matches
+   the names the source writes, ext_scope_host_callable) */
+const char *elab_class_walk_name(const Compiler *c, int k) {
+  if (k < 0 || k >= c->nclasses) return NULL;
+  for (int i = 0; i < g_nprov; i++) if (g_prov_cls[i] == k) return g_prov_name[i];
+  return c->classes[k].name;
+}
 /* The class of name cname, a provisional class by the name it takes after
    the walk too: the lowest index, as comp_class_index answers */
 static int elab_prov_index(Compiler *c, const char *cname) {

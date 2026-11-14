@@ -7127,5 +7127,6 @@ int ext_scope_host_callable(Compiler *c, int si) {
   Scope *sc = &c->scopes[si];
   if (sc->class_id < 0 || !ext_method_shape(c, sc->class_id, si)) return 0;
   if (ext_class_exported(c, sc->class_id)) return 1;
-  return c->classes[sc->class_id].name && ext_listed_descendant(c, c->classes[sc->class_id].name);
+  const char *cn = elab_class_walk_name(c, sc->class_id);
+  return cn && ext_listed_descendant(c, cn);
 }

@@ -541,6 +541,7 @@ int elab_body_def(Compiler *c, int node);
    applied `[lits].each` unrolls (dm_each_inner)? 1 for one at no point,
    which the record leaves to its body */
 int elab_def_applied(Compiler *c, int def);
+int elab_version_held_row(const LrDef *v, const char *name, int cside);   /* a version recorded under a condition of a name a Kernel row answers, on the instance side */
 /* call_target's questions about call id read the record's facts as its
    first such question found them (analyze_elab.c): 1 when the frame is in,
    until elab_plan_leave; 0 for a node it cannot place */

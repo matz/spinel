@@ -3504,6 +3504,14 @@ static const LrDef *lr_first_version(const LrHist *h) {
   for (int j = 0; j < h->n; j++) if (lr_is_version(&h->v[j])) return &h->v[j];
   return NULL;
 }
+/* Is version v of name, on the instance side unless cside, recorded under a
+   condition, of a name a Kernel row answers (respond_to_missing?)? A call may
+   meet it unmade at any count: the name's entry has the row for its else arm
+   (ver_named_kind), and takes the version by its cell at each count the
+   calls pass (ver_named_add) */
+int elab_version_held_row(const LrDef *v, const char *name, int cside) {
+  return !cside && v->may && bop_kernel_answers(name, -1, 0);
+}
 /* Is the late bit asked of history h of x's name, one of nh histories
    that hold a version (lr_late_make)? */
 static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) {
@@ -3567,6 +3575,8 @@ static void lr_late_make(Compiler *c) {
     for (int h = x->first; h >= 0; h = r->hist[h].nlink) {
       LrHist *y = &r->hist[h];
       y->late = lr_late_asked(c, x, y, nh) ? 1 : 3;
+      /* (a held Kernel-row name's: its condition may not have run, and its entry's else arm is the row, whichever builtin answers the name) */
+      if (lr_first_version(y) && elab_version_held_row(lr_first_version(y), x->name, y->b)) { y->late = x->late = 2; continue; }
       if (y->late == 3) continue;
       if (lr_first_version(y)->body) y->late = x->late = 2;   /* (a method body's: before its extent opens, lr_version_order) */
       else { x->pend++; if (x->late == 3) x->late = 1; }

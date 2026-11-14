@@ -1539,18 +1539,25 @@ static int ver_call_n(Compiler *c, int id) {
   for (int i = 0; i < ac; i++) if (nt_kind(nt, av[i]) == NK_ForwardingArgumentsNode) n = -1;
   return n;
 }
+/* Is scope s a version held under a condition (a lone def, cond_lone) of an instance-side name a Kernel row answers? Its
+   entry's else arm is the row, which takes the call's count itself, whether or not the version takes it: the entry is
+   at the call's count, and each arm's call raises the ArgumentError its own count meets */
+static int ver_held_row(const Compiler *c, const Scope *s) {
+  return s->def_node >= 0 && !s->is_cmethod && s->class_id >= 0 && nt_int(c->nt, s->def_node, "cond_lone", 0) && bop_kernel_answers(s->name, -1, 0);
+}
 static int ver_arity(Compiler *c, int id, const int *to, int nto) {
   int n = ver_call_n(c, id);
   int a = nt_ref(c->nt, id, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &ac) : NULL;
   /* not the versions' required ones: a boxed receiver's arm cannot gather a splat into __cond0.. (arg_layout_gathers) */
   if (nt_argv_has(c->nt, av, ac, NT_ARG_SPLAT)) return -1;
-  int ar = ver_plain_arity(c, to[0]), fits = 1;
+  int ar = ver_plain_arity(c, to[0]), fits = 1, held = 0;
   for (int i = 0; i < nto; i++) {
     if (ver_plain_arity(c, to[i]) != ar) ar = -1;
     fits &= ver_takes(c, to[i], n);
+    held |= ver_held_row(c, &c->scopes[to[i]]);
   }
-  return ar >= 0 ? ar : fits ? n : -1;
+  return ar >= 0 ? ar : fits || (held && n >= 0) ? n : -1;
 }
 /* ...for a version entry of `name` on rcls (mi, the table's answer): the
    versions an entry arms (ver_entry_make) */
@@ -1755,7 +1762,7 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
     }
   ElabVersion vs[VER_MAX_ARMS];
   int n = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS), def = n >= 1 && vs[0].v->kind == LR_DEF, any = 0;
-  for (int k = 0; k < n; k++) any |= vs[k].v->body != 0;
+  for (int k = 0; k < n; k++) any |= vs[k].v->body != 0 || elab_version_held_row(vs[k].v, name, sg);
   m->slot[j] = (struct VerChainSlot){ name_dup(name), rcls, sg, n, def, any, elab_versions_late(c, name, vs, n) };
   m->used++;
   *first_def = def;
@@ -5995,9 +6002,15 @@ static int cplan_recv_own_member(Compiler *c, int id, const char *name) {
    holding a version marked cond_lone (a lone def under an `if` the
    lowering leaves to the record, a define_method a Struct or Data block
    may not run): a name not literal or of such an entry (cond_def_refl)? */
+/* Does the name hold a history by count, whose versions carry the mark (ver_named_make) in place of an entry? */
+static int ver_bycount_named(Compiler *c, const char *name) {
+  for (int s = name && c->nver_bycount ? an_scopes_named_first(c, name) : -1; s >= 0; s = an_scopes_named_next(c, name, s))
+    if (nt_int(c->nt, c->scopes[s].def_node, "cond_def_bycount", 0)) return 1;
+  return 0;
+}
 static int ver_refl_named(Compiler *c, int id) {
   int args = nt_ref(c->nt, id, "arguments"), an = 0;
-  if (!c->nver_refl) return 0;
+  if (!c->nver_refl && !c->nver_refl_priv) return 0;
   if (args >= 0) nt_arr(c->nt, args, "arguments", &an);
   const char *q = an ? method_sym_arg(c, id) : NULL;
   for (int i = 0; an && q && i < c->nver_entries; i++) {
@@ -6005,7 +6018,7 @@ static int ver_refl_named(Compiler *c, int id) {
     if (e->guard == VER_ENTRY_HISTORY && e->scope >= 0 && nt_int(c->nt, c->scopes[e->scope].def_node, "cond_def_refl", 0) && sp_streq(e->name, q))
       return 1;
   }
-  return an && !q;
+  return (an && !q) || ver_bycount_named(c, q);
 }
 /* Is scope s a method that answers before its branch has run: a named
    entry whose name reflection does not answer (cond_def_refl), or the
@@ -6039,7 +6052,7 @@ static int ver_list_held(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int r = nt_ref(nt, id, "receiver"), sg = !is_instance_method_list(name);
-  if (!c->nver_refl && !c->ncond_disp) return 0;
+  if (!c->nver_refl && !c->nver_refl_priv && !c->ncond_disp) return 0;
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     int k = cplan_const_recv_class(c, id, r, NULL);
@@ -6070,6 +6083,12 @@ static int ver_list_held(Compiler *c, int id) {
   }
   return 0;
 }
+/* what a call is refused with where it reaches a def under a run-time condition that no cell tells ran (cond_def_override, cplan_bycount_gap) */
+static const char *cond_def_override_why(void) {
+  return "a def under a condition only the run time decides, of a name another method answers "
+         "(a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did "
+         "not run is not known at compile time; see docs/limitations.md";
+}
 /* the limit the call's shape names, and in *lx how a user method exempts it */
 static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *buf, size_t cap) {
   *stop = 1;
@@ -6082,9 +6101,7 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
   if (is_raise_alias(name) && nt_int(nt, id, "class_new_capture", 0) && cplan_reachable(c, id))
     return "Class.new or Module.new with a block that captures outer locals is not supported; see docs/limitations.md";
   if (is_raise_alias(name) && nt_int(nt, id, "cond_def_override", 0) && cplan_reachable(c, id))
-    return "a def under a condition only the run time decides, of a name another method answers "
-           "(a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did "
-           "not run is not known at compile time; see docs/limitations.md";
+    return cond_def_override_why();
   int pq = is_method_presence_query(name);
   if ((nt_int(nt, id, "cond_def_reflect", 0) || (pq == 1 && ver_refl_named(c, id)) ||
        ((pq == 2 ? c->nver_refl || c->ncond_lone_disp || (c->ncond_disp && ver_list_held(c, id)) : pq == 3 && ver_list_held(c, id)) && !cplan_recv_own_member(c, id, name))) &&
@@ -6518,6 +6535,45 @@ static int cplan_top_self_gap(Compiler *c, int id) {
          !s->is_cmethod && !s->entry && s->def_node >= 0 && !prog_is_top_scope(c, s) && comp_main_method(c, name) >= 0;
 }
 
+/* Does call id bind, on a class it may reach, what no cell tells whether it ran (a call the plan cannot bind at its count):
+   the version of a history held by count itself, where no entry of its count was made for it, or a copy of it (an alias),
+   or the entry of a held def at a count it does not take (the entry's parameters are the def's, ver_named_make)? */
+static void cplan_bycount_ask(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
+  MethodLookup ml = { .def_class = -1 };
+  int r = call_target(c, id, k, nm, flags, &ml);
+  /* (a class no object of can exist yet where the call runs is no class it binds) */
+  int none = ml.why == MLW_DISAGREE && k >= 0 && !elab_class_live_at(c, k, (flags & CT_CMETHOD) != 0, elab_point_of(c, id));
+  if (r < 0 || none) return;
+  const Scope *t = &c->scopes[r];
+  /* (read through an alias's name: CRuby's copy is Kernel's method where the branch did not run. The `alias` keyword of a held
+     def keeps the answer it had, the def taken as run: its copy cannot be told taken or untaken without a cell of its own) */
+  const LrDef *ad = NULL;
+  int via = !sp_streq(nm, comp_scope_user_name(t)) && elab_method_at(c, k, nm, (flags & CT_CMETHOD) != 0, elab_point_of(c, id), &ad) == ELAB_YES &&
+            ad && ad->kind == LR_ALIAS;
+  int kw = via && nt_kind(c->nt, ad->node) == NK_AliasMethodNode;
+  int by = nt_int(c->nt, t->def_node, "cond_def_bycount", 0) && !kw && (ml.kind == ML_TABLE || !t->replaced || via),
+      n = ver_call_n(c, id), held = t->entry == ENTRY_NAMED && bop_kernel_answers(nm, -1, 0) && nt_int(c->nt, t->def_node, "cond_def_refl", 0) && n >= 0 && n != ver_plain_arity(c, r);
+  if (by || held) *(int *)arg = 1;
+}
+/* ...and the super of a prepended module's copy, which reaches the class's own version (ct_version_classes asks it of no class) */
+static int cplan_bycount_shadow_super(Compiler *c, const Scope *in, const char *nm) {
+  for (int s = 1; s < c->nscopes; s++)   /* (the class's own body is a shadow copy under a spelling of its own) */
+    if (c->scopes[s].class_id == in->class_id && c->scopes[s].def_node >= 0 && nt_int(c->nt, c->scopes[s].def_node, "cond_def_bycount", 0) &&
+        sp_streq(comp_scope_user_name(&c->scopes[s]), nm)) return 1;
+  return 0;
+}
+static int cplan_bycount_gap(Compiler *c, int id) {
+  NodeKind k = nt_kind(c->nt, id);
+  const Scope *in = k == NK_SuperNode || k == NK_ForwardingSuperNode ? comp_scope_of(c, id) : NULL;   /* (a super names its method's) */
+  const char *nm = in ? comp_scope_user_name(in) : nt_str(c->nt, id, "name");
+  int gap = 0;
+  if ((!c->nver_bycount && !c->nver_refl && !c->nver_refl_priv) || (k != NK_CallNode && !in) || !nm ||
+      !(ver_bycount_named(c, nm) || bop_kernel_answers(nm, -1, 0) || ct_version_named(c, nm)) || !cplan_reachable(c, id)) return 0;
+  if (in && in->shadow == SHADOW_PREP && cplan_bycount_shadow_super(c, in, nm)) return 1;
+  ct_version_classes(c, id, nm, cplan_bycount_ask, &gap);
+  return gap;
+}
+
 static void cplan_refuse_set(CallPlan *p, int from, int rkind, const char *msg, char *buf, size_t cap) {
   p->dispatch = CP_REFUSE; p->rfrom = (unsigned char)from; p->rkind = (unsigned char)rkind;
   snprintf(buf, cap, "%s", msg);
@@ -6529,6 +6585,10 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
   NodeKind k = nt_kind(c->nt, id);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+    if (cplan_bycount_gap(c, id)) {
+      cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(), buf, cap);
+      return;
+    }
     const CallPlan sp = cplan_user(c, id);
     if (sp.dispatch == CP_REFUSE) {
       Scope *s = comp_scope_of(c, id);
@@ -6568,6 +6628,10 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
              "whether the module's singleton class is made yet (a form that makes it may run before): "
              "CRuby's NameError names the class `#<Class:%s>` once it is, `Module` before", cn ? cn : c->classes[mp.owner_ci].name);
     cplan_refuse_set(p, CRF_CAPTURE, CR_FEATURE, msg, buf, cap);
+    return;
+  }
+  if (!what && cplan_bycount_gap(c, id)) {
+    cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(), buf, cap);
     return;
   }
   if (!what && cplan_capture_gap(c, id)) {
@@ -9009,7 +9073,7 @@ static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e) {
    made after the last ask (VerNamed), so that a made entry's nodes
    rebuild no ask's parent map. */
 typedef struct {
-  int cls, sg, hcls, nv, ar, blk, els, espl, refl, atdef;   /* (espl: the else arm lets a spliced block through, ver_else_block; refl: ver_refl_named; atdef: ver_named_refuse_defs) */
+  int cls, sg, hcls, nv, ar, blk, els, espl, refl, atdef, bycount;   /* (espl: the else arm lets a spliced block through, ver_else_block; refl: ver_refl_named; atdef: ver_named_refuse_defs; bycount: ver_named_add) */
   const char *name, *refuse;
   ElabVersion vs[VER_MAX_ARMS];
   int to[VER_MAX_ARMS];
@@ -9022,6 +9086,11 @@ typedef struct {
 typedef struct VerNamedAsks { Compiler *c; VerNamed *v; int n; const unsigned char *sup; int nsup; const char **vc; int nvc; const char **rn; int nrn, demand;
   int *mh, *mn, *mk, *seen, *cps, stamp; unsigned long long *bydef; } VerNamedAsks;   /* (ver_mixers_build: the mixins by module, a mark per class side, the scopes by def) */
 static int ver_named_else(Compiler *c, const VerNamed *w);
+/* (a name reflection does not answer: a private one is no public list's, feature_limit) */
+static void ver_refl_count(Compiler *c, int vis) {
+  if (vis == SP_VIS_PRIVATE) c->nver_refl_priv++;
+  else c->nver_refl++;
+}
 static void ver_named_make(Compiler *c, const VerNamed *w) {
   NodeTable *nt = (NodeTable *)c->nt;
   DispArm arm[VER_MAX_ARMS];
@@ -9036,6 +9105,17 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
     if (c->scopes[to[i]].shadow == SHADOW_PREP && !spell) spell = strdup(c->scopes[to[i]].name);
   }
   int els, like = c->scopes[to[nv - 1]].def_node;
+  if (w->bycount) {   /* (no entry of its own: its versions answer reflection as an entry's def does, ver_cond_scope, and only the calls bound to them reach them) */
+    for (int i = 0; i < nv; i++) {
+      nt_node_set_int(nt, c->scopes[to[i]].def_node, "cond_def_refl", 1);
+      nt_node_set_int(nt, c->scopes[to[i]].def_node, "cond_def_bycount", 1);
+      c->scopes[to[i]].replaced = 1;
+      comp_touch_scope(c->scopes[to[i]].idx);
+    }
+    c->nver_bycount++;
+    ver_refl_count(c, w->vs[0].v->vis);
+    return;
+  }
   if (w->refuse) nt_node_set_int(nt, els = disp_raise_no_method(c, w->name, w->name, 0, 0), w->refuse, 1);
   else els = ver_named_else(c, w);
   /* (at the last version, where a refusal names it) */
@@ -9043,7 +9123,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   for (int i = 0; i < 3; i++) nt_node_set_int(nt, els, at[i], nt_int(nt, like, at[i], 0));
   int e = ver_entry_emit(c, w->cls, w->sg, w->name, w->ar, w->blk, spliced, arm, to, NULL, w->refuse ? 0 : nv, to[nv - 1], els);
   c->scopes[e].entry = ENTRY_NAMED;
-  if (w->refl) { nt_node_set_int(nt, c->scopes[e].def_node, "cond_def_refl", 1); c->nver_refl++; }
+  if (w->refl) { nt_node_set_int(nt, c->scopes[e].def_node, "cond_def_refl", 1); ver_refl_count(c, w->vs[0].v->vis); }
   if (spell) {
     char *u = c->scopes[e].name;
     c->scopes[e].name = spell;
@@ -9071,7 +9151,8 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
     /* (a record class's builtin that takes none, with `*r, **k` passed on:
        called where both are empty, as CRuby passes it no argument then) */
     int bare = w->ar < 0 && !is_record_class_cmethod_with_args(name);
-    int call = disp_self_call(nt, name, bare ? 0 : w->ar, w->blk);
+    /* (an instance side's, a Kernel row's, private: called without a receiver) */
+    int call = sg ? disp_self_call(nt, name, bare ? 0 : w->ar, w->blk) : disp_forward_call(nt, name, w->ar, w->blk);
     ver_pin(c, call, CT_PIN_BUILTIN, 0);
     return bare ? disp_when_unspread(c, call) : call;
   }
@@ -9211,6 +9292,8 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
   /* (a record class's own builtin takes `*r, **k` passed on too: ar -1) */
   if (sg && cls >= 0 && ((ar >= 0 && bop_class_answers(name, ar, blk)) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
+  /* (an instance-side name a Kernel row answers: the row, called without a receiver at ar arguments, which it refuses where it takes no such count) */
+  if (!sg && cls >= 0 && ar >= 0 && bop_kernel_answers(name, -1, 0)) return VK_BUILTIN;
   if (cplan_other_answers(c, cls, sg, name, 1)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
@@ -9333,7 +9416,11 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
   Compiler *c = q->c;
   int blk = 0, ar = ver_arity(c, -1, to, nv), els = VK_NOMETHOD, eb;
   for (int i = 0; i < nv; i++) blk |= c->scopes[to[i]].blk_param || c->scopes[to[i]].yields;
-  if (!refuse) els = ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
+  /* a held history of a name a Kernel row answers, taking no one count (ar -1: an optional or a rest
+     parameter), has no entry of its own, whose else arm would pass `*r, **k` on to a row that takes
+     none: each call's count makes one (ver_late_make), its else arm the row at that count */
+  int bycount = held && !refuse && ar < 0 && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0);
+  if (!refuse && !bycount) els = ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
   if (els == VK_KEEP && !held) return;
   if (els == VK_KEEP) refuse = "cond_def_override";
   eb = refuse ? 0 : ver_else_block(c, cls, sg, to[nv - 1], els);
@@ -9342,7 +9429,7 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
   VerNamed *w = &q->v[q->n++];
-  *w = (VerNamed){ cls, sg, hcls, nv, ar, blk, els, blk && eb != 1, !refuse && held, 0, name, refuse, { { 0 } }, { 0 } };
+  *w = (VerNamed){ cls, sg, hcls, nv, ar, blk, els, blk && eb != 1, !refuse && held, 0, bycount, name, refuse, { { 0 } }, { 0 } };
   memcpy(w->vs, vs, sizeof *vs * (size_t)nv);
   memcpy(w->to, to, sizeof *to * (size_t)nv);
 }

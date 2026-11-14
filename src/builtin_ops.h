@@ -474,6 +474,11 @@ int bop_name_keywords(const char *name);
    `included`, ...) whose version entry falls back to super, the core's
    no-op (ver_named_kind). */
 int bop_class_answers(const char *name, int argc, int has_block);
+/* Does a receiverless builtin row (BOP_KERNEL, not one of the compiler's own)
+   answer `name` for a call of argc arguments and a block when has_block: a
+   Kernel method the program's own def of the name stands in front of
+   (respond_to_missing?)? A negative argc asks for the name at any count. */
+int bop_kernel_answers(const char *name, int argc, int has_block);
 
 /* bop_find, with arg_of(ud, i) answering argument i's kind for the rows
    that guard it. It is called at most once per argument, and only when

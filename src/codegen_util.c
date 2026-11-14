@@ -5930,6 +5930,11 @@ static int body_is_call_on_raise(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
   int body = c->scopes[mi].body;
   if (body < 0) return 0;
+  /* nor one with a `return` anywhere, which may leave before the raise runs
+     (`raise([1].each { return @x })`) */
+  const Scope *s = &c->scopes[mi];
+  for (int r = comp_ret_first(c, mi); r >= 0; r = comp_ret_next(c, r))
+    if (nt_kind(c->nt, r) == NK_ReturnNode && comp_scope_of(c, r) == s) return 0;
   int n = body;
   if (nt_kind(nt, body) == NK_StatementsNode) {
     int cnt = 0;

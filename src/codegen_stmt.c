@@ -6670,8 +6670,15 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
   }
   if (emit_scalar_op_assign(c, lval, t, op, v, cap, lv && slot_is_oint(lv), 0, b)) return;
   if (t == TY_COMPLEX && sp_streq(op, "*") &&
-      (comp_ntype(c, v) == TY_INT || comp_ntype(c, v) == TY_FLOAT)) {
-    /* `z *= 3`: each part times the real, as `z * 3` is */
+      (comp_ntype(c, v) == TY_INT || comp_ntype(c, v) == TY_FLOAT || comp_ntype(c, v) == TY_POLY)) {
+    /* `z *= 3`: each part times the real, as `z * 3` is; a boxed value
+       takes the boxed rule (a Complex runs the Complex formula) */
+    if (comp_ntype(c, v) == TY_POLY) {
+      buf_printf(b, "%s = sp_complex_mul_poly(%s, ", lval,
+                 lv_op_assign_src(c, lval, t, cap, rtn, sizeof rtn));
+      emit_expr(c, v, b); buf_puts(b, ");\n");
+      return;
+    }
     buf_printf(b, "%s = sp_complex_mul_r(%s, (sp_float)(", lval,
                lv_op_assign_src(c, lval, t, cap, rtn, sizeof rtn));
     emit_expr(c, v, b); buf_printf(b, "), %d);\n", comp_ntype(c, v) == TY_FLOAT ? 1 : 0);

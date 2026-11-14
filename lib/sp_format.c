@@ -128,6 +128,10 @@ sp_Complex sp_complex_mul(sp_Complex a, sp_Complex b) { sp_Complex c; c.re = (a.
 sp_Complex sp_complex_mul_r(sp_Complex a, sp_float v, int is_f) {
   sp_Complex c; c.re = a.re * v; c.im = a.im * v;
   c.fl = (unsigned char)(a.fl | (is_f ? (SP_CPLX_RE_F | SP_CPLX_IM_F) : 0));
+  /* an Integer part has no -0: Complex(-1, 2) * 0 is (0+0i), and its
+     parts times 1.0 are 0.0, not -0.0 */
+  if (!(c.fl & SP_CPLX_RE_F)) c.re += 0.0;
+  if (!(c.fl & SP_CPLX_IM_F)) c.im += 0.0;
   return c;
 }
 /* An Integer (evaluated first) times a Complex. CRuby multiplies each part
@@ -142,13 +146,29 @@ sp_Complex sp_complex_imul(int64_t n, sp_Complex a) {
   return sp_complex_mul_r(a, (sp_float)n, 0);
 }
 /* A Float or a Rational (evaluated first) times a Complex: CRuby runs the
-   Complex formula. The kinds are the per-part ones (both parts Float), but
-   the exact 0 of Complex(v, 0) times a NaN part is NaN:
-   3.0 * Complex(NaN, 1) is (NaN+NaN*i). */
+   Complex formula on Complex(v, 0), so both parts are Float, and:
+   - real = v*re - 0*im, imaginary = v*im + 0*re, with an exact Integer 0;
+     0 times an Integer part is an exact 0 and changes nothing, 0 times a
+     Float part is a 0.0 with that part's sign (NaN for a NaN part), so
+     3.0 * Complex(-0.0, -1.0) is (0.0-3.0i) and 3.0 * Complex(NaN, 1) is
+     (NaN+NaN*i);
+   - a non-NaN Float times a zero (and a zero times a non-NaN Float part)
+     uses only the sign of the nonzero side, so Infinity * 0.0 is 0.0, not
+     NaN: 0.0 * Complex(Infinity, 1) is (0.0+0.0i). */
+static sp_float sp_complex_fmul_term(sp_float v, sp_float p, int p_is_f) {
+  if (v != 0 && p == 0 && !isnan(v)) return copysign(1.0, v) * p;
+  if (v == 0 && p != 0 && p_is_f && !isnan(p)) return v * copysign(1.0, p);
+  return v * p;
+}
+static sp_float sp_complex_zero_term(sp_float p) { return isnan(p) ? p : copysign(0.0, p); }
 sp_Complex sp_complex_fmul(sp_float v, sp_Complex a) {
-  sp_Complex c = sp_complex_mul_r(a, v, 1);
-  if (isnan(a.re)) c.im = a.re;
-  if (isnan(a.im)) c.re = a.im;
+  int re_f = a.fl & SP_CPLX_RE_F, im_f = a.fl & SP_CPLX_IM_F;
+  sp_Complex c;
+  c.re = sp_complex_fmul_term(v, a.re, re_f);
+  if (im_f) c.re = c.re - sp_complex_zero_term(a.im);
+  c.im = sp_complex_fmul_term(v, a.im, im_f);
+  if (re_f) c.im = c.im + sp_complex_zero_term(a.re);
+  c.fl = SP_CPLX_RE_F | SP_CPLX_IM_F;
   return c;
 }
 sp_Complex sp_complex_conjugate(sp_Complex a) { sp_Complex c; c.re = a.re; c.im = -a.im; c.fl = a.fl; return c; }

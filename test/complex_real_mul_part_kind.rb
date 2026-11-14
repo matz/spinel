@@ -15,6 +15,14 @@ w *= 3
 p w
 w *= 2.0
 p w
+w *= [3, 2.5].first
+p w
+w *= [Complex(1, 1), 1].first
+p w
+p (Complex(-1, 2) * 0) * 1.0, Complex(-1, 2) * 0
+p 3.0 * Complex(-0.0, -1.0), 3.0 * Complex(1.0, -0.0), -2.0 * Complex(1.0, 0.0)
+p 0.0 * Complex(inf, 1), 0.0 * Complex(1, inf), -0.0 * Complex(2, -3), 0.0 * Complex(-0.0, 2.0)
+p [3.0, 1].first * Complex(-0.0, -1.0), [0.0, 1].first * Complex(inf, 1)
 b = [Complex(1.0, 2), 1].first
 p b * 3, 3 * b, b * 3.0, [3, 1].first * b, [f, 1].first * b, [2**70, 1].first * b
 p b * [3, 1].first, [f - 1, 1].first * Complex(1.0, 0), [f, 1].first * Complex(1.0, 0)

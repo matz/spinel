@@ -49224,6 +49224,13 @@ int desugar_rescue_block_bodies_at(Compiler *c, LowerCtx *lc, int id) {
   comp_grow_node_arrays(c);
   return 1;
 }
+/* Run one step; spinel-work prints the work it took (nt_work_step), which
+   make scale-test reads for the steps a program shape stresses. */
+static void an_work_step(Compiler *c, const char *name, void (*step)(Compiler *)) {
+  unsigned long long w = nt_work_now();
+  step(c);
+  nt_work_step(name, w);
+}
 static void an_phase_desugar_register(Compiler *c) {
   comp_poly_candidates_reset();
   comp_descendants_reset();
@@ -49398,16 +49405,16 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_ENUMERATOR_PRODUCE);         /* Enumerator.produce -> fiber generator */
   lower_run(c, &lc, LW_PARAM_DEFAULT_ASSIGNS_LOCAL); /* def m(p = (x = e)) reading x -> sentinel + callee guard */
   lower_run(c, &lc, LW_RECURSIVE_PARAM_DEFAULTS);   /* def m(x, y = m(..)) -> default helper method */
-  qualify_colliding_classes(c);
+  an_work_step(c, "qualify_colliding_classes", qualify_colliding_classes);
   /* the walk is a step of its own: a form it runs splices through the host,
      which lowers each splice as it is made; the rows a splice leaves to the
      program run once, at the walk's end */
   host_begin(&hs, &lc);
   scope_read_keys_from(c);   /* (the reads qualify keys after the walk: read_key_name) */
   AN_STEP_V("elab_program", elab_program(c, &hs));   /* walk_scope of each file's top level, and the load record */
-  elab_prov_apply(c);   /* the nested classes take their names, by the rule (qc_rule_qualifies) */
+  an_work_step(c, "elab_prov_apply", elab_prov_apply);   /* the nested classes take their names, by the rule (qc_rule_qualifies) */
   scope_read_keys_from(NULL);
-  qualify_colliding_reads(c);
+  an_work_step(c, "qualify_colliding_reads", qualify_colliding_reads);
   /* a def in a `K.instance_eval { }` block defines K's class method (the
      record's frame): the scope walk filed its scope before the record saw the
      def, so it is moved here, as `def self.m` in K's body is placed */
@@ -49432,7 +49439,7 @@ static void an_phase_desugar_register(Compiler *c) {
   host_end(c, &hs);
   lower_finish(c, &lc);   /* SPINEL_LOWER_CHECK: the report, and no C */
   prog_refuse_loads(c);
-  elab_const_keys(c);
+  an_work_step(c, "elab_const_keys", elab_const_keys);
   if (g_dump_load_record) { elab_dump(c, stdout); exit(0); }   /* the load phase's points, as the walk leaves them */
   AN_STEP_V("expand_static_splat_args", expand_static_splat_args(c, 0, c->nt->count));
   AN_STEP_V("register_singleton_defs", register_singleton_defs(c));   /* def CONST.m / def x.m -> synthesized subclass */

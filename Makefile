@@ -6045,14 +6045,13 @@ CLASS_MACROS_ONE_LIMIT ?= 1.2
 # (ct_class_state), so the body is followed once; from the body's start
 # at each call it reads as K^2.
 CLASS_MACRO_STATE_LIMIT ?= 2.2
-# N classes that each write and read a constant SIZE
-# (test/scale/const_collisions.sh), at N = 400 and 800, less the work of the
-# same program with a name of its own for each class's constant: what the
-# collisions cost. The load record keys each write and read after the walk
-# from its entity (elab_const_keys), so it grows with N. qualify matched each
-# read against every colliding write and compared every pair of writes:
-# 0.84 M and 2.78 M units (3.30x); now none (below 1 M units, which the
-# check takes as 1 M).
+# N classes that each write and read a constant SIZE and nest a class In
+# (test/scale/const_collisions.sh), at N = 400 and 800: the work of the
+# constant steps alone (qualify_colliding_classes, elab_prov_apply,
+# elab_header_owner, qualify_colliding_reads, elab_const_keys), which
+# spinel-work prints per step. The whole compile's work hid them, being more
+# than a hundred times theirs. The load record keys each write and read after
+# the walk from its entity (elab_const_keys), so they grow with N.
 CONST_COLLISIONS_LIMIT ?= 2.2
 # Module functions (test/scale/module_functions.sh), compiled to C at N=100
 # and N=200, in both load models: N modules of ten functions after a bare
@@ -6115,6 +6114,11 @@ scale-test: $(SPINEL_WORK)
 	sw () { o=$$($(SPINEL_WORK) "$$@" 2>&1); r=$$?; \
 	  if [ $$r -ne 0 ]; then echo "scale-test: FAIL (spinel-work exited $$r: $$*)" >&2; echo "$$o" | tail -3 >&2; return 1; fi; \
 	  echo "$$o" | sed -n 's/^spinel-work: //p'; }; \
+	sws () { st="$$1"; shift; o=$$($(SPINEL_WORK) "$$@" 2>&1); r=$$?; \
+	  if [ $$r -ne 0 ]; then echo "scale-test: FAIL (spinel-work exited $$r: $$*)" >&2; echo "$$o" | tail -3 >&2; return 1; fi; \
+	  t=$$(echo "$$o" | awk -v st=" $$st " '$$1 == "spinel-work-step:" && index(st, " " $$2 " ") { t += $$3; seen[$$2] = 1 } \
+	    END { n = split(st, w, " "); for (i = 1; i <= n; i++) if (!(w[i] in seen)) { print w[i]; exit 1 } print t }') || \
+	  { echo "scale-test: FAIL (spinel-work printed no step $$t: $$*)" >&2; return 1; }; echo "$$t"; }; \
 	gen gen 100 a.rb; gen gen 400 b.rb; \
 	wa=$$(sw --emit-rbs -o "$$tmp/a.rbs" "$$tmp/a.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	wb=$$(sw --emit-rbs -o "$$tmp/b.rbs" "$$tmp/b.rb") || { rm -rf "$$tmp"; exit 1; }; \
@@ -6161,12 +6165,10 @@ scale-test: $(SPINEL_WORK)
 	gen class_macros_one "2000 written" o1.rb; gen class_macros_one 2000 o2.rb; \
 	oa=$$(sw --load-model=graph -c -o "$$tmp/o1.c" "$$tmp/o1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	ob=$$(sw --load-model=graph -c -o "$$tmp/o2.c" "$$tmp/o2.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	gen const_collisions "400 colliding" cc4.rb; gen const_collisions "800 colliding" cc8.rb; \
-	gen const_collisions "400 distinct" cd4.rb; gen const_collisions "800 distinct" cd8.rb; \
-	cca=$$(sw -c -o "$$tmp/cc4.c" "$$tmp/cc4.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	ccb=$$(sw -c -o "$$tmp/cc8.c" "$$tmp/cc8.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	cda=$$(sw -c -o "$$tmp/cd4.c" "$$tmp/cd4.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	cdb=$$(sw -c -o "$$tmp/cd8.c" "$$tmp/cd8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen const_collisions 400 cc4.rb; gen const_collisions 800 cc8.rb; \
+	ccs="qualify_colliding_classes elab_prov_apply elab_header_owner qualify_colliding_reads elab_const_keys"; \
+	cca=$$(sws "$$ccs" -c -o "$$tmp/cc4.c" "$$tmp/cc4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ccb=$$(sws "$$ccs" -c -o "$$tmp/cc8.c" "$$tmp/cc8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen class_macro_state 200 cs2.rb; gen class_macro_state 400 cs4.rb; \
 	csa=$$(sw --load-model=graph -c -o "$$tmp/cs2.c" "$$tmp/cs2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	csb=$$(sw --load-model=graph -c -o "$$tmp/cs4.c" "$$tmp/cs4.rb") || { rm -rf "$$tmp"; exit 1; }; \
@@ -6272,10 +6274,9 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$oa" -v b="$$ob" -v lim="$(CLASS_MACROS_ONE_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: one class of macro calls against its methods written out is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (a row visited the whole class body per macro call: see lower_later and lower_span)"; exit 1; }; \
-	awk -v ca="$$cca" -v cb="$$ccb" -v da="$$cda" -v db="$$cdb" -v lim="$(CONST_COLLISIONS_LIMIT)" 'BEGIN { a = ca - da; b = cb - db; \
-	  r = b / (a < 1000000 ? 1000000 : a); \
+	awk -v a="$$cca" -v b="$$ccb" -v lim="$(CONST_COLLISIONS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: colliding constant work at 2x the classes is %.2fx (%d, %d units; limit %.2f)\n", r, a, b, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (keying the colliding constants grew superlinearly: see elab_const_keys and lr_const_cand)"; exit 1; }; \
+	  { echo "scale-test: FAIL (the colliding constants' steps grew superlinearly: see qualify_colliding_classes, elab_prov_apply, elab_header_owner, qualify_colliding_reads and elab_const_keys)"; exit 1; }; \
 	awk -v a="$$csa" -v b="$$csb" -v lim="$(CLASS_MACRO_STATE_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: class-body macro state work at 2x the calls is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (a macro call followed the class's state from the body's start: see ct_class_state)"; exit 1; }; \

@@ -1,11 +1,13 @@
 #!/bin/sh
 # N classes that each write a constant and read it, from a method of the
-# class, from a class nested in it and from the top level. With
-# "N colliding" every class's constant is SIZE, so each collides with the
-# others; with "N distinct" class i's is SIZE_i, the same program with no
-# collision. The load record keys each write and each read after the walk
-# (elab_const_keys) from the entity it names, so the difference grows with
-# N; a read keyed by scanning every write of its name grows as N^2.
+# class, from a class nested in it and from the top level. With "N colliding"
+# every class's constant is SIZE, so each collides with the others; with "N
+# distinct" class i's is SIZE_i, the same program with no collision. Every
+# class's nested In collides with the others in both. The load record keys
+# each write and each read after the walk (elab_const_keys) from the entity it
+# names, so the work grows with N; a read keyed by scanning every write of its
+# name grows as N^2. make scale-test takes the work of those steps alone
+# (spinel-work-step) in the colliding form.
 [ $# -eq 1 ] && set -- $1   # "N mode" as one argument too
 N=${1:-10}; MODE=${2:-colliding}
 awk -v N="$N" -v MODE="$MODE" 'BEGIN {

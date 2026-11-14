@@ -8215,7 +8215,9 @@ int elab_header_entity(Compiler *c, int node, const ElabPos *pos) {
   h->owner = k == NK_ConstantReadNode ? lr_cref(c, r->at[node]) : par < 0 ? LR_MAIN : lr_class_ref_at(c, par, NULL);
   /* (a path through a builtin the program does not reopen, `module
      Comparable::Ext::Group`: the class of the program its Ruby name names) */
+  unsigned long long ow = nt_work_now();   /* (the scale test counts the walk's header lookups as a step) */
   if (h->owner < LR_MAIN && par >= 0) h->owner = lr_class_by_written_path(c, par);
+  nt_work_step("elab_header_owner", ow);
   if (h->owner < LR_MAIN) h->owner = LR_UNKNOWN_CLASS;
   const LrDef *d = NULL;
   h->verdict = lr_entity_own_at(c, h->owner, h->leaf, elab_point_of(c, node), &d);

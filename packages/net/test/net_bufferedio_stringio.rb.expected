@@ -1,0 +1,45 @@
+readline
+"head"
+"next"
+readline EOF
+EOFError
+readuntil
+"one|"
+"two|"
+readuntil EOF
+EOFError
+readuntil ignore EOF
+"tail"
+""
+read
+"ab"
+true
+"prefix:cde"
+read short
+EOFError
+"prefix:cdef"
+read ignore EOF
+""
+""
+read_all
+true
+[112, 114, 101, 102, 105, 120, 58, 97, 0, 98, 13, 10, 99]
+""
+multiple fills
+16383
+"xend"
+""
+empty readline
+EOFError
+empty readuntil
+EOFError
+empty readuntil ignore EOF
+""
+empty read
+EOFError
+empty read ignore EOF
+""
+""
+empty read_all
+""
+""

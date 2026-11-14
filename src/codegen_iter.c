@@ -3236,8 +3236,12 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
         ft = is_scalar_ret(rt2) ? rt2 : TY_INT;
       }
       if (ft == TY_UNKNOWN || ft == TY_VOID || ft == TY_NIL) ft = TY_INT;
+      /* a yield wanted as its oint (an Integer or a Float beside a nil) takes
+         the oint's nil: the bare 0 did not fit it (`m { 1 }` then
+         `m { raise "x" }`, the second read by `p`) */
+      if (ywo && oint_kind(ft)) buf_printf(b, " %s;", oint_nil(ft));
       /* a by-value object is a bare struct: default_value's NULL is ill-typed */
-      if (ty_is_object(ft) && comp_ty_value_obj(c, ft))
+      else if (ty_is_object(ft) && comp_ty_value_obj(c, ft))
         buf_printf(b, " (sp_%s){0};", c->classes[ty_object_class(ft)].c_name);
       else
         buf_printf(b, " %s;", default_value_from_compiler(c, ft));

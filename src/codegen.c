@@ -22230,6 +22230,17 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         *isa_ext = eb.p;
         *isa_ext_at = b->len;
       } }
+    /* a builtin class the program reopens (`class Method; def m; end`): its
+       class value is the program's entry, which no builtin value carries.
+       sp_class_eq maps a top-level reopening with a builtin id to that id
+       (reopened_builtin_class_id); for one with none (Method, UnboundMethod,
+       Random, Enumerator::Chain), a class held in a value (`k === x`,
+       `grep(Method)`) asks the runtime by the class's Ruby name here. The walk
+       below still answers a subclass's instance. */
+    for (int k = 0; k < c->nclasses; k++)
+      if (class_is_builtin_class_reopen(c, k) && !reopened_builtin_class_id(c, k))
+        buf_printf(b, "  if (klass.cls_id == %d && sp_poly_kind_of_builtin(obj, \"%s\")) return 1;\n",
+                   k, class_ruby_name(c, k));
     buf_puts(b,
       "  return sp_class_le(sp_poly_get_class(obj),klass);\n}\n");
     /* Module#< / <= / > / >= / <=> where an operand is boxed: the tri-state

@@ -181,3 +181,20 @@ c3_reader_literal_recv.rb:20 call new: none (tail)
 c3_reader_literal_recv.rb:21 call p: none (tail)
 c3_reader_literal_recv.rb:21 call n: 0 C AHEAD code across | 1 L.new AHEAD code | guard=call steps=0
 c3_reader_literal_recv.rb:21 call new: none (tail)
+== c4_local_write_chain.rb
+c4_local_write_chain.rb:2 array: none (pure)
+c4_local_write_chain.rb:5 call p: none (tail)
+c4_local_write_chain.rb:5 call f: none (tail)
+c4_local_write_chain.rb:5 call f: none (tail)
+c4_local_write_chain.rb:5 call f: none (tail)
+c4_local_write_chain.rb:6 call p: none (tail)
+c4_local_write_chain.rb:6 call g: 0 a HOLD(by 1) across | 1 g AHEAD code | guard=call steps=0
+c4_local_write_chain.rb:6 call g: 0 a HOLD(by 1) across | 1 g AHEAD code | guard=call steps=0
+c4_local_write_chain.rb:6 call g: 0 a HOLD(by 1) across | 1 Parentheses AHEAD code | guard=call steps=0
+c4_local_write_chain.rb:7 call p: none (tail)
+c4_local_write_chain.rb:7 array: none (pure)
+== c4_ivar_writes.rb
+c4_ivar_writes.rb:5 array: 0 @a HOLD(by 3) across | 1 @b HOLD(by 4) across | 2 three AHEAD code across | 3 set_a AHEAD code across | 4 Parentheses AHEAD code | guard=call steps=0
+c4_ivar_writes.rb:7 call p: none (tail)
+c4_ivar_writes.rb:7 call run: none (tail)
+c4_ivar_writes.rb:7 call new: none (tail)

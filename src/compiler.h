@@ -2105,7 +2105,7 @@ int comp_is_local_write(NodeKind k);
 int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth);
 /* ...its answer at `id` itself: 1 yes, 0 no for the whole subtree, -1 ask
    the node's operands (a self call's method body is asked here, one level
-   deeper). The operand-order record composes it over a memo. */
+   deeper). */
 int node_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth);
 /* Both questions' one rule, for every instance variable at once: each name
    the node (subtree) may write is handed to `add`, which answers nonzero to

@@ -202,6 +202,24 @@ PROGRAMS = [
     p C.n(K.new)
     p C.n(L.new)
   RUBY
+  ["c4_local_write_chain.rb", <<~'RUBY'],
+    def f(a) = a
+    def g(a, b) = [a, b]
+    x = 0
+    a = 1
+    p f(f(f(x = 1)))
+    p g(a, g(a, g(a, (a = 2))))
+    p [a, x]
+  RUBY
+  ["c4_ivar_writes.rb", <<~'RUBY'],
+    class K
+      def initialize = (@a = 1; @b = 2; @c = 3)
+      def set_a = (@a = 9)
+      def three = (@c = 1; @c = 2; @c = 3)
+      def run = [@a, @b, three, set_a, (@b = 5)]
+    end
+    p K.new.run
+  RUBY
 ]
 
 dir = File.join(Dir.tmpdir, "spinel_order_dump_#{Process.pid}")

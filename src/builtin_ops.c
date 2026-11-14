@@ -699,6 +699,11 @@ static const BuiltinOp bop_rows[] = {
   { TY_COMPLEX, "-",   1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_sub($r, $c0)", CX_NUM },
   { TY_COMPLEX, "-",   1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, CX_TYPEERROR },
   { TY_COMPLEX, "-",   0, 127, BF_ANY, TY_COMPLEX, BOPE_NONE },
+  /* a real argument multiplies each part, so each keeps its kind:
+     Complex(1.0, 2) * 3 is (3.0+6i) */
+  { TY_COMPLEX, "*",   1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_mul_r($r, (sp_float)($e0), 0)", BOP_K(TY_INT) },
+  { TY_COMPLEX, "*",   1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_mul_r($r, (sp_float)($e0), 1)", BOP_K(TY_FLOAT) },
+  { TY_COMPLEX, "*",   1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_mul_poly($r, $b0)", BOP_K(TY_POLY) },
   { TY_COMPLEX, "*",   1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_mul($r, $c0)", CX_NUM },
   { TY_COMPLEX, "*",   1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, CX_TYPEERROR },
   { TY_COMPLEX, "*",   0, 127, BF_ANY, TY_COMPLEX, BOPE_NONE },

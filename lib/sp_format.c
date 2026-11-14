@@ -125,6 +125,58 @@ sp_Complex sp_complex_polar(sp_float m, sp_float a, int m_is_f) {
 }
 sp_Complex sp_complex_add(sp_Complex a, sp_Complex b) { sp_Complex c; c.re = a.re + b.re; c.im = a.im + b.im; c.fl = a.fl | b.fl; return c; }
 sp_Complex sp_complex_mul(sp_Complex a, sp_Complex b) { sp_Complex c; c.re = (a.re * b.re) - (a.im * b.im); c.im = (a.re * b.im) + (a.im * b.re); c.fl = (a.fl | b.fl) ? (SP_CPLX_RE_F | SP_CPLX_IM_F) : 0; return c; }
+/* Complex * a real number (Integer, Float or Rational): each part times the
+   real, as CRuby's Complex#* does for a real argument, so each part keeps
+   its own kind: Complex(1.0, 2) * 3 is (3.0+6i). The Complex * Complex
+   formula above made both parts Float when either side had a Float part.
+   is_f: the real is a Float (or a Rational, which a part keeps in its Float
+   slot). */
+sp_Complex sp_complex_mul_r(sp_Complex a, sp_float v, int is_f) {
+  sp_Complex c; c.re = a.re * v; c.im = a.im * v;
+  c.fl = (unsigned char)(a.fl | (is_f ? (SP_CPLX_RE_F | SP_CPLX_IM_F) : 0));
+  /* an Integer part has no -0: Complex(-1, 2) * 0 is (0+0i), and its
+     parts times 1.0 are 0.0, not -0.0 */
+  if (!(c.fl & SP_CPLX_RE_F)) c.re += 0.0;
+  if (!(c.fl & SP_CPLX_IM_F)) c.im += 0.0;
+  return c;
+}
+/* An Integer (evaluated first) times a Complex. CRuby multiplies each part
+   only for a Fixnum (-2**62 <= n < 2**62): 3 * Complex(1.0, 2) is (3.0+6i).
+   A larger Integer becomes Complex(n, 0) and runs the Complex formula, so a
+   Float part makes both parts Float. */
+sp_Complex sp_complex_imul(int64_t n, sp_Complex a) {
+  if (n < -4611686018427387904LL || n > 4611686018427387903LL) {
+    sp_Complex r; r.re = (sp_float)n; r.im = 0; r.fl = 0;
+    return sp_complex_mul(r, a);
+  }
+  return sp_complex_mul_r(a, (sp_float)n, 0);
+}
+/* A Float or a Rational (evaluated first) times a Complex: CRuby runs the
+   Complex formula on Complex(v, 0), so both parts are Float, and:
+   - real = v*re - 0*im, imaginary = v*im + 0*re, with an exact Integer 0;
+     0 times an Integer part is an exact 0 and changes nothing, 0 times a
+     Float part is a 0.0 with that part's sign (NaN for a NaN part), so
+     3.0 * Complex(-0.0, -1.0) is (0.0-3.0i) and 3.0 * Complex(NaN, 1) is
+     (NaN+NaN*i);
+   - a non-NaN Float times a zero (and a zero times a non-NaN Float part)
+     uses only the sign of the nonzero side, so Infinity * 0.0 is 0.0, not
+     NaN: 0.0 * Complex(Infinity, 1) is (0.0+0.0i). */
+static sp_float sp_complex_fmul_term(sp_float v, sp_float p, int p_is_f) {
+  if (v != 0 && p == 0 && !isnan(v)) return copysign(1.0, v) * p;
+  if (v == 0 && p != 0 && p_is_f && !isnan(p)) return v * copysign(1.0, p);
+  return v * p;
+}
+static sp_float sp_complex_zero_term(sp_float p) { return isnan(p) ? p : copysign(0.0, p); }
+sp_Complex sp_complex_fmul(sp_float v, sp_Complex a) {
+  int re_f = a.fl & SP_CPLX_RE_F, im_f = a.fl & SP_CPLX_IM_F;
+  sp_Complex c;
+  c.re = sp_complex_fmul_term(v, a.re, re_f);
+  if (im_f) c.re = c.re - sp_complex_zero_term(a.im);
+  c.im = sp_complex_fmul_term(v, a.im, im_f);
+  if (re_f) c.im = c.im + sp_complex_zero_term(a.re);
+  c.fl = SP_CPLX_RE_F | SP_CPLX_IM_F;
+  return c;
+}
 sp_Complex sp_complex_conjugate(sp_Complex a) { sp_Complex c; c.re = a.re; c.im = -a.im; c.fl = a.fl; return c; }
 sp_Complex sp_complex_sub(sp_Complex a, sp_Complex b) { sp_Complex c; c.re = a.re - b.re; c.im = a.im - b.im; c.fl = a.fl | b.fl; return c; }
 sp_Complex sp_complex_div(sp_Complex a, sp_Complex b) {

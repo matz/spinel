@@ -1718,6 +1718,43 @@ int builtin_comparable_owns(const char *cls, const char *m) {
   return is_comparable_builtin_name(cls) && is_comparable_module_method(m);
 }
 
+/* Enumerable's own public instance methods with their Method#arity, as
+   CRuby 4.0 lists them (Enumerable.public_instance_methods(false),
+   instance_method(m).arity), less the ones a Method's wrapper does not
+   serve yet, whose capture stays the NameError it was: the wrapper's body
+   call found no method (chunk, grep, grep_v, tally, and a Hash's
+   collect_concat, drop_while, minmax_by and take_while), did not compile
+   (each_with_object) or was refused (lazy), and chunk_while, slice_when,
+   cycle and sum were not tried. */
+static const struct { const char *m; int a; } sp_enumerable_arity_tbl[] = {
+  { "all?", -1 }, { "any?", -1 }, { "chain", -1 }, { "collect", 0 }, { "compact", 0 }, { "count", -1 },
+  { "detect", -1 }, { "drop", 1 }, { "each_cons", 1 }, { "each_entry", -1 }, { "each_slice", 1 },
+  { "each_with_index", -1 }, { "entries", -1 }, { "filter", 0 }, { "filter_map", 0 }, { "find", -1 },
+  { "find_all", 0 }, { "find_index", -1 }, { "first", -1 }, { "flat_map", 0 }, { "group_by", 0 }, { "include?", 1 },
+  { "inject", -1 }, { "map", 0 }, { "max", -1 }, { "max_by", -1 }, { "member?", 1 }, { "min", -1 }, { "min_by", -1 },
+  { "minmax", 0 }, { "none?", -1 }, { "one?", -1 }, { "partition", 0 }, { "reduce", -1 }, { "reject", 0 },
+  { "reverse_each", -1 }, { "select", 0 }, { "slice_after", -1 }, { "slice_before", -1 }, { "sort", 0 },
+  { "sort_by", 0 }, { "take", 1 }, { "to_a", -1 }, { "to_h", -1 }, { "to_set", -1 }, { "uniq", 0 }, { "zip", -1 },
+  { NULL, 0 } };
+
+/* Method#arity of one of Enumerable's own methods */
+int builtin_enumerable_arity(const char *m, int *out) {
+  for (int i = 0; m && sp_enumerable_arity_tbl[i].m; i++)
+    if (sp_streq(sp_enumerable_arity_tbl[i].m, m)) { *out = sp_enumerable_arity_tbl[i].a; return 1; }
+  return 0;
+}
+
+/* Enumerable's own methods on a builtin class that includes it and does
+   not define the name itself: an Array's inject, group_by and to_set, a
+   Hash's map. The builtin table holds each class's own methods only, so
+   `[1, 2].method(:inject)` found none and raised NameError. (Not a
+   Range's: no Method of a Range's binds yet, its own methods' either.) */
+int builtin_enumerable_owns(const char *cls, const char *m) {
+  int a;
+  if (!cls || !(sp_streq(cls, "Array") || sp_streq(cls, "Hash"))) return 0;
+  return !builtin_method_known(cls, m) && builtin_enumerable_arity(m, &a);
+}
+
 /* Method#arity of a Comparable method: between?(min, max), clamp(min, max)
    or clamp(range), and the one-operand comparisons. */
 int builtin_comparable_arity(const char *m) {
@@ -2004,6 +2041,7 @@ const char *builtin_method_owner(const char *cls, const char *m) {
   if (builtin_method_known(cls, m)) return cls;
   if (builtin_numeric_owns(cls, m)) return "Numeric";
   if (builtin_comparable_owns(cls, m)) return "Comparable";
+  if (builtin_enumerable_owns(cls, m)) return "Enumerable";
   return builtin_object_method_owner(m);
 }
 

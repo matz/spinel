@@ -6130,3 +6130,113 @@ int sp_sched_threads_started(void) {
   return 0;
 #endif
 }
+
+#if defined(SP_THREADS) && !defined(_WIN32)
+/* ---- offloaded foreign calls (ffi_func ... offload: true, #11804) ----
+   A pool of plain pthreads runs the C functions; they run no Ruby, hold no
+   Spinel thread-local state and take no signal (each blocks them all), so a
+   process signal and the preemption tick still reach the workers. A job is
+   the caller's (on its stack): the offload thread writes a byte to the
+   caller's pipe, which the caller waits on with sp_sched_wait_io, and then
+   sets `done`, its last touch of the job; so the pipe goes to the next call
+   (or is closed) with nothing more to come. */
+typedef struct sp_offload_job { void (*fn)(void *); void *arg; int wfd; int done; struct sp_offload_job *next; } sp_offload_job;
+static pthread_mutex_t g_off_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_off_cv = PTHREAD_COND_INITIALIZER;
+static sp_offload_job *g_off_head, *g_off_tail;
+static int g_off_threads, g_off_idle, g_off_atfork;
+static int *g_off_pipes, g_off_npipes, g_off_cpipes;   /* free pipes: read, write ends in pairs */
+enum { SP_OFFLOAD_MAX_THREADS = 64 };
+
+static void *sp_offload_main(void *u) {
+  (void)u;
+  pthread_mutex_lock(&g_off_mu);
+  for (;;) {
+    while (!g_off_head) { g_off_idle++; pthread_cond_wait(&g_off_cv, &g_off_mu); g_off_idle--; }
+    sp_offload_job *j = g_off_head;
+    g_off_head = j->next;
+    if (!g_off_head) g_off_tail = NULL;
+    pthread_mutex_unlock(&g_off_mu);
+    j->fn(j->arg);
+    char one = 1;
+    while (write(j->wfd, &one, 1) < 0 && errno == EINTR) {}
+    __atomic_store_n(&j->done, 1, __ATOMIC_RELEASE);   /* (the last touch: j may be gone after it) */
+    pthread_mutex_lock(&g_off_mu);
+  }
+  return NULL;
+}
+/* (a forked child has none of the parent's offload threads) */
+static void sp_offload_atfork_child(void) {
+  pthread_mutex_init(&g_off_mu, NULL);
+  pthread_cond_init(&g_off_cv, NULL);
+  g_off_head = g_off_tail = NULL;
+  g_off_threads = g_off_idle = 0;
+}
+/* PRE: g_off_mu held. 0 when no thread could be made */
+static int sp_offload_spawn_locked(void) {
+  if (!g_off_atfork) { g_off_atfork = 1; pthread_atfork(NULL, NULL, sp_offload_atfork_child); }
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+  sigset_t all, old;
+  sigfillset(&all);
+  pthread_sigmask(SIG_BLOCK, &all, &old);   /* the new thread starts with every signal blocked */
+  pthread_t t;
+  int rc = pthread_create(&t, &at, sp_offload_main, NULL);
+  pthread_sigmask(SIG_SETMASK, &old, NULL);
+  pthread_attr_destroy(&at);
+  if (rc != 0) return 0;
+  g_off_threads++;
+  return 1;
+}
+
+void sp_offload_call(void (*fn)(void *), void *arg) {
+  int p[2] = { -1, -1 };
+  pthread_mutex_lock(&g_off_mu);
+  if (g_off_npipes) { g_off_npipes--; p[0] = g_off_pipes[2 * g_off_npipes]; p[1] = g_off_pipes[2 * g_off_npipes + 1]; }
+  pthread_mutex_unlock(&g_off_mu);
+  if (p[0] < 0) {
+    if (pipe(p) != 0) { fn(arg); return; }
+    for (int k = 0; k < 2; k++) {
+      fcntl(p[k], F_SETFL, fcntl(p[k], F_GETFL) | O_NONBLOCK);
+      fcntl(p[k], F_SETFD, FD_CLOEXEC);
+    }
+  }
+  sp_offload_job j = { fn, arg, p[1], 0, NULL };
+  pthread_mutex_lock(&g_off_mu);
+  if (!g_off_idle && g_off_threads < SP_OFFLOAD_MAX_THREADS && !sp_offload_spawn_locked() && !g_off_threads) {
+    /* no offload thread at all: the call runs in place */
+    pthread_mutex_unlock(&g_off_mu);
+    close(p[0]); close(p[1]);
+    fn(arg);
+    return;
+  }
+  if (g_off_tail) g_off_tail->next = &j; else g_off_head = &j;
+  g_off_tail = &j;
+  pthread_cond_signal(&g_off_cv);
+  pthread_mutex_unlock(&g_off_mu);
+  /* the job is on this stack: a #raise or #kill waits until it is done */
+  sp_fiber_defer_inject();
+  for (int got = 0; !__atomic_load_n(&j.done, __ATOMIC_ACQUIRE); ) {
+    /* the byte comes just before `done`: once it is read, wait the moment out */
+    if (got) { sched_yield(); continue; }
+    if (!sp_sched_wait_io(p[0], POLLIN)) {
+      struct pollfd pf = { p[0], POLLIN, 0 };
+      poll(&pf, 1, 100);
+    }
+    char buf[16];
+    while (read(p[0], buf, sizeof buf) > 0) got = 1;
+  }
+  sp_fiber_undefer_inject();
+  pthread_mutex_lock(&g_off_mu);
+  if (g_off_npipes == g_off_cpipes) {
+    int nc = g_off_cpipes ? g_off_cpipes * 2 : 8;
+    int *np = realloc(g_off_pipes, sizeof(int) * 2 * (size_t)nc);
+    if (np) { g_off_pipes = np; g_off_cpipes = nc; }
+  }
+  if (g_off_npipes < g_off_cpipes) { g_off_pipes[2 * g_off_npipes] = p[0]; g_off_pipes[2 * g_off_npipes + 1] = p[1]; g_off_npipes++; p[0] = -1; }
+  pthread_mutex_unlock(&g_off_mu);
+  if (p[0] >= 0) { close(p[0]); close(p[1]); }
+  sp_fiber_fire_inject_if_pending();
+}
+#endif

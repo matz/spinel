@@ -976,6 +976,10 @@ spinel: test/reject/extend_alias_of_own_class_method.rb:7: K.copied: alias in th
 spinel: test/reject/extend_alias_over_earlier_copy.rb:11: K.copied: alias in the extended module M of a class method K defines itself is not supported; see docs/limitations.md
 == test/reject/extend_alias_over_earlier_copy.rb [promote] rc=1
 spinel: test/reject/extend_alias_over_earlier_copy.rb:11: K.copied: alias in the extended module M of a class method K defines itself is not supported; see docs/limitations.md
+== test/reject/ffi_offload_with_callback.rb [default] rc=1
+spinel: test/reject/ffi_offload_with_callback.rb:11: `offload: true` in a program with an ffi_callback is not supported: the C function runs on another OS thread, where a callback cannot run Ruby
+== test/reject/ffi_offload_with_callback.rb [promote] rc=1
+spinel: test/reject/ffi_offload_with_callback.rb:11: `offload: true` in a program with an ffi_callback is not supported: the C function runs on another OS thread, where a callback cannot run Ruby
 == test/reject/ffi_ptr_ruby_object.rb [default] rc=1
 spinel: test/reject/ffi_ptr_ruby_object.rb:11: unsupported ffi pointer argument (a Ruby object has no C address; pass an IO::Buffer, a String or a :ptr value): node N (CallNode `new`) recv=ConstantReadNode/ty49 argc=0
 spinel: 1 refusal, nothing written

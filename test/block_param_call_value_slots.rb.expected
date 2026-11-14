@@ -1,0 +1,15 @@
+NoMethodError
+"x"
+NoMethodError
+NoMethodError: undefined method 'at' for nil
+nil
+5
+7
+ran
+nil
+ran
+"s"
+ran
+1..2
+nil
+[1, 2, 3]

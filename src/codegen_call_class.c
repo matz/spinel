@@ -1869,6 +1869,62 @@ static int ffi_str_arg_beside_alloc(Compiler *c, int fi, int argc, const int *ar
    of C type ctype, declared in pre ahead of the call, rooting it for the
    call when it is a String (root_str) that Ruby code run by the call could
    collect. */
+/* An `offload: true` call (FfiFunc.offload): `call` is the plain call text,
+   `callee(arg, ...)`. Its arguments go into a struct of the spec types,
+   which a thunk at file scope (in g_procs) passes to the callee on an
+   offload thread (sp_offload_call), keeping the answer and errno there for
+   the caller; pre/base/hold/rel are the temp form's pieces, as for a
+   blocking call. */
+static void ffi_emit_offload(Compiler *c, int fi, const char *call, const char *ret_spec, int is_void_ret,
+                             int fixed_argc, Buf *out, const char *pre, const char *base, const char *hold,
+                             const char *rel) {
+  static int seq;
+  int n = ++seq;
+  const char *lp = strchr(call, '(');
+  size_t clen = lp ? (size_t)(lp - call) : strlen(call);
+  /* the arguments: the text between the call's parentheses, split at its
+     top-level commas */
+  const char *args = lp ? lp + 1 : "";
+  size_t alen = strlen(args);
+  if (alen && args[alen - 1] == ')') alen--;
+  Buf init; memset(&init, 0, sizeof init);
+  int depth = 0, nargs = 0;
+  size_t start = 0;
+  for (size_t i = 0; i <= alen; i++) {
+    char ch = i < alen ? args[i] : ',';
+    if (ch == '(' || ch == '[' || ch == '{') depth++;
+    else if (ch == ')' || ch == ']' || ch == '}') depth--;
+    else if (ch == '"' || ch == '\'') {
+      char q = ch;
+      for (i++; i < alen && args[i] != q; i++) if (args[i] == '\\') i++;
+    }
+    else if (ch == ',' && depth == 0) {
+      if (i > start || i < alen) {
+        if (nargs) buf_puts(&init, ", ");
+        buf_printf(&init, "%.*s", (int)(i - start), args + start);
+        nargs++;
+      }
+      start = i + 1;
+    }
+  }
+  if (nargs != fixed_argc) nargs = fixed_argc;
+  Buf *g = &g_procs;
+  buf_printf(g, "struct _sp_off%d_s { ", n);
+  for (int ai = 0; ai < fixed_argc; ai++) buf_printf(g, "%s a%d; ", ffi_c_type(c->ffi_funcs[fi].args[ai]), ai);
+  if (!is_void_ret) buf_printf(g, "%s r; ", ffi_c_type(ret_spec));
+  buf_printf(g, "int e; };\nstatic void _sp_off%d(void *p_) {\n  struct _sp_off%d_s *p = (struct _sp_off%d_s *)p_;\n  ", n, n, n);
+  if (!is_void_ret) buf_puts(g, "p->r = ");
+  buf_printf(g, "%.*s(", (int)clen, call);
+  for (int ai = 0; ai < fixed_argc; ai++) buf_printf(g, "%sp->a%d", ai ? ", " : "", ai);
+  buf_puts(g, ");\n  p->e = errno;\n}\n");
+  buf_printf(out, "({ %s%s%sstruct _sp_off%d_s _o%d = { %s%s0 }; sp_offload_call(_sp_off%d, &_o%d); errno = _o%d.e; %s",
+             pre ? pre : "", base ? base : "", hold ? hold : "", n, n, init.p ? init.p : "", init.p ? ", " : "",
+             n, n, n, rel ? rel : "");
+  if (!is_void_ret) buf_printf(out, "_o%d.r; })", n);
+  else buf_puts(out, "(void)0; })");
+  free(init.p);
+}
+
 static void ffi_arg_to_temp(Buf *call, size_t at, Buf *pre, const char *ctype, int tb, int ai, int root_str) {
   buf_printf(pre, "%s _b%d_%d = %s; ", ctype, tb, ai, call->p + at);
   if (root_str)
@@ -2670,7 +2726,17 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           }
         }
         buf_puts(&call_buf, ")");
-        if (blocking) {
+        if (blocking && c->ffi_funcs[fi].offload) {
+          /* `offload: true`: the call runs on another OS thread, the
+             arguments and the answer in a struct the thunk reads and
+             writes; the calling green thread waits as on I/O */
+          if (is_vararg) unsupported(c, id, "ffi_func offload: true on a variadic function");
+          Buf w; memset(&w, 0, sizeof w);
+          ffi_emit_offload(c, fi, call_buf.p, ret_spec, is_void_ret, fixed_argc, &w,
+                           pre_buf.p, base_buf.p, hold_buf.p, rel_buf.p);
+          free(call_buf.p); call_buf = w;
+        }
+        else if (blocking) {
           /* the worker is out of the world for exactly the call */
           Buf w; memset(&w, 0, sizeof w);
           if (is_void_ret)

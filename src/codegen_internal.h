@@ -789,6 +789,9 @@ int hc_recv_cached(Compiler *c, int recv);
    a receiver seen as Repr.nil_cold (emit_nil_target_cold, codegen_call.c) */
 void emit_nil_cold_test(Compiler *c, int id, int r, Buf *b);
 int call_is_scalar_op(Compiler *c, int id);   /* a builtin operator over scalars */
+int scalar_op_over_scalars(Compiler *c, int id);   /* ...whose one operand is a number or a boolean */
+int scalar_op_over_numbers(Compiler *c, int id);   /* ...of Integers and Floats alone */
+int scalar_op_runs_no_code(Compiler *c, int id);   /* ...whose operands run no code of the program's */
 int scalar_op_may_raise(Compiler *c, int id);   /* ...that can raise (a zero divisor, an Integer power, a nil operand) */
 /* The operands a value runs before the call in it that finds no method
    where it runs (cplan_missing), each a whole subtree its caller runs for
@@ -2530,6 +2533,7 @@ int an_scopes_named_next(Compiler *c, const char *nm, int s);
 int block_given_tail_then_last(Compiler *c, int last);
 int call_forwards_own_block(Compiler *c, int cid);
 int is_blk_param_call(Compiler *c, int node, int mi);
+int is_yield_or_blk_param_call(Compiler *c, int node);
 int ie_block_body(Compiler *c, int blk);
 int sclass_value_call(Compiler *c, int id);
 int scope_body_last(Compiler *c, int mi);

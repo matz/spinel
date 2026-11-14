@@ -459,6 +459,8 @@ int builtin_class_val_id(const char *name);   /* ...-1 for none: the cls_id of i
 int is_comparable_module_method(const char *name); /* < <= == > >= between? clamp: Comparable's own */
 int builtin_comparable_owns(const char *cls, const char *name); /* Comparable's, on a class including it */
 int builtin_comparable_arity(const char *name);
+int builtin_enumerable_owns(const char *cls, const char *name); /* Enumerable's, on Array or Hash, not the class's own */
+int builtin_enumerable_arity(const char *name, int *out);
 int builtin_numeric_owns(const char *cls, const char *name); /* Numeric's, on Integer or Float */
 int builtin_numeric_arity(const char *name, int *out);
 

@@ -125,7 +125,7 @@ struct LoadRecord {
   struct ElabRec *rec;       /* the record's state while elab_program makes it */
   struct HostStep *host;     /* ...and the host a walk-time form splices through (elab_walk_host) */
   LrEvent *ev; int nev, cev;   /* the hook events of the statements recorded and not yet left by the scope walk */
-  struct LrHist *hist; int nhist, chist, *hhead;
+  struct LrHist *hist; int nhist, chist, *hhead, nhbuckets;   /* nhbuckets: hhead's heads, grown with the histories (lr_hist) */
   /* [ncls] main's history (Object's) and each class the walk made, a
      record class's among them (elab_rec_open). One registration makes
      after the walk (an object's singleton class, which its extends and
@@ -1110,15 +1110,34 @@ static void *lr_grow(void *v, int *cap, int n, size_t sz) {
   return v;
 }
 
-static unsigned lr_hash(int a, int b, const char *name) {
+static unsigned lr_hash_raw(int a, int b, const char *name) {
   unsigned h = (unsigned)a * 31u + (unsigned)b * 7u;
   for (const char *q = name; *q; q++) h = h * 33u + (unsigned char)*q;
-  return h % LR_BUCKETS;
+  return h;
+}
+static unsigned lr_hash(int a, int b, const char *name) {
+  return lr_hash_raw(a, b, name) % LR_BUCKETS;
+}
+
+/* The history heads, LR_BUCKETS at first, made again 4 times as many once
+   the histories are twice as many as the heads: a lookup, which most often
+   misses (a constant read asks every lexical scope and ancestor), walks a
+   chain of about one, whatever the program's size */
+static void lr_hist_heads(LoadRecord *r, int n, int relink) {
+  free(r->hhead);
+  if (!(r->hhead = malloc(sizeof(int) * (size_t)n))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  r->nhbuckets = n;
+  for (int k = 0; k < n; k++) r->hhead[k] = -1;
+  for (int i = 0; relink && i < r->nhist; i++) {
+    unsigned h = lr_hash_raw(r->hist[i].a, r->hist[i].b, r->hist[i].name) % (unsigned)n;
+    r->hist[i].next = r->hhead[h];
+    r->hhead[h] = i;
+  }
 }
 
 static LrHist *lr_hist(LoadRecord *r, int a, int b, const char *name, int make) {
   if (!name || !r->hhead) return NULL;
-  unsigned h = lr_hash(a, b, name);
+  unsigned h = lr_hash_raw(a, b, name) % (unsigned)r->nhbuckets;
   for (int i = r->hhead[h]; i >= 0; i = r->hist[i].next)
     if (r->hist[i].a == a && r->hist[i].b == b && sp_streq(r->hist[i].name, name)) return &r->hist[i];
   if (!make) return NULL;
@@ -1128,6 +1147,7 @@ static LrHist *lr_hist(LoadRecord *r, int a, int b, const char *name, int make) 
   if (!x->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   r->hhead[h] = r->nhist++;
   r->hgen++;
+  if (r->nhist >= 2 * r->nhbuckets) lr_hist_heads(r, r->nhbuckets * 4, 1);
   return x;
 }
 
@@ -2839,7 +2859,7 @@ static void lr_record_drop(LoadRecord *r) {
   for (int i = 0; i < r->nev; i++) free(r->ev[i].name);
   r->nev = 0;
   if (r->cls) memset(r->cls, 0, sizeof *r->cls * (size_t)r->ncls);
-  for (int b = 0; r->hhead && b < LR_BUCKETS; b++) r->hhead[b] = -1;
+  for (int b = 0; r->hhead && b < r->nhbuckets; b++) r->hhead[b] = -1;
   r->nhist = 0; r->frontier = 0; r->nset = 0;
   r->slot_builds = -1;
   r->nentries = 0; r->indexed = r->opened = r->lated = -1;   /* the by-name index and the open and late bits are of the dropped histories */
@@ -3123,9 +3143,8 @@ void elab_program(Compiler *c, struct HostStep *h) {
   LoadRecord *r = lr_get(c);
   int nroots = nt_nroots(c->nt);
   ElabRec x = { c, r, NULL, NULL, NULL, malloc((size_t)nroots), 0 };
-  r->hhead = malloc(sizeof(int) * LR_BUCKETS);
-  if (!r->hhead || !x.vmain) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int b = 0; b < LR_BUCKETS; b++) r->hhead[b] = -1;
+  if (!x.vmain) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  lr_hist_heads(r, LR_BUCKETS, 0);   /* (empty: the histories are made from here) */
   /* each file's top level starts private: its methods are Object's private ones */
   for (int f = 0; f < nroots; f++) x.vmain[f] = BVIS_PRIVATE;
   lr_names_take(c);

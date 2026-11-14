@@ -51,7 +51,7 @@ static int pure_walk_node(Compiler *c, int id, const OrderWalk *w) {
       break;
     case NK_CallNode: {
       int alloc = 0;
-      if (!order_typed_index(c, id) && !call_is_scalar_op(c, id) &&
+      if (!order_typed_index(c, id) && !scalar_op_runs_no_code(c, id) &&
           !(call_is_field_read(c, id, w->alloc ? &alloc : NULL) && !alloc))
         return 0;
       break;
@@ -168,11 +168,12 @@ void oplist_free(OpList *l) {
 /* Is this call a reader on a boxed receiver that every class the receiver
    can hold answers by a public attr_reader or Struct member, with no `def`
    of the name winning over it? The dispatch then reads a field in each arm
-   and runs no code of the program's. A builtin value among them (a nil)
-   answers with its own method or raises NoMethodError, which runs none
-   either when no builtin has the name or every one that has it reads a
-   value, the program defines no method of the name a builtin could take,
-   and no method_missing. */
+   and runs no code of the program's. A builtin value among them (bv, or a
+   class of the builtin part bk alone, as a literal's Integer or String
+   seeds it) answers with its own method or raises NoMethodError, which
+   runs none either when no builtin has the name or every one that has it
+   reads a value, the program defines no method of the name a builtin
+   could take, and no method_missing. */
 static int call_is_poly_field_read(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
@@ -182,9 +183,9 @@ static int call_is_poly_field_read(Compiler *c, int id) {
   const ClsSet *s = cls_fact_node(c, recv);
   if (!s || s->all || s->os || s->n == 0) return 0;
   if (an_user_defines_method(c, "method_missing")) return 0;
-  if (s->bv && (an_user_defines_method(c, nm) ||
-                (!is_plain_builtin_reader(nm) &&
-                 (builtin_object_method_known(nm) || builtin_instance_name_known(nm)))))
+  if ((s->bv || cls_bk_any(s)) && (an_user_defines_method(c, nm) ||
+                                   (!is_plain_builtin_reader(nm) &&
+                                    (builtin_object_method_known(nm) || builtin_instance_name_known(nm)))))
     return 0;
   for (int k = cls_set_next(s, -1); k >= 0; k = cls_set_next(s, k)) {
     if (k >= c->nclasses || c->classes[k].is_native_class) return 0;
@@ -202,7 +203,7 @@ static int call_is_poly_field_read(Compiler *c, int id) {
    poly Array of Arrays). */
 int order_call_runs_no_code(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (call_is_scalar_op(c, id) || order_typed_index(c, id)) return 1;
+  if (scalar_op_runs_no_code(c, id) || order_typed_index(c, id)) return 1;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   int a = nt_ref(nt, id, "arguments"); int ac = 0;
@@ -218,14 +219,23 @@ int order_call_runs_no_code(Compiler *c, int id) {
 /* ---- the record ---- */
 
 /* What the subtree of a code operand may do (order_sum): assign state
-   (subtree_may_reassign_state), have an effect (subtree_has_side_effect),
-   run a proc (subtree_may_run_proc), make an implicit call that may run a
-   method of the program's, or write a local. */
-enum { OS_KNOWN = 1, OS_REASSIGN = 2, OS_SIDE = 4, OS_PROC = 8, OS_IMPL = 16, OS_LOCAL = 32 };
+   (subtree_may_reassign_state), run a proc (subtree_may_run_proc), make an
+   implicit call that may run a method of the program's, or write a
+   local. */
+enum { OS_KNOWN = 1, OS_REASSIGN = 2, OS_PROC = 4, OS_IMPL = 8, OS_LOCAL = 16 };
 /* The nearest code operand to the right of the read being decided that
    may change it, by what the read is (facts_rebinder); NONE for none. */
-typedef struct { int any, state, cell; } OrderNext;
+typedef struct { int any, state, cell, ivar; } OrderNext;
 enum { ORDER_NONE = INT_MAX };
+/* The writes of the program's variables by where they are in the tree:
+   each a pre-order place and a names index, sorted by place (bypos) and by
+   name then place (byname), with the places that may write any (wild). */
+typedef struct { int pos, k; } OrderWrite;
+typedef struct {
+  OrderWrite *bypos, *byname;
+  int n, cap;
+  int *wild, nwild, capwild;
+} OrderWrites;
 
 typedef struct OrderFacts {
   OpOrder *row;
@@ -248,18 +258,27 @@ typedef struct OrderFacts {
      (a chain of calls), so each node is walked once, not once per list
      above it */
   unsigned char *sum;
-  /* order_writes_ivar's memo, open addressing: a node's id and an
-     instance variable's names index, the class asked for, the answer (1
-     no, 2 yes; 0 an empty entry) */
-  unsigned long long *ivw_key;
-  int *ivw_cls;
-  unsigned char *ivw_val;
-  int nivw, capivw;
+  /* [n] the tree in pre-order (order_tree_number): a node's place, its
+     subtree's size and the node at each place, so a subtree is the range
+     [pre, pre + size); -1 out of the tree */
+  int *pre, *size, *ord, nord;
+  /* the nodes a second parent holds besides its own (a desugar's reuse):
+     that parent and the node, pairs */
+  int *reuse, nreuse, capreuse;
+  OrderWrites lw;         /* every local's write in the tree */
+  /* [n] a def's instance-variable writes (order_def_writes): its index
+     into iws plus 1, 0 until a list in the def asks */
+  int *iwof;
+  OrderWrites *iws;
+  int niws, capiws;
   ANameHash names;        /* the variables the lists name, interned */
   int *next;              /* [names] the nearest code operand that may write it, ORDER_NONE */
   int capnext;
   int *touched, ntouched, captouched;   /* the next[] entries the list set */
   int *ivk, nivk, capivk; /* the instance variables the list reads in its def (names index) */
+  int *lck, nlck, caplck; /* the locals the list reads (names index) */
+  unsigned char *listed;  /* [names] in ivk or lck, while the list is decided */
+  int ldef;               /* the def whose instance variables the list reads */
   unsigned char check;    /* SPINEL_ORDER_CHECK, read when the phase runs */
 } OrderFacts;
 
@@ -273,6 +292,53 @@ static void *order_grow(void *p, int *cap, int need, size_t sz) {
   if (!p) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   *cap = nc;
   return p;
+}
+static void order_writes_free(OrderWrites *w) {
+  free(w->bypos); free(w->byname); free(w->wild);
+  memset(w, 0, sizeof *w);
+}
+static void order_writes_add(OrderWrites *w, int pos, int k) {
+  w->bypos = order_grow(w->bypos, &w->cap, w->n + 1, sizeof *w->bypos);
+  w->bypos[w->n].pos = pos;
+  w->bypos[w->n++].k = k;
+}
+static void order_writes_wild(OrderWrites *w, int pos) {
+  w->wild = order_grow(w->wild, &w->capwild, w->nwild + 1, sizeof *w->wild);
+  w->wild[w->nwild++] = pos;
+}
+static int order_cmp_int(int a, int b) { return (a > b) - (a < b); }
+static int order_write_by_pos(const void *a, const void *b) {
+  const OrderWrite *x = a, *y = b;
+  return x->pos != y->pos ? order_cmp_int(x->pos, y->pos) : order_cmp_int(x->k, y->k);
+}
+static int order_write_by_name(const void *a, const void *b) {
+  const OrderWrite *x = a, *y = b;
+  return x->k != y->k ? order_cmp_int(x->k, y->k) : order_cmp_int(x->pos, y->pos);
+}
+static int order_place_cmp(const void *a, const void *b) {
+  return order_cmp_int(*(const int *)a, *(const int *)b);
+}
+/* Sorts the writes once they are all in, in both orders. */
+static void order_writes_seal(OrderWrites *w) {
+  if (w->n) qsort(w->bypos, (size_t)w->n, sizeof *w->bypos, order_write_by_pos);
+  w->byname = malloc(sizeof *w->byname * (size_t)(w->n + 1));
+  if (!w->byname) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (w->n) {
+    memcpy(w->byname, w->bypos, sizeof *w->byname * (size_t)w->n);
+    qsort(w->byname, (size_t)w->n, sizeof *w->byname, order_write_by_name);
+  }
+  if (w->nwild) qsort(w->wild, (size_t)w->nwild, sizeof *w->wild, order_place_cmp);
+}
+/* The first of v[0..n) not before place `pos`, by place (k < 0, bypos) or
+   by name k then place (byname). */
+static int order_write_lb(const OrderWrite *v, int n, int k, int pos) {
+  int lo = 0, hi = n;
+  while (lo < hi) {
+    int m = lo + (hi - lo) / 2;
+    if (k < 0 ? v[m].pos < pos : v[m].k < k || (v[m].k == k && v[m].pos < pos)) lo = m + 1;
+    else hi = m;
+  }
+  return lo;
 }
 static OrderFacts *order_facts_new(int n) {
   OrderFacts *f = calloc(1, sizeof *f);
@@ -288,15 +354,21 @@ static OrderFacts *order_facts_new(int n) {
 /* the scratch the rows are built with */
 static void order_facts_scratch_free(OrderFacts *f) {
   free(f->par); free(f->inblk); free(f->sum); free(f->next); free(f->touched); free(f->ivk);
+  free(f->lck); free(f->listed);
   f->inblk = NULL;
-  free(f->ivw_key); free(f->ivw_cls); free(f->ivw_val);
-  f->ivw_key = NULL; f->ivw_cls = NULL; f->ivw_val = NULL;
-  f->nivw = f->capivw = 0;
+  free(f->pre); free(f->size); free(f->ord); free(f->reuse); free(f->iwof);
+  f->pre = f->size = f->ord = f->reuse = f->iwof = NULL;
+  f->nreuse = f->capreuse = 0;
+  order_writes_free(&f->lw);
+  for (int i = 0; i < f->niws; i++) order_writes_free(&f->iws[i]);
+  free(f->iws);
+  f->iws = NULL;
+  f->niws = f->capiws = 0;
   anh_free(&f->names);
   memset(&f->names, 0, sizeof f->names);
-  f->par = f->next = f->touched = f->ivk = NULL;
-  f->sum = NULL;
-  f->capnext = f->captouched = f->capivk = 0;
+  f->par = f->next = f->touched = f->ivk = f->lck = NULL;
+  f->sum = f->listed = NULL;
+  f->capnext = f->captouched = f->capivk = f->caplck = 0;
 }
 static void order_facts_del(OrderFacts *f) {
   if (!f) return;
@@ -362,6 +434,53 @@ static void order_tree_mark(const Compiler *c, OrderFacts *f) {
   }
   free(stack);
 }
+/* A child `ch` of tree node p: pushed when the tree has it under p, else
+   (another parent holds it) noted in f->reuse. */
+static void order_tree_child(OrderFacts *f, int p, int ch, int *stack, int *sp) {
+  if (ch < 0 || ch >= f->n || f->par[ch] == -2) return;
+  if (f->par[ch] == p) {
+    if (f->pre[ch] == -1) { f->pre[ch] = -3; stack[(*sp)++] = ch; }
+    return;
+  }
+  f->reuse = order_grow(f->reuse, &f->capreuse, f->nreuse + 2, sizeof *f->reuse);
+  f->reuse[f->nreuse++] = p;
+  f->reuse[f->nreuse++] = ch;
+}
+/* Numbers the tree (f->par) in pre-order, into f->pre, f->size and f->ord:
+   a subtree is a range of places, so whether an operand's subtree writes a
+   variable is a search among the writes' places. A node another parent
+   also holds (f->reuse) is numbered under its own. */
+static void order_tree_number(const Compiler *c, OrderFacts *f) {
+  const NodeTable *nt = c->nt;
+  int n = f->n, sp = 0;
+  int *stack = malloc(sizeof *stack * (size_t)(n + 1));
+  f->pre = malloc(sizeof *f->pre * (size_t)(n + 1));
+  f->size = malloc(sizeof *f->size * (size_t)(n + 1));
+  f->ord = malloc(sizeof *f->ord * (size_t)(n + 1));
+  if (!stack || !f->pre || !f->size || !f->ord) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++) { f->pre[i] = -1; f->size[i] = 1; }
+  f->nord = 0;
+  for (int r = 0; r < n; r++) {
+    if (f->par[r] != -1) continue;
+    stack[sp++] = r;
+    while (sp > 0) {
+      int p = stack[--sp];
+      f->pre[p] = f->nord;
+      f->ord[f->nord++] = p;
+      int nr = nt_num_refs(nt, p);
+      for (int i = 0; i < nr; i++) order_tree_child(f, p, nt_ref_at(nt, p, i), stack, &sp);
+      int na = nt_num_arrs(nt, p);
+      for (int i = 0; i < na; i++) {
+        int k = 0;
+        const int *ids = nt_arr_at(nt, p, i, &k);
+        for (int j = 0; j < k; j++) order_tree_child(f, p, ids[j], stack, &sp);
+      }
+    }
+  }
+  for (int i = f->nord - 1; i >= 0; i--)
+    if (f->par[f->ord[i]] >= 0) f->size[f->par[f->ord[i]]] += f->size[f->ord[i]];
+  free(stack);
+}
 
 /* Is `x` inside a block or lambda of its def (the tree), where self may be
    another object (instance_exec, define_method)? Its nearest block,
@@ -370,15 +489,28 @@ static int order_in_block(const OrderFacts *f, int x) {
   return x >= 0 && x < f->n && f->inblk[x];
 }
 /* The index of variable name `nm` among the interned names, with its
-   next[] entry. */
+   next[] and listed[] entries. */
 static int order_name(OrderFacts *f, const char *nm) {
   int k = anh_find(&f->names, nm);
   if (k >= 0) return k;
   anh_add(&f->names, nm);
   k = f->names.n - 1;
+  int cap = f->capnext;
   f->next = order_grow(f->next, &f->capnext, k + 1, sizeof *f->next);
+  if (f->capnext != cap) {
+    f->listed = realloc(f->listed, (size_t)f->capnext);
+    if (!f->listed) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
   f->next[k] = ORDER_NONE;
+  f->listed[k] = 0;
   return k;
+}
+/* Adds names index k to a list's names (ivk or lck), once. */
+static void order_list_name(OrderFacts *f, int **v, int *nv, int *cap, int k) {
+  if (f->listed[k]) return;
+  f->listed[k] = 1;
+  *v = order_grow(*v, cap, *nv + 1, sizeof **v);
+  (*v)[(*nv)++] = k;
 }
 static void order_next_set(OrderFacts *f, int k, int j) {
   if (f->next[k] == ORDER_NONE) {
@@ -388,24 +520,23 @@ static void order_next_set(OrderFacts *f, int k, int j) {
   f->next[k] = j;
 }
 /* The OS_ bits of the subtree at `id`, from each node's own answers
-   (node_may_reassign_state, node_has_side_effect, node_may_run_proc; an
-   implicit call that may run a method of the program's,
-   ic_node_may_call_program, which a call that runs no code itself,
-   order_call_runs_no_code, does not make; a local's write), each node once
-   (f->sum). */
+   (node_may_reassign_state, node_may_run_proc; an implicit call that may
+   run a method of the program's, ic_node_may_call_program, which a call
+   that runs no code itself, order_call_runs_no_code, does not make; a
+   local's write), each node once (f->sum). */
 static unsigned order_sum(Compiler *c, OrderFacts *f, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;
   int m = id < f->n;
   if (m && f->sum[id]) return f->sum[id];
   NodeKind k = nt_kind(nt, id);
-  int own[5] = {
-    node_may_reassign_state(c, id), node_has_side_effect(c, id), node_may_run_proc(c, id),
+  int own[4] = {
+    node_may_reassign_state(c, id), node_may_run_proc(c, id),
     !(k == NK_CallNode && order_call_runs_no_code(c, id)) && ic_node_may_call_program(c, id) ? 1 : -1,
     comp_is_local_write(k) ? 1 : -1,
   };
   unsigned r = OS_KNOWN, ask = 0;
-  for (int b = 0; b < 5; b++) {
+  for (int b = 0; b < 4; b++) {
     if (own[b] > 0) r |= OS_REASSIGN << b;
     else if (own[b] < 0) ask |= OS_REASSIGN << b;
   }
@@ -420,76 +551,93 @@ static unsigned order_sum(Compiler *c, OrderFacts *f, int id) {
   if (m) f->sum[id] = (unsigned char)r;
   return r;
 }
-/* each local the subtree at `id` writes: its next[] is j */
-static void order_note_local_writes(Compiler *c, OrderFacts *f, int id, int j) {
+/* A local's write at `x`, at place pos of the local index. */
+static void order_local_write_at(Compiler *c, OrderFacts *f, int x, int pos) {
+  const char *wn = comp_is_local_write(nt_kind(c->nt, x)) ? nt_str(c->nt, x, "name") : NULL;
+  if (wn) order_writes_add(&f->lw, pos, order_name(f, wn));
+}
+/* ...each one in the subtree at `id`, by the table's own edges, at one
+   place: a reused node's, at its further parent's place. */
+static void order_local_walk(Compiler *c, OrderFacts *f, int id, int pos) {
   const NodeTable *nt = c->nt;
-  if (!(order_sum(c, f, id) & OS_LOCAL)) return;
-  if (comp_is_local_write(nt_kind(nt, id))) {
-    const char *wn = nt_str(nt, id, "name");
-    if (wn) order_next_set(f, order_name(f, wn), j);
-  }
+  if (id < 0 || !(order_sum(c, f, id) & OS_LOCAL)) return;
+  order_local_write_at(c, f, id, pos);
   int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) order_note_local_writes(c, f, nt_ref_at(nt, id, i), j);
+  for (int i = 0; i < nr; i++) order_local_walk(c, f, nt_ref_at(nt, id, i), pos);
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
-    int k = 0;
-    const int *ids = nt_arr_at(nt, id, i, &k);
-    for (int m = 0; m < k; m++) order_note_local_writes(c, f, ids[m], j);
+    int n = 0;
+    const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) order_local_walk(c, f, ids[j], pos);
   }
 }
-/* The entry of order_writes_ivar's memo for (id, k, cls): its slot. */
-static int order_ivw_slot(const OrderFacts *f, int id, int k, int cls) {
-  unsigned long long key = (unsigned long long)(unsigned)id << 32 | (unsigned)k;
-  unsigned h = (unsigned)((key * 0x9E3779B97F4A7C15ull) >> 40) & (unsigned)(f->capivw - 1);
-  while (f->ivw_val[h] && (f->ivw_key[h] != key || f->ivw_cls[h] != cls)) h = (h + 1) & (unsigned)(f->capivw - 1);
-  return (int)h;
+/* The local index: every local's write in the tree at its place, and a
+   reused node's at each further parent's, so a range holds the writes the
+   subtree runs whichever parent the tree gave a node. */
+static void order_local_writes(Compiler *c, OrderFacts *f) {
+  for (int i = 0; i < f->nord; i++) order_local_write_at(c, f, f->ord[i], i);
+  for (int r = 0; r < f->nreuse; r += 2) order_local_walk(c, f, f->reuse[r + 1], f->pre[f->reuse[r]]);
+  order_writes_seal(&f->lw);
 }
-static void order_ivw_put(OrderFacts *f, int id, int k, int cls, int r) {
-  if (2 * (f->nivw + 1) > f->capivw) {
-    unsigned long long *ok = f->ivw_key; int *oc = f->ivw_cls; unsigned char *ov = f->ivw_val;
-    int ocap = f->capivw;
-    f->capivw = ocap ? ocap * 2 : 1024;
-    f->ivw_key = malloc(sizeof *f->ivw_key * (size_t)f->capivw);
-    f->ivw_cls = malloc(sizeof *f->ivw_cls * (size_t)f->capivw);
-    f->ivw_val = calloc((size_t)f->capivw, 1);
-    if (!f->ivw_key || !f->ivw_cls || !f->ivw_val) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int i = 0; i < ocap; i++) {
-      if (!ov[i]) continue;
-      int h = order_ivw_slot(f, (int)(ok[i] >> 32), (int)(unsigned)ok[i], oc[i]);
-      f->ivw_key[h] = ok[i]; f->ivw_cls[h] = oc[i]; f->ivw_val[h] = ov[i];
-    }
-    free(ok); free(oc); free(ov);
-  }
-  int h = order_ivw_slot(f, id, k, cls);
-  f->ivw_key[h] = (unsigned long long)(unsigned)id << 32 | (unsigned)k;
-  f->ivw_cls[h] = cls;
-  f->ivw_val[h] = r ? 2 : 1;
-  f->nivw++;
+typedef struct { OrderFacts *f; OrderWrites *w; int pos; } OrderIvarAt;
+static int order_ivar_note(void *ctx, const char *iv) {
+  OrderIvarAt *at = ctx;
+  order_writes_add(at->w, at->pos, order_name(at->f, iv));
+  return 0;
 }
-/* subtree_may_write_ivar(c, id, names[k], cls, 0), from each node's own
-   answer (node_may_write_ivar), each node once per instance variable and
-   class: a chain's lists each ask of the list below. */
-static int order_writes_ivar(Compiler *c, OrderFacts *f, int id, int k, int cls) {
-  const NodeTable *nt = c->nt;
-  if (id < 0) return 0;
-  if (f->capivw) {
-    int h = order_ivw_slot(f, id, k, cls);
-    if (f->ivw_val[h]) return f->ivw_val[h] == 2;
+/* The instance-variable index of def `def`, built when a list in it first
+   asks: each node's own answer for class cls (node_ivar_writes), the names
+   it writes at its place and a place that may write any wild, every node
+   (an operand below a wild place asks its own range); a reused node's
+   subtree is asked whole at each further parent in the def
+   (subtree_ivar_writes). */
+static const OrderWrites *order_def_writes(Compiler *c, OrderFacts *f, int def, int cls) {
+  if (f->iwof[def]) return &f->iws[f->iwof[def] - 1];
+  f->iws = order_grow(f->iws, &f->capiws, f->niws + 1, sizeof *f->iws);
+  OrderWrites *w = &f->iws[f->niws];
+  memset(w, 0, sizeof *w);
+  f->iwof[def] = ++f->niws;
+  int a = f->pre[def], b = a + f->size[def];
+  OrderIvarAt at = { f, w, 0 };
+  for (int i = a; i < b; i++) {
+    at.pos = i;
+    if (node_ivar_writes(c, f->ord[i], cls, 0, order_ivar_note, &at) > 0) order_writes_wild(w, i);
   }
-  int r = node_may_write_ivar(c, id, f->names.key[k], cls, 0);
-  if (r < 0) {
-    r = 0;
-    int nr = nt_num_refs(nt, id);
-    for (int i = 0; i < nr && !r; i++) r = order_writes_ivar(c, f, nt_ref_at(nt, id, i), k, cls);
-    int na = nt_num_arrs(nt, id);
-    for (int i = 0; i < na && !r; i++) {
-      int n = 0;
-      const int *ids = nt_arr_at(nt, id, i, &n);
-      for (int j = 0; j < n && !r; j++) r = order_writes_ivar(c, f, ids[j], k, cls);
-    }
+  for (int r = 0; r < f->nreuse; r += 2) {
+    at.pos = f->pre[f->reuse[r]];
+    if (at.pos >= a && at.pos < b && subtree_ivar_writes(c, f->reuse[r + 1], cls, 0, order_ivar_note, &at))
+      order_writes_wild(w, at.pos);
   }
-  order_ivw_put(f, id, k, cls, r);
-  return r;
+  order_writes_seal(w);
+  return w;
+}
+/* Code operand j at node x: next[k] = j for each name k of the list's
+   (names) that x's subtree writes, by whichever is fewer, the writes in
+   its range, each looked up among the list's names (listed), or the
+   list's names, each searched for in the range. Each operand costs the
+   smaller count and a search, so no list costs its width times its writes. */
+static void order_next_writes(OrderFacts *f, const OrderWrites *w, int x, const int *names, int nn, int j) {
+  int a = f->pre[x], b = a + f->size[x];
+  int lo = order_write_lb(w->bypos, w->n, -1, a), hi = order_write_lb(w->bypos, w->n, -1, b);
+  if (hi - lo <= nn) {
+    for (int i = lo; i < hi; i++)
+      if (f->listed[w->bypos[i].k]) order_next_set(f, w->bypos[i].k, j);
+    return;
+  }
+  for (int i = 0; i < nn; i++) {
+    int p = order_write_lb(w->byname, w->n, names[i], a);
+    if (p < w->n && w->byname[p].k == names[i] && w->byname[p].pos < b) order_next_set(f, names[i], j);
+  }
+}
+/* Is a place in x's range one that may write any? */
+static int order_writes_any(const OrderFacts *f, const OrderWrites *w, int x) {
+  int a = f->pre[x], lo = 0, hi = w->nwild;
+  while (lo < hi) {
+    int m = lo + (hi - lo) / 2;
+    if (w->wild[m] < a) lo = m + 1;
+    else hi = m;
+  }
+  return lo < w->nwild && w->wild[lo] < a + f->size[x];
 }
 /* An instance variable read in a def of its class, outside a block, is
    changed only by a method of self's that may write it
@@ -502,14 +650,23 @@ static int order_ivar_class(Compiler *c, const OrderFacts *f, int x) {
 /* Code operand j of list l is now the nearest to the right: what it may
    change. */
 static void facts_next_at(Compiler *c, OrderFacts *f, const OpList *l, int j, int cls, OrderNext *nx) {
-  unsigned s = order_sum(c, f, l->node[j]);
+  int x = l->node[j];
+  unsigned s = order_sum(c, f, x);
   nx->any = j;
-  if ((s & OS_REASSIGN && s & OS_SIDE) || s & OS_IMPL) nx->state = j;
+  if (s & (OS_REASSIGN | OS_IMPL)) nx->state = j;
   if (s & (OS_PROC | OS_IMPL)) nx->cell = j;
-  order_note_local_writes(c, f, l->node[j], j);
-  for (int k = 0; k < f->nivk; k++)
-    if (s & OS_IMPL || (s & OS_REASSIGN && order_writes_ivar(c, f, l->node[j], f->ivk[k], cls)))
-      order_next_set(f, f->ivk[k], j);
+  /* each local the list reads that it writes */
+  if (s & OS_LOCAL) order_next_writes(f, &f->lw, x, f->lck, f->nlck, j);
+  /* each instance variable the list reads in its def that it may assign:
+     every one for an implicit call or a place that may write any */
+  if (!f->nivk || !(s & (OS_IMPL | OS_REASSIGN))) return;
+  const OrderWrites *w = s & OS_IMPL ? NULL : order_def_writes(c, f, f->ldef, cls);
+  int a = f->pre[f->ldef], in = f->pre[x] >= a && f->pre[x] < a + f->size[f->ldef];
+  if (!w || (in && order_writes_any(f, w, x))) nx->ivar = j;
+  else if (in) order_next_writes(f, w, x, f->ivk, f->nivk, j);
+  else   /* the tree put x outside its list's def: ask its own subtree */
+    for (int k = 0; k < f->nivk; k++)
+      if (subtree_may_write_ivar(c, x, f->names.key[f->ivk[k]], cls, 0)) order_next_set(f, f->ivk[k], j);
 }
 static int order_min(int a, int b) { return a < b ? a : b; }
 /* The nearest code operand to the right that may change what read `x`
@@ -517,12 +674,15 @@ static int order_min(int a, int b) { return a < b ? a : b; }
    that writes it, or, when a proc assigns its cell, one that may run a
    proc. An instance variable: in a def of its class, outside a block, one
    that may assign it (a method of self's that writes it); anywhere else
-   one with an effect that may assign state. A global or a class variable:
-   such an effect. A literal: none. Anything else read (a constant, an
-   element, a field, arithmetic over reads): any code. An implicit call
-   that may run a method of the program's counts as all of these but a
-   local's write. The emission form (rebound_walk) asks the same of the
-   variables, with the view's bindings and its self. */
+   one that may assign state (node_may_reassign_state: a write or a target
+   of one, `rescue => @@x`, or a call that may run code). A global or a
+   class variable: the same. A literal: none. Anything else read (a
+   constant, an element, a field, arithmetic over reads): any code. An
+   implicit call that may run a method of the program's counts as all of
+   these but a local's write. The emission form (rebound_walk) asks the
+   same of the variables, with the view's bindings and its self, and asks
+   an effect (subtree_has_side_effect) of a global's or a class
+   variable's too. */
 static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const OrderNext *nx) {
   const NodeTable *nt = c->nt;
   int r = ORDER_NONE;
@@ -540,7 +700,7 @@ static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const Orde
     case NK_InstanceVariableReadNode: {
       const char *iv = nt_str(nt, x, "name");
       int k = iv && cls >= 0 && order_ivar_class(c, f, x) == cls ? order_name(f, iv) : -1;
-      r = k >= 0 ? f->next[k] : nx->state;
+      r = k >= 0 ? order_min(f->next[k], nx->ivar) : nx->state;
       break;
     }
     case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode:
@@ -600,28 +760,31 @@ static void facts_none(OrderFacts *f, int owner, int why) {
      and steps come from rows the record does not read yet.
    One pass from the right, which keeps the nearest code operand that may
    change each kind of read: linear in the list, with each operand's
-   subtree walked once for the program (order_sum, order_writes_ivar). */
+   subtree walked once for the program (order_sum) and each variable's
+   write found by its place in the tree (order_next_writes). */
 static void facts_decide(Compiler *c, OrderFacts *f, int owner, const OpList *l) {
   int n = l->n, last = -1, cls = -1;
   for (int i = 0; i < n; i++)
     if (facts_runs_code(c, f, l->node[i])) last = i;
   if (last < 0) { facts_none(f, owner, 1); return; }
-  /* the instance variables read in their class's def: next[] per name */
-  f->nivk = 0;
+  /* the locals the list reads, and the instance variables read in their
+     class's def: next[] per name, each name once per list */
+  f->nivk = f->nlck = 0;
   for (int i = 0; i < n; i++) {
     int x = l->node[i];
-    const char *iv = nt_kind(c->nt, x) == NK_InstanceVariableReadNode ? nt_str(c->nt, x, "name") : NULL;
+    NodeKind xk = nt_kind(c->nt, x);
+    if (xk == NK_LocalVariableReadNode) {
+      order_list_name(f, &f->lck, &f->nlck, &f->caplck, order_name(f, nt_str(c->nt, x, "name")));
+      continue;
+    }
+    const char *iv = xk == NK_InstanceVariableReadNode ? nt_str(c->nt, x, "name") : NULL;
     int xc = iv ? order_ivar_class(c, f, x) : -1;
     if (xc < 0 || (cls >= 0 && xc != cls)) continue;
+    if (cls < 0) f->ldef = comp_scope_of(c, x)->def_node;
     cls = xc;
-    int k = order_name(f, iv);
-    int seen = 0;
-    for (int m = 0; m < f->nivk && !seen; m++) seen = f->ivk[m] == k;
-    if (seen) continue;
-    f->ivk = order_grow(f->ivk, &f->capivk, f->nivk + 1, sizeof *f->ivk);
-    f->ivk[f->nivk++] = k;
+    order_list_name(f, &f->ivk, &f->nivk, &f->capivk, order_name(f, iv));
   }
-  OrderNext nx = { ORDER_NONE, ORDER_NONE, ORDER_NONE };
+  OrderNext nx = { ORDER_NONE, ORDER_NONE, ORDER_NONE, ORDER_NONE };
   facts_next_at(c, f, l, last, cls, &nx);
   int tail = 1;
   for (int i = 0; i < last && tail; i++)
@@ -657,16 +820,21 @@ static void facts_decide(Compiler *c, OrderFacts *f, int owner, const OpList *l)
   }
   for (int k = 0; k < f->ntouched; k++) f->next[f->touched[k]] = ORDER_NONE;
   f->ntouched = 0;
+  for (int i = 0; i < f->nivk; i++) f->listed[f->ivk[i]] = 0;
+  for (int i = 0; i < f->nlck; i++) f->listed[f->lck[i]] = 0;
 }
 static OrderFacts *order_facts_make(Compiler *c) {
   const NodeTable *nt = c->nt;
   OrderFacts *f = order_facts_new(nt->count);
   order_tree_mark(c, f);
   f->sum = calloc((size_t)f->n + 1, 1);
-  if (!f->sum) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  f->iwof = calloc((size_t)f->n + 1, sizeof *f->iwof);
+  if (!f->sum || !f->iwof) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  order_tree_number(c, f);
+  order_local_writes(c, f);
   OpList l; memset(&l, 0, sizeof l);
   for (int id = 0; id < nt->count; id++) {
-    if (f->par[id] == -2 || !oplist_of(c, id, &l) || l.n == 0) continue;
+    if (f->par[id] == -2 || !oplist_of(c, id, &l)) continue;
     facts_decide(c, f, id, &l);
   }
   oplist_free(&l);

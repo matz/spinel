@@ -255,6 +255,17 @@ static inline int sp_native_callback_enter(void) { return 0; }
 static inline void sp_native_callback_leave(int depth) { (void)depth; }
 #endif
 
+/* An ffi_func declared `offload: true` (spinel's own, #11804): fn(arg) runs
+   on an offload OS thread, and the calling green thread waits for it as for
+   I/O, its worker free for its other threads; a #raise or #kill sent to it is
+   held until the call is back. Without the threaded runtime (or where it has
+   no offload threads) fn runs in place. */
+#if defined(SP_THREADS) && !defined(_WIN32)
+void sp_offload_call(void (*fn)(void *), void *arg);
+#else
+static inline void sp_offload_call(void (*fn)(void *), void *arg) { fn(arg); }
+#endif
+
 /* Optional hook the generated TU installs so a worker parking at a safepoint
    also publishes its per-worker in-flight GC roots that live in the TU (pending
    exception objects, proc-return home values) onto its shadow stack, for the

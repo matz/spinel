@@ -6423,14 +6423,8 @@ static void qc_keep_orig_name(const NodeTable *nt, int node) {
 }
 
 /* The qualified names qc_value_collisions gives a constant written under a
-   module path, for qualify_colliding_classes; and by write node, for its
-   list of the constants beside the classes. */
+   module path */
 static char **qc_const_quals; static int qc_nconst_quals;
-static const char **qc_value_keys; static int qc_nvalue_keys;
-static int qc_const_qualified(const char *qn) {
-  for (int i = 0; i < qc_nconst_quals; i++) if (sp_streq(qc_const_quals[i], qn)) return 1;
-  return 0;
-}
 /* Was some constant of this leaf name given one? */
 int qc_leaf_qualified(const char *leaf) {
   size_t ll = strlen(leaf);
@@ -6506,11 +6500,11 @@ static int qc_leaf_elsewhere(const QCWrite *w, const QCIndex *x) {
    receivers such as `Hash.new` are recognised by the bare name); and the
    superclass of `class Foo < Foo` is read around the header
    (qc_outer_super), which the class pass's reads leave alone. */
-static void qc_value_reads(Compiler *c, const QCWrite *ws, int wn) {
+static void qc_value_reads(Compiler *c, const char *const *leaves, int wn) {
   const NodeTable *nt = c->nt;
   const char **names = malloc(sizeof(char *) * (size_t)(wn ? wn : 1));
   if (!names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < wn; i++) names[i] = ws[i].name;
+  for (int i = 0; i < wn; i++) names[i] = leaves[i];
   qsort(names, (size_t)wn, sizeof *names, qc_name_order);
   qc_build_reverse_flags(c);
   int n = nt->count;
@@ -6538,6 +6532,13 @@ static void qc_value_reads(Compiler *c, const QCWrite *ws, int wn) {
   }
   qc_free_reverse_flags();
   free(names);
+}
+static void qc_value_reads_ws(Compiler *c, const QCWrite *ws, int wn) {
+  const char **wl = malloc(sizeof(char *) * (size_t)(wn + 1));
+  if (!wl) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < wn; i++) wl[i] = ws[i].name;
+  qc_value_reads(c, wl, wn);
+  free(wl);
 }
 
 /* The value constants the class pass must keep apart from its classes: those
@@ -6592,17 +6593,13 @@ static void qc_value_collisions(Compiler *c) {
   qci_free(&cx);
   free(two);
   free(cws);
-  qc_nvalue_keys = nt->count;
-  qc_value_keys = calloc((size_t)qc_nvalue_keys + 1, sizeof *qc_value_keys);
-  if (!qc_value_keys) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   if (any) {
-    qc_value_reads(c, ws, wn);
+    qc_value_reads_ws(c, ws, wn);
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
       qc_const_quals = realloc(qc_const_quals, sizeof(char *) * (size_t)(qc_nconst_quals + 1));
       qc_const_quals[qc_nconst_quals++] = strdup(qn);
-      if (ws[i].node >= 0 && ws[i].node < qc_nvalue_keys) qc_value_keys[ws[i].node] = qc_const_quals[qc_nconst_quals - 1];
     }
   }
   qc_free_headers();
@@ -6611,20 +6608,13 @@ static void qc_value_collisions(Compiler *c) {
 
 /* ---- Colliding class/module-name qualification ------------------------
  * Classes/modules live in a flat sp_<Name> C namespace keyed by the leaf
- * name, so `Web::Response` and `Chat::Response` collapse onto one ClassInfo
- * (struct + methods merge, the last `initialize` wins -> uninitialized ivars
- * -> SIGSEGV). This is the class-definition analogue of the nested-constant
- * pass above: when the same class/module leaf name is defined under 2+
- * distinct module paths, rename each nested definition to a qualified
- * `<Mod>__..__<NAME>` and rewrite every reference to whichever qualified
- * class it denotes (relative reads prefer the lexically enclosing module
- * chain; `::`-anchored reads resolve from the root). Collision-gated: a
- * program whose class names are all unique is untouched (so the common case,
- * optcarrot, and the self-host build see zero change). The rewrite happens
- * before walk_scope, so registration (comp_class_new) and every reference
- * lookup (comp_class_index) naturally key on the now-distinct names, and the
- * emitted C identifier (sp_<name>) is distinct too -- no change to the many
- * leaf-name read sites. */
+ * name, so `Web::Response` and `Chat::Response` would collapse onto one
+ * ClassInfo. The walk makes each nested class under a provisional name, and
+ * after it the rule (qc_rule_qualifies, in elab_prov_apply) gives the ones
+ * whose leaf collides a qualified `<Mod>__..__<NAME>`; qualify_colliding_reads
+ * then keys the reads of them. Before the walk only the class writes are
+ * collected here, for the refusal of a class under a builtin parent that
+ * another definition of its leaf would merge with. */
 void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
                              QCWrite **ws, int *n, int *cap) {
   const NodeTable *nt = c->nt;
@@ -6700,76 +6690,11 @@ void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
   qc_pop_header(own, NULL);
 }
 
-/* how a `native_struct "A::B::Leaf", ...` declaration names w's leaf: 2
-   when it spells w's own path -- `class OpenSSL::X509::Store` beside
-   "OpenSSL::X509::Store" is that native class reopened -- 1 when it is under
-   another qualified path, 0 when no declaration names it */
-static int qc_native_leaf_declared(const char *const *decls, int ndecls, const QCWrite *w) {
-  int found = 0;
-  for (int d = 0; d < ndecls; d++) {
-    const char *cn = decls[d];
-    const char *sep = strrchr(cn, ':');
-    if (!sep || sep == cn || sep[-1] != ':') continue;
-    if (!sp_streq(sep + 1, w->name)) continue;
-    char own[512];
-    own[0] = 0;
-    for (int i = 0; i < w->depth; i++) {
-      strncat(own, w->path[i], sizeof own - strlen(own) - 1);
-      strncat(own, "::", sizeof own - strlen(own) - 1);
-    }
-    strncat(own, w->name, sizeof own - strlen(own) - 1);
-    if (sp_streq(own, cn)) return 2;
-    found = 1;
-  }
-  return found;
-}
 /* Is the program's write a before node b in the source (same file)? */
 static int qc_written_before(const NodeTable *nt, int a, int b) {
   if (nt_int(nt, a, "node_file", 0) != nt_int(nt, b, "node_file", 0)) return 0;
   long long la = nt_int(nt, a, "node_line", 0), lb = nt_int(nt, b, "node_line", 0);
   return la < lb || (la == lb && nt_int(nt, a, "node_col", 0) < nt_int(nt, b, "node_col", 0));
-}
-/* Is nm the name of a class or module the program defines? */
-static int qc_class_name_defined(Compiler *c, const char *nm) {
-  const NodeTable *nt = c->nt;
-  int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
-  for (int dh = 0; dh < ndk; dh++)
-    NT_FOREACH_KIND(nt, dk[dh], id) {
-      const char *mn = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? class_def_key(c, id) : NULL;
-      if (mn && sp_streq(mn, nm)) return 1;
-    }
-  return 0;
-}
-/* Whether each class write shares its leaf with a write under another path.
-   A leaf whose writes have two or more distinct paths collides for every
-   one of them (each differs from one of the two), so one pass over the
-   writes, a name set and the first path of each name are enough. Asked of
-   the writes as collected: qualify_colliding_classes drops the ones that do
-   not collide as it goes, and an entry that does not collide shares its leaf
-   with no entry under another path, so dropping it changes no other answer;
-   the one the loop drops with a collision (a native class reopened under
-   its own path) shares its leaf with a nested class that the native
-   declaration qualifies anyway (qc_native_leaf_declared), or with a
-   top-level class or module, which is never renamed: keeping it only lets
-   the read rewrite run, whose one edit for a top-level write (`::X` read as
-   a root-anchored X) names the same constant, and the old loop kept it too
-   whenever it reached it before the native class. */
-static unsigned char *qc_colliding_leaves(QCWrite *ws, int wn) {
-  int n = wn ? wn : 1;
-  ANameHash names = {0};
-  int *group = malloc(sizeof(int) * (size_t)n), *first = malloc(sizeof(int) * (size_t)n);
-  unsigned char *differ = calloc((size_t)n, 1), *collide = calloc((size_t)n, 1);
-  if (!group || !first || !differ || !collide) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < wn; i++) {
-    int g = anh_find(&names, ws[i].name);
-    if (g < 0) { anh_add(&names, ws[i].name); g = names.n - 1; first[g] = i; }
-    else if (!qc_path_eq(ws[i].path, ws[i].depth, ws[first[g]].path, ws[first[g]].depth)) differ[g] = 1;
-    group[i] = g;
-  }
-  for (int i = 0; i < wn; i++) collide[i] = differ[group[i]];
-  anh_free(&names);   /* (its names are the writes' own, which the loop moves) */
-  free(group); free(first); free(differ);
-  return collide;
 }
 /* The class or module body (or file top level) that node n sits in,
    through ifs, loops, blocks and defs. par: comp_parent_map */
@@ -6928,8 +6853,6 @@ static void qc_refuse_conditional_builder(Compiler *c) {
   }
 }
 
-static QCWrite *qc_defer_ws;
-static int qc_defer_wn;
 void qualify_colliding_classes(Compiler *c) {
   const NodeTable *nt = c->nt;
   QCWrite *ws = NULL; int wn = 0, wcap = 0;
@@ -6937,25 +6860,6 @@ void qualify_colliding_classes(Compiler *c) {
   qc_value_collisions(c);
   qc_refuse_conditional_builder(c);
   qc_resolve_headers(c);
-  /* Headers ask only about native_struct declarations: collected once here,
-     not looked for among every call for each nested class. */
-  const char **native_decls = NULL;
-  int nnative = 0, cnative = 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, "native_struct") || nt_ref(nt, id, "receiver") >= 0) continue;
-    int args = nt_ref(nt, id, "arguments");
-    int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    if (an < 1 || nt_kind(nt, av[0]) != NK_StringNode) continue;
-    const char *cn = nt_str(nt, av[0], "content");
-    if (!cn) continue;
-    if (nnative == cnative) {
-      cnative = cnative ? cnative * 2 : 8;
-      native_decls = realloc(native_decls, (size_t)cnative * sizeof *native_decls);
-      if (!native_decls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    }
-    native_decls[nnative++] = cn;
-  }
   for (int r = 0; r < nt_nroots(nt); r++)   /* each file's tree */
     qc_collect_class_writes(c, nt_root(nt, r), path, 0, &ws, &wn, &wcap);
   /* A class under a builtin parent (`class String::Helper`) stays under the
@@ -6978,112 +6882,10 @@ void qualify_colliding_classes(Compiler *c) {
       unsupported_feature(c, ws[i].node, msg);
     }
   }
-  /* the plain constant writes under a bare leaf (the nested ones that collide
-     by the key qc_value_collisions gave them), for a nested class named like
-     a top-level constant: `Config = {...}` beside `module Rack; class Config` */
-  QCWrite *kws = NULL; int kwn = 0, kwcap = 0;
-  for (int r = 0; r < nt_nroots(nt); r++)
-    qc_collect_writes(c, nt_root(nt, r), path, 0, &kws, &kwn, &kwcap);
-  QCIndex wx;
-  qci_build(&wx, ws, wn);
-  for (int i = 0; i < kwn; i++)
-    if (qc_is_class_write(&kws[i], &wx)) { kws[i] = kws[--kwn]; i--; }
-    else if (kws[i].node >= 0 && kws[i].node < qc_nvalue_keys && qc_value_keys[kws[i].node])
-      snprintf(kws[i].name, sizeof kws[i].name, "%s", qc_value_keys[kws[i].node]);
-  qci_free(&wx);
-  QCIndex kx;   /* (after the renames above: the index orders by name) */
-  qci_build(&kx, kws, kwn);
-  free(qc_value_keys); qc_value_keys = NULL; qc_nvalue_keys = 0;
-  /* keep only leaf names defined under 2+ distinct module paths */
-  unsigned char *leaf_collides = qc_colliding_leaves(ws, wn);   /* moves with its write */
-  int any = 0;
-  for (int i = 0; i < wn; i++) {
-    int collide = leaf_collides[i];
-    /* A class defined INSIDE a module whose leaf name is a builtin's --
-       `module M; class Array < Bench` -- collides with the BUILTIN rather than
-       with another user class, and every builtin-name test (Array.new, the
-       reopen checks) would take it for the builtin. Qualify it too (#3781). */
-    if (!collide && ws[i].depth > 0 && builtin_class_id(ws[i].name) != 0) collide = 1;
-    /* ... and a native class declared under a qualified path (openssl's
-       `native_struct "OpenSSL::X509::Store"`), which registers under its
-       leaf: a nested `class Store` elsewhere (activesupport's Cache::Store)
-       shares that key and was refused as a merge; qualified, it is its own
-       class. */
-    int native = ws[i].depth > 0 ? qc_native_leaf_declared(native_decls, nnative, &ws[i]) : 0;
-    if (!collide && native == 1) collide = 1;
-    /* ... and the builtin classes the id table does not carry (Encoding is
-       a tag of its own, not a class id): walk_scope refuses a nested
-       `module Encoding` -- activesupport's ActiveSupport::JSON::Encoding --
-       by is_builtin_class_name, so qualify by the same predicate and the
-       refusal is never reached. A builtin MODULE's name (Comparable, Math)
-       reopens at any depth and is left alone. */
-    if (!collide && ws[i].depth > 0 && is_builtin_class_name(ws[i].name) && !is_builtin_module_name(ws[i].name)) collide = 1;
-    /* ... but a CLASS named like a builtin module cannot reopen it: solid_queue's
-       `module SolidQueue; class Process` is a constant of its own, and a rooted
-       `::Process.pid` beside it names the builtin. Qualified, it is kept apart. */
-    if (!collide && ws[i].depth > 0 && is_builtin_module_name(ws[i].name) &&
-        ws[i].is_class) collide = 1;
-    /* ... and the builtins with no row in that table at all (Monitor, and
-       OpenStruct once required), whose leaf the builtin's own checks match
-       as well: graphql's `class MonitorTrace::Monitor` took over a top-level
-       `Monitor.new`. */
-    if (!collide && ws[i].depth > 0 && is_untabled_native_class_name(ws[i].name)) collide = 1;
-    /* ... and the builtin exceptions the id table carries without a class
-       id (LoadError, SystemCallError): builtins/gem.rb's
-       `module Gem; class LoadError < ::LoadError` took the builtin's name, so
-       a top-level `rescue LoadError` named Gem's class (and, once a builtin
-       exception's reopening adds to the runtime's class, lost its C type). */
-    if (!collide && ws[i].depth > 0 && is_builtin_exception_name(ws[i].name)) collide = 1;
-    /* ... and a body reopening a constant the constant pass qualified --
-       `C64 = Data.define(...)` then `class C64` in the same module, with
-       another module's C64 beside it -- or the body becomes a class of its
-       own under the bare leaf and the Data class never gets its methods. */
-    if (!collide && ws[i].depth > 0) {
-      char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      if (qc_const_qualified(qn)) collide = 1;
-    }
-    /* ... and a nested class sharing its leaf with a plain constant written
-       elsewhere, which keeps the bare leaf as its key */
-    if (!collide && ws[i].depth > 0 && qc_leaf_elsewhere(&ws[i], &kx)) collide = 1;
-    /* ... except the native class itself, written under the path its
-       declaration spells: the native class registers under its bare leaf,
-       so the reopening keeps the leaf whatever else shares it, and the
-       others (Cache::Store) are the ones qualified away from it. */
-    if (native == 2) collide = 0;
-    /* ... and when the qualified name is one the program gives a class or
-       module of its own (`class Foo__Mutex` beside `class Foo::Mutex`),
-       the name takes a leading underscore, as often as it needs to be
-       new. The leaf is no key for it: another definition of the leaf
-       (`Bar::Mutex`) would merge with it. (A top-level definition of the
-       leaf beside it is refused after the walk: elab_prov_apply.) */
-    if (collide && ws[i].depth > 0) {
-      char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      if (qc_class_name_defined(c, qn)) {
-        while (qc_class_name_defined(c, qn)) {
-          ws[i].salt++;
-          qc_qualified_name(qn, sizeof qn, &ws[i]);
-        }
-      }
-    }
-    if (!collide) { ws[i] = ws[--wn]; leaf_collides[i] = leaf_collides[wn]; i--; continue; }
-    any = 1;
-  }
-  free(leaf_collides);
-  free(native_decls);
-  qci_free(&kx);
-  free(kws);
-  if (any) {
-    /* the reads are keyed after the walk (qualify_colliding_reads); the
-       headers are marked here, with their salt: the walk builds each
-       one's name from its owner as it registers it (walk_class_c_name) */
-    for (int i = 0; i < wn; i++) {
-      if (ws[i].depth == 0) continue;
-      nt_node_set_int((NodeTable *)nt, ws[i].node, "qc_qual", 1);
-      if (ws[i].salt) nt_node_set_int((NodeTable *)nt, ws[i].node, "qc_salt", ws[i].salt);
-    }
-  }
-  qc_defer_ws = any ? ws : NULL; qc_defer_wn = any ? wn : 0;
-  if (!any) { qc_free_headers(); free(ws); }
+  /* (which nested classes take a qualified name is decided after the
+     walk, by qc_rule_qualifies: elab_prov_apply) */
+  qc_free_headers();
+  free(ws);
 }
 
 /* The rule that decides, after the walk, whether header id (of class k)
@@ -7229,7 +7031,7 @@ int qc_rule_qualifies(Compiler *c, int id, int k) {
 }
 
 /* Are there reads qualify_colliding_reads will key, after the walk? */
-int qualify_reads_pending(void) { return qc_defer_ws != NULL; }
+int qualify_reads_pending(void) { return elab_prov_any(); }
 
 /* The leaf of a class's C name: what follows its last "__" (Fiddle__Pointer__Release: Release) */
 static const char *qc_c_leaf(const char *cn) {
@@ -7247,8 +7049,10 @@ static const char *qc_c_leaf(const char *cn) {
    reads `::X` of a colliding X as Object's X. */
 void qualify_colliding_reads(Compiler *c) {
   const NodeTable *nt = c->nt;
-  if (qc_defer_ws) {
-    qc_value_reads(c, qc_defer_ws, qc_defer_wn);
+  int nl = 0;
+  const char *const *leaves = elab_prov_qualified_leaves(&nl);
+  if (nl > 0) {
+    qc_value_reads(c, leaves, nl);
     qc_build_reverse_flags(c);
     for (int i = 0; i < nt->count; i++) {
       NodeKind k = nt_kind(nt, i);
@@ -7261,10 +7065,8 @@ void qualify_colliding_reads(Compiler *c) {
       nt_node_set_str((NodeTable *)nt, i, "qc_name", cn);
     }
     qc_free_reverse_flags();
-    qc_free_headers();
-    free(qc_defer_ws);
   }
-  qc_defer_ws = NULL; qc_defer_wn = 0;
+  elab_prov_free_leaves();
 }
 
 /* True if `name` is used as a local write or block parameter OUTSIDE the given

@@ -8872,6 +8872,17 @@ static int elab_prov_index(Compiler *c, const char *cname, int owner) {
         (ci < 0 || g_prov_cls[i] < ci)) ci = g_prov_cls[i];
   return ci;
 }
+/* The leaves of the classes elab_prov_apply qualified, each once: the
+   reads qualify_colliding_reads keys after the walk */
+static char **g_qual_leaves; static int g_nqual_leaves;
+const char *const *elab_prov_qualified_leaves(int *n) { *n = g_nqual_leaves; return (const char *const *)g_qual_leaves; }
+void elab_prov_free_leaves(void) {
+  for (int i = 0; i < g_nqual_leaves; i++) free(g_qual_leaves[i]);
+  free(g_qual_leaves); g_qual_leaves = NULL; g_nqual_leaves = 0;
+}
+/* Does the walk hold a class under a provisional name yet? (a read's key
+   is then the class the record finds for it: read_key_name) */
+int elab_prov_any(void) { return g_nprov > 0; }
 static int elab_prov_of(int k) { return k >= 0 && k < g_prov_of_cap && g_prov_of[k] > 0; }
 /* A qualified name the program's own class already has takes a leading
    underscore (the salt), and the leaf is no key for it. When a top-level
@@ -8903,13 +8914,11 @@ static void elab_prov_refuse_salted(Compiler *c, int i, const char *qn) {
    and those take the name built from their owner's final path, parents
    first (the classes were made in that order), with a leading underscore
    for each time the name is another class's. The headers' qc_name follows
-   the class. SPINEL_QC_RULE_CHECK reports where the rule and qualify's
-   mark disagree. */
+   the class. */
 void elab_prov_apply(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   elab_prov_drop_derived(c);
   if (!g_nprov) return;
-  const char *chk = getenv("SPINEL_QC_RULE_CHECK");
   for (int i = 0; i < g_nprov; i++) {
     const char *leaf = g_prov_np[i] >= 0 ? nt_str(nt, g_prov_np[i], "name") : NULL;
     comp_class_rename(c, g_prov_cls[i], leaf ? leaf : g_prov_name[i]);
@@ -8922,10 +8931,6 @@ void elab_prov_apply(Compiler *c) {
   if (!q) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < g_nprov; i++) {
     q[i] = (unsigned char)qc_rule_qualifies(c, g_prov_hdr[i], g_prov_cls[i]);
-    int mark = g_prov_np[i] >= 0 && nt_int(nt, g_prov_np[i], "qc_qual", 0);
-    if (chk && q[i] != mark)
-      fprintf(stderr, "qc-rule: %s:%lld %s rule=%d mark=%d\n", nt_file_path(nt, (int)nt_int(nt, g_prov_hdr[i], "node_file", 0)),
-              nt_int(nt, g_prov_hdr[i], "node_line", 0), class_ruby_name(c, g_prov_cls[i]), q[i], mark);
   }
   qc_rule_release();
   for (int i = 0; i < nt->count; i++) free(keys[i]);
@@ -8935,11 +8940,7 @@ void elab_prov_apply(Compiler *c) {
   if (!qcls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < g_nprov; i++) {
     int ci = g_prov_cls[i], np = g_prov_np[i];
-    if (!q[i]) {
-      if (chk && np >= 0 && nt_str(nt, np, "qc_name"))
-        fprintf(stderr, "qc-rule: %s keeps a qualified name the walk stamped\n", class_ruby_name(c, ci));
-      continue;
-    }
+    if (!q[i]) continue;
     char out[600], rb[600];
     for (int salt = 0; ; salt++) {
       scope_qualified_name(c, g_prov_hdr[i], np, salt, out, sizeof out, rb, sizeof rb);
@@ -8947,6 +8948,16 @@ void elab_prov_apply(Compiler *c) {
       if (salt == 0 && o >= 0 && o != ci && !elab_prov_of(o) && !anh_has(&done, out))
         elab_prov_refuse_salted(c, i, out);
       if (!((o >= 0 && o != ci) || anh_has(&done, out)) || salt > 8) break;
+    }
+    {
+      const char *lf = np >= 0 ? nt_str(nt, np, "name") : NULL;
+      int seen = 0;
+      for (int j = 0; lf && j < g_nqual_leaves && !seen; j++) seen = sp_streq(g_qual_leaves[j], lf);
+      if (lf && !seen) {
+        g_qual_leaves = realloc(g_qual_leaves, sizeof(char *) * (size_t)(g_nqual_leaves + 1));
+        if (!g_qual_leaves) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        g_qual_leaves[g_nqual_leaves++] = strdup(lf);
+      }
     }
     comp_class_rename(c, ci, out);
     qcls[ci] = 1;

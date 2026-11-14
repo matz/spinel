@@ -1360,10 +1360,7 @@ static int block_body_class(const NodeTable *nt, int def_node) {
    `A::B = Class.new do ... end`) opens one, whatever made the class. */
 static int header_qualified(Compiler *c, int id, int cp, int in_block) {
   if (id < 0 || cp < 0 || in_block) return 0;
-  int rule = qc_rule_nested(c, id);
-  if (getenv("SPINEL_QC_RULE_CHECK") && rule != (nt_int(c->nt, cp, "qc_qual", 0) != 0))
-    fprintf(stderr, "qc-rule: header_qualified line %lld rule=%d\n", nt_int(c->nt, id, "node_line", 0), rule);
-  return rule;
+  return qc_rule_nested(c, id);
 }
 
 /* Class bodies and direct singleton definitions obey the same reopen limits. */

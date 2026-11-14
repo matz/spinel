@@ -1261,6 +1261,8 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
     }
     /* ...and Numeric's, which Integer's and Float's leave out */
     else if (msym && mcls && builtin_numeric_owns(mcls, msym) && builtin_numeric_arity(msym, &ba)) have_ba = 1;
+    /* ...and Enumerable's, which Array's and Hash's leave out */
+    else if (msym && mcls && builtin_enumerable_owns(mcls, msym) && builtin_enumerable_arity(msym, &ba)) have_ba = 1;
     /* A receiverless Kernel wrapper (`method(:String)`) has no receiver
        class; the builtin's real arity is keyed under "Kernel" (#4395). */
     else if (is_bam && mrecv < 0 && msym && builtin_method_arity("Kernel", msym, &ba)) have_ba = 1;

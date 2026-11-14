@@ -3,6 +3,7 @@
 #include <string.h>
 #include "holder.h"
 #include "codegen_internal.h"
+#include "analyze_internal.h"
 #include "share.h"
 
 HolderKind holder_kind_of(NodeKind k) {
@@ -141,6 +142,26 @@ int holder_ivar_side(const Compiler *c, int node, int *cid) {
   int body = holder_cbody(c, node);
   *cid = body >= 0 ? body : c->toplevel_class;
   return *cid >= 0 ? IVS_CLASS : 0;
+}
+
+int ivar_node_classes(const Compiler *c, int node, int *out, int max, int *side, int *poly) {
+  Compiler *mc = (Compiler *)c;
+  int sd;
+  if (!side) side = &sd;
+  if (poly) *poly = 0;
+  if (ie_class_of(mc, node) < -1) {
+    /* a boxed receiver: each class it can be, or none where they are not
+       known (the lexical class is not its) */
+    int n = ie_poly_classes_at(mc, node, out, max);
+    if (poly) *poly = 1;
+    *side = n > 0 ? IVS_INST : 0;
+    return n;
+  }
+  int cid;
+  *side = holder_ivar_side(c, node, &cid);
+  if (!*side || cid < 0 || max < 1) return 0;
+  out[0] = cid;
+  return 1;
 }
 
 int holder_of_node_in(const Compiler *c, int node, int body, HolderRef *out) {

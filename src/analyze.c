@@ -42052,6 +42052,27 @@ static int mark_with_kw_nullable(Compiler *c, int cid, const int *ke, int kn) {
   }
   return changed;
 }
+/* An Integer or Float ivar slot that can hold nil keeps it in its nil byte:
+   marked so, once. 1 when the slot changed. */
+static int ivar_slot_mark_nullable(ClassInfo *ci, int iv) {
+  if (ci->ivar_nullable_int[iv]) return 0;
+  if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) return 0;
+  ci->ivar_nullable_int[iv] = 1;
+  comp_touch_class(ci->idx);
+  return 1;
+}
+/* An ivar target of a multiple assignment that can land nil: its slot in each
+   class it stores into (ivar_node_classes, a boxed receiver's too) holds the
+   nil. 1 when a slot changed. */
+static int ivar_target_nullable(Compiler *c, int t) {
+  int cl[64], ncl = ivar_node_classes(c, t, cl, 64, NULL, NULL), changed = 0;
+  for (int q = 0; q < ncl; q++) {
+    ClassInfo *qc = &c->classes[cl[q]];
+    int qiv = comp_ivar_index(qc, nt_str(c->nt, t, "name"));
+    if (qiv >= 0) changed |= ivar_slot_mark_nullable(qc, qiv);
+  }
+  return changed;
+}
 static void mark_nullable_int_locals(Compiler *c) {
   const NodeTable *nt = c->nt;
   /* A scalar local a read can reach before any write starts as its nil and
@@ -42485,11 +42506,8 @@ static void mark_nullable_int_locals(Compiler *c) {
           ClassInfo *ci = NULL; int iv = -1, is_cv = 0;
           if (tk == NK_ClassVariableTargetNode) { iv = cvar_slot(c, t, &ci); is_cv = 1; }
           else if (tk == NK_InstanceVariableTargetNode) {
-            Scope *s = comp_scope_of(c, t);
-            int cid = s ? s->class_id : -1;
-            if (ie_class_of(c, t) >= 0) cid = ie_class_of(c, t);
-            if (cid < 0) cid = c->toplevel_class;
-            if (cid >= 0 && cid < c->nclasses) { ci = &c->classes[cid]; iv = comp_ivar_index(ci, nt_str(nt, t, "name")); }
+            changed |= ivar_target_nullable(c, t);
+            continue;
           }
           else {
             int trc = nt_ref(nt, t, "receiver");
@@ -42514,11 +42532,7 @@ static void mark_nullable_int_locals(Compiler *c) {
             if (ci->cvar_types[iv] != TY_INT && ci->cvar_types[iv] != TY_FLOAT) continue;
             ci->cvar_nullable_int[iv] = 1; changed = 1;
           }
-          else {
-            if (ci->ivar_nullable_int[iv]) continue;
-            if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) continue;
-            { ci->ivar_nullable_int[iv] = 1; comp_touch_class(ci->idx); } changed = 1;
-          }
+          else changed |= ivar_slot_mark_nullable(ci, iv);
         }
       }
     }

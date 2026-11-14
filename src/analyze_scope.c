@@ -13349,26 +13349,37 @@ int infer_ivar_types(Compiler *c) {
        wrote a slot nothing had registered */
     if (ty_k == NK_InstanceVariableReadNode || ty_k == NK_InstanceVariableTargetNode) {
       Scope *s = comp_scope_of(c, id);
-      if (s->class_id >= 0) continue;  /* class/instance reads: register_locals */
+      /* (register_locals lays out the reads and targets of a class's own
+         scopes, but not the targets of a block instance_eval/exec rebinds) */
+      if (s->class_id >= 0 && !(ty_k == NK_InstanceVariableTargetNode && ie_class_of(c, id) != -1)) continue;
       const char *nm = nt_str(nt, id, "name");
       if (!nm) continue;
-      /* the object it names (holder_ivar_side): an instance_eval block's
+      /* the object it names (ivar_node_classes): an instance_eval block's
          read is its receiver's, which lays out only the ivars written to
          it (a read of another is nil), and its multiple assignment
          target is a write to it */
       if (ie_pending_node(c, id)) continue;  /* (its receiver's class is next round's) */
-      int cid, side = holder_ivar_side(c, id, &cid);
+      int cl[64], side, n = 0;
+      if (ty_k == NK_InstanceVariableTargetNode) n = ivar_node_classes(c, id, cl, 64, &side, NULL);
+      else {
+        int cid;
+        side = holder_ivar_side(c, id, &cid);
+        if (side && cid >= 0) cl[n++] = cid;
+      }
       if (side == IVS_INST && ty_k == NK_InstanceVariableReadNode) continue;
-      if (!side) {
+      if (!n && ie_class_of(c, id) < -1) continue;   /* (a boxed receiver whose classes are not known) */
+      if (!n) {
         int old_nc = c->nclasses;
-        cid = comp_toplevel_class_make(c);
+        cl[n++] = comp_toplevel_class_make(c);
         side = IVS_CLASS;
         if (c->nclasses != old_nc) changed = 1;
       }
-      ClassInfo *ci = &c->classes[cid];
-      int old_ni = ci->nivars;
-      comp_ivar_intern(ci, nm, side);
-      if (ci->nivars != old_ni) changed = 1;
+      for (int q = 0; q < n; q++) {
+        ClassInfo *ci = &c->classes[cl[q]];
+        int old_ni = ci->nivars;
+        comp_ivar_intern(ci, nm, side);
+        if (ci->nivars != old_ni) changed = 1;
+      }
       continue;
     }
     if (ty_k == NK_InstanceVariableWriteNode ||
@@ -13418,19 +13429,20 @@ int infer_ivar_types(Compiler *c) {
       if (vt == TY_NIL) continue;
       /* An instance_eval/exec block on a poly receiver writes each class it
          can be. */
-      if (ie_class_of(c, id) < -1 && ty_k != NK_InstanceVariableOperatorWriteNode) {
-        int pk[64], npk = ie_poly_classes_at(c, id, pk, 64);
-        for (int q = 0; q < npk; q++) {
+      int pk[64], pside, poly, npk = ivar_node_classes(c, id, pk, 64, &pside, &poly);
+      if (poly) {
+        /* (a boxed receiver whose classes are not known has no class to write) */
+        for (int q = 0; ty_k != NK_InstanceVariableOperatorWriteNode && q < npk; q++) {
           ClassInfo *pci = &c->classes[pk[q]];
           int old_pn = pci->nivars;
-          int piv = comp_ivar_intern(pci, nm, IVS_INST);
+          int piv = comp_ivar_intern(pci, nm, pside);
           if (pci->nivars != old_pn) changed = 1;
           if (class_ivar_pinned(pci, nm) || pci->ivar_int_table[piv]) continue;
           TyKind pvt = empty_container_write(c, vnode, vt, pci->ivar_types[piv]);
           TyKind pm = ty_unify(pci->ivar_types[piv], pvt);
           if (pm != pci->ivar_types[piv]) { ivar_set_type(pci, piv, pm); changed = 1; }
         }
-        if (npk > 0) continue;
+        if (ty_k != NK_InstanceVariableOperatorWriteNode || !npk) continue;
       }
       if (cls_id2 < 0) {
         /* Top-level method: track ivars in the Toplevel pseudo-class */

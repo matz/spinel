@@ -32,14 +32,17 @@ int order_pure_walk(Compiler *c, int id, const OrderWalk *w) {
 }
 /* Does `id`, an operand the record asks about (w->code), only read or
    build a value? */
-static int walk_value_only(Compiler *c, int id) {
+static int walk_value_only(Compiler *c, int id, const OrderWalk *w) {
   switch (nt_kind(c->nt, id)) {
     case NK_GlobalVariableReadNode: case NK_BlockNode: case NK_LambdaNode:
     case NK_RegularExpressionNode:
       return 1;
     case NK_ConstantReadNode: case NK_ConstantPathNode: {
       ConstReadEffect e = an_const_read_effect(c, id);
-      return !e.presence && !e.autoload && !e.class_presence;
+      if (e.presence || e.autoload || e.class_presence) return 0;
+      /* (a path evaluates its parent before it reads the leaf: `pick::PAT`
+         runs `pick`) */
+      return nt_kind(c->nt, id) != NK_ConstantPathNode || order_pure_walk(c, nt_ref(c->nt, id, "parent"), w);
     }
     /* (a frozen literal, `"lit"` or `"lit".freeze`; never a statement
        list, whose other statements run) */
@@ -51,7 +54,7 @@ static int walk_value_only(Compiler *c, int id) {
 }
 static int pure_walk_node(Compiler *c, int id, const OrderWalk *w) {
   const NodeTable *nt = c->nt;
-  if (w->code && walk_value_only(c, id)) return 1;
+  if (w->code && walk_value_only(c, id, w)) return 1;
   switch (nt_kind(nt, id)) {
     case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
     case NK_ClassVariableReadNode: case NK_SelfNode: case NK_IntegerNode:

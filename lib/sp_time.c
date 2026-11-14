@@ -543,7 +543,14 @@ const char *sp_timev_strftime(sp_Time t, const char *fmt) { return sp_timev_strf
 /* a program's format String, a NUL among its bytes: CRuby copies one like
    any other byte, where reading it as a C string ended the format there */
 const char *sp_time_strftime_s(const sp_Time *t, const char *fmt) {
-  return sp_timev_strftime_n(*t, fmt, sp_str_byte_len(fmt));
+  const char *r = sp_timev_strftime_n(*t, fmt, sp_str_byte_len(fmt));
+  /* a BINARY format answers a BINARY String, as CRuby's */
+  if (sp_str_is_binary(fmt)) {
+    size_t n = sp_str_byte_len(r);
+    char *b = sp_str_alloc(n); memcpy(b, r, n); sp_str_mark_binary(b);
+    return b;
+  }
+  return r;
 }
 static const char *sp_timev_strftime_n(sp_Time t, const char *fmt, size_t flen) {SP_GC_ROOT_STR(fmt);
   const char *fend = fmt + flen;

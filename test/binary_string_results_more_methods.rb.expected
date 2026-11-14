@@ -1,0 +1,14 @@
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+"\xAC\x9C\xE6\xA5\x97\xE6"
+"a\xFF"
+"\"\\xFF\\xD8\\x00ab\""
+"a\xFF"
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)>
+"\"\\xFF\\xD8\\x00ab\""
+#<Encoding:BINARY (ASCII-8BIT)>

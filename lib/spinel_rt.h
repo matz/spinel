@@ -1122,7 +1122,10 @@ static const char *sp_fstr_lookup(const char *s) {  /* caller holds the heap loc
   if (!sp_fstr_cap) return NULL;
   size_t mask = sp_fstr_cap - 1, idx = (size_t)(sp_str_hash(s) & mask);
   while (sp_fstr_tab[idx]) {
-    if (sp_str_eq(sp_fstr_tab[idx], s)) return sp_fstr_tab[idx];
+    /* keyed by the encoding too, as CRuby's fstring table is: a BINARY
+       String's -@ is no UTF-8 one of the same bytes */
+    if (sp_str_eq(sp_fstr_tab[idx], s) && sp_str_is_binary(sp_fstr_tab[idx]) == sp_str_is_binary(s))
+      return sp_fstr_tab[idx];
     idx = (idx + 1) & mask;
   }
   return NULL;
@@ -1172,7 +1175,9 @@ static const char *sp_str_dedup(const char *s) {
      whose answer the handle copied): it is rooted across it, as sp_str_dup
      roots its own, or the copy read swept bytes. */
   SP_GC_ROOT_STR(s);
-  const char *f = sp_str_freeze_val(sp_str_from_bytes(s, sp_str_byte_len(s)));
+  char *cp = (char *)sp_str_from_bytes(s, sp_str_byte_len(s));
+  if (sp_str_is_binary(s)) sp_str_mark_binary(cp);   /* the copy keeps its encoding */
+  const char *f = sp_str_freeze_val(cp);
   SP_HEAP_LOCK();
   const char *hit2 = sp_fstr_lookup(f);  /* another thread may have won the race */
   if (hit2) { SP_HEAP_UNLOCK(); return hit2; }
@@ -1283,6 +1288,8 @@ static inline const char *sp_File_gets(sp_File *f) {
   char *r = sp_str_alloc(n);
   memcpy(r, buf, n);
   free(buf);
+  /* a binary handle's line (a socket's, a File opened "rb") is BINARY */
+  if (sp_File_reads_binary(f)) sp_str_mark_binary(r);
   f->lineno++;
   return r;
 }

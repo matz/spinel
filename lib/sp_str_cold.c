@@ -229,6 +229,7 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
   if(!s)sp_nil_recv("dump");
   size_t n=sp_str_byte_len(s);   /* a NUL is a byte to escape, not the end */
   char*out=sp_str_alloc_raw((n*4)+3);size_t oi=0;
+  int bin=sp_str_is_binary(s);
   out[oi++]='"';
   for(size_t i=0;i<n;i++){
     unsigned char c=(unsigned char)s[i];
@@ -250,6 +251,8 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
     else if(c<0x20){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);}
     /* #dump promises a pure-ASCII, re-evaluable form: a non-ASCII character
        is written as its \uXXXX escape (#3558) */
+    /* a BINARY String's high bytes are bytes, each \xXX */
+    else if(c>=0x80&&bin){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);}
     else if(c>=0x80){
       unsigned cp=0;int extra=0;
       if((c&0xE0)==0xC0){cp=c&0x1Fu;extra=1;}
@@ -257,13 +260,17 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
       else if((c&0xF8)==0xF0){cp=c&0x07u;extra=3;}
       else{oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}
       if(i+(size_t)extra>=n){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}
+      /* a lead byte without its continuation bytes is no character: the
+         byte alone (\xD8\x00 is no U+0600) */
+      {int ok=1;for(int k=1;k<=extra;k++)if(((unsigned char)s[i+(size_t)k]&0xC0u)!=0x80u)ok=0;
+       if(!ok){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}}
       for(int k=0;k<extra;k++)cp=(cp<<6)|((unsigned char)s[++i]&0x3Fu);
       if(cp>0xFFFFu)oi+=(size_t)sprintf(out+oi,"\\u{%X}",cp);
       else oi+=(size_t)sprintf(out+oi,"\\u%04X",cp);
     }
     else{out[oi++]=(char)c;}
   }
-  out[oi++]='"';out[oi]=0;sp_str_set_len(out,oi);return out;
+  out[oi++]='"';out[oi]=0;sp_str_set_len(out,oi);if(bin)sp_str_mark_binary(out);return out;
 }
 const char*sp_str_delete_prefix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_prefix");if(!p)return sp_str_one_answer(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s+pl,sl-pl+1);sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
 const char*sp_str_delete_suffix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_suffix");if(!p)return sp_str_one_answer(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s+sl-pl,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,sl-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}

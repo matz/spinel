@@ -2264,7 +2264,6 @@ TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int 
 int    comp_ffi_const_at(Compiler *c, int node, int *out);
 int    comp_included_method_index(Compiler *c, const char *name, int call_id);
 int    class_is_blank_slate(Compiler *c, int ci);   /* explicit `< BasicObject` descent */
-int    class_lacks_kernel(Compiler *c, int ci);     /* blank slate with no `include Kernel` */
 int    comp_toplevel_mod_defines(Compiler *c, const char *name, int extend);
 
 /* Locals within a scope. */

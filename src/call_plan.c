@@ -5350,8 +5350,9 @@ static int cplan_kernel_form(Compiler *c, int id, const char *name, int dflt) {
 }
 /* Does Kernel reach the receiver of call id (its self, or the class of a send's
    receiver; any class a dispatch's default arm takes when the receiver is of
-   no one class)? A class under BasicObject without `include Kernel` has no
-   Kernel above it, and its instances raise NoMethodError. */
+   no one class)? A class under BasicObject with no Kernel among its
+   ancestors (elab_class_lacks_kernel) has no Kernel above it, and its
+   instances raise NoMethodError. */
 static int cplan_kernel_reaches(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
@@ -5361,10 +5362,10 @@ static int cplan_kernel_reaches(Compiler *c, int id) {
     const Scope *in = comp_scope_of(c, id);
     ci = in ? in->class_id : -1;
   }
-  if (ci >= 0 && ci < c->nclasses) return !class_lacks_kernel(c, ci);
+  if (ci >= 0 && ci < c->nclasses) return !elab_class_lacks_kernel(c, ci);
   if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 1;
   for (int k = 0; k < c->nclasses; k++)
-    if (class_lacks_kernel(c, k)) return 0;
+    if (elab_class_lacks_kernel(c, k)) return 0;
   return 1;
 }
 /* See call_plan.h. */

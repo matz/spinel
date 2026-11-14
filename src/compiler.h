@@ -2052,11 +2052,17 @@ typedef struct {
      program's (nil, a number, a String), so its ivars are nil; and the class a
      block body's own instance_eval / exec call (or a forwarder to one) runs it
      on, -1 for a body that only sits inside such a block, whose class it shares
-     in cls. All three have cap entries. */
+     in cls. rb flags (IE_RB_*) the nodes whose self is rebound to another
+     object (ie_rebound_marks); rb_ver counts the times those flags changed,
+     rb_scan is the node count the block structure was last read at. All
+     four have cap entries. */
   struct {
     int *cls;
     unsigned char *nonobj;
     int *own;
+    unsigned char *rb;
+    unsigned rb_ver;
+    int rb_scan;
     int cap;
   } ie_map;
   /* cplan_block_value_ignored's answers (call_plan.c): their number, which
@@ -2067,6 +2073,7 @@ typedef struct {
   struct { unsigned long ty, edits; unsigned version, scope_gen; int nscopes; } bvi_stamp;
 } Compiler;
 enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
+enum { IE_RB_IN = 1, IE_RB_OWN = 2, IE_RB_ROOT = 4 };
 
 AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);

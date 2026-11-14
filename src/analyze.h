@@ -1414,7 +1414,7 @@ int ewo_memo_passed_to_callable_at(Compiler *c, int callid, int pidx);
 
 /* Class index when a receiverless instance_eval/exec resolves to self, else -1. */
 int ie_implicit_self_class(Compiler *c, int id);
-int ie_poly_self_classes(Compiler *c, const char *name, int body, int *out, int max,
+int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int *out, int max,
                          const char **need);
 int *ie_body_retype(Compiler *c, int body, int cls);
 void ie_body_restore(Compiler *c, int *snap);

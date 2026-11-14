@@ -11676,7 +11676,7 @@ typedef struct PivsFacts {
                            /* three slots: classes, Hash origins, callables */
   struct { int call; uint64_t done[4]; } *seen;
   int nmemo, cmemo, memo_n, memo_count;
-  unsigned memo_ver;
+  unsigned memo_ver, memo_rb;  /* memo_rb: the rebound marks' version (ie_rebound_marks) */
   int query, sweep, active;  /* active: the memo entry the query fills, -1 for none */
   int hash_mode;            /* the query's: 0 classes, 1 Hash origins, 2 callables */
   int init_args;            /* the query follows an initialize parameter through the arguments
@@ -12508,6 +12508,10 @@ static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
       return 1;
     case NK_SelfNode: {
       Scope *s = comp_scope_of(c, v);
+      /* in a block whose self is another object (ie_rebound_marks: the
+         receiver an instance_eval/exec, or a method forwarding to one, runs
+         it on), the walk leaves self to that call's own set */
+      if (ie_rebound_node(c, v)) return 0;
       /* a yielding method's proc-form clone has its method's callers: the
          clone itself is called by no Ruby call site of its own spelling */
       if (s && s->is_proc_form && s->pf_source > 0 && s->pf_source <= c->nscopes) s = &c->scopes[s->pf_source - 1];
@@ -12596,12 +12600,14 @@ static int pivs_elems_uncached(Compiler *c, int arr, char *set, int depth) {
    table as they are now (dropped when either changed). */
 static PivsFacts *pivs_ready(Compiler *c) {
   PivsFacts *f = pivs_facts(c);
+  ie_rebound_marks(c);
   if (f->memo_n != c->nclasses || f->memo_count != c->nt->count ||
-      f->memo_ver != c->nt->version) {
+      f->memo_ver != c->nt->version || f->memo_rb != c->ie_map.rb_ver) {
     for (int i = 0; i < f->nmemo; i++) { free(f->memo[i].set); free(f->memo[i].cls); free(f->memo[i].hash); free(f->memo[i].cvals); }
     free(f->memo_at); free(f->seen);
     f->nmemo = f->query = 0; f->memo_n = c->nclasses; f->memo_count = c->nt->count;
     f->memo_ver = c->nt->version;
+    f->memo_rb = c->ie_map.rb_ver;
     f->memo_at = calloc((size_t)(f->memo_count > 0 ? f->memo_count : 1) * 3, sizeof *f->memo_at);
     f->seen = calloc((size_t)(f->memo_count > 0 ? f->memo_count : 1), sizeof *f->seen);
     if (!f->memo_at || !f->seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

@@ -1258,6 +1258,20 @@ void propagate_bigint_cascade(Compiler *c);
 void mark_ie_subtree(Compiler *c, int node, int cls);
 void build_ie_map(Compiler *c);
 int ie_block_body(Compiler *c, int blk);
+/* The block an instance_eval / instance_exec call on a receiver other than
+   self runs: its literal block, the block of a proc literal handed with `&`,
+   or that of the proc literal that is the one write of a local handed with
+   `&`; -1 for another call or block. */
+int ie_own_recv_block(Compiler *c, int call);
+/* The rebound marks, by node (c->ie_map.rb, cap entries), short of a def,
+   class or module: IE_RB_ROOT on each ie_own_recv_block, IE_RB_OWN on its
+   nodes, and IE_RB_IN on the nodes whose self is another object than their
+   scope's: OWN ones, and the blocks build_ie_map resolves to a call that
+   hands them to another receiver, a forwarding method's (`def build(&b) =
+   @root.instance_eval(&b)`) too. Read afresh by each build_ie_map, the
+   structure's also when the tree grew; c->ie_map.rb_ver moves with them. */
+const unsigned char *ie_rebound_marks(Compiler *c);
+int ie_rebound_node(Compiler *c, int node);
 int ie_class_of(Compiler *c, int node);
 int ie_own_class_of(Compiler *c, int node);
 int blkp_params_node(Compiler *c, int create);

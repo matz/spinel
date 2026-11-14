@@ -446,11 +446,13 @@ void walk_scope(Compiler *c, int id, int scope_idx, int class_id);
    statements may not run but for those that run whenever the begin does
    (prog_rescue_sure), or a list in the first of them that may raise,
    which runs: 1 in the begin's own frame, 2 in a frame opened under it (a
-   class body), whose statements may not run only from outside it. */
+   class body), whose statements may not run only from outside it. bmay:
+   in the body of a top-level reopening of a builtin class that a
+   condition holds (LrStmt.bmay). */
 typedef struct {
   int e, file, top, frame, depth, rep;
   int list;   /* the statement list the node is an element of (a StatementsNode), -1 for a lone expression */
-  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept, rescued;
+  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept, rescued, bmay;
 } ElabPos;
 enum { EP_NODE, EP_SPINE, EP_LIST, EP_NEW };
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp);

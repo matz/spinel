@@ -75,8 +75,10 @@ int g_dump_load_record = 0;
    file's top level), which lr_may_dominates climbs. kept: in a block a
    call may keep to run later (ElabPos.kept). runs: it may run code of the
    program's (lr_run_points); nrun: how many statements before it
-   do. */
-typedef struct { int node, file, region, top, rank, depth, frame, last, rep; unsigned char may, partial, fmay, fpartial, kept; int list, up, nrun; unsigned char runs; } LrStmt;
+   do. bmay: in a top-level reopening of a builtin class under a condition
+   (ElabPos.bmay), whose defs run only where the condition held, though
+   the class is there either way (lr_def_applied). */
+typedef struct { int node, file, region, top, rank, depth, frame, last, rep; unsigned char may, partial, fmay, fpartial, kept; int list, up, nrun; unsigned char runs, bmay; } LrStmt;
 
 /* The order questions SPINEL_ELAB_CHECK counts, by reader */
 typedef struct { const char *reader; long asked, differ; } LrCheck;
@@ -254,6 +256,7 @@ static int lr_add(ElabWalk *w, int node, ElabPos *pos) {
   }
   int k = r->nst++;
   r->st[k] = (LrStmt){ node, pos->file, w->region, pos->top < 0 ? k : pos->top, -1, pos->depth, pos->frame, w->reg ? INT_MAX : k, pos->rep, pos->may, pos->partial, pos->fmay, pos->fpartial, pos->kept, pos->list, pos->e };
+  r->st[k].bmay = pos->bmay;
   r->at[node] = k;
   pos->e = k; pos->top = r->st[k].top; pos->kind = EP_SPINE;
   return k;
@@ -425,6 +428,15 @@ int elab_write_value_kind(NodeKind k, int *may) {
    and `||` does; a block run at once by a call the record does not know
    (a program method may yield to it, or keep it) may not run, and an
    iterator's may run partly (zero times, or several). */
+/* Does class or module node p reopen a builtin class or module at the top
+   level (`class Array`, no superclass), one that exists before any body
+   of the program's runs? */
+static int elab_builtin_reopen(Compiler *c, int p) {
+  NodeKind k = nt_kind(c->nt, p);
+  if ((k != NK_ClassNode && k != NK_ModuleNode) || (k == NK_ClassNode && nt_ref(c->nt, p, "superclass") >= 0)) return 0;
+  const char *cn = class_def_key(c, p);
+  return cn && !strstr(cn, "__") && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) && !is_object_base_name(cn);
+}
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
   const NodeTable *nt = c->nt;
   ElabPos q = *pp;
@@ -451,7 +463,10 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
   if (!spine && k != NK_CallNode) return q;
   switch (k) {
     case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode:
-      if (spine && ch == nt_ref(nt, p, "body")) { q.frame = pp->e; q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; return elab_body_pos(nt, ch, q); }
+      /* (a reopening of a builtin class, `if c; class Array`: the class is
+         there whether or not the body runs, so a condition around the body
+         is its defs' own, as one in the body is: LrStmt.bmay) */
+      if (spine && ch == nt_ref(nt, p, "body")) { q.frame = pp->e; q.bmay = q.may && elab_builtin_reopen(c, p); q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; return elab_body_pos(nt, ch, q); }
       break;
     case NK_PreExecutionNode: case NK_EnsureNode:
       if (spine && ch == nt_ref(nt, p, "statements")) return elab_body_pos(nt, ch, q);
@@ -522,7 +537,7 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
       if (!spine) { q.defer = runs == ELAB_BLK_UNKNOWN; break; }
       q.kind = EP_SPINE;
       if (runs == ELAB_BLK_UNKNOWN) q.may = q.fmay = q.kept = 1;
-      if (elab_opens_frame(nt, p)) { q.frame = pp->e; q.fmay = q.fpartial = 0; if (q.rescued) q.rescued = 2; }
+      if (elab_opens_frame(nt, p)) { q.frame = pp->e; q.fmay = q.fpartial = q.bmay = 0; if (q.rescued) q.rescued = 2; }
       else { q.partial = q.fpartial = 1; q.rep = pp->e; }   /* an iterator's: zero times, or several */
       break;
     }
@@ -993,6 +1008,15 @@ static int lr_stmt_applied(const LrStmt *s, int unplaced, int may) {
   if (s && s->region < 0) s = NULL;
   if ((!s && !unplaced) || (s && s->fpartial)) return 0;
   return may && s && (s->fmay || !s->may) ? 2 : 1;
+}
+
+/* lr_stmt_applied for a def (or define_method) at s: one in a top-level
+   reopening of a builtin class under a condition (LrStmt.bmay) is one under
+   a condition of its body, 2, where the reopened class is there whether or
+   not the body ran */
+static int lr_def_applied(const LrStmt *s, int unplaced, int may) {
+  int a = lr_stmt_applied(s, unplaced, may);
+  return a == 1 && s && s->region >= 0 && s->bmay ? 2 : a;
 }
 
 /* The point from which node can run: its statement's, and for a node in a
@@ -3460,7 +3484,7 @@ int elab_def_applied(Compiler *c, int def) {
   const LrStmt *s = lr_stmt_of(r, def);
   if (!s || s->region < 0) return 1;
   if (s->fpartial && s->rep >= 0 && dm_each_inner(c->nt, r->st[s->rep].node) == def) s = &r->st[s->rep];
-  return lr_stmt_applied(s, 0, s->may) == 1;
+  return lr_def_applied(s, 0, s->may) == 1;
 }
 
 /* Is def node `def` on an object: on a receiver neither self nor a
@@ -9833,6 +9857,7 @@ int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, Lo
 static int lr_applied(Compiler *c, const LrDef *v) {
   LoadRecord *r = elab_fresh(c);
   if (v->absent || v->unplaced == LR_UNPLACED_LATER) return 0;
+  if (v->kind == LR_DEF || v->kind == LR_DEFINE_METHOD) return lr_def_applied(lr_stmt_of(r, v->node), v->unplaced, v->may);
   return lr_stmt_applied(lr_stmt_of(r, v->node), v->unplaced, v->may);
 }
 

@@ -15986,6 +15986,14 @@ static void cdef_add(CondDef x, CondDef **v, int *n) {
   x.path = strdup(x.path);
   g[(*n)++] = x;
 }
+/* Does class node id reopen a builtin class or module (`class Array`, no
+   superclass)? */
+static int cdef_builtin_class(const Compiler *c, int id) {
+  NodeKind k = nt_kind(c->nt, id);
+  if ((k != NK_ClassNode && k != NK_ModuleNode) || (k == NK_ClassNode && nt_ref(c->nt, id, "superclass") >= 0)) return 0;
+  const char *cn = class_def_key(c, id);
+  return cn && !strstr(cn, "__") && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) && !is_object_base_name(cn);
+}
 static void cdef_walk(const Compiler *c, NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
   NodeKind k = nt_kind(nt, id);
   switch (k) {
@@ -16025,7 +16033,11 @@ static void cdef_walk(const Compiler *c, NodeTable *nt, int id, CondDef x, CondD
     char p[1024];
     snprintf(p, sizeof p, "%s", x.path);
     cdef_path(c, nt, nt_ref(nt, id, "constant_path"), p, sizeof p);
-    x.path = p; x.cls = id; x.cm = 0; x.top = -1; x.here = 0;
+    /* (a top-level reopening of a builtin class, `if c; class Array`, is
+       there whether or not its body runs: a condition around the body is
+       its defs' own, as one in the body is; elab_child keeps it too) */
+    int keep = x.cls == -1 && x.here && cdef_builtin_class(c, id);
+    x.path = p; x.cls = id; x.cm = 0; x.top = -1; x.here = keep;
     cdef_walk(c, nt, nt_ref(nt, id, "body"), x, v, n);
     break;
   }

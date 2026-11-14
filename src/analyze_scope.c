@@ -4940,6 +4940,7 @@ static int alias_method_in_effect(Compiler *c, int k, const char *od, int at, in
    clone, whose builtin call on a program object the emitter serves past
    the class's own. */
 void settle_object_builtin_aliases(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *cls = &c->classes[k];
     for (int i = 0; i < cls->naliases; i++) {
@@ -5118,6 +5119,7 @@ static void mf_copy_entries(Compiler *c) {
 }
 
 void settle_mixin_aliases(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *cls = &c->classes[k];
     if (comp_class_is_module(c, cls) || is_builtin_reopen(cls->name)) continue;
@@ -5204,6 +5206,7 @@ void settle_mixin_aliases(Compiler *c) {
       unsupported_feature(c, at, msg);
     }
   }
+  mtab_leave(c);
 }
 
 /* The accessor an instance alias e names at its point, an attr_* version
@@ -5426,6 +5429,7 @@ static void alias_init_super_values(Compiler *c, int di) {
    ancestry yet for a super to start from, and its alias is bound by
    name. */
 void register_alias_methods(Compiler *c, int modules) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   int n = 0;
   ElabEntry *a = elab_entries(c, 1u << LR_ALIAS | 1u << LR_READER | 1u << LR_WRITER, &n);
   int *src = malloc(sizeof *src * (size_t)(n ? n : 1));
@@ -5481,6 +5485,7 @@ void register_alias_methods(Compiler *c, int modules) {
   if (copied) register_locals(c);
   free(src);
   free(a);
+  mtab_leave(c);
 }
 
 /* Each class's undefs, from the load record (elab_entries), in the order
@@ -7946,6 +7951,7 @@ static void inherited_alias_vis(Compiler *c, int ci, int a) {
    same-class case -- a definition earlier in this very body -- is already
    handled by renaming that definition. */
 void resolve_inherited_aliases(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   for (int ci = 0; ci < c->nclasses; ci++) {
     ClassInfo *cls = &c->classes[ci];
     if (c->classes[ci].parent < 0) continue;
@@ -7979,6 +7985,7 @@ void resolve_inherited_aliases(Compiler *c) {
       }
     }
   }
+  mtab_leave(c);
 }
 
 /* True if the method scope's body contains a `super` (an explicit-arg SuperNode
@@ -8362,6 +8369,7 @@ static void mixin_copies_rename(Compiler *c, int ci, int own, const char *shadow
    renamed copy (no version of it: mixin_prev_version), as the call before
    the include cannot be told from the call after it. */
 static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, int plain, int *cells) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   const NodeTable *nt = c->nt;
   /* snapshot count before adding new scopes to avoid re-scanning them */
   int snap = c->nscopes;
@@ -8629,6 +8637,7 @@ else {
   }
   include_chain_copy(c, ci, mod_id, made, snap, 0);
   free(made);
+  mtab_leave(c);
 }
 
 static int module_prepend_list(Compiler *c, int mod_id, int *out, int max);
@@ -9102,6 +9111,7 @@ static void unbound_module_methods_away(Compiler *c) {
 }
 
 void register_includes(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   const NodeTable *nt = c->nt;
   g_list_has_c = c;
   cell_writes_defer(c);
@@ -9185,6 +9195,7 @@ void register_includes(Compiler *c) {
   }
   unbound_module_methods_away(c);
   if (g_inc_did_clone) register_locals(c);
+  mtab_leave(c);
 }
 
 int cmethod_needs_specialization(Compiler *c, int mi, int ci, int def_cls, int *has_new);
@@ -9218,6 +9229,7 @@ static void prepend_cell_write(Compiler *c, int late, int list, int after, int c
    after a class that includes it (a module nested in its includer), so the
    walk repeats until no class gains a name. */
 void register_include_attrs(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   /* a class's own def of a name answers before an alias of it a module
      brings (CRuby looks in the class before its modules): the alias is not
      copied over it */
@@ -9259,6 +9271,7 @@ void register_include_attrs(Compiler *c) {
     if (cls->nreaders + cls->nwriters + cls->naliases != n0) grew = 1;
   }
   }
+  mtab_leave(c);
 }
 
 /* The class a `super` from class `ci`'s method `mname` lands on answers it with
@@ -9524,6 +9537,7 @@ static void extend_alias_refuse_own(Compiler *c, int mod_id, int ci, const char 
    (include_module_methods): a later version of a module's method is a
    layer of its own in front of the earlier one's renamed copy. */
 static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int prepend, int plain, int *cell) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   int did_clone = 0;
   int snap = c->nscopes;
   int *made = calloc((size_t)(snap > 0 ? snap : 1), sizeof(int));
@@ -9707,6 +9721,7 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
   }
   include_chain_copy(c, ci, mod_id, made, snap, 1);
   free(made);
+  mtab_leave(c);
   return did_clone;
 }
 
@@ -9842,6 +9857,7 @@ void desugar_module_prepends(Compiler *c) {
 }
 
 void register_extends(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   int did_clone = 0;
   cell_writes_defer(c);
   int cls_mod = comp_core_class(c, CORE_CLASS_REOPEN);
@@ -9931,6 +9947,7 @@ void register_extends(Compiler *c) {
   free(seen);
   cell_writes_flush(c);
   if (did_clone) register_locals(c);
+  mtab_leave(c);
 }
 
 /* The nodes of each scope, chained in node order, while
@@ -10399,6 +10416,7 @@ static void specialize_super_cmethod(Compiler *c, int own, int snap) {
 }
 
 void specialize_inherited_cls_new(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   NodeTable *nt = (NodeTable *)c->nt;
   int snap = c->nscopes;
   sn_begin();
@@ -10691,6 +10709,7 @@ void specialize_inherited_cls_new(Compiler *c) {
   sn_end();
   /* The cloned bodies introduced new local/ivar nodes; intern them. */
   if (did_clone) register_locals(c);
+  mtab_leave(c);
 }
 
 /* For each class, find `prepend M` declarations and transplant M's instance
@@ -11021,6 +11040,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
 /* For each class, find `prepend M` in ALL class bodies, the reopenings
    included, the same two passes register_includes makes (#4200). */
 void register_prepends(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   int nb = 0;
   g_list_has_c = c;
   cell_writes_defer(c);
@@ -11028,6 +11048,7 @@ void register_prepends(Compiler *c) {
   for (int b = 0; b < nb; b++) process_prepend_body(c, bo[b].cls, bo[b].body);
   free(bo);
   cell_writes_flush(c);
+  mtab_leave(c);
 }
 
 /* Does class ci define instance method `name` of its own: a def, or an
@@ -11076,6 +11097,7 @@ void inherit_members(Compiler *c) {
      leaving the subclass without the members it inherits (#3576). */
   char *done = (char *)calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
   if (!done) return;
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   for (int i = 0; i < c->nclasses; i++)
     if (c->classes[i].parent < 0) done[i] = 1;
   for (int round = 0; round < c->nclasses + 1; round++) {
@@ -11236,6 +11258,7 @@ void inherit_members(Compiler *c) {
     if (!progressed) break;   /* the rest are cycles or dangling parents */
   }
   free(done);
+  mtab_leave(c);
 }
 
 /* Propagate inherited @ivar types parent -> child. */

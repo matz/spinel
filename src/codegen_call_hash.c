@@ -442,8 +442,8 @@ int emit_op_hash_to_s(Compiler *c, const BopCtx *x, Buf *b) {
 /* The receiver of typed Hash call x: through sp_nil_recv_named, which
    raises NoMethodError under the call's name as written, where the nil fact
    says it may be nil (#9347); as it is where it is never nil, where it is
-   read as tested (inside the call's nil arm), or where the call is a safe
-   navigation. */
+   read as tested (inside the call's nil arm, or a container face's arm),
+   or where the call is a safe navigation. */
 static void emit_hash_recv_named(Compiler *c, const BopCtx *x, Buf *b) {
   int named = !recv_never_nil(c, x->recv) && !nt_safe_nav(c->nt, x->id) &&
               !repr_of(c, x->recv).nil_tested;

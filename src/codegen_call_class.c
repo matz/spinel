@@ -2040,8 +2040,7 @@ int attr_orw_slot(Compiler *c, int id, int *cid, int *iv) {
   char wn[300], ivn[300];
   if (!ty_is_object(rt) || (size_t)snprintf(wn, sizeof wn, "%s=", attr) >= sizeof wn) return 0;
   int rc = ty_object_class(rt);
-  if (comp_resolve_member(c, rc, attr, 0, NULL, NULL) != SP_MEMBER_ATTR ||
-      comp_resolve_member(c, rc, attr, 1, NULL, NULL) != SP_MEMBER_ATTR)
+  if (!call_attr_target(c, -1, rc, attr, 0, NULL) || !call_attr_target(c, -1, rc, attr, CT_WRITER, NULL))
     return 0;
   if (!nt_ignore_visibility(nt, id) && (method_vis_for_caller(c, id, rc, attr) != SP_VIS_PUBLIC ||
                                         method_vis_for_caller(c, id, rc, wn) != SP_VIS_PUBLIC))

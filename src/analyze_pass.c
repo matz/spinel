@@ -1426,9 +1426,17 @@ static int map_bang_with_index_array(const NodeTable *nt, int id) {
    holds (is_fresh_array)? The with_index emitter writes back only into a
    typed Array or a PolyArray it holds itself: a local that aliases a row
    (`r = m[0]`) would widen apart from the row it shares. */
+static int local_has_target_write(Compiler *c, Scope *sc, const char *name);
 static int local_writes_all_fresh(Compiler *c, Scope *ls, const char *name) {
   const NodeTable *nt = c->nt;
   int seen = 0;
+  /* (a target `a, z = m[0], 1`, a `for` variable or a pattern capture, and
+     `a ||= v` / `a &&= v`, bind a value this does not see) */
+  if (local_has_target_write(c, ls, name)) return 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableOrWriteNode, w)
+    if (comp_scope_of(c, w) == ls && sp_streq(nt_str(nt, w, "name"), name)) return 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableAndWriteNode, w)
+    if (comp_scope_of(c, w) == ls && sp_streq(nt_str(nt, w, "name"), name)) return 0;
   NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
     const char *wn = nt_str(nt, w, "name");
     if (!wn || !sp_streq(wn, name) || comp_scope_of(c, w) != ls) continue;

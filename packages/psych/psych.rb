@@ -634,7 +634,9 @@ module Psych
           if col == indent && byte == 58 && blank_at?(1)
             @i += 1
             skip_space
-            value = mapping_value(indent)
+            # (an explicit key's value may be a block collection that starts
+            # on the `:` line: `? a` / `: b: c`, `: - b`)
+            value = eol? ? mapping_value(indent) : parse_block_node(indent)
           else
             value = nil
           end
@@ -789,8 +791,10 @@ module Psych
       text
     end
 
+    # (a `? ` on a plain scalar's continuation line is the scalar's text, as
+    # libyaml reads it: only a `key:` or a `- ` there is structure)
     def continuation_is_structure?
-      seq_entry? || mapping_key_here?
+      seq_entry? || (mapping_key_here? && !(byte == 63 && blank_at?(1)))
     end
 
     def plain_line(inline)

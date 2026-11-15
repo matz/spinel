@@ -12260,8 +12260,12 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
             else
               changed |= bind_call_params(c, id, cplan_new_initialize(c, id, ci, NULL));
           }
-          else
-            changed |= bind_call_params(c, id, call_target(c, id, ci, name, CT_CMETHOD, NULL));
+          else {
+            int cmi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
+            /* ...a class method the class lacks leaves the call to a public top-level def (`C.probe(x)`) */
+            if (cmi < 0) cmi = plan_top_def_target(c, id);
+            changed |= bind_call_params(c, id, cmi);
+          }
           continue;
         }
       }
@@ -12291,17 +12295,12 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           changed |= struct_new_types_members_at(c, id, k, 1);
         }
       }
-      /* `new` on an INSTANCE whose class defines an instance method `new`
-         is an ordinary method call, not a constructor: bind its params.
+      /* `new` on an INSTANCE is an ordinary method call, not a constructor (the object path below
+         binds its params, to an instance method `new` or to a public top-level def `new`).
          Skipping it left a `Relation#new(attrs = {}) = @model.new(attrs)`
          delegate's param typed by its default alone (a Symbol-keyed hash),
          so a String-keyed hash raised TypeError at runtime. */
-      if (sp_streq(name, "new")) {
-        TyKind rtn = infer_type(c, recv);
-        if (!(ty_is_object(rtn) &&
-              comp_method_in_chain(c, ty_object_class(rtn), "new", NULL) >= 0))
-          continue;
-      }
+      if (is_new_name(name) && !ty_is_object(infer_type(c, recv))) continue;
     }
     /* obj.method -> instance method params */
     TyKind rt = infer_type(c, recv);

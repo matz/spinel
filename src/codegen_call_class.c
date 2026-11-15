@@ -1026,8 +1026,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           return 1;
         }
         if ((ans && !nil_too) || (!ans && nil_too)) {
-          /* (an include_all with an effect runs once, after the receiver, though the answer is fixed) */
-          int st = argc >= 2 && subtree_has_side_effect(c, argv[1]) ? ++g_tmp : 0;
+          /* (an include_all that acts or can raise runs once, after the receiver, though the answer is fixed) */
+          int st = argc >= 2 && !order_operand_inert(c, id, argv[1], 0) ? ++g_tmp : 0;
           if (st) { buf_printf(b, "({ const void *_t%d = (const void *)(", st); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[1], b); buf_printf(b, "); _t%d %s NULL; })", st, ans ? "!=" : "=="); }
           else { buf_puts(b, "(("); emit_expr(c, recv, b); buf_printf(b, ") %s NULL)", ans ? "!=" : "=="); }
           return 1;
@@ -1052,7 +1052,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (ans >= 0) {
         /* a receiver that runs code (a call, a write) is evaluated, as
            CRuby does, though the answer is known */
-        int run = recv >= 0 && subtree_has_side_effect(c, recv), run_ia = argc >= 2 && subtree_has_side_effect(c, argv[1]);
+        int run = recv >= 0 && subtree_has_side_effect(c, recv), run_ia = argc >= 2 && !order_operand_inert(c, id, argv[1], 0);
         if (run || run_ia) buf_puts(b, "({ ");
         if (run) { buf_puts(b, "(void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); "); }
         /* (the include_all argument runs after the receiver) */

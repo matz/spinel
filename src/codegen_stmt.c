@@ -3071,7 +3071,7 @@ int emit_strbuf_route_box(Compiler *c, int v, Buf *b) {
   /* a block literal the call splices answers its tail boxed: asked as
      the call's own type, a tail that is a shared String came out as its
      bytes (#8399) */
-  if (pc && is_block_call(c, v)) emit_block_invoke(c, nt_ref(c->nt, v, "arguments"), b, 0, 1, TY_POLY);
+  if (pc && is_block_call(c, v)) emit_block_invoke(c, v, b, 0, 1, TY_POLY);
   else emit_expr(c, v, b);
   view_pop(c, sv);
   return 1;
@@ -3300,7 +3300,7 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
     int tok[64];
     int ntok = strbuf_jump_views(c, nt_ref(nt, g_block_id, "body"), NK_NextNode, tok, 0, 64);
     if (ntok < 0) return 0;
-    emit_block_invoke(c, nt_ref(nt, v, "arguments"), b, 0, 1, TY_STRBUF);
+    emit_block_invoke(c, v, b, 0, 1, TY_STRBUF);
     strbuf_jump_views_pop(c, tok, ntok);
     return 1;
   }
@@ -20694,7 +20694,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
     free(pre.p);
     return 1;
   }
-  if (is_block_call(c, id)) { emit_block_invoke(c, nt_ref(nt, id, "arguments"), b, indent, 0, TY_VOID); return 1; }
+  if (is_block_call(c, id)) { emit_block_invoke(c, id, b, indent, 0, TY_VOID); return 1; }
   if (emit_nil_target_stmt(c, id, b, indent)) return 1;
   { int grecv = -1;
     if (id != g_ivar_nil_guarded_id && nil_recv_guard(c, id, &grecv) &&
@@ -20733,7 +20733,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
   if (is_blockless_block_param_call(c, id)) {
     /* forwarded real proc: <blk>.call(args) for effect; else no block was
        passed, the parameter is nil, and the call raises NoMethodError */
-    if (g_yield_proc_ref) emit_yield_proc_call(c, nt_ref(nt, id, "arguments"), TY_VOID, b, indent, 0);
+    if (g_yield_proc_ref) emit_yield_proc_call(c, id, TY_VOID, b, indent, 0);
     else if (!nt_safe_nav(nt, id)) {
       emit_indent(b, indent);
       buf_printf(b, "sp_nil_recv_raise(\"%s\");\n",
@@ -22835,7 +22835,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     if (g_yield_proc_ref) {
       /* The inlined callee's block is a forwarded real proc (the caller
          nil-checks its &block); call the proc instead of splicing a body. */
-      emit_yield_proc_call(c, nt_ref(nt, id, "arguments"), TY_VOID, b, indent, 0);
+      emit_yield_proc_call(c, id, TY_VOID, b, indent, 0);
       return;
     }
     if (g_block_id < 0) {
@@ -22851,7 +22851,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       buf_puts(b, "sp_raise_cls(\"LocalJumpError\", \"no block given (yield)\");\n");
       return;
     }
-    emit_block_invoke(c, nt_ref(nt, id, "arguments"), b, indent, 0, TY_VOID);
+    emit_block_invoke(c, id, b, indent, 0, TY_VOID);
     return;
   }
 

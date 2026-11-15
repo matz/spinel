@@ -1,0 +1,25 @@
+proc:call
+proc:paren
+proc:index
+proc:yield
+lambda:call
+lambda:paren
+lambda:index
+lambda:yield
+NoMethodError
+forwarded:kept
+forwarded:kept
+spread
+required|omitted||default
+required|optional|extra|supplied
+ArgumentError
+method:kept
+none
+dropped
+dropped lambda
+1
+2
+2
+NoMethodError
+NoMethodError
+nullable

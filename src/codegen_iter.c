@@ -2,6 +2,7 @@
    lowering, split out of codegen_call.c. Pure code movement, no logic change. */
 
 #include "codegen_internal.h"
+#include "codegen_poly.h"
 #include "share.h"
 #include "repr.h"
 #include "call_plan.h"
@@ -1370,25 +1371,70 @@ void emit_proc_yield(Compiler *c, const char *ref, int yargc, const int *yargv, 
   while (nv > 0) view_pop(c, vt[--nv]);
 }
 
+static const char *used_block_param(Compiler *c, int block) {
+  int pn = proc_params_node(c, block), bp = pn >= 0 ? nt_ref(c->nt, pn, "block") : -1;
+  const char *name = nt_kind(c->nt, bp) == NK_BlockParameterNode ? nt_str(c->nt, bp, "name") : NULL;
+  return name && subtree_reads_local(c->nt, proc_body_node(c, block), name) ? name : NULL;
+}
+/* Forwarded literals and unsupported nested inline captures keep the base path. */
+static int call_literal_block(Compiler *c, int site) {
+  int block = nt_kind(c->nt, site) == NK_CallNode ? nt_ref(c->nt, site, "block") : -1;
+  if (nt_kind(c->nt, block) != NK_BlockNode || block_has_top_break(c, proc_body_node(c, block))) return -1;
+  int n = 0, *ids = nt_subtree_ids((NodeTable *)c->nt, &block, 1, &n), nested = 0;
+  for (int i = 0; i < n; i++)
+    if (nt_kind(c->nt, ids[i]) == NK_CallNode && call_targets_yielding_method(c, ids[i]) &&
+        used_block_param(c, nt_ref(c->nt, ids[i], "block"))) nested = 1;
+  free(ids);
+  return nested ? -1 : block;
+}
+
 /* Emit a call to the forwarded real-proc block (g_yield_proc_ref) with the
    given args -- shared by `yield` and `<blk>.call` inside a method inlined with
    a forwarded materialized proc. as_expr=0 emits a statement (value discarded);
    as_expr=1 emits a value expression, unboxed to result_ty when concrete.
    sp_proc_call returns a raw carrier; the poly result rides _sp_proc_poly_ret. */
-void emit_yield_proc_call(Compiler *c, int args_node, TyKind result_ty, Buf *b, int indent, int as_expr) {
+void emit_yield_proc_call(Compiler *c, int site, TyKind result_ty, Buf *b, int indent, int as_expr) {
   const NodeTable *nt = c->nt;
+  int args_node = nt_ref(nt, site, "arguments");
   int yargc = 0;
   const int *yargv = args_node >= 0 ? nt_arr(nt, args_node, "arguments", &yargc) : NULL;
-  if (!as_expr) {
+  int literal = call_literal_block(c, site), ks[16], nk = literal >= 0 ? pivs_callables(c, site, ks, 16) : 0;
+  int needed = nk < 0;
+  for (int i = 0; i < nk; i++) needed |= proc_body_node(c, ks[i]) < 0 || used_block_param(c, ks[i]) != NULL;
+  if (proc_body_node(c, g_yield_proc_expr) >= 0) needed = used_block_param(c, g_yield_proc_expr) != NULL;
+  int blk = needed ? literal : -1;
+  Buf recv = {0};
+  if (literal >= 0) buf_printf(&recv, "sp_proc_recv(%s, \"%s\")", g_yield_proc_ref, blockless_block_param_call_name(c, site));
+  const char *ref = recv.p ? recv.p : g_yield_proc_ref;
+  if (!as_expr && blk < 0) {
     emit_indent(b, indent);
-    emit_proc_yield(c, g_yield_proc_ref, yargc, yargv, b);
+    emit_proc_yield(c, ref, yargc, yargv, b);
     buf_puts(b, ";\n");
+    free(recv.p);
     return;
   }
   Buf cb; memset(&cb, 0, sizeof cb);
   buf_puts(&cb, "((void)");
-  emit_proc_yield(c, g_yield_proc_ref, yargc, yargv, &cb);
+  if (blk >= 0) {
+    Buf ab; memset(&ab, 0, sizeof ab);
+    char kwp[24];
+    int spread = call_args_need_spread(nt, yargv, yargc);
+    int ta = spread ? emit_spread_args_kw(c, yargv, yargc, kwp, sizeof kwp) : -1;
+    if (!spread) emit_proc_call_args(c, site, yargc, yargv, &ab, 1);
+    int t = hoist_block_proc(c, blk);
+    buf_printf(&cb, "%s(%s, _t%d, ", spread ? "sp_proc_call_spread_blk" : "sp_proc_call_blk", ref, t);
+    if (spread) buf_printf(&cb, "sp_box_poly_array(_t%d), %s)", ta, kwp);
+    else buf_puts(&cb, ab.p);
+    free(ab.p);
+  }
+  else emit_proc_yield(c, ref, yargc, yargv, &cb);
+  free(recv.p);
   buf_puts(&cb, ", _sp_proc_poly_ret)");
+  if (!as_expr) {
+    emit_indent(b, indent); buf_puts(b, cb.p); buf_puts(b, ";\n");
+    free(cb.p);
+    return;
+  }
   /* The result rides a single global, so two yields in one expression race:
      C does not sequence a call's arguments, and `yield(1) + yield(2)` could
      run both calls before either read _sp_proc_poly_ret. Capture each into
@@ -2628,11 +2674,11 @@ static int block_tail_lacks_value(Compiler *c, int id, int poly) {
 }
 
 /* The splice of the literal block g_block_id where a yield (or a call of
-   the block) runs it: its parameters bound to args_node's values and its
+   the block) runs it: its parameters bound to site's arguments and its
    body emitted in place, as statements at `indent`, or with as_expr as a
    statement expression whose value is the block's, read into a slot of
    type want_ty. */
-void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_expr,
+void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
                        TyKind want_ty) {
   /* want_ty: the consumer's slot type for the block's value (the YieldNode's
      unified type). A poly slot must receive sp_RbVal even when THIS block's
@@ -2644,6 +2690,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   const NodeTable *nt = c->nt;
   int blk = g_block_id;
   int bbody = nt_ref(nt, blk, "body");
+  int args_node = nt_ref(nt, site, "arguments");
   int yc = 0;
   const int *yargs = args_node >= 0 ? nt_arr(nt, args_node, "arguments", &yc) : NULL;
   /* emit_block_binds may run the values first into temps the binds read */
@@ -2664,6 +2711,24 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   refuse_yield_splat(c, blk, yc, yargs);
   refuse_yield_capwrap(c, blk, yc, yargs);
   if (as_expr) buf_puts(b, "({ ");
+  /* Bind the call's literal block as a value; lexical yield stays unchanged. */
+  const char *bpn = used_block_param(c, blk);
+  if (bpn && bpn[0]) {
+    int cb = call_literal_block(c, site), t = -1;
+    if (cb >= 0) {
+      emit_args_before(c, yargs, yc, NULL, 0, g_pre);
+      int kw = nt_argv_kwh(nt, yargs, yc);
+      if (kw >= 0 && nt_hash_has_splat(nt, kw)) {
+        int kt = hold_operand_pre(c, kw, repr_of(c, kw).as_ty, 0, ++g_tmp, 1);
+        view_hold(view_bind_temp(kw, kt));
+      }
+      t = hoist_block_proc(c, cb);
+    }
+    char ref[32] = "NULL"; if (t >= 0) snprintf(ref, sizeof ref, "_t%d", t);
+    BI_BLOCK_SIDE();
+    emit_iter_param_assign(c, blk, bpn, rename_local(bpn), TY_PROC, ref, b, indent);
+    BI_METHOD_SIDE();
+  }
   emit_block_binds(c, blk, yargs, yc, b, indent, as_expr, &bi);
   /* Keep the rename table active for the block body: the block's variable
      references are in the same lexical scope as the surrounding inlined

@@ -1,0 +1,11 @@
+true
+outer:lexical
+inner
+true
+outer:inline
+inner
+false
+LocalJumpError
+inner
+true
+outer:ignored

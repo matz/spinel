@@ -2628,6 +2628,41 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
   return 0;
 }
 
+/* Is call `node` main's own `protected` word: bare or on self, in main's frame? main has no `protected`
+   (a Module's method): the word raises where it runs (codegen's) and changes no visibility, so the record
+   takes none of it. Its arguments are run first, as any call's are: a def or a form among them is
+   recorded by the walk of the statement's parts, as an ordinary call's arguments are. */
+static int lr_main_protected(ElabRec *x, int node, int fc, int fs) {
+  const NodeTable *nt = x->c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver"), sg;
+  if (!nm || visibility_of_name(nm) != BVIS_PROTECTED || (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode)) return 0;
+  return lr_receiver(x, recv, fc, fs, &sg, 0) == LR_MAIN && !sg;
+}
+/* The parts of a form's operands that run where the form does, scanned for main's `protected` (lr_main_protected):
+   a block, a lambda, a body and a conditional part (the right side of `&&`) are not run in place. */
+typedef struct { ElabRec *x; int fc, fs, hit; } LrProtScan;
+static int lr_prot_scan_part(void *ud, int ch, ElabPos *q) {
+  LrProtScan *n = ud;
+  NodeKind k = nt_kind(n->x->c->nt, ch);
+  if (q->may || q->defer || (q->bits & LR_LATE) || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode ||
+      k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode || k == NK_DefinedNode) return 0;
+  if (k == NK_CallNode && lr_main_protected(n->x, ch, n->fc, n->fs)) n->hit = 1;
+  return !n->hit;
+}
+/* Does call `node` never finish where it runs, because main's `protected` raises among its operands, however deep
+   (`private(protected(public(:m)))`)? Its own effect is then none (the operands before the word run, as parts of the
+   statement, and the word raises), and codegen reads the mark to run them. A form is the call asked: any other
+   call's operands are parts the walk of its statement already enters. */
+static int lr_form_never_runs(ElabRec *x, int node, int fc, int fs) {
+  const NodeTable *nt = x->c->nt;
+  if (lr_main_protected(x, node, fc, fs)) return 1;
+  if (!lr_nested_form(nt_str(nt, node, "name"))) return 0;
+  LrProtScan n = { x, fc, fs, 0 };
+  ElabPos at = { .e = 0, .top = -1, .frame = -1, .rep = -1, .list = -1, .kind = EP_NEW };
+  elab_parts(x->c, node, &at, lr_prot_scan_part, &n);
+  return n.hit;
+}
 static int lr_const_root_undefined(const NodeTable *nt, int n);
 static int lr_const_path_fails(Compiler *c, int n);
 static int lr_const_root_later(Compiler *c, int n);
@@ -2673,8 +2708,10 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   }
   int bvis = visibility_of_name(nm), cvis = class_method_vis_of_name(nm), opaque = 0;
   int self = recv < 0 || nt_kind(nt, recv) == NK_SelfNode, st = self ? *vs : BVIS_PUBLIC;
-  /* (main has no `protected`: the word raises where it runs, codegen's, and changes no visibility) */
-  if (bvis == BVIS_PROTECTED && self && !sg && cls == LR_MAIN) return;
+  if (lr_form_never_runs(x, node, fc, fs)) {
+    if (!lr_main_protected(x, node, fc, fs)) nt_node_set_int((NodeTable *)nt, node, "form_raises", 1);
+    return;
+  }
   if (!nested && nm && (bvis || is_method_naming_call(nm) || is_mixin_call(nm))) lr_form_runs(x, node, cls, sg, may);
   if (bvis && !ac && self) {
     /* the frame's visibility from here on: kept by the frame's node, so
@@ -2871,6 +2908,10 @@ static int lr_nested_part(void *ud, int ch, ElabPos *q) {
   lr_autoload(n->x, ch, n->fc, n->fs, q->may || smay || q->partial);
   lr_const_write(n->x->c, ch, q->e, n->fc, n->fs, q->may || smay || q->partial);
   if (k == NK_DefNode) { lr_def(n->x, ch, n->fc, n->fs, *n->vs, may); return 0; }
+  if (k == NK_CallNode && lr_form_never_runs(n->x, ch, n->fc, n->fs)) {   /* (its operands are parts, as any call's) */
+    if (!lr_main_protected(n->x, ch, n->fc, n->fs)) nt_node_set_int((NodeTable *)nt, ch, "form_raises", 1);
+    return 1;
+  }
   if (k == NK_CallNode && lr_nested_form(nt_str(nt, ch, "name"))) { lr_call(n->x, ch, n->fc, n->fs, n->vs, n->fnode, may, 1); return 0; }
   return 1;
 }
@@ -2989,7 +3030,8 @@ static void lr_record_stmt(ElabRec *x, int e) {
   /* ...and the definition forms in its parts (a form records its own; a
      file's root holds its statements, each one of its own) */
   int own = k == NK_ProgramNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode ||
-            k == NK_AliasMethodNode || k == NK_UndefNode || (k == NK_CallNode && lr_nested_form(nt_str(nt, node, "name")));
+            k == NK_AliasMethodNode || k == NK_UndefNode ||
+            (k == NK_CallNode && lr_nested_form(nt_str(nt, node, "name")) && !lr_form_never_runs(x, node, fc, fs));
   if (!own) {
     ElabPos at = { .e = e, .file = s->file, .top = s->top, .frame = f, .depth = s->depth, .rep = s->rep, .list = -1,
                    .may = 0, .partial = s->partial, .fmay = s->fmay, .fpartial = s->fpartial, .kind = EP_SPINE };

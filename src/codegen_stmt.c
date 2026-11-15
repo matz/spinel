@@ -2,6 +2,7 @@
 #include "order_plan.h"
 static void emit_ivar_lhs_otext(Compiler *c, int cid, int iv, const char *ivn, const char *lhs, const char *otext, Buf *b);
 static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
+static void emit_args_for_effect(Compiler *c, int call, Buf *b, int indent);
 #include "repr.h"
 #include "holder.h"
 #include "share.h"
@@ -20694,9 +20695,17 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
         buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\");\n");
         return 1;
       }
+      /* a form with main's `protected` among its operands (`private(protected(public(:m)))`, marked by the
+         load record) never finishes: its operands run in order, and the word's raise leaves it */
+      if (nt_int(nt, id, "form_raises", 0)) {
+        emit_args_for_effect(c, id, b, indent);
+        return 1;
+      }
       /* main has no `protected` (a Module's method): the word raises where it runs, and
          the def it may wrap (`protected def m`) is made first, as in CRuby */
       if (visibility_of_name(nm) == BVIS_PROTECTED && g_class_body_id < 0 && cplan_runs_on_main(c, id)) {
+        /* its arguments run first, in order, as any call's do (a def among them is made at load) */
+        emit_args_for_effect(c, id, b, indent);
         emit_indent(b, indent);
         /* (written bare, with no parentheses or argument, it is a variable-or-method read: a NameError) */
         if (nt_vcall(nt, id))
@@ -21960,20 +21969,31 @@ int missing_call_raised(Compiler *c, int v) {
   int m = cplan_missing_in_order(c, v);
   return m >= 0 && cplan_missing(c, m, self, sizeof self, NULL) != CM_NONE ? m : -1;
 }
+/* Run expression e at indent for its effect, its prelude in front of it. */
+static void emit_effect_stmt(Compiler *c, int e, Buf *b, int indent) {
+  Buf op, oe; memset(&op, 0, sizeof op); memset(&oe, 0, sizeof oe);
+  Buf *sv = g_pre; g_pre = &op;
+  emit_expr(c, e, &oe);
+  g_pre = sv;
+  if (op.p) buf_puts(b, op.p);
+  emit_indent(b, indent); buf_printf(b, "(void)(%s);\n", oe.p ? oe.p : "0");
+  free(op.p); free(oe.p);
+}
 /* Run, as statements at indent, the operands of run ahead of the call m
    that finds no method (missing_call_in_order), then m. Each operand's
    prelude goes in front of it, not in front of the statement: an earlier
    operand runs before a later one's. */
+/* Run the arguments of call, in order, each for its effect: a def is made at load, and an operand that acts on
+   nothing and cannot raise is skipped. */
+static void emit_args_for_effect(Compiler *c, int call, Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  int an = nt_ref(nt, call, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  for (int i = 0; i < ac; i++)
+    if (nt_kind(nt, av[i]) != NK_DefNode && !order_operand_inert(c, call, av[i], 0)) emit_effect_stmt(c, av[i], b, indent);
+}
 static void emit_missing_run(Compiler *c, int m, const OrderRun *run, Buf *b, int indent) {
-  for (int i = 0; i <= run->n; i++) {
-    Buf op, oe; memset(&op, 0, sizeof op); memset(&oe, 0, sizeof oe);
-    Buf *sv = g_pre; g_pre = &op;
-    emit_expr(c, i < run->n ? run->ids[i] : m, &oe);
-    g_pre = sv;
-    if (op.p) buf_puts(b, op.p);
-    emit_indent(b, indent); buf_printf(b, "(void)(%s);\n", oe.p ? oe.p : "0");
-    free(op.p); free(oe.p);
-  }
+  for (int i = 0; i <= run->n; i++) emit_effect_stmt(c, i < run->n ? run->ids[i] : m, b, indent);
 }
 
 static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {

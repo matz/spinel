@@ -8503,9 +8503,16 @@ static sp_RbVal sp_PolyArray_delete(sp_PolyArray *a, sp_RbVal v) {sp_gc_wb((void
   sp_int w = 0;
   sp_RbVal removed = sp_box_nil(); SP_GC_ROOT_RBVAL(removed);
   for (sp_int i = 0; i < a->len; i++) {
-    if (!sp_poly_rb_equal(a->data[i], v)) { a->data[w] = a->data[i]; w++; }
+    if (!sp_poly_rb_equal(a->data[i], v)) {
+      if (w != i) {
+        if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
+        a->data[w] = a->data[i];
+      }
+      w++;
+    }
     else removed = a->data[i];
   }
+  if (w != a->len && a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
   a->len = w;
   return removed;
 }

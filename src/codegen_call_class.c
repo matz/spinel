@@ -933,6 +933,14 @@ static int emit_respond_to_flag_split(Compiler *c, int id, int recv, TyKind rt, 
   if (boxed) buf_puts(b, ")");
   return 1;
 }
+/* The class value self is in method scope s of a class (a class method's: the receiving class, which one that takes it
+   holds as `_sp_cls`, else its own class), as C text, in buf; NULL for a scope that has no class */
+static const char *scope_self_cls_text(Compiler *c, const Scope *s, char *buf, size_t size) {
+  if (s->is_cmethod && cmethod_takes_self_cls(c, s)) return cmethod_self_cls(c, (Scope *)s);
+  if (s->class_id < 0) return NULL;
+  snprintf(buf, size, "((sp_Class){%d})", s->class_id);
+  return buf;
+}
 int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   if (sp_streq(name, "respond_to?") && argc >= 1 && !respond_to_user_defined(c, id, recv)) {
     NodeKind ak = nt_kind(nt, argv[0]);
@@ -1082,7 +1090,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (g_rto_by_cls >= 0) {
         int boxed = repr_of(c, id).kind == RK_BOXED;
         if (boxed) buf_puts(b, "sp_box_bool(");
-        emit_respond_to_by_cls(c, recv, qm, argc, argv, b);
+        emit_respond_to_by_cls(c, id, recv, qm, argc, argv, b);
         if (boxed) buf_puts(b, ")");
         return 1;
       }
@@ -1421,8 +1429,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     const char *self_cls = NULL;
     char selfbuf[48];
     if (recv < 0 && encl) {
-      if (cmethod_takes_self_cls(c, encl)) self_cls = encl->yields && g_self ? g_self : "_sp_cls";
-      else if (encl->class_id >= 0) { snprintf(selfbuf, sizeof selfbuf, "((sp_Class){%d})", encl->class_id); self_cls = selfbuf; }
+      self_cls = scope_self_cls_text(c, encl, selfbuf, sizeof selfbuf);
     }
     TyKind nty = infer_type(c, argv[0]);
     /* a literal name on a literal class the table does not cover (a builtin
@@ -5801,6 +5808,20 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   return 0;
 }
 
+/* The self of the call id runs in, boxed: the class a class body's or a class method's self is, main at the top
+   level (and in a top-level def, which runs on main here), else the instance of the method's class, as the
+   method holds it (a builtin's reopening included: emit_reopen_self_boxed) */
+static void emit_call_self_boxed(Compiler *c, int id, Buf *b) {
+  const Scope *s = comp_scope_of(c, id);
+  char cb[48];
+  int body = self_class_body(c, id);
+  const char *cls = body >= 0 ? NULL : s && s->is_cmethod ? scope_self_cls_text(c, s, cb, sizeof cb) : NULL;
+  if (body >= 0) buf_printf(b, "sp_box_class(((sp_Class){%d}))", body);
+  else if (cls) buf_printf(b, "sp_box_class(%s)", cls);
+  else if (s && s->class_id >= 0 && !s->is_cmethod && !self_is_main_raw(c, id)) emit_reopen_self_boxed(c, (Scope *)s, b);
+  else buf_puts(b, "sp_main_self()");
+}
+
 /* a call that reaches a class method: a bare call inside a class method, a class body or a module_function's includer, obj.class.name / obj.class.cmeth, and a bare name in a class method */
 int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* A bare call inside a method: the enclosing class's own chain answers it
@@ -5984,7 +6005,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         const char *lead2 = "";
         if (cmethod_takes_self_cls(c, ms)) {
           if (cmethod_takes_self_cls(c, encl)) {
-            buf_puts(&cb, encl->yields && g_self ? g_self : cmethod_cls_token(c, encl));
+            buf_puts(&cb, cmethod_self_cls(c, encl));
             lead2 = ", ";
           }
           else lead2 = emit_cmethod_self_cls_arg(c, smi, new_cls, &cb);
@@ -6078,7 +6099,10 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         }
         lead = ms->nparams > 0 ? ", " : "";
         buf_puts(b, mc_method(c, ms));
-        buf_puts(b, "(NULL");
+        /* (the module's own method carries no self; a copy of it in Object's chain, and an entry of that
+           chain's versions, take the call's self boxed) */
+        if (repr_self_boxed(c, imi)) { buf_puts(b, "("); emit_call_self_boxed(c, id, b); }
+        else buf_puts(b, "(NULL");
         emit_args_filled(c, imi, nt_ref(nt, id, "arguments"), lead, b);
         /* The declared &block is a parameter like any other: without this the
            call passed one argument to a two-parameter function and the C did
@@ -6384,7 +6408,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (encl && encl->is_cmethod && encl->class_id >= 0 &&
         call_target(c, id, encl->class_id, name, CT_CMETHOD, NULL) < 0) {
       if (cmethod_takes_self_cls(c, encl))
-        buf_printf(b, "%s(%s)", comp_class_reader_fn(c, name, cplan_pinned_builtin(c, id)), encl->yields && g_self ? g_self : "_sp_cls");
+        buf_printf(b, "%s(%s)", comp_class_reader_fn(c, name, cplan_pinned_builtin(c, id)), cmethod_self_cls(c, encl));
       else if (comp_class_anonymous(c, encl->class_id))
         buf_printf(b, "%s((sp_Class){%d})", comp_class_reader_fn(c, name, cplan_pinned_builtin(c, id)), encl->class_id);
       else {
@@ -6886,8 +6910,7 @@ int emit_refl_im_params_call(Compiler *c, int id, Buf *b) {
   char selfbuf[48];
   const char *self_cls = NULL;
   if (recv < 0 && encl) {
-    if (cmethod_takes_self_cls(c, encl)) self_cls = encl->yields && g_self ? g_self : "_sp_cls";
-    else if (encl->class_id >= 0) { snprintf(selfbuf, sizeof selfbuf, "((sp_Class){%d})", encl->class_id); self_cls = selfbuf; }
+    self_cls = scope_self_cls_text(c, encl, selfbuf, sizeof selfbuf);
   }
   if (recv < 0 && !self_cls) return 0;
   buf_puts(b, "sp_refl_instance_method_parameters(");

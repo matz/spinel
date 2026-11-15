@@ -35790,7 +35790,9 @@ static int pf_method_obj(Compiler *c, const char *name) {
   return 0;
 }
 
-static int pf_wanted(Compiler *c, const char *name) {
+/* (asker: the scope asking, a copy a module's method made in Object under its hidden name, which Object holds
+   as the name's method as a copy under the real name does) */
+static int pf_wanted(Compiler *c, const char *name, const Scope *asker) {
   const NodeTable *nt = c->nt;
   if (pf_method_obj(c, name)) return 1;
   if (sp_streq(name, "initialize")) return pf_dynamic_new(c);
@@ -35850,7 +35852,7 @@ static int pf_wanted(Compiler *c, const char *name) {
          without one: the Object fallback reaches it the same way */
       int obj = comp_core_class(c, CORE_OBJECT);
       if (obj >= 0 && rt != TY_UNKNOWN && !ty_is_object(rt) && builtin_class_of_type(rt) &&
-          comp_method_in_class(c, obj, name) >= 0) return 1;
+          (comp_method_in_class(c, obj, name) >= 0 || (asker->shadow == SHADOW_INC && asker->class_id == obj))) return 1;
     }
     /* a method the program adds to Object, called with a block on an object
        whose class chain stops short of Object (#5779): the call reaches it
@@ -36007,7 +36009,7 @@ int make_yield_proc_forms(Compiler *c) {
     /* an initialize version a construction runs by a proc form of its own
        (pf_init_versions) */
     int init_version = s < n0 && init_versions[s] && pf_scope_named(c, src, src->name) != s;
-    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !init_version && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src)) &&
+    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !init_version && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src), src) &&
         !pf_in_class_dispatch(c, src) && !(src->ctor_cycle && ctor_graph_init(c, s)))
       continue;
     /* A method the program reopens has two definitions in the scope table

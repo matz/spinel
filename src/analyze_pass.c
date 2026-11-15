@@ -891,7 +891,7 @@ static int subtree_has_return(const NodeTable *nt, int root, int skip) {
 /* The nodes of the tuple call `value` answers when its method has one tuple
    shape (`return a, b`, or a literal `[a, b]` last): their count, 0 when it
    has none. */
-static int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
+int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
   const NodeTable *nt = c->nt;
   NodeKind vk = nt_kind(nt, value);
   if (vk != NK_CallNode) return 0;

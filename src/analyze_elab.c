@@ -4660,6 +4660,9 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
          the later answering: lr_table_twin; main's own step, which
          follows, reads main's alone) */
       const LrHist *h = name ? lr_hist(c->lrec, cls, sg, name, 0) : NULL;
+      /* (with no entry of Object's own, main's are the table's: they
+         stand ahead of the modules Object includes) */
+      if (name && !h && !sg && cls >= 0 && cls == lr_core(c->lrec, CORE_OBJECT)) h = lr_hist(c->lrec, LR_MAIN, 0, name, 0);
       int o = name ? lr_own(c, h, cls >= 0 ? lr_table_twin(c, h) : NULL, p, late, vis, out) : ELAB_NO;
       if (o == ELAB_YES || o == LR_STOP) return o;
       if (o == ELAB_UNKNOWN) *unsure = 1;
@@ -4903,6 +4906,9 @@ static int lr_vv_mixin(void *ud, int cls, int ref) {
 static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap) {
   LrVers_ v = { c, name, out, 0, cap };
   LrWalker w = { lr_vv_own, lr_vv_mixin, NULL, NULL, NULL, NULL, lr_sg_tail_end(name), NULL };
+  /* (main's top level and Object's reopening are one table, with the
+     includes of both behind it: Object's step, asked of either) */
+  if (!sg && lr_object_table(c, cls)) return lr_walk_object(c, &w, &v, 1, 0) < 0 || v.n < 0 ? -1 : v.n;
   return lr_walk(c, &w, &v, cls, sg, 0) < 0 || v.n < 0 ? -1 : v.n;
 }
 /* The program's reopening of builtin class or module name: its record

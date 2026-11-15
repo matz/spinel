@@ -891,7 +891,7 @@ static int subtree_has_return(const NodeTable *nt, int root, int skip) {
 /* The nodes of the tuple call `value` answers when its method has one tuple
    shape (`return a, b`, or a literal `[a, b]` last): their count, 0 when it
    has none. */
-static int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
+int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
   const NodeTable *nt = c->nt;
   NodeKind vk = nt_kind(nt, value);
   if (vk != NK_CallNode) return 0;
@@ -956,6 +956,11 @@ static int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
   else if (masgn_tuple_rhs(nt, last))
     av = nt_arr(nt, last, "elements", &an);
   if (!av || an < 2) return 0;
+  /* the check above skips the last statement whole: a return inside one of
+     its values (`[t, (return 5, 1 if f; 2)]`) is a second shape, and a
+     splat (`return *xs, t`) leaves the positions unknown */
+  for (int i = 0; i < an; i++)
+    if (nt_kind(nt, av[i]) == NK_SplatNode || subtree_has_return(nt, av[i], -1)) return 0;
   *elems = av;
   return an;
 }

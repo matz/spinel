@@ -1,0 +1,5 @@
+[NoMethodError, "undefined method 'tag' for an instance of Fiber", :tag, Fiber]
+:fiber_mark
+[NoMethodError, "undefined method 'tag' for an instance of Thread", :tag, Thread]
+:thread_mark
+[NoMethodError, "undefined method 'count' for an instance of Thread", :count, Thread]

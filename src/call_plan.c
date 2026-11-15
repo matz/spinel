@@ -1725,7 +1725,12 @@ static int ct_top_version(const Compiler *c, int vi, unsigned flags) {
    entry the call then takes with main as self; else main's own (-1) */
 static int ct_top_chain(Compiler *c, const char *name, int sg) {
   int oc = comp_core_class(c, CORE_OBJECT);
-  return !sg && oc >= 0 && elab_main_object_one_entry(c, name) ? oc : -1;
+  if (sg || oc < 0) return -1;
+  if (elab_main_object_one_entry(c, name)) return oc;
+  /* (a module Object includes holds a version behind main's own) */
+  ElabVersion vs[VER_MAX_ARMS];
+  int n = elab_chain_versions(c, oc, 0, name, vs, VER_MAX_ARMS), mh = elab_history_versions(c, -1, 0, name, vs, VER_MAX_ARMS);
+  return n > 0 && mh > 0 && n > mh ? oc : -1;
 }
 /* (mixed through the multiply and shifts of a finalizer: the keys run over
    small ranges, and the sum or xor of their products fell in long runs) */
@@ -3609,6 +3614,19 @@ static int ct_vis(Compiler *c, int cls, const char *name, unsigned flags) {
     if (sp_streq(k->vis_names[i], own)) return k->vis_kinds[i];
   return pr_alias(c, cls, CT_OWN, name) ? comp_method_vis_declared(c, cls, name, NULL) : SP_VIS_PUBLIC;
 }
+/* ct_lookup, and for a call asked on Object that its tables give no
+   method: the top-level def of the name where it is one of the versions
+   Object's chain holds beside a module's (ct_top_chain), whose entry the
+   record then chooses (the def hides the module's copy in the tables) */
+static int ct_lookup_object_top(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
+  int mi = ct_lookup(c, id, cls, name, flags, ml);
+  if (mi >= 0 || id < 0 || cls < 0 || cls != comp_core_class(c, CORE_OBJECT) || (*flags & ~(unsigned)(CT_PUBLIC | CT_PROTECTED | CT_NOFACE)) ||
+      ml->kind == ML_SINGLETON || ml->kind == ML_ATTR || elab_main_object_one_entry(c, name) || ct_top_chain(c, name, 0) != cls) return mi;
+  unsigned tf = CT_TOP;
+  MethodLookup tl = { .def_class = -1 };
+  int ti = ct_lookup(c, id, -1, name, &tf, &tl);
+  return ti >= 0 && c->scopes[ti].class_id < 0 ? ti : mi;
+}
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
   MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
   int dc0 = ml->def_class, mi = -1, pin, r;
@@ -3625,7 +3643,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_NONE;
     r = -1;
   }
-  else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (flags & CT_INCLUDED) ||
+  else if ((mi = ct_lookup_object_top(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (flags & CT_INCLUDED) ||
            (!(flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) && !ct_calls(c, id, name))) {
     if (mi < 0) {
       if (ml->kind != ML_SINGLETON && ml->kind != ML_ATTR) ml->kind = ML_NONE;

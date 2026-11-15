@@ -1864,18 +1864,25 @@ static int erm_args_modules(const NodeTable *nt, const int *av, int first, int a
    (toplevel_includes) is of Object's includes too. Only for modules of the program's (a core
    module's methods, Math's or Comparable's, answer no object's call the
    include adds), where the program defines no hook the include fires and
-   calls no autoload, and none of the modules yields: a call of Object's
-   yielding method off main is one the inference and the emitter do not
-   bind alike yet. */
-static int erm_has_yield(const NodeTable *nt, int node) {
+   calls no autoload, none of the modules has a method that uses instance
+   variables, and none is one of module functions
+   with a yielding method: a call of that one in a class method is bound to
+   the module's own copy by the plan and to Object's by the emitter. */
+/* (what: 0 a yield, 1 a module_function call, 2 an instance variable) */
+static int erm_body_has(const NodeTable *nt, int node, int what) {
   if (node < 0) return 0;
-  if (nt_kind(nt, node) == NK_YieldNode) return 1;
+  NodeKind k = nt_kind(nt, node);
+  const char *ty = what == 2 ? nt_type(nt, node) : NULL;
+  if (what == 0 ? k == NK_YieldNode
+      : what == 2 ? ty && strncmp(ty, "InstanceVariable", 16) == 0
+                : k == NK_CallNode && nt_ref(nt, node, "receiver") < 0 && nt_str(nt, node, "name") &&
+                  sp_streq(nt_str(nt, node, "name"), "module_function")) return 1;
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) if (erm_has_yield(nt, nt_ref_at(nt, node, i))) return 1;
+  for (int i = 0; i < nr; i++) if (erm_body_has(nt, nt_ref_at(nt, node, i), what)) return 1;
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
-    for (int j = 0; j < n; j++) if (erm_has_yield(nt, ids[j])) return 1;
+    for (int j = 0; j < n; j++) if (erm_body_has(nt, ids[j], what)) return 1;
   }
   return 0;
 }
@@ -1893,7 +1900,10 @@ static int erm_toplevel_include_object(Compiler *c, NodeTable *nt, int st) {
     NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
       const char *k = class_def_key(c, m);
       if (!k || !mk || !sp_streq(k, mk)) continue;
-      if (erm_has_yield(nt, class_def_body(nt, m))) return 0;
+      if (erm_body_has(nt, class_def_body(nt, m), 0) && erm_body_has(nt, class_def_body(nt, m), 1)) return 0;
+      /* (a method that uses instance variables has no state to hold them
+         on main or on a builtin value: left to the refusal it has had) */
+      if (erm_body_has(nt, class_def_body(nt, m), 2)) return 0;
       found = 1;
     }
     if (!found) return 0;

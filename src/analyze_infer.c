@@ -4016,7 +4016,17 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         int pf_known = pf >= 0 && c->scopes[pf].ret != TY_UNKNOWN && c->scopes[pf].ret != TY_VOID;
         if (mi >= 0 && c->scopes[mi].ret == TY_UNKNOWN && !pf_known) continue;
         if (mi >= 0) {
-          if (!found && !bound) an_user_call_record(c, id, mi, UC_POLY, k);
+          if (!found && !bound) {
+            /* (a module's method stands for no object: where Object
+               includes the module, the copy Object holds is what the
+               dispatch's default arm calls) */
+            int oc = comp_core_class(c, CORE_OBJECT), rmi = mi, rk = k;
+            if (g_plan_check && oc >= 0 && comp_class_is_module(c, &c->classes[k])) {
+              int om = call_target(c, id, oc, name, 0, NULL);
+              if (om >= 0 && c->scopes[om].class_id == oc && c->scopes[om].is_include_copy) { rmi = om; rk = oc; }
+            }
+            an_user_call_record(c, id, rmi, UC_POLY, rk);
+          }
           r = found ? ty_unify(r, c->scopes[mi].ret) : c->scopes[mi].ret; found = 1;
           if (pf_known) r = ty_unify(r, c->scopes[pf].ret);
           continue;

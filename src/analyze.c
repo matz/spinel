@@ -12931,8 +12931,6 @@ static int sym_to_proc_bind_recv(Compiler *c, int id, int ex) {
   return 1;
 }
 
-static int bo_shallow_copy(NodeTable *nt, int id);
-
 /* Make `vn` a local of the innermost block or lambda node `id` is in, as the
    parser lists a block's own locals: a block-local is fresh in each run of
    its block, so a proc made in one iteration keeps that iteration's value,
@@ -45883,7 +45881,7 @@ static int bo_reads_local(const NodeTable *nt, int e) {
    the parentheses that run the copy as their last statement, so the copy
    runs where the call stood, in its frame, once: node_in_place says so to
    the load record (lr_unplaced), which places it there. */
-static int bo_shallow_copy(NodeTable *nt, int id) {
+int bo_shallow_copy(NodeTable *nt, int id) {
   int nc = nt_new_node(nt, nt_kind(nt, id) == NK_SuperNode ? "SuperNode" : "CallNode");
   if (nc < 0) return -1;
   const SpNode *nd = &nt->nodes[id];
@@ -45897,6 +45895,26 @@ static int bo_shallow_copy(NodeTable *nt, int id) {
   nd = &nt->nodes[id];
   for (int j = 0; j < nd->na; j++) nt_node_set_arr(nt, nc, nd->a[j].key, nd->a[j].ids, nd->a[j].n);
   return nc;
+}
+/* The statements that hold a call's operands in temps while its block operand
+   is built (desugar_block_arg_order). */
+typedef struct {
+  Compiler *c;
+  Scope *sc;
+  int id, seq, lread, ns, serial;
+  int stm[256];
+} BoHoist;
+/* One `__bo_<id>_<k> = e` statement of h; answers the read that replaces e, or
+   e itself when nothing says it must be held: a sequence can reassign even a
+   plain read, and so can an operand that rebinds `&s`'s s, under an operand
+   that reads it (`[s]`; a literal with no read it cannot). */
+static int bo_hoist(BoHoist *h, int e) {
+  NodeTable *nt = (NodeTable *)h->c->nt;
+  if (h->ns >= 255 || e < 0 || !(h->seq || bo_may_act(nt, e) || (h->lread && bo_reads_local(nt, e)))) return e;
+  char tn[64];
+  snprintf(tn, sizeof tn, "__bo_%s_%d", comp_node_tag(h->c, h->id), h->serial++);
+  h->stm[h->ns++] = an_temp_node(nt, h->sc, tn, e);
+  return an_temp_node(nt, h->sc, tn, -1);
 }
 /* `recv.m(args, &expr)`: Ruby evaluates the receiver, then the arguments, then
    the block expression. The emitted C passes the block as one more function
@@ -45958,27 +45976,15 @@ static void desugar_block_arg_order(Compiler *c) {
     if (an > 0 && !av) continue;
     for (int k = 0; k < an; k++) av[k] = av0[k];
     int first = nt->count;
-    int stm[256]; int ns = 0, serial = 0;
-    char tn[64];
-    /* one `__bo_<id>_<k> = e` statement; answers the read that replaces e */
-    #define BO_HOIST(E) ({ int _e = (E), _r = _e; if (ns < 255 && _e >= 0 && (seq || bo_may_act(nt, _e) || \
-        (lread && bo_reads_local(nt, _e)))) { \
-        snprintf(tn, sizeof tn, "__bo_%s_%d", comp_node_tag(c, id), serial++); \
-        int _w = nt_new_node(nt, "LocalVariableWriteNode"); \
-        int _rd = nt_new_node(nt, "LocalVariableReadNode"); \
-        nt_node_set_str(nt, _w, "name", tn); nt_node_set_ref(nt, _w, "value", _e); \
-        nt_node_set_str(nt, _rd, "name", tn); \
-        stm[ns++] = _w; scope_local_intern(sc, tn); _r = _rd; } _r; })
-    /* A sequence can reassign even a plain read, and so can an operand
-       that rebinds `&s`'s s, under an operand that reads it (`[s]`; a
-       literal with no read it cannot). Capture the receiver and
+    BoHoist h = { c, sc, id, seq, lread, 0, 0, { 0 } };
+    /* A sequence can reassign even a plain read: capture the receiver and
        arguments before it, inside the call's own evaluation site. */
-    int nrecv = BO_HOIST(recv);
+    int nrecv = bo_hoist(&h, recv);
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
       if (ak == NK_SplatNode) {
         int ex = nt_ref(nt, av[k], "expression");
-        int nex = BO_HOIST(ex);
+        int nex = bo_hoist(&h, ex);
         if (nex != ex) nt_node_set_ref(nt, av[k], "expression", nex);
       }
       else if (ak == NK_KeywordHashNode) {
@@ -45987,12 +45993,12 @@ static void desugar_block_arg_order(Compiler *c) {
         for (int e = 0; e < en; e++) el[e] = el0[e];
         for (int e = 0; e < en; e++) {
           int key = nt_ref(nt, el[e], "key"), val = nt_ref(nt, el[e], "value");
-          int nk = BO_HOIST(key); if (nk != key) nt_node_set_ref(nt, el[e], "key", nk);
-          int nv = BO_HOIST(val); if (nv != val) nt_node_set_ref(nt, el[e], "value", nv);
+          int nk = bo_hoist(&h, key); if (nk != key) nt_node_set_ref(nt, el[e], "key", nk);
+          int nv = bo_hoist(&h, val); if (nv != val) nt_node_set_ref(nt, el[e], "value", nv);
         }
         free(el);
       }
-      else av[k] = BO_HOIST(av[k]);
+      else av[k] = bo_hoist(&h, av[k]);
     }
     /* `&(log; proc { ... })`: the sequence's statements run here, in turn,
        and the proc literal they end in is the block itself -- hoisted whole,
@@ -46001,24 +46007,23 @@ static void desugar_block_arg_order(Compiler *c) {
     if (nt_kind(nt, be) == NK_ParenthesesNode) {
       int pb = nt_ref(nt, be, "body");
       int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
-      if (ps && pn >= 2 && ns + pn < 255 &&
+      if (ps && pn >= 2 && h.ns + pn < 255 &&
           (nt_kind(nt, ps[pn - 1]) == NK_LambdaNode || is_proc_create(c, ps[pn - 1]))) {
-        for (int k = 0; k < pn - 1; k++) stm[ns++] = ps[k];
+        for (int k = 0; k < pn - 1; k++) h.stm[h.ns++] = ps[k];
         be = ps[pn - 1];
       }
     }
-    int nbe = BO_HOIST(be);
-    #undef BO_HOIST
-    if (ns == 0 || ns >= 255) { free(av); continue; }
+    int nbe = bo_hoist(&h, be);
+    if (h.ns == 0 || h.ns >= 255) { free(av); continue; }
     nt_node_set_ref(nt, blk, "expression", nbe);
     if (args >= 0) nt_node_set_arr(nt, args, "arguments", av, an);
     free(av);
     int nc = bo_shallow_copy(nt, id);
     if (nc < 0) continue;
     if (recv >= 0) nt_node_set_ref(nt, nc, "receiver", nrecv);
-    stm[ns++] = nc;
+    h.stm[h.ns++] = nc;
     int stmts = nt_new_node(nt, "StatementsNode");
-    nt_node_set_arr(nt, stmts, "body", stm, ns);
+    nt_node_set_arr(nt, stmts, "body", h.stm, h.ns);
     /* the node keeps its id, line and file: the parentheses */
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0),
               col = nt_int(nt, id, "node_col", 0);
@@ -52185,6 +52190,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_binding_lvget", desugar_binding_lvget(c));            /* binding.local_variable_get(:x) -> x.itself */
     ch |= AN_PASS("desugar_step_kwargs", desugar_step_kwargs(c));              /* n.step(to: X, by: Y) -> n.step(X, Y) */
     ch |= AN_PASS("desugar_defined_method_call", desugar_defined_method_call(c));      /* defined?(r.m) -> r.respond_to?(:m) */
+    ch |= AN_PASS("desugar_respond_to_flag", desugar_respond_to_flag(c));         /* r.respond_to?(:m, flag) -> flag ? r.respond_to?(:m, true) : r.respond_to?(:m, false) */
     ch |= AN_PASS("desugar_respond_to_missing", desugar_respond_to_missing(c));   /* r.respond_to?(:m) -> t.respond_to?(:m) || t.respond_to_missing?(:m, false) */
     ch |= AN_PASS("desugar_respond_to_probe", desugar_respond_to_probe(c));         /* recv.respond_to?(:m) -> probe recv.m type */
     ch |= AN_PASS("desugar_handle_reopen_self_recv", desugar_handle_reopen_self_recv(c));  /* bare m(..) in a Thread/Fiber reopen -> self.m(..) */

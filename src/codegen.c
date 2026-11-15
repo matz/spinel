@@ -16930,7 +16930,14 @@ void emit_super(Compiler *c, int id, Buf *b) {
       const char *spar = class_is_exc_reopen(c, sci) ? c->classes[sci].name : exc_builtin_parent(c, sci);
       int spread = ty_k != NK_ForwardingSuperNode && argv2 && nt_argv_has_splat(c->nt, argv2, argc2) &&
                    !class_is_syserr(c, sci) && !exc_init_takes_own_args(spar);
-      if (spread || class_takes_exc_attrs(c, sci)) {
+      /* A bare super from an initialize with a rest parameter hands on the
+         rest's elements, as `super(*rest)` does: the gathered arguments go
+         the way a splat's do. Taking the first parameter as the message
+         stored the rest Array itself there, and the C did not compile
+         (`def initialize(*args) = super` in an error class, #11889). */
+      int zrest = ty_k == NK_ForwardingSuperNode && s->rest_idx >= 0 &&
+                  !class_is_syserr(c, sci) && !exc_init_takes_own_args(spar);
+      if (spread || zrest || class_takes_exc_attrs(c, sci)) {
         char self_text[80]; snprintf(self_text, sizeof self_text, "(sp_Exception *)%s", g_self);
         if (ty_k == NK_ForwardingSuperNode) emit_exc_attrs_zsuper(c, id, s, self_text, b);
         else emit_exc_args_super(c, id, self_text, class_takes_exc_attrs(c, sci) ||

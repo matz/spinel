@@ -1,0 +1,11 @@
+"AppError"
+"AppError"
+"sym"
+[ArgumentError, "wrong number of arguments (given 2, expected 0..1)"]
+"m"
+[ArgumentError, "wrong number of arguments (given 2, expected 0..1)"]
+"k"
+["nm", :foo, 5]
+["ky", :z]
+"boom"
+"RuntimeError"

@@ -583,6 +583,14 @@ init function and an `.h` contract that states each entry's C signature;
 the emitted `ext/<name>/<name>.h` of any scaffolded gem is a worked example
 of the contract.
 
+A host that loads the library as a shared object (`dlopen`, Python's
+ctypes, a Swift or C# binding) links it over the position-independent
+runtime: `make runtime-pic` builds `lib/libspinel_rt_pic.a`, and
+`cc -fPIC -shared -Ilib kernel.c lib/libspinel_rt_pic.a -lm -o libkernel.so`
+builds the object. The regular `libspinel_rt.a` is built for an executable,
+and a shared link refuses its relocations. The threaded runtime has no such
+archive yet.
+
 An entry can answer an object of the program (declare its return `untyped`
 in inline RBS, and the host gets it boxed). `--ext-class C,...` (a class
 by its name or by its path, `A::B`; or `--ext-class all`) exports the

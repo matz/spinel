@@ -3281,6 +3281,17 @@ int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int n
   const char **owners = nl ? malloc(sizeof *owners * (size_t)nl) : NULL;
   if (nl && !owners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   if (nl) cplan_send_split_owners(c, recv, name, owners, nl);
+  /* No class of the program is on the list: a program object is none of
+     them and passes no test. No class whose boxed value carries a tag of its
+     own (an Integer, a String) is: a value of a tag is none of them. Either
+     skips the class name read (a call) for such values. */
+  int nprog = 0, ntag = 0;
+  for (int i = 0; i < nl; i++) {
+    int s = builtin_core_class_slot(owners[i]);
+    if (no_class_values && (s == CORE_MODULE || s == CORE_CLASS)) continue;
+    nprog += comp_class_index(c, owners[i]) >= 0;
+    ntag += builtin_boxed_by_tag(s);
+  }
   /* a builtin class by its class id, which the value's class name comes
      with (sp_poly_class_name_id); a class of the program's under one by
      its name */
@@ -3291,6 +3302,10 @@ int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int n
     if (no_class_values && (s == CORE_MODULE || s == CORE_CLASS)) continue;
     if (b && !n) {
       ti = ++g_tmp; ts = ++g_tmp;
+      if (!ntag || !nprog) buf_puts(b, "(");
+      if (!ntag) buf_printf(b, "_t%d.tag == SP_TAG_OBJ && ", tv);
+      if (!nprog && !ntag) buf_printf(b, "_t%d.cls_id < 0 && ", tv);
+      else if (!nprog) buf_printf(b, "!(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id >= 0) && ", tv, tv);
       buf_printf(b, "({ int _t%d; const char *_t%d = sp_poly_class_name_id(_t%d, &_t%d); (void)_t%d; (0", ti, ts, tv, ti, ts);
     }
     if (b && bid) buf_printf(b, " || _t%d == %d", ti, bid);
@@ -3299,9 +3314,18 @@ int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int n
   }
   free(owners);
   if (b && names.p) buf_printf(b, " || sp_str_in_list(_t%d, (const char *const[]){%s, NULL})", ts, names.p);
-  if (b && n) buf_puts(b, "); })");
+  if (b && n) buf_puts(b, !ntag || !nprog ? "); }))" : "); })");
   free(names.p);
   return n;
+}
+
+/* The class key of arm k of a send split's plan that the split's test takes
+   (-1: none): a class of the program's, and a reopened builtin's unless the
+   call is one the builtin's own emission answers (PPF_SURFACE). */
+static int split_arm_key(Compiler *c, const PolyPlan *arms, int k, int surface) {
+  int key = arms->arm[k].key;
+  if (key < 0 || key >= c->nclasses) return -1;
+  return surface && class_is_builtin_reopen(c, key) ? -1 : key;
 }
 
 int emit_send_blind(Compiler *c, int id, Buf *b) {
@@ -3324,12 +3348,32 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
         int sv_argov = g_n_argov;
         view_bind_temp(srcv, tv);
         if (sav && sac > 0) emit_args_in_source_order(c, sav, sac, g_pre);
-        buf_printf(b, "(((_t%d.tag == SP_TAG_OBJ && (0", tv);
+        /* The values the dispatch's arms take are the ones whose key (the
+           switch's, emit_poly_plan_key) is an arm's: a program object by
+           its class id, a value of a builtin the program reopens (`class
+           Integer; def m`) by the class its key names, the reopening's or
+           Numeric's. The test reads that key, so no value reaches the
+           dispatch that no arm takes (a Rational beside a Numeric
+           reopening), and none that one takes goes to the top-level def. */
+        /* (with no class arm, no value takes it: the key is not read) */
         const PolyPlan arms = cplan_poly_arms(c, id);
-        for (int k = 0; k < arms.n; k++)
-          if (arms.arm[k].key >= 0 && arms.arm[k].key < c->nclasses)
-            buf_printf(b, " || _t%d.cls_id == %d", tv, arms.arm[k].key);
-        buf_puts(b, "))");
+        /* (a name the builtin emission of Object's surface answers, ahead of
+           the dispatch, ignores a reopened builtin's method: that arm is no
+           emission of the call, so its values stay where they went) */
+        int surface = (arms.flags & PPF_SURFACE) != 0;
+        int nkeys = 0;
+        for (int k = 0; k < arms.n; k++) nkeys += split_arm_key(c, &arms, k, surface) >= 0;
+        if (nkeys) {
+          int kt = ++g_tmp;
+          buf_printf(b, "((({ int _t%d = ", kt);
+          emit_poly_plan_key(c, arms.flags & ~PPF_SEEN, tv, nt_str(c->nt, id, "name"), b);
+          buf_printf(b, "; (0");
+          for (int k = 0; k < arms.n; k++)
+            if (split_arm_key(c, &arms, k, surface) >= 0)
+              buf_printf(b, " || _t%d == %d", kt, arms.arm[k].key);
+          buf_puts(b, "); })");
+        }
+        else buf_puts(b, "(((0)");
         /* a builtin value whose class below Object answers the name
            (Integer#to_s) takes the dispatch too: its method comes before
            the top-level def */

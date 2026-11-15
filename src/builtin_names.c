@@ -447,6 +447,13 @@ int is_load_path_write(const char *n) {
   return is_array_push_family(n) || is_concat_name(n);
 }
 
+/* The names whose call on a boxed receiver is written as Object's own
+   builtin (the receiver's identity, hash key or instance variables)
+   rather than as a dispatch over the classes that define the name
+   (emit_call_identity_arms, emit_poly_ivar_list). */
+int is_poly_object_surface_name(const char *n) {
+  return sp_streq(n, "hash") || sp_streq(n, "object_id") || sp_streq(n, "__id__") || sp_streq(n, "instance_variables");
+}
 /* A call whose answer tells an object from a copy of it: its identity, or
    whether it is frozen (a copy of a String later frozen is not). */
 int is_identity_query(const char *n) {
@@ -2976,6 +2983,10 @@ const BuiltinClass *builtin_class_at(int i) {
 int builtin_singleton_at_boot(int slot) {
   const BuiltinClass *r = builtin_class_at(slot);
   return r && (r->flags & BC_SG_BOOT);
+}
+int builtin_boxed_by_tag(int slot) {
+  const BuiltinClass *r = builtin_class_at(slot);
+  return r && (r->flags & BC_TAGGED);
 }
 /* Is a yielding method a program's reopening of builtin class `core`
    (CORE_*) defines called through its proc form, with the call's block as a

@@ -2793,10 +2793,11 @@ int view_mark(void);
    emitted (emit_dynamic_send), a frame on its caller's stack that links the
    ones it is emitted inside of: an arm that reaches a yielding method
    expands its body, which may hold the same send, and the send is not
-   emitted again inside its own arms. */
+   emitted again inside its own arms. count_arm is set while a count's arm
+   of a builtin's generic entry is emitted (bi_generic_fn). */
 typedef struct DsendFrame { int id, depth; const struct DsendFrame *up; } DsendFrame;
 typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; const char *arm_cls;
-                 const DsendFrame *dsend; } ArmCtx;
+                 const DsendFrame *dsend; int count_arm; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)

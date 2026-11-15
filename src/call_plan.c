@@ -7768,7 +7768,8 @@ static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, Pol
              (poly_key_cls0(c, id, name, 0, -1, 0, -1) ? PPF_KEY_CLS0 : 0) |
              (poly_key_prim(c, id, name, 0, -1, 0, -1) ? PPF_KEY_PRIM : 0) |
              (cpoly_key_clsv(c, id, name) ? PPF_KEY_CLSV : 0) |
-             (poly_exc_cand(c, name) ? PPF_KEY_EXC : 0);
+             (poly_exc_cand(c, name) ? PPF_KEY_EXC : 0) |
+             (is_poly_object_surface_name(name) ? PPF_SURFACE : 0);
   mtab_pop(c, mt_was);
 }
 

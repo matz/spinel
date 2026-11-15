@@ -134,6 +134,12 @@ int emit_io_pick(Compiler *c, int id, int tv, const char *name, int public_only,
 void emit_io_pick_public(Compiler *c, int id, const char *qm, const char *pick, Buf *b);
 void emit_io_reopen_responds(Compiler *c, int tv, const char *qm, int include_all, Buf *b);
 void emit_poly_dispatch_key(Compiler *c, int tv, int cls0_cand, int prim_cand, int exc_cand, Buf *b);
+/* The key the switch of a named dispatch of `name` reads off the boxed
+   value in _t<tv>, in the plan's key form (PolyPlan.flags, PPF_KEY_*): the
+   value takes the arm whose key it equals. A dispatch's switch and the test
+   of a send split that leads into it (emit_send_blind) both read it, so the
+   split's arm takes exactly the values the arms do. */
+void emit_poly_plan_key(Compiler *c, unsigned form, int tv, const char *name, Buf *b);
 void emit_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv);
 extern const char *const enumerable_names[];
 extern int g_rto_nil_obj;

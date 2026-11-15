@@ -124,6 +124,7 @@ int is_quantifier_or_count(const char *n);  /* all? any? none? one? count: is_qu
 int is_array_self_mutator0(const char *n);   /* push append unshift: a bare call answering the Array itself */
 int is_push_unshift(const char *n);   /* << push append unshift: is_push_alias's names and unshift */
 int is_load_path_write(const char *n); /* << push append unshift prepend concat: the calls that add to $LOAD_PATH */
+int is_poly_object_surface_name(const char *n); /* hash object_id __id__ instance_variables: a boxed receiver's call is emitted as Object's builtin, whatever a reopened builtin defines */
 int is_identity_query(const char *n); /* equal? object_id __id__ frozen?: tells an object from its copy */
 int is_len_alias(const char *n);      /* length size */
 int is_length_spelling(const char *n); /* size count empty? */
@@ -721,13 +722,17 @@ int boot_package_rank_of_path(const char *path, size_t len);   /* the same for s
    Data, below which a program's class is an object of its own; BC_SG_BOOT
    a module CRuby 4.0 boots with its singleton class made (its module
    functions'), as Comparable and Enumerable are not; BC_OSTRUCT
-   OpenStruct, a constant only after `require "ostruct"` (builtin_row). */
-enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64 };
+   OpenStruct, a constant only after `require "ostruct"` (builtin_row);
+   BC_TAGGED a class whose boxed value carries a tag of its own
+   (SP_TAG_INT, SP_TAG_CLASS, SP_TAG_ENCODING ...), not SP_TAG_OBJ. */
+enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64,
+       BC_TAGGED = 128 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */
 int is_plain_builtin_superclass(int id);       /* BC_PLAIN or an exception: gives a program's subclass no method of an Enumerable walk */
 int builtin_singleton_at_boot(int slot);      /* BC_SG_BOOT of row slot (CORE_*): the module's singleton class exists before the program runs */
+int builtin_boxed_by_tag(int slot);           /* BC_TAGGED of row slot (CORE_*): a boxed value of the class carries a tag of its own, not SP_TAG_OBJ */
 /* names the compile-time evaluation and its questions ask about (ct_eval.c,
    analyze_ct.c) */
 int is_class_const_name(const char *n);    /* Class: the constant Class.new is called on */

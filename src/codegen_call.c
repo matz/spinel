@@ -1663,6 +1663,11 @@ static void emit_poly_dispatch_key_top(Compiler *c, int tv, int key_guard, int p
 void emit_poly_dispatch_key(Compiler *c, int tv, int key_guard, int prim_cand, int exc_cand, Buf *b) {
   emit_poly_dispatch_key_top(c, tv, key_guard, prim_cand, exc_cand, NULL, b);
 }
+/* See codegen_call_arms.h. */
+void emit_poly_plan_key(Compiler *c, unsigned form, int tv, const char *name, Buf *b) {
+  emit_poly_dispatch_key_top(c, tv, (form & (PPF_KEY_CLS0 | PPF_KEY_CLSV)) != 0, (form & PPF_KEY_PRIM) != 0,
+                             (form & PPF_KEY_EXC) != 0, name, b);
+}
 
 /* The reopening of builtin `cls` an OBJ box of it keys to in a dispatch of
    `nm`: the program's class, when it has the method (or the dispatch is
@@ -8750,10 +8755,9 @@ static int emit_poly_builtin_default_spread(Compiler *c, int id, int recv, const
   free(arms.p);
   return 1;
 }
-/* Set while a count's arm of a builtin's generic entry is emitted
-   (bi_generic_fn): the answer the analysis recorded for the call is the
-   splatted form's, so each count asks its own. */
-static int g_bi_count_arm = 0;
+/* (g_arm.count_arm, set while a count's arm of a builtin's generic entry
+   is emitted, bi_generic_fn: the answer the analysis recorded for the call
+   is the splatted form's, so each count asks its own.) */
 static int emit_poly_builtin_default_generic(Compiler *c, int id, int recv, const char *name,
                                              int argc, const int *argv, const int *atmp,
                                              const TyKind *atmp_ty, TyKind ret, int tv, int tr,
@@ -9056,7 +9060,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
                      !poly_arg_held_oint(c, argv[a], atmp_ty[a]))))
       return 0;
   }
-  TyKind bt = (c->poly_builtin_ty && id < c->node_cap && !g_bi_count_arm && !nil_fwd)
+  TyKind bt = (c->poly_builtin_ty && id < c->node_cap && !g_arm.count_arm && !nil_fwd)
                 ? c->poly_builtin_ty[id] : TY_UNKNOWN;
   /* `to_s` / `inspect` answer a String on every builtin receiver, with or
      without an argument (Integer#to_s(base)); the analysis types them by the
@@ -9147,8 +9151,11 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
       buf_printf(&ib, " : sp_String_new_shared(%s))", nb->p);
     }
     else if (wrap_h && !is_raise) buf_printf(&ib, "SP_STR_HDL(%s)", nb->p);
-    /* a generic entry's arm typed boxed: boxed by the C type it has */
-    else if (g_bi_count_arm && ret == TY_POLY && bt == TY_POLY && !is_raise) buf_printf(&ib, "SP_BI_BOX(%s)", nb->p);
+    /* an arm typed boxed (a generic entry's, or the builtin arm of a send
+       split, whose call joins the top-level def's answer) is boxed by the C
+       type it has (a boxed IO's puts or print already answers nil) */
+    else if ((g_arm.count_arm || g_arm.send_split == id) && ret == TY_POLY && bt == TY_POLY && !is_raise)
+      buf_printf(&ib, "SP_BI_BOX(%s)", nb->p);
     else buf_puts(&ib, nb->p);
   }
   free(nb->p); free(nb);
@@ -9653,11 +9660,11 @@ static int bi_generic_fn(Compiler *c, int id, const char *name) {
     TyKind ety[BI_GENERIC_MAX];
     for (int k = 0; k < BI_GENERIC_MAX; k++) { eatmp[k] = tv; ety[k] = TY_POLY; }
     Buf one; memset(&one, 0, sizeof one);
-    int sv = g_bi_count_arm;
-    g_bi_count_arm = 1;
+    int sv = g_arm.count_arm;
+    g_arm.count_arm = 1;
     int ok = emit_poly_builtin_default_at(c, call, self, name, n, n ? el : NULL, n ? eatmp : NULL,
                                           n ? ety : NULL, TY_POLY, tv, tr, 0, &one);
-    g_bi_count_arm = sv;
+    g_arm.count_arm = sv;
     view_unbind(slot);
     /* an arm that reads anything of the site's function cannot move here */
     int self_contained = 0;
@@ -11004,8 +11011,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* a genuine String in a slot whose name a user class owns (#4816) */
       emit_poly_str_prearm(c, id, recv, name, 0, NULL, NULL, NULL, ret, tv, tr, b);
       buf_puts(b, "switch (");
-      emit_poly_dispatch_key_top(c, tv, (form & (PPF_KEY_CLS0 | PPF_KEY_CLSV)) != 0, (form & PPF_KEY_PRIM) != 0,
-                                  (form & PPF_KEY_EXC) != 0, name, b);
+      emit_poly_plan_key(c, form, tv, name, b);
       buf_puts(b, ") {");
       if (g_plan_check) pa_resume(pa_frame0);
       if (g_plan_check) pa_flags(form);
@@ -11455,8 +11461,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* where this switch starts, so its end can tell whether any arm below
          wrote the `default:` label (see the builtin default at the close) */
       size_t sw_start = b->len;
-      emit_poly_dispatch_key_top(c, tv, (form & (PPF_KEY_CLS0 | PPF_KEY_CLSV)) != 0, (form & PPF_KEY_PRIM) != 0,
-                                  (form & PPF_KEY_EXC) != 0, name, b);
+      emit_poly_plan_key(c, form, tv, name, b);
       buf_puts(b, ") {");
       if (g_plan_check) pa_resume(pa_frame);
       if (g_plan_check) pa_flags(form);

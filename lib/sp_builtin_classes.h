@@ -8,19 +8,19 @@
 #include <string.h>
 
 #define SP_BUILTIN_CLASSES(X) \
-  X(INTEGER, "Integer", -100, BC_CLASS) \
-  X(FLOAT, "Float", -101, BC_CLASS) \
-  X(STRING, "String", -102, BC_CLASS) \
-  X(SYMBOL, "Symbol", -103, BC_CLASS) \
+  X(INTEGER, "Integer", -100, BC_CLASS | BC_TAGGED) \
+  X(FLOAT, "Float", -101, BC_CLASS | BC_TAGGED) \
+  X(STRING, "String", -102, BC_CLASS | BC_TAGGED) \
+  X(SYMBOL, "Symbol", -103, BC_CLASS | BC_TAGGED) \
   X(ARRAY, "Array", -104, BC_CLASS) \
   X(HASH, "Hash", -105, BC_CLASS) \
   X(RANGE, "Range", -106, BC_CLASS) \
   X(TIME, "Time", -107, BC_CLASS) \
-  X(MODULE, "Module", -108, BC_CLASS) \
-  X(CLASS, "Class", -109, BC_CLASS) \
-  X(NILCLASS, "NilClass", -110, BC_CLASS) \
-  X(TRUECLASS, "TrueClass", -111, BC_CLASS) \
-  X(FALSECLASS, "FalseClass", -112, BC_CLASS) \
+  X(MODULE, "Module", -108, BC_CLASS | BC_TAGGED) \
+  X(CLASS, "Class", -109, BC_CLASS | BC_TAGGED) \
+  X(NILCLASS, "NilClass", -110, BC_CLASS | BC_TAGGED) \
+  X(TRUECLASS, "TrueClass", -111, BC_CLASS | BC_TAGGED) \
+  X(FALSECLASS, "FalseClass", -112, BC_CLASS | BC_TAGGED) \
   X(NUMERIC, "Numeric", -113, BC_CLASS) \
   X(COMPARABLE, "Comparable", -114, BC_CLASS | BC_MODULE) \
   X(ENUMERABLE, "Enumerable", -115, BC_CLASS | BC_MODULE) \
@@ -93,7 +93,7 @@
   X(THREAD_CONDITIONVARIABLE, "Thread::ConditionVariable", -178, 0) \
   X(FIBER, "Fiber", -179, BC_CLASS) \
   X(MATCHDATA, "MatchData", -180, BC_CLASS) \
-  X(ENCODING, "Encoding", 0, BC_CLASS) \
+  X(ENCODING, "Encoding", 0, BC_CLASS | BC_TAGGED) \
   X(ENUMERATOR_CHAIN, "Enumerator::Chain", 0, BC_CLASS) \
   X(ENUMERATOR_LAZY, "Enumerator::Lazy", 0, BC_CLASS) \
   X(ENUMERATOR_PRODUCT, "Enumerator::Product", 0, BC_CLASS) \

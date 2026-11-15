@@ -469,6 +469,13 @@ int bop_flags(TyKind rt, const char *name);
 int bop_name_kwless(const char *name);
 /* Is there a row of `name` that takes keywords (BOPF_KEYWORDS)? */
 int bop_name_keywords(const char *name);
+/* Does a builtin class below Object have a row of `name`, a method it
+   defines as the compiler implements it (StopIteration#result, IO#write),
+   in a library the program has (builtin_library_fact_holds)?
+   A row of one of Object's own methods (itself, class, !=) says how a call
+   on that kind is emitted, not that the class defines it, and does not
+   count. */
+int bop_below_object_answers(const char *name);
 /* Does the builtin answer `name` on a class (or module) itself, taking argc
    arguments and a block when has_block, where no method of the program's
    of the name runs yet: Module's own, as its builtin-op rows (TY_CLASS)

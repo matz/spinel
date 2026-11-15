@@ -982,6 +982,9 @@ enum {
   PPF_KEY_EXC  = 16,  /* a user exception class answers: the exception is re-keyed */
   PPF_KEY_CLSV = 32,  /* a class whose Class object may be a value has an arm: a Class
                          value, which carries its class's index, is kept off it */
+  PPF_SURFACE  = 64,  /* the name is one the builtin emission of Object's own surface answers
+                         for a boxed receiver, ahead of the dispatch: a reopened builtin's arm
+                         is no emission of the call (emit_send_blind keeps its values off it) */
   PPF_SEEN     = 256  /* (--plan-check) the flags were observed */
 };
 

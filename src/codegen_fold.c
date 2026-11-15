@@ -5058,8 +5058,10 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   if (recv < 0) return 0;
   Repr rr = repr_of(c, recv);
   TyKind rt = rr.as_ty;
-  if (!ty_is_array(rt)) return 0;
-  const char *k = (rr.elem == TY_POLY) ? "Poly" : array_kind(rt);
+  if (!ty_is_array(rt) && !ty_is_obj_array(rt)) return 0;
+  /* an Array of one class (narrow_object_arrays) is an sp_PtrArray: its
+     elements are read, gathered and written back as the pointers they are */
+  const char *k = (rr.elem == TY_POLY) ? "Poly" : ty_is_obj_array(rt) ? "Ptr" : array_kind(rt);
   if (!k) return 0;
   const char *p0_orig = block_param_name(c, block, 0);
   const char *p0 = p0_orig ? rename_local(p0_orig) : NULL;
@@ -5129,6 +5131,14 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
     bp_elem_read(c, block, p0_orig, k, trv, ti, &src);
     emit_indent(g_pre, g_indent + 1);
     if (rr.elem == TY_POLY && pt != TY_POLY && pt != TY_UNKNOWN) emit_block_param_from_boxed(c, p0, pt, src.p, g_pre);
+    /* an object of the narrowed array into a parameter the block's own
+       writes left boxed (`i = nil if ...`) is boxed as its class */
+    else if (ty_is_obj_array(rt) && pt == TY_POLY) {
+      Buf bx; memset(&bx, 0, sizeof bx);
+      emit_boxed_text(c, ty_object(ty_obj_array_class(rt)), src.p, &bx);
+      buf_printf(g_pre, "lv_%s = %s;\n", p0, bx.p ? bx.p : "sp_box_nil()");
+      free(bx.p);
+    }
     else buf_printf(g_pre, "lv_%s = %s;\n", p0, src.p);
     free(src.p);
   }
@@ -5270,10 +5280,13 @@ int emit_sort_cmp_expr(Compiler *c, int id, Buf *b) {
   /* Hash#sort { |x, y| ... }: sort the [key, value] pair list (a poly array).
      sort! is not valid on a Hash, so only the non-bang form applies. */
   int hash_sort = ty_is_hash(rt) && !is_bang;
-  if (!ty_is_array(rt) && !hash_sort) return 0;
-  const char *k = hash_sort ? "Poly" : (rr.elem == TY_POLY) ? "Poly" : array_kind(rt);
+  /* an Array of one class (narrow_object_arrays) is an sp_PtrArray whose
+     elements the comparator takes as the class's pointers */
+  int objs = ty_is_obj_array(rt);
+  if (!ty_is_array(rt) && !hash_sort && !objs) return 0;
+  const char *k = hash_sort ? "Poly" : objs ? "Ptr" : (rr.elem == TY_POLY) ? "Poly" : array_kind(rt);
   if (!k) return 0;
-  TyKind et = hash_sort ? TY_POLY : rr.elem;
+  TyKind et = hash_sort ? TY_POLY : objs ? ty_object(ty_obj_array_class(rt)) : rr.elem;
   const char *hn = hash_sort ? ty_hash_cname(rt) : NULL;
   TyKind eff_rt = hash_sort ? TY_POLY_ARRAY : rt;
   /* A comparator block of fewer than two parameters still runs: CRuby hands

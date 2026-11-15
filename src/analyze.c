@@ -16759,9 +16759,10 @@ static int oa_vetted_literal(Compiler *c, int node, int rows) {
   return en > 0;
 }
 /* The filters: 1 for reject!, select! and filter!, which answer the array
-   or nil, and for delete_if and keep_if, which answer the array, and 2 for
-   select, filter and reject, which answer a new array of the same
-   elements. The block takes the element as one plain parameter, or
+   or nil, and for delete_if, keep_if, sort_by! and sort!, which answer the
+   array, and 2 for select, filter, reject, sort_by and sort, which answer a
+   new array of the same elements. A sort's block is its comparator (below);
+   any other block takes the element as one plain parameter, or
    none, and is not a block whose parameters desugar_builtin_iter_block_shapes
    lowered; 0 for any other call. */
 static int oa_filter_call(Compiler *c, int id) {
@@ -16772,10 +16773,19 @@ static int oa_filter_call(Compiler *c, int id) {
   if (args >= 0) nt_arr(nt, args, "arguments", &argc);
   if (!nm || argc != 0 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
   if (nt_int(nt, blk, "bs_lowered", 0)) return 0;
+  /* a comparator takes the two elements it orders, each a plain parameter:
+     sort answers a new array of them, sort! the array itself */
+  if (is_sort_family(nm)) {
+    if (block_param_name(c, blk, 2) || block_param_is_multi(c, blk, 0) || block_param_is_multi(c, blk, 1) ||
+        block_opt_name(c, blk, 0) || block_post_name(c, blk, 0) || block_keyword_name(c, blk, 0) ||
+        block_rest_marker(c, blk)) return 0;
+    return sp_streq(nm, "sort!") ? 1 : 2;
+  }
   if (block_param_name(c, blk, 1) || block_param_is_multi(c, blk, 0) || block_opt_name(c, blk, 0) ||
       block_post_name(c, blk, 0) || block_keyword_name(c, blk, 0) || block_rest_marker(c, blk)) return 0;
-  if (is_select_reject_bang(nm) || sp_streq(nm, "delete_if") || sp_streq(nm, "keep_if")) return 1;
-  if (is_select_alias(nm) || sp_streq(nm, "reject")) return 2;
+  if (is_select_reject_bang(nm) || sp_streq(nm, "delete_if") || sp_streq(nm, "keep_if") ||
+      sp_streq(nm, "sort_by!")) return 1;
+  if (is_select_alias(nm) || sp_streq(nm, "reject") || sp_streq(nm, "sort_by")) return 2;
   return 0;
 }
 /* narrow_object_arrays' last arm for a call on slot S: a filter claims its

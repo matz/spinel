@@ -5363,6 +5363,8 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	  done; \
 	  grep -Fq 'local LibC.__ffi_call(extend) fns: ptr ty=str_poly_hash' "$$tmp/fi.repr" || { echo "infer-test: FAIL (Fiddle function-table read became boxed)"; ok=0; }; \
 	fi; \
+	$(SPINEL) test/object_array_sort_by.rb -c --no-line-map -o "$$tmp/oas.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_sort_by)"; ok=0; }; \
+	awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/oas.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a sort_by or a sort with a comparator kept an Array of one class boxed)"; ok=0; }; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "infer-test: pass (2 of 2)"; else exit 1; fi
 

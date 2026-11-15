@@ -4924,8 +4924,13 @@ static int lr_vv_own(void *ud, int cls, int sg) {
   return v->n < 0 ? LR_W_STOP : 0;
 }
 static int lr_vv_mixin(void *ud, int cls, int ref) {
-  (void)cls; (void)ref;
-  ((LrVers_ *)ud)->n = -1;
+  LrVers_ *v = ud;
+  int core = -1;
+  (void)cls;
+  (void)elab_class_ref_at(v->c, ref, &core);
+  /* (Kernel, which the row of the name answers, ends the versions: nothing behind it is found) */
+  if (core == CORE_KERNEL && v->name && bop_kernel_answers(v->name, -1, 0)) return LR_W_STOP;
+  v->n = -1;
   return LR_W_STOP;
 }
 static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap) {

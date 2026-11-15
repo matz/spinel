@@ -10048,6 +10048,14 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
   Compiler *c = q->c;
   int blk = 0, ar = q->far ? q->far - 1 : ver_arity(c, -1, to, nv), els = VK_NOMETHOD, eb;
   for (int i = 0; i < nv; i++) blk |= c->scopes[to[i]].blk_param || c->scopes[to[i]].yields;
+  /* a held history of a Kernel row's name that Kernel's row, placed in front of it (a prepend of Kernel), answers first
+     on cls's chain: no version of it is found there, so its entry would stand for what no call finds */
+  if (held && !refuse && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0)) {
+    ElabVersion cv[VER_MAX_ARMS];
+    int nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS), found = 0;
+    for (int j = 0; j < nc; j++) found |= cv[j].hist == vs[0].hist;
+    if (nc >= 0 && nc < VER_MAX_ARMS && !found) refuse = "cond_def_override";
+  }
   /* a held history of a Kernel row's name that takes no one count (ar -1: an optional parameter), in a blank slate that
      has Kernel or may gain it (whose chain the record does not settle, so that no entry is made late for a call in a
      method body), is an entry for each count the program's calls of the name pass (the entry's arms call the

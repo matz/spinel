@@ -556,11 +556,12 @@ int elab_body_def(Compiler *c, int node);
    which the record leaves to its body */
 int elab_def_applied(Compiler *c, int def);
 int elab_version_held_row(const LrDef *v, const char *name, int cside);   /* a version recorded under a condition of a name a Kernel row answers, on the instance side */
-/* Does class cls lack Kernel, as the record resolves its chain: the
+/* Does class cls lack Kernel (KERN_*), as the record resolves its chain: the
    chain ends at BasicObject without reaching Object, and no include or
    prepend on it may bring Kernel in? 0 where the record cannot tell (a
    superclass of another expression, a module it cannot name). */
-int elab_class_lacks_kernel(Compiler *c, int cls);
+enum { KERN_HAS, KERN_LACKS };   /* elab_class_kernel: Kernel is among the ancestors; it is not */
+int elab_class_kernel(Compiler *c, int cls);
 /* call_target's questions about call id read the record's facts as its
    first such question found them (analyze_elab.c): 1 when the frame is in,
    until elab_plan_leave; 0 for a node it cannot place */

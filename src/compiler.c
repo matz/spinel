@@ -5588,8 +5588,8 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   /* under BasicObject with no Kernel among its ancestors, neither Object
      nor Kernel is in the chain: a super finds no method there (one that
      includes Kernel reaches Kernel's methods through Object's chain, as
-     before). The record answers it (elab_class_lacks_kernel). */
-  if (elab_class_lacks_kernel(c, class_id)) return -1;
+     before). The record answers it (elab_class_kernel). */
+  if (elab_class_kernel(c, class_id) != KERN_HAS) return -1;
   return obj;
 }
 

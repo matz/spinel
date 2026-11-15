@@ -10986,7 +10986,7 @@ static int lr_reaches_object(Compiler *c, int cls) {
   }
 }
 
-/* elab_class_lacks_kernel's walk of the modules one class of the chain
+/* elab_class_kernel's walk of the modules one class of the chain
    mixes into its instance side (lr_walk_one, each module once: enter): it
    ends where one may bring Kernel in. That is the program's Kernel, a
    module the record holds no class of but a core module other than Kernel
@@ -11029,13 +11029,13 @@ static int lr_kw_class(void *ud, int cls) {
    paths; a superclass it holds no class of is BasicObject when the
    reference names that core class, through an alias too. Each class on it
    is walked for what it mixes in (lr_kw_class). */
-int elab_class_lacks_kernel(Compiler *c, int cls) {
+int elab_class_kernel(Compiler *c, int cls) {
   LoadRecord *r = c->lrec;
   LrKernelWalk x = { c, NULL };
   int ref, core = -1, root = r && r->recorded ? lr_chain_root(c, cls, lr_kw_class, &x, &ref) : LR_ROOT_UNKNOWN;
   free(x.seen);
   if (root == LR_ROOT_NAMED) (void)elab_class_ref_at(c, ref, &core);
-  return root == LR_ROOT_BASIC || core == CORE_BASIC_OBJECT;
+  return root == LR_ROOT_BASIC || core == CORE_BASIC_OBJECT ? KERN_LACKS : KERN_HAS;
 }
 
 /* The main-scope registration a read of `name` scoped by class owner reaches

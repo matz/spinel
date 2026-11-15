@@ -27694,7 +27694,7 @@ int an_super_object_text(Compiler *c, int n, int mi) {
   ClassInfo *ci = &c->classes[cid];
   /* (a reopened builtin -- Exception, String, Object -- has its own
      inspect and to_s behind the program's) */
-  if (comp_class_is_module(c, ci) || is_builtin_reopen(ci->name) || elab_class_lacks_kernel(c, cid) || ci->is_struct || ci->is_data ||
+  if (comp_class_is_module(c, ci) || is_builtin_reopen(ci->name) || elab_class_kernel(c, cid) != KERN_HAS || ci->is_struct || ci->is_data ||
       ci->is_native_class || ci->nsub_root > 0 ||
       comp_ary_root(c, cid) >= 0 || class_inherits_builtin_exception(c, cid) || class_is_exc_subclass(c, cid))
     return 0;

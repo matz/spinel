@@ -7529,7 +7529,7 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
                tvB, tvB, tvB, tvB, tvB);
     char rs[48]; snprintf(rs, sizeof rs, "sp_String_cstr(_m%d)", tvB);
     char hm[24]; snprintf(hm, sizeof hm, "_m%d", tvB);
-    emit_bytesplice_in_place(c, argv, argc, rs, hm, NULL, b);
+    emit_bytesplice_in_place(c, argv, argc, rs, hm, b);
     /* the answer is the receiver itself, so a mutation through it
        (`x.bytesplice(0, 1, "J") << "!"`) reaches x */
     buf_printf(b, "; _r%d = _t%d; }\n"

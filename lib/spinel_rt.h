@@ -15201,10 +15201,11 @@ static sp_RbVal sp_poly_str_aset_key(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
    TypeError), which splices one character. The checks come in CRuby's
    order: the key's conversion and its match or range; then the value's
    conversion (TypeError), then an index outside the String (IndexError),
-   then FrozenError. The caller holds h, key and val rooted; every check is
-   made before this roots anything, so a raise never longjmps with a root of
-   its own live (an inline rescue does not restore sp_gc_nroots), as
-   sp_poly_str_aset_key refuses before it roots. Answers val. */
+   then FrozenError, and for a Regexp key the encoding check the byte splice
+   makes. The caller holds h, key and val rooted; this roots nothing, so a
+   raise never longjmps with a root of its own live (an inline rescue does
+   not restore sp_gc_nroots), as sp_poly_str_aset_key refuses before it
+   roots. Answers val. */
 static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
   if (sp_poly_is_strbuf(key)) key = sp_poly_strbuf_deref(key);
   const char *cur = sp_String_cstr(h);
@@ -15233,8 +15234,8 @@ static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
   }
   else { a = sp_poly_arg_int_chk(key); index = 1; }
   /* the value's conversion (a #to_str runs here); what it answers needs no
-     root until the splice allocates: nothing allocates between, but for a
-     raise, after which it is not read */
+     root: nothing allocates between here and the splice, which does not
+     allocate from the collector either, and after a raise it is not read */
   const char *rep = sp_str_aset_rep(val);
   cur = sp_String_cstr(h);
   len = (sp_int)sp_str_length(cur);
@@ -15244,7 +15245,6 @@ static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
     a = i;
   }
   if (sp_String_is_frozen(h)) sp_raise_frozen_str(cur);
-  SP_GC_ROOT(rep);
   if (a + n > (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)))
     n = (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)) - a;
   /* spliced where h lives, in the encoding the compatibility rule picked:

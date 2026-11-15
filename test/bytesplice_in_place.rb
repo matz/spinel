@@ -87,6 +87,48 @@ n = +"z" if ARGV.size > 5
 seen = []
 p err { n.bytesplice((seen << :arg; 0), 1, "x") }, seen
 
+# a nil in an Integer slot raises once every argument has run
+nl = +"abcdef"
+ran = []
+p err { nl.bytesplice(1, nil, (ran << :str; "x")) }, ran, nl
+ran = []
+p err { nl.bytesplice(0, 1, (ran << :str; "x"), nil, (ran << :vlen; 1)) }, ran, nl
+
+# as a statement too: every argument runs before one converts, a value's
+# conversion raises inside the rescue around it, and a nil receiver raises
+# before a value's #to_str runs
+class Txt
+  def to_str = ($ran << :to_str; "T")
+end
+$ran = []
+st = +"abcdef"
+p err { st.bytesplice(1, ($ran << :len; any(nil)), ($ran << :str; "x")); :stmt }, $ran
+$ran = []
+p err { st.bytesplice(($ran << :start; "1"), 1, ($ran << :str; "x")); :stmt }, $ran
+$ran = []
+p err { st.bytesplice(1, 1, ($ran << :str; any(nil))); :stmt }, $ran
+$ran = []
+p err { n.bytesplice(1, 1, ($ran << :str; Txt.new)); :stmt }, $ran
+$ran = []
+st.bytesplice(1, 1, ($ran << :str; Txt.new))
+p st, $ran
+
+# a byte splice that raises, caught over and over, leaves the String as it
+# was and nothing behind (a Regexp key held as a value the compiler cannot
+# type takes the boxed key's path)
+key = any(/a/)
+key = any(1) if ARGV.size > 5
+caught = 0
+kept = 0
+500.times do |i|
+  bin = +"a\xff".b
+  caught += 1 if ((bin[key] = "\u00e9") rescue :caught) == :caught
+  caught += 1 if ((bin.bytesplice(0, 1, "\u00e9")) rescue :caught) == :caught
+  kept += 1 if bin.bytes == [0x61, 0xff]
+  junk = "j" * (i % 40)
+end
+p caught, kept
+
 # a length-prefixed encoder: each record after a placeholder byte, its
 # length spliced in after it when it needs more than one byte
 def put_record(buff, n)

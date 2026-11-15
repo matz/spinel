@@ -6436,6 +6436,15 @@ int emit_scalar_op_assign(Compiler *c, const char *lval, TyKind t, const char *o
      holds (a Float operand truncated by C before, or into
      sp_bigint_new_int). */
   else emit_coerce(c, v, t, t == TY_FLOAT ? CO_CONVERT : CO_HOLD, "the operand of an `op=`", &rb);
+  /* A Float slot divided by an Integer operand divides by its double, as
+     the binary form does: `d /= 0` is Infinity, and C's compiler warns of
+     a division by the integer constant zero */
+  if (fop && !ffn && vt == TY_INT && r.kind != RK_BOXED && sp_streq(op, "/") && rb.p) {
+    Buf fb; memset(&fb, 0, sizeof fb);
+    buf_printf(&fb, "(sp_float)(%s)", rb.p);
+    free(rb.p);
+    rb = fb;
+  }
   const char *rhs = rb.p ? rb.p : "";
   /* Int and Bignum arithmetic take the same overflow-checked helpers as the
      binary form: a raw C `lv_x *= y` silently wrapped where `x * y` raised.

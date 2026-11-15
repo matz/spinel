@@ -3179,7 +3179,7 @@ int g_timesub_view_recv = -1, g_timesub_view_cls = -1;
 
 /* Bind node n, an Array subclass instance, to its Array -- the same pointer
    cast -- evaluating anything but a variable once, ahead of the call. */
-static int arysub_bind(Compiler *c, int n, TyKind k) {
+static int arysub_bind(Compiler *c, int n, TyKind k, int keep) {
   int cid = ty_object_class(repr_of(c, n).as_ty);
   const char *at = arysub_array_ctype(c, cid);
   NodeKind nk = nt_kind(c->nt, n);
@@ -3199,6 +3199,10 @@ static int arysub_bind(Compiler *c, int n, TyKind k) {
       buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nullable_obj((void *)_t%d, SP_BUILTIN_STRBUF); SP_GC_ROOT_RBVAL(_t%d);\n", bx, t, bx);
       return view_bind_temp(n, bx);
     }
+    /* a method a reopening of String adds (keep): self is the instance,
+       as in CRuby; the copy made it another String, so `equal?(self)` was
+       false and an ivar it kept was written under the copy and lost */
+    if (keep) return view_bind(n, "_t%d", t);
     /* (one representation: the read face is the payload itself, which a
        String slot takes back to the instance; the copy is made here, or
        `m.to_s` answered m) */
@@ -3238,7 +3242,11 @@ static int arysub_view_open(Compiler *c, int id, ArysubView *v) {
   if (comp_arysub_call(c, id, rt, &k) && (array_new_copies(k) || ty_is_hash(k) || str || tim)) {
     int hash = tim ? 3 : str ? 2 : ty_is_hash(k) ? 1 : 0;
     if (tim) { g_timesub_view_recv = recv; g_timesub_view_cls = ty_object_class(rt); }
-    v->bound = arysub_bind(c, recv, k);
+    /* (a method of a String reopening the call reaches, by inheritance from
+       the subclass) */
+    CallPlan up = str ? cplan_user(c, id) : (CallPlan){ .mi = -1 };
+    int sci = comp_core_class(c, CORE_STRING);
+    v->bound = arysub_bind(c, recv, k, str && up.mi >= 0 && sci >= 0 && c->scopes[up.mi].class_id == sci);
     v->vr = view_push(c, recv, k);
     v->vf = view_push_face(recv, k);
     /* a call that answers its receiver: the Array emitter's answer -- the
@@ -3271,7 +3279,7 @@ static int arysub_view_open(Compiler *c, int id, ArysubView *v) {
       if (comp_ty_ary_root(c, at) < 0) continue;
       TyKind ak = comp_ary_kind(c, ty_object_class(at));
       if (ak == TY_STRBUF) ak = TY_STRING;
-      int slot = arysub_bind(c, av[i], ak);
+      int slot = arysub_bind(c, av[i], ak, 0);
       if (v->bound < 0) v->bound = slot;
       v->views[v->nv++] = view_push(c, av[i], ak);
     }

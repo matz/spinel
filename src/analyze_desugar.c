@@ -29697,15 +29697,14 @@ static const char *biv_host_of(NodeTable *nt, const BivHosts *h, const char *mod
 /* The family (biv_family) of the builtin a program class `m` descends
    from through the program's own classes (`class Stack < Base`, `class
    Base < Array`), BIVF_NONE for none */
-static int biv_sub_family(Compiler *c, NodeTable *nt, int m, int n0) {
+static int biv_sub_family(Compiler *c, NodeTable *nt, int m, const int *sub, int ns) {
   int sc = class_def_super(nt, m);
   for (int hop = 0; sc >= 0 && hop < 32; hop++) {
     const char *sn = nt_kind(nt, sc) == NK_ConstantReadNode ? key_name(c, sc) : NULL;
     if (!sn) return BIVF_NONE;
     int next = -1;
-    for (int k = 0; k < n0 && next < 0; k++)
-      if (nt_kind(nt, k) == NK_ClassNode && class_def_super(nt, k) >= 0 && class_def_name(nt, k) &&
-          sp_streq(class_def_name(nt, k), sn)) next = k;
+    for (int k = 0; k < ns && next < 0; k++)
+      if (sp_streq(class_def_name(nt, sub[k]), sn)) next = sub[k];
     if (next < 0) return biv_family(sn);
     sc = class_def_super(nt, next);
   }
@@ -29731,9 +29730,26 @@ static int biv_attr_kept(NodeTable *nt, int call, const BivNames *kept) {
    ivars stay its fields. The class node is marked biv_shared, and
    infer_ivar_types gives the class computed_ivar_set: its reflection reads
    the map beside its fields, and the map keys its instances
-   (SP_TU_BIVAR_USER) */
+   (SP_TU_BIVAR_USER).
+   Most programs keep no such name, and the walk ends at once. Otherwise
+   the classes that name a superclass are collected once, and each class's
+   family is looked up among them alone: asking the whole node table for
+   each class's superclass costs every class a scan of the program, which
+   made scale-test's alias receivers grow superlinearly. */
+static void biv_kept_free(void) {
+  for (int f = 0; f < BIVF_N; f++) {
+    for (int i = 0; i < g_biv_kept[f].n; i++) free(g_biv_kept[f].v[i]);
+    free(g_biv_kept[f].v);
+    g_biv_kept[f] = (BivNames){ NULL, 0 };
+  }
+}
 static int biv_subclasses(Compiler *c, NodeTable *nt, int n0) {
-  int changed = 0;
+  int changed = 0, any = 0;
+  for (int f = 0; f < BIVF_N; f++) any |= g_biv_kept[f].n > 0;
+  if (!any) return 0;
+  int *sub = NULL, ns = 0;
+  for (int k = 0; k < n0; k++)
+    if (nt_kind(nt, k) == NK_ClassNode && class_def_super(nt, k) >= 0 && class_def_name(nt, k)) xc_push(&sub, &ns, k);
   for (int m = 0; m < n0; m++) {
     if (nt_kind(nt, m) != NK_ClassNode) continue;
     /* (a reopening with no superclass written, `class Stack` after `class
@@ -29742,12 +29758,11 @@ static int biv_subclasses(Compiler *c, NodeTable *nt, int n0) {
     if (class_def_super(nt, m) < 0) {
       const char *cn = class_def_name(nt, m);
       head = -1;
-      for (int k = 0; cn && k < n0 && head < 0; k++)
-        if (nt_kind(nt, k) == NK_ClassNode && class_def_super(nt, k) >= 0 && class_def_name(nt, k) &&
-            sp_streq(class_def_name(nt, k), cn)) head = k;
+      for (int k = 0; cn && k < ns && head < 0; k++)
+        if (sp_streq(class_def_name(nt, sub[k]), cn)) head = sub[k];
       if (head < 0) continue;
     }
-    int fam = biv_sub_family(c, nt, head, n0), body = class_def_body(nt, m);
+    int fam = biv_sub_family(c, nt, head, sub, ns), body = class_def_body(nt, m);
     if (!fam || !g_biv_kept[fam].n || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     g_biv_only = &g_biv_kept[fam];
     int bn = 0; const int *bs0 = nt_arr(nt, body, "body", &bn);
@@ -29774,11 +29789,8 @@ static int biv_subclasses(Compiler *c, NodeTable *nt, int n0) {
     free(nb); free(bs);
     g_biv_only = NULL;
   }
-  for (int f = 0; f < BIVF_N; f++) {
-    for (int i = 0; i < g_biv_kept[f].n; i++) free(g_biv_kept[f].v[i]);
-    free(g_biv_kept[f].v);
-    g_biv_kept[f] = (BivNames){ NULL, 0 };
-  }
+  free(sub);
+  biv_kept_free();
   return changed;
 }
 

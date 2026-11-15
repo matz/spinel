@@ -1109,7 +1109,7 @@ static int cf_is_class_const(CF *f, int n) {
   if (n < 0) return -1;
   NodeKind k = nt_kind(f->nt, n);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
-  return comp_class_index(f->c, const_key_at(f->c, n));
+  return const_node_class_index(f->c, n);
 }
 /* the methods named `name`, memoized: the class structure does not move
    during the pass */

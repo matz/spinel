@@ -6,3 +6,5 @@
 [NilClass, Integer]
 [7, "b"]
 [nil, "b"]
+["a", "bb"]
+[:z, 2]

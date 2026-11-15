@@ -30,3 +30,12 @@ class Names
   end
 end
 p Names.new.blank_first
+
+# the block given as a proc, on a local that owns its Array
+s = ["a", "b"]
+s.map!.with_index(&proc { |x, i| x * (i + 1) })
+p s
+pr = proc { |x, i| i == 0 ? :z : x }
+u = [1, 2]
+u.map!.with_index(&pr)
+p u

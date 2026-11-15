@@ -950,8 +950,13 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (boxed) buf_puts(b, "sp_box_bool(");
       buf_puts(b, "((void)(");
       emit_expr_for_effect(c, recv, b);
-      buf_printf(b, repr_slot_kind(c, tg) == RK_BOXED ? "), sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "), (gv_%s == %dLL)", tg->name, SP_VIS_PUBLIC);
-      if (argc >= 2) { buf_puts(b, " || ("); emit_cond(c, argv[1], b); buf_puts(b, ")"); }
+      buf_puts(b, "), ");
+      /* (the include_all argument runs once, after the receiver, whether or
+         not the cell is public: the cell is read after it) */
+      int ia = argc >= 2 ? ++g_tmp : 0;
+      if (ia) { buf_printf(b, "({ int _ia%d = (", ia); emit_cond(c, argv[1], b); buf_puts(b, "); "); }
+      buf_printf(b, repr_slot_kind(c, tg) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "(gv_%s == %dLL)", tg->name, SP_VIS_PUBLIC);
+      if (ia) buf_printf(b, " || _ia%d; })", ia);
       buf_puts(b, ")");
       if (boxed) buf_puts(b, ")");
       return 1;
@@ -1020,8 +1025,13 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           buf_printf(b, "; _t%d != NULL ? %d : _ia%d; })", st, ans, st);
           return 1;
         }
-        if (ans && !nil_too) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") != NULL)"); return 1; }
-        if (!ans && nil_too) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)"); return 1; }
+        if ((ans && !nil_too) || (!ans && nil_too)) {
+          /* (an include_all with an effect runs once, after the receiver, though the answer is fixed) */
+          int st = argc >= 2 && subtree_has_side_effect(c, argv[1]) ? ++g_tmp : 0;
+          if (st) { buf_printf(b, "({ const void *_t%d = (const void *)(", st); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[1], b); buf_printf(b, "); _t%d %s NULL; })", st, ans ? "!=" : "=="); }
+          else { buf_puts(b, "(("); emit_expr(c, recv, b); buf_printf(b, ") %s NULL)", ans ? "!=" : "=="); }
+          return 1;
+        }
       }
       /* the answer is the slot kind's; a nullable Integer or Float whose
          nil flag is set is nil, which answers its own, smaller surface */
@@ -1042,8 +1052,12 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (ans >= 0) {
         /* a receiver that runs code (a call, a write) is evaluated, as
            CRuby does, though the answer is known */
-        int run = recv >= 0 && subtree_has_side_effect(c, recv);
-        if (run) { buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); "); }
+        int run = recv >= 0 && subtree_has_side_effect(c, recv), run_ia = argc >= 2 && subtree_has_side_effect(c, argv[1]);
+        if (run || run_ia) buf_puts(b, "({ ");
+        if (run) { buf_puts(b, "(void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); "); }
+        /* (the include_all argument runs after the receiver) */
+        if (run_ia) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[1], b); buf_puts(b, "); "); }
+        run |= run_ia;
         buf_printf(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(%d)" : "%d", ans);
         if (run) buf_puts(b, "; })");
         return 1;
@@ -1107,6 +1121,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           int boxed = repr_of(c, id).kind == RK_BOXED;
           buf_puts(b, boxed ? "sp_box_bool(((void)(" : "(((void)(");
           emit_expr_for_effect(c, recv, b);
+          /* (the include_all argument runs, after the receiver, though the answer is true either way) */
+          if (argc >= 2) { buf_puts(b, "), ("); emit_expr_for_effect(c, argv[1], b); }
           buf_puts(b, "), 1))");
           return 1;
         }

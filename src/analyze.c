@@ -43268,6 +43268,12 @@ static void mark_nullable_int_locals(Compiler *c) {
           if (rci >= 0)
             mi = is_new_name(cnm) ? cplan_new_initialize(c, id, rci, NULL)
                                       : call_target(c, id, rci, cnm, CT_CMETHOD, NULL);
+          /* a class method `new` the class has (`alias_method :new, :civil`
+             in `class << self`, or a def) is what the call runs: its
+             parameters take the nil too, as a call by the method's own name
+             gives them */
+          int nmi = rci >= 0 && is_new_name(cnm) ? call_target(c, id, rci, cnm, CT_CMETHOD, NULL) : -1;
+          if (nmi >= 0 && nmi != mi) changed |= mark_nullable_params_of_call(c, id, nmi);
         }
       }
       /* `m.call(v)` on a Method, or on the Proc its to_proc made, is the only

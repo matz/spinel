@@ -3697,6 +3697,16 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
      instance method too, as a receiverless call does: a module function */
   if (flags & CT_CMETHOD) return comp_cmethod_in_chain(c, cls, name, def_class);
   if (flags & CT_CAPTURE) return comp_self_method_in_chain(c, cls, name, def_class);
+  if (flags & CT_ATTR) {
+    char base[256];
+    int adc = -1, wr = (flags & CT_WRITER) && setter_base_name(name, base, sizeof base);
+    if (wr ? comp_writer_in_chain(c, cls, base, &adc) : comp_reader_in_chain(c, cls, name, &adc)) {
+      *attr = 1;
+      if (def_class) *def_class = adc;
+    }
+    return -1;
+  }
+  if (flags & CT_METHODS) return comp_method_in_chain(c, cls, name, def_class);
   return ct_member(c, cls, name, flags, def_class, attr);
 }
 /* The method call id runs on candidate pc of its boxed dispatch: the
@@ -3847,7 +3857,9 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     snprintf(setter, sizeof setter, "%s=", name);
     name = setter;
   }
-  mtab_enter(c);
+  /* (a no-site ask of a reader the call sites share, made while a node's frame is open: its read stays that node's) */
+  int open = !((flags & CT_SHARED) && id < 0 && mtab_framed(c));
+  if (open) mtab_enter(c);
   flags = ct_vis_flags(c, id, flags);
   *ml = (MethodLookup){ .def_class = dc0 };
   if (ct_send_shadow(c, id, name)) {
@@ -3928,7 +3940,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_ENTRY;
     ml->why = 0;
   }
-  mtab_leave(c);
+  if (open) mtab_leave(c);
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;
 }

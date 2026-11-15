@@ -51,6 +51,7 @@
 #include "call_plan.h"
 #include "holder.h"
 #include "implicit_calls.h"
+#include "method_table_check.h"
 #include "timing.h"
 #include <limits.h>
 
@@ -7785,6 +7786,7 @@ static void lr_sgm_add(Compiler *c, int node, int who, int sure) {
 static void lr_sg_makers(Compiler *c) {
   LoadRecord *r = c->lrec;
   if (r->sgm && r->sgm_of.recorded == r->recorded && r->sgm_of.ver == r->ver && r->sgm_of.nclasses == c->nclasses) return;
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   r->nsgm = 0;
   r->sgm_of.recorded = r->recorded; r->sgm_of.ver = r->ver; r->sgm_of.nclasses = c->nclasses;
   if (!r->sgm && !(r->sgm = malloc(sizeof *r->sgm * (size_t)(r->csgm = 16)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -7836,6 +7838,7 @@ static void lr_sg_makers(Compiler *c) {
       if (sing) lr_sgm_add(c, id, who, 1);
     }
   }
+  mtab_leave(c);
 }
 /* When form node, which makes a module's singleton class whenever it runs
    (sure) or may, runs as of p: ELAB_YES surely before p, ELAB_NO surely

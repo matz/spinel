@@ -9894,7 +9894,7 @@ static void synth_struct_each(Compiler *c) {
     ClassInfo *cls = &c->classes[ci];
     /* Data is not Enumerable: each/each_pair/each_with_index are Struct's */
     if (!cls->is_struct || cls->is_data || cls->nmembers == 0) continue;
-    if (comp_method_in_class(c, ci, "each") >= 0) continue;
+    if (call_target(c, -1, ci, "each", CT_OWN | CT_SHARED, NULL) >= 0) continue;
     /* a member of an iterator's name is read by its accessor, which the
        struct defines over the one it inherits (#8203) */
     if (!struct_has_member(cls, "each")) {
@@ -9927,7 +9927,7 @@ static void synth_struct_each(Compiler *c) {
     walk_scope(c, body, c->nscopes - 1, ci);
     }
     /* def each_pair; yield :m1, @m1; ...; self; end */
-    if (comp_method_in_class(c, ci, "each_pair") < 0 && !struct_has_member(cls, "each_pair")) {
+    if (call_target(c, -1, ci, "each_pair", CT_OWN | CT_SHARED, NULL) < 0 && !struct_has_member(cls, "each_pair")) {
       int pst[65]; int pn = 0;
       for (int j = 0; j < cls->nmembers && pn < 64; j++) {
         int sy = nt_new_node(nt, "SymbolNode");
@@ -9964,7 +9964,7 @@ static void synth_struct_each(Compiler *c) {
     /* def each_with_index; yield @m1, 0; yield @m2, 1; ...; self; end
        (returns the receiver, unlike the __enum_to_a redirect which would
        return the flat member array). The index is a literal per member. */
-    if (comp_method_in_class(c, ci, "each_with_index") < 0 && !struct_has_member(cls, "each_with_index")) {
+    if (call_target(c, -1, ci, "each_with_index", CT_OWN | CT_SHARED, NULL) < 0 && !struct_has_member(cls, "each_with_index")) {
       int wst[65]; int wn = 0;
       for (int j = 0; j < cls->nmembers && wn < 64; j++) {
         int ivr = nt_new_node(nt, "InstanceVariableReadNode");
@@ -10115,7 +10115,7 @@ static void synth_enum_to_a(Compiler *c) {
           /* a class that mixes Enumerable in still gets the materializer even
              when its #each never yields: the mixin is simply empty (#3755) */
           an_class_includes_enumerable(c, m->class_id))) continue;
-    if (comp_method_in_class(c, m->class_id, "__enum_to_a") >= 0) continue;
+    if (call_target(c, -1, m->class_id, "__enum_to_a", CT_OWN | CT_SHARED, NULL) >= 0) continue;
     /* a module's methods are compiled into each class that includes it,
        which gets its own materializer; the module has no instances, and
        one of its own called methods that exist only in those copies */
@@ -10135,7 +10135,7 @@ static void synth_enum_to_a(Compiler *c) {
        only at run time: Enumerable packs only a yield of several values, so
        the collector takes them all as a rest and packs by the count */
     int ymany = 0, yone = 0, ysplat = 0;
-    { int esi = comp_method_in_class(c, cls[k], "each");
+    { int esi = call_target(c, -1, cls[k], "each", CT_OWN | CT_SHARED, NULL);
       if (esi >= 0)
         for (int nid = 0; nid < nt->count; nid++) {
           if (c->nscope[nid] != esi) continue;
@@ -10357,7 +10357,7 @@ static void synth_to_enum_generators(Compiler *c) {
     for (int k = 0; k < nnames; k++) if (sp_streq(names[k], m->name)) { hit = 1; break; }
     if (!hit) continue;
     char hname[160]; snprintf(hname, sizeof hname, "__to_enum_%s", m->name);
-    if (comp_method_in_class(c, m->class_id, hname) >= 0) continue;   /* already synthesized */
+    if (call_target(c, -1, m->class_id, hname, CT_OWN | CT_SHARED, NULL) >= 0) continue;   /* already synthesized */
     int dup = 0;
     for (int k = 0; k < ntr; k++)
       if (tc[k] == m->class_id && sp_streq(tm[k], m->name)) { dup = 1; break; }
@@ -35475,7 +35475,9 @@ static int struct_new_member_arg(Compiler *c, int u, int ci, int a) {
 static int promote_ivar_handle_stores(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, u) {
+    mtab_push_in(c, u);   /* (what the call's name asks of the tables is the call's) */
     const char *nm = nt_str(nt, u, "name");
     int recv = nt_ref(nt, u, "receiver");
     if (!nm || recv < 0 || nt_ref(nt, u, "block") >= 0) continue;
@@ -35506,6 +35508,7 @@ static int promote_ivar_handle_stores(Compiler *c) {
       if (v >= 0) changed |= dyn_pull_arg(c, v, 1);
     }
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 /* Pull the String variables a call gathers into a rest whose elements the
@@ -37077,7 +37080,7 @@ static const PdnEnt *pdn_lookup(Compiler *c, const char *cn) {
       e->sc = g; e->sc[e->nsc++] = si;
     }
   for (int ci = 0; ci < c->nclasses; ci++)
-    if (comp_reader_in_chain(c, ci, cn, NULL)) {
+    if (call_attr_target(c, -1, ci, cn, CT_ATTR | CT_SHARED, NULL)) {
       int *g = realloc(e->cls, sizeof(int) * (size_t)(e->ncl + 1));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       e->cls = g; e->cls[e->ncl++] = ci;
@@ -45007,8 +45010,11 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
 }
 void expand_static_splat_args(Compiler *c, int from, int count) {
   NodeTable *nt = (NodeTable *)c->nt;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = from; id < count; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     int an = nt_ref(nt, id, "arguments");
     if (an < 0) continue;
     int argc = 0; const int *argv0 = nt_arr(nt, an, "arguments", &argc);
@@ -45182,6 +45188,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     comp_grow_node_arrays(c);
     c->nscope[na] = c->nscope[id];
   }
+  mtab_pop(c, mt_pass);
 }
 
 /* The names the program gives a method taking no keywords by an alias, a
@@ -48193,8 +48200,11 @@ static void rewrite_array_subclass_calls(Compiler *c) {
   if (!c->has_arysub) return;
   const NodeTable *nt = c->nt;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     NodeKind k = nt_kind(nt, id);
+    if (k == NK_CallNode) mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     if (k == NK_CallNode) arysub_builtin_alias_recv_call(c, id);
     /* where an Array is wanted, an Array subclass instance is read as its
        Array (infer_type, emit_expr): a splat's operand, a destructured value,
@@ -48263,6 +48273,7 @@ static void rewrite_array_subclass_calls(Compiler *c) {
       if (nt_kind(nt, id) == NK_CallNode) rewrite_time_maker_class_local(c, id);
     }
   }
+  mtab_pop(c, mt_pass);
   if (nt->count > n0) {
     int m0 = nt->count;
     expand_static_splat_args(c, n0, nt->count);
@@ -49724,15 +49735,16 @@ static void desugar_literal_const_get(Compiler *c) {
 /* A step of an analysis phase: `call` runs with the pass's name `nm` on the
    node table, the name the nodes it appends are named after (nt_set_pass).
    The name before the step is back after it, so a step inside a step names
-   what it appends itself. AN_STEP is an int expression, AN_STEP_V a
+   what it appends itself; so is the check's node frame (--method-table-check), which a pass
+   that returns from inside a node loop leaves set. A bracket a step leaves open is reported. AN_STEP is an int expression, AN_STEP_V a
    statement. The phase lists call their passes through these rather than
    through AN_PASS, whose memo boundaries, tree skip and --timing rows are
    the fixpoint's: around the phase lists' calls they would change what the
    memo keeps, which passes run, and the --timing report. */
-#define AN_STEP(nm, call) ({ const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); int _str = (call); \
-  nt_set_pass((NodeTable *)c->nt, _stp); _str; })
-#define AN_STEP_V(nm, call) do { const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); call; \
-  nt_set_pass((NodeTable *)c->nt, _stp); } while (0)
+#define AN_STEP(nm, call) ({ const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); MtabMark _stm = mtab_save(c); int _str = (call); \
+  mtab_step_end(c, _stm, (nm)); nt_set_pass((NodeTable *)c->nt, _stp); _str; })
+#define AN_STEP_V(nm, call) do { const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); MtabMark _stm = mtab_save(c); call; \
+  mtab_step_end(c, _stm, (nm)); nt_set_pass((NodeTable *)c->nt, _stp); } while (0)
 
 /* `&(expr)`: the parentheses carry no meaning for a block argument, but they
    hide the expression from every shape check downstream (`&blk` as a proc
@@ -50998,7 +51010,7 @@ static int ur_iter_overridden(Compiler *c, const char *it) {
     int contained = 0;
     for (int a = k, d = 0; a >= 0 && d < 64 && !contained; a = c->classes[a].parent, d++)
       contained = c->classes[a].name && str_in(c->classes[a].name, builtins);
-    if (contained && comp_method_in_chain(c, k, it, NULL) >= 0) return 1;
+    if (contained && call_target(c, -1, k, it, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
   }
   return 0;
 }

@@ -53,9 +53,20 @@ void mtab_build_depth(Compiler *c, int by) {
   if (c->mtab) c->mtab->build += by;
 }
 
+int mtab_framed(Compiler *c) {
+  return c->mtab && c->mtab->frame >= 0;
+}
+
 MtabMark mtab_mark(Compiler *c) {
   struct MethodTableCheck *m = c->mtab;
   return m ? (MtabMark){ m->frame, m->depth, m->build } : (MtabMark){ -1, 0, 0 };
+}
+
+void mtab_step_report(Compiler *c, MtabMark was, const char *pass) {
+  struct MethodTableCheck *m = c->mtab;
+  if (m && (m->depth != was.depth || m->build != was.build))
+    fprintf(stderr, "method-table-check: unbalanced bracket in %s\n", pass);
+  mtab_unwind(c, was);
 }
 
 void mtab_unwind(Compiler *c, MtabMark was) {

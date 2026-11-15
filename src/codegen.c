@@ -4636,19 +4636,21 @@ void emit_poly_iter_obj_reject(Compiler *c, int call, int tv, const char *name, 
 /* ... the same, its NoMethodError naming `shown` (the method a builtin
    definition's walk serves, enum_walk_name) */
 void emit_poly_iter_obj_reject_as(Compiler *c, int call, int tv, const char *name, const char *shown, Buf *b) {
+  MtabMark mt_was = mtab_push_in(c, call);   /* (what the arms ask of the tables is the call's) */
   Buf arms; memset(&arms, 0, sizeof arms);
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
     if (!ci->instantiated || ci->is_native_class || is_builtin_reopen(ci->name)) continue;
     if (!is_plain_builtin_superclass(class_builtin_superclass(c, k))) continue;
     if (comp_enum_behind(c, k) || call_target(c, call, k, name, 0, NULL) >= 0 ||
-        comp_method_in_chain(c, k, "method_missing", NULL) >= 0) continue;
+        call_target(c, -1, k, METHOD_MISSING_NAME, CT_METHODS | CT_SHARED, NULL) >= 0) continue;
     buf_printf(&arms, " case %d:", k);
   }
   if (arms.p && arms.p[0])
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ) switch (_t%d.cls_id) {%s sp_raise_poly_nomethod(\"%s\", _t%d); default: break; }\n",
                tv, tv, arms.p, shown, tv);
   free(arms.p);
+  mtab_pop(c, mt_was);
 }
 
 /* A boxed receiver's text `rb` that call `call`'s builtin iteration `name`
@@ -4678,7 +4680,7 @@ void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
     /* a never-instantiated class can't be the runtime class (#1608) */
     if (!c->classes[k].instantiated) continue;
-    int mi = comp_method_in_chain(c, k, "to_a", NULL);
+    int mi = call_target(c, -1, k, "to_a", CT_METHODS | CT_SHARED, NULL);
     /* a to_a forwarding its block has a proc-form clone; that is the emitted
        function for a call from poly dispatch (#3399) */
     { int pfi = mi >= 0 ? scope_proc_form_of(c, mi) : -1; if (pfi >= 0) mi = pfi; }
@@ -12134,10 +12136,14 @@ const char *class_ruby_name(Compiler *c, int ci) {
    defaults (desugar_noarg_display_wrappers). */
 int display_method_scope(Compiler *c, int cid, int want_inspect, int *defcls) {
   int d = cid;
-  int mi = comp_method_in_chain(c, cid, want_inspect ? "inspect" : "to_s", &d);
+  MethodLookup ml_mi = { .def_class = d };
+  int mi = call_target(c, -1, cid, want_inspect ? "inspect" : "to_s", CT_METHODS | CT_SHARED, &ml_mi);
+  d = ml_mi.def_class;
   if (mi >= 0 && c->scopes[mi].nparams > 0) {
     int d2 = cid;
-    int w = comp_method_in_chain(c, cid, want_inspect ? "__noarg inspect" : "__noarg to_s", &d2);
+    MethodLookup ml_w = { .def_class = d2 };
+    int w = call_target(c, -1, cid, want_inspect ? "__noarg inspect" : "__noarg to_s", CT_METHODS | CT_SHARED, &ml_w);
+    d2 = ml_w.def_class;
     if (w >= 0) { mi = w; d = d2; }
   }
   if (defcls) *defcls = d;
@@ -12869,9 +12875,9 @@ static const char *struct_default_text_fn(Compiler *c, int cid) {
    reach its default text, whatever the order of definition. */
 static void emit_struct_display_decls(Compiler *c, int cid, Buf *b) {
   const char *cn = c->classes[cid].c_name;
-  if (comp_method_in_chain(c, cid, "inspect", NULL) < 0)
+  if (call_target(c, -1, cid, "inspect", CT_METHODS | CT_SHARED, NULL) < 0)
     buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self);\n", cn, cn);
-  if (comp_method_in_chain(c, cid, "to_s", NULL) < 0)
+  if (call_target(c, -1, cid, "to_s", CT_METHODS | CT_SHARED, NULL) < 0)
     buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self);\n", cn, cn);
   if (sp_streq(struct_default_text_fn(c, cid), "_struct_inspect"))
     buf_printf(b, "static const char *sp_%s__struct_inspect(sp_%s *self);\n", cn, cn);
@@ -14005,12 +14011,18 @@ static void emit_obj_struct_values_dispatch(Compiler *c, Buf *b) {
    container was opaque to the poly machinery, which answered for an empty
    collection (0 / nil / false) (#3761). */
 static int obj_to_a_method(Compiler *c, int cid, int *defc) {
-  int mi = comp_method_in_chain(c, cid, "to_a", defc);
+  MethodLookup ml_mi = { .def_class = defc ? *defc : -1 };
+  int mi = call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
+  if (defc) *defc = ml_mi.def_class;
   if (mi < 0) {
     /* `alias to_a entries`: the method the alias names */
     int start = cid;
     const char *tn = comp_resolve_alias_at(c, cid, "to_a", &start);
-    if (!sp_streq(tn, "to_a")) mi = comp_method_in_chain(c, start, tn, defc);
+    if (!is_to_a_name(tn)) {
+      MethodLookup ml_tn = { .def_class = defc ? *defc : -1 };
+      mi = call_target(c, -1, start, tn, CT_METHODS | CT_SHARED, &ml_tn);
+      if (defc) *defc = ml_tn.def_class;
+    }
   }
   { int pfi = mi >= 0 ? scope_proc_form_of(c, mi) : -1; if (pfi >= 0) mi = pfi; }   /* the emitted clone (#3399) */
   char tail[64];
@@ -14018,7 +14030,9 @@ static int obj_to_a_method(Compiler *c, int cid, int *defc) {
   /* Not for a Data class: CRuby's Data has no #to_a at all (Struct does), and
      answering its members here turned that NameError into an array. */
   if (cid >= 0 && cid < c->nclasses && c->classes[cid].is_data) return -1;
-  mi = comp_method_in_chain(c, cid, "__enum_to_a", defc);
+  MethodLookup ml_ea = { .def_class = defc ? *defc : -1 };
+  mi = call_target(c, -1, cid, "__enum_to_a", CT_METHODS | CT_SHARED, &ml_ea);
+  if (defc) *defc = ml_ea.def_class;
   if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return mi;
   return -1;
 }
@@ -14132,9 +14146,11 @@ static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
    define a no-arg to_ary get a case; sp_kernel_array falls to the to_a hook
    and then to wrapping, so an absent dispatch costs nothing (#4187). */
 static int obj_to_ary_method(Compiler *c, int cid, int *defc) {
-  int mi = comp_method_in_chain(c, cid, "to_ary", defc);
+  MethodLookup ml_mi = { .def_class = defc ? *defc : -1 };
+  int mi = call_target(c, -1, cid, "to_ary", CT_METHODS | CT_SHARED, &ml_mi);
+  if (defc) *defc = ml_mi.def_class;
   /* (an undef_method / undef of it leaves the class without one) */
-  if (mi >= 0 && comp_is_undeffed_in_chain(c, cid, "to_ary")) return -1;
+  if (mi >= 0 && cplan_undefined(c, cid, 0, "to_ary")) return -1;
   if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return mi;
   return -1;
 }
@@ -14216,14 +14232,18 @@ void emit_obj_to_ary_call(Compiler *c, int mi, int defc, const char *v, Buf *b) 
 int comp_deconstruct_method(Compiler *c, int pat, int cid, int *defcls) {
   int dc = -1;
   MtabMark mt_was = mtab_push_in(c, pat);   /* (pat, a pattern node, owns the call; -1: no pattern) */
-  int mi = comp_method_in_chain(c, cid, "deconstruct", &dc);
+  MethodLookup ml_mi = { .def_class = dc };
+  int mi = call_target(c, -1, cid, "deconstruct", CT_METHODS | CT_SHARED, &ml_mi);
+  dc = ml_mi.def_class;
   if (mi < 0 || dc < 0) { mtab_pop(c, mt_was); return -1; }
   ClassInfo *dci = &c->classes[dc];
   int dn = c->scopes[mi].def_node;
   int fwd = dn >= 0 && nt_int(c->nt, dn, "alias_forwarder", 0);
   for (int k = 0; fwd && k < dci->naliases; k++)
     if (dci->alias_new[k] && sp_streq(dci->alias_new[k], "deconstruct#inherited")) {
-      mi = comp_method_in_chain(c, dc, "deconstruct#inherited", &dc);
+      MethodLookup ml_mi = { .def_class = dc };
+      mi = call_target(c, -1, dc, "deconstruct#inherited", CT_METHODS | CT_SHARED, &ml_mi);
+      dc = ml_mi.def_class;
       break;
     }
   mtab_pop(c, mt_was);
@@ -14233,7 +14253,9 @@ int comp_deconstruct_method(Compiler *c, int pat, int cid, int *defcls) {
 /* Class cid's #deconstruct_keys: the pattern pat's call (see comp_deconstruct_method). */
 int comp_deconstruct_keys_method(Compiler *c, int pat, int cid, int *defcls) {
   MtabMark mt_was = mtab_push_in(c, pat);
-  int mi = comp_method_in_chain(c, cid, "deconstruct_keys", defcls);
+  MethodLookup ml_mi = { .def_class = defcls ? *defcls : -1 };
+  int mi = call_target(c, -1, cid, "deconstruct_keys", CT_METHODS | CT_SHARED, &ml_mi);
+  if (defcls) *defcls = ml_mi.def_class;
   mtab_pop(c, mt_was);
   return mi;
 }
@@ -14393,7 +14415,9 @@ static int conv_bridge_callee(Compiler *c, int i, const char *mname, TyKind want
   if (any_shape != 1 && comp_ty_value_obj(c, ty_object(i))) return -1;
   if (comp_class_is_module(c, ci2)) return -1;   /* no instances */
   int tdef = -1;
-  int tmi = comp_method_in_chain(c, i, mname, &tdef);
+  MethodLookup ml_tmi = { .def_class = tdef };
+  int tmi = call_target(c, -1, i, mname, CT_METHODS | CT_SHARED, &ml_tmi);
+  tdef = ml_tmi.def_class;
   /* a no-parameter method only (a `&block` parameter is not in nparams; the
      bridges pass it as no block, which is what a bare call passes). A method
      that yields is inlined at its call sites and has no function of its own
@@ -14955,7 +14979,9 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     const char *mnames[2] = { "to_s", "inspect" };
     for (int m = 0; m < 2; m++) {
       int fdef = -1;
-      int fmi = comp_method_in_chain(c, i, mnames[m], &fdef);
+      MethodLookup ml_fmi = { .def_class = fdef };
+      int fmi = call_target(c, -1, i, mnames[m], CT_METHODS | CT_SHARED, &ml_fmi);
+      fdef = ml_fmi.def_class;
       /* (a to_s answering a String subclass instance returns its struct) */
       TyKind fret = fmi >= 0 ? (TyKind)c->scopes[fmi].ret : TY_UNKNOWN;
       int fstrsub = m == 0 && !is_val && obj_str_ret_strsub(c, i, 0);
@@ -15036,7 +15062,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        method owning inspect does not change to_s. */
     if (tci->is_struct || tci->is_data) {
       buf_printf(b, "    case %d: return sp_%s_%s((sp_%s *)p);\n", i, tci->c_name,
-                 comp_method_in_chain(c, i, "to_s", NULL) < 0 ? "to_s" : "inspect", tci->c_name);
+                 call_target(c, -1, i, "to_s", CT_METHODS | CT_SHARED, NULL) < 0 ? "to_s" : "inspect", tci->c_name);
       continue;
     }
     /* an Array subclass instance's #to_s is its Array's (#7449) */
@@ -17502,8 +17528,8 @@ static const char *const cmp_lack_ops[] = { "<", "<=", ">", ">=", "between?", "c
    define method_missing? */
 static int class_opens_cmp(Compiler *c, int k) {
   if (class_is_comparable(c, k)) return 1;
-  if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 1;
-  for (int u = 0; cmp_lack_ops[u]; u++) if (comp_method_in_chain(c, k, cmp_lack_ops[u], NULL) >= 0) return 1;
+  if (call_target(c, -1, k, METHOD_MISSING_NAME, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+  for (int u = 0; cmp_lack_ops[u]; u++) if (call_target(c, -1, k, cmp_lack_ops[u], CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
   return 0;
 }
 
@@ -17586,12 +17612,14 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     else if (!c->classes[k].instantiated ||
              class_default_cmp(c, k) == BDC_BUILTIN) continue;
     int defcls = -1;
-    int mi = comp_method_in_chain(c, k, "<=>", &defcls);
+    MethodLookup ml_mi = { .def_class = defcls };
+    int mi = call_target(c, -1, k, "<=>", CT_METHODS | CT_SHARED, &ml_mi);
+    defcls = ml_mi.def_class;
     if (mi < 0) {
       if (!bcase && class_is_comparable(c, k)) {
         int eq = class_default_cmp(c, k) == BDC_EQUAL &&
                  !comp_comparable_answers_first(c, k, "==") &&
-                 comp_method_in_chain(c, k, "==", NULL) >= 0;
+                 call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL) >= 0;
         buf_printf(b, "    case %d: *comparable = %s(a, b); return 0;\n",
                    k, eq ? "sp_poly_rb_equal" : "sp_poly_equal");
       }
@@ -17815,7 +17843,9 @@ static int user_dispatch_arg(Compiler *c, Scope *m, int pi, const char *v,
 
 /* Whether class k answers a user `[]=` the aset table below can call. */
 static int user_aset_scope(Compiler *c, int k, int *defcls) {
-  int mi = comp_method_in_chain(c, k, "[]=", defcls);
+  MethodLookup ml_mi = { .def_class = defcls ? *defcls : -1 };
+  int mi = call_target(c, -1, k, "[]=", CT_METHODS | CT_SHARED, &ml_mi);
+  if (defcls) *defcls = ml_mi.def_class;
   if (mi < 0) return -1;
   Scope *m = &c->scopes[mi];
   if (!m->reachable || m->yields || scope_is_shadowed(c, mi) ||
@@ -17963,7 +17993,7 @@ static void emit_user_eql_dispatch(Compiler *c, Buf *b) {
 /* 1 if a class the eql? table dispatches defines eql? */
 static int program_has_user_eql(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++)
-    if (c->classes[k].instantiated && comp_method_in_chain(c, k, "eql?", NULL) >= 0) return 1;
+    if (c->classes[k].instantiated && call_target(c, -1, k, "eql?", CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
   return 0;
 }
 /* The operator table behind both: a cls_id switch, then each operator in
@@ -17986,14 +18016,16 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
     else if (!c->classes[k].instantiated) continue;
     int any = 0;
     for (int u = 0; uops[u] && !any; u++)
-      if (comp_method_in_chain(c, k, uops[u], NULL) >= 0) any = 1;
+      if (call_target(c, -1, k, uops[u], CT_METHODS | CT_SHARED, NULL) >= 0) any = 1;
     if (!any) continue;
     int cid = k;
     if (bcase) buf_printf(b, "    case %s: {\n", bcase);
     else buf_printf(b, "    case %d: {\n", cid);
     for (int u = 0; uops[u]; u++) {
       int defcls = -1;
-      int mi = comp_method_in_chain(c, k, uops[u], &defcls);
+      MethodLookup ml_mi = { .def_class = defcls };
+      int mi = call_target(c, -1, k, uops[u], CT_METHODS | CT_SHARED, &ml_mi);
+      defcls = ml_mi.def_class;
       if (mi < 0) continue;
       if (bcase && defcls != k) continue;   /* the reopening's own */
       Scope *m = &c->scopes[mi];
@@ -18046,9 +18078,11 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
        Without an arm the boxed path fell through to identity and said false
        for two equal values (#3501). Only with the module included: a class
        defining `<=>` alone compares by identity (class_is_comparable). */
-    if (derive_eq && !bcase && comp_method_in_chain(c, k, "==", NULL) < 0 && class_is_comparable(c, k)) {
+    if (derive_eq && !bcase && call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL) < 0 && class_is_comparable(c, k)) {
       int cmp_defcls = -1;
-      int cmp_mi = comp_method_in_chain(c, k, "<=>", &cmp_defcls);
+      MethodLookup ml_cmp_mi = { .def_class = cmp_defcls };
+      int cmp_mi = call_target(c, -1, k, "<=>", CT_METHODS | CT_SHARED, &ml_cmp_mi);
+      cmp_defcls = ml_cmp_mi.def_class;
       if (cmp_mi >= 0) {
         Scope *cm2 = &c->scopes[cmp_mi];
         if (cm2->reachable && !cm2->yields && !scope_is_shadowed(c, cmp_mi) &&
@@ -18134,9 +18168,9 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
    runtime finds the IO an instance answers (sp_user_to_io_hook). */
 int class_to_io_dispatched(Compiler *c, int k) {
   if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated) return 0;
-  int defcls = -1;
-  int mi = comp_method_in_chain(c, k, "to_io", &defcls);
-  if (mi < 0 || defcls < 0) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, -1, k, "to_io", CT_METHODS | CT_SHARED, &ml);
+  if (mi < 0 || ml.def_class < 0) return 0;
   Scope *m = &c->scopes[mi];
   if (!m->reachable || m->yields || m->nparams != 0) return 0;
   if (m->ret != TY_IO && m->ret != TY_UNKNOWN && m->ret != TY_POLY) return 0;
@@ -18149,7 +18183,9 @@ int class_to_io_dispatched(Compiler *c, int k) {
 static int class_succ_dispatched(Compiler *c, int k) {
   if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) return 0;
   int defcls = -1;
-  int mi = comp_method_in_chain(c, k, "succ", &defcls);
+  MethodLookup ml_mi = { .def_class = defcls };
+  int mi = call_target(c, -1, k, "succ", CT_METHODS | CT_SHARED, &ml_mi);
+  defcls = ml_mi.def_class;
   if (mi < 0 || defcls < 0) return 0;
   Scope *m = &c->scopes[mi];
   if (!m->reachable || m->yields || m->nparams != 0 || m->rest_idx >= 0) return 0;
@@ -18169,7 +18205,9 @@ static int class_range_linear(Compiler *c, int k) {
     if (sn && sp_streq(sn, "Numeric")) return 1;
   }
   int defcls = -1;
-  int mi = comp_method_in_chain(c, k, "to_int", &defcls);
+  MethodLookup ml_mi = { .def_class = defcls };
+  int mi = call_target(c, -1, k, "to_int", CT_METHODS | CT_SHARED, &ml_mi);
+  defcls = ml_mi.def_class;
   if (mi < 0 || defcls < 0) return 0;
   Scope *m = &c->scopes[mi];
   if (!m->reachable || m->yields || m->nparams != 0 || m->rest_idx >= 0) return 0;
@@ -18228,8 +18266,9 @@ static void emit_user_to_io_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_to_io_dispatched(c, k)) continue;
-    int defcls = -1;
-    int mi = comp_method_in_chain(c, k, "to_io", &defcls);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, -1, k, "to_io", CT_METHODS | CT_SHARED, &ml);
+    int defcls = ml.def_class;
     Scope *m = &c->scopes[mi];
     const char *dcn = c->classes[defcls].c_name;
     /* Non-yielding &block: the prototype includes a sp_Proc * parameter
@@ -18336,8 +18375,8 @@ static int hash_reader_ivar(Compiler *c, int k, int *rdcls) {
 
 static int class_is_hashkey(Compiler *c, int k) {
   if (!c->classes[k].instantiated) return 0;
-  int h_mi = comp_method_in_chain(c, k, "hash", NULL);
-  int e_mi = comp_method_in_chain(c, k, "eql?", NULL);
+  int h_mi = call_target(c, -1, k, "hash", CT_METHODS | CT_SHARED, NULL);
+  int e_mi = call_target(c, -1, k, "eql?", CT_METHODS | CT_SHARED, NULL);
   int rd = -1;
   if (e_mi < 0 || (h_mi < 0 && hash_reader_ivar(c, k, &rd) < 0)) return 0;
 
@@ -18359,8 +18398,8 @@ static int class_is_hashkey(Compiler *c, int k) {
 static int class_is_hashonly_key(Compiler *c, int k) {
   ClassInfo *ci = &c->classes[k];
   if (!ci->instantiated || ci->is_struct || ci->is_data || ci->is_value_type) return 0;
-  int h_mi = comp_method_in_chain(c, k, "hash", NULL);
-  if (h_mi < 0 || comp_method_in_chain(c, k, "eql?", NULL) >= 0) return 0;
+  int h_mi = call_target(c, -1, k, "hash", CT_METHODS | CT_SHARED, NULL);
+  if (h_mi < 0 || call_target(c, -1, k, "eql?", CT_METHODS | CT_SHARED, NULL) >= 0) return 0;
   Scope *h_m = &c->scopes[h_mi];
   return h_m->nparams == 0 && (h_m->ret == TY_INT || h_m->ret == TY_POLY);
 }
@@ -18371,9 +18410,9 @@ static int class_is_hashonly_key(Compiler *c, int k) {
 static int class_is_valuekey(Compiler *c, int k) {
   ClassInfo *ci = &c->classes[k];
   return ci->instantiated && (ci->is_struct || ci->is_data) &&
-         comp_method_in_chain(c, k, "==", NULL) < 0 &&
-         comp_method_in_chain(c, k, "eql?", NULL) < 0 &&
-         comp_method_in_chain(c, k, "hash", NULL) < 0;
+         call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL) < 0 &&
+         call_target(c, -1, k, "eql?", CT_METHODS | CT_SHARED, NULL) < 0 &&
+         call_target(c, -1, k, "hash", CT_METHODS | CT_SHARED, NULL) < 0;
 }
 
 /* Generate sp_gen_obj_hash / sp_gen_obj_eql: cls_id switches calling each such
@@ -18390,7 +18429,9 @@ static void emit_obj_hashkey_dispatch(Compiler *c, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_is_hashkey(c, k) && !class_is_hashonly_key(c, k)) continue;
     int defcls = -1;
-    int mi = comp_method_in_chain(c, k, "hash", &defcls);
+    MethodLookup ml_mi = { .def_class = defcls };
+    int mi = call_target(c, -1, k, "hash", CT_METHODS | CT_SHARED, &ml_mi);
+    defcls = ml_mi.def_class;
     if (mi < 0) {
       /* hash is a reader: its ivar is the hash, an Integer as it is, and
          anything else -- nil, or a boxed non-Integer -- CRuby's TypeError */
@@ -18451,7 +18492,9 @@ static void emit_obj_hashkey_dispatch(Compiler *c, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_is_hashkey(c, k)) continue;
     int defcls = -1;
-    int mi = comp_method_in_chain(c, k, "eql?", &defcls);
+    MethodLookup ml_mi = { .def_class = defcls };
+    int mi = call_target(c, -1, k, "eql?", CT_METHODS | CT_SHARED, &ml_mi);
+    defcls = ml_mi.def_class;
     Scope *m = &c->scopes[mi];   /* signature validated in class_is_hashkey */
     if (!m->reachable) continue;   /* nothing compares two keys with it */
     LocalVar *pp = scope_local(m, m->pnames[0]);
@@ -18513,7 +18556,7 @@ static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
     if (!ci->instantiated || !(ci->is_struct || ci->is_data)) continue;
     /* a user-defined == wins; leave those to their own dispatch (they fall
        through to FALSE here, unchanged) */
-    if (comp_method_in_chain(c, k, "==", NULL) >= 0) continue;
+    if (call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL) >= 0) continue;
     buf_printf(b, "    case %d: { sp_%s *_a = (sp_%s *)a.v.p, *_b = (sp_%s *)b.v.p; if (!_a || !_b) return _a == _b; return ",
                k, ci->c_name, ci->c_name, ci->c_name);
     if (ci->nmembers == 0) buf_puts(b, "1");
@@ -18535,7 +18578,7 @@ static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
     if (!ci->instantiated || !class_is_exc_subclass(c, k)) continue;
-    if (comp_method_in_chain(c, k, "==", NULL) >= 0) continue;
+    if (call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL) >= 0) continue;
     buf_printf(b, "    case %d: return sp_exc_eq((sp_Exception *)a.v.p, (sp_Exception *)b.v.p);\n",
                k);
   }
@@ -18549,7 +18592,9 @@ static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
     ClassInfo *ci = &c->classes[k];
     if (!ci->instantiated) continue;
     int defcls = -1;
-    int mi = comp_method_in_chain(c, k, "==", &defcls);
+    MethodLookup ml_mi = { .def_class = defcls };
+    int mi = call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, &ml_mi);
+    defcls = ml_mi.def_class;
     if (mi < 0 || !c->scopes[mi].reachable || c->scopes[mi].ret != TY_BOOL) continue;
     Scope *m = &c->scopes[mi];
     int api = arm_arg_param(c, m);
@@ -20813,7 +20858,7 @@ static const char *const range_rat_walk_names[] = {
    holds floored. */
 static int range_rat_walk_own_def(Compiler *c, const char *cls, const char *name) {
   int ci = comp_builtin_class_named(c, cls);
-  int mi = ci >= 0 ? comp_method_in_chain(c, ci, name, NULL) : -1;
+  int mi = ci >= 0 ? call_target(c, -1, ci, name, CT_METHODS | CT_SHARED, NULL) : -1;
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }
@@ -21611,8 +21656,12 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
    override has no body. */
 static int exc_text_method(Compiler *c, int i, int want_message, int *dcls) {
   int dmsg = -1, dtos = -1;
-  int mi_msg = comp_method_in_chain(c, i, "message", &dmsg);
-  int mi_tos = comp_method_in_chain(c, i, "to_s", &dtos);
+  MethodLookup ml_mi_msg = { .def_class = dmsg };
+  int mi_msg = call_target(c, -1, i, "message", CT_METHODS | CT_SHARED, &ml_mi_msg);
+  dmsg = ml_mi_msg.def_class;
+  MethodLookup ml_mi_tos = { .def_class = dtos };
+  int mi_tos = call_target(c, -1, i, "to_s", CT_METHODS | CT_SHARED, &ml_mi_tos);
+  dtos = ml_mi_tos.def_class;
   if (mi_msg >= 0 && !c->scopes[mi_msg].reachable) mi_msg = -1;
   if (mi_tos >= 0 && !c->scopes[mi_tos].reachable) mi_tos = -1;
   if (want_message && mi_msg >= 0) { *dcls = dmsg; return mi_msg; }
@@ -23766,7 +23815,7 @@ static void prepare_obj_cmp_dispatch(Compiler *c) {
     if (!c->classes[k].instantiated && !breopen) continue;
     if (!breopen && class_default_cmp(c, k) == BDC_BUILTIN) continue;
     if (!breopen && class_is_comparable(c, k)) c->gen_comparable = 1;
-    if (comp_method_in_chain(c, k, "<=>", NULL) >= 0 || c->gen_comparable) g_has_user_cmp = 1;
+    if (call_target(c, -1, k, "<=>", CT_METHODS | CT_SHARED, NULL) >= 0 || c->gen_comparable) g_has_user_cmp = 1;
   }
 }
 
@@ -23991,6 +24040,47 @@ static void emit_toplevel_fns(Compiler *c, Buf *body) {
   ext_emit_method_tables(c, body);
 }
 
+/* Does class k define an operator a boxed value reaches through the dispatch table (sp_user_binop_dispatch's
+   switch: no call stands behind it, so the table is asked with no site)? */
+static int class_has_user_binop(Compiler *c, int k) {
+  static const char *const uops[] = {
+    "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^", "==", "[]", NULL };
+  /* A class that defines a #coerce needs the table for its COMPARISONS too:
+     the protocol routes `5 < obj` to the boxed entry, which reaches the
+     class through this hook. Only for such a class, though -- an ordinary
+     Comparable defines <=> and no coerce, is never reached this way, and
+     would only gain a dispatch table it has no use for. */
+  static const char *const cops[] = { "<", ">", "<=", ">=", "<=>", NULL };
+  /* a reopened Time or Range is instantiated by the runtime itself, and
+     its operators reach boxed values through the table too */
+  const char *kn = c->classes[k].name;
+  int breopen = kn && is_builtin_reopen(kn) && is_range_or_time_class(kn);
+  if (!c->classes[k].instantiated && !breopen) return 0;
+  for (int u = 0; uops[u]; u++)
+    if (call_target(c, -1, k, uops[u], CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+  /* A class's own <, >, <= or >= reaches a boxed receiver through the
+     table even without coerce; sp_poly_cmp cannot supply its ordering. */
+  for (int u = 0; cops[u]; u++)
+    if (is_cmp_op(cops[u]) && call_target(c, -1, k, cops[u], CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+  /* a `<=>` with no `==` is Comparable's equality, which the table
+     derives: a boxed `m == n` (a block parameter, a hash value, a
+     `when FIVE`) reaches it only through the table */
+  if (call_target(c, -1, k, "<=>", CT_METHODS | CT_SHARED, NULL) >= 0 && call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL) < 0) return 1;
+  if (!class_has_coerce_shape(c, k)) return 0;
+  for (int u = 0; cops[u]; u++)
+    if (call_target(c, -1, k, cops[u], CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+  return 0;
+}
+/* Does class k open the field-wise or user == the object dispatch (include?, index, uniq) must honor? */
+static int class_gen_valeq(Compiler *c, int k) {
+  if (!c->classes[k].instantiated) return 0;
+  /* Struct/Data auto field-wise == (no user override). */
+  int mi = call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL);
+  if ((c->classes[k].is_struct || c->classes[k].is_data) && mi < 0) return 1;
+  /* A reachable, bool-returning user == is dispatched so include?/index/uniq
+     honor it (#2884). */
+  return mi >= 0 && c->scopes[mi].reachable && c->scopes[mi].ret == TY_BOOL;
+}
 char *codegen_program(const NodeTable *nt) {
   char *isa_ext = NULL;  /* sp_poly_is_a's class-value arms, and where they go */
   size_t isa_ext_at = 0;
@@ -24465,37 +24555,7 @@ char *codegen_program(const NodeTable *nt) {
   }
   prepare_obj_cmp_dispatch(c);
   g_has_user_binop = 0;
-  {
-    static const char *const uops[] = {
-      "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^", "==", "[]", NULL };
-    /* A class that defines a #coerce needs the table for its COMPARISONS too:
-       the protocol routes `5 < obj` to the boxed entry, which reaches the
-       class through this hook. Only for such a class, though -- an ordinary
-       Comparable defines <=> and no coerce, is never reached this way, and
-       would only gain a dispatch table it has no use for. */
-    static const char *const cops[] = { "<", ">", "<=", ">=", "<=>", NULL };
-    for (int k = 0; k < c->nclasses && !g_has_user_binop; k++) {
-      /* a reopened Time or Range is instantiated by the runtime itself, and
-         its operators reach boxed values through the table too */
-      const char *kn = c->classes[k].name;
-      int breopen = kn && is_builtin_reopen(kn) && is_range_or_time_class(kn);
-      if (!c->classes[k].instantiated && !breopen) continue;
-      for (int u = 0; uops[u]; u++)
-        if (comp_method_in_chain(c, k, uops[u], NULL) >= 0) { g_has_user_binop = 1; break; }
-      /* A class's own <, >, <= or >= reaches a boxed receiver through the
-         table even without coerce; sp_poly_cmp cannot supply its ordering. */
-      for (int u = 0; cops[u] && !g_has_user_binop; u++)
-        if (is_cmp_op(cops[u]) && comp_method_in_chain(c, k, cops[u], NULL) >= 0) g_has_user_binop = 1;
-      /* a `<=>` with no `==` is Comparable's equality, which the table
-         derives: a boxed `m == n` (a block parameter, a hash value, a
-         `when FIVE`) reaches it only through the table */
-      if (!g_has_user_binop && comp_method_in_chain(c, k, "<=>", NULL) >= 0 &&
-          comp_method_in_chain(c, k, "==", NULL) < 0) { g_has_user_binop = 1; break; }
-      if (g_has_user_binop || !class_has_coerce_shape(c, k)) continue;
-      for (int u = 0; cops[u]; u++)
-        if (comp_method_in_chain(c, k, cops[u], NULL) >= 0) { g_has_user_binop = 1; break; }
-    }
-  }
+  for (int k = 0; k < c->nclasses && !g_has_user_binop; k++) g_has_user_binop = class_has_user_binop(c, k);
   g_has_user_aset = 0;
   for (int k = 0; k < c->nclasses && !g_has_user_aset; k++)
     if (c->classes[k].instantiated && user_aset_scope(c, k, NULL) >= 0) g_has_user_aset = 1;
@@ -24513,15 +24573,7 @@ char *codegen_program(const NodeTable *nt) {
     if (class_coerce_emittable(c, k)) { g_has_user_coerce = 1; break; }
   }
   g_has_user_to_io = 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    if (!c->classes[k].instantiated) continue;
-    int dc = -1, mi2 = comp_method_in_chain(c, k, "to_io", &dc);
-    if (mi2 < 0 || dc < 0) continue;
-    Scope *m2 = &c->scopes[mi2];
-    if (m2->reachable && !m2->yields && m2->nparams == 0 &&
-        (m2->ret == TY_IO || m2->ret == TY_UNKNOWN || m2->ret == TY_POLY) &&
-        !scope_is_shadowed(c, mi2) && !m2->is_transplanted_source) { g_has_user_to_io = 1; break; }
-  }
+  for (int k = 0; k < c->nclasses && !g_has_user_to_io; k++) g_has_user_to_io = class_to_io_dispatched(c, k);
   g_has_user_succ = 0;
   g_obj_range_used = 0;
   /* a Range with boxed ends (sp_range_new_box) may turn out a Range of objects */
@@ -24534,16 +24586,7 @@ char *codegen_program(const NodeTable *nt) {
   for (int k = 0; k < c->nclasses; k++)
     if (class_is_hashkey(c, k) || class_is_hashonly_key(c, k) || class_is_valuekey(c, k)) { g_gen_obj_hashkey = 1; break; }
   g_gen_obj_valeq = 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    if (!c->classes[k].instantiated) continue;
-    /* Struct/Data auto field-wise == (no user override). */
-    if ((c->classes[k].is_struct || c->classes[k].is_data) &&
-        comp_method_in_chain(c, k, "==", NULL) < 0) { g_gen_obj_valeq = 1; break; }
-    /* A reachable, bool-returning user == is dispatched so include?/index/uniq
-       honor it (#2884). */
-    int mi = comp_method_in_chain(c, k, "==", NULL);
-    if (mi >= 0 && c->scopes[mi].reachable && c->scopes[mi].ret == TY_BOOL) { g_gen_obj_valeq = 1; break; }
-  }
+  for (int k = 0; k < c->nclasses && !g_gen_obj_valeq; k++) g_gen_obj_valeq = class_gen_valeq(c, k);
 
   /* sp_tu_init is worth emitting only if it would set at least one hook. */
   g_re_init_needed = g_uses_symbols || g_uses_marshal || g_uses_regex || g_needs_class_machinery ||

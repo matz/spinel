@@ -2481,7 +2481,10 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   if (comp_ary_root(c, cid) < 0 || nt_kind(c->nt, id) != NK_CallNode) return 0;
   const char *n = nt_str(c->nt, id, "name");
   if (!n) return 0;
-  if (!cplan_builtin_call(c, id) && !comp_arysub_name_is_array(c, id, cid, n)) return 0;
+  MtabMark mt_was = mtab_push_in(c, id);   /* (what the call's name asks of the subclass's chain is the call's) */
+  int builtin = cplan_builtin_call(c, id) || comp_arysub_name_is_array(c, id, cid, n);
+  mtab_pop(c, mt_was);
+  if (!builtin) return 0;
   *kind = comp_ary_kind(c, cid);
   /* A String subclass instance's String is a handle (TY_STRBUF). A call
      that changes it, or answers it, takes it boxed (the poly String arms
@@ -3837,7 +3840,7 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
 }
 static int mixin_answers_first(Compiler *c, int cid, const char *name, int comparable) {
   /* what master answers: the program's method or reader anywhere in the chain */
-  int master = comp_method_in_chain(c, cid, name, NULL) < 0 && !comp_reader_in_chain(c, cid, name, NULL);
+  int master = !call_answers(c, -1, cid, name, CT_SHARED, NULL);
   if (cid < 0 || cid >= c->nclasses || !name) return master;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
   if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return master;
@@ -5450,9 +5453,9 @@ static int main_call_site(Compiler *c, int call_id) {
    `def self.x`.) */
 static int toplevel_mod_method(Compiler *c, int k, const char *name, int mf_only) {
   int ci = c->toplevel_includes[k];
-  int mi = comp_self_method_in_chain(c, ci, name, NULL);
+  int mi = call_target(c, -1, ci, name, CT_CAPTURE | CT_SHARED, NULL);
   if (mi >= 0) return mi;
-  mi = comp_cmethod_in_chain(c, ci, name, NULL);
+  mi = call_target(c, -1, ci, name, CT_CMETHOD | CT_SHARED, NULL);
   return mi >= 0 && (!mf_only || c->scopes[mi].is_module_function) ? mi : -1;
 }
 static int comp_included_method_index_1(Compiler *c, const char *name, int call_id);
@@ -6479,7 +6482,7 @@ const char *comp_class_base_display_fn(Compiler *c) {
    _inspect); -1 when the class has none. */
 int cls_user_display_mi(Compiler *c, int k, const char *nm) {
   if (k < 0 || k >= c->nclasses || is_builtin_reopen(c->classes[k].name)) return -1;
-  int mi = comp_cmethod_in_chain(c, k, nm, NULL);
+  int mi = call_target(c, -1, k, nm, CT_CMETHOD | CT_SHARED, NULL);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
   if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;

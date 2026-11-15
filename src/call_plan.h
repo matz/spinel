@@ -241,7 +241,14 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
    (`x`), and the call is the setter `x=` (an attr_writer's, or a def's of
    that name); without it, name is the method's own name, and a plain
    name that happens to end in `=` finds no attribute. */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256, CT_NOFACE = 512, CT_WRITER = 1024 };
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256, CT_NOFACE = 512, CT_WRITER = 1024, CT_METHODS = 2048, CT_SHARED = 4096, CT_ATTR = 8192 };
+/* The no-site ask (id -1) of a dispatcher or a survey that takes the final tables' answer for a name, the call sites
+   having none to give it: CT_METHODS asks the instance chain for the method scope as the table primitive answers it,
+   without ct_member's attribute precedence (an attribute nearer than a def answers with the def's scope); the other
+   sides (CT_CMETHOD, CT_OWN, CT_TOP, CT_CAPTURE) are as they are. CT_SHARED marks the ask of a reader the call sites
+   share: a node's frame that is open keeps its read counted as the node's (--method-table-check) until the site asks
+   the plan itself. CT_ATTR asks the attribute alone (the writer's with CT_WRITER): ML_ATTR where the chain holds
+   one, whatever def is nearer, as comp_reader_in_chain answers it. */
 /* CT_NOFACE asks the instance lookup with no visibility face, as a call
    that enforces nothing does: a private def is found. It is the one flag
    that says so by itself; every other flag but CT_WRITER (which asks the

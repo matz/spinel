@@ -11,6 +11,7 @@
 #include "value_pos.h"
 #include "call_plan.h"
 #include "implied_calls.h"
+#include "method_table_check.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <limits.h>
@@ -564,7 +565,9 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
 int desugar_descendant_reader_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     if (nt_ref(nt, id, "receiver") >= 0 || nt_ref(nt, id, "arguments") >= 0 ||
         nt_ref(nt, id, "block") >= 0 || id >= c->node_cap || ie_class_of(c, id) >= 0) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -584,6 +587,7 @@ int desugar_descendant_reader_calls(Compiler *c) {
     nt_set_self_receiver(nt, id, sn);
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -9713,10 +9717,8 @@ int desugar_array_first_last(Compiler *c) {
   int changed = 0;
   int user_fl = 0;
   for (int k = 0; k < c->nclasses && !user_fl; k++)
-    if (comp_method_in_chain(c, k, "first", NULL) >= 0 ||
-        comp_reader_in_chain(c, k, "first", NULL) ||
-        comp_method_in_chain(c, k, "last", NULL) >= 0 ||
-        comp_reader_in_chain(c, k, "last", NULL) ||
+    if (call_answers(c, -1, k, "first", CT_SHARED, NULL) ||
+        call_answers(c, -1, k, "last", CT_SHARED, NULL) ||
         /* `class Array; private :first; end` with no redefinition: no
            method-chain entry exists, only a visibility declaration, so
            the loop above missed it and the rewrite below would have
@@ -9796,7 +9798,7 @@ int desugar_interp_reopened_to_s(Compiler *c) {
   int own[NOWN], any = 0;
   for (int k = 0; k < NOWN; k++) {
     int ci = comp_core_class(c, names[k]);
-    own[k] = ci >= 0 && comp_method_in_chain(c, ci, "to_s", NULL) >= 0;
+    own[k] = ci >= 0 && call_target(c, -1, ci, "to_s", CT_METHODS | CT_SHARED, NULL) >= 0;
     any |= own[k];
   }
   if (!any) return 0;
@@ -9867,7 +9869,7 @@ static int interp_empty_part(const NodeTable *nt, int p) {
 int desugar_interp_elided_to_s(Compiler *c) {
   if (g_infer_optimistic) return 0;
   int sc = comp_core_class(c, CORE_STRING);
-  if (sc >= 0 && comp_method_in_chain(c, sc, "to_s", NULL) >= 0) return 0;
+  if (sc >= 0 && call_target(c, -1, sc, "to_s", CT_METHODS | CT_SHARED, NULL) >= 0) return 0;
   NodeTable *nt = (NodeTable *)c->nt;
   unsigned char *nested = calloc((size_t)(nt->count > 0 ? nt->count : 1), 1);
   if (!nested) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -9969,8 +9971,7 @@ int desugar_array_at(Compiler *c) {
   /* a user class owning the name keeps its own dispatch */
   int user_at = 0;
   for (int k = 0; k < c->nclasses && !user_at; k++)
-    if (comp_method_in_chain(c, k, "at", NULL) >= 0 ||
-        comp_reader_in_chain(c, k, "at", NULL) ||
+    if (call_answers(c, -1, k, "at", CT_SHARED, NULL) ||
         /* a bare `private :at` reopening with no redefinition (K-028,
            kilau docs/CATALOG.md), same reason as desugar_array_first_last */
         comp_method_vis_declared(c, k, "at", NULL) != SP_VIS_PUBLIC) user_at = 1;
@@ -9978,7 +9979,7 @@ int desugar_array_at(Compiler *c) {
      is boxed, or not typed yet, may hold that Class at run time */
   int user_cat = 0;
   for (int k = 0; k < c->nclasses && !user_cat; k++)
-    if (comp_cmethod_in_chain(c, k, "at", NULL) >= 0) user_cat = 1;
+    if (call_target(c, -1, k, "at", CT_CMETHOD | CT_SHARED, NULL) >= 0) user_cat = 1;
   if (!user_at)
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
@@ -10462,7 +10463,9 @@ int desugar_index_op_write_user(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     NodeKind k = nt_kind(nt, id);
     if (k != NK_IndexOrWriteNode && k != NK_IndexAndWriteNode && k != NK_IndexOperatorWriteNode) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -10581,6 +10584,7 @@ int desugar_index_op_write_user(Compiler *c) {
     scope_local_intern(sc, vname);
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -10862,7 +10866,7 @@ int desugar_unpack_block(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int user_any = 0, user_str = 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, "unpack", NULL) >= 0) {
+    if (call_target(c, -1, k, "unpack", CT_METHODS | CT_SHARED, NULL) >= 0) {
       user_any = 1;
       if (c->classes[k].name && sp_streq(c->classes[k].name, "String")) user_str = 1;
     }
@@ -18466,7 +18470,7 @@ int block_body_breaks(const NodeTable *nt, int node) {
    end either way, and the typed emitters are the faster path. */
 int desugar_enum_walk_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  if (comp_method_index(c, lower_row_of(LR_ENUM_WALK)->target) < 0) return 0;   /* not spliced */
+  if (call_target(c, -1, -1, lower_row_of(LR_ENUM_WALK)->target, CT_TOP | CT_SHARED, NULL) < 0) return 0;   /* not spliced */
   int n0 = nt->count;
   int changed = 0;
   for (int id = 0; id < n0; id++) {
@@ -19196,8 +19200,11 @@ int desugar_builtin_enum_calls(Compiler *c) {
     if (ern && (sp_streq(ern, "grep") || sp_streq(ern, "grep_v"))) continue;
     if (er >= 0 && er < n0 && nt_kind(nt, er) == NK_CallNode && nt_ref(nt, er, "block") < 0) chained[er] = 1;
   }
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     const char *name = nt_str(nt, id, "name");
     /* a call given back its written name on a receiver with no Enumerable
        (below) takes the builtin's again once a later round types the
@@ -19791,6 +19798,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   free(chained); free(in_default); free(defcls);
   return changed;
 }
@@ -20516,8 +20524,11 @@ int desugar_builtin_scalar_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     int copy = (int)nt_int(nt, id, "bx_copy", -1);
     if (copy < 0 || copy >= nt->count) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -20658,6 +20669,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -30529,8 +30541,11 @@ int desugar_index_assign_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   int *parent = NULL;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode || !nt_attr_write(nt, id) || nt_safe_nav(nt, id)) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "[]=") || nt_ref(nt, id, "block") >= 0) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -30642,6 +30657,7 @@ int desugar_index_assign_value(Compiler *c) {
     int cb = c->node_cbody ? c->node_cbody[id] : -1;
     for (int j = base; j < nt->count; j++) { c->nscope[j] = encl; if (c->node_cbody) c->node_cbody[j] = cb; }
   }
+  mtab_pop(c, mt_pass);
   free(parent);
   return changed;
 }

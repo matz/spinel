@@ -18,6 +18,8 @@ ensure
 2
 :gave_up
 [8, 7, 8]
+[:original, :replacement]
+[:original, :original]
 :no_block
 5
 :rescued

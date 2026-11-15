@@ -62,6 +62,26 @@ module Batch
     __blk1 = 0
   end
 
+  # a write to the named block parameter rebinds the local; yield keeps
+  # calling the caller's block
+  def self.rebound(&blk)
+    blk = proc { :replacement }
+    begin
+      [yield, blk.call]
+    rescue
+      :r
+    end
+  end
+
+  def self.defaulted(&blk)
+    blk ||= proc { :default }
+    begin
+      [yield, blk.call]
+    ensure
+      blk = nil
+    end
+  end
+
   def self.maybe
     return :no_block unless block_given?
     begin
@@ -96,6 +116,8 @@ p Batch.quiet { raise "x" }
 p Batch.again { |t| raise "again" if t < 2; t }
 p Batch.again { |t| raise "always" }
 p Batch.own_names { |v| v + 1 }
+p Batch.rebound { :original }
+p Batch.defaulted { :original }
 p Batch.maybe
 p Batch.maybe { 5 }
 p Batch.maybe { raise "y" }

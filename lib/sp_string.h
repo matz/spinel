@@ -405,6 +405,8 @@ void sp_String_encode_into(sp_String *h, const char *t);
 /* Cold in-place mutators (compiled once in lib/sp_string.c). */
 void sp_String_prepend(sp_String*s,const char*t);
 void sp_String_insert(sp_String*s,int64_t idx,const char*t);
+void sp_String_splice_chars(sp_String *s, sp_int from, sp_int n, const char *val, int range_form, int keep_enc);
+void sp_String_splice_bytes(sp_String *s, sp_int start, sp_int len, const char *val, sp_int vstart, sp_int vlen, int keep_enc);
 void sp_String_replace(sp_String*s,const char*t);
 sp_String*sp_String_dup(sp_String*s);
 #endif /* SP_STRING_H */

@@ -8,6 +8,108 @@
 void sp_String_prepend(sp_String*s,const char*t){SP_GC_ROOT(s);SP_GC_ROOT_STR(t);if (SP_UNLIKELY(!s)) sp_nil_recv("prepend"); if (!t)return;if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}int64_t tl=(int64_t)strlen(t);if(!sp_fd_grow(s,s->len+tl))return;memmove(s->data+tl,s->data,s->len+1);memcpy(s->data,t,tl);s->len+=tl;sp_fd_publish(s);}
 /* String#insert(idx, str): insert at idx; negative idx is relative to len+1. */
 void sp_String_insert(sp_String*s,int64_t idx,const char*t){SP_GC_ROOT(s);SP_GC_ROOT_STR(t);if (SP_UNLIKELY(!s)) sp_nil_recv("insert"); if (!t)return;if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}int64_t tl=(int64_t)strlen(t);if(tl==0)return;if(idx<0)idx+=s->len+1;if(idx<0)idx=0;if(idx>s->len)idx=s->len;if(!sp_fd_grow(s,s->len+tl))return;memmove(s->data+idx+tl,s->data+idx,s->len-idx+1);memcpy(s->data+idx,t,tl);s->len+=tl;sp_fd_publish(s);}
+/* Whether the n bytes at p are all below 0x80. */
+static int sp_bytes_ascii(const char *p, size_t n) {
+  for (size_t i = 0; i < n; i++) if ((unsigned char)p[i] >= 0x80) return 0;
+  return 1;
+}
+/* The in-place splice: bytes [b, e) of s replaced by the vl bytes at v,
+   where s lives. The tail moves and nothing else is copied; a splice into a
+   new String written back (sp_String_set_bin) copied the whole receiver
+   twice, so a loop of splices was quadratic in its length. `bin` is the
+   encoding the result takes: 1 BINARY, 0 text, -1 the receiver's own. The
+   caller has made every check but this one: FrozenError, after them, where
+   sp_String_set_bin raised it after the splice it was handed. v may be a
+   view of s's own bytes (`s[0] = s`), and is copied first.
+
+   The 7-bit bit (SP_STR_SIZE_ASCII7) says the length walk counted s as
+   bytes: all of them below 0x80, or an invalid one among them
+   (sp_str_length). The splice keeps it, so the next index into s reads no
+   bytes, only where it cannot change what any other byte decodes as: the
+   bytes taken out and put in are ASCII, and so are the bytes on either side
+   of the splice (or an end of s). An ASCII byte ends any sequence, so every
+   other byte decodes as it did, and a String the walk counted as bytes
+   still counts so. Anywhere else (`"\xffé"` given an ASCII first byte is
+   valid text again, `"\xC3a\xA9".slice!(1)` joins two bytes into "é") the
+   bit is cleared, and the next walk sets it again if it holds. */
+static void sp_String_splice_in(sp_String *s, size_t b, size_t e, const char *v, size_t vl, int bin) {
+  if (sp_String_is_immutable(s)) { sp_raise_frozen_str(s->data); return; }
+  char *own = NULL;
+  if ((uintptr_t)v >= (uintptr_t)s->data && (uintptr_t)v <= (uintptr_t)(s->data + s->len)) {
+    own = (char *)malloc(vl + 1);
+    if (!own) sp_oom_die();
+    memcpy(own, v, vl);
+    v = own;
+  }
+  size_t bl = (size_t)s->len, nl = bl - (e - b) + vl;
+  const unsigned char *o = (const unsigned char *)s->data;
+  int ascii7 = sp_str_is_ascii7(s->data) && sp_bytes_ascii(v, vl) && sp_bytes_ascii(s->data + b, e - b) &&
+               (b == 0 || o[b - 1] < 0x80) && (e == bl || o[e] < 0x80);
+  if (!sp_fd_grow(s, (int64_t)nl)) { free(own); return; }
+  char *d = s->data;
+  memmove(d + b + vl, d + e, bl - e);
+  memcpy(d + b, v, vl);
+  s->len = (int64_t)nl; d[nl] = 0;
+  free(own);
+  if (bin == 1) s->binary = 1;
+  else if (bin == 0 && s->binary) { s->binary = 0; sp_str_as_text(d); }
+  sp_fd_publish(s);
+  if (ascii7) sp_str_mark_ascii7(d);
+}
+/* s[from, n] = val by characters, in place: String#[]= of an index, a start
+   and a length, a Range or a substring, and String#insert. The checks are
+   sp_str_splice_at's, in its order (a negative length, then a start outside
+   the String: IndexError, or with range_form the RangeError), and the
+   result's encoding is the one its pieces joined in: the receiver's, unless
+   val has high bytes in the other encoding, which the result takes where
+   the receiver's kept bytes are all ASCII and is BINARY where they are not.
+   keep_enc leaves the receiver's encoding as it is, as sp_String_set_bin did. */
+void sp_String_splice_chars(sp_String *s, sp_int from, sp_int n, const char *val, int range_form, int keep_enc) {
+  SP_GC_ROOT(s); SP_GC_ROOT_STR(val);
+  if (SP_UNLIKELY(!s)) sp_nil_recv("[]=");
+  /* (an empty String with the marker byte the readers look behind: a bare
+     "" has none, and sp_str_byte_len reads the byte before it) */
+  if (!val) val = &("\xff" "")[1];
+  const char *d = s->data;
+  sp_int len = (sp_int)sp_str_length(d);
+  if (n < 0) { sp_raise_cls("IndexError", sp_sprintf("negative length %lld", (long long)n)); return; }
+  sp_int from0 = from;
+  if (from < 0) from += len;
+  if (from < 0 || from > len) {
+    if (range_form) sp_raise_cls("RangeError", sp_sprintf("%lld out of range", (long long)from0));
+    else sp_raise_cls("IndexError", sp_sprintf("index %lld out of string", (long long)from0));
+    return;
+  }
+  if (n > len - from) n = len - from;
+  size_t bl = sp_str_byte_len(d), b, e, fb;
+  if (sp_str_fixed_width(d, &fb) || sp_str_is_binary(d)) { b = (size_t)from; e = b + (size_t)n; }
+  else {
+    b = sp_utf8_byte_offset(d, from);
+    e = b;
+    for (sp_int k = n; k > 0 && e < bl; k--) e += (size_t)sp_utf8_advance(d + e);
+    if (e > bl) e = bl;
+  }
+  int bin = -1;
+  if (!keep_enc) {
+    int sb = sp_str_is_binary(d), vb = sp_str_is_binary(val);
+    bin = sb;
+    if (sb != vb && !sp_str_ascii_only(val))
+      bin = sp_bytes_ascii(d, b) && sp_bytes_ascii(d + e, bl - e) ? vb : 1;
+  }
+  sp_String_splice_in(s, b, e, val, sp_str_byte_len(val), bin);
+}
+/* String#bytesplice(start, len, val, vstart, vlen) in place: bytes
+   start...start+len of s replaced by bytes vstart...vstart+vlen of val,
+   checked as sp_str_bytesplice5 checks them (sp_str_bytesplice_check), and
+   the result in the encoding the two are compatible in, or with keep_enc the
+   receiver's own. */
+void sp_String_splice_bytes(sp_String *s, sp_int start, sp_int len, const char *val, sp_int vstart, sp_int vlen, int keep_enc) {
+  SP_GC_ROOT(s); SP_GC_ROOT_STR(val);
+  if (SP_UNLIKELY(!s)) sp_nil_recv("bytesplice");
+  if (!val) val = &("\xff" "")[1];
+  int bin = sp_str_bytesplice_check(s->data, &start, &len, val, &vstart, &vlen);
+  sp_String_splice_in(s, (size_t)start, (size_t)(start + len), val + vstart, (size_t)vlen, keep_enc ? -1 : bin);
+}
 /* String#replace(s): replace entire content. */
 void sp_String_replace(sp_String*s,const char*t){SP_GC_ROOT(s);SP_GC_ROOT_STR(t);if (SP_UNLIKELY(!s)) sp_nil_recv("replace"); if (!t)return;if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}int64_t tl=(int64_t)strlen(t);if(!sp_fd_grow(s,tl))return;memcpy(s->data,t,tl);s->data[tl]='\0';s->len=tl;sp_fd_publish(s);}
 sp_String*sp_String_dup(sp_String*s){SP_GC_ROOT(s);return sp_String_new(s->data);}

@@ -1790,8 +1790,9 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
 /* ---- String#[]=, #insert, #clear and #slice! (stage 7) ----
    A String slot holds the String's handle, so these rows change the String
    where it lives: the receiver's handle is taken once, before the arguments
-   run (CRuby evaluates the receiver first), and the new bytes are written
-   into it (sp_String_set_bin), which every name holding the String sees: a
+   run (CRuby evaluates the receiver first), and its bytes are spliced in
+   place (sp_String_splice_chars moves the tail), which every name holding
+   the String sees: a
    variable, an ivar, self in a reopened String, an element, a call's
    answer, the temp a `&.` tested, the String a bang on a held chain
    answers. A String no name holds (a call's fresh answer) is changed in a
@@ -1946,13 +1947,14 @@ static void str_mut_value_answer(Compiler *c, const BopCtx *x, const StrMutOp *o
   buf_puts(b, "; })");
 }
 
-/* `_t<t>` takes `s` spliced as `splice` (a call over its bytes), which
-   raises its IndexError first; sp_String_set_bin_enc raises FrozenError
-   after it, the order CRuby checks them in for []= and insert, and takes
-   the splice's encoding, which the compatibility rule picked (an
-   ASCII-only binary receiver takes a UTF-8 value's) */
-static void str_mut_set(Buf *b, int t, const char *splice) {
-  buf_printf(b, " sp_String_set_bin_enc(_t%d, %s);", t, splice);
+/* `splice`, a call that changes `_t<t>` where it lives
+   (sp_String_splice_chars or sp_String_splice_bytes): it raises its
+   IndexError first and FrozenError after it, the order CRuby checks them in
+   for []= and insert, and leaves the String in the encoding the
+   compatibility rule picked (an ASCII-only binary receiver takes a UTF-8
+   value's) */
+static void str_mut_set(Buf *b, const char *splice) {
+  buf_printf(b, " %s;", splice);
 }
 
 /* The forms of `[]=`, which CRuby picks by the key's class: an Integer
@@ -2000,7 +2002,7 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
        converted before the index is checked */
     buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[0], b); buf_puts(b, ";");
     ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_str_splice_at(%s, _t%d, 1, _s%d, 0)", cs.p, tn, ts);
+    buf_printf(&sp, "sp_String_splice_chars(_t%d, _t%d, 1, _s%d, 0, 0)", t, tn, ts);
     break;
   case SA_RANGE:
     /* s[range] = v: the range's character span (a negative length inserts);
@@ -2020,7 +2022,7 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
                   " (_t%d.last < 0 ? _t%d.last + _len%d : _t%d.last);", tn, tn, tn, tn, tn, tn, tn);
     buf_printf(b, " sp_int _n%d = _e%d - _a%d + ((_t%d.excl && !_oe%d) ? 0 : 1);", tn, tn, tn, tn, tn);
     ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_str_splice_at(%s, _a%d, _n%d < 0 ? 0 : _n%d, _s%d, 1)", cs.p, tn, tn, tn, ts);
+    buf_printf(&sp, "sp_String_splice_chars(_t%d, _a%d, _n%d < 0 ? 0 : _n%d, _s%d, 1, 0)", t, tn, tn, tn, ts);
     break;
   case SA_RE:
   case SA_RE_N:
@@ -2034,7 +2036,8 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
     if (form == SA_RE_N) buf_printf(b, "_t%d", tn); else buf_puts(b, "0");
     buf_printf(b, ", &_b%d, &_e%d);", tn, tn);
     ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_str_bytesplice(%s, _b%d, _e%d - _b%d, _s%d)", cs.p, tn, tn, tn, ts);
+    buf_printf(&sp, "sp_String_splice_bytes(_t%d, _b%d, _e%d - _b%d, _s%d, 0, (sp_int)sp_str_byte_len(_s%d), 0)",
+               t, tn, tn, tn, ts, ts);
     break;
   case SA_STR:
     /* s["sub"] = v: the first occurrence; none raises IndexError, before v
@@ -2044,7 +2047,7 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, " sp_oint _a%d = sp_str_index_opt(%s, _k%d);"
                   " if (_a%d.nil) sp_raise_cls(\"IndexError\", \"string not matched\");", tn, cs.p, tn, tn);
     ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_str_splice_at(%s, _a%d.v, (sp_int)sp_str_length(_k%d), _s%d, 0)", cs.p, tn, tn, ts);
+    buf_printf(&sp, "sp_String_splice_chars(_t%d, _a%d.v, (sp_int)sp_str_length(_k%d), _s%d, 0, 0)", t, tn, tn, ts);
     break;
   default:
     /* s[start, len] = v: the start and the length are converted, and a
@@ -2053,10 +2056,10 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "; sp_int _l%d = ", tn); str_mut_index(c, &k[1], b); buf_puts(b, ";");
     buf_printf(b, " if (_l%d < 0) sp_raise_cls(\"IndexError\", sp_sprintf(\"negative length %%lld\", (long long)_l%d));", tn, tn);
     ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_str_splice_at(%s, _t%d, _l%d, _s%d, 0)", cs.p, tn, tn, ts);
+    buf_printf(&sp, "sp_String_splice_chars(_t%d, _t%d, _l%d, _s%d, 0, 0)", t, tn, tn, ts);
     break;
   }
-  if (sp.p) str_mut_set(b, t, sp.p);
+  if (sp.p) str_mut_set(b, sp.p);
   str_mut_value_answer(c, x, &v, b);
   view_unbind(mark);
   free(sp.p); free(cs.p);
@@ -2080,9 +2083,9 @@ int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b) {
      counts from the end and inserts after that character (i + 1); an index
      past the ends raises IndexError */
   Buf sp; memset(&sp, 0, sizeof sp);
-  buf_printf(&sp, "sp_str_splice_at(sp_String_cstr(_t%d), _t%d == -1 ? (sp_int)sp_str_length(sp_String_cstr(_t%d)) :"
-                  " _t%d < 0 ? _t%d + 1 : _t%d, 0, _s%d, 0)", t, ti, t, ti, ti, ti, ts);
-  str_mut_set(b, t, sp.p);
+  buf_printf(&sp, "sp_String_splice_chars(_t%d, _t%d == -1 ? (sp_int)sp_str_length(sp_String_cstr(_t%d)) :"
+                  " _t%d < 0 ? _t%d + 1 : _t%d, 0, _s%d, 0, 0)", t, ti, t, ti, ti, ti, ts);
+  str_mut_set(b, sp.p);
   str_mut_self_answer(c, x, t, b);
   view_unbind(mark);
   free(sp.p);
@@ -2164,9 +2167,9 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
                cs.p, tn, tn, tn, tn, tn);
     buf_printf(b, " if (_t%d && _t%d >= 0 && _t%d <= 9) {"
                   " sp_int _b = sp_re_caps[2 * _t%d], _e = sp_re_caps[2 * _t%d + 1];"
-                  " sp_String_set_bin(_t%d, sp_str_bytesplice(%s, _b, _e - _b, (&(\"\\xff\")[1]))); }"
+                  " sp_String_splice_bytes(_t%d, _b, _e - _b, NULL, 0, 0, 1); }"
                   " _t%d; })",
-               th, tn, tn, tn, tn, t, cs.p, th);
+               th, tn, tn, tn, tn, t, th);
   }
   else {
     /* slice!(i), slice!(start, len), slice!(range): the part removed, by
@@ -2199,13 +2202,13 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
                   " if (_t%d >= 0 && _t%d %s _t%d && _t%d >= 0) {"
                   " if (_t%d > _t%d - _t%d) _t%d = _t%d - _t%d;"
                   " _t%d = sp_str_sub_range(%s, _t%d, _t%d); SP_GC_ROOT_STR(_t%d);"
-                  " sp_String_set_bin(_t%d, sp_str_splice_at(%s, _t%d, _t%d, (&(\"\\xff\")[1]), 0)); }"
+                  " sp_String_splice_chars(_t%d, _t%d, _t%d, NULL, 0, 1); }"
                   " _t%d; })",
                tr,
                tb, tb, span ? "<=" : "<", tn, tl,
                tl, tn, tb, tl, tn, tb,
                tr, cs.p, tb, tl, tr,
-               t, cs.p, tb, tl,
+               t, tb, tl,
                tr);
   }
   view_unbind(mark);

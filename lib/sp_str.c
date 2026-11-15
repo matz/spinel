@@ -525,22 +525,28 @@ static void sp_str_bsp_span(const char*s,sp_int*beg,sp_int*len){
 /* String#bytesplice(start, len, str, str_start, str_len): bytes start...start+len
    of s replaced by bytes str_start...str_start+str_len of val. The result
    takes the encoding the two are compatible in. */
-const char*sp_str_bytesplice5(const char*s,sp_int start,sp_int len,const char*val,sp_int vstart,sp_int vlen){
-  SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(val);
-  if(!s)sp_nil_recv("bytesplice");
-  if(!val)val=&("\xff" "")[1];
-  sp_str_bsp_span(s,&start,&len);sp_str_bsp_span(val,&vstart,&vlen);
-  /* rb_enc_check over the whole of both: high bytes in each, in different
-     encodings, cannot be joined */
+/* bytesplice's checks, in CRuby's order: each span checked and clipped
+   (sp_str_bsp_span), then rb_enc_check over the whole of both, where high
+   bytes in each, in different encodings, cannot be joined. Answers whether
+   the result is BINARY. */
+int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen){
+  sp_str_bsp_span(s,start,len);sp_str_bsp_span(val,vstart,vlen);
   if(sp_str_is_binary(s)!=sp_str_is_binary(val)&&!sp_str_ascii_only(s)&&!sp_str_ascii_only(val))
     sp_raise_cls("Encoding::CompatibilityError",sp_str_is_binary(s)
       ?"incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
       :"incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
+  return sp_str_cat_binary(s,val);
+}
+const char*sp_str_bytesplice5(const char*s,sp_int start,sp_int len,const char*val,sp_int vstart,sp_int vlen){
+  SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(val);
+  if(!s)sp_nil_recv("bytesplice");
+  if(!val)val=&("\xff" "")[1];
+  int bin=sp_str_bytesplice_check(s,&start,&len,val,&vstart,&vlen);
   sp_int bl=(sp_int)sp_str_byte_len(s);
   char*r=sp_str_alloc_raw((size_t)(bl-len+vlen)+1);
   memcpy(r,s,(size_t)start);memcpy(r+start,val+vstart,(size_t)vlen);memcpy(r+start+vlen,s+start+len,(size_t)(bl-start-len));
   r[(size_t)(bl-len+vlen)]=0;sp_str_set_len(r,(size_t)(bl-len+vlen));
-  if(sp_str_cat_binary(s,val))sp_str_mark_binary(r);
+  if(bin)sp_str_mark_binary(r);
   return r;}
 const char*sp_str_bytesplice(const char*s,sp_int start,sp_int len,const char*val){
   return sp_str_bytesplice5(s,start,len,val,0,val?(sp_int)sp_str_byte_len(val):0);}

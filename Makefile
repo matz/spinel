@@ -1799,6 +1799,17 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	  else echo "ext-test: FAIL (late_new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/field_elems.rb -c --no-line-map --ext-init Init_ext_field_elems \
+	      --ext-entry ExtFieldElems.grid,ExtFieldElems.sum_x,ExtFieldElems.box,ExtFieldElems.count_done \
+	      -o "$$tmp/f.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (field_elems emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/field_elems_host.c "$$tmp/f.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/fhost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/fhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '4\n2\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (field_elems host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (field_elems host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/methods.rb -c --no-line-map --ext-init Init_ext_methods \
 	      --ext-entry ExtMethods.make,ExtMethods.loud --ext-class all -o "$$tmp/m.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class emission)"; ok=0; \

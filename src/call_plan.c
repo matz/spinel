@@ -1794,7 +1794,7 @@ static LocalVar *ver_kern_cell(Compiler *c, int cls) {
   char nm[32];
   cplan_kernel_cell_name(cls, nm);
   LocalVar *g = comp_gvar_intern(c, nm + 1);
-  g->type = g_promote_mode ? TY_POLY : TY_INT;   /* (as the version cells' Integer is, --int-overflow=promote) */
+  lv_set_type(g, g_promote_mode ? TY_POLY : TY_INT);   /* (as the version cells' Integer is, --int-overflow=promote) */
   g->gvar_seeded = 2;
   g->ver_cell = 1;
   return g;

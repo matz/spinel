@@ -20636,10 +20636,19 @@ static const char *emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
       if (lv) p = lv->type;
     }
     char a[16]; snprintf(a, sizeof a, "_a%d", i);
+    /* A :str argument is C's bytes, with none of the marks a String's bytes
+       carry before them: the String the method gets is a copy of them (as
+       an ffi_func's :str answer is), and NULL is nil. */
+    if (ffi_spec_is_str(spec)) {
+      const char *face = p == TY_STRING ? "" : p == TY_STRBUF ? "SP_STR_HDL" : "SP_STR_BOX";
+      if (p == TY_STRING || p == TY_STRBUF || p == TY_POLY || p == TY_UNKNOWN) {
+        buf_printf(&call, "%s(sp_str_dup_external(%s))", face, a);
+        continue;
+      }
+    }
     switch (p) {
     case TY_POLY: case TY_UNKNOWN:           /* param is sp_RbVal: box it */
       if (sp_streq(spec, "ptr"))                          buf_printf(&call, "sp_box_foreign_ptr((void *)%s)", a);
-      else if (ffi_spec_is_str(spec))                     buf_printf(&call, "SP_STR_BOX(%s)", a);
       else if (sp_streq(spec, "float") || sp_streq(spec, "double")) buf_printf(&call, "sp_box_float(%s)", a);
       else                                                buf_printf(&call, "sp_box_int((sp_int)%s)", a);
       break;

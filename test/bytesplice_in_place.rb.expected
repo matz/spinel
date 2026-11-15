@@ -28,6 +28,16 @@ true
 [TypeError, "no implicit conversion from nil to integer"]
 [:str, :vlen]
 "abcdef"
+[TypeError, "no implicit conversion from nil to integer"]
+[:len, :str]
+[TypeError, "wrong argument type String (expected Range)"]
+[:start, :str]
+[TypeError, "no implicit conversion of nil into String"]
+[:str]
+[NoMethodError, "undefined method 'bytesplice' for nil"]
+[:str]
+"aTcdef"
+[:str, :to_str]
 1000
 500
 78620

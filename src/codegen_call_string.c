@@ -2094,25 +2094,40 @@ int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b) {
 
 /* bytesplice(start, len, str[, str_start, str_len]) and (range, str[,
    str_range]): the receiver's handle is taken before the arguments run,
-   each argument runs and converts as emit_bytesplice_in_place orders them,
-   and the bytes are spliced in place (sp_String_splice_bytes): its span
-   checks and the encoding check first, then FrozenError, as CRuby's
-   str_check_beg_len and str_modify_keep_cr come. A nil receiver raises
-   NoMethodError once the arguments have run. Answers the receiver; a call
-   shape bytesplice_form_ok does not take is left to the other routes. */
+   every argument runs (str_mut_hold) before any converts, a nil receiver
+   then raises NoMethodError, and the arguments convert as
+   emit_bytesplice_in_place orders them, reading what the holds kept. The
+   bytes are spliced in place (sp_String_splice_bytes): its span checks
+   and the encoding check first, then FrozenError, as CRuby's
+   str_check_beg_len and str_modify_keep_cr come. Answers the receiver; a
+   call shape bytesplice_form_ok does not take is left to the other
+   routes. */
 int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b) {
   int argc;
   const int *argv = call_args(c->nt, x->id, &argc);
   if (!bytesplice_form_ok(c, argv, argc)) return 0;
-  int chk, t = str_mut_open(c, x, &chk, b);
-  char h[24], rs[48], pre[96];
+  int chk, t = str_mut_open(c, x, &chk, b), mark = g_n_argov;
+  /* (a held boxed operand is bound too: the conversions below read the
+     node, and must read the value its hold kept, not run it again) */
+  for (int i = 0; i < argc; i++) {
+    StrMutOp o;
+    str_mut_hold(c, argv, argc, i, 0, &o, b);
+    if (o.t >= 0 && o.boxed) view_bind_temp(o.node, o.t);
+  }
+  str_mut_nil_check(x, t, chk, b);
+  char h[24], rs[48];
   snprintf(h, sizeof h, "_t%d", t);
   snprintf(rs, sizeof rs, "sp_String_cstr(_t%d)", t);
-  snprintf(pre, sizeof pre, "if (SP_UNLIKELY(!_t%d)) sp_nil_recv_raise(\"bytesplice\"); ", t);
+  /* (a #to_str renders here, inline, as str_mut_convert renders it: in the
+     call's conversion hold it would be declared ahead of the row) */
+  ConvHold *hold0 = g_conv_hold;
+  g_conv_hold = NULL;
   buf_puts(b, " (void)");
-  emit_bytesplice_in_place(c, argv, argc, rs, h, chk ? pre : NULL, b);
+  emit_bytesplice_in_place(c, argv, argc, rs, h, b);
   buf_puts(b, ";");
+  g_conv_hold = hold0;
   str_mut_self_answer(c, x, t, b);
+  view_unbind(mark);
   return 1;
 }
 

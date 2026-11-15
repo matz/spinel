@@ -4752,9 +4752,9 @@ static int emit_str_mut_recv_once(Compiler *c, int recv, int lvw, Buf *b) {
    str_start, str_len), (range, str) or (range, str, str_range). The
    arguments run in order, a range is measured against its own String as
    CRuby measures it, and the String is spliced where it lives
-   (sp_String_splice_bytes); the expression is NULL. `pre` is a check placed
-   once every argument has run, ahead of anything that reads the receiver or
-   raises (the stage-7 row's nil receiver), or NULL. */
+   (sp_String_splice_bytes); the expression is NULL. An argument that must
+   run before the others convert is held, and bound to its hold, by the
+   caller (emit_op_string_bytesplice). */
 /* The call shapes emit_bytesplice_in_place takes: (range, str), three
    arguments whose third is a Range or an Integer when the first is a Range,
    and five. Anything else stays the NoMethodError it was. */
@@ -4767,14 +4767,12 @@ int bytesplice_form_ok(Compiler *c, const int *argv, int argc) {
 }
 
 /* the splice, the last step of emit_bytesplice_in_place */
-static void emit_bytesplice_tail(const char *h, const char *pre, int t, Buf *b) {
-  if (pre) buf_puts(b, pre);
+static void emit_bytesplice_tail(const char *h, int t, Buf *b) {
   buf_printf(b, "sp_String_splice_bytes(%s, _b%d, _l%d, _v%d, _vb%d, _vl%d, 0); (const char *)NULL; })",
              h, t, t, t, t, t);
 }
 
-void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char *rs, const char *h,
-                           const char *pre, Buf *b) {
+void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char *rs, const char *h, Buf *b) {
   /* five arguments are always (start, len, str, str_start, str_len) */
   int rng = argc != 5 && comp_ntype(c, argv[0]) == TY_RANGE;
   int t = ++g_tmp;
@@ -4786,7 +4784,6 @@ void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char
                     t0 == TY_SYMBOL ? "Symbol" : NULL;
   if (argc == 3 && t0n) {
     for (int j = 0; j < argc; j++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[j], b); buf_puts(b, "); "); }
-    if (pre) buf_puts(b, pre);
     buf_printf(b, "sp_raise_cls(\"TypeError\", \"wrong argument type %s (expected Range)\"); "
                   "(const char *)NULL; })", t0n);
     return;
@@ -4808,7 +4805,6 @@ void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char
         effect_view_close(c, ve);
         buf_puts(b, "); ");
       }
-      if (pre) buf_puts(b, pre);
       buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s\"); (const char *)NULL; })",
                  ka == TY_NIL ? "no implicit conversion from nil to integer"
                               : "no implicit conversion of Range into Integer");
@@ -4825,7 +4821,7 @@ void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char
       buf_printf(b, "_vb%d = ", t); emit_int_expr(c, argv[3], b);
       buf_printf(b, "; _vl%d = ", t); emit_int_expr(c, argv[4], b); buf_puts(b, "; ");
     }
-    emit_bytesplice_tail(h, pre, t, b);
+    emit_bytesplice_tail(h, t, b);
     return;
   }
   /* (range, str[, str_range]): every argument runs, then, as CRuby orders
@@ -4842,14 +4838,13 @@ void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char
   int vrng = argc == 3 && comp_ntype(c, argv[2]) == TY_RANGE;
   if (vrng) { buf_printf(b, "sp_Range _vr%d = ", t); emit_expr(c, argv[2], b); buf_puts(b, "; "); }
   else if (argc == 3) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[2], b); buf_puts(b, "); "); }
-  if (pre) buf_puts(b, pre);
   buf_printf(b, "sp_range_beg_len(_r%d, (sp_int)sp_str_byte_len(%s), &_b%d, &_l%d); ", t, rs, t, t);
   if (held >= 0) buf_printf(b, "const char *_v%d = sp_poly_arg_str_chk(_t%d); SP_GC_ROOT_STR(_v%d); ", t, held, t);
   buf_printf(b, "_vl%d = _v%d ? (sp_int)sp_str_byte_len(_v%d) : 0; ", t, t, t);
   /* (range, str, n): CRuby's TypeError once the new string has converted */
   if (argc == 3 && !vrng) buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type Integer (expected Range)\"); ");
   if (vrng) buf_printf(b, "sp_range_beg_len(_vr%d, _vl%d, &_vb%d, &_vl%d); ", t, t, t, t);
-  emit_bytesplice_tail(h, NULL, t, b);
+  emit_bytesplice_tail(h, t, b);
 }
 
 /* One argument of append_as_bytes, as the bytes it appends: an Integer's

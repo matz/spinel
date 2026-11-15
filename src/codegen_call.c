@@ -26514,7 +26514,8 @@ int operand_is_held_read(Compiler *c, int id) {
    variable or a global? A write to one does, and so can anything that runs
    Ruby code the subtree does not show -- a user method, a yield, a super.
    A call that runs none (order_call_runs_no_code) cannot, recursively;
-   every other call counts, conservatively. */
+   every other call counts, conservatively, and so does a constant read that
+   autoloads. */
 int node_may_reassign_state(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -26526,6 +26527,8 @@ int node_may_reassign_state(Compiler *c, int id) {
       (strstr(ty, "WriteNode") || strstr(ty, "TargetNode")))
     return 1;
   if (k == NK_CallNode && !order_call_runs_no_code(c, id)) return 1;
+  /* a constant read that autoloads runs a file, which may assign any of them */
+  if (nt_kind_is_constant(k) && an_const_read_effect(c, id).autoload) return 1;
   return -1;
 }
 int subtree_may_reassign_state(Compiler *c, int id) {

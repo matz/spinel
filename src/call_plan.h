@@ -90,14 +90,17 @@ typedef struct {
   unsigned char core_hook; /* a super in a class method that reaches only a core hook's no-op: nothing of the program's answers it, and emit_super answers nil */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */
+  int vis_cell;             /* the history cell + 1 whose visibility cell guards the call (a top-level def's visibility only the run tells, cplan_root_top_def), 0 for none */
 } CallPlan;
 
 /* Is plan p a program's method on a root of the builtin classes (Object,
    or Numeric or NilClass ahead of it), one that answers every receiver the
-   lookup reaches it for (cplan_root_reopen)? The kinds of reopening below
-   that, a builtin class's own, bind by the receiver's type. */
+   lookup reaches it for (cplan_root_reopen)? A top-level def the lookup
+   finds open to an explicit receiver is one: Object's method from where it
+   runs, which takes no self. The kinds of reopening below that, a builtin
+   class's own, bind by the receiver's type. */
 int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
-/* ...and is call id's plan p such a binding that answers the call ahead
+/* Is call id's plan p a root reopening's binding (cplan_root_reopen) that answers the call ahead
    of the builtin arms (not an alias that captured the builtin's method,
    nor an exception accessor picked at run time, nor a private or
    protected method of a name a builtin has, nor one closed to the call)?
@@ -453,6 +456,10 @@ void ver_prepend_cell_name(int cell, char out[32]);
 /* Once the last reachability has run: which version cells no emitted code
    reads, so the C writes none of them (Compiler.ver_cell_dropped) */
 void ver_cells_settle(Compiler *c);
+/* The global holding the visibility of the history a guarded call reads
+   (CallPlan.vis_cell): an Integer, SP_VIS_PRIVATE where the live version is private. NULL
+   for a call with no guard, and for a cell no emitted code reads (ver_cells_settle) */
+const LocalVar *cplan_vis_cell_var(Compiler *c, const CallPlan *p);
 /* Is global g such a cell? */
 int cplan_cell_dropped(const Compiler *c, const LocalVar *g);
 /* Is node id a write of such a cell the plan made (ver_cell_node), which the
@@ -1141,7 +1148,18 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
    on NilClass, Object, Kernel or BasicObject (-1 for none; 0 when an undef
    hides it). include_all is 1 or 0 when known, -1 when only the run time
    knows it: a private method then gives 2 (the include_all decides). */
-int cplan_nil_program_responds(Compiler *c, const char *name, int include_all);
+int cplan_nil_program_responds(Compiler *c, int call, const char *name, int include_all);
+/* The visibility (SP_VIS_*) of main's top-level def `name`, Object's method,
+   where call `call` runs, as the root lookup has it (cplan_root_method): a
+   def is private until a word makes it public. -1 where the program has no
+   such def, or the record cannot tell. The question of the reflection readers
+   (respond_to?). */
+int cplan_top_def_vis(Compiler *c, int call, const char *name);
+/* ...and the cell that holds it where only the run tells (cplan_top_def_vis answers -1): main's def
+   `name`, its one version, has run where call `call` runs, with a word whose order against the
+   call the run decides. The global holds SP_VIS_* (CallPlan.vis_cell); NULL for any other
+   def, and for a cell no emitted code reads. The respond_to? readers ask it */
+const LocalVar *cplan_top_def_cell(Compiler *c, int call, const char *name);
 /* The program's method CRuby's lookup of `name` on an instance of
    builtin class cls reaches first at the roots (NilClass, Numeric,
    Object -- a top-level def is Object's from where it runs, and the later
@@ -1179,6 +1197,10 @@ int cplan_class_answers_ahead_of_object(Compiler *c, int call, int k, const char
    dependencies (a class's method_missing, its chain), so a type that
    rests on its answer is asked again when they move. */
 int cplan_root_closed(Compiler *c, int id, int *vis);
+/* The private arm of a call a visibility cell guards (CallPlan.vis_cell): the def's scope, and
+   SP_VIS_PRIVATE in *vis, as cplan_root_closed answers a call closed to its receiver; -1 for any
+   other call. The refusal the guard raises where the cell says private is the closed call's */
+int cplan_guard_closed(Compiler *c, int id, int *vis);
 int cplan_nil_program_served(Compiler *c, int id);  /* codegen_call.c: nil's method's answer has the call's type */
 /* Is a nil fact's source `why` (nil_fact_why) a nil the program writes --
    a literal, a missing else, a safe navigation, a slot read before its

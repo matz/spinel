@@ -1,0 +1,27 @@
+"private method 'pa' called for an instance of Object"
+false
+true
+false
+true
+"private method 'pa' called for main"
+:pa
+[:pb, 1]
+true
+true
+true
+true
+true
+:pa
+[:pb, 2]
+:pa
+[:pa, :pa, :pa, :pa, :pa, :pa, :pa, :pa, :pa]
+[:pb, 0]
+true
+"private method 'pa' called for an instance of Object"
+false
+true
+false
+true
+true
+"private method 'pa' called for main"
+"private method 'pa' called for an instance of Integer"

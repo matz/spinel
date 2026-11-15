@@ -2020,6 +2020,15 @@ int is_kernel_module_function(const char *m) {
   return m && builtin_name_in(m, K);
 }
 
+/* Is m one of Kernel's module functions that never consults self (the ones
+   is_kernel_module_function lists, but `binding`, which captures it, and the
+   ones IO answers itself, which the names table does not list: a File as
+   self writes to the file) */
+int kernel_function_ignores_self(const char *m) {
+  static const char *const SELF[] = { "binding", "puts", "print", "printf", "gets", NULL };
+  return is_kernel_module_function(m) && !builtin_name_in(m, SELF);
+}
+
 /* The module that defines m, one of Object's own methods every object
    answers: BasicObject for the few it defines, Kernel for the rest; NULL
    for a name that is none of them */

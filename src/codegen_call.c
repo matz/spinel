@@ -23490,7 +23490,7 @@ static void emit_vis_msg_boxed(int vis, const char *vnm, int tv, const char *arg
   if (args) buf_printf(b, "SP_GC_ROOT_STR(_t%d); sp_stage_args_msg(_t%d, %s); })", tm, tm, args);
   else buf_printf(b, "_t%d; })", tm);
 }
-static int emit_vis_refusal_x(Compiler *c, int id, Buf *b);
+static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard);
 static void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
 static void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
 static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
@@ -23600,8 +23600,8 @@ static int module_ffi_or_native_owns(Compiler *c, int ci, const char *name) {
    receiver, nil, true and false, and one that may be nil, name themselves
    at run time. */
 static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind vrt, int vcid,
-                                          const char *vnm, int stamped, Buf *b) {
-  int oci = comp_core_class(c, CORE_OBJECT), vis = SP_VIS_PUBLIC, mi = cplan_root_closed(c, id, &vis);
+                                          const char *vnm, int stamped, int guard, Buf *b) {
+  int oci = comp_core_class(c, CORE_OBJECT), vis = SP_VIS_PUBLIC, mi = guard ? cplan_guard_closed(c, id, &vis) : cplan_root_closed(c, id, &vis);
   if (mi < 0) return 0;
   /* `x&.public_send(:top)` may hold nil, which it never calls on; `x&.top`
      raises past its nil guard */
@@ -23819,9 +23819,13 @@ int method_vis_for_caller(Compiler *c, int id, int vcid, const char *vnm) {
 
 /* --plan-check: a call refused for its visibility binds no method */
 int emit_vis_refusal(Compiler *c, int id, Buf *b) {
-  int r = emit_vis_refusal_x(c, id, b);
+  int r = emit_vis_refusal_x(c, id, b, 0);
   if (r && g_plan_check) ucall_refused(id);
   return r;
+}
+/* See codegen_call_arms.h. */
+int emit_vis_refusal_guard(Compiler *c, int id, Buf *b) {
+  return emit_vis_refusal_x(c, id, b, 1);
 }
 /* The class index a builtin-typed receiver's OWN class reopening declares
    name's visibility at, when the program reopened it with an explicit
@@ -23843,7 +23847,7 @@ static int builtin_reopen_vis_class(Compiler *c, int id, TyKind rt, const char *
   int vis = id >= 0 ? cplan_method_vis(c, id, bci, name, 0, NULL) : comp_method_vis_declared(c, bci, name, NULL);
   return vis == SP_VIS_PUBLIC ? -1 : bci;
 }
-static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
+static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard) {
   const NodeTable *nt = c->nt;
   int vrecv = nt_ref(nt, id, "receiver");
   int stamped = nt_str(nt, id, "vis_enforce") != NULL;
@@ -23867,7 +23871,7 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
     }
     /* public_send refuses Object's private method on any receiver, self too */
     if (((plain && nt_kind(nt, vrecv) != NK_SelfNode && !nt_int(nt, id, "self_call", 0)) || stamped) &&
-        emit_object_reopen_vis_refusal(c, id, vrecv, vrt, vcid, vnm, stamped, b)) return 1;
+        emit_object_reopen_vis_refusal(c, id, vrecv, vrt, vcid, vnm, stamped, guard, b)) return 1;
   }
   else {
     Scope *vs = comp_scope_of(c, id);
@@ -23880,7 +23884,10 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
   int at_main = top_priv && (vrecv < 0 || plain);
   if (vnm && vcid < 0 && vrecv >= 0 && !at_main) return emit_cmethod_vis_refusal(c, id, vrecv, vnm, b);
   if (!vnm || (vcid < 0 && !at_main)) return 0;
-  int vis = top_priv ? SP_VIS_PRIVATE
+  /* (main's def is private until a word makes it open, as the root lookup has it at the call; where it cannot tell, private) */
+  int top_vis = -1;
+  if (top_priv) cplan_root_method(c, id, core_class_name(CORE_OBJECT), vnm, &top_vis);
+  int vis = top_priv ? (top_vis >= 0 ? top_vis : SP_VIS_PRIVATE)
           : plain ? method_vis_for_caller(c, id, vcid, vnm)
                   : cplan_method_vis(c, id, vcid, vnm, 0, NULL);
   if (vis == SP_VIS_PUBLIC) return 0;
@@ -34663,6 +34670,8 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
     int bv = rt == TY_BOOL, rv = -1;
     const int cores[2] = { bv ? CORE_TRUECLASS : builtin_class_of_type(rt) ? core_of_type(rt) : -1, bv ? CORE_FALSECLASS : -1 };
     if (cores[0] >= 0) rv = root_reopen_method_vis(c, -1, qm);
+    /* ...or by the top level's def, Object's method from where it runs */
+    if (cores[0] >= 0 && rv < 0 && !builtin_method_known(core_class_name(cores[0]), qm)) rv = cplan_top_def_vis(c, id, qm);
     for (int i = 0; i < 2 && rv >= 0 && cores[i] >= 0; i++) {
       int bci = comp_core_class(c, cores[i]);
       if (builtin_method_known(core_class_name(cores[i]), qm) ||
@@ -34895,6 +34904,12 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
           resolved = 1; yes = a;
         }
       }
+      /* main's own top-level def answers by its visibility where the call runs (public, or any
+         with a true include_all) */
+      else if (ss && foldable && !(c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0) &&
+               cplan_top_def_vis(c, id, qm) >= 0) {
+        resolved = 1; yes = cplan_top_def_vis(c, id, qm) == SP_VIS_PUBLIC || include_all;
+      }
       /* in a class body, self is the class object: as in a class method
          (`ruby2_keywords(:m) if respond_to?(:ruby2_keywords, true)`) */
       else if (ss && c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0) {
@@ -34950,13 +34965,13 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
    NilClass, Object, Kernel or BasicObject (*prog set), a public one or any
    one with a true include_all (2: a private one where only the run time
    knows the include_all); else by its builtin surface */
-int nil_responds_static(Compiler *c, const char *qm, int argc, const int *argv, int *prog) {
+int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int *argv, int *prog) {
   int ia = 0;
   if (argc == 2) {
     NodeKind k = nt_kind(c->nt, argv[1]);
     ia = k == NK_TrueNode ? 1 : k == NK_FalseNode || k == NK_NilNode ? 0 : -1;
   }
-  int r = argc <= 2 ? cplan_nil_program_responds(c, qm, ia) : -1;
+  int r = argc <= 2 ? cplan_nil_program_responds(c, id, qm, ia) : -1;
   *prog = r >= 0;
   return r >= 0 ? r : nil_answers_name(qm) || sp_streq(qm, "rationalize");
 }
@@ -34983,7 +34998,7 @@ int static_respond_to_cond(Compiler *c, int pred) {
   int ans = respond_to_static_answer(c, pred, recv, rt, qm, ac, av);
   /* a heap object slot may hold nil, which answers only its own surface:
      the branch is not folded where the answer turns on that */
-  int nil_prog = 0, nil_too = nil_responds_static(c, qm, ac, av, &nil_prog);
+  int nil_prog = 0, nil_too = nil_responds_static(c, pred, qm, ac, av, &nil_prog);
   if (ans >= 0 && g_rto_nil_obj && ans != nil_too) return -1;
   /* a String, Integer or Float that may be nil, where nil answers
      otherwise by a method of the program's: not folded */
@@ -35219,6 +35234,19 @@ static int reopen_mixed_later(Compiler *c, int id, int mi) {
   int om = c->scopes[mi].origin_module_ci - 1;
   return om >= 0 && elab_mixed_at(c, c->scopes[mi].class_id, 0, om, elab_point_of(c, id)) == ELAB_NO;
 }
+/* The explicit receiver of a call to a top-level def, which takes no self:
+   it runs for its effect, as a statement ahead of the arguments, which are
+   held in the frame ahead of the call (in an expression it would run in the
+   order the C compiler picked, after them), and not at all where it has no
+   effect. */
+void emit_top_recv_effect(Compiler *c, int recv) {
+  if (!subtree_has_side_effect(c, recv)) return;
+  Buf rx; memset(&rx, 0, sizeof rx);
+  emit_expr_for_effect(c, recv, &rx);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "(void)(%s);\n", rx.p ? rx.p : "0");
+  free(rx.p);
+}
 /* A reopened builtin's yielding method reached with the call's block: it
    has no symbol of its own, being spliced where it can, so the call goes to
    its proc form with the block as a proc (#5779). `recv_text` is the
@@ -35238,9 +35266,19 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
   }
   Buf oc; memset(&oc, 0, sizeof oc);
   if (g_plan_check) ucall_observe(c, id, pf, c->scopes[pf].class_id, 0);
+  /* a top-level def takes no self: its receiver runs for its effect, ahead of the arguments */
+  int top = c->scopes[pf].class_id < 0;
+  if (top) emit_top_recv_effect(c, nt_ref(nt, id, "receiver"));
   buf_puts(&oc, mc_method(c, &c->scopes[pf]));
   int open = 0;
-  if (recv_text) {
+  if (top) {
+    buf_puts(&oc, "(");
+    emit_args_filled(c, pf, nt_ref(nt, id, "arguments"), "", &oc);
+    if (c->scopes[pf].nparams > 0) buf_puts(&oc, ", ");
+    if (tp >= 0) buf_printf(&oc, "_t%d)", tp);
+    else buf_puts(&oc, "NULL)");
+  }
+  else if (recv_text) {
     buf_printf(&oc, "(%s", recv_text);
     emit_args_filled(c, pf, nt_ref(nt, id, "arguments"), ", ", &oc);
   }
@@ -35251,8 +35289,10 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
     buf_puts(&oc, "(");
     open = emit_reopen_recv_args(c, id, pf, nt_ref(nt, id, "receiver"), boxed, box_fn, 0, &oc);
   }
-  if (tp >= 0) buf_printf(&oc, ", _t%d)", tp);
-  else buf_puts(&oc, ", NULL)");
+  if (!top) {
+    if (tp >= 0) buf_printf(&oc, ", _t%d)", tp);
+    else buf_puts(&oc, ", NULL)");
+  }
   if (open) buf_puts(&oc, "; })");
   Repr wr = repr_of(c, id);
   TyKind want = wr.as_ty, pr = (TyKind)c->scopes[pf].ret;
@@ -35277,6 +35317,12 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   const NodeTable *nt = c->nt;
   int pf = c->scopes[mi].yields ? scope_proc_form_of(c, mi) : -1;
   if (pf < 0) return 0;
+  /* (a top-level def's: no class to test the checks below against, which a class not reopened, -1, would match) */
+  if (c->scopes[mi].class_id < 0) {
+    int tblk = nt_ref(nt, id, "block") >= 0 ? resolve_forwarded_block(c, nt_ref(nt, id, "block")) : -1;
+    emit_reopen_pf_call(c, id, pf, tblk, NULL, NULL, b);
+    return 1;
+  }
   if (reopen_mixed_later(c, id, mi))
     unsupported_feature(c, id, "a call of a method a module mixes into a builtin class, made before the program includes the module, is not supported by AOT compilation");
   /* (an Integer's is a new route: a Float's, Symbol's, Range's and Time's

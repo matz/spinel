@@ -522,6 +522,8 @@ int is_dir_blockless_iter(const char *n);  /* foreach each_child: an Enumerator 
 
 int is_kernel_module_name(const char *n);
 int is_kernel_module_function(const char *n);
+/* ...and one that never consults self (not `binding`). */
+int kernel_function_ignores_self(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
 const char *builtin_method_owner(const char *cls, const char *m);   /* the class or module defining builtin cls's m */
 const char *builtin_bool_method_owner(const char *cls, const char *m);   /* ...a true's or false's m, of class cls when known; NULL where it is not known */

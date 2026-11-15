@@ -12493,6 +12493,12 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       int ocb = comp_core_class(c, CORE_OBJECT);
       int omb = ocb >= 0 ? call_target(c, id, ocb, name, 0, NULL) : -1;
       if (omb >= 0 && !c->scopes[omb].is_cmethod) changed |= bind_call_params(c, id, omb);
+      /* ...or a top-level def the plan binds to the call */
+      else if (omb < 0 && !cplan_builtin_call(c, id)) {
+        const CallPlan tp = cplan_user_fresh(c, id);
+        if (tp.mi >= 0 && tp.via == UC_REOPEN && tp.dispatch == CP_DIRECT && c->scopes[tp.mi].class_id < 0 && !c->scopes[tp.mi].is_cmethod)
+          changed |= bind_call_params(c, id, tp.mi);
+      }
     }
   }
   if (!settle || !ipt_work_next(c, &w, &ids, &nids)) break;

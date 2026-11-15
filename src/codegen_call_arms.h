@@ -35,6 +35,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
 void emit_class_value_constants(Compiler *c, const char *cv, int inherit, Buf *b);
 int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
 int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv, int ci, int mi);
+int emit_vis_refusal_guard(Compiler *c, int id, Buf *b);   /* the refusal of a call a visibility cell guards, where the cell says private (cplan_guard_closed) */
 int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, TyKind rt);
 int emit_call_regexp_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0);
 int emit_call_regexp_class_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
@@ -145,7 +146,7 @@ int method_hidden_from_reflection(Compiler *c, int cid, const char *m);
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m);
 int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv);
 /* nil's static answer to respond_to?(qm, ...); *prog: by a method of the program's */
-int nil_responds_static(Compiler *c, const char *qm, int argc, const int *argv, int *prog);
+int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int *argv, int *prog);
 /* respond_to? call id (its argc arguments argv, asking qm) of a class's own
    class method whose answer the version cells hold (cplan_cmethod_presence):
    one of the versions' cells, or what the class answers with none of them,
@@ -264,6 +265,7 @@ int emit_struct_new_early(Compiler *c, int ci, int argc, const int *argv, int kw
 void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b);
 int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *box_fn, Buf *b);
 void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv_text, const char *box_fn, Buf *b);
+void emit_top_recv_effect(Compiler *c, int recv);
 /* `fmt % args` where the format is a String made where it is written (an
    interpolation, a call's result) and the arguments allocate: nothing holds
    the format while they are built, and C does not say which of the two is

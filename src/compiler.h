@@ -1929,6 +1929,8 @@ typedef struct {
   /* the cells of the later prepends whose copies a guard entry chooses
      (Scope.mixin_guarded, ver_prepend_cell_name): 1 .. n_prepend_cells */
   int n_prepend_cells;
+  unsigned char *top_self_marks;      /* per scope: its top-level def reads self (call_plan.c, cplan_top_name_reads_self) */
+  unsigned long top_self_stamp;
   /* the version entries (call_plan.c, ver_entries_build): one method per
      (class, side, name, parameter count) for the calls whose version is
      known only at run time, or by guard (VER_ENTRY_*, call_plan.h), for
@@ -1964,6 +1966,17 @@ typedef struct {
      value (call_plan.c, ver_cells_put; cplan_vis_cell_after) */
   struct VerVisAfter { int node, cell, v; } *ver_vis_after;
   int nver_vis_after;
+  /* the visibility cells a call guard reads (CallPlan.vis_cell), one per call
+     and cell: the history's name, its cell, the call; written: its cell's
+     writes are placed (call_plan.c, ver_cells_put) */
+  struct VerVisRead { char *name; int cell, call, written; } *ver_vis_reads;
+  int nver_vis_reads, ver_vis_read_new;
+  /* ...each call's own cell + 1, by node (one cell per call), and each scope's state as a history a guard
+     may read: 1 its cell is listed, 2 it has none to list (a version the record proves, or more than one) */
+  int *ver_vis_call_cell, ver_vis_call_cap;
+  unsigned char *ver_vis_scope_mark; int ver_vis_scope_cap;
+  unsigned char *ver_vis_hist_seen; int ver_vis_hist_cap;   /* (the cells whose history is listed) */
+  unsigned long ver_vis_guard_stamp;   /* the tree's state ver_vis_guard_hists last read (nodes, scopes, edits, version) */
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),
@@ -2614,6 +2627,11 @@ const int *comp_name_reader_owners(Compiler *c, const char *name, int *n);
    comp_name_responders' count, asked where the list cannot be built too: the
    candidate owner of "is the name defined by a class of the program". */
 int        comp_name_answered(Compiler *c, const char *name, int is_cm);
+/* Does any class or module of the program answer `name` on either side: an
+   instance method or a singleton one (a def self.x, class << self,
+   module_function, define_singleton_method, extend), an attribute (a
+   singleton one too: class << self; attr_reader), or a native class's binding? */
+int        comp_name_answered_any_side(Compiler *c, const char *name);
 /* The scope class cls's chain finds for `name` as one of the name's
    responders, or -1 where it is not one: its class side with CT_CMETHOD, its
    own table only with CT_OWN (an override), the top-level functions for

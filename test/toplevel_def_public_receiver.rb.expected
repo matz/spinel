@@ -1,0 +1,45 @@
+"private method 'plain' called for an instance of Integer"
+"private method 'plain' called for nil"
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+[1, 2, [], 3]
+[1, 5, [6], 7]
+[9, 8, [], 3]
+1
+nil
+nil
+true
+nil
+printed
+[6, 2, [], 3]
+[:recv, :arg]
+:blk
+:none
+11
+:noblock
+[4, 4]
+300
+:first
+"private method 'ver' called for an instance of Integer"
+:second
+:pub_def
+:bare
+"private method 'back_to_private' called for an instance of Integer"
+:orig
+"private method 'hidden' called for an instance of Integer"
+"private method 'hidden' called for nil"
+"private method 'hidden' called for true"
+"private method 'hidden' called for class Integer"
+"private method 'hidden' called for an instance of Foo"

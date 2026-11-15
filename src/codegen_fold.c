@@ -227,13 +227,13 @@ void emit_method_call(Compiler *c, int id, Buf *b) {
   const char *name = nt_str(nt, id, "name");
   if (nt_str(nt, id, "vis_enforce") && emit_vis_refusal(c, id, b)) return;
   /* the target is the call's plan (call_plan.c): a top-level def, reached
-     bare or through a retargeted send. A plan of another kind does not
+     bare, through a retargeted send, or on an explicit receiver it is open to. A plan of another kind does not
      serve this site, which then takes the top-level def by name as it
      always did; --plan-check reports both that fallback and any plan that
      names another method than the by-name lookup. */
   const CallPlan pl = cplan_user(c, id);
   int mi;
-  if (pl.send_fallback >= 0 || (pl.mi >= 0 && (pl.via == UC_TOP || pl.via == UC_SEND_BLIND))) {
+  if (pl.send_fallback >= 0 || (pl.mi >= 0 && (pl.via == UC_TOP || pl.via == UC_SEND_BLIND || (cplan_root_reopen_owner(c, &pl) && c->scopes[pl.mi].class_id < 0)))) {
     mi = pl.send_fallback >= 0 ? pl.send_fallback : pl.mi;
     if (g_plan_check) cplan_served("emit_method_call");
     if (g_plan_check && mi != call_target(c, id, -1, name, CT_TOP, NULL))

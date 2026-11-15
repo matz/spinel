@@ -3235,7 +3235,7 @@ int sclass_value_call(Compiler *c, int id) {
 static TyKind an_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
   an_user_call_record(c, id, p->mi, UC_REOPEN, p->owner_ci);
   if (!g_infer_ignore_brk && call_breaks(c, id)) return TY_POLY;
-  return p->owner_ci == comp_core_class(c, CORE_OBJECT) && c->scopes[p->mi].yields && nt_ref(c->nt, id, "block") >= 0
+  return (c->scopes[p->mi].class_id < 0 || p->owner_ci == comp_core_class(c, CORE_OBJECT)) && c->scopes[p->mi].yields && nt_ref(c->nt, id, "block") >= 0
          ? TY_POLY : an_user_call(c, id, p->mi, UC_REOPEN, p->owner_ci);
 }
 
@@ -3270,7 +3270,13 @@ int object_reopen_answers(Compiler *c, int call_id, TyKind *out) {
   if (!name || builtin_object_method_known(name)) return 0;
   int oci = comp_core_class(c, CORE_OBJECT);
   int omi = oci >= 0 ? call_target(c, call_id, oci, name, 0, NULL) : -1;
-  if (omi < 0) return 0;
+  if (omi < 0) {
+    /* (no method of Object's table: the top level's def the plan binds, which every value answers) */
+    const CallPlan tp = cplan_user_fresh(c, call_id);
+    if (tp.mi < 0 || !cplan_root_reopen_call(c, call_id, &tp) || c->scopes[tp.mi].class_id >= 0) return 0;
+    *out = an_root_reopen_call(c, call_id, &tp);
+    return 1;
+  }
   const CallPlan p = { .mi = omi, .owner_ci = (short)oci, .via = UC_REOPEN };
   *out = an_root_reopen_call(c, call_id, &p);
   return 1;

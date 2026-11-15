@@ -7743,6 +7743,9 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
         if (is_select_reject_bang(name) && argc == 0) { *out = TY_POLY; return 1; }
         if ((sp_streq(name, "delete_if") || sp_streq(name, "keep_if")) && argc == 0) { *out = rt; return 1; }
         if ((is_select_alias(name) || sp_streq(name, "reject")) && argc == 0) { *out = rt; return 1; }
+        /* sort_by answers a new array of the same class and sort_by! the
+           array itself (a comparator's sort and sort! are answered above) */
+        if ((sp_streq(name, "sort_by") || sp_streq(name, "sort_by!")) && argc == 0) { *out = rt; return 1; }
       } }
   }
   return 0;

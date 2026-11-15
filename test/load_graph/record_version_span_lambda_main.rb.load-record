@@ -21,4 +21,4 @@ const Gong: write#3
 Gong#ring: def#4 runs=#8 def#10 runs=#8 end=yes
 const Gong::MAKER: write#5
 const Gong::FIRST: write#6
-versions Gong#ring: def#4..#10 seen=unknown, def#10..end seen=def#10; 3 of the name
+versions Gong#ring: def#4..#10 seen=def#4, def#10..end seen=def#10; 3 of the name

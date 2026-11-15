@@ -8816,7 +8816,7 @@ static int ver_always_shadowed(Compiler *c, const ElabVersion *vs, int nv, int i
   LoadPoint pi = elab_point_of(c, vs[i].v->node);
   if (pi.region < 0) return 0;
   for (int j = 0; j < i; j++) {
-    if (vs[j].hist == vs[i].hist || vs[j].v->kind != LR_DEF || elab_point_may(c, vs[j].v->node)) continue;
+    if (vs[j].hist == vs[i].hist || (vs[j].v->kind != LR_DEF && vs[j].v->kind != LR_COPY) || elab_point_may(c, vs[j].v->node)) continue;
     LoadPoint pj = elab_point_of(c, vs[j].v->node);
     if (pj.region < 0 || elab_cmp(pj, pi) != PROG_BEFORE) continue;
     int removed = 0;

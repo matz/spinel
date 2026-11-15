@@ -5440,6 +5440,26 @@ static int lr_chain_on(Compiler *c, int cls, int sg, const struct LrAncK *e, int
   return e->on >= 0 ? e->on : lr_search(c, cls, sg, NULL, k, p, 0, 0, NULL, 0) != ELAB_NO;
 }
 
+/* Does cls's own history of `name` (its singleton's when sg) hold a method
+   from before p on: a def at a point that runs for sure, ahead of p, in a
+   history nothing removes or undefines one from (a module function's
+   copy is such a def of the singleton's)? A mixin behind cls's own
+   methods (any but a prepend on that side of cls itself) then changes
+   nothing a call on cls finds by the name. */
+static int lr_own_holds_from(Compiler *c, int cls, int sg, const char *name, LoadPoint p) {
+  ElabVersion vs[16];
+  int n = cls >= 0 ? elab_history_versions(c, cls, sg, name, vs, 16) : -1, held = 0;
+  for (int i = 0; i < n; i++) {
+    if (vs[i].v->kind == LR_REMOVE || vs[i].v->kind == LR_UNDEF) return 0;
+    if ((vs[i].v->kind != LR_DEF && vs[i].v->kind != LR_COPY) || elab_point_may(c, vs[i].v->node)) continue;
+    LoadPoint q = elab_point_of(c, vs[i].v->node);
+    if (q.region >= 0 && elab_cmp(q, p) == PROG_BEFORE) held = 1;
+  }
+  return held;
+}
+static int lr_mix_behind_own(int held, int k, int cls, int sg, const LrMixin *m) {
+  return held && !(k == cls && m->kind == (sg ? LR_SG_PREPEND : LR_PREPEND));
+}
 /* Does cls's chain (its singleton's when sg) change for `name` strictly
    between p0 and p1: a module that has or may have the name mixed into a
    class on it, code the record cannot follow run on one of them that may
@@ -5449,6 +5469,7 @@ static int lr_chain_moves(Compiler *c, int cls, int sg, const char *name, LoadPo
   int nk = 0, nc = 0;
   const int *mk = lr_mixed(c, &nk);
   const struct LrAncK *ch = lr_chain_reach(c, cls, sg, &nc);
+  int held = lr_own_holds_from(c, cls, sg, name, p0);
   for (int i = 0; i < (ch ? nc : nk); i++) {
     if (ch && !ch[i].mixed) continue;
     int k = ch ? ch[i].k : mk[i];
@@ -5457,6 +5478,7 @@ static int lr_chain_moves(Compiler *c, int cls, int sg, const char *name, LoadPo
     if (!lr_chain_on(c, cls, sg, ch ? &ch[i] : NULL, k, p1)) continue;
     for (int j = 0; kc && j < kc->nmix; j++) {
       LrMixin *m = &kc->mix[j];
+      if (lr_mix_behind_own(held, k, cls, sg, m)) continue;
       if (lr_inside(c, m->node, p0, p1) &&
           (lr_mixin_class(c, m) < 0 || lr_search(c, m->mod, 0, name, -1, p1, 1, 0, NULL, 0) != ELAB_NO)) return 1;
     }
@@ -5475,6 +5497,7 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
   int nk = 0, nc = 0;
   const int *mk = lr_mixed(c, &nk);
   const struct LrAncK *ch = lr_chain_reach(c, cls, sg, &nc);
+  int held = lr_own_holds_from(c, cls, sg, name, p);
   for (int i = 0; i < (ch ? nc : nk); i++) {
     if (ch && !ch[i].mixed) continue;
     int k = ch ? ch[i].k : mk[i];
@@ -5483,6 +5506,7 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
     if (lr_opaque_defines(r, k)) return 0;
     for (int j = 0; kc && j < kc->nmix; j++) {
       LrMixin *m = &kc->mix[j];
+      if (lr_mix_behind_own(held, k, cls, sg, m)) continue;
       if (lr_later(c, &m->mod, m->ref) < 0) return 0;
       if (lr_search(c, m->mod, 0, name, -1, end, 1, 0, NULL, 0) == ELAB_NO) continue;
       if (elab_point_may(c, m->node) || elab_cmp(elab_point_of(c, m->node), p) != PROG_BEFORE) return 0;

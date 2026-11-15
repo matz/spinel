@@ -33,5 +33,5 @@ Point#ring: def#6 runs=#7 def#15 runs=#7 end=yes
 const Lone: write#9
 Lone#ring: def#10 runs=#13 def#17 runs=#13 end=yes
 const Lone::ORIGIN: write#11
-versions Point#ring: def#6..#15 seen=unknown, def#15..end seen=def#15; 5 of the name
+versions Point#ring: def#6..#15 seen=def#6, def#15..end seen=def#15; 5 of the name
 versions Lone#ring: def#10..#17 seen=def#10, def#17..end seen=def#17; 5 of the name

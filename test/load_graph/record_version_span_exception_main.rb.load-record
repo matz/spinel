@@ -65,8 +65,8 @@ Point#ring: def#18 runs=#19 def#32 runs=#19 end=yes
 const POINT: write#19
 const Bell: write#22
 Bell#ring: def#23 runs=#35 def#34 runs=#35 end=yes
-versions Fault#ring: def#6..#26 seen=unknown, def#26..end seen=def#26; 11 of the name
-versions Raised#ring: def#10..#28 seen=unknown, def#28..end seen=def#28; 11 of the name
-versions Called#ring: def#14..#30 seen=unknown, def#30..end seen=def#30; 11 of the name
-versions Point#ring: def#18..#32 seen=unknown, def#32..end seen=def#32; 11 of the name
+versions Fault#ring: def#6..#26 seen=def#6, def#26..end seen=def#26; 11 of the name
+versions Raised#ring: def#10..#28 seen=def#10, def#28..end seen=def#28; 11 of the name
+versions Called#ring: def#14..#30 seen=def#14, def#30..end seen=def#30; 11 of the name
+versions Point#ring: def#18..#32 seen=def#18, def#32..end seen=def#32; 11 of the name
 versions Bell#ring: def#23..#34 seen=def#23 idle, def#34..end seen=def#34; 11 of the name

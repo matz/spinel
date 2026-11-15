@@ -2,8 +2,8 @@
 # record_version_span_exception_main.rb.load-record) for objects made by
 # exception, called directly or by raise, by method(:new) and by a
 # builder's []: each class's first ring runs where its object is made,
-# so the version before its redefinition is seen (unknown: the include
-# changes the chain), never idle; Bell has no object until the last
+# so the version before its redefinition is seen (the include
+# stands behind the class's own ring), never idle; Bell has no object until the last
 # line. The record only: the compiler does not compile these
 # constructors right yet, so the program has no .expected.
 module Chime

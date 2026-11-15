@@ -123,6 +123,8 @@ p long.length, long.count("a"), long[0, 12], long.hash == ("x" * 0 + long).hash
 # slice! by each form
 t = +"0123456789"
 p t.slice!(3), t.slice!(-1), t.slice!(1, 2), t.slice!(2..3), t.slice!(/(6)(7)/, 2), t.slice!("8"), t.slice!(99), show(t)
+g = +"0478"
+p g.slice!(/(4)(7)/, 2), show(g), g.slice!(/0(4)/, 1), show(g)
 
 # an element, an attribute and a captured local
 rows = [+"....", +"...."]

@@ -16581,7 +16581,17 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                         (sr.kind == RK_BOXED || sr.big || repr_opt_kind(c, argv[0]) == TY_INT ||
                          comp_ntype(c, argv[0]) != TY_INT);
         int ts = -1;
-        if (size_late) ts = hold_operand_pre(c, argv[0], sr.as_ty, sr.kind == RK_BOXED, ++g_tmp, 1);
+        /* a nilable Integer (`s.index(x)`) is held as its oint: read as a
+           plain value, its nil raised the TypeError ahead of the fill */
+        int size_o = size_late && sr.kind != RK_BOXED && repr_opt_kind(c, argv[0]) == TY_INT;
+        if (size_o) {
+          ts = ++g_tmp;
+          Buf ob; memset(&ob, 0, sizeof ob); emit_oint_expr(c, argv[0], TY_INT, &ob);
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(TY_INT), ts, ob.p ? ob.p : oint_nil(TY_INT));
+          free(ob.p);
+        }
+        else if (size_late) ts = hold_operand_pre(c, argv[0], sr.as_ty, sr.kind == RK_BOXED, ++g_tmp, 1);
         else {
           Buf nb; memset(&nb, 0, sizeof nb); emit_int_expr(c, argv[0], &nb);
           emit_indent(g_pre, g_indent);
@@ -16637,7 +16647,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
            arguments before Array.new looks at them (CodeRabbit on #10019) */
         if (size_late) {
           /* the held size, converted where CRuby converts it */
-          int slot = view_bind_temp(argv[0], ts);
+          int slot = size_o ? view_bind_temp_o(argv[0], ts) : view_bind_temp(argv[0], ts);
           Buf nb; memset(&nb, 0, sizeof nb); emit_int_expr(c, argv[0], &nb);
           view_unbind(slot);
           buf_printf(g_pre, "sp_int _t%d = %s;\n", tn, nb.p ? nb.p : "0");

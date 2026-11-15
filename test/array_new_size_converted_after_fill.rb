@@ -35,6 +35,15 @@ rescue TypeError => e
   $log << e.message
 end
 p $log
+# a nilable Integer (String#index's miss) is held with its nil
+$log = []
+begin
+  Array.new("abc".index("z"), fill(0))
+rescue TypeError => e
+  $log << e.message
+end
+i = "abc".index("c")
+p Array.new(i, fill(0)), $log
 $log = []
 begin
   Array.new(Conv.new(-1), fill(0))

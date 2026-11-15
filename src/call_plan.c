@@ -1905,19 +1905,49 @@ int cplan_class_kernel(Compiler *c, int cls) {
    does not run the call's arguments. */
 static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, int ar, int vcall);
 static int cplan_mm_method(Compiler *c, int id, int ci, int cmethod);
+/* `<cell> == 1 || ...` over the Kernel cells *cells lists */
+static int ver_kern_test(Compiler *c, const VerIds *cells) {
+  DispArm *arm = malloc(sizeof *arm * (size_t)cells->n);
+  char (*sel)[32] = malloc(32 * (size_t)cells->n);
+  if (!arm || !sel) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < cells->n; k++) {
+    cplan_kernel_cell_name(cells->v[k], sel[k]);
+    (void)ver_kern_cell(c, cells->v[k]);
+    arm[k] = (DispArm){ sel[k], 1, NULL, 0, 0 };
+  }
+  int test = disp_cell_any((NodeTable *)c->nt, arm, cells->n);
+  free(arm); free(sel);
+  return test;
+}
+/* The test of self's Kernel in an instance method class cls holds, whose own is test (the ncells cells cls's chain
+   reads), where self may be of a class below cls whose Kernel is another: `case when self.instance_of?(D) then <D's>
+   ... else test end` with an arm for each such D, as CRuby answers by the receiver's class. D's is true where D surely
+   has Kernel (elab_class_kernel: an include in its body, or in a module it includes, that surely runs), else the test of
+   the cells D's chain reads (ver_kern_cells), cls's among them, where it reads more: a class method's include run on D,
+   an include under a condition in D's body or a module's, a module of D's with a cell of its own. Where every class
+   below reads what cls reads, test stands alone */
+static int ver_kern_self_test(Compiler *c, int cls, int ncells, int test) {
+  int nd = 0, n = 0;
+  const int *ds = comp_descendants(c, cls, &nd);
+  int *is = malloc(sizeof *is * (size_t)(nd > 0 ? nd : 1)), *own = malloc(sizeof *own * (size_t)(nd > 0 ? nd : 1));
+  if (!is || !own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nd; i++) {
+    VerIds dc = { NULL, 0, 0 };
+    int d = ds[i], t = -1;
+    if (elab_class_kernel(c, d) == KERN_HAS) t = nt_new_node((NodeTable *)c->nt, "TrueNode");
+    else if (ver_kern_cells(c, d, &dc) > ncells) t = ver_kern_test(c, &dc);
+    free(dc.v);
+    if (t >= 0 && (is[n] = disp_self_class_is(c, d)) >= 0) own[n++] = t;
+  }
+  if (n) test = disp_case((NodeTable *)c->nt, is, own, n, test);
+  free(is); free(own);
+  return test;
+}
 static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int how, const int *pm) {
   NodeTable *nt = (NodeTable *)c->nt;
   int base = nt->count, par = pm ? pm[id] : -1;
   VerIds cells;
   if (!ver_kern_cells(c, cls, &cells) || par < 0) { free(cells.v); return; }
-  DispArm *arm = malloc(sizeof *arm * (size_t)cells.n);
-  char (*sel)[32] = malloc(32 * (size_t)cells.n);
-  if (!arm || !sel) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int k = 0; k < cells.n; k++) {
-    cplan_kernel_cell_name(cells.v[k], sel[k]);
-    (void)ver_kern_cell(c, cells.v[k]);
-    arm[k] = (DispArm){ sel[k], 1, NULL, 0, 0 };
-  }
   int an = nt_ref(nt, id, "arguments"), nargs = 0, els;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &nargs) : NULL;
   if (how != 2 && cplan_mm_method(c, -1, cls, 0) >= 0) {
@@ -1945,12 +1975,12 @@ static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int
     els = nops ? disp_ahead(nt, ops, nops, raise) : raise;
     free(ops);
   }
-  int ifn = disp_cell_choose(nt, arm, cells.n, id, els);
+  int ifn = disp_choose(nt, ver_kern_self_test(c, cls, cells.n, ver_kern_test(c, &cells)), id, els);
   nt_replace_child(nt, par, id, ifn);
   comp_grow_node_arrays(c);
   for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
   nt_node_set_int(nt, ifn, "node_line", (int)nt_int(nt, id, "node_line", 0));
-  free(arm); free(sel); free(cells.v);
+  free(cells.v);
 }
 /* ...for each such call of the program */
 static void ver_kernel_guards(Compiler *c) {

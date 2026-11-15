@@ -1,0 +1,21 @@
+false
+:nme
+:nme
+[:sup, false]
+:nme
+:own
+false
+false
+:nme
+false
+[false]
+:nme
+false
+:nme
+false
+:nme
+[:mm, :respond_to_missing?]
+false
+[:mm, :respond_to_missing?]
+true
+:nme

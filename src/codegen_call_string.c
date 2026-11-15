@@ -1787,16 +1787,16 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
-/* ---- String#[]=, #insert, #clear and #slice! (stage 7) ----
+/* ---- String#[]=, #insert, #clear, #slice! and #bytesplice (stage 7) ----
    A String slot holds the String's handle, so these rows change the String
    where it lives: the receiver's handle is taken once, before the arguments
    run (CRuby evaluates the receiver first), and its bytes are spliced in
-   place (sp_String_splice_chars moves the tail), which every name holding
-   the String sees: a
-   variable, an ivar, self in a reopened String, an element, a call's
-   answer, the temp a `&.` tested, the String a bang on a held chain
-   answers. A String no name holds (a call's fresh answer) is changed in a
-   handle of its own, which nobody else reads.
+   place (sp_String_splice_chars, sp_String_splice_bytes: the tail moves),
+   which every name holding the String sees: a variable, an ivar, self in
+   a reopened String, an element, a call's answer, the temp a `&.` tested,
+   the String a bang on a held chain answers. A String no name holds (a
+   call's fresh answer) is changed in a handle of its own, which nobody else
+   reads.
 
    Every operand runs once, in Ruby's order -- the receiver, then the
    arguments left to right -- before any check the method makes (StrMutOp);
@@ -2089,6 +2089,30 @@ int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b) {
   str_mut_self_answer(c, x, t, b);
   view_unbind(mark);
   free(sp.p);
+  return 1;
+}
+
+/* bytesplice(start, len, str[, str_start, str_len]) and (range, str[,
+   str_range]): the receiver's handle is taken before the arguments run,
+   each argument runs and converts as emit_bytesplice_in_place orders them,
+   and the bytes are spliced in place (sp_String_splice_bytes): its span
+   checks and the encoding check first, then FrozenError, as CRuby's
+   str_check_beg_len and str_modify_keep_cr come. A nil receiver raises
+   NoMethodError once the arguments have run. Answers the receiver; a call
+   shape bytesplice_form_ok does not take is left to the other routes. */
+int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  if (!bytesplice_form_ok(c, argv, argc)) return 0;
+  int chk, t = str_mut_open(c, x, &chk, b);
+  char h[24], rs[48], pre[96];
+  snprintf(h, sizeof h, "_t%d", t);
+  snprintf(rs, sizeof rs, "sp_String_cstr(_t%d)", t);
+  snprintf(pre, sizeof pre, "if (SP_UNLIKELY(!_t%d)) sp_nil_recv_raise(\"bytesplice\"); ", t);
+  buf_puts(b, " (void)");
+  emit_bytesplice_in_place(c, argv, argc, rs, h, chk ? pre : NULL, b);
+  buf_puts(b, ";");
+  str_mut_self_answer(c, x, t, b);
   return 1;
 }
 

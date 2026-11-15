@@ -29363,9 +29363,9 @@ static int biv_mode(const char *cn) {
    after the Array it embeds, while `class Array; def tag!(v) = (@tag = v)`
    keeps @tag in the map under the same address: as two stores, neither
    side saw the other's @tag, and reflection on the instance saw neither.
-   A String subclass is not here: a String's method is handed a copy of a
-   subclass instance's bytes, not the instance (its own fault). */
-enum { BIVF_NONE, BIVF_ARRAY, BIVF_HASH, BIVF_EXC, BIVF_N };
+   A String subclass instance is keyed by its handle, which a String
+   reopening's method takes as self (arysub_bind). */
+enum { BIVF_NONE, BIVF_ARRAY, BIVF_HASH, BIVF_STRING, BIVF_EXC, BIVF_N };
 typedef struct { char **v; int n; } BivNames;
 static BivNames g_biv_kept[BIVF_N];
 static int g_biv_collect = BIVF_NONE;   /* the family a reopening's rewrite records into */
@@ -29374,6 +29374,7 @@ static int biv_family(const char *cn) {
   if (!cn) return BIVF_NONE;
   if (sp_streq(cn, "Array")) return BIVF_ARRAY;
   if (sp_streq(cn, "Hash")) return BIVF_HASH;
+  if (sp_streq(cn, "String")) return BIVF_STRING;
   return is_builtin_exception_name(cn) ? BIVF_EXC : BIVF_NONE;
 }
 static int biv_names_has(const BivNames *s, const char *n) {
@@ -29724,8 +29725,8 @@ static int biv_attr_kept(NodeTable *nt, int call, const BivNames *kept) {
   }
   return 0;
 }
-/* The second walk: each program subclass of an Array, a Hash or a builtin
-   exception whose builtin's reopening keeps ivars in the map reads and
+/* The second walk: each program subclass of an Array, a Hash, a String or
+   a builtin exception whose builtin's reopening keeps ivars in the map reads and
    writes those names there too, under its instance's address; its other
    ivars stay its fields. The class node is marked biv_shared, and
    infer_ivar_types gives the class computed_ivar_set: its reflection reads

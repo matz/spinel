@@ -1059,10 +1059,13 @@ module REXML
         raise NotImplementedError, "REXML Document context options are not supported"
       end
       return if source.nil? || source == ""
-      unless source.is_a?(String)
+      # a File is read whole, as REXML reads an IO source to its end
+      text = source.is_a?(File) ? source.read : source
+      unless text.is_a?(String)
         raise NotImplementedError, "REXML Document source: pass a String (File.read the file)"
       end
-      TreeParser.new(source, self).parse
+      return if text == ""
+      TreeParser.new(text, self).parse
     end
 
     def expanded_name = ""

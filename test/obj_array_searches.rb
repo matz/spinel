@@ -110,3 +110,25 @@ p WIRES.size, WIRES.delete(Wire.new(9))
 # index on a constant object array answers nil for a missing element.
 i = WIRES.index(Wire.new(9))
 p i, WIRES.index(b), WIRES.find_index(a)
+
+# An == that stores into the array: delete keeps what it stored.
+class Swap
+  attr_reader :n
+  def initialize(n, arr) = (@n = n; @arr = arr)
+  def ==(o)
+    @arr[0] = Swap.new(99, @arr) if n == 1
+    false
+  end
+end
+
+class Swaps
+  def initialize = @all = []
+  def add(s) = @all << s
+  def drop(s) = @all.delete(s)
+  def all = @all
+  def first_n = @all[0].n
+end
+
+sw = Swaps.new
+sw.add(Swap.new(1, sw.all))
+p sw.drop(Swap.new(5, sw.all)), sw.first_n

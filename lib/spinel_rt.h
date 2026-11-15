@@ -11002,8 +11002,9 @@ static void *sp_PtrArray_delete_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int 
   sp_int w = 0;
   for (sp_int i = 0; i < a->len; i++) {
     void *e = a->data[i];
-    if (!sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) a->data[w++] = e;
-    else removed = e;
+    /* read the slot after ==, which may have stored into it */
+    if (!sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) a->data[w++] = a->data[i];
+    else removed = a->data[i];
   }
   a->len = w;
   return removed;

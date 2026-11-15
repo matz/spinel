@@ -3998,7 +3998,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     if (emit_native_ctor(c, id, ci, argc, argv, b)) return 1;
     if (ci >= 0) {
       if (class_is_exc_subclass(c, ci)) {
-        int initm = cplan_new_initialize(c, id, ci, NULL);
+        int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
         /* (a version the constructor does not run: on the allocated object) */
         if (initm >= 0 && !ctor_new_runs(c, ci, initm)) {
           emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, b);
@@ -4069,7 +4069,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
            `NS::Reg.new { ... }` on an `initialize(o = nil, &blk)` were calls
            with too few arguments (a plain `Reg.new` never came this way). */
         if (emit_or_take_back(c, id, b, emit_class_new_call)) return 1;
-        int initm = cplan_new_initialize(c, id, ci, NULL);
+        int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
         if (initm >= 0 && !ctor_new_runs(c, ci, initm)) {
           emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, b);
           return 1;
@@ -5798,8 +5798,8 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           if (emit_native_ctor(c, id, new_cls, nargc, nargv, b)) return 1;
         }
         /* (self is a class that may be one below new_cls: no site, the
-           table's initialize, cplan_new_initialize) */
-        int initm = cplan_new_initialize(c, -1, new_cls, NULL);
+           table's initialize, cplan_hook_target) */
+        int initm = cplan_hook_target(c, -1, new_cls, "initialize", NULL);
         /* an exception class with no `initialize` takes the first argument as
            its message, exactly as the receiver `Klass.new(msg)` path does;
            the plain constructor below dropped it */
@@ -5839,7 +5839,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             for (int k = 0; k < c->nclasses; k++) {
               if (k == new_cls || !is_descendant(c, k, new_cls)) continue;
               ClassInfo *kc = &c->classes[k];
-              int ik = cplan_new_initialize(c, -1, k, NULL);
+              int ik = cplan_hook_target(c, -1, k, "initialize", NULL);
               if (kc->is_value_type || kc->is_struct || kc->is_native_class || ik < 0 || c->scopes[ik].yields ||
                   call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) plain = 0;
               subs++;
@@ -5853,7 +5853,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
                 for (int k = 0; k < c->nclasses; k++) {
                   if (k == new_cls || !is_descendant(c, k, new_cls)) continue;
                   buf_printf(b, "%s.cls_id == %d ? (sp_%s *)", cmethod_cls_token(c, encl), k, ncls->c_name);
-                  emit_ctor_alloc_init(c, k, cplan_new_initialize(c, -1, k, NULL),
+                  emit_ctor_alloc_init(c, k, cplan_hook_target(c, -1, k, "initialize", NULL),
                                        nt_ref(nt, id, "arguments"), id, b);
                   buf_puts(b, " : ");
                 }
@@ -5880,7 +5880,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           for (int k = 0; plain && k < c->nclasses; k++) {
             if (k == new_cls || !is_descendant(c, k, new_cls) || !class_has_ctor(&c->classes[k])) continue;
             ClassInfo *kc = &c->classes[k];
-            int ik = cplan_new_initialize(c, -1, k, NULL);
+            int ik = cplan_hook_target(c, -1, k, "initialize", NULL);
             if (kc->is_value_type || kc->is_struct || kc->is_native_class ||
                 (ik >= 0 && c->scopes[ik].yields) ||
                 call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) { plain = 0; break; }
@@ -5890,7 +5890,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             buf_puts(b, "(");
             for (int k = 0; k < c->nclasses; k++) {
               if (k == new_cls || !is_descendant(c, k, new_cls) || !class_has_ctor(&c->classes[k])) continue;
-              int ik = cplan_new_initialize(c, -1, k, NULL);
+              int ik = cplan_hook_target(c, -1, k, "initialize", NULL);
               buf_printf(b, "%s.cls_id == %d ? (sp_%s *)sp_%s_new(", cmethod_cls_token(c, encl), k, ncls->c_name, c->classes[k].c_name);
               if (ik >= 0) emit_args_filled(c, ik, nt_ref(nt, id, "arguments"), "", b);
               /* (an initialize that takes its block as a proc takes it in

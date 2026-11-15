@@ -195,7 +195,7 @@ static int ctor_block_fresh(Compiler *c, int id) {
 int emit_ctor_new_with_proc(Compiler *c, int id, int ci, Buf *b) {
   if (nt_kind(c->nt, id) == NK_CallNode && call_target(c, id, ci, "new", CT_CMETHOD, NULL) >= 0) return 0;
   int blk = nt_ref(c->nt, id, "block");
-  int initm = cplan_new_initialize(c, id, ci, NULL);
+  int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
   Scope *sblk = blk < 0 && (nt_kind(c->nt, id) == NK_SuperNode || nt_kind(c->nt, id) == NK_ForwardingSuperNode)
                 ? comp_scope_of(c, id) : NULL;
   int by_sblk = sblk && sblk->blk_param && sblk->blk_param[0];
@@ -203,12 +203,12 @@ int emit_ctor_new_with_proc(Compiler *c, int id, int ci, Buf *b) {
   if (!by_sblk && nt_kind(c->nt, blk) != NK_BlockArgumentNode &&
       !(nt_kind(c->nt, blk) == NK_BlockNode && ctor_new_on_cycle(c, id, ci, initm))) return 0;
   /* The clone is the constructor's, of the initialize it runs. A version
-     the plan answers here instead (cplan_new_initialize) that does not
+     the plan answers here instead (cplan_hook_target) that does not
      yield takes the proc as a plain construction does; one that yields
      runs by its own clone on the proc (ctor_alloc_init). */
   if (!ctor_new_runs(c, ci, initm)) {
     if (initm < 0 || !c->scopes[initm].yields) return 0;
-    if (by_sblk || nt_kind(c->nt, blk) != NK_BlockArgumentNode || scope_proc_form_of(c, initm) < 0) initm = cplan_new_initialize(c, -1, ci, NULL);
+    if (by_sblk || nt_kind(c->nt, blk) != NK_BlockArgumentNode || scope_proc_form_of(c, initm) < 0) initm = cplan_hook_target(c, -1, ci, "initialize", NULL);
     else { emit_ctor_alloc_init(c, ci, initm, nt_ref(c->nt, id, "arguments"), id, b); return 1; }
   }
   if (ctor_init_proc_form(c, ci) < 0) return 0;
@@ -271,7 +271,7 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
     else return 0;
   }
   else if (block >= 0 && (nt_kind(nt, block) != NK_BlockNode)) return 0;
-  int mi = cplan_new_initialize(c, id, ci, NULL);
+  int mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   if (mi < 0 || !c->scopes[mi].yields) return 0;
   if (ctor_new_on_cycle(c, id, ci, mi)) return 0;
   Scope *m = &c->scopes[mi];
@@ -11759,7 +11759,7 @@ int emit_native_ctor(Compiler *c, int id, int ci, int argc, const int *argv, Buf
 }
 
 /* Positional-arity bounds initialize initm accepts (the one a `new` runs,
-   cplan_new_initialize), for the `.new` arity check. Returns 1 and fills
+   cplan_hook_target), for the `.new` arity check. Returns 1 and fills
    [*pmin,*pmax] only when the arity is a fixed positional window we can
    enforce: no `initialize` (initm -1: Object#initialize, arity 0), or an
    `initialize` with only required/optional positionals. Returns 0 --
@@ -12694,7 +12694,7 @@ static void ctor_init_call(Compiler *c, int cid, int initm, int t, const char *a
    the method table's; a `new` the plan answers another version for
    allocates the object and runs that one (emit_ctor_alloc_init) */
 int ctor_new_runs(Compiler *c, int cid, int initm) {
-  return initm == cplan_new_initialize(c, -1, cid, NULL);
+  return initm == cplan_hook_target(c, -1, cid, "initialize", NULL);
 }
 
 /* The `case` of a `k.new(...)` dispatch arm for class `ci`: construct with
@@ -13431,7 +13431,7 @@ void emit_ctor_block_slot(Compiler *c, int id, int initm, const char *lead, Buf 
    or is not the site's (an arm no value reaches) */
 int emit_ctor_splice_arm(Compiler *c, int id, int ci, int rt2, Buf *b) {
   int initm = cplan_new_arm_initialize(c, id, ci);
-  if (initm < 0 || initm != cplan_new_initialize(c, id, ci, NULL) || !c->scopes[initm].yields || c->classes[ci].is_struct ||
+  if (initm < 0 || initm != cplan_hook_target(c, id, ci, "initialize", NULL) || !c->scopes[initm].yields || c->classes[ci].is_struct ||
       comp_class_is_module(c, &c->classes[ci])) return 0;
   /* a proc known only at run time (`k.new(x, &pr)`, the `&` a `...`
      forward passes) goes to the initialize's proc form, as at a static site */
@@ -15042,7 +15042,7 @@ static int emit_struct_new_call_members(Compiler *c, int id, int ci, int argc, c
 int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
   const NodeTable *nt = c->nt;
   ClassInfo *cls = &c->classes[ci];
-  int scust = cplan_new_initialize(c, id, ci, NULL);
+  int scust = cplan_hook_target(c, id, ci, "initialize", NULL);
   if (scust >= 0 && c->scopes[scust].reachable) return emit_struct_new_call_members(c, id, ci, argc, argv, b);
   int kwh = (argc == 1 && nt_kind(nt, argv[0]) == NK_KeywordHashNode && cls->kw_init != -1) ? argv[0] : -1;
   int ok_plain = 1;
@@ -15165,7 +15165,7 @@ static int emit_struct_new_call_members(Compiler *c, int id, int ci, int argc, c
     /* A struct with a custom `initialize` override delegates to it: the
        .new args are that initialize's params (not one-per-member), so call
        the constructor with the args filled to its signature. */
-    int scust = cplan_new_initialize(c, id, ci, NULL);
+    int scust = cplan_hook_target(c, id, ci, "initialize", NULL);
     if (scust >= 0 && c->scopes[scust].reachable && c->scopes[scust].yields) {
       /* a yielding custom initialize (yield / block_given? / a called &blk)
          runs its body inlined at the .new site -- the body drives the block
@@ -15859,7 +15859,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* the .new result is typed poly (a class-var receiver dispatches
          dynamically), so box the concrete constructor result to match (#2653) */
       int is_val = comp_ty_value_obj(c, ty_object(ci));
-      int initm = cplan_new_initialize(c, id, ci, NULL);
+      int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
       if (!ctor_new_runs(c, ci, initm) || ctor_needs_self_defaults_argv(c, initm, argv, argc)) {
         buf_printf(b, is_val ? "sp_box_vobj_%s(" : "sp_box_obj(", c->classes[ci].c_name);
         emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, b);
@@ -15895,7 +15895,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (ci >= 0 && !reopen_builtin_new) {
       /* user exception subclass: use the generated constructor */
       if (class_is_exc_subclass(c, ci)) {
-        int initm = cplan_new_initialize(c, id, ci, NULL);
+        int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
         /* a yielding initialize takes this site's block the way any class's does */
         if (initm >= 0 && c->scopes[initm].yields && nt_ref(nt, id, "block") >= 0 &&
             (emit_ctor_yield_inline(c, id, ci, b) || emit_ctor_new_with_proc(c, id, ci, b))) { *out = 1; return 1; }
@@ -15935,7 +15935,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* a subclass of a native class with no initialize of the program's
          (#9269): allocated, then set up by the in-place twin of the native
          constructor the arguments select */
-      int initm = cplan_new_initialize(c, id, ci, NULL);
+      int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
       if (c->classes[ci].nsub_root > 0 && initm < 0) {
         int t = ++g_tmp;
         char tn[32]; snprintf(tn, sizeof tn, "_t%d", t);
@@ -30282,7 +30282,7 @@ static int refuse_fwd_target(Compiler *c, int id, const char *name) {
   int cls = -1;
   if (sp_streq(name, "new") && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     TyKind ct = comp_ntype(c, id);
-    return ty_is_object(ct) ? cplan_new_initialize(c, id, ty_object_class(ct), NULL) : -1;
+    return ty_is_object(ct) ? cplan_hook_target(c, id, ty_object_class(ct), "initialize", NULL) : -1;
   }
   if (rk == NK_SelfNode) {
     Scope *encl = comp_scope_of(c, id);

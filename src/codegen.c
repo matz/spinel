@@ -12777,7 +12777,7 @@ int ctor_init_proc_form(Compiler *c, int cid) {
   if (ci->is_struct || ci->is_value_type || ci->is_native_class) return -1;
   if (comp_class_is_module(c, ci)) return -1;
   /* (the constructor is the class's, no site's: the table's initialize) */
-  int init = cplan_new_initialize(c, -1, cid, NULL);
+  int init = cplan_hook_target(c, -1, cid, "initialize", NULL);
   int pf = init >= 0 ? scope_proc_form_of(c, init) : -1;
   /* a class no reached code can build leaves its initialize, and so the
      clone, unwritten (compute_reachable, #10592) */
@@ -12988,8 +12988,8 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
    parameters, rather than fill the members (emit_class_new)? */
 static int struct_ctor_runs_init(Compiler *c, int cid) {
   /* (the constructor is one function of the class, built by no site: the
-     table's initialize, as cplan_new_initialize answers with no site) */
-  int si = cplan_new_initialize(c, -1, cid, NULL);
+     table's initialize, as cplan_hook_target answers with no site) */
+  int si = cplan_hook_target(c, -1, cid, "initialize", NULL);
   return si >= 0 && c->scopes[si].reachable;
 }
 /* The C name of class cid's members constructor (emit_struct_members_ctor) */
@@ -13046,7 +13046,7 @@ static void emit_struct_members_ctor(Compiler *c, ClassInfo *ci, Buf *b) {
 }
 /* The members constructors of the Struct and Data classes whose
    sp_<cid>_new runs the program's initialize, for the sites the plan
-   answers none at (cplan_new_initialize): each one texts[0..ntexts) call,
+   answers none at (cplan_hook_target): each one texts[0..ntexts) call,
    its prototype into protos, itself into defs. The calls are all found
    before the first is written: defs may be one of the texts, and grows. */
 static void emit_struct_members_ctors(Compiler *c, const char *const *texts, int ntexts, Buf *protos, Buf *defs) {

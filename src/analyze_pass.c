@@ -3043,7 +3043,7 @@ static int local_is_kept_block_param(Compiler *c, Scope *sc, const char *nm) {
     if (sp_streq(mn, "new")) {
       const char *cn = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
       int ci = cn ? const_node_class_index(c, recv) : -1;
-      int si = ci >= 0 ? cplan_new_initialize(c, call, ci, NULL) : -1;
+      int si = ci >= 0 ? cplan_hook_target(c, call, ci, "initialize", NULL) : -1;
       if (si < 0) return 0;
       Scope *d = &c->scopes[si];
       return !d->yields && d->blk_param && d->blk_param[0];
@@ -11205,7 +11205,7 @@ static int struct_new_types_members_at(Compiler *c, int id, int ci, int given_on
   ClassInfo *cls = &c->classes[ci];
   /* A user initialize receives the arguments; its `super` sets the members
      (struct_super_types_members). */
-  int imi = cplan_new_initialize(c, id, ci, NULL);
+  int imi = cplan_hook_target(c, id, ci, "initialize", NULL);
   if (imi >= 0) return bind_call_params(c, id, imi);
   int args = nt_ref(nt, id, "arguments");
   int an = 0;
@@ -11971,7 +11971,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         const char *rcn = key_name(c, rav[0]);
         int rci = rcn ? const_node_class_index(c, rav[0]) : -1;
         if (rci >= 0 && class_is_exc_subclass(c, rci)) {
-          int imi = cplan_new_initialize(c, id, rci, NULL);
+          int imi = cplan_hook_target(c, id, rci, "initialize", NULL);
           /* the message is `Cls.new(arg)`'s one argument, into the
              parameter its layout funds: `initialize(a = 5, b)` takes it in b */
           Scope *im = imi >= 0 ? &c->scopes[imi] : NULL;
@@ -12013,7 +12013,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       TyKind drt = infer_type(c, recv);
       if (ty_is_object(drt)) {
         int dcid = ty_object_class(drt);
-        int dmi = cplan_copy_initialize(c, id, dcid, NULL);
+        int dmi = cplan_hook_target(c, id, dcid, "initialize_copy", NULL);
         if (dmi >= 0 && c->scopes[dmi].nparams >= 1) {
           LocalVar *dp = scope_local(&c->scopes[dmi], c->scopes[dmi].pnames[0]);
           if (dp && !dp->rbs_seeded) {
@@ -12147,7 +12147,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           else {
             /* (a bare `new` runs on self, a class that may be one below this
                one: the table's initialize, as its construction emits it) */
-            int initmi = cplan_new_initialize(c, -1, s->class_id, NULL);
+            int initmi = cplan_hook_target(c, -1, s->class_id, "initialize", NULL);
             if (initmi >= 0) changed |= bind_call_params(c, id, initmi);
           }
         }
@@ -12322,7 +12322,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           if (ucnew >= 0)
             changed |= bind_call_params(c, id, ucnew);
           else
-            changed |= bind_call_params(c, id, cplan_new_initialize(c, id, ci, NULL));
+            changed |= bind_call_params(c, id, cplan_hook_target(c, id, ci, "initialize", NULL));
         }
         else if (ci >= 0)
           changed |= bind_call_params(c, id, call_target(c, id, ci, name, CT_CMETHOD, NULL));
@@ -12354,7 +12354,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
             if (ucnew >= 0)
               changed |= bind_call_params(c, id, ucnew);
             else
-              changed |= bind_call_params(c, id, cplan_new_initialize(c, id, ci, NULL));
+              changed |= bind_call_params(c, id, cplan_hook_target(c, id, ci, "initialize", NULL));
           }
           else {
             int cmi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
@@ -12403,7 +12403,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     if (name && sp_streq(name, "with") && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
         comp_method_in_chain(c, ty_object_class(rt), "with", NULL) < 0) {
       int wci = ty_object_class(rt);
-      int wimi = cplan_new_initialize(c, -1, wci, NULL);
+      int wimi = cplan_hook_target(c, -1, wci, "initialize", NULL);
       changed |= wimi >= 0 ? struct_with_binds_initialize(c, id, wci, wimi)
                            : struct_with_types_members(c, id, wci);
       continue;
@@ -12418,7 +12418,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       for (int q = 0; q < (ks ? nk : c->nclasses); q++) {
         int k = ks ? ks[q] : q;
         if (k < 0 || k >= c->nclasses || !c->classes[k].is_data ||
-            cplan_new_initialize(c, -1, k, NULL) >= 0 ||
+            cplan_hook_target(c, -1, k, "initialize", NULL) >= 0 ||
             comp_method_in_chain(c, k, "with", NULL) >= 0) continue;
         changed |= struct_with_types_members(c, id, k);
       }
@@ -13701,7 +13701,7 @@ static int block_reach(Compiler *c, int si, const BlockSig *s, TyKind *pos,
     else if (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) {
       int ci = const_node_class_index(c, recv);
       if (ci >= 0) t = call_target(c, f, ci, fn, CT_CMETHOD, NULL);
-      if (ci >= 0 && t < 0 && is_new_name(fn)) t = cplan_new_initialize(c, f, ci, NULL);
+      if (ci >= 0 && t < 0 && is_new_name(fn)) t = cplan_hook_target(c, f, ci, "initialize", NULL);
     }
     else {
       TyKind rt = infer_type(c, recv);
@@ -18455,7 +18455,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
       else if (sp_streq(name, "new") && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
         int cid = nt_str(nt, recv, "name") ? const_node_class_index(c, recv) : -1;
-        if (cid >= 0) ymi = cplan_new_initialize(c, id, cid, NULL);
+        if (cid >= 0) ymi = cplan_hook_target(c, id, cid, "initialize", NULL);
       }
       else if (ty_is_object(infer_type(c, recv))) ymi = call_target(c, id, ty_object_class(infer_type(c, recv)), name, 0, NULL);
       else ymi = const_recv_cmethod_mi(c, id, recv, name);
@@ -18624,7 +18624,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
       if (mi < 0 && sp_streq(name, "new") && recv_is_const) {
         const char *cname = nt_str(nt, recv, "name");
         int cid = const_node_class_index(c, recv);
-        if (cid >= 0) mi = cplan_new_initialize(c, id, cid, NULL);
+        if (cid >= 0) mi = cplan_hook_target(c, id, cid, "initialize", NULL);
       }
       /* Class.method { ... }: look up the class method. This is where the
          block's parameters get their types from what the method YIELDS, so
@@ -21098,7 +21098,7 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
     }
   }
   /* a dup or clone of an object: the initialize_copy its typed arm calls
-     (cplan_copy_initialize), on the class of the receiver and, for a
+     (cplan_hook_target), on the class of the receiver and, for a
      singleton's dup, the class it shows */
   const char *kn = nt_kind(nt, id) == NK_CallNode ? key_name(c, id) : NULL;
   if (kn && is_copy_alias(kn) && ct_version_marked(c, "initialize_copy")) {
@@ -21107,7 +21107,7 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
     int cid = ty_is_object(rt) ? ty_object_class(rt) : -1;
     int cls[2] = { cid, cid >= 0 && c->classes[cid].is_singleton_of ? singleton_visible_ci(c, cid) : cid };
     for (int i = 0; cid >= 0 && i < (cls[1] != cid ? 2 : 1); i++) {
-      int mi = cplan_copy_initialize(c, id, cls[i], NULL);
+      int mi = cplan_hook_target(c, id, cls[i], "initialize_copy", NULL);
       char mark[24];
       if (mi < 0) continue;
       snprintf(mark, sizeof mark, "\x01%d", mi);

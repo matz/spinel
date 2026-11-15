@@ -3479,14 +3479,14 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
     TyKind crt = infer_type(c, crecv);
     if (ty_is_object(crt)) rmi = call_target(c, cid, ty_object_class(crt), cn, 0, NULL);
     /* `Klass.new { block }`: the block feeds the initialize the plan
-       answers the site with (cplan_new_initialize), the version current
+       answers the site with (cplan_hook_target), the version current
        there. A scoped receiver (`NS::Klass`) resolves by its leaf name,
        the key classes are indexed under. */
     else if (is_new_name(cn) && nt_type(nt, crecv) &&
              (nt_kind(nt, crecv) == NK_ConstantReadNode ||
               nt_kind(nt, crecv) == NK_ConstantPathNode)) {
       int nci = const_node_class_index(c, crecv);
-      if (nci >= 0) rmi = cplan_new_initialize(c, cid, nci, NULL);
+      if (nci >= 0) rmi = cplan_hook_target(c, cid, nci, "initialize", NULL);
     }
     /* `Klass.m { block }` / `Mod.m { block }` / `NS::Klass.m { block }`: a
        class/module self-method (singleton). Resolve the constant and look
@@ -6678,7 +6678,7 @@ static void si_call_targets(Compiler *c, SiFacts *f, int from, int id, const cha
   if (r >= 0 && sp_streq(nm, "new") && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
     int k = const_node_class_index(c, r);
     if (k >= 0) {
-      int mi = cplan_new_initialize(c, id, k, NULL);
+      int mi = cplan_hook_target(c, id, k, "initialize", NULL);
       if (mi >= 0) si_target(f, from, mi, hit);
       return;
     }

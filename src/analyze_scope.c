@@ -256,7 +256,7 @@ static int new_site_reaches(Compiler *c, int id, int init) {
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode)
     return 0;
   int cid = const_node_class_index(c, recv);
-  return cid >= 0 && cplan_new_initialize(c, id, cid, NULL) == init;
+  return cid >= 0 && cplan_hook_target(c, id, cid, "initialize", NULL) == init;
 }
 
 /* `def initialize(...)` is reached through `Klass.new(...)`, never a call named
@@ -3542,7 +3542,7 @@ static int sg_block_handoff(const NodeTable *nt, int n, const char *blk) {
    `self` first? */
 static int sg_initialize_yields_self(Compiler *c, int id, int ci) {
   const NodeTable *nt = c->nt;
-  int mi = cplan_new_initialize(c, id, ci, NULL);
+  int mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   if (mi < 0 || c->scopes[mi].body < 0) return 0;
   const char *blk = c->scopes[mi].blk_param;
   if (blk && !blk[0]) blk = NULL;
@@ -12079,7 +12079,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       int rc = rn ? const_node_class_index(c, r) : -1;
       if (rc < 0) { if (rn && is_builtin_class_name(rn)) continue; return 0; }
       if (comp_cmethod_in_chain(c, rc, "new", NULL) >= 0) return 0;
-      if (cplan_new_initialize(c, u, rc, NULL) != (int)(s - c->scopes)) continue;
+      if (cplan_hook_target(c, u, rc, "initialize", NULL) != (int)(s - c->scopes)) continue;
     }
     if (!pn) {
       int r = nt_ref(nt, u, "receiver");

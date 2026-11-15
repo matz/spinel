@@ -20,10 +20,14 @@ sb = +"abcdef"
 rb = sb.bytesplice(0, 1, Shift.new(idx), idx[0], 1)
 p sb, rb.equal?(sb)
 
+class Lengthen
+  def initialize(a) = @a = a
+  def to_str = (@a[1] = 2; "XY")
+end
 idx = [0, 1]
 sl = +"abcdef"
-sl.bytesplice(0, 1, Shift.new(idx), 0, idx[1])
-p sl
+sl.bytesplice(0, 1, Lengthen.new(idx), 0, idx[1])
+p sl, idx
 
 $sh = 0
 sc = +"abcdef"

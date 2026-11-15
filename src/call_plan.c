@@ -2126,6 +2126,12 @@ static int ct_pin_of(const Compiler *c, int id) {
   const struct VerPin *p = ct_pin_find(c, id);
   return p ? p->scope : -1;
 }
+/* ...as it answers a lookup of name at the call: a pin answers the call's
+   own name, not another a lookup asks at it (the hook's, method_missing) */
+static int ct_pin_for(const Compiler *c, int id, const char *name) {
+  const char *own = nt_str(c->nt, id, "name");
+  return own && sp_streq(own, name) ? ct_pin_of(c, id) : -1;
+}
 int cplan_pinned_vis(const Compiler *c, int id) {
   const struct VerPin *p = ct_pin_find(c, id);
   return p ? p->vis : 0;
@@ -4088,7 +4094,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     }
     r = mi;
   }
-  else if ((ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) != -1 &&
+  else if ((ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_for(c, id, name)) != -1 &&
            /* (a pin answers the side its entry is on: an instance entry's
               arm, asked for a class method of a Class value its receiver
               may hold, finds that class's own method. A call on main takes

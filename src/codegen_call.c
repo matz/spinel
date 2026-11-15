@@ -13889,11 +13889,11 @@ void emit_raise_class_value(Compiler *c, int kn, int mn, Buf *b) {
     free(pdpre.p); free(ab.p);
   }
   ctor_arity_emit(&aerr, b);
-  buf_printf(b, "default: break; } if (_t%d.tag == SP_TAG_OBJ) sp_raise_exc((sp_Exception *)_t%d.v.p); ",
-             rt, rt);
+  buf_printf(b, "default: break; } if (_t%d.tag == SP_TAG_OBJ) %s(sp_Exception *)_t%d.v.p); ",
+             rt, raise_fn("sp_raise_exc"), rt);
   /* (a String message is kept as its handle, sp_raise_poly_msg_h) */
-  if (mn >= 0) buf_printf(b, "sp_raise_poly_msg_h(_t%d, _t%d); })", kt, mt);
-  else buf_printf(b, "sp_raise_poly(_t%d); })", kt);
+  if (mn >= 0) buf_printf(b, "%s_t%d, _t%d); })", raise_fn("sp_raise_poly_msg_h"), kt, mt);
+  else buf_printf(b, "%s_t%d); })", raise_fn("sp_raise_poly"), kt);
 }
 
 /* The same, for arguments hoisted into the boxed temps `atmp`. */

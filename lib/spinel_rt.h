@@ -18127,11 +18127,19 @@ SP_NORETURN SP_COLD static void sp_abort_raise(const char *msg) {
   }
   exit(sp_at_exit_run(1));
 }
+/* The TypeError a raise makes when its operands are not an exception: it is
+   not the exception the raise names, so an explicit `cause:` the raise
+   staged is not its cause. Its cause is the exception being handled, as in
+   CRuby. */
+SP_NORETURN SP_COLD static void sp_raise_operand_type(const char *msg) {
+  sp_explicit_cause = NULL; sp_explicit_cause_set = 0;
+  sp_raise_cls("TypeError", msg);
+}
 static void sp_raise_exc(volatile sp_Exception *ve) {
   sp_sig_async_ok = 0;   /* see sp_raise_cls */
   sp_Exception *e = (sp_Exception *)ve;
   /* `raise nil`, or a raise of an Exception slot that holds nil */
-  if (!e) sp_raise_cls("TypeError", "exception class/object expected");
+  if (!e) sp_raise_operand_type("exception class/object expected");
   /* Carry the object so a user subclass keeps its ivars across the
      longjmp; sp_raise_cls moves it into the current frame's slot. */
   sp_pending_exc_obj = (void *)e;
@@ -18156,21 +18164,34 @@ SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_obj(const char *ms
   sp_raise_exc(e);
   SP_UNREACHABLE();   /* sp_raise_exc longjmps */
 }
-SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call(const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, ...) {
+/* A raise with an explicit `cause:` stages its cause (cz, NULL for
+   `cause: nil`) through these _cz entries once its operands have run (see
+   sp_raise_cls_cz). */
+#define SP_CAUSE_STAGE(cz) (sp_explicit_cause = (cz), sp_explicit_cause_set = 1)
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_va(int czset, void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, va_list ap) {
   SP_GC_SAVE();
   SP_GC_ROOT_STR(msg);
   SP_GC_ROOT_RBVAL(name);
   SP_GC_ROOT_RBVAL(recv);
   sp_RbVal v[n > 0 ? n : 1];
-  va_list ap;
-  va_start(ap, n);
   for (sp_int i = 0; i < n; i++) v[i] = va_arg(ap, sp_RbVal);
-  va_end(ap);
   for (sp_int i = 0; i < n; i++) _sp_gc_root_push((void **)((uintptr_t)&v[i] | (uintptr_t)1));
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
   for (sp_int i = 0; i < n; i++) sp_PolyArray_push(a, v[i]);
+  /* (a raise's explicit cause, staged once the operands ran: sp_raise_cls_cz) */
+  if (czset) SP_CAUSE_STAGE(cz);
   sp_raise_nomethod_obj(msg, name, recv, a);
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call(const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  sp_raise_nomethod_va(0, NULL, msg, name, recv, n, ap);
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_cz(void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  sp_raise_nomethod_va(1, cz, msg, name, recv, n, ap);
 }
 SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
   SP_GC_SAVE();
@@ -18185,6 +18206,22 @@ SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const ch
   SP_GC_ROOT(r);
   for (sp_int i = 0; r && i < r->len; i++) sp_PolyArray_push(a, r->data[i]);
   if (sp_poly_length(kw) > 0) sp_PolyArray_push(a, kw);
+  sp_raise_nomethod_obj(msg, name, recv, a);
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest_cz(void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
+  SP_GC_SAVE();
+  SP_GC_ROOT_STR(msg);
+  SP_GC_ROOT_RBVAL(name);
+  SP_GC_ROOT_RBVAL(recv);
+  SP_GC_ROOT_RBVAL(rest);
+  SP_GC_ROOT_RBVAL(kw);
+  sp_PolyArray *a = sp_PolyArray_new();
+  SP_GC_ROOT(a);
+  sp_PolyArray *r = sp_poly_to_poly_array(rest);
+  SP_GC_ROOT(r);
+  for (sp_int i = 0; r && i < r->len; i++) sp_PolyArray_push(a, r->data[i]);
+  if (sp_poly_length(kw) > 0) sp_PolyArray_push(a, kw);
+  SP_CAUSE_STAGE(cz);
   sp_raise_nomethod_obj(msg, name, recv, a);
 }
 /* e.message as the String handle it holds (sp_Exception.msg_h), from the
@@ -18439,7 +18476,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly(sp_RbVal v) {
       sp_raise_cls(cn, sp_str_empty);
     }
   }
-  sp_raise_cls("TypeError", "exception class/object expected");
+  sp_raise_operand_type("exception class/object expected");
 }
 /* Kernel#raise(klass_or_exc, msg) with a runtime-typed first operand: a Class
    value raises that class with the message, an exception object raises
@@ -18472,7 +18509,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg(sp_RbVal v, sp_RbVal m) {
       sp_raise_cls(cn, msg ? msg : sp_str_empty);
     }
   }
-  sp_raise_cls("TypeError", "exception class/object expected");
+  sp_raise_operand_type("exception class/object expected");
 }
 /* --share-strings: `raise k, m` with k a class known only at run time and m
    the box of a shared String's handle: the exception keeps the handle, as a
@@ -18499,6 +18536,27 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg_h(sp_RbVal v, sp_RbVal m) {
     }
   }
   sp_raise_poly_msg(v, m);
+}
+/* A raise with an explicit `cause:` stages the cause here, once its
+   operands have run: the argument list of the call below is evaluated
+   before the call, so a raise inside an operand (a method that raises, or
+   one that rescues its own raise) does not see the cause, and the cause is
+   not cleared before the raise it belongs to. cz is the cause, NULL for
+   none (`cause: nil`); the caller holds it rooted. */
+SP_NORETURN SP_COLD static void sp_raise_cls_cz(void *cz, const char *cls, const char *msg) {
+  SP_CAUSE_STAGE(cz); sp_raise_cls(cls, msg);
+}
+SP_NORETURN SP_COLD static void sp_raise_cz(void *cz, const char *msg) {
+  SP_CAUSE_STAGE(cz); sp_raise_cls("RuntimeError", msg);
+}
+SP_NORETURN SP_COLD static void sp_raise_exc_cz(void *cz, volatile sp_Exception *e) {
+  SP_CAUSE_STAGE(cz); sp_raise_exc(e); SP_UNREACHABLE();
+}
+SP_NORETURN SP_COLD static void sp_raise_poly_cz(void *cz, sp_RbVal v) {
+  SP_CAUSE_STAGE(cz); sp_raise_poly(v);
+}
+SP_NORETURN SP_COLD static void sp_raise_poly_msg_h_cz(void *cz, sp_RbVal v, sp_RbVal m) {
+  SP_CAUSE_STAGE(cz); sp_raise_poly_msg_h(v, m);
 }
 /* Raise StopIteration carrying the iteration's return value as #result. Built as
    a carried object so a `rescue StopIteration => e` binding reads e.result; a

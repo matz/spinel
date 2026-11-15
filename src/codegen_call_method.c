@@ -2297,6 +2297,10 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     int self_receiver = (recv >= 0 && repr_of(c, recv).as_ty != TY_CLASS);
     int self_tmp = 0;
     int tbr = 0;
+    /* a builtin receiver bound by its pointer (a String handle, an Array, a
+       Hash) has no class id in its first field: the Method keeps the box's,
+       which #receiver read back out of a container boxes it by */
+    TyKind self_box_ty = TY_UNKNOWN;
     if (self_receiver && bam_poly) {
       /* the receiver rides the self slot inside a one-element PolyArray,
          which the synthesized wrapper reads back as __bam_r[0] */
@@ -2327,6 +2331,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       self_tmp = ++g_tmp;
       self_kind = "SP_BM_SELF_OBJ";
       self_rooted = 1;
+      self_box_ty = TY_STRBUF;
       buf_printf(b, "({ void *_t%d = (void *)(", self_tmp);
       emit_strbuf_handle_of(c, recv, b);
       buf_printf(b, "); SP_GC_ROOT(_t%d); ", self_tmp);
@@ -2337,7 +2342,10 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       /* A Method binds to whatever the receiver is, and a number is not a
          reference the collector can follow. */
       if (rt2 == TY_STRING || rt2 == TY_STRBUF) { self_kind = "SP_BM_SELF_STR"; self_is_str = 1; self_rooted = 1; }
-      else if (needs_root(rt2) && rr2.kind != RK_BOXED && rr2.kind != RK_VOBJ) { self_kind = "SP_BM_SELF_OBJ"; self_rooted = 1; }
+      else if (needs_root(rt2) && rr2.kind != RK_BOXED && rr2.kind != RK_VOBJ) {
+        self_kind = "SP_BM_SELF_OBJ"; self_rooted = 1;
+        if (ty_is_array(rt2) || ty_is_hash(rt2)) self_box_ty = rt2;
+      }
       /* (a true or a false is its value, which a #receiver read back out of a
          container answers by this kind) */
       else if (rt2 == TY_BOOL && rr2.kind != RK_BOXED) self_kind = "SP_BM_SELF_BOOL";
@@ -2395,6 +2403,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
        name shares, and a typed one its owner's alias group, which a held
        Method finds its own written name in (sp_bm_set_group) */
     int grp = held || ident != NULL;
+    int set_cls = self_rooted && !held && self_box_ty != TY_UNKNOWN;
+    if (set_cls) buf_puts(b, "sp_bm_set_self_cls(");
     if (grp) buf_puts(b, "sp_bm_set_group(");
     if (held) buf_puts(b, "sp_bm_set_held(");
     if (ident) buf_puts(b, "sp_bm_set_ident(");
@@ -2643,6 +2653,12 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       free(map);
       buf_printf(b, ", (sp_int)%uu)", builtin_name_group_hash(ident && hash ? hash + 1 : disp));
     }
+    if (set_cls) {
+      char st[32]; snprintf(st, sizeof st, "_t%d", self_tmp);
+      buf_puts(b, ", (");
+      emit_boxed_text(c, self_box_ty, st, b);
+      buf_puts(b, ").cls_id)");
+    }
     if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
     if (ivk >= 0) buf_puts(b, "; })");
@@ -2867,11 +2883,7 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         /* the object the Method bound: a reference self carries its own class
            id in its first field, which is how any boxed object names its
            class; a true or a false is the value its kind says it is */
-        buf_printf(b, "({ sp_BoundMethod *_m = (sp_BoundMethod *)_t%d.v.p;"
-                      " _m->self_kind == SP_BM_SELF_BOOL ? sp_box_bool(_m->self != NULL)"
-                      " : _m->self_kind == SP_BM_SELF_SYM ? sp_box_sym((sp_sym)(uintptr_t)_m->self)"
-                      " : (_m->self && _m->self_kind == SP_BM_SELF_OBJ)"
-                      " ? sp_box_nullable_obj_dyn(_m->self, 0) : sp_box_nil(); })", t);
+        buf_printf(b, "sp_bm_receiver((sp_BoundMethod *)_t%d.v.p)", t);
       else
         buf_printf(b, "sp_box_obj(sp_method_to_proc((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_PROC)", t);
       /* a bare identifier (`x.instance_eval { name }`) is a NameError, as CRuby's is */

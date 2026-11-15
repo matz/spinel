@@ -10979,6 +10979,53 @@ static void *sp_PtrArray_minmax_obj(sp_PtrArray *a, int cls_id, int want_max) {s
   }
   return best;
 }
+/* delete, include?, index and count over an object array: each element,
+   boxed as its class (dyn: the id the object carries), is compared with v
+   by ==, as the boxed array compares. A user == can allocate and can change
+   the array, so a and v are rooted and the length is read at each step.
+   delete answers the last element equal to v, or NULL; index -1 for none. */
+static void *sp_PtrArray_delete_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) SP_UNUSED;
+static void *sp_PtrArray_delete_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) {sp_gc_wb((void*)a);
+  if (SP_UNLIKELY(!a)) sp_nil_recv("delete");
+  SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
+  if (a->frozen) {   /* as sp_poly_frozen_delete_scan: raise at the first write, a miss answers nil */
+    int found = 0;
+    for (sp_int i = 0; i < a->len; i++) {
+      void *e = a->data[i];
+      if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) found = 1;
+      else if (found) break;
+    }
+    if (found) sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);
+    return NULL;
+  }
+  void *removed = NULL; SP_GC_ROOT(removed);
+  sp_int w = 0;
+  for (sp_int i = 0; i < a->len; i++) {
+    void *e = a->data[i];
+    /* read the slot after ==, which may have stored into it */
+    if (!sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) a->data[w++] = a->data[i];
+    else removed = a->data[i];
+  }
+  a->len = w;
+  return removed;
+}
+static sp_int sp_PtrArray_index_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn, const char *name) SP_UNUSED;
+static sp_int sp_PtrArray_index_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn, const char *name) {
+  if (SP_UNLIKELY(!a)) sp_nil_recv(name);
+  SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
+  for (sp_int i = 0; i < a->len; i++)
+    if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(a->data[i], cls_id) : sp_box_nullable_obj(a->data[i], cls_id), v)) return i;
+  return -1;
+}
+static sp_int sp_PtrArray_count_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) SP_UNUSED;
+static sp_int sp_PtrArray_count_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) {
+  if (SP_UNLIKELY(!a)) sp_nil_recv("count");
+  SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
+  sp_int n = 0;
+  for (sp_int i = 0; i < a->len; i++)
+    if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(a->data[i], cls_id) : sp_box_nullable_obj(a->data[i], cls_id), v)) n++;
+  return n;
+}
 /* Compare two boxed arrays element-wise (Array#<=> semantics): first differing
    comparable element decides, else the shorter array sorts first. Used to order
    Hash#sort's [key, value] pairs. */

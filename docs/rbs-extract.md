@@ -301,8 +301,8 @@ symbol arrays, object arrays, or of tables.
 
 `obj_Foo_ptr_array` is a request, not a pin. The unboxed object array
 (`sp_PtrArray`) has emitters for only a few operations -- `[]`, `[]=`,
-`push`/`<<`, `pop`, `shift`, `delete_at`, `clear`, `length`/`size`, `empty?`,
-`first`/`last`, and the no-block `min`/`max`/`sort` when `Foo` has `<=>` --
+`push`/`<<`, `pop`, `shift`, `delete_at`, `clear`, `delete`, `include?`,
+`index`, `count`, `length`/`size`, `empty?`, `first`/`last`, and the no-block `min`/`max`/`sort` when `Foo` has `<=>` --
 so the compiler narrows an ivar to it only when every use is one of those,
 from the class's own instance methods or through its `attr_reader` on a
 receiver statically of that class. That analysis runs with or without the seed (a `@items = Array.new(n)

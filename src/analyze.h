@@ -1007,9 +1007,9 @@ enum {
   NFW_ELEM_NIL,  /* an element of an Array the program stores nil into or
                     leaves a gap in (a block parameter an iteration over it
                     binds, an element read or pick out of it) */
-  NFW_TAKEN,     /* a pop, shift or delete_at of an object Array, which
-                    answers nil once the Array is empty or the index is
-                    outside it */
+  NFW_TAKEN,     /* a pop, shift, delete_at or delete of an object Array,
+                    which answers nil once the Array is empty, the index is
+                    outside it or no element is equal */
   NFW_ELEM,      /* an element read or a pick that can miss (Array, Hash,
                     String) */
   NFW_GLOBAL,    /* a global, or the main object's ivar, read where no write

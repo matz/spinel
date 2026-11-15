@@ -494,6 +494,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
     if (r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) &&
         !oint_kind(rt) && rt != TY_COMPLEX && rt != TY_RATIONAL && rt != TY_BIGINT &&
         !ty_is_array(rt) && !ty_is_hash(rt) && rt != TY_RANGE && rt != TY_STRING &&   /* a constant holding a number or a container (Float::INFINITY, FREE = []) is a value */
+        !(ty_is_obj_array(rt) && an2 == 1 && (sp_streq(nm, "index") || sp_streq(nm, "find_index"))) &&   /* PAIRS.index(x) on an object array: nil when missing */
         !sp_streq(nm, "world_readable?") && !sp_streq(nm, "world_writable?"))   /* File.world_readable?(f): nil when it is not */
       return 0;
     /* the runtime functions that answer an sp_oint (RUNTIME-API.md) */
@@ -524,6 +525,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
         (sp_streq(nm, "index") || sp_streq(nm, "rindex") || sp_streq(nm, "find_index") || sp_streq(nm, "delete_at") || sp_streq(nm, "delete") ||
          ((sp_streq(nm, "pop") || sp_streq(nm, "shift")) && an2 == 0))) return 1;
     if (r >= 0 && ty_is_hash(rt) && (sp_streq(nm, "delete") || sp_streq(nm, "find_index"))) return 1;
+    if (r >= 0 && ty_is_obj_array(rt) && (sp_streq(nm, "index") || sp_streq(nm, "find_index")) && an2 == 1) return 1;
     if (r >= 0 && rt == TY_MATCHDATA && (sp_streq(nm, "bytebegin") || sp_streq(nm, "byteend"))) return 1;
     if (is_range_bound_reader(nm) && r >= 0 &&
         (rt == TY_MATCHDATA || rt == TY_RANGE || rt == TY_FLOAT_RANGE)) return 1;

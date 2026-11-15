@@ -7714,6 +7714,13 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
     if ((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 0) { *out = ty_object(ecls); return 1; }
     if (sp_streq(name, "delete_at") && argc == 1) { *out = ty_object(ecls); return 1; }
     if (sp_streq(name, "clear") && argc == 0) { *out = rt; return 1; }
+    /* the searches: delete answers the element it takes out (NULL-encoded
+       nil when none), index a position (nil when none) and count a number */
+    if (nt_ref(nt, id, "block") < 0 && argc == 1) {
+      if (sp_streq(name, "delete")) { *out = ty_object(ecls); return 1; }
+      if (is_membership_alias(name)) { *out = TY_BOOL; return 1; }
+      if (sp_streq(name, "index") || sp_streq(name, "find_index") || sp_streq(name, "count")) { *out = TY_INT; return 1; }
+    }
     /* no-block comparisons (admitted by the narrowing pass only for element
        classes with `<=>`): sort keeps the array type, min/max yield an
        element (NULL-encoded nil when empty). */
@@ -7734,6 +7741,7 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
         /* the filters: one with a bang answers the array or nil, boxed,
            and one without a bang a new array of the same class */
         if (is_select_reject_bang(name) && argc == 0) { *out = TY_POLY; return 1; }
+        if ((sp_streq(name, "delete_if") || sp_streq(name, "keep_if")) && argc == 0) { *out = rt; return 1; }
         if ((is_select_alias(name) || sp_streq(name, "reject")) && argc == 0) { *out = rt; return 1; }
       } }
   }

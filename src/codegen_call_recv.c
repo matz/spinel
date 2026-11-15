@@ -5758,9 +5758,44 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       buf_puts(b, nil_ok ? ")" : ", \"clear\"))");
       return 1;
     }
-    /* the filters with a bang, which the pass admits for an object array
-       only: the in-place filter loop, and the array boxed by reference */
-    if (!nested && is_select_reject_bang(name) && argc == 0 && nt_ref(nt, id, "block") >= 0) {
+    /* the searches, which the pass admits for an object array only: the
+       value boxed, each element boxed as its class by the function */
+    if (!nested && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+        (sp_streq(name, "delete") || is_membership_alias(name) || sp_streq(name, "index") ||
+         sp_streq(name, "find_index") || sp_streq(name, "count"))) {
+      Buf rb; int ch = hold_recv_open(c, recv, 0, "sp_PtrArray *", "SP_GC_ROOT", b, &rb);
+      Buf cb; memset(&cb, 0, sizeof cb);
+      arysub_box_id(c, ty_object(ecls), &cb);
+      char tail[64]; snprintf(tail, sizeof tail, ", %s, %d", cb.p, repr_dyn_cls(c, ty_object(ecls)));
+      free(cb.p);
+      int t = ++g_tmp;
+      if (sp_streq(name, "delete")) buf_printf(b, "((%s *)sp_PtrArray_delete_obj(%s, ", ecn, rb.p);
+      else if (sp_streq(name, "count")) buf_printf(b, "sp_PtrArray_count_obj(%s, ", rb.p);
+      else buf_printf(b, "({ sp_int _t%d = sp_PtrArray_index_obj(%s, ", t, rb.p);
+      free(rb.p);
+      emit_boxed(c, argv[0], b);
+      if (sp_streq(name, "delete")) buf_printf(b, "%s))", tail);
+      else if (sp_streq(name, "count")) buf_printf(b, "%s)", tail);
+      else {
+        buf_printf(b, "%s, \"%s\"); ", tail, name);
+        if (is_membership_alias(name)) buf_printf(b, "_t%d >= 0; })", t);
+        else {
+          /* (a boxed node takes the oint as it is, as the boxed index does) */
+          int bare = repr_of(c, id).kind == RK_BOXED;
+          if (!bare) oint_open(c, id, TY_INT, b);
+          buf_printf(b, "_t%d < 0 ? sp_oint_nil() : sp_oint_of(_t%d)", t, t);
+          if (!bare) oint_close(c, id, b);
+          buf_puts(b, "; })");
+        }
+      }
+      if (ch) buf_puts(b, "; })");
+      return 1;
+    }
+    /* the filters with a bang, delete_if and keep_if, which the pass admits
+       for an object array only: the in-place filter loop, and the array
+       boxed by reference */
+    if (!nested && (is_select_reject_bang(name) || sp_streq(name, "delete_if") || sp_streq(name, "keep_if")) &&
+        argc == 0 && nt_ref(nt, id, "block") >= 0) {
       int trecv, torig, twp;
       if (!emit_array_filter_loop(c, recv, nt_ref(nt, id, "block"), rt, name, g_pre, g_indent, &trecv, &torig, &twp))
         return 0;

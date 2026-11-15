@@ -12382,6 +12382,17 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           changed |= bind_call_params(c, id, mi4);
       }
     }
+    /* A builtin exception receiver calling a method that reopenings of
+       builtin exception classes define: the plan picks among them by the
+       class name at run time (cplan_exc_reopen), so each one's parameters
+       take the call's arguments, as an object's override in a subclass
+       does. Bound by no call of its own, `StandardError#echo(v)` took its
+       parameter's type from a program subclass's call alone, and
+       `ArgumentError.new.echo(1)` handed 1 to a Symbol slot. */
+    if (name && rt == TY_EXCEPTION) {
+      int xr[8], xn = exc_reopen_definers(c, name, xr, 8);
+      for (int xi = 0; xi < xn; xi++) changed |= bind_call_params(c, id, call_target(c, id, xr[xi], name, 0, NULL));
+    }
     if (ty_is_object(rt)) {
       int cid3 = ty_object_class(rt);
       int mi3 = call_target(c, id, cid3, name, 0, NULL);

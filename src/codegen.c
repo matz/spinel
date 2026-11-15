@@ -7925,7 +7925,7 @@ static const char *method_self_root(Compiler *c, Scope *s) {
   const char *cn = c->classes[s->class_id].c_name;
   const char *m = is_boxed_self_class_name(cn) ? "SP_GC_ROOT_RBVAL" : is_string_class_name(cn) ? "SP_GC_ROOT_STR" : NULL;
   int body = m ? nt_ref(c->nt, s->def_node, "body") : -1;
-  return body >= 0 && subtree_may_allocate(c->nt, body) ? m : NULL;
+  return body >= 0 && subtree_may_allocate(c, body) ? m : NULL;
 }
 /* A method whose container return seed gave way to the box its body answers
    (Scope.ret_rbs_cont) is emitted as two functions: the body under

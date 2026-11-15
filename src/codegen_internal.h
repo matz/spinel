@@ -665,8 +665,8 @@ extern int  g_cls_tag_skip;   /* poly-dispatch builtin-arm re-entry marker */
 /* Ask subtree_may_allocate before leaving something unrooted across `id`:
    its "no" is a keyed decision (src/decide.c). subtree_allocates is the
    bare fact, for a caller whose answer licenses no such omission. */
-int subtree_may_allocate(const NodeTable *nt, int id);
-int subtree_allocates(const NodeTable *nt, int id);
+int subtree_may_allocate(Compiler *c, int id);
+int subtree_allocates(Compiler *c, int id);
 int subtree_has_side_effect(Compiler *c, int id);
 /* Each subtree_* walk below as its node's own answer: 1 yes, 0 no for the
    whole subtree, -1 ask the node's operands. The operand-order record

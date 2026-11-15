@@ -1992,7 +1992,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
           if (kmi >= 0 && ml.def_class == k) ucall_observe(c, id, kmi, k, 1);
         }
       Buf pcall; memset(&pcall, 0, sizeof pcall);
-      if (subtree_may_allocate(nt, argv[0])) {
+      if (subtree_may_allocate(c, argv[0])) {
         int th = hold_operand_pre(c, recv, TY_POLY, 1, ++g_tmp, 1);
         buf_printf(&pcall, "%s(_t%d, ", pfn, th); emit_boxed(c, argv[0], &pcall); buf_puts(&pcall, ")");
       }

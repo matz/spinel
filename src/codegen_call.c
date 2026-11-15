@@ -184,7 +184,7 @@ static int ctor_block_fresh(Compiler *c, int id) {
   if (bk != NK_BlockArgumentNode) return 0;
   int e = nt_ref(c->nt, blk, "expression");
   if (e < 0 || nt_kind(c->nt, e) == NK_NilNode) return 0;
-  return repr_of(c, e).as_ty != TY_PROC || subtree_allocates(c->nt, e);
+  return repr_of(c, e).as_ty != TY_PROC || subtree_allocates(c, e);
 }
 
 /* `new(..., &pr)` into a yielding initialize, the proc known only at run time
@@ -5875,7 +5875,7 @@ static void emit_curry_apply_chain(Compiler *c, int recv, const int *argv, int a
   for (int k = 0; k < argc && !held; k++)
     held = !arg_ran_first(argv[k], 0) &&
            (operand_allocates_beside(c, argv[k]) || range_boxes_new(comp_ntype(c, argv[k]))) &&
-           (k > 0 || (!arg_ran_first(recv, 0) && subtree_may_allocate(c->nt, recv)));
+           (k > 0 || (!arg_ran_first(recv, 0) && subtree_may_allocate(c, recv)));
   const char *rfn = cret == TY_INT ? "sp_curry_to_int(" : "sp_curry_realize_poly(";
   if (!held) {
     if (realize) buf_puts(b, rfn);
@@ -10416,7 +10416,7 @@ static int poly_arm_default_allocates(Compiler *c, Scope *ms, int a,
     if (A->kw && A->kw->kwall < 0 && pn && kwh_lookup(c->nt, A->kw->kwh, pn) >= 0) return 0;
   }
   else if (from != ARG_DEFAULT && from != ARG_ELEM && from != ARG_GATHERED) return 0;
-  return subtree_may_allocate(c->nt, ms->pdefault[a]);
+  return subtree_may_allocate(c, ms->pdefault[a]);
 }
 
 /* An arm's arguments into `cb`, the first after `lead`, each parameter as
@@ -12310,7 +12310,7 @@ static int recv_held_as_read(Compiler *c, int recv) {
    first only where the two cannot differ (recv_held_as_read). */
 static int reopen_recv_runs_first(Compiler *c, Scope *m, int recv, const int *argv, int argc, int n) {
   for (int i = 0; i < g_n_argov; i++) if (g_argov_node[i] == recv) return 0;
-  int eff = subtree_has_side_effect(c, recv), alloc = subtree_allocates(c->nt, recv);
+  int eff = subtree_has_side_effect(c, recv), alloc = subtree_allocates(c, recv);
   int quiet = 1;
   for (int i = 0; quiet && i < argc; i++) quiet = arg_runs_nothing(c, argv[i]);
   for (int i = 0; quiet && m->pdefault && i < m->nparams; i++) {
@@ -12325,7 +12325,7 @@ static int reopen_recv_runs_first(Compiler *c, Scope *m, int recv, const int *ar
   for (int i = 0; m->pdefault && i < m->nparams; i++) {
     int d = m->pdefault[i];
     if (d < 0 || (!callee_param_is_declared_kwarg(c, m, m->pnames[i]) && arg_slot_for_param(c, m, i, n) >= 0)) continue;
-    if ((eff && subtree_has_side_effect(c, d)) || (alloc && subtree_allocates(c->nt, d)) ||
+    if ((eff && subtree_has_side_effect(c, d)) || (alloc && subtree_allocates(c, d)) ||
         read_rebound_by(c, d, recv)) return 1;
   }
   return 0;
@@ -12376,7 +12376,7 @@ static int reopen_recv_held_after(Compiler *c, Scope *m, int recv, int boxed, in
   for (int i = 0; m->pdefault && i < m->nparams; i++) {
     int d = m->pdefault[i];
     if (d < 0 || (!callee_param_is_declared_kwarg(c, m, m->pnames[i]) && arg_slot_for_param(c, m, i, n) >= 0)) continue;
-    if (subtree_allocates(c->nt, d)) return 1;
+    if (subtree_allocates(c, d)) return 1;
   }
   return 0;
 }
@@ -12588,7 +12588,7 @@ void emit_ctor_arm_param(Compiler *c, Scope *is, int j, const ArgLayout *L, cons
     return;
   }
   if (L->from[j] != ARG_NODE) {
-    if (!is->pdefault || is->pdefault[j] < 0 || !subtree_may_allocate(c->nt, is->pdefault[j]) ||
+    if (!is->pdefault || is->pdefault[j] < 0 || !subtree_may_allocate(c, is->pdefault[j]) ||
         !(ty_gc_rootable(c, pt) || pt == TY_POLY) || (pp && slot_is_oint(pp))) {
       emit_arg_or_default(c, is, j, -1, out);
       return;
@@ -18779,7 +18779,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         emit_str_expr(c, argv[0], b);
         buf_printf(b, "; SP_GC_ROOT(_t%d); sp_str_plus(SP_STR_B(_t%d), _t%d); })", tb, ta, tb);
       }
-      else if (subtree_may_allocate(nt, recv) || subtree_may_allocate(nt, argv[0])) {
+      else if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
         int ta = ++g_tmp, tb = ++g_tmp;
         buf_printf(b, "({ const char *_t%d = ", ta); emit_str_expr(c, recv, b);
         buf_printf(b, "; SP_GC_ROOT(_t%d); const char *_t%d = ", ta, tb);
@@ -26744,7 +26744,7 @@ static int operand_hoists_effect(Compiler *c, int node) {
 
 /* See codegen_internal.h. */
 int operand_allocates_beside(Compiler *c, int v) {
-  if (subtree_may_allocate(c->nt, v)) return !subtree_is_pure_read(c, v);
+  if (subtree_may_allocate(c, v)) return !subtree_is_pure_read(c, v);
   int u = nt_paren_single(c->nt, v);
   if (u >= 0 && repr_of(c, u).read_raw && decide_node(c->nt, u, "strbuf-raw", NULL)) return 0;
   return operand_may_allocate(c, v);
@@ -33028,7 +33028,7 @@ int push_recv_in_slot(Compiler *c, int recv, int argc, const int *argv, TyKind a
    still needs closing. */
 int poly_binop_recv_temp(Compiler *c, int recv, int arg, Buf *b, int *stmt_expr) {
   int t = ++g_tmp;
-  if (subtree_may_allocate(c->nt, arg)) {
+  if (subtree_may_allocate(c, arg)) {
     t = hold_operand_pre(c, recv, TY_POLY, 1, t, 1);
     *stmt_expr = 0;
     return t;

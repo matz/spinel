@@ -680,7 +680,8 @@ int  g_cls_tag_skip = -1;
    interpolation, or a read of the last match qualifies -- `$~` builds its
    MatchData, $` and $' their String; $& and $+ are reads, counted with
    them. */
-int subtree_allocates(const NodeTable *nt, int id) {
+int subtree_allocates(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
   if (id < 0) return 0;
   const char *ty = nt_type(nt, id);
   NodeKind k = nt_kind(nt, id);
@@ -692,6 +693,9 @@ int subtree_allocates(const NodeTable *nt, int id) {
       k == NK_LambdaNode || k == NK_SuperNode ||
       k == NK_ForwardingSuperNode || k == NK_YieldNode)
     return 1;
+  /* A constant read that autoloads runs its file, which allocates; a path's
+     parent is asked below, with the node's other children. */
+  if (nt_kind_is_constant(k) && an_const_read_effect(c, id).autoload) return 1;
   /* Prism reads the match globals as plain globals as often as not. */
   if (k == NK_GlobalVariableReadNode) {
     const char *nm = nt_str(nt, id, "name");
@@ -716,13 +720,13 @@ int subtree_allocates(const NodeTable *nt, int id) {
     return nt_int(nt, id, "rat_big", 0) != 0 || (g_promote_mode && an_rat_boxed(id));
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
-    if (subtree_allocates(nt, nt_ref_at(nt, id, i))) return 1;
+    if (subtree_allocates(c, nt_ref_at(nt, id, i))) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0;
     const int *ids = nt_arr_at(nt, id, i, &n);
     for (int j = 0; j < n; j++)
-      if (subtree_allocates(nt, ids[j])) return 1;
+      if (subtree_allocates(c, ids[j])) return 1;
   }
   return 0;
 }
@@ -731,9 +735,9 @@ int subtree_allocates(const NodeTable *nt, int id) {
    (src/decide.c), keyed at the operand: a refused one is treated as
    allocating, which every caller answers with the root or the ordered temp
    it gives an operand that does allocate. */
-int subtree_may_allocate(const NodeTable *nt, int id) {
-  if (subtree_allocates(nt, id)) return 1;
-  return id >= 0 && !decide_node(nt, id, "no-alloc", NULL);
+int subtree_may_allocate(Compiler *c, int id) {
+  if (subtree_allocates(c, id)) return 1;
+  return id >= 0 && !decide_node(c->nt, id, "no-alloc", NULL);
 }
 /* subtree_may_allocate, plus the one allocation the node table cannot show:
    an ordinary read of a shared-mutable String slot (a TY_STRBUF local or
@@ -749,7 +753,7 @@ int operand_may_allocate(Compiler *c, int id) {
   /* a node the binder ran into a temp first is read as that temp, which
      allocates nothing, whatever its subtree does */
   if (view_ran_first(id) || (inner >= 0 && view_ran_first(inner))) return 0;
-  if (subtree_may_allocate(c->nt, id)) return 1;
+  if (subtree_may_allocate(c, id)) return 1;
   id = inner;
   if (id < 0 || repr_of(c, id).handle) return 0;
   if (strbuf_local_name(c, id)) return 1;

@@ -241,7 +241,7 @@ void emit_poly_user_box(Compiler *c, int id, Scope *m, const char *call, Buf *b)
    expression that allocates? */
 static int zero_arg_default_allocates(Compiler *c, Scope *ds, int ai) {
   if (ai == ds->rest_idx || ai == ds->kwrest_idx) return 1;
-  return ds->pdefault && ds->pdefault[ai] >= 0 && subtree_may_allocate(c->nt, ds->pdefault[ai]);
+  return ds->pdefault && ds->pdefault[ai] >= 0 && subtree_may_allocate(c, ds->pdefault[ai]);
 }
 
 /* Does a default after the first run something (`def z(a = @n, b = (@n

@@ -1282,7 +1282,7 @@ int emit_op_array_push(Compiler *c, const BopCtx *x, Buf *b) {
       return 1;
     }
     Buf rx = expr_buf(c, recv);
-    int t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", NULL, subtree_may_allocate(c->nt, argv[0]), b);
+    int t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", NULL, subtree_may_allocate(c, argv[0]), b);
     free(rx.p);
     buf_printf(b, "sp_PolyArray_push(_t%d, ", t); emit_boxed(c, argv[0], b); buf_puts(b, ")");
     nil_recv_close(name, t, 0, b);
@@ -2596,11 +2596,11 @@ int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            value can drop the hash, and the key when it can allocate, as the
            statement form roots them. */
         int tr = -1, tk = -1;
-        if (subtree_may_allocate(c->nt, recv) || subtree_may_allocate(c->nt, argv[0])) {
+        if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
           TyKind kt = ty_hash_key(rt);
           tr = ++g_tmp; tk = ++g_tmp;
           buf_printf(b, "%s _t%d = ", c_type_name(rt), tr); emit_expr(c, recv, b); buf_puts(b, "; ");
-          if (subtree_may_allocate(c->nt, recv) || subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, argv[1])) { emit_gc_root_tmp(c, rt, tr, b); buf_puts(b, " "); }
+          if (subtree_may_allocate(c, recv) || subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, argv[1])) { emit_gc_root_tmp(c, rt, tr, b); buf_puts(b, " "); }
           buf_printf(b, "%s _t%d = ", c_type_name(kt), tk); emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, "; ");
           if (operand_may_allocate(c, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, b); buf_puts(b, " "); }
         }

@@ -1672,7 +1672,7 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (recv_never_nil(c, recv)) { buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); }
     else {
       Buf rx = expr_buf(c, recv);
-      nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", subtree_may_allocate(nt, argv[0]), b);
+      nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", subtree_may_allocate(c, argv[0]), b);
       buf_printf(b, "sp_PolyArray_get(_t%d", nil_t);
       free(rx.p);
     }
@@ -1693,7 +1693,7 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
     else {
       Buf rx = expr_buf(c, recv);
-      nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", subtree_may_allocate(nt, argv[0]), b);
+      nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", subtree_may_allocate(c, argv[0]), b);
       free(rx.p);
       buf_printf(b, "sp_PolyArray_get(_t%d", nil_t);
     }
@@ -4110,7 +4110,7 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
     else {
       Buf rx = expr_buf(c, recv);
       int keys_alloc = 0;
-      for (int di = 0; di < argc; di++) keys_alloc |= subtree_may_allocate(nt, argv[di]);
+      for (int di = 0; di < argc; di++) keys_alloc |= subtree_may_allocate(c, argv[di]);
       nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", keys_alloc, b);
       free(rx.p);
       memset(&rb, 0, sizeof rb);
@@ -5725,7 +5725,7 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       else {
         Buf rx = expr_buf(c, recv);
         char vt[200]; snprintf(vt, sizeof vt, "%s *", ecn);
-        t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PtrArray *", vt, subtree_may_allocate(nt, argv[0]), b);
+        t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PtrArray *", vt, subtree_may_allocate(c, argv[0]), b);
         free(rx.p);
         buf_printf(b, "((%s *)sp_PtrArray_get(_t%d", ecn, t);
       }
@@ -7033,7 +7033,7 @@ static void emit_str_poly_merge(Compiler *c, TyKind rt, TyKind at, int recv, int
   const char *afn = at == TY_STR_INT_HASH ? "sp_StrPolyHash_from_str_int_hash("
                   : at == TY_STR_STR_HASH  ? "sp_StrPolyHash_from_str_str_hash("
                                            : NULL;
-  int fresh = rfn || subtree_may_allocate(c->nt, recv);
+  int fresh = rfn || subtree_may_allocate(c, recv);
   int th = fresh && (afn || operand_allocates_beside(c, arg)) ? ++g_tmp : 0;
   if (th) buf_printf(b, "({ sp_StrPolyHash *_t%d = ", th);
   else buf_puts(b, "sp_StrPolyHash_merge(");
@@ -10523,7 +10523,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      the arguments where CRuby reads it there, or take a shared String's
      handle: encode_hold) */
   int enc_holds = rt == TY_STRING && name && (sp_streq(name, "encode") || sp_streq(name, "encode!")) && argc <= 3;
-  if (rt == TY_STRING && name && recv >= 0 && subtree_may_allocate(nt, recv) && !arg_ran_first(recv, 0) &&
+  if (rt == TY_STRING && name && recv >= 0 && subtree_may_allocate(c, recv) && !arg_ran_first(recv, 0) &&
       !y_ident && !enc_holds &&
       repr_of(c, recv).as_ty != TY_STRBUF &&   /* a handle is no fresh copy, and no const char * */
       !((!nil_answers_name(name)) && recv_may_be_sentinel(c, recv))) {
@@ -11297,9 +11297,9 @@ static void setter_value_close(Compiler *c, int id, TyKind vt, int so, Buf *b, i
    outlive. Same rule as #4049. A -1 side is an absent range endpoint, which
    sp_obj_clamp skips as nil. */
 static void emit_obj_clamp3(Compiler *c, int recv, int lo, int hi, Buf *b) {
-  int na = (recv >= 0 && subtree_may_allocate(c->nt, recv))
-         + (lo >= 0 && subtree_may_allocate(c->nt, lo))
-         + (hi >= 0 && subtree_may_allocate(c->nt, hi));
+  int na = (recv >= 0 && subtree_may_allocate(c, recv))
+         + (lo >= 0 && subtree_may_allocate(c, lo))
+         + (hi >= 0 && subtree_may_allocate(c, hi));
   if (na < 2) {
     buf_puts(b, "sp_obj_clamp(");
     emit_boxed(c, recv, b); buf_puts(b, ", ");
@@ -17761,7 +17761,7 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
                            ? "sp_poly_arr_get_aon" : "sp_poly_arr_get_hash";
         buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_expr(c, recv, b);
         buf_puts(b, "; ");
-        if (subtree_may_allocate(c->nt, argv[0])) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tr);
+        if (subtree_may_allocate(c, argv[0])) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tr);
         buf_printf(b, "sp_oint _t%d = ", tk); emit_oint_expr(c, argv[0], TY_INT, b);
         buf_printf(b, "; SP_UNLIKELY(_t%d.nil) ? sp_poly_index_poly(_t%d, sp_box_nil()) : %s(_t%d, _t%d.v); })",
                    tk, tr, fn, tr, tk);
@@ -18978,8 +18978,8 @@ static void emit_poly_str_transform(Compiler *c, int recv, int argc, const int *
      already is its temp, which allocates nothing to read, but its
      evaluation did, and a read left in place beside it (`$pat` before a
      later `x.rebind` argument) is held before the others run. */
-  int alloc = subtree_may_allocate(c->nt, recv) || operand_may_allocate(c, recv);
-  for (int i = 0; i < argc; i++) alloc += subtree_may_allocate(c->nt, argv[i]) || operand_may_allocate(c, argv[i]);
+  int alloc = subtree_may_allocate(c, recv) || operand_may_allocate(c, recv);
+  for (int i = 0; i < argc; i++) alloc += subtree_may_allocate(c, argv[i]) || operand_may_allocate(c, argv[i]);
   /* a boxed String argument's check can raise TypeError: the receiver's
      NoMethodError is asked first, as CRuby asks it before the call */
   for (int i = 0; i < argc; i++)

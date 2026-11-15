@@ -18101,6 +18101,18 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_printf(b, "), %d)", eq ? 0 : 1);
       return 1;
     }
+    /* A String, a Symbol, an Integer or a Float against an Array: never
+       equal. String#== asks only an operand with to_str, Symbol#== is
+       identity, and a number hands the question to the Array's ==, which
+       answers false for a number unless the program gives Array its own. */
+    if (recv >= 0 && (rt == TY_STRING || rt == TY_STRBUF || rt == TY_SYMBOL || rt == TY_INT || rt == TY_FLOAT) &&
+        (ty_is_array(a0) || ty_is_obj_array(a0))) {
+      int ac_ = comp_core_class(c, CORE_ARRAY);
+      if (rt == TY_STRING || rt == TY_STRBUF || rt == TY_SYMBOL || ac_ < 0 || call_target(c, -1, ac_, "==", 0, NULL) < 0) {
+        emit_voided_operands(c, recv, argv[0], eq ? 0 : 1, b);
+        return 1;
+      }
+    }
     unsupported(c, id, "equality");
   }
   return 0;

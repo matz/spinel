@@ -29776,7 +29776,17 @@ static int biv_subclasses(Compiler *c, NodeTable *nt, int n0) {
       if (head < 0) continue;
     }
     int fam = biv_sub_family(c, nt, head, sub, ns), body = class_def_body(nt, m);
-    if (!fam || !g_biv_kept[fam].n || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
+    if (!fam || !g_biv_kept[fam].n) continue;
+    /* its instances hold those names in the map whether or not its own
+       methods name them: an inherited writer sets them. Marked only for a
+       rewritten def, `class Plain < Array; end` answered [] for
+       instance_variables after the reopening's writer ran */
+    if (!nt_int(nt, m, "biv_shared", 0) || !nt_int(nt, head, "biv_shared", 0)) {
+      nt_node_set_int(nt, m, "biv_shared", 1);
+      nt_node_set_int(nt, head, "biv_shared", 1);
+      changed = 1;
+    }
+    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     g_biv_only = &g_biv_kept[fam];
     int bn = 0; const int *bs0 = nt_arr(nt, body, "body", &bn);
     int *bs = malloc(sizeof(int) * (size_t)(bn ? bn : 1));

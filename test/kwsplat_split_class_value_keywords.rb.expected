@@ -6,3 +6,11 @@ local 1
 ArgumentError: missing keywords: :phase, :attempt
 ArgumentError: missing keywords: :phase, :attempt
 NoMethodError: undefined method 'phase'
+"named"
+"named"
+ArgumentError: missing keyword: :tag
+ArgumentError: missing keyword: :tag
+7
+8
+8
+ArgumentError: wrong number of arguments (given 1, expected 2)

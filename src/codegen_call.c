@@ -974,8 +974,8 @@ int emit_ie_proc(Compiler *c, int id, int recv, int self_cls, int blk, int tramp
   /* a call that answers its oint (node_is_oint) unboxes the proc's value
      with its nil */
   int io = tr.kind != RK_BOXED && oint_kind(t) && node_is_oint(c, id);
-  if (exec && !io) emit_yield_proc_call(c, args, t, b, g_indent, 1);
-  else if (exec) emit_yield_proc_call(c, args, TY_POLY, &eb, g_indent, 1);
+  if (exec && !io) emit_yield_proc_call(c, id, t, b, g_indent, 1);
+  else if (exec) emit_yield_proc_call(c, id, TY_POLY, &eb, g_indent, 1);
   else { buf_printf(&eb, "sp_penum_call1(%s, ", ref); emit_boxed_text(c, rt, self, &eb); buf_puts(&eb, ")"); }
   if (io) buf_printf(b, "%s(%s)", oint_unbox(t), eb.p ? eb.p : "sp_box_nil()");
   else if (!exec) {
@@ -1010,7 +1010,7 @@ int emit_ie_untraced(Compiler *c, int id, int recv, int blk, Buf *b) {
   char ref[64];
   snprintf(ref, sizeof ref, "sp_ie_bind(_t%d, _t%d)", tp, tr);
   const char *sv = g_yield_proc_ref; g_yield_proc_ref = ref;
-  if (exec) emit_yield_proc_call(c, args, t, b, g_indent, 1);
+  if (exec) emit_yield_proc_call(c, id, t, b, g_indent, 1);
   else {
     buf_printf(&eb, "sp_penum_call1(%s, _t%d)", ref, tr);
     if (t_repr.kind == RK_BOXED || t == TY_UNKNOWN) buf_puts(b, eb.p); else emit_unbox_text(c, t, eb.p, b);

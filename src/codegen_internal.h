@@ -3157,7 +3157,7 @@ int emit_poly_recv_block_value(Compiler *c, int id, Buf *b);
 int is_block_call(Compiler *c, int id);
 int is_blockless_block_param_call(Compiler *c, int id);
 const char *blockless_block_param_call_name(Compiler *c, int id);
-void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_expr, TyKind want_ty);
+void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr, TyKind want_ty);
 typedef struct BiRen BiRen;
 void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int indent,
                          int as_expr, BiRen *bi);
@@ -3165,7 +3165,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
                       Buf *b, int indent, int as_expr, BiRen *bi);
 int block_binds_gathered(Compiler *c, int blk);
 int emit_boxed_step_binds(Compiler *c, int blk, const char *vals, Buf *b, int indent, int as_expr);
-void emit_yield_proc_call(Compiler *c, int args_node, TyKind result_ty, Buf *b, int indent, int as_expr);
+void emit_yield_proc_call(Compiler *c, int site, TyKind result_ty, Buf *b, int indent, int as_expr);
 int emit_inline_expr(Compiler *c, int id, Buf *b);
 void emit_iter_param_assign(Compiler *c, int block, const char *p0_orig, const char *p0_ren, TyKind src_type, const char *src_expr, Buf *b, int indent);
 int subtree_has_own_redo(const NodeTable *nt, int id);

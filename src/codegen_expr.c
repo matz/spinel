@@ -6524,7 +6524,7 @@ static void emit_forwarded_block_value(Compiler *c, int id, Buf *b) {
   TyKind ty = repr_of(c, id).as_ty;
   int optional = oint_kind(ty) && node_is_oint(c, id);
   if (optional) buf_printf(b, "%s(", oint_unbox(ty));
-  emit_yield_proc_call(c, nt_ref(c->nt, id, "arguments"),
+  emit_yield_proc_call(c, id,
                        optional ? TY_POLY : ty != TY_UNKNOWN ? ty : g_yield_slot_ty,
                        b, 0, 1);
   if (optional) buf_puts(b, ")");
@@ -7000,7 +7000,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
             if (_tl != id && block_given_tail_then_last(c, _last) != id) _ytail = 0;
           }
         }
-        emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
+        emit_yield_proc_call(c, id,
                              ((yt != TY_UNKNOWN && yr.kind != RK_BOXED) || !_ytail)
                                ? yt : g_yield_slot_ty,
                              b, 0, 1); }
@@ -7034,12 +7034,12 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       return;
     }
     g_yield_want_oint = oint_kind(repr_of(c, id).as_ty) && node_is_oint(c, id);
-    emit_block_invoke(c, nt_ref(nt, id, "arguments"), b, 0, 1, repr_of(c, id).as_ty);
+    emit_block_invoke(c, id, b, 0, 1, repr_of(c, id).as_ty);
     return;
   }
   if (is_block_call(c, id)) {           /* block.call used for its value */
     g_yield_want_oint = oint_kind(repr_of(c, id).as_ty) && node_is_oint(c, id);
-    emit_block_invoke(c, nt_ref(nt, id, "arguments"), b, 0, 1, repr_of(c, id).as_ty);
+    emit_block_invoke(c, id, b, 0, 1, repr_of(c, id).as_ty);
     return;
   }
   /* `blk.nil?` / `!blk` on an inlined method's own block parameter: the

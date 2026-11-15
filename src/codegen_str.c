@@ -588,7 +588,7 @@ static int str_box_by_kind(Compiler *c, int node, StrForm *sf) {
       /* (a block literal the call splices answers its tail boxed, as
          emit_strbuf_route's proc arm asks it) */
       int v = nt_paren_single(c->nt, node), sv = view_push(c, v, TY_POLY);
-      if (is_block_call(c, v)) emit_block_invoke(c, nt_ref(c->nt, v, "arguments"), b, 0, 1, TY_POLY);
+      if (is_block_call(c, v)) emit_block_invoke(c, v, b, 0, 1, TY_POLY);
       else emit_expr(c, v, b);
       view_pop(c, sv);
       str_box_note(sf, RF_PASS, RW_HANDLE_ROUTE);

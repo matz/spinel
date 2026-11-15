@@ -2903,7 +2903,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
      the no-block raise (#3399). */
   if (g_yield_proc_ref && yield_runs) {
     /* This helper's callers want a BOXED value, so ask for the poly form. */
-    emit_yield_proc_call(c, nt_ref(c->nt, node, "arguments"), TY_POLY, b, 0, 1);
+    emit_yield_proc_call(c, node, TY_POLY, b, 0, 1);
     RC(RF_YIELD, RW_YIELD);
     return;
   }
@@ -2969,7 +2969,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
        the handle it keeps, else the endpoint's own String, as a `next` of it
        is (emit_boxed_next_value): the splice yields the box */
     if ((bt == TY_STRING || bt == TY_STRBUF) && strbuf_yield_tail_srange(c)) {
-      emit_block_invoke(c, nt_ref(c->nt, node, "arguments"), b, 0, 1, TY_POLY);
+      emit_block_invoke(c, node, b, 0, 1, TY_POLY);
       RC(RF_YIELD, RW_YIELD);
       return;
     }

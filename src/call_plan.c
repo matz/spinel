@@ -1214,8 +1214,10 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
        and the top level's def is open to the call */
     /* (a class that answers the name without a method scope, an attribute
        or a Struct member, leaves the plan unbound too: its instance in the
-       box takes its own, so the call stays the dispatch it was) */
-    if (p->mi < 0 && !builtin_name_below_object(name) && !any_class_responds(c, name)) {
+       box takes its own, so the call stays the dispatch it was. Such a
+       class is one of the name's candidates, which the plan already holds:
+       no table is read for it.) */
+    if (p->mi < 0 && !builtin_name_below_object(name) && !npc) {
       int cell, tm = cplan_root_top_def(c, id, name, core_class_name(CORE_OBJECT), &cell);
       if (tm >= 0) {
         cplan_set(p, tm, c->scopes[tm].class_id, UC_REOPEN, CP_DIRECT);

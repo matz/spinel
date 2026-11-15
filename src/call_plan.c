@@ -1122,8 +1122,13 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   else if (rt == TY_CLASS) {
     int ncc = 0;
     const PolyCand *ccs = comp_cmethod_candidates(c, name, &ncc);
+    /* (self in a class method is that class or one under it: a class
+       method of an unrelated class or module, a module function's copy
+       among them, is not on its chain) */
+    const Scope *ss = rk == NK_SelfNode ? comp_scope_of(c, id) : NULL;
+    int under = ss && ss->is_cmethod && ss->class_id >= 0 && !comp_class_is_module(c, &c->classes[ss->class_id]) ? ss->class_id : -1;
     for (int i = 0; i < ncc; i++)
-      if (ccs[i].mi >= 0) {
+      if (ccs[i].mi >= 0 && (under < 0 || ccs[i].cls == under || is_descendant(c, ccs[i].cls, under) || is_descendant(c, under, ccs[i].cls))) {
         cplan_set(p, ccs[i].mi, ccs[i].cls, UC_CMETH, CP_SWITCH);
         p->by_name = 1;
         return;

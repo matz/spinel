@@ -3350,7 +3350,7 @@ static int boxed_store_hash_subclass_evidence(Compiler *c, TyKind kt, TyKind vt)
   int changed = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].ary_hash || comp_ary_root(c, k) != k) continue;
-    if (comp_method_in_chain(c, k, "[]=", NULL) >= 0) continue;
+    if (call_target(c, -1, k, "[]=", CT_METHODS | CT_SHARED, NULL) >= 0) continue;
     TyKind was = c->classes[k].ary_kind, now = was;
     if (now == TY_UNKNOWN) continue;
     fold_evidence(&now, 0, 0, kt, vt);
@@ -9890,7 +9890,7 @@ int propagate_prep_params(Compiler *c) {
       const char *to_name   = cls->prep_to[k];
       /* a class method's chain is keyed `self.<name>` (comp_super_shadow) */
       int cm = strncmp(from_name, "self.", 5) == 0;
-      int from_mi = cm ? comp_cmethod_in_class(c, ci, from_name + 5) : comp_method_in_class(c, ci, from_name);
+      int from_mi = cm ? call_target(c, -1, ci, from_name + 5, CT_CMETHOD | CT_OWN | CT_SHARED, NULL) : call_target(c, -1, ci, from_name, CT_OWN | CT_SHARED, NULL);
       int to_mi = -1;
       for (int s = 0; s < c->nscopes; s++) {
         if (c->scopes[s].class_id == ci && c->scopes[s].is_cmethod == cm &&
@@ -14621,7 +14621,7 @@ int widen_shared_cmp_params(Compiler *c) {
     if (m->nparams < 1) continue;
     int users = 0;
     for (int k = 0; k < c->nclasses && users < 2; k++)
-      if (comp_method_in_chain(c, k, "<=>", NULL) == mi) users++;
+      if (call_target(c, -1, k, "<=>", CT_METHODS | CT_SHARED, NULL) == mi) users++;
     if (users < 2) continue;
     int api = arm_arg_param(c, m);   /* the operand's parameter, as the dispatch binds it */
     LocalVar *p = api >= 0 ? scope_local(m, m->pnames[api]) : NULL;

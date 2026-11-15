@@ -1426,7 +1426,7 @@ int is_numeric_coerce_op(const char *op) {
    only codegen needs (class_coerce_emittable), and a class that fails it finds
    the hook unhandled and gets the TypeError CRuby raises for it anyway. */
 int class_has_coerce_shape(Compiler *c, int k) {
-  int mi = comp_method_in_chain(c, k, "coerce", NULL);
+  int mi = call_target(c, -1, k, "coerce", CT_METHODS | CT_SHARED, NULL);
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   return m->nparams == 1 && m->rest_idx < 0;
@@ -1436,7 +1436,9 @@ int class_has_coerce_shape(Compiler *c, int k) {
    The coerce protocol needs it for `5 + obj` where obj only reads poly. */
 int class_coerce_emittable(Compiler *c, int k) {
   int defcls = -1;
-  int mi = comp_method_in_chain(c, k, "coerce", &defcls);
+  MethodLookup ml_mi = { .def_class = defcls };
+  int mi = call_target(c, -1, k, "coerce", CT_METHODS | CT_SHARED, &ml_mi);
+  defcls = ml_mi.def_class;
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   if (!m->reachable || m->yields || scope_is_shadowed(c, mi) || m->is_transplanted_source)

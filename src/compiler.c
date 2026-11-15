@@ -3840,7 +3840,7 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
 }
 static int mixin_answers_first(Compiler *c, int cid, const char *name, int comparable) {
   /* what master answers: the program's method or reader anywhere in the chain */
-  int master = comp_method_in_chain(c, cid, name, NULL) < 0 && !comp_reader_in_chain(c, cid, name, NULL);
+  int master = !call_answers(c, -1, cid, name, CT_SHARED, NULL);
   if (cid < 0 || cid >= c->nclasses || !name) return master;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
   if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return master;
@@ -5453,9 +5453,9 @@ static int main_call_site(Compiler *c, int call_id) {
    `def self.x`.) */
 static int toplevel_mod_method(Compiler *c, int k, const char *name, int mf_only) {
   int ci = c->toplevel_includes[k];
-  int mi = comp_self_method_in_chain(c, ci, name, NULL);
+  int mi = call_target(c, -1, ci, name, CT_CAPTURE | CT_SHARED, NULL);
   if (mi >= 0) return mi;
-  mi = comp_cmethod_in_chain(c, ci, name, NULL);
+  mi = call_target(c, -1, ci, name, CT_CMETHOD | CT_SHARED, NULL);
   return mi >= 0 && (!mf_only || c->scopes[mi].is_module_function) ? mi : -1;
 }
 static int comp_included_method_index_1(Compiler *c, const char *name, int call_id);
@@ -6482,7 +6482,7 @@ const char *comp_class_base_display_fn(Compiler *c) {
    _inspect); -1 when the class has none. */
 int cls_user_display_mi(Compiler *c, int k, const char *nm) {
   if (k < 0 || k >= c->nclasses || is_builtin_reopen(c->classes[k].name)) return -1;
-  int mi = comp_cmethod_in_chain(c, k, nm, NULL);
+  int mi = call_target(c, -1, k, nm, CT_CMETHOD | CT_SHARED, NULL);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
   if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;

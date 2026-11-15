@@ -9891,7 +9891,7 @@ static void synth_struct_each(Compiler *c) {
     ClassInfo *cls = &c->classes[ci];
     /* Data is not Enumerable: each/each_pair/each_with_index are Struct's */
     if (!cls->is_struct || cls->is_data || cls->nmembers == 0) continue;
-    if (comp_method_in_class(c, ci, "each") >= 0) continue;
+    if (call_target(c, -1, ci, "each", CT_OWN | CT_SHARED, NULL) >= 0) continue;
     /* a member of an iterator's name is read by its accessor, which the
        struct defines over the one it inherits (#8203) */
     if (!struct_has_member(cls, "each")) {
@@ -9924,7 +9924,7 @@ static void synth_struct_each(Compiler *c) {
     walk_scope(c, body, c->nscopes - 1, ci);
     }
     /* def each_pair; yield :m1, @m1; ...; self; end */
-    if (comp_method_in_class(c, ci, "each_pair") < 0 && !struct_has_member(cls, "each_pair")) {
+    if (call_target(c, -1, ci, "each_pair", CT_OWN | CT_SHARED, NULL) < 0 && !struct_has_member(cls, "each_pair")) {
       int pst[65]; int pn = 0;
       for (int j = 0; j < cls->nmembers && pn < 64; j++) {
         int sy = nt_new_node(nt, "SymbolNode");
@@ -9961,7 +9961,7 @@ static void synth_struct_each(Compiler *c) {
     /* def each_with_index; yield @m1, 0; yield @m2, 1; ...; self; end
        (returns the receiver, unlike the __enum_to_a redirect which would
        return the flat member array). The index is a literal per member. */
-    if (comp_method_in_class(c, ci, "each_with_index") < 0 && !struct_has_member(cls, "each_with_index")) {
+    if (call_target(c, -1, ci, "each_with_index", CT_OWN | CT_SHARED, NULL) < 0 && !struct_has_member(cls, "each_with_index")) {
       int wst[65]; int wn = 0;
       for (int j = 0; j < cls->nmembers && wn < 64; j++) {
         int ivr = nt_new_node(nt, "InstanceVariableReadNode");
@@ -10112,7 +10112,7 @@ static void synth_enum_to_a(Compiler *c) {
           /* a class that mixes Enumerable in still gets the materializer even
              when its #each never yields: the mixin is simply empty (#3755) */
           an_class_includes_enumerable(c, m->class_id))) continue;
-    if (comp_method_in_class(c, m->class_id, "__enum_to_a") >= 0) continue;
+    if (call_target(c, -1, m->class_id, "__enum_to_a", CT_OWN | CT_SHARED, NULL) >= 0) continue;
     /* a module's methods are compiled into each class that includes it,
        which gets its own materializer; the module has no instances, and
        one of its own called methods that exist only in those copies */
@@ -10132,7 +10132,7 @@ static void synth_enum_to_a(Compiler *c) {
        only at run time: Enumerable packs only a yield of several values, so
        the collector takes them all as a rest and packs by the count */
     int ymany = 0, yone = 0, ysplat = 0;
-    { int esi = comp_method_in_class(c, cls[k], "each");
+    { int esi = call_target(c, -1, cls[k], "each", CT_OWN | CT_SHARED, NULL);
       if (esi >= 0)
         for (int nid = 0; nid < nt->count; nid++) {
           if (c->nscope[nid] != esi) continue;
@@ -10354,7 +10354,7 @@ static void synth_to_enum_generators(Compiler *c) {
     for (int k = 0; k < nnames; k++) if (sp_streq(names[k], m->name)) { hit = 1; break; }
     if (!hit) continue;
     char hname[160]; snprintf(hname, sizeof hname, "__to_enum_%s", m->name);
-    if (comp_method_in_class(c, m->class_id, hname) >= 0) continue;   /* already synthesized */
+    if (call_target(c, -1, m->class_id, hname, CT_OWN | CT_SHARED, NULL) >= 0) continue;   /* already synthesized */
     int dup = 0;
     for (int k = 0; k < ntr; k++)
       if (tc[k] == m->class_id && sp_streq(tm[k], m->name)) { dup = 1; break; }
@@ -37014,7 +37014,7 @@ static const PdnEnt *pdn_lookup(Compiler *c, const char *cn) {
       e->sc = g; e->sc[e->nsc++] = si;
     }
   for (int ci = 0; ci < c->nclasses; ci++)
-    if (comp_reader_in_chain(c, ci, cn, NULL)) {
+    if (call_attr_target(c, -1, ci, cn, CT_ATTR | CT_SHARED, NULL)) {
       int *g = realloc(e->cls, sizeof(int) * (size_t)(e->ncl + 1));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       e->cls = g; e->cls[e->ncl++] = ci;
@@ -50944,7 +50944,7 @@ static int ur_iter_overridden(Compiler *c, const char *it) {
     int contained = 0;
     for (int a = k, d = 0; a >= 0 && d < 64 && !contained; a = c->classes[a].parent, d++)
       contained = c->classes[a].name && str_in(c->classes[a].name, builtins);
-    if (contained && comp_method_in_chain(c, k, it, NULL) >= 0) return 1;
+    if (contained && call_target(c, -1, k, it, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
   }
   return 0;
 }

@@ -78,6 +78,12 @@ if [ "$QUIET" = 1 ]; then
 else
   "$ROOT/tools/lists_readers_check.sh" || stop 1 "tools/lists_readers_check.sh"
 fi
+# and the siteless readers: the dispatchers and surveys no call stands behind ask the plan with no site, naming no primitive
+if [ "$QUIET" = 1 ]; then
+  sr=$("$ROOT/tools/siteless_readers_check.sh" 2>&1) || { printf "%s\n" "$sr"; stop 1 "tools/siteless_readers_check.sh"; }
+else
+  "$ROOT/tools/siteless_readers_check.sh" || stop 1 "tools/siteless_readers_check.sh"
+fi
 # and the definers (construction): the passes that put methods in the tables stand inside the check's bracket, and the list is exact
 if [ "$QUIET" = 1 ]; then
   cr=$("$ROOT/tools/construction_readers_check.sh" 2>&1) || { printf "%s\n" "$cr"; stop 1 "tools/construction_readers_check.sh"; }

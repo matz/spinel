@@ -6118,7 +6118,7 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
 /* The class method `===` that class `ci` (or a class above it) defines in
    the program, or -1. A builtin row's own `===` does not count. */
 int class_any_cmethod_eqq(Compiler *c, int ci) {
-  int mi = ci >= 0 ? comp_cmethod_in_chain(c, ci, "===", NULL) : -1;
+  int mi = ci >= 0 ? call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL) : -1;
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
       nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
   /* (a super in it reaches Module#===, which the call cannot run yet: the

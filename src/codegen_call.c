@@ -34515,7 +34515,7 @@ int root_reopen_defines(Compiler *c, const char *qm) {
   }
   for (int i = 0; i < nroots; i++) {
     ClassInfo *kc = &c->classes[roots[i]];
-    if (comp_method_in_class(c, roots[i], qm) >= 0 || comp_is_reader(kc, qm)) return 1;
+    if (call_target(c, -1, roots[i], qm, CT_OWN | CT_SHARED, NULL) >= 0 || comp_is_reader(kc, qm)) return 1;
     for (int u = 0; u < kc->nundefs; u++) if (sp_streq(kc->undefs[u], qm)) return 1;
   }
   return 0;

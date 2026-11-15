@@ -18629,6 +18629,94 @@ static int oa_elem_from_undo(Compiler *c, OAS *sl) {
   return undone;
 }
 
+/* Is node id's value thrown away: a statement before its list's last, a
+   loop body, an ensure clause, the program's last statement? A method's or
+   a block's last statement hands it on. */
+static int oa_value_thrown_away(const NodeTable *nt, const int *par, int id) {
+  VpUp up;
+  switch (vp_climb(nt, par, id, VPS_NONE, &up)) {
+  case VPU_DROPPED:
+  case VPU_ROOT:
+    return 1;
+  case VPU_ENDED:
+    return vp_up_loop(nt, &up) >= 0 || vp_up_effect_clause(nt, &up) || nt_kind(nt, up.parent) == NK_ProgramNode;
+  default:
+    return 0;
+  }
+}
+/* Does parameter plv of the method def node `def` go nowhere but the
+   method's value: never written, and every read of it the body's last value
+   (a zsuper, which hands every parameter on, is another way out)? Answers 0
+   on any other use: another parameter's default, a block's, a nested
+   def's. */
+static int oa_param_use_ok(Compiler *c, const int *par, int def, LocalVar *plv, int id, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 1;
+  if (depth > 400) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_ForwardingSuperNode) return 0;
+  if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
+      k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableOrWriteNode) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && scope_local(&c->scopes[c->nscope[id]], nm) == plv) {
+      if (k != NK_LocalVariableReadNode) return 0;
+      VpUp up;
+      if (vp_climb(nt, par, id, VPS_NONE, &up) != VPU_ENDED || up.parent != def) return 0;
+    }
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (!oa_param_use_ok(c, par, def, plv, nt_ref_at(nt, id, i), depth + 1)) return 0;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int an = 0;
+    const int *ids = nt_arr_at(nt, id, i, &an);
+    for (int j = 0; j < an; j++)
+      if (!oa_param_use_ok(c, par, def, plv, ids[j], depth + 1)) return 0;
+  }
+  return 1;
+}
+/* g_oa_onlydef[mi]: 1 when method mi is the only def of its name and no
+   Symbol or String spells it (a subclass's override, a class method beside
+   it, a define_method or an alias could take the call instead), 2 when it
+   is not, 0 not asked yet this round */
+static unsigned char *g_oa_onlydef;
+static int oa_only_def(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  if (!g_oa_onlydef[mi]) {
+    const char *mn = comp_scope_user_name(&c->scopes[mi]);
+    int def = c->scopes[mi].def_node;
+    g_oa_onlydef[mi] = mn && def >= 0 ? 1 : 2;
+    for (int id = 0; g_oa_onlydef[mi] == 1 && id < nt->count; id++) {
+      NodeKind k = nt_kind(nt, id);
+      const char *nm = k == NK_DefNode && id != def ? nt_str(nt, id, "name") :
+                       k == NK_SymbolNode ? nt_str(nt, id, "value") :
+                       k == NK_StringNode ? nt_str(nt, id, "content") : NULL;
+      if (nm && sp_streq(nm, mn)) g_oa_onlydef[mi] = 2;
+    }
+  }
+  return g_oa_onlydef[mi] == 1;
+}
+/* Call id hands a slot to parameter plv of method mi, which no slot models
+   (an untyped parameter, `def make_shareable(obj) = obj` called with a
+   table and with an Array of Strings): the slot goes nowhere when the
+   parameter goes nowhere but mi's value and the call throws that away. */
+static int oa_arg_dropped(Compiler *c, int id, int mi, LocalVar *plv) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  int def = c->scopes[mi].def_node;
+  /* only an untyped parameter, which takes the table boxed: one an RBS
+     signature pins, or of another kind, would ask for a conversion */
+  if (def < 0 || plv->type != TY_POLY || plv->rbs_seeded) return 0;
+  /* the def's own nodes must read this parameter: a method include or
+     `extend self` copied into another scope keeps the def, whose reads
+     name the original's local, and the walk below would see none of the
+     copy's */
+  int body = nt_ref(nt, def, "body");
+  if (body < 0 || scope_local(&c->scopes[c->nscope[body]], plv->name) != plv) return 0;
+  return oa_value_thrown_away(nt, par, id) && oa_only_def(c, mi) &&
+         oa_param_use_ok(c, par, def, plv, def, 0);   /* (the parameters' defaults too) */
+}
 /* Interprocedural edges of call id, whose target narrow_object_arrays
    resolved to method oa_tmi (-1: unattributable). A PARAM slot may only
    narrow when EVERY argument reaching it is a same-component candidate
@@ -18717,6 +18805,7 @@ static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const
     while (pk < M->nparams && layout_plain_arg(c, M, argv, &L, pk) != a) pk++;
     LocalVar *plv = pk < M->nparams && M->pnames[pk] ? scope_local(M, M->pnames[pk]) : NULL;
     int T = plv ? oa_find(sl, n, oa_tmi, plv) : -1;
+    if (T < 0 && plv && oa_arg_dropped(c, id, oa_tmi, plv)) { claimed[a] = 1; continue; }
     if (T < 0) { sl[S].alive = 0; continue; }
     claimed[a] = 1;
     oa_uf_union(sl, S, T);
@@ -19111,6 +19200,8 @@ static void oa_param_defaults(Compiler *c, OAS *sl, int n, const int *read_slot,
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0; MethodLookup ml = { .def_class = -1 };
+  free(g_oa_onlydef);
+  g_oa_onlydef = (unsigned char *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), 1);
   /* Start every round from the same shape. A slot narrowed last round holds
      its pointer-array type, which would keep it out of the candidate list
      below and split its component; put it back on the poly array and let the

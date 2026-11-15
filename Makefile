@@ -4642,6 +4642,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	! grep -q 'sp_RbVal lv_r_' "$$tmp/bst.c" || { echo "infer-test: FAIL (a String-only transform on a boxed String answered boxed)"; ok=0; }; \
 	$(SPINEL) test/boxed_string_own_method_answers.rb -c --no-line-map -o "$$tmp/bso.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (boxed_string_own_method_answers: -c)"; ok=0; }; \
 	[ "$$(grep -o 'sp_RbVal lv_r_[a-z_]*' "$$tmp/bso.c" | sort -u | tr '\n' ' ')" = "sp_RbVal lv_r_b sp_RbVal lv_r_strip " ] || { echo "infer-test: FAIL (a program class's own b or strip answering a non-String lost its answer, or its to_str answering a String boxed the call)"; ok=0; }; \
+	$(SPINEL) test/identity_helper_arg_dropped.rb -c --no-line-map -o "$$tmp/iha.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (identity_helper_arg_dropped: -c)"; ok=0; }; \
+	[ "$$(grep -E -o 'sp_PtrArray \* (cst_SH_TBL|lv_(sh_loc|sh_flt|lp_t))\b' "$$tmp/iha.c" | sed 's/.* //' | LC_ALL=C sort -u | tr '\n' ' ')" = "cst_SH_TBL lv_lp_t lv_sh_flt lv_sh_loc " ] && ! grep -E -q 'sp_PtrArray \* lv_(kp_t|kd_t|an_t|ld_t|yl_t|dm_t|in_t)\b' "$$tmp/iha.c" || { echo "infer-test: FAIL (a table handed to a helper that only answers it back, the answer dropped, stayed boxed, or one the helper keeps was narrowed)"; ok=0; }; \
 	$(SPINEL) test/index_read_unsettled_local.rb -c --no-line-map -o "$$tmp/iru.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_read_unsettled_local: -c)"; ok=0; }; \
 	! grep -q 'sp_RbVal lv_line\b' "$$tmp/iru.c" || { echo "infer-test: FAIL (an index read guessed a settling local a Hash and boxed a block parameter)"; ok=0; }; \
 	$(SPINEL) test/table_row_join_keeps_kind.rb -c --no-line-map -o "$$tmp/trj.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_row_join_keeps_kind: -c)"; ok=0; }; \

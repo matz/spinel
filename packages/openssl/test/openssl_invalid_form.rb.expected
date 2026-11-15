@@ -1,0 +1,8 @@
+ArgumentError
+unsupported point conversion form :bogus (expected :compressed, :uncompressed, or :hybrid)
+ArgumentError
+unsupported point conversion form "compressed" (expected :compressed, :uncompressed, or :hybrid)
+ArgumentError
+unsupported point conversion form nil (expected :compressed, :uncompressed, or :hybrid)
+ArgumentError
+unsupported point conversion form 4 (expected :compressed, :uncompressed, or :hybrid)

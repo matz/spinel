@@ -1,26 +1,79 @@
-# OpenSSL::PKey::EC -- elliptic-curve keys, in the shape #4221 settled on:
-# CRuby's names where CRuby has a spelling, raw bytes where CRuby would hand
-# back a BN or an EC::Point.
-#
-# So `EC.generate("prime256v1")` and `key.dh_compute_key(peer)` are the names
-# a CRuby program already writes, but a key's halves are Strings --
-# `private_key_bytes` is the scalar, `public_key_bytes` is the X9.62
-# uncompressed point, 0x04 || X || Y -- and dh_compute_key takes the peer's
-# bytes rather than a Point built out of a BN. `EC::Group` supplies curve_name;
-# `OpenSSL::BN` and `EC::Point` are not here, and a program that builds one
-# fails at COMPILE time the way the rest of this package's gaps do.
-#
-# That is a real subset, and it is a deliberate one: those arithmetic classes exist
-# in CRuby to express things this runtime has no other use for, and every
-# protocol that names raw EC keys -- RFC 8291 Web Push, JWK's x/y halves,
-# WebAuthn, ES256 -- names them as the byte strings above. A program that
-# reaches for EC::Point is already doing protocol work that has to know the
-# encoding anyway.
+# OpenSSL::PKey::EC keeps its curve and key bytes in Ruby, with one-shot
+# libcrypto calls. Group#order exposes a BN with exact Integer conversion;
+# public_key exposes a Point with X9.62 octet encoding. Group and point
+# arithmetic remain outside this subset. The raw-byte accessors and ECDH
+# interface below retain their existing spellings.
 #
 # A key is its bytes, so nothing on the C side outlives a call: there is no
 # handle to release and no slot to run out of, unlike the connection table
 # SSLSocket holds. An abandoned key costs nothing.
 module OpenSSL
+  class BNError < OpenSSLError; end
+
+  class BN
+    def initialize(value, base = 10)
+      base = radix(base)
+      raise ArgumentError, "invalid argument" if value.nil?
+      if value.is_a?(BN)
+        @value = value.instance_variable_get(:@value) || 0
+      elsif value.is_a?(Integer)
+        @value = value
+      else
+        bytes = OpenSSL.send(:comparison_string, value)
+        raise ArgumentError, "string contains null byte" if (base == 10 || base == 16) && bytes.include?("\0")
+        @value = Native.bn_integer(bytes, base)
+      end
+    end
+    def to_i = @value || 0
+
+    def to_s(base = 10)
+      Native.bn_string(@value || 0, radix(base))
+    end
+
+    def <=>(other)
+      other = other.instance_variable_get(:@value) || 0 if other.is_a?(BN)
+      raise TypeError, "Cannot convert into OpenSSL::BN" unless other.is_a?(Integer)
+      Native.bn_compare(@value || 0, other)
+    end
+
+    def ==(other)
+      if other.is_a?(BN)
+        (@value || 0) == (other.instance_variable_get(:@value) || 0)
+      elsif other.is_a?(Integer)
+        (@value || 0) == other
+      else
+        false
+      end
+    end
+
+    private
+
+    # These inherited entry points would otherwise silently claim numeric
+    # behavior outside this package's BN subset. send must refuse them too.
+    def hash
+      raise NoMethodError, "OpenSSL::BN#hash is unavailable"
+      0 # The hash callback has an Integer result type, but never returns.
+    end
+    public :hash
+    def eql?(other)
+      raise NoMethodError, "OpenSSL::BN#eql? is unavailable"
+      false # The eql? callback has a Boolean result type, but never returns.
+    end
+
+    # Numeric operations consult this private hook; coercion is unavailable.
+    def coerce(other)
+      raise NoMethodError, "OpenSSL::BN#coerce is unavailable"
+      [0, 0] # The numeric callback expects a pair, but never returns.
+    end
+
+    def radix(base)
+      base = base.__send__(:to_int) if !base.is_a?(Integer) && base.respond_to?(:to_int, true)
+      raise TypeError, "no implicit conversion into Integer" unless base.is_a?(Integer)
+      raise RangeError, "integer too big to convert to int" if base > 2147483647 || base < -2147483648
+      base
+    end
+  end
+
   module PKey
     class PKeyError < OpenSSLError
     end
@@ -32,11 +85,55 @@ module OpenSSL
         # Curve metadata only; group arithmetic is outside this subset.
         class Error < OpenSSLError; end
         def curve_name = @curve_name.dup
+        def order = BN.new(Native.ec_group_order(@curve_name))
         def initialize(curve)
           curve = curve.is_a?(Group) ? curve.curve_name : OpenSSL.send(:comparison_string, curve)
           raise ArgumentError, "string contains null byte" if curve.include?("\0")
           @curve_name = Native.ec_curve_name(curve, 0).b
           raise Error, "unknown curve name" if @curve_name.empty?
+        end
+      end
+
+      class Point
+        class Error < OpenSSLError; end
+        def initialize(group, *values)
+          raise ArgumentError, "wrong number of arguments (given #{values.length + 1}, expected 1..2)" if values.length > 1
+          raise Error, "EC_POINT already initialized" unless @bytes.nil?
+          if group.is_a?(Point)
+            raise ArgumentError, "invalid second argument" unless values.empty?
+            curve = group.instance_variable_get(:@curve_name)
+            bytes = group.instance_variable_get(:@bytes)
+            raise Error, "EC point is not initialized" if curve.nil? || bytes.nil?
+          else
+            raise TypeError, "expected an EC::Group" unless group.is_a?(Group)
+            curve = group.instance_variable_get(:@curve_name)
+            raise Group::Error, "EC group is not initialized" if curve.nil?
+            input = values.empty? ? "\0".b : values[0]
+            if input.is_a?(BN)
+              input = Native.bn_string(input.instance_variable_get(:@value) || 0, 2)
+              input = "\0".b if input.empty?
+            end
+            bytes = Native.ec_point_octets(curve, OpenSSL.send(:comparison_string, input), 4).b
+            raise Error, Native.last_error if bytes.empty?
+          end
+          @curve_name = String.new(curve)
+          @bytes = String.new(bytes)
+          self
+        end
+
+        def to_octet_string(form)
+          raise Error, "EC point is not initialized" if @curve_name.nil? || @bytes.nil?
+          code = case form
+                 when :compressed then 2
+                 when :uncompressed then 4
+                 when :hybrid then 6
+                 else
+                   raise ArgumentError, "unsupported point conversion form #{form.inspect} " \
+                                        "(expected :compressed, :uncompressed, or :hybrid)"
+                 end
+          bytes = Native.ec_point_octets(@curve_name, @bytes, code).b
+          raise Error, Native.last_error if bytes.empty?
+          bytes
         end
       end
 
@@ -154,6 +251,7 @@ module OpenSSL
       end
 
       def group = Group.new(Native.ec_curve_name(@curve, 1))
+      def public_key = Point.new(group, @public_key_bytes)
       def public_to_der = export_key(0)
       def private_to_der = export_key(1)
       def private_to_pem = export_key(2)

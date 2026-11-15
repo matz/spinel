@@ -18261,6 +18261,9 @@ static int oa_value_dropped(Compiler *c, int id) {
   VpUpKind ended = vp_climb(nt, par, id, AN_DROP_CLIMB, &up);
   if (up.reach) return 0;
   if (ended == VPU_DROPPED || vp_up_loop(nt, &up) >= 0) return 1;
+  /* the last statement of the program or of a file it requires: nothing
+     reads a file's value */
+  if (ended == VPU_ENDED && nt_kind(nt, up.parent) == NK_ProgramNode) return 1;
   if (vp_up_effect_clause(nt, &up)) return 1;
   int call = vp_up_block_call(nt, par, &up);
   return call >= 0 && oa_ignores_block_value(c, call);
@@ -18647,6 +18650,62 @@ static int oa_elem_from_undo(Compiler *c, OAS *sl) {
   return undone;
 }
 
+/* Does parameter plv of the method def node `def` go nowhere but the
+   method's value: never written, and every read of it the body's last value?
+   Answers 0 on any other use, another parameter's default and a block's
+   included, on a zsuper (which hands every parameter on), and on a tree
+   deeper than the walk follows. */
+static int oa_param_use_ok(Compiler *c, const int *par, int def, LocalVar *plv, int id, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 1;
+  if (depth > 400) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_ForwardingSuperNode) return 0;
+  if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
+      k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableOrWriteNode) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && scope_local(&c->scopes[c->nscope[id]], nm) == plv) {
+      if (k != NK_LocalVariableReadNode) return 0;
+      VpUp up;
+      if (vp_climb(nt, par, id, VPS_NONE, &up) != VPU_ENDED || vp_up_def(nt, &up) != def) return 0;
+    }
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (!oa_param_use_ok(c, par, def, plv, nt_ref_at(nt, id, i), depth + 1)) return 0;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int an = 0;
+    const int *ids = nt_arr_at(nt, id, i, &an);
+    for (int j = 0; j < an; j++)
+      if (!oa_param_use_ok(c, par, def, plv, ids[j], depth + 1)) return 0;
+  }
+  return 1;
+}
+/* Call id hands a slot to parameter plv of method mi, which no slot models
+   (an untyped parameter, `def make_shareable(obj) = obj` called with a
+   table and with an Array of Strings): the slot goes nowhere when the
+   parameter goes nowhere but mi's value and the call throws that away
+   (oa_value_dropped). */
+static int oa_arg_dropped(Compiler *c, int id, int mi, LocalVar *plv) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  int def = c->scopes[mi].def_node;
+  const char *mn = comp_scope_user_name(&c->scopes[mi]);
+  /* only an untyped parameter, which takes the table boxed: one of another
+     kind (an Array an RBS signature pins, say) asks for a conversion */
+  if (def < 0 || !mn || plv->type != TY_POLY) return 0;
+  /* the def's own nodes must read this parameter: a method include or
+     `extend self` copied into another scope keeps the def, whose reads
+     name the original's local, and the walk below would see none of the
+     copy's */
+  int body = nt_ref(nt, def, "body");
+  if (body < 0 || scope_local(&c->scopes[c->nscope[body]], plv->name) != plv) return 0;
+  /* the program gives no other method of the name (an override, a class
+     method beside it, a define_method, an alias, a name it computes) */
+  return oa_value_dropped(c, id) && an_prog_never_gives(mn, 1) &&
+         oa_param_use_ok(c, par, def, plv, def, 0);   /* (the parameters' defaults too) */
+}
 /* Interprocedural edges of call id, whose target narrow_object_arrays
    resolved to method oa_tmi (-1: unattributable). A PARAM slot may only
    narrow when EVERY argument reaching it is a same-component candidate
@@ -18735,6 +18794,7 @@ static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const
     while (pk < M->nparams && layout_plain_arg(c, M, argv, &L, pk) != a) pk++;
     LocalVar *plv = pk < M->nparams && M->pnames[pk] ? scope_local(M, M->pnames[pk]) : NULL;
     int T = plv ? oa_find(sl, n, oa_tmi, plv) : -1;
+    if (T < 0 && plv && oa_arg_dropped(c, id, oa_tmi, plv)) { claimed[a] = 1; continue; }
     if (T < 0) { sl[S].alive = 0; continue; }
     claimed[a] = 1;
     oa_uf_union(sl, S, T);
@@ -19138,31 +19198,23 @@ static int oa_masgn_call_of(const NodeTable *nt, const int *par, int tgt) {
 }
 /* Multi-write mw takes a tuple of en elements apart and throws its value
    away: en plain targets on the left, no splat and none after it, and a
-   value nothing reads (a statement before its list's last, a loop body, an
-   ensure clause, the program's last statement). A method's or a block's
-   last statement hands the tuple on. */
-static int oa_masgn_takes_apart(const NodeTable *nt, const int *par, int mw, int en) {
+   value nothing reads (oa_value_dropped). A method's last statement, or a
+   block's whose call reads its value, hands the tuple on. */
+static int oa_masgn_takes_apart(Compiler *c, int mw, int en) {
+  const NodeTable *nt = c->nt;
   int ln = 0, rn = 0;
   nt_arr(nt, mw, "lefts", &ln);
   nt_arr(nt, mw, "rights", &rn);
   if (ln != en || rn != 0 || nt_ref(nt, mw, "rest") >= 0) return 0;
-  VpUp up;
-  switch (vp_climb(nt, par, mw, VPS_NONE, &up)) {
-  case VPU_DROPPED:
-  case VPU_ROOT:
-    return 1;
-  case VPU_ENDED:
-    return vp_up_loop(nt, &up) >= 0 || vp_up_effect_clause(nt, &up) || nt_kind(nt, up.parent) == NK_ProgramNode;
-  default:
-    return 0;
-  }
+  return oa_value_dropped(c, mw);
 }
 /* Call id of a method answering a tuple of en elements is taken apart where
    it lands: the value of a multi-write that takes it apart (above). */
-static int oa_call_taken_apart(const NodeTable *nt, const int *par, int id, int en) {
+static int oa_call_taken_apart(Compiler *c, const int *par, int id, int en) {
+  const NodeTable *nt = c->nt;
   int mw = par[id];
   return mw >= 0 && nt_kind(nt, mw) == NK_MultiWriteNode && nt_ref(nt, mw, "value") == id &&
-         oa_masgn_takes_apart(nt, par, mw, en);
+         oa_masgn_takes_apart(c, mw, en);
 }
 /* The slot a multi-write's local or constant target writes, or -1. */
 static int oa_target_slot(Compiler *c, OAS *sl, int n, int t) {
@@ -19234,7 +19286,7 @@ static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, 
         if (id != c->scopes[sl[R].sidx].def_node) tup_en[R] = -1;
         continue;
       }
-      if (k != NK_CallNode || call_ret[id] != R || !oa_call_taken_apart(nt, par, id, tup_en[R]) ||
+      if (k != NK_CallNode || call_ret[id] != R || !oa_call_taken_apart(c, par, id, tup_en[R]) ||
           (dead && dead[id])) tup_en[R] = -1;
     }
   }

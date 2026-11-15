@@ -19319,6 +19319,36 @@ static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, 
   }
   free(tup_en);
 }
+/* narrow_object_arrays step 6: a return slot no call site reached is killed,
+   as a method entered by a route this pass never saw, unless no such route
+   can read its value:
+   - an --ext-entry or --ext-class method is entered by the host, through the
+     header written from the types this pass leaves;
+   - a method nothing in the program names (no call, Symbol or String spells
+     it) is never entered at all.
+   Killed, the slot took down the component its value joined: an ivar whose
+   `select` an exported method answered stayed a poly array, and a call on one
+   of its elements went through the boxed dispatch. */
+static void oa_unreached_returns(Compiler *c, OAS *sl, int n) {
+  const NodeTable *nt = c->nt;
+  ANameHash named; memset(&named, 0, sizeof named);
+  int built = 0;
+  for (int i = 0; i < n; i++) {
+    if (sl[i].lv || sl[i].ici >= 0 || sl[i].saw_call) continue;
+    Scope *M = &c->scopes[sl[i].sidx];
+    if (M->is_ext_entry || M->is_ext_method) continue;
+    if (!built) {
+      /* every name a call, a Symbol or a String spells, once per round */
+      NT_FOREACH_KIND(nt, NK_CallNode, k) { const char *v = nt_str(nt, k, "name"); if (v && !anh_has(&named, v)) anh_add(&named, v); }
+      NT_FOREACH_KIND(nt, NK_SymbolNode, k) { const char *v = nt_str(nt, k, "value"); if (v && !anh_has(&named, v)) anh_add(&named, v); }
+      NT_FOREACH_KIND(nt, NK_StringNode, k) { const char *v = nt_str(nt, k, "content"); if (v && !anh_has(&named, v)) anh_add(&named, v); }
+      built = 1;
+    }
+    if (M->name && !anh_has(&named, M->name)) continue;
+    sl[i].alive = 0;
+  }
+  anh_free(&named);
+}
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0; MethodLookup ml = { .def_class = -1 };
@@ -20155,11 +20185,11 @@ static int narrow_object_arrays(Compiler *c) {
   /* 6. a slot read left unclaimed escaped into an unmodeled context -> kill.
         A call whose value is a return slot is the same story: unless a slot
         write claimed it above, the value went somewhere unmodeled. And a
-        return slot no call site reached at all is a method entered by some
-        route this pass never saw, so its C signature must not move. */
+        return slot no call site reached at all may be a method entered by
+        a route this pass never saw (oa_unreached_returns). */
   for (int id = 0; id < nt->count; id++)
     if (call_ret[id] >= 0 && !claimed[id] && !value_ok[id]) sl[call_ret[id]].alive = 0;
-  for (int i = 0; i < n; i++) if (!sl[i].lv && sl[i].ici < 0 && !sl[i].saw_call) sl[i].alive = 0;
+  oa_unreached_returns(c, sl, n);
   for (int id = 0; id < nt->count; id++)
     if (read_slot[id] >= 0 && !claimed[id]) sl[read_slot[id]].alive = 0;
 

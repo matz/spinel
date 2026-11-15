@@ -153,10 +153,12 @@ int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int
    written to b. 0, writing nothing, for a call the plan does not answer
    so; with b NULL, only asked. */
 int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b);
-/* The writes visibility word `id` makes to its visibility cells as its own
-   call runs (cplan_vis_cell_after), as an expression with no value of its
-   own, `gv_<cell> = <v>, ...`, written to b. 0, writing nothing, for a
-   word that writes none. */
+/* The writes visibility word or include call `id` makes to its cells as its
+   own call runs (cplan_vis_cell_after: the visibility cells, and the Kernel
+   cells of the classes an include brings Kernel into), as an expression with
+   no value of its own, `gv_<cell> = <v>, ...` (one of several classes' cells
+   `_sp_cls.cls_id == <class> ? (void)(gv_<cell> = 1) : (void)0`), written to
+   b. 0, writing nothing, for a call that writes none. */
 int emit_vis_cell_write(Compiler *c, int id, Buf *b);
 int respond_to_user_defined(Compiler *c, int id, int recv);
 extern const char *const respond_universal[];

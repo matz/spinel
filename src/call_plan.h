@@ -478,8 +478,20 @@ int cplan_cell_write_dropped(Compiler *c, int id);
    word stands inside an expression (`c && public(:m, :n)`), which may not
    run when its statement does, so no write beside the statement can stand
    for it (ver_cells_put). *g is NULL for a cell no emitted code reads. 0
-   past the last, and for any other node. */
-int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v);
+   past the last, and for any other node. The cells of an include that
+   brings Kernel into a class come after the visibility cells, each written
+   as 1; *only is the class whose cell it is where the include writes the
+   cells of several classes by the class it ran on (_sp_cls), else -1. */
+int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v, int *only);
+/* The name of class cls's Kernel cell, `$__spinel_kern_<cls>`, which a blank slate's readers test where an include
+   brings Kernel into it at run time (cplan_class_kernel: KERN_CELL), and whether the class method of scope index
+   scope holds an include that writes the cells of several classes by the receiving class, which the method then
+   takes (cmethod_takes_self_cls). */
+void cplan_kernel_cell_name(int cls, char out[32]);
+int cplan_kern_site_by_class(Compiler *c, int scope);
+/* elab_class_kernel with the cells: KERN_CELL for a class whose chain lacks Kernel and holds a class or module an
+   include of the program may bring Kernel into at run time */
+int cplan_class_kernel(Compiler *c, int cls);
 /* `cell = v` put in statement list `list` at its statement `at` (after it
    when after): the write, for the caller to record (elab_record_write) */
 int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int v);

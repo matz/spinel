@@ -4411,6 +4411,11 @@ int unsup_message(Compiler *c, int id, const char *what, int self_ci, char *msg,
   NodeKind k = nt_kind(c->nt, id);
   const char *mname = k == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;
   if (mname) {
+    /* a define_method handed a parameter of its method as the body: the
+       words of the pass that refuses it ahead of emission, which
+       --defer-refusals leaves to this site (reject_define_method_runtime_block) */
+    const char *dm = define_method_param_body_refusal(c, id);
+    if (dm) { snprintf(msg, cap, "%s", dm); return CR_FEATURE; }
     int recv = nt_ref(c->nt, id, "receiver");
     int args = nt_ref(c->nt, id, "arguments");
     int ac = 0; const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &ac) : NULL;

@@ -20780,26 +20780,35 @@ static void reject_record_sclass_early(Compiler *c) {
    a literal into a refusal --defer-refusals can defer. An arm of a
    runtime-name send's dispatch (dyn_arm) is no such call: the program
    spelling :define_method somewhere gives `obj.__send__(m, *args, &blk)`
-   an arm of that name, which nothing wrote. */
-static void reject_define_method_runtime_block(Compiler *c) {
+   an arm of that name, which nothing wrote. Under --defer-refusals the
+   call is left to its emission instead, where the probe defers the refusal
+   to a raise in these words (unsup_message): refused here, ahead of
+   emission, it stopped the build of a program whose method is reached only
+   through a send of a run-time name, and never runs it. */
+const char *define_method_param_body_refusal(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm || (!sp_streq(nm, "define_method") && !sp_streq(nm, "define_singleton_method"))) continue;
-    if (nt_int(nt, id, "dyn_arm", 0)) continue;
-    Scope *sc = comp_scope_of(c, id);
-    if (!sc || sc->def_node < 0 || !sc->reachable) continue;
-    int args = nt_ref(nt, id, "arguments"), an = 0;
-    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    int blk = nt_ref(nt, id, "block"), src = -1;
-    if (an == 2 && blk < 0) src = av[1];
-    else if (an == 1 && blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode) src = nt_ref(nt, blk, "expression");
-    if (src < 0 || nt_kind(nt, src) != NK_LocalVariableReadNode) continue;
-    LocalVar *lv = scope_local(sc, nt_str(nt, src, "name"));
-    if (!lv || !lv->is_param) continue;
-    unsupported_feature(c, id, "Module#define_method with a block or Proc the method is handed (`&block`, a "
-                               "parameter) is not supported: the defined method's body is the caller's block, "
-                               "known only at run time. Pass a block literal to define_method instead");
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || (!sp_streq(nm, "define_method") && !sp_streq(nm, "define_singleton_method"))) return NULL;
+  if (nt_int(nt, id, "dyn_arm", 0)) return NULL;
+  Scope *sc = comp_scope_of(c, id);
+  if (!sc || sc->def_node < 0 || !sc->reachable) return NULL;
+  int args = nt_ref(nt, id, "arguments"), an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  int blk = nt_ref(nt, id, "block"), src = -1;
+  if (an == 2 && blk < 0) src = av[1];
+  else if (an == 1 && blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode) src = nt_ref(nt, blk, "expression");
+  if (src < 0 || nt_kind(nt, src) != NK_LocalVariableReadNode) return NULL;
+  LocalVar *lv = scope_local(sc, nt_str(nt, src, "name"));
+  if (!lv || !lv->is_param) return NULL;
+  return "Module#define_method with a block or Proc the method is handed (`&block`, a "
+         "parameter) is not supported: the defined method's body is the caller's block, "
+         "known only at run time. Pass a block literal to define_method instead";
+}
+static void reject_define_method_runtime_block(Compiler *c) {
+  NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
+    if (defer_refusals_at(c, id)) continue;
+    const char *msg = define_method_param_body_refusal(c, id);
+    if (msg) unsupported_feature(c, id, msg);
   }
 }
 

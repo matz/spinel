@@ -15054,7 +15054,7 @@ static sp_RbVal sp_poly_arr_widen_and_set(sp_RbVal v, sp_int idx, sp_RbVal val) 
     const char *rep = sp_str_aset_rep(val);
     SP_GC_ROOT_RBVAL(v);
     SP_GC_ROOT(rep);
-    sp_String_set_bin(sh, sp_str_splice_at(sp_String_cstr(sh), idx, 1, rep, 0));
+    sp_String_splice_chars(sh, idx, 1, rep, 0, 1);
     return v;
   }
   sp_poly_arr_set(v, idx, val);
@@ -15176,9 +15176,10 @@ static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
   SP_GC_ROOT(rep);
   if (a + n > (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)))
     n = (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)) - a;
-  /* (the splice's encoding too, which the compatibility rule picked: an
-     ASCII-only binary String given a UTF-8 text becomes UTF-8) */
-  sp_String_set_bin_enc(h, bytes ? sp_str_bytesplice(cur, a, n, rep) : sp_str_splice_at(cur, a, n, rep, 0));
+  /* spliced where h lives, in the encoding the compatibility rule picked:
+     an ASCII-only binary String given a UTF-8 text becomes UTF-8 */
+  if (bytes) sp_String_splice_bytes(h, a, n, rep, 0, (sp_int)sp_str_byte_len(rep), 0);
+  else sp_String_splice_chars(h, a, n, rep, 0, 0);
   return val;
 }
 /* poly_val[key] = val for a key of no kind the String store picks a form by

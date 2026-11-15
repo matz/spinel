@@ -1124,7 +1124,9 @@ wasm-rt: $(SP_RT_WASI_LIB) $(BUNDLED_NATIVE_WASI_OBJS) $(SP_RT_WASI_NOEXC_LIB) $
 # compile parts and link them with wasm-ld, and one is built again warm,
 # every unit from the cache. Not in the gate: it needs the sdk and an
 # engine. `make wasm-test` where both are. A program with
-# `# spinel: wasm-int-overflow: MODE` is built in that overflow mode.
+# `# spinel: wasm-int-overflow: MODE` is built in that overflow mode. One
+# with `# spinel: wasm-c-noinline: FN...` (or `wasm-c-inline: FN...`) is
+# also emitted as C (-c), where each FN must (or must not) be SP_NOINLINE.
 WASMTIME ?= wasmtime
 WASM_TESTS = $(shell grep -l '^\# spinel: wasm$$' test/*.rb)
 # --exceptions=abort: programs built without exception handling and run with
@@ -1145,6 +1147,15 @@ wasm-test: $(SPINEL) wasm-rt
 	for t in $(WASM_TESTS); do \
 	  bn=$$(basename $$t .rb); \
 	  ov=$$(sed -n "s/^# spinel: wasm-int-overflow: //p" $$t); \
+	  ni=$$(sed -n "s/^# spinel: wasm-c-noinline: //p" $$t); il=$$(sed -n "s/^# spinel: wasm-c-inline: //p" $$t); \
+	  if [ -n "$$ni$$il" ]; then \
+	    if ! WASI_SDK=$(WASI_SDK) $(SPINEL) --target=wasm32-wasi -c --no-line-map $$t -o $$tmp/$$bn.c >/dev/null 2>$$tmp/$$bn.cerr; then \
+	      echo "wasm-test: FAIL (-c) $$t"; head -3 $$tmp/$$bn.cerr; ok=0; \
+	    else cok=1; \
+	      for f in $$ni; do grep -Eq "^static SP_NOINLINE [^(]*[ *]$$f\(" $$tmp/$$bn.c || { echo "wasm-test: FAIL ($$f is not SP_NOINLINE) $$t"; cok=0; }; done; \
+	      for f in $$il; do ! grep -Eq "^static [^(]*SP_NOINLINE [^(]*[ *]$$f\(" $$tmp/$$bn.c || { echo "wasm-test: FAIL ($$f is SP_NOINLINE) $$t"; cok=0; }; done; \
+	      if [ $$cok -eq 1 ]; then echo "wasm-test: pass (the C's noinline marks) $$t"; else ok=0; fi; fi; \
+	  fi; \
 	  for mode in plain --jobs=2 --incremental; do \
 	    case $$mode in plain) m=; lbl=;; *) m=$$mode; lbl=" ($$mode)";; esac; \
 	    if ! WASI_SDK=$(WASI_SDK) $(SPINEL) --target=wasm32-wasi $$m $${ov:+--int-overflow=$$ov} --no-line-map $$t -o $$tmp/$$bn.wasm >/dev/null 2>$$tmp/$$bn.build; then \

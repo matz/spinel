@@ -1,0 +1,17 @@
+[true, "CBA"]
+[:bad, :start, "bad xyz"]
+[true, "YRTER"]
+[false, "TSEUQER-REGNOL-HCUM-A"]
+prepare abc
+route ABC 1
+ensure abc
+prepare xyz
+ensure xyz
+prepare retry
+route RETRY 1
+prepare retry
+route RETRY 2
+ensure retry
+prepare a-much-longer-request
+route A-MUCH-LONGER-REQUEST 3
+ensure a-much-longer-request

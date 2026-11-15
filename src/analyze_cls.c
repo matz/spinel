@@ -5320,7 +5320,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     int sd_modfn = !CF_CLOSED(&f) && s->is_module_function;
     if (sd_proto || cf_opaque_name(s->name) || cf_is_dyn(&f, s->name) ||
         s->is_proc_form || s->is_lowered_yield ||
-        s->cs_synth || sd_modfn || sd_prelude ||
+        s->cs_synth || sd_modfn || sd_prelude || s->is_ext_entry || s->is_ext_method ||
         (c->n_cext_extensions && s->def_node >= 0 && nt_int(c->nt, s->def_node, "cext_stub", 0))) {
       f.protocol[mi] = 1;
       /* a C extension's method answers whatever VALUE its C returns (a
@@ -5342,7 +5342,8 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
            90001 a protocol name, 90002 a prelude helper,
            90003 a module_function, 90004 an opaque or dynamic name, 90005 a
            proc form, a lowered yield or a synthesized scope, 90006 the rest
-           (a C extension's stub) */
+           (a C extension's stub, or an --ext-entry or --ext-class method,
+           which the host calls with whatever it holds) */
         int why = sd_proto ? 90001 : sd_prelude ? 90002 : sd_modfn ? 90003 :
                   (cf_opaque_name(s->name) || cf_is_dyn(&f, s->name)) ? 90004 :
                   (s->is_proc_form || s->is_lowered_yield || s->cs_synth) ? 90005 : 90006;

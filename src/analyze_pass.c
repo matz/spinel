@@ -1422,6 +1422,41 @@ static int map_bang_with_index_array(const NodeTable *nt, int id) {
   return nt_ref(nt, inner, "receiver");
 }
 
+/* The arms of a value (an if / unless / ternary, through parens and
+   statement lists): does one of them answer a literal nil? */
+static int value_has_nil_arm(const NodeTable *nt, int v, int depth) {
+  if (v < 0 || depth > 16) return 0;
+  switch (nt_kind(nt, v)) {
+  case NK_NilNode: return 1;
+  case NK_ParenthesesNode: return value_has_nil_arm(nt, nt_ref(nt, v, "body"), depth + 1);
+  case NK_StatementsNode: { int n = 0; const int *b = nt_arr(nt, v, "body", &n);
+    return n > 0 && value_has_nil_arm(nt, b[n - 1], depth + 1); }
+  case NK_ElseNode: return value_has_nil_arm(nt, nt_ref(nt, v, "statements"), depth + 1);
+  case NK_IfNode: case NK_UnlessNode: {
+    int st = nt_ref(nt, v, "statements");
+    int el = nt_ref(nt, v, nt_kind(nt, v) == NK_IfNode ? "subsequent" : "else_clause");
+    return st < 0 || el < 0 || value_has_nil_arm(nt, st, depth + 1) || value_has_nil_arm(nt, el, depth + 1);
+  }
+  default: return 0;
+  }
+}
+
+/* The Array a map!.with_index block writes into, as store evidence for a
+   param, ivar or Struct member (infer_write_container_usage); -1 where the
+   with_index emitter cannot take the widened Array: a row read out of a
+   table (`m[0]`, boxed once it widens), or a block with a nil arm on an
+   ivar, param or Struct member (the nilable typed store does not take the
+   boxed nil). Those keep the typed Array, as before. */
+static int map_bang_with_index_slot(const NodeTable *nt, int id) {
+  int arr = map_bang_with_index_array(nt, id);
+  if (arr < 0) return -1;
+  if (nt_kind(nt, arr) == NK_CallNode && sp_streq(nt_str(nt, arr, "name") ? nt_str(nt, arr, "name") : "", "[]")) return -1;
+  int body = nt_ref(nt, nt_ref(nt, id, "block"), "body");
+  int n = 0; const int *b = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+  if (n < 1 || (nt_kind(nt, arr) != NK_LocalVariableReadNode && value_has_nil_arm(nt, b[n - 1], 0))) return -1;
+  return arr;
+}
+
 /* `arr.map! { ... }` REPLACES every element with the block's value, so a tail
    the receiver's element type cannot hold widens the receiver itself -- the
    same reasoning as a push of a foreign element, on a mutation that rewrites
@@ -3865,7 +3900,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         kt = TY_INT;  /* a positional span, never hash evidence */
       }
       else if (name && ((sp_streq(name, "fill") && an <= 2) || (is_map_bang_alias(name) && an == 0) ||
-                        map_bang_with_index_array(nt, id) >= 0) &&
+                        map_bang_with_index_slot(nt, id) >= 0) &&
                nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode) {
         /* the block form, fill([start[, len]]) { |i| v }: the block's value
            is what goes into each slot of the span, the same evidence. map!
@@ -3875,7 +3910,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         int fblk = nt_ref(nt, id, "block");
         int fbody = nt_ref(nt, fblk, "body");
         /* (map!.with_index's slots are those of map!'s receiver) */
-        if (map_bang_with_index_array(nt, id) >= 0) recv = push_chain_base(c, map_bang_with_index_array(nt, id));
+        if (map_bang_with_index_slot(nt, id) >= 0) recv = push_chain_base(c, map_bang_with_index_slot(nt, id));
         int fbn = 0; const int *fbs = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
         TyKind ftail = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
         vt = ftail;

@@ -40,3 +40,13 @@ p s.list
 g = %w[a b]
 g.map!.with_index { |x, i| i == 0 ? 7 : x }
 p g
+
+# a nil arm on a typed ivar keeps the String Array (it holds nil)
+class Names
+  def initialize; @a = ["a", "b"]; end
+  def blank_first
+    @a.map!.with_index { |x, i| i == 0 ? nil : x }
+    @a
+  end
+end
+p Names.new.blank_first

@@ -1153,7 +1153,10 @@ wasm-test: $(SPINEL) wasm-rt
 	      echo "wasm-test: FAIL (-c) $$t"; head -3 $$tmp/$$bn.cerr; ok=0; \
 	    else cok=1; \
 	      for f in $$ni; do grep -Eq "^static SP_NOINLINE [^(]*[ *]$$f\(" $$tmp/$$bn.c || { echo "wasm-test: FAIL ($$f is not SP_NOINLINE) $$t"; cok=0; }; done; \
-	      for f in $$il; do ! grep -Eq "^static [^(]*SP_NOINLINE [^(]*[ *]$$f\(" $$tmp/$$bn.c || { echo "wasm-test: FAIL ($$f is SP_NOINLINE) $$t"; cok=0; }; done; \
+	      for f in $$il; do \
+	        if ! grep -Eq "^static [^(]*[ *]$$f\(" $$tmp/$$bn.c; then echo "wasm-test: FAIL ($$f is not emitted) $$t"; cok=0; \
+	        elif grep -Eq "^static [^(]*SP_NOINLINE [^(]*[ *]$$f\(" $$tmp/$$bn.c; then echo "wasm-test: FAIL ($$f is SP_NOINLINE) $$t"; cok=0; fi; \
+	      done; \
 	      if [ $$cok -eq 1 ]; then echo "wasm-test: pass (the C's noinline marks) $$t"; else ok=0; fi; fi; \
 	  fi; \
 	  for mode in plain --jobs=2 --incremental; do \

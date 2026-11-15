@@ -147,6 +147,7 @@ awk -v verbose="$VERBOSE" -v quiet="$QUIET" -v progs="$PROGS" -v fail="$FAIL_FAM
     next
   }
   / method-table-check: table / { why[$4]++; tables++; next }
+  / method-table-check: unbalanced bracket in / { unbal++; next }
   / method-table-check-exit: / { failed++; next }
   / method-table-check-flag-exit: / { flagfail++; k = $1; sub(/:$/, "", k); flagged[k] = $NF; next }
   END {
@@ -176,6 +177,7 @@ awk -v verbose="$VERBOSE" -v quiet="$QUIET" -v progs="$PROGS" -v fail="$FAIL_FAM
       close(cmd)
     }
     bad = flagfail > 0
+    if (unbal > 0) { printf "method-table-check: %.0f passes left a bracket open or closed one too often\n", unbal; bad = 1 }
     nf = split(fail, fl, " ")
     counts = ""
     for (i = 1; i <= nf; i++) {

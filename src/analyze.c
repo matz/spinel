@@ -35409,7 +35409,9 @@ static int struct_new_member_arg(Compiler *c, int u, int ci, int a) {
 static int promote_ivar_handle_stores(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, u) {
+    mtab_push_in(c, u);   /* (what the call's name asks of the tables is the call's) */
     const char *nm = nt_str(nt, u, "name");
     int recv = nt_ref(nt, u, "receiver");
     if (!nm || recv < 0 || nt_ref(nt, u, "block") >= 0) continue;
@@ -35440,6 +35442,7 @@ static int promote_ivar_handle_stores(Compiler *c) {
       if (v >= 0) changed |= dyn_pull_arg(c, v, 1);
     }
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 /* Pull the String variables a call gathers into a rest whose elements the
@@ -44941,8 +44944,11 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
 }
 void expand_static_splat_args(Compiler *c, int from, int count) {
   NodeTable *nt = (NodeTable *)c->nt;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = from; id < count; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     int an = nt_ref(nt, id, "arguments");
     if (an < 0) continue;
     int argc = 0; const int *argv0 = nt_arr(nt, an, "arguments", &argc);
@@ -45116,6 +45122,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     comp_grow_node_arrays(c);
     c->nscope[na] = c->nscope[id];
   }
+  mtab_pop(c, mt_pass);
 }
 
 /* The names the program gives a method taking no keywords by an alias, a
@@ -48127,8 +48134,11 @@ static void rewrite_array_subclass_calls(Compiler *c) {
   if (!c->has_arysub) return;
   const NodeTable *nt = c->nt;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     NodeKind k = nt_kind(nt, id);
+    if (k == NK_CallNode) mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     if (k == NK_CallNode) arysub_builtin_alias_recv_call(c, id);
     /* where an Array is wanted, an Array subclass instance is read as its
        Array (infer_type, emit_expr): a splat's operand, a destructured value,
@@ -48197,6 +48207,7 @@ static void rewrite_array_subclass_calls(Compiler *c) {
       if (nt_kind(nt, id) == NK_CallNode) rewrite_time_maker_class_local(c, id);
     }
   }
+  mtab_pop(c, mt_pass);
   if (nt->count > n0) {
     int m0 = nt->count;
     expand_static_splat_args(c, n0, nt->count);
@@ -49658,15 +49669,16 @@ static void desugar_literal_const_get(Compiler *c) {
 /* A step of an analysis phase: `call` runs with the pass's name `nm` on the
    node table, the name the nodes it appends are named after (nt_set_pass).
    The name before the step is back after it, so a step inside a step names
-   what it appends itself. AN_STEP is an int expression, AN_STEP_V a
+   what it appends itself; so is the check's node frame (--method-table-check), which a pass
+   that returns from inside a node loop leaves set. A bracket a step leaves open is reported. AN_STEP is an int expression, AN_STEP_V a
    statement. The phase lists call their passes through these rather than
    through AN_PASS, whose memo boundaries, tree skip and --timing rows are
    the fixpoint's: around the phase lists' calls they would change what the
    memo keeps, which passes run, and the --timing report. */
-#define AN_STEP(nm, call) ({ const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); int _str = (call); \
-  nt_set_pass((NodeTable *)c->nt, _stp); _str; })
-#define AN_STEP_V(nm, call) do { const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); call; \
-  nt_set_pass((NodeTable *)c->nt, _stp); } while (0)
+#define AN_STEP(nm, call) ({ const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); MtabMark _stm = mtab_save(c); int _str = (call); \
+  mtab_step_end(c, _stm, (nm)); nt_set_pass((NodeTable *)c->nt, _stp); _str; })
+#define AN_STEP_V(nm, call) do { const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); MtabMark _stm = mtab_save(c); call; \
+  mtab_step_end(c, _stm, (nm)); nt_set_pass((NodeTable *)c->nt, _stp); } while (0)
 
 /* `&(expr)`: the parentheses carry no meaning for a block argument, but they
    hide the expression from every shape check downstream (`&blk` as a proc

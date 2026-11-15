@@ -271,7 +271,10 @@ int order_call_runs_no_code(Compiler *c, int id) {
       !any_class_defines(c, "[]") && !prog_has_hash_default_block(c))
     return 1;
   int alloc = 0;
-  return call_is_field_read(c, id, &alloc) || call_is_poly_field_read(c, id);
+  MtabMark mt_was = mtab_push_in(c, id);   /* (the readers the call's name reads are the call's) */
+  int field = call_is_field_read(c, id, &alloc) || call_is_poly_field_read(c, id);
+  mtab_pop(c, mt_was);
+  return field;
 }
 
 /* ---- the record ---- */

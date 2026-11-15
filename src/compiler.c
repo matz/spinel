@@ -2481,7 +2481,10 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   if (comp_ary_root(c, cid) < 0 || nt_kind(c->nt, id) != NK_CallNode) return 0;
   const char *n = nt_str(c->nt, id, "name");
   if (!n) return 0;
-  if (!cplan_builtin_call(c, id) && !comp_arysub_name_is_array(c, id, cid, n)) return 0;
+  MtabMark mt_was = mtab_push_in(c, id);   /* (what the call's name asks of the subclass's chain is the call's) */
+  int builtin = cplan_builtin_call(c, id) || comp_arysub_name_is_array(c, id, cid, n);
+  mtab_pop(c, mt_was);
+  if (!builtin) return 0;
   *kind = comp_ary_kind(c, cid);
   /* A String subclass instance's String is a handle (TY_STRBUF). A call
      that changes it, or answers it, takes it boxed (the poly String arms

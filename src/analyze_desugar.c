@@ -11,6 +11,7 @@
 #include "value_pos.h"
 #include "call_plan.h"
 #include "implied_calls.h"
+#include "method_table_check.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <limits.h>
@@ -564,7 +565,9 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
 int desugar_descendant_reader_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     if (nt_ref(nt, id, "receiver") >= 0 || nt_ref(nt, id, "arguments") >= 0 ||
         nt_ref(nt, id, "block") >= 0 || id >= c->node_cap || ie_class_of(c, id) >= 0) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -584,6 +587,7 @@ int desugar_descendant_reader_calls(Compiler *c) {
     nt_set_self_receiver(nt, id, sn);
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -10462,7 +10466,9 @@ int desugar_index_op_write_user(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     NodeKind k = nt_kind(nt, id);
     if (k != NK_IndexOrWriteNode && k != NK_IndexAndWriteNode && k != NK_IndexOperatorWriteNode) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -10581,6 +10587,7 @@ int desugar_index_op_write_user(Compiler *c) {
     scope_local_intern(sc, vname);
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -19196,8 +19203,11 @@ int desugar_builtin_enum_calls(Compiler *c) {
     if (ern && (sp_streq(ern, "grep") || sp_streq(ern, "grep_v"))) continue;
     if (er >= 0 && er < n0 && nt_kind(nt, er) == NK_CallNode && nt_ref(nt, er, "block") < 0) chained[er] = 1;
   }
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     const char *name = nt_str(nt, id, "name");
     /* a call given back its written name on a receiver with no Enumerable
        (below) takes the builtin's again once a later round types the
@@ -19791,6 +19801,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   free(chained); free(in_default); free(defcls);
   return changed;
 }
@@ -20516,8 +20527,11 @@ int desugar_builtin_scalar_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     int copy = (int)nt_int(nt, id, "bx_copy", -1);
     if (copy < 0 || copy >= nt->count) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -20658,6 +20672,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -30488,8 +30503,11 @@ int desugar_index_assign_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   int *parent = NULL;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode || !nt_attr_write(nt, id) || nt_safe_nav(nt, id)) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "[]=") || nt_ref(nt, id, "block") >= 0) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -30601,6 +30619,7 @@ int desugar_index_assign_value(Compiler *c) {
     int cb = c->node_cbody ? c->node_cbody[id] : -1;
     for (int j = base; j < nt->count; j++) { c->nscope[j] = encl; if (c->node_cbody) c->node_cbody[j] = cb; }
   }
+  mtab_pop(c, mt_pass);
   free(parent);
   return changed;
 }

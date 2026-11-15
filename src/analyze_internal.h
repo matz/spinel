@@ -933,6 +933,8 @@ int desugar_static_class_eval(Compiler *c, HostStep *h);   /* analyze_desugar.c:
 int sce_span(Compiler *c, HostStep *h, int owner, int body, int at, int n, const char *locals, const char *gone);   /* ... over spliced statements */
 void sce_facts_free(struct SceFacts *f);
 int sce_graft_text(Compiler *c, HostStep *h, int owner, const char *text, int site, LoadPoint at, int **out, int *n);   /* a macro's computed class_eval text, grafted, not placed */
+int an_temp_node(NodeTable *nt, Scope *sc, const char *nm, int value);   /* analyze_desugar.c: a local temp's write of value, or (value < 0) its read */
+int bo_shallow_copy(NodeTable *nt, int id);   /* analyze.c: a copy of a call's fields in a fresh node, for the parentheses that run it in the call's place */
 int bo_may_act(const NodeTable *nt, int e);   /* analyze.c: can evaluating e do anything observable (a call may; a read of a local, an instance variable or a constant, a literal cannot) */
 int host_prewalk_shape(NodeTable *nt, const int *ids, int n);   /* a node of the span a pre-walk step reads, or -1 */
 void lower_finish(Compiler *c, LowerCtx *lc);   /* frees; under the check, reports and exits */
@@ -1087,6 +1089,7 @@ int desugar_toplevel_instance_exec(Compiler *c);
 int desugar_binding_lvget(Compiler *c);
 int desugar_step_kwargs(Compiler *c);
 int desugar_defined_method_call(Compiler *c);
+int desugar_respond_to_flag(Compiler *c);
 int desugar_respond_to_missing(Compiler *c);
 int desugar_respond_to_probe(Compiler *c);
 int desugar_symbol_to_proc_call(Compiler *c);

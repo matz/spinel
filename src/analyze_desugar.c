@@ -6049,7 +6049,10 @@ int desugar_match_predicate_at(Compiler *c, LowerCtx *lc, int id) {
   return 1;
 }
 
-static int step_kw_tmp(NodeTable *nt, Scope *sc, const char *nm, int value) {
+/* A local temp of scope sc: the write of `value` to it (value >= 0), else a
+   read of it. The one place the desugars that hoist an operand into a temp
+   (desugar_block_arg_order, the respond_to? family, step) make theirs. */
+int an_temp_node(NodeTable *nt, Scope *sc, const char *nm, int value) {
   scope_local_intern(sc, nm);
   int n = nt_new_node(nt, value >= 0 ? "LocalVariableWriteNode" : "LocalVariableReadNode");
   nt_node_set_str(nt, n, "name", nm);
@@ -6113,11 +6116,11 @@ void step_kw_positional(Compiler *c, NodeTable *nt, int id, int args, int to_v, 
     snprintf(rn, sizeof rn, "__stpr%d", base);
     snprintf(bn, sizeof bn, "__stpb%d", base);
     if (!sn && k != NK_IntegerNode && k != NK_FloatNode) {
-      st[n++] = step_kw_tmp(nt, scp, rn, recv);
-      nt_node_set_ref(nt, id, "receiver", step_kw_tmp(nt, scp, rn, -1));
+      st[n++] = an_temp_node(nt, scp, rn, recv);
+      nt_node_set_ref(nt, id, "receiver", an_temp_node(nt, scp, rn, -1));
     }
-    st[n++] = step_kw_tmp(nt, scp, bn, by_v);
-    by_v = step_kw_tmp(nt, scp, bn, -1);
+    st[n++] = an_temp_node(nt, scp, bn, by_v);
+    by_v = an_temp_node(nt, scp, bn, -1);
     int p = nt_new_node(nt, "ParenthesesNode"), body = nt_new_node(nt, "StatementsNode");
     st[n++] = sn ? to_v : p;
     nt_node_set_arr(nt, body, "body", st, n);
@@ -6174,10 +6177,10 @@ int step_kw_unknown(Compiler *c, NodeTable *nt, int id, int args) {
     Scope *scp = comp_scope_of(c, id);
     char rn[32];
     snprintf(rn, sizeof rn, "__stpu%d", base);
-    int wr = step_kw_tmp(nt, scp, rn, recv);
-    nt_node_set_ref(nt, clone, "receiver", step_kw_tmp(nt, scp, rn, -1));
+    int wr = an_temp_node(nt, scp, rn, recv);
+    nt_node_set_ref(nt, clone, "receiver", an_temp_node(nt, scp, rn, -1));
     int nilq = nt_new_node(nt, "CallNode");
-    nt_node_set_ref(nt, nilq, "receiver", step_kw_tmp(nt, scp, rn, -1));
+    nt_node_set_ref(nt, nilq, "receiver", an_temp_node(nt, scp, rn, -1));
     nt_node_set_str(nt, nilq, "name", "nil?");
     nt_node_set_ref(nt, nilq, "arguments", -1);
     nt_node_set_ref(nt, nilq, "block", -1);
@@ -9254,7 +9257,19 @@ int desugar_dynamic_respond_to(Compiler *c) {
    defined (rtm_live_at), a program with its own respond_to? (its own answer,
    whose super is Object's), a name known only at run time, a safe-navigation
    call, and a splat or block argument. */
-/* v as it is where reading it runs nothing (a literal, self: a literal
+/* Does the program give some class a respond_to? of its own, by def or
+   define_method (a scope named so) or by alias? Its calls answer through
+   that method, which takes the include_all argument itself. */
+static int program_own_respond_to(Compiler *c) {
+  if (an_scopes_named_first(c, RESPOND_TO_NAME) >= 0) return 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *al = comp_resolve_alias(c, k, RESPOND_TO_NAME);
+    if (al && !is_respond_to_name(al)) return 1;
+  }
+  return 0;
+}
+/* v as it is where reading it runs nothing (a literal, a frozen String
+   included, self: a literal
    receiver keeps its own reading, a temp would widen an Integer under
    --int-overflow=promote), else held in
    temp tname of id's scope (*wr the write) */
@@ -9262,12 +9277,12 @@ static int rtm_hold(Compiler *c, NodeTable *nt, int id, int v, const char *tname
   NodeKind k = nt_kind(nt, v);
   *wr = -1;
   if (k == NK_TrueNode || k == NK_FalseNode || k == NK_NilNode || k == NK_SelfNode ||
-      k == NK_IntegerNode || k == NK_FloatNode || k == NK_SymbolNode) return 0;
-  *wr = step_kw_tmp(nt, comp_scope_of(c, id), tname, v);
+      k == NK_IntegerNode || k == NK_FloatNode || k == NK_SymbolNode || k == NK_StringNode) return 0;
+  *wr = an_temp_node(nt, comp_scope_of(c, id), tname, v);
   return 1;
 }
 static int rtm_read(Compiler *c, NodeTable *nt, int id, int lit, const char *tname, int temp) {
-  return temp ? step_kw_tmp(nt, comp_scope_of(c, id), tname, -1) : nt_clone_subtree(nt, lit);
+  return temp ? an_temp_node(nt, comp_scope_of(c, id), tname, -1) : nt_clone_subtree(nt, lit);
 }
 static int rtm_bool_of(NodeTable *nt, int pred) {
   int t = nt_new_node(nt, "TrueNode"), f = nt_new_node(nt, "FalseNode");
@@ -9361,11 +9376,7 @@ int desugar_respond_to_missing(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   /* (a program's own respond_to?, by def, alias or define_method, answers
      itself) */
-  if (an_scopes_named_first(c, RESPOND_TO_MISSING_NAME) < 0 || an_scopes_named_first(c, "respond_to?") >= 0) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    const char *al = comp_resolve_alias(c, k, "respond_to?");
-    if (al && !sp_streq(al, "respond_to?")) return 0;
-  }
+  if (an_scopes_named_first(c, RESPOND_TO_MISSING_NAME) < 0 || program_own_respond_to(c)) return 0;
   int changed = 0, n0 = nt->count;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
@@ -9437,6 +9448,96 @@ int desugar_respond_to_missing(Compiler *c) {
     }
     changed = 1;
   }
+  return changed;
+}
+
+/* `recv.respond_to?(:m, flag)` where flag is no literal: CRuby answers by the
+   flag's truthiness, which is one of the two answers the literals give. The
+   call becomes
+     (t0 = recv; flag ? t0.respond_to?(:m, true) : t0.respond_to?(:m, false))
+   so every arm of the plan answers a literal include_all, which each already
+   does, and the receiver and the flag run once, in that order. The flag is
+   read once, as the test. The receiver is held in a temp only where the
+   receiver or the flag can act (the flag may rebind a local the receiver
+   reads), and a literal or self is never held (rtm_hold); without a temp each
+   arm holds its own copy of the receiver, and only one runs. Left alone: a
+   program with its own respond_to? (by def, define_method or alias), which
+   takes the flag itself; a name known only at run time, whose dispatch reads
+   the flag there (desugar_dynamic_respond_to); a call under defined?, where
+   nothing runs; a safe-navigation call, whose nil receiver evaluates no
+   operand; a call with a block or a splat; and the calls this family made
+   (dyn_arm, rtm_or). */
+int desugar_respond_to_flag(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0, own = -1;
+  unsigned char *dfd = NULL;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") >= 0) continue;
+    if (!is_respond_to_name(nt_str(nt, id, "name"))) continue;
+    if (nt_safe_nav(nt, id) || nt_int(nt, id, "dyn_arm", 0) || nt_int(nt, id, "rtm_or", 0)) continue;
+    int args = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an != 2) continue;
+    NodeKind nk = nt_kind(nt, av[0]), fk = nt_kind(nt, av[1]);
+    if (nk != NK_SymbolNode && nk != NK_StringNode) continue;
+    if (fk == NK_TrueNode || fk == NK_FalseNode || fk == NK_NilNode || fk == NK_SplatNode ||
+        fk == NK_KeywordHashNode || fk == NK_ForwardingArgumentsNode) continue;
+    if (own < 0) own = program_own_respond_to(c);
+    if (own) break;
+    if (!dfd) {
+      dfd = calloc((size_t)n0 + 1, 1);
+      if (!dfd) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      /* the calls a defined? asks of, through the parentheses it looks through */
+      NT_FOREACH_KIND(nt, NK_DefinedNode, d) {
+        int v = nt_ref(nt, d, "value");
+        if (v >= 0 && (v = nt_paren_single(nt, v)) < n0) dfd[v] = 1;
+      }
+    }
+    if (dfd[id] || !comp_scope_of(c, id)) continue;
+    int recv = nt_ref(nt, id, "receiver"), base = nt->count, rw = -1;
+    char tr[64];
+    snprintf(tr, sizeof tr, "__rf_r%s", comp_node_tag(c, id));
+    int rtemp = recv >= 0 && (bo_may_act(nt, recv) || bo_may_act(nt, av[1])) ? rtm_hold(c, nt, id, recv, tr, &rw) : 0;
+    int arm[2];
+    for (int v = 0; v < 2; v++) {
+      int cp = bo_shallow_copy(nt, id), na = nt_new_node(nt, "ArgumentsNode");
+      int pair[2] = { nt_clone_subtree(nt, av[0]), nt_new_node(nt, v ? "TrueNode" : "FalseNode") };
+      nt_node_set_arr(nt, na, "arguments", pair, 2);
+      nt_node_set_ref(nt, cp, "arguments", na);
+      if (recv >= 0) nt_node_set_ref(nt, cp, "receiver", rtm_read(c, nt, id, recv, tr, rtemp));
+      arm[v] = cp;
+    }
+    int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
+    int el = nt_new_node(nt, "ElseNode"), iff = nt_new_node(nt, "IfNode");
+    nt_node_set_arr(nt, ys, "body", &arm[1], 1);
+    nt_node_set_arr(nt, ns, "body", &arm[0], 1);
+    nt_node_set_ref(nt, el, "statements", ns);
+    nt_node_set_ref(nt, iff, "predicate", av[1]);
+    nt_node_set_ref(nt, iff, "statements", ys);
+    nt_node_set_ref(nt, iff, "subsequent", el);
+    int stm[2], sn = 0;
+    if (rw >= 0) stm[sn++] = rw;
+    stm[sn++] = iff;
+    int body = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, body, "body", stm, sn);
+    /* the node keeps its id, line and file: the parentheses */
+    long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0),
+              col = nt_int(nt, id, "node_col", 0);
+    nt_node_reset(nt, id, "ParenthesesNode");
+    nt_node_set_int(nt, id, "node_line", line);
+    nt_node_set_int(nt, id, "node_file", file);
+    nt_node_set_int(nt, id, "node_col", col);
+    nt_node_set_ref(nt, id, "body", body);
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) {
+      c->nscope[j] = c->nscope[id];
+      c->node_cbody[j] = c->node_cbody[id];
+      if (!nt_int(nt, j, "node_line", 0)) nt_node_set_int(nt, j, "node_line", line);
+      if (!nt_int(nt, j, "node_file", 0)) nt_node_set_int(nt, j, "node_file", file);
+    }
+    changed = 1;
+  }
+  free(dfd);
   return changed;
 }
 

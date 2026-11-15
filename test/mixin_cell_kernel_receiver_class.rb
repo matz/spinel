@@ -5,7 +5,8 @@
 # module it includes (a class method's include, or a conditional one, in the
 # module). The holder's own instances keep the holder's answer. Where none
 # is set, a subclass's own method_missing answers, and the NoMethodError
-# names the receiver's class, as a version entry's does.
+# names the receiver's class, as a version entry's does; an include in a
+# reopening of the class, after a call ran, holds only from there on.
 def show
   ::Kernel.p yield
 rescue ::NoMethodError
@@ -156,3 +157,21 @@ class NamedDef < BasicObject
 end
 class NamedDefSub < NamedDef; end
 begin; NamedDefSub.new.t; rescue ::NoMethodError => e; ::Kernel.p e.message; end
+
+# an include in a reopening, after a call ran: Kernel from there on
+class Late < BasicObject
+  def t = respond_to_missing?(:x, false)
+end
+class LateSub < Late; end
+show { Late.new.t }
+class Late; include ::Kernel; end
+show { Late.new.t }
+class LateCond < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class LateCondSub < LateCond; end
+show { LateCondSub.new.t }
+class LateCondSub; include ::Kernel; end
+show { LateCondSub.new.t }
+show { LateCond.new.t }

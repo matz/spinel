@@ -18778,6 +18778,10 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
       if (!executable) {
         emit_mixin_arg_reads(c, stmts[k], b, indent);
         emit_const_visibility_missing(c, stmts[k], ci, b, indent);
+        /* (an include the record cannot place ahead of every call writes the Kernel cells as it runs: cplan_vis_cell_after) */
+        Buf wb; memset(&wb, 0, sizeof wb);
+        if (emit_vis_cell_write(c, stmts[k], &wb)) { emit_indent(b, indent); buf_printf(b, "%s;\n", wb.p); }
+        free(wb.p);
         continue;
       }
     }

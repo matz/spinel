@@ -4987,7 +4987,7 @@ static int lr_vv_mixin(void *ud, int cls, int ref) {
   /* (Kernel, which the row of the name answers, ends the versions: nothing behind it is found, where it surely runs) */
   const LrClass *kc = lr_class(v->c->lrec, cls);
   int sure = 1;
-  for (int j = 0; kc && j < kc->nmix; j++) if (kc->mix[j].ref == ref && elab_mixin_may_not_run(v->c, &kc->mix[j])) sure = 0;
+  for (int j = 0; kc && j < kc->nmix; j++) if (kc->mix[j].ref == ref && elab_mixin_may_not_run(v->c, cls, &kc->mix[j])) sure = 0;
   if (core == CORE_KERNEL && sure && v->name && bop_kernel_answers(v->name, -1, 0)) return LR_W_STOP;
   v->n = -1;
   return LR_W_STOP;
@@ -11081,9 +11081,8 @@ static int lr_kw_mixin(void *ud, int cls, int ref) {
 static int lr_kw_skip(void *ud, int cls, const LrMixin *m) {
   Compiler *c = ((LrKernelWalk *)ud)->c;
   int core = -1;
-  (void)cls;
   (void)elab_class_ref_at(c, m->ref, &core);
-  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || elab_mixin_may_not_run(c, m);
+  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || elab_mixin_may_not_run(c, cls, m);
 }
 static int lr_kw_enter(void *ud, int mod, int depth) {
   LrKernelWalk *x = ud;
@@ -11115,9 +11114,12 @@ int elab_class_kernel(Compiler *c, int cls) {
 /* See analyze.h. */
 /* ...asked of the modules a program module includes: a fact of each module, kept (LoadRecord.brings, of the record's
    histories as they stand) so that a module reached by many routes, or asked by many mixins, is walked once */
-/* Does mixin m of a class, as the record holds it, possibly not run: under a condition, or after one that decides? */
-int elab_mixin_may_not_run(Compiler *c, const LrMixin *m) {
-  return !m->applied || m->cond || elab_point_may(c, m->node);
+/* Does mixin m of class cls, as the record holds it, possibly not run before a call of cls's reads it: under a
+   condition, after one that decides, or in a reopening of the class (not the statement that made it), which code
+   that has made an object of the class may run ahead of? */
+int elab_mixin_may_not_run(Compiler *c, int cls, const LrMixin *m) {
+  int made = cls >= 0 && cls < c->nclasses ? c->classes[cls].def_node : -1;
+  return !m->applied || m->cond || elab_point_may(c, m->node) || (made >= 0 && m->open != made);
 }
 static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   LoadRecord *r = c->lrec;
@@ -11137,7 +11139,7 @@ static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   if (memo[m + 1]) return memo[m + 1] == 1;
   memo[m + 1] = 2;   /* (while it is asked: a module is not its own include) */
   for (int j = 0; j < k->nmix; j++)
-    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && !(certain && elab_mixin_may_not_run(c, &k->mix[j])) &&
+    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && !(certain && elab_mixin_may_not_run(c, m, &k->mix[j])) &&
         lr_brings_kernel(c, k->mix[j].ref, certain) == 1) return memo[m + 1] = 1;
   return 0;
 }

@@ -1840,7 +1840,7 @@ static void ver_kern_sites(Compiler *c) {
       int sn = nt_ref(nt, mx[j].node, "arguments"), sc = 0;
       const int *sv = cn && is_send_family(cn) && sn >= 0 ? nt_arr(nt, sn, "arguments", &sc) : NULL;
       if (sv && sc > 0 && nt_kind(nt, sv[0]) == NK_SymbolNode) cn = nt_str(nt, sv[0], "value");
-      if (mx[j].kind == LR_INCLUDE && cn && is_mixin_call(cn) && elab_mixin_may_not_run(c, &mx[j]) &&
+      if (mx[j].kind == LR_INCLUDE && cn && is_mixin_call(cn) && elab_mixin_may_not_run(c, k, &mx[j]) &&
           elab_mixin_certain_kernel(c, mx[j].ref) == 1)
         ver_kern_add(c, mx[j].node, k);
     }
@@ -1874,7 +1874,7 @@ static void ver_kern_walk(Compiler *c, int k, VerIds *seen, VerIds *out, int dep
   int nm = 0;
   const LrMixin *mx = elab_class_mixins(c, k, &nm);
   for (int j = 0; j < nm; j++)
-    if ((mx[j].kind == LR_INCLUDE || mx[j].kind == LR_PREPEND) && !elab_mixin_may_not_run(c, &mx[j]))   /* (an include that may not run brings Kernel only where it is a site of its own: ver_kern_sites) */
+    if ((mx[j].kind == LR_INCLUDE || mx[j].kind == LR_PREPEND) && !elab_mixin_may_not_run(c, k, &mx[j]))   /* (an include that may not run brings Kernel only where it is a site of its own: ver_kern_sites) */
       ver_kern_walk(c, elab_mixin_module(c, &mx[j]), seen, out, depth + 1);
   int p = c->classes[k].parent;
   ver_kern_walk(c, p >= 0 ? p : elab_class_super(c, k), seen, out, depth + 1);

@@ -574,7 +574,7 @@ int elab_class_kernel(Compiler *c, int cls);
 int elab_mixin_brings_kernel(Compiler *c, int ref);
 /* ...and surely, through mixins that surely run (an include under a condition does not count) */
 int elab_mixin_certain_kernel(Compiler *c, int ref);
-int elab_mixin_may_not_run(Compiler *c, const LrMixin *m);   /* under a condition, or after one that decides */
+int elab_mixin_may_not_run(Compiler *c, int cls, const LrMixin *m);   /* under a condition, after one that decides, or in a reopening */
 /* A number that changes with every change to the record's histories and mixins (a cache of an answer read from them is of it) */
 unsigned long elab_mixin_gen(Compiler *c);
 /* call_target's questions about call id read the record's facts as its

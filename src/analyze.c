@@ -2670,6 +2670,19 @@ else {
       }
     }
   }
+  /* A yielding method of Object's (a reopening's, or a module's it
+     includes) that an object of a program class runs is not spliced: the
+     call goes to its proc-form clone with the block as a real proc
+     (emit_root_reopen_call, emit_reopen_block_call), so the block's
+     captures need cells. A spurious cell is a missed optimization. */
+  {
+    int oc = comp_core_class(c, CORE_OBJECT);
+    Scope *ss = comp_scope_of(c, id);
+    int on_obj = recv < 0 || nt_kind(nt, recv) == NK_SelfNode ? ss && ss->class_id >= 0 && ss->class_id != oc
+                                                              : !class_recv && ty_is_object(infer_type(c, recv));
+    int om = oc >= 0 && on_obj ? call_target(c, id, oc, name, 0, NULL) : -1;
+    if (om >= 0 && c->scopes[om].yields && c->scopes[om].class_id == oc && (mi < 0 || mi == om)) return 1;
+  }
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   /* `Y.new { }` on a cycle of constructors (`Y.new` in Y's own yielding

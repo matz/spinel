@@ -9849,7 +9849,14 @@ static int emit_poly_arg_temp(Compiler *c, int node, TyKind ty, int boxed, int t
   if (!boxed && ty == TY_STRBUF && nr.strbuf_src == RS_HANDLE && !repr_handle_apart(c, node, nr))
     emit_strbuf_handle_of(c, node, &val);
   else if (boxed == 2) emit_identity_operand_box(c, node, &val);
-  else if (boxed) emit_boxed(c, node, &val); else emit_expr(c, node, &val);
+  else if (boxed) emit_boxed(c, node, &val);
+  /* (an and/or answering a handle, `o.m(s && s.upcase)`: its bytes) */
+  else if (ty == TY_STRING && logic_value_handle(c, node)) {
+    buf_puts(&val, "SP_STR_B(");
+    emit_expr(c, node, &val);
+    buf_puts(&val, ")");
+  }
+  else emit_expr(c, node, &val);
   if (as_handle) buf_puts(&val, ")");
   g_pre = sv_pre;
   if (pre.p) buf_puts(b, pre.p);

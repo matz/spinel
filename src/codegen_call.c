@@ -15797,6 +15797,50 @@ void emit_regexp_new(Compiler *c, int argc, const int *argv, Buf *b) {
   buf_printf(b, "_t%d", tp);
 }
 
+/* Array.new(n, v)'s size n, written into g_pre ahead of the fill v, as
+   CRuby evaluates it first. CRuby converts it (#to_int, a boxed value's
+   check, nil's TypeError) only after v ran, so a size that is no plain
+   Integer, beside a fill that can run code, is held as it is in _t<*ts>,
+   and array_new_size_convert converts it after the fill: answers 1, or 2
+   for a nilable Integer (`s.index(x)`), held as its oint, as read as a
+   plain value its nil raised ahead of the fill. Any other size goes into
+   the sp_int _t<tn> converted (answers 0). */
+static int array_new_size_hold(Compiler *c, int size, int fill, int tn, int *ts) {
+  Repr sr = repr_of(c, size);
+  int late = subtree_has_side_effect(c, fill) && nt_kind(c->nt, size) != NK_SplatNode &&
+             g_n_argov < MAX_ARG_OVERRIDE &&
+             (sr.kind == RK_BOXED || sr.big || repr_opt_kind(c, size) == TY_INT ||
+              comp_ntype(c, size) != TY_INT);
+  if (!late) {
+    Buf nb; memset(&nb, 0, sizeof nb); emit_int_expr(c, size, &nb);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_int _t%d = %s;\n", tn, nb.p ? nb.p : "");
+    free(nb.p);
+    return 0;
+  }
+  if (sr.kind != RK_BOXED && repr_opt_kind(c, size) == TY_INT) {
+    *ts = ++g_tmp;
+    Buf ob; memset(&ob, 0, sizeof ob); emit_oint_expr(c, size, TY_INT, &ob);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(TY_INT), *ts, ob.p ? ob.p : oint_nil(TY_INT));
+    free(ob.p);
+    return 2;
+  }
+  *ts = hold_operand_pre(c, size, sr.as_ty, sr.kind == RK_BOXED, ++g_tmp, 1);
+  return 1;
+}
+/* The size array_new_size_hold held in _t<ts> (form 1, or 2 for its oint),
+   converted into the sp_int _t<tn> where CRuby converts it; then the
+   indent of the line after it. */
+static void array_new_size_convert(Compiler *c, int size, int form, int ts, int tn) {
+  int slot = form == 2 ? view_bind_temp_o(size, ts) : view_bind_temp(size, ts);
+  Buf nb; memset(&nb, 0, sizeof nb); emit_int_expr(c, size, &nb);
+  view_unbind(slot);
+  buf_printf(g_pre, "sp_int _t%d = %s;\n", tn, nb.p ? nb.p : "0");
+  free(nb.p);
+  emit_indent(g_pre, g_indent);
+}
+
 static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *out) {
   if (!(recv >= 0 && (is_hash_constructor(name)))) return 0;
   NodeKind rk = nt_kind(nt, recv);
@@ -16568,12 +16612,10 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         /* The size goes into an `sp_int` temp; coerce a poly size expression
            (e.g. `nrows * ncols` where a factor widened to poly -> sp_poly_mul,
            which returns sp_RbVal) through sp_poly_to_i. spinel-dev#24. */
-        Buf nb; memset(&nb, 0, sizeof nb); emit_int_expr(c, argv[0], &nb);
         /* (the size is held before the fill emits what it puts ahead of
            itself, an Array or Hash literal's elements: CRuby evaluates the
-           size first) */
-        emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "sp_int _t%d = ", tn); buf_puts(g_pre, nb.p ? nb.p : ""); buf_puts(g_pre, ";\n");
+           size first; array_new_size_hold) */
+        int ts = -1, size_form = array_new_size_hold(c, argv[0], argv[1], tn, &ts);
         /* --share-strings: a fill stored as the shared handle is boxed as
            its handle, one object in every slot, as a literal's element is */
         int fh = array_fill_boxes_handle(c, id, argv[1]);
@@ -16621,6 +16663,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (array_fill_held_only_here(c, argv[1], fh, k)) { emit_gc_root_tmp(c, fh || ar.elem == TY_POLY ? TY_POLY : str_fill_h ? TY_STRBUF : ar.elem, tv, g_pre); buf_puts(g_pre, "\n"); emit_indent(g_pre, g_indent); }
         /* the size is checked after the fill ran, as CRuby evaluates both
            arguments before Array.new looks at them (CodeRabbit on #10019) */
+        if (size_form) array_new_size_convert(c, argv[0], size_form, ts, tn);
         buf_printf(g_pre, "if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");\n", tn);
         emit_indent(g_pre, g_indent);
         if (fo) {
@@ -16639,7 +16682,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, _t%d);\n",
                      ti, ti, tn, ti, k, str_fill_h ? "_e" : "", tr, tv);
         }
-        free(nb.p); free(vb.p);
+        free(vb.p);
         buf_printf(b, "_t%d", tr);
         { *out = 1; return 1; }
       }

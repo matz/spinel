@@ -17,26 +17,6 @@ f.collect!.with_index { |x, i| i == 0 ? nil : x }
 p f
 p f.map(&:class)
 
-def tag_first(arr)
-  arr.map!.with_index { |x, i| i == 0 ? :first : x }
-  arr
-end
-p tag_first([5, 6, 7])
-
-class Box
-  def initialize; @items = [1, 2, 3]; end
-  def mark
-    @items.map!.with_index { |x, i| i.odd? ? "odd" : x }
-    @items
-  end
-end
-p Box.new.mark
-
-S = Struct.new(:list)
-s = S.new([3, 4])
-s.list.map!.with_index { |x, i| i == 1 ? :two : x }
-p s.list
-
 g = %w[a b]
 g.map!.with_index { |x, i| i == 0 ? 7 : x }
 p g

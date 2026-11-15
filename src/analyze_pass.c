@@ -1422,39 +1422,36 @@ static int map_bang_with_index_array(const NodeTable *nt, int id) {
   return nt_ref(nt, inner, "receiver");
 }
 
-/* The arms of a value (an if / unless / ternary, through parens and
-   statement lists): does one of them answer a literal nil? */
-static int value_has_nil_arm(const NodeTable *nt, int v, int depth) {
-  if (v < 0 || depth > 16) return 0;
-  switch (nt_kind(nt, v)) {
-  case NK_NilNode: return 1;
-  case NK_ParenthesesNode: return value_has_nil_arm(nt, nt_ref(nt, v, "body"), depth + 1);
-  case NK_StatementsNode: { int n = 0; const int *b = nt_arr(nt, v, "body", &n);
-    return n > 0 && value_has_nil_arm(nt, b[n - 1], depth + 1); }
-  case NK_ElseNode: return value_has_nil_arm(nt, nt_ref(nt, v, "statements"), depth + 1);
-  case NK_IfNode: case NK_UnlessNode: {
-    int st = nt_ref(nt, v, "statements");
-    int el = nt_ref(nt, v, nt_kind(nt, v) == NK_IfNode ? "subsequent" : "else_clause");
-    return st < 0 || el < 0 || value_has_nil_arm(nt, st, depth + 1) || value_has_nil_arm(nt, el, depth + 1);
+/* Is every write of local `name` in scope `ls` a new Array nothing else
+   holds (is_fresh_array)? The with_index emitter writes back only into a
+   typed Array or a PolyArray it holds itself: a local that aliases a row
+   (`r = m[0]`) would widen apart from the row it shares. */
+static int local_writes_all_fresh(Compiler *c, Scope *ls, const char *name) {
+  const NodeTable *nt = c->nt;
+  int seen = 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, name) || comp_scope_of(c, w) != ls) continue;
+    if (!is_fresh_array(c, nt_ref(nt, w, "value"))) return 0;
+    seen = 1;
   }
-  default: return 0;
-  }
+  return seen;
 }
 
-/* The Array a map!.with_index block writes into, as store evidence for a
-   param, ivar or Struct member (infer_write_container_usage); -1 where the
-   with_index emitter cannot take the widened Array: a row read out of a
-   table (`m[0]`, boxed once it widens), or a block with a nil arm on an
-   ivar, param or Struct member (the nilable typed store does not take the
-   boxed nil). Those keep the typed Array, as before. */
-static int map_bang_with_index_slot(const NodeTable *nt, int id) {
+/* The plain local a map!.with_index block writes into, as store evidence
+   for infer_write_container_usage (which reads the block's nil arms);
+   -1 for any other receiver. An ivar, a param, a Struct member or a row
+   (`m[0]`, `m.first`) widened here met an emitter that cannot store the
+   boxed value into it, so those keep the typed Array. */
+static int map_bang_with_index_local(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
   int arr = map_bang_with_index_array(nt, id);
-  if (arr < 0) return -1;
-  if (nt_kind(nt, arr) == NK_CallNode && sp_streq(nt_str(nt, arr, "name") ? nt_str(nt, arr, "name") : "", "[]")) return -1;
-  int body = nt_ref(nt, nt_ref(nt, id, "block"), "body");
-  int n = 0; const int *b = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-  if (n < 1 || (nt_kind(nt, arr) != NK_LocalVariableReadNode && value_has_nil_arm(nt, b[n - 1], 0))) return -1;
-  return arr;
+  if (arr < 0 || nt_kind(nt, arr) != NK_LocalVariableReadNode) return -1;
+  const char *rnm = nt_str(nt, arr, "name");
+  Scope *ls = rnm ? comp_scope_of(c, arr) : NULL;
+  LocalVar *lv = ls ? scope_local(ls, rnm) : NULL;
+  if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) return -1;
+  return local_writes_all_fresh(c, ls, rnm) ? arr : -1;
 }
 
 /* `arr.map! { ... }` REPLACES every element with the block's value, so a tail
@@ -1494,6 +1491,7 @@ int widen_arrays_from_map_bang(Compiler *c) {
        program and then loses the values (`sp_poly_to_i` of a String), which is
        worse than the build failure. They are left alone. */
     if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+    if (wi_arr >= 0 && !local_writes_all_fresh(c, ls, rnm)) continue;
     if (!ty_is_array(lv->type) || lv->type == TY_POLY_ARRAY) continue;
     if (tt == ty_array_elem(lv->type)) continue;
     lv_set_type(lv, TY_POLY_ARRAY); changed = 1;
@@ -3900,7 +3898,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         kt = TY_INT;  /* a positional span, never hash evidence */
       }
       else if (name && ((sp_streq(name, "fill") && an <= 2) || (is_map_bang_alias(name) && an == 0) ||
-                        map_bang_with_index_slot(nt, id) >= 0) &&
+                        map_bang_with_index_local(c, id) >= 0) &&
                nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode) {
         /* the block form, fill([start[, len]]) { |i| v }: the block's value
            is what goes into each slot of the span, the same evidence. map!
@@ -3910,7 +3908,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         int fblk = nt_ref(nt, id, "block");
         int fbody = nt_ref(nt, fblk, "body");
         /* (map!.with_index's slots are those of map!'s receiver) */
-        if (map_bang_with_index_slot(nt, id) >= 0) recv = push_chain_base(c, map_bang_with_index_slot(nt, id));
+        if (map_bang_with_index_local(c, id) >= 0) recv = map_bang_with_index_local(c, id);
         int fbn = 0; const int *fbs = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
         TyKind ftail = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
         vt = ftail;

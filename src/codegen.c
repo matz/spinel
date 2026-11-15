@@ -12383,6 +12383,10 @@ void emit_arysub_alloc(Compiler *c, ClassInfo *ci, Buf *b) {
   }
   else
     buf_puts(b, "  if (mode) d->ary.frozen = mode == 1 ? o->ary.frozen : mode == 3;\n");
+  /* the ivars the instance keeps in the object-keyed map (a computed set's,
+     or a builtin reopening's names, desugar_builtin_ivars), as a program
+     object's dup copies them */
+  if (c->classes[cid].computed_ivar_set) buf_puts(b, "  sp_bivar_copy_obj(o, d);\n");
   buf_puts(b, "  return d;\n}\n");
 }
 

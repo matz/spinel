@@ -29357,6 +29357,43 @@ static int biv_mode(const char *cn) {
   return is_string_class_name(cn) ? BIV_STRING : BIV_NONE;
 }
 
+/* The ivar names a reopening of a builtin keeps in the map, by the family
+   of its class, which a program subclass of that builtin reads and writes
+   there too. A `class Stack < Array` instance holds its own ivars as fields
+   after the Array it embeds, while `class Array; def tag!(v) = (@tag = v)`
+   keeps @tag in the map under the same address: as two stores, neither
+   side saw the other's @tag, and reflection on the instance saw neither.
+   A String subclass is not here: a String's method is handed a copy of a
+   subclass instance's bytes, not the instance (its own fault). */
+enum { BIVF_NONE, BIVF_ARRAY, BIVF_HASH, BIVF_EXC, BIVF_N };
+typedef struct { char **v; int n; } BivNames;
+static BivNames g_biv_kept[BIVF_N];
+static int g_biv_collect = BIVF_NONE;   /* the family a reopening's rewrite records into */
+static const BivNames *g_biv_only;      /* a subclass's rewrite: these names alone */
+static int biv_family(const char *cn) {
+  if (!cn) return BIVF_NONE;
+  if (sp_streq(cn, "Array")) return BIVF_ARRAY;
+  if (sp_streq(cn, "Hash")) return BIVF_HASH;
+  return is_builtin_exception_name(cn) ? BIVF_EXC : BIVF_NONE;
+}
+static int biv_names_has(const BivNames *s, const char *n) {
+  for (int i = 0; s && n && i < s->n; i++) if (sp_streq(s->v[i], n)) return 1;
+  return 0;
+}
+static void biv_names_add(BivNames *s, const char *n) {
+  if (!n || biv_names_has(s, n)) return;
+  if (!(s->n & (s->n - 1)) && !(s->v = realloc(s->v, sizeof *s->v * (size_t)(s->n ? 2 * s->n : 1)))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  s->v[s->n++] = strdup(n);
+}
+/* (a name the rewrite reaches: recorded for a reopening's family; for a
+   subclass's rewrite, whether it is one of the kept names) */
+static int biv_takes(const char *iv) {
+  if (g_biv_collect) biv_names_add(&g_biv_kept[g_biv_collect], iv);
+  return !g_biv_only || biv_names_has(g_biv_only, iv);
+}
+
 /* `name(:@x[, v])` on self, in place of node `id` */
 static void biv_self_call(NodeTable *nt, int id, const char *name, const char *iv, int v) {
   char ivb[256], nb[64];
@@ -29416,12 +29453,12 @@ static void biv_rewrite(Compiler *c, NodeTable *nt, int node, int mode) {
   if (k == NK_CallNode && mode == BIV_TABLE && biv_is_self_or_implicit(nt, node) &&
       biv_is_reflective_set(nt, node))
     c->bivar_table = 1;
-  if (k == NK_InstanceVariableTargetNode)
+  if (k == NK_InstanceVariableTargetNode && biv_takes(nt_str(nt, node, "name")))
     unsupported_feature(c, node, "an instance variable of a builtin value as a multiple-assignment target: "
                                  "assign it on its own (`@a = x`)");
   if (k == NK_DefinedNode) {
     int v = nt_ref(nt, node, "value");
-    if (v >= 0 && nt_kind(nt, v) == NK_InstanceVariableReadNode && nt_str(nt, v, "name")) {
+    if (v >= 0 && nt_kind(nt, v) == NK_InstanceVariableReadNode && nt_str(nt, v, "name") && biv_takes(nt_str(nt, v, "name"))) {
       if (mode != BIV_TABLE && mode != BIV_OBJECT) { nt_node_reset(nt, node, "NilNode"); return; }
       /* defined?(@x): "instance-variable" when the value holds it, else nil */
       char ivb[256]; snprintf(ivb, sizeof ivb, "%s", nt_str(nt, v, "name"));
@@ -29455,6 +29492,7 @@ static void biv_rewrite(Compiler *c, NodeTable *nt, int node, int mode) {
   }
   const char *iv = nt_str(nt, node, "name");
   if (!iv || iv[0] != '@' || iv[1] == '@') return;
+  if ((k == NK_InstanceVariableReadNode || k == NK_InstanceVariableWriteNode) && !biv_takes(iv)) return;
   char ivb[256]; snprintf(ivb, sizeof ivb, "%s", iv);
   if (k == NK_InstanceVariableReadNode) {
     if (mode == BIV_OBJECT) {
@@ -29656,6 +29694,94 @@ static const char *biv_host_of(NodeTable *nt, const BivHosts *h, const char *mod
   return host;
 }
 
+/* The family (biv_family) of the builtin a program class `m` descends
+   from through the program's own classes (`class Stack < Base`, `class
+   Base < Array`), BIVF_NONE for none */
+static int biv_sub_family(Compiler *c, NodeTable *nt, int m, int n0) {
+  int sc = class_def_super(nt, m);
+  for (int hop = 0; sc >= 0 && hop < 32; hop++) {
+    const char *sn = nt_kind(nt, sc) == NK_ConstantReadNode ? key_name(c, sc) : NULL;
+    if (!sn) return BIVF_NONE;
+    int next = -1;
+    for (int k = 0; k < n0 && next < 0; k++)
+      if (nt_kind(nt, k) == NK_ClassNode && class_def_super(nt, k) >= 0 && class_def_name(nt, k) &&
+          sp_streq(class_def_name(nt, k), sn)) next = k;
+    if (next < 0) return biv_family(sn);
+    sc = class_def_super(nt, next);
+  }
+  return BIVF_NONE;
+}
+/* `attr_reader :tag` in such a subclass naming a kept ivar */
+static int biv_attr_kept(NodeTable *nt, int call, const BivNames *kept) {
+  const char *nm = nt_str(nt, call, "name");
+  if (!nm || !(is_attr_reader_family(nm) || is_attr_writer_family(nm))) return 0;
+  int an = nt_ref(nt, call, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  for (int i = 0; i < ac; i++) {
+    char ivn[256];
+    if (nt_kind(nt, av[i]) != NK_SymbolNode || !nt_str(nt, av[i], "value")) continue;
+    snprintf(ivn, sizeof ivn, "@%s", nt_str(nt, av[i], "value"));
+    if (biv_names_has(kept, ivn)) return 1;
+  }
+  return 0;
+}
+/* The second walk: each program subclass of an Array, a Hash or a builtin
+   exception whose builtin's reopening keeps ivars in the map reads and
+   writes those names there too, under its instance's address; its other
+   ivars stay its fields. The class node is marked biv_shared, and
+   infer_ivar_types gives the class computed_ivar_set: its reflection reads
+   the map beside its fields, and the map keys its instances
+   (SP_TU_BIVAR_USER) */
+static int biv_subclasses(Compiler *c, NodeTable *nt, int n0) {
+  int changed = 0;
+  for (int m = 0; m < n0; m++) {
+    if (nt_kind(nt, m) != NK_ClassNode) continue;
+    /* (a reopening with no superclass written, `class Stack` after `class
+       Stack < Array`, is the same class: its family is its first def's) */
+    int head = m;
+    if (class_def_super(nt, m) < 0) {
+      const char *cn = class_def_name(nt, m);
+      head = -1;
+      for (int k = 0; cn && k < n0 && head < 0; k++)
+        if (nt_kind(nt, k) == NK_ClassNode && class_def_super(nt, k) >= 0 && class_def_name(nt, k) &&
+            sp_streq(class_def_name(nt, k), cn)) head = k;
+      if (head < 0) continue;
+    }
+    int fam = biv_sub_family(c, nt, head, n0), body = class_def_body(nt, m);
+    if (!fam || !g_biv_kept[fam].n || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
+    g_biv_only = &g_biv_kept[fam];
+    int bn = 0; const int *bs0 = nt_arr(nt, body, "body", &bn);
+    int *bs = malloc(sizeof(int) * (size_t)(bn ? bn : 1));
+    memcpy(bs, bs0, sizeof(int) * (size_t)bn);
+    int *nb = NULL, nnb = 0, attrs = 0;
+    for (int k = 0; k < bn; k++) {
+      if (nt_kind(nt, bs[k]) == NK_CallNode && biv_attr_kept(nt, bs[k], g_biv_only) && biv_attr_defs(nt, bs[k], &nb, &nnb)) { attrs = 1; continue; }
+      xc_push(&nb, &nnb, bs[k]);
+    }
+    if (attrs) { nt_node_set_arr(nt, body, "body", nb, nnb); changed = 1; }
+    for (int k = 0; k < nnb; k++) {
+      int d = nb[k];
+      if (nt_kind(nt, d) == NK_CallNode && nt_str(nt, d, "name") && visibility_of_name(nt_str(nt, d, "name"))) {
+        int an = nt_ref(nt, d, "arguments"), ac = 0;
+        const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+        d = ac == 1 ? av[0] : -1;
+      }
+      if (d < 0 || nt_kind(nt, d) != NK_DefNode || nt_ref(nt, d, "receiver") >= 0) continue;
+      int before = nt->count;
+      biv_def(c, nt, d, BIV_TABLE);
+      if (nt->count != before) { changed = 1; nt_node_set_int(nt, m, "biv_shared", 1); nt_node_set_int(nt, head, "biv_shared", 1); }
+    }
+    free(nb); free(bs);
+    g_biv_only = NULL;
+  }
+  for (int f = 0; f < BIVF_N; f++) {
+    for (int i = 0; i < g_biv_kept[f].n; i++) free(g_biv_kept[f].v[i]);
+    free(g_biv_kept[f].v);
+    g_biv_kept[f] = (BivNames){ NULL, 0 };
+  }
+  return changed;
+}
+
 int desugar_builtin_ivars(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -29671,7 +29797,8 @@ int desugar_builtin_ivars(Compiler *c) {
     if (!class_def_opens_frame(nt, m) || class_def_super(nt, m) >= 0) continue;
     int cp = nt_ref(nt, m, "constant_path");
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
-    int mode = biv_mode(key_name(c, cp));
+    const char *fam_of = key_name(c, cp);
+    int mode = biv_mode(fam_of);
     /* a module mixed into one builtin class alone (rbself_module_host):
        its methods and attr_* run with that builtin value as self, so they
        read and write the value's instance variables as a reopening's do
@@ -29681,6 +29808,7 @@ int desugar_builtin_ivars(Compiler *c) {
       const char *mn = class_def_bare_key(c, m);
       const char *host = mn && !biv_has(hosts.mf, hosts.nmf, mn) ? biv_host_of(nt, &hosts, mn) : NULL;
       mode = host ? biv_mode(host) : BIV_NONE;
+      fam_of = host;
     }
     int body = class_def_body(nt, m);
     if (mode == BIV_NONE || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
@@ -29706,11 +29834,14 @@ int desugar_builtin_ivars(Compiler *c) {
       }
       if (d < 0 || nt_kind(nt, d) != NK_DefNode || nt_ref(nt, d, "receiver") >= 0) continue;
       int before = nt->count;
+      g_biv_collect = mode == BIV_TABLE ? biv_family(fam_of) : BIVF_NONE;
       biv_def(c, nt, d, mode);
+      g_biv_collect = BIVF_NONE;
       if (nt->count != before) changed = 1;
     }
     free(nb); free(bs);
   }
+  changed |= biv_subclasses(c, nt, n0);
   biv_hosts_free(&hosts);
   if (changed) comp_grow_node_arrays(c);
   return changed;

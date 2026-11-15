@@ -1,0 +1,14 @@
+[:mine, nil, nil]
+:first
+:first
+[:mine, :first, "instance-variable"]
+[:@own, :@tag]
+[:deep, :mine]
+:deep
+:deep
+[:@own, :@tag]
+:first
+[:from_hash, :from_hash]
+[:from_bag, :from_bag]
+[:@mark]
+:from_hash

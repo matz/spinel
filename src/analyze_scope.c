@@ -13343,6 +13343,17 @@ int infer_ivar_types(Compiler *c) {
   NilWrites nilw = {0};
   StructAsetIx aset = {0};
   if (c->pivs) c->pivs->sweep++;
+  /* a subclass of an Array, a Hash or a builtin exception that keeps some
+     ivars in the object-keyed map, as its builtin's reopening does
+     (desugar_builtin_ivars' biv_shared): its instances' names live in the
+     map as a computed set's do */
+  for (int k = 0; k < c->nclasses; k++) {
+    int dn = c->classes[k].def_node;
+    if (dn >= 0 && nt_int(nt, dn, "biv_shared", 0) && !c->classes[k].computed_ivar_set) {
+      c->classes[k].computed_ivar_set = 1;
+      changed = 1;
+    }
+  }
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
     NodeKind ty_k = nt_kind(nt, id);

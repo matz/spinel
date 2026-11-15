@@ -8094,10 +8094,15 @@ static int module_aliases_name(const ClassInfo *mod, const char *m) {
 
 /* Does class cls alias its instance method m? Then an include keeps a copy
    of the module's m under a shadow name where the class defines m too: the
-   alias may name the module's (settle_mixin_aliases). */
-static int class_aliases_name(const ClassInfo *cls, const char *m) {
-  for (int a = 0; a < cls->naliases; a++)
-    if (!(cls->alias_sg && cls->alias_sg[a]) && sp_streq(cls->alias_old[a], m)) return 1;
+   alias may name the module's (settle_mixin_aliases). With from, only an
+   alias at or after that point counts: one before it names what stood there,
+   and a copy the include made later would change that (the include's own
+   refusal asks the record). */
+static int class_aliases_name(Compiler *c, const ClassInfo *cls, const char *m, const LoadPoint *from) {
+  for (int a = 0; a < cls->naliases; a++) {
+    if ((cls->alias_sg && cls->alias_sg[a]) || !sp_streq(cls->alias_old[a], m)) continue;
+    if (!from || cls->alias_node[a] < 0 || elab_cmp(elab_point_of(c, cls->alias_node[a]), *from) != PROG_BEFORE) return 1;
+  }
   return 0;
 }
 
@@ -8236,7 +8241,7 @@ static int mixin_brings(Compiler *c, int m, int mod, char *seen) {
    then. An include also looks at the class's prepends and at what its
    superclasses mix in; a prepend does not look at its includes, as a
    module included before is listed again behind the class. */
-static int mixin_already_brought(Compiler *c, int ci, int mod, LrMixKind kind, const int *mods, int n) {
+static int mixin_already_brought(Compiler *c, int ci, int mod, LrMixKind kind, const int *mods, int n, const Scope *method, int stmt) {
   char *seen = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
   if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int brought = 0;
@@ -8251,6 +8256,22 @@ static int mixin_already_brought(Compiler *c, int ci, int mod, LrMixKind kind, c
       brought = mixin_brings(c, cls->prepended_mods[m], mod, seen);
   }
   free(seen);
+  /* A method of the module (an include at statement stmt asks it of each): the module is among Object's
+     ancestors there, and the class's chain answers the method's name at that point with another definition than the
+     module's (a superclass's, another module's in front, a top-level def already run): the include adds nothing
+     for it, as for a module among the ancestors */
+  if (!brought && method && kind == LR_INCLUDE && stmt >= 0 && !comp_class_is_module(c, &c->classes[ci]) &&
+      ci != comp_core_class(c, CORE_OBJECT) && method->name) {
+    LoadPoint at = elab_point_of(c, stmt);
+    const LrDef *d = NULL;
+    const char *nm = comp_scope_user_name(method);
+    /* (an alias the module makes, or the class makes of the name, goes with its original: the alias's copy reads
+       the original's by name in the class, so the original keeps its copy) */
+    brought = !module_aliases_name(&c->classes[mod], nm) && sp_streq(module_alias_root(&c->classes[mod], nm), nm) &&
+              !class_aliases_name(c, &c->classes[ci], nm, &at) &&
+              elab_mixed_at(c, comp_core_class(c, CORE_OBJECT), 0, mod, at) == ELAB_YES &&
+              elab_method_at(c, ci, nm, 0, at, &d) == ELAB_YES && d && d->node != method->def_node;
+  }
   return brought;
 }
 
@@ -8387,7 +8408,7 @@ static void mixin_copies_rename(Compiler *c, int ci, int own, const char *shadow
    module's method a layer of its own in front of the earlier one's
    renamed copy (no version of it: mixin_prev_version), as the call before
    the include cannot be told from the call after it. */
-static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, int plain, int *cells) {
+static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, int plain, int *cells, int stmt) {
   mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   const NodeTable *nt = c->nt;
   /* snapshot count before adding new scopes to avoid re-scanning them */
@@ -8435,6 +8456,11 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
       int top = comp_method_index(c, src->name);
       if (top >= 0 && !c->scopes[top].is_cmethod) own = top;
     }
+    /* (a method the class has no def of its own of, where the include adds nothing for it) */
+    if ((own < 0 || c->scopes[own].is_include_copy) && !src->is_cmethod && !src->shadow && mixin_already_brought(c, ci, mod_id, LR_INCLUDE, NULL, 0, src, stmt)) {
+      if (!src->is_module_function) src->is_transplanted_source = 1;
+      continue;
+    }
     int guarded = guard && !src->is_cmethod && !src->shadow;
     if (src->shadow) {
       /* (one the class has already, from the module mixed in before that
@@ -8446,7 +8472,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
          through the class's prepends or its superclasses' mixins: CRuby's
          include skips that module, so the module's chain ends there and a
          super falls through to what the class's own super reaches) */
-      if (mixin_already_brought(c, ci, mixin_def_module(c, src), LR_INCLUDE, NULL, 0)) continue;
+      if (mixin_already_brought(c, ci, mixin_def_module(c, src), LR_INCLUDE, NULL, 0, NULL, -1)) continue;
       mixin_shadow_name(c, ci, src, inc_shadow, sizeof inc_shadow);
       dst_name = inc_shadow;
     }
@@ -8506,7 +8532,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        module or the class makes of it names it */
     if (own < 0 && is_builtin_reopen_name(c->classes[ci].name) &&
         builtin_method_known(c->classes[ci].name, src->name) &&
-        !module_aliases_name(&c->classes[mod_id], src->name) && !class_aliases_name(&c->classes[ci], src->name)) {
+        !module_aliases_name(&c->classes[mod_id], src->name) && !class_aliases_name(c, &c->classes[ci], src->name, NULL)) {
       if (!src->is_module_function) src->is_transplanted_source = 1;
       continue;
     }
@@ -8524,7 +8550,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
          Otherwise the module method is simply shadowed -- nothing to emit. */
       int behind_own = elab_history_absent(c, ci, 0, src->name) || mixin_reached_behind_own(c, ci, 0, own, ms);
       if (!behind_own && !module_aliases_name(&c->classes[mod_id], src->name) &&
-          !class_aliases_name(&c->classes[ci], src->name)) {
+          !class_aliases_name(c, &c->classes[ci], src->name, NULL)) {
         if (!src->is_module_function) src->is_transplanted_source = 1;
         continue;
       }
@@ -9010,7 +9036,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
        (`include M, then include Base` where M includes Base keeps M#g in
        front; `include M` twice runs M#g once) */
     int brought = mixin_already_brought(c, ci, mod_id, LR_INCLUDE, c->classes[ci].included_mods,
-                                        c->classes[ci].nincluded_mods);
+                                        c->classes[ci].nincluded_mods, NULL, -1);
     /* record membership for `rescue M` matching (dedup across reopenings) */
     class_note_included_mod(c, ci, mod_id);
     /* (one an earlier late include that may not have run brought: this
@@ -9028,7 +9054,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
     if (guard && !cells) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     int s0 = c->nscopes;
     int plain = (here && !guard) || unplaced;
-    include_module_methods(c, ci, mod_id, guard, plain, cells);
+    include_module_methods(c, ci, mod_id, guard, plain, cells, mx[j].stmt);
     for (int s = s0; plain && s < c->nscopes; s++)
       if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) c->scopes[s].mixin_unversioned = 1;
     for (int s = s0; here && !guard && !layered && s < c->nscopes; s++)
@@ -9185,12 +9211,12 @@ void register_includes(Compiler *c) {
        (#9292): what that class and the classes up to Struct define is
        answered with this class's members, as a reopening of Struct is */
     for (int k = par, g = 0; k >= 0 && g < 64; k = c->classes[k].parent, g++) {
-      include_module_methods(c, ci, k, 0, 0, NULL);
+      include_module_methods(c, ci, k, 0, 0, NULL, -1);
       if (k == c->classes[k].parent) break;
     }
     int base = comp_core_class(c, c->classes[ci].is_data ? CORE_DATA : CORE_STRUCT);
     if (base >= 0 && base != ci && !c->classes[base].is_struct)
-      include_module_methods(c, ci, base, 0, 0, NULL);
+      include_module_methods(c, ci, base, 0, 0, NULL, -1);
   }
   /* A reopening of Struct in a program with no Struct.new class (activesupport's
      core_ext/object/json gives Struct an #as_json): a Struct value is always a
@@ -9920,7 +9946,7 @@ void register_extends(Compiler *c) {
       /* extending a module the class already extends, or one such a module
          brings, is a no-op: it stays where it was, and a second copy in
          front would hide the later one */
-      int again = mod_id < 0 || mixin_already_brought(c, ci, mod_id, LR_EXTEND, seen, nseen);
+      int again = mod_id < 0 || mixin_already_brought(c, ci, mod_id, LR_EXTEND, seen, nseen, NULL, -1);
       if (!again) {
         if (nseen == capseen) {
           capseen *= 2;
@@ -10902,7 +10928,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
         if (!done) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
         for (int m = 0; m < cls->nprepended_mods; m++)
           if (mixin_prepended(c, ci, cls->prepended_mods[m])) done[nd++] = cls->prepended_mods[m];
-        int brought = mixin_already_brought(c, ci, mod_id, LR_PREPEND, done, nd);
+        int brought = mixin_already_brought(c, ci, mod_id, LR_PREPEND, done, nd, NULL, -1);
         free(done);
         if (brought && here) mixin_cells_set(c, ci, mod_id, 1, body, mx[j].stmt);
         if (brought) continue;

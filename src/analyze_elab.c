@@ -4717,7 +4717,7 @@ static void lr_mixin_dups_settle(Compiler *c) {
    method holds no undef, and a call on an instance keeps the table's
    target, so a stop there would bind that copy where an ancestor's method,
    the search's answer past it, binds now. */
-enum { LR_SHADOW = 1, LR_MIXIN_STOPS = 2 };
+enum { LR_SHADOW = 1, LR_MIXIN_STOPS = 2, LR_AFTER_MAIN = 4 };
 static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth, int *unsure, unsigned how) {
   LrClass *k = lr_class(c->lrec, cls);
   if (!k) return ELAB_UNKNOWN;
@@ -4729,7 +4729,7 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
       const LrHist *h = name ? lr_hist(c->lrec, cls, sg, name, 0) : NULL;
       /* (with no entry of Object's own, main's are the table's: they
          stand ahead of the modules Object includes) */
-      if (name && !h && !sg && cls >= 0 && cls == lr_core(c->lrec, CORE_OBJECT)) h = lr_hist(c->lrec, LR_MAIN, 0, name, 0);
+      if (name && !h && !sg && cls >= 0 && cls == lr_core(c->lrec, CORE_OBJECT) && !(how & LR_AFTER_MAIN)) h = lr_hist(c->lrec, LR_MAIN, 0, name, 0);
       int o = name ? lr_own(c, h, cls >= 0 ? lr_table_twin(c, h) : NULL, p, late, vis, out) : ELAB_NO;
       if (o == ELAB_YES || o == LR_STOP) return o;
       if (o == ELAB_UNKNOWN) *unsure = 1;
@@ -4803,11 +4803,18 @@ static int lr_sg_tail(Compiler *c, int cls, const char *name, int mod, LoadPoint
 static int lr_search(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth) {
   /* the superclass steps are a loop, not a call each: a chain is as deep as
      the program makes it, and the native stack is not */
-  int unsure = 0, o;
+  int unsure = 0, o, oc = !sg && cls != LR_MAIN ? lr_core(c->lrec, CORE_OBJECT) : -1, obj_seen = 0;
   for (;; depth++) {
     if (depth > lr_chain_bound(c) || cls < LR_MAIN) { o = ELAB_UNKNOWN; break; }
     if (!name && cls == mod && !sg) { o = ELAB_YES; break; }
+    if (cls == oc) obj_seen = 1;
     if ((o = lr_search_one(c, cls, sg, name, mod, p, late, vis, out, depth, &unsure, 0)) != ELAB_NO) break;
+    /* main's top level ends the chain of a class that reaches Object by no superclass: the modules Object includes
+       follow it (a search that starts at main asks main's own) */
+    if (cls == LR_MAIN && oc >= 0 && !obj_seen) {
+      o = lr_search_one(c, oc, sg, name, mod, p, late, vis, out, depth, &unsure, LR_AFTER_MAIN);
+      if (o != ELAB_NO) break;
+    }
     /* a class's chain ends at Object, whose methods main's top level
        defines (main's own singleton is not Object's) */
     int sup = lr_super(c, cls);

@@ -2623,6 +2623,35 @@ static inline sp_bool sp_poly_is_socket(sp_RbVal v) {
    name up (1), false or :numeric does not (0), nil follows the socket (-1).
    Another Symbol is ArgumentError, anything else TypeError. */
 static int sp_sock_rl_flag(sp_RbVal v) SP_UNUSED;
+/* Process.clock_gettime(id, unit) / clock_getres(id, unit) with a unit
+   that only the run time knows (a local, a parameter, a keyword hash). A
+   Symbol names the unit and nil is the default :float_second. Anything
+   else, such as a Hash or a String, is CRuby's ArgumentError. An integer
+   unit gives an Integer, the other units a Float. */
+static SP_UNUSED sp_RbVal sp_process_clock_dyn(sp_int clock_id, sp_RbVal unit, int res) {
+  const char *u = unit.tag == SP_TAG_NIL ? "float_second"
+                : unit.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)unit.v.i) : NULL;
+  int64_t div = 0; double fdiv = 0;
+  if (!u) {}
+  else if (strcmp(u, "nanosecond") == 0) div = 1;
+  else if (strcmp(u, "microsecond") == 0) div = 1000;
+  else if (strcmp(u, "millisecond") == 0) div = 1000000;
+  else if (strcmp(u, "second") == 0) div = 1000000000;
+  else if (strcmp(u, "float_microsecond") == 0) fdiv = 1e3;
+  else if (strcmp(u, "float_millisecond") == 0) fdiv = 1e6;
+  else if (strcmp(u, "float_second") == 0) fdiv = 1e9;
+  if (!div && !fdiv)
+    sp_raise_cls("ArgumentError", sp_sprintf("unexpected unit: %s", sp_poly_to_s(unit)));
+  if (fdiv) return sp_box_float((sp_float)(res ? sp_process_clock_res_ns(clock_id)
+                                               : sp_process_clock_units(clock_id, 1)) / fdiv);
+  /* as the literal unit does: clock_gettime reads ticks of the unit (whole
+     seconds come from nanoseconds), clock_getres divides nanoseconds,
+     rounding toward negative infinity */
+  int64_t per = !res && div < 1000000000 ? div : 1;
+  int64_t t = res ? sp_process_clock_res_ns(clock_id) : sp_process_clock_units(clock_id, per);
+  int64_t d = div / per;
+  return sp_box_int((sp_int)(t / d - (t % d < 0)));
+}
 static int sp_sock_rl_flag(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) return -1;
   if (v.tag == SP_TAG_BOOL) return v.v.i ? 1 : 0;

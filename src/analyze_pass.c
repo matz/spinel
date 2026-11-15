@@ -9154,6 +9154,70 @@ static int cext_widen_stores(Compiler *c, const char *name, Scope *scope, CextWa
   }
   return changed;
 }
+/* Does call `call` enter scope si (cplan_entries: a builtin `new` enters
+   the initialize of the class it builds)? */
+static int cext_call_enters(Compiler *c, int call, int si) {
+  int targets[CPT_MAX], n = cplan_entries(c, call, targets, CPT_MAX);
+  for (int q = 0; q < n; q++) if (targets[q] == si) return 1;
+  return 0;
+}
+/* The argument(s) call `call` hands parameter pi of scope, widened. */
+static int cext_widen_param_args(Compiler *c, int call, Scope *scope, int pi, CextWalk *seen) {
+  const NodeTable *nt = c->nt;
+  int changed = 0, arg = nt_ref(nt, call, "arguments"), ac = 0;
+  const int *av = arg >= 0 ? nt_arr(nt, arg, "arguments", &ac) : NULL;
+  ArgLayout layout; call_layout(c, scope, av, ac, &layout);
+  int actual = layout_plain_arg(c, scope, av, &layout, pi);
+  if (actual >= 0) changed |= cext_widen_containers(c, actual, seen);
+  else for (int q = 0; q < ac; q++) if (gather_reaches(c, scope, av, ac, 0, q, pi))
+    changed |= cext_widen_containers(c, av[q], seen);
+  return changed;
+}
+/* The calls that enter each scope, for the walk's parameter reads: every
+   call of the program asked once (cplan_entries) and filed under each scope
+   it enters, in the order the scan below met them. Kept under
+   infer_param_types for one of its shared generations (wbas_gen, the one
+   widen_boxed_array_sources shares: a change the pass reported ends it),
+   since the walk asked the same question of every call for every
+   parameter it reached, once per binding -- on an application with a
+   hundred thousand scopes, most of the pass. Calls appended after the
+   index was built (cext_pin_array_producer's) are scanned as before. */
+static struct { unsigned gen; int nscopes, ncalls, cap, *off, *calls; } cwc_idx;
+static void cwc_index_build(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (cwc_idx.gen == wbas_gen && cwc_idx.nscopes == c->nscopes) return;
+  int ns = c->nscopes, n = 0, cap = 0, *ps = NULL, *pc = NULL;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    int targets[CPT_MAX], k = cplan_entries(c, call, targets, CPT_MAX);
+    for (int q = 0; q < k; q++) {
+      int s = targets[q], dup = 0;
+      for (int r = 0; r < q; r++) dup |= targets[r] == s;
+      if (dup || s < 0 || s >= ns) continue;
+      if (n == cap) {
+        cap = cap ? cap * 2 : 1024;
+        ps = (int *)realloc(ps, sizeof(int) * (size_t)cap);
+        pc = (int *)realloc(pc, sizeof(int) * (size_t)cap);
+        if (!ps || !pc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      ps[n] = s; pc[n] = call; n++;
+    }
+  }
+  if (cwc_idx.cap < ns + 1 + n) {
+    cwc_idx.cap = ns + 1 + n;
+    cwc_idx.off = (int *)realloc(cwc_idx.off, sizeof(int) * (size_t)(ns + 1));
+    cwc_idx.calls = (int *)realloc(cwc_idx.calls, sizeof(int) * (size_t)(n ? n : 1));
+    if (!cwc_idx.off || !cwc_idx.calls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  memset(cwc_idx.off, 0, sizeof(int) * (size_t)(ns + 1));
+  for (int i = 0; i < n; i++) cwc_idx.off[ps[i] + 1]++;
+  for (int s = 0; s < ns; s++) cwc_idx.off[s + 1] += cwc_idx.off[s];
+  int *cur = (int *)malloc(sizeof(int) * (size_t)(ns ? ns : 1));
+  if (!cur) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(cur, cwc_idx.off, sizeof(int) * (size_t)ns);
+  for (int i = 0; i < n; i++) cwc_idx.calls[cur[ps[i]]++] = pc[i];
+  free(cur); free(ps); free(pc);
+  cwc_idx.gen = wbas_gen; cwc_idx.nscopes = ns; cwc_idx.ncalls = nt->count;
+}
 static int cext_widen_containers(Compiler *c, int v, CextWalk *seen) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
@@ -9206,18 +9270,26 @@ static int cext_widen_containers(Compiler *c, int v, CextWalk *seen) {
     int pi = -1;
     if (scope) for (int j = 0; j < scope->nparams; j++)
       if (scope->pnames[j] && sp_streq(scope->pnames[j], name)) { pi = j; break; }
-    if (pi >= 0) NT_FOREACH_KIND(nt, NK_CallNode, call) {
-      /* (a builtin `new` enters the initialize of the class it builds) */
-      int targets[CPT_MAX], n = cplan_entries(c, call, targets, CPT_MAX), reaches = 0;
-      for (int q = 0; q < n; q++) reaches |= targets[q] == si;
-      if (!reaches) continue;
-      int arg = nt_ref(nt, call, "arguments"), ac = 0;
-      const int *av = arg >= 0 ? nt_arr(nt, arg, "arguments", &ac) : NULL;
-      ArgLayout layout; call_layout(c, scope, av, ac, &layout);
-      int actual = layout_plain_arg(c, scope, av, &layout, pi);
-      if (actual >= 0) changed |= cext_widen_containers(c, actual, seen);
-      else for (int q = 0; q < ac; q++) if (gather_reaches(c, scope, av, ac, 0, q, pi))
-        changed |= cext_widen_containers(c, av[q], seen);
+    if (pi >= 0 && wbas_shared) {
+      /* under infer_param_types: the calls that enter the scope, from the
+         index of the pass's generation (a change the pass reported before
+         this ask ends the generation first, as before each binding's walk) */
+      if (wbas_share_changed) wbas_share_step(wbas_share_changed, wbas_share_any);
+      cwc_index_build(c);
+      /* (the list is copied: a walk below may end the generation and
+         rebuild the index) */
+      int cnt = cwc_idx.off[si + 1] - cwc_idx.off[si], ncalls = cwc_idx.ncalls;
+      int *list = (int *)malloc(sizeof(int) * (size_t)(cnt ? cnt : 1));
+      if (!list) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memcpy(list, cwc_idx.calls + cwc_idx.off[si], sizeof(int) * (size_t)cnt);
+      for (int i = 0; i < cnt; i++) changed |= cext_widen_param_args(c, list[i], scope, pi, seen);
+      free(list);
+      for (int call = ncalls; call < nt->count; call++)
+        if (nt_kind(nt, call) == NK_CallNode && cext_call_enters(c, call, si))
+          changed |= cext_widen_param_args(c, call, scope, pi, seen);
+    }
+    else if (pi >= 0) NT_FOREACH_KIND(nt, NK_CallNode, call) {
+      if (cext_call_enters(c, call, si)) changed |= cext_widen_param_args(c, call, scope, pi, seen);
     }
   } else if (kind == NK_CallNode) {
     const char *name = nt_str(nt, v, "name");

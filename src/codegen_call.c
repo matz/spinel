@@ -23648,8 +23648,11 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
       cname = cvname; named = 1;
     }
     else if (ci < 0 || ci >= c->nclasses) return 0;
+    /* (a reopened builtin class or module answers its builtin singleton
+       methods ahead of Object's: `class Time; def foo; end` leaves Time.now
+       Time's, beside a top-level `def now`) */
     else if (call_target(c, id, ci, vnm, CT_CMETHOD, NULL) >= 0 || object_reopen_class_value_owns(c, id, oci, vnm, 0, ci) ||
-             module_ffi_or_native_owns(c, ci, vnm))
+             module_ffi_or_native_owns(c, ci, vnm) || (c->classes[ci].is_builtin_const && cplan_class_value_answers(c, vrecv, vnm)))
       return 0;
     else {
     /* a class value answers Class's and Module's public methods (K.name)

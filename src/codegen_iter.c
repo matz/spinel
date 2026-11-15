@@ -1622,6 +1622,11 @@ static int block_tail_needs_value_form(Compiler *c, int id) {
   if (nt_kind(nt, id) != NK_CallNode) return 0;
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return 0;
+  /* `obj.x = v` as the tail: the block answers v, as every assignment does.
+     The statement form of a class's writer (`Klass.x = v`) runs it for its
+     effect, and the statement expression's value was what the writer's body
+     returns (`try { Config.limit = 5 }` read a String as an Integer) */
+  if (call_is_setter_assign(nt, id)) return 1;
   /* `system(cmd)` as the tail: its statement form is a compound (the argv
      array is built inside braces), whose value is void, while the call has
      a value (the exit status as a boolean) that the block answers with.

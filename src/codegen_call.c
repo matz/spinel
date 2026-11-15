@@ -15425,24 +15425,41 @@ int exc_reopen_initialize(Compiler *c, int ci) {
 
 /* Build the runtime's exception of the reopened class ci and run the
    reopening's initialize on it: from the call's argument list (args >= 0),
-   or from one message node (the `raise Cls, msg` form; -1 = none) with the
-   remaining parameters at their defaults. Its `super(msg)` sets the message
-   (the exception-initialize super arm); without one the message stays the
-   class name, as CRuby's Exception#initialize leaves it. */
+   or from one message node (the raise forms, `raise Cls, msg` and `raise
+   "msg"`; -1 = none, `raise Cls`). Its `super(msg)` sets the message (the
+   exception-initialize super arm); without one the message stays the class
+   name, as CRuby's Exception#initialize leaves it.
+   A raise form is Cls.exception(msg), so new(msg): the message binds as
+   the one argument of a call does (`initialize(prefix = "p", message)`
+   takes it as message), and an initialize that cannot take one argument,
+   or none, raises CRuby's ArgumentError once the message has run. Filling
+   the first slot with the message and the rest with their defaults ran
+   the body with the message in the wrong slot, or with a required
+   parameter it was never given.
+   An explicit `cause:` the raise staged (sp_explicit_cause) is held aside
+   while the initialize runs: a raise the initialize rescues would take
+   that cause as its own and clear it, and the exception raised after it
+   would have none. */
 void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg_node, Buf *b) {
   Scope *im = &c->scopes[initm];
-  int te = ++g_tmp;
+  int lo, hi, argc = msg_node >= 0;
+  if (args < 0 && class_new_pos_arity(c, initm, &lo, &hi) && (argc < lo || argc > hi)) {
+    char am[128];
+    arity_message(am, sizeof am, argc, lo, hi, NULL);
+    buf_puts(b, "({ ");
+    if (argc) { buf_puts(b, "(void)("); emit_expr(c, msg_node, b); buf_puts(b, "); "); }
+    buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\"); (sp_Exception *)0; })", am);
+    return;
+  }
+  int te = ++g_tmp, tc = ++g_tmp, ts = ++g_tmp;
   buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", (&(\"\\xff\")[1])); SP_GC_ROOT(_t%d); ", te, c->classes[ci].name, te);
+  buf_printf(b, "void *_t%d = sp_explicit_cause; int _t%d = sp_explicit_cause_set; SP_GC_ROOT(_t%d); "
+                "sp_explicit_cause = NULL; sp_explicit_cause_set = 0; ", tc, ts, tc);
   buf_printf(b, "%s(_t%d", mc_method(c, im), te);
   if (args >= 0) emit_args_filled(c, initm, args, ", ", b);
-  else {
-    for (int pk = 0; pk < im->nparams; pk++) {
-      buf_puts(b, ", ");
-      emit_arg_or_default(c, im, pk, pk == 0 ? msg_node : -1, b);
-    }
-  }
+  else emit_args_filled_argv(c, initm, argc ? &msg_node : NULL, argc, -1, ", ", b);
   if (ctor_init_takes_block(c, initm)) buf_puts(b, ", NULL");
-  buf_printf(b, "); _t%d; })", te);
+  buf_printf(b, "); sp_explicit_cause = _t%d; sp_explicit_cause_set = _t%d; _t%d; })", tc, ts, te);
 }
 
 /* Klass.try_convert(x) on a boxed x: whether x already is one of the

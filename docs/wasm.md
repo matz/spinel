@@ -110,7 +110,14 @@ program and the runtime are compiled without the sjlj lowering and without
   long block grew with its calls times its live values. A method that
   asks `block_given?`, or reads its block through a block-less `proc`,
   `lambda` or `binding`, or forwards it with `...` or `&`, keeps the
-  copied form.
+  copied form. And a method of the program that a function holding a
+  `setjmp` calls is not inlined into it (`SP_NOINLINE`) when it makes two
+  or more calls of its own: the C compiler inlines a static function with
+  one call site whatever its size, and inlined there each of its calls
+  pays the stores. Its other call sites are not inlined either. A short
+  method (no more than one call) is left to the C compiler, and so is a
+  call the compiler cannot resolve to one method (a dynamic dispatch). An
+  `--incremental` build is unchanged.
 
 ## The pieces
 

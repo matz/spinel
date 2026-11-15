@@ -67,7 +67,9 @@ static void sp_String_splice_in(sp_String *s, size_t b, size_t e, const char *v,
 void sp_String_splice_chars(sp_String *s, sp_int from, sp_int n, const char *val, int range_form, int keep_enc) {
   SP_GC_ROOT(s); SP_GC_ROOT_STR(val);
   if (SP_UNLIKELY(!s)) sp_nil_recv("[]=");
-  if (!val) val = "";
+  /* (an empty String with the marker byte the readers look behind: a bare
+     "" has none, and sp_str_byte_len reads the byte before it) */
+  if (!val) val = &("\xff" "")[1];
   const char *d = s->data;
   sp_int len = (sp_int)sp_str_length(d);
   if (n < 0) { sp_raise_cls("IndexError", sp_sprintf("negative length %lld", (long long)n)); return; }

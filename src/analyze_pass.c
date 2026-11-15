@@ -9182,7 +9182,7 @@ static int cext_widen_param_args(Compiler *c, int call, Scope *scope, int pi, Ce
    parameter it reached, once per binding -- on an application with a
    hundred thousand scopes, most of the pass. Calls appended after the
    index was built (cext_pin_array_producer's) are scanned as before. */
-static struct { unsigned gen; int nscopes, ncalls, cap, *off, *calls; } cwc_idx;
+static struct { unsigned gen; int nscopes, ncalls, cap_off, cap_calls, *off, *calls; } cwc_idx;
 static void cwc_index_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (cwc_idx.gen == wbas_gen && cwc_idx.nscopes == c->nscopes) return;
@@ -9202,12 +9202,17 @@ static void cwc_index_build(Compiler *c) {
       ps[n] = s; pc[n] = call; n++;
     }
   }
-  if (cwc_idx.cap < ns + 1 + n) {
-    cwc_idx.cap = ns + 1 + n;
-    cwc_idx.off = (int *)realloc(cwc_idx.off, sizeof(int) * (size_t)(ns + 1));
-    cwc_idx.calls = (int *)realloc(cwc_idx.calls, sizeof(int) * (size_t)(n ? n : 1));
-    if (!cwc_idx.off || !cwc_idx.calls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* (each array by its own size: one cap for their sum left the offsets
+     short when the scopes grew and the calls filed shrank) */
+  if (cwc_idx.cap_off < ns + 1) {
+    cwc_idx.cap_off = ns + 1;
+    cwc_idx.off = (int *)realloc(cwc_idx.off, sizeof(int) * (size_t)cwc_idx.cap_off);
   }
+  if (cwc_idx.cap_calls < n || !cwc_idx.calls) {
+    cwc_idx.cap_calls = n ? n : 1;
+    cwc_idx.calls = (int *)realloc(cwc_idx.calls, sizeof(int) * (size_t)cwc_idx.cap_calls);
+  }
+  if (!cwc_idx.off || !cwc_idx.calls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   memset(cwc_idx.off, 0, sizeof(int) * (size_t)(ns + 1));
   for (int i = 0; i < n; i++) cwc_idx.off[ps[i] + 1]++;
   for (int s = 0; s < ns; s++) cwc_idx.off[s + 1] += cwc_idx.off[s];

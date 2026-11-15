@@ -4557,15 +4557,24 @@ static TyKind method_yield_ret(Compiler *c, int mi, TyKind ret) {
    the walk of its values gives up or there are none (the pin stands);
    otherwise 1, with *out the join, TY_UNKNOWN while a value is not typed yet. */
 static int pinned_block_form_ret(Compiler *c, int mi, TyKind *out) {
+  /* (the methods whose values are being joined: one of them that calls
+     itself with its block, `Paged.new(n).each(&block)` as each's last
+     value, asks its own answer from inside it. That value is not typed
+     yet, as any leaf still unknown; asked again without end, the
+     inference overran the stack) */
+  static int active[32], nactive;
+  for (int i = 0; i < nactive; i++) if (active[i] == mi) { *out = TY_UNKNOWN; return 1; }
+  if (nactive == 32) { *out = TY_UNKNOWN; return 1; }
   int lv[16];
   int n = method_value_leaves_or_nil(c, mi, lv, 16);
   TyKind acc = TY_UNKNOWN;
   int any = 0, nil = 0;
+  active[nactive++] = mi;
   for (int i = 0; i < n; i++) {
     if (lv[i] == c->scopes[mi].ret_pin_guard || return_in_lambda(c, lv[i])) continue;   /* a lambda's return leaves the lambda */
     TyKind t = infer_type(c, lv[i]);
     any = 1;
-    if (t == TY_UNKNOWN) { *out = TY_UNKNOWN; return 1; }
+    if (t == TY_UNKNOWN) { nactive--; *out = TY_UNKNOWN; return 1; }
     if (t == TY_VOID) t = TY_NIL;
     nil |= t == TY_NIL;
     acc = ty_unify(acc, t);
@@ -4574,6 +4583,7 @@ static int pinned_block_form_ret(Compiler *c, int mi, TyKind *out) {
   if (any && n >= 0 && method_value_leaves(c, mi, lv, 16) < 0) { nil = 1; acc = ty_unify(acc, TY_NIL); }
   /* an Integer or a Float beside a nil is boxed: the nil flag of a call's slot is a mark that settles later */
   if (nil && (acc == TY_INT || acc == TY_FLOAT)) acc = TY_POLY;
+  nactive--;
   *out = acc;
   return any;
 }

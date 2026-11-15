@@ -194,6 +194,16 @@ spinel: 1 refusal, nothing written
 == test/reject/bind_call_class_value_block_target.rb [promote] rc=1
 spinel: test/reject/bind_call_class_value_block_target.rb:12: unsupported call: node N (CallNode `bind_call`) recv=CallNode/ty0 argc=1 arg0ty1001
 spinel: 1 refusal, nothing written
+== test/reject/block_method_self_call_enum_guard.rb [default] rc=1
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: 3 refusals, nothing written
+== test/reject/block_method_self_call_enum_guard.rb [promote] rc=1
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: 3 refusals, nothing written
 == test/reject/bool_reopen_block_return_in_lambda.rb [default] rc=1
 spinel: test/reject/bool_reopen_block_return_in_lambda.rb:8: a `return` in a block given to a TrueClass's or FalseClass's yielding method, inside a lambda, is not supported by AOT compilation
 spinel: 1 refusal, nothing written

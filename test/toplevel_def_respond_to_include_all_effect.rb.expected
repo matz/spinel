@@ -1,0 +1,19 @@
+flag
+true
+flag
+true
+flag
+true
+flag g
+true
+flag g2
+true
+recv
+arg
+true
+true
+[:ia1]
+true
+[:ia1, :ia2]
+true
+[:ia1, :ia2, :ia3]

@@ -20694,6 +20694,17 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
         buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\");\n");
         return 1;
       }
+      /* main has no `protected` (a Module's method): the word raises where it runs, and
+         the def it may wrap (`protected def m`) is made first, as in CRuby */
+      if (visibility_of_name(nm) == BVIS_PROTECTED && g_class_body_id < 0 && cplan_runs_on_main(c, id)) {
+        emit_indent(b, indent);
+        /* (written bare, with no parentheses or argument, it is a variable-or-method read: a NameError) */
+        if (nt_vcall(nt, id))
+          buf_puts(b, "sp_raise_cls(\"NameError\", \"undefined local variable or method 'protected' for main\");\n");
+        else
+          buf_puts(b, "sp_raise_cls(\"NoMethodError\", \"undefined method 'protected' for main\");\n");
+        return 1;
+      }
       if (visibility_of_name(nm) > BVIS_MODULE_FUNCTION) {
         int vcid = g_class_body_id >= 0 ? g_class_body_id
                  : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);

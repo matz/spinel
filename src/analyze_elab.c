@@ -2673,6 +2673,8 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   }
   int bvis = visibility_of_name(nm), cvis = class_method_vis_of_name(nm), opaque = 0;
   int self = recv < 0 || nt_kind(nt, recv) == NK_SelfNode, st = self ? *vs : BVIS_PUBLIC;
+  /* (main has no `protected`: the word raises where it runs, codegen's, and changes no visibility) */
+  if (bvis == BVIS_PROTECTED && self && !sg && cls == LR_MAIN) return;
   if (!nested && nm && (bvis || is_method_naming_call(nm) || is_mixin_call(nm))) lr_form_runs(x, node, cls, sg, may);
   if (bvis && !ac && self) {
     /* the frame's visibility from here on: kept by the frame's node, so

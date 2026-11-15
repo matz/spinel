@@ -11689,6 +11689,13 @@ static int bind_case_eqq_subjects(Compiler *c, int *changed, int *any) {
   }
   return ch;
 }
+/* The top-level def the call plan binds call id to as a reopening of no class (a public def
+   reached with an explicit receiver), -1 where it binds none or the call is a builtin's */
+static int plan_top_def_target(Compiler *c, int id) {
+  if (cplan_builtin_call(c, id)) return -1;
+  const CallPlan tp = cplan_user_fresh(c, id);
+  return tp.mi >= 0 && tp.via == UC_REOPEN && tp.dispatch == CP_DIRECT && c->scopes[tp.mi].class_id < 0 && !c->scopes[tp.mi].is_cmethod ? tp.mi : -1;
+}
 static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before);
 int infer_param_types(Compiler *c) { return infer_param_types_ex(c, 0, NULL); }
 int infer_param_types_settle(Compiler *c) { return infer_param_types_ex(c, 1, NULL); }
@@ -12411,6 +12418,8 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         int oci3 = comp_core_class(c, CORE_OBJECT);
         if (oci3 >= 0 && oci3 != cid3) mi3 = call_target(c, id, oci3, name, CT_OWN, NULL);
       }
+      /* ...or a top-level def the plan binds to the call (`C.new.m` for a public `def m`) */
+      if (mi3 < 0) mi3 = plan_top_def_target(c, id);
       changed |= bound_name != name && is_eq_op(name) ? bind_delegated_params(c, id, mi3)
                                                      : bind_call_params(c, id, mi3);
       /* Also propagate to descendant overrides: codegen will emit a cls_id
@@ -12512,11 +12521,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       int omb = ocb >= 0 ? call_target(c, id, ocb, name, 0, NULL) : -1;
       if (omb >= 0 && !c->scopes[omb].is_cmethod) changed |= bind_call_params(c, id, omb);
       /* ...or a top-level def the plan binds to the call */
-      else if (omb < 0 && !cplan_builtin_call(c, id)) {
-        const CallPlan tp = cplan_user_fresh(c, id);
-        if (tp.mi >= 0 && tp.via == UC_REOPEN && tp.dispatch == CP_DIRECT && c->scopes[tp.mi].class_id < 0 && !c->scopes[tp.mi].is_cmethod)
-          changed |= bind_call_params(c, id, tp.mi);
-      }
+      else if (omb < 0) changed |= bind_call_params(c, id, plan_top_def_target(c, id));
     }
   }
   mtab_pop(c, mt_pass);

@@ -23677,7 +23677,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     int bid = bn ? builtin_class_id(bn) : 0;
     if (bid && comp_builtin_class_named(c, bn) < 0) {
       int mod = is_builtin_module_name(bn);
-      if (cplan_class_value_answers(c, vrecv, vnm) || class_value_builtin_answers(c, vnm, !mod) ||
+      if (cplan_class_value_answers(c, id, vrecv, vnm) || class_value_builtin_answers(c, vnm, !mod) ||
           object_reopen_class_value_owns(c, id, oci, vnm, 0, mod ? -3 : -2)) return 0;
       snprintf(cvname, sizeof cvname, "%s %s", mod ? "module" : "class", bn);
       cname = cvname; named = 1;
@@ -23687,7 +23687,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
        methods ahead of Object's: `class Time; def foo; end` leaves Time.now
        Time's, beside a top-level `def now`) */
     else if (call_target(c, id, ci, vnm, CT_CMETHOD, NULL) >= 0 || object_reopen_class_value_owns(c, id, oci, vnm, 0, ci) ||
-             module_ffi_or_native_owns(c, ci, vnm) || (c->classes[ci].is_builtin_const && cplan_class_value_answers(c, vrecv, vnm)))
+             module_ffi_or_native_owns(c, ci, vnm) || (c->classes[ci].is_builtin_const && cplan_class_value_answers(c, id, vrecv, vnm)))
       return 0;
     else {
     /* a class value answers Class's and Module's public methods (K.name)
@@ -35299,7 +35299,14 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
   /* no block at the call: the clone's block parameter is NULL, which its
      block_given? reads as false */
   int tp = -1;
-  if (cblk >= 0) {
+  /* a `&`/`&blk`/`...` in an inlined forwarder whose block is a real proc (a proc form's parameter) passes that proc */
+  const char *fwd = cblk < 0 ? forwarded_real_proc(nt_ref(nt, id, "block"), cblk) : NULL;
+  if (fwd) {
+    tp = ++g_tmp;
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d);\n", tp, fwd, tp);
+  }
+  else if (cblk >= 0) {
     Buf pb; memset(&pb, 0, sizeof pb);
     if (!emit_forwarded_proc_arg(c, cblk, &pb)) emit_proc_literal(c, cblk, &pb);
     tp = ++g_tmp;

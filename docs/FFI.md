@@ -398,6 +398,9 @@ Declares a C function-pointer type usable as an `ffi_func` argument spec.
 Passing `method(:some_method)` to an argument of that type compiles a
 trampoline that converts the C arguments, calls the method, and converts the
 result back, so a Ruby method can be handed to a C API that takes a callback.
+A `:str` parameter reaches the method as a new String holding a copy of the
+bytes C passed, or nil for NULL: the method may change it, and C's buffer
+stays as it was.
 
 ```ruby
 module L

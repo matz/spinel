@@ -184,7 +184,7 @@ static int ctor_block_fresh(Compiler *c, int id) {
   if (bk != NK_BlockArgumentNode) return 0;
   int e = nt_ref(c->nt, blk, "expression");
   if (e < 0 || nt_kind(c->nt, e) == NK_NilNode) return 0;
-  return repr_of(c, e).as_ty != TY_PROC || subtree_allocates(c->nt, e);
+  return repr_of(c, e).as_ty != TY_PROC || subtree_allocates(c, e);
 }
 
 /* `new(..., &pr)` into a yielding initialize, the proc known only at run time
@@ -5875,7 +5875,7 @@ static void emit_curry_apply_chain(Compiler *c, int recv, const int *argv, int a
   for (int k = 0; k < argc && !held; k++)
     held = !arg_ran_first(argv[k], 0) &&
            (operand_allocates_beside(c, argv[k]) || range_boxes_new(comp_ntype(c, argv[k]))) &&
-           (k > 0 || (!arg_ran_first(recv, 0) && subtree_may_allocate(c->nt, recv)));
+           (k > 0 || (!arg_ran_first(recv, 0) && subtree_may_allocate(c, recv)));
   const char *rfn = cret == TY_INT ? "sp_curry_to_int(" : "sp_curry_realize_poly(";
   if (!held) {
     if (realize) buf_puts(b, rfn);
@@ -7518,23 +7518,23 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     return 1;
   }
   /* String#bytesplice on a poly value, in each of its forms
-     (emit_bytesplice_bytes): in-place byte splice on the shared handle
+     (emit_bytesplice_in_place): spliced in place on the String's handle
      (#3227). */
   if (sp_streq(name, "bytesplice") && bytesplice_form_ok(c, argv, argc)) {
     int tvB = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", tvB);
     emit_expr(c, recv, b);
     buf_printf(b, "; sp_RbVal _r%d; if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_STRBUF) {"
-                  " sp_String *_m%d = (sp_String *)_t%d.v.p;"
-                  " const char *_n%d = ",
-               tvB, tvB, tvB, tvB, tvB, tvB);
+                  " sp_String *_m%d = (sp_String *)_t%d.v.p; (void)",
+               tvB, tvB, tvB, tvB, tvB);
     char rs[48]; snprintf(rs, sizeof rs, "sp_String_cstr(_m%d)", tvB);
-    emit_bytesplice_bytes(c, argv, argc, rs, b);
+    char hm[24]; snprintf(hm, sizeof hm, "_m%d", tvB);
+    emit_bytesplice_in_place(c, argv, argc, rs, hm, b);
     /* the answer is the receiver itself, so a mutation through it
        (`x.bytesplice(0, 1, "J") << "!"`) reaches x */
-    buf_printf(b, "; sp_String_set_bin_enc(_m%d, _n%d); _r%d = _t%d; }\n"
+    buf_printf(b, "; _r%d = _t%d; }\n"
                   "else { sp_raise_nomethod(sp_nomethod_msg(\"bytesplice\", _t%d)); _r%d = sp_box_nil(); } _r%d; })",
-               tvB, tvB, tvB, tvB, tvB, tvB, tvB);
+               tvB, tvB, tvB, tvB, tvB);
     return 1;
   }
   /* String#replace / #prepend / #concat on a poly value: swap or extend
@@ -10099,12 +10099,15 @@ int poly_inert(Compiler *c, int node) {
   switch (nt_kind(nt, node)) {
   case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
   case NK_ClassVariableReadNode: case NK_GlobalVariableReadNode:
-  case NK_ConstantReadNode: case NK_SelfNode:
+  case NK_SelfNode:
   case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_IntegerNode:
   case NK_FloatNode: case NK_SymbolNode: case NK_StringNode:
     return 1;
+  /* (a constant read that runs an autoload or a presence check is code) */
+  case NK_ConstantReadNode:
+    return an_const_effect_runs_nothing(an_const_read_effect(c, node));
   case NK_ConstantPathNode:
-    return poly_inert(c, nt_ref(nt, node, "parent"));
+    return an_const_effect_runs_nothing(an_const_read_effect(c, node)) && poly_inert(c, nt_ref(nt, node, "parent"));
   case NK_ArrayNode:
     els = nt_arr(nt, node, "elements", &n);
     for (int i = 0; i < n; i++)
@@ -10413,7 +10416,7 @@ static int poly_arm_default_allocates(Compiler *c, Scope *ms, int a,
     if (A->kw && A->kw->kwall < 0 && pn && kwh_lookup(c->nt, A->kw->kwh, pn) >= 0) return 0;
   }
   else if (from != ARG_DEFAULT && from != ARG_ELEM && from != ARG_GATHERED) return 0;
-  return subtree_may_allocate(c->nt, ms->pdefault[a]);
+  return subtree_may_allocate(c, ms->pdefault[a]);
 }
 
 /* An arm's arguments into `cb`, the first after `lead`, each parameter as
@@ -12307,7 +12310,7 @@ static int recv_held_as_read(Compiler *c, int recv) {
    first only where the two cannot differ (recv_held_as_read). */
 static int reopen_recv_runs_first(Compiler *c, Scope *m, int recv, const int *argv, int argc, int n) {
   for (int i = 0; i < g_n_argov; i++) if (g_argov_node[i] == recv) return 0;
-  int eff = subtree_has_side_effect(c, recv), alloc = subtree_allocates(c->nt, recv);
+  int eff = subtree_has_side_effect(c, recv), alloc = subtree_allocates(c, recv);
   int quiet = 1;
   for (int i = 0; quiet && i < argc; i++) quiet = arg_runs_nothing(c, argv[i]);
   for (int i = 0; quiet && m->pdefault && i < m->nparams; i++) {
@@ -12322,7 +12325,7 @@ static int reopen_recv_runs_first(Compiler *c, Scope *m, int recv, const int *ar
   for (int i = 0; m->pdefault && i < m->nparams; i++) {
     int d = m->pdefault[i];
     if (d < 0 || (!callee_param_is_declared_kwarg(c, m, m->pnames[i]) && arg_slot_for_param(c, m, i, n) >= 0)) continue;
-    if ((eff && subtree_has_side_effect(c, d)) || (alloc && subtree_allocates(c->nt, d)) ||
+    if ((eff && subtree_has_side_effect(c, d)) || (alloc && subtree_allocates(c, d)) ||
         read_rebound_by(c, d, recv)) return 1;
   }
   return 0;
@@ -12373,7 +12376,7 @@ static int reopen_recv_held_after(Compiler *c, Scope *m, int recv, int boxed, in
   for (int i = 0; m->pdefault && i < m->nparams; i++) {
     int d = m->pdefault[i];
     if (d < 0 || (!callee_param_is_declared_kwarg(c, m, m->pnames[i]) && arg_slot_for_param(c, m, i, n) >= 0)) continue;
-    if (subtree_allocates(c->nt, d)) return 1;
+    if (subtree_allocates(c, d)) return 1;
   }
   return 0;
 }
@@ -12585,7 +12588,7 @@ void emit_ctor_arm_param(Compiler *c, Scope *is, int j, const ArgLayout *L, cons
     return;
   }
   if (L->from[j] != ARG_NODE) {
-    if (!is->pdefault || is->pdefault[j] < 0 || !subtree_may_allocate(c->nt, is->pdefault[j]) ||
+    if (!is->pdefault || is->pdefault[j] < 0 || !subtree_may_allocate(c, is->pdefault[j]) ||
         !(ty_gc_rootable(c, pt) || pt == TY_POLY) || (pp && slot_is_oint(pp))) {
       emit_arg_or_default(c, is, j, -1, out);
       return;
@@ -15425,24 +15428,41 @@ int exc_reopen_initialize(Compiler *c, int ci) {
 
 /* Build the runtime's exception of the reopened class ci and run the
    reopening's initialize on it: from the call's argument list (args >= 0),
-   or from one message node (the `raise Cls, msg` form; -1 = none) with the
-   remaining parameters at their defaults. Its `super(msg)` sets the message
-   (the exception-initialize super arm); without one the message stays the
-   class name, as CRuby's Exception#initialize leaves it. */
+   or from one message node (the raise forms, `raise Cls, msg` and `raise
+   "msg"`; -1 = none, `raise Cls`). Its `super(msg)` sets the message (the
+   exception-initialize super arm); without one the message stays the class
+   name, as CRuby's Exception#initialize leaves it.
+   A raise form is Cls.exception(msg), so new(msg): the message binds as
+   the one argument of a call does (`initialize(prefix = "p", message)`
+   takes it as message), and an initialize that cannot take one argument,
+   or none, raises CRuby's ArgumentError once the message has run. Filling
+   the first slot with the message and the rest with their defaults ran
+   the body with the message in the wrong slot, or with a required
+   parameter it was never given.
+   An explicit `cause:` the raise staged (sp_explicit_cause) is held aside
+   while the initialize runs: a raise the initialize rescues would take
+   that cause as its own and clear it, and the exception raised after it
+   would have none. */
 void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg_node, Buf *b) {
   Scope *im = &c->scopes[initm];
-  int te = ++g_tmp;
+  int lo, hi, argc = msg_node >= 0;
+  if (args < 0 && class_new_pos_arity(c, initm, &lo, &hi) && (argc < lo || argc > hi)) {
+    char am[128];
+    arity_message(am, sizeof am, argc, lo, hi, NULL);
+    buf_puts(b, "({ ");
+    if (argc) { buf_puts(b, "(void)("); emit_expr(c, msg_node, b); buf_puts(b, "); "); }
+    buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\"); (sp_Exception *)0; })", am);
+    return;
+  }
+  int te = ++g_tmp, tc = ++g_tmp, ts = ++g_tmp;
   buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", (&(\"\\xff\")[1])); SP_GC_ROOT(_t%d); ", te, c->classes[ci].name, te);
+  buf_printf(b, "void *_t%d = sp_explicit_cause; int _t%d = sp_explicit_cause_set; SP_GC_ROOT(_t%d); "
+                "sp_explicit_cause = NULL; sp_explicit_cause_set = 0; ", tc, ts, tc);
   buf_printf(b, "%s(_t%d", mc_method(c, im), te);
   if (args >= 0) emit_args_filled(c, initm, args, ", ", b);
-  else {
-    for (int pk = 0; pk < im->nparams; pk++) {
-      buf_puts(b, ", ");
-      emit_arg_or_default(c, im, pk, pk == 0 ? msg_node : -1, b);
-    }
-  }
+  else emit_args_filled_argv(c, initm, argc ? &msg_node : NULL, argc, -1, ", ", b);
   if (ctor_init_takes_block(c, initm)) buf_puts(b, ", NULL");
-  buf_printf(b, "); _t%d; })", te);
+  buf_printf(b, "); sp_explicit_cause = _t%d; sp_explicit_cause_set = _t%d; _t%d; })", tc, ts, te);
 }
 
 /* Klass.try_convert(x) on a boxed x: whether x already is one of the
@@ -18776,7 +18796,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         emit_str_expr(c, argv[0], b);
         buf_printf(b, "; SP_GC_ROOT(_t%d); sp_str_plus(SP_STR_B(_t%d), _t%d); })", tb, ta, tb);
       }
-      else if (subtree_may_allocate(nt, recv) || subtree_may_allocate(nt, argv[0])) {
+      else if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
         int ta = ++g_tmp, tb = ++g_tmp;
         buf_printf(b, "({ const char *_t%d = ", ta); emit_str_expr(c, recv, b);
         buf_printf(b, "; SP_GC_ROOT(_t%d); const char *_t%d = ", ta, tb);
@@ -20636,10 +20656,25 @@ static const char *emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
       if (lv) p = lv->type;
     }
     char a[16]; snprintf(a, sizeof a, "_a%d", i);
+    /* A :str argument is C's bytes, with none of the marks a String's bytes
+       carry before them: the String the method gets is a copy of them (as
+       an ffi_func's :str answer is), and NULL is nil. The copy, and the
+       handle or box made of it, allocate: each is rooted before the next
+       argument's copy, ahead of the call, or a collection that copy runs
+       frees the one before it. */
+    if (ffi_spec_is_str(spec)) {
+      if (p == TY_STRING || p == TY_STRBUF || p == TY_POLY || p == TY_UNKNOWN) {
+        buf_printf(pb, "const char *_s%d = sp_str_dup_external(%s); SP_GC_ROOT(_s%d);\n  ", i, a, i);
+        if (p == TY_STRING) { buf_printf(&call, "_s%d", i); continue; }
+        if (p == TY_STRBUF) buf_printf(pb, "sp_String *_f%d = SP_STR_HDL(_s%d); SP_GC_ROOT(_f%d);\n  ", i, i, i);
+        else buf_printf(pb, "sp_RbVal _f%d = SP_STR_BOX(_s%d); SP_GC_ROOT_RBVAL(_f%d);\n  ", i, i, i);
+        buf_printf(&call, "_f%d", i);
+        continue;
+      }
+    }
     switch (p) {
     case TY_POLY: case TY_UNKNOWN:           /* param is sp_RbVal: box it */
       if (sp_streq(spec, "ptr"))                          buf_printf(&call, "sp_box_foreign_ptr((void *)%s)", a);
-      else if (ffi_spec_is_str(spec))                     buf_printf(&call, "SP_STR_BOX(%s)", a);
       else if (sp_streq(spec, "float") || sp_streq(spec, "double")) buf_printf(&call, "sp_box_float(%s)", a);
       else                                                buf_printf(&call, "sp_box_int((sp_int)%s)", a);
       break;
@@ -26521,7 +26556,8 @@ int operand_is_held_read(Compiler *c, int id) {
    variable or a global? A write to one does, and so can anything that runs
    Ruby code the subtree does not show -- a user method, a yield, a super.
    A call that runs none (order_call_runs_no_code) cannot, recursively;
-   every other call counts, conservatively. */
+   every other call counts, conservatively, and so does a constant read that
+   autoloads. */
 int node_may_reassign_state(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -26532,7 +26568,14 @@ int node_may_reassign_state(Compiler *c, int id) {
        strncmp(ty, "GlobalVariable", 14) == 0) &&
       (strstr(ty, "WriteNode") || strstr(ty, "TargetNode")))
     return 1;
-  if (k == NK_CallNode && !order_call_runs_no_code(c, id)) return 1;
+  if (k == NK_CallNode) {
+    MtabMark mt_was = mtab_push_in(c, id);   /* (the call's question, asked by a walk of its parent) */
+    int runs_code = !order_call_runs_no_code(c, id);
+    mtab_pop(c, mt_was);
+    if (runs_code) return 1;
+  }
+  /* a constant read that autoloads runs a file, which may assign any of them */
+  if (nt_kind_is_constant(k) && an_const_read_effect(c, id).autoload) return 1;
   return -1;
 }
 int subtree_may_reassign_state(Compiler *c, int id) {
@@ -26751,7 +26794,7 @@ static int operand_hoists_effect(Compiler *c, int node) {
 
 /* See codegen_internal.h. */
 int operand_allocates_beside(Compiler *c, int v) {
-  if (subtree_may_allocate(c->nt, v)) return !subtree_is_pure_read(c, v);
+  if (subtree_may_allocate(c, v)) return !subtree_is_pure_read(c, v);
   int u = nt_paren_single(c->nt, v);
   if (u >= 0 && repr_of(c, u).read_raw && decide_node(c->nt, u, "strbuf-raw", NULL)) return 0;
   return operand_may_allocate(c, v);
@@ -27239,7 +27282,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     /* (a constant read with any effect is bound too: an autoload runs a
        file, which must not move ahead of an earlier argument) */
     ConstReadEffect effect = an_const_read_effect(c, operand[i]);
-    int bindable = !route_op && (effect.presence != NULL || effect.autoload || effect.class_presence ||
+    int bindable = !route_op && (!an_const_effect_runs_nothing(effect) ||
                     an_const_read_keeps_class(c, operand[i]) ||
                     k == NK_CallNode || k == NK_SuperNode || k == NK_IfNode || k == NK_UnlessNode ||
                     k == NK_ForwardingSuperNode || k == NK_YieldNode || k == NK_InterpolatedStringNode ||
@@ -33035,7 +33078,7 @@ int push_recv_in_slot(Compiler *c, int recv, int argc, const int *argv, TyKind a
    still needs closing. */
 int poly_binop_recv_temp(Compiler *c, int recv, int arg, Buf *b, int *stmt_expr) {
   int t = ++g_tmp;
-  if (subtree_may_allocate(c->nt, arg)) {
+  if (subtree_may_allocate(c, arg)) {
     t = hold_operand_pre(c, recv, TY_POLY, 1, t, 1);
     *stmt_expr = 0;
     return t;
@@ -34493,7 +34536,7 @@ int root_reopen_defines(Compiler *c, const char *qm) {
   }
   for (int i = 0; i < nroots; i++) {
     ClassInfo *kc = &c->classes[roots[i]];
-    if (comp_method_in_class(c, roots[i], qm) >= 0 || comp_is_reader(kc, qm)) return 1;
+    if (call_target(c, -1, roots[i], qm, CT_OWN | CT_SHARED, NULL) >= 0 || comp_is_reader(kc, qm)) return 1;
     for (int u = 0; u < kc->nundefs; u++) if (sp_streq(kc->undefs[u], qm)) return 1;
   }
   return 0;

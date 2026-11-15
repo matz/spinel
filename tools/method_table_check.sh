@@ -22,9 +22,14 @@
 # run fails when a listed family has any site left. The run also fails when a
 # program compiles without the flag and fails or crashes with it.
 #
-# A read under a super node of a name other than the super's own (or its
-# shadow's or clone's) is another family's: implied, or presence for a
-# respond_to? that supers.
+# A read under a call or a super of a name other than the node's own (a
+# super's own, its shadow's or its clone's) is implied only for one of the
+# node's own implied calls (its syntax rows and the callbacks of its
+# builtin), and call otherwise: a question about another call, or the call's
+# method_missing, which any call may reach. A respond_to? that supers is
+# presence. A node with no names of its own is implied for a row of a node it
+# holds directly (an interpolation's to_s on its part, a case's === on its
+# when), and other otherwise.
 #
 # A read under a send, a Method maker or an &:sym is the send family's where
 # it asks of the name the node sends or captures. Its own name (`send`,
@@ -72,6 +77,12 @@ if [ "$QUIET" = 1 ]; then
   lr=$("$ROOT/tools/lists_readers_check.sh" 2>&1) || { printf "%s\n" "$lr"; stop 1 "tools/lists_readers_check.sh"; }
 else
   "$ROOT/tools/lists_readers_check.sh" || stop 1 "tools/lists_readers_check.sh"
+fi
+# and the siteless readers: the dispatchers and surveys no call stands behind ask the plan with no site, naming no primitive
+if [ "$QUIET" = 1 ]; then
+  sr=$("$ROOT/tools/siteless_readers_check.sh" 2>&1) || { printf "%s\n" "$sr"; stop 1 "tools/siteless_readers_check.sh"; }
+else
+  "$ROOT/tools/siteless_readers_check.sh" || stop 1 "tools/siteless_readers_check.sh"
 fi
 # and the definers (construction): the passes that put methods in the tables stand inside the check's bracket, and the list is exact
 if [ "$QUIET" = 1 ]; then
@@ -142,6 +153,7 @@ awk -v verbose="$VERBOSE" -v quiet="$QUIET" -v progs="$PROGS" -v fail="$FAIL_FAM
     next
   }
   / method-table-check: table / { why[$4]++; tables++; next }
+  / method-table-check: unbalanced bracket in / { unbal++; next }
   / method-table-check-exit: / { failed++; next }
   / method-table-check-flag-exit: / { flagfail++; k = $1; sub(/:$/, "", k); flagged[k] = $NF; next }
   END {
@@ -171,6 +183,7 @@ awk -v verbose="$VERBOSE" -v quiet="$QUIET" -v progs="$PROGS" -v fail="$FAIL_FAM
       close(cmd)
     }
     bad = flagfail > 0
+    if (unbal > 0) { printf "method-table-check: %.0f passes left a bracket open or closed one too often\n", unbal; bad = 1 }
     nf = split(fail, fl, " ")
     counts = ""
     for (i = 1; i <= nf; i++) {

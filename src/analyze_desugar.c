@@ -11,6 +11,7 @@
 #include "value_pos.h"
 #include "call_plan.h"
 #include "implied_calls.h"
+#include "method_table_check.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <limits.h>
@@ -564,7 +565,9 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
 int desugar_descendant_reader_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     if (nt_ref(nt, id, "receiver") >= 0 || nt_ref(nt, id, "arguments") >= 0 ||
         nt_ref(nt, id, "block") >= 0 || id >= c->node_cap || ie_class_of(c, id) >= 0) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -584,6 +587,7 @@ int desugar_descendant_reader_calls(Compiler *c) {
     nt_set_self_receiver(nt, id, sn);
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -2815,13 +2819,13 @@ int desugar_singleton_class_mixin(Compiler *c) {
      changes is not modeled */
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_SingletonClassNode || nt_kind(nt, nt_ref(nt, id, "expression")) == NK_SelfNode) continue;
-    /* (`class << K`, K a class the program declares: the load record takes
-       the body's mixins as K's singleton's, mixin_by_record. A module K
-       keeps the refusal: a prepend over its own singleton method under a
-       cell is not dispatched yet.) */
+    /* (`class << K`, K a class or a module the program declares: the load
+       record takes the body's mixins as K's singleton's, mixin_by_record.
+       A prepend over a module's own class method runs through the copy's
+       guard entry, as a class's does: ver_entries_build.) */
     int ex = nt_ref(nt, id, "expression");
     if ((nt_kind(nt, ex) == NK_ConstantReadNode || nt_kind(nt, ex) == NK_ConstantPathNode) &&
-        nt_str(nt, ex, "name") && erm_declared_as(nt, nt_str(nt, ex, "name")) == 1) continue;
+        nt_str(nt, ex, "name") && erm_declared_as(nt, nt_str(nt, ex, "name")) >= 1) continue;
     int sb = nt_ref(nt, id, "body"), sn = 0;
     const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &sn) : NULL;
     for (int j = 0; j < sn; j++) {
@@ -9713,10 +9717,8 @@ int desugar_array_first_last(Compiler *c) {
   int changed = 0;
   int user_fl = 0;
   for (int k = 0; k < c->nclasses && !user_fl; k++)
-    if (comp_method_in_chain(c, k, "first", NULL) >= 0 ||
-        comp_reader_in_chain(c, k, "first", NULL) ||
-        comp_method_in_chain(c, k, "last", NULL) >= 0 ||
-        comp_reader_in_chain(c, k, "last", NULL) ||
+    if (call_answers(c, -1, k, "first", CT_SHARED, NULL) ||
+        call_answers(c, -1, k, "last", CT_SHARED, NULL) ||
         /* `class Array; private :first; end` with no redefinition: no
            method-chain entry exists, only a visibility declaration, so
            the loop above missed it and the rewrite below would have
@@ -9796,7 +9798,7 @@ int desugar_interp_reopened_to_s(Compiler *c) {
   int own[NOWN], any = 0;
   for (int k = 0; k < NOWN; k++) {
     int ci = comp_core_class(c, names[k]);
-    own[k] = ci >= 0 && comp_method_in_chain(c, ci, "to_s", NULL) >= 0;
+    own[k] = ci >= 0 && call_target(c, -1, ci, "to_s", CT_METHODS | CT_SHARED, NULL) >= 0;
     any |= own[k];
   }
   if (!any) return 0;
@@ -9867,7 +9869,7 @@ static int interp_empty_part(const NodeTable *nt, int p) {
 int desugar_interp_elided_to_s(Compiler *c) {
   if (g_infer_optimistic) return 0;
   int sc = comp_core_class(c, CORE_STRING);
-  if (sc >= 0 && comp_method_in_chain(c, sc, "to_s", NULL) >= 0) return 0;
+  if (sc >= 0 && call_target(c, -1, sc, "to_s", CT_METHODS | CT_SHARED, NULL) >= 0) return 0;
   NodeTable *nt = (NodeTable *)c->nt;
   unsigned char *nested = calloc((size_t)(nt->count > 0 ? nt->count : 1), 1);
   if (!nested) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -9969,8 +9971,7 @@ int desugar_array_at(Compiler *c) {
   /* a user class owning the name keeps its own dispatch */
   int user_at = 0;
   for (int k = 0; k < c->nclasses && !user_at; k++)
-    if (comp_method_in_chain(c, k, "at", NULL) >= 0 ||
-        comp_reader_in_chain(c, k, "at", NULL) ||
+    if (call_answers(c, -1, k, "at", CT_SHARED, NULL) ||
         /* a bare `private :at` reopening with no redefinition (K-028,
            kilau docs/CATALOG.md), same reason as desugar_array_first_last */
         comp_method_vis_declared(c, k, "at", NULL) != SP_VIS_PUBLIC) user_at = 1;
@@ -9978,7 +9979,7 @@ int desugar_array_at(Compiler *c) {
      is boxed, or not typed yet, may hold that Class at run time */
   int user_cat = 0;
   for (int k = 0; k < c->nclasses && !user_cat; k++)
-    if (comp_cmethod_in_chain(c, k, "at", NULL) >= 0) user_cat = 1;
+    if (call_target(c, -1, k, "at", CT_CMETHOD | CT_SHARED, NULL) >= 0) user_cat = 1;
   if (!user_at)
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
@@ -10462,7 +10463,9 @@ int desugar_index_op_write_user(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     NodeKind k = nt_kind(nt, id);
     if (k != NK_IndexOrWriteNode && k != NK_IndexAndWriteNode && k != NK_IndexOperatorWriteNode) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -10581,6 +10584,7 @@ int desugar_index_op_write_user(Compiler *c) {
     scope_local_intern(sc, vname);
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -10862,7 +10866,7 @@ int desugar_unpack_block(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int user_any = 0, user_str = 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, "unpack", NULL) >= 0) {
+    if (call_target(c, -1, k, "unpack", CT_METHODS | CT_SHARED, NULL) >= 0) {
       user_any = 1;
       if (c->classes[k].name && sp_streq(c->classes[k].name, "String")) user_str = 1;
     }
@@ -18466,7 +18470,7 @@ int block_body_breaks(const NodeTable *nt, int node) {
    end either way, and the typed emitters are the faster path. */
 int desugar_enum_walk_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  if (comp_method_index(c, lower_row_of(LR_ENUM_WALK)->target) < 0) return 0;   /* not spliced */
+  if (call_target(c, -1, -1, lower_row_of(LR_ENUM_WALK)->target, CT_TOP | CT_SHARED, NULL) < 0) return 0;   /* not spliced */
   int n0 = nt->count;
   int changed = 0;
   for (int id = 0; id < n0; id++) {
@@ -19196,8 +19200,11 @@ int desugar_builtin_enum_calls(Compiler *c) {
     if (ern && (sp_streq(ern, "grep") || sp_streq(ern, "grep_v"))) continue;
     if (er >= 0 && er < n0 && nt_kind(nt, er) == NK_CallNode && nt_ref(nt, er, "block") < 0) chained[er] = 1;
   }
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     const char *name = nt_str(nt, id, "name");
     /* a call given back its written name on a receiver with no Enumerable
        (below) takes the builtin's again once a later round types the
@@ -19791,6 +19798,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   free(chained); free(in_default); free(defcls);
   return changed;
 }
@@ -20516,8 +20524,11 @@ int desugar_builtin_scalar_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     int copy = (int)nt_int(nt, id, "bx_copy", -1);
     if (copy < 0 || copy >= nt->count) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -20658,6 +20669,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -29355,11 +29367,52 @@ static int biv_mode(const char *cn) {
   if (!cn) return BIV_NONE;
   if (is_object_root(cn)) return BIV_OBJECT;
   if (is_bivar_keyed_class(cn)) return BIV_TABLE;
-  /* (a builtin exception class has no layout of the program's: the ivars
-     its reopening's methods name live in the table too) */
+  /* a builtin exception's: its struct has no slot of the program's, and the
+     runtime keeps an exception's ivars in the object-keyed map as it does a
+     String's (ty_bivar_keyed). Taken as fields, `@own = 1` in a reopened
+     RuntimeError named a member sp_Exception_s does not have (#11890). A
+     program's subclass of it has a struct of its own and is not this. */
   if (is_builtin_exception_name(cn)) return BIV_TABLE;
   if (is_frozen_value_class(cn)) return BIV_FROZEN;
   return is_string_class_name(cn) ? BIV_STRING : BIV_NONE;
+}
+
+/* The ivar names a reopening of a builtin keeps in the map, by the family
+   of its class, which a program subclass of that builtin reads and writes
+   there too. A `class Stack < Array` instance holds its own ivars as fields
+   after the Array it embeds, while `class Array; def tag!(v) = (@tag = v)`
+   keeps @tag in the map under the same address: as two stores, neither
+   side saw the other's @tag, and reflection on the instance saw neither.
+   A String subclass instance is keyed by its handle, which a String
+   reopening's method takes as self (arysub_bind). */
+enum { BIVF_NONE, BIVF_ARRAY, BIVF_HASH, BIVF_STRING, BIVF_EXC, BIVF_N };
+typedef struct { char **v; int n; } BivNames;
+static BivNames g_biv_kept[BIVF_N];
+static int g_biv_collect = BIVF_NONE;   /* the family a reopening's rewrite records into */
+static const BivNames *g_biv_only;      /* a subclass's rewrite: these names alone */
+static int biv_family(const char *cn) {
+  if (!cn) return BIVF_NONE;
+  if (sp_streq(cn, "Array")) return BIVF_ARRAY;
+  if (sp_streq(cn, "Hash")) return BIVF_HASH;
+  if (sp_streq(cn, "String")) return BIVF_STRING;
+  return is_builtin_exception_name(cn) ? BIVF_EXC : BIVF_NONE;
+}
+static int biv_names_has(const BivNames *s, const char *n) {
+  for (int i = 0; s && n && i < s->n; i++) if (sp_streq(s->v[i], n)) return 1;
+  return 0;
+}
+static void biv_names_add(BivNames *s, const char *n) {
+  if (!n || biv_names_has(s, n)) return;
+  if (!(s->n & (s->n - 1)) && !(s->v = realloc(s->v, sizeof *s->v * (size_t)(s->n ? 2 * s->n : 1)))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  s->v[s->n++] = strdup(n);
+}
+/* (a name the rewrite reaches: recorded for a reopening's family; for a
+   subclass's rewrite, whether it is one of the kept names) */
+static int biv_takes(const char *iv) {
+  if (g_biv_collect) biv_names_add(&g_biv_kept[g_biv_collect], iv);
+  return !g_biv_only || biv_names_has(g_biv_only, iv);
 }
 
 /* `name(:@x[, v])` on self, in place of node `id` */
@@ -29403,50 +29456,6 @@ static int biv_is_self_or_implicit(const NodeTable *nt, int call) {
   return r < 0 || nt_kind(nt, r) == NK_SelfNode;
 }
 
-/* The names biv_rewrite keeps to (NULL: every ivar): in a program class
-   under a reopened builtin exception, only the ivars the reopening's
-   methods name live in the table; the class's own stay in its layout. */
-static const char **g_biv_only = NULL;
-static int g_biv_nonly = 0;
-static int biv_takes(const char *iv) {
-  if (!g_biv_only) return 1;
-  for (int i = 0; i < g_biv_nonly; i++) if (sp_streq(g_biv_only[i], iv)) return 1;
-  return 0;
-}
-/* the instance variables a subtree names, attr_* declarations' too (its
-   own copies of the names) */
-static void biv_name_add(char ***out, int *n, int *cap, const char *nm) {
-  for (int i = 0; i < *n; i++) if (sp_streq((*out)[i], nm)) return;
-  if (*n == *cap) {
-    *cap = *cap ? *cap * 2 : 8;
-    if (!(*out = realloc(*out, sizeof(char *) * (size_t)*cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  (*out)[(*n)++] = strdup(nm);
-}
-static void biv_names_in(const NodeTable *nt, int node, char ***out, int *n, int *cap) {
-  if (node < 0) return;
-  NodeKind k = nt_kind(nt, node);
-  const char *nm = nt_str(nt, node, "name");
-  if (nm && nm[0] == '@' && nm[1] != '@' && k != NK_CallNode) biv_name_add(out, n, cap, nm);
-  if (k == NK_CallNode && nm && nt_ref(nt, node, "receiver") < 0 && (is_attr_reader_family(nm) || is_attr_writer_family(nm))) {
-    int an = nt_ref(nt, node, "arguments"), ac = 0;
-    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-    for (int i = 0; i < ac; i++) {
-      const char *v = nt_kind(nt, av[i]) == NK_SymbolNode ? nt_str(nt, av[i], "value") : NULL;
-      char ivn[256];
-      if (!v) continue;
-      snprintf(ivn, sizeof ivn, "@%s", v);
-      biv_name_add(out, n, cap, ivn);
-    }
-  }
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) biv_names_in(nt, nt_ref_at(nt, node, i), out, n, cap);
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) {
-    int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) biv_names_in(nt, ids[j], out, n, cap);
-  }
-}
 static void biv_rewrite(Compiler *c, NodeTable *nt, int node, int mode) {
   if (node < 0) return;
   NodeKind k = nt_kind(nt, node);
@@ -29465,7 +29474,7 @@ static void biv_rewrite(Compiler *c, NodeTable *nt, int node, int mode) {
   if (k == NK_CallNode && mode == BIV_TABLE && biv_is_self_or_implicit(nt, node) &&
       biv_is_reflective_set(nt, node))
     c->bivar_table = 1;
-  if (k == NK_InstanceVariableTargetNode && biv_takes(nt_str(nt, node, "name") ? nt_str(nt, node, "name") : ""))
+  if (k == NK_InstanceVariableTargetNode && biv_takes(nt_str(nt, node, "name")))
     unsupported_feature(c, node, "an instance variable of a builtin value as a multiple-assignment target: "
                                  "assign it on its own (`@a = x`)");
   if (k == NK_DefinedNode) {
@@ -29503,7 +29512,8 @@ static void biv_rewrite(Compiler *c, NodeTable *nt, int node, int mode) {
     free(cp);
   }
   const char *iv = nt_str(nt, node, "name");
-  if (!iv || iv[0] != '@' || iv[1] == '@' || !biv_takes(iv)) return;
+  if (!iv || iv[0] != '@' || iv[1] == '@') return;
+  if ((k == NK_InstanceVariableReadNode || k == NK_InstanceVariableWriteNode) && !biv_takes(iv)) return;
   char ivb[256]; snprintf(ivb, sizeof ivb, "%s", iv);
   if (k == NK_InstanceVariableReadNode) {
     if (mode == BIV_OBJECT) {
@@ -29709,6 +29719,116 @@ static const char *biv_host_of(NodeTable *nt, const BivHosts *h, const char *mod
   return host;
 }
 
+/* The family (biv_family) of the builtin a program class `m` descends
+   from through the program's own classes (`class Stack < Base`, `class
+   Base < Array`), BIVF_NONE for none */
+static int biv_sub_family(Compiler *c, NodeTable *nt, int m, const int *sub, int ns) {
+  int sc = class_def_super(nt, m);
+  for (int hop = 0; sc >= 0 && hop < 32; hop++) {
+    const char *sn = nt_kind(nt, sc) == NK_ConstantReadNode ? key_name(c, sc) : NULL;
+    if (!sn) return BIVF_NONE;
+    int next = -1;
+    for (int k = 0; k < ns && next < 0; k++)
+      if (sp_streq(class_def_name(nt, sub[k]), sn)) next = sub[k];
+    if (next < 0) return biv_family(sn);
+    sc = class_def_super(nt, next);
+  }
+  return BIVF_NONE;
+}
+/* `attr_reader :tag` in such a subclass naming a kept ivar */
+static int biv_attr_kept(NodeTable *nt, int call, const BivNames *kept) {
+  const char *nm = nt_str(nt, call, "name");
+  if (!nm || !(is_attr_reader_family(nm) || is_attr_writer_family(nm))) return 0;
+  int an = nt_ref(nt, call, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  for (int i = 0; i < ac; i++) {
+    char ivn[256];
+    if (nt_kind(nt, av[i]) != NK_SymbolNode || !nt_str(nt, av[i], "value")) continue;
+    snprintf(ivn, sizeof ivn, "@%s", nt_str(nt, av[i], "value"));
+    if (biv_names_has(kept, ivn)) return 1;
+  }
+  return 0;
+}
+/* The second walk: each program subclass of an Array, a Hash, a String or
+   a builtin exception whose builtin's reopening keeps ivars in the map reads and
+   writes those names there too, under its instance's address; its other
+   ivars stay its fields. The class node is marked biv_shared, and
+   infer_ivar_types gives the class computed_ivar_set: its reflection reads
+   the map beside its fields, and the map keys its instances
+   (SP_TU_BIVAR_USER).
+   Most programs keep no such name, and the walk ends at once. Otherwise
+   the classes that name a superclass are collected once, and each class's
+   family is looked up among them alone: asking the whole node table for
+   each class's superclass costs every class a scan of the program, which
+   made scale-test's alias receivers grow superlinearly. */
+static void biv_kept_free(void) {
+  for (int f = 0; f < BIVF_N; f++) {
+    for (int i = 0; i < g_biv_kept[f].n; i++) free(g_biv_kept[f].v[i]);
+    free(g_biv_kept[f].v);
+    g_biv_kept[f] = (BivNames){ NULL, 0 };
+  }
+}
+static int biv_subclasses(Compiler *c, NodeTable *nt, int n0) {
+  int changed = 0, any = 0;
+  for (int f = 0; f < BIVF_N; f++) any |= g_biv_kept[f].n > 0;
+  if (!any) return 0;
+  int *sub = NULL, ns = 0;
+  for (int k = 0; k < n0; k++)
+    if (nt_kind(nt, k) == NK_ClassNode && class_def_super(nt, k) >= 0 && class_def_name(nt, k)) xc_push(&sub, &ns, k);
+  for (int m = 0; m < n0; m++) {
+    if (nt_kind(nt, m) != NK_ClassNode) continue;
+    /* (a reopening with no superclass written, `class Stack` after `class
+       Stack < Array`, is the same class: its family is its first def's) */
+    int head = m;
+    if (class_def_super(nt, m) < 0) {
+      const char *cn = class_def_name(nt, m);
+      head = -1;
+      for (int k = 0; cn && k < ns && head < 0; k++)
+        if (sp_streq(class_def_name(nt, sub[k]), cn)) head = sub[k];
+      if (head < 0) continue;
+    }
+    int fam = biv_sub_family(c, nt, head, sub, ns), body = class_def_body(nt, m);
+    if (!fam || !g_biv_kept[fam].n) continue;
+    /* its instances hold those names in the map whether or not its own
+       methods name them: an inherited writer sets them. Marked only for a
+       rewritten def, `class Plain < Array; end` answered [] for
+       instance_variables after the reopening's writer ran */
+    if (!nt_int(nt, m, "biv_shared", 0) || !nt_int(nt, head, "biv_shared", 0)) {
+      nt_node_set_int(nt, m, "biv_shared", 1);
+      nt_node_set_int(nt, head, "biv_shared", 1);
+      changed = 1;
+    }
+    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
+    g_biv_only = &g_biv_kept[fam];
+    int bn = 0; const int *bs0 = nt_arr(nt, body, "body", &bn);
+    int *bs = malloc(sizeof(int) * (size_t)(bn ? bn : 1));
+    memcpy(bs, bs0, sizeof(int) * (size_t)bn);
+    int *nb = NULL, nnb = 0, attrs = 0;
+    for (int k = 0; k < bn; k++) {
+      if (nt_kind(nt, bs[k]) == NK_CallNode && biv_attr_kept(nt, bs[k], g_biv_only) && biv_attr_defs(nt, bs[k], &nb, &nnb)) { attrs = 1; continue; }
+      xc_push(&nb, &nnb, bs[k]);
+    }
+    if (attrs) { nt_node_set_arr(nt, body, "body", nb, nnb); changed = 1; }
+    for (int k = 0; k < nnb; k++) {
+      int d = nb[k];
+      if (nt_kind(nt, d) == NK_CallNode && nt_str(nt, d, "name") && visibility_of_name(nt_str(nt, d, "name"))) {
+        int an = nt_ref(nt, d, "arguments"), ac = 0;
+        const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+        d = ac == 1 ? av[0] : -1;
+      }
+      if (d < 0 || nt_kind(nt, d) != NK_DefNode || nt_ref(nt, d, "receiver") >= 0) continue;
+      int before = nt->count;
+      biv_def(c, nt, d, BIV_TABLE);
+      if (nt->count != before) { changed = 1; nt_node_set_int(nt, m, "biv_shared", 1); nt_node_set_int(nt, head, "biv_shared", 1); }
+    }
+    free(nb); free(bs);
+    g_biv_only = NULL;
+  }
+  free(sub);
+  biv_kept_free();
+  return changed;
+}
+
 int desugar_builtin_ivars(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -29718,85 +29838,14 @@ int desugar_builtin_ivars(Compiler *c) {
     if (nt_kind(nt, id) == NK_CallNode && biv_is_reflective_set(nt, id) && !biv_is_self_or_implicit(nt, id) &&
         !biv_frozen_literal(nt, nt_ref(nt, id, "receiver")))
       c->bivar_table = 1;
-  /* the ivars each reopened builtin exception class names (ex: by class) */
-  struct { const char *cls; char **names; int n, cap; } ex[16];
-  int nex = 0;
-  for (int m = 0; m < n0; m++) {
-    if (!class_def_opens_frame(nt, m) || class_def_super(nt, m) >= 0 || class_def_is_module(nt, m)) continue;
-    int cp = nt_ref(nt, m, "constant_path");
-    const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
-    if (!cn || !is_builtin_exception_name(cn)) continue;
-    int at = 0;
-    while (at < nex && !sp_streq(ex[at].cls, cn)) at++;
-    if (at == nex) { if (nex == 16) continue; ex[nex].cls = cn; ex[nex].names = NULL; ex[nex].n = ex[nex].cap = 0; nex++; }
-    biv_names_in(nt, class_def_body(nt, m), &ex[at].names, &ex[at].n, &ex[at].cap);
-  }
   BivHosts hosts;
   biv_hosts_build(c, nt, n0, &hosts);
-  /* a program class under one of those: the ivars the reopening names are
-     the table's in its methods too (its own stay in its layout) */
-  for (int m = 0; nex && m < n0; m++) {
-    if (!class_def_opens_frame(nt, m) || class_def_is_module(nt, m)) continue;
-    int sup = class_def_super(nt, m);
-    const char *sn = sup >= 0 && nt_kind(nt, sup) == NK_ConstantReadNode ? nt_str(nt, sup, "name") : NULL;
-    for (int hop = 0; sn && !is_builtin_exception_name(sn) && hop < 32; hop++) {
-      const char *up = NULL;
-      for (int q = 0; q < n0 && !up; q++) {
-        if (!class_def_opens_frame(nt, q) || class_def_is_module(nt, q)) continue;
-        const char *qn = class_def_bare_key(c, q);
-        int qs = class_def_super(nt, q);
-        if (qn && sp_streq(qn, sn) && qs >= 0 && nt_kind(nt, qs) == NK_ConstantReadNode) up = nt_str(nt, qs, "name");
-      }
-      sn = up;
-    }
-    if (!sn || !is_builtin_exception_name(sn)) continue;
-    char **only = NULL;
-    int nonly = 0, conly = 0;
-    const char *a = sn;
-    for (int i = -1; a; a = builtin_ancestor_at(sn, ++i))
-      for (int e = 0; e < nex; e++)
-        if (sp_streq(ex[e].cls, a))
-          for (int k = 0; k < ex[e].n; k++) biv_name_add(&only, &nonly, &conly, ex[e].names[k]);
-    int body = class_def_body(nt, m);
-    if (!nonly || body < 0 || nt_kind(nt, body) != NK_StatementsNode || biv_nested(nt, hosts.parent, m)) { for (int k = 0; k < nonly; k++) free(only[k]); free(only); continue; }
-    int bn = 0; const int *bs0 = nt_arr(nt, body, "body", &bn);
-    int *bs = malloc(sizeof(int) * (size_t)(bn ? bn : 1));
-    memcpy(bs, bs0, sizeof(int) * (size_t)bn);
-    g_biv_only = (const char **)only; g_biv_nonly = nonly;
-    for (int k = 0; k < bn; k++) {
-      int d = bs[k];
-      if (nt_kind(nt, d) == NK_CallNode && nt_str(nt, d, "name") && visibility_of_name(nt_str(nt, d, "name"))) {
-        int an = nt_ref(nt, d, "arguments"), ac = 0;
-        const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-        d = ac == 1 ? av[0] : -1;
-      }
-      if (d < 0 || nt_kind(nt, d) != NK_DefNode || nt_ref(nt, d, "receiver") >= 0) continue;
-      /* (only a def that names one of them is touched) */
-      char **used = NULL;
-      int nu = 0, cu = 0, hit = 0;
-      biv_names_in(nt, d, &used, &nu, &cu);
-      for (int u = 0; u < nu; u++) { hit |= biv_takes(used[u]); free(used[u]); }
-      free(used);
-      if (!hit) continue;
-      int before = nt->count;
-      int ps = nt_ref(nt, d, "parameters"), db = nt_ref(nt, d, "body");
-      cbi_lower_op_writes(nt, ps);
-      cbi_lower_op_writes(nt, db);
-      biv_rewrite(c, nt, ps, BIV_TABLE);
-      biv_rewrite(c, nt, db, BIV_TABLE);
-      if (nt->count != before) changed = 1;
-    }
-    g_biv_only = NULL; g_biv_nonly = 0;
-    free(bs);
-    for (int k = 0; k < nonly; k++) free(only[k]);
-    free(only);
-  }
-  for (int e = 0; e < nex; e++) { for (int k = 0; k < ex[e].n; k++) free(ex[e].names[k]); free(ex[e].names); }
   for (int m = 0; m < n0; m++) {
     if (!class_def_opens_frame(nt, m) || class_def_super(nt, m) >= 0) continue;
     int cp = nt_ref(nt, m, "constant_path");
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
-    int mode = biv_mode(key_name(c, cp));
+    const char *fam_of = key_name(c, cp);
+    int mode = biv_mode(fam_of);
     /* a module mixed into one builtin class alone (rbself_module_host):
        its methods and attr_* run with that builtin value as self, so they
        read and write the value's instance variables as a reopening's do
@@ -29806,6 +29855,7 @@ int desugar_builtin_ivars(Compiler *c) {
       const char *mn = class_def_bare_key(c, m);
       const char *host = mn && !biv_has(hosts.mf, hosts.nmf, mn) ? biv_host_of(nt, &hosts, mn) : NULL;
       mode = host ? biv_mode(host) : BIV_NONE;
+      fam_of = host;
     }
     int body = class_def_body(nt, m);
     if (mode == BIV_NONE || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
@@ -29831,11 +29881,14 @@ int desugar_builtin_ivars(Compiler *c) {
       }
       if (d < 0 || nt_kind(nt, d) != NK_DefNode || nt_ref(nt, d, "receiver") >= 0) continue;
       int before = nt->count;
+      g_biv_collect = mode == BIV_TABLE ? biv_family(fam_of) : BIVF_NONE;
       biv_def(c, nt, d, mode);
+      g_biv_collect = BIVF_NONE;
       if (nt->count != before) changed = 1;
     }
     free(nb); free(bs);
   }
+  changed |= biv_subclasses(c, nt, n0);
   biv_hosts_free(&hosts);
   if (changed) comp_grow_node_arrays(c);
   return changed;
@@ -30488,8 +30541,11 @@ int desugar_index_assign_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   int *parent = NULL;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode || !nt_attr_write(nt, id) || nt_safe_nav(nt, id)) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "[]=") || nt_ref(nt, id, "block") >= 0) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -30601,6 +30657,7 @@ int desugar_index_assign_value(Compiler *c) {
     int cb = c->node_cbody ? c->node_cbody[id] : -1;
     for (int j = base; j < nt->count; j++) { c->nscope[j] = encl; if (c->node_cbody) c->node_cbody[j] = cb; }
   }
+  mtab_pop(c, mt_pass);
   free(parent);
   return changed;
 }

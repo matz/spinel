@@ -4133,6 +4133,7 @@ static void sg_reattach_scopes(Compiler *c, int id, int ci, int is_scls) {
 }
 
 void register_singleton_defs(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   /* not const: the pass marks a resolved dsm call on the node itself */
   NodeTable *nt = (NodeTable *)c->nt;
   SgMap m = {0};
@@ -4370,6 +4371,7 @@ void register_singleton_defs(Compiler *c) {
     }
   }
   free(m.wkey); free(m.wci);
+  mtab_leave(c);
 }
 
 /* Is record call VAL the value of a constant path write (`A::B = Struct.new(:a)`)? */
@@ -5086,6 +5088,7 @@ static void mf_copy_arms(Compiler *c, int cls, int disp, int at, int own) {
    bare module_function over an if/else chain every branch of which
    defines one (mf_mark_cond_arms). */
 static void mf_copy_entries(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   int n = 0;
   ElabEntry *a = elab_entries(c, 1u << LR_COPY | ELAB_ENTRY_MAY, &n);
   int *src = n ? malloc(sizeof *src * (size_t)n) : NULL;
@@ -5125,6 +5128,7 @@ static void mf_copy_entries(Compiler *c) {
   }
   free(src);
   free(a);
+  mtab_leave(c);
 }
 
 void settle_mixin_aliases(Compiler *c) {
@@ -5321,6 +5325,7 @@ static int alias_replaced_later(const ElabEntry *a, int n, int i) {
    (register_alias_methods, once the classes have their parents); binding
    any other is alias_register's. */
 void register_aliases(Compiler *c) {
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   int n = 0, tl = -1;
   ElabEntry *a = elab_entries(c, 1u << LR_ALIAS | 1u << LR_READER | 1u << LR_WRITER, &n);
   const LrDef **acc = calloc((size_t)(n ? n : 1), sizeof *acc);
@@ -5348,6 +5353,7 @@ void register_aliases(Compiler *c) {
   free(acc);
   free(inh);
   free(a);
+  mtab_leave(c);
 }
 
 /* Does instance alias e name a writer that the record has no version of at
@@ -13343,6 +13349,17 @@ int infer_ivar_types(Compiler *c) {
   NilWrites nilw = {0};
   StructAsetIx aset = {0};
   if (c->pivs) c->pivs->sweep++;
+  /* a subclass of an Array, a Hash or a builtin exception that keeps some
+     ivars in the object-keyed map, as its builtin's reopening does
+     (desugar_builtin_ivars' biv_shared): its instances' names live in the
+     map as a computed set's do */
+  for (int k = 0; k < c->nclasses; k++) {
+    int dn = c->classes[k].def_node;
+    if (dn >= 0 && nt_int(nt, dn, "biv_shared", 0) && !c->classes[k].computed_ivar_set) {
+      c->classes[k].computed_ivar_set = 1;
+      changed = 1;
+    }
+  }
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
     NodeKind ty_k = nt_kind(nt, id);

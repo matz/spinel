@@ -1672,7 +1672,7 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (recv_never_nil(c, recv)) { buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); }
     else {
       Buf rx = expr_buf(c, recv);
-      nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", subtree_may_allocate(nt, argv[0]), b);
+      nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", subtree_may_allocate(c, argv[0]), b);
       buf_printf(b, "sp_PolyArray_get(_t%d", nil_t);
       free(rx.p);
     }
@@ -1693,7 +1693,7 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
     else {
       Buf rx = expr_buf(c, recv);
-      nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", subtree_may_allocate(nt, argv[0]), b);
+      nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", subtree_may_allocate(c, argv[0]), b);
       free(rx.p);
       buf_printf(b, "sp_PolyArray_get(_t%d", nil_t);
     }
@@ -4110,7 +4110,7 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
     else {
       Buf rx = expr_buf(c, recv);
       int keys_alloc = 0;
-      for (int di = 0; di < argc; di++) keys_alloc |= subtree_may_allocate(nt, argv[di]);
+      for (int di = 0; di < argc; di++) keys_alloc |= subtree_may_allocate(c, argv[di]);
       nil_t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PolyArray *", "sp_RbVal", keys_alloc, b);
       free(rx.p);
       memset(&rb, 0, sizeof rb);
@@ -4747,11 +4747,15 @@ static int emit_str_mut_recv_once(Compiler *c, int recv, int lvw, Buf *b) {
   return view_bind_temp(recv, t);
 }
 
-/* String#bytesplice's new bytes over receiver bytes `rs` (an expression read
-   more than once): (start, len, str), (start, len, str, str_start, str_len),
-   (range, str) or (range, str, str_range). The arguments run in order, and
-   a range is measured against its own String as CRuby measures it. */
-/* The call shapes emit_bytesplice_bytes takes: (range, str), three
+/* String#bytesplice on the String handle h, whose bytes rs reads (an
+   expression read more than once): (start, len, str), (start, len, str,
+   str_start, str_len), (range, str) or (range, str, str_range). The
+   arguments run in order, a range is measured against its own String as
+   CRuby measures it, and the String is spliced where it lives
+   (sp_String_splice_bytes); the expression is NULL. An argument that must
+   run before the others convert is held, and bound to its hold, by the
+   caller (emit_op_string_bytesplice). */
+/* The call shapes emit_bytesplice_in_place takes: (range, str), three
    arguments whose third is a Range or an Integer when the first is a Range,
    and five. Anything else stays the NoMethodError it was. */
 int bytesplice_form_ok(Compiler *c, const int *argv, int argc) {
@@ -4762,7 +4766,13 @@ int bytesplice_form_ok(Compiler *c, const int *argv, int argc) {
   return argc == 5;
 }
 
-void emit_bytesplice_bytes(Compiler *c, const int *argv, int argc, const char *rs, Buf *b) {
+/* the splice, the last step of emit_bytesplice_in_place */
+static void emit_bytesplice_tail(const char *h, int t, Buf *b) {
+  buf_printf(b, "sp_String_splice_bytes(%s, _b%d, _l%d, _v%d, _vb%d, _vl%d, 0); (const char *)NULL; })",
+             h, t, t, t, t, t);
+}
+
+void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char *rs, const char *h, Buf *b) {
   /* five arguments are always (start, len, str, str_start, str_len) */
   int rng = argc != 5 && comp_ntype(c, argv[0]) == TY_RANGE;
   int t = ++g_tmp;
@@ -4778,13 +4788,14 @@ void emit_bytesplice_bytes(Compiler *c, const int *argv, int argc, const char *r
                   "(const char *)NULL; })", t0n);
     return;
   }
-  /* an Integer slot holding a Range: CRuby's NUM2LONG TypeError, once the
-     arguments have run and the slots ahead of it converted */
+  /* an Integer slot holding a Range or nil: CRuby's NUM2LONG TypeError,
+     once the arguments have run and the slots ahead of it converted */
   if (!rng) {
     static const int islot[4] = {0, 1, 3, 4};
     for (int k = 0; k < (argc == 5 ? 4 : 2); k++) {
       int a = islot[k];
-      if (comp_ntype(c, argv[a]) != TY_RANGE) continue;
+      TyKind ka = comp_ntype(c, argv[a]);
+      if (ka != TY_RANGE && ka != TY_NIL) continue;
       for (int j = 0; j < argc; j++) {
         buf_puts(b, "(void)(");
         int ve = effect_view_open(c, argv[j]);
@@ -4794,8 +4805,9 @@ void emit_bytesplice_bytes(Compiler *c, const int *argv, int argc, const char *r
         effect_view_close(c, ve);
         buf_puts(b, "); ");
       }
-      buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of Range into Integer\"); "
-                  "(const char *)NULL; })");
+      buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s\"); (const char *)NULL; })",
+                 ka == TY_NIL ? "no implicit conversion from nil to integer"
+                              : "no implicit conversion of Range into Integer");
       return;
     }
   }
@@ -4809,7 +4821,7 @@ void emit_bytesplice_bytes(Compiler *c, const int *argv, int argc, const char *r
       buf_printf(b, "_vb%d = ", t); emit_int_expr(c, argv[3], b);
       buf_printf(b, "; _vl%d = ", t); emit_int_expr(c, argv[4], b); buf_puts(b, "; ");
     }
-    buf_printf(b, "sp_str_bytesplice5(%s, _b%d, _l%d, _v%d, _vb%d, _vl%d); })", rs, t, t, t, t, t);
+    emit_bytesplice_tail(h, t, b);
     return;
   }
   /* (range, str[, str_range]): every argument runs, then, as CRuby orders
@@ -4832,7 +4844,7 @@ void emit_bytesplice_bytes(Compiler *c, const int *argv, int argc, const char *r
   /* (range, str, n): CRuby's TypeError once the new string has converted */
   if (argc == 3 && !vrng) buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type Integer (expected Range)\"); ");
   if (vrng) buf_printf(b, "sp_range_beg_len(_vr%d, _vl%d, &_vb%d, &_vl%d); ", t, t, t, t);
-  buf_printf(b, "sp_str_bytesplice5(%s, _b%d, _l%d, _v%d, _vb%d, _vl%d); })", rs, t, t, t, t, t);
+  emit_bytesplice_tail(h, t, b);
 }
 
 /* One argument of append_as_bytes, as the bytes it appends: an Integer's
@@ -4909,7 +4921,7 @@ static void emit_append_bytes_handle(Compiler *c, int th, int argc, const int *a
   for (int a = 0; a < argc; a++) buf_printf(b, " sp_String_append_bytes(_t%d, _t%d);", th, base + a);
 }
 
-/* A String mutator: the value-form bangs, the in-place mutators, append_as_bytes, bytesplice (emit_array_call's arms, in their order) */
+/* A String mutator: the value-form bangs, the in-place mutators and append_as_bytes (emit_array_call's arms, in their order); bytesplice is a stage-7 row (emit_op_string_bytesplice) */
 static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   /* String value-form mutators: the expression yields the post-mutation
      string -- or nil for the no-change bang contract -- and reassigns an
@@ -5261,13 +5273,12 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
     }
   }
   if (rt == TY_STRING && emit_builtin_op_stage(c, id, recv, rt, name, 6, b)) { *out = 1; return 1; }
-  /* The byte mutators below take a handle receiver too: TY_STRBUF, the
-     handle a call answers under --share-strings (`rec(s).bytesplice(...)`
-     where rec returns its parameter) or a reader of an ivar that holds one.
-     Only their handle arms can take it, and change it in place; without a
-     handle it stays unsupported. append_as_bytes() appends nothing (the
-     arity check has bytesplice take two arguments or more), but a frozen
-     handle still raises. */
+  /* append_as_bytes below takes a handle receiver too: TY_STRBUF, the
+     handle a call answers (`rec(s).append_as_bytes(...)` where rec returns
+     its parameter) or a reader of an ivar that holds one. Only its handle
+     arm can take it, and change it in place; without a handle it stays
+     unsupported. append_as_bytes() appends nothing, but a frozen handle
+     still raises. (bytesplice is a stage-7 row: emit_op_string_bytesplice.) */
   int hrecv = rt == TY_STRBUF && recv >= 0 && is_string_byte_mutator(name);
   if (hrecv) rt = TY_STRING;
   if (hrecv && argc == 0) {
@@ -5324,44 +5335,6 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
     emit_str_mut_writeback(c, recv, lvw9, tn9, rh9 >= 0 ? g_argov_text[rh9] : NULL, b);
     if (rh9 >= 0) view_unbind(rh9);
     buf_printf(b, "_t%d; })", tn9);
-    { *out = 1; return 1; }
-  }
-  /* String#bytesplice: a byte-range replace returning self (value-semantics
-     strings: the helper builds the new value and an lvalue receiver is
-     rebound to it), in each of its forms (emit_bytesplice_bytes). */
-  if (rt == TY_STRING && sp_streq(name, "bytesplice") && recv >= 0 && bytesplice_form_ok(c, argv, argc)) {
-    /* shared handle receiver: swap the buffer in place (#3227) */
-    { Buf srefBS; memset(&srefBS, 0, sizeof srefBS);
-      Buf lbBS; memset(&lbBS, 0, sizeof lbBS);
-      int hrBS = strbuf_recv_handle_any(c, id, recv, &srefBS, &lbBS);
-      if (hrBS) {
-        int tm2 = ++g_tmp, tn3 = ++g_tmp;
-        buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);", tm2, lbBS.p ? lbBS.p : srefBS.p);
-        free(lbBS.p); free(srefBS.p);
-        emit_route_recv_root(c, hrBS, tm2, 0, NULL, TY_UNKNOWN, b);
-        char rs[48]; snprintf(rs, sizeof rs, "sp_String_cstr(_t%d)", tm2);
-        buf_printf(b, " const char *_t%d = ", tn3);
-        emit_bytesplice_bytes(c, argv, argc, rs, b);
-        /* (one representation: bytesplice answers its receiver, read through its bytes face) */
-        buf_printf(b, "; sp_String_set_bin_enc(_t%d, _t%d); sp_strbuf_read_pub(_t%d); })", tm2, tn3, tm2);
-        { *out = 1; return 1; }
-      } }
-    if (hrecv) return 0;
-    int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
-    int tn2 = ++g_tmp;
-    /* in-place mutator: a frozen receiver raises before the splice (#3333) */
-    buf_puts(b, "({ ");
-    int rh2 = emit_str_mut_recv_once(c, recv, lvw, b);
-    buf_puts(b, "sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, "); ");
-    Buf rb2; memset(&rb2, 0, sizeof rb2);
-    emit_expr(c, recv, &rb2);
-    buf_printf(b, "const char *_t%d = ", tn2);
-    emit_bytesplice_bytes(c, argv, argc, rb2.p ? rb2.p : "NULL", b);
-    free(rb2.p);
-    buf_puts(b, "; ");
-    emit_str_mut_writeback(c, recv, lvw, tn2, rh2 >= 0 ? g_argov_text[rh2] : NULL, b);
-    if (rh2 >= 0) view_unbind(rh2);
-    buf_printf(b, "_t%d; })", tn2);
     { *out = 1; return 1; }
   }
   return 0;
@@ -5725,7 +5698,7 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       else {
         Buf rx = expr_buf(c, recv);
         char vt[200]; snprintf(vt, sizeof vt, "%s *", ecn);
-        t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PtrArray *", vt, subtree_may_allocate(nt, argv[0]), b);
+        t = nil_recv_open(c, recv, rx.p ? rx.p : "", "sp_PtrArray *", vt, subtree_may_allocate(c, argv[0]), b);
         free(rx.p);
         buf_printf(b, "((%s *)sp_PtrArray_get(_t%d", ecn, t);
       }
@@ -5758,9 +5731,44 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       buf_puts(b, nil_ok ? ")" : ", \"clear\"))");
       return 1;
     }
-    /* the filters with a bang, which the pass admits for an object array
-       only: the in-place filter loop, and the array boxed by reference */
-    if (!nested && is_select_reject_bang(name) && argc == 0 && nt_ref(nt, id, "block") >= 0) {
+    /* the searches, which the pass admits for an object array only: the
+       value boxed, each element boxed as its class by the function */
+    if (!nested && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+        (sp_streq(name, "delete") || is_membership_alias(name) || sp_streq(name, "index") ||
+         sp_streq(name, "find_index") || sp_streq(name, "count"))) {
+      Buf rb; int ch = hold_recv_open(c, recv, 0, "sp_PtrArray *", "SP_GC_ROOT", b, &rb);
+      Buf cb; memset(&cb, 0, sizeof cb);
+      arysub_box_id(c, ty_object(ecls), &cb);
+      char tail[64]; snprintf(tail, sizeof tail, ", %s, %d", cb.p, repr_dyn_cls(c, ty_object(ecls)));
+      free(cb.p);
+      int t = ++g_tmp;
+      if (sp_streq(name, "delete")) buf_printf(b, "((%s *)sp_PtrArray_delete_obj(%s, ", ecn, rb.p);
+      else if (sp_streq(name, "count")) buf_printf(b, "sp_PtrArray_count_obj(%s, ", rb.p);
+      else buf_printf(b, "({ sp_int _t%d = sp_PtrArray_index_obj(%s, ", t, rb.p);
+      free(rb.p);
+      emit_boxed(c, argv[0], b);
+      if (sp_streq(name, "delete")) buf_printf(b, "%s))", tail);
+      else if (sp_streq(name, "count")) buf_printf(b, "%s)", tail);
+      else {
+        buf_printf(b, "%s, \"%s\"); ", tail, name);
+        if (is_membership_alias(name)) buf_printf(b, "_t%d >= 0; })", t);
+        else {
+          /* (a boxed node takes the oint as it is, as the boxed index does) */
+          int bare = repr_of(c, id).kind == RK_BOXED;
+          if (!bare) oint_open(c, id, TY_INT, b);
+          buf_printf(b, "_t%d < 0 ? sp_oint_nil() : sp_oint_of(_t%d)", t, t);
+          if (!bare) oint_close(c, id, b);
+          buf_puts(b, "; })");
+        }
+      }
+      if (ch) buf_puts(b, "; })");
+      return 1;
+    }
+    /* the filters with a bang, delete_if and keep_if, which the pass admits
+       for an object array only: the in-place filter loop, and the array
+       boxed by reference */
+    if (!nested && (is_select_reject_bang(name) || sp_streq(name, "delete_if") || sp_streq(name, "keep_if")) &&
+        argc == 0 && nt_ref(nt, id, "block") >= 0) {
       int trecv, torig, twp;
       if (!emit_array_filter_loop(c, recv, nt_ref(nt, id, "block"), rt, name, g_pre, g_indent, &trecv, &torig, &twp))
         return 0;
@@ -7033,7 +7041,7 @@ static void emit_str_poly_merge(Compiler *c, TyKind rt, TyKind at, int recv, int
   const char *afn = at == TY_STR_INT_HASH ? "sp_StrPolyHash_from_str_int_hash("
                   : at == TY_STR_STR_HASH  ? "sp_StrPolyHash_from_str_str_hash("
                                            : NULL;
-  int fresh = rfn || subtree_may_allocate(c->nt, recv);
+  int fresh = rfn || subtree_may_allocate(c, recv);
   int th = fresh && (afn || operand_allocates_beside(c, arg)) ? ++g_tmp : 0;
   if (th) buf_printf(b, "({ sp_StrPolyHash *_t%d = ", th);
   else buf_puts(b, "sp_StrPolyHash_merge(");
@@ -10523,7 +10531,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      the arguments where CRuby reads it there, or take a shared String's
      handle: encode_hold) */
   int enc_holds = rt == TY_STRING && name && (sp_streq(name, "encode") || sp_streq(name, "encode!")) && argc <= 3;
-  if (rt == TY_STRING && name && recv >= 0 && subtree_may_allocate(nt, recv) && !arg_ran_first(recv, 0) &&
+  if (rt == TY_STRING && name && recv >= 0 && subtree_may_allocate(c, recv) && !arg_ran_first(recv, 0) &&
       !y_ident && !enc_holds &&
       repr_of(c, recv).as_ty != TY_STRBUF &&   /* a handle is no fresh copy, and no const char * */
       !((!nil_answers_name(name)) && recv_may_be_sentinel(c, recv))) {
@@ -11297,9 +11305,9 @@ static void setter_value_close(Compiler *c, int id, TyKind vt, int so, Buf *b, i
    outlive. Same rule as #4049. A -1 side is an absent range endpoint, which
    sp_obj_clamp skips as nil. */
 static void emit_obj_clamp3(Compiler *c, int recv, int lo, int hi, Buf *b) {
-  int na = (recv >= 0 && subtree_may_allocate(c->nt, recv))
-         + (lo >= 0 && subtree_may_allocate(c->nt, lo))
-         + (hi >= 0 && subtree_may_allocate(c->nt, hi));
+  int na = (recv >= 0 && subtree_may_allocate(c, recv))
+         + (lo >= 0 && subtree_may_allocate(c, lo))
+         + (hi >= 0 && subtree_may_allocate(c, hi));
   if (na < 2) {
     buf_puts(b, "sp_obj_clamp(");
     emit_boxed(c, recv, b); buf_puts(b, ", ");
@@ -17761,7 +17769,7 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
                            ? "sp_poly_arr_get_aon" : "sp_poly_arr_get_hash";
         buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_expr(c, recv, b);
         buf_puts(b, "; ");
-        if (subtree_may_allocate(c->nt, argv[0])) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tr);
+        if (subtree_may_allocate(c, argv[0])) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tr);
         buf_printf(b, "sp_oint _t%d = ", tk); emit_oint_expr(c, argv[0], TY_INT, b);
         buf_printf(b, "; SP_UNLIKELY(_t%d.nil) ? sp_poly_index_poly(_t%d, sp_box_nil()) : %s(_t%d, _t%d.v); })",
                    tk, tr, fn, tr, tk);
@@ -18978,8 +18986,8 @@ static void emit_poly_str_transform(Compiler *c, int recv, int argc, const int *
      already is its temp, which allocates nothing to read, but its
      evaluation did, and a read left in place beside it (`$pat` before a
      later `x.rebind` argument) is held before the others run. */
-  int alloc = subtree_may_allocate(c->nt, recv) || operand_may_allocate(c, recv);
-  for (int i = 0; i < argc; i++) alloc += subtree_may_allocate(c->nt, argv[i]) || operand_may_allocate(c, argv[i]);
+  int alloc = subtree_may_allocate(c, recv) || operand_may_allocate(c, recv);
+  for (int i = 0; i < argc; i++) alloc += subtree_may_allocate(c, argv[i]) || operand_may_allocate(c, argv[i]);
   /* a boxed String argument's check can raise TypeError: the receiver's
      NoMethodError is asked first, as CRuby asks it before the call */
   for (int i = 0; i < argc; i++)

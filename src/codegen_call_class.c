@@ -5582,6 +5582,9 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         if (!uret_set9) { uret9 = kr; uret_set9 = 1; }
         else if (kr != uret9) uret9 = TY_POLY;
       }
+      /* (the inference's guard: where Class's own method answers the
+         classes without one, the call keeps the dispatch below) */
+      if (ncand9 == 0 && core_method_vis("Class", name, 1, NULL) == 1) nwrong9 = 0;
       if (ncand9 == 0) uret9 = wret9;
       if (ncand9 > 0 || nwrong9 > 0) {
         /* Every candidate must accept exactly this call's positional args (no

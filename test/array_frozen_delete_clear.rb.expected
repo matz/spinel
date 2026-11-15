@@ -58,3 +58,11 @@ eq 1
 eq 2
 eq 3
 boxed eq hit: FrozenError
+freeze in == [true]: FrozenError
+[1, true]
+freeze in == [true, nil]: FrozenError
+[2, true]
+freeze in == [nil, true]: FrozenError
+[2, true]
+freeze in == [false, nil]: NilClass
+[2, true]

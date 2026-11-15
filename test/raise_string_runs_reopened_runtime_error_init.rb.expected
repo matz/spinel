@@ -1,0 +1,8 @@
+[RuntimeError, "plain", nil]
+[RuntimeError, "failed", nil]
+[RuntimeError, "n=3", nil]
+[RuntimeError, "from var", nil]
+[RuntimeError, "kernel", nil]
+[RuntimeError, "with cause", "why"]
+[RuntimeError, "outer", "inner"]
+["plain", "failed", "n=3", "from var", "kernel", "with cause", "outer"]

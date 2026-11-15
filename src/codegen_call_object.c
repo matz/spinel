@@ -3143,12 +3143,6 @@ static int emit_bivar_table_op(Compiler *c, const BopCtx *x, char op, Buf *b) {
   const int *argv = call_args(nt, id, &argc);
   int tv = ++g_tmp;
   buf_puts(b, "({ "); tv = hold_operand(c, x->recv, TY_POLY, 1, tv, 1, " ", b);
-  /* (an instance of a program class under a builtin exception, in a method
-     naming an ivar the builtin's reopening holds in the map: keyed as the
-     exception it is, as the reopening's methods key it) */
-  { TyKind xt = repr_of(c, x->recv).ty;
-    if (ty_is_object(xt) && class_is_exc_subclass(c, ty_object_class(xt)))
-      buf_printf(b, "_t%d.cls_id = SP_BUILTIN_EXCEPTION; ", tv); }
   if (op == 'l') { buf_printf(b, "sp_bivar_list(_t%d); })", tv); return 1; }
   buf_printf(b, "sp_sym _k%d = ", tv); emit_bivar_name(c, argv[0], b); buf_puts(b, "; ");
   if (op == 'd') { buf_printf(b, "sp_bivar_defined(_t%d, _k%d); })", tv, tv); return 1; }

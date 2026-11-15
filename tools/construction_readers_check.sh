@@ -25,12 +25,16 @@ src/analyze_scope.c:register_include_attrs
 src/analyze_scope.c:register_extends
 src/analyze_scope.c:register_prepends
 src/analyze_scope.c:resolve_inherited_aliases
+src/analyze_scope.c:register_aliases
+src/analyze_scope.c:mf_copy_entries
+src/analyze_scope.c:register_singleton_defs
 src/analyze_scope.c:settle_object_builtin_aliases
 src/analyze_scope.c:settle_mixin_aliases
 src/analyze_scope.c:specialize_inherited_cls_new
 src/analyze_scope.c:include_module_methods
 src/analyze_scope.c:extend_class_with
 src/analyze.c:make_yield_proc_forms
+src/analyze_elab.c:lr_sg_makers
 "
 REFUSALS="
 src/analyze.c:refuse_mixin_after_calls
@@ -53,7 +57,7 @@ for ent in $FUNCS $REFUSALS; do
   if [ -n "$res" ]; then echo "construction-readers-check: $f:$fn: $res"; bad=1; fi
 done
 # the other direction: every function carrying the comment is on the list
-for f in src/analyze_scope.c src/analyze.c; do
+for f in src/analyze_scope.c src/analyze.c src/analyze_elab.c; do
   awk -v f="$f" '
     /^(static )?[a-z][^;]*[(]/ && !/;$/ && /[{]$/ { fn = $0; sub(/[(].*/, "", fn); n = split(fn, w, /[ *]+/); fn = w[n] }
     /[(]construction:/ { print "c " f ":" fn }

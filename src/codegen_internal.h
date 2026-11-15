@@ -665,8 +665,8 @@ extern int  g_cls_tag_skip;   /* poly-dispatch builtin-arm re-entry marker */
 /* Ask subtree_may_allocate before leaving something unrooted across `id`:
    its "no" is a keyed decision (src/decide.c). subtree_allocates is the
    bare fact, for a caller whose answer licenses no such omission. */
-int subtree_may_allocate(const NodeTable *nt, int id);
-int subtree_allocates(const NodeTable *nt, int id);
+int subtree_may_allocate(Compiler *c, int id);
+int subtree_allocates(Compiler *c, int id);
 int subtree_has_side_effect(Compiler *c, int id);
 /* Each subtree_* walk below as its node's own answer: 1 yes, 0 no for the
    whole subtree, -1 ask the node's operands. The operand-order record
@@ -973,7 +973,7 @@ Scope *open_default_method(void);
 int reopen_self_defaults(Compiler *c, int mi);
 int ctor_needs_self_defaults(Compiler *c, int initm, int argc);
 int bytesplice_form_ok(Compiler *c, const int *argv, int argc);
-void emit_bytesplice_bytes(Compiler *c, const int *argv, int argc, const char *rs, Buf *b);
+void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char *rs, const char *h, Buf *b);
 void emit_ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, int call_id, Buf *b);
 int ctor_needs_self_defaults_argv(Compiler *c, int initm, const int *argv, int argc);
 void emit_ctor_alloc_init_argv(Compiler *c, int cid, int initm, const int *argv, int argc, int argsNode,
@@ -1276,7 +1276,8 @@ void emit_expr(Compiler *c, int id, Buf *b);
 void emit_expr_for_effect(Compiler *c, int node, Buf *b);
 /* Can evaluating `node` run none of the program's own code (codegen_call.c)?
    It may allocate, but writes no variable and calls no method of the
-   program's, implicitly or explicitly. */
+   program's, implicitly or explicitly. A constant that autoloads, or may be
+   unset (a NameError), is not inert. */
 int poly_inert(Compiler *c, int node);
 int effect_view_open(Compiler *c, int node);
 void emit_expr_as_value_of(Compiler *c, int node, int owner, Buf *b);
@@ -2195,7 +2196,8 @@ const char *mc_method(Compiler *c, const Scope *s);
 const char *mc_ring_setf(Compiler *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 /* The scope a #deconstruct call on class cid runs, through an alias
    (codegen.c) */
-int comp_deconstruct_method(Compiler *c, int cid, int *defcls);
+int comp_deconstruct_method(Compiler *c, int pat, int cid, int *defcls);
+int comp_deconstruct_keys_method(Compiler *c, int pat, int cid, int *defcls);
 const char *iv_c(const char *name);  /* ivar/member name -> valid C field id (#3110) */
 #define IV_C_MAX 64  /* iv_c's longest result; a longer name is shortened with a hash */
 /* A method scope is shadowed (and must not be emitted) when a later
@@ -2979,6 +2981,7 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_scrub_block(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_transpose(Compiler *c, const BopCtx *x, Buf *b);

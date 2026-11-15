@@ -6118,7 +6118,7 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
 /* The class method `===` that class `ci` (or a class above it) defines in
    the program, or -1. A builtin row's own `===` does not count. */
 int class_any_cmethod_eqq(Compiler *c, int ci) {
-  int mi = ci >= 0 ? comp_cmethod_in_chain(c, ci, "===", NULL) : -1;
+  int mi = ci >= 0 ? call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL) : -1;
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
       nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
   /* (a super in it reaches Module#===, which the call cannot run yet: the
@@ -6340,7 +6340,10 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       }
       if (nc > 0 && !has_blk)
         { *out = uret == TY_UNKNOWN ? TY_POLY : uret; return 1; }
-      if (nc == 0 && nwrong > 0 && !has_blk)
+      /* not where Class's own method answers the classes without one
+         (`def self.freeze(x)` beside every other class's Module#freeze):
+         only the classes defining it raise */
+      if (nc == 0 && nwrong > 0 && !has_blk && core_method_vis("Class", name, 1, NULL) != 1)
         { *out = wret == TY_UNKNOWN ? TY_POLY : wret; return 1; }
     }
     if (argc == 1 && is_ivar_access(name) && !is_ivar_set(name)) {
@@ -7714,6 +7717,13 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
     if ((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 0) { *out = ty_object(ecls); return 1; }
     if (sp_streq(name, "delete_at") && argc == 1) { *out = ty_object(ecls); return 1; }
     if (sp_streq(name, "clear") && argc == 0) { *out = rt; return 1; }
+    /* the searches: delete answers the element it takes out (NULL-encoded
+       nil when none), index a position (nil when none) and count a number */
+    if (nt_ref(nt, id, "block") < 0 && argc == 1) {
+      if (sp_streq(name, "delete")) { *out = ty_object(ecls); return 1; }
+      if (is_membership_alias(name)) { *out = TY_BOOL; return 1; }
+      if (sp_streq(name, "index") || sp_streq(name, "find_index") || sp_streq(name, "count")) { *out = TY_INT; return 1; }
+    }
     /* no-block comparisons (admitted by the narrowing pass only for element
        classes with `<=>`): sort keeps the array type, min/max yield an
        element (NULL-encoded nil when empty). */
@@ -7734,6 +7744,7 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
         /* the filters: one with a bang answers the array or nil, boxed,
            and one without a bang a new array of the same class */
         if (is_select_reject_bang(name) && argc == 0) { *out = TY_POLY; return 1; }
+        if ((sp_streq(name, "delete_if") || sp_streq(name, "keep_if")) && argc == 0) { *out = rt; return 1; }
         if ((is_select_alias(name) || sp_streq(name, "reject")) && argc == 0) { *out = rt; return 1; }
       } }
   }
@@ -10258,8 +10269,11 @@ int an_call_diverges(Compiler *c, int id) {
   int last = nt_paren_single(nt, id);
   if (nt_kind(nt, last) != NK_CallNode || nt_ref(nt, last, "receiver") >= 0) return 0;
   const char *nm = nt_str(nt, last, "name");
-  return nm && is_diverging_call(nm) && !an_bare_call_class_owned(c, last) &&
-         call_target(c, last, -1, nm, CT_TOP, NULL) < 0;
+  if (!nm || !is_diverging_call(nm)) return 0;
+  MtabMark mt_was = mtab_push_in(c, last);   /* (the call's question, asked under its parent's frame) */
+  int diverges = !an_bare_call_class_owned(c, last) && call_target(c, last, -1, nm, CT_TOP, NULL) < 0;
+  mtab_pop(c, mt_was);
+  return diverges;
 }
 /* Whether call `w`, named `wn`, can run a method the program defines: a
    receiverless call (or one on self) when some user method has the name; a

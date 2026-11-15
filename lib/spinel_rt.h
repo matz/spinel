@@ -2334,12 +2334,21 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
      Object#blank? asks exactly that -- deliberately absent from this array,
      even though both Array and Hash get them from their own generated
      sp_gen_responds_*[] instead. */
+  /* Enumerable's public instance methods in CRuby (the same list as
+     enumerable_method_names in src/codegen_call.c), plus each and size,
+     which Array, Hash, Range and Enumerator all define. A boxed Array,
+     Hash, Range or Enumerator runs every one of them. */
   static const char *const enumm[] = {
-    "each", "each_with_index", "each_with_object", "map", "collect", "select",
-    "filter", "reject", "find", "detect", "reduce", "inject", "to_a", "size",
-    "count", "include?", "first", "min", "max", "sort", "sort_by",
-    "sum", "any?", "all?", "none?", "one?", "group_by", "partition", "zip",
-    "flat_map", "each_slice", "each_cons", "take", "drop", NULL };
+    "each", "size",
+    "all?", "any?", "chain", "chunk", "chunk_while", "collect", "collect_concat",
+    "compact", "count", "cycle", "detect", "drop", "drop_while", "each_cons",
+    "each_entry", "each_slice", "each_with_index", "each_with_object", "entries",
+    "filter", "filter_map", "find", "find_all", "find_index", "first", "flat_map",
+    "grep", "grep_v", "group_by", "include?", "inject", "lazy", "map", "max",
+    "max_by", "member?", "min", "min_by", "minmax", "minmax_by", "none?", "one?",
+    "partition", "reduce", "reject", "reverse_each", "select", "slice_after",
+    "slice_before", "slice_when", "sort", "sort_by", "sum", "take", "take_while",
+    "tally", "to_a", "to_h", "to_set", "uniq", "zip", NULL };
   static const char *const numm[] = {
     "+", "-", "*", "/", "%", "**", "<=>", "<", ">", "<=", ">=", "abs",
     "to_i", "to_int", "to_f", "to_r", "to_c", "zero?", "positive?",
@@ -2489,7 +2498,15 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
     return sp_str_in_list(m, boolm);
   }
   /* an Enumerator answers the Enumerable face (#3625) */
-  if (strcmp(cn, "Enumerator") == 0) return sp_str_in_list(m, enumm);
+  if (strcmp(cn, "Enumerator") == 0) {
+    /* and its own methods. Not feed, + and with_object: a boxed
+       Enumerator does not run them yet (with_object runs only with a
+       block). */
+    static const char *const enumrm[] = {
+      "next", "next_values", "peek", "peek_values", "rewind", "with_index",
+      NULL };
+    return sp_str_in_list(m, enumm) || sp_str_in_list(m, enumrm);
+  }
   /* an IO handle in a boxed slot -- a File, a socket, $stderr, a stat --
      by its kind */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p)
@@ -8483,14 +8500,22 @@ static sp_RbVal sp_PolyArray_delete(sp_PolyArray *a, sp_RbVal v) {sp_gc_wb((void
      mid-loop; a and v may be reachable only through the call expression. */
   SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
   if (a->frozen) { sp_poly_frozen_delete_scan(a, v, a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
-  sp_int w = 0;
+  sp_int w = 0; int found = 0;
   sp_RbVal removed = sp_box_nil(); SP_GC_ROOT_RBVAL(removed);
   for (sp_int i = 0; i < a->len; i++) {
-    if (!sp_poly_rb_equal(a->data[i], v)) { a->data[w] = a->data[i]; w++; }
-    else removed = a->data[i];
+    sp_RbVal e = a->data[i]; SP_GC_ROOT_RBVAL(e);
+    if (sp_poly_rb_equal(e, v)) { removed = e; found = 1; continue; }
+    if (w != i) {
+      if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
+      while (a->len < w) sp_PolyArray_push(a, sp_box_nil());
+      if (w < a->len) a->data[w] = e; else sp_PolyArray_push(a, e);
+    }
+    w++;
   }
-  a->len = w;
-  return removed;
+  if (a->len == w) return sp_box_nil();
+  if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
+  if (w < a->len) a->len = w;
+  return found ? removed : v;
 }
 
 /* MatchData -- holds the source string and the per-group byte offsets
@@ -10978,6 +11003,59 @@ static void *sp_PtrArray_minmax_obj(sp_PtrArray *a, int cls_id, int want_max) {s
     if (want_max ? (r > 0) : (r < 0)) best = a->data[i];
   }
   return best;
+}
+/* delete, include?, index and count over an object array: each element,
+   boxed as its class (dyn: the id the object carries), is compared with v
+   by ==, as the boxed array compares. A user == can allocate and can change
+   the array, so a and v are rooted and the length is read at each step.
+   delete answers the last element equal to v, or NULL; index -1 for none. */
+static void *sp_PtrArray_delete_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) SP_UNUSED;
+static void *sp_PtrArray_delete_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) {sp_gc_wb((void*)a);
+  if (SP_UNLIKELY(!a)) sp_nil_recv("delete");
+  SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
+  if (a->frozen) {   /* as sp_poly_frozen_delete_scan: raise at the first write, a miss answers nil */
+    int found = 0;
+    for (sp_int i = 0; i < a->len; i++) {
+      void *e = a->data[i];
+      if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) found = 1;
+      else if (found) break;
+    }
+    if (found) sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);
+    return NULL;
+  }
+  void *removed = NULL; SP_GC_ROOT(removed);
+  sp_int w = 0;
+  for (sp_int i = 0; i < a->len; i++) {
+    void *e = a->data[i]; SP_GC_ROOT(e);
+    if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) { removed = e; continue; }
+    if (w != i) {
+      if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY); return NULL; }
+      while (a->len < w) sp_PtrArray_push(a, NULL);
+      if (w < a->len) a->data[w] = e; else sp_PtrArray_push(a, e);
+    }
+    w++;
+  }
+  if (a->len == w) return NULL;
+  if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY); return NULL; }
+  if (w < a->len) a->len = w;
+  return removed;
+}
+static sp_int sp_PtrArray_index_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn, const char *name) SP_UNUSED;
+static sp_int sp_PtrArray_index_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn, const char *name) {
+  if (SP_UNLIKELY(!a)) sp_nil_recv(name);
+  SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
+  for (sp_int i = 0; i < a->len; i++)
+    if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(a->data[i], cls_id) : sp_box_nullable_obj(a->data[i], cls_id), v)) return i;
+  return -1;
+}
+static sp_int sp_PtrArray_count_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) SP_UNUSED;
+static sp_int sp_PtrArray_count_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) {
+  if (SP_UNLIKELY(!a)) sp_nil_recv("count");
+  SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
+  sp_int n = 0;
+  for (sp_int i = 0; i < a->len; i++)
+    if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(a->data[i], cls_id) : sp_box_nullable_obj(a->data[i], cls_id), v)) n++;
+  return n;
 }
 /* Compare two boxed arrays element-wise (Array#<=> semantics): first differing
    comparable element decides, else the shorter array sorts first. Used to order
@@ -14037,14 +14115,7 @@ static sp_RbVal sp_poly_delete_key(sp_RbVal recv, sp_RbVal key) {
   }
   if (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)) {
     sp_PolyArray *a = sp_poly_to_poly_array(recv);
-    if (a && a->frozen) { sp_poly_frozen_delete_scan(a, key, a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
-    sp_int w = 0, found = 0;
-    for (sp_int i = 0; a && i < a->len; i++) {
-      if (sp_poly_rb_equal(a->data[i], key)) { found = 1; continue; }
-      a->data[w++] = a->data[i];
-    }
-    if (a) a->len = w;
-    return found ? key : sp_box_nil();
+    return a ? sp_PolyArray_delete(a, key) : sp_box_nil();
   }
   /* String#delete(chars): the same name on a string receiver, which reaches
      here whenever the value only turns out to be a string at run time. */
@@ -15054,7 +15125,7 @@ static sp_RbVal sp_poly_arr_widen_and_set(sp_RbVal v, sp_int idx, sp_RbVal val) 
     const char *rep = sp_str_aset_rep(val);
     SP_GC_ROOT_RBVAL(v);
     SP_GC_ROOT(rep);
-    sp_String_set_bin(sh, sp_str_splice_at(sp_String_cstr(sh), idx, 1, rep, 0));
+    sp_String_splice_chars(sh, idx, 1, rep, 0, 1);
     return v;
   }
   sp_poly_arr_set(v, idx, val);
@@ -15130,10 +15201,11 @@ static sp_RbVal sp_poly_str_aset_key(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
    TypeError), which splices one character. The checks come in CRuby's
    order: the key's conversion and its match or range; then the value's
    conversion (TypeError), then an index outside the String (IndexError),
-   then FrozenError. The caller holds h, key and val rooted; every check is
-   made before this roots anything, so a raise never longjmps with a root of
-   its own live (an inline rescue does not restore sp_gc_nroots), as
-   sp_poly_str_aset_key refuses before it roots. Answers val. */
+   then FrozenError, and for a Regexp key the encoding check the byte splice
+   makes. The caller holds h, key and val rooted; this roots nothing, so a
+   raise never longjmps with a root of its own live (an inline rescue does
+   not restore sp_gc_nroots), as sp_poly_str_aset_key refuses before it
+   roots. Answers val. */
 static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
   if (sp_poly_is_strbuf(key)) key = sp_poly_strbuf_deref(key);
   const char *cur = sp_String_cstr(h);
@@ -15162,8 +15234,8 @@ static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
   }
   else { a = sp_poly_arg_int_chk(key); index = 1; }
   /* the value's conversion (a #to_str runs here); what it answers needs no
-     root until the splice allocates: nothing allocates between, but for a
-     raise, after which it is not read */
+     root: nothing allocates between here and the splice, which does not
+     allocate from the collector either, and after a raise it is not read */
   const char *rep = sp_str_aset_rep(val);
   cur = sp_String_cstr(h);
   len = (sp_int)sp_str_length(cur);
@@ -15173,12 +15245,12 @@ static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
     a = i;
   }
   if (sp_String_is_frozen(h)) sp_raise_frozen_str(cur);
-  SP_GC_ROOT(rep);
   if (a + n > (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)))
     n = (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)) - a;
-  /* (the splice's encoding too, which the compatibility rule picked: an
-     ASCII-only binary String given a UTF-8 text becomes UTF-8) */
-  sp_String_set_bin_enc(h, bytes ? sp_str_bytesplice(cur, a, n, rep) : sp_str_splice_at(cur, a, n, rep, 0));
+  /* spliced where h lives, in the encoding the compatibility rule picked:
+     an ASCII-only binary String given a UTF-8 text becomes UTF-8 */
+  if (bytes) sp_String_splice_bytes(h, a, n, rep, 0, (sp_int)sp_str_byte_len(rep), 0);
+  else sp_String_splice_chars(h, a, n, rep, 0, 0);
   return val;
 }
 /* poly_val[key] = val for a key of no kind the String store picks a form by

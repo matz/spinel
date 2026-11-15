@@ -53,7 +53,9 @@ enum {
   BCR_GVAR = 256u,  /* $stdout or $stderr holding the object: the assignment is a write of a port global, whose row keeps it */
   BCR_HOOK = 512u,  /* the receiver, a class or module of the program: a singleton hook it defines that the builtin calls (const_get: const_missing) */
   BCR_KEY = 1024u,  /* with BLOCK: the answer is compared with another answer of the block (sort_by, min_by), not with a number of the builtin's own (bsearch's 0): a property of the BLOCK call, never a call of its own */
-  BCR_ALL = 2047u
+  BCR_MADE = 2048u, /* an object the builtin makes and initializes (Class#new: the instance's initialize): no value handed to the builtin */
+  BCR_ALL = 4095u,
+  BCR_HANDED = BCR_ALL & ~BCR_MADE   /* the roles of a value handed to a builtin: all but MADE */
 };
 typedef struct { const char *name; unsigned roles; } BopCallback;
 /* What any core method called `builtin` may call back, the union over its
@@ -211,6 +213,7 @@ typedef enum {
   BOPE_STRING_INSERT,
   BOPE_STRING_CLEAR,
   BOPE_STRING_SLICE,
+  BOPE_STRING_BYTESPLICE,
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */
   BOPE_BOXED_ARRAY_COUNT, /* a count-taking Enumerable read through a box */

@@ -4,6 +4,7 @@
 #include "order_plan.h"
 #include "share.h"
 #include "implicit_calls.h"
+#include "method_table_check.h"
 #include "codegen_call_arms.h"
 #include "share.h"
 #include <limits.h>
@@ -54,8 +55,7 @@ static int walk_value_only(Compiler *c, int id, const OrderWalk *w) {
     case NK_RegularExpressionNode:
       return 1;
     case NK_ConstantReadNode: case NK_ConstantPathNode: {
-      ConstReadEffect e = an_const_read_effect(c, id);
-      if (e.presence || e.autoload || e.class_presence) return 0;
+      if (!an_const_effect_runs_nothing(an_const_read_effect(c, id))) return 0;
       /* (a path evaluates its parent before it reads the leaf: `pick::PAT`
          runs `pick`) */
       return nt_kind(c->nt, id) != NK_ConstantPathNode || order_pure_walk(c, nt_ref(c->nt, id, "parent"), w);
@@ -106,9 +106,11 @@ static int pure_walk_node(Compiler *c, int id, const OrderWalk *w) {
     }
     case NK_CallNode: {
       int alloc = 0;
-      if (!order_typed_index(c, id) && !order_typed_len(c, id) && !scalar_op_runs_no_code(c, id) &&
-          !(call_is_field_read(c, id, w->alloc ? &alloc : NULL) && !alloc))
-        return 0;
+      MtabMark mt_was = mtab_push_in(c, id);   /* (the call's question, asked under its parent's frame) */
+      int pure = order_typed_index(c, id) || order_typed_len(c, id) || scalar_op_runs_no_code(c, id) ||
+                 (call_is_field_read(c, id, w->alloc ? &alloc : NULL) && !alloc);
+      mtab_pop(c, mt_was);
+      if (!pure) return 0;
       break;
     }
     default:
@@ -268,7 +270,10 @@ int order_call_runs_no_code(Compiler *c, int id) {
       !any_class_defines(c, "[]") && !prog_has_hash_default_block(c))
     return 1;
   int alloc = 0;
-  return call_is_field_read(c, id, &alloc) || call_is_poly_field_read(c, id);
+  MtabMark mt_was = mtab_push_in(c, id);   /* (the readers the call's name reads are the call's) */
+  int field = call_is_field_read(c, id, &alloc) || call_is_poly_field_read(c, id);
+  mtab_pop(c, mt_was);
+  return field;
 }
 
 /* ---- the record ---- */

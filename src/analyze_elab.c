@@ -51,6 +51,7 @@
 #include "call_plan.h"
 #include "holder.h"
 #include "implicit_calls.h"
+#include "method_table_check.h"
 #include "timing.h"
 #include <limits.h>
 
@@ -2629,6 +2630,20 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
 
 static int lr_const_root_undefined(const NodeTable *nt, int n);
 static int lr_const_path_fails(Compiler *c, int n);
+static int lr_const_root_later(Compiler *c, int n);
+/* Is node written in the body of frame node f, with no method, lambda or
+   block between? */
+static int lr_written_in(Compiler *c, int node, int f) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  if (!par || f < 0) return 0;
+  for (int a = node; a >= 0 && a < nt->count && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(nt, par[a]);
+    if (par[a] == f) return 1;
+    if (k == NK_DefNode || k == NK_LambdaNode || k == NK_BlockNode) return 0;
+  }
+  return 0;
+}
 static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out);
 static int lr_sg_chain_find(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out, int *found);
 static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int fnode, int may, int nested) {
@@ -2758,8 +2773,14 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
          so it is no mixin and defines nothing (codegen reads the mark) */
       int fail = -1;
       for (int q = 0; q < ac && fail < 0; q++)
-        if (q == i ? mod < 0 && mod != LR_LATER : lr_class_ref_at(x->c, av[q], NULL) < 0)
-          fail = lr_const_path_fails(x->c, av[q]);
+        if (q == i ? mod < 0 : lr_class_ref_at(x->c, av[q], NULL) < 0) {
+          if (q != i || mod != LR_LATER) fail = lr_const_path_fails(x->c, av[q]);
+          /* (a statement written in the body the walk is in: one the
+             walk made of a hook's body, on the class the hook was given,
+             stands in no body of the source) */
+          if (fail < 0 && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && lr_written_in(x->c, node, fnode))
+            fail = lr_const_root_later(x->c, av[q]);
+        }
       if (fail >= 0) {
         int path = nt_kind(nt, fail) == NK_ConstantPathNode && nt_ref(nt, fail, "parent") >= 0;
         nt_node_set_int((NodeTable *)nt, node, path ? "mixin_undefined_path" : "mixin_undefined_const", path ? fail + 1 : 1);
@@ -7765,6 +7786,7 @@ static void lr_sgm_add(Compiler *c, int node, int who, int sure) {
 static void lr_sg_makers(Compiler *c) {
   LoadRecord *r = c->lrec;
   if (r->sgm && r->sgm_of.recorded == r->recorded && r->sgm_of.ver == r->ver && r->sgm_of.nclasses == c->nclasses) return;
+  mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   r->nsgm = 0;
   r->sgm_of.recorded = r->recorded; r->sgm_of.ver = r->ver; r->sgm_of.nclasses = c->nclasses;
   if (!r->sgm && !(r->sgm = malloc(sizeof *r->sgm * (size_t)(r->csgm = 16)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -7816,6 +7838,7 @@ static void lr_sg_makers(Compiler *c) {
       if (sing) lr_sgm_add(c, id, who, 1);
     }
   }
+  mtab_leave(c);
 }
 /* When form node, which makes a module's singleton class whenever it runs
    (sure) or may, runs as of p: ELAB_YES surely before p, ELAB_NO surely
@@ -8770,6 +8793,21 @@ static int lr_const_root_undefined(const NodeTable *nt, int n) {
   }
   return 1;
 }
+/* Does a const_set or an autoload of the program's name constant nm by a
+   literal? */
+static int lr_const_set_names(const NodeTable *nt, const char *nm) {
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *cn = nt_str(nt, id, "name");
+    if (!cn || !(sp_streq(cn, "const_set") || sp_streq(cn, "autoload"))) continue;
+    int an = nt_ref(nt, id, "arguments"), ac = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+    if (ac < 1) continue;
+    NodeKind ak = nt_kind(nt, av[0]);
+    const char *in = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") : ak == NK_StringNode ? nt_str(nt, av[0], "unescaped") : NULL;
+    if (in && sp_streq(in, nm)) return 1;
+  }
+  return 0;
+}
 /* Can a constant the program does not write by a literal name come to be,
    from a const_missing or from a const_set or autoload of a computed name? */
 static int lr_const_names_open(const NodeTable *nt) {
@@ -8807,6 +8845,28 @@ static int lr_const_path_fails(Compiler *c, int n) {
     if (o != ELAB_YES) return -1;
   }
   return -1;
+}
+/* Is constant read n (`Later`, `Later::Thing`) one whose first name the
+   program defines only further down: a name of its own (not a builtin's
+   constant, Comparable, nor a reopening of one, nor one an autoload or a
+   const_set names) that no lexical scope nor Object holds yet where the
+   read runs at its point, with nothing that could add it? The first name's
+   node, or -1. Asked of a mixin statement written where it runs (no
+   receiver, or self): a hook's body runs at the include that fires it,
+   where the point's scopes are not the ones its reads are written in. */
+static int lr_const_root_later(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  int x = n;
+  while (x >= 0 && nt_kind(nt, x) == NK_ConstantPathNode && nt_ref(nt, x, "parent") >= 0) x = nt_ref(nt, x, "parent");
+  if (x < 0 || nt_kind(nt, x) != NK_ConstantReadNode || !nt_str(nt, x, "name")) return -1;
+  const char *rn = nt_str(nt, x, "name");
+  LoadPoint rp = elab_point_of(c, x);
+  const LrDef *rd = NULL;
+  int rcore = -1;
+  (void)lr_class_ref_at(c, x, &rcore);
+  if (rp.region < 0 || rcore >= 0 || is_builtin_class_name(rn) || is_builtin_module_const_name(rn) ||
+      lr_const_set_names(nt, rn) || lr_const_names_open(nt)) return -1;
+  return lr_const_at(c, x, rn, rp, &rd, LR_KEY_EITHER) == ELAB_NO ? x : -1;
 }
 /* See analyze.h. Asked once the record is made, in a frame of its own, as
    elab_class_ref_at is. */

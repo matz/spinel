@@ -1,0 +1,46 @@
+true
+"HELLO world"
+["jzLLO WORLD!", 12, "UTF-8"]
+["日hello", 8, "UTF-8"]
+6
+"h"
+[IndexError, "offset 1 does not land on character boundary"]
+["éb", 3, "UTF-8"]
+["\xFFz", 2, "ASCII-8BIT"]
+[255, 122]
+["ccbcc", 5, "UTF-8"]
+[:recv, :start, :len, :str]
+"0--3"
+"Cond"
+"IVar"
+["one", "Two"]
+"BOXed"
+[IndexError, "index 99 out of string"]
+[IndexError, "negative length -1"]
+[FrozenError, "can't modify frozen String: \"frozen\""]
+[IndexError, "index 9 out of string"]
+[RangeError, "5..6 out of range"]
+[NoMethodError, "undefined method 'bytesplice' for nil"]
+[:arg]
+[TypeError, "no implicit conversion from nil to integer"]
+[:str]
+"abcdef"
+[TypeError, "no implicit conversion from nil to integer"]
+[:str, :vlen]
+"abcdef"
+[TypeError, "no implicit conversion from nil to integer"]
+[:len, :str]
+[TypeError, "wrong argument type String (expected Range)"]
+[:start, :str]
+[TypeError, "no implicit conversion of nil into String"]
+[:str]
+[NoMethodError, "undefined method 'bytesplice' for nil"]
+[:str]
+"aTcdef"
+[:str, :to_str]
+1000
+500
+78620
+3356
+[100, 0, 1, 2, 3, 4]
+"ASCII-8BIT"

@@ -75,6 +75,9 @@
 #   HOOK   the receiver, a class or module of the program, whose own singleton
 #          method the builtin calls: K.const_get(:Z) asks K for const_missing,
 #          K.define_method(:m) for method_added
+#   MADE   an object the builtin makes and initializes (Class#new on the
+#          receiver, a class of the program: its instance's initialize); not a
+#          value handed to the builtin
 #   KEY    with BLOCK: the answer is compared with another answer of the block
 #          (sort_by, min_by), not with a number of the builtin's own (bsearch's 0)
 #
@@ -107,7 +110,7 @@ Warning[:deprecated] = false
 Warning[:experimental] = false
 $VERBOSE = nil
 
-ROLES = { arg: 1, elem: 2, block: 4, self: 8, class: 16, port: 32, asked: 64, loaded: 128, gvar: 256, hook: 512, key: 1024 }.freeze
+ROLES = { arg: 1, elem: 2, block: 4, self: 8, class: 16, port: 32, asked: 64, loaded: 128, gvar: 256, hook: 512, key: 1024, made: 2048 }.freeze
 ASKED_NAMES = %w[respond_to? respond_to_missing? method_missing].freeze
 # Methods an IO argument is asked for; the same names handed as an ordinary
 # argument are the port protocol, not a conversion
@@ -280,6 +283,8 @@ module Probe
         k.define_singleton_method(n) { |*a, **kw, &b| ic_log(n, role); ic_answer(self, body, a, kw) }
       end
       k.define_singleton_method(:new) { |*a, &b| ic_log(:new, role); super(*a, &b) } unless omit.include?("new")
+      # Class#new on the receiver runs the initialize of the instance it makes
+      k.define_method(:initialize) { |*a, &b| ic_log(:initialize, :made); super(*a, &b) } if role == :hook && !omit.include?("initialize")
       k.define_singleton_method(:respond_to?) { |n, priv = false| ic_log(:respond_to?, :asked); super(n, priv) }
       k.define_singleton_method(:respond_to_missing?) { |n, priv = false| ic_log(:respond_to_missing?, :asked); super(n, priv) }
       k

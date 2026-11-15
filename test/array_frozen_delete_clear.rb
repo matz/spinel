@@ -95,3 +95,23 @@ kk = [k1, k1, K.new(2)].freeze
 t("eq hits in a row") { kk.delete(K.new(1)) }
 kb = [ks, 1]
 t("boxed eq hit") { kb[0].delete(K.new(2)) }
+
+# an == that freezes the Array during delete: delete raises at its first
+# write and leaves the Array as it was; with no write it answers nil
+class Ice
+  def initialize(arr, hit) = (@arr = arr; @hit = hit)
+  def ==(o)
+    @arr.freeze
+    @hit
+  end
+end
+def iced(hits)
+  arr = []
+  hits.each { |h| arr << (h.nil? ? O : Ice.new(arr, h)) }
+  arr
+end
+[[true], [true, nil], [nil, true], [false, nil]].each do |hits|
+  arr = iced(hits)
+  t("freeze in == #{hits.inspect}") { arr.delete(:needle).class }
+  p [arr.size, arr.frozen?]
+end

@@ -45,6 +45,19 @@ typedef struct IcCall {
    table and the tables. */
 int ic_node_calls(Compiler *c, int id, IcCall *out, int max);
 
+/* Whether node `id` makes CRuby call `name`: one of its syntax rows, or a
+   callback of its call's builtin whether or not the program defines it
+   (ic_node_calls keeps only the defined ones), or for a call of a core name
+   the table does not cover, any name CRuby calls on that side (class_side as
+   for ic_core_callback). The question of a reader that attributes a read of
+   `name` to the node. */
+int ic_node_calls_name(Compiler *c, int id, const char *name, int class_side);
+
+/* Whether a node that node `id` holds directly (a child, or an element of an
+   array field) has a syntax row named `name`: an interpolation's to_s on its
+   part, a case's === on its when. Not the callbacks of a child call's builtin. */
+int ic_held_rows_name(Compiler *c, int id, const char *name);
+
 /* Whether CRuby calls a method `name` on a program's object it is handed
    (class_side 0: a method of the object's class) or on a class object it is
    handed (class_side 1: a singleton method), from some builtin or, for an
@@ -88,6 +101,7 @@ struct IcState {
   ANameHash cext;      /* the names of the methods a C extension defines: a call of one hands its values to C code */
   int has_cext;        /* the program loads a C extension */
   int obj_range;       /* some value is a Range of objects (TY_OBJ_RANGE), typed run only */
+  int obj_coll;        /* some value is an Array or a Hash whose elements may be objects, typed run only */
   unsigned char *plain;/* per class: 0 not asked, 1 not plain, 2 plain (comp_plain_class) */
   /* --dump-implicit alone: what each scope's nodes call, and the calls of
      the reachable scopes, one per name */

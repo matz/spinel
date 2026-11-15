@@ -8,6 +8,7 @@ static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
 #include "builtin_ops.h"
 #include "call_plan.h"
 #include "implied_calls.h"
+#include "method_table_check.h"
 #include "codegen_call_arms.h"
 #include "value_pos.h"
 #include <ctype.h>
@@ -8104,6 +8105,7 @@ static int case_oint_labels_typed(Compiler *c, const int *whens, int nw) {
   return 1;
 }
 static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b);
+static int operand_op_may_raise(Compiler *c, int id);
 /* One such label against the typed subject `_tN` beside its flag `_oN` */
 static void case_oint_label(Compiler *c, int cond, int t, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -8725,7 +8727,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
        read `->len` off the object'"'"'s struct (#3956). */
     if (ty_is_object(pt)) {
       int adef = -1;
-      int am = comp_deconstruct_method(c, ty_object_class(pt), &adef);
+      int am = comp_deconstruct_method(c, pat, ty_object_class(pt), &adef);
       if (am < 0 || adef < 0 || c->scopes[am].ret == TY_UNKNOWN) return 0;
       TyKind art = c->scopes[am].ret;
       const char *acn = c->classes[adef].c_name;
@@ -8893,7 +8895,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
          the method, while `case`/`in` against the same object compiled
          (#3956). */
       int ddef = -1;
-      int dm = comp_method_in_chain(c, ty_object_class(pt), "deconstruct_keys", &ddef);
+      int dm = comp_deconstruct_keys_method(c, pat, ty_object_class(pt), &ddef);
       if (dm >= 0 && ddef >= 0 && c->scopes[dm].ret != TY_UNKNOWN) {
         TyKind drt = c->scopes[dm].ret;
         const char *dcn = c->classes[ddef].c_name;
@@ -9473,6 +9475,14 @@ typedef struct { int msg, key, lbl, bail; } PmDiag;
 static int pm_diag_lit_bound(const NodeTable *nt, int n) {
   return n < 0 || (nt_kind(nt, n) == NK_IntegerNode);
 }
+/* Class ci's own class method `===` as the owner of the constant pattern or condition cnode asks it: the
+   node that holds the row (the pattern, `in` or `when` above it). */
+static int pm_own_cmethod_eqq(Compiler *c, int cnode, int ci) {
+  MtabMark mt_was = mtab_push_row_owner(c, cnode, "===");
+  int mi = class_own_cmethod_eqq(c, ci);
+  mtab_pop(c, mt_was);
+  return mi;
+}
 static int pm_diag_ok(Compiler *c, int pat) {
   const NodeTable *nt = c->nt;
   if (pat < 0) return 1;
@@ -9486,7 +9496,7 @@ static int pm_diag_ok(Compiler *c, int pat) {
      for the message: the plain subject-only message is raised instead */
   case NK_ConstantReadNode: case NK_ConstantPathNode: {
     int ci = const_node_class_index(c, pat);
-    return ci < 0 || class_own_cmethod_eqq(c, ci) < 0;
+    return ci < 0 || pm_own_cmethod_eqq(c, pat, ci) < 0;
   }
   default:
     break;
@@ -9865,15 +9875,15 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
    the call from being reached, and a failed guard still reuses the answer. */
 static int emit_pm_array_cache(Compiler *c, TyKind pt, const int *conds, int cn, int indent, Buf *b) {
   if (!ty_is_object(pt)) return -1;
-  int dm = comp_deconstruct_method(c, ty_object_class(pt), NULL);   /* the method the arm calls */
-  if (dm < 0 || !ty_is_array(c->scopes[dm].ret)) return -1;
-  int arrays = 0;
+  int arrays = 0, first = -1;
   for (int w = 0; w < cn; w++) {
     int guard = -1, neg = 0;
     int pat = pm_unwrap_guard(c->nt, nt_ref(c->nt, conds[w], "pattern"), &guard, &neg);
-    if (nt_kind(c->nt, pat) == NK_ArrayPatternNode) arrays++;
+    if (nt_kind(c->nt, pat) == NK_ArrayPatternNode && arrays++ == 0) first = pat;
   }
   if (arrays < 2) return -1;
+  int dm = comp_deconstruct_method(c, first, ty_object_class(pt), NULL);   /* the method the arms call */
+  if (dm < 0 || !ty_is_array(c->scopes[dm].ret)) return -1;
   int t = ++g_tmp;
   emit_indent(b, indent); emit_ctype(c, c->scopes[dm].ret, b);
   buf_printf(b, " _t%d = NULL; ", t);
@@ -10005,7 +10015,7 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
     else if (ty_is_object(pt) && sp_streq(pty, "ArrayPatternNode")) {
       int isv = c->classes[ty_object_class(pt)].is_value_type;
       int ddef = -1;
-      int dm = comp_deconstruct_method(c, ty_object_class(pt), &ddef);
+      int dm = comp_deconstruct_method(c, pat, ty_object_class(pt), &ddef);
       if (dm >= 0) {
         TyKind rrt = (TyKind)c->scopes[dm].ret;
         TyKind drt = ty_is_array(rrt) ? rrt : TY_POLY_ARRAY;
@@ -10071,7 +10081,7 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
     else if (ty_is_object(pt) && sp_streq(pty, "HashPatternNode")) {
       int isv = c->classes[ty_object_class(pt)].is_value_type;
       int ddef = -1;
-      int dm = comp_method_in_chain(c, ty_object_class(pt), "deconstruct_keys", &ddef);
+      int dm = comp_deconstruct_keys_method(c, pat, ty_object_class(pt), &ddef);
       if (dm >= 0) {
         TyKind rrt = (TyKind)c->scopes[dm].ret;
         TyKind drt = ty_is_hash(rrt) ? rrt : TY_SYM_POLY_HASH;
@@ -10862,7 +10872,7 @@ static int case_subject_needs_root(Compiler *c, TyKind pt, const int *whens, int
   if (!needs_root(pt) || comp_ty_value_obj(c, pt)) return 0;
   for (int w = 0; w < nw; w++) {
     int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
-    for (int k = 0; k < wc; k++) if (subtree_allocates(nt, conds[k])) return 1;
+    for (int k = 0; k < wc; k++) if (subtree_allocates(c, conds[k])) return 1;
   }
   /* no operand allocates: the unrooted subject is a decision, keyed at the
      first `when` */
@@ -11091,7 +11101,7 @@ static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, i
    does (or give it boxed). The value is boxed when the method's parameter
    is. 0: no such method, or one this call cannot pass the value to. */
 int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b) {
-  int mi = class_own_cmethod_eqq(c, ci);
+  int mi = pm_own_cmethod_eqq(c, node, ci);
   if (mi < 0 || !c->scopes[mi].reachable) return 0;
   Scope *ws = &c->scopes[mi];
   LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;
@@ -11361,8 +11371,9 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
   else if (eq_family(pt) && eq_family(comp_ntype(c, cond)) && eq_family(pt) != eq_family(comp_ntype(c, cond))) {
     /* a when value of a different comparable family never matches; one
        that runs code (`when public(:m)`, `when f(x)`) still runs, as CRuby
-       evaluates it before === answers */
-    if (poly_inert(c, cond)) buf_puts(b, "0");
+       evaluates it before === answers, and an operator in it that raises
+       (`when 1 / 0`) still raises */
+    if (poly_inert(c, cond) && !operand_op_may_raise(c, cond)) buf_puts(b, "0");
     else { buf_printf(b, "((void)_t%d, (void)(", t); emit_expr_for_effect(c, cond, b); buf_puts(b, "), 0)"); }
   }
   else if (nt_kind(c->nt, cond) == NK_SplatNode) {
@@ -17574,7 +17585,7 @@ static int masgn_target_key2(const NodeTable *nt, int t) {
    operator over scalars is a CallNode to subtree_may_allocate, but `a[i % n]`
    builds nothing; what has no effect and answers a scalar is arithmetic. */
 static int masgn_part_allocates(Compiler *c, int id) {
-  if (subtree_allocates(c->nt, id)) {
+  if (subtree_allocates(c, id)) {
     if (subtree_has_side_effect(c, id)) return 1;
     TyKind t = comp_ntype(c, id);
     if (!(t == TY_INT || t == TY_FLOAT || t == TY_BOOL)) return 1;
@@ -17667,7 +17678,7 @@ static int masgn_part_plain(Compiler *c, int mw, int id, const int *lefts, int b
 /* A literal that is not built -- rodata, which no sweep touches; a Bignum
    is built. */
 static int masgn_rodata(Compiler *c, int id) {
-  return node_is_pure_literal(c->nt, id) && !subtree_allocates(c->nt, id) && comp_ntype(c, id) != TY_BIGINT &&
+  return node_is_pure_literal(c->nt, id) && !subtree_allocates(c, id) && comp_ntype(c, id) != TY_BIGINT &&
          decide_node(c->nt, id, "masgn-root", NULL);
 }
 /* The root push for a temp, after the `;` of the statement that set it, when
@@ -25844,11 +25855,11 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
          receiver and key are both reads or plain literals keeps the bare
          call: the key is held by its slot. */
       emit_indent(b, indent);
-      if (subtree_may_allocate(nt, recv) || subtree_may_allocate(nt, argv[0])) {
+      if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
         TyKind kt = ty_hash_key(rt);
         int tr = ++g_tmp, tk = ++g_tmp, tv = ++g_tmp;
         buf_printf(b, "{ %s _t%d = ", c_type_name(rt), tr); emit_expr(c, recv, b); buf_puts(b, "; ");
-        if (subtree_may_allocate(nt, recv) || subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, argv[1])) { emit_gc_root_tmp(c, rt, tr, b); buf_puts(b, " "); }
+        if (subtree_may_allocate(c, recv) || subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, argv[1])) { emit_gc_root_tmp(c, rt, tr, b); buf_puts(b, " "); }
         buf_printf(b, "%s _t%d = ", c_type_name(kt), tk); emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, "; ");
         if (operand_may_allocate(c, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, b); buf_puts(b, " "); }
         int vo = hash_store_oset(c, argv[1], rt);
@@ -26415,14 +26426,14 @@ int emit_index_opw_hoist(Compiler *c, int id, Buf *pre, int indent) {
      rebind (`(a[swap.call] += 7)`, a closure over `a`) while it allocates,
      unless a plain local nothing rebinds still holds it */
   int v = nt_ref(nt, id, "value");
-  if (subtree_may_allocate(nt, recv) || subtree_has_side_effect(c, v) ||
+  if (subtree_may_allocate(c, recv) || subtree_has_side_effect(c, v) ||
       (!subtree_is_pure_read(c, argv[0]) && !iow_recv_local_held(c, recv, argv[0], v))) {
     emit_indent(pre, indent);
     buf_printf(pre, rr.kind == RK_BOXED ? "SP_GC_ROOT_RBVAL(_t%d);\n" : "SP_GC_ROOT(_t%d);\n", ta);
   }
   emit_indent(pre, indent);
   buf_printf(pre, "%s _t%d = %s;\n", ktype, tb, kb.p ? kb.p : "0");
-  if (key_is_ptr && subtree_may_allocate(nt, argv[0])) {
+  if (key_is_ptr && subtree_may_allocate(c, argv[0])) {
     emit_indent(pre, indent);
     buf_printf(pre, sp_streq(ktype, "sp_RbVal") ? "SP_GC_ROOT_RBVAL(_t%d);\n" : "SP_GC_ROOT(_t%d);\n", tb);
   }
@@ -26603,7 +26614,7 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); iow_emit_recv(c, recv, b);
     buf_puts(b, "; ");
     if (!g_iow_recv_ref &&
-        (subtree_may_allocate(nt, recv) || (drops && !iow_recv_local_held(c, recv, argv[0], v)))) {
+        (subtree_may_allocate(c, recv) || (drops && !iow_recv_local_held(c, recv, argv[0], v)))) {
       emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " ");
     }
     /* a key that may be nil or of another class: held boxed, the read
@@ -26739,7 +26750,7 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
        neither can one that leaves a plain local receiver alone: the local's
        own root still holds the array (`h[k * 256 + s.getbyte(i)] += r`
        pushed and popped a root on every turn of a histogram loop). */
-    if (subtree_may_allocate(nt, recv) ||
+    if (subtree_may_allocate(c, recv) ||
         (!g_iow_recv_ref && (eff || !subtree_is_pure_read(c, argv[0])) &&
          !iow_recv_local_held(c, recv, argv[0], v)))
       buf_printf(b, "; SP_GC_ROOT(_t%d)", ta);
@@ -26918,7 +26929,7 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
        holder while it allocates; a plain local nothing rebinds still holds
        it (iow_recv_local_held) */
     if (!g_iow_recv_ref &&
-        (subtree_may_allocate(nt, recv) ||
+        (subtree_may_allocate(c, recv) ||
          ((!subtree_is_pure_read(c, argv[0]) || subtree_has_side_effect(c, v)) &&
           !iow_recv_local_held(c, recv, argv[0], v))))
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d)", ta);
@@ -26935,13 +26946,13 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
       Repr kt0r = repr_of(c, argv[0]);
       TyKind kt0 = kt0r.as_ty;
       if (!g_iow_key_ref && (range_boxes_new(kt0) ||
-                             ((needs_root(kt0) || kt0r.kind == RK_BOXED) && subtree_may_allocate(nt, argv[0]))))
+                             ((needs_root(kt0) || kt0r.kind == RK_BOXED) && subtree_may_allocate(c, argv[0]))))
         buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tb);
       buf_printf(b, "sp_RbVal _t%d = sp_poly_index_poly(_t%d, _t%d);", tc, ta, tb);
     }
     /* the element read (a new String for a String receiver's slice) is held
        while a right-hand side that allocates is made */
-    if (eff || subtree_may_allocate(nt, v)) buf_printf(b, " SP_GC_ROOT_RBVAL(_t%d);", tc);
+    if (eff || subtree_may_allocate(c, v)) buf_printf(b, " SP_GC_ROOT_RBVAL(_t%d);", tc);
     char *rhs = iow_rhs(c, v, IOW_RHS_BOXED, eff ? b : NULL);
     /* A String receiver splices into a fresh buffer, and a typed Array given
        an element of another kind widens to a general one: either store
@@ -27000,7 +27011,7 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
     int drops = subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, v);
     buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b);
     buf_puts(b, "; ");
-    if (subtree_may_allocate(nt, recv) || drops) { emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " "); }
+    if (subtree_may_allocate(c, recv) || drops) { emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " "); }
     /* a key that may be nil or of another class: held boxed, the read
        misses on it and a store converts it (hash_opw_okey) */
     int ok = hash_opw_okey(c, argv[0], rt);

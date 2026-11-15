@@ -1,0 +1,51 @@
+true
+false
+true
+false
+false
+1
+nil
+0
+2
+0
+1
+nil
+nil
+nil
+2,3
+undefined method 'n' for nil
+undefined method '+' for nil
+2,4
+4
+== 1,1
+== 2,2
+true
+true
+== 1,1
+0
+== 1,1
+== 2,2
+== 1,1
+2
+== 1,1
+== 2,2
+== 1,1
+false
+1
+2
+== 2,2
+nil
+true
+0
+2
+[1, 2]
+[]
+FrozenError
+2
+nil
+nil
+1
+0
+nil
+nil
+99

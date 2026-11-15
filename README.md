@@ -650,6 +650,11 @@ Adjacent ecosystem (community-built, not part of this repo):
   upstream [Lobsters](https://github.com/lobsters/lobsters) (the
   link-aggregation site behind lobste.rs) compiles and links. It also
   emits other target languages from the same analysis.
+- [awesome-spinel](https://github.com/aristotelesbr/awesome-spinel): a
+  curated list of programs, libraries and tools that run on Spinel
+  (games, web frameworks, ported gems, developer tooling), with
+  screenshots and links to live demos. Maintained by its author, not by
+  the Spinel maintainers.
 
 ## History
 

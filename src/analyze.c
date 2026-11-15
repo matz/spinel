@@ -1362,8 +1362,10 @@ void compute_reachable(Compiler *c, int typed) {
      They are marked before the census below (cr_live_collect), which
      opens the class of an exported method from the start. */
   if (g_ext_entries && *g_ext_entries) {
-    char list[2048];
-    snprintf(list, sizeof list, "%s", g_ext_entries);
+    /* a copy as long as the list: a fixed buffer cut a long one short, and
+       the cut piece read as a method name (or the entries after it were
+       dropped without a word) */
+    char *list = strdup(g_ext_entries);
     for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
       char *dot = strrchr(tok, '.');
       if (!dot) {
@@ -1382,13 +1384,13 @@ void compute_reachable(Compiler *c, int typed) {
       }
       c->scopes[mi2].is_ext_entry = 1;
     }
+    free(list);
   }
   /* --ext-class: the public instance methods of the named classes join the
      graph as roots too, for the method table the library exports */
   if (g_ext_classes && *g_ext_classes) {
     if (!sp_streq(g_ext_classes, "all")) {
-      char list[2048];
-      snprintf(list, sizeof list, "%s", g_ext_classes);
+      char *list = strdup(g_ext_classes);   /* as long as the list, as above */
       for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
         /* a path (`A::B`) names one class; a name alone names each class
            of that leaf, and two of them (A::Base, B::Base) leave the
@@ -1405,6 +1407,7 @@ void compute_reachable(Compiler *c, int typed) {
           exit(1);
         }
       }
+      free(list);
     }
     for (int ci2 = 0; ci2 < c->nclasses; ci2++) {
       if (!ext_class_exported(c, ci2)) continue;
@@ -9833,7 +9836,9 @@ static void desugar_struct_index_ctor(Compiler *c) {
 static void desugar_data_positional_new(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "new")) continue;
@@ -9841,6 +9846,7 @@ static void desugar_data_positional_new(Compiler *c) {
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
     int ci = const_node_class_index(c, recv);
+    mtab_push_in(c, id);   /* (the initialize the call runs) */
     if (ci < 0 || comp_method_in_chain(c, ci, "initialize", NULL) < 0) continue;
     int dc = ci;
     for (int g = 0; dc >= 0 && !c->classes[dc].is_data && g < 64; g++) dc = c->classes[dc].parent;
@@ -9870,6 +9876,7 @@ static void desugar_data_positional_new(Compiler *c) {
     comp_grow_node_arrays(c);
     for (int k = first; k < nt->count; k++) c->nscope[k] = sc;
   }
+  mtab_pop(c, mt_pass);
 }
 
 /* Does Struct class `cls` have a member named `nm`? Its accessor is the
@@ -9887,7 +9894,7 @@ static void synth_struct_each(Compiler *c) {
     ClassInfo *cls = &c->classes[ci];
     /* Data is not Enumerable: each/each_pair/each_with_index are Struct's */
     if (!cls->is_struct || cls->is_data || cls->nmembers == 0) continue;
-    if (comp_method_in_class(c, ci, "each") >= 0) continue;
+    if (call_target(c, -1, ci, "each", CT_OWN | CT_SHARED, NULL) >= 0) continue;
     /* a member of an iterator's name is read by its accessor, which the
        struct defines over the one it inherits (#8203) */
     if (!struct_has_member(cls, "each")) {
@@ -9920,7 +9927,7 @@ static void synth_struct_each(Compiler *c) {
     walk_scope(c, body, c->nscopes - 1, ci);
     }
     /* def each_pair; yield :m1, @m1; ...; self; end */
-    if (comp_method_in_class(c, ci, "each_pair") < 0 && !struct_has_member(cls, "each_pair")) {
+    if (call_target(c, -1, ci, "each_pair", CT_OWN | CT_SHARED, NULL) < 0 && !struct_has_member(cls, "each_pair")) {
       int pst[65]; int pn = 0;
       for (int j = 0; j < cls->nmembers && pn < 64; j++) {
         int sy = nt_new_node(nt, "SymbolNode");
@@ -9957,7 +9964,7 @@ static void synth_struct_each(Compiler *c) {
     /* def each_with_index; yield @m1, 0; yield @m2, 1; ...; self; end
        (returns the receiver, unlike the __enum_to_a redirect which would
        return the flat member array). The index is a literal per member. */
-    if (comp_method_in_class(c, ci, "each_with_index") < 0 && !struct_has_member(cls, "each_with_index")) {
+    if (call_target(c, -1, ci, "each_with_index", CT_OWN | CT_SHARED, NULL) < 0 && !struct_has_member(cls, "each_with_index")) {
       int wst[65]; int wn = 0;
       for (int j = 0; j < cls->nmembers && wn < 64; j++) {
         int ivr = nt_new_node(nt, "InstanceVariableReadNode");
@@ -10108,7 +10115,7 @@ static void synth_enum_to_a(Compiler *c) {
           /* a class that mixes Enumerable in still gets the materializer even
              when its #each never yields: the mixin is simply empty (#3755) */
           an_class_includes_enumerable(c, m->class_id))) continue;
-    if (comp_method_in_class(c, m->class_id, "__enum_to_a") >= 0) continue;
+    if (call_target(c, -1, m->class_id, "__enum_to_a", CT_OWN | CT_SHARED, NULL) >= 0) continue;
     /* a module's methods are compiled into each class that includes it,
        which gets its own materializer; the module has no instances, and
        one of its own called methods that exist only in those copies */
@@ -10128,7 +10135,7 @@ static void synth_enum_to_a(Compiler *c) {
        only at run time: Enumerable packs only a yield of several values, so
        the collector takes them all as a rest and packs by the count */
     int ymany = 0, yone = 0, ysplat = 0;
-    { int esi = comp_method_in_class(c, cls[k], "each");
+    { int esi = call_target(c, -1, cls[k], "each", CT_OWN | CT_SHARED, NULL);
       if (esi >= 0)
         for (int nid = 0; nid < nt->count; nid++) {
           if (c->nscope[nid] != esi) continue;
@@ -10350,7 +10357,7 @@ static void synth_to_enum_generators(Compiler *c) {
     for (int k = 0; k < nnames; k++) if (sp_streq(names[k], m->name)) { hit = 1; break; }
     if (!hit) continue;
     char hname[160]; snprintf(hname, sizeof hname, "__to_enum_%s", m->name);
-    if (comp_method_in_class(c, m->class_id, hname) >= 0) continue;   /* already synthesized */
+    if (call_target(c, -1, m->class_id, hname, CT_OWN | CT_SHARED, NULL) >= 0) continue;   /* already synthesized */
     int dup = 0;
     for (int k = 0; k < ntr; k++)
       if (tc[k] == m->class_id && sp_streq(tm[k], m->name)) { dup = 1; break; }
@@ -14834,8 +14841,11 @@ int desugar_enum_method_recv(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     const char *nm = nt_str(nt, id, "name");
     /* a method the program defines on Enumerator answers the call itself:
        the hops below would hand it to the element array's builtin */
@@ -15193,6 +15203,7 @@ int desugar_enum_method_recv(Compiler *c) {
     c->nscope[wrap] = c->nscope[id];
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 
@@ -16748,8 +16759,9 @@ static int oa_vetted_literal(Compiler *c, int node, int rows) {
   return en > 0;
 }
 /* The filters: 1 for reject!, select! and filter!, which answer the array
-   or nil, and 2 for select, filter and reject, which answer a new array of
-   the same elements. The block takes the element as one plain parameter, or
+   or nil, and for delete_if and keep_if, which answer the array, and 2 for
+   select, filter and reject, which answer a new array of the same
+   elements. The block takes the element as one plain parameter, or
    none, and is not a block whose parameters desugar_builtin_iter_block_shapes
    lowered; 0 for any other call. */
 static int oa_filter_call(Compiler *c, int id) {
@@ -16762,7 +16774,7 @@ static int oa_filter_call(Compiler *c, int id) {
   if (nt_int(nt, blk, "bs_lowered", 0)) return 0;
   if (block_param_name(c, blk, 1) || block_param_is_multi(c, blk, 0) || block_opt_name(c, blk, 0) ||
       block_post_name(c, blk, 0) || block_keyword_name(c, blk, 0) || block_rest_marker(c, blk)) return 0;
-  if (is_select_reject_bang(nm)) return 1;
+  if (is_select_reject_bang(nm) || sp_streq(nm, "delete_if") || sp_streq(nm, "keep_if")) return 1;
   if (is_select_alias(nm) || sp_streq(nm, "reject")) return 2;
   return 0;
 }
@@ -17035,6 +17047,11 @@ static int oa_walk_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *clai
   if (!fold && !(name && is_map_alias(name)) && !(id < nc && walk_disc[id])) sl[S].row_iter |= 8;
   return 1;
 }
+/* delete, include?, index and count with a value, and their aliases */
+static int oa_search_name(const char *nm) {
+  return sp_streq(nm, "delete") || is_membership_alias(nm) || sp_streq(nm, "index") ||
+         sp_streq(nm, "find_index") || sp_streq(nm, "count");
+}
 static int oa_recv_op_ok(const char *nm, int argc, int has_block) {
   if (!nm || has_block) return 0;
   if ((is_element_at_alias(nm)) && argc == 1) return 1;
@@ -17047,6 +17064,8 @@ static int oa_recv_op_ok(const char *nm, int argc, int has_block) {
      an Integer index (step 4 checks the type), and clear the array itself */
   if ((sp_streq(nm, "pop") || sp_streq(nm, "shift") || sp_streq(nm, "clear")) && argc == 0) return 1;
   if (sp_streq(nm, "delete_at") && argc == 1) return 1;
+  /* the searches, which compare each element with == */
+  if (oa_search_name(nm) && argc == 1) return 1;
   /* no-block comparisons: usable when the element class has `<=>` (the
      needs_cmp bit, checked at component resolution). sort's RESULT must
      also land in a modeled place (slot alias or statement position) --
@@ -17475,12 +17494,13 @@ static int narrow_int_table_ivars(Compiler *c, int in_round) {
           int ua = nt_ref(nt, u, "arguments"); int uan = 0;
           if (ua >= 0) nt_arr(nt, ua, "arguments", &uan);
           /* sort/min/max need the boxed comparator, which this element kind
-             has no arm for, and the removals are typed only for an object
-             array: leave those tables alone */
+             has no arm for, and the removals and the searches are typed
+             only for an object array: leave those tables alone */
           if (un && (sp_streq(un, "sort") || sp_streq(un, "sort!") ||
                      sp_streq(un, "min") || sp_streq(un, "max") ||
                      sp_streq(un, "pop") || sp_streq(un, "shift") ||
-                     sp_streq(un, "clear") || sp_streq(un, "delete_at"))) { used = 0; break; }
+                     sp_streq(un, "clear") || sp_streq(un, "delete_at") ||
+                     oa_search_name(un))) { used = 0; break; }
           if (!oa_recv_op_ok(un, uan, nt_ref(nt, u, "block") >= 0)) { used = 0; break; }
           /* what a store puts in the table is a row: a boxed value or another
              kind would be taken as a bare sp_IntArray *. A value not typed
@@ -18244,6 +18264,9 @@ static int oa_value_dropped(Compiler *c, int id) {
   VpUpKind ended = vp_climb(nt, par, id, AN_DROP_CLIMB, &up);
   if (up.reach) return 0;
   if (ended == VPU_DROPPED || vp_up_loop(nt, &up) >= 0) return 1;
+  /* the last statement of the program or of a file it requires: nothing
+     reads a file's value */
+  if (ended == VPU_ENDED && nt_kind(nt, up.parent) == NK_ProgramNode) return 1;
   if (vp_up_effect_clause(nt, &up)) return 1;
   int call = vp_up_block_call(nt, par, &up);
   return call >= 0 && oa_ignores_block_value(c, call);
@@ -18604,7 +18627,8 @@ static int oa_component_narrows(Compiler *c, const OAS *s) {
   /* a nested scalar array: the codegen supports index/push/[]=/length/
      first/last but not the boxed sort/min/max comparators yet, so a
      component that used those (needs_cmp) stays on the poly path for now,
-     and so does one that used pop, shift, delete_at, clear or a filter (removes).
+     and so does one that used pop, shift, delete_at, clear, a search or a
+     filter (removes).
      A boxed element stored as a row stays there too: an object element
      is unboxed with a class check, but a row is taken as a bare pointer,
      and a boxed poly array read back through the table as an
@@ -18629,6 +18653,62 @@ static int oa_elem_from_undo(Compiler *c, OAS *sl) {
   return undone;
 }
 
+/* Does parameter plv of the method def node `def` go nowhere but the
+   method's value: never written, and every read of it the body's last value?
+   Answers 0 on any other use, another parameter's default and a block's
+   included, on a zsuper (which hands every parameter on), and on a tree
+   deeper than the walk follows. */
+static int oa_param_use_ok(Compiler *c, const int *par, int def, LocalVar *plv, int id, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 1;
+  if (depth > 400) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_ForwardingSuperNode) return 0;
+  if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
+      k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableOrWriteNode) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && scope_local(&c->scopes[c->nscope[id]], nm) == plv) {
+      if (k != NK_LocalVariableReadNode) return 0;
+      VpUp up;
+      if (vp_climb(nt, par, id, VPS_NONE, &up) != VPU_ENDED || vp_up_def(nt, &up) != def) return 0;
+    }
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (!oa_param_use_ok(c, par, def, plv, nt_ref_at(nt, id, i), depth + 1)) return 0;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int an = 0;
+    const int *ids = nt_arr_at(nt, id, i, &an);
+    for (int j = 0; j < an; j++)
+      if (!oa_param_use_ok(c, par, def, plv, ids[j], depth + 1)) return 0;
+  }
+  return 1;
+}
+/* Call id hands a slot to parameter plv of method mi, which no slot models
+   (an untyped parameter, `def make_shareable(obj) = obj` called with a
+   table and with an Array of Strings): the slot goes nowhere when the
+   parameter goes nowhere but mi's value and the call throws that away
+   (oa_value_dropped). */
+static int oa_arg_dropped(Compiler *c, int id, int mi, LocalVar *plv) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  int def = c->scopes[mi].def_node;
+  const char *mn = comp_scope_user_name(&c->scopes[mi]);
+  /* only an untyped parameter, which takes the table boxed: one of another
+     kind (an Array an RBS signature pins, say) asks for a conversion */
+  if (def < 0 || !mn || plv->type != TY_POLY) return 0;
+  /* the def's own nodes must read this parameter: a method include or
+     `extend self` copied into another scope keeps the def, whose reads
+     name the original's local, and the walk below would see none of the
+     copy's */
+  int body = nt_ref(nt, def, "body");
+  if (body < 0 || scope_local(&c->scopes[c->nscope[body]], plv->name) != plv) return 0;
+  /* the program gives no other method of the name (an override, a class
+     method beside it, a define_method, an alias, a name it computes) */
+  return oa_value_dropped(c, id) && an_prog_never_gives(mn, 1) &&
+         oa_param_use_ok(c, par, def, plv, def, 0);   /* (the parameters' defaults too) */
+}
 /* Interprocedural edges of call id, whose target narrow_object_arrays
    resolved to method oa_tmi (-1: unattributable). A PARAM slot may only
    narrow when EVERY argument reaching it is a same-component candidate
@@ -18717,6 +18797,7 @@ static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const
     while (pk < M->nparams && layout_plain_arg(c, M, argv, &L, pk) != a) pk++;
     LocalVar *plv = pk < M->nparams && M->pnames[pk] ? scope_local(M, M->pnames[pk]) : NULL;
     int T = plv ? oa_find(sl, n, oa_tmi, plv) : -1;
+    if (T < 0 && plv && oa_arg_dropped(c, id, oa_tmi, plv)) { claimed[a] = 1; continue; }
     if (T < 0) { sl[S].alive = 0; continue; }
     claimed[a] = 1;
     oa_uf_union(sl, S, T);
@@ -18863,12 +18944,13 @@ static void oa_recv_use(Compiler *c, OAS *sl, int S, int id, int recv, const int
          an element no slot sees */
       if (!(id < nc && value_ok[id])) sl[S].alive = 0;
     }
-    /* the removals have emitters for an object array only (the
-       removes bit, checked at component resolution). clear answers the
-       array, so like an append it must land in a modeled consumer, and
-       the emitter reads delete_at's index as a C integer. */
+    /* the removals and the searches have emitters for an object array
+       only (the removes bit, checked at component resolution). clear
+       answers the array, so like an append it must land in a modeled
+       consumer, and the emitter reads delete_at's index as a C integer. */
     else if (name && (sp_streq(name, "pop") || sp_streq(name, "shift") ||
-                      sp_streq(name, "clear") || sp_streq(name, "delete_at"))) {
+                      sp_streq(name, "clear") || sp_streq(name, "delete_at") ||
+                      oa_search_name(name))) {
       sl[S].removes = 1;
       if (sp_streq(name, "clear") && !(id < nc && value_ok[id])) sl[S].alive = 0;
       /* (a boxed index too, which the emitter takes as an Integer the way
@@ -19119,31 +19201,23 @@ static int oa_masgn_call_of(const NodeTable *nt, const int *par, int tgt) {
 }
 /* Multi-write mw takes a tuple of en elements apart and throws its value
    away: en plain targets on the left, no splat and none after it, and a
-   value nothing reads (a statement before its list's last, a loop body, an
-   ensure clause, the program's last statement). A method's or a block's
-   last statement hands the tuple on. */
-static int oa_masgn_takes_apart(const NodeTable *nt, const int *par, int mw, int en) {
+   value nothing reads (oa_value_dropped). A method's last statement, or a
+   block's whose call reads its value, hands the tuple on. */
+static int oa_masgn_takes_apart(Compiler *c, int mw, int en) {
+  const NodeTable *nt = c->nt;
   int ln = 0, rn = 0;
   nt_arr(nt, mw, "lefts", &ln);
   nt_arr(nt, mw, "rights", &rn);
   if (ln != en || rn != 0 || nt_ref(nt, mw, "rest") >= 0) return 0;
-  VpUp up;
-  switch (vp_climb(nt, par, mw, VPS_NONE, &up)) {
-  case VPU_DROPPED:
-  case VPU_ROOT:
-    return 1;
-  case VPU_ENDED:
-    return vp_up_loop(nt, &up) >= 0 || vp_up_effect_clause(nt, &up) || nt_kind(nt, up.parent) == NK_ProgramNode;
-  default:
-    return 0;
-  }
+  return oa_value_dropped(c, mw);
 }
 /* Call id of a method answering a tuple of en elements is taken apart where
    it lands: the value of a multi-write that takes it apart (above). */
-static int oa_call_taken_apart(const NodeTable *nt, const int *par, int id, int en) {
+static int oa_call_taken_apart(Compiler *c, const int *par, int id, int en) {
+  const NodeTable *nt = c->nt;
   int mw = par[id];
   return mw >= 0 && nt_kind(nt, mw) == NK_MultiWriteNode && nt_ref(nt, mw, "value") == id &&
-         oa_masgn_takes_apart(nt, par, mw, en);
+         oa_masgn_takes_apart(c, mw, en);
 }
 /* The slot a multi-write's local or constant target writes, or -1. */
 static int oa_target_slot(Compiler *c, OAS *sl, int n, int t) {
@@ -19215,7 +19289,7 @@ static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, 
         if (id != c->scopes[sl[R].sidx].def_node) tup_en[R] = -1;
         continue;
       }
-      if (k != NK_CallNode || call_ret[id] != R || !oa_call_taken_apart(nt, par, id, tup_en[R]) ||
+      if (k != NK_CallNode || call_ret[id] != R || !oa_call_taken_apart(c, par, id, tup_en[R]) ||
           (dead && dead[id])) tup_en[R] = -1;
     }
   }
@@ -35431,7 +35505,9 @@ static int struct_new_member_arg(Compiler *c, int u, int ci, int a) {
 static int promote_ivar_handle_stores(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, u) {
+    mtab_push_in(c, u);   /* (what the call's name asks of the tables is the call's) */
     const char *nm = nt_str(nt, u, "name");
     int recv = nt_ref(nt, u, "receiver");
     if (!nm || recv < 0 || nt_ref(nt, u, "block") >= 0) continue;
@@ -35462,6 +35538,7 @@ static int promote_ivar_handle_stores(Compiler *c) {
       if (v >= 0) changed |= dyn_pull_arg(c, v, 1);
     }
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 /* Pull the String variables a call gathers into a rest whose elements the
@@ -37033,7 +37110,7 @@ static const PdnEnt *pdn_lookup(Compiler *c, const char *cn) {
       e->sc = g; e->sc[e->nsc++] = si;
     }
   for (int ci = 0; ci < c->nclasses; ci++)
-    if (comp_reader_in_chain(c, ci, cn, NULL)) {
+    if (call_attr_target(c, -1, ci, cn, CT_ATTR | CT_SHARED, NULL)) {
       int *g = realloc(e->cls, sizeof(int) * (size_t)(e->ncl + 1));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       e->cls = g; e->cls[e->ncl++] = ci;
@@ -44963,8 +45040,11 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
 }
 void expand_static_splat_args(Compiler *c, int from, int count) {
   NodeTable *nt = (NodeTable *)c->nt;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = from; id < count; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     int an = nt_ref(nt, id, "arguments");
     if (an < 0) continue;
     int argc = 0; const int *argv0 = nt_arr(nt, an, "arguments", &argc);
@@ -45138,6 +45218,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     comp_grow_node_arrays(c);
     c->nscope[na] = c->nscope[id];
   }
+  mtab_pop(c, mt_pass);
 }
 
 /* The names the program gives a method taking no keywords by an alias, a
@@ -48149,8 +48230,11 @@ static void rewrite_array_subclass_calls(Compiler *c) {
   if (!c->has_arysub) return;
   const NodeTable *nt = c->nt;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     NodeKind k = nt_kind(nt, id);
+    if (k == NK_CallNode) mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     if (k == NK_CallNode) arysub_builtin_alias_recv_call(c, id);
     /* where an Array is wanted, an Array subclass instance is read as its
        Array (infer_type, emit_expr): a splat's operand, a destructured value,
@@ -48219,6 +48303,7 @@ static void rewrite_array_subclass_calls(Compiler *c) {
       if (nt_kind(nt, id) == NK_CallNode) rewrite_time_maker_class_local(c, id);
     }
   }
+  mtab_pop(c, mt_pass);
   if (nt->count > n0) {
     int m0 = nt->count;
     expand_static_splat_args(c, n0, nt->count);
@@ -49680,15 +49765,16 @@ static void desugar_literal_const_get(Compiler *c) {
 /* A step of an analysis phase: `call` runs with the pass's name `nm` on the
    node table, the name the nodes it appends are named after (nt_set_pass).
    The name before the step is back after it, so a step inside a step names
-   what it appends itself. AN_STEP is an int expression, AN_STEP_V a
+   what it appends itself; so is the check's node frame (--method-table-check), which a pass
+   that returns from inside a node loop leaves set. A bracket a step leaves open is reported. AN_STEP is an int expression, AN_STEP_V a
    statement. The phase lists call their passes through these rather than
    through AN_PASS, whose memo boundaries, tree skip and --timing rows are
    the fixpoint's: around the phase lists' calls they would change what the
    memo keeps, which passes run, and the --timing report. */
-#define AN_STEP(nm, call) ({ const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); int _str = (call); \
-  nt_set_pass((NodeTable *)c->nt, _stp); _str; })
-#define AN_STEP_V(nm, call) do { const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); call; \
-  nt_set_pass((NodeTable *)c->nt, _stp); } while (0)
+#define AN_STEP(nm, call) ({ const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); MtabMark _stm = mtab_save(c); int _str = (call); \
+  mtab_step_end(c, _stm, (nm)); nt_set_pass((NodeTable *)c->nt, _stp); _str; })
+#define AN_STEP_V(nm, call) do { const char *_stp = nt_set_pass((NodeTable *)c->nt, (nm)); MtabMark _stm = mtab_save(c); call; \
+  mtab_step_end(c, _stm, (nm)); nt_set_pass((NodeTable *)c->nt, _stp); } while (0)
 
 /* `&(expr)`: the parentheses carry no meaning for a block argument, but they
    hide the expression from every shape check downstream (`&blk` as a proc
@@ -50954,7 +51040,7 @@ static int ur_iter_overridden(Compiler *c, const char *it) {
     int contained = 0;
     for (int a = k, d = 0; a >= 0 && d < 64 && !contained; a = c->classes[a].parent, d++)
       contained = c->classes[a].name && str_in(c->classes[a].name, builtins);
-    if (contained && comp_method_in_chain(c, k, it, NULL) >= 0) return 1;
+    if (contained && call_target(c, -1, k, it, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
   }
   return 0;
 }
@@ -54157,14 +54243,15 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
       if (by)   /* the request is not applied, and the C is as without it */
         fprintf(stderr, "spinel: %s: warning: inline RBS: the type of %s %s is not applied: Array[%s] "
                         "stays a boxed array; every use of it must be one the unboxed array supports "
-                        "([], []=, push, pop, shift, delete_at, clear, length, empty?, first, last, min, "
-                        "max, sort) from the class's own instance methods or its attr_reader\n",
+                        "([], []=, push, pop, shift, delete_at, clear, delete, include?, index, count, "
+                        "length, empty?, first, last, min, max, sort) from the class's own instance "
+                        "methods or its attr_reader\n",
                 byp->head, cl->name, cl->ivars[iv], asked);
       else
         fprintf(stderr, "warning: --rbs: %s %s: Array[%s] stays a boxed array; every use of it must be "
                         "one the unboxed array supports ([], []=, push, pop, shift, delete_at, clear, "
-                        "length, empty?, first, last, min, max, sort) from the class's own instance "
-                        "methods or its attr_reader\n",
+                        "delete, include?, index, count, length, empty?, first, last, min, max, sort) "
+                        "from the class's own instance methods or its attr_reader\n",
                 cl->name, cl->ivars[iv], asked);
     }
   }

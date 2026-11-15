@@ -5087,7 +5087,7 @@ else {
          are: a key that can allocate goes into a rooted temp ahead of the
          value's build, as the store arm's does. */
       int tk = -1;
-      if (ty_is_hash(ht) && subtree_may_allocate(nt, key)) {
+      if (ty_is_hash(ht) && subtree_may_allocate(c, key)) {
         TyKind kt = ty_hash_key(ht);
         tk = ++g_tmp;
         buf_printf(g_pre, "{ %s _t%d = %s; ", c_type_name(kt), tk, kb.p ? kb.p : "");
@@ -6830,7 +6830,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
          when it can allocate, as the statement form does. */
       int drops = subtree_has_side_effect(c, iav[0]) || subtree_has_side_effect(c, iv);
       buf_printf(b, "({ %s _t%d = ", c_type_name(irt), ta2); emit_expr(c, ir, b); buf_puts(b, "; ");
-      if (subtree_may_allocate(c->nt, ir) || drops) { emit_gc_root_tmp(c, irt, ta2, b); buf_puts(b, " "); }
+      if (subtree_may_allocate(c, ir) || drops) { emit_gc_root_tmp(c, irt, ta2, b); buf_puts(b, " "); }
       /* a key that may be nil or of another class: held boxed, the read
          misses on it and the store converts it (hash_opw_okey) */
       int ok = hash_opw_okey(c, iav[0], irt);

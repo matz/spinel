@@ -1214,8 +1214,10 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
        and the top level's def is open to the call */
     /* (a class that answers the name without a method scope, an attribute
        or a Struct member, leaves the plan unbound too: its instance in the
-       box takes its own, so the call stays the dispatch it was) */
-    if (p->mi < 0 && !builtin_name_below_object(name) && !any_class_responds(c, name)) {
+       box takes its own, so the call stays the dispatch it was. Such a
+       class is one of the name's candidates, which the plan already holds:
+       no table is read for it.) */
+    if (p->mi < 0 && !builtin_name_below_object(name) && !npc) {
       int cell, tm = cplan_root_top_def(c, id, name, core_class_name(CORE_OBJECT), &cell);
       if (tm >= 0) {
         cplan_set(p, tm, c->scopes[tm].class_id, UC_REOPEN, CP_DIRECT);
@@ -1292,8 +1294,9 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
 static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
   NodeKind k = nt_kind(c->nt, id);
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) cplan_resolve_super(c, id, p);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) cplan_resolve_super(c, id, p);   /* (its reads stay the super family's to convert) */
   else if (k == NK_CallNode) {
+    MtabMark mt_was = mtab_push_in(c, id);   /* (what the resolution asks of the tables is the call's) */
     cplan_resolve_call(c, id, p);
     p->answers_receiver = p->via == UC_CMETH && cmethod_receiver_class(c, p->mi, p->owner_ci) >= 0;
     int recv = nt_ref(c->nt, id, "receiver");
@@ -1304,6 +1307,7 @@ static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
       int mi = call_target(c, id, -1, name, CT_TOP, NULL);
       if (mi >= 0 && !c->scopes[mi].yields) p->send_fallback = mi;
     }
+    mtab_pop(c, mt_was);
   }
 }
 
@@ -3693,6 +3697,16 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
      instance method too, as a receiverless call does: a module function */
   if (flags & CT_CMETHOD) return comp_cmethod_in_chain(c, cls, name, def_class);
   if (flags & CT_CAPTURE) return comp_self_method_in_chain(c, cls, name, def_class);
+  if (flags & CT_ATTR) {
+    char base[256];
+    int adc = -1, wr = (flags & CT_WRITER) && setter_base_name(name, base, sizeof base);
+    if (wr ? comp_writer_in_chain(c, cls, base, &adc) : comp_reader_in_chain(c, cls, name, &adc)) {
+      *attr = 1;
+      if (def_class) *def_class = adc;
+    }
+    return -1;
+  }
+  if (flags & CT_METHODS) return comp_method_in_chain(c, cls, name, def_class);
   return ct_member(c, cls, name, flags, def_class, attr);
 }
 /* The method call id runs on candidate pc of its boxed dispatch: the
@@ -3843,7 +3857,9 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     snprintf(setter, sizeof setter, "%s=", name);
     name = setter;
   }
-  mtab_enter(c);
+  /* (a no-site ask of a reader the call sites share, made while a node's frame is open: its read stays that node's) */
+  int open = !((flags & CT_SHARED) && id < 0 && mtab_framed(c));
+  if (open) mtab_enter(c);
   flags = ct_vis_flags(c, id, flags);
   *ml = (MethodLookup){ .def_class = dc0 };
   if (ct_send_shadow(c, id, name)) {
@@ -3924,7 +3940,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_ENTRY;
     ml->why = 0;
   }
-  mtab_leave(c);
+  if (open) mtab_leave(c);
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;
 }
@@ -4654,11 +4670,13 @@ static void ct_landing_classes(Compiler *c, int id, CtLanding at, const char *nm
     /* a name a call may run ahead of (elab_method_late) has its entries made
        per class the call meets (ver_absent_note), a holder's descendant or
        includer among them: each class its boxed dispatch takes an arm for,
-       on either side, as the arms ask (cplan_cand_target). Asked once the
-       entries' build is over, when those are noted (and the candidates'
-       lists are kept, the scope index frozen); the build's own asks need
-       the holders alone */
-    if (c->ver_built && elab_method_late(c, nm)) {
+       on either side, as the arms ask (cplan_cand_target). So has a name
+       whose window spans two versions on a class that holds none of them
+       (a subclass that inherits a method its parent redefines later): the
+       span's entry for that class. Asked once the entries' build is over,
+       when those are noted (and the candidates' lists are kept, the scope
+       index frozen); the build's own asks need the holders alone */
+    if (c->ver_built && ct_version_named(c, nm)) {
       int npc = 0;
       const PolyCand *pcs = comp_poly_candidates_at(c, id, nm, &npc);
       for (int i = 0; i < npc; i++) fn(c, id, nm, pcs[i].cls, 0, arg);
@@ -7720,6 +7738,7 @@ static void cpoly_defaults0(Compiler *c, int id, const char *name, const PolySpe
    its arms answer into. An OpenStruct member read makes an untyped call
    poly; emission reads these flags and the adjusted result type. */
 static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, PolySpecials0 *out) {
+  MtabMark mt_was = mtab_push_in(c, id);   /* (a part of an interpolation is asked under its parent's frame) */
   PolySpecials0 ps;
   poly_specials0(c, id, name, &ps);
   *out = ps;
@@ -7744,6 +7763,7 @@ static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, Pol
              (poly_key_prim(c, id, name, 0, -1, 0, -1) ? PPF_KEY_PRIM : 0) |
              (cpoly_key_clsv(c, id, name) ? PPF_KEY_CLSV : 0) |
              (poly_exc_cand(c, name) ? PPF_KEY_EXC : 0);
+  mtab_pop(c, mt_was);
 }
 
 static void cpoly_resolve(Compiler *c, int id, PolyPlan *p, int full) {
@@ -10462,8 +10482,9 @@ void ver_entries_build(Compiler *c) {
     /* (a module's own guarded copy, of a late include into a reopened
        module, is emitted only as its includers' clones, which carry the
        guard and get entries of their own: one on the module would call a
-       copy that no function is emitted for) */
-    if (m->class_id >= 0 && comp_class_is_module(c, &c->classes[m->class_id])) continue;
+       copy that no function is emitted for; a singleton prepend's copy is
+       the module's own class method, called on the module itself) */
+    if (m->class_id >= 0 && !m->is_cmethod && comp_class_is_module(c, &c->classes[m->class_id])) continue;
     const char *name = comp_scope_user_name(m);
     if ((m->is_cmethod ? comp_cmethod_in_class(c, m->class_id, name) : comp_method_in_class(c, m->class_id, name)) != s) continue;
     if (!(ngc & (ngc - 1)) && !(gc = realloc(gc, sizeof *gc * (size_t)(ngc ? 2 * ngc : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

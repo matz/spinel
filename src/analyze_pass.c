@@ -8,6 +8,7 @@
 #include "repr.h"
 #include "holder.h"
 #include "share.h"
+#include "method_table_check.h"
 int callee_has_kwarg(Compiler *c, Scope *m, const char *name);
 int callee_declares_kwargs(Compiler *c, Scope *m);
 int callee_param_is_declared_kwarg(Compiler *c, Scope *m, const char *name);
@@ -1157,7 +1158,7 @@ int case_in_lambda_param(Compiler *c, int lam) {
   if (lambda_body_jumps(nt, body, 0)) return -1;
   /* a body that writes its parameter keeps master's path: the parameter is typed from the subject */
   if (subtree_writes_var(c, body, nt_str(nt, reqs[0], "name"), VW_LOCAL)) return -1;
-  int pci = comp_class_index(c, "Proc"), dc = -1;
+  int pci = comp_builtin_class_named(c, "Proc"), dc = -1;
   if (pci >= 0 && comp_method_in_chain(c, pci, "===", &dc) >= 0 && dc >= 0) {
     const char *dn = c->classes[dc].name;
     if (!dn || !builtin_answers_ahead_of("Proc", "===", dn)) return -1;
@@ -3349,7 +3350,7 @@ static int boxed_store_hash_subclass_evidence(Compiler *c, TyKind kt, TyKind vt)
   int changed = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].ary_hash || comp_ary_root(c, k) != k) continue;
-    if (comp_method_in_chain(c, k, "[]=", NULL) >= 0) continue;
+    if (call_target(c, -1, k, "[]=", CT_METHODS | CT_SHARED, NULL) >= 0) continue;
     TyKind was = c->classes[k].ary_kind, now = was;
     if (now == TY_UNKNOWN) continue;
     fold_evidence(&now, 0, 0, kt, vt);
@@ -7411,7 +7412,10 @@ int ivar_src_slot(Compiler *c, int v, const char **ivn) {
     TyKind rt = infer_type(c, r);
     if (ty_is_object(rt)) cls = ty_object_class(rt);
   }
-  if (cls < 0 || !call_attr_target(c, -1, cls, nm, 0, NULL)) return -1;
+  MtabMark mt_was = mtab_push_in(c, v);
+  int attr = cls >= 0 && call_attr_target(c, -1, cls, nm, 0, NULL);
+  mtab_pop(c, mt_was);
+  if (!attr) return -1;
   ivb[0] = '@'; strcpy(ivb + 1, nm);
   *ivn = ivb;
   return cls;
@@ -9886,7 +9890,7 @@ int propagate_prep_params(Compiler *c) {
       const char *to_name   = cls->prep_to[k];
       /* a class method's chain is keyed `self.<name>` (comp_super_shadow) */
       int cm = strncmp(from_name, "self.", 5) == 0;
-      int from_mi = cm ? comp_cmethod_in_class(c, ci, from_name + 5) : comp_method_in_class(c, ci, from_name);
+      int from_mi = cm ? call_target(c, -1, ci, from_name + 5, CT_CMETHOD | CT_OWN | CT_SHARED, NULL) : call_target(c, -1, ci, from_name, CT_OWN | CT_SHARED, NULL);
       int to_mi = -1;
       for (int s = 0; s < c->nscopes; s++) {
         if (c->scopes[s].class_id == ci && c->scopes[s].is_cmethod == cm &&
@@ -11710,8 +11714,10 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   changed |= struct_with_super_types_members(c);
   const int *ids = NULL;
   int nids = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (;;) {
   for (int k = 0; k < nids; k++, wbas_share_step(&changed, &any)) {
+    mtab_pop(c, mt_pass);
     int id = ids ? ids[k] : k;
     const char *ty = nt_type(nt, id);
     NodeKind ty_k = nt_kind(nt, id);
@@ -11807,6 +11813,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       continue;
     }
     if (ty_k != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (the call's own binding: what it asks of the tables is the call's) */
     if (nt_int(nt, id, "rt_probe", 0)) continue;  /* analysis-only respond_to? probe:
        its dummy-argument shape must not type real method params */
     const char *name = nt_str(nt, id, "name");
@@ -12375,6 +12382,17 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           changed |= bind_call_params(c, id, mi4);
       }
     }
+    /* A builtin exception receiver calling a method that reopenings of
+       builtin exception classes define: the plan picks among them by the
+       class name at run time (cplan_exc_reopen), so each one's parameters
+       take the call's arguments, as an object's override in a subclass
+       does. Bound by no call of its own, `StandardError#echo(v)` took its
+       parameter's type from a program subclass's call alone, and
+       `ArgumentError.new.echo(1)` handed 1 to a Symbol slot. */
+    if (name && rt == TY_EXCEPTION) {
+      int xr[8], xn = exc_reopen_definers(c, name, xr, 8);
+      for (int xi = 0; xi < xn; xi++) changed |= bind_call_params(c, id, call_target(c, id, xr[xi], name, 0, NULL));
+    }
     if (ty_is_object(rt)) {
       int cid3 = ty_object_class(rt);
       int mi3 = call_target(c, id, cid3, name, 0, NULL);
@@ -12501,6 +12519,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       }
     }
   }
+  mtab_pop(c, mt_pass);
   if (!settle || !ipt_work_next(c, &w, &ids, &nids)) break;
   }
   ipt_work_end(&w);
@@ -14602,7 +14621,7 @@ int widen_shared_cmp_params(Compiler *c) {
     if (m->nparams < 1) continue;
     int users = 0;
     for (int k = 0; k < c->nclasses && users < 2; k++)
-      if (comp_method_in_chain(c, k, "<=>", NULL) == mi) users++;
+      if (call_target(c, -1, k, "<=>", CT_METHODS | CT_SHARED, NULL) == mi) users++;
     if (users < 2) continue;
     int api = arm_arg_param(c, m);   /* the operand's parameter, as the dispatch binds it */
     LocalVar *p = api >= 0 ? scope_local(m, m->pnames[api]) : NULL;
@@ -18939,7 +18958,10 @@ int infer_block_params(Compiler *c) {
      only the param is typed here, not implicit-self calls) -- without this a
      `list.tap { |x| .. }` left x UNKNOWN, so a push of x into a typed array
      could not widen the array's element type (#3144). */
+  MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    mtab_pop(c, mt_pass);
+    mtab_push_in(c, id);   /* (the call's own trampoline question) */
     const char *cname = nt_str(nt, id, "name");
     if (!cname) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -19007,7 +19029,10 @@ int infer_block_params(Compiler *c) {
   /* recv.instance_exec(args) { |params| } : the block binds the call's
      arguments as a yield of them does (emit_block_binds), so the binding
      plan types its parameters (block_site_types). */
+  mtab_pop(c, mt_pass);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    mtab_pop(c, mt_pass);
+    mtab_push_in(c, id);
     const char *cname = nt_str(nt, id, "name");
     if (!cname) continue;
     int xrecv = nt_ref(nt, id, "receiver");
@@ -19054,6 +19079,7 @@ int infer_block_params(Compiler *c) {
 
   /* Fiber.new { |first| ... }: the block param receives the resume value,
      which is always a poly (boxed) value at the runtime ABI boundary. */
+  mtab_pop(c, mt_pass);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cname = nt_str(nt, id, "name");
     if (!cname || !sp_streq(cname, "new")) continue;
@@ -21011,7 +21037,7 @@ static void cr_collect_implied(Compiler *c, const NodeTable *nt, int id, char **
       ic_record(c, "*", cause);
     }
     for (int i = 0; i < nn; i++)
-      if (!is_definition_hook_name(names[i].name) && !is_hook_protocol_name(names[i].name))
+      if ((names[i].roles & BCR_HANDED) && !is_definition_hook_name(names[i].name) && !is_hook_protocol_name(names[i].name))
         cr_mark_implied(c, out, n, cap, names[i].name, 0, g_dump_implicit ? cause : NULL);
     return;
   }

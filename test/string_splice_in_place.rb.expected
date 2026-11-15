@@ -1,0 +1,87 @@
+["<dmnnZ>", 7, 7, "UTF-8", true]
+true
+"m"
+">"
+[IndexError, "index 99 out of string"]
+[IndexError, "negative length -1"]
+[RangeError, "99.. out of range"]
+[IndexError, "string not matched"]
+[IndexError, "index 99 out of string"]
+[FrozenError, "can't modify frozen String: \"frozen\""]
+[IndexError, "index 99 out of string"]
+[FrozenError, "can't modify frozen String: \"frozen\""]
+["héllo", 5, 6, "UTF-8", false]
+"l"
+"o"
+2
+["abllo", 5, 5, "UTF-8", true]
+"b"
+5
+["ab日本llo", 7, 11, "UTF-8", false]
+"本"
+"l"
+["ab日本ll?o!", 9, 13, "UTF-8", false]
+"日"
+"本l"
+"bl?o!"
+"a"
+1
+"UTF-8"
+"aé!"
+3
+"é"
+true
+"é"
+1
+"é"
+4
+"a"
+false
+["éb", 2, 3, "UTF-8", false]
+["z\xFE", 2, 2, "ASCII-8BIT", false]
+[122, 254]
+["\xFFq\xFE", 3, 3, "ASCII-8BIT", false]
+[255, 113, 254]
+[0, 97, 0, 0, 99, 0]
+6
+[97, 0]
+[0, 0, 99, 0]
+["aabcc", 5, 5, "UTF-8", true]
+["aaaabccbcc", 10, 10, "UTF-8", true]
+["abccabccbcc", 11, 11, "UTF-8", true]
+"Shared+ TEX"
+"shared text"
+"shared text"
+"shared"
+"shared"
+"text"
+"shared text"
+"shared text"
+["shared text"]
+1
+1010
+200
+13
+"+--+--+--+--+--+--+-1+57+"
+50954
+52000
+2000
+"abxxxxxabxxx"
+true
+"3"
+"9"
+"12"
+"56"
+nil
+"8"
+nil
+["047", 3, 3, "UTF-8", true]
+"7"
+["08", 3, 3, "UTF-8", true]
+"4"
+["08", 2, 2, "UTF-8", true]
+["....", "..#."]
+"Cell"
+"Kap"
+"BOXed"
+"KEsZ"

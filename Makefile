@@ -1749,7 +1749,8 @@ test-corpus-summary: test-corpus-results
 # entries, and a raise caught through the exported try helper -- and a kernel
 # whose entries start and join threads after an init that started some, and
 # one whose at_exit hooks run when the host exits, not as its init returns,
-# and one whose entry calls a Struct's `new` the load redefined.
+# and one whose entry calls a Struct's `new` the load redefined, and an
+# --ext-entry list longer than 2048 bytes exports every method it names.
 ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map \
@@ -1847,6 +1848,15 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	      --ext-entry ExtDup.go --ext-class Base -o "$$tmp/d.c" >"$$tmp/d.out" 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class Base named two classes and compiled)"; ok=0; \
 	  else grep -q "names 2 classes" "$$tmp/d.out" || { echo "ext-test: FAIL (--ext-class Base refused without naming both classes)"; sed -n 1,3p "$$tmp/d.out"; ok=0; }; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  awk 'BEGIN { print "module W"; for (i = 1; i <= 120; i++) printf "  def self.entry_with_a_long_name_%04d(x) = x + %d\n", i, i; print "end" }' > "$$tmp/w.rb"; \
+	  wl=$$(awk 'BEGIN { for (i = 1; i <= 120; i++) printf "%sW.entry_with_a_long_name_%04d", (i > 1 ? "," : ""), i }'); \
+	  if ! $(SPINEL) "$$tmp/w.rb" -c --no-line-map --ext-init Init_ext_wide --ext-entry "$$wl" -o "$$tmp/w.c" >"$$tmp/w.out" 2>&1; then \
+	    echo "ext-test: FAIL (an --ext-entry list past 2048 bytes did not compile)"; sed -n 1,3p "$$tmp/w.out"; ok=0; \
+	  elif [ $$(grep -c 'sp_W_s_entry_with_a_long_name_[0-9]*(' "$$tmp/w.h") -ne 120 ]; then \
+	    echo "ext-test: FAIL (an --ext-entry list past 2048 bytes exported $$(grep -c 'sp_W_s_entry_with_a_long_name_[0-9]*(' "$$tmp/w.h") of its 120 methods)"; ok=0; \
+	  fi; \
 	fi; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "ext-test: pass"; else exit 1; fi
@@ -4625,7 +4635,10 @@ STR_SLOT_C = sp_String \*
 STR_SLOT_RE = sp_String[[:space:]]*\*
 STR_BYREF_S = sp_String \* lv_s
 STR_BYREF_PLAIN = sp_String \* lv_plain
-infer-test: $(SPINEL) $(SP_RT_LIB)
+# (two recipes: one shell command holds at most 128KB, and the checks outgrew it)
+.PHONY: infer-test-1 infer-test-2
+infer-test: infer-test-1 infer-test-2
+infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-infer.XXXXXX); ok=1; \
 	for f in test/infer/*.rb; do \
 	  $(SPINEL) "$$f" -o "$$tmp/ibin" >/dev/null 2>&1 || { echo "infer-test: FAIL ($$f: the emitted C does not compile)"; ok=0; continue; }; \
@@ -4668,6 +4681,12 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	[ "$$(grep -o 'sp_RbVal lv_r_[a-z_]*' "$$tmp/bso.c" | sort -u | tr '\n' ' ')" = "sp_RbVal lv_r_b sp_RbVal lv_r_strip " ] || { echo "infer-test: FAIL (a program class's own b or strip answering a non-String lost its answer, or its to_str answering a String boxed the call)"; ok=0; }; \
 	$(SPINEL) test/tuple_taken_apart_keeps_table.rb -c --no-line-map -o "$$tmp/tak.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (tuple_taken_apart_keeps_table: -c)"; ok=0; }; \
 	[ "$$(grep -E -o 'sp_PtrArray \*( ?volatile)? *(lv_(tw_a|tw_b|gr_m|pt_a|pt_b|lp_a|en_a)|cst_(COLS|SIZES))\b' "$$tmp/tak.c" | sed 's/.*[ *]//' | LC_ALL=C sort -u | tr '\n' ' ')" = "cst_COLS cst_SIZES lv_en_a lv_gr_m lv_lp_a lv_pt_a lv_pt_b lv_tw_a lv_tw_b " ] && ! grep -E -q 'sp_PtrArray \*( ?volatile)? *lv_(sh_a|sh_b|kp_a|se_a|sp_a|sp_rest|ea_a|ea_c)\b' "$$tmp/tak.c" || { echo "infer-test: FAIL (a table handed out in a tuple taken apart where it lands lost its kind, or one whose tuple goes elsewhere was narrowed)"; ok=0; }; \
+	$(SPINEL) test/tuple_taken_apart_in_branch_or_walk.rb -c --no-line-map -o "$$tmp/tbw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (tuple_taken_apart_in_branch_or_walk: -c)"; ok=0; }; \
+	[ "$$(grep -E -o 'sp_PtrArray \*( ?volatile)? *lv_[a-z]+_a\b' "$$tmp/tbw.c" | sed 's/.*[ *]//' | LC_ALL=C sort -u | tr '\n' ' ')" = "lv_ar_a lv_wk_a " ] || { echo "infer-test: FAIL (a tuple taken apart in a thrown-away arm or a walk block lost its table, or one whose value is read was narrowed)"; ok=0; }; \
+	$(SPINEL) test/tuple_taken_apart_redefined_walk.rb -c --no-line-map -o "$$tmp/trw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (tuple_taken_apart_redefined_walk: -c)"; ok=0; }; \
+	! grep -E -q 'sp_PtrArray \*( ?volatile)? *lv_(tm_a|ew_a)\b' "$$tmp/trw.c" || { echo "infer-test: FAIL (a tuple taken apart in the block of a walk the program redefines was narrowed)"; ok=0; }; \
+	$(SPINEL) test/identity_helper_arg_dropped.rb -c --no-line-map -o "$$tmp/iha.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (identity_helper_arg_dropped: -c)"; ok=0; }; \
+	[ "$$(grep -E -o 'sp_PtrArray \*( ?volatile)? *(cst_SH_TBL|lv_(sh_loc|sh_flt|lp_t|cd_t|eb_t|ls_t))\b' "$$tmp/iha.c" | sed 's/.*[ *]//' | LC_ALL=C sort -u | tr '\n' ' ')" = "cst_SH_TBL lv_cd_t lv_eb_t lv_lp_t lv_ls_t lv_sh_flt lv_sh_loc " ] && ! grep -E -q 'sp_PtrArray \*( ?volatile)? *lv_(kp_t|kd_t|an_t|ld_t|yl_t|dm_t|rb_t|ho_t)\b' "$$tmp/iha.c" || { echo "infer-test: FAIL (a table handed to a helper that only answers it back, the answer dropped, stayed boxed, or one the helper keeps was narrowed)"; ok=0; }; \
 	$(SPINEL) test/index_read_unsettled_local.rb -c --no-line-map -o "$$tmp/iru.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_read_unsettled_local: -c)"; ok=0; }; \
 	! grep -q 'sp_RbVal lv_line\b' "$$tmp/iru.c" || { echo "infer-test: FAIL (an index read guessed a settling local a Hash and boxed a block parameter)"; ok=0; }; \
 	$(SPINEL) test/table_row_join_keeps_kind.rb -c --no-line-map -o "$$tmp/trj.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_row_join_keeps_kind: -c)"; ok=0; }; \
@@ -4979,6 +4998,10 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	esac; \
 	grep -q 'sp_PtrArray \* iv_pts;' "$$tmp/oae.c" || { echo "infer-test: FAIL (an array of one class whose class defines each stayed boxed through a walk)"; ok=0; }; \
 	[ "$$(grep -cE '\(lv_pt__bp[A-Za-z0-9_]+\)->iv_x' "$$tmp/oae.c")" = 3 ] || { echo "infer-test: FAIL (an each, reverse_each or each_with_index walk over an array of one class bound its parameter boxed)"; ok=0; }; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "infer-test: pass (1 of 2)"; else exit 1; fi
+infer-test-2: $(SPINEL) $(SP_RT_LIB)
+	@tmp=$$(mktemp -d /tmp/spinel-infer.XXXXXX); ok=1; \
 	$(SPINEL) test/object_array_push_element_read.rb -c --no-line-map -o "$$tmp/oap.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_push_element_read: -c)"; ok=0; }; \
 	[ "$$(awk '/^struct sp_(Node|Ring|Bin)_s \{/ { c = $$2 } c && /iv_(links|members|items)/ { print c, $$1; c = "" }' "$$tmp/oap.c" | tr '\n' ' ')" = "sp_Node_s sp_PtrArray sp_Ring_s sp_PtrArray sp_Bin_s sp_PolyArray " ] || { echo "infer-test: FAIL (an element read of an Array of one class stored into another gave it no class, or one of a mixed Array narrowed it)"; ok=0; }; \
 	$(SPINEL) test/object_array_walk_ends_branch.rb -c --no-line-map -o "$$tmp/oaw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_walk_ends_branch: -c)"; ok=0; }; \
@@ -5016,6 +5039,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q 'sp_PtrArray \* iv_steps;' "$$tmp/oal.c" && grep -q 'sp_total(sp_PtrArray \* lv_parts' "$$tmp/oal.c" || { echo "infer-test: FAIL (an object Array literal passed as an argument stayed boxed)"; ok=0; }; \
 	$(SPINEL) test/obj_array_removals.rb -c --no-line-map -o "$$tmp/oar.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_removals: -c)"; ok=0; }; \
 	grep -q 'sp_PtrArray \* iv_jobs;' "$$tmp/oar.c" && grep -q 'sp_PtrArray_pop(' "$$tmp/oar.c" && grep -q 'sp_PtrArray_shift(' "$$tmp/oar.c" && grep -q 'sp_PtrArray_delete_at(' "$$tmp/oar.c" && grep -q 'sp_PtrArray_clear(' "$$tmp/oar.c" || { echo "infer-test: FAIL (pop, shift, delete_at or clear left an array of one class boxed)"; ok=0; }; \
+	$(SPINEL) test/obj_array_searches.rb -c --no-line-map -o "$$tmp/oas.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_searches: -c)"; ok=0; }; \
+	grep -q 'sp_PtrArray \* iv_wires;' "$$tmp/oas.c" && grep -q 'sp_PtrArray \* iv_points;' "$$tmp/oas.c" && grep -q 'sp_PtrArray_delete_obj(' "$$tmp/oas.c" && grep -q 'sp_PtrArray_index_obj(' "$$tmp/oas.c" && grep -q 'sp_PtrArray_count_obj(' "$$tmp/oas.c" || { echo "infer-test: FAIL (delete, include?, index, count, delete_if or keep_if left an array of one class boxed)"; ok=0; }; \
 	$(SPINEL) test/array_new_fill_object_array.rb -c --no-line-map -o "$$tmp/anf.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (array_new_fill_object_array: -c)"; ok=0; }; \
 	grep -q 'sp_PtrArray \* iv_items;' "$$tmp/anf.c" && grep -q 'sp_bump(sp_Foo \* lv_f)' "$$tmp/anf.c" && grep -q 'sp_rb_sum_bytes(sp_IOBuffer \* lv_b' "$$tmp/anf.c" && grep -q 'sp_PtrArray \* sp_mk(' "$$tmp/anf.c" || { echo "infer-test: FAIL (an Array.new(n, obj) fill left an array of one class boxed)"; ok=0; }; \
 	$(SPINEL) test/obj_array_walk_method_tail.rb -c --no-line-map -o "$$tmp/owt.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_walk_method_tail: -c)"; ok=0; }; \
@@ -5327,7 +5352,7 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  grep -Fq 'local LibC.__ffi_call(extend) fns: ptr ty=str_poly_hash' "$$tmp/fi.repr" || { echo "infer-test: FAIL (Fiddle function-table read became boxed)"; ok=0; }; \
 	fi; \
 	rm -rf "$$tmp"; \
-	if [ $$ok -eq 1 ]; then echo "infer-test: pass"; else exit 1; fi
+	if [ $$ok -eq 1 ]; then echo "infer-test: pass (2 of 2)"; else exit 1; fi
 
 # SP_COLLECT_ERRORS recovers from an unsupported construct with a longjmp, and
 # has to put back everything the abandoned unit was pointing at. The globals it

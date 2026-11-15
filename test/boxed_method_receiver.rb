@@ -21,3 +21,11 @@ p [k.method(:hi), 1].first.receiver.equal?(k)
 p 3.method(:+).receiver
 p [nil.method(:to_s), 1].first.receiver
 p [-7.method(:abs), 1].first.receiver
+class String
+  def shout = upcase + "!"
+end
+sh = +"ab"
+sm = [sh.method(:shout), 1].first
+sh << "c"
+p sm.receiver, sm.receiver.equal?(sh), sm.call
+p %w[x y].map { |w| (+w).method(:shout) }.map(&:receiver)

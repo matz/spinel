@@ -2657,7 +2657,12 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       buf_printf(b, ", (sp_int)%uu)", builtin_name_group_hash(ident && hash ? hash + 1 : disp));
     }
     if (set_cls) {
-      char st[32]; snprintf(st, sizeof st, "_t%d", self_tmp);
+      /* (the temporary is a void *: a String handle is named as one, so the
+         box is the handle's own and nothing allocates before the Method
+         is rooted) */
+      char st[48];
+      if (self_box_ty == TY_STRBUF) snprintf(st, sizeof st, "((sp_String *)_t%d)", self_tmp);
+      else snprintf(st, sizeof st, "_t%d", self_tmp);
       buf_puts(b, ", (");
       emit_boxed_text(c, self_box_ty, st, b);
       buf_puts(b, ").cls_id)");

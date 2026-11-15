@@ -15,3 +15,7 @@ true
 3
 nil
 -7
+"abc"
+true
+"ABC!"
+["x", "y"]

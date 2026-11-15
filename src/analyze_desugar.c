@@ -17293,6 +17293,10 @@ int desugar_conditional_defs(Compiler *c) {
     /* each arm names the dispatcher it is an arm of: where an arm runs, the
        dispatcher's history has the method (ver_cells_write) */
     for (int k = 0; k < ng; k++) nt_node_set_int(nt, g[k].def, "cond_disp", def);
+    /* ...and the arms in order: the dispatcher the first, each arm the next
+       (the readers of the record walk them, no scan of every def) */
+    nt_node_set_int(nt, def, "cond_first_arm", g[0].def);
+    for (int k = 0; k + 1 < ng; k++) nt_node_set_int(nt, g[k].def, "cond_next_arm", g[k + 1].def);
     /* one of every branch of one chain (cond_all_arms): the name is there
        once the body has run, so a list of methods is not refused for it
        (ver_cond_scope); the dispatcher still answers before any arm ran */

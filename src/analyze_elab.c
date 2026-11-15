@@ -1828,7 +1828,8 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
   if (target && !x->unplaced) lr_settle_add(x->r, SET_ALIAS, node, cls, sg, may, vis, name);
   if (ov >= 0) vis = ov;
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
-  lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->body ? 0 : x->unplaced, .scope = sc, .body = x->body });
+  lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->body ? 0 : x->unplaced, .scope = sc, .body = x->body,
+                                                       .arm1 = kind == LR_DEF ? nt_int(x->c->nt, node, "cond_first_arm", 0) : 0 });
   lr_event(x, cls, sg, name, kind, node, vis);
   if (!sg && bvis == BVIS_MODULE_FUNCTION && lr_mf_copies(kind, target)) {
     lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = x->unplaced, .scope = sc });
@@ -4731,6 +4732,11 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
          stand ahead of the modules Object includes) */
       if (name && !h && !sg && cls >= 0 && cls == lr_core(c->lrec, CORE_OBJECT) && !(how & LR_AFTER_MAIN)) h = lr_hist(c->lrec, LR_MAIN, 0, name, 0);
       int o = name ? lr_own(c, h, cls >= 0 ? lr_table_twin(c, h) : NULL, p, late, vis, out) : ELAB_NO;
+      /* (a conditional def's dispatcher stands after its last arm, but the
+         method is there once an arm has run: from the first arm's point on a
+         none is not the answer) */
+      for (int i = 0; o == ELAB_NO && h && i < h->n; i++)
+        if (h->v[i].arm1 && elab_cmp(elab_point_of(c, h->v[i].arm1), p) != PROG_AFTER) o = ELAB_UNKNOWN;
       if (o == ELAB_YES || o == LR_STOP) return o;
       if (o == ELAB_UNKNOWN) *unsure = 1;
       continue;

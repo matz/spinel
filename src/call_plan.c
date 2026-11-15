@@ -10741,6 +10741,7 @@ static void ver_vcall_twins(Compiler *c) {
     int raise = ver_no_method_raise(c, c->scopes[d].class_id, c->scopes[d].is_cmethod, name, 0, 1);
     nt_node_set_arr(nt, nt_ref(nt, st, "statements"), "body", &raise, 1);
     nt_node_set_int(nt, def, "cond_lone_disp", 0);   /* (the dispatcher's own facts stay its own) */
+    nt_node_set_int(nt, def, "cond_first_arm", 0);
     nt_node_set_int(nt, def, "cond_raise_els", 0);
     nt_node_set_int(nt, def, "cond_twin", 1);   /* (its arms test the dispatcher's selector: no cell of its own, ver_cells_put) */
     /* (a class method's: one of a `class << self` body, a module_function's
@@ -11185,8 +11186,7 @@ static void ver_write_version(NodeTable *nt, const int *par, VerCellsAt *cells, 
   /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
      method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
   if (nt_int(nt, node, "cond_lone_disp", 0)) {
-    NT_FOREACH_KIND(nt, NK_DefNode, d) {
-      if (!nt_int(nt, d, "cond_arm", 0) || nt_int(nt, d, "cond_disp", -1) != node) continue;
+    for (int d = nt_int(nt, node, "cond_first_arm", 0); d > 0; d = nt_int(nt, d, "cond_next_arm", 0)) {
       int ast = ver_write_stmt(nt, par, d);
       if (ast < 0 || par[ast] < 0) continue;
       int acw = ver_cell_once(cells, d, v->cell), avw = vw && ver_cell_once(cells, d, -2 - v->cell);

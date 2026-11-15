@@ -18923,17 +18923,6 @@ static int spl_call(NodeTable *nt, int recv, const char *name, const int *args, 
   nt_node_set_ref(nt, call, "block", blk);
   return call;
 }
-static int spl_if(NodeTable *nt, int pred, int yes, int no) {
-  int ifn = nt_new_node(nt, "IfNode");
-  int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode"), el = nt_new_node(nt, "ElseNode");
-  nt_node_set_arr(nt, ys, "body", &yes, 1);
-  nt_node_set_arr(nt, ns, "body", &no, 1);
-  nt_node_set_ref(nt, el, "statements", ns);
-  nt_node_set_ref(nt, ifn, "predicate", pred);
-  nt_node_set_ref(nt, ifn, "statements", ys);
-  nt_node_set_ref(nt, ifn, "subsequent", el);
-  return ifn;
-}
 /* An arm: the original call with these arguments and block, cloned so it
    keeps what earlier passes marked on the site (the Ruby-defined builtin
    copy an Enumerable name was given) */
@@ -19036,7 +19025,7 @@ int desugar_builtin_splat_forward(Compiler *c) {
         int lon = hwi_new_int(nt, lo);
         int sz3 = spl_call(nt, hwi_lread(nt, rest), "size", NULL, 0, -1);
         int lt = spl_call(nt, sz3, "<", &lon, 1, -1);
-        tail = spl_if(nt, lt, rz, tail);
+        tail = disp_choose(nt, lt, rz, tail);
       }
     }
     for (int k = hi; k >= lo; k--) {
@@ -19048,12 +19037,12 @@ int desugar_builtin_splat_forward(Compiler *c) {
         int kb[SPL_MAX_ARITY];
         for (int i = 0; i < k; i++) { int ix = hwi_new_int(nt, i); kb[i] = spl_call(nt, hwi_lread(nt, rest), "[]", &ix, 1, -1); }
         int without = spl_arm(nt, id, recv, kb, k, -1);
-        arm = spl_if(nt, spl_call(nt, -1, "block_given?", NULL, 0, -1), with, without);
+        arm = disp_choose(nt, spl_call(nt, -1, "block_given?", NULL, 0, -1), with, without);
       }
       int kn = hwi_new_int(nt, k);
       int sz2 = spl_call(nt, hwi_lread(nt, rest), "size", NULL, 0, -1);
       int eq = spl_call(nt, sz2, "==", &kn, 1, -1);
-      tail = spl_if(nt, eq, arm, tail);
+      tail = disp_choose(nt, eq, arm, tail);
     }
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
     int body = nt_new_node(nt, "StatementsNode");

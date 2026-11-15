@@ -35742,18 +35742,29 @@ static int scope_yields_inside_lifted_body(Compiler *c, int mi) {
    of `blk.nil?` walked over). The proc form is that arm: its block is the
    real proc, NULL here, which is what `blk.nil?` and a bare `yield` (a
    LocalJumpError) already answer for. */
+/* Does a class method `new` of the program's, whose super reaches Class#new
+   (no user superclass method), build a class (its own or one below) with an
+   initialize that yields, or with keeps set one that holds its block in a
+   parameter? Any version a construction may run counts: the super's
+   block reaches whichever it binds (cplan_new_initializers). */
+static int super_new_init_any(Compiler *c, Scope *s, int keeps) {
+  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, NULL) >= 0) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k != s->class_id && !is_descendant(c, k, s->class_id)) continue;
+    /* (every initialize a construction of k may run: the super's block
+       reaches whichever version it binds) */
+    int ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, k, ms, VER_MAX_ARMS, &whole);
+    for (int i = 0; i < n; i++) {
+      const Scope *im = &c->scopes[ms[i]];
+      if (im->yields || (keeps && im->blk_param && im->blk_param[0])) return 1;
+    }
+  }
+  return 0;
+}
 /* Is there a `new` whose class is only known at run time (`k.new`, a Class
    read out of a container)? Its switch arm calls sp_X_new, which cannot splice
    a yielding initialize the way a constant `X.new` site does, so the class
    needs the clone for its constructor to run the body at all. */
-static int super_new_init_yields(Compiler *c, Scope *s) {
-  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, NULL) >= 0) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    int mi = k == s->class_id || is_descendant(c, k, s->class_id) ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
-    if (mi >= 0 && c->scopes[mi].yields) return 1;
-  }
-  return 0;
-}
 static int pf_dynamic_new(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
@@ -35770,7 +35781,7 @@ static int pf_dynamic_new(Compiler *c) {
     if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return 1;
   }
   for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].class_id >= 0 && super_new_init_yields(c, &c->scopes[s])) return 1;
+    if (c->scopes[s].class_id >= 0 && super_new_init_any(c, &c->scopes[s], 0)) return 1;
   return 0;
 }
 
@@ -46884,16 +46895,6 @@ static void an_method_holders_build(Compiler *c, AnMethodHolders *mh) {
       an_method_holders_add(mh, -1, nt_str(nt, id, "name"));
 }
 
-static int super_new_init_keeps_block(Compiler *c, Scope *s) {
-  if (super_new_init_yields(c, s)) return 1;
-  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, NULL) >= 0) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    int mi = k == s->class_id || is_descendant(c, k, s->class_id) ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
-    if (mi >= 0 && c->scopes[mi].blk_param && c->scopes[mi].blk_param[0] && !c->scopes[mi].yields) return 1;
-  }
-  return 0;
-}
-
 /* A node of the graph below: a yielding method, which is spliced where it
    is called. */
 static int ctor_graph_node(Compiler *c, int s) {
@@ -50549,7 +50550,7 @@ static void an_phase_class_structure(Compiler *c) {
               const Scope *pm = to[k] < ns ? &c->scopes[to[k]] : NULL;
               keeps |= pm && pm->blk_param && pm->blk_param[0] && !pm->yields;
             }
-            if (!(n ? keeps : super_new_init_keeps_block(c, s))) continue;
+            if (!(n ? keeps : super_new_init_any(c, s, 1))) continue;
             s->blk_param = strdup("__sblk__");
             LocalVar *sblk = scope_local_intern(s, s->blk_param);
             if (sblk) { lv_set_type(sblk, TY_PROC); sblk->is_param = 1; }

@@ -11825,28 +11825,32 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (comp_super_is_class_new(c, id)) {
         for (int k = 0; k < c->nclasses; k++) {
           if (k != s->class_id && !is_descendant(c, k, s->class_id)) continue;
-          int imi = comp_method_in_chain(c, k, "initialize", NULL);
-          if (imi < 0) continue;
-          if (ty_k == NK_SuperNode) { changed |= bind_call_params(c, id, imi); continue; }
-          Scope *im = &c->scopes[imi];
-          /* A forwarder (`def self.new(*a, **k, &blk) ... super end`) passes
-             the CONTENTS of its rest array and keyword-rest hash on, not the
-             containers: mapping parameter q to parameter q typed the
-             constructor's first parameter as the array itself. What arrives
-             is decided at run time, so every parameter takes a boxed value. */
-          if (s->rest_idx >= 0 || s->kwrest_idx >= 0) {
-            for (int q = 0; q < im->nparams; q++) {
-              LocalVar *dst = scope_local(im, im->pnames[q]);
-              if (!dst || dst->rbs_seeded) continue;
-              if (lv_widen(dst, TY_POLY)) changed = 1;
+          /* (each initialize a construction of k may run takes them: the
+             super's block and arguments reach whichever it binds) */
+          int ims[VER_MAX_ARMS], whole, nim = cplan_new_initializers(c, k, ims, VER_MAX_ARMS, &whole);
+          for (int vi = 0; vi < nim; vi++) {
+            int imi = ims[vi];
+            if (ty_k == NK_SuperNode) { changed |= bind_call_params(c, id, imi); continue; }
+            Scope *im = &c->scopes[imi];
+            /* A forwarder (`def self.new(*a, **k, &blk) ... super end`) passes
+               the CONTENTS of its rest array and keyword-rest hash on, not the
+               containers: mapping parameter q to parameter q typed the
+               constructor's first parameter as the array itself. What arrives
+               is decided at run time, so every parameter takes a boxed value. */
+            if (s->rest_idx >= 0 || s->kwrest_idx >= 0) {
+              for (int q = 0; q < im->nparams; q++) {
+                LocalVar *dst = scope_local(im, im->pnames[q]);
+                if (!dst || dst->rbs_seeded) continue;
+                if (lv_widen(dst, TY_POLY)) changed = 1;
+              }
+              continue;
             }
-            continue;
-          }
-          for (int q = 0; q < s->nparams && q < im->nparams; q++) {
-            LocalVar *src = scope_local(s, s->pnames[q]);
-            LocalVar *dst = scope_local(im, im->pnames[q]);
-            if (!src || !dst || dst->rbs_seeded || src->type == TY_UNKNOWN) continue;
-            if (lv_widen(dst, src->type)) changed = 1;
+            for (int q = 0; q < s->nparams && q < im->nparams; q++) {
+              LocalVar *src = scope_local(s, s->pnames[q]);
+              LocalVar *dst = scope_local(im, im->pnames[q]);
+              if (!src || !dst || dst->rbs_seeded || src->type == TY_UNKNOWN) continue;
+              if (lv_widen(dst, src->type)) changed = 1;
+            }
           }
         }
         continue;
@@ -11986,12 +11990,16 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         TyKind at = kt == TY_CLASS || kt == TY_POLY ? infer_type(c, rav[1]) : TY_UNKNOWN;
         for (int rci = 0; at != TY_UNKNOWN && rci < c->nclasses; rci++) {
           if (!class_is_exc_subclass(c, rci) || !class_value_escapes(c, rci)) continue;
-          int imi = comp_method_in_chain(c, rci, "initialize", NULL);
-          Scope *im = imi >= 0 ? &c->scopes[imi] : NULL;
-          for (int i = 0; im && i < im->nparams; i++) {
-            if (call_param_arg(c, im, &rav[1], 1, i) != rav[1]) continue;
-            LocalVar *ip = scope_local(im, im->pnames[i]);
-            if (ip && !ip->rbs_seeded) changed |= slot_take(c, ip, at, rav[1]);
+          /* (the class is any one the value reaches, at any point: every
+             initialize a construction of it may run takes the message) */
+          int ims[VER_MAX_ARMS], whole, nim = cplan_new_initializers(c, rci, ims, VER_MAX_ARMS, &whole);
+          for (int vi = 0; vi < nim; vi++) {
+            Scope *im = &c->scopes[ims[vi]];
+            for (int i = 0; i < im->nparams; i++) {
+              if (call_param_arg(c, im, &rav[1], 1, i) != rav[1]) continue;
+              LocalVar *ip = scope_local(im, im->pnames[i]);
+              if (ip && !ip->rbs_seeded) changed |= slot_take(c, ip, at, rav[1]);
+            }
           }
         }
       }
@@ -12137,7 +12145,9 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           if (c->classes[s->class_id].is_struct)
             changed |= struct_new_types_members(c, id, s->class_id);
           else {
-            int initmi = comp_method_in_chain(c, s->class_id, "initialize", NULL);
+            /* (a bare `new` runs on self, a class that may be one below this
+               one: the table's initialize, as its construction emits it) */
+            int initmi = cplan_new_initialize(c, -1, s->class_id, NULL);
             if (initmi >= 0) changed |= bind_call_params(c, id, initmi);
           }
         }
@@ -12393,7 +12403,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     if (name && sp_streq(name, "with") && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
         comp_method_in_chain(c, ty_object_class(rt), "with", NULL) < 0) {
       int wci = ty_object_class(rt);
-      int wimi = comp_method_in_chain(c, wci, "initialize", NULL);
+      int wimi = cplan_new_initialize(c, -1, wci, NULL);
       changed |= wimi >= 0 ? struct_with_binds_initialize(c, id, wci, wimi)
                            : struct_with_types_members(c, id, wci);
       continue;
@@ -12408,7 +12418,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       for (int q = 0; q < (ks ? nk : c->nclasses); q++) {
         int k = ks ? ks[q] : q;
         if (k < 0 || k >= c->nclasses || !c->classes[k].is_data ||
-            comp_method_in_chain(c, k, "initialize", NULL) >= 0 ||
+            cplan_new_initialize(c, -1, k, NULL) >= 0 ||
             comp_method_in_chain(c, k, "with", NULL) >= 0) continue;
         changed |= struct_with_types_members(c, id, k);
       }

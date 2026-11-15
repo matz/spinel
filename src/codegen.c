@@ -12776,7 +12776,8 @@ int ctor_init_proc_form(Compiler *c, int cid) {
   ClassInfo *ci = &c->classes[cid];
   if (ci->is_struct || ci->is_value_type || ci->is_native_class) return -1;
   if (comp_class_is_module(c, ci)) return -1;
-  int init = comp_method_in_chain(c, cid, "initialize", NULL);
+  /* (the constructor is the class's, no site's: the table's initialize) */
+  int init = cplan_new_initialize(c, -1, cid, NULL);
   int pf = init >= 0 ? scope_proc_form_of(c, init) : -1;
   /* a class no reached code can build leaves its initialize, and so the
      clone, unwritten (compute_reachable, #10592) */
@@ -12986,7 +12987,9 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
    program's initialize, a reachable one on its chain, taking that one's
    parameters, rather than fill the members (emit_class_new)? */
 static int struct_ctor_runs_init(Compiler *c, int cid) {
-  int si = comp_method_in_chain(c, cid, "initialize", NULL);
+  /* (the constructor is one function of the class, built by no site: the
+     table's initialize, as cplan_new_initialize answers with no site) */
+  int si = cplan_new_initialize(c, -1, cid, NULL);
   return si >= 0 && c->scopes[si].reachable;
 }
 /* The C name of class cid's members constructor (emit_struct_members_ctor) */

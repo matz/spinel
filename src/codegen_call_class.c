@@ -5878,7 +5878,9 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           int nargc; const int *nargv = call_args(nt, id, &nargc);
           if (emit_native_ctor(c, id, new_cls, nargc, nargv, b)) return 1;
         }
-        int initm = comp_method_in_chain(c, new_cls, "initialize", NULL);
+        /* (self is a class that may be one below new_cls: no site, the
+           table's initialize, cplan_new_initialize) */
+        int initm = cplan_new_initialize(c, -1, new_cls, NULL);
         /* an exception class with no `initialize` takes the first argument as
            its message, exactly as the receiver `Klass.new(msg)` path does;
            the plain constructor below dropped it */
@@ -5918,7 +5920,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             for (int k = 0; k < c->nclasses; k++) {
               if (k == new_cls || !is_descendant(c, k, new_cls)) continue;
               ClassInfo *kc = &c->classes[k];
-              int ik = comp_method_in_chain(c, k, "initialize", NULL);
+              int ik = cplan_new_initialize(c, -1, k, NULL);
               if (kc->is_value_type || kc->is_struct || kc->is_native_class || ik < 0 || c->scopes[ik].yields ||
                   call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) plain = 0;
               subs++;
@@ -5932,7 +5934,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
                 for (int k = 0; k < c->nclasses; k++) {
                   if (k == new_cls || !is_descendant(c, k, new_cls)) continue;
                   buf_printf(b, "%s.cls_id == %d ? (sp_%s *)", cmethod_cls_token(c, encl), k, ncls->c_name);
-                  emit_ctor_alloc_init(c, k, comp_method_in_chain(c, k, "initialize", NULL),
+                  emit_ctor_alloc_init(c, k, cplan_new_initialize(c, -1, k, NULL),
                                        nt_ref(nt, id, "arguments"), id, b);
                   buf_puts(b, " : ");
                 }
@@ -5959,7 +5961,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           for (int k = 0; plain && k < c->nclasses; k++) {
             if (k == new_cls || !is_descendant(c, k, new_cls) || !class_has_ctor(&c->classes[k])) continue;
             ClassInfo *kc = &c->classes[k];
-            int ik = comp_method_in_chain(c, k, "initialize", NULL);
+            int ik = cplan_new_initialize(c, -1, k, NULL);
             if (kc->is_value_type || kc->is_struct || kc->is_native_class ||
                 (ik >= 0 && c->scopes[ik].yields) ||
                 call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) { plain = 0; break; }
@@ -5969,7 +5971,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             buf_puts(b, "(");
             for (int k = 0; k < c->nclasses; k++) {
               if (k == new_cls || !is_descendant(c, k, new_cls) || !class_has_ctor(&c->classes[k])) continue;
-              int ik = comp_method_in_chain(c, k, "initialize", NULL);
+              int ik = cplan_new_initialize(c, -1, k, NULL);
               buf_printf(b, "%s.cls_id == %d ? (sp_%s *)sp_%s_new(", cmethod_cls_token(c, encl), k, ncls->c_name, c->classes[k].c_name);
               if (ik >= 0) emit_args_filled(c, ik, nt_ref(nt, id, "arguments"), "", b);
               /* (an initialize that takes its block as a proc takes it in

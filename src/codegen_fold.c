@@ -5131,6 +5131,14 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
     bp_elem_read(c, block, p0_orig, k, trv, ti, &src);
     emit_indent(g_pre, g_indent + 1);
     if (rr.elem == TY_POLY && pt != TY_POLY && pt != TY_UNKNOWN) emit_block_param_from_boxed(c, p0, pt, src.p, g_pre);
+    /* an object of the narrowed array into a parameter the block's own
+       writes left boxed (`i = nil if ...`) is boxed as its class */
+    else if (ty_is_obj_array(rt) && pt == TY_POLY) {
+      Buf bx; memset(&bx, 0, sizeof bx);
+      emit_boxed_text(c, ty_object(ty_obj_array_class(rt)), src.p, &bx);
+      buf_printf(g_pre, "lv_%s = %s;\n", p0, bx.p ? bx.p : "sp_box_nil()");
+      free(bx.p);
+    }
     else buf_printf(g_pre, "lv_%s = %s;\n", p0, src.p);
     free(src.p);
   }

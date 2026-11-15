@@ -4,6 +4,8 @@
 # blockless sort and sort!, and the emitters took no sp_PtrArray. Now each
 # is a filter of the narrowed array (a new array of the same elements, or
 # the array itself), and infer-test checks that @items is an sp_PtrArray.
+# A sort_by block that writes its parameter leaves it boxed: the element is
+# boxed into it (it was assigned as the raw pointer, which C refused).
 class Ver
   include Comparable
   attr_reader :n
@@ -31,6 +33,7 @@ class Store
   def names = @items.sort { |a, b| a.name <=> b.name }.map { |i| i.name }
   def nil_key = @items.sort_by { |i| i.id > 2 ? nil : i.id }
   def nil_cmp = @items.sort { |a, b| a.id > 2 ? nil : a.id <=> b.id }
+  def param_written = @items.sort_by { |i| i = nil if i.id > 3; i ? i.id : 0 }
 
   def order_by_id
     @items.sort_by! { |i| i.id }
@@ -59,6 +62,7 @@ p s.by_ver.map(&:id)
 p s.desc.map(&:id)
 p s.names
 p s.local_desc.map(&:id)
+p s.param_written.map(&:id)
 p s.items.map(&:id)
 
 copy = s.by_name

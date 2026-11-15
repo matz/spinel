@@ -966,9 +966,12 @@ extern const char *g_method_pr_label;
 extern const char *g_method_pr_var;
 extern const char *g_proc_return_home;
 int cmethod_takes_self_cls(Compiler *c, const Scope *s);
+/* self, boxed, in method scope s of class s->class_id: a builtin's reopening holds it as the builtin's own value */
+void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b);
 const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, Buf *b);
 int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b);
 const char *cmethod_cls_token(Compiler *c, Scope *encl);
+const char *cmethod_self_cls(Compiler *c, Scope *encl);
 Scope *open_default_method(void);
 int reopen_self_defaults(Compiler *c, int mi);
 int ctor_needs_self_defaults(Compiler *c, int initm, int argc);

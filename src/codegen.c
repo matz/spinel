@@ -4459,6 +4459,9 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
         /* a bare call to a class method that reads its receiving class
            hands it this one's (a cycle answers no until it is settled) */
         else if (nm) {
+          /* (a method a top-level include brings, whose copy in Object's chain takes the call's self) */
+          int imi = call_target(c, nid, -1, nm, CT_INCLUDED, NULL);
+          if (imi >= 0 && repr_self_boxed(c, imi)) { ans = 1; break; }
           int cmi = call_target(c, nid, s->class_id, nm, CT_CMETHOD, NULL);
           if (cmi >= 0 && cmi != si) {
             g_cm_selfcls[si] = 0;
@@ -4499,6 +4502,10 @@ const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, Buf *b)
 const char *cmethod_cls_token(Compiler *c, Scope *encl) {
   if (encl && open_default_method() == encl && g_cls_tok_mi == (int)(encl - c->scopes)) return g_cls_tok;
   return "_sp_cls";
+}
+/* ...and, in a yielding method (its body spliced where the call is), the class value its call site holds in g_self */
+const char *cmethod_self_cls(Compiler *c, Scope *encl) {
+  return encl->yields && g_self ? g_self : cmethod_cls_token(c, encl);
 }
 
 /* The group --incremental packs a method's unit by: its file and its class
@@ -10052,6 +10059,9 @@ static int proc_body_uses_self(Compiler *c, int id, int class_id) {
     /* a top-level def or Object's method a subclass overrides is a switch
        on self's class (cplan_self_root_override) */
     if (cplan_root_switch(c, id, class_id)) return 1;
+    /* a method a top-level include brings, whose copy in Object's chain takes the call's self */
+    int imi = nm ? call_target(c, id, -1, nm, CT_INCLUDED, NULL) : -1;
+    if (imi >= 0 && repr_self_boxed(c, imi)) return 1;
     /* a bare instance_exec / instance_eval runs its block on self */
     if (nm && (sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval"))) return 1;
     /* an attr_reader is not a method in the chain -- it reads the ivar
@@ -13377,7 +13387,7 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
     /* (the token `self` reads there: a yielding method inlined at its
        caller reads g_self, a parameter default the call's class) */
     if (cmethod_takes_self_cls(c, s))
-      snprintf(sel, sizeof sel, "(%s).cls_id", s->yields && g_self ? g_self : cmethod_cls_token(c, s));
+      snprintf(sel, sizeof sel, "(%s).cls_id", cmethod_self_cls(c, s));
   }
   else if (!comp_ty_value_obj(c, ty_object(base))) {
     int recv = nt_ref(nt, id, "receiver");
@@ -16551,7 +16561,7 @@ static int struct_super_handle_arg(Compiler *c, int v, Buf *b) {
    Float, the sp_RbVal already for an Array or Object -- and an ordinary
    class as its object pointer. What a super into Object's (boxed-self)
    method hands on. */
-static void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b) {
+void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b) {
   if (repr_self_handle(c, (int)(s - c->scopes))) { emit_boxed_text(c, TY_STRBUF, g_self, b); return; }
   int cls = s->class_id;
   const char *cn = cls >= 0 ? c->classes[cls].c_name : NULL;

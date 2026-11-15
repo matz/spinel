@@ -3944,7 +3944,20 @@ int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst) {
    (ML_SINGLETON); where an undef there stops the lookup
    (ct_main_stopped), none (ML_NONE). */
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
-  if (*flags & CT_INCLUDED) return comp_included_method_index(c, name, id);
+  /* (a module the top level includes brings its method into Object's chain: where the name has versions there, a
+     top-level def after the include among them, the call's own point chooses, as a call on Object's does) */
+  if (*flags & CT_INCLUDED) {
+    int im = comp_included_method_index(c, name, id);
+    int ob = comp_core_class(c, CORE_OBJECT);
+    if (im >= 0 && id >= 0 && ob >= 0 && ct_versioned(c, im, name) && ct_block_self_call(c, id) < 0) {
+      MethodLookup at = *ml;
+      int vi = ct_version(c, id, ob, name, *flags, im, &at);
+      /* (the version a top-level def or its entry makes; a module's own copy, which a prepend or an alias of the
+         module's singleton chain also reads, stays the module's method) */
+      if (vi >= 0 && vi != im && (c->scopes[vi].entry || c->scopes[vi].shadow || c->scopes[vi].class_id < 0)) { *ml = at; return vi; }
+    }
+    return im;
+  }
   const LrDef *d = NULL;
   if ((*flags & CT_TOP) && id >= 0 && ct_main_stopped(c, id, name)) {
     if (ml) ml->kind = ML_NONE;
@@ -4855,6 +4868,9 @@ static void ct_landing_classes(Compiler *c, int id, CtLanding at, const char *nm
     Scope *sc = comp_scope_of(c, id);
     int self_cls = sc && sc->class_id >= 0 ? sc->class_id : c->node_cbody[id];
     ct_class_and_descendants(c, id, nm, -1, CT_TOP, fn, arg);
+    /* (and what a module the top level includes brings, where the name has versions in Object's chain: the version
+       the call binds, which the included-method ask answers) */
+    if (rk != NK_SelfNode && c->ver_built) fn(c, id, nm, oc, CT_INCLUDED, arg);
     if (self_cls >= 0) {
       ct_class_and_descendants(c, id, nm, self_cls, 0, fn, arg);
       ct_class_and_descendants(c, id, nm, self_cls, CT_CMETHOD, fn, arg);

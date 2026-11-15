@@ -1090,7 +1090,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (g_rto_by_cls >= 0) {
         int boxed = repr_of(c, id).kind == RK_BOXED;
         if (boxed) buf_puts(b, "sp_box_bool(");
-        emit_respond_to_by_cls(c, recv, qm, argc, argv, b);
+        emit_respond_to_by_cls(c, id, recv, qm, argc, argv, b);
         if (boxed) buf_puts(b, ")");
         return 1;
       }

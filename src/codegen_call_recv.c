@@ -4791,13 +4791,14 @@ void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char
                   "(const char *)NULL; })", t0n);
     return;
   }
-  /* an Integer slot holding a Range: CRuby's NUM2LONG TypeError, once the
-     arguments have run and the slots ahead of it converted */
+  /* an Integer slot holding a Range or nil: CRuby's NUM2LONG TypeError,
+     once the arguments have run and the slots ahead of it converted */
   if (!rng) {
     static const int islot[4] = {0, 1, 3, 4};
     for (int k = 0; k < (argc == 5 ? 4 : 2); k++) {
       int a = islot[k];
-      if (comp_ntype(c, argv[a]) != TY_RANGE) continue;
+      TyKind ka = comp_ntype(c, argv[a]);
+      if (ka != TY_RANGE && ka != TY_NIL) continue;
       for (int j = 0; j < argc; j++) {
         buf_puts(b, "(void)(");
         int ve = effect_view_open(c, argv[j]);
@@ -4808,8 +4809,9 @@ void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char
         buf_puts(b, "); ");
       }
       if (pre) buf_puts(b, pre);
-      buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of Range into Integer\"); "
-                  "(const char *)NULL; })");
+      buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s\"); (const char *)NULL; })",
+                 ka == TY_NIL ? "no implicit conversion from nil to integer"
+                              : "no implicit conversion of Range into Integer");
       return;
     }
   }

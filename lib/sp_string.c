@@ -63,9 +63,14 @@ static void sp_String_splice_in(sp_String *s, size_t b, size_t e, const char *v,
    result's encoding is the one its pieces joined in: the receiver's, unless
    val has high bytes in the other encoding, which the result takes where
    the receiver's kept bytes are all ASCII and is BINARY where they are not.
-   keep_enc leaves the receiver's encoding as it is, as sp_String_set_bin did. */
+   keep_enc leaves the receiver's encoding as it is, as sp_String_set_bin did.
+
+   Neither splice roots s or val: nothing in them allocates from the
+   collector before the bytes are written (growth and a moved payload's
+   retirement are malloc and realloc), so neither can be collected under
+   them, and a raise from a check leaves no root of theirs behind (an inline
+   rescue does not restore sp_gc_nroots). */
 void sp_String_splice_chars(sp_String *s, sp_int from, sp_int n, const char *val, int range_form, int keep_enc) {
-  SP_GC_ROOT(s); SP_GC_ROOT_STR(val);
   if (SP_UNLIKELY(!s)) sp_nil_recv("[]=");
   /* (an empty String with the marker byte the readers look behind: a bare
      "" has none, and sp_str_byte_len reads the byte before it) */
@@ -104,7 +109,6 @@ void sp_String_splice_chars(sp_String *s, sp_int from, sp_int n, const char *val
    the result in the encoding the two are compatible in, or with keep_enc the
    receiver's own. */
 void sp_String_splice_bytes(sp_String *s, sp_int start, sp_int len, const char *val, sp_int vstart, sp_int vlen, int keep_enc) {
-  SP_GC_ROOT(s); SP_GC_ROOT_STR(val);
   if (SP_UNLIKELY(!s)) sp_nil_recv("bytesplice");
   if (!val) val = &("\xff" "")[1];
   int bin = sp_str_bytesplice_check(s->data, &start, &len, val, &vstart, &vlen);

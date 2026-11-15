@@ -1395,10 +1395,10 @@ spinel: test/reject/macro_two_modules.rb:12: unsupported send with a runtime met
 == test/reject/macro_two_modules.rb [promote] rc=1
 spinel: test/reject/macro_two_modules.rb:12: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/map_bang_with_index_untyped_proc.rb [default] rc=1
-spinel: test/reject/map_bang_with_index_untyped_proc.rb:5: map!.with_index with a block whose value is untyped, on a typed Array
+spinel: test/reject/map_bang_with_index_untyped_proc.rb:6: map!.with_index with a block whose value is untyped, on a typed Array
 spinel: 1 refusal, nothing written
 == test/reject/map_bang_with_index_untyped_proc.rb [promote] rc=1
-spinel: test/reject/map_bang_with_index_untyped_proc.rb:5: map!.with_index with a block whose value is untyped, on a typed Array
+spinel: test/reject/map_bang_with_index_untyped_proc.rb:6: map!.with_index with a block whose value is untyped, on a typed Array
 spinel: 1 refusal, nothing written
 == test/reject/merge_boxed_block_param_shapes.rb [default] rc=1
 spinel: test/reject/merge_boxed_block_param_shapes.rb:5: a merge! conflict block with a default, keyword, post-rest or fourth required parameter over a boxed Hash

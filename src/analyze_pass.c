@@ -1400,6 +1400,68 @@ static int infer_case_pattern_locals(Compiler *c) {
 }
 
 
+/* `a.map!.with_index { |x, i| v }` (or with_index(off)): the blockless
+   map! / collect! hands its Enumerator to with_index, and the block's value
+   goes into each slot of a, as a map! block's does (emit_with_index_expr
+   writes the values back). The node of the Array (a), or -1 when the call
+   is not this form. */
+static int map_bang_with_index_array(const NodeTable *nt, int id) {
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !sp_streq(nm, "with_index")) return -1;
+  int blk = nt_ref(nt, id, "block");
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -1;
+  int args = nt_ref(nt, id, "arguments"), an = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &an);
+  if (an > 1) return -1;
+  int inner = nt_ref(nt, id, "receiver");
+  if (inner < 0 || nt_kind(nt, inner) != NK_CallNode || nt_ref(nt, inner, "block") >= 0) return -1;
+  const char *in = nt_str(nt, inner, "name");
+  int iargs = nt_ref(nt, inner, "arguments"), ian = 0;
+  if (iargs >= 0) nt_arr(nt, iargs, "arguments", &ian);
+  if (!in || !is_map_bang_alias(in) || ian != 0) return -1;
+  return nt_ref(nt, inner, "receiver");
+}
+
+/* Is every write of local `name` in scope `ls` a new Array nothing else
+   holds (is_fresh_array)? The with_index emitter writes back only into a
+   typed Array or a PolyArray it holds itself: a local that aliases a row
+   (`r = m[0]`) would widen apart from the row it shares. */
+static int local_has_target_write(Compiler *c, Scope *sc, const char *name);
+static int local_writes_all_fresh(Compiler *c, Scope *ls, const char *name) {
+  const NodeTable *nt = c->nt;
+  int seen = 0;
+  /* (a target `a, z = m[0], 1`, a `for` variable or a pattern capture, and
+     `a ||= v` / `a &&= v`, bind a value this does not see) */
+  if (local_has_target_write(c, ls, name)) return 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableOrWriteNode, w)
+    if (comp_scope_of(c, w) == ls && sp_streq(nt_str(nt, w, "name"), name)) return 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableAndWriteNode, w)
+    if (comp_scope_of(c, w) == ls && sp_streq(nt_str(nt, w, "name"), name)) return 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, name) || comp_scope_of(c, w) != ls) continue;
+    if (!is_fresh_array(c, nt_ref(nt, w, "value"))) return 0;
+    seen = 1;
+  }
+  return seen;
+}
+
+/* The plain local a map!.with_index block writes into, as store evidence
+   for infer_write_container_usage (which reads the block's nil arms);
+   -1 for any other receiver. An ivar, a param, a Struct member or a row
+   (`m[0]`, `m.first`) widened here met an emitter that cannot store the
+   boxed value into it, so those keep the typed Array. */
+static int map_bang_with_index_local(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int arr = map_bang_with_index_array(nt, id);
+  if (arr < 0 || nt_kind(nt, arr) != NK_LocalVariableReadNode) return -1;
+  const char *rnm = nt_str(nt, arr, "name");
+  Scope *ls = rnm ? comp_scope_of(c, arr) : NULL;
+  LocalVar *lv = ls ? scope_local(ls, rnm) : NULL;
+  if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) return -1;
+  return local_writes_all_fresh(c, ls, rnm) ? arr : -1;
+}
+
 /* `arr.map! { ... }` REPLACES every element with the block's value, so a tail
    the receiver's element type cannot hold widens the receiver itself -- the
    same reasoning as a push of a foreign element, on a mutation that rewrites
@@ -1414,7 +1476,9 @@ int widen_arrays_from_map_bang(Compiler *c) {
   int changed = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || (!sp_streq(nm, "map!") && !sp_streq(nm, "collect!"))) continue;
+    /* (`a.map!.with_index { }` writes a's slots the same way) */
+    int wi_arr = map_bang_with_index_array(nt, id);
+    if (!nm || (!sp_streq(nm, "map!") && !sp_streq(nm, "collect!") && wi_arr < 0)) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0) continue;
     int body = nt_ref(nt, blk, "body");
@@ -1422,7 +1486,7 @@ int widen_arrays_from_map_bang(Compiler *c) {
     if (bn <= 0) continue;
     TyKind tt = infer_type(c, bb[bn - 1]);
     if (tt == TY_UNKNOWN) continue;
-    int recv = nt_ref(nt, id, "receiver");
+    int recv = wi_arr >= 0 ? wi_arr : nt_ref(nt, id, "receiver");
     if (recv >= 0) recv = mutated_array(c, recv);
     if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
     const char *rnm = nt_str(nt, recv, "name");
@@ -1435,6 +1499,7 @@ int widen_arrays_from_map_bang(Compiler *c) {
        program and then loses the values (`sp_poly_to_i` of a String), which is
        worse than the build failure. They are left alone. */
     if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+    if (wi_arr >= 0 && !local_writes_all_fresh(c, ls, rnm)) continue;
     if (!ty_is_array(lv->type) || lv->type == TY_POLY_ARRAY) continue;
     if (tt == ty_array_elem(lv->type)) continue;
     lv_set_type(lv, TY_POLY_ARRAY); changed = 1;
@@ -3840,7 +3905,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         is_idx_write = 1; is_splice = 1; is_fill = 1; vt = infer_type(c, argv[0]);
         kt = TY_INT;  /* a positional span, never hash evidence */
       }
-      else if (name && ((sp_streq(name, "fill") && an <= 2) || (is_map_bang_alias(name) && an == 0)) &&
+      else if (name && ((sp_streq(name, "fill") && an <= 2) || (is_map_bang_alias(name) && an == 0) ||
+                        map_bang_with_index_local(c, id) >= 0) &&
                nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode) {
         /* the block form, fill([start[, len]]) { |i| v }: the block's value
            is what goes into each slot of the span, the same evidence. map!
@@ -3849,6 +3915,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
            widen_arrays_from_map_bang widens only a plain local. */
         int fblk = nt_ref(nt, id, "block");
         int fbody = nt_ref(nt, fblk, "body");
+        /* (map!.with_index's slots are those of map!'s receiver) */
+        if (map_bang_with_index_local(c, id) >= 0) recv = map_bang_with_index_local(c, id);
         int fbn = 0; const int *fbs = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
         TyKind ftail = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
         vt = ftail;

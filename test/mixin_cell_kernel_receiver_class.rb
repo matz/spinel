@@ -175,3 +175,14 @@ show { LateCondSub.new.t }
 class LateCondSub; include ::Kernel; end
 show { LateCondSub.new.t }
 show { LateCond.new.t }
+
+# a subclass's method_missing made in a reopening is not there before it runs
+class LateMiss < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class LateMissSub < LateMiss; end
+show { LateMissSub.new.t }
+class LateMissSub
+  def method_missing(n, *a) = [:late, n]
+end

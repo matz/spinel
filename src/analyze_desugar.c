@@ -12508,6 +12508,134 @@ static int raise_backtrace_arg(Compiler *c, int id, const int *av, int kw) {
   }
   return 1;
 }
+/* Does keyword hash kw of a raise hold keys only the run time knows (a
+   `**h`, a key that is not a Symbol literal), or `cause:` beside other
+   keys? CRuby takes :cause out of the hash and passes what is left, when
+   anything is left, as one more positional argument. */
+static int raise_kw_needs_split(const NodeTable *nt, int kw) {
+  if (raise_kw_cause_only(nt, kw)) return 0;
+  int n = 0; const int *els = nt_arr(nt, kw, "elements", &n);
+  for (int j = 0; j < n; j++) {
+    if (nt_kind(nt, els[j]) != NK_AssocNode) return 1;
+    int key = nt_ref(nt, els[j], "key");
+    if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) return 1;
+    const char *kv = nt_str(nt, key, "value");
+    if (kv && sp_streq(kv, "cause")) return 1;
+  }
+  return 0;
+}
+/* a raise like id's on the positional operands pos[0..npos) (a temp read,
+   or a copy of a stable operand), then the hash temp th when more > 0, then
+   `cause: <temp tc>` when tc */
+static int raise_kw_split_raise(Compiler *c, NodeTable *nt, int id, const int *pos, const char *const *pnm,
+                                int npos, const char *th, int more, const char *tc) {
+  int args[4], n = 0;
+  for (int j = 0; j < npos; j++)
+    args[n++] = pnm[j] ? rbt_var(c, nt, id, pnm[j], -1) : nt_clone_subtree(nt, pos[j]);
+  if (more) args[n++] = rbt_var(c, nt, id, th, -1);
+  if (tc) {
+    int key = nt_new_node(nt, "SymbolNode"), as = fwd_new_node_like(nt, id, "AssocNode");
+    int kh = fwd_new_node_like(nt, id, "KeywordHashNode");
+    nt_node_set_str(nt, key, "value", "cause");
+    nt_node_set_ref(nt, as, "key", key);
+    nt_node_set_ref(nt, as, "value", rbt_var(c, nt, id, tc, -1));
+    nt_node_set_arr(nt, kh, "elements", &as, 1);
+    args[n++] = kh;
+  }
+  int r = fwd_new_call(nt, -1, nt_str(nt, id, "name"), -1), a = nt_new_node(nt, "ArgumentsNode");
+  nt_node_set_arr(nt, a, "arguments", args, n);
+  nt_node_set_ref(nt, r, "arguments", a);
+  fwd_copy_loc(nt, r, id);
+  return r;
+}
+static int raise_kw_split_if(NodeTable *nt, int pred, int yes, int no) {
+  int ys = nt_new_node(nt, "StatementsNode"), nst = nt_new_node(nt, "StatementsNode");
+  int el = nt_new_node(nt, "ElseNode"), f = nt_new_node(nt, "IfNode");
+  nt_node_set_arr(nt, ys, "body", &yes, 1);
+  nt_node_set_arr(nt, nst, "body", &no, 1);
+  nt_node_set_ref(nt, el, "statements", nst);
+  nt_node_set_ref(nt, f, "predicate", pred);
+  nt_node_set_ref(nt, f, "statements", ys);
+  nt_node_set_ref(nt, f, "subsequent", el);
+  return f;
+}
+static int raise_kw_split_sym(NodeTable *nt, const char *v) {
+  int s = nt_new_node(nt, "SymbolNode");
+  nt_node_set_str(nt, s, "value", v);
+  return s;
+}
+/* `raise X, m, **h` (or `k => v` with k a variable, or `cause:` beside other
+   keys): the raise becomes
+     t = {**h}
+     if t.key?(:cause)
+       c = t.delete(:cause)
+       t.empty? ? raise(X, m, cause: c) : raise(X, m, t, cause: c)
+     else
+       t.empty? ? raise(X, m) : raise(X, m, t)
+     end
+   with X and m held first, in order, where reading one runs code. Each
+   raise is a form the other passes already take. */
+static int raise_kw_split(Compiler *c, int id, const int *av, int npos) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  /* (av points into the node table, which new nodes may move) */
+  int pv[2] = { av[0], npos > 1 ? av[1] : -1 }, kh = av[npos];
+  int base = nt->count;
+  const char *tag = comp_node_tag(c, id);
+  char ta[2][48], th[48], tc[48];
+  const char *pnm[2] = { NULL, NULL };
+  int stm[4], ns = 0;
+  for (int j = 0; j < npos; j++) {
+    if (fwd_stable_operand(c, pv[j])) continue;
+    snprintf(ta[j], sizeof ta[j], "__rks_a%d%s", j, tag);
+    pnm[j] = ta[j];
+    stm[ns++] = rbt_var(c, nt, id, ta[j], pv[j]);
+  }
+  snprintf(th, sizeof th, "__rks_h%s", tag);
+  snprintf(tc, sizeof tc, "__rks_c%s", tag);
+  int kn = 0; const int *ke = nt_arr(nt, kh, "elements", &kn);
+  int *kc = malloc(sizeof(int) * (kn > 0 ? kn : 1));
+  for (int j = 0; j < kn; j++) kc[j] = ke[j];
+  int hn = fwd_new_node_like(nt, id, "HashNode");
+  nt_node_set_arr(nt, hn, "elements", kc, kn);
+  free(kc);
+  stm[ns++] = rbt_var(c, nt, id, th, hn);
+  NodeKind k0 = nt_kind(nt, pv[0]);
+  int msg_lit = k0 == NK_StringNode || k0 == NK_InterpolatedStringNode;
+  /* the cause arm */
+  int del = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "delete", raise_kw_split_sym(nt, "cause"));
+  fwd_copy_loc(nt, del, id);
+  int cw = rbt_var(c, nt, id, tc, del);
+  int ce = raise_kw_split_if(nt, fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "empty?", -1),
+                             raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 0, tc),
+                             /* (a Hash left after X and m is a backtrace,
+                                 whose TypeError set_backtrace raises before
+                                 the cause is ever attached; so is the
+                                 TypeError of a String and a Hash) */
+                             raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 1, npos < 2 && !msg_lit ? tc : NULL));
+  int cst = nt_new_node(nt, "StatementsNode"), cb[2] = { cw, ce };
+  nt_node_set_arr(nt, cst, "body", cb, 2);
+  int cpar = fwd_new_node_like(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, cpar, "body", cst);
+  /* no cause */
+  int ne = raise_kw_split_if(nt, fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "empty?", -1),
+                             raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 0, NULL),
+                             raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 1, NULL));
+  int has = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "key?", raise_kw_split_sym(nt, "cause"));
+  stm[ns++] = raise_kw_split_if(nt, has, cpar, ne);
+  int ob = nt_new_node(nt, "StatementsNode");
+  nt_node_set_arr(nt, ob, "body", stm, ns);
+  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, id, "body", ob);
+  nt_node_set_int(nt, id, "node_line", line);
+  nt_node_set_int(nt, id, "node_file", file);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    c->node_cbody[j] = c->node_cbody[id];
+  }
+  return 1;
+}
 int desugar_raise_own_exception(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -12527,6 +12655,13 @@ int desugar_raise_own_exception(Compiler *c) {
     int kw = nt_kind(nt, av[ac - 1]) == NK_KeywordHashNode, npos = ac - kw;
     if (npos < 1 || npos > 3) continue;
     if (nt_int(nt, id, "raise_own_kept", 0)) continue;
+    /* keys only the run time knows: split out :cause at run time */
+    if (kw && npos <= 2 && raise_kw_needs_split(nt, av[ac - 1])) {
+      int sfi = nm[0] == 'f';
+      if (owned[sfi] < 0) owned[sfi] = raise_name_program_defined(c, nm);
+      if (!owned[sfi] && raise_kw_split(c, id, av, npos)) changed = 1;
+      continue;
+    }
     /* `raise X, m, k: v` with a key other than a lone `cause:` passes the
        hash as one more positional argument: X, m and the hash as the
        backtrace, whose set_backtrace raises the TypeError (and

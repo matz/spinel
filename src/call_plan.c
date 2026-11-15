@@ -4658,11 +4658,13 @@ static void ct_landing_classes(Compiler *c, int id, CtLanding at, const char *nm
     /* a name a call may run ahead of (elab_method_late) has its entries made
        per class the call meets (ver_absent_note), a holder's descendant or
        includer among them: each class its boxed dispatch takes an arm for,
-       on either side, as the arms ask (cplan_cand_target). Asked once the
-       entries' build is over, when those are noted (and the candidates'
-       lists are kept, the scope index frozen); the build's own asks need
-       the holders alone */
-    if (c->ver_built && elab_method_late(c, nm)) {
+       on either side, as the arms ask (cplan_cand_target). So has a name
+       whose window spans two versions on a class that holds none of them
+       (a subclass that inherits a method its parent redefines later): the
+       span's entry for that class. Asked once the entries' build is over,
+       when those are noted (and the candidates' lists are kept, the scope
+       index frozen); the build's own asks need the holders alone */
+    if (c->ver_built && ct_version_named(c, nm)) {
       int npc = 0;
       const PolyCand *pcs = comp_poly_candidates_at(c, id, nm, &npc);
       for (int i = 0; i < npc; i++) fn(c, id, nm, pcs[i].cls, 0, arg);

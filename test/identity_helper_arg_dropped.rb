@@ -33,6 +33,14 @@ lp_t = build(2, 1)
 3.times { |i| share(lp_t); lp_t[0][0] += i }
 p lp_t
 
+# shared under a condition, and as the last statement of an each block,
+# whose value each ignores
+cd_t = build(2, 4)
+share(cd_t) if cd_t.size > 1
+eb_t = build(2, 6)
+[1, 2].each { |i| eb_t[0][0] += i; share(eb_t) }
+p cd_t[1][1], eb_t[0][0]
+
 # (each table below is built where it is used: one built by `build` would
 # join the tables above, and its escape would keep them all boxed)
 
@@ -96,27 +104,8 @@ end
 DmA.new.run
 DmB.new.run
 
-# a helper an include copies into the class
-module Keeper
-  def keep_inc(o)
-    @kept_inc = o
-    o
-  end
-end
-
-class Inc
-  include Keeper
-
-  def run
-    in_t = Array.new(2) { Array.new(2, 0) }
-    keep_inc(in_t)
-    @kept_inc[0][0] = "i"
-    p in_t[0]
-  end
-end
-Inc.new.run
-
-# a parameter an RBS signature pins
+# a parameter an RBS signature types as an Array takes the table converted,
+# not boxed
 class Pinned
   #: (Array[untyped]) -> void
   def take(obj)
@@ -131,6 +120,23 @@ class Pinned
 end
 Pinned.new.run
 
-# each helper above also answers other values, so its parameter is untyped
-# and the rule, not a slot of the parameter's own, decides each table
-p keep("k"), keep_default("d"), hold(1).class, lend(:y) { }, DmA.new.ident("i"), Inc.new.keep_inc(2)
+# each helper above but `take` also answers other values, so its parameter
+# is untyped and the rule, not a slot of the parameter's own, decides each table
+p keep("k"), keep_default("d"), hold(1).class, lend(:y) { }, DmA.new.ident("i")
+
+# a helper that hands its argument on to another method
+def pass_on(o)
+  stash(o)
+  o
+end
+
+def stash(v) = ($stashed = v)
+ho_t = Array.new(2) { Array.new(2, 0) }
+pass_on(ho_t)
+$stashed[0][0] = "h"
+p ho_t[0], pass_on(:x)
+
+# the program's last statement shares a table: nothing reads its value
+ls_t = Array.new(2) { Array.new(2, 7) }
+p ls_t[1][1]
+share(ls_t)

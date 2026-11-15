@@ -24,10 +24,27 @@ module Singleton
         lock.synchronize { @singleton__instance__ ||= new }
       end
     end
+
+    # Singleton.__init__'s work, on the class itself: its instance and its
+    # lock are the class's own.
+    def __singleton_reset__
+      SINGLETON_SETUP_LOCK.synchronize do
+        @singleton__instance__ = nil
+        @singleton__lock__ = nil
+      end
+      self
+    end
   end
 
   SINGLETON_SETUP_LOCK = Thread::Mutex.new
   private_constant :SINGLETON_SETUP_LOCK
+
+  # Clears klass's instance and its lock, so the next `instance` builds a
+  # new one (CRuby's singleton.rb, :nodoc:, which code uses to reset a
+  # singleton). Answers klass.
+  def self.__init__(klass)
+    klass.__singleton_reset__
+  end
 
   def self.included(klass)
     klass.extend(SingletonClassMethods)

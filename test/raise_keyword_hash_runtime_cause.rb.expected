@@ -1,0 +1,28 @@
+obj k=>nil: RuntimeError: "e" cause=nil
+obj x=>nil: RuntimeError: "{x: nil}" cause=nil
+cls msg k=>c0: RuntimeError: "m" cause=#<StandardError: c0>
+cls msg x=>1: TypeError: "backtrace must be an Array of String or an Array of Thread::Backtrace::Location" cause=nil
+str k=>c0: RuntimeError: "m" cause=#<StandardError: c0>
+obj **h: RuntimeError: "e" cause=nil
+cls msg **h2: RuntimeError: "m" cause=#<StandardError: c0>
+cls msg **h3: RuntimeError: "m" cause=nil
+cls msg **h4: TypeError: "backtrace must be an Array of String or an Array of Thread::Backtrace::Location" cause=nil
+cls **h2: RuntimeError: "RuntimeError" cause=#<StandardError: c0>
+fail k=>c0: RuntimeError: "m" cause=#<StandardError: c0>
+lit cause and x: TypeError: "backtrace must be an Array of String or an Array of Thread::Backtrace::Location" cause=nil
+string key: RuntimeError: "{\"cause\" => 1}" cause=nil
+interp key: RuntimeError: "e" cause=#<StandardError: c0>
+in rescue **h3: RuntimeError: "m" cause=#<RuntimeError: outer>
+in rescue **h: RuntimeError: "m" cause=nil
+in rescue x=>1: RuntimeError: "{x: 1}" cause=#<RuntimeError: outer>
+order: RuntimeError: "m" cause=#<StandardError: c0>
+[:k, :m, :h]
+own exception: MyErr: "own m" cause=#<StandardError: c0>
+forwarded: ArgumentError: "a" cause=#<StandardError: c0>
+forwarded empty: ArgumentError: "a" cause=nil
+obj cause and x: RuntimeError: "{x: 1}" cause=#<StandardError: c0>
+str cause and x: TypeError: "exception class/object expected" cause=nil
+str var cause and x: TypeError: "exception class/object expected" cause=nil
+str var k and x: TypeError: "exception class/object expected" cause=nil
+str call cause and x: TypeError: "exception class/object expected" cause=nil
+obj var cause and x: RuntimeError: "{x: 1}" cause=#<StandardError: c0>

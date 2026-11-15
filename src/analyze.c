@@ -45929,19 +45929,35 @@ typedef struct {
   Compiler *c;
   Scope *sc;
   int id, seq, lread, ns, serial;
-  int stm[256];
+  /* the statements, sized for every operand the call has (bo_hoist_init) */
+  int *stm;
 } BoHoist;
+/* h for call id, with room for every statement its rewrite can make: one per
+   operand (the receiver, each argument, each pair's key and value, the block
+   expression), the block's sequence and the call itself; 0 when out of
+   memory */
+static int bo_hoist_init(BoHoist *h, Compiler *c, Scope *sc, int id, int seq, int lread, int nops) {
+  *h = (BoHoist){ c, sc, id, seq, lread, 0, 0, malloc(sizeof(int) * (size_t)nops) };
+  return h->stm != NULL;
+}
 /* One `__bo_<id>_<k> = e` statement of h; answers the read that replaces e, or
    e itself when nothing says it must be held: a sequence can reassign even a
    plain read, and so can an operand that rebinds `&s`'s s, under an operand
    that reads it (`[s]`; a literal with no read it cannot). */
 static int bo_hoist(BoHoist *h, int e) {
   NodeTable *nt = (NodeTable *)h->c->nt;
-  if (h->ns >= 255 || e < 0 || !(h->seq || bo_may_act(h->c, e) || (h->lread && bo_reads_local(nt, e)))) return e;
+  if (e < 0 || !(h->seq || bo_may_act(h->c, e) || (h->lread && bo_reads_local(nt, e)))) return e;
   char tn[64];
   snprintf(tn, sizeof tn, "__bo_%s_%d", comp_node_tag(h->c, h->id), h->serial++);
   h->stm[h->ns++] = an_temp_node(nt, h->sc, tn, e);
   return an_temp_node(nt, h->sc, tn, -1);
+}
+/* Set ref `key` of `node` to the read that replaces it (bo_hoist); none
+   when nothing was held. */
+static void bo_hold_ref(BoHoist *h, int node, const char *key) {
+  NodeTable *nt = (NodeTable *)h->c->nt;
+  int from = nt_ref(nt, node, key), to = bo_hoist(h, from);
+  if (to != from) nt_node_set_ref(nt, node, key, to);
 }
 /* `recv.m(args, &expr)`: Ruby evaluates the receiver, then the arguments, then
    the block expression. The emitted C passes the block as one more function
@@ -46002,26 +46018,29 @@ static void desugar_block_arg_order(Compiler *c) {
     int *av = an > 0 ? malloc(sizeof(int) * (size_t)an) : NULL;
     if (an > 0 && !av) continue;
     for (int k = 0; k < an; k++) av[k] = av0[k];
-    int first = nt->count;
-    BoHoist h = { c, sc, id, seq, lread, 0, 0, { 0 } };
+    int first = nt->count, nops = 3 + an + pn;
+    for (int k = 0; k < an; k++) {
+      int en = 0;
+      if (nt_kind(nt, av[k]) == NK_KeywordHashNode) nt_arr(nt, av[k], "elements", &en);
+      nops += 2 * en;
+    }
+    BoHoist h;
+    if (!bo_hoist_init(&h, c, sc, id, seq, lread, nops)) { free(av); continue; }
     /* A sequence can reassign even a plain read: capture the receiver and
        arguments before it, inside the call's own evaluation site. */
     int nrecv = bo_hoist(&h, recv);
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
       if (ak == NK_SplatNode) {
-        int ex = nt_ref(nt, av[k], "expression");
-        int nex = bo_hoist(&h, ex);
-        if (nex != ex) nt_node_set_ref(nt, av[k], "expression", nex);
+        bo_hold_ref(&h, av[k], "expression");
       }
       else if (ak == NK_KeywordHashNode) {
         int en = 0; const int *el0 = nt_arr(nt, av[k], "elements", &en);
         int *el = malloc(sizeof(int) * (size_t)(en > 0 ? en : 1));
         for (int e = 0; e < en; e++) el[e] = el0[e];
         for (int e = 0; e < en; e++) {
-          int key = nt_ref(nt, el[e], "key"), val = nt_ref(nt, el[e], "value");
-          int nk = bo_hoist(&h, key); if (nk != key) nt_node_set_ref(nt, el[e], "key", nk);
-          int nv = bo_hoist(&h, val); if (nv != val) nt_node_set_ref(nt, el[e], "value", nv);
+          bo_hold_ref(&h, el[e], "key");
+          bo_hold_ref(&h, el[e], "value");
         }
         free(el);
       }
@@ -46034,23 +46053,24 @@ static void desugar_block_arg_order(Compiler *c) {
     if (nt_kind(nt, be) == NK_ParenthesesNode) {
       int pb = nt_ref(nt, be, "body");
       int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
-      if (ps && pn >= 2 && h.ns + pn < 255 &&
+      if (ps && pn >= 2 &&
           (nt_kind(nt, ps[pn - 1]) == NK_LambdaNode || is_proc_create(c, ps[pn - 1]))) {
         for (int k = 0; k < pn - 1; k++) h.stm[h.ns++] = ps[k];
         be = ps[pn - 1];
       }
     }
     int nbe = bo_hoist(&h, be);
-    if (h.ns == 0 || h.ns >= 255) { free(av); continue; }
+    if (h.ns == 0) { free(h.stm); free(av); continue; }
     nt_node_set_ref(nt, blk, "expression", nbe);
     if (args >= 0) nt_node_set_arr(nt, args, "arguments", av, an);
     free(av);
     int nc = bo_shallow_copy(nt, id);
-    if (nc < 0) continue;
+    if (nc < 0) { free(h.stm); continue; }
     if (recv >= 0) nt_node_set_ref(nt, nc, "receiver", nrecv);
     h.stm[h.ns++] = nc;
     int stmts = nt_new_node(nt, "StatementsNode");
     nt_node_set_arr(nt, stmts, "body", h.stm, h.ns);
+    free(h.stm);
     /* the node keeps its id, line and file: the parentheses */
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0),
               col = nt_int(nt, id, "node_col", 0);

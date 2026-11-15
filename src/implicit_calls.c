@@ -320,9 +320,10 @@ static int ic_type_holds(Compiler *c, TyKind t, const char *name, int depth) {
 
 static int ic_may_hold_elems(Compiler *c, int node, const char *name) {
   if (node < 0) return 1;
-  /* a boxed Range of objects is a builtin to the class facts, but its
-     members, which the walk hands succ and <=>, are the program's */
-  return ic_type_holds(c, comp_ntype(c, node), name, 0) && (!ic_boxed_builtin(c, node, name) || c->ic->obj_range);
+  /* a boxed Range of objects, Array or Hash is a builtin to the class facts,
+     but its members, which the walk hands succ, <=> and ==, are the program's */
+  return ic_type_holds(c, comp_ntype(c, node), name, 0) &&
+         (!ic_boxed_builtin(c, node, name) || c->ic->obj_range || c->ic->obj_coll);
 }
 
 /* the last statement's node of a block's body, -1 when it has none */
@@ -449,6 +450,11 @@ void ic_begin(Compiler *c, int typed) {
   cr_class_only_names(c, &c->ic->class_only);   /* also the untyped passes' (g_cr_untyped) */
   for (int id = 0; typed && !c->ic->obj_range && id < c->nt->count; id++)
     c->ic->obj_range = comp_ntype(c, id) == TY_OBJ_RANGE;
+  for (int id = 0; typed && !c->ic->obj_coll && id < c->nt->count; id++) {
+    TyKind t = comp_ntype(c, id);
+    if (ty_is_array(t)) c->ic->obj_coll = !cr_ty_builtin_value(c, ty_array_elem(t));
+    else if (ty_is_hash(t)) c->ic->obj_coll = !cr_ty_builtin_value(c, ty_hash_key(t)) || !cr_ty_builtin_value(c, ty_hash_val(t));
+  }
 }
 
 void ic_scope(Compiler *c, int scope) {

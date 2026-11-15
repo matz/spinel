@@ -2210,12 +2210,14 @@ static int ct_pin_for(const Compiler *c, int id, const char *name) {
   const char *own = nt_str(c->nt, id, "name");
   return own && sp_streq(own, name) ? ct_pin_of(c, id) : -1;
 }
-/* ...a pin of call id to a method of a class below cls, named name, which a lookup on cls's chain does not find: a
-   blank slate's Kernel guard calls a subclass's own method_missing where self is of that class (ver_kern_mm_arm) */
-static int ct_pin_below(Compiler *c, int id, int cls, const char *name) {
+/* ...a pin of call id to a method of a class below cls, named name, on the side flags ask (CT_CMETHOD), which a lookup
+   on cls's chain does not find: a blank slate's Kernel guard calls a subclass's own method_missing where self is of
+   that class (ver_kern_mm_arm) */
+static int ct_pin_below(Compiler *c, int id, int cls, const char *name, unsigned flags) {
   int pin = id >= 0 && cls >= 0 ? ct_pin_of(c, id) : -1;
   const Scope *s = pin >= 0 ? &c->scopes[pin] : NULL;
-  return s && !s->is_cmethod && s->class_id >= 0 && s->name && sp_streq(s->name, name) && is_descendant(c, s->class_id, cls) ? pin : -1;
+  return s && !s->is_cmethod == !(flags & CT_CMETHOD) && s->class_id >= 0 && s->name && sp_streq(s->name, name) &&
+         is_descendant(c, s->class_id, cls) ? pin : -1;
 }
 int cplan_pinned_vis(const Compiler *c, int id) {
   const struct VerPin *p = ct_pin_find(c, id);
@@ -4196,7 +4198,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
          the tables give: an accessor has no method scope, so the record's
          proof is asked here, where the call runs before every version) */
       if (ml->kind == ML_NONE && (flags & CT_REACH) && id >= 0 && ct_before_versions(c, id, cls, name, flags, -1)) ml->why = MLW_RECORD;
-      if ((pin = ct_pin_below(c, id, cls, name)) >= 0) {
+      if ((pin = ct_pin_below(c, id, cls, name, flags)) >= 0) {
         *ml = (MethodLookup){ .kind = ML_METHOD, .def_class = c->scopes[pin].class_id };
         mi = pin;
       }

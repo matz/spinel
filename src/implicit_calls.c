@@ -13,9 +13,11 @@ int g_dump_implicit = 0;
 
 /* ---- the calls of a node ---- */
 
-typedef struct { IcCall *out; int max, n; } IcSink;
+/* only: count just the calls of this name; roles: the roles of a builtin's callbacks that count */
+typedef struct { IcCall *out; int max, n; const char *only; unsigned roles; } IcSink;
 
 static void ic_push(IcSink *s, const char *name, int operand, unsigned role, int recv, const char *target) {
+  if (s->only && (!name || strcmp(name, s->only))) return;
   if (s->n < s->max) {
     s->out[s->n].name = name;
     s->out[s->n].operand = operand;
@@ -35,8 +37,9 @@ static int ic_builtin_callbacks(IcSink *s, const char *name, const char *recv_cl
   const BopCallback *cbs = NULL;
   int n = recv_class ? bop_class_callbacks(recv_class, name, &cbs) : bop_name_callbacks(name, &cbs);
   for (int i = 0; i < n; i++)
-    for (unsigned bit = 1; bit <= BCR_HOOK; bit <<= 1)   /* (BCR_KEY qualifies the BLOCK call; it is none of its own) */
-      if (bit != BCR_GVAR /* the assignment's row, not a call's */ && (cbs[i].roles & bit) && (roles_wanted & bit)) ic_push(s, cbs[i].name, operand, bit, recv, NULL);
+    for (unsigned bit = 1; bit <= BCR_MADE; bit <<= 1)
+      if (bit != BCR_GVAR /* the assignment's row, not a call's */ && bit != BCR_KEY /* qualifies the BLOCK call; it is none of its own */ &&
+          (cbs[i].roles & bit) && (roles_wanted & s->roles & bit)) ic_push(s, cbs[i].name, operand, bit, recv, NULL);
   return n;
 }
 
@@ -107,10 +110,15 @@ static int ic_super_calls(Compiler *c, int id, IcSink *s) {
   return s->n;
 }
 
-int ic_node_calls(Compiler *c, int id, IcCall *out, int max) {
+/* What ic_calls answers: the calls a pass could reach (the callbacks of a
+   call's builtin only where a scope of the program defines them), all of the
+   node's, or only its syntax rows. */
+typedef enum { IC_REACHABLE, IC_ALL, IC_ROWS } IcMode;
+
+/* The calls of node id into the sink. */
+static int ic_calls(Compiler *c, int id, IcSink *s, IcMode mode) {
   const NodeTable *nt = c->nt;
-  IcSink s = { out, max, 0 };
-  if (nt_implied_super(nt, id)) return ic_super_calls(c, id, &s);
+  if (nt_implied_super(nt, id)) return mode == IC_ROWS ? 0 : ic_super_calls(c, id, s);
   NtImplied rows[16];
   int nr = nt_implied_calls(nt, id, rows, 16), cnt = nr;
   NtImplied *big = NULL;
@@ -122,16 +130,16 @@ int ic_node_calls(Compiler *c, int id, IcCall *out, int max) {
     row = big;
   }
   for (int i = 0; i < cnt; i++) {
-    ic_push(&s, row[i].name, row[i].operand, 0, 0, row[i].target);
+    ic_push(s, row[i].name, row[i].operand, 0, 0, row[i].target);
     /* the implied call of a core name is a call of the builtin on its
        operand: the elements of that operand and the operand itself, when it
        is a program subclass of the core class, are handed to its callbacks */
-    if (row[i].operand >= 0) ic_builtin_callbacks(&s, row[i].name, NULL, row[i].operand, BCR_ELEM | BCR_SELF, 1);
+    if (row[i].operand >= 0) ic_builtin_callbacks(s, row[i].name, NULL, row[i].operand, BCR_ELEM | BCR_SELF, 1);
   }
   free(big);
-  if (nt_kind(nt, id) == NK_CallNode) {
+  if (mode != IC_ROWS && nt_kind(nt, id) == NK_CallNode) {
     const char *name = nt_str(nt, id, "name");
-    if (!name) return s.n;
+    if (!name) return s->n;
     /* a method a C extension defines receives values the extension's C code
        calls CRuby's protocol methods on (rb_num2long asks for to_int, and so
        on) and sends names it computes: any callback name, as for a core name
@@ -139,22 +147,49 @@ int ic_node_calls(Compiler *c, int id, IcCall *out, int max) {
     if (c->ic && c->ic->has_cext && anh_has(&c->ic->cext, name)) return IC_ANY;
     const BopCallback *any = NULL;
     int nany = bop_name_callbacks(name, &any);   /* the union over every receiver: no callback in it, none in a class's */
-    if (nany == 0) return s.n;
+    if (nany == 0) return s->n;
     /* a call none of whose callbacks any scope defines keeps nothing */
-    int defined = nany < 0;
-    for (int i = 0; i < nany && !defined; i++) defined = ic_defined(c, any[i].name);
-    if (!defined) return s.n;
+    int defined = mode == IC_ALL || nany < 0;
+    for (int i = 0; i < nany && !defined; i++) defined = (any[i].roles & s->roles) && ic_defined(c, any[i].name);
+    if (!defined) return s->n;
     /* a builtin value answers its class's methods and Kernel's; an instance
        of a plain class, Object's, Kernel's and BasicObject's: those classes'
        callbacks of the name, not those of every receiver */
     const char *core = ic_core_receiver(c, id);
     char own[64];   /* the probe table's convention: a class's own row and Kernel's functions */
     if (core) snprintf(own, sizeof own, "%s Kernel", core);
-    if (core ? ic_class_rows(&s, name, own, id) : ic_plain_receiver(c, id) && ic_class_rows(&s, name, core_class_ancestors("Object"), id)) return s.n;
+    if (core ? ic_class_rows(s, name, own, id) : ic_plain_receiver(c, id) && ic_class_rows(s, name, core_class_ancestors("Object"), id)) return s->n;
     if (nany < 0) return IC_ANY;
-    ic_builtin_callbacks(&s, name, NULL, id, BCR_ALL, 0);
+    ic_builtin_callbacks(s, name, NULL, id, BCR_ALL, 0);
   }
-  return s.n;
+  return s->n;
+}
+
+int ic_node_calls(Compiler *c, int id, IcCall *out, int max) {
+  IcSink s = { out, max, 0, NULL, BCR_HANDED };
+  return ic_calls(c, id, &s, IC_REACHABLE);
+}
+
+int ic_node_calls_name(Compiler *c, int id, const char *name, int class_side) {
+  IcSink s = { NULL, 0, 0, name, BCR_ALL };
+  int n = ic_calls(c, id, &s, IC_ALL);
+  return n == IC_ANY ? ic_core_callback(name, class_side) : n > 0;
+}
+
+int ic_held_rows_name(Compiler *c, int id, const char *name) {
+  const NodeTable *nt = c->nt;
+  IcSink s = { NULL, 0, 0, name, BCR_ALL };
+  for (int i = 0, n = nt_num_refs(nt, id); i < n; i++) {
+    int ch = nt_ref_at(nt, id, i);
+    if (ch >= 0 && ic_calls(c, ch, &s, IC_ROWS) > 0) return 1;
+  }
+  for (int i = 0, n = nt_num_arrs(nt, id); i < n; i++) {
+    int ne = 0;
+    const int *el = nt_arr_at(nt, id, i, &ne);
+    for (int j = 0; j < ne; j++)
+      if (el[j] >= 0 && ic_calls(c, el[j], &s, IC_ROWS) > 0) return 1;
+  }
+  return 0;
 }
 
 /* A class object is handed over in the CLASS role, or is the receiver whose
@@ -165,7 +200,7 @@ int ic_node_calls(Compiler *c, int id, IcCall *out, int max) {
    port, a loaded object, a name asked through rb_check_funcall), or by a
    node's syntax. */
 int ic_core_callback(const char *name, int class_side) {
-  unsigned roles = bop_callback_roles(name);
+  unsigned roles = bop_callback_roles(name) & BCR_HANDED;   /* (an object it makes is no value it is handed) */
   if (class_side) return (roles & (BCR_CLASS | BCR_HOOK)) != 0 || (nt_implied_name_sides(name) & NTS_CLASS) != 0;
   return (roles & ~(unsigned)(BCR_CLASS | BCR_HOOK)) != 0 || (nt_implied_name_sides(name) & NTS_INST) != 0;
 }
@@ -365,7 +400,7 @@ void ic_cause(Compiler *c, int node, const IcCall *k, char *buf, size_t n) {
   }
   const char *role = k->role == BCR_ARG ? "ARG" : k->role == BCR_ELEM ? "ELEM" : k->role == BCR_BLOCK ? "BLOCK" :
                      k->role == BCR_SELF ? "SELF" : k->role == BCR_CLASS ? "CLASS" : k->role == BCR_PORT ? "PORT" :
-                     k->role == BCR_ASKED ? "ASKED" : k->role == BCR_HOOK ? "HOOK" : "LOADED";
+                     k->role == BCR_ASKED ? "ASKED" : k->role == BCR_HOOK ? "HOOK" : k->role == BCR_MADE ? "MADE" : "LOADED";
   snprintf(buf, n, "%s line %d@%s: %s of %s", k->recv ? nt_type(nt, node) : "call", line, file, k->name, role);
 }
 

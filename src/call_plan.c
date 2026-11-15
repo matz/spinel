@@ -1294,8 +1294,9 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
 static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
   NodeKind k = nt_kind(c->nt, id);
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) cplan_resolve_super(c, id, p);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) cplan_resolve_super(c, id, p);   /* (its reads stay the super family's to convert) */
   else if (k == NK_CallNode) {
+    MtabMark mt_was = mtab_push_in(c, id);   /* (what the resolution asks of the tables is the call's) */
     cplan_resolve_call(c, id, p);
     p->answers_receiver = p->via == UC_CMETH && cmethod_receiver_class(c, p->mi, p->owner_ci) >= 0;
     int recv = nt_ref(c->nt, id, "receiver");
@@ -1306,6 +1307,7 @@ static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
       int mi = call_target(c, id, -1, name, CT_TOP, NULL);
       if (mi >= 0 && !c->scopes[mi].yields) p->send_fallback = mi;
     }
+    mtab_pop(c, mt_was);
   }
 }
 
@@ -7722,6 +7724,7 @@ static void cpoly_defaults0(Compiler *c, int id, const char *name, const PolySpe
    its arms answer into. An OpenStruct member read makes an untyped call
    poly; emission reads these flags and the adjusted result type. */
 static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, PolySpecials0 *out) {
+  MtabMark mt_was = mtab_push_in(c, id);   /* (a part of an interpolation is asked under its parent's frame) */
   PolySpecials0 ps;
   poly_specials0(c, id, name, &ps);
   *out = ps;
@@ -7746,6 +7749,7 @@ static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, Pol
              (poly_key_prim(c, id, name, 0, -1, 0, -1) ? PPF_KEY_PRIM : 0) |
              (cpoly_key_clsv(c, id, name) ? PPF_KEY_CLSV : 0) |
              (poly_exc_cand(c, name) ? PPF_KEY_EXC : 0);
+  mtab_pop(c, mt_was);
 }
 
 static void cpoly_resolve(Compiler *c, int id, PolyPlan *p, int full) {

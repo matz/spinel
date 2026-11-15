@@ -8,6 +8,7 @@ static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
 #include "builtin_ops.h"
 #include "call_plan.h"
 #include "implied_calls.h"
+#include "method_table_check.h"
 #include "codegen_call_arms.h"
 #include "value_pos.h"
 #include <ctype.h>
@@ -8725,7 +8726,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
        read `->len` off the object'"'"'s struct (#3956). */
     if (ty_is_object(pt)) {
       int adef = -1;
-      int am = comp_deconstruct_method(c, ty_object_class(pt), &adef);
+      int am = comp_deconstruct_method(c, pat, ty_object_class(pt), &adef);
       if (am < 0 || adef < 0 || c->scopes[am].ret == TY_UNKNOWN) return 0;
       TyKind art = c->scopes[am].ret;
       const char *acn = c->classes[adef].c_name;
@@ -8893,7 +8894,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
          the method, while `case`/`in` against the same object compiled
          (#3956). */
       int ddef = -1;
-      int dm = comp_method_in_chain(c, ty_object_class(pt), "deconstruct_keys", &ddef);
+      int dm = comp_deconstruct_keys_method(c, pat, ty_object_class(pt), &ddef);
       if (dm >= 0 && ddef >= 0 && c->scopes[dm].ret != TY_UNKNOWN) {
         TyKind drt = c->scopes[dm].ret;
         const char *dcn = c->classes[ddef].c_name;
@@ -9473,6 +9474,14 @@ typedef struct { int msg, key, lbl, bail; } PmDiag;
 static int pm_diag_lit_bound(const NodeTable *nt, int n) {
   return n < 0 || (nt_kind(nt, n) == NK_IntegerNode);
 }
+/* Class ci's own class method `===` as the owner of the constant pattern or condition cnode asks it: the
+   node that holds the row (the pattern, `in` or `when` above it). */
+static int pm_own_cmethod_eqq(Compiler *c, int cnode, int ci) {
+  MtabMark mt_was = mtab_push_row_owner(c, cnode, "===");
+  int mi = class_own_cmethod_eqq(c, ci);
+  mtab_pop(c, mt_was);
+  return mi;
+}
 static int pm_diag_ok(Compiler *c, int pat) {
   const NodeTable *nt = c->nt;
   if (pat < 0) return 1;
@@ -9486,7 +9495,7 @@ static int pm_diag_ok(Compiler *c, int pat) {
      for the message: the plain subject-only message is raised instead */
   case NK_ConstantReadNode: case NK_ConstantPathNode: {
     int ci = const_node_class_index(c, pat);
-    return ci < 0 || class_own_cmethod_eqq(c, ci) < 0;
+    return ci < 0 || pm_own_cmethod_eqq(c, pat, ci) < 0;
   }
   default:
     break;
@@ -9865,15 +9874,15 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
    the call from being reached, and a failed guard still reuses the answer. */
 static int emit_pm_array_cache(Compiler *c, TyKind pt, const int *conds, int cn, int indent, Buf *b) {
   if (!ty_is_object(pt)) return -1;
-  int dm = comp_deconstruct_method(c, ty_object_class(pt), NULL);   /* the method the arm calls */
-  if (dm < 0 || !ty_is_array(c->scopes[dm].ret)) return -1;
-  int arrays = 0;
+  int arrays = 0, first = -1;
   for (int w = 0; w < cn; w++) {
     int guard = -1, neg = 0;
     int pat = pm_unwrap_guard(c->nt, nt_ref(c->nt, conds[w], "pattern"), &guard, &neg);
-    if (nt_kind(c->nt, pat) == NK_ArrayPatternNode) arrays++;
+    if (nt_kind(c->nt, pat) == NK_ArrayPatternNode && arrays++ == 0) first = pat;
   }
   if (arrays < 2) return -1;
+  int dm = comp_deconstruct_method(c, first, ty_object_class(pt), NULL);   /* the method the arms call */
+  if (dm < 0 || !ty_is_array(c->scopes[dm].ret)) return -1;
   int t = ++g_tmp;
   emit_indent(b, indent); emit_ctype(c, c->scopes[dm].ret, b);
   buf_printf(b, " _t%d = NULL; ", t);
@@ -10005,7 +10014,7 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
     else if (ty_is_object(pt) && sp_streq(pty, "ArrayPatternNode")) {
       int isv = c->classes[ty_object_class(pt)].is_value_type;
       int ddef = -1;
-      int dm = comp_deconstruct_method(c, ty_object_class(pt), &ddef);
+      int dm = comp_deconstruct_method(c, pat, ty_object_class(pt), &ddef);
       if (dm >= 0) {
         TyKind rrt = (TyKind)c->scopes[dm].ret;
         TyKind drt = ty_is_array(rrt) ? rrt : TY_POLY_ARRAY;
@@ -10071,7 +10080,7 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
     else if (ty_is_object(pt) && sp_streq(pty, "HashPatternNode")) {
       int isv = c->classes[ty_object_class(pt)].is_value_type;
       int ddef = -1;
-      int dm = comp_method_in_chain(c, ty_object_class(pt), "deconstruct_keys", &ddef);
+      int dm = comp_deconstruct_keys_method(c, pat, ty_object_class(pt), &ddef);
       if (dm >= 0) {
         TyKind rrt = (TyKind)c->scopes[dm].ret;
         TyKind drt = ty_is_hash(rrt) ? rrt : TY_SYM_POLY_HASH;
@@ -11091,7 +11100,7 @@ static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, i
    does (or give it boxed). The value is boxed when the method's parameter
    is. 0: no such method, or one this call cannot pass the value to. */
 int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b) {
-  int mi = class_own_cmethod_eqq(c, ci);
+  int mi = pm_own_cmethod_eqq(c, node, ci);
   if (mi < 0 || !c->scopes[mi].reachable) return 0;
   Scope *ws = &c->scopes[mi];
   LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;

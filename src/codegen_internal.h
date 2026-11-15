@@ -2195,7 +2195,8 @@ const char *mc_method(Compiler *c, const Scope *s);
 const char *mc_ring_setf(Compiler *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 /* The scope a #deconstruct call on class cid runs, through an alias
    (codegen.c) */
-int comp_deconstruct_method(Compiler *c, int cid, int *defcls);
+int comp_deconstruct_method(Compiler *c, int pat, int cid, int *defcls);
+int comp_deconstruct_keys_method(Compiler *c, int pat, int cid, int *defcls);
 const char *iv_c(const char *name);  /* ivar/member name -> valid C field id (#3110) */
 #define IV_C_MAX 64  /* iv_c's longest result; a longer name is shortened with a hash */
 /* A method scope is shadowed (and must not be emitted) when a later

@@ -22,9 +22,14 @@
 # run fails when a listed family has any site left. The run also fails when a
 # program compiles without the flag and fails or crashes with it.
 #
-# A read under a super node of a name other than the super's own (or its
-# shadow's or clone's) is another family's: implied, or presence for a
-# respond_to? that supers.
+# A read under a call or a super of a name other than the node's own (a
+# super's own, its shadow's or its clone's) is implied only for one of the
+# node's own implied calls (its syntax rows and the callbacks of its
+# builtin), and call otherwise: a question about another call, or the call's
+# method_missing, which any call may reach. A respond_to? that supers is
+# presence. A node with no names of its own is implied for a row of a node it
+# holds directly (an interpolation's to_s on its part, a case's === on its
+# when), and other otherwise.
 #
 # A read under a send, a Method maker or an &:sym is the send family's where
 # it asks of the name the node sends or captures. Its own name (`send`,

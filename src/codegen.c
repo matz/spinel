@@ -13747,7 +13747,7 @@ static void emit_obj_to_json_dispatch(Compiler *c, Buf *b) {
    method is called directly (#4019). */
 static int obj_deconstruct_keys_method(Compiler *c, int ci, int *defc) {
   int dc = -1;
-  int mi = comp_method_in_chain(c, ci, "deconstruct_keys", &dc);
+  int mi = comp_deconstruct_keys_method(c, -1, ci, &dc);
   if (mi < 0) return -1;
   Scope *m = &c->scopes[mi];
   if (m->is_cmethod || !ty_is_hash(m->ret) || !m->reachable) return -1;
@@ -14208,10 +14208,11 @@ void emit_obj_to_ary_call(Compiler *c, int mi, int defc, const char *v, Buf *b) 
    (desugar_inherited_aliases): that answers with the method it reaches.
    Only the forwarder is followed: a `def deconstruct` written after the
    alias replaces it, and is the method that runs. */
-int comp_deconstruct_method(Compiler *c, int cid, int *defcls) {
+int comp_deconstruct_method(Compiler *c, int pat, int cid, int *defcls) {
   int dc = -1;
+  MtabMark mt_was = mtab_push_in(c, pat);   /* (pat, a pattern node, owns the call; -1: no pattern) */
   int mi = comp_method_in_chain(c, cid, "deconstruct", &dc);
-  if (mi < 0 || dc < 0) return -1;
+  if (mi < 0 || dc < 0) { mtab_pop(c, mt_was); return -1; }
   ClassInfo *dci = &c->classes[dc];
   int dn = c->scopes[mi].def_node;
   int fwd = dn >= 0 && nt_int(c->nt, dn, "alias_forwarder", 0);
@@ -14220,7 +14221,15 @@ int comp_deconstruct_method(Compiler *c, int cid, int *defcls) {
       mi = comp_method_in_chain(c, dc, "deconstruct#inherited", &dc);
       break;
     }
+  mtab_pop(c, mt_was);
   if (mi >= 0 && defcls) *defcls = dc;
+  return mi;
+}
+/* Class cid's #deconstruct_keys: the pattern pat's call (see comp_deconstruct_method). */
+int comp_deconstruct_keys_method(Compiler *c, int pat, int cid, int *defcls) {
+  MtabMark mt_was = mtab_push_in(c, pat);
+  int mi = comp_method_in_chain(c, cid, "deconstruct_keys", defcls);
+  mtab_pop(c, mt_was);
   return mi;
 }
 /* The scope of class i's own #deconstruct when it has one this TU emits
@@ -14229,7 +14238,7 @@ int comp_deconstruct_method(Compiler *c, int cid, int *defcls) {
 static int user_deconstruct_scope(Compiler *c, int i, int *defcls) {
   ClassInfo *ci = &c->classes[i];
   if (!ci->instantiated || ci->is_native_class || ci->is_data) return -1;
-  int mi = comp_deconstruct_method(c, i, defcls);
+  int mi = comp_deconstruct_method(c, -1, i, defcls);
   if (mi < 0) return -1;
   Scope *m = &c->scopes[mi];
   if (!m->reachable || m->yields || m->nparams != 0 || scope_is_shadowed(c, mi) ||

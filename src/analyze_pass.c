@@ -1158,7 +1158,7 @@ int case_in_lambda_param(Compiler *c, int lam) {
   if (lambda_body_jumps(nt, body, 0)) return -1;
   /* a body that writes its parameter keeps master's path: the parameter is typed from the subject */
   if (subtree_writes_var(c, body, nt_str(nt, reqs[0], "name"), VW_LOCAL)) return -1;
-  int pci = comp_class_index(c, "Proc"), dc = -1;
+  int pci = comp_builtin_class_named(c, "Proc"), dc = -1;
   if (pci >= 0 && comp_method_in_chain(c, pci, "===", &dc) >= 0 && dc >= 0) {
     const char *dn = c->classes[dc].name;
     if (!dn || !builtin_answers_ahead_of("Proc", "===", dn)) return -1;

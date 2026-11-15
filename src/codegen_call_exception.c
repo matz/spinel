@@ -1186,7 +1186,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
            reopening's own initialize runs on it, as that form's does
            (emit_exc_reopen_construct). Raised by name, it skipped the
            initialize, so its ivars and side effects were missing. */
-        int rxc = comp_class_index(c, "RuntimeError");
+        int rxc = comp_builtin_class_named(c, "RuntimeError");
         int rim = rxc >= 0 ? exc_reopen_initialize(c, rxc) : -1;
         if (rim >= 0) {
           buf_puts(b, "sp_raise_exc(");

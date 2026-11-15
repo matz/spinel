@@ -16407,6 +16407,7 @@ static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vc
     nt_node_set_arr(nt, rargs, "arguments", ra, 2);
     int raise = fwd_new_call(nt, -1, "raise", -1);
     nt_node_set_ref(nt, raise, "arguments", rargs);
+    nt_node_set_int(nt, raise, "kernel_recv", 1);   /* (Kernel's raise: see below) */
     return raise;
   }
   /* ::NoMethodError, spelled as desugar_root_scoped_constants left it for the
@@ -16438,7 +16439,15 @@ static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vc
   nt_node_set_arr(nt, nargs, "arguments", na, vcall ? 3 : 4);
   nt_node_set_ref(nt, made, "arguments", nargs);
   if (!vcall) nt_node_set_int(nt, made, "disp_nomethod", 1);   /* the raise the code generator may lower out of line (emit_raise_nomethod_new) */
-  return fwd_new_call(nt, -1, "raise", made);
+  /* Kernel's raise, as a call that finds no method raises: a bare `raise`
+     in a method of a class that answers raise itself is that class's
+     (Fiber#raise, Thread#raise, desugar_handle_reopen_self_recv), so the arm of a
+     def in `if c; class Fiber` raised FiberError on the unborn fiber with c
+     false, and Thread's arm did not compile. kernel_recv is the mark a
+     written `Kernel.raise` carries once its receiver is dropped. */
+  int raise = fwd_new_call(nt, -1, "raise", made);
+  nt_node_set_int(nt, raise, "kernel_recv", 1);
+  return raise;
 }
 int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar, int vcall) {
   NodeTable *nt = (NodeTable *)c->nt;

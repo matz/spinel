@@ -19108,6 +19108,143 @@ static void oa_param_defaults(Compiler *c, OAS *sl, int n, const int *read_slot,
     if (nt_kind(nt, v) == NK_ArrayNode) oa_note_src(i, v);
   }
 }
+/* The multi-write a target is one of, when its value is a call (`x, y =
+   m(...)`): step 5f decides such a target, where the call's tuple may hand
+   it an element of a slot. Else -1. */
+static int oa_masgn_call_of(const NodeTable *nt, const int *par, int tgt) {
+  int mw = par[tgt];
+  if (mw < 0 || nt_kind(nt, mw) != NK_MultiWriteNode) return -1;
+  int v = nt_ref(nt, mw, "value");
+  return v >= 0 && nt_kind(nt, v) == NK_CallNode ? mw : -1;
+}
+/* Multi-write mw takes a tuple of en elements apart and throws its value
+   away: en plain targets on the left, no splat and none after it, and a
+   value nothing reads (a statement before its list's last, a loop body, an
+   ensure clause, the program's last statement). A method's or a block's
+   last statement hands the tuple on. */
+static int oa_masgn_takes_apart(const NodeTable *nt, const int *par, int mw, int en) {
+  int ln = 0, rn = 0;
+  nt_arr(nt, mw, "lefts", &ln);
+  nt_arr(nt, mw, "rights", &rn);
+  if (ln != en || rn != 0 || nt_ref(nt, mw, "rest") >= 0) return 0;
+  VpUp up;
+  switch (vp_climb(nt, par, mw, VPS_NONE, &up)) {
+  case VPU_DROPPED:
+  case VPU_ROOT:
+    return 1;
+  case VPU_ENDED:
+    return vp_up_loop(nt, &up) >= 0 || vp_up_effect_clause(nt, &up) || nt_kind(nt, up.parent) == NK_ProgramNode;
+  default:
+    return 0;
+  }
+}
+/* Call id of a method answering a tuple of en elements is taken apart where
+   it lands: the value of a multi-write that takes it apart (above). */
+static int oa_call_taken_apart(const NodeTable *nt, const int *par, int id, int en) {
+  int mw = par[id];
+  return mw >= 0 && nt_kind(nt, mw) == NK_MultiWriteNode && nt_ref(nt, mw, "value") == id &&
+         oa_masgn_takes_apart(nt, par, mw, en);
+}
+/* The slot a multi-write's local or constant target writes, or -1. */
+static int oa_target_slot(Compiler *c, OAS *sl, int n, int t) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, t) == NK_ConstantTargetNode) {
+    LocalVar *cv = comp_const_at(c, t);
+    return cv ? oa_find(sl, n, OA_CONST, cv) : -1;
+  }
+  if (nt_kind(nt, t) != NK_LocalVariableTargetNode) return -1;
+  const char *nm = nt_str(nt, t, "name");
+  LocalVar *lv = nm ? scope_local(&c->scopes[c->nscope[t]], nm) : NULL;
+  return lv ? oa_find(sl, n, c->nscope[t], lv) : -1;
+}
+/* Step 5f: `x, y = m(...)` where m answers a fixed tuple (`[a, b]` last, or
+   `return a, b`) and every call of m is taken apart so: target i holds
+   element i itself (the tuple boxes the pointer array and the target
+   unboxes the same one), so element i is its source as `x = a` would
+   be. A table built in m and handed out with another value reached
+   its caller only boxed. A method a Symbol, a String or a super names,
+   one with a call of its name anywhere else, and one with another def of
+   its name (a subclass's override, a class method beside it) may hand
+   the tuple on whole, or another method's tuple may reach its targets;
+   any other multi-write from a call is unmodeled, as step 3 has it.
+   (tup_en[R]: the tuple's size where some multi-write takes m's apart,
+   -1 once m is found to hand it on.) */
+static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, const int *call_ret,
+                             char *claimed, const int *par, const unsigned char *dead, int nc) {
+  const NodeTable *nt = c->nt;
+  int *tup_en = (int *)calloc((size_t)(n > 0 ? n : 1), sizeof(int));
+  ANameHash tup_names; memset(&tup_names, 0, sizeof tup_names);
+  for (int mw = 0; mw < nt->count && mw < nc; mw++) {
+    if (nt_kind(nt, mw) != NK_MultiWriteNode) continue;
+    int v = nt_ref(nt, mw, "value");
+    if (v < 0 || v >= nc || nt_kind(nt, v) != NK_CallNode || call_ret[v] < 0) continue;
+    int R = call_ret[v];
+    const int *els = NULL;
+    int en = multi_return_elem_nodes(c, v, &els);
+    const char *mn = c->scopes[sl[R].sidx].name;
+    if (en > 0 && mn && comp_scope_of(c, els[0]) == &c->scopes[sl[R].sidx] && !tup_en[R]) {
+      tup_en[R] = en;
+      if (!anh_has(&tup_names, mn)) anh_add(&tup_names, mn);
+    }
+  }
+  /* the candidates of each name, chained (tup_head by the name's index in
+     tup_names), so a node of the name visits only its own */
+  int *tup_head = (int *)malloc(sizeof(int) * (size_t)(tup_names.n > 0 ? tup_names.n : 1));
+  int *tup_next = (int *)malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
+  for (int k = 0; k < tup_names.n; k++) tup_head[k] = -1;
+  for (int R = 0; R < n; R++) {
+    if (tup_en[R] <= 0) continue;
+    int k = anh_find(&tup_names, c->scopes[sl[R].sidx].name);
+    tup_next[R] = tup_head[k]; tup_head[k] = R;
+  }
+  /* one walk over the program vets every such method's ways in */
+  for (int id = 0; tup_names.n && id < nt->count && id < nc; id++) {
+    NodeKind k = nt_kind(nt, id);
+    const char *nm = k == NK_SymbolNode ? nt_str(nt, id, "value") :
+                     k == NK_StringNode ? nt_str(nt, id, "content") :
+                     k == NK_CallNode || k == NK_DefNode ? nt_str(nt, id, "name") : NULL;
+    if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+      Scope *ss = comp_scope_of(c, id);
+      nm = ss ? ss->name : NULL;
+    }
+    int hk = nm ? anh_find(&tup_names, nm) : -1;
+    if (hk < 0) continue;
+    for (int R = tup_head[hk]; R >= 0; R = tup_next[R]) {
+      if (tup_en[R] <= 0) continue;
+      if (k == NK_DefNode) {
+        if (id != c->scopes[sl[R].sidx].def_node) tup_en[R] = -1;
+        continue;
+      }
+      if (k != NK_CallNode || call_ret[id] != R || !oa_call_taken_apart(nt, par, id, tup_en[R]) ||
+          (dead && dead[id])) tup_en[R] = -1;
+    }
+  }
+  anh_free(&tup_names);
+  free(tup_head); free(tup_next);
+  for (int mw = 0; mw < nt->count && mw < nc; mw++) {
+    if (nt_kind(nt, mw) != NK_MultiWriteNode) continue;
+    int v = nt_ref(nt, mw, "value");
+    if (v < 0 || v >= nc || nt_kind(nt, v) != NK_CallNode) continue;
+    int ln = 0, rn = 0;
+    const int *lefts = nt_arr(nt, mw, "lefts", &ln);
+    const int *rights = nt_arr(nt, mw, "rights", &rn);
+    const int *els = NULL;
+    int R = call_ret[v];
+    int ok = R >= 0 && tup_en[R] > 0 && multi_return_elem_nodes(c, v, &els) == tup_en[R] &&
+             comp_scope_of(c, els[0]) == &c->scopes[sl[R].sidx];
+    for (int side = 0; side < 2; side++) {
+      const int *ts = side ? rights : lefts;
+      int tn = side ? rn : ln;
+      for (int i = 0; ts && i < tn; i++) {
+        int X = oa_target_slot(c, sl, n, ts[i]);
+        if (X < 0) continue;
+        if (ok) oa_classify_value(c, sl, n, read_slot, call_ret, claimed, X, els[i]);
+        else sl[X].alive = 0;
+      }
+    }
+  }
+  free(tup_en);
+}
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0; MethodLookup ml = { .def_class = -1 };
@@ -19447,6 +19584,7 @@ static int narrow_object_arrays(Compiler *c) {
     }
   }
 
+  const int *par = comp_parent_map(c);
   /* 3. op-assign / multi-target write forms on a slot are unmodeled -> kill.
         An ivar form directly in an instance method of a class writes that
         class's ivar, so it kills that slot alone: a memoizing `@t ||= x` in
@@ -19488,6 +19626,7 @@ static int narrow_object_arrays(Compiler *c) {
         ty_k != NK_LocalVariableTargetNode &&
         ty_k != NK_LocalVariableAndWriteNode &&
         ty_k != NK_LocalVariableOrWriteNode) continue;
+    if (ty_k == NK_LocalVariableTargetNode && oa_masgn_call_of(nt, par, id) >= 0) continue;   /* (step 5f) */
     int sidx = c->nscope[id];
     const char *nm = nt_str(nt, id, "name");
     LocalVar *lv = nm ? scope_local(&c->scopes[sidx], nm) : NULL;
@@ -19581,7 +19720,6 @@ static int narrow_object_arrays(Compiler *c) {
   free(wn); free(wcls);
 
   OaByName oa_bn = oa_byname_build(c, sl, n);
-  const int *par = comp_parent_map(c);
   /* A dynamic receiver may dispatch to ANY same-named instance method at
      runtime (the poly dispatch arms), passing boxed values and expecting a
      boxed one back; neither a param slot nor a return slot reachable that
@@ -19741,6 +19879,7 @@ static int narrow_object_arrays(Compiler *c) {
                    ? comp_const_at(c, id) : NULL;
     int S = cv ? oa_find(sl, n, OA_CONST, cv) : -1;
     if (S < 0) continue;
+    if (ty_k == NK_ConstantTargetNode && oa_masgn_call_of(nt, par, id) >= 0) continue;   /* (step 5f) */
     int v = nt_ref(nt, id, "value");
     /* (an empty `[]` filled later is built at the kind the passes that
        stamp empty literals give it, which no write inference of a constant
@@ -19933,6 +20072,9 @@ static int narrow_object_arrays(Compiler *c) {
     free(reads);
     free(tmis); free(rcls); free(rdead);
   }
+
+  /* 5f. a tuple taken apart where it lands: element i is target i's source */
+  oa_tuple_targets(c, sl, n, read_slot, call_ret, claimed, par, dead, nc);
 
   oa_printer_claims(c, sl, call_ret, claimed, walk_disc, nc);   /* 5e. */
 

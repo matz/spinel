@@ -511,6 +511,7 @@ int infer_global_const_types(Compiler *c);
 int infer_multiwrite_const_types(Compiler *c);
 int masgn_tuple_rhs(const NodeTable *nt, int value);
 int multi_return_elem_types(Compiler *c, int value, TyKind *out, int max);
+int multi_return_elem_nodes(Compiler *c, int value, const int **elems);
 void resolve_parents(Compiler *c);
 void resolve_inherited_aliases(Compiler *c);
 void settle_object_builtin_aliases(Compiler *c);

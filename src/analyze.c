@@ -9833,7 +9833,9 @@ static void desugar_struct_index_ctor(Compiler *c) {
 static void desugar_data_positional_new(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "new")) continue;
@@ -9841,6 +9843,7 @@ static void desugar_data_positional_new(Compiler *c) {
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
     int ci = const_node_class_index(c, recv);
+    mtab_push_in(c, id);   /* (the initialize the call runs) */
     if (ci < 0 || comp_method_in_chain(c, ci, "initialize", NULL) < 0) continue;
     int dc = ci;
     for (int g = 0; dc >= 0 && !c->classes[dc].is_data && g < 64; g++) dc = c->classes[dc].parent;
@@ -9870,6 +9873,7 @@ static void desugar_data_positional_new(Compiler *c) {
     comp_grow_node_arrays(c);
     for (int k = first; k < nt->count; k++) c->nscope[k] = sc;
   }
+  mtab_pop(c, mt_pass);
 }
 
 /* Does Struct class `cls` have a member named `nm`? Its accessor is the
@@ -14834,8 +14838,11 @@ int desugar_enum_method_recv(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (int id = 0; id < n0; id++) {
+    mtab_pop(c, mt_pass);
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (what the call's name asks of the tables is the call's) */
     const char *nm = nt_str(nt, id, "name");
     /* a method the program defines on Enumerator answers the call itself:
        the hops below would hand it to the element array's builtin */
@@ -15193,6 +15200,7 @@ int desugar_enum_method_recv(Compiler *c) {
     c->nscope[wrap] = c->nscope[id];
     changed = 1;
   }
+  mtab_pop(c, mt_pass);
   return changed;
 }
 

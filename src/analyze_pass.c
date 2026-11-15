@@ -8,6 +8,7 @@
 #include "repr.h"
 #include "holder.h"
 #include "share.h"
+#include "method_table_check.h"
 int callee_has_kwarg(Compiler *c, Scope *m, const char *name);
 int callee_declares_kwargs(Compiler *c, Scope *m);
 int callee_param_is_declared_kwarg(Compiler *c, Scope *m, const char *name);
@@ -7411,7 +7412,10 @@ int ivar_src_slot(Compiler *c, int v, const char **ivn) {
     TyKind rt = infer_type(c, r);
     if (ty_is_object(rt)) cls = ty_object_class(rt);
   }
-  if (cls < 0 || !call_attr_target(c, -1, cls, nm, 0, NULL)) return -1;
+  MtabMark mt_was = mtab_push_in(c, v);
+  int attr = cls >= 0 && call_attr_target(c, -1, cls, nm, 0, NULL);
+  mtab_pop(c, mt_was);
+  if (!attr) return -1;
   ivb[0] = '@'; strcpy(ivb + 1, nm);
   *ivn = ivb;
   return cls;
@@ -11710,8 +11714,10 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   changed |= struct_with_super_types_members(c);
   const int *ids = NULL;
   int nids = nt->count;
+  MtabMark mt_pass = mtab_mark(c);
   for (;;) {
   for (int k = 0; k < nids; k++, wbas_share_step(&changed, &any)) {
+    mtab_pop(c, mt_pass);
     int id = ids ? ids[k] : k;
     const char *ty = nt_type(nt, id);
     NodeKind ty_k = nt_kind(nt, id);
@@ -11807,6 +11813,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       continue;
     }
     if (ty_k != NK_CallNode) continue;
+    mtab_push_in(c, id);   /* (the call's own binding: what it asks of the tables is the call's) */
     if (nt_int(nt, id, "rt_probe", 0)) continue;  /* analysis-only respond_to? probe:
        its dummy-argument shape must not type real method params */
     const char *name = nt_str(nt, id, "name");
@@ -12495,6 +12502,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (omb >= 0 && !c->scopes[omb].is_cmethod) changed |= bind_call_params(c, id, omb);
     }
   }
+  mtab_pop(c, mt_pass);
   if (!settle || !ipt_work_next(c, &w, &ids, &nids)) break;
   }
   ipt_work_end(&w);
@@ -18933,7 +18941,10 @@ int infer_block_params(Compiler *c) {
      only the param is typed here, not implicit-self calls) -- without this a
      `list.tap { |x| .. }` left x UNKNOWN, so a push of x into a typed array
      could not widen the array's element type (#3144). */
+  MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    mtab_pop(c, mt_pass);
+    mtab_push_in(c, id);   /* (the call's own trampoline question) */
     const char *cname = nt_str(nt, id, "name");
     if (!cname) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -19001,7 +19012,10 @@ int infer_block_params(Compiler *c) {
   /* recv.instance_exec(args) { |params| } : the block binds the call's
      arguments as a yield of them does (emit_block_binds), so the binding
      plan types its parameters (block_site_types). */
+  mtab_pop(c, mt_pass);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    mtab_pop(c, mt_pass);
+    mtab_push_in(c, id);
     const char *cname = nt_str(nt, id, "name");
     if (!cname) continue;
     int xrecv = nt_ref(nt, id, "receiver");
@@ -19048,6 +19062,7 @@ int infer_block_params(Compiler *c) {
 
   /* Fiber.new { |first| ... }: the block param receives the resume value,
      which is always a poly (boxed) value at the runtime ABI boundary. */
+  mtab_pop(c, mt_pass);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cname = nt_str(nt, id, "name");
     if (!cname || !sp_streq(cname, "new")) continue;

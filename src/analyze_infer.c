@@ -10252,8 +10252,11 @@ int an_call_diverges(Compiler *c, int id) {
   int last = nt_paren_single(nt, id);
   if (nt_kind(nt, last) != NK_CallNode || nt_ref(nt, last, "receiver") >= 0) return 0;
   const char *nm = nt_str(nt, last, "name");
-  return nm && is_diverging_call(nm) && !an_bare_call_class_owned(c, last) &&
-         call_target(c, last, -1, nm, CT_TOP, NULL) < 0;
+  if (!nm || !is_diverging_call(nm)) return 0;
+  MtabMark mt_was = mtab_push_in(c, last);   /* (the call's question, asked under its parent's frame) */
+  int diverges = !an_bare_call_class_owned(c, last) && call_target(c, last, -1, nm, CT_TOP, NULL) < 0;
+  mtab_pop(c, mt_was);
+  return diverges;
 }
 /* Whether call `w`, named `wn`, can run a method the program defines: a
    receiverless call (or one on self) when some user method has the name; a

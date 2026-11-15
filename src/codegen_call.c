@@ -26522,7 +26522,12 @@ int node_may_reassign_state(Compiler *c, int id) {
        strncmp(ty, "GlobalVariable", 14) == 0) &&
       (strstr(ty, "WriteNode") || strstr(ty, "TargetNode")))
     return 1;
-  if (k == NK_CallNode && !order_call_runs_no_code(c, id)) return 1;
+  if (k == NK_CallNode) {
+    MtabMark mt_was = mtab_push_in(c, id);   /* (the call's question, asked by a walk of its parent) */
+    int runs_code = !order_call_runs_no_code(c, id);
+    mtab_pop(c, mt_was);
+    if (runs_code) return 1;
+  }
   return -1;
 }
 int subtree_may_reassign_state(Compiler *c, int id) {

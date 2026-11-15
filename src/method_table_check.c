@@ -5,6 +5,7 @@
 #include "builtin_names.h"
 #include "implied_calls.h"
 #include "implicit_calls.h"
+#include "analyze_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,9 +63,25 @@ void mtab_unwind(Compiler *c, MtabMark was) {
   if (m) { m->frame = was.frame; m->depth = was.depth; m->build = was.build; }
 }
 
-MtabMark mtab_frame_set(Compiler *c, int id) {
+MtabMark mtab_frame_keep(Compiler *c, int id) {
   struct MethodTableCheck *m = c->mtab;
   MtabMark was = mtab_mark(c);
+  if (m && id >= 0) m->frame = id;   /* (no node: the caller's frame stays) */
+  return was;
+}
+
+/* The nearest node above `node` that has an implied call named `name` (a `===` row of a pattern, an `in` or a
+   `when`: the node that holds the row), as the frame of what is asked about `node`. */
+MtabMark mtab_frame_row_owner(Compiler *c, int node, const char *name) {
+  const int *par = comp_parent_map(c);
+  int up = node >= 0 ? par[node] : -1;
+  while (up >= 0 && !ic_node_calls_name(c, up, name, 1)) up = par[up];
+  return mtab_frame_keep(c, up);
+}
+
+MtabMark mtab_frame_set(Compiler *c, int id) {
+  struct MethodTableCheck *m = c->mtab;
+  MtabMark was = mtab_frame_keep(c, id);
   if (m) { m->frame = id; m->depth = 0; m->build = 0; }
   return was;
 }

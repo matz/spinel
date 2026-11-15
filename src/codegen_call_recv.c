@@ -1525,22 +1525,60 @@ static int find_param_is_oint(Compiler *c, int block, const char *bp0, TyKind et
   return mlv && oint_kind(et) && slot_is_oint(mlv);
 }
 
-static void emit_find_elem_decl(Compiler *c, int block, const char *bp0, const char *bp, TyKind rt, const char *k,
+/* Is find's block parameter held boxed over a typed Array's elements? The
+   slot is poly when another block shares it and widened it: the builtin's
+   copy that desugar_builtin_enum_calls puts beside a receiver it saw boxed
+   binds the same parameter from its own boxed walk, and the receiver
+   narrowed to the typed Array only afterwards. The body was typed against
+   the slot, so it reads the parameter boxed. */
+static int find_param_is_boxed(Compiler *c, int block, const char *bp0, TyKind et) {
+  Scope *ms = comp_scope_of(c, block);
+  LocalVar *mlv = ms && bp0 ? scope_local(ms, bp0) : NULL;
+  return mlv && mlv->type == TY_POLY && et != TY_POLY;
+}
+
+/* Answers the temp a boxed parameter's element is kept in (0 for none): the
+   block may store over the entry or rebind the parameter, and find answers
+   the element it yielded. */
+static int emit_find_elem_decl(Compiler *c, int block, const char *bp0, const char *bp, TyKind rt, const char *k,
                                 TyKind et, int trecv, int ti) {
   Scope *ms = comp_scope_of(c, block);
   LocalVar *mlv = ms && bp0 ? scope_local(ms, bp0) : NULL;
   emit_indent(g_pre, g_indent + 1);
   if (find_param_is_oint(c, block, bp0, et)) {
     buf_printf(g_pre, "%s lv_%s = sp_%sArray_oget(_t%d, _t%d);\n", oint_ctype(et), bp, k, trecv, ti);
-    return;
+    return 0;
+  }
+  /* a boxed slot takes the element boxed, so the declaration agrees with
+     the body's reads of it; an Integer or Float element keeps its nil. The
+     element itself is kept first, rooted, as find's answer: a block that
+     replaces the entry may leave it held by that temp alone. The boxed
+     parameter is rooted too: boxing a String element can make a fresh one,
+     which only the declaration holds while the block runs and allocates. */
+  if (find_param_is_boxed(c, block, bp0, et)) {
+    int te = ++g_tmp;
+    char tn[24]; snprintf(tn, sizeof tn, "_t%d", te);
+    if (oint_kind(et)) {
+      buf_printf(g_pre, "%s %s = sp_%sArray_oget(_t%d, _t%d); ", oint_ctype(et), tn, k, trecv, ti);
+      buf_printf(g_pre, "sp_RbVal lv_%s = %s(%s);", bp, oint_box(et), tn);
+    }
+    else {
+      char rd[96]; typed_elem_getf(rd, sizeof rd, rt, k, "_t%d, _t%d", trecv, ti);
+      emit_ctype(c, et, g_pre); buf_printf(g_pre, " %s = %s; ", tn, rd);
+      emit_gc_root_var(c, et, tn, g_pre);
+      buf_printf(g_pre, " sp_RbVal lv_%s = ", bp); emit_boxed_text(c, et, tn, g_pre); buf_puts(g_pre, ";");
+    }
+    buf_printf(g_pre, " SP_GC_ROOT_RBVAL(lv_%s);\n", bp);
+    return te;
   }
   if (sp_streq(k, "Str") && mlv && mlv->type == TY_STRBUF) {
     emit_ctype(c, TY_STRBUF, g_pre);
     buf_printf(g_pre, " lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get_e(_t%d, _t%d));\n", bp, bp, trecv, ti);
-    return;
+    return 0;
   }
   emit_ctype(c, et, g_pre);
   { char rd[96]; typed_elem_getf(rd, sizeof rd, rt, k, "_t%d, _t%d", trecv, ti); buf_printf(g_pre, " lv_%s = %s;\n", bp, rd); }
+  return 0;
 }
 
 static void emit_find_loop_head(Compiler *c, int id, const char *k, int ti, int trecv) {
@@ -2004,16 +2042,29 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tres, tres);
       emit_find_loop_head(c, id, k, ti, trecv);
-      if (bp) emit_find_elem_decl(c, block, block_param_name(c, block, 0), bp, rt, k, et, trecv, ti);
+      int tkeep = bp ? emit_find_elem_decl(c, block, block_param_name(c, block, 0), bp, rt, k, et, trecv, ti) : 0;
       for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
       int sv = g_indent; g_indent++;
-      Buf cb = expr_buf(c, bb[bn - 1]); g_indent = sv;
+      /* a boxed parameter's block value is tested by Ruby's truth rules: the
+         tail as written is a test only for a typed one (a boxed value is a
+         struct) */
+      Buf cb;
+      if (bp && find_param_is_boxed(c, block, block_param_name(c, block, 0), et)) {
+        memset(&cb, 0, sizeof cb); emit_cond(c, bb[bn - 1], &cb);
+      }
+      else cb = expr_buf(c, bb[bn - 1]);
+      g_indent = sv;
       emit_indent(g_pre, g_indent + 1);
       buf_printf(g_pre, "if (%s) { _t%d = ", cb.p ? cb.p : "0", tres);
       { Buf eltxt; memset(&eltxt, 0, sizeof eltxt);
-        if (bp) buf_printf(&eltxt, "lv_%s", bp);
+        /* a boxed parameter answers the element it was handed, kept before
+           the block ran (emit_find_elem_decl) */
+        if (tkeep) buf_printf(&eltxt, "_t%d", tkeep);
+        else if (bp) buf_printf(&eltxt, "lv_%s", bp);
         else { char rd[96]; typed_elem_getf(rd, sizeof rd, rt, k, "_t%d, _t%d", trecv, ti); buf_puts(&eltxt, rd); }
-        if (bp && find_param_is_oint(c, block, block_param_name(c, block, 0), et))
+        if (tkeep && oint_kind(et))   /* (keeps a nil element nil) */
+          buf_printf(g_pre, "%s(%s)", oint_box(et), eltxt.p);
+        else if (!tkeep && bp && find_param_is_oint(c, block, block_param_name(c, block, 0), et))
           buf_printf(g_pre, "%s(%s)", oint_box(et), eltxt.p);
         else emit_boxed_text(c, et, eltxt.p, g_pre);
         free(eltxt.p); }
@@ -2048,6 +2099,12 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
         emit_ctype(c, et, g_pre);
         if (et == TY_STRING) buf_printf(g_pre, " _t%d = NULL;\n", tres);
         else buf_printf(g_pre, " _t%d = 0;\n", tres);
+        /* the element a boxed parameter was handed may be held by the
+           answer alone once the block replaced its entry */
+        if (bp && find_param_is_boxed(c, block, block_param_name(c, block, 0), et)) {
+          char an[24]; snprintf(an, sizeof an, "_t%d", tres);
+          emit_indent(g_pre, g_indent); emit_gc_root_var(c, et, an, g_pre); buf_puts(g_pre, "\n");
+        }
       }
       emit_find_loop_head(c, id, k, ti, trecv);
       /* Declare the block param in the loop body (not a bare assignment) so
@@ -2055,13 +2112,19 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
          hoisted to the call site, the enclosing function has no top-level
          declaration for the block local. Shadows the method-scope slot in
          the ordinary in-body case, which is harmless. */
-      if (bp) emit_find_elem_decl(c, block, block_param_name(c, block, 0), bp, rt, k, et, trecv, ti);
+      int tkeep = bp ? emit_find_elem_decl(c, block, block_param_name(c, block, 0), bp, rt, k, et, trecv, ti) : 0;
+      /* a boxed parameter's block value is tested by Ruby's truth rules
+         (emit_cond), not read as the test itself, and find answers the
+         element it was handed, kept before the block ran, in the answer
+         slot's type */
+      int bpbox = tkeep > 0;
       Buf cb; memset(&cb, 0, sizeof cb);
       { IterStep st; emit_iter_step_open(c, block, 1, g_indent + 1, &st);
         int sv = g_indent; g_indent++;
-        emit_iter_step_cond(c, &st, 1, &cb); g_indent = sv; }
+        emit_iter_step_cond(c, &st, !bpbox, &cb); g_indent = sv; }
       emit_indent(g_pre, g_indent + 1);
-      if (bp && find_param_is_oint(c, block, block_param_name(c, block, 0), et))
+      if (bpbox) buf_printf(g_pre, "if (%s) { _t%d = _t%d; break; }\n", cb.p ? cb.p : "0", tres, tkeep);
+      else if (bp && find_param_is_oint(c, block, block_param_name(c, block, 0), et))
         buf_printf(g_pre, "if (%s) { _t%d = lv_%s; break; }\n", cb.p ? cb.p : "0", tres, bp);
       else if (bp && oint_kind(et)) buf_printf(g_pre, "if (%s) { _t%d = %s(lv_%s); break; }\n", cb.p ? cb.p : "0", tres, oint_of(et), bp);
       /* (one representation: the parameter may hold the handle; the answer

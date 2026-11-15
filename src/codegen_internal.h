@@ -1878,6 +1878,9 @@ int defer_refusals(void);
 int defer_refusals_at(const Compiler *c, int node);
 extern int g_deferred_diags;   /* the refusals a deferral took (codegen_util.c) */
 int time_parse_refusal(Compiler *c, int id, char *msg, size_t cap);
+/* the refusal of a define_method in a method's body handed a parameter of
+   that method as its body (codegen.c), or NULL */
+const char *define_method_param_body_refusal(Compiler *c, int id);
 int emit_stmt_or_defer(Compiler *c, int st, Buf *b, int indent);
 extern int g_stmt_deferrals;       /* refusals emit_stmt_or_defer turned into a raise in place */
 extern int g_unsup_probe;          /* silent emittability probe (drop a dynamic-send arm) */

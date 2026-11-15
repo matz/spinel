@@ -1821,6 +1821,16 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	  else echo "ext-test: FAIL (--ext-class subclass host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/classes.rb -c --no-line-map --ext-init Init_ext_classes \
+	      --ext-entry ExtClasses.new_list,ExtClasses.add,ExtClasses.pt,ExtClasses.oops -o "$$tmp/c.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (class-typed entries emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/classes_host.c "$$tmp/c.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/chost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/chost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '2\n3 6\nOops bad\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (class-typed entries host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (class-typed entries host C did not compile against the header alone)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/methods_opt.rb -c --no-line-map --ext-init Init_ext_methods_opt \
 	      --ext-entry ExtOpt.make --ext-class ExtOpt::Rel -o "$$tmp/m.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class optional parameter emission)"; ok=0; \

@@ -21365,6 +21365,43 @@ static void ext_generate_cruby_shim(Compiler *c) {
 }
 
 
+/* Whether `word` occurs in text as a whole C identifier. */
+static int ext_text_names(const char *text, const char *word) {
+  size_t n = strlen(word);
+  for (const char *p = strstr(text, word); p; p = strstr(p + 1, word)) {
+    int before = p > text && (isalnum((unsigned char)p[-1]) || p[-1] == '_');
+    int after = isalnum((unsigned char)p[n]) || p[n] == '_';
+    if (!before && !after) return 1;
+  }
+  return 0;
+}
+/* The contract header's declarations of the classes its entries pass: an
+   entry that takes or answers an instance names the class's C type, which
+   the library declares in its own TU only, so a host that includes the
+   header alone met an unknown type. Each class the signatures name is
+   declared as the library declares it -- an incomplete struct the host
+   holds pointers to, the sp_Exception of an ivar-less exception subclass,
+   a native class's package struct -- and a value-type class, which an
+   entry passes by value, with its whole struct. */
+static void ext_emit_header_class_decls(Compiler *c, const char *sigs, Buf *hb) {
+  Buf vt; memset(&vt, 0, sizeof vt);
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (is_builtin_reopen(ci->name)) continue;
+    if (!ext_text_names(sigs, class_ctype(c, i))) continue;
+    if (ci->is_native_class) {
+      if (ci->c_struct) buf_printf(hb, "typedef struct %s_s %s;\n", ci->c_struct, ci->c_struct);
+      continue;
+    }
+    if (class_is_exc_subclass(c, i) && comp_inst_ivar_count(ci) == 0)
+      buf_printf(hb, "typedef sp_Exception sp_%s;\n", ci->c_name);
+    else buf_printf(hb, "typedef struct sp_%s_s sp_%s;\n", ci->c_name, ci->c_name);
+    if (ci->is_value_type) emit_class_struct(c, ci, &vt);
+  }
+  if (vt.p) buf_puts(hb, vt.p);
+  free(vt.p);
+}
+
 /* --ext-class (compiler.h, ext_method_exported): the row type of the method
    table, written once into the library and once into its header. */
 static void ext_emit_method_typedef(Buf *b) {
@@ -24968,11 +25005,14 @@ char *codegen_program(const NodeTable *nt) {
     buf_printf(&hb, "void %s(void);\n", g_ext_init_name);
     buf_printf(&hb, "int %s_try(void (*fn)(void *), void *ctx, const char **cls, const char **msg);\n\n",
                g_ext_init_name);
+    Buf sigs; memset(&sigs, 0, sizeof sigs);
     for (int s9 = 1; s9 < c->nscopes; s9++) {
       if (!c->scopes[s9].is_ext_entry) continue;
-      emit_method_signature(c, &c->scopes[s9], &hb);
-      buf_puts(&hb, ";\n");
+      emit_method_signature(c, &c->scopes[s9], &sigs);
+      buf_puts(&sigs, ";\n");
     }
+    if (sigs.p) { ext_emit_header_class_decls(c, sigs.p, &hb); buf_puts(&hb, sigs.p); }
+    free(sigs.p);
     if (g_ext_classes && *g_ext_classes) ext_emit_contract_decls(&hb);
     buf_puts(&hb, "\n#endif\n");
     free(g_ext_header_text);

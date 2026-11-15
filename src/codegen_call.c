@@ -16545,8 +16545,11 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         /* --share-strings: a fill stored as the shared handle is boxed as
            its handle, one object in every slot, as a literal's element is */
         int fh = array_fill_boxes_handle(c, id, argv[1]);
+        /* an Integer or Float fill value that can be nil is held as its oint */
+        int fo = is_numeric_literal_tag(k) && *nil_store_sfx(c, k, argv[1]);
         Buf vb; memset(&vb, 0, sizeof vb);
         if (fh) emit_boxed(c, argv[1], &vb);
+        else if (fo) emit_oint_expr(c, argv[1], ty_array_elem(at), &vb);
         else vb = expr_buf(c, argv[1]);
         emit_indent(g_pre, g_indent);
         if (ar.elem == TY_POLY) {
@@ -16566,11 +16569,10 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           else if (fvtr.kind != RK_BOXED && !fh) emit_boxed_text(c, fvt, vb.p ? vb.p : "sp_box_nil()", g_pre);
           else buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");
         }
-        /* an Integer or Float fill value that can be nil is held as its oint:
-           a nil fills the new array with nils (sp_IntArray_new_nil) */
-        else if (is_numeric_literal_tag(k) && *nil_store_sfx(c, k, argv[1])) {
+        /* a nil fills the new array with nils (sp_IntArray_new_nil) */
+        else if (fo) {
           buf_printf(g_pre, "%s _t%d = ", oint_ctype(ty_array_elem(at)), tv);
-          emit_oint_expr(c, argv[1], ty_array_elem(at), g_pre);
+          buf_puts(g_pre, vb.p ? vb.p : oint_nil(ty_array_elem(at)));
         }
         /* (one representation: a String Array is filled with the one
            String's handle, the same object in every slot, as CRuby's is) */
@@ -16589,7 +16591,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
            arguments before Array.new looks at them (CodeRabbit on #10019) */
         buf_printf(g_pre, "if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");\n", tn);
         emit_indent(g_pre, g_indent);
-        if (is_numeric_literal_tag(k) && *nil_store_sfx(c, k, argv[1])) {
+        if (fo) {
           buf_printf(g_pre, "sp_%sArray *_t%d = _t%d.nil ? sp_%sArray_new_nil(_t%d) : sp_%sArray_new_fill(_t%d, _t%d.v);\n",
                      k, tr, tv, k, tn, k, tn, tv);
           emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tr);

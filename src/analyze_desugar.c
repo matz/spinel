@@ -29355,6 +29355,12 @@ static int biv_mode(const char *cn) {
   if (!cn) return BIV_NONE;
   if (is_object_root(cn)) return BIV_OBJECT;
   if (is_bivar_keyed_class(cn)) return BIV_TABLE;
+  /* a builtin exception's: its struct has no slot of the program's, and the
+     runtime keeps an exception's ivars in the object-keyed map as it does a
+     String's (ty_bivar_keyed). Taken as fields, `@own = 1` in a reopened
+     RuntimeError named a member sp_Exception_s does not have (#11890). A
+     program's subclass of it has a struct of its own and is not this. */
+  if (is_builtin_exception_name(cn)) return BIV_TABLE;
   if (is_frozen_value_class(cn)) return BIV_FROZEN;
   return is_string_class_name(cn) ? BIV_STRING : BIV_NONE;
 }

@@ -6087,6 +6087,15 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     int eblk = nt_ref(nt, id, "block");
     int boxed = repr_of(c, id).kind == RK_BOXED;
     char ans[32];
+    if (eblk < 0 && poly_each_line_args_enum(c, id)) {
+      /* asked its size: CRuby's Enumerator over those lines (nil size) */
+      buf_printf(b, " sp_Enumerator *_t%d = sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(_t%d)), sp_box_str(_t%d), SPL(\"each_line\"));", ++g_tmp, ta, tl);
+      snprintf(ans, sizeof ans, "_t%d", g_tmp);
+      buf_puts(b, " ");
+      if (boxed) emit_boxed_text(c, TY_ENUMERATOR, ans, b); else buf_puts(b, ans);
+      buf_puts(b, "; })");
+      return 1;
+    }
     if (eblk < 0) {
       snprintf(ans, sizeof ans, "_t%d", ta);
       buf_puts(b, " ");

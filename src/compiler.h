@@ -2452,6 +2452,7 @@ int ostruct_keeps_method(const char *n);
 int ostruct_member_read(Compiler *c, int id, TyKind rt);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
 int poly_str_iter_enum(Compiler *c, int id);        /* boxed String iterator answers an Enumerator (analyze_infer_recv.c) */
+int poly_each_line_args_enum(Compiler *c, int id); /* boxed each_line(sep / chomp:) asked .size answers its Enumerator (analyze_infer_recv.c) */
 int poly_io_codepoint_enum(Compiler *c, int id);   /* boxed each_codepoint takes the IO arm (analyze_infer_recv.c) */
 int lazy_alias_chain(Compiler *c, int var_read);
 int lazy_method_chain(Compiler *c, int call);      /* parameterless method whose body is a lazy chain -> chain node, else -1 */

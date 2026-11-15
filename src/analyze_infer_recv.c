@@ -1911,8 +1911,11 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   /* ...and each_line with those arguments and no block: the same Array,
      as the argumentless poly.each_line materializes */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") && nt_ref(nt, id, "block") < 0 &&
-      poly_lines_args(c, argc, argv))
-    { *out = (an_user_defines_or_reads(c, name) || an_user_defines_or_reads(c, "lines")) ? TY_POLY : TY_STR_ARRAY; return 1; }
+      poly_lines_args(c, argc, argv)) {
+    if (an_user_defines_or_reads(c, name) || an_user_defines_or_reads(c, "lines")) { *out = TY_POLY; return 1; }
+    /* (asked its size, it is CRuby's Enumerator, which has none: nil) */
+    *out = poly_each_line_args_enum(c, id) ? TY_ENUMERATOR : TY_STR_ARRAY; return 1;
+  }
   /* A blockless grouping enumerator on a boxed Array -- an Array read out of a
      container -- materializes to the groups themselves, an Array of Arrays. */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
@@ -2279,6 +2282,22 @@ int poly_io_codepoint_enum(Compiler *c, int id) {
   const char *name = nt_str(nt, id, "name");
   return name && sp_streq(name, "each_codepoint") && nt_ref(nt, id, "arguments") < 0 &&
          nt_ref(nt, id, "block") < 0 && an_program_makes_io(c);
+}
+/* Does a blockless each_line with a separator or chomp: on a boxed
+   receiver (call id) answer CRuby's Enumerator? Where its parent asks
+   `size`: the Enumerator has no size (nil), where the Array its lines give
+   would answer the line count. Elsewhere it walks that Array. */
+int poly_each_line_args_enum(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int q = comp_recv_parent(c, id);
+  if (q < 0) return 0;
+  const char *qn = nt_str(nt, q, "name");
+  int qac = 0;
+  call_args(nt, q, &qac);
+  /* (`x&.each_line(",").size` on nil asks nil its size, which raises; the
+     Enumerator slot's nil would answer nil) */
+  return qn && sp_streq(qn, "size") && qac == 0 && nt_ref(nt, q, "block") < 0 &&
+         !nt_safe_nav(nt, id);
 }
 int poly_str_iter_enum(Compiler *c, int id) {
   const NodeTable *nt = c->nt;

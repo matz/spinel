@@ -50,3 +50,10 @@ t("forwarded") { kwfwd(cause: c0) }
 t("forwarded empty") { kwfwd }
 t("obj cause and x") { raise(RuntimeError.new("e"), k => c0, x => 1) }
 t("str cause and x") { raise("m", k => c0, x => 1) }
+sm = "s"
+t("str var cause and x") { raise(sm, x: 1, cause: c0) }
+t("str var k and x") { raise(sm, :x => 1, k => c0) }
+def gm = "g"
+t("str call cause and x") { raise(gm, x: 1, cause: c0) }
+ev = RuntimeError.new("v")
+t("obj var cause and x") { raise(ev, x: 1, cause: c0) }

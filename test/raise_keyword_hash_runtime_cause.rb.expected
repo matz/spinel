@@ -22,3 +22,7 @@ forwarded: ArgumentError: "a" cause=#<StandardError: c0>
 forwarded empty: ArgumentError: "a" cause=nil
 obj cause and x: RuntimeError: "{x: 1}" cause=#<StandardError: c0>
 str cause and x: TypeError: "exception class/object expected" cause=nil
+str var cause and x: TypeError: "exception class/object expected" cause=nil
+str var k and x: TypeError: "exception class/object expected" cause=nil
+str call cause and x: TypeError: "exception class/object expected" cause=nil
+obj var cause and x: RuntimeError: "{x: 1}" cause=#<StandardError: c0>

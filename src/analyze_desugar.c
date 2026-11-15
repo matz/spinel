@@ -12605,13 +12605,22 @@ static int raise_kw_split(Compiler *c, int id, const int *av, int npos) {
   int del = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "delete", raise_kw_split_sym(nt, "cause"));
   fwd_copy_loc(nt, del, id);
   int cw = rbt_var(c, nt, id, tc, del);
+  /* A Hash left after X and m is a backtrace, whose TypeError
+     set_backtrace raises before the cause is ever attached; so is the
+     TypeError of a String and a Hash. Those raises leave the cause out. */
+  int left;
+  if (npos == 2 || msg_lit) left = raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 1, NULL);
+  else {
+    int x0 = pnm[0] ? rbt_var(c, nt, id, pnm[0], -1) : nt_clone_subtree(nt, pv[0]);
+    int sc = fwd_new_node_like(nt, id, "ConstantReadNode");
+    nt_node_set_str(nt, sc, "name", "String");
+    int iss = fwd_new_call(nt, x0, "is_a?", sc);
+    fwd_copy_loc(nt, iss, id);
+    left = raise_kw_split_if(nt, iss, raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 1, NULL),
+                             raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 1, tc));
+  }
   int ce = raise_kw_split_if(nt, fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "empty?", -1),
-                             raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 0, tc),
-                             /* (a Hash left after X and m is a backtrace,
-                                 whose TypeError set_backtrace raises before
-                                 the cause is ever attached; so is the
-                                 TypeError of a String and a Hash) */
-                             raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 1, npos < 2 && !msg_lit ? tc : NULL));
+                             raise_kw_split_raise(c, nt, id, pv, pnm, npos, th, 0, tc), left);
   int cst = nt_new_node(nt, "StatementsNode"), cb[2] = { cw, ce };
   nt_node_set_arr(nt, cst, "body", cb, 2);
   int cpar = fwd_new_node_like(nt, id, "ParenthesesNode");

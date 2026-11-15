@@ -50,3 +50,38 @@ p 3.public_send(:respond_to?, :puts, no), 3.public_send(:respond_to?, :puts, yes
 # the flag can rebind the local the receiver reads
 rv = "a"
 p rv.respond_to?(:upcase, (rv = 3; yes)), rv
+
+# a builtin the program redefines runs its code: a receiver read after a
+# `method` the program defines (or a `proc`, a `lambda`) in the flag sees what
+# that code left, so the receiver is held first
+class W
+  def initialize = (@receiver = "a")
+  def method(_) = (@receiver = []; true)
+  def go = @receiver.respond_to?(:upcase, method(:ignored))
+end
+p W.new.go
+class W2
+  def initialize = (@receiver = "a")
+  def proc = (@receiver = []; true)
+  def lambda = (@receiver = []; true)
+  def go1 = @receiver.respond_to?(:upcase, proc { 1 })
+  def go2 = @receiver.respond_to?(:upcase, lambda { 1 })
+end
+p W2.new.go1, W2.new.go2
+
+# a Hash or Range literal over the program's own objects runs their `hash` and
+# `<=>`: the receiver is held first
+class Key
+  def initialize(o) = (@o = o)
+  def hash = (@o.swap; 1)
+  def eql?(x) = true
+  def <=>(x) = (@o.swap; 0)
+end
+class W3
+  def initialize = (@receiver = "a")
+  def swap = (@receiver = [])
+  def go_hash = @receiver.respond_to?(:upcase, {Key.new(self) => 1})
+  def go_hash_local = (k = Key.new(self); @receiver.respond_to?(:upcase, {k => 1}))
+  def go_range = (k = Key.new(self); @receiver.respond_to?(:upcase, (k..k)))
+end
+p W3.new.go_hash, W3.new.go_hash_local, W3.new.go_range

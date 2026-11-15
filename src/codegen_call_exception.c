@@ -821,6 +821,15 @@ static const char *exc_const_class_name(Compiler *c, int node) {
   const char *n = const_node_match_class_name(c, node);
   return n ? n : nt_str(c->nt, node, "name");
 }
+/* ...and the class itself, or -1: the one the constant names
+   (const_node_match_class); by name only where it names none, for an alias
+   of a builtin exception or the name as written */
+static int exc_const_class_index(Compiler *c, int node) {
+  int k = const_node_match_class(c, node);
+  if (k >= 0) return k;
+  const char *n = exc_const_class_name(c, node);
+  return n ? comp_class_index(c, n) : -1;
+}
 int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv) {
   /* raise */
   /* `fail` is an exact alias of `Kernel#raise`. */
@@ -891,7 +900,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
                         (nt_kind(nt, av[0]) == NK_ConstantReadNode || nt_kind(nt, av[0]) == NK_ConstantPathNode) &&
                         !raise_const_read_early(c, av[0]);
       const char *first_cn = first_const ? exc_const_class_name(c, av[0]) : NULL;
-      int first_xc = first_cn ? comp_class_index(c, first_cn) : -1;
+      int first_xc = first_cn ? exc_const_class_index(c, av[0]) : -1;
       TyKind first_ty = ac > 0 && !first_const ? comp_ntype(c, av[0]) : TY_UNKNOWN;
       /* a class of the program with its own initialize is built before the
          cause is judged, which this path does not do: it keeps the old one.
@@ -969,7 +978,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
          any `super`/message run. Without a custom initialize the message
          defaults to the class name, so the (cls, "") fast path is correct. */
       const char *cn = exc_const_class_name(c, av[0]);
-      int xc = cn ? comp_class_index(c, cn) : -1;
+      int xc = cn ? exc_const_class_index(c, av[0]) : -1;
       /* a reopened builtin exception is still the builtin: raised by name,
          through the reopening's own initialize when it has one */
       if (xc >= 0 && cn && is_exc_name(cn) && is_builtin_reopen(cn)) {
@@ -1030,7 +1039,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
          the message comes from the class's initialize/super, then carry it.
          A bare-string/builtin exception keeps the (cls, msg) fast path. */
       const char *cn = exc_const_class_name(c, av[0]);
-      int xc = cn ? comp_class_index(c, cn) : -1;
+      int xc = cn ? exc_const_class_index(c, av[0]) : -1;
       /* a reopened builtin exception is still the builtin: raised by name,
          through the reopening's own initialize when it has one */
       if (xc >= 0 && cn && is_exc_name(cn) && is_builtin_reopen(cn)) {

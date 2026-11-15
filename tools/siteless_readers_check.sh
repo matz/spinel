@@ -68,10 +68,11 @@ src/compiler.c:mixin_answers_first
 src/compiler.c:cls_user_display_mi
 src/compiler.c:toplevel_mod_method
 "
-PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain)[(]'
+PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain)[[:space:]]*([(]|$)'
 bad=0
 for ent in $FUNCS; do
   f=${ent%%:*}; fn=${ent##*:}
+  [ -f "$f" ] || { echo "siteless-readers-check: $f: no such file"; bad=1; continue; }
   out=$(awk -v fn="$fn" '
     !inb && $0 ~ "^(static )?[a-z].*[ *]" fn "[(]" && $0 !~ /;$/ { inb = 1 }
     inb { printf "%d: %s\n", NR, $0 }
@@ -89,7 +90,7 @@ for f in src/*.c; do
     /^[a-zA-Z_][^;=]*[(]/ && !/^(typedef|return|else|if|for|while|switch|#)/ && !/;[ \t]*$/ { x = $0; sub(/[(].*/, "", x); n = split(x, w, /[ *]+/); fn = w[n] }
     /CT_SHARED/ && fn != "" { print f ":" fn }' "$f"
 done | sort -u | while IFS= read -r ent; do
-  case "$FUNCS" in *"$ent"*) ;; *) echo "siteless-readers-check: $ent asks the plan with no site (CT_SHARED) and is not on the readers' list"; exit 3 ;; esac
+  printf '%s\n' $FUNCS | grep -Fxq -- "$ent" || { echo "siteless-readers-check: $ent asks the plan with no site (CT_SHARED) and is not on the readers' list"; exit 3; }
 done || bad=1
 [ $bad -eq 0 ] && echo "siteless-readers-check: ok"
 exit $bad

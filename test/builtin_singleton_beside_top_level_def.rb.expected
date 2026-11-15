@@ -1,0 +1,17 @@
+1794182400
+12
+true
+"a/b"
+4
+4.0
+"X"
+"Time"
+4
+private method 'foo' called for an instance of Integer
+private method 'foo' called for an instance of Object
+private method 'foo' called for an instance of String
+private method 'foo' called for class Time
+private method 'year' called for class Time
+private method 'foo' called for class File
+private method 'foo' called for class Integer
+private method 'foo' called for module Math

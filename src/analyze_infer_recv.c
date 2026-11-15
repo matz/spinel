@@ -2288,5 +2288,9 @@ int poly_str_iter_enum(Compiler *c, int id) {
   if (is_lazy_name(qn)) return 1;
   int qac = 0;
   call_args(nt, q, &qac);
+  /* (each_line's Enumerator has no size: CRuby's `s.each_line.size` is nil,
+     where the Array lines would answer its length) */
+  const char *nm = nt_str(nt, id, "name");
+  if (qn && nm && sp_streq(qn, "size") && qac == 0 && sp_streq(nm, "each_line")) return 1;
   return qn && !bop_find(BOP_ANY_ARRAY, qn, qac, nt_ref(nt, q, "block") >= 0);
 }

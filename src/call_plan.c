@@ -4891,11 +4891,14 @@ static void ct_landing_classes(Compiler *c, int id, CtLanding at, const char *nm
       pcs = comp_cmethod_candidates(c, nm, &npc);
       for (int i = 0; i < npc; i++) fn(c, id, nm, pcs[i].cls, CT_CMETHOD, arg);
     }
+    int obj = oc;
     oc = -1;   /* (Object among them, where its chain holds two) */
     for (int i = c->ver_ix_nb ? c->ver_names[sp_strhash(nm) % c->ver_ix_nb] : -1;
          i >= 0; i = c->ver_names_next[i]) {   /* and the class of each later prepend's copy */
       const struct VerEntry *e = &c->ver_entries[i];
       if (e->guard != VER_ENTRY_CHAIN && sp_streq(e->name, nm)) fn(c, id, nm, e->cls, e->sg ? CT_CMETHOD : 0, arg);
+      /* (a value no class of the program holds meets Object's chain entry: a module included into Object, or a top-level def, beside versions) */
+      else if (e->guard == VER_ENTRY_CHAIN && !e->sg && e->cls == obj && sp_streq(e->name, nm)) fn(c, id, nm, obj, 0, arg);
     }
   }
   if (oc >= 0) fn(c, id, nm, oc, 0, arg);

@@ -2261,7 +2261,7 @@ reject-test: string-minus-reject-test $(SPINEL)
 	t=test/reject/toplevel_include_yield_ivar_target.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/tiv.c" >"$$tmp/tiv.out" 2>&1; then \
 	  echo "reject-test: FAIL (an included method assigning an ivar as a multiple-assignment target compiled)"; ok=0; \
-	else grep -q "top-level include of a module method that uses instance variables" "$$tmp/tiv.out" || \
+	else grep -q "as a multiple-assignment target" "$$tmp/tiv.out" || \
 	  { echo "reject-test: FAIL (included ivar target rejected without saying why)"; sed -n 1,5p "$$tmp/tiv.out"; ok=0; }; fi; \
 	for t in $(shell grep -l '^\# spinel: reject-super-value$$' test/reject/*.rb); do \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/siv.c" >"$$tmp/siv.out" 2>&1; then \

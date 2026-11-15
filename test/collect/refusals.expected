@@ -2187,11 +2187,9 @@ spinel: test/reject/top_def_calls_main_singleton_def_self.rb:7: a top-level meth
 == test/reject/top_def_calls_main_singleton_def_self.rb [promote] rc=1
 spinel: test/reject/top_def_calls_main_singleton_def_self.rb:7: a top-level method's self is not modelled: this call finds main's singleton method when the method runs on main and Object's when it runs on another object
 == test/reject/toplevel_include_yield_ivar_target.rb [default] rc=1
-spinel: test/reject/toplevel_include_yield_ivar_target.rb:14: unsupported top-level include of a module method that uses instance variables: node N (CallNode `pair`) recv=-/ty-1 argc=0
-spinel: 1 refusal, nothing written
+spinel: test/reject/toplevel_include_yield_ivar_target.rb:9: an instance variable of a builtin value as a multiple-assignment target: assign it on its own (`@a = x`)
 == test/reject/toplevel_include_yield_ivar_target.rb [promote] rc=1
-spinel: test/reject/toplevel_include_yield_ivar_target.rb:14: unsupported top-level include of a module method that uses instance variables: node N (CallNode `pair`) recv=-/ty-1 argc=0
-spinel: 1 refusal, nothing written
+spinel: test/reject/toplevel_include_yield_ivar_target.rb:9: an instance variable of a builtin value as a multiple-assignment target: assign it on its own (`@a = x`)
 == test/reject/typed_array_include_user_eq.rb [default] rc=1
 spinel: test/reject/typed_array_include_user_eq.rb:7: Array#include? of a user object defining == in a typed Array
 spinel: 1 refusal, nothing written

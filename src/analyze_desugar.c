@@ -1864,8 +1864,10 @@ static int erm_args_modules(const NodeTable *nt, const int *av, int first, int a
    (toplevel_includes) is of Object's includes too. Only for modules of the program's (a core
    module's methods, Math's or Comparable's, answer no object's call the
    include adds), where the program defines no hook the include fires and
-   calls no autoload, and none of the modules has a method that uses
-   instance variables. */
+   calls no autoload, and none of the modules has a method that still
+   names an instance variable (desugar_builtin_ivars, which runs first,
+   gives a module included at the top level alone Object's reflective
+   reads and writes; one also mixed into a class keeps its layout's). */
 /* (what: 0 a yield, 1 a module_function call, 2 an instance variable) */
 static int erm_body_has(const NodeTable *nt, int node, int what) {
   if (node < 0) return 0;
@@ -1898,8 +1900,8 @@ static int erm_toplevel_include_object(Compiler *c, NodeTable *nt, int st) {
     NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
       const char *k = class_def_key(c, m);
       if (!k || !mk || !sp_streq(k, mk)) continue;
-      /* (a method that uses instance variables has no state to hold them
-         on main or on a builtin value: left to the refusal it has had) */
+      /* (a method that still names an instance variable is also a class's,
+         whose layout holds it: left to the refusal it has had) */
       if (erm_body_has(nt, class_def_body(nt, m), 2)) return 0;
       found = 1;
     }
@@ -29695,6 +29697,10 @@ static const char *biv_host_of(NodeTable *nt, const BivHosts *h, const char *mod
       target = biv_nested(nt, h->parent, m) ? NULL : class_def_name(nt, m);
       if (!target) return NULL;
     }
+    /* (a top-level `include M` is Object's: main.include is Object.include) */
+    else if (sp_streq(nm, "include") && h->parent[id] >= 0 && nt_kind(nt, h->parent[id]) == NK_StatementsNode &&
+             h->parent[h->parent[id]] >= 0 && nt_kind(nt, h->parent[h->parent[id]]) == NK_ProgramNode)
+      target = "Object";
     if (!target || !(rbself_builtin(target) || sp_streq(target, "Object")) ||
         (host && !sp_streq(host, target))) return NULL;
     host = target;

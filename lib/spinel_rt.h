@@ -14115,14 +14115,7 @@ static sp_RbVal sp_poly_delete_key(sp_RbVal recv, sp_RbVal key) {
   }
   if (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)) {
     sp_PolyArray *a = sp_poly_to_poly_array(recv);
-    if (a && a->frozen) { sp_poly_frozen_delete_scan(a, key, a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
-    sp_int w = 0, found = 0;
-    for (sp_int i = 0; a && i < a->len; i++) {
-      if (sp_poly_rb_equal(a->data[i], key)) { found = 1; continue; }
-      a->data[w++] = a->data[i];
-    }
-    if (a) a->len = w;
-    return found ? key : sp_box_nil();
+    return a ? sp_PolyArray_delete(a, key) : sp_box_nil();
   }
   /* String#delete(chars): the same name on a string receiver, which reaches
      here whenever the value only turns out to be a string at run time. */

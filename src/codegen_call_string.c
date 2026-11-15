@@ -1790,9 +1790,9 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
 /* ---- String#[]=, #insert, #clear and #slice! (stage 7) ----
    A String slot holds the String's handle, so these rows change the String
    where it lives: the receiver's handle is taken once, before the arguments
-   run (CRuby evaluates the receiver first), and the String is changed where
-   it lives (the splices move its tail, sp_String_splice_chars), which every
-   name holding the String sees: a
+   run (CRuby evaluates the receiver first), and its bytes are spliced in
+   place (sp_String_splice_chars moves the tail), which every name holding
+   the String sees: a
    variable, an ivar, self in a reopened String, an element, a call's
    answer, the temp a `&.` tested, the String a bang on a held chain
    answers. A String no name holds (a call's fresh answer) is changed in a

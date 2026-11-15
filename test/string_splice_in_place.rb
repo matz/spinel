@@ -144,4 +144,8 @@ x[1, 2] = "OX"
 y = +"keys"
 k = ARGV.size > 5 ? 1 : 0.7
 y[k] = "K"
+kr = ARGV.size > 5 ? 1 : /e(y)/
+y[kr] = "E"
+kn = ARGV.size > 5 ? 1 : (3..3)
+y[kn] = "Z"
 p x, y

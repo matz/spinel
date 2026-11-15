@@ -131,6 +131,14 @@ void an_const_presence(Compiler *c);
 int an_const_read_finds(Compiler *c, int id, const char *name);
 int const_has_flag(const LocalVar *lv);
 typedef struct { const LocalVar *presence; int autoload, class_presence; } ConstReadEffect;
+/* Does a constant read with this effect run nothing of its own: no autoload,
+   no presence check that can raise NameError, no class-presence check? The
+   one answer the value-position predicates ask (poly_inert, the order
+   record's walk_value_only, the String operand binder, the read's prefix).
+   A path's parent is asked separately. */
+static inline int an_const_effect_runs_nothing(ConstReadEffect e) {
+  return !e.presence && !e.autoload && !e.class_presence;
+}
 int an_class_needs_presence(Compiler *c, int ci);
 int an_class_presence_is_read(const Compiler *c, int ci);
 int an_class_presence_write(Compiler *c, int id);

@@ -918,7 +918,7 @@ int emit_hash_has_value(Compiler *c, int recv, int arg, TyKind rt, const char *h
   if (!recv_never_nil(c, recv)) {
     Buf rx = expr_buf(c, recv);
     char ct[48]; snprintf(ct, sizeof ct, "sp_%sHash *", hn);
-    int t = nil_recv_open(c, recv, rx.p ? rx.p : "", ct, NULL, subtree_may_allocate(c->nt, arg), b);
+    int t = nil_recv_open(c, recv, rx.p ? rx.p : "", ct, NULL, subtree_may_allocate(c, arg), b);
     free(rx.p);
     int ta = ++g_tmp;
     buf_printf(b, "%s _t%d = ", poly ? "sp_RbVal" : c_type_name(ty_hash_val(rt)), ta);

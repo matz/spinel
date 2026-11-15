@@ -665,8 +665,8 @@ extern int  g_cls_tag_skip;   /* poly-dispatch builtin-arm re-entry marker */
 /* Ask subtree_may_allocate before leaving something unrooted across `id`:
    its "no" is a keyed decision (src/decide.c). subtree_allocates is the
    bare fact, for a caller whose answer licenses no such omission. */
-int subtree_may_allocate(const NodeTable *nt, int id);
-int subtree_allocates(const NodeTable *nt, int id);
+int subtree_may_allocate(Compiler *c, int id);
+int subtree_allocates(Compiler *c, int id);
 int subtree_has_side_effect(Compiler *c, int id);
 /* Each subtree_* walk below as its node's own answer: 1 yes, 0 no for the
    whole subtree, -1 ask the node's operands. The operand-order record
@@ -1276,7 +1276,8 @@ void emit_expr(Compiler *c, int id, Buf *b);
 void emit_expr_for_effect(Compiler *c, int node, Buf *b);
 /* Can evaluating `node` run none of the program's own code (codegen_call.c)?
    It may allocate, but writes no variable and calls no method of the
-   program's, implicitly or explicitly. */
+   program's, implicitly or explicitly. A constant that autoloads, or may be
+   unset (a NameError), is not inert. */
 int poly_inert(Compiler *c, int node);
 int effect_view_open(Compiler *c, int node);
 void emit_expr_as_value_of(Compiler *c, int node, int owner, Buf *b);

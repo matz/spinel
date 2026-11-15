@@ -21254,6 +21254,13 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     builtin_recv = 1;
   if (!builtin_recv && k0 == NK_CallNode && nm && names[0] == nm) builtin_recv = cr_recv_builtin_class(c, nt, id, nm);
   if (builtin_recv) names[0] = NULL;
+  /* a builtin value is an instance: a method a reopening or an included
+     module gives its class may be the one called, a class method never */
+  if (g_cr_typed && k0 == NK_CallNode && nm && names[0] == nm && !nt_int(nt, id, "dyn_arm", 0) &&
+      nt_ref(nt, id, "receiver") >= 0 && cr_ty_builtin_value(c, comp_ntype(c, nt_ref(nt, id, "receiver")))) {
+    snprintf(inst_name, sizeof inst_name, "\x03%s", nm);
+    names[0] = inst_name;
+  }
   /* An entry's arm call is pinned to the method it runs, which the entry
      reaches by scope (ver_entry_targets, above), or to the builtin: by name
      it reached every other method of the name, a class method's entry the

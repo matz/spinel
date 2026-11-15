@@ -1418,10 +1418,19 @@ void compute_reachable(Compiler *c, int typed) {
   ic_begin(c, typed);
   if (typed == 2) { g_cr_typed = &c->ic->class_only; cplan_targets_drop(); }
   else { g_cr_untyped = &c->ic->class_only; cr_literal_locals_build(c); }
+  /* by def: does an extend run a copy of it as a class method? */
+  unsigned char *ext_copied = calloc((size_t)c->nt->count + 1, 1);
+  for (int s = 0; s < c->nscopes; s++)
+    if (c->scopes[s].is_extend_copy && c->scopes[s].is_cmethod && c->scopes[s].def_node >= 0)
+      ext_copied[c->scopes[s].def_node] = 1;
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *sc = &c->scopes[s];
+    /* (a method of a module runs on an instance too where nothing extends
+       the module, or where the extenders run copies of it: register_extends) */
     int instance_self = sc->name && !sc->is_cmethod && sc->class_id >= 0 &&
-                        !comp_class_is_module(c, &c->classes[sc->class_id]);
+                        (!comp_class_is_module(c, &c->classes[sc->class_id]) ||
+                         (!sc->is_module_function &&
+                          ((sc->def_node >= 0 && ext_copied[sc->def_node]) || !cr_module_extended(c, sc->class_id, 0))));
     ic_scope(c, s);
     if (c->scopes[s].body >= 0)
       cr_collect_calls(c, c->nt, c->scopes[s].body, &scope_calls[s], &sc_n[s], &sc_cap[s], instance_self);
@@ -1437,6 +1446,7 @@ void compute_reachable(Compiler *c, int typed) {
         cr_live_collect(&lv, s, pn, -1, 0);
     }
   }
+  free(ext_copied);
   ic_scope(c, 0);
   cr_collect_program_end(c, &scope_calls[0], &sc_n[0], &sc_cap[0]);
   ic_scope(c, -1);

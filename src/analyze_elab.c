@@ -4970,10 +4970,12 @@ static int lr_vv_own(void *ud, int cls, int sg) {
 static int lr_vv_mixin(void *ud, int cls, int ref) {
   LrVers_ *v = ud;
   int core = -1;
-  (void)cls;
   (void)elab_class_ref_at(v->c, ref, &core);
-  /* (Kernel, which the row of the name answers, ends the versions: nothing behind it is found) */
-  if (core == CORE_KERNEL && v->name && bop_kernel_answers(v->name, -1, 0)) return LR_W_STOP;
+  /* (Kernel, which the row of the name answers, ends the versions: nothing behind it is found, where it surely runs) */
+  const LrClass *kc = lr_class(v->c->lrec, cls);
+  int sure = 1;
+  for (int j = 0; kc && j < kc->nmix; j++) if (kc->mix[j].ref == ref && elab_mixin_may_not_run(v->c, &kc->mix[j])) sure = 0;
+  if (core == CORE_KERNEL && sure && v->name && bop_kernel_answers(v->name, -1, 0)) return LR_W_STOP;
   v->n = -1;
   return LR_W_STOP;
 }
@@ -11068,7 +11070,7 @@ static int lr_kw_skip(void *ud, int cls, const LrMixin *m) {
   int core = -1;
   (void)cls;
   (void)elab_class_ref_at(c, m->ref, &core);
-  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || !m->applied || m->cond || elab_point_may(c, m->node);
+  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || elab_mixin_may_not_run(c, m);
 }
 static int lr_kw_enter(void *ud, int mod, int depth) {
   LrKernelWalk *x = ud;
@@ -11100,7 +11102,11 @@ int elab_class_kernel(Compiler *c, int cls) {
 /* See analyze.h. */
 /* ...asked of the modules a program module includes: a fact of each module, kept (LoadRecord.brings, of the record's
    histories as they stand) so that a module reached by many routes, or asked by many mixins, is walked once */
-static int lr_brings_kernel(Compiler *c, int ref) {
+/* Does mixin m of a class, as the record holds it, possibly not run: under a condition, or after one that decides? */
+int elab_mixin_may_not_run(Compiler *c, const LrMixin *m) {
+  return !m->applied || m->cond || elab_point_may(c, m->node);
+}
+static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   LoadRecord *r = c->lrec;
   int core = -1, ke = comp_core_class(c, CORE_KERNEL), m = elab_class_ref_at(c, ref, &core);
   if (core == CORE_KERNEL || (m >= 0 && m == ke)) return 1;
@@ -11110,18 +11116,23 @@ static int lr_brings_kernel(Compiler *c, int ref) {
   if (!k || m + 1 >= r->ncls) return 0;
   if (!r->brings || r->brings_gen != r->hgen || r->brings_n != r->ncls) {
     free(r->brings);
-    if (!(r->brings = calloc((size_t)r->ncls + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (!(r->brings = calloc(2 * ((size_t)r->ncls + 1), 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     r->brings_gen = r->hgen;
     r->brings_n = r->ncls;
   }
-  if (r->brings[m + 1]) return r->brings[m + 1] == 1;
-  r->brings[m + 1] = 2;   /* (while it is asked: a module is not its own include) */
+  signed char *memo = r->brings + (certain ? r->ncls + 1 : 0);
+  if (memo[m + 1]) return memo[m + 1] == 1;
+  memo[m + 1] = 2;   /* (while it is asked: a module is not its own include) */
   for (int j = 0; j < k->nmix; j++)
-    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && lr_brings_kernel(c, k->mix[j].ref) == 1) return r->brings[m + 1] = 1;
+    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && !(certain && elab_mixin_may_not_run(c, &k->mix[j])) &&
+        lr_brings_kernel(c, k->mix[j].ref, certain) == 1) return memo[m + 1] = 1;
   return 0;
 }
 int elab_mixin_brings_kernel(Compiler *c, int ref) {
-  return lr_brings_kernel(c, ref);
+  return lr_brings_kernel(c, ref, 0);
+}
+int elab_mixin_certain_kernel(Compiler *c, int ref) {
+  return lr_brings_kernel(c, ref, 1);
 }
 /* See analyze.h. */
 unsigned long elab_mixin_gen(Compiler *c) {

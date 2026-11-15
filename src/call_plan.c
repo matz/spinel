@@ -1837,8 +1837,8 @@ static void ver_kern_sites(Compiler *c) {
       int sn = nt_ref(nt, mx[j].node, "arguments"), sc = 0;
       const int *sv = cn && is_send_family(cn) && sn >= 0 ? nt_arr(nt, sn, "arguments", &sc) : NULL;
       if (sv && sc > 0 && nt_kind(nt, sv[0]) == NK_SymbolNode) cn = nt_str(nt, sv[0], "value");
-      if (mx[j].kind == LR_INCLUDE && cn && is_mixin_call(cn) && (!mx[j].applied || mx[j].cond || elab_point_may(c, mx[j].node)) &&
-          elab_mixin_brings_kernel(c, mx[j].ref) == 1)
+      if (mx[j].kind == LR_INCLUDE && cn && is_mixin_call(cn) && elab_mixin_may_not_run(c, &mx[j]) &&
+          elab_mixin_certain_kernel(c, mx[j].ref) == 1)
         ver_kern_add(c, mx[j].node, k);
     }
   }
@@ -1846,7 +1846,7 @@ static void ver_kern_sites(Compiler *c) {
   for (int id = an_calls_named_first(c, "include"); id >= 0; id = an_calls_named_next(id)) {
     int an = nt_ref(nt, id, "arguments"), ac = 0, recv = nt_ref(nt, id, "receiver"), brings = 0;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-    for (int i = 0; i < ac; i++) brings |= elab_mixin_brings_kernel(c, av[i]) == 1;
+    for (int i = 0; i < ac; i++) brings |= elab_mixin_certain_kernel(c, av[i]) == 1;
     const Scope *s = comp_scope_of(c, id);
     if (!brings || (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) || elab_point_of(c, id).region >= 0 || !s || !s->is_cmethod || s->class_id < 0) continue;
     int own = s->class_id, nd = 0;
@@ -1871,7 +1871,8 @@ static void ver_kern_walk(Compiler *c, int k, VerIds *seen, VerIds *out, int dep
   int nm = 0;
   const LrMixin *mx = elab_class_mixins(c, k, &nm);
   for (int j = 0; j < nm; j++)
-    if (mx[j].kind == LR_INCLUDE || mx[j].kind == LR_PREPEND) ver_kern_walk(c, elab_mixin_module(c, &mx[j]), seen, out, depth + 1);
+    if ((mx[j].kind == LR_INCLUDE || mx[j].kind == LR_PREPEND) && !elab_mixin_may_not_run(c, &mx[j]))   /* (an include that may not run brings Kernel only where it is a site of its own: ver_kern_sites) */
+      ver_kern_walk(c, elab_mixin_module(c, &mx[j]), seen, out, depth + 1);
   int p = c->classes[k].parent;
   ver_kern_walk(c, p >= 0 ? p : elab_class_super(c, k), seen, out, depth + 1);
 }
@@ -1900,6 +1901,7 @@ int cplan_class_kernel(Compiler *c, int cls) {
    (cplan_kernel_reaches, comp_super_parent), the raise the one an entry for the name gives (ver_no_method_raise), which
    does not run the call's arguments. */
 static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, int ar, int vcall);
+static int cplan_mm_method(Compiler *c, int ci, int cmethod);
 static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int how, const int *pm) {
   NodeTable *nt = (NodeTable *)c->nt;
   int base = nt->count, par = pm ? pm[id] : -1;
@@ -1913,7 +1915,33 @@ static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int
     (void)ver_kern_cell(c, cells.v[k]);
     arm[k] = (DispArm){ sel[k], 1, NULL, 0, 0 };
   }
-  int raise = ver_no_method_raise(c, cls, 0, name, 0, how), ifn = disp_cell_choose(nt, arm, cells.n, id, raise);
+  int an = nt_ref(nt, id, "arguments"), nargs = 0, els;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &nargs) : NULL;
+  if (how != 2 && cplan_mm_method(c, cls, 0) >= 0) {
+    /* (a class with a method_missing of its own: it answers the call where no cell is set, with a copy of the call's operands) */
+    int call = disp_forward_call(nt, "method_missing", 0, 0), margs = nt_new_node(nt, "ArgumentsNode"), sym = nt_new_node(nt, "SymbolNode");
+    int *mv = malloc(sizeof *mv * (size_t)(nargs + 1));
+    if (!mv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    comp_sym_intern(c, name);
+    nt_node_set_str(nt, sym, "value", name);
+    mv[0] = sym;
+    for (int k = 0; k < nargs; k++) mv[k + 1] = nt_clone_subtree(nt, av[k]);
+    nt_node_set_arr(nt, margs, "arguments", mv, nargs + 1);
+    nt_node_set_ref(nt, call, "arguments", margs);
+    free(mv);
+    els = call;
+  }
+  else {
+    /* the call's operands that run code are evaluated, as CRuby evaluates them before it finds no method, ahead of the raise
+       (a copy of each: the call's own run only on the other arm) */
+    int raise = ver_no_method_raise(c, cls, 0, name, 0, how), nops = 0;
+    int *ops = malloc(sizeof *ops * (size_t)(nargs + 1));
+    if (!ops) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k < nargs; k++) if (!order_operand_inert(c, id, av[k], 0)) ops[nops++] = nt_clone_subtree(nt, av[k]);
+    els = nops ? disp_ahead(nt, ops, nops, raise) : raise;
+    free(ops);
+  }
+  int ifn = disp_cell_choose(nt, arm, cells.n, id, els);
   nt_replace_child(nt, par, id, ifn);
   comp_grow_node_arrays(c);
   for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
@@ -9760,7 +9788,13 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   case VK_CELL: {
     /* (a Kernel row's name in a class that has Kernel where a cell says so: the row where a cell of its chain is set,
        else NoMethodError; the row's call is made once for each cell) */
-    int els = ver_no_method_raise(c, cls, sg, name, w->ar, 0);
+    /* (the class's own method_missing, where it has one, answers where no cell is set, as it does where it has no Kernel) */
+    int els;
+    if (cplan_mm_method(c, cls, sg) >= 0) {
+      comp_sym_intern(c, name);
+      els = disp_method_missing_call(nt, name, w->ar, w->blk);
+    }
+    else els = ver_no_method_raise(c, cls, sg, name, w->ar, 0);
     VerIds cells;
     VerNamed row = *w;
     row.els = VK_BUILTIN;

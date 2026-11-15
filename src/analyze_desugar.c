@@ -2815,13 +2815,13 @@ int desugar_singleton_class_mixin(Compiler *c) {
      changes is not modeled */
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_SingletonClassNode || nt_kind(nt, nt_ref(nt, id, "expression")) == NK_SelfNode) continue;
-    /* (`class << K`, K a class the program declares: the load record takes
-       the body's mixins as K's singleton's, mixin_by_record. A module K
-       keeps the refusal: a prepend over its own singleton method under a
-       cell is not dispatched yet.) */
+    /* (`class << K`, K a class or a module the program declares: the load
+       record takes the body's mixins as K's singleton's, mixin_by_record.
+       A prepend over a module's own class method runs through the copy's
+       guard entry, as a class's does: ver_entries_build.) */
     int ex = nt_ref(nt, id, "expression");
     if ((nt_kind(nt, ex) == NK_ConstantReadNode || nt_kind(nt, ex) == NK_ConstantPathNode) &&
-        nt_str(nt, ex, "name") && erm_declared_as(nt, nt_str(nt, ex, "name")) == 1) continue;
+        nt_str(nt, ex, "name") && erm_declared_as(nt, nt_str(nt, ex, "name")) >= 1) continue;
     int sb = nt_ref(nt, id, "body"), sn = 0;
     const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &sn) : NULL;
     for (int j = 0; j < sn; j++) {

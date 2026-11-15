@@ -25,3 +25,7 @@
 [RuntimeError, "m2", "c"]
 [ArgumentError, "bad", "c2"]
 1
+[ArgumentError, "mm", "c"]
+[RuntimeError, "mm", "c"]
+[ArgumentError, "unsupported signal 'SIGBOGUS'", nil]
+["SIGINT", "c"]

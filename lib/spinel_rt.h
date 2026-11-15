@@ -18193,7 +18193,7 @@ SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_cz(void *cz, 
   va_start(ap, n);
   sp_raise_nomethod_va(1, cz, msg, name, recv, n, ap);
 }
-SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_rest_c(int czset, void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
   SP_GC_SAVE();
   SP_GC_ROOT_STR(msg);
   SP_GC_ROOT_RBVAL(name);
@@ -18206,23 +18206,14 @@ SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const ch
   SP_GC_ROOT(r);
   for (sp_int i = 0; r && i < r->len; i++) sp_PolyArray_push(a, r->data[i]);
   if (sp_poly_length(kw) > 0) sp_PolyArray_push(a, kw);
+  if (czset) SP_CAUSE_STAGE(cz);
   sp_raise_nomethod_obj(msg, name, recv, a);
 }
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
+  sp_raise_nomethod_rest_c(0, NULL, msg, name, recv, rest, kw);
+}
 SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest_cz(void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
-  SP_GC_SAVE();
-  SP_GC_ROOT_STR(msg);
-  SP_GC_ROOT_RBVAL(name);
-  SP_GC_ROOT_RBVAL(recv);
-  SP_GC_ROOT_RBVAL(rest);
-  SP_GC_ROOT_RBVAL(kw);
-  sp_PolyArray *a = sp_PolyArray_new();
-  SP_GC_ROOT(a);
-  sp_PolyArray *r = sp_poly_to_poly_array(rest);
-  SP_GC_ROOT(r);
-  for (sp_int i = 0; r && i < r->len; i++) sp_PolyArray_push(a, r->data[i]);
-  if (sp_poly_length(kw) > 0) sp_PolyArray_push(a, kw);
-  SP_CAUSE_STAGE(cz);
-  sp_raise_nomethod_obj(msg, name, recv, a);
+  sp_raise_nomethod_rest_c(1, cz, msg, name, recv, rest, kw);
 }
 /* e.message as the String handle it holds (sp_Exception.msg_h), from the
    shared dispatch's stored message, which tells a message given from one
@@ -18556,6 +18547,21 @@ SP_NORETURN SP_COLD static void sp_raise_poly_cz(void *cz, sp_RbVal v) {
   SP_CAUSE_STAGE(cz); sp_raise_poly(v);
 }
 SP_NORETURN SP_COLD static void sp_raise_poly_msg_h_cz(void *cz, sp_RbVal v, sp_RbVal m) {
+  /* What sp_raise_poly_msg runs before its raise runs here, before the
+     cause is staged: the message's own to_s (which may rescue a raise of
+     its own), and the signal name SignalException looks up (an unknown one
+     is an ArgumentError, which does not take the cause). */
+  SP_GC_ROOT_RBVAL(v);
+  if (m.tag != SP_TAG_NIL && m.tag != SP_TAG_STR && !sp_poly_is_strbuf(m)) m = sp_box_str(sp_poly_to_s(m));
+  SP_GC_ROOT_RBVAL(m);
+  if (v.tag == SP_TAG_CLASS) {
+    const char *cn = sp_class_val_name(v);
+    if (cn && !strcmp(cn, "SignalException")) {
+      sp_Exception *e = sp_signal_exc_new(m);
+      SP_GC_ROOT(e);
+      SP_CAUSE_STAGE(cz); sp_raise_exc(e); SP_UNREACHABLE();
+    }
+  }
   SP_CAUSE_STAGE(cz); sp_raise_poly_msg_h(v, m);
 }
 /* Raise StopIteration carrying the iteration's return value as #result. Built as

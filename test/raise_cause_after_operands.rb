@@ -66,3 +66,18 @@ show { raise(e1, "m2", cause: C) }
 def pick(f) = f ? 1 : raise(ArgumentError, "bad", cause: RuntimeError.new("c2"))
 show { pick(false) }
 p pick(true)
+
+# a class or an exception known only at run time: the message's to_s and
+# the signal name run before the cause is staged
+class M; def to_s; (raise "inner" rescue nil); "mm"; end; end
+j = [ArgumentError, String].first
+show { raise(j, M.new, cause: C) }
+e0 = [RuntimeError.new("o"), 1].first
+show { raise(e0, M.new, cause: C) }
+sg = [SignalException, String].first
+show { raise(sg, "BOGUS", cause: C) }
+begin
+  raise(sg, "INT", cause: C)
+rescue SignalException => e
+  p [e.message, e.cause&.message]
+end

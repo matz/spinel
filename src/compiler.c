@@ -5592,7 +5592,7 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
      includes Kernel reaches Kernel's methods through Object's chain, as
      before). The record answers it (elab_class_kernel), and the call plan's cells where an include that may not
      run decides (cplan_class_kernel: the super is then guarded, ver_kernel_guards). */
-  if (cplan_class_kernel(c, class_id) != KERN_HAS) return -1;
+  if (cplan_class_kernel(c, class_id) == KERN_LACKS) return -1;
   return obj;
 }
 

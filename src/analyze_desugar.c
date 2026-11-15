@@ -16662,6 +16662,13 @@ int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then) {
   nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, then));
   return ifn;
 }
+/* `if <arm[0]'s test> || ... then <then> else <els> end` */
+int disp_cell_choose(NodeTable *nt, const DispArm *arm, int narm, int then, int els) {
+  int ifn = disp_cell_guard(nt, arm, narm, then), el = nt_new_node(nt, "ElseNode");
+  nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, els));
+  nt_node_set_ref(nt, ifn, "subsequent", el);
+  return ifn;
+}
 /* `(<st[0]>; ...; <expr>)` */
 int disp_ahead(NodeTable *nt, const int *st, int n, int expr) {
   int *b = malloc(sizeof(int) * (size_t)(n + 1)), s = nt_new_node(nt, "StatementsNode"), p = nt_new_node(nt, "ParenthesesNode");

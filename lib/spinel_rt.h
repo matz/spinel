@@ -2334,12 +2334,21 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
      Object#blank? asks exactly that -- deliberately absent from this array,
      even though both Array and Hash get them from their own generated
      sp_gen_responds_*[] instead. */
+  /* Enumerable's public instance methods in CRuby (the same list as
+     enumerable_method_names in src/codegen_call.c), plus each and size,
+     which Array, Hash, Range and Enumerator all define. A boxed Array,
+     Hash, Range or Enumerator runs every one of them. */
   static const char *const enumm[] = {
-    "each", "each_with_index", "each_with_object", "map", "collect", "select",
-    "filter", "reject", "find", "detect", "reduce", "inject", "to_a", "size",
-    "count", "include?", "first", "min", "max", "sort", "sort_by",
-    "sum", "any?", "all?", "none?", "one?", "group_by", "partition", "zip",
-    "flat_map", "each_slice", "each_cons", "take", "drop", NULL };
+    "each", "size",
+    "all?", "any?", "chain", "chunk", "chunk_while", "collect", "collect_concat",
+    "compact", "count", "cycle", "detect", "drop", "drop_while", "each_cons",
+    "each_entry", "each_slice", "each_with_index", "each_with_object", "entries",
+    "filter", "filter_map", "find", "find_all", "find_index", "first", "flat_map",
+    "grep", "grep_v", "group_by", "include?", "inject", "lazy", "map", "max",
+    "max_by", "member?", "min", "min_by", "minmax", "minmax_by", "none?", "one?",
+    "partition", "reduce", "reject", "reverse_each", "select", "slice_after",
+    "slice_before", "slice_when", "sort", "sort_by", "sum", "take", "take_while",
+    "tally", "to_a", "to_h", "to_set", "uniq", "zip", NULL };
   static const char *const numm[] = {
     "+", "-", "*", "/", "%", "**", "<=>", "<", ">", "<=", ">=", "abs",
     "to_i", "to_int", "to_f", "to_r", "to_c", "zero?", "positive?",
@@ -2489,7 +2498,14 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
     return sp_str_in_list(m, boolm);
   }
   /* an Enumerator answers the Enumerable face (#3625) */
-  if (strcmp(cn, "Enumerator") == 0) return sp_str_in_list(m, enumm);
+  if (strcmp(cn, "Enumerator") == 0) {
+    /* and its own methods. Not feed and +: a boxed Enumerator does not
+       run them yet. */
+    static const char *const enumrm[] = {
+      "next", "next_values", "peek", "peek_values", "rewind", "with_index",
+      "with_object", NULL };
+    return sp_str_in_list(m, enumm) || sp_str_in_list(m, enumrm);
+  }
   /* an IO handle in a boxed slot -- a File, a socket, $stderr, a stat --
      by its kind */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p)

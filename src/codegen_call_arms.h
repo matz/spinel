@@ -144,7 +144,7 @@ void emit_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv)
 extern const char *const enumerable_names[];
 extern int g_rto_nil_obj;
 extern int g_rto_by_cls;
-int emit_respond_to_by_cls(Compiler *c, int recv, const char *qm, int argc, const int *argv, Buf *b);
+int emit_respond_to_by_cls(Compiler *c, int id, int recv, const char *qm, int argc, const int *argv, Buf *b);
 extern int g_rto_exc;
 extern int g_rto_force_ia;
 int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc, const int *argv, Buf *b);

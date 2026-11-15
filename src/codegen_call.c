@@ -34219,7 +34219,7 @@ int root_reopen_method_vis(Compiler *c, int cid, const char *qm) {
    The method-table reading of respond_to_static_answer's object branch,
    without its deferral to the class's own respond_to? -- this is what that
    override's `super` asks. */
-static int obj_responds_answer(Compiler *c, int cid, const char *qm) {
+static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
   if (name_is_synth_method(c, qm) || comp_method_is_private_helper(c, cid, qm)) return 0;
   if (sp_streq(qm, "initialize_copy")) return 1;
   /* BasicObject#initialize is private too, unless the class made it public:
@@ -34258,6 +34258,14 @@ static int obj_responds_answer(Compiler *c, int cid, const char *qm) {
      root's, by its visibility there */
   if (!found) {
     int rv = root_reopen_method_vis(c, cid, qm);
+    /* ...or by the top level's def, Object's method from where the call runs (the chain of a class with no
+       explicit superclass ends before it); not for a blank slate, which has no Object */
+    if (rv < 0 && id >= 0 && !class_is_blank_slate(c, cid)) {
+      rv = cplan_top_def_vis(c, id, qm);
+      /* (a visibility word the class's chain holds for the name, `private :tk`, is the class's answer) */
+      int at = -1, dv = comp_method_vis_declared(c, cid, qm, &at);
+      if (rv >= 0 && at >= 0 && at != comp_core_class(c, CORE_OBJECT)) rv = dv;
+    }
     if (rv >= 0) return rv == SP_VIS_PUBLIC ? 2 : 1;
   }
   /* Object's private methods (exit, puts, raise) answer to include_all;
@@ -34377,7 +34385,7 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
       }
       int ans[256], same = 1, any = 0;
       for (int k = 0; k < ncls; k++) {
-        ans[k] = obj_responds_answer(c, cls[k], qm);
+        ans[k] = obj_responds_answer(c, cls[k], qm, id);
         if (ans[k]) any = 1;
         if (ans[k] != ans[0]) same = 0;
       }
@@ -34423,7 +34431,7 @@ int g_rto_exc = 0;
    value (emit_respond_to_flag_split asks both); -1: as the call writes it */
 int g_rto_force_ia = -1;
 static int rto_exact_class_answer(Compiler *c, int cid, const char *qm,
-                                  int include_all, int foldable);
+                                  int include_all, int foldable, int id);
 /* Does an exception class of the program define qm, public or not, which
    no builtin exception has? Then a receiver typed as the base exception
    answers by the class it holds. Not when one of them answers only at run
@@ -34433,8 +34441,8 @@ static int rto_exc_by_cls(Compiler *c, const char *qm, int include_all, int fold
   int any = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_is_exc_subclass(c, k)) continue;
-    if (rto_exact_class_answer(c, k, qm, include_all, foldable) < 0) return 0;
-    any |= obj_responds_answer(c, k, qm) != 0;
+    if (rto_exact_class_answer(c, k, qm, include_all, foldable, -1) < 0) return 0;
+    any |= obj_responds_answer(c, k, qm, -1) != 0;
   }
   return any;
 }
@@ -34449,7 +34457,7 @@ int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc,
   emit_expr(c, recv, b);
   buf_printf(b, "); int _k%d = _t%d ? sp_exc_user_cls_id(sp_box_obj((void *)_t%d, SP_BUILTIN_EXCEPTION)) : 0x7fffffff; (", t, t, t);
   for (int k = 0; k < c->nclasses; k++)
-    if (class_is_exc_subclass(c, k) && rto_exact_class_answer(c, k, qm, include_all, 1) == 1)
+    if (class_is_exc_subclass(c, k) && rto_exact_class_answer(c, k, qm, include_all, 1, -1) == 1)
       buf_printf(b, "_k%d == %d || ", t, k);
   buf_printf(b, "(_t%d ? sp_poly_responds_builtin(", t);
   emit_boxed_text(c, TY_EXCEPTION, xv, b);
@@ -34462,10 +34470,10 @@ int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc,
    (qm): 1 / 0, or -1 when only the runtime can tell (its class defines
    respond_to?, or a private match under a runtime include_all). */
 static int rto_exact_class_answer(Compiler *c, int cid, const char *qm,
-                                  int include_all, int foldable) {
+                                  int include_all, int foldable, int id) {
   /* the class's own respond_to? answers, not the method table */
   if (comp_method_in_chain(c, cid, "respond_to?", NULL) >= 0) return -1;
-  int a = obj_responds_answer(c, cid, qm);
+  int a = obj_responds_answer(c, cid, qm, id);
   if (a != 1) return a == 2;
   return foldable ? include_all : -1;
 }
@@ -34486,14 +34494,14 @@ static int rto_slot_may_hold(Compiler *c, int k, int cid) {
    instance may have disagree, g_rto_by_cls names cid and the answer is -1,
    for the emitter to ask the object's class id. */
 static int rto_subtree_answer(Compiler *c, int cid, const char *qm,
-                              int include_all, int foldable) {
-  int a = rto_exact_class_answer(c, cid, qm, include_all, foldable);
+                              int include_all, int foldable, int id) {
+  int a = rto_exact_class_answer(c, cid, qm, include_all, foldable, id);
   if (a < 0 || c->classes[cid].is_value_type) return a;
   int mixed = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (k == cid || !rto_slot_may_hold(c, k, cid) ||
         (!c->classes[k].instantiated && is_descendant(c, k, cid))) continue;
-    int ak = rto_exact_class_answer(c, k, qm, include_all, foldable);
+    int ak = rto_exact_class_answer(c, k, qm, include_all, foldable, id);
     if (ak < 0) return -1;
     if (ak != a) mixed = 1;
   }
@@ -34506,7 +34514,7 @@ static int rto_subtree_answer(Compiler *c, int cid, const char *qm,
    off the object (self when recv < 0), true for the classes under the
    receiver's class that answer qm. A nil slot answers nil's own surface.
    Answers 1 when it emitted. */
-int emit_respond_to_by_cls(Compiler *c, int recv, const char *qm, int argc,
+int emit_respond_to_by_cls(Compiler *c, int id, int recv, const char *qm, int argc,
                            const int *argv, Buf *b) {
   int cid = g_rto_by_cls;
   if (cid < 0) return 0;
@@ -34521,7 +34529,7 @@ int emit_respond_to_by_cls(Compiler *c, int recv, const char *qm, int argc,
   int any = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (!rto_slot_may_hold(c, k, cid)) continue;
-    if (rto_exact_class_answer(c, k, qm, include_all, 1) != 1) continue;
+    if (rto_exact_class_answer(c, k, qm, include_all, 1, id) != 1) continue;
     buf_printf(b, "%s_t%d == %d", any ? " || " : "", t, k);
     any = 1;
   }
@@ -34919,7 +34927,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         resolved = 1; yes = 0;
       }
       else {
-        int a = rto_subtree_answer(c, cid, qm, include_all, foldable);
+        int a = rto_subtree_answer(c, cid, qm, include_all, foldable, id);
         if (a < 0) return -1;
         resolved = 1; yes = a;
       }
@@ -34949,7 +34957,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         else {
           /* receiverless respond_to? still answers false for a private
              or protected match unless include_all folded true. */
-          int a = rto_subtree_answer(c, cid, qm, include_all, foldable);
+          int a = rto_subtree_answer(c, cid, qm, include_all, foldable, id);
           if (a < 0) return -1;
           resolved = 1; yes = a;
         }

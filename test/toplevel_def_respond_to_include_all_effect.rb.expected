@@ -17,3 +17,9 @@ true
 [:ia1, :ia2]
 true
 [:ia1, :ia2, :ia3]
+ZeroDivisionError
+ZeroDivisionError
+ZeroDivisionError
+true
+true
+true

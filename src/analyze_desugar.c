@@ -1036,6 +1036,22 @@ static int wasm_rescuing_yielder(const NodeTable *nt, int id) {
   if (pn >= 0) wy_scan(nt, pn, &s);
   return s.frame && s.yields && !s.keep;
 }
+/* does any node under `node` carry `name` (a local, a parameter, a call)?
+   The block parameter a def is given takes a name none of them has: a
+   local `__blk` of the method's own was the parameter otherwise */
+static int yic_name_used(const NodeTable *nt, int node, const char *name) {
+  if (node < 0) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  if (nm && sp_streq(nm, name)) return 1;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (yic_name_used(nt, nt_ref_at(nt, node, i), name)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++) if (yic_name_used(nt, ids[j], name)) return 1;
+  }
+  return 0;
+}
 int desugar_yield_in_closure_left(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   int body = nt_ref(nt, id, "body");
@@ -1054,12 +1070,16 @@ int desugar_yield_in_closure_at(Compiler *c, LowerCtx *lc, int id) {
   }
   int bpn = nt_ref(nt, pn, "block");
   const char *bp = (bpn >= 0 && nt_kind(nt, bpn) == NK_BlockParameterNode) ? nt_str(nt, bpn, "name") : NULL;
+  char bpc[300];
   if (!bp || !bp[0]) {
+    /* `__blk`, or `__blk1`, `__blk2`, ... when the method has a name that */
+    snprintf(bpc, sizeof bpc, "__blk");
+    for (int k = 1; yic_name_used(nt, body, bpc) || yic_name_used(nt, pn, bpc); k++)
+      snprintf(bpc, sizeof bpc, "__blk%d", k);
     if (bpn < 0) { bpn = nt_new_node(nt, "BlockParameterNode"); if (bpn < 0) return 0; nt_node_set_ref(nt, pn, "block", bpn); }
-    nt_node_set_str(nt, bpn, "name", "__blk");
-    bp = "__blk";
+    nt_node_set_str(nt, bpn, "name", bpc);
   }
-  char bpc[300]; snprintf(bpc, sizeof bpc, "%s", bp);
+  else snprintf(bpc, sizeof bpc, "%s", bp);
   yic_walk(nt, body, all, bpc);
   comp_grow_node_arrays(c);
   return 1;

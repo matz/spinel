@@ -52,6 +52,16 @@ module Batch
     end
   end
 
+  # locals with the names a block parameter given to the method would take
+  def self.own_names
+    __blk = 7
+    __blk1 = 8
+    r = yield(__blk)
+    [r, __blk, __blk1]
+  ensure
+    __blk1 = 0
+  end
+
   def self.maybe
     return :no_block unless block_given?
     begin
@@ -85,6 +95,7 @@ p Batch.quiet { 7 }
 p Batch.quiet { raise "x" }
 p Batch.again { |t| raise "again" if t < 2; t }
 p Batch.again { |t| raise "always" }
+p Batch.own_names { |v| v + 1 }
 p Batch.maybe
 p Batch.maybe { 5 }
 p Batch.maybe { raise "y" }

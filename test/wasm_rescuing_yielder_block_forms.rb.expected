@@ -17,6 +17,7 @@ ensure
 :quiet
 2
 :gave_up
+[8, 7, 8]
 :no_block
 5
 :rescued

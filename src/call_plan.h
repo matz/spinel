@@ -328,7 +328,9 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, 
    without asking the record, as for a call with no node or a name the node
    does not itself call (UNASKED); a Method's arm on a class whose accessor
    the tables have and whose capture meets neither a version of it nor a
-   def (cplan_capture_class_arms: ACCESSOR). For ML_NONE: the record's none
+   def (cplan_capture_class_arms: ACCESSOR); a visibility the plan
+   answers from the tables, for a name whose visibility the record may tell
+   apart where it has no answer at the call (cplan_method_vis: VIS). For ML_NONE: the record's none
    (RECORD): for a method, none is live at the call's point and the call
    takes no version entry to tell a later run, so it raises there wherever
    it runs, as nothing proves it runs after a def; for a name the tables
@@ -336,7 +338,7 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, 
    record proves the call runs before every version of it
    (ct_before_versions). Any other why on an ML_NONE (0, or UNASKED from
    cplan_new_initialize) is a none the tables give */
-typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD } MlWhy;
+typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD, MLW_VIS } MlWhy;
 typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);

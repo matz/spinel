@@ -743,7 +743,7 @@ int cplan_exc_object_method(Compiler *c, int call, const char *name) {
   if (!is_gated_exception_accessor(name)) return -1;
   int oc = comp_core_class(c, CORE_OBJECT);
   int mi = oc >= 0 ? call_target(c, call, oc, name, CT_OWN, NULL) : -1;
-  if (mi < 0 || comp_method_vis_declared(c, oc, name, NULL) == SP_VIS_PRIVATE ||
+  if (mi < 0 || cplan_method_vis(c, call, oc, name, 0, NULL) == SP_VIS_PRIVATE ||
       c->scopes[mi].nparams != 0 || c->scopes[mi].yields) return -1;
   return mi;
 }
@@ -7557,7 +7557,7 @@ static int cpoly_obj_default_n(Compiler *c, int id, const char *name, int kwh, i
   const NodeTable *nt = c->nt;
   int enforce = nt_str(nt, id, "vis_enforce") != NULL;
   int blind = !enforce && (nt_str(nt, id, "send_blind") || nt_ignore_visibility(nt, id));
-  int vis = blind ? SP_VIS_PUBLIC : comp_method_vis_declared(c, obj_cls, name, NULL);
+  int vis = blind ? SP_VIS_PUBLIC : cplan_method_vis(c, id, obj_cls, name, 0, NULL);
   if (vis == SP_VIS_PROTECTED && !enforce) vis = SP_VIS_PUBLIC;
   /* ... as the method has it from the first point the call can run (its
      statement's, or that of the def holding it) to the end of the load
@@ -8373,14 +8373,22 @@ static int cplan_bound_at_point(Compiler *c, int id, int ci, const char *name, i
 }
 /* See call_plan.h. */
 int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, int *at) {
-  int sg = (flags & CPV_CMETHOD) != 0, root = (flags & CPV_ROOT) != 0;
+  int sg = (flags & CPV_CMETHOD) != 0, root = (flags & CPV_ROOT) != 0, here = -1, asked = 0;
+  mtab_enter(c);   /* (the question's own reads: the tables', the record's and the binding's) */
   int vis = sg ? comp_cmethod_vis_declared(c, ci, name, at) : comp_method_vis_declared(c, ci, name, at);
-  if (ci < 0 || !name || (!root && (!ct_version_named(c, name) || !elab_method_vis_varies(c, name)))) return vis;
-  LoadPoint p = elab_point_of(c, id);
-  int here = elab_method_vis_at(c, ci, name, sg, p);
-  /* (the binding is asked only where the answers differ) */
-  if (here < 0 || here == vis || (!root && !cplan_bound_at_point(c, id, ci, name, sg, p))) return vis;
-  return here;
+  if (ci >= 0 && name && (root || (ct_version_named(c, name) && elab_method_vis_varies(c, name)))) {
+    LoadPoint p = elab_point_of(c, id);
+    asked = 1;
+    here = elab_method_vis_at(c, ci, name, sg, p);
+    if (here == vis) asked = 0;   /* (the record answered, and agrees) */
+    /* (the binding is asked only where the answers differ) */
+    else if (here >= 0 && !root && !cplan_bound_at_point(c, id, ci, name, sg, p)) here = -1;
+  }
+  mtab_leave(c);
+  if (here >= 0) return here;
+  /* (a name whose visibility the record may tell apart, which it did not: the declared one is the table's last word) */
+  if (asked && g_method_table_check) mtab_table(c, id, ci, sg ? CT_CMETHOD : 0, name, MLW_VIS);
+  return vis;
 }
 
 /* Whether the boxed class arm calls the method rather than raising for
@@ -8518,7 +8526,7 @@ int cplan_nil_scalar_reach(Compiler *c, int id) {
     int ok = comp_core_class(c, others[i]);
     int omi = ok >= 0 ? call_target(c, id, ok, name, 0, NULL) : -1;
     if (omi >= 0 &&
-        !(others[i] == CORE_OBJECT && comp_method_vis_declared(c, ok, name, NULL) == SP_VIS_PUBLIC)) return 0;
+        !(others[i] == CORE_OBJECT && cplan_method_vis(c, id, ok, name, 0, NULL) == SP_VIS_PUBLIC)) return 0;
     /* (a block into one that yields keeps the old path: the default arm
        does not hand Object's method the block) */
     if (omi >= 0 && nt_ref(nt, id, "block") >= 0 && c->scopes[omi].yields) return 0;
@@ -8526,7 +8534,7 @@ int cplan_nil_scalar_reach(Compiler *c, int id) {
   /* (a private or protected one keeps the old path: the boxed dispatch
      does not check visibility) */
   int nk = comp_core_class(c, CORE_NILCLASS);
-  if (comp_method_vis_declared(c, nk, name, NULL) != SP_VIS_PUBLIC) return 0;
+  if (cplan_method_vis(c, id, nk, name, 0, NULL) != SP_VIS_PUBLIC) return 0;
   int k = comp_core_class(c, core);
   return k < 0 || call_target(c, id, k, name, 0, NULL) < 0;
 }
@@ -8540,12 +8548,12 @@ int cplan_nil_scalar_boxed(Compiler *c, int id, const char *name, int recv, TyKi
   int oc = comp_core_class(c, CORE_OBJECT), nk = comp_core_class(c, CORE_NILCLASS);
   int omi = cplan_core_method(c, id, CORE_OBJECT, name);
   if (nt_ref(nt, id, "block") >= 0 && omi >= 0 && c->scopes[omi].yields) return 0;
-  if (cplan_core_method(c, id, CORE_NILCLASS, name) < 0 || comp_method_vis_declared(c, nk, name, NULL) != SP_VIS_PUBLIC) return 0;
+  if (cplan_core_method(c, id, CORE_NILCLASS, name) < 0 || cplan_method_vis(c, id, nk, name, 0, NULL) != SP_VIS_PUBLIC) return 0;
   /* beside a public method the program adds to Object, an Integer or a
      Float answers boxed before the analysis settles whether it may be nil:
      an Array the answer is pushed into is built boxed from the start, not
      typed by Object's method alone */
-  int beside_obj = (rt == TY_INT || rt == TY_FLOAT) && omi >= 0 && comp_method_vis_declared(c, oc, name, NULL) == SP_VIS_PUBLIC;
+  int beside_obj = (rt == TY_INT || rt == TY_FLOAT) && omi >= 0 && cplan_method_vis(c, id, oc, name, 0, NULL) == SP_VIS_PUBLIC;
   return rt == TY_STRING || rt == TY_STRBUF || beside_obj || ((rt == TY_INT || rt == TY_FLOAT) && nullable_int_value(c, recv));
 }
 
@@ -8685,7 +8693,7 @@ static int cplan_root_vis(Compiler *c, int call, int k, const char *name) {
     int lv = vis < 0 ? cplan_top_lone_vis(c, name, NULL) : -2;
     if (lv == -1) return -1;
     if (lv >= 0) vis = lv;
-    if (vis < 0) vis = oc >= 0 ? comp_method_vis_declared(c, oc, name, &at) : SP_VIS_PRIVATE;
+    if (vis < 0) vis = oc >= 0 ? cplan_method_vis(c, call, oc, name, 0, &at) : SP_VIS_PRIVATE;
     if (mv < 1 && at < 0 && lv < 0) vis = SP_VIS_PRIVATE;
   }
   else {
@@ -8788,7 +8796,7 @@ int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, 
     /* a builtin's own method answers first, and so does a `public :name`
        the root declares itself */
     int at = -1;
-    if (root && k >= 0 && comp_method_vis_declared(c, k, name, &at) == SP_VIS_PUBLIC && at == k) return -1;
+    if (root && k >= 0 && cplan_method_vis(c, call, k, name, 0, &at) == SP_VIS_PUBLIC && at == k) return -1;
     if (builtin_owns_instance_method(a, name)) {
       int bv = core_method_vis(a, name, 0, NULL);
       if (vis) *vis = bv == 4 ? SP_VIS_PRIVATE : bv == 2 ? SP_VIS_PROTECTED : bv == 1 ? SP_VIS_PUBLIC : -1;
@@ -8817,7 +8825,7 @@ int cplan_class_answers_ahead_of_object(Compiler *c, int call, int k, const char
   int mi = call_target(c, call, k, name, 0, NULL);
   if (mi >= 0 && mi < c->nscopes && c->scopes[mi].class_id != oc) return 1;
   int at = -1;
-  comp_method_vis_declared(c, k, name, &at);
+  cplan_method_vis(c, call, k, name, 0, &at);
   if (at >= 0 && at != oc) return 1;
   char base[256];
   return comp_reader_in_chain(c, k, name, NULL) ||
@@ -8936,7 +8944,7 @@ int cplan_nil_program_responds(Compiler *c, int call, const char *name, int incl
         return cplan_top_def_vis(c, call, name) == SP_VIS_PUBLIC ? 1 : ia;
       continue;
     }
-    return comp_method_vis_declared(c, k, name, NULL) == SP_VIS_PUBLIC ? 1 : ia;
+    return cplan_method_vis(c, call, k, name, 0, NULL) == SP_VIS_PUBLIC ? 1 : ia;
   }
   return -1;
 }

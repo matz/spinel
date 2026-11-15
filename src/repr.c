@@ -494,6 +494,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
     if (r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) &&
         !oint_kind(rt) && rt != TY_COMPLEX && rt != TY_RATIONAL && rt != TY_BIGINT &&
         !ty_is_array(rt) && !ty_is_hash(rt) && rt != TY_RANGE && rt != TY_STRING &&   /* a constant holding a number or a container (Float::INFINITY, FREE = []) is a value */
+        !(ty_is_obj_array(rt) && an2 == 1 && (sp_streq(nm, "index") || sp_streq(nm, "find_index"))) &&   /* PAIRS.index(x) on an object array: nil when missing */
         !sp_streq(nm, "world_readable?") && !sp_streq(nm, "world_writable?"))   /* File.world_readable?(f): nil when it is not */
       return 0;
     /* the runtime functions that answer an sp_oint (RUNTIME-API.md) */

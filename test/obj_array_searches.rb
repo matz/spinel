@@ -106,3 +106,7 @@ rescue FrozenError => e
   puts e.class
 end
 p WIRES.size, WIRES.delete(Wire.new(9))
+
+# index on a constant object array answers nil for a missing element.
+i = WIRES.index(Wire.new(9))
+p i, WIRES.index(b), WIRES.find_index(a)

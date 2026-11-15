@@ -21080,8 +21080,10 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
   if (ct_version_marked(c, "initialize")) {
     int init[CPT_MAX], ni = is_new_name(key_name(c, id)) ? cplan_entries(c, id, init, CPT_MAX) : 0;
     if (ni == 0 && (init[0] = cplan_raise_initialize(c, id)) >= 0) ni = 1;
-    for (int i = 0; i < ni && is_initialize_name(c->scopes[init[i]].name); i++) {
+    for (int i = 0; i < ni; i++) {
       char mark[24];
+      /* (a program `new` the site may reach lists its own method ahead of the initializes) */
+      if (!is_initialize_name(c->scopes[init[i]].name)) continue;
       snprintf(mark, sizeof mark, "\x01%d", init[i]);
       cr_add_name(out, n, cap, mark);
     }

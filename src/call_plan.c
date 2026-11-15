@@ -6359,17 +6359,15 @@ static int ct_mixed_new_entries(Compiler *c, int id, int *out) {
     }
   }
   for (int i = 0; i < ncls; i++) {
-    int k = cls[i], init[CPT_MAX];
+    int k = cls[i], dup = 0;
     if (comp_class_is_module(c, &c->classes[k]) || call_target(c, -1, k, "new", CT_CMETHOD | CT_SHARED, NULL) >= 0) continue;
-    int ni = ct_class_initializers(c, -1, k, 0, init);
-    if (ni < 0) return CPT_UNKNOWN;
-    for (int j = 0; j < ni; j++) {
-      int dup = 0;
-      for (int q = 0; q < n && !dup; q++) dup = out[q] == init[j];
-      if (dup) continue;
-      if (n == CPT_MAX) return CPT_UNKNOWN;
-      out[n++] = init[j];
-    }
+    /* (the initialize the class's arm of the site runs: the entries are
+       what the arms call, so reachability keeps the versions they name) */
+    int mi = cplan_new_arm_initialize(c, id, k);
+    for (int q = 0; q < n && !dup; q++) dup = out[q] == mi;
+    if (mi < 0 || dup) continue;
+    if (n == CPT_MAX) return CPT_UNKNOWN;
+    out[n++] = mi;
   }
   return n;
 }

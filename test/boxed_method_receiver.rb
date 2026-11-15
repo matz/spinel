@@ -19,3 +19,5 @@ class K; def hi = 1; end
 k = K.new
 p [k.method(:hi), 1].first.receiver.equal?(k)
 p 3.method(:+).receiver
+p [nil.method(:to_s), 1].first.receiver
+p [-7.method(:abs), 1].first.receiver

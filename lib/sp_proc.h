@@ -84,6 +84,7 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg);
 #define SP_BM_SELF_SYM  4   /* a Symbol, held as its id: boxed back as a Symbol, not an Integer */
 #define SP_BM_SELF_BOOL 3   /* true or false, held as 1 or 0: no reference either, but a value #receiver answers */
 #define SP_BM_SELF_MAIN 5   /* main, the top level's self (sp_main_obj, a root of its own): boxed back as sp_main_self() */
+#define SP_BM_SELF_INT  6   /* an Integer, held as its value: no reference, boxed back as that Integer */
 /* How the legacy sp_int C return is boxed back into a Ruby value. Any method
    whose C return fits the register records its kind here: a plain Integer, a
    `const char *` String, a nullable `sp_Bigint *`, a void/nil, a bool, a
@@ -328,9 +329,9 @@ static inline sp_BoundMethod *sp_bm_set_group(sp_BoundMethod *m, const char *ali
 static inline sp_RbVal sp_bm_held_recv(void *holder) { return sp_PolyArray_get_m((sp_PolyArray *)holder, 0); }
 /* Method#receiver on a Method read back out of a container: a held
    receiver is its holder's element, a Boolean, Symbol, String or main self
-   is the value its kind says, and a number bound as the target's leading
-   argument (recv_bound) is that Integer. Any other self-less Method (a top
-   level def's, a class value's) answers nil, as before. */
+   is the value its kind says, and so is an Integer (SP_BM_SELF_INT). Any
+   other self-less Method (a top level def's, a class value's, nil's) answers
+   nil, as before. */
 static inline sp_RbVal sp_bm_receiver(const sp_BoundMethod *m) {
   if (m->held) return sp_bm_held_recv(m->self);
   switch (m->self_kind) {
@@ -339,7 +340,8 @@ static inline sp_RbVal sp_bm_receiver(const sp_BoundMethod *m) {
     case SP_BM_SELF_BOOL: return sp_box_bool(m->self != NULL);
     case SP_BM_SELF_SYM:  return sp_box_sym((sp_sym)(uintptr_t)m->self);
     case SP_BM_SELF_MAIN: return sp_main_self();
-    default:              return m->recv_bound ? sp_box_int((sp_int)(uintptr_t)m->self) : sp_box_nil();
+    case SP_BM_SELF_INT:  return sp_box_int((sp_int)(intptr_t)m->self);
+    default:              return sp_box_nil();
   }
 }
 static inline sp_bool sp_bm_recv_same(sp_RbVal x, sp_RbVal y) {

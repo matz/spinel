@@ -2351,6 +2351,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       else if (rt2 == TY_BOOL && rr2.kind != RK_BOXED) self_kind = "SP_BM_SELF_BOOL";
       /* (a Symbol is its id, which boxes back as a Symbol, not an Integer) */
       else if (rt2 == TY_SYMBOL && rr2.kind != RK_BOXED) self_kind = "SP_BM_SELF_SYM";
+      /* (an Integer is its value, which #receiver read back out of a
+         container boxes back as that Integer) */
+      else if (rt2 == TY_INT && rr2.kind != RK_BOXED) self_kind = "SP_BM_SELF_INT";
       /* The constructor allocates and may collect: a fresh receiver
          (`M.new.method(:v)`) is otherwise unreachable and would be swept, so
          hold it in a rooted C temporary across the call -- the same shape as

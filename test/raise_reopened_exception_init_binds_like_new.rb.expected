@@ -1,0 +1,9 @@
+p:boom
+p:boom
+p:outer cause=why
+p:outer cause=why
+message ran
+ArgumentError: wrong number of arguments (given 1, expected 2)
+message ran
+ArgumentError: wrong number of arguments (given 1, expected 0)
+fixed

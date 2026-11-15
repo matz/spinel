@@ -6712,17 +6712,17 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
   buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
-  /* map! on a frozen receiver raises before the block runs, as CRuby's */
-  if (is_mapbang && array_frozen_cls(rt)) {
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);\n", trecv, trecv, trecv, array_frozen_cls(rt));
-  }
   /* running index, seeded with the offset */
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = ", tidx);
   /* as an Integer: a boxed offset (`with_index(body.first_line)` on a value
      known only at run time) went into the sp_int raw */
   if (wi_argc > 0 && wi_argv) emit_with_index_offset(c, wi_argv[0], g_pre); else buf_puts(g_pre, "0");
   buf_puts(g_pre, ";\n");
+  /* map! on a frozen receiver raises before the block runs, once the offset has run, as CRuby's */
+  if (is_mapbang && array_frozen_cls(rt)) {
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);\n", trecv, trecv, trecv, array_frozen_cls(rt));
+  }
   if (collecting) {
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);

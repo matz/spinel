@@ -34,3 +34,9 @@ rescue FrozenError => e
   p e.class, runs
 end
 p fr
+seen = 0
+begin
+  fr.map!.with_index((seen += 1; 0)) { |x, i| x }
+rescue FrozenError
+  p seen
+end

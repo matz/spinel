@@ -2294,7 +2294,10 @@ int poly_each_line_args_enum(Compiler *c, int id) {
   const char *qn = nt_str(nt, q, "name");
   int qac = 0;
   call_args(nt, q, &qac);
-  return qn && sp_streq(qn, "size") && qac == 0 && nt_ref(nt, q, "block") < 0;
+  /* (`x&.each_line(",").size` on nil asks nil its size, which raises; the
+     Enumerator slot's nil would answer nil) */
+  return qn && sp_streq(qn, "size") && qac == 0 && nt_ref(nt, q, "block") < 0 &&
+         !nt_safe_nav(nt, id);
 }
 int poly_str_iter_enum(Compiler *c, int id) {
   const NodeTable *nt = c->nt;

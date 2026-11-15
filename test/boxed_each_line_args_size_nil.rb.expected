@@ -12,3 +12,4 @@ nil
 nil
 nil
 NoMethodError
+"undefined method 'size' for nil"

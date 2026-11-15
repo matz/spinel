@@ -26,3 +26,9 @@ begin
 rescue NoMethodError => e
   p e.class
 end
+z = [nil, "a,b"].first
+begin
+  z&.each_line(",").size
+rescue NoMethodError => e
+  p e.message
+end

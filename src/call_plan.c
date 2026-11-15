@@ -2641,18 +2641,19 @@ static struct NewSiteSlot *new_sites_slot(Compiler *c, int id, int ci) {
   while (m->slot[j].id >= 0 && (m->slot[j].id != id || m->slot[j].ci != ci)) j = (j + 1) & (m->cap - 1);
   return &m->slot[j];
 }
-/* Does call id, a construction of class ci, run where the record proves no
-   initialize of the program's on ci's chain: at its point (elab_call_method,
-   which also proves no code the record cannot order supplies one), or at
-   each state of its window, where it may run more than once (as
-   ct_every_span asks it), with no code the record has not seen; and not
-   where ci is not opened yet (elab_class_live_at), as a `new` there cannot
-   build it */
-static int new_init_absent(Compiler *c, int id, int ci) {
+/* Does call id, a construction of class ci (or a copy of an instance of
+   it, for initialize_copy), run where the record proves no `name` (initialize
+   or initialize_copy) of the program's on ci's chain: at its point
+   (elab_call_method, which also proves no code the record cannot order
+   supplies one), or at each state of its window, where it may run more than
+   once (as ct_every_span asks it), with no code the record has not seen; and
+   not where ci is not opened yet (elab_class_live_at), as a `new` there
+   cannot build it */
+static int new_init_absent(Compiler *c, int id, int ci, const char *name) {
   const LrDef *ds[2];
-  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, "initialize", 0, 0), absent = at == ELAB_NO;
+  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, name, 0, 0), absent = at == ELAB_NO;
   if (at == ELAB_UNKNOWN && !elab_runs_unseen(c))
-    absent = elab_call_span(c, id, ci, "initialize", 0, ct_after_point(c, id), NULL, ds, 2) == 1 && !ds[0];
+    absent = elab_call_span(c, id, ci, name, 0, ct_after_point(c, id), NULL, ds, 2) == 1 && !ds[0];
   absent = absent && elab_class_live_at(c, ci, 1, elab_point_of(c, id));
   if (framed) elab_plan_leave(c);
   return absent;
@@ -2685,7 +2686,7 @@ int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
      cannot tell, and keeps the table's; so does one where the record holds
      no version of the table's method, nv 0, as for a def a method body
      makes: it may be made before the site runs) */
-  int vi = -1, unplaced = elab_in_unplaced_block(c, id), absent = !unplaced && nv != 0 && new_init_absent(c, id, ci);
+  int vi = -1, unplaced = elab_in_unplaced_block(c, id), absent = !unplaced && nv != 0 && new_init_absent(c, id, ci, "initialize");
   if (absent) *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   else if (nv == 1) vi = tm;
   else if (unplaced) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNPLACED, .def_class = -1 };
@@ -2698,6 +2699,40 @@ int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
   /* (asking may have grown the table or rebuilt the record: the slot again) */
   e = new_sites_slot(c, id, ci);
   if (e->id < 0) { *e = (struct NewSiteSlot){ id, ci, vi, *m }; c->new_sites->used++; }
+  return vi;
+}
+/* See call_plan.h. As cplan_new_initialize answers an initialize, for the
+   hook a dup or clone (call id) runs on a copy of an instance of ci: none
+   where the record proves none at the call (Object's runs), else the
+   window's version, else the table's. No entry is made for it. */
+int cplan_copy_initialize(Compiler *c, int id, int ci, int *defcls) {
+  int dc = -1;
+  mtab_enter(c);
+  int tm = ci >= 0 ? comp_method_in_chain(c, ci, "initialize_copy", &dc) : -1;
+  int undef = tm >= 0 && id >= 0 && comp_is_undeffed_in_chain(c, ci, "initialize_copy");
+  mtab_leave(c);
+  if (defcls) *defcls = dc;
+  if (tm < 0 || id < 0 || undef) return tm;
+  int first = 0, body = 0, late = 0, nv = ver_chain_count(c, ci, 0, "initialize_copy", &first, &body, &late);
+  struct NewSiteSlot *e = new_sites_slot(c, id, ci);
+  if (e->id >= 0) {
+    if (defcls && e->vi >= 0) *defcls = e->m.def_class;
+    return e->vi;
+  }
+  MethodLookup m = { .kind = ML_TABLE, .why = MLW_MANY, .def_class = dc };
+  int vi = tm, unplaced = elab_in_unplaced_block(c, id), absent = !unplaced && nv != 0 && new_init_absent(c, id, ci, "initialize_copy");
+  if (absent) { vi = -1; m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 }; }
+  else if (nv != 1 && !unplaced) {
+    MethodLookup w = { .def_class = -1 };
+    int wi = ct_implied_at(c, id, ci, "initialize_copy", &w);
+    if (wi >= 0 && w.kind == ML_METHOD) { vi = wi; m = w; m.def_class = wi == tm ? dc : c->scopes[wi].class_id; }
+    else if (w.kind == ML_TABLE) m.why = w.why;
+  }
+  else if (unplaced) m.why = MLW_UNPLACED;
+  if (g_method_table_check && !absent && vi == tm && nv != 1) mtab_table(c, id, ci, 0, "initialize_copy", m.why);
+  if (defcls && vi >= 0) *defcls = m.def_class;
+  e = new_sites_slot(c, id, ci);
+  if (e->id < 0) { *e = (struct NewSiteSlot){ id, ci, vi, m }; c->new_sites->used++; }
   return vi;
 }
 /* The exception class a Kernel#raise id builds, as its lowering names it

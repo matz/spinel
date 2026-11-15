@@ -12013,7 +12013,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       TyKind drt = infer_type(c, recv);
       if (ty_is_object(drt)) {
         int dcid = ty_object_class(drt);
-        int dmi = comp_method_in_chain(c, dcid, "initialize_copy", NULL);
+        int dmi = cplan_copy_initialize(c, id, dcid, NULL);
         if (dmi >= 0 && c->scopes[dmi].nparams >= 1) {
           LocalVar *dp = scope_local(&c->scopes[dmi], c->scopes[dmi].pnames[0]);
           if (dp && !dp->rbs_seeded) {
@@ -21091,6 +21091,23 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
       int mi = cplan_as_new(c, id, k) && dynamic_new_may_reach(c, id, k) ? cplan_new_arm_initialize(c, id, k) : -1;
       char mark[24];
       if (mi < 0 || !is_initialize_name(c->scopes[mi].name)) continue;
+      snprintf(mark, sizeof mark, "\x01%d", mi);
+      cr_add_name(out, n, cap, mark);
+    }
+  }
+  /* a dup or clone of an object: the initialize_copy its typed arm calls
+     (cplan_copy_initialize), on the class of the receiver and, for a
+     singleton's dup, the class it shows */
+  const char *kn = nt_kind(nt, id) == NK_CallNode ? key_name(c, id) : NULL;
+  if (kn && is_copy_alias(kn) && ct_version_marked(c, "initialize_copy")) {
+    int recv = nt_ref(nt, id, "receiver");
+    TyKind rt = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
+    int cid = ty_is_object(rt) ? ty_object_class(rt) : -1;
+    int cls[2] = { cid, cid >= 0 && c->classes[cid].is_singleton_of ? singleton_visible_ci(c, cid) : cid };
+    for (int i = 0; cid >= 0 && i < (cls[1] != cid ? 2 : 1); i++) {
+      int mi = cplan_copy_initialize(c, id, cls[i], NULL);
+      char mark[24];
+      if (mi < 0) continue;
       snprintf(mark, sizeof mark, "\x01%d", mi);
       cr_add_name(out, n, cap, mark);
     }

@@ -1474,7 +1474,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* the class's initialize_copy hook, as for any program object; its
          super into Array is a replace, which the copy has already done */
       int defcls = -1;
-      int ic = comp_method_in_chain(c, cid, "initialize_copy", &defcls);
+      int ic = cplan_copy_initialize(c, id, cid, &defcls);
       /* the original handed as the parameter's class, or boxed -- as its
          Array or Hash, its class read back off its scan -- to a parameter
          the program also hands other values; the parameters after it take
@@ -1525,7 +1525,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         ClassInfo *dci = &c->classes[cid];
         const char *cn = dci->c_name;
         int defcls = -1;
-        int ic = comp_method_in_chain(c, dup_cls, "initialize_copy", &defcls);
+        int ic = cplan_copy_initialize(c, id, dup_cls, &defcls);
         LocalVar *icp = (ic >= 0 && c->scopes[ic].nparams >= 1)
           ? scope_local(&c->scopes[ic], c->scopes[ic].pnames[0]) : NULL;
         TyKind ictp = icp ? icp->type : TY_UNKNOWN;

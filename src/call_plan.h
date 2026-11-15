@@ -636,6 +636,14 @@ int cplan_new_arm_initialize(Compiler *c, int id, int ci);
    table's method alone with *whole 0, which a memo of the facts
    (ivar_assigned_in_initialize) would keep as "not set". */
 int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole);
+/* The initialize_copy hook the dup or clone call id runs on the copy of an
+   instance of class ci, as cplan_new_initialize answers an initialize: the
+   version the record proves where id runs, else the table's method; -1
+   where ci has none of the program's, or the record proves none where id
+   runs (a def that comes later): Object's, which copies alone. *defcls
+   (may be NULL) is the class that holds the method, as comp_method_in_chain
+   gives it. id -1 answers the table's, for a copy no site makes. */
+int cplan_copy_initialize(Compiler *c, int id, int ci, int *defcls);
 /* The initialize a Kernel `raise K` or `raise K, msg` (call id) runs, K a
    constant naming an exception class of the program's: K.new's there
    (cplan_new_initialize); -1 for any other call */

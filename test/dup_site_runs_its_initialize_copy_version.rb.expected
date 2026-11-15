@@ -1,0 +1,28 @@
+:d1
+8
+:c1
+true
+[:c2, false]
+true
+[:c2, false]
+[1, :copied1]
+[1, 101]
+[1, 2]
+:orig
+[:orig, :hooked]
+[:orig, :hooked]
+[1, 2]
+1
+Arr
+[1, 2]
+20
+:one
+[:two, :dflt]
+[:p1, :c]
+[:p2, :c]
+:was_nil
+2
+:hi
+false
+:v2
+:v2

@@ -25207,8 +25207,30 @@ int *an_scope_call_candidates(Compiler *c, Scope *m, int *n) {
 static int sb_targets_gen, sb_targets_on;
 typedef struct { int gen, n; int *ids; } SbTargets;
 static SbTargets *sb_targets; static int sb_targets_cap;
+/* The memo under a pass (infer_param_types, whose walks back from a
+   parameter ask a method's callers once per parameter and per walk: on an
+   application with a hundred thousand scopes, resolving the same methods'
+   callers again was most of the pass): the pass's `changed` and `any`, as
+   wbas_share_begin's (analyze_pass.c). A change the pass reported since the
+   last ask ends the generation, so no ask reads a list left before a write
+   it has not seen; what was folded into `any` goes back to `changed` at the
+   end. The promote passes that first kept it are gone (a2eb878c1). */
+static int *sb_targets_changed, *sb_targets_any;
+void sb_targets_share_begin(int *changed, int *any) {
+  sb_targets_gen++; sb_targets_on = 1;
+  sb_targets_changed = changed; sb_targets_any = any;
+}
+void sb_targets_share_end(void) {
+  if (sb_targets_changed) *sb_targets_changed |= *sb_targets_any;
+  sb_targets_on = 0; sb_targets_gen++;
+  sb_targets_changed = sb_targets_any = NULL;
+}
+static void sb_targets_share_step(void) {
+  if (sb_targets_changed && *sb_targets_changed) { sb_targets_gen++; *sb_targets_any = 1; *sb_targets_changed = 0; }
+}
 static int *strbuf_scope_callers(Compiler *c, int mi, Scope *m, int *n) {
   const NodeTable *nt = c->nt;
+  if (sb_targets_on) sb_targets_share_step();
   if (sb_targets_on && mi < sb_targets_cap && sb_targets[mi].gen == sb_targets_gen) {
     *n = sb_targets[mi].n;
     int *cp = malloc(sizeof(int) * (size_t)(*n > 0 ? *n : 1));

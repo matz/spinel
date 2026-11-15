@@ -1211,6 +1211,10 @@ struct ElabNames { ANameIndex hdr; int hdr_unknown, hdr_built; ANameIndex byname
 /* The qualified names the class pass gave constants written under a module
    path ("Mod__LIMIT"), and each tail after a "__": see qc_leaf_qualified. */
 struct QcConstNames { ANameHash quals, leaves; };
+/* the callers memo of the share-strings walks under a pass (analyze.c,
+   strbuf_scope_callers): the pass's `changed` and `any` */
+void sb_targets_share_begin(int *changed, int *any);
+void sb_targets_share_end(void);
 void cr_class_only_names(Compiler *c, ANameHash *out);   /* the names only plain classes' methods hold */
 /* The block-passing call sites, and the supers, of the node table, indexed
    for yield_value_type and its kin (yvt_build, analyze_util.c): built once

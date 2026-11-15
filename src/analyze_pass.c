@@ -11704,8 +11704,11 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   const NodeTable *nt = c->nt;
   int changed = 0, any = 0;
   /* the walks the bindings start share what they found unchanged, until a
-     binding reports a change (widen_boxed_array_sources) */
+     binding reports a change (widen_boxed_array_sources); so do the
+     share-strings walks back from a parameter, each method's callers
+     (strbuf_scope_callers) */
   wbas_share_begin(&changed, &any);
+  sb_targets_share_begin(&changed, &any);
   IptWork w;
   ipt_work_begin(c, &w);
   /* A class method `===` of the program's own is called by `when` and `in`
@@ -12528,6 +12531,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   if (!settle || !ipt_work_next(c, &w, &ids, &nids)) break;
   }
   ipt_work_end(&w);
+  sb_targets_share_end();
   wbas_share_end();
   return changed | any;
 }

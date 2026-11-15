@@ -20656,10 +20656,25 @@ static const char *emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
       if (lv) p = lv->type;
     }
     char a[16]; snprintf(a, sizeof a, "_a%d", i);
+    /* A :str argument is C's bytes, with none of the marks a String's bytes
+       carry before them: the String the method gets is a copy of them (as
+       an ffi_func's :str answer is), and NULL is nil. The copy, and the
+       handle or box made of it, allocate: each is rooted before the next
+       argument's copy, ahead of the call, or a collection that copy runs
+       frees the one before it. */
+    if (ffi_spec_is_str(spec)) {
+      if (p == TY_STRING || p == TY_STRBUF || p == TY_POLY || p == TY_UNKNOWN) {
+        buf_printf(pb, "const char *_s%d = sp_str_dup_external(%s); SP_GC_ROOT(_s%d);\n  ", i, a, i);
+        if (p == TY_STRING) { buf_printf(&call, "_s%d", i); continue; }
+        if (p == TY_STRBUF) buf_printf(pb, "sp_String *_f%d = SP_STR_HDL(_s%d); SP_GC_ROOT(_f%d);\n  ", i, i, i);
+        else buf_printf(pb, "sp_RbVal _f%d = SP_STR_BOX(_s%d); SP_GC_ROOT_RBVAL(_f%d);\n  ", i, i, i);
+        buf_printf(&call, "_f%d", i);
+        continue;
+      }
+    }
     switch (p) {
     case TY_POLY: case TY_UNKNOWN:           /* param is sp_RbVal: box it */
       if (sp_streq(spec, "ptr"))                          buf_printf(&call, "sp_box_foreign_ptr((void *)%s)", a);
-      else if (ffi_spec_is_str(spec))                     buf_printf(&call, "SP_STR_BOX(%s)", a);
       else if (sp_streq(spec, "float") || sp_streq(spec, "double")) buf_printf(&call, "sp_box_float(%s)", a);
       else                                                buf_printf(&call, "sp_box_int((sp_int)%s)", a);
       break;

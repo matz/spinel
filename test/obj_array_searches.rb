@@ -1,11 +1,11 @@
 # spinel: gc-stress
-# delete, include?, index and count on an @ivar that holds objects of one
-# class keep it an unboxed object array, and answer as CRuby does. Each
-# compares an element with == as its receiver, so a class with its own ==
-# finds an equal object that is not the same one, and delete answers the
-# element it took out, the last of the equal ones, or nil. A method called
-# on that nil raises NoMethodError. An Array of Integer Arrays takes the
-# same calls, and stays boxed.
+# delete, include?, index, count, delete_if and keep_if on an @ivar that
+# holds objects of one class keep it an unboxed object array, and answer
+# as CRuby does. Each search compares an element with == as its receiver,
+# so a class with its own == finds an equal object that is not the same
+# one, and delete answers the element it took out, the last of the equal
+# ones, or nil. A method called on that nil raises NoMethodError. An Array
+# of Integer Arrays takes the same calls, and stays boxed.
 class Wire
   attr_reader :n
   def initialize(n) = @n = n
@@ -22,6 +22,14 @@ class Server
   def tally(w) = @wires.count(w)
   def size = @wires.size
   def ns = @wires.map(&:n).join(",")
+  def drop_odd
+    @wires.delete_if { |w| w.n.odd? }
+    nil
+  end
+  def keep_big
+    @wires.keep_if { |w| w.n > 2 }
+    nil
+  end
 end
 
 s = Server.new
@@ -44,6 +52,11 @@ begin
 rescue NoMethodError => e
   puts e.message
 end
+s.add(Wire.new(5)); s.add(Wire.new(4))
+s.drop_odd
+puts s.ns
+s.keep_big
+puts s.ns
 
 # A class with its own ==, which the searches call with the element as its
 # receiver, once per element, in order.
@@ -81,4 +94,5 @@ p path.drop(Point.new(7, 7))
 rows = [[1, 2], [3, 4], [1, 2]]
 p rows.include?([3, 4]), rows.index([1, 2]), rows.count([1, 2])
 p rows.delete([1, 2])
+rows.delete_if { |r| r[0] == 3 }
 p rows

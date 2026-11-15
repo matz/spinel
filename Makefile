@@ -4617,7 +4617,10 @@ STR_SLOT_C = sp_String \*
 STR_SLOT_RE = sp_String[[:space:]]*\*
 STR_BYREF_S = sp_String \* lv_s
 STR_BYREF_PLAIN = sp_String \* lv_plain
-infer-test: $(SPINEL) $(SP_RT_LIB)
+# (two recipes: one shell command holds at most 128KB, and the checks outgrew it)
+.PHONY: infer-test-1 infer-test-2
+infer-test: infer-test-1 infer-test-2
+infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-infer.XXXXXX); ok=1; \
 	for f in test/infer/*.rb; do \
 	  $(SPINEL) "$$f" -o "$$tmp/ibin" >/dev/null 2>&1 || { echo "infer-test: FAIL ($$f: the emitted C does not compile)"; ok=0; continue; }; \
@@ -4975,6 +4978,10 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	esac; \
 	grep -q 'sp_PtrArray \* iv_pts;' "$$tmp/oae.c" || { echo "infer-test: FAIL (an array of one class whose class defines each stayed boxed through a walk)"; ok=0; }; \
 	[ "$$(grep -cE '\(lv_pt__bp[A-Za-z0-9_]+\)->iv_x' "$$tmp/oae.c")" = 3 ] || { echo "infer-test: FAIL (an each, reverse_each or each_with_index walk over an array of one class bound its parameter boxed)"; ok=0; }; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "infer-test: pass (1 of 2)"; else exit 1; fi
+infer-test-2: $(SPINEL) $(SP_RT_LIB)
+	@tmp=$$(mktemp -d /tmp/spinel-infer.XXXXXX); ok=1; \
 	$(SPINEL) test/object_array_push_element_read.rb -c --no-line-map -o "$$tmp/oap.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_push_element_read: -c)"; ok=0; }; \
 	[ "$$(awk '/^struct sp_(Node|Ring|Bin)_s \{/ { c = $$2 } c && /iv_(links|members|items)/ { print c, $$1; c = "" }' "$$tmp/oap.c" | tr '\n' ' ')" = "sp_Node_s sp_PtrArray sp_Ring_s sp_PtrArray sp_Bin_s sp_PolyArray " ] || { echo "infer-test: FAIL (an element read of an Array of one class stored into another gave it no class, or one of a mixed Array narrowed it)"; ok=0; }; \
 	$(SPINEL) test/object_array_walk_ends_branch.rb -c --no-line-map -o "$$tmp/oaw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_walk_ends_branch: -c)"; ok=0; }; \
@@ -5325,7 +5332,7 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  grep -Fq 'local LibC.__ffi_call(extend) fns: ptr ty=str_poly_hash' "$$tmp/fi.repr" || { echo "infer-test: FAIL (Fiddle function-table read became boxed)"; ok=0; }; \
 	fi; \
 	rm -rf "$$tmp"; \
-	if [ $$ok -eq 1 ]; then echo "infer-test: pass"; else exit 1; fi
+	if [ $$ok -eq 1 ]; then echo "infer-test: pass (2 of 2)"; else exit 1; fi
 
 # SP_COLLECT_ERRORS recovers from an unsupported construct with a longjmp, and
 # has to put back everything the abandoned unit was pointing at. The globals it

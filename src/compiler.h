@@ -1977,6 +1977,12 @@ typedef struct {
   unsigned char *ver_vis_scope_mark; int ver_vis_scope_cap;
   unsigned char *ver_vis_hist_seen; int ver_vis_hist_cap;   /* (the cells whose history is listed) */
   unsigned long ver_vis_guard_stamp;   /* the tree's state ver_vis_guard_hists last read (nodes, scopes, edits, version) */
+  /* the include calls that may bring Kernel into a class, with the classes whose cell each writes (call_plan.c,
+     ver_kern_sites; cplan_vis_cell_after), and what they were made from */
+  struct VerKernAfter { int node, cls; } *ver_kern_after;
+  int nver_kern_after, ver_kern_made;
+  long ver_kern_stamp;   /* the classes, the scopes and the record's mixins the list was made of */
+  unsigned char *ver_kern_has;   /* [nclasses] 1 for a class some include of the list writes the cell of */
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),

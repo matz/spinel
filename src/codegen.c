@@ -4439,7 +4439,7 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
   }
   if (!g_cm_selfcls) return 0;
   if (g_cm_selfcls[si] >= 0) return g_cm_selfcls[si];
-  int ans = class_reopen_cmethod(c, -1, -1, s->name) == si, has_desc = 0;
+  int ans = class_reopen_cmethod(c, -1, -1, s->name) == si || cplan_kern_site_by_class(c, si), has_desc = 0;
   /* a descendant some reached code names (comp_new_receiver), off the
      class's descendant list rather than every class (#10546) */
   if (!ans) has_desc = comp_new_receivers(c, s->class_id) > 0;

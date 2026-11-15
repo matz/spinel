@@ -586,6 +586,8 @@ void comp_free(Compiler *c) {
   free(c->ver_cell_dropped); c->ver_cell_dropped = NULL; c->nver_cell_dropped = 0;
   free(c->top_self_marks); c->top_self_marks = NULL; c->top_self_stamp = 0;
   free(c->ver_vis_after); c->ver_vis_after = NULL; c->nver_vis_after = 0;
+  free(c->ver_kern_after); c->ver_kern_after = NULL; c->nver_kern_after = c->ver_kern_made = 0;
+  free(c->ver_kern_has); c->ver_kern_has = NULL;
   free(c->ver_guards); c->ver_guards = NULL; c->nver_guards = 0;
   for (int i = 0; i < c->nver_vis_reads; i++) free(c->ver_vis_reads[i].name);
   free(c->ver_vis_reads); c->ver_vis_reads = NULL; c->nver_vis_reads = c->ver_vis_read_new = 0;
@@ -5588,8 +5590,9 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   /* under BasicObject with no Kernel among its ancestors, neither Object
      nor Kernel is in the chain: a super finds no method there (one that
      includes Kernel reaches Kernel's methods through Object's chain, as
-     before). The record answers it (elab_class_kernel). */
-  if (elab_class_kernel(c, class_id) != KERN_HAS) return -1;
+     before). The record answers it (elab_class_kernel), and the call plan's cells where an include that may not
+     run decides (cplan_class_kernel: the super is then guarded, ver_kernel_guards). */
+  if (cplan_class_kernel(c, class_id) != KERN_HAS) return -1;
   return obj;
 }
 

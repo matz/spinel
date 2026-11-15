@@ -556,12 +556,19 @@ int elab_body_def(Compiler *c, int node);
    which the record leaves to its body */
 int elab_def_applied(Compiler *c, int def);
 int elab_version_held_row(const LrDef *v, const char *name, int cside);   /* a version recorded under a condition of a name a Kernel row answers, on the instance side */
-/* Does class cls lack Kernel (KERN_*), as the record resolves its chain: the
-   chain ends at BasicObject without reaching Object, and no include or
-   prepend on it may bring Kernel in? 0 where the record cannot tell (a
-   superclass of another expression, a module it cannot name). */
-enum { KERN_HAS, KERN_LACKS };   /* elab_class_kernel: Kernel is among the ancestors; it is not */
+/* Whether class cls has Kernel among its ancestors, as the record resolves its chain: KERN_HAS where it does or the
+   record cannot tell (a superclass of another expression, a module it cannot name); KERN_LACKS where the chain ends at
+   BasicObject without reaching Object, and no include on it that surely runs may bring Kernel in. An include that may
+   not run, and one a method body makes, bring none here: the call plan's cells say whether they ran (KERN_CELL,
+   cplan_class_kernel). */
+enum { KERN_HAS, KERN_LACKS, KERN_CELL };
 int elab_class_kernel(Compiler *c, int cls);
+/* Does the module a mixin call's argument node names bring Kernel into the class that mixes it in: 1 for the core
+   Kernel and for a module of the program that includes it, 0 for a module that does not, -1 for one the record cannot
+   name (a parameter, an expression) */
+int elab_mixin_brings_kernel(Compiler *c, int ref);
+/* A number that changes with every change to the record's histories and mixins (a cache of an answer read from them is of it) */
+unsigned long elab_mixin_gen(Compiler *c);
 /* call_target's questions about call id read the record's facts as its
    first such question found them (analyze_elab.c): 1 when the frame is in,
    until elab_plan_leave; 0 for a node it cannot place */

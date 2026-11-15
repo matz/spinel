@@ -6477,7 +6477,7 @@ static int bind_dynamic_new_initializers(Compiler *c, int call_id) {
   int *seen = (int *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(int));
   for (int k = 0; k < c->nclasses; k++) {
     if (!cplan_as_new(c, call_id, k) || !dynamic_new_may_reach(c, call_id, k)) continue;
-    int imi = comp_method_in_chain(c, k, "initialize", NULL);
+    int imi = cplan_new_arm_initialize(c, call_id, k);
     /* A Struct or Data built by its generated constructor from `k.new(a: 1)`:
        a member a keyword names with a value of another type than the one
        the member has is boxed, as the arm would read the value as the
@@ -12257,7 +12257,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           int first_splat = 0;
           while (first_splat < nargs && nt_kind(nt, av[first_splat]) != NK_SplatNode) first_splat++;
           for (int k = 0; k < c->nclasses; k++) {
-            int imi = comp_method_in_chain(c, k, "initialize", NULL);
+            int imi = cplan_new_arm_initialize(c, id, k);
             if (imi >= 0) {
               changed |= bind_call_params(c, id, imi);
               /* which element lands in which parameter differs per class and
@@ -12387,7 +12387,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         for (int q = 0; q < nloop; q++) {
           int k = every ? q : ks[q];
           if (k < 0 || k >= c->nclasses || !c->classes[k].is_struct ||
-              comp_method_in_chain(c, k, "initialize", NULL) >= 0) continue;
+              cplan_new_arm_initialize(c, id, k) >= 0) continue;
           changed |= struct_new_types_members_at(c, id, k, 1);
         }
       }
@@ -21083,6 +21083,15 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
     for (int i = 0; i < ni && is_initialize_name(c->scopes[init[i]].name); i++) {
       char mark[24];
       snprintf(mark, sizeof mark, "\x01%d", init[i]);
+      cr_add_name(out, n, cap, mark);
+    }
+    /* a `new` on a class value: the arm of each class it may reach runs the
+       initialize the plan answers it (cplan_new_arm_initialize) */
+    for (int k = 0; ni == CPT_UNKNOWN && k < c->nclasses; k++) {
+      int mi = cplan_as_new(c, id, k) && dynamic_new_may_reach(c, id, k) ? cplan_new_arm_initialize(c, id, k) : -1;
+      char mark[24];
+      if (mi < 0 || !is_initialize_name(c->scopes[mi].name)) continue;
+      snprintf(mark, sizeof mark, "\x01%d", mi);
       cr_add_name(out, n, cap, mark);
     }
   }

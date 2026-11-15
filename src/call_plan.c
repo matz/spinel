@@ -3366,6 +3366,7 @@ static int ct_runs_on_main(Compiler *c, int id) {
   const Scope *s = comp_scope_of(c, id);
   return self_is_main(c, id) && (prog_is_top_scope(c, s) || s->is_cmethod);
 }
+int cplan_runs_on_main(Compiler *c, int id) { return ct_runs_on_main(c, id); }
 /* What main's singleton answers for `name` at call id's point
    (elab_main_singleton_at): 1, main's own method (or the record cannot
    tell, or the point is no load point); 0, none, so Object's chain

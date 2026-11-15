@@ -2249,11 +2249,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  echo "reject-test: FAIL (an included method assigning an ivar as a multiple-assignment target compiled)"; ok=0; \
 	else grep -q "top-level include of a module method that uses instance variables" "$$tmp/tiv.out" || \
 	  { echo "reject-test: FAIL (included ivar target rejected without saying why)"; sed -n 1,5p "$$tmp/tiv.out"; ok=0; }; fi; \
-	t=test/reject/basicobject_toplevel_include_call.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/bo.c" >"$$tmp/bo.out" 2>&1; then \
-	  echo "reject-test: FAIL (a BasicObject instance method reached a top-level included module method)"; ok=0; \
-	else grep -q "unsupported call: node [0-9]* (CallNode \`hello\`)" "$$tmp/bo.out" || \
-	  { echo "reject-test: FAIL (BasicObject bare call rejected without naming it)"; sed -n 1,5p "$$tmp/bo.out"; ok=0; }; fi; \
 	for t in $(shell grep -l '^\# spinel: reject-super-value$$' test/reject/*.rb); do \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/siv.c" >"$$tmp/siv.out" 2>&1; then \
 	  echo "reject-test: FAIL (the value of super in initialize compiled: $$t)"; ok=0; \

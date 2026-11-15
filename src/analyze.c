@@ -50062,6 +50062,17 @@ static void an_phase_class_structure(Compiler *c) {
       c->toplevel_extends[c->ntoplevel_includes] = mx[i].kind == LR_EXTEND;
       c->toplevel_includes[c->ntoplevel_includes++] = mx[i].mod;
     }
+    /* (Object's includes are main's too) */
+    int oc = comp_core_class(c, CORE_OBJECT), nox = 0;
+    const LrMixin *ox = oc >= 0 ? elab_class_mixins(c, oc, &nox) : NULL;
+    for (int i = 0; i < nox; i++) {
+      if (ox[i].mod < 0 || ox[i].kind != LR_INCLUDE || elab_point_may(c, ox[i].node)) continue;
+      c->toplevel_includes = realloc(c->toplevel_includes, sizeof(int) * (size_t)(c->ntoplevel_includes + 1));
+      c->toplevel_extends = realloc(c->toplevel_extends, (size_t)(c->ntoplevel_includes + 1));
+      if (!c->toplevel_includes || !c->toplevel_extends) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      c->toplevel_extends[c->ntoplevel_includes] = 0;
+      c->toplevel_includes[c->ntoplevel_includes++] = ox[i].mod;
+    }
   }
 
   AN_STEP_V("rewrite_ffi_dynamic_calls", rewrite_ffi_dynamic_calls(c));   /* Mod.Name / bare Name with no def -> the attached-function table */

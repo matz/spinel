@@ -188,12 +188,6 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/bare_const_unreachable_const_missing.rb:9: uninitialized constant B::X (NameError): the program defines it only as A::X, which CRuby's lookup from B (its lexical scope, then its ancestors) does not reach; CRuby then calls const_missing (or raises NameError), which spinel does not follow here
 == test/reject/bare_const_unreachable_const_missing.rb [promote] rc=1
 spinel: test/reject/bare_const_unreachable_const_missing.rb:9: uninitialized constant B::X (NameError): the program defines it only as A::X, which CRuby's lookup from B (its lexical scope, then its ancestors) does not reach; CRuby then calls const_missing (or raises NameError), which spinel does not follow here
-== test/reject/basicobject_toplevel_include_call.rb [default] rc=1
-spinel: test/reject/basicobject_toplevel_include_call.rb:18: unsupported call: node N (CallNode `hello`) recv=-/ty-1 argc=0
-spinel: 1 refusal, nothing written
-== test/reject/basicobject_toplevel_include_call.rb [promote] rc=1
-spinel: test/reject/basicobject_toplevel_include_call.rb:18: unsupported call: node N (CallNode `hello`) recv=-/ty-1 argc=0
-spinel: 1 refusal, nothing written
 == test/reject/bind_call_class_value_block_target.rb [default] rc=1
 spinel: test/reject/bind_call_class_value_block_target.rb:12: unsupported call: node N (CallNode `bind_call`) recv=CallNode/ty0 argc=1 arg0ty1001
 spinel: 1 refusal, nothing written

@@ -3962,6 +3962,13 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
          union of returns) */
       if (!an_builtin_only && cplan_builtin_call(c, id)) { *out = an_builtin_answer(c, id); return 1; }
       int live = !an_builtin_only && an_poly_name_live(c, name);
+      /* (--plan-check: a call the plan binds to one method, main's to
+         Object's, keeps that record: no candidate stands for it) */
+      int bound = 0;
+      if (g_plan_check && !an_builtin_only && cplan_runs_on_main(c, id)) {
+        const CallPlan bp = cplan_user_fresh(c, id);
+        bound = bp.mi >= 0 && bp.via == UC_REOPEN && bp.dispatch == CP_DIRECT;
+      }
       for (int pi = 0; pi < npc; pi++) {
         int k = pcs[pi].cls;
         if (an_builtin_only) continue;   /* the builtin answer alone is wanted */
@@ -4009,7 +4016,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         int pf_known = pf >= 0 && c->scopes[pf].ret != TY_UNKNOWN && c->scopes[pf].ret != TY_VOID;
         if (mi >= 0 && c->scopes[mi].ret == TY_UNKNOWN && !pf_known) continue;
         if (mi >= 0) {
-          if (!found) an_user_call_record(c, id, mi, UC_POLY, k);
+          if (!found && !bound) an_user_call_record(c, id, mi, UC_POLY, k);
           r = found ? ty_unify(r, c->scopes[mi].ret) : c->scopes[mi].ret; found = 1;
           if (pf_known) r = ty_unify(r, c->scopes[pf].ret);
           continue;

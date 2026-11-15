@@ -1857,6 +1857,59 @@ static int erm_args_modules(const NodeTable *nt, const int *av, int first, int a
   }
   return 1;
 }
+/* A top-level `include M` is Object's (CRuby's main.include is
+   Object.include): every object answers M's methods, and M is among
+   Object's ancestors. The statement takes Object as its receiver, which the
+   rows below take as any explicit receiver's; the bare calls' reading of it
+   (toplevel_includes) is of Object's includes too. Only for modules of the program's (a core
+   module's methods, Math's or Comparable's, answer no object's call the
+   include adds), where the program defines no hook the include fires and
+   calls no autoload, and none of the modules yields: a call of Object's
+   yielding method off main is one the inference and the emitter do not
+   bind alike yet. */
+static int erm_has_yield(const NodeTable *nt, int node) {
+  if (node < 0) return 0;
+  if (nt_kind(nt, node) == NK_YieldNode) return 1;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (erm_has_yield(nt, nt_ref_at(nt, node, i))) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++) if (erm_has_yield(nt, ids[j])) return 1;
+  }
+  return 0;
+}
+static int erm_toplevel_include_object(Compiler *c, NodeTable *nt, int st) {
+  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0 || nt_ref(nt, st, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, st, "name");
+  if (!nm || !sp_streq(nm, "include")) return 0;
+  int args = nt_ref(nt, st, "arguments"), an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  if (an < 1) return 0;
+  for (int a = 0; a < an; a++) {
+    if (nt_kind(nt, av[a]) != NK_ConstantReadNode && nt_kind(nt, av[a]) != NK_ConstantPathNode) return 0;
+    const char *mk = key_name(c, av[a]);
+    int found = 0;
+    NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
+      const char *k = class_def_key(c, m);
+      if (!k || !mk || !sp_streq(k, mk)) continue;
+      if (erm_has_yield(nt, class_def_body(nt, m))) return 0;
+      found = 1;
+    }
+    if (!found) return 0;
+  }
+  if (ct_method_defined(nt, "included") || ct_method_defined(nt, "append_features")) return 0;
+  /* (nor where the program autoloads: a module an autoload brings may be
+     named before the walk has it) */
+  NT_FOREACH_KIND(nt, NK_CallNode, cn) {
+    const char *an_ = nt_str(nt, cn, "name");
+    if (an_ && sp_streq(an_, "autoload")) return 0;
+  }
+  int r = fwd_new_node_like(nt, st, "ConstantReadNode");
+  nt_node_set_str(nt, r, "name", "Object");
+  nt_node_set_ref(nt, st, "receiver", r);
+  return 1;
+}
 static int erm_keep;   /* (the statement stays, after the reopening erm_rewrite_stmt made) */
 static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const int *parent, int encl) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -2159,6 +2212,9 @@ int desugar_explicit_receiver_mixin(Compiler *c) {
     if (stmts < 0 || nt_kind(nt, stmts) != NK_StatementsNode) continue;
     int bn = 0; const int *bb = nt_arr(nt, stmts, "body", &bn);
     if (!bb || bn == 0) continue;
+    /* (the entry file's: one in a required file is refused under the load graph) */
+    if (is_prog && nt_nroots(nt) > 0 && id == nt_root(nt, 0))
+      for (int k = 0; k < bn; k++) if (erm_toplevel_include_object(c, nt, bb[k])) changed = 1;
     int *nb = (int *)malloc(sizeof(int) * (size_t)bn * 2), nn = 0;
     if (!nb) continue;
     int any = 0;

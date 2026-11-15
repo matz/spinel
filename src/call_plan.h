@@ -123,6 +123,9 @@ int cplan_reopen_target(Compiler *c, CallPlan p);
    twin of cplan_root_reopen, for the desugars that run before types exist
    (it holds for a receiver whose builtin class owns the name too). */
 int cplan_object_method_named(Compiler *c, const char *name);
+/* does call id run with main as self (receiverless or on self, at a file's
+   top level or in a method of main's own)? */
+int cplan_runs_on_main(Compiler *c, int id);
 /* Does call `call`, which takes a block, throw away every value its block
    answers? A builtin iterator of the each family does
    (is_block_value_dropped_iter: each, times, loop, each_char, ...), on any

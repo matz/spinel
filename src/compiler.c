@@ -2703,6 +2703,10 @@ int comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *a
         int mci = ci->included_mods[m];
         if (mci < 0 || mci >= c->nclasses) continue;
         ClassInfo *mc_ = &c->classes[mci];
+        /* (an attribute's: a module's method the class holds no copy of, an include that added nothing for it, is
+           no answer of the module's) */
+        char base[256];
+        if (!comp_is_reader(mc_, name) && !(setter_base_name(name, base, sizeof base) && comp_is_writer(mc_, base))) continue;
         for (int i = 0; i < mc_->nvis; i++)
           if (sp_streq(mc_->vis_names[i], name)) { if (at) *at = mci; return mc_->vis_kinds[i]; }
       }

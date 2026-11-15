@@ -2724,7 +2724,14 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
     }
     char ref[32] = "NULL"; if (t >= 0) snprintf(ref, sizeof ref, "_t%d", t);
     BI_BLOCK_SIDE();
-    emit_iter_param_assign(c, blk, bpn, rename_local(bpn), TY_PROC, ref, b, indent);
+    Scope *bsc = comp_scope_of(c, blk); LocalVar *blv = bsc ? scope_local(bsc, bpn) : NULL;
+    emit_param_cell_fresh(c, blk, bpn, b, as_expr ? 0 : indent);
+    if (emit_proc_cell_lvalue(c, blk, bpn, b)) buf_printf(b, "%s);\n", ref);
+    else if (blv && blv->is_cell) {
+      emit_local_ref(c, blk, bpn, b); buf_puts(b, " = ");
+      emit_boxed_text(c, TY_PROC, ref, b); buf_puts(b, ";\n");
+    }
+    else emit_iter_param_assign(c, blk, bpn, rename_local(bpn), TY_PROC, ref, b, indent);
     BI_METHOD_SIDE();
   }
   emit_block_binds(c, blk, yargs, yc, b, indent, as_expr, &bi);

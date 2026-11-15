@@ -2462,6 +2462,18 @@ void emit_param_cell_publish(Compiler *c, int blk, const char *pname, Buf *b, in
   else
     buf_printf(b, "*_cell_%s = lv_%s;\n", prn, prn);
 }
+/* A fresh cell for a captured block parameter about to be bound again: each
+   call of the receiving block keeps its own binding for readers that outlive
+   the call, as emit_param_cell_publish's callers do for ordinary parameters. */
+void emit_param_cell_fresh(Compiler *c, int blk, const char *pname, Buf *b, int indent) {
+  Scope *psc = blk >= 0 ? comp_scope_of(c, blk) : NULL;
+  LocalVar *plv = psc ? scope_local(psc, pname) : NULL;
+  if (!plv || !plv->is_cell) return;
+  const char *prn = rename_local(pname);
+  if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, prn)) return;
+  char pcell_buf[160];
+  emit_fresh_cell(c, plv, cell_var_name(prn, pcell_buf, sizeof pcell_buf), b, indent);
+}
 void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent) {
   if (blk < 0) return;
   const char *locs = nt_str(c->nt, blk, "locals");

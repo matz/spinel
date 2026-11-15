@@ -3827,14 +3827,18 @@ static int ct_on_main(Compiler *c, int id, const char *name) {
    (elab_main_singleton_at's ELAB_STOP): no method of Object's chain nor a
    builtin's (the core's to_s and inspect) answers it, so it raises, as a
    call ct_undefined_at proves undefined does, where no program
-   method_missing may answer it instead. */
+   method_missing may answer it instead. The point is asked only of a
+   call that runs on main: outside the plan's frame, it rebuilds the map
+   whenever a pass appended nodes since, and every call a pass asks the
+   hook for (cplan_mm_method) comes here. */
 static int ct_main_stopped(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
+  if (!ct_runs_on_main(c, id)) return 0;
   LoadPoint p = elab_point_of(c, id);
   if (p.region < 0 || elab_main_singleton_at(c, name, p, &d) != ELAB_STOP) return 0;
   /* (a program method_missing main reaches, its singleton's or Object's,
      answers the call instead: not told apart here, so none stops) */
-  return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, -1, 0) < 0 && ct_runs_on_main(c, id);
+  return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, -1, 0) < 0;
 }
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml);
 /* Does call id, by its own name on main (ct_runs_on_main), meet an undef

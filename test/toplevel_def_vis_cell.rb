@@ -72,3 +72,14 @@ p go(3)
 p 3.respond_to?(:m1), 3.respond_to?(:m2), 3.respond_to?(:m2, true), nil.respond_to?(:m1)
 p mixed.map { |x| x.respond_to?(:m1) }.all?
 p mixed.map { |x| x.respond_to?(:m2) }.any?
+
+# a word the run takes back, and a later one that opens it again: a call in a
+# method body and respond_to? (with include_all too) read the cell each time
+def m88 = 8
+public :m88
+def go88 = (3.m88 rescue $!.class)
+p go88, 3.respond_to?(:m88), 3.respond_to?(:m88, true)
+private :m88 if ARGV.empty?
+p go88, 3.respond_to?(:m88), 3.respond_to?(:m88, true)
+public :m88 if ARGV.empty?
+p go88, 3.respond_to?(:m88), 3.respond_to?(:m88, true)

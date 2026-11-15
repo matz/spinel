@@ -3630,6 +3630,13 @@ static void cf_call(CF *f, int v) {
       int mi = call_target(c, v, -1, nm, CT_INCLUDED, NULL);
       if (mi >= 0 && cf_user_target(f, v, mi, argv, argc, blk)) found = 1;
     }
+    /* and so is one a reopening of Object holds, or includes by name
+       (`Object.include(M)`) */
+    if (!found) {
+      int oc = comp_core_class(c, CORE_OBJECT);
+      int mi = oc >= 0 ? call_target(c, v, oc, nm, 0, NULL) : -1;
+      if (mi >= 0 && cf_user_target(f, v, mi, argv, argc, blk)) found = 1;
+    }
     if (found) return;
     /* a native binding of the class (an ffi_func) of the name: what it
        declares it answers. A name no binding of the class or a subclass

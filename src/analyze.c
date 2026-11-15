@@ -22821,8 +22821,12 @@ static int an_call_recv_builtin(Compiler *c, int u) {
 int an_class_can_be_reached(Compiler *c, int ci) {
   if (ci < 0 || ci >= c->nclasses) return 1;
   if (c->classes[ci].instantiated) return 1;
+  /* main is an Object with no `new` to show for it: a reopening of Object,
+     and a module it includes, are reached from the start */
+  int obj = comp_core_class(c, CORE_OBJECT);
+  if (ci == obj) return 1;
   for (int j = 0; j < c->nclasses; j++) {
-    if (!c->classes[j].instantiated) continue;
+    if (!c->classes[j].instantiated && j != obj) continue;
     for (int k = j; k >= 0; k = c->classes[k].parent)
       if (k == ci) return 1;
     /* a module reaches instances through every class that includes it */

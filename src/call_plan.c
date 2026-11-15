@@ -330,6 +330,7 @@ static void cplan_root_reopen(Compiler *c, int call, const char *name, const cha
   if (mi >= 0 && (root == CORE_OBJECT || c->scopes[mi].class_id == rci)) cplan_set(p, mi, rci, UC_REOPEN, CP_DIRECT);
 }
 
+static int ct_runs_on_main(Compiler *c, int id);
 /* See call_plan.h. */
 int cplan_object_method_named(Compiler *c, const char *name) {
   for (int si = 1; si < c->nscopes; si++) {
@@ -998,6 +999,12 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     return;
   }
   if (rt == TY_POLY) {
+    /* main is an Object and no other class's: a call on it reaches Object's
+       method of the name, its own or a module's, with no builtin ahead */
+    if (ct_runs_on_main(c, id)) {
+      cplan_root_reopen(c, id, name, "Object", CORE_OBJECT, p);
+      if (p->mi >= 0) return;
+    }
     int npc = 0;
     const PolyCand *pcs = comp_poly_candidates(c, name, &npc);
     if (cplan_native_block_possible(c, id, pcs, npc)) {

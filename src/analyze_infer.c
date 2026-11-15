@@ -6340,7 +6340,10 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       }
       if (nc > 0 && !has_blk)
         { *out = uret == TY_UNKNOWN ? TY_POLY : uret; return 1; }
-      if (nc == 0 && nwrong > 0 && !has_blk)
+      /* not where Class's own method answers the classes without one
+         (`def self.freeze(x)` beside every other class's Module#freeze):
+         only the classes defining it raise */
+      if (nc == 0 && nwrong > 0 && !has_blk && core_method_vis("Class", name, 1, NULL) != 1)
         { *out = wret == TY_UNKNOWN ? TY_POLY : wret; return 1; }
     }
     if (argc == 1 && is_ivar_access(name) && !is_ivar_set(name)) {

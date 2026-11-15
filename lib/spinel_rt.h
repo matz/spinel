@@ -8500,21 +8500,22 @@ static sp_RbVal sp_PolyArray_delete(sp_PolyArray *a, sp_RbVal v) {sp_gc_wb((void
      mid-loop; a and v may be reachable only through the call expression. */
   SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
   if (a->frozen) { sp_poly_frozen_delete_scan(a, v, a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
-  sp_int w = 0;
+  sp_int w = 0; int found = 0;
   sp_RbVal removed = sp_box_nil(); SP_GC_ROOT_RBVAL(removed);
   for (sp_int i = 0; i < a->len; i++) {
-    if (!sp_poly_rb_equal(a->data[i], v)) {
-      if (w != i) {
-        if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
-        a->data[w] = a->data[i];
-      }
-      w++;
+    sp_RbVal e = a->data[i]; SP_GC_ROOT_RBVAL(e);
+    if (sp_poly_rb_equal(e, v)) { removed = e; found = 1; continue; }
+    if (w != i) {
+      if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
+      while (a->len < w) sp_PolyArray_push(a, sp_box_nil());
+      if (w < a->len) a->data[w] = e; else sp_PolyArray_push(a, e);
     }
-    else removed = a->data[i];
+    w++;
   }
-  if (w != a->len && a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
-  a->len = w;
-  return removed;
+  if (a->len == w) return sp_box_nil();
+  if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
+  if (w < a->len) a->len = w;
+  return found ? removed : v;
 }
 
 /* MatchData -- holds the source string and the per-group byte offsets
@@ -11025,12 +11026,18 @@ static void *sp_PtrArray_delete_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int 
   void *removed = NULL; SP_GC_ROOT(removed);
   sp_int w = 0;
   for (sp_int i = 0; i < a->len; i++) {
-    void *e = a->data[i];
-    /* read the slot after ==, which may have stored into it */
-    if (!sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) a->data[w++] = a->data[i];
-    else removed = a->data[i];
+    void *e = a->data[i]; SP_GC_ROOT(e);
+    if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) { removed = e; continue; }
+    if (w != i) {
+      if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY); return NULL; }
+      while (a->len < w) sp_PtrArray_push(a, NULL);
+      if (w < a->len) a->data[w] = e; else sp_PtrArray_push(a, e);
+    }
+    w++;
   }
-  a->len = w;
+  if (a->len == w) return NULL;
+  if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY); return NULL; }
+  if (w < a->len) a->len = w;
   return removed;
 }
 static sp_int sp_PtrArray_index_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn, const char *name) SP_UNUSED;

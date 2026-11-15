@@ -653,7 +653,8 @@ Adjacent ecosystem (community-built, not part of this repo):
 - [awesome-spinel](https://github.com/aristotelesbr/awesome-spinel): a
   curated list of programs, libraries and tools that run on Spinel
   (games, web frameworks, ported gems, developer tooling), with
-  screenshots and links to live demos.
+  screenshots and links to live demos. Maintained by its author, not by
+  the Spinel maintainers.
 
 ## History
 

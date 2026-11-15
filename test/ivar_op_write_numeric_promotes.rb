@@ -84,3 +84,26 @@ begin
 rescue NoMethodError => e
   p e.class
 end
+
+# the operand writes nil to the slot: the operation adds to the value read
+# before the operand ran, as in CRuby
+class Reset
+  def initialize
+    @x = 1.0
+    @n = 1
+  end
+
+  def reset
+    @x = nil
+    @n = nil
+    1
+  end
+
+  def bump = (@x += [reset].sum)
+  def bump_n = (@n += [reset].sum)
+  attr_reader :x, :n
+end
+rs = Reset.new
+p rs.bump, rs.x
+rs = Reset.new
+p rs.bump_n, rs.n

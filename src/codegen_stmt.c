@@ -6080,6 +6080,27 @@ static const char *op_assign_slot_src(Compiler *c, const char *lval, const char 
 static void op_assign_slot_end(const char *src, const char *lval, Buf *b) {
   buf_puts(b, !g_pre && src != lval ? " }\n" : "\n");
 }
+/* A field's nil bit is the slot's as much as its payload: where
+   op_assign_slot_src read the payload ahead of the rhs, read the bit into a
+   temp there too (inside the block it opened when there is no g_pre). An rhs
+   that writes nil to the field then leaves the receiver the operation tests
+   as it was. Answers the temp. */
+static const char *op_assign_bit_src(const char *bit, size_t pre_mark, char *tn, size_t tnsz, Buf *b) {
+  int t = ++g_tmp;
+  snprintf(tn, tnsz, "_t%d", t);
+  if (!g_pre) {
+    buf_printf(b, "int _t%d = (%s) != 0; ", t, bit);
+    return tn;
+  }
+  Buf cap; memset(&cap, 0, sizeof cap);
+  emit_indent(&cap, g_indent); buf_printf(&cap, "int _t%d = (%s) != 0;\n", t, bit);
+  char *rest = strdup(g_pre->len > pre_mark ? g_pre->p + pre_mark : "");
+  buf_erase(g_pre, pre_mark, g_pre->len - pre_mark);
+  buf_puts(g_pre, cap.p);
+  buf_puts(g_pre, rest);
+  free(rest); free(cap.p);
+  return tn;
+}
 static const char *array_op_assign_src(Compiler *c, const char *lval, const char *k,
                                        int v, size_t pre_mark, char *tn, size_t tnsz, Buf *b) {
   char ct[48]; snprintf(ct, sizeof ct, "sp_%sArray *", k);
@@ -6388,7 +6409,15 @@ int emit_scalar_op_assign(Compiler *c, const char *lval, TyKind t, const char *o
   }
   const char *captured = src;
   if (onil) { snprintf(srcbuf, sizeof srcbuf, "%s(%s, \"%s\")", oint_val(t), src, op); src = srcbuf; }
-  else if (bnil) { snprintf(srcbuf, sizeof srcbuf, "({ if (SP_UNLIKELY(%s)) sp_nil_recv(\"%s\"); %s; })", bnil, op, src); src = srcbuf; }
+  else if (bnil) {
+    /* the bit read ahead of an effectful rhs with the payload, as CRuby has
+       read the receiver: `@x += [reset].sum`, with reset writing nil to @x,
+       answered NoMethodError where CRuby adds to the old value */
+    char btn[32];
+    const char *bit = src != lval ? op_assign_bit_src(bnil, pre_mark, btn, sizeof btn, b) : bnil;
+    snprintf(srcbuf, sizeof srcbuf, "({ if (SP_UNLIKELY(%s)) sp_nil_recv(\"%s\"); %s; })", bit, op, src);
+    src = srcbuf;
+  }
   /* `n = n >> k` as the binary shift emits it: the count converted as it
      converts it (emit_int_expr), the old value rooted across it */
   if (bshift) {

@@ -17035,6 +17035,11 @@ static int oa_walk_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *clai
   if (!fold && !(name && is_map_alias(name)) && !(id < nc && walk_disc[id])) sl[S].row_iter |= 8;
   return 1;
 }
+/* delete, include?, index and count with a value, and their aliases */
+static int oa_search_name(const char *nm) {
+  return sp_streq(nm, "delete") || is_membership_alias(nm) || sp_streq(nm, "index") ||
+         sp_streq(nm, "find_index") || sp_streq(nm, "count");
+}
 static int oa_recv_op_ok(const char *nm, int argc, int has_block) {
   if (!nm || has_block) return 0;
   if ((is_element_at_alias(nm)) && argc == 1) return 1;
@@ -17047,6 +17052,8 @@ static int oa_recv_op_ok(const char *nm, int argc, int has_block) {
      an Integer index (step 4 checks the type), and clear the array itself */
   if ((sp_streq(nm, "pop") || sp_streq(nm, "shift") || sp_streq(nm, "clear")) && argc == 0) return 1;
   if (sp_streq(nm, "delete_at") && argc == 1) return 1;
+  /* the searches, which compare each element with == */
+  if (oa_search_name(nm) && argc == 1) return 1;
   /* no-block comparisons: usable when the element class has `<=>` (the
      needs_cmp bit, checked at component resolution). sort's RESULT must
      also land in a modeled place (slot alias or statement position) --
@@ -17475,12 +17482,13 @@ static int narrow_int_table_ivars(Compiler *c, int in_round) {
           int ua = nt_ref(nt, u, "arguments"); int uan = 0;
           if (ua >= 0) nt_arr(nt, ua, "arguments", &uan);
           /* sort/min/max need the boxed comparator, which this element kind
-             has no arm for, and the removals are typed only for an object
-             array: leave those tables alone */
+             has no arm for, and the removals and the searches are typed
+             only for an object array: leave those tables alone */
           if (un && (sp_streq(un, "sort") || sp_streq(un, "sort!") ||
                      sp_streq(un, "min") || sp_streq(un, "max") ||
                      sp_streq(un, "pop") || sp_streq(un, "shift") ||
-                     sp_streq(un, "clear") || sp_streq(un, "delete_at"))) { used = 0; break; }
+                     sp_streq(un, "clear") || sp_streq(un, "delete_at") ||
+                     oa_search_name(un))) { used = 0; break; }
           if (!oa_recv_op_ok(un, uan, nt_ref(nt, u, "block") >= 0)) { used = 0; break; }
           /* what a store puts in the table is a row: a boxed value or another
              kind would be taken as a bare sp_IntArray *. A value not typed
@@ -18604,7 +18612,8 @@ static int oa_component_narrows(Compiler *c, const OAS *s) {
   /* a nested scalar array: the codegen supports index/push/[]=/length/
      first/last but not the boxed sort/min/max comparators yet, so a
      component that used those (needs_cmp) stays on the poly path for now,
-     and so does one that used pop, shift, delete_at, clear or a filter (removes).
+     and so does one that used pop, shift, delete_at, clear, a search or a
+     filter (removes).
      A boxed element stored as a row stays there too: an object element
      is unboxed with a class check, but a row is taken as a bare pointer,
      and a boxed poly array read back through the table as an
@@ -18863,12 +18872,13 @@ static void oa_recv_use(Compiler *c, OAS *sl, int S, int id, int recv, const int
          an element no slot sees */
       if (!(id < nc && value_ok[id])) sl[S].alive = 0;
     }
-    /* the removals have emitters for an object array only (the
-       removes bit, checked at component resolution). clear answers the
-       array, so like an append it must land in a modeled consumer, and
-       the emitter reads delete_at's index as a C integer. */
+    /* the removals and the searches have emitters for an object array
+       only (the removes bit, checked at component resolution). clear
+       answers the array, so like an append it must land in a modeled
+       consumer, and the emitter reads delete_at's index as a C integer. */
     else if (name && (sp_streq(name, "pop") || sp_streq(name, "shift") ||
-                      sp_streq(name, "clear") || sp_streq(name, "delete_at"))) {
+                      sp_streq(name, "clear") || sp_streq(name, "delete_at") ||
+                      oa_search_name(name))) {
       sl[S].removes = 1;
       if (sp_streq(name, "clear") && !(id < nc && value_ok[id])) sl[S].alive = 0;
       /* (a boxed index too, which the emitter takes as an Integer the way
@@ -54127,14 +54137,15 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
       if (by)   /* the request is not applied, and the C is as without it */
         fprintf(stderr, "spinel: %s: warning: inline RBS: the type of %s %s is not applied: Array[%s] "
                         "stays a boxed array; every use of it must be one the unboxed array supports "
-                        "([], []=, push, pop, shift, delete_at, clear, length, empty?, first, last, min, "
-                        "max, sort) from the class's own instance methods or its attr_reader\n",
+                        "([], []=, push, pop, shift, delete_at, clear, delete, include?, index, count, "
+                        "length, empty?, first, last, min, max, sort) from the class's own instance "
+                        "methods or its attr_reader\n",
                 byp->head, cl->name, cl->ivars[iv], asked);
       else
         fprintf(stderr, "warning: --rbs: %s %s: Array[%s] stays a boxed array; every use of it must be "
                         "one the unboxed array supports ([], []=, push, pop, shift, delete_at, clear, "
-                        "length, empty?, first, last, min, max, sort) from the class's own instance "
-                        "methods or its attr_reader\n",
+                        "delete, include?, index, count, length, empty?, first, last, min, max, sort) "
+                        "from the class's own instance methods or its attr_reader\n",
                 cl->name, cl->ivars[iv], asked);
     }
   }

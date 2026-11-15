@@ -1901,7 +1901,7 @@ int cplan_class_kernel(Compiler *c, int cls) {
    (cplan_kernel_reaches, comp_super_parent), the raise the one an entry for the name gives (ver_no_method_raise), which
    does not run the call's arguments. */
 static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, int ar, int vcall);
-static int cplan_mm_method(Compiler *c, int ci, int cmethod);
+static int cplan_mm_method(Compiler *c, int id, int ci, int cmethod);
 static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int how, const int *pm) {
   NodeTable *nt = (NodeTable *)c->nt;
   int base = nt->count, par = pm ? pm[id] : -1;
@@ -1917,7 +1917,7 @@ static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int
   }
   int an = nt_ref(nt, id, "arguments"), nargs = 0, els;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &nargs) : NULL;
-  if (how != 2 && cplan_mm_method(c, cls, 0) >= 0) {
+  if (how != 2 && cplan_mm_method(c, -1, cls, 0) >= 0) {
     /* (a class with a method_missing of its own: it answers the call where no cell is set, with a copy of the call's operands) */
     int call = disp_forward_call(nt, "method_missing", 0, 0), margs = nt_new_node(nt, "ArgumentsNode"), sym = nt_new_node(nt, "SymbolNode");
     int *mv = malloc(sizeof *mv * (size_t)(nargs + 1));
@@ -3130,7 +3130,6 @@ static int ver_face_closes(int face) {
 static int ver_closed_to(int vis, int face) {
   return ver_face_closes(face) && (vis == SP_VIS_PRIVATE || (face == VF_PUBLIC && vis == SP_VIS_PROTECTED));
 }
-static int cplan_mm_method(Compiler *c, int ci, int cmethod);
 /* The face a call asked with flags binds (VF_NONE: it enforces nothing) */
 static int ct_flags_face(unsigned flags) {
   return !(flags & CT_PUBLIC) ? VF_NONE : flags & CT_PROTECTED ? VF_PUBLIC : VF_PRIVATE;
@@ -3191,7 +3190,7 @@ static int ct_face_for(Compiler *c, int rcls, int sg, const char *name, unsigned
      asked once per call) */
   if (!face || sg || rcls != oc) return VF_NONE;
   /* (a method_missing every object reaches answers the call instead) */
-  if (cplan_mm_method(c, oc, 0) >= 0) return VF_NONE;
+  if (cplan_mm_method(c, -1, oc, 0) >= 0) return VF_NONE;
   return ver_arms_closed(c, rcls, name, face, NULL) == -1 ? face : VF_NONE;
 }
 /* Does rcls's chain (its side sg) hold an undef of name? */
@@ -3829,7 +3828,7 @@ static int ct_main_stopped(Compiler *c, int id, const char *name) {
   if (p.region < 0 || elab_main_singleton_at(c, name, p, &d) != ELAB_STOP) return 0;
   /* (a program method_missing main reaches, its singleton's or Object's,
      answers the call instead: not told apart here, so none stops) */
-  return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, 0) < 0 && ct_runs_on_main(c, id);
+  return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, -1, 0) < 0 && ct_runs_on_main(c, id);
 }
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml);
 /* Does call id, by its own name on main (ct_runs_on_main), meet an undef
@@ -3844,7 +3843,7 @@ static int ct_main_builtin_undef(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
   unsigned f = CT_TOP;
   if (!builtin_self_method_known(name, BSELF_MAIN) || ct_pin_of(c, id) != -1 || !ver_chain_undef(c, -1, 1, name) ||
-      comp_main_method(c, METHOD_MISSING_NAME) >= 0 || cplan_mm_method(c, -1, 0) >= 0 || !ct_runs_on_main(c, id) ||
+      comp_main_method(c, METHOD_MISSING_NAME) >= 0 || cplan_mm_method(c, -1, -1, 0) >= 0 || !ct_runs_on_main(c, id) ||
       ct_lookup(c, id, -1, name, &f, NULL) >= 0) return 0;
   LoadPoint p = elab_point_of(c, id);
   return p.region < 0 || elab_main_singleton_at(c, name, p, &d) == ELAB_UNKNOWN;
@@ -8247,17 +8246,26 @@ int cplan_visibility_class(Compiler *c, int id, int ci) {
   return ci >= 0 && cls_fact_bounded(c, ci) && n == 0 ? ci : -1;
 }
 
-/* The method_missing a call on class ci (its class side when cmethod;
+/* The method_missing a call id on class ci (its class side when cmethod;
    main for -1) falls to: its chain's, else, past a class that is no blank
    slate, Object's (an Object or a Kernel reopen's, a top-level def: main
    has no user class entry), which the tables leave out of a program
-   class's chain; -1 for none */
-static int cplan_mm_method(Compiler *c, int ci, int cmethod) {
-  int t = cplan_mm_chain(c, ci, cmethod);
+   class's chain; -1 for none. Each is call_target's answer for the
+   hook's name at the call (CT_REACH: every call may reach its lookup's
+   tail, whatever it names), as the record has it there. Id -1 asks with
+   no site, which keeps the table's answer (noted unasked where the hook has
+   versions): for a reader with no single call (an entry's face, a guard's or
+   a version's tail), for ct_main_stopped, which runs inside the lookup of the
+   call's own name on main (an ask at its id would reach it again for the
+   name method_missing), and for ct_main_builtin_undef, which is the same test
+   as ct_main_stopped's. cplan_mm_chain stays on the tables: its one caller is
+   the entry path (ver_mm_at), which reads the record. */
+static int cplan_mm_method(Compiler *c, int id, int ci, int cmethod) {
+  int t = ci < 0 ? -1 : call_target(c, id, ci, METHOD_MISSING_NAME, CT_REACH | (cmethod ? CT_CMETHOD : 0), NULL);
   if (t >= 0 || (!cmethod && ci >= 0 && class_is_blank_slate(c, ci))) return t;
   int obj = comp_core_class(c, CORE_OBJECT);
-  if (obj >= 0 && (t = comp_method_in_chain(c, obj, METHOD_MISSING_NAME, NULL)) >= 0) return t;
-  return comp_method_index(c, METHOD_MISSING_NAME);
+  if (obj >= 0 && (t = call_target(c, id, obj, METHOD_MISSING_NAME, CT_REACH, NULL)) >= 0) return t;
+  return call_target(c, id, -1, METHOD_MISSING_NAME, CT_REACH | CT_TOP, NULL);
 }
 /* Missing hooks are not dispatched yet. New visibility checks retain the
    old self-call behaviour when the existing method table defines a hook. */
@@ -8267,7 +8275,7 @@ int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod) {
     if (s && !s->is_cmethod) ci = s->class_id;
     if (ci < 0 && !self_is_main(c, id)) return 0;
   }
-  return cplan_mm_method(c, ci, cmethod) >= 0;
+  return cplan_mm_method(c, id, ci, cmethod) >= 0;
 }
 
 /* The super a method's body is, unconditionally (`super`, `super(n, *a)`):
@@ -8355,7 +8363,7 @@ int cplan_super_needs_method_missing(Compiler *c, int id) {
   if (!s || p.via != UC_SUPER || p.mi < 0 || !cplan_value_dead_super(c, p.mi)) return 0;
   for (int k = -1; k < c->nclasses; k++) {
     if (k >= 0 && (k == s->class_id || !is_descendant(c, k, s->class_id))) continue;
-    int mm = cplan_mm_method(c, k < 0 ? s->class_id : k, s->is_cmethod);
+    int mm = cplan_mm_method(c, id, k < 0 ? s->class_id : k, s->is_cmethod);
     if (mm >= 0 && cplan_mm_answers(c, mm)) return 1;
   }
   return 0;
@@ -8853,7 +8861,7 @@ int cplan_root_closed(Compiler *c, int id, int *vis) {
   if (rt == TY_NIL && nt_safe_nav(nt, id)) return -1;
   if (rt == TY_NIL) return cplan_nil_closed_method(c, id, name, vis);
   /* (a method_missing every object reaches answers the call instead) */
-  if (cplan_mm_method(c, comp_core_class(c, CORE_OBJECT), 0) >= 0) return -1;
+  if (cplan_mm_method(c, id, comp_core_class(c, CORE_OBJECT), 0) >= 0) return -1;
   /* the lookup from the receiver's builtin class; a boxed value's from
      Object, which the arms ask at run time of a value whose own class
      answers the name ahead of Object (cplan_send_split_owners) */
@@ -9692,7 +9700,7 @@ static int guard_entry_make(Compiler *c, int mi, int ar, int *behind) {
   /* the hidden method behind a later include's copy that finds no method:
      CRuby calls the chain's method_missing there, as an open history's
      entry does for none run (VK_MM) */
-  if (guard_behind_finds_none(c, to[n - 1], cls, sg, name) && cplan_mm_method(c, cls, sg) >= 0) {
+  if (guard_behind_finds_none(c, to[n - 1], cls, sg, name) && cplan_mm_method(c, -1, cls, sg) >= 0) {
     els = ver_absent_else(c, VK_MM, cls, sg, name, to, n, ar, &blk, &spliced);
     *behind = to[n - 1];
   }
@@ -9798,7 +9806,7 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
        else NoMethodError; the row's call is made once for each cell) */
     /* (the class's own method_missing, where it has one, answers where no cell is set, as it does where it has no Kernel) */
     int els;
-    if (cplan_mm_method(c, cls, sg) >= 0) {
+    if (cplan_mm_method(c, -1, cls, sg) >= 0) {
       comp_sym_intern(c, name);
       els = disp_method_missing_call(nt, name, w->ar, w->blk);
     }
@@ -9984,7 +9992,7 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   if (sg && cls >= 0 && ar == 1 && !blk && is_module_hook_name(name)) return VK_SUPER;
   /* (method_missing where the calls run: there at some and not at
      others, the history keeps its handling; at none, NoMethodError) */
-  if (cplan_mm_method(c, cls, sg) >= 0 && (mm & 1)) return mm == 1 ? VK_MM : VK_KEEP;
+  if (cplan_mm_method(c, -1, cls, sg) >= 0 && (mm & 1)) return mm == 1 ? VK_MM : VK_KEEP;
   return q->nvc && bsearch(&name, q->vc, (size_t)q->nvc, sizeof *q->vc, ver_name_cmp) ? VK_KEEP : VK_NOMETHOD;
 }
 /* Does the method the else arm els calls (super's target, method_missing)
@@ -9993,7 +10001,7 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
 static int ver_else_block(Compiler *c, int cls, int sg, int last, int els) {
   int t = -1;
   if (els == VK_SUPER) t = cplan_super_target(c, -1, &c->scopes[last], NULL);
-  else if (els == VK_MM) t = cplan_mm_method(c, cls, sg);
+  else if (els == VK_MM) t = cplan_mm_method(c, -1, cls, sg);
   return t < 0 || !(c->scopes[t].blk_param || c->scopes[t].yields) ? 0 : c->scopes[t].yields ? 2 : 1;
 }
 /* The else arm of rcls's version entry for a call that may meet no

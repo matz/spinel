@@ -18028,11 +18028,13 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
          a.dup }`: each element's copy is of the element's class, so the
          copy table is the slot's kind, built in place by the map as above.
          Not where the program defines its own dup or clone, which may
-         answer anything. */
+         answer anything. `as.map { |a| a }` answers the elements
+         themselves, of the slot's class all the more. */
+      int ident = mtail >= 0 && nt_kind(nt, mtail) == NK_LocalVariableReadNode;
       if (!joined && mn == 1 && read_slot[crecv] >= 0 && mtail >= 0 &&
-          nt_kind(nt, mtail) == NK_CallNode && nt_ref(nt, mtail, "block") < 0 &&
-          nt_ref(nt, mtail, "arguments") < 0 && oa_copy_name(c, nt_str(nt, mtail, "name"))) {
-        int pr = nt_ref(nt, mtail, "receiver");
+          (ident || (nt_kind(nt, mtail) == NK_CallNode && nt_ref(nt, mtail, "block") < 0 &&
+                     nt_ref(nt, mtail, "arguments") < 0 && oa_copy_name(c, nt_str(nt, mtail, "name"))))) {
+        int pr = ident ? mtail : nt_ref(nt, mtail, "receiver");
         const char *pn = block_param_name(c, mb, 0);
         if (pr >= 0 && nt_kind(nt, pr) == NK_LocalVariableReadNode && pn && !block_param_name(c, mb, 1) &&
             sp_streq(nt_str(nt, pr, "name"), pn)) {

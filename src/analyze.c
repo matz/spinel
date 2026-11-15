@@ -20111,9 +20111,8 @@ static int narrow_object_arrays(Compiler *c) {
   /* 6. a slot read left unclaimed escaped into an unmodeled context -> kill.
         A call whose value is a return slot is the same story: unless a slot
         write claimed it above, the value went somewhere unmodeled. And a
-        return slot no call site reached at all is a method entered by some
-        route this pass never saw, so its C signature must not move
-        (oa_unreached_returns). */
+        return slot no call site reached at all may be a method entered by
+        a route this pass never saw (oa_unreached_returns). */
   for (int id = 0; id < nt->count; id++)
     if (call_ret[id] >= 0 && !claimed[id] && !value_ok[id]) sl[call_ret[id]].alive = 0;
   oa_unreached_returns(c, sl, n);

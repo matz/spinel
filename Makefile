@@ -1746,7 +1746,8 @@ test-corpus-summary: test-corpus-results
 # entries, and a raise caught through the exported try helper -- and a kernel
 # whose entries start and join threads after an init that started some, and
 # one whose at_exit hooks run when the host exits, not as its init returns,
-# and one whose entry calls a Struct's `new` the load redefined.
+# and one whose entry calls a Struct's `new` the load redefined, and an
+# --ext-entry list longer than 2048 bytes exports every method it names.
 ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map \
@@ -1836,6 +1837,15 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	      --ext-entry ExtDup.go --ext-class Base -o "$$tmp/d.c" >"$$tmp/d.out" 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class Base named two classes and compiled)"; ok=0; \
 	  else grep -q "names 2 classes" "$$tmp/d.out" || { echo "ext-test: FAIL (--ext-class Base refused without naming both classes)"; sed -n 1,3p "$$tmp/d.out"; ok=0; }; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  awk 'BEGIN { print "module W"; for (i = 1; i <= 120; i++) printf "  def self.entry_with_a_long_name_%04d(x) = x + %d\n", i, i; print "end" }' > "$$tmp/w.rb"; \
+	  wl=$$(awk 'BEGIN { for (i = 1; i <= 120; i++) printf "%sW.entry_with_a_long_name_%04d", (i > 1 ? "," : ""), i }'); \
+	  if ! $(SPINEL) "$$tmp/w.rb" -c --no-line-map --ext-init Init_ext_wide --ext-entry "$$wl" -o "$$tmp/w.c" >"$$tmp/w.out" 2>&1; then \
+	    echo "ext-test: FAIL (an --ext-entry list past 2048 bytes did not compile)"; sed -n 1,3p "$$tmp/w.out"; ok=0; \
+	  elif [ $$(grep -c 'sp_W_s_entry_with_a_long_name_[0-9]*(' "$$tmp/w.h") -ne 120 ]; then \
+	    echo "ext-test: FAIL (an --ext-entry list past 2048 bytes exported $$(grep -c 'sp_W_s_entry_with_a_long_name_[0-9]*(' "$$tmp/w.h") of its 120 methods)"; ok=0; \
+	  fi; \
 	fi; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "ext-test: pass"; else exit 1; fi

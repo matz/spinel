@@ -1362,8 +1362,10 @@ void compute_reachable(Compiler *c, int typed) {
      They are marked before the census below (cr_live_collect), which
      opens the class of an exported method from the start. */
   if (g_ext_entries && *g_ext_entries) {
-    char list[2048];
-    snprintf(list, sizeof list, "%s", g_ext_entries);
+    /* a copy as long as the list: a fixed buffer cut a long one short, and
+       the cut piece read as a method name (or the entries after it were
+       dropped without a word) */
+    char *list = strdup(g_ext_entries);
     for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
       char *dot = strrchr(tok, '.');
       if (!dot) {
@@ -1382,13 +1384,13 @@ void compute_reachable(Compiler *c, int typed) {
       }
       c->scopes[mi2].is_ext_entry = 1;
     }
+    free(list);
   }
   /* --ext-class: the public instance methods of the named classes join the
      graph as roots too, for the method table the library exports */
   if (g_ext_classes && *g_ext_classes) {
     if (!sp_streq(g_ext_classes, "all")) {
-      char list[2048];
-      snprintf(list, sizeof list, "%s", g_ext_classes);
+      char *list = strdup(g_ext_classes);   /* as long as the list, as above */
       for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
         /* a path (`A::B`) names one class; a name alone names each class
            of that leaf, and two of them (A::Base, B::Base) leave the
@@ -1405,6 +1407,7 @@ void compute_reachable(Compiler *c, int typed) {
           exit(1);
         }
       }
+      free(list);
     }
     for (int ci2 = 0; ci2 < c->nclasses; ci2++) {
       if (!ext_class_exported(c, ci2)) continue;

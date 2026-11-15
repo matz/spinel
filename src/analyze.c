@@ -19187,6 +19187,16 @@ static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, 
       if (!anh_has(&tup_names, mn)) anh_add(&tup_names, mn);
     }
   }
+  /* the candidates of each name, chained (tup_head by the name's index in
+     tup_names), so a node of the name visits only its own */
+  int *tup_head = (int *)malloc(sizeof(int) * (size_t)(tup_names.n > 0 ? tup_names.n : 1));
+  int *tup_next = (int *)malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
+  for (int k = 0; k < tup_names.n; k++) tup_head[k] = -1;
+  for (int R = 0; R < n; R++) {
+    if (tup_en[R] <= 0) continue;
+    int k = anh_find(&tup_names, c->scopes[sl[R].sidx].name);
+    tup_next[R] = tup_head[k]; tup_head[k] = R;
+  }
   /* one walk over the program vets every such method's ways in */
   for (int id = 0; tup_names.n && id < nt->count && id < nc; id++) {
     NodeKind k = nt_kind(nt, id);
@@ -19197,9 +19207,10 @@ static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, 
       Scope *ss = comp_scope_of(c, id);
       nm = ss ? ss->name : NULL;
     }
-    if (!nm || !anh_has(&tup_names, nm)) continue;
-    for (int R = 0; R < n; R++) {
-      if (tup_en[R] <= 0 || !sp_streq(c->scopes[sl[R].sidx].name, nm)) continue;
+    int hk = nm ? anh_find(&tup_names, nm) : -1;
+    if (hk < 0) continue;
+    for (int R = tup_head[hk]; R >= 0; R = tup_next[R]) {
+      if (tup_en[R] <= 0) continue;
       if (k == NK_DefNode) {
         if (id != c->scopes[sl[R].sidx].def_node) tup_en[R] = -1;
         continue;
@@ -19209,6 +19220,7 @@ static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, 
     }
   }
   anh_free(&tup_names);
+  free(tup_head); free(tup_next);
   for (int mw = 0; mw < nt->count && mw < nc; mw++) {
     if (nt_kind(nt, mw) != NK_MultiWriteNode) continue;
     int v = nt_ref(nt, mw, "value");

@@ -115,3 +115,15 @@ end
 sp_a, *sp_rest = spread
 sp_rest[0][1][1] = "s"
 p sp_a[0][0], sp_rest[0][1], sp_rest[1]
+
+# a return inside the tuple's own value is a second shape: the table stays
+# boxed, and the early answer reaches the targets as it is
+def early(f)
+  t = Array.new(2) { Array.new(2, 0) }
+  [t, (return 5, 1 if f; 2)]
+end
+ea_a, ea_b = early(false)
+ea_a[0][0] = 3
+p ea_a, ea_b
+ea_c, ea_d = early(true)
+p ea_c, ea_d

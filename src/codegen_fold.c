@@ -6712,6 +6712,11 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
   buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
+  /* map! on a frozen receiver raises before the block runs, as CRuby's */
+  if (is_mapbang && array_frozen_cls(rt)) {
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);\n", trecv, trecv, trecv, array_frozen_cls(rt));
+  }
   /* running index, seeded with the offset */
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = ", tidx);
   /* as an Integer: a boxed offset (`with_index(body.first_line)` on a value
@@ -6778,6 +6783,19 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
       }
       else buf_puts(g_pre, vb.p ? vb.p : "");
       buf_puts(g_pre, ");\n");
+      if (is_mapbang) {
+        /* map! stores each value into the receiver as the block answers
+           it, as CRuby's does: a later run of the block that reads the
+           receiver sees the elements written before, and a `break` keeps
+           them */
+        emit_indent(g_pre, innerIndent);
+        if (sp_streq(rk, "Int") || sp_streq(rk, "Float"))
+          buf_printf(g_pre, "sp_%sArray_oset(_t%d, _t%d, sp_%sArray_oget(_t%d, sp_%sArray_length(_t%d) - 1));\n", rk, trecv, ti, rk, tres, rk, tres);
+        else if (sp_streq(rk, "Str"))
+          buf_printf(g_pre, "sp_StrArray_set_e(_t%d, _t%d, sp_StrArray_get_e(_t%d, sp_StrArray_length(_t%d) - 1));\n", trecv, ti, tres, tres);
+        else
+          buf_printf(g_pre, "sp_%sArray_set(_t%d, _t%d, sp_%sArray_get(_t%d, sp_%sArray_length(_t%d) - 1));\n", rk, trecv, ti, rk, tres, rk, tres);
+      }
     }
     else {  /* select / reject: push the element on the (negated) predicate */
       emit_indent(g_pre, innerIndent);
@@ -6796,11 +6814,7 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_%sArray_nil_from(_t%d, _t%d);\n", k, tres, trecv);
   }
 
-  if (is_mapbang) {
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_%sArray_replace(_t%d, _t%d);\n", rk, trecv, tres);
-    buf_printf(b, "_t%d", trecv);   /* map! returns the mutated receiver */
-  }
+  if (is_mapbang) buf_printf(b, "_t%d", trecv);   /* map! returns the mutated receiver */
   else if (collecting) buf_printf(b, "_t%d", tres);
   else if (range_src) buf_printf(b, "_t%d", trng);  /* each yields the Range itself */
   else buf_printf(b, "_t%d", trecv);  /* each.with_index yields the receiver */

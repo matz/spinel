@@ -1874,10 +1874,13 @@ static int str_mut_inert(Compiler *c, int n, int later_effects) {
 /* Holds argv[i] into *o. As an index (as_index), an Integer stays an
    sp_int and any other value is held boxed, for the conversion CRuby's
    NUM2LONG makes (str_mut_index); otherwise the operand is held as what it
-   is. */
-static void str_mut_hold(Compiler *c, const int *argv, int argc, int i, int as_index, StrMutOp *o, Buf *b) {
-  int n = argv[i], later = 0;
-  for (int j = i + 1; j < argc; j++) later |= subtree_has_side_effect(c, argv[j]);
+   is. A pure read is left where it is used unless a later operand can
+   change what it reads, or, with `changed`, code runs between its turn and
+   its use anyway (a conversion of an operand ahead of it). */
+static void str_mut_hold_as(Compiler *c, const int *argv, int argc, int i, int as_index, int changed,
+                            StrMutOp *o, Buf *b) {
+  int n = argv[i], later = changed;
+  for (int j = i + 1; j < argc && !later; j++) later |= subtree_has_side_effect(c, argv[j]);
   Repr r = repr_of(c, n);
   TyKind ty = r.as_ty;
   int boxed = r.kind == RK_BOXED || ty == TY_POLY || ty == TY_NIL || ty == TY_VOID || ty == TY_UNKNOWN ||
@@ -1888,6 +1891,9 @@ static void str_mut_hold(Compiler *c, const int *argv, int argc, int i, int as_i
   buf_puts(b, " ");
   o->t = hold_operand(c, n, boxed ? TY_POLY : ty, boxed, ++g_tmp, 1, "", b);
   if (!boxed) view_bind_temp(n, o->t);
+}
+static void str_mut_hold(Compiler *c, const int *argv, int argc, int i, int as_index, StrMutOp *o, Buf *b) {
+  str_mut_hold_as(c, argv, argc, i, as_index, 0, o, b);
 }
 
 /* The sp_int index operand o reads as: an Integer as it is; any other
@@ -2094,7 +2100,7 @@ int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b) {
 
 /* bytesplice(start, len, str[, str_start, str_len]) and (range, str[,
    str_range]): the receiver's handle is taken before the arguments run,
-   every argument runs (str_mut_hold) before any converts, a nil receiver
+   every argument runs (str_mut_hold_as) before any converts, a nil receiver
    then raises NoMethodError, and the arguments convert as
    emit_bytesplice_in_place orders them, reading what the holds kept. The
    bytes are spliced in place (sp_String_splice_bytes): its span checks
@@ -2108,10 +2114,14 @@ int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b) {
   if (!bytesplice_form_ok(c, argv, argc)) return 0;
   int chk, t = str_mut_open(c, x, &chk, b), mark = g_n_argov;
   /* (a held boxed operand is bound too: the conversions below read the
-     node, and must read the value its hold kept, not run it again) */
+     node, and must read the value its hold kept, not run it again. Every
+     operand after the first is held even where it reads as pure, `idx[0]`
+     or `@n`: the conversions run in order after the holds, and one ahead of
+     it -- the String's #to_str, a boxed index's #to_int -- can change what
+     it reads, where Ruby has read it already.) */
   for (int i = 0; i < argc; i++) {
     StrMutOp o;
-    str_mut_hold(c, argv, argc, i, 0, &o, b);
+    str_mut_hold_as(c, argv, argc, i, 0, i > 0, &o, b);
     if (o.t >= 0 && o.boxed) view_bind_temp(o.node, o.t);
   }
   str_mut_nil_check(x, t, chk, b);

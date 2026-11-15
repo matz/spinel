@@ -2499,11 +2499,12 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
   }
   /* an Enumerator answers the Enumerable face (#3625) */
   if (strcmp(cn, "Enumerator") == 0) {
-    /* and its own methods. Not feed and +: a boxed Enumerator does not
-       run them yet. */
+    /* and its own methods. Not feed, + and with_object: a boxed
+       Enumerator does not run them yet (with_object runs only with a
+       block). */
     static const char *const enumrm[] = {
       "next", "next_values", "peek", "peek_values", "rewind", "with_index",
-      "with_object", NULL };
+      NULL };
     return sp_str_in_list(m, enumm) || sp_str_in_list(m, enumrm);
   }
   /* an IO handle in a boxed slot -- a File, a socket, $stderr, a stat --

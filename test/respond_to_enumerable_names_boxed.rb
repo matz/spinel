@@ -8,7 +8,7 @@ p names.map { |n| e.respond_to?(n) }
 xs = [[1, 2].each, (1..2), [1], { a: 1 }, "s"]
 xs.each { |x| p names.map { |n| x.respond_to?(n) } }
 # an Enumerator's own names
-own = %i[next peek rewind size with_index with_object next_values peek_values]
+own = %i[next peek rewind size with_index next_values peek_values]
 p own.map { |n| e.respond_to?(n) }
 p own.map { |n| xs.first.respond_to?(n) }
 # and the calls run

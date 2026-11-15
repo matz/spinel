@@ -19,3 +19,8 @@ false
 [:mm, :respond_to_missing?]
 true
 :nme
+[:sub, :respond_to_missing?, 2, nil]
+[:holder, :respond_to_missing?]
+[:plain_sub, :respond_to_missing?]
+false
+[:holder, :respond_to_missing?]

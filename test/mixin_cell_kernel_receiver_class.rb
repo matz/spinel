@@ -3,7 +3,8 @@
 # from there: a subclass reads its own cell (a class method's include run on
 # it), has Kernel for sure (an include in its body), or reads the cell of a
 # module it includes (a class method's include, or a conditional one, in the
-# module). The holder's own instances keep the holder's answer.
+# module). The holder's own instances keep the holder's answer. Where none
+# is set, a subclass's own method_missing answers.
 def show
   ::Kernel.p yield
 rescue ::NoMethodError
@@ -113,3 +114,27 @@ class SupSub < Sup
 end
 show { SupSub.new.to_s.start_with?("#<SupSub") }
 show { Sup.new.to_s }
+
+# a subclass's own method_missing answers where no cell is set, the holder's elsewhere
+class Miss < BasicObject
+  def self.mix = include(::Kernel)
+  def method_missing(n, *a) = [:holder, n]
+  def t = respond_to_missing?(:x, false)
+end
+class MissSub < Miss
+  def method_missing(n, *a, &b) = [:sub, n, a.size, b ? b.call : nil]
+end
+class MissPlain < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+  def u = respond_to_missing?(:y, true)
+end
+class MissPlainSub < MissPlain
+  def method_missing(n, *a) = [:plain_sub, n]
+end
+show { MissSub.new.t }
+show { Miss.new.t }
+show { MissPlainSub.new.u }
+MissSub.mix
+show { MissSub.new.t }
+show { Miss.new.t }

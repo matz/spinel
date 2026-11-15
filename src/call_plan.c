@@ -1943,28 +1943,52 @@ static int ver_kern_self_test(Compiler *c, int cls, int ncells, int test) {
   free(is); free(own);
   return test;
 }
+/* `method_missing(:name, <call id's arguments>)` with the call's block, a copy of each (the call's own run only on the
+   other arm) */
+static int ver_kern_mm_call(Compiler *c, int id, const char *name) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int an = nt_ref(nt, id, "arguments"), nargs = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &nargs) : NULL;
+  int call = disp_forward_call(nt, "method_missing", 0, 0), margs = nt_new_node(nt, "ArgumentsNode"), sym = nt_new_node(nt, "SymbolNode");
+  int *mv = malloc(sizeof *mv * (size_t)(nargs + 1));
+  if (!mv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  comp_sym_intern(c, name);
+  nt_node_set_str(nt, sym, "value", name);
+  mv[0] = sym;
+  for (int k = 0; k < nargs; k++) mv[k + 1] = nt_clone_subtree(nt, av[k]);
+  nt_node_set_arr(nt, margs, "arguments", mv, nargs + 1);
+  nt_node_set_ref(nt, call, "arguments", margs);
+  if (nt_ref(nt, id, "block") >= 0) nt_node_set_ref(nt, call, "block", nt_clone_subtree(nt, nt_ref(nt, id, "block")));   /* (the call's block goes with it) */
+  free(mv);
+  return call;
+}
+static void ver_pin(Compiler *c, int node, int scope, int vis);
+/* The guard's arm where no cell is set, els the holder's (its method_missing mm, or the raise), where self may be of a
+   class below cls whose method_missing is another: `case when self.instance_of?(D) then method_missing(:name, ...)
+   ... else els end`, each call pinned to D's method_missing (ver_pin), which the holder's chain does not hold */
+static int ver_kern_self_mm(Compiler *c, int id, int cls, const char *name, int mm, int els) {
+  int nd = 0, n = 0;
+  const int *ds = comp_descendants(c, cls, &nd);
+  int *is = malloc(sizeof *is * (size_t)(nd > 0 ? nd : 1)), *call = malloc(sizeof *call * (size_t)(nd > 0 ? nd : 1));
+  if (!is || !call) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nd; i++) {
+    int dm = cplan_mm_method(c, -1, ds[i], 0);
+    if (dm < 0 || dm == mm || (is[n] = disp_self_class_is(c, ds[i])) < 0) continue;
+    call[n] = ver_kern_mm_call(c, id, name);
+    ver_pin(c, call[n++], dm, 0);
+  }
+  if (n) els = disp_case((NodeTable *)c->nt, is, call, n, els);
+  free(is); free(call);
+  return els;
+}
 static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int how, const int *pm) {
   NodeTable *nt = (NodeTable *)c->nt;
   int base = nt->count, par = pm ? pm[id] : -1;
   VerIds cells;
   if (!ver_kern_cells(c, cls, &cells) || par < 0) { free(cells.v); return; }
-  int an = nt_ref(nt, id, "arguments"), nargs = 0, els;
+  int an = nt_ref(nt, id, "arguments"), nargs = 0, els, mm = how != 2 ? cplan_mm_method(c, -1, cls, 0) : -1;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &nargs) : NULL;
-  if (how != 2 && cplan_mm_method(c, -1, cls, 0) >= 0) {
-    /* (a class with a method_missing of its own: it answers the call where no cell is set, with a copy of the call's operands) */
-    int call = disp_forward_call(nt, "method_missing", 0, 0), margs = nt_new_node(nt, "ArgumentsNode"), sym = nt_new_node(nt, "SymbolNode");
-    int *mv = malloc(sizeof *mv * (size_t)(nargs + 1));
-    if (!mv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    comp_sym_intern(c, name);
-    nt_node_set_str(nt, sym, "value", name);
-    mv[0] = sym;
-    for (int k = 0; k < nargs; k++) mv[k + 1] = nt_clone_subtree(nt, av[k]);
-    nt_node_set_arr(nt, margs, "arguments", mv, nargs + 1);
-    nt_node_set_ref(nt, call, "arguments", margs);
-    if (nt_ref(nt, id, "block") >= 0) nt_node_set_ref(nt, call, "block", nt_clone_subtree(nt, nt_ref(nt, id, "block")));   /* (the call's block goes with it) */
-    free(mv);
-    els = call;
-  }
+  if (mm >= 0) els = ver_kern_mm_call(c, id, name);   /* (a class with a method_missing of its own answers the call where no cell is set) */
   else {
     /* the call's operands that run code are evaluated, as CRuby evaluates them before it finds no method, ahead of the raise
        (a copy of each: the call's own run only on the other arm) */
@@ -1975,6 +1999,7 @@ static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int
     els = nops ? disp_ahead(nt, ops, nops, raise) : raise;
     free(ops);
   }
+  if (how != 2) els = ver_kern_self_mm(c, id, cls, name, mm, els);
   int ifn = disp_choose(nt, ver_kern_self_test(c, cls, cells.n, ver_kern_test(c, &cells)), id, els);
   nt_replace_child(nt, par, id, ifn);
   comp_grow_node_arrays(c);
@@ -2165,6 +2190,13 @@ static int ct_pin_of(const Compiler *c, int id) {
 static int ct_pin_for(const Compiler *c, int id, const char *name) {
   const char *own = nt_str(c->nt, id, "name");
   return own && sp_streq(own, name) ? ct_pin_of(c, id) : -1;
+}
+/* ...a pin of call id to a method of a class below cls, named name, which a lookup on cls's chain does not find: a
+   blank slate's Kernel guard calls a subclass's own method_missing where self is of that class (ver_kern_self_mm) */
+static int ct_pin_below(Compiler *c, int id, int cls, const char *name) {
+  int pin = id >= 0 && cls >= 0 ? ct_pin_of(c, id) : -1;
+  const Scope *s = pin >= 0 ? &c->scopes[pin] : NULL;
+  return s && !s->is_cmethod && s->class_id >= 0 && s->name && sp_streq(s->name, name) && is_descendant(c, s->class_id, cls) ? pin : -1;
 }
 int cplan_pinned_vis(const Compiler *c, int id) {
   const struct VerPin *p = ct_pin_find(c, id);
@@ -4145,6 +4177,10 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
          the tables give: an accessor has no method scope, so the record's
          proof is asked here, where the call runs before every version) */
       if (ml->kind == ML_NONE && (flags & CT_REACH) && id >= 0 && ct_before_versions(c, id, cls, name, flags, -1)) ml->why = MLW_RECORD;
+      if ((pin = ct_pin_below(c, id, cls, name)) >= 0) {
+        *ml = (MethodLookup){ .kind = ML_METHOD, .def_class = c->scopes[pin].class_id };
+        mi = pin;
+      }
     }
     else if (ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
       ml->kind = ML_TABLE;

@@ -16727,6 +16727,7 @@ int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, i
   int em = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode");
   int es = nt_new_node(nt, "EmbeddedStatementsNode"), self = nt_new_node(nt, "SelfNode");
   int who = inst ? fwd_new_call(nt, self, "class", -1) : self;
+  if (inst) nt_mark_builtin_call(nt, who);   /* (the class the object is: a blank slate has no method `class`, and a program's own `class` does not name it) */
   nt_node_set_str(nt, hd, "unescaped", head);
   nt_node_set_str(nt, hd, "content", head);
   nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, who));

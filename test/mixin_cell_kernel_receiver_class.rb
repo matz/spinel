@@ -4,7 +4,8 @@
 # it), has Kernel for sure (an include in its body), or reads the cell of a
 # module it includes (a class method's include, or a conditional one, in the
 # module). The holder's own instances keep the holder's answer. Where none
-# is set, a subclass's own method_missing answers.
+# is set, a subclass's own method_missing answers, and the NoMethodError
+# names the receiver's class, as a version entry's does.
 def show
   ::Kernel.p yield
 rescue ::NoMethodError
@@ -138,3 +139,20 @@ show { MissPlainSub.new.u }
 MissSub.mix
 show { MissSub.new.t }
 show { Miss.new.t }
+
+# the NoMethodError names the receiver's class
+class Named < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class NamedSub < Named; end
+begin; NamedSub.new.t; rescue ::NoMethodError => e; ::Kernel.p [e.message, e.name]; end
+begin; Named.new.t; rescue ::NoMethodError => e; ::Kernel.p e.message; end
+class NamedDef < BasicObject
+  if ::ARGV.size == 9
+    def respond_to_missing?(n, p = false) = true
+  end
+  def t = respond_to_missing?(:x, false)
+end
+class NamedDefSub < NamedDef; end
+begin; NamedDefSub.new.t; rescue ::NoMethodError => e; ::Kernel.p e.message; end

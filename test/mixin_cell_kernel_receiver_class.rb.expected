@@ -24,3 +24,6 @@ true
 [:plain_sub, :respond_to_missing?]
 false
 [:holder, :respond_to_missing?]
+["undefined method 'respond_to_missing?' for an instance of NamedSub", :respond_to_missing?]
+"undefined method 'respond_to_missing?' for an instance of Named"
+"undefined method 'respond_to_missing?' for an instance of NamedDefSub"

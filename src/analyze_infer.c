@@ -4836,6 +4836,10 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
           if (u && (sp_streq(u, "nanosecond") || sp_streq(u, "microsecond") ||
                     sp_streq(u, "millisecond") || sp_streq(u, "second"))) { *out = TY_INT; return 1; }
         }
+        /* a unit only the run time knows gives an Integer or a Float by
+           its value (sp_process_clock_dyn) */
+        if (argc == 2 && nt_kind(nt, argv[1]) != NK_SymbolNode &&
+            nt_kind(nt, argv[1]) != NK_NilNode) { *out = TY_POLY; return 1; }
         { *out = TY_FLOAT; return 1; }
       }
     }

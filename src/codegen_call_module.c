@@ -1375,6 +1375,19 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       const char *unit = NULL;
       if (argc >= 2 && nt_kind(nt, argv[1]) == NK_SymbolNode)
         unit = nt_str(nt, argv[1], "value");
+      /* a unit that is not a Symbol literal (a local, a keyword hash, a
+         String) is judged at run time: the clock id runs first, then the
+         unit; the result is boxed, an Integer or a Float by the unit */
+      if (argc == 2 && !unit && nt_kind(nt, argv[1]) != NK_NilNode) {
+        int t = ++g_tmp;
+        buf_printf(b, "({ sp_int _clk%d = ", t);
+        if (!emit_clock_id(c, argv[0], b)) emit_int_expr(c, argv[0], b);
+        buf_printf(b, "; sp_RbVal _clu%d = ", t);
+        emit_boxed(c, argv[1], b);
+        buf_printf(b, "; sp_process_clock_dyn(_clk%d, _clu%d, %d); })", t, t,
+                   sp_streq(name, "clock_getres") ? 1 : 0);
+        return 1;
+      }
       /* an unknown literal unit is CRuby's ArgumentError, not a silent
          float_second (#2727) */
       if (unit && !sp_streq(unit, "nanosecond") && !sp_streq(unit, "microsecond") &&

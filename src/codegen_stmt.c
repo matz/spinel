@@ -22800,6 +22800,20 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
   NodeKind ty_k = nt_kind(nt, id);
   if (!ty) unsupported(c, id, "statement (no type)");
 
+  /* A statement in parentheses whose last statement jumps (`(return v) if
+     c`, `(break) if i == 3`, a ternary's `(return v)` arm): nothing reads
+     the parentheses' value, so its statements run as the statements they
+     are. As an expression, the return had no place to be emitted. */
+  if (ty_k == NK_ParenthesesNode) {
+    int pb = nt_ref(nt, id, "body"), pn = 0;
+    const int *ps = pb >= 0 && nt_kind(nt, pb) == NK_StatementsNode ? nt_arr(nt, pb, "body", &pn) : NULL;
+    NodeKind lk = pn > 0 ? nt_kind(nt, ps[pn - 1]) : NK_NilNode;
+    if (lk == NK_ReturnNode || lk == NK_BreakNode || lk == NK_NextNode || lk == NK_RedoNode || lk == NK_RetryNode) {
+      for (int i = 0; i < pn; i++) emit_stmt(c, ps[i], b, indent);
+      return;
+    }
+  }
+
   /* `y << v` / `y.yield(v)` inside an Enumerator.new generator lowers to a
      Fiber.yield. Intercept here so the statement-level `<<` mutation fast path
      does not treat the yielder as an array; emit_expr routes through emit_call's

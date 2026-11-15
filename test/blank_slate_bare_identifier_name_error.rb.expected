@@ -1,0 +1,4 @@
+undefined local variable or method 'hello' for an instance of Blank
+undefined method 'hello' for an instance of Blank
+[NameError, "undefined local variable or method 'nope' for an instance of Blank2", :nope]
+[NoMethodError, "undefined method 'nope' for an instance of Blank2", :nope]

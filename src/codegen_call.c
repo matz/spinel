@@ -23659,7 +23659,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     int bid = bn ? builtin_class_id(bn) : 0;
     if (bid && comp_builtin_class_named(c, bn) < 0) {
       int mod = is_builtin_module_name(bn);
-      if (cplan_class_value_answers(c, vrecv, vnm) || class_value_builtin_answers(c, vnm, !mod) ||
+      if (cplan_class_value_answers(c, id, vrecv, vnm) || class_value_builtin_answers(c, vnm, !mod) ||
           object_reopen_class_value_owns(c, id, oci, vnm, 0, mod ? -3 : -2)) return 0;
       snprintf(cvname, sizeof cvname, "%s %s", mod ? "module" : "class", bn);
       cname = cvname; named = 1;
@@ -23669,7 +23669,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
        methods ahead of Object's: `class Time; def foo; end` leaves Time.now
        Time's, beside a top-level `def now`) */
     else if (call_target(c, id, ci, vnm, CT_CMETHOD, NULL) >= 0 || object_reopen_class_value_owns(c, id, oci, vnm, 0, ci) ||
-             module_ffi_or_native_owns(c, ci, vnm) || (c->classes[ci].is_builtin_const && cplan_class_value_answers(c, vrecv, vnm)))
+             module_ffi_or_native_owns(c, ci, vnm) || (c->classes[ci].is_builtin_const && cplan_class_value_answers(c, id, vrecv, vnm)))
       return 0;
     else {
     /* a class value answers Class's and Module's public methods (K.name)

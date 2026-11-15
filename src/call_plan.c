@@ -260,13 +260,18 @@ static const char *cplan_builtin_name_of(Compiler *c, int cid) {
    included (`class File; end`, or one in Object's body), unless it names a
    class of the program's own (a nested `Foo::File`), which only Class's and
    Module's methods precede. */
-int cplan_class_value_answers(Compiler *c, int recv, const char *name) {
+int cplan_class_value_answers(Compiler *c, int id, int recv, const char *name) {
   const NodeTable *nt = c->nt;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   int named = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
   const char *bn = rk == NK_ConstantReadNode || (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0) ? key_name(c, recv) : NULL;
   int ci = named ? const_node_class_index(c, recv) : -1;
   int own = ci >= 0 && !(c->classes[ci].is_builtin_const && !comp_class_in_namespace(c, ci));
+  /* a singleton reader or writer of the named class (`class << self; attr_reader`, singleton_class.attr_*, its
+     ancestors' included, an alias of one resolved, one an alias shadows not): no scope the plan finds, and it
+     answers ahead of the top level's def */
+  char slot[256];
+  if (own && cplan_sg_accessor(c, id, ci, name, slot, sizeof slot) != CP_SG_NONE) return 1;
   if (own || !bn || !(is_builtin_class_name(bn) || is_builtin_module_const_name(bn)))
     return (!bn && !own && builtin_cmethod_known_any(name)) || core_class_value_answers("Class#", name) || core_class_value_answers("Module#", name);
   /* (a module of the table with no class id, Process or GC, has its singleton methods in the arity rows) */
@@ -1287,7 +1292,8 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   const char *bn = rt == TY_BOOL ? "TrueClass" : bcls >= 0 ? core_class_name(bcls) : NULL;
   /* (not a String, Integer or Float that may be nil, where NilClass has the
      name too: the boxed dispatch, cplan_poly_sub, picks by the value) */
-  if (bn && !(rt == TY_CLASS && cplan_class_value_answers(c, recv, name)) && !cplan_nil_scalar_reach(c, id))
+  /* (a singleton accessor of a class answers its name ahead of the top level's def: it is no scope) */
+  if (bn && !(rt == TY_CLASS && cplan_class_value_answers(c, id, recv, name)) && !cplan_nil_scalar_reach(c, id))
     cplan_root_reopen(c, id, name, bn, CORE_OBJECT, p);
 }
 

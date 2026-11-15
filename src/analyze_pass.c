@@ -21005,7 +21005,7 @@ static void cr_collect_implied(Compiler *c, const NodeTable *nt, int id, char **
       ic_record(c, "*", cause);
     }
     for (int i = 0; i < nn; i++)
-      if (!is_definition_hook_name(names[i].name) && !is_hook_protocol_name(names[i].name))
+      if ((names[i].roles & BCR_HANDED) && !is_definition_hook_name(names[i].name) && !is_hook_protocol_name(names[i].name))
         cr_mark_implied(c, out, n, cap, names[i].name, 0, g_dump_implicit ? cause : NULL);
     return;
   }

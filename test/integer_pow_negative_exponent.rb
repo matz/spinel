@@ -1,6 +1,6 @@
 # Integer ** with a literal negative exponent yields a Rational (CRuby
-# semantics), typed statically. A statically int-typed runtime exponent keeps
-# the Integer result and raises on a negative value (see limitations.md).
+# semantics), typed statically; a run-time exponent that may be negative is
+# boxed and answered by its sign (int_pow_runtime_negative_exponent.rb).
 # Integer#pow(negative, mod) raises RangeError with CRuby's message.
 puts 2 ** 10
 puts 0 ** 0

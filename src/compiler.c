@@ -170,6 +170,8 @@ Compiler *comp_new(const NodeTable *nt) {
   c->empty_arr_recv = calloc((size_t)n, 1);
   c->empty_hash_recv = calloc((size_t)n, 1);
   c->empty_hash_arg = calloc((size_t)n, 1);
+  c->pow_signed = calloc((size_t)n, 1);
+  if (!c->pow_signed) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->store_misfit_arg = calloc((size_t)n, 1);
   c->ivar_widen_src = calloc((size_t)n, 1);
   c->hash_want = calloc((size_t)n, sizeof(TyKind));
@@ -494,6 +496,8 @@ void comp_grow_node_arrays(Compiler *c) {
   c->empty_arr_recv = realloc((char *)c->empty_arr_recv, (size_t)n);
   c->empty_hash_recv = realloc((char *)c->empty_hash_recv, (size_t)n);
   c->empty_hash_arg = realloc((char *)c->empty_hash_arg, (size_t)n);
+  c->pow_signed = realloc((char *)c->pow_signed, (size_t)n);
+  if (!c->pow_signed) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->store_misfit_arg = realloc(c->store_misfit_arg, (size_t)n);
   c->ivar_widen_src = realloc(c->ivar_widen_src, (size_t)n);
   c->hash_want = realloc((TyKind *)c->hash_want, sizeof(TyKind) * (size_t)n);
@@ -505,7 +509,7 @@ void comp_grow_node_arrays(Compiler *c) {
   for (int i = c->node_cap; i < n; i++) c->bop_inf[i] = NULL;
   c->ucall_inf = realloc(c->ucall_inf, sizeof *c->ucall_inf * (size_t)n);
   memset(c->ucall_inf + c->node_cap, 0, sizeof *c->ucall_inf * (size_t)(n - c->node_cap));
-  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; ((unsigned char *)c->strbuf_handle_demand)[i] = 0; c->strbuf_read_raw[i] = 0; ((unsigned char *)c->poly_strbuf_lift)[i] = 0; ((unsigned char *)c->nil_tested)[i] = 0; ((unsigned char *)c->head_held)[i] = 0; ((unsigned char *)c->value_discarded)[i] = 0; ((unsigned char *)c->str_shadow)[i] = 0; }
+  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; ((char *)c->pow_signed)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; ((unsigned char *)c->strbuf_handle_demand)[i] = 0; c->strbuf_read_raw[i] = 0; ((unsigned char *)c->poly_strbuf_lift)[i] = 0; ((unsigned char *)c->nil_tested)[i] = 0; ((unsigned char *)c->head_held)[i] = 0; ((unsigned char *)c->value_discarded)[i] = 0; ((unsigned char *)c->str_shadow)[i] = 0; }
   c->node_cap = n;
 }
 
@@ -692,6 +696,7 @@ void comp_free(Compiler *c) {
   free(c->autoloads); free(c->auto_at);
   free((char *)c->empty_arr_recv);
   free((char *)c->empty_hash_recv);
+  free((char *)c->pow_signed);
   free(c->store_misfit_arg);
   free(c->ivar_widen_src);
   free((TyKind *)c->hash_want);
@@ -1870,7 +1875,7 @@ static char **cmc_name; static unsigned char *cmc_cm; static int **cmc_ans;
 static int **cmc_resp; static int *cmc_nresp;   /* per slot: the responders (comp_name_responders), -1 unbuilt */
 static int cmc_cap = 0, cmc_n = 0;
 static unsigned cmc_epoch;   /* bumped when a slot's index can move: a clear, a growth */
-static const Compiler *cmc_c; static unsigned cmc_gen, cmc_shape_at;
+static const Compiler *cmc_c; static unsigned cmc_gen, cmc_shape_at, cmc_table_at;
 static int cmc_nscopes = -1, cmc_nclasses = -1;
 static void cmc_clear(void) {
   for (int i = 0; i < cmc_cap; i++) if (cmc_name && cmc_name[i]) { free(cmc_name[i]); free(cmc_ans[i]); free(cmc_resp[i]); }
@@ -1878,14 +1883,17 @@ static void cmc_clear(void) {
   cmc_name = NULL; cmc_cm = NULL; cmc_ans = NULL; cmc_resp = NULL; cmc_nresp = NULL; cmc_cap = cmc_n = 0;
   cmc_epoch++;
 }
+/* (is_cm is 0 the instance side, 1 the class side, 2 a capture's, and 3 and 4
+   the reader and writer chains of accessor_chain; a reader or a writer added
+   (comp_table_gen) drops the answers too.) */
 /* The slot of (name, is_cm), made when missing, or -1 when the memo cannot
    be trusted now. */
 static int cmc_slot_idx(Compiler *c, const char *name, int is_cm) {
   if (!sm_frozen || mv_n || !name || c->nclasses <= 0) return -1;
   if (cmc_c != c || cmc_gen != sm_gen || cmc_shape_at != cmc_shape ||
-      cmc_nscopes != c->nscopes || cmc_nclasses != c->nclasses) {
+      cmc_nscopes != c->nscopes || cmc_nclasses != c->nclasses || cmc_table_at != comp_table_gen) {
     cmc_clear();
-    cmc_c = c; cmc_gen = sm_gen; cmc_shape_at = cmc_shape;
+    cmc_c = c; cmc_gen = sm_gen; cmc_shape_at = cmc_shape; cmc_table_at = comp_table_gen;
     cmc_nscopes = c->nscopes; cmc_nclasses = c->nclasses;
   }
   if (cmc_n * 2 >= cmc_cap) {
@@ -2266,14 +2274,6 @@ int comp_name_responder(Compiler *c, int cls, const char *name, unsigned side) {
          : cm ? comp_cmethod_in_chain(c, cls, name, NULL) : comp_method_in_chain(c, cls, name, NULL);
   mtab_leave(c);
   return mi;
-}
-
-/* See compiler.h. */
-int comp_class_answers(Compiler *c, int k, const char *name) {
-  mtab_enter(c);
-  int ans = comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL);
-  mtab_leave(c);
-  return ans;
 }
 
 /* See compiler.h. */
@@ -3135,12 +3135,12 @@ unsigned comp_table_gen = 0;   /* bumped when a reader, writer or alias table gr
 void comp_add_reader(ClassInfo *ci, const char *name) {
   comp_table_gen++;
   name_add_ix(&ci->readers, &ci->nreaders, &ci->creaders, &ci->readers_ix, name);
-  comp_touch_class(ci->idx);
+  comp_touch_global_r(6);    /* a new reader is a change of the table (accessor_chain) */
 }
 void comp_add_writer(ClassInfo *ci, const char *name) {
   comp_table_gen++;
   name_add_ix(&ci->writers, &ci->nwriters, &ci->cwriters, &ci->writers_ix, name);
-  comp_touch_class(ci->idx);
+  comp_touch_global_r(6);    /* a new writer is a change of the table (accessor_chain) */
 }
 int comp_is_reader(ClassInfo *ci, const char *name) { return name_idx_find(&ci->readers_ix, ci->readers, ci->nreaders, name) >= 0; }
 void comp_add_own_reader(ClassInfo *ci, const char *name) {
@@ -3322,39 +3322,6 @@ void comp_add_alias_from(ClassInfo *ci, const char *new_name, const char *old_na
 
 void comp_add_alias(ClassInfo *ci, const char *new_name, const char *old_name) {
   comp_add_alias_from(ci, new_name, old_name, -1);
-}
-
-/* An attribute and an explicit method can both own one name. CRuby's
-   attr_accessor defines an ordinary method, so a `def` at an equal-or-more-
-   derived class replaces it: the more-derived definition wins, and a same-class
-   tie goes to the method. Every emission site used to compose this policy from
-   the chain queries itself, and the sites that composed only half of it emitted
-   a call to the override typed as the attribute, or a switch with no arm for
-   the method at all (#3907, #3909, #3910). */
-int comp_resolve_member(Compiler *c, int class_id, const char *name, int want_write,
-                        int *def_class, int *method_index) {
-  if (def_class) *def_class = -1;
-  if (method_index) *method_index = -1;
-  if (!name || class_id < 0 || class_id >= c->nclasses) return SP_MEMBER_NONE;
-  char mbuf[300];
-  const char *mname = name;
-  if (want_write) { snprintf(mbuf, sizeof mbuf, "%s=", name); mname = mbuf; }
-  int adc = -1, mdc = -1;
-  int has_attr = want_write ? comp_writer_in_chain(c, class_id, name, &adc)
-                            : comp_reader_in_chain(c, class_id, name, &adc);
-  int mi = comp_method_in_chain(c, class_id, mname, &mdc);
-  if (mi < 0 && !has_attr) return SP_MEMBER_NONE;
-  int attr_wins = has_attr;
-  if (has_attr && mi >= 0) {
-    for (int k = class_id; k >= 0; k = c->classes[k].parent) {
-      if (k == mdc) { attr_wins = 0; break; }
-      if (k == adc) { attr_wins = 1; break; }
-    }
-  }
-  if (attr_wins) { if (def_class) *def_class = adc; return SP_MEMBER_ATTR; }
-  if (def_class) *def_class = mdc;
-  if (method_index) *method_index = mi;
-  return SP_MEMBER_METHOD;
 }
 
 /* An instance method's lookup reads the instance aliases only: a singleton
@@ -3706,16 +3673,46 @@ int comp_native_method_find_typed(Compiler *c, int class_id, const char *name, i
   return rest_match >= 0 ? rest_match : loose;
 }
 
-int comp_reader_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
-  if (g_method_table_check) mtab_read(c, MT_READER_IN_CHAIN, class_id, MTS_INST, name);
-  name = comp_resolve_alias(c, class_id, name);
-  /* (every class asked, a miss included: a reader added to one of them
-     later changes the answer) */
-  for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent) {
-    IMEMO_DEP_CLASS(cid);
-    if (comp_is_reader(&c->classes[cid], name)) { if (def_class) *def_class = cid; return 1; }
+/* Can any class of class_id's chain answer an accessor ask? A reader (a
+   writer's ask: a writer) is found only in a class that lists one; a name
+   resolves through an alias only where a class of the chain has aliases or
+   brings a module (whose aliases it resolves through). A chain with none
+   of these answers no ask, so the ask touches no memo: most calls of a
+   program that has few accessors. */
+static int accessor_chain_possible(const Compiler *c, int class_id, int writer) {
+  for (int k = class_id; k >= 0; k = c->classes[k].parent) {
+    const ClassInfo *ci = &c->classes[k];
+    if ((writer ? ci->nwriters : ci->nreaders) || ci->naliases || ci->nincluded_mods || ci->nprepended_mods) return 1;
   }
   return 0;
+}
+/* The nearest class of class_id's chain that declares an attribute reader
+   (writer: `writer`) of `name`, and whether any does. A reader's name is
+   followed through the aliases (`alias loc location`); a writer's is the
+   attribute's base, and an alias of it is the reader's: `alias to_s name`
+   defines no `to_s=`, so it is not followed there. The answer is the table's
+   alone, kept as chain_lookup's is, for every class asked (a call asks it
+   at every instance call, and the walk resolved the aliases and read every
+   class of a deep chain each time). A reader or writer added moves the
+   program's version (comp_add_reader), as a new method's slot does, so an
+   inference that asked keeps no per-class dependency on the chain. */
+static int accessor_chain(Compiler *c, int class_id, const char *name, int *def_class, int writer) {
+  if (class_id >= 0 && class_id < c->nclasses && !accessor_chain_possible(c, class_id, writer)) return 0;
+  int *a = class_id >= 0 && class_id < c->nclasses ? cmc_slot(c, name, writer ? 4 : 3) : NULL;
+  int found = 0, dc = -1;
+  if (a && a[2 * class_id] != -2) { found = a[2 * class_id]; dc = a[2 * class_id + 1]; }
+  else {
+    const char *rn = writer ? name : comp_resolve_alias(c, class_id, name);
+    for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent)
+      if (writer ? comp_is_writer(&c->classes[cid], rn) : comp_is_reader(&c->classes[cid], rn)) { found = 1; dc = cid; break; }
+    if (a) { a[2 * class_id] = found; a[2 * class_id + 1] = dc; }
+  }
+  if (found && def_class) *def_class = dc;
+  return found;
+}
+int comp_reader_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
+  if (g_method_table_check) mtab_read(c, MT_READER_IN_CHAIN, class_id, MTS_INST, name);
+  return accessor_chain(c, class_id, name, def_class, 0);
 }
 /* Whether a strict subclass of class_id answers `name` with a method or a
    reader of its own chain: a slot typed class_id may hold that subclass,
@@ -3734,11 +3731,7 @@ int comp_subclass_answers(Compiler *c, int class_id, const char *name) {
 }
 int comp_writer_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
   if (g_method_table_check) mtab_read(c, MT_WRITER_IN_CHAIN, class_id, MTS_INST, name);
-  /* `name` is the attribute's base, and an alias of it is the reader's:
-     `alias to_s name` defines no `to_s=`, so it is not followed here */
-  for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent)
-    if (comp_is_writer(&c->classes[cid], name)) { if (def_class) *def_class = cid; return 1; }
-  return 0;
+  return accessor_chain(c, class_id, name, def_class, 1);
 }
 
 /* Whether the program answers `name` at one level of the lookup, class or
@@ -5299,7 +5292,7 @@ int class_is_blank_slate(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
     int sc = class_def_super(c->nt, c->classes[k].def_node);
     const char *sn = sc >= 0 ? key_name(c, sc) : NULL;
-    if (sn && sp_streq(sn, "BasicObject")) return 1;
+    if (sn && is_basic_object_name(sn)) return 1;
     if (sn && c->classes[k].parent < 0) return 0;   /* rooted at another builtin */
   }
   return 0;
@@ -5340,6 +5333,65 @@ int class_lacks_kernel(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent)
     if (def_body_includes_kernel(c, c->classes[k].name, 0)) return 0;
   return 1;
+}
+
+/* class_lacks_kernel for the class named `nm`, before the class table exists
+   (the lowerings ahead of it, which read the class nodes). The name must
+   name one class: every node of it (a reopen is one) sits in the same
+   enclosing class or module node, none is a module, and none is written
+   under another constant (`class P::Q`, whose namespace this does not
+   resolve); a name two scopes carry (P::Q and Q) is not known to lack
+   Kernel. Its superclass, as the first node that writes one gives it, is
+   BasicObject written as such (bare only where no class or module of that
+   name is declared below the top level, which a bare read in its scope
+   would find: basic_object_shadowed), or a program class that lacks Kernel
+   in turn; and no body on the chain includes Kernel. A class node named
+   BasicObject is the root itself. */
+/* Is a class or module named BasicObject declared below the top level (in a
+   class or module body, or as `P::BasicObject`)? */
+static int basic_object_shadowed(Compiler *c, const int *par) {
+  const NodeTable *nt = c->nt;
+  for (int q = 0; q < 2; q++)
+    NT_FOREACH_KIND(nt, q ? NK_ModuleNode : NK_ClassNode, id) {
+      int cp = nt_ref(nt, id, "constant_path");
+      if (!is_basic_object_name(key_name(c, cp))) continue;
+      if (nt_kind(nt, cp) == NK_ConstantPathNode && nt_ref(nt, cp, "parent") >= 0) return 1;
+      for (int up = par[id]; up >= 0; up = par[up])
+        if (nt_kind(nt, up) == NK_ClassNode || nt_kind(nt, up) == NK_ModuleNode) return 1;
+    }
+  return 0;
+}
+static int class_name_lacks_kernel(Compiler *c, const int *par, const char *nm, int hop) {
+  const NodeTable *nt = c->nt;
+  int sup = -1, encl = -2, found = 0;
+  if (hop > 16 || !nm || def_body_includes_kernel(c, nm, 0)) return 0;
+  for (int q = 0; q < 2; q++)
+    NT_FOREACH_KIND(nt, q ? NK_ModuleNode : NK_ClassNode, id) {
+      int cp = nt_ref(nt, id, "constant_path");
+      const char *cn = key_name(c, cp);
+      if (!cn || !sp_streq(cn, nm)) continue;
+      if (nt_kind(nt, cp) == NK_ConstantPathNode && nt_ref(nt, cp, "parent") >= 0) return 0;
+      int up = par[id];
+      while (up >= 0 && nt_kind(nt, up) != NK_ClassNode && nt_kind(nt, up) != NK_ModuleNode) up = par[up];
+      if (q || (found && up != encl)) return 0;
+      if (sup < 0) sup = class_def_super(nt, id);
+      encl = up;
+      found = 1;
+    }
+  if (!found) return 0;
+  if (is_basic_object_name(nm)) return encl < 0;
+  if (sup < 0) return 0;
+  NodeKind sk = nt_kind(nt, sup);
+  if (sk == NK_ConstantPathNode && nt_ref(nt, sup, "parent") >= 0) return 0;
+  if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) return 0;
+  const char *sn = key_name(c, sup);
+  if (sn && is_basic_object_name(sn))
+    return (sk == NK_ConstantPathNode || !basic_object_shadowed(c, par)) && !def_body_includes_kernel(c, sn, 0);
+  return sn && class_name_lacks_kernel(c, par, sn, hop + 1);
+}
+int class_node_lacks_kernel(Compiler *c, int cnode) {
+  if (cnode < 0 || nt_kind(c->nt, cnode) != NK_ClassNode) return 0;
+  return class_name_lacks_kernel(c, comp_parent_map(c), key_name(c, nt_ref(c->nt, cnode, "constant_path")), 0);
 }
 
 /* Find a method named `name` in any top-level included module.

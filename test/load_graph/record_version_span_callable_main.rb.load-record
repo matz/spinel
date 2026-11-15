@@ -55,7 +55,7 @@ const Pod: write#10
 Pod#ring: def#11 runs=#31 def#30 runs=#31 end=yes
 const LATER: write#12
 const MAKE: write#14
-versions Bell#ring: def#4..#24 seen=unknown, def#24..end seen=def#24; 9 of the name
-versions Drum#ring: def#6..#26 seen=unknown, def#26..end seen=def#26; 9 of the name
-versions Gong#ring: def#8..#28 seen=unknown, def#28..end seen=def#28; 9 of the name
+versions Bell#ring: def#4..#24 seen=def#4, def#24..end seen=def#24; 9 of the name
+versions Drum#ring: def#6..#26 seen=def#6, def#26..end seen=def#26; 9 of the name
+versions Gong#ring: def#8..#28 seen=def#8, def#28..end seen=def#28; 9 of the name
 versions Pod#ring: def#11..#30 seen=def#11 idle, def#30..end seen=def#30; 9 of the name

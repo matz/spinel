@@ -1186,6 +1186,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   g_exc_abort = exc_abort;
+  g_target_wasi = target_wasi;
 
   /* Base name for default output paths. */
   char basename[1024];

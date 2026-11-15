@@ -89,6 +89,7 @@ int an_rat_operand(Compiler *c, int n, int infer);
 int an_step_rat_bound(Compiler *c, int id, int infer);
 int an_range_step_rat(Compiler *c, int id, int infer);
 extern int g_exc_abort;   /* --exceptions=abort (src/main.c) */
+extern int g_target_wasi; /* --target=wasm32-wasi (src/main.c) */
 extern int g_gc_none;     /* --gc=none (src/main.c) */
 /* is a def's value (the Symbol it names) used? par: an_parent_map */
 int an_def_value_used(const NodeTable *nt, const int *par, int v);
@@ -492,6 +493,9 @@ int elab_method_replaced(Compiler *c, const char *name);
    do the methods its versions give have more than one visibility (a
    module's private one and a class's public one)? */
 int elab_method_vis_varies(Compiler *c, const char *name);
+/* Does the subtree at id write the variable nm of kind (a local, or a constant)? (codegen_stmt.c) */
+enum { VW_LOCAL, VW_CONST };
+int subtree_writes_var(Compiler *c, int id, const char *nm, int kind);
 /* does a call of `name` run, or open the window of the bodies around it,
    ahead of the first version of one of its histories, where the name is
    absent on that class and side? */
@@ -961,12 +965,14 @@ ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n);
    LrDef.absent), once the accessors are registered; each statement carries
    its NameError message ("alias_absent") for the emitter. */
 void elab_absent_aliases(Compiler *c);
-/* The class-side accessor versions of each history that ends in a def
-   (`class << self; attr_writer :cfg; end`, then `def self.cfg=`): a call
-   that runs while one is live runs the accessor, any other the def, so
-   each is a version of its own, a method register_attr_versions makes and
+/* The accessor versions of each history, on either side, that mixes
+   accessors and defs in either order (`class << self; attr_writer :cfg;
+   end`, then `def self.cfg=`; `def x`, then `attr_reader :x`): a call that
+   runs while one is live runs the accessor, any other the def, so each is
+   a version of its own, a method register_attr_versions makes and
    elab_attr_scope links to it (LrDef.scope); *n of them, the caller frees
-   the array. An accessor no def follows stays its class's slot alone. */
+   the array. An accessor of a history no def is in stays its class's slot
+   or field alone. */
 ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
 /* does class cls's own side hold such an accessor version of name? */
@@ -1236,6 +1242,8 @@ int nullable_int_value_raw(Compiler *c, int id);
 int nn_ivar_write_keeps_clear(Compiler *c, int id);
 /* `a[i]` on a pointer array proven to read within it (no nil past the end) */
 int an_elem_read_in_bounds(Compiler *c, int id);
+/* is the Integer expression `id` shown >= 0 by the nil-narrowing facts (a literal, a local the walk knew non-negative, `hi - lo` of ordered locals, a sum or product of such, abs, a builtin container's size)? */
+int an_int_nonneg(Compiler *c, int id);
 /* is position pos of a multiple assignment's value, read from a constant Array of a proven length, within it and no nil (a position from the end is not asked)? */
 int masgn_const_elem_in_range(Compiler *c, int value, long long pos);
 int scalar_nil_only_call(Compiler *c, int id, TyKind rt);

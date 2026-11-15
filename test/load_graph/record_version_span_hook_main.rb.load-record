@@ -76,5 +76,5 @@ const Host: write#18
 form #19 runs code
 Watch#tick: def#22 end=yes
 versions Bell#ring: def#5..#31 seen=unknown, def#31..end seen=def#31; 7 of the name
-versions Drum#ring: def#7..#33 seen=unknown, def#33..end seen=def#33; 7 of the name
+versions Drum#ring: def#7..#33 seen=def#7, def#33..end seen=def#33; 7 of the name
 versions Gong#ring: def#9..#35 seen=unknown, def#35..end seen=def#35; 7 of the name

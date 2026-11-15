@@ -28,3 +28,10 @@ def fwd(o, &b) = o.instance_exec(&b)
 def both(&b) = [fwd(FA.new, &b), fwd(FB.new, &b)]
 p both { |q = @a| [q, @b] }
 p both { |q = 5| [q, @b] }
+
+# a block's default reads each class's own ivar on a receiver that can be
+# either class (the body itself makes no self call and names no ivar)
+class PA; def initialize = (@a = 1); end
+class PB; def initialize = (@a = 2); end
+p([PA.new, PB.new].map { |o| o.instance_exec { |q = @a| q } })
+p([PA.new, PB.new].map { |o| o.instance_exec(7) { |q = @a| q } })

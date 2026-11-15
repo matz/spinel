@@ -376,7 +376,7 @@ static void iob_allocate(sp_IOBuffer *b, int64_t size, uint32_t flags, int flags
   b->size = size;
   if (size > 0) {
     b->data = (uint8_t *)calloc(1, (size_t)size);
-    if (!b->data) sp_oom_die();
+    if (!b->data) sp_raise_cls("IO::Buffer::AllocationError", "Could not allocate buffer!");
     sp_gc_payload_resize(b, 0, (size_t)size);
   }
 }

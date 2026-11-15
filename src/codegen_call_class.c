@@ -238,7 +238,7 @@ int respond_to_runtime_reaches(Compiler *c, TyKind rt) {
    priv when k's chain does not answer it and u is the first root with it. */
 static void object_reopen_responds_name(Compiler *c, int k, const int *roots, int u, const char *nm,
                                         Buf *pub, Buf *priv) {
-  if (k >= 0 && (comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_reader_in_chain(c, k, nm, NULL) ||
+  if (k >= 0 && (call_answers(c, -1, k, nm, 0, NULL) ||
                  comp_is_undeffed_in_chain(c, k, nm))) return;
   /* the first root that defines it answers (Object over Kernel) */
   for (int v = 0; v < u; v++) {
@@ -2015,6 +2015,39 @@ int attr_assign_slot(Compiler *c, int id, int *cid, int *iv) {
   snprintf(ivn, sizeof ivn, "@%s", base);
   *cid = defc < 0 ? ty_object_class(rt) : defc;
   *iv = comp_ivar_index(&c->classes[*cid], ivn);
+  return *iv >= 0;
+}
+
+/* The ivar slot of an attribute's `obj.x ||= v` or `obj.x &&= v` (node id)
+   that reads and stores the field itself: the reader and the writer are
+   both attr accessors the caller may call. Its class in *cid and ivar index
+   in *iv, or 0 for any other node: a half written out is called and one the
+   caller may not call raises (emit_call_or_write_via_methods), and a
+   receiver of no one class takes the two calls (desugar_call_or_write_reopen).
+   The write's value is what the field holds after it (the slot's String
+   too, under --share-strings: repr_write_share). The receiver's class is
+   read off its Repr's stored type, which is the node's type itself
+   (repr_of sets as_ty from comp_ntype and nothing else): the type the
+   write's emitter reads for the field it stores through, so the field
+   named here is that one. */
+int attr_orw_slot(Compiler *c, int id, int *cid, int *iv) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, id);
+  int recv = nt_ref(nt, id, "receiver");
+  const char *attr = nt_str(nt, id, "name");
+  if ((k != NK_CallOrWriteNode && k != NK_CallAndWriteNode) || recv < 0 || !attr || nt_ref(nt, id, "value") < 0) return 0;
+  TyKind rt = repr_of(c, recv).as_ty;
+  char wn[300], ivn[300];
+  if (!ty_is_object(rt) || (size_t)snprintf(wn, sizeof wn, "%s=", attr) >= sizeof wn) return 0;
+  int rc = ty_object_class(rt);
+  if (!call_attr_target(c, -1, rc, attr, 0, NULL) || !call_attr_target(c, -1, rc, attr, CT_WRITER, NULL))
+    return 0;
+  if (!nt_ignore_visibility(nt, id) && (method_vis_for_caller(c, id, rc, attr) != SP_VIS_PUBLIC ||
+                                        method_vis_for_caller(c, id, rc, wn) != SP_VIS_PUBLIC))
+    return 0;
+  snprintf(ivn, sizeof ivn, "@%s", attr);
+  *cid = rc;
+  *iv = comp_ivar_index(&c->classes[rc], ivn);
   return *iv >= 0;
 }
 
@@ -5499,21 +5532,29 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          names: the constructor below builds it, where this dispatch had arms
          only for the classes with a `self.new` of their own */
       if (sp_streq(name, "new") && anon_struct_recv_ci(c, recv) >= 0) goto skip_cls_cmethod9;
-      TyKind uret9 = TY_UNKNOWN; int uret_set9 = 0, splat9 = nt_argv_splat_count(nt, argv, argc);
+      TyKind uret9 = TY_UNKNOWN, wret9 = TY_UNKNOWN;
+      int uret_set9 = 0, nwrong9 = 0, splat9 = nt_argv_splat_count(nt, argv, argc);
       for (int k = 0; k < c->nclasses; k++) {
         if (!comp_cv_arm_class(c, k) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
         int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
         if (kmi < 0) continue;
+        TyKind kr = (TyKind)c->scopes[kmi].ret;
         /* Only the candidates this call could actually reach set the return
            type. One that cannot take this many arguments is not a possible
-           receiver here, so its return type is not part of the answer. */
-        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat9)) continue;
+           receiver here, so its return type is not part of the answer --
+           unless no candidate can take the call: then every arm raises, and
+           the call is typed as the methods it names, as the inference does
+           (infer_class_module_call). */
+        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat9)) {
+          wret9 = nwrong9++ == 0 || kr == wret9 ? kr : TY_POLY;
+          continue;
+        }
         ncand9++; defmi9 = kmi;
-        TyKind kr = (TyKind)c->scopes[kmi].ret;
         if (!uret_set9) { uret9 = kr; uret_set9 = 1; }
         else if (kr != uret9) uret9 = TY_POLY;
       }
-      if (ncand9 > 0) {
+      if (ncand9 == 0) uret9 = wret9;
+      if (ncand9 > 0 || nwrong9 > 0) {
         /* Every candidate must accept exactly this call's positional args (no
            block/yield). Different candidates may declare different param
            types, so emit_args_filled runs per arm against that method's

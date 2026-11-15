@@ -1,4 +1,5 @@
 #include "codegen_internal.h"
+#include "order_plan.h"
 static void emit_ivar_lhs_otext(Compiler *c, int cid, int iv, const char *ivn, const char *lhs, const char *otext, Buf *b);
 static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
 #include "repr.h"
@@ -1863,9 +1864,11 @@ int strbuf_bang_chain(Compiler *c, int v) {
   int args[32], base = str_alias_chain_base(c, v);
   return strbuf_chain_bang_base(c, v, base) && strbuf_chain_links_m(c, v, base, args, 1) > 0;
 }
-/* --share-strings: v (through parentheses) is an attribute assignment on a
-   handle, whose value is the one String it was handed (repr_write_share):
-   a leaf a handle route reads as that handle (emit_strbuf_write_handle). */
+/* --share-strings: v (through parentheses) is an attribute's write on a
+   handle (`o.x = s`, whose value is the one String it was handed, or
+   `o.x ||= s` and `o.x &&= s`, whose value is the String the field holds
+   after it: repr_write_share): a leaf a handle route reads as that handle
+   (emit_strbuf_write_handle). */
 /* ...on a receiver whose class is known only at run time? */
 static int strbuf_assign_boxed_recv(Compiler *c, int v) {
   int r = nt_ref(c->nt, nt_paren_single(c->nt, v), "receiver");
@@ -1874,7 +1877,8 @@ static int strbuf_assign_boxed_recv(Compiler *c, int v) {
 }
 int strbuf_assign_leaf(Compiler *c, int v) {
   v = nt_paren_single(c->nt, v);
-  return v >= 0 && nt_kind(c->nt, v) == NK_CallNode && repr_write_share(c, v);
+  NodeKind k = v >= 0 ? nt_kind(c->nt, v) : NK_NONE;
+  return (k == NK_CallNode || k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) && repr_write_share(c, v);
 }
 /* --share-strings: v (through parentheses) is `freeze` over a leaf, a chain
    over one or another such freeze, which answers that handle, frozen (as it
@@ -3856,7 +3860,11 @@ int emit_recv_route_handle(Compiler *c, int id, int recv, Buf *b) {
   /* (a held chain's shadow has none: its shim holds the handle and writes
      the shadow back, emit_held_self_answer_shim) */
   if (sb_shadowed_reader(c, nt_paren_single(c->nt, recv))) return 0;
+  /* (a head holds the expression a receiver's parentheses wrap, as
+     emit_bang_self_form's route form does: a call distributed over a
+     conditional's arms keeps an arm's own parentheses as its receiver) */
   int th = ran_first_handle(recv);
+  if (th < 0) th = ran_first_handle(nt_paren_single(c->nt, recv));
   if (th >= 0) { buf_printf(b, "_t%d", th); return 1; }
   /* a receiver a head ran into its bytes alone has no handle to give (the
      operand-order rewrite's trial binding has run nothing: the route runs
@@ -4876,7 +4884,7 @@ static int route_block_rebinds_base(Compiler *c, int v) {
     if (n == v && g_pre && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
         nt_paren_single(c->nt, nt_ref(nt, v, "receiver")) == base)
       continue;
-    if (blk >= 0 && subtree_writes_local(c, blk, nm)) return 1;
+    if (blk >= 0 && subtree_writes_var(c, blk, nm, VW_LOCAL)) return 1;
   }
   return 0;
 }
@@ -6496,26 +6504,49 @@ int emit_poly_op_assign(Compiler *c, const char *lval, const char *op, int v,
   return 1;
 }
 
-/* Whether the subtree at `id` assigns the local `nm`: a write, an
-   op-write or a multiple-assignment target by that name. */
-int subtree_writes_local(Compiler *c, int id, const char *nm) {
+/* Whether the subtree at `id` assigns the variable `nm` of `kind`: a
+   write, an or-write, an and-write, an op-write or a multiple-assignment
+   target of that name. A constant's path forms (`A::K = 1`, `::K += 1`,
+   `A::K, b = ...`) are the constant's kinds too: a path write's leaf is its
+   target's name, a path target's its own. */
+int subtree_writes_var(Compiler *c, int id, const char *nm, int kind) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;
-  const char *ty = nt_type(nt, id);
-  if (!ty) return 0;
-  if (!strncmp(ty, "LocalVariable", 13) && (strstr(ty, "Write") || strstr(ty, "Target"))) {
-    const char *wn = nt_str(nt, id, "name");
-    if (wn && sp_streq(wn, nm)) return 1;
+  switch (nt_kind(nt, id)) {
+    case NK_LocalVariableWriteNode: case NK_LocalVariableOrWriteNode: case NK_LocalVariableAndWriteNode:
+    case NK_LocalVariableOperatorWriteNode: case NK_LocalVariableTargetNode:
+      if (kind == VW_LOCAL) {
+        const char *wn = nt_str(nt, id, "name");
+        if (wn && sp_streq(wn, nm)) return 1;
+      }
+      break;
+    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+    case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
+      if (kind == VW_CONST) {
+        const char *wn = nt_str(nt, id, "name");
+        if (wn && sp_streq(wn, nm)) return 1;
+      }
+      break;
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    case NK_ConstantPathOperatorWriteNode:
+      if (kind == VW_CONST) {
+        int t = nt_ref(nt, id, "target");
+        const char *wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
+        if (wn && sp_streq(wn, nm)) return 1;
+      }
+      break;
+    default:
+      break;
   }
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
-    if (subtree_writes_local(c, nt_ref_at(nt, id, i), nm)) return 1;
+    if (subtree_writes_var(c, nt_ref_at(nt, id, i), nm, kind)) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0;
     const int *ids = nt_arr_at(nt, id, i, &n);
     for (int j = 0; j < n; j++)
-      if (subtree_writes_local(c, ids[j], nm)) return 1;
+      if (subtree_writes_var(c, ids[j], nm, kind)) return 1;
   }
   return 0;
 }
@@ -6614,7 +6645,7 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
                (g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm));
   /* the rhs can reassign the local: directly, or through a closure over it */
   int cap = t != TY_UNKNOWN && t != TY_PROC &&
-            (subtree_writes_local(c, v, nm) || (celled && subtree_has_side_effect(c, v)));
+            (subtree_writes_var(c, v, nm, VW_LOCAL) || (celled && subtree_has_side_effect(c, v)));
   char rtn[32];
 
   /* Ruby takes s's String, then runs the RHS, then concatenates what
@@ -17205,11 +17236,11 @@ int boxed_writer_holds_handle(Compiler *c, const char *base, int v) {
   snprintf(ivn, sizeof ivn, "@%s", base);
   int held = -1;
   for (int k = 0; k < c->nclasses && held < 1; k++) {
-    int wmdc = -1, kmi = -1;
-    int kind = comp_resolve_member(c, k, base, 1, &wmdc, &kmi);
-    if (kind == SP_MEMBER_METHOD && !scope_has_callable_symbol(c, kmi))
-      kind = comp_writer_in_chain(c, k, base, &wmdc) ? SP_MEMBER_ATTR : SP_MEMBER_NONE;
-    int iv = kind == SP_MEMBER_ATTR ? comp_ivar_index(&c->classes[k], ivn) : -1;
+    MethodLookup wml = { .def_class = -1 };
+    int kmi = call_target(c, -1, k, base, CT_WRITER, &wml), wmdc = wml.def_class;
+    int attr = wml.kind == ML_ATTR;
+    if (kmi >= 0 && !scope_has_callable_symbol(c, kmi)) attr = comp_writer_in_chain(c, k, base, &wmdc);
+    int iv = attr ? comp_ivar_index(&c->classes[k], ivn) : -1;
     if (iv >= 0 && c->classes[k].ivar_types[iv] == TY_STRBUF) held = c->classes[k].ivar_str_shared[iv] ? 1 : 0;
   }
   return held;
@@ -17266,12 +17297,15 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
         continue;
       }
     }
-    int wmdc = -1, kmi = -1;
-    int kind = comp_resolve_member(c, k, base, 1, &wmdc, &kmi);
-    if (kind == SP_MEMBER_METHOD && !scope_has_callable_symbol(c, kmi))
-      kind = comp_writer_in_chain(c, k, base, &wmdc) ? SP_MEMBER_ATTR : SP_MEMBER_NONE;
-    if (kind == SP_MEMBER_NONE) continue;
-    int writer_wins = (kind == SP_MEMBER_ATTR);
+    MethodLookup wml = { .def_class = -1 };
+    int kmi = call_target(c, -1, k, base, CT_WRITER, &wml), wmdc = wml.def_class;
+    int attr = wml.kind == ML_ATTR;
+    if (kmi >= 0 && !scope_has_callable_symbol(c, kmi)) {
+      attr = comp_writer_in_chain(c, k, base, &wmdc);
+      if (!attr) kmi = -1;
+    }
+    if (kmi < 0 && !attr) continue;
+    int writer_wins = attr;
     /* --share-strings: inside a dispatch's builtin arm, an explicit writer's
        class was the dispatch's own arm (no user class owns the name here) */
     if (!writer_wins && g_poly_builtin_arm) continue;
@@ -17606,6 +17640,22 @@ static void masgn_root(Compiler *c, TyKind t, int tmp, Buf *b) {
   if (rb.p && rb.p[0]) buf_printf(b, " %s", rb.p);
   free(rb.p);
 }
+/* Where an instance-variable target of a multiple assignment lives, as the
+   single write's home is (holder_ivar_side): the field of self in an
+   instance method, of the receiver in an instance_eval/exec block, or the
+   class-level slot (h->cls_slot) of a class method, a class body or the top
+   level. h->cid is the class whose ivar table types it; 0 when the target
+   has no home (the value is still evaluated). */
+static int masgn_ivar_home(Compiler *c, int tgt, HolderRef *h) {
+  return holder_of_node_slot(c, tgt, h) && h->kind == HK_IVAR && h->cid >= 0;
+}
+/* the C lvalue of a home */
+static void masgn_ivar_lhs(Compiler *c, const HolderRef *h, char *lhs, size_t n) {
+  Buf ref; memset(&ref, 0, sizeof ref);
+  holder_slot_buf(c, h, &ref);
+  snprintf(lhs, n, "%s", ref.p ? ref.p : "");
+  free(ref.p);
+}
 /* Whether the slot value `vi` lands in boxes a by-value struct of type `vt`
    on the heap: a local or an instance variable of that type holds it as it
    is; any other slot may box it. */
@@ -17619,10 +17669,9 @@ static int masgn_slot_boxes(Compiler *c, int id, const int *lefts, int ln, int v
     return !lv || lv->type != vt;
   }
   if (k == NK_InstanceVariableTargetNode) {
-    Scope *sc = comp_scope_of(c, id);
-    int cid = sc && sc->class_id >= 0 ? sc->class_id : g_class_body_id;
-    int ix = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-    return ix < 0 || c->classes[cid].ivar_types[ix] != vt;
+    HolderRef h;
+    int ix = masgn_ivar_home(c, lefts[vi], &h) ? comp_ivar_index(&c->classes[h.cid], nm) : -1;
+    return ix < 0 || c->classes[h.cid].ivar_types[ix] != vt;
   }
   return 1;
 }
@@ -17642,32 +17691,6 @@ static int masgn_hoist_part(Compiler *c, int node, TyKind t, Buf *hb) {
   masgn_root(c, t, tmp, hb);
   buf_puts(hb, "\n");
   return tmp;
-}
-/* Where an instance-variable target of a multiple assignment lives: the
-   class of the enclosing method (`self->iv_x`, or the class-level `civ_` slot
-   of a class method), a class body's module-level slot, or the top-level
-   pseudo-class global. Fills `lhs` with the C lvalue and *cid with the class
-   whose ivar table types it; 0 when the target has no home (the value is
-   still evaluated). The single write knew every home; the multiple
-   assignment's arms only knew the method's class, so `@x, @y = pair` at
-   the top level wrote `self->iv_x` into a function with no self, and the
-   arms reached through a typed or boxed array skipped the store outright. */
-static int masgn_ivar_home(Compiler *c, int id, const char *ivnm, char *lhs, size_t n, int *cid) {
-  Scope *sc = comp_scope_of(c, id);
-  int cc = sc ? sc->class_id : -1;
-  if (cc >= 0) {
-    if (sc->is_cmethod) snprintf(lhs, n, "civ_%s_%s", c->classes[cc].name, iv_c(ivnm + 1));
-    else snprintf(lhs, n, "%s%siv_%s", g_self, g_self_deref, iv_c(ivnm + 1));
-    *cid = cc;
-    return 1;
-  }
-  if (sc && sc->is_cmethod) return 0;
-  if (g_class_body_id >= 0) cc = g_class_body_id;
-  else cc = c->toplevel_class;
-  if (cc < 0) return 0;
-  snprintf(lhs, n, "civ_%s_%s", c->classes[cc].name, iv_c(ivnm + 1));
-  *cid = cc;
-  return 1;
 }
 /* The frozen guard a single ivar write makes, on a line of its own, when the
    class has one; the guard's text ends in the separator an inline caller
@@ -17728,8 +17751,9 @@ static int masgn_writer_takes_nil(Compiler *c, int tgt) {
   char base[256], ivn[260];
   if (!setter_base_name(nm, base, sizeof base)) return 1;
   snprintf(ivn, sizeof ivn, "@%s", base);
-  int wdc = -1; comp_writer_in_chain(c, crc, base, &wdc);
-  int wcls = wdc >= 0 ? wdc : crc, ix = comp_ivar_index(&c->classes[wcls], ivn);
+  MethodLookup wml = { .def_class = -1 };
+  call_target(c, -1, crc, base, CT_WRITER, &wml);
+  int wcls = wml.kind == ML_ATTR && wml.def_class >= 0 ? wml.def_class : crc, ix = comp_ivar_index(&c->classes[wcls], ivn);
   TyKind ivt = ix >= 0 ? c->classes[wcls].ivar_types[ix] : TY_UNKNOWN;
   return ix < 0 || ivt == TY_POLY || (oint_kind(ivt) && ivar_has_nilbit(c, wcls, ix));
 }
@@ -17948,10 +17972,10 @@ static TyKind masgn_slot_type(Compiler *c, int id, int tgt) {
   NodeKind k = nt_kind(nt, tgt);
   if (!ty || !nm) return TY_UNKNOWN;
   if (k == NK_InstanceVariableTargetNode) {
-    char lhs[320]; int cid = -1;
-    if (!masgn_ivar_home(c, id, nm, lhs, sizeof lhs, &cid)) return TY_UNKNOWN;
-    int ix = comp_ivar_index(&c->classes[cid], nm);
-    return ix >= 0 ? c->classes[cid].ivar_types[ix] : TY_UNKNOWN;
+    HolderRef h;
+    if (!masgn_ivar_home(c, tgt, &h)) return TY_UNKNOWN;
+    int ix = comp_ivar_index(&c->classes[h.cid], nm);
+    return ix >= 0 ? c->classes[h.cid].ivar_types[ix] : TY_UNKNOWN;
   }
   if (k == NK_ClassVariableTargetNode) {
     int cid = masgn_cvar_class(c, id, nm);
@@ -18125,8 +18149,10 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
   if (recv_tmp < 0 && key_tmp < 0) masgn_target_tmps(mt, tgt, &recv_tmp, &key_tmp);
   if (masgn_call_store(c, tgt, val, vt, val_t, recv_tmp, key_tmp, indent, 1, b)) return 1;
   if (ty_k == NK_InstanceVariableTargetNode && nm) {
-    char lhs[320]; int cid = -1;
-    if (!masgn_ivar_home(c, id, nm, lhs, sizeof lhs, &cid)) return 1;
+    HolderRef h;
+    if (!masgn_ivar_home(c, tgt, &h)) return 1;
+    char lhs[320]; masgn_ivar_lhs(c, &h, lhs, sizeof lhs);
+    int cid = h.cid;
     int ix = comp_ivar_index(&c->classes[cid], nm);
     emit_indent(b, indent);
     buf_printf(b, "%s = ", lhs);
@@ -18353,8 +18379,9 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
       /* attr_writer convention: name matches the backing ivar */
       char base[256]; snprintf(base, sizeof base, "%.*s", (int)(snl - 1), nm);
       char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", base);
-      int wdc = -1; comp_writer_in_chain(c, crc, base, &wdc);
-      int wcls = wdc >= 0 ? wdc : crc;
+      MethodLookup wml = { .def_class = -1 };
+      call_target(c, -1, crc, base, CT_WRITER, &wml);
+      int wcls = wml.kind == ML_ATTR && wml.def_class >= 0 ? wml.def_class : crc;
       int ix = comp_ivar_index(&c->classes[wcls], ivn);
       TyKind ivt = ix >= 0 ? c->classes[wcls].ivar_types[ix] : vt;
       /* the receiver is held once for the assigned mark */
@@ -18708,10 +18735,73 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
   g_class_body_id = saved_cbi;
 }
 
+/* An element, `_t<tmp>` of type valt (Ruby nil when tmp < 0 or nil_el), stored
+   into an ivar target of a multiple assignment whose home is h: the frozen
+   guard of an object's field, then the slot set in its own form (an Integer
+   or Float slot that holds its nil with it, a String slot as the handle, a
+   boxed element unboxed). Both arms of a multiple assignment, before and
+   after its splat, store through it. */
+static void masgn_ivar_store(Compiler *c, int tgt, const HolderRef *h, int tmp, TyKind valt, int nil_el, int indent, Buf *b) {
+  const char *ivnm = nt_str(c->nt, tgt, "name");
+  int cid = h->cid, st = h->cls_slot;
+  int ix = ivnm ? comp_ivar_index(&c->classes[cid], ivnm) : -1;
+  TyKind ivt = ix >= 0 ? c->classes[cid].ivar_types[ix] : TY_UNKNOWN;
+  char lhs[320]; masgn_ivar_lhs(c, h, lhs, sizeof lhs);
+  if (!st) {
+    Buf fb; memset(&fb, 0, sizeof fb);
+    emit_frozen_obj_guard(c, cid, g_self ? g_self : "self", &fb);
+    masgn_guard_line(&fb, b, indent);
+  }
+  emit_indent(b, indent);
+  buf_printf(b, "%s = ", lhs);
+  nil_el = nil_el || tmp < 0;
+  char ivex[32]; snprintf(ivex, sizeof ivex, "_t%d", tmp);
+  int o_field = oint_kind(ivt) && ix >= 0 && !st && ivar_has_nilbit(c, cid, ix);
+  int o_static = oint_kind(ivt) && ix >= 0 && st && civ_is_oint(c, cid, ix);
+  if (tmp < 0 && !o_field && !o_static) {
+    if (oint_kind(ivt)) refuse_nil_store(c, tgt, ivt, "a multiple assignment into an instance variable");
+    else buf_puts(b, nil_sentinel(ivt));
+  }
+  else if (ivt == TY_POLY && valt != TY_POLY) emit_boxed_tmp(c, valt, tmp, b);
+  /* an Integer or Float slot that holds its nil: the element with its
+     nil, into the field's bit or the oint static */
+  else if (o_field) {
+    char pfx[160]; snprintf(pfx, sizeof pfx, "%s%s", g_self, g_self_deref);
+    Buf ob; memset(&ob, 0, sizeof ob);
+    masgn_conv_o(c, ivt, valt, nil_el ? NULL : ivex, &ob);
+    emit_ivar_text_nilbit(c, cid, ix, pfx, ob.p ? ob.p : oint_nil(ivt), b);
+    free(ob.p);
+  }
+  else if (o_static) masgn_conv_o(c, ivt, valt, nil_el ? NULL : ivex, b);
+  /* a mutable-String ivar holds an sp_String *: a String element is
+     wrapped, as a local target's is */
+  else if (ivt == TY_STRBUF && valt == TY_STRING) buf_printf(b, "sp_String_new_shared(_t%d)", tmp);
+  /* a boxed element into a String ivar: a box holding a handle is that
+     handle, a boxed nil the slot's NULL, as a local target's is */
+  else if (ivt == TY_STRBUF && valt == TY_POLY) buf_printf(b, "sp_poly_as_strbuf(_t%d)", tmp);
+  /* a boxed element into any other typed ivar: unboxed, behind the
+     --rbs seed's assertion where a seed pins the slot, as the single
+     write's store is (a general Array slot converts the box, nil kept:
+     a cast would read a typed Array's elements as boxed values) */
+  else if (valt == TY_POLY && ivt != TY_POLY && ivt != TY_UNKNOWN) {
+    Buf ck; memset(&ck, 0, sizeof ck);
+    if (class_ivar_pinned(&c->classes[cid], ivnm)) emit_rbs_checked_text(c, ivt, ivnm, ivex, &ck);
+    else buf_puts(&ck, ivex);
+    if (ivt == TY_POLY_ARRAY) {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = %s; _t%d.tag == SP_TAG_NIL ? NULL : sp_poly_to_poly_array(_t%d); })",
+                 tv, ck.p, tv, tv);
+    }
+    else masgn_conv(c, tgt, ivt, valt, ck.p, b);
+    free(ck.p);
+  }
+  else buf_printf(b, "_t%d", tmp);
+  buf_puts(b, ";\n");
+}
 /* A MultiWriteNode whose value is not an Array literal (a, b = x) (emit_multi_write_stmt's arms, in their order) */
 static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, int ln, const int *lefts, int value, const char *vty, int tuple, int rn, const int *rights, const char *rest_var, const char *rest_gvar, int rest_tgt, int *ttr, int *ttk, const MasgnTmps *mt) {
   if (!(!tuple)) return 0;
-  char iv_lhs[320]; int iv_home_cid = -1;   /* an ivar target's home (masgn_ivar_home) */
+  char iv_lhs[320]; HolderRef iv_h;   /* an ivar target's home (masgn_ivar_home) */
   /* scalar RHS (`a, b = 1`): the first target takes the value, the rest
      their slot default (Ruby gives nil; we land the typed zero). A call /
      super / yield can return a multi-value tuple, so those are excluded
@@ -18741,30 +18831,29 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
       /* an instance-variable target: the first takes the value, the rest
          nil, in the slot's own representation */
       if (lk == NK_InstanceVariableTargetNode && nt_str(nt, lefts[i], "name") &&
-          masgn_ivar_home(c, id, nt_str(nt, lefts[i], "name"), iv_lhs, sizeof iv_lhs, &iv_home_cid)) {
-        int ix = comp_ivar_index(&c->classes[iv_home_cid], nt_str(nt, lefts[i], "name"));
-        TyKind ivt = ix >= 0 ? c->classes[iv_home_cid].ivar_types[ix] : TY_POLY;
+          masgn_ivar_home(c, lefts[i], &iv_h)) {
+        masgn_ivar_lhs(c, &iv_h, iv_lhs, sizeof iv_lhs);
+        int ix = comp_ivar_index(&c->classes[iv_h.cid], nt_str(nt, lefts[i], "name"));
+        TyKind ivt = ix >= 0 ? c->classes[iv_h.cid].ivar_types[ix] : TY_POLY;
         emit_indent(b, indent);
         buf_printf(b, "%s = ", iv_lhs);
         if (i == 0) {
           if (ivt == TY_POLY && st != TY_POLY) emit_boxed(c, value, b);
-          else if (oint_kind(ivt) && ix >= 0 && ivar_has_nilbit(c, iv_home_cid, ix)) {
-            const char *ivp = strstr(iv_lhs, "iv_");
-            char opfx[256]; snprintf(opfx, sizeof opfx, "%.*s", ivp ? (int)(ivp - iv_lhs) : 0, iv_lhs);
-            emit_ivar_value_nilbit(c, iv_home_cid, ix, opfx, value, b);
+          else if (oint_kind(ivt) && ix >= 0 && !iv_h.cls_slot && ivar_has_nilbit(c, iv_h.cid, ix)) {
+            char opfx[160]; snprintf(opfx, sizeof opfx, "%s%s", g_self, g_self_deref);
+            emit_ivar_value_nilbit(c, iv_h.cid, ix, opfx, value, b);
           }
-          else if (oint_kind(ivt) && ix >= 0 && civ_is_oint(c, iv_home_cid, ix) && !strstr(iv_lhs, "->") && !strchr(iv_lhs, '.'))
+          else if (oint_kind(ivt) && ix >= 0 && iv_h.cls_slot && civ_is_oint(c, iv_h.cid, ix))
             emit_oint_expr(c, value, ivt, b);
           else emit_expr(c, value, b);
         }
         else if (ivt == TY_POLY) buf_puts(b, "sp_box_nil()");
-        else if (oint_kind(ivt) && ix >= 0 && ivar_has_nilbit(c, iv_home_cid, ix)) {
+        else if (oint_kind(ivt) && ix >= 0 && !iv_h.cls_slot && ivar_has_nilbit(c, iv_h.cid, ix)) {
           /* a field with a nil bit: the bit set, the value left */
-          const char *ivp = strstr(iv_lhs, "iv_");
-          char opfx[256]; snprintf(opfx, sizeof opfx, "%.*s", ivp ? (int)(ivp - iv_lhs) : 0, iv_lhs);
-          emit_ivar_text_nilbit(c, iv_home_cid, ix, opfx, oint_nil(ivt), b);
+          char opfx[160]; snprintf(opfx, sizeof opfx, "%s%s", g_self, g_self_deref);
+          emit_ivar_text_nilbit(c, iv_h.cid, ix, opfx, oint_nil(ivt), b);
         }
-        else if (oint_kind(ivt) && !(ix >= 0 && civ_is_oint(c, iv_home_cid, ix) && !strstr(iv_lhs, "->") && !strchr(iv_lhs, '.')))
+        else if (oint_kind(ivt) && !(ix >= 0 && iv_h.cls_slot && civ_is_oint(c, iv_h.cid, ix)))
           refuse_nil_store(c, lefts[i], ivt, "a multiple assignment into an instance variable");
         else buf_puts(b, nil_sentinel(ivt));
         buf_puts(b, ";\n");
@@ -18951,13 +19040,14 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         buf_puts(b, ";\n");
       }
       else if (lk == NK_InstanceVariableTargetNode && nt_str(nt, lefts[i], "name") &&
-               masgn_ivar_home(c, id, nt_str(nt, lefts[i], "name"), iv_lhs, sizeof iv_lhs, &iv_home_cid)) {
+               masgn_ivar_home(c, lefts[i], &iv_h)) {
+        masgn_ivar_lhs(c, &iv_h, iv_lhs, sizeof iv_lhs);
         const char *ivnm = nt_str(nt, lefts[i], "name");
         emit_indent(b, indent);
         char get_expr[64]; typed_elem_getf(get_expr, sizeof get_expr, st, k, "_t%d, %dLL", tarr, i);
         TyKind ivt = TY_UNKNOWN;
-        int iv_rt = comp_ivar_index(&c->classes[iv_home_cid], ivnm);
-        if (iv_rt >= 0) ivt = c->classes[iv_home_cid].ivar_types[iv_rt];
+        int iv_rt = comp_ivar_index(&c->classes[iv_h.cid], ivnm);
+        if (iv_rt >= 0) ivt = c->classes[iv_h.cid].ivar_types[iv_rt];
         buf_printf(b, "%s = ", iv_lhs);
         /* (the slot keeps its nil: an object's field in its nil bit, a
            class-level static in itself, ivar_read_slot_is_oint) */
@@ -18966,7 +19056,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
           char og[96];
           if (sp_streq(k, "Poly")) snprintf(og, sizeof og, "%s(%s)", oint_unbox(ivt), get_expr);
           else snprintf(og, sizeof og, "sp_%sArray_oget(_t%d, %dLL)", k, tarr, i);
-          emit_ivar_lhs_otext(c, iv_home_cid, iv_rt, ivnm, iv_lhs, og, b);
+          emit_ivar_lhs_otext(c, iv_h.cid, iv_rt, ivnm, iv_lhs, og, b);
         }
         /* a boxed field from a number array: past the end (or a nil
            element) is nil, boxed with it, as for a local */
@@ -19097,7 +19187,8 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         buf_puts(b, ";\n");
       }
       else if (lk == NK_InstanceVariableTargetNode && nt_str(nt, rights[j], "name") &&
-               masgn_ivar_home(c, id, nt_str(nt, rights[j], "name"), iv_lhs, sizeof iv_lhs, &iv_home_cid)) {
+               masgn_ivar_home(c, rights[j], &iv_h)) {
+        masgn_ivar_lhs(c, &iv_h, iv_lhs, sizeof iv_lhs);
         const char *ivnm2 = nt_str(nt, rights[j], "name");
         emit_indent(b, indent);
         /* Same underflow clamp as the local-variable branch above: pick the
@@ -19111,8 +19202,8 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         char get_expr2[96];
         typed_elem_getf(get_expr2, sizeof get_expr2, st, k, "_t%d, _t%d", tarr, tix);
         TyKind ivt2 = TY_UNKNOWN;
-        int iv_rt2 = comp_ivar_index(&c->classes[iv_home_cid], ivnm2);
-        if (iv_rt2 >= 0) ivt2 = c->classes[iv_home_cid].ivar_types[iv_rt2];
+        int iv_rt2 = comp_ivar_index(&c->classes[iv_h.cid], ivnm2);
+        if (iv_rt2 >= 0) ivt2 = c->classes[iv_h.cid].ivar_types[iv_rt2];
         buf_printf(b, "%s = ", iv_lhs);
         if (ivt2 == TY_POLY && elem != TY_POLY) {
           Buf bx2; memset(&bx2, 0, sizeof bx2);
@@ -19124,7 +19215,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         else if ((sp_streq(k, "Int") || sp_streq(k, "Float")) && iv_rt2 >= 0 && ivar_read_slot_is_oint(c, rights[j])) {
           /* the element with its nil into the field's nil bit */
           char og2[160]; snprintf(og2, sizeof og2, "sp_%sArray_oget(_t%d, _t%d)", k, tarr, tix);
-          emit_ivar_lhs_otext(c, iv_home_cid, iv_rt2, ivnm2, iv_lhs, og2, b);
+          emit_ivar_lhs_otext(c, iv_h.cid, iv_rt2, ivnm2, iv_lhs, og2, b);
         }
         else if (sp_streq(k, "Int") || sp_streq(k, "Float")) buf_puts(b, get_expr2);
         else if (sp_streq(k, "Str")) buf_printf(b, "SP_STR_TO(%s, (_t%d >= _t%d->len ? NULL : %s))", iv_lhs, tix, tarr, get_expr2);
@@ -19214,11 +19305,12 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         buf_puts(b, ";\n");
       }
       else if (lk == NK_InstanceVariableTargetNode && nt_str(nt, lefts[i], "name") &&
-               masgn_ivar_home(c, id, nt_str(nt, lefts[i], "name"), iv_lhs, sizeof iv_lhs, &iv_home_cid)) {
+               masgn_ivar_home(c, lefts[i], &iv_h)) {
+        masgn_ivar_lhs(c, &iv_h, iv_lhs, sizeof iv_lhs);
         const char *ivnm = nt_str(nt, lefts[i], "name");
-        int iv_rt = comp_ivar_index(&c->classes[iv_home_cid], ivnm);
+        int iv_rt = comp_ivar_index(&c->classes[iv_h.cid], ivnm);
         if (iv_rt < 0) continue;
-        TyKind ivt = c->classes[iv_home_cid].ivar_types[iv_rt];
+        TyKind ivt = c->classes[iv_h.cid].ivar_types[iv_rt];
         emit_indent(b, indent);
         char get_expr[64]; snprintf(get_expr, sizeof get_expr, "sp_poly_massign_get(_t%d, %dLL)", tarr, i);
         buf_printf(b, "%s = ", iv_lhs);
@@ -19235,7 +19327,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         if (ck && oint_kind(ivt) && ivar_read_slot_is_oint(c, lefts[i])) {
           char og[200], ipfx[300]; snprintf(og, sizeof og, "%s(%s, \"%s\")", ck, get_expr, ivnm);
           (void)ipfx;
-          emit_ivar_lhs_otext(c, iv_home_cid, iv_rt, ivnm, iv_lhs, og, b);
+          emit_ivar_lhs_otext(c, iv_h.cid, iv_rt, ivnm, iv_lhs, og, b);
         }
         else if (ck && oint_kind(ivt)) buf_printf(b, "%s(%s(%s, \"%s\"))", oint_arg(ivt), ck, get_expr, ivnm);
         else if (ck) buf_printf(b, "%s(%s, \"%s\")", ck, get_expr, ivnm);
@@ -19616,7 +19708,7 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
   int ln = 0;
   const int *lefts = nt_arr(nt, id, "lefts", &ln);
   int value = nt_ref(nt, id, "value");
-  char iv_lhs[320]; int iv_home_cid = -1;   /* an ivar target's home (masgn_ivar_home) */
+  char iv_lhs[320]; HolderRef iv_h;   /* an ivar target's home (masgn_ivar_home) */
   const char *vty = nt_type(nt, value);
   NodeKind vk = nt_kind(nt, value);
   /* `r, w = IO.pipe` -> make a pipe, bind both ends as IO handles. */
@@ -19772,11 +19864,11 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
        declared `void`, a C error) (#3280) */
     if ((el_empty_arr || el_empty_hash) && (elt == TY_UNKNOWN || elt == TY_VOID) && i < ln &&
         nt_kind(nt, lefts[i]) == NK_InstanceVariableTargetNode) {
-      Scope *isc0 = comp_scope_of(c, id);
+      HolderRef ish0;
       const char *ivn0 = nt_str(nt, lefts[i], "name");
-      if (isc0 && isc0->class_id >= 0 && ivn0) {
-        int ix0 = comp_ivar_index(&c->classes[isc0->class_id], ivn0);
-        TyKind it0 = ix0 >= 0 ? c->classes[isc0->class_id].ivar_types[ix0] : TY_UNKNOWN;
+      if (ivn0 && masgn_ivar_home(c, lefts[i], &ish0)) {
+        int ix0 = comp_ivar_index(&c->classes[ish0.cid], ivn0);
+        TyKind it0 = ix0 >= 0 ? c->classes[ish0.cid].ivar_types[ix0] : TY_UNKNOWN;
         if ((el_empty_arr && ty_is_array(it0)) ||
             (el_empty_hash && ty_is_hash(it0)) || it0 == TY_POLY) elt = it0;
       }
@@ -20036,76 +20128,8 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
       if (comp_const(c, cnm_l)->type == TY_CLASS) emit_const_target_class_name(c, lefts[i], cnm_l, b, indent);
     }
     else if (lk == NK_InstanceVariableTargetNode) {
-      const char *ivnm = nt_str(nt, lefts[i], "name");
-      if (!ivnm) continue;
-      Scope *iv_sc = comp_scope_of(c, id);
-      int iv_cid = iv_sc ? iv_sc->class_id : -1;
-      /* outside any class: a class body's module-level slot, or the
-         top-level pseudo-class global, the same homes the single write
-         has (`@x, @y = pair` at the top level wrote `self->iv_x` into a
-         function with no self, and the C did not build) */
-      int iv_global = 0;
-      if (iv_cid < 0 && !(iv_sc && iv_sc->is_cmethod)) {
-        if (g_class_body_id >= 0) { iv_cid = g_class_body_id; iv_global = 1; }
-        else if (c->toplevel_class >= 0) { iv_cid = c->toplevel_class; iv_global = 1; }
-        else continue;   /* no home for it: the value was evaluated above */
-      }
-      TyKind ivt = TY_UNKNOWN;
-      if (iv_cid >= 0) {
-        int iv_idx = comp_ivar_index(&c->classes[iv_cid], ivnm);
-        if (iv_idx >= 0) ivt = c->classes[iv_cid].ivar_types[iv_idx];
-      }
-      if (!(iv_sc && iv_sc->is_cmethod) && !iv_global && iv_cid >= 0) {
-        Buf fb; memset(&fb, 0, sizeof fb);
-        emit_frozen_obj_guard(c, iv_cid, g_self ? g_self : "self", &fb);
-        masgn_guard_line(&fb, b, indent);
-      }
-      emit_indent(b, indent);
-      int iv_static = ((iv_sc && iv_sc->is_cmethod) || iv_global) && iv_cid >= 0;
-      if (iv_static)
-        buf_printf(b, "civ_%s_%s = ", c->classes[iv_cid].name, iv_c(ivnm + 1));
-      else
-        buf_printf(b, "%s%siv_%s = ", g_self, g_self_deref, iv_c(ivnm + 1));
-      TyKind valt = tmpts ? tmpts[i] : repr_of(c, els[i]).as_ty;
-      int iv_ix = iv_cid >= 0 ? comp_ivar_index(&c->classes[iv_cid], ivnm) : -1;
-      char ivex[32]; snprintf(ivex, sizeof ivex, "_t%d", tmps[i]);
-      if (ivt == TY_POLY && valt != TY_POLY) emit_boxed_tmp(c, valt, tmps[i], b);
-      /* an Integer or Float slot that holds its nil: the element with its
-         nil, into the field's bit or the oint static */
-      else if (oint_kind(ivt) && iv_ix >= 0 && !iv_static && ivar_has_nilbit(c, iv_cid, iv_ix)) {
-        char pfx[160]; snprintf(pfx, sizeof pfx, "%s%s", g_self, g_self_deref);
-        Buf ob; memset(&ob, 0, sizeof ob);
-        masgn_conv_o(c, ivt, valt, masgn_nil_el(c, els[i]) ? NULL : ivex, &ob);
-        emit_ivar_text_nilbit(c, iv_cid, iv_ix, pfx, ob.p ? ob.p : oint_nil(ivt), b);
-        free(ob.p);
-      }
-      else if (oint_kind(ivt) && iv_ix >= 0 && iv_static && civ_is_oint(c, iv_cid, iv_ix))
-        masgn_conv_o(c, ivt, valt, masgn_nil_el(c, els[i]) ? NULL : ivex, b);
-      /* a mutable-String ivar holds an sp_String *: a String element is
-         wrapped, as a local target's is */
-      else if (ivt == TY_STRBUF && valt == TY_STRING) buf_printf(b, "sp_String_new_shared(_t%d)", tmps[i]);
-      /* a boxed element into a String ivar: a box holding a handle is that
-         handle, a boxed nil the slot's NULL, as a local target's is */
-      else if (ivt == TY_STRBUF && valt == TY_POLY) buf_printf(b, "sp_poly_as_strbuf(_t%d)", tmps[i]);
-      /* a boxed element into any other typed ivar: unboxed, behind the
-         --rbs seed's assertion where a seed pins the slot, as the single
-         write's store is (a general Array slot converts the box, nil kept:
-         a cast would read a typed Array's elements as boxed values) */
-      else if (valt == TY_POLY && ivt != TY_POLY && ivt != TY_UNKNOWN) {
-        Buf ck; memset(&ck, 0, sizeof ck);
-        if (iv_cid >= 0 && class_ivar_pinned(&c->classes[iv_cid], ivnm))
-          emit_rbs_checked_text(c, ivt, ivnm, ivex, &ck);
-        else buf_puts(&ck, ivex);
-        if (ivt == TY_POLY_ARRAY) {
-          int tv = ++g_tmp;
-          buf_printf(b, "({ sp_RbVal _t%d = %s; _t%d.tag == SP_TAG_NIL ? NULL : sp_poly_to_poly_array(_t%d); })",
-                     tv, ck.p, tv, tv);
-        }
-        else masgn_conv(c, lefts[i], ivt, valt, ck.p, b);
-        free(ck.p);
-      }
-      else buf_printf(b, "_t%d", tmps[i]);
-      buf_puts(b, ";\n");
+      if (masgn_ivar_home(c, lefts[i], &iv_h))
+        masgn_ivar_store(c, lefts[i], &iv_h, tmps[i], tmpts ? tmpts[i] : repr_of(c, els[i]).as_ty, masgn_nil_el(c, els[i]), indent, b);
     }
     else if (lk == NK_CallTargetNode) {
       /* setter call: e.g. @c.v = _t<i> */
@@ -20125,19 +20149,21 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
         { unsupported(c, id, "multiple assignment call target non-object"); continue; }
       char base2[256]; memcpy(base2, setnm, snlen - 1); base2[snlen - 1] = '\0';
       int rc2 = ty_object_class(rt2);
-      int wr2 = comp_writer_in_chain(c, rc2, base2, NULL);
+      MethodLookup wml2 = { .def_class = -1 };
+      int wmi2 = call_target(c, lefts[i], rc2, base2, CT_WRITER, &wml2), wr2 = wmi2 < 0 && wml2.kind == ML_ATTR;
       if (!wr2 || masgn_writer_overridden(c, rc2, setnm)) {
-        /* a writer defined with `def x=`, or bound with `native_method :x=`,
-           runs as a call, and so does an attr writer a descendant defines
-           its own `x=` for */
+        /* a writer defined with `def x=` (in the class, a module it includes
+           or an ancestor, whichever the plan ranks first), or bound with
+           `native_method :x=`, runs as a call, and so does an attr writer a
+           descendant defines its own `x=` for */
         char rv[32]; snprintf(rv, sizeof rv, "_t%d", tmps[i]);
-        if (!wr2 && call_target(c, lefts[i], rc2, setnm, 0, NULL) < 0 && comp_native_method_find(c, rc2, setnm, 1, 0) < 0)
+        if (!wr2 && wmi2 < 0 && comp_native_method_find(c, rc2, setnm, 1, 0) < 0)
           unsupported(c, id, "multiple assignment call target no writer");
         else masgn_store(c, id, mt, lefts[i], masgn_nil_el(c, els[i]) ? NULL : rv, tmpts[i], tmps[i], ttr[i], ttk[i], indent, b);
         continue;
       }
       char ivn2[260]; snprintf(ivn2, sizeof ivn2, "@%s", base2);
-      int defc2 = -1; comp_writer_in_chain(c, rc2, base2, &defc2);
+      int defc2 = wml2.def_class;
       int iv2 = comp_ivar_index(&c->classes[defc2 < 0 ? rc2 : defc2], ivn2);
       TyKind ivt2 = iv2 >= 0 ? c->classes[defc2 < 0 ? rc2 : defc2].ivar_types[iv2] : TY_UNKNOWN;
       int wcls2 = defc2 < 0 ? rc2 : defc2;
@@ -20415,21 +20441,11 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
       }
       buf_puts(b, ";\n");
     }
-    else if (lk == NK_InstanceVariableTargetNode && rnm_j &&
-             masgn_ivar_home(c, id, rnm_j, iv_lhs, sizeof iv_lhs, &iv_home_cid)) {
-      TyKind ivt2 = TY_UNKNOWN;
-      { int iv_idx2 = comp_ivar_index(&c->classes[iv_home_cid], rnm_j);
-        if (iv_idx2 >= 0) ivt2 = c->classes[iv_home_cid].ivar_types[iv_idx2]; }
-      emit_indent(b, indent);
-      buf_printf(b, "%s = ", iv_lhs);
-      if (ridx >= 0 && ridx < en) {
-        Repr valt2r = repr_of(c, ridx < en ? els[ridx] : -1);
-        TyKind valt2 = (ridx < en) ? valt2r.as_ty : TY_UNKNOWN;
-        if (ivt2 == TY_POLY && valt2r.kind != RK_BOXED) emit_boxed_tmp(c, valt2, tmps[ridx], b);
-        else buf_printf(b, "_t%d", tmps[ridx]);
-      }
-      else buf_puts(b, default_value_from_compiler(c, ivt2 != TY_UNKNOWN ? ivt2 : TY_INT));
-      buf_puts(b, ";\n");
+    else if (lk == NK_InstanceVariableTargetNode && rnm_j && masgn_ivar_home(c, rights[j], &iv_h)) {
+      int has = ridx >= 0 && ridx < en;
+      masgn_ivar_store(c, rights[j], &iv_h, has ? tmps[ridx] : -1,
+                       has ? (tmpts ? tmpts[ridx] : repr_of(c, els[ridx]).as_ty) : TY_NIL,
+                       has && masgn_nil_el(c, els[ridx]), indent, b);
     }
     else {
       char rv[32];
@@ -20766,8 +20782,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
              same-class `def x=`). When overridden, fall through to normal
              dispatch. The more-derived definition wins; a same-class tie
              goes to the explicit method. */
-          int writer_wins =
-              comp_resolve_member(c, ty_object_class(rt), base, 1, NULL, NULL) == SP_MEMBER_ATTR;
+          int writer_wins = call_attr_target(c, -1, ty_object_class(rt), base, CT_WRITER, NULL);
           int nk = comp_native_answer_class(c, ty_object_class(rt), nm);
           if (writer_wins) {
             /* `private :x=` on the writer: the refusal, as a statement */
@@ -20780,7 +20795,9 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
             if (an >= 1) {
               int rc = ty_object_class(rt);
               char ivn[sizeof base + 1]; snprintf(ivn, sizeof ivn, "@%s", base);
-              int defc = -1; comp_writer_in_chain(c, rc, base, &defc);
+              MethodLookup wml = { .def_class = -1 };
+              call_target(c, -1, rc, base, CT_WRITER, &wml);
+              int defc = wml.kind == ML_ATTR ? wml.def_class : -1;
               int iv = comp_ivar_index(&c->classes[defc < 0 ? rc : defc], ivn);
               TyKind ivt = iv >= 0 ? c->classes[defc < 0 ? rc : defc].ivar_types[iv] : TY_UNKNOWN;
               emit_indent(b, indent);
@@ -25030,6 +25047,21 @@ void emit_str_frozen_check(Compiler *c, int recv, Buf *b) {
   buf_puts(b, "if ("); emit_expr(c, recv, b); buf_puts(b, ") sp_str_check_mutable(");
   emit_expr(c, recv, b); buf_puts(b, ");");
 }
+/* The String argument of a mutator that takes its receiver's bytes from
+   the handle held in the statement: one that runs code (order_runs_code)
+   may change the receiver in place, so it runs first, into a rooted temp,
+   and the bytes are read after it, as CRuby reads the String once its
+   arguments ran (C leaves the order of a call's operands open). Answers
+   that temp, or -1 with nothing emitted: the argument is rendered in the
+   call. */
+static int str_mut_arg_first(Compiler *c, int arg, Buf *b) {
+  if (!order_runs_code(c, arg)) return -1;
+  int t = ++g_tmp;
+  buf_printf(b, "const char *_t%d = ", t);
+  emit_str_expr(c, arg, b);
+  buf_printf(b, "; SP_GC_ROOT_STR(_t%d); ", t);
+  return t;
+}
 /* emit_array_mutate_stmt_body's String mutators done by reassigning the
    receiver: replace, prepend, concat, delete_prefix! /
    delete_suffix! (answers 1 emitted, 0 declined, -1 to go on) */
@@ -25066,9 +25098,11 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
           free(srefR2.p);
           return 1;
         }
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); sp_String_set_bin(_t%d, ", tbR, srefR2.p, tbR);
+        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); ", tbR, srefR2.p);
         free(srefR2.p);
-        buf_puts(b, "sp_str_concat("); emit_str_expr(c, argv[0], b);
+        int taP = str_mut_arg_first(c, argv[0], b);
+        buf_printf(b, "sp_String_set_bin(_t%d, sp_str_concat(", tbR);
+        if (taP >= 0) buf_printf(b, "_t%d", taP); else emit_str_expr(c, argv[0], b);
         buf_printf(b, ", sp_String_cstr(_t%d))", tbR);
         buf_puts(b, "); }\n");
         return 1;
@@ -25105,10 +25139,11 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
         const char *base3 = sp_streq(name, "delete_prefix!") ? "delete_prefix" : "delete_suffix";
         int tbD = ++g_tmp;
         emit_indent(b, indent);
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); sp_String_set_bin(_t%d, sp_str_%s(sp_String_cstr(_t%d), ",
-                   tbD, srefD.p, tbD, base3, tbD);
+        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); ", tbD, srefD.p);
         free(srefD.p);
-        emit_expr(c, argv[0], b);
+        int taD = str_mut_arg_first(c, argv[0], b);
+        buf_printf(b, "sp_String_set_bin(_t%d, sp_str_%s(sp_String_cstr(_t%d), ", tbD, base3, tbD);
+        if (taD >= 0) buf_printf(b, "_t%d", taD); else emit_expr(c, argv[0], b);
         buf_puts(b, ")); }\n");
         return 1;
       }
@@ -26494,7 +26529,7 @@ static int iow_recv_local_held(Compiler *c, int recv, int key, int v) {
   snprintf(want, sizeof want, "lv_%s", nm);
   int plain = rb.p && sp_streq(rb.p, want);
   free(rb.p);
-  return plain && !subtree_writes_local(c, key, nm) && !subtree_writes_local(c, v, nm);
+  return plain && !subtree_writes_var(c, key, nm, VW_LOCAL) && !subtree_writes_var(c, v, nm, VW_LOCAL);
 }
 
 void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
@@ -27197,7 +27232,7 @@ int strbuf_poly_user_boxes(Compiler *c, int v) {
     for (int i = 0; i < p.n && !hit; i++) hit = p.arm[i].key == ks[j];
     if (!hit && (ks[j] < 0 || ks[j] >= c->nclasses || name_is_plain_setter(nm) ||
                  comp_method_in_chain(c, ks[j], "method_missing", NULL) >= 0 ||
-                 comp_resolve_member(c, ks[j], nm, 0, NULL, NULL) != SP_MEMBER_NONE))
+                 call_answers(c, -1, ks[j], nm, 0, NULL)))
       return 0;
   }
   return 1;

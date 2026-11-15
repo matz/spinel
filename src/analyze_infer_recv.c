@@ -680,8 +680,15 @@ static int fill_value_fits(Compiler *c, int call, TyKind rt) {
 /* A Float consumer accepts either result of a seedless Float Array sum:
    Integer zero when empty, Float otherwise. Ask the builtin row so an
    overridden sum keeps its ordinary boxed-result promotion. */
-TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int value) {
+TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int write) {
+  int value = nt_ref(c->nt, write, "value");
   TyKind rhs = infer_type(c, value);
+  /* `x **= e` is the power of the local by e: a Rational or boxed value where
+     the Integer power is one */
+  if (lhs == TY_INT && rhs == TY_INT && is_pow_op(nt_str(c->nt, write, "binary_operator"))) {
+    TyKind pt = infer_int_pow_type(c, write, -1, value);
+    if (pt != TY_UNKNOWN) return pt;
+  }
   if (lhs == TY_FLOAT && rhs == TY_POLY && nt_kind(c->nt, value) == NK_CallNode) {
     int recv = nt_ref(c->nt, value, "receiver");
     if (recv >= 0 && infer_type(c, recv) == TY_FLOAT_ARRAY) {
@@ -1269,8 +1276,9 @@ int infer_arysub_call(Compiler *c, int id, TyKind *out) {
    arbitration: the ivar's type in the class that defines the reader, through
    any alias. */
 int attr_reader_ty(Compiler *c, int cid, const char *name, TyKind *out) {
-  int rdcls = -1;
-  if (comp_resolve_member(c, cid, name, 0, &rdcls, NULL) != SP_MEMBER_ATTR) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  if (!call_attr_target(c, -1, cid, name, 0, &ml)) return 0;
+  int rdcls = ml.def_class;
   const char *rname = comp_resolve_alias(c, cid, name);
   char ivn[256];
   snprintf(ivn, sizeof ivn, "@%s", rname);
@@ -1299,8 +1307,7 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        method storing `self` types it as the class that DEFINED the method --
        so the call dispatches at run time and its value is that union (#4023).
        The emitter routes the same shape through the poly dispatch. */
-    if (call_target(c, id, cid, name, 0, NULL) < 0 &&
-        !comp_reader_in_chain(c, cid, name, NULL) && !cls->is_native_class &&
+    if (!call_answers(c, id, cid, name, 0, NULL) && !cls->is_native_class &&
         comp_subclass_answers(c, cid, name)) {
       /* Runtime-name send arms on boxed self may include classes the descendant plan excludes. */
       if (g_plan_check && !nt_int(nt, id, "dyn_arm", 0)) {
@@ -1321,9 +1328,8 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     /* Object#hash default (no user hash in the chain): value/pointer int.
        Structs keep their dedicated value-based hash arm. */
     if (sp_streq(name, "hash") && argc == 0 && !cls->is_struct &&
-        comp_method_in_chain(c, cid, "hash", NULL) < 0 &&
-        /* a reader named hash answers its ivar, typed as the ivar is */
-        !comp_reader_in_chain(c, cid, "hash", NULL)) { *out = TY_INT; return 1; }
+        /* (a reader named hash answers its ivar, typed as the ivar is) */
+        !call_answers(c, -1, cid, "hash", 0, NULL)) { *out = TY_INT; return 1; }
     /* native class (C-backed): a declared instance method returns its spec
        type, also on a subclass of the class (#9269) */
     int ncid = comp_native_answer_class(c, cid, name);
@@ -1454,13 +1460,14 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       int wdefc = -1;
       /* only while the attribute's writer is the one the call reaches: an
          explicit `def x=` at an equal-or-more-derived class wins, as the
-         emitter decides (comp_resolve_member), and its value is the
+         emitter decides (call_target), and its value is the
          argument as written (the rule below). Typed from the attribute's
          boxed slot instead, the expression read as poly while the emitter
          handed back the raw argument (`def x=(v) = super` under
          --int-overflow=promote). */
-      if (comp_writer_in_chain(c, cid, base, &wdefc) && argc >= 1 &&
-          comp_resolve_member(c, cid, base, 1, NULL, NULL) == SP_MEMBER_ATTR) {
+      MethodLookup wml = { .def_class = -1 };
+      if (argc >= 1 && call_attr_target(c, -1, cid, base, CT_WRITER, &wml)) {
+        wdefc = wml.def_class;
         TyKind rhsk = infer_type(c, argv[0]);
         /* (a handle local's value is its String face, as an ivar write's is) */
         if (rhsk == TY_STRBUF) rhsk = TY_STRING;
@@ -2281,5 +2288,9 @@ int poly_str_iter_enum(Compiler *c, int id) {
   if (is_lazy_name(qn)) return 1;
   int qac = 0;
   call_args(nt, q, &qac);
+  /* (each_line's Enumerator has no size: CRuby's `s.each_line.size` is nil,
+     where the Array lines would answer its length) */
+  const char *nm = nt_str(nt, id, "name");
+  if (qn && nm && sp_streq(qn, "size") && qac == 0 && sp_streq(nm, "each_line")) return 1;
   return qn && !bop_find(BOP_ANY_ARRAY, qn, qac, nt_ref(nt, q, "block") >= 0);
 }

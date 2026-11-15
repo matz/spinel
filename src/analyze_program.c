@@ -1052,6 +1052,17 @@ static int prog_param_in_scope(Compiler *c, const int *par, int n, const char *n
   }
   return 0;
 }
+/* The next write of local `name` after node w (-1: the first) whose scope is def scope `scope` (prog_def_scope),
+   or -1 for none */
+static int prog_scope_write_next(LoadSrc *s, int scope, const char *name, int w) {
+  const NodeTable *nt = s->c->nt;
+  const int *par = comp_parent_map(s->c);
+  for (w = w < 0 ? comp_lvw_first(s->c, name) : comp_lvw_next(s->c, w); w >= 0; w = comp_lvw_next(s->c, w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (wn && sp_streq(wn, name) && prog_def_scope(nt, par, w) == scope) return w;
+  }
+  return -1;
+}
 static int prog_local_may_hold(LoadSrc *s, int site, const char *name, int depth);
 /* May the value of expression v hold a LoadError (an instance, or its class): one of its value positions
    (for_each_value_position) does. A position is no for nil and a literal; for a clause's variable that may catch
@@ -1097,10 +1108,8 @@ static int prog_local_may_hold(LoadSrc *s, int site, const char *name, int depth
   const int *par = comp_parent_map(s->c);
   int scope = prog_def_scope(nt, par, site), written = 0;
   if (!name) return s->le;
-  for (int w = comp_lvw_first(s->c, name); w >= 0; w = comp_lvw_next(s->c, w)) {
+  for (int w = prog_scope_write_next(s, scope, name, -1); w >= 0; w = prog_scope_write_next(s, scope, name, w)) {
     NodeKind k = nt_kind(nt, w);
-    const char *wn = nt_str(nt, w, "name");
-    if (!wn || !sp_streq(wn, name) || prog_def_scope(nt, par, w) != scope) continue;
     written = 1;
     if (k == NK_LocalVariableTargetNode) {
       int p = par[w];
@@ -1116,13 +1125,9 @@ static int prog_local_may_hold(LoadSrc *s, int site, const char *name, int depth
 /* Is local `name`, read at node site, written in its scope by anything but the target node `except` (a handler's
    binding: `rescue => e; e = LoadError.new(...); raise e` re-raises what the write made, not what it caught) */
 static int prog_local_rebound(LoadSrc *s, int site, const char *name, int except) {
-  const NodeTable *nt = s->c->nt;
-  const int *par = comp_parent_map(s->c);
-  int scope = prog_def_scope(nt, par, site);
-  for (int w = comp_lvw_first(s->c, name); w >= 0; w = comp_lvw_next(s->c, w)) {
-    const char *wn = nt_str(nt, w, "name");
-    if (w != except && wn && sp_streq(wn, name) && prog_def_scope(nt, par, w) == scope) return 1;
-  }
+  int scope = prog_def_scope(s->c->nt, comp_parent_map(s->c), site);
+  for (int w = prog_scope_write_next(s, scope, name, -1); w >= 0; w = prog_scope_write_next(s, scope, name, w))
+    if (w != except) return 1;
   return 0;
 }
 /* May raise node n, with argument node a (-1: none) that no constant names, re-raise a LoadError that a handler it

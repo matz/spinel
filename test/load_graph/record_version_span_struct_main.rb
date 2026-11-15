@@ -1,7 +1,7 @@
 # A body that makes an instance of its class with a builder's `[]`
 # (record_version_span_main.rb): `Point[0]` makes a Point before the
 # reopening's body ends, so the include that follows lands where it can be
-# seen (--dump-load-record: unknown). Lone's first body makes a Point,
+# seen (--dump-load-record: its own ring, not idle). Lone's first body makes a Point,
 # which is no Lone, so its include lands before any Lone exists.
 Point = Struct.new(:x) do
   def twice = x * 2

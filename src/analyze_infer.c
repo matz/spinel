@@ -2102,6 +2102,33 @@ static int infer_int_pow_overflows(long long base, long long exp) {
   return 0;
 }
 
+/* What an Integer power is beyond a plain Integer, for the three spellings of
+   it: `b ** e` and `b.pow(e)` (recv is the base) and `x **= e` (recv is -1:
+   the local holds the base, never a constant). The exponent `exp` is an
+   Integer. TY_UNKNOWN: a plain Integer, which the caller's later rules
+   type. CRuby answers a Rational for a negative exponent and an Integer for a
+   base of 1 or -1, so the answer follows the exponent's sign:
+     - a negative literal exponent: Integer for a literal 1 / -1 base,
+       Rational for another constant base, boxed for a run-time base (it can
+       be 1 or -1: sp_poly_pow resolves it);
+     - --int-overflow=promote: boxed unless both are constants (the pair can
+       leave the word), the Bignum for a constant pair that does;
+     - a run-time exponent that mark_int_pow_signed found the facts do not
+       show >= 0: boxed, and the result is by the exponent's sign at run
+       time. An exponent shown >= 0 keeps the plain Integer. */
+TyKind infer_int_pow_type(Compiler *c, int id, int recv, int exp) {
+  const NodeTable *nt = c->nt;
+  long long base, e;
+  int cbase = recv >= 0 && infer_const_int_node(nt, recv, &base);
+  int cexp = infer_const_int_node(nt, exp, &e);
+  if (cexp && e < 0) return recv >= 0 && an_unit_int_literal(nt, recv) ? TY_INT : cbase ? TY_RATIONAL : TY_POLY;
+  if (g_promote_mode) {
+    if (!(cbase && cexp)) return TY_POLY;
+    return infer_int_pow_overflows(base, e) ? TY_BIGINT : TY_UNKNOWN;
+  }
+  return !cexp && comp_pow_signed(c, id) ? TY_POLY : TY_UNKNOWN;
+}
+
 /* Whether base << amount does not fit the target's word (a Bignum in CRuby --
    `1 << 64` is 2**64, not a wrapped/UB C shift). */
 static int infer_int_shl_overflows(long long base, long long amount) {
@@ -2415,7 +2442,7 @@ int an_object_methods_listable(Compiler *c, int cid, const char *name) {
   if (comp_method_in_chain(c, cid, name, NULL) >= 0) return 0;
   /* nor where it answers the name with a reader of its own: a Struct member
      or an attr named `methods` (#10345) */
-  if (comp_resolve_member(c, cid, name, 0, NULL, NULL) != SP_MEMBER_NONE) return 0;
+  if (call_answers(c, -1, cid, name, 0, NULL)) return 0;
   for (int k = cid, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     if (c->classes[k].is_native_class) return 0;
     if (c->classes[k].parent < 0 && !c->classes[k].is_struct) {
@@ -2859,8 +2886,7 @@ int an_bare_call_class_owned(Compiler *c, int id) {
   int cid = sc ? sc->class_id : -1;
   if (cid < 0 || cid >= c->nclasses) return 0;
   if (sc->is_cmethod) return call_target(c, id, cid, name, CT_CMETHOD, NULL) >= 0;
-  return call_target(c, id, cid, name, 0, NULL) >= 0 ||
-         comp_reader_in_chain(c, cid, name, NULL);
+  return call_answers(c, id, cid, name, 0, NULL);
 }
 
 static TyKind infer_call_inner(Compiler *c, int id);
@@ -3778,22 +3804,16 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
          through sp_poly_to_s and re-boxes the result, so the value stays
          poly (mirrors the codegen list in codegen_call_recv.c). */
       if (argc == 0 &&
-          (sp_streq(name, "strip") || sp_streq(name, "reverse") ||
-           sp_streq(name, "chomp") || sp_streq(name, "chop") ||
+          (sp_streq(name, "reverse") ||
            sp_streq(name, "succ") || sp_streq(name, "next") || sp_streq(name, "peek") ||
            sp_streq(name, "chr") ||
-           /* `strip` was here and its one-sided siblings were not, which is
-              what most of this line is: a String reaching the dispatch
-              through a poly slot answered NoMethodError for a method String
-              has. `to_str` matters most of them -- it is the implicit
-              conversion protocol, so a poly slot holding a String has to
-              answer it. The answers stay boxed, which is why they are POLY
-              here: `ascii_only?` is a boxed boolean and reads as one. */
-           sp_streq(name, "lstrip") || sp_streq(name, "rstrip") ||
-           sp_streq(name, "to_str") || sp_streq(name, "ascii_only?") ||
+           /* reverse, succ, next, peek and chr are answered by another
+              builtin too (an Array, an Integer, an Enumerator); the
+              predicates below are boxed booleans and read as one. The
+              String-only transforms are rows (builtin_ops.c, TY_POLY). */
+           sp_streq(name, "ascii_only?") ||
            sp_streq(name, "ascii_compatible?") || sp_streq(name, "dummy?") ||
-           sp_streq(name, "valid_encoding?") || sp_streq(name, "encode") ||
-           sp_streq(name, "scrub") || sp_streq(name, "b") || sp_streq(name, "dump")))
+           sp_streq(name, "valid_encoding?")))
         { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
       /* ...and the same names where they take arguments. unpack answers a
          boxed array, byteslice a boxed String or nil; the codegen arm for
@@ -3942,6 +3962,13 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
          union of returns) */
       if (!an_builtin_only && cplan_builtin_call(c, id)) { *out = an_builtin_answer(c, id); return 1; }
       int live = !an_builtin_only && an_poly_name_live(c, name);
+      /* (--plan-check: a call the plan binds to one method, main's to
+         Object's, keeps that record: no candidate stands for it) */
+      int bound = 0;
+      if (g_plan_check && !an_builtin_only && cplan_runs_on_main(c, id)) {
+        const CallPlan bp = cplan_user_fresh(c, id);
+        bound = bp.mi >= 0 && bp.via == UC_REOPEN && bp.dispatch == CP_DIRECT;
+      }
       for (int pi = 0; pi < npc; pi++) {
         int k = pcs[pi].cls;
         if (an_builtin_only) continue;   /* the builtin answer alone is wanted */
@@ -3989,7 +4016,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         int pf_known = pf >= 0 && c->scopes[pf].ret != TY_UNKNOWN && c->scopes[pf].ret != TY_VOID;
         if (mi >= 0 && c->scopes[mi].ret == TY_UNKNOWN && !pf_known) continue;
         if (mi >= 0) {
-          if (!found) an_user_call_record(c, id, mi, UC_POLY, k);
+          if (!found && !bound) an_user_call_record(c, id, mi, UC_POLY, k);
           r = found ? ty_unify(r, c->scopes[mi].ret) : c->scopes[mi].ret; found = 1;
           if (pf_known) r = ty_unify(r, c->scopes[pf].ret);
           continue;
@@ -5655,22 +5682,17 @@ static int infer_int_float_recv_call(Compiler *c, int id, const NodeTable *nt, c
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
       if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
     }
-    /* pow with a literal negative exponent yields the exact Rational, but
-       an Integer for a base of 1 or -1 */
-    if (sp_streq(name, "pow") && argc == 1 &&
-        nt_kind(nt, argv[0]) == NK_IntegerNode &&
-        nt_int(nt, argv[0], "value", 0) < 0) { *out = an_unit_int_literal(nt, recv) ? TY_INT : TY_RATIONAL; return 1; }
-    if (sp_streq(name, "pow") && argc == 1 && infer_type(c, argv[0]) == TY_FLOAT) { *out = TY_FLOAT; return 1; }
-    /* --int-overflow=promote: pow(n) is `**`: a pair that is not both known
-       constants can leave the word and promotes (sp_poly_int_pow); a
-       constant pair that overflows is the Bignum, the rest an sp_int */
-    if (g_promote_mode && sp_streq(name, "pow") && argc == 1 &&
-        (infer_type(c, argv[0]) == TY_INT || infer_type(c, argv[0]) == TY_POLY)) {
-      long long pb, pe;
-      if (!(infer_const_int_node(nt, recv, &pb) && infer_const_int_node(nt, argv[0], &pe))) { *out = TY_POLY; return 1; }
-      if (pe >= 0 && infer_int_pow_overflows(pb, pe)) { *out = TY_BIGINT; return 1; }
+    /* pow(n) is `**`: the Integer power rule answers a Rational, a boxed
+       value or the Bignum where the plain Integer does not hold */
+    if (is_pow_name(name) && argc == 1) {
+      TyKind et = infer_type(c, argv[0]);
+      if (et == TY_FLOAT) { *out = TY_FLOAT; return 1; }
+      if (et == TY_INT || (g_promote_mode && et == TY_POLY)) {
+        TyKind pt = infer_int_pow_type(c, id, recv, argv[0]);
+        if (pt != TY_UNKNOWN) { *out = pt; return 1; }
+      }
     }
-    if (sp_streq(name, "pow") && argc >= 1) { *out = TY_INT; return 1; }
+    if (is_pow_name(name) && argc >= 1) { *out = TY_INT; return 1; }
     /* clamp keeps the applied operand's class: a Float bound can be returned, so
        the mixed int-receiver/float-bound form is poly; pure-int stays Integer. */
     if (sp_streq(name, "clamp")) {
@@ -6247,8 +6269,8 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
        its existing dispatch, so only fire for a variable receiver (#2445). */
     {
       int recv_is_var = class_recv_is_dynamic(c, recv);
-      TyKind uret = TY_UNKNOWN; int nc = recv_is_var ? 0 : -1000, set = 0;
-      int ncc = 0, nblk = 0;
+      TyKind uret = TY_UNKNOWN, wret = TY_UNKNOWN; int nc = recv_is_var ? 0 : -1000, set = 0;
+      int ncc = 0, nblk = 0, nwrong = 0;
       int has_blk = nt_ref(nt, id, "block") >= 0, splat = nt_argv_splat_count(nt, argv, argc);
       const PolyCand *ccs = recv_is_var ? comp_cmethod_candidates(c, name, &ncc) : NULL;
       for (int ki = 0; ki < ncc; ki++) {
@@ -6259,7 +6281,9 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
            arm the emitter can build, so it kills the whole dispatch. A
            candidate with the WRONG ARITY does not: this call cannot reach it,
            so it neither contributes a return type nor vetoes the others
-           (#4129). Codegen's arms ask the same cplan_cls_arm_takes.
+           (#4129), unless no candidate can take the call: every arm then
+           raises, and the call is typed as the methods it names. Codegen's
+           arms ask the same cplan_cls_arm_takes.
            A candidate taking a block (a yielding one through its
            proc form) is reached by the poly receiver's class-tag dispatch
            instead, which answers poly. */
@@ -6271,10 +6295,13 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
         /* a *rest the emitter packs is an arm like any other */
         int rest_ok = rest_packable_arm(c, &c->scopes[kmi]);
         if ((c->scopes[kmi].rest_idx >= 0 && !rest_ok) || c->scopes[kmi].yields ||
-            (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0])) { nc = 0; nblk = 0; break; }
-        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat)) continue;
-        nc++;
+            (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0])) { nc = 0; nblk = 0; nwrong = 0; break; }
         TyKind kr = (TyKind)c->scopes[kmi].ret;
+        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat)) {
+          wret = nwrong++ == 0 || kr == wret ? kr : TY_POLY;
+          continue;
+        }
+        nc++;
         if (!set) { uret = kr; set = 1; }
         else if (kr != uret) uret = TY_POLY;
       }
@@ -6297,6 +6324,8 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       }
       if (nc > 0 && !has_blk)
         { *out = uret == TY_UNKNOWN ? TY_POLY : uret; return 1; }
+      if (nc == 0 && nwrong > 0 && !has_blk)
+        { *out = wret == TY_UNKNOWN ? TY_POLY : wret; return 1; }
     }
     if (argc == 1 && is_ivar_access(name) && !is_ivar_set(name)) {
       int ci = class_recv_static_ci(c, recv);
@@ -6346,7 +6375,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
          so does a method the class defines itself, whose value is what its
          body answers -- `def dup = self.class.new(...)` answers boxed (#5461) */
       !(ty_is_object(rt) &&
-        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
+        (call_answers(c, -1, ty_object_class(rt), name, 0, NULL))) &&
       !(rt == TY_POLY && an_user_defines_method(c, name)) &&
       /* (nor where TrueClass or FalseClass defines it: the reopen rule below
          types each value's side, cplan_bool_sides) */
@@ -6585,8 +6614,10 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
         int cmi = call_target(c, id, self->class_id, name, CT_CMETHOD, NULL);
         if (cmi >= 0) { *out = an_self_call_ret(c, self, name, cmi, id); return 1; }
       }
-      { int rdcls2 = -1;
-        if (comp_reader_in_chain(c, self->class_id, name, &rdcls2)) {
+      { MethodLookup rml2 = { .def_class = -1 };
+        int rdcls2 = -1;
+        if (call_attr_target(c, -1, self->class_id, name, 0, &rml2)) {
+          rdcls2 = rml2.def_class;
           const char *rname2 = comp_resolve_alias(c, self->class_id, name);
           char ivn[256];
           snprintf(ivn, sizeof ivn, "@%s", rname2);
@@ -6940,7 +6971,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
          (#3794), and so does a member accessor: Struct.new(:members) reads
          the member, not the member names -- mirrors the same guard in the
          emitter */
-      comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_NONE) {
+      !call_answers(c, -1, ty_object_class(rt), name, 0, NULL)) {
     ClassInfo *sc = &c->classes[ty_object_class(rt)];
     if (sp_streq(name, "with") && sc->is_data) { *out = rt; return 1; }  /* copy-update returns the same type */
     if (sp_streq(name, "to_a") || sp_streq(name, "values") ||
@@ -7359,7 +7390,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
      Integer here split the two halves and the build stopped (#4190). */
   if ((sp_streq(name, "object_id") || sp_streq(name, "__id__")) && recv >= 0 && argc == 0) {
     if (ty_is_object(rt) &&
-        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_ATTR)
+        call_attr_target(c, -1, ty_object_class(rt), name, 0, NULL))
       { /* fall through to the member-read rule below */ }
     else { *out = TY_INT; return 1; }
   }
@@ -9078,7 +9109,7 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
   for (int i = 0; i < n; i++) {
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 0;
+    if (call_answers(c, -1, k, name, 0, NULL)) return 0;
     if (an_object_methods_listable(c, k, name)) any = 1;
   }
   return any;
@@ -9317,6 +9348,12 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (aci >= 0 && c->classes[aci].naliases > 0 && !cplan_builtin_call(c, id)) {
       int bi = 0;
       const char *rn = comp_resolve_alias_ex(c, aci, name, NULL, &bi);
+      /* (an alias of the program's own defs made more than once, one of
+         them maybe under a condition: which target it names is the
+         record's to say where the call runs, so the call keeps its name
+         and asks the alias's versions, call_target's entry) */
+      ElabVersion avs[2];
+      if (rn && !bi && !sp_streq(rn, name) && elab_chain_versions(c, aci, 0, name, avs, 2) >= 2) rn = NULL;
       if (rn && !sp_streq(rn, name)) {
         if (!an_pure_reads) nt_node_set_str((NodeTable *)nt, id, "name", rn);
         name = an_pure_reads ? rn : nt_str(nt, id, "name");
@@ -9451,11 +9488,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
          override, so the type must hold each of their returns. Answering
          the base's declared return alone typed `@snap = attributes` a
          Hash where the switch answered sp_RbVal (#4600). */
-      /* a reader nearer than the def it overrides answers instead, as the
-         emitted read does (the implicit-self arm below types it) (#7303) */
-      if (omi >= 0 && !osc->is_cmethod && ocls >= 0 &&
-          comp_resolve_member(c, ocls, name, 0, NULL, NULL) == SP_MEMBER_ATTR)
-        omi = -1;
+      /* (a reader nearer than the def it overrides answers instead, as the
+         emitted read does: call_target gives no scope there, #7303) */
       if (omi >= 0 && omi < c->nscopes && !c->scopes[omi].yields && osc)
         return an_self_call_ret(c, osc, name, omi, id);
     }
@@ -9646,28 +9680,16 @@ static TyKind infer_call_inner(Compiler *c, int id) {
         infer_int_pow_overflows(base, exp))
       return TY_BIGINT;
   }
-  /* Integer ** <negative literal>: a Rational in CRuby, typed statically. A
-     runtime exponent keeps the static Integer result (typing it poly would
-     cascade through every int-arithmetic consumer -- see limitations.md); the
-     negative case raises loudly, and the poly-dispatched path (promote-mode
-     params) resolves the class at runtime in sp_poly_pow. */
+  /* Integer ** <Integer>: infer_int_pow_type answers a Rational for a negative
+     literal and a boxed value for a run-time exponent the facts do not show
+     >= 0 (sp_poly_pow resolves the class by the exponent's sign at run time). */
   /* The cheap operand-type and name gates come BEFORE infer_type(c, recv): that
      receiver re-inference recurses through infer_call, so calling it for every
      1-arg call node makes a wide call graph explode (#2707). */
-  if (a0 == TY_INT && sp_streq(name, "**") && recv >= 0 && argc == 1 &&
+  if (a0 == TY_INT && is_pow_op(name) && recv >= 0 && argc == 1 &&
       infer_type(c, recv) == TY_INT) {
-    long long base, exp;
-    int cexp = infer_const_int_node(nt, argv[0], &exp);
-    if (cexp && exp < 0) return an_unit_int_literal(nt, recv) ? TY_INT : TY_RATIONAL;
-    /* --int-overflow=promote: an int `**` whose operands are not both known
-       constants can escape the word at run time and promote to a Bignum
-       (codegen lowers it to sp_poly_pow), the `<<` rule below. A const-const
-       pair is exact -- an overflowing one answered TY_BIGINT above, the rest
-       fit an int. A typed exponent -- a block parameter, an element -- kept
-       the int helper, which raises in the mode whose contract is to promote
-       (#4679). */
-    if (g_promote_mode && !(cexp && infer_const_int_node(nt, recv, &base)))
-      return TY_POLY;
+    TyKind pt = infer_int_pow_type(c, id, recv, argv[0]);
+    if (pt != TY_UNKNOWN) return pt;
   }
   /* Integer with a Rational/Complex operand: ** Complex is Complex; ** Rational
      is a Float (by design, see codegen); fdiv is Float, div is the Integer floor. */
@@ -9798,7 +9820,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   /* nil receiver: type inference for NilClass methods */
   if (recv >= 0 && sp_streq(name, "display") && argc == 0 &&
       !(ty_is_object(rt) &&
-        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
+        (call_answers(c, -1, ty_object_class(rt), name, 0, NULL))) &&
       !(rt == TY_POLY && an_user_defines_method(c, name)))
     return TY_NIL;
   if (recv >= 0 && sp_streq(name, "instance_variable_defined?") && argc == 1 &&
@@ -10979,14 +11001,15 @@ static TyKind infer_conditional_attr_write(Compiler *c, int id) {
        neither need be the backing ivar's type (`def v=(x); @v = x * 10; end`
        stores an Integer while the expression answers what was assigned).
        Unify the two arms, the way the emitter does (#4148). */
-    int rmi2 = -1, wmi2 = -1;
-    int rk2 = comp_resolve_member(c, cid2, attr, 0, NULL, &rmi2);
-    int wk2 = comp_resolve_member(c, cid2, attr, 1, NULL, &wmi2);
-    if (rk2 == SP_MEMBER_METHOD || wk2 == SP_MEMBER_METHOD) {
+    MethodLookup rml = { .def_class = -1 }, wml = { .def_class = -1 };
+    /* (each half as the version live at this write: the node is asked) */
+    int rmi2 = call_target(c, id, cid2, attr, 0, &rml);
+    int wmi2 = call_target(c, id, cid2, attr, CT_WRITER, &wml);
+    if (rmi2 >= 0 || wmi2 >= 0) {
       int v3 = nt_ref(nt, id, "value");
       TyKind at = v3 >= 0 ? infer_type(c, v3) : TY_UNKNOWN;
-      TyKind rr = (rk2 == SP_MEMBER_METHOD && rmi2 >= 0) ? (TyKind)c->scopes[rmi2].ret : TY_UNKNOWN;
-      if (rk2 == SP_MEMBER_ATTR) {
+      TyKind rr = rmi2 >= 0 ? (TyKind)c->scopes[rmi2].ret : TY_UNKNOWN;
+      if (rml.kind == ML_ATTR) {
         char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", attr);
         int iv = comp_ivar_index(&c->classes[cid2], ivn);
         if (iv >= 0) rr = ivar_value_ty(&c->classes[cid2], iv);
@@ -11776,7 +11799,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        is: the operator answers a new String (`s += x`) */
     if (ct2 == TY_STRING || ct2 == TY_STRBUF) return TY_STRING;
     if (ty_is_numeric(ct2) && (ty_is_numeric(vt2) || vt2 == TY_POLY))
-      return infer_op_assign_type(c, ct2, nt_ref(nt, id, "value"));
+      return infer_op_assign_type(c, ct2, id);
     /* `cmd += ["-c", dir]` with elements of another kind than the local's
        (a String Array and a boxed one): the concatenation answers a poly
        Array, as `cmd = cmd + [...]` does, and the local widens to hold it */

@@ -64,8 +64,8 @@ Bell#ring: def#16 runs=#20 def#32 runs=#20 end=yes
 Bell.make: def#17 end=yes
 const Drum: write#18
 Drum#ring: def#19 runs=#36 def#34 runs=#36 end=yes
-versions Sent#ring: def#4..#26 seen=unknown, def#26..end seen=def#26; 11 of the name
-versions Public#ring: def#8..#28 seen=unknown, def#28..end seen=def#28; 11 of the name
-versions Bare#ring: def#12..#30 seen=unknown, def#30..end seen=def#30; 11 of the name
-versions Bell#ring: def#16..#32 seen=unknown, def#32..end seen=def#32; 11 of the name
+versions Sent#ring: def#4..#26 seen=def#4, def#26..end seen=def#26; 11 of the name
+versions Public#ring: def#8..#28 seen=def#8, def#28..end seen=def#28; 11 of the name
+versions Bare#ring: def#12..#30 seen=def#12, def#30..end seen=def#30; 11 of the name
+versions Bell#ring: def#16..#32 seen=def#16, def#32..end seen=def#32; 11 of the name
 versions Drum#ring: def#19..#34 seen=def#19 idle, def#34..end seen=def#34; 11 of the name

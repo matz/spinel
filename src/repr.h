@@ -329,7 +329,8 @@ int repr_local_shares(const Compiler *c, const Scope *s, const LocalVar *lv);
    an emitter that needs only this bit ask it. */
 int repr_static_share(const Compiler *c, int node);
 /* Does write node `node` -- a local's, an ivar's, a global's or a class
-   variable's `=`, `||=` or `&&=` -- store into a slot that holds the
+   variable's `=`, `||=` or `&&=`, or an attribute's through its field
+   (attr_assign_slot, attr_orw_slot) -- store into a slot that holds the
    handle the rule assigned (that slot's Repr's `share`)? In value position
    its value is then the handle, as the slot's read is (repr_of:
    RS_HANDLE). */

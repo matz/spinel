@@ -1,0 +1,15 @@
+[:one, :one, nil]
+[:a, :a, nil]
+[:one, :one, :b]
+[nil, :a, nil]
+[:one, :wdef, :one]
+[:one, :one, nil]
+[:one, :one, nil]
+[:one, :wdef, :one]
+[:one, :wdef, :one]
+[:a, :a, nil]
+[:one, :one, nil]
+[3, 3]
+[nil, 3]
+3
+3

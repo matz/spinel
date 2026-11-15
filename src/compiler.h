@@ -1449,6 +1449,9 @@ typedef struct {
   SP_TY_FIELD char *empty_arr_recv; /* [node_cap] empty `[]` used as a direct receiver/interpolation -> TY_POLY_ARRAY */
   SP_TY_FIELD char *empty_hash_recv; /* [node_cap] empty `{}` used as a direct receiver/interpolation -> TY_STR_POLY_HASH */
   SP_TY_FIELD char *empty_hash_arg;  /* [node_cap] empty `{}` passed as a user-method arg -> TY_POLY_POLY_HASH */
+  SP_TY_FIELD char *pow_signed;      /* [node_cap] an Integer power (`b ** e`, `b.pow(e)`, `x **= e`) whose run-time exponent the
+                                       facts do not show >= 0: it may be negative, so the power is a boxed Integer or Rational
+                                       (mark_int_pow_signed; only ever set) */
   char *store_misfit_arg; /* [node_cap] a typed array passed to a boxed parameter
                           the method stores an element into that the array
                           cannot hold: codegen refuses it unless the binding
@@ -2249,6 +2252,7 @@ int    comp_ffi_const_at(Compiler *c, int node, int *out);
 int    comp_included_method_index(Compiler *c, const char *name, int call_id);
 int    class_is_blank_slate(Compiler *c, int ci);   /* explicit `< BasicObject` descent */
 int    class_lacks_kernel(Compiler *c, int ci);     /* blank slate with no `include Kernel` */
+int    class_node_lacks_kernel(Compiler *c, int cnode);   /* ...of the class node, before the class table */
 int    comp_toplevel_mod_defines(Compiler *c, const char *name, int extend);
 
 /* Locals within a scope. */
@@ -2614,10 +2618,6 @@ int        comp_name_answered(Compiler *c, const char *name, int is_cm);
    own table only with CT_OWN (an override), the top-level functions for
    cls < 0. No record is asked: a candidate, not what one call runs. */
 int        comp_name_responder(Compiler *c, int cls, const char *name, unsigned side);
-/* Does class k's chain hold a method or an attribute reader of `name`: one
-   of the name's candidates for a boxed dispatch (comp_poly_candidates' test,
-   asked of one class), as a def or an attr_reader gives an arm? */
-int        comp_class_answers(Compiler *c, int k, const char *name);
 /* Does any class's chain answer an attribute writer of base? */
 int        comp_name_writer_any(Compiler *c, const char *base);
 int        send_def_just_supers(Compiler *c, int mi);          /* analyze_desugar.c */
@@ -2874,15 +2874,6 @@ int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap);
 const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id);
 /* Resolve `name` through the class's (chain-aware) alias table to the
    underlying method/attr name. Returns `name` unchanged if not aliased. */
-/* What a name means on a class: nothing, an attribute (attr_reader/writer,
-   Struct member, ...), or an explicit method. Both tables can own one name;
-   comp_resolve_member arbitrates once for every emission site. */
-enum { SP_MEMBER_NONE = 0, SP_MEMBER_ATTR, SP_MEMBER_METHOD };
-/* `name` is the bare name for a read and the BASE name for a write (the method
-   consulted is then `name=`). Reports the defining class and, for a method, its
-   scope index. */
-int         comp_resolve_member(Compiler *c, int class_id, const char *name, int want_write,
-                                int *def_class, int *method_index);
 const char *comp_resolve_alias(Compiler *c, int class_id, const char *name);
 const char *comp_resolve_alias_at(Compiler *c, int class_id, const char *name, int *start_cls);
 const char *comp_resolve_cm_alias_at(Compiler *c, int class_id, const char *name, int *start_cls);
@@ -2994,6 +2985,7 @@ static inline uint64_t comp_node_marks_digest(const Compiler *c, uint64_t h, int
   if (c->empty_arr_recv) h = mix(h, c->empty_arr_recv, (size_t)n * sizeof *c->empty_arr_recv);
   if (c->empty_hash_recv) h = mix(h, c->empty_hash_recv, (size_t)n * sizeof *c->empty_hash_recv);
   if (c->empty_hash_arg) h = mix(h, c->empty_hash_arg, (size_t)n * sizeof *c->empty_hash_arg);
+  if (c->pow_signed) h = mix(h, c->pow_signed, (size_t)n * sizeof *c->pow_signed);
   if (c->store_misfit_arg) h = mix(h, c->store_misfit_arg, (size_t)n * sizeof *c->store_misfit_arg);
   if (c->ivar_widen_src) h = mix(h, c->ivar_widen_src, (size_t)n * sizeof *c->ivar_widen_src);
   if (c->hash_want) h = mix(h, c->hash_want, (size_t)n * sizeof *c->hash_want);
@@ -3023,6 +3015,11 @@ static inline char comp_set_empty_hash_arg(Compiler *c, int id, char v) {
   if (c->empty_hash_arg[id] != v) { ((char *)c->empty_hash_arg)[id] = v; comp_touch_node(c, id); }
   return v;
 }
+static inline char comp_set_pow_signed(Compiler *c, int id, char v) {
+  if (c->pow_signed[id] != v) { ((char *)c->pow_signed)[id] = v; comp_touch_node(c, id); }
+  return v;
+}
+static inline int comp_pow_signed(const Compiler *c, int id) { return comp_node_in(c, id) && c->pow_signed[id]; }
 static inline TyKind comp_set_hash_want(Compiler *c, int id, TyKind v) {
   if (c->hash_want[id] != v) { ((TyKind *)c->hash_want)[id] = v; comp_touch_node(c, id); }
   return v;

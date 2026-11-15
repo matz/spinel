@@ -36,6 +36,13 @@ void one_elem_bind_slot(LocalVar *lv, TyKind bt) {
 /* The call a boxed receiver's arm re-enters (emit_face_arm) takes the
    answer as it is too: the arm boxes a nil as nil. */
 int g_face_oint_id = -1, g_face_oint_got = 0;   /* got: the oint's kind */
+/* A block's value that cannot go back into a numeric seed's slot (#3220,
+   #3308): a boxed value, a Rational, a Complex or an object. The fold accumulates boxed.
+   (A Bignum is numeric: the slot widens to it, ty_promote_numeric.) Asked by
+   the Array inject and the each.with_index one. */
+static int inject_value_leaves_seed_slot(TyKind acc_ty, Repr br) {
+  return ty_is_numeric(acc_ty) && (br.kind == RK_BOXED || br.as_ty == TY_RATIONAL || br.as_ty == TY_COMPLEX || ty_is_object(br.as_ty));
+}
 static int oint_kept(Compiler *c, int id, TyKind t) {
   if (id == g_face_oint_id) { if (t != TY_UNKNOWN) g_face_oint_got = t; return 1; }
   return node_is_oint(c, id);
@@ -3973,9 +3980,7 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
        poly -- a parameter called with Integer and Rational call sites), or
        an object, cannot fold back into a scalar numeric accumulator slot --
        keep the accumulator boxed (#3220, #3308). */
-    else if (acc_ty != TY_POLY && init >= 0 && ty_is_numeric(acc_ty) &&
-             (bt == TY_RATIONAL || bt == TY_COMPLEX || br.kind == RK_BOXED ||
-              bt == TY_BIGINT || ty_is_object(bt)))
+    else if (acc_ty != TY_POLY && init >= 0 && inject_value_leaves_seed_slot(acc_ty, br))
       acc_ty = TY_POLY;
     /* With no seed the accumulator starts at the first element and kept that
        type however the block answered. A body that is an UNRESOLVED call --
@@ -4627,7 +4632,9 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   int init = (argc > 0 && argv) ? argv[0] : -1;
   TyKind acc_ty = elem_t;
   if (init >= 0) { TyKind it = repr_of(c, init).as_ty; if (it != TY_UNKNOWN) acc_ty = it; }
-  { TyKind bt = comp_ntype(c, bb[bn - 1]); if (ty_is_numeric(bt)) acc_ty = ty_promote_numeric(acc_ty, bt); }
+  { Repr br = repr_of(c, bb[bn - 1]);
+    if (acc_ty != br.as_ty && inject_value_leaves_seed_slot(acc_ty, br)) acc_ty = TY_POLY;
+    else if (ty_is_numeric(br.as_ty)) acc_ty = ty_promote_numeric(acc_ty, br.as_ty); }
   const char *p0 = rename_local(p0o);
   TyKind pair_ty = (elem_t == TY_INT) ? TY_INT_ARRAY : TY_POLY_ARRAY;
   /* --int-overflow=promote: the body is re-inferred under the parameter
@@ -4663,6 +4670,7 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " ");
   emit_ctype(c, acc_ty, b); buf_printf(b, " _t%d = ", tacc);
   if (init >= 0 && acc_ty == TY_POLY && repr_of(c, init).kind != RK_BOXED) emit_boxed(c, init, b);
+  else if (init >= 0 && acc_ty == TY_BIGINT) emit_bigint_operand(c, init, b);   /* an Integer seed, past the word */
   else if (init >= 0) emit_expr(c, init, b);
   else buf_puts(b, acc_ty == TY_POLY ? "sp_box_nil()" : "0");
   buf_puts(b, "; ");
@@ -4729,7 +4737,9 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   { Buf tb; memset(&tb, 0, sizeof tb);
     Buf inner; memset(&inner, 0, sizeof inner);
     Buf *sv_pre = g_pre; g_pre = &inner;
-    emit_expr(c, bb[bn - 1], &tb);
+    /* a boxed accumulator takes a concrete tail (`1r`) boxed */
+    if (acc_ty == TY_POLY) emit_boxed(c, bb[bn - 1], &tb);
+    else emit_expr(c, bb[bn - 1], &tb);
     g_pre = sv_pre;
     if (inner.p) buf_puts(b, inner.p);
     buf_printf(b, "_t%d = ", tacc);
@@ -7713,8 +7723,10 @@ int ran_first_handle(int node) {
     /* (a String read of the handle, ran_first_bind_read's) */
     int rh = ran_first_read_handle(node);
     if (rh >= 0) return rh;
+    /* (one representation: a temp that holds the handle reads as its
+       bytes, SP_STR_B, and is still the handle) */
     int t;
-    if (sscanf(g_argov_text[i], "_t%d", &t) != 1) return -1;
+    if (sscanf(g_argov_text[i], "_t%d", &t) != 1 && sscanf(g_argov_text[i], "SP_STR_B(_t%d)", &t) != 1) return -1;
     for (int j = 0; j < g_n_ran_hnd; j++)
       if (g_ran_hnd[j].idx == i && g_ran_hnd[j].node == node && g_ran_hnd[j].t == t)
         return g_ran_hnd[j].th;
@@ -9607,6 +9619,17 @@ void hold_string_handle_decl(Compiler *c, int node, int t, int root, Buf *b) {
 }
 
 /* See codegen_internal.h. */
+int hold_string_handle(Compiler *c, int node, Buf *b) {
+  if (g_n_argov >= MAX_ARG_OVERRIDE) return -1;
+  int t = ++g_tmp;
+  hold_string_handle_decl(c, node, t, 1, b);
+  buf_puts(b, " ");
+  ran_first_bind(node, t, t);
+  snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "SP_STR_B(_t%d)", t);
+  return g_n_argov - 1;
+}
+
+/* See codegen_internal.h. */
 int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, const char *sep, Buf *b) {
   /* a value with no C slot of its own (nil) is held boxed */
   if (!boxed && (ty == TY_NIL || ty == TY_VOID || ty == TY_UNKNOWN)) { boxed = 1; ty = TY_POLY; }
@@ -9687,7 +9710,7 @@ static int rebound_walk(Compiler *c, int x, int after, int bound) {
     case NK_LocalVariableReadNode: {
       const char *nm = nt_str(nt, x, "name");
       if (!nm) return 0;
-      if (subtree_writes_local(c, after, nm)) return 1;
+      if (subtree_writes_var(c, after, nm, VW_LOCAL)) return 1;
       /* A proc that assigns the local through its cell rebinds it wherever
          it is called from: `m2(v, la.call)` for `la = -> { v = 0; 5 }` read
          v beside the call, in C's order, and bound the 0. Anything that
@@ -9714,6 +9737,15 @@ static int rebound_walk(Compiler *c, int x, int after, int bound) {
     }
     case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode:
       return subtree_may_reassign_state(c, after) && subtree_has_side_effect(c, after);
+    /* a constant an argument assigns (`C.m(C = 2)`) is read before it, as
+       CRuby evaluates the receiver first. The walk reads the whole argument,
+       a proc body written in it included (`C.m(proc { C = 2 }.call)`); a
+       proc defined elsewhere and called from it is not followed, and a
+       method's body assigns no constant */
+    case NK_ConstantReadNode: {
+      const char *nm = nt_str(nt, x, "name");
+      return nm && subtree_writes_var(c, after, nm, VW_CONST);
+    }
     /* a block's body reads when it runs, not where it is written */
     case NK_BlockNode: case NK_LambdaNode: return 0;
     default: {
@@ -9945,8 +9977,7 @@ static int emit_arg_handle_first(Compiler *c, int v, int rebound) {
 
 /* See codegen_internal.h. A copy an argument reads (arg_reads_copy) beside
    another argument that allocates in the call -- another such copy, or an
-   effect the call runs in place -- is at risk the same way as an operand
-   of a builtin's call (operand_copy_at_risk): nothing holds it until the
+   effect the call runs in place -- is at risk: nothing holds it until the
    call takes it, and a collection the other one runs frees it. It runs
    first, into its rooted temp, with the arguments. An effect that runs
    first itself is bound ahead of the call, and a value with no effect (an
@@ -10801,7 +10832,7 @@ void emit_pd_cell_copyback(Compiler *c, Scope *m, int uid, char names[][64]) {
     LocalVar *cp = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
     if (!cp || !cp->is_cell) continue;
     for (int j = i + 1; j < m->nparams; j++)
-      if (m->pdefault && m->pdefault[j] >= 0 && subtree_writes_local(c, m->pdefault[j], m->pnames[i])) {
+      if (m->pdefault && m->pdefault[j] >= 0 && subtree_writes_var(c, m->pdefault[j], m->pnames[i], VW_LOCAL)) {
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "%s = %s*_cell__pd%d_%d;\n", names[i],
                    cp->type == TY_PROC ? "(sp_Proc *)(uintptr_t)" : "", uid, i);
@@ -10821,7 +10852,7 @@ int default_refs_earlier_param(Compiler *c, Scope *m) {
     if (!m->pdefault || m->pdefault[i] < 0) continue;
     for (int j = 0; j < i; j++)
       if (m->pnames[j] && (subtree_reads_local(nt, m->pdefault[i], m->pnames[j]) ||
-                           subtree_writes_local(c, m->pdefault[i], m->pnames[j])))
+                           subtree_writes_var(c, m->pdefault[i], m->pnames[j], VW_LOCAL)))
         return 1;
   }
   return 0;
@@ -11575,7 +11606,7 @@ static int gather_lead_arg(Compiler *c, Scope *m, const int *argv, int argc, int
   int nd = 0, *dfl = call_site_defaults(c, m, kwh, &nd), rebound = 0;
   for (int j = i + 1; j < argc + nd && !rebound; j++) {
     int after = j < argc ? argv[j] : dfl[j - argc];
-    if (vn) rebound = subtree_writes_local(c, after, vn) ||
+    if (vn) rebound = subtree_writes_var(c, after, vn, VW_LOCAL) ||
                       (lv && lv->is_cell && subtree_has_side_effect(c, after));
     else if (xk == NK_InstanceVariableReadNode) rebound = subtree_has_side_effect(c, after);
     else rebound = read_rebound_by(c, x, after);
@@ -13221,8 +13252,9 @@ int reader_override_arms(Compiler *c, int id, int cid, const char *name, TyKind 
    for a shared-mutable String slot, whose read is a copy the dispatch's
    default arm does not make. */
 TyKind reader_override_ty(Compiler *c, int id, int cid, const char *name) {
-  int rdc = -1;
-  if (!comp_reader_in_chain(c, cid, name, &rdc)) return TY_UNKNOWN;
+  MethodLookup ml = { .def_class = -1 };
+  if (!call_attr_target(c, -1, cid, name, 0, &ml)) return TY_UNKNOWN;
+  int rdc = ml.def_class;
   /* an alias of a reader: a def of the ORIGINAL name in a subclass does not
      override the alias, and comp_method_in_chain would follow the alias to it */
   { const char *al = comp_resolve_alias(c, cid, name);
@@ -13416,7 +13448,7 @@ int read_of_fixed_param(Compiler *c, int node) {
   Scope *s = NULL;
   LocalVar *lv = read_of_rooted_local(c, node, &s);
   return lv && lv->is_param && s->def_node >= 0 &&
-         !subtree_writes_local(c, s->def_node, nt_str(c->nt, node, "name"));
+         !subtree_writes_var(c, s->def_node, nt_str(c->nt, node, "name"), VW_LOCAL);
 }
 
 /* A read of a local nothing in the statement around it can rebind, when the
@@ -13996,7 +14028,7 @@ else {
       LocalVar *cp = scope_local(pm, pm->pnames[k]);
       int cell = cp && cp->is_cell;
       for (int j = k + 1; j < pm->nparams; j++)
-        if (pm->pdefault && pm->pdefault[j] >= 0 && subtree_writes_local(c, pm->pdefault[j], pm->pnames[k])) {
+        if (pm->pdefault && pm->pdefault[j] >= 0 && subtree_writes_var(c, pm->pdefault[j], pm->pnames[k], VW_LOCAL)) {
           emit_indent(g_pre, g_indent);
           if (!cell) buf_printf(g_pre, "_t%d = lv__pd%d_%d;\n", atmp[k], pd_uid, k);
           else if (cp->type == TY_PROC) buf_printf(g_pre, "_t%d = (sp_Proc *)(uintptr_t)*_cell__pd%d_%d;\n", atmp[k], pd_uid, k);

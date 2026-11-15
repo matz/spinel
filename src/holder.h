@@ -93,6 +93,12 @@ int holder_of_node(const Compiler *c, int node, HolderRef *out);
    class side, anywhere else. 0, with *cid -1, when the node has no scope
    or there is no class to hold it. */
 int holder_ivar_side(const Compiler *c, int node, int *cid);
+/* The classes whose slot the ivar node `node` (a write, or a multiple
+   assignment's target) stores into, with their side (*side, if asked): each class a
+   boxed instance_eval/exec receiver can be (ie_poly_classes_at; *poly set
+   for a boxed receiver), none where its classes are not known, else the one
+   holder_ivar_side names. 0 when there is none. */
+int ivar_node_classes(const Compiler *c, int node, int *out, int max, int *side, int *poly);
 int const_path_on_class_value(const Compiler *c, int id, TyKind prt);   /* a path read off a Class value: no one slot */
 int holder_of_node_slot(const Compiler *c, int node, HolderRef *out);   /* no Repr */
 /* holder_of_node, in the class body `body` the caller says (codegen passes

@@ -188,12 +188,6 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/bare_const_unreachable_const_missing.rb:9: uninitialized constant B::X (NameError): the program defines it only as A::X, which CRuby's lookup from B (its lexical scope, then its ancestors) does not reach; CRuby then calls const_missing (or raises NameError), which spinel does not follow here
 == test/reject/bare_const_unreachable_const_missing.rb [promote] rc=1
 spinel: test/reject/bare_const_unreachable_const_missing.rb:9: uninitialized constant B::X (NameError): the program defines it only as A::X, which CRuby's lookup from B (its lexical scope, then its ancestors) does not reach; CRuby then calls const_missing (or raises NameError), which spinel does not follow here
-== test/reject/basicobject_toplevel_include_call.rb [default] rc=1
-spinel: test/reject/basicobject_toplevel_include_call.rb:18: unsupported call: node N (CallNode `hello`) recv=-/ty-1 argc=0
-spinel: 1 refusal, nothing written
-== test/reject/basicobject_toplevel_include_call.rb [promote] rc=1
-spinel: test/reject/basicobject_toplevel_include_call.rb:18: unsupported call: node N (CallNode `hello`) recv=-/ty-1 argc=0
-spinel: 1 refusal, nothing written
 == test/reject/bind_call_class_value_block_target.rb [default] rc=1
 spinel: test/reject/bind_call_class_value_block_target.rb:12: unsupported call: node N (CallNode `bind_call`) recv=CallNode/ty0 argc=1 arg0ty1001
 spinel: 1 refusal, nothing written
@@ -1401,10 +1395,10 @@ spinel: test/reject/macro_two_modules.rb:12: unsupported send with a runtime met
 == test/reject/macro_two_modules.rb [promote] rc=1
 spinel: test/reject/macro_two_modules.rb:12: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/map_bang_with_index_untyped_proc.rb [default] rc=1
-spinel: test/reject/map_bang_with_index_untyped_proc.rb:5: map!.with_index with a block whose value is untyped, on a typed Array
+spinel: test/reject/map_bang_with_index_untyped_proc.rb:6: map!.with_index with a block whose value is untyped, on a typed Array
 spinel: 1 refusal, nothing written
 == test/reject/map_bang_with_index_untyped_proc.rb [promote] rc=1
-spinel: test/reject/map_bang_with_index_untyped_proc.rb:5: map!.with_index with a block whose value is untyped, on a typed Array
+spinel: test/reject/map_bang_with_index_untyped_proc.rb:6: map!.with_index with a block whose value is untyped, on a typed Array
 spinel: 1 refusal, nothing written
 == test/reject/merge_boxed_block_param_shapes.rb [default] rc=1
 spinel: test/reject/merge_boxed_block_param_shapes.rb:5: a merge! conflict block with a default, keyword, post-rest or fourth required parameter over a boxed Hash

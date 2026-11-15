@@ -5088,9 +5088,10 @@ int comp_name_is_private_helper(Compiler *c, const char *m) {
 int comp_method_is_private_helper(Compiler *c, int cid, const char *m) {
   if (!m || m[0] != '_' || m[1] != '_') return 0;
   /* the member an instance reaches: a reader the program declares nearer
-     than the helper is its own (comp_resolve_member) */
-  int mi = -1;
-  if (cid >= 0 && comp_resolve_member(c, cid, m, 0, NULL, &mi) == SP_MEMBER_ATTR) return 0;
+     than the helper is its own (call_target) */
+  MethodLookup ml = { .def_class = -1 };
+  int mi = cid >= 0 ? call_target(c, -1, cid, m, 0, &ml) : -1;
+  if (ml.kind == ML_ATTR) return 0;
   for (int s = mi < 0 ? an_scopes_named_first(c, m) : -1; s >= 0 && mi < 0; s = an_scopes_named_next(c, m, s))
     if (c->scopes[s].class_id < 0 && !c->scopes[s].is_cmethod && !c->scopes[s].is_proc_form) mi = s;
   return comp_scope_is_private_helper(c, mi);
@@ -5188,9 +5189,9 @@ int comp_self_call_mi(Compiler *c, int id, const char *name) {
 }
 
 int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char *name) {
+  MethodLookup ml = { .def_class = -1 };
   if (ty_is_object(srt))
-    return call_target(c, call, ty_object_class(srt), name, 0, NULL) >= 0 ||
-           comp_reader_in_chain(c, ty_object_class(srt), name, NULL);
+    return call_answers(c, call, ty_object_class(srt), name, 0, &ml);
   /* a class named by a constant (or `self.class`): its own class methods
      come before Object's private top-level def */
   NodeKind rk = nt_kind(c->nt, recv);
@@ -5220,7 +5221,7 @@ int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char
     if (nl && name[nl - 1] != '?' && builtin_name_below_object(name) && cplan_send_split_owners(c, recv, name, NULL, 0) > 0) return 1;
     if (nr == 0) return comp_name_reader_any(c, name);
     for (int k = 0; k < c->nclasses; k++)
-      if (call_target(c, call, k, name, 0, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
+      if (call_answers(c, call, k, name, 0, &ml)) return 1;
     return 0;
   }
   const char *bc = srt == TY_INT ? "Integer" : srt == TY_FLOAT ? "Float"
@@ -5469,8 +5470,10 @@ int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *arml
      (desugar_bind_attr_helpers) */
   char hn[300], base[256];
   int hdc = -1, hmi = snprintf(hn, sizeof hn, "__bind %s", sym) < (int)sizeof hn ? comp_method_in_chain(c, ci, hn, &hdc) : -1;
-  int attr = setter_base_name(sym, base, sizeof base) ? comp_writer_in_chain(c, ci, base, NULL)
-                                                      : comp_reader_in_chain(c, ci, sym, NULL);
+  MethodLookup aml = { .def_class = -1 };
+  int wr = setter_base_name(sym, base, sizeof base);
+  call_target(c, -1, ci, wr ? base : sym, wr ? CT_WRITER : 0, &aml);
+  int attr = aml.kind == ML_ATTR;
   if (hmi >= 0 && attr && (mi < 0 || (hdc != mdc && is_descendant(c, hdc, mdc)))) mi = hmi;
   if (mi < 0) return -1;
   const ClassInfo *k = &c->classes[ci];

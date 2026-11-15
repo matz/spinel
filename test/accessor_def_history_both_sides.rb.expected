@@ -1,0 +1,17 @@
+:cls1
+:inst1
+:cls2
+:inst2
+:cls2
+[:inst_def, :inst2]
+[:inst_def, :inst3]
+:cls2
+[:cls_def, [:w, :cls3]]
+[:inst_def, :inst3]
+[:inst_def, :inst0]
+15
+2
+6
+102
+:inst1
+[:inst_def, :inst1]

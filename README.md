@@ -561,9 +561,9 @@ gets in the way of a POSIX change it may be removed. See
 - **No general lambda calculus**: deeply nested `-> x { }` with `[]` calls
 
 A few cases deliberately diverge from CRuby because the CRuby behavior needs a
-feature Spinel does not implement (e.g. `Integer#**` with a negative exponent
-raises instead of returning a `Rational`). These are catalogued under "By
-design" in [docs/limitations.md](docs/limitations.md).
+feature Spinel does not implement (e.g. `Integer#**` with a `Rational`
+exponent returns a `Float`, not an exact `Rational`). These are catalogued
+under "By design" in [docs/limitations.md](docs/limitations.md).
 
 ## Dependencies
 

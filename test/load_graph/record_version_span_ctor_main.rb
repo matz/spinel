@@ -2,7 +2,7 @@
 # record_version_span_ctor_main.rb.load-record) for objects made by a
 # constructor named by a Symbol: each class's first ring runs where its
 # object is made, so the version before its redefinition is seen
-# (unknown: the include changes the chain), never idle. Bell's object is
+# (the include stands behind the class's own ring), never idle. Bell's object is
 # made only by a class method's own constructor, which the first `puts`
 # runs; Drum has no object until the last line.
 # record_version_span_exception_main.rb makes one by exception, by

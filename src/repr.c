@@ -16,8 +16,9 @@
 /* The reader method `nm` resolved on class cid: the ivar it answers, when
    that ivar carries a nil bit (its read is an sp_oint). */
 static int reader_ivar_has_nilbit(Compiler *c, int cid, const char *nm) {
-  int defc = -1;
-  if (cid < 0 || cid >= c->nclasses || !nm || !comp_reader_in_chain(c, cid, nm, &defc)) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  if (cid < 0 || cid >= c->nclasses || !nm || !call_attr_target(c, -1, cid, nm, 0, &ml)) return 0;
+  int defc = ml.def_class;
   char ivb[300];
   snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, cid, nm));
   int k = defc >= 0 ? defc : cid;
@@ -158,22 +159,25 @@ static int node_is_oint_asked(Compiler *c, int node) {
     const char *nm = nt_str(nt, node, "name");
     TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
     if (r < 0 || !nm || !ty_is_object(rt)) return nullable_int_value(c, node);
-    int cid = ty_object_class(rt), rmi = -1;
-    int rk = comp_resolve_member(c, cid, nm, 0, NULL, &rmi);
+    int cid = ty_object_class(rt);
+    MethodLookup rml = { .def_class = -1 };
+    int rmi = call_target(c, node, cid, nm, 0, &rml);
     /* `&&=` answers the value on the arm that assigns: nil where it can be,
        whatever the reader answers (`o.count &&= nil` on an Integer reader) */
-    if (k == NK_CallAndWriteNode && (rk == SP_MEMBER_METHOD || rk == SP_MEMBER_ATTR)) {
+    if (k == NK_CallAndWriteNode && (rmi >= 0 || rml.kind == ML_ATTR)) {
       int v = nt_ref(nt, node, "value");
       if (v >= 0 && (nt_kind(nt, v) == NK_NilNode || node_has_oint_form(c, v))) return 1;
     }
-    if (rk == SP_MEMBER_METHOD && rmi >= 0) return method_ret_is_oint(&c->scopes[rmi]);
+    /* a reader that only answers nil: `&&=` never assigns, and answers its nil */
+    if (rmi >= 0 && k == NK_CallAndWriteNode && (c->scopes[rmi].ret == TY_NIL || c->scopes[rmi].ret == TY_VOID)) return 1;
+    if (rmi >= 0) return method_ret_is_oint(&c->scopes[rmi]);
     /* an attr's `||=` stores a nil field's replacement and answers it: nil
        only where the value can be */
-    if (rk == SP_MEMBER_ATTR && k == NK_CallOrWriteNode) {
+    if (rml.kind == ML_ATTR && k == NK_CallOrWriteNode) {
       int v = nt_ref(nt, node, "value");
       return v >= 0 && (nt_kind(nt, v) == NK_NilNode || node_has_oint_form(c, v));
     }
-    if (rk == SP_MEMBER_ATTR) return reader_ivar_has_nilbit(c, cid, nm);
+    if (rml.kind == ML_ATTR) return reader_ivar_has_nilbit(c, cid, nm);
     return nullable_int_value(c, node);
   }
   case NK_CallNode: {
@@ -310,11 +314,8 @@ static int node_is_oint_asked(Compiler *c, int node) {
       /* an attr reader is its ivar's read: the ivar's oint when the ivar
          carries a nil bit, the plain field otherwise (whatever the reader's
          own return mark says: the field has no other form) -- unless a
-         method written out nearer in the chain, or in the same class,
-         overrides the reader (comp_resolve_member, as the call's emit
-         decides it) */
-      if (an2 == 0 && blk < 0 && comp_reader_in_chain(c, cid, nm, NULL) &&
-          (mi < 0 || comp_resolve_member(c, cid, nm, 0, NULL, NULL) == SP_MEMBER_ATTR))
+         method written out nearer in the chain overrides the reader */
+      if (an2 == 0 && blk < 0 && mi < 0 && ml.kind == ML_ATTR)
         return reader_ivar_has_nilbit(c, cid, nm) || dispatch_answers_nil(c, node, cid, nm, -1);
     }
     else if (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) {
@@ -784,6 +785,13 @@ int repr_write_share(const Compiler *c, int node) {
     return attr_assign_slot(mc, node, &cid, &iv) ? repr_of_ivar(c, cid, iv).share
                                                  : user_assign_handle(mc, node) || native_assign_keeps(mc, node) != NULL;
   }
+  /* an attribute's `obj.x ||= v` or `obj.x &&= v` through its field: the
+     value is what the field holds after it, as an ivar's `||=` is its
+     slot's */
+  if (k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) {
+    int cid, iv;
+    return attr_orw_slot(mc, node, &cid, &iv) && repr_of_ivar(c, cid, iv).share;
+  }
   return 0;
 }
 
@@ -821,7 +829,7 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
        which answers no String: strbuf_poly_user_boxes) */
     if (arm < 0) {
       if (ks[j] < 0 || ks[j] >= c->nclasses || comp_method_in_chain(c, ks[j], "method_missing", NULL) >= 0 ||
-          comp_resolve_member(c, ks[j], nm, 0, NULL, NULL) != SP_MEMBER_NONE)
+          call_answers(c, -1, ks[j], nm, 0, NULL))
         return 0;
       continue;
     }

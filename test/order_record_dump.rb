@@ -166,10 +166,13 @@ PROGRAMS = [
       def bump; @x = 9; end
       def run(o) = [@x, 1 << o]
       def plain(n) = [@x, 1 << n]
+      def shift(o) = 1 << o
+      def via(o) = [@x, shift(o)]
     end
     k = K.new
     p k.run(O.new(k))
     p k.plain(2)
+    p K.new.via(O.new(k))
   RUBY
   ["c2_rescue_cvar.rb", <<~'RUBY'],
     class C
@@ -226,6 +229,18 @@ PROGRAMS = [
     a = []
     h = {}
     p a, h, foo
+  RUBY
+  # an Array literal, a Range over Integers, a Regexp literal and a Hash
+  # literal with String keys only build their values: no code, so beside
+  # reads alone no row; beside a call, the Array literal is a read the
+  # call may change (HOLD)
+  ["v1_value_builders.rb", <<~'RUBY'],
+    def f(*a) = a
+    s = +"ab"
+    n = 1
+    g = proc { s << "z"; 2 }
+    p f([s], (0..n), /a/, {"k" => s}, s)
+    p f([s], (0..n), /a/, {"k" => s}, g.call)
   RUBY
 ]
 

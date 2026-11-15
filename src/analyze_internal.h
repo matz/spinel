@@ -446,11 +446,13 @@ void walk_scope(Compiler *c, int id, int scope_idx, int class_id);
    statements may not run but for those that run whenever the begin does
    (prog_rescue_sure), or a list in the first of them that may raise,
    which runs: 1 in the begin's own frame, 2 in a frame opened under it (a
-   class body), whose statements may not run only from outside it. */
+   class body), whose statements may not run only from outside it. bmay:
+   in the body of a top-level reopening of a builtin class that a
+   condition holds (LrStmt.bmay). */
 typedef struct {
   int e, file, top, frame, depth, rep;
   int list;   /* the statement list the node is an element of (a StatementsNode), -1 for a lone expression */
-  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept, rescued;
+  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept, rescued, bmay;
 } ElabPos;
 enum { EP_NODE, EP_SPINE, EP_LIST, EP_NEW };
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp);
@@ -623,7 +625,6 @@ int strbuf_iter_box_tail(Compiler *c, int v);                    /* codegen_stmt
 int strbuf_route_clamp(Compiler *c, int v, int *ops);           /* codegen_stmt.c */
 int subtree_may_reassign_state(Compiler *c, int id);             /* codegen_call.c */
 int subtree_may_run_proc(Compiler *c, int id);                   /* codegen_call.c */
-int subtree_writes_local(Compiler *c, int id, const char *nm);   /* codegen_stmt.c */
 /* The type a READ of ivar slot `iv` yields (a shared-mutable string slot
    reads as a plain String). Shared with the receiver-face helpers. */
 TyKind ivar_value_ty(ClassInfo *ci, int iv);
@@ -632,7 +633,9 @@ int range_object_face(const char *name);  /* Object's face of a Float / String r
 int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_arysub_call(Compiler *c, int id, TyKind *out);
-TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int value);
+TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int write);
+/* what an Integer power (`b ** e`, `b.pow(e)`, `x **= e`) is beyond a plain Integer, or TY_UNKNOWN; recv -1 for the op-write */
+TyKind infer_int_pow_type(Compiler *c, int id, int recv, int exp);
 int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out);

@@ -1,7 +1,7 @@
 # A first body that may make an instance (record_version_span_main.rb): the
 # lambda makes a Gong, and calling it makes one before Gong's first body
 # ends, so the include that follows lands where it can be seen
-# (--dump-load-record: unknown).
+# (--dump-load-record: its own ring, not idle).
 module Chime
   def ring = "chime"
 end

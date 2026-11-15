@@ -890,7 +890,9 @@ int subtree_has_side_effect(Compiler *c, int id) {
 /* See compiler.h. A write names the variable; a call on self follows the
    one method the classes from `cls` down define for it, up to a few calls
    deep; anything else that runs code of the program's -- a call on another
-   object, a yield, a super, a block -- may write any. */
+   object, a yield, a super, a block, a scalar operator over an operand whose
+   to_int or coerce is the program's (scalar_op_runs_no_code) -- may write
+   any. */
 int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -903,7 +905,7 @@ int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, v
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_YieldNode ||
       k == NK_BlockNode || k == NK_LambdaNode || k == NK_BlockArgumentNode)
     return 1;
-  if (k == NK_CallNode && !call_is_scalar_op(c, id)) {
+  if (k == NK_CallNode && !scalar_op_runs_no_code(c, id)) {
     int recv = nt_ref(nt, id, "receiver");
     const char *nm = nt_str(nt, id, "name");
     if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) return 1;
@@ -3944,12 +3946,13 @@ static int strbuf_bang_self_local_at(const Compiler *c, int v) {
    that also holds nil or another class), so its read is an sp_RbVal that
    holds the handle? */
 static int strbuf_reader_field_boxed(Compiler *c, int n) {
-  int recv = nt_ref(c->nt, n, "receiver"), cid, defc = -1;
+  int recv = nt_ref(c->nt, n, "receiver"), cid;
+  MethodLookup ml = { .def_class = -1 };
   const char *name = nt_str(c->nt, n, "name");
   if (recv < 0 || !name || nt_ref(c->nt, n, "arguments") >= 0) return 0;
   TyKind rt = comp_ntype(c, recv);
-  if (!ty_is_object(rt) || !comp_reader_in_chain(c, (cid = ty_object_class(rt)), name, &defc)) return 0;
-  if (comp_method_in_chain(c, cid, name, NULL) >= 0) return 0;
+  if (!ty_is_object(rt) || !call_attr_target(c, -1, (cid = ty_object_class(rt)), name, 0, &ml)) return 0;
+  int defc = ml.def_class;
   char ivn[300];
   snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, cid, name));
   ClassInfo *ci = &c->classes[defc >= 0 ? defc : cid];
@@ -8372,6 +8375,29 @@ void kw_key_inspect(const char *kn, int is_sym, char *out, size_t n) {
   else out[n - 1] = 0;
 }
 
+static size_t pre_line_start(const Buf *pre) {
+  size_t ls = pre->len;
+  while (ls > 0 && pre->p[ls - 1] != '\n') ls--;
+  return ls;
+}
+
+/* splices `hoist` in where the line at `ls` starts, appends `val` to that
+   line, and frees both */
+static void pre_line_splice(Buf *pre, size_t ls, Buf *hoist, Buf *val) {
+  if (hoist->len > 0) {
+    size_t tail = pre->len - ls;
+    char *saved = malloc(tail + 1);
+    memcpy(saved, pre->p + ls, tail); saved[tail] = 0;
+    pre->len = ls; pre->p[ls] = 0;
+    buf_puts(pre, hoist->p);
+    if (pre->len > 0 && pre->p[pre->len - 1] != '\n') buf_puts(pre, "\n");
+    buf_putn(pre, saved, tail);
+    free(saved);
+  }
+  if (val->p) buf_puts(pre, val->p);
+  free(val->p); free(hoist->p);
+}
+
 /* An emitter asked to write into g_pre itself, after a partial line
    (`buf_printf(g_pre, "sp_int _t3 = "); emit_int_expr(c, v, g_pre)`): what
    the expression hoists would land in the middle of that line -- an
@@ -8381,25 +8407,13 @@ void kw_key_inspect(const char *kn, int is_sym, char *out, size_t n) {
    line starts, and the value is appended to the line. */
 void emit_into_pre_line(Compiler *c, void (*fn)(Compiler *, int, Buf *), int node) {
   Buf *pre = g_pre;
-  size_t ls = pre->len;
-  while (ls > 0 && pre->p[ls - 1] != '\n') ls--;
+  size_t ls = pre_line_start(pre);
   Buf val; memset(&val, 0, sizeof val);
   Buf hoist; memset(&hoist, 0, sizeof hoist);
   g_pre = &hoist;
   fn(c, node, &val);
   g_pre = pre;
-  if (hoist.len > 0) {
-    size_t tail = pre->len - ls;
-    char *saved = malloc(tail + 1);
-    memcpy(saved, pre->p + ls, tail); saved[tail] = 0;
-    pre->len = ls; pre->p[ls] = 0;
-    buf_puts(pre, hoist.p);
-    if (pre->len > 0 && pre->p[pre->len - 1] != '\n') buf_puts(pre, "\n");
-    buf_putn(pre, saved, tail);
-    free(saved);
-  }
-  if (val.p) buf_puts(pre, val.p);
-  free(val.p); free(hoist.p);
+  pre_line_splice(pre, ls, &hoist, &val);
 }
 
 /* ---- nil out of band: sp_oint / sp_ofloat (codegen_internal.h) ---- */
@@ -8968,10 +8982,14 @@ int node_has_oint_form(Compiler *c, int node) {
 void emit_oint_expr(Compiler *c, int node, TyKind t, Buf *b) {
   if (b == g_pre) {
     /* as emit_into_pre_line, with the kind threaded through */
-    Buf tmp; memset(&tmp, 0, sizeof tmp);
-    emit_oint_expr(c, node, t, &tmp);
-    buf_puts(b, tmp.p ? tmp.p : "");
-    free(tmp.p);
+    Buf *pre = g_pre;
+    size_t ls = pre_line_start(pre);
+    Buf val; memset(&val, 0, sizeof val);
+    Buf hoist; memset(&hoist, 0, sizeof hoist);
+    g_pre = &hoist;
+    emit_oint_expr(c, node, t, &val);
+    g_pre = pre;
+    pre_line_splice(pre, ls, &hoist, &val);
     return;
   }
   if (!oint_kind(t)) t = TY_INT;

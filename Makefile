@@ -1943,7 +1943,7 @@ test-run: decisions-test
 # Each kind also has its row in the table in tools/README.md.
 DECISION_TESTS = $(shell grep -l '^\# spinel: decisions$$' test/*.rb test/fixtures/decisions/*.rb)
 DECISION_KINDS = aon-get case-root fetch-inert fetch-slot gc-save hc-cobound index-sum inline-force masgn-root nn-inb nn-read no-alloc \
-                 pd-hoist push-slot root-elide root-frame strbuf-raw
+                 pd-hoist pow-int push-slot root-elide root-frame strbuf-raw
 decisions-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-decisions.XXXXXX); : > "$$tmp/none"; \
 	if $(SPINEL) --decisions="$$tmp/absent" test/fixtures/decisions/sites.rb -c -o "$$tmp/o.c" >"$$tmp/o.out" 2>&1; then \
@@ -2249,11 +2249,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  echo "reject-test: FAIL (an included method assigning an ivar as a multiple-assignment target compiled)"; ok=0; \
 	else grep -q "top-level include of a module method that uses instance variables" "$$tmp/tiv.out" || \
 	  { echo "reject-test: FAIL (included ivar target rejected without saying why)"; sed -n 1,5p "$$tmp/tiv.out"; ok=0; }; fi; \
-	t=test/reject/basicobject_toplevel_include_call.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/bo.c" >"$$tmp/bo.out" 2>&1; then \
-	  echo "reject-test: FAIL (a BasicObject instance method reached a top-level included module method)"; ok=0; \
-	else grep -q "unsupported call: node [0-9]* (CallNode \`hello\`)" "$$tmp/bo.out" || \
-	  { echo "reject-test: FAIL (BasicObject bare call rejected without naming it)"; sed -n 1,5p "$$tmp/bo.out"; ok=0; }; fi; \
 	for t in $(shell grep -l '^\# spinel: reject-super-value$$' test/reject/*.rb); do \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/siv.c" >"$$tmp/siv.out" 2>&1; then \
 	  echo "reject-test: FAIL (the value of super in initialize compiled: $$t)"; ok=0; \
@@ -3657,7 +3652,7 @@ inline-rbs-test:
 	@echo "inline-rbs-test: parser-backed cases skipped (vendor/rbs not fetched; run 'make deps')"
 else
 INLINE_RBS_PARITY := methods attrs association identity_reopen identity_collide check_honest hash_return_box builtin_classes relative_const_class multiline_signature optional_params forwarding_params
-INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syntax_error syntax_error_multiline syntax_error_rbs two_annotations precedence_agree precedence_disagree reader_pin_precedence reader_pin_conflicts stray_rb override_family check_false off_switch \
+INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syntax_error syntax_error_multiline syntax_error_rbs two_annotations precedence_agree precedence_disagree precedence_module_function reader_pin_precedence reader_pin_conflicts stray_rb override_family check_false off_switch \
                      placements duplicate_reopen_agree duplicate_reopen_disagree duplicate_nilable precedence_objarray duplicate_rbs_decl \
                      redefine_unannotated redefine_unannotated_req redefine_define_method redefine_class_eval redefine_ignored redefine_refused mixin_not_applied analyzer_warnings dump_ast_malformed \
                      contradiction_inline objarray_boxed desugared_warnings self_types_agree sclass_receiver_def
@@ -3796,6 +3791,10 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	precedence_disagree) \
 	if $(SPINEL) $(IRB)/precedence.rb --rbs $(IRB)/sig/precedence_disagree -c --no-line-map -o "$$tmp/d.c" >"$$tmp/d.err" 2>&1; then echo "inline-rbs-test: FAIL (inline RBS disagreeing with --rbs compiled)"; ok=0; \
 	else grep -q 'precedence.rb:5:.*meter.rbs:2' "$$tmp/d.err" || { echo "inline-rbs-test: FAIL (a disagreement with --rbs was refused without naming both)"; sed -n 1,5p "$$tmp/d.err"; ok=0; }; fi; \
+	;; \
+	precedence_module_function) \
+	if $(SPINEL) $(IRB)/precedence_module_function.rb --rbs $(IRB)/sig/precedence_module_function -c --no-line-map -o "$$tmp/d.c" >"$$tmp/d.err" 2>&1; then echo "inline-rbs-test: FAIL (inline RBS on a module function disagreeing with --rbs on its includer's copy compiled)"; ok=0; \
+	else grep -q 'precedence_module_function.rb:6:.*disagrees with the .rbs signature at .*gauge.rbs:2' "$$tmp/d.err" || { echo "inline-rbs-test: FAIL (a module function's disagreement with --rbs was refused without naming both)"; sed -n 1,5p "$$tmp/d.err"; ok=0; }; fi; \
 	;; \
 	reader_pin_precedence) \
 	for fl in "" --int-overflow=promote; do \
@@ -4633,10 +4632,16 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	! grep -q 'sp_PolyPolyHash_new' "$$tmp/hbu.c" || { echo "infer-test: FAIL (an unbounded boxed store widened a known Hash)"; ok=0; }; \
 	$(SPINEL) test/container_alias_untracked_local.rb -c --no-line-map -o "$$tmp/cau.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (container_alias_untracked_local: -c)"; ok=0; }; \
 	awk '/^struct sp_Area_s \{/,/^\}/' "$$tmp/cau.c" | grep -Fq 'sp_StrArray * iv_except;' || { echo "infer-test: FAIL (a local that may hold an untracked container joined an alias group and widened an Array[String])"; ok=0; }; \
+	$(SPINEL) test/ivar_push_unsettled_block_value.rb -c --no-line-map -o "$$tmp/ipu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_push_unsettled_block_value: -c)"; ok=0; }; \
+	awk '/^struct sp_Jar_s \{/,/^\}/' "$$tmp/ipu.c" | grep -Fq 'sp_StrStrHash * iv_values;' || { echo "infer-test: FAIL (a push of a block value not typed yet made an ivar the poly Array and widened a Hash[String, String])"; ok=0; }; \
 	$(SPINEL) test/struct_member_index_op_write_box.rb -c --no-line-map -o "$$tmp/smo.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (struct_member_index_op_write_box: -c)"; ok=0; }; \
 	[ "$$(awk '/^struct sp_Point_s \{/,/^\}/' "$$tmp/smo.c" | grep -c 'sp_int iv_[xy];')" = 2 ] && awk '/^struct sp_Pair_s \{/,/^\}/' "$$tmp/smo.c" | grep -q 'sp_RbVal iv_a;' && awk '/^struct sp_Cell_s \{/,/^\}/' "$$tmp/smo.c" | grep -q 'sp_RbVal iv_v;' || { echo "infer-test: FAIL (an index op-write through a box typed a Struct the box cannot hold, or not one it can)"; ok=0; }; \
 	$(SPINEL) test/ivar_op_write_numeric_promotes.rb -c --no-line-map -o "$$tmp/iow.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_op_write_numeric_promotes: -c)"; ok=0; }; \
 	[ "$$(grep -E -o '(sp_float|sp_RbVal) iv_(f|g|wins|i|c|s|v|d);' "$$tmp/iow.c" | LC_ALL=C sort -u | tr '\n' ' ')" = "sp_RbVal iv_c; sp_RbVal iv_i; sp_RbVal iv_s; sp_float iv_d; sp_float iv_f; sp_float iv_g; sp_float iv_v; sp_float iv_wins; " ] && [ "$$(grep -E -c '^(static )?sp_ofloat civ_(Counter_total|Toplevel_t)( =[^;]*)?;' "$$tmp/iow.c")" = 2 ] || { echo "infer-test: FAIL (a Float ivar's arithmetic op-write with an Integer operand boxed the slot, or a mixed, boxed-operand or shift op-write narrowed one)"; ok=0; }; \
+	$(SPINEL) test/boxed_string_only_transforms.rb -c --no-line-map -o "$$tmp/bst.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (boxed_string_only_transforms: -c)"; ok=0; }; \
+	! grep -q 'sp_RbVal lv_r_' "$$tmp/bst.c" || { echo "infer-test: FAIL (a String-only transform on a boxed String answered boxed)"; ok=0; }; \
+	$(SPINEL) test/boxed_string_own_method_answers.rb -c --no-line-map -o "$$tmp/bso.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (boxed_string_own_method_answers: -c)"; ok=0; }; \
+	[ "$$(grep -o 'sp_RbVal lv_r_[a-z_]*' "$$tmp/bso.c" | sort -u | tr '\n' ' ')" = "sp_RbVal lv_r_b sp_RbVal lv_r_strip " ] || { echo "infer-test: FAIL (a program class's own b or strip answering a non-String lost its answer, or its to_str answering a String boxed the call)"; ok=0; }; \
 	$(SPINEL) test/index_read_unsettled_local.rb -c --no-line-map -o "$$tmp/iru.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_read_unsettled_local: -c)"; ok=0; }; \
 	! grep -q 'sp_RbVal lv_line\b' "$$tmp/iru.c" || { echo "infer-test: FAIL (an index read guessed a settling local a Hash and boxed a block parameter)"; ok=0; }; \
 	$(SPINEL) test/table_row_join_keeps_kind.rb -c --no-line-map -o "$$tmp/trj.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_row_join_keeps_kind: -c)"; ok=0; }; \
@@ -4879,7 +4884,7 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) test/loop_string_getbyte_unheld.rb -c --no-line-map -o "$$tmp/lsgu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_string_getbyte_unheld: -c)"; ok=0; }; \
 	awk '/^[a-z].* sp_(total|edges|uncached)\(.*\{$$/,/^}/' "$$tmp/lsgu.c" | grep -cE 'getbyte_opt\((sp_String_cstr|SP_STR_B)\(lv_rows\), ' | grep -qx 3 || { echo "infer-test: FAIL (String#getbyte with an arithmetic index does not read its receiver where the call needs it)"; ok=0; }; \
 	awk '/^[a-z].* sp_(total|edges|uncached)\(.*\{$$/,/^}/' "$$tmp/lsgu.c" | grep -q 'SP_GC_ROOT(_t' && { echo "infer-test: FAIL (String#getbyte with an arithmetic index fetches and roots its receiver's bytes ahead of the index)"; ok=0; }; \
-	awk '/^[a-z].* sp_built\(.*\{$$/,/^}/' "$$tmp/lsgu.c" | grep -qE 'const char \*_t[0-9]+ = (\(sp_String_cstr\(lv_rows\)\)|SP_STR_B\(SP_STR_B\(lv_rows\)\)); SP_GC_ROOT\(_t' || { echo "infer-test: FAIL (String#getbyte with an index that allocates does not hold its receiver rooted)"; ok=0; }; \
+	awk '/^[a-z].* sp_built\(.*\{$$/,/^}/' "$$tmp/lsgu.c" | grep -qE 'sp_int _t([0-9]+) = [^;]*; sp_str_getbyte_opt\(SP_STR_B\(lv_rows\), _t\1\)' || { echo "infer-test: FAIL (String#getbyte with an index that allocates does not run the index ahead of the receiver's read)"; ok=0; }; \
 	$(SPINEL) test/begin_while_locals_not_volatile.rb -c --no-line-map -o "$$tmp/bwv.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (begin_while_locals_not_volatile: -c)"; ok=0; }; \
 	grep -qE 'volatile .* lv_(sum|v|f|n) ' "$$tmp/bwv.c" && { echo "infer-test: FAIL (a local a handler-less begin ... end while writes was declared volatile)"; ok=0; }; \
 	grep -qE 'volatile sp_int lv_x ' "$$tmp/bwv.c" || { echo "infer-test: FAIL (a local a begin with a rescue writes lost its volatile)"; ok=0; }; \

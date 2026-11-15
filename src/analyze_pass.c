@@ -1151,7 +1151,7 @@ int case_in_lambda_param(Compiler *c, int lam) {
   if (nt_kind(nt, reqs[0]) != NK_RequiredParameterNode || !nt_str(nt, reqs[0], "name")) return -1;
   if (lambda_body_jumps(nt, body, 0)) return -1;
   /* a body that writes its parameter keeps master's path: the parameter is typed from the subject */
-  if (subtree_writes_local(c, body, nt_str(nt, reqs[0], "name"))) return -1;
+  if (subtree_writes_var(c, body, nt_str(nt, reqs[0], "name"), VW_LOCAL)) return -1;
   int pci = comp_class_index(c, "Proc"), dc = -1;
   if (pci >= 0 && comp_method_in_chain(c, pci, "===", &dc) >= 0 && dc >= 0) {
     const char *dn = c->classes[dc].name;
@@ -1400,6 +1400,68 @@ static int infer_case_pattern_locals(Compiler *c) {
 }
 
 
+/* `a.map!.with_index { |x, i| v }` (or with_index(off)): the blockless
+   map! / collect! hands its Enumerator to with_index, and the block's value
+   goes into each slot of a, as a map! block's does (emit_with_index_expr
+   writes the values back). The node of the Array (a), or -1 when the call
+   is not this form. */
+static int map_bang_with_index_array(const NodeTable *nt, int id) {
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !sp_streq(nm, "with_index")) return -1;
+  int blk = nt_ref(nt, id, "block");
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -1;
+  int args = nt_ref(nt, id, "arguments"), an = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &an);
+  if (an > 1) return -1;
+  int inner = nt_ref(nt, id, "receiver");
+  if (inner < 0 || nt_kind(nt, inner) != NK_CallNode || nt_ref(nt, inner, "block") >= 0) return -1;
+  const char *in = nt_str(nt, inner, "name");
+  int iargs = nt_ref(nt, inner, "arguments"), ian = 0;
+  if (iargs >= 0) nt_arr(nt, iargs, "arguments", &ian);
+  if (!in || !is_map_bang_alias(in) || ian != 0) return -1;
+  return nt_ref(nt, inner, "receiver");
+}
+
+/* Is every write of local `name` in scope `ls` a new Array nothing else
+   holds (is_fresh_array)? The with_index emitter writes back only into a
+   typed Array or a PolyArray it holds itself: a local that aliases a row
+   (`r = m[0]`) would widen apart from the row it shares. */
+static int local_has_target_write(Compiler *c, Scope *sc, const char *name);
+static int local_writes_all_fresh(Compiler *c, Scope *ls, const char *name) {
+  const NodeTable *nt = c->nt;
+  int seen = 0;
+  /* (a target `a, z = m[0], 1`, a `for` variable or a pattern capture, and
+     `a ||= v` / `a &&= v`, bind a value this does not see) */
+  if (local_has_target_write(c, ls, name)) return 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableOrWriteNode, w)
+    if (comp_scope_of(c, w) == ls && sp_streq(nt_str(nt, w, "name"), name)) return 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableAndWriteNode, w)
+    if (comp_scope_of(c, w) == ls && sp_streq(nt_str(nt, w, "name"), name)) return 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, name) || comp_scope_of(c, w) != ls) continue;
+    if (!is_fresh_array(c, nt_ref(nt, w, "value"))) return 0;
+    seen = 1;
+  }
+  return seen;
+}
+
+/* The plain local a map!.with_index block writes into, as store evidence
+   for infer_write_container_usage (which reads the block's nil arms);
+   -1 for any other receiver. An ivar, a param, a Struct member or a row
+   (`m[0]`, `m.first`) widened here met an emitter that cannot store the
+   boxed value into it, so those keep the typed Array. */
+static int map_bang_with_index_local(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int arr = map_bang_with_index_array(nt, id);
+  if (arr < 0 || nt_kind(nt, arr) != NK_LocalVariableReadNode) return -1;
+  const char *rnm = nt_str(nt, arr, "name");
+  Scope *ls = rnm ? comp_scope_of(c, arr) : NULL;
+  LocalVar *lv = ls ? scope_local(ls, rnm) : NULL;
+  if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) return -1;
+  return local_writes_all_fresh(c, ls, rnm) ? arr : -1;
+}
+
 /* `arr.map! { ... }` REPLACES every element with the block's value, so a tail
    the receiver's element type cannot hold widens the receiver itself -- the
    same reasoning as a push of a foreign element, on a mutation that rewrites
@@ -1414,7 +1476,9 @@ int widen_arrays_from_map_bang(Compiler *c) {
   int changed = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || (!sp_streq(nm, "map!") && !sp_streq(nm, "collect!"))) continue;
+    /* (`a.map!.with_index { }` writes a's slots the same way) */
+    int wi_arr = map_bang_with_index_array(nt, id);
+    if (!nm || (!sp_streq(nm, "map!") && !sp_streq(nm, "collect!") && wi_arr < 0)) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0) continue;
     int body = nt_ref(nt, blk, "body");
@@ -1422,7 +1486,7 @@ int widen_arrays_from_map_bang(Compiler *c) {
     if (bn <= 0) continue;
     TyKind tt = infer_type(c, bb[bn - 1]);
     if (tt == TY_UNKNOWN) continue;
-    int recv = nt_ref(nt, id, "receiver");
+    int recv = wi_arr >= 0 ? wi_arr : nt_ref(nt, id, "receiver");
     if (recv >= 0) recv = mutated_array(c, recv);
     if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
     const char *rnm = nt_str(nt, recv, "name");
@@ -1435,6 +1499,7 @@ int widen_arrays_from_map_bang(Compiler *c) {
        program and then loses the values (`sp_poly_to_i` of a String), which is
        worse than the build failure. They are left alone. */
     if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+    if (wi_arr >= 0 && !local_writes_all_fresh(c, ls, rnm)) continue;
     if (!ty_is_array(lv->type) || lv->type == TY_POLY_ARRAY) continue;
     if (tt == ty_array_elem(lv->type)) continue;
     lv_set_type(lv, TY_POLY_ARRAY); changed = 1;
@@ -1890,7 +1955,7 @@ typedef struct { TyRef slot; unsigned char local, reader; int cid, iv; } AliasSi
    member's setter), or any send or instance_variable_set may. */
 static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
   static const char *const dyn[] = { "send", "public_send", "__send__", "instance_variable_set", NULL };
-  if (comp_resolve_member(c, cls, ivn + 1, 1, NULL, NULL) == SP_MEMBER_NONE) return 0;
+  if (!call_answers(c, -1, cls, ivn + 1, CT_WRITER, NULL)) return 0;
   char setter[300];
   snprintf(setter, sizeof setter, "%s=", ivn + 1);
   /* a call of the writer's name whose receiver may be an object of the
@@ -1921,8 +1986,10 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
      parameter (ivar_writes_fresh) */
   if (nt_kind(c->nt, n) == NK_CallNode) {
     const char *ivn = NULL;
-    int cls = ivar_src_slot(c, n, &ivn), dc = -1;
-    if (cls < 0 || comp_resolve_member(c, cls, ivn + 1, 0, &dc, NULL) != SP_MEMBER_ATTR || dc < 0) return 0;
+    int cls = ivar_src_slot(c, n, &ivn);
+    MethodLookup rml = { .def_class = -1 };
+    if (cls < 0 || !call_attr_target(c, -1, cls, ivn + 1, 0, &rml) || rml.def_class < 0) return 0;
+    int dc = rml.def_class;
     ClassInfo *ci = &c->classes[dc];
     int iv = comp_ivar_index(ci, ivn);
     /* a Struct member of a Struct with no initialize of its own is set by
@@ -2393,8 +2460,10 @@ static TyRef ivar_evidence_slot(Compiler *c, const LWIndex *ivw, int ivar_cls_id
      the merge then destroyed the Queue with (#4211). Consult the ivar's
      own direct writes first: a settled non-array write means this push
      is no array evidence at all, and an array write of another element
-     kind means the slot is the poly array from the start. */
-  if (is_push && ci->ivar_types[iv] == TY_UNKNOWN && inm) {
+     kind means the slot is the poly array from the start. A value not
+     typed yet is no evidence either (fold_evidence skips it): read as
+     another kind than the write's, it made the slot the poly array. */
+  if (is_push && ci->ivar_types[iv] == TY_UNKNOWN && *vt != TY_UNKNOWN && inm) {
     int nonarray_write = 0, other_kind_write = 0;
     TyKind want0 = ty_array_of(*vt);
     for (int _r = ivw_index_first(ivw, inm); _r >= 0; _r = ivw->next[_r]) {
@@ -2574,26 +2643,18 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
       }
       else {
         MethodLookup ml = { .def_class = -1 };
-        int rdef = -1;
         mi = call_target(c, call, from, mname, 0, &ml);
-        int rd = comp_reader_in_chain(c, from, mname, &rdef);
-        /* a class carries its parent's readers as its own, so a method there
-           over an inherited reader is the override, not a tie */
-        int pdef = ml.def_class >= 0 ? c->classes[ml.def_class].parent : -1;
-        int over = mi >= 0 && rd && ml.def_class == rdef && pdef >= 0 &&
-                   comp_reader_in_chain(c, pdef, mname, NULL);
-        if (mi >= 0 && (!rd || over || (ml.def_class != rdef && is_descendant(c, ml.def_class, rdef)))) {
+        if (mi >= 0) {
           defcls = ml.def_class;
           niv = getter_exit_ivars(c, mi, ivs, 8);
         }
-        else if (rd && (mi < 0 || (ml.def_class != rdef && is_descendant(c, rdef, ml.def_class)))) {
+        else if (ml.kind == ML_ATTR) {
           snprintf(rbuf, sizeof rbuf, "@%s", comp_resolve_alias(c, from, mname));
-          defcls = rdef;
+          defcls = ml.def_class;
           ivs[0] = rbuf;
           niv = 1;
           break;
         }
-        else mi = -1;
       }
       if (mi < 0 || niv > 0 || defcls < 0) break;
       if (!is_bare_super(c, scope_body_last(c, mi))) break;
@@ -2630,8 +2691,8 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
 /* Does class `k` itself define the instance getter `mname`, as a method or
    an attr_reader (not one it inherits)? */
 static int class_owns_getter(Compiler *c, int k, const char *mname) {
-  int kd = -1;
-  if (comp_reader_in_chain(c, k, mname, &kd)) return kd == k;
+  MethodLookup ml = { .def_class = -1 };
+  if (call_attr_target(c, -1, k, mname, 0, &ml)) return ml.def_class == k;
   return comp_method_in_class(c, k, mname) >= 0;
 }
 
@@ -3124,16 +3185,16 @@ static int masgn_attr_take(Compiler *c, int tgt, TyKind elem) {
   if (rt != TY_POLY && only < 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (only >= 0 && k != only && !is_descendant(c, k, only)) continue;
-    int wdc = -1;
-    int wmi = call_target(c, tgt, k, nm, 0, NULL);
+    MethodLookup wml = { .def_class = -1 };
+    int wmi = call_target(c, tgt, k, nm, 0, &wml);
     if (wmi >= 0) {
       Scope *ws = &c->scopes[wmi];
       LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;
       if (wp) changed |= slot_take(c, wp, elem, -1);
       continue;
     }
-    if (!comp_writer_in_chain(c, k, base, &wdc)) continue;
-    int wcls = wdc >= 0 ? wdc : k, iv = comp_ivar_index(&c->classes[wcls], ivn);
+    if (!call_attr_target(c, tgt, k, base, CT_WRITER, &wml)) continue;
+    int wcls = wml.def_class >= 0 ? wml.def_class : k, iv = comp_ivar_index(&c->classes[wcls], ivn);
     if (iv < 0 || class_ivar_pinned(&c->classes[wcls], ivn)) continue;
     TyKind mg = ty_unify(c->classes[wcls].ivar_types[iv], elem);
     if (mg != c->classes[wcls].ivar_types[iv]) { ivar_set_type(&c->classes[wcls], iv, mg); changed = 1; }
@@ -3141,15 +3202,20 @@ static int masgn_attr_take(Compiler *c, int tgt, TyKind elem) {
   return changed;
 }
 
-/* The class whose slot an ivar target tgt of a multiple write in scope ms
-   writes: the method's, outside a method the class body's, or the top
-   level's (the Toplevel pseudo-class), as an `@x = v` write's is. -1 for
-   none yet. */
-static int masgn_ivar_cls(Compiler *c, Scope *ms, int tgt) {
-  int icid = ms ? ms->class_id : -1;
-  if (icid < 0 && c->node_cbody && tgt < c->node_cap) icid = c->node_cbody[tgt];
-  if (icid < 0) icid = c->toplevel_class;
-  return icid;
+/* An ivar target of a multiple write takes `elem`'s type into each slot it
+   writes (ivar_node_classes, as an `@x = v` write's; a pinned ivar keeps
+   its own); 1 when a slot's type changed. */
+static int masgn_ivar_unify(Compiler *c, int tgt, TyKind elem) {
+  const char *nm = nt_str(c->nt, tgt, "name");
+  int cl[64], n = nm ? ivar_node_classes(c, tgt, cl, 64, NULL, NULL) : 0, changed = 0;
+  for (int i = 0; i < n; i++) {
+    ClassInfo *ci = &c->classes[cl[i]];
+    int ix = comp_ivar_index(ci, nm);
+    if (ix < 0 || class_ivar_pinned(ci, nm)) continue;
+    TyKind mg = ty_unify(ci->ivar_types[ix], elem);
+    if (mg != ci->ivar_types[ix]) { ivar_set_type(ci, ix, mg); changed = 1; }
+  }
+  return changed;
 }
 
 static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKind elem) {
@@ -3162,18 +3228,8 @@ static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKi
       LocalVar *lv = lnm ? scope_local(ms, lnm) : NULL;
       changed |= masgn_local_take(c, lv, elem, tgts[i]);
     }
-    else if (sp_streq(lty_ms, "InstanceVariableTargetNode") && ms) {
-      /* outside a method: the class body's slot, or the top level's */
-      int icid = masgn_ivar_cls(c, ms, tgts[i]);
-      if (icid < 0) continue;
-      const char *ivnm = nt_str(nt, tgts[i], "name");
-      int iv_ms = ivnm ? comp_ivar_index(&c->classes[icid], ivnm) : -1;
-      if (iv_ms < 0 || class_ivar_pinned(&c->classes[icid], ivnm)) continue;
-      TyKind mg = ty_unify(c->classes[icid].ivar_types[iv_ms], elem);
-      if (mg != c->classes[icid].ivar_types[iv_ms]) {
-        ivar_set_type(&c->classes[icid], iv_ms, mg); changed = 1;
-      }
-    }
+    else if (nt_kind(nt, tgts[i]) == NK_InstanceVariableTargetNode)
+      changed |= masgn_ivar_unify(c, tgts[i], elem);
     else if (sp_streq(lty_ms, "GlobalVariableTargetNode")) {
       const char *gnm = nt_str(nt, tgts[i], "name");
       const char *grn = gnm ? comp_resolve_gvar(c, gnm + 1) : NULL;
@@ -3849,7 +3905,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         is_idx_write = 1; is_splice = 1; is_fill = 1; vt = infer_type(c, argv[0]);
         kt = TY_INT;  /* a positional span, never hash evidence */
       }
-      else if (name && ((sp_streq(name, "fill") && an <= 2) || (is_map_bang_alias(name) && an == 0)) &&
+      else if (name && ((sp_streq(name, "fill") && an <= 2) || (is_map_bang_alias(name) && an == 0) ||
+                        map_bang_with_index_local(c, id) >= 0) &&
                nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode) {
         /* the block form, fill([start[, len]]) { |i| v }: the block's value
            is what goes into each slot of the span, the same evidence. map!
@@ -3858,6 +3915,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
            widen_arrays_from_map_bang widens only a plain local. */
         int fblk = nt_ref(nt, id, "block");
         int fbody = nt_ref(nt, fblk, "body");
+        /* (map!.with_index's slots are those of map!'s receiver) */
+        if (map_bang_with_index_local(c, id) >= 0) recv = map_bang_with_index_local(c, id);
         int fbn = 0; const int *fbs = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
         TyKind ftail = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
         vt = ftail;
@@ -4460,7 +4519,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
                 if (last < 0 || nt_kind(nt, last) != NK_InstanceVariableReadNode) continue;
                 ivn = nt_str(nt, last, "name");
               }
-              else if (comp_reader_in_chain(c, k, mname, &kd)) {
+              else if (ml.kind == ML_ATTR) {
                 snprintf(rbuf, sizeof rbuf, "@%s", mname);
                 ivn = rbuf;
               }
@@ -4828,17 +4887,8 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
    the change detector for these slots (same rule as slot_reset). */
             changed |= masgn_local_take(c, lv, elems[i], value);
           }
-          else if (sp_streq(lty_mr, "InstanceVariableTargetNode") && ms_mr &&
-                   masgn_ivar_cls(c, ms_mr, lefts[i]) >= 0) {
-            int icid = masgn_ivar_cls(c, ms_mr, lefts[i]);
-            const char *ivnm = nt_str(nt, lefts[i], "name");
-            int ivx = ivnm ? comp_ivar_index(&c->classes[icid], ivnm) : -1;
-            if (ivx < 0 || class_ivar_pinned(&c->classes[icid], ivnm)) continue;
-            TyKind mg = ty_unify(c->classes[icid].ivar_types[ivx], elems[i]);
-            if (mg != c->classes[icid].ivar_types[ivx]) {
-              ivar_set_type(&c->classes[icid], ivx, mg); changed = 1;
-            }
-          }
+          else if (nt_kind(nt, lefts[i]) == NK_InstanceVariableTargetNode)
+            changed |= masgn_ivar_unify(c, lefts[i], elems[i]);
           else if (sp_streq(lty_mr, "GlobalVariableTargetNode") || sp_streq(lty_mr, "ClassVariableTargetNode"))
             changed |= masgn_unify_elem(c, ms_mr, &lefts[i], 1, elems[i]);
           else if (sp_streq(lty_mr, "ConstantTargetNode") || sp_streq(lty_mr, "ConstantPathTargetNode")) {
@@ -5014,17 +5064,9 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
         if (lv_widen(cv, et)) changed = 1;
       }
       else if (lk == NK_InstanceVariableTargetNode) {
-        int iv_cid = masgn_ivar_cls(c, comp_scope_of(c, id), lefts[i]);
-        if (iv_cid < 0) continue;
-        const char *ivnm = nt_str(nt, lefts[i], "name");
-        int iv_idx = ivnm ? comp_ivar_index(&c->classes[iv_cid], ivnm) : -1;
-        if (iv_idx < 0 || class_ivar_pinned(&c->classes[iv_cid], ivnm)) continue;
         TyKind et = infer_type(c, els[i]);
         if (et == TY_NIL) et = TY_POLY;
-        TyKind mg = ty_unify(c->classes[iv_cid].ivar_types[iv_idx], et);
-        if (mg != c->classes[iv_cid].ivar_types[iv_idx]) {
-          ivar_set_type(&c->classes[iv_cid], iv_idx, mg); changed = 1;
-        }
+        changed |= masgn_ivar_unify(c, lefts[i], et);
       }
       else if (lk == NK_GlobalVariableTargetNode || lk == NK_ClassVariableTargetNode) {
         TyKind et = infer_type(c, els[i]);
@@ -5098,17 +5140,8 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
       }
       else if (rty3_k == NK_GlobalVariableTargetNode || rty3_k == NK_ClassVariableTargetNode)
         changed |= masgn_unify_elem(c, comp_scope_of(c, id), &rights[j], 1, et);
-      else if (rty3_k == NK_InstanceVariableTargetNode) {
-        int iv_cid3 = masgn_ivar_cls(c, comp_scope_of(c, id), rights[j]);
-        if (iv_cid3 < 0) continue;
-        const char *ivnm3 = nt_str(nt, rights[j], "name");
-        int iv_idx3 = ivnm3 ? comp_ivar_index(&c->classes[iv_cid3], ivnm3) : -1;
-        if (iv_idx3 < 0 || class_ivar_pinned(&c->classes[iv_cid3], ivnm3)) continue;
-        TyKind mg4 = ty_unify(c->classes[iv_cid3].ivar_types[iv_idx3], et);
-        if (mg4 != c->classes[iv_cid3].ivar_types[iv_idx3]) {
-          ivar_set_type(&c->classes[iv_cid3], iv_idx3, mg4); changed = 1;
-        }
-      }
+      else if (rty3_k == NK_InstanceVariableTargetNode)
+        changed |= masgn_ivar_unify(c, rights[j], et);
     }
     /* rest (splat) target: elements [ln, en-rn) become a typed array */
     int rest_nid = nt_ref(nt, id, "rest");
@@ -5374,7 +5407,7 @@ static TyKind local_write_ty(Compiler *c, int id, int stashed) {
     if (ct == TY_STRING) newt = TY_STRING;
     /* A boxed addend can promote the accumulator at run time as well. */
     else if (ty_is_numeric(ct) && (ty_is_numeric(vt) || vt == TY_POLY))
-      newt = infer_op_assign_type(c, ct, nt_ref(nt, id, "value"));
+      newt = infer_op_assign_type(c, ct, id);
     /* `cmd += ["-c", dir]` with elements of another kind: a poly Array, as
        the binary `cmd = cmd + [...]` gives (infer_type's op-write rule) */
     else if (ty_is_array(ct) && ty_is_array(vt) && vt != ct &&
@@ -7373,8 +7406,7 @@ int ivar_src_slot(Compiler *c, int v, const char **ivn) {
     TyKind rt = infer_type(c, r);
     if (ty_is_object(rt)) cls = ty_object_class(rt);
   }
-  int def_cls = -1, mix = -1;
-  if (cls < 0 || comp_resolve_member(c, cls, nm, 0, &def_cls, &mix) != SP_MEMBER_ATTR) return -1;
+  if (cls < 0 || !call_attr_target(c, -1, cls, nm, 0, NULL)) return -1;
   ivb[0] = '@'; strcpy(ivb + 1, nm);
   *ivn = ivb;
   return cls;
@@ -7624,9 +7656,8 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   if (icls >= 0) {
     ClassInfo *ci = &c->classes[icls];
     int ivi = comp_ivar_index(ci, ivn);
-    int wdc = -1, wmi = -1;
     if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap ||
-        comp_resolve_member(c, icls, ivn + 1, 1, &wdc, &wmi) == SP_MEMBER_ATTR ||
+        (call_attr_target(c, -1, icls, ivn + 1, CT_WRITER, NULL)) ||
         !ivar_writes_fresh(c, icls, ivn, 0, NULL)) return 0;
     if (!apply) return 1;
     int ch = 0;
@@ -11308,9 +11339,8 @@ static int infer_conditional_writer_param(Compiler *c, int id) {
   if (recv < 0 || val < 0 || !name) return 0;
   TyKind rt = infer_type(c, recv);
   if (!ty_is_object(rt)) return 0;
-  int mi = -1;
-  if (comp_resolve_member(c, ty_object_class(rt), name, 1, NULL, &mi) != SP_MEMBER_METHOD || mi < 0)
-    return 0;
+  int mi = call_target(c, id, ty_object_class(rt), name, CT_WRITER, NULL);
+  if (mi < 0) return 0;
   Scope *ws = &c->scopes[mi];
   LocalVar *pv = ws->nparams > 0 && ws->pnames[0] ? scope_local(ws, ws->pnames[0]) : NULL;
   if (!pv || pv->rbs_seeded) return 0;
@@ -13829,24 +13859,6 @@ static void rehome_block_body(Compiler *c, int body, int encl) {
 }
 
 static void subtree_rename_local(NodeTable *nt, int root, const char *oldn, const char *newn, int depth);
-/* Is local `name` written anywhere under `root`? */
-static int exec_subtree_writes_local(const NodeTable *nt, int root, const char *name, int depth) {
-  if (root < 0 || depth > 200) return 0;
-  NodeKind k = nt_kind(nt, root);
-  if ((k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode || k == NK_LocalVariableOperatorWriteNode ||
-       k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode) &&
-      nt_str(nt, root, "name") && sp_streq(nt_str(nt, root, "name"), name)) return 1;
-  int nr = nt_num_refs(nt, root);
-  for (int i = 0; i < nr; i++)
-    if (exec_subtree_writes_local(nt, nt_ref_at(nt, root, i), name, depth + 1)) return 1;
-  int na = nt_num_arrs(nt, root);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *ids = nt_arr_at(nt, root, i, &n);
-    for (int j = 0; j < n; j++)
-      if (exec_subtree_writes_local(nt, ids[j], name, depth + 1)) return 1;
-  }
-  return 0;
-}
 /* Does the code under `root` append to local `name` in place or hand it to
    a call? */
 static int exec_subtree_lends_local(const NodeTable *nt, int root, const char *name, int depth) {
@@ -13885,7 +13897,7 @@ static int exec_param_reads_arg(Compiler *c, int body, const char *pn, int arg) 
   const char *an = nt_str(nt, arg, "name");
   TyKind at = infer_type(c, arg);
   if (!an || (at != TY_STRING && at != TY_STRBUF)) return 0;
-  if (exec_subtree_writes_local(nt, body, pn, 0) || exec_subtree_writes_local(nt, body, an, 0)) return 0;
+  if (subtree_writes_var(c, body, pn, VW_LOCAL) || subtree_writes_var(c, body, an, VW_LOCAL)) return 0;
   return exec_subtree_lends_local(nt, body, pn, 0);
 }
 
@@ -14215,7 +14227,7 @@ static int struct_to_h_with_block(Compiler *c, int id) {
   if (!nm || !sp_streq(nm, "to_h") || recv < 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
   TyKind rt = infer_type(c, recv);
   if (!ty_is_object(rt) || !c->classes[ty_object_class(rt)].is_struct) return 0;
-  return comp_resolve_member(c, ty_object_class(rt), nm, 0, NULL, NULL) == SP_MEMBER_NONE;
+  return !call_answers(c, -1, ty_object_class(rt), nm, 0, NULL);
 }
 
 /* A CallNode at the source position of `like`. */
@@ -19581,18 +19593,17 @@ static int scope_tail_unresolved_call(Compiler *c, int s) {
      user class defining the same name is not a candidate here (the receiver is
      statically a String / Integer / ...), and treating it as one put the
      method back to void as soon as any library happened to share the name. */
-  { const char *bn = rt == TY_STRING || rt == TY_STRBUF ? "String"
+  { MethodLookup ml = { .def_class = -1 };
+    const char *bn = rt == TY_STRING || rt == TY_STRBUF ? "String"
                    : rt == TY_INT || rt == TY_BIGINT ? "Integer"
                    : rt == TY_FLOAT ? "Float"
                    : rt == TY_SYMBOL ? "Symbol" : NULL;
     if (bn) {
       int bc = comp_builtin_class_named(c, bn);
-      if (bc >= 0 && (call_target(c, last, bc, nm, 0, NULL) >= 0 ||
-                      comp_reader_in_chain(c, bc, nm, NULL))) return 0;
+      if (bc >= 0 && (call_answers(c, last, bc, nm, 0, &ml))) return 0;
     }
     int oc = comp_core_class(c, CORE_OBJECT);
-    if (oc >= 0 && (call_target(c, last, oc, nm, 0, NULL) >= 0 ||
-                    comp_reader_in_chain(c, oc, nm, NULL))) return 0;
+    if (oc >= 0 && (call_answers(c, last, oc, nm, 0, &ml))) return 0;
   }
   return 1;
 }
@@ -20919,7 +20930,7 @@ static void cr_mark_version(Compiler *c, int id, const char *nm, int k, unsigned
   if (nt_kind(c->nt, id) == NK_CallNode && is_method_object_maker(nt_str(c->nt, id, "name"))) flags |= CT_CAPTURE;
   int mi = call_target(c, id, k, nm, flags, NULL);
   char mark[24];
-  if (mi < 0 || (c->scopes[mi].attr_version && cplan_sg_slot_call(c, id, k, nm))) return;
+  if (mi < 0 || cplan_sg_slot_call(c, id, k, nm, mi)) return;
   snprintf(mark, sizeof mark, "\x01%d", mi);
   cr_add_name(m->out, m->n, m->cap, mark);
 }
@@ -21231,7 +21242,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     int k = cn ? const_node_class_index(c, r) : -1;
     int mi = k >= 0 ? call_target(c, id, k, nm, CT_CMETHOD, NULL) : -1;
     /* (a call the plan compiles to the accessor's slot reaches nothing) */
-    if (mi >= 0 && c->scopes[mi].attr_version && cplan_sg_slot_call(c, id, k, nm)) names[0] = NULL;
+    if (cplan_sg_slot_call(c, id, k, nm, mi)) names[0] = NULL;
     else if (mi >= 0) { snprintf(resolved, sizeof resolved, "\x01%d", mi); names[0] = resolved; }
   }
   /* a call on main that finds main's own method reaches that one, not an
@@ -21311,6 +21322,13 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     builtin_recv = 1;
   if (!builtin_recv && k0 == NK_CallNode && nm && names[0] == nm) builtin_recv = cr_recv_builtin_class(c, nt, id, nm);
   if (builtin_recv) names[0] = NULL;
+  /* a builtin value is an instance: a method a reopening or an included
+     module gives its class may be the one called, a class method never */
+  if (g_cr_typed && k0 == NK_CallNode && nm && names[0] == nm && !nt_int(nt, id, "dyn_arm", 0) &&
+      nt_ref(nt, id, "receiver") >= 0 && cr_ty_builtin_value(c, comp_ntype(c, nt_ref(nt, id, "receiver")))) {
+    snprintf(inst_name, sizeof inst_name, "\x03%s", nm);
+    names[0] = inst_name;
+  }
   /* An entry's arm call is pinned to the method it runs, which the entry
      reaches by scope (ver_entry_targets, above), or to the builtin: by name
      it reached every other method of the name, a class method's entry the

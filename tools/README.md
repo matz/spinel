@@ -931,6 +931,7 @@ file, no compiler, a bad option). This is a contract.
 | `root-frame` | a method, proc, Fiber or END body roots through one frame (`--no-root-frame`); denied, each root is pushed |
 | `inline-force` | a hot small method is forced inline (`--no-inline-hot`); denied, the C compiler decides |
 | `pd-hoist` | a poly dispatch's switch is moved out of line, into a function its call sites share (`SPINEL_NO_PD_HOIST`); denied, it stays inline at the call |
+| `pow-int` | an Integer power's run-time exponent is proved non-negative, so the power stays a plain Integer; denied, the power is boxed and answers by the exponent's sign (a Rational for a negative one) |
 | `strbuf-raw` | a reader hands out a string buffer's bytes without a copy; denied, it copies |
 | `no-alloc` | an operand is taken not to allocate, so what was evaluated before it needs no temp or root; denied, it is treated as allocating |
 | `case-root` | a `case` subject is not rooted across its `when` tests; denied, it is |

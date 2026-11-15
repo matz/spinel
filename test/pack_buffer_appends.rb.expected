@@ -1,0 +1,40 @@
+[:c_star, "ab\u0001\u0002", #<Encoding:UTF-8>, 4]
+true
+[:u_fmt, "x☺", #<Encoding:UTF-8>, 4]
+[:mixed, "\x00\x00\x00\x00\x00\x00\xF8?\x00\ahi\x00", #<Encoding:BINARY (ASCII-8BIT)>, 13]
+[:ber, "\x82,\x05", #<Encoding:BINARY (ASCII-8BIT)>, 3]
+[:pad, "head\u0000\u0001", #<Encoding:UTF-8>, 6]
+[:at, "abA", #<Encoding:UTF-8>, 3]
+[:back, "abcdeZ", #<Encoding:UTF-8>, 6]
+[:frozen, FrozenError]
+[:type, "buffer must be String, not Integer"]
+[:ints, "\x01\x02\x03", #<Encoding:BINARY (ASCII-8BIT)>, 3]
+[:floats, "\x00\x00\xC0?\x00\x00 @", #<Encoding:BINARY (ASCII-8BIT)>, 8]
+[:strs, "ab cd ", #<Encoding:BINARY (ASCII-8BIT)>, 6]
+[:mixed_ary, "\x01z\x00\x00\x00@", #<Encoding:BINARY (ASCII-8BIT)>, 6]
+400
+true
+99
+"head"
+"head\u0001"
+"\x01"
+"\x01"
+"\x01\x02"
+true
+"key\x03"
+["key"]
+"☺"
+#<Encoding:UTF-8>
+FrozenError
+"seed"
+true
+100001
+"B"
+#<Encoding:BINARY (ASCII-8BIT)>
+"utfC"
+#<Encoding:BINARY (ASCII-8BIT)>
+"textD"
+#<Encoding:UTF-8>
+180000
+9999.5
+#<Encoding:BINARY (ASCII-8BIT)>

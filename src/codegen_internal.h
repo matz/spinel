@@ -130,6 +130,7 @@ RenPark ren_park(int from);
 void ren_unpark(RenPark *p);
 const char *strbuf_local_name(Compiler *c, int recv);
 int attr_assign_slot(Compiler *c, int id, int *cid, int *iv);
+int attr_orw_slot(Compiler *c, int id, int *cid, int *iv);
 const int *codegen_node_parents(Compiler *c, int node);
 int node_is_block_stmt(Compiler *c, int node);
 int user_assign_handle(Compiler *c, int id);
@@ -684,7 +685,6 @@ int node_may_reassign_state(Compiler *c, int id);
    Strings, Symbols, their ranges and typed Arrays can; a builtin over those
    alone, with no block, cannot: `total + i.to_s` (codegen_call.c). */
 int subtree_may_run_proc(Compiler *c, int id);
-int node_may_run_proc(Compiler *c, int id);
 /* a builtin reading a value of kind t runs no program code */
 int ty_runs_no_code(TyKind t);
 /* --share-strings: a watched scan's handle and length before its loop, and
@@ -802,7 +802,6 @@ int missing_call_in_order(Compiler *c, int v, OrderRun *run);
 int missing_call_raised(Compiler *c, int v);
 /* Whether the subtree at `id` assigns the local `nm`: a write, an op-write
    or a multiple-assignment target by that name. */
-int subtree_writes_local(Compiler *c, int id, const char *nm);
 int iter_recv_bind_once(Compiler *c, int node);
 /* When a yielding method is inlined, g_yield_block_fallback holds the block
    that was active in the CALLER's context so nested `yield`s inside the
@@ -1503,6 +1502,11 @@ void emit_value_identity(Compiler *c, int recv, int arg, Buf *b);
    an operand that runs between the hold and the read and changes the
    String in place is seen, and one that rebinds the slot is not. */
 void hold_string_handle_decl(Compiler *c, int node, int t, int root, Buf *b);
+/* hold_string_handle_decl of `node` into a new rooted temp, then bound:
+   its handle reads are the temp and its value reads SP_STR_B of it. The
+   binding's mark, for view_unbind; -1, writing nothing, when the override
+   table is full. */
+int hold_string_handle(Compiler *c, int node, Buf *b);
 /* hold_operand as a statement of its own in g_pre, at the current indent. */
 int hold_operand_pre(Compiler *c, int node, TyKind ty, int boxed, int t, int root);
 int emit_splat_gather(Compiler *c, Scope *m, const int *argv, const ArgLayout *L);

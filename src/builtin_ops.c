@@ -403,9 +403,32 @@ static const BuiltinOp bop_rows[] = {
     "sp_poly_case_conv($r, sp_str_capitalize, \"capitalize\")", 0, 0, 0, 1 },
   { TY_POLY, "swapcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
     "sp_poly_case_conv($r, sp_str_swapcase, \"swapcase\")", 0, 0, 0, 1 },
-  /* Boxed String transforms; stage 1 retains the zero-argument dispatch position. */
-  { TY_POLY, "dump", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
-    "sp_box_str(sp_str_dump(sp_poly_recv_s($r, \"dump\")))", 0, 0, 0, 1 },
+  /* Boxed String transforms; stage 1 retains the zero-argument dispatch position.
+     No builtin but String answers dump, b, scrub, encode, strip, lstrip,
+     rstrip, chomp, chop or to_str, and the receiver is
+     read as a String (NoMethodError for any other value), so each answers a
+     String; a program class's own method of the name widens the call
+     (an_poly_concrete). */
+  { TY_POLY, "dump", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_str_dump(sp_poly_recv_s($r, \"dump\"))", 0, 0, 0, 1 },
+  { TY_POLY, "b", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_str_b(sp_poly_recv_s($r, \"b\"))", 0, 0, 0, 1 },   /* a binary copy (#4441) */
+  { TY_POLY, "scrub", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,   /* a block is not called yet, as before */
+    "sp_str_scrub(sp_poly_recv_s($r, \"scrub\"), 0)", 0, 0, 0, 1 },
+  { TY_POLY, "encode", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_poly_recv_s($r, \"encode\")", 0, 0, 0, 1 },   /* every String here is UTF-8 */
+  { TY_POLY, "strip", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_str_strip(sp_poly_recv_s($r, \"strip\"))", 0, 0, 0, 1 },
+  { TY_POLY, "lstrip", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_str_lstrip(sp_poly_recv_s($r, \"lstrip\"))", 0, 0, 0, 1 },
+  { TY_POLY, "rstrip", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_str_rstrip(sp_poly_recv_s($r, \"rstrip\"))", 0, 0, 0, 1 },
+  { TY_POLY, "chomp", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_str_chomp(sp_poly_recv_s($r, \"chomp\"))", 0, 0, 0, 1 },
+  { TY_POLY, "chop", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_str_chop(sp_poly_recv_s($r, \"chop\"))", 0, 0, 0, 1 },
+  { TY_POLY, "to_str", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
+    "sp_poly_recv_s($r, \"to_str\")", 0, 0, 0, 1 },   /* the String itself */
   { TY_POLY, "undump", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
     "sp_box_str(sp_str_undump(sp_poly_recv_s($r, \"undump\")))", 0, 0, 0, 1 },
   { TY_POLY, "upcase", 1, BOP_ARGC_ANY, BF_NONE, TY_POLY, BOPE_POLY_CASE_OPTIONS, "0" },
@@ -1053,17 +1076,17 @@ static const BuiltinOp bop_rows[] = {
   { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_to_f($r) == $f0)", BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_eq($r, $q0))", RAT_IR },
   { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_poly_eq(sp_box_rational($r), $b0))", BOP_K(TY_POLY) | BOP_K(TY_UNKNOWN) },
-  { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(({ sp_Rational _t$u = $r; sp_Complex _t$t = $c0; _t$t.im == 0 && sp_poly_eq(sp_box_rational(_t$u), sp_complex_re_box(_t$t)); }))", BOP_K(TY_COMPLEX) },
+  { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(({ sp_Rational _t$u = $r; sp_Complex _t$t = $c0; sp_rational_eq_complex(_t$u, _t$t); }))", BOP_K(TY_COMPLEX) },
   { TY_RATIONAL, "==",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($b0), 0)" },
   { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_to_f($r) == $f0)", BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_eq($r, $q0))", RAT_IR },
   { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_poly_eq(sp_box_rational($r), $b0))", BOP_K(TY_POLY) | BOP_K(TY_UNKNOWN) },
-  { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(({ sp_Rational _t$u = $r; sp_Complex _t$t = $c0; _t$t.im == 0 && sp_poly_eq(sp_box_rational(_t$u), sp_complex_re_box(_t$t)); }))", BOP_K(TY_COMPLEX) },
+  { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(({ sp_Rational _t$u = $r; sp_Complex _t$t = $c0; sp_rational_eq_complex(_t$u, _t$t); }))", BOP_K(TY_COMPLEX) },
   { TY_RATIONAL, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($b0), 0)" },
   { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_rational_to_f($r) != $f0)", BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(!sp_rational_eq($r, $q0))", RAT_IR },
   { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(!sp_poly_eq(sp_box_rational($r), $b0))", BOP_K(TY_POLY) | BOP_K(TY_UNKNOWN) },
-  { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(!({ sp_Rational _t$u = $r; sp_Complex _t$t = $c0; _t$t.im == 0 && sp_poly_eq(sp_box_rational(_t$u), sp_complex_re_box(_t$t)); }))", BOP_K(TY_COMPLEX) },
+  { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(!({ sp_Rational _t$u = $r; sp_Complex _t$t = $c0; sp_rational_eq_complex(_t$u, _t$t); }))", BOP_K(TY_COMPLEX) },
   { TY_RATIONAL, "!=",  1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($b0), 1)" },
   /* Comparable#between? / #clamp via <=> (#2563): clamp between two
      Rationals answers the receiver or a bound; with another bound the
@@ -2992,11 +3015,11 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "detect",                0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE, NULL, 0, 0, BOPF_NOT_CHAIN_RECV },
   { BOP_ANY_ARRAY, "detect",                1,   1, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
   { BOP_ANY_ARRAY, "rfind",                 0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { BOP_ANY_ARRAY, "index",                 0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE, NULL, 0, 0, BOPF_NOT_CHAIN_RECV },
+  { BOP_ANY_ARRAY, "index",                 0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE },
   { BOP_ANY_ARRAY, "index",                 0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { BOP_ANY_ARRAY, "find_index",            0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE, NULL, 0, 0, BOPF_NOT_CHAIN_RECV },
+  { BOP_ANY_ARRAY, "find_index",            0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE },
   { BOP_ANY_ARRAY, "find_index",            0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { BOP_ANY_ARRAY, "rindex",                0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE, NULL, 0, 0, BOPF_NOT_CHAIN_RECV },
+  { BOP_ANY_ARRAY, "rindex",                0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE },
   { BOP_ANY_ARRAY, "rindex",                0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { BOP_ANY_ARRAY, "slice_before",          0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE },
   { BOP_ANY_ARRAY, "slice_when",            0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },

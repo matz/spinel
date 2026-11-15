@@ -5649,7 +5649,7 @@ static int sg_parent_answers_as_object(Compiler *c, int par, const char *n) {
   /* `!=` and `===` answer by the class's `==` */
   int eqs = sp_streq(n, "==") || sp_streq(n, "!=") || sp_streq(n, "===");
   if (eqs && !sp_streq(n, "==") && !sg_parent_answers_as_object(c, par, "==")) return 0;
-  if (comp_method_in_chain(c, par, n, NULL) >= 0 || comp_reader_in_chain(c, par, n, NULL) ||
+  if (call_answers(c, -1, par, n, 0, NULL) ||
       class_implicit_responds(c, par, n) || (eqs && class_is_comparable(c, par)))
     return 0;
   for (int p = par, d = 0; p >= 0 && d <= c->nclasses; d++) {
@@ -12753,7 +12753,7 @@ static int struct_member_owns(Compiler *c, int cid, const char *nm) {
   char iv[64]; snprintf(iv, sizeof iv, "@%s", nm);
   int idx = comp_ivar_index(ci, iv);
   return idx >= 0 && (ci->ivar_types[idx] == TY_STRING || ci->ivar_types[idx] == TY_STRBUF) &&
-         comp_resolve_member(c, cid, nm, 0, NULL, NULL) == SP_MEMBER_ATTR;
+         call_attr_target(c, -1, cid, nm, 0, NULL);
 }
 /* Does the program (a def) or a member own class cid's inspect or to_s? */
 static int struct_display_owned(Compiler *c, int cid, const char *nm) {
@@ -13931,7 +13931,7 @@ static int obj_to_a_method(Compiler *c, int cid, int *defc) {
    cid's ivars, or -1. Whatever it holds is the answer: a caller raises
    CRuby's TypeError for one that is not an Array. */
 static int obj_to_a_reader(Compiler *c, int cid) {
-  if (comp_resolve_member(c, cid, "to_a", 0, NULL, NULL) != SP_MEMBER_ATTR) return -1;
+  if (!call_attr_target(c, -1, cid, "to_a", 0, NULL)) return -1;
   const char *rn = comp_resolve_alias(c, cid, "to_a");
   ClassInfo *ci = &c->classes[cid];
   for (int j = 0; j < ci->nivars; j++) {

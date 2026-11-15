@@ -1,8 +1,8 @@
 # A method of a module included at the top level is a method of Object. An
 # instance of a BasicObject subclass is not an Object, so a bare identifier
 # in its instance method does not reach the module and is CRuby's NameError
-# (a call written with parentheses is refused at compile time,
-# test/reject/basicobject_toplevel_include_call.rb). The class itself is an
+# (a call written with parentheses is its NoMethodError,
+# test/basicobject_toplevel_include_call.rb). The class itself is an
 # Object: its class methods, and the blocks inside them, still reach the
 # module, as do instances of ordinary classes and the top level.
 

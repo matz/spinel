@@ -16662,6 +16662,13 @@ int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then) {
   nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, then));
   return ifn;
 }
+/* `if <arm[0]'s test> || ... then <then> else <els> end` */
+int disp_cell_choose(NodeTable *nt, const DispArm *arm, int narm, int then, int els) {
+  int ifn = disp_cell_guard(nt, arm, narm, then), el = nt_new_node(nt, "ElseNode");
+  nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, els));
+  nt_node_set_ref(nt, ifn, "subsequent", el);
+  return ifn;
+}
 /* `(<st[0]>; ...; <expr>)` */
 int disp_ahead(NodeTable *nt, const int *st, int n, int expr) {
   int *b = malloc(sizeof(int) * (size_t)(n + 1)), s = nt_new_node(nt, "StatementsNode"), p = nt_new_node(nt, "ParenthesesNode");
@@ -16970,8 +16977,8 @@ int desugar_conditional_defs(Compiler *c) {
        `if` of its body is marked cond_lone: what the entry cannot answer
        for it is refused (ver_named_one, ver_refl_named) */
     int left = g[0].cls == -2 || (ng == 1 && !g[0].here);
-    /* (a Kernel row's name, respond_to_missing?, answers behind an instance-side def in a class or module body that has Kernel only: a blank slate's NoMethodError is its table's, as any def's) */
-    if (!left && ng == 1 && (cdef_name_inherited(nt, base, d0) || (g[0].cls >= 0 && !g[0].cm && bop_kernel_answers(base, -1, 0) && !class_node_lacks_kernel(c, g[0].cls)))) left = 2;
+    /* (a Kernel row's name, respond_to_missing?, answers behind an instance-side def in a class or module body only; where the class has no Kernel, NoMethodError does, which the record tells once it holds the class's chain: ver_named_kind) */
+    if (!left && ng == 1 && (cdef_name_inherited(nt, base, d0) || (g[0].cls >= 0 && !g[0].cm && bop_kernel_answers(base, -1, 0)))) left = 2;
     /* (...and an instance method of the builtin class the body reopens:
        `class Array; if c; def size`, whose else is Array's own size) */
     if (!left && ng == 1 && g[0].cls >= 0 && !g[0].cm && cdef_builtin_reopen_answers(c, g[0].cls, base)) left = 2;

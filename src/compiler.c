@@ -586,6 +586,8 @@ void comp_free(Compiler *c) {
   free(c->ver_cell_dropped); c->ver_cell_dropped = NULL; c->nver_cell_dropped = 0;
   free(c->top_self_marks); c->top_self_marks = NULL; c->top_self_stamp = 0;
   free(c->ver_vis_after); c->ver_vis_after = NULL; c->nver_vis_after = 0;
+  free(c->ver_kern_after); c->ver_kern_after = NULL; c->nver_kern_after = c->ver_kern_made = 0;
+  free(c->ver_kern_has); c->ver_kern_has = NULL;
   free(c->ver_guards); c->ver_guards = NULL; c->nver_guards = 0;
   for (int i = 0; i < c->nver_vis_reads; i++) free(c->ver_vis_reads[i].name);
   free(c->ver_vis_reads); c->ver_vis_reads = NULL; c->nver_vis_reads = c->ver_vis_read_new = 0;
@@ -5323,102 +5325,6 @@ int class_is_blank_slate(Compiler *c, int ci) {
   return 0;
 }
 
-/* Does the body of the class or module named `cn` write `include Kernel`,
-   or include a module whose body does (through that module's own includes,
-   to a bounded depth)? */
-static int def_body_includes_kernel(Compiler *c, const char *cn, int depth) {
-  const NodeTable *nt = c->nt;
-  if (!cn || depth > 16) return 0;
-  for (int q = 0; q < 2; q++)
-    NT_FOREACH_KIND(nt, q ? NK_ModuleNode : NK_ClassNode, id) {
-      int cp = nt_ref(nt, id, "constant_path");
-      const char *nm = cp >= 0 ? key_name(c, cp) : NULL;
-      int body = nt_ref(nt, id, "body"), bn = 0;
-      if (!nm || !sp_streq(nm, cn) || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-      const int *bb = nt_arr(nt, body, "body", &bn);
-      for (int j = 0; j < bn; j++) {
-        if (nt_kind(nt, bb[j]) != NK_CallNode || nt_ref(nt, bb[j], "receiver") >= 0 ||
-            !sp_streq(nt_str(nt, bb[j], "name"), "include")) continue;
-        int an = 0, args = nt_ref(nt, bb[j], "arguments");
-        const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-        for (int a = 0; a < an; a++) {
-          const char *mn = nt_str(nt, av[a], "name");
-          if (mn && (sp_streq(mn, "Kernel") || def_body_includes_kernel(c, mn, depth + 1))) return 1;
-        }
-      }
-    }
-  return 0;
-}
-
-/* Is class ci under BasicObject with no `include Kernel` in its chain's
-   bodies or in a module they include: neither Kernel's methods nor Object's
-   are in its ancestry? */
-int class_lacks_kernel(Compiler *c, int ci) {
-  if (!class_is_blank_slate(c, ci)) return 0;
-  for (int k = ci; k >= 0; k = c->classes[k].parent)
-    if (def_body_includes_kernel(c, c->classes[k].name, 0)) return 0;
-  return 1;
-}
-
-/* class_lacks_kernel for the class named `nm`, before the class table exists
-   (the lowerings ahead of it, which read the class nodes). The name must
-   name one class: every node of it (a reopen is one) sits in the same
-   enclosing class or module node, none is a module, and none is written
-   under another constant (`class P::Q`, whose namespace this does not
-   resolve); a name two scopes carry (P::Q and Q) is not known to lack
-   Kernel. Its superclass, as the first node that writes one gives it, is
-   BasicObject written as such (bare only where no class or module of that
-   name is declared below the top level, which a bare read in its scope
-   would find: basic_object_shadowed), or a program class that lacks Kernel
-   in turn; and no body on the chain includes Kernel. A class node named
-   BasicObject is the root itself. */
-/* Is a class or module named BasicObject declared below the top level (in a
-   class or module body, or as `P::BasicObject`)? */
-static int basic_object_shadowed(Compiler *c, const int *par) {
-  const NodeTable *nt = c->nt;
-  for (int q = 0; q < 2; q++)
-    NT_FOREACH_KIND(nt, q ? NK_ModuleNode : NK_ClassNode, id) {
-      int cp = nt_ref(nt, id, "constant_path");
-      if (!is_basic_object_name(key_name(c, cp))) continue;
-      if (nt_kind(nt, cp) == NK_ConstantPathNode && nt_ref(nt, cp, "parent") >= 0) return 1;
-      for (int up = par[id]; up >= 0; up = par[up])
-        if (nt_kind(nt, up) == NK_ClassNode || nt_kind(nt, up) == NK_ModuleNode) return 1;
-    }
-  return 0;
-}
-static int class_name_lacks_kernel(Compiler *c, const int *par, const char *nm, int hop) {
-  const NodeTable *nt = c->nt;
-  int sup = -1, encl = -2, found = 0;
-  if (hop > 16 || !nm || def_body_includes_kernel(c, nm, 0)) return 0;
-  for (int q = 0; q < 2; q++)
-    NT_FOREACH_KIND(nt, q ? NK_ModuleNode : NK_ClassNode, id) {
-      int cp = nt_ref(nt, id, "constant_path");
-      const char *cn = key_name(c, cp);
-      if (!cn || !sp_streq(cn, nm)) continue;
-      if (nt_kind(nt, cp) == NK_ConstantPathNode && nt_ref(nt, cp, "parent") >= 0) return 0;
-      int up = par[id];
-      while (up >= 0 && nt_kind(nt, up) != NK_ClassNode && nt_kind(nt, up) != NK_ModuleNode) up = par[up];
-      if (q || (found && up != encl)) return 0;
-      if (sup < 0) sup = class_def_super(nt, id);
-      encl = up;
-      found = 1;
-    }
-  if (!found) return 0;
-  if (is_basic_object_name(nm)) return encl < 0;
-  if (sup < 0) return 0;
-  NodeKind sk = nt_kind(nt, sup);
-  if (sk == NK_ConstantPathNode && nt_ref(nt, sup, "parent") >= 0) return 0;
-  if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) return 0;
-  const char *sn = key_name(c, sup);
-  if (sn && is_basic_object_name(sn))
-    return (sk == NK_ConstantPathNode || !basic_object_shadowed(c, par)) && !def_body_includes_kernel(c, sn, 0);
-  return sn && class_name_lacks_kernel(c, par, sn, hop + 1);
-}
-int class_node_lacks_kernel(Compiler *c, int cnode) {
-  if (cnode < 0 || nt_kind(c->nt, cnode) != NK_ClassNode) return 0;
-  return class_name_lacks_kernel(c, comp_parent_map(c), key_name(c, nt_ref(c->nt, cnode, "constant_path")), 0);
-}
-
 /* Find a method named `name` in any top-level included module.
    module_function methods are class-level (is_cmethod=1), so check both
    (toplevel_mod_method).
@@ -5665,33 +5571,6 @@ const char *comp_prep_chain_target(Compiler *c, int class_id, const char *name) 
   return NULL;
 }
 
-/* Marks (a calloc'd array over the node table, NULL when there is none to
-   mark) the nodes of ids[0..n) that sit in a ClassNode nested in that walk,
-   less the nodes of a block or lambda inside one. A nested module is left
-   in: the outer body can include or prepend it, or send it :include. */
-static char *nested_class_body_marks(NodeTable *nt, const int *ids, int n) {
-  int nn = 0, *roots = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
-  if (!roots) return NULL;
-  for (int i = 0; i < n; i++) {
-    NodeKind k = nt_kind(nt, ids[i]);
-    if (k == NK_ClassNode) roots[nn++] = ids[i];
-  }
-  char *mark = nn > 0 ? calloc((size_t)nt->count, 1) : NULL;
-  if (!mark) { free(roots); return NULL; }
-  int m = 0, *in = nt_subtree_ids(nt, roots, nn, &m);
-  int nb = 0;
-  for (int i = 0; i < m; i++) {
-    mark[in[i]] = 1;
-    NodeKind k = nt_kind(nt, in[i]);
-    if (k == NK_BlockNode || k == NK_LambdaNode) roots[nb++] = in[i];
-  }
-  free(in);
-  int b = 0, *blk = nt_subtree_ids(nt, roots, nb, &b);
-  for (int i = 0; i < b; i++) mark[blk[i]] = 0;
-  free(blk);
-  free(roots);
-  return mark;
-}
 /* Is this `super` (with or without arguments) Class#new? Inside a class
    method `new` whose ancestors define no class method of that name, the
    parent is Class itself: `def self.new(x) = super(x * 10)` allocates the
@@ -5701,79 +5580,6 @@ static char *nested_class_body_marks(NodeTable *nt, const int *ids, int n) {
    parent, and past the top of an explicit chain, Object -- where a method the
    program defines on Object is every class's superclass method. A module's
    super is its includer's, and a class method's chain has no such end. */
-/* Does the program use Kernel as a value: `include Kernel` in any body,
-   `BasicObject.include(Kernel)`, `send(:include, ::Kernel)`, `K = Kernel`?
-   Every read of the constant counts but a call's receiver (`Kernel.puts`)
-   and a `module Kernel` header. A class under the program's own
-   BasicObject may then reach Kernel's methods through Object's chain, so
-   that BasicObject keeps the lookup it had. Kept until the table changes. */
-static int kernel_const_node(const NodeTable *nt, int id) {
-  if (id < 0) return 0;
-  NodeKind k = nt_kind(nt, id);
-  return (k == NK_ConstantReadNode || k == NK_ConstantPathNode) && sp_streq(nt_str(nt, id, "name"), "Kernel");
-}
-static int program_names_kernel(Compiler *c) {
-  static const NodeTable *knt; static unsigned kver; static int kcount = -1, kans;
-  const NodeTable *nt = c->nt;
-  if (knt == nt && kver == nt->version && kcount == nt->count) return kans;
-  int reads = 0, held = 0;
-  NT_FOREACH_KIND(nt, NK_ConstantReadNode, id) reads += kernel_const_node(nt, id);
-  NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) reads += kernel_const_node(nt, id);
-  NT_FOREACH_KIND(nt, NK_CallNode, id) held += kernel_const_node(nt, nt_ref(nt, id, "receiver"));
-  NT_FOREACH_KIND(nt, NK_ModuleNode, id) held += kernel_const_node(nt, nt_ref(nt, id, "constant_path"));
-  kans = reads > held;
-  knt = nt; kver = nt->version; kcount = nt->count;
-  return kans;
-}
-/* Is class ci under BasicObject with no Kernel among its ancestors? The
-   includes registration recorded are asked first (an `include` through a
-   constant alias, in a block or a class method of the body), then the
-   bodies' text (class_lacks_kernel), which runs for such a class alone.
-   The program's own BasicObject (`class BasicObject; end`) is such a
-   class too, when the program passes Kernel to no call
-   (program_names_kernel): Object is not past it. */
-static int blank_slate_without_kernel(Compiler *c, int ci) {
-  int bo = ci >= 0 && ci == comp_core_class(c, CORE_BASIC_OBJECT);
-  int ans = bo || class_is_blank_slate(c, ci);
-  int ke = comp_core_class(c, CORE_KERNEL);
-  for (int k = ci, d = 0; ans && k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++) {
-    const ClassInfo *ki = &c->classes[k];
-    for (int i = 0; ans && i < ki->nincluded_mod_names; i++) {
-      const char *n = ki->included_mod_names[i], *l = n ? strrchr(n, ':') : NULL;
-      if (n && sp_streq(l ? l + 1 : n, "Kernel")) ans = 0;
-    }
-    for (int i = 0; ans && ke >= 0 && i < ki->nincluded_mods; i++) {
-      int m = ki->included_mods[i];
-      if (m == ke || (m >= 0 && comp_module_includes(c, m, ke, 0))) ans = 0;
-    }
-  }
-  if (!ans || (bo ? program_names_kernel(c) : !class_lacks_kernel(c, ci))) return 0;
-  /* an `include` the body makes another way (through a constant alias, in
-     a block, in a class method it calls) may bring Kernel in: such a chain
-     keeps the lookup it had */
-  NodeTable *nt = (NodeTable *)c->nt;
-  for (int k = ci, d = 0; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++) {
-    int body = c->classes[k].def_node >= 0 ? nt_ref(nt, c->classes[k].def_node, "body") : -1;
-    if (body < 0) continue;
-    int n = 0, found = 0, *ids = nt_subtree_ids(nt, &body, 1, &n);
-    /* a class the body nests is another self: its bare include goes to
-       that class (class B; class Inner; include Kernel). A block
-       there may run with this class as self (B.class_eval { include ... }),
-       so an include inside a block still counts. */
-    char *skip = nested_class_body_marks(nt, ids, n);
-    for (int i = 0; i < n && !found; i++) {
-      if (skip && skip[ids[i]]) continue;
-      if (nt_kind(nt, ids[i]) != NK_CallNode || nt_ref(nt, ids[i], "arguments") < 0) continue;
-      const char *nm = nt_str(nt, ids[i], "name");
-      int r = nt_ref(nt, ids[i], "receiver");
-      found = nm && sp_streq(nm, "include") && (r < 0 || nt_kind(nt, r) == NK_SelfNode);
-    }
-    free(ids);
-    free(skip);
-    if (found) return 0;
-  }
-  return 1;
-}
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   if (class_id < 0) return -1;
   int p = c->classes[class_id].parent;
@@ -5781,10 +5587,12 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   int obj = comp_core_class(c, CORE_OBJECT);
   if (obj < 0 || obj == class_id) return -1;
   if (comp_class_is_module(c, &c->classes[class_id])) return -1;
-  /* under BasicObject with no `include Kernel`, neither Object nor Kernel
-     is in the chain: a super finds no method there (one that includes
-     Kernel reaches Kernel's methods through Object's chain, as before) */
-  if (blank_slate_without_kernel(c, class_id)) return -1;
+  /* under BasicObject with no Kernel among its ancestors, neither Object
+     nor Kernel is in the chain: a super finds no method there (one that
+     includes Kernel reaches Kernel's methods through Object's chain, as
+     before). The record answers it (elab_class_kernel), and the call plan's cells where an include that may not
+     run decides (cplan_class_kernel: the super is then guarded, ver_kernel_guards). */
+  if (cplan_class_kernel(c, class_id) == KERN_LACKS) return -1;
   return obj;
 }
 

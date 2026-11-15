@@ -1776,11 +1776,185 @@ static int ver_call_n(Compiler *c, int id) {
   for (int i = 0; i < ac; i++) if (nt_kind(nt, av[i]) == NK_ForwardingArgumentsNode) n = -1;
   return n;
 }
-/* Is scope s a version held under a condition (a lone def, cond_lone) of an instance-side name a Kernel row answers? Its
-   entry's else arm is the row, which takes the call's count itself, whether or not the version takes it: the entry is
-   at the call's count, and each arm's call raises the ArgumentError its own count meets */
-static int ver_held_row(const Compiler *c, const Scope *s) {
-  return s->def_node >= 0 && !s->is_cmethod && s->class_id >= 0 && nt_int(c->nt, s->def_node, "cond_lone", 0) && bop_kernel_answers(s->name, -1, 0);
+/* Does a Kernel row answer `name` behind an instance-side version of class cls where none has run: a Kernel row's name, in a
+   class that has Kernel? A class whose chain the record holds ending at BasicObject, with no Kernel mixed in, has none
+   (elab_class_kernel): the else arm there is what the chain finds past the versions, NoMethodError at the last; one that
+   gains it where a cell is set (KERN_CELL) has the row there, which the entry's else arm tests (VK_CELL) */
+static int ver_kernel_row_behind(Compiler *c, int cls, const char *name) {
+  return cls >= 0 && bop_kernel_answers(name, -1, 0) && elab_class_kernel(c, cls) == KERN_HAS;
+}
+/* See call_plan.h. */
+void cplan_kernel_cell_name(int cls, char out[32]) {
+  snprintf(out, 32, "$__spinel_kern_%d", cls);
+}
+/* class cls's Kernel cell, registered as the version cells are: an Integer global the call plan made (ver_cell, which
+   cplan_cell_dropped asks), 0 until an include that brings Kernel into cls runs and writes it (cplan_vis_cell_after),
+   read by the entries' arms and the guards (VK_CELL, ver_kernel_guard) */
+static LocalVar *ver_kern_cell(Compiler *c, int cls) {
+  char nm[32];
+  cplan_kernel_cell_name(cls, nm);
+  LocalVar *g = comp_gvar_intern(c, nm + 1);
+  g->type = g_promote_mode ? TY_POLY : TY_INT;   /* (as the version cells' Integer is, --int-overflow=promote) */
+  g->gvar_seeded = 2;
+  g->ver_cell = 1;
+  return g;
+}
+/* a growing list of class ids */
+typedef struct { int *v, n, cap; } VerIds;
+static int ver_ids_add(VerIds *l, int x) {
+  for (int i = 0; i < l->n; i++) if (l->v[i] == x) return 0;
+  if (l->n == l->cap && !(l->v = realloc(l->v, sizeof *l->v * (size_t)(l->cap = l->cap ? 2 * l->cap : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  l->v[l->n++] = x;
+  return 1;
+}
+static void ver_kern_add(Compiler *c, int node, int cls) {
+  int n = c->nver_kern_after;
+  if (!(n & (n - 1)) && !(c->ver_kern_after = realloc(c->ver_kern_after, sizeof *c->ver_kern_after * (size_t)(n ? 2 * n : 1)))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  c->ver_kern_after[c->nver_kern_after++] = (struct VerKernAfter){ node, cls };
+}
+/* The include calls that bring Kernel into a class where the record cannot tell whether they ran, each with the
+   classes whose cell it writes as it runs (c->ver_kern_after, as ver_vis_after lists the words that write a
+   visibility cell): an include of Kernel, or of a module of the program that includes it, that may not run (under a
+   condition), and one a class method makes, which the load phase does not run: it writes the cell of the class
+   it ran on (the owner, and its blank-slate subclasses, told by _sp_cls). A prepend is not an include (Kernel's
+   methods then stand in front of the class's own), and a route the record cannot see (a send by a computed name, an
+   eval, a Method) writes none: master's answer stands. Rebuilt when the classes, the scopes or the record's mixins change. */
+static void ver_kern_sites(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  long stamp = (long)c->nclasses * 1000003L + c->nscopes + (long)elab_mixin_gen(c) * 7919L;
+  if (c->ver_kern_made && c->ver_kern_stamp == stamp) return;
+  c->ver_kern_made = 1;
+  c->ver_kern_stamp = stamp;
+  c->nver_kern_after = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int nm = 0;
+    const LrMixin *mx = elab_class_mixins(c, k, &nm);
+    for (int j = 0; j < nm; j++) {
+      /* (an include call, or a send of :include, which a pass later makes one) */
+      const char *cn = nt_kind(nt, mx[j].node) == NK_CallNode ? nt_str(nt, mx[j].node, "name") : NULL;
+      int sn = nt_ref(nt, mx[j].node, "arguments"), sc = 0;
+      const int *sv = cn && is_send_family(cn) && sn >= 0 ? nt_arr(nt, sn, "arguments", &sc) : NULL;
+      if (sv && sc > 0 && nt_kind(nt, sv[0]) == NK_SymbolNode) cn = nt_str(nt, sv[0], "value");
+      if (mx[j].kind == LR_INCLUDE && cn && is_mixin_call(cn) && (!mx[j].applied || mx[j].cond || elab_point_may(c, mx[j].node)) &&
+          elab_mixin_brings_kernel(c, mx[j].ref) == 1)
+        ver_kern_add(c, mx[j].node, k);
+    }
+  }
+  int *par = NULL;
+  for (int id = an_calls_named_first(c, "include"); id >= 0; id = an_calls_named_next(id)) {
+    int an = nt_ref(nt, id, "arguments"), ac = 0, recv = nt_ref(nt, id, "receiver"), brings = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+    for (int i = 0; i < ac; i++) brings |= elab_mixin_brings_kernel(c, av[i]) == 1;
+    const Scope *s = comp_scope_of(c, id);
+    if (!brings || (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) || elab_point_of(c, id).region >= 0 || !s || !s->is_cmethod || s->class_id < 0) continue;
+    int own = s->class_id, nd = 0;
+    if (!par) par = du_parent_map(nt);
+    for (int a = id; own >= 0 && a >= 0 && par[a] >= 0 && a != s->def_node; a = par[a])
+      if (nt_kind(nt, a) == NK_BlockNode || nt_kind(nt, a) == NK_LambdaNode) own = -1;   /* (a block's self is another) */
+    if (own < 0 || !(class_is_blank_slate(c, own) || comp_class_is_module(c, &c->classes[own]))) continue;
+    ver_kern_add(c, id, own);
+    const int *ds = comp_descendants(c, own, &nd);
+    for (int i = 0; i < nd; i++) if (class_is_blank_slate(c, ds[i])) ver_kern_add(c, id, ds[i]);
+  }
+  free(par);
+  free(c->ver_kern_has);
+  if (!(c->ver_kern_has = calloc((size_t)c->nclasses + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < c->nver_kern_after; i++) c->ver_kern_has[c->ver_kern_after[i].cls] = 1;
+}
+/* ...the classes on cls's chain (its superclasses, and the modules they and it include, prepend or include in turn)
+   that an include of the list writes the cell of: the cells the class's Kernel is read from */
+static void ver_kern_walk(Compiler *c, int k, VerIds *seen, VerIds *out, int depth) {
+  if (k < 0 || depth > c->nclasses || !ver_ids_add(seen, k)) return;   /* (each class once: no chain is deeper than the classes) */
+  if (k < c->nclasses && c->ver_kern_has[k]) ver_ids_add(out, k);
+  int nm = 0;
+  const LrMixin *mx = elab_class_mixins(c, k, &nm);
+  for (int j = 0; j < nm; j++)
+    if (mx[j].kind == LR_INCLUDE || mx[j].kind == LR_PREPEND) ver_kern_walk(c, elab_mixin_module(c, &mx[j]), seen, out, depth + 1);
+  int p = c->classes[k].parent;
+  ver_kern_walk(c, p >= 0 ? p : elab_class_super(c, k), seen, out, depth + 1);
+}
+/* The classes whose Kernel cell class cls reads, in *out (the caller frees ids->v); how many */
+static int ver_kern_cells(Compiler *c, int cls, VerIds *out) {
+  VerIds seen = { NULL, 0, 0 };
+  *out = (VerIds){ NULL, 0, 0 };
+  ver_kern_sites(c);
+  if (c->nver_kern_after) ver_kern_walk(c, cls, &seen, out, 0);
+  free(seen.v);
+  return out->n;
+}
+/* See call_plan.h. */
+int cplan_class_kernel(Compiler *c, int cls) {
+  int r = elab_class_kernel(c, cls);
+  if (r != KERN_LACKS) return r;   /* (a chain not rooted at BasicObject pays nothing more) */
+  VerIds cells;
+  r = ver_kern_cells(c, cls, &cells) ? KERN_CELL : KERN_LACKS;
+  free(cells.v);
+  return r;
+}
+/* A call whose answer is Kernel's where a cell of its class's chain is set, and NoMethodError where none is
+   (KERN_CELL): a `super` that reaches no method of the program's, and a receiverless call that binds a Kernel row (no
+   method of the program's answers it on the class: a version entry has the cells' test in its else arm already). Its
+   node is replaced by `if <cells> then <call> else <raise> end`, the call as a class that has Kernel binds it
+   (cplan_kernel_reaches, comp_super_parent), the raise the one an entry for the name gives (ver_no_method_raise), which
+   does not run the call's arguments. */
+static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, int ar, int vcall);
+static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int how, const int *pm) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int base = nt->count, par = pm ? pm[id] : -1;
+  VerIds cells;
+  if (!ver_kern_cells(c, cls, &cells) || par < 0) { free(cells.v); return; }
+  DispArm *arm = malloc(sizeof *arm * (size_t)cells.n);
+  char (*sel)[32] = malloc(32 * (size_t)cells.n);
+  if (!arm || !sel) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < cells.n; k++) {
+    cplan_kernel_cell_name(cells.v[k], sel[k]);
+    (void)ver_kern_cell(c, cells.v[k]);
+    arm[k] = (DispArm){ sel[k], 1, NULL, 0, 0 };
+  }
+  int raise = ver_no_method_raise(c, cls, 0, name, 0, how), ifn = disp_cell_choose(nt, arm, cells.n, id, raise);
+  nt_replace_child(nt, par, id, ifn);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+  nt_node_set_int(nt, ifn, "node_line", (int)nt_int(nt, id, "node_line", 0));
+  free(arm); free(sel); free(cells.v);
+}
+/* ...for each such call of the program */
+static void ver_kernel_guards(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int n0 = nt->count;
+  ver_kern_sites(c);
+  if (!c->nver_kern_after) return;
+  int *pm = du_parent_map(nt);   /* (of the nodes the guards leave where they stand) */
+  for (int id = 0; id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    const Scope *s = k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_CallNode ? comp_scope_of(c, id) : NULL;
+    if (!s || s->class_id < 0 || s->is_cmethod || !s->name || s->entry != ENTRY_NONE || nt_int(nt, id, "kernel_recv", 0) ||
+        cplan_class_kernel(c, s->class_id) != KERN_CELL) continue;   /* (an entry's arms, and the raise they hold, are the plan's own) */
+    if (k == NK_CallNode) {
+      const char *nm = nt_str(nt, id, "name");
+      if (cplan_dispatch_row(c, id) && call_target(c, id, s->class_id, nm, 0, NULL) < 0) ver_kernel_guard(c, id, s->class_id, nm, nt_vcall(nt, id), pm);
+    }
+    else if (cplan_super_target(c, id, s, NULL) < 0) ver_kernel_guard(c, id, s->class_id, comp_scope_user_name(s), 2, pm);
+  }
+  free(pm);
+}
+/* See call_plan.h. */
+int cplan_kern_site_by_class(Compiler *c, int scope) {
+  for (int i = 0; i < c->nver_kern_after; i++) {
+    int n = 0;
+    if (c->nscope[c->ver_kern_after[i].node] != scope) continue;
+    for (int j = 0; j < c->nver_kern_after; j++) n += c->ver_kern_after[j].node == c->ver_kern_after[i].node;
+    if (n > 1) return 1;
+  }
+  return 0;
+}
+/* Is scope s a version held under a condition (a lone def, cond_lone) of an instance-side name a Kernel row answers behind
+   it (ver_kernel_row_behind)? Its entry's else arm is the row, which takes the call's count itself, whether or not the
+   version takes it: the entry is at the call's count, and each arm's call raises the ArgumentError its own count meets */
+static int ver_held_row(Compiler *c, const Scope *s) {
+  return s->def_node >= 0 && !s->is_cmethod && nt_int(c->nt, s->def_node, "cond_lone", 0) && ver_kernel_row_behind(c, s->class_id, s->name);
 }
 static int ver_arity(Compiler *c, int id, const int *to, int nto) {
   int n = ver_call_n(c, id);
@@ -5350,8 +5524,9 @@ static int cplan_kernel_form(Compiler *c, int id, const char *name, int dflt) {
 }
 /* Does Kernel reach the receiver of call id (its self, or the class of a send's
    receiver; any class a dispatch's default arm takes when the receiver is of
-   no one class)? A class under BasicObject without `include Kernel` has no
-   Kernel above it, and its instances raise NoMethodError. */
+   no one class)? A class under BasicObject with no Kernel among its
+   ancestors (cplan_class_kernel) has no Kernel above it, and its
+   instances raise NoMethodError. */
 static int cplan_kernel_reaches(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
@@ -5361,10 +5536,10 @@ static int cplan_kernel_reaches(Compiler *c, int id) {
     const Scope *in = comp_scope_of(c, id);
     ci = in ? in->class_id : -1;
   }
-  if (ci >= 0 && ci < c->nclasses) return !class_lacks_kernel(c, ci);
+  if (ci >= 0 && ci < c->nclasses) return cplan_class_kernel(c, ci) != KERN_LACKS;
   if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 1;
   for (int k = 0; k < c->nclasses; k++)
-    if (class_lacks_kernel(c, k)) return 0;
+    if (cplan_class_kernel(c, k) == KERN_LACKS) return 0;
   return 1;
 }
 /* See call_plan.h. */
@@ -6422,8 +6597,14 @@ static int ver_list_held(Compiler *c, int id) {
   }
   return 0;
 }
-/* what a call is refused with where it reaches a def under a run-time condition that no cell tells ran (cond_def_override, cplan_bycount_gap) */
-static const char *cond_def_override_why(void) {
+/* what a call is refused with where it reaches a def under a run-time condition that no cell tells ran (cond_def_override,
+   cplan_bycount_gap); front: the class the call binds mixes Kernel in below the def's class (BYCOUNT_FRONT) */
+enum { BYCOUNT_GAP = 1, BYCOUNT_FRONT };
+static const char *cond_def_override_why(int front) {
+  if (front)
+    return "a def under a condition only the run time decides, in a class without Kernel, called on a subclass that "
+           "includes Kernel, is not supported: Kernel's method answers in front of the def whether the branch ran or not, "
+           "and the def's entry stands for the def; see docs/limitations.md";
   return "a def under a condition only the run time decides, of a name another method answers "
          "(a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did "
          "not run is not known at compile time; see docs/limitations.md";
@@ -6440,7 +6621,7 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
   if (is_raise_alias(name) && nt_int(nt, id, "class_new_capture", 0) && cplan_reachable(c, id))
     return "Class.new or Module.new with a block that captures outer locals is not supported; see docs/limitations.md";
   if (is_raise_alias(name) && nt_int(nt, id, "cond_def_override", 0) && cplan_reachable(c, id))
-    return cond_def_override_why();
+    return cond_def_override_why(0);
   int pq = is_method_presence_query(name);
   if ((nt_int(nt, id, "cond_def_reflect", 0) || (pq == 1 && ver_refl_named(c, id)) ||
        ((pq == 2 ? c->nver_refl || c->ncond_lone_disp || (c->ncond_disp && ver_list_held(c, id)) : pq == 3 && ver_list_held(c, id)) && !cplan_recv_own_member(c, id, name))) &&
@@ -6876,7 +7057,8 @@ static int cplan_top_self_gap(Compiler *c, int id) {
 
 /* Does call id bind, on a class it may reach, what no cell tells whether it ran (a call the plan cannot bind at its count):
    the version of a history held by count itself, where no entry of its count was made for it, or a copy of it (an alias),
-   or the entry of a held def at a count it does not take (the entry's parameters are the def's, ver_named_make)? */
+   or the entry of a held def at a count it does not take (the entry's parameters are the def's, ver_named_make), or one whose
+   else arm is no Kernel row on a class whose chain has Kernel in front of it? */
 static void cplan_bycount_ask(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   MethodLookup ml = { .def_class = -1 };
   int r = call_target(c, id, k, nm, flags, &ml);
@@ -6891,8 +7073,13 @@ static void cplan_bycount_ask(Compiler *c, int id, const char *nm, int k, unsign
             ad && ad->kind == LR_ALIAS;
   int kw = via && nt_kind(c->nt, ad->node) == NK_AliasMethodNode;
   int by = nt_int(c->nt, t->def_node, "cond_def_bycount", 0) && !kw && (ml.kind == ML_TABLE || !t->replaced || via),
-      n = ver_call_n(c, id), held = t->entry == ENTRY_NAMED && bop_kernel_answers(nm, -1, 0) && nt_int(c->nt, t->def_node, "cond_def_refl", 0) && n >= 0 && n != ver_plain_arity(c, r);
-  if (by || held) *(int *)arg = 1;
+      n = ver_call_n(c, id), refl = t->entry == ENTRY_NAMED && bop_kernel_answers(nm, -1, 0) && nt_int(c->nt, t->def_node, "cond_def_refl", 0),
+      row = refl && ver_kernel_row_behind(c, t->class_id, nm), held = row && n >= 0 && n != ver_plain_arity(c, r);
+  /* (a held def's entry in a class without Kernel, on a class k whose chain mixes Kernel in below it: CRuby's lookup meets
+     Kernel's method in front of the history, which the entry does not stand for) */
+  int front = refl && !row && ver_kernel_row_behind(c, k, nm);
+  if (by || held) *(int *)arg = BYCOUNT_GAP;
+  else if (front && !*(int *)arg) *(int *)arg = BYCOUNT_FRONT;
 }
 /* ...and the super of a prepended module's copy, which reaches the class's own version (ct_version_classes asks it of no class) */
 static int cplan_bycount_shadow_super(Compiler *c, const Scope *in, const char *nm) {
@@ -6908,7 +7095,7 @@ static int cplan_bycount_gap(Compiler *c, int id) {
   int gap = 0;
   if ((!c->nver_bycount && !c->nver_refl && !c->nver_refl_priv) || (k != NK_CallNode && !in) || !nm ||
       !(ver_bycount_named(c, nm) || bop_kernel_answers(nm, -1, 0) || ct_version_named(c, nm)) || !cplan_reachable(c, id)) return 0;
-  if (in && in->shadow == SHADOW_PREP && cplan_bycount_shadow_super(c, in, nm)) return 1;
+  if (in && in->shadow == SHADOW_PREP && cplan_bycount_shadow_super(c, in, nm)) return BYCOUNT_GAP;
   ct_version_classes(c, id, nm, cplan_bycount_ask, &gap);
   return gap;
 }
@@ -6924,8 +7111,9 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
   NodeKind k = nt_kind(c->nt, id);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    if (cplan_bycount_gap(c, id)) {
-      cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(), buf, cap);
+    int gap = cplan_bycount_gap(c, id);
+    if (gap) {
+      cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(gap == BYCOUNT_FRONT), buf, cap);
       return;
     }
     const CallPlan sp = cplan_user(c, id);
@@ -6969,8 +7157,9 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_CAPTURE, CR_FEATURE, msg, buf, cap);
     return;
   }
-  if (!what && cplan_bycount_gap(c, id)) {
-    cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(), buf, cap);
+  int gap = what ? 0 : cplan_bycount_gap(c, id);
+  if (gap) {
+    cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE, cond_def_override_why(gap == BYCOUNT_FRONT), buf, cap);
     return;
   }
   if (!what && cplan_capture_gap(c, id)) {
@@ -9029,7 +9218,9 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
    or take one only at run time) */
 static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, int ar, int vcall) {
   char msg[512];
-  const char *what = vcall ? "undefined local variable or method" : "undefined method";
+  int super = vcall == 2;   /* (a super that reaches no method) */
+  const char *what = super ? "super: no superclass method" : vcall ? "undefined local variable or method" : "undefined method";
+  vcall = vcall == 1;
   int mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]), nd = 0;
   comp_sym_intern(c, name);   /* (the error's name, a Symbol made after the literals were interned) */
   if (cls >= 0) comp_descendants(c, cls, &nd);
@@ -9052,7 +9243,7 @@ static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, i
    no entry, where none of these is CRuby's answer: the history keeps the
    handling it had (its last version taken as run); a version entry's
    else arm the same, VK_KEEP its last version (ver_entry_make) */
-enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP };
+enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP, VK_CELL };
 struct VerNamedAsks;
 static int ver_named_kind(const struct VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm);
 static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int *blk, int *spliced);
@@ -9503,7 +9694,7 @@ typedef struct {
    answers from the final methods), an alias or a `&:sym` names, sorted;
    demand: asked for the deferred histories a call names now) */
 typedef struct VerNamedAsks { Compiler *c; VerNamed *v; int n; const unsigned char *sup; int nsup; const char **vc; int nvc; const char **rn; int nrn, demand;
-  int *mh, *mn, *mk, *seen, *cps, stamp; unsigned long long *bydef; } VerNamedAsks;   /* (ver_mixers_build: the mixins by module, a mark per class side, the scopes by def) */
+  int *mh, *mn, *mk, *seen, *cps, stamp; unsigned long long *bydef; int far; } VerNamedAsks;   /* (ver_mixers_build: the mixins by module, a mark per class side, the scopes by def) */
 static int ver_named_else(Compiler *c, const VerNamed *w);
 /* (a name reflection does not answer: a private one is no public list's, feature_limit) */
 static void ver_refl_count(Compiler *c, int vis) {
@@ -9566,6 +9757,23 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   case VK_SUPER: return disp_super_call(nt, w->ar, w->blk);
   case VK_TEXT: return disp_super_call(nt, 0, 0);
   case VK_MM: comp_sym_intern(c, name); return disp_method_missing_call(nt, name, w->ar, w->blk);   /* (its Symbol, made after the literals were interned) */
+  case VK_CELL: {
+    /* (a Kernel row's name in a class that has Kernel where a cell says so: the row where a cell of its chain is set,
+       else NoMethodError; the row's call is made once for each cell) */
+    int els = ver_no_method_raise(c, cls, sg, name, w->ar, 0);
+    VerIds cells;
+    VerNamed row = *w;
+    row.els = VK_BUILTIN;
+    ver_kern_cells(c, cls, &cells);
+    for (int k = 0; k < cells.n; k++) {
+      char sel[32];
+      cplan_kernel_cell_name(cells.v[k], sel);
+      (void)ver_kern_cell(c, cells.v[k]);
+      els = disp_cell_test(nt, sel, 1, ver_named_else(c, &row), els);
+    }
+    free(cells.v);
+    return els;
+  }
   case VK_BUILTIN: {
     /* (a record class's builtin that takes none, with `*r, **k` passed on:
        called where both are empty, as CRuby passes it no argument then) */
@@ -9713,12 +9921,18 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
   /* (a record class's own builtin takes `*r, **k` passed on too: ar -1) */
   if (sg && cls >= 0 && ((ar >= 0 && bop_class_answers(name, ar, blk)) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
-  /* (an instance-side name a Kernel row answers: the row, called without a receiver at ar arguments, which it refuses where it takes no such count) */
-  if (!sg && cls >= 0 && ar >= 0 && bop_kernel_answers(name, -1, 0)) return VK_BUILTIN;
+  /* (an instance-side name a Kernel row answers behind the versions: the row, called without a receiver at ar arguments,
+     which it refuses where it takes no such count. A class without Kernel has no row behind them (ver_kernel_row_behind),
+     and cplan_other_answers, which reads such a name as Kernel's or Object's, is not asked there (bare). BasicObject's own
+     methods of a Kernel row's name, instance_eval and instance_exec, are not read here: such a class answers NoMethodError
+     for them past the versions, a gap) */
+  int row = !sg && ver_kernel_row_behind(c, cls, name), bare = !sg && cls >= 0 && !row && bop_kernel_answers(name, -1, 0);
+  if (row && ar >= 0) return VK_BUILTIN;
+  if (!sg && cls >= 0 && ar >= 0 && bop_kernel_answers(name, -1, 0) && cplan_class_kernel(c, cls) == KERN_CELL) return VK_CELL;
   /* (an instance-side method of the builtin a reopened class stands for:
      with no version run, the builtin's own, #11819) */
   if (!sg && cls >= 0 && ar >= 0 && ver_builtin_instance_answers(c, cls, name, ar)) return VK_BUILTIN;
-  if (cplan_other_answers(c, cls, sg, name, 1)) return VK_KEEP;
+  if (!bare && cplan_other_answers(c, cls, sg, name, 1)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
   for (int j = 0; j < nc; j++) if (cv[j].hist == hist) last = j;
@@ -9770,6 +9984,7 @@ static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *nam
   switch (els) {
   case VK_NOMETHOD: case VK_MM: return VER_FINDS_NONE;
   case VK_BUILTIN: case VK_TEXT: return VER_FINDS_PUBLIC;
+  case VK_CELL: return VER_FINDS_HIDDEN;   /* (a Kernel row's is private: not found where the cell is clear either) */
   case VK_KEEP:   /* (main's: the versions', a private one unless declared) */
     if (cls >= 0) vis = sg ? comp_cmethod_vis_declared(c, cls, name, NULL) : comp_method_vis_in_chain(c, cls, name);
     break;
@@ -9838,12 +10053,43 @@ static int ver_in_dropped_rescue(const Compiler *c, const int *par, int n) {
 static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, const ElabVersion *vs, const int *to, int nv,
                           const char *refuse, int hcls, int held) {
   Compiler *c = q->c;
-  int blk = 0, ar = ver_arity(c, -1, to, nv), els = VK_NOMETHOD, eb;
+  int blk = 0, ar = q->far ? q->far - 1 : ver_arity(c, -1, to, nv), els = VK_NOMETHOD, eb;
   for (int i = 0; i < nv; i++) blk |= c->scopes[to[i]].blk_param || c->scopes[to[i]].yields;
-  /* a held history of a name a Kernel row answers, taking no one count (ar -1: an optional or a rest
-     parameter), has no entry of its own, whose else arm would pass `*r, **k` on to a row that takes
-     none: each call's count makes one (ver_late_make), its else arm the row at that count */
-  int bycount = held && !refuse && ar < 0 && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0);
+  /* a held history of a Kernel row's name that Kernel's row, placed in front of it (a prepend of Kernel), answers first
+     on cls's chain: no version of it is found there, so its entry would stand for what no call finds */
+  if (held && !refuse && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0)) {
+    ElabVersion cv[VER_MAX_ARMS];
+    int nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS), found = 0;
+    for (int j = 0; j < nc; j++) found |= cv[j].hist == vs[0].hist;
+    if (nc >= 0 && nc < VER_MAX_ARMS && !found) refuse = "cond_def_override";
+  }
+  /* a held history of a Kernel row's name that takes no one count (ar -1: an optional parameter), in a blank slate that
+     has Kernel or may gain it (whose chain the record does not settle, so that no entry is made late for a call in a
+     method body), is an entry for each count the program's calls of the name pass (the entry's arms call the
+     versions with that many arguments, its else arm the row at that count); a call at another count stays refused
+     (ver_named_make, bycount) */
+  if (held && !refuse && !q->far && ar < 0 && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0) && cplan_class_kernel(c, cls) != KERN_LACKS && class_is_blank_slate(c, cls)) {
+    VerIds seen = { NULL, 0, 0 };
+    for (int id = an_calls_named_first(c, name); id >= 0; id = an_calls_named_next(id)) {
+      /* (a call in a method body, which the record gives no point: the entries a call of the load phase makes late,
+         ver_late_make, are not made for it) */
+      int n = nt_kind(c->nt, id) == NK_CallNode && elab_point_of(c, id).region < 0 ? ver_call_n(c, id) : -1;
+      int ok = n >= 0 && bop_kernel_answers(name, n, 0);   /* (the row takes that count) */
+      for (int i = 0; ok && i < nv; i++) ok = ver_takes(c, to[i], n);
+      if (ok) ver_ids_add(&seen, n);
+    }
+    for (int i = 0; i < seen.n; i++) {
+      q->far = seen.v[i] + 1;
+      ver_named_add(q, cls, sg, name, vs, to, nv, refuse, hcls, held);
+    }
+    q->far = 0;
+    free(seen.v);
+  }
+  /* a held history of a name a Kernel row answers behind it (ver_kernel_row_behind), taking no one
+     count (ar -1: an optional or a rest parameter), has no entry of its own, whose else arm would pass
+     `*r, **k` on to a row that takes none: each call's count makes one (ver_late_make), its else arm
+     the row at that count */
+  int bycount = held && !refuse && ar < 0 && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0) && cplan_class_kernel(c, cls) != KERN_LACKS;
   if (!refuse && !bycount) els = ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
   if (els == VK_KEEP && !held) return;
   if (els == VK_KEEP) refuse = "cond_def_override";
@@ -10330,7 +10576,7 @@ static void ver_named_facts(Compiler *c, VerNamedAsks *q, int demand) {
   }
   if (nvc) qsort(vc, (size_t)nvc, sizeof *vc, ver_name_cmp);
   if (nrn) qsort(rn, (size_t)nrn, sizeof *rn, ver_name_cmp);
-  *q = (VerNamedAsks){ c, NULL, 0, sup, c->nscopes, vc, nvc, rn, nrn, demand, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+  *q = (VerNamedAsks){ c, NULL, 0, sup, c->nscopes, vc, nvc, rn, nrn, demand, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 };
 }
 static void ver_named_facts_free(VerNamedAsks *q) {
   free(q->v); free(q->mh); free(q->mn); free(q->mk); free(q->seen); free(q->cps); free(q->bydef);
@@ -10778,7 +11024,8 @@ int cplan_cell_dropped(const Compiler *c, const LocalVar *g) {
   return i >= 0 && i < c->nver_cell_dropped && c->ver_cell_dropped[i];
 }
 /* See call_plan.h. */
-int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v) {
+int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v, int *only) {
+  *only = -1;
   for (int i = 0; i < c->nver_vis_after; i++) {
     const struct VerVisAfter *a = &c->ver_vis_after[i];
     if (a->node != id || k--) continue;
@@ -10787,6 +11034,20 @@ int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v)
     *g = comp_gvar(c, cell + 1);
     if (*g && cplan_cell_dropped(c, *g)) *g = NULL;
     *v = a->v;
+    return 1;
+  }
+  /* ...and the Kernel cells an include writes as it runs (ver_kern_sites): one of several classes' by the receiving class */
+  int nk = 0;
+  for (int i = 0; i < c->nver_kern_after; i++) nk += c->ver_kern_after[i].node == id;
+  for (int i = 0; i < c->nver_kern_after; i++) {
+    const struct VerKernAfter *a = &c->ver_kern_after[i];
+    if (a->node != id || k--) continue;
+    char cell[32];
+    cplan_kernel_cell_name(a->cls, cell);
+    *g = comp_gvar(c, cell + 1);
+    if (*g && cplan_cell_dropped(c, *g)) *g = NULL;
+    *v = 1;
+    if (nk > 1) *only = a->cls;
     return 1;
   }
   return 0;
@@ -10829,6 +11090,10 @@ static void ver_write_version(NodeTable *nt, const int *par, VerCellsAt *cells, 
 }
 static int ver_cells_put(Compiler *c);
 void ver_cells_write(Compiler *c) {
+  /* (the Kernel cells the include calls write, as globals before the types are derived) */
+  ver_kern_sites(c);
+  for (int k = 0; k < c->nver_kern_after; k++) (void)ver_kern_cell(c, c->ver_kern_after[k].cls);
+  ver_kernel_guards(c);
   ver_cells_put(c);
   ver_memo_drop(c);   /* (the versions kept before the writes are asked again) */
 }

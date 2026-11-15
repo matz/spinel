@@ -168,6 +168,7 @@ struct LoadRecord {
      none), asked again each pass, while the epochs in of hold
      (lr_unset_kept) */
   struct LrUnset { int *key; unsigned char *un; int n, cap; struct { unsigned long hgen, nedits; unsigned sgen, shape, tgen, nver; int ncls, nscopes, nclasses; } of; } unset;
+  signed char *brings; unsigned long brings_gen; int brings_n;   /* lr_brings_kernel's answer by module: 1 brings Kernel, 2 does not */
   unsigned long hgen;        /* bumped by every change to the histories and the mixins, and by each scope owner the record sets */
   const LrDef **cand; int ncand, ccand, cand_bad; unsigned char collect;   /* elab_class_candidates: the writes lr_last_before passes */
   long opened;               /* LrHist.open is of this many entries (lr_open_make), -1 for none made */
@@ -3673,9 +3674,9 @@ static const LrDef *lr_first_version(const LrHist *h) {
 }
 /* Is version v of name, on the instance side unless cside, recorded under a
    condition, of a name a Kernel row answers (respond_to_missing?)? A call may
-   meet it unmade at any count: the name's entry has the row for its else arm
-   (ver_named_kind), and takes the version by its cell at each count the
-   calls pass (ver_named_add) */
+   meet it unmade at any count: the name's entry has the row for its else arm,
+   or NoMethodError in a class without Kernel (ver_named_kind), and takes the
+   version by its cell at each count the calls pass (ver_named_add) */
 int elab_version_held_row(const LrDef *v, const char *name, int cside) {
   return !cside && v->may && bop_kernel_answers(name, -1, 0);
 }
@@ -4822,6 +4823,7 @@ typedef struct LrWalker {
   int (*unsure)(void *ud, int cls, int ref);
   int tail_end;
   int (*enter)(void *ud, int mod, int depth);
+  int (*skip)(void *ud, int cls, const LrMixin *m);   /* a mixin to leave out of the walk (NULL: none) */
 } LrWalker;
 static int lr_walk(Compiler *c, const LrWalker *w, void *ud, int cls, int sg, int depth);
 /* mixin i of cls (class record k): nothing where its module is already among the ancestors (CRuby's no-op re-include,
@@ -4831,6 +4833,7 @@ static int lr_walk_mixin(Compiler *c, const LrWalker *w, void *ud, int cls, int 
   LrMixin *m = &k->mix[i];
   int dup = lr_mixin_dup(c, cls, sg, k, i), mod, rc;
   if (dup == ELAB_YES) return 0;
+  if (w->skip && w->skip(ud, cls, m)) return 0;
   if (dup == ELAB_UNKNOWN && w->unsure && (rc = w->unsure(ud, cls, m->ref))) return rc;
   if ((mod = lr_later(c, &m->mod, m->ref)) < 0) return w->mixin(ud, cls, m->ref);
   return w->enter && w->enter(ud, mod, depth + 1) ? 0 : lr_walk(c, w, ud, mod, 0, depth + 1);
@@ -4923,8 +4926,13 @@ static int lr_vv_own(void *ud, int cls, int sg) {
   return v->n < 0 ? LR_W_STOP : 0;
 }
 static int lr_vv_mixin(void *ud, int cls, int ref) {
-  (void)cls; (void)ref;
-  ((LrVers_ *)ud)->n = -1;
+  LrVers_ *v = ud;
+  int core = -1;
+  (void)cls;
+  (void)elab_class_ref_at(v->c, ref, &core);
+  /* (Kernel, which the row of the name answers, ends the versions: nothing behind it is found) */
+  if (core == CORE_KERNEL && v->name && bop_kernel_answers(v->name, -1, 0)) return LR_W_STOP;
+  v->n = -1;
   return LR_W_STOP;
 }
 static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap) {
@@ -8883,14 +8891,17 @@ int elab_const_path_fails(Compiler *c, int node) {
   }
   return fail;
 }
-static int lr_opaque_may_define_hook(Compiler *c, int k) {
+/* Does owner k's opaque history hold code that may define (LR_OPAQUE_DEFINES)
+   but a mixin of core modules, whose hooks are the core's no-ops, or of
+   constants the program defines nowhere (a NameError)? */
+static int lr_opaque_may_define(Compiler *c, int k) {
   const NodeTable *nt = c->nt;
   const LrHist *op = lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);
   for (int j = 0; op && j < op->n; j++) {
     if (op->v[j].vis != LR_OPAQUE_DEFINES) continue;
     int n = op->v[j].node, core = 0;
     const char *nm = n >= 0 && nt_kind(nt, n) == NK_CallNode ? nt_str(nt, n, "name") : NULL;
-    if (nm && (sp_streq(nm, "include") || sp_streq(nm, "extend") || sp_streq(nm, "prepend"))) {
+    if (nm && is_mixin_call(nm)) {
       int an = nt_ref(nt, n, "arguments"), ac = 0;
       const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
       core = ac > 0;
@@ -8908,7 +8919,7 @@ static int lr_hook_live(Compiler *c, int cls, const char *hook, LoadPoint p, con
   if (elab_method_at(c, cls, hook, 1, p, d) != ELAB_NO) return 1;
   if (!lr_defines(c->lrec, hook)) return 0;
   for (int a = cls, i = 0; a >= 0 && i < lr_chain_bound(c); a = lr_super(c, a), i++)
-    if (elab_opaque_before(c, a, p) != ELAB_NO && lr_opaque_may_define_hook(c, a)) return 1;
+    if (elab_opaque_before(c, a, p) != ELAB_NO && lr_opaque_may_define(c, a)) return 1;
   return 0;
 }
 
@@ -10798,7 +10809,7 @@ void elab_free(Compiler *c) {
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
   free(r->fin); free(r->fin_head);
-  free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
+  free(r->brings); free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
   free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->urun); free(r->rentry); free(r);
@@ -10939,23 +10950,140 @@ static int lr_named_reach(const NodeTable *nt, int node) {
   return sn && (is_builtin_class_name(sn) || is_builtin_exception_name(sn)) ? ELAB_YES : ELAB_UNKNOWN;
 }
 
+/* Where class cls's superclass chain leaves the classes the record holds:
+   at Object (LR_ROOT_OBJECT), at the program's BasicObject (LR_ROOT_BASIC),
+   at a module, whose instance chain has no end (LR_ROOT_MODULE), at a
+   superclass the record holds no class of (LR_ROOT_NAMED, *ref the
+   constant its header names: each reader reads that name its own way), or
+   where the record does not know it (LR_ROOT_UNKNOWN). Each class on the
+   way is first given to visit (NULL: none), whose nonzero answer ends the
+   walk not known. */
+enum { LR_ROOT_UNKNOWN, LR_ROOT_OBJECT, LR_ROOT_BASIC, LR_ROOT_MODULE, LR_ROOT_NAMED };
+static int lr_chain_root(Compiler *c, int cls, int (*visit)(void *ud, int cls), void *ud, int *ref) {
+  *ref = -1;
+  for (int a = cls, g = 0; g < lr_chain_bound(c); g++) {
+    if (visit && a >= 0 && visit(ud, a)) return LR_ROOT_UNKNOWN;
+    if (a == LR_MAIN) return LR_ROOT_OBJECT;
+    if (a < 0 || a >= c->nclasses) return LR_ROOT_UNKNOWN;
+    int dn = c->classes[a].def_node;
+    if (a == comp_core_class(c, CORE_BASIC_OBJECT)) return LR_ROOT_BASIC;
+    if (dn >= 0 ? class_def_is_module(c->nt, dn) : is_builtin_module_name(c->classes[a].name)) return LR_ROOT_MODULE;
+    if (a == cls && c->classes[a].is_builtin_const) return LR_ROOT_UNKNOWN;   /* (a path to a builtin class reads a top-level class of the leaf's name) */
+    LrClass *k = lr_class(c->lrec, a);
+    if (k && k->has_sup && lr_later(c, &k->sup, k->sup_ref) < 0) {   /* a builtin superclass has no class here */
+      *ref = k->sup_ref;
+      return LR_ROOT_NAMED;
+    }
+    a = lr_super(c, a);
+  }
+  return LR_ROOT_UNKNOWN;
+}
+
 /* Does the ancestry of class cls reach Object? A read scoped by such a class
    also looks in Object's constants, so it runs an autoload registered there
    before it raises NameError. ELAB_NO for a module and a BasicObject-rooted
-   class, ELAB_UNKNOWN for a chain the record does not know. */
+   class, ELAB_UNKNOWN for a chain the record does not know. (A builtin
+   superclass is read by its written name: the read of a constant asks this
+   while it is made, which a read of the header's constant would enter
+   again.) */
 static int lr_reaches_object(Compiler *c, int cls) {
-  for (int a = cls, g = 0; g < lr_chain_bound(c); g++) {
-    if (a == LR_MAIN) return ELAB_YES;
-    if (a < 0 || a >= c->nclasses) return ELAB_UNKNOWN;
-    int dn = c->classes[a].def_node;
-    if (a == comp_core_class(c, CORE_BASIC_OBJECT) ||
-        (dn >= 0 ? class_def_is_module(c->nt, dn) : is_builtin_module_name(c->classes[a].name))) return ELAB_NO;
-    if (a == cls && c->classes[a].is_builtin_const) return ELAB_UNKNOWN;   /* (a path to a builtin class reads a top-level class of the leaf's name) */
-    LrClass *k = lr_class(c->lrec, a);
-    if (k && k->has_sup && lr_later(c, &k->sup, k->sup_ref) < 0) return lr_named_reach(c->nt, k->sup_ref);   /* a builtin superclass has no class here */
-    a = lr_super(c, a);
+  int ref;
+  switch (lr_chain_root(c, cls, NULL, NULL, &ref)) {
+    case LR_ROOT_OBJECT: return ELAB_YES;
+    case LR_ROOT_BASIC: case LR_ROOT_MODULE: return ELAB_NO;
+    case LR_ROOT_NAMED: return lr_named_reach(c->nt, ref);
+    default: return ELAB_UNKNOWN;
   }
-  return ELAB_UNKNOWN;
+}
+
+/* elab_class_kernel's walk of the modules one class of the chain mixes into
+   its instance side (lr_walk_one, each module once: enter): it ends where
+   one brings Kernel in. That is the program's Kernel, and a module the
+   record holds no class of but a core module other than Kernel (whose
+   ancestors hold no Kernel; ::Kernel itself unless the program reopens it,
+   a constant it cannot name). A mixin that may not run (under a condition,
+   or after one that decides), and a prepend of Kernel, which is not an
+   include (it puts Kernel's methods in front of the class's own), bring
+   none: the call plan's cells say where an include that may not run ran
+   (cplan_class_kernel). An opaque entry of a core module's mixin is the
+   record's mixin at that node, which the walk reads by its side (an extend,
+   or an include in `class << self`, is the singleton's), and whose hooks
+   are the core's no-ops. */
+typedef struct { Compiler *c; unsigned char *seen; } LrKernelWalk;
+static int lr_kw_own(void *ud, int cls, int sg) {
+  LrKernelWalk *x = ud;
+  (void)sg;
+  return cls == lr_core(x->c->lrec, CORE_KERNEL) ? LR_W_STOP : 0;
+}
+static int lr_kw_mixin(void *ud, int cls, int ref) {
+  int core = -1;
+  (void)cls;
+  (void)elab_class_ref_at(((LrKernelWalk *)ud)->c, ref, &core);
+  return core < 0 || core == CORE_KERNEL ? LR_W_STOP : 0;
+}
+static int lr_kw_skip(void *ud, int cls, const LrMixin *m) {
+  Compiler *c = ((LrKernelWalk *)ud)->c;
+  int core = -1;
+  (void)cls;
+  (void)elab_class_ref_at(c, m->ref, &core);
+  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || !m->applied || m->cond || elab_point_may(c, m->node);
+}
+static int lr_kw_enter(void *ud, int mod, int depth) {
+  LrKernelWalk *x = ud;
+  (void)depth;
+  if (mod < LR_MAIN || mod + 1 >= x->c->lrec->ncls) return 0;   /* (the walk ends at it: no record class) */
+  if (!x->seen && !(x->seen = calloc((size_t)x->c->lrec->ncls, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (x->seen[mod + 1]) return 1;
+  x->seen[mod + 1] = 1;
+  return 0;
+}
+static int lr_kw_class(void *ud, int cls) {
+  LrKernelWalk *x = ud;
+  LrWalker w = { lr_kw_own, lr_kw_mixin, NULL, NULL, NULL, NULL, LR_TAIL_N, lr_kw_enter, lr_kw_skip };
+  return lr_walk_one(x->c, &w, x, cls, 0, 0) != 0;
+}
+/* See analyze.h. The chain is the record's (lr_chain_root): each header's
+   superclass as resolved where it stands, through constant aliases and
+   paths; a superclass it holds no class of is BasicObject when the
+   reference names that core class, through an alias too. Each class on it
+   is walked for what it mixes in (lr_kw_class). */
+int elab_class_kernel(Compiler *c, int cls) {
+  LoadRecord *r = c->lrec;
+  LrKernelWalk x = { c, NULL };
+  int ref, core = -1, root = r && r->recorded ? lr_chain_root(c, cls, lr_kw_class, &x, &ref) : LR_ROOT_UNKNOWN;
+  free(x.seen);
+  if (root == LR_ROOT_NAMED) (void)elab_class_ref_at(c, ref, &core);
+  return root == LR_ROOT_BASIC || core == CORE_BASIC_OBJECT ? KERN_LACKS : KERN_HAS;
+}
+/* See analyze.h. */
+/* ...asked of the modules a program module includes: a fact of each module, kept (LoadRecord.brings, of the record's
+   histories as they stand) so that a module reached by many routes, or asked by many mixins, is walked once */
+static int lr_brings_kernel(Compiler *c, int ref) {
+  LoadRecord *r = c->lrec;
+  int core = -1, ke = comp_core_class(c, CORE_KERNEL), m = elab_class_ref_at(c, ref, &core);
+  if (core == CORE_KERNEL || (m >= 0 && m == ke)) return 1;
+  if (m < 0) return core >= 0 ? 0 : -1;
+  /* a module of the program: through the modules it includes, the core Kernel among them (the program need not reopen it) */
+  const LrClass *k = lr_class(r, m);
+  if (!k || m + 1 >= r->ncls) return 0;
+  if (!r->brings || r->brings_gen != r->hgen || r->brings_n != r->ncls) {
+    free(r->brings);
+    if (!(r->brings = calloc((size_t)r->ncls + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    r->brings_gen = r->hgen;
+    r->brings_n = r->ncls;
+  }
+  if (r->brings[m + 1]) return r->brings[m + 1] == 1;
+  r->brings[m + 1] = 2;   /* (while it is asked: a module is not its own include) */
+  for (int j = 0; j < k->nmix; j++)
+    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && lr_brings_kernel(c, k->mix[j].ref) == 1) return r->brings[m + 1] = 1;
+  return 0;
+}
+int elab_mixin_brings_kernel(Compiler *c, int ref) {
+  return lr_brings_kernel(c, ref);
+}
+/* See analyze.h. */
+unsigned long elab_mixin_gen(Compiler *c) {
+  return c->lrec ? c->lrec->hgen : 0;
 }
 
 /* The main-scope registration a read of `name` scoped by class owner reaches

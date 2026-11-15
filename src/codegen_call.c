@@ -20454,11 +20454,13 @@ static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
    read it (emit_cells_test) */
 int emit_vis_cell_write(Compiler *c, int id, Buf *b) {
   const LocalVar *g;
-  int v = 0, n = 0;
-  for (int k = 0; cplan_vis_cell_after(c, id, k, &g, &v); k++) {
+  int v = 0, n = 0, only;
+  for (int k = 0; cplan_vis_cell_after(c, id, k, &g, &v, &only); k++) {
     if (!g) continue;
     if (n++) buf_puts(b, ", ");
+    if (only >= 0) buf_printf(b, "_sp_cls.cls_id == %d ? (void)(", only);   /* (the class the include ran on) */
     buf_printf(b, repr_slot_kind(c, g) == RK_BOXED ? "gv_%s = sp_box_int(%dLL)" : "gv_%s = %dLL", g->name, v);
+    if (only >= 0) buf_puts(b, ") : (void)0");
   }
   return n > 0;
 }

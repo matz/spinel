@@ -1977,6 +1977,12 @@ typedef struct {
   unsigned char *ver_vis_scope_mark; int ver_vis_scope_cap;
   unsigned char *ver_vis_hist_seen; int ver_vis_hist_cap;   /* (the cells whose history is listed) */
   unsigned long ver_vis_guard_stamp;   /* the tree's state ver_vis_guard_hists last read (nodes, scopes, edits, version) */
+  /* the include calls that may bring Kernel into a class, with the classes whose cell each writes (call_plan.c,
+     ver_kern_sites; cplan_vis_cell_after), and what they were made from */
+  struct VerKernAfter { int node, cls; } *ver_kern_after;
+  int nver_kern_after, ver_kern_made;
+  long ver_kern_stamp;   /* the classes, the scopes and the record's mixins the list was made of */
+  unsigned char *ver_kern_has;   /* [nclasses] 1 for a class some include of the list writes the cell of */
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),
@@ -2264,8 +2270,6 @@ TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int 
 int    comp_ffi_const_at(Compiler *c, int node, int *out);
 int    comp_included_method_index(Compiler *c, const char *name, int call_id);
 int    class_is_blank_slate(Compiler *c, int ci);   /* explicit `< BasicObject` descent */
-int    class_lacks_kernel(Compiler *c, int ci);     /* blank slate with no `include Kernel` */
-int    class_node_lacks_kernel(Compiler *c, int cnode);   /* ...of the class node, before the class table */
 int    comp_toplevel_mod_defines(Compiler *c, const char *name, int extend);
 
 /* Locals within a scope. */

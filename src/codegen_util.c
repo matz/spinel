@@ -4736,7 +4736,7 @@ int emit_const_read_prefix(Compiler *c, int id, Buf *b) {
   if (!nt_kind_is_constant(k) || view_const_read_done(c, id)) return 0;
   int n = k == NK_ConstantPathNode ? emit_const_read_prefix(c, nt_ref(c->nt, id, "parent"), b) : 0;
   ConstReadEffect ce = an_const_read_effect(c, id);
-  if (ce.presence || ce.autoload || ce.class_presence) {
+  if (!an_const_effect_runs_nothing(ce)) {
     if (!n) buf_puts(b, "(");
     emit_const_read_open_checked(c, id, ce, b);
     buf_puts(b, "0");

@@ -54,8 +54,7 @@ static int walk_value_only(Compiler *c, int id, const OrderWalk *w) {
     case NK_RegularExpressionNode:
       return 1;
     case NK_ConstantReadNode: case NK_ConstantPathNode: {
-      ConstReadEffect e = an_const_read_effect(c, id);
-      if (e.presence || e.autoload || e.class_presence) return 0;
+      if (!an_const_effect_runs_nothing(an_const_read_effect(c, id))) return 0;
       /* (a path evaluates its parent before it reads the leaf: `pick::PAT`
          runs `pick`) */
       return nt_kind(c->nt, id) != NK_ConstantPathNode || order_pure_walk(c, nt_ref(c->nt, id, "parent"), w);

@@ -10099,12 +10099,15 @@ int poly_inert(Compiler *c, int node) {
   switch (nt_kind(nt, node)) {
   case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
   case NK_ClassVariableReadNode: case NK_GlobalVariableReadNode:
-  case NK_ConstantReadNode: case NK_SelfNode:
+  case NK_SelfNode:
   case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_IntegerNode:
   case NK_FloatNode: case NK_SymbolNode: case NK_StringNode:
     return 1;
+  /* (a constant read that runs an autoload or a presence check is code) */
+  case NK_ConstantReadNode:
+    return an_const_effect_runs_nothing(an_const_read_effect(c, node));
   case NK_ConstantPathNode:
-    return poly_inert(c, nt_ref(nt, node, "parent"));
+    return an_const_effect_runs_nothing(an_const_read_effect(c, node)) && poly_inert(c, nt_ref(nt, node, "parent"));
   case NK_ArrayNode:
     els = nt_arr(nt, node, "elements", &n);
     for (int i = 0; i < n; i++)
@@ -27229,7 +27232,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     /* (a constant read with any effect is bound too: an autoload runs a
        file, which must not move ahead of an earlier argument) */
     ConstReadEffect effect = an_const_read_effect(c, operand[i]);
-    int bindable = !route_op && (effect.presence != NULL || effect.autoload || effect.class_presence ||
+    int bindable = !route_op && (!an_const_effect_runs_nothing(effect) ||
                     an_const_read_keeps_class(c, operand[i]) ||
                     k == NK_CallNode || k == NK_SuperNode || k == NK_IfNode || k == NK_UnlessNode ||
                     k == NK_ForwardingSuperNode || k == NK_YieldNode || k == NK_InterpolatedStringNode ||

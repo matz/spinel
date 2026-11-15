@@ -1400,6 +1400,28 @@ static int infer_case_pattern_locals(Compiler *c) {
 }
 
 
+/* `a.map!.with_index { |x, i| v }` (or with_index(off)): the blockless
+   map! / collect! hands its Enumerator to with_index, and the block's value
+   goes into each slot of a, as a map! block's does (emit_with_index_expr
+   writes the values back). The node of the Array (a), or -1 when the call
+   is not this form. */
+static int map_bang_with_index_array(const NodeTable *nt, int id) {
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !sp_streq(nm, "with_index")) return -1;
+  int blk = nt_ref(nt, id, "block");
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -1;
+  int args = nt_ref(nt, id, "arguments"), an = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &an);
+  if (an > 1) return -1;
+  int inner = nt_ref(nt, id, "receiver");
+  if (inner < 0 || nt_kind(nt, inner) != NK_CallNode || nt_ref(nt, inner, "block") >= 0) return -1;
+  const char *in = nt_str(nt, inner, "name");
+  int iargs = nt_ref(nt, inner, "arguments"), ian = 0;
+  if (iargs >= 0) nt_arr(nt, iargs, "arguments", &ian);
+  if (!in || !is_map_bang_alias(in) || ian != 0) return -1;
+  return nt_ref(nt, inner, "receiver");
+}
+
 /* `arr.map! { ... }` REPLACES every element with the block's value, so a tail
    the receiver's element type cannot hold widens the receiver itself -- the
    same reasoning as a push of a foreign element, on a mutation that rewrites
@@ -1414,7 +1436,9 @@ int widen_arrays_from_map_bang(Compiler *c) {
   int changed = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || (!sp_streq(nm, "map!") && !sp_streq(nm, "collect!"))) continue;
+    /* (`a.map!.with_index { }` writes a's slots the same way) */
+    int wi_arr = map_bang_with_index_array(nt, id);
+    if (!nm || (!sp_streq(nm, "map!") && !sp_streq(nm, "collect!") && wi_arr < 0)) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0) continue;
     int body = nt_ref(nt, blk, "body");
@@ -1422,7 +1446,7 @@ int widen_arrays_from_map_bang(Compiler *c) {
     if (bn <= 0) continue;
     TyKind tt = infer_type(c, bb[bn - 1]);
     if (tt == TY_UNKNOWN) continue;
-    int recv = nt_ref(nt, id, "receiver");
+    int recv = wi_arr >= 0 ? wi_arr : nt_ref(nt, id, "receiver");
     if (recv >= 0) recv = mutated_array(c, recv);
     if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
     const char *rnm = nt_str(nt, recv, "name");
@@ -3840,7 +3864,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         is_idx_write = 1; is_splice = 1; is_fill = 1; vt = infer_type(c, argv[0]);
         kt = TY_INT;  /* a positional span, never hash evidence */
       }
-      else if (name && ((sp_streq(name, "fill") && an <= 2) || (is_map_bang_alias(name) && an == 0)) &&
+      else if (name && ((sp_streq(name, "fill") && an <= 2) || (is_map_bang_alias(name) && an == 0) ||
+                        map_bang_with_index_array(nt, id) >= 0) &&
                nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode) {
         /* the block form, fill([start[, len]]) { |i| v }: the block's value
            is what goes into each slot of the span, the same evidence. map!
@@ -3849,6 +3874,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
            widen_arrays_from_map_bang widens only a plain local. */
         int fblk = nt_ref(nt, id, "block");
         int fbody = nt_ref(nt, fblk, "body");
+        /* (map!.with_index's slots are those of map!'s receiver) */
+        if (map_bang_with_index_array(nt, id) >= 0) recv = push_chain_base(c, map_bang_with_index_array(nt, id));
         int fbn = 0; const int *fbs = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
         TyKind ftail = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
         vt = ftail;

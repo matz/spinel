@@ -4924,7 +4924,7 @@ static void emit_append_bytes_handle(Compiler *c, int th, int argc, const int *a
   for (int a = 0; a < argc; a++) buf_printf(b, " sp_String_append_bytes(_t%d, _t%d);", th, base + a);
 }
 
-/* A String mutator: the value-form bangs, the in-place mutators, append_as_bytes, bytesplice (emit_array_call's arms, in their order) */
+/* A String mutator: the value-form bangs, the in-place mutators and append_as_bytes (emit_array_call's arms, in their order); bytesplice is a stage-7 row (emit_op_string_bytesplice) */
 static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   /* String value-form mutators: the expression yields the post-mutation
      string -- or nil for the no-change bang contract -- and reassigns an
@@ -5276,13 +5276,12 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
     }
   }
   if (rt == TY_STRING && emit_builtin_op_stage(c, id, recv, rt, name, 6, b)) { *out = 1; return 1; }
-  /* The byte mutators below take a handle receiver too: TY_STRBUF, the
-     handle a call answers under --share-strings (`rec(s).bytesplice(...)`
-     where rec returns its parameter) or a reader of an ivar that holds one.
-     Only their handle arms can take it, and change it in place; without a
-     handle it stays unsupported. append_as_bytes() appends nothing (the
-     arity check has bytesplice take two arguments or more), but a frozen
-     handle still raises. */
+  /* append_as_bytes below takes a handle receiver too: TY_STRBUF, the
+     handle a call answers (`rec(s).append_as_bytes(...)` where rec returns
+     its parameter) or a reader of an ivar that holds one. Only its handle
+     arm can take it, and change it in place; without a handle it stays
+     unsupported. append_as_bytes() appends nothing, but a frozen handle
+     still raises. (bytesplice is a stage-7 row: emit_op_string_bytesplice.) */
   int hrecv = rt == TY_STRBUF && recv >= 0 && is_string_byte_mutator(name);
   if (hrecv) rt = TY_STRING;
   if (hrecv && argc == 0) {

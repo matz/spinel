@@ -527,11 +527,14 @@ static void sp_str_bsp_span(const char*s,sp_int*beg,sp_int*len){
    takes the encoding the two are compatible in. */
 /* bytesplice's checks, in CRuby's order: each span checked and clipped
    (sp_str_bsp_span), then rb_enc_check over the whole of both, where high
-   bytes in each, in different encodings, cannot be joined. Answers whether
-   the result is BINARY. */
+   bytes in each, in different encodings, cannot be joined. The value is
+   scanned before the receiver: it is the short one (a length spliced into
+   a binary buffer from a text literal), and an ASCII value settles it, so
+   the receiver is not read end to end on every call. Answers whether the
+   result is BINARY. */
 int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen){
   sp_str_bsp_span(s,start,len);sp_str_bsp_span(val,vstart,vlen);
-  if(sp_str_is_binary(s)!=sp_str_is_binary(val)&&!sp_str_ascii_only(s)&&!sp_str_ascii_only(val))
+  if(sp_str_is_binary(s)!=sp_str_is_binary(val)&&!sp_str_ascii_only(val)&&!sp_str_ascii_only(s))
     sp_raise_cls("Encoding::CompatibilityError",sp_str_is_binary(s)
       ?"incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
       :"incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");

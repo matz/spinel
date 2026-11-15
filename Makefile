@@ -5002,6 +5002,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	if [ $$ok -eq 1 ]; then echo "infer-test: pass (1 of 2)"; else exit 1; fi
 infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-infer.XXXXXX); ok=1; \
+	$(SPINEL) test/object_array_map_identity.rb -c --no-line-map -o "$$tmp/oai.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_map_identity)"; ok=0; }; \
+	awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/oai.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a map answering its element kept an Array of one class boxed)"; ok=0; }; \
 	$(SPINEL) test/object_array_push_element_read.rb -c --no-line-map -o "$$tmp/oap.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_push_element_read: -c)"; ok=0; }; \
 	[ "$$(awk '/^struct sp_(Node|Ring|Bin)_s \{/ { c = $$2 } c && /iv_(links|members|items)/ { print c, $$1; c = "" }' "$$tmp/oap.c" | tr '\n' ' ')" = "sp_Node_s sp_PtrArray sp_Ring_s sp_PtrArray sp_Bin_s sp_PolyArray " ] || { echo "infer-test: FAIL (an element read of an Array of one class stored into another gave it no class, or one of a mixed Array narrowed it)"; ok=0; }; \
 	$(SPINEL) test/object_array_walk_ends_branch.rb -c --no-line-map -o "$$tmp/oaw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_walk_ends_branch: -c)"; ok=0; }; \

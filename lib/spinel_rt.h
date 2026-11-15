@@ -10988,6 +10988,16 @@ static void *sp_PtrArray_delete_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int 
 static void *sp_PtrArray_delete_obj(sp_PtrArray *a, sp_RbVal v, int cls_id, int dyn) {sp_gc_wb((void*)a);
   if (SP_UNLIKELY(!a)) sp_nil_recv("delete");
   SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
+  if (a->frozen) {   /* as sp_poly_frozen_delete_scan: raise at the first write, a miss answers nil */
+    int found = 0;
+    for (sp_int i = 0; i < a->len; i++) {
+      void *e = a->data[i];
+      if (sp_poly_rb_equal(dyn ? sp_box_nullable_obj_dyn(e, cls_id) : sp_box_nullable_obj(e, cls_id), v)) found = 1;
+      else if (found) break;
+    }
+    if (found) sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);
+    return NULL;
+  }
   void *removed = NULL; SP_GC_ROOT(removed);
   sp_int w = 0;
   for (sp_int i = 0; i < a->len; i++) {

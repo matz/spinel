@@ -40,3 +40,6 @@ true
 2
 [1, 2]
 []
+FrozenError
+2
+nil

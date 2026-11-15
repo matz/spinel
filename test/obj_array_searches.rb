@@ -96,3 +96,13 @@ p rows.include?([3, 4]), rows.index([1, 2]), rows.count([1, 2])
 p rows.delete([1, 2])
 rows.delete_if { |r| r[0] == 3 }
 p rows
+
+# A frozen object array: delete raises FrozenError when it finds an equal
+# element, and leaves the array as it was; a miss answers nil.
+WIRES = [a, b].freeze
+begin
+  WIRES.delete(a)
+rescue FrozenError => e
+  puts e.class
+end
+p WIRES.size, WIRES.delete(Wire.new(9))

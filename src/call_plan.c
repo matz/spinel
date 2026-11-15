@@ -8808,6 +8808,24 @@ static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int
    asks its visibility cell first (ver_vis_arm). An undef's arm raises what
    a call finding no method does (ver_no_method_raise: NameError for a
    variable-like call's face). -1 for none. */
+/* Is version i of a chain's versions (elab_chain_versions: nearest history
+   first) always behind another: a def of a nearer history, at a point that
+   runs for sure and before version i's, in a history nothing removes or
+   undefines a method from? */
+static int ver_always_shadowed(Compiler *c, const ElabVersion *vs, int nv, int i) {
+  LoadPoint pi = elab_point_of(c, vs[i].v->node);
+  if (pi.region < 0) return 0;
+  for (int j = 0; j < i; j++) {
+    if (vs[j].hist == vs[i].hist || vs[j].v->kind != LR_DEF || elab_point_may(c, vs[j].v->node)) continue;
+    LoadPoint pj = elab_point_of(c, vs[j].v->node);
+    if (pj.region < 0 || elab_cmp(pj, pi) != PROG_BEFORE) continue;
+    int removed = 0;
+    for (int k = 0; k < nv && !removed; k++)
+      removed = vs[k].hist == vs[j].hist && (vs[k].v->kind == LR_REMOVE || vs[k].v->kind == LR_UNDEF);
+    if (!removed) return 1;
+  }
+  return 0;
+}
 static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int into, int sg, const char *name, int mi, int ar, int mm,
                           int face, int *absent, int *finds) {
   ElabVersion vs[VER_MAX_ARMS];
@@ -8833,8 +8851,15 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
        which an arm's call on main reaches with main as self, ct_lookup) */
     int obj = s < 0 && into < 0 && sg;
     if (obj) s = ct_def_version(c, comp_core_class(c, CORE_OBJECT), name, 0, vs[i].v, &dc);
-    if (s < 0 || c->scopes[s].is_transplanted_source || (!c->scopes[s].replaced && scope_is_shadowed(c, s)))
+    /* (a version no call on this chain meets is no arm: one of a history
+       further along, made after a def of a nearer one that always runs and
+       that nothing removes, which answers ahead of it from then on. A
+       top-level def is such a version of every class's singleton chain,
+       which ends in Object's methods.) */
+    if (s < 0 || c->scopes[s].is_transplanted_source || (!c->scopes[s].replaced && scope_is_shadowed(c, s))) {
+      if (ver_always_shadowed(c, vs, nv, i)) continue;
       return -1;
+    }
     vs[nd] = vs[i];   /* (the defs, for the else arm's facts) */
     dto[nd++] = s;
     blk |= c->scopes[s].blk_param || c->scopes[s].yields;

@@ -1182,7 +1182,18 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
            shared String's handle (exc_msg_handle) */
         Buf mh; memset(&mh, 0, sizeof mh);
         int mk;
-        if (strbuf_route_reader(c, av[0])) {
+        /* `raise "msg"` is `raise RuntimeError, "msg"`: a RuntimeError
+           reopening's own initialize runs on it, as that form's does
+           (emit_exc_reopen_construct). Raised by name, it skipped the
+           initialize, so its ivars and side effects were missing. */
+        int rxc = comp_class_index(c, "RuntimeError");
+        int rim = rxc >= 0 ? exc_reopen_initialize(c, rxc) : -1;
+        if (rim >= 0 && c->scopes[rim].nparams >= 1) {
+          buf_puts(b, "sp_raise_exc(");
+          emit_exc_reopen_construct(c, rxc, rim, -1, av[0], b);
+          buf_puts(b, ")");
+        }
+        else if (strbuf_route_reader(c, av[0])) {
           /* A reader's box keeps its shared field as the message. */
           buf_puts(b, "sp_raise_poly("); emit_boxed(c, av[0], b); buf_puts(b, ")");
         }

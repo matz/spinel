@@ -1931,6 +1931,7 @@ static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int
     for (int k = 0; k < nargs; k++) mv[k + 1] = nt_clone_subtree(nt, av[k]);
     nt_node_set_arr(nt, margs, "arguments", mv, nargs + 1);
     nt_node_set_ref(nt, call, "arguments", margs);
+    if (nt_ref(nt, id, "block") >= 0) nt_node_set_ref(nt, call, "block", nt_clone_subtree(nt, nt_ref(nt, id, "block")));   /* (the call's block goes with it) */
     free(mv);
     els = call;
   }

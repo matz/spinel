@@ -213,6 +213,7 @@ typedef enum {
   BOPE_STRING_INSERT,
   BOPE_STRING_CLEAR,
   BOPE_STRING_SLICE,
+  BOPE_STRING_BYTESPLICE,
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */
   BOPE_BOXED_ARRAY_COUNT, /* a count-taking Enumerable read through a box */

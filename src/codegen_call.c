@@ -7518,23 +7518,23 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     return 1;
   }
   /* String#bytesplice on a poly value, in each of its forms
-     (emit_bytesplice_bytes): in-place byte splice on the shared handle
+     (emit_bytesplice_in_place): spliced in place on the String's handle
      (#3227). */
   if (sp_streq(name, "bytesplice") && bytesplice_form_ok(c, argv, argc)) {
     int tvB = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", tvB);
     emit_expr(c, recv, b);
     buf_printf(b, "; sp_RbVal _r%d; if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_STRBUF) {"
-                  " sp_String *_m%d = (sp_String *)_t%d.v.p;"
-                  " const char *_n%d = ",
-               tvB, tvB, tvB, tvB, tvB, tvB);
+                  " sp_String *_m%d = (sp_String *)_t%d.v.p; (void)",
+               tvB, tvB, tvB, tvB, tvB);
     char rs[48]; snprintf(rs, sizeof rs, "sp_String_cstr(_m%d)", tvB);
-    emit_bytesplice_bytes(c, argv, argc, rs, b);
+    char hm[24]; snprintf(hm, sizeof hm, "_m%d", tvB);
+    emit_bytesplice_in_place(c, argv, argc, rs, hm, NULL, b);
     /* the answer is the receiver itself, so a mutation through it
        (`x.bytesplice(0, 1, "J") << "!"`) reaches x */
-    buf_printf(b, "; sp_String_set_bin_enc(_m%d, _n%d); _r%d = _t%d; }\n"
+    buf_printf(b, "; _r%d = _t%d; }\n"
                   "else { sp_raise_nomethod(sp_nomethod_msg(\"bytesplice\", _t%d)); _r%d = sp_box_nil(); } _r%d; })",
-               tvB, tvB, tvB, tvB, tvB, tvB, tvB);
+               tvB, tvB, tvB, tvB, tvB);
     return 1;
   }
   /* String#replace / #prepend / #concat on a poly value: swap or extend

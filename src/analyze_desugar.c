@@ -9825,8 +9825,8 @@ int desugar_array_first_last(Compiler *c) {
            the loop above missed it and the rewrite below would have
            silently turned the refused call into a harmless index read
            (K-028, kilau docs/CATALOG.md) */
-        comp_method_vis_declared(c, k, "first", NULL) != SP_VIS_PUBLIC ||
-        comp_method_vis_declared(c, k, "last", NULL) != SP_VIS_PUBLIC) user_fl = 1;
+        cplan_method_vis(c, -1, k, "first", 0, NULL) != SP_VIS_PUBLIC ||
+        cplan_method_vis(c, -1, k, "last", 0, NULL) != SP_VIS_PUBLIC) user_fl = 1;
   if (user_fl) return 0;
   static const char *const calls_of[] = { "first", "last", NULL };
   int *calls, ncalls = an_calls_named_any(c, calls_of, nt->count, &calls);
@@ -10075,7 +10075,7 @@ int desugar_array_at(Compiler *c) {
     if (call_answers(c, -1, k, "at", CT_SHARED, NULL) ||
         /* a bare `private :at` reopening with no redefinition (K-028,
            kilau docs/CATALOG.md), same reason as desugar_array_first_last */
-        comp_method_vis_declared(c, k, "at", NULL) != SP_VIS_PUBLIC) user_at = 1;
+        cplan_method_vis(c, -1, k, "at", 0, NULL) != SP_VIS_PUBLIC) user_at = 1;
   /* a class method `at` of the program's own (Stamp.at): a receiver that
      is boxed, or not typed yet, may hold that Class at run time */
   int user_cat = 0;

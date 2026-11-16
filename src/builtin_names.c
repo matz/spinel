@@ -1366,8 +1366,9 @@ int is_implicitly_private_name(const char *n) {
                sp_streq(n, "respond_to_missing?"));
 }
 
+int is_initialize_copy_name(const char *n) { return sp_streq(n, "initialize_copy"); }
 int is_initialize_family(const char *n) {
-  return sp_streq(n, "initialize_copy") || sp_streq(n, "initialize");
+  return is_initialize_copy_name(n) || is_initialize_name(n);
 }
 
 int is_intersection_alias(const char *n) {
@@ -2006,6 +2007,14 @@ int is_dir_blockless_iter(const char *n) {
 }
 
 int is_kernel_module_name(const char *n) { return n && sp_streq(n, "Kernel"); }
+
+/* Kernel functions that read the calling frame (the method's name, the block, the locals, the stack): the bare call
+   answers the frame it is made in, which a super lowered into a method's body is not CRuby's. */
+int is_frame_reading_function(const char *n) {
+  static const char *const NAMES[] = { "__method__", "__callee__", "__dir__", "binding", "block_given?", "caller",
+                                       "caller_locations", "local_variables", NULL };
+  return n && builtin_name_in(n, NAMES);
+}
 
 /* Kernel's module functions, by name. A whitelist rather than "anything with
    the Kernel receiver": Kernel is also a VALUE, so `Kernel === 5` asks whether

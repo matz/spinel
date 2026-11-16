@@ -295,6 +295,7 @@ int is_select_alias(const char *n); /* filter select */
 int is_format_alias(const char *n); /* format sprintf */
 int is_initialize_name(const char *n); /* initialize */
 int is_initialize_family(const char *n); /* initialize initialize_copy */
+int is_initialize_copy_name(const char *n); /* initialize_copy */
 
 int is_iso8601_alias(const char *n); /* iso8601 xmlschema */
 int is_rfc2822_alias(const char *n);   /* rfc2822 rfc822 */
@@ -528,6 +529,8 @@ const char *dir_surface_alias(const char *n, int blockless_iter);
 int is_dir_blockless_iter(const char *n);  /* foreach each_child: an Enumerator without a block */
 
 int is_kernel_module_name(const char *n);
+int is_frame_reading_function(const char *n);   /* __method__ __callee__ __dir__ binding block_given? caller caller_locations local_variables: Kernel functions that read the calling frame */
+int builtin_method_takes_keywords(const char *owner, const char *m);   /* CRuby's parameters of owner's instance method m (BAP) list a keyword or a keyword rest */
 int is_kernel_module_function(const char *n);
 /* ...and one that never consults self (not `binding`). */
 int kernel_function_ignores_self(const char *n);

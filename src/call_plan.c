@@ -5728,10 +5728,12 @@ int cplan_kernel_row(Compiler *c, int id, const char *name) {
   int recv = nt_ref(nt, id, "receiver");
   const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(nt, id, "block") >= 0) : NULL;
   if (!op) return 0;
-  /* an internal row answers the calls the compiler made (builtin_only: it
-     never reaches a method of the program's), whatever the program defines;
-     the program's own call of its name never takes it */
-  if (op->flags & BOPF_INTERNAL) return recv < 0 && cplan_builtin_call(c, id);
+  /* a call the compiler made (builtin_only: it never reaches a method of the
+     program's) takes the row, whatever the program defines; an internal row
+     answers no other call, and the program's own call of a name never takes
+     it */
+  if (recv < 0 && cplan_builtin_call(c, id)) return 1;
+  if (op->flags & BOPF_INTERNAL) return 0;
   if (!cplan_kernel_form(c, id, name, 0)) return 0;
   /* an arm pinned to a version runs it, and its else arm (CT_PIN_BUILTIN)
      the row */

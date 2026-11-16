@@ -14874,7 +14874,7 @@ static int fwd_call_names(const NodeTable *nt, int id, const char *name, int *sk
   *skip = 1;
   return 1;
 }
-static int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
+int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
   int n = -2;
   for (int id = 0; id < nt->count; id++) {
     if (!fwd_node_is(nt, id, "CallNode")) continue;

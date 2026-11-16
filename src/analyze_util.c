@@ -5384,6 +5384,8 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
         k = c->scopes[im].origin_module_ci > 0 ? c->scopes[im].origin_module_ci - 1 : c->scopes[im].class_id, side = 0;
         if (k >= 0) goto found;
       }
+      /* (Object's own entry the program's `class Object` reopening makes: bound on Object) */
+      if (mst == EMC_OWN) { k = comp_core_class(c, CORE_OBJECT), side = 0; if (k >= 0) goto found; }
     }
     if (mi < 0) return cplan_capture_missing(c, node);
     k = c->scopes[mi].class_id, side = k >= 0 && c->scopes[mi].is_cmethod;

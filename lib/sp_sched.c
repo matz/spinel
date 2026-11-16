@@ -3230,7 +3230,14 @@ static void sp_sched_pump(sp_thread *target, int may_wait) {
        no wait list here, so nothing marks it RUNNABLE for it) */
     if (target && sp_thread_inject_pending(&g_main_thread)) return;
 #ifdef SP_EV_BACKEND
-    if (g_wslot[0].evfd > 0) sp_ev_worker_wait(0, 0);   /* see sp_worker_main */
+    /* A look at the set before each thread was a syscall that, when nothing
+       is ready, leaves the CPU on Darwin (about 12 us). With threads queued
+       it is taken when the helpers take theirs (sp_ev_drain_due); with none,
+       the wait below, or the look before returning, takes it. */
+    if (g_wslot[0].evfd > 0 &&
+        (SP_ATOMIC_LOAD(&g_lrq[0].head, __ATOMIC_ACQUIRE) || SP_ATOMIC_LOAD(&g_grq.head, __ATOMIC_ACQUIRE)) &&
+        sp_ev_drain_due(0))
+      sp_ev_worker_wait(0, 0);   /* see sp_worker_main */
 #endif
     /* main blocked on a Queue/Mutex and a runnable thread just woke it */
     if (g_main_thread.state == SP_TH_RUNNABLE) { SP_TH_SET_STATE(&g_main_thread, SP_TH_RUNNING); return; }
@@ -3293,6 +3300,9 @@ static void sp_sched_pump(sp_thread *target, int may_wait) {
     }
 #else
     (void)may_wait;
+#endif
+#ifdef SP_EV_BACKEND
+    if (g_wslot[0].evfd > 0 && sp_ev_worker_wait(0, 0) > 0) continue;
 #endif
     return;
   }

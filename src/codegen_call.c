@@ -21904,7 +21904,8 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       int ocid = ty_object_class(rt);
       if (ocid >= 0 && ocid < c->nclasses &&
           !call_answers(c, id, ocid, name, 0, NULL) &&
-          !comp_writer_in_chain(c, ocid, name, NULL))
+          /* (the plan's answer for a writer of the name, read through call_target) */
+          !call_attr_target(c, id, ocid, name, CT_ATTR | CT_WRITER, NULL))
         bcn = c->classes[ocid].is_native_class ? c->classes[ocid].name
             : c->classes[ocid].is_struct ? "Struct"
             : c->classes[ocid].is_data ? "Data" : "Object";

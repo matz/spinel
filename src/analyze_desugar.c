@@ -10485,7 +10485,10 @@ int desugar_cmethod_cvar_reflection(Compiler *c) {
    fresh local first:
      (__ixr_N = recv; __ixk_N = k; __ixr_N[__ixk_N] || (__ixr_N[__ixk_N] = v))
    with `&&` for `&&=`, and `__ixr_N[__ixk_N] = __ixr_N[__ixk_N] op v` for an
-   operator. A key list other than one plain argument is left alone. */
+   operator. Several keys (`m[y, x] += 1` on a two-index `[]`) are held one
+   local each, `__ixk_N`, `__ixk_N_1`, ..., in order. A key list with a
+   splat, a block or keywords is left alone, as is one of more than
+   IXW_MAX_KEYS keys. */
 /* An index store a desugar writes out is an assignment, as `recv[i] = v` is:
    the call carries Prism's attribute-write flag. */
 static int ix_store_call(NodeTable *nt, int call) {
@@ -10538,10 +10541,14 @@ static int ix_held_store(NodeTable *nt, const char *vname, int value, int set, i
   nt_node_set_ref(nt, par, "body", st);
   return par;
 }
-static int ixw_held_store(NodeTable *nt, int source, const char *rname, const char *vname, int key, int value) {
-  int wa[2] = { key, ixw_read(nt, vname) };
-  if (wa[1] < 0) return -1;
-  return ix_held_store(nt, vname, value, ixw_call(nt, source, rname, "[]=", wa, 2), -1);
+#define IXW_MAX_KEYS 8
+static int ixw_held_store(NodeTable *nt, int source, const char *rname, const char *vname,
+                          const int *keys, int nkeys, int value) {
+  int wa[IXW_MAX_KEYS + 1];
+  for (int j = 0; j < nkeys; j++) wa[j] = keys[j];
+  wa[nkeys] = ixw_read(nt, vname);
+  if (wa[nkeys] < 0) return -1;
+  return ix_held_store(nt, vname, value, ixw_call(nt, source, rname, "[]=", wa, nkeys + 1), -1);
 }
 
 /* Does an op-write on an object of class k call the program's [] or []=:
@@ -10574,7 +10581,7 @@ int desugar_index_op_write_user(Compiler *c) {
     int args = nt_ref(nt, id, "arguments");
     if (recv < 0 || val < 0 || args < 0 || nt_ref(nt, id, "block") >= 0) continue;
     int argc = 0; const int *argv = nt_arr(nt, args, "arguments", &argc);
-    if (argc != 1 || !argv) continue;
+    if (argc < 1 || argc > IXW_MAX_KEYS || !argv) continue;
     NodeKind ak = nt_kind(nt, argv[0]);
     if (nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) continue;
     TyKind rt = infer_type(c, recv);
@@ -10597,6 +10604,9 @@ int desugar_index_op_write_user(Compiler *c) {
        the calls, it stores what the single `[]=` stores, where the op-write
        on a box set an Array's element only and dropped a member's store */
     if (!user && !struct_aset_may_reach(c, id)) continue;
+    /* a Struct's `[]=` takes one key; a program's `[]` and `[]=` any
+       number (`m[y, x] += 1`), each held in its own local */
+    if (!user && argc != 1) continue;
     /* a literal key stays one, so the member it names is the one typed and
        stored (a receiver typed as the Struct then takes the member's writer) */
     int lit = !user && (ak == NK_SymbolNode || ak == NK_StringNode || ak == NK_IntegerNode);
@@ -10612,40 +10622,44 @@ int desugar_index_op_write_user(Compiler *c) {
     const char *op = k == NK_IndexOperatorWriteNode ? nt_str(nt, id, "binary_operator") : NULL;
     if (k == NK_IndexOperatorWriteNode && !op) continue;
     char opname[64]; if (op) snprintf(opname, sizeof opname, "%s", op);
-    int key = argv[0];
-    char rname[48], kname[48], vname[48];
+    int keys[IXW_MAX_KEYS];
+    for (int j = 0; j < argc; j++) keys[j] = argv[j];
+    char rname[48], kname[IXW_MAX_KEYS][56], vname[48];
     snprintf(rname, sizeof rname, "__ixr_%s", comp_node_tag(c, id));
-    snprintf(kname, sizeof kname, "__ixk_%s", comp_node_tag(c, id));
+    snprintf(kname[0], sizeof kname[0], "__ixk_%s", comp_node_tag(c, id));
+    for (int j = 1; j < argc; j++) snprintf(kname[j], sizeof kname[j], "__ixk_%s_%d", comp_node_tag(c, id), j);
     snprintf(vname, sizeof vname, "__ixv_%s", comp_node_tag(c, id));
     int first = nt->count;
-    int rw = nt_new_node(nt, "LocalVariableWriteNode");
-    int kw = lit ? -1 : nt_new_node(nt, "LocalVariableWriteNode");
-    if (rw < 0 || (!lit && kw < 0)) continue;
+    int rw = nt_new_node(nt, "LocalVariableWriteNode"), kw[IXW_MAX_KEYS], bad = rw < 0;
+    for (int j = 0; j < argc && !lit && !bad; j++) bad = (kw[j] = nt_new_node(nt, "LocalVariableWriteNode")) < 0;
+    if (bad) continue;
     nt_node_set_str(nt, rw, "name", rname); nt_node_set_int(nt, rw, "depth", 0);
     nt_node_set_ref(nt, rw, "value", recv);
-    if (!lit) {
-      nt_node_set_str(nt, kw, "name", kname); nt_node_set_int(nt, kw, "depth", 0);
-      nt_node_set_ref(nt, kw, "value", key);
+    for (int j = 0; j < argc && !lit; j++) {
+      nt_node_set_str(nt, kw[j], "name", kname[j]); nt_node_set_int(nt, kw[j], "depth", 0);
+      nt_node_set_ref(nt, kw[j], "value", keys[j]);
     }
-    int k1 = lit ? nt_clone_subtree(nt, key) : ixw_read(nt, kname);
-    int get = k1 >= 0 ? ixw_call(nt, id, rname, "[]", &k1, 1) : -1;
+    /* the keys as each call reads them: the literal itself, or its local */
+    int k1[IXW_MAX_KEYS], k2[IXW_MAX_KEYS];
+    for (int j = 0; j < argc && !bad; j++) bad = (k1[j] = lit ? nt_clone_subtree(nt, keys[j]) : ixw_read(nt, kname[j])) < 0;
+    int get = bad ? -1 : ixw_call(nt, id, rname, "[]", k1, argc);
     if (get < 0) continue;
     int last = -1;
     if (k == NK_IndexOperatorWriteNode) {
       int bin = nt_new_node(nt, "CallNode");
       int ba = nt_new_node(nt, "ArgumentsNode");
-      int k2 = lit ? nt_clone_subtree(nt, key) : ixw_read(nt, kname);
-      if (bin < 0 || ba < 0 || k2 < 0) continue;
+      for (int j = 0; j < argc && !bad; j++) bad = (k2[j] = lit ? nt_clone_subtree(nt, keys[j]) : ixw_read(nt, kname[j])) < 0;
+      if (bin < 0 || ba < 0 || bad) continue;
       nt_node_set_arr(nt, ba, "arguments", &val, 1);
       nt_node_set_ref(nt, bin, "receiver", get);
       nt_node_set_str(nt, bin, "name", opname);
       nt_node_set_ref(nt, bin, "arguments", ba);
-      last = ixw_held_store(nt, id, rname, vname, k2, bin);
+      last = ixw_held_store(nt, id, rname, vname, k2, argc, bin);
     }
     else {
-      int k2 = lit ? nt_clone_subtree(nt, key) : ixw_read(nt, kname);
-      if (k2 < 0) continue;
-      int set = ixw_held_store(nt, id, rname, vname, k2, val);
+      for (int j = 0; j < argc && !bad; j++) bad = (k2[j] = lit ? nt_clone_subtree(nt, keys[j]) : ixw_read(nt, kname[j])) < 0;
+      if (bad) continue;
+      int set = ixw_held_store(nt, id, rname, vname, k2, argc, val);
       int logic = nt_new_node(nt, k == NK_IndexOrWriteNode ? "OrNode" : "AndNode");
       if (set < 0 || logic < 0) continue;
       nt_node_set_ref(nt, logic, "left", get);
@@ -10654,8 +10668,11 @@ int desugar_index_op_write_user(Compiler *c) {
     }
     int stmts = nt_new_node(nt, "StatementsNode");
     if (last < 0 || stmts < 0) continue;
-    int body[3] = { rw, lit ? last : kw, last };
-    nt_node_set_arr(nt, stmts, "body", body, lit ? 2 : 3);
+    int body[IXW_MAX_KEYS + 2], nb = 0;
+    body[nb++] = rw;
+    for (int j = 0; j < argc && !lit; j++) body[nb++] = kw[j];
+    body[nb++] = last;
+    nt_node_set_arr(nt, stmts, "body", body, nb);
     nt_node_set_type(nt, id, "ParenthesesNode");
     nt_node_set_ref(nt, id, "body", stmts);
     nt_node_set_ref(nt, id, "receiver", -1);
@@ -10681,7 +10698,7 @@ int desugar_index_op_write_user(Compiler *c) {
     /* locals were collected before the fixpoint; these are new */
     Scope *sc = comp_scope_of(c, rw);
     scope_local_intern(sc, rname);
-    if (!lit) scope_local_intern(sc, kname);
+    for (int j = 0; j < argc && !lit; j++) scope_local_intern(sc, kname[j]);
     scope_local_intern(sc, vname);
     changed = 1;
   }

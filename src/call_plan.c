@@ -4332,16 +4332,17 @@ int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst) {
    a top-level def not run on main, asks Object's chain alone. Asked inside the plan's frame (elab_plan_enter), so a
    pass that appends nodes between its asks does not rebuild the point map. ELAB_YES / NO / UNKNOWN, MCH_MOVES. */
 enum { MCH_MOVES = 3 };
-/* (the answer by (name, region, seq, side, window): every call of a name at one statement, or over one window, has one
-   answer, kept while the record stands, whatever nodes a pass appends) */
-struct MainChainMemo { struct MainChainSlot { const char *name; int region, seq, key, r, step; const LrDef *d; } *slot; int cap, used; ElabStamp stamp; };
+/* (the answer by (name, region, seq, node, side, window): a call at a point, whose node tells it from another call of the
+   statement (a def or an include in an argument runs between two of them), or over one window (node -1), kept while the
+   record stands, whatever nodes a pass appends) */
+struct MainChainMemo { struct MainChainSlot { const char *name; int region, seq, node, key, r, step; const LrDef *d; } *slot; int cap, used; ElabStamp stamp; };
 void main_chain_free(Compiler *c) {
   if (!c->main_chain) return;
   free(c->main_chain->slot);
   free(c->main_chain);
   c->main_chain = NULL;
 }
-static struct MainChainSlot *ct_main_chain_slot(Compiler *c, const char *name, int region, int seq, int key, int *hit) {
+static struct MainChainSlot *ct_main_chain_slot(Compiler *c, const char *name, int region, int seq, int node, int key, int *hit) {
   struct MainChainMemo *m = c->main_chain;
   ElabStamp st = elab_stamp(c);
   st.nt = 0;
@@ -4357,20 +4358,20 @@ static struct MainChainSlot *ct_main_chain_slot(Compiler *c, const char *name, i
     if (!(m->slot = calloc((size_t)m->cap, sizeof *m->slot))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (int i = 0; i < ocap; i++) {
       if (!old[i].name) continue;
-      unsigned h = ver_mix(sp_strhash(old[i].name) + (unsigned)old[i].seq * 0x9E3779B1u + (unsigned)old[i].region * 31u + (unsigned)old[i].key);
+      unsigned h = ver_mix(sp_strhash(old[i].name) + (unsigned)old[i].seq * 0x9E3779B1u + (unsigned)old[i].region * 31u + (unsigned)old[i].node * 0x85EBCA6Bu + (unsigned)old[i].key);
       int j = (int)(h & (unsigned)(m->cap - 1));
       while (m->slot[j].name) j = (j + 1) & (m->cap - 1);
       m->slot[j] = old[i];
     }
     free(old);
   }
-  unsigned h = ver_mix(sp_strhash(name) + (unsigned)seq * 0x9E3779B1u + (unsigned)region * 31u + (unsigned)key);
+  unsigned h = ver_mix(sp_strhash(name) + (unsigned)seq * 0x9E3779B1u + (unsigned)region * 31u + (unsigned)node * 0x85EBCA6Bu + (unsigned)key);
   int j = (int)(h & (unsigned)(m->cap - 1));
   for (; m->slot[j].name; j = (j + 1) & (m->cap - 1))
-    if (m->slot[j].region == region && m->slot[j].seq == seq && m->slot[j].key == key && sp_streq(m->slot[j].name, name)) { *hit = 1; return &m->slot[j]; }
+    if (m->slot[j].region == region && m->slot[j].seq == seq && m->slot[j].node == node && m->slot[j].key == key && sp_streq(m->slot[j].name, name)) { *hit = 1; return &m->slot[j]; }
   *hit = 0;
   m->slot[j].name = name;   /* (a name the node table holds: it outlives the memo) */
-  m->slot[j].region = region, m->slot[j].seq = seq, m->slot[j].key = key;
+  m->slot[j].region = region, m->slot[j].seq = seq, m->slot[j].node = node, m->slot[j].key = key;
   m->used++;
   return &m->slot[j];
 }
@@ -4378,7 +4379,7 @@ static struct MainChainSlot *ct_main_chain_slot(Compiler *c, const char *name, i
    answer where the body may first run, or MCH_MOVES where the end of the program answers otherwise */
 static int ct_main_chain_win(Compiler *c, const char *name, ElabWindow w, int obj, int *step, const LrDef **d) {
   int hit = 0, r;
-  struct MainChainSlot *sl = ct_main_chain_slot(c, name, w.from.region, w.from.seq, obj + 2, &hit);
+  struct MainChainSlot *sl = ct_main_chain_slot(c, name, w.from.region, w.from.seq, -1, obj + 2, &hit);
   if (hit) { *step = sl->step, *d = sl->d; return sl->r; }
   const LrDef *d2 = NULL;
   int st2 = EMC_NONE;
@@ -4414,7 +4415,7 @@ static int ct_main_chain(Compiler *c, int id, const char *name, int defs, int *s
   int both = s->class_id < 0 && !s->is_cmethod && !prog_is_top_scope(c, s);
   int obj = !(s->class_id < 0 && self_is_main(c, id)), hit = 0;
   if (p.region >= 0) {
-    struct MainChainSlot *sl = ct_main_chain_slot(c, name, p.region, p.seq, obj, &hit);
+    struct MainChainSlot *sl = ct_main_chain_slot(c, name, p.region, p.seq, p.node, obj, &hit);
     if (hit) r = sl->r, *step = sl->step, *d = sl->d;
     else r = elab_main_chain_at(c, name, p, obj, d, step), sl->r = r, sl->step = *step, sl->d = *d;
   }
@@ -4461,21 +4462,26 @@ int cplan_main_chain_step(Compiler *c, int id, const char *name) {
 }
 /* Does a bare call of `name` at call id, in top-level code, meet a mixin or def of the name that runs under a condition,
    or from a body that may not have run (an `include L if cond`, an extend inside a method called later)? CRuby finds
-   its method only once it has run, which the record cannot tell: the call is refused (CRF_MAIN_CHAIN). */
+   its method only once it has run, which the record cannot tell: the call is refused (CRF_MAIN_CHAIN). A call whose
+   target is fixed (a compiler-made builtin call, `Kernel.name`) takes no lookup of main's chain: not refused. */
 static int cplan_main_chain_unsure(Compiler *c, int id) {
   const char *name = nt_str(c->nt, id, "name");
   int step;
   const LrDef *d;
   return nt_kind(c->nt, id) == NK_CallNode && name && nt_ref(c->nt, id, "receiver") < 0 &&
+         !(cplan_builtin_call(c, id) || nt_int(c->nt, id, "kernel_recv", 0)) &&
          ct_main_chain(c, id, name, 0, &step, &d) == ELAB_UNKNOWN && step == EMC_UNSURE;
 }
 /* Does the main-chain fact put a mixin's method ahead of main's and Object's own at call id (an extend, an Object
    prepend), so that the top-level def of the name does not answer where the ask goes to the mixin (CT_TOP | CT_INCLUDED;
-   CT_TOP alone keeps the top-level def)? */
+   CT_TOP alone keeps the top-level def)? Not an extend over a top-level def of the name: the emitters ask CT_TOP alone
+   and bind that def, so inference answers it too, where both would otherwise type the call differently (a bare call
+   of an extend's method over a top-level def of the name is the follow-up's, with the emitters' ask). */
 static int ct_main_mixin_ahead(Compiler *c, int id, const char *name) {
   int step;
   const LrDef *d;
-  return ct_main_chain(c, id, name, 0, &step, &d) == ELAB_YES && (step == EMC_EXTEND || step == EMC_PREPEND);
+  if (ct_main_chain(c, id, name, 0, &step, &d) != ELAB_YES || (step != EMC_EXTEND && step != EMC_PREPEND)) return 0;
+  return step == EMC_PREPEND || call_target(c, id, -1, name, CT_TOP, NULL) < 0;
 }
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
   /* (CT_TOP | CT_INCLUDED asks main's whole chain at the call: a module main extends or Object prepends answers ahead of

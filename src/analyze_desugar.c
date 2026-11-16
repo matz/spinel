@@ -873,12 +873,16 @@ int desugar_rest_param_writes_left(Compiler *c, LowerCtx *lc, int id) {
   const char *rp; int body;
   return rest_param_site(nt, id, &rp, &body) && bpw_walk(nt, body, rp, NULL) != 0;
 }
+/* The local a body that assigns its `*rp` moves the rest's reads and writes to (a bare super reads it: super_zsuper_args) */
+void rest_param_copy_name(char *out, size_t cap, const char *rp) {
+  snprintf(out, cap, "__rpv_%s", rp);
+}
 int desugar_rest_param_writes_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *rp; int body;
   if (!rest_param_site(nt, id, &rp, &body)) return 0;
   if (bpw_walk(nt, body, rp, NULL) == 0) return 0;
-  char nn[300]; snprintf(nn, sizeof nn, "__rpv_%s", rp);
+  char nn[300]; rest_param_copy_name(nn, sizeof nn, rp);
   /* The usual shape writes it once, as a statement of the body itself
      (`args = args.first`), with no write before it: the statements before
      read the parameter, the write's own value reads it too, and from the
@@ -14970,7 +14974,7 @@ static int fwd_call_names(const NodeTable *nt, int id, const char *name, int *sk
   *skip = 1;
   return 1;
 }
-static int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
+int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
   int n = -2;
   for (int id = 0; id < nt->count; id++) {
     if (!fwd_node_is(nt, id, "CallNode")) continue;
@@ -26771,10 +26775,10 @@ static void pb_walk(const NodeTable *nt, const int *parent, InhNames *r, char **
   for (int i = 0; i < n; i++) {
     int id = v[i], lexical = 0;
     char q[1024], w[512];
-    /* a statement of a file the inline model spliced here from a require in
-       a method, a block or a lambda runs only when that code does, not
-       unconditionally earlier: it neither defines a namespace nor is a
-       write the walk marks */
+    /* a statement of a file the inline model spliced here from a require that
+       may not run where it stands (sp_req_always_runs says no) runs only when
+       that does, not unconditionally earlier: it neither defines a namespace
+       nor is a write the walk marks */
     if (nt_int(nt, id, "req_deferred", 0)) continue;
     if (nt_kind(nt, id) == NK_ConstantPathWriteNode) {
       int ns = nt_ref(nt, nt_ref(nt, id, "target"), "parent");

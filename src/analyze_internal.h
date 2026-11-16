@@ -1049,6 +1049,8 @@ int type_block_rest_params(Compiler *c);
 void check_block_rest_support(Compiler *c);
 int desugar_dynamic_send(Compiler *c);
 void expand_static_splat_args(Compiler *c, int from, int count);
+void rest_param_copy_name(char *out, size_t cap, const char *rp);   /* the local the reads of an assigned *rest move to */
+int fwd_fixed_call_arity(const NodeTable *nt, const char *name);   /* the one positional count every call of a `...` forwarder passes, -1 when they differ or pass a splat or keywords, -2 for no call */
 int desugar_dynamic_method(Compiler *c);
 int desugar_method_call_runtime_name(Compiler *c);
 int desugar_builtin_method_defined_conds(Compiler *c);

@@ -119,7 +119,7 @@ static void poll_block_edges(Compiler *c, int n, int t, int **ef, int **et, int 
         }
     }
   }
-  if (k == NK_YieldNode || ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && !cplan_user(c, n).core_hook)) dyn[t] = 1;
+  if (k == NK_YieldNode || ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && !cplan_core_hook(c, n))) dyn[t] = 1;
   int nr = nt_num_refs(nt, n);
   for (int i = 0; i < nr; i++) poll_block_edges(c, nt_ref_at(nt, n, i), t, ef, et, ne, cap, dyn, depth + 1);
   int na = nt_num_arrs(nt, n);
@@ -196,8 +196,8 @@ int poll_scope_on_cycle(Compiler *c, int si) {
         if (pe.tg[k] == from) g_poll_cyc[from] = 1;   /* calls itself */
       }
     }
-    NT_FOREACH_KIND(nt, NK_SuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n).core_hook) dyn[f] = 1; }
-    NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n).core_hook) dyn[f] = 1; }
+    NT_FOREACH_KIND(nt, NK_SuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_core_hook(c, n)) dyn[f] = 1; }
+    NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_core_hook(c, n)) dyn[f] = 1; }
     /* the edges by source (CSR), and their reverse */
     int *off = calloc((size_t)nv + 2, sizeof(int)), *adj = malloc(sizeof(int) * (size_t)(ne + 1));
     int *roff = calloc((size_t)nv + 2, sizeof(int)), *radj = malloc(sizeof(int) * (size_t)(ne + 1));
@@ -4451,7 +4451,7 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
       if (comp_super_is_class_new(c, nid)) { ans = 1; break; }
       /* and any other super runs the method it reaches on that class, which
          may read it even where this body does not */
-      if ((nt_kind(c->nt, nid) == NK_SuperNode || nt_kind(c->nt, nid) == NK_ForwardingSuperNode) && !cplan_user(c, nid).core_hook) { ans = 1; break; }
+      if ((nt_kind(c->nt, nid) == NK_SuperNode || nt_kind(c->nt, nid) == NK_ForwardingSuperNode) && !cplan_core_hook(c, nid)) { ans = 1; break; }
       NodeKind ty_k = nt_kind(c->nt, nid);
       if (ty_k == NK_CallNode && nt_ref(c->nt, nid, "receiver") < 0) {
         const char *nm = nt_str(c->nt, nid, "name");
@@ -4975,7 +4975,7 @@ static int fi_body_unforceable(Compiler *c, int id, int depth) {
     case NK_YieldNode:
       return 1;
     case NK_SuperNode: case NK_ForwardingSuperNode:
-      if (cplan_user(c, id).core_hook) break;
+      if (cplan_core_hook(c, id)) break;
       return 1;
     default: break;
   }
@@ -16119,7 +16119,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (s->class_id < 0 || !s->name) return 0;
   refuse_super_splat(c, id, super_plan_mi(c, id));
   const Scope *st = comp_super_site(c, s);
-  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
+  int p = cplan_super_start(c, st);
   int defcls = -1;
   /* `super` inside a class method resolves through the parent's CLASS-method
      chain; the instance chain would miss `def self.x` entirely. */
@@ -16875,7 +16875,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
     return;
   }
   /* Strip __prep N prefix to get the user method name for parent chain lookup. */
-  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
+  int p = cplan_super_start(c, st);
   const char *uname = comp_super_name(c, p, st);
   /* super inside a class method: resolve through the parent's CLASS-method
      chain and call the sp_<Cls>_s_ form (class methods take no instance
@@ -16900,7 +16900,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* Module's and Class's own hooks are no-ops answering nil: `super` from a
        program's method_added (Thor's), inherited, included, ... reaches them
        when no ancestor of the program defines one */
-    if (cmi < 0 && cplan_user(c, id).core_hook) {
+    if (cmi < 0 && cplan_core_hook(c, id)) {
       Repr hr = repr_of(c, id);
       TyKind ht = hr.as_ty;
       /* an explicit `super(...)` evaluates its arguments, in order, before
@@ -17217,7 +17217,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
        so route super to the same per-member ivar assignment. Without this the
        members set only via super (e.g. doom's Visplane `super(..., Array.new,
        Array.new, ...)`) stayed nil and later comparisons hit NilClass. */
-    if (c->classes[s->class_id].is_struct && uname && sp_streq(uname, "initialize")) {
+    if (builtin_owner_kind(cplan_user(c, id).bowner) == BOWN_STRUCT && uname && is_initialize_name(uname)) {
       ClassInfo *cls = &c->classes[s->class_id];
       /* A bare `super` (ForwardingSuperNode) forwards the current initialize's
          own params positionally into the members -- exactly what Struct's
@@ -17503,8 +17503,11 @@ void emit_super(Compiler *c, int id, Buf *b) {
                uname, scn, raise_tail_value_c(c, repr_of(c, id).as_ty));
     return;
   }
-  if (sp_streq(c->classes[defcls].name, "Object") || sp_streq(c->classes[defcls].name, "Array") ||
-      sp_streq(c->classes[defcls].name, "Hash") || sp_streq(c->classes[defcls].name, "Numeric")) {
+  /* a top-level def (Object's private method) is a function with no self to pass */
+  int toplevel = defcls < 0;
+  if (toplevel)
+    buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
+  else if (repr_self_boxed(c, mi)) {
     /* Object's methods take self boxed: any value can be the receiver. So
        do an Array, Hash or Numeric reopening's (emit_method_signature),
        which a program class deriving from it reaches by super --
@@ -17527,12 +17530,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* The parent may declare more than this method does -- an optional,
        `*rest`, a keyword, `**` -- which a bare super leaves to their defaults
        and empties, as CRuby does (#4852). */
-    emit_zsuper_args(c, s, &c->scopes[mi], ", ", b);
+    emit_zsuper_args(c, s, &c->scopes[mi], toplevel ? "" : ", ", b);
   }
   else {
-    emit_args_filled(c, mi, nt_ref(c->nt, id, "arguments"), ", ", b);
+    emit_args_filled(c, mi, nt_ref(c->nt, id, "arguments"), toplevel ? "" : ", ", b);
   }
-  emit_super_block_arg(c, id, s, &c->scopes[mi], 1, b);
+  emit_super_block_arg(c, id, s, &c->scopes[mi], !toplevel || c->scopes[mi].nparams > 0, b);
   buf_puts(b, ")");
 }
 

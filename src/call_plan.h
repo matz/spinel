@@ -87,7 +87,7 @@ typedef struct {
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
-  unsigned char core_hook; /* a super in a class method that reaches only a core hook's no-op: nothing of the program's answers it, and emit_super answers nil */
+  const char *bowner;      /* UC_SUPER with no program method (mi -1): the builtin class or module whose method the super reaches (MethodLookup.bowner); in a class method, the owner of a definition hook (cplan_core_hook) */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */
   int vis_cell;             /* the history cell + 1 whose visibility cell guards the call (a top-level def's visibility only the run tells, cplan_root_top_def), 0 for none */
@@ -306,6 +306,9 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
    the class a super's lookup started from, written by those two only.
+   bowner: where no program method answers a super, the builtin class or
+   module whose method it reaches (builtin_super_owner: its table's name),
+   NULL for none; written by cplan_super_target only.
    kind is read by cplan_resolve_super, cplan_presence, cplan_implied_target,
    cplan_boxed_to_ary_classes and cplan_main_singleton_call, and ML_OBJECT by
    cplan_missing and method_obj_lookup; why by the method-table check
@@ -339,7 +342,7 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, 
    (ct_before_versions). Any other why on an ML_NONE (0, or UNASKED from
    cplan_hook_target) is a none the tables give */
 typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD, MLW_VIS } MlWhy;
-typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
+typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; const char *bowner; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
 /* Does an attribute (attr_reader, attr_writer, a Struct member) answer this
@@ -357,6 +360,13 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    chain's); ml as call_target's, and ml->from the class the lookup started
    from (-1: a prepend chain with no next) */
 int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
+/* The class a super in instance method scope s starts its chain at: the parent (Object for a root class), but
+   none for a class with no program superclass that sits under a builtin answering the name ahead of Object (an
+   exception, an Array, a Struct): the builtin's method is the answer, and a reopening of Object's is behind it.
+   Every reader of a super's target starts here. */
+int cplan_super_start(Compiler *c, const Scope *s);
+/* Is super node id, in a class method, the call of a definition hook (`inherited`, `method_added`) that only a builtin's no-op answers? */
+int cplan_core_hook(Compiler *c, int id);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */
 /* Does call id run Kernel's raise: a receiverless `raise` or `fail` that no
    method of the program answers (a class's own `raise`, a top-level def)? */

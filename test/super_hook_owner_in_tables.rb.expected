@@ -1,0 +1,3 @@
+inherited Kid
+included in User
+NoMethodError

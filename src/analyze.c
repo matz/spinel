@@ -27880,13 +27880,13 @@ int an_super_object_text(Compiler *c, int n, int mi) {
   ClassInfo *ci = &c->classes[cid];
   /* (a reopened builtin -- Exception, String, Object -- has its own
      inspect and to_s behind the program's) */
-  if (comp_class_is_module(c, ci) || is_builtin_reopen(ci->name) || cplan_class_kernel(c, cid) == KERN_LACKS || ci->is_struct || ci->is_data ||
-      ci->is_native_class || ci->nsub_root > 0 ||
-      comp_ary_root(c, cid) >= 0 || class_inherits_builtin_exception(c, cid) || class_is_exc_subclass(c, cid))
-    return 0;
+  if (comp_class_is_module(c, ci) || is_builtin_reopen(ci->name) || ci->is_native_class || ci->nsub_root > 0) return 0;
   /* (a method of an ancestor, an included module's, or an Object
-     reopening's, is the call plan's target) */
-  return cplan_user_fresh(c, n).mi < 0;
+     reopening's, is the call plan's target; no method of the program's,
+     Kernel's is the builtin the plan names, which no Struct, Exception,
+     Array or blank slate has) */
+  CallPlan p = cplan_user_fresh(c, n);
+  return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_KERNEL;
 }
 /* The same super in a Struct or Data class's own inspect or to_s, where no
    class of the program above it defines the name: CRuby's Struct#inspect
@@ -27903,9 +27903,12 @@ int an_super_struct_text(Compiler *c, int n, int mi) {
   if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
   if (k == NK_SuperNode && nt_ref(c->nt, n, "arguments") >= 0) return 0;
   ClassInfo *ci = &c->classes[s->class_id];
-  if (!ci->is_struct || comp_class_is_module(c, ci)) return 0;
-  /* (a method of an ancestor or an included module's is the call plan's target) */
-  return cplan_user_fresh(c, n).mi < 0;
+  if (comp_class_is_module(c, ci)) return 0;
+  /* (a method of an ancestor or an included module's is the call plan's
+     target; no method of the program's, Struct's or Data's is the builtin
+     the plan names) */
+  CallPlan p = cplan_user_fresh(c, n);
+  return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_STRUCT;
 }
 /* Method mi is decided: yes or no, and for the handle walk its field. */
 static int an_ret_decided(Compiler *c, RetHandles *R, int mi, int yes) {
@@ -47174,94 +47177,16 @@ static void mark_ctor_cycles(Compiler *c) {
   free(start); free(adj); free(fill); free(index); free(low); free(edge); free(stack); free(path); free(on);
 }
 
-/* `super` from a method a module prepended into a builtin class put in front
-   of the builtin's own (`class Range; prepend RangeWithFormat; end`, whose
-   to_s calls super): with no program method above it, it is the builtin's
-   method on self. Spelled as that call -- self as the receiver, the
-   method's own name, marked builtin_only so the prepended copy does not
-   take it again -- the way rewrite_builtin_alias_self_calls spells an
-   alias of a builtin. A bare `super` passes the method's parameters on;
-   one with keyword parameters is left alone. Only a prepend's copy: a
-   reopening's own def replaces the builtin's, and its super goes past it. */
-static int rpbs_param_args(Compiler *c, Scope *s, int sup) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int *ids = (int *)malloc(sizeof(int) * (size_t)(s->nparams > 0 ? s->nparams : 1));
-  if (!ids) return -1;
-  int n = 0;
-  for (int j = 0; j < s->nparams; j++) {
-    if (j == s->kwrest_idx || !s->pnames || !s->pnames[j]) { free(ids); return -1; }
-    int rd = nt_new_node(nt, "LocalVariableReadNode");
-    if (rd < 0) { free(ids); return -1; }
-    nt_node_set_str(nt, rd, "name", s->pnames[j]);
-    int arg = rd;
-    if (j == s->rest_idx) {
-      arg = nt_new_node(nt, "SplatNode");
-      if (arg < 0) { free(ids); return -1; }
-      nt_node_set_ref(nt, arg, "expression", rd);
-    }
-    ids[n++] = arg;
-  }
-  int an = nt_new_node(nt, "ArgumentsNode");
-  if (an >= 0) nt_node_set_arr(nt, an, "arguments", ids, n);
-  free(ids);
-  comp_grow_node_arrays(c);
-  (void)sup;
-  return an;
-}
-static void rewrite_prepended_builtin_supers(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count;
-  for (int id = 0; id < n0; id++) {
-    NodeKind k = nt_kind(nt, id);
-    if (k != NK_SuperNode && k != NK_ForwardingSuperNode) continue;
-    int si = c->nscope[id];
-    if (si < 0 || si >= c->nscopes) continue;
-    Scope *s = &c->scopes[si];
-    if (!s->is_prepend_copy || s->is_cmethod || !s->name || s->class_id < 0) continue;
-    const char *cn = c->classes[s->class_id].name;
-    if (!cn || !is_builtin_reopen_name(cn) || sp_streq(cn, "Object") || s->class_id == c->toplevel_class) continue;
-    if (cplan_super_target(c, -1, s, NULL) >= 0) continue;
-    int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1;
-    if (k == NK_ForwardingSuperNode) {
-      int kw = 0;
-      for (int j = 0; j < s->nparams && !kw; j++)
-        kw = s->pnames && s->pnames[j] && callee_param_is_declared_kwarg(c, s, s->pnames[j]);
-      if (kw) continue;
-      args = rpbs_param_args(c, s, id);
-      if (args < 0) continue;
-    }
-    char *mname = strdup(s->name);
-    int self = nt_new_node(nt, "SelfNode");
-    comp_grow_node_arrays(c);
-    c->nscope[self] = si;
-    if (args >= 0) {
-      /* the parameter reads are this scope's */
-      int an = 0; const int *av = nt_arr(nt, args, "arguments", &an);
-      for (int q = 0; q < an; q++) {
-        c->nscope[av[q]] = si;
-        int ex = nt_kind(nt, av[q]) == NK_SplatNode ? nt_ref(nt, av[q], "expression") : -1;
-        if (ex >= 0) c->nscope[ex] = si;
-      }
-      c->nscope[args] = si;
-    }
-    nt_node_set_type(nt, id, "CallNode");
-    nt_set_self_receiver(nt, id, self);
-    nt_node_set_ref(nt, id, "arguments", args);
-    nt_node_set_str(nt, id, "name", mname);
-    nt_mark_builtin_call(nt, id);
-    free(mname);
-  }
-}
-
+static int super_zsuper_args(Compiler *c, int at, Scope *s, const int *par, int strict);
 /* `super` from the program's own instance_variable_get, _set,
    instance_variable_defined?, instance_variables or remove_instance_variable,
    with no program method above it: Object's reflection of self, which reads
    and writes the object's own fields as the builtin does. Spelled as that
    call -- self as the receiver, the method's name, marked builtin_only so the
-   method does not take it again -- as a super into a prepended builtin is
-   (rewrite_prepended_builtin_supers). A bare `super` passes the parameters
-   on; one with keyword parameters is left alone. The reflection defined on
-   Object itself reaches Kernel's the same way. */
+   method does not take it again -- as a super into a builtin is
+   (lower_builtin_supers). A bare `super` passes the parameters on
+   (super_zsuper_args). The reflection defined on Object itself reaches
+   Kernel's the same way. */
 static void rewrite_ivar_reflection_supers(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -47277,26 +47202,13 @@ static void rewrite_ivar_reflection_supers(Compiler *c) {
     if (cplan_super_target(c, -1, s, NULL) >= 0) continue;
     int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1;
     if (k == NK_ForwardingSuperNode) {
-      int kw = 0;
-      for (int j = 0; j < s->nparams && !kw; j++)
-        kw = s->pnames && s->pnames[j] && callee_param_is_declared_kwarg(c, s, s->pnames[j]);
-      if (kw) continue;
-      args = rpbs_param_args(c, s, id);
+      args = super_zsuper_args(c, id, s, NULL, 0);
       if (args < 0) continue;
     }
     char *mname = strdup(s->name);
     int self = nt_new_node(nt, "SelfNode");
     comp_grow_node_arrays(c);
     c->nscope[self] = si;
-    if (args >= 0) {
-      int an = 0; const int *av = nt_arr(nt, args, "arguments", &an);
-      for (int q = 0; q < an; q++) {
-        c->nscope[av[q]] = si;
-        int ex = nt_kind(nt, av[q]) == NK_SplatNode ? nt_ref(nt, av[q], "expression") : -1;
-        if (ex >= 0) c->nscope[ex] = si;
-      }
-      c->nscope[args] = si;
-    }
     nt_node_set_type(nt, id, "CallNode");
     nt_set_self_receiver(nt, id, self);
     nt_node_set_ref(nt, id, "arguments", args);
@@ -47560,35 +47472,126 @@ static int arysub_builtin_call(Compiler *c, int at, const char *bn, const char *
   return arysub_new_call(c, at, k, name, args, blk);
 }
 
-/* The arguments a bare `super` in the method of scope s passes on: its
-   parameters, read by name. -1 for a parameter list this spelling does not
-   reproduce (keywords, a post-rest or destructured parameter). */
-static int arysub_zsuper_args(Compiler *c, int at, Scope *s) {
+/* A read of the local `nm` for node `at`. */
+static int zsuper_read(Compiler *c, int at, const char *nm) {
+  int rd = arysub_node(c, "LocalVariableReadNode", at);
+  if (rd >= 0) nt_node_set_str((NodeTable *)c->nt, rd, "name", nm);
+  return rd;
+}
+/* The local that holds the `*rest` parameter where node `at` reads it. A body that assigns the rest moves its
+   reads and writes from the first assignment on to a copy, whose name desugar_rest_param_writes_at gives
+   (rest_param_copy_name) and the body's own write of it proves, so a bare super after the assignment passes that copy, as CRuby passes the parameter's
+   current value. The copy's own assignment is a statement of the body; a super in a later statement reads it. */
+static const char *zsuper_rest_local(Compiler *c, const int *par, int at, const char *nm, char *cp, size_t cap) {
   const NodeTable *nt = c->nt;
-  int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
-  int rn = 0, on = 0, qn = 0, kn = 0;
-  const int *rq = pn >= 0 ? nt_arr(nt, pn, "requireds", &rn) : NULL;
-  const int *op = pn >= 0 ? nt_arr(nt, pn, "optionals", &on) : NULL;
-  if (pn >= 0) { nt_arr(nt, pn, "posts", &qn); nt_arr(nt, pn, "keywords", &kn); }
-  int rest = pn >= 0 ? nt_ref(nt, pn, "rest") : -1;
-  if (qn || kn || (pn >= 0 && nt_ref(nt, pn, "keyword_rest") >= 0)) return -1;
-  int ids[64], n = 0;
-  for (int i = 0; i < rn + on + (rest >= 0); i++) {
-    int p = i < rn ? rq[i] : i < rn + on ? op[i - rn] : rest;
-    const char *pnm = nt_str(nt, p, "name");
-    if (!pnm || n >= 63 || nt_kind(nt, p) == NK_MultiTargetNode) return -1;
-    int rd = arysub_node(c, "LocalVariableReadNode", at);
-    if (rd < 0) return -1;
-    nt_node_set_str((NodeTable *)c->nt, rd, "name", pnm);
-    if (p == rest) {
-      int sp = arysub_node(c, "SplatNode", at);
-      if (sp < 0) return -1;
-      nt_node_set_ref((NodeTable *)c->nt, sp, "expression", rd);
-      rd = sp;
-    }
-    ids[n++] = rd;
+  rest_param_copy_name(cp, cap, nm);
+  if (!par) return nm;
+  int d = at;
+  while (d >= 0 && nt_kind(nt, d) != NK_DefNode) d = par[d];
+  int body = d >= 0 ? nt_ref(nt, d, "body") : -1, bn = 0;
+  const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+  int w = -1, j = -1;
+  for (int i = 0; w < 0 && i < bn; i++) {
+    const char *wn = nt_kind(nt, bb[i]) == NK_LocalVariableWriteNode ? nt_str(nt, bb[i], "name") : NULL;
+    if (wn && sp_streq(wn, cp)) w = i;
   }
-  return arysub_args(c, at, ids, n);
+  /* the statement of the body that holds the super: the ancestor the walk reached below the body */
+  for (int n = at; n >= 0 && j < 0; n = par[n])
+    for (int i = 0; i < bn; i++) if (bb[i] == n) { j = i; break; }
+  return w >= 0 && j > w ? cp : nm;
+}
+/* The arguments a bare `super` in the method of scope s passes on, spelled
+   as a call's, by CRuby's rule: the requireds and optionals as reads, the
+   rest as a splat (an anonymous `*` as the anonymous splat), the posts as
+   reads, each keyword k as `k: k` and the keyword rest as `**` (an anonymous
+   one likewise), all in one KeywordHashNode. An ArgumentsNode for node `at`,
+   or -1 for a parameter list this spelling does not reproduce (a
+   destructured parameter has no local to read; with strict, a `...` whose
+   calls pass different positional counts too: its __fwd_N slots hold the
+   most any passes, which a builtin that takes what each passes (an
+   Array subclass's, refused before) cannot be given. A module prepended into
+   a builtin keeps the slots, as its super did). The block is the caller's
+   (lower_super_call). */
+static int super_zsuper_args(Compiler *c, int at, Scope *s, const int *par, int strict) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
+  if (pn < 0) return arysub_args(c, at, NULL, 0);
+  /* `(...)` is the scope's parameters, the leading ones and the __fwd_N the
+     calls' arity gave it, passed on by position */
+  int fwd = nt_ref(nt, pn, "keyword_rest");
+  if (fwd >= 0 && nt_kind(nt, fwd) == NK_ForwardingParameterNode) {
+    if (strict && fwd_fixed_call_arity(nt, nt_str(nt, s->def_node, "name")) == -1) return -1;
+    int *ids = (int *)malloc(sizeof(int) * (size_t)(s->nparams + 1)), n = 0, ok = 1;
+    if (!ids) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int j = 0; ok && j < s->nparams; j++) {
+      int rd = s->pnames && s->pnames[j] && j != s->kwrest_idx && j != s->rest_idx ? zsuper_read(c, at, s->pnames[j]) : -1;
+      if (rd < 0 || callee_param_is_declared_kwarg(c, s, s->pnames[j])) ok = 0; else ids[n++] = rd;
+    }
+    int args = ok ? arysub_args(c, at, ids, n) : -1;
+    free(ids);
+    return args;
+  }
+  int rn = 0, on = 0, qn = 0, kn = 0;
+  const int *rq = nt_arr(nt, pn, "requireds", &rn), *op = nt_arr(nt, pn, "optionals", &on);
+  const int *po = nt_arr(nt, pn, "posts", &qn), *kw = nt_arr(nt, pn, "keywords", &kn);
+  int rest = nt_ref(nt, pn, "rest"), kwr = nt_ref(nt, pn, "keyword_rest");
+  int total = rn + on + qn + kn + 3;
+  int *ids = (int *)malloc(sizeof(int) * (size_t)total), *els = (int *)malloc(sizeof(int) * (size_t)(kn + 1));
+  if (!ids || !els) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int n = 0, ne = 0, ok = 1;
+  for (int i = 0; ok && i < rn + on; i++) {
+    int p = i < rn ? rq[i] : op[i - rn];
+    const char *nm = nt_str(nt, p, "name");
+    int rd = nm && nt_kind(nt, p) != NK_MultiTargetNode ? zsuper_read(c, at, nm) : -1;
+    if (rd < 0) ok = 0; else ids[n++] = rd;
+  }
+  if (ok && rest >= 0 && nt_kind(nt, rest) == NK_RestParameterNode) {
+    const char *nm = nt_str(nt, rest, "name");
+    char cp[300];
+    if (nm) nm = zsuper_rest_local(c, par, at, nm, cp, sizeof cp);
+    int sp = arysub_node(c, "SplatNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
+    if (sp < 0 || (nm && rd < 0)) ok = 0;
+    else {
+      if (nm) nt_node_set_ref(nt, sp, "expression", rd);
+      ids[n++] = sp;
+    }
+  }
+  for (int i = 0; ok && i < qn; i++) {
+    const char *nm = nt_str(nt, po[i], "name");
+    int rd = nm && nt_kind(nt, po[i]) != NK_MultiTargetNode ? zsuper_read(c, at, nm) : -1;
+    if (rd < 0) ok = 0; else ids[n++] = rd;
+  }
+  for (int i = 0; ok && i < kn; i++) {
+    const char *nm = nt_str(nt, kw[i], "name");
+    int sy = arysub_node(c, "SymbolNode", at), as = arysub_node(c, "AssocNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
+    if (sy < 0 || as < 0 || rd < 0) { ok = 0; break; }
+    nt_node_set_str(nt, sy, "value", nm);
+    nt_node_set_ref(nt, as, "key", sy);
+    nt_node_set_ref(nt, as, "value", rd);
+    els[ne++] = as;
+  }
+  if (ok && kwr >= 0 && nt_kind(nt, kwr) == NK_KeywordRestParameterNode) {
+    const char *nm = nt_str(nt, kwr, "name");
+    int as = arysub_node(c, "AssocSplatNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
+    if (as < 0 || (nm && rd < 0)) ok = 0;
+    else {
+      if (nm) nt_node_set_ref(nt, as, "value", rd);
+      els[ne++] = as;
+    }
+  }
+  else if (ok && kwr >= 0) ok = 0;
+  if (ok && ne) {
+    int kh = arysub_node(c, "KeywordHashNode", at);
+    if (kh < 0) ok = 0;
+    else {
+      nt_node_set_arr(nt, kh, "elements", els, ne);
+      ids[n++] = kh;
+    }
+  }
+  int args = ok ? arysub_args(c, at, ids, n) : -1;
+  free(ids);
+  free(els);
+  return args;
 }
 
 /* Node `n` (reset in place) as the call a `super` at `at` makes into Array:
@@ -47621,7 +47624,7 @@ static int hash_super_drop_capacity(Compiler *c, int at, int args, int *an, int 
   memcpy(keep, av, sizeof(int) * (size_t)(n - 1));
   return arysub_args(c, at, keep, n - 1);
 }
-static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int init, int args, int blk) {
+static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int init, int args, int blk, int kfn) {
   Scope *s = comp_scope_of(c, at);
   const char *bn = s ? core_class_name(comp_arysub_builtin(c, s->class_id)) : "Array";
   int an = 0;
@@ -47638,8 +47641,11 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
   int cap_kept = 0;
   if (init == 1 && sp_streq(bn, "Hash")) args = hash_super_drop_capacity(c, at, args, &an, &cap_kept);
   if (!init) {
-    arysub_set_call(c, n, self, mn, args, blk);
+    /* (a Kernel module function takes no receiver: the bare call
+       desugar_kernel_recv leaves `Kernel.format(x)` as) */
+    arysub_set_call(c, n, kfn ? -1 : self, mn, args, blk);
     nt_mark_builtin_call((NodeTable *)c->nt, n);
+    if (kfn) nt_node_set_int((NodeTable *)c->nt, n, "kernel_recv", 1);
   }
   /* Hash#initialize keeps the entries the subclass's initialize wrote ahead
      of its super (hashie's Mash: `deep_update(source_hash); super(default)`)
@@ -47761,49 +47767,28 @@ static int arysub_new_gets_block(Compiler *c, int k) {
   }
   return 0;
 }
-static void rewrite_array_subclass_super(Compiler *c, int id) {
+/* A bare `super` into a builtin from a method whose parameters super_zsuper_args cannot spell: a `...` whose
+   calls differ in their positional count (the __fwd_N slots hold the most any passes, and the builtin takes
+   what each passes), or a destructured parameter, which has no local. */
+static void zsuper_refuse(Compiler *c, int id, Scope *s) {
+  int pn = s->def_node >= 0 ? nt_ref(c->nt, s->def_node, "parameters") : -1;
+  int kwr = pn >= 0 ? nt_ref(c->nt, pn, "keyword_rest") : -1;
+  if (kwr >= 0 && nt_kind(c->nt, kwr) == NK_ForwardingParameterNode)
+    unsupported_feature(c, id, "`...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments");
+  else
+    unsupported_feature(c, id, "a bare `super` into a builtin from a method with a destructured parameter is not supported yet; "
+                               "pass the arguments explicitly");
+}
+/* Node id, a `super` into a builtin (the plan's bowner, or Array's
+   initialize), as the builtin's call: mname on self marked builtin_only, with
+   args, and the block it passes. init: 1 in initialize, 2 in the class's own
+   `def self.new` (arysub_super_into); kfn: a Kernel module function;
+   own_block_only: pass no block but the super's own. A super
+   with no block of its own passes the method's: `&blk` names it, and an
+   anonymous `&` (or none, in a method that yields) is the block the method
+   was given (resolve_forwarded_block). `super(&nil)` passes none. */
+static void lower_super_call(Compiler *c, int id, Scope *s, const char *mname, int init, int args, int blk, int kfn, int own_block_only) {
   const NodeTable *nt = c->nt;
-  Scope *s = comp_scope_of(c, id);
-  if (!s || !s->name) return;
-  const Scope *st = comp_super_site(c, s);
-  if (comp_ary_root(c, st->class_id) < 0) return;
-  int init;
-  const char *mname = comp_scope_user_name(st);
-  if (s->is_cmethod) {
-    /* (only the class's own: not a copy a module's extend, include or
-       prepend in its singleton made) */
-    if (s->is_extend_copy || !sp_streq(s->name, "new") || s->def_node < 0 || c->node_cbody[s->def_node] != s->class_id ||
-        !comp_super_is_class_new(c, id) || arysub_cnew_kept(c, s->class_id)) return;
-    init = 2;
-  }
-  else {
-    if (comp_super_shadow(c, st)) return;
-    int p = c->classes[st->class_id].parent;
-    if (p >= 0 && comp_method_in_chain(c, p, mname, NULL) >= 0) return;
-    init = sp_streq(mname, "initialize");
-  }
-  /* Array#initialize_copy is a replace, which the copy dup and clone make
-     of an Array subclass instance has done already: super into it is the
-     receiver */
-  if (sp_streq(mname, "initialize_copy")) {
-    int self = arysub_node(c, "SelfNode", id);
-    if (self >= 0) { arysub_set_call(c, id, self, "itself", -1, -1); nt_set_ignore_visibility((NodeTable *)c->nt, id, 1); }
-    return;
-  }
-  if (!init && !comp_arysub_builtin_name(c, id, st->class_id, mname)) return;
-  int args = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
-  if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
-    args = arysub_zsuper_args(c, id, s);
-    if (args < 0 && init == 2) return;
-    if (args < 0) {
-      char msg[256];
-      snprintf(msg, sizeof msg, "a bare `super` into %s from a method with keyword, "
-               "post-rest or destructured parameters is not supported yet; "
-               "pass the arguments explicitly", core_class_name(comp_arysub_builtin(c, s->class_id)));
-      unsupported_feature(c, id, msg);
-      return;
-    }
-  }
   /* (a `**` splat among the arguments is left to Class#new) */
   if (init == 2 && arysub_args_kwsplat(nt, args)) return;
   /* (a block of its own in a self.new that a block may reach as well is
@@ -47812,7 +47797,7 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
   /* `super(&nil)` passes no block */
   if (blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode && nt_ref(nt, blk, "expression") >= 0 &&
       nt_kind(nt, nt_ref(nt, blk, "expression")) == NK_NilNode) {
-    arysub_super_into(c, id, id, mname, init, args, -1);
+    arysub_super_into(c, id, id, mname, init, args, -1, kfn);
     return;
   }
   /* `super(n, &blk)` in initialize with the method's own block, named or
@@ -47821,12 +47806,15 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
   if (bx == -1 || (bx >= 0 && nt_kind(nt, bx) == NK_LocalVariableReadNode && s->blk_param &&
                    nt_str(nt, bx, "name") && sp_streq(nt_str(nt, bx, "name"), s->blk_param)))
     blk = -1;
-  if (blk >= 0) { arysub_super_into(c, id, id, mname, init, args, blk); return; }
+  if (blk >= 0) { arysub_super_into(c, id, id, mname, init, args, blk, kfn); return; }
+  /* (a Kernel function ignores a block: the call takes none; nor does a super from a module prepended into a
+     builtin hand the method's block on, which would make a yielding method of the builtin's reopening) */
+  if (kfn || own_block_only) { arysub_super_into(c, id, id, mname, init, args, -1, kfn); return; }
   /* In self.new, a split on block_given? would make the method a yielding
      one, which a call through a class value cannot reach: with no block
      to pass on it passes none, and else it is left to Class#new. */
   if (init == 2) {
-    if (!arysub_new_gets_block(c, s->class_id)) arysub_super_into(c, id, id, mname, init, args, -1);
+    if (!arysub_new_gets_block(c, s->class_id)) arysub_super_into(c, id, id, mname, init, args, -1, kfn);
     return;
   }
   /* A super with no block of its own passes the method's: `&blk` names it,
@@ -47855,8 +47843,8 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
   int bg = arysub_node(c, "CallNode", id), els = arysub_node(c, "ElseNode", id);
   int sw = arysub_node(c, "StatementsNode", id), so = arysub_node(c, "StatementsNode", id);
   if (with < 0 || without < 0 || bg < 0 || els < 0 || sw < 0 || so < 0) return;
-  arysub_super_into(c, id, with, mname, init, args, fwd);
-  arysub_super_into(c, id, without, mname, init, args, -1);
+  arysub_super_into(c, id, with, mname, init, args, fwd, kfn);
+  arysub_super_into(c, id, without, mname, init, args, -1, kfn);
   arysub_set_call(c, bg, -1, "block_given?", -1, -1);
   nt_node_set_arr(wnt, sw, "body", &with, 1);
   nt_node_set_arr(wnt, so, "body", &without, 1);
@@ -47868,6 +47856,139 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
   nt_node_set_ref(wnt, id, "predicate", bg);
   nt_node_set_ref(wnt, id, "statements", sw);
   nt_node_set_ref(wnt, id, "subsequent", els);
+}
+
+static void rewrite_array_subclass_super(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  Scope *s = comp_scope_of(c, id);
+  if (!s || !s->name) return;
+  const Scope *st = comp_super_site(c, s);
+  if (comp_ary_root(c, st->class_id) < 0) return;
+  int init;
+  const char *mname = comp_scope_user_name(st);
+  if (s->is_cmethod) {
+    /* (only the class's own: not a copy a module's extend, include or
+       prepend in its singleton made) */
+    if (s->is_extend_copy || !is_new_name(s->name) || s->def_node < 0 || c->node_cbody[s->def_node] != s->class_id ||
+        !comp_super_is_class_new(c, id) || arysub_cnew_kept(c, s->class_id)) return;
+    init = 2;
+  }
+  else {
+    if (comp_super_shadow(c, st)) return;
+    int p = c->classes[st->class_id].parent;
+    if (p >= 0 && comp_method_in_chain(c, p, mname, NULL) >= 0) return;
+    init = is_initialize_name(mname);
+  }
+  /* Array#initialize_copy is a replace, which the copy dup and clone make
+     of an Array subclass instance has done already: super into it is the
+     receiver */
+  if (is_initialize_copy_name(mname)) {
+    int self = arysub_node(c, "SelfNode", id);
+    if (self >= 0) { arysub_set_call(c, id, self, "itself", -1, -1); nt_set_ignore_visibility((NodeTable *)c->nt, id, 1); }
+    return;
+  }
+  /* (any other name is the plan's builtin: lower_builtin_supers) */
+  if (!init) return;
+  int args = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
+  if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
+    args = super_zsuper_args(c, id, s, NULL, 1);
+    if (args < 0 && init == 2) return;
+    if (args < 0) {
+      zsuper_refuse(c, id, s);
+      return;
+    }
+  }
+  lower_super_call(c, id, s, mname, init, args, blk, 0, 0);
+}
+
+static void arysub_keep_builtin_only(Compiler *c, int m0, const char *name);
+/* Is the method of scope s a `(...)` forwarder? Its bare super passes a rest of unknown length too. */
+static int super_def_forwards(Compiler *c, const Scope *s) {
+  int pn = s->def_node >= 0 ? nt_ref(c->nt, s->def_node, "parameters") : -1;
+  int kwr = pn >= 0 ? nt_ref(c->nt, pn, "keyword_rest") : -1;
+  return kwr >= 0 && nt_kind(c->nt, kwr) == NK_ForwardingParameterNode;
+}
+/* Whether argument list args (an ArgumentsNode, or -1) passes a splat, and whether it passes keywords (a keyword
+   hash, a `**`). */
+static void super_args_shape(const NodeTable *nt, int args, int *splat, int *kw) {
+  int an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  for (int i = 0; i < an; i++) {
+    NodeKind ak = nt_kind(nt, av[i]);
+    if (ak == NK_SplatNode || ak == NK_ForwardingArgumentsNode) *splat = 1;
+    if (ak == NK_KeywordHashNode || ak == NK_AssocSplatNode) *kw = 1;
+  }
+}
+/* Each `super` the call plan finds no method of the program's for, whose
+   builtin owner has a call path from a program object's self
+   (comp_bsuper_carried), is the builtin's own call on self: its name, with
+   self as the receiver, marked builtin_only (and blind to visibility, as a
+   super is) so the program's methods of the name do not take it; a Kernel
+   module function is the bare call (kernel_recv), the route `Kernel.puts x`
+   takes. A bare `super` passes the method's parameters (super_zsuper_args),
+   and the block as lower_super_call has it. Array's initialize and
+   Class#new stay with rewrite_array_subclass_super. A super with a program
+   target, or an owner not carried yet, is not touched. */
+static void lower_builtin_supers(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count;
+  /* (the parents of the nodes there are now: the lowering adds nodes, which rebuilds the map the next ask) */
+  int *par0 = (int *)malloc(sizeof(int) * (size_t)(n0 > 0 ? n0 : 1));
+  if (!par0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(par0, comp_parent_map(c), sizeof(int) * (size_t)n0);
+  for (int id = 0; id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k != NK_SuperNode && k != NK_ForwardingSuperNode) continue;
+    int si = c->nscope[id];
+    if (si < 0 || si >= c->nscopes) continue;
+    Scope *s = &c->scopes[si];
+    if (s->is_cmethod || !s->name || s->class_id < 0 || s->class_id == c->toplevel_class) continue;
+    MethodLookup ml = { .def_class = -1 };
+    if (cplan_super_target(c, id, s, &ml) >= 0 || !ml.bowner) continue;
+    const Scope *st = comp_super_site(c, s);
+    const char *mname = comp_scope_user_name(st);
+    int blk = nt_ref(nt, id, "block");
+    BsuperPath path = mname ? comp_bsuper_carried(c, id, st, mname, ml.bowner) : BSP_NONE;
+    int kfn = path == BSP_KERNEL;
+    if (path == BSP_NONE || (kfn && blk >= 0)) continue;
+    int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : super_zsuper_args(c, id, s, par0, path == BSP_ARRAY);
+    if (k == NK_ForwardingSuperNode && args < 0) {
+      /* (an Array subclass's was refused before, for every such parameter list; the other families keep the
+         emission they had, which the corpus answers right for a `to_json(...)` prepended to Array) */
+      if (path == BSP_ARRAY) zsuper_refuse(c, id, s);
+      continue;
+    }
+    /* The call lowered is the one the program could write, so only where the call layer answers it: a Kernel
+       function takes no keyword and no splat or `(...)` (the spread of a run-time length, 0b's); a bare
+       super's keywords go to a builtin whose parameters (BAP) list one, else they would reach a method with
+       none, where CRuby passes a Hash or nothing (the spread, which master refused for a bare super). */
+    int splat = 0, kw = 0;
+    super_args_shape(nt, args, &splat, &kw);
+    if (kfn && (kw || splat || super_def_forwards(c, s))) continue;
+    if (kw && k == NK_ForwardingSuperNode && !builtin_method_takes_keywords(ml.bowner, mname)) {
+      if (path == BSP_ARRAY)
+        unsupported_feature(c, id, "a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword "
+                                   "parameters are not known is not supported yet; pass the arguments explicitly");
+      continue;
+    }
+    char *mn = strdup(mname);
+    lower_super_call(c, id, s, mn, 0, args, blk, kfn, path == BSP_PREPENDED);
+    int m0 = nt->count;
+    /* (a module prepended into a builtin keeps its splat as it was: the length dispatch's poly arm for a boxed self
+       calls the prepended method itself, which loses builtin_only: a stack overflow for Hash#fetch) */
+    if (nt_kind(nt, id) == NK_CallNode) {
+      if (path != BSP_PREPENDED) expand_static_splat_args(c, id, id + 1);
+      arysub_keep_builtin_only(c, m0, mn);
+    }
+    free(mn);
+  }
+  /* the arms a split on block_given? made spread a splat by its length too */
+  if (nt->count > n0) {
+    int m0 = nt->count;
+    expand_static_splat_args(c, n0, nt->count);
+    arysub_keep_builtin_only(c, m0, NULL);
+  }
+  free(par0);
 }
 
 /* A receiverless call in an Array subclass's instance method of a name its
@@ -50530,7 +50651,6 @@ static void an_phase_class_structure(Compiler *c) {
   /* again, for the bodies the mixins cloned into their includers: a clone's
      binding is a slot of the copy's own, which the first pass never saw */
   type_rescue_bindings(c);
-  AN_STEP_V("rewrite_prepended_builtin_supers", rewrite_prepended_builtin_supers(c));   /* super in a module prepended into Range -> Range's own */
   AN_STEP_V("rewrite_ivar_reflection_supers", rewrite_ivar_reflection_supers(c));     /* super in the program's own ivar reflection -> Object's */
   AN_STEP_V("desugar_reader_index_write", desugar_reader_index_write(c));  /* all[k] = v through a reader of @all -> (all; @all[k] = v) */
   /* again, now that modules have put their methods in: an alias can take an
@@ -50543,6 +50663,7 @@ static void an_phase_class_structure(Compiler *c) {
   /* super into Array, X.new / X[], implicit self, in the class's methods and
      the copies its modules put in (#7449) */
   AN_STEP_V("rewrite_array_subclass_calls", rewrite_array_subclass_calls(c));
+  AN_STEP_V("lower_builtin_supers", lower_builtin_supers(c));   /* super with no program method -> the builtin's call on self */
   AN_STEP_V("rewrite_attr_supers", rewrite_attr_supers(c));
   rewrite_self_attr_empty_writes(c);
   AN_STEP_V("specialize_inherited_cls_new", specialize_inherited_cls_new(c));

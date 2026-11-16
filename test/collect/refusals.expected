@@ -2020,14 +2020,18 @@ spinel: test/reject/struct_subclass_own_new_superclass.rb:7: unsupported supercl
 spinel: test/reject/subclass_array_class_new_call.rb:5: Class.new(Array) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Array`
 == test/reject/subclass_array_class_new_call.rb [promote] rc=1
 spinel: test/reject/subclass_array_class_new_call.rb:5: Class.new(Array) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Array`
-== test/reject/subclass_array_zsuper_post.rb [default] rc=1
-spinel: test/reject/subclass_array_zsuper_post.rb:8: a bare `super` into Array from a method with keyword, post-rest or destructured parameters is not supported yet; pass the arguments explicitly
-== test/reject/subclass_array_zsuper_post.rb [promote] rc=1
-spinel: test/reject/subclass_array_zsuper_post.rb:8: a bare `super` into Array from a method with keyword, post-rest or destructured parameters is not supported yet; pass the arguments explicitly
 == test/reject/subclass_hash_class_new.rb [default] rc=1
 spinel: test/reject/subclass_hash_class_new.rb:5: Class.new(Hash) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Hash`
 == test/reject/subclass_hash_class_new.rb [promote] rc=1
 spinel: test/reject/subclass_hash_class_new.rb:5: Class.new(Hash) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Hash`
+== test/reject/subclass_hash_zsuper_fwd_counts.rb [default] rc=1
+spinel: test/reject/subclass_hash_zsuper_fwd_counts.rb:7: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/subclass_hash_zsuper_fwd_counts.rb [promote] rc=1
+spinel: test/reject/subclass_hash_zsuper_fwd_counts.rb:7: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/subclass_hash_zsuper_keyword.rb [default] rc=1
+spinel: test/reject/subclass_hash_zsuper_keyword.rb:7: a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword parameters are not known is not supported yet; pass the arguments explicitly
+== test/reject/subclass_hash_zsuper_keyword.rb [promote] rc=1
+spinel: test/reject/subclass_hash_zsuper_keyword.rb:7: a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword parameters are not known is not supported yet; pass the arguments explicitly
 == test/reject/subclass_range.rb [default] rc=1
 spinel: test/reject/subclass_range.rb:3: class Span < Range: subclassing Range is not supported yet (a subclass would answer differently from CRuby); wrap a Range in an instance variable instead
 == test/reject/subclass_range.rb [promote] rc=1

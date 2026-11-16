@@ -21259,6 +21259,13 @@ const char *builtin_method_params(const char *owner, const char *m, int *in_c) {
     }
   return NULL;
 }
+/* See builtin_names.h: a "key" or "keyrest" entry among the parameters; a method the facts do not list takes none known. */
+int builtin_method_takes_keywords(const char *owner, const char *m) {
+  const char *ps = builtin_method_params(owner, m, NULL);
+  for (const char *e = ps; e && *e; e = strchr(e, ' ') ? strchr(e, ' ') + 1 : NULL)
+    if (!strncmp(e, "key", 3)) return 1;   /* (key:name, keyrest:name) */
+  return 0;
+}
 /* Does any builtin class or module have a class method `m` (Integer.sqrt)? */
 int builtin_cmethod_name_known(const char *m) {
   for (int i = 0; m && sp_builtin_cmeth_arity_spec_tbl[i].cls; i++)

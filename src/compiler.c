@@ -7,6 +7,7 @@
 #include "analyze.h"
 #include "analyze_internal.h"
 #include "builtin_names.h"
+#include "builtin_ops.h"
 #include "codegen_poly.h"
 #include "value_pos.h"
 #include "call_plan.h"
@@ -3795,32 +3796,42 @@ static int mixin_level_answers(Compiler *c, int k, const char *name) {
    precedence; neither query reconstructs includes from the node table. */
 /* What the mixin walk looks for: Enumerable, Comparable, or any core module
    (one of those, or a builtin module named by path) */
-enum { MX_ENUM = 0, MX_CMP = 1, MX_CORE = 2 };
-static int mixin_here(const ClassInfo *ci, int what) {
+enum { MX_ENUM = 0, MX_CMP = 1, MX_CORE = 2, MX_ANSWERS = 3 };   /* MX_ANSWERS: one of them has the name (mixin_here's `name`) ahead of Object */
+static int mixin_here(const ClassInfo *ci, int what, const char *name) {
   int en = ci->enum_inc_at || ci->enum_prepended, cm = ci->cmp_inc_at || ci->cmp_prepended;
+  if (what == MX_ANSWERS) {
+    /* a core module of this level, Comparable, Enumerable or one named by path (Math), that has the name */
+    if ((en && builtin_answers_ahead_of(core_class_name(CORE_ENUMERABLE), name, NULL)) ||
+        (cm && builtin_answers_ahead_of(core_class_name(CORE_COMPARABLE), name, NULL))) return 1;
+    for (int i = 0; i < ci->nincluded_mod_names; i++)
+      if (builtin_answers_ahead_of(ci->included_mod_names[i], name, NULL)) return 1;
+    return 0;
+  }
   return what == MX_ENUM ? en : what == MX_CMP ? cm : en || cm || ci->nincluded_mod_names > 0;
 }
 /* Whether what is among the ancestors class or module k brings: it
    includes (or prepends) it, or includes a module that does, at any depth.
    Each module is asked once (`seen`), so a module several includes share
    costs one visit. */
-static int mixin_reaches_from(Compiler *c, int k, int what, unsigned char *seen) {
+static int mixin_reaches_from(Compiler *c, int k, int what, const char *name, unsigned char *seen) {
   ClassInfo *ci = &c->classes[k];
   seen[k] = 1;
-  if (mixin_here(ci, what)) return 1;
+  if (mixin_here(ci, what, name)) return 1;
   for (int j = 0; j < ci->nincluded_mods; j++) {
     int m = ci->included_mods[j];
-    if (m >= 0 && m < c->nclasses && !seen[m] && mixin_reaches_from(c, m, what, seen)) return 1;
+    /* (a builtin module of the program's classes: Math) */
+    if (what == MX_ANSWERS && m >= 0 && m < c->nclasses && c->classes[m].is_builtin_const && builtin_answers_ahead_of(c->classes[m].name, name, NULL)) return 1;
+    if (m >= 0 && m < c->nclasses && !seen[m] && mixin_reaches_from(c, m, what, name, seen)) return 1;
   }
   return 0;
 }
-static int mixin_reaches(Compiler *c, int k, int what) {
+static int mixin_reaches(Compiler *c, int k, int what, const char *name) {
   const ClassInfo *ci = &c->classes[k];
   /* a class with no includes answers by its own flags, with no set */
-  if (ci->nincluded_mods == 0) return mixin_here(ci, what);
+  if (ci->nincluded_mods == 0) return mixin_here(ci, what, name);
   unsigned char *seen = (unsigned char *)calloc((size_t)c->nclasses, 1);
   if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int r = mixin_reaches_from(c, k, what, seen);
+  int r = mixin_reaches_from(c, k, what, name, seen);
   free(seen);
   return r;
 }
@@ -3874,7 +3885,7 @@ static int mixin_answers_first(Compiler *c, int cid, const char *name, int compa
       }
       return master;
     }
-    if (mixin_reaches(c, k, comparable)) top = k;
+    if (mixin_reaches(c, k, comparable, NULL)) top = k;
     if (k == ci->parent) break;
   }
   n = 0;
@@ -3898,7 +3909,18 @@ int comp_comparable_answers_first(Compiler *c, int cid, const char *name) {
 int comp_enum_reaches(Compiler *c, int cid) {
   int n = 0;
   for (int k = cid; k >= 0 && k < c->nclasses && n < c->nclasses; k = c->classes[k].parent, n++) {
-    if (mixin_reaches(c, k, 0)) return 1;
+    if (mixin_reaches(c, k, 0, NULL)) return 1;
+    if (k == c->classes[k].parent) break;
+  }
+  return 0;
+}
+/* Does a builtin module that class cid or a superclass includes (Comparable, Enumerable, one named by path such as
+   Math), at any depth, answer the name ahead of Object (whose place a top-level def takes in the ancestors)? Those
+   modules' methods are then what a super past the program's defs reaches. */
+int comp_chain_core_answers(Compiler *c, int cid, const char *name) {
+  int n = 0;
+  for (int k = cid; k >= 0 && k < c->nclasses && n < c->nclasses; k = c->classes[k].parent, n++) {
+    if (mixin_reaches(c, k, MX_ANSWERS, name)) return 1;
     if (k == c->classes[k].parent) break;
   }
   return 0;
@@ -3924,13 +3946,13 @@ int comp_plain_class(Compiler *c, int cid) {
   for (int k = cid; k >= 0 && k < c->nclasses && n < c->nclasses; k = c->classes[k].parent, n++) {
     ClassInfo *ci = &c->classes[k];
     if (ci->is_native_class || ci->is_struct || ci->nsub_root > 0 || comp_ary_root(c, k) >= 0 || comp_class_is_module(c, ci) ||
-        ci->def_node < 0 || mixin_reaches(c, k, MX_CORE)) return 0;
+        ci->def_node < 0 || mixin_reaches(c, k, MX_CORE, NULL)) return 0;
     if (k == ci->parent) break;
   }
   return cid >= 0 && cid < c->nclasses && !class_is_exc_subclass(c, cid) && is_plain_builtin_superclass(class_builtin_parent(c, cid));
 }
 int comp_comparable_reaches(Compiler *c, int cid) {
-  return cid >= 0 && cid < c->nclasses && mixin_reaches(c, cid, 1);
+  return cid >= 0 && cid < c->nclasses && mixin_reaches(c, cid, 1, NULL);
 }
 
 /* ---- Poly-dispatch candidates by method name ----
@@ -5606,6 +5628,78 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
      run decides (cplan_class_kernel: the super is then guarded, ver_kernel_guards). */
   if (cplan_class_kernel(c, class_id) == KERN_LACKS) return -1;
   return obj;
+}
+
+/* The builtin class at the top of class cid's chain, by name: a reopening's
+   own class, Struct or Data, the builtin its superclass constant names (Array,
+   Hash, String, an Exception), BasicObject for a blank slate, else Object.
+   NULL for a native class and for a superclass the method tables do not know
+   (an expression): nothing says what its methods are. *self: cid is that
+   reopening itself. */
+const char *comp_super_builtin_root(Compiler *c, int cid, int *self) {
+  int k = cid, n = 0;
+  if (self) *self = 0;
+  for (; k >= 0 && n < 256; n++, k = c->classes[k].parent) {
+    if (c->classes[k].is_native_class || c->classes[k].nsub_root > 0) return NULL;   /* (a native class has its own methods) */
+    if (c->classes[k].parent < 0) break;
+  }
+  if (k < 0) return NULL;
+  const char *kn = c->classes[k].name;
+  if (kn && is_builtin_reopen(kn)) {
+    if (self) *self = k == cid;
+    return kn;
+  }
+  if (c->classes[k].is_data) return "Data";
+  if (c->classes[k].is_struct) return "Struct";
+  int sc = c->classes[k].def_node >= 0 ? class_def_super(c->nt, c->classes[k].def_node) : -1;
+  /* (a builtin exception named by its path, Math::DomainError, is read whole) */
+  const char *sn = sc >= 0 ? superclass_builtin_exc_name(c, c->nt, sc) : NULL;
+  if (!sn && sc >= 0 && (nt_kind(c->nt, sc) == NK_ConstantReadNode || nt_kind(c->nt, sc) == NK_ConstantPathNode))
+    sn = nt_str(c->nt, sc, "name");
+  if (class_is_blank_slate(c, k)) return cplan_class_kernel(c, cid) == KERN_LACKS ? "BasicObject" : "Object";
+  if (sn && builtin_table_known(sn)) return sn;
+  return sc >= 0 ? NULL : "Object";
+}
+/* The builtin whose method a `super` named uname in instance method scope s
+   reaches once no program method answers it (the call plan's, for the plan
+   to copy; see MethodLookup.bowner): the first ancestor of the chain's
+   builtin root that has the name, as builtin_super_owner gives it, NULL for
+   none. The site's own place is the root's when the method is the root
+   reopening's own or a module included into it (its methods come first), not
+   when a module is prepended to it. */
+const char *comp_super_bowner(Compiler *c, const Scope *s, const char *uname) {
+  if (!uname || s->is_cmethod || s->class_id < 0) return NULL;
+  int self = 0;
+  const char *root = comp_super_builtin_root(c, s->class_id, &self);
+  return root ? builtin_super_owner(root, uname, self && !s->is_prepend_copy) : NULL;
+}
+
+/* Does lower_builtin_supers lower a super in site scope st named uname whose
+   plan names builtin bowner? Not every owner has a call path from a program
+   object's self yet: each family is carried when its path is (the owners
+   not carried keep the ladder in emit_super, which answers them, as before).
+   Carried: a Kernel module function that takes no block (BSP_KERNEL: called
+   bare, as `Kernel.format` is); a super in an Array, Hash, String or Time
+   subclass (the instance is the builtin's value) for the names the Array
+   path answers (comp_arysub_builtin_name; BSP_ARRAY, which passes the
+   method's block on); a method a module prepended to a builtin reopening put
+   in front of the builtin's (BSP_PREPENDED). A module included into a
+   reopened builtin, and a prepended one's self typed as the builtin's value,
+   have no such path: `self.m` there reaches no method at run time, or
+   returns an Enumerator where the method answers a boxed value. */
+BsuperPath comp_bsuper_carried(Compiler *c, int id, const Scope *st, const char *uname, const char *bowner) {
+  /* (the stand-in a version entry's else arm calls for the call made before a later include or prepend is that
+     call's method: a Kernel function is private, and the visibility-blind call a lowered super is would answer an
+     explicit receiver where CRuby raises) */
+  if (builtin_owner_kind(bowner) == BOWN_KERNEL && !st->super_behind && is_kernel_module_function(uname) && !is_frame_reading_function(uname) &&
+      !iter_row(BOP_KERNEL, uname, -1, 0))
+    return BSP_KERNEL;
+  int self = 0;
+  const char *root = comp_super_builtin_root(c, st->class_id, &self);
+  int slot = root ? builtin_core_class_slot(root) : -1;
+  if (st->is_prepend_copy && self && slot >= 0 && slot != CORE_OBJECT && is_builtin_reopen_name(root)) return BSP_PREPENDED;
+  /* (Array's initialize and initialize_copy are rewrite_array_subclass_super's) */
+  return comp_ary_root(c, st->class_id) >= 0 && !is_initialize_family(uname) && comp_arysub_builtin_name(c, id, st->class_id, uname) ? BSP_ARRAY : BSP_NONE;
 }
 
 /* The proc-form clone scope `s` runs, or -1. A def that was cloned holds its

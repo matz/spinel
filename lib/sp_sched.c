@@ -10,6 +10,7 @@
 #endif
 #include "sp_alloc.h"   /* sp_box_nil / sp_box_obj */
 #include "sp_exc.h"     /* sp_exc_cls_display / sp_exc_cls_unnamed (the thread report) */
+#include "sp_re.h"      /* sp_re_switch: the match registers of a thread */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -2963,6 +2964,14 @@ static void sp_sched_signal_if_quiescent(void) {
    caller_ctx rather than its own, so a switch to it lands on a context that
    was never saved. run_thread_once never nests on a worker, so it sets the
    home and clears it after. */
+/* The match registers (`$~`) are per thread in Ruby and per worker in the
+   runtime. A green thread that stops and gives its worker to another one
+   saves its own on its stack and puts them back when it runs again, and so
+   does the side that runs it (run_thread_once), so the threads of one worker
+   do not read each other's. The trap thread (lib/sp_cold.c) takes no part:
+   CRuby runs a trap in the main thread, with the `$~` of that thread, and
+   the trap thread reads and writes the registers of the side that runs it. */
+static int sp_thread_own_match(const sp_thread *t) { return t && !t->internal; }
 static SP_TLS sp_Fiber *g_sched_home = NULL;
 static sp_Fiber *sp_sched_home(void) { return g_sched_home ? g_sched_home : sp_fiber_worker_root(); }
 sp_Fiber *sp_sched_home_fiber(void) { return sp_sched_home(); }
@@ -2972,7 +2981,11 @@ sp_Fiber *sp_sched_home_fiber(void) { return sp_sched_home(); }
 static void sp_sched_switch_out(void) {
   sp_thread *self = g_current;
   if (self && sp_fiber_current != self->fiber) self->at = sp_fiber_current;
+  int own = sp_thread_own_match(self);
+  sp_re_switch match;
+  if (own) sp_re_switch_out(&match);
   sp_fiber_sched_switch(sp_sched_home());
+  if (own) sp_re_switch_in(&match);
 }
 
 static void run_thread_once(sp_thread *t) { sp_gc_wb((void*)t);   /* PRE/POST: sched lock held, or not held from the worker's fast path */
@@ -3035,9 +3048,17 @@ static void run_thread_once(sp_thread *t) { sp_gc_wb((void*)t);   /* PRE/POST: s
   g_sched_home = sp_fiber_current;
   sp_Fiber *at = t->at;   /* it stopped inside a Fiber it resumed */
   t->at = NULL;
+  /* the thread runs with its own `$~`; a new one starts with none */
+  int own = sp_thread_own_match(t);
+  sp_re_switch match;
+  if (own) {
+    sp_re_switch_out(&match);
+    if (t->fiber->state == 0) sp_re_thread_begin();
+  }
   if (locked) SCHED_UNLOCK();
   sp_Fiber_transfer_catch(t->fiber, at, in, &raised, &ec, &em, &eo);
   if (locked) SCHED_LOCK();
+  if (own) sp_re_switch_in(&match);
   g_sched_home = NULL;
   g_current = saved;
 #ifdef SP_THREADS
@@ -3385,7 +3406,9 @@ sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file,
   t->birth_line = line;
   return t;
 }
-sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg) {
+/* `internal` marks the runtime's own thread. It is set before the thread
+   goes on a run queue, so the worker that runs the thread first reads it. */
+static sp_thread *thread_spawn(sp_Fiber *f, sp_RbVal arg, int internal) {
 #ifdef SP_THREADS
   if (!g_workers_started) {
     if (!sp_sched_ensure_workers())
@@ -3400,6 +3423,7 @@ sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg) {
   sp_thread *volatile t = (sp_thread *)sp_gc_alloc(sizeof(sp_thread), NULL, sp_thread_scan);
   memset(t, 0, sizeof *t);
   t->home_wid = -1;              /* not yet started: any worker may pick it up */
+  t->internal = internal ? 1 : 0;
   t->fiber = f;
   t->arg = arg;
   t->retval = sp_box_nil();
@@ -3429,6 +3453,8 @@ sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg) {
   SCHED_UNLOCK();
   return t;
 }
+sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg) { return thread_spawn(f, arg, 0); }
+sp_thread *sp_Thread_spawn_internal(sp_Fiber *f) { return thread_spawn(f, sp_box_nil(), 1); }
 
 /* Joining the current thread can never finish. Reject it before attempting to
    park, including on the main thread before the timer monitor has started. */
@@ -3633,7 +3659,6 @@ sp_thread *sp_Thread_list_at(sp_int i) {
   REG_UNLOCK();
   return t ? t : &g_main_thread;
 }
-void sp_thread_set_internal(sp_thread *t) { t->internal = 1; }
 
 /* #status: "run" while runnable/running, "sleep" while blocked, false when it
    finished normally, nil when it died with an unhandled exception. */

@@ -1,0 +1,12 @@
+nil
+7
+{}
+9
+nil
+4
+[:to_hash]
+"unknown keyword: :k"
+"unknown keywords: :j, :k"
+"no implicit conversion of String into Integer"
+3
+nil

@@ -13210,10 +13210,12 @@ static int hash_new_capacity_pure(Compiler *c, int n, int depth) {
   return 0;
 }
 
+static int kwb_explicit(NodeTable *nt, const char *kname, const char *dflt, int h, Scope *sc);
 /* `Hash.new(capacity: n)`: the capacity only sizes the table, so the
    keyword is dropped and the call is the Hash.new it would be without it.
    A value with nothing to run (hash_new_capacity_pure) is dropped with it;
-   any other value is kept on the call to run after the Hash is built. Any
+   any other value is kept on the call to run after the Hash is built. A
+   lone `**h` passes it too, as the value kwb_explicit reads out of it. Any
    other keyword is CRuby's ArgumentError (emit_hash_new_arg_guard). The
    keyword argument went in as a default value, and the call found no
    method. */
@@ -13235,6 +13237,16 @@ static int desugar_hash_new_capacity(Compiler *c) {
     int bnf = cplan_const_user(c, id, r, 1).mi >= 0 ? BNF_REFUSE : cplan_builtin_new_form(c, id);
     if (bnf == BNF_REFUSE || bnf == BNF_FILL) continue;
     int en = 0; const int *el = nt_arr(nt, av[an - 1], "elements", &en);
+    /* (a lone `**h` passes the keyword too: its keys are checked as Hash#initialize binds them, and its capacity, 0
+       where it has none, is the keyword's value) */
+    if (en == 1 && nt_kind(nt, el[0]) == NK_AssocSplatNode && nt_ref(nt, el[0], "value") >= 0) {
+      int base = nt->count, kh = kwb_explicit(nt, "capacity", "IntegerNode", nt_ref(nt, el[0], "value"), comp_scope_of(c, id));
+      nt_replace_child(nt, argsn, av[an - 1], kh);
+      comp_grow_node_arrays(c);
+      for (int j = base; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
+      av = nt_arr(nt, argsn, "arguments", &an);
+      el = nt_arr(nt, av[an - 1], "elements", &en);
+    }
     if (en != 1 || nt_kind(nt, el[0]) != NK_AssocNode) continue;
     int key = nt_ref(nt, el[0], "key"), val = nt_ref(nt, el[0], "value");
     if (key < 0 || nt_kind(nt, key) != NK_SymbolNode || !nt_str(nt, key, "value") ||
@@ -44549,17 +44561,20 @@ static int kwb_reject(NodeTable *nt, Scope *sc, const char *xn) {
   return sd_if(nt, sd_call(nt, "empty?", kwb_lv(nt, sc, xn, -1), NULL, 0), nt_new_node(nt, "NilNode"),
                sd_call(nt, "raise", -1, ra, 2));
 }
-static int kwb_explicit(NodeTable *nt, int row, int h, Scope *sc) {
+/* The one keyword `key` (`dflt` the node kind of its default) a builtin takes, out of the `**h` that passes it:
+   `key: (hn = h; vn = hn's conversion; xn = vn.keys - [key]; xn empty or the unknown keyword raises; vn.fetch(key,
+   default))`, run in the keyword's place. */
+static int kwb_explicit(NodeTable *nt, const char *kname, const char *dflt, int h, Scope *sc) {
   char hn[32], vn[32], xn[32];
   snprintf(hn, sizeof hn, "__kwbh%d", nt->count);
   snprintf(vn, sizeof vn, "__kwbv%d", nt->count);
   snprintf(xn, sizeof xn, "__kwbx%d", nt->count);
   int key = nt_new_node(nt, "SymbolNode");
-  nt_node_set_str(nt, key, "value", kwb_rows[row][1]);
+  nt_node_set_str(nt, key, "value", kname);
   int conv = kwb_conv(nt, sc, hn);
   int ka = nt_new_node(nt, "ArrayNode"), kc = nt_clone_subtree(nt, key);
   nt_node_set_arr(nt, ka, "elements", &kc, 1);
-  int fa[2] = { nt_clone_subtree(nt, key), nt_new_node(nt, kwb_rows[row][2]) };
+  int fa[2] = { nt_clone_subtree(nt, key), nt_new_node(nt, dflt) };
   if (nt_kind(nt, fa[1]) == NK_IntegerNode) nt_node_set_int(nt, fa[1], "value", 0);
   int st[5] = { kwb_lv(nt, sc, hn, nt_clone_subtree(nt, h)), kwb_lv(nt, sc, vn, conv),
                 kwb_lv(nt, sc, xn, sd_call(nt, "-", sd_call(nt, "keys", kwb_lv(nt, sc, vn, -1), NULL, 0), &ka, 1)),
@@ -44762,11 +44777,11 @@ int desugar_builtin_kwsplat_at(Compiler *c, LowerCtx *lc, int id) {
   const int *el = nt_arr(nt, args[n - 1], "elements", &en);
   int lit = -1;
   if (en == 1 && nt_kind(nt, el[0]) == NK_AssocSplatNode && nt_ref(nt, el[0], "value") >= 0) {
-    args[n - 1] = kwb_explicit(nt, row, nt_ref(nt, el[0], "value"), NULL);
+    args[n - 1] = kwb_explicit(nt, kwb_rows[row][1], kwb_rows[row][2], nt_ref(nt, el[0], "value"), NULL);
     nt_node_set_arr(nt, an, "arguments", args, n);
   }
   else if ((lit = kwb_unknown_literal(nt, row, args[n - 1])) >= 0) {
-    args[n - 1] = kwb_explicit(nt, row, lit, NULL);
+    args[n - 1] = kwb_explicit(nt, kwb_rows[row][1], kwb_rows[row][2], lit, NULL);
     nt_node_set_arr(nt, an, "arguments", args, n);
   }
   kwb_drop_orphan(c, lc, kwb_clone_split(c, id, NULL));
@@ -45127,7 +45142,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   for (int k = 0; k < argc; k++) {
     if (nt_kind(nt, argv[k]) != NK_KeywordHashNode) continue;
     if (ctor == 1 && nt_kind(nt, fargs[k]) == NK_KeywordHashNode) continue;
-    if (krow >= 0) { fargs[k] = kwb_explicit(nt, krow, fargs[k], comp_scope_of(c, id)); continue; }
+    if (krow >= 0) { fargs[k] = kwb_explicit(nt, kwb_rows[krow][1], kwb_rows[krow][2], fargs[k], comp_scope_of(c, id)); continue; }
     int as = nt_new_node(nt, "AssocSplatNode");
     nt_node_set_ref(nt, as, "value", fargs[k]);
     fargs[k] = nt_new_node(nt, "KeywordHashNode");

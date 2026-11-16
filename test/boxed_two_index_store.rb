@@ -130,6 +130,29 @@ end
 krows[[$kk][0]][0, 1] = 9
 p $krows[0][0, 1], $krows[1][0, 1]
 
+# a value that runs code: the outer and the index run once, before it, and
+# the store reaches the element they chose
+$olog = []
+$orows = [Grid.new, Grid.new, [1, 2, 3], [4, 5, 6], [7, 8, 9]]
+$ok = 2
+def orows_call
+  $olog << :o
+  $ok += 1
+  $orows
+end
+def oval_call
+  $olog << :v
+  $ok += 1
+  7
+end
+oi = $ok
+local_rows = $orows
+local_rows[(oi += 1)][0, 1] = oval_call
+p $olog, $orows[3], oi
+$olog.clear
+orows_call[$ok][0, 1] = oval_call
+p $olog, $orows.map { |r| r.is_a?(Grid) ? r[0, 1] : r }
+
 # a store whose class takes one index fewer raises, as in Ruby
 c = boxes[1]
 begin

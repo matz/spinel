@@ -27249,7 +27249,26 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      which is a worse order than the one C picked. Only a local read ahead of
      it that it can rebind runs first, with the operands before it
      (emit_operands_before_unbound). */
-  int nmax = 1 + argc;
+  /* `outer[k][start, len] = v` through a box: the splice stores into outer's
+     slot k after v, and the class dispatch reads `outer[k]` itself, so outer
+     and k are the operands, in place of the receiver they make: each runs
+     once, before v, as Ruby reads the receiver first */
+  int recv_outer = -1, recv_key = -1;
+  if (recv >= 0 && argc == 3 && !nt_safe_nav(nt, id) && nt_str(nt, id, "name") &&
+      sp_streq(nt_str(nt, id, "name"), "[]=") && comp_ntype(c, recv) == TY_POLY &&
+      nt_kind(nt, recv) == NK_CallNode && nt_str(nt, recv, "name") &&
+      sp_streq(nt_str(nt, recv, "name"), "[]") && nt_ref(nt, recv, "block") < 0 &&
+      nt_ref(nt, recv, "receiver") >= 0 && !nt_safe_nav(nt, recv)) {
+    int ra = 0;
+    const int *rav = call_args(nt, recv, &ra);
+    if (ra == 1 && nt_kind(nt, rav[0]) != NK_SplatNode && nt_kind(nt, rav[0]) != NK_KeywordHashNode) {
+      recv_outer = nt_ref(nt, recv, "receiver");
+      recv_key = rav[0];
+    }
+  }
+  /* the receiver's operands: none, the receiver, or its outer and key */
+  int nrecv = recv < 0 ? 0 : recv_outer >= 0 ? 2 : 1;
+  int nmax = nrecv + argc;
   for (int i = 0; i < argc; i++) {
     if (nt_kind(nt, argv[i]) == NK_KeywordHashNode) { int nk = 0; nt_arr(nt, argv[i], "elements", &nk); nmax += nk; }
     else if (range_lit_ends_ordered(c, argv[i], i == argc - 1)) nmax++;
@@ -27257,7 +27276,8 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   int node[nmax], fresh[nmax], oo[nmax], copy[nmax], sh[nmax], fb[nmax], nb = 0;
   TyKind ty[nmax];
   int operand[nmax], nop = 0;
-  if (recv >= 0) operand[nop++] = recv;
+  if (recv_outer >= 0) { operand[nop++] = recv_outer; operand[nop++] = recv_key; }
+  else if (recv >= 0) operand[nop++] = recv;
   for (int i = 0; i < argc; i++) {
     /* keyword arguments are operands one value at a time, in the order
        written: `new(a: r.int, b: f(r.int))` runs a's call first, however
@@ -27305,7 +27325,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      argument is bound and rooted ahead of the call like an observable one
      (operand_held_for_later). */
   int held[nmax], nheld = 0;
-  operands_held_for_later(c, operand, nop, recv >= 0, held);
+  operands_held_for_later(c, operand, nop, nrecv, held);
   /* A push or an append of several arguments pushes each before the next
      is read, so where a later argument can see an earlier push
      (push_args_read_before_pushes) every argument is bound first, in
@@ -27316,7 +27336,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      push had grown, and `a.push(5, last(a))` ran last on it. */
   int push_reads = push_args_read_before_pushes(c, id);
   if (push_reads)
-    for (int i = recv >= 0; i < nop; i++) {
+    for (int i = nrecv; i < nop; i++) {
       /* (but a value with no C value of its own -- a literal nil -- which
          nothing can change, and a shared String slot, which its copy path
          reads last) */
@@ -27361,7 +27381,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     if (ot == TY_POLY || (ty_is_object(ot) && ty_object_class(ot) >= 0 &&
                           ty_object_class(ot) < c->nclasses &&
                           !c->classes[ty_object_class(ot)].is_native_class &&
-                          !(recv >= 0 && i == 0)))
+                          !(i < nrecv)))
       converts = 1;
     /* an operand the nil arm's head ran (VR_HEAD_HELD) reads as its temp:
        it runs nothing here, and bound again it was copied into a second
@@ -27509,7 +27529,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
        it as a held String read does, in order; a class read held only for its
        effect goes on to that binding when the ordering declines) */
     if (!ncand && !nheld_value) {
-      int done = emit_operands_before_unbound(c, id, operand, nop, recv >= 0, unb, b);
+      int done = emit_operands_before_unbound(c, id, operand, nop, nrecv, unb, b);
       if (done || !nheld) return done;
     }
     if (unb_lit) return 0;

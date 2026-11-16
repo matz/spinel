@@ -5060,6 +5060,22 @@ else {
       if (poly_poly) emit_boxed(c, key, &kb);
       else if (ty_is_hash(ht)) emit_coerce(c, key, ty_hash_key(ht), CO_HOLD, "a Hash literal's key", &kb);
       else emit_expr(c, key, &kb);
+      /* A pair's key and value are the set's sibling arguments, as a store's
+         are: a key that can allocate goes into a rooted temp ahead of the
+         value's build, as the store arm's does. So does a key whose
+         variable the value assigns (`{x => (x = 5)}`, `{x => [x = 2]}`):
+         CRuby reads the key first, so the temp goes ahead of what the
+         value's build puts in the prelude too. Its block closes after the
+         set. */
+      int tk = -1;
+      if (ty_is_hash(ht) && (subtree_may_allocate(c, key) || read_rebound_by(c, key, val))) {
+        TyKind kt = ty_hash_key(ht);
+        tk = ++g_tmp;
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "{ %s _t%d = %s; ", c_type_name(kt), tk, kb.p ? kb.p : "");
+        if (needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, g_pre); buf_puts(g_pre, " "); }
+        buf_puts(g_pre, "\n");
+      }
       Buf vb; memset(&vb, 0, sizeof vb);
       if (sym_poly || poly_poly) {
         /* (a published String before a pair that can change it is boxed as
@@ -5083,16 +5099,6 @@ else {
       else emit_expr(c, val, &vb);
       int vheld = typed_elem_held(ht) == TY_STRBUF;
       emit_indent(g_pre, g_indent);
-      /* A pair's key and value are the set's sibling arguments, as a store's
-         are: a key that can allocate goes into a rooted temp ahead of the
-         value's build, as the store arm's does. */
-      int tk = -1;
-      if (ty_is_hash(ht) && subtree_may_allocate(c, key)) {
-        TyKind kt = ty_hash_key(ht);
-        tk = ++g_tmp;
-        buf_printf(g_pre, "{ %s _t%d = %s; ", c_type_name(kt), tk, kb.p ? kb.p : "");
-        if (needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, g_pre); buf_puts(g_pre, " "); }
-      }
       /* a key that is a shared String slot's read is a fresh copy: beside
          a value that allocates, the value is built first, into a rooted
          temp, and the key read last, in the set itself */

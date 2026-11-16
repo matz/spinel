@@ -17438,10 +17438,26 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
         emit_expr(c, so, &dcl);
         buf_puts(&dcl, "; ");
         if (ty_gc_holds_refs(c, ot)) { emit_gc_root_tmp_refs(c, ot, to, &dcl); buf_puts(&dcl, " "); }
-        buf_printf(&dcl, "%s _t%d = ", kt == TY_INT ? "sp_int" : "sp_RbVal", tk);
-        emit_expr(c, sk, &dcl);
-        buf_puts(&dcl, "; ");
-        if (kt == TY_POLY) buf_printf(&dcl, "SP_GC_ROOT_RBVAL(_t%d); ", tk);
+        size_t key_mark = g_pre ? g_pre->len : 0;
+        Buf kdc; memset(&kdc, 0, sizeof kdc);
+        buf_printf(&kdc, "%s _t%d = ", kt == TY_INT ? "sp_int" : "sp_RbVal", tk);
+        emit_expr(c, sk, &kdc);
+        buf_puts(&kdc, "; ");
+        if (kt == TY_POLY) buf_printf(&kdc, "SP_GC_ROOT_RBVAL(_t%d); ", tk);
+        /* k's own preludes (a literal it reads, built above the statement:
+           `[$k][0]`) run where they are hoisted: the outer is read ahead of
+           them there, as Ruby reads the receiver first, so an outer that
+           changes what k reads (`shelf_of_call[[$k][0]]`) is seen */
+        if (g_pre && g_pre->len > key_mark) {
+          Buf od; memset(&od, 0, sizeof od);
+          emit_indent(&od, g_indent);
+          buf_printf(&od, "%s\n", dcl.p ? dcl.p : "");
+          buf_insert_at(g_pre, key_mark, od.p ? od.p : "");
+          free(od.p);
+          dcl.len = 0; if (dcl.p) dcl.p[0] = 0;
+        }
+        buf_puts(&dcl, kdc.p ? kdc.p : "");
+        free(kdc.p);
         size_t pre_mark = g_pre ? g_pre->len : 0;
         int mk = view_bind_temp(so, to);
         view_bind_temp(sk, tk);

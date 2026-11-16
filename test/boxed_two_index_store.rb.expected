@@ -25,4 +25,13 @@ nil
 8
 nil
 "t"
+nil
+9
+[:v]
+[7, 5, 6]
+3
+[:o, :v]
+[nil, nil, [1, 2, 3], [7, 5, 6], [7, 8, 9]]
+6
+nil
 ArgumentError

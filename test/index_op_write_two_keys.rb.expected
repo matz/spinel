@@ -1,0 +1,10 @@
+"a"
+nil
+nil
+[:recv, [:key, 1], [:key, 2], [:get, 1, 2], :val, [:set, 1, 2, "a"], :recv, [:key, 1], [:key, 2], [:get, 1, 2], :val, [:set, 1, 2, "ab"], :recv, [:key, 1], [:key, 2], [:get, 1, 2], [:set, 1, 2, nil], [:get, 0, 0], [:get, 1, 2]]
+4
+40
+2
+1
+0
+ArgumentError

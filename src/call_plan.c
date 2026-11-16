@@ -4714,7 +4714,8 @@ static int ct_native_twin_call(Compiler *c, int id) {
    (desugar_concat_builtin_version): the version tables bind it to that
    version, whose parameter its argument types. */
 static int ct_builtin_own(Compiler *c, int id, const char *name, unsigned flags) {
-  if (id < 0 || !name || (flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) || !cplan_builtin_call(c, id) ||
+  /* (no call marked, no read: call_target is asked at every site in every round) */
+  if (!nt_any_builtin_call(c->nt) || id < 0 || !name || (flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) || !cplan_builtin_call(c, id) ||
       cplan_main_text_call(c, id) || nt_int(c->nt, id, "concat_builtin_version", 0)) return 0;
   const char *own = nt_str(c->nt, id, "name"), *orig = nt_str(c->nt, id, "orig_name");
   return ((own && sp_streq(own, name)) || (orig && sp_streq(orig, name))) && !ct_native_twin_call(c, id);

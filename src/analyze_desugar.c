@@ -12478,7 +12478,7 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
     /* the builtin identity: a program's own `equal?` (on Object, Module,
        Class or the class itself) does not answer the test */
     int eq = fwd_new_call(nt, test, "equal?", nt_clone_subtree(nt, k));
-    nt_node_set_int(nt, eq, "builtin_only", 1);
+    nt_mark_builtin_call(nt, eq);
     nt_node_set_ref(nt, iff, "predicate", eq);
     nt_node_set_ref(nt, iff, "statements", st);
     if (!first) nt_node_set_ref(nt, cur, "subsequent", iff);
@@ -12841,19 +12841,19 @@ static int raise_kw_only(Compiler *c, int id, int kh) {
   fwd_copy_loc(nt, del, id);
   /* the builtin Hash's key?, delete and empty?: a program's own Hash
      methods do not decide which raise runs */
-  nt_node_set_int(nt, del, "builtin_only", 1);
+  nt_mark_builtin_call(nt, del);
   int e1 = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "empty?", -1);
-  nt_node_set_int(nt, e1, "builtin_only", 1);
+  nt_mark_builtin_call(nt, e1);
   int ce = raise_kw_split_if(nt, e1, ar, on_t);
   int cst = nt_new_node(nt, "StatementsNode"), cb[2] = { del, ce };
   nt_node_set_arr(nt, cst, "body", cb, 2);
   int cpar = fwd_new_node_like(nt, id, "ParenthesesNode");
   nt_node_set_ref(nt, cpar, "body", cst);
   int e2 = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "empty?", -1);
-  nt_node_set_int(nt, e2, "builtin_only", 1);
+  nt_mark_builtin_call(nt, e2);
   int ne = raise_kw_split_if(nt, e2, bare, on_t2);
   int has = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "key?", raise_kw_split_sym(nt, "cause"));
-  nt_node_set_int(nt, has, "builtin_only", 1);
+  nt_mark_builtin_call(nt, has);
   stm[ns++] = raise_kw_split_if(nt, has, cpar, ne);
   int ob = nt_new_node(nt, "StatementsNode");
   nt_node_set_arr(nt, ob, "body", stm, ns);
@@ -23742,7 +23742,7 @@ int desugar_inherited_aliases(Compiler *c) {
         }
         nt_node_set_str(nt, call, "name", odb);
         nt_node_set_ref(nt, call, "receiver", self);
-        nt_node_set_int(nt, call, "builtin_only", 1);
+        nt_mark_builtin_call(nt, call);
         int bd = fwd_new_node_like(nt, s, "StatementsNode");
         nt_node_set_arr(nt, bd, "body", &call, 1);
         nt_node_set_str(nt, fd, "name", nwb);

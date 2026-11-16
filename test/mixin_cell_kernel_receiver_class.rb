@@ -176,6 +176,38 @@ class LateCondSub; include ::Kernel; end
 show { LateCondSub.new.t }
 show { LateCond.new.t }
 
+# a subclass that defines the name itself: its own method answers, whatever Kernel says
+class OwnName < BasicObject
+  def self.mix = include(::Kernel)
+  def t = respond_to_missing?(:x, false)
+end
+class OwnNameSub < OwnName
+  def respond_to_missing?(n, p) = :sub_own
+end
+class OwnNameDeep < OwnNameSub; end
+class OwnNameMiss < OwnName
+  def method_missing(n, *a) = [:miss, n]
+  def respond_to_missing?(n, p) = :miss_own
+end
+show { OwnNameSub.new.t }
+show { OwnNameDeep.new.t }
+show { OwnNameMiss.new.t }
+show { OwnName.new.t }
+
+# an undef of the name below the subclass ends the lookup there
+class OwnUndef < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class OwnUndefSub < OwnUndef
+  def respond_to_missing?(n, p) = :sub_own
+end
+class OwnUndefLeaf < OwnUndefSub
+  undef_method :respond_to_missing?
+end
+show { OwnUndefSub.new.t }
+show { OwnUndefLeaf.new.t }
+
 # a subclass's method_missing made in a reopening is not there before it runs
 class LateMiss < BasicObject
   include ::Kernel if ::ARGV.size == 3

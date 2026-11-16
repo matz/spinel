@@ -1919,9 +1919,9 @@ static int ver_kern_test(Compiler *c, const VerIds *cells) {
   free(arm); free(sel);
   return test;
 }
-/* What a Kernel guard asks of the classes below the holder cls: the call id of name, the ncells
+/* What a Kernel guard asks of the classes below the holder cls: the call id of name (how: 2 for a super), the ncells
    cells cls's chain reads, cls's method_missing mm, and the parent map pm of the nodes the guards leave */
-typedef struct { int id, cls, ncells, mm; const char *name; const int *pm; } VerKernSelf;
+typedef struct { int id, cls, ncells, mm, how; const char *name; const int *pm; } VerKernSelf;
 /* `case when self.instance_of?(D) then <arm(D)> ... else els end`, with an arm for each class D below x->cls that arm
    gives a node for; els where it gives none */
 static int ver_kern_by_self(Compiler *c, const VerKernSelf *x, int (*arm)(Compiler *c, const VerKernSelf *x, int d), int els) {
@@ -1947,14 +1947,23 @@ static int ver_def_in_reopening(Compiler *c, int mi, const int *pm) {
     for (int i = 0; i < nb; i++) if (a == o[i].body) return o[i].node != made;
   return 0;
 }
-/* The test of self's Kernel where self is a D (ver_kern_by_self; the holder's own is the else): true where D surely
-   has Kernel (elab_class_kernel: an include in its body, or in a module it includes, that surely runs); else the test of the cells
+/* Does a call of x->name on a D find a method of its own, below x->cls, which the holder's chain does not hold: CRuby
+   calls it, whatever Kernel says (not a super, which looks above the holder's method; not one behind an undef of the
+   name, where the lookup ends; not one a reopening makes) */
+static int ver_kern_own(Compiler *c, const VerKernSelf *x, int d) {
+  int own = x->how != 2 ? comp_method_in_chain(c, d, x->name, NULL) : -1, oc = own >= 0 ? c->scopes[own].class_id : -1;
+  return oc >= 0 && oc != x->cls && is_descendant(c, oc, x->cls) && is_descendant(c, d, oc) &&
+         !comp_is_undeffed_in_chain(c, d, x->name) && !ver_def_in_reopening(c, own, x->pm);
+}
+/* The test of self's Kernel where self is a D (ver_kern_by_self; the holder's own is the else): true where D finds a
+   method of its own (ver_kern_own), whose call the guard's then arm makes, or where D surely has Kernel
+   (elab_class_kernel: an include in its body, or in a module it includes, that surely runs); else the test of the cells
    D's chain reads (ver_kern_cells), cls's among them, where it reads more: a class method's include run on D, an include
    under a condition in D's body or a module's, a module of D's with a cell of its own; none where D reads what cls reads */
 static int ver_kern_test_arm(Compiler *c, const VerKernSelf *x, int d) {
   VerIds dc = { NULL, 0, 0 };
   int t = -1;
-  if (elab_class_kernel(c, d) == KERN_HAS) t = nt_new_node((NodeTable *)c->nt, "TrueNode");
+  if (ver_kern_own(c, x, d) || elab_class_kernel(c, d) == KERN_HAS) t = nt_new_node((NodeTable *)c->nt, "TrueNode");
   else if (ver_kern_cells(c, d, &dc) > x->ncells) t = ver_kern_test(c, &dc);
   free(dc.v);
   return t;
@@ -1981,12 +1990,12 @@ static int ver_kern_mm_call(Compiler *c, int id, const char *name) {
 static void ver_pin(Compiler *c, int node, int scope, int vis);
 /* The guard's arm where no cell is set and self is a D (ver_kern_by_self; the holder's, its method_missing or the raise,
    is the else): D's own method_missing where it is another than the holder's, called with a copy of the call's operands
-   and block and pinned to it (ver_pin), as the holder's chain does not hold it; none where D's method_missing is made
-   in a reopening, which the record counts from the
+   and block and pinned to it (ver_pin), as the holder's chain does not hold it; none where D finds a method of its own
+   (the test's arm is true there), or where D's method_missing is made in a reopening, which the record counts from the
    start, though the call may run ahead of it */
 static int ver_kern_mm_arm(Compiler *c, const VerKernSelf *x, int d) {
   int dm = cplan_mm_method(c, -1, d, 0), call;
-  if (dm < 0 || dm == x->mm || ver_def_in_reopening(c, dm, x->pm)) return -1;
+  if (dm < 0 || dm == x->mm || ver_kern_own(c, x, d) || ver_def_in_reopening(c, dm, x->pm)) return -1;
   ver_pin(c, call = ver_kern_mm_call(c, x->id, x->name), dm, 0);
   return call;
 }
@@ -2008,7 +2017,7 @@ static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int
     els = nops ? disp_ahead(nt, ops, nops, raise) : raise;
     free(ops);
   }
-  VerKernSelf x = { id, cls, cells.n, mm, name, pm };
+  VerKernSelf x = { id, cls, cells.n, mm, how, name, pm };
   if (how != 2) els = ver_kern_by_self(c, &x, ver_kern_mm_arm, els);
   int ifn = disp_choose(nt, ver_kern_by_self(c, &x, ver_kern_test_arm, ver_kern_test(c, &cells)), id, els);
   nt_replace_child(nt, par, id, ifn);

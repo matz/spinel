@@ -169,8 +169,7 @@ static int emit_exc_detailed_options(Compiler *c, int id, int recv, int argc, co
 const char *isa_exc_class_name(Compiler *c, int arg, char *buf, size_t bufsz) {
   const char *qn = isa_const_qualname(c->nt, arg, buf, bufsz);
   if (!qn) return NULL;
-  int qi = comp_class_index(c, qn);
-  if (qi < 0) qi = const_node_class_index(c, arg);
+  int qi = const_node_class_index(c, arg);
   const char *rn = qi >= 0 ? class_ruby_name(c, qi) : NULL;
   if (!rn) return qn;
   snprintf(buf, bufsz, "%s", rn);

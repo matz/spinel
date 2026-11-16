@@ -12003,7 +12003,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        the existing TY_IO dispatch. */
     if (nm && (sp_streq(nm, "STDOUT") || sp_streq(nm, "STDERR") ||
                sp_streq(nm, "STDIN"))) return TY_IO;
-    if (nm && comp_class_index(c, nm) >= 0) return TY_CLASS;
+    if (nm && const_node_class_index(c, id) >= 0) return TY_CLASS;
     if (nm && is_builtin_class_name(nm)) return TY_CLASS;
     /* an exception class with no cls_id of its own (SystemCallError,
        LoadError) is still a first-class Class value, carried by name */

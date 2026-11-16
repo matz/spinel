@@ -3615,7 +3615,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     if (nm && sp_streq(nm, "STDERR")) { buf_puts(b, "sp_io_stderr()"); return 1; }
     if (nm && sp_streq(nm, "STDIN"))  { buf_puts(b, "sp_io_stdin()"); return 1; }
     if (nm) {
-      int _cidx = comp_class_index(c, nm);
+      int _cidx = const_node_class_index(c, id);
       emit_const_read_open(c, id, NULL, b);
       if (_cidx >= 0) {
         buf_printf(b, "((sp_Class){%d})", _cidx);  /* user class as value: TY_CLASS unboxed */

@@ -22801,22 +22801,26 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         char *cn = strdup(cn0);
         /* find the direct parent name (builtin or user) */
         const char *par = NULL;
+        int pci = -1;   /* (the parent's class, by its superclass node or the table's parent) */
         int sc = class_def_super(nt, c->classes[i].def_node);
         if (sc >= 0) {
           NodeKind sk = nt_kind(c->nt, sc);
-          if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode)
+          if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) {
             par = key_name(c, sc);
+            pci = const_node_class_index(c, sc);
+          }
           /* a builtin exception by its whole path (Errno::ENOENT) */
           const char *bpar = superclass_builtin_exc_name(c, c->nt, sc);
-          if (bpar) par = bpar;
+          if (bpar) { par = bpar; pci = -1; }
         }
-        if (!par && c->classes[i].parent >= 0)
+        if (!par && c->classes[i].parent >= 0) {
           par = c->classes[c->classes[i].parent].name;
+          pci = c->classes[i].parent;
+        }
         /* canonicalize a user parent to its qualified Ruby name so the
            hierarchy walk meets the raised / rescue-arm names (both emitted
            qualified); a builtin parent keeps its runtime name */
         if (par && !is_exc_name(par)) {
-          int pci = comp_class_index(c, par);
           if (pci >= 0) {
             const char *pqn = class_ruby_name(c, pci);
             if (pqn) par = pqn;

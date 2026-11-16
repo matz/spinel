@@ -1426,7 +1426,7 @@ CallPlan cplan_const_user(Compiler *c, int id, int recv, int fresh) {
   CallPlan none;
   cplan_set(&none, -1, -1, UC_NONE, CP_NONE);
   if (!cn || c->nclasses == 0) return none;
-  int ci = comp_class_index(c, cn);
+  int ci = const_node_class_index(c, recv);
   if (ci < 0) return none;
   if (!c->classes[ci].is_native_class && !c->classes[ci].is_builtin_const &&
       (c->n_native_funcs == 0 || comp_native_find(c, cn, nt_str(nt, id, "name")) < 0) &&

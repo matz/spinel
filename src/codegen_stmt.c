@@ -7144,7 +7144,7 @@ int static_isa_cond(Compiler *c, int pred) {
     }
     return ty_matches_class(c, rt, target_name, sp_streq(nm, "instance_of?"));
   }
-  int target = comp_class_index(c, target_name);
+  int target = const_node_class_index(c, av[0]);
   /* Comparable, Enumerable and Math name no class of the table: the includes
      of the class answer for them, as for a user module. */
   int builtin_mod = target < 0 && (sp_streq(target_name, "Comparable") ||
@@ -15849,7 +15849,7 @@ static int rescue_operand_is_class_name(Compiler *c, int op) {
   const char *n = key_name(c, op);
   if (!n || !comp_const(c, n)) return 1;
   /* (a class alias no read reaches before its assignment names its class) */
-  return comp_class_index(c, n) >= 0 || is_builtin_class_name(n) || is_builtin_module_name(n) ||
+  return const_node_class_index(c, op) >= 0 || is_builtin_class_name(n) || is_builtin_module_name(n) ||
          is_builtin_exception_name(n) || const_node_match_class_name(c, op);
 }
 /* Does the runtime give class or module k, or one above it, an exception

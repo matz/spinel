@@ -55750,8 +55750,9 @@ static void an_phase_value_types(Compiler *c) {
       const char *fzn = nt_str(c->nt, id, "name");
       /* `o.clone(freeze: true)` freezes the copy, an instance of o's class:
          any argument may carry freeze: (a keyword, a splat or a run-time
-         value), so a clone with arguments counts as a freeze */
-      int fz_clone = fzn && sp_streq(fzn, "clone") && nt_ref(c->nt, id, "arguments") >= 0;
+         value), so a clone with arguments counts as a freeze -- unless
+         the receiver's class has its own clone (below) */
+      int fz_clone = is_clone_name(fzn) && nt_ref(c->nt, id, "arguments") >= 0;
       if (fzn && (is_freeze_family(fzn) || fz_clone)) {
         int frecv = nt_ref(c->nt, id, "receiver");
         int q = -1;
@@ -55771,6 +55772,7 @@ static void an_phase_value_types(Compiler *c) {
           Scope *fs = comp_scope_of(c, id);
           if (fs && fs->class_id >= 0 && !fs->is_cmethod) q = fs->class_id;
         }
+        if (fz_clone && q >= 0 && q < c->nclasses && comp_method_in_chain(c, q, fzn, NULL) >= 0) q = -1;
         /* the receiver (or self) may be an instance of a subclass: a
            freeze in Base#initialize freezes a Child's instance too, so
            Child's ivar stores take the guard as well */

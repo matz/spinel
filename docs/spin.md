@@ -588,8 +588,12 @@ ctypes, a Swift or C# binding) links it over the position-independent
 runtime: `make runtime-pic` builds `lib/libspinel_rt_pic.a`, and
 `cc -fPIC -shared -Ilib kernel.c lib/libspinel_rt_pic.a -lm -o libkernel.so`
 builds the object. The regular `libspinel_rt.a` is built for an executable,
-and a shared link refuses its relocations. The threaded runtime has no such
-archive yet.
+and a shared link refuses its relocations. A library that uses threads
+links `lib/libspinel_rt_mt_pic.a`, which `make runtime-pic` builds too, and
+is compiled with `-DSP_THREADS -fPIC` (not the `-ftls-model=initial-exec`
+an executable takes: a loaded object gets no room for this runtime's
+thread-local state in that model). Its thread-local reads cost more there:
+an allocating entry ran about 25% more instructions than in an executable.
 
 An entry can answer an object of the program (declare its return `untyped`
 in inline RBS, and the host gets it boxed). `--ext-class C,...` (a class

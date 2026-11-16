@@ -916,9 +916,8 @@ $(SP_RT_MT_NOGC_LIB): $(patsubst lib/regexp/%.c,build/mt-nogc/regexp/%.o,$(RE_SR
 # C one through dlopen. The regular archive is built for an executable, and
 # `cc -shared` refuses its relocations ("relocation R_X86_64_PC32 against
 # symbol ... can not be used when making a shared object; recompile with
-# -fPIC"). Opt-in, as the C extension runtime is: `make runtime-pic`. The
-# threaded runtime has no such variant: its TLS is initial-exec, which an
-# object a host dlopens may not get room for.
+# -fPIC"). Opt-in, as the C extension runtime is: `make runtime-pic` builds
+# it and the threaded one below.
 SP_RT_PIC_LIB = lib/libspinel_rt_pic.a
 PIC_DEF = -fPIC
 
@@ -935,6 +934,33 @@ $(SP_RT_PIC_LIB): $(patsubst lib/regexp/%.c,build/pic/regexp/%.o,$(RE_SRC)) $(ad
 
 .PHONY: runtime-pic
 runtime-pic: $(SP_RT_PIC_LIB)
+
+# The threaded runtime the same way, and a library that uses threads is
+# compiled with -DSP_THREADS -fPIC to link it. Not -ftls-model=initial-exec,
+# as MT_DEF has it: an object a host dlopens gets only the loader's small
+# static TLS surplus for that model, and this runtime's TLS is about 600 KB
+# a thread (sp_gc_roots alone is 512 KB). The general-dynamic model -fPIC
+# implies costs a call to __tls_get_addr per function that reads TLS: an
+# allocating entry ran about 25% more instructions than the same kernel in
+# an executable. TLSDESC (-mtls-dialect=gnu2) ran more still on a module
+# loaded with dlopen, and hidden TLS symbols saved 3%. MT_PIC_TLS passes a
+# dialect of one's own.
+SP_RT_MT_PIC_LIB = lib/libspinel_rt_mt_pic.a
+MT_PIC_TLS ?=
+MT_PIC_DEF = -DSP_THREADS -fPIC $(MT_PIC_TLS)
+
+build/mt-pic/regexp/%.o: lib/regexp/%.c $(RE_HDRS)
+	@mkdir -p $(@D)
+	$(CC) -c $(COPT) $(SEC_FLAGS) $(RE_CASE_FLAGS) $(MT_PIC_DEF) -Ilib/regexp -Ilib/regexp/shim $< -o $@
+
+build/mt-pic/%.o: lib/%.c $(RT_HDRS)
+	@mkdir -p $(@D)
+	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(MT_PIC_DEF) -Ilib -Ilib/regexp -Ilib/regexp/shim $< -o $@
+
+$(SP_RT_MT_PIC_LIB): $(patsubst lib/regexp/%.c,build/mt-pic/regexp/%.o,$(RE_SRC)) $(addprefix build/mt-pic/,$(addsuffix .o,$(RT_MEMBERS))) $(PLATFORM_MT_OBJ)
+	$(AR_DET) ar rcs $@ $^
+
+runtime-pic: $(SP_RT_MT_PIC_LIB)
 
 # ---- ThreadSanitizer build of the threaded runtime (Phase 1 validation) ----
 # The gate links a threaded test against the mt archive, as the driver does,
@@ -1777,7 +1803,7 @@ test-corpus-summary: test-corpus-results
 # one whose at_exit hooks run when the host exits, not as its init returns,
 # and one whose entry calls a Struct's `new` the load redefined, and an
 # --ext-entry list longer than 2048 bytes exports every method it names.
-ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SPINEL_TIMEOUT)
+ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC_LIB) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map \
 	  --ext-init Init_ext_kernel \
@@ -1829,6 +1855,18 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SPINEL_TIMEO
 	    printf '42\np0,p1,p2\np0,p1,p2,p3,p4\nraised ArgumentError: not positive: -3\nok 7\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (the shared object's host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (pic host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/threads.rb -c --no-line-map --ext-init Init_ext_threads \
+	      --ext-entry ExtThreads.par,ExtThreads.bg -o "$$tmp/tp.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (threads emission for a shared object)"; ok=0; \
+	  elif ! $(CC) -DSP_THREADS -fPIC -shared -O1 -w -Ilib -I"$$tmp" "$$tmp/tp.c" $(SP_RT_MT_PIC_LIB) $(LDFLAGS) -lm -lpthread -o "$$tmp/libtp.so" 2>"$$tmp/cc.err"; then \
+	    echo "ext-test: FAIL (the threaded library did not link as a shared object over $(SP_RT_MT_PIC_LIB))"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
+	  elif $(CC) -O1 -w test/ext/threads_pic_host.c $(LDFLAGS) -ldl -o "$$tmp/tphost" 2>"$$tmp/cc.err"; then \
+	    $(TIMEOUT10) "$$tmp/tphost" "$$tmp/libtp.so" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '60\n150\n1\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (the threaded shared object's host output mismatch, or it hung, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (threads pic host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/late_new.rb -c --no-line-map --ext-init Init_ext_late_new \

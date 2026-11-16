@@ -923,7 +923,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
          the operands ran, and only for a cause that cannot hold nil. */
       int first_exc_val = !first_const && ac > 0 && repr_of(c, av[0]).exc;
       int first_ok = first_const ? (first_xc >= 0 ? (class_is_exc_subclass(c, first_xc) &&
-                                                       cplan_new_initialize(c, id, first_xc, NULL) < 0)
+                                                       cplan_hook_target(c, id, first_xc, "initialize", NULL) < 0)
                                                   : (first_cn && is_exc_name(first_cn)))
                    : (ac == 1 && first_ty == TY_STRING) || (first_exc_val && cause_never_nil);
       int cause_bad = !cause_exc && first_ok;
@@ -1013,7 +1013,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
         }
         xc = -1;
       }
-      int ic = (xc >= 0 && class_is_exc_subclass(c, xc)) ? cplan_new_initialize(c, id, xc, NULL) : -1;
+      int ic = (xc >= 0 && class_is_exc_subclass(c, xc)) ? cplan_hook_target(c, id, xc, "initialize", NULL) : -1;
       if (xc >= 0 && ic >= 0 && c->scopes[ic].reachable && (!ctor_new_runs(c, xc, ic) || ctor_needs_self_defaults(c, ic, 0))) {
         /* a default reading the instance runs on the allocated object, as
            the same `.new` does (emit_ctor_alloc_init), and a version the
@@ -1076,7 +1076,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
       }
       int ic = -1;
       if (xc >= 0 && class_is_exc_subclass(c, xc))
-        ic = cplan_new_initialize(c, id, xc, NULL);
+        ic = cplan_hook_target(c, id, xc, "initialize", NULL);
       if (xc >= 0 && ic >= 0 && c->scopes[ic].reachable && (!ctor_new_runs(c, xc, ic) || ctor_needs_self_defaults(c, ic, 1))) {
         /* a default the message leaves reading the instance runs on the
            allocated object, as for `Cls.new(msg)`, and a version the

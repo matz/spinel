@@ -2593,24 +2593,24 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
   }
   return ct_implied_at(c, id, cls, name, m);
 }
-/* The answers of cplan_new_initialize, kept by (site, class) for the
+/* The answers of cplan_hook_target, kept by (site, class, name) for the
    record, the method table and the version entries as they stand
    (elab_stamp, nscopes, nclasses, nver_entries), and dropped with the
    version memos (ver_memo_drop: a fact the windows read changed, a block
    newly kept): every reader of a site asks it, and each ask read the
    site's window from the record. */
-struct NewSites { struct NewSiteSlot { int id, ci, vi; MethodLookup m; } *slot; int cap, used, nscopes, ncls, nent; ElabStamp stamp; };
+struct NewSites { struct NewSiteSlot { int id, ci, vi; const char *name; MethodLookup m; } *slot; int cap, used, nscopes, ncls, nent; ElabStamp stamp; };
 void new_sites_free(Compiler *c) {
   if (!c->new_sites) return;
   free(c->new_sites->slot);
   free(c->new_sites);
   c->new_sites = NULL;
 }
-static unsigned new_sites_hash(int id, int ci) {
-  return ver_mix((unsigned)id * 0x9E3779B1u + (unsigned)ci * 0x85EBCA6Bu);
+static unsigned new_sites_hash(int id, int ci, const char *name) {
+  return ver_mix((unsigned)id * 0x9E3779B1u + (unsigned)ci * 0x85EBCA6Bu + sp_strhash(name));
 }
-/* (the slot of (id, ci): the kept answer, or the empty slot it goes in) */
-static struct NewSiteSlot *new_sites_slot(Compiler *c, int id, int ci) {
+/* (the slot of (id, ci, name): the kept answer, or the empty slot it goes in) */
+static struct NewSiteSlot *new_sites_slot(Compiler *c, int id, int ci, const char *name) {
   struct NewSites *m = c->new_sites;
   if (m && (!elab_stamp_same(m->stamp, elab_stamp(c)) || m->nscopes != c->nscopes || m->ncls != c->nclasses || m->nent != c->nver_entries)) {
     new_sites_free(c);
@@ -2631,33 +2631,35 @@ static struct NewSiteSlot *new_sites_slot(Compiler *c, int id, int ci) {
     for (int i = 0; i < m->cap; i++) m->slot[i].id = -1;
     for (int i = 0; i < ocap; i++) {
       if (old[i].id < 0) continue;
-      int j = (int)(new_sites_hash(old[i].id, old[i].ci) & (unsigned)(m->cap - 1));
+      int j = (int)(new_sites_hash(old[i].id, old[i].ci, old[i].name) & (unsigned)(m->cap - 1));
       while (m->slot[j].id >= 0) j = (j + 1) & (m->cap - 1);
       m->slot[j] = old[i];
     }
     free(old);
   }
-  int j = (int)(new_sites_hash(id, ci) & (unsigned)(m->cap - 1));
-  while (m->slot[j].id >= 0 && (m->slot[j].id != id || m->slot[j].ci != ci)) j = (j + 1) & (m->cap - 1);
+  int j = (int)(new_sites_hash(id, ci, name) & (unsigned)(m->cap - 1));
+  while (m->slot[j].id >= 0 && (m->slot[j].id != id || m->slot[j].ci != ci || !sp_streq(m->slot[j].name, name))) j = (j + 1) & (m->cap - 1);
   return &m->slot[j];
 }
-/* Does call id, a construction of class ci, run where the record proves no
-   initialize of the program's on ci's chain: at its point (elab_call_method,
-   which also proves no code the record cannot order supplies one), or at
-   each state of its window, where it may run more than once (as
-   ct_every_span asks it), with no code the record has not seen; and not
-   where ci is not opened yet (elab_class_live_at), as a `new` there cannot
-   build it */
-static int new_init_absent(Compiler *c, int id, int ci) {
+/* Does call id, a construction of class ci (or a copy of an instance of
+   it, for initialize_copy), run where the record proves no `name` (initialize
+   or initialize_copy) of the program's on ci's chain: at its point
+   (elab_call_method, which also proves no code the record cannot order
+   supplies one), or at each state of its window, where it may run more than
+   once (as ct_every_span asks it), with no code the record has not seen; and
+   not where ci is not opened yet (elab_class_live_at), as a `new` there
+   cannot build it */
+static int new_init_absent(Compiler *c, int id, int ci, const char *name) {
   const LrDef *ds[2];
-  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, "initialize", 0, 0), absent = at == ELAB_NO;
+  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, name, 0, 0), absent = at == ELAB_NO;
   if (at == ELAB_UNKNOWN && !elab_runs_unseen(c))
-    absent = elab_call_span(c, id, ci, "initialize", 0, ct_after_point(c, id), NULL, ds, 2) == 1 && !ds[0];
+    absent = elab_call_span(c, id, ci, name, 0, ct_after_point(c, id), NULL, ds, 2) == 1 && !ds[0];
   absent = absent && elab_class_live_at(c, ci, 1, elab_point_of(c, id));
   if (framed) elab_plan_leave(c);
   return absent;
 }
-/* See call_plan.h. Class#new's initialize: none where the record proves
+/* See call_plan.h. Class#new's initialize, or the initialize_copy a dup or
+   clone runs on the copy (name): none where the record proves
    none there (new_init_absent: BasicObject's runs, or the builtin
    exception's or record's own), else the window's version (the steps of
    cplan_implied_target past its row); an entry is not taken, as none is
@@ -2667,37 +2669,40 @@ static int new_init_absent(Compiler *c, int id, int ci) {
    node is the frame where a reader asks it of site id; an answer that
    stands on the table for want of a proof is reported as call_target's
    are. */
-int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml) {
+int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
+  int dc = -1;
   mtab_enter(c);
-  int tm = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
-  int undef = tm >= 0 && id >= 0 && comp_is_undeffed_in_chain(c, ci, "initialize");
+  int tm = ci >= 0 ? comp_method_in_chain(c, ci, name, &dc) : -1;
+  int undef = tm >= 0 && id >= 0 && comp_is_undeffed_in_chain(c, ci, name);
   mtab_leave(c);
-  *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = -1 };
+  *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = dc };
   if (tm < 0 || id < 0 || undef) return tm;
   /* (one version on the chain: the table's, the only one a site meets
      where there is one) */
-  int first = 0, body = 0, late = 0, nv = ver_chain_count(c, ci, 0, "initialize", &first, &body, &late);
-  struct NewSiteSlot *e = new_sites_slot(c, id, ci);
+  int first = 0, body = 0, late = 0, nv = ver_chain_count(c, ci, 0, name, &first, &body, &late);
+  struct NewSiteSlot *e = new_sites_slot(c, id, ci, name);
   if (e->id >= 0) { *m = e->m; return e->vi; }
   /* (a site in a block the record does not place, kept, assumed or given
      to a call it cannot read, may run on either side of a reopening: it
      cannot tell, and keeps the table's; so does one where the record holds
      no version of the table's method, nv 0, as for a def a method body
      makes: it may be made before the site runs) */
-  int vi = -1, unplaced = elab_in_unplaced_block(c, id), absent = !unplaced && nv != 0 && new_init_absent(c, id, ci);
+  int vi = -1, unplaced = elab_in_unplaced_block(c, id), absent = !unplaced && nv != 0 && new_init_absent(c, id, ci, name);
   if (absent) *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   else if (nv == 1) vi = tm;
-  else if (unplaced) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNPLACED, .def_class = -1 };
-  else vi = ct_implied_at(c, id, ci, "initialize", m);
+  else if (unplaced) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNPLACED, .def_class = dc };
+  else vi = ct_implied_at(c, id, ci, name, m);
   if (!absent && (vi < 0 || m->kind != ML_METHOD)) {
-    if (m->kind != ML_TABLE) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_MANY, .def_class = -1 };
+    if (m->kind != ML_TABLE) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_MANY, .def_class = dc };
     vi = tm;
-    if (g_method_table_check && nv != 1) mtab_table(c, id, ci, 0, "initialize", m->why);
+    if (g_method_table_check && nv != 1) mtab_table(c, id, ci, 0, name, m->why);
   }
+  /* (the class that holds the method the answer is: the table's, or the version's own) */
+  if (vi >= 0) m->def_class = vi == tm ? dc : c->scopes[vi].class_id;
   /* (asking may have grown the table or rebuilt the record: the slot again) */
-  e = new_sites_slot(c, id, ci);
-  if (e->id < 0) { *e = (struct NewSiteSlot){ id, ci, vi, *m }; c->new_sites->used++; }
+  e = new_sites_slot(c, id, ci, name);
+  if (e->id < 0) { *e = (struct NewSiteSlot){ id, ci, vi, name, *m }; c->new_sites->used++; }
   return vi;
 }
 /* The exception class a Kernel#raise id builds, as its lowering names it
@@ -2722,7 +2727,7 @@ static int ct_raise_class(Compiler *c, int id, int *val) {
 /* See call_plan.h. The class ct_raise_class names. */
 int cplan_raise_initialize(Compiler *c, int id) {
   int val, xc = ct_raise_class(c, id, &val);
-  return xc >= 0 ? cplan_new_initialize(c, id, xc, NULL) : -1;
+  return xc >= 0 ? cplan_hook_target(c, id, xc, "initialize", NULL) : -1;
 }
 /* See call_plan.h. A class not opened yet at the last statement of the
    site's window (elab_class_live_at) is opened at none of them. */
@@ -2734,7 +2739,7 @@ int cplan_new_arm_initialize(Compiler *c, int id, int ci) {
     live = w.from.region != w.to.region || elab_class_live_at(c, ci, 1, (LoadPoint){ w.to.region, w.to.seq - 1, -1 });
   }
   if (framed) elab_plan_leave(c);
-  return cplan_new_initialize(c, live ? id : -1, ci, NULL);
+  return cplan_hook_target(c, live ? id : -1, ci, "initialize", NULL);
 }
 /* The window step of cplan_implied_target, for a call node id makes */
 static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m) {
@@ -2850,7 +2855,7 @@ static void new_census(Compiler *c, struct NewInits *m) {
   }
 }
 /* Does a site of the census build an instance of class k where the plan
-   answers no initialize of the program's (cplan_new_initialize: one that
+   answers no initialize of the program's (cplan_hook_target: one that
    comes later)? Such an instance has none of what k's initialize sets. */
 static int new_census_none(Compiler *c, struct NewInits *m, int k) {
   if (m->nsites < 0) new_census(c, m);
@@ -2858,7 +2863,7 @@ static int new_census_none(Compiler *c, struct NewInits *m, int k) {
     const struct NewSite *s = &m->sites[i];
     int builds = s->ci == NEW_ANY ? 1 : s->ci == NEW_ANY_EXC ? class_is_exc_subclass(c, k) :
                  k == s->ci || (s->own && is_descendant(c, k, s->ci));
-    if (builds && cplan_new_initialize(c, s->id, k, NULL) < 0) return 1;
+    if (builds && cplan_hook_target(c, s->id, k, "initialize", NULL) < 0) return 1;
   }
   return 0;
 }
@@ -5845,12 +5850,12 @@ static int cplan_new_class(Compiler *c, int id, int *own) {
 /* The initialize methods a builtin `new` runs that builds class ci, or with
    own an instance of ci or of any subclass (into out, at most CPT_MAX;
    CPT_UNKNOWN past it): those the plan answers where the construction id
-   runs (cplan_new_initialize), the table's for id -1. */
+   runs (cplan_hook_target), the table's for id -1. */
 static int ct_class_initializers(Compiler *c, int id, int ci, int own, int *out) {
   int n = 0;
   for (int k = ci; ci >= 0 && k < c->nclasses; k++) {
     if (k != ci && (!own || !is_descendant(c, k, ci))) continue;
-    int mi = cplan_new_initialize(c, id, k, NULL), dup = 0;
+    int mi = cplan_hook_target(c, id, k, "initialize", NULL), dup = 0;
     for (int j = 0; j < n; j++) dup |= out[j] == mi;
     if (mi < 0 || dup) continue;
     if (n == CPT_MAX) return CPT_UNKNOWN;
@@ -6087,6 +6092,108 @@ TyKind cplan_poly_operator_ret(Compiler *c, int id) {
   return found ? TY_BOOL : TY_UNKNOWN;
 }
 
+/* Is class method scope mi of class p a copy of an ancestor's method (the
+   one an inherited method reading class-level ivars gets per subclass, see
+   specialize_inherited_cls_new) rather than a method p's own body defines?
+   The copy keeps the original's def node, which an ancestor of p holds: the
+   original itself shares the node with the copies its subclasses get. */
+static int cmethod_is_inherited_copy(Compiler *c, int mi, int p) {
+  for (int o = 1; o < c->nscopes; o++) {
+    int oc = c->scopes[o].class_id;
+    if (o != mi && c->scopes[o].is_cmethod && c->scopes[o].def_node == c->scopes[mi].def_node &&
+        oc >= 0 && oc != p && is_descendant(c, p, oc)) return 1;
+  }
+  return 0;
+}
+/* Does class k answer call `call`'s `name` by a `class << self` accessor?
+   The lookup walks k's singleton class and then its superclasses', and the
+   first class that declares the accessor or defines a class method of the
+   name answers: the accessor wins over a `def self.label` in a superclass,
+   and a class method defined below the accessor's class is ahead of it. A
+   class's lists hold the accessors its ancestors declare as well, so what a
+   class declares is read from its declarations (comp_sg_accessor_own), the
+   reader `x` and the writer `x=` apart: a class can declare one half and
+   inherit the other. A per-subclass copy of an ancestor's class method is
+   the ancestor's. */
+int cplan_cls_own_sg_answers(Compiler *c, int call, int k, const char *name, int argc) {
+  /* (a class that declares no singleton accessor answers by none: asked of every class at every
+     site, so the cheap test comes first) */
+  if (!c->classes[k].nsg_readers && !c->classes[k].nsg_writers) return 0;
+  char base[256];
+  int setter = setter_base_name(name, base, sizeof base);
+  if (setter ? argc != 1 : argc != 0) return 0;
+  ClassInfo *cls = &c->classes[k];
+  if (is_builtin_reopen(cls->name)) return 0;
+  const char *rn = setter ? base : comp_resolve_cm_alias_at(c, k, name, NULL);
+  if (!rn) rn = name;
+  if (setter ? !comp_is_sg_writer(cls, base) : !comp_is_sg_reader(cls, rn)) return 0;
+  char wn[260];
+  snprintf(wn, sizeof wn, "%s=", base);
+  for (int p = k, guard = 0; p >= 0 && guard < 256; p = c->classes[p].parent, guard++) {
+    ClassInfo *pc = &c->classes[p];
+    int pmi = call_target(c, call, p, name, CT_OWN | CT_CMETHOD, NULL);
+    if (pmi >= 0 && !cmethod_is_inherited_copy(c, pmi, p)) return 0;
+    if ((setter ? comp_is_sg_writer(pc, base) : comp_is_sg_reader(pc, rn)) &&
+        comp_sg_accessor_own(c, p, setter ? wn : rn)) return 1;
+    if (p == pc->parent) break;
+  }
+  return call_target(c, call, k, name, CT_CMETHOD, NULL) < 0;
+}
+/* Whether a class can be a run-time class value: it is named by reached
+   code, or it is an ancestor of one that is (`superclass` reaches it). */
+int cplan_class_value_possible(Compiler *c, int k) {
+  if (k < 0 || !c->classes[k].unreferenced) return 1;
+  for (int j = 0; j < c->nclasses; j++) {
+    if (c->classes[j].unreferenced) continue;
+    for (int x = c->classes[j].parent; x >= 0; x = c->classes[x].parent)
+      if (x == k) return 1;
+  }
+  return 0;
+}
+/* See call_plan.h. The arms of the class-valued dispatch emit_call_class_arms writes for a class
+   method called on a Class value held in a variable, a parameter or a constant that names no one
+   class: each class a value may hold that answers the name by a class method (not by a
+   `class << self` accessor, whose own arms the emitter writes), and that class method. *lower says
+   how the call is lowered: as the switch of those arms (no block at the call, and no candidate
+   that yields, takes a block or has a rest the arm cannot pack), or, where a candidate takes the
+   block as a proc, by the proc-form dispatch (CLS_LOWER_PROC; the emitter takes it on a boxed
+   receiver). */
+int cplan_cls_value_arms(Compiler *c, int id, const char *name, int argc, int **cls, int **mi, unsigned *lower) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  *cls = *mi = NULL;
+  if (lower) *lower = 0;
+  /* (only a Class-typed receiver has class arms, and a constant that names one class is a direct
+     call: no arm) */
+  NodeKind rk = recv >= 0 ? nt_kind(c->nt, recv) : NK_NONE;
+  if (recv < 0 || comp_ntype(c, recv) != TY_CLASS || !class_recv_is_dynamic(c, recv)) return 0;
+  if ((rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && const_node_class_index(c, recv) >= 0) return 0;
+  int n = 0, veto = nt_ref(c->nt, id, "block") >= 0;
+  unsigned low = 0;
+  if (!(*cls = malloc(sizeof(int) * (size_t)(c->nclasses + 1))) || !(*mi = malloc(sizeof(int) * (size_t)(c->nclasses + 1)))) {
+    fprintf(stderr, "spinel: out of memory\n");
+    exit(1);
+  }
+  for (int k = 0; k < c->nclasses; k++) {
+    if (cplan_cls_own_sg_answers(c, id, k, name, argc)) continue;
+    int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
+    if (kmi < 0) continue;
+    const Scope *ks = &c->scopes[kmi];
+    if (scope_proc_form_of(c, kmi) >= 0 || (ks->blk_param && ks->blk_param[0] && !ks->yields)) low |= CLS_LOWER_PROC;
+    if (!comp_cv_arm_class(c, k)) continue;
+    /* (a candidate that yields, takes a block, or has a rest the arm cannot pack has no arm the
+       switch can build: it vetoes the switch, as one the call gets wrong in arity does not) */
+    if (ks->yields || (ks->blk_param && ks->blk_param[0]) || (ks->rest_idx >= 0 && !rest_packable_arm(c, (Scope *)ks))) veto = 1;
+    /* (a class no reached code names, and no named class descends from, is no class value: its
+       singleton copy is not compiled, so an arm calling it would dangle; a method copied into
+       each class a value can hold is not emitted itself) */
+    if (!cplan_class_value_possible(c, k) || comp_scope_copied_away(c, kmi)) continue;
+    (*cls)[n] = k;
+    (*mi)[n++] = kmi;
+  }
+  if (!veto) low |= CLS_LOWER_SWITCH;
+  if (lower) *lower = low;
+  return n;
+}
 /* Does method mi take pos_argc positional arguments and the keyword hash
    kwh (-1 for none): the judgement of its dispatch arm and of a call's
    emission (poly_arm_count) */
@@ -6222,17 +6329,15 @@ static int ct_mixed_new_entries(Compiler *c, int id, int *out) {
     }
   }
   for (int i = 0; i < ncls; i++) {
-    int k = cls[i], init[CPT_MAX];
+    int k = cls[i], dup = 0;
     if (comp_class_is_module(c, &c->classes[k]) || call_target(c, -1, k, "new", CT_CMETHOD | CT_SHARED, NULL) >= 0) continue;
-    int ni = ct_class_initializers(c, -1, k, 0, init);
-    if (ni < 0) return CPT_UNKNOWN;
-    for (int j = 0; j < ni; j++) {
-      int dup = 0;
-      for (int q = 0; q < n && !dup; q++) dup = out[q] == init[j];
-      if (dup) continue;
-      if (n == CPT_MAX) return CPT_UNKNOWN;
-      out[n++] = init[j];
-    }
+    /* (the initialize the class's arm of the site runs: the entries are
+       what the arms call, so reachability keeps the versions they name) */
+    int mi = cplan_new_arm_initialize(c, id, k);
+    for (int q = 0; q < n && !dup; q++) dup = out[q] == mi;
+    if (mi < 0 || dup) continue;
+    if (n == CPT_MAX) return CPT_UNKNOWN;
+    out[n++] = mi;
   }
   return n;
 }
@@ -10742,6 +10847,7 @@ static void ver_vcall_twins(Compiler *c) {
     int raise = ver_no_method_raise(c, c->scopes[d].class_id, c->scopes[d].is_cmethod, name, 0, 1);
     nt_node_set_arr(nt, nt_ref(nt, st, "statements"), "body", &raise, 1);
     nt_node_set_int(nt, def, "cond_lone_disp", 0);   /* (the dispatcher's own facts stay its own) */
+    nt_node_set_int(nt, def, "cond_first_arm", 0);
     nt_node_set_int(nt, def, "cond_raise_els", 0);
     nt_node_set_int(nt, def, "cond_twin", 1);   /* (its arms test the dispatcher's selector: no cell of its own, ver_cells_put) */
     /* (a class method's: one of a `class << self` body, a module_function's
@@ -11186,8 +11292,7 @@ static void ver_write_version(NodeTable *nt, const int *par, VerCellsAt *cells, 
   /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
      method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
   if (nt_int(nt, node, "cond_lone_disp", 0)) {
-    NT_FOREACH_KIND(nt, NK_DefNode, d) {
-      if (!nt_int(nt, d, "cond_arm", 0) || nt_int(nt, d, "cond_disp", -1) != node) continue;
+    for (int d = nt_int(nt, node, "cond_first_arm", 0); d > 0; d = nt_int(nt, d, "cond_next_arm", 0)) {
       int ast = ver_write_stmt(nt, par, d);
       if (ast < 0 || par[ast] < 0) continue;
       int acw = ver_cell_once(cells, d, v->cell), avw = vw && ver_cell_once(cells, d, -2 - v->cell);

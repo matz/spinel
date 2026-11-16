@@ -7106,7 +7106,18 @@ static char *mc_version_name(const Scope *s) {
   else memcpy(v, s->name, (size_t)n + 1);
   return v;
 }
+/* A replaced version no call marked reachable has no number and no
+   function: spelled from its name it would be the table's method */
+static int mc_version_unkept(const Scope *s) {
+  return s->replaced && !s->reachable && !s->version_n && !s->main_n && !s->entry && !s->c_name;
+}
 const char *mc_method(Compiler *c, const Scope *s) {
+  /* a call that names one would run the wrong version without a word */
+  if (mc_version_unkept(s)) {
+    fprintf(stderr, "spinel: internal error: a call names the replaced version %s#%s, which no call kept reachable\n",
+            s->class_id >= 0 ? c->classes[s->class_id].name : "main", s->name ? s->name : "?");
+    exit(1);
+  }
   char *name = mc_version_name(s);
   const char *out;
   if (s->c_name) out = mc_ring_setf(c, "sp_%s", s->c_name);
@@ -7254,7 +7265,7 @@ static int mc_find_clash(Compiler *c, int *first, int *later) {
     const Scope *s = i >= 0 ? &c->scopes[i] : NULL;
     const char *nm;
     if (s) {
-      if (!s->name || s->c_name) continue;
+      if (!s->name || s->c_name || mc_version_unkept(s)) continue;   /* (a function nothing emits spells no name) */
       nm = mc_method(c, s);
     } else if (i < -nh) {
       const ClassInfo *ci = &c->classes[-i - 1 - nh];

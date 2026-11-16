@@ -2361,14 +2361,14 @@ static int a_scope_forwards_block_to_poly(Compiler *c, int mi) {
 }
 
 /* `recv.new` (call id) with recv naming a class: 1, with the initialize it
-   runs there in *init (cplan_new_initialize; -1 for none). 0 for any other
+   runs there in *init (cplan_hook_target; -1 for none). 0 for any other
    receiver. */
 static int an_const_new_init(Compiler *c, int id, int recv, int *init) {
   int rk = recv >= 0 ? nt_kind(c->nt, recv) : -1;
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return 0;
   int ci = const_node_class_index(c, recv);
   if (ci < 0) return 0;
-  *init = cplan_new_initialize(c, id, ci, NULL);
+  *init = cplan_hook_target(c, id, ci, "initialize", NULL);
   return 1;
 }
 
@@ -2520,7 +2520,7 @@ static int a_block_call_target(Compiler *c, int id, int roots, int *cls, int *cl
   Scope *cs = comp_scope_of(c, id);
   if (ci >= 0) {
     mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
-    if (mi < 0 && is_new_name(name)) mi = cplan_new_initialize(c, id, ci, NULL);
+    if (mi < 0 && is_new_name(name)) mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   }
   else if (rk == NK_SelfNode && is_new_name(name) && cs && cs->is_cmethod && cs->class_id >= 0 &&
            comp_cmethod_in_chain(c, cs->class_id, "new", NULL) < 0) {
@@ -4800,7 +4800,7 @@ static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, 
 static int ie_forward_target(Compiler *c, int call, int cls, int cm, const char *name, int receiverless, int *rb) {
   if (!name) return -1;
   int mi = cls < 0 ? -1 : call_target(c, call, cls, name, cm ? CT_CMETHOD : 0, NULL);
-  if (mi < 0 && cm && cls >= 0 && is_new_name(name)) mi = cplan_new_initialize(c, call, cls, NULL);
+  if (mi < 0 && cm && cls >= 0 && is_new_name(name)) mi = cplan_hook_target(c, call, cls, "initialize", NULL);
   if (mi < 0 && receiverless) {
     mi = call_target(c, call, -1, name, CT_TOP, NULL);
     if (mi >= 0 && c->scopes[mi].class_id >= 0) mi = -1;
@@ -5229,7 +5229,7 @@ static int ie_new_takes_block(Compiler *c, int id, int recv) {
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? const_node_class_index(c, recv) : -1;
   if (ci < 0) return -1;
   int mi = comp_cmethod_in_chain(c, ci, "new", NULL);
-  if (mi < 0) mi = cplan_new_initialize(c, id, ci, NULL);
+  if (mi < 0) mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   return mi >= 0 && c->scopes[mi].blk_param;
 }
 
@@ -17275,7 +17275,7 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
       else if (nt_kind(nt, recv) == NK_ConstantReadNode) {
         int rci = const_node_class_index(c, recv);
         if (rci >= 0)
-          mi = is_new_name(name) ? cplan_new_initialize(c, id, rci, NULL)
+          mi = is_new_name(name) ? cplan_hook_target(c, id, rci, "initialize", NULL)
                                      : call_target(c, id, rci, name, CT_CMETHOD, NULL);
       }
     }
@@ -19897,7 +19897,7 @@ static int narrow_object_arrays(Compiler *c) {
         if (oa_tmi < 0 && sp_streq(name, "new")) {
           Scope *ncs = comp_scope_of(c, id);
           if (ncs && ncs->is_cmethod && ncs->class_id >= 0)
-            oa_tmi = cplan_new_initialize(c, id, ncs->class_id, NULL);
+            oa_tmi = cplan_hook_target(c, id, ncs->class_id, "initialize", NULL);
         }
       }
       else if (nt_type(nt, recv) &&
@@ -19914,7 +19914,7 @@ static int narrow_object_arrays(Compiler *c) {
            the ivar inside `initialize` narrowed. A class that defines its own
            `self.new` is found above and keeps it. */
         if (oa_tmi < 0 && rci >= 0 && sp_streq(name, "new"))
-          oa_tmi = cplan_new_initialize(c, id, rci, NULL);
+          oa_tmi = cplan_hook_target(c, id, rci, "initialize", NULL);
       }
       else {
         TyKind ort = infer_type(c, recv);
@@ -23129,7 +23129,7 @@ static int an_call_target_mi(Compiler *c, int id) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   if (sp_streq(nm, "new") && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     TyKind ct = comp_ntype(c, id);
-    return ty_is_object(ct) ? cplan_new_initialize(c, id, ty_object_class(ct), NULL) : -1;
+    return ty_is_object(ct) ? cplan_hook_target(c, id, ty_object_class(ct), "initialize", NULL) : -1;
   }
   if (rk == NK_SelfNode) {
     /* by name alone, `run(u) { ... }` at the top level found K#run, a
@@ -29095,7 +29095,7 @@ static void an_call_targets_of(Compiler *c, int u, ACallTargets *t) {
   /* asked of THIS class, not the whole program: a dynamic `new` elsewhere only
      matters where its shape could construct this one */
   if (an_class_dynamic_new_risk(c, cid)) return;
-  int mi = cplan_new_initialize(c, u, cid, NULL);
+  int mi = cplan_hook_target(c, u, cid, "initialize", NULL);
   if (mi < 0 || mi >= c->nscopes) return;
   Scope *m2 = &c->scopes[mi];
   if (!m2->name || m2->class_id < 0 || m2->is_cmethod) return;
@@ -29707,7 +29707,7 @@ static int an_call_targets_scope(Compiler *c, int u, int mi2, Scope *m2) {
   /* the same per-class question an_call_targets_of asks, at the same point:
      the two answer for the same set or the index and the predicate diverge */
   if (an_class_dynamic_new_risk(c, cid)) return 0;
-  return cplan_new_initialize(c, u, cid, NULL) == mi2;
+  return cplan_hook_target(c, u, cid, "initialize", NULL) == mi2;
 }
 
 /* The parameter twin of narrow_locals_from_arrays.
@@ -33485,7 +33485,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
     if (comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
     /* (a `new` in a class method builds self, which may be a subclass: the
        constructor's switch, whose arms run the table's) */
-    int mi = cplan_new_initialize(c, sub ? -1 : u, k, NULL);
+    int mi = cplan_hook_target(c, sub ? -1 : u, k, "initialize", NULL);
     if (mi < 0 || c->scopes[mi].is_cmethod) continue;
     int dup = 0;
     for (int e = 0; e < n && !dup; e++) dup = out[e] == mi;
@@ -34996,7 +34996,7 @@ static int promote_spread_string_args(Compiler *c) {
     int ctor = -1, r = nt_ref(nt, n, "receiver");
     if (sp_streq(nm, "new") && r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
       int ci = key_name(c, r) ? const_node_class_index(c, r) : -1;
-      ctor = ci >= 0 ? cplan_new_initialize(c, n, ci, NULL) : -1;
+      ctor = ci >= 0 ? cplan_hook_target(c, n, ci, "initialize", NULL) : -1;
     }
     int first = ctor >= 0 ? ctor : dyn_scopes_named(c, nm);
     if (!splat && ctor < 0) first = spread_rest_from(c, rest_from, first);
@@ -35114,7 +35114,7 @@ static int fwd_call_target(Compiler *c, int u) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   if (sp_streq(nm, "new") && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     TyKind ct = comp_ntype(c, u);
-    return ty_is_object(ct) ? cplan_new_initialize(c, u, ty_object_class(ct), NULL) : -1;
+    return ty_is_object(ct) ? cplan_hook_target(c, u, ty_object_class(ct), "initialize", NULL) : -1;
   }
   if (rk == NK_SelfNode) {
     Scope *es = comp_scope_of(c, u);
@@ -35739,18 +35739,29 @@ static int scope_yields_inside_lifted_body(Compiler *c, int mi) {
    of `blk.nil?` walked over). The proc form is that arm: its block is the
    real proc, NULL here, which is what `blk.nil?` and a bare `yield` (a
    LocalJumpError) already answer for. */
+/* Does a class method `new` of the program's, whose super reaches Class#new
+   (no user superclass method), build a class (its own or one below) with an
+   initialize that yields, or with keeps set one that holds its block in a
+   parameter? Any version a construction may run counts: the super's
+   block reaches whichever it binds (cplan_new_initializers). */
+static int super_new_init_any(Compiler *c, Scope *s, int keeps) {
+  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, NULL) >= 0) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k != s->class_id && !is_descendant(c, k, s->class_id)) continue;
+    /* (every initialize a construction of k may run: the super's block
+       reaches whichever version it binds) */
+    int ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, k, ms, VER_MAX_ARMS, &whole);
+    for (int i = 0; i < n; i++) {
+      const Scope *im = &c->scopes[ms[i]];
+      if (im->yields || (keeps && im->blk_param && im->blk_param[0])) return 1;
+    }
+  }
+  return 0;
+}
 /* Is there a `new` whose class is only known at run time (`k.new`, a Class
    read out of a container)? Its switch arm calls sp_X_new, which cannot splice
    a yielding initialize the way a constant `X.new` site does, so the class
    needs the clone for its constructor to run the body at all. */
-static int super_new_init_yields(Compiler *c, Scope *s) {
-  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, NULL) >= 0) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    int mi = k == s->class_id || is_descendant(c, k, s->class_id) ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
-    if (mi >= 0 && c->scopes[mi].yields) return 1;
-  }
-  return 0;
-}
 static int pf_dynamic_new(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
@@ -35767,7 +35778,7 @@ static int pf_dynamic_new(Compiler *c) {
     if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return 1;
   }
   for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].class_id >= 0 && super_new_init_yields(c, &c->scopes[s])) return 1;
+    if (c->scopes[s].class_id >= 0 && super_new_init_any(c, &c->scopes[s], 0)) return 1;
   return 0;
 }
 
@@ -35946,7 +35957,7 @@ static char *pf_init_versions(Compiler *c, int n0) {
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
     int ks[VER_MAX_ARMS], nk = new_recv_classes(c, nt_ref(nt, id, "receiver"), ks, VER_MAX_ARMS);
     for (int i = 0; i < nk; i++) {
-      int mi = cplan_new_initialize(c, id, ks[i], NULL);
+      int mi = cplan_hook_target(c, id, ks[i], "initialize", NULL);
       if (mi >= 0 && mi < n0) mark[mi] = 1;
     }
   }
@@ -43334,7 +43345,7 @@ static void mark_nullable_int_locals(Compiler *c) {
       for (int q = 0; q < nloop; q++) {
       int k = every ? q : ks[q];
       if (k < 0 || !(c->classes[k].is_struct || c->classes[k].is_data) ||
-          cplan_new_initialize(c, rk == NK_SelfNode ? -1 : id, k, NULL) >= 0) continue;
+          cplan_hook_target(c, rk == NK_SelfNode ? -1 : id, k, "initialize", NULL) >= 0) continue;
       ClassInfo *ci = &c->classes[k];
       int ca = nt_ref(nt, id, "arguments");
       int an = 0; const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
@@ -43397,7 +43408,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         Scope *bs = comp_scope_of(c, id);
         int bk = bs->def_node >= 0 ? (bs->is_cmethod ? bs->class_id : -1)
                : (c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1);
-        if (bk >= 0) mi = cplan_new_initialize(c, bs->def_node >= 0 ? -1 : id, bk, NULL);
+        if (bk >= 0) mi = cplan_hook_target(c, bs->def_node >= 0 ? -1 : id, bk, "initialize", NULL);
       }
       if (mi < 0 && recv >= 0) {
         TyKind rt = infer_type(c, recv);
@@ -43433,7 +43444,7 @@ static void mark_nullable_int_locals(Compiler *c) {
           const char *cnm = nt_str(nt, id, "name");
           int rci = const_node_class_index(c, recv);
           if (rci >= 0)
-            mi = is_new_name(cnm) ? cplan_new_initialize(c, id, rci, NULL)
+            mi = is_new_name(cnm) ? cplan_hook_target(c, id, rci, "initialize", NULL)
                                       : call_target(c, id, rci, cnm, CT_CMETHOD, NULL);
           /* a class method `new` the class has (`alias_method :new, :civil`
              in `class << self`, or a def) is what the call runs: its
@@ -46880,16 +46891,6 @@ static void an_method_holders_build(Compiler *c, AnMethodHolders *mh) {
       an_method_holders_add(mh, -1, nt_str(nt, id, "name"));
 }
 
-static int super_new_init_keeps_block(Compiler *c, Scope *s) {
-  if (super_new_init_yields(c, s)) return 1;
-  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, NULL) >= 0) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    int mi = k == s->class_id || is_descendant(c, k, s->class_id) ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
-    if (mi >= 0 && c->scopes[mi].blk_param && c->scopes[mi].blk_param[0] && !c->scopes[mi].yields) return 1;
-  }
-  return 0;
-}
-
 /* A node of the graph below: a yielding method, which is spliced where it
    is called. */
 static int ctor_graph_node(Compiler *c, int s) {
@@ -46928,7 +46929,7 @@ static int ctor_graph_target(Compiler *c, int id) {
        its initialize */
     if (sp_streq(name, "new")) {
       t = ci >= 0 ? comp_cmethod_in_chain(c, ci, "new", NULL) : -1;
-      if (t < 0 && ci >= 0) t = cplan_new_initialize(c, recv < 0 || rk == NK_SelfNode ? -1 : id, ci, NULL);
+      if (t < 0 && ci >= 0) t = cplan_hook_target(c, recv < 0 || rk == NK_SelfNode ? -1 : id, ci, "initialize", NULL);
     }
     else if (recv < 0 || rk == NK_SelfNode) t = comp_self_call_mi(c, id, name);
     else if (ci >= 0) t = call_target(c, id, ci, name, CT_CMETHOD, NULL);
@@ -50545,7 +50546,7 @@ static void an_phase_class_structure(Compiler *c) {
               const Scope *pm = to[k] < ns ? &c->scopes[to[k]] : NULL;
               keeps |= pm && pm->blk_param && pm->blk_param[0] && !pm->yields;
             }
-            if (!(n ? keeps : super_new_init_keeps_block(c, s))) continue;
+            if (!(n ? keeps : super_new_init_any(c, s, 1))) continue;
             s->blk_param = strdup("__sblk__");
             LocalVar *sblk = scope_local_intern(s, s->blk_param);
             if (sblk) { lv_set_type(sblk, TY_PROC); sblk->is_param = 1; }
@@ -50851,7 +50852,7 @@ static void an_phase_block_inline(Compiler *c) {
           /* `Klass.new(&b)` with no `def self.new` hands the block to
              initialize, which may store it */
           if (fci >= 0 && fmi < 0 && sp_streq(fn, "new"))
-            fmi = cplan_new_initialize(c, p, fci, NULL);
+            fmi = cplan_hook_target(c, p, fci, "initialize", NULL);
         }
         /* This pass runs before the receiver's type settles, so an unresolved
            receiver falls back to the name: any block-taking method that could
@@ -53942,7 +53943,7 @@ static void an_phase_method_backstops(Compiler *c) {
             if (rt == TY_POLY || rt == TY_UNKNOWN || rt == TY_CLASS) called = 1;
             continue;
           }
-          if (cid >= 0 && cplan_new_initialize(c, id, cid, NULL) == s) called = 1;
+          if (cid >= 0 && cplan_hook_target(c, id, cid, "initialize", NULL) == s) called = 1;
         }
       }
       if (!called) continue;

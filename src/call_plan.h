@@ -337,7 +337,7 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, 
    hold no method scope of (an accessor's), asked only under CT_REACH, the
    record proves the call runs before every version of it
    (ct_before_versions). Any other why on an ML_NONE (0, or UNASKED from
-   cplan_new_initialize) is a none the tables give */
+   cplan_hook_target) is a none the tables give */
 typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD, MLW_VIS } MlWhy;
 typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
@@ -602,9 +602,12 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
    (no row, or an undef on the chain) */
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
-/* The initialize the builtin Class#new runs when node id (a `new` the
+/* The method the builtin runs for node id on class ci: with name
+   "initialize", the initialize Class#new runs when id (a `new` the
    program's `new` does not answer, a `raise K`) builds an instance of
-   class ci: the version the record proves where id runs (*ml ML_METHOD),
+   class ci; with "initialize_copy", the hook a dup or clone id runs on the
+   copy of an instance of ci (no entry is made for it). The version the
+   record proves where id runs (*ml ML_METHOD),
    else the table's method (ML_TABLE); ML_NONE and -1 where ci has no
    initialize of the program's, or the record proves none where id runs (a
    def that comes later): the builtin construction. Every reader of a
@@ -613,10 +616,11 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
    block decisions, ask cplan_new_arm_initialize, which may answer the
    table's for a class no run of the site can build. A reader whose
    receiver is a self in a class method asks with id -1, the table's
-   answer: self may be a class under ci. ml may be NULL. */
-int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml);
+   answer: self may be a class under ci. ml may be NULL; its def_class is
+   the class that holds the method, as comp_method_in_chain gives it. */
+int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLookup *ml);
 /* The initialize the arm for class ci of a `new` on a Class value (call
-   id) runs: the site's (cplan_new_initialize), else the table's where ci
+   id) runs: the site's (cplan_hook_target), else the table's where ci
    is opened at no statement the call may run at (its window): no run
    takes that arm, which keeps the constructor's own */
 int cplan_new_arm_initialize(Compiler *c, int id, int ci);
@@ -638,7 +642,7 @@ int cplan_new_arm_initialize(Compiler *c, int id, int ci);
 int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole);
 /* The initialize a Kernel `raise K` or `raise K, msg` (call id) runs, K a
    constant naming an exception class of the program's: K.new's there
-   (cplan_new_initialize); -1 for any other call */
+   (cplan_hook_target); -1 for any other call */
 int cplan_raise_initialize(Compiler *c, int id);
 /* The to_ary of the program's through which a value of type t converts
    where node `at` takes it apart (the implied to_ary call a row makes on
@@ -755,6 +759,18 @@ int cplan_def_takes_argc(Compiler *c, int mi, int argc);
    binds through the gather, which judges the count there. Codegen's arms
    and the inference of their answer both ask this. */
 int cplan_cls_arm_takes(Compiler *c, int id, int mi, int argc, int splat);
+/* The arms of the class-valued dispatch of a class method call (a Class value held in a variable, a
+   parameter or a constant that names no one class): the classes it has one for into *cls and the
+   class method each calls into *mi (malloc'd, the caller frees; NULL for a direct call), their number.
+   *lower (may be NULL): CLS_LOWER_SWITCH where the call is lowered as the switch of these arms, CLS_LOWER_PROC
+   where a candidate takes the block as a proc. The emitter writes these arms and reachability keeps
+   the versions they name. */
+enum { CLS_LOWER_SWITCH = 1, CLS_LOWER_PROC = 2 };   /* how cplan_cls_value_arms says the call is lowered */
+int cplan_cls_value_arms(Compiler *c, int id, const char *name, int argc, int **cls, int **mi, unsigned *lower);
+/* Can class k be a run-time class value: named by reached code, or an ancestor of one that is */
+int cplan_class_value_possible(Compiler *c, int k);
+/* Does class k answer call `call`'s `name` by a `class << self` accessor, not a class method? */
+int cplan_cls_own_sg_answers(Compiler *c, int call, int k, const char *name, int argc);
 /* Is call id a class body's call on self (receiverless or `self.`) that
    the plan binds to one method of the body's class (UC_CMETH, CP_DIRECT)?
    That binding is the one method the call runs, so reachability follows it

@@ -285,6 +285,11 @@ typedef struct {
   unsigned char arm_vis; /* a version's: the visibility its face arm takes
                             (elab_version_vis, -1 for the run's), plus 2;
                             0 not asked yet */
+  int arm1;             /* a conditional def's dispatcher (cond_lone_disp): the
+                           first of its arms (`name#__condN`, cond_arm) by
+                           node, which runs where its branch does and makes
+                           the method as the dispatcher stands after the
+                           last (lr_cond_first_arm); 0 for any other version */
 } LrDef;
 enum { LR_UNPLACED_LATER = 2 };   /* LrDef.unplaced */
 typedef struct { int node, body; } LrOpen;

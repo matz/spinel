@@ -3043,7 +3043,7 @@ static int local_is_kept_block_param(Compiler *c, Scope *sc, const char *nm) {
     if (sp_streq(mn, "new")) {
       const char *cn = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
       int ci = cn ? const_node_class_index(c, recv) : -1;
-      int si = ci >= 0 ? cplan_new_initialize(c, call, ci, NULL) : -1;
+      int si = ci >= 0 ? cplan_hook_target(c, call, ci, "initialize", NULL) : -1;
       if (si < 0) return 0;
       Scope *d = &c->scopes[si];
       return !d->yields && d->blk_param && d->blk_param[0];
@@ -6477,7 +6477,7 @@ static int bind_dynamic_new_initializers(Compiler *c, int call_id) {
   int *seen = (int *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(int));
   for (int k = 0; k < c->nclasses; k++) {
     if (!cplan_as_new(c, call_id, k) || !dynamic_new_may_reach(c, call_id, k)) continue;
-    int imi = comp_method_in_chain(c, k, "initialize", NULL);
+    int imi = cplan_new_arm_initialize(c, call_id, k);
     /* A Struct or Data built by its generated constructor from `k.new(a: 1)`:
        a member a keyword names with a value of another type than the one
        the member has is boxed, as the arm would read the value as the
@@ -11205,7 +11205,7 @@ static int struct_new_types_members_at(Compiler *c, int id, int ci, int given_on
   ClassInfo *cls = &c->classes[ci];
   /* A user initialize receives the arguments; its `super` sets the members
      (struct_super_types_members). */
-  int imi = cplan_new_initialize(c, id, ci, NULL);
+  int imi = cplan_hook_target(c, id, ci, "initialize", NULL);
   if (imi >= 0) return bind_call_params(c, id, imi);
   int args = nt_ref(nt, id, "arguments");
   int an = 0;
@@ -11825,28 +11825,32 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (comp_super_is_class_new(c, id)) {
         for (int k = 0; k < c->nclasses; k++) {
           if (k != s->class_id && !is_descendant(c, k, s->class_id)) continue;
-          int imi = comp_method_in_chain(c, k, "initialize", NULL);
-          if (imi < 0) continue;
-          if (ty_k == NK_SuperNode) { changed |= bind_call_params(c, id, imi); continue; }
-          Scope *im = &c->scopes[imi];
-          /* A forwarder (`def self.new(*a, **k, &blk) ... super end`) passes
-             the CONTENTS of its rest array and keyword-rest hash on, not the
-             containers: mapping parameter q to parameter q typed the
-             constructor's first parameter as the array itself. What arrives
-             is decided at run time, so every parameter takes a boxed value. */
-          if (s->rest_idx >= 0 || s->kwrest_idx >= 0) {
-            for (int q = 0; q < im->nparams; q++) {
-              LocalVar *dst = scope_local(im, im->pnames[q]);
-              if (!dst || dst->rbs_seeded) continue;
-              if (lv_widen(dst, TY_POLY)) changed = 1;
+          /* (each initialize a construction of k may run takes them: the
+             super's block and arguments reach whichever it binds) */
+          int ims[VER_MAX_ARMS], whole, nim = cplan_new_initializers(c, k, ims, VER_MAX_ARMS, &whole);
+          for (int vi = 0; vi < nim; vi++) {
+            int imi = ims[vi];
+            if (ty_k == NK_SuperNode) { changed |= bind_call_params(c, id, imi); continue; }
+            Scope *im = &c->scopes[imi];
+            /* A forwarder (`def self.new(*a, **k, &blk) ... super end`) passes
+               the CONTENTS of its rest array and keyword-rest hash on, not the
+               containers: mapping parameter q to parameter q typed the
+               constructor's first parameter as the array itself. What arrives
+               is decided at run time, so every parameter takes a boxed value. */
+            if (s->rest_idx >= 0 || s->kwrest_idx >= 0) {
+              for (int q = 0; q < im->nparams; q++) {
+                LocalVar *dst = scope_local(im, im->pnames[q]);
+                if (!dst || dst->rbs_seeded) continue;
+                if (lv_widen(dst, TY_POLY)) changed = 1;
+              }
+              continue;
             }
-            continue;
-          }
-          for (int q = 0; q < s->nparams && q < im->nparams; q++) {
-            LocalVar *src = scope_local(s, s->pnames[q]);
-            LocalVar *dst = scope_local(im, im->pnames[q]);
-            if (!src || !dst || dst->rbs_seeded || src->type == TY_UNKNOWN) continue;
-            if (lv_widen(dst, src->type)) changed = 1;
+            for (int q = 0; q < s->nparams && q < im->nparams; q++) {
+              LocalVar *src = scope_local(s, s->pnames[q]);
+              LocalVar *dst = scope_local(im, im->pnames[q]);
+              if (!src || !dst || dst->rbs_seeded || src->type == TY_UNKNOWN) continue;
+              if (lv_widen(dst, src->type)) changed = 1;
+            }
           }
         }
         continue;
@@ -11967,7 +11971,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         const char *rcn = key_name(c, rav[0]);
         int rci = rcn ? const_node_class_index(c, rav[0]) : -1;
         if (rci >= 0 && class_is_exc_subclass(c, rci)) {
-          int imi = cplan_new_initialize(c, id, rci, NULL);
+          int imi = cplan_hook_target(c, id, rci, "initialize", NULL);
           /* the message is `Cls.new(arg)`'s one argument, into the
              parameter its layout funds: `initialize(a = 5, b)` takes it in b */
           Scope *im = imi >= 0 ? &c->scopes[imi] : NULL;
@@ -11986,12 +11990,16 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         TyKind at = kt == TY_CLASS || kt == TY_POLY ? infer_type(c, rav[1]) : TY_UNKNOWN;
         for (int rci = 0; at != TY_UNKNOWN && rci < c->nclasses; rci++) {
           if (!class_is_exc_subclass(c, rci) || !class_value_escapes(c, rci)) continue;
-          int imi = comp_method_in_chain(c, rci, "initialize", NULL);
-          Scope *im = imi >= 0 ? &c->scopes[imi] : NULL;
-          for (int i = 0; im && i < im->nparams; i++) {
-            if (call_param_arg(c, im, &rav[1], 1, i) != rav[1]) continue;
-            LocalVar *ip = scope_local(im, im->pnames[i]);
-            if (ip && !ip->rbs_seeded) changed |= slot_take(c, ip, at, rav[1]);
+          /* (the class is any one the value reaches, at any point: every
+             initialize a construction of it may run takes the message) */
+          int ims[VER_MAX_ARMS], whole, nim = cplan_new_initializers(c, rci, ims, VER_MAX_ARMS, &whole);
+          for (int vi = 0; vi < nim; vi++) {
+            Scope *im = &c->scopes[ims[vi]];
+            for (int i = 0; i < im->nparams; i++) {
+              if (call_param_arg(c, im, &rav[1], 1, i) != rav[1]) continue;
+              LocalVar *ip = scope_local(im, im->pnames[i]);
+              if (ip && !ip->rbs_seeded) changed |= slot_take(c, ip, at, rav[1]);
+            }
           }
         }
       }
@@ -12005,7 +12013,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       TyKind drt = infer_type(c, recv);
       if (ty_is_object(drt)) {
         int dcid = ty_object_class(drt);
-        int dmi = comp_method_in_chain(c, dcid, "initialize_copy", NULL);
+        int dmi = cplan_hook_target(c, id, dcid, "initialize_copy", NULL);
         if (dmi >= 0 && c->scopes[dmi].nparams >= 1) {
           LocalVar *dp = scope_local(&c->scopes[dmi], c->scopes[dmi].pnames[0]);
           if (dp && !dp->rbs_seeded) {
@@ -12137,7 +12145,9 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           if (c->classes[s->class_id].is_struct)
             changed |= struct_new_types_members(c, id, s->class_id);
           else {
-            int initmi = comp_method_in_chain(c, s->class_id, "initialize", NULL);
+            /* (a bare `new` runs on self, a class that may be one below this
+               one: the table's initialize, as its construction emits it) */
+            int initmi = cplan_hook_target(c, -1, s->class_id, "initialize", NULL);
             if (initmi >= 0) changed |= bind_call_params(c, id, initmi);
           }
         }
@@ -12247,7 +12257,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           int first_splat = 0;
           while (first_splat < nargs && nt_kind(nt, av[first_splat]) != NK_SplatNode) first_splat++;
           for (int k = 0; k < c->nclasses; k++) {
-            int imi = comp_method_in_chain(c, k, "initialize", NULL);
+            int imi = cplan_new_arm_initialize(c, id, k);
             if (imi >= 0) {
               changed |= bind_call_params(c, id, imi);
               /* which element lands in which parameter differs per class and
@@ -12312,7 +12322,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
           if (ucnew >= 0)
             changed |= bind_call_params(c, id, ucnew);
           else
-            changed |= bind_call_params(c, id, cplan_new_initialize(c, id, ci, NULL));
+            changed |= bind_call_params(c, id, cplan_hook_target(c, id, ci, "initialize", NULL));
         }
         else if (ci >= 0)
           changed |= bind_call_params(c, id, call_target(c, id, ci, name, CT_CMETHOD, NULL));
@@ -12344,7 +12354,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
             if (ucnew >= 0)
               changed |= bind_call_params(c, id, ucnew);
             else
-              changed |= bind_call_params(c, id, cplan_new_initialize(c, id, ci, NULL));
+              changed |= bind_call_params(c, id, cplan_hook_target(c, id, ci, "initialize", NULL));
           }
           else {
             int cmi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
@@ -12377,7 +12387,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         for (int q = 0; q < nloop; q++) {
           int k = every ? q : ks[q];
           if (k < 0 || k >= c->nclasses || !c->classes[k].is_struct ||
-              comp_method_in_chain(c, k, "initialize", NULL) >= 0) continue;
+              cplan_new_arm_initialize(c, id, k) >= 0) continue;
           changed |= struct_new_types_members_at(c, id, k, 1);
         }
       }
@@ -12393,7 +12403,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     if (name && sp_streq(name, "with") && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
         comp_method_in_chain(c, ty_object_class(rt), "with", NULL) < 0) {
       int wci = ty_object_class(rt);
-      int wimi = comp_method_in_chain(c, wci, "initialize", NULL);
+      int wimi = cplan_hook_target(c, -1, wci, "initialize", NULL);
       changed |= wimi >= 0 ? struct_with_binds_initialize(c, id, wci, wimi)
                            : struct_with_types_members(c, id, wci);
       continue;
@@ -12408,7 +12418,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       for (int q = 0; q < (ks ? nk : c->nclasses); q++) {
         int k = ks ? ks[q] : q;
         if (k < 0 || k >= c->nclasses || !c->classes[k].is_data ||
-            comp_method_in_chain(c, k, "initialize", NULL) >= 0 ||
+            cplan_hook_target(c, -1, k, "initialize", NULL) >= 0 ||
             comp_method_in_chain(c, k, "with", NULL) >= 0) continue;
         changed |= struct_with_types_members(c, id, k);
       }
@@ -13691,7 +13701,7 @@ static int block_reach(Compiler *c, int si, const BlockSig *s, TyKind *pos,
     else if (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) {
       int ci = const_node_class_index(c, recv);
       if (ci >= 0) t = call_target(c, f, ci, fn, CT_CMETHOD, NULL);
-      if (ci >= 0 && t < 0 && is_new_name(fn)) t = cplan_new_initialize(c, f, ci, NULL);
+      if (ci >= 0 && t < 0 && is_new_name(fn)) t = cplan_hook_target(c, f, ci, "initialize", NULL);
     }
     else {
       TyKind rt = infer_type(c, recv);
@@ -18445,7 +18455,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
       else if (sp_streq(name, "new") && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
         int cid = nt_str(nt, recv, "name") ? const_node_class_index(c, recv) : -1;
-        if (cid >= 0) ymi = cplan_new_initialize(c, id, cid, NULL);
+        if (cid >= 0) ymi = cplan_hook_target(c, id, cid, "initialize", NULL);
       }
       else if (ty_is_object(infer_type(c, recv))) ymi = call_target(c, id, ty_object_class(infer_type(c, recv)), name, 0, NULL);
       else ymi = const_recv_cmethod_mi(c, id, recv, name);
@@ -18614,7 +18624,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
       if (mi < 0 && sp_streq(name, "new") && recv_is_const) {
         const char *cname = nt_str(nt, recv, "name");
         int cid = const_node_class_index(c, recv);
-        if (cid >= 0) mi = cplan_new_initialize(c, id, cid, NULL);
+        if (cid >= 0) mi = cplan_hook_target(c, id, cid, "initialize", NULL);
       }
       /* Class.method { ... }: look up the class method. This is where the
          block's parameters get their types from what the method YIELDS, so
@@ -21070,14 +21080,63 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
   if (ct_version_marked(c, "initialize")) {
     int init[CPT_MAX], ni = is_new_name(key_name(c, id)) ? cplan_entries(c, id, init, CPT_MAX) : 0;
     if (ni == 0 && (init[0] = cplan_raise_initialize(c, id)) >= 0) ni = 1;
-    for (int i = 0; i < ni && is_initialize_name(c->scopes[init[i]].name); i++) {
+    for (int i = 0; i < ni; i++) {
       char mark[24];
+      /* (a program `new` the site may reach lists its own method ahead of the initializes) */
+      if (!is_initialize_name(c->scopes[init[i]].name)) continue;
       snprintf(mark, sizeof mark, "\x01%d", init[i]);
+      cr_add_name(out, n, cap, mark);
+    }
+    /* a `new` on a class value: the arm of each class it may reach runs the
+       initialize the plan answers it (cplan_new_arm_initialize) */
+    for (int k = 0; ni == CPT_UNKNOWN && k < c->nclasses; k++) {
+      int mi = cplan_as_new(c, id, k) && dynamic_new_may_reach(c, id, k) ? cplan_new_arm_initialize(c, id, k) : -1;
+      char mark[24];
+      if (mi < 0 || !is_initialize_name(c->scopes[mi].name)) continue;
+      snprintf(mark, sizeof mark, "\x01%d", mi);
+      cr_add_name(out, n, cap, mark);
+    }
+  }
+  /* a dup or clone of an object: the initialize_copy its typed arm calls
+     (cplan_hook_target), on the class of the receiver and, for a
+     singleton's dup, the class it shows */
+  const char *kn = nt_kind(nt, id) == NK_CallNode ? key_name(c, id) : NULL;
+  if (kn && is_copy_alias(kn) && ct_version_marked(c, "initialize_copy")) {
+    int recv = nt_ref(nt, id, "receiver");
+    TyKind rt = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
+    int cid = ty_is_object(rt) ? ty_object_class(rt) : -1;
+    int cls[2] = { cid, cid >= 0 && c->classes[cid].is_singleton_of ? singleton_visible_ci(c, cid) : cid };
+    for (int i = 0; cid >= 0 && i < (cls[1] != cid ? 2 : 1); i++) {
+      int mi = cplan_hook_target(c, id, cls[i], "initialize_copy", NULL);
+      char mark[24];
+      if (mi < 0) continue;
+      snprintf(mark, sizeof mark, "\x01%d", mi);
       cr_add_name(out, n, cap, mark);
     }
   }
   for (int i = 0, nn = call_node_names(c, id, names); i < nn; i++)
     if (ct_version_marked(c, names[i])) ct_version_classes(c, id, names[i], cr_mark_version, &m);
+  /* the arms of a class-valued dispatch (a class method called on a Class value): the plan's one
+     answer of them, which the emitter writes, so each replaced version an arm names is kept and
+     none a direct call or a left-out arm does not */
+  const char *nm0 = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  if (nm0 && !is_new_name(nm0) && ct_version_marked(c, nm0)) {
+    int *ak = NULL, *am = NULL, argc0 = 0;
+    (void)call_args(nt, id, &argc0);
+    unsigned low0 = 0;
+    int nar = cplan_cls_value_arms(c, id, nm0, argc0, &ak, &am, &low0);
+    /* (the arms the switch is written from: not where a candidate vetoes it. The proc-form dispatch
+       is taken on a boxed receiver, which the types of a pass this early do not settle, so the arms
+       are marked whatever the proc-form bit says: everything the emitter may still write) */
+    if (!(low0 & CLS_LOWER_SWITCH)) nar = 0;
+    for (int i = 0; i < nar; i++) {
+      char mark[24];
+      if (!c->scopes[am[i]].replaced) continue;
+      snprintf(mark, sizeof mark, "\x01%d", am[i]);
+      cr_add_name(out, n, cap, mark);
+    }
+    free(ak); free(am);
+  }
   ct_implied_classes(c, id, ct_version_marked, cr_mark_version, &m);
 }
 

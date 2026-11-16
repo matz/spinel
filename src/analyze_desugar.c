@@ -19454,6 +19454,17 @@ static int enum_recv_class_owns(Compiler *c, int id, TyKind rt, const char *nm) 
    class with Enumerable behind it, or a boxed value, whose call first
    tests for the classes that answer the name themselves (and for an
    OpenStruct, which reads its member). Answers whether it rewrote one. */
+/* Can boxed receiver `id`'s call of `qn` reach a class method of the
+   program: is there a class with one of the name in its chain whose Class
+   value the receiver may hold (poly_cls_value_reaches)? */
+static int poly_recv_cmethod_answers(Compiler *c, int id, const char *qn) {
+  if (!qn) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (c->classes[k].is_native_class) continue;
+    if (comp_cmethod_in_chain(c, k, qn, NULL) >= 0 && poly_cls_value_reaches(c, id, k)) return 1;
+  }
+  return 0;
+}
 int desugar_builtin_enum_calls(Compiler *c) {
   if (sp_builtin_enum_names_n == 0) return 0;
   NodeTable *nt = (NodeTable *)c->nt;
@@ -19738,6 +19749,15 @@ int desugar_builtin_enum_calls(Compiler *c) {
            comp_enum_answers_first(c, ci, qn);
       /* a class that answers the name itself keeps the name it was called by */
       if (!ok && enum_unrename(nt, id)) changed = 1;
+    }
+    /* a receiver known only at run time that may be a Class value (a class
+       `Object.const_get` hands out) whose class has its own class method of
+       the name answers that method: the call is left as written, for the
+       poly dispatch's class arm. Rewritten, `klass.find(id)` walked the
+       class's #each (NoMethodError) or was refused. */
+    else if (rt == TY_POLY && poly_recv_cmethod_answers(c, id, nt_str(nt, id, "orig_name") ? nt_str(nt, id, "orig_name") : name)) {
+      if (enum_unrename(nt, id)) changed = 1;
+      continue;
     }
     else if (rt == TY_POLY) ok = 1;   /* a class of its own definition is dispatched below */
     if (!ok) continue;

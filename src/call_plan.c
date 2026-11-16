@@ -1934,31 +1934,26 @@ static int ver_kern_by_self(Compiler *c, const VerKernSelf *x, int (*arm)(Compil
   free(is); free(then);
   return els;
 }
-/* The method scope found, which D's lookup of name finds, unless an undef of the name on D's chain ends the lookup
-   ahead of it (comp_is_undeffed_in_chain): -1 there, and where found is -1 */
-static int ver_kern_reach(Compiler *c, int d, const char *name, int found) {
-  return found >= 0 && !comp_is_undeffed_in_chain(c, d, name) ? found : -1;
-}
-/* May a call on a D run ahead of the def that makes method scope mi (elab_def_late)? For a version entry (one a call
-   whose version only the run tells reaches, or an open history's), ahead of the def of any version of its class
-   its arms call (ver_entry_targets) */
-static int ver_kern_late(Compiler *c, int mi) {
-  if (mi < 0 || (c->scopes[mi].entry != ENTRY_DISPATCH && c->scopes[mi].entry != ENTRY_NAMED)) return elab_def_late(c, mi);
-  int to[VER_MAX_ARMS + 1], n = ver_entry_targets(c, mi, to, NULL), any = 0;
-  for (int k = 0; k < n; k++)
-    if (to[k] >= 0 && to[k] != mi && c->scopes[to[k]].class_id == c->scopes[mi].class_id) {
-      if (elab_def_late(c, to[k])) return 1;
-      any = 1;
-    }
-  return !any;
+/* Method scope mi, which D's table finds for name below the holder cls (comp_method_in_chain, cplan_mm_method), where
+   the record says a call of name on a D runs it from D's first object on (elab_runs_below): the def it was made of, a
+   module's an includer's copy shares, the original an alias names, or for a version entry the versions its arms call
+   (ver_entry_targets); -1 where the lookup ends at an undef ahead of it (a module's too), where a call may run ahead
+   of what binds the name (a def, an alias, an undef, a mixin), and where the record finds another */
+static int ver_kern_found(Compiler *c, int d, int cls, const char *name, int mi) {
+  if (mi < 0) return -1;
+  int to[VER_MAX_ARMS + 1], nodes[VER_MAX_ARMS + 1], n = 0, entry = c->scopes[mi].entry == ENTRY_DISPATCH || c->scopes[mi].entry == ENTRY_NAMED;
+  if (!entry) nodes[n++] = c->scopes[mi].def_node;
+  for (int k = 0, nt = entry ? ver_entry_targets(c, mi, to, NULL) : 0; k < nt; k++)
+    if (to[k] >= 0 && to[k] != mi && c->scopes[to[k]].class_id == c->scopes[mi].class_id) nodes[n++] = c->scopes[to[k]].def_node;
+  return elab_runs_below(c, d, cls, name, nodes, n, entry) == ELAB_YES ? mi : -1;
 }
 /* Does a call of x->name on a D find a method of its own, below x->cls, which the holder's chain does not hold: CRuby
    calls it, whatever Kernel says (not a super, which looks above the holder's method; not one behind an undef of the
-   name, where the lookup ends: ver_kern_reach; not one a call may run ahead of: ver_kern_late) */
+   name, where the lookup ends, nor one a call may run ahead of: ver_kern_found) */
 static int ver_kern_own(Compiler *c, const VerKernSelf *x, int d) {
-  int own = x->how != 2 ? ver_kern_reach(c, d, x->name, comp_method_in_chain(c, d, x->name, NULL)) : -1;
+  int own = x->how != 2 ? ver_kern_found(c, d, x->cls, x->name, comp_method_in_chain(c, d, x->name, NULL)) : -1;
   int oc = own >= 0 ? c->scopes[own].class_id : -1;
-  return oc >= 0 && oc != x->cls && is_descendant(c, oc, x->cls) && is_descendant(c, d, oc) && !ver_kern_late(c, own);
+  return oc >= 0 && oc != x->cls && is_descendant(c, oc, x->cls) && is_descendant(c, d, oc);
 }
 /* The test of self's Kernel where self is a D (ver_kern_by_self; the holder's own is the else): true where D finds a
    method of its own (ver_kern_own), whose call the guard's then arm makes, or where D surely has Kernel
@@ -1996,11 +1991,11 @@ static void ver_pin(Compiler *c, int node, int scope, int vis);
 /* The guard's arm where no cell is set and self is a D (ver_kern_by_self; the holder's, its method_missing or the raise,
    is the else): D's own method_missing where it is another than the holder's, called with a copy of the call's operands
    and block and pinned to it (ver_pin), as the holder's chain does not hold it; none where D finds a method of its own
-   (the test's arm is true there), where an undef of method_missing on D's chain ends the lookup ahead of it
-   (ver_kern_reach), or where a call may run ahead of the def that makes D's method_missing (ver_kern_late) */
+   (the test's arm is true there), and none where the record does not say a call on a D runs that method_missing from
+   D's first object on (ver_kern_found: an undef of it ahead, a def or a mixin a call may run ahead of) */
 static int ver_kern_mm_arm(Compiler *c, const VerKernSelf *x, int d) {
-  int dm = ver_kern_reach(c, d, METHOD_MISSING_NAME, cplan_mm_method(c, -1, d, 0)), call;
-  if (dm < 0 || dm == x->mm || ver_kern_own(c, x, d) || ver_kern_late(c, dm)) return -1;
+  int dm = ver_kern_found(c, d, x->cls, METHOD_MISSING_NAME, cplan_mm_method(c, -1, d, 0)), call;
+  if (dm < 0 || dm == x->mm || ver_kern_own(c, x, d)) return -1;
   ver_pin(c, call = ver_kern_mm_call(c, x->id, x->name), dm, 0);
   return call;
 }
@@ -2215,14 +2210,13 @@ static int ct_pin_for(const Compiler *c, int id, const char *name) {
   const char *own = nt_str(c->nt, id, "name");
   return own && sp_streq(own, name) ? ct_pin_of(c, id) : -1;
 }
-/* ...a pin of call id to a method of a class below cls, named name, on the side flags ask (CT_CMETHOD), which a lookup
+/* ...a pin of call id, of name, to a method of a class below cls on the side flags ask (CT_CMETHOD), which a lookup
    on cls's chain does not find: a blank slate's Kernel guard calls a subclass's own method_missing where self is of
-   that class (ver_kern_mm_arm) */
+   that class (ver_kern_mm_arm), the def an alias of it names among them */
 static int ct_pin_below(Compiler *c, int id, int cls, const char *name, unsigned flags) {
-  int pin = id >= 0 && cls >= 0 ? ct_pin_of(c, id) : -1;
+  int pin = id >= 0 && cls >= 0 ? ct_pin_for(c, id, name) : -1;
   const Scope *s = pin >= 0 ? &c->scopes[pin] : NULL;
-  return s && !s->is_cmethod == !(flags & CT_CMETHOD) && s->class_id >= 0 && s->name && sp_streq(s->name, name) &&
-         is_descendant(c, s->class_id, cls) ? pin : -1;
+  return s && !s->is_cmethod == !(flags & CT_CMETHOD) && s->class_id >= 0 && is_descendant(c, s->class_id, cls) ? pin : -1;
 }
 int cplan_pinned_vis(const Compiler *c, int id) {
   const struct VerPin *p = ct_pin_find(c, id);

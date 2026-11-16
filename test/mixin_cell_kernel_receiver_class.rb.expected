@@ -53,3 +53,10 @@ false
 :nme
 [:undef_sub, :respond_to_missing?]
 :nme
+:nme
+[:sub_mm, :respond_to_missing?]
+:sub_own
+:nme
+:alias_own
+:nest_inner
+:nme

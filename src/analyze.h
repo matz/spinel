@@ -285,8 +285,8 @@ typedef struct {
   unsigned char arm_vis; /* a version's: the visibility its face arm takes
                             (elab_version_vis, -1 for the run's), plus 2;
                             0 not asked yet */
-  unsigned char early;  /* a def's or a define_method's of a class: no
-                           object of the class, or of one below it, may
+  unsigned char early;  /* a method version's (a def, an alias, an undef,
+                           ...): no object of the class, or of one below it, may
                            exist where it runs, so no call on one runs
                            ahead of it (lr_early_settle); 0 where one may,
                            or where the record does not place it */
@@ -584,9 +584,15 @@ int elab_mixin_brings_kernel(Compiler *c, int ref);
 /* ...and surely, through mixins that surely run (an include under a condition does not count) */
 int elab_mixin_certain_kernel(Compiler *c, int ref);
 int elab_mixin_may_not_run(const LrMixin *m);   /* under a condition, after one that decides, or in a reopening that may run after an object of the class exists */
-/* May a call on an object of method scope mi's class, or of one below it, run ahead of the def or define_method
-   that makes mi (LrDef.early: one that may exist where it runs, or one the record does not place)? */
-int elab_def_late(Compiler *c, int mi);
+/* What a call of name on an object of class d finds on d's chain below class upto (its prepends, own table, includes
+   and their modules' mixins, then its superclass's, up to upto's, which is left out), the same from the first point an
+   object of d may exist to the load's end: ELAB_YES where it runs the def or define_method at one of nodes (an alias
+   followed to its original) -- with entry, the n arms of a version entry, where the versions under a condition hold it,
+   decided before any object of d exists; ELAB_STOP where an undef there ends the lookup, a module's among them;
+   ELAB_NO where none below upto holds the name; ELAB_UNKNOWN where an entry, or a mixin whose module holds the name,
+   may run once an object of d exists (LrDef.early, elab_mixin_may_not_run), the record does not place it, the chain
+   holds a module it cannot name, or the method it finds is not at nodes */
+int elab_runs_below(Compiler *c, int d, int upto, const char *name, const int *nodes, int n, int entry);
 /* A number that changes with every change to the record's histories and mixins (a cache of an answer read from them is of it) */
 unsigned long elab_mixin_gen(Compiler *c);
 /* call_target's questions about call id read the record's facts as its

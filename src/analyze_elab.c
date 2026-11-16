@@ -3326,6 +3326,7 @@ static void lr_record_again(ElabRec *x) {
    record is made, since what is live at a point depends on the entries after
    it; a copy of a method with no scope (an attribute, a method a mixin
    brought) keeps none. */
+static const LrDef *lr_alias_origin(Compiler *c, int cls, const LrDef *v);
 static void lr_copy_scopes(Compiler *c) {
   LoadRecord *r = c->lrec;
   for (int i = 0; i < r->nhist; i++) {
@@ -3334,17 +3335,24 @@ static void lr_copy_scopes(Compiler *c) {
     for (int j = 0; j < h->n; j++) {
       LrDef *v = &h->v[j];
       if (v->kind != LR_COPY || v->scope > 0 || !v->target) continue;
-      const char *nm = v->target;
-      LoadPoint p = elab_point_of(c, v->node);
-      for (;;) {
-        const LrDef *d = NULL;
-        if (elab_method_at(c, h->a, nm, 0, p, &d) != ELAB_YES || !d) break;
-        if (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) { v->scope = d->scope; break; }
-        if (d->kind != LR_ALIAS || !d->target) break;
-        nm = d->target;
-        p = elab_point_of(c, d->node);
-      }
+      const LrDef *d = lr_alias_origin(c, h->a, v);
+      if (d) v->scope = d->scope;
     }
+  }
+}
+/* The def or define_method the original name of copy or alias v of class cls's (its instance side) names where v
+   runs, followed through the aliases it reaches, each asked at its own point; NULL for none (an attribute, a method a
+   mixin brought, a name with no version there) */
+static const LrDef *lr_alias_origin(Compiler *c, int cls, const LrDef *v) {
+  const char *nm = v->target;
+  LoadPoint p = elab_point_of(c, v->node);
+  for (;;) {
+    const LrDef *d = NULL;
+    if (!nm || elab_method_at(c, cls, nm, 0, p, &d) != ELAB_YES || !d) return NULL;
+    if (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) return d;
+    if (d->kind != LR_ALIAS) return NULL;
+    nm = d->target;
+    p = elab_point_of(c, d->node);
   }
 }
 
@@ -11125,8 +11133,8 @@ static int lr_late_reopening(Compiler *c, int cls, int open, int node) {
   return made >= 0 && open >= 0 && open != made &&
          (comp_class_is_module(c, &c->classes[cls]) || elab_class_live_at(c, cls, 0, elab_point_of(c, node)));
 }
-/* Is def v of class cls's (sg: its singleton's) one no call on an object of cls, or of a class below it, runs ahead
-   of: at a statement the record places, where no such object may exist yet (for a module, in the body that made
+/* Is method version v of class cls's (sg: its singleton's; a def, an alias, an undef, ...) one no call on an object
+   of cls, or of a class below it, runs ahead of: at a statement the record places, where no such object may exist yet (for a module, in the body that made
    it)? Not one a method body makes, one in a builder's block or a block run later, nor one outside a class body. */
 static int lr_def_early(Compiler *c, int cls, int sg, const LrDef *v) {
   LoadRecord *r = c->lrec;
@@ -11135,7 +11143,7 @@ static int lr_def_early(Compiler *c, int cls, int sg, const LrDef *v) {
   if (comp_class_is_module(c, &c->classes[cls])) return r->st[s->frame].node == c->classes[cls].def_node;
   return !elab_class_live_at(c, cls, sg, elab_point_of(c, v->node));
 }
-/* Each mixin's and each def's early bit (LrMixin.early, LrDef.early), once, as the record is made: from the map's
+/* Each mixin's and each method version's early bit (LrMixin.early, LrDef.early), once, as the record is made: from the map's
    conditions of a statement (elab_point_may) and lr_rta's first instances, facts of the load phase as the record
    holds it, whatever later passes make of the calls that make an object (a `send(:new)` counts as the `new` it
    becomes) */
@@ -11149,7 +11157,7 @@ static void lr_early_settle(Compiler *c) {
   for (int i = 0; i < r->nhist; i++)
     for (int j = 0; r->hist[i].a >= 0 && j < r->hist[i].n; j++) {
       LrDef *v = &r->hist[i].v[j];
-      if (v->kind == LR_DEF || v->kind == LR_DEFINE_METHOD) v->early = (unsigned char)lr_def_early(c, r->hist[i].a, r->hist[i].b, v);
+      if (lr_is_version(v)) v->early = (unsigned char)lr_def_early(c, r->hist[i].a, r->hist[i].b, v);
     }
   r->hgen++;
 }
@@ -11162,35 +11170,69 @@ static void lr_early_settle(Compiler *c) {
 int elab_mixin_may_not_run(const LrMixin *m) {
   return !m->applied || m->cond || !m->early;
 }
-/* Does class cls mix module mod in by a mixin of its own (an include or a prepend) that surely runs ahead of any call
-   on an object of cls (elab_mixin_may_not_run)? */
-static int lr_mixes_early(LoadRecord *r, int cls, int mod) {
-  const LrClass *k = lr_class(r, cls);
-  for (int j = 0; k && j < k->nmix; j++)
-    if (k->mix[j].mod == mod && (k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) &&
-        !elab_mixin_may_not_run(&k->mix[j]))
-      return 1;
+/* elab_runs_below's walk of d's chain: the first owner with an entry of the name decides */
+typedef struct { Compiler *c; const char *name; int upto; const int *nodes; int n, entry, o; } LrBelow;
+static int lr_below_has(const LrBelow *b, int node) {
+  for (int k = 0; k < b->n; k++) if (b->nodes[k] == node) return 1;
   return 0;
 }
-/* See analyze.h. The def's version, by its node, in the history of whatever class or module holds it: the scope's
-   own def, or the module def an includer's copy (or a prepend's) shares, which needs its class's mixin of that
-   module to run early as well. */
-int elab_def_late(Compiler *c, int mi) {
-  LoadRecord *r = c->lrec;
-  const Scope *s = mi >= 0 && mi < c->nscopes ? &c->scopes[mi] : NULL;
-  if (!r || !s || s->class_id < 0 || s->def_node < 0 || comp_class_is_module(c, &c->classes[s->class_id])) return 1;
-  const LrVers *x = lr_vers(r, comp_scope_user_name(s));
-  int found = 0;
-  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink) {
-    const LrHist *h = &r->hist[i];
-    for (int j = 0; h->b == s->is_cmethod && j < h->n; j++) {
-      const LrDef *v = &h->v[j];
-      if ((v->kind != LR_DEF && v->kind != LR_DEFINE_METHOD) || v->node != s->def_node) continue;
-      if (!v->early || (h->a != s->class_id && !lr_mixes_early(r, s->class_id, h->a))) return 1;
-      found = 1;
+static int lr_below_own(void *ud, int cls, int sg) {
+  LrBelow *b = ud;
+  if (b->o == ELAB_UNKNOWN) return LR_W_STOP;   /* (a mixin ahead, lr_below_skip) */
+  if (cls == b->upto) return LR_W_END;   /* (the holder's chain: none below it) */
+  const LrHist *h = lr_hist(b->c->lrec, cls, sg, b->name, 0);
+  int any = 0;
+  for (int j = 0; h && j < h->n; j++) {
+    if (h->v[j].kind > LR_REMOVE || h->v[j].absent) continue;
+    if (h->v[j].unplaced || !h->v[j].early) { b->o = ELAB_UNKNOWN; return LR_W_STOP; }
+    any = 1;
+  }
+  if (!any) return 0;
+  const LrDef *v = NULL, *d;
+  LoadPoint end = { -1, -1, -1 };
+  int o = lr_own(b->c, h, NULL, end, 1, 0, &v);
+  if (o == ELAB_NO) return 0;   /* (a removal: the lookup goes on) */
+  if (o == LR_STOP) b->o = ELAB_STOP;
+  else if (o == ELAB_YES) {
+    d = v && v->kind == LR_ALIAS ? lr_alias_origin(b->c, cls, v) : v;
+    b->o = d && (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) && lr_below_has(b, d->node) ? ELAB_YES : ELAB_UNKNOWN;
+  }
+  else {
+    /* (versions under a condition, all run before any object of d exists: the run has chosen among them by then, and
+       a method that dispatches over them, a version entry, answers as CRuby does when it holds no other) */
+    b->o = b->entry ? ELAB_YES : ELAB_UNKNOWN;
+    for (int k = 0; k < b->n && b->o == ELAB_YES; k++) {
+      int in = 0;
+      for (int j = 0; j < h->n && !in; j++) in = (h->v[j].kind == LR_DEF || h->v[j].kind == LR_DEFINE_METHOD) && h->v[j].node == b->nodes[k];
+      if (!in) b->o = ELAB_UNKNOWN;
     }
   }
-  return !found;
+  return LR_W_STOP;
+}
+/* (a mixin that may not run ahead of an object of d leaves the answer unknown where its module holds the name; the
+   holder's mixins are the holder's chain) */
+static int lr_below_skip(void *ud, int cls, const LrMixin *m) {
+  LrBelow *b = ud;
+  if (cls == b->upto) return 1;
+  if (!elab_mixin_may_not_run(m)) return 0;
+  ElabVersion one;
+  if (m->mod < LR_MAIN || lr_chain_versions(b->c, m->mod, 0, b->name, &one, 1) != 0) b->o = ELAB_UNKNOWN;
+  return 1;
+}
+static int lr_below_stop(void *ud, int cls, int ref) {
+  (void)cls; (void)ref;
+  ((LrBelow *)ud)->o = ELAB_UNKNOWN;
+  return LR_W_STOP;
+}
+/* See analyze.h. */
+int elab_runs_below(Compiler *c, int d, int upto, const char *name, const int *nodes, int n, int entry) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || !name || d < 0 || n <= 0) return ELAB_UNKNOWN;
+  LrBelow b = { c, name, upto, nodes, n, entry, ELAB_NO };
+  /* (a mixin whose module may already be among the ancestors is walked as it stands, as the versions' walk does) */
+  LrWalker w = { lr_below_own, lr_below_stop, NULL, NULL, NULL, NULL, LR_TAIL_N, NULL, lr_below_skip };
+  int rc = lr_walk(c, &w, &b, d, 0, 0);
+  return rc < 0 && b.o == ELAB_NO ? ELAB_UNKNOWN : b.o;
 }
 static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   LoadRecord *r = c->lrec;

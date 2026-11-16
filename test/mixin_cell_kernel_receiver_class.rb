@@ -70,6 +70,56 @@ class UndefMissLeaf < UndefMissSub
   undef_method :method_missing
 end
 
+# an undef in a module ends the lookup where the module stands: prepended to
+# the subclass, included in a class below it, or undefining method_missing
+module ModUndefOwn
+  def respond_to_missing?(n, p) = :mod_own
+  undef_method :respond_to_missing?
+end
+module ModUndefMiss
+  def method_missing(n, *a) = [:mod_mm, n]
+  undef_method :method_missing
+end
+class ModUndef < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class ModUndefPre < ModUndef
+  prepend ::ModUndefOwn
+  def respond_to_missing?(n, p) = :pre_own
+end
+class ModUndefSub < ModUndef
+  def respond_to_missing?(n, p) = :sub_own
+  def method_missing(n, *a) = [:sub_mm, n]
+end
+class ModUndefLeaf < ModUndefSub
+  include ::ModUndefOwn
+end
+class ModUndefMissLeaf < ModUndefSub
+  undef_method :respond_to_missing?
+  include ::ModUndefMiss
+end
+
+# an alias in the subclass's body answers with its original; a module's own
+# include brings its module's method
+module NestInner
+  def respond_to_missing?(n, p) = :nest_inner
+end
+module NestOuter
+  include ::NestInner
+end
+class Aliased < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class AliasedSub < Aliased
+  def own(n, p) = :alias_own
+  alias respond_to_missing? own
+end
+class Nested < Aliased
+  include ::NestOuter
+end
+
 # a class method's include run on a subclass, a deeper one, and one called by super
 class Mix < BasicObject
   def self.mix = include(::Kernel)
@@ -304,3 +354,21 @@ show { UndefMissOwn.new.t }
 show { UndefMissLeaf.new.t }
 show { UndefMissSub.new.t }
 show { undef_later.t }
+
+# the module undefs, aliases and nested include
+show { ModUndefPre.new.t }
+show { ModUndefLeaf.new.t }
+show { ModUndefSub.new.t }
+show { ModUndefMissLeaf.new.t }
+show { AliasedSub.new.t }
+show { Nested.new.t }
+
+# an alias made in a reopening, after an object was made, is not there before it runs
+class AliasLate < Aliased
+  def own(n, p) = :alias_late
+end
+alias_late = AliasLate.new
+show { alias_late.t }
+class AliasLate
+  alias respond_to_missing? own
+end

@@ -305,8 +305,12 @@ typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND, LR_SG_PREPEND } LrMixKind;   /
    body runs, as the registration applies an entry (elab_entries): no
    condition between them, not in an iterator's block or a begin with a
    rescue clause. open: the statement whose body the call stands in
-   (LrOpen.node; a file's root for main's). */
-typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int open; } LrMixin;
+   (LrOpen.node; a file's root for main's). early: the call's statement
+   runs whenever its body does (no condition of its own, elab_point_may),
+   and stands in the body that made the class, or in a reopening that runs
+   before any object of the class, or of one below it, may exist
+   (lr_early_settle). */
+typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int open; unsigned char early; } LrMixin;
 typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 struct HostStep;
 void elab_program(Compiler *c, struct HostStep *h);
@@ -574,7 +578,7 @@ int elab_class_kernel(Compiler *c, int cls);
 int elab_mixin_brings_kernel(Compiler *c, int ref);
 /* ...and surely, through mixins that surely run (an include under a condition does not count) */
 int elab_mixin_certain_kernel(Compiler *c, int ref);
-int elab_mixin_may_not_run(Compiler *c, int cls, const LrMixin *m);   /* under a condition, after one that decides, or in a reopening */
+int elab_mixin_may_not_run(const LrMixin *m);   /* under a condition, after one that decides, or in a reopening that may run after an object of the class exists */
 /* A number that changes with every change to the record's histories and mixins (a cache of an answer read from them is of it) */
 unsigned long elab_mixin_gen(Compiler *c);
 /* call_target's questions about call id read the record's facts as its

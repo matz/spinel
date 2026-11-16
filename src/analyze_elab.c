@@ -3106,6 +3106,7 @@ static void lr_check_walked(Compiler *c, const char *walked);
 enum { LR_OWNERS_WALK = 1, LR_OWNERS_HELD = 2 };   /* lr_def_owners' checks */
 static void lr_def_owners(Compiler *c, int check);
 static void lr_later_settle(Compiler *c);
+static void lr_early_settle(Compiler *c);
 static void lr_block_cond_dms(Compiler *c);
 
 /* The definitions of a body of class ci that the record holds with no
@@ -3314,6 +3315,7 @@ static void lr_record_again(ElabRec *x) {
   lr_later_settle(x->c);
   lr_record_unplaced(x->c);
   r->recorded = 1;
+  lr_early_settle(x->c);
 }
 
 /* The method scope each named module_function copy copies: that of the def
@@ -3397,6 +3399,7 @@ void elab_program(Compiler *c, struct HostStep *h) {
   lr_later_settle(c);
   lr_record_unplaced(c);
   r->recorded = 1;
+  lr_early_settle(c);
   if (r->check) {   /* the same record made after the walk, as a check */
     lr_check_held(c);
     char *walked = lr_dump_text(c);
@@ -4987,7 +4990,7 @@ static int lr_vv_mixin(void *ud, int cls, int ref) {
   /* (Kernel, which the row of the name answers, ends the versions: nothing behind it is found, where it surely runs) */
   const LrClass *kc = lr_class(v->c->lrec, cls);
   int sure = 1;
-  for (int j = 0; kc && j < kc->nmix; j++) if (kc->mix[j].ref == ref && elab_mixin_may_not_run(v->c, cls, &kc->mix[j])) sure = 0;
+  for (int j = 0; kc && j < kc->nmix; j++) if (kc->mix[j].ref == ref && elab_mixin_may_not_run(&kc->mix[j])) sure = 0;
   if (core == CORE_KERNEL && sure && v->name && bop_kernel_answers(v->name, -1, 0)) return LR_W_STOP;
   v->n = -1;
   return LR_W_STOP;
@@ -6253,7 +6256,8 @@ static void lr_rta_node(LrRta *t, int id) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   int rc = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? lr_rta_const(t, recv)
          : rk == NK_SelfNode ? lr_rta_self(t, id) : LR_UNKNOWN_CLASS;
-  by = nm && is_send_family(nm) ? (ac ? call_sent_name(nt, id, NULL) : "")
+  int used = 0;   /* (the arguments that name what a send sends) */
+  by = nm && is_send_family(nm) ? (ac ? call_sent_name(nt, id, &used) : "")
      : nm && (is_method_object_maker(nm) || is_enumerator_maker(nm)) ? (ac ? vis_arg_name(nt, av[0]) : "") : nm;
   if (!by || (ac && is_code_eval_name(nm)) || is_method_bind_name(by) || is_object_loader(rk == NK_ConstantReadNode ? lr_read_key(t->c, recv) : NULL, by, ac)) {
     lr_rta_all(t, 0);
@@ -6288,8 +6292,9 @@ static void lr_rta_node(LrRta *t, int id) {
     for_each_value_position(nt, av[ka], 0, lr_rta_raised, &x);
   }
   /* a module mixed in by a call the record does not hold as a class's
-     (on an object, in a method body): its methods have instances */
-  for (int i = 0; is_mixin_call(by) && (rk != NK_SelfNode || elab_body_def(t->c, id) >= 0) && i < ac; i++) {
+     (on an object, in a method body): its methods have instances (a
+     send's modules follow the names it sends, which name no module) */
+  for (int i = used; is_mixin_call(by) && (rk != NK_SelfNode || elab_body_def(t->c, id) >= 0) && i < ac; i++) {
     int m = nt_kind(nt, av[i]) == NK_ConstantReadNode || nt_kind(nt, av[i]) == NK_ConstantPathNode ? lr_rta_const(t, av[i]) : LR_UNKNOWN_CLASS;
     if (m >= 0) lr_rta_add(t, m);
     else lr_rta_any(t);
@@ -11081,8 +11086,9 @@ static int lr_kw_mixin(void *ud, int cls, int ref) {
 static int lr_kw_skip(void *ud, int cls, const LrMixin *m) {
   Compiler *c = ((LrKernelWalk *)ud)->c;
   int core = -1;
+  (void)cls;
   (void)elab_class_ref_at(c, m->ref, &core);
-  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || elab_mixin_may_not_run(c, cls, m);
+  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || elab_mixin_may_not_run(m);
 }
 static int lr_kw_enter(void *ud, int mod, int depth) {
   LrKernelWalk *x = ud;
@@ -11111,15 +11117,34 @@ int elab_class_kernel(Compiler *c, int cls) {
   if (root == LR_ROOT_NAMED) (void)elab_class_ref_at(c, ref, &core);
   return root == LR_ROOT_BASIC || core == CORE_BASIC_OBJECT ? KERN_LACKS : KERN_HAS;
 }
+/* Does a mixin of class cls's, at node in the body whose header is open, run in a reopening of cls (a body that is
+   not the statement that made the class) that may run once an object of cls, or of a class below it, exists? A
+   module's objects are its includers', which this does not follow: one may exist. */
+static int lr_late_reopening(Compiler *c, int cls, int open, int node) {
+  int made = cls >= 0 && cls < c->nclasses ? c->classes[cls].def_node : -1;
+  return made >= 0 && open >= 0 && open != made &&
+         (comp_class_is_module(c, &c->classes[cls]) || elab_class_live_at(c, cls, 0, elab_point_of(c, node)));
+}
+/* Each mixin's early bit (LrMixin.early), once, as the record is made: from the map's conditions of a statement
+   (elab_point_may) and lr_rta's first instances, facts of the load phase as the record holds it, whatever later
+   passes make of the calls that make an object (a `send(:new)` counts as the `new` it becomes) */
+static void lr_early_settle(Compiler *c) {
+  LoadRecord *r = elab_fresh(c);
+  for (int k = LR_MAIN; k + 1 < r->ncls; k++) {
+    LrClass *kc = lr_class(r, k);
+    for (int j = 0; j < kc->nmix; j++)
+      kc->mix[j].early = !elab_point_may(c, kc->mix[j].node) && !lr_late_reopening(c, k, kc->mix[j].open, kc->mix[j].node);
+  }
+  r->hgen++;
+}
 /* See analyze.h. */
 /* ...asked of the modules a program module includes: a fact of each module, kept (LoadRecord.brings, of the record's
    histories as they stand) so that a module reached by many routes, or asked by many mixins, is walked once */
-/* Does mixin m of class cls, as the record holds it, possibly not run before a call of cls's reads it: under a
-   condition, after one that decides, or in a reopening of the class (not the statement that made it), which code
-   that has made an object of the class may run ahead of? */
-int elab_mixin_may_not_run(Compiler *c, int cls, const LrMixin *m) {
-  int made = cls >= 0 && cls < c->nclasses ? c->classes[cls].def_node : -1;
-  return !m->applied || m->cond || elab_point_may(c, m->node) || (made >= 0 && m->open != made);
+/* Does mixin m of a class, as the record holds it, possibly not run before a call on an object of the class reads
+   it: under a condition, after one that decides, or in a reopening that may run after such an object exists
+   (LrMixin.early)? */
+int elab_mixin_may_not_run(const LrMixin *m) {
+  return !m->applied || m->cond || !m->early;
 }
 static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   LoadRecord *r = c->lrec;
@@ -11139,7 +11164,7 @@ static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   if (memo[m + 1]) return memo[m + 1] == 1;
   memo[m + 1] = 2;   /* (while it is asked: a module is not its own include) */
   for (int j = 0; j < k->nmix; j++)
-    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && !(certain && elab_mixin_may_not_run(c, m, &k->mix[j])) &&
+    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && !(certain && elab_mixin_may_not_run(&k->mix[j])) &&
         lr_brings_kernel(c, k->mix[j].ref, certain) == 1) return memo[m + 1] = 1;
   return 0;
 }

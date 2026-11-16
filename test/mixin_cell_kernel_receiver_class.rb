@@ -218,3 +218,24 @@ show { LateMissSub.new.t }
 class LateMissSub
   def method_missing(n, *a) = [:late, n]
 end
+
+# a reopening that runs before any object is made: its include holds from the start
+class Ahead < BasicObject; end
+class Ahead
+  include ::Kernel
+  def t = respond_to_missing?(:x, false)
+end
+show { Ahead.new.t }
+
+# an object made by a send ahead of the reopening: the include holds from where it runs
+class SentNew < BasicObject
+  def t = respond_to_missing?(:x, false)
+end
+sent = SentNew.send(:new)
+psent = SentNew.public_send(:new)
+show { sent.t }
+class SentNew
+  include ::Kernel
+end
+show { sent.t }
+show { psent.t }

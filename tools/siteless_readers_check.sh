@@ -17,6 +17,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
 FUNCS="
+src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
 src/analyze_util.c:class_has_coerce_shape
 src/analyze_util.c:class_coerce_emittable

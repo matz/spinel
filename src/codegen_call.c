@@ -24296,7 +24296,13 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
       /* a generated reader has no method entry, but the switch has its arm
          (`[lobby].first.members`), so its visibility and an `undef` of it
          are checked here, as a method's are */
-      if (!call_attr_target(c, -1, k, vnm, CT_ATTR | CT_SHARED, NULL)) continue;
+      /* (and a generated writer, `x=`, by its attribute's name, which a
+         send's writer arms store through: emit_boxed_writer_arms) */
+      char wbase[256];
+      if (name_is_plain_setter(vnm) && setter_base_name(vnm, wbase, sizeof wbase)) {
+        if (!call_attr_target(c, -1, k, wbase, CT_ATTR | CT_SHARED | CT_WRITER, NULL)) continue;
+      }
+      else if (!call_attr_target(c, -1, k, vnm, CT_ATTR | CT_SHARED, NULL)) continue;
       /* undefined unless a class below the `undef` declares the reader
          again, or an alias of that name (comp_is_undeffed_in_chain stops
          only at a method; a reader is not inherited past an `undef`, so a

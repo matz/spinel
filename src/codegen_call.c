@@ -5507,8 +5507,8 @@ static void emit_sysexit_alloc(Compiler *c, int ci, const char **dim, Buf *b) {
    or a class below it. The status and the message are judged at run time, as
    CRuby's initialize judges them. */
 void emit_sysexit_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
-  if (nt_argv_has(c->nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING))
-    unsupported(c, id, "a splat, keyword or block argument to a SystemExit constructor");
+  if (nt_argv_has(c->nt, argv, argc, NT_ARG_BLOCK | NT_ARG_FORWARDING))
+    unsupported(c, id, "a block argument to a SystemExit constructor");
   int te = ++g_tmp;
   Buf alloc; memset(&alloc, 0, sizeof alloc);
   const char *dim = "sp_Exception";
@@ -5633,8 +5633,18 @@ int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, 
    CRuby's initialize judges them. `lead` is empty or ends in ", ". */
 void emit_syserr_call(Compiler *c, int id, const char *fn, const char *lead,
                       int argc, const int *argv, Buf *b) {
-  if (nt_argv_has(c->nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING))
-    unsupported(c, id, "a splat, keyword or block argument to a SystemCallError constructor");
+  if (nt_argv_has(c->nt, argv, argc, NT_ARG_BLOCK | NT_ARG_FORWARDING))
+    unsupported(c, id, "a block argument to a SystemCallError constructor");
+  /* a splat or keywords: the arguments gathered in the prelude, a non-empty
+     keyword Hash as one more (the initialize is written in C and takes no
+     keywords), and the count judged by `fn` at run time */
+  if (nt_argv_has(c->nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS)) {
+    int ta, tk;
+    emit_exc_args_gather(c, id, argc, argv, &ta, &tk);
+    buf_printf(b, "({ if (_t%d.tag == SP_TAG_OBJ && sp_poly_keys(_t%d)->len > 0) sp_PolyArray_push(_t%d, _t%d); "
+                  "%s(%s_t%d->len, _t%d->data); })", tk, tk, ta, tk, fn, lead, ta, ta);
+    return;
+  }
   if (argc == 0) { buf_printf(b, "%s(%s0, NULL)", fn, lead); return; }
   int t0 = g_tmp + 1;
   g_tmp += argc;

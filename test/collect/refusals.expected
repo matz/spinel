@@ -2096,12 +2096,6 @@ spinel: test/reject/systemcallerror_subclass_errno_const.rb:5: an Errno constant
 spinel: test/reject/systemcallerror_subclass_errno_const_nested.rb:5: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
 == test/reject/systemcallerror_subclass_errno_const_nested.rb [promote] rc=1
 spinel: test/reject/systemcallerror_subclass_errno_const_nested.rb:5: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
-== test/reject/systemcallerror_zsuper_keyword.rb [default] rc=1
-spinel: test/reject/systemcallerror_zsuper_keyword.rb:6: unsupported a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize: node N (ForwardingSuperNode)
-spinel: 1 refusal, nothing written
-== test/reject/systemcallerror_zsuper_keyword.rb [promote] rc=1
-spinel: test/reject/systemcallerror_zsuper_keyword.rb:6: unsupported a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize: node N (ForwardingSuperNode)
-spinel: 1 refusal, nothing written
 == test/reject/table_loop_class_intersection.rb [default] rc=1
 spinel: test/reject/table_loop_class_intersection.rb:7: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty6
 spinel: 1 refusal, nothing written

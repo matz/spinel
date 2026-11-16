@@ -81,3 +81,18 @@ begin
 rescue SignalException => e
   p [e.message, e.cause&.message]
 end
+
+# a SystemCallError class known only at run time builds from the operand
+# itself: a lone Integer is the errno
+c9 = RuntimeError.new("c9")
+[SystemCallError, Errno::ENOENT, RuntimeError].each do |k|
+  [2, "boom", nil].each do |m|
+    begin
+      raise k, m, cause: c9
+    rescue Errno::ENOENT => e
+      p [:enoent, e.class, e.message, e.cause]
+    rescue Exception => e
+      p [e.class, e.message, e.cause]
+    end
+  end
+end

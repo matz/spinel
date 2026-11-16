@@ -18605,7 +18605,7 @@ static int class_case_eq_defined(Compiler *c, int pred) {
    `v.kind_of?(K)`, `v.instance_of?(K)` or `K === v`, K a bare constant.
    Sets *local to the local read, *kn to K's name, *exact to the instance_of?
    form and *case_eq to the `===` form; 0 when the predicate is no such test. */
-static int local_class_test(const Compiler *c, const NodeTable *nt, int pred, int *local, const char **kn, int *exact, int *case_eq) {
+static int local_class_test(const Compiler *c, const NodeTable *nt, int pred, int *local, const char **kn, int *knode, int *exact, int *case_eq) {
   if (pred < 0 || nt_kind(nt, pred) != NK_CallNode || nt_ref(nt, pred, "block") >= 0) return 0;
   const char *nm = nt_str(nt, pred, "name");
   int recv = nt_ref(nt, pred, "receiver");
@@ -18616,7 +18616,7 @@ static int local_class_test(const Compiler *c, const NodeTable *nt, int pred, in
   if (!*case_eq && !is_kind_query(nm)) return 0;
   int lv = *case_eq ? av[0] : recv, kc = *case_eq ? recv : av[0];
   if (nt_kind(nt, lv) != NK_LocalVariableReadNode || nt_kind(nt, kc) != NK_ConstantReadNode) return 0;
-  *local = lv; *kn = key_name(c, kc); *exact = is_instance_of_query(nm);
+  *local = lv; *kn = key_name(c, kc); *knode = kc; *exact = is_instance_of_query(nm);
   return *kn != NULL;
 }
 
@@ -18707,13 +18707,13 @@ int fold_static_is_a(Compiler *c) {
       changed |= fold_if_arm(c, id, pred, ans, ps, is_elsif, n0);
       continue;
     }
-    int recv, exact, case_eq;
+    int recv, exact, case_eq, knode;
     const char *kn;
-    if (!local_class_test(c, nt, pred, &recv, &kn, &exact, &case_eq)) continue;
+    if (!local_class_test(c, nt, pred, &recv, &kn, &knode, &exact, &case_eq)) continue;
     /* a constant that names no class is no test (`R === v` on a Range
        constant, an undefined name's NameError), and a class method `===`
        answers as the program says */
-    int kci = comp_class_index(c, kn);
+    int kci = const_node_class_index(c, knode);
     if (kci < 0 && !is_builtin_class_name(kn) && !is_builtin_module_name(kn)) continue;
     if (case_eq && kci >= 0 && call_target(c, pred, kci, "===", CT_CMETHOD, NULL) >= 0) continue;
     if (case_eq && class_case_eq_defined(c, pred)) continue;

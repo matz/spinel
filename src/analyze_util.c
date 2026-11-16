@@ -5381,7 +5381,6 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
                        ? nt_str(nt, recv, "name") : NULL;
       /* (the class the receiver names: an alias's, a class body's self) */
       k = recv >= 0 && (rn || nt_kind(nt, recv) == NK_SelfNode) ? class_recv_static_ci(c, recv) : -1;
-      if (k < 0) k = rn ? comp_class_index(c, rn) : -1;
       goto found;
     }
   }
@@ -5431,9 +5430,7 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
     /* `Outer::Mod.method(:m)` names the class by its last segment, as every
        other constant receiver resolves */
-    const char *rn2 = key_name(c, recv);
     k = class_recv_static_ci(c, recv), side = 1;
-    if (k < 0) k = rn2 ? comp_class_index(c, rn2) : -1;
     if (k >= 0) goto found;
   }
   /* `self.class.method(:cmeth)` in an instance method of a class nothing

@@ -18920,7 +18920,7 @@ static int oa_const_slot(Compiler *c, OAS *sl, int n, int id, int *dyn) {
   const NodeTable *nt = c->nt;
   const char *nm = const_key_at(c, id);
   *dyn = 0;
-  if (!nm || comp_class_index(c, nm) >= 0) return -1;
+  if (!nm || const_node_class_index(c, id) >= 0) return -1;
   if (nt_kind(nt, id) == NK_ConstantPathNode) {
     if (const_path_in_closed_builtin(c, id) || const_path_misses_toplevel(c, id)) return -1;
     int p = nt_ref(nt, id, "parent");
@@ -44154,7 +44154,7 @@ static int splat_builtin_spec_range(Compiler *c, int id, const char *name, int *
      takes the constant's name */
   if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode) {
     const char *cn = nt_str(nt, r, "name");
-    if (!cn || comp_class_index(c, cn) >= 0 || !builtin_cmethod_span(cn, name, &l, &h) || h > l + 3) return 0;
+    if (!cn || const_node_class_index(c, r) >= 0 || !builtin_cmethod_span(cn, name, &l, &h) || h > l + 3) return 0;
     if (lo) *lo = l;
     if (hi) *hi = h;
     return 1;
@@ -48561,7 +48561,7 @@ static int tmcv_const_is_time(Compiler *c, int v) {
   const char *n = nt_str(nt, v, "name");
   /* Not only an unopened Time: a top-level `class Time` reopens the builtin (a runtime adding a method to it) */
   if (sp_streq(n, "Time")) return 1;
-  int k = comp_class_index(c, n);
+  int k = const_node_class_index(c, v);
   return k >= 0 && comp_ary_is_time(c, k);
 }
 static int tmcv_local_holds_time_class(Compiler *c, int at, const char *name) {

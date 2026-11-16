@@ -2865,8 +2865,7 @@ int comp_sg_reader_const(Compiler *c, int call_id) {
   if (recv < 0) return -1;
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return -1;
-  const char *rn = const_key_at(c, recv);
-  int ci = rn ? comp_class_index(c, rn) : -1;
+  int ci = const_node_class_index(c, recv);
   if (ci < 0 || !comp_is_sg_reader(&c->classes[ci], nm)) return -1;
   return comp_sg_const_binding(c, ci, nm);
 }

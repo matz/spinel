@@ -4411,7 +4411,7 @@ static void cf_node(CF *f, int v) {
       cf_all(f, v);
       return;
     }
-    int kc = comp_class_index(c, nm);
+    int kc = const_node_class_index(c, v);
     if (kc >= 0) { cf_add_set(f, v, cf_classval(f, kc)); return; }   /* the Class object */
     /* a module whose methods hand out values from anywhere, held as a
        value (`m = Marshal`): a call on what holds it answers anything, as

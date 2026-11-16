@@ -7987,9 +7987,9 @@ static int ct_params_plain(Compiler *c, const Scope *sc, int kwrest_ok, int defa
     if (i != sc->rest_idx && sc->pdefault && sc->pdefault[i] >= 0) return 0;
   return 1;
 }
-/* Does the super call sup (a `super`, or the builtin-lowered call of it) of
-   method sc pass on exactly what sc received: its parameters in order, a rest
-   parameter splatted, no keywords, and its caller's block (super_forwards_caller_block)? */
+/* Does the `super` sup of method sc pass on exactly what sc received: its
+   parameters in order, a rest parameter splatted, no keywords, and its
+   caller's block (super_forwards_caller_block)? */
 static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int argc, int open, int kw_ok) {
   const NodeTable *nt = c->nt;
   /* (the call fills every positional parameter: a default never runs) */
@@ -7997,8 +7997,6 @@ static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int arg
   if (!ct_params_plain(c, sc, 1, !open && argc >= pos)) return 0;
   int an = 0, args = nt_ref(nt, sup, "arguments"), np = 0, blk = nt_ref(nt, sup, "block");
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  /* (the lowered call holds its block pass among its arguments) */
-  if (blk < 0 && an > 0 && nt_kind(nt, av[an - 1]) == NK_BlockArgumentNode) blk = av[an - 1];
   if (!block_pass_is_callers(c, sc, blk)) return 0;
   if (nt_kind(nt, sup) == NK_ForwardingSuperNode) return 1;
   for (int i = 0; i < an; i++) {
@@ -8026,16 +8024,18 @@ static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int arg
    forward: a prepended module's copy whose body only calls `super` with what
    it received? Then the builtin's own initialize runs as if it were not there.
    A reopening's own def is never one: its `super` skips the builtin (the
-   reopening replaced it) and reaches BasicObject's. */
+   reopening replaced it) and reaches BasicObject's. The body read is the
+   def's, as written, which every copy of the method shares: the copy's own
+   is the one the compiler rewrites, and a `super` into the builtin there is
+   lowered to the builtin's call (lower_builtin_supers), which no longer says
+   what the `super` passes (a bare one's block). */
 static int ct_init_forwards(Compiler *c, int mi, int ci, int argc, int open, int kw_ok) {
   const Scope *sc = &c->scopes[mi];
-  int b = sc->body, n = 0;
+  int b = sc->def_node >= 0 ? nt_ref(c->nt, sc->def_node, "body") : -1, n = 0;
   const int *bb = b >= 0 && nt_kind(c->nt, b) == NK_StatementsNode ? nt_arr(c->nt, b, "body", &n) : NULL;
   if (!sc->is_prepend_copy || sc->class_id != ci || !bb || n != 1) return 0;
   NodeKind k = nt_kind(c->nt, bb[0]);
-  const char *cn = k == NK_CallNode ? nt_str(c->nt, bb[0], "name") : NULL;
-  return k == NK_SuperNode || k == NK_ForwardingSuperNode || (cn && is_initialize_name(comp_scope_user_name(sc)) && sp_streq(cn, sc->name) && cplan_builtin_call(c, bb[0]))
-         ? ct_super_passes_params(c, sc, bb[0], argc, open, kw_ok) : 0;
+  return (k == NK_SuperNode || k == NK_ForwardingSuperNode) && ct_super_passes_params(c, sc, bb[0], argc, open, kw_ok);
 }
 /* What the chain of program initializes of builtin class ci reduces to from
    start (cplan_builtin_new_form's rule): each takes what the call passes

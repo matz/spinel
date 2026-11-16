@@ -13230,8 +13230,10 @@ static int desugar_hash_new_capacity(Compiler *c) {
     const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
     if (nt_argv_kwh(nt, av, an) < 0) continue;
     /* (a program initialize ahead of Hash's own that takes the keyword as a positional Hash sees it: the plan refuses that
-       call with the keyword on it, cplan_builtin_new_form) */
-    if (cplan_const_user(c, id, r, 1).mi >= 0 || cplan_builtin_new_form(c, id) == BNF_REFUSE) continue;
+       call with the keyword on it, cplan_builtin_new_form; and where it fills defaults, the fill's rewrite holds the
+       keyword's value first, as CRuby runs it ahead of them, and the call is then the builtin's own) */
+    int bnf = cplan_const_user(c, id, r, 1).mi >= 0 ? BNF_REFUSE : cplan_builtin_new_form(c, id);
+    if (bnf == BNF_REFUSE || bnf == BNF_FILL) continue;
     int en = 0; const int *el = nt_arr(nt, av[an - 1], "elements", &en);
     if (en != 1 || nt_kind(nt, el[0]) != NK_AssocNode) continue;
     int key = nt_ref(nt, el[0], "key"), val = nt_ref(nt, el[0], "value");

@@ -15867,19 +15867,20 @@ void emit_regexp_new(Compiler *c, int argc, const int *argv, Buf *b) {
    plain value its nil raised ahead of the fill. Any other size goes into
    the sp_int _t<tn> converted (answers 0). */
 /* (A fill with no effect of its own is still read before the conversion
-   when the program has a #to_int that may change what it reads, a global
-   or an ivar the method writes; only a literal reads the same either way.) */
-static int array_fill_reads_same_after(Compiler *c, int fill) {
+   when the size's #to_int, asked at the size it converts, may change what
+   it reads, a global or an ivar the method writes; only a literal reads the
+   same either way.) */
+static int array_fill_reads_same_after(Compiler *c, int size, int fill) {
   if (subtree_has_side_effect(c, fill)) return 0;
   NodeKind k = nt_kind(c->nt, fill);
   if (k == NK_IntegerNode || k == NK_FloatNode || k == NK_StringNode || k == NK_SymbolNode ||
       k == NK_NilNode || k == NK_TrueNode || k == NK_FalseNode)
     return 1;
-  return !prog_has_conv_method(c, "to_int", TY_INT);
+  return !prog_has_conv_method(c, size, "to_int", TY_INT);
 }
 static int array_new_size_hold(Compiler *c, int size, int fill, int tn, int *ts) {
   Repr sr = repr_of(c, size);
-  int late = !array_fill_reads_same_after(c, fill) && nt_kind(c->nt, size) != NK_SplatNode &&
+  int late = !array_fill_reads_same_after(c, size, fill) && nt_kind(c->nt, size) != NK_SplatNode &&
              g_n_argov < MAX_ARG_OVERRIDE &&
              (sr.kind == RK_BOXED || sr.big || repr_opt_kind(c, size) == TY_INT ||
               comp_ntype(c, size) != TY_INT);

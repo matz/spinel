@@ -18421,7 +18421,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
   int changed = 0;
   /* ENV's missing-key block receives the String key, as fetch's does. */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      is_env_const(key_name(c, recv)) && !comp_const(c, "ENV") &&
+      infer_type(c, recv) == TY_ENV &&
       bop_share_named(BOP_ENV, name) == BSH_FETCH) {
     const char *p0 = block_param_name(c, block, 0);
     if (p0) changed |= bp_widen(comp_scope_of(c, block), p0, TY_STRING);

@@ -4932,7 +4932,7 @@ int is_handler_proc_block(Compiler *c, int id) {
     nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Signal");
   }
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      key_name(c, recv) && sp_streq(key_name(c, recv), "ENV") &&
+      infer_type(c, recv) == TY_ENV &&
       is_select_bang(name))
     return 1;
   return 0;

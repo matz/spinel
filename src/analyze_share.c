@@ -1627,7 +1627,7 @@ static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
   int rcv = nt_ref(nt, n, "receiver");
   const char *cn = nt_str(nt, n, "name");
   if (cn && rcv >= 0 && nt_ref(nt, n, "block") < 0 && !sh_has_targets(c, n)) {
-    if (nt_kind(nt, rcv) == NK_ConstantReadNode && is_env_const(key_name(c, rcv)) && is_aref_name(cn))
+    if (nt_kind(nt, rcv) == NK_ConstantReadNode && comp_ntype_settled(c, rcv) == TY_ENV && is_aref_name(cn))
       return 1;
     if ((is_receiver_conversion(cn) || is_freeze_name(cn)) && call_plain_argc(c, n) == 0)
       return share_value_fresh(c, rcv, depth + 1);

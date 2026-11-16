@@ -1100,7 +1100,7 @@ int env_delete_block_value(Compiler *c, int v) {
   int recv = is_delete_name(nm) ? nt_ref(nt, v, "receiver") : -1;
   int blk = recv >= 0 ? nt_ref(nt, v, "block") : -1, argc = 0;
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || nt_kind(nt, recv) != NK_ConstantReadNode ||
-      !is_env_const(nt_str(nt, recv, "name")) || comp_const(c, "ENV"))
+      comp_ntype(c, recv) != TY_ENV)
     return -1;
   call_args(nt, v, &argc);
   if (argc != 1) return -1;
@@ -1528,8 +1528,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   {
     int erecv = nt_ref(nt, id, "receiver");
     NodeKind erk = nt_kind(nt, erecv);
-    const char *ern = (erk == NK_ConstantReadNode) ? key_name(c, erecv) : NULL;
-    if (ern && sp_streq(ern, "ENV")) {
+    if (erk == NK_ConstantReadNode && comp_ntype(c, erecv) == TY_ENV) {
       const char *enm = nt_str(nt, id, "name");
       int eac = 0; const int *eav = call_args(nt, id, &eac);
       /* a non-String key never converts: TypeError at the call (#2765/#2766) */
@@ -1746,7 +1745,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     NodeKind rty2_k = nt_kind(nt, recv);
     if (rty2_k == NK_ConstantReadNode) {
       const char *rn = key_name(c, recv);
-      if (rn && sp_streq(rn, "ENV")) {
+      if (comp_ntype(c, recv) == TY_ENV) {
         buf_puts(b, "sp_env_str(getenv("); emit_env_str(c, argv[0], 0, b); buf_puts(b, "))");
         return 1;
       }
@@ -1757,7 +1756,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     NodeKind rty2_k = nt_kind(nt, recv);
     if (rty2_k == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+      if (comp_ntype(c, recv) == TY_ENV) {
         TyKind evt = comp_ntype(c, argv[1]);
         NodeKind v1k = nt_kind(nt, argv[1]);
         int lit_nil = v1k == NK_NilNode;
@@ -1793,7 +1792,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     NodeKind rty2_k = nt_kind(nt, recv);
     if (rty2_k == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+      if (comp_ntype(c, recv) == TY_ENV) {
         buf_puts(b, "sp_env_size()");
         return 1;
       }
@@ -1805,7 +1804,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     NodeKind rty2_k = nt_kind(nt, recv);
     if (rty2_k == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+      if (comp_ntype(c, recv) == TY_ENV) {
         buf_puts(b, "(getenv("); emit_env_str(c, argv[0], 0, b); buf_puts(b, ") != NULL)");
         return 1;
       }
@@ -1816,7 +1815,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     NodeKind rty2_k = nt_kind(nt, recv);
     if (rty2_k == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+      if (comp_ntype(c, recv) == TY_ENV) {
         /* The call's type is String joined with the default's: a String or
            nil default keeps the nullable string, any other default boxes both
            arms. (The block form is the ENV snapshot's Hash#fetch, #2742.) */

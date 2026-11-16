@@ -27371,7 +27371,7 @@ int strbuf_flow_unseen(Compiler *c, int v) {
   if (share_value_fresh(c, v, 0)) return 1;
   int recv = nt_kind(nt, v) == NK_CallNode ? nt_ref(nt, v, "receiver") : -1;
   const char *rname = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
-  return is_argv_const(rname) || (is_env_const(rname) &&
+  return is_argv_const(rname) || (rname && comp_ntype(c, recv) == TY_ENV &&
          bop_share_named(BOP_ENV, nt_str(nt, v, "name")) == BSH_PURE) || strbuf_flow_unseen_arms(c, v);
 }
 static int strbuf_flow_seen_leaf(Compiler *c, int v) { return !strbuf_flow_unseen(c, v); }

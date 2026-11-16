@@ -51,5 +51,19 @@ rescue ArgumentError => e
   $log << e.message
 end
 p $log
+# a fill with no effect of its own is read before #to_int changes it, and
+# stays alive while #to_int drops its other holder and collects
+class Swap
+  def to_int
+    $fill = :new
+    $s = "replaced"
+    GC.start
+    2
+  end
+end
+$fill = :old
+p Array.new(Swap.new, $fill)
+$s = "a" * 3
+p Array.new(Swap.new, $s)
 # a plain Integer size and a fill without side effects keep their order
 p Array.new(2, fill(7)), Array.new(Conv.new(2), 0)

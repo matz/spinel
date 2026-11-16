@@ -9882,11 +9882,12 @@ static void desugar_data_positional_new(Compiler *c) {
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
     int ci = const_node_class_index(c, recv);
-    mtab_push_in(c, id);   /* (the initialize the call runs) */
-    if (ci < 0 || comp_method_in_chain(c, ci, "initialize", NULL) < 0) continue;
+    if (ci < 0) continue;
     int dc = ci;
     for (int g = 0; dc >= 0 && !c->classes[dc].is_data && g < 64; g++) dc = c->classes[dc].parent;
     if (dc < 0 || !c->classes[dc].is_data) continue;
+    mtab_push_in(c, id);   /* (the initialize the call runs, where it runs) */
+    if (cplan_hook_target(c, id, ci, "initialize", NULL) < 0) continue;
     ClassInfo *dcls = &c->classes[dc];
     int args = nt_ref(nt, id, "arguments");
     int an = 0;
@@ -35716,7 +35717,7 @@ static int promote_ivar_handle_stores(Compiler *c) {
     TyKind ut = infer_type(c, u);
     int ci = ty_is_object(ut) ? ty_object_class(ut) : -1;
     if (ci < 0 || !(c->classes[ci].is_struct || c->classes[ci].is_data) ||
-        comp_method_in_chain(c, ci, "initialize", NULL) >= 0) continue;
+        cplan_hook_target(c, u, ci, "initialize", NULL) >= 0) continue;
     for (int a = 0; a < c->classes[ci].nmembers; a++) {
       if (c->classes[ci].ivar_types[a] != TY_STRBUF || !c->classes[ci].ivar_str_shared[a]) continue;
       int v = struct_new_member_arg(c, u, ci, a);

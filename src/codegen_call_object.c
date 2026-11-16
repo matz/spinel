@@ -2699,7 +2699,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
     int ic_c = 0; const int *ic_v = ic_a >= 0 ? nt_arr(nt, ic_a, "arguments", &ic_c) : NULL;
     if (ic_r >= 0 && ic_n && sp_streq(ic_n, "initialize_copy") && ic_c == 1 &&
         ty_is_object(comp_ntype(c, ic_r)) &&
-        comp_method_in_chain(c, ty_object_class(comp_ntype(c, ic_r)), "initialize_copy", NULL) < 0) {
+        call_target(c, id, ty_object_class(comp_ntype(c, ic_r)), "initialize_copy", CT_METHODS, NULL) < 0) {
       buf_puts(b, "((void)("); emit_expr_for_effect(c, ic_v[0], b); buf_puts(b, "), ");
       emit_expr(c, ic_r, b); buf_puts(b, ")");
       return 1;

@@ -1,0 +1,30 @@
+[121, 101, 115, 8232]
+[121, 101, 115]
+[97, 8232, 10, 98]
+[97, 8232]
+[97, 8232]
+Psych::SyntaxError: (<unknown>): could not find expected ':' while scanning a si
+[97, 8232, 98]
+[97, 8232, 98]
+Psych::SyntaxError: (<unknown>): could not find expected ':' while scanning a si
+Psych::SyntaxError: (<unknown>): could not find expected ':' while scanning a si
+[97, 8233, 98]
+[97, 32, 98]
+{"a" => 1, "b" => 2}
+{"a" => 1, "b" => 2}
+{"k" => "x\ny\n"}
+{"k" => "x y\nz\n"}
+{"k" => "a b"}
+{"k" => "a\nb"}
+{"k" => "a b\nc"}
+{"a" => 1, "b" => 2}
+{"a" => 1, "b" => 2}
+{"k" => "yes\u2028\n\n"}
+{"k" => "yes\u2028"}
+{"k" => "a\u2028b c\n"}
+["a", "b"]
+{"k" => ["a", "b"]}
+Psych::SyntaxError: (<unknown>): did not find expected node content while parsing a flow node at line 3 column
+Psych::SyntaxError: (<unknown>): did not find expected '-' indicator while parsing a block collection at line 
+{"k" => "xy"}
+{"k" => "v"}

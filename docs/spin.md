@@ -588,10 +588,19 @@ ctypes, a Swift or C# binding) links it over the position-independent
 runtime: `make runtime-pic` builds `lib/libspinel_rt_pic.a`, and
 `cc -fPIC -shared -Ilib kernel.c lib/libspinel_rt_pic.a -lm -o libkernel.so`
 builds the object. The regular `libspinel_rt.a` is built for an executable,
-and a shared link refuses its relocations. A library that uses threads
-links `lib/libspinel_rt_mt_pic.a`, which `make runtime-pic` builds too, and
-is compiled with `-DSP_THREADS -fPIC` (not the `-ftls-model=initial-exec`
-an executable takes: a loaded object gets no room for this runtime's
+and a shared link refuses its relocations. A kernel that calls
+`String#crypt` adds `-lcrypt` on glibc Linux, as `spinel` does for a
+program: the shared link succeeds without it, and `dlopen` then refuses
+the object for its undefined `crypt`.
+
+A library that requires a bundled package with C of its own (`json`,
+`zlib`, `openssl`, ...) names its object in its C, as
+`/* SPINEL_LINK_OBJ: packages/json/sp_json.o */`; a shared object links
+the position-independent build beside it, `packages/json/sp_json_pic.o`,
+which `make runtime-pic` builds too. A library that uses threads links
+`lib/libspinel_rt_mt_pic.a` and the packages' `sp_<p>_mt_pic.o`, and is
+compiled with `-DSP_THREADS -fPIC` (not the `-ftls-model=initial-exec` an
+executable takes: a loaded object gets no room for this runtime's
 thread-local state in that model). Its thread-local reads cost more there:
 an allocating entry ran about 25% more instructions than in an executable.
 

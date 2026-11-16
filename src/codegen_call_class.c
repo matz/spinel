@@ -151,18 +151,6 @@ int class_switch_arm_oint(Compiler *c, int call, int cid, const char *name) {
 
 /* `mark` (or NULL) is the slot's assigned mark (ivar_set_mark), set after
    the store. */
-/* Whether a class can be a run-time class value: it is named by reached
-   code, or it is an ancestor of one that is (`superclass` reaches it). */
-static int class_value_possible(Compiler *c, int k) {
-  if (k < 0 || !c->classes[k].unreferenced) return 1;
-  for (int j = 0; j < c->nclasses; j++) {
-    if (c->classes[j].unreferenced) continue;
-    for (int x = c->classes[j].parent; x >= 0; x = c->classes[x].parent)
-      if (x == k) return 1;
-  }
-  return 0;
-}
-
 static void emit_attr_writer_converted(Compiler *c, int arg, TyKind ivt, int tmp,
                                        const char *name, const char *mark, Buf *b) {
   TyKind avk = store_value_kind(c, arg);
@@ -4381,56 +4369,12 @@ void emit_boxed_cls_sg_first_arms(Compiler *c, int id, const char *name, int arg
    class method of (`klass.label`, one class with `attr_accessor :label` on
    its singleton, another with `def self.label`): each reads or writes its
    own slot into the dispatch's boxed result `_t<tr>`. 1 when any. */
-/* Is class method scope mi of class p a copy of an ancestor's method (the
-   one an inherited method reading class-level ivars gets per subclass, see
-   specialize_inherited_cls_new) rather than a method p's own body defines?
-   The copy keeps the original's def node, which an ancestor of p holds: the
-   original itself shares the node with the copies its subclasses get. */
-static int cmethod_is_inherited_copy(Compiler *c, int mi, int p) {
-  for (int o = 1; o < c->nscopes; o++) {
-    int oc = c->scopes[o].class_id;
-    if (o != mi && c->scopes[o].is_cmethod && c->scopes[o].def_node == c->scopes[mi].def_node &&
-        oc >= 0 && oc != p && is_descendant(c, p, oc)) return 1;
-  }
-  return 0;
-}
-/* Does class k answer call `call`'s `name` by a `class << self` accessor?
-   The lookup walks k's singleton class and then its superclasses', and the
-   first class that declares the accessor or defines a class method of the
-   name answers: the accessor wins over a `def self.label` in a superclass,
-   and a class method defined below the accessor's class is ahead of it. A
-   class's lists hold the accessors its ancestors declare as well, so what a
-   class declares is read from its declarations (comp_sg_accessor_own), the
-   reader `x` and the writer `x=` apart: a class can declare one half and
-   inherit the other. A per-subclass copy of an ancestor's class method is
-   the ancestor's. */
-static int cls_value_own_sg_answers(Compiler *c, int call, int k, const char *name, int argc) {
-  char base[256];
-  int setter = setter_base_name(name, base, sizeof base);
-  if (setter ? argc != 1 : argc != 0) return 0;
-  ClassInfo *cls = &c->classes[k];
-  if (is_builtin_reopen(cls->name)) return 0;
-  const char *rn = setter ? base : comp_resolve_cm_alias_at(c, k, name, NULL);
-  if (!rn) rn = name;
-  if (setter ? !comp_is_sg_writer(cls, base) : !comp_is_sg_reader(cls, rn)) return 0;
-  char wn[260];
-  snprintf(wn, sizeof wn, "%s=", base);
-  for (int p = k, guard = 0; p >= 0 && guard < 256; p = c->classes[p].parent, guard++) {
-    ClassInfo *pc = &c->classes[p];
-    int pmi = call_target(c, call, p, name, CT_OWN | CT_CMETHOD, NULL);
-    if (pmi >= 0 && !cmethod_is_inherited_copy(c, pmi, p)) return 0;
-    if ((setter ? comp_is_sg_writer(pc, base) : comp_is_sg_reader(pc, rn)) &&
-        comp_sg_accessor_own(c, p, setter ? wn : rn)) return 1;
-    if (p == pc->parent) break;
-  }
-  return call_target(c, call, k, name, CT_CMETHOD, NULL) < 0;
-}
 static int emit_cls_value_sg_arms(Compiler *c, int id, const char *name, int argc, const int *argv,
                                   int tr, Buf *b) {
   char base[256];
   int setter = setter_base_name(name, base, sizeof base), any = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    if (!cls_value_own_sg_answers(c, id, k, name, argc)) continue;
+    if (!cplan_cls_own_sg_answers(c, id, k, name, argc)) continue;
     ClassInfo *cls = &c->classes[k];
     const char *rn = setter ? base : comp_resolve_cm_alias_at(c, k, name, NULL);
     if (!rn) rn = name;
@@ -4587,7 +4531,7 @@ static int emit_cvar_reflection(Compiler *c, int id, Buf *b, const NodeTable *nt
    methods compiled, and no exception of it is raised). */
 static int exc_cls_pick_class(Compiler *c, int k) {
   if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) return 0;
-  return class_is_exc_reopen(c, k) || is_builtin_reopen(c->classes[k].name) || class_value_possible(c, k);
+  return class_is_exc_reopen(c, k) || is_builtin_reopen(c->classes[k].name) || cplan_class_value_possible(c, k);
 }
 /* How many such exception classes define class method `name` themselves,
    with no parameter; with str_only, 0 unless each of them answers a String. */
@@ -5587,7 +5531,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       TyKind uret9 = TY_UNKNOWN, wret9 = TY_UNKNOWN;
       int uret_set9 = 0, nwrong9 = 0, splat9 = nt_argv_splat_count(nt, argv, argc);
       for (int k = 0; k < c->nclasses; k++) {
-        if (!comp_cv_arm_class(c, k) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
+        if (!comp_cv_arm_class(c, k) || cplan_cls_own_sg_answers(c, id, k, name, argc)) continue;
         int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
         if (kmi < 0) continue;
         TyKind kr = (TyKind)c->scopes[kmi].ret;
@@ -5609,26 +5553,23 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          classes without one, the call keeps the dispatch below) */
       if (ncand9 == 0 && core_method_vis("Class", name, 1, NULL) == 1) nwrong9 = 0;
       if (ncand9 == 0) uret9 = wret9;
+      /* the plan's answer for the call: its arms, and whether it is lowered as the switch of
+         them or by the proc-form dispatch (cplan_cls_value_arms) */
+      int *arm_k9 = NULL, *arm_mi9 = NULL;
+      unsigned low9 = 0;
+      int narm9 = ncand9 > 0 || nwrong9 > 0 ? cplan_cls_value_arms(c, id, name, argc, &arm_k9, &arm_mi9, &low9) : 0;
       if (ncand9 > 0 || nwrong9 > 0) {
         /* Every candidate must accept exactly this call's positional args (no
            block/yield). Different candidates may declare different param
            types, so emit_args_filled runs per arm against that method's
            signature -- the args are hoisted into poly temps first so a
            side-effecting argument is evaluated once, not once per arm. */
-        int simple9 = (nt_ref(nt, id, "block") < 0);
+        int simple9 = (low9 & CLS_LOWER_SWITCH) != 0;
         /* A candidate taking a block -- a yielding one through its
            proc form -- is an arm of the poly receiver's class-tag dispatch,
            which hands the block over as a proc: box the class and take it. */
         if (repr_of(c, id).kind == RK_BOXED && g_n_argov < MAX_ARG_OVERRIDE) {
-          int any_pf9 = 0;
-          for (int k = 0; k < c->nclasses && !any_pf9; k++) {
-            if (cls_value_own_sg_answers(c, id, k, name, argc)) continue;
-            int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
-            if (kmi < 0) continue;
-            Scope *ks9 = &c->scopes[kmi];
-            if (scope_proc_form_of(c, kmi) >= 0 ||
-                (ks9->blk_param && ks9->blk_param[0] && !ks9->yields)) any_pf9 = 1;
-          }
+          int any_pf9 = (low9 & CLS_LOWER_PROC) != 0;
           if (any_pf9) {
             int tsd = ++g_tmp;
             tsd = hold_operand_pre(c, recv, TY_POLY, 1, tsd, 1);
@@ -5639,25 +5580,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             g_cls_value_recv = svcv;
             view_pop(c, vw);
             view_unbind(g_n_argov - 1);
-            if (done9) return 1;
+            if (done9) { free(arm_k9); free(arm_mi9); return 1; }
           }
-        }
-        for (int k = 0; simple9 && k < c->nclasses; k++) {
-          if (!comp_cv_arm_class(c, k) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
-          int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
-          if (kmi < 0) continue;
-          /* A candidate that yields, takes a block, or has a rest param has no
-             arm this emitter can build at all, so it still vetoes the
-             dispatch. A candidate with the WRONG ARITY does not: it cannot be
-             the receiver of this call, and vetoing on it refused to compile a
-             program whose call was never ambiguous (#4129). */
-          /* A *rest candidate has an arm when the rest is the boxed array
-             every splat parameter starts as: the surplus arguments are
-             packed into it (FFI::Struct.layout, a getter and a DSL in one). */
-          int rest_ok9 = rest_packable_arm(c, &c->scopes[kmi]);
-          if (c->scopes[kmi].yields ||
-              (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0]) ||
-              (c->scopes[kmi].rest_idx >= 0 && !rest_ok9)) simple9 = 0;
         }
         if (simple9) {
           TyKind slot9 = is_scalar_ret(uret9) && uret9 != TY_VOID && uret9 != TY_UNKNOWN
@@ -5704,17 +5628,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           snprintf(rcls9, sizeof rcls9, "_t%d", tk9);
           snprintf(rraise9, sizeof rraise9, "sp_raise_nomethod(sp_sprintf(\"undefined method '%s' for %%s\", sp_class_to_s(_t%d)))", name, tk9);
           int rdef9 = 0;
-          for (int k = 0; k < c->nclasses; k++) {
-            if (!comp_cv_arm_class(c, k) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
-            /* a class no reached code names, and no named class descends
-               from, is no class value: its singleton copy is not compiled
-               (#10592), so an arm calling it would dangle */
-            if (!class_value_possible(c, k)) continue;
-            int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
-            if (kmi < 0) continue;
-            /* a method copied into each class a value can hold is not emitted
-               itself: no value holds a class that answers by it */
-            if (comp_scope_copied_away(c, kmi)) continue;
+          /* the arms the plan answers for the call (cplan_cls_value_arms): the classes that
+             have one and the class method each calls */
+          for (int ai9 = 0; ai9 < narm9; ai9++) {
+            int k = arm_k9[ai9], kmi = arm_mi9[ai9];
             int rarm9 = emit_reopen_arm_test(c, kmi, name, rcls9, rraise9, b);
             if (!rarm9) buf_printf(b, " case %d: ", k);
             rdef9 |= rarm9;
@@ -5796,11 +5713,13 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           buf_printf(b, " } _t%d; })", tr9);
           unhoist_dispatch_args(c, hn9, hsv9, hty9);
           (void)defmi9;
+          free(arm_k9); free(arm_mi9);
           return 1;
         }
       }
       /* a `class << self` accessor on such a value: an arm per class that
          has it, on its own slot */
+      free(arm_k9); free(arm_mi9);
       if (ncand9 == 0 && emit_cls_value_sg_accessor(c, id, recv, name, argc, argv, b)) return 1;
       skip_cls_cmethod9:;
     }

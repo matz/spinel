@@ -21114,6 +21114,27 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
   }
   for (int i = 0, nn = call_node_names(c, id, names); i < nn; i++)
     if (ct_version_marked(c, names[i])) ct_version_classes(c, id, names[i], cr_mark_version, &m);
+  /* the arms of a class-valued dispatch (a class method called on a Class value): the plan's one
+     answer of them, which the emitter writes, so each replaced version an arm names is kept and
+     none a direct call or a left-out arm does not */
+  const char *nm0 = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  if (nm0 && !is_new_name(nm0) && ct_version_marked(c, nm0)) {
+    int *ak = NULL, *am = NULL, argc0 = 0;
+    (void)call_args(nt, id, &argc0);
+    unsigned low0 = 0;
+    int nar = cplan_cls_value_arms(c, id, nm0, argc0, &ak, &am, &low0);
+    /* (the arms the switch is written from: not where a candidate vetoes it. The proc-form dispatch
+       is taken on a boxed receiver, which the types of a pass this early do not settle, so the arms
+       are marked whatever the proc-form bit says: everything the emitter may still write) */
+    if (!(low0 & CLS_LOWER_SWITCH)) nar = 0;
+    for (int i = 0; i < nar; i++) {
+      char mark[24];
+      if (!c->scopes[am[i]].replaced) continue;
+      snprintf(mark, sizeof mark, "\x01%d", am[i]);
+      cr_add_name(out, n, cap, mark);
+    }
+    free(ak); free(am);
+  }
   ct_implied_classes(c, id, ct_version_marked, cr_mark_version, &m);
 }
 

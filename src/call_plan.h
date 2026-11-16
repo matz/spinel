@@ -763,6 +763,18 @@ int cplan_def_takes_argc(Compiler *c, int mi, int argc);
    binds through the gather, which judges the count there. Codegen's arms
    and the inference of their answer both ask this. */
 int cplan_cls_arm_takes(Compiler *c, int id, int mi, int argc, int splat);
+/* The arms of the class-valued dispatch of a class method call (a Class value held in a variable, a
+   parameter or a constant that names no one class): the classes it has one for into *cls and the
+   class method each calls into *mi (malloc'd, the caller frees; NULL for a direct call), their number.
+   *lower (may be NULL): CLS_LOWER_SWITCH where the call is lowered as the switch of these arms, CLS_LOWER_PROC
+   where a candidate takes the block as a proc. The emitter writes these arms and reachability keeps
+   the versions they name. */
+enum { CLS_LOWER_SWITCH = 1, CLS_LOWER_PROC = 2 };   /* how cplan_cls_value_arms says the call is lowered */
+int cplan_cls_value_arms(Compiler *c, int id, const char *name, int argc, int **cls, int **mi, unsigned *lower);
+/* Can class k be a run-time class value: named by reached code, or an ancestor of one that is */
+int cplan_class_value_possible(Compiler *c, int k);
+/* Does class k answer call `call`'s `name` by a `class << self` accessor, not a class method? */
+int cplan_cls_own_sg_answers(Compiler *c, int call, int k, const char *name, int argc);
 /* Is call id a class body's call on self (receiverless or `self.`) that
    the plan binds to one method of the body's class (UC_CMETH, CP_DIRECT)?
    That binding is the one method the call runs, so reachability follows it

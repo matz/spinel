@@ -6122,6 +6122,108 @@ TyKind cplan_poly_operator_ret(Compiler *c, int id) {
   return found ? TY_BOOL : TY_UNKNOWN;
 }
 
+/* Is class method scope mi of class p a copy of an ancestor's method (the
+   one an inherited method reading class-level ivars gets per subclass, see
+   specialize_inherited_cls_new) rather than a method p's own body defines?
+   The copy keeps the original's def node, which an ancestor of p holds: the
+   original itself shares the node with the copies its subclasses get. */
+static int cmethod_is_inherited_copy(Compiler *c, int mi, int p) {
+  for (int o = 1; o < c->nscopes; o++) {
+    int oc = c->scopes[o].class_id;
+    if (o != mi && c->scopes[o].is_cmethod && c->scopes[o].def_node == c->scopes[mi].def_node &&
+        oc >= 0 && oc != p && is_descendant(c, p, oc)) return 1;
+  }
+  return 0;
+}
+/* Does class k answer call `call`'s `name` by a `class << self` accessor?
+   The lookup walks k's singleton class and then its superclasses', and the
+   first class that declares the accessor or defines a class method of the
+   name answers: the accessor wins over a `def self.label` in a superclass,
+   and a class method defined below the accessor's class is ahead of it. A
+   class's lists hold the accessors its ancestors declare as well, so what a
+   class declares is read from its declarations (comp_sg_accessor_own), the
+   reader `x` and the writer `x=` apart: a class can declare one half and
+   inherit the other. A per-subclass copy of an ancestor's class method is
+   the ancestor's. */
+int cplan_cls_own_sg_answers(Compiler *c, int call, int k, const char *name, int argc) {
+  /* (a class that declares no singleton accessor answers by none: asked of every class at every
+     site, so the cheap test comes first) */
+  if (!c->classes[k].nsg_readers && !c->classes[k].nsg_writers) return 0;
+  char base[256];
+  int setter = setter_base_name(name, base, sizeof base);
+  if (setter ? argc != 1 : argc != 0) return 0;
+  ClassInfo *cls = &c->classes[k];
+  if (is_builtin_reopen(cls->name)) return 0;
+  const char *rn = setter ? base : comp_resolve_cm_alias_at(c, k, name, NULL);
+  if (!rn) rn = name;
+  if (setter ? !comp_is_sg_writer(cls, base) : !comp_is_sg_reader(cls, rn)) return 0;
+  char wn[260];
+  snprintf(wn, sizeof wn, "%s=", base);
+  for (int p = k, guard = 0; p >= 0 && guard < 256; p = c->classes[p].parent, guard++) {
+    ClassInfo *pc = &c->classes[p];
+    int pmi = call_target(c, call, p, name, CT_OWN | CT_CMETHOD, NULL);
+    if (pmi >= 0 && !cmethod_is_inherited_copy(c, pmi, p)) return 0;
+    if ((setter ? comp_is_sg_writer(pc, base) : comp_is_sg_reader(pc, rn)) &&
+        comp_sg_accessor_own(c, p, setter ? wn : rn)) return 1;
+    if (p == pc->parent) break;
+  }
+  return call_target(c, call, k, name, CT_CMETHOD, NULL) < 0;
+}
+/* Whether a class can be a run-time class value: it is named by reached
+   code, or it is an ancestor of one that is (`superclass` reaches it). */
+int cplan_class_value_possible(Compiler *c, int k) {
+  if (k < 0 || !c->classes[k].unreferenced) return 1;
+  for (int j = 0; j < c->nclasses; j++) {
+    if (c->classes[j].unreferenced) continue;
+    for (int x = c->classes[j].parent; x >= 0; x = c->classes[x].parent)
+      if (x == k) return 1;
+  }
+  return 0;
+}
+/* See call_plan.h. The arms of the class-valued dispatch emit_call_class_arms writes for a class
+   method called on a Class value held in a variable, a parameter or a constant that names no one
+   class: each class a value may hold that answers the name by a class method (not by a
+   `class << self` accessor, whose own arms the emitter writes), and that class method. *lower says
+   how the call is lowered: as the switch of those arms (no block at the call, and no candidate
+   that yields, takes a block or has a rest the arm cannot pack), or, where a candidate takes the
+   block as a proc, by the proc-form dispatch (CLS_LOWER_PROC; the emitter takes it on a boxed
+   receiver). */
+int cplan_cls_value_arms(Compiler *c, int id, const char *name, int argc, int **cls, int **mi, unsigned *lower) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  *cls = *mi = NULL;
+  if (lower) *lower = 0;
+  /* (only a Class-typed receiver has class arms, and a constant that names one class is a direct
+     call: no arm) */
+  NodeKind rk = recv >= 0 ? nt_kind(c->nt, recv) : NK_NONE;
+  if (recv < 0 || comp_ntype(c, recv) != TY_CLASS || !class_recv_is_dynamic(c, recv)) return 0;
+  if ((rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && const_node_class_index(c, recv) >= 0) return 0;
+  int n = 0, veto = nt_ref(c->nt, id, "block") >= 0;
+  unsigned low = 0;
+  if (!(*cls = malloc(sizeof(int) * (size_t)(c->nclasses + 1))) || !(*mi = malloc(sizeof(int) * (size_t)(c->nclasses + 1)))) {
+    fprintf(stderr, "spinel: out of memory\n");
+    exit(1);
+  }
+  for (int k = 0; k < c->nclasses; k++) {
+    if (cplan_cls_own_sg_answers(c, id, k, name, argc)) continue;
+    int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
+    if (kmi < 0) continue;
+    const Scope *ks = &c->scopes[kmi];
+    if (scope_proc_form_of(c, kmi) >= 0 || (ks->blk_param && ks->blk_param[0] && !ks->yields)) low |= CLS_LOWER_PROC;
+    if (!comp_cv_arm_class(c, k)) continue;
+    /* (a candidate that yields, takes a block, or has a rest the arm cannot pack has no arm the
+       switch can build: it vetoes the switch, as one the call gets wrong in arity does not) */
+    if (ks->yields || (ks->blk_param && ks->blk_param[0]) || (ks->rest_idx >= 0 && !rest_packable_arm(c, (Scope *)ks))) veto = 1;
+    /* (a class no reached code names, and no named class descends from, is no class value: its
+       singleton copy is not compiled, so an arm calling it would dangle; a method copied into
+       each class a value can hold is not emitted itself) */
+    if (!cplan_class_value_possible(c, k) || comp_scope_copied_away(c, kmi)) continue;
+    (*cls)[n] = k;
+    (*mi)[n++] = kmi;
+  }
+  if (!veto) low |= CLS_LOWER_SWITCH;
+  if (lower) *lower = low;
+  return n;
+}
 /* Does method mi take pos_argc positional arguments and the keyword hash
    kwh (-1 for none): the judgement of its dispatch arm and of a call's
    emission (poly_arm_count) */

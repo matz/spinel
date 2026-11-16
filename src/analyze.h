@@ -582,7 +582,7 @@ unsigned long elab_mixin_gen(Compiler *c);
    first such question found them (analyze_elab.c): 1 when the frame is in,
    until elab_plan_leave; 0 for a node it cannot place */
 int elab_plan_enter(Compiler *c, int id);
-int elab_accessor_first(Compiler *c, int node, const char *name);
+int elab_accessor_first(Compiler *c, int node, const char *name, int cls);
 void elab_plan_leave(Compiler *c);
 void elab_check_version(Compiler *c, int id, int vi, int dc, int now, int ndc);   /* SPINEL_ELAB_CHECK */
 void elab_check_surface(Compiler *c);   /* SPINEL_ELAB_CHECK: the record's surface against the class tables */

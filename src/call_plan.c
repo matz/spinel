@@ -4224,7 +4224,7 @@ static const AttrFact *attr_fact(Compiler *c, int cls, const char *name) {
   int versioned = ct_version_named(c, name), first = 0;
   if (versioned) {
     int n = elab_chain_versions(c, cls, 0, name, vs, 2);
-    first = n == 1 && ct_attr_version(vs[0].v) && vs[0].v->node >= 0 && elab_accessor_first(c, vs[0].v->node, name);
+    first = n == 1 && ct_attr_version(vs[0].v) && vs[0].v->node >= 0 && elab_accessor_first(c, vs[0].v->node, name, cls);
   }
   m->slot[j] = (AttrFact){ cls, first, versioned, name_dup(name) };
   m->used++;

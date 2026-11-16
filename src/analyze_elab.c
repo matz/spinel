@@ -111,7 +111,7 @@ struct LoadRecord {
   unsigned char *bits;       /* [n] LR_* */
   int n, ncap, nregion;
   struct ElabWalk *walk;     /* the registration's walk, while it runs (elab_walk_enter) */
-  ANameHash cfirst; int *cfirst_st, cfirst_done;   /* the first statement of region 0 that calls each name outside a method body, -1 where one is elsewhere (elab_accessor_first) */
+  ANameHash cfirst; struct LrCallSt *cfirst_cs; int cfirst_done;   /* the statements of region 0 that call each name outside a method body, and whether a call is elsewhere (elab_accessor_first) */
   ANameHash cn_name, cn_leaf; int *cn_cls, cn_n, cn_cap, cn_done;   /* the classes registered so far, each by its Ruby name and by the last segment of it, in class order (lr_walk_class_by_name) */
   unsigned ver;              /* the node table the map is of */
   int check, shown;
@@ -6545,44 +6545,75 @@ static int lr_runs_in(const LoadRecord *r, int a, int b) {
   return (b < r->nst ? r->st[b].nrun : r->nrun) - (a < r->nst ? r->st[a].nrun : r->nrun);
 }
 
-/* Is node, an attr_* call, the first thing of the program's that matters to a call of `name`: its statement is in
-   region 0 with no statement before it running code of the program's (lr_run_points), and no call of `name` (or a
-   send, a Method maker or an op-assign naming it) stands outside a method body before it? Then every call that can
-   run, in a method body or after it, runs after the accessor is made, whatever its window. */
-int elab_accessor_first(Compiler *c, int node, const char *name) {
+/* the statements of region 0 that call one name outside a method body (sorted when asked), poison: a call of it
+   stands in no statement of region 0 */
+struct LrCallSt { int *st, n, cap; unsigned char poison, sorted; };
+static int lr_int_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+/* Can a call of `name` meet the attr_* call `node` before it has run, for an instance of class cls? An instance of cls
+   exists only after cls is created (its first opening), so what runs before that matters not. The accessor is made
+   first when the attr_* statement is in region 0, on cls or a class above it (not a module a later include may
+   bring), and from cls's creation to the attr_* statement (none, where the class is created after it) no statement
+   runs code of the program's (lr_run_points) and no call of the name stands outside a method body (a call in a
+   method body or a kept block runs after code of the program's). Then every call that can reach cls meets it,
+   whatever its window. */
+int elab_accessor_first(Compiler *c, int node, const char *name, int cls) {
   LoadRecord *r = c->lrec;
-  if (!r || !r->recorded || node < 0 || !name) return 0;
-  int framed = elab_plan_enter(c, node), ok;
+  if (!r || !r->recorded || node < 0 || !name || cls < 0) return 0;
+  int framed = elab_plan_enter(c, node), ok = 0;
   lr_run_points(c);
   r = c->lrec;
-  int s = node < r->n ? r->at[node] : -1;
-  ok = s >= 0 && r->st[s].region == 0 && r->st[s].nrun == 0;
-  if (ok) {
-    if (!r->cfirst_done) {   /* (one pass over the calls for every name) */
-      r->cfirst_done = 1;
-      for (int id = 0; id < r->n; id++) {
-        if (nt_kind(c->nt, id) != NK_CallNode) continue;
-        int at = r->at[id];
-        if (at >= 0 && (r->bits[id] & LR_LATE)) continue;   /* (a call in a method body or a kept block runs after code of the program's) */
-        int st = at >= 0 && r->st[at].region == 0 ? at : -1;
-        const char *nm[2];
-        int n = call_node_names(c, id, nm);
-        for (int i = 0; i < n; i++) {
-          if (!nm[i]) continue;
-          int k = anh_find(&r->cfirst, nm[i]);
-          if (k < 0) {
-            anh_add(&r->cfirst, nm[i]);
-            k = r->cfirst.n - 1;
-            r->cfirst_st = realloc(r->cfirst_st, sizeof(int) * (size_t)(k + 1));
-            if (!r->cfirst_st) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-            r->cfirst_st[k] = st;
+  int s = node < r->n ? r->at[node] : -1, body = node < c->nt->count ? c->node_cbody[node] : -1, nb = 0;
+  const LrOpen *o = body >= 0 ? elab_class_bodies(c, cls, &nb) : NULL;
+  if (s >= 0 && r->st[s].region == 0 && body >= 0 && !comp_class_is_module(c, &c->classes[body]) && (body == cls || is_descendant(c, cls, body)) && nb > 0) {
+    int e = INT_MAX;   /* (the first opening of cls: the earliest statement of its headers) */
+    for (int i = 0; i < nb; i++) {
+      int h = o[i].node >= 0 && o[i].node < r->n ? r->at[o[i].node] : -1;
+      if (h < 0 || r->st[h].region != 0) { e = -1; break; }
+      if (h < e) e = h;
+    }
+    ok = e >= 0 && (e >= s || lr_runs_in(r, e, s) == 0);
+    if (ok && e < s) {
+      if (!r->cfirst_done) {   /* (one pass over the calls for every name) */
+        r->cfirst_done = 1;
+        for (int id = 0; id < r->n; id++) {
+          if (nt_kind(c->nt, id) != NK_CallNode) continue;
+          int at = r->at[id];
+          if (at >= 0 && (r->bits[id] & LR_LATE)) continue;
+          int st = at >= 0 && r->st[at].region == 0 ? at : -1;
+          const char *nm[2];
+          int n = call_node_names(c, id, nm);
+          for (int q = 0; q < n; q++) {
+            if (!nm[q]) continue;
+            int k = anh_find(&r->cfirst, nm[q]);
+            if (k < 0) {
+              anh_add(&r->cfirst, nm[q]);
+              k = r->cfirst.n - 1;
+              r->cfirst_cs = realloc(r->cfirst_cs, sizeof *r->cfirst_cs * (size_t)(k + 1));
+              if (!r->cfirst_cs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+              r->cfirst_cs[k] = (struct LrCallSt){ NULL, 0, 0, 0, 0 };
+            }
+            struct LrCallSt *cs = &r->cfirst_cs[k];
+            if (st < 0) { cs->poison = 1; continue; }
+            if (cs->n == cs->cap) {
+              cs->cap = cs->cap ? 2 * cs->cap : 4;
+              if (!(cs->st = realloc(cs->st, sizeof(int) * (size_t)cs->cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+            }
+            cs->st[cs->n++] = st;
           }
-          else if (st < 0 || (r->cfirst_st[k] >= 0 && st < r->cfirst_st[k])) r->cfirst_st[k] = st;
+        }
+      }
+      int k = anh_find(&r->cfirst, name);
+      if (k >= 0) {
+        struct LrCallSt *cs = &r->cfirst_cs[k];
+        if (cs->poison) ok = 0;
+        else {
+          if (!cs->sorted) { qsort(cs->st, (size_t)cs->n, sizeof(int), lr_int_cmp); cs->sorted = 1; }
+          int lo = 0, hi = cs->n;
+          while (lo < hi) { int mid = (lo + hi) / 2; if (cs->st[mid] < e) lo = mid + 1; else hi = mid; }
+          if (lo < cs->n && cs->st[lo] < s) ok = 0;   /* (a call of the name between the class's creation and the attr_*) */
         }
       }
     }
-    int k = anh_find(&r->cfirst, name);
-    ok = k < 0 || (r->cfirst_st[k] >= 0 && r->cfirst_st[k] >= s);
   }
   if (framed) elab_plan_leave(c);
   return ok;
@@ -10911,7 +10942,8 @@ void elab_free(Compiler *c) {
   lr_record_drop(r);
   for (int i = 0; i < r->cn_name.n; i++) free((char *)r->cn_name.key[i]);
   anh_free(&r->cn_name); anh_free(&r->cn_leaf); free(r->cn_cls);
-  anh_free(&r->cfirst); free(r->cfirst_st);
+  for (int i = 0; i < r->cfirst.n; i++) free(r->cfirst_cs[i].st);
+  anh_free(&r->cfirst); free(r->cfirst_cs);
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
   free(r->plan.rend); free(r->plan.rinst); free(r->plan.urun); free(r->plan.rentry);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);

@@ -20491,17 +20491,13 @@ int class_object_answers_builtin(const char *qm, int is_module) {
 static int class_responds_builtin(Compiler *c, int ci, const char *qm);
 static int class_responds_to(Compiler *c, int ci, const char *qm, int id) {
   if (!cplan_cmethod_later(c, id, ci, qm)) {
-    if (comp_cmethod_in_chain(c, ci, qm, NULL) >= 0) return 1;
-    /* singleton attr_accessor/reader/writer via class << self */
-    char base[256];
-    if (name_is_plain_setter(qm)) {
-      if (setter_base_name(qm, base, sizeof base) && comp_is_sg_writer(&c->classes[ci], base)) return 1;
-    }
-    else if (comp_is_sg_reader(&c->classes[ci], qm)) return 1;
+    /* the class's own class methods and its singleton accessors, from the call plan's table answer */
+    CplanPresence pr;
+    cplan_table_presence(c, ci, CT_CMETHOD, qm, &pr);
+    if (pr.table) return 1;
   }
   return class_responds_builtin(c, ci, qm);
-}
-/* ...with none of its program's class methods: the builtin ones */
+}/* ...with none of its program's class methods: the builtin ones */
 static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   int is_module = comp_class_is_module(c, &c->classes[ci]);
   /* A module's `module_function` methods are recorded class-level and were
@@ -20585,13 +20581,13 @@ int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const i
   return 1;
 }
 
-int class_value_responds(Compiler *c, int tv, const char *qm, Buf *b) {
+int class_value_responds(Compiler *c, int id, int tv, const char *qm, Buf *b) {
   int any = (class_reopen_cmethod(c, -1, -1, qm) >= 0);
-  for (int k = 0; k < c->nclasses && !class_object_universal_method(qm); k++) any |= class_responds_to(c, k, qm, -1);
+  for (int k = 0; k < c->nclasses && !class_object_universal_method(qm); k++) any |= class_responds_to(c, k, qm, id);
   if (!any || !b) return any;
   buf_printf(b, " || (_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id == SP_CLASS_BY_NAME ? %d : (0", tv, tv, tv,
              class_object_universal_method(qm) || (class_reopen_cmethod(c, -1, -1, qm) >= 0));
-  for (int k = 0; k < c->nclasses; k++) if (class_responds_to(c, k, qm, -1)) buf_printf(b, " || _t%d.cls_id == %d", tv, k);
+  for (int k = 0; k < c->nclasses; k++) if (class_responds_to(c, k, qm, id)) buf_printf(b, " || _t%d.cls_id == %d", tv, k);
   buf_puts(b, ")))");
   return 1;
 }
@@ -34967,11 +34963,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
      own respond_to? keeps the answer below. */
   if (!resolved && foldable && include_all && recv >= 0 &&
       !(ty_is_object(rt) && call_target(c, id, ty_object_class(rt), RESPOND_TO_NAME, CT_METHODS, NULL) >= 0)) {
-    for (int si = 0; si < c->nscopes; si++) {
-      const Scope *ts = &c->scopes[si];
-      if (ts->name && ts->def_node >= 0 && ts->class_id < 0 && !ts->is_cmethod &&
-          !ts->is_proc_form && sp_streq(ts->name, qm)) { resolved = yes = 1; break; }
-    }
+    if (cplan_top_def_vis(c, id, qm) >= 0) resolved = yes = 1;
   }
   /* Object's private methods (exit, puts, raise) are every object's, so a
      builtin value, a class value or a boxed one answers them to include_all,

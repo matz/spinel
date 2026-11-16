@@ -9926,6 +9926,12 @@ int cplan_top_def_vis(Compiler *c, int call, const char *name) {
 }
 
 /* See call_plan.h. */
+int cplan_top_def_absent(Compiler *c, int call, const char *name) {
+  int tm = call >= 0 && name ? call_target(c, -1, -1, name, CT_TOP, NULL) : -1;
+  return tm >= 0 && ct_undefined_at(c, call, -1, name, CT_TOP, tm);
+}
+
+/* See call_plan.h. */
 const LocalVar *cplan_top_def_cell(Compiler *c, int call, const char *name) {
   int v = -1, cell = -1;
   if (!name || call_target(c, -1, -1, name, CT_TOP, NULL) < 0 || builtin_name_below_object(name)) return NULL;

@@ -1235,6 +1235,9 @@ int cplan_nil_program_responds(Compiler *c, int call, const char *name, int incl
    such def, or the record cannot tell. The question of the reflection readers
    (respond_to?). */
 int cplan_top_def_vis(Compiler *c, int call, const char *name);
+/* Does the record prove the top-level def of `name`, which the tables hold, has not run where call `call` runs (as a call
+   of the name there raises)? 0 where it has, where the record cannot tell, and where there is no such def. */
+int cplan_top_def_absent(Compiler *c, int call, const char *name);
 /* ...and the cell that holds it where only the run tells (cplan_top_def_vis answers -1): main's def
    `name`, its one version, has run where call `call` runs, with a word whose order against the
    call the run decides. The global holds SP_VIS_* (CallPlan.vis_cell); NULL for any other

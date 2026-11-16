@@ -304,6 +304,49 @@ static const CplanRtrLists *rtr_undef(Compiler *c, int k) {
   e->undef_built = 1;
   return e;
 }
+/* The names a respond_to? at call id leaves out of the lists a run-time name tests (the shared lists hold every
+   def of the program): a top-level def, or a method of an Object or Kernel reopening no class of the program
+   defines itself, that the record proves has not run where the call runs, and no builtin answers (it would still).
+   Only names with versions are asked. NULL, with *n 0, when none: the shared lists stand. */
+typedef struct { Compiler *c; int id; char ***v; int *n, *cap; } RtrOmit;
+/* a root reopening's name: left out when no class of the program defines it and the record proves it has not run */
+static void rtr_omit_root(void *ud, const char *name) {
+  const RtrOmit *o = ud;
+  Compiler *c = o->c;
+  CplanPresence pr;
+  int defined = 0, r = -1;
+  for (int k = 0; k < c->nclasses && !defined; k++)
+    defined = !(c->classes[k].name && is_object_root(c->classes[k].name)) && call_answers(c, -1, k, name, 0, NULL);
+  if (defined || !elab_method_versions(c, name) || builtin_object_method_known(name) || builtin_instance_name_known(name)) return;
+  for (int u = 0; u < 3 && r < 0; u++) {
+    static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT };
+    int k = comp_core_class(c, roots[u]);
+    if (k >= 0 && presence_at(c, o->id, k, CT_REACH, name, &pr) == PR_ABSENT && pr.table) r = k;
+  }
+  if (r < 0) return;
+  if (*o->n == *o->cap && !(*o->v = realloc(*o->v, sizeof **o->v * (size_t)(*o->cap = *o->cap ? *o->cap * 2 : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (!((*o->v)[(*o->n)++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+}
+static char **rtr_omitted(Compiler *c, int id, int *n) {
+  char **v = NULL;
+  int cap = 0;
+  *n = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *ts = &c->scopes[s];
+    if (!ts->name || ts->def_node < 0 || ts->class_id >= 0 || ts->is_cmethod || ts->is_proc_form) continue;
+    if (!elab_method_versions(c, ts->name) || !cplan_top_def_absent(c, id, ts->name) || any_class_defines(c, ts->name) ||
+        builtin_object_method_known(ts->name) || builtin_instance_name_known(ts->name)) continue;
+    if (*n == cap && !(v = realloc(v, sizeof *v * (size_t)(cap = cap ? cap * 2 : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (!(v[(*n)++] = strdup(ts->name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  RtrOmit o = { c, id, &v, n, &cap };
+  for (int u = 0; roots[u] >= 0; u++) {
+    int r = comp_core_class(c, roots[u]);
+    if (r >= 0) cplan_own_names(c, r, rtr_omit_root, &o);
+  }
+  return v;
+}
 /* respond_to? asked at run time, by the name's string: each class's own
    methods by the value's class, then what every object has. */
 static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv) {
@@ -313,8 +356,20 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
   int boxed = repr_of(c, id).kind == RK_BOXED;
   if (boxed) buf_puts(b, "sp_box_bool(");
   buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
-  buf_printf(b, "; const char *_n%d = sp_poly_to_name(", tv); emit_boxed(c, argv[0], b);
-  buf_printf(b, "); sp_bool _a%d = ", tv);
+  int nom = 0;
+  char **om = rtr_omitted(c, id, &nom);
+  if (nom) buf_printf(b, "; const char *_n%d = ({ const char *_q%d = sp_poly_to_name(", tv, tv);
+  else buf_printf(b, "; const char *_n%d = sp_poly_to_name(", tv);
+  emit_boxed(c, argv[0], b);
+  if (nom) {
+    buf_printf(b, "); sp_str_in_list(_q%d, (const char *const[]){", tv);
+    for (int i = 0; i < nom; i++) { buf_puts(b, "\""); emit_c_escaped(b, om[i]); buf_puts(b, "\", "); }
+    buf_printf(b, "NULL}) ? \"\" : _q%d; })", tv);
+  }
+  else buf_puts(b, ")");
+  for (int i = 0; i < nom; i++) free(om[i]);
+  free(om);
+  buf_printf(b, "; sp_bool _a%d = ", tv);
   if (argc >= 2) emit_cond(c, argv[1], b); else buf_puts(b, "0");
   /* the value's class as the poly dispatch keys it: a boxed builtin a
      reopening extended (a Time is an OBJ box naming SP_BUILTIN_TIME, a
@@ -1087,7 +1142,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           buf_puts(b, "), 1))");
           return 1;
         }
-        else if ((rt == TY_CLASS && class_value_responds(c, 0, qm, NULL)) ||
+        else if ((rt == TY_CLASS && class_value_responds(c, id, 0, qm, NULL)) ||
                  ((rt == TY_POLY || rt == TY_UNKNOWN) && !any_class_responds(c, qm))) {
           /* a nil the poly value holds answers by the program's NilClass
              (Object, Kernel) where it defines, undefines or hides the name */
@@ -1098,7 +1153,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           int ia_once = rt != TY_CLASS && nil_prog && nil_ans == 2 && argc >= 2 &&
                         iak != NK_TrueNode && iak != NK_FalseNode;
           int nil_arm = rt != TY_CLASS && nil_prog && (nil_ans != 2 || ia_once);
-          int cls_arm = class_value_responds(c, 0, qm, NULL);
+          int cls_arm = class_value_responds(c, id, 0, qm, NULL);
           int tv = cls_arm || nil_arm ? ++g_tmp : 0;
           if (!tv && argc == 1 && (rt == TY_POLY || rt == TY_UNKNOWN) &&
               emit_boxed_responds_builtin_absent(c, recv, qm, b)) return 1;
@@ -1116,7 +1171,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           buf_puts(b, ", \"");
           emit_c_escaped(b, qm);
           buf_puts(b, "\")");
-          if (tv) { if (cls_arm) class_value_responds(c, tv, qm, b); buf_puts(b, "; })"); }
+          if (tv) { if (cls_arm) class_value_responds(c, id, tv, qm, b); buf_puts(b, "; })"); }
           return 1;
         }
         else if ((rt == TY_POLY || rt == TY_UNKNOWN) && any_class_responds(c, qm)) {
@@ -1247,7 +1302,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           emit_c_escaped(b, qm);
           buf_puts(b, "\")");
           emit_io_reopen_responds(c, id, tv, qm, argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode, b);
-          class_value_responds(c, tv, qm, b);
+          class_value_responds(c, id, tv, qm, b);
           buf_puts(b, "; })");
           return 1;
         }

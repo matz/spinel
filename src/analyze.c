@@ -11448,10 +11448,10 @@ static const char *bool_value_class(const NodeTable *nt, int n) {
       else o.method(:sym) end)                # builtin_only
 
    1 when it split. Another receiver is left as it was. */
-/* (is class k's `method` the program's own?) */
-static int bsu_own_method(Compiler *c, int k) {
+/* (is class k's `method` the program's own? asked at call id, or with no call, id -1, by the table's survey) */
+static int bsu_own_method(Compiler *c, int id, int k) {
   if (k < 0 || k >= c->nclasses || !c->classes[k].name) return 0;
-  int mi = comp_method_in_chain(c, k, "method", NULL);
+  int mi = call_target(c, id, k, "method", id < 0 ? CT_METHODS | CT_SHARED : CT_METHODS, NULL);
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }
@@ -11489,7 +11489,7 @@ static void bsu_tab_build(Compiler *c) {
   int nn = nt->count;
   bsu_tab.nodes = nn;
   bsu_tab.none = 1;
-  for (int k = 0; k < c->nclasses && bsu_tab.none; k++) if (bsu_own_method(c, k)) bsu_tab.none = 0;
+  for (int k = 0; k < c->nclasses && bsu_tab.none; k++) if (bsu_own_method(c, -1, k)) bsu_tab.none = 0;
   if (bsu_tab.none) return;
   bsu_tab.at = calloc((size_t)(nn > 0 ? nn : 1), sizeof(int));
   if (!bsu_tab.at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -11527,7 +11527,7 @@ static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym)
     int k = ks ? ks[i] : i;
     /* (instantiated is not known yet while the types settle: a class the
        value cannot be fails its is_a? at run time) */
-    if (bsu_own_method(c, k)) own[nown++] = k;
+    if (bsu_own_method(c, id, k)) own[nown++] = k;
   }
   if (!nown) return 0;
   int base = nt->count;
@@ -11640,16 +11640,16 @@ static int desugar_builtin_method_obj(Compiler *c) {
            inherited class method is its own self */
         int kd = 0;
         if (ks >= 0 && ks < c->nscopes && c->scopes[ks].is_cmethod && c->scopes[ks].class_id >= 0 &&
-            comp_cmethod_in_chain(c, c->scopes[ks].class_id, ksym, NULL) < 0 &&
+            call_target(c, -1, c->scopes[ks].class_id, ksym, CT_CMETHOD | CT_SHARED, NULL) < 0 &&
             (comp_descendants(c, c->scopes[ks].class_id, &kd), kd == 0))
           kcls = c->scopes[ks].class_id;
         if (kcls < 0) continue;
       }
       else if (!kknown) continue;
-      if (comp_method_index(c, ksym) >= 0) continue;   /* a user def wins */
+      if (call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0) continue;   /* a user def wins */
       char kwname[48];
       snprintf(kwname, sizeof kwname, "__bam_%s", comp_node_tag(c, id));
-      if (comp_method_index(c, kwname) >= 0) continue;
+      if (call_target(c, -1, -1, kwname, CT_TOP | CT_SHARED, NULL) >= 0) continue;
       /* the wrapper takes what the call sites pass (bam_call_argc above),
          `def __bam_N(__bam_r, __bam_a, ...) = Integer(__bam_r, __bam_a, ...)`,
          or `def __bam_N(*__bam_r) = puts(*__bam_r)` when they disagree; one
@@ -11781,7 +11781,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     /* main's own `to_s` (cplan_main_singleton_call) comes ahead of a
        same-named top-level def, which otherwise wins */
     int main_sg = cplan_main_singleton_call(c, id);
-    if (!main_sg && comp_method_index(c, sym) >= 0) continue;
+    if (!main_sg && call_target(c, -1, -1, sym, CT_TOP | CT_SHARED, NULL) >= 0) continue;
     int cmp_only = 0;   /* a Comparable method the class does not define itself */
     int num_only = 0;   /* a Numeric method Integer or Float inherits */
     int sym_arity = 0, have_arity = 0;   /* the builtin's Method#arity */
@@ -11827,7 +11827,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     }
     char wname[48];
     snprintf(wname, sizeof wname, "__bam_%s", comp_node_tag(c, id));
-    if (comp_method_index(c, wname) >= 0) continue;   /* synthesized on a prior pass */
+    if (call_target(c, -1, -1, wname, CT_TOP | CT_SHARED, NULL) >= 0) continue;   /* synthesized on a prior pass */
     /* def __bam_<id>(__bam_r) = __bam_r.<sym>; for a binary operator
        def __bam_<id>(__bam_r, __bam_a) = __bam_r <op> __bam_a; and for a
        method whose call sites pass N arguments
@@ -13854,7 +13854,7 @@ static int rewrite_poly_to_h_block(Compiler *c, int id, NodeTable *nt, const cha
   int trecv = nt_ref(nt, id, "receiver");
   if (trecv < 0) return 0;
   for (int ci = 0; ci < c->nclasses; ci++)
-    if (comp_method_in_class(c, ci, "to_h") >= 0) return 0;
+    if (call_target(c, id, ci, "to_h", CT_OWN, NULL) >= 0) return 0;
   if (infer_type(c, trecv) != TY_POLY) return 0;
   /* A Hash's to_h yields the key and the value as two values, where its
      map yields the pair as one: a block of one parameter, `|key|`, binds
@@ -14162,7 +14162,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
         return 1;
       }
       else if (ty_is_object(rt) &&
-               comp_method_in_chain(c, ty_object_class(rt), "to_set", NULL) >= 0)
+               call_target(c, id, ty_object_class(rt), "to_set", CT_METHODS, NULL) >= 0)
         decline = 1;                                             /* the class owns the name */
       if (!decline) {
         int cst = nt_new_node(nt, "ConstantReadNode");
@@ -14484,7 +14484,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       ClassInfo *wsc = &c->classes[ty_object_class(wrt)];
       int wmi = struct_member_idx(c, wsc, wav[0]);
       /* a Float literal offset, unless the class has a `[]=` of its own */
-      if (wmi < 0 && comp_method_in_chain(c, ty_object_class(wrt), "[]=", NULL) < 0)
+      if (wmi < 0 && call_target(c, id, ty_object_class(wrt), "[]=", CT_METHODS, NULL) < 0)
         wmi = struct_member_idx_float(c, wsc, wav[0]);
       if (wmi >= 0) {
         char wn[300]; snprintf(wn, sizeof wn, "%s=", wsc->ivars[wmi] + 1);
@@ -14678,7 +14678,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     TyKind frt = frc >= 0 ? infer_type(c, frc) : TY_UNKNOWN;
     int fa_user = 0;
     for (int uk = 0; uk < c->nclasses; uk++)
-      if (comp_method_in_chain(c, uk, "find_all", NULL) >= 0) { fa_user = 1; break; }
+      if (call_target(c, id, uk, "find_all", CT_METHODS, NULL) >= 0) { fa_user = 1; break; }
     /* NOT hashes: Hash#find_all answers an array of pairs (the Enumerable
        contract), while Hash#select answers a hash -- the existing hash
        find_all machinery keeps that shape */
@@ -14812,7 +14812,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
        through its own methods */
     int okc = pcid >= 0 && pcid < c->nclasses;
     int smi = wix && okc ? call_target(c, id, pcid, nm, 0, NULL) : -1;
-    int cmi = wix && okc ? comp_method_in_chain(c, pcid, "to_a", NULL) : -1;
+    int cmi = wix && okc ? call_target(c, id, pcid, "to_a", CT_METHODS, NULL) : -1;
     int own = (smi >= 0 && !scope_is_struct_synth(c, smi)) || cmi >= 0 ||
               (okc && c->classes[pcid].is_struct && struct_has_member(&c->classes[pcid], nm));
     if (okc && c->classes[pcid].is_struct && !c->classes[pcid].is_data && !own) {
@@ -14871,7 +14871,7 @@ int desugar_enum_method_recv(Compiler *c) {
       /* a class without an #each that answers the name itself has the name
          it was called by back (detect, renamed to find by the pre-pass) */
       if (qn != nm && !comp_enum_answers_first(c, ocid, qn)) { changed |= enum_unrename(nt, id); continue; }
-      if (comp_method_in_chain(c, ocid, "__enum_to_a", NULL) < 0) continue;
+      if (call_target(c, id, ocid, "__enum_to_a", CT_METHODS, NULL) < 0) continue;
       if (!comp_enum_answers_first(c, ocid, qn)) continue;   /* the class's own */
       int selfn = nt_new_node(nt, "SelfNode");
       int wrap = nt_new_node(nt, "CallNode");
@@ -15097,7 +15097,7 @@ int desugar_enum_method_recv(Compiler *c) {
         TyKind zat = infer_type(c, za);
         if (!ty_is_object(zat)) continue;
         int zcid = ty_object_class(zat);
-        if (zcid < 0 || comp_method_in_chain(c, zcid, "__enum_to_a", NULL) < 0) continue;
+        if (zcid < 0 || call_target(c, id, zcid, "__enum_to_a", CT_METHODS, NULL) < 0) continue;
         int zwrap = nt_new_node(nt, "CallNode");
         if (zwrap < 0) continue;
         nt_node_set_str(nt, zwrap, "name", "__enum_to_a");
@@ -15127,7 +15127,7 @@ int desugar_enum_method_recv(Compiler *c) {
        is_array_enum_method; only THIS object-receiver wrap declines it. */
     if (sp_streq(nm, "each_with_index")) continue;
     int cid = ty_object_class(rt);
-    if (comp_method_in_chain(c, cid, "__enum_to_a", NULL) < 0) continue;  /* not an #each class */
+    if (call_target(c, id, cid, "__enum_to_a", CT_METHODS, NULL) < 0) continue;  /* not an #each class */
     /* A Struct's blockless #each returns an Enumerator over its members (CRuby),
        not the LocalJumpError the synthesized yielding #each would raise. Route
        it through the member array's blockless #each, which materializes the
@@ -15185,7 +15185,7 @@ int desugar_enum_method_recv(Compiler *c) {
        they ride the fiber-backed generator rather than the eager element
        array: a class whose #each never ends materializes forever (#3756). */
     const char *matn = "__enum_to_a";
-    if (comp_method_in_chain(c, cid, "__to_enum_each", NULL) >= 0 &&
+    if (call_target(c, id, cid, "__to_enum_each", CT_METHODS, NULL) >= 0 &&
         (sp_streq(nm, "first") || sp_streq(nm, "take") || sp_streq(nm, "lazy") ||
          ((is_find_or_take_while(nm)) &&
           nt_ref(nt, id, "block") >= 0) ||

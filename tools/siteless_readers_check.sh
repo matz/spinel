@@ -25,7 +25,10 @@ src/analyze.c:ur_iter_overridden
 src/analyze.c:synth_enum_to_a
 src/analyze.c:synth_struct_each
 src/analyze.c:synth_to_enum_generators
+src/analyze.c:bsu_own_method
+src/analyze.c:desugar_builtin_method_obj
 src/analyze_desugar.c:desugar_array_at
+src/analyze_desugar.c:user_block_method
 src/analyze_desugar.c:desugar_array_first_last
 src/analyze_desugar.c:desugar_enum_walk_calls
 src/analyze_desugar.c:desugar_unpack_block
@@ -34,6 +37,7 @@ src/analyze_desugar.c:desugar_interp_elided_to_s
 src/analyze_pass.c:widen_shared_cmp_params
 src/analyze_pass.c:boxed_store_hash_subclass_evidence
 src/analyze_pass.c:propagate_prep_params
+src/codegen_call.c:diag_user_defines
 src/codegen.c:class_has_user_binop
 src/codegen.c:class_gen_valeq
 src/codegen.c:emit_obj_cmp_dispatch

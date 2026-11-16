@@ -13274,8 +13274,9 @@ static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pf
    arguments, as CRuby runs them once the call has built its argument list: each a clone of the default. Where a forward
    made the call's literal keywords a positional Hash ahead of some (kwat), the keywords are that Hash, at its place among
    them. Where one reads an earlier parameter, every positional value is held in a local in turn, appended to pre (np so
-   far), and the reads read those locals. Answers how many writes pre holds, with room for one statement more. */
-static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **prep, int np) {
+   far), and the reads read those locals; where the call is to build the empty value (empty), each default is held too,
+   to run as the call drops its arguments. Answers how many writes pre holds, with room for one statement more. */
+static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **prep, int np, int empty) {
   NodeTable *nt = (NodeTable *)c->nt;
   Scope *sc = comp_scope_of(c, id);
   int an = nt_ref(nt, id, "arguments"), n = 0, npos = 0, nk = 0, hold = 0, base = nt->count;
@@ -13314,7 +13315,7 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
         j++;
       }
     free(di);
-    out[npos] = hold ? sd_hold(c, nt, sc, id, "bnd", npos, d, pre, &np) : d;
+    out[npos] = hold || empty ? sd_hold(c, nt, sc, id, "bnd", npos, d, pre, &np) : d;
   }
   memcpy(out + npos, keep, sizeof(int) * (size_t)nk);
   nt_node_set_arr(nt, an, "arguments", out, npos + nk);
@@ -13331,24 +13332,26 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
    The operands that run code are held in locals in CRuby's order, as any call's
    are (sd_hold_call_operands: a splat as `[*x]`, a `**` as `{**x}`, a block pass
    through __blk_conv, which checks what its to_proc answers), and the call
-   becomes `(held; ...; K.new)`. A literal block is never run. One whose forwards
-   leave defaults unfilled (BNF_FILL) holds them alike and passes their values
-   after its own (bni_place_defaults). */
+   becomes `(held; ...; K.new)`, the builtin's own (nt_mark_builtin_call). A
+   literal block is never run. One whose forwards leave defaults unfilled
+   (BNF_FILL) holds them alike and passes their values after its own
+   (bni_place_defaults); ahead of an empty one, those with an effect run after
+   the held operands. */
 static int desugar_builtin_new_init_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
     if (nt_kind(nt, id) != NK_CallNode || id >= c->node_cap) continue;
     int form = cplan_builtin_new_form(c, id);
-    if (form != BNF_FILL && ((nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0) || form != BNF_EMPTY)) continue;
-    NewFills fl;
-    if (form == BNF_FILL) cplan_builtin_new_fills(c, id, &fl);
+    NewFills fl = { .n = 0, .kwat = -1 };
+    if (form == BNF_FILL || form == BNF_EMPTY) cplan_builtin_new_fills(c, id, &fl);
+    if (form != BNF_FILL && (form != BNF_EMPTY || (nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0 && !fl.n))) continue;
     /* (where the call stands is known before its operands are held: holding them rewrites the call) */
     int *par = du_parent_map(nt);
     if (!par || par[id] < 0) { free(par); continue; }
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
-    if (form == BNF_FILL) np = bni_place_defaults(c, id, &fl, &pre, np);
+    if (fl.n) np = bni_place_defaults(c, id, &fl, &pre, np, form == BNF_EMPTY);
     if (np > 0) {
       /* (a sequence of its own in the call's place, of fresh nodes throughout: the order plan keeps what it recorded of the old
          call and its operands by node; the held values run as statements of their own, the plain `new` last) */
@@ -13358,9 +13361,10 @@ static int desugar_builtin_new_init_args(Compiler *c) {
         nt_node_set_ref(nt, id, "block", -1);
       }
       for (int i = 0; i < np; i++)
-        if (form == BNF_FILL) pre[i] = nt_clone_subtree(nt, pre[i]);
+        if (fl.n) pre[i] = nt_clone_subtree(nt, pre[i]);
         else if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
       pre[np++] = nt_clone_subtree(nt, id);
+      if (form == BNF_EMPTY) nt_mark_builtin_call(nt, pre[np - 1]);
       nt_node_set_arr(nt, stmts, "body", pre, np);
       nt_node_set_ref(nt, seq, "body", stmts);
       comp_grow_node_arrays(c);
@@ -13370,6 +13374,7 @@ static int desugar_builtin_new_init_args(Compiler *c) {
     else if (form == BNF_EMPTY) {
       nt_node_set_ref(nt, id, "arguments", -1);
       nt_node_set_ref(nt, id, "block", -1);
+      nt_mark_builtin_call(nt, id);
     }
     free(par);
     free(pre);

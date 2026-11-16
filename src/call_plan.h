@@ -764,8 +764,9 @@ int cplan_entries(Compiler *c, int id, int *out, int cap);
    the reopening's (CRuby's chain order, ct_behind_builtin_init): BNF_OWN the
    builtin's own initialize runs (every initialize ahead only forwards its
    parameters to it); BNF_EMPTY the first that does not is empty, and the builtin
-   has an empty value (builtin_empty_new): the call evaluates its arguments and
-   builds it; BNF_REFUSE any other, which the builtin construction does not run.
+   has an empty value (builtin_empty_new): the call evaluates its arguments, then
+   the defaults the forwards leave unfilled where one has an effect
+   (cplan_builtin_new_fills), and builds it; BNF_REFUSE any other, which the builtin construction does not run.
    BNF_NONE for any other call, and a builtin exception's `new`, which runs the
    program's. BNF_FILL: the builtin's own runs, given the values of the defaults
    the forwards leave unfilled after the call's arguments, as a bare `super`
@@ -773,7 +774,7 @@ int cplan_entries(Compiler *c, int id, int *out, int cap);
    them on the call, which is then BNF_OWN). */
 enum { BNF_NONE, BNF_OWN, BNF_EMPTY, BNF_REFUSE, BNF_FILL };
 int cplan_builtin_new_form(Compiler *c, int id);
-/* ...and for BNF_FILL those defaults, in the order CRuby runs them: parameter
+/* ...and for BNF_FILL and BNF_EMPTY those defaults, in the order CRuby runs them: parameter
    pi[k] of method scope mi[k], each the next positional argument. kwat: where a
    forward without a keyword rest made the call's literal keywords one more
    positional Hash, the count of defaults ahead of that Hash, which every later

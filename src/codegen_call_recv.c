@@ -7078,8 +7078,21 @@ static int emit_hash_merge_general(Compiler *c, int id, int recv, int arg, TyKin
     char copy[24]; snprintf(copy, sizeof copy, "_t%d", tc);
     emit_boxed_text(c, rt, copy, b);
     buf_printf(b, ", sp_box_nil()); SP_GC_ROOT(_t%d); sp_poly_hash_merge_into(", td);
-    buf_printf(b, "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH), sp_poly_hash_merge_arg(_t%d)); _t%d; })",
-               td, ta, td);
+    buf_printf(b, "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH), ", td);
+    int def = -1;
+    TyKind mk = ar.kind != RK_BOXED ? obj_container_conv(c, at, "to_hash", &def) : TY_UNKNOWN;
+    if (mk != TY_UNKNOWN) {
+      /* Typed converters pass defaults that the boxed bridge cannot supply. */
+      char av[24]; snprintf(av, sizeof av, "_t%d", ta);
+      Buf obj = {0, 0, 0}, cv = {0, 0, 0};
+      emit_unbox_text(c, at, av, &obj);
+      emit_obj_conv_call(c, def, "to_hash", comp_ty_value_obj(c, at), obj.p, &cv);
+      buf_printf(b, "(_t%d.tag == SP_TAG_NIL ? sp_poly_hash_merge_arg(_t%d) : ", ta, ta);
+      emit_boxed_text(c, mk, cv.p, b); buf_puts(b, ")");
+      free(obj.p); free(cv.p);
+    }
+    else buf_printf(b, "sp_poly_hash_merge_arg(_t%d)", ta);
+    buf_printf(b, "); _t%d; })", td);
     free(rb.p); free(ab.p);
     return 1;
   }

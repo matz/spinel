@@ -1,101 +1,176 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
-# entry_names_check.rb -- a typed container's entry names come from its row.
+# entry_names_check.rb -- a typed container's store and search entry names are formatted in one place.
 #
-#   tools/entry_names_check.rb
+#   tools/entry_names_check.rb [--staged | --rev REV]
 #
 # A String Array holds its elements as handles (typed_elem_held), and a Hash of String values its values: the
 # entries that store, search or insert a String are the `_e` ones, and the bytes entries (sp_StrArray_push,
-# sp_StrArray_set, sp_StrStrHash_set, ...) are deleted. The suffix of an entry is the container row's answer,
-# typed_elem_store_sfx (emit_array_entry / emit_hash_entry in codegen_util.c format a name from it). This check
-# keeps a name that could be a deleted one from being written back by hand. In src/*.c, outside comments, it
-# fails when
-#   1. a deleted entry is spelled out (sp_StrArray_push( and kin), or
-#   2. a format string builds the name of a store or a search (`sp_%sArray_push`, `sp_%sHash_set`, a `%s`
-#      operation, ...) in a statement that
-#        - takes its suffix from the row (typed_elem_store_sfx, elem_push_sfx, array_push_sfx, emit_kind_push, emit_array_entry,
-#          emit_hash_entry, emit_typed_elem_hold, emit_lifted, copy_entry_get) is fine; or
-#        - is listed in tools/entry_names.allow with the class and the reason it cannot name a deleted entry
-#          for a String kind (a numeric kind, a Poly value, a String arm taken before it).
-# Reads (get, oget, vget, get_e, ...) are not deleted names and are not asked about. An allow line whose site no
-# longer exists is also a failure, so the list stays what the sources are.
+# sp_StrArray_set, sp_StrStrHash_set, ...) are deleted. The suffix of an entry is the container row's
+# (typed_elem_store_sfx), and emit_elem_entry (codegen_util.c) is the one formatter of the name:
+# `sp_<kind>Array_<op><sfx>`. This check keeps a name from being formatted anywhere else.
 #
-# Exit status: 0 clean, 1 a site to route or list.
+# In the sources under src/ (.c, .h, .inc), outside comments, every string literal (adjacent literals joined)
+# is read for a name of the form sp_<kind>Array_<op> / sp_<kind>Hash_<op>, where <kind> is %s, %.*s, a $A / $H
+# template slot or a spelled kind (Str, StrStr, IntStr, Int, Poly, ...), and for an operation name that stands
+# apart (`"Array_push"`). A name whose operation is a store or a search (push, set, oset, insert, index,
+# rindex, delete, has_value, new_with_default, unshift, with any suffix) or is not known at the site (`%s`, or
+# the end of the literal) is a site. A kind that is spelled and holds no String handle (Int, Poly, ...) has no
+# deleted entry and is not read. A site outside emit_elem_entry fails unless tools/entry_names.allow lists
+# it: its class, file, function, pattern and how many times it occurs there, with the reason it cannot name a
+# deleted entry for a String kind. A listed site that no longer occurs, or occurs another number of times, is a
+# failure too, so a copied line is not allowed by the original's entry.
+#
+# The suffix is not followed: that a variable holds the row's answer is not proved, a site is either routed
+# through the formatter or listed.
+#
+# With --staged the sources and the list are read from the index, with --rev REV from that revision, so the
+# change judged is the one read. Exit status: 0 clean, 1 a site to route or list (each is printed).
+require "open3"
 ROOT = File.expand_path("..", __dir__)
-DELETED = /\bsp_(StrArray_(push|set|insert|index|rindex|delete|index_poly|rindex_poly)|(StrStr|IntStr)Hash_(set|has_value|new_with_default))\s*\(/
-AOPS = "push|set|insert|index|rindex|delete|index_poly|rindex_poly|unshift"
-HOPS = "set|has_value|new_with_default"
-FORMAT = /sp_%sArray_(#{AOPS})(%s|\b)|sp_%sHash_(#{HOPS})(%s|\b)|sp_%s(Array|Hash)_%s/
-ROW = /typed_elem_store_sfx|elem_push_sfx|array_push_sfx|emit_kind_push|emit_array_entry|emit_hash_entry|emit_typed_elem_hold|emit_lifted|copy_entry_get/
-NUMERIC_OP = /_o\b|_nilable|push_nil|_nil\b|\boset\b|\boget\b|\bvget\b/
+mode = ARGV[0]
+rev = ARGV[1]
 
+def git_show(spec)
+  out, st = Open3.capture2("git", "-C", ROOT, "show", spec, binmode: true)
+  st.success? ? out : nil
+end
+
+def read_tree(mode, rev)
+  files = {}
+  case mode
+  when "--staged", "--rev"
+    ref = mode == "--staged" ? ":" : "#{rev}:"
+    names, = Open3.capture2("git", "-C", ROOT, mode == "--staged" ? "ls-files" : "ls-tree", *(mode == "--staged" ? ["--", "src"] : ["-r", "--name-only", rev, "--", "src"]))
+    names.split("\n").grep(%r{\Asrc/[^/]+\.(c|h|inc)\z}).each { |f| files[f] = git_show("#{ref}#{f}") }
+    allow = git_show("#{ref}tools/entry_names.allow")
+  else
+    Dir[File.join(ROOT, "src/*.{c,h,inc}")].sort.each { |p| files["src/" + File.basename(p)] = File.binread(p) }
+    allow = File.binread(File.join(ROOT, "tools/entry_names.allow"))
+  end
+  [files, allow.to_s]
+end
+
+# C source with its comments blanked (newlines kept), string literals left alone
 def strip_comments(text)
   out = +""
   i = 0
-  in_str = false
   while i < text.size
     c = text[i]
-    if in_str
-      out << c
-      if c == "\\" then out << text[i + 1].to_s; i += 1
-      elsif c == '"' then in_str = false end
-    elsif c == '"' then in_str = true; out << c
+    if c == '"' || c == "'"
+      j = i + 1
+      j += (text[j] == "\\" ? 2 : 1) while j < text.size && text[j] != c
+      out << text[i..j]
+      i = j + 1
     elsif text[i, 2] == "/*"
       j = text.index("*/", i + 2) || text.size
       out << text[i...j + 2].gsub(/[^\n]/, " ")
-      i = j + 1
+      i = j + 2
     elsif text[i, 2] == "//"
       j = text.index("\n", i) || text.size
-      i = j - 1
-    else out << c end
-    i += 1
+      i = j
+    else
+      out << c
+      i += 1
+    end
   end
   out
 end
 
-# the text up to the first `;` outside a string literal
-def statement(text, from)
-  in_str = false
-  k = 0
-  while k < text.size
-    c = text[k]
-    if in_str
-      if c == "\\" then k += 1 elsif c == '"' then in_str = false end
-    elsif c == '"' then in_str = true
-    elsif c == ";" && k >= from then return text[0..k]
+# the string literals of a source, adjacent ones joined: [text, first line]
+def literals(text)
+  res = []
+  i = 0
+  line = 1
+  cur = nil
+  gap_ok = false
+  while i < text.size
+    c = text[i]
+    if c == '"'
+      j = i + 1
+      j += (text[j] == "\\" ? 2 : 1) while j < text.size && text[j] != '"'
+      body = text[i + 1...j]
+      if cur && gap_ok then cur[0] << body else res << (cur = [+body, line]) end
+      line += text[i..j].count("\n")
+      i = j + 1
+      gap_ok = true
+    elsif c == "'"
+      j = i + 1
+      j += (text[j] == "\\" ? 2 : 1) while j < text.size && text[j] != "'"
+      i = j + 1
+      cur = nil
+      gap_ok = false
+    else
+      if c == "\n" then line += 1 end
+      gap_ok = false unless c =~ /\s/
+      i += 1
     end
-    k += 1
   end
-  text
+  res
+end
+
+STORE = /\A(push|set|oset|insert|index|rindex|delete|has_value|new_with_default|unshift)/
+HSTORE = /\A(set|oset|has_value|new_with_default)/   # a Hash's delete, index and the like take its key, which stays bytes
+NAME = /sp_(?<kind>%\.?\*?s|%s|\$[A-Z]|[A-Z][A-Za-z]*?)(?<word>Array|Hash)_(?<op>[a-z_]*)/
+APART = /(?<![\w%])(Array|Hash)_(push|set|insert|index|rindex|delete|has_value|new_with_default|unshift)\b/
+
+def function_at(lines)
+  names = Array.new(lines.size)
+  cur = "(file)"
+  lines.each_with_index do |l, i|
+    m = l.match(/\A[A-Za-z_][\w \t\*]*?\b([A-Za-z_]\w*)\s*\(/)
+    cur = m[1] if m && l !~ /;\s*\z/ && l !~ /\A(?:if|for|while|switch|return|else|case|typedef|#)\b/
+    names[i] = cur
+  end
+  names
+end
+
+files, allow_text = read_tree(mode, rev)
+sites = Hash.new(0)
+site_lines = Hash.new { |h, k| h[k] = [] }
+files.each do |file, src|
+  next unless src
+  text = strip_comments(src.dup.force_encoding("BINARY"))
+  funcs = function_at(text.split("\n", -1))
+  literals(text).each do |lit, line|
+    fn = funcs[line - 1] || "(file)"
+    next if file == "src/codegen_util.c" && fn == "emit_elem_entry"
+    lit.scan(NAME) do
+      m = Regexp.last_match
+      op = m[:op]
+      next unless op.empty? || op =~ (m[:word] == "Hash" ? HSTORE : STORE)
+      next unless m[:kind] =~ /\A(%\.?\*?s|\$[A-Z]|Str|StrStr|IntStr)\z/   # a spelled kind that holds no String handle has no deleted entry
+      next if m[:kind] =~ /\A(Str|StrStr|IntStr)\z/ && op =~ /_e\z/   # the handle entry itself
+      pat = "sp_#{m[:kind]}#{m[:word]}_#{op.sub(/_(e|o|poly|poly_e|nilable|nil|grow|key|bytes)\z/, '')}"
+      sites[[file, fn, pat]] += 1
+      site_lines[[file, fn, pat]] << line
+      warn "#{file}:#{line}: #{fn}: #{pat}" if ENV["ENTRY_NAMES_LINES"]
+    end
+    lit.scan(APART) { sites[[file, fn, "#{$1}_#{$2} (apart)"]] += 1 }
+  end
 end
 
 allow = {}
-File.readlines(File.join(ROOT, "tools/entry_names.allow"), chomp: true).each do |l|
+allow_text.split("\n").each do |l|
   next if l.empty? || l.start_with?("#")
-  cls, file, site, reason = l.split("\t", 4)
-  abort "entry_names.allow: bad line: #{l}" unless reason && %w[NUM POLY ARM READ].include?(cls)
-  allow[[file, site]] = false
+  cls, file, fn, pat, count, reason = l.split("\t", 6)
+  abort "entry_names.allow: bad line: #{l}" unless reason && cls.split("+").all? { |c| %w[NUM POLY ARM READ ROW IDX].include?(c) } && count =~ /\A\d+\z/
+  allow[[file, fn, pat]] = [count.to_i, false]
 end
 
 bad = []
-Dir[File.join(ROOT, "src/*.c")].sort.each do |path|
-  file = "src/" + File.basename(path)
-  lines = strip_comments(File.read(path, encoding: "BINARY")).split("\n")
-  lines.each_with_index do |l, i|
-    bad << "#{file}:#{i + 1}: spells a deleted entry: #{l.strip[0, 100]}" if l =~ DELETED
-    next unless l =~ FORMAT
-    joined = lines[i, 8].join(" ")
-    stmt = statement(joined, joined.index(FORMAT) || 0)
-    next if stmt =~ ROW
-    # a suffix held in a variable: its assignment, in the function above, takes the row's answer
-    vars = stmt.scan(/(?<![%\w])(\w*sfx|ms|cs|vs|ns|hs)\b(?!\s*\()/).flatten.uniq - ["typed_elem_store_sfx", "nil_store_sfx"]
-    next if !vars.empty? && vars.all? { |v| lines[[i - 90, 0].max, 90 + 8].any? { |u| u =~ /\b#{v}\s*=[^=]/ && u =~ ROW } }
-    site = l.strip
-    if allow.key?([file, site]) then allow[[file, site]] = true; next end
-    bad << "#{file}:#{i + 1}: entry name formatted by hand (take the suffix from the row, or list it in tools/entry_names.allow): #{site[0, 100]}"
+sites.each do |key, n|
+  a = allow[key]
+  if a.nil?
+    bad << "#{key[0]}:#{site_lines[key].join(',')}: #{key[1]}: #{n} store or search entry name(s) formatted outside emit_elem_entry: #{key[2]} (route them through it, or list them in tools/entry_names.allow with the reason)"
+  elsif a[0] != n
+    bad << "#{key[0]}: #{key[1]}: #{key[2]} occurs #{n} time(s), tools/entry_names.allow lists #{a[0]}"
+    a[1] = true
+  else
+    a[1] = true
   end
 end
-allow.each { |k, used| bad << "tools/entry_names.allow: no such site: #{k[0]}: #{k[1][0, 80]}" unless used }
+allow.each { |key, (n, used)| bad << "tools/entry_names.allow: no such site: #{key.join(' ')}" unless used || sites.key?(key) }
 puts bad
-puts "entry-names: pass (#{allow.size} listed sites)" if bad.empty?
+puts "entry-names: pass (#{allow.size} listed sites, #{sites.values.sum} name formats)" if bad.empty?
 exit(bad.empty? ? 0 : 1)

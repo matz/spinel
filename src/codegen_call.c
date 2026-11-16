@@ -11479,19 +11479,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          (ran_first_handle): an arm that re-emits it, the synthesized
          writers' default, stores that handle (unbound with kwmark) */
       if (setter_late && htmp[0]) ran_first_bind(argv[0], atmp[0], htmp[0]);
-      ptemps.kwh_tmp = emit_poly_callable_kwh_decl(c, name, &ps, &ptemps, &kw, b);
-      emit_poly_prearms_n(c, name, &ps, &ptemps, b);
-      int sv_csd2 = g_cls_tag_skip;
-      int blk_tmp2 = emit_poly_prearms_n_blk(c, id, name, &ps, &ptemps, atmp, atmp_ty, &kw, htmp,
-                                             is_setter_val, splat_a, splat_last, stk, b);
-      /* The plan supplies the switch key form. */
-      const PolyPlan pform = cplan_poly_arms(c, id);
-      unsigned form = pform.flags & ~PPF_SEEN;
-      if (g_plan_check) cplan_served("poly-form-n");
-      /* a genuine String in a slot whose name a user class owns (#4816) */
-      if (kw_pos) emit_poly_str_aset_prearm(c, recv, &ps, &ptemps, b);
-      if (kw_pos && !has_splat_arg)
-        emit_poly_str_prearm(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, tv, tr, b);
+      /* (ahead of the pre-arms, which end in `else ` before the switch) */
       /* A writer's name called as a method (`o.send(:x=, v)`, a computed
          send's arm) where some class defines it: an attr_writer of another
          class answers too, storing the value it answers with (the method
@@ -11511,6 +11499,19 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (atmp_ty[0] == TY_POLY) buf_puts(b, an); else emit_boxed_text(c, atmp_ty[0], an, b);
         buf_puts(b, "; ");
       }
+      ptemps.kwh_tmp = emit_poly_callable_kwh_decl(c, name, &ps, &ptemps, &kw, b);
+      emit_poly_prearms_n(c, name, &ps, &ptemps, b);
+      int sv_csd2 = g_cls_tag_skip;
+      int blk_tmp2 = emit_poly_prearms_n_blk(c, id, name, &ps, &ptemps, atmp, atmp_ty, &kw, htmp,
+                                             is_setter_val, splat_a, splat_last, stk, b);
+      /* The plan supplies the switch key form. */
+      const PolyPlan pform = cplan_poly_arms(c, id);
+      unsigned form = pform.flags & ~PPF_SEEN;
+      if (g_plan_check) cplan_served("poly-form-n");
+      /* a genuine String in a slot whose name a user class owns (#4816) */
+      if (kw_pos) emit_poly_str_aset_prearm(c, recv, &ps, &ptemps, b);
+      if (kw_pos && !has_splat_arg)
+        emit_poly_str_prearm(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, tv, tr, b);
       buf_puts(b, "switch (");
       /* where this switch starts, so its end can tell whether any arm below
          wrote the `default:` label (see the builtin default at the close) */

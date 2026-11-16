@@ -111,6 +111,7 @@ struct LoadRecord {
   unsigned char *bits;       /* [n] LR_* */
   int n, ncap, nregion;
   struct ElabWalk *walk;     /* the registration's walk, while it runs (elab_walk_enter) */
+  ANameHash cfirst; int *cfirst_st, cfirst_done;   /* the first statement of region 0 that calls each name outside a method body, -1 where one is elsewhere (elab_accessor_first) */
   ANameHash cn_name, cn_leaf; int *cn_cls, cn_n, cn_cap, cn_done;   /* the classes registered so far, each by its Ruby name and by the last segment of it, in class order (lr_walk_class_by_name) */
   unsigned ver;              /* the node table the map is of */
   int check, shown;
@@ -6556,15 +6557,32 @@ int elab_accessor_first(Compiler *c, int node, const char *name) {
   r = c->lrec;
   int s = node < r->n ? r->at[node] : -1;
   ok = s >= 0 && r->st[s].region == 0 && r->st[s].nrun == 0;
-  for (int id = 0; ok && id < r->n; id++) {
-    if (nt_kind(c->nt, id) != NK_CallNode) continue;
-    int at = r->at[id];
-    /* (a call in a method body or a kept block runs after code of the program's; one after the attr_* statement of
-       region 0 runs after it) */
-    if (at >= 0 && ((r->bits[id] & LR_LATE) || (at >= s && r->st[at].region == 0))) continue;
-    const char *nm[2];
-    int n = call_node_names(c, id, nm);
-    for (int i = 0; i < n; i++) if (nm[i] && sp_streq(nm[i], name)) ok = 0;
+  if (ok) {
+    if (!r->cfirst_done) {   /* (one pass over the calls for every name) */
+      r->cfirst_done = 1;
+      for (int id = 0; id < r->n; id++) {
+        if (nt_kind(c->nt, id) != NK_CallNode) continue;
+        int at = r->at[id];
+        if (at >= 0 && (r->bits[id] & LR_LATE)) continue;   /* (a call in a method body or a kept block runs after code of the program's) */
+        int st = at >= 0 && r->st[at].region == 0 ? at : -1;
+        const char *nm[2];
+        int n = call_node_names(c, id, nm);
+        for (int i = 0; i < n; i++) {
+          if (!nm[i]) continue;
+          int k = anh_find(&r->cfirst, nm[i]);
+          if (k < 0) {
+            anh_add(&r->cfirst, nm[i]);
+            k = r->cfirst.n - 1;
+            r->cfirst_st = realloc(r->cfirst_st, sizeof(int) * (size_t)(k + 1));
+            if (!r->cfirst_st) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+            r->cfirst_st[k] = st;
+          }
+          else if (st < 0 || (r->cfirst_st[k] >= 0 && st < r->cfirst_st[k])) r->cfirst_st[k] = st;
+        }
+      }
+    }
+    int k = anh_find(&r->cfirst, name);
+    ok = k < 0 || (r->cfirst_st[k] >= 0 && r->cfirst_st[k] >= s);
   }
   if (framed) elab_plan_leave(c);
   return ok;
@@ -10893,6 +10911,7 @@ void elab_free(Compiler *c) {
   lr_record_drop(r);
   for (int i = 0; i < r->cn_name.n; i++) free((char *)r->cn_name.key[i]);
   anh_free(&r->cn_name); anh_free(&r->cn_leaf); free(r->cn_cls);
+  anh_free(&r->cfirst); free(r->cfirst_st);
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
   free(r->plan.rend); free(r->plan.rinst); free(r->plan.urun); free(r->plan.rentry);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);

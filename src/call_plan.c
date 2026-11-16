@@ -8177,8 +8177,10 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
       /* (the defaults a forward fills are the next positional arguments of the one it passes them to; past one without a
          keyword rest, the literal keywords are a positional Hash ahead of its own defaults and every later one's) */
       int pos = ct_positionals(c, sc) - (sc->rest_idx >= 0);
-      /* (the keywords a bare `super` passes, which the next takes: the fills follow them to the builtin alone) */
-      if (f->nk) return BNF_REFUSE;
+      /* (the keywords a bare `super` passes, which the next takes: the fills ride through a forward that passes them on
+         unchanged, one with a keyword rest and no keywords of its own, and that fills no positional default, which the
+         rewrite would run ahead of them) */
+      if (f->nk && (!kwrest || nkw || (!dopen && dargc < pos))) return BNF_REFUSE;
       if (kw == NEWKW_SURE && !kwrest) f->kwat = f->n;
       int fill = !dopen && dargc < pos ? ct_fill_defaults(c, sc, mi, dargc, f, &effects) : 1, kfill = 1;
       if (fill && nkw) kfill = ct_fill_keywords(c, sc, mi, kws, nkw, id, kw, f, &effects);

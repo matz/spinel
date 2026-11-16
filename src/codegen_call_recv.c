@@ -7082,7 +7082,7 @@ static int emit_hash_merge_general(Compiler *c, int id, int recv, int arg, TyKin
     buf_printf(b, ", sp_box_nil()); SP_GC_ROOT(_t%d); sp_poly_hash_merge_into(", td);
     buf_printf(b, "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH), ", td);
     int def = -1;
-    TyKind mk = ar.kind != RK_BOXED ? obj_container_conv(c, at, "to_hash", &def) : TY_UNKNOWN;
+    TyKind mk = ar.kind != RK_BOXED ? obj_container_conv(c, arg, at, "to_hash", &def) : TY_UNKNOWN;
     Scope *s = mk == TY_UNKNOWN ? NULL : &c->scopes[comp_method_in_chain(c, def, "to_hash", NULL)];
     if (s && s->reachable && !s->yields && (!s->blk_param || !*s->blk_param)) {
       /* Typed converters pass defaults that the boxed bridge cannot supply. */

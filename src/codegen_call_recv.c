@@ -11828,8 +11828,8 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
   ClassInfo *sc = &c->classes[ty_object_class(rt)];
   /* #inspect / #to_s -> the generated (or user-overridden) struct/data stringifier */
   if ((is_text_conversion(name)) && argc == 0) {
-    const char *cn = obj_str_cname(c, ty_object_class(rt), sp_streq(name, "inspect"));
-    if (cn) { buf_printf(b, "%s((sp_%s *)", obj_str_fn(c, ty_object_class(rt), sp_streq(name, "inspect")), cn); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; } }
+    const char *cn = obj_str_cname(c, recv, ty_object_class(rt), is_inspect_name(name));
+    if (cn) { buf_printf(b, "%s((sp_%s *)", obj_str_fn(c, recv, ty_object_class(rt), is_inspect_name(name)), cn); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; } }
   }
   int is_to_a = (sp_streq(name, "to_a") || sp_streq(name, "values") || sp_streq(name, "deconstruct"));
   /* CRuby's Data has neither #to_a nor #values (Struct has both); only
@@ -13292,7 +13292,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      renderer is emitted inline over a stack temp. */
   if (recv >= 0 && ty_is_object(rt) && !c->classes[ty_object_class(rt)].is_struct &&
       (is_text_conversion(name)) && argc == 0 &&
-      !obj_str_cname(c, ty_object_class(rt), sp_streq(name, "inspect")) &&
+      !obj_str_cname(c, recv, ty_object_class(rt), is_inspect_name(name)) &&
       /* a native class may bind its own to_s/inspect (IO::Buffer does);
          that declared method wins over the default renderer */
       comp_native_method_find(c, ty_object_class(rt), name, 0, 0) < 0) {

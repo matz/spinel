@@ -27,15 +27,15 @@ static void emit_const_write_last_value(Compiler *c, const LocalVar *lv, const c
 
 /* an object arg's #to_s as a C string expression (the puts/print arms) */
 static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
-  const char *cn = obj_str_cname(c, ty_object_class(t), 0);
-  int ret_poly = obj_str_ret_poly(c, ty_object_class(t), 0);
+  const char *cn = obj_str_cname(c, arg, ty_object_class(t), 0);
+  int ret_poly = obj_str_ret_poly(c, arg, ty_object_class(t), 0);
   /* A to_s that unions a String with another branch type (e.g. nil)
      returns a boxed sp_RbVal; route it through sp_poly_to_s rather than a
      pointer cast (#3266). */
   /* one answering a String subclass instance: that String's bytes */
-  int ret_strsub = !ret_poly && obj_str_ret_strsub(c, ty_object_class(t), 0);
+  int ret_strsub = !ret_poly && obj_str_ret_strsub(c, arg, ty_object_class(t), 0);
   buf_puts(b, ret_poly ? "sp_poly_to_s(" : ret_strsub ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "(const char *)(");
-  buf_printf(b, "%s((sp_%s *)", obj_str_fn(c, ty_object_class(t), 0), cn);
+  buf_printf(b, "%s((sp_%s *)", obj_str_fn(c, arg, ty_object_class(t), 0), cn);
   NodeKind rk = nt_kind(c->nt, arg);
   if (rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode || rk == NK_SelfNode || rk == NK_ConstantReadNode) {
     emit_expr(c, arg, b);
@@ -54,7 +54,7 @@ static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
     if (!comp_ty_value_obj(c, t)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tt); }
     buf_printf(b, "_t%d", tt);
   }
-  buf_printf(b, "%s))%s", obj_str_blockarg(c, ty_object_class(t), 0), ret_strsub ? "))" : "");
+  buf_printf(b, "%s))%s", obj_str_blockarg(c, arg, ty_object_class(t), 0), ret_strsub ? "))" : "");
 }
 
 static int emit_splat_io(Compiler *c, int arg, const char *fn, Buf *b, int indent) {
@@ -88,7 +88,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
       emit_indent(b, indent);
       emit_const_read_stmt(c, arg, b, 0);
       /* (a class method to_s of the class's own prints it) */
-      if (cls_user_display_mi(c, arg_ci, "to_s") >= 0)
+      if (cls_user_display_mi(c, arg, arg_ci, "to_s") >= 0)
         buf_printf(b, "sp_puts_line(sp_class_to_s_disp((sp_Class){%d, NULL}));\n", arg_ci);
       else buf_printf(b, "puts(\"%s\");\n", arg_nm);
       return;
@@ -270,7 +270,11 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
     emit_expr(c, arg, b);
     buf_puts(b, "); sp_puts_cstr_line(_ps); }\n");
   }
-  else if (ty_is_object(t) && obj_str_cname(c, ty_object_class(t), 0)) {
+  else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 0)) {
+    /* a class whose to_s the record proves undefined here: CRuby's call raises */
+    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "to_s", "(const char *)\"\"", b); buf_puts(b, ";\n");
+  }
+  else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s (user-defined or a generated struct/data one) */
     buf_puts(b, "{ const char *_ps = "); emit_obj_to_s(c, arg, t, b);
     buf_puts(b, "; sp_puts_cstr_line(_ps); }\n");
@@ -314,7 +318,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
        its own class method to_s answers */
     emit_const_read_stmt(c, arg, b, 0);
     int pci = const_node_class_index(c, arg);
-    if (cls_user_display_mi(c, pci, "to_s") >= 0)
+    if (cls_user_display_mi(c, arg, pci, "to_s") >= 0)
       buf_printf(b, "sp_puts_line(sp_class_to_s_disp((sp_Class){%d, NULL}));\n", pci);
     else buf_printf(b, "puts(\"%s\");\n", nt_str(c->nt, arg, "name"));
   }
@@ -400,7 +404,10 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
        its effect (it diverges or returns nil); print renders nil as nothing */
     buf_puts(b, "(void)("); emit_expr_for_effect(c, arg, b); buf_puts(b, ");\n");
   }
-  else if (ty_is_object(t) && obj_str_cname(c, ty_object_class(t), 0)) {
+  else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 0)) {
+    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "to_s", "(const char *)\"\"", b); buf_puts(b, ";\n");
+  }
+  else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s: call it directly (like the puts arm) */
     buf_puts(b, "{ const char *_ps = "); emit_obj_to_s(c, arg, t, b);
     buf_puts(b, "; if (_ps) fputs(_ps, stdout); }\n");
@@ -662,19 +669,22 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
            ({ int _n = 0; nt_arr(c->nt, arg, "elements", &_n); _n == 0; })) {
     buf_puts(b, "fputs(\"[]\\n\", stdout);\n");  /* p [] */
   }
-  else if (ty_is_object(t) && obj_str_cname(c, ty_object_class(t), 1)) {
+  else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 1)) {
+    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "inspect", "(const char *)\"\"", b); buf_puts(b, ";\n");
+  }
+  else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 1)) {
     /* an object with #inspect (user-defined or a generated struct/data one);
        a NULL pointer is nil (nullable-object convention, e.g. Set#add?) */
-    const char *cn = obj_str_cname(c, ty_object_class(t), 1);
+    const char *cn = obj_str_cname(c, arg, ty_object_class(t), 1);
     int pv = ++g_tmp;
     /* rooted: a fresh object (`p mk`) has no other reference while its
        #inspect allocates */
     buf_printf(b, "{ sp_%s *_t%d = (sp_%s *)(", cn, pv, cn); emit_expr(c, arg, b);
     buf_puts(b, "); ");
     if (!expr_is_held_ref(c, arg)) buf_printf(b, "SP_GC_ROOT(_t%d); ", pv);
-    int rp = obj_str_ret_poly(c, ty_object_class(t), 1);
+    int rp = obj_str_ret_poly(c, arg, ty_object_class(t), 1);
     buf_printf(b, "sp_puts_line(_t%d ? %s%s(_t%d%s)%s : \"nil\"); }\n", pv, rp ? "sp_poly_to_s(" : "",
-               obj_str_fn(c, ty_object_class(t), 1), pv, obj_str_blockarg(c, ty_object_class(t), 1), rp ? ")" : "");
+               obj_str_fn(c, arg, ty_object_class(t), 1), pv, obj_str_blockarg(c, arg, ty_object_class(t), 1), rp ? ")" : "");
   }
   else if (t == TY_PROC) {
     buf_puts(b, "{ sp_Proc *_pp = ("); emit_expr(c, arg, b);
@@ -758,21 +768,21 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     /* p obj: a user #inspect wins; otherwise the generated per-class ivar
        walk renders CRuby's default #<Name:0xADDR @a=..., ...> */
     int cid = ty_object_class(t);
-    const char *icn = obj_str_cname(c, cid, 1);
+    const char *icn = obj_str_cname(c, arg, cid, 1);
     if (icn && expr_is_held_ref(c, arg)) {
-      int rp = obj_str_ret_poly(c, cid, 1);
-      buf_printf(b, "{ const char *_pi = %s%s((sp_%s *)(", rp ? "sp_poly_to_s(" : "", obj_str_fn(c, cid, 1), icn);
+      int rp = obj_str_ret_poly(c, arg, cid, 1);
+      buf_printf(b, "{ const char *_pi = %s%s((sp_%s *)(", rp ? "sp_poly_to_s(" : "", obj_str_fn(c, arg, cid, 1), icn);
       emit_expr(c, arg, b);
-      buf_printf(b, ")%s)%s; sp_puts_line(_pi ? _pi : \"nil\"); }\n", obj_str_blockarg(c, cid, 1), rp ? ")" : "");
+      buf_printf(b, ")%s)%s; sp_puts_line(_pi ? _pi : \"nil\"); }\n", obj_str_blockarg(c, arg, cid, 1), rp ? ")" : "");
     }
     else if (icn) {
       /* the receiver rooted across its #inspect, as in the arm above */
       int pv = ++g_tmp;
       buf_printf(b, "{ sp_%s *_t%d = (sp_%s *)(", icn, pv, icn); emit_expr(c, arg, b);
-      int rp = obj_str_ret_poly(c, cid, 1);
+      int rp = obj_str_ret_poly(c, arg, cid, 1);
       buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_pi = %s%s(_t%d%s)%s;"
-                    " sp_puts_line(_pi ? _pi : \"nil\"); }\n", pv, rp ? "sp_poly_to_s(" : "", obj_str_fn(c, cid, 1), pv,
-                    obj_str_blockarg(c, cid, 1), rp ? ")" : "");
+                    " sp_puts_line(_pi ? _pi : \"nil\"); }\n", pv, rp ? "sp_poly_to_s(" : "", obj_str_fn(c, arg, cid, 1), pv,
+                    obj_str_blockarg(c, arg, cid, 1), rp ? ")" : "");
     }
     else {
       buf_printf(b, "{ void *_po = (void *)("); emit_expr(c, arg, b);
@@ -815,7 +825,7 @@ int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv
   for (int k = 0; k < argc && pp_own; k++) {
     TyKind at = repr_of(c, argv[k]).as_ty;
     if (ty_is_object(at) && comp_method_in_chain(c, ty_object_class(at), "inspect", NULL) >= 0 &&
-        !record_pp_skips_inspect(c, ty_object_class(at)) && !obj_arm_calls_own_inspect(c, ty_object_class(at)))
+        !record_pp_skips_inspect(c, argv[k], ty_object_class(at)) && !obj_arm_calls_own_inspect(c, ty_object_class(at)))
       pp_own = 0;
   }
   if (argc < 2 && !pp_own) return 0;
@@ -10953,7 +10963,7 @@ static int emit_when_user_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   if (weq < 0 && wml.why == MLW_RECORD) {
     /* the arm's class undefines === where the record places it: CRuby's call of it raises */
     buf_printf(b, "((void)_t%d, ", t);
-    emit_nomethod_raise(c, cond, -1, "===", "(sp_bool)0", b);
+    emit_nomethod_raise(c, cond, 0, NULL, "===", "(sp_bool)0", b);
     buf_puts(b, ")");
     return 1;
   }

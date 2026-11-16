@@ -547,14 +547,17 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         EMIT_IV();
         buf_printf(&conv, "); _t%d ? sp_strbuf_read(_t%d) : sp_str_empty; })", to, to);
       }
-      else if (ty_is_object(t) && obj_str_cname(c, ty_object_class(t), 0)) {
-        const char *cn = obj_str_cname(c, ty_object_class(t), 0);
+      else if (ty_is_object(t) && obj_str_undef(c, expr, ty_object_class(t), 0)) {
+        emit_nomethod_raise(c, expr, 0, NULL, "to_s", "(const char *)\"\"", &conv);   /* (to_s undefined where the record places it: CRuby raises) */
+      }
+      else if (ty_is_object(t) && obj_str_cname(c, expr, ty_object_class(t), 0)) {
+        const char *cn = obj_str_cname(c, expr, ty_object_class(t), 0);
         /* a poly-returning to_s (String unioned with e.g. nil) yields a boxed
            sp_RbVal -- render it through sp_poly_to_s so it's a const char *
            in the interpolation (#3266). */
-        int ret_poly = obj_str_ret_poly(c, ty_object_class(t), 0);
+        int ret_poly = obj_str_ret_poly(c, expr, ty_object_class(t), 0);
         /* one answering a String subclass instance reads its bytes */
-        const char *ss_open = !ret_poly && obj_str_ret_strsub(c, ty_object_class(t), 0) ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "";
+        const char *ss_open = !ret_poly && obj_str_ret_strsub(c, expr, ty_object_class(t), 0) ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "";
         const char *ss_close = *ss_open ? ")))" : "";
         if (ret_poly) buf_puts(&conv, "sp_poly_to_s(");
         /* a part that may be nil (the nil fact, #7444) reads as nil's to_s,
@@ -563,11 +566,11 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         /* a value-type object (single-ivar) has a by-VALUE to_s signature;
            casting its receiver to a pointer is a C type error (#2357) */
         if (!part_nil && (comp_ty_value_obj(c, t) || (!vexpr[0] && !iv_pre && expr_is_held_ref(c, expr)))) {
-          const char *tsf = obj_str_fn(c, ty_object_class(t), 0);
+          const char *tsf = obj_str_fn(c, expr, ty_object_class(t), 0);
           buf_puts(&conv, ss_open);
           if (comp_ty_value_obj(c, t)) buf_printf(&conv, "%s(", tsf);
           else buf_printf(&conv, "%s((sp_%s *)", tsf, cn);
-          EMIT_IV(); buf_printf(&conv, "%s)%s", obj_str_blockarg(c, ty_object_class(t), 0), ss_close);
+          EMIT_IV(); buf_printf(&conv, "%s)%s", obj_str_blockarg(c, expr, ty_object_class(t), 0), ss_close);
         }
         else {
           /* rooted: the part may be a fresh object (`"#{C.new}"`) held
@@ -577,8 +580,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
           EMIT_IV();
           buf_printf(&conv, "); SP_GC_ROOT(_t%d); ", to);
           if (part_nil) buf_printf(&conv, "_t%d ? ", to);
-          buf_printf(&conv, "%s%s(_t%d%s)%s%s; })", ss_open, obj_str_fn(c, ty_object_class(t), 0), to,
-                     obj_str_blockarg(c, ty_object_class(t), 0), ss_close, part_nil ? " : sp_str_empty" : "");
+          buf_printf(&conv, "%s%s(_t%d%s)%s%s; })", ss_open, obj_str_fn(c, expr, ty_object_class(t), 0), to,
+                     obj_str_blockarg(c, expr, ty_object_class(t), 0), ss_close, part_nil ? " : sp_str_empty" : "");
         }
         if (ret_poly) buf_puts(&conv, ")");
       }

@@ -11,6 +11,7 @@
 #include "codegen_poly.h"
 #include "value_pos.h"
 #include "call_plan.h"
+#include "implicit_calls.h"
 #include "holder.h"
 #include "method_table_check.h"
 
@@ -6404,17 +6405,19 @@ const char *comp_class_base_display_fn(Compiler *c) {
 }
 /* A class method to_s / inspect (nm) of class k's own, taking no arguments
    and answering a String: what prints the class (sp_class_user_to_s and
-   _inspect); -1 when the class has none. */
-int cls_user_display_mi(Compiler *c, int k, const char *nm) {
+   _inspect); -1 when the class has none. The call plan answers it at node
+   site, the class constant a puts prints; -1 for the table behind the run-time
+   dispatcher, which no call stands behind. */
+int cls_user_display_mi(Compiler *c, int site, int k, const char *nm) {
   if (k < 0 || k >= c->nclasses || is_builtin_reopen(c->classes[k].name)) return -1;
-  int mi = call_target(c, -1, k, nm, CT_CMETHOD | CT_SHARED, NULL);
+  int mi = cplan_implied_target(c, ic_operand_host(c, site), site, k, nm, CT_CMETHOD, NULL);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
   if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;
   return mi;
 }
 int prog_has_cls_user_display(Compiler *c, const char *nm) {
-  for (int k = 0; k < c->nclasses; k++) if (cls_user_display_mi(c, k, nm) >= 0) return 1;
+  for (int k = 0; k < c->nclasses; k++) if (cls_user_display_mi(c, -1, k, nm) >= 0) return 1;
   return 0;
 }
 /* ... and for to_s, the table behind the program's own class method to_s */

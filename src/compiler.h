@@ -2420,7 +2420,7 @@ const char *comp_class_reader_fn(Compiler *c, const char *name, int builtin);   
 int comp_class_kw_init(Compiler *c, int ci);   /* inspects with the keyword_init suffix: a keyword_init Struct class or a subclass of one */
 const char *comp_class_inspect_suffix(Compiler *c, int ci, const char *name);   /* a keyword-init Struct class's inspect suffix, else "" */
 const char *comp_class_base_display_fn(Compiler *c);
-int cls_user_display_mi(Compiler *c, int k, const char *nm);
+int cls_user_display_mi(Compiler *c, int site, int k, const char *nm);
 int prog_has_cls_user_display(Compiler *c, const char *nm);
 int        class_var_static_ci(Compiler *c, int node);  /* local holding one class const */
 int        class_recv_static_ci(Compiler *c, int node); /* constant or local naming one class, or self in a class body */

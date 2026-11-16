@@ -1360,12 +1360,15 @@ int class_has_ctor(const ClassInfo *ci);   /* does the class get a sp_X_new (an 
 int anon_class_text(Compiler *c, int ci, const char *head, Buf *b);
 int scope_def_line(Compiler *c, Scope *s);
 const char *scope_def_file(Compiler *c, Scope *s);
-int display_method_scope(Compiler *c, int cid, int want_inspect, int *defcls);
-const char *obj_str_cname(Compiler *c, int cid, int want_inspect);
-const char *obj_str_fn(Compiler *c, int cid, int want_inspect);
-const char *obj_str_blockarg(Compiler *c, int cid, int want_inspect);
-int obj_str_ret_poly(Compiler *c, int cid, int want_inspect);
-int obj_str_ret_strsub(Compiler *c, int cid, int want_inspect);
+int display_method_scope(Compiler *c, int site, int cid, int want_inspect, int *defcls);
+const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect);
+int obj_str_undef(Compiler *c, int site, int cid, int want_inspect);
+void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, Buf *b);
+int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b);
+const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect);
+const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect);
+int obj_str_ret_poly(Compiler *c, int site, int cid, int want_inspect);
+int obj_str_ret_strsub(Compiler *c, int site, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 #ifdef SP_EMIT_TRACE
@@ -1787,7 +1790,7 @@ int nameset_has(NameSet *s, const char *nm);
 int array_user_inspect_mi(Compiler *c);
 /* does pp print a record of class cid by its layout, not by the class's
    own #inspect; does a pp print through sp_pp_inspect (codegen.c) */
-int record_pp_skips_inspect(Compiler *c, int cid);
+int record_pp_skips_inspect(Compiler *c, int site, int cid);
 int pp_prints_by_rt(Compiler *c);
 /* does sp_obj_inspect_sw call class cid's own #inspect (codegen.c) */
 int obj_arm_calls_own_inspect(Compiler *c, int cid);
@@ -3409,9 +3412,9 @@ int is_builtin_reopen(const char *name);
 int is_exc_name(const char *n);
 int class_is_exc_subclass(Compiler *c, int ci);
 const char *class_ruby_name(Compiler *c, int ci);
-const char *obj_str_cname(Compiler *c, int cid, int want_inspect);
-const char *obj_str_blockarg(Compiler *c, int cid, int want_inspect);
-int obj_str_ret_poly(Compiler *c, int cid, int want_inspect);
+const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect);
+const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect);
+int obj_str_ret_poly(Compiler *c, int site, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_class_struct(Compiler *c, ClassInfo *ci, Buf *b);
 int class_needs_scan(ClassInfo *ci);

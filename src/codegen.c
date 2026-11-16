@@ -12192,27 +12192,70 @@ const char *class_ruby_name(Compiler *c, int ci) {
    want_inspect, else to_s), resolved from class cid, *defcls set to the class
    that defines it; -1 for none. One that takes parameters, all of them
    optional, is called through its `__noarg ` sibling, which passes the
-   defaults (desugar_noarg_display_wrappers). */
-int display_method_scope(Compiler *c, int cid, int want_inspect, int *defcls) {
-  int d = cid;
-  MethodLookup ml_mi = { .def_class = d };
-  int mi = call_target(c, -1, cid, want_inspect ? "inspect" : "to_s", CT_METHODS | CT_SHARED, &ml_mi);
-  d = ml_mi.def_class;
+   defaults (desugar_noarg_display_wrappers). The call plan answers it at
+   node site, the part, argument or receiver whose display this is (the
+   call or interpolation that makes it, ic_operand_host); -1 for a dispatcher
+   or a survey of the program's classes, which no call stands behind. */
+int display_method_scope(Compiler *c, int site, int cid, int want_inspect, int *defcls) {
+  int host = ic_operand_host(c, site);
+  MethodLookup ml_mi = { .def_class = cid };
+  int mi = cplan_implied_target(c, host, site, cid, want_inspect ? "inspect" : "to_s", 0, &ml_mi), d = ml_mi.def_class;
   if (mi >= 0 && c->scopes[mi].nparams > 0) {
-    int d2 = cid;
-    MethodLookup ml_w = { .def_class = d2 };
-    int w = call_target(c, -1, cid, want_inspect ? "__noarg inspect" : "__noarg to_s", CT_METHODS | CT_SHARED, &ml_w);
-    d2 = ml_w.def_class;
-    if (w >= 0) { mi = w; d = d2; }
+    MethodLookup ml_w = { .def_class = cid };
+    int w = cplan_implied_target(c, host, site, cid, want_inspect ? "__noarg inspect" : "__noarg to_s", 0, &ml_w);
+    if (w >= 0) { mi = w; d = ml_w.def_class; }
   }
   if (defcls) *defcls = d;
   return mi;
 }
 
-const char *obj_str_cname(Compiler *c, int cid, int want_inspect) {
+/* Does the record prove class cid's to_s (inspect when want_inspect) undefined
+   before the display at node site (the plan's none, MLW_RECORD)? CRuby's call
+   of it raises NoMethodError there, so the display emits that raise
+   (emit_nomethod_raise) where it would have printed the default text. */
+int obj_str_undef(Compiler *c, int site, int cid, int want_inspect) {
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  cplan_implied_target(c, ic_operand_host(c, site), site, cid, want_inspect ? "inspect" : "to_s", 0, &ml);
+  return ml.kind == ML_NONE && ml.why == MLW_RECORD;
+}
+/* The raise CRuby's call of a method undefined where the record places the
+   call makes, as an expression: object node obj is evaluated, then the argc
+   nodes argv (the call's arguments), and NoMethodError names method `name`
+   and the object; `dflt` is the C value the expression stands for. The one
+   emission of every site that reads the plan's none with MLW_RECORD
+   (cplan_implied_target). */
+void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, Buf *b) {
+  int tv = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+  emit_boxed(c, obj, b);
+  /* rooted: the arguments run, and the message is built, while the object is its only reference */
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
+  for (int i = 0; i < argc; i++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[i], b); buf_puts(b, "); "); }
+  buf_printf(b, "(void)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d))); %s; })", name, tv, dflt);
+}
+/* Does call id, a Comparable operator or between? (or Comparable#== / !=)
+   on recv, reach a `<=>` the record proves undefined (the plan's
+   delegate_undef)? Then it is the raise naming `<=>`, CRuby's. */
+int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b) {
+  if (recv < 0) return 0;
+  CallPlan p = cplan_user(c, id);
+  if (!p.delegate_undef) return 0;
+  /* the raise stands for the call's value: nil where it is boxed, else a zero of its C type */
+  Repr r = repr_of(c, id);
+  if (comp_ty_value_obj(c, r.as_ty)) return 0;
+  Buf dflt; memset(&dflt, 0, sizeof dflt);
+  if (r.kind == RK_BOXED) buf_puts(&dflt, "sp_box_nil()");
+  else { buf_puts(&dflt, "("); emit_ctype(c, r.as_ty, &dflt); buf_puts(&dflt, ")0"); }
+  emit_nomethod_raise(c, recv, argc, argv, p.delegate, dflt.p ? dflt.p : "sp_box_nil()", b);
+  free(dflt.p);
+  return 1;
+}
+
+const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect) {
   if (cid < 0 || cid >= c->nclasses) return NULL;
   int defcls = cid;
-  if (display_method_scope(c, cid, want_inspect, &defcls) >= 0)
+  if (display_method_scope(c, site, cid, want_inspect, &defcls) >= 0)
     return c->classes[defcls].c_name;
   if (c->classes[cid].is_struct) return c->classes[cid].c_name;  /* generated #inspect/#to_s */
   return NULL;
@@ -12221,8 +12264,8 @@ const char *obj_str_cname(Compiler *c, int cid, int want_inspect) {
 /* That C function's whole name: the resolved method's (for an alias,
    `alias inspect readable_inspect`, the target's), or the generated
    struct/data method's. */
-const char *obj_str_fn(Compiler *c, int cid, int want_inspect) {
-  int mi = cid < 0 || cid >= c->nclasses ? -1 : display_method_scope(c, cid, want_inspect, NULL);
+const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect) {
+  int mi = cid < 0 || cid >= c->nclasses ? -1 : display_method_scope(c, site, cid, want_inspect, NULL);
   if (mi >= 0) return mc_method(c, &c->scopes[mi]);
   /* the generated one, in mc_method's ring */
   return mc_ring_setf(c, "sp_%s_%s", cid < 0 || cid >= c->nclasses ? "" : c->classes[cid].c_name,
@@ -12233,9 +12276,9 @@ const char *obj_str_fn(Compiler *c, int cid, int want_inspect) {
    value flows through more than one branch type, e.g. a String on one arm
    and nil on another). Callers that consume the result as a `const char *`
    must route it through sp_poly_to_s instead of a pointer cast (#3266). */
-int obj_str_ret_poly(Compiler *c, int cid, int want_inspect) {
+int obj_str_ret_poly(Compiler *c, int site, int cid, int want_inspect) {
   if (cid < 0 || cid >= c->nclasses) return 0;
-  int mi = display_method_scope(c, cid, want_inspect, NULL);
+  int mi = display_method_scope(c, site, cid, want_inspect, NULL);
   return mi >= 0 && (TyKind)c->scopes[mi].ret == TY_POLY;
 }
 
@@ -12245,9 +12288,9 @@ int obj_str_ret_poly(Compiler *c, int cid, int want_inspect) {
    sp_strbuf_read instead of taking the struct pointer as a const char *.
    Not for a String subclass's own instances, which are read as the String
    they are without a #to_s call (rb_obj_as_string). */
-int obj_str_ret_strsub(Compiler *c, int cid, int want_inspect) {
+int obj_str_ret_strsub(Compiler *c, int site, int cid, int want_inspect) {
   if (cid < 0 || cid >= c->nclasses || comp_ary_is_str(c, cid)) return 0;
-  int mi = display_method_scope(c, cid, want_inspect, NULL);
+  int mi = display_method_scope(c, site, cid, want_inspect, NULL);
   TyKind r = mi >= 0 ? (TyKind)c->scopes[mi].ret : TY_UNKNOWN;
   return ty_is_object(r) && comp_ary_is_str(c, ty_object_class(r));
 }
@@ -13005,20 +13048,20 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
             (*q >= '0' && *q <= '9') || *q == '_')) simple = 0;
     buf_printf(b, "  sp_String_append(s, \"%s%s%s=\");\n", i ? ", " : " ", simple ? "" : ":", mnm);
     TyKind mt = ci->ivar_types[i];
-    const char *mcn = ty_is_object(mt) ? obj_str_cname(c, ty_object_class(mt), 1) : NULL;
+    const char *mcn = ty_is_object(mt) ? obj_str_cname(c, -1, ty_object_class(mt), 1) : NULL;
     if (mcn) {
       /* a struct/data (or user-#inspect) member recurses into its own inspect */
       char ivn[128]; snprintf(ivn, sizeof ivn, "%s", iv_c(ci->ivars[i] + 1));
       int mc = ty_object_class(mt);
       /* inside a pp, a Struct or Data member with its own #inspect shows its
          record layout too (record_pp_skips_inspect) */
-      if (pp_prints_by_rt(c) && record_pp_skips_inspect(c, mc))
+      if (pp_prints_by_rt(c) && record_pp_skips_inspect(c, -1, mc))
         buf_printf(b, "  sp_String_append(s, !self->iv_%s ? \"nil\" : sp_pp_printing ? sp_%s_%s((sp_%s *)self->iv_%s) : %s((sp_%s *)self->iv_%s));\n",
                    ivn, c->classes[mc].c_name, struct_default_text_fn(c, mc), c->classes[mc].c_name, ivn,
-                   obj_str_fn(c, mc, 1), mcn, ivn);
+                   obj_str_fn(c, -1, mc, 1), mcn, ivn);
       else
         buf_printf(b, "  sp_String_append(s, self->iv_%s ? %s((sp_%s *)self->iv_%s) : \"nil\");\n",
-                   ivn, obj_str_fn(c, mc, 1), mcn, ivn);
+                   ivn, obj_str_fn(c, -1, mc, 1), mcn, ivn);
     }
     else {
       Buf ivb; memset(&ivb, 0, sizeof ivb); buf_printf(&ivb, "self->iv_%s", iv_c(ci->ivars[i] + 1));
@@ -14531,9 +14574,9 @@ static const char *bridge_blk_param(Compiler *c, int mi) { return bridge_has_blk
 static const char *bridge_blk_arg(Compiler *c, int mi)   { return bridge_has_blk(c, mi) ? ", NULL" : ""; }
 /* The block argument a direct call of a class's #to_s or #inspect passes:
    a C extension method always takes one. */
-const char *obj_str_blockarg(Compiler *c, int cid, int want_inspect) {
+const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect) {
   if (cid < 0 || cid >= c->nclasses) return "";
-  int mi = display_method_scope(c, cid, want_inspect, NULL);
+  int mi = display_method_scope(c, site, cid, want_inspect, NULL);
   return mi >= 0 ? bridge_blk_arg(c, mi) : "";
 }
 
@@ -14775,7 +14818,7 @@ static int obj_arm_calls_own_inspect1(Compiler *c, int i) {
   ClassInfo *ci = &c->classes[i];
   if (!class_has_obj_arm(c, i)) return 1;   /* no object of it to print */
   if (!class_inspectable(c, i) || comp_ty_value_obj(c, ty_object(i))) return 0;
-  int mi = display_method_scope(c, i, 1, NULL);
+  int mi = display_method_scope(c, -1, i, 1, NULL);
   if (mi < 0 || ci->is_native_class) return 0;
   const Scope *s = &c->scopes[mi];
   return s->reachable && !s->yields && s->nparams == 0 && (s->ret == TY_STRING || s->ret == TY_POLY);
@@ -15046,7 +15089,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       fdef = ml_fmi.def_class;
       /* (a to_s answering a String subclass instance returns its struct) */
       TyKind fret = fmi >= 0 ? (TyKind)c->scopes[fmi].ret : TY_UNKNOWN;
-      int fstrsub = m == 0 && !is_val && obj_str_ret_strsub(c, i, 0);
+      int fstrsub = m == 0 && !is_val && obj_str_ret_strsub(c, -1, i, 0);
       if (fmi < 0 || !c->scopes[fmi].reachable || (fret != TY_STRING && !fstrsub) ||
           c->scopes[fmi].nparams != 0 || fdef != i || c->scopes[fmi].yields) continue;
       /* a debug (-g) build gives user methods external linkage (see
@@ -15082,7 +15125,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        function no TU defines and the program did not link (#4533) */
     if (comp_class_is_module(c, tci)) continue;
     int tdef = -1;
-    int tmi = display_method_scope(c, i, 0, &tdef);
+    int tmi = display_method_scope(c, -1, i, 0, &tdef);
     /* a #to_s answering its String through a boxed value (one that may also
        answer something else) renders through sp_poly_to_s */
     int tspoly = tmi >= 0 && c->scopes[tmi].ret == TY_POLY;
@@ -15109,7 +15152,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     }
     /* one answering a String subclass instance: that String's bytes, where
        the object default rendered #<Name:0x...> */
-    if (tmi >= 0 && c->scopes[tmi].reachable && c->scopes[tmi].nparams == 0 && obj_str_ret_strsub(c, i, 0)) {
+    if (tmi >= 0 && c->scopes[tmi].reachable && c->scopes[tmi].nparams == 0 && obj_str_ret_strsub(c, -1, i, 0)) {
       buf_printf(b, "    case %d: return sp_str_or_empty(sp_strbuf_read((sp_String *)%s((sp_%s *)p%s)));\n",
                  i, mc_method(c, &c->scopes[tmi]), c->classes[tdef].c_name, bridge_blk_arg(c, tmi));
       continue;
@@ -15181,7 +15224,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   if (pp_prints_by_rt(c)) {
     int any = 0;
     for (int i = 0; i < c->nclasses; i++) {
-      if (!class_has_obj_arm(c, i) || !record_pp_skips_inspect(c, i)) continue;
+      if (!class_has_obj_arm(c, i) || !record_pp_skips_inspect(c, -1, i)) continue;
       if (!any) buf_puts(b, "  if (sp_pp_printing) switch (cls_id) {\n");
       any = 1;
       buf_printf(b, "    case %d: return sp_%s_%s((sp_%s *)p);\n", i, c->classes[i].c_name,
@@ -15215,7 +15258,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        Array printed #<Object>. */
     if (comp_ty_value_obj(c, ty_object(i)) && !comp_class_is_module(c, &c->classes[i])) {
       int vdef = -1;
-      int vmi = display_method_scope(c, i, 1, &vdef);
+      int vmi = display_method_scope(c, -1, i, 1, &vdef);
       int vpoly = vmi >= 0 && c->scopes[vmi].ret == TY_POLY;
       if (vdef == i && emit_display_yield_arm(c, i, vmi, vdef, 1, b)) continue;
       if (vmi >= 0 && vdef == i && c->scopes[vmi].reachable &&
@@ -15231,7 +15274,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        element renders the same as a directly-inspected one. A module's own
        arm would name a function only its includers define (#4533). */
     int uidef = -1;
-    int uimi = comp_class_is_module(c, ci) ? -1 : display_method_scope(c, i, 1, &uidef);
+    int uimi = comp_class_is_module(c, ci) ? -1 : display_method_scope(c, -1, i, 1, &uidef);
     /* ...also when it answers the String through a boxed value */
     int uipoly = uimi >= 0 && c->scopes[uimi].ret == TY_POLY;
     if (uimi >= 0 && c->scopes[uimi].reachable && emit_display_yield_arm(c, i, uimi, uidef, 0, b)) continue;
@@ -23503,11 +23546,11 @@ int array_user_inspect_mi(Compiler *c) {
    #inspect? It does for a Struct or Data class that has its own #inspect:
    CRuby's pp uses Struct#pretty_print / Data#pretty_print, which leave
    that method out (p still uses it). */
-int record_pp_skips_inspect(Compiler *c, int cid) {
+int record_pp_skips_inspect(Compiler *c, int site, int cid) {
   if (cid < 0 || cid >= c->nclasses) return 0;
   ClassInfo *ci = &c->classes[cid];
   if (!(ci->is_struct || ci->is_data) || ci->is_native_class) return 0;
-  int mi = display_method_scope(c, cid, 1, NULL);
+  int mi = display_method_scope(c, site, cid, 1, NULL);
   return mi >= 0 && c->scopes[mi].reachable;
 }
 /* Does a pp print through sp_pp_inspect? It does where the program reopens
@@ -23520,7 +23563,7 @@ int pp_prints_by_rt(Compiler *c) {
   if (at == c && ncls == c->nclasses) return val;
   at = c; ncls = c->nclasses; val = array_user_inspect_mi(c) >= 0;
   if (!val && an_calls_named_first(c, "pp") >= 0)
-    for (int i = 0; i < c->nclasses && !val; i++) val = record_pp_skips_inspect(c, i);
+    for (int i = 0; i < c->nclasses && !val; i++) val = record_pp_skips_inspect(c, -1, i);
   return val;
 }
 /* sp_class_user_to_s / sp_class_user_inspect: a class's own class method
@@ -23536,7 +23579,7 @@ static void emit_cls_user_display_hooks(Compiler *c, Buf *b) {
     if (!prog_has_cls_user_display(c, nms[q])) continue;
     buf_printf(b, "static const char *sp_class_user_%s(sp_Class c){switch(c.cls_id){", nms[q]);
     for (int k = 0; k < c->nclasses; k++) {
-      int mi = cls_user_display_mi(c, k, nms[q]);
+      int mi = cls_user_display_mi(c, -1, k, nms[q]);
       if (mi < 0) continue;
       buf_printf(b, "case %d:return ", k);
       buf_puts(b, mc_method(c, &c->scopes[mi]));

@@ -4183,7 +4183,7 @@ static int ct_lookup_object_top(Compiler *c, int id, int cls, const char *name, 
    name, the ask answers none (MLW_RECORD). Where the name has versions otherwise, the answer is the table's, reported
    as an `accessor` table answer (id -1 asks it of every class: a candidate scan). */
 typedef struct AttrFact { int cls, first, versioned; char *name; } AttrFact;
-struct AttrFacts { AttrFact *slot; int cap, used; ElabStamp stamp; };
+struct AttrFacts { AttrFact *slot; int cap, used; ElabStamp stamp; unsigned long hgen; };
 void attr_facts_free(Compiler *c) {
   if (!c->attr_facts) return;
   for (int i = 0; i < c->attr_facts->cap; i++) free(c->attr_facts->slot[i].name);
@@ -4199,10 +4199,11 @@ static const AttrFact *attr_fact(Compiler *c, int cls, const char *name) {
   struct AttrFacts *m = c->attr_facts;
   ElabStamp cur = elab_stamp(c);
   if (m) cur.nt = m->stamp.nt, cur.rec = m->stamp.rec;
-  if (m && !elab_stamp_same(m->stamp, cur)) { attr_facts_free(c); m = NULL; }
+  if (m && (!elab_stamp_same(m->stamp, cur) || m->hgen != elab_hgen(c))) { attr_facts_free(c); m = NULL; }
   if (!m) {
     if (!(c->attr_facts = m = calloc(1, sizeof *m))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     m->stamp = elab_stamp(c);
+    m->hgen = elab_hgen(c);
   }
   if (2 * (m->used + 1) > m->cap) {
     AttrFact *old = m->slot;

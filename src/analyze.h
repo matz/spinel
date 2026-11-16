@@ -586,6 +586,7 @@ unsigned long elab_mixin_gen(Compiler *c);
    until elab_plan_leave; 0 for a node it cannot place */
 int elab_plan_enter(Compiler *c, int id);
 int elab_accessor_first(Compiler *c, int node, const char *name, int cls);
+unsigned long elab_hgen(Compiler *c);   /* bumped by every change to the histories and the mixins */
 void elab_plan_leave(Compiler *c);
 void elab_check_version(Compiler *c, int id, int vi, int dc, int now, int ndc);   /* SPINEL_ELAB_CHECK */
 void elab_check_surface(Compiler *c);   /* SPINEL_ELAB_CHECK: the record's surface against the class tables */

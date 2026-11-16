@@ -111,7 +111,7 @@ struct LoadRecord {
   unsigned char *bits;       /* [n] LR_* */
   int n, ncap, nregion;
   struct ElabWalk *walk;     /* the registration's walk, while it runs (elab_walk_enter) */
-  ANameHash cfirst; struct LrCallSt *cfirst_cs; int cfirst_done;   /* the statements of region 0 that call each name outside a method body, and whether a call is elsewhere (elab_accessor_first) */
+  ANameHash cfirst; struct LrCallSt *cfirst_cs; int cfirst_done;   /* the statements of region 0 that call each name outside a method body, and whether a call is elsewhere (elab_accessor_first), of the nodes below cfirst_done (lr_calls_scan) */
   ANameHash cn_name, cn_leaf; int *cn_cls, cn_n, cn_cap, cn_done;   /* the classes registered so far, each by its Ruby name and by the last segment of it, in class order (lr_walk_class_by_name) */
   unsigned ver;              /* the node table the map is of */
   int check, shown;
@@ -6549,6 +6549,40 @@ static int lr_runs_in(const LoadRecord *r, int a, int b) {
    stands in no statement of region 0 */
 struct LrCallSt { int *st, n, cap; unsigned char poison, sorted; };
 static int lr_int_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+/* Take the calls of the nodes the record has grown by since the last scan (all of them the first time) into the per-name
+   statement lists: a call a pass appended is read as an original one is. */
+static void lr_calls_scan(Compiler *c, LoadRecord *r) {
+  for (int id = r->cfirst_done; id < r->n; id++) {
+    if (nt_kind(c->nt, id) != NK_CallNode) continue;
+    int at = r->at[id];
+    if (at >= 0 && (r->bits[id] & LR_LATE)) continue;   /* (a call in a method body or a kept block runs after code of the program's) */
+    int st = at >= 0 && r->st[at].region == 0 ? at : -1;
+    const char *nm[2];
+    int n = call_node_names(c, id, nm);
+    for (int q = 0; q < n; q++) {
+      if (!nm[q]) continue;
+      int k = anh_find(&r->cfirst, nm[q]);
+      if (k < 0) {
+        anh_add(&r->cfirst, nm[q]);
+        k = r->cfirst.n - 1;
+        r->cfirst_cs = realloc(r->cfirst_cs, sizeof *r->cfirst_cs * (size_t)(k + 1));
+        if (!r->cfirst_cs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        r->cfirst_cs[k] = (struct LrCallSt){ NULL, 0, 0, 0, 0 };
+      }
+      struct LrCallSt *cs = &r->cfirst_cs[k];
+      cs->sorted = 0;
+      if (st < 0) { cs->poison = 1; continue; }
+      if (cs->n == cs->cap) {
+        cs->cap = cs->cap ? 2 * cs->cap : 4;
+        if (!(cs->st = realloc(cs->st, sizeof(int) * (size_t)cs->cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      cs->st[cs->n++] = st;
+    }
+  }
+  r->cfirst_done = r->n;
+}
+unsigned long elab_hgen(Compiler *c) { return c->lrec ? c->lrec->hgen : 0; }
+
 /* Can a call of `name` meet the attr_* call `node` before it has run, for an instance of class cls? An instance of cls
    exists only after cls is created (its first opening), so what runs before that matters not. The accessor is made
    first when the attr_* statement is in region 0, on cls or a class above it (not a module a later include may
@@ -6573,35 +6607,7 @@ int elab_accessor_first(Compiler *c, int node, const char *name, int cls) {
     }
     ok = e >= 0 && (e >= s || lr_runs_in(r, e, s) == 0);
     if (ok && e < s) {
-      if (!r->cfirst_done) {   /* (one pass over the calls for every name) */
-        r->cfirst_done = 1;
-        for (int id = 0; id < r->n; id++) {
-          if (nt_kind(c->nt, id) != NK_CallNode) continue;
-          int at = r->at[id];
-          if (at >= 0 && (r->bits[id] & LR_LATE)) continue;
-          int st = at >= 0 && r->st[at].region == 0 ? at : -1;
-          const char *nm[2];
-          int n = call_node_names(c, id, nm);
-          for (int q = 0; q < n; q++) {
-            if (!nm[q]) continue;
-            int k = anh_find(&r->cfirst, nm[q]);
-            if (k < 0) {
-              anh_add(&r->cfirst, nm[q]);
-              k = r->cfirst.n - 1;
-              r->cfirst_cs = realloc(r->cfirst_cs, sizeof *r->cfirst_cs * (size_t)(k + 1));
-              if (!r->cfirst_cs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-              r->cfirst_cs[k] = (struct LrCallSt){ NULL, 0, 0, 0, 0 };
-            }
-            struct LrCallSt *cs = &r->cfirst_cs[k];
-            if (st < 0) { cs->poison = 1; continue; }
-            if (cs->n == cs->cap) {
-              cs->cap = cs->cap ? 2 * cs->cap : 4;
-              if (!(cs->st = realloc(cs->st, sizeof(int) * (size_t)cs->cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-            }
-            cs->st[cs->n++] = st;
-          }
-        }
-      }
+      lr_calls_scan(c, r);
       int k = anh_find(&r->cfirst, name);
       if (k >= 0) {
         struct LrCallSt *cs = &r->cfirst_cs[k];

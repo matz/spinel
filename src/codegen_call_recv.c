@@ -3235,7 +3235,7 @@ else {
     if (is_find_index(name) && srange_member_hop(c, recv) >= 0 &&
         emit_srange_hop_row(c, id, srange_member_hop(c, recv), name, b)) { *out = 1; return 1; }
     /* nil-on-miss -> poly */
-    const char *fn = sp_streq(name, "rindex") ? "rindex_poly" : "index_poly";
+    const char *fn = is_rindex_name(name) ? "rindex_poly" : "index_poly";
     if (value_obj_compares(c, argv[0])) {
       unsupported_feature(c, id, "Array#index of a user object defining == in a typed Array");
       { *out = 0; return 1; }
@@ -3253,7 +3253,7 @@ else {
       buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (_t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_NIL)"
                     " ? sp_FloatArray_%s(_t%d, _t%d) : ", tv, tv, tv, tv,
-                 sp_streq(name, "rindex") ? "rindex_key" : "index_key", ta, tv);
+                 is_rindex_name(name) ? "rindex_key" : "index_key", ta, tv);
       emit_typed_arr_scan(c, id, rt, ta, tv, 0, is_rindex_name(name), b);
       buf_puts(b, "; })");
       { *out = 1; return 1; }
@@ -3267,7 +3267,7 @@ else {
       buf_printf(b, "; _t%d.tag == SP_TAG_INT ? sp_IntArray_%s(_t%d, _t%d.v.i) : ", tv, fn, ta, tv);
       /* a boxed nil finds the array's nil elements */
       if (elem_nil_sentinel(c, recv, rt))
-        buf_printf(b, "_t%d.tag == SP_TAG_NIL ? sp_box_oint(sp_IntArray_index_nil(_t%d, %d)) : ", tv, ta, sp_streq(name, "rindex") ? 1 : 0);
+        buf_printf(b, "_t%d.tag == SP_TAG_NIL ? sp_box_oint(sp_IntArray_index_nil(_t%d, %d)) : ", tv, ta, is_rindex_name(name) ? 1 : 0);
       if (a0 == TY_POLY) emit_typed_arr_scan(c, id, rt, ta, tv, 0, is_rindex_name(name), b);
       else buf_puts(b, "sp_box_nil()");
       buf_puts(b, "; })");
@@ -3290,7 +3290,7 @@ else {
       int ta = ++g_tmp;
       buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
       buf_puts(b, "; (void)("); emit_expr_for_effect(c, argv[0], b);
-      buf_printf(b, "); sp_box_oint(sp_%sArray_index_nil(_t%d, %d)); })", k, ta, sp_streq(name, "rindex") ? 1 : 0);
+      buf_printf(b, "); sp_box_oint(sp_%sArray_index_nil(_t%d, %d)); })", k, ta, is_rindex_name(name) ? 1 : 0);
       { *out = 1; return 1; }
     }
     /* held across the needle, which may allocate */
@@ -3300,7 +3300,7 @@ else {
     if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && node_has_oint_form(c, argv[0])) {
       /* a needle that can be nil searches with its nil (a nil needle finds
          the nil elements); the _o answer is boxed as the _poly one is */
-      buf_printf(b, "sp_box_oint(sp_%sArray_%s_o(%s, ", k, sp_streq(name, "rindex") ? "rindex" : "index", rix.p);
+      buf_printf(b, "sp_box_oint(sp_%sArray_%s_o(%s, ", k, is_rindex_name(name) ? "rindex" : "index", rix.p);
       emit_elem_needle(c, rt, argv[0], b);
       buf_puts(b, "))");
     }

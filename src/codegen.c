@@ -12245,7 +12245,8 @@ void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const 
 }
 /* Does call id, a Comparable method (an operator, between?, clamp, `==` and
    `!=`) or Kernel#===, on recv reach a method the record proves undefined (the
-   plan's delegate_undef: `<=>`, or `==` for `!=` and `===`)? Then it is the
+   plan's delegate_undef: `<=>`, `==` for `!=` and `===`, or the operator's
+   own name when that is what is undefined)? Then it is the
    raise naming that method, CRuby's, after the builtin's own shortcut
    (the plan's delegate_cut: the same object answers true or false, clamp's nil
    bounds and min above max). */

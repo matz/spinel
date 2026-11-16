@@ -315,7 +315,7 @@ int hoist_exc_recv(Compiler *c, int recv);
 int ctor_init_takes_block(Compiler *c, int initm);
 void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg_node, Buf *b);
 void emit_raise_class_value(Compiler *c, int id, int kn, int mn, Buf *b);
-int exc_reopen_initialize(Compiler *c, int ci);
+int exc_reopen_initialize(Compiler *c, int id, int ci);
 void emit_exc_new_no_init(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
 int raise_plain_arg(const NodeTable *nt, int node);
 void emit_kconv_call(Compiler *c, int id, const int *av, int ac, int raise, Buf *b);

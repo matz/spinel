@@ -15506,10 +15506,10 @@ static int array_new_block_needs_fresh_locals(Compiler *c, int blk) {
 
 /* The reopening of builtin exception class ci (`class KeyError; def
    initialize(msg = "no key") super("wrapped: " + msg) end`) defining its
-   own initialize: the index of that method, or -1. */
-int exc_reopen_initialize(Compiler *c, int ci) {
+   own initialize that call id runs: the index of that method, or -1. */
+int exc_reopen_initialize(Compiler *c, int id, int ci) {
   if (!class_is_exc_reopen(c, ci)) return -1;
-  int mi = cplan_hook_target(c, -1, ci, "initialize", NULL);
+  int mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   return (mi >= 0 && c->scopes[mi].class_id == ci && c->scopes[mi].reachable) ? mi : -1;
 }
 
@@ -16065,7 +16065,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* a reopening's own initialize runs on the runtime's exception, but
          not for the error a dispatcher's no-method arm builds (builtin_new) */
       if (!nt_int(nt, id, "builtin_new", 0)) { int rci = comp_builtin_class_named(c, cn);
-        int rim = rci >= 0 ? exc_reopen_initialize(c, rci) : -1;
+        int rim = rci >= 0 ? exc_reopen_initialize(c, id, rci) : -1;
         if (rim >= 0) { emit_exc_reopen_construct(c, rci, rim, nt_ref(nt, id, "arguments"), -1, b); { *out = 1; return 1; } } }
       /* SystemCallError#initialize builds the message from the errno:
          Errno::ENOENT.new("x") is "No such file or directory - x", and

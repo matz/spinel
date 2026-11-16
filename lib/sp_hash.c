@@ -80,6 +80,10 @@ sp_strelem sp_StrStrHash_get_e(sp_StrStrHash*h,const char*k){if (SP_UNLIKELY(!h)
 /* ENV's snapshot as a value (sp_env_value) is told by its finalizer: a
    String stored into it is a frozen copy, as ENV keeps */
 static void sp_StrStrHash_env_fin(void*p){sp_StrStrHash_fin(p);}
+/* (lib/sp_cold.c: a marked snapshot's stores go on to the environment) */
+void sp_env_write_through(const char *k, const char *v);
+void sp_env_clear_through(void);
+static int sp_StrStrHash_is_env(sp_StrStrHash*h){return h&&((sp_gc_hdr*)((char*)h-sizeof(sp_gc_hdr)))->finalize==sp_StrStrHash_env_fin;}
 void sp_StrStrHash_mark_env(sp_StrStrHash*h){if(h)((sp_gc_hdr*)((char*)h-sizeof(sp_gc_hdr)))->finalize=sp_StrStrHash_env_fin;}
 static sp_strelem sp_StrStrHash_env_copy(sp_strelem v){
   sp_String*c=sp_String_new_inline_len(v->data,v->len);
@@ -87,13 +91,13 @@ static sp_strelem sp_StrStrHash_env_copy(sp_strelem v){
   return sp_String_freeze(c);
 }
 void sp_StrStrHash_set_e(sp_StrStrHash*h,const char*k,sp_strelem v){SP_GC_ROOT(h);SP_GC_ROOT_STR(k);SP_GC_ROOT(v); if(!k){sp_raise_cls("TypeError","no implicit conversion of nil into String");return;} 
-if(v&&SP_UNLIKELY(((sp_gc_hdr*)((char*)h-sizeof(sp_gc_hdr)))->finalize==sp_StrStrHash_env_fin))v=sp_StrStrHash_env_copy(v);
+if(SP_UNLIKELY(sp_StrStrHash_is_env(h))){if(v)v=sp_StrStrHash_env_copy(v);sp_env_write_through(k,v?SP_SEB(v):NULL);}
 sp_gc_wb((void*)h);if(h->len*2>=h->cap)sp_StrStrHash_grow(h);sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k)){h->vals[idx]=v;return;}idx=(idx+1)&h->mask;}k=sp_hash_key_str(k);sp_gc_wb((void*)h);h->keys[idx]=k;h->vals[idx]=v;h->order[h->len]=k;h->len++;}
 sp_bool sp_StrStrHash_has_key(sp_StrStrHash*h,const char*k){SP_GC_ROOT(h);SP_GC_ROOT_STR(k);sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k))return TRUE;idx=(idx+1)&h->mask;}return FALSE;}
 const char *sp_StrStrHash_fetch_or(sp_StrStrHash*h,const char*k,const char*d){if (SP_UNLIKELY(!h)) sp_nil_recv("fetch");sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k))return SP_SEB(h->vals[idx]);idx=(idx+1)&h->mask;}return d;}
 sp_bool sp_StrStrHash_has_value_e(sp_StrStrHash*h,sp_strelem v){if (SP_UNLIKELY(!h)) sp_nil_recv("value?"); if (!v)return FALSE;for(sp_int i=0;i<h->len;i++){sp_strelem x=sp_StrStrHash_get_e(h,h->order[i]);if(x&&sp_str_eq(SP_SEB(x),SP_SEB(v)))return TRUE;}return FALSE;}
 sp_int sp_StrStrHash_length(sp_StrStrHash*h){return h->len;}
-void sp_StrStrHash_delete(sp_StrStrHash*h,const char*k){SP_GC_ROOT(h);SP_GC_ROOT_STR(k); sp_gc_wb((void*)h);sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k)){sp_order_drop_str(h->order,h->len,h->keys[idx]);h->keys[idx]=NULL;h->vals[idx]=NULL;h->len--;sp_int j=(idx+1)&h->mask;while(h->keys[j]){sp_int nj=(sp_int)(sp_str_hash(h->keys[j])&h->mask);if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->keys[j]=NULL;h->vals[j]=NULL;idx=j;}j=(j+1)&h->mask;}return;}idx=(idx+1)&h->mask;}}
+void sp_StrStrHash_delete(sp_StrStrHash*h,const char*k){SP_GC_ROOT(h);SP_GC_ROOT_STR(k); if(SP_UNLIKELY(sp_StrStrHash_is_env(h)))sp_env_write_through(k,NULL); sp_gc_wb((void*)h);sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k)){sp_order_drop_str(h->order,h->len,h->keys[idx]);h->keys[idx]=NULL;h->vals[idx]=NULL;h->len--;sp_int j=(idx+1)&h->mask;while(h->keys[j]){sp_int nj=(sp_int)(sp_str_hash(h->keys[j])&h->mask);if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->keys[j]=NULL;h->vals[j]=NULL;idx=j;}j=(j+1)&h->mask;}return;}idx=(idx+1)&h->mask;}}
 sp_StrArray*sp_StrStrHash_keys(sp_StrStrHash*h){SP_GC_ROOT(h);sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);for(sp_int i=0;i<h->len;i++)sp_StrArray_push_e(a,sp_String_key_handle(h->order[i]));return a;}
 sp_StrArray*sp_StrStrHash_values(sp_StrStrHash*h){SP_GC_ROOT(h);sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);for(sp_int i=0;i<h->len;i++)sp_StrArray_push(a,sp_StrStrHash_get(h,h->order[i]));return a;}
 sp_StrStrHash*sp_StrStrHash_invert(sp_StrStrHash*h){SP_GC_ROOT(h);sp_StrStrHash*r=sp_StrStrHash_new();for(sp_int i=0;i<h->len;i++){const char*k=h->order[i];sp_StrStrHash_set_e(r,sp_StrStrHash_get(h,k),sp_String_key_handle(k));}return r;}
@@ -101,7 +105,7 @@ void sp_StrStrHash_update(sp_StrStrHash*a,sp_StrStrHash*b){SP_GC_ROOT(a);SP_GC_R
 sp_StrStrHash*sp_StrStrHash_dup(sp_StrStrHash*h){if(!h)return NULL;SP_GC_ROOT(h);sp_StrStrHash*r=sp_StrStrHash_new();r->default_v=h->default_v;for(sp_int i=0;i<h->len;i++)sp_StrStrHash_set(r,h->order[i],sp_StrStrHash_get(h,h->order[i]));return r;}
 sp_StrStrHash*sp_StrStrHash_merge(sp_StrStrHash*a,sp_StrStrHash*b){SP_GC_ROOT(a);SP_GC_ROOT(b);if (SP_UNLIKELY(!a)) sp_nil_recv("merge");sp_StrStrHash*r=sp_StrStrHash_new();r->default_v=a->default_v;for(sp_int i=0;i<a->len;i++)sp_StrStrHash_set(r,a->order[i],sp_StrStrHash_get(a,a->order[i]));if(b){for(sp_int i=0;i<b->len;i++)sp_StrStrHash_set(r,b->order[i],sp_StrStrHash_get(b,b->order[i]));}return r;}
 sp_StrStrHash*sp_StrStrHash_replace(sp_StrStrHash*h,sp_StrStrHash*o){SP_GC_ROOT(h);SP_GC_ROOT(o); sp_gc_wb((void*)h);if (SP_UNLIKELY(!h)) sp_nil_recv("replace");if(h==o)return h;for(sp_int i=0;i<h->cap;i++)h->keys[i]=NULL;h->len=0;if(o)for(sp_int i=0;i<o->len;i++)sp_StrStrHash_set(h,o->order[i],sp_StrStrHash_get(o,o->order[i]));return h;}
-void sp_StrStrHash_clear(sp_StrStrHash*h){ sp_gc_wb((void*)h);if (SP_UNLIKELY(!h)) sp_nil_recv("clear");for(sp_int i=0;i<h->cap;i++)h->keys[i]=NULL;h->len=0;}
+void sp_StrStrHash_clear(sp_StrStrHash*h){ sp_gc_wb((void*)h);if (SP_UNLIKELY(!h)) sp_nil_recv("clear");if(SP_UNLIKELY(sp_StrStrHash_is_env(h)))sp_env_clear_through();for(sp_int i=0;i<h->cap;i++)h->keys[i]=NULL;h->len=0;}
 sp_bool sp_StrStrHash_eq(sp_StrStrHash*a,sp_StrStrHash*b){SP_GC_ROOT(a);SP_GC_ROOT(b);if(!a||!b)return a==b;if(a->len!=b->len)return FALSE;for(sp_int i=0;i<a->len;i++){const char*k=a->order[i];if(!sp_StrStrHash_has_key(b,k))return FALSE;if(!sp_str_eq(sp_StrStrHash_get(a,k),sp_StrStrHash_get(b,k)))return FALSE;}return TRUE;}
 /* the bytes a slot of the tables takes (keys, vals, order, used), counted
    to the header as the tables grow (sp_gc_payload_resize) */

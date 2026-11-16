@@ -1267,8 +1267,8 @@ extern int g_has_user_coerce;
    no rest, an array return -- the [other, self] pair, poly or homogeneously
    typed. See analyze_util.c. */
 int class_coerce_emittable(Compiler *c, int k);
-int class_has_coerce_shape(Compiler *c, int k);
-int class_has_to_str_shape(Compiler *c, int k);
+int class_has_coerce_shape(Compiler *c, int site, int op, int k);
+int class_has_to_str_shape(Compiler *c, int site, int op, int k);
 int is_numeric_coerce_op(const char *op);
 extern int g_has_user_to_io;
 extern int g_gen_obj_hashkey; /* >=1 instantiated class defines #hash + #eql?: emit + install the obj hash/eql key hooks */
@@ -1360,12 +1360,17 @@ int class_has_ctor(const ClassInfo *ci);   /* does the class get a sp_X_new (an 
 int anon_class_text(Compiler *c, int ci, const char *head, Buf *b);
 int scope_def_line(Compiler *c, Scope *s);
 const char *scope_def_file(Compiler *c, Scope *s);
-int display_method_scope(Compiler *c, int cid, int want_inspect, int *defcls);
-const char *obj_str_cname(Compiler *c, int cid, int want_inspect);
-const char *obj_str_fn(Compiler *c, int cid, int want_inspect);
-const char *obj_str_blockarg(Compiler *c, int cid, int want_inspect);
-int obj_str_ret_poly(Compiler *c, int cid, int want_inspect);
-int obj_str_ret_strsub(Compiler *c, int cid, int want_inspect);
+int display_method_scope(Compiler *c, int site, int cid, int want_inspect, int *defcls);
+const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect);
+int obj_str_undef(Compiler *c, int site, int cid, int want_inspect);
+void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, Buf *b);
+void emit_nomethod_raise_boxed(Buf *b, const char *name, int tv, const char *dflt);
+void emit_nomethod_raise_unless_nil(Compiler *c, int obj, const char *name, const char *dflt, const char *nil_ans, Buf *b);
+int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b);
+const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect);
+const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect);
+int obj_str_ret_poly(Compiler *c, int site, int cid, int want_inspect);
+int obj_str_ret_strsub(Compiler *c, int site, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 #ifdef SP_EMIT_TRACE
@@ -1608,7 +1613,7 @@ void emit_opw_okey_read(const char *t, Buf *b);
 int hash_nil_key_stored(Compiler *c, int key, TyKind kt);
 const char *conv_wrong_cls_name(TyKind t);
 const char *conv_cls_name_of(Compiler *c, TyKind t);
-TyKind obj_container_conv(Compiler *c, TyKind t, const char *conv, int *def);
+TyKind obj_container_conv(Compiler *c, int op, TyKind t, const char *conv, int *def);   /* the call plan answers it at the call op is passed to */
 int conv_takes_no_args(Compiler *c, int mi);
 void emit_conv_dflt_args(Compiler *c, int mi, Buf *b);
 void emit_str_pattern_expr(Compiler *c, int node, Buf *b);
@@ -1787,7 +1792,7 @@ int nameset_has(NameSet *s, const char *nm);
 int array_user_inspect_mi(Compiler *c);
 /* does pp print a record of class cid by its layout, not by the class's
    own #inspect; does a pp print through sp_pp_inspect (codegen.c) */
-int record_pp_skips_inspect(Compiler *c, int cid);
+int record_pp_skips_inspect(Compiler *c, int site, int cid);
 int pp_prints_by_rt(Compiler *c);
 /* does sp_obj_inspect_sw call class cid's own #inspect (codegen.c) */
 int obj_arm_calls_own_inspect(Compiler *c, int cid);
@@ -1897,8 +1902,10 @@ extern int g_open_defaults;        /* parameter defaults being emitted, innermos
    typed slot (CRuby's implicit conversion protocol), or -1: `conv` is "to_str"
    or "to_int" and `want` the slot's type, which the method's declared return
    must be. *def_out receives the defining class. Shared by the emitter and the
-   native-argument check so both agree on which objects may cross. */
-int obj_conv_method(Compiler *c, TyKind t, const char *conv, TyKind want, int *def_out);
+   native-argument check so both agree on which objects may cross. The call
+   plan answers it (cplan_implied_target) at the call the operand op is
+   passed to (ic_operand_host). */
+int obj_conv_method(Compiler *c, int op, TyKind t, const char *conv, TyKind want, int *def_out);
 /* A String comparison's operand: the shape test both the type rules and the
    arms ask, the conversion emitted on a spilled temp, and the prologue the
    arms share. See codegen.c. */
@@ -1909,8 +1916,9 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b);
 void emit_str_cmp_conv(Compiler *c, int node, int tmp, Buf *b);
 void emit_str_cmp_prologue(Compiler *c, const char *rtxt, int operand,
                            int *tr, int *to, int *ts, Buf *b);
-/* 1 iff any class defines a usable #to_int / #to_str -- see codegen.c. */
-int prog_has_conv_method(Compiler *c, const char *conv, TyKind want);
+/* 1 iff any class defines a usable #to_int / #to_str -- see codegen.c. id and
+   op as obj_conv_method's. */
+int prog_has_conv_method(Compiler *c, int op, const char *conv, TyKind want);
 
 __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what);
 int unsup_message(Compiler *c, int id, const char *what, int self_ci, char *msg, size_t cap);
@@ -2207,8 +2215,8 @@ const char *mc_method(Compiler *c, const Scope *s);
 const char *mc_ring_setf(Compiler *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 /* The scope a #deconstruct call on class cid runs, through an alias
    (codegen.c) */
-int comp_deconstruct_method(Compiler *c, int pat, int cid, int *defcls);
-int comp_deconstruct_keys_method(Compiler *c, int pat, int cid, int *defcls);
+int comp_deconstruct_method(Compiler *c, int site, int cid, int *defcls);
+int comp_deconstruct_keys_method(Compiler *c, int site, int cid, int *defcls);
 const char *iv_c(const char *name);  /* ivar/member name -> valid C field id (#3110) */
 #define IV_C_MAX 64  /* iv_c's longest result; a longer name is shortened with a hash */
 /* A method scope is shadowed (and must not be emitted) when a later
@@ -3149,7 +3157,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt, int start_node,
 int aset_range_held(Compiler *c, TyKind rt, const int *argv);
 void emit_aset_range_held(Compiler *c, int id, int recv, TyKind rt, const int *argv, Buf *b);
 int frange_index_view(Compiler *c, int id);
-int splice_to_ary_mi(Compiler *c, TyKind rhs_ty);
+int splice_to_ary_mi(Compiler *c, int op, TyKind rhs_ty);
 TyKind emit_splice_to_ary_src(Compiler *c, int id, int rhs_node, TyKind rhs_ty, int mi, int ta, Buf *b, Buf *out);
 void emit_to_ary_dispatch(Compiler *c, int id, int cid, const char *selfptr, Buf *out);
 int emit_boxed_to_ary(Compiler *c, int id, int op, int src, Buf *b, int indent);
@@ -3406,9 +3414,9 @@ int is_builtin_reopen(const char *name);
 int is_exc_name(const char *n);
 int class_is_exc_subclass(Compiler *c, int ci);
 const char *class_ruby_name(Compiler *c, int ci);
-const char *obj_str_cname(Compiler *c, int cid, int want_inspect);
-const char *obj_str_blockarg(Compiler *c, int cid, int want_inspect);
-int obj_str_ret_poly(Compiler *c, int cid, int want_inspect);
+const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect);
+const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect);
+int obj_str_ret_poly(Compiler *c, int site, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_class_struct(Compiler *c, ClassInfo *ci, Buf *b);
 int class_needs_scan(ClassInfo *ci);

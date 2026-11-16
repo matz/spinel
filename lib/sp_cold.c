@@ -4483,6 +4483,15 @@ sp_StrStrHash *sp_env_value(void) {
   sp_StrStrHash_mark_env(h);
   return h;
 }
+/* A store, a delete or a clear on the snapshot a boxed ENV is read through
+   (sp_env_box_read, marked by sp_StrStrHash_mark_env) goes on to the
+   environment, as ENV's own does (lib/sp_hash.c calls these). v NULL unsets. */
+void sp_env_write_through(const char *k, const char *v) {
+  if (v) setenv(sp_env_chk(k, 0), sp_env_chk(v, 1), 1);
+  else unsetenv(sp_env_chk(k, 0));
+}
+sp_StrStrHash *sp_env_clear(void);
+void sp_env_clear_through(void) { (void)sp_env_clear(); }
 sp_StrStrHash *sp_env_clear(void) {
   extern char **environ;
   for (;;) {   /* environ shifts under unsetenv: restart until empty */

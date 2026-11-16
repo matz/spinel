@@ -1803,6 +1803,14 @@ ReprKind repr_slot_kind(const Compiler *c, const LocalVar *lv) {
   if (slot_is_oint(lv)) return RK_OPT;
   return repr_kind_of_type(c, lv->type);
 }
+/* Does node v's value come out as an Integer Range held by value (an
+   sp_Range), not boxed? A call that takes the Range as one argument
+   emits it as that C struct. */
+int repr_range_value(const Compiler *c, int v) {
+  Repr r = repr_of(c, v);
+  return r.as_ty == TY_RANGE && r.kind != RK_BOXED;
+}
+
 Repr repr_of_slot(const Compiler *c, const LocalVar *lv) {
   Repr r;
   memset(&r, 0, sizeof r);

@@ -201,6 +201,8 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->method_call = 0;
   p->send_fallback = -1;
   p->delegate = NULL;
+  p->delegate_undef = 0;
+  p->delegate_cut = BCUT_NONE;
   p->mi = mi; p->owner_ci = (short)owner;
   p->via = (unsigned char)via; p->dispatch = (unsigned char)dispatch;
   p->by_name = 0;
@@ -1231,15 +1233,32 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     mtab_leave(c);
     const char *via_op = sub_answers ? NULL : builtin_operator_delegate(name);
     if (via_op && sp_streq(via_op, "<=>") && !class_is_comparable(c, cid)) via_op = NULL;
-    int dmi = via_op ? call_target(c, id, cid, via_op, 0, NULL) : -1;
-    if (dmi < 0 && via_op) {
+    /* (the delegate is an implied call of the operator: asked as the emitter asks it, which sees an undef) */
+    MethodLookup dl = { .def_class = -1 };
+    const char *gone = NULL;
+    /* (the operator itself undefined where the record places the call: the call raises naming it) */
+    if (via_op) {
+      cplan_implied_target(c, id, recv, cid, name, 0, &dl);
+      if (dl.kind == ML_NONE && dl.why == MLW_RECORD) gone = name;
+    }
+    int dmi = via_op && !gone ? cplan_implied_target(c, id, recv, cid, via_op, 0, &dl) : -1;
+    if (via_op && !gone && dmi < 0 && dl.kind == ML_NONE && dl.why == MLW_RECORD) gone = via_op;
+    if (dmi < 0 && via_op && !gone) {   /* (stops at the first undefined delegate: CRuby raises there) */
       via_op = builtin_operator_delegate(via_op);
       if (via_op && sp_streq(via_op, "<=>") && !class_is_comparable(c, cid)) via_op = NULL;
-      dmi = via_op ? call_target(c, id, cid, via_op, 0, NULL) : -1;
+      dmi = via_op ? cplan_implied_target(c, id, recv, cid, via_op, 0, &dl) : -1;
+      if (via_op && dmi < 0 && dl.kind == ML_NONE && dl.why == MLW_RECORD) gone = via_op;
     }
     if (dmi >= 0) {
       cplan_set(p, dmi, cid, UC_INST, cplan_dispatch_form(c, id, cid, via_op, 1));
       p->delegate = via_op;
+      return;
+    }
+    if (gone) {
+      p->delegate = gone;
+      p->delegate_undef = 1;
+      /* what the builtin answers before it reaches the undefined method (the delegate row's cut) */
+      p->delegate_cut = (unsigned char)builtin_operator_cut(name, gone);
       return;
     }
     /* a reader a subclass overrides with a method: the switch reaches the
@@ -1541,6 +1560,7 @@ int cplan_plain_ctx(void) {
 }
 
 static int cplan_capture_absent(Compiler *c, int id, int mi);
+static int cplan_main_capture_absent(Compiler *c, int id);
 static int cm_capture_class(Compiler *c, int id, const char **name);
 static int cplan_capture_gap(Compiler *c, int id);
 /* A bound Method already carries its target. Its arguments are bound by
@@ -1559,6 +1579,7 @@ CallPlan cplan_method_call(Compiler *c, int id) {
   if (mi >= 0) cplan_set(&p, mi, c->scopes[mi].class_id, c->scopes[mi].is_cmethod ? UC_CMETH : UC_INST, CP_DIRECT);
   if (mi >= 0 && c->scopes[mi].entry) p.dispatch = CP_SWITCH;
   p.absent = capture ? (unsigned char)cplan_capture_absent(c, id, mi) : 0;
+  if (capture && mi < 0 && !p.absent && cplan_main_capture_absent(c, id)) p.absent = CP_ABSENT_MAIN;
   if (p.absent && mi < 0) p.owner_ci = (short)cm_capture_class(c, id, NULL);
   p.method_node = mn;
   p.method_call = 1;
@@ -1610,7 +1631,8 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
      const char * helper, so call it directly (#3868) */
   if (own < 0 && is_message_name(name)) {
     int mi8 = call_target(c, -1, xcm, "message", CT_METHODS | CT_SHARED, NULL);
-    if (mi8 < 0) mi8 = call_target(c, -1, xcm, "to_s", CT_METHODS | CT_SHARED, NULL);
+    /* (Exception#message's to_s, a callback the call makes on its receiver: asked at the call) */
+    if (mi8 < 0) mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "to_s", 0, NULL);
     if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
         (TyKind)c->scopes[mi8].ret != TY_UNKNOWN)
       own = mi8;
@@ -1621,7 +1643,7 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
     int sub_str = 0, sub_other = 0;
     for (int k = 0; k < c->nclasses; k++) {
       if (k == xcm || !is_descendant(c, k, xcm)) continue;
-      int ko = call_target(c, -1, k, "to_s", CT_OWN | CT_SHARED, NULL);
+      int ko = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), k, "to_s", CT_OWN, NULL);
       if (ko < 0) continue;
       if ((TyKind)c->scopes[ko].ret == TY_STRING) sub_str = 1;
       else sub_other = 1;
@@ -2832,25 +2854,76 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
      node does not itself call it, and an implied ask makes no entry),
      unless the chain holds a version a method body makes, which the
      entry has no arm for: ML_ENTRY;
-   - else none (-1): *ml is ML_TABLE, with the why of the declined window
+   - else the table's method (ML_TABLE), with the why of the declined window
      (MLW_UNPLACED no window, MLW_MOVES the chain moves, MLW_MANY any
-     other), or call_target's, and the reader keeps the method table's
-     answer.
-   -1 with ML_TABLE and MLW_UNASKED where no row makes the call; -1 with
-   ML_NONE where cls has no class, or an undef of the name on cls's chain
-   leaves the table without it (comp_is_undeffed_in_chain): the call is
-   lowered as a call of `name`, which binds through the table, so that call
-   is not the version proved. ml may be NULL. */
+     other), as call_target answers it.
+   A call no planned row makes (a builtin's callback, a syntax row not
+   planned yet) is not asked of the record: the table's method, with
+   MLW_UNASKED where the name has versions, else ML_METHOD; so is one with no
+   site (id -1), the ask of a program-wide reader. side is 0 for
+   an instance of cls, CT_CMETHOD for the class object, CT_OWN for cls's
+   own method (with CT_CMETHOD, its own class method), as call_target's
+   flags; the planned rows ask instances. -1 with ML_NONE where cls has no
+   class, the table holds no method, or an undef of the name on cls's chain
+   provably ran before id (ct_undef_before: *ml is ML_NONE with MLW_RECORD; a
+   planned row's reader takes the table's program-wide undef, as it always
+   did): the call is lowered as a
+   call of `name`, which binds through the table, so that call is not the
+   version proved. An undef the record cannot place before id leaves the
+   table's method, ML_TABLE, as cplan_hook_target does. ml may be NULL. */
 static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m);
-int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml) {
+static int ver_chain_undef(Compiler *c, int rcls, int sg, const char *name);
+static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int *def_class, int *attr);
+/* Does an undef of `name` on cls's chain take the method away at call site: the
+   record places the undef before site's point, unconditionally (elab_method_at
+   answers none with the undef as the version in force), and site runs where
+   the record places it, not in a method's body or a block it cannot place,
+   which may run before the undef? Anywhere else the table's method stands, as
+   cplan_hook_target keeps it. */
+static int ct_undef_before(Compiler *c, int site, int cls, const char *name) {
+  if (site < 0 || elab_in_unplaced_block(c, site)) return 0;
+  int framed = elab_plan_enter(c, site);
+  LoadPoint p = elab_point_of(c, site);
+  const LrDef *d = NULL;
+  int o = p.region >= 0 ? elab_method_at(c, cls, name, 0, p, &d) : ELAB_UNKNOWN;
+  if (framed) elab_plan_leave(c);
+  return o == ELAB_NO && d && d->kind == LR_UNDEF;
+}
+int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *name, unsigned side, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
   *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
-  if (cls < 0 || comp_is_undeffed_in_chain(c, cls, name)) return -1;
-  if (!ct_implied_row(c, id, name, op)) {
-    *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNASKED, .def_class = -1 };
+  if (cls < 0) return -1;
+  mtab_enter(c);
+  /* (an undef the table no longer holds, a later def having replaced it, is in the record's versions) */
+  int undef = !(side & CT_CMETHOD) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name)));
+  mtab_leave(c);
+  /* (a call no planned row makes, a builtin's callback or a row not planned
+     yet, is not asked of the record: the table's method, as call_target
+     answers a call whose node does not make it) */
+  int vi = -1, planned = !side && site >= 0 && ct_implied_row(c, site, name, op);
+  /* (a planned row's undef stays the table's, program-wide, as to_ary's readers
+     always had it: its lowering, an explicit call of the name, would raise at
+     the sites before the undef, as cplan_undef_stops takes the undef
+     program-wide) */
+  if (undef && planned) return -1;
+  if (undef && ct_undef_before(c, site, cls, name)) {
+    m->why = MLW_RECORD;   /* (the record proves the call raises, as call_target's none) */
     return -1;
   }
-  return ct_implied_at(c, id, cls, name, m);
+  if (!planned) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNASKED, .def_class = -1 };
+  else vi = ct_implied_at(c, site, cls, name, m);
+  if (vi >= 0 && m->def_class < 0) m->def_class = c->scopes[vi].class_id;
+  if (m->kind != ML_TABLE) return vi;
+  /* (no proof: the table's method, so the reader reads no table of its own) */
+  int dc = -1;
+  mtab_enter(c);
+  int tm = ct_table(c, cls, name, side | CT_METHODS, &dc, NULL);
+  mtab_leave(c);
+  m->def_class = dc;
+  if (tm < 0) m->kind = ML_NONE;
+  else if (!planned && !undef && !ct_versioned(c, tm, name)) m->kind = ML_METHOD;   /* (a window the plan declined, or an undef it cannot place, stays declined) */
+  else if (g_method_table_check) mtab_table(c, site, cls, side, name, m->why);
+  return tm;
 }
 /* The answers of cplan_hook_target, kept by (site, class, name) for the
    record, the method table and the version entries as they stand
@@ -3172,6 +3245,12 @@ static int cplan_implied_entry(Compiler *c, int cls, const char *name, int mi) {
   int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, cls, 0, name, ver_call_arity(c, -1, cls, 0, name, mi), VF_NONE);
   return ix >= 0 ? c->ver_entries[ix].scope : -1;
 }
+/* See call_plan.h. An Array subclass instance is an Array already
+   (comp_arysub_emb): CRuby takes it as it is and never calls its #to_ary. */
+int cplan_to_ary_method(Compiler *c, int id, int op, int cid) {
+  if (comp_ary_is_array_proper(c, cid)) return -1;
+  return cplan_implied_target(c, id, op, cid, "to_ary", 0, NULL);
+}
 /* See call_plan.h. The classes are cplan_boxed_to_ary_classes' (a box can
    hold them, their to_ary is the table's no-argument one). */
 const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
@@ -3184,7 +3263,9 @@ const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
   es->cls = cls;
   es->scope = scope;
   for (int i = 0; i < np; i++) {
+    mtab_enter(c);
     int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    mtab_leave(c);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     int e = cplan_implied_entry(c, k, "to_ary", mi);
     if (e < 0 || !c->scopes[e].reachable) continue;
@@ -3238,12 +3319,14 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
   if (oc < 0 && ot != TY_POLY) return 0;
   const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
   for (int i = 0; i < np && n < cap; i++) {
+    mtab_enter(c);
     int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    mtab_leave(c);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     if (oc >= 0 && !is_descendant(c, k, oc)) continue;
     MethodLookup ml;
-    int vi = cplan_implied_target(c, id, op, k, "to_ary", &ml);
-    if (vi < 0 || c->scopes[vi].nparams != 0) continue;
+    int vi = cplan_implied_target(c, id, op, k, "to_ary", 0, &ml);
+    if (vi < 0 || ml.kind == ML_TABLE || c->scopes[vi].nparams != 0) continue;
     if (ans) ans[n] = (CplanToAry){ vi, ml.kind == ML_ENTRY && cplan_to_ary_entry_of(c, k) == vi ? CTA_ENTRY : vi == mi ? CTA_TABLE : CTA_VERSION };
     out[n++] = k;
   }
@@ -3255,10 +3338,13 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
 int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
   if (boxed) *boxed = 0;
   int cls = ty_is_object(t) ? ty_object_class(t) : -1;
+  mtab_enter(c);
   int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
+  mtab_leave(c);
   if (mi < 0 || c->scopes[mi].nparams != 0) return -1;
-  int vi = cplan_implied_target(c, at, op, cls, "to_ary", NULL);
-  if (vi < 0 || c->scopes[vi].nparams != 0) return -1;
+  MethodLookup ml;
+  int vi = cplan_implied_target(c, at, op, cls, "to_ary", 0, &ml);
+  if (vi < 0 || ml.kind == ML_TABLE || c->scopes[vi].nparams != 0) return -1;
   if (ty_is_array(c->scopes[mi].ret) && ty_is_array(c->scopes[vi].ret)) return vi;
   if (boxed) *boxed = 1;
   return -1;
@@ -4106,14 +4192,23 @@ static int ct_on_main(Compiler *c, int id, const char *name) {
    method_missing may answer it instead. The point is asked only of a
    call that runs on main: outside the plan's frame, it rebuilds the map
    whenever a pass appended nodes since, and every call a pass asks the
-   hook for (cplan_mm_method) comes here. */
+   hook for (cplan_mm_method) comes here. The same stop where a module main extends or Object includes or prepends
+   holds the undef (the main-chain fact's EMC_STOP), in a top-level def's call too. */
 static int ct_main_stopped(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
-  if (!ct_runs_on_main(c, id)) return 0;
-  int framed = elab_plan_enter(c, id);
-  LoadPoint p = elab_point_of(c, id);
-  int stop = p.region >= 0 && elab_main_singleton_at(c, name, p, &d) == ELAB_STOP;
-  if (framed) elab_plan_leave(c);
+  int stop = 0;
+  if (ct_runs_on_main(c, id)) {
+    int framed = elab_plan_enter(c, id);
+    LoadPoint p = elab_point_of(c, id);
+    stop = p.region >= 0 && elab_main_singleton_at(c, name, p, &d) == ELAB_STOP;
+    if (framed) elab_plan_leave(c);
+  }
+  /* (or an undef in a module main extends or Object includes or prepends: the main-chain fact's stop. It holds for a
+     top-level def's call too, whose self is its caller's, main or another object, both of which the fact asks) */
+  if (!stop) {
+    const Scope *s = comp_scope_of(c, id);
+    stop = s && s->class_id < 0 && !s->is_cmethod && cplan_main_chain_step(c, id, name) == EMC_STOP;
+  }
   if (!stop) return 0;
   /* (a program method_missing main reaches, its singleton's or Object's,
      answers the call instead: not told apart here, so none stops) */
@@ -4231,13 +4326,184 @@ int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst) {
    singleton answers by the core's `to_s` or `inspect`, none
    (ML_SINGLETON); where an undef there stops the lookup
    (ct_main_stopped), none (ML_NONE). */
+/* The main-chain fact: what a self-call of `name` at call id meets along main's chain (elab_main_chain_at),
+   at the call's point; for a call with none (a method body, a block kept to run later), over the window it may run
+   in (elab_call_window): its answer at the window's start, where the answer at the load's end is the same one
+   (MCH_MOVES where they differ: the answer depends on when the body runs). A call in a class's instance method, or in
+   a top-level def not run on main, asks Object's chain alone. Asked inside the plan's frame (elab_plan_enter), so a
+   pass that appends nodes between its asks does not rebuild the point map. ELAB_YES / NO / UNKNOWN, MCH_MOVES. */
+enum { MCH_MOVES = 3 };
+/* (the answer by (name, region, seq, side, window): every call of a name at one statement, or over one window, has one
+   answer, kept while the record stands, whatever nodes a pass appends) */
+struct MainChainMemo { struct MainChainSlot { const char *name; int region, seq, key, r, step; const LrDef *d; } *slot; int cap, used; ElabStamp stamp; };
+void main_chain_free(Compiler *c) {
+  if (!c->main_chain) return;
+  free(c->main_chain->slot);
+  free(c->main_chain);
+  c->main_chain = NULL;
+}
+static struct MainChainSlot *ct_main_chain_slot(Compiler *c, const char *name, int region, int seq, int key, int *hit) {
+  struct MainChainMemo *m = c->main_chain;
+  ElabStamp st = elab_stamp(c);
+  st.nt = 0;
+  if (m && !elab_stamp_same(m->stamp, st)) { main_chain_free(c); m = NULL; }
+  if (!m) {
+    if (!(c->main_chain = m = calloc(1, sizeof *m))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    m->stamp = st;
+  }
+  if (2 * (m->used + 1) > m->cap) {
+    struct MainChainSlot *old = m->slot;
+    int ocap = m->cap;
+    m->cap = ocap ? 2 * ocap : 256;
+    if (!(m->slot = calloc((size_t)m->cap, sizeof *m->slot))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < ocap; i++) {
+      if (!old[i].name) continue;
+      unsigned h = ver_mix(sp_strhash(old[i].name) + (unsigned)old[i].seq * 0x9E3779B1u + (unsigned)old[i].region * 31u + (unsigned)old[i].key);
+      int j = (int)(h & (unsigned)(m->cap - 1));
+      while (m->slot[j].name) j = (j + 1) & (m->cap - 1);
+      m->slot[j] = old[i];
+    }
+    free(old);
+  }
+  unsigned h = ver_mix(sp_strhash(name) + (unsigned)seq * 0x9E3779B1u + (unsigned)region * 31u + (unsigned)key);
+  int j = (int)(h & (unsigned)(m->cap - 1));
+  for (; m->slot[j].name; j = (j + 1) & (m->cap - 1))
+    if (m->slot[j].region == region && m->slot[j].seq == seq && m->slot[j].key == key && sp_streq(m->slot[j].name, name)) { *hit = 1; return &m->slot[j]; }
+  *hit = 0;
+  m->slot[j].name = name;   /* (a name the node table holds: it outlives the memo) */
+  m->slot[j].region = region, m->slot[j].seq = seq, m->slot[j].key = key;
+  m->used++;
+  return &m->slot[j];
+}
+/* The main-chain fact over a method body's window w, from one side (obj: an Object instance's, else main's): its
+   answer where the body may first run, or MCH_MOVES where the end of the program answers otherwise */
+static int ct_main_chain_win(Compiler *c, const char *name, ElabWindow w, int obj, int *step, const LrDef **d) {
+  int hit = 0, r;
+  struct MainChainSlot *sl = ct_main_chain_slot(c, name, w.from.region, w.from.seq, obj + 2, &hit);
+  if (hit) { *step = sl->step, *d = sl->d; return sl->r; }
+  const LrDef *d2 = NULL;
+  int st2 = EMC_NONE;
+  r = elab_main_chain_at(c, name, w.from, obj, d, step);
+  int r2 = elab_main_chain_at(c, name, (LoadPoint){ -1, -1, -1 }, obj, &d2, &st2);
+  if (r == ELAB_UNKNOWN || r2 == ELAB_UNKNOWN) r = ELAB_UNKNOWN;
+  else if (r != r2 || *step != st2 || *d != d2) r = MCH_MOVES;
+  sl->r = r, sl->step = *step, sl->d = *d;
+  return r;
+}
+static int ct_main_chain(Compiler *c, int id, const char *name, int defs, int *step, const LrDef **d) {
+  *step = EMC_NONE;
+  *d = NULL;
+  if (id < 0 || !name || nt_kind(c->nt, id) != NK_CallNode) return ELAB_UNKNOWN;
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return ELAB_UNKNOWN;
+  /* (no mixin on main or Object: the defs' versions answer, as they did; nothing to walk. Asked before anything that
+     can refresh the parent map: a program with no mixin pays this count per ask and no more) */
+  int nm0 = 0, nm1 = 0, oc = comp_core_class(c, CORE_OBJECT);
+  elab_class_mixins(c, -1, &nm0);
+  if (oc >= 0) elab_class_mixins(c, oc, &nm1);
+  if (!nm0 && !nm1 && !defs) return ELAB_UNKNOWN;
+  const Scope *s = comp_scope_of(c, id);
+  if (!s || s->is_cmethod || ct_block_self_call(c, id) >= 0) return ELAB_UNKNOWN;
+  if (s->class_id >= 0 && class_is_blank_slate(c, s->class_id)) return ELAB_UNKNOWN;
+  /* (a `class << self` body's self is main's singleton class, whose chain is Class's: not asked here) */
+  int pb = id < c->node_pbase_n ? c->node_pbase[id] : -1;
+  if (pb >= 0 && nt_kind(c->nt, pb) == NK_SingletonClassNode) return ELAB_UNKNOWN;
+  int framed = elab_plan_enter(c, id), r;
+  LoadPoint p = elab_point_of(c, id);
+  /* (a top-level def's self is its caller's, main or another object: both sides ask, and where they differ the
+     answer depends on self, which the fact leaves to the table) */
+  int both = s->class_id < 0 && !s->is_cmethod && !prog_is_top_scope(c, s);
+  int obj = !(s->class_id < 0 && self_is_main(c, id)), hit = 0;
+  if (p.region >= 0) {
+    struct MainChainSlot *sl = ct_main_chain_slot(c, name, p.region, p.seq, obj, &hit);
+    if (hit) r = sl->r, *step = sl->step, *d = sl->d;
+    else r = elab_main_chain_at(c, name, p, obj, d, step), sl->r = r, sl->step = *step, sl->d = *d;
+  }
+  else {
+    ElabWindow w;
+    int wr = elab_call_window(c, id, &w);
+    if (wr != ELAB_YES || w.never) r = ELAB_UNKNOWN;
+    else if (!both) r = ct_main_chain_win(c, name, w, obj, step, d);
+    else {
+      const LrDef *d2 = NULL;
+      int st2 = EMC_NONE;
+      r = ct_main_chain_win(c, name, w, 0, step, d);
+      int r2 = ct_main_chain_win(c, name, w, 1, &st2, &d2);
+      if (r != r2 || *step != st2 || *d != d2) r = ELAB_UNKNOWN;
+    }
+  }
+  if (framed) elab_plan_leave(c);
+  if (p.region < 0 && r == ELAB_UNKNOWN) *step = EMC_NONE;   /* (a body's site: its unsure answer is the table's here) */
+  return r;
+}
+/* The method of a module main extends, Object prepends or Object includes that the main-chain fact answers for call
+   id, as the table's entry for that module holds it (toplevel_mod_method's scope, which shares the definition); -1
+   where another step answers or none does; -2 where the fact does not answer (the table's) */
+static int ct_main_mixin(Compiler *c, int id, const char *name, int *ext) {
+  int step;
+  const LrDef *d;
+  int o = ct_main_chain(c, id, name, 0, &step, &d);
+  if (o == ELAB_UNKNOWN) return -2;
+  if (o == MCH_MOVES) return -3;
+  if (o != ELAB_YES || (step != EMC_EXTEND && step != EMC_PREPEND && step != EMC_INCLUDE)) return -1;
+  *ext = step == EMC_EXTEND;
+  if (*ext) return d && d->scope > 0 && d->scope < c->nscopes ? d->scope : -2;
+  int im = comp_included_method_index(c, name, id);
+  if (im >= 0 && d && c->scopes[im].def_node == d->node) return im;
+  return d && d->scope > 0 && d->scope < c->nscopes ? d->scope : -2;
+}
+/* See call_plan.h. */
+int cplan_main_chain_step(Compiler *c, int id, const char *name) {
+  int step;
+  const LrDef *d;
+  /* (a capture asks it of the defs too: method(:sym)'s maker is no call the defs' versions bind) */
+  int o = ct_main_chain(c, id, name, is_bound_method_maker(nt_str(c->nt, id, "name")), &step, &d);
+  return o == ELAB_YES || o == ELAB_NO ? step : -1;   /* (EMC_NONE, or EMC_STOP for an undef that stops the lookup) */
+}
+/* Does a bare call of `name` at call id, in top-level code, meet a mixin or def of the name that runs under a condition,
+   or from a body that may not have run (an `include L if cond`, an extend inside a method called later)? CRuby finds
+   its method only once it has run, which the record cannot tell: the call is refused (CRF_MAIN_CHAIN). */
+static int cplan_main_chain_unsure(Compiler *c, int id) {
+  const char *name = nt_str(c->nt, id, "name");
+  int step;
+  const LrDef *d;
+  return nt_kind(c->nt, id) == NK_CallNode && name && nt_ref(c->nt, id, "receiver") < 0 &&
+         ct_main_chain(c, id, name, 0, &step, &d) == ELAB_UNKNOWN && step == EMC_UNSURE;
+}
+/* Does the main-chain fact put a mixin's method ahead of main's and Object's own at call id (an extend, an Object
+   prepend), so that the top-level def of the name does not answer where the ask goes to the mixin (CT_TOP | CT_INCLUDED;
+   CT_TOP alone keeps the top-level def)? */
+static int ct_main_mixin_ahead(Compiler *c, int id, const char *name) {
+  int step;
+  const LrDef *d;
+  return ct_main_chain(c, id, name, 0, &step, &d) == ELAB_YES && (step == EMC_EXTEND || step == EMC_PREPEND);
+}
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
+  /* (CT_TOP | CT_INCLUDED asks main's whole chain at the call: a module main extends or Object prepends answers ahead of
+     the top-level def where the fact puts it there, else the top-level def, else a module Object includes. CT_TOP alone
+     is the top-level functions' ask and keeps that meaning) */
+  if ((*flags & (CT_TOP | CT_INCLUDED)) == (CT_TOP | CT_INCLUDED)) {
+    unsigned f = *flags & ~(unsigned)CT_TOP;
+    int mi = -1;
+    if (id < 0 || !ct_main_mixin_ahead(c, id, name)) {
+      f = *flags & ~(unsigned)CT_INCLUDED;
+      mi = ct_lookup(c, id, cls, name, &f, ml);
+      if (mi >= 0 || (ml && (ml->kind == ML_NONE || ml->kind == ML_SINGLETON))) { *flags = f; return mi; }   /* (an undef's stop or main's own core method answers none: nothing behind it) */
+      f = *flags & ~(unsigned)CT_TOP;
+    }
+    mi = ct_lookup(c, id, cls, name, &f, ml);
+    *flags = f | CT_TOP;
+    return mi;
+  }
   /* (a module the top level includes brings its method into Object's chain: where the name has versions there, a
      top-level def after the include among them, the call's own point chooses, as a call on Object's does) */
   if (*flags & CT_INCLUDED) {
-    int im = comp_included_method_index(c, name, id);
+    int ext = 0, im = ct_main_mixin(c, id, name, &ext);
     int ob = comp_core_class(c, CORE_OBJECT);
-    if (im >= 0 && id >= 0 && ob >= 0 && ct_versioned(c, im, name) && ct_block_self_call(c, id) < 0) {
+    /* (where the fact does not answer, or the answer moves with when the body runs: the table's, as before) */
+    if (im < -1) im = comp_included_method_index(c, name, id);
+    /* (an extend's method is main's singleton's, no version of Object's) */
+    if (im >= 0 && id >= 0 && !ext && ob >= 0 && ct_versioned(c, im, name) && ct_block_self_call(c, id) < 0) {
       MethodLookup at = *ml;
       int vi = ct_version(c, id, ob, name, *flags, im, &at);
       /* (the version a top-level def or its entry makes; a module's own copy, which a prepend or an alias of the
@@ -5824,6 +6090,21 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
   else if (cls < 0 || !(ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1) || cm_capture_never_made(c, id, cls, name)) ||
            cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL);
+}
+/* Does a receiverless capture of `sym` that runs on main (not in a class's method, a module's, or a top-level def another
+   object may run) find no method where it runs (main's chain meets none: the main-chain
+   fact), though the program defines the name, only later (a def, an include or an extend that has not run)? Then its
+   NameError is main's singleton class's, as CRuby's. Not a name the core's Kernel answers (the capture binds that), unless
+   an undef stops the lookup, nor where a method_missing or a respond_to_missing? of the program may answer it. */
+static int cplan_main_capture_absent(Compiler *c, int id) {
+  const char *name = method_sym_arg(c, id);
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (!name || !name[0] || (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) || !ct_runs_on_main(c, id)) return 0;
+  /* (nothing of the name, or an undef that stops the lookup, which no core method answers behind either) */
+  int st = cplan_main_chain_step(c, id, name);
+  if (st != EMC_NONE && st != EMC_STOP) return 0;
+  if (st != EMC_STOP && (core_method_name_any(name) || bop_core_name(name) || !elab_method_versions(c, name))) return 0;
+  return an_name_binder_free(c, METHOD_MISSING_NAME) && an_name_binder_free(c, RESPOND_TO_MISSING_NAME);
 }
 /* Is ci's class method `name` defined wherever node at runs? */
 static int capture_live_at(Compiler *c, int at, int ci, const char *name) {
@@ -7586,8 +7867,10 @@ static int cplan_bind_call_gap(Compiler *c, int id) {
 static int cplan_top_self_gap(Compiler *c, int id) {
   const char *name = nt_str(c->nt, id, "name");
   const Scope *s = comp_scope_of(c, id);
+  /* (a call written `Kernel.name` is Kernel's whatever self is: desugar_kernel_recv marks it) */
   if (!(nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0 && name && s->class_id < 0 &&
-        !s->is_cmethod && !s->entry && s->def_node >= 0 && !prog_is_top_scope(c, s))) return 0;
+        !(cplan_builtin_call(c, id) || nt_int(c->nt, id, "kernel_recv", 0)) && !s->is_cmethod && !s->entry && s->def_node >= 0 &&
+        !prog_is_top_scope(c, s))) return 0;
   mtab_enter(c);   /* (the plan's own root read: whether main has a singleton method of the name) */
   int gap = comp_main_method(c, name) >= 0;
   mtab_leave(c);
@@ -7675,6 +7958,12 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_TOP_SELF, CR_FEATURE,
                      "a top-level method's self is not modelled: this call finds main's singleton method when the "
                      "method runs on main and Object's when it runs on another object", buf, cap);
+    return;
+  }
+  if (!what && cplan_main_chain_unsure(c, id)) {
+    cplan_refuse_set(p, CRF_MAIN_CHAIN, CR_FEATURE,
+                     "a call of a name that a mixin of main or Object defines, where that mixin runs under a condition or "
+                     "from a method that may not have run: CRuby finds its method only once the mixin has run", buf, cap);
     return;
   }
   if (!what && cplan_record_new_gap(c, id)) {

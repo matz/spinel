@@ -916,9 +916,8 @@ $(SP_RT_MT_NOGC_LIB): $(patsubst lib/regexp/%.c,build/mt-nogc/regexp/%.o,$(RE_SR
 # C one through dlopen. The regular archive is built for an executable, and
 # `cc -shared` refuses its relocations ("relocation R_X86_64_PC32 against
 # symbol ... can not be used when making a shared object; recompile with
-# -fPIC"). Opt-in, as the C extension runtime is: `make runtime-pic`. The
-# threaded runtime has no such variant: its TLS is initial-exec, which an
-# object a host dlopens may not get room for.
+# -fPIC"). Opt-in, as the C extension runtime is: `make runtime-pic` builds
+# it and the threaded one below.
 SP_RT_PIC_LIB = lib/libspinel_rt_pic.a
 PIC_DEF = -fPIC
 
@@ -935,6 +934,53 @@ $(SP_RT_PIC_LIB): $(patsubst lib/regexp/%.c,build/pic/regexp/%.o,$(RE_SRC)) $(ad
 
 .PHONY: runtime-pic
 runtime-pic: $(SP_RT_PIC_LIB)
+
+# The threaded runtime the same way, and a library that uses threads is
+# compiled with -DSP_THREADS -fPIC to link it. Not -ftls-model=initial-exec,
+# as MT_DEF has it: an object a host dlopens gets only the loader's small
+# static TLS surplus for that model, and this runtime's TLS is about 600 KB
+# a thread (sp_gc_roots alone is 512 KB). The general-dynamic model -fPIC
+# implies costs a call to __tls_get_addr per function that reads TLS: an
+# allocating entry ran about 25% more instructions than the same kernel in
+# an executable. TLSDESC (-mtls-dialect=gnu2) ran more still on a module
+# loaded with dlopen, and hidden TLS symbols saved 3%. MT_PIC_TLS passes a
+# dialect of one's own.
+SP_RT_MT_PIC_LIB = lib/libspinel_rt_mt_pic.a
+MT_PIC_TLS ?=
+MT_PIC_DEF = -DSP_THREADS -fPIC $(MT_PIC_TLS)
+
+build/mt-pic/regexp/%.o: lib/regexp/%.c $(RE_HDRS)
+	@mkdir -p $(@D)
+	$(CC) -c $(COPT) $(SEC_FLAGS) $(RE_CASE_FLAGS) $(MT_PIC_DEF) -Ilib/regexp -Ilib/regexp/shim $< -o $@
+
+build/mt-pic/%.o: lib/%.c $(RT_HDRS)
+	@mkdir -p $(@D)
+	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(MT_PIC_DEF) -Ilib -Ilib/regexp -Ilib/regexp/shim $< -o $@
+
+$(SP_RT_MT_PIC_LIB): $(patsubst lib/regexp/%.c,build/mt-pic/regexp/%.o,$(RE_SRC)) $(addprefix build/mt-pic/,$(addsuffix .o,$(RT_MEMBERS))) $(PLATFORM_MT_OBJ)
+	$(AR_DET) ar rcs $@ $^
+
+runtime-pic: $(SP_RT_MT_PIC_LIB)
+
+# The bundled packages' objects the same two ways: a library that requires
+# one names packages/<p>/sp_<p>.o in its C (SPINEL_LINK_OBJ), and a shared
+# object links packages/<p>/sp_<p>_pic.o in its place, or sp_<p>_mt_pic.o
+# when it uses threads. Each is compiled as the package's own rule compiles
+# it (above), with the package's flags from PKG_PIC_FLAGS_<p>.
+PKG_PIC_FLAGS_openssl = $(OPENSSL_CPPFLAGS)
+PKG_PIC_FLAGS_ffi = $(LIBFFI_CPPFLAGS)
+PKG_PIC_HDRS = lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+define PKG_PIC_RULES
+packages/$(1)/sp_$(1)_pic.o: packages/$(1)/sp_$(1).c $$(wildcard packages/$(1)/*.h) $$(PKG_PIC_HDRS)
+	$$(CC) -c $$(COPT) -Wno-all $$(SEC_FLAGS) $$(PIC_DEF) $$(PKG_PIC_FLAGS_$(1)) -Ilib -Ipackages/$(1) $$< -o $$@
+packages/$(1)/sp_$(1)_mt_pic.o: packages/$(1)/sp_$(1).c $$(wildcard packages/$(1)/*.h) $$(PKG_PIC_HDRS)
+	$$(CC) -c $$(COPT) -Wno-all $$(SEC_FLAGS) $$(MT_PIC_DEF) $$(PKG_PIC_FLAGS_$(1)) -Ilib -Ipackages/$(1) $$< -o $$@
+endef
+$(foreach p,$(patsubst packages/%/,%,$(dir $(BUNDLED_NATIVE_OBJS))),$(eval $(call PKG_PIC_RULES,$(p))))
+BUNDLED_NATIVE_PIC_OBJS = $(BUNDLED_NATIVE_OBJS:.o=_pic.o)
+BUNDLED_NATIVE_MT_PIC_OBJS = $(BUNDLED_NATIVE_OBJS:.o=_mt_pic.o)
+
+runtime-pic: $(BUNDLED_NATIVE_PIC_OBJS) $(BUNDLED_NATIVE_MT_PIC_OBJS)
 
 # ---- ThreadSanitizer build of the threaded runtime (Phase 1 validation) ----
 # The gate links a threaded test against the mt archive, as the driver does,
@@ -1781,7 +1827,7 @@ test-corpus-summary: test-corpus-results
 # one whose at_exit hooks run when the host exits, not as its init returns,
 # and one whose entry calls a Struct's `new` the load redefined, and an
 # --ext-entry list longer than 2048 bytes exports every method it names.
-ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SPINEL_TIMEOUT)
+ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC_LIB) $(BUNDLED_NATIVE_PIC_OBJS) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map \
 	  --ext-init Init_ext_kernel \
@@ -1835,6 +1881,34 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SPINEL_TIMEO
 	  else echo "ext-test: FAIL (pic host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/threads.rb -c --no-line-map --ext-init Init_ext_threads \
+	      --ext-entry ExtThreads.par,ExtThreads.bg -o "$$tmp/tp.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (threads emission for a shared object)"; ok=0; \
+	  elif ! $(CC) -DSP_THREADS -fPIC -shared -O1 -w -Ilib -I"$$tmp" "$$tmp/tp.c" $(SP_RT_MT_PIC_LIB) $(LDFLAGS) -lm -lpthread -o "$$tmp/libtp.so" 2>"$$tmp/cc.err"; then \
+	    echo "ext-test: FAIL (the threaded library did not link as a shared object over $(SP_RT_MT_PIC_LIB))"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
+	  elif $(CC) -O1 -w test/ext/threads_pic_host.c $(LDFLAGS) -ldl -o "$$tmp/tphost" 2>"$$tmp/cc.err"; then \
+	    $(TIMEOUT10) "$$tmp/tphost" "$$tmp/libtp.so" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '60\n150\n1\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (the threaded shared object's host output mismatch, or it hung, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (threads pic host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/pic_pkg.rb -c --no-line-map --ext-init Init_ext_pic_pkg \
+	      --ext-entry ExtPicPkg.dump,ExtPicPkg.sum -o "$$tmp/q.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (pic_pkg emission)"; ok=0; \
+	  else \
+	    objs=$$(sed -n 's|^/\* SPINEL_LINK_OBJ: \(.*\)\.o \*/$$|\1_pic.o|p' "$$tmp/q.c"); \
+	    if [ -z "$$objs" ]; then echo "ext-test: FAIL (pic_pkg's C names no package object)"; ok=0; \
+	    elif ! $(CC) -fPIC -shared -O1 -w -Ilib -I"$$tmp" "$$tmp/q.c" $$objs $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libq.so" 2>"$$tmp/cc.err"; then \
+	      echo "ext-test: FAIL (a library requiring a package did not link as a shared object over $$objs)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
+	    elif $(CC) -O1 -w test/ext/pic_pkg_host.c $(LDFLAGS) -ldl -o "$$tmp/qhost" 2>"$$tmp/cc.err"; then \
+	      "$$tmp/qhost" "$$tmp/libq.so" > "$$tmp/out" 2>&1; rc=$$?; \
+	      printf '{"n":7,"list":[1,2,3]}\n16\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	        { echo "ext-test: FAIL (the package's shared object host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	    else echo "ext-test: FAIL (pic_pkg host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	  fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/late_new.rb -c --no-line-map --ext-init Init_ext_late_new \
 	      --ext-entry ExtLateNew.e -o "$$tmp/l.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (late_new emission)"; ok=0; \
@@ -1843,6 +1917,20 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SPINEL_TIMEO
 	    printf '2\n3\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (late_new host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (late_new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/rbs_object_array.rb -c --no-line-map --ext-init Init_ext_geo \
+	      --ext-entry ExtGeo.pts,ExtGeo.length -o "$$tmp/g.c" >"$$tmp/g.out" 2>&1; then \
+	    echo "ext-test: FAIL (rbs_object_array emission)"; ok=0; \
+	  elif grep -q "not applied" "$$tmp/g.out"; then \
+	    echo "ext-test: FAIL (a signature naming Array[Point] was not applied)"; grep "not applied" "$$tmp/g.out" | head -2; ok=0; \
+	  elif ! grep -Fq 'sp_ExtGeo_s_length(sp_PtrArray * lv_pts)' "$$tmp/g.h" || ! grep -Fq 'sp_ExtGeo_s_pts(sp_int lv_n)' "$$tmp/g.h"; then \
+	    echo "ext-test: FAIL (an entry's Array[Point] parameter is no sp_PtrArray, or its Integer no sp_int)"; grep 'sp_ExtGeo_s_' "$$tmp/g.h"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/rbs_object_array_host.c "$$tmp/g.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/ghost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/ghost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '15.0\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (rbs_object_array host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (rbs_object_array host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/field_elems.rb -c --no-line-map --ext-init Init_ext_field_elems \
@@ -1992,6 +2080,7 @@ defer-refusals-test: $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-defer.XXXXXX); \
 	for t in $(shell grep -l '^\# spinel: defer-refusals: ' test/defer/*.rb); do \
 	  rest=$$(sed -n 's/^# spinel: defer-refusals: //p' "$$t"); n=$${rest%%:*}; want="$${rest#*:} "; \
+	  msg=$$(sed -n 's/^# spinel: defer-message: //p' "$$t"); msg=$${msg:-ruby2_keywords is not supported}; \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/p.c" >"$$tmp/p.out" 2>&1; then \
 	    echo "defer-refusals-test: FAIL ($$t compiled without the flag)"; ok=0; fi; \
 	  if ! $(SPINEL) --defer-refusals "$$t" -o "$$tmp/d" >"$$tmp/d.out" 2>&1; then \
@@ -2001,7 +2090,7 @@ defer-refusals-test: $(SPINEL)
 	    { echo "defer-refusals-test: FAIL ($$t: deferred refusals not counted)"; sed -n 1,5p "$$tmp/d.out"; ok=0; }; \
 	  "$$tmp/d" >"$$tmp/r.out" 2>"$$tmp/r.err"; st=$$?; out=$$(tr '\n' ' ' <"$$tmp/r.out"); \
 	  [ "$$out" = "$$want" ] || { echo "defer-refusals-test: FAIL ($$t ran wrong: $$out)"; ok=0; }; \
-	  [ $$st -ne 0 ] && grep -q "ruby2_keywords is not supported.*(NotImplementedError)" "$$tmp/r.err" || \
+	  [ $$st -ne 0 ] && grep -q "$$msg.*(NotImplementedError)" "$$tmp/r.err" || \
 	    { echo "defer-refusals-test: FAIL ($$t: a refused line did not raise NotImplementedError, exit $$st)"; sed -n 1,3p "$$tmp/r.err"; ok=0; }; \
 	done; \
 	rm -rf "$$tmp"; \

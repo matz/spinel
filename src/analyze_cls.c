@@ -5150,6 +5150,23 @@ static void cf_alias_groups(CF *f) {
       if (!lv->ctr_sites) cf_oom();
       for (int j = 0; j < f->npts[e]; j++) { int o = f->pts[e][j]; if (o >= 0 && o < f->nobj && oidx[o] >= 0) lv->ctr_sites[lv->nctr_sites++] = oidx[o]; }
     }
+  /* An --rbs-pinned ivar keeps the pin's kind, and a store converts into it
+     as the pin asks (#12009): a site it may hold is copied there, so no
+     group holds that site (join_container_alias_groups), as for a seeded
+     local. A local that reads the ivar holds the copy, not the site. */
+  free(c->ctr_site_excl);
+  c->ctr_site_excl = calloc((size_t)c->nctr_site + 1, 1);
+  if (!c->ctr_site_excl) cf_oom();
+  for (int i = 0; i < f->ent_cap; i++) {
+    const CFEntry *en = &f->ent[i];
+    if (!en->name || en->cls < 0 || en->cls >= c->nclasses || en->name[0] != '@' || en->name[1] == '@') continue;
+    if (!class_ivar_pinned(&c->classes[en->cls], en->name)) continue;
+    int e = en->el;
+    for (int j = 0; e >= 0 && e < f->nel && j < f->npts[e]; j++) {
+      int o = f->pts[e][j];
+      if (o >= 0 && o < f->nobj && oidx[o] >= 0) c->ctr_site_excl[oidx[o]] = 1;
+    }
+  }
   free(osite); free(nhold); free(oidx);
 }
 

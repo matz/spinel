@@ -8157,6 +8157,7 @@ static int g_seed_nilable;
    pins nothing for (a Range, an exception): the slot keeps its inferred
    type, and an inline annotation naming it still applies. */
 static int g_seed_unpinned;
+static int seed_obj_array_class(Compiler *c, const char *tok);
 static TyKind parse_seed_type(Compiler *c, const char *tok) {
   g_seed_nilable = 0;
   g_seed_unpinned = 0;
@@ -8206,7 +8207,11 @@ static TyKind parse_seed_type(Compiler *c, const char *tok) {
     /* the full seed matcher, not a bare table lookup: an obj_ token names a
        class the same way a `class` seed line does (module-nested leaf,
        collision-renamed form), and must match the same set */
-    /* obj_X_ptr_array (`Array[X]`) is not a pin: see seed_obj_array_class */
+    /* obj_X_ptr_array (`Array[X]`) is not a pin: see seed_obj_array_class.
+       An Array of one class exists only once narrow_object_arrays decides
+       it, so the slot keeps its inferred type, and an inline signature
+       naming it still pins its other types (it dropped them all). */
+    if (seed_obj_array_class(c, buf) >= 0) { g_seed_unpinned = 1; return TY_UNKNOWN; }
     int ci = seed_class_index(c, buf + 4);
     /* A module names no object layout: its methods exist only as copies in
        its includers, and a value of the module type is one of them. It is
@@ -8729,6 +8734,17 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
         /* a nilable int parameter can hold nil like any other: mark it so
            it is an oint and boxing it answers nil rather than a number */
         if (g_seed_nilable && (pt == TY_INT || pt == TY_FLOAT)) lv->nullable_int = 1;
+      }
+    }
+    /* `Array[Point]`: a boxed array the narrowing may make one of Point
+       (lv->oa_seed). Not pinned, or the pass would skip the slot; a host
+       calling an --ext-entry gets the sp_PtrArray its uses allow. */
+    else if (!g_seed_nilable) {
+      int oc = seed_obj_array_class(c, field);
+      LocalVar *lv = oc >= 0 ? scope_local(s, s->pnames[slot]) : NULL;
+      if (lv) {
+        if (lv->type == TY_UNKNOWN || lv->type == TY_POLY) lv_set_type(lv, TY_POLY_ARRAY);
+        lv->oa_seed = oc + 1;
       }
     }
   }
@@ -11632,6 +11648,16 @@ static int desugar_builtin_method_obj(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  /* (the main-chain fact of every receiverless capture, asked before the rewrites below add nodes: an ask after one
+     would re-walk the program's points per capture) */
+  int *kst_of = calloc((size_t)(n0 > 0 ? n0 : 1), sizeof *kst_of);
+  if (!kst_of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int id = 0; id < n0; id++) {
+    kst_of[id] = -1;
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *ks = is_bound_method_maker(nt_str(nt, id, "name")) ? method_sym_arg(c, id) : NULL;
+    if (ks && ks[0] && ks[0] != '_') kst_of[id] = cplan_main_chain_step(c, id, ks);
+  }
   for (int id = 0; id < n0; id++) {
     NodeKind ty_k = nt_kind(nt, id);
     if (ty_k != NK_CallNode) continue;
@@ -11661,13 +11687,22 @@ static int desugar_builtin_method_obj(Compiler *c) {
            inherited class method is its own self */
         int kd = 0;
         if (ks >= 0 && ks < c->nscopes && c->scopes[ks].is_cmethod && c->scopes[ks].class_id >= 0 &&
-            call_target(c, -1, c->scopes[ks].class_id, ksym, CT_CMETHOD | CT_SHARED, NULL) < 0 &&
+            call_target(c, id, c->scopes[ks].class_id, ksym, CT_CMETHOD | CT_CAPTURE, NULL) < 0 &&
             (comp_descendants(c, c->scopes[ks].class_id, &kd), kd == 0))
           kcls = c->scopes[ks].class_id;
         if (kcls < 0) continue;
       }
       else if (!kknown) continue;
-      if (call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0) continue;   /* a user def wins */
+      /* a user def wins where main has it at the capture; one that main defines only later (or removed) is not the
+         Method's: it binds Kernel's, whose wrapper calls it through Kernel, not through main (CRuby's lookup at the
+         capture) */
+      int kst = kcls < 0 ? kst_of[id] : -1;
+      if (kst == EMC_PREPEND) kst = -1;   /* (an Object prepend: the table's, as before) */
+      if (kst == EMC_MAIN || kst == EMC_STOP || kst > EMC_CORE) continue;   /* (an undef stops the lookup: the plan's NameError) */
+      int tbl = call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0;
+      /* (where the fact cannot say, the table's, and for a class method's const_get the call's own ask) */
+      if (kst < 0 && (kcls >= 0 ? call_target(c, id, -1, ksym, CT_TOP | CT_CAPTURE, NULL) >= 0 : tbl)) continue;
+      int kern = kst == EMC_NONE && tbl;
       char kwname[48];
       snprintf(kwname, sizeof kwname, "__bam_%s", comp_node_tag(c, id));
       if (call_target(c, -1, -1, kwname, CT_TOP | CT_SHARED, NULL) >= 0) continue;
@@ -11694,9 +11729,11 @@ static int desugar_builtin_method_obj(Compiler *c) {
       int kcall = nt_new_node(nt, "CallNode");
       nt_node_set_str(nt, kcall, "name", ksym);
       nt_node_set_ref(nt, kcall, "arguments", kargs);
-      if (kcls >= 0) {
+      /* (a class method's capture of Module's const_get is the builtin's, whatever the class defines afterwards) */
+      if (kcls >= 0) nt_mark_builtin_call(nt, kcall);
+      if (kcls >= 0 || kern) {
         int krecv = nt_new_node(nt, "ConstantReadNode");
-        nt_node_set_str(nt, krecv, "name", c->classes[kcls].name);
+        nt_node_set_str(nt, krecv, "name", kcls >= 0 ? c->classes[kcls].name : "Kernel");
         nt_node_set_ref(nt, kcall, "receiver", krecv);
       }
       int kbody = nt_new_node(nt, "StatementsNode");
@@ -11802,7 +11839,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     /* main's own `to_s` (cplan_main_singleton_call) comes ahead of a
        same-named top-level def, which otherwise wins */
     int main_sg = cplan_main_singleton_call(c, id);
-    if (!main_sg && call_target(c, -1, -1, sym, CT_TOP | CT_SHARED, NULL) >= 0) continue;
+    int bown = 0;   /* the receiver's builtin class answers the name itself, ahead of Object's private top-level defs */
     int cmp_only = 0;   /* a Comparable method the class does not define itself */
     int num_only = 0;   /* a Numeric method Integer or Float inherits */
     int sym_arity = 0, have_arity = 0;   /* the builtin's Method#arity */
@@ -11827,13 +11864,17 @@ static int desugar_builtin_method_obj(Compiler *c) {
       /* TrueClass/FalseClass define the logical operators (#2835) */
       int bool_op = rt == TY_BOOL &&
                     is_bit_op(sym);
+      /* the Method captured on a receiver is the receiver's class's own where its builtin has the name; a top-level def
+         of the name is Object's private method, behind it (`5.method(:succ)` beside a `def succ`), and wins only where
+         nothing in front answers */
+      bown = bcls && !bool_op && (builtin_method_known(bcls, sym) || builtin_comparable_owns(bcls, sym) ||
+             builtin_numeric_owns(bcls, sym) || builtin_enumerable_owns(bcls, sym) || builtin_object_method_known(sym));
+      MethodLookup rml = { .def_class = -1 };
+      if (!main_sg && !bown && (call_target(c, id, -1, sym, CT_TOP | CT_CAPTURE, &rml) >= 0 || rml.kind == ML_OBJECT)) continue;
       /* Comparable's methods (between?, clamp) and Numeric's (abs2, quo,
          positive?) are the class's through the module or the superclass,
          which the class's own table leaves out */
-      if (bcls && !bool_op &&
-          !builtin_method_known(bcls, sym) && !builtin_comparable_owns(bcls, sym) &&
-          !builtin_numeric_owns(bcls, sym) && !builtin_enumerable_owns(bcls, sym) &&
-          !builtin_object_method_known(sym)) {
+      if (bcls && !bool_op && !bown) {
         int rd = rt == TY_BOOL ? -1 : cplan_builtin_reopen_def(c, id, bcls, sym, NULL);
         if (rd >= 0 && nt_int(nt, id, "public_capture", 0) && !cplan_reopen_def_public(c, id, rd, sym)) rd = -1;
         if (rd < 0) continue;
@@ -11984,6 +12025,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     }
     changed = 1;
   }
+  free(kst_of);
   bam_tab_free();
   bsu_tab_free();
   return changed;
@@ -12170,7 +12212,7 @@ static int expand_literal_splat_args(Compiler *c) {
       if (!lit) continue; }
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) {
-      if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || call_target(c, id, -1, nm, CT_INCLUDED, NULL) >= 0)
+      if (call_target(c, id, -1, nm, CT_TOP | CT_INCLUDED, NULL) >= 0)
         continue;   /* a user method: native splat path */
     }
     else {
@@ -19490,7 +19532,7 @@ static int narrow_object_arrays(Compiler *c) {
       LocalVar *lv = &sc->locals[li];
       if (lv->type != TY_POLY_ARRAY || lv->is_block_param || lv->rbs_seeded || cext_scope(c, s)) continue;
       if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].row_mut = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
+      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = lv->oa_seed > 0 ? lv->oa_seed - 1 : -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].row_mut = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
       sl[n].old_pin = lv->oa_pin; lv->oa_pin = TY_UNKNOWN; n++;
     }
   }
@@ -55385,7 +55427,7 @@ static void an_phase_proc_returns(Compiler *c) {
           int val = av[an - 1];
           TyKind vt = infer_type(c, val), src = vt;
           if (ty_is_object(vt)) {
-            int tmi = comp_implicit_to_ary_mi(c, ty_object_class(vt));
+            int tmi = cplan_to_ary_method(c, u, val, ty_object_class(vt));
             src = tmi >= 0 ? (TyKind)c->scopes[tmi].ret : TY_UNKNOWN;
           }
           if (src != TY_POLY_ARRAY) continue;
@@ -55751,51 +55793,53 @@ static void mark_native_str_operands(Compiler *c) {
    their own). ivar_set_kind keeps an assigned flag only for ivars of a
    marked class. */
 enum { OBS_SEEN = 1, OBS_INSPECT = 2, OBS_DUMP = 4 };
-static void an_presence_type(Compiler *c, TyKind t, int how, int depth);
-static void an_presence_poly_ivar(Compiler *c, int k, const char *ivn, int how, int depth);
+static void an_presence_type(Compiler *c, int site, TyKind t, int how, int depth);
+static void an_presence_poly_ivar(Compiler *c, int site, int k, const char *ivn, int how, int depth);
 /* Class k and the classes below it, whose instances a value typed k can
-   be; how is 0 for a read of presence alone, else OBS_INSPECT or
+   be (each class's inspect is the callback of the call, interpolation or
+   super at node site, which the plan answers there); how is 0 for a
+   read of presence alone, else OBS_INSPECT or
    OBS_DUMP, which reach the ivars' values as well. */
-static void an_presence_class(Compiler *c, int k, int how, int depth) {
+static void an_presence_class(Compiler *c, int site, int k, int how, int depth) {
   if (k < 0 || k >= c->nclasses || depth > 16) return;
   for (int d = 0; d < c->nclasses; d++) {
     if (d != k && !is_descendant(c, d, k)) continue;
     ClassInfo *ci = &c->classes[d];
     /* `super` in the program's inspect runs the default one (depth -1) */
-    if (how == OBS_INSPECT && depth >= 0 && comp_method_in_chain(c, d, "inspect", NULL) >= 0) continue;
+    if (how == OBS_INSPECT && depth >= 0 && cplan_implied_target(c, site, -1, d, "inspect", 0, NULL) >= 0) continue;
     ci->presence_observed |= OBS_SEEN;
     c->pres_seen = 1;
     if (!how || (ci->presence_observed & how)) continue;
     ci->presence_observed |= how;
     for (int j = 0; j < ci->nivars; j++) {
       if (!comp_ivar_on(ci, j, IVS_INST)) continue;
-      if (ci->ivar_types[j] == TY_POLY) an_presence_poly_ivar(c, d, ci->ivars[j], how, depth + 1);
-      else an_presence_type(c, ci->ivar_types[j], how, depth + 1);
+      if (ci->ivar_types[j] == TY_POLY) an_presence_poly_ivar(c, site, d, ci->ivars[j], how, depth + 1);
+      else an_presence_type(c, site, ci->ivar_types[j], how, depth + 1);
     }
   }
 }
-static void an_presence_type(Compiler *c, TyKind t, int how, int depth) {
-  if (ty_is_object(t)) an_presence_class(c, ty_object_class(t), how, depth);
-  else if (ty_is_obj_array(t)) an_presence_class(c, ty_obj_array_class(t), how, depth);
-  else if (ty_is_array(t) && ty_is_object(ty_array_elem(t))) an_presence_type(c, ty_array_elem(t), how, depth);
+static void an_presence_type(Compiler *c, int site, TyKind t, int how, int depth) {
+  if (ty_is_object(t)) an_presence_class(c, site, ty_object_class(t), how, depth);
+  else if (ty_is_obj_array(t)) an_presence_class(c, site, ty_obj_array_class(t), how, depth);
+  else if (ty_is_array(t) && ty_is_object(ty_array_elem(t))) an_presence_type(c, site, ty_array_elem(t), how, depth);
   else if (ty_is_hash(t)) {
-    an_presence_type(c, ty_hash_key(t), how, depth);
-    an_presence_type(c, ty_hash_val(t), how, depth);
+    an_presence_type(c, site, ty_hash_key(t), how, depth);
+    an_presence_type(c, site, ty_hash_val(t), how, depth);
   }
 }
 /* The boxed ivar ivn of class k holds what its stores put there: the
    classes the receiver walk bounds them to (none when it cannot). */
-static void an_presence_poly_ivar(Compiler *c, int k, const char *ivn, int how, int depth) {
+static void an_presence_poly_ivar(Compiler *c, int site, int k, const char *ivn, int how, int depth) {
   char *set = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
   if (!set) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   if (pivs_ivar_classes(c, k, ivn, set))
-    for (int i = 0; i < c->nclasses; i++) if (set[i]) an_presence_class(c, i, how, depth);
+    for (int i = 0; i < c->nclasses; i++) if (set[i]) an_presence_class(c, site, i, how, depth);
   free(set);
 }
 /* What node v holds: a literal's elements one by one, a typed value by its
    type, a boxed value or a general Array's elements or a Hash's boxed
    values by the classes pivs bounds them to (none when it cannot). */
-static void an_presence_node(Compiler *c, int v, int how) {
+static void an_presence_node(Compiler *c, int site, int v, int how) {
   const NodeTable *nt = c->nt;
   if (v < 0) return;
   NodeKind k = nt_kind(nt, v);
@@ -55803,20 +55847,20 @@ static void an_presence_node(Compiler *c, int v, int how) {
     int n = 0; const int *el = nt_arr(nt, v, "elements", &n);
     for (int i = 0; i < n; i++) {
       if (nt_kind(nt, el[i]) == NK_AssocNode) {
-        an_presence_node(c, nt_ref(nt, el[i], "key"), how);
-        an_presence_node(c, nt_ref(nt, el[i], "value"), how);
+        an_presence_node(c, site, nt_ref(nt, el[i], "key"), how);
+        an_presence_node(c, site, nt_ref(nt, el[i], "value"), how);
       }
-      else if (nt_kind(nt, el[i]) != NK_SplatNode) an_presence_node(c, el[i], how);
+      else if (nt_kind(nt, el[i]) != NK_SplatNode) an_presence_node(c, site, el[i], how);
     }
     return;
   }
   TyKind t = comp_ntype(c, v);
   int elems = t == TY_POLY_ARRAY || (ty_is_hash(t) && ty_hash_val(t) == TY_POLY);
-  if (t != TY_POLY && !elems) { an_presence_type(c, t, how, 0); return; }
+  if (t != TY_POLY && !elems) { an_presence_type(c, site, t, how, 0); return; }
   char *set = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
   if (!set) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   if (pivs_value_classes(c, v, elems, set))
-    for (int i = 0; i < c->nclasses; i++) if (set[i]) an_presence_class(c, i, how, 0);
+    for (int i = 0; i < c->nclasses; i++) if (set[i]) an_presence_class(c, site, i, how, 0);
   free(set);
 }
 /* The receiver of reflective call id: self's class, a typed object's, or
@@ -55825,12 +55869,12 @@ static void an_presence_recv(Compiler *c, int id, int how) {
   int r = nt_ref(c->nt, id, "receiver");
   Scope *s = comp_scope_of(c, id);
   if (r < 0) {
-    if (s && !s->is_cmethod && s->class_id >= 0) an_presence_class(c, s->class_id, how, 0);
+    if (s && !s->is_cmethod && s->class_id >= 0) an_presence_class(c, id, s->class_id, how, 0);
     return;
   }
-  if (comp_ntype(c, r) != TY_POLY) { an_presence_node(c, r, how); return; }
+  if (comp_ntype(c, r) != TY_POLY) { an_presence_node(c, id, r, how); return; }
   int n = 0; const int *ks = poly_recv_classes(c, id, &n);
-  for (int i = 0; ks && i < n; i++) an_presence_class(c, ks[i], how, 0);
+  for (int i = 0; ks && i < n; i++) an_presence_class(c, id, ks[i], how, 0);
 }
 /* Note every ivar the subtree under n writes as one whose writes no emitter
    marks assigned. */
@@ -55931,7 +55975,7 @@ static void an_presence_observe(Compiler *c, int id) {
   int own = s && !s->is_cmethod && s->class_id >= 0 ? s->class_id : -1;
   an_presence_writes(c, id);
   if (k == NK_DefinedNode) {
-    if (nt_kind(nt, nt_ref(nt, id, "value")) == NK_InstanceVariableReadNode) an_presence_class(c, own, 0, 0);
+    if (nt_kind(nt, nt_ref(nt, id, "value")) == NK_InstanceVariableReadNode) an_presence_class(c, id, own, 0, 0);
     return;
   }
   /* Object#inspect, through `super` in an inspect of the program's */
@@ -55940,7 +55984,7 @@ static void an_presence_observe(Compiler *c, int id) {
     const Scope *st = s ? comp_super_site(c, s) : NULL;
     int up = own >= 0 ? comp_super_parent(c, st->class_id, 0) : -1;
     if (own >= 0 && s->name && is_inspect_name(st->name) && (up < 0 || comp_method_in_chain(c, up, st->name, NULL) < 0))
-      an_presence_class(c, own, OBS_INSPECT, -1);
+      an_presence_class(c, id, own, OBS_INSPECT, -1);
     return;
   }
   /* an interpolated Array or Hash is its inspect */
@@ -55948,7 +55992,7 @@ static void an_presence_observe(Compiler *c, int id) {
     int st = nt_ref(nt, id, "statements"), n = 0;
     const int *b = st >= 0 ? nt_arr(nt, st, "body", &n) : NULL;
     TyKind t = n > 0 ? comp_ntype(c, b[n - 1]) : TY_UNKNOWN;
-    if (ty_is_array(t) || ty_is_hash(t)) an_presence_node(c, b[n - 1], OBS_INSPECT);
+    if (ty_is_array(t) || ty_is_hash(t)) an_presence_node(c, id, b[n - 1], OBS_INSPECT);
     return;
   }
   if (k != NK_CallNode) return;
@@ -55959,7 +56003,7 @@ static void an_presence_observe(Compiler *c, int id) {
   if (!nm) return;
   if (is_ivar_presence_read(nm)) {
     if (is_inspect_print(nm)) {
-      if (r < 0) for (int i = 0; i < ac; i++) an_presence_node(c, av[i], OBS_INSPECT);
+      if (r < 0) for (int i = 0; i < ac; i++) an_presence_node(c, id, av[i], OBS_INSPECT);
     }
     /* inspect reaches the ivars' values, the readers of presence and the
        removal do not */
@@ -55968,12 +56012,12 @@ static void an_presence_observe(Compiler *c, int id) {
   }
   /* an Array's or a Hash's to_s is its inspect; puts writes a Hash so */
   else if (r >= 0 && is_to_s_name(nm) && (ty_is_array(comp_ntype(c, r)) || ty_is_hash(comp_ntype(c, r))))
-    an_presence_node(c, r, OBS_INSPECT);
+    an_presence_node(c, id, r, OBS_INSPECT);
   else if (r < 0 && is_text_print(nm)) {
-    for (int i = 0; i < ac; i++) if (ty_is_hash(comp_ntype(c, av[i]))) an_presence_node(c, av[i], OBS_INSPECT);
+    for (int i = 0; i < ac; i++) if (ty_is_hash(comp_ntype(c, av[i]))) an_presence_node(c, id, av[i], OBS_INSPECT);
   }
   else if (ac >= 1 && r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_marshal_dump(key_name(c, r), nm))
-    an_presence_node(c, av[0], OBS_DUMP);
+    an_presence_node(c, id, av[0], OBS_DUMP);
 }
 
 static void an_phase_value_types(Compiler *c) {
@@ -56804,6 +56848,23 @@ static void an_phase_enum_late(Compiler *c) {
 /* A call desugar_env_enum moved onto ENV's snapshot through a variable that held ENV and nothing else when it
    ran: the variable's type is the fixpoint's last now, and one that widened past TY_ENV (a Hash assigned to it in a
    later round) may hold another value, whose call the snapshot does not answer. Refused, not answered from ENV. */
+/* Is ENV used as a value anywhere (a read of the constant that is no call's
+   receiver)? Then a boxed value may be ENV, and a call on one reads it
+   through the environment (emit_call, sp_env_box_read); a program that only
+   calls ENV's methods on ENV itself has no such value and no such read. */
+static void an_env_value_flows(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  c->env_value_flows = 0;
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, id) {
+    if (!is_env_const(nt_str(nt, id, "name")) || infer_type(c, id) != TY_ENV) continue;
+    int p = par ? par[id] : -1;
+    /* (a read a rewrite left behind, ENV's receiver a desugar replaced, has no parent) */
+    if (p < 0 || (nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id)) continue;
+    c->env_value_flows = 1;
+    return;
+  }
+}
 static void an_env_value_recv_check(Compiler *c) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_CallNode, u) {
@@ -56891,6 +56952,7 @@ void analyze_program(Compiler *c) {
   AN_PHASE("value_types", an_phase_value_types(c));
   AN_PHASE("mutated_answers", an_phase_mutated_answers(c));
   AN_PHASE("env_value_recv_check", an_env_value_recv_check(c));
+  AN_PHASE("env_value_flows", an_env_value_flows(c));
   AN_PHASE("reconcile_check", an_phase_reconcile_check(c));
   /* once more on the settled types, which tell a builtin receiver's call
      from a program method's (cr_recv_builtin_value) */

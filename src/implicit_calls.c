@@ -176,6 +176,17 @@ int ic_node_calls_name(Compiler *c, int id, const char *name, int class_side) {
   return n == IC_ANY ? ic_core_callback(name, class_side) : n > 0;
 }
 
+int ic_operand_host(Compiler *c, int op) {
+  const NodeTable *nt = c->nt;
+  const int *par = op >= 0 ? comp_parent_map(c) : NULL;
+  for (int up = par ? par[op] : -1; up >= 0; up = par[up]) {
+    NodeKind k = nt_kind(nt, up);
+    if (k == NK_CallNode || k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_YieldNode || k == NK_WhenNode) return up;
+    if (k != NK_ArgumentsNode && k != NK_ParenthesesNode && k != NK_StatementsNode && k != NK_KeywordHashNode && k != NK_AssocNode) break;
+  }
+  return op;
+}
+
 int ic_held_rows_name(Compiler *c, int id, const char *name) {
   const NodeTable *nt = c->nt;
   IcSink s = { NULL, 0, 0, name, BCR_ALL };

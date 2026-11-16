@@ -1,4 +1,5 @@
 #include "codegen_internal.h"
+#include "implicit_calls.h"
 #include "order_plan.h"
 static void emit_ivar_lhs_otext(Compiler *c, int cid, int iv, const char *ivn, const char *lhs, const char *otext, Buf *b);
 static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
@@ -26,15 +27,15 @@ static void emit_const_write_last_value(Compiler *c, const LocalVar *lv, const c
 
 /* an object arg's #to_s as a C string expression (the puts/print arms) */
 static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
-  const char *cn = obj_str_cname(c, ty_object_class(t), 0);
-  int ret_poly = obj_str_ret_poly(c, ty_object_class(t), 0);
+  const char *cn = obj_str_cname(c, arg, ty_object_class(t), 0);
+  int ret_poly = obj_str_ret_poly(c, arg, ty_object_class(t), 0);
   /* A to_s that unions a String with another branch type (e.g. nil)
      returns a boxed sp_RbVal; route it through sp_poly_to_s rather than a
      pointer cast (#3266). */
   /* one answering a String subclass instance: that String's bytes */
-  int ret_strsub = !ret_poly && obj_str_ret_strsub(c, ty_object_class(t), 0);
+  int ret_strsub = !ret_poly && obj_str_ret_strsub(c, arg, ty_object_class(t), 0);
   buf_puts(b, ret_poly ? "sp_poly_to_s(" : ret_strsub ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "(const char *)(");
-  buf_printf(b, "%s((sp_%s *)", obj_str_fn(c, ty_object_class(t), 0), cn);
+  buf_printf(b, "%s((sp_%s *)", obj_str_fn(c, arg, ty_object_class(t), 0), cn);
   NodeKind rk = nt_kind(c->nt, arg);
   if (rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode || rk == NK_SelfNode || rk == NK_ConstantReadNode) {
     emit_expr(c, arg, b);
@@ -53,7 +54,7 @@ static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
     if (!comp_ty_value_obj(c, t)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tt); }
     buf_printf(b, "_t%d", tt);
   }
-  buf_printf(b, "%s))%s", obj_str_blockarg(c, ty_object_class(t), 0), ret_strsub ? "))" : "");
+  buf_printf(b, "%s))%s", obj_str_blockarg(c, arg, ty_object_class(t), 0), ret_strsub ? "))" : "");
 }
 
 static int emit_splat_io(Compiler *c, int arg, const char *fn, Buf *b, int indent) {
@@ -87,7 +88,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
       emit_indent(b, indent);
       emit_const_read_stmt(c, arg, b, 0);
       /* (a class method to_s of the class's own prints it) */
-      if (cls_user_display_mi(c, arg_ci, "to_s") >= 0)
+      if (cls_user_display_mi(c, arg, arg_ci, "to_s") >= 0)
         buf_printf(b, "sp_puts_line(sp_class_to_s_disp((sp_Class){%d, NULL}));\n", arg_ci);
       else buf_printf(b, "puts(\"%s\");\n", arg_nm);
       return;
@@ -269,7 +270,12 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
     emit_expr(c, arg, b);
     buf_puts(b, "); sp_puts_cstr_line(_ps); }\n");
   }
-  else if (ty_is_object(t) && obj_str_cname(c, ty_object_class(t), 0)) {
+  else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 0)) {
+    /* a class whose to_s the record proves undefined here: CRuby's call raises */
+    /* (nil prints its own empty line) */
+    buf_puts(b, "sp_puts_line("); emit_nomethod_raise_unless_nil(c, arg, "to_s", "(const char *)\"\"", "(const char *)\"\"", b); buf_puts(b, ");\n");
+  }
+  else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s (user-defined or a generated struct/data one) */
     buf_puts(b, "{ const char *_ps = "); emit_obj_to_s(c, arg, t, b);
     buf_puts(b, "; sp_puts_cstr_line(_ps); }\n");
@@ -313,7 +319,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
        its own class method to_s answers */
     emit_const_read_stmt(c, arg, b, 0);
     int pci = const_node_class_index(c, arg);
-    if (cls_user_display_mi(c, pci, "to_s") >= 0)
+    if (cls_user_display_mi(c, arg, pci, "to_s") >= 0)
       buf_printf(b, "sp_puts_line(sp_class_to_s_disp((sp_Class){%d, NULL}));\n", pci);
     else buf_printf(b, "puts(\"%s\");\n", nt_str(c->nt, arg, "name"));
   }
@@ -399,7 +405,10 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
        its effect (it diverges or returns nil); print renders nil as nothing */
     buf_puts(b, "(void)("); emit_expr_for_effect(c, arg, b); buf_puts(b, ");\n");
   }
-  else if (ty_is_object(t) && obj_str_cname(c, ty_object_class(t), 0)) {
+  else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 0)) {
+    buf_puts(b, "(void)"); emit_nomethod_raise_unless_nil(c, arg, "to_s", "(const char *)\"\"", "(const char *)\"\"", b); buf_puts(b, ";\n");
+  }
+  else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s: call it directly (like the puts arm) */
     buf_puts(b, "{ const char *_ps = "); emit_obj_to_s(c, arg, t, b);
     buf_puts(b, "; if (_ps) fputs(_ps, stdout); }\n");
@@ -661,19 +670,23 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
            ({ int _n = 0; nt_arr(c->nt, arg, "elements", &_n); _n == 0; })) {
     buf_puts(b, "fputs(\"[]\\n\", stdout);\n");  /* p [] */
   }
-  else if (ty_is_object(t) && obj_str_cname(c, ty_object_class(t), 1)) {
+  else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 1)) {
+    /* (nil inspects as "nil", NilClass's own) */
+    buf_puts(b, "sp_puts_line("); emit_nomethod_raise_unless_nil(c, arg, "inspect", "(const char *)\"\"", "(const char *)\"nil\"", b); buf_puts(b, ");\n");
+  }
+  else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 1)) {
     /* an object with #inspect (user-defined or a generated struct/data one);
        a NULL pointer is nil (nullable-object convention, e.g. Set#add?) */
-    const char *cn = obj_str_cname(c, ty_object_class(t), 1);
+    const char *cn = obj_str_cname(c, arg, ty_object_class(t), 1);
     int pv = ++g_tmp;
     /* rooted: a fresh object (`p mk`) has no other reference while its
        #inspect allocates */
     buf_printf(b, "{ sp_%s *_t%d = (sp_%s *)(", cn, pv, cn); emit_expr(c, arg, b);
     buf_puts(b, "); ");
     if (!expr_is_held_ref(c, arg)) buf_printf(b, "SP_GC_ROOT(_t%d); ", pv);
-    int rp = obj_str_ret_poly(c, ty_object_class(t), 1);
+    int rp = obj_str_ret_poly(c, arg, ty_object_class(t), 1);
     buf_printf(b, "sp_puts_line(_t%d ? %s%s(_t%d%s)%s : \"nil\"); }\n", pv, rp ? "sp_poly_to_s(" : "",
-               obj_str_fn(c, ty_object_class(t), 1), pv, obj_str_blockarg(c, ty_object_class(t), 1), rp ? ")" : "");
+               obj_str_fn(c, arg, ty_object_class(t), 1), pv, obj_str_blockarg(c, arg, ty_object_class(t), 1), rp ? ")" : "");
   }
   else if (t == TY_PROC) {
     buf_puts(b, "{ sp_Proc *_pp = ("); emit_expr(c, arg, b);
@@ -757,21 +770,21 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     /* p obj: a user #inspect wins; otherwise the generated per-class ivar
        walk renders CRuby's default #<Name:0xADDR @a=..., ...> */
     int cid = ty_object_class(t);
-    const char *icn = obj_str_cname(c, cid, 1);
+    const char *icn = obj_str_cname(c, arg, cid, 1);
     if (icn && expr_is_held_ref(c, arg)) {
-      int rp = obj_str_ret_poly(c, cid, 1);
-      buf_printf(b, "{ const char *_pi = %s%s((sp_%s *)(", rp ? "sp_poly_to_s(" : "", obj_str_fn(c, cid, 1), icn);
+      int rp = obj_str_ret_poly(c, arg, cid, 1);
+      buf_printf(b, "{ const char *_pi = %s%s((sp_%s *)(", rp ? "sp_poly_to_s(" : "", obj_str_fn(c, arg, cid, 1), icn);
       emit_expr(c, arg, b);
-      buf_printf(b, ")%s)%s; sp_puts_line(_pi ? _pi : \"nil\"); }\n", obj_str_blockarg(c, cid, 1), rp ? ")" : "");
+      buf_printf(b, ")%s)%s; sp_puts_line(_pi ? _pi : \"nil\"); }\n", obj_str_blockarg(c, arg, cid, 1), rp ? ")" : "");
     }
     else if (icn) {
       /* the receiver rooted across its #inspect, as in the arm above */
       int pv = ++g_tmp;
       buf_printf(b, "{ sp_%s *_t%d = (sp_%s *)(", icn, pv, icn); emit_expr(c, arg, b);
-      int rp = obj_str_ret_poly(c, cid, 1);
+      int rp = obj_str_ret_poly(c, arg, cid, 1);
       buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_pi = %s%s(_t%d%s)%s;"
-                    " sp_puts_line(_pi ? _pi : \"nil\"); }\n", pv, rp ? "sp_poly_to_s(" : "", obj_str_fn(c, cid, 1), pv,
-                    obj_str_blockarg(c, cid, 1), rp ? ")" : "");
+                    " sp_puts_line(_pi ? _pi : \"nil\"); }\n", pv, rp ? "sp_poly_to_s(" : "", obj_str_fn(c, arg, cid, 1), pv,
+                    obj_str_blockarg(c, arg, cid, 1), rp ? ")" : "");
     }
     else {
       buf_printf(b, "{ void *_po = (void *)("); emit_expr(c, arg, b);
@@ -814,7 +827,7 @@ int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv
   for (int k = 0; k < argc && pp_own; k++) {
     TyKind at = repr_of(c, argv[k]).as_ty;
     if (ty_is_object(at) && comp_method_in_chain(c, ty_object_class(at), "inspect", NULL) >= 0 &&
-        !record_pp_skips_inspect(c, ty_object_class(at)) && !obj_arm_calls_own_inspect(c, ty_object_class(at)))
+        !record_pp_skips_inspect(c, argv[k], ty_object_class(at)) && !obj_arm_calls_own_inspect(c, ty_object_class(at)))
       pp_own = 0;
   }
   if (argc < 2 && !pp_own) return 0;
@@ -984,6 +997,12 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
      (it sits above Kernel), then the top-level table (Object) */
   if (bare_call_class_owned(c, id)) return 0;
   if (!cplan_builtin_call(c, id) && call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
+  /* (a module main extends, or Object includes or prepends, answers it at the call: the main-chain fact) */
+  if (!cplan_builtin_call(c, id)) {
+    int st = cplan_main_chain_step(c, id, name);
+    /* (or an undef on Object's chain stops it: no builtin answers, the call raises) */
+    if (st > EMC_CORE || st == EMC_STOP) return 0;
+  }
   refuse_unredirected_output(c, id);
   int args = nt_ref(nt, id, "arguments");
   int argc = 0;
@@ -8416,10 +8435,11 @@ static void emit_pm_deconstruct_keys_call_arg(Compiler *c, int mi, int pat, Buf 
 /* A user object a Regexp's === converts through its #to_str (CRuby's
    rb_check_string_type): boxed, the runtime reaches the method through the
    conversion bridge, so only a #to_str the bridge carries qualifies. Any
-   other keeps the arms' plain no-match answer. */
-static int re_case_eq_obj_subject(Compiler *c, TyKind pt) {
+   other keeps the arms' plain no-match answer. The plan answers the to_str at
+   the when or pattern whose Regexp cond makes the call. */
+static int re_case_eq_obj_subject(Compiler *c, int cond, TyKind pt) {
   /* the conversion bridge's own admission: a value-type copy has no row */
-  return ty_is_object(pt) && class_has_to_str_shape(c, ty_object_class(pt)) &&
+  return ty_is_object(pt) && class_has_to_str_shape(c, ic_operand_host(c, cond), cond, ty_object_class(pt)) &&
          !comp_ty_value_obj(c, pt);
 }
 
@@ -8529,7 +8549,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
         buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, sp_box_sym(_t%d))", reidx, t);
         return 1;
       }
-      if (re_case_eq_obj_subject(c, pt)) {
+      if (re_case_eq_obj_subject(c, pat, pt)) {
         char sref[32]; snprintf(sref, sizeof sref, "_t%d", t);
         buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, ", reidx); emit_boxed_text(c, pt, sref, b); buf_puts(b, ")");
         return 1;
@@ -10883,6 +10903,16 @@ static int case_subject_needs_root(Compiler *c, TyKind pt, const int *whens, int
   return nw > 0 && !decide_node(nt, whens[0], "case-root", NULL);
 }
 
+/* Does the record prove class cid's === undefined where the when arm cond
+   runs (the plan's none, MLW_RECORD)? CRuby's call of it raises NoMethodError,
+   where Object#=== would have asked the class's ==. */
+static int when_eqq_gone(Compiler *c, int cond, int cid) {
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  cplan_implied_target(c, ic_operand_host(c, cond), cond, cid, "===", 0, &ml);
+  return ml.kind == ML_NONE && ml.why == MLW_RECORD;
+}
+
 /* `case <array or hash> when <cond>`: Array#=== and Hash#=== are Object#===,
    which is ==, so the arm compares by value through sp_poly_eq. An arm of
    another kind can never be == an Array or a Hash, and comparing the two
@@ -10895,6 +10925,7 @@ static int case_subject_needs_root(Compiler *c, TyKind pt, const int *whens, int
 static int emit_case_container_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   if (!ty_is_array(pt) && !ty_is_obj_array(pt) && !ty_is_hash(pt)) return 0;
   TyKind wat = comp_ntype(c, cond);
+  int wn = ic_operand_host(c, cond);
   char stmp[24]; snprintf(stmp, sizeof stmp, "_t%d", t);
   if (ty_is_array(wat) || ty_is_obj_array(wat) || ty_is_hash(wat) || wat == TY_POLY || wat == TY_UNKNOWN) {
     /* the arm is the receiver of `===`, so it is the left operand: an
@@ -10905,13 +10936,20 @@ static int emit_case_container_eq(Compiler *c, int cond, int t, TyKind pt, Buf *
     emit_boxed_text(c, pt, stmp, b);
     buf_puts(b, ")");
   }
+  else if (ty_is_object(wat) && when_eqq_gone(c, cond, ty_object_class(wat))) {
+    /* the arm's class undefines === where the record places it: CRuby's call of it raises,
+       whatever == the class has (the subject is already evaluated) */
+    buf_printf(b, "((void)_t%d, ", t);
+    emit_nomethod_raise(c, cond, 0, NULL, "===", "(sp_bool)0", NULL, b);
+    buf_puts(b, ")");
+  }
   else if (ty_is_object(wat) &&
-           (comp_method_in_chain(c, ty_object_class(wat), "===", NULL) >= 0 ||
-            comp_method_in_chain(c, ty_object_class(wat), "==", NULL) >= 0)) {
+           (cplan_implied_target(c, wn, cond, ty_object_class(wat), "===", 0, NULL) >= 0 ||
+            cplan_implied_target(c, wn, cond, ty_object_class(wat), "==", 0, NULL) >= 0)) {
     /* an object arm of a class with its own === (or ==) is asked with the
        Array or Hash as the argument: a matcher may accept it */
-    int emi = comp_method_in_chain(c, ty_object_class(wat), "===", NULL);
-    if (emi < 0) emi = comp_method_in_chain(c, ty_object_class(wat), "==", NULL);
+    int emi = cplan_implied_target(c, wn, cond, ty_object_class(wat), "===", 0, NULL);
+    if (emi < 0) emi = cplan_implied_target(c, wn, cond, ty_object_class(wat), "==", 0, NULL);
     Scope *ems = &c->scopes[emi];
     LocalVar *eplv = ems->nparams > 0 ? scope_local(ems, ems->pnames[0]) : NULL;
     TyKind pty = eplv ? eplv->type : TY_POLY;
@@ -10940,12 +10978,23 @@ static int emit_when_user_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   TyKind wpt = comp_ntype(c, cond);
   int wcid = ty_is_object(wpt) ? ty_object_class(wpt) : -1;
   if (wcid < 0 || comp_ty_value_obj(c, wpt)) return 0;
-  int wdef = -1;
-  int weq = comp_method_in_chain(c, wcid, "===", &wdef);
+  /* the === the when's row makes on cond (rb_equal's == where the class has
+     none of its own), the plan's answer at the when */
+  int wn = ic_operand_host(c, cond);
+  MethodLookup wml;
+  int weq = cplan_implied_target(c, wn, cond, wcid, "===", 0, &wml);
   /* Object#=== is rb_equal: the arm itself matches before its == runs */
   int via_eq = weq < 0;
-  if (weq < 0) weq = comp_method_in_chain(c, wcid, "==", &wdef);
+  if (weq < 0 && wml.why == MLW_RECORD) {
+    /* the arm's class undefines === where the record places it: CRuby's call of it raises */
+    buf_printf(b, "((void)_t%d, ", t);
+    emit_nomethod_raise(c, cond, 0, NULL, "===", "(sp_bool)0", NULL, b);
+    buf_puts(b, ")");
+    return 1;
+  }
+  if (weq < 0) weq = cplan_implied_target(c, wn, cond, wcid, "==", 0, &wml);
   if (weq < 0) return 0;
+  int wdef = wml.def_class;
   Scope *ws = &c->scopes[weq];
   LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
   /* a parameter the case subject alone typed (infer_block_params) takes it
@@ -10985,19 +11034,20 @@ static int emit_when_user_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
 /* `when <cond>` against the subject in _t<t>: the subject class's own ===
    or == when cond has its type, else a native === or the pointer compare. */
 static void emit_case_obj_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
+  int wn = ic_operand_host(c, cond);
   if (ty_is_object(pt) && comp_ntype(c, cond) == pt &&
-      (comp_method_in_chain(c, ty_object_class(pt), "===", NULL) >= 0 ||
-       comp_method_in_chain(c, ty_object_class(pt), "==", NULL) >= 0)) {
+      (cplan_implied_target(c, wn, cond, ty_object_class(pt), "===", 0, NULL) >= 0 ||
+       cplan_implied_target(c, wn, cond, ty_object_class(pt), "==", 0, NULL) >= 0)) {
     /* `case obj when other`: Ruby asks `other === obj`, which for a class
        defining #== is that method. Comparing the C structs instead did
        not compile for a value-type object and compared addresses for a
        heap one (#3820). */
     int ecid = ty_object_class(pt);
-    int emi = comp_method_in_chain(c, ecid, "===", NULL);
+    int emi = cplan_implied_target(c, wn, cond, ecid, "===", 0, NULL);
     /* Object#=== is rb_equal: the same heap object matches before its ==
        runs (a value-type object has no identity to compare) */
     int ident = emi < 0 && !comp_ty_value_obj(c, pt);
-    if (emi < 0) emi = comp_method_in_chain(c, ecid, "==", NULL);
+    if (emi < 0) emi = cplan_implied_target(c, wn, cond, ecid, "==", 0, NULL);
     Scope *ems = &c->scopes[emi];
     LocalVar *eplv = ems->nparams > 0 ? scope_local(ems, ems->pnames[0]) : NULL;
     TyKind pty = eplv ? eplv->type : TY_POLY;
@@ -11068,17 +11118,29 @@ static void emit_case_obj_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
 /* (a module's own: no object has a module for its class, and the module's
    methods are emitted in the classes that include it, which have arms of
    their own) */
-static int when_boxed_arm_class(Compiler *c, int k) {
+static int when_boxed_arm_class(Compiler *c, int cond, int k) {
   /* a class with no instance never matches the arm's cls_id test (#10902) */
   return c->classes[k].instantiated &&
          !c->classes[k].is_native_class && !comp_class_is_module(c, &c->classes[k]) &&
-         comp_method_in_chain(c, k, "===", NULL) >= 0;
+         cplan_implied_target(c, ic_operand_host(c, cond), cond, k, "===", 0, NULL) >= 0;
+}
+/* ... and the arms of the classes whose #=== the record proves undefined here:
+   the raise CRuby's call of it makes, where the equality match would answer */
+static int when_boxed_arm_gone(Compiler *c, int cond, int k) {
+  return c->classes[k].instantiated &&
+         !c->classes[k].is_native_class && !comp_class_is_module(c, &c->classes[k]) && when_eqq_gone(c, cond, k);
 }
 static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, int tpw, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
-    if (!when_boxed_arm_class(c, k)) continue;
-    int wdef = -1;
-    int weq = comp_method_in_chain(c, k, "===", &wdef);
+    if (when_boxed_arm_gone(c, cond, k)) {
+      buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? ", tpw, tpw, k);
+      emit_nomethod_raise_boxed(b, "===", tpw, "(sp_bool)0");
+      buf_puts(b, " : ");
+      continue;
+    }
+    if (!when_boxed_arm_class(c, cond, k)) continue;
+    MethodLookup wml = { .def_class = -1 };
+    int weq = cplan_implied_target(c, ic_operand_host(c, cond), cond, k, "===", 0, &wml), wdef = wml.def_class;
     if (weq < 0 || wdef < 0) continue;
     Scope *ws = &c->scopes[weq];
     LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
@@ -11149,9 +11211,9 @@ static int emit_when_class_cmethod_eq(Compiler *c, int cond, int t, TyKind pt, B
   return emit_class_cmethod_eqq(c, const_node_class_index(c, cond), sref, pt, cond, 0, b);
 }
 
-static int when_boxed_has_user_arm(Compiler *c) {
+static int when_boxed_has_user_arm(Compiler *c, int cond) {
   for (int k = 0; k < c->nclasses; k++)
-    if (when_boxed_arm_class(c, k)) return 1;
+    if (when_boxed_arm_class(c, cond, k) || when_boxed_arm_gone(c, cond, k)) return 1;
   return 0;
 }
 
@@ -11164,7 +11226,7 @@ static void emit_when_boxed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b
      captures after it allocates. */
   buf_printf(b, "({ sp_RbVal _t%d = ", tpw); emit_boxed(c, cond, b);
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tpw);
-  if (when_boxed_has_user_arm(c)) emit_when_boxed_user_arms(c, cond, t, pt, tpw, b);
+  if (when_boxed_has_user_arm(c, cond)) emit_when_boxed_user_arms(c, cond, t, pt, tpw, b);
   buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC", tpw, tpw);
   buf_printf(b, " ? sp_poly_truthy(sp_penum_call1((sp_Proc *)_t%d.v.p, ", tpw);
   if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
@@ -11261,7 +11323,7 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
   else if (reidx >= 0 && pt == TY_SYMBOL) {
     buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, sp_box_sym(_t%d))", reidx, t);
   }
-  else if ((reidx >= 0 || comp_ntype(c, cond) == TY_REGEX) && re_case_eq_obj_subject(c, pt)) {
+  else if ((reidx >= 0 || comp_ntype(c, cond) == TY_REGEX) && re_case_eq_obj_subject(c, cond, pt)) {
     char sref[32]; snprintf(sref, sizeof sref, "_t%d", t);
     if (reidx >= 0) buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, ", reidx);
     else { buf_puts(b, "sp_re_case_eq("); emit_expr(c, cond, b); buf_puts(b, ", "); }
@@ -11764,9 +11826,11 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
                equal instances of a class that defines one (#3741). */
             TyKind wpt = comp_ntype(c, conds[j]);
             int wcid = ty_is_object(wpt) ? ty_object_class(wpt) : -1;
-            int wdef = -1;
-            int weq = wcid >= 0 ? comp_method_in_chain(c, wcid, "===", &wdef) : -1;
-            if (weq < 0 && wcid >= 0) weq = comp_method_in_chain(c, wcid, "==", &wdef);
+            int wn = ic_operand_host(c, conds[j]);
+            MethodLookup wml = { .def_class = -1 };
+            int weq = wcid >= 0 ? cplan_implied_target(c, wn, conds[j], wcid, "===", 0, &wml) : -1;
+            if (weq < 0 && wcid >= 0) weq = cplan_implied_target(c, wn, conds[j], wcid, "==", 0, &wml);
+            int wdef = wml.def_class;
             if (weq >= 0 && wdef >= 0 && !comp_ty_value_obj(c, wpt)) {
               buf_printf(b, "%s(", mc_method(c, &c->scopes[weq]));
               emit_expr(c, conds[j], b);

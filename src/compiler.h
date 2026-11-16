@@ -205,6 +205,11 @@ typedef struct {
                        Integer, so a Range of it stays boxed in promote mode */
   int rbs_seeded;   /* param type pinned from an --rbs advisory seed: the
                        fixpoint must not widen it (see apply_rbs_seeds) */
+  int oa_seed;      /* (params) a seed's `Array[Class]`: 1 + the class index.
+                       Not a pin -- the parameter is a boxed array the seed
+                       left unpinned -- but the element evidence
+                       narrow_object_arrays starts its slot from, as an
+                       ivar's ivar_oa_seed is a request (seed_method) */
   int rbs_box_held; /* (params) a box reached the container seed while the
                        fixpoint ran and the seed held: it may have been a
                        transient, so the settled types decide whether the
@@ -1469,6 +1474,7 @@ typedef struct {
      kind of a site by node ([ctr_site_cap]) */
   int *ctr_site_node; TyKind *ctr_site_kind; int nctr_site;
   TyKind *ctr_site_kind_of; int ctr_site_cap;
+  unsigned char *ctr_site_excl;   /* (#12009) a site an --rbs-pinned ivar may hold: it is copied there, so no group holds it */
   SP_TY_FIELD TyKind *arr_want;  /* [node_cap] array kind a node takes from its use context
                         rather than from its own contents: an empty `[]`
                         literal, or a `map` that narrow_object_arrays decided
@@ -1673,6 +1679,7 @@ typedef struct {
   int ntoplevel_includes;
   unsigned char *toplevel_extends;  /* per entry: 1 for `extend` (main alone), 0 for `include` */
   int has_include_math;    /* program has `include Math`: expose bare PI/E/fns */
+  int env_value_flows;   /* ENV is used as a value somewhere, so a boxed value may be ENV (an_env_value_flows) */
   /* some store in the program can put a nil VALUE into a typed Hash of this
      Integer-valued kind (hash_vals_nullable, DESIGN.md D3b-ii) */
   unsigned char hash_vnil_str_int, hash_vnil_int_int;
@@ -2001,6 +2008,7 @@ typedef struct {
      2 once made (ver_entries_demand) */
   struct VerDefer { const char *name; int cls, sg, taken; } *ver_defer;
   int nver_defer;
+  struct MainChainMemo *main_chain;   /* the main-chain fact by (name, point or window start, side): call_plan.c, ct_main_chain */
   struct VerChain *ver_chain;   /* how many versions a class's chain holds of a name, by (class, side, name) (call_plan.c, ver_chain_count) */
   struct VerHold *ver_hold;   /* the holders of a name worth asking, by name (call_plan.c, ver_holders) */
   struct NewInits *new_inits;   /* the initialize methods a `new` of a class may run, by class (call_plan.c, cplan_new_initializers) */
@@ -2368,7 +2376,8 @@ int const_path_reaches_leaf_const(Compiler *c, int id);   /* the constant the le
 int const_node_match_class(Compiler *c, int node);   /* the class a raise or rescue operand matches by (analyze_util.c) */
 const char *const_node_match_class_name(Compiler *c, int node);   /* ...by name: a builtin class an alias holds too */
 int const_node_match_class_or_named(Compiler *c, int node);
-int env_value_recv(Compiler *c, int recv, TyKind t);   /* ENV's value as a receiver: the constant or a variable holding it */   /* ...else the class by that name or the name as written */
+int env_value_recv(Compiler *c, int recv, TyKind t);
+int env_answers_name(const char *n);   /* a name ENV answers (analyze_desugar.c) */   /* ENV's value as a receiver: the constant or a variable holding it */   /* ...else the class by that name or the name as written */
 int class_lacks_own_const(Compiler *c, int k, const char *nm);   /* private_constant :nm in k is a NameError */
 int const_visibility_call_is_builtin(Compiler *c, int call, int k);   /* ... when the call is Module's own */
 int const_node_class_index(Compiler *c, int id);
@@ -2420,7 +2429,7 @@ const char *comp_class_reader_fn(Compiler *c, const char *name, int builtin);   
 int comp_class_kw_init(Compiler *c, int ci);   /* inspects with the keyword_init suffix: a keyword_init Struct class or a subclass of one */
 const char *comp_class_inspect_suffix(Compiler *c, int ci, const char *name);   /* a keyword-init Struct class's inspect suffix, else "" */
 const char *comp_class_base_display_fn(Compiler *c);
-int cls_user_display_mi(Compiler *c, int k, const char *nm);
+int cls_user_display_mi(Compiler *c, int site, int k, const char *nm);
 int prog_has_cls_user_display(Compiler *c, const char *nm);
 int        class_var_static_ci(Compiler *c, int node);  /* local holding one class const */
 int        class_recv_static_ci(Compiler *c, int node); /* constant or local naming one class, or self in a class body */
@@ -2658,6 +2667,7 @@ int        send_family_defined_anywhere(Compiler *c, const char *name);   /* ana
    the kind of the Array the chain's instances embed, TY_POLY_ARRAY once the
    inference is past its optimistic stage with no element seen. */
 int        comp_ary_root(Compiler *c, int cid);
+int        comp_ary_is_array_proper(Compiler *c, int cid);
 int        comp_implicit_to_ary_mi(Compiler *c, int cid);
 int        comp_ty_ary_root(Compiler *c, TyKind t);
 int        comp_ty_arysub_array(Compiler *c, TyKind t);

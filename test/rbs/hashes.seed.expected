@@ -5,3 +5,7 @@ meth sp str_poly_hash str_poly_hash
 meth yi sym_poly_hash sym_poly_hash
 meth ys sym_poly_hash sym_poly_hash
 meth yp sym_poly_hash sym_poly_hash
+meth ii int_int_hash int_int_hash
+meth is int_str_hash int_str_hash
+meth ip poly_poly_hash poly_poly_hash
+meth iu poly_poly_hash poly_poly_hash

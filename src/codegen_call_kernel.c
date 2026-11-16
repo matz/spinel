@@ -9,6 +9,7 @@
 #include "builtin_ops.h"
 #include "repr.h"
 #include "call_plan.h"
+#include "implicit_calls.h"
 #include "share.h"
 #include "codegen_call_arms.h"
 
@@ -94,8 +95,10 @@ static const char *kconv_blk_arg(const Compiler *c, int mi) {
   return s->blk_param && s->blk_param[0] && !s->yields ? ", NULL" : "";
 }
 static int emit_kconv_obj_nil(Compiler *c, int arg, int ci, const char *m1, const char *m2, Buf *b) {
-  int d = ci, mi = comp_method_in_chain(c, ci, m1, &d);
-  if (mi < 0 && m2) { m1 = m2; mi = comp_method_in_chain(c, ci, m2, &d); }
+  int host = ic_operand_host(c, arg);
+  MethodLookup ml;
+  int mi = cplan_implied_target(c, host, arg, ci, m1, 0, &ml), d = ml.def_class;
+  if (mi < 0 && m2) { m1 = m2; mi = cplan_implied_target(c, host, arg, ci, m2, 0, &ml); d = ml.def_class; }
   if (mi < 0 || !repr_of(c, arg).may_nil) return 0;
   TyKind rt = (TyKind)c->scopes[mi].ret;
   char nil_c[64];

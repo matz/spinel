@@ -1445,9 +1445,11 @@ int is_numeric_coerce_op(const char *op) {
    this, so they agree at every point in the pipeline; whether the coerce
    dispatch ends up carrying an arm for the class is a separate question that
    only codegen needs (class_coerce_emittable), and a class that fails it finds
-   the hook unhandled and gets the TypeError CRuby raises for it anyway. */
-int class_has_coerce_shape(Compiler *c, int k) {
-  int mi = call_target(c, -1, k, "coerce", CT_METHODS | CT_SHARED, NULL);
+   the hook unhandled and gets the TypeError CRuby raises for it anyway. The
+   plan answers it at the call id that coerces its operand op (id -1: the
+   dispatcher's, whose table switch no call stands behind). */
+int class_has_coerce_shape(Compiler *c, int site, int op, int k) {
+  int mi = cplan_implied_target(c, site, op, k, "coerce", 0, NULL);
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   return m->nparams == 1 && m->rest_idx < 0;
@@ -1490,10 +1492,11 @@ int class_coerce_emittable(Compiler *c, int k) {
    where it found them rather than adding a new way in. An
    `attr_reader :to_str` defines no method scope at all, so the lookup below
    never sees it. A native class is excluded because the conversion is a
-   direct call to a method this TU compiles. */
-int class_has_to_str_shape(Compiler *c, int k) {
+   direct call to a method this TU compiles. The plan answers it at the call
+   id that converts its operand op. */
+int class_has_to_str_shape(Compiler *c, int site, int op, int k) {
   if (k < 0 || k >= c->nclasses || c->classes[k].is_native_class) return 0;
-  int mi = comp_method_in_chain(c, k, "to_str", NULL);
+  int mi = cplan_implied_target(c, site, op, k, "to_str", 0, NULL);
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   /* an ALIAS is not this shape yet: the conversion emitter names the call
@@ -5387,6 +5390,18 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
      method lookup, comp_self_call_mi) */
   if (recv < 0) {
     int mi = comp_self_call_mi(c, node, sym);
+    /* (a module main extends or Object includes, where main's chain meets it at the capture: its owner's. Not an
+       Object prepend's: Object's prepends emit no body a Method can bind yet) */
+    int mst = mi < 0 ? cplan_main_chain_step(c, node, sym) : -1;
+    if (mst > EMC_CORE && mst != EMC_PREPEND) {
+      int im = call_target(c, node, -1, sym, CT_INCLUDED, NULL);
+      if (im >= 0) {
+        k = c->scopes[im].origin_module_ci > 0 ? c->scopes[im].origin_module_ci - 1 : c->scopes[im].class_id, side = 0;
+        if (k >= 0) goto found;
+      }
+      /* (Object's own entry the program's `class Object` reopening makes: bound on Object) */
+      if (mst == EMC_OWN) { k = comp_core_class(c, CORE_OBJECT), side = 0; if (k >= 0) goto found; }
+    }
     if (mi < 0) return cplan_capture_missing(c, node);
     k = c->scopes[mi].class_id, side = k >= 0 && c->scopes[mi].is_cmethod;
     if (k < 0) {

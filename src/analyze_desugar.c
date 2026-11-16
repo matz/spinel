@@ -550,7 +550,14 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
        body, a top-level `def` of the name is the one the bare call means,
        and in top-level code so is a module main extends (main's singleton
        class, asked ahead of Object) */
-    else if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || comp_main_extend_defines(c, id, nm)) continue;
+    else {
+      /* (on main's chain at the call, Object's own entry is met only past main's singleton and its extends, and
+         from the point its include or def runs: the main-chain fact) */
+      int st = cplan_main_chain_step(c, id, nm);
+      if (st >= 0 && st != EMC_OWN && st != EMC_PREPEND && st != EMC_INCLUDE) continue;
+      if (st < 0 ? (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || comp_main_extend_defines(c, id, nm))
+                 : (st == EMC_OWN && call_target(c, id, -1, nm, CT_TOP, NULL) >= 0)) continue;
+    }
     int sn = nt_new_node(nt, "SelfNode");
     if (sn < 0) continue;
     comp_grow_node_arrays(c);
@@ -4956,6 +4963,20 @@ int desugar_user_not_match(Compiler *c) {
   return changed;
 }
 
+/* A name ENV answers: its enumeration and read surface (env_enum_method)
+   and the reads and writes its own arms answer. A call of another name on a
+   boxed value is none ENV takes, so it is not read through the
+   environment (emit_call_env_box_read). */
+int env_answers_name(const char *n) {
+  static const char *const W[] = { "[]", "[]=", "fetch", "store", "key?", "has_key?", "include?", "member?",
+                                   "delete", "update", "merge!", "replace", "clear", "select!", "filter!",
+                                   "reject!", "keep_if", "delete_if", "shift", "size", "length", "rehash",
+                                   "filter_map", NULL };
+  if (!n) return 0;
+  if (env_enum_method(n)) return 1;
+  for (int i = 0; W[i]; i++) if (sp_streq(n, W[i])) return 1;
+  return 0;
+}
 /* the names desugar_env_enum acts on */
 static int env_enum_call_name(const char *nm) {
   return env_enum_method(nm) || sp_streq(nm, "fetch");

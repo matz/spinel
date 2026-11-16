@@ -915,6 +915,10 @@ void sp_PolyPolyHash_clear(sp_PolyPolyHash*h)
 sp_RbVal sp_poly_clear(sp_RbVal v)
 {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_QUEUE && v.v.p) { sp_Queue_clear((sp_queue *)v.v.p); return v; }
+  /* ENV#clear: the environment emptied, ENV itself answered (a boxed ENV's
+     clear is not read through its snapshot: the call takes its receiver
+     back, emit_call_env_box_read) */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENV) { (void)sp_env_clear(); return v; }
   /* String#clear on a plain string box: a fresh empty string the receiver
      takes back, as the typed clear builds; a frozen one raises. It answered
      the box untouched. */

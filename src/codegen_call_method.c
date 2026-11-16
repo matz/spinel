@@ -2747,7 +2747,8 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   if (plan.absent && plan.mi < 0) {
     buf_puts(b, "({ ");
     if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
-    emit_capture_absent_raise(c, id, &plan, b);
+    if (plan.absent == CP_ABSENT_MAIN) emit_main_capture_absent_raise(c, id, b);
+    else emit_capture_absent_raise(c, id, &plan, b);
     /* (a pointer's NULL is cast to the call's C type: a Method's fields
        are read off the value, `.name`) */
     TyKind at = repr_of(c, id).as_ty;

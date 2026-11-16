@@ -1,0 +1,11 @@
+
+
+[]
+nil
+[nil]
+puts NoMethodError
+print NoMethodError
+interpolation NoMethodError
+p NoMethodError
+p made NoMethodError
+1

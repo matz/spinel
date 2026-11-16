@@ -1,0 +1,15 @@
+false
+true
+undefined method '<=>' for an instance of L
+[1, 2]
+:none
+R1
+undefined method '===' for an instance of R2
+20
+ca
+no implicit conversion of CB into Integer
+undefined method 'to_s' for an instance of CB
+undefined method 'to_s' for an instance of CB
+undefined method 'inspect' for an instance of CB
+undefined method '<=>' for an instance of CB
+undefined method '<=>' for an instance of CB

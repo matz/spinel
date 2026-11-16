@@ -1013,13 +1013,14 @@ static int map_literal_elem_types(Compiler *c, int value, TyKind *out, int max) 
    to_ary return type when it defines one (CRuby coerces the splice source);
    without to_ary it inserts as a single heterogeneous element. Stable across
    the fixpoint: scopes[].ret settles monotonically, and an unsettled ret
-   simply contributes no evidence that iteration. */
-static TyKind splice_incoming_elem(Compiler *c, int rhs) {
+   simply contributes no evidence that iteration. The plan answers the to_ary
+   at the call id the source is an argument of. */
+static TyKind splice_incoming_elem(Compiler *c, int id, int rhs) {
   TyKind t = infer_type(c, rhs);
   if (t == TY_POLY_ARRAY) return TY_POLY_ARRAY;  /* heterogeneous source */
   if (ty_is_array(t)) return ty_array_elem(t);
   if (ty_is_object(t)) {
-    int mi = comp_implicit_to_ary_mi(c, ty_object_class(t));
+    int mi = cplan_to_ary_method(c, id, rhs, ty_object_class(t));
     if (mi >= 0) {
       TyKind r = (TyKind)c->scopes[mi].ret;
       if (r == TY_POLY_ARRAY) return TY_POLY_ARRAY;
@@ -3529,7 +3530,7 @@ static int push_escape_widen_each(Compiler *c, int id, int recv, int is_push, Ty
   int cat = nm && sp_streq(nm, "concat"), from = nm && sp_streq(nm, "insert") ? 1 : 0;
   int changed = 0;
   for (int k = from; k < an && an > 1; k++)
-    changed |= push_escape_widen(c, id, recv, is_push, cat ? splice_incoming_elem(c, av[k]) : push_elem_ty(c, av[k]));
+    changed |= push_escape_widen(c, id, recv, is_push, cat ? splice_incoming_elem(c, id, av[k]) : push_elem_ty(c, av[k]));
   return changed;
 }
 
@@ -3739,8 +3740,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         /* concat(other, ...): each other array's elements splice in, so
            every argument is evidence, as push's are; one that is no array
            raises before anything is stored */
-        is_push = 1; vt = splice_incoming_elem(c, argv[0]);
-        for (int ai = 1; ai < an; ai++) vt = ty_unify(vt, splice_incoming_elem(c, argv[ai]));
+        is_push = 1; vt = splice_incoming_elem(c, id, argv[0]);
+        for (int ai = 1; ai < an; ai++) vt = ty_unify(vt, splice_incoming_elem(c, id, argv[ai]));
         for (int ai = 0; ai < an && !concat_scalar; ai++) {
           TyKind cat = infer_type(c, argv[ai]);
           concat_scalar = cat != TY_UNKNOWN && cat != TY_POLY && !ty_is_array(cat);
@@ -3762,7 +3763,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
            into it somewhere. Without the first, `h1.replace(h2)` widened a
            hash local into an array; without the second, `h.replace([1, 2])`
            did -- and each stopped compiling. */
-        is_push = 1; vt = splice_incoming_elem(c, argv[0]);
+        is_push = 1; vt = splice_incoming_elem(c, id, argv[0]);
       }
       else if (name && sp_streq(name, "default_proc=") && an == 1) {
         /* installing a default proc needs the poly-valued variant (the proc
@@ -3845,7 +3846,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         knode = argv[0]; vnode = argv[1];
         /* a range key is a splice: the RHS contributes element evidence */
         if (kt == TY_RANGE) {
-          is_splice = 1; vt = splice_incoming_elem(c, argv[1]);
+          is_splice = 1; vt = splice_incoming_elem(c, id, argv[1]);
           splice_arr = ty_is_array(infer_type(c, argv[1])) && vt != TY_POLY_ARRAY;
         }
         /* an empty [] / {} literal value carries no element type but is
@@ -3902,7 +3903,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
       }
       else if (name && sp_streq(name, "[]=") && an == 3) {
         /* a[start, len] = rhs: a splice over the (start, len) span */
-        is_idx_write = 1; is_splice = 1; vt = splice_incoming_elem(c, argv[2]);
+        is_idx_write = 1; is_splice = 1; vt = splice_incoming_elem(c, id, argv[2]);
         vnode = argv[2];
         splice_arr = ty_is_array(infer_type(c, argv[2])) && vt != TY_POLY_ARRAY;
       }

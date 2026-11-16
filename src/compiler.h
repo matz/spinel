@@ -2428,7 +2428,7 @@ const char *comp_class_reader_fn(Compiler *c, const char *name, int builtin);   
 int comp_class_kw_init(Compiler *c, int ci);   /* inspects with the keyword_init suffix: a keyword_init Struct class or a subclass of one */
 const char *comp_class_inspect_suffix(Compiler *c, int ci, const char *name);   /* a keyword-init Struct class's inspect suffix, else "" */
 const char *comp_class_base_display_fn(Compiler *c);
-int cls_user_display_mi(Compiler *c, int k, const char *nm);
+int cls_user_display_mi(Compiler *c, int site, int k, const char *nm);
 int prog_has_cls_user_display(Compiler *c, const char *nm);
 int        class_var_static_ci(Compiler *c, int node);  /* local holding one class const */
 int        class_recv_static_ci(Compiler *c, int node); /* constant or local naming one class, or self in a class body */
@@ -2666,6 +2666,7 @@ int        send_family_defined_anywhere(Compiler *c, const char *name);   /* ana
    the kind of the Array the chain's instances embed, TY_POLY_ARRAY once the
    inference is past its optimistic stage with no element seen. */
 int        comp_ary_root(Compiler *c, int cid);
+int        comp_ary_is_array_proper(Compiler *c, int cid);
 int        comp_implicit_to_ary_mi(Compiler *c, int cid);
 int        comp_ty_ary_root(Compiler *c, TyKind t);
 int        comp_ty_arysub_array(Compiler *c, TyKind t);

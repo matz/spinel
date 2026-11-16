@@ -251,7 +251,7 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       nt_ref(nt, id, "block") < 0 &&
       (rt == TY_INT || rt == TY_FLOAT || rt == TY_RATIONAL || rt == TY_BIGINT)) {
     TyKind ac = comp_ntype(c, argv[0]);
-    if (ty_is_object(ac) && class_has_coerce_shape(c, ty_object_class(ac))) {
+    if (ty_is_object(ac) && class_has_coerce_shape(c, id, argv[0], ty_object_class(ac))) {
       *out = TY_POLY;
       return 1;
     }
@@ -1751,7 +1751,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       /* an operand that answers #to_str converts and compares, and answers
          nil when its #to_str does -- the boxed result the emitter's arm
          gives. Same shape test, same answer, as the typed-receiver rule. */
-      if (ty_is_object(at0) && class_has_to_str_shape(c, ty_object_class(at0))) {
+      if (ty_is_object(at0) && class_has_to_str_shape(c, id, argv[0], ty_object_class(at0))) {
         *out = TY_POLY;
         return 1;
       }

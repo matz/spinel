@@ -98,6 +98,7 @@ int emit_main_text_call(Compiler *c, int id, Buf *b) {
 int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   /* between?(lo, hi): lo <= self <= hi */
   if (sp_streq(name, "between?") && argc == 2) {
+    if (emit_delegate_undef_arm(c, id, recv, argc, argv, b)) return 1;
     /* a boxed bound (TY_POLY) takes this arm too: it may hold a String or
        anything else, which the conversion below tells apart at run time;
        the plain arm after it would hand the box to the byte compare */
@@ -256,11 +257,12 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        (class_is_comparable) */
     if (ty_is_object(rt)) {
       int cid_b = ty_object_class(rt);
-      int defcls_b = -1;
-      int mi_b = class_is_comparable(c, cid_b) ? comp_method_in_chain(c, cid_b, "<=>", &defcls_b) : -1;
-      if (mi_b >= 0 && user_cmp_invalid_ret(c, cid_b) != TY_UNKNOWN)
+      MethodLookup ml_b = { .def_class = -1 };
+      int mi_b = class_is_comparable(c, cid_b) ? cplan_implied_target(c, id, recv, cid_b, "<=>", 0, &ml_b) : -1;
+      int defcls_b = ml_b.def_class;
+      if (mi_b >= 0 && user_cmp_invalid_ret(c, id, recv, cid_b) != TY_UNKNOWN)
         unsupported_feature(c, id, "Comparable operator on an object whose #<=> returns a non-Integer (protocol requires Integer or nil)");
-      if (mi_b >= 0 && user_cmp_needs_check(c, cid_b)) {
+      if (mi_b >= 0 && user_cmp_needs_check(c, id, recv, cid_b)) {
         /* nil-capable `<=>`: checked comparisons (incomparable raises) */
         int ts = hoist_boxed_rooted(c, recv);
         int tlo = hoist_boxed_rooted(c, argv[0]), thi = hoist_boxed_rooted(c, argv[1]);
@@ -2588,7 +2590,7 @@ static int emit_case_eq_identity(Compiler *c, int id, int recv, Buf *b) {
   int argc = 0; const int *argv = call_args(nt, id, &argc);
   Repr ar = repr_of(c, argv[0]);
   TyKind at = ar.as_ty;
-  int mi = comp_method_in_chain(c, ty_object_class(rt), "==", NULL);
+  int mi = cplan_implied_target(c, id, argv[0], ty_object_class(rt), "==", 0, NULL);
   if (mi < 0 || comp_ty_value_obj(c, rt) ||
       !(ty_is_object(at) || at == TY_POLY) || comp_ty_value_obj(c, at) ||
       !plain_read_node(nt, recv) || !plain_read_node(nt, argv[0])) return 0;
@@ -3263,8 +3265,8 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
        boxed sp_poly_to_s default would print the bare-object form */
     TyKind drt2 = comp_ntype(c, recv);
     if (ty_is_object(drt2) && c->classes[ty_object_class(drt2)].is_struct &&
-        comp_method_in_chain(c, ty_object_class(drt2), "to_s", NULL) < 0 &&
-        comp_method_in_chain(c, ty_object_class(drt2), "inspect", NULL) < 0) {
+        cplan_implied_target(c, id, recv, ty_object_class(drt2), "to_s", 0, NULL) < 0 &&
+        cplan_implied_target(c, id, recv, ty_object_class(drt2), "inspect", 0, NULL) < 0) {
       buf_printf(b, "((void)fputs(sp_%s_inspect(",
                  c->classes[ty_object_class(drt2)].c_name);
       emit_expr(c, recv, b);

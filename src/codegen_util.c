@@ -3660,7 +3660,7 @@ int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b) {
     free(e.p);
     return 1;
   }
-  const char *fn = slot == TY_STRING && prog_has_conv_method(c, "to_str", TY_STRING)
+  const char *fn = slot == TY_STRING && prog_has_conv_method(c, v, "to_str", TY_STRING)
                    ? "sp_poly_arg_str" : poly_rhs_unbox_fn(slot);
   if (!fn) return 0;
   buf_printf(b, "%s(", fn); emit_expr(c, v, b); buf_puts(b, ")");
@@ -6929,7 +6929,7 @@ int exc_text_override_calls_super(Compiler *c) {
   for (int i = 0; i < c->nclasses && c->exc_text_super == 1; i++) {
     if (!class_is_exc_subclass(c, i) && !class_is_exc_reopen(c, i)) continue;
     for (int k = 0; k < 2; k++) {
-      int mi = comp_method_in_class(c, i, k ? "to_s" : "message");
+      int mi = cplan_implied_target(c, -1, -1, i, k ? "to_s" : "message", CT_OWN, NULL);
       /* (--share-strings: one that answers a new String of its own,
          `"B:" + super`, never hands on super's answer, and one that
          publishes the handle it answers, `def message = super`, hands on

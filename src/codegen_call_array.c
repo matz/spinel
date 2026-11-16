@@ -8,6 +8,7 @@
    emitted nothing) to leave it to the chain after the lookup. */
 
 #include "codegen_internal.h"
+#include "implicit_calls.h"
 #include "repr.h"
 #include "holder.h"
 #include "codegen_poly.h"
@@ -1839,10 +1840,10 @@ typedef struct {
 
 /* A program object's no-argument to_ary. The existing dispatch selects a
    subclass override; its result is checked at the operand's turn. */
-static int concat_converter_mi(Compiler *c, TyKind t) {
+static int concat_converter_mi(Compiler *c, int op, TyKind t) {
   int cid = ty_object_class(t);
   if (c->classes[cid].is_value_type) return -1;
-  int mi = comp_implicit_to_ary_mi(c, cid);
+  int mi = cplan_to_ary_method(c, ic_operand_host(c, op), op, cid);
   return mi >= 0 && c->scopes[mi].nparams == 0 ? mi : -1;
 }
 
@@ -1858,7 +1859,7 @@ static int prepare_concat_operands(Compiler *c, const int *argv, int argc, Conca
        operand the AST rewrite (desugar_array_op_to_ary) does not take it,
        and the call raised NoMethodError. */
     if (ty_is_object(r.as_ty) && !conv_to_ary_misfit(c, r.as_ty)) {
-      int mi = concat_converter_mi(c, r.as_ty);
+      int mi = concat_converter_mi(c, argv[i], r.as_ty);
       if (mi < 0) return 0;
       out[i].conv_mi = mi;
       out[i].obj_ty = r.as_ty;

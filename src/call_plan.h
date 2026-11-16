@@ -90,6 +90,8 @@ typedef struct {
   const char *bowner;      /* UC_SUPER with no program method (mi -1): the builtin class or module whose method the super reaches (MethodLookup.bowner); in a class method, the owner of a definition hook (cplan_core_hook) */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */
+  unsigned char delegate_cut;   /* with delegate_undef: what the builtin answers before it calls the undefined delegate (BCUT_*, the delegate row's): the same object answers true (`==`, `===`) or false (`!=`), clamp's nil bounds and min above max answer as CRuby's */
+  unsigned char delegate_undef; /* mi is -1 and delegate (`<=>` behind a Comparable operator, `==` behind `!=` and `===`, or the operator's own name where the record proves it undefined itself) is a method the record proves undefined where the call runs (cplan_implied_target's MLW_RECORD): the call raises CRuby's NoMethodError naming it */
   int vis_cell;             /* the history cell + 1 whose visibility cell guards the call (a top-level def's visibility only the run tells, cplan_root_top_def), 0 for none */
 } CallPlan;
 
@@ -611,13 +613,22 @@ CallPlan cplan_const_user(Compiler *c, int id, int recv, int fresh);
    receiver and add members, and nothing here promises a set only grows. */
 enum { CPT_UNKNOWN = -1, CPT_MAX = 64 };
 int cplan_targets(Compiler *c, int id, int *out, int cap);
-/* The method the implied call `name` node id makes on operand op (a row
-   of tools/implied_calls.yml: a multiple assignment's to_ary of its value)
-   runs on an instance of cls: the version the record proves there, else an
-   entry whose every state finds a method; -1 otherwise, with *ml (may be
-   NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
-   (no row, or an undef on the chain) */
-int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
+/* The method the implied call `name` node id makes on operand op runs on
+   an instance of cls (side 0; CT_CMETHOD its class object, CT_OWN its own
+   method): the version the record proves there where a row of
+   tools/implied_calls.yml is planned for the call (a multiple assignment's
+   to_ary of its value), else an entry whose every state finds a method;
+   anything else the table's method (*ml ML_TABLE, or ML_METHOD where the
+   name has one version), so a reader of the implied call asks here and
+   reads no table of its own: a builtin's callback, a row not planned yet.
+   -1 with ML_NONE where the table has no method or an undef on the chain
+   provably ran before the site (an undef the record cannot place there leaves
+   the table's method, ML_TABLE). *ml may be NULL */
+int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *name, unsigned side, MethodLookup *ml);
+/* The #to_ary a call node id makes on its operand op, an instance of class
+   cid (rb_check_array_type), as cplan_implied_target answers it: -1 for an
+   Array subclass, which is an Array already and never calls its own. */
+int cplan_to_ary_method(Compiler *c, int id, int op, int cid);
 /* The method the builtin runs for node id on class ci: with name
    "initialize", the initialize Class#new runs when id (a `new` the
    program's `new` does not answer, a `raise K`) builds an instance of

@@ -1576,11 +1576,12 @@ static int sp_ev_backend_wait(int set, sp_ev_ready *out, int max, int tmo_ms) {
   int n = kevent(set, NULL, 0, evs, max, &ts);
   for (int i = 0; i < n; i++) {
     out[i].fd = (int)evs[i].ident;
-    /* EV_EOF is a peer that closed: readable (and writable, for a socket whose
-       other end is gone) exactly as POLLHUP is. EV_ERROR answers both so the
-       waiter's own read or write reports the error, which is what poll did. */
+    /* EV_EOF is a peer that closed its side of this filter's direction, so it
+       answers that direction only, as epoll's EPOLLIN does for a peer that
+       stopped sending. EV_ERROR answers both so the waiter's own read or
+       write reports the error, which is what poll did. */
     short r = (evs[i].filter == EVFILT_WRITE) ? POLLOUT : POLLIN;
-    if (evs[i].flags & (EV_EOF | EV_ERROR)) r = POLLIN | POLLOUT;
+    if (evs[i].flags & EV_ERROR) r = POLLIN | POLLOUT;
     out[i].rev = r;
   }
   return n;

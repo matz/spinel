@@ -21598,9 +21598,10 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
     const char *cn = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? key_name(c, r) : NULL;
     int k = cn ? const_node_class_index(c, r) : -1;
-    int mi = k >= 0 ? call_target(c, id, k, nm, CT_CMETHOD, NULL) : -1;
-    /* (a call the plan compiles to the accessor's slot reaches nothing) */
-    if (cplan_sg_slot_call(c, id, k, nm, mi)) names[0] = NULL;
+    MethodLookup ml = { .def_class = -1 };
+    int mi = k >= 0 ? call_target(c, id, k, nm, CT_CMETHOD, &ml) : -1;
+    /* (a call the plan compiles to the accessor's slot reaches nothing, nor does the builtin's own method of the name) */
+    if (cplan_sg_slot_call(c, id, k, nm, mi) || (mi < 0 && ml.kind == ML_BUILTIN)) names[0] = NULL;
     else if (mi >= 0) { snprintf(resolved, sizeof resolved, "\x01%d", mi); names[0] = resolved; }
   }
   /* a call on main that finds main's own method reaches that one, not an

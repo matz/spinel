@@ -84,3 +84,20 @@ class H
 end
 p H.new.go
 p((H.new.xk rescue $!.class))
+
+# a blank slate's chain stops at BasicObject: a module Object includes is
+# not among its ancestors, so its own include of the module stands ahead of
+# its superclass's def
+module BM
+  def bf = :m
+end
+class Object
+  include BM
+end
+class BB < BasicObject
+  def bf = :b
+end
+class BC < BB
+  include ::BM
+end
+p BC.new.bf

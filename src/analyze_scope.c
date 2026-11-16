@@ -8257,11 +8257,12 @@ static int mixin_already_brought(Compiler *c, int ci, int mod, LrMixKind kind, c
   }
   free(seen);
   /* A method of the module (an include at statement stmt asks it of each): the module is among Object's
-     ancestors there, and the class's chain answers the method's name at that point with another definition than the
-     module's (a superclass's, another module's in front, a top-level def already run): the include adds nothing
-     for it, as for a module among the ancestors */
+     ancestors there, the class's chain reaches Object (no blank slate, whose chain stops at BasicObject), and it
+     answers the method's name at that point with another definition than the module's (a superclass's, another
+     module's in front, a top-level def already run): the include adds nothing for it, as for a module among the
+     ancestors */
   if (!brought && method && kind == LR_INCLUDE && stmt >= 0 && !comp_class_is_module(c, &c->classes[ci]) &&
-      ci != comp_core_class(c, CORE_OBJECT) && method->name) {
+      ci != comp_core_class(c, CORE_OBJECT) && !class_is_blank_slate(c, ci) && method->name) {
     LoadPoint at = elab_point_of(c, stmt);
     const LrDef *d = NULL;
     const char *nm = comp_scope_user_name(method);

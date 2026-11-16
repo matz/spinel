@@ -559,6 +559,11 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
 #define BOPX_PROMOTE 1  /* --int-overflow=promote */
 #define BOPX_KEPT    2  /* a blockless combination & co. whose position keeps
                            the tuples as an Array (an_blockless_tuples_kept) */
+#define BOPX_BOXED_USE 4 /* an index query of a typed Array in a program
+                           that reads an Integer with a call nil answers
+                           otherwise -- `& | ^`, `method`, ...
+                           (an_int_nil_sensitive_use): it answers boxed, as it
+                           did before it answered the oint */
 
 /* The BOPF_BOXED row of kind rt for `name`, or NULL. */
 const BuiltinOp *bop_find_boxed(TyKind rt, const char *name, int argc, int has_block);

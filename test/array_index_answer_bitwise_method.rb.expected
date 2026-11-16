@@ -1,0 +1,20 @@
+&: false
+|: true
+^: true
+(idx) &: false
+method: "nil"
+local &: false
+local method: ""
+local +: 1
+str &: false
+flt |: true
+plain +: 1
+found: 1
+op-assign: false
+param: false
+ivar: true
+copy: true
+block param: false
+masgn: [false, 1]
+clone kw: nil
+sum block: NoMethodError: undefined method '+' for nil

@@ -3472,6 +3472,9 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
     return argc == 1 ? fold_sum_type(arg_of(ud, 0), ty_array_elem(rt), facts & BOPX_PROMOTE) : TY_UNKNOWN;
   case (int)BOPR_ARRAY_TUPLES:
     return rt == TY_POLY_ARRAY && !(facts & BOPX_KEPT) ? TY_ENUMERATOR : bop_result(op, rt);
+  case (int)BOPR_ARRAY_INDEX:
+    return (facts & BOPX_BOXED_USE) && (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY)
+           ? TY_POLY : bop_result(op, rt);
   case (int)BOPR_ARRAY_PLUS:
   case (int)BOPR_ARRAY_SETOP:
     break;

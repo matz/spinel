@@ -3476,9 +3476,95 @@ TyKind an_bop_result(Compiler *c, const BuiltinOp *op, TyKind rt, int id, int ar
 /* The facts bop_result_args reads beside the operands' kinds: the build
    mode, and for a blockless combination & co. whether its position keeps
    the tuples. Inference and --plan-check ask the same. */
+/* Does the program read an Integer with a call nil answers otherwise than
+   an Integer does -- `x & y`, `|`, `^` and their op-assigns (false / true
+   for nil), `x.method(:m)` (nil's Method), `x.clone(freeze: ...)`, a typed
+   Array's `sum(seed) { }` -- by the types inference has so far? Then a typed
+   Array's index query answers boxed (BOPX_BOXED_USE), as it did before it
+   answered an Integer that may be nil: a nil answer can reach such a call
+   through any parameter, ivar, local or element, and the box dispatches it
+   as nil, where an Integer result had no room for nil's false or true.
+   Boxing those calls wherever an Integer only may be nil instead would box
+   the bit operations of hot paths. Once seen it holds for the rest of the
+   analysis (a latch): the boxed answers it makes may retype the very
+   receiver that showed it, and the fixpoint must not swing back. A
+   `method` call latches by its name alone (any receiver), as its helpers
+   are laid out before the latch could flip on a type. */
+static const NodeTable *g_ibx_nt;
+static int g_ibx_latched;
+static int is_bit_op_name(const char *n) { return n && (sp_streq(n, "&") || sp_streq(n, "|") || sp_streq(n, "^")); }
+static int an_int_nil_sensitive_use(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (g_ibx_nt != nt) { g_ibx_nt = nt; g_ibx_latched = 0; }
+  if (g_ibx_latched) return 1;
+  static const char *const names[] = { "&", "|", "^", "method", "public_method", "clone", "sum", NULL };
+  for (int k = 0; names[k]; k++)
+    for (int cl = an_calls_named_first(c, names[k]); cl >= 0; cl = an_calls_named_next(cl)) {
+      int r = nt_ref(nt, cl, "receiver");
+      if (r < 0) continue;
+      int an = nt_ref(nt, cl, "arguments"), n = 0;
+      const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
+      int hit;
+      if (k <= 2) hit = n == 1 && comp_ntype(c, r) == TY_INT;
+      /* (`method` by its name alone, from the first round: the bound
+         method's helpers are laid out from the receiver's type as it is
+         first seen, and a receiver boxed later found none for its class) */
+      else if (k <= 4) hit = n >= 1;
+      else if (k == 5) hit = n >= 1 && comp_ntype(c, r) == TY_INT;
+      else hit = n == 1 && nt_ref(nt, cl, "block") >= 0 && av && comp_ntype(c, av[0]) == TY_INT &&
+                 (comp_ntype(c, r) == TY_INT_ARRAY || comp_ntype(c, r) == TY_FLOAT_ARRAY);
+      if (hit) return g_ibx_latched = 1;
+    }
+  /* ... and a method of the program's that an Integer finds in its chain
+     (Integer's own, Numeric's, Object's, a module's it includes) under a
+     name nil answers too, a builtin's (`class Integer; def itself = 7`) or
+     one of the program's in nil's chain (Object's, NilClass's, a module
+     NilClass includes): a nil answer calls nil's own */
+  { int ic = comp_core_class(c, CORE_INTEGER), nc = comp_core_class(c, CORE_NILCLASS),
+        oc = comp_core_class(c, CORE_OBJECT);
+    static const char *const nil_own[] = { "to_a", "to_h", "to_i", "to_f", "to_r", "to_c", "rationalize",
+                                          "to_s", "inspect", "nil?", "=~", "!", NULL };
+    for (int mi = 1; ic >= 0 && mi < c->nscopes; mi++) {
+      const Scope *ms = &c->scopes[mi];
+      if (ms->class_id < 0 || ms->is_cmethod || ms->def_node < 0 || !ms->name) continue;
+      /* (an Integer's own finding, not Object's: a top-level def is
+         Object's, and an Integer and nil both call that one) */
+      int imi = comp_method_in_chain(c, ic, ms->name, NULL);
+      if (imi < 0 || c->scopes[imi].class_id == oc) continue;
+      int own = object_public_method_name(ms->name) || (nc >= 0 && comp_method_in_chain(c, nc, ms->name, NULL) >= 0) ||
+                (oc >= 0 && comp_method_in_chain(c, oc, ms->name, NULL) >= 0);
+      for (int q = 0; !own && nil_own[q]; q++) own = sp_streq(ms->name, nil_own[q]);
+      if (own) return g_ibx_latched = 1;
+    } }
+  /* ... and `& | ^` named by a Symbol: a fold (`[x, 1].reduce(:&)`) or a
+     block-pass (`&:|`) */
+  { static const char *const folds[] = { "reduce", "inject", NULL };
+    for (int k = 0; folds[k]; k++)
+      for (int cl = an_calls_named_first(c, folds[k]); cl >= 0; cl = an_calls_named_next(cl)) {
+        int an = nt_ref(nt, cl, "arguments"), n = 0;
+        const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
+        for (int j = 0; av && j < n; j++)
+          if (nt_kind(nt, av[j]) == NK_SymbolNode && is_bit_op_name(nt_str(nt, av[j], "value"))) return g_ibx_latched = 1;
+      }
+    NT_FOREACH_KIND(nt, NK_BlockArgumentNode, ba) {
+      int e = nt_ref(nt, ba, "expression");
+      if (e >= 0 && nt_kind(nt, e) == NK_SymbolNode && is_bit_op_name(nt_str(nt, e, "value"))) return g_ibx_latched = 1;
+    } }
+  static const NodeKind opw[] = { NK_LocalVariableOperatorWriteNode, NK_InstanceVariableOperatorWriteNode,
+                                  NK_ClassVariableOperatorWriteNode, NK_GlobalVariableOperatorWriteNode,
+                                  NK_IndexOperatorWriteNode, NK_CallOperatorWriteNode, NK_ConstantOperatorWriteNode };
+  for (size_t q = 0; q < sizeof opw / sizeof opw[0]; q++) NT_FOREACH_KIND(nt, opw[q], w) {
+    const char *op = nt_str(nt, w, "binary_operator");
+    if (op && (sp_streq(op, "&") || sp_streq(op, "|") || sp_streq(op, "^")) && comp_ntype(c, w) == TY_INT)
+      return g_ibx_latched = 1;
+  }
+  return 0;
+}
+
 int an_bop_facts(Compiler *c, const BuiltinOp *op, int id) {
   return (g_promote_mode ? BOPX_PROMOTE : 0) |
-         (op->result == BOPR_ARRAY_TUPLES && an_blockless_tuples_kept(c, id) ? BOPX_KEPT : 0);
+         (op->result == BOPR_ARRAY_TUPLES && an_blockless_tuples_kept(c, id) ? BOPX_KEPT : 0) |
+         (op->result == BOPR_ARRAY_INDEX && an_int_nil_sensitive_use(c) ? BOPX_BOXED_USE : 0);
 }
 
 /* Does the program give a builtin class or module (String, Comparable,

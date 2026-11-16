@@ -10445,6 +10445,19 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      splice its text (so a literal/complex receiver isn't rebuilt). */
   if (!(recv >= 0 && (rt == TY_STRING || rt == TY_INT || rt == TY_FLOAT))) return 0;
   if (rt == TY_STRING && str_partition_shared(c, id, b, name, recv, argc, argv)) { *out = 1; return 1; }
+  /* `x.to_s(base)` on an Integer that may be nil: nil's to_s takes no
+     argument, so a nil one is its ArgumentError, the receiver and the base
+     run first */
+  if (rt == TY_INT && sp_streq(name, "to_s") && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      a0 == TY_INT && cmp_operand_may_be_nil(c, recv) && node_is_oint(c, recv) &&
+      cplan_user(c, id).mi < 0 && cplan_user(c, id).dispatch == CP_NONE) {
+    int tr = ++g_tmp, tb = ++g_tmp;
+    buf_printf(b, "({ sp_oint _t%d = ", tr); emit_oint_expr(c, recv, TY_INT, b);
+    buf_printf(b, "; sp_int _t%d = ", tb); emit_int_expr(c, argv[0], b);
+    buf_printf(b, "; if (_t%d.nil) sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given 1, expected 0)\"); "
+                  "sp_int_to_s_base(_t%d.v, _t%d); })", tr, tr, tb);
+    *out = 1; return 1;
+  }
   /* --share-strings: an encoding mutator over a call that hands on a handle
      takes that handle alone: the receiver's read made below first would run
      the call a second time (the arm itself uses the handle) */

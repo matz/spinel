@@ -2429,8 +2429,8 @@ int emit_cmethod_setter_assign(Compiler *c, int id, Buf *b) {
 
 /* JSON.parse's options hash `kwh` asks for `object_class: OpenStruct`, with
    ostruct required: every object of the document is then an OpenStruct,
-   deep, as CRuby's parser makes it (sp_json_ostructify). Another
-   object_class is not read. The class facts take the answer from here too
+   deep, as CRuby's parser makes it (sp_json_ostructify). Other non-default
+   object_class values are refused. The class facts take the answer from here too
    (analyze_cls.c). */
 int json_parse_ostruct_opts(Compiler *c, int kwh) {
   const NodeTable *nt = c->nt;
@@ -2448,7 +2448,7 @@ static void emit_json_parse_call(Compiler *c, const NativeFunc *nf, int argc, co
     int t = ++g_tmp;
     buf_printf(b, "({ const char *_t%d = ", t); emit_str_expr(c, argv[0], b);
     buf_printf(b, "; SP_GC_ROOT_STR(_t%d); sp_json_parse_options(_t%d, ", t, t); emit_boxed(c, argv[1], b);
-    buf_puts(b, "); })");
+    buf_printf(b, ", %d); })", json_parse_ostruct_opts(c, argv[1]));
   }
 }
 

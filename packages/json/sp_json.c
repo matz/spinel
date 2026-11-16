@@ -590,6 +590,8 @@ const char *sp_json_pretty(sp_RbVal v) {
 typedef struct { const char *key; size_t len; } jkey;
 typedef struct {
   const char *p, *end;
+  const char *start;
+  int allow_duplicate_key;
   sp_int max_nesting;           /* zero disables the nesting check */
   int in_array;                 /* arrays open around the read */
   int nkeys; jkey keys[JP_KEYS];   /* by length, then bytes */
@@ -598,6 +600,16 @@ typedef struct {
 
 static SP_NORETURN void jp_err(const char *msg) {
   sp_raise_cls("JSON::ParserError", msg);
+}
+static const char *jp_position(jrd *j, const char *at) {
+  int line = 1, column = 1;
+  for (const char *p = j->start; p < at; p++) {
+    if (*p == '\n') { line++; column = 1; }
+    else column++;
+  }
+  /* json 2.18.0's backward scan omits the nearest newline from the line count. */
+  if (line > 1) line--;
+  return sp_sprintf(" at line %d column %d", line, column);
 }
 static void jp_ws(jrd *j) {
   while (j->p < j->end) {
@@ -849,10 +861,17 @@ static sp_RbVal jp_array(jrd *j, int depth) {
   }
   return box;
 }
+static void jp_duplicate(jrd *j, const char *at, const char *key) {
+  const char *name = sp_poly_inspect_fn(sp_box_str(key)); SP_GC_ROOT_STR(name);
+  const char *position = jp_position(j, at); SP_GC_ROOT_STR(position);
+  jp_err(sp_sprintf("duplicate key %s%s", name, position));
+}
 static sp_RbVal jp_object(jrd *j, int depth) {
+  const char *start = j->p;
   j->p++;  /* '{' */
   sp_RbVal box = sp_json_mk_hash_fn();
   SP_GC_ROOT_RBVAL(box);
+  const char *duplicate = NULL; SP_GC_ROOT_STR(duplicate);
   jp_ws(j);
   if (j->p < j->end && *j->p == '}') { j->p++; return box; }
   jp_check_nesting(j, depth);
@@ -864,13 +883,16 @@ static sp_RbVal jp_object(jrd *j, int depth) {
     if (j->p >= j->end || *j->p != ':') jp_err("expected ':' in object");
     j->p++;
     sp_RbVal v = jp_value(j, depth + 1);
+    sp_int before = sp_json_len_fn(box);
     sp_json_hash_set_fn(box, key, v);
+    if (!j->allow_duplicate_key && !duplicate && before == sp_json_len_fn(box)) duplicate = key;
     jp_ws(j);
     if (j->p >= j->end) jp_err("unterminated object");
     if (*j->p == ',') { j->p++; continue; }
     if (*j->p == '}') { j->p++; break; }
     jp_err("expected ',' or '}' in object");
   }
+  if (duplicate) jp_duplicate(j, start, duplicate);
   return box;
 }
 static sp_RbVal jp_value(jrd *j, int depth) {
@@ -887,7 +909,7 @@ static sp_RbVal jp_value(jrd *j, int depth) {
   jp_err("unexpected character");
 }
 
-sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting) {
+sp_RbVal sp_json_parse_duplicates(const char *s, sp_int max_nesting, int allow_duplicate_key) {
   /* The reader walks `s` in place while the parse allocates every container
      and string it builds, so the input has to stay rooted for the whole walk:
      a caller passing it straight in (`JSON.parse File.read path`) holds it in
@@ -899,13 +921,18 @@ sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting) {
   SP_GC_ROOT_RBVAL(held);
   jrd j;
   j.max_nesting = max_nesting;
+  j.allow_duplicate_key = allow_duplicate_key;
   j.in_array = 0; j.nkeys = 0; j.held = &held;
   j.p = s ? s : "";
+  j.start = j.p;
   j.end = j.p + (s ? sp_str_byte_len(s) : 0);
   sp_RbVal v = jp_value(&j, 0);
   jp_ws(&j);
   if (j.p != j.end) jp_err("unexpected trailing characters");
   return v;
+}
+sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting) {
+  return sp_json_parse_duplicates(s, max_nesting, 1);
 }
 
 sp_RbVal sp_json_parse(const char *s) { return sp_json_parse_limit(s, SP_JSON_MAX_NESTING); }

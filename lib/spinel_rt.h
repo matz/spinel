@@ -17410,18 +17410,32 @@ static sp_RbVal sp_json_symbolize(sp_RbVal v) {
   return v;
 }
 extern sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting);
-static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options) {
+extern sp_RbVal sp_json_parse_duplicates(const char *s, sp_int max_nesting, int allow_duplicate_key);
+static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options, int ostruct) {
   SP_GC_ROOT_STR(s); SP_GC_ROOT_RBVAL(options);
   sp_int limit = 100;
   sp_bool symbolize = FALSE;
+  sp_bool duplicates = TRUE;
   sp_sym nesting_key = sp_json_sym_intern_fn("max_nesting"), symbol_key = sp_json_sym_intern_fn("symbolize_names");
   for (sp_int i = 0; options.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(options.cls_id) && i < sp_poly_length(options); i++) {
     sp_RbVal key, value; sp_poly_hash_pair(options, i, &key, &value);
     if (key.tag != SP_TAG_SYM) continue;
     if (key.v.i == nesting_key) limit = sp_json_nesting_limit(value);
     else if (key.v.i == symbol_key) symbolize = sp_poly_truthy(value);
+    else if (key.v.i == sp_json_sym_intern_fn("allow_duplicate_key")) duplicates = sp_poly_truthy(value);
+    else if (key.v.i == sp_json_sym_intern_fn("on_load") ||
+             (key.v.i == sp_json_sym_intern_fn("create_additions") && sp_poly_truthy(value)) ||
+             (key.v.i == sp_json_sym_intern_fn("array_class") && sp_poly_truthy(value) &&
+              !(value.tag == SP_TAG_CLASS && !strcmp(sp_class_val_name(value), "Array"))) ||
+             (key.v.i == sp_json_sym_intern_fn("decimal_class") && sp_poly_truthy(value) &&
+              !(value.tag == SP_TAG_CLASS && !strcmp(sp_class_val_name(value), "Float"))) ||
+             (key.v.i == sp_json_sym_intern_fn("object_class") &&
+             (sp_poly_truthy(value) && !(value.tag == SP_TAG_CLASS &&
+               (!strcmp(sp_class_val_name(value), "Hash") ||
+                (ostruct && !strcmp(sp_class_val_name(value), "OpenStruct")))))))
+      sp_raise_cls("ArgumentError", sp_sprintf("unsupported JSON.parse option: %s", sp_sym_name_fn((sp_sym)key.v.i)));
   }
-  sp_RbVal value = sp_json_parse_limit(s, limit);
+  sp_RbVal value = sp_json_parse_duplicates(s, limit, duplicates);
   return symbolize ? sp_json_symbolize(value) : value;
 }
 /* JSON.parse(object_class: OpenStruct): every parsed object becomes an

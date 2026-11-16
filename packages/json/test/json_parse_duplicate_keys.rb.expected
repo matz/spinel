@@ -1,0 +1,18 @@
+duplicate key "x" at line 1 column 1
+duplicate key "x" at line 1 column 1
+duplicate key "x" at line 1 column 1
+{"x" => 2}
+duplicate key "x" at line 1 column 1
+duplicate key "x" at line 1 column 1
+duplicate key "a\n" at line 1 column 1
+JSON::ParserError
+duplicate key "é" at line 1 column 3
+duplicate key "b" at line 1 column 1
+{"a" => 1, "b" => [{"a" => 2}, {"a" => 3}]}
+[{"a" => 1}, {"a" => 2}]
+duplicate key "y" at line 1 column 6
+duplicate key "" at line 1 column 1
+{"x" => 2}
+duplicate key "x" at line 1 column 1
+duplicate key "x" at line 1 column 7
+duplicate key "a\u0000b" at line 1 column 1

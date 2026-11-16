@@ -187,7 +187,6 @@ int refl_im_params_used(Compiler *c);
 int emit_refl_im_params_call(Compiler *c, int id, Buf *b);
 void emit_refl_im_params(Compiler *c, Buf *b);
 void emit_refl_method_defined(Compiler *c, Buf *b);
-int rt_probe_answer(Compiler *c, int id, int *yes);
 extern const char *const struct_names[];
 void emit_call_body(Compiler *c, int id, Buf *b);
 void emit_ffi_callback_arg(Compiler *c, int cbidx, int argnode, Buf *out);

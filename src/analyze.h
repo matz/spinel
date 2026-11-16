@@ -1219,10 +1219,11 @@ TyKind infer_type(Compiler *c, int id);
 /* Does a receiver of type `rt` have a real method named `name`, among the
    per-call-site-cloned generic Enumerable names (analyze_desugar.c's
    builtin_enum_name_index list) or transform_keys!/transform_values!?
-   Used by rt_probe_answer (codegen_call.c) for a respond_to? probe on
+   Used by rt_probe_answer (analyze_desugar.c) for a respond_to? probe on
    one of these names, which the one-shot rewrites that actually type
    them never reach (K-026 cause A). */
-int enum_builtin_responds(Compiler *c, const char *name, TyKind rt);
+int enum_builtin_responds(Compiler *c, int id, const char *name, TyKind rt);
+int rt_probe_answer(Compiler *c, int id, int *yes);   /* the respond_to? probes' answer: 1 when a probe types or a builtin receiver has the name (*yes); 0 where none was synthesized */
 int enum_unrename(NodeTable *nt, int id);
 /* empty infer_type's memo of earlier queries' answers: the start or end of
    a pass whose writes are not all counted (#8852) */

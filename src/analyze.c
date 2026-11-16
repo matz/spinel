@@ -14932,9 +14932,9 @@ int desugar_enum_method_recv(Compiler *c) {
       if (ocid < c->nclasses && c->classes[ocid].is_data) continue;
       /* a class without an #each that answers the name itself has the name
          it was called by back (detect, renamed to find by the pre-pass) */
-      if (qn != nm && !comp_enum_answers_first(c, ocid, qn)) { changed |= enum_unrename(nt, id); continue; }
+      if (qn != nm && !comp_enum_answers_first(c, id, ocid, qn)) { changed |= enum_unrename(nt, id); continue; }
       if (call_target(c, id, ocid, "__enum_to_a", CT_METHODS, NULL) < 0) continue;
-      if (!comp_enum_answers_first(c, ocid, qn)) continue;   /* the class's own */
+      if (!comp_enum_answers_first(c, id, ocid, qn)) continue;   /* the class's own */
       int selfn = nt_new_node(nt, "SelfNode");
       int wrap = nt_new_node(nt, "CallNode");
       if (selfn < 0 || wrap < 0) continue;
@@ -15210,7 +15210,7 @@ int desugar_enum_method_recv(Compiler *c) {
       changed = 1;
       continue;
     }
-    if (!comp_enum_answers_first(c, cid, qn)) { changed |= enum_unrename(nt, id); continue; }   /* class defines it */
+    if (!comp_enum_answers_first(c, id, cid, qn)) { changed |= enum_unrename(nt, id); continue; }   /* class defines it */
     /* minmax only where Enumerable really is: a Struct, or a class that mixes
        it in, itself, through a superclass or through an included module
        (whose own minmax builtins/enumerable.rb also answers); a class with a
@@ -16026,7 +16026,7 @@ static int desugar_multi_yield_map_param(Compiler *c) {
         (c->classes[cid].enum_yield_arity <= 1 && !c->classes[cid].enum_yield_packed)) continue;
     /* a map the program defines takes what it yields, not what #each does,
        unless Enumerable's comes first in the receiver's ancestors */
-    if (call_target(c, id, cid, nm, 0, NULL) >= 0 && !comp_enum_answers_first(c, cid, nm)) continue;
+    if (call_target(c, id, cid, nm, 0, NULL) >= 0 && !comp_enum_answers_first(c, id, cid, nm)) continue;
     int packed = c->classes[cid].enum_yield_packed;
     if (packed && comp_method_in_chain(c, cid, "__enum_to_a_raw", NULL) < 0) continue;
     int bp = nt_ref(nt, blk, "parameters");

@@ -2814,8 +2814,9 @@ int        comp_is_own_reader(ClassInfo *ci, const char *name);
 /* Whether a call named `name` on an instance of class cid, which has an
    #each, is Enumerable's: no method or reader of the program's comes before
    Enumerable in Ruby's lookup order. 0 when the program's answers first. */
-int        comp_enum_answers_first(Compiler *c, int cid, const char *name);
-int        comp_comparable_answers_first(Compiler *c, int cid, const char *name);
+/* id: the call whose name is asked of cid (-1: none) */
+int        comp_enum_answers_first(Compiler *c, int id, int cid, const char *name);
+int        comp_comparable_answers_first(Compiler *c, int id, int cid, const char *name);
 int        comp_comparable_reaches(Compiler *c, int cid);
 int        comp_enum_reaches(Compiler *c, int cid);   /* Enumerable among its ancestors */
 int        class_builtin_parent(Compiler *c, int cid);   /* codegen.c: the builtin class above the user chain of the class */

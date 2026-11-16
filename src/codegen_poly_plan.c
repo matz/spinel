@@ -889,7 +889,7 @@ void emit_poly_enum_includer_arms0(Compiler *c, int id, const char *name, TyKind
     int armed = 0;
     for (int i = 0; p && i < p->n && !armed; i++) armed = p->arm[i].key == k;
     char elems[320];
-    if (armed || !comp_enum_reaches(c, k) || !comp_enum_answers_first(c, k, name) ||
+    if (armed || !comp_enum_reaches(c, k) || !comp_enum_answers_first(c, id, k, name) ||
         !obj_each_elems_text(c, k, v, elems, sizeof elems)) continue;
     char pcall[512];
     snprintf(pcall, sizeof pcall, "sp_poly_enum_proc(%s, %s, _t%d)", elems, op, blk_tmp0);

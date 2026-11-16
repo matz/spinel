@@ -2466,7 +2466,7 @@ int comp_arysub_name_is_array(Compiler *c, int id, int cid, const char *n) {
   MethodLookup ml = { .def_class = -1 };
   int ro = comp_arysub_reopen(c, cid);
   if (((call_target(c, id, cid, n, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) ||
-       comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, cid, n)) return 0;
+       comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, id, cid, n)) return 0;
   char base[256];
   if (setter_base_name(n, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return 0;
   /* != is BasicObject's, which calls == and negates it: a class with its
@@ -3863,9 +3863,9 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
     if (r) return r;
   }
 }
-static int mixin_answers_first(Compiler *c, int cid, const char *name, int comparable) {
-  /* what master answers: the program's method or reader anywhere in the chain */
-  int master = !call_answers(c, -1, cid, name, CT_SHARED, NULL);
+static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, int comparable) {
+  /* what master answers: the program's method or reader anywhere in the chain, whatever its visibility */
+  int master = !call_answers(c, id, cid, name, CT_NOFACE, NULL);
   if (cid < 0 || cid >= c->nclasses || !name) return master;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
   if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return master;
@@ -3897,11 +3897,11 @@ static int mixin_answers_first(Compiler *c, int cid, const char *name, int compa
   return master;
 }
 
-int comp_enum_answers_first(Compiler *c, int cid, const char *name) {
-  return mixin_answers_first(c, cid, name, 0);
+int comp_enum_answers_first(Compiler *c, int id, int cid, const char *name) {
+  return mixin_answers_first(c, id, cid, name, 0);
 }
-int comp_comparable_answers_first(Compiler *c, int cid, const char *name) {
-  return mixin_answers_first(c, cid, name, 1);
+int comp_comparable_answers_first(Compiler *c, int id, int cid, const char *name) {
+  return mixin_answers_first(c, id, cid, name, 1);
 }
 /* Enumerable reaches class cid through it or a superclass: a subclass of a
    class that includes it (Journey's Cat < Binary < Node) answers its

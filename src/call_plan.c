@@ -1621,7 +1621,8 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
      const char * helper, so call it directly (#3868) */
   if (own < 0 && is_message_name(name)) {
     int mi8 = call_target(c, -1, xcm, "message", CT_METHODS | CT_SHARED, NULL);
-    if (mi8 < 0) mi8 = call_target(c, -1, xcm, "to_s", CT_METHODS | CT_SHARED, NULL);
+    /* (Exception#message's to_s, a callback the call makes on its receiver: asked at the call) */
+    if (mi8 < 0) mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "to_s", 0, NULL);
     if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
         (TyKind)c->scopes[mi8].ret != TY_UNKNOWN)
       own = mi8;

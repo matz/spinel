@@ -7814,7 +7814,7 @@ static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const 
        than a String carries that value out: the string-typed helper answered
        the stored message (the class name) instead (#3868). */
     if (sp_streq(name, "message") && ty_is_object(rt)) {
-      int mi8 = comp_method_in_chain(c, ty_object_class(rt), "to_s", NULL);
+      int mi8 = cplan_implied_target(c, id, recv, ty_object_class(rt), "to_s", 0, NULL);
       if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
           (TyKind)c->scopes[mi8].ret != TY_UNKNOWN)
         { *out = (TyKind)c->scopes[mi8].ret; return 1; }
@@ -13303,7 +13303,7 @@ int exc_message_super_to_s(Compiler *c, int id, int *out, int cap) {
   if (exc_reopen_definers(c, "to_s", xr, 8) > 0) wide = 1;
   for (int k = 0; k < c->nclasses; k++) {
     if (k != cid && !is_descendant(c, k, cid)) continue;
-    int mi = comp_method_in_chain(c, k, "to_s", NULL);
+    int mi = cplan_implied_target(c, id, -1, k, "to_s", 0, NULL);
     if (mi < 0) continue;
     if ((TyKind)c->scopes[mi].ret != TY_STRING && (TyKind)c->scopes[mi].ret != TY_UNKNOWN) return -2;
     int seen = 0;

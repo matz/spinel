@@ -3265,8 +3265,8 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
        boxed sp_poly_to_s default would print the bare-object form */
     TyKind drt2 = comp_ntype(c, recv);
     if (ty_is_object(drt2) && c->classes[ty_object_class(drt2)].is_struct &&
-        comp_method_in_chain(c, ty_object_class(drt2), "to_s", NULL) < 0 &&
-        comp_method_in_chain(c, ty_object_class(drt2), "inspect", NULL) < 0) {
+        cplan_implied_target(c, id, recv, ty_object_class(drt2), "to_s", 0, NULL) < 0 &&
+        cplan_implied_target(c, id, recv, ty_object_class(drt2), "inspect", 0, NULL) < 0) {
       buf_printf(b, "((void)fputs(sp_%s_inspect(",
                  c->classes[ty_object_class(drt2)].c_name);
       emit_expr(c, recv, b);

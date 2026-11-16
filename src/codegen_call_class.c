@@ -1095,10 +1095,15 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          poly receiver */
       /* an Enumerator's next, peek, next_values, peek_values and feed
          (respond_to_static_answer): a chain or a product has none of them */
-      if (recv >= 0 && rt == TY_ENUMERATOR) {
+      /* (only those names: any other the answer above leaves open is the
+         run time's; an include_all that acts runs once, after the receiver) */
+      if (recv >= 0 && rt == TY_ENUMERATOR && is_enum_cursor_name(qm)) {
         int tv = ++g_tmp;
         buf_printf(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(({ sp_Enumerator *_t%d = " : "({ sp_Enumerator *_t%d = ", tv);
         emit_expr(c, recv, b);
+        if (argc >= 2 && !order_operand_inert(c, id, argv[1], 0)) {
+          buf_printf(b, "; SP_GC_ROOT(_t%d); (void)(", tv); emit_expr_for_effect(c, argv[1], b); buf_puts(b, ")");
+        }
         buf_printf(b, "; (sp_bool)(_t%d && !_t%d->is_chain && !_t%d->is_product); })", tv, tv, tv);
         if (repr_of(c, id).kind == RK_BOXED) buf_puts(b, ")");
         return 1;

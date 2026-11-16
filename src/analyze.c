@@ -55748,13 +55748,17 @@ static void an_phase_value_types(Compiler *c) {
        freeze can hit any boxable instance, so it marks every class. */
     if (ty_k == NK_CallNode) {
       const char *fzn = nt_str(c->nt, id, "name");
-      if (fzn && (is_freeze_family(fzn))) {
+      /* `o.clone(freeze: true)` freezes the copy, an instance of o's class:
+         any argument may carry freeze: (a keyword, a splat or a run-time
+         value), so a clone with arguments counts as a freeze */
+      int fz_clone = fzn && sp_streq(fzn, "clone") && nt_ref(c->nt, id, "arguments") >= 0;
+      if (fzn && (is_freeze_family(fzn) || fz_clone)) {
         int frecv = nt_ref(c->nt, id, "receiver");
         int q = -1;
         if (frecv >= 0) {
           TyKind frt = comp_ntype(c, frecv);
           if (ty_is_object(frt)) q = ty_object_class(frt);
-          else if (frt == TY_POLY && sp_streq(fzn, "freeze"))
+          else if (frt == TY_POLY && (sp_streq(fzn, "freeze") || fz_clone))
             /* a poly-receiver freeze can hit any class's instance, so every
                class must carry the GC-header frozen bit -- disqualify them all
                from the by-value layout too, matching the single-class path */

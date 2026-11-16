@@ -123,7 +123,6 @@ int obj_cmp_by_identity(TyKind t);
 int object_defines_cmp(Compiler *c);
 int any_class_defines(Compiler *c, const char *qm);
 int any_class_responds(Compiler *c, const char *qm);
-int class_implicit_responds(Compiler *c, int cid, const char *qm);
 int class_struct_kind(Compiler *c, int cid);
 int class_value_responds(Compiler *c, int tv, const char *qm, Buf *b);
 void class_value_responds_runtime(int tv, Buf *b);
@@ -187,7 +186,6 @@ int refl_im_params_used(Compiler *c);
 int emit_refl_im_params_call(Compiler *c, int id, Buf *b);
 void emit_refl_im_params(Compiler *c, Buf *b);
 void emit_refl_method_defined(Compiler *c, Buf *b);
-extern const char *const struct_names[];
 void emit_call_body(Compiler *c, int id, Buf *b);
 void emit_ffi_callback_arg(Compiler *c, int cbidx, int argnode, Buf *out);
 void emit_ffi_num_arg(Compiler *c, int arg, TyKind at, const char *spec, int dbl, Buf *b);
@@ -263,6 +261,7 @@ void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, Re
 void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b);
 void refl_at(ReflNames *r, int id, int cls, unsigned side);
 void refl_free(ReflNames *r);
+int refl_note(ReflNames *r, const char *m, int show);   /* r holds m once (1 when it was new) */
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv, int with_modules, ReflNames *r);
 void unhoist_dispatch_args(Compiler *c, int n, int *sv, int *vw);
 int emit_ctor_new_with_proc(Compiler *c, int id, int ci, Buf *b);

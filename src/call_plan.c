@@ -4869,6 +4869,21 @@ static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, in
          (comp_is_reader(k, name) && pr_accessor_own(c, cls, name, 0, 0)) ||
          (wr && comp_is_writer(k, base) && pr_accessor_own(c, cls, base, 1, 0)) || pr_alias(c, cls, side, name);
 }
+/* Does instance class cls answer name with no entry of its own, by what a mixin or a core class brings: the names of
+   Enumerable once it includes the module and has the `each` it serves (the synthesized __enum_to_a marks any yielding
+   `each`, include or not; a Struct is Enumerable without the line), Comparable's once it includes that module and
+   defines `<=>`, and the names a Struct and a Data carry from their core class. The names are asked first: every
+   candidate of a list asks this. */
+static int pr_implied(Compiler *c, int cls, unsigned side, const char *name) {
+  if ((side & CT_CMETHOD) || cls < 0) return 0;
+  int en = name_is_enumerable_module_method(name), cm = is_comparable_module_method(name);
+  int sk = class_struct_kind(c, cls);
+  if (!en && !cm && !is_struct_core_name(name, sk)) return 0;
+  if (en && comp_method_in_chain(c, cls, "__enum_to_a", NULL) >= 0 &&
+      (sk == 1 || class_mixes_in(c, cls, elab_module_named(c, "Enumerable"), 0))) return 1;
+  if (cm && comp_method_in_chain(c, cls, "<=>", NULL) >= 0 && class_is_comparable(c, cls)) return 1;
+  return is_struct_core_name(name, sk);
+}
 /* Does an undef_method of name stand on cls's chain, on the instance side (whatever builtin answers the name)? */
 static int pr_undef(Compiler *c, int cls, unsigned side, const char *name) {
   return !(side & CT_CMETHOD) && cls >= 0 && comp_is_undeffed_in_chain(c, cls, name);
@@ -4880,7 +4895,8 @@ static int pr_table(Compiler *c, int cls, unsigned side, const char *name, Cplan
   mtab_enter(c);
   int mi = ct_table(c, cls, name, side, NULL, NULL);
   *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, mi), .vis = ct_vis(c, cls, name, side),
-                          .undef = pr_undef(c, cls, side, name) };
+                          .undef = pr_undef(c, cls, side, name), .implied = pr_implied(c, cls, side, name),
+                          .sg_only = !(side & CT_CMETHOD) && cls >= 0 && comp_name_is_sg_alias_only(c, cls, name) };
   mtab_leave(c);
   return mi;
 }
@@ -4936,6 +4952,73 @@ int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *na
   CplanPresence pr;
   if (id < 0 || cls < 0 || !name || elab_chain_versions(c, cls, (side & CT_CMETHOD) != 0, name, vs, 1) == 0) return 0;
   return cplan_presence(c, id, cls, side, name, &pr) == PR_ABSENT && pr.table;
+}
+
+/* See call_plan.h. A chain lookup from class cls answers a scope owned by cls or one of its ancestors (chain_lookup:
+   an alias resumes at an ancestor, and the walk is up the parents), so only those scopes are asked, in the order every
+   scope was. The names are noted after the walk, outside the question's bracket: the reader's own reads stay its own. */
+void cplan_chain_names(Compiler *c, int cls, CplanNameFn fn, void *ud) {
+  unsigned char *anc = calloc((size_t)c->nclasses + 1, 1);
+  int *own = calloc((size_t)c->nscopes + 1, sizeof *own), nown = 0;
+  if (!anc || !own) cplan_oom();
+  mtab_enter(c);
+  for (int p = cls; p >= 0; p = c->classes[p].parent) anc[p] = 1;
+  for (int s = 0; s < c->nscopes; s++)
+    if (c->scopes[s].name && !c->scopes[s].is_cmethod && !c->scopes[s].is_proc_form &&
+        (c->scopes[s].class_id < 0 || (c->scopes[s].class_id < c->nclasses && anc[c->scopes[s].class_id])) &&
+        call_target(c, -1, cls, c->scopes[s].name, CT_METHODS, NULL) == s)
+      own[nown++] = s;
+  free(anc);
+  mtab_leave(c);
+  for (int q = 0; q < nown; q++) fn(ud, c->scopes[own[q]].name);
+  free(own);
+  for (int p = cls; p >= 0; p = c->classes[p].parent)
+    for (int m = 0; m < c->n_native_methods; m++)
+      if (c->native_methods[m].class_id == p && !c->native_methods[m].kind) fn(ud, c->native_methods[m].name);
+  for (int p = cls; p >= 0; p = c->classes[p].parent) {
+    ClassInfo *cl = &c->classes[p];
+    for (int r = 0; r < cl->nreaders; r++) fn(ud, cl->readers[r]);
+    for (int w = 0; w < cl->nwriters; w++) {
+      char wn[256];
+      snprintf(wn, sizeof wn, "%s=", cl->writers[w]);
+      fn(ud, wn);
+    }
+    for (int a = 0; a < cl->naliases; a++) {
+      mtab_enter(c);
+      int sg = comp_name_is_sg_alias_only(c, cls, cl->alias_new[a]);
+      mtab_leave(c);
+      if (!sg) fn(ud, cl->alias_new[a]);
+    }
+  }
+}
+/* See call_plan.h. */
+void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud) {
+  int *own = calloc((size_t)c->nscopes + 1, sizeof *own), nown = 0;
+  if (!own) cplan_oom();
+  mtab_enter(c);
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *os = &c->scopes[s];
+    if (!os->name || os->is_cmethod || os->is_proc_form || os->class_id != cls) continue;
+    if (call_target(c, -1, cls, os->name, CT_OWN, NULL) == s) own[nown++] = s;
+  }
+  mtab_leave(c);
+  for (int q = 0; q < nown; q++) fn(ud, c->scopes[own[q]].name);
+  free(own);
+  const ClassInfo *rc = &c->classes[cls];
+  for (int i = 0; i < rc->nreaders; i++) {
+    mtab_enter(c);
+    int shadowed = call_target(c, -1, cls, rc->readers[i], CT_OWN, NULL) >= 0;
+    mtab_leave(c);
+    if (!shadowed) fn(ud, rc->readers[i]);
+  }
+  for (int i = 0; i < rc->nwriters; i++) {
+    char nm[260];
+    if (snprintf(nm, sizeof nm, "%s=", rc->writers[i]) >= (int)sizeof nm) continue;
+    mtab_enter(c);
+    int shadowed = call_target(c, -1, cls, nm, CT_OWN, NULL) >= 0;
+    mtab_leave(c);
+    if (!shadowed) fn(ud, nm);
+  }
 }
 
 /* A candidate of a list: nm asked of cls on the list's side, with no site

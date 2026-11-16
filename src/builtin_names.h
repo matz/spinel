@@ -296,6 +296,7 @@ int is_format_alias(const char *n); /* format sprintf */
 int is_initialize_name(const char *n); /* initialize */
 int is_initialize_family(const char *n); /* initialize initialize_copy */
 int is_initialize_copy_name(const char *n); /* initialize_copy */
+int is_initialize_hook_name(const char *n); /* initialize initialize_copy initialize_clone initialize_dup: private on every class, defined or not */
 
 int is_iso8601_alias(const char *n); /* iso8601 xmlschema */
 int is_rfc2822_alias(const char *n);   /* rfc2822 rfc822 */
@@ -353,6 +354,7 @@ int is_basic_object_hook_name(const char *n); /* ...BasicObject's: singleton_met
 int is_const_added_name(const char *n); /* const_added */
 int is_method_missing_name(const char *n); /* method_missing respond_to_missing?: what a call of a name an object has no method by runs */
 extern const char METHOD_MISSING_NAME[];   /* "method_missing", the name a lookup of that method asks */
+int is_method_missing_method(const char *n);   /* method_missing itself, not respond_to_missing? (is_method_missing_name) */
 extern const char RESPOND_TO_MISSING_NAME[];   /* "respond_to_missing?", what a Method capture asks of a name it finds no method by */
 int definition_form_hooks(const char *form, int sg, const char **out); /* the hooks a definition form fires: included and append_features for include, method_added for attr_accessor, ... (up to 2) */
 int is_const_missing_name(const char *n); /* const_missing */
@@ -540,6 +542,9 @@ const char *builtin_bool_method_owner(const char *cls, const char *m);   /* ...a
 const char *builtin_function_owner(const char *m);   /* the module defining the function a receiverless method(:m) binds */
 extern const char RESPOND_TO_NAME[];   /* "respond_to?", the name a lookup of the calls that ask presence goes by */
 int is_respond_to_name(const char *n); /* respond_to?: does the receiver itself answer a name */
+extern const char *const struct_names[];   /* the names a Struct's instance answers from Struct (not a Data's), NULL-terminated */
+extern const char *const struct_core_names[];   /* the names a Struct and a Data answer from their core classes: members, to_h, deconstruct, deconstruct_keys, and Data's with */
+int is_struct_core_name(const char *n, int kind);   /* a name a Struct (kind 1) or a Data (kind 2) instance answers from its core class: members, to_h, deconstruct, deconstruct_keys, and Data#with or Struct's struct_names */
 int is_method_presence_query(const char *n); /* 1: respond_to? *method_defined? (public_)instance_method (public_)method; 2: (public_)instance_methods (public_)methods, answered for the whole program; 3: private_/protected_instance_methods, private_/protected_methods, singleton_methods, answered by the receiver's chain */
 int is_instance_method_list(const char *n); /* (public_|private_|protected_)instance_methods */
 int method_list_vis_mask(const char *n); /* the visibilities a method list shows, 1 << SP_VIS_* each: public and protected for instance_methods, methods, singleton_methods; the prefixed forms one; 0 for no list */
@@ -607,6 +612,7 @@ int is_math_module_name(const char *n);     /* Math */
 int is_native_decl_name(const char *n);     /* native_lib native_struct native_method ...: a module body's native binding declarations */
 int is_ffi_decl_name(const char *n);        /* ffi_lib attach_function attach_variable callback native_func ...: declarations made methods before the walk */
 int is_method_defined_query(const char *n); /* method_defined? public_/private_/protected_method_defined? */
+int method_defined_vis_mask(const char *n); /* the visibilities that query counts: 1 public, 2 protected, 4 private; 0 for any other name */
 int is_undef_method_name(const char *n);  /* undef_method */
 int is_remove_method_name(const char *n); /* remove_method */
 int is_check_funcall_name(const char *n);   /* respond_to? respond_to_missing? method_missing: what rb_check_funcall asks */

@@ -19720,35 +19720,6 @@ int class_struct_kind(Compiler *c, int cid) {
   return 0;
 }
 
-const char *const struct_names[] = {
-    "to_a", "values", "values_at", "dig", "each", "each_pair", "size",
-    "length", "[]", "[]=", NULL };
-/* The names an instance answers respond_to? for without an entry in its
-   class's method table: Enumerable's once the class includes the module
-   and has the `each` it serves (the synthesized __enum_to_a marks any
-   yielding `each`, include or not; a Struct is Enumerable without the
-   line), Comparable's once it includes that module and defines `<=>`, the
-   names a Struct and a Data carry from their core class. The typed fold
-   and the run-time check for a boxed receiver read this one list. The
-   Struct-only names are a Struct's, not a Data's, which answers none of
-   them in CRuby. */
-int class_implicit_responds(Compiler *c, int cid, const char *qm) {
-  if (comp_method_in_chain(c, cid, "__enum_to_a", NULL) >= 0 &&
-      name_is_enumerable_module_method(qm) &&
-      (class_struct_kind(c, cid) == 1 || class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0))) return 1;
-  if (comp_method_in_chain(c, cid, "<=>", NULL) >= 0 &&
-      is_comparable_module_method(qm) &&
-      class_is_comparable(c, cid)) return 1;
-  int sk = class_struct_kind(c, cid);
-  if (!sk) return 0;
-  if (sp_streq(qm, "members") || sp_streq(qm, "to_h") ||
-      sp_streq(qm, "deconstruct") || sp_streq(qm, "deconstruct_keys")) return 1;
-  if (sk == 2) return sp_streq(qm, "with");
-  for (int i = 0; struct_names[i]; i++) if (sp_streq(qm, struct_names[i])) return 1;
-  return 0;
-}
-
-
 /* A method in `cid`'s chain that reflection must not report: a
    compiler-synthesized helper, or a generated Struct iterator on a Data
    class. */
@@ -19762,7 +19733,7 @@ int method_hidden_from_reflection(Compiler *c, int cid, const char *m) {
 /* ReflNames: codegen_call_arms.h */
 
 /* (1 where m is new to r) */
-static int refl_note(ReflNames *r, const char *m, int show) {
+int refl_note(ReflNames *r, const char *m, int show) {
   for (int i = 0; i < r->n; i++) if (sp_streq(r->v[i], m)) return 0;
   if (r->n >= r->cap) {
     r->cap = r->cap ? r->cap * 2 : 32;
@@ -20298,8 +20269,11 @@ int emit_value_methods_reflection(Compiler *c, int id, Buf *b) {
    asks the per-class check or only the builtin surface. */
 int any_class_responds(Compiler *c, const char *qm) {
   if (any_class_defines(c, qm)) return 1;
-  for (int k = 0; k < c->nclasses; k++)
-    if (class_implicit_responds(c, k, qm)) return 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    CplanPresence pr;
+    cplan_table_presence(c, k, 0, qm, &pr);
+    if (pr.implied) return 1;
+  }
   return 0;
 }
 const char *builtin_class_of_type(TyKind t);
@@ -34484,41 +34458,40 @@ int root_reopen_method_vis(Compiler *c, int cid, const char *qm) {
    true, 1 = only with include_all (a private or protected match), 0 = false.
    The method-table reading of respond_to_static_answer's object branch,
    without its deferral to the class's own respond_to? -- this is what that
-   override's `super` asks. */
+   override's `super` asks. The table's entry, visibility and undef, and the
+   names the class carries with no entry, come from the call plan
+   (cplan_table_presence). */
 static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
   if (name_is_synth_method(c, qm) || comp_method_is_private_helper(c, cid, qm)) return 0;
-  if (sp_streq(qm, "initialize_copy")) return 1;
+  if (is_initialize_copy_name(qm)) return 1;
   /* BasicObject#initialize is private too, unless the class made it public:
      a `public :initialize` counts whether or not the chain defines it */
-  if (sp_streq(qm, "initialize")) {
-    int at = -1, vis = comp_method_vis_declared(c, cid, qm, &at);
+  if (is_initialize_name(qm)) {
+    int at = -1, vis = cplan_method_vis(c, -1, cid, qm, 0, &at);
     if (at >= 0) return vis == SP_VIS_PUBLIC ? 2 : 1;
-    return comp_method_in_chain(c, cid, qm, NULL) >= 0 && vis == SP_VIS_PUBLIC ? 2 : 1;
+    return call_target(c, -1, cid, qm, CT_METHODS, NULL) >= 0 && vis == SP_VIS_PUBLIC ? 2 : 1;
   }
   for (int u = 0; respond_universal[u]; u++) if (sp_streq(qm, respond_universal[u])) return 2;
-  char wbase[256]; wbase[0] = '\0';
-  int is_wr = setter_base_name(qm, wbase, sizeof wbase);
-  if (comp_is_undeffed_in_chain(c, cid, qm)) return 0;
+  CplanPresence pr;
+  cplan_table_presence(c, cid, CT_REACH, qm, &pr);
+  if (pr.undef) return 0;
   /* a singleton alias names a class method, not one of the instance's */
-  if (comp_name_is_sg_alias_only(c, cid, qm)) return 0;
+  if (pr.sg_only) return 0;
   /* an alias that captured an Object / Kernel method answers as that one */
   { int bi = 0; const char *bn = comp_resolve_alias_ex(c, cid, qm, NULL, &bi);
     if (bi == 3 && !sp_streq(bn, qm)) return 2; }
-  int found = (comp_method_in_chain(c, cid, qm, NULL) >= 0 &&
-               !method_hidden_from_reflection(c, cid, qm)) ||
-              comp_reader_in_chain(c, cid, qm, NULL) ||
-              (is_wr && comp_writer_in_chain(c, cid, wbase, NULL));
+  int found = pr.table;
   /* an Array (Hash) subclass instance answers Array's (Hash's) names (#7449) */
   if (!found && comp_ty_ary_root(c, ty_object(cid)) >= 0 && comp_arysub_builtin_name(c, -1, cid, qm)) return 2;
   /* Both a native class and its subclasses answer the public bindings.
      A source visibility declaration applies just as it does to a def. */
   int nk = comp_native_binding_class(c, cid, qm);
   if (!found && nk >= 0 && comp_native_method_find(c, nk, qm, 0, 0) >= 0)
-    return comp_method_vis_in_chain(c, cid, qm) == SP_VIS_PUBLIC ? 2 : 1;
+    return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
   /* the names the class answers without a method-table entry: an
      Enumerable includer's, a Comparable's, a Struct's or a Data's
      core names (#2663) */
-  if (!found && class_implicit_responds(c, cid, qm)) return 2;
+  if (!found && pr.implied) return 2;
   /* a method of a program's Object, Kernel or BasicObject reopening that
      the chain does not reach (the class table keeps them apart): the
      root's, by its visibility there */
@@ -34538,7 +34511,7 @@ static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
      one an Object reopening redefines is left as the chain reads it */
   if (!found) return object_private_method_name(qm) && !class_is_blank_slate(c, cid) &&
                      !root_reopen_defines(c, qm) ? 1 : 0;
-  return comp_method_vis_in_chain(c, cid, qm) == SP_VIS_PUBLIC ? 2 : 1;
+  return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
 }
 
 /* `super` inside a user-defined respond_to?(m, include_all = false) that no
@@ -34745,7 +34718,7 @@ int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc,
 static int rto_exact_class_answer(Compiler *c, int cid, const char *qm,
                                   int include_all, int foldable, int id) {
   /* the class's own respond_to? answers, not the method table */
-  if (comp_method_in_chain(c, cid, "respond_to?", NULL) >= 0) return -1;
+  if (call_target(c, id, cid, RESPOND_TO_NAME, CT_METHODS, NULL) >= 0) return -1;
   int a = obj_responds_answer(c, cid, qm, id);
   if (a != 1) return a == 2;
   return foldable ? include_all : -1;
@@ -34838,9 +34811,9 @@ int private_answer_overridden(Compiler *c, const char *qm, TyKind rt) {
     int builtin = kn && (is_builtin_class_name(kn) || is_builtin_module_const_name(kn) ||
                          is_object_root(kn));
     if (!boxed && !builtin) continue;
-    if (class_is_blank_slate(c, k) || comp_is_undeffed_in_chain(c, k, qm) ||
-        comp_method_in_class(c, k, "respond_to?") >= 0 ||
-        comp_cmethod_in_chain(c, k, "respond_to?", NULL) >= 0) return 1;
+    if (class_is_blank_slate(c, k) || cplan_undefined(c, k, 0, qm) ||
+        call_target(c, -1, k, RESPOND_TO_NAME, CT_OWN, NULL) >= 0 ||
+        call_target(c, -1, k, RESPOND_TO_NAME, CT_CMETHOD, NULL) >= 0) return 1;
   }
   return 0;
 }
@@ -34976,7 +34949,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
      `5.respond_to?(:foo, true)` read false. A receiver whose class has its
      own respond_to? keeps the answer below. */
   if (!resolved && foldable && include_all && recv >= 0 &&
-      !(ty_is_object(rt) && comp_method_in_chain(c, ty_object_class(rt), "respond_to?", NULL) >= 0)) {
+      !(ty_is_object(rt) && call_target(c, id, ty_object_class(rt), RESPOND_TO_NAME, CT_METHODS, NULL) >= 0)) {
     for (int si = 0; si < c->nscopes; si++) {
       const Scope *ts = &c->scopes[si];
       if (ts->name && ts->def_node >= 0 && ts->class_id < 0 && !ts->is_cmethod &&
@@ -35222,7 +35195,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       Scope *ss = comp_scope_of(c, id);
       if (ss && ss->class_id >= 0) {
         int cid = ss->class_id;
-        if (!ss->is_cmethod && comp_method_in_chain(c, cid, "respond_to?", NULL) >= 0) return -1;
+        if (!ss->is_cmethod && call_target(c, id, cid, RESPOND_TO_NAME, CT_METHODS, NULL) >= 0) return -1;
         if (ss->is_cmethod) {
           /* implicit self is the class object itself: same answer as
              the explicit `Const.respond_to?` fold, including the

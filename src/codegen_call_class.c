@@ -243,70 +243,41 @@ static void object_reopen_responds_name(Compiler *c, int k, const int *roots, in
    them apart), into pub or priv by the visibility root_reopen_method_vis
    gives; k -1 for a value of no program class. Each name once. Readers and
    writers (attr_*) count as methods. */
+typedef struct { Compiler *c; int k; const int *roots; int u; Buf *pub, *priv; } ObjReopen;
+static void object_reopen_name(void *ud, const char *name) {
+  const ObjReopen *o = ud;
+  object_reopen_responds_name(o->c, o->k, o->roots, o->u, name, o->pub, o->priv);
+}
 static void emit_object_reopen_responds(Compiler *c, int k, Buf *pub, Buf *priv) {
   static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   for (int u = 0; roots[u] >= 0; u++) {
     int r = comp_core_class(c, roots[u]);
-    if (r < 0 || r == k) continue;
-    for (int s = 0; s < c->nscopes; s++) {
-      const Scope *os = &c->scopes[s];
-      if (!os->name || os->is_cmethod || os->is_proc_form || os->class_id != r) continue;
-      if (comp_method_in_class(c, r, os->name) != s) continue;
-      object_reopen_responds_name(c, k, roots, u, os->name, pub, priv);
-    }
-    const ClassInfo *rc = &c->classes[r];
-    for (int i = 0; i < rc->nreaders; i++)
-      if (comp_method_in_class(c, r, rc->readers[i]) < 0)
-        object_reopen_responds_name(c, k, roots, u, rc->readers[i], pub, priv);
-    for (int i = 0; i < rc->nwriters; i++) {
-      char nm[260];
-      if (snprintf(nm, sizeof nm, "%s=", rc->writers[i]) >= (int)sizeof nm) continue;
-      if (comp_method_in_class(c, r, nm) < 0) object_reopen_responds_name(c, k, roots, u, nm, pub, priv);
-    }
+    ObjReopen o = { c, k, roots, u, pub, priv };
+    if (r >= 0 && r != k) cplan_own_names(c, r, object_reopen_name, &o);
   }
 }
 
 /* The names class k's chain answers, as the two lists a run-time
    respond_to? tests (`"a", "b", ` -- public, and the private ones that
    include_all adds), or the names every object has for k -1 (the Object
-   reopening's). A chain lookup from class k answers a scope owned by k or
-   one of its ancestors (chain_lookup: an alias resumes at an ancestor, and
-   the walk is up the parents), so only those scopes are asked, in the
-   order every scope was. */
+   reopening's). The call plan lists the candidates (cplan_chain_names) and
+   answers each name's visibility and undef. */
+typedef struct { Compiler *c; int k; Buf *pb, *vb; } RtrNames;
+static void rtr_name(void *ud, const char *name) {
+  const RtrNames *r = ud;
+  emit_responds_name(r->c, r->k, name, r->pb, r->vb);
+}
 static void rtr_lists_build(Compiler *c, int k, Buf *pb, Buf *vb) {
   if (k < 0) { emit_object_reopen_responds(c, -1, pb, vb); return; }
-  unsigned char *anc = calloc((size_t)c->nclasses + 1, 1);
-  if (!anc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int p = k; p >= 0; p = c->classes[p].parent) anc[p] = 1;
-  for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].name && !c->scopes[s].is_cmethod && !c->scopes[s].is_proc_form &&
-        (c->scopes[s].class_id < 0 || (c->scopes[s].class_id < c->nclasses && anc[c->scopes[s].class_id])) &&
-        comp_method_in_chain(c, k, c->scopes[s].name, NULL) == s)
-      emit_responds_name(c, k, c->scopes[s].name, pb, vb);
-  free(anc);
-  /* Native methods are inherited too. The receiver's visibility and
-     undef declarations still decide which list receives each name. */
-  for (int p = k; p >= 0; p = c->classes[p].parent)
-    for (int m = 0; m < c->n_native_methods; m++)
-      if (c->native_methods[m].class_id == p && !c->native_methods[m].kind)
-        emit_responds_name(c, k, c->native_methods[m].name, pb, vb);
-  for (int p = k; p >= 0; p = c->classes[p].parent) {
-    ClassInfo *cl = &c->classes[p];
-    for (int r = 0; r < cl->nreaders; r++) emit_responds_name(c, k, cl->readers[r], pb, vb);
-    for (int w = 0; w < cl->nwriters; w++) {
-      char wn[256];
-      snprintf(wn, sizeof wn, "%s=", cl->writers[w]);
-      emit_responds_name(c, k, wn, pb, vb);
-    }
-    for (int a = 0; a < cl->naliases; a++)
-      if (!comp_name_is_sg_alias_only(c, k, cl->alias_new[a]))   /* a class method's, not the instance's */
-        emit_responds_name(c, k, cl->alias_new[a], pb, vb);
-  }
-  const char *const *imp[] = { enumerable_names, comparable_names, struct_names,
-                               (const char *const[]){ "members", "to_h", "deconstruct", "deconstruct_keys", "with", NULL } };
+  RtrNames rn = { c, k, pb, vb };
+  cplan_chain_names(c, k, rtr_name, &rn);
+  const char *const *imp[] = { enumerable_names, comparable_names, struct_names, struct_core_names };
   for (int l = 0; l < 4; l++)
-    for (int i = 0; imp[l][i]; i++)
-      if (class_implicit_responds(c, k, imp[l][i])) emit_responds_name(c, k, imp[l][i], pb, vb);
+    for (int i = 0; imp[l][i]; i++) {
+      CplanPresence pr;
+      cplan_table_presence(c, k, 0, imp[l][i], &pr);
+      if (pr.implied) emit_responds_name(c, k, imp[l][i], pb, vb);
+    }
   /* and the methods of a program's Object reopening the chain does not
      reach (the class table keeps Object apart), by Object's visibility */
   emit_object_reopen_responds(c, k, pb, vb);
@@ -1182,28 +1153,22 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
               buf_puts(b, ") : ");
             } }
           buf_puts(b, "(");
-          char wbase[256]; wbase[0] = '\0';
-          int is_wr = setter_base_name(qm, wbase, sizeof wbase);
           int first = 1, root_seen = 0, own[256], nown = 0, own_full = 0;
           for (int k = 0; k < c->nclasses; k++) {
             /* (an undef hides a root class's method from the class's values) */
-            if (comp_is_undeffed_in_chain(c, k, qm)) {
+            CplanPresence pr;
+            cplan_table_presence(c, k, CT_REACH, qm, &pr);
+            if (pr.undef) {
               if (nown < (int)(sizeof own / sizeof own[0])) own[nown++] = k; else own_full = 1;
               continue;
             }
             int nk = comp_native_binding_class(c, k, qm);
             int native = nk >= 0 && comp_native_method_find(c, nk, qm, 0, 0) >= 0;
-            int has = (comp_method_in_chain(c, k, qm, NULL) >= 0 &&
-                       !method_hidden_from_reflection(c, k, qm)) ||
-                      comp_reader_in_chain(c, k, qm, NULL) ||
-                      (is_wr && comp_writer_in_chain(c, k, wbase, NULL)) ||
-                      native ||
-                      /* the names the class carries without a method entry
-                         answer as they do on the typed receiver */
-                      class_implicit_responds(c, k, qm);
+            /* (the names the class carries without a method entry answer as they do on the typed receiver) */
+            int has = pr.table || native || pr.implied;
             /* a private or protected method, the program's own as much as a
                native one, answers only to a true include_all */
-            int nonpublic = has && comp_method_vis_in_chain(c, k, qm) != SP_VIS_PUBLIC;
+            int nonpublic = has && pr.vis != SP_VIS_PUBLIC;
             /* an exception class with no method of its own for the name
                answers through a builtin reopening its runtime class is under */
             int xr[8], xn = 0;
@@ -1250,9 +1215,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
               /* a singleton class's own method answers once its def has run:
                  the box keeps the static id, the object carries the parent's
                  until then (and in a #dup) */
-              int dk = -1;
-              if (comp_method_in_chain(c, k, qm, &dk) >= 0 && dk >= 0 &&
-                  c->classes[dk].is_singleton_of && !c->classes[dk].is_value_type)
+              MethodLookup dl = { .def_class = -1 };
+              int dk = call_target(c, -1, k, qm, CT_METHODS, &dl) >= 0 ? dl.def_class : -1;
+              if (dk >= 0 && c->classes[dk].is_singleton_of && !c->classes[dk].is_value_type)
                 buf_printf(b, "%s(_k%d == %d && sp_class_le((sp_Class){sp_obj_cls_id_of(_t%d.v.p)}, (sp_Class){%d}))",
                            first ? "" : " || ", tv, k, tv, dk);
               else buf_printf(b, "%s_k%d == %d", first ? "" : " || ", tv, k);
@@ -1309,12 +1274,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
      methods + attr readers/writers) filtered by visibility. `method_defined?`
      matches public+protected (not private); the prefixed forms match exactly
      one visibility. inherit=false restricts the lookup to own definitions. */
-  int md_pub = 0, md_prot = 0, md_priv = 0, md_family = 1;
-  if (sp_streq(name, "method_defined?"))              { md_pub = 1; md_prot = 1; }
-  else if (sp_streq(name, "public_method_defined?"))    { md_pub = 1; }
-  else if (sp_streq(name, "protected_method_defined?")) { md_prot = 1; }
-  else if (sp_streq(name, "private_method_defined?"))   { md_priv = 1; }
-  else md_family = 0;
+  int md_mask = method_defined_vis_mask(name), md_family = md_mask != 0;
+  int md_pub = md_mask & 1, md_prot = (md_mask & 2) != 0, md_priv = (md_mask & 4) != 0;
   /* a constant path receiver (`CGI::EscapeExt.method_defined?`, cgi/escape.rb)
      names its class by the leaf, as constant paths resolve here */
   if (md_family && recv >= 0 && argc >= 1 && nt_type(nt, recv) &&
@@ -1336,43 +1297,21 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       return 1;
     }
     if (qm && ci >= 0) {
-      /* a writer query (`m=`) consults the writer table under its base name */
-      char base[256];
-      base[0] = '\0';
-      int is_setter = setter_base_name(qm, base, sizeof base);
       /* Ruby makes the initialize family private on every class, defined or
          not: private_method_defined? is true for all of them and the public /
          protected / plain queries are false (#3874). */
-      if (sp_streq(qm, "initialize") || sp_streq(qm, "initialize_copy") ||
-          sp_streq(qm, "initialize_clone") || sp_streq(qm, "initialize_dup")) {
+      if (is_initialize_hook_name(qm)) {
         buf_printf(b, "%d", md_priv ? 1 : 0);
         return 1;
       }
-      if (name_is_synth_method(c, qm) || comp_method_is_private_helper(c, ci, qm) || comp_is_undeffed_in_chain(c, ci, qm)) { buf_puts(b, "FALSE"); return 1; }
-      int parent = c->classes[ci].parent;
-      int mc = -1;
-      int mi = comp_method_in_chain(c, ci, qm, &mc);
-      /* a generated Struct iterator is Struct's or Enumerable's, never the
-         class's own, and a Data class has none */
-      if (mi >= 0 && scope_is_struct_synth(c, mi) &&
-          (!inherit || class_struct_kind(c, ci) == 2)) mi = -1;
-      int found;
-      if (inherit) {
-        found = mi >= 0 || comp_reader_in_chain(c, ci, qm, NULL) ||
-                (is_setter && comp_writer_in_chain(c, ci, base, NULL));
-      }
-      else {
-        /* attr readers/writers are flattened into descendants at analyze
-           time, so "own" means present here but not in the parent chain */
-        int rd_own = comp_is_reader(&c->classes[ci], qm) &&
-                     (parent < 0 || !comp_reader_in_chain(c, parent, qm, NULL)) &&
-                     !refl_member_of_struct_superclass(c, ci, qm);
-        int wr_own = is_setter && comp_is_writer(&c->classes[ci], base) &&
-                     (parent < 0 || !comp_writer_in_chain(c, parent, base, NULL)) &&
-                     !refl_member_of_struct_superclass(c, ci, base);
-        /* a method copied in from an included module is the module's */
-        found = (mi >= 0 && mc == ci && c->scopes[mi].origin_module_ci == 0) || rd_own || wr_own;
-      }
+      if (name_is_synth_method(c, qm) || comp_method_is_private_helper(c, ci, qm)) { buf_puts(b, "FALSE"); return 1; }
+      /* the call plan's answer for the class: with inherit, the chain's (a generated Struct iterator is Struct's or
+         Enumerable's, never a Data class's); without, the class's own entries (a method copied in from an included
+         module is the module's) */
+      CplanPresence pr;
+      cplan_table_presence(c, ci, inherit ? CT_REACH : CT_OWN, qm, &pr);
+      if (pr.undef) { buf_puts(b, "FALSE"); return 1; }
+      int found = pr.table;
       /* a name the program's defs leave open is answered by CRuby's own
          methods of the builtin classes and modules above the class, Object
          and Kernel among them (#2673); one the table does not hold is
@@ -6731,39 +6670,27 @@ int refl_md_dynamic_used(Compiler *c) {
   return 0;
 }
 
-/* The names the reflection table lists, each once */
-typedef struct { const char **names; int n, cap; } MdNames;
-static void md_names_add(MdNames *r, const char *x) {
-  for (int i = 0; i < r->n; i++)
-    if (sp_streq(r->names[i], x)) return;
-  if (r->n == r->cap) {
-    r->cap *= 2;
-    if (!(r->names = realloc(r->names, sizeof(char *) * (size_t)r->cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  r->names[r->n++] = x;
-}
-
 /* sp_refl_method_defined(klass, name, mask, inherit): what the literal
    method_defined? branch answers at compile time, as a table per class.
    mask: 1 public, 2 protected, 4 private. */
 void emit_refl_method_defined(Compiler *c, Buf *b) {
   /* every name a method or attr accessor of any class carries */
-  MdNames rn = { malloc(sizeof(char *) * 64), 0, 64 };
-  if (!rn.names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  ReflNames rn;
+  memset(&rn, 0, sizeof rn);
   for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].name && c->scopes[s].class_id >= 0) md_names_add(&rn, c->scopes[s].name);
+    if (c->scopes[s].name && c->scopes[s].class_id >= 0) refl_note(&rn, c->scopes[s].name, 0);
   char **wnames = NULL; int nw = 0, wcap = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    for (int r = 0; r < c->classes[k].nreaders; r++) md_names_add(&rn, c->classes[k].readers[r]);
+    for (int r = 0; r < c->classes[k].nreaders; r++) refl_note(&rn, c->classes[k].readers[r], 0);
     for (int w = 0; w < c->classes[k].nwriters; w++) {
       size_t l = strlen(c->classes[k].writers[w]);
       char *x = malloc(l + 2); memcpy(x, c->classes[k].writers[w], l); x[l] = '='; x[l + 1] = 0;
       if (nw == wcap) { wcap = wcap ? wcap * 2 : 16; wnames = realloc(wnames, sizeof(char *) * (size_t)wcap); }
       wnames[nw++] = x;
-      md_names_add(&rn, x);
+      refl_note(&rn, x, 0);
     }
   }
-  const char **names = rn.names;
+  char **names = rn.v;
   int nn = rn.n;
   buf_puts(b, "static int sp_refl_method_defined(sp_Class k, const char *name, int mask, int inherit) {\n  if (sp_class_sclass_p(k)) sp_raise_cls(\"NotImplementedError\", \"spinel: the methods of a singleton class held in a variable are not modeled\");\n");
   buf_puts(b, "  if (!strcmp(name, \"initialize\") || !strcmp(name, \"initialize_copy\") ||\n"
@@ -6815,7 +6742,7 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
   buf_puts(b, "  }\n  return 0;\n}\n");
   for (int w = 0; w < nw; w++) free(wnames[w]);
   free(wnames);
-  free(names);
+  refl_free(&rn);
 }
 
 int refl_im_params_used(Compiler *c) {

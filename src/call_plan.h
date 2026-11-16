@@ -1518,9 +1518,16 @@ int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, Cp
    where it declares none, until visibility is per version; the class's own
    entry's under CT_OWN. out->undef is 1 where an `undef_method` or
    `undef` of the name stands on the class's chain (the final tables'; a
-   list leaves the name out), 0 otherwise. */
+   list leaves the name out), 0 otherwise. out->implied is 1 where the instance
+   side answers the name with no entry in its table, by what a mixin or a core
+   class brings: the names an Enumerable includer with an `each`, a Comparable
+   includer with a `<=>`, a Struct or a Data carry (builtin_names.c's
+   predicates). It is asked beside `table`, which holds the entries only.
+   out->sg_only is 1 where the name is in the instance's chain only as the alias
+   a `class << self; alias a b` made: a class method's, no method of the
+   instance's. */
 typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
-typedef struct { int table, vis, undef; } CplanPresence;
+typedef struct { int table, vis, undef, implied, sg_only; } CplanPresence;
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);
 /* The table part of that answer alone, with no site (table, vis and undef;
    the record is not asked): what a list holds before any point is asked. */
@@ -1540,15 +1547,26 @@ int cplan_undefined(Compiler *c, int cls, unsigned side, const char *name);
    order (refl_any, lr_late_asked), so call_target answers there from the
    tables, the list with it: only the class side answers at the point. */
 int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name);
+/* The names class cls's instances may answer by an entry of its chain, as the final tables hold them, with no site
+   (the reader asks each cplan_table_presence): the methods the chain's lookup finds (a scope per name, in the order
+   the scopes were made), the native bindings the chain inherits, and per class up the chain its accessors and aliases
+   (a class method's alias left out). A name may be noted more than once. */
+typedef void (*CplanNameFn)(void *ud, const char *name);
+void cplan_chain_names(Compiler *c, int cls, CplanNameFn fn, void *ud);
+/* The instance methods class cls itself holds (a def of its own, an accessor no def of its own shadows), as the final
+   tables hold them: its defs in order, then its readers, then its writers (`x=`). The set is the one Object's, Kernel's
+   and BasicObject's reopenings contribute to the run-time lists, which is not cplan_list_candidates': that one lists
+   the class's aliases and keeps only what the question holds. */
+void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud);
 /* The lists a run-time `respond_to?` tests per class (emit_respond_to_runtime_name): class cls's public names and the
-   private ones include_all adds, as the C text `"a", "b", `, and the Object private names its undef_method takes away
-   (the entries of object_private_method_names, in its order); cls -1 is the Object reopening's. The lists are built
+   private ones include_all adds, as the C text `"a", "b", `, and the Object private names its undef_method takes
+   away (entries of object_private_method_names, in its order); cls -1 is the Object reopening's. They are built
    from the final tables with no site (every name is asked cplan_table_presence: no program class's instance side is
-   absent at a point, as cplan_presence proves), so the plan keeps them while nothing they read has moved, as each
-   emission asks them again: the scope index frozen, with its epoch, the scope and class counts, the class shape, the
-   reader and writer tables and the visibility and undef tables as they were. The entry is the caller's to fill (the
-   lists when `built` is 0, the undef names when `undef_built` is), and is kept only while a later ask finds the tables unmoved; where the tables may move (the scope
-   index is not frozen) every ask hands out a fresh entry, valid until the next ask. */
+   absent at a point, as cplan_presence proves), so the plan keeps them while nothing they read has moved: the scope
+   index frozen, with its epoch, the scope and class counts, the class shape, the reader and writer tables and the
+   visibility and undef tables as they were. The caller fills an entry (the lists when `built` is 0, the undef
+   names when `undef_built` is). Where the tables may move (the scope index is not frozen) each ask hands out a
+   fresh entry, valid until the next ask. */
 typedef struct { char *pub, *priv; const char **undef_priv; int nundef_priv; unsigned char built, undef_built; } CplanRtrLists;
 CplanRtrLists *cplan_rtr_lists(Compiler *c, int cls);
 /* The names a method list on cls's side asks about, as the final tables

@@ -4731,6 +4731,7 @@ static void lr_mixin_dups_settle(Compiler *c) {
    target, so a stop there would bind that copy where an ancestor's method,
    the search's answer past it, binds now. */
 enum { LR_SHADOW = 1, LR_MIXIN_STOPS = 2, LR_AFTER_MAIN = 4 };
+static int lr_search_mix(Compiler *c, int cls, int sg, LrClass *k, int i, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth, int *unsure, unsigned how);
 static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth, int *unsure, unsigned how) {
   LrClass *k = lr_class(c->lrec, cls);
   if (!k) return ELAB_UNKNOWN;
@@ -4754,27 +4755,34 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
       continue;
     }
     for (int i = k ? k->nmix - 1 : -1; i >= 0; i--) {
-      LrMixin *m = &k->mix[i];
       int want = sg ? (pass == 0 ? LR_SG_PREPEND : LR_EXTEND) : pass == 0 ? LR_PREPEND : LR_INCLUDE;
-      if (m->kind != want) continue;
-      int b = lr_mixed_before(c, m, p, late, elab_point_may(c, m->node));
-      if (b == ELAB_NO) continue;
-      /* a module already among the ancestors where the mixin runs (an
-         earlier mixin's, the superclass's) stays where it is */
-      int dup = lr_mixin_dup(c, cls, sg, k, i);
-      if (dup == ELAB_YES) continue;
-      if (dup == ELAB_UNKNOWN && !*unsure) *unsure = 1;
-      /* (a module's search is its own step, as it has no superclass; with
-         LR_MIXIN_STOPS it keeps an undef's stop, which lr_search's end drops) */
-      int o = lr_mixin_class(c, m) < 0 ? ELAB_UNKNOWN : !name && m->mod == mod ? ELAB_YES
-            : !(how & LR_MIXIN_STOPS) ? lr_search(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1)
-            : depth >= lr_chain_bound(c) ? ELAB_UNKNOWN
-            : lr_search_one(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1, unsure, LR_MIXIN_STOPS);
-      if ((o == ELAB_YES || o == LR_STOP) && b == ELAB_YES) return o;
-      /* (2: a mixin that may not have run holds the name: not a core module's, whose entries it cannot read) */
-      if (o != ELAB_NO) *unsure = *unsure == 2 || o == ELAB_YES || o == LR_STOP ? 2 : 1;
+      int o = k->mix[i].kind == want ? lr_search_mix(c, cls, sg, k, i, name, mod, p, late, vis, out, depth, unsure, how) : ELAB_NO;
+      if (o != ELAB_NO) return o;
     }
   }
+  return ELAB_NO;
+}
+
+/* One mixin k->mix[i] of cls's search (lr_search_one's step per mixin): its module's part of the search, ELAB_YES or
+   LR_STOP where the mixin has run and answers, else ELAB_NO with *unsure raised where it may have run */
+static int lr_search_mix(Compiler *c, int cls, int sg, LrClass *k, int i, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth, int *unsure, unsigned how) {
+  LrMixin *m = &k->mix[i];
+  int b = lr_mixed_before(c, m, p, late, elab_point_may(c, m->node));
+  if (b == ELAB_NO) return ELAB_NO;
+  /* a module already among the ancestors where the mixin runs (an
+     earlier mixin's, the superclass's) stays where it is */
+  int dup = lr_mixin_dup(c, cls, sg, k, i);
+  if (dup == ELAB_YES) return ELAB_NO;
+  if (dup == ELAB_UNKNOWN && !*unsure) *unsure = 1;
+  /* (a module's search is its own step, as it has no superclass; with
+     LR_MIXIN_STOPS it keeps an undef's stop, which lr_search's end drops) */
+  int o = lr_mixin_class(c, m) < 0 ? ELAB_UNKNOWN : !name && m->mod == mod ? ELAB_YES
+        : !(how & LR_MIXIN_STOPS) ? lr_search(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1)
+        : depth >= lr_chain_bound(c) ? ELAB_UNKNOWN
+        : lr_search_one(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1, unsure, LR_MIXIN_STOPS);
+  if ((o == ELAB_YES || o == LR_STOP) && b == ELAB_YES) return o;
+  /* (2: a mixin that may not have run holds the name: not a core module's, whose entries it cannot read) */
+  if (o != ELAB_NO) *unsure = *unsure == 2 || o == ELAB_YES || o == LR_STOP ? 2 : 1;
   return ELAB_NO;
 }
 
@@ -5315,6 +5323,33 @@ static int lr_main_chain_one(Compiler *c, int cls, int sg, const char *name, Loa
   if (o != ELAB_YES) *out = NULL;
   return o;
 }
+/* Object's includes with main's top-level ones (an include in a block the load runs at once is main's own), latest
+   first in the record's order of the two statements (elab_order, as lr_walk_object): the first that has run and holds
+   name answers. Two statements the record cannot order, one holding name, leave it unsure (2). */
+static int lr_main_includes(Compiler *c, const char *name, LoadPoint p, int oc, const LrDef **out, int *unsure) {
+  LoadRecord *r = c->lrec;
+  int late = p.region < 0;
+  LrClass *ko = oc >= 0 ? lr_class(r, oc) : NULL, *km = lr_class(r, LR_MAIN);
+  *out = NULL;
+  for (int i = lr_next_include(ko, ko ? ko->nmix - 1 : -1), j = lr_next_include(km, km ? km->nmix - 1 : -1); i >= 0 || j >= 0;) {
+    int ord = i < 0 ? PROG_BEFORE : j < 0 ? PROG_AFTER : elab_order(c, ko->mix[i].node, km->mix[j].node);
+    if (ord == PROG_UNKNOWN) {
+      int a = lr_search_mix(c, oc, 0, ko, i, name, -1, p, late, 0, out, 0, unsure, LR_MIXIN_STOPS);
+      int b = lr_search_mix(c, LR_MAIN, 0, km, j, name, -1, p, late, 0, out, 0, unsure, LR_MIXIN_STOPS);
+      if (a != ELAB_NO || b != ELAB_NO) *unsure = 2;
+      else if (!*unsure) *unsure = 1;
+      i = lr_next_include(ko, i - 1), j = lr_next_include(km, j - 1);
+      continue;
+    }
+    int o = ord == PROG_BEFORE ? lr_search_mix(c, LR_MAIN, 0, km, j, name, -1, p, late, 0, out, 0, unsure, LR_MIXIN_STOPS)
+                               : lr_search_mix(c, oc, 0, ko, i, name, -1, p, late, 0, out, 0, unsure, LR_MIXIN_STOPS);
+    if (o != ELAB_NO) return o;
+    if (ord == PROG_BEFORE) j = lr_next_include(km, j - 1);
+    else i = lr_next_include(ko, i - 1);
+  }
+  *out = NULL;
+  return ELAB_NO;
+}
 int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_object, const LrDef **out, int *step) {
   LoadRecord *r = c->lrec;
   *out = NULL;
@@ -5347,14 +5382,10 @@ int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_obje
   if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
   if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
   if (o == ELAB_YES) { *step = EMC_OWN; *out = d; return ELAB_YES; }
-  for (int k = 0; k < 2; k++) {
-    int cls = k ? LR_MAIN : oc;
-    if (cls < LR_MAIN || (k == 0 && oc < 0)) continue;
-    o = lr_main_chain_one(c, cls, 0, name, p, 0, &d, &unsure);
-    if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
-    if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
-    if (o == ELAB_YES) { *step = EMC_INCLUDE; *out = d; return ELAB_YES; }
-  }
+  o = lr_main_includes(c, name, p, oc, &d, &unsure);
+  if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
+  if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
+  if (o == ELAB_YES) { *step = EMC_INCLUDE; *out = d; return ELAB_YES; }
   if (kc >= 0) {
     o = lr_main_chain_one(c, kc, 0, name, p, 0, &d, &unsure);
     if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }

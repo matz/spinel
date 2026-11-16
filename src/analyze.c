@@ -13256,80 +13256,38 @@ static int desugar_hash_new_capacity(Compiler *c) {
 /* A builtin class's `new` whose first initialize that does not forward is empty
    (cplan_builtin_new_form BNF_EMPTY): CRuby builds the empty value its own
    initialize would not (`class Array; def initialize(*); end; end; Array.new(2, 0)`
-   is `[]`), after evaluating the arguments and the block pass the empty method
-   only receives. The call becomes `(arg; ...; blk; K.new)`: each argument that
-   runs code, then the block pass's expression, then the plain `new` (a literal
-   block is never run). */
-static int bne_new(NodeTable *nt, Compiler *c, const char *type, int like) {
-  int n = nt_new_node(nt, type);
-  if (n < 0) return -1;
-  comp_grow_node_arrays(c);
-  c->nscope[n] = c->nscope[like];
-  if (c->node_cbody) c->node_cbody[n] = c->node_cbody[like];
-  return n;
-}
-/* The statement that runs argument a as building the argument list does, or -1 where it has none to give: a splat is
-   `[*x]` (its to_a), keywords are the hash literal (a `**h` calls to_hash), a block pass `&x` is x.to_proc unless x is a
-   Proc or nil (a literal block runs nothing). */
-static int bne_effect(Compiler *c, NodeTable *nt, int a, int *ok) {
-  OrderWalk w = { NULL, 1 };
-  NodeKind k = nt_kind(nt, a);
-  if (k == NK_SplatNode) {
-    int ex = nt_ref(nt, a, "expression");
-    if (ex >= 0 && nt_kind(nt, ex) == NK_ArrayNode && order_pure_walk(c, ex, &w)) return -1;
-    int arr = bne_new(nt, c, "ArrayNode", a);
-    if (arr < 0) { *ok = 0; return -1; }
-    nt_node_set_arr(nt, arr, "elements", &a, 1);
-    return arr;
-  }
-  if (k == NK_KeywordHashNode) {
-    nt_node_set_type(nt, a, "HashNode");
-    return order_pure_walk(c, a, &w) ? -1 : a;
-  }
-  if (k == NK_BlockArgumentNode) {
-    int ex = nt_ref(nt, a, "expression");
-    if (ex < 0) return -1;
-    TyKind t = infer_type(c, ex);
-    if (t == TY_PROC || t == TY_NIL) return order_pure_walk(c, ex, &w) ? -1 : ex;
-    if (!(ty_is_object(t) || t == TY_SYMBOL)) { *ok = 0; return -1; }   /* (a value whose to_proc the call plan cannot name) */
-    int cn = bne_new(nt, c, "CallNode", a);
-    if (cn < 0) { *ok = 0; return -1; }
-    nt_node_set_str(nt, cn, "name", "to_proc");
-    nt_node_set_ref(nt, cn, "receiver", ex);
-    nt_node_set_ref(nt, cn, "arguments", -1);
-    nt_node_set_ref(nt, cn, "block", -1);
-    return cn;
-  }
-  return order_pure_walk(c, a, &w) ? -1 : a;
-}
+   is `[]`), after building the argument list the empty method only receives.
+   The operands that run code are held in locals in CRuby's order, as any call's
+   are (sd_hold_call_operands: a splat as `[*x]`, a `**` as `{**x}`, a block pass
+   through __blk_conv, which checks what its to_proc answers), and the call
+   becomes `(held; ...; K.new)`. A literal block is never run. */
 static int desugar_builtin_new_empty_init(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
     if (nt_kind(nt, id) != NK_CallNode || id >= c->node_cap) continue;
-    int argsn = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
-    if ((argsn < 0 && blk < 0) || cplan_builtin_new_form(c, id) != BNF_EMPTY) continue;
-    int an = 0;
-    const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
-    int *eff = malloc(sizeof(int) * (size_t)(an + 2)), ne = 0, ok = 1;
-    if (!eff) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int i = 0; i < an && ok; i++) { int e = bne_effect(c, nt, av[i], &ok); if (e >= 0) eff[ne++] = e; }
-    if (ok && blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode) { int e = bne_effect(c, nt, blk, &ok); if (e >= 0) eff[ne++] = e; }
-    if (!ok) { free(eff); continue; }   /* (the plan refuses the call it could not rewrite: its arguments are still on it) */
+    if ((nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0) || cplan_builtin_new_form(c, id) != BNF_EMPTY) continue;
+    int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
+    if (np < 0) { free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
     nt_node_set_ref(nt, id, "arguments", -1);
     nt_node_set_ref(nt, id, "block", -1);
-    int nc = ne > 0 ? nt_clone_subtree(nt, id) : -1, stmts = ne > 0 ? nt_new_node(nt, "StatementsNode") : -1;
-    if (nc >= 0 && stmts >= 0) {
-      eff[ne++] = nc;
-      nt_node_set_arr(nt, stmts, "body", eff, ne);
-      nt_node_set_type(nt, id, "ParenthesesNode");
-      nt_node_set_ref(nt, id, "body", stmts);
-      nt_node_set_ref(nt, id, "receiver", -1);
-      comp_grow_node_arrays(c);
-      for (int j = nc; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
-    }
-    free(eff);
     changed = 1;
+    int *par = np > 0 ? du_parent_map(nt) : NULL;
+    if (np > 0 && par && par[id] >= 0) {
+      /* (a sequence of its own in the call's place, of fresh nodes throughout: the order plan keeps what it recorded of the old
+         call and its operands by node; the held values run as statements of their own, the plain `new` last) */
+      int base = nt->count, stmts = nt_new_node(nt, "StatementsNode"), seq = nt_new_node(nt, "ParenthesesNode");
+      for (int i = 0; i < np; i++)
+        if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
+      pre[np++] = nt_clone_subtree(nt, id);
+      nt_node_set_arr(nt, stmts, "body", pre, np);
+      nt_node_set_ref(nt, seq, "body", stmts);
+      comp_grow_node_arrays(c);
+      for (int j = base; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
+      nt_replace_child(nt, par[id], id, seq);
+    }
+    free(par);
+    free(pre);
   }
   return changed;
 }
@@ -46249,6 +46207,8 @@ static void desugar_block_arg_order(Compiler *c) {
     if (!is_super && nt_kind(nt, id) != NK_CallNode) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
+    /* (a builtin `new` that builds its empty value holds every operand in CRuby's order itself: desugar_builtin_new_empty_init) */
+    if (!is_super && cplan_builtin_new_form(c, id) == BNF_EMPTY) continue;
     int be = nt_ref(nt, blk, "expression");
     int pb = nt_kind(nt, be) == NK_ParenthesesNode ? nt_ref(nt, be, "body") : -1;
     int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;

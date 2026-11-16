@@ -32237,8 +32237,7 @@ static int dyn_scopes_named(Compiler *c, const char *nm) {
    or raises. */
 static int dyn_rbs_cont_name(Compiler *c, const char *nm) {
   if (!nm || builtin_method_known_any(nm) || builtin_object_method_known(nm)) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_reader_in_chain(c, k, nm, NULL)) return 0;
+  if (comp_name_reader_any(c, nm)) return 0;
   int any = 0;
   for (int mi = dyn_scopes_named(c, nm); mi >= 0; mi = g_dyn.snext[mi]) {
     if (!c->scopes[mi].ret_rbs_cont) return 0;
@@ -32998,8 +32997,7 @@ static int dyn_may_callable_walk(Compiler *c, int v, int depth) {
         if (!encl || encl->is_cmethod) return 1;
       }
       /* an attribute reader is a slot, which may hold anything */
-      for (int k = 0; k < c->nclasses; k++)
-        if (comp_reader_in_chain(c, k, nm, NULL)) return 1;
+      if (comp_name_reader_any(c, nm)) return 1;
       /* a user method only a subclass defines leaves the receiver's own
          class with the builtin's */
       {

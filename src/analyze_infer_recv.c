@@ -2192,10 +2192,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       (sp_streq(name, "year") || sp_streq(name, "mon") || sp_streq(name, "month") ||
        sp_streq(name, "mday") || sp_streq(name, "day") || sp_streq(name, "hour") ||
        sp_streq(name, "sec") || sp_streq(name, "wday") || sp_streq(name, "yday"))) {
-    int has_reader9 = 0;
-    for (int k9 = 0; k9 < c->nclasses && !has_reader9; k9++)
-      if (comp_reader_in_chain(c, k9, name, NULL)) has_reader9 = 1;
-    if (!has_reader9) { *out = TY_INT; return 1; }
+    if (!comp_name_reader_any(c, name)) { *out = TY_INT; return 1; }
   }
   /* to_sym on a poly value: the codegen arm interns a STR tag / passes a SYM
      through and raises otherwise, so the non-raising result is a Symbol

@@ -43357,7 +43357,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         if (!ws || !ws->name || !sp_streq(ws->name, "with") || ws->is_cmethod || ws->class_id < 0) continue;
         ClassInfo *sci = &c->classes[ws->class_id];
         if (!sci->is_struct || !sci->is_data ||
-            (sci->parent >= 0 && comp_method_in_chain(c, sci->parent, "with", NULL) >= 0)) continue;
+            (sci->parent >= 0 && call_target(c, -1, sci->parent, "with", CT_METHODS, NULL) >= 0)) continue;
         if (pass) {
           for (int pi = 0; pi < ws->nparams; pi++) {
             const char *pn = ws->pnames ? ws->pnames[pi] : NULL;
@@ -43435,8 +43435,8 @@ static void mark_nullable_int_locals(Compiler *c) {
       /* with an initialize of its own the values are its keywords'
          (struct_with_binds_initialize): a given nil is the nil of the
          keyword it names, and so is a nil the copy takes from the receiver */
-      int wimi = comp_method_in_chain(c, sci->idx, "initialize", NULL);
-      if (wimi >= 0 && comp_method_in_chain(c, sci->idx, "with", NULL) < 0) {
+      int wimi = cplan_hook_target(c, -1, sci->idx, "initialize", NULL);
+      if (wimi >= 0 && call_target(c, -1, sci->idx, "with", CT_METHODS, NULL) < 0) {
         changed |= mark_nullable_params_of_call(c, id, wimi);
         Scope *wm = &c->scopes[wimi];
         for (int k = 0; k < wm->nparams; k++) {

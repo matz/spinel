@@ -11319,7 +11319,7 @@ static int struct_with_super_types_members(Compiler *c) {
     if (!s || !s->name || !sp_streq(s->name, "with") || s->is_cmethod || s->class_id < 0) continue;
     ClassInfo *cls = &c->classes[s->class_id];
     if (!cls->is_struct || !cls->is_data ||
-        (cls->parent >= 0 && comp_method_in_chain(c, cls->parent, "with", NULL) >= 0)) continue;
+        (cls->parent >= 0 && call_target(c, -1, cls->parent, "with", CT_METHODS, NULL) >= 0)) continue;
     if (pass) {
       for (int j = 0; j < s->nparams; j++) {
         const char *pn = s->pnames[j];
@@ -12574,7 +12574,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     /* obj.method -> instance method params */
     TyKind rt = infer_type(c, recv);
     if (name && sp_streq(name, "with") && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
-        comp_method_in_chain(c, ty_object_class(rt), "with", NULL) < 0) {
+        call_target(c, -1, ty_object_class(rt), "with", CT_METHODS, NULL) < 0) {
       int wci = ty_object_class(rt);
       int wimi = cplan_hook_target(c, -1, wci, "initialize", NULL);
       changed |= wimi >= 0 ? struct_with_binds_initialize(c, id, wci, wimi)
@@ -12592,7 +12592,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         int k = ks ? ks[q] : q;
         if (k < 0 || k >= c->nclasses || !c->classes[k].is_data ||
             cplan_hook_target(c, -1, k, "initialize", NULL) >= 0 ||
-            comp_method_in_chain(c, k, "with", NULL) >= 0) continue;
+            call_target(c, -1, k, "with", CT_METHODS, NULL) >= 0) continue;
         changed |= struct_with_types_members(c, id, k);
       }
     }

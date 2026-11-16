@@ -11720,7 +11720,7 @@ int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
   int cid = s->class_id;
   ClassInfo *sc = &c->classes[cid];
   if (!sc->is_struct || !sc->is_data) return 0;
-  if (comp_method_in_chain(c, cid, "initialize", NULL) >= 0)
+  if (cplan_hook_target(c, -1, cid, "initialize", NULL) >= 0)
     unsupported_feature(c, id, "`super` from Data#with on a Data with an initialize of its own");
   /* the copy is built as this class: one of a subclass would change class */
   for (int k = 0; k < c->nclasses; k++)
@@ -12105,7 +12105,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
       unsupported(c, id, "Data#with with a positional argument (keywords only)");
       { *out = 0; return 1; }
     }
-    int wimi = comp_method_in_chain(c, (int)(sc - c->classes), "initialize", NULL);
+    int wimi = cplan_hook_target(c, -1, (int)(sc - c->classes), "initialize", NULL);
     if (wimi >= 0 && c->scopes[wimi].reachable) {
       emit_data_with_init(c, id, recv, sc, wimi, wkwh, b);
       { *out = 1; return 1; }

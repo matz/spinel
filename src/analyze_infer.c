@@ -10738,6 +10738,8 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
     { *out = TY_CLASS; return 1; }
   if (nm && sp_streq(nm, "ARGV")) { *out = TY_STR_ARRAY; return 1; }
   if (nm && sp_streq(nm, "ARGF")) { *out = TY_ARGF; return 1; }
+  /* ENV, unless the program assigns a constant ENV of its own */
+  if (nm && is_env_const(nm) && nt_ref(nt, id, "parent") < 0 && !comp_const(c, "ENV")) { *out = TY_ENV; return 1; }
   /* well-known module constants */
   int par_id = nt_ref(nt, id, "parent");
   /* a ::-scoped BUILTIN class (Math::DomainError, Process::Status) is a
@@ -11977,6 +11979,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (nm && sp_streq(nm, "RUBY_PATCHLEVEL")) return TY_INT;
     if (nm && sp_streq(nm, "ARGV")) return TY_STR_ARRAY;
     if (nm && sp_streq(nm, "ARGF")) return TY_ARGF;
+    if (nm && is_env_const(nm) && !comp_const(c, "ENV")) return TY_ENV;
     /* STDOUT/STDERR/STDIN are IO handles wrapping the C standard streams, so
        puts/print/write/flush -- and gets/read/tty? for STDIN -- route through
        the existing TY_IO dispatch. */

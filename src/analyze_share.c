@@ -262,6 +262,7 @@ static TyKind sh_family(TyKind rt) {
   if (ty_is_array(rt) || ty_is_ptr_array(rt) || rt == TY_STR_RANGE || rt == TY_ENUMERATOR) return BOP_ANY_ARRAY;
   if (ty_is_hash(rt)) return BOP_ANY_HASH;
   if (rt == TY_ARGF) return TY_IO;
+  if (rt == TY_ENV) return BOP_ENV;
   if (rt == TY_PROC || rt == TY_METHOD || rt == TY_CURRY) return BOP_CALLABLE;
   return rt;
 }

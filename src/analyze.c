@@ -11759,8 +11759,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
       owner_ci = acc.owner;
       attr_decl = acc.pos == 1 ? acc.node : -1;
     }
+    /* (ENV's methods have no compiled function a wrapper could name: its
+       Method is refused at the call, emit_method_obj_on_constant) */
     else if (rt == TY_UNKNOWN || rt == TY_VOID || rt == TY_NIL ||
-             rt == TY_CLASS || rt == TY_METHOD || rt == TY_PROC)
+             rt == TY_CLASS || rt == TY_METHOD || rt == TY_PROC || rt == TY_ENV)
       continue;
     /* A boxed receiver is not a C pointer the Method's self slot can carry:
        the wrapper takes it inside a one-element array instead,

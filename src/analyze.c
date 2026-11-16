@@ -24520,19 +24520,79 @@ int *cext_container_stores(Compiler *c, const char *name, Scope *scope, int *cou
   }
   free(values.v); *count = all.n; return all.v;
 }
+/* The calls whose receiver reads an instance variable, chained by the
+   variable's name in node order, as cst_ready chains the stores of a local.
+   cext_ivar_container_stores read every call of the program per instance
+   variable read the container-widening walk reached (and that walk reaches
+   each again for every binding of an extension method's parameter): a
+   third of the storage phase's samples on an application with a hundred
+   thousand scopes. The chains are made again when the table's version
+   moves, and extended over the nodes appended since when only its count
+   grew (the appended nodes come after every chained one, so the chains stay
+   ascending). */
+static ANameHash g_ivc_names;
+static int *g_ivc_first, *g_ivc_last, *g_ivc_next, g_ivc_cap, g_ivc_cnt;
+static const NodeTable *g_ivc_nt;
+static unsigned g_ivc_ver;
+static void ivc_ready(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (g_ivc_nt != nt || g_ivc_ver != nt->version) {
+    anh_free(&g_ivc_names); memset(&g_ivc_names, 0, sizeof g_ivc_names);
+    free(g_ivc_first); free(g_ivc_last); free(g_ivc_next);
+    g_ivc_cap = 64;
+    g_ivc_first = malloc(sizeof(int) * (size_t)g_ivc_cap);
+    g_ivc_last = malloc(sizeof(int) * (size_t)g_ivc_cap);
+    g_ivc_next = NULL;
+    if (!g_ivc_first || !g_ivc_last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_ivc_nt = nt; g_ivc_ver = nt->version; g_ivc_cnt = 0;
+  }
+  if (g_ivc_cnt == nt->count) return;
+  g_ivc_next = realloc(g_ivc_next, sizeof(int) * (size_t)nt->count);
+  if (!g_ivc_next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int w = g_ivc_cnt; w < nt->count; w++) {
+    g_ivc_next[w] = -1;
+    if (nt_kind(nt, w) != NK_CallNode) continue;
+    int r = nt_ref(nt, w, "receiver");
+    if (r < 0 || nt_kind(nt, r) != NK_InstanceVariableReadNode) continue;
+    const char *nm = nt_str(nt, r, "name");
+    if (!nm) continue;
+    int k = anh_find(&g_ivc_names, nm);
+    if (k < 0) {
+      anh_add(&g_ivc_names, nm); k = g_ivc_names.n - 1;
+      if (k >= g_ivc_cap) {
+        g_ivc_cap *= 2;
+        g_ivc_first = realloc(g_ivc_first, sizeof(int) * (size_t)g_ivc_cap);
+        g_ivc_last = realloc(g_ivc_last, sizeof(int) * (size_t)g_ivc_cap);
+        if (!g_ivc_first || !g_ivc_last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      g_ivc_first[k] = w;
+    }
+    else g_ivc_next[g_ivc_last[k]] = w;
+    g_ivc_last[k] = w;
+  }
+  g_ivc_cnt = nt->count;
+}
 /* The values element stores (`@q.push(x)`, `@q << x`, `@q[i] = x`) put into
  * the container an instance variable of class `cls` holds. */
 int *cext_ivar_container_stores(Compiler *c, const char *name, int cls, int *count) {
   const NodeTable *nt = c->nt;
   StoreVals all = {0}, values = {0};
-  NT_FOREACH_KIND(nt, NK_CallNode, call) {
-    int r = nt_ref(nt, call, "receiver");
-    if (r < 0 || nt_kind(nt, r) != NK_InstanceVariableReadNode) continue;
-    const char *rn = nt_str(nt, r, "name");
-    if (!rn || !sp_streq(rn, name) || comp_ivar_owner(c, r) != cls) continue;
+  /* the chain is copied before the walk runs over it: a store's values may
+     append nodes or move the table's version, which makes the chains again */
+  ivc_ready(c);
+  int k = name ? anh_find(&g_ivc_names, name) : -1, n = 0, *calls = NULL;
+  for (int call = k >= 0 ? g_ivc_first[k] : -1; call >= 0; call = g_ivc_next[call]) {
+    if (!(n & (n - 1))) calls = realloc(calls, sizeof(int) * (size_t)(n ? 2 * n : 1));
+    if (!calls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    calls[n++] = call;
+  }
+  for (int i = 0; i < n; i++) {
+    int call = calls[i], r = nt_ref(nt, call, "receiver");   /* (the chain's: a read of name) */
+    if (comp_ivar_owner(c, r) != cls) continue;
     values.n = 0; array_call_store_values(c, call, &values);
     for (int j = 0; j < values.n; j++) store_vals_add(&all, values.v[j]);
   }
+  free(calls);
   free(values.v); *count = all.n; return all.v;
 }
 

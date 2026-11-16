@@ -246,6 +246,12 @@ spinel: 1 refusal, nothing written
 == test/reject/builtin_prepended_forward_drops_keywords.rb [promote] rc=1
 spinel: test/reject/builtin_prepended_forward_drops_keywords.rb:10: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
 spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_forward_kwsplat_positional.rb [default] rc=1
+spinel: test/reject/builtin_prepended_forward_kwsplat_positional.rb:11: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_forward_kwsplat_positional.rb [promote] rc=1
+spinel: test/reject/builtin_prepended_forward_kwsplat_positional.rb:11: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
 == test/reject/builtin_prepended_initialize_new.rb [default] rc=1
 spinel: test/reject/builtin_prepended_initialize_new.rb:13: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
 spinel: 1 refusal, nothing written

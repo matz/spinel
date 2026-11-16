@@ -8153,6 +8153,8 @@ static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws
 static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open, int kw, NewFills *f) {
   /* (a keyword-dropping forward is one only where dropping them cannot be observed) */
   int kw_ok = !kw || builtin_new_keywords(c->classes[ci].name), unplaced = 0, effects = 0, kwpass = 0;
+  /* (a `**h` alone, the call's only argument) */
+  int lone = kw == NEWKW_MAYBE && !open && !argc;
   for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
     const Scope *sc = &c->scopes[mi];
     /* (a def of the class's own counts where the load record proves it made before the call can first run; where the call runs
@@ -8168,7 +8170,9 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
     if (!(dopen ? sc->rest_idx >= 0 && sc->nrequired == 0 : cplan_def_takes_argc(c, mi, dargc))) return BNF_REFUSE;
     /* (and its `super` passes that Hash on as a positional argument: the builtin's initialize sees the call it would have seen
        only where it takes no keywords and makes the Hash a positional argument too (BC_INIT_NO_KEYWORDS), as Array's does; a
-       `**h` alone is taken as passing none, as it does when empty: one that holds keys is not told apart) */
+       `**h` passes that Hash only when it holds keys, which the plan does not tell apart: as the call's only argument it is
+       refused, and beside positional arguments it is taken as passing none, right when empty) */
+    if (lone && !kwrest && !builtin_init_no_keywords(c->classes[ci].name)) return BNF_REFUSE;
     if ((kw != NEWKW_SURE || kwrest || builtin_init_no_keywords(c->classes[ci].name)) && ct_init_forwards(c, mi, ci, dargc, dopen, kw_ok)) {
       /* (the defaults a forward fills are the next positional arguments of the one it passes them to; past one without a
          keyword rest, the literal keywords are a positional Hash ahead of its own defaults and every later one's) */

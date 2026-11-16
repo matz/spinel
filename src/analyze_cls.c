@@ -1668,7 +1668,6 @@ static int cf_owner_block(CF *f, int v, int loop_stop) {
 
 static int cf_in_exec_block(CF *f, int v);
 static void cf_ivar_write_any(CF *f, const char *name, int v);
-static const char *cf_ivar_lit(CF *f, int call);
 
 /* the loop a break under v leaves: the nearest enclosing while, until or
    for, or -1 when a block, a lambda or a def is nearer */
@@ -3484,8 +3483,6 @@ static void cf_opaque_answer(CF *f, int v, int r, const char *nm, const int *arg
       if (rv >= 0) cf_flow(f, rv, v);
     }
     else if (argc >= 2) cf_flow(f, argv[argc - 1], v);
-    /* (into the ivar of every class: the receiver's classes are not asked) */
-    if (sp_streq(nm, "instance_variable_set") && argc == 2 && cf_ivar_lit(f, v)) cf_ivar_write_any(f, cf_ivar_lit(f, v), argv[1]);
     return;
   }
   if (sp_streq(nm, "const_get")) {
@@ -3496,10 +3493,8 @@ static void cf_opaque_answer(CF *f, int v, int r, const char *nm, const int *arg
   if (sp_streq(nm, "instance_variable_get")) {
     cf_add_set(f, v, cf_bv_set(f));
     cf_edge(f, f->rtc, v);
-    const char *lit = cf_ivar_lit(f, v);
     for (int i = 0; i < f->ent_cap; i++)
-      if (f->ent[i].name && f->ent[i].cls >= 0 && f->ent[i].name[0] == '@' && f->ent[i].name[1] != '@' &&
-          (!lit || sp_streq(f->ent[i].name, lit))) cf_flow(f, f->ent[i].el, v);
+      if (f->ent[i].name && f->ent[i].cls >= 0 && f->ent[i].name[0] == '@' && f->ent[i].name[1] != '@') cf_flow(f, f->ent[i].el, v);
     return;
   }
   if (cf_name_in(nm, execs)) {
@@ -3598,7 +3593,6 @@ static void cf_call(CF *f, int v) {
   if (cf_opaque_name(nm)) {
     cf_all(f, v);
     for (int i = 0; i < argc; i++) cf_all(f, argv[i]);
-    if (sp_streq(nm, "instance_variable_set") && argc == 2 && cf_ivar_lit(f, v)) cf_ivar_write_any(f, cf_ivar_lit(f, v), argv[1]);
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) { cf_all_block_params(f, blk); cf_all(f, blk); }
     if (argc >= 2 && (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) &&
         nt_kind(nt, argv[0]) != NK_SymbolNode && nt_kind(nt, argv[0]) != NK_StringNode)
@@ -4625,26 +4619,6 @@ static void cf_node(CF *f, int v) {
 
 /* ---- the pass ---- */
 
-/* the ivar a literal first argument names (`instance_variable_set(:@a, v)`,
-   `instance_variable_get(:@a)`), else NULL: a splat, a block argument or a
-   keyword hash may hand it other arguments than the ones written */
-static const char *cf_ivar_lit(CF *f, int call) {
-  const NodeTable *nt = f->nt;
-  const char *cn = nt_str(nt, call, "name");
-  int want = cn && sp_streq(cn, "instance_variable_set") ? 2 : cn && sp_streq(cn, "instance_variable_get") ? 1 : 0;
-  int a = nt_ref(nt, call, "arguments"), n = 0;
-  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
-  if (!want || n != want || nt_ref(nt, call, "block") >= 0) return NULL;
-  for (int i = 0; i < n; i++) {
-    NodeKind ak = nt_kind(nt, av[i]);
-    if (ak == NK_SplatNode || ak == NK_BlockArgumentNode || ak == NK_KeywordHashNode) return NULL;
-  }
-  NodeKind k = nt_kind(nt, av[0]);
-  const char *nm = k == NK_SymbolNode ? nt_str(nt, av[0], "value") : k == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
-  if (!nm || nm[0] != '@' || nm[1] == '@' || !nm[1]) return NULL;
-  return nm;
-}
-
 static void cf_collect_dyn(CF *f) {
   const NodeTable *nt = f->nt;
   /* the constants the program writes: a read of any other names a builtin */
@@ -4663,18 +4637,7 @@ static void cf_collect_dyn(CF *f) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cn = nt_str(nt, id, "name");
     if (!cn) continue;
-    if (sp_streq(cn, "instance_variable_set") || sp_streq(cn, "instance_variable_get") || sp_streq(cn, "remove_instance_variable")) {
-      /* (a literal name reads or writes that ivar alone, at the call) */
-      if (sp_streq(cn, "remove_instance_variable") || !cf_ivar_lit(f, id)) f->all_ivars = 1;
-    }
-    /* (a send of one of them is no literal call of it) */
-    if (sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send")) {
-      int a1 = nt_ref(nt, id, "arguments"), n1 = 0;
-      const int *v1 = a1 >= 0 ? nt_arr(nt, a1, "arguments", &n1) : NULL;
-      NodeKind k1 = n1 > 0 ? nt_kind(nt, v1[0]) : NK_NilNode;
-      const char *sn = k1 == NK_SymbolNode ? nt_str(nt, v1[0], "value") : k1 == NK_StringNode ? nt_str(nt, v1[0], "content") : NULL;
-      if (sn && (sp_streq(sn, "instance_variable_set") || sp_streq(sn, "instance_variable_get") || sp_streq(sn, "remove_instance_variable"))) f->all_ivars = 1;
-    }
+    if (sp_streq(cn, "instance_variable_set") || sp_streq(cn, "instance_variable_get") || sp_streq(cn, "remove_instance_variable")) f->all_ivars = 1;
     /* `inject(:m)`, `inject(init, :m)` and `each_with_object(x, &:m)` call m
        with arguments the pass does not see: m takes any class */
     {

@@ -3150,8 +3150,9 @@ static int kconv_noraise_kw(Compiler *c, int argc, const int *argv) {
    Integer slot in the strict form, where a Bignum answer is a loud
    RangeError at run time: typing it as a Bignum would refuse to build every
    site that needs an Integer, a Range bound for one. The `exception: false`
-   form of such a call is boxed already, so it carries the answer. */
-static TyKind kconv_integer_kind(Compiler *c, int arg, int noraise) {
+   form of such a call is boxed already, so it carries the answer. The plan
+   answers the conversions at the Integer call id. */
+static TyKind kconv_integer_kind(Compiler *c, int id, int arg, int noraise) {
   static const char *const names[] = { "to_int", "to_i" };
   TyKind at = infer_type(c, arg);
   /* promote mode reads a String too wide for sp_int as a Bignum
@@ -3159,7 +3160,7 @@ static TyKind kconv_integer_kind(Compiler *c, int arg, int noraise) {
   if (g_promote_mode && at == TY_STRING) return TY_POLY;
   if (!ty_is_object(at)) return TY_INT;
   for (int k = 0; k < 2; k++) {
-    int mi = comp_method_in_chain(c, ty_object_class(at), names[k], NULL);
+    int mi = cplan_implied_target(c, id, arg, ty_object_class(at), names[k], 0, NULL);
     /* the same admission as conv_bridge_callee's: a method with parameters
        or one that yields has no bridge row, so it must not type the slot */
     if (mi < 0 || c->scopes[mi].nparams != 0 || c->scopes[mi].yields) continue;
@@ -3170,8 +3171,9 @@ static TyKind kconv_integer_kind(Compiler *c, int arg, int noraise) {
 }
 
 /* What Kernel#Hash answers for the argument `arg`, called bare or on a
-   receiver that takes it as Kernel's. */
-static TyKind kconv_hash_kind(Compiler *c, int arg) {
+   receiver that takes it as Kernel's; its #to_hash is the plan's answer at
+   the call id. */
+static TyKind kconv_hash_kind(Compiler *c, int id, int arg) {
   TyKind at = infer_type(c, arg);
   if (ty_is_hash(at)) return at;                 /* Hash(hash) -> the hash */
   /* a Hash subclass instance is a Hash already: CRuby answers it as it is
@@ -3180,7 +3182,7 @@ static TyKind kconv_hash_kind(Compiler *c, int arg) {
   if (ty_is_object(at) && comp_ary_is_hash(c, ty_object_class(at))) return TY_POLY;
   /* an object answers through its own #to_hash (#3721) */
   if (ty_is_object(at)) {
-    int hci2 = ty_object_class(at), hmi = comp_method_in_chain(c, hci2, "to_hash", NULL);
+    int hci2 = ty_object_class(at), hmi = cplan_implied_target(c, id, arg, hci2, "to_hash", 0, NULL);
     if (hmi >= 0) return (TyKind)c->scopes[hmi].ret;
   }
   if (at == TY_POLY) return TY_POLY;             /* nil-or-hash decided at runtime */
@@ -5575,7 +5577,7 @@ static int infer_string_recv_call(Compiler *c, int id, const NodeTable *nt, cons
          boolean a String operand gives, because the conversion can still
          answer nothing: a #to_str answering nil is CRuby's nil casecmp. The
          emitter takes the same shape test, so both agree. */
-      if (ty_is_object(at0) && class_has_to_str_shape(c, ty_object_class(at0)))
+      if (ty_is_object(at0) && class_has_to_str_shape(c, id, argv[0], ty_object_class(at0)))
         { *out = TY_POLY; return 1; }
       { *out = TY_NIL; return 1; }
     }
@@ -5887,7 +5889,7 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
            that method -- the pair's receiver is a Float -- so taking the
            method's return there answered one operator from the class and
            another from the pair. */
-        if (op_mi >= 0 && !class_has_coerce_shape(c, acls))
+        if (op_mi >= 0 && !class_has_coerce_shape(c, id, argv[0], acls))
           { *out = (TyKind)c->scopes[op_mi].ret; return 1; }
         /* The standard idiom answers a pair of plain NUMBERS and defines no
            operator of its own, so the result is whatever the pair computes --
@@ -6789,7 +6791,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
         /* a Float argument converts to an Integer that promote mode lets be a
            Bignum, as Float#to_i does there (#4688) */
         if (g_promote_mode && infer_type(c, argv[0]) == TY_FLOAT) { *out = TY_POLY; return 1; }
-        { *out = kconv_integer_kind(c, argv[0], kw_argc < argc && kconv_noraise_kw(c, argc, argv)); return 1; }
+        { *out = kconv_integer_kind(c, id, argv[0], kw_argc < argc && kconv_noraise_kw(c, argc, argv)); return 1; }
       }
       if (sp_streq(name, "Rational")) { *out = TY_RATIONAL; return 1; }
       if (sp_streq(name, "Complex"))  { *out = TY_COMPLEX; return 1; }
@@ -6798,7 +6800,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
         if (sp_streq(name, "String"))   { *out = TY_STRING; return 1; }
         /* the emitter takes Hash on such a receiver as Kernel's too
            (codegen_call_kernel.c); left untyped, its value read as nil */
-        if (sp_streq(name, "Hash"))     { *out = kconv_hash_kind(c, argv[0]); return 1; }
+        if (is_hash_const_name(name))   { *out = kconv_hash_kind(c, id, argv[0]); return 1; }
         if (sp_streq(name, "Array")) {
           TyKind kat = infer_type(c, argv[0]);
           if (ty_is_array(kat)) { *out = kat; return 1; }
@@ -6840,7 +6842,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
     /* Kernel conversions */
     if (sp_streq(name, "Integer") && (kw_argc == 1 || kw_argc == 2)) {
       if (g_promote_mode && infer_type(c, argv[0]) == TY_FLOAT) { *out = TY_POLY; return 1; }   /* see above (#4688) */
-      { *out = kconv_integer_kind(c, argv[0], kw_argc < argc && kconv_noraise_kw(c, argc, argv)); return 1; }
+      { *out = kconv_integer_kind(c, id, argv[0], kw_argc < argc && kconv_noraise_kw(c, argc, argv)); return 1; }
     }
     if (sp_streq(name, "Float") && kw_argc == 1) { *out = TY_FLOAT; return 1; }
     if (sp_streq(name, "String") && argc == 1) { *out = TY_STRING; return 1; }
@@ -6864,7 +6866,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
       if (at == TY_RANGE)  { *out = TY_INT_ARRAY; return 1; }    /* Array(range) enumerates */
       { *out = TY_POLY_ARRAY; return 1; }
     }
-    if (sp_streq(name, "Hash") && argc == 1) { *out = kconv_hash_kind(c, argv[0]); return 1; }
+    if (is_hash_const_name(name) && argc == 1) { *out = kconv_hash_kind(c, id, argv[0]); return 1; }
     if ((is_format_alias(name)) && argc >= 1) { *out = TY_STRING; return 1; }
     if (sp_streq(name, "system") && argc >= 1) { *out = TY_POLY; return 1; }  /* true, false, or nil when the command cannot run */
     if (sp_streq(name, "`") && argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode) { *out = TY_STRING; return 1; }  /* the command's output */

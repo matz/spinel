@@ -2658,6 +2658,7 @@ int        send_family_defined_anywhere(Compiler *c, const char *name);   /* ana
    the kind of the Array the chain's instances embed, TY_POLY_ARRAY once the
    inference is past its optimistic stage with no element seen. */
 int        comp_ary_root(Compiler *c, int cid);
+int        comp_ary_is_array_proper(Compiler *c, int cid);
 int        comp_implicit_to_ary_mi(Compiler *c, int cid);
 int        comp_ty_ary_root(Compiler *c, TyKind t);
 int        comp_ty_arysub_array(Compiler *c, TyKind t);

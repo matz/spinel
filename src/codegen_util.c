@@ -3660,7 +3660,7 @@ int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b) {
     free(e.p);
     return 1;
   }
-  const char *fn = slot == TY_STRING && prog_has_conv_method(c, "to_str", TY_STRING)
+  const char *fn = slot == TY_STRING && prog_has_conv_method(c, v, "to_str", TY_STRING)
                    ? "sp_poly_arg_str" : poly_rhs_unbox_fn(slot);
   if (!fn) return 0;
   buf_printf(b, "%s(", fn); emit_expr(c, v, b); buf_puts(b, ")");

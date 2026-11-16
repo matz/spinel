@@ -1445,9 +1445,11 @@ int is_numeric_coerce_op(const char *op) {
    this, so they agree at every point in the pipeline; whether the coerce
    dispatch ends up carrying an arm for the class is a separate question that
    only codegen needs (class_coerce_emittable), and a class that fails it finds
-   the hook unhandled and gets the TypeError CRuby raises for it anyway. */
-int class_has_coerce_shape(Compiler *c, int k) {
-  int mi = call_target(c, -1, k, "coerce", CT_METHODS | CT_SHARED, NULL);
+   the hook unhandled and gets the TypeError CRuby raises for it anyway. The
+   plan answers it at the call id that coerces its operand op (id -1: the
+   dispatcher's, whose table switch no call stands behind). */
+int class_has_coerce_shape(Compiler *c, int site, int op, int k) {
+  int mi = cplan_implied_target(c, site, op, k, "coerce", 0, NULL);
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   return m->nparams == 1 && m->rest_idx < 0;
@@ -1490,10 +1492,11 @@ int class_coerce_emittable(Compiler *c, int k) {
    where it found them rather than adding a new way in. An
    `attr_reader :to_str` defines no method scope at all, so the lookup below
    never sees it. A native class is excluded because the conversion is a
-   direct call to a method this TU compiles. */
-int class_has_to_str_shape(Compiler *c, int k) {
+   direct call to a method this TU compiles. The plan answers it at the call
+   id that converts its operand op. */
+int class_has_to_str_shape(Compiler *c, int site, int op, int k) {
   if (k < 0 || k >= c->nclasses || c->classes[k].is_native_class) return 0;
-  int mi = comp_method_in_chain(c, k, "to_str", NULL);
+  int mi = cplan_implied_target(c, site, op, k, "to_str", 0, NULL);
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   /* an ALIAS is not this shape yet: the conversion emitter names the call

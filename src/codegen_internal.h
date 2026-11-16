@@ -1267,8 +1267,8 @@ extern int g_has_user_coerce;
    no rest, an array return -- the [other, self] pair, poly or homogeneously
    typed. See analyze_util.c. */
 int class_coerce_emittable(Compiler *c, int k);
-int class_has_coerce_shape(Compiler *c, int k);
-int class_has_to_str_shape(Compiler *c, int k);
+int class_has_coerce_shape(Compiler *c, int site, int op, int k);
+int class_has_to_str_shape(Compiler *c, int site, int op, int k);
 int is_numeric_coerce_op(const char *op);
 extern int g_has_user_to_io;
 extern int g_gen_obj_hashkey; /* >=1 instantiated class defines #hash + #eql?: emit + install the obj hash/eql key hooks */
@@ -1608,7 +1608,7 @@ void emit_opw_okey_read(const char *t, Buf *b);
 int hash_nil_key_stored(Compiler *c, int key, TyKind kt);
 const char *conv_wrong_cls_name(TyKind t);
 const char *conv_cls_name_of(Compiler *c, TyKind t);
-TyKind obj_container_conv(Compiler *c, TyKind t, const char *conv, int *def);
+TyKind obj_container_conv(Compiler *c, int op, TyKind t, const char *conv, int *def);   /* the call plan answers it at the call op is passed to */
 int conv_takes_no_args(Compiler *c, int mi);
 void emit_conv_dflt_args(Compiler *c, int mi, Buf *b);
 void emit_str_pattern_expr(Compiler *c, int node, Buf *b);
@@ -1897,8 +1897,10 @@ extern int g_open_defaults;        /* parameter defaults being emitted, innermos
    typed slot (CRuby's implicit conversion protocol), or -1: `conv` is "to_str"
    or "to_int" and `want` the slot's type, which the method's declared return
    must be. *def_out receives the defining class. Shared by the emitter and the
-   native-argument check so both agree on which objects may cross. */
-int obj_conv_method(Compiler *c, TyKind t, const char *conv, TyKind want, int *def_out);
+   native-argument check so both agree on which objects may cross. The call
+   plan answers it (cplan_implied_target) at the call the operand op is
+   passed to (ic_operand_host). */
+int obj_conv_method(Compiler *c, int op, TyKind t, const char *conv, TyKind want, int *def_out);
 /* A String comparison's operand: the shape test both the type rules and the
    arms ask, the conversion emitted on a spilled temp, and the prologue the
    arms share. See codegen.c. */
@@ -1909,8 +1911,9 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b);
 void emit_str_cmp_conv(Compiler *c, int node, int tmp, Buf *b);
 void emit_str_cmp_prologue(Compiler *c, const char *rtxt, int operand,
                            int *tr, int *to, int *ts, Buf *b);
-/* 1 iff any class defines a usable #to_int / #to_str -- see codegen.c. */
-int prog_has_conv_method(Compiler *c, const char *conv, TyKind want);
+/* 1 iff any class defines a usable #to_int / #to_str -- see codegen.c. id and
+   op as obj_conv_method's. */
+int prog_has_conv_method(Compiler *c, int op, const char *conv, TyKind want);
 
 __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what);
 int unsup_message(Compiler *c, int id, const char *what, int self_ci, char *msg, size_t cap);
@@ -3149,7 +3152,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt, int start_node,
 int aset_range_held(Compiler *c, TyKind rt, const int *argv);
 void emit_aset_range_held(Compiler *c, int id, int recv, TyKind rt, const int *argv, Buf *b);
 int frange_index_view(Compiler *c, int id);
-int splice_to_ary_mi(Compiler *c, TyKind rhs_ty);
+int splice_to_ary_mi(Compiler *c, int op, TyKind rhs_ty);
 TyKind emit_splice_to_ary_src(Compiler *c, int id, int rhs_node, TyKind rhs_ty, int mi, int ta, Buf *b, Buf *out);
 void emit_to_ary_dispatch(Compiler *c, int id, int cid, const char *selfptr, Buf *out);
 int emit_boxed_to_ary(Compiler *c, int id, int op, int src, Buf *b, int indent);

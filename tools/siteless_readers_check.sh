@@ -2,7 +2,7 @@
 # siteless_readers_check.sh -- the static rule beside method_table_check.sh (#10866, step 2, siteless readers): the
 # dispatchers and predicates that no call stands behind (the per-class switches of the generated C, the passes'
 # surveys of "does any class define X") ask the method tables with no site, through the plan's no-site ask
-# (call_target, call_answers and call_attr_target with id -1; CT_SHARED marks the asks of the readers the call sites share), and name no table
+# (call_target, call_answers and call_attr_target with id -1; CT_SHARED marks the asks of the readers the call sites share; cplan_implied_target with id -1 is the same ask for an implied name: a survey of the program's classes, a table switch or a memo, each with no call behind it), and name no table
 # primitive themselves. The dynamic check lists a versioned answer of such an ask as an `unasked` table answer.
 #
 #   tools/siteless_readers_check.sh
@@ -10,7 +10,7 @@
 # Two directions. Fails, naming file:function:line, when the body of one of the functions below names a primitive of
 # the method tables (comp_method_in_chain and its kin, comp_reader_in_chain, comp_main_method, comp_method_index ...).
 # And fails, naming file:function, when a function that is not on the list makes a no-site ask for a method scope
-# (CT_SHARED): a new reader of that kind joins the list, so that none drops its reads from --method-table-check
+# (CT_SHARED, or cplan_implied_target with id -1): a new reader of that kind joins the list, so that none drops its reads from --method-table-check
 # unseen. The rule checks this named list, not the callees: a helper they call is covered by the dynamic check
 # (method_table_check.sh, whose `pass` family counts a read made with no node open).
 set -u
@@ -92,7 +92,7 @@ for f in src/*.c; do
   case "$f" in src/call_plan.c) continue ;; esac
   awk -v f="$f" '
     /^[a-zA-Z_][^;=]*[(]/ && !/^(typedef|return|else|if|for|while|switch|#)/ && !/;[ \t]*$/ { x = $0; sub(/[(].*/, "", x); n = split(x, w, /[ *]+/); fn = w[n] }
-    /CT_SHARED/ && fn != "" { print f ":" fn }' "$f"
+    (/CT_SHARED/ || /cplan_implied_target\(c, -1,/) && fn != "" { print f ":" fn }' "$f"
 done | sort -u | while IFS= read -r ent; do
   printf '%s\n' $FUNCS | grep -Fxq -- "$ent" || { echo "siteless-readers-check: $ent asks the plan with no site (CT_SHARED) and is not on the readers' list"; exit 3; }
 done || bad=1

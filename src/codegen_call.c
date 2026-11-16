@@ -1,6 +1,7 @@
 #include "codegen_internal.h"
 #include "order_plan.h"
 #include "method_table_check.h"
+#include "implicit_calls.h"
 #include "share.h"
 #include "repr.h"
 #include "codegen_poly.h"
@@ -11688,7 +11689,7 @@ void native_arg_check(Compiler *c, int id, const char *what, NativeMethod *m,
        could only ever raise, and naming the position beats a run-time
        TypeError the author has to reach first. */
     if (bad && (want == TY_STRING || want == TY_INT) &&
-        obj_conv_method(c, got, want == TY_STRING ? "to_str" : "to_int",
+        obj_conv_method(c, argv[ai], got, want == TY_STRING ? "to_str" : "to_int",
                         want, NULL) >= 0) bad = 0;
     if (!bad) continue;
     char msg[256];
@@ -15551,10 +15552,10 @@ static int try_convert_arysub(Compiler *c, int arg, int emb, Buf *b) {
    typed String, so a #to_str of another type (an Integer) answered nil.
    0 leaves the call to the bridge. */
 static int emit_try_convert_obj_to_str(Compiler *c, int arg, TyKind at, Buf *b) {
-  int cid = ty_object_class(at), def = -1;
+  int cid = ty_object_class(at), host = ic_operand_host(c, arg);
   if (cid < 0 || cid >= c->nclasses || c->classes[cid].is_native_class) return 0;
-  int mi = comp_method_in_chain(c, cid, "to_str", &def);
-  if (mi >= 0 && comp_is_undeffed_in_chain(c, cid, "to_str")) return 0;
+  MethodLookup ml;
+  int mi = cplan_implied_target(c, host, arg, cid, "to_str", 0, &ml), def = ml.def_class;
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   /* a String #to_str is the bridge's (sp_poly_check_str); an alias or a
@@ -15572,8 +15573,8 @@ static int emit_try_convert_obj_to_str(Compiler *c, int arg, TyKind at, Buf *b) 
     int up = c->classes[k].parent;
     while (up >= 0 && up != cid) up = c->classes[up].parent;
     if (up != cid) continue;
-    int kd = -1;
-    if (comp_method_in_chain(c, k, "to_str", &kd) != mi || kd != def) return 0;
+    MethodLookup kl;
+    if (cplan_implied_target(c, host, arg, k, "to_str", 0, &kl) != mi || kl.def_class != def) return 0;
   }
   if (comp_ty_value_obj(c, ty_object(def))) return 0;
   int to = ++g_tmp, tr = ++g_tmp, ts = ++g_tmp;
@@ -18277,12 +18278,13 @@ static void emit_splice_bounds(Compiler *c, int ta, int tg,
 /* Scope index of an array-returning `to_ary` in rhs_ty's class chain, else -1.
    CRuby coerces a non-array splice source through to_ary (rb_ary_to_ary); the
    object itself remains the expression value. Value-type classes are excluded
-   (their instances are not boxed). */
-int splice_to_ary_mi(Compiler *c, TyKind rhs_ty) {
+   (their instances are not boxed). The plan answers it at the call op is an
+   argument of. */
+int splice_to_ary_mi(Compiler *c, int op, TyKind rhs_ty) {
   if (!ty_is_object(rhs_ty)) return -1;
   int cid = ty_object_class(rhs_ty);
   if (c->classes[cid].is_value_type) return -1;
-  int mi = comp_implicit_to_ary_mi(c, cid);
+  int mi = cplan_to_ary_method(c, ic_operand_host(c, op), op, cid);
   if (mi < 0) return -1;
   return ty_is_array((TyKind)c->scopes[mi].ret) ? mi : -1;
 }
@@ -18431,7 +18433,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
     }
   }
   int ta = ++g_tmp, ts = ++g_tmp, tg = ++g_tmp;  /* recv, src, range temps */
-  int tam = splice_to_ary_mi(c, rhs_ty);
+  int tam = splice_to_ary_mi(c, rhs_node, rhs_ty);
 
   if (rt == TY_POLY_ARRAY) {
     buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, recv, b); buf_puts(b, "; ");
@@ -32170,7 +32172,7 @@ int emit_implicit_self_member(Compiler *c, int id, Buf *b) {
 static int coercing_object_arg(Compiler *c, int node) {
   TyKind t = comp_ntype(c, node);
   if (!ty_is_object(t)) return 0;
-  return class_has_coerce_shape(c, ty_object_class(t));
+  return class_has_coerce_shape(c, ic_operand_host(c, node), node, ty_object_class(t));
 }
 
 /* The boxed `**` for a receiver of static type rt: a receiver typed a number

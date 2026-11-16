@@ -2837,7 +2837,8 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
      other), as call_target answers it.
    A call no planned row makes (a builtin's callback, a syntax row not
    planned yet) is not asked of the record: the table's method, with
-   MLW_UNASKED where the name has versions, else ML_METHOD. side is 0 for
+   MLW_UNASKED where the name has versions, else ML_METHOD; so is one with no
+   site (id -1), the ask of a program-wide reader. side is 0 for
    an instance of cls, CT_CMETHOD for the class object, CT_OWN for cls's
    own method (with CT_CMETHOD, its own class method), as call_target's
    flags; the planned rows ask instances. -1 with ML_NONE where cls has no
@@ -3222,6 +3223,12 @@ static int cplan_implied_entry(Compiler *c, int cls, const char *name, int mi) {
   int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, cls, 0, name, ver_call_arity(c, -1, cls, 0, name, mi), VF_NONE);
   return ix >= 0 ? c->ver_entries[ix].scope : -1;
 }
+/* See call_plan.h. An Array subclass instance is an Array already
+   (comp_arysub_emb): CRuby takes it as it is and never calls its #to_ary. */
+int cplan_to_ary_method(Compiler *c, int id, int op, int cid) {
+  if (comp_ary_is_array_proper(c, cid)) return -1;
+  return cplan_implied_target(c, id, op, cid, "to_ary", 0, NULL);
+}
 /* See call_plan.h. The classes are cplan_boxed_to_ary_classes' (a box can
    hold them, their to_ary is the table's no-argument one). */
 const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
@@ -3234,7 +3241,9 @@ const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
   es->cls = cls;
   es->scope = scope;
   for (int i = 0; i < np; i++) {
+    mtab_enter(c);
     int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    mtab_leave(c);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     int e = cplan_implied_entry(c, k, "to_ary", mi);
     if (e < 0 || !c->scopes[e].reachable) continue;
@@ -3288,7 +3297,9 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
   if (oc < 0 && ot != TY_POLY) return 0;
   const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
   for (int i = 0; i < np && n < cap; i++) {
+    mtab_enter(c);
     int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    mtab_leave(c);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     if (oc >= 0 && !is_descendant(c, k, oc)) continue;
     MethodLookup ml;
@@ -3305,7 +3316,9 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
 int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
   if (boxed) *boxed = 0;
   int cls = ty_is_object(t) ? ty_object_class(t) : -1;
+  mtab_enter(c);
   int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
+  mtab_leave(c);
   if (mi < 0 || c->scopes[mi].nparams != 0) return -1;
   MethodLookup ml;
   int vi = cplan_implied_target(c, at, op, cls, "to_ary", 0, &ml);

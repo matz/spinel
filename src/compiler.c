@@ -2381,12 +2381,15 @@ int comp_arysub_emb(Compiler *c, int cid) {
 int comp_arysub_builtin(Compiler *c, int cid) {
   return comp_ary_is_time(c, cid) ? CORE_TIME : comp_ary_is_str(c, cid) ? CORE_STRING : comp_ary_is_hash(c, cid) ? CORE_HASH : CORE_ARRAY;
 }
+/* An Array subclass instance is an Array already: CRuby (rb_check_array_type)
+   takes it as it is and never calls its own #to_ary. */
+int comp_ary_is_array_proper(Compiler *c, int cid) {
+  return comp_ary_root(c, cid) >= 0 && comp_arysub_emb(c, cid) == 0;
+}
 /* The scope of the #to_ary an implicit Array conversion of a class cid
-   instance calls, or -1. An Array subclass instance is an Array already:
-   CRuby (rb_check_array_type) takes it as it is and never calls its own
-   #to_ary. */
+   instance calls, or -1 (comp_ary_is_array_proper: none). */
 int comp_implicit_to_ary_mi(Compiler *c, int cid) {
-  if (comp_ary_root(c, cid) >= 0 && comp_arysub_emb(c, cid) == 0) return -1;
+  if (comp_ary_is_array_proper(c, cid)) return -1;
   return comp_method_in_chain(c, cid, "to_ary", NULL);
 }
 

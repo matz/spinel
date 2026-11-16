@@ -4,6 +4,7 @@
 
 #include "codegen_internal.h"
 #include "order_plan.h"
+#include "implicit_calls.h"
 
 int g_ivg_box_node = -1;
 #include "call_plan.h"
@@ -618,7 +619,7 @@ static void emit_obj_container_conv(Compiler *c, int node, int def, const char *
    kind the text is typed as. */
 static TyKind emit_product_operand(Compiler *c, int node, TyKind at, Buf *b) {
   int def = -1;
-  TyKind k = obj_container_conv(c, at, "to_ary", &def);
+  TyKind k = obj_container_conv(c, node, at, "to_ary", &def);
   if (k != TY_UNKNOWN) { emit_obj_container_conv(c, node, def, "to_ary", b); return k; }
   /* a boxed operand is an Array only at run time: taken as one, or the
      implicit-conversion TypeError CRuby raises for anything else (a String,
@@ -886,7 +887,7 @@ static void emit_zip_args(Compiler *c, const int *argv, int nargs, const int *tb
       /* an object answering #to_ary zips as that Array; one answering
          #each enumerates; any other is the scalar's TypeError */
       int zdef = -1;
-      TyKind zk = obj_container_conv(c, at[j], "to_ary", &zdef);
+      TyKind zk = obj_container_conv(c, argv[j], at[j], "to_ary", &zdef);
       if (zk != TY_UNKNOWN) {
         const char *kz = zk == TY_POLY_ARRAY ? "Poly" : array_kind(zk);
         buf_printf(b, " sp_%sArray *_t%d = ", kz ? kz : "Poly", tb[j]);
@@ -4720,7 +4721,7 @@ static int sub_bang_reenters(Compiler *c, int id, int recv, int argc, const int 
   const NodeTable *nt = c->nt;
   if (!sub_bang_alone(c, g_stmt_cur, id) || !sub_bang_reads(c, recv)) return 1;
   for (int a = 0; a < argc; a++)
-    if (sub_bang_operand_runs(c, argv[a], a == 0 || !prog_has_conv_method(c, "to_str", TY_STRING))) return 1;
+    if (sub_bang_operand_runs(c, argv[a], a == 0 || !prog_has_conv_method(c, argv[a], "to_str", TY_STRING))) return 1;
   int blk = nt_ref(nt, id, "block");
   if (blk < 0) return 0;
   int body = nt_kind(nt, blk) == NK_BlockNode ? nt_ref(nt, blk, "body") : -1;
@@ -6528,7 +6529,7 @@ static void emit_merge_arg_boxed(Compiler *c, int arg, Buf *b) {
   TyKind at = infer_type(c, arg);
   if (!ty_is_hash(at) && at != TY_POLY && at != TY_UNKNOWN) {
     int mdef = -1;
-    TyKind mk = obj_container_conv(c, at, "to_hash", &mdef);
+    TyKind mk = obj_container_conv(c, arg, at, "to_hash", &mdef);
     if (mk != TY_UNKNOWN) {
       Buf cb = {0, 0, 0};
       emit_obj_container_conv(c, arg, mdef, "to_hash", &cb);
@@ -6726,7 +6727,7 @@ static int emit_hash_merge_misfit(Compiler *c, int id, TyKind rt, Buf *b) {
     Repr ar = repr_of(c, argv[i]);
     TyKind at = ar.as_ty;
     int def = -1;
-    TyKind mk = ty_is_object(at) ? obj_container_conv(c, at, "to_hash", &def) : TY_UNKNOWN;
+    TyKind mk = ty_is_object(at) ? obj_container_conv(c, argv[i], at, "to_hash", &def) : TY_UNKNOWN;
     int fits = mk != TY_UNKNOWN && (ty_hash_key(rt) == TY_POLY || ty_hash_key(rt) == ty_hash_key(mk)) &&
                (ty_hash_val(rt) == TY_POLY || ty_hash_val(rt) == ty_hash_val(mk));
     if (mk != TY_UNKNOWN && !fits) { unsupported_feature(c, id, "Hash#merge! with a #to_hash of another layout than the receiver"); return 0; }
@@ -6771,7 +6772,7 @@ static int emit_hash_merge_misfit(Compiler *c, int id, TyKind rt, Buf *b) {
       buf_puts(b, "; ");
       free(cb.p);
     }
-    else if (i != bad && ty_is_object(at) && (obj_container_conv(c, at, "to_hash", &def) != TY_UNKNOWN || merge_arg_dyn_to_hash(c, at)))
+    else if (i != bad && ty_is_object(at) && (obj_container_conv(c, argv[i], at, "to_hash", &def) != TY_UNKNOWN || merge_arg_dyn_to_hash(c, at)))
       buf_printf(b, "_t%d = sp_kw_splat_conv(_t%d, 0); ", t0 + i, t0 + i);
     buf_printf(b, "if (_t%d.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(_t%d.cls_id))"
                   " sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Hash\", sp_convert_src_name(_t%d))); ",
@@ -7802,7 +7803,7 @@ else {
           return 1;
         }
         int mdef = -1;
-        if (at != rt && (!ty_is_object(at) || obj_container_conv(c, at, "to_hash", &mdef) != rt)) return 0;
+        if (at != rt && (!ty_is_object(at) || obj_container_conv(c, argv[0], at, "to_hash", &mdef) != rt)) return 0;
         /* values that may be nil are read and stored with their nil (D3b-ii) */
         int mvn = oint_kind(vt) && hash_vals_nullable(c, recv);
         const char *mset = mvn ? "oset" : "set", *mget = mvn ? "vget" : "get";
@@ -7880,7 +7881,7 @@ else {
         /* an object argument merges its #to_hash, as the typed merge does */
         TyKind oat = comp_ntype(c, argv[0]);
         int odef = -1;
-        TyKind oht = ty_is_object(oat) ? obj_container_conv(c, oat, "to_hash", &odef) : TY_UNKNOWN;
+        TyKind oht = ty_is_object(oat) ? obj_container_conv(c, argv[0], oat, "to_hash", &odef) : TY_UNKNOWN;
         if (ty_is_object(oat) && odef >= 0 && ty_is_hash(oht)) {
           int tob = ++g_tmp, toh = ++g_tmp, obv = repr_of(c, argv[0]).kind == RK_VOBJ;
           char ob[32], oh[32];
@@ -8027,7 +8028,7 @@ else {
           /* an object answering #to_hash of the receiver's own layout merges
              as that Hash; any other class is CRuby's TypeError */
           int mdef = -1;
-          TyKind mk = obj_container_conv(c, at, "to_hash", &mdef);
+          TyKind mk = obj_container_conv(c, argv[0], at, "to_hash", &mdef);
           if (mk == rt) {
             buf_printf(b, "sp_%sHash_merge(", hn); emit_expr(c, recv, b); buf_puts(b, ", ");
             emit_obj_container_conv(c, argv[0], mdef, "to_hash", b); buf_puts(b, ")");
@@ -14184,7 +14185,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
          through #to_str, reads as `in:` does; an Integer is a second count;
          any other value is resolved at run time (sp_time_in_zone_v) */
       TyKind ot = comp_ntype(c, argv[0]);
-      if (ot == TY_STRING || obj_conv_method(c, ot, "to_str", TY_STRING, NULL) >= 0) {
+      if (ot == TY_STRING || obj_conv_method(c, argv[0], ot, "to_str", TY_STRING, NULL) >= 0) {
         buf_printf(b, "sp_time_in_zone_s%s(%s, ", bang, r); emit_str_expr(c, argv[0], b);
       }
       else if (ot == TY_INT) { buf_printf(b, "sp_time_getlocal_off%s(%s, ", bang, r); emit_int_expr(c, argv[0], b); }
@@ -15545,7 +15546,7 @@ static int splice_recv_index_slot(Compiler *c, int recv, int *outer, int *oidx) 
    binding. CRuby stores into the receiver it read first and keeps the new
    binding. A value with to_ary for a Range key keeps its arm. */
 static int poly_aset_rebound(Compiler *c, int recv, const int *argv) {
-  if (comp_ntype(c, argv[0]) == TY_RANGE && splice_to_ary_mi(c, comp_ntype(c, argv[1])) >= 0) return 0;
+  if (comp_ntype(c, argv[0]) == TY_RANGE && splice_to_ary_mi(c, argv[1], comp_ntype(c, argv[1])) >= 0) return 0;
   return aset_recv_rebinds_only(c, recv, argv[0], argv[1]);
 }
 /* Whether `id` reads the variable `nm` (a read of kind `rk`) or, for an
@@ -17506,7 +17507,7 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
                                    rcvk == NK_InstanceVariableReadNode);
     int outer, oidx;
     TyKind rty2 = comp_ntype(c, argv[2]);
-    int tam = splice_to_ary_mi(c, rty2);
+    int tam = splice_to_ary_mi(c, argv[2], rty2);
     buf_puts(b, "({ ");
     if (tam >= 0) {
       /* object RHS with to_ary: splice the coercion; the OBJECT is the value */
@@ -17656,7 +17657,7 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
                                      rcvk == NK_InstanceVariableReadNode);
       int outer, oidx;
       TyKind rty1 = comp_ntype(c, argv[1]);
-      int tam = splice_to_ary_mi(c, rty1);
+      int tam = splice_to_ary_mi(c, argv[1], rty1);
       buf_puts(b, "({ ");
       if (tam >= 0) {
         /* object RHS with to_ary: splice the coercion; the OBJECT is the value */

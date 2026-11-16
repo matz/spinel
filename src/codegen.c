@@ -5,6 +5,7 @@
 #include "call_plan.h"
 #include "method_table_check.h"
 #include "implied_calls.h"
+#include "implicit_calls.h"
 #include "codegen_call_arms.h"
 #include "timing.h"
 
@@ -1139,11 +1140,12 @@ void emit_conv_dflt_args(Compiler *c, int mi, Buf *b) {
   for (int i = 0; i < s->nparams; i++) { buf_puts(b, ", "); emit_arg_or_default(c, s, i, -1, b); }
 }
 
-int obj_conv_method(Compiler *c, TyKind t, const char *conv, TyKind want, int *def_out) {
+int obj_conv_method(Compiler *c, int op, TyKind t, const char *conv, TyKind want, int *def_out) {
   if (!ty_is_object(t)) return -1;
   int cid = ty_object_class(t);
   if (cid < 0 || cid >= c->nclasses) return -1;
-  int def = -1, mi = comp_method_in_chain(c, cid, conv, &def);
+  MethodLookup ml;
+  int mi = cplan_implied_target(c, ic_operand_host(c, op), op, cid, conv, 0, &ml), def = ml.def_class;
   if (mi < 0) return -1;
   Scope *um = &c->scopes[mi];
   /* only a no-parameter method whose static return IS the slot's type
@@ -1167,8 +1169,8 @@ int obj_conv_method(Compiler *c, TyKind t, const char *conv, TyKind want, int *d
    sp_poly_arg_str_chk itself. Asking the widened question there took both
    arms away: the comparison assigned an sp_RbVal to a `const char *` and the
    generated C stopped compiling. */
-static int obj_conv_method_typed(Compiler *c, TyKind t, const char *conv, TyKind want, int *def_out) {
-  int mi = obj_conv_method(c, t, conv, want, def_out);
+static int obj_conv_method_typed(Compiler *c, int op, TyKind t, const char *conv, TyKind want, int *def_out) {
+  int mi = obj_conv_method(c, op, t, conv, want, def_out);
   if (mi < 0) return -1;
   return c->scopes[mi].ret == want ? mi : -1;
 }
@@ -1179,11 +1181,12 @@ static int obj_conv_method_typed(Compiler *c, TyKind t, const char *conv, TyKind
    Hash#merge). Answers the container kind, or TY_UNKNOWN when the class has
    no such method -- the method's own return type is the answer, so there is
    nothing to search the kind space for. */
-TyKind obj_container_conv(Compiler *c, TyKind t, const char *conv, int *def) {
+TyKind obj_container_conv(Compiler *c, int op, TyKind t, const char *conv, int *def) {
   if (!ty_is_object(t)) return TY_UNKNOWN;
   int cid = ty_object_class(t);
   if (cid < 0 || cid >= c->nclasses) return TY_UNKNOWN;
-  int d = -1, mi = comp_method_in_chain(c, cid, conv, &d);
+  MethodLookup ml;
+  int mi = cplan_implied_target(c, ic_operand_host(c, op), op, cid, conv, 0, &ml), d = ml.def_class;
   if (mi < 0 || !conv_takes_no_args(c, mi)) return TY_UNKNOWN;
   TyKind ret = c->scopes[mi].ret;
   if (sp_streq(conv, "to_hash") ? !ty_is_hash(ret) : !ty_is_array(ret)) return TY_UNKNOWN;
@@ -1197,9 +1200,9 @@ TyKind obj_container_conv(Compiler *c, TyKind t, const char *conv, int *def) {
    inside a per-pixel loop, where the object test is real work rather than a
    cold arm, and measured 6.7% more instructions on optcarrot. A program that
    defines no conversion method can never take that arm, so it pays nothing. */
-int prog_has_conv_method(Compiler *c, const char *conv, TyKind want) {
+int prog_has_conv_method(Compiler *c, int op, const char *conv, TyKind want) {
   for (int i = 0; i < c->nclasses; i++)
-    if (obj_conv_method(c, ty_object(i), conv, want, NULL) >= 0) return 1;
+    if (obj_conv_method(c, op, ty_object(i), conv, want, NULL) >= 0) return 1;
   return 0;
 }
 
@@ -1335,13 +1338,13 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
   if (cid < 0 || cid >= c->nclasses) return 0;
   int def = -1;
   /* a String subclass instance in a String slot is a String: its bytes */
-  if (want == TY_STRING && comp_ary_is_str(c, cid) && comp_method_in_chain(c, cid, conv, NULL) < 0) {
+  if (want == TY_STRING && comp_ary_is_str(c, cid) && cplan_implied_target(c, ic_operand_host(c, node), node, cid, conv, 0, NULL) < 0) {
     buf_puts(b, "sp_strbuf_read((sp_String *)(");
     emit_expr(c, node, b);
     buf_puts(b, "))");
     return 1;
   }
-  int mi = obj_conv_method(c, t, conv, want, &def);
+  int mi = obj_conv_method(c, node, t, conv, want, &def);
   if (mi >= 0) {
     emit_obj_conv_call(c, node, t, def, mi, conv, b);
     return 1;
@@ -1359,7 +1362,8 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
      left to the old path, where the raw object pointer landed in the scalar
      slot and the C build stopped with a message about a generated symbol.
      CRuby names the offending kind, so this does as well. */
-  { int wdef = -1, wmi = comp_method_in_chain(c, cid, conv, &wdef);
+  MethodLookup wml;
+  { int wmi = cplan_implied_target(c, ic_operand_host(c, node), node, cid, conv, 0, &wml), wdef = wml.def_class;
     if (wmi >= 0 && c->scopes[wmi].nparams == 0) {
       /* CRuby names the answer's CLASS, so the diagnostic does too rather
          than printing the analysis's own lowercase tag */
@@ -1395,9 +1399,11 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
      beside a Digest's). Likewise a builtin class's arm of a call split on a
      boxed class value: the value may never be that class. CRuby raises if
      it ever is, so the raise is left to run time rather than refusing the
-     program. */
+     program. Likewise a class whose conversion the record proves undefined
+     before this site (the plan's none with MLW_RECORD): the call raises
+     where it runs, and the lines before it stay. */
   { Scope *es = comp_scope_of(c, node);
-    if ((es && es->cand_bound) || conv_arg_of_cvb_arm(c, node)) {
+    if ((es && es->cand_bound) || conv_arg_of_cvb_arm(c, node) || wml.why == MLW_RECORD) {
       /* (a conversion for the operand-order gate, as above) */
       g_conv_emitted++;
       snprintf(msg, sizeof msg, "no implicit conversion of %s into %s", cn ? cn : "Object", into);
@@ -1541,7 +1547,7 @@ static void emit_int_expr_ex(Compiler *c, int node, int strict, Buf *b) {
   if (yield_site_type(c, node) == TY_POLY) {
     /* a boxed value may carry a user object whose #to_int runs here; only a
        program defining one makes this a conversion the order gate counts */
-    if (strict && prog_has_conv_method(c, "to_int", TY_INT)) g_conv_emitted++;
+    if (strict && prog_has_conv_method(c, node, "to_int", TY_INT)) g_conv_emitted++;
     buf_puts(b, strict > 1 ? "sp_poly_arg_int_chk_w(" : strict ? "sp_poly_arg_int_chk(" : "sp_poly_to_i(");
     emit_expr(c, node, b);
     if (strict > 1) buf_printf(b, ", %d", strict - 1);
@@ -2064,7 +2070,7 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
   int cid = ty_is_object(t) ? ty_object_class(t) : -1;
   if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_native_class) {
     int def = -1;
-    int mi = obj_conv_method_typed(c, t, "to_path", TY_STRING, &def);
+    int mi = obj_conv_method_typed(c, node, t, "to_path", TY_STRING, &def);
     if (mi >= 0) {
       emit_obj_conv_call(c, node, t, def, mi, "to_path", b);
       return;
@@ -2116,7 +2122,7 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
    (analyze_util.c), so typing and emission agree on the typed side. */
 int str_cmp_conv_shape(Compiler *c, int node) {
   TyKind t = comp_ntype(c, node);
-  return ty_is_object(t) && class_has_to_str_shape(c, ty_object_class(t));
+  return ty_is_object(t) && class_has_to_str_shape(c, ic_operand_host(c, node), node, ty_object_class(t));
 }
 
 /* The conversion itself, reading the operand back out of the rooted sp_RbVal
@@ -2152,8 +2158,12 @@ void emit_str_cmp_conv(Compiler *c, int node, int tmp, Buf *b) {
   if (tr.kind == RK_BOXED) { buf_printf(b, "sp_poly_check_str(_t%d)", tmp); return; }
   if (!str_cmp_conv_shape(c, node)) { buf_puts(b, "NULL"); return; }
   int def = -1;
-  int poly = obj_conv_method_typed(c, t, "to_str", TY_STRING, &def) < 0;
-  if (poly) comp_method_in_chain(c, ty_object_class(t), "to_str", &def);
+  int poly = obj_conv_method_typed(c, node, t, "to_str", TY_STRING, &def) < 0;
+  if (poly) {
+    MethodLookup ml;
+    cplan_implied_target(c, ic_operand_host(c, node), node, ty_object_class(t), "to_str", 0, &ml);
+    def = ml.def_class;
+  }
   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ ? ", tmp);
   if (poly) buf_puts(b, "sp_str_cmp_conv(");
   buf_printf(b, "sp_%s_to_str((sp_%s *)_t%d.v.p)",

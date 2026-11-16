@@ -55370,7 +55370,7 @@ static void an_phase_proc_returns(Compiler *c) {
           int val = av[an - 1];
           TyKind vt = infer_type(c, val), src = vt;
           if (ty_is_object(vt)) {
-            int tmi = comp_implicit_to_ary_mi(c, ty_object_class(vt));
+            int tmi = cplan_to_ary_method(c, u, val, ty_object_class(vt));
             src = tmi >= 0 ? (TyKind)c->scopes[tmi].ret : TY_UNKNOWN;
           }
           if (src != TY_POLY_ARRAY) continue;
@@ -55739,7 +55739,9 @@ enum { OBS_SEEN = 1, OBS_INSPECT = 2, OBS_DUMP = 4 };
 static void an_presence_type(Compiler *c, TyKind t, int how, int depth);
 static void an_presence_poly_ivar(Compiler *c, int k, const char *ivn, int how, int depth);
 /* Class k and the classes below it, whose instances a value typed k can
-   be; how is 0 for a read of presence alone, else OBS_INSPECT or
+   be (the pass asks each class's inspect of the plan with no site: it
+   walks the program's classes, no call stands behind it); how is 0 for a
+   read of presence alone, else OBS_INSPECT or
    OBS_DUMP, which reach the ivars' values as well. */
 static void an_presence_class(Compiler *c, int k, int how, int depth) {
   if (k < 0 || k >= c->nclasses || depth > 16) return;

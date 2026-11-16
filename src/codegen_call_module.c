@@ -639,8 +639,8 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
          permission bits, which reach open(2) for either mode form */
       int mnode = kw_mode >= 0 ? kw_mode : argc >= 2 ? argv[1] : -1;
       int int_mode = mnode >= 0 &&
-                     (comp_ntype(c, mnode) == TY_INT ||
-                      obj_conv_method(c, comp_ntype(c, mnode), "to_int", TY_INT, NULL) >= 0);
+                     (repr_of(c, mnode).as_ty == TY_INT ||
+                      obj_conv_method(c, mnode, repr_of(c, mnode).as_ty, "to_int", TY_INT, NULL) >= 0);
       int perm = -1;
       if (nt_argv_kwh(nt, argv, argc) >= 0)
         perm = struct_kwarg_value(c, argv[argc - 1], "perm");
@@ -1043,7 +1043,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       if (at != TY_INT && at != TY_FLOAT && at != TY_BIGINT && at != TY_UNKNOWN) {
         /* an object answering #to_int is its Integer; any other class is
            CRuby's "can't convert X into an exact number" */
-        if (ty_is_object(at) && obj_conv_method(c, at, "to_int", TY_INT, NULL) >= 0) {
+        if (ty_is_object(at) && obj_conv_method(c, argv[0], at, "to_int", TY_INT, NULL) >= 0) {
           buf_puts(b, "sp_time_at_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
           return 1;
         }

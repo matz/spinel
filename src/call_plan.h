@@ -623,6 +623,10 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    provably ran before the site (an undef the record cannot place there leaves
    the table's method, ML_TABLE). *ml may be NULL */
 int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *name, unsigned side, MethodLookup *ml);
+/* The #to_ary a call node id makes on its operand op, an instance of class
+   cid (rb_check_array_type), as cplan_implied_target answers it: -1 for an
+   Array subclass, which is an Array already and never calls its own. */
+int cplan_to_ary_method(Compiler *c, int id, int op, int cid);
 /* The method the builtin runs for node id on class ci: with name
    "initialize", the initialize Class#new runs when id (a `new` the
    program's `new` does not answer, a `raise K`) builds an instance of

@@ -8157,8 +8157,7 @@ int node_is_scope_tail(Compiler *c, int mi, int id) {
 
 /* A Kernel method that runs its block: loop, catch and throw, instance_eval and instance_exec, a trampoline's block (infer_call_inner's rules, in their order) */
 static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, TyKind rt, TyKind *out) {
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      is_env_const(key_name(c, recv)) && !comp_const(c, "ENV") &&
+  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && rt == TY_ENV &&
       bop_share_named(BOP_ENV, name) == BSH_FETCH) {
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0) {
@@ -10069,7 +10068,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && nt_type(nt, recv) &&
       (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
     const char *rname = key_name(c, recv);
-    if (rname && sp_streq(rname, "ENV")) {
+    if (rt == TY_ENV) {
       if (sp_streq(name, "class")) return TY_CLASS;
       if (sp_streq(name, "frozen?")) return TY_BOOL;
       if (sp_streq(name, "shift")) return TY_POLY;
@@ -10122,7 +10121,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     NodeKind rk = nt_kind(nt, recv);
     if (rk == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+      if (rt == TY_ENV) {
         if (sp_streq(name, "fetch") && argc >= 2) {
           TyKind dt = infer_type(c, argv[1]);
           if (dt == TY_UNKNOWN || dt == TY_NIL || dt == TY_VOID) return TY_STRING;
@@ -10138,13 +10137,13 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     NodeKind rk = nt_kind(nt, recv);
     if (rk == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) return TY_BOOL;
+      if (rt == TY_ENV) return TY_BOOL;
     }
   }
   /* ENV direct arms (#2743, #2746): typed results so p/interp accept them */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode) {
     const char *rn = key_name(c, recv);
-    if (rn && sp_streq(rn, "ENV")) {
+    if (rt == TY_ENV) {
       if (sp_streq(name, "to_s")) return TY_STRING;
       /* a non-String key raises TypeError; type the (diverging) call poly */
       if (argc >= 1 &&

@@ -111,6 +111,7 @@ struct LoadRecord {
   unsigned char *bits;       /* [n] LR_* */
   int n, ncap, nregion;
   struct ElabWalk *walk;     /* the registration's walk, while it runs (elab_walk_enter) */
+  ANameHash cfirst; struct LrCallSt *cfirst_cs; int cfirst_done;   /* the statements of region 0 that call each name outside a method body, and whether a call is elsewhere (elab_accessor_first), of the nodes below cfirst_done (lr_calls_scan) */
   ANameHash cn_name, cn_leaf; int *cn_cls, cn_n, cn_cap, cn_done;   /* the classes registered so far, each by its Ruby name and by the last segment of it, in class order (lr_walk_class_by_name) */
   unsigned ver;              /* the node table the map is of */
   int check, shown;
@@ -3106,6 +3107,7 @@ static void lr_check_walked(Compiler *c, const char *walked);
 enum { LR_OWNERS_WALK = 1, LR_OWNERS_HELD = 2 };   /* lr_def_owners' checks */
 static void lr_def_owners(Compiler *c, int check);
 static void lr_later_settle(Compiler *c);
+static void lr_early_settle(Compiler *c);
 static void lr_block_cond_dms(Compiler *c);
 
 /* The definitions of a body of class ci that the record holds with no
@@ -3314,6 +3316,7 @@ static void lr_record_again(ElabRec *x) {
   lr_later_settle(x->c);
   lr_record_unplaced(x->c);
   r->recorded = 1;
+  lr_early_settle(x->c);
 }
 
 /* The method scope each named module_function copy copies: that of the def
@@ -3324,6 +3327,7 @@ static void lr_record_again(ElabRec *x) {
    record is made, since what is live at a point depends on the entries after
    it; a copy of a method with no scope (an attribute, a method a mixin
    brought) keeps none. */
+static const LrDef *lr_alias_origin(Compiler *c, int cls, const LrDef *v);
 static void lr_copy_scopes(Compiler *c) {
   LoadRecord *r = c->lrec;
   for (int i = 0; i < r->nhist; i++) {
@@ -3332,17 +3336,24 @@ static void lr_copy_scopes(Compiler *c) {
     for (int j = 0; j < h->n; j++) {
       LrDef *v = &h->v[j];
       if (v->kind != LR_COPY || v->scope > 0 || !v->target) continue;
-      const char *nm = v->target;
-      LoadPoint p = elab_point_of(c, v->node);
-      for (;;) {
-        const LrDef *d = NULL;
-        if (elab_method_at(c, h->a, nm, 0, p, &d) != ELAB_YES || !d) break;
-        if (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) { v->scope = d->scope; break; }
-        if (d->kind != LR_ALIAS || !d->target) break;
-        nm = d->target;
-        p = elab_point_of(c, d->node);
-      }
+      const LrDef *d = lr_alias_origin(c, h->a, v);
+      if (d) v->scope = d->scope;
     }
+  }
+}
+/* The def or define_method the original name of copy or alias v of class cls's (its instance side) names where v
+   runs, followed through the aliases it reaches, each asked at its own point; NULL for none (an attribute, a method a
+   mixin brought, a name with no version there) */
+static const LrDef *lr_alias_origin(Compiler *c, int cls, const LrDef *v) {
+  const char *nm = v->target;
+  LoadPoint p = elab_point_of(c, v->node);
+  for (;;) {
+    const LrDef *d = NULL;
+    if (!nm || elab_method_at(c, cls, nm, 0, p, &d) != ELAB_YES || !d) return NULL;
+    if (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) return d;
+    if (d->kind != LR_ALIAS) return NULL;
+    nm = d->target;
+    p = elab_point_of(c, d->node);
   }
 }
 
@@ -3397,6 +3408,7 @@ void elab_program(Compiler *c, struct HostStep *h) {
   lr_later_settle(c);
   lr_record_unplaced(c);
   r->recorded = 1;
+  lr_early_settle(c);
   if (r->check) {   /* the same record made after the walk, as a check */
     lr_check_held(c);
     char *walked = lr_dump_text(c);
@@ -4987,7 +4999,7 @@ static int lr_vv_mixin(void *ud, int cls, int ref) {
   /* (Kernel, which the row of the name answers, ends the versions: nothing behind it is found, where it surely runs) */
   const LrClass *kc = lr_class(v->c->lrec, cls);
   int sure = 1;
-  for (int j = 0; kc && j < kc->nmix; j++) if (kc->mix[j].ref == ref && elab_mixin_may_not_run(v->c, &kc->mix[j])) sure = 0;
+  for (int j = 0; kc && j < kc->nmix; j++) if (kc->mix[j].ref == ref && elab_mixin_may_not_run(&kc->mix[j])) sure = 0;
   if (core == CORE_KERNEL && sure && v->name && bop_kernel_answers(v->name, -1, 0)) return LR_W_STOP;
   v->n = -1;
   return LR_W_STOP;
@@ -6271,7 +6283,8 @@ static void lr_rta_node(LrRta *t, int id) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   int rc = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? lr_rta_const(t, recv)
          : rk == NK_SelfNode ? lr_rta_self(t, id) : LR_UNKNOWN_CLASS;
-  by = nm && is_send_family(nm) ? (ac ? call_sent_name(nt, id, NULL) : "")
+  int used = 0;   /* (the arguments that name what a send sends) */
+  by = nm && is_send_family(nm) ? (ac ? call_sent_name(nt, id, &used) : "")
      : nm && (is_method_object_maker(nm) || is_enumerator_maker(nm)) ? (ac ? vis_arg_name(nt, av[0]) : "") : nm;
   if (!by || (ac && is_code_eval_name(nm)) || is_method_bind_name(by) || is_object_loader(rk == NK_ConstantReadNode ? lr_read_key(t->c, recv) : NULL, by, ac)) {
     lr_rta_all(t, 0);
@@ -6306,8 +6319,9 @@ static void lr_rta_node(LrRta *t, int id) {
     for_each_value_position(nt, av[ka], 0, lr_rta_raised, &x);
   }
   /* a module mixed in by a call the record does not hold as a class's
-     (on an object, in a method body): its methods have instances */
-  for (int i = 0; is_mixin_call(by) && (rk != NK_SelfNode || elab_body_def(t->c, id) >= 0) && i < ac; i++) {
+     (on an object, in a method body): its methods have instances (a
+     send's modules follow the names it sends, which name no module) */
+  for (int i = used; is_mixin_call(by) && (rk != NK_SelfNode || elab_body_def(t->c, id) >= 0) && i < ac; i++) {
     int m = nt_kind(nt, av[i]) == NK_ConstantReadNode || nt_kind(nt, av[i]) == NK_ConstantPathNode ? lr_rta_const(t, av[i]) : LR_UNKNOWN_CLASS;
     if (m >= 0) lr_rta_add(t, m);
     else lr_rta_any(t);
@@ -6542,6 +6556,88 @@ static void lr_run_points(Compiler *c) {
 /* How many statements in seq [a, b) may run code of the program's */
 static int lr_runs_in(const LoadRecord *r, int a, int b) {
   return (b < r->nst ? r->st[b].nrun : r->nrun) - (a < r->nst ? r->st[a].nrun : r->nrun);
+}
+
+/* the statements of region 0 that call one name outside a method body (sorted when asked), poison: a call of it
+   stands in no statement of region 0 */
+struct LrCallSt { int *st, n, cap; unsigned char poison, sorted; };
+static int lr_int_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+/* Take the calls of the nodes the record has grown by since the last scan (all of them the first time) into the per-name
+   statement lists: a call a pass appended is read as an original one is. */
+static void lr_calls_scan(Compiler *c, LoadRecord *r) {
+  for (int id = r->cfirst_done; id < r->n; id++) {
+    if (nt_kind(c->nt, id) != NK_CallNode) continue;
+    int at = r->at[id];
+    if (at >= 0 && (r->bits[id] & LR_LATE)) continue;   /* (a call in a method body or a kept block runs after code of the program's) */
+    int st = at >= 0 && r->st[at].region == 0 ? at : -1;
+    const char *nm[2];
+    int n = call_node_names(c, id, nm);
+    for (int q = 0; q < n; q++) {
+      if (!nm[q]) continue;
+      int k = anh_find(&r->cfirst, nm[q]);
+      if (k < 0) {
+        anh_add(&r->cfirst, nm[q]);
+        k = r->cfirst.n - 1;
+        r->cfirst_cs = realloc(r->cfirst_cs, sizeof *r->cfirst_cs * (size_t)(k + 1));
+        if (!r->cfirst_cs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        r->cfirst_cs[k] = (struct LrCallSt){ NULL, 0, 0, 0, 0 };
+      }
+      struct LrCallSt *cs = &r->cfirst_cs[k];
+      cs->sorted = 0;
+      if (st < 0) { cs->poison = 1; continue; }
+      if (cs->n == cs->cap) {
+        cs->cap = cs->cap ? 2 * cs->cap : 4;
+        if (!(cs->st = realloc(cs->st, sizeof(int) * (size_t)cs->cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      cs->st[cs->n++] = st;
+    }
+  }
+  r->cfirst_done = r->n;
+}
+unsigned long elab_hgen(Compiler *c) { return c->lrec ? c->lrec->hgen : 0; }
+
+/* Can a call of `name` meet the attr_* call `node` before it has run, for an instance of class cls? An instance of a
+   program's class exists only after the class is created (its first opening), so what runs before that matters not;
+   a builtin class's instances exist from the program's start, so its interval starts there, whatever its reopenings. The accessor is made
+   first when the attr_* statement is in region 0, on cls or a class above it (not a module a later include may
+   bring), and from cls's creation to the attr_* statement (none, where the class is created after it) no statement
+   runs code of the program's (lr_run_points) and no call of the name stands outside a method body (a call in a
+   method body or a kept block runs after code of the program's). Then every call that can reach cls meets it,
+   whatever its window. */
+int elab_accessor_first(Compiler *c, int node, const char *name, int cls) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || node < 0 || !name || cls < 0) return 0;
+  int framed = elab_plan_enter(c, node), ok = 0;
+  lr_run_points(c);
+  r = c->lrec;
+  int s = node < r->n ? r->at[node] : -1, body = node < c->nt->count ? c->node_cbody[node] : -1, nb = 0;
+  const LrOpen *o = body >= 0 ? elab_class_bodies(c, cls, &nb) : NULL;
+  if (s >= 0 && r->st[s].region == 0 && body >= 0 && !comp_class_is_module(c, &c->classes[body]) && (body == cls || is_descendant(c, cls, body)) && nb > 0) {
+    int e = INT_MAX;   /* (the first opening of cls: the earliest statement of its headers; a builtin's instances exist from the start) */
+    for (int i = 0; !c->classes[cls].is_builtin_const && i < nb; i++) {
+      int h = o[i].node >= 0 && o[i].node < r->n ? r->at[o[i].node] : -1;
+      if (h < 0 || r->st[h].region != 0) { e = -1; break; }
+      if (h < e) e = h;
+    }
+    if (c->classes[cls].is_builtin_const) e = 0;
+    ok = e >= 0 && (e >= s || lr_runs_in(r, e, s) == 0);
+    if (ok && e < s) {
+      lr_calls_scan(c, r);
+      int k = anh_find(&r->cfirst, name);
+      if (k >= 0) {
+        struct LrCallSt *cs = &r->cfirst_cs[k];
+        if (cs->poison) ok = 0;
+        else {
+          if (!cs->sorted) { qsort(cs->st, (size_t)cs->n, sizeof(int), lr_int_cmp); cs->sorted = 1; }
+          int lo = 0, hi = cs->n;
+          while (lo < hi) { int mid = (lo + hi) / 2; if (cs->st[mid] < e) lo = mid + 1; else hi = mid; }
+          if (lo < cs->n && cs->st[lo] < s) ok = 0;   /* (a call of the name between the class's creation and the attr_*) */
+        }
+      }
+    }
+  }
+  if (framed) elab_plan_leave(c);
+  return ok;
 }
 
 /* The node the climb to a point goes on to from a: its parent; from a
@@ -10867,6 +10963,8 @@ void elab_free(Compiler *c) {
   lr_record_drop(r);
   for (int i = 0; i < r->cn_name.n; i++) free((char *)r->cn_name.key[i]);
   anh_free(&r->cn_name); anh_free(&r->cn_leaf); free(r->cn_cls);
+  for (int i = 0; i < r->cfirst.n; i++) free(r->cfirst_cs[i].st);
+  anh_free(&r->cfirst); free(r->cfirst_cs);
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
   free(r->plan.rend); free(r->plan.rinst); free(r->plan.urun); free(r->plan.rentry);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);
@@ -11101,7 +11199,7 @@ static int lr_kw_skip(void *ud, int cls, const LrMixin *m) {
   int core = -1;
   (void)cls;
   (void)elab_class_ref_at(c, m->ref, &core);
-  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || elab_mixin_may_not_run(c, m);
+  return (m->kind == LR_PREPEND && core == CORE_KERNEL) || elab_mixin_may_not_run(m);
 }
 static int lr_kw_enter(void *ud, int mod, int depth) {
   LrKernelWalk *x = ud;
@@ -11130,12 +11228,114 @@ int elab_class_kernel(Compiler *c, int cls) {
   if (root == LR_ROOT_NAMED) (void)elab_class_ref_at(c, ref, &core);
   return root == LR_ROOT_BASIC || core == CORE_BASIC_OBJECT ? KERN_LACKS : KERN_HAS;
 }
+/* Does a mixin of class cls's, at node in the body whose header is open, run in a reopening of cls (a body that is
+   not the statement that made the class) that may run once an object of cls, or of a class below it, exists? A
+   module's objects are its includers', which this does not follow: one may exist. */
+static int lr_late_reopening(Compiler *c, int cls, int open, int node) {
+  int made = cls >= 0 && cls < c->nclasses ? c->classes[cls].def_node : -1;
+  return made >= 0 && open >= 0 && open != made &&
+         (comp_class_is_module(c, &c->classes[cls]) || elab_class_live_at(c, cls, 0, elab_point_of(c, node)));
+}
+/* Is method version v of class cls's (sg: its singleton's; a def, an alias, an undef, ...) one no call on an object
+   of cls, or of a class below it, runs ahead of: at a statement the record places, where no such object may exist yet (for a module, in the body that made
+   it)? Not one a method body makes, one in a builder's block or a block run later, nor one outside a class body. */
+static int lr_def_early(Compiler *c, int cls, int sg, const LrDef *v) {
+  LoadRecord *r = c->lrec;
+  const LrStmt *s = v->unplaced || v->body ? NULL : lr_stmt_of(r, v->node);
+  if (!s || s->frame < 0 || cls >= c->nclasses) return 0;
+  if (comp_class_is_module(c, &c->classes[cls])) return r->st[s->frame].node == c->classes[cls].def_node;
+  return !elab_class_live_at(c, cls, sg, elab_point_of(c, v->node));
+}
+/* Each mixin's and each method version's early bit (LrMixin.early, LrDef.early), once, as the record is made: from the map's
+   conditions of a statement (elab_point_may) and lr_rta's first instances, facts of the load phase as the record
+   holds it, whatever later passes make of the calls that make an object (a `send(:new)` counts as the `new` it
+   becomes) */
+static void lr_early_settle(Compiler *c) {
+  LoadRecord *r = elab_fresh(c);
+  for (int k = LR_MAIN; k + 1 < r->ncls; k++) {
+    LrClass *kc = lr_class(r, k);
+    for (int j = 0; j < kc->nmix; j++)
+      kc->mix[j].early = !elab_point_may(c, kc->mix[j].node) && !lr_late_reopening(c, k, kc->mix[j].open, kc->mix[j].node);
+  }
+  for (int i = 0; i < r->nhist; i++)
+    for (int j = 0; r->hist[i].a >= 0 && j < r->hist[i].n; j++) {
+      LrDef *v = &r->hist[i].v[j];
+      if (lr_is_version(v)) v->early = (unsigned char)lr_def_early(c, r->hist[i].a, r->hist[i].b, v);
+    }
+  r->hgen++;
+}
 /* See analyze.h. */
 /* ...asked of the modules a program module includes: a fact of each module, kept (LoadRecord.brings, of the record's
    histories as they stand) so that a module reached by many routes, or asked by many mixins, is walked once */
-/* Does mixin m of a class, as the record holds it, possibly not run: under a condition, or after one that decides? */
-int elab_mixin_may_not_run(Compiler *c, const LrMixin *m) {
-  return !m->applied || m->cond || elab_point_may(c, m->node);
+/* Does mixin m of a class, as the record holds it, possibly not run before a call on an object of the class reads
+   it: under a condition, after one that decides, or in a reopening that may run after such an object exists
+   (LrMixin.early)? */
+int elab_mixin_may_not_run(const LrMixin *m) {
+  return !m->applied || m->cond || !m->early;
+}
+/* elab_runs_below's walk of d's chain: the first owner with an entry of the name decides */
+typedef struct { Compiler *c; const char *name; int upto; const int *nodes; int n, entry, o; } LrBelow;
+static int lr_below_has(const LrBelow *b, int node) {
+  for (int k = 0; k < b->n; k++) if (b->nodes[k] == node) return 1;
+  return 0;
+}
+static int lr_below_own(void *ud, int cls, int sg) {
+  LrBelow *b = ud;
+  if (b->o == ELAB_UNKNOWN) return LR_W_STOP;   /* (a mixin ahead, lr_below_skip) */
+  if (cls == b->upto) return LR_W_END;   /* (the holder's chain: none below it) */
+  const LrHist *h = lr_hist(b->c->lrec, cls, sg, b->name, 0);
+  int any = 0;
+  for (int j = 0; h && j < h->n; j++) {
+    if (h->v[j].kind > LR_REMOVE || h->v[j].absent) continue;
+    if (h->v[j].unplaced || !h->v[j].early) { b->o = ELAB_UNKNOWN; return LR_W_STOP; }
+    any = 1;
+  }
+  if (!any) return 0;
+  const LrDef *v = NULL, *d;
+  LoadPoint end = { -1, -1, -1 };
+  int o = lr_own(b->c, h, NULL, end, 1, 0, &v);
+  if (o == ELAB_NO) return 0;   /* (a removal: the lookup goes on) */
+  if (o == LR_STOP) b->o = ELAB_STOP;
+  else if (o == ELAB_YES) {
+    d = v && v->kind == LR_ALIAS ? lr_alias_origin(b->c, cls, v) : v;
+    b->o = d && (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) && lr_below_has(b, d->node) ? ELAB_YES : ELAB_UNKNOWN;
+  }
+  else {
+    /* (versions under a condition, all run before any object of d exists: the run has chosen among them by then, and
+       a method that dispatches over them, a version entry, answers as CRuby does when it holds no other) */
+    b->o = b->entry ? ELAB_YES : ELAB_UNKNOWN;
+    for (int k = 0; k < b->n && b->o == ELAB_YES; k++) {
+      int in = 0;
+      for (int j = 0; j < h->n && !in; j++) in = (h->v[j].kind == LR_DEF || h->v[j].kind == LR_DEFINE_METHOD) && h->v[j].node == b->nodes[k];
+      if (!in) b->o = ELAB_UNKNOWN;
+    }
+  }
+  return LR_W_STOP;
+}
+/* (a mixin that may not run ahead of an object of d leaves the answer unknown where its module holds the name; the
+   holder's mixins are the holder's chain) */
+static int lr_below_skip(void *ud, int cls, const LrMixin *m) {
+  LrBelow *b = ud;
+  if (cls == b->upto) return 1;
+  if (!elab_mixin_may_not_run(m)) return 0;
+  ElabVersion one;
+  if (m->mod < LR_MAIN || lr_chain_versions(b->c, m->mod, 0, b->name, &one, 1) != 0) b->o = ELAB_UNKNOWN;
+  return 1;
+}
+static int lr_below_stop(void *ud, int cls, int ref) {
+  (void)cls; (void)ref;
+  ((LrBelow *)ud)->o = ELAB_UNKNOWN;
+  return LR_W_STOP;
+}
+/* See analyze.h. */
+int elab_runs_below(Compiler *c, int d, int upto, const char *name, const int *nodes, int n, int entry) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || !name || d < 0 || n <= 0) return ELAB_UNKNOWN;
+  LrBelow b = { c, name, upto, nodes, n, entry, ELAB_NO };
+  /* (a mixin whose module may already be among the ancestors is walked as it stands, as the versions' walk does) */
+  LrWalker w = { lr_below_own, lr_below_stop, NULL, NULL, NULL, NULL, LR_TAIL_N, NULL, lr_below_skip };
+  int rc = lr_walk(c, &w, &b, d, 0, 0);
+  return rc < 0 && b.o == ELAB_NO ? ELAB_UNKNOWN : b.o;
 }
 static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   LoadRecord *r = c->lrec;
@@ -11155,7 +11355,7 @@ static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   if (memo[m + 1]) return memo[m + 1] == 1;
   memo[m + 1] = 2;   /* (while it is asked: a module is not its own include) */
   for (int j = 0; j < k->nmix; j++)
-    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && !(certain && elab_mixin_may_not_run(c, &k->mix[j])) &&
+    if ((k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) && !(certain && elab_mixin_may_not_run(&k->mix[j])) &&
         lr_brings_kernel(c, k->mix[j].ref, certain) == 1) return memo[m + 1] = 1;
   return 0;
 }

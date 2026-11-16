@@ -576,7 +576,7 @@ int desugar_descendant_reader_calls(Compiler *c) {
     if (call_answers(c, id, sc->class_id, nm, 0, NULL)) continue;
     int nd = 0, hit = 0;
     const int *ds = comp_descendants(c, sc->class_id, &nd);
-    for (int i = 0; i < nd && !hit; i++) hit = comp_reader_in_chain(c, ds[i], nm, NULL);
+    for (int i = 0; i < nd && !hit; i++) hit = call_attr_target(c, id, ds[i], nm, CT_ATTR, NULL);
     if (!hit) continue;
     int sn = nt_new_node(nt, "SelfNode");
     if (sn < 0) continue;
@@ -4970,9 +4970,16 @@ int desugar_env_enum(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
-    if (!nm || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    const char *rn = key_name(c, recv);
-    if (!rn || !sp_streq(rn, "ENV")) continue;
+    if (!nm || recv < 0) continue;
+    /* ENV itself in the fixpoint; a variable that holds ENV and nothing else (TY_ENV) only after it
+       (an_phase_enum_late), where its type is settled: in a round of the fixpoint a parameter defaulting to ENV is
+       TY_ENV before a caller's Hash reaches it, and the snapshot's marks (env_key's NUL check) would then apply to
+       that Hash. Its read is dropped, which runs no code; an_env_value_recv_check refuses the call should the type
+       still widen after. */
+    extern int g_enum_late;
+    int lit = nt_kind(nt, recv) == NK_ConstantReadNode && key_name(c, recv) && sp_streq(key_name(c, recv), "ENV");
+    if (lit ? g_enum_late : (!g_enum_late || nt_kind(nt, recv) == NK_ConstantReadNode ||
+                             !env_value_recv(c, recv, infer_type(c, recv)))) continue;
     int is_enum = env_enum_method(nm);
     /* fetch WITH a block rides the snapshot's block-aware Hash#fetch (#2745) */
     if (!is_enum && sp_streq(nm, "fetch") && nt_ref(nt, id, "block") >= 0) is_enum = 1;
@@ -5021,6 +5028,7 @@ int desugar_env_enum(Compiler *c) {
     nt_node_set_ref(nt, snap, "arguments", -1);
     nt_node_set_ref(nt, snap, "block", -1);
     nt_node_set_int(nt, id, "env_snapshot", 1);
+    if (!lit) nt_node_set_int(nt, id, "env_value_recv", recv + 1);
     /* the reads that take variable names check them as ENV[] does: an
        embedded NUL raises (emit_hash_key reads the mark) */
     if (sp_streq(nm, "assoc") || sp_streq(nm, "slice") || sp_streq(nm, "values_at") || sp_streq(nm, "fetch")) {
@@ -5255,7 +5263,7 @@ int desugar_enumerable_chain(Compiler *c) {
       TyKind rt = infer_type(c, recv);
       if (ty_is_object(rt)) {
         int ci = ty_object_class(rt);
-        if (ci >= 0 && !comp_enum_answers_first(c, ci, "chain")) continue;
+        if (ci >= 0 && !comp_enum_answers_first(c, id, ci, "chain")) continue;
       }
       /* a program's Enumerable#chain answers a builtin receiver too */
       else if (an_enum_prog_method(c, "chain")) continue;
@@ -8446,11 +8454,11 @@ static int dsend_name_only_outside(Compiler *c, int id, int recv, const char *na
   if (builtin_recv_arity_span(name, &lo, &hi) || cplan_core_method(c, id, CORE_OBJECT, name) >= 0) return 0;
   int any = 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (!cls_fact_excludes(c, recv, k) && comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
+    if (!cls_fact_excludes(c, recv, k) && call_target(c, id, k, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     /* (a class method answers on the class itself, a Class object the
        receiver may hold) */
-    int inst = comp_method_in_class(c, k, name) >= 0, cls = comp_cmethod_in_class(c, k, name) >= 0;
+    int inst = call_target(c, id, k, name, CT_OWN, NULL) >= 0, cls = call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL) >= 0;
     if (!inst && !cls) continue;
     if (inst && !cls_fact_excludes(c, recv, k)) return 0;
     if (cls && !cls_fact_excludes_class_value(c, recv, k)) return 0;
@@ -10563,9 +10571,9 @@ static int ixw_held_store(NodeTable *nt, int source, const char *rname, const ch
 static int ixw_builtin_reaches(Compiler *c, int k, const char *name) {
   return !comp_is_undeffed_in_chain(c, k, name) && comp_method_vis_in_chain(c, k, name) == SP_VIS_PUBLIC;
 }
-static int ixw_user_class(Compiler *c, int k) {
-  int own_get = comp_method_in_chain(c, k, "[]", NULL) >= 0;
-  int own_set = comp_method_in_chain(c, k, "[]=", NULL) >= 0;
+static int ixw_user_class(Compiler *c, int id, int k) {
+  int own_get = call_target(c, id, k, "[]", CT_METHODS, NULL) >= 0;
+  int own_set = call_target(c, id, k, "[]=", CT_METHODS, NULL) >= 0;
   if (own_get && own_set) return 1;
   if (!own_get && !own_set) return 0;
   return comp_ary_root(c, k) >= 0 && ixw_builtin_reaches(c, k, own_get ? "[]=" : "[]");
@@ -10590,7 +10598,7 @@ int desugar_index_op_write_user(Compiler *c) {
     if (nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) continue;
     TyKind rt = infer_type(c, recv);
     int ci = ty_is_object(rt) ? ty_object_class(rt) : -1;
-    int user = rt == TY_THREAD || (ci >= 0 && ixw_user_class(c, ci));
+    int user = rt == TY_THREAD || (ci >= 0 && ixw_user_class(c, id, ci));
     /* a box that can hold such an object (a class with a construction
        site, ctor_reachable: the census before the fixpoint): the calls
        dispatch on the class the box holds, where the op-write took the
@@ -10600,7 +10608,7 @@ int desugar_index_op_write_user(Compiler *c) {
       const int *ks = poly_recv_classes(c, id, &n);
       for (int i = 0; i < (ks ? n : c->nclasses) && !user; i++) {
         int pk = ks ? ks[i] : i;
-        user = c->classes[pk].ctor_reachable && !is_builtin_reopen(c->classes[pk].name) && ixw_user_class(c, pk);
+        user = c->classes[pk].ctor_reachable && !is_builtin_reopen(c->classes[pk].name) && ixw_user_class(c, id, pk);
       }
     }
     /* so does one a Struct's own `[]=` can take (a key no literal names on a
@@ -16827,6 +16835,7 @@ int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, i
   int em = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode");
   int es = nt_new_node(nt, "EmbeddedStatementsNode"), self = nt_new_node(nt, "SelfNode");
   int who = inst ? fwd_new_call(nt, self, "class", -1) : self;
+  if (inst) nt_mark_builtin_call(nt, who);   /* (the class the object is: a blank slate has no method `class`, and a program's own `class` does not name it) */
   nt_node_set_str(nt, hd, "unescaped", head);
   nt_node_set_str(nt, hd, "content", head);
   nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, who));
@@ -16947,25 +16956,63 @@ static int disp_arm_test(NodeTable *nt, const DispArm *arm) {
   if (arm->hist) nt_node_set_int(nt, t, "ver_hist", arm->hist);
   return t;
 }
-/* `if <arm[0]'s test> || ... then <then> end` */
-int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then) {
-  int test = disp_arm_test(nt, &arm[0]), ifn = nt_new_node(nt, "IfNode");
+/* `<arm[0]'s test> || ...` */
+int disp_cell_any(NodeTable *nt, const DispArm *arm, int narm) {
+  int test = disp_arm_test(nt, &arm[0]);
   for (int k = 1; k < narm; k++) {
     int o = nt_new_node(nt, "OrNode");
     nt_node_set_ref(nt, o, "left", test);
     nt_node_set_ref(nt, o, "right", disp_arm_test(nt, &arm[k]));
     test = o;
   }
+  return test;
+}
+/* `if <arm[0]'s test> || ... then <then> end` */
+int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then) {
+  int test = disp_cell_any(nt, arm, narm), ifn = nt_new_node(nt, "IfNode");
   nt_node_set_ref(nt, ifn, "predicate", test);
   nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, then));
   return ifn;
 }
-/* `if <arm[0]'s test> || ... then <then> else <els> end` */
-int disp_cell_choose(NodeTable *nt, const DispArm *arm, int narm, int then, int els) {
-  int ifn = disp_cell_guard(nt, arm, narm, then), el = nt_new_node(nt, "ElseNode");
+/* `if <pred> then <then> else <els> end` */
+int disp_choose(NodeTable *nt, int pred, int then, int els) {
+  int ifn = nt_new_node(nt, "IfNode"), el;
+  nt_node_set_ref(nt, ifn, "predicate", pred);
+  nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, then));
+  el = nt_new_node(nt, "ElseNode");
   nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, els));
   nt_node_set_ref(nt, ifn, "subsequent", el);
   return ifn;
+}
+/* `case when <when[0]> then <then[0]> ... else <els> end`, the arms flat (an
+   elsif chain nests one in the other's subsequent) */
+int disp_case(NodeTable *nt, const int *when, const int *then, int n, int els) {
+  int *wv = malloc(sizeof *wv * (size_t)(n > 0 ? n : 1)), cs, el;
+  if (!wv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < n; k++) {
+    wv[k] = nt_new_node(nt, "WhenNode");
+    nt_node_set_arr(nt, wv[k], "conditions", &when[k], 1);
+    nt_node_set_ref(nt, wv[k], "statements", cdef_stmts(nt, then[k]));
+  }
+  cs = nt_new_node(nt, "CaseNode");
+  nt_node_set_ref(nt, cs, "predicate", -1);
+  nt_node_set_arr(nt, cs, "conditions", wv, n);
+  el = nt_new_node(nt, "ElseNode");
+  nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, els));
+  nt_node_set_ref(nt, cs, "else_clause", el);
+  free(wv);
+  return cs;
+}
+/* `self.instance_of?(K)` for class ci, the test of self's class itself
+   (the call is the builtin's, never a program's method of the name), which
+   reads the class id of the object self is (emit_object_call) */
+int disp_self_class_is(Compiler *c, int ci) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int k = sus_class_const(c, ci);
+  if (k < 0) return -1;
+  int test = fwd_new_call(nt, nt_new_node(nt, "SelfNode"), "instance_of?", k);
+  nt_mark_builtin_call(nt, test);
+  return test;
 }
 /* `(<st[0]>; ...; <expr>)` */
 int disp_ahead(NodeTable *nt, const int *st, int n, int expr) {
@@ -18868,10 +18915,10 @@ static int enum_owner_chain(Compiler *c, const char *rn, const char *nm, int blk
    Enumerable behind it (comp_enum_behind) and no method_missing: the walk
    would read the object through them, where it answers none of the
    Enumerable methods. */
-static int class_lacks_enumerable(Compiler *c, int k) {
+static int class_lacks_enumerable(Compiler *c, int id, int k) {
   if (!(c->classes[k].instantiated || c->classes[k].ctor_reachable) || comp_class_is_module(c, &c->classes[k])) return 0;
-  if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
-  if (comp_method_in_chain(c, k, "each", NULL) < 0 && comp_method_in_chain(c, k, "to_a", NULL) < 0) return 0;
+  if (call_target(c, id, k, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0) return 0;
+  if (call_target(c, id, k, "each", CT_METHODS, NULL) < 0 && call_target(c, id, k, "to_a", CT_METHODS, NULL) < 0) return 0;
   return !comp_enum_behind(c, k);
 }
 
@@ -18984,17 +19031,6 @@ static int spl_call(NodeTable *nt, int recv, const char *name, const int *args, 
   nt_node_set_ref(nt, call, "block", blk);
   return call;
 }
-static int spl_if(NodeTable *nt, int pred, int yes, int no) {
-  int ifn = nt_new_node(nt, "IfNode");
-  int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode"), el = nt_new_node(nt, "ElseNode");
-  nt_node_set_arr(nt, ys, "body", &yes, 1);
-  nt_node_set_arr(nt, ns, "body", &no, 1);
-  nt_node_set_ref(nt, el, "statements", ns);
-  nt_node_set_ref(nt, ifn, "predicate", pred);
-  nt_node_set_ref(nt, ifn, "statements", ys);
-  nt_node_set_ref(nt, ifn, "subsequent", el);
-  return ifn;
-}
 /* An arm: the original call with these arguments and block, cloned so it
    keeps what earlier passes marked on the site (the Ruby-defined builtin
    copy an Enumerable name was given) */
@@ -19097,7 +19133,7 @@ int desugar_builtin_splat_forward(Compiler *c) {
         int lon = hwi_new_int(nt, lo);
         int sz3 = spl_call(nt, hwi_lread(nt, rest), "size", NULL, 0, -1);
         int lt = spl_call(nt, sz3, "<", &lon, 1, -1);
-        tail = spl_if(nt, lt, rz, tail);
+        tail = disp_choose(nt, lt, rz, tail);
       }
     }
     for (int k = hi; k >= lo; k--) {
@@ -19109,12 +19145,12 @@ int desugar_builtin_splat_forward(Compiler *c) {
         int kb[SPL_MAX_ARITY];
         for (int i = 0; i < k; i++) { int ix = hwi_new_int(nt, i); kb[i] = spl_call(nt, hwi_lread(nt, rest), "[]", &ix, 1, -1); }
         int without = spl_arm(nt, id, recv, kb, k, -1);
-        arm = spl_if(nt, spl_call(nt, -1, "block_given?", NULL, 0, -1), with, without);
+        arm = disp_choose(nt, spl_call(nt, -1, "block_given?", NULL, 0, -1), with, without);
       }
       int kn = hwi_new_int(nt, k);
       int sz2 = spl_call(nt, hwi_lread(nt, rest), "size", NULL, 0, -1);
       int eq = spl_call(nt, sz2, "==", &kn, 1, -1);
-      tail = spl_if(nt, eq, arm, tail);
+      tail = disp_choose(nt, eq, arm, tail);
     }
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
     int body = nt_new_node(nt, "StatementsNode");
@@ -19372,12 +19408,12 @@ int enum_unrename(NodeTable *nt, int id) {
    (desugar_respond_to_probe), which is synthesized later, during the
    analyzer's fixpoint: the probe's own inferred type stays at
    bop_rows's placeholder TY_UNKNOWN row forever (K-026 cause A). Used by
-   rt_probe_answer (codegen_call.c) to answer those probes from the same
+   rt_probe_answer (below) to answer those probes from the same
    receiver-type test desugar_builtin_enum_calls's "ok" gate uses below,
    which is the question respond_to? actually asks -- does the TYPE have
    this method -- not whether this one analysis-only probe happens to
    have been rewritten. */
-int enum_builtin_responds(Compiler *c, const char *name, TyKind rt) {
+int enum_builtin_responds(Compiler *c, int id, const char *name, TyKind rt) {
   if (!name) return 0;
   if ((sp_streq(name, "transform_keys!") || sp_streq(name, "transform_values!")) && ty_is_hash(rt)) return 1;
   if (builtin_enum_name_index(name) < 0) return 0;
@@ -19386,9 +19422,29 @@ int enum_builtin_responds(Compiler *c, const char *name, TyKind rt) {
   if (ty_is_object(rt)) {
     int ci = ty_object_class(rt);
     return (an_class_includes_enumerable(c, ci) || comp_ary_root(c, ci) >= 0) &&
-           comp_enum_answers_first(c, ci, name);
+           comp_enum_answers_first(c, id, ci, name);
   }
   return 0;
+}
+
+/* The answer a respond_to? with a literal method name gets from its `recv.<qm>` probes (desugar_respond_to_probe): a
+   recognized method infers a concrete type, an unrecognized one stays UNKNOWN, and a probe the per-call-site rewrite
+   never reached is asked the receiver-type question that rewrite's gate would have (enum_builtin_responds). Reading the
+   settled types is side-effect free (unlike emitting, which mutates g_pre/g_tmp), so the codegen fold reads this
+   inside a live fold. Returns 0 when no probe was synthesized (a non-literal method name). */
+int rt_probe_answer(Compiler *c, int id, int *yes) {
+  int pn = 0; const int *probes = nt_arr(c->nt, id, "rt_probes", &pn);
+  if (!probes || pn <= 0) return 0;
+  *yes = 0;
+  for (int p = 0; p < pn; p++) {
+    int precv = nt_ref(c->nt, probes[p], "receiver");
+    if (comp_ntype(c, probes[p]) != TY_UNKNOWN ||
+        (precv >= 0 && enum_builtin_responds(c, probes[p], nt_str(c->nt, probes[p], "name"), infer_type(c, precv)))) {
+      *yes = 1;
+      break;
+    }
+  }
+  return 1;
 }
 
 /* Does the program give Enumerator a with_object of its own (a reopening
@@ -19767,7 +19823,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
       const char *qn = nt_str(nt, id, "orig_name") ? nt_str(nt, id, "orig_name") : name;
       /* an Array subclass is Enumerable through Array (#7449) */
       ok = (an_class_includes_enumerable(c, ci) || comp_ary_root(c, ci) >= 0) &&
-           comp_enum_answers_first(c, ci, qn);
+           comp_enum_answers_first(c, id, ci, qn);
       /* a class that answers the name itself keeps the name it was called by */
       if (!ok && enum_unrename(nt, id)) changed = 1;
     }
@@ -19811,14 +19867,14 @@ int desugar_builtin_enum_calls(Compiler *c) {
       const char *oq = nt_str(nt, id, "orig_name") ? nt_str(nt, id, "orig_name") : name;
       for (int k = 0; own_copy >= 0 && own_copy < nt->count && enum_owner_classes[k]; k++)
         if (enum_class_owns(enum_owner_classes[k], oq, nt_ref(nt, id, "block") >= 0)) own_arm = 1;
-      if (own_arm && comp_method_index(c, nt_str(nt, own_copy, "name")) < 0) own_arm = 0;
+      if (own_arm && call_target(c, id, -1, nt_str(nt, own_copy, "name"), CT_TOP, NULL) < 0) own_arm = 0;
       /* a name builtins/ has no definition of that a builtin receiver
          answers itself (map, uniq, entries) has no copy for the classes
          that own it: the call keeps its typed dispatch */
       if ((own_copy < 0 || own_copy >= nt->count) && bi_enum_receivers_answer(oq)) continue;
     }
     const char *gn = nt_str(nt, copy, "name");
-    if (!gn || comp_method_index(c, gn) < 0) continue;
+    if (!gn || call_target(c, id, -1, gn, CT_TOP, NULL) < 0) continue;
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
     /* the builtin's own arity: `str.partition(sep)` on a value that is a
@@ -19872,8 +19928,8 @@ int desugar_builtin_enum_calls(Compiler *c) {
            copy would walk its #each or convert its #to_a. Its test is
            exact: a subclass that includes Enumerable answers through it */
         if (c->classes[k].is_native_class || is_enumerable_module_name(c->classes[k].name)) continue;
-        int defines = comp_poly_arm_defines_n(c, k, qn, an) || (an == 0 && comp_reader_in_chain(c, k, qn, NULL));
-        if (!defines && (in_copy || !class_lacks_enumerable(c, k))) continue;
+        int defines = comp_poly_arm_defines_n(c, k, qn, an) || (an == 0 && call_attr_target(c, id, k, qn, CT_ATTR, NULL));
+        if (!defines && (in_copy || !class_lacks_enumerable(c, id, k))) continue;
         exact[ndef] = !defines;
         defcls[ndef++] = k;
         nown += defines;
@@ -20781,7 +20837,7 @@ static int bx_copy_self_free(Compiler *c, int copy) {
    gaps in desugar_builtin_scalar_calls are the builtins/ generic's own
    body. A builtin method of the receiver's class with the name answers
    before Comparable's, as in CRuby. The receiver's class name, or NULL. */
-static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, const char *name) {
+static const char *bx_cmp_own_class(Compiler *c, int id, int bx, int copy, TyKind rt, const char *name) {
   const NodeTable *nt = c->nt;
   if (bx != SP_BX_COMPARABLE || copy < 0 || !name) return NULL;
   if (!nt_int(nt, (int)nt_int(nt, copy, "bx_def", -1), "bx_own", 0)) return NULL;
@@ -20802,7 +20858,7 @@ static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, co
   if (rt == TY_RATIONAL || rt == TY_COMPLEX) {
     if (core_method_vis("Numeric", name, 0, NULL) > 0) return NULL;
     int k = comp_builtin_class_named(c, "Numeric");
-    int mi = k >= 0 ? comp_method_in_chain(c, k, name, NULL) : -1;
+    int mi = k >= 0 ? call_target(c, id, k, name, CT_METHODS, NULL) : -1;
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
         !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0)) return NULL;
   }
@@ -20823,7 +20879,7 @@ static int bx_revert_widened(Compiler *c, int id) {
   int ra = nt_ref(nt, id, "arguments");
   int rn = 0; const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rn) : NULL;
   if (!rv || rn < 1 || bx_recv_concrete(bx, infer_type(c, rv[0])) ||
-      bx_cmp_own_class(c, bx, (int)nt_int(nt, id, "bx_copy", -1), infer_type(c, rv[0]), nt_str(nt, id, "bx_name")))
+      bx_cmp_own_class(c, id, bx, (int)nt_int(nt, id, "bx_copy", -1), infer_type(c, rv[0]), nt_str(nt, id, "bx_name")))
     return 0;
   nt_node_set_ref(nt, id, "receiver", rv[0]);
   nt_node_set_ref(nt, id, "arguments", (int)nt_int(nt, id, "bx_args", -1));
@@ -20890,7 +20946,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
        the call keeps its `&.` and its typed emitter */
     if (nt_safe_nav(nt, id)) continue;
     int ok = bx_recv_concrete(bx, rt);
-    const char *cmp_cls = ok ? NULL : bx_cmp_own_class(c, bx, copy, rt, name);
+    const char *cmp_cls = ok ? NULL : bx_cmp_own_class(c, id, bx, copy, rt, name);
     if (cmp_cls) ok = 1;
     if (bx == SP_BX_COMPARABLE) {
       /* Integer/Bignum/Float only, narrower than builtins/comparable.rb's
@@ -20952,7 +21008,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
        onto; no separate "does the program's own class chain define this
        name" check is needed here. */
     const char *gn = nt_str(nt, copy, "name");
-    if (!gn || comp_method_index(c, gn) < 0) continue;
+    if (!gn || call_target(c, id, -1, gn, CT_TOP, NULL) < 0) continue;
     /* a call of a reopening's method ahead of its def at the top level:
        the builtin's method answers it there, as in CRuby (#10719), which
        the call left as written reaches (call_target finds no reopening
@@ -22497,9 +22553,9 @@ static int sym_proc_blockify_op(Compiler *c, int id) {
 /* Whether some user class has a block-taking method `nm`, which a poly
    receiver reaches through the class-id dispatch
    (poly_block_call_needs_dispatch) rather than the poly map loop. */
-static int user_block_method(Compiler *c, const char *nm) {
+static int user_block_method(Compiler *c, int id, const char *nm) {
   for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_chain(c, k, nm, NULL);
+    int mi = call_target(c, id, k, nm, CT_METHODS, NULL);
     if (mi < 0) continue;
     Scope *m = &c->scopes[mi];
     if (m->yields || (m->blk_param && m->blk_param[0])) return 1;
@@ -22586,7 +22642,7 @@ int sym_proc_poly_pair_view(Compiler *c, int id) {
   if (!nm || argc || ty_iter_shape(nm) != TY_ITER_MAP || nt_ref(nt, id, "block") < 0) return 0;
   int changed = sym_proc_blockify_op(c, id);
   int blk = nt_ref(nt, id, "block");
-  int rest = user_block_method(c, nm);
+  int rest = user_block_method(c, id, nm);
   const char *mn = nt_kind(nt, blk) == NK_BlockNode ? sym_proc_name_of(nt, blk, rest) : NULL;
   if (!mn || nt_ref(nt, blk, "sym_proc_pair") >= 0) return changed;
   if (rest) return sym_proc_rest_view(c, blk, mn) | changed;
@@ -30807,7 +30863,7 @@ int desugar_index_assign_user_recv(Compiler *c) {
       const char *cn = nt_str(nt, recv, "name");
       int cid = cn ? const_node_class_index(c, recv) : -1;
       if (cid < 0 || cid >= c->nclasses) continue;
-      if (comp_cmethod_in_chain(c, cid, "[]", NULL) < 0 || comp_cmethod_in_chain(c, cid, "[]=", NULL) < 0) continue;
+      if (call_target(c, id, cid, "[]", CT_CMETHOD, NULL) < 0 || call_target(c, id, cid, "[]=", CT_CMETHOD, NULL) < 0) continue;
     }
     else if (!env) {
       TyKind rt = comp_ntype(c, recv);
@@ -30815,7 +30871,7 @@ int desugar_index_assign_user_recv(Compiler *c) {
       if (!ty_is_object(rt)) continue;
       int cid = ty_object_class(rt);
       if (cid < 0 || cid >= c->nclasses) continue;
-      if (comp_method_in_chain(c, cid, "[]", NULL) < 0 || comp_method_in_chain(c, cid, "[]=", NULL) < 0) continue;
+      if (call_target(c, id, cid, "[]", CT_METHODS, NULL) < 0 || call_target(c, id, cid, "[]=", CT_METHODS, NULL) < 0) continue;
     }
     const char *op = k == NK_IndexOperatorWriteNode ? nt_str(nt, id, "binary_operator") : NULL;
     if (k == NK_IndexOperatorWriteNode && !op) continue;
@@ -30935,14 +30991,14 @@ int desugar_index_assign_value(Compiler *c) {
          call) of a class whose class-level `[]=` is the program's */
       Scope *rs = comp_scope_of(c, id);
       user = rs && rs->is_cmethod && rs->class_id >= 0 && rs->class_id < c->nclasses &&
-             comp_cmethod_in_chain(c, rs->class_id, "[]=", NULL) >= 0;
+             call_target(c, id, rs->class_id, "[]=", CT_CMETHOD, NULL) >= 0;
       if (!user) continue;
     }
     TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
     if (recv >= 0 && !ty_is_object(rt)) rt = infer_type(c, recv);   /* a local's type lives in its scope slot */
     if (!user && ty_is_object(rt)) {
       int cid = ty_object_class(rt);
-      user = cid >= 0 && cid < c->nclasses && comp_method_in_chain(c, cid, "[]=", NULL) >= 0;
+      user = cid >= 0 && cid < c->nclasses && call_target(c, id, cid, "[]=", CT_METHODS, NULL) >= 0;
     }
     /* a box that can hold an object of such a class (one with a
        construction site, as desugar_index_op_write_user asks) */
@@ -30952,7 +31008,7 @@ int desugar_index_assign_value(Compiler *c) {
       for (int i = 0; i < (ks ? n : c->nclasses) && !user; i++) {
         int pk = ks ? ks[i] : i;
         user = c->classes[pk].ctor_reachable && !is_builtin_reopen(c->classes[pk].name) &&
-               comp_method_in_chain(c, pk, "[]=", NULL) >= 0;
+               call_target(c, id, pk, "[]=", CT_METHODS, NULL) >= 0;
       }
     }
     /* a class-level `self.[]=` of a class a constant (or a local that

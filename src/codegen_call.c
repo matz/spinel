@@ -2092,6 +2092,17 @@ static int cls_value_answer_raises(const char *t) {
    is a raise, whose message the switch's own default already gives, where
    it would read an argument with a side effect a second time, or where its
    answer does not fit the slot the dispatch assigns. */
+/* Does the program give a class value the name through a method of its own on what every class value is an
+   object of: Object, Module, Class, Kernel or BasicObject (`class Object; private def top`)? Such a method answers
+   for a class value whatever the builtin tables hold (`Integer.send(:top)`). */
+static int cls_side_program_answers(Compiler *c, const char *name) {
+  static const int owners[] = { CORE_OBJECT, CORE_MODULE, CORE_CLASS, CORE_KERNEL, CORE_BASIC_OBJECT };
+  for (unsigned i = 0; i < sizeof owners / sizeof *owners; i++) {
+    int k = comp_core_class(c, owners[i]);
+    if (k >= 0 && call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+  }
+  return 0;
+}
 static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, int argc,
                                        const int *argv, const int *atmp, const TyKind *atmp_ty,
                                        TyKind ret, int tv, int tr, Buf *b) {
@@ -2100,6 +2111,13 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   if (recv < 0 || !name || nt_ref(nt, id, "block") >= 0) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;
   if (argc > 0 && (!atmp || !atmp_ty)) return 0;
+  /* only a name the class side answers (Class's and Module's instance
+     methods, Object's): for any other the switch's default raises, as
+     CRuby does. The probe below asks the emitters under the Class face,
+     and the Hash emitter answered `empty?` and `none?` on the class value
+     (its conversion of a Class is NULL, "empty"): `String.send(:empty?)`
+     was true where CRuby raises NoMethodError. */
+  if (!builtin_method_answers("Object", name, 1, 0) && !cls_side_program_answers(c, name)) return 0;
   for (int a = 0; a < argc; a++) {
     if (nt_kind(nt, argv[a]) == NK_SplatNode) return 0;
     if (subtree_has_side_effect(c, argv[a]) && repr_of(c, argv[a]).as_ty != atmp_ty[a]) return 0;
@@ -2188,6 +2206,11 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
   int argc = 0; const int *argv = call_args(nt, id, &argc);
   if (recv < 0 || nt_ref(nt, id, "block") >= 0 || g_n_argov + 1 > MAX_ARG_OVERRIDE ||
       nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return 0;
+  /* (a name the class side does not answer keeps the switch's raise, as
+     above: the emitters under the face would answer for a value of
+     another class) */
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || (!builtin_method_answers("Object", nm, 1, 0) && !cls_side_program_answers(c, nm))) return 0;
   /* each argument runs once, in the arm that is taken */
   for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
   int sv_tmp = g_tmp;
@@ -2941,9 +2964,9 @@ int cls_value_owns_name(Compiler *c, int id, const char *name) {
   return 0;
 }
 
-int diag_user_defines(Compiler *c, const char *name) {
+int diag_user_defines(Compiler *c, int id, const char *name) {
   if (comp_name_is_shadow_copy(c, name, SHADOW_PREP)) return 0;
-  return recv_user_defines(c, name) || comp_method_index(c, name) >= 0;
+  return recv_user_defines(c, name) || call_target(c, id, -1, name, CT_TOP, NULL) >= 0;
 }
 
 /* diag_user_defines for a call with an explicit receiver: a top-level def
@@ -4535,7 +4558,7 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
   int src_is_range = (sr.range == TY_INT), src_is_intarr = (sr.elem == TY_INT);
   int src_is_enum = (st == TY_ENUMERATOR);
   /* a boxed source streams as an Enumerator over it (sp_poly_lazy_src) */
-  int src_is_poly = (st == TY_POLY && !diag_user_defines(c, "lazy"));
+  int src_is_poly = (st == TY_POLY && !diag_user_defines(c, id, "lazy"));
   if (src_is_poly) src_is_enum = 1;
   /* a String Range streams the same way once boxed, an endless one by succ */
   int src_is_srange = (st == TY_STR_RANGE);
@@ -11450,6 +11473,26 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          (ran_first_handle): an arm that re-emits it, the synthesized
          writers' default, stores that handle (unbound with kwmark) */
       if (setter_late && htmp[0]) ran_first_bind(argv[0], atmp[0], htmp[0]);
+      /* (ahead of the pre-arms, which end in `else ` before the switch) */
+      /* A writer's name called as a method (`o.send(:x=, v)`, a computed
+         send's arm) where some class defines it: an attr_writer of another
+         class answers too, storing the value it answers with (the method
+         arms answer their own values over it) */
+      char wbase[256];
+      int attr_wr = !is_setter_val && argc == 1 && pos_argc == 1 && splat_a < 0 && kwh < 0 && ret == TY_POLY &&
+                    nt_ref(nt, id, "block") < 0 && name_is_plain_setter(name) &&
+                    setter_base_name(name, wbase, sizeof wbase);
+      if (attr_wr) {
+        int any = 0;
+        for (int k = 0; k < c->nclasses && !any; k++) any = comp_is_writer(&c->classes[k], wbase);
+        attr_wr = any;
+      }
+      if (attr_wr) {
+        char an[32]; snprintf(an, sizeof an, "_t%d", atmp[0]);
+        buf_printf(b, "_t%d = ", tr);
+        if (atmp_ty[0] == TY_POLY) buf_puts(b, an); else emit_boxed_text(c, atmp_ty[0], an, b);
+        buf_puts(b, "; ");
+      }
       ptemps.kwh_tmp = emit_poly_callable_kwh_decl(c, name, &ps, &ptemps, &kw, b);
       emit_poly_prearms_n(c, name, &ps, &ptemps, b);
       int sv_csd2 = g_cls_tag_skip;
@@ -11477,6 +11520,13 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         g_poly_pub_keep = pub_keep;
         emit_poly_user_arms_n(c, id, name, &U, b);
         g_poly_pub_keep = pk; }
+      if (attr_wr) {
+        char an[32], objp[32];
+        snprintf(an, sizeof an, "_t%d", atmp[0]); snprintf(objp, sizeof objp, "_t%d.v.p", tv);
+        g_writer_arms_attr_only = 1;
+        emit_boxed_writer_arms(c, wbase, name, objp, an, atmp_ty[0], argv[0], tv, atmp[0], 0, b);
+        g_writer_arms_attr_only = 0;
+      }
       int is_aref = sp_streq(name, "[]") && argc == 1 && splat_a < 0;
       int is_aref2 = sp_streq(name, "[]") && argc == 2 && splat_a < 0;
       /* fetch with a block answers the block for a missing key: the
@@ -20333,27 +20383,6 @@ static int rt_probe_unfounded(Compiler *c, TyKind rt, const char *qm) {
   }
   return 1;
 }
-/* Read the analyze-time `recv.<qm>` probes stashed on a respond_to? node: a
-   recognized method infers a concrete type, an unrecognized one stays UNKNOWN.
-   Reading the cached type is side-effect free (unlike emitting, which mutates
-   g_pre/g_tmp), so it is safe inside a live fold. Returns 0 when no probe was
-   synthesized (a non-literal method name). */
-int rt_probe_answer(Compiler *c, int id, int *yes) {
-  int pn = 0; const int *probes = nt_arr(c->nt, id, "rt_probes", &pn);
-  if (!probes || pn <= 0) return 0;
-  *yes = 0;
-  for (int p = 0; p < pn; p++) {
-    if (!repr_of(c, probes[p]).untyped) { *yes = 1; break; }
-    /* the probe itself never got the per-call-site rewrite that would
-       type it (K-026 cause A, enum_builtin_responds's comment): ask the
-       same receiver-type question that rewrite's gate would have. */
-    int precv = nt_ref(c->nt, probes[p], "receiver");
-    if (precv >= 0 && enum_builtin_responds(c, nt_str(c->nt, probes[p], "name"), infer_type(c, precv))) {
-      *yes = 1; break;
-    }
-  }
-  return 1;
-}
 /* A receiver whose class defines respond_to? itself answers through it: the
    call is an ordinary dispatch, not the compile-time fold. That is a typed
    receiver of such a class, implicit self in one, or a boxed value when a
@@ -24232,7 +24261,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
       /* a generated reader has no method entry, but the switch has its arm
          (`[lobby].first.members`), so its visibility and an `undef` of it
          are checked here, as a method's are */
-      if (!call_attr_target(c, -1, k, vnm, CT_ATTR | CT_SHARED, NULL)) continue;
+      if (!call_attr_target(c, id, k, vnm, CT_ATTR, NULL)) continue;
       /* undefined unless a class below the `undef` declares the reader
          again, or an alias of that name (comp_is_undeffed_in_chain stops
          only at a method; a reader is not inherited past an `undef`, so a
@@ -25764,7 +25793,7 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
          constant), its `lazy` reached no method at run time, where CRuby's
          collection answers one: refused here, naming the line (#9160). */
       if (nm && sp_streq(nm, "lazy") && recv >= 0 && nt_ref(nt, id, "block") < 0 &&
-          nt_ref(nt, id, "arguments") < 0 && !diag_user_defines(c, "lazy") &&
+          nt_ref(nt, id, "arguments") < 0 && !diag_user_defines(c, id, "lazy") &&
           (ty_is_array(grt) || ty_is_hash(grt) || grt == TY_RANGE || grt == TY_FLOAT_RANGE ||
            grt == TY_STR_RANGE || grt == TY_ENUMERATOR))
         unsupported(c, id, "a lazy chain held in an instance, class or global variable or a "
@@ -26137,7 +26166,7 @@ void ffi_check_buffer_bounds(Compiler *c, int id, int arg,
 
 /* Does `txt` mention the temp `_t<n>` -- as that temp, not as a prefix of a
    longer number (`_t5` must not match inside `_t50`)? */
-static int text_uses_tmp(const char *txt, int n) {
+int text_uses_tmp(const char *txt, int n) {
   if (!txt) return 0;
   char want[24];
   int wl = snprintf(want, sizeof want, "_t%d", n);
@@ -27220,7 +27249,31 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      which is a worse order than the one C picked. Only a local read ahead of
      it that it can rebind runs first, with the operands before it
      (emit_operands_before_unbound). */
-  int nmax = 1 + argc;
+  /* `outer[k][start, len] = v` through a box: the splice stores into outer's
+     slot k after v, so outer and k are the operands, in place of the
+     receiver they make: each runs once, before v, as Ruby reads the
+     receiver first. Where a class's `[]=` may take the store, the element
+     `outer[k]` is one too, read through them: the dispatch calls the method
+     on the element Ruby selected, though v put another in outer's slot. */
+  int recv_outer = -1, recv_key = -1, recv_elem = 0;
+  if (recv >= 0 && argc == 3 && !nt_safe_nav(nt, id) && nt_str(nt, id, "name") &&
+      sp_streq(nt_str(nt, id, "name"), "[]=") && comp_ntype(c, recv) == TY_POLY &&
+      nt_kind(nt, recv) == NK_CallNode && nt_str(nt, recv, "name") &&
+      sp_streq(nt_str(nt, recv, "name"), "[]") && nt_ref(nt, recv, "block") < 0 &&
+      nt_ref(nt, recv, "receiver") >= 0 && !nt_safe_nav(nt, recv)) {
+    int ra = 0;
+    const int *rav = call_args(nt, recv, &ra);
+    if (ra == 1 && nt_kind(nt, rav[0]) != NK_SplatNode && nt_kind(nt, rav[0]) != NK_KeywordHashNode) {
+      recv_outer = nt_ref(nt, recv, "receiver");
+      recv_key = rav[0];
+      for (int k = 0; k < c->nclasses && !recv_elem; k++)
+        recv_elem = comp_poly_arm_defines_n(c, k, "[]=", 3);
+    }
+  }
+  /* the receiver's operands: none, the receiver, or its outer and key (and
+     the element) */
+  int nrecv = recv < 0 ? 0 : recv_outer >= 0 ? 2 + recv_elem : 1;
+  int nmax = nrecv + argc;
   for (int i = 0; i < argc; i++) {
     if (nt_kind(nt, argv[i]) == NK_KeywordHashNode) { int nk = 0; nt_arr(nt, argv[i], "elements", &nk); nmax += nk; }
     else if (range_lit_ends_ordered(c, argv[i], i == argc - 1)) nmax++;
@@ -27228,7 +27281,11 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   int node[nmax], fresh[nmax], oo[nmax], copy[nmax], sh[nmax], fb[nmax], nb = 0;
   TyKind ty[nmax];
   int operand[nmax], nop = 0;
-  if (recv >= 0) operand[nop++] = recv;
+  if (recv_outer >= 0) {
+    operand[nop++] = recv_outer; operand[nop++] = recv_key;
+    if (recv_elem) operand[nop++] = recv;
+  }
+  else if (recv >= 0) operand[nop++] = recv;
   for (int i = 0; i < argc; i++) {
     /* keyword arguments are operands one value at a time, in the order
        written: `new(a: r.int, b: f(r.int))` runs a's call first, however
@@ -27276,7 +27333,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      argument is bound and rooted ahead of the call like an observable one
      (operand_held_for_later). */
   int held[nmax], nheld = 0;
-  operands_held_for_later(c, operand, nop, recv >= 0, held);
+  operands_held_for_later(c, operand, nop, nrecv, held);
   /* A push or an append of several arguments pushes each before the next
      is read, so where a later argument can see an earlier push
      (push_args_read_before_pushes) every argument is bound first, in
@@ -27287,7 +27344,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      push had grown, and `a.push(5, last(a))` ran last on it. */
   int push_reads = push_args_read_before_pushes(c, id);
   if (push_reads)
-    for (int i = recv >= 0; i < nop; i++) {
+    for (int i = nrecv; i < nop; i++) {
       /* (but a value with no C value of its own -- a literal nil -- which
          nothing can change, and a shared String slot, which its copy path
          reads last) */
@@ -27332,7 +27389,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     if (ot == TY_POLY || (ty_is_object(ot) && ty_object_class(ot) >= 0 &&
                           ty_object_class(ot) < c->nclasses &&
                           !c->classes[ty_object_class(ot)].is_native_class &&
-                          !(recv >= 0 && i == 0)))
+                          !(i < nrecv)))
       converts = 1;
     /* an operand the nil arm's head ran (VR_HEAD_HELD) reads as its temp:
        it runs nothing here, and bound again it was copied into a second
@@ -27480,7 +27537,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
        it as a held String read does, in order; a class read held only for its
        effect goes on to that binding when the ordering declines) */
     if (!ncand && !nheld_value) {
-      int done = emit_operands_before_unbound(c, id, operand, nop, recv >= 0, unb, b);
+      int done = emit_operands_before_unbound(c, id, operand, nop, nrecv, unb, b);
       if (done || !nheld) return done;
     }
     if (unb_lit) return 0;
@@ -27530,10 +27587,16 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      with nothing naming it when it does not. A held String read is rendered
      with its binding. */
   int operands_last = (observable < 2 && !nheld) || held_for_group;
+  /* the element of a two-index store's receiver (recv_elem) reads its outer
+     and key: it is rendered as it is bound, after them, so it reads their
+     temps rather than running them again */
+  int elem_at = -1;
+  for (int i = 0; i < nb && recv_elem; i++)
+    if (node[i] == recv && !copy[i]) elem_at = i;
   for (int i = 0; i < nb; i++)
-    if (copy[i]) { memset(&opb[i], 0, sizeof opb[i]); memset(&opp[i], 0, sizeof opp[i]); }
+    if (copy[i] || i == elem_at) { memset(&opb[i], 0, sizeof opb[i]); memset(&opp[i], 0, sizeof opp[i]); }
   for (; !operands_last && rendered < nb && ok; rendered++) {
-    if (copy[rendered]) continue;
+    if (copy[rendered] || rendered == elem_at) continue;
     render_bound_operand(c, node[rendered], fresh[rendered],
                          operand_binds_handle(c, node[rendered], harg) || hdl[rendered] || sh[rendered],
                          oo[rendered], fb[rendered], &opb[rendered], &opp[rendered]);
@@ -27550,6 +27613,11 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
         ran_first_bind(node[i], tmp[i], tmp[i]);
         snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "SP_STR_B(_t%d)", tmp[i]);
         continue;
+      }
+      if (i == elem_at) {
+        render_bound_operand(c, node[i], fresh[i], operand_binds_handle(c, node[i], harg) || hdl[i] || sh[i],
+                             oo[i], fb[i], &opb[i], &opp[i]);
+        if (text_is_raise_token(opb[i].p)) ok = 0;
       }
       tmp[i] = ++g_tmp;
       if (sh[i]) {
@@ -27606,7 +27674,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
        #to_int renders inline and IO#write holds per operand. */
     if (observable < 2 && !nheld && g_conv_emitted == conv_mark) ok = 0;
     for (; operands_last && rendered < nb && ok; rendered++) {
-      if (copy[rendered]) continue;
+      if (copy[rendered] || rendered == elem_at) continue;
       render_bound_operand(c, node[rendered], fresh[rendered],
                            operand_binds_handle(c, node[rendered], harg) || hdl[rendered] || sh[rendered],
                            oo[rendered], fb[rendered], &opb[rendered], &opp[rendered]);
@@ -27615,7 +27683,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   }
   if (!ok) {
     for (int i = 0; i < nb; i++)
-      if (!copy[i] && i < rendered) { free(opb[i].p); free(opp[i].p); }
+      if (!copy[i] && (i < rendered || i == elem_at)) { free(opb[i].p); free(opp[i].p); }
     free(ob.p);
     g_pre->len = pre_mark;
     if (g_pre->p) g_pre->p[pre_mark] = '\0';
@@ -29389,7 +29457,13 @@ static const char *strvar_arg(Compiler *c, int a, int *shared) {
   }
   if (at != TY_STRING && at != TY_STRBUF) return NULL;
   if (k == NK_SelfNode) { *shared = repr_self_shared(c, a); return "String self"; }
-  if (k == NK_InstanceVariableReadNode) return "an instance variable";
+  if (k == NK_InstanceVariableReadNode) {
+    Scope *is = comp_scope_of(c, a);
+    const char *in = nt_str(nt, a, "name");
+    int iv = is && is->class_id >= 0 && !is->is_cmethod && in ? comp_ivar_index(&c->classes[is->class_id], in) : -1;
+    *shared = iv >= 0 && repr_of_ivar(c, is->class_id, iv).handle;
+    return "an instance variable";
+  }
   if (k == NK_GlobalVariableReadNode) return "a global variable";
   if (k == NK_ClassVariableReadNode) return "a class variable";
   return NULL;
@@ -36590,6 +36664,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
 
   if (emit_call_compare_arms(c, id, b, nt, name, recv, argc, argv, rt)) return;
   if (rt == TY_TMS && emit_builtin_op(c, id, recv, rt, name, b)) return;
+  if (rt == TY_ENV && emit_builtin_op(c, id, recv, rt, name, b)) return;
   if (emit_call_symbol_misc_arms(c, b, name, recv, argc, argv, rt)) return;
   if (emit_call_display_ivar_arms(c, id, b, nt, name, recv, argc, argv, rt)) return;
 

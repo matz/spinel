@@ -248,7 +248,9 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT
    sides (CT_CMETHOD, CT_OWN, CT_TOP, CT_CAPTURE) are as they are. CT_SHARED marks the ask of a reader the call sites
    share: a node's frame that is open keeps its read counted as the node's (--method-table-check) until the site asks
    the plan itself. CT_ATTR asks the attribute alone (the writer's with CT_WRITER): ML_ATTR where the chain holds
-   one, whatever def is nearer, as comp_reader_in_chain answers it. */
+   one, whatever def is nearer, as comp_reader_in_chain answers it. An accessor has a load point: asked at a call (id >= 0), the ask answers none where no attr_*
+   call of the name has run by the call's point (ct_attr_point); with no call (id -1) it is a candidate scan of
+   every class, and an accessor with versions is reported as an `accessor` table answer. */
 /* CT_NOFACE asks the instance lookup with no visibility face, as a call
    that enforces nothing does: a private def is found. It is the one flag
    that says so by itself; every other flag but CT_WRITER (which asks the
@@ -457,6 +459,7 @@ void ver_hold_free(Compiler *c);
 void ver_chain_free(Compiler *c);
 void new_inits_free(Compiler *c);
 void new_sites_free(Compiler *c);
+void attr_facts_free(Compiler *c);
 /* the method call id reaches when it can reach only main's own method of
    name, -1 for none (a call on main where main's method is defined) */
 int ct_main_target(Compiler *c, int id, const char *name);
@@ -519,6 +522,9 @@ int cplan_pinned_builtin(const Compiler *c, int id);
 /* Is call id an entry's arm (or else arm) call, pinned to the method it
    runs or to the builtin (ver_entry_targets lists the methods)? */
 int cplan_pinned(const Compiler *c, int id);
+/* ...the method it runs, -1 for none (an arm that raises, the builtin's,
+   any other node) */
+int cplan_pin_scope(const Compiler *c, int id);
 /* ...and the visibility (SP_VIS_PRIVATE or SP_VIS_PROTECTED) that a face
    entry's arm for that version raises with, instead of running it; 0 for
    an arm that runs, and for any other node */

@@ -168,7 +168,7 @@ static int share_target_armed_plan(Compiler *c, const CallPlan *p, int call, int
   int np = 0;
   const PolyCand *pc = comp_poly_candidates_at(c, call, nm, &np);
   for (int i = 0; i < np; i++)
-    if (pc[i].mi == mi || (pc[i].mi < 0 && call_target(c, -1, pc[i].cls, nm, CT_METHODS | CT_SHARED, NULL) == mi)) return 1;
+    if (pc[i].mi == mi || (pc[i].mi < 0 && call_target(c, call, pc[i].cls, nm, CT_METHODS, NULL) == mi)) return 1;
   return 0;
 }
 int share_target_armed(Compiler *c, int call, int mi) {
@@ -1627,7 +1627,7 @@ static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
   int rcv = nt_ref(nt, n, "receiver");
   const char *cn = nt_str(nt, n, "name");
   if (cn && rcv >= 0 && nt_ref(nt, n, "block") < 0 && !sh_has_targets(c, n)) {
-    if (nt_kind(nt, rcv) == NK_ConstantReadNode && comp_ntype_settled(c, rcv) == TY_ENV && is_aref_name(cn))
+    if (env_value_recv(c, rcv, comp_ntype_settled(c, rcv)) && is_aref_name(cn))
       return 1;
     if ((is_receiver_conversion(cn) || is_freeze_name(cn)) && call_plain_argc(c, n) == 0)
       return share_value_fresh(c, rcv, depth + 1);

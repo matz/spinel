@@ -408,7 +408,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     int pu = 0;
     for (int k = 0; k < c->nclasses && !pu; k++)
       if (call_target(c, id, k, name, CT_OWN, NULL) >= 0 ||
-          call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL)) pu = 1;
+          call_attr_target(c, id, k, name, CT_ATTR, NULL)) pu = 1;
     if (!pu || g_poly_builtin_arm) {
       int t = ++g_tmp, ta = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", t);

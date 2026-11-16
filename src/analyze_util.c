@@ -510,6 +510,16 @@ static int const_node_record_class(Compiler *c, int id, int *core) {
     return elab_header_class(c, hp, NULL, NULL);
   return elab_class_ref_at(c, id, core);
 }
+/* Is recv, typed t, ENV's value as a call's receiver: the constant, or a read
+   of a variable that holds ENV and nothing else (TY_ENV)? The ENV arms answer
+   from the environment and do not evaluate their receiver, so a receiver that
+   runs code (a method answering ENV) is not one. */
+int env_value_recv(Compiler *c, int recv, TyKind t) {
+  if (recv < 0 || t != TY_ENV) return 0;
+  NodeKind k = nt_kind(c->nt, nt_paren_single(c->nt, recv));
+  return k == NK_ConstantReadNode || k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode ||
+         k == NK_ClassVariableReadNode || k == NK_GlobalVariableReadNode;
+}
 int const_node_class_index(Compiler *c, int id) {
   /* a constant a pass made to name a builtin class (cvb_split's arms) */
   if (id >= 0 && id < c->nt->count && nt_int(c->nt, id, "builtin_ref", 0)) return comp_builtin_class_named(c, nt_str(c->nt, id, "name"));
@@ -4540,7 +4550,7 @@ int an_fwd_block_may_be_nil(Compiler *c, int id) {
 TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int base_mi, TyKind r,
                          int call_id) {
   int nd = 0;
-  const int *ds = comp_descendants(c, cid, &nd);
+  const int *ds = call_id >= 0 && cplan_pinned(c, call_id) ? NULL : comp_descendants(c, cid, &nd);
   for (int i = 0; i < nd; i++) {
     int kmi = call_target(c, call_id, ds[i], name, cmeth ? CT_CMETHOD : 0, NULL);
     if (kmi < 0 || kmi == base_mi) continue;
@@ -4931,8 +4941,7 @@ int is_handler_proc_block(Compiler *c, int id) {
     return hrk == NK_ConstantReadNode &&
     nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Signal");
   }
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      infer_type(c, recv) == TY_ENV &&
+  if (env_value_recv(c, recv, infer_type(c, recv)) &&
       is_select_bang(name))
     return 1;
   return 0;
@@ -5142,6 +5151,9 @@ int name_is_synth_method(Compiler *c, const char *m) {
   /* `__mm a` / `__rtm a`: a method_missing Method's target and its
      respond_to_missing? test (desugar_missing_method_obj), spaced too */
   if (strncmp(m, "__mm ", 5) == 0 || strncmp(m, "__rtm ", 6) == 0) return 1;
+  /* `__kern test a` and its kin: a Kernel guard's test and else arm, made
+     once per holder and name (ver_kernel_guards), spaced too */
+  if (strncmp(m, "__kern ", 7) == 0) return 1;
   /* `__inc <n> <name>`: the shadow copy of an included module's method, kept
      so an override can reach it through super (#3738); a name no such copy
      has, as `__inc foo`, is the program's own */

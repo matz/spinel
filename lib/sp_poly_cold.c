@@ -458,6 +458,7 @@ const char *sp_poly_to_s(sp_RbVal v)
         case SP_BUILTIN_ENUMERATOR: return sp_enum_inspect_boxed(v);
         case SP_BUILTIN_RANDOM: if (v.v.p) return sp_Random_inspect((sp_Random *)v.v.p); return SPL("#<Object>");
         case SP_BUILTIN_ARGF: return SPL("ARGF");
+        case SP_BUILTIN_ENV: return SPL("ENV");
         default:
           if ((v.cls_id >= 0 || v.cls_id == SP_BUILTIN_OBJECT) && v.v.p) {
             /* a class with a user #to_s renders through the generated
@@ -575,6 +576,7 @@ static const char *sp_poly_class_name_arm(sp_RbVal v, int *id)
         case SP_BUILTIN_YIELDER: return SPL("Enumerator::Yielder");
         case SP_BUILTIN_RANDOM: return SPL("Random");
         case SP_BUILTIN_ARGF: return SPL("ARGF.class");
+        case SP_BUILTIN_ENV: return SPL("Object");   /* ENV is an Object with singleton methods */
         case SP_BUILTIN_EXCEPTION: {
           /* a builtin exception class carries its id (sp_Exception.cls_id) */
           const sp_Exception *e = (const sp_Exception *)v.v.p;
@@ -795,6 +797,8 @@ const char *sp_poly_inspect(sp_RbVal v)
         case SP_BUILTIN_FIBER:  return sp_Fiber_inspect((sp_Fiber *)v.v.p);
         case SP_BUILTIN_THREAD: return sp_Thread_inspect((sp_thread *)v.v.p);
         case SP_BUILTIN_ARGF:   return SPL("ARGF");
+        /* ENV inspects as the Hash of what it holds now */
+        case SP_BUILTIN_ENV:    return sp_StrStrHash_inspect(sp_env_to_h());
         /* the typed form's rendering, which lists the ivars a program set */
         case SP_BUILTIN_RANDOM: if (v.v.p) return sp_Random_inspect((sp_Random *)v.v.p); return SPL("#<Object>");
         default:

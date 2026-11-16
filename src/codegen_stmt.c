@@ -15338,6 +15338,21 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
   free(tmp.p);
 }
 
+/* Are the classes of object types a and b one line (one an ancestor of the
+   other), neither a value type, and not the same? A pointer of one is
+   layout-compatible with the other's (a subclass replicates its parent's
+   fields at the same offsets), so a cast between them is a no-op C needs
+   spelled out. */
+static int obj_classes_related(Compiler *c, TyKind a, TyKind b) {
+  if (!ty_is_object(a) || !ty_is_object(b)) return 0;
+  int ac = ty_object_class(a), bc = ty_object_class(b);
+  if (ac < 0 || bc < 0 || ac == bc) return 0;
+  if (c->classes[ac].is_value_type || c->classes[bc].is_value_type) return 0;
+  for (int k = c->classes[ac].parent; k >= 0; k = c->classes[k].parent) if (k == bc) return 1;
+  for (int k = c->classes[bc].parent; k >= 0; k = c->classes[k].parent) if (k == ac) return 1;
+  return 0;
+}
+
 /* A literal whose evaluation has no side effects -- used to decide whether a
    discarded `return <expr>` in a void function needs `(void)(<expr>)` to keep
    the side effects or can collapse to a bare `return;`. Callers unwrap parens
@@ -17309,6 +17324,7 @@ static void emit_writer_arm_src_root(TyKind at, const char *src, Buf *b) {
   else if (at == TY_STRING || at == TY_STRBUF) buf_printf(b, "SP_GC_ROOT(%s); ", src);
 }
 
+int g_writer_arms_attr_only;
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, int vnode,
                             int box_tv, int src_tv, int native_answer, Buf *b) {
@@ -17336,7 +17352,7 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
        binding returns -- `s.send(:pos=, -2)` is the clamped position -- so
        that arm stores it back into the value temp the switch yields, and a
        binding whose answer the temp can't hold keeps no arm. */
-    if (box_tv >= 0 && c->classes[k].is_native_class && c->classes[k].instantiated) {
+    if (box_tv >= 0 && !g_writer_arms_attr_only && c->classes[k].is_native_class && c->classes[k].instantiated) {
       TyKind ats[1] = { at }, mret;
       Buf cb;
       if (poly_native_arm_call(c, k, nm, 1, &vnode, &src_tv, ats, box_tv, &cb, &mret)) {
@@ -17360,6 +17376,8 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
     }
     if (kmi < 0 && !attr) continue;
     int writer_wins = attr;
+    /* (beside a method dispatch's own arms: only the classes it has none for) */
+    if (g_writer_arms_attr_only && !writer_wins) continue;
     /* --share-strings: inside a dispatch's builtin arm, an explicit writer's
        class was the dispatch's own arm (no user class owns the name here) */
     if (!writer_wins && g_poly_builtin_arm) continue;
@@ -18781,6 +18799,10 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
       if (!executable) {
         emit_mixin_arg_reads(c, stmts[k], b, indent);
         emit_const_visibility_missing(c, stmts[k], ci, b, indent);
+        /* (an include the record cannot place ahead of every call writes the Kernel cells as it runs: cplan_vis_cell_after) */
+        Buf wb; memset(&wb, 0, sizeof wb);
+        if (emit_vis_cell_write(c, stmts[k], &wb)) { emit_indent(b, indent); buf_printf(b, "%s;\n", wb.p); }
+        free(wb.p);
         continue;
       }
     }
@@ -24001,6 +24023,14 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
          reads, and each arm's, published others) */
       else if (!g_result_var && g_ret_type == TY_STRBUF && rt == TY_STRBUF)
         buf_printf(b, "sp_strface_pub_h(_t%d);\n", t);
+      /* an object into a slot typed another class of its line: cast, as a
+         plain tail's is (emit_obj_upcast_prefix), and the other way too --
+         the slot a subclass's copy of a `new` fills (a module an ancestor
+         extends writes it, `super` inside an ensure) is the subclass, while
+         the begin's own type is the class the method was analyzed on, the
+         ancestor; the object is the subclass's */
+      else if (ty_is_object(slot_t) && ty_is_object(rt) && obj_classes_related(c, slot_t, rt))
+        buf_printf(b, "(%s *)_t%d;\n", class_ctype(c, ty_object_class(slot_t)), t);
       else buf_printf(b, "_t%d;\n", t);
       return;
     }
@@ -25884,6 +25914,17 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
   { int rv = str_mutate_append_bang_arms(c, id, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }
   { int rv = str_mutate_reassign_arms(c, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }
 
+  /* `h[x] = (x = 5)`, `a[i] = (i = 2; v)`: CRuby reads the receiver and
+     the key before the value runs. The statement arms below read the key
+     inside the set's argument list, after the value's assignment, so a
+     value that can give the key's variable a new value declines here, to
+     the expression form, whose operands run in order
+     (emit_operands_in_order). (A receiver the key or the value can
+     rebind stays here: the arms below hold it first.) */
+  if ((is_store_alias(name) || sp_streq(name, "[]=")) && argc == 2 && recv >= 0 &&
+      (ty_is_hash(rt) || ty_is_array(rt)) && read_rebound_by(c, argv[0], argv[1]) &&
+      !read_rebound_by(c, recv, argv[1]) && !read_rebound_by(c, recv, argv[0]))
+    return 0;
   if (ty_is_hash(rt)) {
     const char *hn = ty_hash_cname(rt);
     /* Hash#store is the method form of []= */
@@ -27374,7 +27415,7 @@ int strbuf_flow_unseen(Compiler *c, int v) {
   if (share_value_fresh(c, v, 0)) return 1;
   int recv = nt_kind(nt, v) == NK_CallNode ? nt_ref(nt, v, "receiver") : -1;
   const char *rname = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
-  return is_argv_const(rname) || (rname && comp_ntype(c, recv) == TY_ENV &&
+  return is_argv_const(rname) || (env_value_recv(c, recv, comp_ntype(c, recv)) &&
          bop_share_named(BOP_ENV, nt_str(nt, v, "name")) == BSH_PURE) || strbuf_flow_unseen_arms(c, v);
 }
 static int strbuf_flow_seen_leaf(Compiler *c, int v) { return !strbuf_flow_unseen(c, v); }

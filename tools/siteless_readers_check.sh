@@ -17,6 +17,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
 FUNCS="
+src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
 src/analyze_util.c:class_has_coerce_shape
 src/analyze_util.c:class_coerce_emittable
@@ -25,6 +26,8 @@ src/analyze.c:ur_iter_overridden
 src/analyze.c:synth_enum_to_a
 src/analyze.c:synth_struct_each
 src/analyze.c:synth_to_enum_generators
+src/analyze.c:bsu_own_method
+src/analyze.c:desugar_builtin_method_obj
 src/analyze_desugar.c:desugar_array_at
 src/analyze_desugar.c:desugar_array_first_last
 src/analyze_desugar.c:desugar_enum_walk_calls
@@ -41,7 +44,6 @@ src/codegen.c:prepare_obj_cmp_dispatch
 src/codegen.c:emit_struct_display_decls
 src/codegen.c:exc_text_method
 src/codegen.c:range_rat_walk_own_def
-src/codegen.c:emit_poly_iter_obj_reject_as
 src/codegen.c:emit_poly_iter_obj_normalize
 src/codegen.c:user_aset_scope
 src/codegen.c:obj_to_ary_method
@@ -67,21 +69,7 @@ src/codegen_call.c:root_reopen_defines
 src/compiler.c:mixin_answers_first
 src/compiler.c:cls_user_display_mi
 src/compiler.c:toplevel_mod_method
-src/analyze.c:dyn_site_misses
-src/analyze.c:ie_poly_self_classes
-src/analyze_infer.c:infer_poly_operand_call
-src/analyze_infer_recv.c:infer_poly_call
-src/analyze_scope.c:poly_recv_defines
-src/analyze_share.c:share_target_armed_plan
-src/codegen_call.c:emit_poly_vis_precheck
 src/codegen_call_exception.c:emit_call_exception_arms
-src/codegen_call_io.c:emit_call_poly_io_arms
-src/codegen_call_method.c:emit_call_poly_callable_arms
-src/codegen_call_recv.c:emit_poly_call0_arms
-src/codegen_call_recv.c:emit_poly_numeric_call
-src/codegen_poly_plan.c:poly_key_cls0
-src/codegen_poly_plan.c:poly_specials0
-src/codegen_poly_plan.c:recv_user_cdefines
 src/compiler.c:comp_poly_arm_reader_any
 "
 PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain)[[:space:]]*([(]|$)'

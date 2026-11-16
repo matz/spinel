@@ -505,6 +505,9 @@ int infer_param_hash_value(Compiler *c) {
       if (p == sc->rest_idx || p == sc->kwrest_idx) continue;
       LocalVar *lv = scope_local(sc, sc->pnames[p]);
       if (!lv || lv->is_block_param) continue;
+      /* a parameter defaulting to ENV holds ENV where no argument is passed:
+         its `p[k] = v` is ENV's store, no evidence of a Hash */
+      if (sc->pdefault && sc->pdefault[p] >= 0 && infer_type(c, sc->pdefault[p]) == TY_ENV) continue;
       TyKind cur = lv->type;
       /* An already-CONCRETE hash type is a caller's, and the object is shared:
          narrowing str->poly to str->str here does not convert anything, it
@@ -12355,8 +12358,9 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
          receive the same arg types so the cls_id-switch dispatch is type-safe.
          Also handles the case where only descendants define the method (mi < 0
          from base chain, e.g. Base.find calls adapter_find defined only in
-         Article and Comment descendants). */
-      if (caller_cid >= 0) {
+         Article and Comment descendants). A call the plan pins to one method
+         (cplan_pinned) runs that one on every self: no override takes it. */
+      if (caller_cid >= 0 && !cplan_pinned(c, id)) {
         Scope *caller_sc = comp_scope_of(c, id);
         int is_cm = caller_sc ? caller_sc->is_cmethod : 0;
         int nd = 0; const int *ds = comp_descendants(c, caller_cid, &nd);
@@ -18578,8 +18582,7 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
 static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id, int block, const char *name, int recv) {
   int changed = 0;
   /* ENV's missing-key block receives the String key, as fetch's does. */
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      infer_type(c, recv) == TY_ENV &&
+  if (env_value_recv(c, recv, infer_type(c, recv)) &&
       bop_share_named(BOP_ENV, name) == BSH_FETCH) {
     const char *p0 = block_param_name(c, block, 0);
     if (p0) changed |= bp_widen(comp_scope_of(c, block), p0, TY_STRING);
@@ -21677,8 +21680,17 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
   /* An entry's arm call is pinned to the method it runs, which the entry
      reaches by scope (ver_entry_targets, above), or to the builtin: by name
      it reached every other method of the name, a class method's entry the
-     instance methods too */
-  if (k0 == NK_CallNode && cplan_pinned(c, id)) names[0] = NULL;
+     instance methods too. A call pinned outside an entry (a Kernel guard's,
+     to its holder's helper, ver_kern_help) reaches its method by scope. */
+  if (k0 == NK_CallNode && cplan_pinned(c, id)) {
+    int pin = cplan_pin_scope(c, id);
+    if (pin >= 0) {
+      char mark[24];
+      snprintf(mark, sizeof mark, "\x01%d", pin);
+      cr_add_name(out, n, cap, mark);
+    }
+    names[0] = NULL;
+  }
   /* Once the types are settled, a plain name, or one on a known instance,
      reaches the scopes of that name that can take the call's argument count
      (cr_count_name, compute_reachable). A 0-argument `r.attribute` kept a

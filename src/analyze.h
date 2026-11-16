@@ -22,6 +22,9 @@ const int *poly_recv_classes(Compiler *c, int call, int *n);
 /* Does an instantiated class of the program that the boxed receiver of `call`
    can be (any, when the walk does not bound it) define a method `name`? */
 int poly_recv_defines(Compiler *c, int call, const char *name);
+/* May the receiver of poly call `call` be an instance of class k: the classes the analysis bounds it to, or any class
+   where it does not (poly_recv_classes); a reopened builtin always may be */
+int poly_recv_may_be(Compiler *c, int call, int k);
 /* Does a method of the program answer the call `call` (the builtin reflection
    it names, a program's method of that name in its receiver's class chain)? A
    boxed receiver is asked by the classes it can be, a typed one by the call
@@ -286,6 +289,11 @@ typedef struct {
   unsigned char arm_vis; /* a version's: the visibility its face arm takes
                             (elab_version_vis, -1 for the run's), plus 2;
                             0 not asked yet */
+  unsigned char early;  /* a method version's (a def, an alias, an undef,
+                           ...): no object of the class, or of one below it, may
+                           exist where it runs, so no call on one runs
+                           ahead of it (lr_early_settle); 0 where one may,
+                           or where the record does not place it */
   int arm1;             /* a conditional def's dispatcher (cond_lone_disp): the
                            first of its arms (`name#__condN`, cond_arm) by
                            node, which runs where its branch does and makes
@@ -306,8 +314,12 @@ typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND, LR_SG_PREPEND } LrMixKind;   /
    body runs, as the registration applies an entry (elab_entries): no
    condition between them, not in an iterator's block or a begin with a
    rescue clause. open: the statement whose body the call stands in
-   (LrOpen.node; a file's root for main's). */
-typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int open; } LrMixin;
+   (LrOpen.node; a file's root for main's). early: the call's statement
+   runs whenever its body does (no condition of its own, elab_point_may),
+   and stands in the body that made the class, or in a reopening that runs
+   before any object of the class, or of one below it, may exist
+   (lr_early_settle). */
+typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int open; unsigned char early; } LrMixin;
 typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 struct HostStep;
 void elab_program(Compiler *c, struct HostStep *h);
@@ -575,13 +587,24 @@ int elab_class_kernel(Compiler *c, int cls);
 int elab_mixin_brings_kernel(Compiler *c, int ref);
 /* ...and surely, through mixins that surely run (an include under a condition does not count) */
 int elab_mixin_certain_kernel(Compiler *c, int ref);
-int elab_mixin_may_not_run(Compiler *c, const LrMixin *m);   /* under a condition, or after one that decides */
+int elab_mixin_may_not_run(const LrMixin *m);   /* under a condition, after one that decides, or in a reopening that may run after an object of the class exists */
+/* What a call of name on an object of class d finds on d's chain below class upto (its prepends, own table, includes
+   and their modules' mixins, then its superclass's, up to upto's, which is left out), the same from the first point an
+   object of d may exist to the load's end: ELAB_YES where it runs the def or define_method at one of nodes (an alias
+   followed to its original) -- with entry, the n arms of a version entry, where the versions under a condition hold it,
+   decided before any object of d exists; ELAB_STOP where an undef there ends the lookup, a module's among them;
+   ELAB_NO where none below upto holds the name; ELAB_UNKNOWN where an entry, or a mixin whose module holds the name,
+   may run once an object of d exists (LrDef.early, elab_mixin_may_not_run), the record does not place it, the chain
+   holds a module it cannot name, or the method it finds is not at nodes */
+int elab_runs_below(Compiler *c, int d, int upto, const char *name, const int *nodes, int n, int entry);
 /* A number that changes with every change to the record's histories and mixins (a cache of an answer read from them is of it) */
 unsigned long elab_mixin_gen(Compiler *c);
 /* call_target's questions about call id read the record's facts as its
    first such question found them (analyze_elab.c): 1 when the frame is in,
    until elab_plan_leave; 0 for a node it cannot place */
 int elab_plan_enter(Compiler *c, int id);
+int elab_accessor_first(Compiler *c, int node, const char *name, int cls);
+unsigned long elab_hgen(Compiler *c);   /* bumped by every change to the histories and the mixins */
 void elab_plan_leave(Compiler *c);
 void elab_check_version(Compiler *c, int id, int vi, int dc, int now, int ndc);   /* SPINEL_ELAB_CHECK */
 void elab_check_surface(Compiler *c);   /* SPINEL_ELAB_CHECK: the record's surface against the class tables */
@@ -1219,10 +1242,11 @@ TyKind infer_type(Compiler *c, int id);
 /* Does a receiver of type `rt` have a real method named `name`, among the
    per-call-site-cloned generic Enumerable names (analyze_desugar.c's
    builtin_enum_name_index list) or transform_keys!/transform_values!?
-   Used by rt_probe_answer (codegen_call.c) for a respond_to? probe on
+   Used by rt_probe_answer (analyze_desugar.c) for a respond_to? probe on
    one of these names, which the one-shot rewrites that actually type
    them never reach (K-026 cause A). */
-int enum_builtin_responds(Compiler *c, const char *name, TyKind rt);
+int enum_builtin_responds(Compiler *c, int id, const char *name, TyKind rt);
+int rt_probe_answer(Compiler *c, int id, int *yes);   /* the respond_to? probes' answer: 1 when a probe types or a builtin receiver has the name (*yes); 0 where none was synthesized */
 int enum_unrename(NodeTable *nt, int id);
 /* empty infer_type's memo of earlier queries' answers: the start or end of
    a pass whose writes are not all counted (#8852) */

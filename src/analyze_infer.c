@@ -3680,10 +3680,12 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
           { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
         if (argc == 2 && sp_streq(name, "store")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
         /* count(v): the value-equality count (sp_poly_count_val). A user
-           definition blocks it only when it can TAKE one positional
-           argument -- the same judgement codegen's arm makes; an
-           arity-incompatible `count(a, b)` cannot answer this call, and
-           counting it left the two halves naming different methods. */
+           definition of a class the receiver can be, of any arity, claims
+           the call (as codegen's arm does): the dispatch's arm raises
+           ArgumentError where it cannot take the argument, and genuine
+           Array, Hash and String receivers keep their builtin arms
+           (#4195's concern). A count on a class the receiver never is
+           leaves the builtin call direct. */
         if (sp_streq(name, "count")) {
           int can1 = 0;
           for (int k2 = 0; k2 < c->nclasses && !can1; k2++) {
@@ -3691,12 +3693,8 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
               if (comp_poly_arm_defines_n(c, k2, "count", 1)) can1 = 1;
               continue;
             }
-            int mi2 = call_target(c, -1, k2, "count", CT_METHODS | CT_SHARED, NULL);
-            if (mi2 >= 0 && mi2 < c->nscopes) {
-              Scope *cs2 = &c->scopes[mi2];
-              if (cs2->rest_idx >= 0 || (1 >= cs2->nrequired && 1 <= cs2->nparams))
-                can1 = 1;
-            }
+            int mi2 = poly_recv_may_be(c, id, k2) ? call_target(c, id, k2, "count", CT_METHODS, NULL) : -1;
+            if (mi2 >= 0 && mi2 < c->nscopes) can1 = 1;
           }
           if (!can1) { *out = TY_INT; return 1; }
         }
@@ -3909,7 +3907,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
             if (!c->classes[k].is_native_class) has_user_def = 1;
           }
           if (has_base && !c->classes[k].is_native_class &&
-              call_attr_target(c, -1, k, sbase, CT_ATTR | CT_WRITER | CT_SHARED, NULL)) has_writer = 1;
+              call_attr_target(c, id, k, sbase, CT_ATTR | CT_WRITER, NULL)) has_writer = 1;
         }
         /* A call the send desugar retargeted (`obj.send(:x=, v)`, and a
            public_send dispatch arm) is a plain call, not an assignment
@@ -4083,6 +4081,17 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
          `[-> { 5 }, Table.new][0][]` read the Proc's Integer back as
          Table#[]'s String and crashed. A receiver the facts hold to program
          objects, or to no Proc (the `pr` bit), carries none. */
+      /* A writer's name called as a method on a union beside a class's own
+         `def name=`: an attr_writer of another class answers the value it
+         stores, which the dispatch's writer arms put in the boxed result
+         slot (emit_boxed_writer_arms beside the method arms) */
+      if (found && !an_builtin_only && rt == TY_POLY && argc == 1 && name_is_plain_setter(name) &&
+          !call_is_setter_assign(nt, id) && nt_ref(nt, id, "block") < 0) {
+        char wb[256];
+        if (setter_base_name(name, wb, sizeof wb))
+          for (int k = 0; k < c->nclasses; k++)
+            if (comp_is_writer(&c->classes[k], wb) && call_target(c, id, k, name, 0, NULL) < 0) { *out = TY_POLY; return 1; }
+      }
       if (found && !an_builtin_only && rt == TY_POLY && is_call_alias(name)) {
         const ClsSet *cs = cls_fact_node(c, recv);
         if (!cs || cs->all || cs->pr) { *out = TY_POLY; return 1; }
@@ -4464,7 +4473,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         for (int k = 0; k < c->nclasses && !owned; k++)
           if (comp_poly_arm_defines(c, k, name) || call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0 ||
               (!c->classes[k].is_native_class && comp_is_reader(&c->classes[k], name)) ||
-              (wbase[0] && call_attr_target(c, -1, k, wbase, CT_ATTR | CT_WRITER | CT_SHARED, NULL)))
+              (wbase[0] && call_attr_target(c, id, k, wbase, CT_ATTR | CT_WRITER, NULL)))
             owned = 1;
         if (!owned) { *out = (sp_streq(name, "advise") || sp_streq(name, "flock")) ? TY_POLY : TY_INT; return 1; }
       }
@@ -7967,6 +7976,11 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
     if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
   }
+  /* ENV's value: its identity rows (builtin_ops.c), past the ENV rules above */
+  if (recv >= 0 && rt == TY_ENV) {
+    const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+  }
   /* Process::Status readers: builtin-op rows (builtin_ops.c) */
   if (recv >= 0 && rt == TY_PROCESS_STATUS) {
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
@@ -8157,7 +8171,7 @@ int node_is_scope_tail(Compiler *c, int mi, int id) {
 
 /* A Kernel method that runs its block: loop, catch and throw, instance_eval and instance_exec, a trampoline's block (infer_call_inner's rules, in their order) */
 static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, TyKind rt, TyKind *out) {
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && rt == TY_ENV &&
+  if (env_value_recv(c, recv, rt) &&
       bop_share_named(BOP_ENV, name) == BSH_FETCH) {
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0) {
@@ -10064,11 +10078,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (rname && sp_streq(rname, "Kernel")) return TY_INT;
     }
   }
-  /* Signal.trap / Signal.list / Signal.signame; Process.kill (#2735, #2750) */
-  if (recv >= 0 && nt_type(nt, recv) &&
-      (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
-    const char *rname = key_name(c, recv);
-    if (rt == TY_ENV) {
+  /* ENV's value, the constant or a variable holding it */
+  if (env_value_recv(c, recv, rt)) {
       if (sp_streq(name, "class")) return TY_CLASS;
       if (sp_streq(name, "frozen?")) return TY_BOOL;
       if (sp_streq(name, "shift")) return TY_POLY;
@@ -10078,6 +10089,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
           sp_streq(name, "replace") || sp_streq(name, "delete_if") || sp_streq(name, "keep_if"))
         return TY_STR_STR_HASH;   /* filter-block params seed in mark_proc_captures */
     }
+  /* Signal.trap / Signal.list / Signal.signame; Process.kill (#2735, #2750) */
+  if (recv >= 0 && nt_type(nt, recv) &&
+      (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
+    const char *rname = key_name(c, recv);
     if (rname && sp_streq(rname, "Signal")) {
       if (sp_streq(name, "trap") && argc >= 1) return TY_POLY;
       if (sp_streq(name, "list") && argc == 0) return TY_STR_INT_HASH;
@@ -10118,10 +10133,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      the const char * slot as it stood. (The block form is the ENV snapshot's
      Hash#fetch, #2742, and types there.) */
   if (recv >= 0 && argc >= 1 && (sp_streq(name, "[]") || sp_streq(name, "fetch"))) {
-    NodeKind rk = nt_kind(nt, recv);
-    if (rk == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rt == TY_ENV) {
+    {
+      if (env_value_recv(c, recv, rt)) {
         if (sp_streq(name, "fetch") && argc >= 2) {
           TyKind dt = infer_type(c, argv[1]);
           if (dt == TY_UNKNOWN || dt == TY_NIL || dt == TY_VOID) return TY_STRING;
@@ -10134,16 +10147,13 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   /* ENV.key?/has_key?/include?/member?(key) -> bool */
   if (recv >= 0 && argc == 1 &&
       is_key_query(name)) {
-    NodeKind rk = nt_kind(nt, recv);
-    if (rk == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rt == TY_ENV) return TY_BOOL;
+    {
+      if (env_value_recv(c, recv, rt)) return TY_BOOL;
     }
   }
   /* ENV direct arms (#2743, #2746): typed results so p/interp accept them */
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode) {
-    const char *rn = key_name(c, recv);
-    if (rt == TY_ENV) {
+  {
+    if (env_value_recv(c, recv, rt)) {
       if (sp_streq(name, "to_s")) return TY_STRING;
       /* a non-String key raises TypeError; type the (diverging) call poly */
       if (argc >= 1 &&

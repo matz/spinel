@@ -3607,6 +3607,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     if (nm && sp_streq(nm, "RUBY_COPYRIGHT"))   { emit_engine_const_str(c, "sp_str_ruby_copyright", "\"ruby - Copyright (C) 1993-2026 Yukihiro Matsumoto\"", b); return 1; }
     if (nm && sp_streq(nm, "ARGV")) { buf_puts(b, "sp_get_ARGV()"); return 1; }
     if (nm && sp_streq(nm, "ARGF")) { buf_puts(b, "(&sp_argf_obj)"); return 1; }
+    if (nm && is_env_const(nm) && comp_ntype(c, id) == TY_ENV) { buf_puts(b, "(&sp_env_obj)"); return 1; }
     if (nm && sp_streq(nm, "STDOUT")) { buf_puts(b, "sp_io_stdout()"); return 1; }
     if (nm && sp_streq(nm, "STDERR")) { buf_puts(b, "sp_io_stderr()"); return 1; }
     if (nm && sp_streq(nm, "STDIN"))  { buf_puts(b, "sp_io_stdin()"); return 1; }
@@ -3850,6 +3851,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     if (cpcv && cpcv->type != TY_UNKNOWN) { emit_const_slot_read(c, id, cpcv, nm, slot, 1, b); return 1; }
     if (nm && sp_streq(nm, "ARGV")) { buf_puts(b, "sp_get_ARGV()"); return 1; }
     if (nm && sp_streq(nm, "ARGF")) { buf_puts(b, "(&sp_argf_obj)"); return 1; }
+    if (nm && is_env_const(nm) && comp_ntype(c, id) == TY_ENV) { buf_puts(b, "(&sp_env_obj)"); return 1; }
     /* well-known module constants */
     if (par_nmc && sp_streq(par_nmc, "Float") && nm) {
       if (sp_streq(nm, "MAX"))      { buf_puts(b, "DBL_MAX"); return 1; }
@@ -4888,7 +4890,11 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
     if (!k) unsupported(c, id, "array literal (element type)");
     int t = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", k, t, k);
+    /* a literal of n elements and no splat takes its buffer at n */
+    int lit_n = array_has_new_cap(k) ? n : 0;
+    for (int j = 0; j < n && lit_n; j++) if (nt_kind(nt, els[j]) == NK_SplatNode) lit_n = 0;
+    if (lit_n) buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_cap(%d);\n", k, t, k, lit_n);
+    else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", k, t, k);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
     if (sp_streq(k, "Str") && str_lit_reads_late(c, els, n)) {
@@ -4995,7 +5001,11 @@ else {
     const int *els = nt_arr(nt, id, "elements", &n);
     int t = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_%sHash *_t%d = sp_%sHash_new();\n", hn, t, hn);
+    /* a literal of n pairs and no `**` takes its tables at n (sp_hash_cap_for) */
+    int lit_n = n;
+    for (int j = 0; j < n && lit_n; j++) if (nt_kind(nt, els[j]) == NK_AssocSplatNode) lit_n = 0;
+    if (lit_n) buf_printf(g_pre, "sp_%sHash *_t%d = sp_%sHash_new_cap(%d);\n", hn, t, hn, lit_n);
+    else buf_printf(g_pre, "sp_%sHash *_t%d = sp_%sHash_new();\n", hn, t, hn);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
     int sym_poly = (repr_hash_is(hr, TY_SYMBOL, TY_POLY) || repr_hash_is(hr, TY_STRING, TY_POLY));
@@ -5063,6 +5073,36 @@ else {
       if (poly_poly) emit_boxed(c, key, &kb);
       else if (ty_is_hash(ht)) emit_coerce(c, key, ty_hash_key(ht), CO_HOLD, "a Hash literal's key", &kb);
       else emit_expr(c, key, &kb);
+      /* A pair's key and value are the set's sibling arguments, as a store's
+         are: a key that can allocate goes into a rooted temp ahead of the
+         value's build, as the store arm's does. So does a key whose
+         variable the value assigns (`{x => (x = 5)}`, `{x => [x = 2]}`):
+         CRuby reads the key first, so the temp goes ahead of what the
+         value's build puts in the prelude too. Its block closes after the
+         set. */
+      int tk = -1;
+      int krb = ty_is_hash(ht) && read_rebound_by(c, key, val);
+      /* (a key that is a shared String slot's read is held as its handle:
+         the value may change that String in place before it rebinds the
+         variable, and the set takes the String as it is then) */
+      if (krb && ty_hash_key(ht) == TY_STRING && strbuf_read_copies(c, key)) {
+        int th = ++g_tmp;
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_String *_t%d = ", th);
+        emit_strbuf_handle_of(c, nt_paren_single(c->nt, key), g_pre);
+        buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", th);
+        free(kb.p); memset(&kb, 0, sizeof kb);
+        buf_printf(&kb, "SP_STR_B(sp_strbuf_read_pub(_t%d))", th);
+        krb = 0;
+      }
+      if (ty_is_hash(ht) && (subtree_may_allocate(c, key) || krb)) {
+        TyKind kt = ty_hash_key(ht);
+        tk = ++g_tmp;
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "{ %s _t%d = %s; ", c_type_name(kt), tk, kb.p ? kb.p : "");
+        if (needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, g_pre); buf_puts(g_pre, " "); }
+        buf_puts(g_pre, "\n");
+      }
       Buf vb; memset(&vb, 0, sizeof vb);
       if (sym_poly || poly_poly) {
         /* (a published String before a pair that can change it is boxed as
@@ -5086,16 +5126,6 @@ else {
       else emit_expr(c, val, &vb);
       int vheld = typed_elem_held(ht) == TY_STRBUF;
       emit_indent(g_pre, g_indent);
-      /* A pair's key and value are the set's sibling arguments, as a store's
-         are: a key that can allocate goes into a rooted temp ahead of the
-         value's build, as the store arm's does. */
-      int tk = -1;
-      if (ty_is_hash(ht) && subtree_may_allocate(c, key)) {
-        TyKind kt = ty_hash_key(ht);
-        tk = ++g_tmp;
-        buf_printf(g_pre, "{ %s _t%d = %s; ", c_type_name(kt), tk, kb.p ? kb.p : "");
-        if (needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, g_pre); buf_puts(g_pre, " "); }
-      }
       /* a key that is a shared String slot's read is a fresh copy: beside
          a value that allocates, the value is built first, into a rooted
          temp, and the key read last, in the set itself */

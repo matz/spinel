@@ -581,6 +581,7 @@ void comp_free(Compiler *c) {
   ver_chain_free(c);
   new_inits_free(c);
   new_sites_free(c);
+  attr_facts_free(c);
   free(c->ver_ix); free(c->ver_ix_next); free(c->ver_names); free(c->ver_names_next);
   c->ver_ix = c->ver_ix_next = c->ver_names = c->ver_names_next = NULL; c->ver_ix_nb = 0;
   free(c->ver_pins); c->ver_pins = NULL; c->nver_pins = 0;
@@ -2213,9 +2214,12 @@ int comp_name_reader_any(Compiler *c, const char *name) {
 
 /* See compiler.h. */
 int comp_poly_arm_reader_any(Compiler *c, const char *name, int argc) {
+  /* (a candidate scan: does any class of the program, at any point, give the name an arm; no call's point is asked, and
+     an accessor with versions is an `accessor` table answer. poly_name_user_claimed keeps its answer per name where
+     the scope index is frozen; the analysis's and the emitters' other callers ask it directly) */
   for (int k = 0; k < c->nclasses; k++)
     if (comp_poly_arm_defines_n(c, k, name, argc) ||
-        (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL))) return 1;
+        (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR, NULL))) return 1;
   return 0;
 }
 
@@ -2466,7 +2470,7 @@ int comp_arysub_name_is_array(Compiler *c, int id, int cid, const char *n) {
   MethodLookup ml = { .def_class = -1 };
   int ro = comp_arysub_reopen(c, cid);
   if (((call_target(c, id, cid, n, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) ||
-       comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, cid, n)) return 0;
+       comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, id, cid, n)) return 0;
   char base[256];
   if (setter_base_name(n, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return 0;
   /* != is BasicObject's, which calls == and negates it: a class with its
@@ -3863,12 +3867,13 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
     if (r) return r;
   }
 }
-static int mixin_answers_first(Compiler *c, int cid, const char *name, int comparable) {
-  /* what master answers: the program's method or reader anywhere in the chain */
-  int master = !call_answers(c, -1, cid, name, CT_SHARED, NULL);
-  if (cid < 0 || cid >= c->nclasses || !name) return master;
+static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, int comparable) {
+  /* the table's answer at the call: the program's method or reader anywhere in the chain, whatever its visibility (a
+     private def comes first in a lookup too); with no call (-1) a no-site ask of the program-wide dispatchers */
+  int tbl = !call_answers(c, id, cid, name, CT_NOFACE | (id < 0 ? CT_SHARED : 0), NULL);
+  if (cid < 0 || cid >= c->nclasses || !name) return tbl;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
-  if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return master;
+  if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return tbl;
   /* the topmost class that has Enumerable among its ancestors, by an include
      of its own or of a module: below it the include is a no-op. A Struct, an Array or a native class has Enumerable of its
      own, at a place the includes do not show: master's answer there. */
@@ -3883,7 +3888,7 @@ static int mixin_answers_first(Compiler *c, int cid, const char *name, int compa
         if (mixin_level_answers(c, j, name)) return 0;
         if (j == k || c->classes[j].parent < 0) break;
       }
-      return master;
+      return tbl;
     }
     if (mixin_reaches(c, k, comparable, NULL)) top = k;
     if (k == ci->parent) break;
@@ -3894,14 +3899,14 @@ static int mixin_answers_first(Compiler *c, int cid, const char *name, int compa
     if (r) return r == 2;
     if (k == c->classes[k].parent) break;
   }
-  return master;
+  return tbl;
 }
 
-int comp_enum_answers_first(Compiler *c, int cid, const char *name) {
-  return mixin_answers_first(c, cid, name, 0);
+int comp_enum_answers_first(Compiler *c, int id, int cid, const char *name) {
+  return mixin_answers_first(c, id, cid, name, 0);
 }
-int comp_comparable_answers_first(Compiler *c, int cid, const char *name) {
-  return mixin_answers_first(c, cid, name, 1);
+int comp_comparable_answers_first(Compiler *c, int id, int cid, const char *name) {
+  return mixin_answers_first(c, id, cid, name, 1);
 }
 /* Enumerable reaches class cid through it or a superclass: a subclass of a
    class that includes it (Journey's Cat < Binary < Node) answers its

@@ -42250,21 +42250,28 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
     if (wnh_widen_ret(c, mi, lt) && ms->body >= 0) wnh_note(ms->body);
   }
   /* ... and a local Hash a `[]=` / `store` stores such a key or value into
-     (`h = Hash.new; h["k"] = a[1]`): the local, its reads, and its writes
-     whose value is an empty literal or a bare Hash.new built at its kind */
-  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+     (`h = Hash.new; h["k"] = a[1]`), or an index op-write (`h[x] += 1`,
+     `h[x] ||= v`) stores under such a key: the local, its reads, and its
+     writes whose value is an empty literal, a bare Hash.new, or a literal or
+     a Hash.new(default) already of its kind, each built at the kind */
+  static const NodeKind sk[] = { NK_CallNode, NK_IndexOperatorWriteNode, NK_IndexOrWriteNode,
+                                 NK_IndexAndWriteNode };
+  for (size_t q = 0; q < sizeof sk / sizeof sk[0]; q++) NT_FOREACH_KIND(nt, sk[q], id) {
+    int is_call = sk[q] == NK_CallNode;
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store"))) continue;
+    if (is_call && (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store")))) continue;
     int r = nt_ref(nt, id, "receiver");
     if (r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode) continue;
     TyKind ht = comp_ntype(c, r);
     if (!ty_is_hash(ht)) continue;
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-    if (!av || an != 2) continue;
+    if (!av || an != (is_call ? 2 : 1)) continue;
+    /* (an op-write stores the operator's answer, a value of the Hash's kind) */
+    int kv = av[0], vv = is_call ? av[1] : sk[q] == NK_IndexOperatorWriteNode ? -1 : nt_ref(nt, id, "value");
     TyKind kt = ty_hash_key(ht), vt = ty_hash_val(ht);
-    int kn = (kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, av[0]) || comp_ntype(c, av[0]) == TY_POLY);
-    int vn = (vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, av[1]) || comp_ntype(c, av[1]) == TY_POLY);
+    int kn = (kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, kv) || comp_ntype(c, kv) == TY_POLY);
+    int vn = vv >= 0 && (vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, vv) || comp_ntype(c, vv) == TY_POLY);
     if (!kn && !vn) continue;
     TyKind nk = kn ? TY_POLY : kt, nv = vn ? TY_POLY : vt;
     TyKind want = nk == TY_SYMBOL ? TY_SYM_POLY_HASH : ty_hash_of(nk, nv);
@@ -42285,9 +42292,17 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
       NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NilNode;
       int en = 0;
       if (vk == NK_HashNode) nt_arr(nt, v, "elements", &en);
-      int bare_new = vk == NK_CallNode && sp_streq(nt_str(nt, v, "name"), "new") && nt_ref(nt, v, "arguments") < 0 &&
-                     nt_ref(nt, v, "block") < 0;
-      if (!((vk == NK_HashNode && en == 0) || bare_new)) { ok = 0; break; }
+      int bare_new = vk == NK_CallNode && sp_streq(nt_str(nt, v, "name"), "new") && nt_ref(nt, v, "block") < 0;
+      if (bare_new && nt_ref(nt, v, "arguments") >= 0) {
+        /* `Hash.new(default)`: the default is a value, of the kind the
+           Hash's values already are */
+        int na = 0; const int *nav = nt_arr(nt, nt_ref(nt, v, "arguments"), "arguments", &na);
+        int nr = nt_ref(nt, v, "receiver");
+        const char *rcn = nr >= 0 && nt_kind(nt, nr) == NK_ConstantReadNode ? nt_str(nt, nr, "name") : NULL;
+        bare_new = rcn && sp_streq(rcn, "Hash") && nav && na == 1 &&
+                   nt_kind(nt, nav[0]) != NK_SplatNode && nt_kind(nt, nav[0]) != NK_KeywordHashNode;
+      }
+      if (!((vk == NK_HashNode && (en == 0 || comp_ntype(c, v) == ht)) || bare_new)) { ok = 0; break; }
     }
     if (!ok) continue;
     /* the method answers the local (`counts = {}; ...; counts`, tally in

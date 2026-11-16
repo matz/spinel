@@ -3608,6 +3608,8 @@ void emit_int_recv_named(Compiler *c, int recv, const char *name, Buf *b) {
     buf_puts(b, "sp_poly_int_recv("); emit_expr(c, recv, b); buf_printf(b, ", \"%s\")", name);
     return;
   }
+  /* (and so has an Integer that may be nil) */
+  if (comp_ntype(c, recv) == TY_INT && emit_scalar_recv_maybe_nil(c, recv, name, b)) return;
   emit_int_expr(c, recv, b);
 }
 /* the same for upto with a limit node `lim`: a boxed String raises the

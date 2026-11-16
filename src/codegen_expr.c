@@ -1029,6 +1029,9 @@ void emit_int_divisor(Compiler *c, int node, Buf *b) {
     buf_puts(b, "sp_poly_arg_int_chk("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
+  /* a divisor that may be nil raises the coercion TypeError, as the other
+     operators' right operand does, not a plain argument's conversion one */
+  if (emit_int_opnd_maybe_nil(c, node, 0, b)) return;
   emit_expr(c, node, b);
 }
 

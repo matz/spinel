@@ -9125,6 +9125,18 @@ void emit_oint_unwrap_ck(Compiler *c, int node, TyKind t, const char *op, Buf *b
   free(side.p);
 }
 
+/* An Integer operand that may be nil, unwrapped with the error its consumer
+   raises for nil: an operator's right operand (`1 & x`, `1 / x`,
+   `7.divmod(x)`: "nil can't be coerced into Integer"), or a shift count
+   (`1 << x`: "no implicit conversion of nil into Integer"). 0 when the
+   operand cannot be nil, for the caller's own emission. */
+int emit_int_opnd_maybe_nil(Compiler *c, int node, int shift_count, Buf *b) {
+  if (node < 0 || !node_is_oint(c, node) || !nullable_int_value(c, node)) return 0;
+  if (shift_count) { buf_puts(b, "sp_oint_arg_of("); emit_oint_expr(c, node, TY_INT, b); buf_puts(b, ")"); }
+  else emit_oint_unwrap_ck(c, node, TY_INT, g_ck_opnd, b);
+  return 1;
+}
+
 /* An Integer key of a boxed receiver's [] / []= / index op-write that can be
    nil goes to the runtime boxed (sp_poly_index_poly / sp_poly_set_poly),
    its nil with it: CRuby calls [] on the receiver before the key is
@@ -9137,9 +9149,16 @@ int poly_int_key_boxed(Compiler *c, int key) {
 }
 
 void emit_scalar_operand_op(Compiler *c, int node, const char *op, Buf *b) {
-  TyKind t = comp_ntype(c, node);
-  if (oint_kind(t) && cmp_operand_may_be_nil(c, node)) { emit_oint_unwrap_ck(c, node, t, op, b); return; }
-  emit_scalar_operand(c, node, t == TY_FLOAT ? "0.0" : "0", b);
+  if (emit_scalar_recv_maybe_nil(c, node, op, b)) return;
+  emit_scalar_operand(c, node, comp_ntype(c, node) == TY_FLOAT ? "0.0" : "0", b);
+}
+
+/* See codegen_internal.h. */
+int emit_scalar_recv_maybe_nil(Compiler *c, int node, const char *op, Buf *b) {
+  TyKind t = node >= 0 ? comp_ntype(c, node) : TY_UNKNOWN;
+  if (!oint_kind(t) || !cmp_operand_may_be_nil(c, node)) return 0;
+  emit_oint_unwrap_ck(c, node, t, op, b);
+  return 1;
 }
 
 /* See codegen_internal.h. */

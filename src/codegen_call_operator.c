@@ -631,7 +631,8 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       else if (at0 == TY_FLOAT) { buf_puts(b, "sp_float_to_i_checked("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       /* a Bignum count saturates (sp_bigint_shift_count): every bit leaves */
       else if (repr_of(c, argv[0]).big) { buf_puts(b, "sp_bigint_shift_count("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else emit_int_expr(c, argv[0], b);
+      /* a count that may be nil: "no implicit conversion of nil into Integer" */
+      else if (!emit_int_opnd_maybe_nil(c, argv[0], 1, b)) emit_int_expr(c, argv[0], b);
       buf_puts(b, ")");
       return 1;
     }
@@ -667,6 +668,9 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       buf_puts(b, is_shift ? "sp_bigint_shift_count(" : "sp_bigint_to_int("); emit_expr(c, argv[0], b); buf_puts(b, ")");
     }
     else if (at0 == TY_UNKNOWN || at0 == TY_VOID) emit_int_expr(c, argv[0], b);
+    /* an operand that may be nil: the coercion TypeError, or a shift
+       count's conversion one */
+    else if (emit_int_opnd_maybe_nil(c, argv[0], is_shift, b)) { }
     else emit_expr(c, argv[0], b);
     if (shl_neg_safe) buf_puts(b, ")");
     buf_puts(b, ")");

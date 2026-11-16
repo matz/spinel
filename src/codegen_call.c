@@ -4377,18 +4377,10 @@ int srange_member_hop(Compiler *c, int n) {
 }
 
 /* The String Range row `name` for call id over the Range node r, which a hop
-   (srange_member_hop) stood in front of. The find_index row answers the
-   box of its nullable Integer (sp_box_oint): a slot that holds an Integer
-   takes it unboxed, with its nil. */
+   (srange_member_hop) stood in front of. (The find_index row answers its
+   Integer that may be nil in the call's form, as the Array's does.) */
 int emit_srange_hop_row(Compiler *c, int id, int r, const char *name, Buf *b) {
-  Buf rb; memset(&rb, 0, sizeof rb);
-  if (!emit_builtin_op(c, id, r, TY_STR_RANGE, name, &rb)) { free(rb.p); return 0; }
-  Repr rp = repr_of(c, id);
-  if (is_find_index(name) && rp.kind != RK_BOXED && rp.as_ty == TY_INT)
-    emit_unbox_nilable_text(c, TY_INT, rb.p ? rb.p : "sp_box_nil()", b);
-  else buf_puts(b, rb.p ? rb.p : "");
-  free(rb.p);
-  return 1;
+  return emit_builtin_op(c, id, r, TY_STR_RANGE, name, b);
 }
 
 static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b);

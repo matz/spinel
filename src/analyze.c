@@ -40554,6 +40554,12 @@ int nullable_int_value(Compiler *c, int v) {
     int rcv0 = nt_ref(nt, v, "receiver");
     /* an element read out of an array some element of which is nil */
     if (rcv0 >= 0 && elem_returning_call(cn) && nullable_int_elem_expr(c, rcv0, 0)) return 1;
+    /* `e.itself` answers e, nil included (a desugar wraps a splat call's
+       arms in one: `a.find_index(*r) { }`) -- Kernel's, where the plan
+       binds no method of the program's to the call */
+    if (rcv0 >= 0 && cn && sp_streq(cn, "itself") && nt_ref(nt, v, "arguments") < 0 &&
+        nt_ref(nt, v, "block") < 0 && cplan_reopen_binding(cplan_user_fresh(c, v)) < 0 &&
+        nullable_int_value(c, rcv0)) return 1;
     /* Array#fetch answers its default argument, or its block's value, for
        an index out of range: either can be nil */
     if (rcv0 >= 0 && cn && sp_streq(cn, "fetch") && ty_is_array(infer_type(c, rcv0))) {

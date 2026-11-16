@@ -2915,6 +2915,14 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         nt_ref(nt, id, "block") < 0) {
       int ac0 = 0; call_args(nt, id, &ac0);
       TyKind irt0 = comp_ntype(c, nt_ref(nt, id, "receiver"));
+      /* an Integer or Float receiver that may be nil, where the plan binds
+         no method of the program's to the call (another class's `itself`
+         is no target): the call answers its oint (node_is_oint), which the
+         caller unwraps as it needs */
+      if (ac0 == 0 && oint_kind(irt0) && node_is_oint(c, id)) {
+        CallPlan kp = cplan_user(c, id);
+        if (kp.mi < 0 && kp.dispatch == CP_NONE) { emit_oint_expr(c, nt_ref(nt, id, "receiver"), irt0, b); return 1; }
+      }
       if (ac0 == 0 && !diag_user_defines(c, "itself") &&
           /* a generated READER of the name owns it, as in CRuby (#4190) */
           !(ty_is_object(irt0) &&

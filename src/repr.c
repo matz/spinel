@@ -248,6 +248,8 @@ static int node_is_oint_asked(Compiler *c, int node) {
     }
     /* `x.tap { ... }` answers its receiver, in the receiver's form */
     if (kernel && is_tap_name(nm) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
+    /* so does `x.itself` (a desugar wraps a splat call's arms in one) */
+    if (kernel && sp_streq(nm, "itself") && an2 == 0 && blk < 0 && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
     /* unary `+` hands an Integer / Float its operand: the operand's form */
     if (sp_streq(nm, "+@") && an2 == 0 && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
     /* a proc's result comes back boxed and is unboxed with its nil */
@@ -544,6 +546,8 @@ static int node_is_oint_asked(Compiler *c, int node) {
     }
     if (r >= 0 && (rt == TY_RANGE || rt == TY_FLOAT_RANGE) && an2 == 0 && blk < 0 &&
         (sp_streq(nm, "min") || sp_streq(nm, "max"))) return 1;
+    /* a String Range's find_index(v) row answers the position, nil on a miss */
+    if (r >= 0 && rt == TY_STR_RANGE && an2 == 1 && blk < 0 && sp_streq(nm, "find_index")) return 1;
     /* `s.unpack1("q")` past the input's end is nil */
     if (r >= 0 && sp_streq(nm, "unpack1")) return 1;
     /* a String range has no size (nil); an Enumerator's find_index / index

@@ -2459,8 +2459,10 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
 static int ct_accessor_class(Compiler *c, int cls, const char *name) {
   int dc = -1;
   char base[256];
+  mtab_enter(c);   /* (entry construction: the accessor lists' own answer) */
   int found = setter_base_name(name, base, sizeof base) ? comp_writer_in_chain(c, cls, base, &dc)
                                                          : comp_reader_in_chain(c, cls, name, &dc);
+  mtab_leave(c);
   return found ? dc : -1;
 }
 /* (the Struct or the Data on cls's superclass chain whose member `name`
@@ -4659,7 +4661,8 @@ CvCtor cplan_cv_ctor(Compiler *c, int id) {
 int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k) {
   if (f == CVC_NONE || comp_ary_root(c, k) < 0 || !comp_class_builds_by_aref(c, k))
     return 0;
-  return f != CVC_NEW || (comp_method_in_chain(c, k, "initialize", NULL) < 0 && comp_cmethod_in_chain(c, k, "new", NULL) < 0);
+  return f != CVC_NEW || (call_target(c, -1, k, "initialize", CT_METHODS | CT_SHARED, NULL) < 0 &&
+                          call_target(c, -1, k, "new", CT_CMETHOD | CT_SHARED, NULL) < 0);
 }
 
 int cplan_cv_ctor_builds(Compiler *c, int id, int k) {
@@ -5523,24 +5526,34 @@ static int ct_def_sure(Compiler *c, const LrDef *d) {
   return d && d->kind == LR_DEF && !d->may && !d->unplaced && !elab_point_partial(c, d->node);
 }
 static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int ar, int blk);
-/* See call_plan.h. */
-int cplan_capture_misses(Compiler *c, int id, int k, const char *sym) {
-  static const char *const hooks[] = { METHOD_MISSING_NAME, RESPOND_TO_MISSING_NAME };
+/* Do the tables leave a capture of sym on class k to the two hooks: nothing of the name answers on k's chain or a
+   class under it, and k's chain holds both hooks? */
+static int ct_capture_hooked(Compiler *c, int k, const char *sym, const char *const *hooks) {
   if (k < 0 || !sym || capture_builtin_answers(c, k, sym) || ver_builtin_chain(c, k, 0, sym, 0, 0) ||
       ct_accessor_class(c, k, sym) >= 0)
     return 0;
   for (int i = 0; i < 2; i++)
-    if (comp_method_in_chain(c, k, hooks[i], NULL) < 0) return 0;
+    if (call_target(c, -1, k, hooks[i], CT_METHODS | CT_SHARED, NULL) < 0) return 0;
   /* (a method of the name, but for the stand-in a later include or
      prepend puts in front of none, cplan_capture_arm) */
+  mtab_enter(c);   /* (the plan's own read: the captured name, on k's chain and under it) */
   int mi = comp_method_in_chain(c, k, sym, NULL), nd = 0;
+  mtab_leave(c);
   if (mi >= 0 && !c->scopes[mi].mixin_guarded && c->scopes[mi].entry == ENTRY_NONE) return 0;
   /* a class under k that has one: the receiver may be of it */
   const int *ds = comp_descendants(c, k, &nd);
   for (int i = 0; i < nd; i++) {
+    mtab_enter(c);
     int d = ds[i], dm = comp_method_in_chain(c, d, sym, NULL);
+    mtab_leave(c);
     if (!c->classes[d].unreferenced && ((dm >= 0 && dm != mi) || ct_accessor_class(c, d, sym) >= 0)) return 0;
   }
+  return 1;
+}
+/* See call_plan.h. */
+int cplan_capture_misses(Compiler *c, int id, int k, const char *sym) {
+  static const char *const hooks[] = { METHOD_MISSING_NAME, RESPOND_TO_MISSING_NAME };
+  if (!ct_capture_hooked(c, k, sym, hooks)) return 0;
   /* both hooks a def surely live where the capture runs */
   int framed = elab_plan_enter(c, id), live = 1, none;
   for (int i = 0; i < 2 && live; i++) live = ct_def_sure(c, ct_met_version(c, id, k, hooks[i], 0, &none));
@@ -6210,7 +6223,7 @@ static int ct_mixed_new_entries(Compiler *c, int id, int *out) {
   }
   for (int i = 0; i < ncls; i++) {
     int k = cls[i], init[CPT_MAX];
-    if (comp_class_is_module(c, &c->classes[k]) || comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
+    if (comp_class_is_module(c, &c->classes[k]) || call_target(c, -1, k, "new", CT_CMETHOD | CT_SHARED, NULL) >= 0) continue;
     int ni = ct_class_initializers(c, -1, k, 0, init);
     if (ni < 0) return CPT_UNKNOWN;
     for (int j = 0; j < ni; j++) {
@@ -10075,7 +10088,11 @@ static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *nam
   case VK_BUILTIN: case VK_TEXT: return VER_FINDS_PUBLIC;
   case VK_CELL: return VER_FINDS_HIDDEN;   /* (a Kernel row's is private: not found where the cell is clear either) */
   case VK_KEEP:   /* (main's: the versions', a private one unless declared) */
-    if (cls >= 0) vis = sg ? comp_cmethod_vis_declared(c, cls, name, NULL) : comp_method_vis_in_chain(c, cls, name);
+    if (cls >= 0) {
+      mtab_enter(c);   /* (entry construction: the visibility the versions' table leaves the name) */
+      vis = sg ? comp_cmethod_vis_declared(c, cls, name, NULL) : comp_method_vis_in_chain(c, cls, name);
+      mtab_leave(c);
+    }
     break;
   case VK_SUPER:
     if (last < 0 || cplan_super_target(c, -1, &c->scopes[last], NULL) < 0) vis = SP_VIS_PRIVATE;
@@ -10828,7 +10845,10 @@ void ver_entries_build(Compiler *c) {
        the module's own class method, called on the module itself) */
     if (m->class_id >= 0 && !m->is_cmethod && comp_class_is_module(c, &c->classes[m->class_id])) continue;
     const char *name = comp_scope_user_name(m);
-    if ((m->is_cmethod ? comp_cmethod_in_class(c, m->class_id, name) : comp_method_in_class(c, m->class_id, name)) != s) continue;
+    mtab_enter(c);   /* (entry construction: the guarded copy is the table's last of its name) */
+    int last = m->is_cmethod ? comp_cmethod_in_class(c, m->class_id, name) : comp_method_in_class(c, m->class_id, name);
+    mtab_leave(c);
+    if (last != s) continue;
     if (!(ngc & (ngc - 1)) && !(gc = realloc(gc, sizeof *gc * (size_t)(ngc ? 2 * ngc : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     gc[ngc++] = s;
     int to[VER_MAX_ARMS + 1];

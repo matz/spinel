@@ -248,8 +248,10 @@ static int node_is_oint_asked(Compiler *c, int node) {
     }
     /* `x.tap { ... }` answers its receiver, in the receiver's form */
     if (kernel && is_tap_name(nm) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
-    /* so does `x.itself` (a desugar wraps a splat call's arms in one) */
-    if (kernel && sp_streq(nm, "itself") && an2 == 0 && blk < 0 && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
+    /* so do `x.itself` (a desugar wraps a splat call's arms in one) and
+       freeze / dup / clone, which answer an Integer or a Float and nil
+       alike as themselves */
+    if (kernel && is_self_copy(nm) && an2 == 0 && blk < 0 && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
     /* unary `+` hands an Integer / Float its operand: the operand's form */
     if (sp_streq(nm, "+@") && an2 == 0 && r >= 0 && oint_kind(rt)) return node_is_oint(c, r);
     /* a proc's result comes back boxed and is unboxed with its nil */
@@ -546,6 +548,13 @@ static int node_is_oint_asked(Compiler *c, int node) {
     }
     if (r >= 0 && (rt == TY_RANGE || rt == TY_FLOAT_RANGE) && an2 == 0 && blk < 0 &&
         (sp_streq(nm, "min") || sp_streq(nm, "max"))) return 1;
+    /* a typed Array's sum(seed) with a seed that may be nil answers it over
+       no elements (emit_poly_sum_seed, unboxed into the oint) */
+    if (r >= 0 && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && an2 == 1 && blk < 0 && sp_streq(nm, "sum")) {
+      int sa = nt_ref(nt, node, "arguments"), sn = 0;
+      const int *sav = nt_arr(nt, sa, "arguments", &sn);
+      if (sav && sn == 1 && oint_kind(comp_ntype(c, sav[0])) && nullable_int_value(c, sav[0])) return 1;
+    }
     /* a String Range's find_index(v) row answers the position, nil on a miss */
     if (r >= 0 && rt == TY_STR_RANGE && an2 == 1 && blk < 0 && sp_streq(nm, "find_index")) return 1;
     /* `s.unpack1("q")` past the input's end is nil */

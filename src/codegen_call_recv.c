@@ -2431,6 +2431,17 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
       emit_poly_sum_seed(c, recv, argv[0], b);
       { *out = 1; return 1; }
     }
+    /* ... and so does an Integer or Float seed that may be nil: over
+       elements, nil's own `+` raises (NoMethodError); over none, the fold
+       answers the nil seed, which the call's oint carries */
+    if (oint_kind(init_t) && oint_kind(comp_ntype(c, id)) && cmp_operand_may_be_nil(c, argv[0])) {
+      TyKind st = comp_ntype(c, id);
+      Buf sb; memset(&sb, 0, sizeof sb);
+      emit_poly_sum_seed(c, recv, argv[0], &sb);
+      oint_open(c, id, st, b); buf_printf(b, "%s(%s)", oint_unbox(st), sb.p ? sb.p : "sp_box_nil()"); oint_close(c, id, b);
+      free(sb.p);
+      { *out = 1; return 1; }
+    }
     /* A FLOAT seed over Floats compensates from the first element, as Ruby
        4.0.7 does: `[0.1, 0.2, 0.3].sum(0.0)` is 0.6, like `.sum(0)`. The
        boxed fold draws the same line; the two paths must not disagree. */

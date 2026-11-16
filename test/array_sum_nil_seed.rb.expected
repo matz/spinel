@@ -1,0 +1,9 @@
+e: nil
+ia: NoMethodError: undefined method '+' for nil
+fa: NoMethodError: undefined method '+' for nil
+fe: nil
+idx: NoMethodError: undefined method '+' for nil
+idx empty: nil
+fidx: NoMethodError: undefined method '+' for nil
+true
+1

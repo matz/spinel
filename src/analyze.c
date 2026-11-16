@@ -45354,7 +45354,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     int keep_splat = 0;
     /* A builtin's `new` that runs a program initialize ahead of its own, or builds its empty value (cplan_builtin_new_form),
        keeps its splat whole: desugar_builtin_new_empty_init evaluates it as CRuby builds the argument list, `[*b]` */
-    if (is_new_name(cnm) && cplan_builtin_new_form(c, id) >= BNF_EMPTY) continue;
+    if (cplan_builtin_new_form(c, id) >= BNF_EMPTY) continue;
     if (sp_streq(cnm, "join")) {
       int fr = nt_ref(nt, id, "receiver");
       const char *frn = fr >= 0 && nt_kind(nt, fr) == NK_ConstantReadNode ? nt_str(nt, fr, "name") : NULL;

@@ -8061,10 +8061,10 @@ int cplan_builtin_new_form(Compiler *c, int id) {
   if (ci < 0 || !is_builtin_reopen(c->classes[ci].name) || class_is_exc_subclass(c, ci) || is_builtin_exception_name(c->classes[ci].name) ||
       ct_class_initializers(c, id, ci, 0, tmp) <= 0) return BNF_NONE;
   /* what the call passes: the count of positional arguments (a block pass is none), or an open list (a splat, keywords) */
-  int argc = 0, args = nt_ref(c->nt, id, "arguments");
-  const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
-  int open = nt_argv_has(c->nt, av, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING);
-  for (int i = 0; i < argc; i++) argc -= nt_kind(c->nt, av[i]) == NK_BlockArgumentNode;
+  int nargs = 0, argc = 0, args = nt_ref(c->nt, id, "arguments");
+  const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL;
+  int open = nt_argv_has(c->nt, av, nargs, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING);
+  for (int i = 0; i < nargs; i++) argc += nt_kind(c->nt, av[i]) != NK_BlockArgumentNode;
   /* the chain's head, as the plan answers it where the call runs (a prepended module's copy answers the name ahead of the class's own
      def); a def the call runs ahead of is not in force there (ct_new_chain_form) */
   int start = tmp[0];

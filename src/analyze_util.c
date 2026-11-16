@@ -550,6 +550,17 @@ const char *const_node_match_class_name(Compiler *c, int node) {
   if (!real || sp_streq(real, key)) return NULL;
   return is_builtin_class_name(real) || is_builtin_exception_name(real) ? real : NULL;
 }
+/* ...and where it names none, the class by that name or by the name as
+   written: a raise and a rescue arm both match an alias of a builtin
+   exception, and a path a const_missing hook answers, by the name. -1 for
+   none. */
+int const_node_match_class_or_named(Compiler *c, int node) {
+  int k = const_node_match_class(c, node);
+  if (k >= 0) return k;
+  const char *n = const_node_match_class_name(c, node);
+  if (!n) n = nt_str(c->nt, node, "name");
+  return n ? comp_class_index(c, n) : -1;
+}
 static int const_node_class_index_tree(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int k = comp_class_index(c, const_key_at(c, id));

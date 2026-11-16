@@ -16009,7 +16009,8 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
       first = 0;
       const char *ename = key_name(c, exc[i]);
       /* a class alias matches as the class it names */
-      if (ename && comp_class_index(c, ename) < 0 && comp_const(c, ename)) {
+      int rci = const_node_match_class_or_named(c, exc[i]);
+      if (ename && rci < 0 && comp_const(c, ename)) {
         const char *an = const_node_match_class_name(c, exc[i]);
         if (an) ename = an;
       }
@@ -16035,7 +16036,7 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
          (`rescue App::Error`, whose AST name is the leaf) and a
          leaf-referenced arm inside the module match the raised name. Resolve
          the index BEFORE swapping in the qualified name. */
-      int uci = (ename && !is_exc_name(ename)) ? comp_class_index(c, ename) : -1;
+      int uci = (ename && !is_exc_name(ename)) ? rci : -1;
       if (uci >= 0) {
         const char *qn = class_ruby_name(c, uci);
         if (qn) ename = qn;

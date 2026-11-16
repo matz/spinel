@@ -411,6 +411,10 @@ TyKind infer_uncached(Compiler *c, int id);
 void scope_reserve_param(Scope *s);
 void scope_add_param(Scope *s, const char *name, int defnode);
 void collect_def_params(Compiler *c, int def_id, Scope *s);
+/* Class k's instance method `name` that def (disp_def_build, at no line of
+   the program) declares, a helper no call of the program names (the space
+   in its name, name_is_synth_method), its scope walked, reached when run */
+int synth_def_scope(Compiler *c, int k, const char *name, int def, int run);
 char *dm_lit_str(Compiler *c, int lit);
 char *dm_eval_name(Compiler *c, int node, const char *bv, int lit);
 TyKind dm_lit_type(Compiler *c, int lit);
@@ -1070,9 +1074,15 @@ typedef struct { const char *sel; int val; const char *callee; int hist, stmt; }
 int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, int blk,
                    const DispArm *arm, int narm, int els);
 /* `if <arm[0].sel> == <arm[0].val> || ... then <then> end`, a statement
-   ahead of a call kept as it is behind its versions' cells, and `(<st[0]>;
-   ...; <expr>)` (analyze_desugar.c) */
+   ahead of a call kept as it is behind its versions' cells, its test alone,
+   `if <pred> then <then> else <els> end`, `case when <when[0]> then
+   <then[0]> ... else <els> end`, `self.instance_of?(K)` for class ci (the
+   builtin's class test), and `(<st[0]>; ...; <expr>)` (analyze_desugar.c) */
 int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then);
+int disp_cell_any(NodeTable *nt, const DispArm *arm, int narm);
+int disp_choose(NodeTable *nt, int pred, int then, int els);
+int disp_case(NodeTable *nt, const int *when, const int *then, int n, int els);
+int disp_self_class_is(Compiler *c, int ci);
 int disp_ahead(NodeTable *nt, const int *st, int n, int expr);
 /* The operands of call id that run code held in locals in CRuby's order,
    their writes into *pre, malloc'd with room for one more (analyze.c): how
@@ -1084,7 +1094,6 @@ int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_when_unspread(Compiler *c, int call);
 int disp_cell_test(NodeTable *nt, const char *sel, int val, int then, int els);
-int disp_cell_choose(NodeTable *nt, const DispArm *arm, int narm, int then, int els);
 int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_super_call(NodeTable *nt, int ar, int blk);
 int disp_method_missing_call(NodeTable *nt, const char *name, int ar, int blk);

@@ -522,6 +522,9 @@ int cplan_pinned_builtin(const Compiler *c, int id);
 /* Is call id an entry's arm (or else arm) call, pinned to the method it
    runs or to the builtin (ver_entry_targets lists the methods)? */
 int cplan_pinned(const Compiler *c, int id);
+/* ...the method it runs, -1 for none (an arm that raises, the builtin's,
+   any other node) */
+int cplan_pin_scope(const Compiler *c, int id);
 /* ...and the visibility (SP_VIS_PRIVATE or SP_VIS_PROTECTED) that a face
    entry's arm for that version raises with, instead of running it; 0 for
    an arm that runs, and for any other node */

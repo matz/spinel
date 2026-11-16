@@ -36,6 +36,13 @@ class Answers < BasicObject
   def t = respond_to_missing?(:x, false)
 end
 
+class Blocky < BasicObject
+  def method_missing(n, *a, &b) = b ? [:blk, b.call] : [:noblk]
+  def self.mix = include(::Kernel)
+  mix if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false) { 42 }
+end
+
 def attempt
   p yield
 rescue NoMethodError
@@ -48,3 +55,4 @@ attempt { ViaIdleEdge.new.to_s.start_with?("#<ViaIdleEdge") }
 attempt { Operands.new.t }
 p $count
 attempt { Answers.new.t }
+attempt { Blocky.new.t }

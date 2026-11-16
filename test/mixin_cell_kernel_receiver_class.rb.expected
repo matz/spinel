@@ -1,0 +1,70 @@
+false
+:nme
+:nme
+[:sup, false]
+:nme
+:own
+false
+false
+:nme
+false
+[false]
+:nme
+false
+:nme
+false
+:nme
+[:mm, :respond_to_missing?]
+false
+[:mm, :respond_to_missing?]
+true
+:nme
+[:sub, :respond_to_missing?, 2, nil]
+[:holder, :respond_to_missing?]
+[:plain_sub, :respond_to_missing?]
+false
+[:holder, :respond_to_missing?]
+["undefined method 'respond_to_missing?' for an instance of NamedSub", :respond_to_missing?]
+"undefined method 'respond_to_missing?' for an instance of Named"
+"undefined method 'respond_to_missing?' for an instance of NamedDefSub"
+:nme
+false
+:nme
+false
+:nme
+:sub_own
+:sub_own
+:miss_own
+:nme
+:sub_own
+:nme
+:nme
+false
+:nme
+false
+false
+:nme
+:nme
+:nme
+:nme
+[:sg_mm, :respond_to_missing?]
+[:sg_mm, :respond_to_missing?]
+:nme
+:nme
+[:undef_sub, :respond_to_missing?]
+:nme
+:nme
+[:sub_mm, :respond_to_missing?]
+:sub_own
+:nme
+:alias_own
+:nest_inner
+[:block_sub, :respond_to_missing?, [:c, false], 10]
+[:block_sub, :respond_to_missing?, [:f, true], 20]
+[:block_sub, :respond_to_missing?, [:f, true], :noblk]
+[:block_sub, :respond_to_missing?, [1, false], :noblk]
+:nme
+[:g, :g]
+[:alias_mm, :respond_to_missing?, [3, false]]
+[:alias_method_mm, :respond_to_missing?, [4, false]]
+:nme

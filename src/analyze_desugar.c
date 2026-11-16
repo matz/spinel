@@ -16835,6 +16835,7 @@ int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, i
   int em = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode");
   int es = nt_new_node(nt, "EmbeddedStatementsNode"), self = nt_new_node(nt, "SelfNode");
   int who = inst ? fwd_new_call(nt, self, "class", -1) : self;
+  if (inst) nt_mark_builtin_call(nt, who);   /* (the class the object is: a blank slate has no method `class`, and a program's own `class` does not name it) */
   nt_node_set_str(nt, hd, "unescaped", head);
   nt_node_set_str(nt, hd, "content", head);
   nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, who));
@@ -16955,25 +16956,63 @@ static int disp_arm_test(NodeTable *nt, const DispArm *arm) {
   if (arm->hist) nt_node_set_int(nt, t, "ver_hist", arm->hist);
   return t;
 }
-/* `if <arm[0]'s test> || ... then <then> end` */
-int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then) {
-  int test = disp_arm_test(nt, &arm[0]), ifn = nt_new_node(nt, "IfNode");
+/* `<arm[0]'s test> || ...` */
+int disp_cell_any(NodeTable *nt, const DispArm *arm, int narm) {
+  int test = disp_arm_test(nt, &arm[0]);
   for (int k = 1; k < narm; k++) {
     int o = nt_new_node(nt, "OrNode");
     nt_node_set_ref(nt, o, "left", test);
     nt_node_set_ref(nt, o, "right", disp_arm_test(nt, &arm[k]));
     test = o;
   }
+  return test;
+}
+/* `if <arm[0]'s test> || ... then <then> end` */
+int disp_cell_guard(NodeTable *nt, const DispArm *arm, int narm, int then) {
+  int test = disp_cell_any(nt, arm, narm), ifn = nt_new_node(nt, "IfNode");
   nt_node_set_ref(nt, ifn, "predicate", test);
   nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, then));
   return ifn;
 }
-/* `if <arm[0]'s test> || ... then <then> else <els> end` */
-int disp_cell_choose(NodeTable *nt, const DispArm *arm, int narm, int then, int els) {
-  int ifn = disp_cell_guard(nt, arm, narm, then), el = nt_new_node(nt, "ElseNode");
+/* `if <pred> then <then> else <els> end` */
+int disp_choose(NodeTable *nt, int pred, int then, int els) {
+  int ifn = nt_new_node(nt, "IfNode"), el;
+  nt_node_set_ref(nt, ifn, "predicate", pred);
+  nt_node_set_ref(nt, ifn, "statements", cdef_stmts(nt, then));
+  el = nt_new_node(nt, "ElseNode");
   nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, els));
   nt_node_set_ref(nt, ifn, "subsequent", el);
   return ifn;
+}
+/* `case when <when[0]> then <then[0]> ... else <els> end`, the arms flat (an
+   elsif chain nests one in the other's subsequent) */
+int disp_case(NodeTable *nt, const int *when, const int *then, int n, int els) {
+  int *wv = malloc(sizeof *wv * (size_t)(n > 0 ? n : 1)), cs, el;
+  if (!wv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < n; k++) {
+    wv[k] = nt_new_node(nt, "WhenNode");
+    nt_node_set_arr(nt, wv[k], "conditions", &when[k], 1);
+    nt_node_set_ref(nt, wv[k], "statements", cdef_stmts(nt, then[k]));
+  }
+  cs = nt_new_node(nt, "CaseNode");
+  nt_node_set_ref(nt, cs, "predicate", -1);
+  nt_node_set_arr(nt, cs, "conditions", wv, n);
+  el = nt_new_node(nt, "ElseNode");
+  nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, els));
+  nt_node_set_ref(nt, cs, "else_clause", el);
+  free(wv);
+  return cs;
+}
+/* `self.instance_of?(K)` for class ci, the test of self's class itself
+   (the call is the builtin's, never a program's method of the name), which
+   reads the class id of the object self is (emit_object_call) */
+int disp_self_class_is(Compiler *c, int ci) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int k = sus_class_const(c, ci);
+  if (k < 0) return -1;
+  int test = fwd_new_call(nt, nt_new_node(nt, "SelfNode"), "instance_of?", k);
+  nt_mark_builtin_call(nt, test);
+  return test;
 }
 /* `(<st[0]>; ...; <expr>)` */
 int disp_ahead(NodeTable *nt, const int *st, int n, int expr) {
@@ -18992,17 +19031,6 @@ static int spl_call(NodeTable *nt, int recv, const char *name, const int *args, 
   nt_node_set_ref(nt, call, "block", blk);
   return call;
 }
-static int spl_if(NodeTable *nt, int pred, int yes, int no) {
-  int ifn = nt_new_node(nt, "IfNode");
-  int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode"), el = nt_new_node(nt, "ElseNode");
-  nt_node_set_arr(nt, ys, "body", &yes, 1);
-  nt_node_set_arr(nt, ns, "body", &no, 1);
-  nt_node_set_ref(nt, el, "statements", ns);
-  nt_node_set_ref(nt, ifn, "predicate", pred);
-  nt_node_set_ref(nt, ifn, "statements", ys);
-  nt_node_set_ref(nt, ifn, "subsequent", el);
-  return ifn;
-}
 /* An arm: the original call with these arguments and block, cloned so it
    keeps what earlier passes marked on the site (the Ruby-defined builtin
    copy an Enumerable name was given) */
@@ -19105,7 +19133,7 @@ int desugar_builtin_splat_forward(Compiler *c) {
         int lon = hwi_new_int(nt, lo);
         int sz3 = spl_call(nt, hwi_lread(nt, rest), "size", NULL, 0, -1);
         int lt = spl_call(nt, sz3, "<", &lon, 1, -1);
-        tail = spl_if(nt, lt, rz, tail);
+        tail = disp_choose(nt, lt, rz, tail);
       }
     }
     for (int k = hi; k >= lo; k--) {
@@ -19117,12 +19145,12 @@ int desugar_builtin_splat_forward(Compiler *c) {
         int kb[SPL_MAX_ARITY];
         for (int i = 0; i < k; i++) { int ix = hwi_new_int(nt, i); kb[i] = spl_call(nt, hwi_lread(nt, rest), "[]", &ix, 1, -1); }
         int without = spl_arm(nt, id, recv, kb, k, -1);
-        arm = spl_if(nt, spl_call(nt, -1, "block_given?", NULL, 0, -1), with, without);
+        arm = disp_choose(nt, spl_call(nt, -1, "block_given?", NULL, 0, -1), with, without);
       }
       int kn = hwi_new_int(nt, k);
       int sz2 = spl_call(nt, hwi_lread(nt, rest), "size", NULL, 0, -1);
       int eq = spl_call(nt, sz2, "==", &kn, 1, -1);
-      tail = spl_if(nt, eq, arm, tail);
+      tail = disp_choose(nt, eq, arm, tail);
     }
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
     int body = nt_new_node(nt, "StatementsNode");

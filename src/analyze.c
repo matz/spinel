@@ -11989,13 +11989,12 @@ static int desugar_builtin_method_obj(Compiler *c) {
   return changed;
 }
 
-/* Class k's instance method `name` that def (disp_def_build, at no line of
-   the program) declares, a helper no call of the program names (the space
-   in its name, name_is_synth_method), reached when run */
+/* scope s reached (the helpers below, once made) */
 static void mm_helper_reach(Compiler *c, int s) {
   if (s >= 0) { c->scopes[s].reachable = 1; comp_touch_scope(c->scopes[s].idx); }
 }
-static int mm_helper_def(Compiler *c, int k, const char *name, int def, int run) {
+/* See analyze_internal.h. */
+int synth_def_scope(Compiler *c, int k, const char *name, int def, int run) {
   Scope *ws = comp_scope_new(c, name, def);
   int ws_idx = c->nscopes - 1;
   { ws->class_id = k; comp_touch_scope(ws->idx); }
@@ -12069,7 +12068,7 @@ static int desugar_missing_method_obj(Compiler *c) {
     nt_node_set_str(nt, preq, "name", "__rtm_p");
     nt_node_set_arr(nt, qp, "requireds", &preq, 1);
     nt_node_set_ref(nt, qdef, "parameters", qp);
-    int qs = mm_helper_def(c, k, qname, qdef, run);
+    int qs = synth_def_scope(c, k, qname, qdef, run);
     LocalVar *plv = scope_local(&c->scopes[qs], "__rtm_p");
     if (plv) { lv_set_type(plv, TY_BOOL); plv->rbs_seeded = 1; }   /* (no call of the program passes it) */
     /* the Method's target */
@@ -12078,7 +12077,7 @@ static int desugar_missing_method_obj(Compiler *c) {
     nt_node_set_str(nt, wdef, "bam_sym", sym);   /* its #name and #original_name */
     nt_node_set_int(nt, wdef, "mm_test", qs + 1);
     nt_node_set_int(nt, wdef, "bam_owner_ci", k + 1);   /* its #owner */
-    int ws = mm_helper_def(c, k, wname, wdef, run), mmi = comp_method_in_chain(c, k, METHOD_MISSING_NAME, NULL);
+    int ws = synth_def_scope(c, k, wname, wdef, run), mmi = comp_method_in_chain(c, k, METHOD_MISSING_NAME, NULL);
     nt_node_set_int(nt, id, "mm_target", ws + 1);
     /* (a forwarder of its block, inlined where what it hands the block to
        is, as the yield marking before this pass decided for the others) */

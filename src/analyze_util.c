@@ -4550,7 +4550,7 @@ int an_fwd_block_may_be_nil(Compiler *c, int id) {
 TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int base_mi, TyKind r,
                          int call_id) {
   int nd = 0;
-  const int *ds = comp_descendants(c, cid, &nd);
+  const int *ds = call_id >= 0 && cplan_pinned(c, call_id) ? NULL : comp_descendants(c, cid, &nd);
   for (int i = 0; i < nd; i++) {
     int kmi = call_target(c, call_id, ds[i], name, cmeth ? CT_CMETHOD : 0, NULL);
     if (kmi < 0 || kmi == base_mi) continue;
@@ -5151,6 +5151,9 @@ int name_is_synth_method(Compiler *c, const char *m) {
   /* `__mm a` / `__rtm a`: a method_missing Method's target and its
      respond_to_missing? test (desugar_missing_method_obj), spaced too */
   if (strncmp(m, "__mm ", 5) == 0 || strncmp(m, "__rtm ", 6) == 0) return 1;
+  /* `__kern test a` and its kin: a Kernel guard's test and else arm, made
+     once per holder and name (ver_kernel_guards), spaced too */
+  if (strncmp(m, "__kern ", 7) == 0) return 1;
   /* `__inc <n> <name>`: the shadow copy of an included module's method, kept
      so an override can reach it through super (#3738); a name no such copy
      has, as `__inc foo`, is the program's own */

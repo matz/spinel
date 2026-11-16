@@ -2887,12 +2887,14 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
   if (diagnose_unsupported_call(c, id)) return 1;
   /* A blank-slate instance (class X < BasicObject) answers only BasicObject's
      own methods and the user's: everything else is CRuby's NoMethodError, and
-     must not fall through to the Object/Kernel default arms (#2703). */
+     must not fall through to the Object/Kernel default arms (#2703). A call
+     the compiler wrote for its own use binds the builtin (cplan_builtin_call:
+     the class test of a blank slate's Kernel guard, ver_kernel_guard). */
   {
     int bsrecv = nt_ref(nt, id, "receiver");
-    TyKind bsrt = bsrecv >= 0 ? comp_ntype(c, bsrecv) : TY_UNKNOWN;
+    TyKind bsrt = bsrecv >= 0 ? repr_of(c, bsrecv).as_ty : TY_UNKNOWN;   /* (the receiver's layout: the class its object is) */
     const char *bsnm = nt_str(nt, id, "name");
-    if (bsnm && ty_is_object(bsrt)) {
+    if (bsnm && ty_is_object(bsrt) && !cplan_builtin_call(c, id)) {
       int bsci = ty_object_class(bsrt);
       if (bsci >= 0 && class_is_blank_slate(c, bsci) && nt_int(nt, id, "defined_ask", 0) &&
           call_target(c, id, bsci, bsnm, 0, NULL) < 0)

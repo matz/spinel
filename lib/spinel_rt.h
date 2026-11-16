@@ -18552,8 +18552,22 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg_h_cz(void *cz, sp_RbVal v, sp_
      its own), and the signal name SignalException looks up (an unknown one
      is an ArgumentError, which does not take the cause). */
   SP_GC_ROOT_RBVAL(v);
-  if (m.tag != SP_TAG_NIL && m.tag != SP_TAG_STR && !sp_poly_is_strbuf(m)) m = sp_box_str(sp_poly_to_s(m));
   SP_GC_ROOT_RBVAL(m);
+  /* the SystemCallError family builds from the operand itself (a lone
+     Integer is the errno: SystemCallError, 2 is an Errno::ENOENT), so it is
+     built here as sp_raise_poly_msg builds it, before the cause */
+  if (v.tag == SP_TAG_CLASS) {
+    const char *cn = sp_class_val_name(v);
+    if (cn && *cn && sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE &&
+        ((sp_user_exc_parent_fn && sp_user_exc_parent_fn(cn)) || sp_exc_parent_of_name(cn))) {
+      sp_Exception *se = sp_syserr_build(cn, 1, &m);
+      SP_GC_ROOT(se);
+      SP_CAUSE_STAGE(cz);
+      if (!(sp_user_exc_parent_fn && sp_user_exc_parent_fn(cn))) sp_raise_exc(se);
+      sp_raise_cls(cn, se->msg);
+    }
+  }
+  if (m.tag != SP_TAG_NIL && m.tag != SP_TAG_STR && !sp_poly_is_strbuf(m)) m = sp_box_str(sp_poly_to_s(m));
   if (v.tag == SP_TAG_CLASS) {
     const char *cn = sp_class_val_name(v);
     if (cn && !strcmp(cn, "SignalException")) {

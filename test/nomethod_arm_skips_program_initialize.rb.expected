@@ -1,0 +1,8 @@
+no args: NoMethodError undefined method 'tag' for an instance of Foo name=:tag recv=Foo args=[]
+range arg: NoMethodError undefined method 'take' for an instance of Foo name=:take recv=Foo args=[1..2]
+built string arg: NoMethodError undefined method 'take' for an instance of Foo name=:take recv=Foo args=["ss"]
+rest and keywords: NoMethodError undefined method 'many' for an instance of Foo name=:many recv=Foo args=[1, 2, {k: 3}]
+variable-like: NameError undefined local variable or method 'tag2' for an instance of Foo name=:tag2 recv=Foo
+never defined: NoMethodError undefined method 'nothere' for an instance of Foo name=:nothere recv=Foo args=[]
+Fiber reopening: NoMethodError undefined method 'tag' for an instance of Fiber name=:tag recv=Fiber args=[]
+"ownN: y"

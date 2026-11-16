@@ -15974,8 +15974,9 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     const char *cn = superclass_builtin_exc_name(c, nt, recv);
     if (!cn) cn = nt_str(nt, recv, "name");
     if (cn && is_exc_name(cn)) {
-      /* a reopening's own initialize runs on the runtime's exception */
-      { int rci = comp_builtin_class_named(c, cn);
+      /* a reopening's own initialize runs on the runtime's exception, but
+         not for the error a dispatcher's no-method arm builds (builtin_new) */
+      if (!nt_int(nt, id, "builtin_new", 0)) { int rci = comp_builtin_class_named(c, cn);
         int rim = rci >= 0 ? exc_reopen_initialize(c, rci) : -1;
         if (rim >= 0) { emit_exc_reopen_construct(c, rci, rim, nt_ref(nt, id, "arguments"), -1, b); { *out = 1; return 1; } } }
       /* SystemCallError#initialize builds the message from the errno:

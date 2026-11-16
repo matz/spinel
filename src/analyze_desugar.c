@@ -16667,65 +16667,12 @@ static int cdef_name_inherited(const NodeTable *nt, const char *nm, int own) {
    that finds no method; with disp_raise_no_method_self, its message
    `"<head>#{self.class}"` (`#{self}` when !inst), which names the class of
    the object it runs on */
-/* Does class node cls define an initialize among its statements? */
-static int class_defines_initialize(const NodeTable *nt, int cls) {
-  int body = nt_ref(nt, cls, "body"), n = 0;
-  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
-  const int *st = nt_arr(nt, body, "body", &n);
-  for (int k = 0; k < n; k++) {
-    const char *dn = nt_kind(nt, st[k]) == NK_DefNode ? nt_str(nt, st[k], "name") : NULL;
-    if (dn && is_initialize_name(dn)) return 1;
-  }
-  return 0;
-}
-
-/* Does the program give the builtin NoMethodError (with vcall, NameError)
-   an initialize of its own: a `class NoMethodError` at the top level of a
-   file, or a `class ::NoMethodError` at any nesting (a root-anchored path,
-   as desugar_root_scoped_constants leaves it)? CRuby never runs it for the
-   error a failed call raises. (A NoMethodError a module defines is not the
-   builtin: the arm raises ::NoMethodError, which it does not touch.) Asked
-   of the tree: the load record that holds the fact is made after this pass
-   has run. */
-static int nomethod_own_init(Compiler *c, int vcall) {
-  int *memo = vcall ? &c->nameerror_init : &c->nomethod_init;
-  if (*memo) return *memo == 2;
-  const NodeTable *nt = c->nt;
-  int (*is_cls)(const char *) = vcall ? is_name_error_root_class : is_no_method_error_class;
-  *memo = 1;
-  for (int id = 0; id < nt->count && *memo == 1; id++) {
-    int cp = nt_kind(nt, id) == NK_ClassNode ? nt_ref(nt, id, "constant_path") : -1;
-    const char *cn = cp >= 0 ? key_name(c, cp) : NULL;
-    if (!cn || !is_cls(cn)) continue;
-    int root = nt_kind(nt, cp) == NK_ConstantPathNode ? nt_ref(nt, cp, "parent") < 0 : nt_int(nt, cp, "root_anchored", 0);
-    if (root && class_defines_initialize(nt, id)) *memo = 2;
-  }
-  for (int r = 0; r < nt_nroots(nt) && *memo == 1; r++) {
-    int tn = 0; const int *top = nt_arr(nt, prog_root_stmts(c, r), "body", &tn);
-    for (int t = 0; t < tn; t++) {
-      int cp = nt_kind(nt, top[t]) == NK_ClassNode ? nt_ref(nt, top[t], "constant_path") : -1;
-      const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
-      if (cn && is_cls(cn) && class_defines_initialize(nt, top[t])) *memo = 2;
-    }
-  }
-  return *memo == 2;
-}
-
 /* (vcall: `raise NameError.new(msg, :name, receiver: self)`, which takes
    no arguments: a variable-like call has none) */
 static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vcall) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *cls = vcall ? "NameError" : "NoMethodError";
   char pn[32];
-  if (nomethod_own_init(c, vcall)) {   /* (raise NoMethodError, msg: the program's initialize stays what it was) */
-    int rc = nt_new_node(nt, "ConstantReadNode"), ra[2] = { rc, em }, rargs = nt_new_node(nt, "ArgumentsNode");
-    nt_node_set_str(nt, rc, "name", cls);
-    nt_node_set_arr(nt, rargs, "arguments", ra, 2);
-    int raise = fwd_new_call(nt, -1, "raise", -1);
-    nt_node_set_ref(nt, raise, "arguments", rargs);
-    nt_node_set_int(nt, raise, "kernel_recv", 1);   /* (Kernel's raise: see below) */
-    return raise;
-  }
   /* ::NoMethodError, spelled as desugar_root_scoped_constants left it for the
      program's own: a path where a class or module body defines the name */
   int shadowed = rsc_shadowed(c->rsc_names, c->n_rsc_names, cls);
@@ -16755,6 +16702,10 @@ static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vc
   nt_node_set_arr(nt, nargs, "arguments", na, vcall ? 3 : 4);
   nt_node_set_ref(nt, made, "arguments", nargs);
   if (!vcall) nt_node_set_int(nt, made, "disp_nomethod", 1);   /* the raise the code generator may lower out of line (emit_raise_nomethod_new) */
+  /* the builtin's error, which CRuby builds for a call that finds no method
+     without running an initialize the program gives NoMethodError or
+     NameError (the code generator skips a reopening's initialize for it) */
+  nt_node_set_int(nt, made, "builtin_new", 1);
   /* Kernel's raise, as a call that finds no method raises: a bare `raise`
      in a method of a class that answers raise itself is that class's
      (Fiber#raise, Thread#raise, desugar_handle_reopen_self_recv), so the arm of a

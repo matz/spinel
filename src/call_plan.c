@@ -8231,9 +8231,10 @@ static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
   if (id < 0 || id >= c->node_cap || nt_kind(c->nt, id) != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name")) ||
       cplan_builtin_call(c, id)) return BNF_NONE;
   ci = cplan_new_class(c, id, &own);
-  /* (a builtin exception's `new` runs the program's initialize itself: its emitter calls it) */
+  /* (a builtin exception's `new` runs the program's initialize itself: its emitter calls it; a program's `self.new` the call runs
+     answers it, and calls initialize only where it says so) */
   if (ci < 0 || !is_builtin_reopen(c->classes[ci].name) || class_is_exc_subclass(c, ci) || is_builtin_exception_name(c->classes[ci].name) ||
-      ct_class_initializers(c, id, ci, 0, tmp) <= 0) return BNF_NONE;
+      cplan_user_new(c, id, ci) >= 0 || ct_class_initializers(c, id, ci, 0, tmp) <= 0) return BNF_NONE;
   /* what the call passes: the count of positional arguments (a block pass and the keywords are none), or an open list (a
      splat, `...`) */
   int nargs = 0, argc = 0, args = nt_ref(c->nt, id, "arguments");

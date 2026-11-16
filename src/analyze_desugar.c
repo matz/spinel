@@ -550,7 +550,14 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
        body, a top-level `def` of the name is the one the bare call means,
        and in top-level code so is a module main extends (main's singleton
        class, asked ahead of Object) */
-    else if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || comp_main_extend_defines(c, id, nm)) continue;
+    else {
+      /* (on main's chain at the call, Object's own entry is met only past main's singleton and its extends, and
+         from the point its include or def runs: the main-chain fact) */
+      int st = cplan_main_chain_step(c, id, nm);
+      if (st >= 0 && st != EMC_OWN && st != EMC_PREPEND && st != EMC_INCLUDE) continue;
+      if (st < 0 ? (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || comp_main_extend_defines(c, id, nm))
+                 : (st == EMC_OWN && call_target(c, id, -1, nm, CT_TOP, NULL) >= 0)) continue;
+    }
     int sn = nt_new_node(nt, "SelfNode");
     if (sn < 0) continue;
     comp_grow_node_arrays(c);

@@ -4172,6 +4172,21 @@ static int ct_main_mixin(Compiler *c, int id, const char *name, int *ext) {
   if (im >= 0 && d && c->scopes[im].def_node == d->node) return im;
   return d && d->scope > 0 && d->scope < c->nscopes ? d->scope : -2;
 }
+/* See call_plan.h. */
+int cplan_main_chain_step(Compiler *c, int id, const char *name) {
+  int step;
+  const LrDef *d;
+  /* (a capture asks it of the defs too: method(:sym)'s maker is no call the defs' versions bind) */
+  int o = ct_main_chain(c, id, name, is_bound_method_maker(nt_str(c->nt, id, "name")), &step, &d);
+  return o == ELAB_YES ? step : o == ELAB_NO ? EMC_NONE : -1;
+}
+/* Does the main-chain fact put a mixin's method ahead of main's and Object's own at call id (an extend, an Object
+   prepend), so that the top-level ask (CT_TOP) answers none there? */
+static int ct_main_mixin_ahead(Compiler *c, int id, const char *name) {
+  int step;
+  const LrDef *d;
+  return ct_main_chain(c, id, name, 0, &step, &d) == ELAB_YES && (step == EMC_EXTEND || step == EMC_PREPEND);
+}
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
   /* (a module the top level includes brings its method into Object's chain: where the name has versions there, a
      top-level def after the include among them, the call's own point chooses, as a call on Object's does) */
@@ -4203,6 +4218,11 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
   }
   if (sg) {
     if (ml) ml->kind = ML_SINGLETON;
+    return -1;
+  }
+  /* (an extend's or Object prepend's method answers ahead of main's top-level def: the mixin ask's, CT_INCLUDED) */
+  if ((*flags & CT_TOP) && !(*flags & CT_CAPTURE) && id >= 0 && ct_main_mixin_ahead(c, id, name)) {
+    if (ml) ml->kind = ML_NONE;
     return -1;
   }
   int si = (*flags & CT_TOP) && id >= 0 ? comp_main_method(c, name) : -1;

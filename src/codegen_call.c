@@ -31860,6 +31860,12 @@ int bare_call_class_owned(Compiler *c, int id) {
   if (bk >= 0 && bk < c->nclasses) return call_target(c, id, bk, name, CT_CMETHOD, NULL) >= 0;
   int cid = (g_ie_class_id >= 0) ? g_ie_class_id
           : (g_emitting_class_id >= 0) ? g_emitting_class_id : sc->class_id;
+  /* (on main's chain, a module main extends or Object prepends or includes, where the call meets it: the main-chain
+     fact) */
+  if (g_ie_class_id < 0 && !sc->is_cmethod) {
+    int st = cplan_main_chain_step(c, id, name);
+    if (st > EMC_CORE && st != EMC_OWN && st != EMC_KERNEL) return 1;
+  }
   if (cid < 0 || cid >= c->nclasses) return 0;
   if (sc->is_cmethod) return call_target(c, id, cid, name, CT_CMETHOD, NULL) >= 0;
   return call_answers(c, id, cid, name, 0, NULL);

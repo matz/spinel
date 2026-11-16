@@ -548,7 +548,7 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         buf_printf(&conv, "); _t%d ? sp_strbuf_read(_t%d) : sp_str_empty; })", to, to);
       }
       else if (ty_is_object(t) && obj_str_undef(c, expr, ty_object_class(t), 0)) {
-        emit_nomethod_raise(c, expr, 0, NULL, "to_s", "(const char *)\"\"", NULL, &conv);   /* (to_s undefined where the record places it: CRuby raises) */
+        emit_nomethod_raise_unless_nil(c, expr, "to_s", "(const char *)\"\"", "sp_str_empty", &conv);   /* (to_s undefined where the record places it: CRuby raises, for nil's own to_s is the empty String) */
       }
       else if (ty_is_object(t) && obj_str_cname(c, expr, ty_object_class(t), 0)) {
         const char *cn = obj_str_cname(c, expr, ty_object_class(t), 0);

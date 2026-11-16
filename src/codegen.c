@@ -12227,8 +12227,10 @@ int obj_str_undef(Compiler *c, int site, int cid, int want_inspect) {
    (cplan_implied_target). With `same` (a C value), the builtin's own shortcut
    comes first: the first argument being the receiver itself answers `same`
    and raises nothing. The operands are rooted temporaries (the caller has
-   normally hoisted them, so reading one runs nothing twice). */
-void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, Buf *b) {
+   normally hoisted them, so reading one runs nothing twice). With `nil_ans`
+   (a C value of dflt's type), a nil object answers it instead: the display
+   of nil is NilClass's own, which CRuby never raises. */
+static void nomethod_raise_expr(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, const char *nil_ans, Buf *b) {
   int tv = ++g_tmp, ta = same && argc > 0 ? ++g_tmp : -1;
   buf_printf(b, "({ sp_RbVal _t%d = ", tv);
   emit_boxed(c, obj, b);
@@ -12241,7 +12243,16 @@ void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const 
   }
   for (int i = ta >= 0 ? 1 : 0; i < argc; i++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[i], b); buf_puts(b, "); "); }
   if (ta >= 0) buf_printf(b, "(_t%d.tag == _t%d.tag && _t%d.v.p == _t%d.v.p) ? (%s) : ", tv, ta, tv, ta, same);
+  if (nil_ans) buf_printf(b, "(_t%d.tag == SP_TAG_NIL) ? (%s) : ", tv, nil_ans);
   buf_printf(b, "((void)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d))), %s); })", name, tv, dflt);
+}
+void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, Buf *b) {
+  nomethod_raise_expr(c, obj, argc, argv, name, dflt, same, NULL, b);
+}
+/* The display's raise (a part, argument or receiver whose to_s or inspect the
+   record proves undefined): the same, where a nil operand answers nil_ans. */
+void emit_nomethod_raise_unless_nil(Compiler *c, int obj, const char *name, const char *dflt, const char *nil_ans, Buf *b) {
+  nomethod_raise_expr(c, obj, 0, NULL, name, dflt, NULL, nil_ans, b);
 }
 /* Does call id, a Comparable method (an operator, between?, clamp, `==` and
    `!=`) or Kernel#===, on recv reach a method the record proves undefined (the

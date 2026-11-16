@@ -272,7 +272,8 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   }
   else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 0)) {
     /* a class whose to_s the record proves undefined here: CRuby's call raises */
-    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "to_s", "(const char *)\"\"", NULL, b); buf_puts(b, ";\n");
+    /* (nil prints its own empty line) */
+    buf_puts(b, "sp_puts_line("); emit_nomethod_raise_unless_nil(c, arg, "to_s", "(const char *)\"\"", "(const char *)\"\"", b); buf_puts(b, ");\n");
   }
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s (user-defined or a generated struct/data one) */
@@ -405,7 +406,7 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "(void)("); emit_expr_for_effect(c, arg, b); buf_puts(b, ");\n");
   }
   else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 0)) {
-    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "to_s", "(const char *)\"\"", NULL, b); buf_puts(b, ";\n");
+    buf_puts(b, "(void)"); emit_nomethod_raise_unless_nil(c, arg, "to_s", "(const char *)\"\"", "(const char *)\"\"", b); buf_puts(b, ";\n");
   }
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s: call it directly (like the puts arm) */
@@ -670,7 +671,8 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "fputs(\"[]\\n\", stdout);\n");  /* p [] */
   }
   else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 1)) {
-    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "inspect", "(const char *)\"\"", NULL, b); buf_puts(b, ";\n");
+    /* (nil inspects as "nil", NilClass's own) */
+    buf_puts(b, "sp_puts_line("); emit_nomethod_raise_unless_nil(c, arg, "inspect", "(const char *)\"\"", "(const char *)\"nil\"", b); buf_puts(b, ");\n");
   }
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 1)) {
     /* an object with #inspect (user-defined or a generated struct/data one);

@@ -1,0 +1,9 @@
+"x"
+"Node"
+"NotImplementedError: pruned"
+"String"
+nil
+"sym"
+"NoMethodError: undefined method 'name' "
+["node x", "Node", "NotImplementedError: pruned", "String", "sym", "str"]
+["#<x>", "Node", "NotImplementedError: pruned", "String", ":sym", "\"str\""]

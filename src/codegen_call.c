@@ -2935,7 +2935,7 @@ int cls_value_owns_name(Compiler *c, int id, const char *name) {
 
 int diag_user_defines(Compiler *c, const char *name) {
   if (comp_name_is_shadow_copy(c, name, SHADOW_PREP)) return 0;
-  return recv_user_defines(c, name) || comp_method_index(c, name) >= 0;
+  return recv_user_defines(c, name) || call_target(c, -1, -1, name, CT_TOP | CT_SHARED, NULL) >= 0;
 }
 
 /* diag_user_defines for a call with an explicit receiver: a top-level def

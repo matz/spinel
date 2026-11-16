@@ -2358,8 +2358,10 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                    rrr.kind != RK_VOBJ && node_may_be_null_nil(c, recv);
       /* a Class value is a by-value sp_Class whose nil is the sentinel
          (a nil-defaulted Class parameter, `def f(x = nil) = x&.name`):
-         the guard asks sp_class_nil_p */
-      int sn_cls = rrt == TY_CLASS && rrr.kind != RK_BOXED && node_may_be_null_nil(c, recv);
+         the guard asks sp_class_nil_p (not a class writer, `k&.x = v`,
+         whose value the writer's arm answers past the guard) */
+      int sn_cls = rrt == TY_CLASS && rrr.kind != RK_BOXED && node_may_be_null_nil(c, recv) &&
+                   !call_is_setter_assign(nt, id);
       if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont || sn_ptr || sn_cls) && g_sn_skip != id) {
         int tsn2 = ++g_tmp;
         /* (an attribute assignment marked to hand out its handle answers it,

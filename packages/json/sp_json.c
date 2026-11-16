@@ -901,7 +901,7 @@ static sp_RbVal jp_value(jrd *j, int depth) {
   char c = *j->p;
   if (c == '{') return jp_object(j, depth);
   if (c == '[') return jp_array(j, depth);
-  if (c == '"') return sp_box_str(jp_string(j));
+  if (c == '"') return sp_box_str_new(jp_string(j));
   if (c == 't') { if (j->end - j->p >= 4 && !memcmp(j->p, "true", 4))  { j->p += 4; return sp_box_bool(1); } jp_err("expected 'true'"); }
   if (c == 'f') { if (j->end - j->p >= 5 && !memcmp(j->p, "false", 5)) { j->p += 5; return sp_box_bool(0); } jp_err("expected 'false'"); }
   if (c == 'n') { if (j->end - j->p >= 4 && !memcmp(j->p, "null", 4))  { j->p += 4; return sp_box_nil(); } jp_err("expected 'null'"); }

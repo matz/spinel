@@ -29153,7 +29153,9 @@ static void an_call_targets_nonunique(Compiler *c, int u, const char *un, ACallT
   if (rk == NK_SelfNode) {
     int mi = comp_self_call_mi(c, u, un);
     if (mi < 0 && rc < 0) mi = comp_cbody_call_mi(c, u, un);
-    if (mi < 0) mi = call_target(c, u, -1, un, CT_INCLUDED, NULL);
+    MethodLookup ml = { .def_class = -1 };   /* (ML_BUILTIN: the plan binds the builtin's own method, so no method of the program's, an override below the receiver's class included, is a target) */
+    if (mi < 0) mi = call_target(c, u, -1, un, CT_INCLUDED, &ml);
+    if (mi < 0 && ml.kind == ML_BUILTIN) return;
     act_add(t, mi);
     Scope *self = comp_scope_of(c, u);
     int any = mi >= 0;
@@ -29171,7 +29173,10 @@ static void an_call_targets_nonunique(Compiler *c, int u, const char *un, ACallT
     TyKind rt = infer_type(c, rc);
     if (ty_is_object(rt)) {
       int cid = ty_object_class(rt);
-      act_add(t, call_target(c, u, cid, un, 0, NULL));
+      MethodLookup ol = { .def_class = -1 };
+      int om = call_target(c, u, cid, un, 0, &ol);
+      if (om < 0 && ol.kind == ML_BUILTIN) return;
+      act_add(t, om);
       act_add_overrides(c, t, cid, un, 0);
       return;
     }

@@ -4,9 +4,11 @@
 [:d]
 3
 [:d, :v, :d]
+6
+[:d, :v, :d, :w]
 7
 3
-[:d, :v, :d, :d]
+[:d, :v, :d, :w, :d]
 "unknown keyword: :foo"
 ""
 #<Encoding:UTF-8>
@@ -14,4 +16,4 @@
 #<Encoding:BINARY (ASCII-8BIT)>
 []
 []
-[:d, :v, :d, :d, :k]
+[:d, :v, :d, :w, :d, :k]

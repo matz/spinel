@@ -10,6 +10,7 @@ Hash.prepend(Sized)
 p Hash.new[:x], $log
 p Hash.new(5)[:x], $log
 p Hash.new(capacity: ($log << :v; 2))[:x], $log
+p Hash.new(6, capacity: ($log << :w; 2))[:x], $log
 h = {}
 g = { capacity: 4 }
 p Hash.new(7, **h)[:x], Hash.new(**g)[:x], $log

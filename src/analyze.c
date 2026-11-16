@@ -13288,6 +13288,9 @@ static int desugar_hash_new_capacity(Compiler *c) {
       memcpy(keep, av, sizeof(int) * (size_t)(an - 1));
       nt_node_set_arr(nt, argsn, "arguments", keep, an - 1);
     }
+    /* (a chain the plan answers the builtin's own with the keyword stays so without it: asked again, a forward's
+       `capacity:` parameter would fill its default in place of the value the call passed) */
+    if (bnf == BNF_OWN) nt_mark_builtin_call(nt, id);
     changed = 1;
   }
   return changed;

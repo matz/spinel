@@ -10666,6 +10666,18 @@ static void emit_proc_scalar_param_bind(Buf *pb, TyKind pt, int k, int oint) {
 
 /* fb names the capture struct of a proc whose maker's self is a kind of
    ie_cls: a plain call runs on that self, as CRuby does. */
+static int g_rself_default_boxed;
+static const char *g_rself_default_boxed_pid;
+/* does C text t name the identifier id (not as part of a longer one)? */
+static int text_names_ident(const char *t, const char *id) {
+  size_t n = strlen(id);
+  for (const char *p = t; n && (p = strstr(p, id)); p += n) {
+    int before = p > t && (isalnum((unsigned char)p[-1]) || p[-1] == '_');
+    int after = isalnum((unsigned char)p[n]) || p[n] == '_';
+    if (!before && !after) return 1;
+  }
+  return 0;
+}
 static void emit_proc_ie_self(Compiler *c, int ie_mark, int ie_cls, int rself, int body, const char *fb, Buf *pb) {
   if (ie_cls >= 0 && fb)
     buf_printf(pb, "    sp_%s *self = (sp_%s *)(_sp_ie_self ? _sp_ie_self : ((_proc_cap_%s *)_cap)->__self); _sp_ie_self = NULL;\n",
@@ -10676,6 +10688,7 @@ static void emit_proc_ie_self(Compiler *c, int ie_mark, int ie_cls, int rself, i
                c->classes[ie_cls].c_name, c->classes[ie_cls].c_name);
   else if (ie_mark >= 0) buf_puts(pb, "    _sp_ie_self = NULL;\n");  /* the caller set it; no later call may read it */
   if (rself != 1) return;
+  if (g_rself_default_boxed) { buf_printf(pb, "    sp_RbVal _sp_rself = sp_ie_rself(((_proc_cap_%s *)_cap)->__rself_dflt); (void)_sp_rself;\n", g_rself_default_boxed_pid); return; }
   Buf rb; memset(&rb, 0, sizeof rb);
   g_ie_rself_on = 0;
   emit_boxed(c, (int)nt_int(c->nt, body, "ie_rself_at", 0) - 1, &rb);
@@ -11093,6 +11106,19 @@ else if (orecv >= 0 && onm) {
   /* an Object / Array / Hash / Numeric reopening holds self boxed (its
      methods take `sp_RbVal self`): captured as the boxed value */
   int self_boxed = cap_self && !self_is_value && is_boxed_self_class_name(c->classes[scls].name);
+  /* A runtime-self body's fallback self (sp_ie_rself's, for a call no
+     instance_exec rebinds) is its maker's self, boxed: a text of the
+     maker's C scope where it names that self (a block instance_eval or
+     another runtime-self body runs on), so it is taken there into the
+     capture rather than spelled in the proc's own function. */
+  Buf rself_src; memset(&rself_src, 0, sizeof rself_src);
+  if (rself == 1 && !cap_self && !ie_fb && !cap_cls && !(bs && bs->is_cmethod)) {
+    int sv_on = g_ie_rself_on; g_ie_rself_on = 0;
+    if (sv_rself_on) buf_puts(&rself_src, "_sp_rself");
+    else emit_boxed(c, (int)nt_int(nt, body, "ie_rself_at", 0) - 1, &rself_src);
+    g_ie_rself_on = sv_on;
+  }
+  int rself_boxed = rself_src.p && g_self && (sv_rself_on || text_names_ident(rself_src.p, g_self));
   const char *self_cls = cap_self ? c->classes[scls].c_name : NULL;
 
   /* parameter metadata for Proc#parameters: every parameter kind in signature
@@ -11190,7 +11216,7 @@ else if (orecv >= 0 && onm) {
      the cap struct itself first (sp_Proc_scan does not), then each cell --
      matching the sp_hashproc convention; marking only the cells would leave
      the cap struct unreachable and free it out from under the proc. */
-  if (ncap > 0 || cap_self || ie_fb || cap_cls || ret_proc || brk_blk) {
+  if (ncap > 0 || cap_self || rself_boxed || ie_fb || cap_cls || ret_proc || brk_blk) {
     buf_printf(&g_procs, "typedef struct {");
     for (int i = 0; i < ncap; i++) {
       LocalVar *clv = scope_local(bs, caps.v[i]);
@@ -11204,6 +11230,7 @@ else if (orecv >= 0 && onm) {
     else if (self_boxed) buf_puts(&g_procs, " sp_RbVal __self_rb;");
     else if (cap_self || ie_fb) buf_puts(&g_procs, " void *__self;");
     if (cap_cls) buf_puts(&g_procs, " sp_Class __self_cls;");
+    if (rself_boxed) buf_puts(&g_procs, " sp_RbVal __rself_dflt;");
     if (ret_proc) buf_puts(&g_procs, " sp_int _home;");  /* home method's proc-return id (sp_proc_home.id) */
     if (brk_blk) buf_puts(&g_procs, " sp_int _brkhome;");  /* the call site's break serial (sp_brk_push) */
     buf_printf(&g_procs, " } _proc_cap_%s;\n", pid);
@@ -11219,6 +11246,7 @@ else if (orecv >= 0 && onm) {
     }
     else if (self_boxed) buf_puts(&g_procs, "  sp_mark_rbval(_c->__self_rb);\n");
     else if (cap_self || ie_fb) buf_puts(&g_procs, "  if (_c->__self) sp_gc_mark(_c->__self);\n");
+    if (rself_boxed) buf_puts(&g_procs, "  sp_mark_rbval(_c->__rself_dflt);\n");
     buf_puts(&g_procs, "}\n");
   }
 
@@ -11265,6 +11293,8 @@ else if (orecv >= 0 && onm) {
   char cm_self_p[32];
   if (ie_cls < 0 && bs && bs->class_id >= 0 && bs->is_cmethod)
     g_self = proc_cmethod_self(c, bs, cm_self_p, sizeof cm_self_p);
+  /* (a runtime-self body with no self of its own runs on the runtime's) */
+  if (rself_boxed && ie_cls < 0 && !(bs && bs->class_id >= 0 && bs->is_cmethod)) g_self = "_sp_rself";
   if (ie_cls >= 0) g_ie_class_id = ie_cls;
   int bs_moved = ie_cls >= 0 && sv_bcls >= 0;
   if (bs_moved) { comp_scope_move_begin(c, (int)(bs - c->scopes)); { bs->class_id = ie_cls; comp_touch_scope(bs->idx); } { bs->is_cmethod = 0; comp_touch_scope(bs->idx); } }
@@ -11342,7 +11372,9 @@ else if (orecv >= 0 && onm) {
     buf_printf(pb, "    sp_Class _sp_cls = ((_proc_cap_%s *)_cap)->__self_cls;\n", pid);
     buf_puts(pb, "    (void)_sp_cls;\n");
   }
+  g_rself_default_boxed = rself_boxed; g_rself_default_boxed_pid = pid;
   emit_proc_ie_self(c, ie_mark, ie_cls, rself, body, ie_fb ? pid : NULL, pb);
+  g_rself_default_boxed = 0;
   /* Lambda: strict arity -- requireds + trailing posts mandatory, optionals
      widen the max, a splat rest lifts it entirely. */
   int has_kwrest = 0, no_kw = 0;
@@ -11842,7 +11874,7 @@ else if (orecv >= 0 && onm) {
   g_fn_pr_label = sv_fn_prl; g_fn_pr_var = sv_fn_prv; g_fn_ret_type = sv_fn_rt; g_fn_ret_oint = sv_fn_ro;
 
   if (ie_mark >= 0 || rself) buf_puts(b, "({ sp_Proc *_pie = ");
-  if (ncap == 0 && !cap_self && !ie_fb && !cap_cls && !ret_proc && !brk_blk) {
+  if (ncap == 0 && !cap_self && !rself_boxed && !ie_fb && !cap_cls && !ret_proc && !brk_blk) {
     buf_printf(b, "sp_proc_new_meta((void *)_proc_%s, NULL, NULL, %d, %s, %d, %s)",
                pid, meta_arity, is_lambda ? "TRUE" : "FALSE", meta_count, meta_args);
   }
@@ -11894,6 +11926,7 @@ else if (orecv >= 0 && onm) {
         else
           buf_printf(g_pre, "_capv_%s->__self_cls = %s;\n", pid, bs->yields && sv_self ? sv_self : "_sp_cls");
       }
+      if (rself_boxed) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->__rself_dflt = %s;\n", pid, rself_src.p); }
       if (ret_proc) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->_home = %s;\n", pid, in_home_proc ? g_proc_return_home : "_h.id"); }
       if (brk_blk) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->_brkhome = %s;\n", pid, sv_bser); }
     }
@@ -11902,7 +11935,7 @@ else if (orecv >= 0 && onm) {
   }
   if (ie_mark >= 0 || rself) buf_printf(b, "; _pie->ie_cls = %d; _pie; })", ie_mark >= 0 ? ie_mark + 1 : -rself);
 
-  free(params.v); free(used.v); free(locals.v); free(caps.v);
+  free(params.v); free(used.v); free(locals.v); free(caps.v); free(rself_src.p);
 }
 
 /* Emit the struct + the constructor (sp_<Class>_new) for one class. */

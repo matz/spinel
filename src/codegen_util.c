@@ -3996,7 +3996,18 @@ int str_changing_name(const char *nm) {
 int strbuf_poly_ivar_mutated(Compiler *c, int n) {
   int pc = comp_recv_parent(c, n);
   const char *pn = pc >= 0 ? nt_str(c->nt, pc, "name") : NULL;
-  return pn && str_changing_name(pn) && !is_freeze_name(pn);
+  if (!pn || !str_changing_name(pn) || is_freeze_name(pn)) return 0;
+  /* (a mutator's name a Hash or an Array answers too, `[]=` or `<<`: only
+     a slot of the name some class keeps a String in has a handle to give) */
+  int a = nt_ref(c->nt, n, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &ac) : NULL;
+  const char *ivn = ac == 1 ? nt_str(c->nt, av[0], "value") : NULL;
+  if (!ivn) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int iv = comp_ivar_index(&c->classes[k], ivn);
+    if (iv >= 0 && (c->classes[k].ivar_types[iv] == TY_STRING || c->classes[k].ivar_types[iv] == TY_STRBUF)) return 1;
+  }
+  return 0;
 }
 int strbuf_call_reads_handle(Compiler *c, int recv) {
   return recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode &&

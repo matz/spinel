@@ -2129,6 +2129,14 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   view_pop(c, va);
   view_unbind(slot);
   const char *t = ok && nb->p ? nb->p : NULL;
+  /* A class reader (Module#name, to_s, inspect: emit_class_reader, the
+     class's name as bytes, NULL for an anonymous class's name) answers
+     bytes under the Class face whatever the call's own type says: the
+     probe asked the call, whose type is the join of every arm's (poly where
+     a class method of the name in the program answers nothing, as a stub
+     that raises does), and the arm handed the bytes to the boxed slot. */
+  if (got == TY_POLY && argc == 0 && (is_class_name_name(name) || is_to_s_name(name) || is_inspect_name(name)))
+    got = TY_STRING;
   /* an answer that can itself raise NoMethodError is the Class emitter's
      own class-method switch (the program's methods of the name, then the
      raise): no better than the default it would replace */

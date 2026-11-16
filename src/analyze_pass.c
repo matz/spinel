@@ -4873,12 +4873,14 @@ static void masgn_note_joined(Compiler *c, int mw, int tgt, LocalVar *lv, TyKind
 
 /* infer_write_types's pass over multiple assignments: each target takes its
    element's type (answers whether it changed a type) */
-static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
+static int infer_write_multi_assign(Compiler *c, const NodeTable *nt, const unsigned char *only) {
   int changed = 0;
   /* Multiple assignment `a, b = e0, e1`: each target gets its element's
-     type (the RHS ArrayNode is a tuple here, not an array value). */
+     type (the RHS ArrayNode is a tuple here, not an array value). `only`,
+     when given, names the assignments (by node) to type. */
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_MultiWriteNode) continue;
+    if (only && !only[id]) continue;
     int ln = 0;
     const int *lefts = nt_arr(nt, id, "lefts", &ln);
     int value = nt_ref(nt, id, "value");
@@ -4901,8 +4903,10 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
         if (hen == 0 && !ty_is_hash(c->hash_want[hv])) { comp_set_hash_want(c, hv, TY_POLY_POLY_HASH); changed = 1; }
       }
     }
-    /* (each target as this assignment types it, the empty `{}` settled) */
-    masgn_runtime_targets(c, id, masgn_note_joined, NULL);
+    /* (each target as this assignment types it, the empty `{}` settled;
+       not after the container fold (`only`), which has widened the values
+       since: a later re-join reads them against the round's first types) */
+    if (!only) masgn_runtime_targets(c, id, masgn_note_joined, NULL);
     const char *vty = nt_type(nt, value);
     NodeKind vk = nt_kind(nt, value);
     /* `r, w = IO.pipe` / `a, b = Socket.pair(...)` -> both targets are IO
@@ -5273,6 +5277,28 @@ typedef struct {
   int next;       /* the next such write reading the same local, or -1 */
 } ReadWrite;
 
+/* Every scope's locals in one index: scope s's local i is base[s] + i, and
+   base[c->nscopes] is the count. */
+static int *all_locals_base(Compiler *c) {
+  int *base = malloc(sizeof(int) * ((size_t)c->nscopes + 1));
+  if (!base) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  base[0] = 0;
+  for (int s = 0; s < c->nscopes; s++) base[s + 1] = base[s] + c->scopes[s].nlocals;
+  return base;
+}
+
+/* The local value `v` reads, itself or through a chain of calls on it
+   (`t[1]`, `t[1].succ`, `t.first(2).last`), with its scope in *sc; NULL
+   when the chain ends elsewhere. */
+static LocalVar *value_read_root(Compiler *c, const NodeTable *nt, int v, Scope **sc) {
+  int r = v;
+  for (int hop = 0; hop < 8 && r >= 0 && nt_kind(nt, r) == NK_CallNode; hop++) r = nt_ref(nt, r, "receiver");
+  if (r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode) return NULL;
+  const char *rn = nt_str(nt, r, "name");
+  *sc = comp_scope_of(c, r);
+  return rn ? scope_local(*sc, rn) : NULL;
+}
+
 /* A slot narrowed to a pointer array, a nested table or a table's element
    type (oa_pin) that re-derives as the poly array or the poly scalar its
    writes still read takes the pin back; 0 when it derives as neither, and
@@ -5333,9 +5359,14 @@ static void pin_shadow_lift(PinShadow *ps) {
    plain writes (`a, *b = t`) -- saw the narrower type, and the slot it
    fills kept it: an Integer slot read a String's box as 0, a String
    Array slot read a String's (a crash). Once every write of the round is
-   in, a write whose value is, or calls on, a local now held boxed is
-   typed again, and its slot widens when the value now is. Only those
-   writes: re-inferring every value would double the pass. The slot is
+   in, a write whose value is, or calls on, a local now held boxed (or a
+   chain of calls on one, `t[1].succ`) is typed again, and its slot widens
+   when the value now is. Only those writes: re-inferring every value
+   would double the pass. infer_write_types runs this again once the
+   container fold has widened its containers, with `seed` naming the
+   locals (by all_locals_base's index) the fold widened: the writes that
+   read those are typed again then, and a local already boxed is not a
+   seed (its readers were typed here before). The slot is
    one the round resets, so no change is reported (the stash comparison
    at the end of the pass is the detector).
    A slot this widens is read in turn: in `d = c; c = b; b = "xy"` inside
@@ -5346,14 +5377,11 @@ static void pin_shadow_lift(PinShadow *ps) {
    at once if it already has). A slot widens once (a boxed one is not
    typed again), so a list is drained once and each write is typed at most
    once: the work stays linear in the writes, whatever their order. */
-static void infer_write_reads_widened(Compiler *c, const NodeTable *nt, PinShadow *pins) {
+static void infer_write_reads_widened(Compiler *c, const NodeTable *nt, PinShadow *pins, const unsigned char *seed) {
   int nw = 0;
   const int *ws = nt_nodes_of_kind(nt, NK_LocalVariableWriteNode, &nw);
   if (nw == 0) return;
-  int *base = malloc(sizeof(int) * ((size_t)c->nscopes + 1));
-  if (!base) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  base[0] = 0;
-  for (int s = 0; s < c->nscopes; s++) base[s + 1] = base[s] + c->scopes[s].nlocals;
+  int *base = all_locals_base(c);
   int nl = base[c->nscopes];
   int *head = malloc(sizeof(int) * (size_t)(nl > 0 ? nl : 1));
   int *queue = malloc(sizeof(int) * (size_t)nw);
@@ -5364,23 +5392,19 @@ static void infer_write_reads_widened(Compiler *c, const NodeTable *nt, PinShado
   for (int j = 0; j < nw; j++) {
     int id = ws[j];
     int v = nt_ref(nt, id, "value");
-    int r = v;
-    if (r >= 0 && nt_kind(nt, r) == NK_CallNode) r = nt_ref(nt, r, "receiver");
-    if (r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode) continue;
-    const char *rn = nt_str(nt, r, "name"), *wn = nt_str(nt, id, "name");
-    Scope *rs = comp_scope_of(c, r), *wsc = comp_scope_of(c, id);
-    LocalVar *rl = rn ? scope_local(rs, rn) : NULL;
+    Scope *rs = NULL;
+    LocalVar *rl = value_read_root(c, nt, v, &rs);
+    const char *wn = nt_str(nt, id, "name");
+    Scope *wsc = comp_scope_of(c, id);
     LocalVar *lv = rl && wn ? scope_local(wsc, wn) : NULL;
     if (!lv || lv == rl || lv->is_param || lv->is_block_param || lv->rbs_seeded || ty_degraded(lv->type))
       continue;
     ReadWrite *w = &rw[nrw];
     w->val = v; w->dst = lv; w->dst_ix = base[wsc - c->scopes] + (int)(lv - wsc->locals);
     w->next = -1;
-    if (ty_degraded(rl->type)) queue[nq++] = nrw;
-    else {
-      int ri = base[rs - c->scopes] + (int)(rl - rs->locals);
-      w->next = head[ri]; head[ri] = nrw;
-    }
+    int ri = base[rs - c->scopes] + (int)(rl - rs->locals);
+    if (seed ? seed[ri] : ty_degraded(rl->type)) queue[nq++] = nrw;
+    else { w->next = head[ri]; head[ri] = nrw; }
     nrw++;
   }
   for (int q = 0; q < nq; q++) {
@@ -5596,7 +5620,7 @@ static void lv_keep_decisions(Compiler *c, LocalVar *lv, int stashed) {
    puts the pin back only at the end of infer_write_types: read as the poly
    array, each target of `x, y = cells[i]` took a boxed element. The rest
    of the pass reads the local as before, so the pin is lifted again after. */
-static int infer_write_multi_assign_pinned(Compiler *c, const NodeTable *nt) {
+static int infer_write_multi_assign_pinned(Compiler *c, const NodeTable *nt, const unsigned char *only) {
   int n = 0, cap = 0;
   LocalVar **pinned = NULL;
   for (int s = 0; s < c->nscopes; s++)
@@ -5611,7 +5635,7 @@ static int infer_write_multi_assign_pinned(Compiler *c, const NodeTable *nt) {
       pinned[n++] = lv;
       lv_set_type(lv, lv->oa_pin);
     }
-  int changed = infer_write_multi_assign(c, nt);
+  int changed = infer_write_multi_assign(c, nt, only);
   for (int k = 0; k < n; k++)
     if (pinned[k]->type == pinned[k]->oa_pin) lv_set_type(pinned[k], TY_POLY_ARRAY);
   free(pinned);
@@ -5843,8 +5867,8 @@ int infer_write_types(Compiler *c) {
     pin_shadow_take(c, &pins, lv, newt, val_id);
   }
 
-  changed |= infer_write_multi_assign_pinned(c, nt);
-  infer_write_reads_widened(c, nt, &pins);
+  changed |= infer_write_multi_assign_pinned(c, nt, NULL);
+  infer_write_reads_widened(c, nt, &pins, NULL);
   pin_shadow_lift(&pins);
 
   changed |= infer_case_pattern_locals(c);
@@ -5878,6 +5902,14 @@ int infer_write_types(Compiler *c) {
     }
   }
 
+  /* each local's type before the container fold, for the readers of the
+     containers it widens (below) */
+  int fold_ns0 = c->nscopes, *fold_base0 = all_locals_base(c);
+  TyKind *fold_ty0 = malloc(sizeof *fold_ty0 * (size_t)(fold_base0[fold_ns0] + 1));
+  if (!fold_ty0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int s = 0; s < fold_ns0; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) fold_ty0[fold_base0[s] + i] = c->scopes[s].locals[i].type;
+
   changed |= infer_write_container_usage(c, nt, nfb, fb, lw_ix, ivw_ix);
 
   /* Container widening across direct aliases (`b = a`): the fold above
@@ -5885,6 +5917,44 @@ int infer_write_types(Compiler *c) {
      source widened would keep the narrower container kind. */
   changed |= propagate_alias_widening(c, &ivw_ix);
   changed |= join_container_alias_groups(c);
+  /* The fold has widened containers whose readers the main loop typed with
+     the kind the containers' writes alone give: `w = t[1]` and `_, w = t`
+     read t as a String Array, before the fold counted `t[1] = 3` and made
+     it the general Array. The multiple assignments and the writes that read
+     such a container are typed again now, so what the round binds from w
+     (a parameter, a Struct member) takes the box. Only those: a table held
+     at its narrowed kind during the joins reads as the poly array again by
+     now, and a target the fold widened past its literal's kind would join
+     the two kinds to a box. */
+  {
+    /* indexed as the locals are now, which infer_write_reads_widened reads
+       it by; a local the fold added has no type before it to compare */
+    int *fold_base = all_locals_base(c), nseed = 0;
+    unsigned char *seed = calloc((size_t)fold_base[c->nscopes] + 1, 1);
+    if (!seed) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int s = 0; s < c->nscopes && s < fold_ns0; s++)
+      for (int i = 0; i < c->scopes[s].nlocals && i < fold_base0[s + 1] - fold_base0[s]; i++)
+        if (!ty_degraded(fold_ty0[fold_base0[s] + i]) && ty_degraded(c->scopes[s].locals[i].type)) {
+          seed[fold_base[s] + i] = 1; nseed++;
+        }
+    if (nseed) {
+      unsigned char *mw_sel = calloc((size_t)nt->count + 1, 1);
+      if (!mw_sel) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      int nsel = 0;
+      NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) {
+        Scope *rs = NULL;
+        LocalVar *rl = value_read_root(c, nt, nt_ref(nt, mw, "value"), &rs);
+        if (rl && seed[fold_base[rs - c->scopes] + (int)(rl - rs->locals)]) { mw_sel[mw] = 1; nsel++; }
+      }
+      PinShadow fold_pins = {0};
+      if (nsel) changed |= infer_write_multi_assign_pinned(c, nt, mw_sel);
+      infer_write_reads_widened(c, nt, &fold_pins, seed);
+      pin_shadow_lift(&fold_pins);
+      free(mw_sel);
+    }
+    free(seed); free(fold_base);
+  }
+  free(fold_base0); free(fold_ty0);
 
   /* The container-usage fold above can widen a hash's value layout after the
      main write-site scan has already typed a destination local. Reconcile the

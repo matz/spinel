@@ -56800,7 +56800,8 @@ static void an_env_value_flows(Compiler *c) {
   NT_FOREACH_KIND(nt, NK_ConstantReadNode, id) {
     if (!is_env_const(nt_str(nt, id, "name")) || infer_type(c, id) != TY_ENV) continue;
     int p = par ? par[id] : -1;
-    if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id) continue;
+    /* (a read a rewrite left behind, ENV's receiver a desugar replaced, has no parent) */
+    if (p < 0 || (nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id)) continue;
     c->env_value_flows = 1;
     return;
   }

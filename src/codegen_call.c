@@ -31178,35 +31178,71 @@ static int emit_call_on_missing_builtin_path(Compiler *c, int id, Buf *b) {
   return 1;
 }
 /* A call on a boxed value that may be ENV (env_value_flows) reads it
-   through the environment's String Hash taken at the call: the receiver is
-   held once, in the prelude, as sp_env_box_read makes it (ENV's box turned
-   into that Hash, any other value itself), and the call is the one it was
-   on that held value. The names that ask the object itself keep it. */
+   through the environment's String Hash taken at the call: the receiver
+   reads as sp_env_box_read makes it (ENV's box turned into that Hash, any
+   other value itself), and the call is the one it was on that value. A
+   receiver that is a plain read is read so wherever the call reads it (a
+   second read is a second Hash of the same environment, whose stores reach
+   it all the same); one that runs code is held once, in the call's own
+   expression, not the prelude, which would run it ahead of an `&&` or an
+   `if` around the call. The names that ask the object itself keep it. */
 static int g_env_read_skip = -1;
 static int env_box_keeps_name(const char *n) {
   static const char *const K[] = { "equal?", "eql?", "==", "!=", "===", "object_id", "__id__", "class",
                                    "frozen?", "nil?", "is_a?", "kind_of?", "instance_of?", "to_s", "hash",
-                                   "itself", "respond_to?", NULL };
+                                   "itself", "respond_to?",
+                                   /* (clear takes its receiver back: sp_poly_clear answers ENV's itself) */
+                                   "clear", NULL };
   for (int i = 0; K[i]; i++) if (sp_streq(n, K[i])) return 1;
   return 0;
+}
+/* (one arm of the read: the call emitted with its own prelude caught in the expression, and the receiver, when bound,
+   reading as text) */
+static void env_box_arm(Compiler *c, int id, int rv, const char *bound, Buf *b) {
+  Buf tpre, tval;
+  memset(&tpre, 0, sizeof tpre); memset(&tval, 0, sizeof tval);
+  Buf *sv_pre = g_pre; int sv_ind = g_indent;
+  g_pre = &tpre; g_indent = 0;
+  int mk = bound ? view_bind(rv, "%s", bound) : -1;
+  emit_call(c, id, &tval);
+  if (bound) view_unbind(mk);
+  g_pre = sv_pre; g_indent = sv_ind;
+  buf_printf(b, "({ %s%s; })", tpre.p ? tpre.p : "", tval.p ? tval.p : "0");
+  free(tpre.p); free(tval.p);
 }
 static int emit_call_env_box_read(Compiler *c, int id, Buf *b) {
   int rv = nt_ref(c->nt, id, "receiver");
   const char *nm = nt_str(c->nt, id, "name");
-  if (!c->env_value_flows || g_env_read_skip == id || rv < 0 || !nm || env_box_keeps_name(nm) ||
-      repr_of(c, rv).kind != RK_BOXED || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
-  int t = ++g_tmp;
+  if (!c->env_value_flows || g_env_read_skip == id || rv < 0 || !nm || env_box_keeps_name(nm) || !env_answers_name(nm) ||
+      repr_of(c, rv).kind != RK_BOXED || g_n_argov + 2 >= MAX_ARG_OVERRIDE) return 0;
+  /* Two arms on whether the receiver is ENV's box: ENV's reads the call on
+     a String Hash of the environment taken there (held in a temp, which a
+     call that takes its receiver back writes, harmlessly); the other is the
+     call as it was, writing back where it always did. A receiver that is a
+     plain read is read in each arm; one that runs code is held first. */
   Buf rb; memset(&rb, 0, sizeof rb);
   emit_expr(c, rv, &rb);
-  emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "sp_RbVal _t%d = sp_env_box_read(%s); SP_GC_ROOT_RBVAL(_t%d);\n", t, rb.p ? rb.p : "sp_box_nil()", t);
-  free(rb.p);
-  int mk = view_bind_temp(rv, t);
+  NodeKind rk = nt_kind(c->nt, nt_paren_single(c->nt, rv));
+  int plain = rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode || rk == NK_ClassVariableReadNode ||
+              rk == NK_GlobalVariableReadNode || rk == NK_ConstantReadNode || rk == NK_SelfNode;
   int sv = g_env_read_skip;
   g_env_read_skip = id;
-  emit_call(c, id, b);
+  int tr = plain ? 0 : ++g_tmp, te = ++g_tmp;
+  char rtext[64], etext[48];
+  if (plain) snprintf(rtext, sizeof rtext, "%s", "");
+  else snprintf(rtext, sizeof rtext, "_t%d", tr);
+  snprintf(etext, sizeof etext, "_t%d", te);
+  buf_puts(b, "({ ");
+  if (!plain) buf_printf(b, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tr, rb.p ? rb.p : "sp_box_nil()", tr);
+  const char *rref = plain ? (rb.p ? rb.p : "sp_box_nil()") : rtext;
+  buf_printf(b, "sp_RbVal _t%d = sp_env_box_read(%s); SP_GC_ROOT_RBVAL(_t%d); (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_STR_STR_HASH && !(%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_STR_STR_HASH)) ? ",
+             te, rref, te, te, te, rref, rref);
+  env_box_arm(c, id, rv, etext, b);
+  buf_puts(b, " : ");
+  env_box_arm(c, id, rv, plain ? NULL : rtext, b);
+  buf_puts(b, "; })");
   g_env_read_skip = sv;
-  view_unbind(mk);
+  free(rb.p);
   return 1;
 }
 void emit_call(Compiler *c, int id, Buf *b) {

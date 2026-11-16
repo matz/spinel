@@ -588,7 +588,10 @@ ctypes, a Swift or C# binding) links it over the position-independent
 runtime: `make runtime-pic` builds `lib/libspinel_rt_pic.a`, and
 `cc -fPIC -shared -Ilib kernel.c lib/libspinel_rt_pic.a -lm -o libkernel.so`
 builds the object. The regular `libspinel_rt.a` is built for an executable,
-and a shared link refuses its relocations. The threaded runtime has no such
+and a shared link refuses its relocations. A kernel that calls
+`String#crypt` adds `-lcrypt` on glibc Linux, as `spinel` does for a
+program: the shared link succeeds without it, and `dlopen` then refuses
+the object for its undefined `crypt`. The threaded runtime has no such
 archive yet.
 
 An entry can answer an object of the program (declare its return `untyped`

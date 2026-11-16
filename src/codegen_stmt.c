@@ -10897,6 +10897,16 @@ static int case_subject_needs_root(Compiler *c, TyKind pt, const int *whens, int
   return nw > 0 && !decide_node(nt, whens[0], "case-root", NULL);
 }
 
+/* Does the record prove class cid's === undefined where the when arm cond
+   runs (the plan's none, MLW_RECORD)? CRuby's call of it raises NoMethodError,
+   where Object#=== would have asked the class's ==. */
+static int when_eqq_gone(Compiler *c, int cond, int cid) {
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  cplan_implied_target(c, ic_operand_host(c, cond), cond, cid, "===", 0, &ml);
+  return ml.kind == ML_NONE && ml.why == MLW_RECORD;
+}
+
 /* `case <array or hash> when <cond>`: Array#=== and Hash#=== are Object#===,
    which is ==, so the arm compares by value through sp_poly_eq. An arm of
    another kind can never be == an Array or a Hash, and comparing the two
@@ -10918,6 +10928,13 @@ static int emit_case_container_eq(Compiler *c, int cond, int t, TyKind pt, Buf *
     emit_boxed(c, cond, b);
     buf_puts(b, ", ");
     emit_boxed_text(c, pt, stmp, b);
+    buf_puts(b, ")");
+  }
+  else if (ty_is_object(wat) && when_eqq_gone(c, cond, ty_object_class(wat))) {
+    /* the arm's class undefines === where the record places it: CRuby's call of it raises,
+       whatever == the class has (the subject is already evaluated) */
+    buf_printf(b, "((void)_t%d, ", t);
+    emit_nomethod_raise(c, cond, 0, NULL, "===", "(sp_bool)0", NULL, b);
     buf_puts(b, ")");
   }
   else if (ty_is_object(wat) &&
@@ -11101,8 +11118,20 @@ static int when_boxed_arm_class(Compiler *c, int cond, int k) {
          !c->classes[k].is_native_class && !comp_class_is_module(c, &c->classes[k]) &&
          cplan_implied_target(c, ic_operand_host(c, cond), cond, k, "===", 0, NULL) >= 0;
 }
+/* ... and the arms of the classes whose #=== the record proves undefined here:
+   the raise CRuby's call of it makes, where the equality match would answer */
+static int when_boxed_arm_gone(Compiler *c, int cond, int k) {
+  return c->classes[k].instantiated &&
+         !c->classes[k].is_native_class && !comp_class_is_module(c, &c->classes[k]) && when_eqq_gone(c, cond, k);
+}
 static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, int tpw, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
+    if (when_boxed_arm_gone(c, cond, k)) {
+      buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? ", tpw, tpw, k);
+      emit_nomethod_raise_boxed(b, "===", tpw, "(sp_bool)0");
+      buf_puts(b, " : ");
+      continue;
+    }
     if (!when_boxed_arm_class(c, cond, k)) continue;
     MethodLookup wml = { .def_class = -1 };
     int weq = cplan_implied_target(c, ic_operand_host(c, cond), cond, k, "===", 0, &wml), wdef = wml.def_class;
@@ -11178,7 +11207,7 @@ static int emit_when_class_cmethod_eq(Compiler *c, int cond, int t, TyKind pt, B
 
 static int when_boxed_has_user_arm(Compiler *c, int cond) {
   for (int k = 0; k < c->nclasses; k++)
-    if (when_boxed_arm_class(c, cond, k)) return 1;
+    if (when_boxed_arm_class(c, cond, k) || when_boxed_arm_gone(c, cond, k)) return 1;
   return 0;
 }
 

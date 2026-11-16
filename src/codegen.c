@@ -12230,6 +12230,10 @@ int obj_str_undef(Compiler *c, int site, int cid, int want_inspect) {
    normally hoisted them, so reading one runs nothing twice). With `nil_ans`
    (a C value of dflt's type), a nil object answers it instead: the display
    of nil is NilClass's own, which CRuby never raises. */
+/* The raise itself, on the rooted boxed temporary _t<tv> (an expression of dflt's type). */
+void emit_nomethod_raise_boxed(Buf *b, const char *name, int tv, const char *dflt) {
+  buf_printf(b, "((void)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d))), %s)", name, tv, dflt);
+}
 static void nomethod_raise_expr(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, const char *nil_ans, Buf *b) {
   int tv = ++g_tmp, ta = same && argc > 0 ? ++g_tmp : -1;
   buf_printf(b, "({ sp_RbVal _t%d = ", tv);
@@ -12244,7 +12248,8 @@ static void nomethod_raise_expr(Compiler *c, int obj, int argc, const int *argv,
   for (int i = ta >= 0 ? 1 : 0; i < argc; i++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[i], b); buf_puts(b, "); "); }
   if (ta >= 0) buf_printf(b, "(_t%d.tag == _t%d.tag && _t%d.v.p == _t%d.v.p) ? (%s) : ", tv, ta, tv, ta, same);
   if (nil_ans) buf_printf(b, "(_t%d.tag == SP_TAG_NIL) ? (%s) : ", tv, nil_ans);
-  buf_printf(b, "((void)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d))), %s); })", name, tv, dflt);
+  emit_nomethod_raise_boxed(b, name, tv, dflt);
+  buf_puts(b, "; })");
 }
 void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, Buf *b) {
   nomethod_raise_expr(c, obj, argc, argv, name, dflt, same, NULL, b);

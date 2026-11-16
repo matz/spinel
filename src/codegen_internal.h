@@ -1364,6 +1364,7 @@ int display_method_scope(Compiler *c, int site, int cid, int want_inspect, int *
 const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect);
 int obj_str_undef(Compiler *c, int site, int cid, int want_inspect);
 void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, Buf *b);
+void emit_nomethod_raise_boxed(Buf *b, const char *name, int tv, const char *dflt);
 void emit_nomethod_raise_unless_nil(Compiler *c, int obj, const char *name, const char *dflt, const char *nil_ans, Buf *b);
 int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b);
 const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect);

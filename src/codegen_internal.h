@@ -1415,6 +1415,7 @@ void emit_vis_raise_boxed(int vis, const char *vnm, int tv, Buf *b);
    `base` writer slot through the object pointer text `objp` (codegen_stmt.c).
    box_tv is the boxed receiver's temp (-1 for a typed one), src_tv src's;
    native_answer: a send's native arm stores the binding's answer in src. */
+extern int g_writer_arms_attr_only;
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, int vnode,
                             int box_tv, int src_tv, int native_answer, Buf *b);

@@ -17324,6 +17324,7 @@ static void emit_writer_arm_src_root(TyKind at, const char *src, Buf *b) {
   else if (at == TY_STRING || at == TY_STRBUF) buf_printf(b, "SP_GC_ROOT(%s); ", src);
 }
 
+int g_writer_arms_attr_only;
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, int vnode,
                             int box_tv, int src_tv, int native_answer, Buf *b) {
@@ -17351,7 +17352,7 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
        binding returns -- `s.send(:pos=, -2)` is the clamped position -- so
        that arm stores it back into the value temp the switch yields, and a
        binding whose answer the temp can't hold keeps no arm. */
-    if (box_tv >= 0 && c->classes[k].is_native_class && c->classes[k].instantiated) {
+    if (box_tv >= 0 && !g_writer_arms_attr_only && c->classes[k].is_native_class && c->classes[k].instantiated) {
       TyKind ats[1] = { at }, mret;
       Buf cb;
       if (poly_native_arm_call(c, k, nm, 1, &vnode, &src_tv, ats, box_tv, &cb, &mret)) {
@@ -17375,6 +17376,8 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
     }
     if (kmi < 0 && !attr) continue;
     int writer_wins = attr;
+    /* (beside a method dispatch's own arms: only the classes it has none for) */
+    if (g_writer_arms_attr_only && !writer_wins) continue;
     /* --share-strings: inside a dispatch's builtin arm, an explicit writer's
        class was the dispatch's own arm (no user class owns the name here) */
     if (!writer_wins && g_poly_builtin_arm) continue;

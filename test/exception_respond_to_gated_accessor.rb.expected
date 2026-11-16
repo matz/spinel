@@ -1,0 +1,19 @@
+NameError: receiver name
+NoMethodError: receiver args private_call? name
+KeyError: key receiver
+StandardError: 
+SystemExit: status success?
+ENOENT: errno
+StopIteration: result
+FrozenError: receiver
+LocalJumpError: reason exit_value
+false
+true
+false
+true
+true
+false
+true
+false
+true
+false

@@ -34520,12 +34520,19 @@ static int rto_exc_by_cls(Compiler *c, const char *qm, int include_all, int fold
 int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc,
                             const int *argv, Buf *b) {
   int include_all = argc >= 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode;
-  int t = ++g_tmp;
+  int t = ++g_tmp, own = 0;
+  for (int k = 0; k < c->nclasses && !own; k++)
+    own = class_is_exc_subclass(c, k) && rto_exact_class_answer(c, k, qm, include_all, 1, -1) == 1;
   char xv[32]; snprintf(xv, sizeof xv, "_t%d", t);
   buf_printf(b, "({ sp_Exception *_t%d = (sp_Exception *)(", t);
   emit_expr(c, recv, b);
-  buf_printf(b, "); int _k%d = _t%d ? sp_exc_user_cls_id(sp_box_obj((void *)_t%d, SP_BUILTIN_EXCEPTION)) : 0x7fffffff; (", t, t, t);
-  for (int k = 0; k < c->nclasses; k++)
+  buf_puts(b, "); ");
+  /* the class id is read only where a class of the program answers (a
+     class-gated accessor's name may have none, and then the program has
+     no sp_exc_user_cls_id) */
+  if (own) buf_printf(b, "int _k%d = _t%d ? sp_exc_user_cls_id(sp_box_obj((void *)_t%d, SP_BUILTIN_EXCEPTION)) : 0x7fffffff; ", t, t, t);
+  buf_puts(b, "(");
+  for (int k = 0; own && k < c->nclasses; k++)
     if (class_is_exc_subclass(c, k) && rto_exact_class_answer(c, k, qm, include_all, 1, -1) == 1)
       buf_printf(b, "_k%d == %d || ", t, k);
   buf_printf(b, "(_t%d ? sp_poly_responds_builtin(", t);
@@ -35069,7 +35076,15 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       /* an exception answers a name the program's exception classes define
          by the class it holds, where the probe typed `e.label` through
          whichever class has it */
-      if (rt == TY_EXCEPTION && recv >= 0 && rto_exc_by_cls(c, qm, include_all, foldable)) {
+      /* ...and a class-gated accessor (KeyError#key, NoMethodError#args,
+         SystemExit#status, ...) answers by the class it holds, as the
+         runtime gates it (sp_poly_responds_builtin): the probe types
+         `e.args` for any exception, so it would answer true for all. Not
+         where the program's Object answers the name: every exception
+         answers it then, as the probe says */
+      int oc = comp_core_class(c, CORE_OBJECT);
+      int gated = is_gated_exception_accessor(qm) && !(oc >= 0 && obj_responds_answer(c, oc, qm, -1) != 0);
+      if (rt == TY_EXCEPTION && recv >= 0 && (gated || rto_exc_by_cls(c, qm, include_all, foldable))) {
         g_rto_exc = 1;
         return -1;
       }

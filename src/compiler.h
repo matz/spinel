@@ -2628,6 +2628,11 @@ int        comp_name_reader_any(Compiler *c, const char *name);
    asks it for every argument-less call on a receiver that can be anything,
    at every solve. */
 const int *comp_name_reader_owners(Compiler *c, const char *name, int *n);
+/* Does some class answer `name` with argc arguments as an arm of a poly
+   dispatch: a def or a native binding (comp_poly_arm_defines_n), or, of a
+   class that is not native, a reader? The one scan the poly arm gates
+   (inference's and the emitters') ask. */
+int        comp_poly_arm_reader_any(Compiler *c, const char *name, int argc);
 /* Does any class's chain answer `name` (on the class side when is_cm)?
    comp_name_responders' count, asked where the list cannot be built too: the
    candidate owner of "is the name defined by a class of the program". */

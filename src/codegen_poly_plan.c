@@ -1623,7 +1623,7 @@ void emit_poly_index_cases(TyKind ret, int tr, int tv, const char *idxref, int s
 static int recv_user_cdefines(Compiler *c, const char *name) {
   if (g_poly_builtin_arm) return 0;
   for (int uk = 0; uk < c->nclasses; uk++)
-    if (comp_cmethod_in_chain(c, uk, name, NULL) >= 0) return 1;
+    if (call_target(c, -1, uk, name, CT_CMETHOD | CT_SHARED, NULL) >= 0) return 1;
   return 0;
 }
 
@@ -1787,7 +1787,7 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
     int is_call = comp_poly_arm_defines(c, k, name) ||
                   (nt_ref(nt, id, "block") >= 0 && c->classes[k].is_native_class &&
                    call_target(c, id, k, name, 0, NULL) >= 0);
-    if (is_call || (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL))) ncand++;
+    if (is_call || (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL))) ncand++;
     /* The root decision counts only the arms the switch below will carry:
        a class no reachable code constructs gets no arm, so it must not
        decide the root either. A dead FFI wrapper's Vector2 counted as a
@@ -1947,13 +1947,12 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
    them)? The dispatch key then keeps a non-object value off it. */
 int poly_key_cls0(Compiler *c, int call, const char *name, int argc, int kwh, int pos_argc, int splat_a) {
   if (argc == 0) {
-    int cls0_rd = -1;
     int cls0_mi = c->nclasses > 0 ? call_target(c, call, 0, name, 0, NULL) : -1;
     char cls0_exp[600];
     return ((cls0_mi >= 0 && c->scopes[cls0_mi].nrequired == 0) ||
             /* an arm refusing no arguments raises, and is a `case 0:` all the same */
             poly_arm_refuses_none(c, cls0_mi, cls0_exp, sizeof cls0_exp) ||
-            (c->nclasses > 0 && comp_reader_in_chain(c, 0, name, &cls0_rd))) &&
+            (c->nclasses > 0 && call_attr_target(c, -1, 0, name, CT_ATTR | CT_SHARED, NULL))) &&
            c->nclasses > 0 &&
            (c->classes[0].instantiated || class_is_prim_reopen(c, 0));
   }

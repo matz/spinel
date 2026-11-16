@@ -168,7 +168,7 @@ static int share_target_armed_plan(Compiler *c, const CallPlan *p, int call, int
   int np = 0;
   const PolyCand *pc = comp_poly_candidates_at(c, call, nm, &np);
   for (int i = 0; i < np; i++)
-    if (pc[i].mi == mi || (pc[i].mi < 0 && comp_method_in_chain(c, pc[i].cls, nm, NULL) == mi)) return 1;
+    if (pc[i].mi == mi || (pc[i].mi < 0 && call_target(c, -1, pc[i].cls, nm, CT_METHODS | CT_SHARED, NULL) == mi)) return 1;
   return 0;
 }
 int share_target_armed(Compiler *c, int call, int mi) {

@@ -4452,7 +4452,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   if (nn == 64) return 0;
   int ask[64], nask = 0;
   for (int i = 0; i < nn; i++) {
-    if (comp_method_index(c, names[i]) >= 0) continue;
+    if (call_target(c, -1, -1, names[i], CT_TOP | CT_SHARED, NULL) >= 0) continue;
     for (int k = 0; k < c->nclasses; k++) {
       if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) { ask[nask++] = i; break; }
     }
@@ -4474,11 +4474,11 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   const int *rc = nask == 0 ? poly_recv_classes(c, call, &nrc) : NULL;
   if (rc) {
     for (int i = 0; i < nrc && n < max; i++)
-      if (ie_poly_class_ok(c, rc[i]) && comp_method_in_chain(c, rc[i], name, NULL) < 0) out[n++] = rc[i];
+      if (ie_poly_class_ok(c, rc[i]) && call_target(c, -1, rc[i], name, CT_METHODS | CT_SHARED, NULL) < 0) out[n++] = rc[i];
     return n;
   }
   for (int k = 0; k < c->nclasses && n < max; k++) {
-    if (!ie_poly_class_ok(c, k) || comp_method_in_chain(c, k, name, NULL) >= 0) continue;
+    if (!ie_poly_class_ok(c, k) || call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) continue;
     int all = 1;
     for (int i = 0; i < nask && all; i++) all = call_answers(c, -1, k, names[ask[i]], 0, NULL);
     for (int i = 0; i < niv && all; i++) all = comp_ivar_index(&c->classes[k], ivs[i]) >= 0;
@@ -5133,8 +5133,7 @@ static int ie_rself_name_selfish(Compiler *c, const char *nm) {
   for (int i = 0; kn[i]; i++) if (sp_streq(nm, kn[i])) return 1;
   for (int s = 0; s < c->nscopes; s++)
     if (c->scopes[s].name && c->scopes[s].class_id >= 0 && !c->scopes[s].is_cmethod && sp_streq(c->scopes[s].name, nm)) return 1;
-  for (int k = 0; k < c->nclasses; k++) if (comp_reader_in_chain(c, k, nm, NULL)) return 1;
-  return 0;
+  return comp_name_reader_any(c, nm);
 }
 
 /* The self_call marker tracks receiver identity through rebinding, rather
@@ -32123,7 +32122,7 @@ static int dyn_site_misses(Compiler *c, int n, int mi) {
     if (rc >= 0 && m->name) {
       if (m->is_cmethod) return 1;
       for (int k = 0; k < c->nclasses; k++)
-        if (is_descendant(c, k, rc) && comp_method_in_chain(c, k, m->name, NULL) == mi) return 0;
+        if (is_descendant(c, k, rc) && call_target(c, -1, k, m->name, CT_METHODS | CT_SHARED, NULL) == mi) return 0;
       return 1;
     }
   }
@@ -32237,8 +32236,7 @@ static int dyn_scopes_named(Compiler *c, const char *nm) {
    or raises. */
 static int dyn_rbs_cont_name(Compiler *c, const char *nm) {
   if (!nm || builtin_method_known_any(nm) || builtin_object_method_known(nm)) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_reader_in_chain(c, k, nm, NULL)) return 0;
+  if (comp_name_reader_any(c, nm)) return 0;
   int any = 0;
   for (int mi = dyn_scopes_named(c, nm); mi >= 0; mi = g_dyn.snext[mi]) {
     if (!c->scopes[mi].ret_rbs_cont) return 0;
@@ -32998,8 +32996,7 @@ static int dyn_may_callable_walk(Compiler *c, int v, int depth) {
         if (!encl || encl->is_cmethod) return 1;
       }
       /* an attribute reader is a slot, which may hold anything */
-      for (int k = 0; k < c->nclasses; k++)
-        if (comp_reader_in_chain(c, k, nm, NULL)) return 1;
+      if (comp_name_reader_any(c, nm)) return 1;
       /* a user method only a subclass defines leaves the receiver's own
          class with the builtin's */
       {
@@ -43966,8 +43963,7 @@ static int splat_builtin_spec_range(Compiler *c, int id, const char *name, int *
   for (int si = 0; !sub && si < c->nscopes; si++)
     if (c->scopes[si].name && sp_streq(c->scopes[si].name, name)) return 0;
   /* ...nor a reader it declares of the name */
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_reader_in_chain(c, k, name, NULL)) return 0;
+  if (comp_name_reader_any(c, name)) return 0;
   /* the tables are instance methods': a class's (`File.unlink(*paths)`)
      is no row of theirs */
   int r = nt_ref(nt, id, "receiver");

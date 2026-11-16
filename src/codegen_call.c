@@ -2985,12 +2985,6 @@ int poly_ostruct_member_call(Compiler *c, int id) {
          ostruct_member_read(c, id, comp_recv_type(c, recv));
 }
 
-static int poly_name_user_claimed_walk(Compiler *c, const char *name, int argc) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_poly_arm_defines_n(c, k, name, argc) ||
-        (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL))) return 1;
-  return 0;
-}
 /* The answer per name and arity, kept as user_defines_or_reads keeps its
    own: while the scope index is frozen and neither the class shape nor the
    counts move. Each ask walked every class, and the poly emitters ask it
@@ -3000,7 +2994,7 @@ static char **pnuc_key; static unsigned char *pnuc_ans; static int pnuc_cap, pnu
 static unsigned pnuc_gen, pnuc_shape; static int pnuc_nscopes = -1, pnuc_nclasses = -1;
 int poly_name_user_claimed(Compiler *c, const char *name, int argc) {
   if (g_poly_builtin_arm) return 0;
-  if (!name || !comp_scope_index_is_frozen()) return poly_name_user_claimed_walk(c, name, argc);
+  if (!name || !comp_scope_index_is_frozen()) return comp_poly_arm_reader_any(c, name, argc);
   if (pnuc_gen != comp_scope_index_gen() || pnuc_shape != comp_class_shape_gen() ||
       pnuc_nscopes != c->nscopes || pnuc_nclasses != c->nclasses) {
     for (int i = 0; i < pnuc_cap; i++) free(pnuc_key ? pnuc_key[i] : NULL);
@@ -3031,7 +3025,7 @@ int poly_name_user_claimed(Compiler *c, const char *name, int argc) {
     if (sp_streq(pnuc_key[j], key)) return pnuc_ans[j];
     j = (j + 1) & (unsigned)(pnuc_cap - 1);
   }
-  int ans = poly_name_user_claimed_walk(c, name, argc);
+  int ans = comp_poly_arm_reader_any(c, name, argc);
   pnuc_key[j] = strdup(key);
   if (!pnuc_key[j]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   pnuc_ans[j] = (unsigned char)ans; pnuc_n++;
@@ -24209,7 +24203,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
       /* a generated reader has no method entry, but the switch has its arm
          (`[lobby].first.members`), so its visibility and an `undef` of it
          are checked here, as a method's are */
-      if (!comp_reader_in_chain(c, k, vnm, NULL)) continue;
+      if (!call_attr_target(c, -1, k, vnm, CT_ATTR | CT_SHARED, NULL)) continue;
       /* undefined unless a class below the `undef` declares the reader
          again, or an alias of that name (comp_is_undeffed_in_chain stops
          only at a method; a reader is not inherited past an `undef`, so a

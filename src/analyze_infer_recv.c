@@ -1612,10 +1612,11 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        argc == 0)) {
     int oci = comp_core_class(c, CORE_OBJECT);
     int own = oci >= 0 && call_target(c, id, oci, name, 0, NULL) >= 0;
-    for (int k = 0; k < c->nclasses && !own && !an_builtin_only_p(); k++)
-      if (comp_poly_arm_defines_n(c, k, name, argc) ||
-          (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ||
-          call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
+    if (!own && !an_builtin_only_p()) {
+      own = comp_poly_arm_reader_any(c, name, argc);
+      for (int k = 0; k < c->nclasses && !own; k++)
+        if (call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
+    }
     if (!own) { *out = TY_ENUMERATOR; return 1; }
   }
   /* #name is a class name (a String) for a boxed Class and the method name (a
@@ -1654,10 +1655,11 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      reader or a class method of the name. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "i")) {
     int own = 0;
-    for (int k = 0; k < c->nclasses && !own && !an_builtin_only_p(); k++)
-      if (comp_poly_arm_defines_n(c, k, name, argc) ||
-          (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ||
-          call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
+    if (!an_builtin_only_p()) {
+      own = comp_poly_arm_reader_any(c, name, argc);
+      for (int k = 0; k < c->nclasses && !own; k++)
+        if (call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
+    }
     if (!own) { *out = TY_POLY; return 1; }
   }
   /* Numeric#arg / #angle / #phase (0, pi or a Complex's angle) and #rect /
@@ -1670,10 +1672,11 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       (sp_streq(name, "arg") || sp_streq(name, "angle") || sp_streq(name, "phase") ||
        sp_streq(name, "rect") || sp_streq(name, "rectangular") || sp_streq(name, "polar"))) {
     int own = 0;
-    for (int k = 0; k < c->nclasses && !own && !an_builtin_only_p(); k++)
-      if (comp_poly_arm_defines_n(c, k, name, argc) ||
-          (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ||
-          call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
+    if (!an_builtin_only_p()) {
+      own = comp_poly_arm_reader_any(c, name, argc);
+      for (int k = 0; k < c->nclasses && !own; k++)
+        if (call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
+    }
     if (!own) {
       *out = (is_rectangular_alias(name) || sp_streq(name, "polar")) ? TY_POLY_ARRAY : TY_POLY;
       return 1;
@@ -2002,7 +2005,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       sp_feature_required("json") && rt != TY_UNKNOWN &&
       (!ty_is_object(rt) ||
        (ty_object_class(rt) >= 0 &&
-        comp_method_in_chain(c, ty_object_class(rt), "to_json", NULL) < 0)))
+        call_target(c, -1, ty_object_class(rt), "to_json", CT_METHODS | CT_SHARED, NULL) < 0)))
     { *out = TY_STRING; return 1; }
 
   /* poly.scan(re): a String read out of a container. Same shape as the
@@ -2192,10 +2195,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       (sp_streq(name, "year") || sp_streq(name, "mon") || sp_streq(name, "month") ||
        sp_streq(name, "mday") || sp_streq(name, "day") || sp_streq(name, "hour") ||
        sp_streq(name, "sec") || sp_streq(name, "wday") || sp_streq(name, "yday"))) {
-    int has_reader9 = 0;
-    for (int k9 = 0; k9 < c->nclasses && !has_reader9; k9++)
-      if (comp_reader_in_chain(c, k9, name, NULL)) has_reader9 = 1;
-    if (!has_reader9) { *out = TY_INT; return 1; }
+    if (!comp_name_reader_any(c, name)) { *out = TY_INT; return 1; }
   }
   /* to_sym on a poly value: the codegen arm interns a STR tag / passes a SYM
      through and raises otherwise, so the non-raising result is a Symbol
@@ -2256,7 +2256,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       int by_proc = nt_kind(nt, blk) == NK_BlockArgumentNode;
       blk_ok = 1;
       for (int k = 0; k < c->nclasses && blk_ok; k++) {
-        int im = comp_method_in_chain(c, k, "initialize", NULL);
+        int im = call_target(c, -1, k, "initialize", CT_METHODS | CT_SHARED, NULL);
         if (im >= 0 && c->scopes[im].yields && !(by_proc && scope_proc_form_of(c, im) >= 0)) blk_ok = 0;
       }
     }

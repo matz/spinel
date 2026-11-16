@@ -25,6 +25,12 @@
 #include "sp_string.h"  /* sp_String builder for sp_IntIntHash_inspect */
 #include "sp_re.h"      /* mrb_regexp_pattern for sp_re_gsub_str_str_hash/sub_str_str_hash */
 
+/* The slots a Hash's tables take to hold n entries without growing (a
+   table grows when an insert finds it half full), four the least: what a
+   literal of n pairs starts with (_new_cap), where an empty `{}` (_new)
+   takes sixteen whatever it then holds. */
+static inline sp_int sp_hash_cap_for(sp_int n){sp_int c=4;while(c<2*n-1)c*=2;return c;}
+
 /* A Hash's insertion order without the entry a delete takes out. The order
    holds what the table holds for the entry -- the key pointer a String-keyed
    Hash stored, the key of an Integer- or Symbol-keyed one, a PolyPolyHash's
@@ -53,6 +59,7 @@ void sp_StrIntHash_scan(void*p);
    up; the enclosing object is zeroed by its allocation, as _new's is. */
 void sp_StrIntHash_init_embedded(sp_StrIntHash*h);
 sp_StrIntHash*sp_StrIntHash_new(void);
+sp_StrIntHash*sp_StrIntHash_new_cap(sp_int n);
 sp_StrIntHash*sp_StrIntHash_new_with_default(sp_int d);
 void sp_StrIntHash_grow(sp_StrIntHash*h);
 sp_int sp_StrIntHash_get(sp_StrIntHash*h,const char*k);
@@ -94,6 +101,7 @@ void sp_StrStrHash_fin(void*p);
 void sp_StrStrHash_scan(void*p);
 void sp_StrStrHash_init_embedded(sp_StrStrHash*h);
 sp_StrStrHash*sp_StrStrHash_new(void);
+sp_StrStrHash*sp_StrStrHash_new_cap(sp_int n);
 sp_StrStrHash*sp_StrStrHash_new_with_default_e(sp_strelem d);
 static inline sp_StrStrHash*sp_StrStrHash_new_with_default(const char*d){return sp_StrStrHash_new_with_default_e(sp_strelem_fx(d));}
 void sp_StrStrHash_grow(sp_StrStrHash*h);
@@ -123,6 +131,7 @@ void sp_IntStrHash_fin(void*p);
 void sp_IntStrHash_scan(void*p);
 void sp_IntStrHash_init_embedded(sp_IntStrHash*h);
 sp_IntStrHash*sp_IntStrHash_new(void);
+sp_IntStrHash*sp_IntStrHash_new_cap(sp_int n);
 sp_IntStrHash*sp_IntStrHash_new_with_default_e(sp_strelem d);
 static inline sp_IntStrHash*sp_IntStrHash_new_with_default(const char*d){return sp_IntStrHash_new_with_default_e(sp_strelem_fx(d));}
 void sp_IntStrHash_grow(sp_IntStrHash*h);
@@ -145,6 +154,7 @@ sp_bool sp_IntStrHash_eq(sp_IntStrHash*a,sp_IntStrHash*b);
 void sp_IntIntHash_fin(void*p);
 void sp_IntIntHash_init_embedded(sp_IntIntHash*h);
 sp_IntIntHash*sp_IntIntHash_new(void);
+sp_IntIntHash*sp_IntIntHash_new_cap(sp_int n);
 sp_IntIntHash*sp_IntIntHash_new_with_default(sp_int d);
 void sp_IntIntHash_grow(sp_IntIntHash*h);
 void sp_IntIntHash_set(sp_IntIntHash*h,sp_int k,sp_int v);

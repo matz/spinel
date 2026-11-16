@@ -202,7 +202,14 @@ static const char *hash_tag_for_kv(const char *k, const char *v) {
         return "sym_poly_hash";
     }
     if (strcmp(k, "int") == 0) {
+        if (strcmp(v, "int") == 0)    return "int_int_hash";
         if (strcmp(v, "string") == 0) return "int_str_hash";
+        /* No other Integer-keyed kind: the boxed-value Hash, the one the
+         * analysis infers for such a literal. Unmapped, a value of any other
+         * type (`Hash[Integer, Float]`) dropped the whole signature, and an
+         * untyped one fell to the bare poly below, an sp_RbVal the analysis
+         * does not take for a Hash. */
+        return "poly_poly_hash";
     }
     /* `Hash[untyped, untyped]` (and any leftover combination where
      * one side is untyped without a matching concrete variant

@@ -1964,6 +1964,8 @@ int is_array_constructor(const char *recv, const char *meth) {
 int is_pow_name(const char *n) { return sp_streq(n, "pow"); }
 /* `new`: a class's constructor (a native binding's "new" names them) */
 int is_new_name(const char *n) { return n && sp_streq(n, "new"); }
+/* `capacity:`: Hash.new's and String.new's keyword, converted as an Integer is (#to_int) */
+int is_capacity_keyword(const char *n) { return n && sp_streq(n, "capacity"); }
 /* `native_share`: a package's declaration of what a native binding does
    with the String its object keeps (--share-strings) */
 int is_native_share_decl(const char *n) { return n && sp_streq(n, "native_share"); }

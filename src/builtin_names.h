@@ -511,6 +511,7 @@ int is_pow_name(const char *n); /* pow: Integer power, with an optional modulus 
 
 int is_lazy_name(const char *n);         /* lazy: makes a Lazy of its receiver */
 int is_new_name(const char *n);          /* new: a class's constructor */
+int is_capacity_keyword(const char *n);  /* capacity: Hash.new's and String.new's keyword, an Integer through #to_int */
 int is_native_share_decl(const char *n); /* native_share: a package's share declaration */
 int is_proc_new(const char *recv, const char *meth); /* Proc.new */
 int is_method_ref_name(const char *n);   /* method: Kernel#method */

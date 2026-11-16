@@ -1347,6 +1347,22 @@ static int cr_class_side_scope(Compiler *c, int t) {
   return cr_module_extended(c, s->class_id, 0);
 }
 
+/* Does a `new` call pass a `capacity:` keyword, or a `**h` that may hold one? Hash.new's converts it through
+   its #to_int (emit_hash_new_capacity_check), a call the conversion names nowhere in the AST. */
+static int new_call_passes_capacity(const NodeTable *nt, int id) {
+  int args = nt_ref(nt, id, "arguments"), n = 0, en = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+  if (!is_new_name(nt_str(nt, id, "name"))) return 0;
+  if (nt_ref(nt, id, "hash_capacity") >= 0) return 1;
+  int kh = nt_argv_kwh(nt, av, n);
+  const int *el = kh >= 0 ? nt_arr(nt, kh, "elements", &en) : NULL;
+  for (int j = 0; j < en; j++) {
+    int key = nt_kind(nt, el[j]) == NK_AssocNode ? nt_ref(nt, el[j], "key") : -1;
+    if (nt_kind(nt, el[j]) == NK_AssocSplatNode ||
+        (key >= 0 && nt_kind(nt, key) == NK_SymbolNode && is_capacity_keyword(nt_str(nt, key, "value")))) return 1;
+  }
+  return 0;
+}
 void compute_reachable(Compiler *c, int typed) {
   mtab_enter(c);   /* (a scan of every call's name) */
   /* Build per-scope call sets (CallNode names, not entering nested DefNodes). */
@@ -1706,11 +1722,12 @@ void compute_reachable(Compiler *c, int typed) {
      define_method of it in the program) implicitly; format, sprintf, printf
      and a String's % keep that conversion and its bridge. */
   {
-    int has_kint = 0, has_kflt = 0, has_hmerge = 0;
+    int has_kint = 0, has_kflt = 0, has_hmerge = 0, has_kcap = 0;
     for (int id = 0; id < c->nt->count; id++) {
       if (nt_kind(c->nt, id) != NK_CallNode) continue;
       const char *nm = nt_str(c->nt, id, "name");
       if (!nm) continue;
+      has_kcap |= new_call_passes_capacity(c->nt, id);
       if (sp_streq(nm, "Integer")) has_kint = 1;
       else if (sp_streq(nm, "Float") ||
                ((is_format_alias(nm) || sp_streq(nm, "printf") ||
@@ -1745,10 +1762,11 @@ void compute_reachable(Compiler *c, int typed) {
     }
     c->uses_kw_to_hash = (has_kwsplat || has_hmerge) && has_to_hash;
     if (has_kint) { MARK_NAME("to_int"); MARK_NAME("to_str"); MARK_NAME("to_i"); }
+    if (has_kcap) MARK_NAME("to_int");
     if (has_kflt || has_unum) MARK_NAME("to_f");
     if (c->uses_kw_to_hash) MARK_NAME("to_hash");
     if (c->uses_blk_conv) MARK_NAME("to_proc");
-    if (has_kint || has_kflt || has_unum || c->uses_kw_to_hash || c->uses_blk_conv)
+    if (has_kint || has_kcap || has_kflt || has_unum || c->uses_kw_to_hash || c->uses_blk_conv)
       while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); cr_live_scope(&lv, s, scope_calls[s], sc_n[s]); }
   }
 

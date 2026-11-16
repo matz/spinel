@@ -33614,7 +33614,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
   if (any) {
     for (int k = 0; k < c->nclasses && n < cap; k++) {
       if (any == 2 ? !cplan_as_new(c, u, k) || !dynamic_new_may_reach(c, u, k) : !class_is_exc_subclass(c, k)) continue;
-      int mi = any == 2 ? cplan_new_arm_initialize(c, u, k) : comp_method_in_chain(c, k, "initialize", NULL);
+      int mi = cplan_new_arm_initialize(c, u, k);
       if (mi < 0 || c->scopes[mi].is_cmethod) continue;
       int dup = 0;
       for (int e = 0; e < n && !dup; e++) dup = out[e] == mi;

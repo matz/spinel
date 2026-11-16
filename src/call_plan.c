@@ -3064,6 +3064,12 @@ int cplan_raise_initialize(Compiler *c, int id) {
   int val, xc = ct_raise_class(c, id, &val);
   return xc >= 0 ? cplan_hook_target(c, id, xc, "initialize", NULL) : -1;
 }
+/* See call_plan.h. */
+int cplan_raise_class_value(Compiler *c, int id) {
+  int val;
+  ct_raise_class(c, id, &val);
+  return val;
+}
 /* See call_plan.h. A class not opened yet at the last statement of the
    site's window (elab_class_live_at) is opened at none of them. */
 int cplan_new_arm_initialize(Compiler *c, int id, int ci) {

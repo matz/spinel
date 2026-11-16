@@ -679,6 +679,10 @@ int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole);
    constant naming an exception class of the program's: K.new's there
    (cplan_hook_target); -1 for any other call */
 int cplan_raise_initialize(Compiler *c, int id);
+/* Is call id a Kernel#raise whose first argument is a value that may hold
+   an exception class at run time (not a constant naming one)? Its arm for
+   each exception class runs cplan_new_arm_initialize's initialize. */
+int cplan_raise_class_value(Compiler *c, int id);
 /* The to_ary of the program's through which a value of type t converts
    where node `at` takes it apart (the implied to_ary call a row makes on
    operand op: a multiple assignment's value, the element a nested target

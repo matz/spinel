@@ -21261,9 +21261,12 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
       cr_add_name(out, n, cap, mark);
     }
     /* a `new` on a class value: the arm of each class it may reach runs the
-       initialize the plan answers it (cplan_new_arm_initialize) */
-    for (int k = 0; ni == CPT_UNKNOWN && k < c->nclasses; k++) {
-      int mi = cplan_as_new(c, id, k) && dynamic_new_may_reach(c, id, k) ? cplan_new_arm_initialize(c, id, k) : -1;
+       initialize the plan answers it (cplan_new_arm_initialize), as does the
+       arm of each exception class of a `raise` of a class value */
+    int rv = ni == 0 && cplan_raise_class_value(c, id);
+    for (int k = 0; (ni == CPT_UNKNOWN || rv) && k < c->nclasses; k++) {
+      int mi = rv ? (class_is_exc_subclass(c, k) ? cplan_new_arm_initialize(c, id, k) : -1)
+                  : cplan_as_new(c, id, k) && dynamic_new_may_reach(c, id, k) ? cplan_new_arm_initialize(c, id, k) : -1;
       char mark[24];
       if (mi < 0 || !is_initialize_name(c->scopes[mi].name)) continue;
       snprintf(mark, sizeof mark, "\x01%d", mi);

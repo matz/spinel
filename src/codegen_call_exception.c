@@ -1175,7 +1175,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
       TyKind at = ar.as_ty;
       if (ac == 1 && emit_raise_nomethod_new(c, av[0], b)) { }
       else if (ac >= 2 && (at == TY_POLY || at == TY_CLASS))
-        emit_raise_class_value(c, av[0], av[1], b);
+        emit_raise_class_value(c, id, av[0], av[1], b);
       else if (ac >= 2 && ar.exc) {
         /* `raise e, msg` with an exception object in a variable: the message
            was dropped and the class name answered */
@@ -1245,7 +1245,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
            by the codegen when their static type is known (see the
            ty_is_object branch above). Reading parent_cls_name on an
            arbitrary poly-tagged object is a wrong-offset read (segfault). */
-        emit_raise_class_value(c, av[0], -1, b);
+        emit_raise_class_value(c, id, av[0], -1, b);
       }
       else {
         /* Integer/nil/Array/Symbol/Float/...: valid Ruby, TypeError at

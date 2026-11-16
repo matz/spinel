@@ -13929,7 +13929,7 @@ int emit_exc_sub_new_arm_splat(Compiler *c, int id, int ci, int tsa, const char 
    as the constant form is: a user exception class with an initialize of its
    own is constructed through it, so its `super("...")` sets the message. The
    runtime helper, which only has the class name, takes every other value. */
-void emit_raise_class_value(Compiler *c, int kn, int mn, Buf *b) {
+void emit_raise_class_value(Compiler *c, int id, int kn, int mn, Buf *b) {
   int argc = mn >= 0 ? 1 : 0;
   int kt = ++g_tmp, mt = ++g_tmp, rt = ++g_tmp;
   buf_puts(b, "({ "); kt = hold_operand(c, kn, TY_POLY, 1, kt, 1, " ", b);
@@ -13942,7 +13942,7 @@ void emit_raise_class_value(Compiler *c, int kn, int mn, Buf *b) {
   for (int ci = 0; ci < c->nclasses; ci++) {
     if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
     if (!class_is_exc_subclass(c, ci) || !class_has_ctor(&c->classes[ci])) continue;
-    int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+    int initm = cplan_new_arm_initialize(c, id, ci);
     if (initm < 0 || !c->scopes[initm].reachable) continue;
     Scope *is = &c->scopes[initm];
     char am[256];

@@ -5160,7 +5160,9 @@ static void ie_rself_give_self(Compiler *c, int n) {
   if (n < 0) return;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_BlockNode || k == NK_LambdaNode) return;
-  if (ie_rself_cmethod_call(c, n)) {
+  int selfish = k == NK_CallNode && nt_ref(nt, n, "receiver") < 0 && nt_str(nt, n, "name") &&
+                !ie_kernel_global(nt_str(nt, n, "name")) && ie_rself_name_selfish(c, nt_str(nt, n, "name"));
+  if (selfish || ie_rself_cmethod_call(c, n)) {
     int sn = nt_new_node(nt, "SelfNode");
     if (sn >= 0) {
       comp_grow_node_arrays(c);
@@ -5183,10 +5185,22 @@ static int ie_rself_use(Compiler *c, int n, int nested) {
   NodeKind k = nt_kind(nt, n);
   if (k == NK_SelfNode) return nested ? 2 : 1;
   const char *ty = nt_type(nt, n);
+  /* An ivar read or plain write is the rebound self's, through
+     instance_variable_get / _set (ie_rself_ivars); `@x ||= v` and the like
+     still are not rebound */
+  if (k == NK_InstanceVariableReadNode || k == NK_InstanceVariableWriteNode) {
+    if (nested) return 2;
+    if (k == NK_InstanceVariableWriteNode) return 1 | ie_rself_use(c, nt_ref(nt, n, "value"), nested);
+    return 1;
+  }
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode ||
       (ty && !strncmp(ty, "InstanceVariable", 16))) return 2;
+  /* A receiverless call to a method self answers (`title`, `respond_to?(m)`)
+     takes self as its receiver (ie_rself_give_self) and so dispatches on the
+     rebound self, as `self.title` does; inside a nested block it would be
+     that block's self, which no binding reaches. */
   if (k == NK_CallNode && nt_ref(nt, n, "receiver") < 0 && nt_str(nt, n, "name") &&
-      ie_rself_name_selfish(c, nt_str(nt, n, "name"))) return 2;
+      ie_rself_name_selfish(c, nt_str(nt, n, "name"))) return nested ? 2 : 1;
   if (ie_rself_cmethod_call(c, n)) return nested ? 2 : 1;
   int in = nested || k == NK_BlockNode || k == NK_LambdaNode, r = 0;
   for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) r |= ie_rself_use(c, nt_ref_at(nt, n, i), in);
@@ -5211,6 +5225,53 @@ static int ie_rself_mark(NodeTable *nt, int n) {
   return at;
 }
 
+/* `@x` becomes `self.instance_variable_get(:@x)` and `@x = v`
+   `self.instance_variable_set(:@x, v)`, in place: the ivar is the rebound
+   self's when an instance_exec runs the literal, and its own scope's when it
+   is called as written, as Ruby's is. */
+static int ie_rself_new_self(Compiler *c, int like) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int sn = nt_new_node(nt, "SelfNode");
+  if (sn < 0) return -1;
+  comp_grow_node_arrays(c);
+  c->nscope[sn] = c->nscope[like];
+  if (c->node_cbody && like < c->node_cap && sn < c->node_cap) c->node_cbody[sn] = c->node_cbody[like];
+  return sn;
+}
+static void ie_rself_ivars(Compiler *c, int n) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (n < 0) return;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return;
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) ie_rself_ivars(c, nt_ref_at(nt, n, i));
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) { ie_rself_ivars(c, ids[j]); ids = nt_arr_at(nt, n, i, &m); }
+  }
+  if (k != NK_InstanceVariableReadNode && k != NK_InstanceVariableWriteNode) return;
+  const char *iv = nt_str(nt, n, "name");
+  if (!iv) return;
+  char *name = strdup(iv);
+  int value = k == NK_InstanceVariableWriteNode ? nt_ref(nt, n, "value") : -1;
+  int sn = ie_rself_new_self(c, n);
+  int sym = nt_new_node(nt, "SymbolNode");
+  int args = nt_new_node(nt, "ArgumentsNode");
+  if (!name || sn < 0 || sym < 0 || args < 0) { free(name); return; }
+  comp_grow_node_arrays(c);
+  c->nscope[sym] = c->nscope[n];
+  c->nscope[args] = c->nscope[n];
+  nt_node_set_str(nt, sym, "value", name);
+  int av[2] = { sym, value };
+  nt_node_set_arr(nt, args, "arguments", av, value >= 0 ? 2 : 1);
+  nt_node_set_type(nt, n, "CallNode");
+  nt_node_set_str(nt, n, "name", value >= 0 ? "instance_variable_set" : "instance_variable_get");
+  nt_node_set_ref(nt, n, "receiver", sn);
+  nt_node_set_ref(nt, n, "arguments", args);
+  nt_node_set_ref(nt, n, "block", -1);
+  nt_set_vcall(nt, n, 0);
+  free(name);
+}
+
 static void ie_rself_literal(Compiler *c, int lit) {
   NodeTable *nt = (NodeTable *)c->nt;
   int body = nt_ref(nt, lit, "body"), params = nt_ref(nt, lit, "parameters");
@@ -5219,6 +5280,7 @@ static void ie_rself_literal(Compiler *c, int lit) {
   nt_node_set_int(nt, body, "ie_rself_lit", u & 2 ? 2 : 1);
   if (u & 2) return;
   ie_rself_give_self(c, params); ie_rself_give_self(c, body);
+  ie_rself_ivars(c, params); ie_rself_ivars(c, body);
   int at = ie_rself_mark(nt, params), bt = ie_rself_mark(nt, body);
   nt_node_set_int(nt, body, "ie_rself_at", (at >= 0 ? at : bt) + 1);
 }

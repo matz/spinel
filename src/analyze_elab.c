@@ -5288,6 +5288,22 @@ int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p) {
   int o = lr_own(c, lr_hist(r, oc, 0, name, 0), NULL, p, p.region < 0, 0, NULL);
   return o == LR_STOP ? ELAB_NO : o;
 }
+/* May version v not have run by p: it sits under a condition (a branch, a rescue, a modifier; or the dispatcher a lone
+   one is lowered to) or in an iterator's body, and p does not come after it in the branch or body that holds it
+   (lr_may_dominates: that run has made it), or is a file's whose require may not run where it stands
+   (sp_req_always_runs)? */
+static int lr_may_not_have_run(Compiler *c, const LrDef *v, LoadPoint p) {
+  if (!v) return 0;
+  const LoadRecord *r = elab_fresh(c);
+  const LrStmt *st = lr_stmt_of(r, v->node);
+  /* a def a file defines is made where the file's require runs: the inline model stamps the statements of a file
+     spliced from a require that may not run where it stands (req_deferred), the graph stamps that file's root
+     (prog_load_deferred), the one stamp for a file at any depth below such a require */
+  if (st && st->top >= 0 && nt_int(c->nt, r->st[st->top].node, "req_deferred", 0)) return 1;
+  if (st && prog_load_deferred(c, st->file)) return 1;
+  return nt_int(c->nt, v->node, "cond_lone_disp", 0) ||
+         ((v->may || (st && (st->may || st->fmay || st->fpartial))) && !lr_may_dominates(c->lrec, v, p));
+}
 int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
   const LrDef *v = NULL;
@@ -5296,11 +5312,13 @@ int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
      dispatcher a lone one is lowered to) or in an iterator's body may not
      have run, unless p comes after it in the branch or body that holds it
      (lr_may_dominates: that run has made it) */
-  const LrStmt *st = o == ELAB_YES && v ? lr_stmt_of(elab_fresh(c), v->node) : NULL;
-  if (v && (nt_int(c->nt, v->node, "cond_lone_disp", 0) ||
-            ((v->may || (st && (st->may || st->fmay || st->fpartial))) && !lr_may_dominates(c->lrec, v, p))))
-    return ELAB_UNKNOWN;
+  if (o == ELAB_YES && lr_may_not_have_run(c, v, p)) return ELAB_UNKNOWN;
   return unsure ? ELAB_UNKNOWN : o == LR_STOP ? ELAB_YES : o;
+}
+int elab_method_made_at(Compiler *c, int cls, const char *name, LoadPoint p) {
+  const LrDef *v = NULL;
+  int o = elab_method_at(c, cls, name, 0, p, &v);
+  return o == ELAB_YES && lr_may_not_have_run(c, v, p) ? ELAB_UNKNOWN : o;
 }
 
 int elab_reached_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {

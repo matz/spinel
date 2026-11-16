@@ -1,0 +1,6 @@
+[TypeError, "exception class/object expected"]
+[ArgumentError, "only cause is given with no arguments"]
+[RuntimeError, ""]
+true
+false
+:mine

@@ -2129,6 +2129,14 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   view_pop(c, va);
   view_unbind(slot);
   const char *t = ok && nb->p ? nb->p : NULL;
+  /* A class reader (Module#name, to_s, inspect: emit_class_reader, the
+     class's name as bytes, NULL for an anonymous class's name) answers
+     bytes under the Class face whatever the call's own type says: the
+     probe asked the call, whose type is the join of every arm's (poly where
+     a class method of the name in the program answers nothing, as a stub
+     that raises does), and the arm handed the bytes to the boxed slot. */
+  if (got == TY_POLY && argc == 0 && (is_class_name_name(name) || is_to_s_name(name) || is_inspect_name(name)))
+    got = TY_STRING;
   /* an answer that can itself raise NoMethodError is the Class emitter's
      own class-method switch (the program's methods of the name, then the
      raise): no better than the default it would replace */
@@ -15805,9 +15813,20 @@ void emit_regexp_new(Compiler *c, int argc, const int *argv, Buf *b) {
    for a nilable Integer (`s.index(x)`), held as its oint, as read as a
    plain value its nil raised ahead of the fill. Any other size goes into
    the sp_int _t<tn> converted (answers 0). */
+/* (A fill with no effect of its own is still read before the conversion
+   when the program has a #to_int that may change what it reads, a global
+   or an ivar the method writes; only a literal reads the same either way.) */
+static int array_fill_reads_same_after(Compiler *c, int fill) {
+  if (subtree_has_side_effect(c, fill)) return 0;
+  NodeKind k = nt_kind(c->nt, fill);
+  if (k == NK_IntegerNode || k == NK_FloatNode || k == NK_StringNode || k == NK_SymbolNode ||
+      k == NK_NilNode || k == NK_TrueNode || k == NK_FalseNode)
+    return 1;
+  return !prog_has_conv_method(c, "to_int", TY_INT);
+}
 static int array_new_size_hold(Compiler *c, int size, int fill, int tn, int *ts) {
   Repr sr = repr_of(c, size);
-  int late = subtree_has_side_effect(c, fill) && nt_kind(c->nt, size) != NK_SplatNode &&
+  int late = !array_fill_reads_same_after(c, fill) && nt_kind(c->nt, size) != NK_SplatNode &&
              g_n_argov < MAX_ARG_OVERRIDE &&
              (sr.kind == RK_BOXED || sr.big || repr_opt_kind(c, size) == TY_INT ||
               comp_ntype(c, size) != TY_INT);
@@ -16665,7 +16684,11 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         int str_fill_h = ar.elem == TY_STRING && sp_streq(k, "Str");
         buf_puts(g_pre, ";\n");
         emit_indent(g_pre, g_indent);
-        if (array_fill_held_only_here(c, argv[1], fh, k)) { emit_gc_root_tmp(c, fh || ar.elem == TY_POLY ? TY_POLY : str_fill_h ? TY_STRBUF : ar.elem, tv, g_pre); buf_puts(g_pre, "\n"); emit_indent(g_pre, g_indent); }
+        /* (a size converted after the fill runs #to_int, which can drop the
+           fill's other holder and collect: the fill is rooted across it) */
+        int fill_ref = !fo && !is_numeric_literal_tag(k) &&
+                       (fh || ar.elem == TY_POLY || str_fill_h || ty_gc_rootable(c, ar.elem));
+        if (array_fill_held_only_here(c, argv[1], fh, k) || (size_form && fill_ref)) { emit_gc_root_tmp(c, fh || ar.elem == TY_POLY ? TY_POLY : str_fill_h ? TY_STRBUF : ar.elem, tv, g_pre); buf_puts(g_pre, "\n"); emit_indent(g_pre, g_indent); }
         /* the size is checked after the fill ran, as CRuby evaluates both
            arguments before Array.new looks at them (CodeRabbit on #10019) */
         if (size_form) array_new_size_convert(c, argv[0], size_form, ts, tn);
@@ -21235,6 +21258,13 @@ const char *builtin_method_params(const char *owner, const char *m, int *in_c) {
       return sp_builtin_params_tbl[i].params;
     }
   return NULL;
+}
+/* See builtin_names.h: a "key" or "keyrest" entry among the parameters; a method the facts do not list takes none known. */
+int builtin_method_takes_keywords(const char *owner, const char *m) {
+  const char *ps = builtin_method_params(owner, m, NULL);
+  for (const char *e = ps; e && *e; e = strchr(e, ' ') ? strchr(e, ' ') + 1 : NULL)
+    if (!strncmp(e, "key", 3)) return 1;   /* (key:name, keyrest:name) */
+  return 0;
 }
 /* Does any builtin class or module have a class method `m` (Integer.sqrt)? */
 int builtin_cmethod_name_known(const char *m) {
@@ -34697,6 +34727,12 @@ int bool_side_responds(Compiler *c, const char *qm, int include_all, int foldabl
   *ta = ans[0]; *fa = ans[1];
   return 1;
 }
+/* The names an Enumerator answers that a chain and a product do not */
+int is_enum_cursor_name(const char *n) {
+  static const char *const iterm[] = { "next", "peek", "next_values", "peek_values", "feed", NULL };
+  for (int u = 0; n && iterm[u]; u++) if (sp_streq(n, iterm[u])) return 1;
+  return 0;
+}
 int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const char *qm,
                                     int argc, const int *argv) {
   const NodeTable *nt = c->nt;
@@ -34890,6 +34926,10 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
      range does; the probe below has no reading for them (#3619) */
   if (!resolved && recv >= 0 &&
       (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE)) return -1;
+  /* an Enumerator slot may hold a chain or a product, which CRuby makes
+     without next, peek, next_values, peek_values and feed: the site reads
+     which one it holds (emit_respond_to's Enumerator arm) */
+  if (!resolved && recv >= 0 && rt == TY_ENUMERATOR && is_enum_cursor_name(qm)) return -1;
   if (!resolved && recv >= 0 && rt == TY_PROC) {
     static const char *const procm[] = {
       "call", "()", "[]", "yield", "arity", "lambda?", "curry",

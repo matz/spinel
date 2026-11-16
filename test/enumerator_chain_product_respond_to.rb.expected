@@ -1,0 +1,41 @@
+["c", false, false]
+["p", false, false]
+["e", true, true]
+[false, false, false, false, false]
+[false, false, true, true]
+[true, true, true]
+if-en
+f
+true
+false
+false
+{a: true, b: false}
+false
+true
+false
+["next", false, false, true]
+["next", false, false]
+["peek", false, false, true]
+["peek", false, false]
+["next_values", false, false, true]
+["next_values", false, false]
+["peek_values", false, false, true]
+["peek_values", false, false]
+["rewind", true, true, true]
+["rewind", true, true]
+["with_index", true, true, true]
+["with_index", true, true]
+["each", true, true, true]
+["each", true, true]
+["size", true, true, true]
+["size", true, true]
+["map", true, true, true]
+["map", true, true]
+["each_slice", true, true, true]
+["each_slice", true, true]
+["zzz", false, false, false]
+["zzz", false, false]
+[Enumerator::Chain, false, true]
+[Enumerator::Product, false, true]
+[Enumerator, true, true]
+[Integer, true, false]

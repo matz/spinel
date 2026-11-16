@@ -2717,7 +2717,7 @@ int        ext_item_classes(Compiler *c, const char *item, int *a, int *b);
 int        ext_method_exported(Compiler *c, int class_id, int si, int typed);
 int        ext_scope_host_callable(Compiler *c, int si);
 int        ext_class_def_wanted(Compiler *c, const char *key);
-const char *ext_fwd_orig(const char *name, int *nfixed, int *rest);
+const char *ext_fwd_orig(const char *name, int *nfixed, int *rest, int *block);
 int        ext_ty_crosses(TyKind t);
 int        comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at);
 /* Is method mi (the one the plan answered for a call, -1 for none) an
@@ -2821,6 +2821,7 @@ int        comp_enum_reaches(Compiler *c, int cid);   /* Enumerable among its an
 int        class_builtin_parent(Compiler *c, int cid);   /* codegen.c: the builtin class above the user chain of the class */
 int        class_is_exc_subclass(Compiler *c, int ci);   /* analyze.c */
 int        comp_plain_class(Compiler *c, int cid);    /* only Object's and Kernel's builtin methods behind the class: no core class or core module among its ancestors */
+int        comp_chain_core_answers(Compiler *c, int cid, const char *name);   /* a builtin module the class or a superclass includes has the name ahead of Object */
 int        comp_enum_behind(Compiler *c, int cid);    /* Enumerable's methods behind the class: Enumerable, or an Array, Struct or native ancestor */
 int        core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
 int        core_vis_of_bit(int bit);   /* codegen_call_class.c: SP_VIS_* of a core_method_vis bit */
@@ -2882,6 +2883,10 @@ int comp_new_receiver(Compiler *c, int k);
 int comp_new_receivers(Compiler *c, int own);
 int method_answers_receiver(Compiler *c, int mi);
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod); /* super in `self.new` is Class#new */
+const char *comp_super_builtin_root(Compiler *c, int cid, int *self);   /* the builtin at the top of class cid's chain ("Array", "Struct", "Object"); *self: cid is that reopening */
+const char *comp_super_bowner(Compiler *c, const Scope *s, const char *uname);   /* the builtin a super in instance method scope s reaches when no program method answers: the call plan's bowner */
+typedef enum { BSP_NONE, BSP_ARRAY, BSP_KERNEL, BSP_PREPENDED } BsuperPath;
+BsuperPath comp_bsuper_carried(Compiler *c, int id, const Scope *st, const char *uname, const char *bowner);   /* the call path lower_builtin_supers lowers a super whose plan names bowner to: an Array, Hash, String or Time subclass's own, a Kernel module function's bare call, a module prepended into a builtin, or none yet */
 const Scope *comp_super_site(Compiler *c, const Scope *s);   /* the method scope a super in s resolves as: its class starts the parent chain, its def names the method asked for; a copy of an alias (Scope.super_of) is the owner's */
 enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF, SUPER_OBJ_ROW };
 /* a super (node id) no program ancestor answers that reaches BasicObject's

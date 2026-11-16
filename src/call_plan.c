@@ -207,7 +207,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->chain = 0;
   p->absent = 0;
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
-  p->core_hook = 0;
+  p->bowner = NULL;
   p->answers_receiver = 0;
   p->vis_cell = 0;
 }
@@ -786,6 +786,25 @@ int cplan_kernel_raise(Compiler *c, int id) {
   const char *nm = nt_str(nt, id, "name");
   return nm && is_raise_alias(nm) && cplan_user(c, id).dispatch == CP_NONE;
 }
+/* Does the program have a top-level def of `name` that a `super` of scope s, which cplan_super_chain_mi found no
+   target for, may still reach? A top-level def is Object's private method, ahead of Kernel's and of a builtin that
+   does not answer the name first, for a chain that reaches Object: the lookup binds it only where one def is made
+   for sure before the method's own def runs (a def made after the class, or twice, is none it proves). Where it
+   binds none but a def exists, the builtin's own method is not the answer either: CRuby answers the def wherever it
+   has run, Kernel's function where it has not, and which one depends on when the super runs. The super keeps the
+   NoMethodError it had, rather than a Kernel function's answer that is wrong wherever the def has run. */
+static int cplan_super_top_def_unproven(Compiler *c, const Scope *s, const char *name) {
+  if (s->is_cmethod || s->class_id < 0 || comp_class_is_module(c, &c->classes[s->class_id])) return 0;
+  int top = s->class_id;
+  while (c->classes[top].parent >= 0) top = c->classes[top].parent;
+  if (class_is_blank_slate(c, top) || builtin_core_class_slot(c->classes[top].name) == CORE_BASIC_OBJECT) return 0;
+  const char *root = comp_super_builtin_root(c, s->class_id, NULL);
+  if (!root || builtin_answers_ahead_of(root, name, "Object") || comp_chain_core_answers(c, s->class_id, name)) return 0;
+  for (int t = an_scopes_named_first(c, name); t >= 0; t = an_scopes_named_next(c, name, t))
+    if (cplan_is_top_def_scope(c, t)) return 1;
+  int tm = call_target(c, -1, -1, name, CT_TOP, NULL);   /* (an alias names a def under another name) */
+  return tm >= 0 && cplan_is_top_def_scope(c, tm);
+}
 /* A super's parent-chain target, past inherited copies of the same
    extended definition. Shared by resolution, inference, inline splicing and
    the miss check. Every step is call_target's, with CT_REACH: it skips the
@@ -794,6 +813,7 @@ int cplan_kernel_raise(Compiler *c, int id) {
    record, a shadow's name too. ml->from is the par asked, though the
    extend-copy skip and the Object start look further; ml->def_class is the
    class that answered, -1 on a miss. */
+static int ct_top_chain(Compiler *c, const char *name, int sg);
 int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 };
   if (!ml) ml = &own;
@@ -820,10 +840,35 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
     while (c->classes[top].parent >= 0) top = c->classes[top].parent;
     /* (not under BasicObject: Object is not in that chain; not under another
        builtin: its methods come first, cplan_root_under_builtin) */
-    if (!class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top)) {
-      static const int owners[] = { CORE_KERNEL, CORE_BASIC_OBJECT };
+    int plain = !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top);
+    if (plain) {
       int obj = comp_super_parent(c, top, 0);
       if (obj >= 0 && obj != top) mi = call_target(c, id, obj, name, CT_REACH, ml);
+    }
+    /* a top-level def is Object's (private) method, ahead of Kernel's, for a
+       chain that reaches Object (the program need not reopen Object for
+       that): not past a builtin or a core module the chain includes that
+       answers the name before Object does (Struct#to_s, Exception#message,
+       an included Comparable's clamp), nor under BasicObject (a program's
+       reopening of it is the top of a chain that does not reach Object
+       either) */
+    if (mi < 0) {
+      const char *root = class_is_blank_slate(c, top) || builtin_core_class_slot(c->classes[top].name) == CORE_BASIC_OBJECT
+                         ? NULL : comp_super_builtin_root(c, s->class_id, NULL);
+      /* (one def on the chain the target is read from, made for sure before the method's own def runs: a top-level function the program makes again has versions,
+         and one made later is none a call before it reaches (the plain call takes its presence entry, which raises
+         there); which one a super reaches depends on when it runs, which no single target says, so the super keeps
+         the answer it had. A def that may read self stays private to a receiver here as it does for a call
+         (cplan_root_top_def): the def takes no self, so it would run on main) */
+      ElabVersion tv[VER_MAX_ARMS];
+      int tc = ct_top_chain(c, name, 0);
+      if (root && !builtin_answers_ahead_of(root, name, "Object") && !comp_chain_core_answers(c, s->class_id, name) &&
+          !cplan_top_name_reads_self(c, name) && elab_chain_versions(c, tc, 0, name, tv, VER_MAX_ARMS) == 1 && s->def_node >= 0 &&
+          elab_method_made_at(c, tc, name, elab_point_of(c, s->def_node)) == ELAB_YES)
+        mi = call_target(c, id, -1, name, CT_TOP | CT_REACH, ml);
+    }
+    if (mi < 0 && plain) {
+      static const int owners[] = { CORE_KERNEL, CORE_BASIC_OBJECT };
       /* a reopening of Kernel or BasicObject answers only where no builtin
          method of the name comes before it (Object's, then Kernel's, as
          CRuby's tables hold them) */
@@ -849,6 +894,21 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    module's versions, a layer below a later one, reaches the entry over
    them once the entries are made (super_layer_entry). ml is call_target's
    answer for the lookup (NULL: the scope only). */
+/* See call_plan.h. */
+int cplan_super_start(Compiler *c, const Scope *s) {
+  int par = comp_super_parent(c, s->class_id, s->is_cmethod);
+  if (par < 0 || s->is_cmethod || c->classes[s->class_id].parent >= 0) return par;
+  /* a class with no program superclass whose builtin root answers the name ahead of Object: the builtin's
+     method comes before a reopening of Object's in CRuby's ancestors, and the chain has no program class to
+     start from (a reopening itself starts after its own methods, which the builtin_super_owner answers) */
+  const char *uname = comp_super_name(c, par, s);
+  int self = 0;
+  const char *root = uname ? comp_super_builtin_root(c, s->class_id, &self) : NULL;
+  /* (a Struct's or Data's own methods other than its text and its initialize have no arm yet behind a plan with no
+     start: the emitter raises where the chain's reopening of Object answered, so those keep the reopening) */
+  if (builtin_owner_kind(root) == BOWN_STRUCT && !is_to_s_name(uname) && !is_inspect_name(uname) && !is_initialize_name(uname)) return par;
+  return root && !self && builtin_answers_ahead_of(root, uname, "Object") ? -1 : par;
+}
 static int super_layer_entry(Compiler *c, int id, int t);
 int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
   const Scope *s = comp_super_site(c, s0);
@@ -862,13 +922,20 @@ int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
     if (e >= 0) { ml->kind = ML_ENTRY; ml->why = 0; }
     return e >= 0 ? e : mi;
   }
-  int par = comp_super_parent(c, s->class_id, s->is_cmethod);
+  /* (a Method#super_method, asked with no node, has no Method value of the builtin's to answer with: it keeps
+     the program's chain) */
+  int par = id >= 0 ? cplan_super_start(c, s) : comp_super_parent(c, s->class_id, s->is_cmethod);
   const char *uname = comp_super_name(c, par, s);
   if (!uname) {
     *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1, .from = par };
     return -1;
   }
-  return cplan_super_chain_mi(c, id, s, par, uname, ml);
+  int mi = cplan_super_chain_mi(c, id, s, par, uname, ml);
+  /* no method of the program's answers: the builtin's does, if one, unless the program has a top-level def of the
+     name that the lookup could not rule out (below) */
+  if (mi < 0) ml->bowner = comp_super_bowner(c, s, uname);
+  if (mi < 0 && ml->bowner && cplan_super_top_def_unproven(c, s, uname)) ml->bowner = NULL;
+  return mi;
 }
 
 /* Does the `super` of the program's send, __send__ or public_send in scope
@@ -886,6 +953,7 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   MethodLookup ml = { .def_class = -1 };
   int mi = cplan_super_target(c, id, s, &ml);
   if (mi >= 0) { cplan_set(p, mi, ml.from, UC_SUPER, CP_DIRECT); return; }
+  p->bowner = ml.bowner;
   const Scope *st = comp_super_site(c, s);
   const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, ml.from, st);
   if (uname && s->is_cmethod &&
@@ -895,7 +963,8 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = "super to an inherited builtin singleton method is not supported; see docs/limitations.md";
   } else if (uname && s->is_cmethod && is_definition_hook_name(uname))
-    p->core_hook = 1;   /* Class#inherited and the like: a no-op that reads no class and calls no method */
+    /* Class#inherited and the like: a no-op that reads no class and calls no method */
+    p->bowner = builtin_super_owner(comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class", uname, 0);
   else if (uname && is_send_family(uname) && cplan_send_super_refused(c, s, uname)) {
     /* `super` from the program's own send, __send__ or public_send that
        nothing above defines is Object's: it dispatches on the name at run
@@ -910,6 +979,12 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = cplan_keep(c, strdup(msg));
   }
+}
+
+/* See call_plan.h. */
+int cplan_core_hook(Compiler *c, int id) {
+  const Scope *s = comp_scope_of(c, id);
+  return s && s->is_cmethod && cplan_user(c, id).bowner;
 }
 
 /* Is node id inside a block, a lambda or a method body (it may run later)? */
@@ -1499,7 +1574,7 @@ int cplan_missing_guard(Compiler *c, int t) {
 }
 int cplan_capture_arm(Compiler *c, int id, int t) {
   int sup = t >= 0 && c->scopes[t].def_node >= 0 ? (int)nt_int(c->nt, c->scopes[t].def_node, "behind_super", 0) - 1 : -1;
-  int mw = sup >= 0 && cplan_user(c, sup).mi < 0 && !cplan_user(c, sup).core_hook ? cplan_capture_missing(c, id) : -1;
+  int mw = sup >= 0 && cplan_user(c, sup).mi < 0 && !cplan_core_hook(c, sup) ? cplan_capture_missing(c, id) : -1;
   return mw >= 0 ? mw : t;
 }
 
@@ -5724,10 +5799,12 @@ int cplan_kernel_row(Compiler *c, int id, const char *name) {
   int recv = nt_ref(nt, id, "receiver");
   const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(nt, id, "block") >= 0) : NULL;
   if (!op) return 0;
-  /* an internal row answers the calls the compiler made (builtin_only: it
-     never reaches a method of the program's), whatever the program defines;
-     the program's own call of its name never takes it */
-  if (op->flags & BOPF_INTERNAL) return recv < 0 && cplan_builtin_call(c, id);
+  /* a call the compiler made (builtin_only: it never reaches a method of the
+     program's) takes the row, whatever the program defines; an internal row
+     answers no other call, and the program's own call of a name never takes
+     it */
+  if (recv < 0 && cplan_builtin_call(c, id)) return 1;
+  if (op->flags & BOPF_INTERNAL) return 0;
   if (!cplan_kernel_form(c, id, name, 0)) return 0;
   /* an arm pinned to a version runs it, and its else arm (CT_PIN_BUILTIN)
      the row */

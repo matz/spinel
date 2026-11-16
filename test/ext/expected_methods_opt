@@ -7,4 +7,3 @@ raised ArgumentError: wrong number of arguments (given 0, expected 1..2)
 raised ArgumentError: wrong number of arguments (given 3, expected 1..2)
 no method hid
 no method kw
-no method blk

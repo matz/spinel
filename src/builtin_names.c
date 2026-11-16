@@ -1362,8 +1362,9 @@ int is_implicitly_private_name(const char *n) {
                sp_streq(n, "respond_to_missing?"));
 }
 
+int is_initialize_copy_name(const char *n) { return sp_streq(n, "initialize_copy"); }
 int is_initialize_family(const char *n) {
-  return sp_streq(n, "initialize_copy") || sp_streq(n, "initialize");
+  return is_initialize_copy_name(n) || is_initialize_name(n);
 }
 
 int is_intersection_alias(const char *n) {
@@ -2003,6 +2004,14 @@ int is_dir_blockless_iter(const char *n) {
 
 int is_kernel_module_name(const char *n) { return n && sp_streq(n, "Kernel"); }
 
+/* Kernel functions that read the calling frame (the method's name, the block, the locals, the stack): the bare call
+   answers the frame it is made in, which a super lowered into a method's body is not CRuby's. */
+int is_frame_reading_function(const char *n) {
+  static const char *const NAMES[] = { "__method__", "__callee__", "__dir__", "binding", "block_given?", "caller",
+                                       "caller_locations", "local_variables", NULL };
+  return n && builtin_name_in(n, NAMES);
+}
+
 /* Kernel's module functions, by name. A whitelist rather than "anything with
    the Kernel receiver": Kernel is also a VALUE, so `Kernel === 5` asks whether
    5 is in the Object hierarchy, and `Kernel.name` / `.to_s` / `.freeze` /
@@ -2401,6 +2410,40 @@ int builtin_answers_ahead_of(const char *cls, const char *m, const char *root) {
   int below = !root;
   for (int i = 0; !below && i < t->nanc; i++) below = !strcmp(t->ancestors[i], root);
   return below && bmt_ancestors_have(t, m, 0, must, 0, root, NULL) != 0;
+}
+/* The class or module of CRuby's tables whose instance method m a `super` reaches from a program class under
+   builtin class root: the first ancestor of root's table with m (any visibility, in a library the program has),
+   by its table name; NULL for none, and where an ancestor with no table of its own lies ahead (StringIO's
+   IO::generic_writable: what it answers is not known, nor what is behind it) or one that undefines m does. after_root:
+   the super's own place is root's (a reopening's method, or a module included into it), so root's own methods are
+   ahead of it. Names only: where the program's classes and includes put the super is the caller's
+   (comp_super_bowner). */
+const char *builtin_super_owner(const char *root, const char *m, int after_root) {
+  const BuiltinMethodTable *t = bmt_find(root);
+  unsigned must = bmt_loaded();
+  if (!t || !m || !(t->flags & must)) return NULL;
+  for (int i = after_root ? 1 : 0; i < t->nanc; i++) {
+    if (!(t->aflags[i] & must)) continue;   /* (a library the program has not required) */
+    const BuiltinMethodTable *a = bmt_find(t->ancestors[i]);
+    if (!a) return NULL;
+    if (!(a->flags & must)) continue;
+    if (bmt_has(a->inst, a->iflags, a->ninst, m, must, 0)) return a->name;
+    if (bmt_undefines(a, m, 0)) return NULL;
+  }
+  return NULL;
+}
+/* See builtin_names.h. */
+BownKind builtin_owner_kind(const char *owner) {
+  if (!owner) return BOWN_NONE;
+  if (is_kernel_module_name(owner)) return BOWN_KERNEL;
+  int slot = builtin_core_class_slot(owner);
+  if (slot == CORE_STRUCT || slot == CORE_DATA) return BOWN_STRUCT;
+  return BOWN_OTHER;
+}
+/* Does CRuby's method tables hold class or module name, in a library the program has? */
+int builtin_table_known(const char *name) {
+  const BuiltinMethodTable *t = bmt_find(name);
+  return t && (t->flags & bmt_loaded());
 }
 /* The i-th ancestor of builtin class or module cls in CRuby's lookup order (0: cls itself), counting only those a
    library the program has defines; NULL past the last, and for a name with no table. The walk of a mixin's `super`

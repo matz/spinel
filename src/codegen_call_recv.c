@@ -17392,8 +17392,63 @@ static int aref_cmethod_owns(Compiler *c, int id) {
 /* Element access on a boxed receiver: an index read, []= and [] with one or two arguments (emit_poly_call's arms, in their order) */
 static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   /* poly receiver: arr[start, len] = src -- 3-arg splice assign
-     Skip Fiber/Fiber.current storage receivers (handled later). */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 &&
+     Skip Fiber/Fiber.current storage receivers (handled later). A program
+     class with its own `[]=` owns the name, as for the two-argument store
+     below: the call goes to the class dispatch, which calls the method on
+     the class's instance (`m[y, x] = v` on a two-index matrix; a class
+     whose `[]=` takes other arguments raises ArgumentError there, as in
+     Ruby) and whose builtin arm re-enters here for a real Array or String.
+     Taken here, the store spliced the box as an Array and never ran the
+     class's method. */
+  int user_aset3 = 0;
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 && !g_poly_builtin_arm)
+    for (int kk = 0; kk < c->nclasses && !user_aset3; kk++)
+      if (comp_poly_arm_defines_n(c, kk, "[]=", 3)) user_aset3 = 1;
+  /* The dispatch evaluates the receiver once, and its builtin arm re-enters
+     the splice below, which reads a receiver `outer[k]` through outer and k
+     again to store a spliced String or a promoted Array back into outer's
+     slot: an outer or a k that runs code (`rows[i += 1]`, `rows_of(b)[1]`)
+     ran twice, and k's second value chose the next row. Such an outer and
+     k run here, once, into temps the whole store reads: a box, or what
+     a pointer holds (an Array, a Hash, an object). An outer held inline
+     (a value-type object) keeps the splice, which runs each once. */
+  if (user_aset3) {
+    int so, sk;
+    if (splice_recv_index_slot(c, recv, &so, &sk) &&
+        (!subtree_is_pure_read(c, so) || !subtree_is_pure_read(c, sk))) {
+      TyKind ot = comp_ntype(c, so), kt = comp_ntype(c, sk);
+      int held = ot == TY_POLY;
+      if (ty_is_object(ot)) {
+        int ocid = ty_object_class(ot);
+        held = ocid >= 0 && ocid < c->nclasses && !c->classes[ocid].is_value_type;
+      }
+      else if (!held) {
+        const char *n = c_type_name(ot);
+        held = n && n[strlen(n) - 1] == '*';
+      }
+      if (!held || (kt != TY_INT && kt != TY_POLY) || g_n_argov + 2 > MAX_ARG_OVERRIDE) user_aset3 = 0;
+      else {
+        int to = ++g_tmp, tk = ++g_tmp;
+        Buf oct; memset(&oct, 0, sizeof oct);
+        emit_ctype(c, ot, &oct);
+        buf_printf(b, "({ %s _t%d = ", oct.p ? oct.p : "sp_RbVal", to);
+        free(oct.p);
+        emit_expr(c, so, b);
+        buf_printf(b, "; %s(_t%d); %s _t%d = ", ot == TY_POLY ? "SP_GC_ROOT_RBVAL" : "SP_GC_ROOT", to,
+                   kt == TY_INT ? "sp_int" : "sp_RbVal", tk);
+        emit_expr(c, sk, b);
+        buf_puts(b, "; ");
+        if (kt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tk);
+        int mk = view_bind_temp(so, to);
+        view_bind_temp(sk, tk);
+        emit_call(c, id, b);
+        view_unbind(mk);
+        buf_puts(b, "; })");
+        { *out = 1; return 1; }
+      }
+    }
+  }
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 && !user_aset3 &&
       !sp_is_fiber_storage_recv(nt, recv)) {
     int tv = ++g_tmp;
     NodeKind rcvk = nt_kind(nt, recv);
@@ -19265,8 +19320,17 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      emit_hash_call), as every other arm of this function assumes: refused on
      the name alone, a user class's own compare_by_identity was rejected. */
   if (recv >= 0 && rt == TY_POLY &&
-      sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
+      sp_streq(name, "compare_by_identity")) {  /* any arity: identity hashing is unsupported */
+    /* An arm of a run-time name's dispatch (dyn_arm) runs only when the name
+       is this one, which the program spelling it anywhere gives every such
+       send. A probe drops the arm (its send then raises NoMethodError); one
+       emitted outside a probe, a builtin Method wrapper's, raises here. */
+    if (nt_int(nt, id, "dyn_arm", 0) && !g_unsup_probe) {
+      buf_puts(b, "({ sp_raise_cls(\"NotImplementedError\", \"Hash#compare_by_identity (identity-keyed hashing) is not supported\"); sp_box_nil(); })");
+      return 1;
+    }
     unsupported(c, id, "Hash#compare_by_identity (identity-keyed hashing)");
+  }
   /* obj.methods / public_methods / singleton_methods on a boxed receiver: the
      list of whichever class of the program it is an instance of
      (emit_poly_object_methods_reflection); anything else is the

@@ -2881,7 +2881,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
      the class test of a blank slate's Kernel guard, ver_kernel_guard). */
   {
     int bsrecv = nt_ref(nt, id, "receiver");
-    TyKind bsrt = bsrecv >= 0 ? comp_ntype(c, bsrecv) : TY_UNKNOWN;
+    TyKind bsrt = bsrecv >= 0 ? repr_of(c, bsrecv).as_ty : TY_UNKNOWN;   /* (the receiver's layout: the class its object is) */
     const char *bsnm = nt_str(nt, id, "name");
     if (bsnm && ty_is_object(bsrt) && !cplan_builtin_call(c, id)) {
       int bsci = ty_object_class(bsrt);

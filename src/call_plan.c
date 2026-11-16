@@ -8192,6 +8192,13 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
         return unplaced && effects ? BNF_REFUSE : BNF_RAISE;
       }
       if (!fill || !kfill) return BNF_REFUSE;
+      /* (a `**h` may hold a key this one does not name, which raises as it binds, before its defaults run: the rewrite checks
+         the keys once the operands are held and ahead of the defaults (rmi), where no default with an effect is filled ahead
+         of this one, which would run before the raise) */
+      if (kw == NEWKW_MAYBE && nkw && sc->kwrest_idx < 0 && effects != e0) {
+        if (e0 || f->rmi >= 0) return BNF_REFUSE;
+        f->rmi = mi;
+      }
       /* (a default that reads the object being built (self, an ivar, a call on self) or the def's lexical scope runs only once
          CRuby has made the object, which the builtin's construction does not model yet: the walk goes on, and the call keeps
          master's answer, which runs no default) */

@@ -771,7 +771,8 @@ int cplan_entries(Compiler *c, int id, int *out, int cap);
    program's. BNF_FILL: the builtin's own runs, given the values of the defaults
    the forwards leave unfilled after the call's arguments, as a bare `super`
    passes them (cplan_builtin_new_fills; desugar_builtin_new_init_args places
-   them on the call, which is then BNF_OWN). BNF_RAISE: a forward without a keyword rest is given a literal keyword it
+   them on the call, which is then BNF_OWN; rmi: the forward without a keyword rest whose binding
+   checks the keys a `**` passes, before the defaults run). BNF_RAISE: a forward without a keyword rest is given a literal keyword it
    does not name, and CRuby's binding raises `unknown keyword` before its body runs: the call evaluates what BNF_EMPTY's
    does, then raises (rmi: that forward's scope). */
 enum { BNF_NONE, BNF_OWN, BNF_EMPTY, BNF_REFUSE, BNF_FILL, BNF_RAISE };

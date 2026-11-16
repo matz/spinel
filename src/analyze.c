@@ -13407,6 +13407,29 @@ static int bni_unknown_keys(Compiler *c, int id, int rmi) {
   free(ks);
   return ar;
 }
+static int sd_bcall(NodeTable *nt, const char *name, int recv, const int *args, int n);
+/* BNF_FILL's check of the keys a `**` passes, once the operands are held (rmi >= 0): `{the call's keywords}.keys - [the
+   keys scope rmi names]`, which its binding raises for before its defaults run (-1 where the call has no keywords). */
+static int bni_splat_unknown(Compiler *c, int id, int rmi) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int an = nt_ref(nt, id, "arguments"), n = 0, en = 0, nkw = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL, kh = rmi >= 0 ? nt_argv_kwh(nt, av, n) : -1;
+  if (kh < 0) return -1;
+  const int *el = nt_arr(nt, kh, "elements", &en);
+  int pn = nt_ref(nt, c->scopes[rmi].def_node, "parameters"), h = nt_new_node(nt, "HashNode"), ar = nt_new_node(nt, "ArrayNode");
+  const int *kws = pn >= 0 ? nt_arr(nt, pn, "keywords", &nkw) : NULL;
+  int *ce = malloc(sizeof(int) * (size_t)(en + nkw + 1));
+  if (!ce) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int j = 0; j < en; j++) ce[j] = nt_clone_subtree(nt, el[j]);   /* (the held values: local reads and literals) */
+  nt_node_set_arr(nt, h, "elements", ce, en);
+  for (int i = 0; i < nkw; i++) {
+    ce[i] = nt_new_node(nt, "SymbolNode");
+    nt_node_set_str(nt, ce[i], "value", nt_str(nt, kws[i], "name"));
+  }
+  nt_node_set_arr(nt, ar, "elements", ce, nkw);
+  free(ce);
+  return sd_bcall(nt, "-", sd_bcall(nt, "keys", h, NULL, 0), &ar, 1);
+}
 /* A builtin class's `new` whose first initialize that does not forward is empty
    (cplan_builtin_new_form BNF_EMPTY): CRuby builds the empty value its own
    initialize would not (`class Array; def initialize(*); end; end; Array.new(2, 0)`
@@ -13419,7 +13442,8 @@ static int bni_unknown_keys(Compiler *c, int id, int rmi) {
    values after its own (bni_place_defaults); ahead of an empty one, those with
    an effect run after the held operands. One that a forward's binding refuses for a
    keyword it does not name (BNF_RAISE) runs as an empty one does up to the raise of
-   CRuby's `unknown keyword` (kwb_reject). The call left is the builtin's own
+   CRuby's `unknown keyword` (kwb_reject); a BNF_FILL whose `**` a forward's binding checks raises the keys
+   it does not name after the held operands and ahead of the defaults (bni_splat_unknown). The call left is the builtin's own
    (nt_mark_builtin_call), which the plan does not answer again. */
 static int desugar_builtin_new_init_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -13438,6 +13462,16 @@ static int desugar_builtin_new_init_args(Compiler *c) {
     int unk = form == BNF_RAISE ? bni_unknown_keys(c, id, fl.rmi) : -1;
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
+    /* (the keys a forward's binding raises for, after the held operands and ahead of the defaults, held ones too) */
+    int sk = form == BNF_FILL ? bni_splat_unknown(c, id, fl.rmi) : -1;
+    if (sk >= 0) {
+      char xn[32];
+      snprintf(xn, sizeof xn, "__bnu%d", id);
+      pre = realloc(pre, sizeof(int) * (size_t)(np + 2));
+      if (!pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      pre[np++] = kwb_lv(nt, comp_scope_of(c, id), xn, sk);
+      pre[np++] = kwb_reject(nt, comp_scope_of(c, id), xn);
+    }
     if (fl.n || fl.nk) np = bni_place_defaults(c, id, &fl, &pre, np, form != BNF_FILL);
     if (np > 0 || unk >= 0) {
       /* (a sequence of its own in the call's place, of fresh nodes throughout: the order plan keeps what it recorded of the old

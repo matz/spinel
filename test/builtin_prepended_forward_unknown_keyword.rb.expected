@@ -11,4 +11,16 @@ ArgumentError
 3
 [:a, :f, :d]
 "unknown keyword: :foo"
+[]
+3
+3
+3
+[:d, :d, :th, :d]
+"unknown keyword: :foo"
+"unknown keyword: :foo"
+[:h]
+"unknown keyword: :foo"
+3
+[:h, :d]
+"unknown keyword: :foo"
 "unknown keyword: :foo"

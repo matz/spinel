@@ -86,6 +86,13 @@ static int emit_p_splat_value(Compiler *c, const char *name, int argc, const int
   return 1;
 }
 
+/* A block parameter the conversion method takes but does not yield to is a
+   parameter of its C function (emit_method_signature); the conversion passes
+   none. */
+static const char *kconv_blk_arg(const Compiler *c, int mi) {
+  const Scope *s = &c->scopes[mi];
+  return s->blk_param && s->blk_param[0] && !s->yields ? ", NULL" : "";
+}
 static int emit_kconv_obj_nil(Compiler *c, int arg, int ci, const char *m1, const char *m2, Buf *b) {
   int d = ci, mi = comp_method_in_chain(c, ci, m1, &d);
   if (mi < 0 && m2) { m1 = m2; mi = comp_method_in_chain(c, ci, m2, &d); }
@@ -96,7 +103,7 @@ static int emit_kconv_obj_nil(Compiler *c, int arg, int ci, const char *m1, cons
   const char *cn = c->classes[d].c_name;
   int t = ++g_tmp;
   buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", cn, t, cn); emit_expr(c, arg, b);
-  buf_printf(b, "); SP_GC_ROOT(_t%d); _t%d ? %s(_t%d) : %s; })", t, t, mc_method(c, &c->scopes[mi]), t, nil_c);
+  buf_printf(b, "); SP_GC_ROOT(_t%d); _t%d ? %s(_t%d%s) : %s; })", t, t, mc_method(c, &c->scopes[mi]), t, kconv_blk_arg(c, mi), nil_c);
   return 1;
 }
 
@@ -687,14 +694,14 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         int ami = comp_method_in_chain(c, acid, anm, &adef);
         if (expr_is_held_ref(c, av[0])) {
           buf_printf(b, "%s((sp_%s *)(", mc_method(c, &c->scopes[ami]), c->classes[adef].c_name);
-          emit_expr(c, av[0], b); buf_puts(b, "))");
+          emit_expr(c, av[0], b); buf_printf(b, ")%s)", kconv_blk_arg(c, ami));
         }
         else {
           /* rooted, as Kernel#String roots its #to_str receiver */
           int tao = ++g_tmp;
           buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", c->classes[adef].c_name, tao, c->classes[adef].c_name);
           emit_expr(c, av[0], b);
-          buf_printf(b, "); SP_GC_ROOT(_t%d); %s(_t%d); })", tao, mc_method(c, &c->scopes[ami]), tao);
+          buf_printf(b, "); SP_GC_ROOT(_t%d); %s(_t%d%s); })", tao, mc_method(c, &c->scopes[ami]), tao, kconv_blk_arg(c, ami));
         }
       }
       else { buf_puts(b, "sp_kernel_array("); emit_boxed(c, av[0], b); buf_puts(b, ")"); }

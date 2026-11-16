@@ -11497,7 +11497,9 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          class answers too, storing the value it answers with (the method
          arms answer their own values over it) */
       char wbase[256];
-      int attr_wr = !is_setter_val && argc == 1 && pos_argc == 1 && splat_a < 0 && kwh < 0 && ret == TY_POLY &&
+      /* (keywords alone, `o.send(:x=, **h)`, hand the writer their Hash) */
+      int wr_kw = argc == 1 && pos_argc == 0 && kwh >= 0;
+      int attr_wr = !is_setter_val && argc == 1 && (pos_argc == 1 || wr_kw) && splat_a < 0 && (kwh < 0 || wr_kw) && ret == TY_POLY &&
                     nt_ref(nt, id, "block") < 0 && name_is_plain_setter(name) &&
                     setter_base_name(name, wbase, sizeof wbase);
       if (attr_wr) {
@@ -11505,10 +11507,16 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         for (int k = 0; k < c->nclasses && !any; k++) any = comp_is_writer(&c->classes[k], wbase);
         attr_wr = any;
       }
+      int wr_src = attr_wr ? (wr_kw ? ++g_tmp : atmp[0]) : -1;
+      TyKind wr_ty = wr_kw ? TY_POLY : attr_wr ? atmp_ty[0] : TY_UNKNOWN;
+      if (attr_wr && wr_kw) {
+        buf_printf(b, "sp_RbVal _t%d = ", wr_src); emit_kwh_pos_hash(c, &kw, 1, b);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", wr_src);
+      }
       if (attr_wr) {
-        char an[32]; snprintf(an, sizeof an, "_t%d", atmp[0]);
+        char an[32]; snprintf(an, sizeof an, "_t%d", wr_src);
         buf_printf(b, "_t%d = ", tr);
-        if (atmp_ty[0] == TY_POLY) buf_puts(b, an); else emit_boxed_text(c, atmp_ty[0], an, b);
+        if (wr_ty == TY_POLY) buf_puts(b, an); else emit_boxed_text(c, wr_ty, an, b);
         buf_puts(b, "; ");
       }
       buf_puts(b, "switch (");
@@ -11527,9 +11535,9 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         g_poly_pub_keep = pk; }
       if (attr_wr) {
         char an[32], objp[32];
-        snprintf(an, sizeof an, "_t%d", atmp[0]); snprintf(objp, sizeof objp, "_t%d.v.p", tv);
+        snprintf(an, sizeof an, "_t%d", wr_src); snprintf(objp, sizeof objp, "_t%d.v.p", tv);
         g_writer_arms_attr_only = 1;
-        emit_boxed_writer_arms(c, wbase, name, objp, an, atmp_ty[0], argv[0], tv, atmp[0], 0, b);
+        emit_boxed_writer_arms(c, wbase, name, objp, an, wr_ty, wr_kw ? -1 : argv[0], tv, wr_src, 0, b);
         g_writer_arms_attr_only = 0;
       }
       int is_aref = sp_streq(name, "[]") && argc == 1 && splat_a < 0;

@@ -4291,8 +4291,7 @@ static void sp_sig_thread_start(void) {
   sp_sig_wake[0] = pf[0];
   SP_ATOMIC_STORE(&sp_sig_wake[1], pf[1], __ATOMIC_RELEASE);   /* the handler writes it from here on */
   started = 1;
-  sp_thread *t = sp_Thread_spawn_fiber(sp_Fiber_new(sp_sig_thread_body), sp_box_nil());
-  sp_thread_set_internal(t);
+  sp_Thread_spawn_internal(sp_Fiber_new(sp_sig_thread_body));
   /* a delivery recorded before the pipe, whose proc has not run yet */
   if (SP_ATOMIC_LOAD(&sp_sig_pending_flag, __ATOMIC_ACQUIRE)) { char b = 0; ssize_t w = write(pf[1], &b, 1); (void)w; }
 }

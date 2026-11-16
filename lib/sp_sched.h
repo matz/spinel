@@ -120,7 +120,8 @@ void       sp_sched_init(void);
    a green thread and enqueue it RUNNABLE. It runs the next time the current
    thread yields, or at drain. Returns the thread (boxed SP_BUILTIN_THREAD). */
 sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg);
-void sp_thread_set_internal(sp_thread *t);
+/* A thread of the runtime's own (sp_thread.internal), enqueued RUNNABLE. */
+sp_thread *sp_Thread_spawn_internal(sp_Fiber *f);
 sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, sp_int line);
 
 /* #join: block until the thread has finished, re-raise its unhandled exception

@@ -3406,7 +3406,9 @@ sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file,
   t->birth_line = line;
   return t;
 }
-sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg) {
+/* `internal` marks the runtime's own thread. It is set before the thread
+   goes on a run queue, so the worker that runs the thread first reads it. */
+static sp_thread *thread_spawn(sp_Fiber *f, sp_RbVal arg, int internal) {
 #ifdef SP_THREADS
   if (!g_workers_started) {
     if (!sp_sched_ensure_workers())
@@ -3421,6 +3423,7 @@ sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg) {
   sp_thread *volatile t = (sp_thread *)sp_gc_alloc(sizeof(sp_thread), NULL, sp_thread_scan);
   memset(t, 0, sizeof *t);
   t->home_wid = -1;              /* not yet started: any worker may pick it up */
+  t->internal = internal ? 1 : 0;
   t->fiber = f;
   t->arg = arg;
   t->retval = sp_box_nil();
@@ -3450,6 +3453,8 @@ sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg) {
   SCHED_UNLOCK();
   return t;
 }
+sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg) { return thread_spawn(f, arg, 0); }
+sp_thread *sp_Thread_spawn_internal(sp_Fiber *f) { return thread_spawn(f, sp_box_nil(), 1); }
 
 /* Joining the current thread can never finish. Reject it before attempting to
    park, including on the main thread before the timer monitor has started. */
@@ -3654,7 +3659,6 @@ sp_thread *sp_Thread_list_at(sp_int i) {
   REG_UNLOCK();
   return t ? t : &g_main_thread;
 }
-void sp_thread_set_internal(sp_thread *t) { t->internal = 1; }
 
 /* #status: "run" while runnable/running, "sleep" while blocked, false when it
    finished normally, nil when it died with an unhandled exception. */

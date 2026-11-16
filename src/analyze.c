@@ -13255,6 +13255,50 @@ static int desugar_hash_new_capacity(Compiler *c) {
   return changed;
 }
 
+static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pfx, int k, int value, int *pre, int *npre);
+/* The defaults a builtin `new`'s forwards leave unfilled (cplan_builtin_new_fills) placed on call id after its positional
+   arguments, as CRuby runs them once the call has built its argument list: each a clone of the default. Where one reads
+   an earlier parameter, every positional value is held in a local in turn, appended to pre (np so far), and the reads
+   read those locals. Answers how many writes pre holds, with room for one statement more. */
+static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **prep, int np) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  Scope *sc = comp_scope_of(c, id);
+  int an = nt_ref(nt, id, "arguments"), n = 0, npos = 0, nk = 0, hold = 0, base = nt->count;
+  if (an < 0) { an = nt_new_node(nt, "ArgumentsNode"); nt_node_set_ref(nt, id, "arguments", an); }
+  const int *av = nt_arr(nt, an, "arguments", &n);
+  int *out = malloc(sizeof(int) * (size_t)(n + fl->n)), *keep = malloc(sizeof(int) * (size_t)(n + 1));
+  int *pre = realloc(*prep, sizeof(int) * (size_t)(np + n + fl->n + 1));
+  if (!out || !keep || !pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  *prep = pre;
+  for (int k = 0; k < n; k++)
+    if (nt_kind(nt, av[k]) == NK_KeywordHashNode || nt_kind(nt, av[k]) == NK_BlockArgumentNode) keep[nk++] = av[k]; else out[npos++] = av[k];
+  for (int f = 0; f < fl->n; f++) {
+    int d = c->scopes[fl->mi[f]].pdefault[fl->pi[f]], nd = 0, *di = nt_subtree_ids(nt, &d, 1, &nd);
+    for (int k = 0; k < nd; k++) hold |= nt_kind(nt, di[k]) == NK_LocalVariableReadNode;
+    free(di);
+  }
+  for (int k = 0; hold && k < npos; k++) out[k] = sd_hold(c, nt, sc, id, "bnd", k, out[k], pre, &np);
+  for (int f = 0; f < fl->n; f++, npos++) {
+    const Scope *ms = &c->scopes[fl->mi[f]];
+    int d = nt_clone_subtree(nt, ms->pdefault[fl->pi[f]]), nd = 0, *di = nt_subtree_ids(nt, &d, 1, &nd);
+    /* (a read of an earlier parameter, the j-th positional value: ct_default_placeable lets no other local through) */
+    for (int k = 0; k < nd; k++)
+      for (int i = 0, j = 0; nt_kind(nt, di[k]) == NK_LocalVariableReadNode && i < fl->pi[f]; i++) {
+        if (i == ms->rest_idx || i == ms->kwrest_idx) continue;
+        if (sp_streq(nt_str(nt, di[k], "name"), ms->pnames[i])) { nt_node_set_str(nt, di[k], "name", nt_str(nt, out[j], "name")); break; }
+        j++;
+      }
+    free(di);
+    out[npos] = hold ? sd_hold(c, nt, sc, id, "bnd", npos, d, pre, &np) : d;
+  }
+  memcpy(out + npos, keep, sizeof(int) * (size_t)nk);
+  nt_node_set_arr(nt, an, "arguments", out, npos + nk);
+  free(out);
+  free(keep);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
+  return np;
+}
 /* A builtin class's `new` whose first initialize that does not forward is empty
    (cplan_builtin_new_form BNF_EMPTY): CRuby builds the empty value its own
    initialize would not (`class Array; def initialize(*); end; end; Array.new(2, 0)`
@@ -13262,26 +13306,35 @@ static int desugar_hash_new_capacity(Compiler *c) {
    The operands that run code are held in locals in CRuby's order, as any call's
    are (sd_hold_call_operands: a splat as `[*x]`, a `**` as `{**x}`, a block pass
    through __blk_conv, which checks what its to_proc answers), and the call
-   becomes `(held; ...; K.new)`. A literal block is never run. */
-static int desugar_builtin_new_empty_init(Compiler *c) {
+   becomes `(held; ...; K.new)`. A literal block is never run. One whose forwards
+   leave defaults unfilled (BNF_FILL) holds them alike and passes their values
+   after its own (bni_place_defaults). */
+static int desugar_builtin_new_init_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
     if (nt_kind(nt, id) != NK_CallNode || id >= c->node_cap) continue;
-    if ((nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0) || cplan_builtin_new_form(c, id) != BNF_EMPTY) continue;
+    int form = cplan_builtin_new_form(c, id);
+    if (form != BNF_FILL && ((nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0) || form != BNF_EMPTY)) continue;
+    NewFills fl;
+    if (form == BNF_FILL) cplan_builtin_new_fills(c, id, &fl);
     /* (where the call stands is known before its operands are held: holding them rewrites the call) */
     int *par = du_parent_map(nt);
     if (!par || par[id] < 0) { free(par); continue; }
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
+    if (form == BNF_FILL) np = bni_place_defaults(c, id, &fl, &pre, np);
     if (np > 0) {
       /* (a sequence of its own in the call's place, of fresh nodes throughout: the order plan keeps what it recorded of the old
          call and its operands by node; the held values run as statements of their own, the plain `new` last) */
       int base = nt->count, stmts = nt_new_node(nt, "StatementsNode"), seq = nt_new_node(nt, "ParenthesesNode");
-      nt_node_set_ref(nt, id, "arguments", -1);
-      nt_node_set_ref(nt, id, "block", -1);
+      if (form == BNF_EMPTY) {
+        nt_node_set_ref(nt, id, "arguments", -1);
+        nt_node_set_ref(nt, id, "block", -1);
+      }
       for (int i = 0; i < np; i++)
-        if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
+        if (form == BNF_FILL) pre[i] = nt_clone_subtree(nt, pre[i]);
+        else if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
       pre[np++] = nt_clone_subtree(nt, id);
       nt_node_set_arr(nt, stmts, "body", pre, np);
       nt_node_set_ref(nt, seq, "body", stmts);
@@ -13289,7 +13342,7 @@ static int desugar_builtin_new_empty_init(Compiler *c) {
       for (int j = base; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
       nt_replace_child(nt, par[id], id, seq);
     }
-    else {
+    else if (form == BNF_EMPTY) {
       nt_node_set_ref(nt, id, "arguments", -1);
       nt_node_set_ref(nt, id, "block", -1);
     }
@@ -45361,7 +45414,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
        File arm flattens (a static length still expands to its parts) */
     int keep_splat = 0;
     /* A builtin's `new` that runs a program initialize ahead of its own, or builds its empty value (cplan_builtin_new_form),
-       keeps its splat whole: desugar_builtin_new_empty_init evaluates it as CRuby builds the argument list, `[*b]` */
+       keeps its splat whole: desugar_builtin_new_init_args evaluates it as CRuby builds the argument list, `[*b]` */
     if (cplan_builtin_new_form(c, id) >= BNF_EMPTY) continue;
     if (sp_streq(cnm, "join")) {
       int fr = nt_ref(nt, id, "receiver");
@@ -46215,7 +46268,7 @@ static void desugar_block_arg_order(Compiler *c) {
     if (!is_super && nt_kind(nt, id) != NK_CallNode) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
-    /* (a builtin `new` that builds its empty value holds every operand in CRuby's order itself: desugar_builtin_new_empty_init) */
+    /* (a builtin `new` that builds its empty value holds every operand in CRuby's order itself: desugar_builtin_new_init_args) */
     if (!is_super && cplan_builtin_new_form(c, id) == BNF_EMPTY) continue;
     int be = nt_ref(nt, blk, "expression");
     int pb = nt_kind(nt, be) == NK_ParenthesesNode ? nt_ref(nt, be, "body") : -1;
@@ -52584,7 +52637,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("infer_default_param_types", infer_default_param_types(c));
     ch |= AN_PASS("expand_literal_splat_args", expand_literal_splat_args(c));        /* builtin/proc m(*[a,b]) -> m(a, b) */
     ch |= AN_PASS("desugar_hash_new_capacity", desugar_hash_new_capacity(c));        /* Hash.new(capacity: n) -> Hash.new */
-    ch |= AN_PASS("desugar_builtin_new_empty_init", desugar_builtin_new_empty_init(c));   /* an empty initialize on a builtin: its `new` is the empty value */
+    ch |= AN_PASS("desugar_builtin_new_init_args", desugar_builtin_new_init_args(c));   /* an empty initialize on a builtin: its `new` is the empty value */
     ch |= AN_PASS("pin_arg_position_hash_new", pin_arg_position_hash_new(c));        /* f(Hash.new(d)) -> PolyPoly variant */
     ch |= AN_PASS("pad_unsupplied_params", pad_unsupplied_params(c));            /* under-supplied call: placeholder param type */
     ch |= AN_PASS("desugar_builtin_method_obj", desugar_builtin_method_obj(c));       /* builtin recv.method(:sym) -> wrapper def */

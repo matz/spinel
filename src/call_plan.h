@@ -767,9 +767,17 @@ int cplan_entries(Compiler *c, int id, int *out, int cap);
    has an empty value (builtin_empty_new): the call evaluates its arguments and
    builds it; BNF_REFUSE any other, which the builtin construction does not run.
    BNF_NONE for any other call, and a builtin exception's `new`, which runs the
-   program's. */
-enum { BNF_NONE, BNF_OWN, BNF_EMPTY, BNF_REFUSE };
+   program's. BNF_FILL: the builtin's own runs, given the values of the defaults
+   the forwards leave unfilled after the call's arguments, as a bare `super`
+   passes them (cplan_builtin_new_fills; desugar_builtin_new_init_args places
+   them on the call, which is then BNF_OWN). */
+enum { BNF_NONE, BNF_OWN, BNF_EMPTY, BNF_REFUSE, BNF_FILL };
 int cplan_builtin_new_form(Compiler *c, int id);
+/* ...and for BNF_FILL those defaults, in the order CRuby runs them: parameter
+   pi[k] of method scope mi[k], each the next positional argument */
+enum { NEW_FILLS_MAX = 16 };
+typedef struct NewFills { int n, mi[NEW_FILLS_MAX], pi[NEW_FILLS_MAX]; } NewFills;
+void cplan_builtin_new_fills(Compiler *c, int id, NewFills *f);
 /* Where cplan_entries cannot list them (CPT_UNKNOWN), the names whose
    program methods hold every method call node id may enter, into names (at
    most 2), and how many: the call's own name (a super's, its method's),

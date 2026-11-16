@@ -7987,14 +7987,62 @@ static int ct_params_plain(Compiler *c, const Scope *sc, int kwrest_ok, int defa
     if (i != sc->rest_idx && sc->pdefault && sc->pdefault[i] >= 0) return 0;
   return 1;
 }
+/* Can the default of parameter i of method sc run at the call instead, once
+   the call's arguments have (desugar_builtin_new_init_args)? It reads nothing
+   the new object or the method's frame supplies: no self, instance or class
+   variable, call on self, block, yield or super, no local but an earlier
+   parameter (held where the call passes it), and it writes no local. Nor a
+   constant, which the def's lexical scope reads and the call's need not. */
+static int ct_default_placeable(Compiler *c, const Scope *sc, int i) {
+  int root = sc->pdefault[i], n = 0, ok = 1;
+  int *ids = nt_subtree_ids((NodeTable *)c->nt, &root, 1, &n);
+  for (int k = 0; ok && k < n; k++) {
+    const char *nm = nt_str(c->nt, ids[k], "name");
+    switch (nt_kind(c->nt, ids[k])) {
+    case NK_IntegerNode: case NK_FloatNode: case NK_RationalNode: case NK_ImaginaryNode: case NK_StringNode:
+    case NK_InterpolatedStringNode: case NK_EmbeddedStatementsNode: case NK_SymbolNode: case NK_InterpolatedSymbolNode:
+    case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_ArrayNode: case NK_HashNode: case NK_AssocNode:
+    case NK_KeywordHashNode: case NK_RangeNode: case NK_RegularExpressionNode: case NK_ParenthesesNode:
+    case NK_StatementsNode: case NK_ArgumentsNode: case NK_GlobalVariableReadNode: case NK_GlobalVariableWriteNode: case NK_GlobalVariableOperatorWriteNode:
+    case NK_GlobalVariableOrWriteNode: case NK_GlobalVariableAndWriteNode: case NK_IfNode: case NK_ElseNode:
+    case NK_UnlessNode: case NK_AndNode: case NK_OrNode:
+      break;
+    case NK_CallNode: ok = nt_ref(c->nt, ids[k], "receiver") >= 0 && nt_ref(c->nt, ids[k], "block") < 0; break;
+    case NK_SplatNode: ok = nt_ref(c->nt, ids[k], "expression") >= 0; break;
+    case NK_LocalVariableReadNode:
+      ok = 0;
+      for (int j = 0; j < i && !ok; j++) ok = j != sc->rest_idx && nm && sc->pnames[j] && sp_streq(nm, sc->pnames[j]);
+      break;
+    default: ok = 0;
+    }
+  }
+  free(ids);
+  return ok;
+}
+/* Are the parameters of method sc that a call of argc positional arguments
+   leaves unfilled all defaults, the trailing optionals ahead of any rest?
+   1 where every one runs at the call (ct_default_placeable), each into f where
+   f is given (parameter of scope mi); FILL_UNPLACED where one cannot; 0 where
+   one has no default. */
+enum { FILL_UNPLACED = -1 };
+static int ct_fill_defaults(Compiler *c, const Scope *sc, int mi, int argc, NewFills *f) {
+  int placed = 1;
+  for (int i = 0, k = 0; i < sc->nparams; i++) {
+    if (i == sc->rest_idx || i == sc->kwrest_idx || k++ < argc) continue;
+    if (!sc->pdefault || sc->pdefault[i] < 0 || (sc->rest_idx >= 0 && i > sc->rest_idx) || (f && f->n >= NEW_FILLS_MAX)) return 0;
+    if (!ct_default_placeable(c, sc, i)) placed = 0;
+    else if (f) { f->mi[f->n] = mi; f->pi[f->n++] = i; }
+  }
+  return placed ? 1 : FILL_UNPLACED;
+}
 /* Does the `super` sup of method sc pass on exactly what sc received: its
    parameters in order, a rest parameter splatted, no keywords, and its
    caller's block (super_forwards_caller_block)? */
 static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int argc, int open, int kw_ok) {
   const NodeTable *nt = c->nt;
-  /* (the call fills every positional parameter: a default never runs) */
+  /* (the call fills every positional parameter, or the defaults it leaves run at the call) */
   int pos = sc->nparams - (sc->rest_idx >= 0) - (sc->kwrest_idx >= 0);
-  if (!ct_params_plain(c, sc, 1, !open && argc >= pos)) return 0;
+  if (!ct_params_plain(c, sc, 1, !open && (argc >= pos || ct_fill_defaults(c, sc, -1, argc, NULL) != 0))) return 0;
   int an = 0, args = nt_ref(nt, sup, "arguments"), np = 0, blk = nt_ref(nt, sup, "block");
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   if (!block_pass_is_callers(c, sc, blk)) return 0;
@@ -8057,7 +8105,7 @@ static int ct_call_keywords(const NodeTable *nt, const int *av, int nargs) {
    start (cplan_builtin_new_form's rule): each takes what the call passes
    (argc positional arguments and its keywords kw, or an open list), and
    forwards or ends the walk. */
-static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open, int kw) {
+static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open, int kw, NewFills *f) {
   /* (a keyword-dropping forward is one only where dropping them cannot be observed) */
   int kw_ok = !kw || builtin_new_keywords(c->classes[ci].name);
   for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
@@ -8075,20 +8123,32 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
        only where it takes no keywords and makes the Hash a positional argument too (BC_INIT_NO_KEYWORDS), as Array's does; a
        `**h` alone is taken as passing none, as it does when empty: one that holds keys is not told apart) */
     if ((kw != NEWKW_SURE || kwrest || builtin_init_no_keywords(c->classes[ci].name)) && ct_init_forwards(c, mi, ci, dargc, dopen, kw_ok)) {
+      /* (the defaults a forward fills are the next positional arguments of the one it passes them to, which the rewrite
+         places ahead of the call's keywords: not after a Hash made of them) */
+      int pos = sc->nparams - (sc->rest_idx >= 0) - (sc->kwrest_idx >= 0);
+      int fill = !dopen && dargc < pos ? (kw == NEWKW_SURE && !kwrest ? 0 : ct_fill_defaults(c, sc, mi, dargc, f)) : 1;
+      if (!fill) return BNF_REFUSE;
+      /* (a default that reads the object being built (self, an ivar, a call on self) or the def's lexical scope runs only once
+         CRuby has made the object, which the builtin's construction does not model yet: the chain keeps master's answer,
+         the builtin's own `new`, which runs no initialize) */
+      if (fill == FILL_UNPLACED) { f->n = 0; return BNF_OWN; }
+      argc = !dopen && dargc < pos ? pos : dargc;
       /* (the next takes what this one passes: past one without a keyword rest, the Hash it made, and no keywords) */
-      if (!kwrest) open = dopen, argc = dargc, kw = NEWKW_NONE;
+      if (!kwrest) open = dopen, kw = NEWKW_NONE;
       continue;
     }
     /* (the first that does not forward: an empty one builds the builtin's empty value, if it has one, from what the call
-       passes; an open list's splat, keywords and block pass are evaluated by the rewrite, which refuses what it cannot) */
-    return cplan_body_empty(c, mi) && builtin_empty_new(c->classes[ci].name) && !sc->yields && ct_params_plain(c, sc, 0, 0)
+       passes, where no default ahead runs; an open list's splat, keywords and block pass are evaluated by the rewrite,
+       which refuses what it cannot) */
+    return !f->n && cplan_body_empty(c, mi) && builtin_empty_new(c->classes[ci].name) && !sc->yields && ct_params_plain(c, sc, 0, 0)
            ? BNF_EMPTY : BNF_REFUSE;
   }
-  return BNF_OWN;
+  return f->n ? BNF_FILL : BNF_OWN;
 }
-/* See call_plan.h. */
-int cplan_builtin_new_form(Compiler *c, int id) {
+/* cplan_builtin_new_form's answer, and the defaults of a BNF_FILL into f */
+static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
   int ci, own, tmp[CPT_MAX];
+  f->n = 0;
   if (id < 0 || id >= c->node_cap || nt_kind(c->nt, id) != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name"))) return BNF_NONE;
   ci = cplan_new_class(c, id, &own);
   /* (a builtin exception's `new` runs the program's initialize itself: its emitter calls it) */
@@ -8111,24 +8171,38 @@ int cplan_builtin_new_form(Compiler *c, int id) {
   int start = tmp[0];
   /* a prepend a later statement makes is chosen at run time by its guard (guard_chain): every chain it may run must reduce alike */
   if (c->scopes[start].mixin_guarded || c->scopes[start].entry == ENTRY_TABLE) {
-    int to[VER_MAX_ARMS + 1], n = guard_chain(c, start, to, NULL, NULL), f = BNF_NONE;
+    int to[VER_MAX_ARMS + 1], n = guard_chain(c, start, to, NULL, NULL), g = BNF_NONE;
+    NewFills nf[1];
     for (int k = 0; k < n; k++) {
-      int fk = ct_new_chain_form(c, id, ci, to[k], argc, open, kw);
-      if (f != BNF_NONE && fk != f) return BNF_REFUSE;
-      f = fk;
+      /* (a chain whose defaults run at the call is one only where no guard chooses it) */
+      nf->n = 0;
+      int fk = ct_new_chain_form(c, id, ci, to[k], argc, open, kw, nf);
+      if ((g != BNF_NONE && fk != g) || fk == BNF_FILL) return BNF_REFUSE;
+      g = fk;
     }
-    return kw_own && f != BNF_OWN ? BNF_REFUSE : f;
+    return kw_own && g != BNF_OWN ? BNF_REFUSE : g;
   }
-  int f = ct_new_chain_form(c, id, ci, start, argc, open, kw);
-  return kw_own && f != BNF_OWN ? BNF_REFUSE : f;
+  int g = ct_new_chain_form(c, id, ci, start, argc, open, kw, f);
+  return kw_own && g != BNF_OWN ? BNF_REFUSE : g;
+}
+/* See call_plan.h. */
+int cplan_builtin_new_form(Compiler *c, int id) {
+  NewFills f;
+  return ct_builtin_new_form(c, id, &f);
+}
+/* See call_plan.h. */
+void cplan_builtin_new_fills(Compiler *c, int id, NewFills *f) {
+  if (ct_builtin_new_form(c, id, f) != BNF_FILL) f->n = 0;
 }
 /* Is call id a builtin class's `new` the plan does not answer: it runs a program
    initialize the builtin construction does not (the effect and the block_given? a
-   yielding one sees are lost), or builds its empty value from arguments still on
-   the call (desugar_builtin_new_empty_init moves them out first)? */
+   yielding one sees are lost), builds its empty value from arguments still on
+   the call, or leaves the defaults a forward fills off it
+   (desugar_builtin_new_init_args moves the arguments out and places the
+   defaults first)? */
 static int cplan_builtin_initialize_gap(Compiler *c, int id) {
   int f = cplan_builtin_new_form(c, id);
-  return f == BNF_REFUSE || (f == BNF_EMPTY && (nt_ref(c->nt, id, "arguments") >= 0 || nt_ref(c->nt, id, "block") >= 0));
+  return f == BNF_REFUSE || f == BNF_FILL || (f == BNF_EMPTY && (nt_ref(c->nt, id, "arguments") >= 0 || nt_ref(c->nt, id, "block") >= 0));
 }
 
 /* in the order codegen meets them: the prepasses, then the emitters */

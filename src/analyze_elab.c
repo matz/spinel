@@ -6766,6 +6766,16 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   return ELAB_YES;
 }
 
+/* See analyze.h. The call's window starts where it may first run (elab_call_window: a method's body from the statement its
+   first run reaches, past statements that run no code of the program's), so a def before that point is made before any run. */
+int elab_def_before_call(Compiler *c, int id, int def) {
+  ElabWindow w;
+  if (def < 0 || elab_call_window(c, id, &w) != ELAB_YES) return 0;
+  LoadPoint d = elab_point_of(c, def);
+  /* (and made for sure: not under a condition or in a block that may not run) */
+  return d.region >= 0 && !elab_point_may(c, def) && !elab_point_partial(c, def) && elab_cmp(d, w.from) == PROG_BEFORE;
+}
+
 /* ...in a block the record takes to run at once, one whose typed call
    target keeps it when kept (blk_kept), any when not: a call there may be
    one a target keeps, before the typed pass has marked it; or in a block

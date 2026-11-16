@@ -8040,8 +8040,9 @@ static int ct_init_forwards(Compiler *c, int mi, int ci, int argc, int open) {
 static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open) {
   for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
     const Scope *sc = &c->scopes[mi];
-    /* (a def of the class's own that the call runs ahead of, in the order the load phase runs, is not made yet: the chain goes on past it) */
-    if (!sc->is_prepend_copy && !sc->is_include_copy && cplan_runs_before_def_node(c, id, sc->def_node)) continue;
+    /* (a def of the class's own counts where the load record proves it made before the call can first run; where the call runs
+       ahead of it, or may, it does not: the chain is the one without it, as the builtin's own is where nothing else stands) */
+    if (!sc->is_prepend_copy && !sc->is_include_copy && !elab_def_before_call(c, id, sc->def_node)) continue;
     /* (each takes what the call passes, or CRuby raises ArgumentError there) */
     if (!(open ? sc->rest_idx >= 0 && sc->nrequired == 0 : cplan_def_takes_argc(c, mi, argc))) return BNF_REFUSE;
     if (ct_init_forwards(c, mi, ci, argc, open)) continue;

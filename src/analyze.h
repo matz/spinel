@@ -645,6 +645,9 @@ int elab_version_on_singleton(Compiler *c, int cls, const char *name, int node);
    which version the call meets. */
 typedef struct { LoadPoint from, to; unsigned char closed, wraps, never; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);
+/* is the def (a DefNode) made before call id can first run, in the order the load phase runs, so that every run of the call
+   finds it? 0 where the record cannot say (a call in a closure that may run ahead of it, a def under a condition's window) */
+int elab_def_before_call(Compiler *c, int id, int def);
 /* The calls that run the closure node id is in, with no def or block
    between (a lambda, `proc { }`), into sites[0..cap): the call that invokes
    it (is_proc_invoke), or each that invokes a read of the local it is

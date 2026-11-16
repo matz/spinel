@@ -849,6 +849,21 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    module's versions, a layer below a later one, reaches the entry over
    them once the entries are made (super_layer_entry). ml is call_target's
    answer for the lookup (NULL: the scope only). */
+/* See call_plan.h. */
+int cplan_super_start(Compiler *c, const Scope *s) {
+  int par = comp_super_parent(c, s->class_id, s->is_cmethod);
+  if (par < 0 || s->is_cmethod || c->classes[s->class_id].parent >= 0) return par;
+  /* a class with no program superclass whose builtin root answers the name ahead of Object: the builtin's
+     method comes before a reopening of Object's in CRuby's ancestors, and the chain has no program class to
+     start from (a reopening itself starts after its own methods, which the builtin_super_owner answers) */
+  const char *uname = comp_super_name(c, par, s);
+  int self = 0;
+  const char *root = uname ? comp_super_builtin_root(c, s->class_id, &self) : NULL;
+  /* (a Struct's or Data's own methods other than its text and its initialize have no arm yet behind a plan with no
+     start: the emitter raises where the chain's reopening of Object answered, so those keep the reopening) */
+  if (builtin_owner_kind(root) == BOWN_STRUCT && !is_to_s_name(uname) && !is_inspect_name(uname) && !is_initialize_name(uname)) return par;
+  return root && !self && builtin_answers_ahead_of(root, uname, "Object") ? -1 : par;
+}
 static int super_layer_entry(Compiler *c, int id, int t);
 int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
   const Scope *s = comp_super_site(c, s0);
@@ -862,7 +877,9 @@ int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
     if (e >= 0) { ml->kind = ML_ENTRY; ml->why = 0; }
     return e >= 0 ? e : mi;
   }
-  int par = comp_super_parent(c, s->class_id, s->is_cmethod);
+  /* (a Method#super_method, asked with no node, has no Method value of the builtin's to answer with: it keeps
+     the program's chain) */
+  int par = id >= 0 ? cplan_super_start(c, s) : comp_super_parent(c, s->class_id, s->is_cmethod);
   const char *uname = comp_super_name(c, par, s);
   if (!uname) {
     *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1, .from = par };

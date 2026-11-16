@@ -16116,7 +16116,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (s->class_id < 0 || !s->name) return 0;
   refuse_super_splat(c, id, super_plan_mi(c, id));
   const Scope *st = comp_super_site(c, s);
-  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
+  int p = cplan_super_start(c, st);
   int defcls = -1;
   /* `super` inside a class method resolves through the parent's CLASS-method
      chain; the instance chain would miss `def self.x` entirely. */
@@ -16861,7 +16861,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
     return;
   }
   /* Strip __prep N prefix to get the user method name for parent chain lookup. */
-  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
+  int p = cplan_super_start(c, st);
   const char *uname = comp_super_name(c, p, st);
   /* super inside a class method: resolve through the parent's CLASS-method
      chain and call the sp_<Cls>_s_ form (class methods take no instance

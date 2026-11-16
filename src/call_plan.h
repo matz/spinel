@@ -360,6 +360,11 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    chain's); ml as call_target's, and ml->from the class the lookup started
    from (-1: a prepend chain with no next) */
 int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
+/* The class a super in instance method scope s starts its chain at: the parent (Object for a root class), but
+   none for a class with no program superclass that sits under a builtin answering the name ahead of Object (an
+   exception, an Array, a Struct): the builtin's method is the answer, and a reopening of Object's is behind it.
+   Every reader of a super's target starts here. */
+int cplan_super_start(Compiler *c, const Scope *s);
 /* Is super node id, in a class method, the call of a definition hook (`inherited`, `method_added`) that only a builtin's no-op answers? */
 int cplan_core_hook(Compiler *c, int id);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */

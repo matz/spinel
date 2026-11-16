@@ -534,8 +534,7 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     if (nt_ref(nt, id, "receiver") >= 0 || id >= c->node_cap) continue;
     const char *nm = nt_str(nt, id, "name");
-    /* (a builtin_only call is the builtin's, whatever Object defines) */
-    if (!nm || cplan_builtin_call(c, id) || call_target(c, id, obj, nm, CT_OWN, NULL) < 0) continue;
+    if (!nm || call_target(c, id, obj, nm, CT_OWN, NULL) < 0) continue;
     /* (in an instance_eval block self is the receiver) */
     Scope *sc = comp_scope_of(c, id);
     if (ie_class_of(c, id) >= 0) continue;

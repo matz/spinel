@@ -36307,7 +36307,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      block parameter). */
   {
     const char *bn0 = nt_str(c->nt, id, "name");
-    int bmi0 = bn0 && !cplan_builtin_call(c, id) ? call_target(c, id, -1, bn0, CT_TOP, NULL) : -1;
+    int bmi0 = bn0 ? call_target(c, id, -1, bn0, CT_TOP, NULL) : -1;
     if (bmi0 >= 0 && nt_ref(c->nt, id, "receiver") < 0 &&
         nt_ref(c->nt, id, "block") < 0 &&
         !(bmi0 < c->nscopes && c->scopes[bmi0].yields)) {
@@ -36355,7 +36355,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     int erecv = nt_ref(c->nt, id, "receiver");
     TyKind ert = erecv >= 0 ? comp_ntype(c, erecv) : TY_VOID;
     if (erecv >= 0 && (ert == TY_RANGE || ert == TY_TIME || ert == TY_IO || ert == TY_CLASS) &&
-        nt_ref(c->nt, id, "block") < 0 && !cplan_builtin_call(c, id)) {
+        nt_ref(c->nt, id, "block") < 0) {
       const char *ename = nt_str(c->nt, id, "name");
       int eci = ert == TY_IO ? io_reopen_class(c, id, ename)
               : comp_core_class(c, ert == TY_RANGE ? CORE_RANGE : ert == TY_TIME ? CORE_TIME : CORE_CLASS);

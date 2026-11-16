@@ -6829,16 +6829,15 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
        as the call plan takes it (comp_cbody_call_mi); not where an
        instance_eval block's receiver answers the name */
     { int iec = ie_class_of(c, id);
-      int cb = cplan_builtin_call(c, id) || (iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0)
-               ? -1 : comp_cbody_call_mi(c, id, name);
+      int cb = iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0 ? -1 : comp_cbody_call_mi(c, id, name);
       if (cb >= 0) { *out = an_user_call(c, id, cb, UC_CMETH, c->node_cbody[id]); return 1; } }
-    int mi = cplan_builtin_call(c, id) ? -1 : call_target(c, id, -1, name, CT_TOP | CT_INCLUDED, NULL), fvia = UC_TOP;
+    int mi = call_target(c, id, -1, name, CT_TOP | CT_INCLUDED, NULL), fvia = UC_TOP;
     if (mi >= 0 && c->scopes[mi].class_id >= 0 && !c->scopes[mi].is_cmethod) fvia = UC_INCLUDED;   /* (a module main extends or Object includes) */
     /* in a block run by instance_eval, the receiver's own method answers
        before a top-level def of the same name (#7213) */
     { int iec = ie_class_of(c, id);
       if (mi >= 0 && iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0) mi = -1; }
-    if (mi < 0 && !cplan_builtin_call(c, id)) { mi = call_target(c, id, -1, name, CT_INCLUDED, NULL); fvia = UC_INCLUDED; }
+    if (mi < 0) { mi = call_target(c, id, -1, name, CT_INCLUDED, NULL); fvia = UC_INCLUDED; }
     if (mi >= 0) { *out = an_user_call(c, id, mi, fvia, fvia == UC_TOP ? -1 : c->scopes[mi].class_id); return 1; }
     /* Kernel conversions */
     if (sp_streq(name, "Integer") && (kw_argc == 1 || kw_argc == 2)) {
@@ -6936,7 +6935,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
 /* Does a reopening of the receiver's builtin class answer call id with a
    method of its own, as infer_user_method_call's reopen lookup finds it? */
 int an_builtin_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly) {
-  if (recv < 0 || bonly || !name || core_of_type(rt) < 0 || cplan_builtin_call(c, id)) return 0;
+  if (recv < 0 || bonly || !name || core_of_type(rt) < 0) return 0;
   int ci = comp_core_class(c, core_of_type(rt));
   int mi = ci >= 0 ? call_target(c, id, ci, name, 0, NULL) : -1;
   return mi >= 0 && !cplan_reopen_runs_builtin(c, id, mi);
@@ -9493,7 +9492,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      declared sp_StrArray * and assigned a const char *. One rule, asked before
      any builtin arm, keeps the two halves of the compiler on the same method. */
   if (recv < 0 && nt_ref(nt, id, "block") < 0 &&
-      !nt_str(nt, id, "vis_enforce") && !cplan_builtin_call(c, id)) {
+      !nt_str(nt, id, "vis_enforce")) {
     int bmi = call_target(c, id, -1, name, CT_TOP | CT_INCLUDED, NULL);
     int bvia = bmi >= 0 && c->scopes[bmi].class_id >= 0 && !c->scopes[bmi].is_cmethod ? UC_INCLUDED : UC_TOP;
     if (bmi >= 0) {
@@ -9636,8 +9635,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      for a name it does not know, which typed `t.stamp` as an int slot around
      a String-returning reopen. The scalar reopens (String, Integer, ...) keep
      their place further down, where their rules have long been ordered. */
-  if (recv >= 0 && (rt == TY_RANGE || rt == TY_TIME || rt == TY_IO || rt == TY_CLASS) &&
-      !bonly && !cplan_builtin_call(c, id)) {
+  if (recv >= 0 && (rt == TY_RANGE || rt == TY_TIME || rt == TY_IO || rt == TY_CLASS) && !bonly) {
     int eci = rt == TY_IO ? io_reopen_class(c, id, name)
             : comp_core_class(c, rt == TY_RANGE ? CORE_RANGE : rt == TY_TIME ? CORE_TIME : CORE_CLASS);
     int emi = eci >= 0 ? call_target(c, id, eci, name, 0, NULL) : -1;

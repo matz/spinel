@@ -10948,8 +10948,14 @@ static int infer_yield_node(Compiler *c, int id, const NodeTable *nt, NodeKind n
         int an = nt_ref(nt, w, "arguments");
         if (an < 0) break;
         const char *wn = nt_str(nt, w, "name");
+        /* Hash#merge chooses its result layout from both operands. A
+           shared local or return cannot keep the first block's layout. */
+        int recv = nt_ref(nt, w, "receiver"), ac = 0;
+        const int *av = nt_arr(nt, an, "arguments", &ac);
+        if (wn && sp_streq(wn, "merge") && recv >= 0 && ac == 1 &&
+            ty_is_hash(infer_type(c, recv)) && value_arm_is(nt, av[0], id) &&
+            yvd_once(c, ymi, &dv)) { *out = TY_POLY; return 1; }
         if (!wn || !call_may_reach_user_method(c, w, wn)) break;
-        int ac = 0; const int *av = nt_arr(nt, an, "arguments", &ac);
         for (int e = 0; e < ac; e++)
           if (value_arm_is(nt, av[e], id)) { if (yvd_once(c, ymi, &dv)) { *out = TY_POLY; return 1; } break; }
         break;

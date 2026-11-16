@@ -1588,6 +1588,15 @@ int main(int argc, char **argv) {
      0 means unlimited in both -- in each compiler's own spelling; an unknown
      -f flag is an error, not a warning (#4152). */
   s_add(&cmd, cc_is_clang(cc_cmd) ? "-ferror-limit=0 " : "-fmax-errors=0 ");
+  /* clang stops parsing at 256 nested brackets ("bracket nesting level
+     exceeded maximum of 256"), a guard of its own stack against
+     pathological input. The generated C nests a statement expression per
+     operand, arm and root, and six statements of an application with a
+     hundred thousand scopes went past it (a JSON encoder's
+     `value.as_json(@options) unless @options.empty?`, a delegator's
+     `target.send(method, *arguments, &block)`), each ending the build of
+     its unit. Lifted, in clang's own spelling; gcc has no such limit. */
+  if (cc_is_clang(cc_cmd)) s_add(&cmd, "-fbracket-depth=4096 ");
   /* With #line on, cc reports against the .rb -- but only the LINE is remapped.
      The column is the C one, and a whole Ruby line is emitted as one C line, so
      it routinely lands hundreds of columns past the end of the source line it

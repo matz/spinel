@@ -15879,7 +15879,11 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     /* a reopened builtin (`class String; def ...`) with no user-defined
        self.new keeps its builtin constructor: fall past the user-ctor logic
        to the builtin cn handler below (#3109) */
-    int reopen_builtin_new = ci >= 0 && rk == NK_ConstantReadNode &&
+    /* (the error a dispatcher's no-method arm builds, builtin_new, names
+       the class as ::NoMethodError / ::NameError where a nested definition
+       shadows the name: that path is the builtin's too) */
+    int reopen_builtin_new = ci >= 0 &&
+                             (rk == NK_ConstantReadNode || nt_int(nt, id, "builtin_new", 0)) &&
                              is_builtin_reopen(key_name(c, recv)) &&
                              comp_cmethod_in_chain(c, ci, "new", NULL) < 0;
     /* native (C-backed) class: the declared constructor (see emit_native_ctor) */

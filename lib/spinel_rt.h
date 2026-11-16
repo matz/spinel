@@ -2507,6 +2507,13 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
       NULL };
     return sp_str_in_list(m, enumm) || sp_str_in_list(m, enumrm);
   }
+  /* a chain or a product is an Enumerator whose #class names its subclass.
+     CRuby undefines next, peek, next_values, peek_values and feed there,
+     so only rewind and with_index of the Enumerator's own names stay. */
+  if (strcmp(cn, "Enumerator::Chain") == 0 || strcmp(cn, "Enumerator::Product") == 0) {
+    static const char *const enumcm[] = { "rewind", "with_index", NULL };
+    return sp_str_in_list(m, enumm) || sp_str_in_list(m, enumcm);
+  }
   /* an IO handle in a boxed slot -- a File, a socket, $stderr, a stat --
      by its kind */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p)

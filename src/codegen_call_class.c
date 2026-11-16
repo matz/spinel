@@ -1093,6 +1093,16 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* the runtime answers: a Range value's builtin surface (the probe has
          no reading for it, #3619), an IO (the handle knows its kind), and a
          poly receiver */
+      /* an Enumerator's next, peek, next_values, peek_values and feed
+         (respond_to_static_answer): a chain or a product has none of them */
+      if (recv >= 0 && rt == TY_ENUMERATOR) {
+        int tv = ++g_tmp;
+        buf_printf(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(({ sp_Enumerator *_t%d = " : "({ sp_Enumerator *_t%d = ", tv);
+        emit_expr(c, recv, b);
+        buf_printf(b, "; (sp_bool)(_t%d && !_t%d->is_chain && !_t%d->is_product); })", tv, tv, tv);
+        if (repr_of(c, id).kind == RK_BOXED) buf_puts(b, ")");
+        return 1;
+      }
       if (recv >= 0 && (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_IO)) {
         int tv = ++g_tmp;
         if (repr_of(c, id).kind == RK_BOXED) buf_puts(b, "sp_box_bool(");

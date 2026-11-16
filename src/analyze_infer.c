@@ -4081,6 +4081,17 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
          `[-> { 5 }, Table.new][0][]` read the Proc's Integer back as
          Table#[]'s String and crashed. A receiver the facts hold to program
          objects, or to no Proc (the `pr` bit), carries none. */
+      /* A writer's name called as a method on a union beside a class's own
+         `def name=`: an attr_writer of another class answers the value it
+         stores, which the dispatch's writer arms put in the boxed result
+         slot (emit_boxed_writer_arms beside the method arms) */
+      if (found && !an_builtin_only && rt == TY_POLY && argc == 1 && name_is_plain_setter(name) &&
+          !call_is_setter_assign(nt, id) && nt_ref(nt, id, "block") < 0) {
+        char wb[256];
+        if (setter_base_name(name, wb, sizeof wb))
+          for (int k = 0; k < c->nclasses; k++)
+            if (comp_is_writer(&c->classes[k], wb) && call_target(c, id, k, name, 0, NULL) < 0) { *out = TY_POLY; return 1; }
+      }
       if (found && !an_builtin_only && rt == TY_POLY && is_call_alias(name)) {
         const ClsSet *cs = cls_fact_node(c, recv);
         if (!cs || cs->all || cs->pr) { *out = TY_POLY; return 1; }

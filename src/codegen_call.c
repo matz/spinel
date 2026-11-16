@@ -11479,6 +11479,26 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          (ran_first_handle): an arm that re-emits it, the synthesized
          writers' default, stores that handle (unbound with kwmark) */
       if (setter_late && htmp[0]) ran_first_bind(argv[0], atmp[0], htmp[0]);
+      /* (ahead of the pre-arms, which end in `else ` before the switch) */
+      /* A writer's name called as a method (`o.send(:x=, v)`, a computed
+         send's arm) where some class defines it: an attr_writer of another
+         class answers too, storing the value it answers with (the method
+         arms answer their own values over it) */
+      char wbase[256];
+      int attr_wr = !is_setter_val && argc == 1 && pos_argc == 1 && splat_a < 0 && kwh < 0 && ret == TY_POLY &&
+                    nt_ref(nt, id, "block") < 0 && name_is_plain_setter(name) &&
+                    setter_base_name(name, wbase, sizeof wbase);
+      if (attr_wr) {
+        int any = 0;
+        for (int k = 0; k < c->nclasses && !any; k++) any = comp_is_writer(&c->classes[k], wbase);
+        attr_wr = any;
+      }
+      if (attr_wr) {
+        char an[32]; snprintf(an, sizeof an, "_t%d", atmp[0]);
+        buf_printf(b, "_t%d = ", tr);
+        if (atmp_ty[0] == TY_POLY) buf_puts(b, an); else emit_boxed_text(c, atmp_ty[0], an, b);
+        buf_puts(b, "; ");
+      }
       ptemps.kwh_tmp = emit_poly_callable_kwh_decl(c, name, &ps, &ptemps, &kw, b);
       emit_poly_prearms_n(c, name, &ps, &ptemps, b);
       int sv_csd2 = g_cls_tag_skip;
@@ -11506,6 +11526,13 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         g_poly_pub_keep = pub_keep;
         emit_poly_user_arms_n(c, id, name, &U, b);
         g_poly_pub_keep = pk; }
+      if (attr_wr) {
+        char an[32], objp[32];
+        snprintf(an, sizeof an, "_t%d", atmp[0]); snprintf(objp, sizeof objp, "_t%d.v.p", tv);
+        g_writer_arms_attr_only = 1;
+        emit_boxed_writer_arms(c, wbase, name, objp, an, atmp_ty[0], argv[0], tv, atmp[0], 0, b);
+        g_writer_arms_attr_only = 0;
+      }
       int is_aref = sp_streq(name, "[]") && argc == 1 && splat_a < 0;
       int is_aref2 = sp_streq(name, "[]") && argc == 2 && splat_a < 0;
       /* fetch with a block answers the block for a missing key: the

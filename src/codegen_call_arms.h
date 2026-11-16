@@ -131,7 +131,7 @@ extern const char *const comparable_names[];
 int const_name_is_wrong(const char *s);
 int emit_io_pick(Compiler *c, int id, int tv, const char *name, int public_only, Buf *b);
 void emit_io_pick_public(Compiler *c, int id, const char *qm, const char *pick, Buf *b);
-void emit_io_reopen_responds(Compiler *c, int tv, const char *qm, int include_all, Buf *b);
+void emit_io_reopen_responds(Compiler *c, int id, int tv, const char *qm, int include_all, Buf *b);
 void emit_poly_dispatch_key(Compiler *c, int tv, int cls0_cand, int prim_cand, int exc_cand, Buf *b);
 /* The key the switch of a named dispatch of `name` reads off the boxed
    value in _t<tv>, in the plan's key form (PolyPlan.flags, PPF_KEY_*): the
@@ -176,9 +176,9 @@ int root_reopen_defines(Compiler *c, const char *qm);
 /* 1 when the program's reopen of the builtin class or module `cls` (its
    chain) defines `name`, as call_target answers call id (-1: no call asks) */
 int reopened_owns(Compiler *c, int id, const char *cls, const char *name);
-int bool_side_responds(Compiler *c, const char *qm, int include_all, int foldable, int *ta, int *fa);
-int root_reopen_defines_own(Compiler *c, int k, const char *qm);   /* a root reopening k defines qm itself (def, attr_reader, attr_writer) */
-int root_reopen_method_vis(Compiler *c, int cid, const char *qm);   /* an Object, Kernel or BasicObject reopening's method qm: its visibility, or -1 */
+PresenceKind presence_at(Compiler *c, int id, int cls, unsigned side, const char *qm, CplanPresence *pr);   /* what class cls holds of qm where call id runs (the call plan: cplan_presence; the final tables alone for a super or no id) */
+int bool_side_responds(Compiler *c, int id, const char *qm, int include_all, int foldable, int *ta, int *fa);
+int root_reopen_method_vis(Compiler *c, int id, int cid, const char *qm);   /* an Object, Kernel or BasicObject reopening's method qm: its visibility, or -1 */
 int private_answer_overridden(Compiler *c, const char *qm, TyKind rt);
 int refl_md_dynamic_used(Compiler *c);
 void emit_scope_parameters_pushes(Compiler *c, int mi, int tr4, Buf *b);
@@ -362,6 +362,7 @@ int builtin_method_arity(const char *cls, const char *m, int *out);
 const char *builtin_method_params(const char *owner, const char *m, int *in_c);
 int builtin_method_known(const char *cls, const char *m);
 int core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
+int refl_builtin_rows_vis(Compiler *c, int ci, const char *m);   /* codegen_call_class.c */
 int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
 const char *core_ancestor_step(const char *p, size_t *len);   /* codegen_call_class.c */

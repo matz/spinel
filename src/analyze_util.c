@@ -6286,10 +6286,15 @@ static const int *io_family_classes(Compiler *c, int *n) {
 int io_reopen_defs(Compiler *c, int id, const char *name, int public_only, int *ks, int max) {
   int n = 0, nf = 0;
   const int *fam = io_family_classes(c, &nf);
+  /* a call of the name binds as it calls; a node that only asks about the name (a respond_to?) asks where it runs */
+  const char *own[2];
+  int calls = 0, no = id >= 0 ? call_node_names(c, id, own) : 0;
+  for (int q = 0; q < no; q++) calls |= own[q] && sp_streq(own[q], name);
+  unsigned flags = id >= 0 && !calls ? CT_REACH : 0;
   for (int i = 0; i < nf && n < max; i++) {
     int k = fam[i];
     MethodLookup ml = { .def_class = -1 };
-    if (call_target(c, id, k, name, 0, &ml) < 0 || ml.def_class != k) continue;
+    if (call_target(c, id, k, name, flags, &ml) < 0 || ml.def_class != k) continue;
     if (public_only && comp_method_vis_in_chain(c, k, name) != SP_VIS_PUBLIC) continue;
     ks[n++] = k;
   }

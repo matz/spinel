@@ -1358,6 +1358,9 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
    of a builtin's name among them. 0 for none; -1 where the rows do not
    hold the class. */
 int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit);
+/* ...from CRuby's rows alone, for a reopened builtin whose def of the name the record proves has not run where the
+   reflection call runs: the program's own visibility words and defs do not count. */
+int cplan_builtin_rows_vis(Compiler *c, int ci, const char *m);
 /* The visibility (SP_VIS_*) a reflection call node that finds program
    method m of class ci (its own, or along its chain with inherit) reads:
    for Object's reopening, where main's history of m and Object's are one

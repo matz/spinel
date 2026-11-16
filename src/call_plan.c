@@ -5003,10 +5003,27 @@ static int pr_in_untyped_block(Compiler *c, int id) {
   }
   return 0;
 }
+/* Has the undef_method of name that builtin class cls itself holds run where call id runs? The record places the call
+   (not in a method's body or a block it cannot place) and answers by the version live there: an undef stands, no
+   version yet or a def says it has not run; anywhere the record cannot tell, the table's undef stands. */
+static int pr_undef_at(Compiler *c, int id, int cls, const char *name) {
+  LoadPoint p = elab_point_of(c, id);
+  if (p.region < 0 || elab_in_unplaced_block(c, id)) return 1;
+  const LrDef *d = NULL;
+  int o = elab_method_at(c, cls, name, 0, p, &d);
+  if (o == ELAB_UNKNOWN) return 1;
+  return o == ELAB_NO && d && d->kind == LR_UNDEF;
+}
 /* See call_plan.h. */
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
   MethodLookup ml = { .def_class = -1 };
   pr_table(c, cls, side, name, out);
+  /* an undef_method of a reopened builtin's own method answers where it runs (as ct_builtin_reopen_undefined_at asks a
+     reopened builtin's defs); a program class's keeps the table's, whose chain the record does not place */
+  if (out->undef && id >= 0 && !(side & (CT_CMETHOD | CT_TOP | CT_OWN)) && cls >= 0 && cls < c->nclasses && c->classes[cls].name &&
+      c->classes[cls].enclosing_class < 0 && builtin_class_id(c->classes[cls].name) &&
+      name_list_has(c->classes[cls].undefs, c->classes[cls].nundefs, name))
+    out->undef = pr_undef_at(c, id, cls, name);
   if (pr_in_untyped_block(c, id)) return PR_TABLE;
   call_target(c, id, cls, name, side | CT_REACH, &ml);
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
@@ -6411,6 +6428,10 @@ int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, con
   return mv > 0 ? mv : bv;
 }
 /* See call_plan.h. */
+/* See call_plan.h. */
+int cplan_builtin_rows_vis(Compiler *c, int ci, const char *m) {
+  return refl_builtin_rows_vis(c, ci, m);
+}
 int cplan_program_method_vis(Compiler *c, int node, int ci, const char *m, int inherit) {
   int v = cplan_object_entry_vis(c, node, ci, m);
   return v >= 0 ? v : inherit ? comp_method_vis_in_chain(c, ci, m) : comp_method_vis(&c->classes[ci], m);
@@ -9935,7 +9956,9 @@ int cplan_nil_program_responds(Compiler *c, int call, const char *name, int incl
   /* an undef on NilClass or Object (above the first definer) hides the
      lower owners' method */
   int nk = comp_core_class(c, CORE_NILCLASS);
-  if (nk >= 0 && comp_is_undeffed_in_chain(c, nk, name)) return 0;
+  CplanPresence npr = { 0 };
+  if (nk >= 0) cplan_presence(c, call, nk, 0, name, &npr);
+  if (npr.undef) return 0;
   int ia = include_all < 0 ? 2 : include_all;
   /* NilClass's own public methods (CRuby's NilClass.public_instance_methods
      false): one sits below every program method of Object, Kernel and
@@ -9943,7 +9966,7 @@ int cplan_nil_program_responds(Compiler *c, int call, const char *name, int incl
   for (int i = 0; owners[i] >= 0; i++) {
     if (owners[i] == CORE_OBJECT && builtin_answers_ahead_of("NilClass", name, "Object")) return 1;
     int k = comp_core_class(c, owners[i]);
-    if (k < 0 || call_target(c, -1, k, name, 0, NULL) < 0) {
+    if (k < 0 || call_target(c, call, k, name, CT_REACH, NULL) < 0) {
       if (owners[i] == CORE_OBJECT && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0)
         return cplan_top_def_vis(c, call, name) == SP_VIS_PUBLIC ? 1 : ia;
       continue;

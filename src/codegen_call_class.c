@@ -215,24 +215,14 @@ static void cm_ret_close(const Scope *s, int w, Buf *b) {
 int respond_to_runtime_reaches(Compiler *c, TyKind rt) {
   return !any_class_defines(c, "respond_to?") || g_poly_builtin_arm ||
          !(rt == TY_POLY ||
-           (ty_is_object(rt) && comp_method_in_chain(c, ty_object_class(rt), "respond_to?", NULL) >= 0));
+           (ty_is_object(rt) && call_target(c, -1, ty_object_class(rt), RESPOND_TO_NAME, CT_METHODS, NULL) >= 0));
 }
 
-/* The instance methods of the program's Object, Kernel and BasicObject
-   reopenings that class k's chain does not reach (the class table keeps
-   them apart), into pub or priv by the visibility root_reopen_method_vis
-   gives; k -1 for a value of no program class. Each name once. */
-/* One name of root reopening u (an index in roots) for class k: into pub or
-   priv when k's chain does not answer it and u is the first root with it. */
-static void object_reopen_responds_name(Compiler *c, int k, const int *roots, int u, const char *nm,
-                                        Buf *pub, Buf *priv) {
+/* One name of a root reopening for class k: into pub or priv when k's chain
+   does not answer it, by the visibility the first root that holds it gives. */
+static void object_reopen_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv) {
   if (k >= 0 && (call_answers(c, -1, k, nm, 0, NULL) || cplan_undefined(c, k, 0, nm))) return;
-  /* the first root that defines it answers (Object over Kernel) */
-  for (int v = 0; v < u; v++) {
-    int rv = comp_core_class(c, roots[v]);
-    if (rv >= 0 && rv != k && root_reopen_defines_own(c, rv, nm)) return;
-  }
-  int vis = root_reopen_method_vis(c, k, nm);
+  int vis = root_reopen_method_vis(c, -1, k, nm);
   if (vis < 0 || name_is_synth_method(c, nm) || is_initialize_family(nm)) return;
   Buf *b = vis == SP_VIS_PUBLIC ? pub : priv;
   buf_puts(b, "\""); emit_c_escaped(b, nm); buf_puts(b, "\", ");
@@ -241,20 +231,24 @@ static void object_reopen_responds_name(Compiler *c, int k, const int *roots, in
 /* The instance methods of the program's Object, Kernel and BasicObject
    reopenings that class k's chain does not reach (the class table keeps
    them apart), into pub or priv by the visibility root_reopen_method_vis
-   gives; k -1 for a value of no program class. Each name once. Readers and
-   writers (attr_*) count as methods. */
-typedef struct { Compiler *c; int k; const int *roots; int u; Buf *pub, *priv; } ObjReopen;
+   gives; k -1 for a value of no program class. Each name once (the first
+   root that holds it asks the lookup, which answers by that root's).
+   Readers and writers (attr_*) count as methods. */
+typedef struct { Compiler *c; int k; Buf *pub, *priv; ReflNames *seen; } ObjReopen;
 static void object_reopen_name(void *ud, const char *name) {
   const ObjReopen *o = ud;
-  object_reopen_responds_name(o->c, o->k, o->roots, o->u, name, o->pub, o->priv);
+  if (refl_note(o->seen, name, 0)) object_reopen_responds_name(o->c, o->k, name, o->pub, o->priv);
 }
 static void emit_object_reopen_responds(Compiler *c, int k, Buf *pub, Buf *priv) {
   static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  ReflNames seen;
+  memset(&seen, 0, sizeof seen);
+  ObjReopen o = { c, k, pub, priv, &seen };
   for (int u = 0; roots[u] >= 0; u++) {
     int r = comp_core_class(c, roots[u]);
-    ObjReopen o = { c, k, roots, u, pub, priv };
     if (r >= 0 && r != k) cplan_own_names(c, r, object_reopen_name, &o);
   }
+  refl_free(&seen);
 }
 
 /* The names class k's chain answers, as the two lists a run-time
@@ -592,6 +586,11 @@ static int refl_builtin_vis_walk(Compiler *c, int ci, const char *m, int inherit
   return core_method_vis(sup, m, 1, owner);
 }
 
+/* The same from CRuby's own rows alone: no visibility the program's defs and words gave its classes counts (a method
+   the class's reopening defines later is not one of the rows) */
+int refl_builtin_rows_vis(Compiler *c, int ci, const char *m) {
+  return refl_builtin_vis_walk(c, ci, m, 1, 0, NULL);
+}
 /* The visibility CRuby gives instance method m of class ci where the
    program defines none: from a builtin class it reopens, the builtin modules
    its chain includes, and the builtin class at the root of the chain (Object
@@ -932,7 +931,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        value picks its class's answer */
     int bta, bfa, bia = argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode,
         bfo = argc < 2 || nt_kind(nt, argv[1]) == NK_TrueNode || nt_kind(nt, argv[1]) == NK_FalseNode;
-    if (qm && recv >= 0 && rt == TY_BOOL && bool_side_responds(c, qm, bia, bfo, &bta, &bfa) &&
+    if (qm && recv >= 0 && rt == TY_BOOL && bool_side_responds(c, id, qm, bia, bfo, &bta, &bfa) &&
         respond_to_static_answer(c, id, recv, rt, qm, argc, argv) < 0) {
       int tv = ++g_tmp, boxed = repr_of(c, id).kind == RK_BOXED;
       if (boxed) buf_puts(b, "sp_box_bool(");
@@ -1069,7 +1068,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         buf_puts(b, "\")");
         /* a private one too when the literal second argument is true */
         if (rt == TY_IO)
-          emit_io_reopen_responds(c, tv, qm, argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode, b);
+          emit_io_reopen_responds(c, id, tv, qm, argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode, b);
         buf_puts(b, "; })");
         if (repr_of(c, id).kind == RK_BOXED) buf_puts(b, ")");
         return 1;
@@ -1157,7 +1156,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           for (int k = 0; k < c->nclasses; k++) {
             /* (an undef hides a root class's method from the class's values) */
             CplanPresence pr;
-            cplan_table_presence(c, k, CT_REACH, qm, &pr);
+            PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
             if (pr.undef) {
               if (nown < (int)(sizeof own / sizeof own[0])) own[nown++] = k; else own_full = 1;
               continue;
@@ -1165,7 +1164,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             int nk = comp_native_binding_class(c, k, qm);
             int native = nk >= 0 && comp_native_method_find(c, nk, qm, 0, 0) >= 0;
             /* (the names the class carries without a method entry answer as they do on the typed receiver) */
-            int has = pr.table || native || pr.implied;
+            int has = (pk != PR_ABSENT && pr.table) || native || pr.implied;
             /* a private or protected method, the program's own as much as a
                native one, answers only to a true include_all */
             int nonpublic = has && pr.vis != SP_VIS_PUBLIC;
@@ -1247,7 +1246,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           buf_puts(b, "\"");
           emit_c_escaped(b, qm);
           buf_puts(b, "\")");
-          emit_io_reopen_responds(c, tv, qm, argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode, b);
+          emit_io_reopen_responds(c, id, tv, qm, argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode, b);
           class_value_responds(c, tv, qm, b);
           buf_puts(b, "; })");
           return 1;
@@ -1309,14 +1308,15 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          Enumerable's, never a Data class's); without, the class's own entries (a method copied in from an included
          module is the module's) */
       CplanPresence pr;
-      cplan_table_presence(c, ci, inherit ? CT_REACH : CT_OWN, qm, &pr);
+      PresenceKind pk = presence_at(c, id, ci, inherit ? CT_REACH : CT_OWN, qm, &pr);
       if (pr.undef) { buf_puts(b, "FALSE"); return 1; }
-      int found = pr.table;
+      int found = pk != PR_ABSENT && pr.table;
       /* a name the program's defs leave open is answered by CRuby's own
          methods of the builtin classes and modules above the class, Object
          and Kernel among them (#2673); one the table does not hold is
          refused below */
-      bv = found ? 0 : cplan_builtin_method_vis(c, id, ci, NULL, qm, inherit);
+      /* (where the record proves no def of the name live at the call, CRuby's rows alone answer) */
+      bv = found ? 0 : pk == PR_ABSENT && pr.table ? cplan_builtin_rows_vis(c, ci, qm) : cplan_builtin_method_vis(c, id, ci, NULL, qm, inherit);
       if (bv >= 0) {
         int yes = ((bv & 1) && md_pub) || ((bv & 2) && md_prot) || ((bv & 4) && md_priv);
         if (found) {

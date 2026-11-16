@@ -16737,13 +16737,19 @@ static int emit_super_backtick(Compiler *c, int id, Scope *s, Buf *b) {
 
 /* A bare `super` in the initialize of a class below KeyError and its like:
    the method's parameters as they stand now, the positional ones gathered
-   into one Array, the keywords boxed as a Hash. */
-static void emit_exc_attrs_zsuper(Compiler *c, int id, Scope *s, const char *self_text, Buf *b) {
+   into one Array, the keywords boxed as a Hash. With `fn` (sp_syserr_super,
+   sp_sysexit_super) the initialize reached is SystemCallError's or
+   SystemExit's, which take no keywords: as for any initialize written in C,
+   a non-empty keyword Hash goes over as one more argument and an empty one
+   as none, and `fn` judges the count at run time as CRuby does. */
+static void emit_exc_attrs_zsuper(Compiler *c, int id, Scope *s, const char *self_text, const char *fn, Buf *b) {
   int nkwd = 0;
   for (int k = 0; k < s->nparams; k++)
     if (k != s->kwrest_idx && callee_param_is_declared_kwarg(c, s, s->pnames[k])) nkwd++;
   if (nt_ref(c->nt, id, "block") >= 0 || (nkwd > 0 && s->kwrest_idx >= 0))
-    unsupported(c, id, "a bare super forwarding a block, or named keywords beside a **rest, to the initialize of a KeyError, NameError or FrozenError subclass");
+    unsupported(c, id, !fn ? "a bare super forwarding a block, or named keywords beside a **rest, to the initialize of a KeyError, NameError or FrozenError subclass"
+                       : sp_streq(fn, "sp_sysexit_super") ? "a bare super forwarding named keywords beside a **rest to SystemExit#initialize"
+                       : "a bare super forwarding named keywords beside a **rest to SystemCallError#initialize");
   if (nkwd > 0 || s->kwrest_idx >= 0) g_uses_symbols = 1;
   int ta = ++g_tmp, tk = ++g_tmp, th = nkwd > 0 ? ++g_tmp : 0;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
@@ -16765,6 +16771,11 @@ static void emit_exc_attrs_zsuper(Compiler *c, int id, Scope *s, const char *sel
     free(ab.p);
   }
   if (nkwd > 0) buf_printf(b, "_t%d = sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH); ", tk, th);
+  if (fn) {
+    buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && sp_poly_keys(_t%d)->len > 0) sp_PolyArray_push(_t%d, _t%d); "
+                  "%s(%s, _t%d->len, _t%d->data); })", tk, tk, ta, tk, fn, self_text, ta, ta);
+    return;
+  }
   buf_printf(b, "sp_exc_attrs_super(%s, _t%d->len, _t%d->data, _t%d); })", self_text, ta, ta, tk);
 }
 void emit_super(Compiler *c, int id, Buf *b) {
@@ -17078,7 +17089,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
                     !class_is_syserr(c, sci) && !class_is_sysexit(c, sci) && !exc_init_takes_own_args(spar);
       if (spread || zspread || class_takes_exc_attrs(c, sci)) {
         char self_text[80]; snprintf(self_text, sizeof self_text, "(sp_Exception *)%s", g_self);
-        if (ty_k == NK_ForwardingSuperNode) emit_exc_attrs_zsuper(c, id, s, self_text, b);
+        if (ty_k == NK_ForwardingSuperNode) emit_exc_attrs_zsuper(c, id, s, self_text, NULL, b);
         else emit_exc_args_super(c, id, self_text, class_takes_exc_attrs(c, sci) ||
                                  (class_is_exc_reopen(c, sci) && exc_reopen_super_takes_attrs(c->classes[sci].name)),
                                  argc2, argv2, b);
@@ -17098,9 +17109,16 @@ void emit_super(Compiler *c, int id, Buf *b) {
           int pnd = s->def_node >= 0 ? nt_ref(c->nt, s->def_node, "parameters") : -1;
           int nkwd = 0;
           if (pnd >= 0) (void)nt_arr(c->nt, pnd, "keywords", &nkwd);
-          if (s->rest_idx >= 0 || s->kwrest_idx >= 0 || nkwd > 0 || nt_ref(c->nt, id, "block") >= 0)
-            unsupported(c, id, super_exit ? "a bare super forwarding a rest, keyword or block parameter to SystemExit#initialize"
-                                          : "a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize");
+          if (nt_ref(c->nt, id, "block") >= 0)
+            unsupported(c, id, super_exit ? "a bare super forwarding a block parameter to SystemExit#initialize"
+                                          : "a bare super forwarding a block parameter to SystemCallError#initialize");
+          /* a rest's elements and the keywords go over as `super(*a, **k)`
+             hands them on; the count is the run time's */
+          if (s->rest_idx >= 0 || s->kwrest_idx >= 0 || nkwd > 0) {
+            char self_text[80]; snprintf(self_text, sizeof self_text, "(sp_Exception *)%s", g_self);
+            emit_exc_attrs_zsuper(c, id, s, self_text, super_fn, b);
+            return;
+          }
           if (s->nparams == 0) { buf_printf(b, "%s(%s0, NULL)", super_fn, lead); return; }
           int t0 = g_tmp + 1;
           g_tmp += s->nparams;

@@ -2483,11 +2483,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  else grep -q "an Errno constant defined in a subclass of SystemCallError" "$$tmp/sce.out" || \
 	    { echo "reject-test: FAIL ($$t: refused without saying why)"; sed -n 1,5p "$$tmp/sce.out"; ok=0; }; fi; \
 	done; \
-	t=test/reject/systemcallerror_zsuper_keyword.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/szk.c" >"$$tmp/szk.out" 2>&1; then \
-	  echo "reject-test: FAIL (a bare super forwarding a keyword to SystemCallError#initialize compiled)"; ok=0; \
-	else grep -q "a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize" "$$tmp/szk.out" || \
-	  { echo "reject-test: FAIL (a bare super forwarding a keyword refused without saying why)"; sed -n 1,5p "$$tmp/szk.out"; ok=0; }; fi; \
 	for t in test/reject/object_receiver_include*.rb; do \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ori.c" >"$$tmp/ori.out" 2>&1; then \
 	    echo "reject-test: FAIL ($$t: an include into Object through an explicit receiver compiled)"; ok=0; \

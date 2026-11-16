@@ -11,10 +11,11 @@ puts "b"
 def puts(*a) = $stdout.write("O:#{a.join}\n")
 puts "c"
 module E
-  def puts(*a) = $stdout.write("E:#{a.join}\n")
+  def print(*a) = $stdout.write("E:#{a.join}\n")
 end
+print "d\n"
 extend E
-puts "d"
+print "d"
 
 module L2
   def shout = "L2"

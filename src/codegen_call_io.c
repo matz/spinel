@@ -585,8 +585,11 @@ static int socket_send_call(const NodeTable *nt, const char *name, int argc, con
 }
 
 /* The socket calls emit_io_socket_opt_call answers, at the arities it does */
-static int boxed_socket_opt(const char *name, int argc) {
-  return (sp_streq(name, "connect_nonblock") && argc >= 1 && argc <= 3) ||
+static int boxed_socket_opt(const NodeTable *nt, const char *name, int argc, const int *argv) {
+  /* (keywords alone, `tls.connect_nonblock(exception: false)`, are an
+     SSLSocket's call or a computed send's arm: no address to connect to) */
+  int pos = argc - (nt_argv_kwh(nt, argv, argc) >= 0);
+  return (sp_streq(name, "connect_nonblock") && pos >= 1 && argc <= 3) ||
          (sp_streq(name, "setsockopt") && argc == 3) || (sp_streq(name, "getsockopt") && argc == 2);
 }
 
@@ -653,9 +656,6 @@ static int emit_io_socket_opt_call(Compiler *c, const NodeTable *nt, const char 
     int pos9 = kwh9 >= 0 ? argc - 1 : argc;
     Buf x, pre; memset(&x, 0, sizeof x); memset(&pre, 0, sizeof pre);
     char op[2][32];
-    /* (keywords alone, as a computed send's arm hands them on, `**h`: no
-       address, which CRuby refuses before it reads them) */
-    if (pos9 == 0) { buf_puts(b, "({ sp_raise_arity(0, 1, 1, NULL); (sp_int)0; })"); return 1; }
     int no_exc = (pos9 == 1 || pos9 == 2) &&
                  emit_nonblock_exc(c, nt, name, argv, argc, pos9 == 1 ? "s" : "si", op, &pre, &x);
     if (sp_streq(name, "connect_nonblock") && pos9 == 1) {
@@ -899,7 +899,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        sp_streq(name, "readpartial") || sp_streq(name, "sysread") ||
        /* a socket read back out of a container: its non-blocking connect and
           its options, as the typed socket arms answer them */
-       (boxed_socket_opt(name, argc) && sp_feature_required("socket")) ||
+       (boxed_socket_opt(nt, name, argc, argv) && sp_feature_required("socket")) ||
        /* a socket's addresses: a connection passed into a Thread arrives
           boxed, and a server reads REMOTE_ADDR from it */
        ((is_socket_address(name)) && argc <= 1 && !nt_argv_has_splat(nt, argv, argc) &&
@@ -1111,7 +1111,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         return 1;
       }
       int sockcall = socket_handle_call(nt, name, argc, argv);
-      if (boxed_socket_opt(name, argc) || sockcall) {
+      if (boxed_socket_opt(nt, name, argc, argv) || sockcall) {
         /* the receiver first, then the typed arm's call on the unboxed handle */
         int trv = ++g_tmp;
         buf_printf(b, "({ sp_RbVal _t%d = ", trv);

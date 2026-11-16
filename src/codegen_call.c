@@ -2100,6 +2100,13 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   if (recv < 0 || !name || nt_ref(nt, id, "block") >= 0) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;
   if (argc > 0 && (!atmp || !atmp_ty)) return 0;
+  /* only a name the class side answers (Class's and Module's instance
+     methods, Object's): for any other the switch's default raises, as
+     CRuby does. The probe below asks the emitters under the Class face,
+     and the Hash emitter answered `empty?` and `none?` on the class value
+     (its conversion of a Class is NULL, "empty"): `String.send(:empty?)`
+     was true where CRuby raises NoMethodError. */
+  if (!builtin_method_answers("Object", name, 1, 0)) return 0;
   for (int a = 0; a < argc; a++) {
     if (nt_kind(nt, argv[a]) == NK_SplatNode) return 0;
     if (subtree_has_side_effect(c, argv[a]) && repr_of(c, argv[a]).as_ty != atmp_ty[a]) return 0;
@@ -2188,6 +2195,11 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
   int argc = 0; const int *argv = call_args(nt, id, &argc);
   if (recv < 0 || nt_ref(nt, id, "block") >= 0 || g_n_argov + 1 > MAX_ARG_OVERRIDE ||
       nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return 0;
+  /* (a name the class side does not answer keeps the switch's raise, as
+     above: the emitters under the face would answer for a value of
+     another class) */
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !builtin_method_answers("Object", nm, 1, 0)) return 0;
   /* each argument runs once, in the arm that is taken */
   for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
   int sv_tmp = g_tmp;

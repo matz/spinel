@@ -653,6 +653,9 @@ static int emit_io_socket_opt_call(Compiler *c, const NodeTable *nt, const char 
     int pos9 = kwh9 >= 0 ? argc - 1 : argc;
     Buf x, pre; memset(&x, 0, sizeof x); memset(&pre, 0, sizeof pre);
     char op[2][32];
+    /* (keywords alone, as a computed send's arm hands them on, `**h`: no
+       address, which CRuby refuses before it reads them) */
+    if (pos9 == 0) { buf_puts(b, "({ sp_raise_arity(0, 1, 1, NULL); (sp_int)0; })"); return 1; }
     int no_exc = (pos9 == 1 || pos9 == 2) &&
                  emit_nonblock_exc(c, nt, name, argv, argc, pos9 == 1 ? "s" : "si", op, &pre, &x);
     if (sp_streq(name, "connect_nonblock") && pos9 == 1) {

@@ -20278,7 +20278,7 @@ static void scan_prologue_features(Compiler *c) {
          surfaces inside the block instead -- report the refinement itself here,
          before any of that runs. `using` is caught at its call site. #2652 */
       if (sp_streq(nm, "refine") && nt_ref(nt, i, "receiver") < 0 &&
-          nt_ref(nt, i, "block") >= 0 && !diag_user_defines(c, "refine"))
+          nt_ref(nt, i, "block") >= 0 && !diag_user_defines(c, i, "refine") && !cplan_runs_on_main(c, i))
         unsupported_feature(c, i,
           "Refinements are not supported by AOT compilation: scope-keyed dispatch is "
           "incompatible with direct C calls. Reopen the class instead (see docs/limitations.md)");

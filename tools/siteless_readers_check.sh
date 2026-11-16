@@ -17,6 +17,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
 FUNCS="
+src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
 src/analyze_util.c:class_has_coerce_shape
 src/analyze_util.c:class_coerce_emittable
@@ -25,6 +26,8 @@ src/analyze.c:ur_iter_overridden
 src/analyze.c:synth_enum_to_a
 src/analyze.c:synth_struct_each
 src/analyze.c:synth_to_enum_generators
+src/analyze.c:bsu_own_method
+src/analyze.c:desugar_builtin_method_obj
 src/analyze_desugar.c:desugar_array_at
 src/analyze_desugar.c:desugar_array_first_last
 src/analyze_desugar.c:desugar_enum_walk_calls

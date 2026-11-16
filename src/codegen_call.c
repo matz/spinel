@@ -2092,6 +2092,17 @@ static int cls_value_answer_raises(const char *t) {
    is a raise, whose message the switch's own default already gives, where
    it would read an argument with a side effect a second time, or where its
    answer does not fit the slot the dispatch assigns. */
+/* Does the program give a class value the name through a method of its own on what every class value is an
+   object of: Object, Module, Class, Kernel or BasicObject (`class Object; private def top`)? Such a method answers
+   for a class value whatever the builtin tables hold (`Integer.send(:top)`). */
+static int cls_side_program_answers(Compiler *c, const char *name) {
+  static const int owners[] = { CORE_OBJECT, CORE_MODULE, CORE_CLASS, CORE_KERNEL, CORE_BASIC_OBJECT };
+  for (unsigned i = 0; i < sizeof owners / sizeof *owners; i++) {
+    int k = comp_core_class(c, owners[i]);
+    if (k >= 0 && call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+  }
+  return 0;
+}
 static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, int argc,
                                        const int *argv, const int *atmp, const TyKind *atmp_ty,
                                        TyKind ret, int tv, int tr, Buf *b) {
@@ -2100,6 +2111,13 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   if (recv < 0 || !name || nt_ref(nt, id, "block") >= 0) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;
   if (argc > 0 && (!atmp || !atmp_ty)) return 0;
+  /* only a name the class side answers (Class's and Module's instance
+     methods, Object's): for any other the switch's default raises, as
+     CRuby does. The probe below asks the emitters under the Class face,
+     and the Hash emitter answered `empty?` and `none?` on the class value
+     (its conversion of a Class is NULL, "empty"): `String.send(:empty?)`
+     was true where CRuby raises NoMethodError. */
+  if (!builtin_method_answers("Object", name, 1, 0) && !cls_side_program_answers(c, name)) return 0;
   for (int a = 0; a < argc; a++) {
     if (nt_kind(nt, argv[a]) == NK_SplatNode) return 0;
     if (subtree_has_side_effect(c, argv[a]) && repr_of(c, argv[a]).as_ty != atmp_ty[a]) return 0;
@@ -2188,6 +2206,11 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
   int argc = 0; const int *argv = call_args(nt, id, &argc);
   if (recv < 0 || nt_ref(nt, id, "block") >= 0 || g_n_argov + 1 > MAX_ARG_OVERRIDE ||
       nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return 0;
+  /* (a name the class side does not answer keeps the switch's raise, as
+     above: the emitters under the face would answer for a value of
+     another class) */
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || (!builtin_method_answers("Object", nm, 1, 0) && !cls_side_program_answers(c, nm))) return 0;
   /* each argument runs once, in the arm that is taken */
   for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
   int sv_tmp = g_tmp;
@@ -2941,9 +2964,9 @@ int cls_value_owns_name(Compiler *c, int id, const char *name) {
   return 0;
 }
 
-int diag_user_defines(Compiler *c, const char *name) {
+int diag_user_defines(Compiler *c, int id, const char *name) {
   if (comp_name_is_shadow_copy(c, name, SHADOW_PREP)) return 0;
-  return recv_user_defines(c, name) || comp_method_index(c, name) >= 0;
+  return recv_user_defines(c, name) || call_target(c, id, -1, name, CT_TOP, NULL) >= 0;
 }
 
 /* diag_user_defines for a call with an explicit receiver: a top-level def
@@ -4541,7 +4564,7 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
   int src_is_range = (sr.range == TY_INT), src_is_intarr = (sr.elem == TY_INT);
   int src_is_enum = (st == TY_ENUMERATOR);
   /* a boxed source streams as an Enumerator over it (sp_poly_lazy_src) */
-  int src_is_poly = (st == TY_POLY && !diag_user_defines(c, "lazy"));
+  int src_is_poly = (st == TY_POLY && !diag_user_defines(c, id, "lazy"));
   if (src_is_poly) src_is_enum = 1;
   /* a String Range streams the same way once boxed, an endless one by succ */
   int src_is_srange = (st == TY_STR_RANGE);
@@ -25770,7 +25793,7 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
          constant), its `lazy` reached no method at run time, where CRuby's
          collection answers one: refused here, naming the line (#9160). */
       if (nm && sp_streq(nm, "lazy") && recv >= 0 && nt_ref(nt, id, "block") < 0 &&
-          nt_ref(nt, id, "arguments") < 0 && !diag_user_defines(c, "lazy") &&
+          nt_ref(nt, id, "arguments") < 0 && !diag_user_defines(c, id, "lazy") &&
           (ty_is_array(grt) || ty_is_hash(grt) || grt == TY_RANGE || grt == TY_FLOAT_RANGE ||
            grt == TY_STR_RANGE || grt == TY_ENUMERATOR))
         unsupported(c, id, "a lazy chain held in an instance, class or global variable or a "
@@ -26143,7 +26166,7 @@ void ffi_check_buffer_bounds(Compiler *c, int id, int arg,
 
 /* Does `txt` mention the temp `_t<n>` -- as that temp, not as a prefix of a
    longer number (`_t5` must not match inside `_t50`)? */
-static int text_uses_tmp(const char *txt, int n) {
+int text_uses_tmp(const char *txt, int n) {
   if (!txt) return 0;
   char want[24];
   int wl = snprintf(want, sizeof want, "_t%d", n);

@@ -5674,9 +5674,10 @@ static sp_int sp_poly_struct_size(sp_RbVal v) {
 }
 /* A boxed value with no #empty?: a program object (its own empty? is
    dispatched before this), a builtin with no length, a Process::Tms (a
-   Struct) or a Range of any kind. */
+   Struct), a Range of any kind, or a Class (a class value sent `empty?`
+   by name read its length, 0, and answered true where CRuby raises). */
 static SP_INLINE SP_UNUSED int sp_poly_no_empty(sp_RbVal v) {
-  return sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
+  return v.tag == SP_TAG_CLASS || sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
          (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_TMS || (v.cls_id == SP_BUILTIN_IO && !sp_poly_root_defines("empty?")) || v.cls_id == SP_BUILTIN_RANGE ||
                                   v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_FLOAT_RANGE ||
                                   v.cls_id == SP_BUILTIN_TIME_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE));

@@ -1,0 +1,20 @@
+{a: 1}
+false
+NoMethodError empty?
+NoMethodError name
+NoMethodError params
+false
+false
+NoMethodError name
+NoMethodError params
+true
+true
+NoMethodError name
+NoMethodError params
+NoMethodError none?
+NoMethodError empty?
+"String"
+NoMethodError params
+NoMethodError none?
+NoMethodError empty?
+nil

@@ -576,7 +576,7 @@ int desugar_descendant_reader_calls(Compiler *c) {
     if (call_answers(c, id, sc->class_id, nm, 0, NULL)) continue;
     int nd = 0, hit = 0;
     const int *ds = comp_descendants(c, sc->class_id, &nd);
-    for (int i = 0; i < nd && !hit; i++) hit = comp_reader_in_chain(c, ds[i], nm, NULL);
+    for (int i = 0; i < nd && !hit; i++) hit = call_attr_target(c, id, ds[i], nm, CT_ATTR, NULL);
     if (!hit) continue;
     int sn = nt_new_node(nt, "SelfNode");
     if (sn < 0) continue;
@@ -8446,11 +8446,11 @@ static int dsend_name_only_outside(Compiler *c, int id, int recv, const char *na
   if (builtin_recv_arity_span(name, &lo, &hi) || cplan_core_method(c, id, CORE_OBJECT, name) >= 0) return 0;
   int any = 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (!cls_fact_excludes(c, recv, k) && comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
+    if (!cls_fact_excludes(c, recv, k) && call_target(c, id, k, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     /* (a class method answers on the class itself, a Class object the
        receiver may hold) */
-    int inst = comp_method_in_class(c, k, name) >= 0, cls = comp_cmethod_in_class(c, k, name) >= 0;
+    int inst = call_target(c, id, k, name, CT_OWN, NULL) >= 0, cls = call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL) >= 0;
     if (!inst && !cls) continue;
     if (inst && !cls_fact_excludes(c, recv, k)) return 0;
     if (cls && !cls_fact_excludes_class_value(c, recv, k)) return 0;
@@ -10563,9 +10563,9 @@ static int ixw_held_store(NodeTable *nt, int source, const char *rname, const ch
 static int ixw_builtin_reaches(Compiler *c, int k, const char *name) {
   return !comp_is_undeffed_in_chain(c, k, name) && comp_method_vis_in_chain(c, k, name) == SP_VIS_PUBLIC;
 }
-static int ixw_user_class(Compiler *c, int k) {
-  int own_get = comp_method_in_chain(c, k, "[]", NULL) >= 0;
-  int own_set = comp_method_in_chain(c, k, "[]=", NULL) >= 0;
+static int ixw_user_class(Compiler *c, int id, int k) {
+  int own_get = call_target(c, id, k, "[]", CT_METHODS, NULL) >= 0;
+  int own_set = call_target(c, id, k, "[]=", CT_METHODS, NULL) >= 0;
   if (own_get && own_set) return 1;
   if (!own_get && !own_set) return 0;
   return comp_ary_root(c, k) >= 0 && ixw_builtin_reaches(c, k, own_get ? "[]=" : "[]");
@@ -10590,7 +10590,7 @@ int desugar_index_op_write_user(Compiler *c) {
     if (nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) continue;
     TyKind rt = infer_type(c, recv);
     int ci = ty_is_object(rt) ? ty_object_class(rt) : -1;
-    int user = rt == TY_THREAD || (ci >= 0 && ixw_user_class(c, ci));
+    int user = rt == TY_THREAD || (ci >= 0 && ixw_user_class(c, id, ci));
     /* a box that can hold such an object (a class with a construction
        site, ctor_reachable: the census before the fixpoint): the calls
        dispatch on the class the box holds, where the op-write took the
@@ -10600,7 +10600,7 @@ int desugar_index_op_write_user(Compiler *c) {
       const int *ks = poly_recv_classes(c, id, &n);
       for (int i = 0; i < (ks ? n : c->nclasses) && !user; i++) {
         int pk = ks ? ks[i] : i;
-        user = c->classes[pk].ctor_reachable && !is_builtin_reopen(c->classes[pk].name) && ixw_user_class(c, pk);
+        user = c->classes[pk].ctor_reachable && !is_builtin_reopen(c->classes[pk].name) && ixw_user_class(c, id, pk);
       }
     }
     /* so does one a Struct's own `[]=` can take (a key no literal names on a
@@ -18868,10 +18868,10 @@ static int enum_owner_chain(Compiler *c, const char *rn, const char *nm, int blk
    Enumerable behind it (comp_enum_behind) and no method_missing: the walk
    would read the object through them, where it answers none of the
    Enumerable methods. */
-static int class_lacks_enumerable(Compiler *c, int k) {
+static int class_lacks_enumerable(Compiler *c, int id, int k) {
   if (!(c->classes[k].instantiated || c->classes[k].ctor_reachable) || comp_class_is_module(c, &c->classes[k])) return 0;
-  if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
-  if (comp_method_in_chain(c, k, "each", NULL) < 0 && comp_method_in_chain(c, k, "to_a", NULL) < 0) return 0;
+  if (call_target(c, id, k, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0) return 0;
+  if (call_target(c, id, k, "each", CT_METHODS, NULL) < 0 && call_target(c, id, k, "to_a", CT_METHODS, NULL) < 0) return 0;
   return !comp_enum_behind(c, k);
 }
 
@@ -19811,14 +19811,14 @@ int desugar_builtin_enum_calls(Compiler *c) {
       const char *oq = nt_str(nt, id, "orig_name") ? nt_str(nt, id, "orig_name") : name;
       for (int k = 0; own_copy >= 0 && own_copy < nt->count && enum_owner_classes[k]; k++)
         if (enum_class_owns(enum_owner_classes[k], oq, nt_ref(nt, id, "block") >= 0)) own_arm = 1;
-      if (own_arm && comp_method_index(c, nt_str(nt, own_copy, "name")) < 0) own_arm = 0;
+      if (own_arm && call_target(c, id, -1, nt_str(nt, own_copy, "name"), CT_TOP, NULL) < 0) own_arm = 0;
       /* a name builtins/ has no definition of that a builtin receiver
          answers itself (map, uniq, entries) has no copy for the classes
          that own it: the call keeps its typed dispatch */
       if ((own_copy < 0 || own_copy >= nt->count) && bi_enum_receivers_answer(oq)) continue;
     }
     const char *gn = nt_str(nt, copy, "name");
-    if (!gn || comp_method_index(c, gn) < 0) continue;
+    if (!gn || call_target(c, id, -1, gn, CT_TOP, NULL) < 0) continue;
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
     /* the builtin's own arity: `str.partition(sep)` on a value that is a
@@ -19872,8 +19872,8 @@ int desugar_builtin_enum_calls(Compiler *c) {
            copy would walk its #each or convert its #to_a. Its test is
            exact: a subclass that includes Enumerable answers through it */
         if (c->classes[k].is_native_class || is_enumerable_module_name(c->classes[k].name)) continue;
-        int defines = comp_poly_arm_defines_n(c, k, qn, an) || (an == 0 && comp_reader_in_chain(c, k, qn, NULL));
-        if (!defines && (in_copy || !class_lacks_enumerable(c, k))) continue;
+        int defines = comp_poly_arm_defines_n(c, k, qn, an) || (an == 0 && call_attr_target(c, id, k, qn, CT_ATTR, NULL));
+        if (!defines && (in_copy || !class_lacks_enumerable(c, id, k))) continue;
         exact[ndef] = !defines;
         defcls[ndef++] = k;
         nown += defines;
@@ -20781,7 +20781,7 @@ static int bx_copy_self_free(Compiler *c, int copy) {
    gaps in desugar_builtin_scalar_calls are the builtins/ generic's own
    body. A builtin method of the receiver's class with the name answers
    before Comparable's, as in CRuby. The receiver's class name, or NULL. */
-static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, const char *name) {
+static const char *bx_cmp_own_class(Compiler *c, int id, int bx, int copy, TyKind rt, const char *name) {
   const NodeTable *nt = c->nt;
   if (bx != SP_BX_COMPARABLE || copy < 0 || !name) return NULL;
   if (!nt_int(nt, (int)nt_int(nt, copy, "bx_def", -1), "bx_own", 0)) return NULL;
@@ -20802,7 +20802,7 @@ static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, co
   if (rt == TY_RATIONAL || rt == TY_COMPLEX) {
     if (core_method_vis("Numeric", name, 0, NULL) > 0) return NULL;
     int k = comp_builtin_class_named(c, "Numeric");
-    int mi = k >= 0 ? comp_method_in_chain(c, k, name, NULL) : -1;
+    int mi = k >= 0 ? call_target(c, id, k, name, CT_METHODS, NULL) : -1;
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
         !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0)) return NULL;
   }
@@ -20823,7 +20823,7 @@ static int bx_revert_widened(Compiler *c, int id) {
   int ra = nt_ref(nt, id, "arguments");
   int rn = 0; const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rn) : NULL;
   if (!rv || rn < 1 || bx_recv_concrete(bx, infer_type(c, rv[0])) ||
-      bx_cmp_own_class(c, bx, (int)nt_int(nt, id, "bx_copy", -1), infer_type(c, rv[0]), nt_str(nt, id, "bx_name")))
+      bx_cmp_own_class(c, id, bx, (int)nt_int(nt, id, "bx_copy", -1), infer_type(c, rv[0]), nt_str(nt, id, "bx_name")))
     return 0;
   nt_node_set_ref(nt, id, "receiver", rv[0]);
   nt_node_set_ref(nt, id, "arguments", (int)nt_int(nt, id, "bx_args", -1));
@@ -20890,7 +20890,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
        the call keeps its `&.` and its typed emitter */
     if (nt_safe_nav(nt, id)) continue;
     int ok = bx_recv_concrete(bx, rt);
-    const char *cmp_cls = ok ? NULL : bx_cmp_own_class(c, bx, copy, rt, name);
+    const char *cmp_cls = ok ? NULL : bx_cmp_own_class(c, id, bx, copy, rt, name);
     if (cmp_cls) ok = 1;
     if (bx == SP_BX_COMPARABLE) {
       /* Integer/Bignum/Float only, narrower than builtins/comparable.rb's
@@ -20952,7 +20952,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
        onto; no separate "does the program's own class chain define this
        name" check is needed here. */
     const char *gn = nt_str(nt, copy, "name");
-    if (!gn || comp_method_index(c, gn) < 0) continue;
+    if (!gn || call_target(c, id, -1, gn, CT_TOP, NULL) < 0) continue;
     /* a call of a reopening's method ahead of its def at the top level:
        the builtin's method answers it there, as in CRuby (#10719), which
        the call left as written reaches (call_target finds no reopening
@@ -22497,9 +22497,9 @@ static int sym_proc_blockify_op(Compiler *c, int id) {
 /* Whether some user class has a block-taking method `nm`, which a poly
    receiver reaches through the class-id dispatch
    (poly_block_call_needs_dispatch) rather than the poly map loop. */
-static int user_block_method(Compiler *c, const char *nm) {
+static int user_block_method(Compiler *c, int id, const char *nm) {
   for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_chain(c, k, nm, NULL);
+    int mi = call_target(c, id, k, nm, CT_METHODS, NULL);
     if (mi < 0) continue;
     Scope *m = &c->scopes[mi];
     if (m->yields || (m->blk_param && m->blk_param[0])) return 1;
@@ -22586,7 +22586,7 @@ int sym_proc_poly_pair_view(Compiler *c, int id) {
   if (!nm || argc || ty_iter_shape(nm) != TY_ITER_MAP || nt_ref(nt, id, "block") < 0) return 0;
   int changed = sym_proc_blockify_op(c, id);
   int blk = nt_ref(nt, id, "block");
-  int rest = user_block_method(c, nm);
+  int rest = user_block_method(c, id, nm);
   const char *mn = nt_kind(nt, blk) == NK_BlockNode ? sym_proc_name_of(nt, blk, rest) : NULL;
   if (!mn || nt_ref(nt, blk, "sym_proc_pair") >= 0) return changed;
   if (rest) return sym_proc_rest_view(c, blk, mn) | changed;
@@ -30807,7 +30807,7 @@ int desugar_index_assign_user_recv(Compiler *c) {
       const char *cn = nt_str(nt, recv, "name");
       int cid = cn ? const_node_class_index(c, recv) : -1;
       if (cid < 0 || cid >= c->nclasses) continue;
-      if (comp_cmethod_in_chain(c, cid, "[]", NULL) < 0 || comp_cmethod_in_chain(c, cid, "[]=", NULL) < 0) continue;
+      if (call_target(c, id, cid, "[]", CT_CMETHOD, NULL) < 0 || call_target(c, id, cid, "[]=", CT_CMETHOD, NULL) < 0) continue;
     }
     else if (!env) {
       TyKind rt = comp_ntype(c, recv);
@@ -30815,7 +30815,7 @@ int desugar_index_assign_user_recv(Compiler *c) {
       if (!ty_is_object(rt)) continue;
       int cid = ty_object_class(rt);
       if (cid < 0 || cid >= c->nclasses) continue;
-      if (comp_method_in_chain(c, cid, "[]", NULL) < 0 || comp_method_in_chain(c, cid, "[]=", NULL) < 0) continue;
+      if (call_target(c, id, cid, "[]", CT_METHODS, NULL) < 0 || call_target(c, id, cid, "[]=", CT_METHODS, NULL) < 0) continue;
     }
     const char *op = k == NK_IndexOperatorWriteNode ? nt_str(nt, id, "binary_operator") : NULL;
     if (k == NK_IndexOperatorWriteNode && !op) continue;
@@ -30935,14 +30935,14 @@ int desugar_index_assign_value(Compiler *c) {
          call) of a class whose class-level `[]=` is the program's */
       Scope *rs = comp_scope_of(c, id);
       user = rs && rs->is_cmethod && rs->class_id >= 0 && rs->class_id < c->nclasses &&
-             comp_cmethod_in_chain(c, rs->class_id, "[]=", NULL) >= 0;
+             call_target(c, id, rs->class_id, "[]=", CT_CMETHOD, NULL) >= 0;
       if (!user) continue;
     }
     TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
     if (recv >= 0 && !ty_is_object(rt)) rt = infer_type(c, recv);   /* a local's type lives in its scope slot */
     if (!user && ty_is_object(rt)) {
       int cid = ty_object_class(rt);
-      user = cid >= 0 && cid < c->nclasses && comp_method_in_chain(c, cid, "[]=", NULL) >= 0;
+      user = cid >= 0 && cid < c->nclasses && call_target(c, id, cid, "[]=", CT_METHODS, NULL) >= 0;
     }
     /* a box that can hold an object of such a class (one with a
        construction site, as desugar_index_op_write_user asks) */
@@ -30952,7 +30952,7 @@ int desugar_index_assign_value(Compiler *c) {
       for (int i = 0; i < (ks ? n : c->nclasses) && !user; i++) {
         int pk = ks ? ks[i] : i;
         user = c->classes[pk].ctor_reachable && !is_builtin_reopen(c->classes[pk].name) &&
-               comp_method_in_chain(c, pk, "[]=", NULL) >= 0;
+               call_target(c, id, pk, "[]=", CT_METHODS, NULL) >= 0;
       }
     }
     /* a class-level `self.[]=` of a class a constant (or a local that

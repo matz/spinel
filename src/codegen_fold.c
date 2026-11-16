@@ -1578,7 +1578,7 @@ int block_tail_is_unresolved(Compiler *c, int node) {
   Repr rr2 = repr_of(c, r);
   TyKind rt2 = rr2.as_ty;
   if (rt2 == TY_UNKNOWN || rr2.kind == RK_BOXED) return 0;
-  return !diag_user_defines(c, nm);
+  return !diag_user_defines(c, node, nm);
 }
 
 /* poly `uniq`/`uniq!` with a block, as an expression: the receiver boxes an

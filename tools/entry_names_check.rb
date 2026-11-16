@@ -30,6 +30,7 @@ require "open3"
 ROOT = File.expand_path("..", __dir__)
 mode = ARGV[0]
 rev = ARGV[1]
+abort "usage: entry_names_check.rb [--staged | --rev REV]" if mode == "--rev" && (rev.nil? || rev.empty?)
 
 def git_show(spec)
   out, st = Open3.capture2("git", "-C", ROOT, "show", spec, binmode: true)
@@ -41,10 +42,16 @@ def read_tree(mode, rev)
   case mode
   when "--staged", "--rev"
     ref = mode == "--staged" ? ":" : "#{rev}:"
-    names, = Open3.capture2("git", "-C", ROOT, mode == "--staged" ? "ls-files" : "ls-tree", *(mode == "--staged" ? ["--", "src"] : ["-r", "--name-only", rev, "--", "src"]))
-    names.split("\n").grep(%r{\Asrc/[^/]+\.(c|h|inc)\z}).each { |f| files[f] = git_show("#{ref}#{f}") }
-    allow = git_show("#{ref}tools/entry_names.allow")
+    list = mode == "--staged" ? ["ls-files", "--", "src"] : ["ls-tree", "-r", "--name-only", rev, "--", "src"]
+    names, st = Open3.capture2("git", "-C", ROOT, *list)
+    abort "entry-names: git #{list.first} failed for #{mode == '--staged' ? 'the index' : rev}" unless st.success?
+    names.split("\n").grep(%r{\Asrc/[^/]+\.(c|h|inc)\z}).each do |f|
+      files[f] = git_show("#{ref}#{f}") or abort "entry-names: cannot read #{ref}#{f}"
+    end
+    abort "entry-names: no source under src/ in #{mode == '--staged' ? 'the index' : rev}" if files.empty?
+    allow = git_show("#{ref}tools/entry_names.allow") or abort "entry-names: cannot read #{ref}tools/entry_names.allow"
   else
+    abort "usage: entry_names_check.rb [--staged | --rev REV]" if mode
     Dir[File.join(ROOT, "src/*.{c,h,inc}")].sort.each { |p| files["src/" + File.basename(p)] = File.binread(p) }
     allow = File.binread(File.join(ROOT, "tools/entry_names.allow"))
   end

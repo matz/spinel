@@ -26657,10 +26657,10 @@ static void pb_walk(const NodeTable *nt, const int *parent, InhNames *r, char **
   for (int i = 0; i < n; i++) {
     int id = v[i], lexical = 0;
     char q[1024], w[512];
-    /* a statement of a file the inline model spliced here from a require in
-       a method, a block or a lambda runs only when that code does, not
-       unconditionally earlier: it neither defines a namespace nor is a
-       write the walk marks */
+    /* a statement of a file the inline model spliced here from a require that
+       may not run where it stands (sp_req_always_runs says no) runs only when
+       that does, not unconditionally earlier: it neither defines a namespace
+       nor is a write the walk marks */
     if (nt_int(nt, id, "req_deferred", 0)) continue;
     if (nt_kind(nt, id) == NK_ConstantPathWriteNode) {
       int ns = nt_ref(nt, nt_ref(nt, id, "target"), "parent");

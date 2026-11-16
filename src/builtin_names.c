@@ -2406,6 +2406,40 @@ int builtin_answers_ahead_of(const char *cls, const char *m, const char *root) {
   for (int i = 0; !below && i < t->nanc; i++) below = !strcmp(t->ancestors[i], root);
   return below && bmt_ancestors_have(t, m, 0, must, 0, root, NULL) != 0;
 }
+/* The class or module of CRuby's tables whose instance method m a `super` reaches from a program class under
+   builtin class root: the first ancestor of root's table with m (any visibility, in a library the program has),
+   by its table name; NULL for none, and where an ancestor with no table of its own lies ahead (StringIO's
+   IO::generic_writable: what it answers is not known, nor what is behind it) or one that undefines m does. after_root:
+   the super's own place is root's (a reopening's method, or a module included into it), so root's own methods are
+   ahead of it. Names only: where the program's classes and includes put the super is the caller's
+   (comp_super_bowner). */
+const char *builtin_super_owner(const char *root, const char *m, int after_root) {
+  const BuiltinMethodTable *t = bmt_find(root);
+  unsigned must = bmt_loaded();
+  if (!t || !m || !(t->flags & must)) return NULL;
+  for (int i = after_root ? 1 : 0; i < t->nanc; i++) {
+    if (!(t->aflags[i] & must)) continue;   /* (a library the program has not required) */
+    const BuiltinMethodTable *a = bmt_find(t->ancestors[i]);
+    if (!a) return NULL;
+    if (!(a->flags & must)) continue;
+    if (bmt_has(a->inst, a->iflags, a->ninst, m, must, 0)) return a->name;
+    if (bmt_undefines(a, m, 0)) return NULL;
+  }
+  return NULL;
+}
+/* See builtin_names.h. */
+BownKind builtin_owner_kind(const char *owner) {
+  if (!owner) return BOWN_NONE;
+  if (is_kernel_module_name(owner)) return BOWN_KERNEL;
+  int slot = builtin_core_class_slot(owner);
+  if (slot == CORE_STRUCT || slot == CORE_DATA) return BOWN_STRUCT;
+  return BOWN_OTHER;
+}
+/* Does CRuby's method tables hold class or module name, in a library the program has? */
+int builtin_table_known(const char *name) {
+  const BuiltinMethodTable *t = bmt_find(name);
+  return t && (t->flags & bmt_loaded());
+}
 /* The i-th ancestor of builtin class or module cls in CRuby's lookup order (0: cls itself), counting only those a
    library the program has defines; NULL past the last, and for a name with no table. The walk of a mixin's `super`
    steps through these, asking each for the name it looks up (builtin_owns_instance_method). */

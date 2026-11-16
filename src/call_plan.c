@@ -207,7 +207,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->chain = 0;
   p->absent = 0;
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
-  p->core_hook = 0;
+  p->bowner = NULL;
   p->answers_receiver = 0;
   p->vis_cell = 0;
 }
@@ -868,7 +868,10 @@ int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
     *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1, .from = par };
     return -1;
   }
-  return cplan_super_chain_mi(c, id, s, par, uname, ml);
+  int mi = cplan_super_chain_mi(c, id, s, par, uname, ml);
+  /* no method of the program's answers: the builtin's does, if one */
+  if (mi < 0) ml->bowner = comp_super_bowner(c, s, uname);
+  return mi;
 }
 
 /* Does the `super` of the program's send, __send__ or public_send in scope
@@ -886,6 +889,7 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   MethodLookup ml = { .def_class = -1 };
   int mi = cplan_super_target(c, id, s, &ml);
   if (mi >= 0) { cplan_set(p, mi, ml.from, UC_SUPER, CP_DIRECT); return; }
+  p->bowner = ml.bowner;
   const Scope *st = comp_super_site(c, s);
   const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, ml.from, st);
   if (uname && s->is_cmethod &&
@@ -895,7 +899,8 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = "super to an inherited builtin singleton method is not supported; see docs/limitations.md";
   } else if (uname && s->is_cmethod && is_definition_hook_name(uname))
-    p->core_hook = 1;   /* Class#inherited and the like: a no-op that reads no class and calls no method */
+    /* Class#inherited and the like: a no-op that reads no class and calls no method */
+    p->bowner = builtin_super_owner(comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class", uname, 0);
   else if (uname && is_send_family(uname) && cplan_send_super_refused(c, s, uname)) {
     /* `super` from the program's own send, __send__ or public_send that
        nothing above defines is Object's: it dispatches on the name at run
@@ -910,6 +915,12 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = cplan_keep(c, strdup(msg));
   }
+}
+
+/* See call_plan.h. */
+int cplan_core_hook(Compiler *c, int id) {
+  const Scope *s = comp_scope_of(c, id);
+  return s && s->is_cmethod && cplan_user(c, id).bowner;
 }
 
 /* Is node id inside a block, a lambda or a method body (it may run later)? */
@@ -1496,7 +1507,7 @@ int cplan_missing_guard(Compiler *c, int t) {
 }
 int cplan_capture_arm(Compiler *c, int id, int t) {
   int sup = t >= 0 && c->scopes[t].def_node >= 0 ? (int)nt_int(c->nt, c->scopes[t].def_node, "behind_super", 0) - 1 : -1;
-  int mw = sup >= 0 && cplan_user(c, sup).mi < 0 && !cplan_user(c, sup).core_hook ? cplan_capture_missing(c, id) : -1;
+  int mw = sup >= 0 && cplan_user(c, sup).mi < 0 && !cplan_core_hook(c, sup) ? cplan_capture_missing(c, id) : -1;
   return mw >= 0 ? mw : t;
 }
 

@@ -2878,6 +2878,8 @@ int comp_new_receiver(Compiler *c, int k);
 int comp_new_receivers(Compiler *c, int own);
 int method_answers_receiver(Compiler *c, int mi);
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod); /* super in `self.new` is Class#new */
+const char *comp_super_builtin_root(Compiler *c, int cid, int *self);   /* the builtin at the top of class cid's chain ("Array", "Struct", "Object"); *self: cid is that reopening */
+const char *comp_super_bowner(Compiler *c, const Scope *s, const char *uname);   /* the builtin a super in instance method scope s reaches when no program method answers: the call plan's bowner */
 const Scope *comp_super_site(Compiler *c, const Scope *s);   /* the method scope a super in s resolves as: its class starts the parent chain, its def names the method asked for; a copy of an alias (Scope.super_of) is the owner's */
 enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF, SUPER_OBJ_ROW };
 /* a super (node id) no program ancestor answers that reaches BasicObject's

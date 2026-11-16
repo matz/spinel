@@ -27757,13 +27757,13 @@ int an_super_object_text(Compiler *c, int n, int mi) {
   ClassInfo *ci = &c->classes[cid];
   /* (a reopened builtin -- Exception, String, Object -- has its own
      inspect and to_s behind the program's) */
-  if (comp_class_is_module(c, ci) || is_builtin_reopen(ci->name) || cplan_class_kernel(c, cid) == KERN_LACKS || ci->is_struct || ci->is_data ||
-      ci->is_native_class || ci->nsub_root > 0 ||
-      comp_ary_root(c, cid) >= 0 || class_inherits_builtin_exception(c, cid) || class_is_exc_subclass(c, cid))
-    return 0;
+  if (comp_class_is_module(c, ci) || is_builtin_reopen(ci->name) || ci->is_native_class || ci->nsub_root > 0) return 0;
   /* (a method of an ancestor, an included module's, or an Object
-     reopening's, is the call plan's target) */
-  return cplan_user_fresh(c, n).mi < 0;
+     reopening's, is the call plan's target; no method of the program's,
+     Kernel's is the builtin the plan names, which no Struct, Exception,
+     Array or blank slate has) */
+  CallPlan p = cplan_user_fresh(c, n);
+  return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_KERNEL;
 }
 /* The same super in a Struct or Data class's own inspect or to_s, where no
    class of the program above it defines the name: CRuby's Struct#inspect
@@ -27780,9 +27780,12 @@ int an_super_struct_text(Compiler *c, int n, int mi) {
   if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
   if (k == NK_SuperNode && nt_ref(c->nt, n, "arguments") >= 0) return 0;
   ClassInfo *ci = &c->classes[s->class_id];
-  if (!ci->is_struct || comp_class_is_module(c, ci)) return 0;
-  /* (a method of an ancestor or an included module's is the call plan's target) */
-  return cplan_user_fresh(c, n).mi < 0;
+  if (comp_class_is_module(c, ci)) return 0;
+  /* (a method of an ancestor or an included module's is the call plan's
+     target; no method of the program's, Struct's or Data's is the builtin
+     the plan names) */
+  CallPlan p = cplan_user_fresh(c, n);
+  return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_STRUCT;
 }
 /* Method mi is decided: yes or no, and for the handle walk its field. */
 static int an_ret_decided(Compiler *c, RetHandles *R, int mi, int yes) {

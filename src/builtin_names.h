@@ -425,6 +425,12 @@ int is_string_read_only_method(const char *name);
 int str_mutator_str_args(const char *n, int argc, int *int_ok); /* the arguments a String mutator takes as Strings */
 
 int builtin_answers_ahead_of(const char *cls, const char *m, const char *root); /* an ancestor of cls ahead of root (NULL: any) owns instance method m, or undefines it (CRuby's tables) */
+const char *builtin_super_owner(const char *root, const char *m, int after_root);   /* the table name of the ancestor of root that a super's method m reaches, NULL for none */
+/* What an owner is, for the readers that ask: Kernel (the default inspect and to_s of a plain class), Struct or Data (the default
+   #<struct ...> text), any other builtin. */
+typedef enum { BOWN_NONE, BOWN_KERNEL, BOWN_STRUCT, BOWN_OTHER } BownKind;
+BownKind builtin_owner_kind(const char *owner);
+int builtin_table_known(const char *name);   /* CRuby's method tables hold the class or module, in a library the program has */
 const char *builtin_ancestor_at(const char *cls, int i);   /* the i-th ancestor (0: cls) in CRuby's lookup order, NULL past the last */
 int builtin_owns_instance_method(const char *cls, const char *m);   /* cls's own instance method m, any visibility (CRuby's tables) */
 const char *builtin_next_class_answering(int *i, const char *m);   /* the next class of the tables, from table *i, that Spinel has as a value and that answers m ahead of Object */

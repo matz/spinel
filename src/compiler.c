@@ -5600,6 +5600,50 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   return obj;
 }
 
+/* The builtin class at the top of class cid's chain, by name: a reopening's
+   own class, Struct or Data, the builtin its superclass constant names (Array,
+   Hash, String, an Exception), BasicObject for a blank slate, else Object.
+   NULL for a native class and for a superclass the method tables do not know
+   (an expression): nothing says what its methods are. *self: cid is that
+   reopening itself. */
+const char *comp_super_builtin_root(Compiler *c, int cid, int *self) {
+  int k = cid, n = 0;
+  if (self) *self = 0;
+  for (; k >= 0 && n < 256; n++, k = c->classes[k].parent) {
+    if (c->classes[k].is_native_class || c->classes[k].nsub_root > 0) return NULL;   /* (a native class has its own methods) */
+    if (c->classes[k].parent < 0) break;
+  }
+  if (k < 0) return NULL;
+  const char *kn = c->classes[k].name;
+  if (kn && is_builtin_reopen(kn)) {
+    if (self) *self = k == cid;
+    return kn;
+  }
+  if (c->classes[k].is_data) return "Data";
+  if (c->classes[k].is_struct) return "Struct";
+  int sc = c->classes[k].def_node >= 0 ? class_def_super(c->nt, c->classes[k].def_node) : -1;
+  /* (a builtin exception named by its path, Math::DomainError, is read whole) */
+  const char *sn = sc >= 0 ? superclass_builtin_exc_name(c, c->nt, sc) : NULL;
+  if (!sn && sc >= 0 && (nt_kind(c->nt, sc) == NK_ConstantReadNode || nt_kind(c->nt, sc) == NK_ConstantPathNode))
+    sn = nt_str(c->nt, sc, "name");
+  if (class_is_blank_slate(c, k)) return cplan_class_kernel(c, cid) == KERN_LACKS ? "BasicObject" : "Object";
+  if (sn && builtin_table_known(sn)) return sn;
+  return sc >= 0 ? NULL : "Object";
+}
+/* The builtin whose method a `super` named uname in instance method scope s
+   reaches once no program method answers it (the call plan's, for the plan
+   to copy; see MethodLookup.bowner): the first ancestor of the chain's
+   builtin root that has the name, as builtin_super_owner gives it, NULL for
+   none. The site's own place is the root's when the method is the root
+   reopening's own or a module included into it (its methods come first), not
+   when a module is prepended to it. */
+const char *comp_super_bowner(Compiler *c, const Scope *s, const char *uname) {
+  if (!uname || s->is_cmethod || s->class_id < 0) return NULL;
+  int self = 0;
+  const char *root = comp_super_builtin_root(c, s->class_id, &self);
+  return root ? builtin_super_owner(root, uname, self && !s->is_prepend_copy) : NULL;
+}
+
 /* The proc-form clone scope `s` runs, or -1. A def that was cloned holds its
    clone (Scope.pf_clone). A yielding def that lost its name to a later one in
    its class, a reopen or a copy an include makes (pf_by_name), runs the clone

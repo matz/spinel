@@ -53,6 +53,14 @@ int ic_node_calls(Compiler *c, int id, IcCall *out, int max);
    `name` to the node. */
 int ic_node_calls_name(Compiler *c, int id, const char *name, int class_side);
 
+/* The node whose implied call an operand receives: the call, super, yield or
+   when that node `op` is an argument, the receiver or a condition of,
+   through the argument list, parentheses, a keyword hash and its pairs; op
+   itself where it is none of these. The node a reader of the operand's conversion
+   asks the plan at (cplan_implied_target), and the node the method table
+   check tests a read under the operand against. */
+int ic_operand_host(Compiler *c, int op);
+
 /* Whether a node that node `id` holds directly (a child, or an element of an
    array field) has a syntax row named `name`: an interpolation's to_s on its
    part, a case's === on its when. Not the callbacks of a child call's builtin. */

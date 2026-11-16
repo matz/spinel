@@ -2832,25 +2832,75 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
      node does not itself call it, and an implied ask makes no entry),
      unless the chain holds a version a method body makes, which the
      entry has no arm for: ML_ENTRY;
-   - else none (-1): *ml is ML_TABLE, with the why of the declined window
+   - else the table's method (ML_TABLE), with the why of the declined window
      (MLW_UNPLACED no window, MLW_MOVES the chain moves, MLW_MANY any
-     other), or call_target's, and the reader keeps the method table's
-     answer.
-   -1 with ML_TABLE and MLW_UNASKED where no row makes the call; -1 with
-   ML_NONE where cls has no class, or an undef of the name on cls's chain
-   leaves the table without it (comp_is_undeffed_in_chain): the call is
-   lowered as a call of `name`, which binds through the table, so that call
-   is not the version proved. ml may be NULL. */
+     other), as call_target answers it.
+   A call no planned row makes (a builtin's callback, a syntax row not
+   planned yet) is not asked of the record: the table's method, with
+   MLW_UNASKED where the name has versions, else ML_METHOD. side is 0 for
+   an instance of cls, CT_CMETHOD for the class object, CT_OWN for cls's
+   own method (with CT_CMETHOD, its own class method), as call_target's
+   flags; the planned rows ask instances. -1 with ML_NONE where cls has no
+   class, the table holds no method, or an undef of the name on cls's chain
+   provably ran before id (ct_undef_before: *ml is ML_NONE with MLW_RECORD; a
+   planned row's reader takes the table's program-wide undef, as it always
+   did): the call is lowered as a
+   call of `name`, which binds through the table, so that call is not the
+   version proved. An undef the record cannot place before id leaves the
+   table's method, ML_TABLE, as cplan_hook_target does. ml may be NULL. */
 static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m);
-int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml) {
+static int ver_chain_undef(Compiler *c, int rcls, int sg, const char *name);
+static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int *def_class, int *attr);
+/* Does an undef of `name` on cls's chain take the method away at call site: the
+   record places the undef before site's point, unconditionally (elab_method_at
+   answers none with the undef as the version in force), and site runs where
+   the record places it, not in a method's body or a block it cannot place,
+   which may run before the undef? Anywhere else the table's method stands, as
+   cplan_hook_target keeps it. */
+static int ct_undef_before(Compiler *c, int site, int cls, const char *name) {
+  if (site < 0 || elab_in_unplaced_block(c, site)) return 0;
+  int framed = elab_plan_enter(c, site);
+  LoadPoint p = elab_point_of(c, site);
+  const LrDef *d = NULL;
+  int o = p.region >= 0 ? elab_method_at(c, cls, name, 0, p, &d) : ELAB_UNKNOWN;
+  if (framed) elab_plan_leave(c);
+  return o == ELAB_NO && d && d->kind == LR_UNDEF;
+}
+int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *name, unsigned side, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
   *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
-  if (cls < 0 || comp_is_undeffed_in_chain(c, cls, name)) return -1;
-  if (!ct_implied_row(c, id, name, op)) {
-    *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNASKED, .def_class = -1 };
+  if (cls < 0) return -1;
+  mtab_enter(c);
+  /* (an undef the table no longer holds, a later def having replaced it, is in the record's versions) */
+  int undef = !(side & CT_CMETHOD) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name)));
+  mtab_leave(c);
+  /* (a call no planned row makes, a builtin's callback or a row not planned
+     yet, is not asked of the record: the table's method, as call_target
+     answers a call whose node does not make it) */
+  int vi = -1, planned = !side && site >= 0 && ct_implied_row(c, site, name, op);
+  /* (a planned row's undef stays the table's, program-wide, as to_ary's readers
+     always had it: its lowering, an explicit call of the name, would raise at
+     the sites before the undef, as cplan_undef_stops takes the undef
+     program-wide) */
+  if (undef && planned) return -1;
+  if (undef && ct_undef_before(c, site, cls, name)) {
+    m->why = MLW_RECORD;   /* (the record proves the call raises, as call_target's none) */
     return -1;
   }
-  return ct_implied_at(c, id, cls, name, m);
+  if (!planned) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNASKED, .def_class = -1 };
+  else vi = ct_implied_at(c, site, cls, name, m);
+  if (vi >= 0 && m->def_class < 0) m->def_class = c->scopes[vi].class_id;
+  if (m->kind != ML_TABLE) return vi;
+  /* (no proof: the table's method, so the reader reads no table of its own) */
+  int dc = -1;
+  mtab_enter(c);
+  int tm = ct_table(c, cls, name, side | CT_METHODS, &dc, NULL);
+  mtab_leave(c);
+  m->def_class = dc;
+  if (tm < 0) m->kind = ML_NONE;
+  else if (!planned && !undef && !ct_versioned(c, tm, name)) m->kind = ML_METHOD;   /* (a window the plan declined, or an undef it cannot place, stays declined) */
+  else if (g_method_table_check) mtab_table(c, site, cls, side, name, m->why);
+  return tm;
 }
 /* The answers of cplan_hook_target, kept by (site, class, name) for the
    record, the method table and the version entries as they stand
@@ -3242,8 +3292,8 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     if (oc >= 0 && !is_descendant(c, k, oc)) continue;
     MethodLookup ml;
-    int vi = cplan_implied_target(c, id, op, k, "to_ary", &ml);
-    if (vi < 0 || c->scopes[vi].nparams != 0) continue;
+    int vi = cplan_implied_target(c, id, op, k, "to_ary", 0, &ml);
+    if (vi < 0 || ml.kind == ML_TABLE || c->scopes[vi].nparams != 0) continue;
     if (ans) ans[n] = (CplanToAry){ vi, ml.kind == ML_ENTRY && cplan_to_ary_entry_of(c, k) == vi ? CTA_ENTRY : vi == mi ? CTA_TABLE : CTA_VERSION };
     out[n++] = k;
   }
@@ -3257,8 +3307,9 @@ int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
   int cls = ty_is_object(t) ? ty_object_class(t) : -1;
   int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
   if (mi < 0 || c->scopes[mi].nparams != 0) return -1;
-  int vi = cplan_implied_target(c, at, op, cls, "to_ary", NULL);
-  if (vi < 0 || c->scopes[vi].nparams != 0) return -1;
+  MethodLookup ml;
+  int vi = cplan_implied_target(c, at, op, cls, "to_ary", 0, &ml);
+  if (vi < 0 || ml.kind == ML_TABLE || c->scopes[vi].nparams != 0) return -1;
   if (ty_is_array(c->scopes[mi].ret) && ty_is_array(c->scopes[vi].ret)) return vi;
   if (boxed) *boxed = 1;
   return -1;

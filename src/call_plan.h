@@ -611,13 +611,18 @@ CallPlan cplan_const_user(Compiler *c, int id, int recv, int fresh);
    receiver and add members, and nothing here promises a set only grows. */
 enum { CPT_UNKNOWN = -1, CPT_MAX = 64 };
 int cplan_targets(Compiler *c, int id, int *out, int cap);
-/* The method the implied call `name` node id makes on operand op (a row
-   of tools/implied_calls.yml: a multiple assignment's to_ary of its value)
-   runs on an instance of cls: the version the record proves there, else an
-   entry whose every state finds a method; -1 otherwise, with *ml (may be
-   NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
-   (no row, or an undef on the chain) */
-int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
+/* The method the implied call `name` node id makes on operand op runs on
+   an instance of cls (side 0; CT_CMETHOD its class object, CT_OWN its own
+   method): the version the record proves there where a row of
+   tools/implied_calls.yml is planned for the call (a multiple assignment's
+   to_ary of its value), else an entry whose every state finds a method;
+   anything else the table's method (*ml ML_TABLE, or ML_METHOD where the
+   name has one version), so a reader of the implied call asks here and
+   reads no table of its own: a builtin's callback, a row not planned yet.
+   -1 with ML_NONE where the table has no method or an undef on the chain
+   provably ran before the site (an undef the record cannot place there leaves
+   the table's method, ML_TABLE). *ml may be NULL */
+int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *name, unsigned side, MethodLookup *ml);
 /* The method the builtin runs for node id on class ci: with name
    "initialize", the initialize Class#new runs when id (a `new` the
    program's `new` does not answer, a `raise K`) builds an instance of

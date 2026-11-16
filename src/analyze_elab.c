@@ -3895,6 +3895,19 @@ int elab_method_vis_varies(Compiler *c, const char *name) {
   return x->visvar == 2;
 }
 
+/* See analyze.h. */
+int elab_method_may_be_protected(Compiler *c, const char *name) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded) return 1;
+  const LrVers *x = name ? lr_vers(r, name) : NULL;
+  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink)
+    for (int j = 0; j < r->hist[i].n; j++) {
+      const LrDef *v = &r->hist[i].v[j];
+      if (v->kind != LR_UNDEF && v->kind != LR_REMOVE && v->vis == SP_VIS_PROTECTED) return 1;
+    }
+  return 0;
+}
+
 int elab_method_holder(Compiler *c, const char *name, int i, int *cls, int *sg) {
   LoadRecord *r = c->lrec;
   if (!r || !r->recorded) return -1;

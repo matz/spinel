@@ -532,6 +532,10 @@ int elab_method_replaced(Compiler *c, const char *name);
    do the methods its versions give have more than one visibility (a
    module's private one and a class's public one)? */
 int elab_method_vis_varies(Compiler *c, const char *name);
+/* may a method `name` the program gives be protected at some point of the
+   load: does one of its histories hold a protected def, alias or visibility
+   word of it? 1 where the load is not recorded. */
+int elab_method_may_be_protected(Compiler *c, const char *name);
 /* Does the subtree at id write the variable nm of kind (a local, or a constant)? (codegen_stmt.c) */
 enum { VW_LOCAL, VW_CONST };
 int subtree_writes_var(Compiler *c, int id, const char *nm, int kind);

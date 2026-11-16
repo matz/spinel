@@ -7992,7 +7992,10 @@ static int ct_params_plain(Compiler *c, const Scope *sc, int kwrest_ok, int defa
    the new object or the method's frame supplies: no self, instance or class
    variable, call on self, block, yield or super, no local but an earlier
    parameter (held where the call passes it), and it writes no local. Nor a
-   constant, which the def's lexical scope reads and the call's need not. */
+   constant, which the def's lexical scope reads and the call's need not,
+   nor a call a protected method may answer, which CRuby lets self's class
+   make (the object being built's there, main's at the call); a private
+   one's, with a receiver that is no self, raises at both. */
 static int ct_default_placeable(Compiler *c, const Scope *sc, int i) {
   int root = sc->pdefault[i], n = 0, ok = 1;
   int *ids = nt_subtree_ids((NodeTable *)c->nt, &root, 1, &n);
@@ -8007,7 +8010,9 @@ static int ct_default_placeable(Compiler *c, const Scope *sc, int i) {
     case NK_GlobalVariableOrWriteNode: case NK_GlobalVariableAndWriteNode: case NK_IfNode: case NK_ElseNode:
     case NK_UnlessNode: case NK_AndNode: case NK_OrNode:
       break;
-    case NK_CallNode: ok = nt_ref(c->nt, ids[k], "receiver") >= 0 && nt_ref(c->nt, ids[k], "block") < 0; break;
+    case NK_CallNode:
+      ok = nt_ref(c->nt, ids[k], "receiver") >= 0 && nt_ref(c->nt, ids[k], "block") < 0 && !elab_method_may_be_protected(c, nm);
+      break;
     case NK_SplatNode: ok = nt_ref(c->nt, ids[k], "expression") >= 0; break;
     case NK_LocalVariableReadNode:
       ok = 0;

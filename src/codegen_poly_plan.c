@@ -1718,7 +1718,7 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
      inspect keep the older rule, as a program's own to_s is common and the
      class arm's text beside it does not fit a shared String slot. */
   int is_class_named = is_name_reader(name) &&
-                       !(sp_streq(name, "name") ? recv_user_cdefines(c, id, name) : recv_user_defines(c, name));
+                       !(is_class_name_name(name) ? recv_user_cdefines(c, id, name) : recv_user_defines(c, name));
   int is_class_reflect_cls_only = 0;
   int is_class_reflect = poly_class_reflect_arm(c, id, name, &is_class_reflect_cls_only);
   /* `members` on a Class read out of a container is its member list (the

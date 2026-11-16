@@ -3866,11 +3866,12 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
   }
 }
 static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, int comparable) {
-  /* what master answers: the program's method or reader anywhere in the chain, whatever its visibility */
-  int master = !call_answers(c, id, cid, name, CT_NOFACE, NULL);
-  if (cid < 0 || cid >= c->nclasses || !name) return master;
+  /* the table's answer at the call: the program's method or reader anywhere in the chain, whatever its visibility (a
+     private def comes first in a lookup too); with no call (-1) a no-site ask of the program-wide dispatchers */
+  int tbl = !call_answers(c, id, cid, name, CT_NOFACE | (id < 0 ? CT_SHARED : 0), NULL);
+  if (cid < 0 || cid >= c->nclasses || !name) return tbl;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
-  if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return master;
+  if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return tbl;
   /* the topmost class that has Enumerable among its ancestors, by an include
      of its own or of a module: below it the include is a no-op. A Struct, an Array or a native class has Enumerable of its
      own, at a place the includes do not show: master's answer there. */
@@ -3885,7 +3886,7 @@ static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, i
         if (mixin_level_answers(c, j, name)) return 0;
         if (j == k || c->classes[j].parent < 0) break;
       }
-      return master;
+      return tbl;
     }
     if (mixin_reaches(c, k, comparable, NULL)) top = k;
     if (k == ci->parent) break;
@@ -3896,7 +3897,7 @@ static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, i
     if (r) return r == 2;
     if (k == c->classes[k].parent) break;
   }
-  return master;
+  return tbl;
 }
 
 int comp_enum_answers_first(Compiler *c, int id, int cid, const char *name) {

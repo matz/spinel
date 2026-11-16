@@ -255,6 +255,7 @@ src/call_plan.c cplan_check_missing the independent check of resolution
 # a helper the compiler synthesizes, by its own name
 src/analyze.c desugar_to_enum a synthesized helper's name
 src/analyze_desugar.c desugar_builtin_enum_calls a synthesized helper's name
+src/analyze_desugar.c poly_recv_cmethod_answers which classes have a class method of an Enumerable name a boxed Class value may answer
 src/analyze_desugar.c desugar_builtin_scalar_calls =gn a synthesized helper's name
 src/analyze_desugar.c fwd_bam_lambda_count a synthesized helper's name
 src/analyze_desugar.c ie_enum_reopen_answers a name's presence in the Enumerable reopen

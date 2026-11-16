@@ -17595,6 +17595,12 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
         char tn[32]; snprintf(tn, sizeof tn, "_t%d", tval);
         buf_puts(b, " } "); emit_unbox_text(c, comp_ntype(c, id), tn, b); buf_puts(b, "; })");
       }
+      /* (a call read boxed, as a computed send's arm is, answers the value
+         boxed: a typed one, a Hash, went into the poly slot as its pointer) */
+      else if (!nil_rhs && !unk_rhs && at != TY_POLY && at != TY_STRBUF && comp_ntype(c, id) == TY_POLY) {
+        char tn[32]; snprintf(tn, sizeof tn, "_t%d", tval);
+        buf_puts(b, " } "); emit_boxed_text(c, at, tn, b); buf_puts(b, "; })");
+      }
       else buf_printf(b, " } _t%d; })", tval);
       { *out = 1; return 1; }
     }

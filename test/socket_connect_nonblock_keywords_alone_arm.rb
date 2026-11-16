@@ -1,6 +1,7 @@
 # A computed send handing keywords alone (`**h`) to a name a builtin Socket
-# answers too: the Socket arm, which has no address, raises ArgumentError as
-# CRuby does, and the program's own method of the name answers
+# answers too: keywords alone are no Socket#connect_nonblock (it needs an
+# address), so no Socket arm is built for them, and the program's own method
+# of the name answers
 require "socket"
 class Sock
   def connect_nonblock(exception: true) = exception ? :ok : :wait

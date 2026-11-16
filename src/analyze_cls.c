@@ -3333,11 +3333,16 @@ static int cf_dsend_wake(CF *f) {
                                sp_streq(c->classes[k].name, "Object") || sp_streq(c->classes[k].name, "BasicObject") ||
                                sp_streq(c->classes[k].name, "Kernel");
     const ClsSet *d = !now ? &f->pool[f->desc[k]] : NULL;
+    /* (a computed `new` on the Class object runs initialize; a module's
+       desc leaves the module out, whose Class object answers its own
+       singleton methods) */
+    int by_cls = s->is_cmethod || sp_streq(s->name, "initialize");
     for (int j = 0; j < f->ndsend && !now; j++) {
       if (rs[j] == CF_EMPTY) continue;
       const ClsSet *r = &f->pool[rs[j]];
+      if (s->is_cmethod && cls_set_has(r, k + c->nclasses)) now = 1;
       for (int x = cls_set_next(d, -1); x >= 0 && !now; x = cls_set_next(d, x))
-        now = cls_set_has(r, s->is_cmethod ? x + c->nclasses : x);
+        now = (!s->is_cmethod && cls_set_has(r, x)) || (by_cls && cls_set_has(r, x + c->nclasses));
     }
     if (!now) { f->dsend_pend[keep++] = mi; continue; }
     for (int j = 0; j < s->nparams; j++) cf_edge(f, f->dynarg, cf_param_el(f, mi, j));

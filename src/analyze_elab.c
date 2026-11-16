@@ -4738,7 +4738,7 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
       for (int i = 0; o == ELAB_NO && h && i < h->n; i++)
         if (h->v[i].arm1 && elab_cmp(elab_point_of(c, h->v[i].arm1), p) != PROG_AFTER) o = ELAB_UNKNOWN;
       if (o == ELAB_YES || o == LR_STOP) return o;
-      if (o == ELAB_UNKNOWN) *unsure = 1;
+      if (o == ELAB_UNKNOWN && !*unsure) *unsure = 1;   /* (the grade only rises: 2 stays) */
       continue;
     }
     for (int i = k ? k->nmix - 1 : -1; i >= 0; i--) {
@@ -4751,7 +4751,7 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
          earlier mixin's, the superclass's) stays where it is */
       int dup = lr_mixin_dup(c, cls, sg, k, i);
       if (dup == ELAB_YES) continue;
-      if (dup == ELAB_UNKNOWN) *unsure = 1;
+      if (dup == ELAB_UNKNOWN && !*unsure) *unsure = 1;
       /* (a module's search is its own step, as it has no superclass; with
          LR_MIXIN_STOPS it keeps an undef's stop, which lr_search's end drops) */
       int o = lr_mixin_class(c, m) < 0 ? ELAB_UNKNOWN : !name && m->mod == mod ? ELAB_YES

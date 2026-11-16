@@ -9858,7 +9858,9 @@ static int int_arms_clamp_pow(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     buf_printf(b, "sp_powmod_box(%s, ", r); emit_boxed(c, argv[0], b); buf_puts(b, ", ");
     emit_boxed(c, argv[1], b); buf_puts(b, ")");
   }
-  else if (sp_streq(name, "pow") && argc == 2 && repr_of(c, argv[1]).kind == RK_BOXED) {
+  /* a modulus that may be nil goes boxed, its nil with it: pow's own TypeError */
+  else if (sp_streq(name, "pow") && argc == 2 &&
+           (repr_of(c, argv[1]).kind == RK_BOXED || (node_is_oint(c, argv[1]) && nullable_int_value(c, argv[1])))) {
     buf_printf(b, "sp_powmod_arg(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
     emit_boxed(c, argv[1], b); buf_puts(b, ")");
   }
@@ -9957,6 +9959,12 @@ static int int_arms_clamp_pow(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       buf_printf(b, "%s(sp_box_oint(", sp_streq(name, "eql?") ? "sp_poly_eql" : "sp_poly_equal");
       emit_oint_expr(c, recv, TY_INT, b); buf_puts(b, "), ");
       emit_boxed(c, argv[0], b); buf_puts(b, ")");
+    }
+    /* an argument that may be nil is equal to no Integer */
+    else if (a0 == TY_INT && node_is_oint(c, argv[0]) && nullable_int_value(c, argv[0])) {
+      int te = ++g_tmp;
+      buf_printf(b, "({ sp_oint _t%d = ", te); emit_oint_expr(c, argv[0], TY_INT, b);
+      buf_printf(b, "; !_t%d.nil && _t%d.v == (%s); })", te, te, r);
     }
     else if (a0 == TY_INT) { buf_printf(b, "((%s) == (", r); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
     else if (a0 == TY_POLY) {
@@ -10154,7 +10162,9 @@ static int int_arms_round_divide(Compiler *c, int id, Buf *b, const NodeTable *n
     /* the quotient and the modulo each read the receiver, so hold it in a
        temp: a receiver with a side effect ran twice */
     int tr = ++g_tmp, tb = ++g_tmp, o = ++g_tmp;
-    buf_printf(b, "({ sp_int _t%d = (%s); sp_int _t%d = ", tr, r, tb); emit_int_expr(c, argv[0], b);
+    buf_printf(b, "({ sp_int _t%d = (%s); sp_int _t%d = ", tr, r, tb);
+    /* a divisor that may be nil: the coercion TypeError */
+    if (!emit_int_opnd_maybe_nil(c, argv[0], 0, b)) emit_int_expr(c, argv[0], b);
     buf_printf(b, "; sp_IntArray *_t%d = sp_IntArray_new(); sp_IntArray_push(_t%d, sp_idiv(_t%d, _t%d));"
                   " sp_IntArray_push(_t%d, sp_imod(_t%d, _t%d)); _t%d; })", o, o, tr, tb, o, tr, tb, o);
   }
@@ -11010,6 +11020,12 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_printf(b, "sp_poly_%s(sp_box_ofloat(", sp_streq(name, "eql?") ? "eql" : "equal");
         emit_oint_expr(c, recv, TY_FLOAT, b); buf_puts(b, "), ");
         emit_boxed(c, argv[0], b); buf_puts(b, ")");
+      }
+      /* an argument that may be nil is equal to no Float */
+      else if (a0 == TY_FLOAT && node_is_oint(c, argv[0]) && nullable_int_value(c, argv[0])) {
+        int te = ++g_tmp;
+        buf_printf(b, "({ sp_ofloat _t%d = ", te); emit_oint_expr(c, argv[0], TY_FLOAT, b);
+        buf_printf(b, "; !_t%d.nil && _t%d.v == (%s); })", te, te, r);
       }
       else if (a0 == TY_FLOAT) { buf_printf(b, "((%s) == (", r); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
       else {

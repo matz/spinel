@@ -3566,8 +3566,15 @@ int call_misses_self_method(Compiler *c, int id);   /* codegen_call.c: a self-ca
 /* node as a plain scalar through its oint form: `sp_oint_val(<oint>, op)`
    when the node may be nil (cmp_operand_may_be_nil), else emit_expr */
 void emit_oint_unwrap_ck(Compiler *c, int node, TyKind t, const char *op, Buf *b);
+/* an Integer operand that may be nil, with its consumer's error (codegen_util.c) */
+int emit_int_opnd_maybe_nil(Compiler *c, int node, int shift_count, Buf *b);
 int poly_int_key_boxed(Compiler *c, int key);
 void emit_scalar_operand_op(Compiler *c, int node, const char *op, Buf *b);
+/* the receiver of method `op` as its plain scalar, unwrapped with the
+   NoMethodError a nil receiver raises, where it is an Integer or Float that
+   may be nil; else 0, nothing emitted (an iterator's receiver, which
+   emit_int_expr would unwrap with the argument's TypeError) */
+int emit_scalar_recv_maybe_nil(Compiler *c, int node, const char *op, Buf *b);
 /* Ruby truthiness of an Integer / Float node as a C condition: `!o.nil`
    for one with an oint form, else always true (the node evaluated) */
 void emit_oint_truthy(Compiler *c, int node, TyKind t, Buf *b);

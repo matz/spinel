@@ -6085,7 +6085,8 @@ static int iter_range_upto_arms(Compiler *c, int id, Buf *b, int indent, const N
     const int *argv = NULL;
     if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
     if (argc != 1) return 0;
-    Buf lo; memset(&lo, 0, sizeof lo); emit_expr(c, recv, &lo);
+    Buf lo; memset(&lo, 0, sizeof lo);
+    if (!emit_scalar_recv_maybe_nil(c, recv, name, &lo)) emit_expr(c, recv, &lo);
     /* a boxed limit (the receiver reached this arm through the poly face,
        and its limit is boxed too) is unboxed to the counter's sp_int; it did
        not compile against it (#4665). A typed limit stays as it is: a Float
@@ -7587,6 +7588,18 @@ static int step_recv_hoists(Compiler *c, int id, int argc, const int *argv) {
   return paren && g_pre && g_sn_skip != id;
 }
 
+/* The receiver of an Integer or Float `step`: a nil one is the NoMethodError
+   its call raises (emit_scalar_recv_maybe_nil), not the argument's TypeError */
+static void emit_step_recv_int(Compiler *c, int recv, Buf *b) {
+  if (!emit_scalar_recv_maybe_nil(c, recv, "step", b)) emit_int_expr(c, recv, b);
+}
+static void emit_step_recv_float(Compiler *c, int recv, Buf *b) {
+  Buf rb; memset(&rb, 0, sizeof rb);
+  if (!emit_scalar_recv_maybe_nil(c, recv, "step", &rb)) { emit_float_expr(c, recv, b); return; }
+  buf_printf(b, comp_ntype(c, recv) == TY_INT ? "(sp_float)(%s)" : "%s", rb.p ? rb.p : "0");
+  free(rb.p);
+}
+
 static int step_bind_recv(Compiler *c, int id, int recv, const char *cty, void (*emit)(Compiler *, int, Buf *),
                           int argc, const int *argv, Buf *b, int indent) {
   int t = ++g_tmp;
@@ -8111,7 +8124,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
   if (sp_streq(name, "times") && (rt == TY_INT || rr.big)) {
     int t = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb);
-    emit_int_expr(c, recv, &rb);
+    if (rr.big || !emit_scalar_recv_maybe_nil(c, recv, "times", &rb)) emit_int_expr(c, recv, &rb);
     /* The count is evaluated ONCE, so a receiver that can change (or change
        something) between rounds has to be hoisted: spliced into the loop
        condition, `rng.next_int(n).times` re-rolled the die every round, and
@@ -8196,7 +8209,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
                    (nt_kind(nt, sargv[0]) == NK_NilNode);
     if (no_limit && rt == TY_INT &&
         (sargc < 2 || comp_ntype(c, sargv[1]) != TY_FLOAT)) {
-      int tr = step_recv_hoists(c, id, sargc, sargv) ? step_bind_recv(c, id, recv, "sp_int", emit_int_expr, sargc, sargv, b, indent) : 0;
+      int tr = step_recv_hoists(c, id, sargc, sargv) ? step_bind_recv(c, id, recv, "sp_int", emit_step_recv_int, sargc, sargv, b, indent) : 0;
       int t = ++g_tmp, ts = ++g_tmp;
       emit_indent(b, indent); buf_printf(b, "sp_int _t%d = ", ts);
       if (sargc >= 2) emit_int_expr(c, sargv[1], b); else buf_puts(b, "1");
@@ -8204,7 +8217,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent);
       buf_printf(b, "if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");\n", ts);
       emit_indent(b, indent);
-      buf_printf(b, "for (sp_int _t%d = ", t); if (tr) buf_printf(b, "_t%d", tr); else emit_int_expr(c, recv, b);
+      buf_printf(b, "for (sp_int _t%d = ", t); if (tr) buf_printf(b, "_t%d", tr); else emit_step_recv_int(c, recv, b);
       buf_printf(b, "; ; _t%d += _t%d) {\n", t, ts);
       if (p0) { char ts2[32]; snprintf(ts2, sizeof ts2, "_t%d", t); emit_iter_param_assign(c, block, p0_orig, p0, TY_INT, ts2, b, indent + 1); }
       { char rs_es[32]; snprintf(rs_es, sizeof rs_es, "_t%d", t);
@@ -8219,7 +8232,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
                    (sargc >= 2 && comp_ntype(c, sargv[1]) == TY_FLOAT);
     if (!is_float) {
       int t = ++g_tmp, tl = ++g_tmp, ts = ++g_tmp, tv = 0;
-      int tr = nt_kind(nt, recv) == NK_IntegerNode ? 0 : step_bind_recv(c, id, recv, "sp_int", emit_expr, sargc, sargv, b, indent);
+      int tr = nt_kind(nt, recv) == NK_IntegerNode ? 0 : step_bind_recv(c, id, recv, "sp_int", emit_step_recv_int, sargc, sargv, b, indent);
       if (repr_of(c, sargv[0]).kind == RK_BOXED) {
         char tvs[32]; tv = ++g_tmp; snprintf(tvs, sizeof tvs, "_t%d", tv);
         emit_indent(b, indent); buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, sargv[0], b);
@@ -8274,7 +8287,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent); buf_puts(b, "}\n");
       return 1;
     }
-    int tb = step_bind_recv(c, id, recv, "sp_float", emit_float_expr, sargc, sargv, b, indent), tl = ++g_tmp, ts = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp;
+    int tb = step_bind_recv(c, id, recv, "sp_float", emit_step_recv_float, sargc, sargv, b, indent), tl = ++g_tmp, ts = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp;
     /* the limit and the step through the Float slot's conversion: a BOXED
        one (an Integer local under --int-overflow=promote, the argument of a
        boxed receiver's Float arm) unboxes, a typed Integer widens, and a

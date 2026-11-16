@@ -1,0 +1,33 @@
+/: TypeError: nil can't be coerced into Integer
+%: TypeError: nil can't be coerced into Integer
+divmod: TypeError: nil can't be coerced into Integer
+div: TypeError: nil can't be coerced into Integer
+modulo: TypeError: nil can't be coerced into Integer
+&: TypeError: nil can't be coerced into Integer
+|: TypeError: nil can't be coerced into Integer
+^: TypeError: nil can't be coerced into Integer
+<<: TypeError: no implicit conversion of nil into Integer
+>>: TypeError: no implicit conversion of nil into Integer
+pow: TypeError: Integer#pow() 2nd argument not allowed unless all arguments are integers
+eql?: false
+equal?: false
+Float eql?: false
+{1 => 2, nil => 3}
+3
+3
+true
+3
+{1 => 2}
+[4, 2]
+4
+{1 => 2}
+{nil => 2, 1 => 1}
+1=2.5
+nil=1.5
+times: NoMethodError: undefined method 'times' for nil
+upto: NoMethodError: undefined method 'upto' for nil
+downto: NoMethodError: undefined method 'downto' for nil
+step: NoMethodError: undefined method 'step' for nil
+step float: NoMethodError: undefined method 'step' for nil
+times.to_a: NoMethodError: undefined method 'times' for nil
+Float step: NoMethodError: undefined method 'step' for nil

@@ -24,6 +24,12 @@
  *     sp_hash_key_from_bytes  (a frozen String key, which a Hash stores as
  *                              is: a parser's object keys)
  *
+ *   Boxing a new String (sp_string.h):
+ *     sp_box_str_new  (a String the package just built, boxed as the String's
+ *                      own handle: a change through the box reaches every copy
+ *                      of it, as in CRuby. A parser's String values, not its
+ *                      object keys)
+ *
  *   Float digits (sp_dtoa.h):
  *     sp_float_shortest  (the shortest round-trip digits and exponent, for a
  *                         package with a layout of its own, as JSON's)
@@ -57,5 +63,6 @@
 #include "sp_gc.h"      /* sp_RbVal, SP_TAG_*, container + sym reflection hooks */
 #include "sp_alloc.h"   /* sp_str_alloc, sp_str_set_len, sp_int_to_s, sp_float_to_s, sp_oom_die */
 #include "sp_dtoa.h"    /* sp_float_shortest */
+#include "sp_string.h"   /* sp_box_str_new */
 
 #endif /* SPINEL_RUNTIME_H */

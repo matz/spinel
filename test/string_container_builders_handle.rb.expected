@@ -1,0 +1,57 @@
+true
+true
+true
+true
+true
+"pear!"
+"pear!"
+true
+"2"
+true
+{"a" => "merged?", "b" => "2"}
+{"a" => "merged?"}
+true
+true
+false
+1
+1
+true
+true
+true
+true
+2
+true
+true
+true
+["a", "b!", "c"]
+"b"
+true
+true
+["o", "slot?"]
+{"k" => "slot?"}
+true
+4
+["x\n!", "y\n"]
+["x\n", "y\n"]
+["b!", "1"]
+["a!", "b"]
+["a\n!", "b\n"]
+["b!", "1", "b1?"]
+"b^"
+"1&"
+["p", "p", "q", "q", "x", "p", "q", "p", "q", "p", "q"]
+["one"]
+11
+["abab", "cz"]
+ArgumentError
+["x!"]
+"x!"
+true
+[nil, "y!"]
+true
+["aa!", "b"]
+["x!", "z"]
+["a", "c"]
+["p", "q"]
+["w", "y", "z!"]
+"y"

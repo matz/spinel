@@ -1552,7 +1552,7 @@ sp_PolyArray *sp_MatchData_aref_range(sp_MatchData *m, sp_int beg, sp_int end, i
   if (beg < 0 || beg > n) return NULL;   /* nil in Ruby */
   for (sp_int i = beg; i <= last && i < n; i++) {
     const char *g = sp_MatchData_aref(m, i);
-    sp_PolyArray_push(a, g ? sp_box_str(g) : sp_box_nil());
+    sp_PolyArray_push(a, g ? sp_box_str_new(g) : sp_box_nil());
   }
   return a;
 }
@@ -1565,7 +1565,7 @@ sp_PolyArray *sp_MatchData_aref_len(sp_MatchData *m, sp_int start, sp_int len) {
   if (start < 0 || start > m->ncap || len < 0) return NULL;   /* nil in Ruby */
   for (sp_int i = start; i < start + len && i < m->ncap; i++) {
     const char *g = sp_MatchData_aref(m, i);
-    sp_PolyArray_push(a, g ? sp_box_str(g) : sp_box_nil());
+    sp_PolyArray_push(a, g ? sp_box_str_new(g) : sp_box_nil());
   }
   return a;
 }
@@ -1646,7 +1646,7 @@ static sp_PolyArray *sp_md_groups_from(sp_MatchData *m, sp_int from) {SP_GC_ROOT
   SP_GC_ROOT(r);
   for (sp_int i = from; i < m->ncap; i++) {
     const char *g = sp_MatchData_aref(m, i);
-    sp_PolyArray_push(r, g ? sp_box_str(g) : sp_box_nil());
+    sp_PolyArray_push(r, g ? sp_box_str_new(g) : sp_box_nil());
   }
   return r;
 }

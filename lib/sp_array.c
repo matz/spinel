@@ -241,7 +241,7 @@ static SP_NOINLINE SP_COLD void sp_StrArray_splice_gap(sp_StrArray*a,sp_int s,co
   SP_GC_ROOT(a);
   sp_strelem*sb=NULL;
   if(srcn>0){sb=(sp_strelem*)sp_pl_alloc(sizeof(sp_strelem)*(size_t)srcn);if(!sb)sp_oom_die();memcpy(sb,src,sizeof(sp_strelem)*(size_t)srcn);}
-  while(a->len<s)sp_StrArray_push(a,NULL);
+  while(a->len<s)sp_StrArray_push_e(a,NULL);
   for(sp_int i=0;i<srcn;i++)sp_StrArray_push_e(a,sb[i]);
   sp_pl_free(sb);
 }
@@ -929,7 +929,7 @@ sp_FloatArray*sp_FloatArray_nil_sum_ck(sp_FloatArray*a,int float_seed){if(!a||!a
 sp_strelem sp_StrArray_delete_at_e(sp_StrArray*a,sp_int i){SP_GC_ROOT(a); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("delete_at");if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}sp_strelem v=a->data[i];for(sp_int j=i;j<a->len-1;j++)a->data[j]=a->data[j+1];a->len--;return v;}
 sp_strelem sp_StrArray_delete_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("delete");if(a->frozen){if(sp_StrArray_index_e(a,v)>=0)sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}sp_int w=0;sp_strelem found=NULL;for(sp_int i=0;i<a->len;i++){if(!sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v))){a->data[w]=a->data[i];w++;}
 else{found=a->data[i];}}a->len=w;return found;}
-void sp_StrArray_insert_e(sp_StrArray*a,sp_int i,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("insert");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len+1;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)(-(a->len+1))));while(i>a->len)sp_StrArray_push(a,NULL);/* CRuby pads with nils past the end */sp_StrArray_push_e(a,sp_String_new_shared(sp_str_empty));for(sp_int j=a->len-1;j>i;j--)a->data[j]=a->data[j-1];a->data[i]=v;}
+void sp_StrArray_insert_e(sp_StrArray*a,sp_int i,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("insert");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len+1;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)(-(a->len+1))));while(i>a->len)sp_StrArray_push_e(a,NULL);/* CRuby pads with nils past the end */sp_StrArray_push_e(a,sp_String_new_shared(sp_str_empty));for(sp_int j=a->len-1;j>i;j--)a->data[j]=a->data[j-1];a->data[i]=v;}
 void sp_StrArray_shuffle_bang(sp_StrArray*a){SP_GC_ROOT(a); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("shuffle!");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(sp_int i=a->len-1;i>0;i--){sp_int j=sp_krand_below(i+1);sp_strelem t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
 sp_StrArray*sp_StrArray_dup(sp_StrArray*a){if(!a)return NULL;SP_GC_ROOT(a);sp_StrArray*r=sp_StrArray_new();sp_StrArray_replace(r,a);return r;}
 sp_StrArray*sp_StrArray_sort(sp_StrArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort");sp_StrArray*b=sp_StrArray_dup(a);sp_StrArray_sort_bang(b);return b;}
@@ -1068,7 +1068,7 @@ const int64_t *sp_IntArray_ffi_data(sp_IntArray *a) {
 }
 const double  *sp_FloatArray_ffi_data(sp_FloatArray *a) { return a ? (const double *)a->data : (const double *)0; }
 sp_IntArray *sp_IntArray_concat(sp_IntArray *a, sp_IntArray *b) { SP_GC_ROOT(a); SP_GC_ROOT(b); sp_IntArray *r = sp_IntArray_new(); SP_GC_ROOT(r); if (SP_UNLIKELY(!a)) sp_nil_recv("+"); for (sp_int i = 0; i < a->len; i++) sp_IntArray_push_o(r, sp_IntArray_oget(a, i)); if (b) for (sp_int i = 0; i < b->len; i++) sp_IntArray_push_o(r, sp_IntArray_oget(b, i)); return r; }
-sp_StrArray *sp_StrArray_concat(sp_StrArray *a, sp_StrArray *b) {SP_GC_ROOT(a);SP_GC_ROOT(b); sp_StrArray *r = sp_StrArray_new(); SP_GC_ROOT(r); if (SP_UNLIKELY(!a)) sp_nil_recv("+"); for (sp_int i = 0; i < a->len; i++) sp_StrArray_push(r, sp_StrArray_get(a, i)); if (b) for (sp_int i = 0; i < b->len; i++) sp_StrArray_push(r, sp_StrArray_get(b, i)); return r; }
+sp_StrArray *sp_StrArray_concat(sp_StrArray *a, sp_StrArray *b) {SP_GC_ROOT(a);SP_GC_ROOT(b); sp_StrArray *r = sp_StrArray_new(); SP_GC_ROOT(r); if (SP_UNLIKELY(!a)) sp_nil_recv("+"); for (sp_int i = 0; i < a->len; i++) sp_StrArray_push_e(r, sp_StrArray_get_e(a, i)); if (b) for (sp_int i = 0; i < b->len; i++) sp_StrArray_push_e(r, sp_StrArray_get_e(b, i)); return r; }
 sp_FloatArray *sp_FloatArray_concat(sp_FloatArray *a, sp_FloatArray *b) {SP_GC_ROOT(a);SP_GC_ROOT(b); sp_FloatArray *r = sp_FloatArray_new(); SP_GC_ROOT(r); if (SP_UNLIKELY(!a)) sp_nil_recv("+"); for (sp_int i = 0; i < a->len; i++) sp_FloatArray_push_o(r, sp_FloatArray_oget(a, i)); if (b) for (sp_int i = 0; i < b->len; i++) sp_FloatArray_push_o(r, sp_FloatArray_oget(b, i)); return r; }
 /* A typed array widened whole into a poly one boxes its nil elements as nil,
    as sp_PolyArray_from_int_array does: once boxed as a number, nothing

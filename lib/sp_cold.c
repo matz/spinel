@@ -1567,7 +1567,7 @@ static void sp_typed_array_replace_boxed(sp_RbVal recv, sp_RbVal src) {
         if (e.tag == SP_TAG_STR) sp_StrArray_push_e(st, sp_String_new_shared(e.v.s));
         else if (e.tag == SP_TAG_OBJ && e.cls_id == SP_BUILTIN_STRBUF)
           sp_StrArray_push_e(st, (sp_strelem)e.v.p);   /* the handle itself: one String */
-        else if (e.tag == SP_TAG_NIL) sp_StrArray_push(st, NULL);
+        else if (e.tag == SP_TAG_NIL) sp_StrArray_push_e(st, NULL);
         else sp_typed_replace_elem_error(e, "String");
       }
       sp_StrArray_replace((sp_StrArray *)recv.v.p, st);
@@ -4970,7 +4970,7 @@ sp_StrArray *sp_get_load_path(void) {
   if (!sp_load_path_cache) {
     sp_load_path_cache = sp_StrArray_new();   /* (marked from here: the seeds allocate) */
     for (int i = 0; i < sp_load_seed_n; i++)
-      sp_StrArray_push(sp_load_path_cache, sp_sprintf("%s", sp_load_seed_dirs[i]));
+      sp_StrArray_push_e(sp_load_path_cache, sp_String_new_shared(sp_sprintf("%s", sp_load_seed_dirs[i])));
   }
   return sp_load_path_cache;
 }
@@ -5345,7 +5345,7 @@ sp_Enumerator *sp_srange_stepped_enum(sp_RbVal src, sp_int n, const char *label,
     SP_GC_ROOT(all);
     sp_StrArray *v = sp_StrArray_new();
     SP_GC_ROOT(v);
-    for (sp_int i = 0; i < sp_StrArray_length(all); i += n) sp_StrArray_push(v, sp_StrArray_get(all, i));
+    for (sp_int i = 0; i < sp_StrArray_length(all); i += n) sp_StrArray_push_e(v, sp_StrArray_get_e(all, i));
     sp_PolyArray *items;
     if (r.sym) {   /* the members of a Range of Symbols are Symbols (the program's interner) */
       items = sp_PolyArray_new();

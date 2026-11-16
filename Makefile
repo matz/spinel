@@ -52,7 +52,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check runtime-gvar-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test no-bigint-test no-alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
+.PHONY: entry-names-check ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check runtime-gvar-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test no-bigint-test no-alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-stress-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot rubyboy gate-rubyboy scale-test clean install uninstall deps tools
@@ -663,10 +663,10 @@ build/%.o: lib/%.c $(RT_HDRS)
 # spinel/runtime.h ABI (-Ilib) plus its own package headers. BUNDLED_NATIVE_OBJS
 # is defined near the top (before `all`, whose prereqs expand at parse time).
 packages/json/sp_json.o: packages/json/sp_json.c packages/json/sp_json.h \
-                         lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                         lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib -Ipackages/json packages/json/sp_json.c -o $@
 packages/json/sp_json_mt.o: packages/json/sp_json.c packages/json/sp_json.h \
-                            lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                            lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib -Ipackages/json packages/json/sp_json.c -o $@
 
 # openssl is glue over the SYSTEM libssl, so unlike the other package C it is
@@ -676,81 +676,81 @@ packages/json/sp_json_mt.o: packages/json/sp_json.c packages/json/sp_json.h \
 # link error. -lssl/-lcrypto reach the link line through openssl.rb's ffi_lib,
 # which is parsed only when a program requires it.
 packages/openssl/sp_openssl.o: packages/openssl/sp_openssl.c \
-                               lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                               lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(OPENSSL_CPPFLAGS) -Ilib -Ipackages/openssl packages/openssl/sp_openssl.c -o $@
 packages/openssl/sp_openssl_mt.o: packages/openssl/sp_openssl.c \
-                                  lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                                  lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) $(OPENSSL_CPPFLAGS) -Ilib -Ipackages/openssl packages/openssl/sp_openssl.c -o $@
 
 packages/ffi/sp_ffi.o: packages/ffi/sp_ffi.c \
-                       lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                       lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(LIBFFI_CPPFLAGS) -Ilib -Ipackages/ffi packages/ffi/sp_ffi.c -o $@
 packages/ffi/sp_ffi_mt.o: packages/ffi/sp_ffi.c \
-                          lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                          lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) $(LIBFFI_CPPFLAGS) -Ilib -Ipackages/ffi packages/ffi/sp_ffi.c -o $@
 
 # stringio is a native-bound spin package (Path B typed object): the struct,
 # every method, and the header live in the package; the compiler knows it only
 # through the native_* declarations in stringio.rb.
 packages/stringio/sp_stringio.o: packages/stringio/sp_stringio.c packages/stringio/sp_stringio.h \
-                                 lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                                 lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib -Ipackages/stringio packages/stringio/sp_stringio.c -o $@
 packages/stringio/sp_stringio_mt.o: packages/stringio/sp_stringio.c packages/stringio/sp_stringio.h \
-                                    lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                                    lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib -Ipackages/stringio packages/stringio/sp_stringio.c -o $@
 
 # strscan is likewise a native-bound spin package; its regex matching links
 # against the runtime archive's re_exec (a forward extern in the package C).
 packages/strscan/sp_strscan.o: packages/strscan/sp_strscan.c \
-                               lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                               lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib packages/strscan/sp_strscan.c -o $@
 packages/strscan/sp_strscan_mt.o: packages/strscan/sp_strscan.c \
-                                  lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                                  lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/strscan/sp_strscan.c -o $@
 
 # base64 carries its whole implementation; digest carries none (it binds the
 # runtime's vendored sp_crypto symbols and has no object of its own).
 packages/base64/sp_base64.o: packages/base64/sp_base64.c \
-                             lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                             lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib packages/base64/sp_base64.c -o $@
 packages/base64/sp_base64_mt.o: packages/base64/sp_base64.c \
-                                lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                                lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/base64/sp_base64.c -o $@
 
 # tmpdir: Dir.tmpdir and Dir.mktmpdir, the system temp directory and a
 # unique-directory creator. Pure C, no struct.
 packages/tmpdir/sp_tmpdir.o: packages/tmpdir/sp_tmpdir.c \
-                             lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                             lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib packages/tmpdir/sp_tmpdir.c -o $@
 packages/tmpdir/sp_tmpdir_mt.o: packages/tmpdir/sp_tmpdir.c \
-                                lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                                lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/tmpdir/sp_tmpdir.c -o $@
 
 # etc: the user and group databases, each entry as one string the Ruby
 # splits. Pure C, no struct.
 packages/etc/sp_etc.o: packages/etc/sp_etc.c \
-                       lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                       lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib packages/etc/sp_etc.c -o $@
 packages/etc/sp_etc_mt.o: packages/etc/sp_etc.c \
-                          lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                          lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/etc/sp_etc.c -o $@
 
 # syslog: the four calls of syslog(3) and the LOG_ constants of the
 # platform. Pure C, no struct.
 packages/syslog/sp_syslog.o: packages/syslog/sp_syslog.c \
-                             lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                             lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib packages/syslog/sp_syslog.c -o $@
 packages/syslog/sp_syslog_mt.o: packages/syslog/sp_syslog.c \
-                                lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                                lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/syslog/sp_syslog.c -o $@
 
 # pty: PTY.spawn, a child on a new pseudo-terminal (posix_openpt + fork).
 # Pure C over libc; no wasm32-wasi object, since WASI has no fork.
 packages/pty/sp_pty.o: packages/pty/sp_pty.c \
-                       lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                       lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib packages/pty/sp_pty.c -o $@
 packages/pty/sp_pty_mt.o: packages/pty/sp_pty.c \
-                          lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                          lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/pty/sp_pty.c -o $@
 
 # zlib: DEFLATE, zlib and gzip in the package's own C. No system libz and so
@@ -758,10 +758,10 @@ packages/pty/sp_pty_mt.o: packages/pty/sp_pty.c \
 # box without the -dev package -- would drop the package and give a green
 # `make test` that never ran it. Pure C, no struct.
 packages/zlib/sp_zlib.o: packages/zlib/sp_zlib.c \
-                         lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                         lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib packages/zlib/sp_zlib.c -o $@
 packages/zlib/sp_zlib_mt.o: packages/zlib/sp_zlib.c \
-                            lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+                            lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/zlib/sp_zlib.c -o $@
 
 build/sp_cold.o: lib/sp_cold.c $(RT_HDRS)
@@ -1112,7 +1112,7 @@ $(SP_RT_WASI_LIB): $(RE_WASI_OBJ) $(WASI_SHIM_OBJ) $(addprefix build/wasm32-wasi
 	rm -f $@ && $(WASI_AR) rcs $@ $^
 
 BUNDLED_NATIVE_WASI_OBJS = $(patsubst %.o,%_wasi.o,$(filter-out packages/openssl/% packages/ffi/% packages/pty/%,$(BUNDLED_NATIVE_OBJS)))
-packages/%_wasi.o: packages/%.c lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h $(WASI_SHIM_HDRS)
+packages/%_wasi.o: packages/%.c lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h $(WASI_SHIM_HDRS)
 	$(WASI_CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(WASI_CFLAGS) -Ilib -I$(@D) $< -o $@
 
 # --exceptions=abort (#8401): the same archive with no setjmp/longjmp, for a
@@ -1183,7 +1183,7 @@ $(SP_RT_WASI_NOEXC_NOGC_LIB): $(patsubst lib/regexp/%.c,build/wasm32-wasi-noexc-
 	rm -f $@ && $(WASI_AR) rcs $@ $^
 
 BUNDLED_NATIVE_WASI_NOEXC_OBJS = $(patsubst %_wasi.o,%_wasi_noexc.o,$(BUNDLED_NATIVE_WASI_OBJS))
-packages/%_wasi_noexc.o: packages/%.c lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_setjmp.h $(WASI_SHIM_HDRS)
+packages/%_wasi_noexc.o: packages/%.c lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_setjmp.h $(WASI_SHIM_HDRS)
 	$(WASI_CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(WASI_NOEXC_CFLAGS) -Ilib -I$(@D) $< -o $@
 
 wasm-rt: $(SP_RT_WASI_LIB) $(BUNDLED_NATIVE_WASI_OBJS) $(SP_RT_WASI_NOEXC_LIB) $(BUNDLED_NATIVE_WASI_NOEXC_OBJS) $(SP_RT_WASI_NOGC_LIB) $(SP_RT_WASI_NOEXC_NOGC_LIB)
@@ -5900,6 +5900,12 @@ imemo-shadow-corpus: $(SPINEL)
 # drops the const is gcc's -Wdiscarded-qualifiers; clang takes that for an
 # unknown option and has the warning under a name of its own.
 TY_GUARD_QUAL := -Werror=discarded-qualifiers $(if $(filter clang,$(CC_KIND)),-Werror=incompatible-pointer-types-discards-qualifiers)
+# A typed container's store and search entry names come from its row (typed_elem_store_sfx): no src/ line
+# formats one by hand or spells a deleted bytes entry, unless tools/entry_names.allow says why it cannot
+# name one for a String kind.
+entry-names-check:
+	@ruby tools/entry_names_check.rb
+
 ty-setter-check: $(SPINEL)
 	@printf '%s\n' $(patsubst build/csrc/%.o,src/%.c,$(SPINEL_OBJ)) | \
 	 xargs -P $(NPROC) -I{} $(CC) $(CFLAGS) -fsyntax-only -DSP_TY_GUARD $(TY_GUARD_QUAL) -Isrc -Ibuild/csrc {} && \

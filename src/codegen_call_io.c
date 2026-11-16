@@ -45,9 +45,9 @@ static void emit_io_readlines_args(Compiler *c, const char *r, const int *pos, i
                   "sp_raise_cls(\"ArgumentError\", \"invalid limit: 0 for readlines\"); ",
                ts, ta, ta, tb, tl, tb);
   buf_printf(b, "SP_GC_ROOT_STR(_t%d); sp_StrArray *_t%d = sp_StrArray_new(); SP_GC_ROOT(_t%d); const char *_t%d; "
-                "while ((_t%d = sp_File_gets_sep(_t%d, _t%d, _t%d < 0 ? 0 : _t%d, _t%d)) != NULL) "
-                "sp_StrArray_push(_t%d, _t%d); _t%d; })",
-             ts, tr, tr, tn, tn, tf, ts, tl, tl, tc, tr, tn, tr);
+                "while ((_t%d = sp_File_gets_sep(_t%d, _t%d, _t%d < 0 ? 0 : _t%d, _t%d)) != NULL) ",
+             ts, tr, tr, tn, tn, tf, ts, tl, tl, tc);
+  { char ln[24]; snprintf(ln, sizeof ln, "_t%d", tn); emit_kind_push(c, b, "Str", tr, ln); buf_printf(b, "; _t%d; })", tr); }
 }
 
 /* The block body of an IO-style C loop (each_line, each_char/byte, ARGF,
@@ -2202,9 +2202,9 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); ", rf, r, rf);
       emit_io_line_args_spread(c, argv, argc, ls, ll, lc, "readlines", b);
       buf_printf(b, "sp_StrArray *_t%d = sp_StrArray_new(); SP_GC_ROOT(_t%d); const char *_t%d; "
-                    "while ((_t%d = sp_File_gets_sep(_t%d, _t%d, _t%d, _t%d)) != NULL) "
-                    "sp_StrArray_push(_t%d, _t%d); _t%d; })",
-                 tr, tr, tn, tn, rf, ls, ll, lc, tr, tn, tr);
+                    "while ((_t%d = sp_File_gets_sep(_t%d, _t%d, _t%d, _t%d)) != NULL) ",
+                 tr, tr, tn, tn, rf, ls, ll, lc);
+      { char ln[24]; snprintf(ln, sizeof ln, "_t%d", tn); emit_kind_push(c, b, "Str", tr, ln); buf_printf(b, "; _t%d; })", tr); }
       free(rb.p); return 1;
     }
     if (sp_streq(name, "readlines")) {

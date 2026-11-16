@@ -16631,7 +16631,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         int tail_strbuf = sp_streq(k, "Poly") && repr_of(c, bb[bn - 1]).as_ty == TY_STRBUF;
         /* (one representation: a String Array holds the String the tail
            answers, its handle, where its bytes became a new one) */
-        int tail_hdl = sp_streq(k, "Str") && !tail_o && !an_next && !nil_store_sfx(c, k, bb[bn - 1])[0];
+        int tail_hdl = typed_elem_held(at) == TY_STRBUF && !tail_o && !an_next && !nil_store_sfx(c, k, bb[bn - 1])[0];
         if (tail_strbuf) emit_boxed(c, bb[bn - 1], &vb);
         else if (tail_o) emit_oint_expr(c, bb[bn - 1], elem_t, &vb);
         else if (tail_hdl) emit_strbuf_handle_of(c, bb[bn - 1], &vb);
@@ -16672,12 +16672,10 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         }
         else if (sp_streq(k, "Ptr"))
           buf_printf(g_pre, "sp_PtrArray_push(_t%d, (void *)(%s));\n", tr, vb.p ? vb.p : "0");
-        /* (one representation: the tail may be the handle; a String Array
-           takes the bytes) */
-        else if (tail_hdl)
-          buf_printf(g_pre, "sp_StrArray_push_e(_t%d, SP_STR_HDL(%s));\n", tr, vb.p ? vb.p : "NULL");
-        else if (sp_streq(k, "Str") && !tail_o && !nil_store_sfx(c, k, bb[bn - 1])[0])
-          buf_printf(g_pre, "sp_StrArray_push(_t%d, SP_STR_B(%s));\n", tr, vb.p ? vb.p : "NULL");
+        /* (one representation: the tail may be the handle or its bytes; a String Array holds the handle) */
+        else if (tail_hdl || (typed_elem_held(at) == TY_STRBUF && !tail_o && !nil_store_sfx(c, k, bb[bn - 1])[0])) {
+          emit_kind_push(c, g_pre, k, tr, vb.p ? vb.p : "NULL"); buf_puts(g_pre, ";\n");
+        }
         else { buf_printf(g_pre, "sp_%sArray_push%s(_t%d, %s);\n", k, tail_o ? "_nilable" : nil_store_sfx(c, k, bb[bn - 1]), tr, vb.p ? vb.p : ""); }
         free(vb.p);
       }
@@ -16743,7 +16741,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           emit_ctype(c, ar.elem, g_pre);
           buf_printf(g_pre, " _t%d = ", tv); buf_puts(g_pre, vb.p ? vb.p : "");
         }
-        int str_fill_h = ar.elem == TY_STRING && sp_streq(k, "Str");
+        int str_fill_h = ar.elem == TY_STRING && typed_elem_held(at) == TY_STRBUF;
         buf_puts(g_pre, ";\n");
         emit_indent(g_pre, g_indent);
         /* (a size converted after the fill runs #to_int, which can drop the
@@ -16770,7 +16768,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tr);
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, _t%d);\n",
-                     ti, ti, tn, ti, k, str_fill_h ? "_e" : "", tr, tv);
+                     ti, ti, tn, ti, k, str_fill_h ? typed_elem_store_sfx(at) : "", tr, tv);
         }
         free(vb.p);
         buf_printf(b, "_t%d", tr);
@@ -18739,7 +18737,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
                    tn, k, tr, k, tr,
                    ti, ti, tn, ti,
                    tj, tj, ta, tj,
-                   k, ONE_SA_KE(k), tr, ta, tj, nf, tr);
+                   k, typed_elem_store_sfx(rt), tr, ta, tj, nf, tr);
       }
     }
     return 1;

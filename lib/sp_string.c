@@ -187,7 +187,6 @@ const char*sp_sym_to_s_frozen(sp_sym id){
   return r;
 }
 
-struct sp_String_s *sp_strelem_of(const char *b) { return sp_String_new_shared(b); }
 const char *sp_str_keep_copy(const char *s) { return sp_str_concat(s, sp_str_empty); }
 /* A Hash's String key made from `len` bytes at `data`: a frozen handle over
    a copy, whose payload is the key (sp_hash_key_str, sp_hash_key_from_bytes) */

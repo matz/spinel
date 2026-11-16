@@ -335,8 +335,7 @@ static inline sp_String*sp_String_new_fresh(const char*s){
   int bin=sp_str_is_binary(s);
   int frozen=sp_str_is_frozen_val(s);
   int mk=((const unsigned char*)s)[-1];
-  /* (one representation: the runtime takes a literal's bytes into an
-     element itself, sp_strelem_of, so its own copy is the literal too) */
+  /* (one representation: a literal's bytes are the literal's own handle) */
   sp_String *lh = sp_String_of_literal(s);
   if (lh) return lh;
   int64_t len=(int64_t)sp_str_byte_len(s);
@@ -390,6 +389,9 @@ static inline sp_RbVal sp_box_str_new(const char *v) {
   }
   return sp_box_str(v);
 }
+
+/* sp_box_str_new for a String that may be nil (NULL): the nil box, else the new String's handle box */
+static inline sp_RbVal sp_box_nullable_str_new(const char *v) { return v ? sp_box_str_new(v) : sp_box_nil(); }
 
 /* A new String a call answers in bytes it may share with others (Integer#chr
    answers a one-character table's), boxed for something that keeps the box:

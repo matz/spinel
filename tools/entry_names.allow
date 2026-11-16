@@ -1,0 +1,93 @@
+# tools/entry_names.allow -- the sites tools/entry_names_check.rb lets name an entry by hand.
+# CLASS<TAB>file<TAB>function<TAB>pattern<TAB>count<TAB>why no String kind can name a deleted bytes entry here
+# A site is keyed by its function and its pattern, not by its text; the count is how many times the pattern occurs
+# in the function, and a copy of a listed line changes it. CLASS (several join with +):
+#   NUM   an Int or Float container: the entry named has no String form
+#   POLY  the container holds boxed (Poly) values
+#   ARM   a String kind takes the _e arm before this one; this arm is the other kinds
+#   ROW   the suffix is the container row's, formatted at the site and not routed through emit_elem_entry
+#   READ  the operation is a read or an aggregate, not a store or a search
+#   IDX   deletes by index: no String value enters
+
+IDX	src/builtin_ops.c	bop_zero_find	sp_$AArray_delete_at	3	deletes by index: no String value enters
+NUM	src/codegen_call.c	emit_array_arith_call	sp_%sArray_push	3	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+NUM	src/codegen_call.c	emit_array_splice	sp_%sArray_push	2	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+NUM+ROW	src/codegen_call.c	emit_new_call_arms	sp_%sArray_push	2	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form; the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_call_array.c	emit_builtin_array_concat	sp_%sArray_	2	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_call_array.c	emit_builtin_array_concat	sp_%sArray_push	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+ROW	src/codegen_call_array.c	emit_call_append_arms	sp_%sArray_push	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_call_array.c	emit_call_array_arms	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+ROW	src/codegen_call_array.c	emit_call_array_arms	sp_%sArray_set	2	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_call_array.c	emit_call_store_value_arms	sp_%sHash_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_call_array.c	emit_op_array_cycle_n	sp_%sArray_push	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+ROW	src/codegen_call_array.c	emit_op_array_minmax	sp_%sArray_push	2	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_call_array.c	emit_op_array_nil_recv	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_call_array.c	emit_op_array_setop	sp_%sArray_	3	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_call_hash.c	emit_op_hash_aref	sp_%sHash_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_call_hash.c	emit_op_hash_assoc	sp_%sHash_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+POLY	src/codegen_call_hash.c	emit_op_hash_compact	sp_%sHash_set	1	the container holds boxed (Poly) values
+POLY	src/codegen_call_hash.c	emit_op_hash_compact_bang	sp_%sHash_set	2	the container holds boxed (Poly) values
+READ	src/codegen_call_hash.c	emit_op_hash_fetch	sp_%sHash_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_call_kernel.c	emit_call_kernel_arms	sp_%sArray_push	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+ARM	src/codegen_call_method.c	emit_method_obj_target	sp_%sArray_push	2	a String kind takes the _e arm before this one; this arm is the other kinds
+ARM	src/codegen_call_method.c	emit_method_obj_target	sp_%sArray_set	2	a String kind takes the _e arm before this one; this arm is the other kinds
+ROW	src/codegen_call_recv.c	emit_array_splat_mutator	sp_%sArray_insert	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+ROW	src/codegen_call_recv.c	emit_array_splat_mutator	sp_%sArray_unshift	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_call_recv.c	emit_hash_call	sp_%sHash_	6	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+POLY	src/codegen_call_recv.c	emit_hash_call	sp_%sHash_set	2	the container holds boxed (Poly) values
+READ	src/codegen_call_recv.c	emit_hash_entry_copy	sp_%sHash_	2	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_call_recv.c	emit_kind_array_call	sp_%sArray_	7	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_call_recv.c	emit_kind_array_call	sp_%sArray_delete	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+READ	src/codegen_call_recv.c	emit_kind_array_call	sp_%sArray_index	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+ROW	src/codegen_call_recv.c	emit_kind_array_call	sp_%sArray_insert	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+ARM	src/codegen_call_recv.c	emit_kind_array_call	sp_StrArray_	2	the index of a boxed needle takes the sp_StrArray_index_poly_e arm before this one; fn is then include, the bytes search the runtime keeps (sp_StrArray_include)
+ROW	src/codegen_call_recv.c	emit_kind_array_call	sp_StrArray_insert	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_call_recv.c	emit_merge_block_same_variant	sp_%sHash_	2	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+POLY	src/codegen_call_recv.c	emit_poly_array_call	sp_%sHash_set	1	the container holds boxed (Poly) values
+NUM	src/codegen_call_recv.c	emit_slice_okey_key	sp_%sHash_oset	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+ROW	src/codegen_call_recv.c	emit_slice_okey_key	sp_%sHash_set	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+ROW	src/codegen_call_recv.c	emit_str_array_delete	sp_StrArray_delete	3	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_call_recv.c	emit_struct_recv_call	sp_%sHash_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_call_recv.c	emit_typed_array_call	sp_%sArray_	9	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM+ROW	src/codegen_call_recv.c	emit_typed_array_call	sp_%sArray_set	5	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form; the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_call_recv.c	emit_values_at_boxed	sp_%sArray_	2	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM+ROW	src/codegen_expr.c	emit_array_hash_literal_expr	sp_%sArray_push	4	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form; the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+ROW	src/codegen_expr.c	emit_array_hash_literal_expr	sp_%sHash_set	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+NUM	src/codegen_expr.c	emit_expr_node	sp_%sArray_oset	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+ARM+NUM+POLY+ROW	src/codegen_expr.c	emit_expr_node	sp_%sHash_set	4	a String kind takes the _e arm before this one; this arm is the other kinds; an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form; the container holds boxed (Poly) values; the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+ROW	src/codegen_expr.c	emit_str_lit_late	sp_StrArray_push	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_fold.c	bp_elem_read	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_fold.c	emit_collect_expr	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_fold.c	emit_collect_expr	sp_%sArray_push	3	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+READ	src/codegen_fold.c	emit_cycle_bounded_expr	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_fold.c	emit_each_with_index_terminal	sp_%sArray_push	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+NUM	src/codegen_fold.c	emit_each_with_index_terminal	sp_%sHash_set	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+READ	src/codegen_fold.c	emit_hash_collect_expr	sp_%sHash_	2	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+POLY	src/codegen_fold.c	emit_hash_collect_expr	sp_%sHash_set	1	the container holds boxed (Poly) values
+READ	src/codegen_fold.c	emit_hash_pair_at	sp_%sHash_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_fold.c	emit_poly_uniq_block	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_fold.c	emit_poly_uniq_block	sp_%sArray_push	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+READ	src/codegen_fold.c	emit_sortby_expr	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_fold.c	emit_transform_hash_expr	sp_%sHash_set	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+NUM	src/codegen_fold.c	emit_with_index_expr	sp_%sArray_oset	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+NUM	src/codegen_fold.c	emit_with_index_expr	sp_%sArray_push	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+ARM	src/codegen_fold.c	emit_with_index_expr	sp_%sArray_set	1	a String kind takes the _e arm before this one; this arm is the other kinds
+READ	src/codegen_fold.c	row_elem_for_param	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_fold.c	splat_table_elem	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_iter.c	iter_enum_poly_walk_arms	sp_%sArray_	3	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_iter.c	iter_ewi_zip_poly_arms	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_iter.c	iter_hash_arms	sp_%sHash_	3	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_ops.c	emit_op_array_pop_shift	sp_%sArray_	2	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_stmt.c	emit_array_mutate_stmt_body	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+ROW	src/codegen_stmt.c	emit_array_mutate_stmt_body	sp_%sArray_push	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+NUM+ROW	src/codegen_stmt.c	emit_array_mutate_stmt_body	sp_%sArray_set	3	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form; the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_stmt.c	emit_array_mutate_stmt_body	sp_%sHash_	2	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_stmt.c	emit_array_op_assign	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+NUM	src/codegen_stmt.c	emit_array_op_assign	sp_%sArray_push	2	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+NUM	src/codegen_stmt.c	emit_index_and_or_write	sp_%sArray_oset	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+READ	src/codegen_stmt.c	emit_index_and_or_write	sp_%sHash_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+POLY	src/codegen_stmt.c	emit_index_and_or_write	sp_%sHash_set	1	the container holds boxed (Poly) values
+NUM	src/codegen_stmt.c	emit_index_op_write	sp_%sArray_set	1	an Int or Float container: the entry named (_o, _nilable, _nil, oset, _on, _key, a cached-header store) has no String form
+ROW	src/codegen_stmt.c	emit_index_op_write	sp_%sHash_set	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
+READ	src/codegen_stmt.c	emit_multi_write_scalar	sp_%sArray_	1	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+ROW	src/codegen_util.c	emit_hash_new_with_default	sp_%sHash_new_with_default	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry

@@ -17,22 +17,6 @@
 #include <stdint.h>
 #include <math.h>      /* isnan / isinf / signbit / NAN / fabs for sp_float_sum_step */
 #include "sp_gc.h"      /* sp_gc_hdr, sp_gc_bytes, SP_GC_ROOT, sp_oom_die */
-/* sp_strelem_fx's fast cases, where a bytes-form wrapper takes a String in: a
-   payload view's owner (0xfd, the header's link) and a frozen literal's
-   static handle (0xf1, the header's link to it, tagged: sp_StringLiteral).
-   Anything else, a new handle, goes out of line (sp_strelem_of). */
-static inline struct sp_String_s *sp_strelem_fx(const char *b) {
-  if (b) {
-    unsigned char m = ((const unsigned char *)b)[-1];
-    const sp_str_hdr *h = (const sp_str_hdr *)(const void *)(b - 1) - 1;
-    if (m == 0xfd) { if (h->next) return (struct sp_String_s *)(void *)h->next; }
-    else if (m == 0xf1 && !sp_slab_owns(h)) {
-      uintptr_t p = (uintptr_t)h->next;
-      if (p & 1) return (struct sp_String_s *)(void *)(p - 1);
-    }
-  }
-  return sp_strelem_of(b);
-}
 #include "sp_alloc.h"   /* sp_gc_alloc, sp_str_alloc, sp_raise_cls, sp_raise_frozen_array */
 
 const char *sp_sprintf(const char *fmt, ...);  /* defined in the generated TU */
@@ -685,7 +669,6 @@ static void sp_StrArray_init_embedded(sp_StrArray*a){a->cap=SP_STRARR_INLINE;a->
 static SP_NOINLINE void sp_StrArray_push_grow(sp_StrArray*a){if(a->head>0){int room=a->head>=a->len;SP_ARR_REBASE(a);if(room)return;}sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_int nc=((((((a->cap*2))))))+1;if(a->data==a->inline_data){sp_strelem*nd=(sp_strelem*)sp_pl_alloc(sizeof(sp_strelem)*nc);if(!nd)sp_oom_die();memcpy(nd,a->data,sizeof(sp_strelem)*a->len);a->data=nd;}
 else{sp_gc_bytes_sub(sizeof(sp_strelem)*a->cap);h->size-=sizeof(sp_strelem)*a->cap;void*nd=sp_pl_realloc(a->data,sizeof(sp_strelem)*nc);if(!nd)sp_oom_die();a->data=(sp_strelem*)nd;}a->cap=nc;h->size+=sizeof(sp_strelem)*a->cap;sp_gc_bytes_add(sizeof(sp_strelem)*a->cap);}
 static inline void sp_StrArray_push_e(sp_StrArray*a,sp_strelem v){sp_gc_wb((void*)a); if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int l=SP_ARR_LEN_ONCE(a);if(l>=a->cap)sp_StrArray_push_grow(a);a->data[l]=v;a->len=l+1;}
-static inline void sp_StrArray_push(sp_StrArray*a,const char*v){sp_StrArray_push_e(a,sp_strelem_fx(v));}
 static inline sp_int sp_StrArray_length(sp_StrArray*a){return a ? a->len : 0;}
 static inline sp_int sp_StrArray_length_m(sp_StrArray*a){if (SP_UNLIKELY(!a)) sp_nil_recv("length");return a->len;}
 static inline sp_bool sp_StrArray_empty(sp_StrArray*a){sp_gc_wb((void*)a); return a->len==0;}
@@ -694,8 +677,7 @@ static inline sp_strelem sp_StrArray_get_m_e(sp_StrArray*a,sp_int i){if (SP_UNLI
 /* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle */
 static inline const char *sp_StrArray_get(sp_StrArray*a,sp_int i){sp_strelem e=sp_StrArray_get_e(a,i);return SP_SEB(e);}
 static inline const char *sp_StrArray_get_m(sp_StrArray*a,sp_int i){sp_strelem e=sp_StrArray_get_m_e(a,i);return SP_SEB(e);}
-static inline void sp_StrArray_set_e(sp_StrArray*a,sp_int i,sp_strelem v){sp_gc_wb((void*)a); if (SP_UNLIKELY(!a)) sp_nil_recv("[]=");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));while(i>=a->len)sp_StrArray_push(a,NULL);a->data[i]=v;}  /* the gap is nil, not "" (#3836) */
-static inline void sp_StrArray_set(sp_StrArray*a,sp_int i,const char*v){sp_StrArray_set_e(a,i,sp_strelem_fx(v));}
+static inline void sp_StrArray_set_e(sp_StrArray*a,sp_int i,sp_strelem v){sp_gc_wb((void*)a); if (SP_UNLIKELY(!a)) sp_nil_recv("[]=");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));while(i>=a->len)sp_StrArray_push_e(a,NULL);a->data[i]=v;}  /* the gap is nil, not "" (#3836) */
 
 /* ---- sp_StrArray cold ops (compiled in lib/sp_array.c) ---- */
 void sp_StrArray_replace(sp_StrArray *dst, sp_StrArray *src);
@@ -719,9 +701,7 @@ sp_bool sp_StrArray_intersect_p(sp_StrArray *a, sp_StrArray *b);
 sp_StrArray *sp_StrArray_union(sp_StrArray *a, sp_StrArray *b);
 sp_StrArray *sp_StrArray_difference(sp_StrArray *a, sp_StrArray *b);
 sp_int sp_StrArray_index_e(sp_StrArray *a, sp_strelem v);
-static inline sp_int sp_StrArray_index(sp_StrArray *a, const char *v){return sp_StrArray_index_e(a,sp_strelem_fx(v));}
 sp_int sp_StrArray_rindex_e(sp_StrArray *a, sp_strelem v);
-static inline sp_int sp_StrArray_rindex(sp_StrArray *a, const char *v){return sp_StrArray_rindex_e(a,sp_strelem_fx(v));}
 sp_StrArray *sp_StrArray_compact(sp_StrArray *a);
 sp_IntArray *sp_IntArray_compact(sp_IntArray *a);
 sp_FloatArray *sp_FloatArray_compact(sp_FloatArray *a);
@@ -760,9 +740,7 @@ static inline sp_int sp_StrArray_truthy_count(sp_StrArray*a,sp_int limit){sp_int
 sp_strelem sp_StrArray_delete_at_e(sp_StrArray *a, sp_int i);
 sp_strelem sp_StrArray_delete_e(sp_StrArray *a, sp_strelem v);
 static inline const char *sp_StrArray_delete_at(sp_StrArray *a, sp_int i){sp_strelem e=sp_StrArray_delete_at_e(a,i);return SP_SEB(e);}
-static inline const char *sp_StrArray_delete(sp_StrArray *a, const char *v){sp_strelem e=sp_StrArray_delete_e(a,sp_strelem_fx(v));return SP_SEB(e);}
 void sp_StrArray_insert_e(sp_StrArray *a, sp_int i, sp_strelem v);
-static inline void sp_StrArray_insert(sp_StrArray *a, sp_int i, const char *v){sp_StrArray_insert_e(a,i,sp_strelem_fx(v));}
 void sp_StrArray_shuffle_bang(sp_StrArray *a);
 sp_StrArray *sp_StrArray_dup(sp_StrArray *a);
 static inline sp_StrArray *sp_StrArray_to_a(sp_StrArray *a) { return a ? a : sp_StrArray_new(); }
@@ -805,9 +783,7 @@ const char*sp_PtrArray_str_join(sp_PtrArray*a,const char*sep);
 sp_RbVal sp_IntArray_index_poly(sp_IntArray *a, sp_int v);
 sp_RbVal sp_IntArray_rindex_poly(sp_IntArray *a, sp_int v);
 sp_RbVal sp_StrArray_index_poly_e(sp_StrArray *a, sp_strelem v);
-static inline sp_RbVal sp_StrArray_index_poly(sp_StrArray *a, const char *v){return sp_StrArray_index_poly_e(a,sp_strelem_fx(v));}
 sp_RbVal sp_StrArray_rindex_poly_e(sp_StrArray *a, sp_strelem v);
-static inline sp_RbVal sp_StrArray_rindex_poly(sp_StrArray *a, const char *v){return sp_StrArray_rindex_poly_e(a,sp_strelem_fx(v));}
 sp_oint sp_IntArray_index_opt(sp_IntArray *a, sp_int v);
 sp_oint sp_IntArray_rindex_opt(sp_IntArray *a, sp_int v);
 /* index(nil) / rindex(nil) / include?(nil) / count(nil): the bitmap's view */
@@ -833,8 +809,8 @@ sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, sp_int from, sp_int n);
 
 /* ---- more cold StrArray ops relocated from spinel_rt.h (0 optcarrot
    uses). #include here (not near the top): by this point array.h's own
-   hot inline core (sp_StrArray_push et al) is already defined, so
-   sp_str.h's nested processing (it needs sp_StrArray_push for
+   hot inline core (sp_StrArray_push_e et al) is already defined, so
+   sp_str.h's nested processing (it needs sp_StrArray_push_e for
    sp_str_split_push) sees it; the reverse order undeclares it. ---- */
 #include "sp_str.h"     /* sp_str_eq, for the cold StrArray ops below */
 const char *sp_StrArray_sum_str(sp_StrArray *a, const char *init);

@@ -144,6 +144,12 @@ module Gate
     srcs = changed.grep(%r{\Asrc/.*\.c\z})
     at = change.after == ":" ? ["--staged"] : ["--rev", change.after.chomp(":")]
     warn "gate: a call target bypasses call_target (tools/route_audit.rb)" unless srcs.empty? || system(RbConfig.ruby, File.join(__dir__, "route_audit.rb"), *at, *srcs)
+    # a typed container's store and search entries come from its row (tools/entry_names_check.rb), read from the
+    # change judged like the call targets above, the sites it fails on printed: a warning
+    # (a deleted source too: its allowlist entries go stale, which `changed` leaves out with the deletions)
+    touched = git("diff", *change.diff, "--name-only").to_s.split("\n")
+    names_src = touched.any? { |f| f.match?(%r{\Asrc/[^/]+\.(c|h|inc)\z}) || f == "tools/entry_names.allow" }
+    warn "gate: a store or search entry name is formatted by hand (tools/entry_names_check.rb)" if names_src && !system(RbConfig.ruby, File.join(__dir__, "entry_names_check.rb"), *at, out: $stderr)
     added = git("diff", *change.diff, "--name-only", "--diff-filter=A", "--", "test/*.rb").to_s.split("\n")
       .reject { |t| t.count("/") > 1 }
     ruby = reference_ruby unless added.empty?

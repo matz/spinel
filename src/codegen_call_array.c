@@ -209,7 +209,10 @@ int emit_op_array_cycle_n(Compiler *c, const BopCtx *x, Buf *b) {
   /* an Integer or Float element is copied with its nil */
   if (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY)
     buf_printf(b, " sp_%sArray_push_o(_t%d, sp_%sArray_oget(_t%d, _t%d));", k, tr2, k, t, ti2);
-  else buf_printf(b, " sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, _t%d));", k, tr2, k, t, ti2);
+  else {
+    buf_puts(b, " "); emit_elem_entry(b, 0, rt, k, "push", "");
+    buf_printf(b, "(_t%d, sp_%sArray_get%s(_t%d, _t%d));", tr2, k, typed_elem_store_sfx(rt), t, ti2);
+  }
   buf_printf(b, " _t%d; })", tr2);
   return 1;
 }
@@ -2027,7 +2030,7 @@ int emit_builtin_array_concat(Compiler *c, int id, int recv, TyKind rt, const in
       buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {", ti, ti, lengths + i, ti);
     else
       buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ",
-                 ti, ti, lengths + i, ti, k, num ? (same ? "_o" : "_nilable") : same ? typed_elem_store_sfx(rt) : "", tr);
+                 ti, ti, lengths + i, ti, k, num ? (same ? "_o" : "_nilable") : typed_elem_store_sfx(rt), tr);
     Buf el = {0};
     /* an element of the same kind is copied as it is held (a String
        Array's handle: the String itself, read and stored by the `_e`
@@ -2061,6 +2064,7 @@ int emit_builtin_array_concat(Compiler *c, int id, int recv, TyKind rt, const in
     else if (same || rt == TY_POLY_ARRAY) buf_puts(b, el.p);
     else if (rt == TY_INT_ARRAY) buf_printf(b, "sp_poly_elem_i(%s)", el.p);
     else if (rt == TY_FLOAT_ARRAY) buf_printf(b, "sp_poly_elem_f(%s)", el.p);
+    else if (typed_elem_held(rt) == TY_STRBUF) buf_printf(b, "sp_poly_elem_e(%s)", el.p);   /* (the handle the Array holds) */
     else emit_unbox_text(c, ty_array_elem(rt), el.p, b);
     free(el.p);
     buf_puts(b, boxed_recv ? " }" : ");");
@@ -2690,27 +2694,6 @@ int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         else {
           buf_printf(b, "); _t%d; })", tv);
         }
-        return 1;
-      }
-    }
-    if (ty_is_array(rt) || rt == TY_POLY_ARRAY) {
-      const char *k = rt == TY_POLY_ARRAY ? "Poly" : array_kind(rt);
-      if (k) {
-        int tv = ++g_tmp;
-        const char *vsfx = nil_store_sfx(c, k, argv[1]);
-        /* a number that can be nil travels as its oint into the _nilable store */
-        int voint = rt != TY_POLY_ARRAY && oint_kind(vt) && vsfx[0];
-        buf_puts(b, "({ ");
-        if (voint) buf_puts(b, oint_ctype(vt)); else emit_ctype(c, vr.kind == RK_BOXED || vt == TY_UNKNOWN ? TY_POLY : vt, b);
-        buf_printf(b, " _t%d = ", tv);
-        if (rt == TY_POLY_ARRAY && vr.kind != RK_BOXED) emit_boxed(c, argv[1], b);
-        else if (voint) emit_oint_expr(c, argv[1], vt, b);
-        else emit_expr(c, argv[1], b);
-        buf_printf(b, "; sp_%sArray_set%s(", k, vsfx); emit_expr(c, recv, b); buf_puts(b, ", ");
-        emit_expr(c, argv[0], b); buf_printf(b, ", _t%d); ", tv);
-        /* the store answers the value: with its nil where the consumer takes the oint */
-        if (voint) { oint_open(c, id, vt, b); buf_printf(b, "_t%d", tv); oint_close(c, id, b); buf_puts(b, "; })"); }
-        else buf_printf(b, "_t%d; })", tv);
         return 1;
       }
     }

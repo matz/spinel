@@ -21413,7 +21413,7 @@ static void ext_generate_cruby_shim(Compiler *c) {
     "  { long n = RARRAY_LEN(v); sp_StrArray *a = sp_StrArray_new(); SP_GC_ROOT(a);\n"
     "    for (long i = 0; i < n; i++) { VALUE e = RARRAY_AREF(v, i);\n"
     "      if (!RB_TYPE_P(e, T_STRING)) rb_raise(rb_eTypeError, \"array element %%ld is not a String\", i);\n"
-    "      sp_StrArray_push(a, sp_str_from_bytes(RSTRING_PTR(e), (size_t)RSTRING_LEN(e))); }\n"
+    "      sp_StrArray_push_e(a, sp_String_new_shared(sp_str_from_bytes(RSTRING_PTR(e), (size_t)RSTRING_LEN(e)))); }\n"
     "    return a; }\n}\n"
     "static VALUE spx_out_int_array(sp_IntArray *a) {\n"
     "  if (!a) return Qnil;\n"

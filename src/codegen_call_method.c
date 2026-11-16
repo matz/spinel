@@ -386,10 +386,14 @@ static const char *const BAM_RECV_TST[] = {
   "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE" };
 
 /* The test of the cells an arm of a version entry runs under: the tests
-   cplan_method_arms gives it (an arm of an arm: both), `&&`-joined */
+   cplan_method_arms gives it (an arm of an arm: both), `&&`-joined. Each
+   is a condition (emit_cond), a C truth value: a cell no reachable
+   statement writes (a prepend in a method an application never runs) is
+   boxed, and its `== 1` emitted as a value is a boxed answer, which the
+   `?:` the arms are chained by cannot test. */
 static void emit_arm_cells_test(Compiler *c, const int *t, Buf *b) {
   for (int k = 0, first = 1; k < 2; k++)
-    if (t[k] >= 0) { if (!first) buf_puts(b, " && "); emit_expr(c, t[k], b); first = 0; }
+    if (t[k] >= 0) { if (!first) buf_puts(b, " && "); emit_cond(c, t[k], b); first = 0; }
 }
 
 /* The value one class's arm stands for, as f writes it for a method mi (-1:

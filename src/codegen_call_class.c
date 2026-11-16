@@ -3948,7 +3948,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
     int acid = const_node_class_index(c, recv);
     /* (a class method `allocate` of the program's own is the user dispatch's) */
-    if (comp_own_allocate(c, acid, id)) return 0;
+    if (cplan_own_allocate(c, id, acid)) return 0;
     /* allocate is Class's: a module raises NoMethodError (#10751) */
     if (acid >= 0 && comp_class_is_module(c, &c->classes[acid])) {
       const char *mn = class_ruby_name(c, acid); if (!mn) mn = c->classes[acid].name;
@@ -3977,8 +3977,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
 
   /* Class#allocate on a class value no constant names (`x.class.allocate`):
      the dispatch a boxed class value gets, sp_cls_allocate, which the program
-     has generated when comp_class_value_allocate asks (g_gen_cls_answers). */
-  if (comp_class_value_allocate(c, id)) {
+     has generated when cplan_class_value_allocate asks (g_gen_cls_answers). */
+  if (cplan_class_value_allocate(c, id)) {
     buf_puts(b, "sp_cls_allocate(sp_box_class("); emit_expr(c, recv, b); buf_puts(b, "))");
     return 1;
   }

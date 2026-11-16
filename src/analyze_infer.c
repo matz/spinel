@@ -6601,7 +6601,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       /* a class method `allocate` of the program's own (on the class or
          module, its singleton class, or a module it extends) is the call's
          target: the user dispatch types it */
-      if (comp_own_allocate(c, ci, id)) return 0;
+      if (cplan_own_allocate(c, id, ci)) return 0;
       /* a module's allocate raises (no instance of a module): boxed, as the
          raise's expression is (#10751) */
       if (ci >= 0 && comp_class_is_module(c, &c->classes[ci])) { *out = TY_POLY; return 1; }
@@ -6616,8 +6616,8 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       if (bcn && sp_streq(bcn, "Integer")) { *out = TY_POLY; return 1; }
     }
     /* a class value no constant names (`x.class.allocate`): boxed, as the
-       sp_cls_allocate that answers it is (comp_class_value_allocate) */
-    if (comp_class_value_allocate(c, id)) { *out = TY_POLY; return 1; }
+       sp_cls_allocate that answers it is (cplan_class_value_allocate) */
+    if (cplan_class_value_allocate(c, id)) { *out = TY_POLY; return 1; }
   }
   return 0;
 }

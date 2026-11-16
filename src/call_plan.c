@@ -4027,6 +4027,17 @@ int cplan_entry_finds(const Compiler *c, int e) {
     if (c->ver_entries[i].scope == e) return c->ver_entries[i].finds;
   return -1;
 }
+/* The class method t of the program's that a call id of the builtin's own name (`new`, `allocate`) on class ci
+   finds, where the record proves the call runs before t is made: the builtin runs, -1. Not one a superclass
+   defines (the class then has no method of its own to call), nor one no def makes (define_singleton_method),
+   which the record does not see. */
+static int ct_cmethod_made_at(Compiler *c, int id, int ci, const char *nm, int t) {
+  int dn = c->scopes[t].def_node;
+  if (c->scopes[t].class_id != ci || nt_kind(c->nt, dn) != NK_DefNode || elab_point_of(c, dn).region < 0) return t;
+  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1);
+  if (framed) elab_plan_leave(c);
+  return at == ELAB_NO ? -1 : t;
+}
 /* The program's `new` a call reaches on class ci (cplan_user_new): the one
    call_target finds, and on a record class also in *unplaced whether the
    record can tell neither that version nor the builtin constructor there:
@@ -4046,13 +4057,7 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
      superclass defines (the class then has no constructor of its own to
      call), nor one no def makes (define_singleton_method), which the
      record does not see. */
-  if (!c->classes[ci].is_struct) {
-    int dn = c->scopes[t].def_node;
-    if (c->scopes[t].class_id != ci || nt_kind(c->nt, dn) != NK_DefNode || elab_point_of(c, dn).region < 0) return t;
-    int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1);
-    if (framed) elab_plan_leave(c);
-    return at == ELAB_NO ? -1 : t;
-  }
+  if (!c->classes[ci].is_struct) return ct_cmethod_made_at(c, id, ci, nm, t);
   int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1), absent = at == ELAB_NO;
   /* (a call in a method or a block: the def in force over its window, or
      none over all of it) */
@@ -4071,6 +4076,57 @@ int cplan_user_new(Compiler *c, int id, int ci) {
 int cplan_aref_builds(Compiler *c, int id, int ci) {
   const ClassInfo *k = &c->classes[ci];
   return k->is_struct && !is_builtin_reopen(k->name) && !k->is_native_class && call_target(c, id, ci, "[]", CT_CMETHOD, NULL) < 0;
+}
+/* See call_plan.h. Does call `call` (-1: any) of `allocate` on class or module ci reach a
+   class method `allocate` of the program's own: on ci, its singleton
+   class, a parent or a module it extends? Not a call the analysis made
+   for Class#new's allocation (cnew_alloc: CRuby's new does not call
+   allocate), and not one whose method calls a super that reaches neither
+   Class#allocate (allocate_super_reaches_class: not one with arguments,
+   in an Exception class, ...) nor a parent's own allocate that answers:
+   that super has no target here, so such a call keeps Class#allocate as
+   before. */
+int cplan_own_allocate(Compiler *c, int call, int ci) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (ci < 0 || ci >= c->nclasses) return 0;
+  if (call >= 0 && nt_int(nt, call, "cnew_alloc", 0)) return 0;
+  int mi = call_target(c, call, ci, "allocate", CT_CMETHOD, NULL);
+  if (mi >= 0 && call >= 0) mi = ct_cmethod_made_at(c, call, ci, "allocate", mi);
+  int d = mi >= 0 ? c->scopes[mi].def_node : -1;
+  if (mi < 0) return 0;
+  if (d < 0) return 1;
+  /* a super that reaches a parent's own allocate has that target, when
+     that method itself answers (its own supers checked the same way) */
+  int pc = c->scopes[mi].class_id >= 0 ? comp_super_parent(c, c->scopes[mi].class_id, 1) : -1;
+  int parent_own = pc >= 0 && cplan_own_allocate(c, call, pc);
+  int n = 0, sup = 0, *ids = nt_subtree_ids(nt, &d, 1, &n);
+  for (int i = 0; i < n && !sup; i++)
+    sup = (nt_kind(nt, ids[i]) == NK_SuperNode || nt_kind(nt, ids[i]) == NK_ForwardingSuperNode) &&
+          !allocate_super_reaches_class(c, ids[i]) && !parent_own;
+  free(ids);
+  return !sup;
+}
+/* `<class value>.allocate` where the class value is no written-out constant
+   (`x.class.allocate`, a local holding a class): a call the generated
+   sp_cls_allocate answers, as it does a boxed class value, and whose value is
+   boxed. A constant has its own static arm; a `self` receiver and a program
+   that gives some class a class method `allocate` of its own keep the paths
+   they had (that method is the user dispatch's). One rule for the analyzer's
+   type of the call, the emitter, and the pass that asks for the sp_cls_*
+   answers (g_gen_cls_answers). */
+int cplan_class_value_allocate(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || !name || !is_allocate_name(name) || nt_ref(nt, id, "arguments") >= 0 ||
+      nt_ref(nt, id, "block") >= 0 || comp_ntype(c, recv) != TY_CLASS)
+    return 0;
+  NodeKind rk = nt_kind(nt, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode || rk == NK_SelfNode) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (call_target(c, -1, k, "allocate", CT_CMETHOD, NULL) >= 0) return 0;
+  return 1;
 }
 /* See call_plan.h. */
 int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name) {

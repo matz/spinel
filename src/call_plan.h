@@ -1602,6 +1602,15 @@ int cplan_user_new(Compiler *c, int id, int ci);
    program's where the call runs? CRuby's `[]` on a record class does not
    call a program's `new`, so none is asked. */
 int cplan_aref_builds(Compiler *c, int id, int ci);
+/* Does call id (-1: any) of `allocate` on class or module ci reach a class
+   method `allocate` of the program's own that is in force where the call
+   runs: on ci, its singleton class, a parent or a module it extends, and
+   not Class#new's own allocation (cnew_alloc)? */
+int cplan_own_allocate(Compiler *c, int id, int ci);
+/* `x.class.allocate`: a class value no constant names, which the generated
+   sp_cls_allocate answers; none where a class of the program has an
+   `allocate` of its own. */
+int cplan_class_value_allocate(Compiler *c, int id);
 /* The class method of program class ci that call id, named name, runs:
    for a `new` the one cplan_user_new answers (none where the builtin
    constructor answers a call before the class's `def self.new`), for any

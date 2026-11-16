@@ -6220,56 +6220,6 @@ int allocate_super_reaches_class(Compiler *c, int id) {
   return nt_ref(nt, s->def_node, "parameters") < 0;
 }
 
-/* Does call `call` (-1: any) of `allocate` on class or module ci reach a
-   class method `allocate` of the program's own: on ci, its singleton
-   class, a parent or a module it extends? Not a call the analysis made
-   for Class#new's allocation (cnew_alloc: CRuby's new does not call
-   allocate), and not one whose method calls a super that reaches neither
-   Class#allocate (allocate_super_reaches_class: not one with arguments,
-   in an Exception class, ...) nor a parent's own allocate that answers:
-   that super has no target here, so such a call keeps Class#allocate as
-   before. */
-/* `<class value>.allocate` where the class value is no written-out constant
-   (`x.class.allocate`, a local holding a class): a call the generated
-   sp_cls_allocate answers, as it does a boxed class value, and whose value is
-   boxed. A constant has its own static arm; a `self` receiver and a program
-   that gives some class a class method `allocate` of its own keep the paths
-   they had (that method is the user dispatch's). One rule for the analyzer's
-   type of the call, the emitter, and the pass that asks for the sp_cls_*
-   answers (g_gen_cls_answers). */
-int comp_class_value_allocate(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  if (nt_kind(nt, id) != NK_CallNode) return 0;
-  const char *name = nt_str(nt, id, "name");
-  int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0 || !name || !sp_streq(name, "allocate") || nt_ref(nt, id, "arguments") >= 0 ||
-      nt_ref(nt, id, "block") >= 0 || comp_ntype(c, recv) != TY_CLASS)
-    return 0;
-  NodeKind rk = nt_kind(nt, recv);
-  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode || rk == NK_SelfNode) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_cmethod_in_chain(c, k, "allocate", NULL) >= 0) return 0;
-  return 1;
-}
-int comp_own_allocate(Compiler *c, int ci, int call) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  if (ci < 0 || ci >= c->nclasses) return 0;
-  if (call >= 0 && nt_int(nt, call, "cnew_alloc", 0)) return 0;
-  int mi = comp_cmethod_in_chain(c, ci, "allocate", NULL);
-  int d = mi >= 0 ? c->scopes[mi].def_node : -1;
-  if (mi < 0) return 0;
-  if (d < 0) return 1;
-  /* a super that reaches a parent's own allocate has that target, when
-     that method itself answers (its own supers checked the same way) */
-  int pc = c->scopes[mi].class_id >= 0 ? comp_super_parent(c, c->scopes[mi].class_id, 1) : -1;
-  int parent_own = pc >= 0 && comp_cmethod_in_chain(c, pc, "allocate", NULL) >= 0 && comp_own_allocate(c, pc, -1);
-  int n = 0, sup = 0, *ids = nt_subtree_ids(nt, &d, 1, &n);
-  for (int i = 0; i < n && !sup; i++)
-    sup = (nt_kind(nt, ids[i]) == NK_SuperNode || nt_kind(nt, ids[i]) == NK_ForwardingSuperNode) &&
-          !allocate_super_reaches_class(c, ids[i]) && !parent_own;
-  free(ids);
-  return !sup;
-}
 /* `allocate` on the class the method runs for: bare or `self.allocate` in a
    class method, `self.class.allocate` in an instance method. Returns that
    class -- the base of what it builds, since a subclass receiving the class
@@ -6278,7 +6228,7 @@ int allocate_on_own_class(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || nt_kind(nt, id) != NK_CallNode) return -1;
   const char *nm = nt_str(nt, id, "name");
-  if (!nm || !sp_streq(nm, "allocate") || nt_ref(nt, id, "block") >= 0) return -1;
+  if (!nm || !is_allocate_name(nm) || nt_ref(nt, id, "block") >= 0) return -1;
   int an = 0; nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &an);
   if (an) return -1;
   Scope *s = comp_scope_of(c, id);
@@ -6286,7 +6236,7 @@ int allocate_on_own_class(Compiler *c, int id) {
   if (cid < 0 || cid >= c->nclasses || comp_class_is_module(c, &c->classes[cid])) return -1;
   int recv = nt_ref(nt, id, "receiver");
   /* (a class method `allocate` of the program's own answers the call) */
-  if (comp_own_allocate(c, cid, id)) return -1;
+  if (cplan_own_allocate(c, id, cid)) return -1;
   if (s->is_cmethod) return (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) ? cid : -1;
   return self_class_base_ci(c, recv);
 }

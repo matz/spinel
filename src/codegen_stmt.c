@@ -25907,6 +25907,17 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
   { int rv = str_mutate_append_bang_arms(c, id, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }
   { int rv = str_mutate_reassign_arms(c, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }
 
+  /* `h[x] = (x = 5)`, `a[i] = (i = 2; v)`: CRuby reads the receiver and
+     the key before the value runs. The statement arms below read the key
+     inside the set's argument list, after the value's assignment, so a
+     value that can give the key's variable a new value declines here, to
+     the expression form, whose operands run in order
+     (emit_operands_in_order). (A receiver the key or the value can
+     rebind stays here: the arms below hold it first.) */
+  if ((is_store_alias(name) || sp_streq(name, "[]=")) && argc == 2 && recv >= 0 &&
+      (ty_is_hash(rt) || ty_is_array(rt)) && read_rebound_by(c, argv[0], argv[1]) &&
+      !read_rebound_by(c, recv, argv[1]) && !read_rebound_by(c, recv, argv[0]))
+    return 0;
   if (ty_is_hash(rt)) {
     const char *hn = ty_hash_cname(rt);
     /* Hash#store is the method form of []= */

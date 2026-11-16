@@ -17392,8 +17392,19 @@ static int aref_cmethod_owns(Compiler *c, int id) {
 /* Element access on a boxed receiver: an index read, []= and [] with one or two arguments (emit_poly_call's arms, in their order) */
 static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   /* poly receiver: arr[start, len] = src -- 3-arg splice assign
-     Skip Fiber/Fiber.current storage receivers (handled later). */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 &&
+     Skip Fiber/Fiber.current storage receivers (handled later). A program
+     class with its own `[]=` owns the name, as for the two-argument store
+     below: the call goes to the class dispatch, which calls the method on
+     the class's instance (`m[y, x] = v` on a two-index matrix; a class
+     whose `[]=` takes other arguments raises ArgumentError there, as in
+     Ruby) and whose builtin arm re-enters here for a real Array or String.
+     Taken here, the store spliced the box as an Array and never ran the
+     class's method. */
+  int user_aset3 = 0;
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 && !g_poly_builtin_arm)
+    for (int kk = 0; kk < c->nclasses && !user_aset3; kk++)
+      if (comp_poly_arm_defines_n(c, kk, "[]=", 3)) user_aset3 = 1;
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 && !user_aset3 &&
       !sp_is_fiber_storage_recv(nt, recv)) {
     int tv = ++g_tmp;
     NodeKind rcvk = nt_kind(nt, recv);

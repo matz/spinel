@@ -4181,7 +4181,7 @@ int cplan_main_chain_step(Compiler *c, int id, const char *name) {
   const LrDef *d;
   /* (a capture asks it of the defs too: method(:sym)'s maker is no call the defs' versions bind) */
   int o = ct_main_chain(c, id, name, is_bound_method_maker(nt_str(c->nt, id, "name")), &step, &d);
-  return o == ELAB_YES ? step : o == ELAB_NO ? EMC_NONE : -1;
+  return o == ELAB_YES || o == ELAB_NO ? step : -1;   /* (EMC_NONE, or EMC_STOP for an undef that stops the lookup) */
 }
 /* Does a bare call of `name` at call id, in top-level code, meet a mixin or def of the name that runs under a condition,
    or from a body that may not have run (an `include L if cond`, an extend inside a method called later)? CRuby finds

@@ -11723,7 +11723,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
          capture) */
       int kst = kcls < 0 ? kst_of[id] : -1;
       if (kst == EMC_PREPEND) kst = -1;   /* (an Object prepend: the table's, as before) */
-      if (kst == EMC_MAIN || kst > EMC_CORE) continue;
+      if (kst == EMC_MAIN || kst == EMC_STOP || kst > EMC_CORE) continue;   /* (an undef stops the lookup: the plan's NameError) */
       int tbl = call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0;
       /* (where the fact cannot say, the table's, and for a class method's const_get the call's own ask) */
       if (kst < 0 && (kcls >= 0 ? call_target(c, id, -1, ksym, CT_TOP | CT_CAPTURE, NULL) >= 0 : tbl)) continue;

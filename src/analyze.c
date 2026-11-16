@@ -32249,7 +32249,7 @@ static int dyn_site_misses(Compiler *c, int n, int mi) {
     if (rc >= 0 && m->name) {
       if (m->is_cmethod) return 1;
       for (int k = 0; k < c->nclasses; k++)
-        if (is_descendant(c, k, rc) && call_target(c, -1, k, m->name, CT_METHODS | CT_SHARED, NULL) == mi) return 0;
+        if (is_descendant(c, k, rc) && call_target(c, n, k, m->name, CT_METHODS, NULL) == mi) return 0;
       return 1;
     }
   }
@@ -37280,7 +37280,7 @@ static const PdnEnt *pdn_lookup(Compiler *c, const char *cn) {
       e->sc = g; e->sc[e->nsc++] = si;
     }
   for (int ci = 0; ci < c->nclasses; ci++)
-    if (call_attr_target(c, -1, ci, cn, CT_ATTR | CT_SHARED, NULL)) {
+    if (call_attr_target(c, -1, ci, cn, CT_ATTR, NULL)) {
       int *g = realloc(e->cls, sizeof(int) * (size_t)(e->ncl + 1));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       e->cls = g; e->cls[e->ncl++] = ci;

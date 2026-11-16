@@ -12842,7 +12842,7 @@ int poly_recv_defines(Compiler *c, int call, const char *name) {
     if (!c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
     int held = !ks;
     for (int j = 0; j < nk && !held; j++) held = ks[j] == k;
-    if (held && call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+    if (held && call_target(c, call, k, name, CT_METHODS, NULL) >= 0) return 1;
   }
   return 0;
 }

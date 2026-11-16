@@ -3691,7 +3691,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
               if (comp_poly_arm_defines_n(c, k2, "count", 1)) can1 = 1;
               continue;
             }
-            int mi2 = call_target(c, -1, k2, "count", CT_METHODS | CT_SHARED, NULL);
+            int mi2 = call_target(c, id, k2, "count", CT_METHODS, NULL);
             if (mi2 >= 0 && mi2 < c->nscopes) {
               Scope *cs2 = &c->scopes[mi2];
               if (cs2->rest_idx >= 0 || (1 >= cs2->nrequired && 1 <= cs2->nparams))
@@ -3909,7 +3909,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
             if (!c->classes[k].is_native_class) has_user_def = 1;
           }
           if (has_base && !c->classes[k].is_native_class &&
-              call_attr_target(c, -1, k, sbase, CT_ATTR | CT_WRITER | CT_SHARED, NULL)) has_writer = 1;
+              call_attr_target(c, -1, k, sbase, CT_ATTR | CT_WRITER, NULL)) has_writer = 1;
         }
         /* A call the send desugar retargeted (`obj.send(:x=, v)`, and a
            public_send dispatch arm) is a plain call, not an assignment
@@ -4464,7 +4464,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         for (int k = 0; k < c->nclasses && !owned; k++)
           if (comp_poly_arm_defines(c, k, name) || call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0 ||
               (!c->classes[k].is_native_class && comp_is_reader(&c->classes[k], name)) ||
-              (wbase[0] && call_attr_target(c, -1, k, wbase, CT_ATTR | CT_WRITER | CT_SHARED, NULL)))
+              (wbase[0] && call_attr_target(c, -1, k, wbase, CT_ATTR | CT_WRITER, NULL)))
             owned = 1;
         if (!owned) { *out = (sp_streq(name, "advise") || sp_streq(name, "flock")) ? TY_POLY : TY_INT; return 1; }
       }

@@ -17131,7 +17131,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user; kk++) {
         if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-            (!c->classes[kk].is_native_class && call_attr_target(c, -1, kk, name, CT_ATTR | CT_SHARED, NULL))) has_user = 1;
+            (!c->classes[kk].is_native_class && call_attr_target(c, -1, kk, name, CT_ATTR, NULL))) has_user = 1;
         if (nf && call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_cm = 1;
       }
       /* A class method of next_float / prev_float is a boxed Class's: the
@@ -17156,7 +17156,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
            before sp_poly_ord answered a Bignum, rather than answer the
            builtin value the program overrode. */
         int ici = sp_streq(name, "ord") ? comp_core_class(c, CORE_INTEGER) : -1;
-        if (ici >= 0 && call_target(c, -1, ici, "ord", CT_OWN | CT_SHARED, NULL) >= 0) {
+        if (ici >= 0 && call_target(c, id, ici, "ord", CT_OWN, NULL) >= 0) {
           int tg = ++g_tmp;
           buf_printf(b, "({ sp_RbVal _t%d = ", tg); emit_expr(c, recv, b);
           buf_printf(b, "; if (_t%d.tag == SP_TAG_BIGINT) sp_raise_poly_nomethod(\"ord\", _t%d);"
@@ -18788,7 +18788,7 @@ static int emit_poly_numeric_call(Compiler *c, int id, Buf *b, const NodeTable *
         if (comp_poly_arm_defines_n(c, kk, "count", 1)) has_user_cnt = 1;
         continue;
       }
-      int mi_k = call_target(c, -1, kk, "count", CT_METHODS | CT_SHARED, NULL);
+      int mi_k = call_target(c, id, kk, "count", CT_METHODS, NULL);
       if (mi_k >= 0) {
         Scope *cs_k = &c->scopes[mi_k];
         if (cs_k->rest_idx >= 0 || (1 >= cs_k->nrequired && 1 <= cs_k->nparams))

@@ -2215,7 +2215,7 @@ int comp_name_reader_any(Compiler *c, const char *name) {
 int comp_poly_arm_reader_any(Compiler *c, const char *name, int argc) {
   for (int k = 0; k < c->nclasses; k++)
     if (comp_poly_arm_defines_n(c, k, name, argc) ||
-        (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL))) return 1;
+        (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR, NULL))) return 1;
   return 0;
 }
 

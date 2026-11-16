@@ -2005,7 +2005,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       sp_feature_required("json") && rt != TY_UNKNOWN &&
       (!ty_is_object(rt) ||
        (ty_object_class(rt) >= 0 &&
-        call_target(c, -1, ty_object_class(rt), "to_json", CT_METHODS | CT_SHARED, NULL) < 0)))
+        call_target(c, id, ty_object_class(rt), "to_json", CT_METHODS, NULL) < 0)))
     { *out = TY_STRING; return 1; }
 
   /* poly.scan(re): a String read out of a container. Same shape as the
@@ -2256,7 +2256,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       int by_proc = nt_kind(nt, blk) == NK_BlockArgumentNode;
       blk_ok = 1;
       for (int k = 0; k < c->nclasses && blk_ok; k++) {
-        int im = call_target(c, -1, k, "initialize", CT_METHODS | CT_SHARED, NULL);
+        int im = cplan_hook_target(c, id, k, "initialize", NULL);
         if (im >= 0 && c->scopes[im].yields && !(by_proc && scope_proc_form_of(c, im) >= 0)) blk_ok = 0;
       }
     }

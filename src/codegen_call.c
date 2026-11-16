@@ -24001,13 +24001,13 @@ int emit_vis_refusal_guard(Compiler *c, int id, Buf *b) {
    `Array.foo`; this lets the instance form (`[1].foo`) and the plain
    direct-call check below share it too. For call id the visibility is the
    one the call meets (cplan_method_vis); id -1, a reflection's question,
-   asks the table's. */
+   the table's. */
 static int builtin_reopen_vis_class(Compiler *c, int id, TyKind rt, const char *name) {
   if (!name || ty_is_object(rt)) return -1;
   int bcls = builtin_class_of_type(rt) ? core_of_type(rt) : -1;
   int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
   if (bci < 0) return -1;
-  int vis = id >= 0 ? cplan_method_vis(c, id, bci, name, 0, NULL) : comp_method_vis_declared(c, bci, name, NULL);
+  int vis = cplan_method_vis(c, id, bci, name, 0, NULL);
   return vis == SP_VIS_PUBLIC ? -1 : bci;
 }
 static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard) {
@@ -34507,7 +34507,7 @@ static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
     if (rv < 0 && id >= 0 && !class_is_blank_slate(c, cid)) {
       rv = cplan_top_def_vis(c, id, qm);
       /* (a visibility word the class's chain holds for the name, `private :tk`, is the class's answer) */
-      int at = -1, dv = comp_method_vis_declared(c, cid, qm, &at);
+      int at = -1, dv = cplan_method_vis(c, -1, cid, qm, 0, &at);
       if (rv >= 0 && at >= 0 && at != comp_core_class(c, CORE_OBJECT)) rv = dv;
     }
     if (rv >= 0) return rv == SP_VIS_PUBLIC ? 2 : 1;
@@ -34799,7 +34799,7 @@ int root_reopen_defines(Compiler *c, const char *qm) {
     int k = comp_core_class(c, roots[i]);
     if (k < 0) continue;
     ClassInfo *kc = &c->classes[k];
-    if (call_target(c, -1, k, qm, CT_OWN | CT_SHARED, NULL) >= 0 || comp_is_reader(kc, qm)) return 1;
+    if (call_target(c, -1, k, qm, CT_OWN, NULL) >= 0 || comp_is_reader(kc, qm)) return 1;
     for (int u = 0; u < kc->nundefs; u++) if (sp_streq(kc->undefs[u], qm)) return 1;
   }
   return 0;
@@ -34927,7 +34927,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
   int init_pub = 0;
   if ((is_initialize_family(qm)) && recv >= 0 && ty_is_object(rt)) {
     int at = -1;
-    init_pub = comp_method_vis_declared(c, ty_object_class(rt), qm, &at) == SP_VIS_PUBLIC && at >= 0;
+    init_pub = cplan_method_vis(c, -1, ty_object_class(rt), qm, 0, &at) == SP_VIS_PUBLIC && at >= 0;
   }
   if (!resolved && init_pub && foldable) {
     /* made public on the class, but nil's own stays private: a heap object
@@ -34991,7 +34991,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
     for (int i = 0; i < 2 && rv >= 0 && cores[i] >= 0; i++) {
       int bci = comp_core_class(c, cores[i]);
       if (builtin_method_known(core_class_name(cores[i]), qm) ||
-          (bci >= 0 && !is_object_root(c->classes[bci].name) && comp_method_in_chain(c, bci, qm, NULL) >= 0)) rv = -1;
+          (bci >= 0 && !is_object_root(c->classes[bci].name) && call_target(c, -1, bci, qm, CT_METHODS, NULL) >= 0)) rv = -1;
     }
     if (rv >= 0) {
       if (rv == SP_VIS_PUBLIC) resolved = yes = 1;
@@ -35021,17 +35021,19 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
        below) */
     if (bn && (bci < 0 || !builtin_ancestor_accessor(c, bci, qm)) && !builtin_method_known(bn, qm) && core_method_vis(bn, qm, 1, NULL) <= 0 &&
         !core_method_undefined(bn, qm) &&
-        (bci < 0 || (comp_method_in_chain(c, bci, qm, NULL) < 0 && !comp_is_undeffed_in_chain(c, bci, qm)))) {
+        (bci < 0 || (call_target(c, -1, bci, qm, CT_METHODS, NULL) < 0 && !cplan_undefined(c, bci, 0, qm)))) {
       for (int a = 1; anc[a] && !sp_streq(anc[a], "Object"); a++) {
         int k = comp_class_index(c, anc[a]);
         if (k < 0) continue;
-        if (comp_is_undeffed_in_chain(c, k, qm) || builtin_ancestor_accessor(c, k, qm)) break;
-        if (comp_method_in_chain(c, k, qm, NULL) < 0) continue;
+        if (cplan_undefined(c, k, 0, qm) || builtin_ancestor_accessor(c, k, qm)) break;
+        if (call_target(c, -1, k, qm, CT_METHODS, NULL) < 0) continue;
         /* the def must have run where the call runs (`"s".respond_to?(:m)`
            ahead of `module Comparable; def m`); else the paths below
            answer */
         if (!builtin_ancestor_def_ran(c, id, k, qm)) break;
-        int v = comp_method_vis_in_chain(c, k, qm);
+        CplanPresence apr;
+        cplan_table_presence(c, k, 0, qm, &apr);
+        int v = apr.vis;
         /* (a private or protected one with a second argument only the run
            time knows is left to the paths below, as before) */
         if (v == SP_VIS_PUBLIC) resolved = yes = 1;
@@ -35052,8 +35054,10 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
     static const int roots[] = { CORE_BASIC_OBJECT, CORE_OBJECT, CORE_KERNEL, -1 };
     for (int u = 0; roots[u] >= 0; u++) {
       int k = comp_core_class(c, roots[u]);
-      if (k < 0 || comp_method_in_chain(c, k, qm, NULL) < 0) continue;
-      if (comp_method_vis_in_chain(c, k, qm) == SP_VIS_PUBLIC) return 1;
+      if (k < 0 || call_target(c, -1, k, qm, CT_METHODS, NULL) < 0) continue;
+      CplanPresence rpr;
+      cplan_table_presence(c, k, 0, qm, &rpr);
+      if (rpr.vis == SP_VIS_PUBLIC) return 1;
       return foldable ? include_all : -1;
     }
     return -1;
@@ -35137,7 +35141,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
             !(comp_class_is_module(c, &c->classes[ci]) && class_only_method(qm)))
           rt_probe_answer(c, id, &yes);
         /* a private/protected class method answers only to include_all */
-        if (yes && foldable && comp_cmethod_vis_declared(c, ci, qm, NULL) != SP_VIS_PUBLIC)
+        if (yes && foldable && cplan_method_vis(c, -1, ci, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
         /* as do Class's and Module's private ones (private, inherited, ...) */
         if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])))
@@ -35171,7 +35175,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       yes = class_responds_to(c, ci, qm, id);
       if (!yes && (is_builtin_class_name(rcn) || is_builtin_module_const_name(rcn)) && !(mod && class_only_method(qm)))
         rt_probe_answer(c, id, &yes);
-      if (yes && foldable && comp_cmethod_vis_declared(c, ci, qm, NULL) != SP_VIS_PUBLIC) yes = include_all;
+      if (yes && foldable && cplan_method_vis(c, -1, ci, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC) yes = include_all;
       if (!yes && foldable && include_all && class_object_private_method(qm, mod)) yes = 1;
     }
     else if (recv >= 0 && ty_is_object(rt)) {
@@ -35211,7 +35215,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
              builtin Class/Module capabilities (:new, :name, ...). */
           resolved = 1;
           yes = class_responds_to(c, cid, qm, id);
-          if (yes && foldable && comp_cmethod_vis_declared(c, cid, qm, NULL) != SP_VIS_PUBLIC)
+          if (yes && foldable && cplan_method_vis(c, -1, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
             yes = include_all;
           if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
             yes = 1;
@@ -35236,7 +35240,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         int cid = c->node_cbody[id];
         resolved = 1;
         yes = class_responds_to(c, cid, qm, id);
-        if (yes && foldable && comp_cmethod_vis_declared(c, cid, qm, NULL) != SP_VIS_PUBLIC)
+        if (yes && foldable && cplan_method_vis(c, -1, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
         if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
           yes = 1;

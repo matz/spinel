@@ -6434,7 +6434,11 @@ int cplan_builtin_rows_vis(Compiler *c, int ci, const char *m) {
 }
 int cplan_program_method_vis(Compiler *c, int node, int ci, const char *m, int inherit) {
   int v = cplan_object_entry_vis(c, node, ci, m);
-  return v >= 0 ? v : inherit ? comp_method_vis_in_chain(c, ci, m) : comp_method_vis(&c->classes[ci], m);
+  if (v >= 0) return v;
+  mtab_enter(c);
+  v = inherit ? comp_method_vis_in_chain(c, ci, m) : comp_method_vis(&c->classes[ci], m);
+  mtab_leave(c);
+  return v;
 }
 /* Does call id's form reach a Kernel function (they are private)? Receiverless,
    `self.`, or a send (the retargeted call) whose receiver's class does not own

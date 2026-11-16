@@ -701,7 +701,7 @@ int builtin_ancestor_def_ran(Compiler *c, int id, int k, const char *qm) {
 int builtin_ancestor_accessor(Compiler *c, int k, const char *qm) {
   char wbase[256]; wbase[0] = '\0';
   int is_wr = setter_base_name(qm, wbase, sizeof wbase);
-  return comp_reader_in_chain(c, k, qm, NULL) || (is_wr && comp_writer_in_chain(c, k, wbase, NULL));
+  return call_attr_target(c, -1, k, qm, CT_ATTR, NULL) || (is_wr && call_attr_target(c, -1, k, wbase, CT_ATTR | CT_WRITER, NULL));
 }
 static int builtin_ancestor_holders(Compiler *c, int k, const char *qm, const char **out) {
   static const struct { const char *cls, *mid, *mod; } rows[] = {
@@ -727,9 +727,9 @@ static int builtin_ancestor_holders(Compiler *c, int k, const char *qm, const ch
       int a = comp_class_index(c, chain[i]);
       if (a < 0) continue;
       /* (a `private :m` in a nearer class decides there too) */
-      if (comp_is_undeffed_in_chain(c, a, qm) || comp_method_in_class(c, a, qm) >= 0 ||
-          comp_method_in_chain(c, a, qm, NULL) >= 0 || comp_reader_in_chain(c, a, qm, NULL) ||
-          (is_wr && comp_writer_in_chain(c, a, wbase, NULL)) || (a != k && refl_explicit_vis(&c->classes[a], qm))) {
+      if (cplan_undefined(c, a, 0, qm) || call_target(c, -1, a, qm, CT_OWN, NULL) >= 0 ||
+          call_target(c, -1, a, qm, CT_METHODS, NULL) >= 0 || call_attr_target(c, -1, a, qm, CT_ATTR, NULL) ||
+          (is_wr && call_attr_target(c, -1, a, wbase, CT_ATTR | CT_WRITER, NULL)) || (a != k && refl_explicit_vis(&c->classes[a], qm))) {
         if (a == k && n < 8) out[n++] = rows[r].cls;
         break;
       }
@@ -789,10 +789,10 @@ static int root_method_vis(Compiler *c, int id, const char *qm) {
   for (int i = 0; roots[i] >= 0; i++) {
     int k = comp_core_class(c, roots[i]);
     /* (-1: an undef on Object hides the lower roots' method) */
-    if (k >= 0 && roots[i] == CORE_OBJECT && comp_is_undeffed_in_chain(c, k, qm)) return -1;
-    if (k >= 0 && (comp_method_in_class(c, k, qm) >= 0 || comp_is_reader(&c->classes[k], qm) ||
+    if (k >= 0 && roots[i] == CORE_OBJECT && cplan_undefined(c, k, 0, qm)) return -1;
+    if (k >= 0 && (call_target(c, -1, k, qm, CT_OWN, NULL) >= 0 || comp_is_reader(&c->classes[k], qm) ||
                    (is_wr && comp_is_writer(&c->classes[k], wbase))))
-      return comp_method_vis_declared(c, k, qm, NULL);
+      return cplan_method_vis(c, -1, k, qm, 0, NULL);
     if (roots[i] == CORE_OBJECT && call_target(c, -1, -1, qm, CT_TOP, NULL) >= 0) {
       int tv = cplan_top_def_vis(c, id, qm);
       return tv >= 0 ? tv : SP_VIS_PRIVATE;

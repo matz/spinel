@@ -6295,7 +6295,11 @@ int io_reopen_defs(Compiler *c, int id, const char *name, int public_only, int *
     int k = fam[i];
     MethodLookup ml = { .def_class = -1 };
     if (call_target(c, id, k, name, flags, &ml) < 0 || ml.def_class != k) continue;
-    if (public_only && comp_method_vis_in_chain(c, k, name) != SP_VIS_PUBLIC) continue;
+    if (public_only) {
+      CplanPresence pr;
+      cplan_table_presence(c, k, 0, name, &pr);
+      if (pr.vis != SP_VIS_PUBLIC) continue;
+    }
     ks[n++] = k;
   }
   return n;

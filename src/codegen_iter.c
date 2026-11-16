@@ -570,7 +570,6 @@ static void inline_target_lookup(Compiler *c, int id, const char *name, int recv
                         ? key_name(c, recv) : NULL;
     /* (the class the node names: an alias's too) */
   int ci = cname ? const_node_class_index(c, recv) : rk == NK_SelfNode && class_body_self_ci(c, recv) >= 0 ? class_body_self_ci(c, recv) : self_class_static_ci(c, recv);
-  if (ci < 0 && cname) ci = comp_class_index(c, cname);
     if ((t->mi = class_reopen_cmethod(c, id, recv, name)) >= 0) {
       t->cm_class = c->scopes[t->mi].class_id;
       t->cm_self_id = builtin_class_id(cname);
@@ -686,7 +685,6 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
   }
   /* (the class the node names: an alias's too) */
   int ci = cname ? const_node_class_index(c, recv) : bci >= 0 ? bci : self_class_static_ci(c, recv);
-  if (ci < 0 && cname) ci = comp_class_index(c, cname);
   if (p.via == UC_CMETH && !p.by_name && (cname || ci >= 0)) {
     if (ci >= 0 && p.owner_ci == ci) { t->mi = p.mi; t->cm_class = ci; return 1; }
     if (!narrow && cname && builtin_class_id(cname) && p.owner_ci == c->scopes[p.mi].class_id &&
@@ -3808,7 +3806,6 @@ int call_targets_yielding_method(Compiler *c, int id) {
                      ? key_name(c, recv) : NULL;
     /* (the class the node names, as inline_target_lookup asks) */
     int ci = cn ? const_node_class_index(c, recv) : rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
-    if (ci < 0 && cn) ci = comp_class_index(c, cn);
     if (ci >= 0) mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
     else if (ty_is_object(rt)) mi = call_target(c, id, ty_object_class(rt), name, 0, NULL);
   }

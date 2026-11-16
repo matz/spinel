@@ -60,6 +60,17 @@ sum = 0
 end
 p sum
 
+# a later multiple assignment in the loop replaces the Array: the first
+# pass reads a Float, the second the String the replacement holds
+src = [1.5, 2.5]
+j = 0
+while j < 2
+  _, e = src
+  src, unused = ["s", "q"], 0
+  p e
+  j += 1
+end
+
 # rows of a nested Array, one of them given a String
 rows = [[1, 2], [3, 4]]
 rows << [5, "x"]

@@ -748,9 +748,13 @@ int boot_package_rank_of_path(const char *path, size_t len);   /* the same for s
    initialize. BC_INIT_NO_KEYWORDS a class whose initialize takes no
    keywords and takes the ones it is given as a last positional Hash, so that
    it sees the same call when a forward passes them on as that Hash (Array's
-   and Range's): Hash's takes `capacity:` as a keyword. */
+   and Range's): Hash's takes `capacity:` as a keyword. BC_KEYWORDS_NEW_OWN
+   a class whose own `new`, given keywords, builds the value from them itself
+   and runs no initialize, a program's or its own (String's: `String.new("ab",
+   capacity: 10)`); its subclasses' `new` runs it. */
 enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64,
-       BC_TAGGED = 128, BC_EMPTY_NEW = 256, BC_NEW_KEYWORDS = 512, BC_INIT_NO_KEYWORDS = 1024 };
+       BC_TAGGED = 128, BC_EMPTY_NEW = 256, BC_NEW_KEYWORDS = 512, BC_INIT_NO_KEYWORDS = 1024,
+       BC_KEYWORDS_NEW_OWN = 2048 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */
@@ -759,6 +763,7 @@ int builtin_singleton_at_boot(int slot);      /* BC_SG_BOOT of row slot (CORE_*)
 int builtin_empty_new(const char *name);       /* BC_EMPTY_NEW of the class named name */
 int builtin_new_keywords(const char *name);    /* BC_NEW_KEYWORDS of the class named name */
 int builtin_init_no_keywords(const char *name); /* BC_INIT_NO_KEYWORDS of the class named name */
+int builtin_keywords_new_own(const char *name); /* BC_KEYWORDS_NEW_OWN of the class named name */
 int builtin_boxed_by_tag(int slot);           /* BC_TAGGED of row slot (CORE_*): a boxed value of the class carries a tag of its own, not SP_TAG_OBJ */
 /* names the compile-time evaluation and its questions ask about (ct_eval.c,
    analyze_ct.c) */

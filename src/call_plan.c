@@ -8100,6 +8100,12 @@ int cplan_builtin_new_form(Compiler *c, int id) {
   const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL;
   int open = nt_argv_has(c->nt, av, nargs, NT_ARG_SPLAT | NT_ARG_FORWARDING), kw = ct_call_keywords(c->nt, av, nargs);
   for (int i = 0; i < nargs; i++) argc += nt_kind(c->nt, av[i]) != NK_BlockArgumentNode && nt_kind(c->nt, av[i]) != NK_KeywordHashNode;
+  /* String's own `new` given keywords builds the String from them itself and runs no initialize (BC_KEYWORDS_NEW_OWN): a literal
+     key gives it some; a `**h` alone gives none when empty, and the chain then runs without them, so only one that forwards
+     answers both alike. A class method's `new` may build a subclass's, which runs it. */
+  int kw_own = kw && !own && builtin_keywords_new_own(c->classes[ci].name);
+  if (kw_own && kw == NEWKW_SURE) return BNF_NONE;
+  if (kw_own) kw = NEWKW_NONE;
   /* the chain's head, as the plan answers it where the call runs (a prepended module's copy answers the name ahead of the class's own
      def); a def the call runs ahead of is not in force there (ct_new_chain_form) */
   int start = tmp[0];
@@ -8111,9 +8117,10 @@ int cplan_builtin_new_form(Compiler *c, int id) {
       if (f != BNF_NONE && fk != f) return BNF_REFUSE;
       f = fk;
     }
-    return f;
+    return kw_own && f != BNF_OWN ? BNF_REFUSE : f;
   }
-  return ct_new_chain_form(c, id, ci, start, argc, open, kw);
+  int f = ct_new_chain_form(c, id, ci, start, argc, open, kw);
+  return kw_own && f != BNF_OWN ? BNF_REFUSE : f;
 }
 /* Is call id a builtin class's `new` the plan does not answer: it runs a program
    initialize the builtin construction does not (the effect and the block_given? a

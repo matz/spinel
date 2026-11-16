@@ -19265,8 +19265,17 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      emit_hash_call), as every other arm of this function assumes: refused on
      the name alone, a user class's own compare_by_identity was rejected. */
   if (recv >= 0 && rt == TY_POLY &&
-      sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
+      sp_streq(name, "compare_by_identity")) {  /* any arity: identity hashing is unsupported */
+    /* An arm of a run-time name's dispatch (dyn_arm) runs only when the name
+       is this one, which the program spelling it anywhere gives every such
+       send. A probe drops the arm (its send then raises NoMethodError); one
+       emitted outside a probe, a builtin Method wrapper's, raises here. */
+    if (nt_int(nt, id, "dyn_arm", 0) && !g_unsup_probe) {
+      buf_puts(b, "({ sp_raise_cls(\"NotImplementedError\", \"Hash#compare_by_identity (identity-keyed hashing) is not supported\"); sp_box_nil(); })");
+      return 1;
+    }
     unsupported(c, id, "Hash#compare_by_identity (identity-keyed hashing)");
+  }
   /* obj.methods / public_methods / singleton_methods on a boxed receiver: the
      list of whichever class of the program it is an instance of
      (emit_poly_object_methods_reflection); anything else is the

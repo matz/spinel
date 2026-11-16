@@ -209,7 +209,10 @@ int emit_op_array_cycle_n(Compiler *c, const BopCtx *x, Buf *b) {
   /* an Integer or Float element is copied with its nil */
   if (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY)
     buf_printf(b, " sp_%sArray_push_o(_t%d, sp_%sArray_oget(_t%d, _t%d));", k, tr2, k, t, ti2);
-  else buf_printf(b, " sp_%sArray_push%s(_t%d, sp_%sArray_get%s(_t%d, _t%d));", k, typed_elem_store_sfx(rt), tr2, k, typed_elem_store_sfx(rt), t, ti2);
+  else {
+    buf_puts(b, " "); emit_elem_entry(b, 0, rt, k, "push", "");
+    buf_printf(b, "(_t%d, sp_%sArray_get%s(_t%d, _t%d));", tr2, k, typed_elem_store_sfx(rt), t, ti2);
+  }
   buf_printf(b, " _t%d; })", tr2);
   return 1;
 }

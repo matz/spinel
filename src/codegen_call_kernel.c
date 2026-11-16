@@ -669,7 +669,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         buf_printf(b, "; SP_GC_ROOT(_t%d); sp_kernel_array(sp_box_nullable_obj(_t%d, SP_BUILTIN_STRBUF)); })", t, t);
       }
       else if (at == TY_INT || at == TY_FLOAT || at == TY_STRING) {
-        const char *ak = at == TY_INT ? "Int" : at == TY_FLOAT ? "Float" : "Str";
+        const char *ak = array_kind(ty_array_of(at));
         int t = ++g_tmp;
         /* a nullable Integer or Float whose nil flag is set is nil, and
            Array(nil) is empty: the element goes in only when it is one */
@@ -687,7 +687,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
           emit_kind_push(c, b, ak, t, sb.p ? sb.p : "NULL"); free(sb.p);
         }
         else {
-          buf_printf(b, "sp_%sArray_push(_t%d, ", ak, t);
+          emit_elem_entry(b, 0, array_kind_ty(ak), ak, "push", ""); buf_printf(b, "(_t%d, ", t);
           if (at == TY_INT) emit_int_expr(c, av[0], b); else emit_float_expr(c, av[0], b);
           buf_puts(b, ")");
         }

@@ -4925,8 +4925,9 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
             int rhi2 = nt_ref(nt, rn2, "right");
             Buf lo2; memset(&lo2, 0, sizeof lo2); emit_expr(c, rlo2, &lo2);
             Buf hi2; memset(&hi2, 0, sizeof hi2); emit_expr(c, rhi2, &hi2);
-            buf_printf(g_pre, "{ sp_StrArray *_sa = sp_StrArray_from_string_range(%s, %s, %d); if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_StrArray_push_e(_t%d, _sa->data[_si]); }\n",
-                       lo2.p ? lo2.p : "NULL", hi2.p ? hi2.p : "NULL", rexcl2, t);
+            buf_printf(g_pre, "{ sp_StrArray *_sa = sp_StrArray_from_string_range(%s, %s, %d); if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) ",
+                       lo2.p ? lo2.p : "NULL", hi2.p ? hi2.p : "NULL", rexcl2);
+            emit_array_entry(g_pre, "Str", "push"); buf_printf(g_pre, "(_t%d, _sa->data[_si]); }\n", t);
             free(lo2.p); free(hi2.p);
           }
           else {
@@ -4937,7 +4938,8 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
           /* not the slot itself: a nil lives in the bitmap, and the slot alone reads 0 */
           buf_printf(g_pre, "{ sp_IntArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_%sArray_push_o(_t%d, sp_IntArray_oget(_sa, _si)); }\n", ep, k, t);
         else if (ir.elem == TY_STRING && sp_streq(k, "Str"))
-          buf_printf(g_pre, "{ sp_StrArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_StrArray_push_e(_t%d, _sa->data[_si]); }\n", ep, t);
+        { buf_printf(g_pre, "{ sp_StrArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) ", ep);
+          emit_array_entry(g_pre, "Str", "push"); buf_printf(g_pre, "(_t%d, _sa->data[_si]); }\n", t); }
         else if (ir.elem == TY_FLOAT && sp_streq(k, "Float"))
           buf_printf(g_pre, "{ sp_FloatArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_FloatArray_push_o(_t%d, sp_FloatArray_oget(_sa, _si)); }\n", ep, t);
         else if (it == TY_NIL)
@@ -4955,7 +4957,7 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
         else {
           /* Mismatched or unknown element type: emit_expr fallback */
           const char *ns = nil_store_sfx(c, k, inner);
-          if (ns[0]) buf_printf(g_pre, "sp_%sArray_push%s(_t%d, %s);\n", k, ns, t, ep);
+          if (ns[0]) { emit_elem_entry(g_pre, 0, array_kind_ty(k), k, "push", ns); buf_printf(g_pre, "(_t%d, %s);\n", t, ep); }
           else { emit_kind_push(c, g_pre, k, t, ep); buf_puts(g_pre, ";\n"); }
         }
         free(el.p);
@@ -6577,7 +6579,7 @@ static void emit_index_or_str_array(Compiler *c, int ir, int idx, int iv, TyKind
   buf_printf(b, " if (%s_t%d) { ", is_or ? "!" : "", tc);
   emit_guarded_slot_assign(c, iv, tc, b);
   char tcn[24]; snprintf(tcn, sizeof tcn, "_t%d", tc);
-  buf_printf(b, "; sp_StrArray_set_e(_t%d, _t%d, ", ta, tb);
+  buf_puts(b, "; "); emit_array_entry(b, "Str", "set"); buf_printf(b, "(_t%d, _t%d, ", ta, tb);
   emit_typed_elem_hold(c, -1, irt, tcn, b);
   buf_printf(b, "); } _t%d; })", tc);
 }

@@ -2135,16 +2135,17 @@ const char *elem_push_sfx(TyKind rt, const char *sfx) {
 const char *array_push_sfx(const char *k, const char *sfx) {
   return elem_push_sfx(array_kind_ty(k), sfx);
 }
-/* The name of the entry `op` (push, set, insert, index, rindex, has_value, ...) of the typed Array of element
-   kind k, or of the typed Hash of kind hrt: the container row's suffix (typed_elem_store_sfx) after the
-   operation, so an Array that holds the handle takes the `_e` entry and no name for a deleted bytes entry is
-   ever formatted. tools/entry_names_check.rb keeps a hand-formatted store or search name from coming back. */
-void emit_array_entry(Buf *b, const char *k, const char *op) {
-  buf_printf(b, "sp_%sArray_%s%s", k ? k : "", op, typed_elem_store_sfx(array_kind_ty(k)));
+/* The ONE formatter of the name of a typed container's store or search entry: `sp_<cname>Array_<op><sfx>`
+   (hash: `sp_<cname>Hash_<op><sfx>`) for the operation `op` (push, set, insert, index, rindex, has_value, ...)
+   on the container of kind rt. The suffix is the container row's (typed_elem_store_sfx: `_e` for a
+   container that holds the handle, so no name for a deleted bytes entry is ever formatted), or the nil store
+   the caller chose (nil_sfx, "" when it chose none: `_nilable`, `_o`). tools/entry_names_check.rb fails a
+   store or search name formatted anywhere else in src/. */
+void emit_elem_entry(Buf *b, int hash, TyKind rt, const char *cname, const char *op, const char *nil_sfx) {
+  buf_printf(b, "sp_%s%s_%s%s", cname ? cname : "", hash ? "Hash" : "Array", op, elem_push_sfx(rt, nil_sfx));
 }
-void emit_hash_entry(Buf *b, TyKind hrt, const char *op) {
-  buf_printf(b, "sp_%sHash_%s%s", ty_hash_cname(hrt), op, typed_elem_store_sfx(hrt));
-}
+void emit_array_entry(Buf *b, const char *k, const char *op) { emit_elem_entry(b, 0, array_kind_ty(k), k, op, ""); }
+void emit_hash_entry(Buf *b, TyKind hrt, const char *op) { emit_elem_entry(b, 1, hrt, ty_hash_cname(hrt), op, ""); }
 /* `sp_<k>Array_push(_t<t>, <text>)` for an element kind k: the text as the kind's push takes it
    (a String Array: its handle). No semicolon. */
 void emit_kind_push(Compiler *c, Buf *b, const char *k, int t, const char *text) {

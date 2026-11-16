@@ -5076,7 +5076,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
   int ote = oint_kind(et) && !live;
   /* an Array that holds the handle compacts by moving the handles, whatever its block's parameter binds
      (one_h): the row's `_e` entries */
-  const char *hsfx = live || ote ? "" : typed_elem_store_sfx(rt);
+  TyKind hrt = live || ote ? TY_UNKNOWN : rt;   /* (what the entries are asked of: the container row) */
   char lv[32], lenf[48], getf[48], setf[48];
   snprintf(lv, sizeof lv, "_t%d", live ? g_face_live_box : t);
   if (live) {
@@ -5087,12 +5087,12 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
   }
   else {
     snprintf(lenf, sizeof lenf, "sp_%sArray_length", kk);
-    snprintf(getf, sizeof getf, "sp_%sArray_%s%s", kk, ote ? "oget" : "get", hsfx);
+    { Buf ge = {0}; emit_elem_entry(&ge, 0, hrt, kk, ote ? "oget" : "get", ""); snprintf(getf, sizeof getf, "%s", ge.p); free(ge.p); }
     /* (a kept element written past the end of an array the block cut
        fills the gap with nil, as CRuby's store does, and as the setters of
        the other kinds do; the plain pointer setter drops it) */
-    snprintf(setf, sizeof setf, "sp_%sArray_%s%s", kk,
-             ote ? "oset" : sp_streq(kk, "Ptr") ? "set_grow" : "set", hsfx);
+    { Buf se = {0}; emit_elem_entry(&se, 0, hrt, kk, ote ? "oset" : ty_is_obj_array(rt) ? "set_grow" : "set", "");
+      snprintf(setf, sizeof setf, "%s", se.p); free(se.p); }
   }
   Buf rb = expr_buf(c, recv);
   /* rooted: a receiver that is a temporary has no other holder once its own
@@ -5115,7 +5115,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
   buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tnv, tnv);
   emit_indent(b, indent);
   if (ote) buf_printf(b, "%s _t%d = %s;\n", oint_ctype(et), te, oint_nil(et));
-  else if (hsfx[0]) buf_printf(b, "sp_String *_t%d = NULL; SP_GC_ROOT(_t%d);\n", te, te);
+  else if (typed_elem_held(hrt) == TY_STRBUF) buf_printf(b, "sp_String *_t%d = NULL; SP_GC_ROOT(_t%d);\n", te, te);
   else {
     emit_ctype(c, et, b);
     if (et == TY_POLY) buf_printf(b, " _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", te, te);

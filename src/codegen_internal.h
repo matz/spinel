@@ -1815,6 +1815,7 @@ const char *typed_elem_store_sfx(TyKind rt);
 TyKind array_kind_ty(const char *k);
 const char *elem_push_sfx(TyKind rt, const char *sfx);
 const char *array_push_sfx(const char *k, const char *sfx);
+void emit_elem_entry(Buf *b, int hash, TyKind rt, const char *cname, const char *op, const char *nil_sfx);
 void emit_array_entry(Buf *b, const char *k, const char *op);
 void emit_hash_entry(Buf *b, TyKind hrt, const char *op);
 void emit_kind_push(Compiler *c, Buf *b, const char *k, int t, const char *text);

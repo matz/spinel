@@ -1793,6 +1793,7 @@ int obj_arm_calls_own_inspect(Compiler *c, int cid);
 /* a pp that prints through sp_pp_inspect (codegen_stmt.c) */
 int pp_leaves_own_inspect(Compiler *c, const char *name);
 void emit_param_cell_publish(Compiler *c, int blk, const char *pname, Buf *b, int indent);
+void emit_param_cell_fresh(Compiler *c, int blk, const char *pname, Buf *b, int indent);
 void nameset_add(NameSet *s, const char *nm);
 /* Emit the C lvalue for local `name` in the current emission context: a
    captured var inside a proc body -> the cell in _cap; a cell local in its

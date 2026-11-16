@@ -4,7 +4,7 @@
 # the strength of the type needs this beside the type, since `Integer` and
 # `Integer?` are one TY_INT. The emit-types leg of infer-test reads this.
 def find(a, k)
-  i = a.index(k)
+  i = a.index(k) || :none
   i
 end
 def total(a)

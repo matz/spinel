@@ -2445,6 +2445,41 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
       emit_poly_sum_seed(c, recv, argv[0], b);
       { *out = 1; return 1; }
     }
+    /* ... and so does an Integer or Float seed that may be nil: over
+       elements, nil's own `+` raises (NoMethodError); over none, the fold
+       answers the nil seed, which the call's oint carries */
+    if (oint_kind(init_t) && oint_kind(comp_ntype(c, id)) && cmp_operand_may_be_nil(c, argv[0])) {
+      TyKind st = comp_ntype(c, id);
+      /* a seed that is no nil takes the typed fold, as one that cannot be
+         nil does; only a nil one folds boxed, to answer as nil's `+` */
+      int fast = (rt == TY_INT_ARRAY && init_t == TY_INT && st == TY_INT && !g_promote_mode) ||
+                 (rt == TY_FLOAT_ARRAY && st == TY_FLOAT && (init_t == TY_FLOAT || init_t == TY_INT));
+      if (!fast) {
+        Buf sb; memset(&sb, 0, sizeof sb);
+        emit_poly_sum_seed(c, recv, argv[0], &sb);
+        oint_open(c, id, st, b); buf_printf(b, "%s(%s)", oint_unbox(st), sb.p ? sb.p : "sp_box_nil()"); oint_close(c, id, b);
+        free(sb.p);
+        { *out = 1; return 1; }
+      }
+      int ta = ++g_tmp, ts = ++g_tmp;
+      buf_puts(b, "({ ");
+      ta = hold_operand(c, recv, rt, 0, ta, 1, " ", b);
+      buf_printf(b, "%s _t%d = ", oint_ctype(init_t), ts); emit_oint_expr(c, argv[0], init_t, b); buf_puts(b, "; ");
+      char an[32]; snprintf(an, sizeof an, "_t%d", ta);
+      Buf ck; memset(&ck, 0, sizeof ck);
+      const char *ar = nil_sum_ck_text(c, recv, rt, rt == TY_FLOAT_ARRAY && init_t == TY_FLOAT, an, &ck);
+      Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, rt, an, &bx);
+      /* the nil arm answers the oint (nil over no elements), the other the
+         plain sum; the call's form wraps the one that is not it */
+      Buf nilv, fastv; memset(&nilv, 0, sizeof nilv); memset(&fastv, 0, sizeof fastv);
+      buf_printf(&nilv, "%s(sp_poly_sum_seed(%s, sp_box_nil()))", oint_unbox(st), bx.p ? bx.p : "sp_box_nil()");
+      buf_printf(&fastv, "sp_%sArray_sum(%s, %s_t%d.v)", rt == TY_FLOAT_ARRAY ? "Float" : "Int", ar,
+                 rt == TY_FLOAT_ARRAY && init_t == TY_INT ? "(sp_float)" : "", ts);
+      if (node_is_oint(c, id)) buf_printf(b, "_t%d.nil ? %s : %s(%s); })", ts, nilv.p, oint_of(st), fastv.p);
+      else buf_printf(b, "_t%d.nil ? %s(%s) : %s; })", ts, oint_arg(st), nilv.p, fastv.p);
+      free(nilv.p); free(fastv.p); free(ck.p); free(bx.p);
+      { *out = 1; return 1; }
+    }
     /* A FLOAT seed over Floats compensates from the first element, as Ruby
        4.0.7 does: `[0.1, 0.2, 0.3].sum(0.0)` is 0.6, like `.sum(0)`. The
        boxed fold draws the same line; the two paths must not disagree. */
@@ -2580,6 +2615,115 @@ static void emit_str_array_delete(Compiler *c, int id, const char *arr, int need
   }
   if (rd) buf_puts(b, ")");
 }
+/* An index query's boxed answer `txt` (the position, or nil) in the call's
+   own form: the oint an Integer slot takes (unwrapped where it is never
+   nil), or the box itself for a boxed consumer */
+static void emit_index_answer(Compiler *c, int id, const char *txt, Buf *b) {
+  if (repr_of(c, id).as_ty == TY_INT) {
+    oint_open(c, id, TY_INT, b); buf_printf(b, "sp_unbox_oint(%s)", txt); oint_close(c, id, b);
+  }
+  else buf_puts(b, txt);
+}
+
+/* index / find_index / rindex(v) on an Integer, String or Float Array: the
+   position, or nil, as a boxed value, which the caller converts to the
+   call's form. -1 when the call is refused. */
+static int emit_typed_index_query(Compiler *c, int id, int recv, TyKind rt, const char *k, const char *name,
+                                 const int *argv, TyKind a0, int nil_needle, int elem_mismatch, Buf *b) {
+  if (elem_mismatch) {
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
+    buf_puts(b, "), (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+    return 1;
+  }
+  /* nil-on-miss -> poly */
+  const char *fn = is_rindex_name(name) ? "rindex_poly" : "index_poly";
+  if (value_obj_compares(c, argv[0])) {
+    unsupported_feature(c, id, "Array#index of a user object defining == in a typed Array");
+    return -1;
+  }
+  if (needle_misses(c, recv, rt, argv[0])) {
+    buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[0], b);
+    buf_puts(b, "); sp_box_nil(); })");
+    return 1;
+  }
+  if (rt == TY_FLOAT_ARRAY && (a0 == TY_POLY || a0 == TY_UNKNOWN)) {
+    /* boxed needle: the tag-guarded helper compares Float and Integer
+       tags and misses every other, where a to-f coercion made false hits */
+    int ta = ++g_tmp, tv = ++g_tmp;
+    buf_printf(b, "({ sp_FloatArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
+    buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (_t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_NIL)"
+                  " ? sp_FloatArray_%s(_t%d, _t%d) : ", tv, tv, tv, tv,
+               is_rindex_name(name) ? "rindex_key" : "index_key", ta, tv);
+    emit_typed_arr_scan(c, id, rt, ta, tv, 0, is_rindex_name(name), b);
+    buf_puts(b, "; })");
+    return 1;
+  }
+  if (rt == TY_INT_ARRAY && (a0 == TY_POLY || (a0 == TY_NIL && !nil_needle))) {
+    /* the Integer twin of the String arm below: only an Integer can be
+       there, where unboxing the needle raised TypeError (#4835) */
+    int ta = ++g_tmp, tv = ++g_tmp;
+    buf_printf(b, "({ sp_IntArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
+    buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_INT ? sp_IntArray_%s(_t%d, _t%d.v.i) : ", tv, fn, ta, tv);
+    /* a boxed nil finds the array's nil elements */
+    if (elem_nil_sentinel(c, recv, rt))
+      buf_printf(b, "_t%d.tag == SP_TAG_NIL ? sp_box_oint(sp_IntArray_index_nil(_t%d, %d)) : ", tv, ta, is_rindex_name(name) ? 1 : 0);
+    if (a0 == TY_POLY) emit_typed_arr_scan(c, id, rt, ta, tv, 0, is_rindex_name(name), b);
+    else buf_puts(b, "sp_box_nil()");
+    buf_puts(b, "; })");
+    return 1;
+  }
+  if (rt == TY_STR_ARRAY && (a0 == TY_POLY || a0 == TY_NIL)) {
+    /* a boxed needle into a String array: a String compares, anything
+       else (nil first of all) is simply not there. The boxed value
+       used to be passed as the const char* itself, which did not
+       compile (#4458). */
+    int ta = ++g_tmp, tv = ++g_tmp;
+    buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
+    buf_printf(b, "sp_RbVal _t%d = %s", tv, needle_needs_deref(c, argv[0]) ? "sp_poly_strbuf_deref(" : ""); emit_boxed(c, argv[0], b); if (needle_needs_deref(c, argv[0])) buf_puts(b, ")");
+    char nbs[32]; snprintf(nbs, sizeof nbs, "_t%d.v.s", tv);
+    buf_printf(b, "; _t%d.tag == SP_TAG_STR ? ", tv); emit_array_entry(b, "Str", fn); buf_printf(b, "(_t%d, ", ta);
+    emit_typed_elem_hold(c, -1, TY_STR_ARRAY, nbs, b);
+    buf_printf(b, ") : _t%d.tag == SP_TAG_NIL ? ", tv); emit_array_entry(b, "Str", fn); buf_printf(b, "(_t%d, NULL) : sp_box_nil(); })", ta);
+    return 1;
+  }
+  if (nil_needle) {
+    /* a literal nil: the first (last) nil element */
+    int ta = ++g_tmp;
+    buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
+    buf_puts(b, "; (void)("); emit_expr_for_effect(c, argv[0], b);
+    buf_printf(b, "); sp_box_oint(sp_%sArray_index_nil(_t%d, %d)); })", k, ta, is_rindex_name(name) ? 1 : 0);
+    return 1;
+  }
+  /* held across the needle, which may allocate */
+  Buf rix; char tyx[32];
+  snprintf(tyx, sizeof tyx, "sp_%sArray *", k);
+  int cix = hold_recv_open(c, recv, 0, tyx, "SP_GC_ROOT", b, &rix);
+  if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && node_has_oint_form(c, argv[0])) {
+    /* a needle that can be nil searches with its nil (a nil needle finds
+       the nil elements); the _o answer is boxed as the _poly one is */
+    buf_printf(b, "sp_box_oint(sp_%sArray_%s_o(%s, ", k, is_rindex_name(name) ? "rindex" : "index", rix.p);
+    emit_elem_needle(c, rt, argv[0], b);
+    buf_puts(b, "))");
+  }
+  else {
+    /* a String Array holds the handle: its search takes the needle's handle, of either face */
+    emit_elem_entry(b, 0, rt, k, fn, ""); buf_printf(b, "(%s, ", rix.p);
+    /* the _poly search takes the plain element: the needle's oint form,
+       which is never nil here, unwrapped */
+    if (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) {
+      buf_printf(b, "%s(", oint_arg(ty_array_elem(rt))); emit_elem_needle(c, rt, argv[0], b); buf_puts(b, ")");
+    }
+    else if (typed_elem_held(rt) == TY_STRBUF) { Buf nb = expr_buf(c, argv[0]); emit_typed_elem_hold(c, argv[0], rt, nb.p ? nb.p : "NULL", b); free(nb.p); }
+    else emit_expr(c, argv[0], b);
+    buf_puts(b, ")");
+  }
+  free(rix.p);
+  if (cix) buf_puts(b, "; })");
+  return 1;
+}
+
 static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0, const char *k, int *out) {
   if (!(k)) return 0;
   if (sp_streq(name, "[]") && argc == 1 && nt_kind(nt, argv[0]) == NK_RangeNode) {
@@ -3220,11 +3364,15 @@ else {
   if (num_needle && (is_index_query(name) || is_membership_alias(name))) {
     /* the receiver held across the needle, which may allocate */
     int ta = ++g_tmp, tv = ++g_tmp;
-    buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
-    buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b);
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
-    emit_typed_arr_scan(c, id, rt, ta, tv, is_membership_alias(name), is_rindex_name(name), b);
-    buf_puts(b, "; })");
+    Buf nb; memset(&nb, 0, sizeof nb);
+    buf_printf(&nb, "({ sp_%sArray *_t%d = ", k, ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", &nb);
+    buf_printf(&nb, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], &nb);
+    buf_printf(&nb, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
+    emit_typed_arr_scan(c, id, rt, ta, tv, is_membership_alias(name), is_rindex_name(name), &nb);
+    buf_puts(&nb, "; })");
+    if (is_index_query(name)) emit_index_answer(c, id, nb.p, b);
+    else buf_puts(b, nb.p);
+    free(nb.p);
     { *out = 1; return 1; }
   }
   /* ... and a user object whose class defines ==: Integer#== hands the
@@ -3238,100 +3386,18 @@ else {
   }
   if (is_index_query(name) && argc == 1 &&
       (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY)) {
-    if (elem_mismatch) {
-      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
-      buf_puts(b, "), (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
-      { *out = 1; return 1; }
-    }
-    /* find_index(value) over a hop in front of a String Range walks the Range itself */
+    /* the position as an Integer, nil on a miss (an oint), as an object
+       Array's and the block form's are: the arms answer it boxed, and an
+       Integer slot takes it unboxed */
+    /* find_index(value) over a hop in front of a String Range walks the
+       Range itself, in the call's form */
     if (is_find_index(name) && srange_member_hop(c, recv) >= 0 &&
         emit_srange_hop_row(c, id, srange_member_hop(c, recv), name, b)) { *out = 1; return 1; }
-    /* nil-on-miss -> poly */
-    const char *fn = is_rindex_name(name) ? "rindex_poly" : "index_poly";
-    if (value_obj_compares(c, argv[0])) {
-      unsupported_feature(c, id, "Array#index of a user object defining == in a typed Array");
-      { *out = 0; return 1; }
-    }
-    if (needle_misses(c, recv, rt, argv[0])) {
-      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[0], b);
-      buf_puts(b, "); sp_box_nil(); })");
-      { *out = 1; return 1; }
-    }
-    if (rt == TY_FLOAT_ARRAY && (a0 == TY_POLY || a0 == TY_UNKNOWN)) {
-      /* boxed needle: the tag-guarded helper compares Float and Integer
-         tags and misses every other, where a to-f coercion made false hits */
-      int ta = ++g_tmp, tv = ++g_tmp;
-      buf_printf(b, "({ sp_FloatArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
-      buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b);
-      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (_t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_NIL)"
-                    " ? sp_FloatArray_%s(_t%d, _t%d) : ", tv, tv, tv, tv,
-                 is_rindex_name(name) ? "rindex_key" : "index_key", ta, tv);
-      emit_typed_arr_scan(c, id, rt, ta, tv, 0, is_rindex_name(name), b);
-      buf_puts(b, "; })");
-      { *out = 1; return 1; }
-    }
-    if (rt == TY_INT_ARRAY && (a0 == TY_POLY || (a0 == TY_NIL && !nil_needle))) {
-      /* the Integer twin of the String arm below: only an Integer can be
-         there, where unboxing the needle raised TypeError (#4835) */
-      int ta = ++g_tmp, tv = ++g_tmp;
-      buf_printf(b, "({ sp_IntArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
-      buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b);
-      buf_printf(b, "; _t%d.tag == SP_TAG_INT ? sp_IntArray_%s(_t%d, _t%d.v.i) : ", tv, fn, ta, tv);
-      /* a boxed nil finds the array's nil elements */
-      if (elem_nil_sentinel(c, recv, rt))
-        buf_printf(b, "_t%d.tag == SP_TAG_NIL ? sp_box_oint(sp_IntArray_index_nil(_t%d, %d)) : ", tv, ta, is_rindex_name(name) ? 1 : 0);
-      if (a0 == TY_POLY) emit_typed_arr_scan(c, id, rt, ta, tv, 0, is_rindex_name(name), b);
-      else buf_puts(b, "sp_box_nil()");
-      buf_puts(b, "; })");
-      { *out = 1; return 1; }
-    }
-    if (rt == TY_STR_ARRAY && (a0 == TY_POLY || a0 == TY_NIL)) {
-      /* a boxed needle into a String array: a String compares, anything
-         else (nil first of all) is simply not there. The boxed value
-         used to be passed as the const char* itself, which did not
-         compile (#4458). */
-      int ta = ++g_tmp, tv = ++g_tmp;
-      buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
-      buf_printf(b, "sp_RbVal _t%d = %s", tv, needle_needs_deref(c, argv[0]) ? "sp_poly_strbuf_deref(" : ""); emit_boxed(c, argv[0], b); if (needle_needs_deref(c, argv[0])) buf_puts(b, ")");
-      char nbs[32]; snprintf(nbs, sizeof nbs, "_t%d.v.s", tv);
-      buf_printf(b, "; _t%d.tag == SP_TAG_STR ? ", tv); emit_array_entry(b, "Str", fn); buf_printf(b, "(_t%d, ", ta);
-      emit_typed_elem_hold(c, -1, TY_STR_ARRAY, nbs, b);
-      buf_printf(b, ") : _t%d.tag == SP_TAG_NIL ? ", tv); emit_array_entry(b, "Str", fn); buf_printf(b, "(_t%d, NULL) : sp_box_nil(); })", ta);
-      { *out = 1; return 1; }
-    }
-    if (nil_needle) {
-      /* a literal nil: the first (last) nil element */
-      int ta = ++g_tmp;
-      buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
-      buf_puts(b, "; (void)("); emit_expr_for_effect(c, argv[0], b);
-      buf_printf(b, "); sp_box_oint(sp_%sArray_index_nil(_t%d, %d)); })", k, ta, is_rindex_name(name) ? 1 : 0);
-      { *out = 1; return 1; }
-    }
-    /* held across the needle, which may allocate */
-    Buf rix; char tyx[32];
-    snprintf(tyx, sizeof tyx, "sp_%sArray *", k);
-    int cix = hold_recv_open(c, recv, 0, tyx, "SP_GC_ROOT", b, &rix);
-    if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && node_has_oint_form(c, argv[0])) {
-      /* a needle that can be nil searches with its nil (a nil needle finds
-         the nil elements); the _o answer is boxed as the _poly one is */
-      buf_printf(b, "sp_box_oint(sp_%sArray_%s_o(%s, ", k, is_rindex_name(name) ? "rindex" : "index", rix.p);
-      emit_elem_needle(c, rt, argv[0], b);
-      buf_puts(b, "))");
-    }
-    else {
-      /* a String Array holds the handle: its search takes the needle's handle, of either face */
-      emit_elem_entry(b, 0, rt, k, fn, ""); buf_printf(b, "(%s, ", rix.p);
-      /* the _poly search takes the plain element: the needle's oint form,
-         which is never nil here, unwrapped */
-      if (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) {
-        buf_printf(b, "%s(", oint_arg(ty_array_elem(rt))); emit_elem_needle(c, rt, argv[0], b); buf_puts(b, ")");
-      }
-      else if (typed_elem_held(rt) == TY_STRBUF) { Buf nb = expr_buf(c, argv[0]); emit_typed_elem_hold(c, argv[0], rt, nb.p ? nb.p : "NULL", b); free(nb.p); }
-      else emit_expr(c, argv[0], b);
-      buf_puts(b, ")");
-    }
-    free(rix.p);
-    if (cix) buf_puts(b, "; })");
+    Buf ib; memset(&ib, 0, sizeof ib);
+    int r = emit_typed_index_query(c, id, recv, rt, k, name, argv, a0, nil_needle, elem_mismatch, &ib);
+    if (r < 0) { free(ib.p); *out = 0; return 1; }
+    emit_index_answer(c, id, ib.p ? ib.p : "sp_box_nil()", b);
+    free(ib.p);
     { *out = 1; return 1; }
   }
   if ((is_membership_alias(name)) && argc == 1) {
@@ -10465,6 +10531,19 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      splice its text (so a literal/complex receiver isn't rebuilt). */
   if (!(recv >= 0 && (rt == TY_STRING || rt == TY_INT || rt == TY_FLOAT))) return 0;
   if (rt == TY_STRING && str_partition_shared(c, id, b, name, recv, argc, argv)) { *out = 1; return 1; }
+  /* `x.to_s(base)` on an Integer that may be nil: nil's to_s takes no
+     argument, so a nil one is its ArgumentError, the receiver and the base
+     run first */
+  if (rt == TY_INT && sp_streq(name, "to_s") && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      a0 == TY_INT && cmp_operand_may_be_nil(c, recv) && node_is_oint(c, recv) &&
+      cplan_user(c, id).mi < 0 && cplan_user(c, id).dispatch == CP_NONE) {
+    int tr = ++g_tmp, tb = ++g_tmp;
+    buf_printf(b, "({ sp_oint _t%d = ", tr); emit_oint_expr(c, recv, TY_INT, b);
+    buf_printf(b, "; sp_int _t%d = ", tb); emit_int_expr(c, argv[0], b);
+    buf_printf(b, "; if (_t%d.nil) sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given 1, expected 0)\"); "
+                  "sp_int_to_s_base(_t%d.v, _t%d); })", tr, tr, tb);
+    *out = 1; return 1;
+  }
   /* --share-strings: an encoding mutator over a call that hands on a handle
      takes that handle alone: the receiver's read made below first would run
      the call a second time (the arm itself uses the handle) */

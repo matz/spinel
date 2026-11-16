@@ -1,0 +1,35 @@
+1
+3
+nil
+nil
+1
+3
+nil
+nil
+0
+2
+nil
+nil
+1
+nil
+nil
+true
+-1
+""
+"nil"
+3
+4
+4
+[2]
+{nil => :a, 2 => :b}
+4
+nil
+nil
+2
+nil
+0
+1
+2
+nil
+undefined method '+' for nil
+[20, :none]

@@ -21,6 +21,6 @@ param pair_at n: scalar ty=int
 ret Buf#initialize: scalar ty=int
 ret Buf#peek: opt ty=int may_nil
 ret Tally.add: scalar ty=int
-ret find: boxed ty=poly
+ret find: opt ty=int may_nil
 ret pair_at: boxed ty=poly
 repr_diff (--dump-repr): 0 slots became String buffers (strbuf), 0 became boxed, 0 left a by-value layout, 0 other changes, in 0 of 1 programs

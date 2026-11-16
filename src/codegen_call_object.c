@@ -1237,6 +1237,20 @@ static int main_object_chain_defines(Compiler *c, const char *name) {
 }
 int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc) {
   MethodLookup ml = { .def_class = -1 };
+  /* an Integer or Float receiver that may be nil, where the plan binds no
+     method of the program's: freeze / dup / clone answer it, nil included
+     (the call's oint, node_is_oint), and frozen? is true of both */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 && oint_kind(comp_ntype(c, recv)) &&
+      node_is_oint(c, recv) && (is_self_copy(name) || sp_streq(name, "frozen?"))) {
+    CallPlan kp = cplan_user(c, id);
+    if (kp.mi < 0 && kp.dispatch == CP_NONE) {
+      if (sp_streq(name, "frozen?")) {
+        buf_puts(b, "((void)("); emit_oint_expr(c, recv, comp_ntype(c, recv), b); buf_puts(b, "), 1)");
+      }
+      else emit_oint_expr(c, recv, comp_ntype(c, recv), b);
+      return 1;
+    }
+  }
   if (recv >= 0 && (comp_ntype(c, recv) == TY_RANGE || comp_ntype(c, recv) == TY_FLOAT_RANGE ||
                    comp_ntype(c, recv) == TY_STR_RANGE) &&
       emit_builtin_op_stage(c, id, recv, comp_ntype(c, recv), name, 1, b)) return 1;
@@ -2930,6 +2944,14 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         nt_ref(nt, id, "block") < 0) {
       int ac0 = 0; call_args(nt, id, &ac0);
       TyKind irt0 = comp_ntype(c, nt_ref(nt, id, "receiver"));
+      /* an Integer or Float receiver that may be nil, where the plan binds
+         no method of the program's to the call (another class's `itself`
+         is no target): the call answers its oint (node_is_oint), which the
+         caller unwraps as it needs */
+      if (ac0 == 0 && oint_kind(irt0) && node_is_oint(c, id)) {
+        CallPlan kp = cplan_user(c, id);
+        if (kp.mi < 0 && kp.dispatch == CP_NONE) { emit_oint_expr(c, nt_ref(nt, id, "receiver"), irt0, b); return 1; }
+      }
       if (ac0 == 0 && !diag_user_defines(c, id, "itself") &&
           /* a generated READER of the name owns it, as in CRuby (#4190) */
           !(ty_is_object(irt0) &&

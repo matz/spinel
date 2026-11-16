@@ -1291,7 +1291,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_STR_RANGE, "each_with_index", 0, 0, BF_NONE,    TY_ENUMERATOR,  BOPE_TEMPLATE, "sp_srange_ewi(sp_box_srange($r))" },
   { TY_STR_RANGE, "each_slice",   1,   1, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_int _t$u = $i0; sp_srange_regroup(_t$y, _t$u, 0); })" },
   { TY_STR_RANGE, "each_cons",    1,   1, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_int _t$u = $i0; sp_srange_regroup(_t$y, _t$u, 1); })" },
-  { TY_STR_RANGE, "find_index",   1,   1, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_RbVal _t$u = $b0; SP_GC_ROOT_RBVAL(_t$u); sp_box_oint(sp_srange_find_index(_t$y, _t$u)); })" },
+  /* the position, nil on a miss: an Integer that may be nil, as an Array's find_index answers */
+  { TY_STR_RANGE, "find_index",   1,   1, BF_ANY,      TY_INT,         BOPE_TEMPLATE, "$<({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_RbVal _t$u = $b0; SP_GC_ROOT_RBVAL(_t$u); sp_srange_find_index(_t$y, _t$u); })$>" },
   { TY_STR_RANGE, "step",         1,   1, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_srange_step_enum(_t$y, $b0, SPL(\"step\")); })" },
   { TY_STR_RANGE, "step",         0,   0, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_srange_stepped_enum(_t$y, 1, SPL(\"step\"), 0); })" },  /* no argument: a step of 1, labeled as written */
   { TY_STR_RANGE, "%",            1,   1, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_srange_step_enum(_t$y, $b0, SPL(\"%\")); })" },
@@ -3441,8 +3442,7 @@ TyKind bop_result(const BuiltinOp *op, TyKind rt) {
   case (int)BOPR_HASH_KEY_OF: return rt == TY_SYM_POLY_HASH ? TY_SYMBOL : TY_POLY;
   case (int)BOPR_HASH_INVERT: return rt == TY_STR_STR_HASH ? TY_STR_STR_HASH : TY_POLY_POLY_HASH;
   case (int)BOPR_ARRAY_SUM: return rt == TY_INT_ARRAY ? TY_UNKNOWN : fold_sum_type(TY_INT, ty_array_elem(rt), 0);
-  case (int)BOPR_ARRAY_INDEX:
-    return rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY ? TY_POLY : TY_INT;
+  case (int)BOPR_ARRAY_INDEX: return TY_INT;
   case (int)BOPR_ARRAY_TUPLES: return rt == TY_POLY_ARRAY ? TY_POLY_ARRAY : TY_ENUMERATOR;
   case (int)BOPR_ASSOC: {
     /* the matching sub-array of a poly array; an array of numbers, Strings,
@@ -3472,6 +3472,9 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
     return argc == 1 ? fold_sum_type(arg_of(ud, 0), ty_array_elem(rt), facts & BOPX_PROMOTE) : TY_UNKNOWN;
   case (int)BOPR_ARRAY_TUPLES:
     return rt == TY_POLY_ARRAY && !(facts & BOPX_KEPT) ? TY_ENUMERATOR : bop_result(op, rt);
+  case (int)BOPR_ARRAY_INDEX:
+    return (facts & BOPX_BOXED_USE) && (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY)
+           ? TY_POLY : bop_result(op, rt);
   case (int)BOPR_ARRAY_PLUS:
   case (int)BOPR_ARRAY_SETOP:
     break;

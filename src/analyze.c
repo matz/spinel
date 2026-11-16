@@ -40584,6 +40584,23 @@ int nullable_int_value(Compiler *c, int v) {
     int rcv0 = nt_ref(nt, v, "receiver");
     /* an element read out of an array some element of which is nil */
     if (rcv0 >= 0 && elem_returning_call(cn) && nullable_int_elem_expr(c, rcv0, 0)) return 1;
+    /* `e.itself` answers e, nil included (a desugar wraps a splat call's
+       arms in one: `a.find_index(*r) { }`), and so do freeze / dup / clone
+       -- Kernel's, where the plan binds no method of the program's */
+    if (rcv0 >= 0 && cn && is_self_copy(cn) && nt_ref(nt, v, "arguments") < 0 &&
+        nt_ref(nt, v, "block") < 0 && cplan_reopen_binding(cplan_user_fresh(c, v)) < 0 &&
+        nullable_int_value(c, rcv0)) return 1;
+    /* a typed Array's sum(seed) answers a seed that may be nil, over no
+       elements */
+    if (rcv0 >= 0 && cn && sp_streq(cn, "sum") && nt_ref(nt, v, "block") < 0) {
+      int sa = nt_ref(nt, v, "arguments"), sn = 0;
+      const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &sn) : NULL;
+      TyKind srt = infer_type(c, rcv0);
+      if (sav && sn == 1 && (srt == TY_INT_ARRAY || srt == TY_FLOAT_ARRAY) && nullable_int_value(c, sav[0])) return 1;
+    }
+    /* ... as `tap { }` does, whatever its block answers */
+    if (rcv0 >= 0 && cn && is_tap_name(cn) && nt_ref(nt, v, "arguments") < 0 && nt_ref(nt, v, "block") >= 0 &&
+        cplan_reopen_binding(cplan_user_fresh(c, v)) < 0 && nullable_int_value(c, rcv0)) return 1;
     /* Array#fetch answers its default argument, or its block's value, for
        an index out of range: either can be nil */
     if (rcv0 >= 0 && cn && sp_streq(cn, "fetch") && ty_is_array(infer_type(c, rcv0))) {
@@ -43091,10 +43108,8 @@ static void mark_nullable_int_locals(Compiler *c) {
       int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
       if (!tn || recv < 0 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
       if (!is_tap_alias(tn)) continue;
-      int bp = nt_ref(nt, blk, "parameters");
-      int params = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
-      int rn = 0; const int *reqs = params >= 0 ? nt_arr(nt, params, "requireds", &rn) : NULL;
-      const char *pnm = reqs && rn >= 1 ? nt_str(nt, reqs[0], "name") : NULL;
+      /* (a numbered parameter or `it` is the parameter too) */
+      const char *pnm = block_param_name(c, blk, 0);
       Scope *bsc = pnm ? comp_scope_of(c, blk) : NULL;
       LocalVar *plv = bsc ? scope_local(bsc, pnm) : NULL;
       if (!plv || (plv->type != TY_INT && plv->type != TY_FLOAT) || plv->nullable_int) continue;

@@ -50592,6 +50592,79 @@ static void an_phase_class_structure(Compiler *c) {
       nt_node_set_str((NodeTable *)c->nt, id, "name", "block_given?");
   }
 
+  /* A method's own `&blk` as the bare condition of an if/unless/while/until
+     asks whether a block was given: it becomes `block_given?`, so a forward
+     of blk to instance_eval (`obj.instance_eval(&blk) if blk`, aasm's DSL) is
+     the method's own block, as with block_given? beside it, rather than a
+     value the method keeps. Not where the method assigns blk, which then
+     holds what it was given, nor reads it for anything else. */
+  {
+    NodeTable *nt = (NodeTable *)c->nt;
+    int n0 = nt->count;
+    for (int p = 0; p < n0; p++) {
+      NodeKind pk = nt_kind(nt, p);
+      if (!(pk == NK_IfNode || pk == NK_UnlessNode || pk == NK_WhileNode || pk == NK_UntilNode)) continue;
+      int pr = nt_ref(nt, p, "predicate");
+      if (pr < 0 || nt_kind(nt, pr) != NK_LocalVariableReadNode) continue;
+      const char *pn = nt_str(nt, pr, "name");
+      Scope *ms = comp_scope_of(c, pr);
+      if (!pn || !ms || !ms->name || !ms->blk_param || !ms->blk_param[0] || !sp_streq(ms->blk_param, pn)) continue;
+      int written = 0;
+      for (int w = 0; w < n0 && !written; w++)
+        if ((nt_kind(nt, w) == NK_LocalVariableWriteNode || nt_kind(nt, w) == NK_LocalVariableOrWriteNode ||
+             nt_kind(nt, w) == NK_LocalVariableAndWriteNode || nt_kind(nt, w) == NK_LocalVariableOperatorWriteNode ||
+             nt_kind(nt, w) == NK_LocalVariableTargetNode) &&
+            comp_scope_of(c, w) == ms && sp_streq(nt_str(nt, w, "name"), pn)) written = 1;
+      if (written) continue;
+      /* Only where blk is read for nothing else but such a condition or a
+         `&blk` forward: a `blk.call` beside the test keeps the value, and
+         block_given? and the value then answer apart */
+      int *par = an_parent_map(nt);
+      int other = !par, forwards = 0;
+      for (int r = 0; r < n0 && !other; r++) {
+        if (nt_kind(nt, r) != NK_LocalVariableReadNode || comp_scope_of(c, r) != ms || !sp_streq(nt_str(nt, r, "name"), pn)) continue;
+        int up = par[r];
+        NodeKind uk = up >= 0 ? nt_kind(nt, up) : NK_NONE;
+        int cond = (uk == NK_IfNode || uk == NK_UnlessNode || uk == NK_WhileNode || uk == NK_UntilNode) && nt_ref(nt, up, "predicate") == r;
+        /* (a forward to instance_eval or instance_exec alone: one to an
+           iterator answers an Enumerator, or the block's own value, where
+           no block is given, which the forward then can no longer tell) */
+        int call = uk == NK_BlockArgumentNode ? par[up] : -1;
+        int fwd = uk == NK_BlockArgumentNode && nt_ref(nt, up, "expression") == r && call >= 0 &&
+                  nt_kind(nt, call) == NK_CallNode && nt_ref(nt, call, "block") == up &&
+                  is_instance_eval_family(nt_str(nt, call, "name"));
+        /* (and a forward whose value is dropped, a statement other than its
+           body's last: `r = instance_exec(x, &b) if b` keeps the value,
+           which the inlined block then hands on) */
+        for (int x = call, guard = 0; fwd && x >= 0 && guard < 16; guard++) {
+          int p = par[x];
+          NodeKind pk = p >= 0 ? nt_kind(nt, p) : NK_NONE;
+          if (pk == NK_StatementsNode) {
+            int sn = 0; const int *sb = nt_arr(nt, p, "body", &sn);
+            if (sn > 0 && sb[sn - 1] != x) break;
+            int pp = par[p];
+            NodeKind ppk = pp >= 0 ? nt_kind(nt, pp) : NK_NONE;
+            if (ppk == NK_IfNode || ppk == NK_UnlessNode || ppk == NK_ElseNode) { x = pp; continue; }
+            fwd = 0;
+          }
+          else if (pk == NK_IfNode || pk == NK_UnlessNode || pk == NK_ElseNode) { x = p; continue; }
+          else fwd = 0;
+        }
+        if (!cond && !fwd) other = 1;
+        forwards += fwd;
+      }
+      /* (and only for such a forward: a test alone is left as it is written) */
+      if (other || !forwards) continue;
+      /* (retyped in place: the vsite index and every whole-table scan then
+         see no read of blk left behind) */
+      nt_node_set_type(nt, pr, "CallNode");
+      nt_node_set_str(nt, pr, "name", "block_given?");
+      nt_node_set_ref(nt, pr, "receiver", -1);
+      nt_node_set_ref(nt, pr, "arguments", -1);
+      nt_node_set_ref(nt, pr, "block", -1);
+    }
+  }
+
   /* mark block-aware methods (contain yield or block_given?) -- these are
      inlined at every call site so block_given? reflects the actual site */
   for (int id = 0; id < c->nt->count; id++) {

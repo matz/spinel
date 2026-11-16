@@ -4455,7 +4455,10 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   if (nn == 64) return 0;
   int ask[64], nask = 0;
   for (int i = 0; i < nn; i++) {
-    if (call_target(c, nodes[i], -1, names[i], CT_TOP, NULL) >= 0) continue;
+    /* (a top-level def answers the call, or main's own method does where the call runs on main: either way the name
+       tells nothing of the receiver's class) */
+    MethodLookup tl = { .def_class = -1 };
+    if (call_target(c, nodes[i], -1, names[i], CT_TOP, &tl) >= 0 || tl.kind == ML_SINGLETON || tl.kind == ML_OBJECT) continue;
     for (int k = 0; k < c->nclasses; k++) {
       if (ie_poly_class_ok(c, k) && call_answers(c, nodes[i], k, names[i], 0, NULL)) { ask[nask++] = i; break; }
     }

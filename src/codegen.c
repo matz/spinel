@@ -14218,8 +14218,13 @@ void emit_obj_to_ary_call(Compiler *c, int mi, int defc, const char *v, Buf *b) 
   TyKind mret = (TyKind)c->scopes[mi].ret;
   Buf cx; memset(&cx, 0, sizeof cx);
   int vobj = comp_ty_value_obj(c, ty_object(defc));
-  buf_printf(&cx, vobj ? "%s(*(sp_%s *)%s.v.p)" : "%s((sp_%s *)%s.v.p)",
-             mc_method(c, &c->scopes[mi]), c->classes[defc].c_name, v);
+  /* (a block parameter the method takes but does not yield to is a
+     parameter of its C function, emit_method_signature; the conversion
+     passes none) */
+  const Scope *ts = &c->scopes[mi];
+  int takes_blk = ts->blk_param && ts->blk_param[0] && !ts->yields;
+  buf_printf(&cx, vobj ? "%s(*(sp_%s *)%s.v.p%s)" : "%s((sp_%s *)%s.v.p%s)",
+             mc_method(c, &c->scopes[mi]), c->classes[defc].c_name, v, takes_blk ? ", NULL" : "");
   if (mret == TY_POLY) buf_puts(b, cx.p);
   else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, mret, cx.p, &bx);
          buf_puts(b, bx.p ? bx.p : "sp_box_nil()"); free(bx.p); }

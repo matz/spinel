@@ -1,0 +1,10 @@
+and class: true true
+and encoding: true true
+and literal: true true
+and empty: true true
+and mutable: true true
+or class: true true
+or encoding: true true
+or mutable: true true
+or kept: true true
+["new!", "fresh?"]

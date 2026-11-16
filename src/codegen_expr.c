@@ -6570,18 +6570,23 @@ static void emit_forwarded_block_value(Compiler *c, int id, Buf *b) {
   if (optional) buf_puts(b, ")");
 }
 
-/* `a[i] ||= v` / `a[i] &&= v` on a String Array: the slot is read as its bytes for the test and stored as the
-   handle the Array holds (the row's hold) */
+/* `a[i] ||= v` / `a[i] &&= v` on a String Array: the slot is read as the handle the Array
+   holds, a write takes the value's handle (the row's hold) and stores that one, and the
+   expression answers its bytes: the String the Array holds, so a consumer that takes the
+   bytes face reaches the stored String, as the Hash's form below does */
 static void emit_index_or_str_array(Compiler *c, int ir, int idx, int iv, TyKind irt, int is_or, int ta, int tb, int tc, Buf *b) {
   buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_expr(c, ir, b);
   buf_printf(b, "; sp_int _t%d = ", tb); emit_int_expr(c, idx, b);
-  buf_printf(b, "; const char *_t%d = SP_STR_B(sp_StrArray_get_e(_t%d, _t%d));", tc, ta, tb);
+  buf_printf(b, "; sp_String *_t%d = sp_StrArray_get_e(_t%d, _t%d);", tc, ta, tb);
   buf_printf(b, " if (%s_t%d) { ", is_or ? "!" : "", tc);
-  emit_guarded_slot_assign(c, iv, tc, b);
-  char tcn[24]; snprintf(tcn, sizeof tcn, "_t%d", tc);
-  buf_puts(b, "; "); emit_array_entry(b, "Str", "set"); buf_printf(b, "(_t%d, _t%d, ", ta, tb);
-  emit_typed_elem_hold(c, -1, irt, tcn, b);
-  buf_printf(b, "); } _t%d; })", tc);
+  Buf rvb; memset(&rvb, 0, sizeof rvb);
+  Buf *svp = g_pre; g_pre = b;
+  emit_expr(c, iv, &rvb);
+  g_pre = svp;
+  buf_printf(b, "_t%d = ", tc);
+  emit_typed_elem_hold(c, iv, irt, rvb.p ? rvb.p : "NULL", b);
+  free(rvb.p);
+  buf_puts(b, "; "); emit_array_entry(b, "Str", "set"); buf_printf(b, "(_t%d, _t%d, _t%d); } SP_STR_B(_t%d); })", ta, tb, tc, tc);
 }
 static void emit_expr_node(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;

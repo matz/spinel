@@ -13,9 +13,10 @@
 # In the sources under src/ (.c, .h, .inc), outside comments, every string literal (adjacent literals joined)
 # is read for a name of the form sp_<kind>Array_<op> / sp_<kind>Hash_<op>, where <kind> is %s, %.*s, a $A / $H
 # template slot or a spelled kind (Str, StrStr, IntStr, Int, Poly, ...), and for an operation name that stands
-# apart (`"Array_push"`). A name whose operation is a store or a search (push, set, oset, insert, index,
-# rindex, delete, has_value, new_with_default, unshift, with any suffix) or is not known at the site (`%s`, or
-# the end of the literal) is a site. A kind that is spelled and holds no String handle (Int, Poly, ...) has no
+# apart (`"Array_push"`, `"Array_%s"`, `"Hash_"`). A name whose operation is a store or a search (push, set, oset,
+# insert, index, rindex, delete, has_value, new_with_default, unshift, with any suffix) or is not known at the
+# site (`%s`, or the end of the literal) is a site; a standalone name is listed as `Array_*` when its operation
+# is not spelled. A kind that is spelled and holds no String handle (Int, Poly, ...) has no
 # deleted entry and is not read. A site outside emit_elem_entry fails unless tools/entry_names.allow lists
 # it: its class, file, function, pattern and how many times it occurs there, with the reason it cannot name a
 # deleted entry for a String kind. A listed site that no longer occurs, or occurs another number of times, is a
@@ -120,6 +121,7 @@ STORE = /\A(push|set|oset|insert|index|rindex|delete|has_value|new_with_default|
 HSTORE = /\A(set|oset|has_value|new_with_default)/   # a Hash's delete, index and the like take its key, which stays bytes
 NAME = /sp_(?<kind>%\.?\*?s|%s|\$[A-Z]|[A-Z][A-Za-z]*?)(?<word>Array|Hash)_(?<op>[a-z_]*)/
 APART = /(?<![\w%])(Array|Hash)_(push|set|insert|index|rindex|delete|has_value|new_with_default|unshift)\b/
+APART_DYN = /(?<![\w%])(Array|Hash)_(?:%\.?\*?s|\z)/   # a name that stands apart whose operation is not known at the site
 
 def function_at(lines)
   names = Array.new(lines.size)
@@ -153,7 +155,8 @@ files.each do |file, src|
       site_lines[[file, fn, pat]] << line
       warn "#{file}:#{line}: #{fn}: #{pat}" if ENV["ENTRY_NAMES_LINES"]
     end
-    lit.scan(APART) { sites[[file, fn, "#{$1}_#{$2} (apart)"]] += 1 }
+    lit.scan(APART) { k = [file, fn, "#{$1}_#{$2} (apart)"]; sites[k] += 1; site_lines[k] << line }
+    lit.scan(APART_DYN) { k = [file, fn, "#{$1}_* (apart)"]; sites[k] += 1; site_lines[k] << line }
   end
 end
 

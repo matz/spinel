@@ -13275,7 +13275,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      with a real end raises (CRuby). A clamped result IS the Integer endpoint
      itself, so the value stays boxed (inference: TY_POLY). */
   if (recv >= 0 && ty_is_object(rt) && sp_streq(name, "clamp") && argc == 1 &&
-      comp_ntype(c, argv[0]) == TY_RANGE &&
+      repr_range_value(c, argv[0]) &&
       comp_method_in_chain(c, ty_object_class(rt), "<=>", NULL) >= 0 &&
       class_is_comparable(c, ty_object_class(rt))) {
     buf_puts(b, "sp_obj_clamp_range(");

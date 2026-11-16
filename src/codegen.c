@@ -12272,7 +12272,7 @@ int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *
     else buf_printf(b, "(%s)_t%d.v.p; })", ct.p ? ct.p : "void *", tr);
     done = 1;
   }
-  else if (p.delegate_cut == BCUT_CLAMP && argc == 1 && comp_ntype(c, argv[0]) == TY_RANGE) {
+  else if (p.delegate_cut == BCUT_CLAMP && argc == 1 && repr_range_value(c, argv[0])) {
     /* clamp(range): the same order, the range unpacked as sp_obj_clamp_range does */
     int tv = ++g_tmp, tr = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);

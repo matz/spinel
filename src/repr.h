@@ -173,6 +173,8 @@ int repr_boxed_to_s_operand(Compiler *c, int v);
 int repr_boxed_reader_handle(Compiler *c, int v);
 /* The representation of node `node`'s value. */
 Repr repr_of(const Compiler *c, int node);
+/* Is the node an Integer Range held by value (an sp_Range)? */
+int repr_range_value(const Compiler *c, int v);
 int repr_self_handle(const Compiler *c, int scope);
 int repr_self_boxed(const Compiler *c, int scope);
 int repr_self_shared(const Compiler *c, int node);

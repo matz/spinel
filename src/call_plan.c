@@ -8036,7 +8036,7 @@ static int ct_default_placeable(Compiler *c, const Scope *sc, int root, int i) {
    f is given (parameter of scope mi); FILL_UNPLACED where one cannot; 0 where
    one has no default. *effects is set where effects is given and one has an
    effect (subtree_has_side_effect). */
-enum { FILL_UNPLACED = -1 };
+enum { FILL_UNPLACED = -1, FILL_RAISE = -2 };
 /* The index past method sc's positional parameters, its rest among them: its keywords follow (scope_add_param's order). */
 static int ct_positionals(Compiler *c, const Scope *sc) {
   int pn = sc->def_node >= 0 ? nt_ref(c->nt, sc->def_node, "parameters") : -1, nkw = 0;
@@ -8123,8 +8123,8 @@ static int ct_call_keywords(const NodeTable *nt, const int *av, int nargs) {
 }
 /* ...and the keyword parameters kws of method sc (scope mi), which a bare `super` passes on as keywords: each the call
    does not pass (kw: ct_call_keywords; a `**h` may pass any, which leaves only a default without an effect to fill,
-   ahead of it) into f, as ct_fill_defaults answers. 0 also where a literal key the call passes names none and no
-   keyword rest takes it (CRuby's ArgumentError). */
+   ahead of it) into f, as ct_fill_defaults answers. FILL_RAISE where a literal key the call passes names none and no
+   keyword rest takes it (CRuby's ArgumentError, raised as the def binds its parameters). */
 static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws, int nkw, int id, int kw, NewFills *f, int *effects) {
   int nargs = 0, args = nt_ref(c->nt, id, "arguments"), en = 0, placed = 1;
   const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL;
@@ -8134,7 +8134,7 @@ static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws
     int key = nt_kind(c->nt, el[j]) == NK_AssocNode ? nt_ref(c->nt, el[j], "key") : -1;
     if (key < 0 || nt_kind(c->nt, key) != NK_SymbolNode) return 0;
     for (int i = 0; i < nkw && !named; i++) named = sp_streq(nt_str(c->nt, kws[i], "name"), nt_str(c->nt, key, "value"));
-    if (!named && sc->kwrest_idx < 0) return 0;
+    if (!named && sc->kwrest_idx < 0) return FILL_RAISE;
   }
   for (int i = 0, passed = 0; i < nkw; i++, passed = 0) {
     for (int j = 0; j < en && !passed; j++) passed = sp_streq(nt_str(c->nt, kws[i], "name"), nt_str(c->nt, nt_ref(c->nt, el[j], "key"), "value"));
@@ -8183,8 +8183,14 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
          rewrite would run ahead of them) */
       if (f->nk && (!kwrest || nkw || (!dopen && dargc < pos))) return BNF_REFUSE;
       if (kw == NEWKW_SURE && !kwrest) f->kwat = f->n;
-      int fill = !dopen && dargc < pos ? ct_fill_defaults(c, sc, mi, dargc, f, &effects) : 1, kfill = 1;
+      int n0 = f->n, e0 = effects, fill = !dopen && dargc < pos ? ct_fill_defaults(c, sc, mi, dargc, f, &effects) : 1, kfill = 1;
       if (fill && nkw) kfill = ct_fill_keywords(c, sc, mi, kws, nkw, id, kw, f, &effects);
+      /* (a key this one does not name raises as it binds, before its own defaults run: what the forwards ahead fill has run) */
+      if (kfill == FILL_RAISE) {
+        f->n = n0, effects = e0, f->rmi = mi;
+        if (unplaced || !effects) f->n = f->nk = 0, f->kwat = -1;
+        return unplaced && effects ? BNF_REFUSE : BNF_RAISE;
+      }
       if (!fill || !kfill) return BNF_REFUSE;
       /* (a default that reads the object being built (self, an ivar, a call on self) or the def's lexical scope runs only once
          CRuby has made the object, which the builtin's construction does not model yet: the walk goes on, and the call keeps
@@ -8210,10 +8216,10 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
   if (unplaced) f->n = f->nk = 0, f->kwat = -1;
   return f->n || f->nk ? BNF_FILL : BNF_OWN;
 }
-/* cplan_builtin_new_form's answer, and the defaults of a BNF_FILL or BNF_EMPTY into f */
+/* cplan_builtin_new_form's answer, and the defaults of a BNF_FILL, BNF_EMPTY or BNF_RAISE into f */
 static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
   int ci, own, tmp[CPT_MAX];
-  f->n = f->nk = 0, f->kwat = -1;
+  f->n = f->nk = 0, f->kwat = f->rmi = -1;
   /* (the empty value desugar_builtin_new_init_args builds once it has run the arguments is the builtin's own `new`) */
   if (id < 0 || id >= c->node_cap || nt_kind(c->nt, id) != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name")) ||
       cplan_builtin_call(c, id)) return BNF_NONE;
@@ -8242,10 +8248,10 @@ static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
     NewFills nf[1];
     for (int k = 0; k < n; k++) {
       /* (a chain whose defaults run at the call is one only where no guard chooses it) */
-      nf->n = nf->nk = 0, nf->kwat = -1;
+      nf->n = nf->nk = 0, nf->kwat = nf->rmi = -1;
       int fk = ct_new_chain_form(c, id, ci, to[k], argc, open, kw, nf);
-      if ((g != BNF_NONE && fk != g) || fk == BNF_FILL || nf->n || nf->nk) return BNF_REFUSE;
-      g = fk;
+      if ((g != BNF_NONE && fk != g) || fk == BNF_FILL || nf->n || nf->nk || (k && fk == BNF_RAISE && nf->rmi != f->rmi)) return BNF_REFUSE;
+      g = fk, f->rmi = nf->rmi;
     }
     return kw_own && g != BNF_OWN ? BNF_REFUSE : g;
   }
@@ -8260,18 +8266,18 @@ int cplan_builtin_new_form(Compiler *c, int id) {
 /* See call_plan.h. */
 void cplan_builtin_new_fills(Compiler *c, int id, NewFills *f) {
   int g = ct_builtin_new_form(c, id, f);
-  if (g != BNF_FILL && g != BNF_EMPTY) f->n = f->nk = 0, f->kwat = -1;
+  if (g != BNF_FILL && g != BNF_EMPTY && g != BNF_RAISE) f->n = f->nk = 0, f->kwat = -1;
 }
 /* Is call id a builtin class's `new` the plan does not answer: it runs a program
    initialize the builtin construction does not (the effect and the block_given? a
    yielding one sees are lost), builds its empty value from arguments still on
-   the call, or leaves the defaults a forward fills off it
+   the call, raises a forward's unknown keyword with its arguments still on it, or leaves the defaults a forward fills off it
    (desugar_builtin_new_init_args moves the arguments out and places the
    defaults first)? */
 static int cplan_builtin_initialize_gap(Compiler *c, int id) {
   NewFills fl;
   int f = ct_builtin_new_form(c, id, &fl);
-  return f == BNF_REFUSE || f == BNF_FILL ||
+  return f == BNF_REFUSE || f == BNF_FILL || f == BNF_RAISE ||
          (f == BNF_EMPTY && (nt_ref(c->nt, id, "arguments") >= 0 || nt_ref(c->nt, id, "block") >= 0 || fl.n || fl.nk));
 }
 

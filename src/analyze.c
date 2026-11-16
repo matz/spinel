@@ -13253,7 +13253,7 @@ static int desugar_hash_new_capacity(Compiler *c) {
        call with the keyword on it, cplan_builtin_new_form; and where it fills defaults, the fill's rewrite holds the
        keyword's value first, as CRuby runs it ahead of them, and the call is then the builtin's own) */
     int bnf = cplan_const_user(c, id, r, 1).mi >= 0 ? BNF_REFUSE : cplan_builtin_new_form(c, id);
-    if (bnf == BNF_REFUSE || bnf == BNF_FILL) continue;
+    if (bnf == BNF_REFUSE || bnf == BNF_FILL || bnf == BNF_RAISE) continue;
     int en = 0; const int *el = nt_arr(nt, av[an - 1], "elements", &en);
     /* (a `**h` passes the keyword too: the keywords' keys are checked as Hash#initialize binds them, and its capacity, 0
        where they have none, is the keyword's value) */
@@ -13385,6 +13385,28 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
   for (int j = base; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
   return np;
 }
+static int kwb_lv(NodeTable *nt, Scope *sc, const char *nm, int value);
+static int kwb_reject(NodeTable *nt, Scope *sc, const char *xn);
+/* The literal keys of call id's keywords that the keyword parameters of scope rmi do not name, as an Array of Symbols
+   (BNF_RAISE: the keys CRuby's `unknown keyword` names). */
+static int bni_unknown_keys(Compiler *c, int id, int rmi) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int an = nt_ref(nt, id, "arguments"), n = 0, en = 0, nkw = 0, m = 0, ar = nt_new_node(nt, "ArrayNode");
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL, kh = nt_argv_kwh(nt, av, n);
+  const int *el = kh >= 0 ? nt_arr(nt, kh, "elements", &en) : NULL;
+  int pn = nt_ref(nt, c->scopes[rmi].def_node, "parameters"), *ks = malloc(sizeof(int) * (size_t)(en + 1));
+  const int *kws = pn >= 0 ? nt_arr(nt, pn, "keywords", &nkw) : NULL;
+  if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int j = 0, named = 0; j < en; j++, named = 0) {
+    int key = nt_kind(nt, el[j]) == NK_AssocNode ? nt_ref(nt, el[j], "key") : -1;
+    if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) continue;
+    for (int i = 0; i < nkw && !named; i++) named = sp_streq(nt_str(nt, kws[i], "name"), nt_str(nt, key, "value"));
+    if (!named) ks[m++] = nt_clone_subtree(nt, key);
+  }
+  nt_node_set_arr(nt, ar, "elements", ks, m);
+  free(ks);
+  return ar;
+}
 /* A builtin class's `new` whose first initialize that does not forward is empty
    (cplan_builtin_new_form BNF_EMPTY): CRuby builds the empty value its own
    initialize would not (`class Array; def initialize(*); end; end; Array.new(2, 0)`
@@ -13395,7 +13417,9 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
    becomes `(held; ...; K.new)`. A literal block is never run. One whose
    forwards leave defaults unfilled (BNF_FILL) holds them alike and passes their
    values after its own (bni_place_defaults); ahead of an empty one, those with
-   an effect run after the held operands. The call left is the builtin's own
+   an effect run after the held operands. One that a forward's binding refuses for a
+   keyword it does not name (BNF_RAISE) runs as an empty one does up to the raise of
+   CRuby's `unknown keyword` (kwb_reject). The call left is the builtin's own
    (nt_mark_builtin_call), which the plan does not answer again. */
 static int desugar_builtin_new_init_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -13404,25 +13428,37 @@ static int desugar_builtin_new_init_args(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode || id >= c->node_cap) continue;
     int form = cplan_builtin_new_form(c, id);
     NewFills fl = { .n = 0, .kwat = -1 };
-    if (form == BNF_FILL || form == BNF_EMPTY) cplan_builtin_new_fills(c, id, &fl);
-    if (form != BNF_FILL && (form != BNF_EMPTY || (nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0 && !fl.n && !fl.nk))) continue;
+    if (form == BNF_FILL || form == BNF_EMPTY || form == BNF_RAISE) cplan_builtin_new_fills(c, id, &fl);
+    if (form != BNF_FILL && form != BNF_RAISE &&
+        (form != BNF_EMPTY || (nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0 && !fl.n && !fl.nk))) continue;
     /* (where the call stands is known before its operands are held: holding them rewrites the call) */
     int *par = du_parent_map(nt);
     if (!par || par[id] < 0) { free(par); continue; }
+    /* (the call's keys the raising forward does not name, before holding takes the keywords apart) */
+    int unk = form == BNF_RAISE ? bni_unknown_keys(c, id, fl.rmi) : -1;
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
-    if (fl.n || fl.nk) np = bni_place_defaults(c, id, &fl, &pre, np, form == BNF_EMPTY);
-    if (np > 0) {
+    if (fl.n || fl.nk) np = bni_place_defaults(c, id, &fl, &pre, np, form != BNF_FILL);
+    if (np > 0 || unk >= 0) {
       /* (a sequence of its own in the call's place, of fresh nodes throughout: the order plan keeps what it recorded of the old
-         call and its operands by node; the held values run as statements of their own, the plain `new` last) */
+         call and its operands by node; the held values run as statements of their own, the plain `new` last, after the
+         raise of the keys a forward does not name) */
       int base = nt->count, stmts = nt_new_node(nt, "StatementsNode"), seq = nt_new_node(nt, "ParenthesesNode");
-      if (form == BNF_EMPTY) {
+      if (form != BNF_FILL) {
         nt_node_set_ref(nt, id, "arguments", -1);
         nt_node_set_ref(nt, id, "block", -1);
       }
+      pre = realloc(pre, sizeof(int) * (size_t)(np + 3));
+      if (!pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       for (int i = 0; i < np; i++)
         if (fl.n || fl.nk) pre[i] = nt_clone_subtree(nt, pre[i]);
         else if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
+      if (unk >= 0) {
+        char xn[32];
+        snprintf(xn, sizeof xn, "__bnu%d", id);
+        pre[np++] = kwb_lv(nt, comp_scope_of(c, id), xn, unk);
+        pre[np++] = kwb_reject(nt, comp_scope_of(c, id), xn);
+      }
       pre[np++] = nt_clone_subtree(nt, id);
       nt_mark_builtin_call(nt, pre[np - 1]);
       nt_node_set_arr(nt, stmts, "body", pre, np);
@@ -13432,7 +13468,7 @@ static int desugar_builtin_new_init_args(Compiler *c) {
       nt_replace_child(nt, par[id], id, seq);
     }
     else {
-      if (form == BNF_EMPTY) {
+      if (form != BNF_FILL) {
         nt_node_set_ref(nt, id, "arguments", -1);
         nt_node_set_ref(nt, id, "block", -1);
       }
@@ -46364,7 +46400,7 @@ static void desugar_block_arg_order(Compiler *c) {
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
     /* (a builtin `new` that builds its empty value holds every operand in CRuby's order itself: desugar_builtin_new_init_args) */
-    if (!is_super && cplan_builtin_new_form(c, id) == BNF_EMPTY) continue;
+    if (!is_super && (cplan_builtin_new_form(c, id) == BNF_EMPTY || cplan_builtin_new_form(c, id) == BNF_RAISE)) continue;
     int be = nt_ref(nt, blk, "expression");
     int pb = nt_kind(nt, be) == NK_ParenthesesNode ? nt_ref(nt, be, "body") : -1;
     int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;

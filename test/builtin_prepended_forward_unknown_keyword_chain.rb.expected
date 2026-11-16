@@ -1,0 +1,4 @@
+"unknown keyword: :foo"
+[:o]
+5
+[:o, :o]

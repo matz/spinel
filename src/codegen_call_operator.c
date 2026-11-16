@@ -257,6 +257,7 @@ static int emit_nil_aware_num_eq(Compiler *c, int id, const char *name, int recv
    Integer or Float ==, and the String identity arms (a nullable String's
    NULL, a call's shared String answer) */
 static int emit_compare_lead_arms(Compiler *c, int id, const char *name, int recv, int argc, const int *argv, TyKind rt, Buf *b) {
+  if (emit_delegate_undef_arm(c, id, recv, argc, argv, b)) return 1;
   if (emit_nil_aware_num_eq(c, id, name, recv, argc, argv, rt, b)) return 1;
   /* A nullable String's NULL is nil, whether held as text or a handle.
      The ordinary String arms assume a String even against nil or a box. */
@@ -1229,12 +1230,12 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     if (ty_is_object(rt)) {
       int cid4 = ty_object_class(rt);
       if (call_target(c, id, cid4, name, 0, NULL) < 0 &&
-          comp_method_in_chain(c, cid4, "<=>", NULL) >= 0 && class_is_comparable(c, cid4)) {
-        if (user_cmp_invalid_ret(c, cid4) != TY_UNKNOWN)
+          cplan_implied_target(c, id, recv, cid4, "<=>", 0, NULL) >= 0 && class_is_comparable(c, cid4)) {
+        if (user_cmp_invalid_ret(c, id, recv, cid4) != TY_UNKNOWN)
           unsupported_feature(c, id, "Comparable operator on an object whose #<=> returns a non-Integer (protocol requires Integer or nil)");
         /* a `<=>` that can return nil: check it -- incomparable raises the
            Comparable ArgumentError instead of comparing a garbage value */
-        if (user_cmp_needs_check(c, cid4)) {
+        if (user_cmp_needs_check(c, id, recv, cid4)) {
           /* a Time subclass instance boxes as its Time, and the boxed
              comparison would read it as one, not ask its own <=> */
           if (comp_ary_is_time(c, cid4))

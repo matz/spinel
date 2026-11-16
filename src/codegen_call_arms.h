@@ -95,8 +95,8 @@ int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int exact, Bu
 void emit_pre_root(Compiler *c, TyKind t, int tmp);
 int emit_scalar_class_test(Compiler *c, int node, TyKind t, const char *cn, int exact, Buf *b);
 int hoist_boxed_rooted(Compiler *c, int node);
-TyKind user_cmp_invalid_ret(Compiler *c, int cid);
-int user_cmp_needs_check(Compiler *c, int cid);
+TyKind user_cmp_invalid_ret(Compiler *c, int id, int op, int cid);
+int user_cmp_needs_check(Compiler *c, int id, int op, int cid);
 void emit_ie_param_default(Compiler *c, TyKind t, Buf *b);
 int emit_ie_poly(Compiler *c, int id, Buf *b);
 int emit_ie_proc(Compiler *c, int id, int recv, int self_cls, int blk, int tramp, Buf *b);

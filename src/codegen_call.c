@@ -17060,9 +17060,8 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
    `<op> 0` path. Value-type classes take the checked path too when their
    `<=>` can return nil: the direct `<op> 0` emit would compare an sp_RbVal
    (invalid C), and sp_box_vobj / the cmp hook's by-value deref handle them. */
-int user_cmp_needs_check(Compiler *c, int cid) {
-  int def = -1;
-  int mi = comp_method_in_chain(c, cid, "<=>", &def);
+int user_cmp_needs_check(Compiler *c, int id, int op, int cid) {
+  int mi = cplan_implied_target(c, id, op, cid, "<=>", 0, NULL);
   if (mi < 0) return 0;   /* no user <=> reachable: keep the inline path */
   TyKind ret = (TyKind)c->scopes[mi].ret;
   /* an Integer or Float `<=>` that also answers nil keeps its scalar slot
@@ -17071,8 +17070,7 @@ int user_cmp_needs_check(Compiler *c, int cid) {
   int nullable = c->scopes[mi].ret_nullable_int;
   for (int k = 0; k < c->nclasses; k++) {
     if (!is_descendant(c, k, cid)) continue;
-    int kd = -1;
-    int kmi = comp_method_in_chain(c, k, "<=>", &kd);
+    int kmi = cplan_implied_target(c, id, op, k, "<=>", 0, NULL);
     if (kmi >= 0 && (TyKind)c->scopes[kmi].ret != TY_UNKNOWN)
       ret = ty_unify(ret, (TyKind)c->scopes[kmi].ret);
     if (kmi >= 0 && c->scopes[kmi].ret_nullable_int) nullable = 1;
@@ -17102,15 +17100,13 @@ int obj_member_shadows(Compiler *c, TyKind rt, const char *nm) {
 /* The unified `<=>` return type across a Comparable class and its descendants,
    or TY_UNKNOWN if none. Backs both user_cmp_needs_check and the protocol check
    below (a statically non-{Integer,Float,nil} result is a compile-time error). */
-static TyKind user_cmp_ret_type(Compiler *c, int cid) {
-  int def = -1;
-  int mi = comp_method_in_chain(c, cid, "<=>", &def);
+static TyKind user_cmp_ret_type(Compiler *c, int id, int op, int cid) {
+  int mi = cplan_implied_target(c, id, op, cid, "<=>", 0, NULL);
   if (mi < 0) return TY_UNKNOWN;
   TyKind ret = (TyKind)c->scopes[mi].ret;
   for (int k = 0; k < c->nclasses; k++) {
     if (!is_descendant(c, k, cid)) continue;
-    int kd = -1;
-    int kmi = comp_method_in_chain(c, k, "<=>", &kd);
+    int kmi = cplan_implied_target(c, id, op, k, "<=>", 0, NULL);
     if (kmi >= 0 && (TyKind)c->scopes[kmi].ret != TY_UNKNOWN)
       ret = ty_unify(ret, (TyKind)c->scopes[kmi].ret);
   }
@@ -17122,8 +17118,8 @@ static TyKind user_cmp_ret_type(Compiler *c, int cid) {
    violation spinel catches at compile time; poly/unknown stay a runtime check
    (they may be Integer at run time). Returns the offending type, else
    TY_UNKNOWN. (#2961) */
-TyKind user_cmp_invalid_ret(Compiler *c, int cid) {
-  TyKind ret = user_cmp_ret_type(c, cid);
+TyKind user_cmp_invalid_ret(Compiler *c, int id, int op, int cid) {
+  TyKind ret = user_cmp_ret_type(c, id, op, cid);
   if (ret == TY_STRING || ret == TY_SYMBOL || ret == TY_BOOL ||
       ty_is_array(ret) || ty_is_hash(ret))
     return ret;
@@ -17276,12 +17272,12 @@ static void emit_cmp_derived_eq(Compiler *c, int id, int recv, int arg, int ecid
 /* `x == nil` (or `!=`) on a boxed x: an object of a program class that
    defines `==` (or `!=`) answers by it, which need not be a Boolean
    (`def ==(o) = nil`). */
-static int poly_nil_eq_is_users(Compiler *c, int eq) {
+static int poly_nil_eq_is_users(Compiler *c, int id, int eq) {
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
     if (ci->is_native_class || !ci->instantiated || comp_class_is_module(c, ci)) continue;
-    if (comp_method_in_chain(c, k, "==", NULL) >= 0) return 1;
-    if (!eq && comp_method_in_chain(c, k, "!=", NULL) >= 0) return 1;
+    if (cplan_implied_target(c, id, -1, k, "==", 0, NULL) >= 0) return 1;
+    if (!eq && cplan_implied_target(c, id, -1, k, "!=", 0, NULL) >= 0) return 1;
   }
   return 0;
 }
@@ -17413,12 +17409,12 @@ int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b) {
 
 /* Does a Time subclass of the program's define its own == (not a reopened
    Time's, which the Time arms below take)? */
-static int program_timesub_defines_eq(Compiler *c) {
+static int program_timesub_defines_eq(Compiler *c, int id) {
   for (int k = 0; k < c->nclasses; k++) {
-    int defcls = -1;
+    MethodLookup ml = { .def_class = -1 };
     if (comp_ary_is_time(c, k) && !is_builtin_reopen(c->classes[k].name) &&
-        comp_method_in_chain(c, k, "==", &defcls) >= 0 && defcls >= 0 &&
-        !is_builtin_reopen(c->classes[defcls].name)) return 1;
+        cplan_implied_target(c, id, -1, k, "==", 0, &ml) >= 0 && ml.def_class >= 0 &&
+        !is_builtin_reopen(c->classes[ml.def_class].name)) return 1;
   }
   return 0;
 }
@@ -17594,7 +17590,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
     int r_niltyped = !r_nil && rt == TY_NIL && a0 != TY_NIL;
     /* `x == nil` / `x != nil` for any receiver */
     /* (`t != nil` on a Time subclass with its own ==: that == decides) */
-    if (!eq && (a_nil || a_niltyped) && rt == TY_TIME && recv >= 0 && program_timesub_defines_eq(c)) {
+    if (!eq && (a_nil || a_niltyped) && rt == TY_TIME && recv >= 0 && program_timesub_defines_eq(c, id)) {
       emit_timesub_ne(c, recv, argv[0], b);
       return 1;
     }
@@ -17610,7 +17606,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       /* The nil-typed operand's evaluation. As the RECEIVER it runs before the
          test, which a comma expresses; as the ARGUMENT it runs after the
          receiver, which needs the test's value held while it runs. */
-      if (a_nil && ot == TY_POLY && poly_nil_eq_is_users(c, eq)) {
+      if (a_nil && ot == TY_POLY && poly_nil_eq_is_users(c, id, eq)) {
         emit_poly_nil_eq_user(c, id, recv, eq, b);
         return 1;
       }
@@ -17988,14 +17984,15 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       /* no direct == : use <=> == 0 when the class supports Comparable */
       /* A synthesized != follows == before Comparable's fallback. */
       const CallPlan ep = cplan_user(c, id);
+      if (emit_delegate_undef_arm(c, id, recv, argc, argv, b)) return 1;
       if (ep.mi >= 0 && ep.delegate && !is_equality_name(ep.delegate)) {
         /* a `<=>` statically returning a non-{Integer,Float,nil} value is a
            protocol violation, caught at compile time (#2961) */
-        if (user_cmp_invalid_ret(c, ecid) != TY_UNKNOWN)
+        if (user_cmp_invalid_ret(c, id, recv, ecid) != TY_UNKNOWN)
           unsupported_feature(c, id, "Comparable operator on an object whose #<=> returns a non-Integer (protocol requires Integer or nil)");
         /* a `<=>` that can return nil: Comparable#== semantics -- identity is
            equal, an incomparable pair is false (never an error) */
-        if (user_cmp_needs_check(c, ecid)) {
+        if (user_cmp_needs_check(c, id, recv, ecid)) {
           int ta = hoist_boxed_rooted(c, recv), tb2 = hoist_boxed_rooted(c, argv[0]);
           buf_printf(b, "(%ssp_poly_cmp_eq(_t%d, _t%d))", eq ? "" : "!", ta, tb2);
           return 1;
@@ -18022,7 +18019,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
        CRuby's BasicObject#!= calls ==. The receiver reads as its Time here,
        so the boxed value's class (sp_poly_bsub_obj) picks the method at run
        time. */
-    if (!eq && rt == TY_TIME && recv >= 0 && program_timesub_defines_eq(c)) {
+    if (!eq && rt == TY_TIME && recv >= 0 && program_timesub_defines_eq(c, id)) {
       emit_timesub_ne(c, recv, argv[0], b);
       return 1;
     }

@@ -304,10 +304,10 @@ static void emit_struct_member_by_key(Compiler *c, ClassInfo *sc, const char *rt
 static int value_obj_compares(Compiler *c, int node) {
   TyKind t = comp_ntype(c, node);
   if (!ty_is_object(t)) return 0;
-  int cid = ty_object_class(t);
-  return cid >= 0 && (comp_method_in_chain(c, cid, "==", NULL) >= 0 ||
-                      comp_method_in_chain(c, cid, "===", NULL) >= 0 ||
-                      (comp_method_in_chain(c, cid, "<=>", NULL) >= 0 && class_is_comparable(c, cid)));
+  int cid = ty_object_class(t), host = ic_operand_host(c, node);
+  return cid >= 0 && (cplan_implied_target(c, host, node, cid, "==", 0, NULL) >= 0 ||
+                      cplan_implied_target(c, host, node, cid, "===", 0, NULL) >= 0 ||
+                      (cplan_implied_target(c, host, node, cid, "<=>", 0, NULL) >= 0 && class_is_comparable(c, cid)));
 }
 
 /* The object's class has an == of its own, or the one Comparable makes of
@@ -316,9 +316,9 @@ static int value_obj_compares(Compiler *c, int node) {
 static int value_obj_defines_eq(Compiler *c, int node) {
   TyKind t = comp_ntype(c, node);
   if (!ty_is_object(t)) return 0;
-  int cid = ty_object_class(t);
-  return cid >= 0 && (comp_method_in_chain(c, cid, "==", NULL) >= 0 ||
-                      (comp_method_in_chain(c, cid, "<=>", NULL) >= 0 && class_is_comparable(c, cid)));
+  int cid = ty_object_class(t), host = ic_operand_host(c, node);
+  return cid >= 0 && (cplan_implied_target(c, host, node, cid, "==", 0, NULL) >= 0 ||
+                      (cplan_implied_target(c, host, node, cid, "<=>", 0, NULL) >= 0 && class_is_comparable(c, cid)));
 }
 
 /* The program defines its own == on a class named `cn` (a reopen or a

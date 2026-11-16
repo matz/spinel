@@ -8417,10 +8417,11 @@ static void emit_pm_deconstruct_keys_call_arg(Compiler *c, int mi, int pat, Buf 
 /* A user object a Regexp's === converts through its #to_str (CRuby's
    rb_check_string_type): boxed, the runtime reaches the method through the
    conversion bridge, so only a #to_str the bridge carries qualifies. Any
-   other keeps the arms' plain no-match answer. */
-static int re_case_eq_obj_subject(Compiler *c, TyKind pt) {
+   other keeps the arms' plain no-match answer. The plan answers the to_str at
+   the when or pattern whose Regexp cond makes the call. */
+static int re_case_eq_obj_subject(Compiler *c, int cond, TyKind pt) {
   /* the conversion bridge's own admission: a value-type copy has no row */
-  return ty_is_object(pt) && class_has_to_str_shape(c, ty_object_class(pt)) &&
+  return ty_is_object(pt) && class_has_to_str_shape(c, ic_operand_host(c, cond), cond, ty_object_class(pt)) &&
          !comp_ty_value_obj(c, pt);
 }
 
@@ -10896,6 +10897,7 @@ static int case_subject_needs_root(Compiler *c, TyKind pt, const int *whens, int
 static int emit_case_container_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   if (!ty_is_array(pt) && !ty_is_obj_array(pt) && !ty_is_hash(pt)) return 0;
   TyKind wat = comp_ntype(c, cond);
+  int wn = ic_operand_host(c, cond);
   char stmp[24]; snprintf(stmp, sizeof stmp, "_t%d", t);
   if (ty_is_array(wat) || ty_is_obj_array(wat) || ty_is_hash(wat) || wat == TY_POLY || wat == TY_UNKNOWN) {
     /* the arm is the receiver of `===`, so it is the left operand: an
@@ -10907,12 +10909,12 @@ static int emit_case_container_eq(Compiler *c, int cond, int t, TyKind pt, Buf *
     buf_puts(b, ")");
   }
   else if (ty_is_object(wat) &&
-           (comp_method_in_chain(c, ty_object_class(wat), "===", NULL) >= 0 ||
-            comp_method_in_chain(c, ty_object_class(wat), "==", NULL) >= 0)) {
+           (cplan_implied_target(c, wn, cond, ty_object_class(wat), "===", 0, NULL) >= 0 ||
+            cplan_implied_target(c, wn, cond, ty_object_class(wat), "==", 0, NULL) >= 0)) {
     /* an object arm of a class with its own === (or ==) is asked with the
        Array or Hash as the argument: a matcher may accept it */
-    int emi = comp_method_in_chain(c, ty_object_class(wat), "===", NULL);
-    if (emi < 0) emi = comp_method_in_chain(c, ty_object_class(wat), "==", NULL);
+    int emi = cplan_implied_target(c, wn, cond, ty_object_class(wat), "===", 0, NULL);
+    if (emi < 0) emi = cplan_implied_target(c, wn, cond, ty_object_class(wat), "==", 0, NULL);
     Scope *ems = &c->scopes[emi];
     LocalVar *eplv = ems->nparams > 0 ? scope_local(ems, ems->pnames[0]) : NULL;
     TyKind pty = eplv ? eplv->type : TY_POLY;
@@ -10941,12 +10943,23 @@ static int emit_when_user_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   TyKind wpt = comp_ntype(c, cond);
   int wcid = ty_is_object(wpt) ? ty_object_class(wpt) : -1;
   if (wcid < 0 || comp_ty_value_obj(c, wpt)) return 0;
-  int wdef = -1;
-  int weq = comp_method_in_chain(c, wcid, "===", &wdef);
+  /* the === the when's row makes on cond (rb_equal's == where the class has
+     none of its own), the plan's answer at the when */
+  int wn = ic_operand_host(c, cond);
+  MethodLookup wml;
+  int weq = cplan_implied_target(c, wn, cond, wcid, "===", 0, &wml);
   /* Object#=== is rb_equal: the arm itself matches before its == runs */
   int via_eq = weq < 0;
-  if (weq < 0) weq = comp_method_in_chain(c, wcid, "==", &wdef);
+  if (weq < 0 && wml.why == MLW_RECORD) {
+    /* the arm's class undefines === where the record places it: CRuby's call of it raises */
+    buf_printf(b, "((void)_t%d, ", t);
+    emit_nomethod_raise(c, cond, -1, "===", "(sp_bool)0", b);
+    buf_puts(b, ")");
+    return 1;
+  }
+  if (weq < 0) weq = cplan_implied_target(c, wn, cond, wcid, "==", 0, &wml);
   if (weq < 0) return 0;
+  int wdef = wml.def_class;
   Scope *ws = &c->scopes[weq];
   LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
   /* a parameter the case subject alone typed (infer_block_params) takes it
@@ -10986,19 +10999,20 @@ static int emit_when_user_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
 /* `when <cond>` against the subject in _t<t>: the subject class's own ===
    or == when cond has its type, else a native === or the pointer compare. */
 static void emit_case_obj_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
+  int wn = ic_operand_host(c, cond);
   if (ty_is_object(pt) && comp_ntype(c, cond) == pt &&
-      (comp_method_in_chain(c, ty_object_class(pt), "===", NULL) >= 0 ||
-       comp_method_in_chain(c, ty_object_class(pt), "==", NULL) >= 0)) {
+      (cplan_implied_target(c, wn, cond, ty_object_class(pt), "===", 0, NULL) >= 0 ||
+       cplan_implied_target(c, wn, cond, ty_object_class(pt), "==", 0, NULL) >= 0)) {
     /* `case obj when other`: Ruby asks `other === obj`, which for a class
        defining #== is that method. Comparing the C structs instead did
        not compile for a value-type object and compared addresses for a
        heap one (#3820). */
     int ecid = ty_object_class(pt);
-    int emi = comp_method_in_chain(c, ecid, "===", NULL);
+    int emi = cplan_implied_target(c, wn, cond, ecid, "===", 0, NULL);
     /* Object#=== is rb_equal: the same heap object matches before its ==
        runs (a value-type object has no identity to compare) */
     int ident = emi < 0 && !comp_ty_value_obj(c, pt);
-    if (emi < 0) emi = comp_method_in_chain(c, ecid, "==", NULL);
+    if (emi < 0) emi = cplan_implied_target(c, wn, cond, ecid, "==", 0, NULL);
     Scope *ems = &c->scopes[emi];
     LocalVar *eplv = ems->nparams > 0 ? scope_local(ems, ems->pnames[0]) : NULL;
     TyKind pty = eplv ? eplv->type : TY_POLY;
@@ -11069,17 +11083,17 @@ static void emit_case_obj_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
 /* (a module's own: no object has a module for its class, and the module's
    methods are emitted in the classes that include it, which have arms of
    their own) */
-static int when_boxed_arm_class(Compiler *c, int k) {
+static int when_boxed_arm_class(Compiler *c, int cond, int k) {
   /* a class with no instance never matches the arm's cls_id test (#10902) */
   return c->classes[k].instantiated &&
          !c->classes[k].is_native_class && !comp_class_is_module(c, &c->classes[k]) &&
-         comp_method_in_chain(c, k, "===", NULL) >= 0;
+         cplan_implied_target(c, ic_operand_host(c, cond), cond, k, "===", 0, NULL) >= 0;
 }
 static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, int tpw, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
-    if (!when_boxed_arm_class(c, k)) continue;
-    int wdef = -1;
-    int weq = comp_method_in_chain(c, k, "===", &wdef);
+    if (!when_boxed_arm_class(c, cond, k)) continue;
+    MethodLookup wml = { .def_class = -1 };
+    int weq = cplan_implied_target(c, ic_operand_host(c, cond), cond, k, "===", 0, &wml), wdef = wml.def_class;
     if (weq < 0 || wdef < 0) continue;
     Scope *ws = &c->scopes[weq];
     LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
@@ -11150,9 +11164,9 @@ static int emit_when_class_cmethod_eq(Compiler *c, int cond, int t, TyKind pt, B
   return emit_class_cmethod_eqq(c, const_node_class_index(c, cond), sref, pt, cond, 0, b);
 }
 
-static int when_boxed_has_user_arm(Compiler *c) {
+static int when_boxed_has_user_arm(Compiler *c, int cond) {
   for (int k = 0; k < c->nclasses; k++)
-    if (when_boxed_arm_class(c, k)) return 1;
+    if (when_boxed_arm_class(c, cond, k)) return 1;
   return 0;
 }
 
@@ -11165,7 +11179,7 @@ static void emit_when_boxed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b
      captures after it allocates. */
   buf_printf(b, "({ sp_RbVal _t%d = ", tpw); emit_boxed(c, cond, b);
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tpw);
-  if (when_boxed_has_user_arm(c)) emit_when_boxed_user_arms(c, cond, t, pt, tpw, b);
+  if (when_boxed_has_user_arm(c, cond)) emit_when_boxed_user_arms(c, cond, t, pt, tpw, b);
   buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC", tpw, tpw);
   buf_printf(b, " ? sp_poly_truthy(sp_penum_call1((sp_Proc *)_t%d.v.p, ", tpw);
   if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
@@ -11765,9 +11779,11 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
                equal instances of a class that defines one (#3741). */
             TyKind wpt = comp_ntype(c, conds[j]);
             int wcid = ty_is_object(wpt) ? ty_object_class(wpt) : -1;
-            int wdef = -1;
-            int weq = wcid >= 0 ? comp_method_in_chain(c, wcid, "===", &wdef) : -1;
-            if (weq < 0 && wcid >= 0) weq = comp_method_in_chain(c, wcid, "==", &wdef);
+            int wn = ic_operand_host(c, conds[j]);
+            MethodLookup wml = { .def_class = -1 };
+            int weq = wcid >= 0 ? cplan_implied_target(c, wn, conds[j], wcid, "===", 0, &wml) : -1;
+            if (weq < 0 && wcid >= 0) weq = cplan_implied_target(c, wn, conds[j], wcid, "==", 0, &wml);
+            int wdef = wml.def_class;
             if (weq >= 0 && wdef >= 0 && !comp_ty_value_obj(c, wpt)) {
               buf_printf(b, "%s(", mc_method(c, &c->scopes[weq]));
               emit_expr(c, conds[j], b);

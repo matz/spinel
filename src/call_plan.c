@@ -201,6 +201,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->method_call = 0;
   p->send_fallback = -1;
   p->delegate = NULL;
+  p->delegate_undef = 0;
   p->mi = mi; p->owner_ci = (short)owner;
   p->via = (unsigned char)via; p->dispatch = (unsigned char)dispatch;
   p->by_name = 0;
@@ -1231,15 +1232,25 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     mtab_leave(c);
     const char *via_op = sub_answers ? NULL : builtin_operator_delegate(name);
     if (via_op && sp_streq(via_op, "<=>") && !class_is_comparable(c, cid)) via_op = NULL;
-    int dmi = via_op ? call_target(c, id, cid, via_op, 0, NULL) : -1;
+    /* (the delegate is an implied call of the operator: asked as the emitter asks it, which sees an undef) */
+    MethodLookup dl = { .def_class = -1 };
+    const char *gone = NULL;
+    int dmi = via_op ? cplan_implied_target(c, id, recv, cid, via_op, 0, &dl) : -1;
+    if (via_op && dmi < 0 && dl.kind == ML_NONE && dl.why == MLW_RECORD) gone = via_op;
     if (dmi < 0 && via_op) {
       via_op = builtin_operator_delegate(via_op);
       if (via_op && sp_streq(via_op, "<=>") && !class_is_comparable(c, cid)) via_op = NULL;
-      dmi = via_op ? call_target(c, id, cid, via_op, 0, NULL) : -1;
+      dmi = via_op ? cplan_implied_target(c, id, recv, cid, via_op, 0, &dl) : -1;
+      if (via_op && dmi < 0 && dl.kind == ML_NONE && dl.why == MLW_RECORD) gone = via_op;
     }
     if (dmi >= 0) {
       cplan_set(p, dmi, cid, UC_INST, cplan_dispatch_form(c, id, cid, via_op, 1));
       p->delegate = via_op;
+      return;
+    }
+    if (gone) {
+      p->delegate = gone;
+      p->delegate_undef = 1;
       return;
     }
     /* a reader a subclass overrides with a method: the switch reaches the

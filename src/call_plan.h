@@ -90,6 +90,7 @@ typedef struct {
   const char *bowner;      /* UC_SUPER with no program method (mi -1): the builtin class or module whose method the super reaches (MethodLookup.bowner); in a class method, the owner of a definition hook (cplan_core_hook) */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */
+  unsigned char delegate_undef; /* mi is -1 and delegate (`<=>`, behind a Comparable operator) is a method the record proves undefined where the call runs (cplan_implied_target's MLW_RECORD): the call raises CRuby's NoMethodError naming it */
   int vis_cell;             /* the history cell + 1 whose visibility cell guards the call (a top-level def's visibility only the run tells, cplan_root_top_def), 0 for none */
 } CallPlan;
 

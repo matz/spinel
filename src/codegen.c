@@ -14296,34 +14296,29 @@ void emit_obj_to_ary_call(Compiler *c, int mi, int defc, const char *v, Buf *b) 
    (desugar_inherited_aliases): that answers with the method it reaches.
    Only the forwarder is followed: a `def deconstruct` written after the
    alias replaces it, and is the method that runs. */
-int comp_deconstruct_method(Compiler *c, int pat, int cid, int *defcls) {
-  int dc = -1;
-  MtabMark mt_was = mtab_push_in(c, pat);   /* (pat, a pattern node, owns the call; -1: no pattern) */
-  MethodLookup ml_mi = { .def_class = dc };
-  int mi = call_target(c, -1, cid, "deconstruct", CT_METHODS | CT_SHARED, &ml_mi);
-  dc = ml_mi.def_class;
-  if (mi < 0 || dc < 0) { mtab_pop(c, mt_was); return -1; }
+int comp_deconstruct_method(Compiler *c, int site, int cid, int *defcls) {
+  /* (site, a pattern node, makes the call and is the plan's site; -1: a dispatcher's, with none) */
+  MethodLookup ml_mi = { .def_class = -1 };
+  int mi = cplan_implied_target(c, site, site, cid, "deconstruct", 0, &ml_mi), dc = ml_mi.def_class;
+  if (mi < 0 || dc < 0) return -1;
   ClassInfo *dci = &c->classes[dc];
   int dn = c->scopes[mi].def_node;
   int fwd = dn >= 0 && nt_int(c->nt, dn, "alias_forwarder", 0);
   for (int k = 0; fwd && k < dci->naliases; k++)
     if (dci->alias_new[k] && sp_streq(dci->alias_new[k], "deconstruct#inherited")) {
-      MethodLookup ml_mi = { .def_class = dc };
-      mi = call_target(c, -1, dc, "deconstruct#inherited", CT_METHODS | CT_SHARED, &ml_mi);
-      dc = ml_mi.def_class;
+      MethodLookup ml_fwd = { .def_class = -1 };
+      mi = cplan_implied_target(c, site, site, dc, "deconstruct#inherited", 0, &ml_fwd);
+      dc = ml_fwd.def_class;
       break;
     }
-  mtab_pop(c, mt_was);
   if (mi >= 0 && defcls) *defcls = dc;
   return mi;
 }
 /* Class cid's #deconstruct_keys: the pattern pat's call (see comp_deconstruct_method). */
-int comp_deconstruct_keys_method(Compiler *c, int pat, int cid, int *defcls) {
-  MtabMark mt_was = mtab_push_in(c, pat);
+int comp_deconstruct_keys_method(Compiler *c, int site, int cid, int *defcls) {
   MethodLookup ml_mi = { .def_class = defcls ? *defcls : -1 };
-  int mi = call_target(c, -1, cid, "deconstruct_keys", CT_METHODS | CT_SHARED, &ml_mi);
+  int mi = cplan_implied_target(c, site, site, cid, "deconstruct_keys", 0, &ml_mi);
   if (defcls) *defcls = ml_mi.def_class;
-  mtab_pop(c, mt_was);
   return mi;
 }
 /* The scope of class i's own #deconstruct when it has one this TU emits
@@ -24256,7 +24251,7 @@ static int class_has_user_binop(Compiler *c, int k) {
      derives: a boxed `m == n` (a block parameter, a hash value, a
      `when FIVE`) reaches it only through the table */
   if (call_target(c, -1, k, "<=>", CT_METHODS | CT_SHARED, NULL) >= 0 && call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL) < 0) return 1;
-  if (!class_has_coerce_shape(c, k)) return 0;
+  if (!class_has_coerce_shape(c, -1, -1, k)) return 0;
   for (int u = 0; cops[u]; u++)
     if (call_target(c, -1, k, cops[u], CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
   return 0;

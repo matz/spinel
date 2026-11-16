@@ -1633,7 +1633,7 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
     int sub_str = 0, sub_other = 0;
     for (int k = 0; k < c->nclasses; k++) {
       if (k == xcm || !is_descendant(c, k, xcm)) continue;
-      int ko = call_target(c, -1, k, "to_s", CT_OWN | CT_SHARED, NULL);
+      int ko = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), k, "to_s", CT_OWN, NULL);
       if (ko < 0) continue;
       if ((TyKind)c->scopes[ko].ret == TY_STRING) sub_str = 1;
       else sub_other = 1;

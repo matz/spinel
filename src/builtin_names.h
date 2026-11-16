@@ -202,6 +202,7 @@ int is_value_constructor(const char *recv, const char *meth); /* Hash.new, Array
 int is_array_new(const char *recv, const char *meth); /* Array.new */
 int is_array_class_name(const char *n); /* Array */
 int is_string_index(const char *n); /* index rindex */
+int is_rindex_name(const char *n);  /* rindex */
 int is_modulo_alias(const char *n); /* % modulo */
 int is_append_concat(const char *n); /* << concat */
 int is_socket_address(const char *n); /* addr peeraddr */

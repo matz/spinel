@@ -2,7 +2,7 @@
 # siteless_readers_check.sh -- the static rule beside method_table_check.sh (#10866, step 2, siteless readers): the
 # dispatchers and predicates that no call stands behind (the per-class switches of the generated C, the passes'
 # surveys of "does any class define X") ask the method tables with no site, through the plan's no-site ask
-# (call_target, call_answers and call_attr_target with id -1; CT_SHARED marks the asks of the readers the call sites share; cplan_implied_target with id -1 is the same ask for an implied name: a survey of the program's classes, a table switch or a memo, each with no call behind it), and name no table
+# (call_target, call_answers and call_attr_target with id -1; CT_SHARED marks the asks of the readers the call sites share; a literal -1 passed as a reader's `site` parameter is the same ask for an implied name: a survey of the program's classes, a table switch or a memo, each with no call behind it), and name no table
 # primitive themselves. The dynamic check lists a versioned answer of such an ask as an `unasked` table answer.
 #
 #   tools/siteless_readers_check.sh
@@ -10,7 +10,7 @@
 # Two directions. Fails, naming file:function:line, when the body of one of the functions below names a primitive of
 # the method tables (comp_method_in_chain and its kin, comp_reader_in_chain, comp_main_method, comp_method_index ...).
 # And fails, naming file:function, when a function that is not on the list makes a no-site ask for a method scope
-# (CT_SHARED, or cplan_implied_target with id -1): a new reader of that kind joins the list, so that none drops its reads from --method-table-check
+# (CT_SHARED, or a literal -1 passed in the position of a parameter named `site` of any function that declares one: cplan_implied_target and the readers that ask it): a new reader of that kind joins the list, so that none drops its reads from --method-table-check
 # unseen. The rule checks this named list, not the callees: a helper they call is covered by the dynamic check
 # (method_table_check.sh, whose `pass` family counts a read made with no node open).
 set -u
@@ -19,8 +19,15 @@ cd "$ROOT" || exit 2
 FUNCS="
 src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
-src/analyze_util.c:class_has_coerce_shape
+src/codegen_util.c:exc_text_override_calls_super
 src/analyze_util.c:class_coerce_emittable
+src/codegen.c:emit_cls_user_display_hooks
+src/codegen.c:emit_struct_default_inspect
+src/codegen.c:obj_arm_calls_own_inspect1
+src/codegen.c:obj_deconstruct_keys_method
+src/codegen.c:pp_prints_by_rt
+src/codegen.c:user_deconstruct_scope
+src/compiler.c:prog_has_cls_user_display
 src/analyze.c:pdn_lookup
 src/analyze.c:ur_iter_overridden
 src/analyze.c:synth_enum_to_a
@@ -62,12 +69,8 @@ src/codegen.c:class_range_linear
 src/codegen.c:class_succ_dispatched
 src/codegen.c:class_opens_cmp
 src/codegen.c:conv_bridge_callee
-src/codegen.c:display_method_scope
-src/codegen.c:comp_deconstruct_method
-src/codegen.c:comp_deconstruct_keys_method
 src/codegen_call.c:root_reopen_defines
 src/compiler.c:mixin_answers_first
-src/compiler.c:cls_user_display_mi
 src/compiler.c:toplevel_mod_method
 src/codegen_call_exception.c:emit_call_exception_arms
 src/compiler.c:comp_poly_arm_reader_any
@@ -87,14 +90,60 @@ for ent in $FUNCS; do
     bad=1
   fi
 done
-# the other direction: every function that asks the plan for a method scope with no site is on the list
+# the other direction: every function that asks the plan for a method scope with no site is on the list: by CT_SHARED, or
+# structurally, by a literal -1 passed in the position of a parameter named `site` (the reader's site node) of any
+# function that declares one (cplan_implied_target, the display and conversion readers, ...)
+rbout=$(ruby -Eascii-8bit:ascii-8bit -e '
+  files = Dir["src/*.c"].sort
+  texts = (files + Dir["src/*.h"]).map { |f| [f, File.read(f)] }
+  decl = {}   # name => index of its `site` parameter
+  texts.each do |f, t|
+    t.scan(/\b(\w+)\s*\(([^()]*\bint\s+site\b[^()]*)\)\s*[;{]/m) do |name, params|
+      i = params.split(",").index { |q| q =~ /\bsite\s*\z/ }
+      decl[name] = i if i
+    end
+  end
+  call = /\b(#{decl.keys.map { |n| Regexp.escape(n) }.join("|")})\s*\(/
+  head = /^[a-zA-Z_][^;=\n]*?(\w+)\(.*$/
+  texts.each do |f, t|
+    next unless f.end_with?(".c")
+    heads = []   # [offset, function] of each definition header, in file order
+    t.scan(head) do
+      m = $~
+      heads << [m.begin(0), m[1]] unless m[0] =~ /\A(typedef|return|else|if|for|while|switch)\b/ || m[0] =~ /;\s*\z/
+    end
+    t.scan(call) do
+      name = $1; at = $~.end(0)
+      depth = 0; arg = +""; args = []
+      i = at
+      while i < t.size
+        ch = t[i]
+        if ch == "(" then depth += 1; arg << ch
+        elsif ch == ")" then break if depth == 0; depth -= 1; arg << ch
+        elsif ch == "," && depth == 0 then args << arg; arg = +""
+        else arg << ch end
+        i += 1
+      end
+      args << arg
+      a = args[decl[name]]
+      next unless a && a.gsub(%r{/\*.*?\*/}m, "").strip == "-1"
+      cur = heads.reverse.find { |o, _| o < at }
+      puts "#{f}:#{cur[1]}" if cur && cur[1] != name
+    end
+  end
+') || { echo "siteless-readers-check: the site-parameter scan failed"; exit 2; }
+missing=$(
+{
+printf "%s\n" "$rbout"
 for f in src/*.c; do
-  case "$f" in src/call_plan.c) continue ;; esac
+  [ "$f" = src/call_plan.c ] && continue
   awk -v f="$f" '
     /^[a-zA-Z_][^;=]*[(]/ && !/^(typedef|return|else|if|for|while|switch|#)/ && !/;[ \t]*$/ { x = $0; sub(/[(].*/, "", x); n = split(x, w, /[ *]+/); fn = w[n] }
-    (/CT_SHARED/ || /cplan_implied_target\(c, -1,/) && fn != "" { print f ":" fn }' "$f"
-done | sort -u | while IFS= read -r ent; do
-  printf '%s\n' $FUNCS | grep -Fxq -- "$ent" || { echo "siteless-readers-check: $ent asks the plan with no site (CT_SHARED) and is not on the readers' list"; exit 3; }
-done || bad=1
+    /CT_SHARED/ && fn != "" { print f ":" fn }' "$f"
+done
+} | sed -e "/^\$/d" | sort -u | while IFS= read -r ent; do
+  printf '%s\n' $FUNCS | grep -Fxq -- "$ent" || echo "siteless-readers-check: $ent asks the plan with no site and is not on the readers' list"
+done)
+if [ -n "$missing" ]; then printf '%s\n' "$missing"; bad=1; fi
 [ $bad -eq 0 ] && echo "siteless-readers-check: ok"
 exit $bad

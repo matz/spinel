@@ -322,11 +322,12 @@ static int value_obj_defines_eq(Compiler *c, int node) {
 }
 
 /* The program defines its own == on a class named `cn` (a reopen or a
-   prepended module). */
-static int program_defines_eq_on(Compiler *c, const char *cn) {
+   prepended module): the == the include?, index or rindex call id makes on
+   its elements, asked of the plan there. */
+static int program_defines_eq_on(Compiler *c, int id, const char *cn) {
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].name || !sp_streq(c->classes[k].name, cn)) continue;
-    int mi = comp_method_in_chain(c, k, "==", NULL);
+    int mi = cplan_implied_target(c, id, -1, k, "==", 0, NULL);
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
         !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0))
       return 1;
@@ -335,19 +336,19 @@ static int program_defines_eq_on(Compiler *c, const char *cn) {
 }
 /* ... Integer#== or Float#==, which every compare of an element of the
    typed Array `rt` runs */
-static int program_defines_elem_eq(Compiler *c, TyKind rt) {
-  return program_defines_eq_on(c, rt == TY_INT_ARRAY ? "Integer" : "Float");
+static int program_defines_elem_eq(Compiler *c, int id, TyKind rt) {
+  return program_defines_eq_on(c, id, rt == TY_INT_ARRAY ? "Integer" : "Float");
 }
 /* ... Rational#==, which Integer#== and Float#== hand a Rational to. A
    `class Rational` body's methods are kept on Object. */
-static int program_defines_rational_eq(Compiler *c) {
-  return program_defines_eq_on(c, "Rational") || program_defines_eq_on(c, "Object");
+static int program_defines_rational_eq(Compiler *c, int id) {
+  return program_defines_eq_on(c, id, "Rational") || program_defines_eq_on(c, id, "Object");
 }
 /* The program defines an == that the compare of an element of the typed
    Array `rt` with a needle of kind `nk` would run. The general Array's
    scan does not call it. */
-static int program_defines_num_eq(Compiler *c, TyKind rt, TyKind nk) {
-  return program_defines_elem_eq(c, rt) || (nk == TY_RATIONAL && program_defines_rational_eq(c));
+static int program_defines_num_eq(Compiler *c, int id, TyKind rt, TyKind nk) {
+  return program_defines_elem_eq(c, id, rt) || (nk == TY_RATIONAL && program_defines_rational_eq(c, id));
 }
 
 /* The general Array's == scan over the typed Integer or Float Array held in
@@ -357,14 +358,14 @@ static int program_defines_num_eq(Compiler *c, TyKind rt, TyKind nk) {
    is found by value as CRuby's == finds it. Where the program defines an
    == the scan would skip, that kind of needle stays "not there": every
    needle for Integer#== or Float#==, a Rational for Rational#==. */
-static void emit_typed_arr_scan(Compiler *c, TyKind rt, int ta, int tv, int inc, int rev, Buf *b) {
+static void emit_typed_arr_scan(Compiler *c, int id, TyKind rt, int ta, int tv, int inc, int rev, Buf *b) {
   const char *miss = inc ? "FALSE" : "sp_box_nil()";
-  if (program_defines_elem_eq(c, rt)) { buf_puts(b, miss); return; }
+  if (program_defines_elem_eq(c, id, rt)) { buf_puts(b, miss); return; }
   const char *bk = rt == TY_INT_ARRAY ? "SP_BUILTIN_INT_ARRAY" : "SP_BUILTIN_FLT_ARRAY";
   /* a String, Symbol, true, false or nil is never == to a number: no walk */
   buf_printf(b, "(_t%d.tag == SP_TAG_STR || _t%d.tag == SP_TAG_SYM || _t%d.tag == SP_TAG_BOOL || _t%d.tag == SP_TAG_NIL ||"
                 " sp_poly_is_strbuf(_t%d)) ? %s : ", tv, tv, tv, tv, tv, miss);
-  if (program_defines_rational_eq(c))
+  if (program_defines_rational_eq(c, id))
     buf_printf(b, "(sp_poly_is_rational(_t%d) || sp_poly_is_brat(_t%d)) ? %s : ", tv, tv, miss);
   if (inc) buf_printf(b, "sp_poly_arr_include_eq(sp_box_nullable_obj((void *)_t%d, %s), _t%d)", ta, bk, tv);
   else buf_printf(b, "sp_box_oint(sp_poly_arr_index_val(sp_box_nullable_obj((void *)_t%d, %s), _t%d, %d))", ta, bk, tv, rev);
@@ -3203,14 +3204,14 @@ else {
      so the needle goes boxed into the general Array's scan, which does --
      unless the program defines its own == there, which the scan skips. */
   int num_needle = argc == 1 && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
-                   (a0 == TY_RATIONAL || a0 == TY_BIGINT) && !program_defines_num_eq(c, rt, a0);
+                   (a0 == TY_RATIONAL || a0 == TY_BIGINT) && !program_defines_num_eq(c, id, rt, a0);
   if (num_needle && (is_index_query(name) || is_membership_alias(name))) {
     /* the receiver held across the needle, which may allocate */
     int ta = ++g_tmp, tv = ++g_tmp;
     buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
     buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
-    emit_typed_arr_scan(c, rt, ta, tv, is_membership_alias(name), sp_streq(name, "rindex"), b);
+    emit_typed_arr_scan(c, id, rt, ta, tv, is_membership_alias(name), is_rindex_name(name), b);
     buf_puts(b, "; })");
     { *out = 1; return 1; }
   }
@@ -3253,7 +3254,7 @@ else {
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (_t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_NIL)"
                     " ? sp_FloatArray_%s(_t%d, _t%d) : ", tv, tv, tv, tv,
                  sp_streq(name, "rindex") ? "rindex_key" : "index_key", ta, tv);
-      emit_typed_arr_scan(c, rt, ta, tv, 0, sp_streq(name, "rindex"), b);
+      emit_typed_arr_scan(c, id, rt, ta, tv, 0, is_rindex_name(name), b);
       buf_puts(b, "; })");
       { *out = 1; return 1; }
     }
@@ -3267,7 +3268,7 @@ else {
       /* a boxed nil finds the array's nil elements */
       if (elem_nil_sentinel(c, recv, rt))
         buf_printf(b, "_t%d.tag == SP_TAG_NIL ? sp_box_oint(sp_IntArray_index_nil(_t%d, %d)) : ", tv, ta, sp_streq(name, "rindex") ? 1 : 0);
-      if (a0 == TY_POLY) emit_typed_arr_scan(c, rt, ta, tv, 0, sp_streq(name, "rindex"), b);
+      if (a0 == TY_POLY) emit_typed_arr_scan(c, id, rt, ta, tv, 0, is_rindex_name(name), b);
       else buf_puts(b, "sp_box_nil()");
       buf_puts(b, "; })");
       { *out = 1; return 1; }
@@ -3341,7 +3342,7 @@ else {
     buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (_t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_NIL)"
                   " ? sp_FloatArray_index_key(_t%d, _t%d).tag != SP_TAG_NIL : ", tv, tv, tv, tv, ta, tv);
-    emit_typed_arr_scan(c, rt, ta, tv, 1, 0, b);
+    emit_typed_arr_scan(c, id, rt, ta, tv, 1, 0, b);
     buf_puts(b, "; })");
     { *out = 1; return 1; }
   }
@@ -3384,7 +3385,7 @@ else {
       buf_printf(b, "; _t%d.tag == SP_TAG_INT ? sp_IntArray_%s_o(_t%d, sp_oint_of(_t%d.v.i)) : ", tv, fn, ta, tv);
       if (elem_nil_sentinel(c, recv, rt))   /* as the index arm above */
         buf_printf(b, "_t%d.tag == SP_TAG_NIL ? sp_IntArray_%s_o(_t%d, sp_oint_nil()) : ", tv, fn, ta);
-      if (isinc && satr.kind == RK_BOXED) emit_typed_arr_scan(c, rt, ta, tv, 1, 0, b);
+      if (isinc && satr.kind == RK_BOXED) emit_typed_arr_scan(c, id, rt, ta, tv, 1, 0, b);
       else buf_puts(b, isinc ? "FALSE" : "sp_oint_nil()");
       buf_puts(b, "; })");
       if (!isinc) oint_close(c, id, b);

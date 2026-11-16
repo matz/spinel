@@ -334,6 +334,8 @@ const char *builtin_operator_delegate(const char *name) {
   return NULL;
 }
 
+int is_rindex_name(const char *n) { return n && sp_streq(n, "rindex"); }
+
 int is_equality_name(const char *n) {
   return sp_streq(n, "equal?") || sp_streq(n, "eql?") || sp_streq(n, "==");
 }

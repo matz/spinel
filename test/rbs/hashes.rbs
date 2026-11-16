@@ -1,6 +1,9 @@
-# Hash[K, V] is supported only when K is String or Symbol. The value
-# type collapses to int / string / poly. A non-String/Symbol key takes
-# the whole signature out of subset (see dropped_types.rbs).
+# Hash[K, V] is supported when K is String, Symbol or Integer. The value
+# type collapses to int / string / poly for a String key, to poly for a
+# Symbol key, and to int / string / poly for an Integer key, whose boxed
+# form is the poly-keyed Hash the analysis infers for such a literal.
+# Any other key takes the whole signature out of subset (see
+# dropped_types.rbs).
 class Hashes
   def si: (Hash[String, Integer]) -> Hash[String, Integer]
   def ss: (Hash[String, String]) -> Hash[String, String]
@@ -8,4 +11,8 @@ class Hashes
   def yi: (Hash[Symbol, Integer]) -> Hash[Symbol, Integer]
   def ys: (Hash[Symbol, String]) -> Hash[Symbol, String]
   def yp: (Hash[Symbol, Float]) -> Hash[Symbol, Float]
+  def ii: (Hash[Integer, Integer]) -> Hash[Integer, Integer]
+  def is: (Hash[Integer, String]) -> Hash[Integer, String]
+  def ip: (Hash[Integer, Float]) -> Hash[Integer, Float]
+  def iu: (Hash[Integer, untyped]) -> Hash[Integer, untyped]
 end

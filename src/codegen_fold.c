@@ -8077,6 +8077,17 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
           emit_expr(c, provided, out); buf_puts(out, ")");
           return;
         }
+        /* A typed hash into a parameter an RBS signature types as the
+           boxed-value Hash (`Hash[Integer, untyped]`) that the binding could
+           not widen where it is built (bind_args_params): an element of an
+           Array, a `select`'s value. A raw pointer of another layout has no
+           conversion, and the call raised TypeError; it is rebuilt boxed, as
+           the String-keyed case above is. */
+        if (pt == TY_POLY_POLY_HASH && p && p->rbs_seeded && ty_is_hash(at) && at != TY_POLY_POLY_HASH) {
+          buf_puts(out, "sp_PolyPolyHash_from_poly(");
+          emit_boxed(c, provided, out); buf_puts(out, ")");
+          return;
+        }
         /* When the param is a typed hash pointer but the caller passes a poly
            or nil value (e.g. an uninit ivar), extract .v.p from the RbVal.
            sp_box_nil() stores v.i=0 so .v.p is NULL, which hash getters handle

@@ -9772,6 +9772,14 @@ static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, i
     LocalVar *p = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
     if (!p || cext_scope(c, mi)) continue;
     int anode = layout_plain_arg(c, m, argv, &L, i);
+    /* a typed Hash passed where the declaration says the boxed-value one
+       (`Hash[Integer, untyped]` and `{1 => 2}`): the caller's hash is that
+       variant, as a foreign store through the parameter makes it below. A
+       copy at the call lost the stores the method makes and the default. */
+    if (p->rbs_seeded && anode >= 0 && (p->rbs_type != TY_UNKNOWN ? p->rbs_type : p->type) == TY_POLY_POLY_HASH) {
+      TyKind at0 = infer_type(c, anode);
+      if (ty_is_hash(at0) && at0 != TY_POLY_POLY_HASH) changed |= widen_arg_hash(c, anode);
+    }
     if (p->rbs_seeded && (anode < 0 || param_seed_holds_arg(c, p, anode, infer_type(c, anode)))) {
       /* the declaration types the parameter; an empty-`{}`-only local passed
          here still takes the Hash it declares, as it takes an inferred

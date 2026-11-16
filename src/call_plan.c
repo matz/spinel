@@ -5130,7 +5130,10 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
 /* See call_plan.h. */
 int cplan_undef_stops(Compiler *c, int id, int cls, const char *name) {
   MethodLookup ml = { .def_class = -1 };
-  if (!comp_is_undeffed_in_chain(c, cls, name)) return 0;
+  mtab_enter(c);   /* (the plan's own read: whether an undef on the chain takes the name away, before its answer is asked) */
+  int undef = comp_is_undeffed_in_chain(c, cls, name);
+  mtab_leave(c);
+  if (!undef) return 0;
   int e = call_target(c, id, cls, name, 0, &ml);
   return e < 0 || ml.kind != ML_ENTRY || c->scopes[e].entry != ENTRY_DISPATCH;
 }

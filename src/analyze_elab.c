@@ -11125,9 +11125,20 @@ static int lr_late_reopening(Compiler *c, int cls, int open, int node) {
   return made >= 0 && open >= 0 && open != made &&
          (comp_class_is_module(c, &c->classes[cls]) || elab_class_live_at(c, cls, 0, elab_point_of(c, node)));
 }
-/* Each mixin's early bit (LrMixin.early), once, as the record is made: from the map's conditions of a statement
-   (elab_point_may) and lr_rta's first instances, facts of the load phase as the record holds it, whatever later
-   passes make of the calls that make an object (a `send(:new)` counts as the `new` it becomes) */
+/* Is def v of class cls's (sg: its singleton's) one no call on an object of cls, or of a class below it, runs ahead
+   of: at a statement the record places, where no such object may exist yet (for a module, in the body that made
+   it)? Not one a method body makes, one in a builder's block or a block run later, nor one outside a class body. */
+static int lr_def_early(Compiler *c, int cls, int sg, const LrDef *v) {
+  LoadRecord *r = c->lrec;
+  const LrStmt *s = v->unplaced || v->body ? NULL : lr_stmt_of(r, v->node);
+  if (!s || s->frame < 0 || cls >= c->nclasses) return 0;
+  if (comp_class_is_module(c, &c->classes[cls])) return r->st[s->frame].node == c->classes[cls].def_node;
+  return !elab_class_live_at(c, cls, sg, elab_point_of(c, v->node));
+}
+/* Each mixin's and each def's early bit (LrMixin.early, LrDef.early), once, as the record is made: from the map's
+   conditions of a statement (elab_point_may) and lr_rta's first instances, facts of the load phase as the record
+   holds it, whatever later passes make of the calls that make an object (a `send(:new)` counts as the `new` it
+   becomes) */
 static void lr_early_settle(Compiler *c) {
   LoadRecord *r = elab_fresh(c);
   for (int k = LR_MAIN; k + 1 < r->ncls; k++) {
@@ -11135,6 +11146,11 @@ static void lr_early_settle(Compiler *c) {
     for (int j = 0; j < kc->nmix; j++)
       kc->mix[j].early = !elab_point_may(c, kc->mix[j].node) && !lr_late_reopening(c, k, kc->mix[j].open, kc->mix[j].node);
   }
+  for (int i = 0; i < r->nhist; i++)
+    for (int j = 0; r->hist[i].a >= 0 && j < r->hist[i].n; j++) {
+      LrDef *v = &r->hist[i].v[j];
+      if (v->kind == LR_DEF || v->kind == LR_DEFINE_METHOD) v->early = (unsigned char)lr_def_early(c, r->hist[i].a, r->hist[i].b, v);
+    }
   r->hgen++;
 }
 /* See analyze.h. */
@@ -11145,6 +11161,36 @@ static void lr_early_settle(Compiler *c) {
    (LrMixin.early)? */
 int elab_mixin_may_not_run(const LrMixin *m) {
   return !m->applied || m->cond || !m->early;
+}
+/* Does class cls mix module mod in by a mixin of its own (an include or a prepend) that surely runs ahead of any call
+   on an object of cls (elab_mixin_may_not_run)? */
+static int lr_mixes_early(LoadRecord *r, int cls, int mod) {
+  const LrClass *k = lr_class(r, cls);
+  for (int j = 0; k && j < k->nmix; j++)
+    if (k->mix[j].mod == mod && (k->mix[j].kind == LR_INCLUDE || k->mix[j].kind == LR_PREPEND) &&
+        !elab_mixin_may_not_run(&k->mix[j]))
+      return 1;
+  return 0;
+}
+/* See analyze.h. The def's version, by its node, in the history of whatever class or module holds it: the scope's
+   own def, or the module def an includer's copy (or a prepend's) shares, which needs its class's mixin of that
+   module to run early as well. */
+int elab_def_late(Compiler *c, int mi) {
+  LoadRecord *r = c->lrec;
+  const Scope *s = mi >= 0 && mi < c->nscopes ? &c->scopes[mi] : NULL;
+  if (!r || !s || s->class_id < 0 || s->def_node < 0 || comp_class_is_module(c, &c->classes[s->class_id])) return 1;
+  const LrVers *x = lr_vers(r, comp_scope_user_name(s));
+  int found = 0;
+  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink) {
+    const LrHist *h = &r->hist[i];
+    for (int j = 0; h->b == s->is_cmethod && j < h->n; j++) {
+      const LrDef *v = &h->v[j];
+      if ((v->kind != LR_DEF && v->kind != LR_DEFINE_METHOD) || v->node != s->def_node) continue;
+      if (!v->early || (h->a != s->class_id && !lr_mixes_early(r, s->class_id, h->a))) return 1;
+      found = 1;
+    }
+  }
+  return !found;
 }
 static int lr_brings_kernel(Compiler *c, int ref, int certain) {
   LoadRecord *r = c->lrec;

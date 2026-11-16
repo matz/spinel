@@ -1917,8 +1917,8 @@ static int ver_kern_test(Compiler *c, const VerIds *cells) {
   return test;
 }
 /* What a Kernel guard asks of the classes below the holder cls: the call id of name (how: 2 for a super), the ncells
-   cells cls's chain reads, cls's method_missing mm, and the parent map pm of the nodes the guards leave */
-typedef struct { int id, cls, ncells, mm, how; const char *name; const int *pm; } VerKernSelf;
+   cells cls's chain reads, and cls's method_missing mm */
+typedef struct { int id, cls, ncells, mm, how; const char *name; } VerKernSelf;
 /* `case when self.instance_of?(D) then <arm(D)> ... else els end`, with an arm for each class D below x->cls that arm
    gives a node for; els where it gives none */
 static int ver_kern_by_self(Compiler *c, const VerKernSelf *x, int (*arm)(Compiler *c, const VerKernSelf *x, int d), int els) {
@@ -1934,23 +1934,26 @@ static int ver_kern_by_self(Compiler *c, const VerKernSelf *x, int (*arm)(Compil
   free(is); free(then);
   return els;
 }
-/* Does method scope mi stand in a reopening of its class: a body of the class's (elab_class_bodies) that is not the
-   statement that made it? The record counts a def there from the start, where code may have run ahead of it */
-static int ver_def_in_reopening(Compiler *c, int mi, const int *pm) {
-  const Scope *s = &c->scopes[mi];
-  int nb = 0, made = s->class_id >= 0 ? c->classes[s->class_id].def_node : -1;
-  const LrOpen *o = made >= 0 ? elab_class_bodies(c, s->class_id, &nb) : NULL;
-  for (int a = s->def_node; a >= 0 && pm; a = pm[a])
-    for (int i = 0; i < nb; i++) if (a == o[i].body) return o[i].node != made;
-  return 0;
+/* May a call on a D run ahead of the def that makes method scope mi (elab_def_late)? For a version entry (one a call
+   whose version only the run tells reaches, or an open history's), ahead of the def of any version of its class
+   its arms call (ver_entry_targets) */
+static int ver_kern_late(Compiler *c, int mi) {
+  if (mi < 0 || (c->scopes[mi].entry != ENTRY_DISPATCH && c->scopes[mi].entry != ENTRY_NAMED)) return elab_def_late(c, mi);
+  int to[VER_MAX_ARMS + 1], n = ver_entry_targets(c, mi, to, NULL), any = 0;
+  for (int k = 0; k < n; k++)
+    if (to[k] >= 0 && to[k] != mi && c->scopes[to[k]].class_id == c->scopes[mi].class_id) {
+      if (elab_def_late(c, to[k])) return 1;
+      any = 1;
+    }
+  return !any;
 }
 /* Does a call of x->name on a D find a method of its own, below x->cls, which the holder's chain does not hold: CRuby
    calls it, whatever Kernel says (not a super, which looks above the holder's method; not one behind an undef of the
-   name, where the lookup ends; not one a reopening makes) */
+   name, where the lookup ends; not one a call may run ahead of: ver_kern_late) */
 static int ver_kern_own(Compiler *c, const VerKernSelf *x, int d) {
   int own = x->how != 2 ? comp_method_in_chain(c, d, x->name, NULL) : -1, oc = own >= 0 ? c->scopes[own].class_id : -1;
   return oc >= 0 && oc != x->cls && is_descendant(c, oc, x->cls) && is_descendant(c, d, oc) &&
-         !comp_is_undeffed_in_chain(c, d, x->name) && !ver_def_in_reopening(c, own, x->pm);
+         !comp_is_undeffed_in_chain(c, d, x->name) && !ver_kern_late(c, own);
 }
 /* The test of self's Kernel where self is a D (ver_kern_by_self; the holder's own is the else): true where D finds a
    method of its own (ver_kern_own), whose call the guard's then arm makes, or where D surely has Kernel
@@ -1988,11 +1991,11 @@ static void ver_pin(Compiler *c, int node, int scope, int vis);
 /* The guard's arm where no cell is set and self is a D (ver_kern_by_self; the holder's, its method_missing or the raise,
    is the else): D's own method_missing where it is another than the holder's, called with a copy of the call's operands
    and block and pinned to it (ver_pin), as the holder's chain does not hold it; none where D finds a method of its own
-   (the test's arm is true there), or where D's method_missing is made in a reopening, which the record counts from the
-   start, though the call may run ahead of it */
+   (the test's arm is true there), or where a call may run ahead of the def that makes D's method_missing
+   (ver_kern_late) */
 static int ver_kern_mm_arm(Compiler *c, const VerKernSelf *x, int d) {
   int dm = cplan_mm_method(c, -1, d, 0), call;
-  if (dm < 0 || dm == x->mm || ver_kern_own(c, x, d) || ver_def_in_reopening(c, dm, x->pm)) return -1;
+  if (dm < 0 || dm == x->mm || ver_kern_own(c, x, d) || ver_kern_late(c, dm)) return -1;
   ver_pin(c, call = ver_kern_mm_call(c, x->id, x->name), dm, 0);
   return call;
 }
@@ -2014,7 +2017,7 @@ static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int
     els = nops ? disp_ahead(nt, ops, nops, raise) : raise;
     free(ops);
   }
-  VerKernSelf x = { id, cls, cells.n, mm, how, name, pm };
+  VerKernSelf x = { id, cls, cells.n, mm, how, name };
   if (how != 2) els = ver_kern_by_self(c, &x, ver_kern_mm_arm, els);
   int ifn = disp_choose(nt, ver_kern_by_self(c, &x, ver_kern_test_arm, ver_kern_test(c, &cells)), id, els);
   nt_replace_child(nt, par, id, ifn);
@@ -11762,4 +11765,3 @@ int ver_entries_demand(Compiler *c) {
     ver_memo_drop(c);   /* (the versions kept before the entries and the writes are asked again) */
   return any || late;
 }
-

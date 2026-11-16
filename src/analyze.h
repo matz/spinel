@@ -285,6 +285,11 @@ typedef struct {
   unsigned char arm_vis; /* a version's: the visibility its face arm takes
                             (elab_version_vis, -1 for the run's), plus 2;
                             0 not asked yet */
+  unsigned char early;  /* a def's or a define_method's of a class: no
+                           object of the class, or of one below it, may
+                           exist where it runs, so no call on one runs
+                           ahead of it (lr_early_settle); 0 where one may,
+                           or where the record does not place it */
   int arm1;             /* a conditional def's dispatcher (cond_lone_disp): the
                            first of its arms (`name#__condN`, cond_arm) by
                            node, which runs where its branch does and makes
@@ -579,6 +584,9 @@ int elab_mixin_brings_kernel(Compiler *c, int ref);
 /* ...and surely, through mixins that surely run (an include under a condition does not count) */
 int elab_mixin_certain_kernel(Compiler *c, int ref);
 int elab_mixin_may_not_run(const LrMixin *m);   /* under a condition, after one that decides, or in a reopening that may run after an object of the class exists */
+/* May a call on an object of method scope mi's class, or of one below it, run ahead of the def or define_method
+   that makes mi (LrDef.early: one that may exist where it runs, or one the record does not place)? */
+int elab_def_late(Compiler *c, int mi);
 /* A number that changes with every change to the record's histories and mixins (a cache of an answer read from them is of it) */
 unsigned long elab_mixin_gen(Compiler *c);
 /* call_target's questions about call id read the record's facts as its

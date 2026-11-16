@@ -1,0 +1,11 @@
+:nme
+:fwd_own
+:fwd_own
+[:fwd_miss, :respond_to_missing?]
+:nme
+:mod_own
+:mod_own
+[:mod_miss, :respond_to_missing?]
+:nme
+:cond_ran
+:nme

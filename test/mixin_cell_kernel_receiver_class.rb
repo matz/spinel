@@ -13,6 +13,47 @@ rescue ::NoMethodError
   ::Kernel.p :nme
 end
 
+# The classes whose own methods answer stand ahead of the first call that may
+# make an object of any class (a class method's include run on a class, an
+# object's singleton method): a def after one counts as one a call may run
+# ahead of, and keeps the holder's answer.
+
+# a subclass's own method_missing answers where no cell is set
+class MissPlain < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+  def u = respond_to_missing?(:y, true)
+end
+class MissPlainSub < MissPlain
+  def method_missing(n, *a) = [:plain_sub, n]
+end
+
+# a subclass that defines the name itself: its own method answers, whatever Kernel says
+class OwnName < BasicObject
+  def self.mix = include(::Kernel)
+  def t = respond_to_missing?(:x, false)
+end
+class OwnNameSub < OwnName
+  def respond_to_missing?(n, p) = :sub_own
+end
+class OwnNameDeep < OwnNameSub; end
+class OwnNameMiss < OwnName
+  def method_missing(n, *a) = [:miss, n]
+  def respond_to_missing?(n, p) = :miss_own
+end
+
+# an undef of the name below the subclass ends the lookup there
+class OwnUndef < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class OwnUndefSub < OwnUndef
+  def respond_to_missing?(n, p) = :sub_own
+end
+class OwnUndefLeaf < OwnUndefSub
+  undef_method :respond_to_missing?
+end
+
 # a class method's include run on a subclass, a deeper one, and one called by super
 class Mix < BasicObject
   def self.mix = include(::Kernel)
@@ -126,14 +167,6 @@ end
 class MissSub < Miss
   def method_missing(n, *a, &b) = [:sub, n, a.size, b ? b.call : nil]
 end
-class MissPlain < BasicObject
-  include ::Kernel if ::ARGV.size == 3
-  def t = respond_to_missing?(:x, false)
-  def u = respond_to_missing?(:y, true)
-end
-class MissPlainSub < MissPlain
-  def method_missing(n, *a) = [:plain_sub, n]
-end
 show { MissSub.new.t }
 show { Miss.new.t }
 show { MissPlainSub.new.u }
@@ -176,35 +209,11 @@ class LateCondSub; include ::Kernel; end
 show { LateCondSub.new.t }
 show { LateCond.new.t }
 
-# a subclass that defines the name itself: its own method answers, whatever Kernel says
-class OwnName < BasicObject
-  def self.mix = include(::Kernel)
-  def t = respond_to_missing?(:x, false)
-end
-class OwnNameSub < OwnName
-  def respond_to_missing?(n, p) = :sub_own
-end
-class OwnNameDeep < OwnNameSub; end
-class OwnNameMiss < OwnName
-  def method_missing(n, *a) = [:miss, n]
-  def respond_to_missing?(n, p) = :miss_own
-end
+# a subclass that defines the name itself, and an undef below it
 show { OwnNameSub.new.t }
 show { OwnNameDeep.new.t }
 show { OwnNameMiss.new.t }
 show { OwnName.new.t }
-
-# an undef of the name below the subclass ends the lookup there
-class OwnUndef < BasicObject
-  include ::Kernel if ::ARGV.size == 3
-  def t = respond_to_missing?(:x, false)
-end
-class OwnUndefSub < OwnUndef
-  def respond_to_missing?(n, p) = :sub_own
-end
-class OwnUndefLeaf < OwnUndefSub
-  undef_method :respond_to_missing?
-end
 show { OwnUndefSub.new.t }
 show { OwnUndefLeaf.new.t }
 

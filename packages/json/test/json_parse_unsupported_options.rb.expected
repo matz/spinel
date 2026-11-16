@@ -1,0 +1,13 @@
+unsupported JSON.parse option: array_class
+unsupported JSON.parse option: decimal_class
+unsupported JSON.parse option: object_class
+unsupported JSON.parse option: create_additions
+unsupported JSON.parse option: on_load
+unsupported JSON.parse option: on_load
+unsupported JSON.parse option: on_load
+unsupported JSON.parse option: object_class
+[{"x" => 1}]
+{"x" => 1}
+{"x" => 1}
+{"x" => 1}
+1

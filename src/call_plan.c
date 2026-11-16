@@ -1541,6 +1541,7 @@ int cplan_plain_ctx(void) {
 }
 
 static int cplan_capture_absent(Compiler *c, int id, int mi);
+static int cplan_main_capture_absent(Compiler *c, int id);
 static int cm_capture_class(Compiler *c, int id, const char **name);
 static int cplan_capture_gap(Compiler *c, int id);
 /* A bound Method already carries its target. Its arguments are bound by
@@ -1559,6 +1560,7 @@ CallPlan cplan_method_call(Compiler *c, int id) {
   if (mi >= 0) cplan_set(&p, mi, c->scopes[mi].class_id, c->scopes[mi].is_cmethod ? UC_CMETH : UC_INST, CP_DIRECT);
   if (mi >= 0 && c->scopes[mi].entry) p.dispatch = CP_SWITCH;
   p.absent = capture ? (unsigned char)cplan_capture_absent(c, id, mi) : 0;
+  if (capture && mi < 0 && !p.absent && cplan_main_capture_absent(c, id)) p.absent = CP_ABSENT_MAIN;
   if (p.absent && mi < 0) p.owner_ci = (short)cm_capture_class(c, id, NULL);
   p.method_node = mn;
   p.method_call = 1;
@@ -5713,6 +5715,17 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
   else if (cls < 0 || !(ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1) || cm_capture_never_made(c, id, cls, name)) ||
            cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL);
+}
+/* Does a receiverless capture of `sym` on main find no method where it runs (main's chain meets none: the main-chain
+   fact), though the program defines the name, only later (a def, an include or an extend that has not run)? Then its
+   NameError is main's singleton class's, as CRuby's. Not a name the core's Kernel answers (the capture binds that), nor
+   where a method_missing or a respond_to_missing? of the program may answer it. */
+static int cplan_main_capture_absent(Compiler *c, int id) {
+  const char *name = method_sym_arg(c, id);
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (!name || !name[0] || (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) || cplan_main_chain_step(c, id, name) != EMC_NONE ||
+      core_method_name_any(name) || bop_core_name(name) || !elab_method_versions(c, name)) return 0;
+  return an_name_binder_free(c, METHOD_MISSING_NAME) && an_name_binder_free(c, RESPOND_TO_MISSING_NAME);
 }
 /* Is ci's class method `name` defined wherever node at runs? */
 static int capture_live_at(Compiler *c, int at, int ci, const char *name) {

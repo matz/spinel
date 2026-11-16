@@ -59,10 +59,11 @@ typedef enum {
 
 /* CallPlan.absent: the side a `method(:sym)` that finds no method names in
    CRuby's NameError: an instance side ('K'), a class side ('#<Class:K>'),
-   or a module's class side before its singleton class is made ('Module');
+   or a module's class side before its singleton class is made ('Module'), or main's
+   singleton class (CP_ABSENT_MAIN: a name the program defines only later, or main's chain meets nothing of);
    untold: a module's, where the record cannot tell which of the last two,
    whose capture the plan refuses (cplan_refuse_resolve) */
-enum { CP_ABSENT_NONE, CP_ABSENT_INST, CP_ABSENT_SG, CP_ABSENT_MODULE, CP_ABSENT_UNTOLD };
+enum { CP_ABSENT_NONE, CP_ABSENT_INST, CP_ABSENT_SG, CP_ABSENT_MODULE, CP_ABSENT_UNTOLD, CP_ABSENT_MAIN };
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */

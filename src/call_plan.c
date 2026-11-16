@@ -7975,21 +7975,26 @@ static int cplan_body_empty(Compiler *c, int mi) {
   if (!bb) return nt_kind(c->nt, b) == NK_NilNode;
   return n == 0 || (n == 1 && nt_kind(c->nt, bb[0]) == NK_NilNode);
 }
-/* Are the parameters of method sc positional and without defaults (a rest and a
-   block allowed)? Nothing about them runs code or binds anything the call did not pass. */
-static int ct_params_plain(Compiler *c, const Scope *sc) {
+/* Are the parameters of method sc positional, and without defaults unless
+   defaults_ok (the call fills every one: a default that never runs binds
+   nothing), a rest and a block allowed, and a keyword rest if kwrest_ok (a
+   `super` that passes it on)? Nothing about them runs code or binds anything
+   the call did not pass. */
+static int ct_params_plain(Compiler *c, const Scope *sc, int kwrest_ok, int defaults_ok) {
   int pn = sc->def_node >= 0 ? nt_ref(c->nt, sc->def_node, "parameters") : -1, nk = 0;
-  if (pn >= 0 && (nt_ref(c->nt, pn, "keyword_rest") >= 0 || (nt_arr(c->nt, pn, "keywords", &nk), nk > 0))) return 0;
-  for (int i = 0; i < sc->nparams; i++)
+  if (pn >= 0 && ((nt_ref(c->nt, pn, "keyword_rest") >= 0 && !kwrest_ok) || (nt_arr(c->nt, pn, "keywords", &nk), nk > 0))) return 0;
+  for (int i = 0; !defaults_ok && i < sc->nparams; i++)
     if (i != sc->rest_idx && sc->pdefault && sc->pdefault[i] >= 0) return 0;
   return 1;
 }
 /* Does the super call sup (a `super`, or the builtin-lowered call of it) of
    method sc pass on exactly what sc received: its parameters in order, a rest
    parameter splatted, no keywords, and its caller's block (super_forwards_caller_block)? */
-static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup) {
+static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int argc, int open) {
   const NodeTable *nt = c->nt;
-  if (!ct_params_plain(c, sc)) return 0;
+  /* (the call fills every positional parameter: a default never runs) */
+  int pos = sc->nparams - (sc->rest_idx >= 0) - (sc->kwrest_idx >= 0);
+  if (!ct_params_plain(c, sc, 1, !open && argc >= pos)) return 0;
   int an = 0, args = nt_ref(nt, sup, "arguments"), np = 0, blk = nt_ref(nt, sup, "block");
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   /* (the lowered call holds its block pass among its arguments) */
@@ -7998,6 +8003,15 @@ static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup) {
   if (nt_kind(nt, sup) == NK_ForwardingSuperNode) return 1;
   for (int i = 0; i < an; i++) {
     if (nt_kind(nt, av[i]) == NK_BlockArgumentNode) continue;   /* (judged above) */
+    if (nt_kind(nt, av[i]) == NK_KeywordHashNode) {   /* (`**kw`, the keyword rest passed on) */
+      int en = 0, np0 = np;
+      const int *el = nt_arr(nt, av[i], "elements", &en);
+      int kv = en == 1 && nt_kind(nt, el[0]) == NK_AssocSplatNode ? nt_ref(nt, el[0], "value") : -1;
+      if (kv < 0 || nt_kind(nt, kv) != NK_LocalVariableReadNode || sc->kwrest_idx < 0 || np0 != sc->kwrest_idx ||
+          !nt_str(nt, kv, "name") || !sp_streq(nt_str(nt, kv, "name"), sc->pnames[sc->kwrest_idx])) return 0;
+      np++;
+      continue;
+    }
     int ex = nt_kind(nt, av[i]) == NK_SplatNode ? nt_ref(nt, av[i], "expression") : av[i];
     if (np >= sc->nparams || ex < 0 || nt_kind(nt, ex) != NK_LocalVariableReadNode || !nt_str(nt, ex, "name") ||
         !sp_streq(nt_str(nt, ex, "name"), sc->pnames[np]) || (nt_kind(nt, av[i]) == NK_SplatNode) != (np == sc->rest_idx)) return 0;
@@ -8010,7 +8024,7 @@ static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup) {
    it received? Then the builtin's own initialize runs as if it were not there.
    A reopening's own def is never one: its `super` skips the builtin (the
    reopening replaced it) and reaches BasicObject's. */
-static int ct_init_forwards(Compiler *c, int mi, int ci) {
+static int ct_init_forwards(Compiler *c, int mi, int ci, int argc, int open) {
   const Scope *sc = &c->scopes[mi];
   int b = sc->body, n = 0;
   const int *bb = b >= 0 && nt_kind(c->nt, b) == NK_StatementsNode ? nt_arr(c->nt, b, "body", &n) : NULL;
@@ -8018,7 +8032,7 @@ static int ct_init_forwards(Compiler *c, int mi, int ci) {
   NodeKind k = nt_kind(c->nt, bb[0]);
   const char *cn = k == NK_CallNode ? nt_str(c->nt, bb[0], "name") : NULL;
   return k == NK_SuperNode || k == NK_ForwardingSuperNode || (cn && is_initialize_name(comp_scope_user_name(sc)) && sp_streq(cn, sc->name) && cplan_builtin_call(c, bb[0]))
-         ? ct_super_passes_params(c, sc, bb[0]) : 0;
+         ? ct_super_passes_params(c, sc, bb[0], argc, open) : 0;
 }
 /* What the chain of program initializes of builtin class ci reduces to from
    start (cplan_builtin_new_form's rule): each takes what the call passes
@@ -8030,10 +8044,10 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
     if (!sc->is_prepend_copy && !sc->is_include_copy && cplan_runs_before_def_node(c, id, sc->def_node)) continue;
     /* (each takes what the call passes, or CRuby raises ArgumentError there) */
     if (!(open ? sc->rest_idx >= 0 && sc->nrequired == 0 : cplan_def_takes_argc(c, mi, argc))) return BNF_REFUSE;
-    if (ct_init_forwards(c, mi, ci)) continue;
+    if (ct_init_forwards(c, mi, ci, argc, open)) continue;
     /* (the first that does not forward: an empty one builds the builtin's empty value, if it has one, from what the call
        passes; an open list's splat, keywords and block pass are evaluated by the rewrite, which refuses what it cannot) */
-    return cplan_body_empty(c, mi) && builtin_empty_new(c->classes[ci].name) && !sc->yields && ct_params_plain(c, sc)
+    return cplan_body_empty(c, mi) && builtin_empty_new(c->classes[ci].name) && !sc->yields && ct_params_plain(c, sc, 0, 0)
            ? BNF_EMPTY : BNF_REFUSE;
   }
   return BNF_OWN;

@@ -4885,7 +4885,11 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
     if (!k) unsupported(c, id, "array literal (element type)");
     int t = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", k, t, k);
+    /* a literal of n elements and no splat takes its buffer at n */
+    int lit_n = array_has_new_cap(k) ? n : 0;
+    for (int j = 0; j < n && lit_n; j++) if (nt_kind(nt, els[j]) == NK_SplatNode) lit_n = 0;
+    if (lit_n) buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_cap(%d);\n", k, t, k, lit_n);
+    else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", k, t, k);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
     if (sp_streq(k, "Str") && str_lit_reads_late(c, els, n)) {
@@ -4992,7 +4996,11 @@ else {
     const int *els = nt_arr(nt, id, "elements", &n);
     int t = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_%sHash *_t%d = sp_%sHash_new();\n", hn, t, hn);
+    /* a literal of n pairs and no `**` takes its tables at n (sp_hash_cap_for) */
+    int lit_n = n;
+    for (int j = 0; j < n && lit_n; j++) if (nt_kind(nt, els[j]) == NK_AssocSplatNode) lit_n = 0;
+    if (lit_n) buf_printf(g_pre, "sp_%sHash *_t%d = sp_%sHash_new_cap(%d);\n", hn, t, hn, lit_n);
+    else buf_printf(g_pre, "sp_%sHash *_t%d = sp_%sHash_new();\n", hn, t, hn);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
     int sym_poly = (repr_hash_is(hr, TY_SYMBOL, TY_POLY) || repr_hash_is(hr, TY_STRING, TY_POLY));

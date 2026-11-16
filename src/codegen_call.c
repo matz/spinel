@@ -13899,11 +13899,11 @@ void emit_raise_class_value(Compiler *c, int kn, int mn, Buf *b) {
     free(pdpre.p); free(ab.p);
   }
   ctor_arity_emit(&aerr, b);
-  buf_printf(b, "default: break; } if (_t%d.tag == SP_TAG_OBJ) sp_raise_exc((sp_Exception *)_t%d.v.p); ",
-             rt, rt);
+  buf_printf(b, "default: break; } if (_t%d.tag == SP_TAG_OBJ) %s(sp_Exception *)_t%d.v.p); ",
+             rt, raise_fn("sp_raise_exc"), rt);
   /* (a String message is kept as its handle, sp_raise_poly_msg_h) */
-  if (mn >= 0) buf_printf(b, "sp_raise_poly_msg_h(_t%d, _t%d); })", kt, mt);
-  else buf_printf(b, "sp_raise_poly(_t%d); })", kt);
+  if (mn >= 0) buf_printf(b, "%s_t%d, _t%d); })", raise_fn("sp_raise_poly_msg_h"), kt, mt);
+  else buf_printf(b, "%s_t%d); })", raise_fn("sp_raise_poly"), kt);
 }
 
 /* The same, for arguments hoisted into the boxed temps `atmp`. */
@@ -15454,10 +15454,8 @@ int exc_reopen_initialize(Compiler *c, int ci) {
    the first slot with the message and the rest with their defaults ran
    the body with the message in the wrong slot, or with a required
    parameter it was never given.
-   An explicit `cause:` the raise staged (sp_explicit_cause) is held aside
-   while the initialize runs: a raise the initialize rescues would take
-   that cause as its own and clear it, and the exception raised after it
-   would have none. */
+   An explicit `cause:` is not staged while the initialize runs: the
+   raise's own call stages it once the exception is built (raise_fn). */
 void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg_node, Buf *b) {
   Scope *im = &c->scopes[initm];
   int lo, hi, argc = msg_node >= 0;
@@ -15469,15 +15467,13 @@ void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg
     buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\"); (sp_Exception *)0; })", am);
     return;
   }
-  int te = ++g_tmp, tc = ++g_tmp, ts = ++g_tmp;
+  int te = ++g_tmp;
   buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", (&(\"\\xff\")[1])); SP_GC_ROOT(_t%d); ", te, c->classes[ci].name, te);
-  buf_printf(b, "void *_t%d = sp_explicit_cause; int _t%d = sp_explicit_cause_set; SP_GC_ROOT(_t%d); "
-                "sp_explicit_cause = NULL; sp_explicit_cause_set = 0; ", tc, ts, tc);
   buf_printf(b, "%s(_t%d", mc_method(c, im), te);
   if (args >= 0) emit_args_filled(c, initm, args, ", ", b);
   else emit_args_filled_argv(c, initm, argc ? &msg_node : NULL, argc, -1, ", ", b);
   if (ctor_init_takes_block(c, initm)) buf_puts(b, ", NULL");
-  buf_printf(b, "); sp_explicit_cause = _t%d; sp_explicit_cause_set = _t%d; _t%d; })", tc, ts, te);
+  buf_printf(b, "); _t%d; })", te);
 }
 
 /* Klass.try_convert(x) on a boxed x: whether x already is one of the

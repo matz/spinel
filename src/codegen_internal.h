@@ -106,6 +106,9 @@ static inline const char *isa_const_qualname(const NodeTable *nt, int arg, char 
 extern Buf *g_pre;
 extern int  g_indent;
 extern int  g_tmp;
+/* a raise's explicit cause temp (codegen_call_exception.c) */
+extern int  g_raise_cz;
+const char *raise_fn(const char *fn);
 /* one representation: the String operands now being rendered are held across
    a block the program runs (emit_call sets it for a call with a block,
    emit_stmt_inner clears it for the statements inside), so a handle's read

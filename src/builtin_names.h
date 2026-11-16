@@ -765,6 +765,7 @@ int is_core_change_call(const char *n);    /* class_eval .. module_exec include 
 int is_singleton_reach_call(const char *n);/* define_singleton_method extend singleton_class instance_eval instance_exec: give an object methods of its own */
 int is_singleton_class_maker(const char *n, int argc); /* singleton_class extend define_singleton_method instance_variable_set class_variable_set private_class_method public_class_method refine, module_function with names: make a module's singleton class */
 int is_method_naming_call(const char *n);  /* define_method define_singleton_method alias_method remove_method undef_method attr*: give or take a method its argument names */
+int is_attr_name(const char *n);           /* attr attr_reader attr_writer attr_accessor: the Module methods that define accessors */
 int is_attr_decl_reader(const char *n);    /* attr attr_reader attr_accessor, and Spinel's class-body attribute attributes: declare a reader of each name */
 int is_attr_decl_writer(const char *n);    /* attr_writer attr_accessor attribute attributes: declare a writer of each name */
 int class_method_vis_of_name(const char *n); /* private_class_method public_class_method: BVIS_PRIVATE / BVIS_PUBLIC, else 0 */

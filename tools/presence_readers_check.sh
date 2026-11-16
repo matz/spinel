@@ -9,7 +9,8 @@
 #   tools/presence_readers_check.sh
 #
 # Fails, naming file:function:line, when the body of one of the functions below names a primitive of the method
-# tables (comp_method_in_class and its kin, comp_is_undeffed_in_chain, comp_*_vis*). The rule checks this named list,
+# tables (comp_method_in_class and its kin, comp_is_undeffed_in_chain, comp_is_reader and its kin, comp_*_vis*) or a
+# ClassInfo array of methods (undefs, vis_names, aliases, readers, writers and their counts). The rule checks this named list,
 # not the callees: a helper they call is covered by the dynamic check (method_table_check.sh, whose presence family
 # is a FAIL_FAMILY and counts any other read made under a respond_to? or a method_defined?).
 set -u
@@ -33,12 +34,14 @@ src/codegen_call.c:rt_probe_unfounded
 src/codegen_call.c:root_reopen_method_vis
 src/codegen_call.c:emit_io_pick_public
 src/codegen_call.c:emit_io_reopen_responds
+src/codegen_call.c:emit_class_value_responds_helper
+src/codegen_call_class.c:emit_refl_method_defined
+src/analyze_desugar.c:desugar_respond_to_probe
 src/codegen_call_class.c:object_reopen_responds_name
 src/codegen_call_class.c:emit_object_reopen_responds
 src/codegen_call_class.c:rtr_lists_build
 src/codegen_call_class.c:rtr_lists
 src/codegen_call_class.c:rtr_undef
-src/codegen_call_class.c:rtr_omit_root
 src/codegen_call_class.c:rtr_omitted
 src/codegen_call_class.c:emit_respond_to_runtime_name
 src/codegen_call_class.c:root_method_vis
@@ -46,7 +49,8 @@ src/codegen_call_object.c:emit_blank_slate_defined_ask
 src/codegen_expr.c:defined_super_reaches
 src/analyze_util.c:io_reopen_defs
 "
-PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain|method_vis_declared|cmethod_vis_declared|name_is_sg_alias_only)[(]'
+PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|is_reader|is_writer|is_sg_reader|is_sg_writer|name_is_sg_alias_only|method_vis_in_chain|method_vis_declared|cmethod_vis_declared|method_vis|cmethod_vis)[(]'
+ARR='(->|[.])(undefs|nundefs|vis_names|vis_kinds|nvis|alias_new|alias_old|naliases|readers|nreaders|writers|nwriters|sg_readers|sg_writers|nsg_readers|nsg_writers)([^a-z_]|$)'
 bad=0
 for ent in $FUNCS; do
   f=${ent%%:*}; fn=${ent##*:}
@@ -54,7 +58,7 @@ for ent in $FUNCS; do
     !inb && $0 ~ "^(static )?[a-zA-Z].*[ *]" fn "[(]" && $0 !~ /;$/ { inb = 1 }
     inb { printf "%d: %s\n", NR, $0 }
     inb && /^}/ { inb = 0; found = 1 }
-    END { if (!found) print "0: function not found" }' "$f" | grep -E "$PRIM|function not found")
+    END { if (!found) print "0: function not found" }' "$f" | grep -E "$PRIM|$ARR|function not found")
   if [ -n "$out" ]; then
     printf '%s\n' "$out" | while IFS= read -r l; do echo "presence-readers-check: $f:$fn:$l"; done
     bad=1

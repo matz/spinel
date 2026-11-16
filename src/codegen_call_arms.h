@@ -172,7 +172,7 @@ extern const char *const respond_universal_all[]; /* public and private */
 int object_private_method_name(const char *qm);
 const char *const *object_private_method_names(void); /* NULL-terminated */
 int respond_to_runtime_reaches(Compiler *c, TyKind rt);
-int root_reopen_defines(Compiler *c, const char *qm);
+int root_reopen_defines(Compiler *c, int id, const char *qm);
 /* 1 when the program's reopen of the builtin class or module `cls` (its
    chain) defines `name`, as call_target answers call id (-1: no call asks) */
 int reopened_owns(Compiler *c, int id, const char *cls, const char *name);
@@ -362,8 +362,7 @@ int builtin_method_arity(const char *cls, const char *m, int *out);
 const char *builtin_method_params(const char *owner, const char *m, int *in_c);
 int builtin_method_known(const char *cls, const char *m);
 int core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
-int refl_builtin_rows_vis(Compiler *c, int ci, const char *m);   /* codegen_call_class.c */
-int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
+int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, int own, const char **owner);   /* codegen_call_class.c */
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
 const char *core_ancestor_step(const char *p, size_t *len);   /* codegen_call_class.c */
 void core_own_methods_each(const char *cls, size_t cl, void (*f)(void *, const char *, int), void *ud);

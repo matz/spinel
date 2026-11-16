@@ -3200,6 +3200,9 @@ int is_method_naming_call(const char *n) {
 }
 /* The attribute declarations (`attribute`/`attributes` are Spinel's own
    compile-time class-body declarations, accessors as attr_accessor's) */
+int is_attr_name(const char *n) {
+  return n && (sp_streq(n, "attr") || is_attr_reader_family(n) || is_attr_writer_family(n));
+}
 int is_attr_decl_reader(const char *n) {
   return n && (sp_streq(n, "attr") || is_attr_reader_family(n) || sp_streq(n, "attribute") || sp_streq(n, "attributes"));
 }

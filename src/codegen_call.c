@@ -20334,9 +20334,7 @@ static int rt_probe_unfounded(Compiler *c, int id, TyKind rt, const char *qm) {
   const char *const *anc = builtin_value_ancestry(rt);
   /* an undef_method of the name the value's own class's reopening has run where the call runs (the call plan) */
   int own = anc && qm ? comp_builtin_class_named(c, anc[0]) : -1;
-  CplanPresence upr = { 0 };
-  if (own >= 0) cplan_presence(c, id, own, 0, qm, &upr);
-  if (upr.undef) return 1;
+  if (own >= 0 && cplan_undef_at(c, id, own, qm) == 1) return 1;
   if (!anc || !qm || builtin_instance_method_known(anc[0], qm) ||
       builtin_instance_method_known("Object", qm)) return 0;
   int foreign = 0;
@@ -20348,7 +20346,7 @@ static int rt_probe_unfounded(Compiler *c, int id, TyKind rt, const char *qm) {
        before it had a row here (the probe's); the kinds that had one keep
        theirs. */
     int owns = call_target(c, id, k, qm, CT_REACH, NULL) >= 0;
-    if (!owns && (rt != TY_BOOL || call_target(c, -1, k, "respond_to_missing?", CT_METHODS, NULL) < 0)) continue;
+    if (!owns && (rt != TY_BOOL || call_target(c, -1, k, RESPOND_TO_MISSING_NAME, CT_METHODS, NULL) < 0)) continue;
     for (int a = 0; anc[a]; a++) if (sp_streq(anc[a], kn)) return 0;
     if (!owns) continue;
     if (is_builtin_reopen(kn)) foreign = 1;
@@ -20377,7 +20375,7 @@ static int rt_probe_unfounded(Compiler *c, int id, TyKind rt, const char *qm) {
     int a = 0;
     while (kn && anc[a] && !sp_streq(anc[a], kn)) a++;
     if (!kn || !anc[a]) continue;
-    if (call_target(c, -1, k, "respond_to_missing?", CT_METHODS, NULL) >= 0) return 0;
+    if (call_target(c, -1, k, RESPOND_TO_MISSING_NAME, CT_METHODS, NULL) >= 0) return 0;
     const char *al = comp_resolve_alias(c, k, qm);
     if (al && !sp_streq(al, qm)) return 0;
     if (mixes_in_builtin_module(c, k, 0)) return 0;
@@ -20497,7 +20495,8 @@ static int class_responds_to(Compiler *c, int ci, const char *qm, int id) {
     if (pr.table) return 1;
   }
   return class_responds_builtin(c, ci, qm);
-}/* ...with none of its program's class methods: the builtin ones */
+}
+/* ...with none of its program's class methods: the builtin ones */
 static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   int is_module = comp_class_is_module(c, &c->classes[ci]);
   /* A module's `module_function` methods are recorded class-level and were
@@ -20606,6 +20605,13 @@ static void class_value_name_once(Buf *b, Buf *seen, const char *nm) {
   buf_putn(seen, nm, n + 1);
   buf_puts(b, "\""); emit_c_escaped(b, nm); buf_puts(b, "\", ");
 }
+typedef struct { Compiler *c; Buf *b, *seen; } ClassValueNames;
+/* one class-side name of the call plan's list, left out where it is the compiler's own */
+static void class_value_name(void *ud, const char *name, int vis) {
+  const ClassValueNames *o = ud;
+  (void)vis;
+  if (!name_is_synth_method(o->c, name)) class_value_name_once(o->b, o->seen, name);
+}
 void class_value_responds_runtime(int tv, Buf *b) {
   buf_printf(b, " || sp_class_value_responds(_t%d, _n%d)", tv, tv);
 }
@@ -20634,30 +20640,15 @@ void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int
   }
   free(seen.p);
   buf_printf(b, "static sp_bool sp_class_value_responds(sp_RbVal v, const char *n) {\n  if (v.tag != SP_TAG_CLASS) return 0;\n  if (sp_str_in_list(n, (const char *const[]){%sNULL})) return 1;\n  sp_bool r = 0;\n  switch (v.cls_id) {", uni.p ? uni.p : "");
-  /* the class methods of the program, asked of each class's chain */
-  int ncm = 0, *cms = malloc(sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
-  for (int s = 0; s < c->nscopes; s++) {
-    const Scope *sc = &c->scopes[s];
-    /* (one the program compiles: an uncompiled one no dispatch arm calls) */
-    if (sc->name && sc->is_cmethod && sc->reachable && !sc->is_proc_form && !name_is_synth_method(c, sc->name)) cms[ncm++] = s;
-  }
+  /* the class methods of the program, asked of each class's chain: the names the call plan lists for the class's side */
   for (int k = 0; k < c->nclasses; k++) {
     if (k == comp_core_class(c, CORE_CLASS_REOPEN)) continue;
     int is_module = comp_class_is_module(c, &c->classes[k]);
     Buf nb;
     memset(&nb, 0, sizeof nb);
     memset(&seen, 0, sizeof seen);
-    for (int i = 0; i < ncm; i++)
-      if (comp_cmethod_in_chain(c, k, c->scopes[cms[i]].name, NULL) == cms[i])
-        class_value_name_once(&nb, &seen, c->scopes[cms[i]].name);
-    for (int p = k; p >= 0; p = c->classes[p].parent) {
-      ClassInfo *ci = &c->classes[p];
-      for (int r = 0; r < ci->nsg_readers; r++) class_value_name_once(&nb, &seen, ci->sg_readers[r]);
-      for (int w = 0; w < ci->nsg_writers; w++) {
-        char wn[260];
-        if (snprintf(wn, sizeof wn, "%s=", ci->sg_writers[w]) < (int)sizeof wn) class_value_name_once(&nb, &seen, wn);
-      }
-    }
+    ClassValueNames cvn = { c, &nb, &seen };
+    cplan_list_candidates(c, k, CT_CMETHOD, class_value_name, &cvn);
     free(seen.p);
     /* a class with no names of its own answers by the default's; a module
        answers neither Class's own methods nor the reopening's */
@@ -20677,7 +20668,6 @@ void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int
   if (cls_only.len) buf_printf(b, "sp_str_in_list(n, (const char *const[]){%sNULL}) || ", cls_only.p);
   if (reopen.len) buf_printf(b, "sp_str_in_list(n, (const char *const[]){%sNULL}) || ", reopen.p);
   buf_puts(b, "0; break; }\n  return r;\n}\n");
-  free(cms);
   free(uni.p); free(cls_only.p); free(reopen.p);
 }
 
@@ -34451,9 +34441,9 @@ int root_reopen_method_vis(Compiler *c, int id, int cid, const char *qm) {
     int k = comp_core_class(c, roots[u]);
     if (k < 0 || k == cid) continue;
     /* an undef here hides a lower root's method of that name; a Kernel reopening's defs land in Object's table */
-    if (name_list_has(c->classes[k].undefs, c->classes[k].nundefs, qm)) return -1;
     CplanPresence pr;
     PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
+    if (pr.undef) return -1;
     if (pk != PR_ABSENT && pr.table) return pr.vis;
   }
   return -1;
@@ -34515,7 +34505,7 @@ static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
   /* Object's private methods (exit, puts, raise) answer to include_all;
      one an Object reopening redefines is left as the chain reads it */
   if (!found) return object_private_method_name(qm) && !class_is_blank_slate(c, cid) &&
-                     !root_reopen_defines(c, qm) ? 1 : 0;
+                     !root_reopen_defines(c, id, qm) ? 1 : 0;
   return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
 }
 
@@ -34790,17 +34780,20 @@ int emit_respond_to_by_cls(Compiler *c, int id, int recv, const char *qm, int ar
   buf_puts(b, "; })");
   return 1;
 }
-/* Does a reopening of Object, Kernel or BasicObject define or undefine qm?
-   Then the name is left to the class chain, as it was read before Object's
-   private methods were answered. */
-int root_reopen_defines(Compiler *c, const char *qm) {
+/* Does a reopening of Object, Kernel or BasicObject define or undefine qm,
+   where call id runs (-1: anywhere in the program)? Then the name is left
+   to the class chain, as it was read before Object's private methods were
+   answered. A def the record proves has not run there is none yet. */
+int root_reopen_defines(Compiler *c, int id, const char *qm) {
   static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   for (int i = 0; roots[i] >= 0; i++) {
     int k = comp_core_class(c, roots[i]);
     if (k < 0) continue;
-    ClassInfo *kc = &c->classes[k];
-    if (call_target(c, -1, k, qm, CT_OWN, NULL) >= 0 || comp_is_reader(kc, qm)) return 1;
-    for (int u = 0; u < kc->nundefs; u++) if (sp_streq(kc->undefs[u], qm)) return 1;
+    CplanPresence pr;
+    cplan_table_presence(c, k, CT_REACH, qm, &pr);
+    if (!pr.table && !pr.undef) continue;   /* (the tables hold none: the record is asked only for a name they hold) */
+    PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
+    if ((pk != PR_ABSENT && pr.table) || pr.undef) return 1;
   }
   return 0;
 }
@@ -34849,11 +34842,11 @@ int bool_side_responds(Compiler *c, int id, const char *qm, int include_all, int
     }
     if (own[i] >= 0) any = 1;
   }
-  if (!any || root_reopen_defines(c, qm)) return 0;
+  if (!any || root_reopen_defines(c, id, qm)) return 0;
   /* (a respond_to_missing? answers too: left to the other paths) */
-  if (root_reopen_defines(c, "respond_to_missing?")) return 0;
+  if (root_reopen_defines(c, id, RESPOND_TO_MISSING_NAME)) return 0;
   for (int i = 0; i < 2; i++)
-    if (ks[i] >= 0 && call_target(c, -1, ks[i], "respond_to_missing?", CT_METHODS, NULL) >= 0) return 0;
+    if (ks[i] >= 0 && call_target(c, -1, ks[i], RESPOND_TO_MISSING_NAME, CT_METHODS, NULL) >= 0) return 0;
   if (include_all || !foldable) {
     if (object_private_method_name(qm)) return 0;
     for (int si = 0; si < c->nscopes; si++) {
@@ -34866,7 +34859,7 @@ int bool_side_responds(Compiler *c, int id, const char *qm, int include_all, int
   for (int i = 0; i < 2; i++) {
     CplanPresence pr = { 0 };
     if (ks[i] >= 0) cplan_presence(c, id, ks[i], 0, qm, &pr);
-    if (ks[i] >= 0 && (pr.undef || comp_is_reader(&c->classes[ks[i]], qm)))
+    if (ks[i] >= 0 && (pr.undef || call_attr_target(c, -1, ks[i], qm, CT_ATTR, NULL)))
       return 0;
     if (own[i] >= 0)
       ans[i] = pr.vis == SP_VIS_PUBLIC ? 1 : foldable ? include_all : 2;
@@ -34963,7 +34956,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
      own respond_to? keeps the answer below. */
   if (!resolved && foldable && include_all && recv >= 0 &&
       !(ty_is_object(rt) && call_target(c, id, ty_object_class(rt), RESPOND_TO_NAME, CT_METHODS, NULL) >= 0)) {
-    if (cplan_top_def_vis(c, id, qm) >= 0) resolved = yes = 1;
+    if (call_target(c, -1, -1, qm, CT_TOP, NULL) >= 0 && !cplan_top_def_absent(c, id, qm)) resolved = yes = 1;
   }
   /* Object's private methods (exit, puts, raise) are every object's, so a
      builtin value, a class value or a boxed one answers them to include_all,
@@ -34972,7 +34965,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
      undefines the name, one with its own respond_to?. A user object answers
      through its class chain below (obj_responds_answer). */
   if (!resolved && foldable && include_all && recv >= 0 && !ty_is_object(rt) && rt != TY_CLASS &&
-      object_private_method_name(qm) && !root_reopen_defines(c, qm)) {
+      object_private_method_name(qm) && !root_reopen_defines(c, id, qm)) {
     if (!private_answer_overridden(c, qm, rt)) resolved = yes = 1;
     /* the value's class picks, at run time (emit_call_reflection_arms) */
     else if (respond_to_runtime_reaches(c, rt)) return -1;

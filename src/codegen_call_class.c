@@ -308,42 +308,19 @@ static const CplanRtrLists *rtr_undef(Compiler *c, int k) {
    def of the program): a top-level def, or a method of an Object or Kernel reopening no class of the program
    defines itself, that the record proves has not run where the call runs, and no builtin answers (it would still).
    Only names with versions are asked. NULL, with *n 0, when none: the shared lists stand. */
-typedef struct { Compiler *c; int id; char ***v; int *n, *cap; } RtrOmit;
-/* a root reopening's name: left out when no class of the program defines it and the record proves it has not run */
-static void rtr_omit_root(void *ud, const char *name) {
-  const RtrOmit *o = ud;
-  Compiler *c = o->c;
-  CplanPresence pr;
-  int defined = 0, r = -1;
-  for (int k = 0; k < c->nclasses && !defined; k++)
-    defined = !(c->classes[k].name && is_object_root(c->classes[k].name)) && call_answers(c, -1, k, name, 0, NULL);
-  if (defined || !elab_method_versions(c, name) || builtin_object_method_known(name) || builtin_instance_name_known(name)) return;
-  for (int u = 0; u < 3 && r < 0; u++) {
-    static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT };
-    int k = comp_core_class(c, roots[u]);
-    if (k >= 0 && presence_at(c, o->id, k, CT_REACH, name, &pr) == PR_ABSENT && pr.table) r = k;
-  }
-  if (r < 0) return;
-  if (*o->n == *o->cap && !(*o->v = realloc(*o->v, sizeof **o->v * (size_t)(*o->cap = *o->cap ? *o->cap * 2 : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  if (!((*o->v)[(*o->n)++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-}
 static char **rtr_omitted(Compiler *c, int id, int *n) {
   char **v = NULL;
-  int cap = 0;
+  int cap = 0, nc = 0;
   *n = 0;
-  for (int s = 0; s < c->nscopes; s++) {
-    const Scope *ts = &c->scopes[s];
-    if (!ts->name || ts->def_node < 0 || ts->class_id >= 0 || ts->is_cmethod || ts->is_proc_form) continue;
-    if (!elab_method_versions(c, ts->name) || !cplan_top_def_absent(c, id, ts->name) || any_class_defines(c, ts->name) ||
-        builtin_object_method_known(ts->name) || builtin_instance_name_known(ts->name)) continue;
+  const CplanOmitCand *cand = cplan_omit_candidates(c, &nc);
+  /* (the record answers only for a call that runs once where it stands) */
+  if (!cplan_runs_once(c, id)) return NULL;
+  for (int i = 0; i < nc; i++) {
+    int gone = cand[i].root < 0 ? cplan_top_def_absent(c, id, cand[i].name)
+                                : cplan_root_def_absent(c, id, cand[i].root, cand[i].name);
+    if (!gone) continue;
     if (*n == cap && !(v = realloc(v, sizeof *v * (size_t)(cap = cap ? cap * 2 : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    if (!(v[(*n)++] = strdup(ts->name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  RtrOmit o = { c, id, &v, n, &cap };
-  for (int u = 0; roots[u] >= 0; u++) {
-    int r = comp_core_class(c, roots[u]);
-    if (r >= 0) cplan_own_names(c, r, rtr_omit_root, &o);
+    if (!(v[(*n)++] = strdup(cand[i].name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
   return v;
 }
@@ -415,7 +392,7 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
   const char *const *priv = object_private_method_names();
   buf_printf(b, "0)) || (_a%d && (!strcmp(_n%d, \"initialize\") || (_t%d.tag != SP_TAG_CLASS && sp_str_in_list(_n%d, (const char *const[]){", tv, tv, tv, tv);
   for (int u = 0; priv[u]; u++)
-    if (!root_reopen_defines(c, priv[u])) {
+    if (!root_reopen_defines(c, id, priv[u])) {
       buf_puts(b, "\"");
       emit_c_escaped(b, priv[u]);
       buf_puts(b, "\", ");
@@ -641,26 +618,23 @@ static int refl_builtin_vis_walk(Compiler *c, int ci, const char *m, int inherit
   return core_method_vis(sup, m, 1, owner);
 }
 
-/* The same from CRuby's own rows alone: no visibility the program's defs and words gave its classes counts (a method
-   the class's reopening defines later is not one of the rows) */
-int refl_builtin_rows_vis(Compiler *c, int ci, const char *m) {
-  return refl_builtin_vis_walk(c, ci, m, 1, 0, NULL);
-}
 /* The visibility CRuby gives instance method m of class ci where the
    program defines none: from a builtin class it reopens, the builtin modules
    its chain includes, and the builtin class at the root of the chain (Object
    unless it names another). With `inherit` 2, what a super in ci's own m
    reaches there, past a reopened builtin's own method. 0 for none; -1 where
    one of those is not in core_class_methods.inc. `owner`, when given, is
-   set to the builtin class or module that defines the method. */
-int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, const char **owner) {
+   set to the builtin class or module that defines the method. `own` 0 asks
+   CRuby's rows alone: the visibilities the program's defs and words gave its
+   classes do not count. */
+int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, int own, const char **owner) {
   const ClassInfo *ki = &c->classes[ci];
   if (!inherit) {
-    int v = refl_explicit_vis(ki, m);
+    int v = own ? refl_explicit_vis(ki, m) : 0;
     return v ? v : ki->is_builtin_const && ki->enclosing_class < 0 ? core_method_vis(ki->name, m, 0, owner) : 0;
   }
   if (owner) *owner = NULL;
-  int v = refl_builtin_vis_walk(c, ci, m, inherit, inherit != 2, owner);
+  int v = refl_builtin_vis_walk(c, ci, m, inherit, own && inherit != 2, owner);
   /* a visibility the program gives a builtin method it inherits (`public
      :global_variables`) leaves the method the builtin's: its owner is the
      one the walk past the program's visibilities finds */
@@ -790,8 +764,8 @@ static int root_method_vis(Compiler *c, int id, const char *qm) {
     int k = comp_core_class(c, roots[i]);
     /* (-1: an undef on Object hides the lower roots' method) */
     if (k >= 0 && roots[i] == CORE_OBJECT && cplan_undefined(c, k, 0, qm)) return -1;
-    if (k >= 0 && (call_target(c, -1, k, qm, CT_OWN, NULL) >= 0 || comp_is_reader(&c->classes[k], qm) ||
-                   (is_wr && comp_is_writer(&c->classes[k], wbase))))
+    if (k >= 0 && (call_target(c, -1, k, qm, CT_OWN, NULL) >= 0 || call_attr_target(c, -1, k, qm, CT_ATTR, NULL) ||
+                   (is_wr && call_attr_target(c, -1, k, wbase, CT_ATTR | CT_WRITER, NULL))))
       return cplan_method_vis(c, -1, k, qm, 0, NULL);
     if (roots[i] == CORE_OBJECT && call_target(c, -1, -1, qm, CT_TOP, NULL) >= 0) {
       int tv = cplan_top_def_vis(c, id, qm);
@@ -850,7 +824,7 @@ static int qm_named_off_root(Compiler *c, const char *qm) {
 }
 static int flag_split_root_only(Compiler *c, const char *qm) {
   if (qm_named_off_root(c, qm)) return 0;
-  if (!root_reopen_defines(c, qm) || any_class_defines(c, "respond_to_missing?") ||
+  if (!root_reopen_defines(c, -1, qm) || any_class_defines(c, "respond_to_missing?") ||
       program_defines_unseen(c))
     return 0;
   for (int k = 0; k < c->nclasses; k++) {
@@ -1071,7 +1045,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          flag and has Object's private methods for every value but a
          BasicObject one or one whose class undefines the name. A name an
          Object reopening defines or undefines is left to the arms below. */
-      if (ans < 0 && recv >= 0 && rt != TY_CLASS && argc >= 2 && !root_reopen_defines(c, qm) &&
+      if (ans < 0 && recv >= 0 && rt != TY_CLASS && argc >= 2 && !root_reopen_defines(c, id, qm) &&
           (nt_kind(nt, argv[1]) == NK_TrueNode ? object_private_method_name(qm)
                                                : ty_is_object(rt) && nt_kind(nt, argv[1]) != NK_FalseNode &&
                                                  nt_kind(nt, argv[1]) != NK_NilNode) &&
@@ -1345,7 +1319,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (ik == NK_FalseNode) inherit = 0;
     }
     /* a builtin class the program does not open: CRuby's own table */
-    int bv = qm && ci < 0 ? cplan_builtin_method_vis(c, id, -1, nt_str(nt, recv, "name"), qm, inherit) : -1;
+    int bv = qm && ci < 0 ? cplan_builtin_method_vis(c, id, -1, nt_str(nt, recv, "name"), qm, inherit, 1) : -1;
     if (bv >= 0) {
       buf_printf(b, "%d", ((bv & 1) && md_pub) || ((bv & 2) && md_prot) || ((bv & 4) && md_priv));
       return 1;
@@ -1371,7 +1345,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          and Kernel among them (#2673); one the table does not hold is
          refused below */
       /* (where the record proves no def of the name live at the call, CRuby's rows alone answer) */
-      bv = found ? 0 : pk == PR_ABSENT && pr.table ? cplan_builtin_rows_vis(c, ci, qm) : cplan_builtin_method_vis(c, id, ci, NULL, qm, inherit);
+      bv = found ? 0 : cplan_builtin_method_vis(c, id, ci, NULL, qm, inherit, !(pk == PR_ABSENT && pr.table));
       if (bv >= 0) {
         int yes = ((bv & 1) && md_pub) || ((bv & 2) && md_prot) || ((bv & 4) && md_priv);
         if (found) {
@@ -6728,23 +6702,17 @@ int refl_md_dynamic_used(Compiler *c) {
 /* sp_refl_method_defined(klass, name, mask, inherit): what the literal
    method_defined? branch answers at compile time, as a table per class.
    mask: 1 public, 2 protected, 4 private. */
+/* a name of a class's chain, the reflection table's candidate */
+static void md_name_note(void *ud, const char *name) {
+  refl_note(ud, name, 0);
+}
 void emit_refl_method_defined(Compiler *c, Buf *b) {
   /* every name a method or attr accessor of any class carries */
   ReflNames rn;
   memset(&rn, 0, sizeof rn);
   for (int s = 0; s < c->nscopes; s++)
     if (c->scopes[s].name && c->scopes[s].class_id >= 0) refl_note(&rn, c->scopes[s].name, 0);
-  char **wnames = NULL; int nw = 0, wcap = 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    for (int r = 0; r < c->classes[k].nreaders; r++) refl_note(&rn, c->classes[k].readers[r], 0);
-    for (int w = 0; w < c->classes[k].nwriters; w++) {
-      size_t l = strlen(c->classes[k].writers[w]);
-      char *x = malloc(l + 2); memcpy(x, c->classes[k].writers[w], l); x[l] = '='; x[l + 1] = 0;
-      if (nw == wcap) { wcap = wcap ? wcap * 2 : 16; wnames = realloc(wnames, sizeof(char *) * (size_t)wcap); }
-      wnames[nw++] = x;
-      refl_note(&rn, x, 0);
-    }
-  }
+  for (int k = 0; k < c->nclasses; k++) cplan_chain_names(c, k, md_name_note, &rn);
   char **names = rn.v;
   int nn = rn.n;
   buf_puts(b, "static int sp_refl_method_defined(sp_Class k, const char *name, int mask, int inherit) {\n  if (sp_class_sclass_p(k)) sp_raise_cls(\"NotImplementedError\", \"spinel: the methods of a singleton class held in a variable are not modeled\");\n");
@@ -6752,28 +6720,17 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
               "      !strcmp(name, \"initialize_clone\") || !strcmp(name, \"initialize_dup\")) return (mask & 4) != 0;\n");
   buf_puts(b, "  switch (k.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
-    int parent = c->classes[k].parent;
     Buf rows; memset(&rows, 0, sizeof rows);
     int nrows = 0;
     for (int i = 0; i < nn; i++) {
       const char *qm = names[i];
       if (sp_streq(qm, "initialize") || name_is_synth_method(c, qm) || comp_method_is_private_helper(c, k, qm) ||
           cplan_undefined(c, k, 0, qm)) continue;
-      char base[256]; base[0] = 0;
-      int is_setter = setter_base_name(qm, base, sizeof base);
-      int mc = -1;
-      int mi = comp_method_in_chain(c, k, qm, &mc);
-      if (mi >= 0 && scope_is_struct_synth(c, mi)) mi = -1;
-      int found = mi >= 0 || comp_reader_in_chain(c, k, qm, NULL) ||
-                  (is_setter && comp_writer_in_chain(c, k, base, NULL));
-      if (!found) continue;
-      int rd_own = comp_is_reader(&c->classes[k], qm) &&
-                   (parent < 0 || !comp_reader_in_chain(c, parent, qm, NULL));
-      int wr_own = is_setter && comp_is_writer(&c->classes[k], base) &&
-                   (parent < 0 || !comp_writer_in_chain(c, parent, base, NULL));
-      int own = (mi >= 0 && mc == k && c->scopes[mi].origin_module_ci == 0) || rd_own || wr_own;
-      CplanPresence pr;
+      CplanPresence pr, ow;
       cplan_table_presence(c, k, 0, qm, &pr);
+      if (!pr.table) continue;
+      cplan_table_presence(c, k, CT_OWN, qm, &ow);
+      int own = ow.table;
       int vis = pr.vis == SP_VIS_PRIVATE ? 4 : pr.vis == SP_VIS_PROTECTED ? 2 : 1;
       buf_puts(&rows, "      if (!strcmp(name, \"");
       emit_c_escaped(&rows, qm);
@@ -6795,8 +6752,6 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
     buf_puts(b, "\")) return 1;\n");
   }
   buf_puts(b, "  }\n  return 0;\n}\n");
-  for (int w = 0; w < nw; w++) free(wnames[w]);
-  free(wnames);
   refl_free(&rn);
 }
 

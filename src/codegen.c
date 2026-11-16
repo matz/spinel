@@ -19074,7 +19074,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
     /* one entry per name: an Object#last leaves IO#length raising */
     int any = 0;
     for (int i = 0; lacks[i]; i++)
-      if (root_reopen_defines(c, lacks[i])) {
+      if (root_reopen_defines(c, -1, lacks[i])) {
         buf_printf(b, "%s\"%s\"", any ? ", " : "  { static const char *const rl[] = { ", lacks[i]);
         any = 1;
       }

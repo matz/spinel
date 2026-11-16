@@ -1238,6 +1238,8 @@ int cplan_top_def_vis(Compiler *c, int call, const char *name);
 /* Does the record prove the top-level def of `name`, which the tables hold, has not run where call `call` runs (as a call
    of the name there raises)? 0 where it has, where the record cannot tell, and where there is no such def. */
 int cplan_top_def_absent(Compiler *c, int call, const char *name);
+/* ...and the same of the method `name` that Object's, Kernel's or BasicObject's reopening `root` holds. */
+int cplan_root_def_absent(Compiler *c, int call, int root, const char *name);
 /* ...and the cell that holds it where only the run tells (cplan_top_def_vis answers -1): main's def
    `name`, its one version, has run where call `call` runs, with a word whose order against the
    call the run decides. The global holds SP_VIS_* (CallPlan.vis_cell); NULL for any other
@@ -1359,11 +1361,19 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
    top-level def is Object's; where main's history and Object's are one
    entry, its later version (cplan_program_method_vis), an alias in Object
    of a builtin's name among them. 0 for none; -1 where the rows do not
-   hold the class. */
-int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit);
-/* ...from CRuby's rows alone, for a reopened builtin whose def of the name the record proves has not run where the
-   reflection call runs: the program's own visibility words and defs do not count. */
-int cplan_builtin_rows_vis(Compiler *c, int ci, const char *m);
+   hold the class. `own` 0 asks CRuby's rows alone, for a reopened builtin
+   whose def of the name the record proves has not run where the call runs:
+   the visibilities the program's defs and words gave its classes do not
+   count. */
+int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit, int own);
+/* Does node run once, where it stands (in no method body, loop, lambda, or block a call may run later or again)? The
+   proof a call's record answer needs (ct_before_versions' ct_after_point and elab_blocks_run_at_once, and the
+   loop). */
+int cplan_runs_once(Compiler *c, int node);
+/* Has the undef_method of `name` that builtin class cls itself holds run where call id runs: 1 where the record
+   proves it has (the call runs once, at a point after the undef), 0 where it proves it has not, -1 where it cannot
+   tell (the table's undef then stands for a reader that always took it). */
+int cplan_undef_at(Compiler *c, int id, int cls, const char *name);
 /* The visibility (SP_VIS_*) a reflection call node that finds program
    method m of class ci (its own, or along its chain with inherit) reads:
    for Object's reopening, where main's history of m and Object's are one
@@ -1568,6 +1578,13 @@ void cplan_chain_names(Compiler *c, int cls, CplanNameFn fn, void *ud);
    and BasicObject's reopenings contribute to the run-time lists, which is not cplan_list_candidates': that one lists
    the class's aliases and keeps only what the question holds. */
 void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud);
+/* The names a run-time-name respond_to? may leave out of its shared lists for a call: the program's top-level defs
+   (root -1) and the methods of its Object, Kernel and BasicObject reopenings (root: the class holding it) that have
+   versions, which no class of the program defines besides the roots, no builtin answers and no private Kernel
+   function is. Built once while the tables are as they were (the key of cplan_rtr_lists); the names are the plan's.
+   Which of them a call leaves out is the record's, asked per call. */
+typedef struct { char *name; int root; } CplanOmitCand;
+const CplanOmitCand *cplan_omit_candidates(Compiler *c, int *n);
 /* The lists a run-time `respond_to?` tests per class (emit_respond_to_runtime_name): class cls's public names and the
    private ones include_all adds, as the C text `"a", "b", `, and the Object private names its undef_method takes
    away (entries of object_private_method_names, in its order); cls -1 is the Object reopening's. They are built

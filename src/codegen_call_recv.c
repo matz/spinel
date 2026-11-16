@@ -697,7 +697,7 @@ static int name_is_literal(Compiler *c, const char *name) {
    literal of the name may define it reflectively. */
 static int obj_may_answer(Compiler *c, int cid, const char *name) {
   if (call_answers(c, -1, cid, name, 0, NULL) ||
-      comp_subclass_answers(c, cid, name) || root_reopen_defines(c, name) ||
+      comp_subclass_answers(c, cid, name) || root_reopen_defines(c, -1, name) ||
       comp_method_index(c, name) >= 0)
     return 1;
   for (int i = 0; i < c->ntoplevel_includes; i++) {

@@ -54,7 +54,8 @@ typedef enum {
   CRF_BIND_CALL,   /* a bind_call on a Class value with an armless class */
   CRF_TOP_SELF,    /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
   CRF_CAPTURE,     /* a record class's class method captured where its def may not have run, or a module's absent one where its NameError's class is not told (emit_call_method_obj_arms) */
-  CRF_RECORD_NEW   /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
+  CRF_RECORD_NEW,  /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
+  CRF_MAIN_CHAIN   /* a bare call of a name a conditional or may-not-have-run mixin of main or Object defines (reject_main_chain) */
 } CplanRefuseFrom;
 
 /* CallPlan.absent: the side a `method(:sym)` that finds no method names in

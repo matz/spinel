@@ -20776,6 +20776,16 @@ static void reject_top_self(Compiler *c) {
   }
 }
 
+/* A bare call of a name a conditional or may-not-have-run mixin of main or Object defines: the plan's CRF_MAIN_CHAIN.
+   Under --defer-refusals it stands at the statement as a NotImplementedError. */
+static void reject_main_chain(Compiler *c) {
+  NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
+    const Scope *s = comp_scope_of(c, id);
+    if (s->name && !s->reachable) continue;
+    if (!defer_refusals_at(c, id)) refuse_from_plan(c, id, CRF_MAIN_CHAIN, "refuse-main-chain");
+  }
+}
+
 /* `const_get(name)` with a runtime name that the lowering could not reach:
    one with no receiver the desugar could supply (an instance method, where
    self has no const_get) or one the fixpoint never lowered. Left alone it
@@ -24302,6 +24312,7 @@ char *codegen_program(const NodeTable *nt) {
   reject_runtime_const_get(c);
   reject_binding(c);
   reject_top_self(c);
+  reject_main_chain(c);
   reject_time_parse(c);
   reject_define_method_early(c);
   reject_record_sclass_early(c);

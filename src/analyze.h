@@ -376,8 +376,9 @@ int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrD
    (EMC_KERNEL), each mixin from its point on. ELAB_YES with *out the
    definition and *step its step; ELAB_NO for none of the program's
    (EMC_NONE: the core's Kernel, or NoMethodError; EMC_STOP: an undef stops
-   it); ELAB_UNKNOWN where the record cannot say. */
-enum { EMC_NONE, EMC_STOP, EMC_MAIN, EMC_CORE, EMC_EXTEND, EMC_PREPEND, EMC_OWN, EMC_INCLUDE, EMC_KERNEL };
+   it); ELAB_UNKNOWN where the record cannot say (*step EMC_UNSURE where a mixin or def
+   of the name runs under a condition or from a body that may not have run). */
+enum { EMC_NONE, EMC_STOP, EMC_MAIN, EMC_CORE, EMC_EXTEND, EMC_PREPEND, EMC_OWN, EMC_INCLUDE, EMC_KERNEL, EMC_UNSURE };
 int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_object, const LrDef **out, int *step);
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A

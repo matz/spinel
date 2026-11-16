@@ -4759,7 +4759,8 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
             : depth >= lr_chain_bound(c) ? ELAB_UNKNOWN
             : lr_search_one(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1, unsure, LR_MIXIN_STOPS);
       if ((o == ELAB_YES || o == LR_STOP) && b == ELAB_YES) return o;
-      if (o != ELAB_NO) *unsure = 1;
+      /* (2: a mixin that may not have run holds the name: not a core module's, whose entries it cannot read) */
+      if (o != ELAB_NO) *unsure = *unsure == 2 || o == ELAB_YES || o == LR_STOP ? 2 : 1;
     }
   }
   return ELAB_NO;
@@ -5301,14 +5302,14 @@ int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_obje
   if (!from_object) {
     /* main's singleton: its prepends and own methods, the core's own of main's, then its extends */
     o = lr_main_chain_one(c, LR_MAIN, 1, name, p, LR_SHADOW, &d, &unsure);
-    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
     if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
     if (o == ELAB_YES) { *step = EMC_MAIN; *out = d; return ELAB_YES; }
     const LrDef *v = NULL;
     lr_own(c, lr_hist(r, LR_MAIN, 1, name, 0), NULL, p, late, 0, &v);
     if (!v && main_self_method(name)) { *step = EMC_CORE; return ELAB_YES; }
     o = lr_main_chain_one(c, LR_MAIN, 1, name, p, 0, &d, &unsure);
-    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
     if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
     if (o == ELAB_YES) { *step = EMC_EXTEND; *out = d; return ELAB_YES; }
   }
@@ -5317,7 +5318,7 @@ int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_obje
   int oc = lr_core(r, CORE_OBJECT), kc = lr_core(r, CORE_KERNEL);
   if (oc >= 0) {
     o = lr_main_chain_one(c, oc, 0, name, p, LR_SHADOW, &d, &unsure);
-    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
     if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
     if (o == ELAB_YES) {
       int sc = d && d->scope > 0 && d->scope < c->nscopes ? c->scopes[d->scope].class_id : -1;
@@ -5327,20 +5328,20 @@ int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_obje
     }
   }
   o = lr_main_chain_one(c, LR_MAIN, 0, name, p, LR_SHADOW, &d, &unsure);
-  if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+  if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
   if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
   if (o == ELAB_YES) { *step = EMC_OWN; *out = d; return ELAB_YES; }
   for (int k = 0; k < 2; k++) {
     int cls = k ? LR_MAIN : oc;
     if (cls < LR_MAIN || (k == 0 && oc < 0)) continue;
     o = lr_main_chain_one(c, cls, 0, name, p, 0, &d, &unsure);
-    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
     if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
     if (o == ELAB_YES) { *step = EMC_INCLUDE; *out = d; return ELAB_YES; }
   }
   if (kc >= 0) {
     o = lr_main_chain_one(c, kc, 0, name, p, 0, &d, &unsure);
-    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
     if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
     if (o == ELAB_YES) { *step = EMC_KERNEL; *out = d; return ELAB_YES; }
   }

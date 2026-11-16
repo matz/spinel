@@ -4156,6 +4156,7 @@ static int ct_main_chain(Compiler *c, int id, const char *name, int defs, int *s
     }
   }
   if (framed) elab_plan_leave(c);
+  if (p.region < 0 && r == ELAB_UNKNOWN) *step = EMC_NONE;   /* (a body's site: its unsure answer is the table's here) */
   return r;
 }
 /* The method of a module main extends, Object prepends or Object includes that the main-chain fact answers for call
@@ -4181,6 +4182,16 @@ int cplan_main_chain_step(Compiler *c, int id, const char *name) {
   /* (a capture asks it of the defs too: method(:sym)'s maker is no call the defs' versions bind) */
   int o = ct_main_chain(c, id, name, is_bound_method_maker(nt_str(c->nt, id, "name")), &step, &d);
   return o == ELAB_YES ? step : o == ELAB_NO ? EMC_NONE : -1;
+}
+/* Does a bare call of `name` at call id, in top-level code, meet a mixin or def of the name that runs under a condition,
+   or from a body that may not have run (an `include L if cond`, an extend inside a method called later)? CRuby finds
+   its method only once it has run, which the record cannot tell: the call is refused (CRF_MAIN_CHAIN). */
+static int cplan_main_chain_unsure(Compiler *c, int id) {
+  const char *name = nt_str(c->nt, id, "name");
+  int step;
+  const LrDef *d;
+  return nt_kind(c->nt, id) == NK_CallNode && name && nt_ref(c->nt, id, "receiver") < 0 &&
+         ct_main_chain(c, id, name, 0, &step, &d) == ELAB_UNKNOWN && step == EMC_UNSURE;
 }
 /* Does the main-chain fact put a mixin's method ahead of main's and Object's own at call id (an extend, an Object
    prepend), so that the top-level ask (CT_TOP) answers none there? */
@@ -7579,6 +7590,12 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_TOP_SELF, CR_FEATURE,
                      "a top-level method's self is not modelled: this call finds main's singleton method when the "
                      "method runs on main and Object's when it runs on another object", buf, cap);
+    return;
+  }
+  if (!what && cplan_main_chain_unsure(c, id)) {
+    cplan_refuse_set(p, CRF_MAIN_CHAIN, CR_FEATURE,
+                     "a call of a name that a mixin of main or Object defines, where that mixin runs under a condition or "
+                     "from a method that may not have run: CRuby finds its method only once the mixin has run", buf, cap);
     return;
   }
   if (!what && cplan_record_new_gap(c, id)) {

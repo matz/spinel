@@ -5068,7 +5068,21 @@ else {
          value's build puts in the prelude too. Its block closes after the
          set. */
       int tk = -1;
-      if (ty_is_hash(ht) && (subtree_may_allocate(c, key) || read_rebound_by(c, key, val))) {
+      int krb = ty_is_hash(ht) && read_rebound_by(c, key, val);
+      /* (a key that is a shared String slot's read is held as its handle:
+         the value may change that String in place before it rebinds the
+         variable, and the set takes the String as it is then) */
+      if (krb && ty_hash_key(ht) == TY_STRING && strbuf_read_copies(c, key)) {
+        int th = ++g_tmp;
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_String *_t%d = ", th);
+        emit_strbuf_handle_of(c, nt_paren_single(c->nt, key), g_pre);
+        buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", th);
+        free(kb.p); memset(&kb, 0, sizeof kb);
+        buf_printf(&kb, "SP_STR_B(sp_strbuf_read_pub(_t%d))", th);
+        krb = 0;
+      }
+      if (ty_is_hash(ht) && (subtree_may_allocate(c, key) || krb)) {
         TyKind kt = ty_hash_key(ht);
         tk = ++g_tmp;
         emit_indent(g_pre, g_indent);

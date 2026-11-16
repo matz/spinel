@@ -2110,6 +2110,8 @@ static int join_container_alias_groups(Compiler *c) {
       LocalVar *lv = &c->scopes[s].locals[i];
       if (lv->rbs_seeded) for (int j = 0; j < lv->nctr_sites; j++) excl[lv->ctr_sites[j]] = 1;
     }
+  /* (and a site an --rbs-pinned ivar may hold, likewise copied there: ctr_site_excl) */
+  if (c->ctr_site_excl) for (int i = 0; i < n; i++) if (c->ctr_site_excl[i]) excl[i] = 1;
   /* a local's first site no seed copies, -1 for none */
 #define CTR_FIRST(lv) ({ int _f = -1; for (int _j = 0; _j < (lv)->nctr_sites && _f < 0; _j++) if (!excl[(lv)->ctr_sites[_j]]) _f = (lv)->ctr_sites[_j]; _f; })
   for (int s = 0; s < ns; s++)

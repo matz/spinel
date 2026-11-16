@@ -1469,6 +1469,7 @@ typedef struct {
      kind of a site by node ([ctr_site_cap]) */
   int *ctr_site_node; TyKind *ctr_site_kind; int nctr_site;
   TyKind *ctr_site_kind_of; int ctr_site_cap;
+  unsigned char *ctr_site_excl;   /* (#12009) a site an --rbs-pinned ivar may hold: it is copied there, so no group holds it */
   SP_TY_FIELD TyKind *arr_want;  /* [node_cap] array kind a node takes from its use context
                         rather than from its own contents: an empty `[]`
                         literal, or a `map` that narrow_object_arrays decided

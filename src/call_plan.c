@@ -6549,7 +6549,7 @@ static int limit_exempt(Compiler *c, int id, int lx) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   switch (lx) {
-  case LX_NAME: return diag_user_defines(c, name);
+  case LX_NAME: return diag_user_defines(c, id, name);
   case LX_RECV_CMETHOD: {
     int recv = nt_ref(nt, id, "receiver");
     NodeKind rk = nt_kind(nt, recv);

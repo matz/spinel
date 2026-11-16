@@ -17409,18 +17409,30 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
      again to store a spliced String or a promoted Array back into outer's
      slot: an outer or a k that runs code (`rows[i += 1]`, `rows_of(b)[1]`)
      ran twice, and k's second value chose the next row. Such an outer and
-     k run here, once, into temps the whole store reads. An outer with no
-     plain C slot to hold it keeps the splice, which runs each once. */
+     k run here, once, into temps the whole store reads: a box, or what
+     a pointer holds (an Array, a Hash, an object). An outer held inline
+     (a value-type object) keeps the splice, which runs each once. */
   if (user_aset3) {
     int so, sk;
     if (splice_recv_index_slot(c, recv, &so, &sk) &&
         (!subtree_is_pure_read(c, so) || !subtree_is_pure_read(c, sk))) {
       TyKind ot = comp_ntype(c, so), kt = comp_ntype(c, sk);
-      const char *oct = ot == TY_POLY || ty_is_array(ot) || ty_is_obj_array(ot) ? c_type_name(ot) : NULL;
-      if (!oct || (kt != TY_INT && kt != TY_POLY) || g_n_argov + 2 > MAX_ARG_OVERRIDE) user_aset3 = 0;
+      int held = ot == TY_POLY;
+      if (ty_is_object(ot)) {
+        int ocid = ty_object_class(ot);
+        held = ocid >= 0 && ocid < c->nclasses && !c->classes[ocid].is_value_type;
+      }
+      else if (!held) {
+        const char *n = c_type_name(ot);
+        held = n && n[strlen(n) - 1] == '*';
+      }
+      if (!held || (kt != TY_INT && kt != TY_POLY) || g_n_argov + 2 > MAX_ARG_OVERRIDE) user_aset3 = 0;
       else {
         int to = ++g_tmp, tk = ++g_tmp;
-        buf_printf(b, "({ %s _t%d = ", oct, to);
+        Buf oct; memset(&oct, 0, sizeof oct);
+        emit_ctype(c, ot, &oct);
+        buf_printf(b, "({ %s _t%d = ", oct.p ? oct.p : "sp_RbVal", to);
+        free(oct.p);
         emit_expr(c, so, b);
         buf_printf(b, "; %s(_t%d); %s _t%d = ", ot == TY_POLY ? "SP_GC_ROOT_RBVAL" : "SP_GC_ROOT", to,
                    kt == TY_INT ? "sp_int" : "sp_RbVal", tk);

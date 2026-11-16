@@ -64,6 +64,21 @@ sb = [strs, Grid.new][0]
 j = -1
 sb[j += 1][0, 1] = "Z"
 p strs, j
+# the outer a Hash, and a program object, whose element is the class's
+gh = Grid.new
+by_key = { 0 => gh, 1 => [1, 2] }
+k = -1
+by_key[k += 1][0, 1] = 9
+p gh[0, 1], k
+class Shelf
+  def initialize(a) = @a = a
+  def [](n) = @a[n]
+end
+gs = Grid.new
+shelf = Shelf.new([gs, [1, 2]])
+m = -1
+shelf[m += 1][1, 0] = 4
+p gs[1, 0], m
 
 # a store whose class takes one index fewer raises, as in Ruby
 c = boxes[1]

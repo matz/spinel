@@ -7475,8 +7475,10 @@ static int cplan_bind_call_gap(Compiler *c, int id) {
 static int cplan_top_self_gap(Compiler *c, int id) {
   const char *name = nt_str(c->nt, id, "name");
   const Scope *s = comp_scope_of(c, id);
+  /* (a call written `Kernel.name` is Kernel's whatever self is: desugar_kernel_recv marks it) */
   if (!(nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0 && name && s->class_id < 0 &&
-        !s->is_cmethod && !s->entry && s->def_node >= 0 && !prog_is_top_scope(c, s))) return 0;
+        !(cplan_builtin_call(c, id) || nt_int(c->nt, id, "kernel_recv", 0)) && !s->is_cmethod && !s->entry && s->def_node >= 0 &&
+        !prog_is_top_scope(c, s))) return 0;
   mtab_enter(c);   /* (the plan's own root read: whether main has a singleton method of the name) */
   int gap = comp_main_method(c, name) >= 0;
   mtab_leave(c);

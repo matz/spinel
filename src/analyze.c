@@ -11708,7 +11708,11 @@ static int desugar_builtin_method_obj(Compiler *c) {
         if (kcls < 0) continue;
       }
       else if (!kknown) continue;
-      if (call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0) continue;   /* a user def wins */
+      /* a user def wins where main has it at the capture; one that main defines only later (or removed) is not the
+         Method's: it binds Kernel's, whose wrapper calls it through Kernel, not through main (CRuby's lookup at the
+         capture) */
+      if (call_target(c, id, -1, ksym, CT_TOP | CT_CAPTURE, NULL) >= 0) continue;
+      int kern = kcls < 0 && call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0;
       char kwname[48];
       snprintf(kwname, sizeof kwname, "__bam_%s", comp_node_tag(c, id));
       if (call_target(c, -1, -1, kwname, CT_TOP | CT_SHARED, NULL) >= 0) continue;
@@ -11735,9 +11739,9 @@ static int desugar_builtin_method_obj(Compiler *c) {
       int kcall = nt_new_node(nt, "CallNode");
       nt_node_set_str(nt, kcall, "name", ksym);
       nt_node_set_ref(nt, kcall, "arguments", kargs);
-      if (kcls >= 0) {
+      if (kcls >= 0 || kern) {
         int krecv = nt_new_node(nt, "ConstantReadNode");
-        nt_node_set_str(nt, krecv, "name", c->classes[kcls].name);
+        nt_node_set_str(nt, krecv, "name", kcls >= 0 ? c->classes[kcls].name : "Kernel");
         nt_node_set_ref(nt, kcall, "receiver", krecv);
       }
       int kbody = nt_new_node(nt, "StatementsNode");

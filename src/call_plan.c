@@ -8017,7 +8017,9 @@ static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int arg
         !sp_streq(nt_str(nt, ex, "name"), sc->pnames[np]) || (nt_kind(nt, av[i]) == NK_SplatNode) != (np == sc->rest_idx)) return 0;
     np++;
   }
-  return np == sc->nparams;
+  /* (a keyword rest the `super` leaves out: the call's keywords are the builtin's own to take, as `String.new` takes `encoding:` before
+     its initialize runs; where the initialize then drops them, the answer is the builtin's own, master's, which this does not model) */
+  return np == sc->nparams || (np + 1 == sc->nparams && sc->kwrest_idx == np);
 }
 /* Is method mi, which the chain of builtin class ci holds for initialize, a
    forward: a prepended module's copy whose body only calls `super` with what

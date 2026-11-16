@@ -23,7 +23,7 @@ const int *poly_recv_classes(Compiler *c, int call, int *n);
    can be (any, when the walk does not bound it) define a method `name`? */
 int poly_recv_defines(Compiler *c, int call, const char *name);
 /* May the receiver of poly call `call` be an instance of class k: the classes the analysis bounds it to, or any class
-   where it does not (poly_recv_classes) */
+   where it does not (poly_recv_classes); a reopened builtin always may be */
 int poly_recv_may_be(Compiler *c, int call, int k);
 /* Does a method of the program answer the call `call` (the builtin reflection
    it names, a program's method of that name in its receiver's class chain)? A

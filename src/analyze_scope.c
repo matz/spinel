@@ -12834,6 +12834,7 @@ const int *poly_recv_classes(Compiler *c, int call, int *n) {
 }
 /* See analyze.h. */
 int poly_recv_may_be(Compiler *c, int call, int k) {
+  if (is_builtin_reopen(c->classes[k].name)) return 1;   /* (a reopened builtin: its values are no tracked instances) */
   int nk = 0;
   const int *ks = poly_recv_classes(c, call, &nk);
   for (int j = 0; ks && j < nk; j++) if (ks[j] == k) return 1;

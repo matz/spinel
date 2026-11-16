@@ -2092,6 +2092,17 @@ static int cls_value_answer_raises(const char *t) {
    is a raise, whose message the switch's own default already gives, where
    it would read an argument with a side effect a second time, or where its
    answer does not fit the slot the dispatch assigns. */
+/* Does the program give a class value the name through a method of its own on what every class value is an
+   object of: Object, Module, Class, Kernel or BasicObject (`class Object; private def top`)? Such a method answers
+   for a class value whatever the builtin tables hold (`Integer.send(:top)`). */
+static int cls_side_program_answers(Compiler *c, const char *name) {
+  static const int owners[] = { CORE_OBJECT, CORE_MODULE, CORE_CLASS, CORE_KERNEL, CORE_BASIC_OBJECT };
+  for (unsigned i = 0; i < sizeof owners / sizeof *owners; i++) {
+    int k = comp_core_class(c, owners[i]);
+    if (k >= 0 && call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+  }
+  return 0;
+}
 static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, int argc,
                                        const int *argv, const int *atmp, const TyKind *atmp_ty,
                                        TyKind ret, int tv, int tr, Buf *b) {
@@ -2106,7 +2117,7 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
      and the Hash emitter answered `empty?` and `none?` on the class value
      (its conversion of a Class is NULL, "empty"): `String.send(:empty?)`
      was true where CRuby raises NoMethodError. */
-  if (!builtin_method_answers("Object", name, 1, 0)) return 0;
+  if (!builtin_method_answers("Object", name, 1, 0) && !cls_side_program_answers(c, name)) return 0;
   for (int a = 0; a < argc; a++) {
     if (nt_kind(nt, argv[a]) == NK_SplatNode) return 0;
     if (subtree_has_side_effect(c, argv[a]) && repr_of(c, argv[a]).as_ty != atmp_ty[a]) return 0;
@@ -2199,7 +2210,7 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
      above: the emitters under the face would answer for a value of
      another class) */
   const char *nm = nt_str(nt, id, "name");
-  if (!nm || !builtin_method_answers("Object", nm, 1, 0)) return 0;
+  if (!nm || (!builtin_method_answers("Object", nm, 1, 0) && !cls_side_program_answers(c, nm))) return 0;
   /* each argument runs once, in the arm that is taken */
   for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
   int sv_tmp = g_tmp;

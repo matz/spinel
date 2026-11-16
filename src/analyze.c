@@ -4372,7 +4372,9 @@ int ie_implicit_self_class(Compiler *c, int id) {
   return s->class_id;
 }
 
-static int ie_self_call_names(Compiler *c, int node, const char **names, int n, int max) {
+/* The names an instance_eval/exec body calls on its self, each once, into names[n..max); the first call node of each
+   into nodes (when given), the node a question of the name is asked at. */
+static int ie_self_call_names(Compiler *c, int node, const char **names, int *nodes, int n, int max) {
   const NodeTable *nt = c->nt;
   if (node < 0) return n;
   NodeKind k = nt_kind(nt, node);
@@ -4385,7 +4387,7 @@ static int ie_self_call_names(Compiler *c, int node, const char **names, int n, 
     if (nm && self_call && !ie_kernel_global(nm)) {
       int seen = 0;
       for (int i = 0; i < n; i++) if (sp_streq(names[i], nm)) seen = 1;
-      if (!seen && n < max) names[n++] = nm;
+      if (!seen && n < max) { if (nodes) nodes[n] = node; names[n++] = nm; }
     }
     if (self_call || (nm && (is_instance_eval_family(nm))))
       skip = nt_ref(nt, node, "block");
@@ -4393,12 +4395,12 @@ static int ie_self_call_names(Compiler *c, int node, const char **names, int n, 
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) {
     int ch = nt_ref_at(nt, node, i);
-    if (ch != skip) n = ie_self_call_names(c, ch, names, n, max);
+    if (ch != skip) n = ie_self_call_names(c, ch, names, nodes, n, max);
   }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
-    for (int j = 0; j < m; j++) n = ie_self_call_names(c, ids[j], names, n, max);
+    for (int j = 0; j < m; j++) n = ie_self_call_names(c, ids[j], names, nodes, n, max);
   }
   return n;
 }
@@ -4447,14 +4449,15 @@ static int ie_poly_class_ok(Compiler *c, int k) {
 int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int *out, int max,
                          const char **need) {
   const char *names[64];
-  int nn = ie_self_call_names(c, body, names, 0, 64);
-  nn = ie_self_call_names(c, ie_body_params(c, body), names, nn, 64);
+  int nodes[64];
+  int nn = ie_self_call_names(c, body, names, nodes, 0, 64);
+  nn = ie_self_call_names(c, ie_body_params(c, body), names, nodes, nn, 64);
   if (nn == 64) return 0;
   int ask[64], nask = 0;
   for (int i = 0; i < nn; i++) {
-    if (call_target(c, -1, -1, names[i], CT_TOP | CT_SHARED, NULL) >= 0) continue;
+    if (call_target(c, nodes[i], -1, names[i], CT_TOP, NULL) >= 0) continue;
     for (int k = 0; k < c->nclasses; k++) {
-      if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) { ask[nask++] = i; break; }
+      if (ie_poly_class_ok(c, k) && call_answers(c, nodes[i], k, names[i], 0, NULL)) { ask[nask++] = i; break; }
     }
   }
   /* A body that makes no such call but reads or writes ivars on its self
@@ -4474,13 +4477,13 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   const int *rc = nask == 0 ? poly_recv_classes(c, call, &nrc) : NULL;
   if (rc) {
     for (int i = 0; i < nrc && n < max; i++)
-      if (ie_poly_class_ok(c, rc[i]) && call_target(c, -1, rc[i], name, CT_METHODS | CT_SHARED, NULL) < 0) out[n++] = rc[i];
+      if (ie_poly_class_ok(c, rc[i]) && call_target(c, call, rc[i], name, CT_METHODS, NULL) < 0) out[n++] = rc[i];
     return n;
   }
   for (int k = 0; k < c->nclasses && n < max; k++) {
-    if (!ie_poly_class_ok(c, k) || call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) continue;
+    if (!ie_poly_class_ok(c, k) || call_target(c, call, k, name, CT_METHODS, NULL) >= 0) continue;
     int all = 1;
-    for (int i = 0; i < nask && all; i++) all = call_answers(c, -1, k, names[ask[i]], 0, NULL);
+    for (int i = 0; i < nask && all; i++) all = call_answers(c, nodes[ask[i]], k, names[ask[i]], 0, NULL);
     for (int i = 0; i < niv && all; i++) all = comp_ivar_index(&c->classes[k], ivs[i]) >= 0;
     if (all) out[n++] = k;
   }
@@ -5027,7 +5030,7 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
     if (t >= 0) cls = cls == -1 || cls == t ? t : -2 - id;
   }
   const char *names[64];
-  int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, 0, 64) : 0;
+  int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, NULL, 0, 64) : 0;
   for (int i = 0; i < nn; i++)
     for (int k = 0; k < c->nclasses && !call_answers(c, -1, cls, names[i], 0, NULL) && comp_method_index(c, names[i]) < 0; k++)
       if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) return -1;

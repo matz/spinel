@@ -10,10 +10,10 @@
 #define SP_BUILTIN_CLASSES(X) \
   X(INTEGER, "Integer", -100, BC_CLASS | BC_TAGGED) \
   X(FLOAT, "Float", -101, BC_CLASS | BC_TAGGED) \
-  X(STRING, "String", -102, BC_CLASS | BC_TAGGED) \
+  X(STRING, "String", -102, BC_CLASS | BC_TAGGED | BC_EMPTY_NEW) \
   X(SYMBOL, "Symbol", -103, BC_CLASS | BC_TAGGED) \
-  X(ARRAY, "Array", -104, BC_CLASS) \
-  X(HASH, "Hash", -105, BC_CLASS) \
+  X(ARRAY, "Array", -104, BC_CLASS | BC_EMPTY_NEW) \
+  X(HASH, "Hash", -105, BC_CLASS | BC_EMPTY_NEW) \
   X(RANGE, "Range", -106, BC_CLASS) \
   X(TIME, "Time", -107, BC_CLASS) \
   X(MODULE, "Module", -108, BC_CLASS | BC_TAGGED) \

@@ -6504,6 +6504,17 @@ static int cplan_new_class(Compiler *c, int id, int *own) {
   return ci;
 }
 
+/* Does method mi, which the chain of builtin class k holds for `initialize`,
+   sit behind the builtin's own (C) initialize, so that CRuby's `new` never
+   reaches it? Only a prepend on the builtin and the reopening's own def run
+   ahead of it: an included module's, and Object's, Kernel's or BasicObject's,
+   come after it. Object and its roots have no initialize of their own to hide
+   behind, and a program class's chain holds only program methods. */
+static int ct_behind_builtin_init(Compiler *c, int k, int mi) {
+  const Scope *sc = &c->scopes[mi];
+  if (!is_builtin_reopen(c->classes[k].name) || is_object_root(c->classes[k].name)) return 0;
+  return sc->class_id != k || (sc->is_include_copy && !sc->is_prepend_copy);
+}
 /* The initialize methods a builtin `new` runs that builds class ci, or with
    own an instance of ci or of any subclass (into out, at most CPT_MAX;
    CPT_UNKNOWN past it): those the plan answers where the construction id
@@ -6513,6 +6524,7 @@ static int ct_class_initializers(Compiler *c, int id, int ci, int own, int *out)
   for (int k = ci; ci >= 0 && k < c->nclasses; k++) {
     if (k != ci && (!own || !is_descendant(c, k, ci))) continue;
     int mi = cplan_hook_target(c, id, k, "initialize", NULL), dup = 0;
+    if (mi >= 0 && ct_behind_builtin_init(c, k, mi)) continue;
     for (int j = 0; j < n; j++) dup |= out[j] == mi;
     if (mi < 0 || dup) continue;
     if (n == CPT_MAX) return CPT_UNKNOWN;
@@ -7953,6 +7965,114 @@ static void cplan_refuse_set(CallPlan *p, int from, int rkind, const char *msg, 
   p->msg = buf;
 }
 
+/* Is method mi's body empty (nothing, or a bare nil), so that running it
+   builds the empty value the builtin's own initialize would not? */
+static int cplan_body_empty(Compiler *c, int mi) {
+  int b = c->scopes[mi].body;
+  if (b < 0) return 1;
+  int n = 0;
+  const int *bb = nt_kind(c->nt, b) == NK_StatementsNode ? nt_arr(c->nt, b, "body", &n) : NULL;
+  if (!bb) return nt_kind(c->nt, b) == NK_NilNode;
+  return n == 0 || (n == 1 && nt_kind(c->nt, bb[0]) == NK_NilNode);
+}
+/* Are the parameters of method sc positional and without defaults (a rest and a
+   block allowed)? Nothing about them runs code or binds anything the call did not pass. */
+static int ct_params_plain(Compiler *c, const Scope *sc) {
+  int pn = sc->def_node >= 0 ? nt_ref(c->nt, sc->def_node, "parameters") : -1, nk = 0;
+  if (pn >= 0 && (nt_ref(c->nt, pn, "keyword_rest") >= 0 || (nt_arr(c->nt, pn, "keywords", &nk), nk > 0))) return 0;
+  for (int i = 0; i < sc->nparams; i++)
+    if (i != sc->rest_idx && sc->pdefault && sc->pdefault[i] >= 0) return 0;
+  return 1;
+}
+/* Does the super call sup (a `super`, or the builtin-lowered call of it) of
+   method sc pass on exactly what sc received: its parameters in order, a rest
+   parameter splatted, no keywords, and its caller's block (super_forwards_caller_block)? */
+static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup) {
+  const NodeTable *nt = c->nt;
+  if (!ct_params_plain(c, sc)) return 0;
+  int an = 0, args = nt_ref(nt, sup, "arguments"), np = 0, blk = nt_ref(nt, sup, "block");
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  /* (the lowered call holds its block pass among its arguments) */
+  if (blk < 0 && an > 0 && nt_kind(nt, av[an - 1]) == NK_BlockArgumentNode) blk = av[an - 1];
+  if (!block_pass_is_callers(c, sc, blk)) return 0;
+  if (nt_kind(nt, sup) == NK_ForwardingSuperNode) return 1;
+  for (int i = 0; i < an; i++) {
+    if (nt_kind(nt, av[i]) == NK_BlockArgumentNode) continue;   /* (judged above) */
+    int ex = nt_kind(nt, av[i]) == NK_SplatNode ? nt_ref(nt, av[i], "expression") : av[i];
+    if (np >= sc->nparams || ex < 0 || nt_kind(nt, ex) != NK_LocalVariableReadNode || !nt_str(nt, ex, "name") ||
+        !sp_streq(nt_str(nt, ex, "name"), sc->pnames[np]) || (nt_kind(nt, av[i]) == NK_SplatNode) != (np == sc->rest_idx)) return 0;
+    np++;
+  }
+  return np == sc->nparams;
+}
+/* Is method mi, which the chain of builtin class ci holds for initialize, a
+   forward: a prepended module's copy whose body only calls `super` with what
+   it received? Then the builtin's own initialize runs as if it were not there.
+   A reopening's own def is never one: its `super` skips the builtin (the
+   reopening replaced it) and reaches BasicObject's. */
+static int ct_init_forwards(Compiler *c, int mi, int ci) {
+  const Scope *sc = &c->scopes[mi];
+  int b = sc->body, n = 0;
+  const int *bb = b >= 0 && nt_kind(c->nt, b) == NK_StatementsNode ? nt_arr(c->nt, b, "body", &n) : NULL;
+  if (!sc->is_prepend_copy || sc->class_id != ci || !bb || n != 1) return 0;
+  NodeKind k = nt_kind(c->nt, bb[0]);
+  const char *cn = k == NK_CallNode ? nt_str(c->nt, bb[0], "name") : NULL;
+  return k == NK_SuperNode || k == NK_ForwardingSuperNode || (cn && is_initialize_name(comp_scope_user_name(sc)) && sp_streq(cn, sc->name) && cplan_builtin_call(c, bb[0]))
+         ? ct_super_passes_params(c, sc, bb[0]) : 0;
+}
+/* What the chain of program initializes of builtin class ci reduces to from
+   start (cplan_builtin_new_form's rule): each takes what the call passes
+   (argc positional arguments, or an open list), and forwards or ends the walk. */
+static int ct_new_chain_form(Compiler *c, int ci, int start, int argc, int open) {
+  for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
+    const Scope *sc = &c->scopes[mi];
+    /* (each takes what the call passes, or CRuby raises ArgumentError there) */
+    if (!(open ? sc->rest_idx >= 0 && sc->nrequired == 0 : cplan_def_takes_argc(c, mi, argc))) return BNF_REFUSE;
+    if (ct_init_forwards(c, mi, ci)) continue;
+    /* (the first that does not forward: an empty one builds the builtin's empty value, if it has one, from what the call
+       passes; an open list's splat, keywords and block pass are evaluated by the rewrite, which refuses what it cannot) */
+    return cplan_body_empty(c, mi) && builtin_empty_new(c->classes[ci].name) && !sc->yields && ct_params_plain(c, sc)
+           ? BNF_EMPTY : BNF_REFUSE;
+  }
+  return BNF_OWN;
+}
+/* See call_plan.h. */
+int cplan_builtin_new_form(Compiler *c, int id) {
+  int ci, own, tmp[CPT_MAX];
+  if (id < 0 || id >= c->node_cap || nt_kind(c->nt, id) != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name"))) return BNF_NONE;
+  ci = cplan_new_class(c, id, &own);
+  /* (a builtin exception's `new` runs the program's initialize itself: its emitter calls it) */
+  if (ci < 0 || !is_builtin_reopen(c->classes[ci].name) || class_is_exc_subclass(c, ci) || is_builtin_exception_name(c->classes[ci].name) ||
+      ct_class_initializers(c, id, ci, 0, tmp) <= 0) return BNF_NONE;
+  /* what the call passes: the count of positional arguments (a block pass is none), or an open list (a splat, keywords) */
+  int argc = 0, args = nt_ref(c->nt, id, "arguments");
+  const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
+  int open = nt_argv_has(c->nt, av, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING);
+  for (int i = 0; i < argc; i++) argc -= nt_kind(c->nt, av[i]) == NK_BlockArgumentNode;
+  /* the chain's head: a prepended module's copy answers the name ahead of the class's own def, which the plan's answer for a
+     site names only past the prepends */
+  int head = comp_method_in_class(c, ci, "initialize"), start = head >= 0 && c->scopes[head].is_prepend_copy ? head : tmp[0];
+  /* a prepend a later statement makes is chosen at run time by its guard (guard_chain): every chain it may run must reduce alike */
+  if (c->scopes[start].mixin_guarded || c->scopes[start].entry == ENTRY_TABLE) {
+    int to[VER_MAX_ARMS + 1], n = guard_chain(c, start, to, NULL, NULL), f = BNF_NONE;
+    for (int k = 0; k < n; k++) {
+      int fk = ct_new_chain_form(c, ci, to[k], argc, open);
+      if (f != BNF_NONE && fk != f) return BNF_REFUSE;
+      f = fk;
+    }
+    return f;
+  }
+  return ct_new_chain_form(c, ci, start, argc, open);
+}
+/* Is call id a builtin class's `new` the plan does not answer: it runs a program
+   initialize the builtin construction does not (the effect and the block_given? a
+   yielding one sees are lost), or builds its empty value from arguments still on
+   the call (desugar_builtin_new_empty_init moves them out first)? */
+static int cplan_builtin_initialize_gap(Compiler *c, int id) {
+  int f = cplan_builtin_new_form(c, id);
+  return f == BNF_REFUSE || (f == BNF_EMPTY && (nt_ref(c->nt, id, "arguments") >= 0 || nt_ref(c->nt, id, "block") >= 0));
+}
+
 /* in the order codegen meets them: the prepasses, then the emitters */
 static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, size_t cap) {
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
@@ -7995,6 +8115,12 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_RECORD_NEW, CR_FEATURE,
                      "a Struct or Data class's `new` or `[]` the program defines, called where the record "
                      "cannot tell whether that def has run: CRuby runs it once it has, the builtin before", buf, cap);
+    return;
+  }
+  if (!what && cplan_builtin_initialize_gap(c, id)) {
+    cplan_refuse_set(p, CRF_LIMIT, CR_FEATURE,
+                     "a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a "
+                     "prepended module's): CRuby calls it, the builtin construction does not", buf, cap);
     return;
   }
   /* the plan's capture of a module's class method it does not have, where

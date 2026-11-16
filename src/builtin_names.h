@@ -736,14 +736,19 @@ int boot_package_rank_of_path(const char *path, size_t len);   /* the same for s
    functions'), as Comparable and Enumerable are not; BC_OSTRUCT
    OpenStruct, a constant only after `require "ostruct"` (builtin_row);
    BC_TAGGED a class whose boxed value carries a tag of its own
-   (SP_TAG_INT, SP_TAG_CLASS, SP_TAG_ENCODING ...), not SP_TAG_OBJ. */
+   (SP_TAG_INT, SP_TAG_CLASS, SP_TAG_ENCODING ...), not SP_TAG_OBJ.
+   BC_EMPTY_NEW a class whose `new` with no arguments builds a usable empty
+   value (`[]`, `{}`, `""`), the value CRuby's `new` leaves when the program's
+   own initialize runs instead of the builtin's and sets nothing: Time, Range,
+   Fiber and the like build an uninitialized object that raises when used. */
 enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64,
-       BC_TAGGED = 128 };
+       BC_TAGGED = 128, BC_EMPTY_NEW = 256 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */
 int is_plain_builtin_superclass(int id);       /* BC_PLAIN or an exception: gives a program's subclass no method of an Enumerable walk */
 int builtin_singleton_at_boot(int slot);      /* BC_SG_BOOT of row slot (CORE_*): the module's singleton class exists before the program runs */
+int builtin_empty_new(const char *name);       /* BC_EMPTY_NEW of the class named name */
 int builtin_boxed_by_tag(int slot);           /* BC_TAGGED of row slot (CORE_*): a boxed value of the class carries a tag of its own, not SP_TAG_OBJ */
 /* names the compile-time evaluation and its questions ask about (ct_eval.c,
    analyze_ct.c) */

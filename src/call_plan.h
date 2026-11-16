@@ -759,6 +759,17 @@ int cplan_targets_unknown_why(Compiler *c, int id, int cap);
    its cplan_targets. Same answers as cplan_targets otherwise (n >= 0,
    CPT_UNKNOWN). Never what the call answers: that is cplan_targets'. */
 int cplan_entries(Compiler *c, int id, int *out, int cap);
+/* What a builtin class's `new` call id (Array.new, Hash.new, Fiber.new) reduces
+   to where a program initialize stands ahead of the builtin's own, a prepend's or
+   the reopening's (CRuby's chain order, ct_behind_builtin_init): BNF_OWN the
+   builtin's own initialize runs (every initialize ahead only forwards its
+   parameters to it); BNF_EMPTY the first that does not is empty, and the builtin
+   has an empty value (builtin_empty_new): the call evaluates its arguments and
+   builds it; BNF_REFUSE any other, which the builtin construction does not run.
+   BNF_NONE for any other call, and a builtin exception's `new`, which runs the
+   program's. */
+enum { BNF_NONE, BNF_OWN, BNF_EMPTY, BNF_REFUSE };
+int cplan_builtin_new_form(Compiler *c, int id);
 /* Where cplan_entries cannot list them (CPT_UNKNOWN), the names whose
    program methods hold every method call node id may enter, into names (at
    most 2), and how many: the call's own name (a super's, its method's),

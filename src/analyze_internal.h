@@ -293,6 +293,7 @@ int method_value_leaves_or_nil_narrow(Compiler *c, int mi, int *out, int cap);
 int cmethod_receiver_class(Compiler *c, int mi, int ci);
 int block_given_tail_then_last(Compiler *c, int last);
 int super_forwards_caller_block(Compiler *c, int id);
+int block_pass_is_callers(Compiler *c, const Scope *scope, int block);
 /* 1 if `node` is `<&block-param>.call(...)` / .() / [] for method mi -- the
    explicit-call equivalent of `yield`, inlined the same way. */
 int is_blk_param_call(Compiler *c, int node, int mi);

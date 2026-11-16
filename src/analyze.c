@@ -13253,6 +13253,87 @@ static int desugar_hash_new_capacity(Compiler *c) {
   return changed;
 }
 
+/* A builtin class's `new` whose first initialize that does not forward is empty
+   (cplan_builtin_new_form BNF_EMPTY): CRuby builds the empty value its own
+   initialize would not (`class Array; def initialize(*); end; end; Array.new(2, 0)`
+   is `[]`), after evaluating the arguments and the block pass the empty method
+   only receives. The call becomes `(arg; ...; blk; K.new)`: each argument that
+   runs code, then the block pass's expression, then the plain `new` (a literal
+   block is never run). */
+static int bne_new(NodeTable *nt, Compiler *c, const char *type, int like) {
+  int n = nt_new_node(nt, type);
+  if (n < 0) return -1;
+  comp_grow_node_arrays(c);
+  c->nscope[n] = c->nscope[like];
+  if (c->node_cbody) c->node_cbody[n] = c->node_cbody[like];
+  return n;
+}
+/* The statement that runs argument a as building the argument list does, or -1 where it has none to give: a splat is
+   `[*x]` (its to_a), keywords are the hash literal (a `**h` calls to_hash), a block pass `&x` is x.to_proc unless x is a
+   Proc or nil (a literal block runs nothing). */
+static int bne_effect(Compiler *c, NodeTable *nt, int a, int *ok) {
+  OrderWalk w = { NULL, 1 };
+  NodeKind k = nt_kind(nt, a);
+  if (k == NK_SplatNode) {
+    int ex = nt_ref(nt, a, "expression");
+    if (ex >= 0 && nt_kind(nt, ex) == NK_ArrayNode && order_pure_walk(c, ex, &w)) return -1;
+    int arr = bne_new(nt, c, "ArrayNode", a);
+    if (arr < 0) { *ok = 0; return -1; }
+    nt_node_set_arr(nt, arr, "elements", &a, 1);
+    return arr;
+  }
+  if (k == NK_KeywordHashNode) {
+    nt_node_set_type(nt, a, "HashNode");
+    return order_pure_walk(c, a, &w) ? -1 : a;
+  }
+  if (k == NK_BlockArgumentNode) {
+    int ex = nt_ref(nt, a, "expression");
+    if (ex < 0) return -1;
+    TyKind t = infer_type(c, ex);
+    if (t == TY_PROC || t == TY_NIL) return order_pure_walk(c, ex, &w) ? -1 : ex;
+    if (!(ty_is_object(t) || t == TY_SYMBOL)) { *ok = 0; return -1; }   /* (a value whose to_proc the call plan cannot name) */
+    int cn = bne_new(nt, c, "CallNode", a);
+    if (cn < 0) { *ok = 0; return -1; }
+    nt_node_set_str(nt, cn, "name", "to_proc");
+    nt_node_set_ref(nt, cn, "receiver", ex);
+    nt_node_set_ref(nt, cn, "arguments", -1);
+    nt_node_set_ref(nt, cn, "block", -1);
+    return cn;
+  }
+  return order_pure_walk(c, a, &w) ? -1 : a;
+}
+static int desugar_builtin_new_empty_init(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
+    if (nt_kind(nt, id) != NK_CallNode || id >= c->node_cap) continue;
+    int argsn = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
+    if ((argsn < 0 && blk < 0) || cplan_builtin_new_form(c, id) != BNF_EMPTY) continue;
+    int an = 0;
+    const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
+    int *eff = malloc(sizeof(int) * (size_t)(an + 2)), ne = 0, ok = 1;
+    if (!eff) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < an && ok; i++) { int e = bne_effect(c, nt, av[i], &ok); if (e >= 0) eff[ne++] = e; }
+    if (ok && blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode) { int e = bne_effect(c, nt, blk, &ok); if (e >= 0) eff[ne++] = e; }
+    if (!ok) { free(eff); continue; }   /* (the plan refuses the call it could not rewrite: its arguments are still on it) */
+    nt_node_set_ref(nt, id, "arguments", -1);
+    nt_node_set_ref(nt, id, "block", -1);
+    int nc = ne > 0 ? nt_clone_subtree(nt, id) : -1, stmts = ne > 0 ? nt_new_node(nt, "StatementsNode") : -1;
+    if (nc >= 0 && stmts >= 0) {
+      eff[ne++] = nc;
+      nt_node_set_arr(nt, stmts, "body", eff, ne);
+      nt_node_set_type(nt, id, "ParenthesesNode");
+      nt_node_set_ref(nt, id, "body", stmts);
+      nt_node_set_ref(nt, id, "receiver", -1);
+      comp_grow_node_arrays(c);
+      for (int j = nc; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
+    }
+    free(eff);
+    changed = 1;
+  }
+  return changed;
+}
+
 static int pin_arg_position_hash_new(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -45313,6 +45394,9 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
        separator: a length known only at run time keeps the splat, which the
        File arm flattens (a static length still expands to its parts) */
     int keep_splat = 0;
+    /* A builtin's `new` that runs a program initialize ahead of its own, or builds its empty value (cplan_builtin_new_form),
+       keeps its splat whole: desugar_builtin_new_empty_init evaluates it as CRuby builds the argument list, `[*b]` */
+    if (is_new_name(cnm) && cplan_builtin_new_form(c, id) >= BNF_EMPTY) continue;
     if (sp_streq(cnm, "join")) {
       int fr = nt_ref(nt, id, "receiver");
       const char *frn = fr >= 0 && nt_kind(nt, fr) == NK_ConstantReadNode ? nt_str(nt, fr, "name") : NULL;
@@ -49326,10 +49410,13 @@ static void share_struct_aset_handles(Compiler *c) {
 int super_forwards_caller_block(Compiler *c, int id) {
   NodeKind kind = nt_kind(c->nt, id);
   if (kind != NK_SuperNode && kind != NK_ForwardingSuperNode) return 0;
-  int block = nt_ref(c->nt, id, "block");
+  return block_pass_is_callers(c, comp_scope_of(c, id), nt_ref(c->nt, id, "block"));
+}
+/* Is block (a call's block slot, -1 for none) the block its method's caller gave:
+   none written, or the method's own block parameter passed on? */
+int block_pass_is_callers(Compiler *c, const Scope *scope, int block) {
   if (block < 0) return 1;
   if (nt_kind(c->nt, block) != NK_BlockArgumentNode) return 0;
-  Scope *scope = comp_scope_of(c, id);
   int expr = nt_ref(c->nt, block, "expression");
   return scope && scope->blk_param && scope->blk_param[0] && expr >= 0 &&
          nt_kind(c->nt, expr) == NK_LocalVariableReadNode &&
@@ -52529,6 +52616,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("infer_default_param_types", infer_default_param_types(c));
     ch |= AN_PASS("expand_literal_splat_args", expand_literal_splat_args(c));        /* builtin/proc m(*[a,b]) -> m(a, b) */
     ch |= AN_PASS("desugar_hash_new_capacity", desugar_hash_new_capacity(c));        /* Hash.new(capacity: n) -> Hash.new */
+    ch |= AN_PASS("desugar_builtin_new_empty_init", desugar_builtin_new_empty_init(c));   /* an empty initialize on a builtin: its `new` is the empty value */
     ch |= AN_PASS("pin_arg_position_hash_new", pin_arg_position_hash_new(c));        /* f(Hash.new(d)) -> PolyPoly variant */
     ch |= AN_PASS("pad_unsupplied_params", pad_unsupplied_params(c));            /* under-supplied call: placeholder param type */
     ch |= AN_PASS("desugar_builtin_method_obj", desugar_builtin_method_obj(c));       /* builtin recv.method(:sym) -> wrapper def */

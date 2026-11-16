@@ -545,12 +545,14 @@ static void sp_io_park_fd_readable(int fd, const unsigned char *closed) {
      timeout and hand the scheduler to the other threads until readable. */
   {
     extern void sp_Thread_pass(void);
+    extern int sp_sched_other_threads_live(void);
     struct pollfd p;
     p.fd = fd;
     p.events = POLLIN;
     for (;;) {
       p.revents = 0;
-      int r = SP_SIG_BLOCKING(poll(&p, 1, 1));
+      /* (with no other thread to hand over to, wait in the poll itself) */
+      int r = SP_SIG_BLOCKING(poll(&p, 1, sp_sched_other_threads_live() ? 1 : -1));
       if (r > 0 || (r < 0 && errno != EINTR && errno != EAGAIN)) return;
       sp_Thread_pass();
     }

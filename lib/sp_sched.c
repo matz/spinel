@@ -2198,7 +2198,12 @@ static void reg_add(sp_thread *t) {
 int sp_sched_other_threads_live(void) {
   int other = 0;
   SCHED_LOCK();
-  if (g_current != &g_main_thread) other = 1;
+  /* (no green thread yet: the scheduler never started, and the caller, main
+     or a Fiber it resumed, is all there is. NULL read as another thread sent
+     a child wait inside a Fiber to sp_Thread_pass, which switched out to no
+     thread, #12024) */
+  if (!g_current) other = 0;
+  else if (g_current != &g_main_thread) other = 1;
   else { REG_LOCK(); sp_thread *t = g_all;
     while (t) { if (t != g_current) { other = 1; break; } t = t->all_next; }
     REG_UNLOCK(); }
@@ -3597,6 +3602,9 @@ void sp_Thread_pass(void) {
   if (SP_ATOMIC_LOAD(&sp_sig_pending_flag, __ATOMIC_ACQUIRE)) sp_sig_run_pending();
   SCHED_LOCK();
   sp_thread *self = g_current;
+  /* (no green thread yet: there is no one to pass to, and a switch out from
+     a Fiber of main's would go to no thread, #12024) */
+  if (!self) { SCHED_UNLOCK(); return; }
   if (self == &g_main_thread) {
     sp_sched_pass();   /* one round-robin sweep, then main resumes (not a drain) */
     SCHED_UNLOCK();

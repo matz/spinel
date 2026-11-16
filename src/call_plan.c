@@ -8123,15 +8123,16 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
        only where it takes no keywords and makes the Hash a positional argument too (BC_INIT_NO_KEYWORDS), as Array's does; a
        `**h` alone is taken as passing none, as it does when empty: one that holds keys is not told apart) */
     if ((kw != NEWKW_SURE || kwrest || builtin_init_no_keywords(c->classes[ci].name)) && ct_init_forwards(c, mi, ci, dargc, dopen, kw_ok)) {
-      /* (the defaults a forward fills are the next positional arguments of the one it passes them to, which the rewrite
-         places ahead of the call's keywords: not after a Hash made of them) */
+      /* (the defaults a forward fills are the next positional arguments of the one it passes them to; past one without a
+         keyword rest, the literal keywords are a positional Hash ahead of its own defaults and every later one's) */
       int pos = sc->nparams - (sc->rest_idx >= 0) - (sc->kwrest_idx >= 0);
-      int fill = !dopen && dargc < pos ? (kw == NEWKW_SURE && !kwrest ? 0 : ct_fill_defaults(c, sc, mi, dargc, f)) : 1;
+      if (kw == NEWKW_SURE && !kwrest) f->kwat = f->n;
+      int fill = !dopen && dargc < pos ? ct_fill_defaults(c, sc, mi, dargc, f) : 1;
       if (!fill) return BNF_REFUSE;
       /* (a default that reads the object being built (self, an ivar, a call on self) or the def's lexical scope runs only once
          CRuby has made the object, which the builtin's construction does not model yet: the chain keeps master's answer,
          the builtin's own `new`, which runs no initialize) */
-      if (fill == FILL_UNPLACED) { f->n = 0; return BNF_OWN; }
+      if (fill == FILL_UNPLACED) { f->n = 0, f->kwat = -1; return BNF_OWN; }
       argc = !dopen && dargc < pos ? pos : dargc;
       /* (the next takes what this one passes: past one without a keyword rest, the Hash it made, and no keywords) */
       if (!kwrest) open = dopen, kw = NEWKW_NONE;
@@ -8148,7 +8149,7 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
 /* cplan_builtin_new_form's answer, and the defaults of a BNF_FILL into f */
 static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
   int ci, own, tmp[CPT_MAX];
-  f->n = 0;
+  f->n = 0, f->kwat = -1;
   if (id < 0 || id >= c->node_cap || nt_kind(c->nt, id) != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name"))) return BNF_NONE;
   ci = cplan_new_class(c, id, &own);
   /* (a builtin exception's `new` runs the program's initialize itself: its emitter calls it) */
@@ -8175,7 +8176,7 @@ static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
     NewFills nf[1];
     for (int k = 0; k < n; k++) {
       /* (a chain whose defaults run at the call is one only where no guard chooses it) */
-      nf->n = 0;
+      nf->n = 0, nf->kwat = -1;
       int fk = ct_new_chain_form(c, id, ci, to[k], argc, open, kw, nf);
       if ((g != BNF_NONE && fk != g) || fk == BNF_FILL) return BNF_REFUSE;
       g = fk;
@@ -8192,7 +8193,7 @@ int cplan_builtin_new_form(Compiler *c, int id) {
 }
 /* See call_plan.h. */
 void cplan_builtin_new_fills(Compiler *c, int id, NewFills *f) {
-  if (ct_builtin_new_form(c, id, f) != BNF_FILL) f->n = 0;
+  if (ct_builtin_new_form(c, id, f) != BNF_FILL) f->n = 0, f->kwat = -1;
 }
 /* Is call id a builtin class's `new` the plan does not answer: it runs a program
    initialize the builtin construction does not (the effect and the block_given? a

@@ -774,9 +774,12 @@ int cplan_entries(Compiler *c, int id, int *out, int cap);
 enum { BNF_NONE, BNF_OWN, BNF_EMPTY, BNF_REFUSE, BNF_FILL };
 int cplan_builtin_new_form(Compiler *c, int id);
 /* ...and for BNF_FILL those defaults, in the order CRuby runs them: parameter
-   pi[k] of method scope mi[k], each the next positional argument */
+   pi[k] of method scope mi[k], each the next positional argument. kwat: where a
+   forward without a keyword rest made the call's literal keywords one more
+   positional Hash, the count of defaults ahead of that Hash, which every later
+   one follows; -1 where none did. */
 enum { NEW_FILLS_MAX = 16 };
-typedef struct NewFills { int n, mi[NEW_FILLS_MAX], pi[NEW_FILLS_MAX]; } NewFills;
+typedef struct NewFills { int n, kwat, mi[NEW_FILLS_MAX], pi[NEW_FILLS_MAX]; } NewFills;
 void cplan_builtin_new_fills(Compiler *c, int id, NewFills *f);
 /* Where cplan_entries cannot list them (CPT_UNKNOWN), the names whose
    program methods hold every method call node id may enter, into names (at

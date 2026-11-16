@@ -13257,9 +13257,10 @@ static int desugar_hash_new_capacity(Compiler *c) {
 
 static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pfx, int k, int value, int *pre, int *npre);
 /* The defaults a builtin `new`'s forwards leave unfilled (cplan_builtin_new_fills) placed on call id after its positional
-   arguments, as CRuby runs them once the call has built its argument list: each a clone of the default. Where one reads
-   an earlier parameter, every positional value is held in a local in turn, appended to pre (np so far), and the reads
-   read those locals. Answers how many writes pre holds, with room for one statement more. */
+   arguments, as CRuby runs them once the call has built its argument list: each a clone of the default. Where a forward
+   made the call's literal keywords a positional Hash ahead of some (kwat), the keywords are that Hash, at its place among
+   them. Where one reads an earlier parameter, every positional value is held in a local in turn, appended to pre (np so
+   far), and the reads read those locals. Answers how many writes pre holds, with room for one statement more. */
 static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **prep, int np) {
   NodeTable *nt = (NodeTable *)c->nt;
   Scope *sc = comp_scope_of(c, id);
@@ -13270,8 +13271,11 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
   int *pre = realloc(*prep, sizeof(int) * (size_t)(np + n + fl->n + 1));
   if (!out || !keep || !pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   *prep = pre;
+  int kwh = -1, kwat = fl->kwat >= 0 && fl->kwat < fl->n ? fl->kwat : -1;
   for (int k = 0; k < n; k++)
-    if (nt_kind(nt, av[k]) == NK_KeywordHashNode || nt_kind(nt, av[k]) == NK_BlockArgumentNode) keep[nk++] = av[k]; else out[npos++] = av[k];
+    if (kwat >= 0 && nt_kind(nt, av[k]) == NK_KeywordHashNode) kwh = av[k];
+    else if (nt_kind(nt, av[k]) == NK_KeywordHashNode || nt_kind(nt, av[k]) == NK_BlockArgumentNode) keep[nk++] = av[k];
+    else out[npos++] = av[k];
   for (int f = 0; f < fl->n; f++) {
     int d = c->scopes[fl->mi[f]].pdefault[fl->pi[f]], nd = 0, *di = nt_subtree_ids(nt, &d, 1, &nd);
     for (int k = 0; k < nd; k++) hold |= nt_kind(nt, di[k]) == NK_LocalVariableReadNode;
@@ -13279,11 +13283,18 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
   }
   for (int k = 0; hold && k < npos; k++) out[k] = sd_hold(c, nt, sc, id, "bnd", k, out[k], pre, &np);
   for (int f = 0; f < fl->n; f++, npos++) {
+    if (f == kwat && kwh >= 0) {   /* (the keywords as the positional Hash a forward made of them) */
+      int en = 0, h = nt_new_node(nt, "HashNode");
+      const int *el = nt_arr(nt, kwh, "elements", &en);
+      nt_node_set_arr(nt, h, "elements", el, en);
+      out[npos] = hold ? sd_hold(c, nt, sc, id, "bnd", npos, h, pre, &np) : h;
+      npos++;
+    }
     const Scope *ms = &c->scopes[fl->mi[f]];
     int d = nt_clone_subtree(nt, ms->pdefault[fl->pi[f]]), nd = 0, *di = nt_subtree_ids(nt, &d, 1, &nd);
     /* (a read of an earlier parameter, the j-th positional value: ct_default_placeable lets no other local through) */
     for (int k = 0; k < nd; k++)
-      for (int i = 0, j = 0; nt_kind(nt, di[k]) == NK_LocalVariableReadNode && i < fl->pi[f]; i++) {
+      for (int i = 0, j = 0; nt_kind(nt, di[k]) == NK_LocalVariableReadNode && i < fl->pi[f] && j < npos; i++) {
         if (i == ms->rest_idx || i == ms->kwrest_idx) continue;
         if (sp_streq(nt_str(nt, di[k], "name"), ms->pnames[i])) { nt_node_set_str(nt, di[k], "name", nt_str(nt, out[j], "name")); break; }
         j++;

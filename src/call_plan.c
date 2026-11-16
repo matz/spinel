@@ -1917,19 +1917,27 @@ static int ver_kern_test(Compiler *c, const VerIds *cells) {
   return test;
 }
 /* What a Kernel guard asks of the classes below the holder cls: the call id of name (how: 2 for a super), the ncells
-   cells cls's chain reads, and cls's method_missing mm */
-typedef struct { int id, cls, ncells, mm, how; const char *name; } VerKernSelf;
-/* `case when self.instance_of?(D) then <arm(D)> ... else els end`, with an arm for each class D below x->cls that arm
-   gives a node for; els where it gives none */
-static int ver_kern_by_self(Compiler *c, const VerKernSelf *x, int (*arm)(Compiler *c, const VerKernSelf *x, int d), int els) {
+   cells cls's chain reads, cls's method_missing mm, and the call's count of arguments (ver_kern_arity) and its block */
+typedef struct { int id, cls, ncells, mm, how, ar, blk; const char *name; } VerKernSelf;
+/* For each class D below x->cls (comp_descendants' order), pick's answer in *how (the caller frees it): >= 0 for an
+   arm, -1 for none (a singleton class has none); how many have one. The record is asked here, before any node of
+   the arms is made: a node made moves the load points its next question reads (an_elab_points) */
+static int ver_kern_pick(Compiler *c, const VerKernSelf *x, int (*pick)(Compiler *c, const VerKernSelf *x, int d), int **how) {
+  int nd = 0, n = 0;
+  const int *ds = comp_descendants(c, x->cls, &nd);
+  if (!(*how = malloc(sizeof **how * (size_t)(nd > 0 ? nd : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nd; i++) n += ((*how)[i] = c->classes[ds[i]].is_singleton_of ? -1 : pick(c, x, ds[i])) >= 0;
+  return n;
+}
+/* `case when self.instance_of?(D) then <arm(D, how)> ... else els end`, with an arm for each class D below x->cls
+   that how (ver_kern_pick) gives one */
+static int ver_kern_by_self(Compiler *c, const VerKernSelf *x, const int *how, int (*arm)(Compiler *c, const VerKernSelf *x, int d, int how), int els) {
   int nd = 0, n = 0;
   const int *ds = comp_descendants(c, x->cls, &nd);
   int *is = malloc(sizeof *is * (size_t)(nd > 0 ? nd : 1)), *then = malloc(sizeof *then * (size_t)(nd > 0 ? nd : 1));
   if (!is || !then) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < nd; i++) {
-    int t = c->classes[ds[i]].is_singleton_of ? -1 : arm(c, x, ds[i]);
-    if (t >= 0 && (is[n] = disp_self_class_is(c, ds[i])) >= 0) then[n++] = t;
-  }
+  for (int i = 0; i < nd; i++)
+    if (how[i] >= 0 && (is[n] = disp_self_class_is(c, ds[i])) >= 0) then[n++] = arm(c, x, ds[i], how[i]);
   if (n) els = disp_case((NodeTable *)c->nt, is, then, n, els);
   free(is); free(then);
   return els;
@@ -1955,58 +1963,141 @@ static int ver_kern_own(Compiler *c, const VerKernSelf *x, int d) {
   int oc = own >= 0 ? c->scopes[own].class_id : -1;
   return oc >= 0 && oc != x->cls && is_descendant(c, oc, x->cls) && is_descendant(c, d, oc);
 }
-/* The test of self's Kernel where self is a D (ver_kern_by_self; the holder's own is the else): true where D finds a
-   method of its own (ver_kern_own), whose call the guard's then arm makes, or where D surely has Kernel
-   (elab_class_kernel: an include in its body, or in a module it includes, that surely runs); else the test of the cells
-   D's chain reads (ver_kern_cells), cls's among them, where it reads more: a class method's include run on D, an include
-   under a condition in D's body or a module's, a module of D's with a cell of its own; none where D reads what cls reads */
-static int ver_kern_test_arm(Compiler *c, const VerKernSelf *x, int d) {
-  VerIds dc = { NULL, 0, 0 };
-  int t = -1;
-  if (ver_kern_own(c, x, d) || elab_class_kernel(c, d) == KERN_HAS) t = nt_new_node((NodeTable *)c->nt, "TrueNode");
-  else if (ver_kern_cells(c, d, &dc) > x->ncells) t = ver_kern_test(c, &dc);
+/* How the test of self's Kernel answers where self is a D (ver_kern_by_self; the holder's own is the else): 1 true,
+   where D finds a method of its own (ver_kern_own), whose call the guard's then arm makes, or where D surely has Kernel
+   (elab_class_kernel: an include in its body, or in a module it includes, that surely runs); 0 the test of the cells
+   D's chain reads (ver_kern_cells), cls's among them, where it reads more: a class method's include run on D, an
+   include under a condition in D's body or a module's, a module of D's with a cell of its own; -1 none, where D reads
+   what cls reads */
+static int ver_kern_test_pick(Compiler *c, const VerKernSelf *x, int d) {
+  if (ver_kern_own(c, x, d) || elab_class_kernel(c, d) == KERN_HAS) return 1;
+  VerIds dc;
+  int more = ver_kern_cells(c, d, &dc) > x->ncells;
+  free(dc.v);
+  return more ? 0 : -1;
+}
+/* ...its arm for a D: true, or the test of D's cells */
+static int ver_kern_test_arm(Compiler *c, const VerKernSelf *x, int d, int how) {
+  if (how) return nt_new_node((NodeTable *)c->nt, "TrueNode");
+  VerIds dc;
+  (void)ver_kern_cells(c, d, &dc);
+  int t = ver_kern_test(c, &dc);
   free(dc.v);
   return t;
 }
-/* `method_missing(:name, <call id's arguments>)` with the call's block, a copy of each (the call's own run only on the
-   other arm) */
-static int ver_kern_mm_call(Compiler *c, int id, const char *name) {
+/* `callee(<call id's arguments>)` with the call's block, a copy of each (the call's own run only on the other arm),
+   `:sym` ahead of them where sym (a method_missing's) */
+static int ver_kern_fwd(Compiler *c, int id, const char *callee, const char *sym) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int an = nt_ref(nt, id, "arguments"), nargs = 0;
+  int an = nt_ref(nt, id, "arguments"), nargs = 0, k0 = sym != NULL;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &nargs) : NULL;
-  int call = disp_forward_call(nt, "method_missing", 0, 0), margs = nt_new_node(nt, "ArgumentsNode"), sym = nt_new_node(nt, "SymbolNode");
+  int call = disp_forward_call(nt, callee, 0, 0), margs = k0 + nargs ? nt_new_node(nt, "ArgumentsNode") : -1;
   int *mv = malloc(sizeof *mv * (size_t)(nargs + 1));
   if (!mv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  comp_sym_intern(c, name);
-  nt_node_set_str(nt, sym, "value", name);
-  mv[0] = sym;
-  for (int k = 0; k < nargs; k++) mv[k + 1] = nt_clone_subtree(nt, av[k]);
-  nt_node_set_arr(nt, margs, "arguments", mv, nargs + 1);
-  nt_node_set_ref(nt, call, "arguments", margs);
+  if (sym) {
+    comp_sym_intern(c, sym);
+    nt_node_set_str(nt, mv[0] = nt_new_node(nt, "SymbolNode"), "value", sym);
+  }
+  for (int k = 0; k < nargs; k++) mv[k0 + k] = nt_clone_subtree(nt, av[k]);
+  if (margs >= 0) {
+    nt_node_set_arr(nt, margs, "arguments", mv, k0 + nargs);
+    nt_node_set_ref(nt, call, "arguments", margs);
+  }
   if (nt_ref(nt, id, "block") >= 0) nt_node_set_ref(nt, call, "block", nt_clone_subtree(nt, nt_ref(nt, id, "block")));   /* (the call's block goes with it) */
   free(mv);
   return call;
 }
+/* The call's count of arguments, as the guard's else helper takes them (disp_def_build's ar): -1 where one is a splat,
+   keywords or `...`, which `*r, **k` take */
+static int ver_kern_arity(const NodeTable *nt, const int *av, int n) {
+  for (int k = 0; k < n; k++) {
+    NodeKind ak = nt_kind(nt, av[k]);
+    if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_ForwardingArgumentsNode) return -1;
+  }
+  return n;
+}
 static void ver_pin(Compiler *c, int node, int scope, int vis);
-/* The guard's arm where no cell is set and self is a D (ver_kern_by_self; the holder's, its method_missing or the raise,
-   is the else): D's own method_missing where it is another than the holder's, called with a copy of the call's operands
-   and block and pinned to it (ver_pin), as the holder's chain does not hold it; none where D finds a method of its own
-   (the test's arm is true there), and none where the record does not say a call on a D runs that method_missing from
-   D's first object on (ver_kern_found: an undef of it ahead, a def or a mixin a call may run ahead of) */
-static int ver_kern_mm_arm(Compiler *c, const VerKernSelf *x, int d) {
-  int dm = ver_kern_found(c, d, x->cls, METHOD_MISSING_NAME, cplan_mm_method(c, -1, d, 0)), call;
-  if (dm < 0 || dm == x->mm || ver_kern_own(c, x, d)) return -1;
-  ver_pin(c, call = ver_kern_mm_call(c, x->id, x->name), dm, 0);
+/* D's own method_missing, which the guard's else calls where no cell is set and self is a D: another than the
+   holder's, as the holder's chain does not hold it; -1 where D finds a method of its own (the test's arm is true
+   there), and where the record does not say a call on a D runs that method_missing from D's first object on
+   (ver_kern_found: an undef of it ahead, a def or a mixin a call may run ahead of) */
+static int ver_kern_mm_pick(Compiler *c, const VerKernSelf *x, int d) {
+  int dm = ver_kern_found(c, d, x->cls, METHOD_MISSING_NAME, cplan_mm_method(c, -1, d, 0));
+  return dm < 0 || dm == x->mm || ver_kern_own(c, x, d) ? -1 : dm;
+}
+/* ...its arm in the else helper (ver_kern_by_self; the holder's method_missing or the raise is the else):
+   `method_missing(:name, <the helper's parameters>, &blk)`, pinned to D's, dm (ver_pin) */
+static int ver_kern_mm_arm(Compiler *c, const VerKernSelf *x, int d, int dm) {
+  int call = disp_method_missing_call((NodeTable *)c->nt, x->name, x->ar, x->blk);
+  ver_pin(c, call, dm, 0);
   return call;
 }
-static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int how, const int *pm) {
+/* A Kernel guard's def on its holder (ver_kern_help): kind 0 the test, 1 the else; scope -1 where no class below has
+   an arm */
+typedef struct { int kind, cls, how, ar, blk, scope; const char *name; } VerKernHelp;
+typedef struct { VerKernHelp *v; int n, cap; } VerKernHelps;
+/* The holder's def that answers x's guard for the classes below it, made once per (holder, name, how, count, block)
+   and kept in *hs (ver_kernel_guards' own): kind 0 the test, a def of no parameters whose body is the `case` over them
+   (ver_kern_test_arm), the test of cls's cells its else; kind 1 the else, which takes the call's operands and block
+   as disp_def_build gives them, its arms calling each D's own method_missing (ver_kern_mm_arm), its else cls's
+   method_missing or the raise. It is walked as a method of cls (synth_def_scope), reached where the call's method is,
+   and the site calls it pinned to it, its operands evaluated as its arguments. A call of it runs the `case` as an
+   if-chain, an instance_of? test per class with an arm until one holds. -1 where no class below has an arm: the site
+   builds the guard in place. */
+static int ver_kern_help(Compiler *c, VerKernHelps *hs, const VerKernSelf *x, int kind, const VerIds *cells) {
+  int how = kind ? x->how : x->how == 2, ar = kind ? x->ar : 0, blk = kind ? x->blk : 0, scope = -1;
+  const Scope *site = comp_scope_of(c, x->id);
+  int run = site && site->reachable;
+  for (int i = 0; i < hs->n; i++) {
+    const VerKernHelp *h = &hs->v[i];
+    if (h->kind != kind || h->cls != x->cls || h->how != how || h->ar != ar || h->blk != blk || !sp_streq(h->name, x->name)) continue;
+    if (run && h->scope >= 0 && !c->scopes[h->scope].reachable) { c->scopes[h->scope].reachable = 1; comp_touch_scope(c->scopes[h->scope].idx); }
+    return h->scope;
+  }
+  int *picks = NULL;
+  if (ver_kern_pick(c, x, kind ? ver_kern_mm_pick : ver_kern_test_pick, &picks)) {
+    NodeTable *nt = (NodeTable *)c->nt;
+    size_t hl = strlen(x->name) + 48;
+    char *hn = malloc(hl);
+    if (!hn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    /* (the space: a name no def of the program has, name_is_synth_method) */
+    if (kind) snprintf(hn, hl, "__kern else %d %d %d %s", how, ar, blk, x->name);
+    else snprintf(hn, hl, "__kern %s %s", how ? "super" : "test", x->name);
+    int body;
+    if (kind) {
+      comp_sym_intern(c, x->name);
+      body = ver_kern_by_self(c, x, picks, ver_kern_mm_arm, x->mm >= 0 ? disp_method_missing_call(nt, x->name, ar, blk) : ver_no_method_raise(c, x->cls, 0, x->name, 0, x->how));
+    }
+    else body = ver_kern_by_self(c, x, picks, ver_kern_test_arm, ver_kern_test(c, cells));
+    scope = synth_def_scope(c, x->cls, hn, disp_def_build(nt, -1, hn, 0, ar, blk, NULL, 0, body), run);
+    free(hn);
+    if (kind && blk) {
+      /* (it forwards its block: spliced where every method_missing it calls lets a spliced block through, as a
+         version entry's arms, ver_entry_emit) */
+      int spliced = x->mm < 0 || c->scopes[x->mm].yields || !c->scopes[x->mm].blk_param, nd = 0;
+      (void)comp_descendants(c, x->cls, &nd);
+      for (int i = 0; i < nd; i++) if (picks[i] >= 0) spliced &= c->scopes[picks[i]].yields || !c->scopes[picks[i]].blk_param;
+      c->scopes[scope].yields = spliced;
+      comp_touch_scope(c->scopes[scope].idx);
+    }
+  }
+  free(picks);
+  if (hs->n == hs->cap && !(hs->v = realloc(hs->v, sizeof *hs->v * (size_t)(hs->cap = hs->cap ? 2 * hs->cap : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  hs->v[hs->n++] = (VerKernHelp){ kind, x->cls, how, ar, blk, scope, x->name };
+  return scope;
+}
+static void ver_kernel_guard(Compiler *c, VerKernHelps *hs, int id, int cls, const char *name, int how, const int *pm) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int base = nt->count, par = pm ? pm[id] : -1;
+  int par = pm ? pm[id] : -1;
   VerIds cells;
   if (!ver_kern_cells(c, cls, &cells) || par < 0) { free(cells.v); return; }
   int an = nt_ref(nt, id, "arguments"), nargs = 0, els, mm = how != 2 ? cplan_mm_method(c, -1, cls, 0) : -1;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &nargs) : NULL;
-  if (mm >= 0) els = ver_kern_mm_call(c, id, name);   /* (a class with a method_missing of its own answers the call where no cell is set) */
+  VerKernSelf x = { id, cls, cells.n, mm, how, ver_kern_arity(nt, av, nargs), nt_ref(nt, id, "block") >= 0, name };
+  /* (the helpers first: their nodes are their own scope's, the guard's the call's) */
+  int es = how != 2 ? ver_kern_help(c, hs, &x, 1, &cells) : -1, ts = ver_kern_help(c, hs, &x, 0, &cells), base = nt->count;
+  if (es >= 0) ver_pin(c, els = ver_kern_fwd(c, id, c->scopes[es].name, NULL), es, 0);
+  else if (mm >= 0) els = ver_kern_fwd(c, id, METHOD_MISSING_NAME, name);   /* (a class with a method_missing of its own answers the call where no cell is set) */
   else {
     /* the call's operands that run code are evaluated, as CRuby evaluates them before it finds no method, ahead of the raise
        (a copy of each: the call's own run only on the other arm) */
@@ -2017,22 +2108,24 @@ static void ver_kernel_guard(Compiler *c, int id, int cls, const char *name, int
     els = nops ? disp_ahead(nt, ops, nops, raise) : raise;
     free(ops);
   }
-  VerKernSelf x = { id, cls, cells.n, mm, how, name };
-  if (how != 2) els = ver_kern_by_self(c, &x, ver_kern_mm_arm, els);
-  int ifn = disp_choose(nt, ver_kern_by_self(c, &x, ver_kern_test_arm, ver_kern_test(c, &cells)), id, els);
+  int test;
+  if (ts >= 0) ver_pin(c, test = disp_forward_call(nt, c->scopes[ts].name, 0, 0), ts, 0);
+  else test = ver_kern_test(c, &cells);
+  int ifn = disp_choose(nt, test, id, els);
   nt_replace_child(nt, par, id, ifn);
   comp_grow_node_arrays(c);
   for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
   nt_node_set_int(nt, ifn, "node_line", (int)nt_int(nt, id, "node_line", 0));
   free(cells.v);
 }
-/* ...for each such call of the program */
+/* ...for each such call of the program, the helpers that answer for the classes below a holder made once (VerKernHelps) */
 static void ver_kernel_guards(Compiler *c) {
   const NodeTable *nt = c->nt;
   int n0 = nt->count;
   ver_kern_sites(c);
   if (!c->nver_kern_after) return;
   int *pm = du_parent_map(nt);   /* (of the nodes the guards leave where they stand) */
+  VerKernHelps hs = { NULL, 0, 0 };
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     const Scope *s = k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_CallNode ? comp_scope_of(c, id) : NULL;
@@ -2040,10 +2133,11 @@ static void ver_kernel_guards(Compiler *c) {
         cplan_class_kernel(c, s->class_id) != KERN_CELL) continue;   /* (an entry's arms, and the raise they hold, are the plan's own) */
     if (k == NK_CallNode) {
       const char *nm = nt_str(nt, id, "name");
-      if (cplan_dispatch_row(c, id) && call_target(c, id, s->class_id, nm, 0, NULL) < 0) ver_kernel_guard(c, id, s->class_id, nm, nt_vcall(nt, id), pm);
+      if (cplan_dispatch_row(c, id) && call_target(c, id, s->class_id, nm, 0, NULL) < 0) ver_kernel_guard(c, &hs, id, s->class_id, nm, nt_vcall(nt, id), pm);
     }
-    else if (cplan_super_target(c, id, s, NULL) < 0) ver_kernel_guard(c, id, s->class_id, comp_scope_user_name(s), 2, pm);
+    else if (cplan_super_target(c, id, s, NULL) < 0) ver_kernel_guard(c, &hs, id, s->class_id, comp_scope_user_name(s), 2, pm);
   }
+  free(hs.v);
   free(pm);
 }
 /* See call_plan.h. */
@@ -2224,6 +2318,11 @@ int cplan_pinned_vis(const Compiler *c, int id) {
 }
 int cplan_pinned_builtin(const Compiler *c, int id) { return ct_pin_of(c, id) == CT_PIN_BUILTIN; }
 int cplan_pinned(const Compiler *c, int id) { return ct_pin_of(c, id) != -1; }
+/* See call_plan.h. */
+int cplan_pin_scope(const Compiler *c, int id) {
+  const struct VerPin *p = ct_pin_find(c, id);
+  return p && p->scope >= 0 && !p->vis ? p->scope : -1;
+}
 /* Is version vi a top-level method (Object's) that a call asked on a
    class's chain reaches past the class's own versions? The class's table
    holds no such method: the call's top-level ask (CT_TOP) binds it. */

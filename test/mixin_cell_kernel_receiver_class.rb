@@ -120,6 +120,25 @@ class Nested < Aliased
   include ::NestOuter
 end
 
+# the call's operands, run once, and its block reach a subclass's method_missing
+class BlockGiven < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def c = respond_to_missing?(:c, false) { |x| x * 5 }
+  def f(&blk) = respond_to_missing?(:f, true, &blk)
+  def g(log) = respond_to_missing?(log.push(:g).size, false)
+end
+class BlockGivenSub < BlockGiven
+  def method_missing(n, *a, &b) = [:block_sub, n, a, (b ? yield(2) : :noblk)]
+end
+class BlockGivenAlias < BlockGiven
+  def miss(n, *a) = [:alias_mm, n, a]
+  alias method_missing miss
+end
+class BlockGivenAliasMethod < BlockGiven
+  def miss(n, *a) = [:alias_method_mm, n, a]
+  alias_method :method_missing, :miss
+end
+
 # a class method's include run on a subclass, a deeper one, and one called by super
 class Mix < BasicObject
   def self.mix = include(::Kernel)
@@ -362,6 +381,17 @@ show { ModUndefSub.new.t }
 show { ModUndefMissLeaf.new.t }
 show { AliasedSub.new.t }
 show { Nested.new.t }
+
+# the operands and the block
+show { BlockGivenSub.new.c }
+show { BlockGivenSub.new.f { |v| v * 10 } }
+show { BlockGivenSub.new.f }
+given_log = []
+show { BlockGivenSub.new.g(given_log) }
+show { BlockGiven.new.g(given_log) }
+::Kernel.p given_log
+show { BlockGivenAlias.new.g(given_log) }
+show { BlockGivenAliasMethod.new.g(given_log) }
 
 # an alias made in a reopening, after an object was made, is not there before it runs
 class AliasLate < Aliased

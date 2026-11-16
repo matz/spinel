@@ -59,4 +59,12 @@ false
 :nme
 :alias_own
 :nest_inner
+[:block_sub, :respond_to_missing?, [:c, false], 10]
+[:block_sub, :respond_to_missing?, [:f, true], 20]
+[:block_sub, :respond_to_missing?, [:f, true], :noblk]
+[:block_sub, :respond_to_missing?, [1, false], :noblk]
+:nme
+[:g, :g]
+[:alias_mm, :respond_to_missing?, [3, false]]
+[:alias_method_mm, :respond_to_missing?, [4, false]]
 :nme

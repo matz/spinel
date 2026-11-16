@@ -21520,8 +21520,17 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
   /* An entry's arm call is pinned to the method it runs, which the entry
      reaches by scope (ver_entry_targets, above), or to the builtin: by name
      it reached every other method of the name, a class method's entry the
-     instance methods too */
-  if (k0 == NK_CallNode && cplan_pinned(c, id)) names[0] = NULL;
+     instance methods too. A call pinned outside an entry (a Kernel guard's,
+     to its holder's helper, ver_kern_help) reaches its method by scope. */
+  if (k0 == NK_CallNode && cplan_pinned(c, id)) {
+    int pin = cplan_pin_scope(c, id);
+    if (pin >= 0) {
+      char mark[24];
+      snprintf(mark, sizeof mark, "\x01%d", pin);
+      cr_add_name(out, n, cap, mark);
+    }
+    names[0] = NULL;
+  }
   /* Once the types are settled, a plain name, or one on a known instance,
      reaches the scopes of that name that can take the call's argument count
      (cr_count_name, compute_reachable). A 0-argument `r.attribute` kept a

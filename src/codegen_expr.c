@@ -5602,7 +5602,9 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
       free(lb.p); free(tc2.p);
       return 1;
     }
-    if (lt == TY_BOOL && comp_ntype(c, right) == TY_BOOL) {
+    /* (both operands Booleans at this site and the chain's own type is a Boolean too: another site's block
+       value, which the cached type unifies, makes it boxed, and the flat C `&&` answers an int) */
+    if (lt == TY_BOOL && repr_of(c, right).as_ty == TY_BOOL && res == TY_BOOL) {
       /* Capture the right operand's prelude: an object subexpression there
          (`a && b.c == x`) hoists a GC-rooted temp that must run inside the
          short-circuit, not above the whole chain (issue #1773). No prelude ->

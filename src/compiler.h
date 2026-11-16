@@ -205,6 +205,11 @@ typedef struct {
                        Integer, so a Range of it stays boxed in promote mode */
   int rbs_seeded;   /* param type pinned from an --rbs advisory seed: the
                        fixpoint must not widen it (see apply_rbs_seeds) */
+  int oa_seed;      /* (params) a seed's `Array[Class]`: 1 + the class index.
+                       Not a pin -- the parameter is a boxed array the seed
+                       left unpinned -- but the element evidence
+                       narrow_object_arrays starts its slot from, as an
+                       ivar's ivar_oa_seed is a request (seed_method) */
   int rbs_box_held; /* (params) a box reached the container seed while the
                        fixpoint ran and the seed held: it may have been a
                        transient, so the settled types decide whether the

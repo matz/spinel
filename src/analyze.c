@@ -8157,6 +8157,7 @@ static int g_seed_nilable;
    pins nothing for (a Range, an exception): the slot keeps its inferred
    type, and an inline annotation naming it still applies. */
 static int g_seed_unpinned;
+static int seed_obj_array_class(Compiler *c, const char *tok);
 static TyKind parse_seed_type(Compiler *c, const char *tok) {
   g_seed_nilable = 0;
   g_seed_unpinned = 0;
@@ -8206,7 +8207,11 @@ static TyKind parse_seed_type(Compiler *c, const char *tok) {
     /* the full seed matcher, not a bare table lookup: an obj_ token names a
        class the same way a `class` seed line does (module-nested leaf,
        collision-renamed form), and must match the same set */
-    /* obj_X_ptr_array (`Array[X]`) is not a pin: see seed_obj_array_class */
+    /* obj_X_ptr_array (`Array[X]`) is not a pin: see seed_obj_array_class.
+       An Array of one class exists only once narrow_object_arrays decides
+       it, so the slot keeps its inferred type, and an inline signature
+       naming it still pins its other types (it dropped them all). */
+    if (seed_obj_array_class(c, buf) >= 0) { g_seed_unpinned = 1; return TY_UNKNOWN; }
     int ci = seed_class_index(c, buf + 4);
     /* A module names no object layout: its methods exist only as copies in
        its includers, and a value of the module type is one of them. It is
@@ -8729,6 +8734,17 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
         /* a nilable int parameter can hold nil like any other: mark it so
            it is an oint and boxing it answers nil rather than a number */
         if (g_seed_nilable && (pt == TY_INT || pt == TY_FLOAT)) lv->nullable_int = 1;
+      }
+    }
+    /* `Array[Point]`: a boxed array the narrowing may make one of Point
+       (lv->oa_seed). Not pinned, or the pass would skip the slot; a host
+       calling an --ext-entry gets the sp_PtrArray its uses allow. */
+    else if (!g_seed_nilable) {
+      int oc = seed_obj_array_class(c, field);
+      LocalVar *lv = oc >= 0 ? scope_local(s, s->pnames[slot]) : NULL;
+      if (lv) {
+        if (lv->type == TY_UNKNOWN || lv->type == TY_POLY) lv_set_type(lv, TY_POLY_ARRAY);
+        lv->oa_seed = oc + 1;
       }
     }
   }
@@ -19490,7 +19506,7 @@ static int narrow_object_arrays(Compiler *c) {
       LocalVar *lv = &sc->locals[li];
       if (lv->type != TY_POLY_ARRAY || lv->is_block_param || lv->rbs_seeded || cext_scope(c, s)) continue;
       if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].row_mut = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
+      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = lv->oa_seed > 0 ? lv->oa_seed - 1 : -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].row_mut = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
       sl[n].old_pin = lv->oa_pin; lv->oa_pin = TY_UNKNOWN; n++;
     }
   }

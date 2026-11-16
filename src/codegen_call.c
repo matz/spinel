@@ -2857,7 +2857,7 @@ static int class_module_refs(Compiler *c, int ci, const char *kw, int *out, int 
         NodeKind ak = nt_kind(nt, av[j]);
         const char *mn = (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode)
                          ? nt_str(nt, av[j], "name") : NULL;
-        int mi = mn ? comp_class_index(c, mn) : -1;
+        int mi = mn ? const_node_class_index(c, av[j]) : -1;
         if (mi >= 0) out[n++] = mi;
       }
     }

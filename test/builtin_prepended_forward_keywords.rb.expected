@@ -1,0 +1,6 @@
+5
+[:default, :capacity]
+:z
+0
+[{k: 1}, {k: 1}]
+[:default, :capacity, :size, :k]

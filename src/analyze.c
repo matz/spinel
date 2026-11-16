@@ -13229,7 +13229,9 @@ static int desugar_hash_new_capacity(Compiler *c) {
     int argsn = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
     if (nt_argv_kwh(nt, av, an) < 0) continue;
-    if (cplan_const_user(c, id, r, 1).mi >= 0) continue;
+    /* (a program initialize ahead of Hash's own that takes the keyword as a positional Hash sees it: the plan refuses that
+       call with the keyword on it, cplan_builtin_new_form) */
+    if (cplan_const_user(c, id, r, 1).mi >= 0 || cplan_builtin_new_form(c, id) == BNF_REFUSE) continue;
     int en = 0; const int *el = nt_arr(nt, av[an - 1], "elements", &en);
     if (en != 1 || nt_kind(nt, el[0]) != NK_AssocNode) continue;
     int key = nt_ref(nt, el[0], "key"), val = nt_ref(nt, el[0], "value");

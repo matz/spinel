@@ -8037,22 +8037,48 @@ static int ct_init_forwards(Compiler *c, int mi, int ci, int argc, int open, int
   NodeKind k = nt_kind(c->nt, bb[0]);
   return (k == NK_SuperNode || k == NK_ForwardingSuperNode) && ct_super_passes_params(c, sc, bb[0], argc, open, kw_ok);
 }
+/* The keywords a builtin's `new` passes on (ct_call_keywords): none, some
+   for certain (a literal key), or maybe none (only `**h` or `...`, which may
+   be empty, and an empty one passes nothing). */
+enum { NEWKW_NONE, NEWKW_MAYBE, NEWKW_SURE };
+static int ct_call_keywords(const NodeTable *nt, const int *av, int nargs) {
+  int kw = nt_argv_has(nt, av, nargs, NT_ARG_FORWARDING) ? NEWKW_MAYBE : NEWKW_NONE;
+  for (int i = 0; i < nargs; i++) {
+    int en = 0;
+    const int *el = nt_kind(nt, av[i]) == NK_KeywordHashNode ? nt_arr(nt, av[i], "elements", &en) : NULL;
+    for (int j = 0; j < en; j++) {
+      if (nt_kind(nt, el[j]) != NK_AssocSplatNode) return NEWKW_SURE;
+      kw = NEWKW_MAYBE;
+    }
+  }
+  return kw;
+}
 /* What the chain of program initializes of builtin class ci reduces to from
    start (cplan_builtin_new_form's rule): each takes what the call passes
-   (argc positional arguments, or an open list), and forwards or ends the walk. */
-static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open) {
-  /* (keywords the call passes, `...` too: a keyword-dropping forward is one only where dropping them cannot be observed) */
-  int nargs = 0, args = nt_ref(c->nt, id, "arguments");
-  const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL;
-  int kw_ok = !nt_argv_has(c->nt, av, nargs, NT_ARG_KEYWORDS | NT_ARG_FORWARDING) || builtin_new_keywords(c->classes[ci].name);
+   (argc positional arguments and its keywords kw, or an open list), and
+   forwards or ends the walk. */
+static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open, int kw) {
+  /* (a keyword-dropping forward is one only where dropping them cannot be observed) */
+  int kw_ok = !kw || builtin_new_keywords(c->classes[ci].name);
   for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
     const Scope *sc = &c->scopes[mi];
     /* (a def of the class's own counts where the load record proves it made before the call can first run; where the call runs
        ahead of it, or may, it does not: the chain is the one without it, as the builtin's own is where nothing else stands) */
     if (!sc->is_prepend_copy && !sc->is_include_copy && !elab_def_before_call(c, id, sc->def_node)) continue;
+    /* (keywords go to a keyword rest (`...` holds one), and the positional parameters take the positional arguments; a def
+       without one takes them as one more positional Hash, which `**h` alone may not pass, as an open list's splat may not) */
+    int kwrest = sc->kwrest_idx >= 0 || def_takes_forwarding(c->nt, sc->def_node);
+    int dopen = open || (kw == NEWKW_MAYBE && !kwrest), dargc = argc + (kw == NEWKW_SURE && !kwrest);
     /* (each takes what the call passes, or CRuby raises ArgumentError there) */
-    if (!(open ? sc->rest_idx >= 0 && sc->nrequired == 0 : cplan_def_takes_argc(c, mi, argc))) return BNF_REFUSE;
-    if (ct_init_forwards(c, mi, ci, argc, open, kw_ok)) continue;
+    if (!(dopen ? sc->rest_idx >= 0 && sc->nrequired == 0 : cplan_def_takes_argc(c, mi, dargc))) return BNF_REFUSE;
+    /* (and its `super` passes that Hash on as a positional argument: the builtin's initialize sees the call it would have seen
+       only where it takes no keywords and makes the Hash a positional argument too (BC_INIT_NO_KEYWORDS), as Array's does; a
+       `**h` alone is taken as passing none, as it does when empty: one that holds keys is not told apart) */
+    if ((kw != NEWKW_SURE || kwrest || builtin_init_no_keywords(c->classes[ci].name)) && ct_init_forwards(c, mi, ci, dargc, dopen, kw_ok)) {
+      /* (the next takes what this one passes: past one without a keyword rest, the Hash it made, and no keywords) */
+      if (!kwrest) open = dopen, argc = dargc, kw = NEWKW_NONE;
+      continue;
+    }
     /* (the first that does not forward: an empty one builds the builtin's empty value, if it has one, from what the call
        passes; an open list's splat, keywords and block pass are evaluated by the rewrite, which refuses what it cannot) */
     return cplan_body_empty(c, mi) && builtin_empty_new(c->classes[ci].name) && !sc->yields && ct_params_plain(c, sc, 0, 0)
@@ -8068,11 +8094,12 @@ int cplan_builtin_new_form(Compiler *c, int id) {
   /* (a builtin exception's `new` runs the program's initialize itself: its emitter calls it) */
   if (ci < 0 || !is_builtin_reopen(c->classes[ci].name) || class_is_exc_subclass(c, ci) || is_builtin_exception_name(c->classes[ci].name) ||
       ct_class_initializers(c, id, ci, 0, tmp) <= 0) return BNF_NONE;
-  /* what the call passes: the count of positional arguments (a block pass is none), or an open list (a splat, keywords) */
+  /* what the call passes: the count of positional arguments (a block pass and the keywords are none), or an open list (a
+     splat, `...`) */
   int nargs = 0, argc = 0, args = nt_ref(c->nt, id, "arguments");
   const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL;
-  int open = nt_argv_has(c->nt, av, nargs, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING);
-  for (int i = 0; i < nargs; i++) argc += nt_kind(c->nt, av[i]) != NK_BlockArgumentNode;
+  int open = nt_argv_has(c->nt, av, nargs, NT_ARG_SPLAT | NT_ARG_FORWARDING), kw = ct_call_keywords(c->nt, av, nargs);
+  for (int i = 0; i < nargs; i++) argc += nt_kind(c->nt, av[i]) != NK_BlockArgumentNode && nt_kind(c->nt, av[i]) != NK_KeywordHashNode;
   /* the chain's head, as the plan answers it where the call runs (a prepended module's copy answers the name ahead of the class's own
      def); a def the call runs ahead of is not in force there (ct_new_chain_form) */
   int start = tmp[0];
@@ -8080,13 +8107,13 @@ int cplan_builtin_new_form(Compiler *c, int id) {
   if (c->scopes[start].mixin_guarded || c->scopes[start].entry == ENTRY_TABLE) {
     int to[VER_MAX_ARMS + 1], n = guard_chain(c, start, to, NULL, NULL), f = BNF_NONE;
     for (int k = 0; k < n; k++) {
-      int fk = ct_new_chain_form(c, id, ci, to[k], argc, open);
+      int fk = ct_new_chain_form(c, id, ci, to[k], argc, open, kw);
       if (f != BNF_NONE && fk != f) return BNF_REFUSE;
       f = fk;
     }
     return f;
   }
-  return ct_new_chain_form(c, id, ci, start, argc, open);
+  return ct_new_chain_form(c, id, ci, start, argc, open, kw);
 }
 /* Is call id a builtin class's `new` the plan does not answer: it runs a program
    initialize the builtin construction does not (the effect and the block_given? a

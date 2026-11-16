@@ -6066,6 +6066,9 @@ int self_class_static_ci(Compiler *c, int recv) {
   const char *cn = nt_str(nt, recv, "name");
   int cr = nt_ref(nt, recv, "receiver");
   if (!cn || !sp_streq(cn, "class") || cr < 0 || nt_kind(nt, cr) != NK_SelfNode) return -1;
+  /* (not a self an instance_exec rebinds: a stored block's, whose class is
+     the receiver's at run time, not the method's it is written in) */
+  if (nt_int(nt, cr, "ie_rself", 0)) return -1;
   Scope *s = comp_scope_of(c, recv);
   int cid = s ? s->class_id : -1;
   if (cid < 0 || comp_class_is_module(c, &c->classes[cid])) return -1;

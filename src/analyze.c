@@ -11680,7 +11680,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
   for (int id = 0; id < n0; id++) {
     kst_of[id] = -1;
     if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) continue;
-    const char *nm = nt_str(nt, id, "name"), *ks = nm && sp_streq(nm, "method") ? method_sym_arg(c, id) : NULL;
+    const char *ks = is_bound_method_maker(nt_str(nt, id, "name")) ? method_sym_arg(c, id) : NULL;
     if (ks && ks[0] && ks[0] != '_') kst_of[id] = cplan_main_chain_step(c, id, ks);
   }
   for (int id = 0; id < n0; id++) {

@@ -45,6 +45,26 @@ end
 3.times { bump(boxes[0], 0, 0) }
 p g[0, 0]
 
+# a receiver read from a table whose outer or index runs code: each runs
+# once, and the splice is stored back into the row the first run chose
+rows = [[1, 2], [3, 4], [5, 6]]
+rb = [rows, Grid.new][0]
+i = 0
+rb[i += 1][0, 1] = [9]
+p rows, i
+$calls = 0
+def rows_of(t)
+  $calls += 1
+  t
+end
+rows_of(rb)[2][1, 1] = [8]
+p rows, $calls
+strs = [+"abc", +"def"]
+sb = [strs, Grid.new][0]
+j = -1
+sb[j += 1][0, 1] = "Z"
+p strs, j
+
 # a store whose class takes one index fewer raises, as in Ruby
 c = boxes[1]
 begin

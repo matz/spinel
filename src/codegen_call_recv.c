@@ -17404,6 +17404,38 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 && !g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !user_aset3; kk++)
       if (comp_poly_arm_defines_n(c, kk, "[]=", 3)) user_aset3 = 1;
+  /* The dispatch evaluates the receiver once, and its builtin arm re-enters
+     the splice below, which reads a receiver `outer[k]` through outer and k
+     again to store a spliced String or a promoted Array back into outer's
+     slot: an outer or a k that runs code (`rows[i += 1]`, `rows_of(b)[1]`)
+     ran twice, and k's second value chose the next row. Such an outer and
+     k run here, once, into temps the whole store reads. An outer with no
+     plain C slot to hold it keeps the splice, which runs each once. */
+  if (user_aset3) {
+    int so, sk;
+    if (splice_recv_index_slot(c, recv, &so, &sk) &&
+        (!subtree_is_pure_read(c, so) || !subtree_is_pure_read(c, sk))) {
+      TyKind ot = comp_ntype(c, so), kt = comp_ntype(c, sk);
+      const char *oct = ot == TY_POLY || ty_is_array(ot) || ty_is_obj_array(ot) ? c_type_name(ot) : NULL;
+      if (!oct || (kt != TY_INT && kt != TY_POLY) || g_n_argov + 2 > MAX_ARG_OVERRIDE) user_aset3 = 0;
+      else {
+        int to = ++g_tmp, tk = ++g_tmp;
+        buf_printf(b, "({ %s _t%d = ", oct, to);
+        emit_expr(c, so, b);
+        buf_printf(b, "; %s(_t%d); %s _t%d = ", ot == TY_POLY ? "SP_GC_ROOT_RBVAL" : "SP_GC_ROOT", to,
+                   kt == TY_INT ? "sp_int" : "sp_RbVal", tk);
+        emit_expr(c, sk, b);
+        buf_puts(b, "; ");
+        if (kt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tk);
+        int mk = view_bind_temp(so, to);
+        view_bind_temp(sk, tk);
+        emit_call(c, id, b);
+        view_unbind(mk);
+        buf_puts(b, "; })");
+        { *out = 1; return 1; }
+      }
+    }
+  }
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 && !user_aset3 &&
       !sp_is_fiber_storage_recv(nt, recv)) {
     int tv = ++g_tmp;

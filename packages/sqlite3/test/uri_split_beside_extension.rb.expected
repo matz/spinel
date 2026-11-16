@@ -1,0 +1,3 @@
+["mailto", nil, nil, nil, nil, nil, "a@b?subject=hi", nil, nil]
+["http", nil, "h", nil, nil, "/p", nil, "q", "f"]
+https example.com /a b=1

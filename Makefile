@@ -962,6 +962,26 @@ $(SP_RT_MT_PIC_LIB): $(patsubst lib/regexp/%.c,build/mt-pic/regexp/%.o,$(RE_SRC)
 
 runtime-pic: $(SP_RT_MT_PIC_LIB)
 
+# The bundled packages' objects the same two ways: a library that requires
+# one names packages/<p>/sp_<p>.o in its C (SPINEL_LINK_OBJ), and a shared
+# object links packages/<p>/sp_<p>_pic.o in its place, or sp_<p>_mt_pic.o
+# when it uses threads. Each is compiled as the package's own rule compiles
+# it (above), with the package's flags from PKG_PIC_FLAGS_<p>.
+PKG_PIC_FLAGS_openssl = $(OPENSSL_CPPFLAGS)
+PKG_PIC_FLAGS_ffi = $(LIBFFI_CPPFLAGS)
+PKG_PIC_HDRS = lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+define PKG_PIC_RULES
+packages/$(1)/sp_$(1)_pic.o: packages/$(1)/sp_$(1).c $$(wildcard packages/$(1)/*.h) $$(PKG_PIC_HDRS)
+	$$(CC) -c $$(COPT) -Wno-all $$(SEC_FLAGS) $$(PIC_DEF) $$(PKG_PIC_FLAGS_$(1)) -Ilib -Ipackages/$(1) $$< -o $$@
+packages/$(1)/sp_$(1)_mt_pic.o: packages/$(1)/sp_$(1).c $$(wildcard packages/$(1)/*.h) $$(PKG_PIC_HDRS)
+	$$(CC) -c $$(COPT) -Wno-all $$(SEC_FLAGS) $$(MT_PIC_DEF) $$(PKG_PIC_FLAGS_$(1)) -Ilib -Ipackages/$(1) $$< -o $$@
+endef
+$(foreach p,$(patsubst packages/%/,%,$(dir $(BUNDLED_NATIVE_OBJS))),$(eval $(call PKG_PIC_RULES,$(p))))
+BUNDLED_NATIVE_PIC_OBJS = $(BUNDLED_NATIVE_OBJS:.o=_pic.o)
+BUNDLED_NATIVE_MT_PIC_OBJS = $(BUNDLED_NATIVE_OBJS:.o=_mt_pic.o)
+
+runtime-pic: $(BUNDLED_NATIVE_PIC_OBJS) $(BUNDLED_NATIVE_MT_PIC_OBJS)
+
 # ---- ThreadSanitizer build of the threaded runtime (Phase 1 validation) ----
 # The gate links a threaded test against the mt archive, as the driver does,
 # but uninstrumented, so a race shows only when it corrupts the output. This
@@ -1803,7 +1823,7 @@ test-corpus-summary: test-corpus-results
 # one whose at_exit hooks run when the host exits, not as its init returns,
 # and one whose entry calls a Struct's `new` the load redefined, and an
 # --ext-entry list longer than 2048 bytes exports every method it names.
-ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC_LIB) $(SPINEL_TIMEOUT)
+ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC_LIB) $(BUNDLED_NATIVE_PIC_OBJS) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map \
 	  --ext-init Init_ext_kernel \
@@ -1867,6 +1887,22 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    printf '60\n150\n1\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (the threaded shared object's host output mismatch, or it hung, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (threads pic host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/pic_pkg.rb -c --no-line-map --ext-init Init_ext_pic_pkg \
+	      --ext-entry ExtPicPkg.dump,ExtPicPkg.sum -o "$$tmp/q.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (pic_pkg emission)"; ok=0; \
+	  else \
+	    objs=$$(sed -n 's|^/\* SPINEL_LINK_OBJ: \(.*\)\.o \*/$$|\1_pic.o|p' "$$tmp/q.c"); \
+	    if [ -z "$$objs" ]; then echo "ext-test: FAIL (pic_pkg's C names no package object)"; ok=0; \
+	    elif ! $(CC) -fPIC -shared -O1 -w -Ilib -I"$$tmp" "$$tmp/q.c" $$objs $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libq.so" 2>"$$tmp/cc.err"; then \
+	      echo "ext-test: FAIL (a library requiring a package did not link as a shared object over $$objs)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
+	    elif $(CC) -O1 -w test/ext/pic_pkg_host.c $(LDFLAGS) -ldl -o "$$tmp/qhost" 2>"$$tmp/cc.err"; then \
+	      "$$tmp/qhost" "$$tmp/libq.so" > "$$tmp/out" 2>&1; rc=$$?; \
+	      printf '{"n":7,"list":[1,2,3]}\n16\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	        { echo "ext-test: FAIL (the package's shared object host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	    else echo "ext-test: FAIL (pic_pkg host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	  fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/late_new.rb -c --no-line-map --ext-init Init_ext_late_new \

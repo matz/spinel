@@ -5336,8 +5336,7 @@ static int lr_main_includes(Compiler *c, const char *name, LoadPoint p, int oc, 
     if (ord == PROG_UNKNOWN) {
       int a = lr_search_mix(c, oc, 0, ko, i, name, -1, p, late, 0, out, 0, unsure, LR_MIXIN_STOPS);
       int b = lr_search_mix(c, LR_MAIN, 0, km, j, name, -1, p, late, 0, out, 0, unsure, LR_MIXIN_STOPS);
-      if (a != ELAB_NO || b != ELAB_NO) *unsure = 2;
-      else if (!*unsure) *unsure = 1;
+      if (a != ELAB_NO || b != ELAB_NO) *unsure = 2;   /* (neither holding name: their order changes no answer) */
       i = lr_next_include(ko, i - 1), j = lr_next_include(km, j - 1);
       continue;
     }

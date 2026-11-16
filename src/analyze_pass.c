@@ -4798,6 +4798,79 @@ int join_local_proc_rets(Compiler *c) {
   return changed;
 }
 
+/* The type a multiple assignment from a run-time value (`_, x = t`,
+   `a, *r = line.split`) gives a local target: the value's element, the
+   value itself for the splat target, a box when the value is boxed.
+   TY_UNKNOWN for the shapes typed another way (a tuple literal, a call
+   answering a fixed tuple, a scalar). infer_write_multi_assign types the
+   targets so; rejoin_local_writes asks again once the passes after
+   infer_write_types have widened the value (`t << "s"` after `t = [1.5]`).
+   The element is answered, and the splat target's type set in *whole. */
+static TyKind masgn_runtime_target_ty(Compiler *c, int mw, TyKind *whole) {
+  const NodeTable *nt = c->nt;
+  int value = nt_ref(nt, mw, "value");
+  *whole = TY_UNKNOWN;
+  if (value < 0 || masgn_tuple_rhs(nt, value)) return TY_UNKNOWN;
+  NodeKind vk = nt_kind(nt, value);
+  int multi_src = vk == NK_CallNode || vk == NK_SuperNode || vk == NK_ForwardingSuperNode || vk == NK_YieldNode;
+  int ln = 0, rn = 0;
+  nt_arr(nt, mw, "lefts", &ln);
+  nt_arr(nt, mw, "rights", &rn);
+  if (ln >= 2 && rn == 0 && nt_ref(nt, mw, "rest") < 0) {
+    TyKind elems[16];
+    int en = multi_return_elem_types(c, value, elems, 16);
+    if (en == 0) en = map_literal_elem_types(c, value, elems, 16);
+    /* (a call answering a tuple of that many values is typed element by
+       element whatever each is: one of them boxed, an Integer under
+       --int-overflow=promote, leaves the others their own kinds) */
+    const int *els = NULL;
+    if (en != ln && multi_return_elem_nodes(c, value, &els) == ln) en = ln;
+    if (en == ln) return TY_UNKNOWN;
+  }
+  TyKind st = infer_type(c, value);
+  if (ty_is_array(st) || ty_is_obj_array(st)) { *whole = st; return ty_array_elem(st); }
+  if (st == TY_POLY || (st != TY_UNKNOWN && (ty_is_hash(st) || multi_src))) {
+    *whole = TY_POLY_ARRAY;
+    return TY_POLY;
+  }
+  return TY_UNKNOWN;
+}
+
+/* Calls `fn` with each plain local target of multiple assignment `mw` (a
+   parameter, a block parameter or an RBS-seeded slot is typed elsewhere)
+   and the type masgn_runtime_target_ty gives it */
+typedef void (*MasgnTargetFn)(Compiler *c, int mw, int tgt, LocalVar *lv, TyKind v, void *ud);
+static void masgn_runtime_targets(Compiler *c, int mw, MasgnTargetFn fn, void *ud) {
+  const NodeTable *nt = c->nt;
+  if (mw >= c->node_cap) return;
+  int rest = nt_ref(nt, mw, "rest");
+  int rin = rest >= 0 && nt_kind(nt, rest) == NK_SplatNode ? nt_ref(nt, rest, "expression") : -1;
+  TyKind elem = TY_UNKNOWN, whole = TY_UNKNOWN;
+  int got = 0;
+  const char *sides[2] = { "lefts", "rights" };
+  for (int s = 0; s < 3; s++) {
+    int n = 0;
+    const int *ts = s < 2 ? nt_arr(nt, mw, sides[s], &n) : &rin;
+    if (s == 2) n = rin >= 0;
+    for (int i = 0; i < n; i++) {
+      int t = ts[i];
+      if (t < 0 || t >= c->node_cap || nt_kind(nt, t) != NK_LocalVariableTargetNode) continue;
+      const char *nm = nt_str(nt, t, "name");
+      LocalVar *lv = nm ? scope_local(comp_scope_of(c, mw), nm) : NULL;
+      if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+      if (!got) { elem = masgn_runtime_target_ty(c, mw, &whole); got = 1; }
+      fn(c, mw, t, lv, s == 2 ? whole : elem, ud);
+    }
+  }
+}
+/* What a target takes, noted as the main loop notes a write's (lw_joined),
+   when its assignment is typed: a later assignment in the same pass can
+   widen the value (`t, u = ["s"], 0` after `_, x = t`), which x did not take */
+static void masgn_note_joined(Compiler *c, int mw, int tgt, LocalVar *lv, TyKind v, void *ud) {
+  (void)mw; (void)lv; (void)ud;
+  c->lw_joined[tgt] = v;
+}
+
 /* infer_write_types's pass over multiple assignments: each target takes its
    element's type (answers whether it changed a type) */
 static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
@@ -4828,6 +4901,8 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
         if (hen == 0 && !ty_is_hash(c->hash_want[hv])) { comp_set_hash_want(c, hv, TY_POLY_POLY_HASH); changed = 1; }
       }
     }
+    /* (each target as this assignment types it, the empty `{}` settled) */
+    masgn_runtime_targets(c, id, masgn_note_joined, NULL);
     const char *vty = nt_type(nt, value);
     NodeKind vk = nt_kind(nt, value);
     /* `r, w = IO.pipe` / `a, b = Socket.pair(...)` -> both targets are IO
@@ -5515,74 +5590,6 @@ static void lv_keep_decisions(Compiler *c, LocalVar *lv, int stashed) {
   slot_take_string_handle(c, lv);
 }
 
-/* The type a multiple assignment from a run-time value (`_, x = t`,
-   `a, *r = line.split`) gives a local target: the value's element, the
-   value itself for the splat target, a box when the value is boxed.
-   TY_UNKNOWN for the shapes typed another way (a tuple literal, a call
-   answering a fixed tuple, a scalar). infer_write_multi_assign types the
-   targets so; rejoin_local_writes asks again once the passes after
-   infer_write_types have widened the value (`t << "s"` after `t = [1.5]`). */
-static TyKind masgn_runtime_target_ty(Compiler *c, int mw, int is_rest) {
-  const NodeTable *nt = c->nt;
-  int value = nt_ref(nt, mw, "value");
-  if (value < 0 || masgn_tuple_rhs(nt, value)) return TY_UNKNOWN;
-  NodeKind vk = nt_kind(nt, value);
-  int multi_src = vk == NK_CallNode || vk == NK_SuperNode || vk == NK_ForwardingSuperNode || vk == NK_YieldNode;
-  int ln = 0, rn = 0;
-  nt_arr(nt, mw, "lefts", &ln);
-  nt_arr(nt, mw, "rights", &rn);
-  if (ln >= 2 && rn == 0 && nt_ref(nt, mw, "rest") < 0) {
-    TyKind elems[16];
-    int en = multi_return_elem_types(c, value, elems, 16);
-    if (en == 0) en = map_literal_elem_types(c, value, elems, 16);
-    /* (a call answering a tuple of that many values is typed element by
-       element whatever each is: one of them boxed, an Integer under
-       --int-overflow=promote, leaves the others their own kinds) */
-    const int *els = NULL;
-    if (en != ln && multi_return_elem_nodes(c, value, &els) == ln) en = ln;
-    if (en == ln) return TY_UNKNOWN;
-  }
-  TyKind st = infer_type(c, value);
-  if (ty_is_array(st) || ty_is_obj_array(st)) return is_rest ? st : ty_array_elem(st);
-  if (st == TY_POLY || (st != TY_UNKNOWN && (ty_is_hash(st) || multi_src)))
-    return is_rest ? TY_POLY_ARRAY : TY_POLY;
-  return TY_UNKNOWN;
-}
-
-/* Calls `fn` with each plain local target of each multiple assignment (a
-   parameter, a block parameter or an RBS-seeded slot is typed elsewhere) and
-   the type masgn_runtime_target_ty gives it */
-typedef void (*MasgnTargetFn)(Compiler *c, int mw, int tgt, LocalVar *lv, TyKind v, void *ud);
-static void masgn_each_runtime_target(Compiler *c, MasgnTargetFn fn, void *ud) {
-  const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) {
-    if (mw >= c->node_cap) continue;
-    int rest = nt_ref(nt, mw, "rest");
-    int rin = rest >= 0 && nt_kind(nt, rest) == NK_SplatNode ? nt_ref(nt, rest, "expression") : -1;
-    TyKind elem = TY_UNKNOWN, whole = TY_UNKNOWN;
-    int got = 0;
-    const char *sides[2] = { "lefts", "rights" };
-    for (int s = 0; s < 3; s++) {
-      int n = 0;
-      const int *ts = s < 2 ? nt_arr(nt, mw, sides[s], &n) : &rin;
-      if (s == 2) n = rin >= 0;
-      for (int i = 0; i < n; i++) {
-        int t = ts[i];
-        if (t < 0 || t >= c->node_cap || nt_kind(nt, t) != NK_LocalVariableTargetNode) continue;
-        const char *nm = nt_str(nt, t, "name");
-        LocalVar *lv = nm ? scope_local(comp_scope_of(c, mw), nm) : NULL;
-        if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
-        if (!got) { elem = masgn_runtime_target_ty(c, mw, 0); whole = masgn_runtime_target_ty(c, mw, 1); got = 1; }
-        fn(c, mw, t, lv, s == 2 ? whole : elem, ud);
-      }
-    }
-  }
-}
-static void masgn_note_joined(Compiler *c, int mw, int tgt, LocalVar *lv, TyKind v, void *ud) {
-  (void)mw; (void)lv; (void)ud;
-  c->lw_joined[tgt] = v;
-}
-
 /* infer_write_multi_assign, with each table narrowed to a pointer array
    (narrow_object_arrays' oa_pin) read as that table. The reset re-derived
    such a local as the poly array its writes build, and lv_keep_decisions
@@ -5605,8 +5612,6 @@ static int infer_write_multi_assign_pinned(Compiler *c, const NodeTable *nt) {
       lv_set_type(lv, lv->oa_pin);
     }
   int changed = infer_write_multi_assign(c, nt);
-  /* what each target took, as the main loop notes a write's (lw_joined) */
-  masgn_each_runtime_target(c, masgn_note_joined, NULL);
   for (int k = 0; k < n; k++)
     if (pinned[k]->type == pinned[k]->oa_pin) lv_set_type(pinned[k], TY_POLY_ARRAY);
   free(pinned);
@@ -6029,7 +6034,7 @@ int rejoin_local_writes(Compiler *c) {
       if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
       rejoin_one(c, &rj, id, lv, local_write_ty(c, id, 0), nt_ref(nt, id, "value"));
     }
-  masgn_each_runtime_target(c, rejoin_masgn_target, &rj);
+  NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) masgn_runtime_targets(c, mw, rejoin_masgn_target, &rj);
   int changed = rj.changed, nboxed = rj.nboxed;
   LocalVar **boxed = rj.boxed;
   /* A parameter typed from a local the re-join has just boxed keeps the

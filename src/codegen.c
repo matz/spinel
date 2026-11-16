@@ -17482,8 +17482,11 @@ void emit_super(Compiler *c, int id, Buf *b) {
                uname, scn, raise_tail_value_c(c, repr_of(c, id).as_ty));
     return;
   }
-  if (sp_streq(c->classes[defcls].name, "Object") || sp_streq(c->classes[defcls].name, "Array") ||
-      sp_streq(c->classes[defcls].name, "Hash") || sp_streq(c->classes[defcls].name, "Numeric")) {
+  /* a top-level def (Object's private method) is a function with no self to pass */
+  int toplevel = defcls < 0;
+  if (toplevel)
+    buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
+  else if (repr_self_boxed(c, mi)) {
     /* Object's methods take self boxed: any value can be the receiver. So
        do an Array, Hash or Numeric reopening's (emit_method_signature),
        which a program class deriving from it reaches by super --
@@ -17506,12 +17509,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* The parent may declare more than this method does -- an optional,
        `*rest`, a keyword, `**` -- which a bare super leaves to their defaults
        and empties, as CRuby does (#4852). */
-    emit_zsuper_args(c, s, &c->scopes[mi], ", ", b);
+    emit_zsuper_args(c, s, &c->scopes[mi], toplevel ? "" : ", ", b);
   }
   else {
-    emit_args_filled(c, mi, nt_ref(c->nt, id, "arguments"), ", ", b);
+    emit_args_filled(c, mi, nt_ref(c->nt, id, "arguments"), toplevel ? "" : ", ", b);
   }
-  emit_super_block_arg(c, id, s, &c->scopes[mi], 1, b);
+  emit_super_block_arg(c, id, s, &c->scopes[mi], !toplevel || c->scopes[mi].nparams > 0, b);
   buf_puts(b, ")");
 }
 

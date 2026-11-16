@@ -158,6 +158,7 @@ int prog_root_stmts(const Compiler *c, int i);
 int prog_defines_only(const Compiler *c, int i);
 void prog_file_tops(Compiler *c, unsigned char *has, void (*native)(void *ud, int load), void *ud);
 int prog_load_sets_flag(Compiler *c, int id);
+int prog_load_deferred(const Compiler *c, int f);
 int prog_ordered_load(const Compiler *c, int id);
 int prog_site_places(const Compiler *c, int id);
 int prog_load_ncand(const NodeTable *nt, int load);
@@ -748,6 +749,9 @@ int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int 
    ELAB_UNKNOWN where the record cannot say */
 int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p);
 /* ...and whether main's top-level history of `name` holds a version whose node carries the int mark `mark` (set by a desugar) */
+/* is `name` made on cls's instance side for sure by point p (elab_method_at, but a def under a condition or in an iterator's body
+   that p does not follow answers ELAB_UNKNOWN, as elab_own_method_at's) */
+int elab_method_made_at(Compiler *c, int cls, const char *name, LoadPoint p);
 int elab_main_history_marked(Compiler *c, const char *name, const char *mark);
 /* The state of the record and the node table an answer of elab_chain_versions
    was read from: a kept answer holds while the stamp does (the table's

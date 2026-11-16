@@ -3788,32 +3788,42 @@ static int mixin_level_answers(Compiler *c, int k, const char *name) {
    precedence; neither query reconstructs includes from the node table. */
 /* What the mixin walk looks for: Enumerable, Comparable, or any core module
    (one of those, or a builtin module named by path) */
-enum { MX_ENUM = 0, MX_CMP = 1, MX_CORE = 2 };
-static int mixin_here(const ClassInfo *ci, int what) {
+enum { MX_ENUM = 0, MX_CMP = 1, MX_CORE = 2, MX_ANSWERS = 3 };   /* MX_ANSWERS: one of them has the name (mixin_here's `name`) ahead of Object */
+static int mixin_here(const ClassInfo *ci, int what, const char *name) {
   int en = ci->enum_inc_at || ci->enum_prepended, cm = ci->cmp_inc_at || ci->cmp_prepended;
+  if (what == MX_ANSWERS) {
+    /* a core module of this level, Comparable, Enumerable or one named by path (Math), that has the name */
+    if ((en && builtin_answers_ahead_of(core_class_name(CORE_ENUMERABLE), name, NULL)) ||
+        (cm && builtin_answers_ahead_of(core_class_name(CORE_COMPARABLE), name, NULL))) return 1;
+    for (int i = 0; i < ci->nincluded_mod_names; i++)
+      if (builtin_answers_ahead_of(ci->included_mod_names[i], name, NULL)) return 1;
+    return 0;
+  }
   return what == MX_ENUM ? en : what == MX_CMP ? cm : en || cm || ci->nincluded_mod_names > 0;
 }
 /* Whether what is among the ancestors class or module k brings: it
    includes (or prepends) it, or includes a module that does, at any depth.
    Each module is asked once (`seen`), so a module several includes share
    costs one visit. */
-static int mixin_reaches_from(Compiler *c, int k, int what, unsigned char *seen) {
+static int mixin_reaches_from(Compiler *c, int k, int what, const char *name, unsigned char *seen) {
   ClassInfo *ci = &c->classes[k];
   seen[k] = 1;
-  if (mixin_here(ci, what)) return 1;
+  if (mixin_here(ci, what, name)) return 1;
   for (int j = 0; j < ci->nincluded_mods; j++) {
     int m = ci->included_mods[j];
-    if (m >= 0 && m < c->nclasses && !seen[m] && mixin_reaches_from(c, m, what, seen)) return 1;
+    /* (a builtin module of the program's classes: Math) */
+    if (what == MX_ANSWERS && m >= 0 && m < c->nclasses && c->classes[m].is_builtin_const && builtin_answers_ahead_of(c->classes[m].name, name, NULL)) return 1;
+    if (m >= 0 && m < c->nclasses && !seen[m] && mixin_reaches_from(c, m, what, name, seen)) return 1;
   }
   return 0;
 }
-static int mixin_reaches(Compiler *c, int k, int what) {
+static int mixin_reaches(Compiler *c, int k, int what, const char *name) {
   const ClassInfo *ci = &c->classes[k];
   /* a class with no includes answers by its own flags, with no set */
-  if (ci->nincluded_mods == 0) return mixin_here(ci, what);
+  if (ci->nincluded_mods == 0) return mixin_here(ci, what, name);
   unsigned char *seen = (unsigned char *)calloc((size_t)c->nclasses, 1);
   if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int r = mixin_reaches_from(c, k, what, seen);
+  int r = mixin_reaches_from(c, k, what, name, seen);
   free(seen);
   return r;
 }
@@ -3867,7 +3877,7 @@ static int mixin_answers_first(Compiler *c, int cid, const char *name, int compa
       }
       return master;
     }
-    if (mixin_reaches(c, k, comparable)) top = k;
+    if (mixin_reaches(c, k, comparable, NULL)) top = k;
     if (k == ci->parent) break;
   }
   n = 0;
@@ -3891,7 +3901,18 @@ int comp_comparable_answers_first(Compiler *c, int cid, const char *name) {
 int comp_enum_reaches(Compiler *c, int cid) {
   int n = 0;
   for (int k = cid; k >= 0 && k < c->nclasses && n < c->nclasses; k = c->classes[k].parent, n++) {
-    if (mixin_reaches(c, k, 0)) return 1;
+    if (mixin_reaches(c, k, 0, NULL)) return 1;
+    if (k == c->classes[k].parent) break;
+  }
+  return 0;
+}
+/* Does a builtin module that class cid or a superclass includes (Comparable, Enumerable, one named by path such as
+   Math), at any depth, answer the name ahead of Object (whose place a top-level def takes in the ancestors)? Those
+   modules' methods are then what a super past the program's defs reaches. */
+int comp_chain_core_answers(Compiler *c, int cid, const char *name) {
+  int n = 0;
+  for (int k = cid; k >= 0 && k < c->nclasses && n < c->nclasses; k = c->classes[k].parent, n++) {
+    if (mixin_reaches(c, k, MX_ANSWERS, name)) return 1;
     if (k == c->classes[k].parent) break;
   }
   return 0;
@@ -3917,13 +3938,13 @@ int comp_plain_class(Compiler *c, int cid) {
   for (int k = cid; k >= 0 && k < c->nclasses && n < c->nclasses; k = c->classes[k].parent, n++) {
     ClassInfo *ci = &c->classes[k];
     if (ci->is_native_class || ci->is_struct || ci->nsub_root > 0 || comp_ary_root(c, k) >= 0 || comp_class_is_module(c, ci) ||
-        ci->def_node < 0 || mixin_reaches(c, k, MX_CORE)) return 0;
+        ci->def_node < 0 || mixin_reaches(c, k, MX_CORE, NULL)) return 0;
     if (k == ci->parent) break;
   }
   return cid >= 0 && cid < c->nclasses && !class_is_exc_subclass(c, cid) && is_plain_builtin_superclass(class_builtin_parent(c, cid));
 }
 int comp_comparable_reaches(Compiler *c, int cid) {
-  return cid >= 0 && cid < c->nclasses && mixin_reaches(c, cid, 1);
+  return cid >= 0 && cid < c->nclasses && mixin_reaches(c, cid, 1, NULL);
 }
 
 /* ---- Poly-dispatch candidates by method name ----

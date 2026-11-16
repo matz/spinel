@@ -794,6 +794,7 @@ int cplan_kernel_raise(Compiler *c, int id) {
    record, a shadow's name too. ml->from is the par asked, though the
    extend-copy skip and the Object start look further; ml->def_class is the
    class that answered, -1 on a miss. */
+static int ct_top_chain(Compiler *c, const char *name, int sg);
 int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 };
   if (!ml) ml = &own;
@@ -820,10 +821,35 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
     while (c->classes[top].parent >= 0) top = c->classes[top].parent;
     /* (not under BasicObject: Object is not in that chain; not under another
        builtin: its methods come first, cplan_root_under_builtin) */
-    if (!class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top)) {
-      static const int owners[] = { CORE_KERNEL, CORE_BASIC_OBJECT };
+    int plain = !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top);
+    if (plain) {
       int obj = comp_super_parent(c, top, 0);
       if (obj >= 0 && obj != top) mi = call_target(c, id, obj, name, CT_REACH, ml);
+    }
+    /* a top-level def is Object's (private) method, ahead of Kernel's, for a
+       chain that reaches Object (the program need not reopen Object for
+       that): not past a builtin or a core module the chain includes that
+       answers the name before Object does (Struct#to_s, Exception#message,
+       an included Comparable's clamp), nor under BasicObject (a program's
+       reopening of it is the top of a chain that does not reach Object
+       either) */
+    if (mi < 0) {
+      const char *root = class_is_blank_slate(c, top) || builtin_core_class_slot(c->classes[top].name) == CORE_BASIC_OBJECT
+                         ? NULL : comp_super_builtin_root(c, s->class_id, NULL);
+      /* (one def on the chain the target is read from, made for sure before the method's own def runs: a top-level function the program makes again has versions,
+         and one made later is none a call before it reaches (the plain call takes its presence entry, which raises
+         there); which one a super reaches depends on when it runs, which no single target says, so the super keeps
+         the answer it had. A def that may read self stays private to a receiver here as it does for a call
+         (cplan_root_top_def): the def takes no self, so it would run on main) */
+      ElabVersion tv[VER_MAX_ARMS];
+      int tc = ct_top_chain(c, name, 0);
+      if (root && !builtin_answers_ahead_of(root, name, "Object") && !comp_chain_core_answers(c, s->class_id, name) &&
+          !cplan_top_name_reads_self(c, name) && elab_chain_versions(c, tc, 0, name, tv, VER_MAX_ARMS) == 1 && s->def_node >= 0 &&
+          elab_method_made_at(c, tc, name, elab_point_of(c, s->def_node)) == ELAB_YES)
+        mi = call_target(c, id, -1, name, CT_TOP | CT_REACH, ml);
+    }
+    if (mi < 0 && plain) {
+      static const int owners[] = { CORE_KERNEL, CORE_BASIC_OBJECT };
       /* a reopening of Kernel or BasicObject answers only where no builtin
          method of the name comes before it (Object's, then Kernel's, as
          CRuby's tables hold them) */

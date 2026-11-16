@@ -8948,6 +8948,25 @@ static int mixin_layers_call_super(Compiler *c, int ci, int mod, int late, int s
   }
   return hit;
 }
+/* A builtin module with no class of its own that class ci includes, by name (`IO::WaitReadable`, `Math`), once. */
+static void class_note_mod_name(ClassInfo *ci, const char *name) {
+  for (int m = 0; m < ci->nincluded_mod_names; m++)
+    if (sp_streq(ci->included_mod_names[m], name)) return;
+  if (ci->nincluded_mod_names >= ci->cincluded_mod_names) {
+    ci->cincluded_mod_names = ci->cincluded_mod_names ? ci->cincluded_mod_names * 2 : 4;
+    char **nn = realloc(ci->included_mod_names, sizeof(char *) * (size_t)ci->cincluded_mod_names);
+    if (!nn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    ci->included_mod_names = nn;
+  }
+  ci->included_mod_names[ci->nincluded_mod_names++] = strdup(name);
+}
+/* Does the builtin root of class ci's chain have builtin module `mod` among its ancestors already (Kernel, under
+   Object)? CRuby's include of it is then a no-op, and the class's own ancestry does not gain it. */
+static int mod_in_root_ancestors(Compiler *c, int ci, const char *mod) {
+  const char *root = comp_super_builtin_root(c, ci, NULL);
+  int rs = root ? builtin_core_class_slot(root) : -1, ms = builtin_core_class_slot(mod);
+  return rs >= 0 && ms >= 0 && builtin_core_is_a(rs, ms);
+}
 void process_include_body(Compiler *c, int ci, int body_node) {
   const NodeTable *nt = c->nt;
   /* (a core class's or module's reopening keeps its includes as they were:
@@ -9014,20 +9033,14 @@ void process_include_body(Compiler *c, int ci, int body_node) {
           strncat(qual, "::", sizeof qual - strlen(qual) - 1);
         }
         strncat(qual, mname, sizeof qual - strlen(qual) - 1);
-        ClassInfo *cif2 = &c->classes[ci];
-        int dup = 0;
-        for (int m = 0; m < cif2->nincluded_mod_names; m++)
-          if (sp_streq(cif2->included_mod_names[m], qual)) { dup = 1; break; }
-        if (!dup) {
-          if (cif2->nincluded_mod_names >= cif2->cincluded_mod_names) {
-            cif2->cincluded_mod_names = cif2->cincluded_mod_names ? cif2->cincluded_mod_names * 2 : 4;
-            char **nn = realloc(cif2->included_mod_names,
-                                sizeof(char *) * (size_t)cif2->cincluded_mod_names);
-            if (!nn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-            cif2->included_mod_names = nn;
-          }
-          cif2->included_mod_names[cif2->nincluded_mod_names++] = strdup(qual);
-        }
+        class_note_mod_name(&c->classes[ci], qual);
+      }
+      /* (a builtin module named bare, `include Math`: the class's fact as the path form is, unless its builtin root has it
+         among its ancestors already, where CRuby's include is a no-op (`include Kernel`); Comparable and Enumerable
+         have their own flags above) */
+      else if (ak == NK_ConstantReadNode && mname && is_builtin_module_const_name(mname) && !is_comparable_module_name(mname) &&
+               !is_enumerable_module_name(mname)) {
+        if (!mod_in_root_ancestors(c, ci, mname)) class_note_mod_name(&c->classes[ci], mname);
       }
       continue;
     }

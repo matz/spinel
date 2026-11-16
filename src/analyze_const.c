@@ -580,10 +580,8 @@ int an_class_presence_write(Compiler *c, int id) {
   int ci = -1;
   if (k == NK_ClassNode || k == NK_ModuleNode) ci = elab_header_class(c, id, NULL, NULL);
   else if (k == NK_ConstantWriteNode || k == NK_ConstantPathWriteNode) {
-    int target = k == NK_ConstantWriteNode ? id : nt_ref(c->nt, id, "target");
-    const char *nm = const_key_at(c, target);
-    ci = nm ? comp_class_index(c, nm) : -1;
-    if (ci >= 0 && c->classes[ci].def_node != id) ci = -1;
+    /* (the class this write defines: `K = Class.new`) */
+    ci = comp_class_of_def(c, id);
   }
   return an_class_presence_is_read(c, ci) ? ci + 1 : 0;
 }

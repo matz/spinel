@@ -20362,27 +20362,6 @@ static int rt_probe_unfounded(Compiler *c, TyKind rt, const char *qm) {
   }
   return 1;
 }
-/* Read the analyze-time `recv.<qm>` probes stashed on a respond_to? node: a
-   recognized method infers a concrete type, an unrecognized one stays UNKNOWN.
-   Reading the cached type is side-effect free (unlike emitting, which mutates
-   g_pre/g_tmp), so it is safe inside a live fold. Returns 0 when no probe was
-   synthesized (a non-literal method name). */
-int rt_probe_answer(Compiler *c, int id, int *yes) {
-  int pn = 0; const int *probes = nt_arr(c->nt, id, "rt_probes", &pn);
-  if (!probes || pn <= 0) return 0;
-  *yes = 0;
-  for (int p = 0; p < pn; p++) {
-    if (!repr_of(c, probes[p]).untyped) { *yes = 1; break; }
-    /* the probe itself never got the per-call-site rewrite that would
-       type it (K-026 cause A, enum_builtin_responds's comment): ask the
-       same receiver-type question that rewrite's gate would have. */
-    int precv = nt_ref(c->nt, probes[p], "receiver");
-    if (precv >= 0 && enum_builtin_responds(c, nt_str(c->nt, probes[p], "name"), infer_type(c, precv))) {
-      *yes = 1; break;
-    }
-  }
-  return 1;
-}
 /* A receiver whose class defines respond_to? itself answers through it: the
    call is an ordinary dispatch, not the compile-time fold. That is a typed
    receiver of such a class, implicit self in one, or a boxed value when a
@@ -24261,7 +24240,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
       /* a generated reader has no method entry, but the switch has its arm
          (`[lobby].first.members`), so its visibility and an `undef` of it
          are checked here, as a method's are */
-      if (!call_attr_target(c, -1, k, vnm, CT_ATTR | CT_SHARED, NULL)) continue;
+      if (!call_attr_target(c, id, k, vnm, CT_ATTR, NULL)) continue;
       /* undefined unless a class below the `undef` declares the reader
          again, or an alias of that name (comp_is_undeffed_in_chain stops
          only at a method; a reader is not inherited past an `undef`, so a

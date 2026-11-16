@@ -2969,7 +2969,7 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       int cmi = g_cls_tag_skip != id ? cplan_cmethod_arm(c, id, _k, name, NULL, NULL) : -1;
       if ((umi >= 0 && (is_aref0 || argc >= c->scopes[umi].nrequired)) ||
           (cmi >= 0 && (is_aref0 || argc >= c->scopes[cmi].nrequired)) ||
-          (argc == 0 && call_attr_target(c, -1, _k, name, CT_ATTR | CT_SHARED, NULL)))
+          (argc == 0 && call_attr_target(c, id, _k, name, CT_ATTR, NULL)))
         has_user_call = 1;
     }
     /* A call of any count: the slots are sized for it, and an argument past

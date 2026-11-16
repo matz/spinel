@@ -22,6 +22,9 @@ const int *poly_recv_classes(Compiler *c, int call, int *n);
 /* Does an instantiated class of the program that the boxed receiver of `call`
    can be (any, when the walk does not bound it) define a method `name`? */
 int poly_recv_defines(Compiler *c, int call, const char *name);
+/* May the receiver of poly call `call` be an instance of class k: the classes the analysis bounds it to, or any class
+   where it does not (poly_recv_classes); a reopened builtin always may be */
+int poly_recv_may_be(Compiler *c, int call, int k);
 /* Does a method of the program answer the call `call` (the builtin reflection
    it names, a program's method of that name in its receiver's class chain)? A
    boxed receiver is asked by the classes it can be, a typed one by the call
@@ -582,6 +585,8 @@ unsigned long elab_mixin_gen(Compiler *c);
    first such question found them (analyze_elab.c): 1 when the frame is in,
    until elab_plan_leave; 0 for a node it cannot place */
 int elab_plan_enter(Compiler *c, int id);
+int elab_accessor_first(Compiler *c, int node, const char *name, int cls);
+unsigned long elab_hgen(Compiler *c);   /* bumped by every change to the histories and the mixins */
 void elab_plan_leave(Compiler *c);
 void elab_check_version(Compiler *c, int id, int vi, int dc, int now, int ndc);   /* SPINEL_ELAB_CHECK */
 void elab_check_surface(Compiler *c);   /* SPINEL_ELAB_CHECK: the record's surface against the class tables */
@@ -1219,10 +1224,11 @@ TyKind infer_type(Compiler *c, int id);
 /* Does a receiver of type `rt` have a real method named `name`, among the
    per-call-site-cloned generic Enumerable names (analyze_desugar.c's
    builtin_enum_name_index list) or transform_keys!/transform_values!?
-   Used by rt_probe_answer (codegen_call.c) for a respond_to? probe on
+   Used by rt_probe_answer (analyze_desugar.c) for a respond_to? probe on
    one of these names, which the one-shot rewrites that actually type
    them never reach (K-026 cause A). */
-int enum_builtin_responds(Compiler *c, const char *name, TyKind rt);
+int enum_builtin_responds(Compiler *c, int id, const char *name, TyKind rt);
+int rt_probe_answer(Compiler *c, int id, int *yes);   /* the respond_to? probes' answer: 1 when a probe types or a builtin receiver has the name (*yes); 0 where none was synthesized */
 int enum_unrename(NodeTable *nt, int id);
 /* empty infer_type's memo of earlier queries' answers: the start or end of
    a pass whose writes are not all counted (#8852) */

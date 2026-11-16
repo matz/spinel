@@ -5263,7 +5263,7 @@ int desugar_enumerable_chain(Compiler *c) {
       TyKind rt = infer_type(c, recv);
       if (ty_is_object(rt)) {
         int ci = ty_object_class(rt);
-        if (ci >= 0 && !comp_enum_answers_first(c, ci, "chain")) continue;
+        if (ci >= 0 && !comp_enum_answers_first(c, id, ci, "chain")) continue;
       }
       /* a program's Enumerable#chain answers a builtin receiver too */
       else if (an_enum_prog_method(c, "chain")) continue;
@@ -19380,12 +19380,12 @@ int enum_unrename(NodeTable *nt, int id) {
    (desugar_respond_to_probe), which is synthesized later, during the
    analyzer's fixpoint: the probe's own inferred type stays at
    bop_rows's placeholder TY_UNKNOWN row forever (K-026 cause A). Used by
-   rt_probe_answer (codegen_call.c) to answer those probes from the same
+   rt_probe_answer (below) to answer those probes from the same
    receiver-type test desugar_builtin_enum_calls's "ok" gate uses below,
    which is the question respond_to? actually asks -- does the TYPE have
    this method -- not whether this one analysis-only probe happens to
    have been rewritten. */
-int enum_builtin_responds(Compiler *c, const char *name, TyKind rt) {
+int enum_builtin_responds(Compiler *c, int id, const char *name, TyKind rt) {
   if (!name) return 0;
   if ((sp_streq(name, "transform_keys!") || sp_streq(name, "transform_values!")) && ty_is_hash(rt)) return 1;
   if (builtin_enum_name_index(name) < 0) return 0;
@@ -19394,9 +19394,29 @@ int enum_builtin_responds(Compiler *c, const char *name, TyKind rt) {
   if (ty_is_object(rt)) {
     int ci = ty_object_class(rt);
     return (an_class_includes_enumerable(c, ci) || comp_ary_root(c, ci) >= 0) &&
-           comp_enum_answers_first(c, ci, name);
+           comp_enum_answers_first(c, id, ci, name);
   }
   return 0;
+}
+
+/* The answer a respond_to? with a literal method name gets from its `recv.<qm>` probes (desugar_respond_to_probe): a
+   recognized method infers a concrete type, an unrecognized one stays UNKNOWN, and a probe the per-call-site rewrite
+   never reached is asked the receiver-type question that rewrite's gate would have (enum_builtin_responds). Reading the
+   settled types is side-effect free (unlike emitting, which mutates g_pre/g_tmp), so the codegen fold reads this
+   inside a live fold. Returns 0 when no probe was synthesized (a non-literal method name). */
+int rt_probe_answer(Compiler *c, int id, int *yes) {
+  int pn = 0; const int *probes = nt_arr(c->nt, id, "rt_probes", &pn);
+  if (!probes || pn <= 0) return 0;
+  *yes = 0;
+  for (int p = 0; p < pn; p++) {
+    int precv = nt_ref(c->nt, probes[p], "receiver");
+    if (comp_ntype(c, probes[p]) != TY_UNKNOWN ||
+        (precv >= 0 && enum_builtin_responds(c, probes[p], nt_str(c->nt, probes[p], "name"), infer_type(c, precv)))) {
+      *yes = 1;
+      break;
+    }
+  }
+  return 1;
 }
 
 /* Does the program give Enumerator a with_object of its own (a reopening
@@ -19775,7 +19795,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
       const char *qn = nt_str(nt, id, "orig_name") ? nt_str(nt, id, "orig_name") : name;
       /* an Array subclass is Enumerable through Array (#7449) */
       ok = (an_class_includes_enumerable(c, ci) || comp_ary_root(c, ci) >= 0) &&
-           comp_enum_answers_first(c, ci, qn);
+           comp_enum_answers_first(c, id, ci, qn);
       /* a class that answers the name itself keeps the name it was called by */
       if (!ok && enum_unrename(nt, id)) changed = 1;
     }

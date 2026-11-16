@@ -3680,10 +3680,12 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
           { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
         if (argc == 2 && sp_streq(name, "store")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
         /* count(v): the value-equality count (sp_poly_count_val). A user
-           definition blocks it only when it can TAKE one positional
-           argument -- the same judgement codegen's arm makes; an
-           arity-incompatible `count(a, b)` cannot answer this call, and
-           counting it left the two halves naming different methods. */
+           definition of a class the receiver can be, of any arity, claims
+           the call (as codegen's arm does): the dispatch's arm raises
+           ArgumentError where it cannot take the argument, and genuine
+           Array, Hash and String receivers keep their builtin arms
+           (#4195's concern). A count on a class the receiver never is
+           leaves the builtin call direct. */
         if (sp_streq(name, "count")) {
           int can1 = 0;
           for (int k2 = 0; k2 < c->nclasses && !can1; k2++) {
@@ -3691,12 +3693,8 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
               if (comp_poly_arm_defines_n(c, k2, "count", 1)) can1 = 1;
               continue;
             }
-            int mi2 = call_target(c, -1, k2, "count", CT_METHODS | CT_SHARED, NULL);
-            if (mi2 >= 0 && mi2 < c->nscopes) {
-              Scope *cs2 = &c->scopes[mi2];
-              if (cs2->rest_idx >= 0 || (1 >= cs2->nrequired && 1 <= cs2->nparams))
-                can1 = 1;
-            }
+            int mi2 = poly_recv_may_be(c, id, k2) ? call_target(c, id, k2, "count", CT_METHODS, NULL) : -1;
+            if (mi2 >= 0 && mi2 < c->nscopes) can1 = 1;
           }
           if (!can1) { *out = TY_INT; return 1; }
         }
@@ -3909,7 +3907,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
             if (!c->classes[k].is_native_class) has_user_def = 1;
           }
           if (has_base && !c->classes[k].is_native_class &&
-              call_attr_target(c, -1, k, sbase, CT_ATTR | CT_WRITER | CT_SHARED, NULL)) has_writer = 1;
+              call_attr_target(c, id, k, sbase, CT_ATTR | CT_WRITER, NULL)) has_writer = 1;
         }
         /* A call the send desugar retargeted (`obj.send(:x=, v)`, and a
            public_send dispatch arm) is a plain call, not an assignment
@@ -4464,7 +4462,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         for (int k = 0; k < c->nclasses && !owned; k++)
           if (comp_poly_arm_defines(c, k, name) || call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0 ||
               (!c->classes[k].is_native_class && comp_is_reader(&c->classes[k], name)) ||
-              (wbase[0] && call_attr_target(c, -1, k, wbase, CT_ATTR | CT_WRITER | CT_SHARED, NULL)))
+              (wbase[0] && call_attr_target(c, id, k, wbase, CT_ATTR | CT_WRITER, NULL)))
             owned = 1;
         if (!owned) { *out = (sp_streq(name, "advise") || sp_streq(name, "flock")) ? TY_POLY : TY_INT; return 1; }
       }

@@ -4178,6 +4178,76 @@ static int ct_lookup_object_top(Compiler *c, int id, int cls, const char *name, 
   int ti = ct_lookup(c, id, -1, name, &tf, &tl);
   return ti >= 0 && c->scopes[ti].class_id < 0 ? ti : mi;
 }
+/* The accessor an ask of CT_ATTR finds (ML_ATTR) as it stands at call id: the record holds the attr_* calls of a name
+   as versions (ct_attr_version), so where none has run by id's point and the class has no Struct or Data member of the
+   name, the ask answers none (MLW_RECORD). Where the name has versions otherwise, the answer is the table's, reported
+   as an `accessor` table answer (id -1 asks it of every class: a candidate scan). */
+typedef struct AttrFact { int cls, first, versioned; char *name; } AttrFact;
+struct AttrFacts { AttrFact *slot; int cap, used; ElabStamp stamp; unsigned long hgen; };
+void attr_facts_free(Compiler *c) {
+  if (!c->attr_facts) return;
+  for (int i = 0; i < c->attr_facts->cap; i++) free(c->attr_facts->slot[i].name);
+  free(c->attr_facts->slot);
+  free(c->attr_facts);
+  c->attr_facts = NULL;
+}
+/* Has `name` versions, and is the attr_* call that is the only version of it on cls's chain the first thing of the
+   program's that matters to a call of it (elab_accessor_first)? Kept by (class, name) while the record's shape stands: a node a pass appends,
+   or the rebuild of the map it causes, moves no attr_* call's place, and a pass that appends between asks would
+   otherwise drop the facts at each. */
+static const AttrFact *attr_fact(Compiler *c, int cls, const char *name) {
+  struct AttrFacts *m = c->attr_facts;
+  ElabStamp cur = elab_stamp(c);
+  if (m) cur.nt = m->stamp.nt, cur.rec = m->stamp.rec;
+  if (m && (!elab_stamp_same(m->stamp, cur) || m->hgen != elab_hgen(c))) { attr_facts_free(c); m = NULL; }
+  if (!m) {
+    if (!(c->attr_facts = m = calloc(1, sizeof *m))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    m->stamp = elab_stamp(c);
+    m->hgen = elab_hgen(c);
+  }
+  if (2 * (m->used + 1) > m->cap) {
+    AttrFact *old = m->slot;
+    int ocap = m->cap;
+    m->cap = ocap ? 2 * ocap : 256;
+    if (!(m->slot = calloc((size_t)m->cap, sizeof *m->slot))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < ocap; i++) {
+      if (!old[i].name) continue;
+      int j = (int)(ver_mix(sp_strhash(old[i].name) + (unsigned)old[i].cls * 0x9E3779B1u) & (unsigned)(m->cap - 1));
+      while (m->slot[j].name) j = (j + 1) & (m->cap - 1);
+      m->slot[j] = old[i];
+    }
+    free(old);
+  }
+  int j = (int)(ver_mix(sp_strhash(name) + (unsigned)cls * 0x9E3779B1u) & (unsigned)(m->cap - 1));
+  for (; m->slot[j].name; j = (j + 1) & (m->cap - 1))
+    if (m->slot[j].cls == cls && sp_streq(m->slot[j].name, name)) return &m->slot[j];
+  ElabVersion vs[2];
+  int versioned = ct_version_named(c, name), first = 0;
+  if (versioned) {
+    int n = elab_chain_versions(c, cls, 0, name, vs, 2);
+    first = n == 1 && ct_attr_version(vs[0].v) && vs[0].v->node >= 0 && elab_accessor_first(c, vs[0].v->node, name, cls);
+  }
+  m->slot[j] = (AttrFact){ cls, first, versioned, name_dup(name) };
+  m->used++;
+  return &m->slot[j];
+}
+static void ct_attr_point(Compiler *c, int id, int cls, unsigned flags, const char *name, MethodLookup *ml) {
+  const AttrFact *af = attr_fact(c, cls, name);
+  if (!af->versioned) return;
+  if (id >= 0) {
+    /* (made before any code of the program's can run: live at every call, none asks a window) */
+    if (af->first) return;
+    int none, framed = elab_plan_enter(c, id);
+    const LrDef *d = ct_met_version(c, id, cls, name, 0, &none);
+    if (framed) elab_plan_leave(c);
+    if (none && ct_struct_member(c, cls, name) < 0) {
+      *ml = (MethodLookup){ .kind = ML_NONE, .why = MLW_RECORD, .def_class = ml->def_class };
+      return;
+    }
+    if (d && ct_attr_version(d)) return;
+  }
+  if (g_method_table_check) mtab_table(c, id, cls, flags, name, MLW_ACCESSOR);
+}
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
   MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
   int dc0 = ml->def_class, mi = -1, pin, r;
@@ -4270,6 +4340,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_ENTRY;
     ml->why = 0;
   }
+  if ((flags & CT_ATTR) && ml->kind == ML_ATTR) ct_attr_point(c, id, cls, flags, name, ml);
   if (open) mtab_leave(c);
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;
@@ -7615,14 +7686,14 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
     /* A yielding candidate has a proc form emitted for exactly this
        dispatch (#3399); it is as callable as any other symbol here. */
     { char zexp[600];
-      if (poly_arm_refuses_none(c, mi, zexp, sizeof zexp) && !call_attr_target(c, -1, k, name, CT_ATTR, NULL)) {
+      if (poly_arm_refuses_none(c, mi, zexp, sizeof zexp) && !call_attr_target(c, id, k, name, CT_ATTR, NULL)) {
         cpoly_add(p, &cap, PA_ARITY, k, mi, TY_UNKNOWN, PC_VOID);
         continue;
       } }
     /* call_target ranks a def and a reader by which class defines
        them nearer; the reader below takes the arm when it wins (#7248). */
     if (mi >= 0 && c->scopes[mi].nrequired == 0 &&
-        (!call_attr_target(c, -1, k, name, 0, NULL)) &&
+        (!call_attr_target(c, id, k, name, 0, NULL)) &&
         (scope_has_callable_symbol(c, mi) || scope_needs_proc_form(c, mi)) &&
         !(c->classes[defcls].name && sp_streq(c->classes[defcls].name, "Class"))) {
       /* A proc form is a separately inferred clone, so its own return type
@@ -7645,7 +7716,7 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
       continue;
     }
     MethodLookup rml = { .def_class = -1 };
-    if (call_attr_target(c, -1, k, name, CT_ATTR, &rml)) {
+    if (call_attr_target(c, id, k, name, CT_ATTR, &rml)) {
       int rdcls = rml.def_class;
       const char *rn = comp_resolve_alias(c, k, name);
       char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", rn);
@@ -11668,6 +11739,7 @@ void ver_memo_drop(Compiler *c) {
   free(c->guard_memo.at); free(c->guard_memo.to);
   c->guard_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
   new_sites_free(c);
+  attr_facts_free(c);
 }
 static int ver_late_key_cmp(const struct VerLate *x, const struct VerLate *y) {
   int d = strcmp(x->name, y->name);

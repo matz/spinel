@@ -4656,7 +4656,7 @@ void emit_poly_iter_obj_reject_as(Compiler *c, int call, int tv, const char *nam
     if (!ci->instantiated || ci->is_native_class || is_builtin_reopen(ci->name)) continue;
     if (!is_plain_builtin_superclass(class_builtin_superclass(c, k))) continue;
     if (comp_enum_behind(c, k) || call_target(c, call, k, name, 0, NULL) >= 0 ||
-        call_target(c, -1, k, METHOD_MISSING_NAME, CT_METHODS | CT_SHARED, NULL) >= 0) continue;
+        call_target(c, call, k, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0) continue;
     buf_printf(&arms, " case %d:", k);
   }
   if (arms.p && arms.p[0])
@@ -17663,7 +17663,7 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     if (mi < 0) {
       if (!bcase && class_is_comparable(c, k)) {
         int eq = class_default_cmp(c, k) == BDC_EQUAL &&
-                 !comp_comparable_answers_first(c, k, "==") &&
+                 !comp_comparable_answers_first(c, -1, k, "==") &&
                  call_target(c, -1, k, "==", CT_METHODS | CT_SHARED, NULL) >= 0;
         buf_printf(b, "    case %d: *comparable = %s(a, b); return 0;\n",
                    k, eq ? "sp_poly_rb_equal" : "sp_poly_equal");

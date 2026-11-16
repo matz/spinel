@@ -4325,7 +4325,9 @@ int ie_implicit_self_class(Compiler *c, int id) {
   return s->class_id;
 }
 
-static int ie_self_call_names(Compiler *c, int node, const char **names, int n, int max) {
+/* The names an instance_eval/exec body calls on its self, each once, into names[n..max); the first call node of each
+   into nodes (when given), the node a question of the name is asked at. */
+static int ie_self_call_names(Compiler *c, int node, const char **names, int *nodes, int n, int max) {
   const NodeTable *nt = c->nt;
   if (node < 0) return n;
   NodeKind k = nt_kind(nt, node);
@@ -4338,7 +4340,7 @@ static int ie_self_call_names(Compiler *c, int node, const char **names, int n, 
     if (nm && self_call && !ie_kernel_global(nm)) {
       int seen = 0;
       for (int i = 0; i < n; i++) if (sp_streq(names[i], nm)) seen = 1;
-      if (!seen && n < max) names[n++] = nm;
+      if (!seen && n < max) { if (nodes) nodes[n] = node; names[n++] = nm; }
     }
     if (self_call || (nm && (is_instance_eval_family(nm))))
       skip = nt_ref(nt, node, "block");
@@ -4346,12 +4348,12 @@ static int ie_self_call_names(Compiler *c, int node, const char **names, int n, 
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) {
     int ch = nt_ref_at(nt, node, i);
-    if (ch != skip) n = ie_self_call_names(c, ch, names, n, max);
+    if (ch != skip) n = ie_self_call_names(c, ch, names, nodes, n, max);
   }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
-    for (int j = 0; j < m; j++) n = ie_self_call_names(c, ids[j], names, n, max);
+    for (int j = 0; j < m; j++) n = ie_self_call_names(c, ids[j], names, nodes, n, max);
   }
   return n;
 }
@@ -4400,14 +4402,18 @@ static int ie_poly_class_ok(Compiler *c, int k) {
 int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int *out, int max,
                          const char **need) {
   const char *names[64];
-  int nn = ie_self_call_names(c, body, names, 0, 64);
-  nn = ie_self_call_names(c, ie_body_params(c, body), names, nn, 64);
+  int nodes[64];
+  int nn = ie_self_call_names(c, body, names, nodes, 0, 64);
+  nn = ie_self_call_names(c, ie_body_params(c, body), names, nodes, nn, 64);
   if (nn == 64) return 0;
   int ask[64], nask = 0;
   for (int i = 0; i < nn; i++) {
-    if (call_target(c, -1, -1, names[i], CT_TOP | CT_SHARED, NULL) >= 0) continue;
+    /* (a top-level def answers the call, or main's own method does where the call runs on main: either way the name
+       tells nothing of the receiver's class) */
+    MethodLookup tl = { .def_class = -1 };
+    if (call_target(c, nodes[i], -1, names[i], CT_TOP, &tl) >= 0 || tl.kind == ML_SINGLETON || tl.kind == ML_OBJECT) continue;
     for (int k = 0; k < c->nclasses; k++) {
-      if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) { ask[nask++] = i; break; }
+      if (ie_poly_class_ok(c, k) && call_answers(c, nodes[i], k, names[i], 0, NULL)) { ask[nask++] = i; break; }
     }
   }
   /* A body that makes no such call but reads or writes ivars on its self
@@ -4427,13 +4433,13 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   const int *rc = nask == 0 ? poly_recv_classes(c, call, &nrc) : NULL;
   if (rc) {
     for (int i = 0; i < nrc && n < max; i++)
-      if (ie_poly_class_ok(c, rc[i]) && call_target(c, -1, rc[i], name, CT_METHODS | CT_SHARED, NULL) < 0) out[n++] = rc[i];
+      if (ie_poly_class_ok(c, rc[i]) && call_target(c, call, rc[i], name, CT_METHODS, NULL) < 0) out[n++] = rc[i];
     return n;
   }
   for (int k = 0; k < c->nclasses && n < max; k++) {
-    if (!ie_poly_class_ok(c, k) || call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) continue;
+    if (!ie_poly_class_ok(c, k) || call_target(c, call, k, name, CT_METHODS, NULL) >= 0) continue;
     int all = 1;
-    for (int i = 0; i < nask && all; i++) all = call_answers(c, -1, k, names[ask[i]], 0, NULL);
+    for (int i = 0; i < nask && all; i++) all = call_answers(c, nodes[ask[i]], k, names[ask[i]], 0, NULL);
     for (int i = 0; i < niv && all; i++) all = comp_ivar_index(&c->classes[k], ivs[i]) >= 0;
     if (all) out[n++] = k;
   }
@@ -4980,7 +4986,7 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
     if (t >= 0) cls = cls == -1 || cls == t ? t : -2 - id;
   }
   const char *names[64];
-  int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, 0, 64) : 0;
+  int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, NULL, 0, 64) : 0;
   for (int i = 0; i < nn; i++)
     for (int k = 0; k < c->nclasses && !call_answers(c, -1, cls, names[i], 0, NULL) && comp_method_index(c, names[i]) < 0; k++)
       if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) return -1;
@@ -14885,9 +14891,9 @@ int desugar_enum_method_recv(Compiler *c) {
       if (ocid < c->nclasses && c->classes[ocid].is_data) continue;
       /* a class without an #each that answers the name itself has the name
          it was called by back (detect, renamed to find by the pre-pass) */
-      if (qn != nm && !comp_enum_answers_first(c, ocid, qn)) { changed |= enum_unrename(nt, id); continue; }
+      if (qn != nm && !comp_enum_answers_first(c, id, ocid, qn)) { changed |= enum_unrename(nt, id); continue; }
       if (call_target(c, id, ocid, "__enum_to_a", CT_METHODS, NULL) < 0) continue;
-      if (!comp_enum_answers_first(c, ocid, qn)) continue;   /* the class's own */
+      if (!comp_enum_answers_first(c, id, ocid, qn)) continue;   /* the class's own */
       int selfn = nt_new_node(nt, "SelfNode");
       int wrap = nt_new_node(nt, "CallNode");
       if (selfn < 0 || wrap < 0) continue;
@@ -15163,7 +15169,7 @@ int desugar_enum_method_recv(Compiler *c) {
       changed = 1;
       continue;
     }
-    if (!comp_enum_answers_first(c, cid, qn)) { changed |= enum_unrename(nt, id); continue; }   /* class defines it */
+    if (!comp_enum_answers_first(c, id, cid, qn)) { changed |= enum_unrename(nt, id); continue; }   /* class defines it */
     /* minmax only where Enumerable really is: a Struct, or a class that mixes
        it in, itself, through a superclass or through an included module
        (whose own minmax builtins/enumerable.rb also answers); a class with a
@@ -15979,7 +15985,7 @@ static int desugar_multi_yield_map_param(Compiler *c) {
         (c->classes[cid].enum_yield_arity <= 1 && !c->classes[cid].enum_yield_packed)) continue;
     /* a map the program defines takes what it yields, not what #each does,
        unless Enumerable's comes first in the receiver's ancestors */
-    if (call_target(c, id, cid, nm, 0, NULL) >= 0 && !comp_enum_answers_first(c, cid, nm)) continue;
+    if (call_target(c, id, cid, nm, 0, NULL) >= 0 && !comp_enum_answers_first(c, id, cid, nm)) continue;
     int packed = c->classes[cid].enum_yield_packed;
     if (packed && comp_method_in_chain(c, cid, "__enum_to_a_raw", NULL) < 0) continue;
     int bp = nt_ref(nt, blk, "parameters");
@@ -32202,7 +32208,7 @@ static int dyn_site_misses(Compiler *c, int n, int mi) {
     if (rc >= 0 && m->name) {
       if (m->is_cmethod) return 1;
       for (int k = 0; k < c->nclasses; k++)
-        if (is_descendant(c, k, rc) && call_target(c, -1, k, m->name, CT_METHODS | CT_SHARED, NULL) == mi) return 0;
+        if (is_descendant(c, k, rc) && call_target(c, n, k, m->name, CT_METHODS, NULL) == mi) return 0;
       return 1;
     }
   }
@@ -37233,7 +37239,8 @@ static const PdnEnt *pdn_lookup(Compiler *c, const char *cn) {
       e->sc = g; e->sc[e->nsc++] = si;
     }
   for (int ci = 0; ci < c->nclasses; ci++)
-    if (call_attr_target(c, -1, ci, cn, CT_ATTR | CT_SHARED, NULL)) {
+    /* (a candidate scan kept per name: the classes that may read it at any point) */
+    if (call_attr_target(c, -1, ci, cn, CT_ATTR, NULL)) {
       int *g = realloc(e->cls, sizeof(int) * (size_t)(e->ncl + 1));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       e->cls = g; e->cls[e->ncl++] = ci;

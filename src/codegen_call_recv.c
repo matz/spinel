@@ -17131,7 +17131,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user; kk++) {
         if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-            (!c->classes[kk].is_native_class && call_attr_target(c, -1, kk, name, CT_ATTR, NULL))) has_user = 1;
+            (!c->classes[kk].is_native_class && call_attr_target(c, id, kk, name, CT_ATTR, NULL))) has_user = 1;
         if (nf && call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_cm = 1;
       }
       /* A class method of next_float / prev_float is a boxed Class's: the

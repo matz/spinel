@@ -4178,6 +4178,24 @@ static int ct_lookup_object_top(Compiler *c, int id, int cls, const char *name, 
   int ti = ct_lookup(c, id, -1, name, &tf, &tl);
   return ti >= 0 && c->scopes[ti].class_id < 0 ? ti : mi;
 }
+/* The accessor an ask of CT_ATTR finds (ML_ATTR) as it stands at call id: the record holds the attr_* calls of a name
+   as versions (ct_attr_version), so where none has run by id's point and the class has no Struct or Data member of the
+   name, the ask answers none (MLW_RECORD). Where the name has versions otherwise, the answer is the table's, reported
+   as an `accessor` table answer (id -1 asks it of every class: a candidate scan). */
+static void ct_attr_point(Compiler *c, int id, int cls, unsigned flags, const char *name, MethodLookup *ml) {
+  if (!ct_version_named(c, name)) return;
+  if (id >= 0) {
+    int none, framed = elab_plan_enter(c, id);
+    const LrDef *d = ct_met_version(c, id, cls, name, 0, &none);
+    if (framed) elab_plan_leave(c);
+    if (none && ct_struct_member(c, cls, name) < 0) {
+      *ml = (MethodLookup){ .kind = ML_NONE, .why = MLW_RECORD, .def_class = ml->def_class };
+      return;
+    }
+    if (d && ct_attr_version(d)) return;
+  }
+  if (g_method_table_check) mtab_table(c, id, cls, flags, name, MLW_ACCESSOR);
+}
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
   MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
   int dc0 = ml->def_class, mi = -1, pin, r;
@@ -4270,6 +4288,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_ENTRY;
     ml->why = 0;
   }
+  if ((flags & CT_ATTR) && ml->kind == ML_ATTR) ct_attr_point(c, id, cls, flags, name, ml);
   if (open) mtab_leave(c);
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;
@@ -7615,14 +7634,14 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
     /* A yielding candidate has a proc form emitted for exactly this
        dispatch (#3399); it is as callable as any other symbol here. */
     { char zexp[600];
-      if (poly_arm_refuses_none(c, mi, zexp, sizeof zexp) && !call_attr_target(c, -1, k, name, CT_ATTR, NULL)) {
+      if (poly_arm_refuses_none(c, mi, zexp, sizeof zexp) && !call_attr_target(c, id, k, name, CT_ATTR, NULL)) {
         cpoly_add(p, &cap, PA_ARITY, k, mi, TY_UNKNOWN, PC_VOID);
         continue;
       } }
     /* call_target ranks a def and a reader by which class defines
        them nearer; the reader below takes the arm when it wins (#7248). */
     if (mi >= 0 && c->scopes[mi].nrequired == 0 &&
-        (!call_attr_target(c, -1, k, name, 0, NULL)) &&
+        (!call_attr_target(c, id, k, name, 0, NULL)) &&
         (scope_has_callable_symbol(c, mi) || scope_needs_proc_form(c, mi)) &&
         !(c->classes[defcls].name && sp_streq(c->classes[defcls].name, "Class"))) {
       /* A proc form is a separately inferred clone, so its own return type
@@ -7645,7 +7664,7 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
       continue;
     }
     MethodLookup rml = { .def_class = -1 };
-    if (call_attr_target(c, -1, k, name, CT_ATTR, &rml)) {
+    if (call_attr_target(c, id, k, name, CT_ATTR, &rml)) {
       int rdcls = rml.def_class;
       const char *rn = comp_resolve_alias(c, k, name);
       char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", rn);

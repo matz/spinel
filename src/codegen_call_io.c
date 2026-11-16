@@ -982,11 +982,11 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         continue;
       }
       if (call_target(c, id, k, name, 0, NULL) >= 0 ||
-          call_attr_target(c, -1, k, name, CT_ATTR, NULL))
+          call_attr_target(c, id, k, name, CT_ATTR, NULL))
         iocand = 1;
       /* an attr writer answers `x.sync = v` as a reader answers `x.sync` */
       char base[256];
-      if (setter_base_name(name, base, sizeof base) && call_attr_target(c, -1, k, base, CT_ATTR | CT_WRITER, NULL)) iocand = 1;
+      if (setter_base_name(name, base, sizeof base) && call_attr_target(c, id, k, base, CT_ATTR | CT_WRITER, NULL)) iocand = 1;
     }
     /* each_codepoint: the runtime answers a box, read back at the call's
        representation (an Enumerator where it is kept) */

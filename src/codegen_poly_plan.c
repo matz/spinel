@@ -1787,7 +1787,7 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
     int is_call = comp_poly_arm_defines(c, k, name) ||
                   (nt_ref(nt, id, "block") >= 0 && c->classes[k].is_native_class &&
                    call_target(c, id, k, name, 0, NULL) >= 0);
-    if (is_call || (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR, NULL))) ncand++;
+    if (is_call || (!c->classes[k].is_native_class && call_attr_target(c, id, k, name, CT_ATTR, NULL))) ncand++;
     /* The root decision counts only the arms the switch below will carry:
        a class no reachable code constructs gets no arm, so it must not
        decide the root either. A dead FFI wrapper's Vector2 counted as a
@@ -1952,7 +1952,7 @@ int poly_key_cls0(Compiler *c, int call, const char *name, int argc, int kwh, in
     return ((cls0_mi >= 0 && c->scopes[cls0_mi].nrequired == 0) ||
             /* an arm refusing no arguments raises, and is a `case 0:` all the same */
             poly_arm_refuses_none(c, cls0_mi, cls0_exp, sizeof cls0_exp) ||
-            (c->nclasses > 0 && call_attr_target(c, -1, 0, name, CT_ATTR, NULL))) &&
+            (c->nclasses > 0 && call_attr_target(c, call, 0, name, CT_ATTR, NULL))) &&
            c->nclasses > 0 &&
            (c->classes[0].instantiated || class_is_prim_reopen(c, 0));
   }

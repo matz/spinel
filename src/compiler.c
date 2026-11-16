@@ -2213,6 +2213,8 @@ int comp_name_reader_any(Compiler *c, const char *name) {
 
 /* See compiler.h. */
 int comp_poly_arm_reader_any(Compiler *c, const char *name, int argc) {
+  /* (a candidate scan: does any class of the program, at any point, give the name an arm; kept per name by
+     poly_name_user_claimed, so no call's point is asked; an accessor with versions is an `accessor` table answer) */
   for (int k = 0; k < c->nclasses; k++)
     if (comp_poly_arm_defines_n(c, k, name, argc) ||
         (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR, NULL))) return 1;

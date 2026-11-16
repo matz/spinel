@@ -248,9 +248,9 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT
    sides (CT_CMETHOD, CT_OWN, CT_TOP, CT_CAPTURE) are as they are. CT_SHARED marks the ask of a reader the call sites
    share: a node's frame that is open keeps its read counted as the node's (--method-table-check) until the site asks
    the plan itself. CT_ATTR asks the attribute alone (the writer's with CT_WRITER): ML_ATTR where the chain holds
-   one, whatever def is nearer, as comp_reader_in_chain answers it. No load point versions an attribute: ct_lookup
-   answers none for CT_ATTR at any id, and call_target's none arm never asks the record, so the ask of a reader with
-   no node (the dispatchers over every class) is the same with id -1 and without CT_SHARED, its reads the plan's own. */
+   one, whatever def is nearer, as comp_reader_in_chain answers it. An accessor has a load point: asked at a call (id >= 0), the ask answers none where no attr_*
+   call of the name has run by the call's point (ct_attr_point); with no call (id -1) it is a candidate scan of
+   every class, and an accessor with versions is reported as an `accessor` table answer. */
 /* CT_NOFACE asks the instance lookup with no visibility face, as a call
    that enforces nothing does: a private def is found. It is the one flag
    that says so by itself; every other flag but CT_WRITER (which asks the

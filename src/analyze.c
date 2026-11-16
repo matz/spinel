@@ -13267,16 +13267,17 @@ static int desugar_builtin_new_empty_init(Compiler *c) {
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
     if (nt_kind(nt, id) != NK_CallNode || id >= c->node_cap) continue;
     if ((nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0) || cplan_builtin_new_form(c, id) != BNF_EMPTY) continue;
+    /* (where the call stands is known before its operands are held: holding them rewrites the call) */
+    int *par = du_parent_map(nt);
+    if (!par || par[id] < 0) { free(par); continue; }
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
-    if (np < 0) { free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
-    nt_node_set_ref(nt, id, "arguments", -1);
-    nt_node_set_ref(nt, id, "block", -1);
-    changed = 1;
-    int *par = np > 0 ? du_parent_map(nt) : NULL;
-    if (np > 0 && par && par[id] >= 0) {
+    if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
+    if (np > 0) {
       /* (a sequence of its own in the call's place, of fresh nodes throughout: the order plan keeps what it recorded of the old
          call and its operands by node; the held values run as statements of their own, the plain `new` last) */
       int base = nt->count, stmts = nt_new_node(nt, "StatementsNode"), seq = nt_new_node(nt, "ParenthesesNode");
+      nt_node_set_ref(nt, id, "arguments", -1);
+      nt_node_set_ref(nt, id, "block", -1);
       for (int i = 0; i < np; i++)
         if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
       pre[np++] = nt_clone_subtree(nt, id);
@@ -13286,8 +13287,13 @@ static int desugar_builtin_new_empty_init(Compiler *c) {
       for (int j = base; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
       nt_replace_child(nt, par[id], id, seq);
     }
+    else {
+      nt_node_set_ref(nt, id, "arguments", -1);
+      nt_node_set_ref(nt, id, "block", -1);
+    }
     free(par);
     free(pre);
+    changed = 1;
   }
   return changed;
 }

@@ -1592,6 +1592,12 @@ int cplan_entry_finds(const Compiler *c, int e);
    name one method. With id -1, the table's `self.new` (a reader that
    answers for every call of a class, as cplan_hook_target's). */
 int cplan_user_new(Compiler *c, int id, int ci);
+/* Does the `[]` call id, on a boxed value that may hold the class ci,
+   build an instance of ci itself: a Struct or Data class of the program
+   (not a builtin's reopening, not a native class) with no `[]` of the
+   program's where the call runs? CRuby's `[]` on a record class does not
+   call a program's `new`, so none is asked. */
+int cplan_aref_builds(Compiler *c, int id, int ci);
 /* The class method of program class ci that call id, named name, runs:
    for a `new` the one cplan_user_new answers (none where the builtin
    constructor answers a call before the class's `def self.new`), for any

@@ -16716,9 +16716,9 @@ static int aref_arg_in_place(const NodeTable *nt, int a) {
    reads each argument as the type the compiler gave the member it fills.
    Answers 1 when some argument's type is another type, or is not known, so
    that class is left to the `[]` the value took before. */
-static int aref_arg_mistyped(Compiler *c, int ci, const int *argv, int argc) {
+static int aref_arg_mistyped(Compiler *c, int id, int ci, const int *argv, int argc) {
   ClassInfo *k = &c->classes[ci];
-  if (comp_method_in_chain(c, ci, "initialize", NULL) >= 0) return 0;
+  if (cplan_new_arm_initialize(c, id, ci) >= 0) return 0;
   for (int j = 0; j < argc && j < k->nreaders; j++) {
     char mvn[300]; snprintf(mvn, sizeof mvn, "@%s", k->readers[j]);
     int mvi = comp_ivar_index(k, mvn);
@@ -16761,11 +16761,8 @@ int emit_boxed_class_aref(Compiler *c, int id, Buf *b) {
     Buf ids; memset(&ids, 0, sizeof ids);
     unsigned char *only = calloc((size_t)c->nclasses, 1);
     for (int ci = 0; ci < c->nclasses; ci++) {
-      ClassInfo *k = &c->classes[ci];
-      if (!k->is_struct || is_builtin_reopen(k->name) || k->is_native_class) continue;
-      if (comp_cmethod_in_chain(c, ci, "[]", NULL) >= 0 ||
-          comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
-      if (aref_arg_mistyped(c, ci, argv, argc)) continue;
+      if (!cplan_aref_builds(c, id, ci)) continue;
+      if (aref_arg_mistyped(c, id, ci, argv, argc)) continue;
       if (!ncls) tsv = ++g_tmp;
       buf_printf(&ids, "%s_t%d.cls_id == %d", ncls++ ? " || " : "", tsv, ci);
       only[ci] = 1;
@@ -16818,10 +16815,14 @@ int emit_boxed_class_aref(Compiler *c, int id, Buf *b) {
     /* the `new` arm is taken only for the classes tested above: its
        switch has their arms, not one per class of the program */
     char *sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", "new");
+    /* (each arm is the class's own `[]`, as the constant's `S[x]` is: it does not call a program's `new`) */
+    long long sv_ix = nt_int(nt, id, "index_ctor", 0);
+    nt_node_set_int((NodeTable *)nt, id, "index_ctor", 1);
     const unsigned char *sv_only = g_poly_new_only;
     g_poly_new_only = only;
     Buf nb; memset(&nb, 0, sizeof nb); emit_call(c, id, &nb);
     g_poly_new_only = sv_only;
+    nt_node_set_int((NodeTable *)nt, id, "index_ctor", sv_ix);
     nt_node_restore_str((NodeTable *)nt, id, "name", sv_nm);
     int sv_skip = g_aref_cls_skip;
     g_aref_cls_skip = id;
@@ -17420,7 +17421,7 @@ static int aref_cmethod_owns(Compiler *c, int id) {
   if (blk < 0 || nt_kind(c->nt, blk) != NK_BlockNode) return cls_value_owns_name(c, id, "[]");
   if (g_cls_tag_skip == id) return 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (comp_cmethod_in_chain(c, k, "[]", NULL) >= 0) return 1;
+    if (call_target(c, id, k, "[]", CT_CMETHOD, NULL) >= 0) return 1;
   return 0;
 }
 

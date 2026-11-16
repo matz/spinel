@@ -2917,13 +2917,8 @@ static int boxed_struct_aref_may_construct(Compiler *c, int id) {
   const char *nm = nt_str(c->nt, id, "name");
   int recv = nt_ref(c->nt, id, "receiver");
   if (!nm || !sp_streq(nm, "[]") || recv < 0 || comp_ntype(c, recv) != TY_POLY) return 0;
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    ClassInfo *k = &c->classes[ci];
-    if (!k->is_struct || is_builtin_reopen(k->name) || k->is_native_class) continue;
-    if (comp_cmethod_in_chain(c, ci, "[]", NULL) >= 0 ||
-        comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
-    return 1;
-  }
+  for (int ci = 0; ci < c->nclasses; ci++)
+    if (cplan_aref_builds(c, id, ci)) return 1;
   return 0;
 }
 

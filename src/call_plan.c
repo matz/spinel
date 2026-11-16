@@ -4062,6 +4062,11 @@ int cplan_user_new(Compiler *c, int id, int ci) {
   return id < 0 ? call_target(c, -1, ci, "new", CT_CMETHOD, NULL) : user_new_at(c, id, ci, NULL);
 }
 /* See call_plan.h. */
+int cplan_aref_builds(Compiler *c, int id, int ci) {
+  const ClassInfo *k = &c->classes[ci];
+  return k->is_struct && !is_builtin_reopen(k->name) && !k->is_native_class && call_target(c, id, ci, "[]", CT_CMETHOD, NULL) < 0;
+}
+/* See call_plan.h. */
 int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name) {
   return is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
 }

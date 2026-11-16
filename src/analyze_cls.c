@@ -3342,6 +3342,11 @@ static int cf_dsend_wake(CF *f) {
       if (rs[j] == CF_EMPTY) continue;
       const ClsSet *r = &f->pool[rs[j]];
       if (s->is_cmethod && cls_set_has(r, k + c->nclasses)) now = 1;
+      /* a module's instance method is a singleton method of each Class
+         object that extends it, or extends a module including it: any
+         Class object in the set may be one */
+      if (!s->is_cmethod && f->mod[k])
+        for (int x = c->nclasses; x < 2 * c->nclasses && !now; x++) now = cls_set_has(r, x);
       for (int x = cls_set_next(d, -1); x >= 0 && !now; x = cls_set_next(d, x))
         now = (!s->is_cmethod && cls_set_has(r, x)) || (by_cls && cls_set_has(r, x + c->nclasses));
     }
@@ -5442,7 +5447,11 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
            proc form, a lowered yield or a synthesized scope, 90006 the rest
            (a C extension's stub, or an --ext-entry or --ext-class method,
            which the host calls with whatever it holds) */
-        int why = sd_proto ? 90001 : sd_prelude ? 90002 : sd_modfn ? 90003 :
+        /* (ahead of a dynamic name: the host's call is not a send the walk
+           sees, which cf_dsend_wake would wait for) */
+        int sd_host = s->is_ext_entry || s->is_ext_method ||
+                      (c->n_cext_extensions && s->def_node >= 0 && nt_int(c->nt, s->def_node, "cext_stub", 0));
+        int why = sd_proto ? 90001 : sd_prelude ? 90002 : sd_modfn ? 90003 : sd_host ? 90006 :
                   (cf_opaque_name(s->name) || cf_is_dyn(&f, s->name)) ? 90004 :
                   (s->is_proc_form || s->is_lowered_yield || s->cs_synth) ? 90005 : 90006;
         if (why == 90001 && f.rvis >= 0) {

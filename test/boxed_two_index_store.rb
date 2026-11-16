@@ -119,6 +119,17 @@ to = TagShelf.new(1)
 ts[(ts = to; 0)][1, 1] = 8
 p g0[0, 1], g1[0, 1], g0[1, 1], g1[1, 1], ts.tag
 
+# an outer call that changes what an index built above the statement reads
+# (`[$k][0]`) runs first, as in Ruby
+$krows = [Grid.new, Grid.new, [1, 2]]
+$kk = 0
+def krows
+  $kk = 1
+  $krows
+end
+krows[[$kk][0]][0, 1] = 9
+p $krows[0][0, 1], $krows[1][0, 1]
+
 # a store whose class takes one index fewer raises, as in Ruby
 c = boxes[1]
 begin

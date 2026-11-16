@@ -25,4 +25,6 @@ nil
 8
 nil
 "t"
+nil
+9
 ArgumentError

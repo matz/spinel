@@ -47991,6 +47991,35 @@ static void lower_builtin_supers(Compiler *c) {
   free(par0);
 }
 
+/* A bare `super` after its method assigned its `*rest` passes the rest's current value, as CRuby does: the
+   assignment moves the rest's reads to a copy (zsuper_rest_local), which the emission of a bare super into a
+   method of the program does not read (it passes the parameter as it came). Spelled as a call's arguments,
+   super(args), the super reads the copy. Only that case: every other bare super keeps its emission. A bare super
+   that reaches a builtin was lowered before (lower_builtin_supers). */
+static void lower_zsuper_assigned_rest(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count;
+  int *par0 = (int *)malloc(sizeof(int) * (size_t)(n0 > 0 ? n0 : 1));
+  if (!par0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(par0, comp_parent_map(c), sizeof(int) * (size_t)n0);
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_ForwardingSuperNode) continue;
+    int si = c->nscope[id];
+    if (si < 0 || si >= c->nscopes) continue;
+    Scope *s = &c->scopes[si];
+    if (!s->name || s->rest_idx < 0 || s->rest_idx >= s->nparams || !s->pnames || !s->pnames[s->rest_idx]) continue;
+    char cp[128];
+    const char *rn = s->pnames[s->rest_idx];
+    const char *rd = zsuper_rest_local(c, par0, id, rn, cp, sizeof cp);
+    if (rd == rn) continue;   /* (the rest is not assigned before this super) */
+    int args = super_zsuper_args(c, id, s, par0, 0);
+    if (args < 0) continue;
+    nt_node_set_type(nt, id, "SuperNode");
+    nt_node_set_ref(nt, id, "arguments", args);
+  }
+  free(par0);
+}
+
 /* A receiverless call in an Array subclass's instance method of a name its
    class chain does not define but Array does (`size`, `each { }`, `first`):
    Array's method on self, spelled with self as the receiver, as
@@ -50664,6 +50693,7 @@ static void an_phase_class_structure(Compiler *c) {
      the copies its modules put in (#7449) */
   AN_STEP_V("rewrite_array_subclass_calls", rewrite_array_subclass_calls(c));
   AN_STEP_V("lower_builtin_supers", lower_builtin_supers(c));   /* super with no program method -> the builtin's call on self */
+  AN_STEP_V("lower_zsuper_assigned_rest", lower_zsuper_assigned_rest(c));   /* a bare super after the rest was assigned passes its current value */
   AN_STEP_V("rewrite_attr_supers", rewrite_attr_supers(c));
   rewrite_self_attr_empty_writes(c);
   AN_STEP_V("specialize_inherited_cls_new", specialize_inherited_cls_new(c));

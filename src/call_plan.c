@@ -786,6 +786,25 @@ int cplan_kernel_raise(Compiler *c, int id) {
   const char *nm = nt_str(nt, id, "name");
   return nm && is_raise_alias(nm) && cplan_user(c, id).dispatch == CP_NONE;
 }
+/* Does the program have a top-level def of `name` that a `super` of scope s, which cplan_super_chain_mi found no
+   target for, may still reach? A top-level def is Object's private method, ahead of Kernel's and of a builtin that
+   does not answer the name first, for a chain that reaches Object: the lookup binds it only where one def is made
+   for sure before the method's own def runs (a def made after the class, or twice, is none it proves). Where it
+   binds none but a def exists, the builtin's own method is not the answer either: CRuby answers the def wherever it
+   has run, Kernel's function where it has not, and which one depends on when the super runs. The super keeps the
+   NoMethodError it had, rather than a Kernel function's answer that is wrong wherever the def has run. */
+static int cplan_super_top_def_unproven(Compiler *c, const Scope *s, const char *name) {
+  if (s->is_cmethod || s->class_id < 0 || comp_class_is_module(c, &c->classes[s->class_id])) return 0;
+  int top = s->class_id;
+  while (c->classes[top].parent >= 0) top = c->classes[top].parent;
+  if (class_is_blank_slate(c, top) || builtin_core_class_slot(c->classes[top].name) == CORE_BASIC_OBJECT) return 0;
+  const char *root = comp_super_builtin_root(c, s->class_id, NULL);
+  if (!root || builtin_answers_ahead_of(root, name, "Object") || comp_chain_core_answers(c, s->class_id, name)) return 0;
+  for (int t = an_scopes_named_first(c, name); t >= 0; t = an_scopes_named_next(c, name, t))
+    if (cplan_is_top_def_scope(c, t)) return 1;
+  int tm = call_target(c, -1, -1, name, CT_TOP, NULL);   /* (an alias names a def under another name) */
+  return tm >= 0 && cplan_is_top_def_scope(c, tm);
+}
 /* A super's parent-chain target, past inherited copies of the same
    extended definition. Shared by resolution, inference, inline splicing and
    the miss check. Every step is call_target's, with CT_REACH: it skips the
@@ -912,8 +931,10 @@ int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
     return -1;
   }
   int mi = cplan_super_chain_mi(c, id, s, par, uname, ml);
-  /* no method of the program's answers: the builtin's does, if one */
+  /* no method of the program's answers: the builtin's does, if one, unless the program has a top-level def of the
+     name that the lookup could not rule out (below) */
   if (mi < 0) ml->bowner = comp_super_bowner(c, s, uname);
+  if (mi < 0 && ml->bowner && cplan_super_top_def_unproven(c, s, uname)) ml->bowner = NULL;
   return mi;
 }
 

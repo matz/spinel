@@ -10559,10 +10559,8 @@ void specialize_inherited_cls_new(Compiler *c) {
     else {
       NodeKind rk = nt_kind(nt, recv);
       if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
-      const char *cn = key_name(c, recv);
       /* (the class the node names: an alias's too) */
       ci = const_node_class_index(c, recv);
-      if (ci < 0) ci = cn ? comp_class_index(c, cn) : -1;
       if (ci < 0) continue;
     }
     const char *mname = cls_call_name(c, id);

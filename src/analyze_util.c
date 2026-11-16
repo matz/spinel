@@ -5377,7 +5377,9 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
     int mi = comp_self_call_mi(c, node, sym);
     /* (a module main extends or Object includes, where main's chain meets it at the capture: its owner's. Not an
        Object prepend's: Object's prepends emit no body a Method can bind yet) */
-    int mst = mi < 0 ? cplan_main_chain_step(c, node, sym) : -1;
+    int mst = mi < 0 || c->scopes[mi].class_id < 0 ? cplan_main_chain_step(c, node, sym) : -1;
+    /* (with a top-level def found, only an extend answers ahead of it) */
+    if (mi >= 0 && mst != EMC_EXTEND) mst = -1;
     if (mst > EMC_CORE && mst != EMC_PREPEND) {
       int im = call_target(c, node, -1, sym, CT_INCLUDED, NULL);
       if (im >= 0) {

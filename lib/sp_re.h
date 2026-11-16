@@ -174,6 +174,19 @@ typedef struct {
 } sp_re_frame;
 void sp_re_frame_push(sp_re_frame *f);
 void sp_re_frame_pop(sp_re_frame *f);
+/* The match registers of one green thread across a switch: `$~` is
+   thread-local in Ruby, and the registers are per worker, so the thread that
+   leaves a worker saves its own and puts them back when it runs again
+   (lib/sp_sched.c). held is 0 for a thread with no match, which saves
+   nothing. */
+typedef struct {
+  sp_re_frame f;
+  int held;
+  int sub_matched;
+} sp_re_switch;
+void sp_re_switch_out(sp_re_switch *s);
+void sp_re_switch_in(sp_re_switch *s);
+void sp_re_thread_begin(void);   /* a new thread starts with no match */
 sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, sp_int cpos);
 const char *sp_MatchData_aref(sp_MatchData *m, sp_int i);
 const char *sp_MatchData_aref_name(sp_MatchData *m, const char *name);

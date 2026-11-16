@@ -152,6 +152,63 @@ void sp_re_frame_pop(sp_re_frame *f) {
   /* drop the slots sp_re_frame_push rooted */
   if (sp_gc_nroots > f->nroots) sp_gc_nroots = f->nroots;
 }
+/* A green thread leaves its worker and comes back (sp_re.h). The saved
+   strings are rooted as a frame's are: the root stack is the thread's own
+   and stays with it while another thread runs on the worker. */
+static void sp_re_switch_keep(const char **slot, const char *val) {
+  *slot = val;
+  if (val) _sp_gc_root_push((void **)((uintptr_t)slot | (uintptr_t)2));
+}
+/* Whether the registers hold a match. The subject is set before every other
+   string of a match (sp_re_set_captures), and every clear takes all of them
+   together, so with no subject there is no string to keep. */
+static int sp_re_switch_held(void) { return sp_re_last_str != NULL; }
+void sp_re_switch_out(sp_re_switch *s) {
+  s->sub_matched = sp_re_sub_matched;
+  s->held = sp_re_switch_held();
+  if (!s->held) return;
+  sp_re_frame *f = &s->f;
+  /* as sp_re_frame_push, for the positions the last match has and the
+     strings that are set: a switch is more frequent than a method's entry */
+  int n = sp_re_last_ncap * 2;
+  if (n > 64 || n < 0) n = 64;
+  for (int i = 0; i < n; i++) f->caps[i] = sp_re_caps[i];
+  f->last_ncap = sp_re_last_ncap;
+  f->last_pat = sp_re_last_pat;
+  f->last_lit = sp_re_last_lit;
+  f->pp_span[0] = sp_re_pp_span[0]; f->pp_span[1] = sp_re_pp_span[1];
+  f->nroots = sp_gc_nroots;
+  for (int i = 0; i < 10; i++) sp_re_switch_keep(&f->captures[i], sp_re_captures[i]);
+  sp_re_switch_keep(&f->last_str, sp_re_last_str);
+  sp_re_switch_keep(&f->match_str, sp_re_match_str);
+  sp_re_switch_keep(&f->match_pre, sp_re_match_pre);
+  sp_re_switch_keep(&f->match_post, sp_re_match_post);
+}
+void sp_re_switch_in(sp_re_switch *s) {
+  sp_re_sub_matched = s->sub_matched;
+  if (!s->held) {
+    if (sp_re_switch_held()) sp_re_clear_last_match();
+    return;
+  }
+  const sp_re_frame *f = &s->f;
+  int n = f->last_ncap * 2;
+  if (n > 64 || n < 0) n = 64;
+  for (int i = 0; i < n; i++) sp_re_caps[i] = f->caps[i];
+  for (int i = 0; i < 10; i++) sp_re_captures[i] = f->captures[i];
+  sp_re_last_str = f->last_str;
+  sp_re_match_str = f->match_str;
+  sp_re_match_pre = f->match_pre;
+  sp_re_match_post = f->match_post;
+  sp_re_last_ncap = f->last_ncap;
+  sp_re_last_pat = f->last_pat;
+  sp_re_last_lit = f->last_lit;
+  sp_re_pp_span[0] = f->pp_span[0]; sp_re_pp_span[1] = f->pp_span[1];
+  if (sp_gc_nroots > f->nroots) sp_gc_nroots = f->nroots;
+}
+void sp_re_thread_begin(void) {
+  sp_re_clear_last_match();
+  sp_re_sub_matched = 0;
+}
 void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(str);
   /* $~ keeps the target past the call: a copy of a live payload, which a
      later write (a bang's write-back, a growth's realloc) changes or frees

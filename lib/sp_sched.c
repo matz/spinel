@@ -10,6 +10,7 @@
 #endif
 #include "sp_alloc.h"   /* sp_box_nil / sp_box_obj */
 #include "sp_exc.h"     /* sp_exc_cls_display / sp_exc_cls_unnamed (the thread report) */
+#include "sp_re.h"      /* sp_re_switch: the match registers of a thread */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -2963,6 +2964,14 @@ static void sp_sched_signal_if_quiescent(void) {
    caller_ctx rather than its own, so a switch to it lands on a context that
    was never saved. run_thread_once never nests on a worker, so it sets the
    home and clears it after. */
+/* The match registers (`$~`) are per thread in Ruby and per worker in the
+   runtime. A green thread that stops and gives its worker to another one
+   saves its own on its stack and puts them back when it runs again, and so
+   does the side that runs it (run_thread_once), so the threads of one worker
+   do not read each other's. The trap thread (lib/sp_cold.c) takes no part:
+   CRuby runs a trap in the main thread, with the `$~` of that thread, and
+   the trap thread reads and writes the registers of the side that runs it. */
+static int sp_thread_own_match(const sp_thread *t) { return t && !t->internal; }
 static SP_TLS sp_Fiber *g_sched_home = NULL;
 static sp_Fiber *sp_sched_home(void) { return g_sched_home ? g_sched_home : sp_fiber_worker_root(); }
 sp_Fiber *sp_sched_home_fiber(void) { return sp_sched_home(); }
@@ -2972,7 +2981,11 @@ sp_Fiber *sp_sched_home_fiber(void) { return sp_sched_home(); }
 static void sp_sched_switch_out(void) {
   sp_thread *self = g_current;
   if (self && sp_fiber_current != self->fiber) self->at = sp_fiber_current;
+  int own = sp_thread_own_match(self);
+  sp_re_switch match;
+  if (own) sp_re_switch_out(&match);
   sp_fiber_sched_switch(sp_sched_home());
+  if (own) sp_re_switch_in(&match);
 }
 
 static void run_thread_once(sp_thread *t) { sp_gc_wb((void*)t);   /* PRE/POST: sched lock held, or not held from the worker's fast path */
@@ -3035,9 +3048,17 @@ static void run_thread_once(sp_thread *t) { sp_gc_wb((void*)t);   /* PRE/POST: s
   g_sched_home = sp_fiber_current;
   sp_Fiber *at = t->at;   /* it stopped inside a Fiber it resumed */
   t->at = NULL;
+  /* the thread runs with its own `$~`; a new one starts with none */
+  int own = sp_thread_own_match(t);
+  sp_re_switch match;
+  if (own) {
+    sp_re_switch_out(&match);
+    if (t->fiber->state == 0) sp_re_thread_begin();
+  }
   if (locked) SCHED_UNLOCK();
   sp_Fiber_transfer_catch(t->fiber, at, in, &raised, &ec, &em, &eo);
   if (locked) SCHED_LOCK();
+  if (own) sp_re_switch_in(&match);
   g_sched_home = NULL;
   g_current = saved;
 #ifdef SP_THREADS

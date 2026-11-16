@@ -47056,7 +47056,7 @@ static void mark_ctor_cycles(Compiler *c) {
   free(start); free(adj); free(fill); free(index); free(low); free(edge); free(stack); free(path); free(on);
 }
 
-static int super_zsuper_args(Compiler *c, int at, Scope *s, int strict);
+static int super_zsuper_args(Compiler *c, int at, Scope *s, const int *par, int strict);
 /* `super` from the program's own instance_variable_get, _set,
    instance_variable_defined?, instance_variables or remove_instance_variable,
    with no program method above it: Object's reflection of self, which reads
@@ -47081,7 +47081,7 @@ static void rewrite_ivar_reflection_supers(Compiler *c) {
     if (cplan_super_target(c, -1, s, NULL) >= 0) continue;
     int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1;
     if (k == NK_ForwardingSuperNode) {
-      args = super_zsuper_args(c, id, s, 0);
+      args = super_zsuper_args(c, id, s, NULL, 0);
       if (args < 0) continue;
     }
     char *mname = strdup(s->name);
@@ -47357,6 +47357,28 @@ static int zsuper_read(Compiler *c, int at, const char *nm) {
   if (rd >= 0) nt_node_set_str((NodeTable *)c->nt, rd, "name", nm);
   return rd;
 }
+/* The local that holds the `*rest` parameter where node `at` reads it. A body that assigns the rest moves its
+   reads and writes from the first assignment on to a copy, whose name desugar_rest_param_writes_at gives
+   (rest_param_copy_name) and the body's own write of it proves, so a bare super after the assignment passes that copy, as CRuby passes the parameter's
+   current value. The copy's own assignment is a statement of the body; a super in a later statement reads it. */
+static const char *zsuper_rest_local(Compiler *c, const int *par, int at, const char *nm, char *cp, size_t cap) {
+  const NodeTable *nt = c->nt;
+  rest_param_copy_name(cp, cap, nm);
+  if (!par) return nm;
+  int d = at;
+  while (d >= 0 && nt_kind(nt, d) != NK_DefNode) d = par[d];
+  int body = d >= 0 ? nt_ref(nt, d, "body") : -1, bn = 0;
+  const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+  int w = -1, j = -1;
+  for (int i = 0; w < 0 && i < bn; i++) {
+    const char *wn = nt_kind(nt, bb[i]) == NK_LocalVariableWriteNode ? nt_str(nt, bb[i], "name") : NULL;
+    if (wn && sp_streq(wn, cp)) w = i;
+  }
+  /* the statement of the body that holds the super: the ancestor the walk reached below the body */
+  for (int n = at; n >= 0 && j < 0; n = par[n])
+    for (int i = 0; i < bn; i++) if (bb[i] == n) { j = i; break; }
+  return w >= 0 && j > w ? cp : nm;
+}
 /* The arguments a bare `super` in the method of scope s passes on, spelled
    as a call's, by CRuby's rule: the requireds and optionals as reads, the
    rest as a splat (an anonymous `*` as the anonymous splat), the posts as
@@ -47369,7 +47391,7 @@ static int zsuper_read(Compiler *c, int at, const char *nm) {
    Array subclass's, refused before) cannot be given. A module prepended into
    a builtin keeps the slots, as its super did). The block is the caller's
    (lower_super_call). */
-static int super_zsuper_args(Compiler *c, int at, Scope *s, int strict) {
+static int super_zsuper_args(Compiler *c, int at, Scope *s, const int *par, int strict) {
   NodeTable *nt = (NodeTable *)c->nt;
   int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
   if (pn < 0) return arysub_args(c, at, NULL, 0);
@@ -47404,6 +47426,8 @@ static int super_zsuper_args(Compiler *c, int at, Scope *s, int strict) {
   }
   if (ok && rest >= 0 && nt_kind(nt, rest) == NK_RestParameterNode) {
     const char *nm = nt_str(nt, rest, "name");
+    char cp[300];
+    if (nm) nm = zsuper_rest_local(c, par, at, nm, cp, sizeof cp);
     int sp = arysub_node(c, "SplatNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
     if (sp < 0 || (nm && rd < 0)) ok = 0;
     else {
@@ -47746,7 +47770,7 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
   if (!init) return;
   int args = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
-    args = super_zsuper_args(c, id, s, 1);
+    args = super_zsuper_args(c, id, s, NULL, 1);
     if (args < 0 && init == 2) return;
     if (args < 0) {
       zsuper_refuse(c, id, s);
@@ -47787,6 +47811,10 @@ static void super_args_shape(const NodeTable *nt, int args, int *splat, int *kw)
 static void lower_builtin_supers(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
+  /* (the parents of the nodes there are now: the lowering adds nodes, which rebuilds the map the next ask) */
+  int *par0 = (int *)malloc(sizeof(int) * (size_t)(n0 > 0 ? n0 : 1));
+  if (!par0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(par0, comp_parent_map(c), sizeof(int) * (size_t)n0);
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_SuperNode && k != NK_ForwardingSuperNode) continue;
@@ -47802,7 +47830,7 @@ static void lower_builtin_supers(Compiler *c) {
     BsuperPath path = mname ? comp_bsuper_carried(c, id, st, mname, ml.bowner) : BSP_NONE;
     int kfn = path == BSP_KERNEL;
     if (path == BSP_NONE || (kfn && blk >= 0)) continue;
-    int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : super_zsuper_args(c, id, s, path == BSP_ARRAY);
+    int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : super_zsuper_args(c, id, s, par0, path == BSP_ARRAY);
     if (k == NK_ForwardingSuperNode && args < 0) {
       /* (an Array subclass's was refused before, for every such parameter list; the other families keep the
          emission they had, which the corpus answers right for a `to_json(...)` prepended to Array) */
@@ -47839,6 +47867,7 @@ static void lower_builtin_supers(Compiler *c) {
     expand_static_splat_args(c, n0, nt->count);
     arysub_keep_builtin_only(c, m0, NULL);
   }
+  free(par0);
 }
 
 /* A receiverless call in an Array subclass's instance method of a name its

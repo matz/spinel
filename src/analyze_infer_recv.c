@@ -568,6 +568,8 @@ int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out) {
          symbols (e.g. transform_keys(&:to_sym)) yield a SymPolyHash regardless
          of the value type. */
       if (nkt == TY_SYMBOL) { *out = TY_SYM_POLY_HASH; return 1; }
+      /* a block a parameter hands on (`&block`) has no body here: its keys are of no kind the receiver's gives */
+      if (nt_kind(nt, block) == NK_BlockArgumentNode && nkt == TY_UNKNOWN) { *out = TY_POLY_POLY_HASH; return 1; }
       TyKind r = ty_hash_of(nkt, ty_hash_val(rt));
       { *out = r != TY_UNKNOWN ? r : rt; return 1; }
     }

@@ -4028,12 +4028,12 @@ int cplan_entry_finds(const Compiler *c, int e) {
   return -1;
 }
 /* The class method t of the program's that a call id of the builtin's own name (`new`, `allocate`) on class ci
-   finds, where the record proves the call runs before t is made: the builtin runs, -1. Not one a superclass
-   defines (the class then has no method of its own to call), nor one no def makes (define_singleton_method),
-   which the record does not see. */
+   finds, where the record proves the call runs before t is made: the builtin runs, -1. That holds for one a
+   superclass defines as well (the record's chain answers it where the call runs). Not one no def makes
+   (define_singleton_method), which the record does not see. */
 static int ct_cmethod_made_at(Compiler *c, int id, int ci, const char *nm, int t) {
   int dn = c->scopes[t].def_node;
-  if (c->scopes[t].class_id != ci || nt_kind(c->nt, dn) != NK_DefNode || elab_point_of(c, dn).region < 0) return t;
+  if (nt_kind(c->nt, dn) != NK_DefNode || elab_point_of(c, dn).region < 0) return t;
   int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1);
   if (framed) elab_plan_leave(c);
   return at == ELAB_NO ? -1 : t;
@@ -4053,10 +4053,7 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   int t = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   if (t < 0 || c->scopes[t].entry != ENTRY_NONE) return t;
   /* Any other class: the builtin constructor where the record proves the
-     call runs before the class's own `def self.new` is made. Not one a
-     superclass defines (the class then has no constructor of its own to
-     call), nor one no def makes (define_singleton_method), which the
-     record does not see. */
+     call runs before the `def self.new` it finds is made (ct_cmethod_made_at) */
   if (!c->classes[ci].is_struct) return ct_cmethod_made_at(c, id, ci, nm, t);
   int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1), absent = at == ELAB_NO;
   /* (a call in a method or a block: the def in force over its window, or

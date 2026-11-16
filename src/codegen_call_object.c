@@ -1120,7 +1120,9 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       Repr ie_call_repr = repr_of(c, ie_fwd_boxed ? id : -1);
       if (scalar_res && ie_call_repr.kind == RK_BOXED && body_ty != TY_POLY) {
         char tv[32]; snprintf(tv, sizeof tv, "_t%d", tres);
-        emit_boxed_text(c, body_ty, tv, b);
+        /* (an oint result slot boxes as its oint: its nil is the block's) */
+        if (res_oint) buf_printf(b, "%s(%s)", oint_box(body_ty), tv);
+        else emit_boxed_text(c, body_ty, tv, b);
       }
       else if (scalar_res) buf_printf(b, "_t%d", tres);
       else if (ie_call_repr.kind == RK_BOXED && (body_ty == TY_NIL || body_ty == TY_VOID)) buf_puts(b, "sp_box_nil()");

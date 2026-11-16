@@ -1151,7 +1151,10 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
        `!=` through `==`, the comparisons through `<=>` when Comparable
        supplies them (class_is_comparable). Not one a subclass defines
        itself: the call dispatches at run time (#4023). */
-    const char *via_op = comp_subclass_answers(c, cid, name) ? NULL : builtin_operator_delegate(name);
+    mtab_enter(c);   /* (the plan's own candidate read: the strict subclasses that answer the name) */
+    int sub_answers = comp_subclass_answers(c, cid, name);
+    mtab_leave(c);
+    const char *via_op = sub_answers ? NULL : builtin_operator_delegate(name);
     if (via_op && sp_streq(via_op, "<=>") && !class_is_comparable(c, cid)) via_op = NULL;
     int dmi = via_op ? call_target(c, id, cid, via_op, 0, NULL) : -1;
     if (dmi < 0 && via_op) {
@@ -7110,8 +7113,12 @@ static int cplan_bind_call_gap(Compiler *c, int id) {
 static int cplan_top_self_gap(Compiler *c, int id) {
   const char *name = nt_str(c->nt, id, "name");
   const Scope *s = comp_scope_of(c, id);
-  return nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0 && name && s->class_id < 0 &&
-         !s->is_cmethod && !s->entry && s->def_node >= 0 && !prog_is_top_scope(c, s) && comp_main_method(c, name) >= 0;
+  if (!(nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0 && name && s->class_id < 0 &&
+        !s->is_cmethod && !s->entry && s->def_node >= 0 && !prog_is_top_scope(c, s))) return 0;
+  mtab_enter(c);   /* (the plan's own root read: whether main has a singleton method of the name) */
+  int gap = comp_main_method(c, name) >= 0;
+  mtab_leave(c);
+  return gap;
 }
 
 /* Does call id bind, on a class it may reach, what no cell tells whether it ran (a call the plan cannot bind at its count):

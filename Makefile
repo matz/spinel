@@ -4685,6 +4685,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	awk '/^struct sp_Bin_s \{/,/^\}/' "$$tmp/oar.c" | grep -Fq 'sp_PtrArray * iv_cells;' || { echo "infer-test: FAIL (a reduce or an inject over an Array of one class kept it boxed)"; ok=0; }; \
 	$(SPINEL) test/infer/object_array_unnamed_method.rb -c --no-line-map -o "$$tmp/oau.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_unnamed_method)"; exit 1; }; \
 	awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/oau.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a select a method nothing names answers kept an Array of one class boxed)"; ok=0; }; \
+	$(SPINEL) test/infer/object_array_dead_dynamic_read.rb -c --no-line-map -o "$$tmp/oad.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_dead_dynamic_read)"; ok=0; }; \
+	awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/oad.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a reader a method nothing names calls on an untyped receiver kept an Array of one class boxed)"; ok=0; }; \
 	$(SPINEL) test/is_a_user_class_guard_narrows.rb -c --no-line-map -o "$$tmp/iug.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (is_a_user_class_guard_narrows: -c)"; ok=0; }; \
 	grep -q 'sp_Int_tag((sp_Int \*)(sp_Int \*)sp_poly_unbox_cls(lv_x' "$$tmp/iug.c" || { echo "infer-test: FAIL (is_a?(Int) left a guarded call on a user class in boxed dispatch)"; ok=0; }; \
 	$(SPINEL) test/obj_array_zip_narrows.rb -c --no-line-map -o "$$tmp/oaz.c" >/dev/null 2>"$$tmp/oaz.err" || { echo "infer-test: FAIL (compile obj_array_zip_narrows)"; exit 1; }; \

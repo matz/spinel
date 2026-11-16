@@ -19403,25 +19403,40 @@ static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, 
    Killed, the slot took down the component its value joined: an ivar whose
    `select` an exported method answered stayed a poly array, and a call on one
    of its elements went through the boxed dispatch. */
-static void oa_unreached_returns(Compiler *c, OAS *sl, int n) {
+/* Every name a call, a Symbol or a String spells, gathered on the first ask
+   of a round. */
+typedef struct { ANameHash h; int built; } OaSpelled;
+static int oa_name_spelled(Compiler *c, OaSpelled *nm, const char *name) {
   const NodeTable *nt = c->nt;
-  ANameHash named; memset(&named, 0, sizeof named);
-  int built = 0;
+  if (!nm->built) {
+    NT_FOREACH_KIND(nt, NK_CallNode, k) { const char *v = nt_str(nt, k, "name"); if (v && !anh_has(&nm->h, v)) anh_add(&nm->h, v); }
+    NT_FOREACH_KIND(nt, NK_SymbolNode, k) { const char *v = nt_str(nt, k, "value"); if (v && !anh_has(&nm->h, v)) anh_add(&nm->h, v); }
+    NT_FOREACH_KIND(nt, NK_StringNode, k) { const char *v = nt_str(nt, k, "content"); if (v && !anh_has(&nm->h, v)) anh_add(&nm->h, v); }
+    nm->built = 1;
+  }
+  return anh_has(&nm->h, name);
+}
+static void oa_unreached_returns(Compiler *c, OAS *sl, int n, OaSpelled *named) {
   for (int i = 0; i < n; i++) {
     if (sl[i].lv || sl[i].ici >= 0 || sl[i].saw_call) continue;
     Scope *M = &c->scopes[sl[i].sidx];
     if (M->is_ext_entry || M->is_ext_method) continue;
-    if (!built) {
-      /* every name a call, a Symbol or a String spells, once per round */
-      NT_FOREACH_KIND(nt, NK_CallNode, k) { const char *v = nt_str(nt, k, "name"); if (v && !anh_has(&named, v)) anh_add(&named, v); }
-      NT_FOREACH_KIND(nt, NK_SymbolNode, k) { const char *v = nt_str(nt, k, "value"); if (v && !anh_has(&named, v)) anh_add(&named, v); }
-      NT_FOREACH_KIND(nt, NK_StringNode, k) { const char *v = nt_str(nt, k, "content"); if (v && !anh_has(&named, v)) anh_add(&named, v); }
-      built = 1;
-    }
-    if (M->name && !anh_has(&named, M->name)) continue;
+    if (M->name && !oa_name_spelled(c, named, M->name)) continue;
     sl[i].alive = 0;
   }
-  anh_free(&named);
+}
+/* Is scope s a method nothing can enter: a def no call, Symbol or String
+   names, and no --ext-entry or --ext-class method or runtime protocol? A
+   call in it never runs, so a dynamic receiver there reaches no slot: a
+   reader such a method calls on an untyped parameter kept the ivar of every
+   class with that reader boxed (oa_unreached_returns asks the same of a
+   return slot). A block is its own scope with no name, and stays in. */
+static int oa_scope_never_entered(Compiler *c, OaSpelled *named, int s) {
+  if (s <= 0 || s >= c->nscopes) return 0;
+  Scope *M = &c->scopes[s];
+  if (!M->name || M->def_node < 0 || M->is_ext_entry || M->is_ext_method) return 0;
+  if (sp_streq(M->name, "initialize") || method_name_implicitly_invoked(M->name)) return 0;
+  return !oa_name_spelled(c, named, M->name);
 }
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -19918,7 +19933,7 @@ static int narrow_object_arrays(Compiler *c) {
   } while (0)
   /* the locals some write node assigns, so a block parameter one of them
      reassigns is no element of the walk that bound it (oa_elem_recv_slot) */
-  int nwlv = 0;
+  int nwlv = 0; OaSpelled oa_named; memset(&oa_named, 0, sizeof oa_named);
   LocalVar **wlv = oa_written_locals(c, &nwlv);
   /* the calls on an element of a slot, decided in step 5d */
   OaPend *pend = NULL; int npend = 0, cpend = 0;
@@ -20004,7 +20019,7 @@ static int narrow_object_arrays(Compiler *c) {
             pend[npend].id = id; pend[npend].slot = es; pend[npend].cls = -1; npend++;
             continue;
           }
-          if (read_slot[id] < 0) OA_DYN_KILL(recv, name);   /* (the facts' one reader class is read as its slot) */
+          if (read_slot[id] < 0 && !oa_scope_never_entered(c, &oa_named, c->nscope[id])) OA_DYN_KILL(recv, name);   /* (the facts' one reader class is read as its slot) */
         }
       }
     }
@@ -20263,7 +20278,7 @@ static int narrow_object_arrays(Compiler *c) {
         a route this pass never saw (oa_unreached_returns). */
   for (int id = 0; id < nt->count; id++)
     if (call_ret[id] >= 0 && !claimed[id] && !value_ok[id]) sl[call_ret[id]].alive = 0;
-  oa_unreached_returns(c, sl, n);
+  oa_unreached_returns(c, sl, n, &oa_named); anh_free(&oa_named.h);
   for (int id = 0; id < nt->count; id++)
     if (read_slot[id] >= 0 && !claimed[id]) sl[read_slot[id]].alive = 0;
 

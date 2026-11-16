@@ -4463,12 +4463,14 @@ int cplan_main_chain_step(Compiler *c, int id, const char *name) {
 }
 /* Does a bare call of `name` at call id, in top-level code, meet a mixin or def of the name that runs under a condition,
    or from a body that may not have run (an `include L if cond`, an extend inside a method called later)? CRuby finds
-   its method only once it has run, which the record cannot tell: the call is refused (CRF_MAIN_CHAIN). */
+   its method only once it has run, which the record cannot tell: the call is refused (CRF_MAIN_CHAIN). A call whose
+   target is fixed (a compiler-made builtin call, `Kernel.name`) takes no lookup of main's chain: not refused. */
 static int cplan_main_chain_unsure(Compiler *c, int id) {
   const char *name = nt_str(c->nt, id, "name");
   int step;
   const LrDef *d;
   return nt_kind(c->nt, id) == NK_CallNode && name && nt_ref(c->nt, id, "receiver") < 0 &&
+         !(cplan_builtin_call(c, id) || nt_int(c->nt, id, "kernel_recv", 0)) &&
          ct_main_chain(c, id, name, 0, &step, &d) == ELAB_UNKNOWN && step == EMC_UNSURE;
 }
 /* Does the main-chain fact put a mixin's method ahead of main's and Object's own at call id (an extend, an Object

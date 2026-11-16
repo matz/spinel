@@ -3695,7 +3695,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
               if (comp_poly_arm_defines_n(c, k2, "count", 1)) can1 = 1;
               continue;
             }
-            int mi2 = comp_method_in_chain(c, k2, "count", NULL);
+            int mi2 = call_target(c, -1, k2, "count", CT_METHODS | CT_SHARED, NULL);
             if (mi2 >= 0 && mi2 < c->nscopes) {
               Scope *cs2 = &c->scopes[mi2];
               if (cs2->rest_idx >= 0 || (1 >= cs2->nrequired && 1 <= cs2->nparams))

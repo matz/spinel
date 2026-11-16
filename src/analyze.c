@@ -4452,7 +4452,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   if (nn == 64) return 0;
   int ask[64], nask = 0;
   for (int i = 0; i < nn; i++) {
-    if (comp_method_index(c, names[i]) >= 0) continue;
+    if (call_target(c, -1, -1, names[i], CT_TOP, NULL) >= 0) continue;
     for (int k = 0; k < c->nclasses; k++) {
       if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) { ask[nask++] = i; break; }
     }
@@ -4474,11 +4474,11 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   const int *rc = nask == 0 ? poly_recv_classes(c, call, &nrc) : NULL;
   if (rc) {
     for (int i = 0; i < nrc && n < max; i++)
-      if (ie_poly_class_ok(c, rc[i]) && comp_method_in_chain(c, rc[i], name, NULL) < 0) out[n++] = rc[i];
+      if (ie_poly_class_ok(c, rc[i]) && call_target(c, -1, rc[i], name, CT_METHODS | CT_SHARED, NULL) < 0) out[n++] = rc[i];
     return n;
   }
   for (int k = 0; k < c->nclasses && n < max; k++) {
-    if (!ie_poly_class_ok(c, k) || comp_method_in_chain(c, k, name, NULL) >= 0) continue;
+    if (!ie_poly_class_ok(c, k) || call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) continue;
     int all = 1;
     for (int i = 0; i < nask && all; i++) all = call_answers(c, -1, k, names[ask[i]], 0, NULL);
     for (int i = 0; i < niv && all; i++) all = comp_ivar_index(&c->classes[k], ivs[i]) >= 0;
@@ -32123,7 +32123,7 @@ static int dyn_site_misses(Compiler *c, int n, int mi) {
     if (rc >= 0 && m->name) {
       if (m->is_cmethod) return 1;
       for (int k = 0; k < c->nclasses; k++)
-        if (is_descendant(c, k, rc) && comp_method_in_chain(c, k, m->name, NULL) == mi) return 0;
+        if (is_descendant(c, k, rc) && call_target(c, -1, k, m->name, CT_METHODS | CT_SHARED, NULL) == mi) return 0;
       return 1;
     }
   }

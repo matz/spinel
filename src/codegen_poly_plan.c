@@ -1623,7 +1623,7 @@ void emit_poly_index_cases(TyKind ret, int tr, int tv, const char *idxref, int s
 static int recv_user_cdefines(Compiler *c, const char *name) {
   if (g_poly_builtin_arm) return 0;
   for (int uk = 0; uk < c->nclasses; uk++)
-    if (comp_cmethod_in_chain(c, uk, name, NULL) >= 0) return 1;
+    if (call_target(c, -1, uk, name, CT_CMETHOD | CT_SHARED, NULL) >= 0) return 1;
   return 0;
 }
 

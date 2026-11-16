@@ -26143,7 +26143,7 @@ void ffi_check_buffer_bounds(Compiler *c, int id, int arg,
 
 /* Does `txt` mention the temp `_t<n>` -- as that temp, not as a prefix of a
    longer number (`_t5` must not match inside `_t50`)? */
-static int text_uses_tmp(const char *txt, int n) {
+int text_uses_tmp(const char *txt, int n) {
   if (!txt) return 0;
   char want[24];
   int wl = snprintf(want, sizeof want, "_t%d", n);

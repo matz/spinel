@@ -17409,61 +17409,59 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
      again to store a spliced String or a promoted Array back into outer's
      slot: an outer or a k that runs code (`rows[i += 1]`, `rows_of(b)[1]`)
      ran twice, and k's second value chose the next row. Such an outer and
-     k run here, once, into temps the whole store reads: a box, or what a
-     pointer holds (an Array, a Hash, an object), or an object held inline
-     (a value type) whose fields are all scalars, copied by value with
-     nothing to root. Another inline object is read where it stands when it
-     is a plain read, and only k is held; one that runs code keeps the
-     splice, which runs it once. */
+     k run here, once and in that order, into temps the whole store reads:
+     a box, what a pointer holds (an Array, a Hash, an object), or an object
+     held inline (a value type), copied by value and rooted field by field
+     as a local of its kind is. */
   if (user_aset3) {
     int so, sk;
     if (splice_recv_index_slot(c, recv, &so, &sk) &&
         (!subtree_is_pure_read(c, so) || !subtree_is_pure_read(c, sk))) {
       TyKind ot = comp_ntype(c, so), kt = comp_ntype(c, sk);
-      /* held: 1 by its pointer or box (rooted), 2 by value, a value-type
-         object of scalar fields only (nothing in it to root) */
-      int held = ot == TY_POLY;
-      if (ty_is_object(ot)) {
+      int held = ot == TY_POLY || comp_ty_value_obj(c, ot);
+      if (!held && ty_is_object(ot)) {
         int ocid = ty_object_class(ot);
-        ClassInfo *oc = ocid >= 0 && ocid < c->nclasses ? &c->classes[ocid] : NULL;
-        held = oc && !oc->is_value_type;
-        if (oc && oc->is_value_type) {
-          held = 2;
-          for (int j = 0; j < oc->nivars && held; j++) {
-            TyKind ft = oc->ivar_types[j];
-            if (ft != TY_INT && ft != TY_FLOAT && ft != TY_BOOL) held = 0;
-          }
-        }
+        held = ocid >= 0 && ocid < c->nclasses;
       }
       else if (!held) {
         const char *n = c_type_name(ot);
         held = n && n[strlen(n) - 1] == '*';
       }
-      if ((!held && !subtree_is_pure_read(c, so)) || (kt != TY_INT && kt != TY_POLY) ||
-          g_n_argov + 2 > MAX_ARG_OVERRIDE)
-        user_aset3 = 0;
+      if (!held || (kt != TY_INT && kt != TY_POLY) || g_n_argov + 2 > MAX_ARG_OVERRIDE) user_aset3 = 0;
       else {
-        int to = ++g_tmp, tk = ++g_tmp, mk = -1;
-        buf_puts(b, "({ ");
-        if (held) {
-          Buf oct; memset(&oct, 0, sizeof oct);
-          emit_ctype(c, ot, &oct);
-          buf_printf(b, "%s _t%d = ", oct.p ? oct.p : "sp_RbVal", to);
-          free(oct.p);
-          emit_expr(c, so, b);
-          buf_puts(b, "; ");
-          if (held == 1) buf_printf(b, "%s(_t%d); ", ot == TY_POLY ? "SP_GC_ROOT_RBVAL" : "SP_GC_ROOT", to);
-        }
-        buf_printf(b, "%s _t%d = ", kt == TY_INT ? "sp_int" : "sp_RbVal", tk);
-        emit_expr(c, sk, b);
-        buf_puts(b, "; ");
-        if (kt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tk);
-        if (held) mk = view_bind_temp(so, to);
-        int mk2 = view_bind_temp(sk, tk);
-        if (mk < 0) mk = mk2;
-        emit_call(c, id, b);
+        int to = ++g_tmp, tk = ++g_tmp;
+        Buf dcl, call, oct;
+        memset(&dcl, 0, sizeof dcl); memset(&call, 0, sizeof call); memset(&oct, 0, sizeof oct);
+        emit_ctype(c, ot, &oct);
+        buf_printf(&dcl, "%s _t%d = ", oct.p ? oct.p : "sp_RbVal", to);
+        free(oct.p);
+        emit_expr(c, so, &dcl);
+        buf_puts(&dcl, "; ");
+        if (ty_gc_holds_refs(c, ot)) { emit_gc_root_tmp_refs(c, ot, to, &dcl); buf_puts(&dcl, " "); }
+        buf_printf(&dcl, "%s _t%d = ", kt == TY_INT ? "sp_int" : "sp_RbVal", tk);
+        emit_expr(c, sk, &dcl);
+        buf_puts(&dcl, "; ");
+        if (kt == TY_POLY) buf_printf(&dcl, "SP_GC_ROOT_RBVAL(_t%d); ", tk);
+        size_t pre_mark = g_pre ? g_pre->len : 0;
+        int mk = view_bind_temp(so, to);
+        view_bind_temp(sk, tk);
+        emit_call(c, id, &call);
         view_unbind(mk);
-        buf_puts(b, "; })");
+        /* A part of the call the dispatch hoists above the statement (an
+           argument boxed for a `[]` that takes it boxed, under
+           --int-overflow=promote) reads the temps: they are declared there,
+           ahead of it, in the same order */
+        if (g_pre && g_pre->len > pre_mark &&
+            (text_uses_tmp(g_pre->p + pre_mark, to) || text_uses_tmp(g_pre->p + pre_mark, tk))) {
+          Buf hd; memset(&hd, 0, sizeof hd);
+          emit_indent(&hd, g_indent);
+          buf_printf(&hd, "%s\n", dcl.p ? dcl.p : "");
+          buf_insert_at(g_pre, pre_mark, hd.p ? hd.p : "");
+          free(hd.p);
+          buf_printf(b, "(%s)", call.p ? call.p : "");
+        }
+        else buf_printf(b, "({ %s%s; })", dcl.p ? dcl.p : "", call.p ? call.p : "");
+        free(dcl.p); free(call.p);
         { *out = 1; return 1; }
       }
     }

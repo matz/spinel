@@ -3260,6 +3260,9 @@ int needs_root(TyKind t);
 int ty_gc_rootable(Compiler *c, TyKind t);
 void emit_gc_root_var(Compiler *c, TyKind t, const char *name, Buf *b);
 void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b);
+/* Does `txt` mention the temp `_t<n>` as that temp, not as a prefix of a
+   longer number? (codegen_call.c) */
+int text_uses_tmp(const char *txt, int n);
 int ty_gc_holds_refs(Compiler *c, TyKind t);
 void emit_gc_root_tmp_refs(Compiler *c, TyKind t, int tmp, Buf *b);
 void emit_srange_handle_roots(Compiler *c, const char *ref, Buf *b);

@@ -97,6 +97,27 @@ $inline_rows[0] = gm
 q = -1
 made_inline[q += 1][1, 0] = 2
 p gm[1, 0], q
+# an index that assigns the outer runs after it, as in Ruby: the store
+# reaches the element of the outer read first
+class BaseShelf
+  def initialize(b) = @b = b
+  def [](n) = $based_rows[@b + n]
+end
+class TagShelf
+  def initialize(b) = (@tag = "t"; @b = b)
+  def [](n) = $based_rows[@b + n]
+  def tag = @tag
+end
+g0 = Grid.new
+g1 = Grid.new
+$based_rows = [g0, g1]
+bs = BaseShelf.new(0)
+bo = BaseShelf.new(1)
+bs[(bs = bo; 0)][0, 1] = 9
+ts = TagShelf.new(0)
+to = TagShelf.new(1)
+ts[(ts = to; 0)][1, 1] = 8
+p g0[0, 1], g1[0, 1], g0[1, 1], g1[1, 1], ts.tag
 
 # a store whose class takes one index fewer raises, as in Ruby
 c = boxes[1]

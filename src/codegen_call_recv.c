@@ -18789,11 +18789,7 @@ static int emit_poly_numeric_call(Compiler *c, int id, Buf *b, const NodeTable *
         continue;
       }
       int mi_k = call_target(c, id, kk, "count", CT_METHODS, NULL);
-      if (mi_k >= 0) {
-        Scope *cs_k = &c->scopes[mi_k];
-        if (cs_k->rest_idx >= 0 || (1 >= cs_k->nrequired && 1 <= cs_k->nparams))
-          has_user_cnt = 1;
-      }
+      if (mi_k >= 0) has_user_cnt = 1;
     }
     if (!has_user_cnt) {
       /* boxed where the analyzer counted a count this arm cannot reach (a

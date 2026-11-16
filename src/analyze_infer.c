@@ -3692,11 +3692,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
               continue;
             }
             int mi2 = call_target(c, id, k2, "count", CT_METHODS, NULL);
-            if (mi2 >= 0 && mi2 < c->nscopes) {
-              Scope *cs2 = &c->scopes[mi2];
-              if (cs2->rest_idx >= 0 || (1 >= cs2->nrequired && 1 <= cs2->nparams))
-                can1 = 1;
-            }
+            if (mi2 >= 0 && mi2 < c->nscopes) can1 = 1;
           }
           if (!can1) { *out = TY_INT; return 1; }
         }

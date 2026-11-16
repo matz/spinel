@@ -1589,7 +1589,8 @@ int cplan_entry_finds(const Compiler *c, int e);
    before); for any other class the one call_target finds where the call
    runs, its version entry where the call may reach two or more of the
    class's `self.new`, so that inference, the emitter and the call plan
-   name one method. */
+   name one method. With id -1, the table's `self.new` (a reader that
+   answers for every call of a class, as cplan_hook_target's). */
 int cplan_user_new(Compiler *c, int id, int ci);
 /* The class method of program class ci that call id, named name, runs:
    for a `new` the one cplan_user_new answers (none where the builtin

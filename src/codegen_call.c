@@ -14451,7 +14451,7 @@ static void emit_super_new_ctor(Compiler *c, int id, int ci, Buf *b) {
   ClassInfo *k = &c->classes[ci];
   if (k->is_struct || k->is_native_class || class_is_exc_subclass(c, ci))
     unsupported(c, id, "super in `self.new` of a Struct, Data, exception or native class");
-  int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+  int initm = cplan_hook_target(c, -1, ci, "initialize", NULL);
   int argsn = nt_ref(nt, id, "arguments");
   int argc = 0; if (argsn >= 0) nt_arr(nt, argsn, "arguments", &argc);
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
@@ -15500,7 +15500,7 @@ static int array_new_block_needs_fresh_locals(Compiler *c, int blk) {
    own initialize: the index of that method, or -1. */
 int exc_reopen_initialize(Compiler *c, int ci) {
   if (!class_is_exc_reopen(c, ci)) return -1;
-  int mi = comp_method_in_chain(c, ci, "initialize", NULL);
+  int mi = cplan_hook_target(c, -1, ci, "initialize", NULL);
   return (mi >= 0 && c->scopes[mi].class_id == ci && c->scopes[mi].reachable) ? mi : -1;
 }
 
@@ -30406,7 +30406,7 @@ static int refuse_fwd_target(Compiler *c, int id, const char *name) {
   if (rk == NK_SelfNode) {
     Scope *encl = comp_scope_of(c, id);
     if (encl && encl->is_cmethod && encl->class_id >= 0 && sp_streq(name, "new"))
-      return comp_method_in_chain(c, encl->class_id, "initialize", NULL);
+      return cplan_hook_target(c, -1, encl->class_id, "initialize", NULL);
     cls = encl && !encl->is_cmethod ? encl->class_id : -1;
   }
   else {

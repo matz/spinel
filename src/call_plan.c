@@ -3009,6 +3009,9 @@ int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLooku
   int undef = tm >= 0 && id >= 0 && comp_is_undeffed_in_chain(c, ci, name);
   mtab_leave(c);
   *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = dc };
+  /* (a siteless ask, which every reader of a class's constructions makes with id -1, answers the table's method:
+     for a name with versions that is an unasked table line, as call_target's no-site ask reports one) */
+  if (g_method_table_check && id < 0 && tm >= 0 && ct_versioned(c, tm, name)) mtab_table(c, id, ci, 0, name, MLW_UNASKED);
   if (tm < 0 || id < 0 || undef) return tm;
   /* (one version on the chain: the table's, the only one a site meets
      where there is one) */
@@ -3103,7 +3106,10 @@ static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodL
    every one where the record cannot tell them apart. How many; *whole as
    cplan_new_initializers says. */
 static int new_inits_list(Compiler *c, int ci, int *out, int *whole) {
-  int tm = comp_method_in_chain(c, ci, "initialize", NULL), n = 0, dc;
+  int n = 0, dc;
+  mtab_enter(c);   /* (the plan's own read: the table's method, which the versions of its history then refine) */
+  int tm = comp_method_in_chain(c, ci, "initialize", NULL);
+  mtab_leave(c);
   *whole = 1;
   if (tm < 0) return 0;
   out[n++] = tm;
@@ -4052,7 +4058,9 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   return made ? t : -1;
 }
 /* See call_plan.h. */
-int cplan_user_new(Compiler *c, int id, int ci) { return user_new_at(c, id, ci, NULL); }
+int cplan_user_new(Compiler *c, int id, int ci) {
+  return id < 0 ? call_target(c, -1, ci, "new", CT_CMETHOD, NULL) : user_new_at(c, id, ci, NULL);
+}
 /* See call_plan.h. */
 int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name) {
   return is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);

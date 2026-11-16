@@ -7799,7 +7799,7 @@ void resolve_parents(Compiler *c) {
      ("uninitialized stream"); here it would be an empty one */
   for (int i = 0; i < c->nclasses; i++) {
     if (c->classes[i].nsub_root <= 0) continue;
-    int im = comp_method_in_class(c, i, "initialize");
+    int im = call_target(c, -1, i, "initialize", CT_OWN, NULL);
     if (im < 0 || c->scopes[im].def_node < 0) continue;
     int dn = c->scopes[im].def_node, has_super = 0;
     /* the def's own body, not a def nested in it */

@@ -3739,7 +3739,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       repr_of(c, recv).kind == RK_BOXED && repr_of(c, id).kind == RK_BOXED &&
       !subtree_has_side_effect(c, recv)) {
     int inst_new = 0;
-    for (int k = 0; k < c->nclasses && !inst_new; k++) inst_new = comp_method_in_class(c, k, "new") >= 0;
+    for (int k = 0; k < c->nclasses && !inst_new; k++) inst_new = call_target(c, -1, k, "new", CT_OWN, NULL) >= 0;
     if (inst_new) {
       buf_puts(b, "(("); emit_boxed(c, recv, b); buf_puts(b, ").tag == SP_TAG_CLASS ? ");
       g_poly_new_instance_pass = 2;   /* this emission: the constructor arms */
@@ -3987,7 +3987,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     int cid = self_class_static_ci(c, recv);
     /* a Struct's `self.class.new(*a)` or keywords: spread and bound as
        `S.new(*a)` is, where each was passed as one argument */
-    if (c->classes[cid].is_struct && comp_method_in_chain(c, cid, "initialize", NULL) < 0 &&
+    if (c->classes[cid].is_struct && cplan_hook_target(c, -1, cid, "initialize", NULL) < 0 &&
         (nt_argv_has_splat(nt, argv, argc) || nt_argv_kwh(nt, argv, argc) >= 0) &&
         emit_struct_new_call(c, id, cid, argc, argv, b))
       return 1;
@@ -3995,7 +3995,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     /* the arguments converted to initialize's parameter types, as
        `V.new(...)` does: an `x.to_i` narrowed to sp_int passed raw into a
        poly parameter did not compile (#4534) */
-    int initm = comp_method_in_chain(c, cid, "initialize", NULL);
+    int initm = cplan_hook_target(c, -1, cid, "initialize", NULL);
     if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
     else for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_expr(c, argv[a], b); }
     if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : "", b);

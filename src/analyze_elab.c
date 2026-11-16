@@ -5281,6 +5281,71 @@ int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrD
      load's start) */
   return late && o == ELAB_NO && main_self_method(name) ? ELAB_YES : ELAB_NO;
 }
+/* See analyze.h. One ancestor's part, then the step it is: a found
+   definition's own class tells an extend's or a mixin's module from main's
+   or Object's own entries. */
+static int lr_main_chain_one(Compiler *c, int cls, int sg, const char *name, LoadPoint p, unsigned how, const LrDef **out, int *unsure) {
+  int late = p.region < 0;
+  *out = NULL;
+  int o = lr_search_one(c, cls, sg, name, -1, p, late, 0, out, 0, unsure, how | LR_MIXIN_STOPS);
+  if (o != ELAB_YES) *out = NULL;
+  return o;
+}
+int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_object, const LrDef **out, int *step) {
+  LoadRecord *r = c->lrec;
+  *out = NULL;
+  *step = EMC_NONE;
+  if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
+  int unsure = 0, o, late = p.region < 0;
+  const LrDef *d = NULL;
+  if (!from_object) {
+    /* main's singleton: its prepends and own methods, the core's own of main's, then its extends */
+    o = lr_main_chain_one(c, LR_MAIN, 1, name, p, LR_SHADOW, &d, &unsure);
+    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
+    if (o == ELAB_YES) { *step = EMC_MAIN; *out = d; return ELAB_YES; }
+    const LrDef *v = NULL;
+    lr_own(c, lr_hist(r, LR_MAIN, 1, name, 0), NULL, p, late, 0, &v);
+    if (!v && main_self_method(name)) { *step = EMC_CORE; return ELAB_YES; }
+    o = lr_main_chain_one(c, LR_MAIN, 1, name, p, 0, &d, &unsure);
+    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
+    if (o == ELAB_YES) { *step = EMC_EXTEND; *out = d; return ELAB_YES; }
+  }
+  /* Object's prepends, its own entries with main's top-level ones (one table), its includes; then Kernel's
+     reopening. A definition of a module's on Object's shadow pass is a prepend's. */
+  int oc = lr_core(r, CORE_OBJECT), kc = lr_core(r, CORE_KERNEL);
+  if (oc >= 0) {
+    o = lr_main_chain_one(c, oc, 0, name, p, LR_SHADOW, &d, &unsure);
+    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
+    if (o == ELAB_YES) {
+      int sc = d && d->scope > 0 && d->scope < c->nscopes ? c->scopes[d->scope].class_id : -1;
+      *step = sc >= 0 && sc != comp_core_class(c, CORE_OBJECT) ? EMC_PREPEND : EMC_OWN;
+      *out = d;
+      return ELAB_YES;
+    }
+  }
+  o = lr_main_chain_one(c, LR_MAIN, 0, name, p, LR_SHADOW, &d, &unsure);
+  if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+  if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
+  if (o == ELAB_YES) { *step = EMC_OWN; *out = d; return ELAB_YES; }
+  for (int k = 0; k < 2; k++) {
+    int cls = k ? LR_MAIN : oc;
+    if (cls < LR_MAIN || (k == 0 && oc < 0)) continue;
+    o = lr_main_chain_one(c, cls, 0, name, p, 0, &d, &unsure);
+    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
+    if (o == ELAB_YES) { *step = EMC_INCLUDE; *out = d; return ELAB_YES; }
+  }
+  if (kc >= 0) {
+    o = lr_main_chain_one(c, kc, 0, name, p, 0, &d, &unsure);
+    if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
+    if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
+    if (o == ELAB_YES) { *step = EMC_KERNEL; *out = d; return ELAB_YES; }
+  }
+  return ELAB_NO;
+}
 int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p) {
   LoadRecord *r = c->lrec;
   int oc = r ? lr_core(r, CORE_OBJECT) : -1;

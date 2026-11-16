@@ -367,6 +367,18 @@ void const_writes_free(Compiler *c);
    module's) stops the lookup, the core's methods' too, ELAB_UNKNOWN when
    the record cannot say. */
 int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrDef **out);
+/* What a self-call of `name` on main (from_object: on another Object
+   instance, Object's chain alone) meets at p, in CRuby's lookup order:
+   main's singleton (its prepends and own methods, EMC_MAIN; the core's of
+   main's, EMC_CORE; its extends, EMC_EXTEND), Object's prepends
+   (EMC_PREPEND), Object's own entries with main's top-level defs
+   (EMC_OWN), Object's includes (EMC_INCLUDE), Kernel's reopening
+   (EMC_KERNEL), each mixin from its point on. ELAB_YES with *out the
+   definition and *step its step; ELAB_NO for none of the program's
+   (EMC_NONE: the core's Kernel, or NoMethodError; EMC_STOP: an undef stops
+   it); ELAB_UNKNOWN where the record cannot say. */
+enum { EMC_NONE, EMC_STOP, EMC_MAIN, EMC_CORE, EMC_EXTEND, EMC_PREPEND, EMC_OWN, EMC_INCLUDE, EMC_KERNEL };
+int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_object, const LrDef **out, int *step);
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A
    hook (`inherited`, `included`, `method_added`, ...) is asked as the

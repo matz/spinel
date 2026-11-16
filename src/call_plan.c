@@ -4047,13 +4047,141 @@ int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst) {
    singleton answers by the core's `to_s` or `inspect`, none
    (ML_SINGLETON); where an undef there stops the lookup
    (ct_main_stopped), none (ML_NONE). */
+/* The main-chain fact: what a self-call of `name` at call id meets along main's chain (elab_main_chain_at),
+   at the call's point; for a call with none (a method body, a block kept to run later), over the window it may run
+   in (elab_call_window): its answer at the window's start, where the answer at the load's end is the same one
+   (MCH_MOVES where they differ: the answer depends on when the body runs). A call in a class's instance method, or in
+   a top-level def not run on main, asks Object's chain alone. Asked inside the plan's frame (elab_plan_enter), so a
+   pass that appends nodes between its asks does not rebuild the point map. ELAB_YES / NO / UNKNOWN, MCH_MOVES. */
+enum { MCH_MOVES = 3 };
+/* (the answer by (name, region, seq, side, window): every call of a name at one statement, or over one window, has one
+   answer, kept while the record stands, whatever nodes a pass appends) */
+struct MainChainMemo { struct MainChainSlot { const char *name; int region, seq, key, r, step; const LrDef *d; } *slot; int cap, used; ElabStamp stamp; };
+void main_chain_free(Compiler *c) {
+  if (!c->main_chain) return;
+  free(c->main_chain->slot);
+  free(c->main_chain);
+  c->main_chain = NULL;
+}
+static struct MainChainSlot *ct_main_chain_slot(Compiler *c, const char *name, int region, int seq, int key, int *hit) {
+  struct MainChainMemo *m = c->main_chain;
+  ElabStamp st = elab_stamp(c);
+  st.nt = 0;
+  if (m && !elab_stamp_same(m->stamp, st)) { main_chain_free(c); m = NULL; }
+  if (!m) {
+    if (!(c->main_chain = m = calloc(1, sizeof *m))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    m->stamp = st;
+  }
+  if (2 * (m->used + 1) > m->cap) {
+    struct MainChainSlot *old = m->slot;
+    int ocap = m->cap;
+    m->cap = ocap ? 2 * ocap : 256;
+    if (!(m->slot = calloc((size_t)m->cap, sizeof *m->slot))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < ocap; i++) {
+      if (!old[i].name) continue;
+      unsigned h = ver_mix(sp_strhash(old[i].name) + (unsigned)old[i].seq * 0x9E3779B1u + (unsigned)old[i].region * 31u + (unsigned)old[i].key);
+      int j = (int)(h & (unsigned)(m->cap - 1));
+      while (m->slot[j].name) j = (j + 1) & (m->cap - 1);
+      m->slot[j] = old[i];
+    }
+    free(old);
+  }
+  unsigned h = ver_mix(sp_strhash(name) + (unsigned)seq * 0x9E3779B1u + (unsigned)region * 31u + (unsigned)key);
+  int j = (int)(h & (unsigned)(m->cap - 1));
+  for (; m->slot[j].name; j = (j + 1) & (m->cap - 1))
+    if (m->slot[j].region == region && m->slot[j].seq == seq && m->slot[j].key == key && sp_streq(m->slot[j].name, name)) { *hit = 1; return &m->slot[j]; }
+  *hit = 0;
+  m->slot[j].name = name;   /* (a name the node table holds: it outlives the memo) */
+  m->slot[j].region = region, m->slot[j].seq = seq, m->slot[j].key = key;
+  m->used++;
+  return &m->slot[j];
+}
+/* The main-chain fact over a method body's window w, from one side (obj: an Object instance's, else main's): its
+   answer where the body may first run, or MCH_MOVES where the end of the program answers otherwise */
+static int ct_main_chain_win(Compiler *c, const char *name, ElabWindow w, int obj, int *step, const LrDef **d) {
+  int hit = 0, r;
+  struct MainChainSlot *sl = ct_main_chain_slot(c, name, w.from.region, w.from.seq, obj + 2, &hit);
+  if (hit) { *step = sl->step, *d = sl->d; return sl->r; }
+  const LrDef *d2 = NULL;
+  int st2 = EMC_NONE;
+  r = elab_main_chain_at(c, name, w.from, obj, d, step);
+  int r2 = elab_main_chain_at(c, name, (LoadPoint){ -1, -1, -1 }, obj, &d2, &st2);
+  if (r == ELAB_UNKNOWN || r2 == ELAB_UNKNOWN) r = ELAB_UNKNOWN;
+  else if (r != r2 || *step != st2 || *d != d2) r = MCH_MOVES;
+  sl->r = r, sl->step = *step, sl->d = *d;
+  return r;
+}
+static int ct_main_chain(Compiler *c, int id, const char *name, int defs, int *step, const LrDef **d) {
+  *step = EMC_NONE;
+  *d = NULL;
+  if (id < 0 || !name || nt_kind(c->nt, id) != NK_CallNode) return ELAB_UNKNOWN;
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return ELAB_UNKNOWN;
+  /* (no mixin on main or Object: the defs' versions answer, as they did; nothing to walk. Asked before anything that
+     can refresh the parent map: a program with no mixin pays this count per ask and no more) */
+  int nm0 = 0, nm1 = 0, oc = comp_core_class(c, CORE_OBJECT);
+  elab_class_mixins(c, -1, &nm0);
+  if (oc >= 0) elab_class_mixins(c, oc, &nm1);
+  if (!nm0 && !nm1 && !defs) return ELAB_UNKNOWN;
+  const Scope *s = comp_scope_of(c, id);
+  if (!s || s->is_cmethod || ct_block_self_call(c, id) >= 0) return ELAB_UNKNOWN;
+  if (s->class_id >= 0 && class_is_blank_slate(c, s->class_id)) return ELAB_UNKNOWN;
+  /* (a `class << self` body's self is main's singleton class, whose chain is Class's: not asked here) */
+  int pb = id < c->node_pbase_n ? c->node_pbase[id] : -1;
+  if (pb >= 0 && nt_kind(c->nt, pb) == NK_SingletonClassNode) return ELAB_UNKNOWN;
+  int framed = elab_plan_enter(c, id), r;
+  LoadPoint p = elab_point_of(c, id);
+  /* (a top-level def's self is its caller's, main or another object: both sides ask, and where they differ the
+     answer depends on self, which the fact leaves to the table) */
+  int both = s->class_id < 0 && !s->is_cmethod && !prog_is_top_scope(c, s);
+  int obj = !(s->class_id < 0 && self_is_main(c, id)), hit = 0;
+  if (p.region >= 0) {
+    struct MainChainSlot *sl = ct_main_chain_slot(c, name, p.region, p.seq, obj, &hit);
+    if (hit) r = sl->r, *step = sl->step, *d = sl->d;
+    else r = elab_main_chain_at(c, name, p, obj, d, step), sl->r = r, sl->step = *step, sl->d = *d;
+  }
+  else {
+    ElabWindow w;
+    int wr = elab_call_window(c, id, &w);
+    if (wr != ELAB_YES || w.never) r = ELAB_UNKNOWN;
+    else if (!both) r = ct_main_chain_win(c, name, w, obj, step, d);
+    else {
+      const LrDef *d2 = NULL;
+      int st2 = EMC_NONE;
+      r = ct_main_chain_win(c, name, w, 0, step, d);
+      int r2 = ct_main_chain_win(c, name, w, 1, &st2, &d2);
+      if (r != r2 || *step != st2 || *d != d2) r = ELAB_UNKNOWN;
+    }
+  }
+  if (framed) elab_plan_leave(c);
+  return r;
+}
+/* The method of a module main extends, Object prepends or Object includes that the main-chain fact answers for call
+   id, as the table's entry for that module holds it (toplevel_mod_method's scope, which shares the definition); -1
+   where another step answers or none does; -2 where the fact does not answer (the table's) */
+static int ct_main_mixin(Compiler *c, int id, const char *name, int *ext) {
+  int step;
+  const LrDef *d;
+  int o = ct_main_chain(c, id, name, 0, &step, &d);
+  if (o == ELAB_UNKNOWN) return -2;
+  if (o == MCH_MOVES) return -3;
+  if (o != ELAB_YES || (step != EMC_EXTEND && step != EMC_PREPEND && step != EMC_INCLUDE)) return -1;
+  *ext = step == EMC_EXTEND;
+  if (*ext) return d && d->scope > 0 && d->scope < c->nscopes ? d->scope : -2;
+  int im = comp_included_method_index(c, name, id);
+  if (im >= 0 && d && c->scopes[im].def_node == d->node) return im;
+  return d && d->scope > 0 && d->scope < c->nscopes ? d->scope : -2;
+}
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
   /* (a module the top level includes brings its method into Object's chain: where the name has versions there, a
      top-level def after the include among them, the call's own point chooses, as a call on Object's does) */
   if (*flags & CT_INCLUDED) {
-    int im = comp_included_method_index(c, name, id);
+    int ext = 0, im = ct_main_mixin(c, id, name, &ext);
     int ob = comp_core_class(c, CORE_OBJECT);
-    if (im >= 0 && id >= 0 && ob >= 0 && ct_versioned(c, im, name) && ct_block_self_call(c, id) < 0) {
+    /* (where the fact does not answer, or the answer moves with when the body runs: the table's, as before) */
+    if (im < -1) im = comp_included_method_index(c, name, id);
+    /* (an extend's method is main's singleton's, no version of Object's) */
+    if (im >= 0 && id >= 0 && !ext && ob >= 0 && ct_versioned(c, im, name) && ct_block_self_call(c, id) < 0) {
       MethodLookup at = *ml;
       int vi = ct_version(c, id, ob, name, *flags, im, &at);
       /* (the version a top-level def or its entry makes; a module's own copy, which a prepend or an alias of the

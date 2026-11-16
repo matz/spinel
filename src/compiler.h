@@ -2001,6 +2001,7 @@ typedef struct {
      2 once made (ver_entries_demand) */
   struct VerDefer { const char *name; int cls, sg, taken; } *ver_defer;
   int nver_defer;
+  struct MainChainMemo *main_chain;   /* the main-chain fact by (name, point or window start, side): call_plan.c, ct_main_chain */
   struct VerChain *ver_chain;   /* how many versions a class's chain holds of a name, by (class, side, name) (call_plan.c, ver_chain_count) */
   struct VerHold *ver_hold;   /* the holders of a name worth asking, by name (call_plan.c, ver_holders) */
   struct NewInits *new_inits;   /* the initialize methods a `new` of a class may run, by class (call_plan.c, cplan_new_initializers) */

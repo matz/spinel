@@ -454,6 +454,7 @@ int cplan_recv_class(Compiler *c, int id, int recv);
 int ct_version_named(Compiler *c, const char *nm);
 int ct_version_marked(Compiler *c, const char *nm);
 void ver_hold_free(Compiler *c);
+void main_chain_free(Compiler *c);   /* the main-chain fact's memo (ct_main_chain) */
 void ver_chain_free(Compiler *c);
 void new_inits_free(Compiler *c);
 void new_sites_free(Compiler *c);

@@ -2259,7 +2259,9 @@ int    send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const c
    class in the subtree runs -- its chain's, so a module a subclass includes
    counts -- class methods when cmeth. A yielding one answers call_id's
    block (method_call_ret) when call_id >= 0. Inference's object and
-   implicit-self calls and codegen's dispatch switch share it. */
+   implicit-self calls and codegen's dispatch switch share it. A call the
+   plan pins to one method (cplan_pinned: a version entry's arm, its else
+   arm's builtin) runs that one, whatever class self is: r alone. */
 TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int base_mi, TyKind r,
                          int call_id);
 /* 1 iff `node` is a constant path naming an `ffi_const` declaration, with its

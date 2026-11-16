@@ -4540,7 +4540,7 @@ int an_fwd_block_may_be_nil(Compiler *c, int id) {
 TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int base_mi, TyKind r,
                          int call_id) {
   int nd = 0;
-  const int *ds = comp_descendants(c, cid, &nd);
+  const int *ds = call_id >= 0 && cplan_pinned(c, call_id) ? NULL : comp_descendants(c, cid, &nd);
   for (int i = 0; i < nd; i++) {
     int kmi = call_target(c, call_id, ds[i], name, cmeth ? CT_CMETHOD : 0, NULL);
     if (kmi < 0 || kmi == base_mi) continue;

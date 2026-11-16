@@ -12197,8 +12197,9 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
          receive the same arg types so the cls_id-switch dispatch is type-safe.
          Also handles the case where only descendants define the method (mi < 0
          from base chain, e.g. Base.find calls adapter_find defined only in
-         Article and Comment descendants). */
-      if (caller_cid >= 0) {
+         Article and Comment descendants). A call the plan pins to one method
+         (cplan_pinned) runs that one on every self: no override takes it. */
+      if (caller_cid >= 0 && !cplan_pinned(c, id)) {
         Scope *caller_sc = comp_scope_of(c, id);
         int is_cm = caller_sc ? caller_sc->is_cmethod : 0;
         int nd = 0; const int *ds = comp_descendants(c, caller_cid, &nd);

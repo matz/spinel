@@ -37286,10 +37286,10 @@ static const PdnEnt *pdn_lookup(Compiler *c, const char *cn) {
       e->sc = g; e->sc[e->nsc++] = si;
     }
   for (int ci = 0; ci < c->nclasses; ci++)
+    /* (a candidate scan kept per name: the classes that may read it at any point) */
     if (call_attr_target(c, -1, ci, cn, CT_ATTR, NULL)) {
       int *g = realloc(e->cls, sizeof(int) * (size_t)(e->ncl + 1));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    /* (a candidate scan kept per name: the classes that may read it at any point) */
       e->cls = g; e->cls[e->ncl++] = ci;
     }
   return e;

@@ -1,0 +1,23 @@
+true
+true
+false
+true
+true
+true
+true
+true
+true
+false
+[:sz, "1000000"]
+[:cnt, "1000000"]
+[:ks, "0100000"]
+[:mmm, "0010000"]
+[:bt, "0010000"]
+[:ins, "0001000"]
+[:fr, "0001000"]
+[:mine2, "0001000"]
+[:nope, "0000000"]
+[false, false, false, true, false, false, false]
+true
+false
+false

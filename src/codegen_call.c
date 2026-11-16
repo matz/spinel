@@ -20264,15 +20264,16 @@ int emit_value_methods_reflection(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
-/* Does any user class answer respond_to?(qm) at run time, through a method of
-   its own or a name it carries implicitly? Decides whether a boxed receiver
+/* Does any user class answer respond_to?(qm) at run time, through a method or
+   an alias of its own (the call plan's table answer) or a name it carries
+   implicitly? Decides whether a boxed receiver
    asks the per-class check or only the builtin surface. */
 int any_class_responds(Compiler *c, const char *qm) {
   if (any_class_defines(c, qm)) return 1;
   for (int k = 0; k < c->nclasses; k++) {
     CplanPresence pr;
     cplan_table_presence(c, k, 0, qm, &pr);
-    if (pr.implied) return 1;
+    if (pr.table || pr.implied) return 1;
   }
   return 0;
 }

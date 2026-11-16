@@ -6128,7 +6128,8 @@ int cplan_cls_own_sg_answers(Compiler *c, int call, int k, const char *name, int
   if (!rn) rn = name;
   if (setter ? !comp_is_sg_writer(cls, base) : !comp_is_sg_reader(cls, rn)) return 0;
   char wn[260];
-  snprintf(wn, sizeof wn, "%s=", base);
+  /* (base is written for a setter only) */
+  if (setter) snprintf(wn, sizeof wn, "%s=", base);
   for (int p = k, guard = 0; p >= 0 && guard < 256; p = c->classes[p].parent, guard++) {
     ClassInfo *pc = &c->classes[p];
     int pmi = call_target(c, call, p, name, CT_OWN | CT_CMETHOD, NULL);

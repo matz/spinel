@@ -1,8 +1,6 @@
 # A Method of a method that appends to its parameter, read out of an
-# instance variable and called through its proc with a String the call
-# cannot share (an instance variable): the append would be lost, so it is
-# refused.
-# spinel: reject-subclass: a proc or Method it can reach appends
+# instance variable and called through its proc with a String instance
+# variable: the ivar's slot is the shared handle, so the append reaches it.
 class Buffer
   def initialize
     @add = method(:add)

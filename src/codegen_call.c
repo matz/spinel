@@ -29418,7 +29418,13 @@ static const char *strvar_arg(Compiler *c, int a, int *shared) {
   }
   if (at != TY_STRING && at != TY_STRBUF) return NULL;
   if (k == NK_SelfNode) { *shared = repr_self_shared(c, a); return "String self"; }
-  if (k == NK_InstanceVariableReadNode) return "an instance variable";
+  if (k == NK_InstanceVariableReadNode) {
+    Scope *is = comp_scope_of(c, a);
+    const char *in = nt_str(nt, a, "name");
+    int iv = is && is->class_id >= 0 && !is->is_cmethod && in ? comp_ivar_index(&c->classes[is->class_id], in) : -1;
+    *shared = iv >= 0 && repr_of_ivar(c, is->class_id, iv).handle;
+    return "an instance variable";
+  }
   if (k == NK_GlobalVariableReadNode) return "a global variable";
   if (k == NK_ClassVariableReadNode) return "a class variable";
   return NULL;

@@ -33948,6 +33948,19 @@ static int dyn_pull_site_args(Compiler *c, int n) {
       changed |= dyn_lift_poly_arg(c, n, k, av[k]);
       continue;
     }
+    /* A String ivar goes over as its slot's handle once the slot is one:
+       a target that appends to it makes it one (strbuf_promote_ivar) */
+    if (ak == NK_InstanceVariableReadNode) {
+      TyKind it = comp_ntype(c, av[k]);
+      Scope *is = comp_scope_of(c, av[k]);
+      if ((it != TY_STRING && it != TY_STRBUF) || !is || is->class_id < 0 || is->is_cmethod) continue;
+      DynReach r;
+      dyn_site_reach(c, n, k, &r);
+      if (r.unlifted) continue;
+      if (!r.app && !(r.unknown && dyn_any_appender(c))) continue;
+      changed |= strbuf_promote_ivar(c, is->class_id, nt_str(nt, av[k], "name"));
+      continue;
+    }
     if (ak != NK_LocalVariableReadNode) continue;
     TyKind at = comp_ntype(c, av[k]);
     /* A POLY variable boxes whatever it holds, and a plain String boxed

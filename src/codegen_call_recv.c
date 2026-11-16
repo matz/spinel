@@ -2436,10 +2436,34 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
        answers the nil seed, which the call's oint carries */
     if (oint_kind(init_t) && oint_kind(comp_ntype(c, id)) && cmp_operand_may_be_nil(c, argv[0])) {
       TyKind st = comp_ntype(c, id);
-      Buf sb; memset(&sb, 0, sizeof sb);
-      emit_poly_sum_seed(c, recv, argv[0], &sb);
-      oint_open(c, id, st, b); buf_printf(b, "%s(%s)", oint_unbox(st), sb.p ? sb.p : "sp_box_nil()"); oint_close(c, id, b);
-      free(sb.p);
+      /* a seed that is no nil takes the typed fold, as one that cannot be
+         nil does; only a nil one folds boxed, to answer as nil's `+` */
+      int fast = (rt == TY_INT_ARRAY && init_t == TY_INT && st == TY_INT && !g_promote_mode) ||
+                 (rt == TY_FLOAT_ARRAY && st == TY_FLOAT && (init_t == TY_FLOAT || init_t == TY_INT));
+      if (!fast) {
+        Buf sb; memset(&sb, 0, sizeof sb);
+        emit_poly_sum_seed(c, recv, argv[0], &sb);
+        oint_open(c, id, st, b); buf_printf(b, "%s(%s)", oint_unbox(st), sb.p ? sb.p : "sp_box_nil()"); oint_close(c, id, b);
+        free(sb.p);
+        { *out = 1; return 1; }
+      }
+      int ta = ++g_tmp, ts = ++g_tmp;
+      buf_puts(b, "({ ");
+      ta = hold_operand(c, recv, rt, 0, ta, 1, " ", b);
+      buf_printf(b, "%s _t%d = ", oint_ctype(init_t), ts); emit_oint_expr(c, argv[0], init_t, b); buf_puts(b, "; ");
+      char an[32]; snprintf(an, sizeof an, "_t%d", ta);
+      Buf ck; memset(&ck, 0, sizeof ck);
+      const char *ar = nil_sum_ck_text(c, recv, rt, rt == TY_FLOAT_ARRAY && init_t == TY_FLOAT, an, &ck);
+      Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, rt, an, &bx);
+      /* the nil arm answers the oint (nil over no elements), the other the
+         plain sum; the call's form wraps the one that is not it */
+      Buf nilv, fastv; memset(&nilv, 0, sizeof nilv); memset(&fastv, 0, sizeof fastv);
+      buf_printf(&nilv, "%s(sp_poly_sum_seed(%s, sp_box_nil()))", oint_unbox(st), bx.p ? bx.p : "sp_box_nil()");
+      buf_printf(&fastv, "sp_%sArray_sum(%s, %s_t%d.v)", rt == TY_FLOAT_ARRAY ? "Float" : "Int", ar,
+                 rt == TY_FLOAT_ARRAY && init_t == TY_INT ? "(sp_float)" : "", ts);
+      if (node_is_oint(c, id)) buf_printf(b, "_t%d.nil ? %s : %s(%s); })", ts, nilv.p, oint_of(st), fastv.p);
+      else buf_printf(b, "_t%d.nil ? %s(%s) : %s; })", ts, oint_arg(st), nilv.p, fastv.p);
+      free(nilv.p); free(fastv.p); free(ck.p); free(bx.p);
       { *out = 1; return 1; }
     }
     /* A FLOAT seed over Floats compensates from the first element, as Ruby

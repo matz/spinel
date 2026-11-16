@@ -9887,7 +9887,7 @@ static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, i
           /* the value is stored boxed: one whose type is not known yet (an
              empty `[]`) holds any class, so the keyword does too */
           TyKind at = infer_type(c, val);
-          if (at == TY_UNKNOWN || at == TY_NIL) at = TY_POLY;
+          if (at == TY_UNKNOWN || at == TY_NIL || at == TY_VOID) at = TY_POLY;
           for (int i = 0; i < m->nparams; i++) {
             if (i == m->kwrest_idx || !m->pnames[i] || !callee_has_kwarg(c, m, m->pnames[i])) continue;
             LocalVar *p = scope_local(m, m->pnames[i]);
@@ -9916,6 +9916,12 @@ static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, i
         LocalVar *p = scope_local(m, kname);
         if (!p) continue;
         TyKind at = infer_type(c, val);
+        /* A void value (a constant a stub that always raises was to fill)
+           binds the keyword as the positional loop above binds its void
+           argument: poly, so the parameter is declarable. The call never
+           completes, so nothing reads the slot; bound void, the method was
+           refused in codegen as unemittable. */
+        if (at == TY_VOID) at = TY_POLY;
         /* a signature's parameter keeps its type, and still types the
            empty `{}` it is handed */
         if (!param_seed_holds_arg(c, p, val, at)) changed |= slot_take(c, p, at, val);

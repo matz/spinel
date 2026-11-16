@@ -50511,6 +50511,23 @@ static void an_phase_class_structure(Compiler *c) {
         int fwd = uk == NK_BlockArgumentNode && nt_ref(nt, up, "expression") == r && call >= 0 &&
                   nt_kind(nt, call) == NK_CallNode && nt_ref(nt, call, "block") == up &&
                   is_instance_eval_family(nt_str(nt, call, "name"));
+        /* (and a forward whose value is dropped, a statement other than its
+           body's last: `r = instance_exec(x, &b) if b` keeps the value,
+           which the inlined block then hands on) */
+        for (int x = call, guard = 0; fwd && x >= 0 && guard < 16; guard++) {
+          int p = par[x];
+          NodeKind pk = p >= 0 ? nt_kind(nt, p) : NK_NONE;
+          if (pk == NK_StatementsNode) {
+            int sn = 0; const int *sb = nt_arr(nt, p, "body", &sn);
+            if (sn > 0 && sb[sn - 1] != x) break;
+            int pp = par[p];
+            NodeKind ppk = pp >= 0 ? nt_kind(nt, pp) : NK_NONE;
+            if (ppk == NK_IfNode || ppk == NK_UnlessNode || ppk == NK_ElseNode) { x = pp; continue; }
+            fwd = 0;
+          }
+          else if (pk == NK_IfNode || pk == NK_UnlessNode || pk == NK_ElseNode) { x = p; continue; }
+          else fwd = 0;
+        }
         if (!cond && !fwd) other = 1;
         forwards += fwd;
       }

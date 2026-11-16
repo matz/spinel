@@ -19095,8 +19095,7 @@ int desugar_builtin_splat_forward(Compiler *c) {
                /* (a reopen of Time leaves Time.new alone unless it defines its own) */
                (comp_core_class(c, CORE_TIME) < 0 || call_target(c, id, comp_core_class(c, CORE_TIME), "new", CT_CMETHOD, NULL) < 0) &&
                sp_streq(nm, "new") && nt_ref(nt, id, "block") < 0 && rest && ms && ty_is_array(infer_type(c, sv));
-    if (!tnew && (!rest || !ms || ms->rest_idx < 0 || ms->rest_idx >= ms->nparams || !ms->pnames ||
-        !ms->pnames[ms->rest_idx] || !sp_streq(ms->pnames[ms->rest_idx], rest))) continue;
+    if (!tnew && !comp_scope_rest_param_is(ms, rest)) continue;
     /* the block: none, the method's own (`&block`, or the yielding literal
        a forward of it became), or the caller's own literal */
     int blk = nt_ref(nt, id, "block"), own = 0;

@@ -27166,8 +27166,7 @@ static unsigned char *rest_param_reads(Compiler *c) {
   NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, n) {
     Scope *s = comp_scope_of(c, n);
     const char *ln = nt_str(nt, n, "name");
-    if (s && ln && s->rest_idx >= 0 && s->pnames[s->rest_idx] && sp_streq(s->pnames[s->rest_idx], ln))
-      r[s - c->scopes] = 1;
+    if (comp_scope_rest_param_is(s, ln)) r[s - c->scopes] = 1;
   }
   NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, n) {
     Scope *s = comp_scope_of(c, n);
@@ -44862,7 +44861,11 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
      its elements), in its turn among the arguments, and the arms read that. */
   /* (a local splat into one of the names the lists leave out is bound so
      too: the local need not hold an Array, `*n` spreads an Integer) */
-  int ex_local = !spec && nt_kind(nt, ex) == NK_LocalVariableReadNode;
+  /* (the method's own rest parameter, which the body never assigns, is an Array, read as it is) */
+  int own_rest = spec && nt_kind(nt, ex) == NK_LocalVariableReadNode &&
+                 comp_scope_rest_param_is(comp_scope_of(c, id), nt_str(nt, ex, "name")) &&
+                 !comp_lvw_any_sc(c, (int)(comp_scope_of(c, id) - c->scopes), nt_str(nt, ex, "name"));
+  int ex_local = (!spec || own_rest) && nt_kind(nt, ex) == NK_LocalVariableReadNode;
   const char *anm = ex_local ? nt_str(nt, ex, "name") : NULL;
   int aview = ex_local;   /* anm is the operand local itself (splat_operand_read) */
   if (ex_local && !anm) return 0;

@@ -2502,7 +2502,8 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   const char *n = nt_str(c->nt, id, "name");
   if (!n) return 0;
   MtabMark mt_was = mtab_push_in(c, id);   /* (what the call's name asks of the subclass's chain is the call's) */
-  int builtin = cplan_builtin_call(c, id) || comp_arysub_name_is_array(c, id, cid, n);
+  /* (the identity a dispatch over a splat leaves, nt_set_itself_call, is no builtin method: its value is the instance) */
+  int builtin = (cplan_builtin_call(c, id) && !is_itself_name(n)) || comp_arysub_name_is_array(c, id, cid, n);
   mtab_pop(c, mt_was);
   if (!builtin) return 0;
   *kind = comp_ary_kind(c, cid);
@@ -3528,6 +3529,12 @@ int comp_native_find(Compiler *c, const char *mod, const char *name) {
 int comp_scope_native_twin(Compiler *c, int mi) {
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          nt_int(c->nt, c->scopes[mi].def_node, "native_twin", 0);
+}
+
+/* Is `name` the rest parameter of scope s (`*args`)? */
+int comp_scope_rest_param_is(const Scope *s, const char *name) {
+  return s && name && s->rest_idx >= 0 && s->rest_idx < s->nparams && s->pnames && s->pnames[s->rest_idx] &&
+         sp_streq(s->pnames[s->rest_idx], name);
 }
 
 TyKind native_spec_to_ty(const char *spec) {

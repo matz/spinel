@@ -12091,7 +12091,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       const char *rn = nt_str(nt, r, "name");
       int rc = rn ? const_node_class_index(c, r) : -1;
       if (rc < 0) { if (rn && is_builtin_class_name(rn)) continue; return 0; }
-      if (comp_cmethod_in_chain(c, rc, "new", NULL) >= 0) return 0;
+      if (cplan_user_new(c, u, rc) >= 0) return 0;
       if (cplan_hook_target(c, u, rc, "initialize", NULL) != (int)(s - c->scopes)) continue;
     }
     if (!pn) {
@@ -12603,7 +12603,7 @@ static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
           return builtin_class_id(nt_str(nt, r, "name")) != 0;
         }
         /* a class method `new` of its own may answer anything */
-        if (comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) return 0;
+        if (cplan_user_new(c, v, ci) >= 0) return 0;
         set[ci] = 1;
         return 1;
       }

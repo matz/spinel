@@ -11260,7 +11260,7 @@ static int ssv_value(Compiler *c, int v, char *set, int depth) {
       const char *rn = nt_str(nt, r, "name");
       int ci = rn ? const_node_class_index(c, r) : -1;
       if (sp_streq(un, "new") && ci >= 0) {
-        if (comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) return 0;
+        if (cplan_user_new(c, v, ci) >= 0) return 0;
         set[ci] = 1;
         return 1;
       }

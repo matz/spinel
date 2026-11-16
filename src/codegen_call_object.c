@@ -3360,7 +3360,7 @@ static int ivar_list_mixed(Compiler *c, int recv, int cid) {
   if (recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode && is_new_name(nt_str(c->nt, recv, "name"))) {
     int r = nt_ref(c->nt, recv, "receiver");
     if (r >= 0 && nt_kind(c->nt, r) == NK_ConstantReadNode && const_node_class_index(c, r) == cid &&
-        comp_cmethod_in_chain(c, cid, "new", NULL) < 0) return 0;
+        cplan_user_new(c, recv, cid) < 0) return 0;
   }
   int ranked = ivar_ranked(c, cid);
   int nbase, *base = ivar_listing_order_new(c, cid, &nbase), mixed = 0;

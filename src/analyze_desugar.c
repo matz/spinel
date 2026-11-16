@@ -5885,6 +5885,9 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
     c->nscope[j] = c->nscope[id];
     if (!nt_int(nt, j, "node_line", 0)) nt_node_set_int(nt, j, "node_line", line);
     if (!nt_int(nt, j, "node_file", 0)) nt_node_set_int(nt, j, "node_file", file);
+    /* each arm, and the call left to the dispatch, runs where the call stood, in its frame, once:
+       node_in_place says so to the load record (lr_unplaced), which places them there */
+    nt_node_set_int(nt, j, "node_in_place", 1);
   }
   return 1;
 }
@@ -11393,7 +11396,7 @@ static int splat_feeds_user_method(Compiler *c, int sp) {
       int r = nt_ref(nt, id, "receiver");
       const char *rn = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
       int ci = rn ? const_node_class_index(c, r) : -1;
-      return ci >= 0 && comp_cmethod_in_chain(c, ci, "new", NULL) >= 0;
+      return ci >= 0 && cplan_user_new(c, id, ci) >= 0;
     }
     for (int si = 0; nm && si < c->nscopes; si++)
       if (c->scopes[si].name && sp_streq(c->scopes[si].name, nm)) return 1;
@@ -12025,7 +12028,7 @@ static void fwd_branch_on_block_given(Compiler *c, int id) { fwd_branch_on_calla
 int exc_ctor_class(Compiler *c, int id, int ci) {
   if (!class_is_exc_subclass(c, ci) && !(is_builtin_reopen(c->classes[ci].name) && is_builtin_exception_name(c->classes[ci].name))) return 0;
   return call_target(c, id, ci, "exception", CT_CMETHOD, NULL) < 0 &&
-         call_target(c, id, ci, "new", CT_CMETHOD, NULL) < 0;
+         cplan_user_new(c, id, ci) < 0;
 }
 
 /* See analyze_internal.h. */
@@ -12268,11 +12271,11 @@ int desugar_exception_class_ctor(Compiler *c) {
      class that defines it, not the receiving one);
    - where a bare super's def takes other parameters. */
 static int exc_super_new_kept(Compiler *c, int id, int cid) {
-  if (call_target(c, id, cid, "new", CT_CMETHOD, NULL) >= 0) return 1;
+  if (cplan_user_new(c, id, cid) >= 0) return 1;
   int nd = 0;
   const int *ds = comp_descendants(c, cid, &nd);
   for (int i = 0; i < nd; i++)
-    if (call_target(c, id, ds[i], "new", CT_CMETHOD, NULL) >= 0) return 1;
+    if (cplan_user_new(c, id, ds[i]) >= 0) return 1;
   return 0;
 }
 /* Does a call that may reach a class method `exception` hand it a block?
@@ -19094,7 +19097,7 @@ int desugar_builtin_splat_forward(Compiler *c) {
     int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && key_name(c, recv) &&
                sp_streq(key_name(c, recv), "Time") &&
                /* (a reopen of Time leaves Time.new alone unless it defines its own) */
-               (comp_core_class(c, CORE_TIME) < 0 || call_target(c, id, comp_core_class(c, CORE_TIME), "new", CT_CMETHOD, NULL) < 0) &&
+               (comp_core_class(c, CORE_TIME) < 0 || cplan_user_new(c, id, comp_core_class(c, CORE_TIME)) < 0) &&
                sp_streq(nm, "new") && nt_ref(nt, id, "block") < 0 && rest && ms && ty_is_array(infer_type(c, sv));
     if (!tnew && (!rest || !ms || ms->rest_idx < 0 || ms->rest_idx >= ms->nparams || !ms->pnames ||
         !ms->pnames[ms->rest_idx] || !sp_streq(ms->pnames[ms->rest_idx], rest))) continue;

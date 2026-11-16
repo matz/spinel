@@ -12466,7 +12466,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (!static_cls && infer_type(c, recv) == TY_CLASS) {
         int bound_any = 0;
         for (int k = 0; k < c->nclasses; k++) {
-          int cmi = call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL);
+          int cmi = is_new_name(name) ? cplan_user_new(c, id, k) : call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL);
           if (cmi >= 0) { changed |= bind_call_params(c, id, cmi); bound_any = 1; }
         }
         if (bound_any) continue;
@@ -12491,7 +12491,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         int cpath_struct = ci >= 0 && sp_streq(name, "new") && c->classes[ci].is_struct;
         if (cpath_struct) { /* handled below, with the short-name spelling */ }
         else if (ci >= 0 && sp_streq(name, "new")) {
-          int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
+          int ucnew = cplan_user_new(c, id, ci);
           if (ucnew >= 0)
             changed |= bind_call_params(c, id, ucnew);
           else
@@ -12523,7 +12523,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
             continue;
           }
           if (sp_streq(name, "new")) {
-            int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
+            int ucnew = cplan_user_new(c, id, ci);
             if (ucnew >= 0)
               changed |= bind_call_params(c, id, ucnew);
             else
@@ -17453,8 +17453,9 @@ static int new_block_initialize(Compiler *c, int id, int *several) {
   for (int e = 0; e < n; e++) {
     int k = cls >= 0 ? (e == 0 ? cls : ds[e - 1]) : e;
     if (cls < 0 && !dynamic_new_may_reach(c, id, k)) continue;
-    if (comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
-    int mi = comp_method_in_chain(c, k, "initialize", NULL);
+    /* (`self.new` in a class method builds the class or one below it: no one point, the table's) */
+    if (cplan_user_new(c, cls >= 0 ? -1 : id, k) >= 0) continue;
+    int mi = cls >= 0 ? cplan_hook_target(c, -1, k, "initialize", NULL) : cplan_new_arm_initialize(c, id, k);
     if (mi < 0 || c->scopes[mi].is_cmethod || mi == found) continue;
     Scope *m = &c->scopes[mi];
     if (!m->yields && !(m->blk_param && m->blk_param[0]) && forwarding_yield_target(c, mi, 0) < 0)

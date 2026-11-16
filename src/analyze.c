@@ -5249,7 +5249,7 @@ static int ie_new_takes_block(Compiler *c, int id, int recv) {
   NodeKind rk = nt_kind(nt, recv);
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? const_node_class_index(c, recv) : -1;
   if (ci < 0) return -1;
-  int mi = comp_cmethod_in_chain(c, ci, "new", NULL);
+  int mi = cplan_user_new(c, id, ci);
   if (mi < 0) mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   return mi >= 0 && c->scopes[mi].blk_param;
 }
@@ -33614,7 +33614,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
   if (any) {
     for (int k = 0; k < c->nclasses && n < cap; k++) {
       if (any == 2 ? !cplan_as_new(c, u, k) || !dynamic_new_may_reach(c, u, k) : !class_is_exc_subclass(c, k)) continue;
-      int mi = comp_method_in_chain(c, k, "initialize", NULL);
+      int mi = any == 2 ? cplan_new_arm_initialize(c, u, k) : comp_method_in_chain(c, k, "initialize", NULL);
       if (mi < 0 || c->scopes[mi].is_cmethod) continue;
       int dup = 0;
       for (int e = 0; e < n && !dup; e++) dup = out[e] == mi;
@@ -33625,7 +33625,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
   int nd = 0; const int *ds = sub ? comp_descendants(c, cls, &nd) : NULL;
   for (int d = -1; d < nd && n < cap; d++) {
     int k = d < 0 ? cls : ds[d];
-    if (comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
+    if (cplan_user_new(c, sub ? -1 : u, k) >= 0) continue;
     /* (a `new` in a class method builds self, which may be a subclass: the
        constructor's switch, whose arms run the table's) */
     int mi = cplan_hook_target(c, sub ? -1 : u, k, "initialize", NULL);
@@ -48160,7 +48160,7 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
   int tim = comp_ary_is_time(c, k);
   if ((brackets || time_maker) && tim != time_maker) return;
   if (tim && brackets) return;
-  if (!brackets && !time_maker && comp_method_in_chain(c, k, "initialize", NULL) >= 0) return;
+  if (!brackets && !time_maker && cplan_hook_target(c, id, k, "initialize", NULL) >= 0) return;
   int args = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
   int an = 0;
   if (args >= 0) nt_arr(nt, args, "arguments", &an);

@@ -2893,7 +2893,7 @@ static int ivs_never_nil(Compiler *c, int v) {
       if (!nm || r < 0) return 0;
       if (sp_streq(nm, "new") && nt_kind(nt, r) == NK_ConstantReadNode) {
         int ci = const_node_class_index(c, r);
-        return ci < 0 ? 1 : comp_cmethod_in_chain(c, ci, "new", NULL) < 0;
+        return ci < 0 ? 1 : cplan_user_new(c, v, ci) < 0;
       }
       if (is_unary_sign(nm)) return nt_kind(nt, r) == NK_StringNode;
       TyKind rt = comp_ntype(c, r);

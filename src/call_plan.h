@@ -778,9 +778,11 @@ int cplan_builtin_new_form(Compiler *c, int id);
    pi[k] of method scope mi[k], each the next positional argument. kwat: where a
    forward without a keyword rest made the call's literal keywords one more
    positional Hash, the count of defaults ahead of that Hash, which every later
-   one follows; -1 where none did. */
+   one follows; -1 where none did. Then the keywords a bare `super` passes that
+   the call does not: keyword parameter kp[k] of method scope kmi[k], each one
+   more keyword, ahead of the call's `**`. */
 enum { NEW_FILLS_MAX = 16 };
-typedef struct NewFills { int n, kwat, mi[NEW_FILLS_MAX], pi[NEW_FILLS_MAX]; } NewFills;
+typedef struct NewFills { int n, kwat, nk, mi[NEW_FILLS_MAX], pi[NEW_FILLS_MAX], kmi[NEW_FILLS_MAX], kp[NEW_FILLS_MAX]; } NewFills;
 void cplan_builtin_new_fills(Compiler *c, int id, NewFills *f);
 /* Where cplan_entries cannot list them (CPT_UNKNOWN), the names whose
    program methods hold every method call node id may enter, into names (at

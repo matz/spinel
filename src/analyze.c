@@ -13237,10 +13237,16 @@ static int desugar_hash_new_capacity(Compiler *c) {
     int bnf = cplan_const_user(c, id, r, 1).mi >= 0 ? BNF_REFUSE : cplan_builtin_new_form(c, id);
     if (bnf == BNF_REFUSE || bnf == BNF_FILL) continue;
     int en = 0; const int *el = nt_arr(nt, av[an - 1], "elements", &en);
-    /* (a lone `**h` passes the keyword too: its keys are checked as Hash#initialize binds them, and its capacity, 0
-       where it has none, is the keyword's value) */
-    if (en == 1 && nt_kind(nt, el[0]) == NK_AssocSplatNode && nt_ref(nt, el[0], "value") >= 0) {
-      int base = nt->count, kh = kwb_explicit(nt, "capacity", "IntegerNode", nt_ref(nt, el[0], "value"), comp_scope_of(c, id));
+    /* (a `**h` passes the keyword too: the keywords' keys are checked as Hash#initialize binds them, and its capacity, 0
+       where they have none, is the keyword's value) */
+    int spl = 0, anon = 0, elc[64];
+    for (int j = 0; j < en; j++)
+      if (nt_kind(nt, el[j]) == NK_AssocSplatNode) nt_ref(nt, el[j], "value") >= 0 ? (spl = 1) : (anon = 1);
+    if (spl && !anon && en <= 64) {
+      memcpy(elc, el, sizeof(int) * (size_t)en);
+      int base = nt->count, all = en == 1 ? nt_ref(nt, elc[0], "value") : nt_new_node(nt, "HashNode");
+      if (en > 1) nt_node_set_arr(nt, all, "elements", elc, en);
+      int kh = kwb_explicit(nt, "capacity", "IntegerNode", all, comp_scope_of(c, id));
       nt_replace_child(nt, argsn, av[an - 1], kh);
       comp_grow_node_arrays(c);
       for (int j = base; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
@@ -13269,13 +13275,26 @@ static int desugar_hash_new_capacity(Compiler *c) {
   return changed;
 }
 
+/* (a read of an earlier parameter of ms, one of the first upto, in default d: the j-th positional value of out) */
+static void bni_rename_params(NodeTable *nt, const Scope *ms, int d, int upto, const int *out, int npos) {
+  int nd = 0, *di = nt_subtree_ids(nt, &d, 1, &nd);
+  for (int k = 0; k < nd; k++)
+    for (int i = 0, j = 0; nt_kind(nt, di[k]) == NK_LocalVariableReadNode && i < upto && j < npos; i++) {
+      if (i == ms->rest_idx || i == ms->kwrest_idx) continue;
+      if (sp_streq(nt_str(nt, di[k], "name"), ms->pnames[i])) { nt_node_set_str(nt, di[k], "name", nt_str(nt, out[j], "name")); break; }
+      j++;
+    }
+  free(di);
+}
 static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pfx, int k, int value, int *pre, int *npre);
 /* The defaults a builtin `new`'s forwards leave unfilled (cplan_builtin_new_fills) placed on call id after its positional
    arguments, as CRuby runs them once the call has built its argument list: each a clone of the default. Where a forward
    made the call's literal keywords a positional Hash ahead of some (kwat), the keywords are that Hash, at its place among
-   them. Where one reads an earlier parameter, every positional value is held in a local in turn, appended to pre (np so
-   far), and the reads read those locals; where the call is to build the empty value (empty), each default is held too,
-   to run as the call drops its arguments. Answers how many writes pre holds, with room for one statement more. */
+   them. The keyword parameters' defaults a bare `super` passes as keywords (fl->nk) go into the call's keyword Hash
+   after them, ahead of its first `**`. Where one reads an earlier parameter, every positional value is held in a local
+   in turn, appended to pre (np so far), and the reads read those locals; where the call is to build the empty value
+   (empty), each default is held too, to run as the call drops its arguments. Answers how many writes pre holds, with
+   room for one statement more. */
 static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **prep, int np, int empty) {
   NodeTable *nt = (NodeTable *)c->nt;
   Scope *sc = comp_scope_of(c, id);
@@ -13283,7 +13302,7 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
   if (an < 0) { an = nt_new_node(nt, "ArgumentsNode"); nt_node_set_ref(nt, id, "arguments", an); }
   const int *av = nt_arr(nt, an, "arguments", &n);
   int *out = malloc(sizeof(int) * (size_t)(n + fl->n)), *keep = malloc(sizeof(int) * (size_t)(n + 1));
-  int *pre = realloc(*prep, sizeof(int) * (size_t)(np + n + fl->n + 1));
+  int *pre = realloc(*prep, sizeof(int) * (size_t)(np + n + fl->n + fl->nk + 1));
   if (!out || !keep || !pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   *prep = pre;
   int kwh = -1, kwat = fl->kwat >= 0 && fl->kwat < fl->n ? fl->kwat : -1;
@@ -13291,8 +13310,9 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
     if (kwat >= 0 && nt_kind(nt, av[k]) == NK_KeywordHashNode) kwh = av[k];
     else if (nt_kind(nt, av[k]) == NK_KeywordHashNode || nt_kind(nt, av[k]) == NK_BlockArgumentNode) keep[nk++] = av[k];
     else out[npos++] = av[k];
-  for (int f = 0; f < fl->n; f++) {
-    int d = c->scopes[fl->mi[f]].pdefault[fl->pi[f]], nd = 0, *di = nt_subtree_ids(nt, &d, 1, &nd);
+  for (int f = 0; f < fl->n + fl->nk; f++) {
+    int d = f < fl->n ? c->scopes[fl->mi[f]].pdefault[fl->pi[f]] : nt_ref(nt, fl->kp[f - fl->n], "value"), nd = 0;
+    int *di = nt_subtree_ids(nt, &d, 1, &nd);
     for (int k = 0; k < nd; k++) hold |= nt_kind(nt, di[k]) == NK_LocalVariableReadNode;
     free(di);
   }
@@ -13306,16 +13326,33 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
       npos++;
     }
     const Scope *ms = &c->scopes[fl->mi[f]];
-    int d = nt_clone_subtree(nt, ms->pdefault[fl->pi[f]]), nd = 0, *di = nt_subtree_ids(nt, &d, 1, &nd);
-    /* (a read of an earlier parameter, the j-th positional value: ct_default_placeable lets no other local through) */
-    for (int k = 0; k < nd; k++)
-      for (int i = 0, j = 0; nt_kind(nt, di[k]) == NK_LocalVariableReadNode && i < fl->pi[f] && j < npos; i++) {
-        if (i == ms->rest_idx || i == ms->kwrest_idx) continue;
-        if (sp_streq(nt_str(nt, di[k], "name"), ms->pnames[i])) { nt_node_set_str(nt, di[k], "name", nt_str(nt, out[j], "name")); break; }
-        j++;
-      }
-    free(di);
+    int d = nt_clone_subtree(nt, ms->pdefault[fl->pi[f]]);
+    /* (ct_default_placeable lets no other local through) */
+    bni_rename_params(nt, ms, d, fl->pi[f], out, npos);
     out[npos] = hold || empty ? sd_hold(c, nt, sc, id, "bnd", npos, d, pre, &np) : d;
+  }
+  if (fl->nk) {   /* (the keywords a bare `super` passes that the call does not, after the defaults, ahead of the call's `**`) */
+    int kh = -1, ne = 0, m = 0, at = 0;
+    for (int k = 0; k < nk; k++) if (nt_kind(nt, keep[k]) == NK_KeywordHashNode) kh = keep[k];
+    if (kh < 0) { memmove(keep + 1, keep, sizeof(int) * (size_t)nk++); keep[0] = kh = nt_new_node(nt, "KeywordHashNode"); }
+    nt_arr(nt, kh, "elements", &ne);
+    int *e0 = malloc(sizeof(int) * (size_t)(ne + 1)), *el = malloc(sizeof(int) * (size_t)(ne + fl->nk));
+    if (!e0 || !el) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (ne) memcpy(e0, nt_arr(nt, kh, "elements", &ne), sizeof(int) * (size_t)ne);
+    while (at < ne && nt_kind(nt, e0[at]) != NK_AssocSplatNode) el[m++] = e0[at++];
+    for (int f = 0; f < fl->nk; f++) {
+      const Scope *ms = &c->scopes[fl->kmi[f]];
+      int d = nt_clone_subtree(nt, nt_ref(nt, fl->kp[f], "value")), key = nt_new_node(nt, "SymbolNode");
+      bni_rename_params(nt, ms, d, ms->nparams, out, npos);
+      nt_node_set_str(nt, key, "value", nt_str(nt, fl->kp[f], "name"));
+      el[m] = nt_new_node(nt, "AssocNode");
+      nt_node_set_ref(nt, el[m], "key", key);
+      nt_node_set_ref(nt, el[m++], "value", hold || empty ? sd_hold(c, nt, sc, id, "bnk", f, d, pre, &np) : d);
+    }
+    while (at < ne) el[m++] = e0[at++];
+    nt_node_set_arr(nt, kh, "elements", el, m);
+    free(e0);
+    free(el);
   }
   memcpy(out + npos, keep, sizeof(int) * (size_t)nk);
   nt_node_set_arr(nt, an, "arguments", out, npos + nk);
@@ -13332,11 +13369,11 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
    The operands that run code are held in locals in CRuby's order, as any call's
    are (sd_hold_call_operands: a splat as `[*x]`, a `**` as `{**x}`, a block pass
    through __blk_conv, which checks what its to_proc answers), and the call
-   becomes `(held; ...; K.new)`, the builtin's own (nt_mark_builtin_call). A
-   literal block is never run. One whose forwards leave defaults unfilled
-   (BNF_FILL) holds them alike and passes their values after its own
-   (bni_place_defaults); ahead of an empty one, those with an effect run after
-   the held operands. */
+   becomes `(held; ...; K.new)`. A literal block is never run. One whose
+   forwards leave defaults unfilled (BNF_FILL) holds them alike and passes their
+   values after its own (bni_place_defaults); ahead of an empty one, those with
+   an effect run after the held operands. The call left is the builtin's own
+   (nt_mark_builtin_call), which the plan does not answer again. */
 static int desugar_builtin_new_init_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -13345,13 +13382,13 @@ static int desugar_builtin_new_init_args(Compiler *c) {
     int form = cplan_builtin_new_form(c, id);
     NewFills fl = { .n = 0, .kwat = -1 };
     if (form == BNF_FILL || form == BNF_EMPTY) cplan_builtin_new_fills(c, id, &fl);
-    if (form != BNF_FILL && (form != BNF_EMPTY || (nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0 && !fl.n))) continue;
+    if (form != BNF_FILL && (form != BNF_EMPTY || (nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0 && !fl.n && !fl.nk))) continue;
     /* (where the call stands is known before its operands are held: holding them rewrites the call) */
     int *par = du_parent_map(nt);
     if (!par || par[id] < 0) { free(par); continue; }
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
-    if (fl.n) np = bni_place_defaults(c, id, &fl, &pre, np, form == BNF_EMPTY);
+    if (fl.n || fl.nk) np = bni_place_defaults(c, id, &fl, &pre, np, form == BNF_EMPTY);
     if (np > 0) {
       /* (a sequence of its own in the call's place, of fresh nodes throughout: the order plan keeps what it recorded of the old
          call and its operands by node; the held values run as statements of their own, the plain `new` last) */
@@ -13361,19 +13398,21 @@ static int desugar_builtin_new_init_args(Compiler *c) {
         nt_node_set_ref(nt, id, "block", -1);
       }
       for (int i = 0; i < np; i++)
-        if (fl.n) pre[i] = nt_clone_subtree(nt, pre[i]);
+        if (fl.n || fl.nk) pre[i] = nt_clone_subtree(nt, pre[i]);
         else if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
       pre[np++] = nt_clone_subtree(nt, id);
-      if (form == BNF_EMPTY) nt_mark_builtin_call(nt, pre[np - 1]);
+      nt_mark_builtin_call(nt, pre[np - 1]);
       nt_node_set_arr(nt, stmts, "body", pre, np);
       nt_node_set_ref(nt, seq, "body", stmts);
       comp_grow_node_arrays(c);
       for (int j = base; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
       nt_replace_child(nt, par[id], id, seq);
     }
-    else if (form == BNF_EMPTY) {
-      nt_node_set_ref(nt, id, "arguments", -1);
-      nt_node_set_ref(nt, id, "block", -1);
+    else {
+      if (form == BNF_EMPTY) {
+        nt_node_set_ref(nt, id, "arguments", -1);
+        nt_node_set_ref(nt, id, "block", -1);
+      }
       nt_mark_builtin_call(nt, id);
     }
     free(par);

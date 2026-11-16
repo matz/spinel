@@ -13322,7 +13322,9 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
   int an = nt_ref(nt, id, "arguments"), n = 0, npos = 0, nk = 0, hold = 0, base = nt->count;
   if (an < 0) { an = nt_new_node(nt, "ArgumentsNode"); nt_node_set_ref(nt, id, "arguments", an); }
   const int *av = nt_arr(nt, an, "arguments", &n);
-  int *out = malloc(sizeof(int) * (size_t)(n + fl->n)), *keep = malloc(sizeof(int) * (size_t)(n + 1));
+  /* (out ends with keep's nk, and keep may gain the keyword Hash the
+     keyword defaults go into: one more) */
+  int *out = malloc(sizeof(int) * (size_t)(n + fl->n + 1)), *keep = malloc(sizeof(int) * (size_t)(n + 1));
   int *pre = realloc(*prep, sizeof(int) * (size_t)(np + n + fl->n + fl->nk + 1));
   if (!out || !keep || !pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   *prep = pre;

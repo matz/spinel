@@ -9501,7 +9501,7 @@ int desugar_respond_to_flag(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver"), base = nt->count, rw = -1;
     char tr[64];
     snprintf(tr, sizeof tr, "__rf_r%s", comp_node_tag(c, id));
-    int rtemp = recv >= 0 && (bo_may_act(nt, recv) || bo_may_act(nt, av[1])) ? rtm_hold(c, nt, id, recv, tr, &rw) : 0;
+    int rtemp = recv >= 0 && (bo_may_act(c, recv) || bo_may_act(c, av[1])) ? rtm_hold(c, nt, id, recv, tr, &rw) : 0;
     int arm[2];
     for (int v = 0; v < 2; v++) {
       int cp = bo_shallow_copy(nt, id), na = nt_new_node(nt, "ArgumentsNode");
@@ -11640,29 +11640,31 @@ static int fwd_hoist_temp(Compiler *c, int id, int k, int e, int *stm, int *ns) 
 }
 /* The last element of keyword argument a whose evaluation acts: a double
    splat's hash, an element's key or value, or a non-pair; else -1 */
-static int fwd_kw_last_acting(const NodeTable *nt, int a) {
+static int fwd_kw_last_acting(Compiler *c, int a) {
+  const NodeTable *nt = c->nt;
   int en = 0, last = -1;
   const int *el = nt_arr(nt, a, "elements", &en);
   for (int e = 0; e < en; e++)
-    if (nt_kind(nt, el[e]) == NK_AssocSplatNode ? bo_may_act(nt, nt_ref(nt, el[e], "value"))
-        : nt_kind(nt, el[e]) != NK_AssocNode || bo_may_act(nt, nt_ref(nt, el[e], "key")) || bo_may_act(nt, nt_ref(nt, el[e], "value")))
+    if (nt_kind(nt, el[e]) == NK_AssocSplatNode ? bo_may_act(c, nt_ref(nt, el[e], "value"))
+        : nt_kind(nt, el[e]) != NK_AssocNode || bo_may_act(c, nt_ref(nt, el[e], "key")) || bo_may_act(c, nt_ref(nt, el[e], "value")))
       last = e;
   return last;
 }
 /* Does evaluating argument a of a call act: a splat's expression, a
    keyword argument's keys and values (a double splat's hash too), or the
    argument itself? */
-static int fwd_arg_acts(const NodeTable *nt, int a) {
+static int fwd_arg_acts(Compiler *c, int a) {
+  const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, a);
-  if (k == NK_SplatNode) return bo_may_act(nt, nt_ref(nt, a, "expression"));
-  return k == NK_KeywordHashNode ? fwd_kw_last_acting(nt, a) >= 0 : bo_may_act(nt, a);
+  if (k == NK_SplatNode) return bo_may_act(c, nt_ref(nt, a, "expression"));
+  return k == NK_KeywordHashNode ? fwd_kw_last_acting(c, a) >= 0 : bo_may_act(c, a);
 }
 /* Does part x of an argument go into a temp: when it acts, or, read ahead of
    a later part that acts (early), when that part may change what it reads:
    anything but a literal, self or a constant (a local too: a later part may
    write it)? */
 static int fwd_part_hoists(Compiler *c, int x, int early) {
-  return bo_may_act(c->nt, x) || (early && (nt_kind(c->nt, x) == NK_LocalVariableReadNode || !fwd_stable_operand(c, x)));
+  return bo_may_act(c, x) || (early && (nt_kind(c->nt, x) == NK_LocalVariableReadNode || !fwd_stable_operand(c, x)));
 }
 /* ...its temps: the argument itself, a splat's expression (the argument
    becomes `*tmp`), a keyword argument's keys and values and a double
@@ -11693,7 +11695,7 @@ static int fwd_arg_hoist(Compiler *c, int id, int k, int a, int early, int *stm,
       }
       if (nt_kind(nt, el[e]) != NK_AssocNode) continue;
       int key = nt_ref(nt, el[e], "key"), val = nt_ref(nt, el[e], "value");
-      if (fwd_part_hoists(c, key, e < early || (e == early && bo_may_act(nt, val))))
+      if (fwd_part_hoists(c, key, e < early || (e == early && bo_may_act(c, val))))
         nt_node_set_ref(nt, el[e], "key", fwd_hoist_temp(c, id, k * 64 + 2 * e, key, stm, ns));
       if (fwd_part_hoists(c, val, e < early)) nt_node_set_ref(nt, el[e], "value", fwd_hoist_temp(c, id, k * 64 + 2 * e + 1, val, stm, ns));
     }
@@ -11734,19 +11736,19 @@ static void fwd_hoist_callable(Compiler *c, int id, int blk, int *ex, int order,
   int arg_acts = 0, recv_written = 0;
   const char *rn = nt_kind(nt, recv) == NK_LocalVariableReadNode ? nt_str(nt, recv, "name") : NULL;
   for (int k = 0; k < ac; k++) {
-    arg_acts |= fwd_arg_acts(nt, av[k]);
+    arg_acts |= fwd_arg_acts(c, av[k]);
     recv_written |= rn && fwd_subtree_writes(nt, av[k], rn, 0, 0);
   }
   int last = recv;
-  if (order && (bo_may_act(nt, recv) || (arg_acts && (recv_written || !fwd_stable_operand(c, recv))))) last = fwd_hoist_temp(c, id, 0, recv, stm, &ns);
+  if (order && (bo_may_act(c, recv) || (arg_acts && (recv_written || !fwd_stable_operand(c, recv))))) last = fwd_hoist_temp(c, id, 0, recv, stm, &ns);
   int kw_acts = 0;
-  for (int k = 0; k < ac; k++) kw_acts |= nt_kind(nt, av[k]) == NK_KeywordHashNode && fwd_arg_acts(nt, av[k]);
+  for (int k = 0; k < ac; k++) kw_acts |= nt_kind(nt, av[k]) == NK_KeywordHashNode && fwd_arg_acts(c, av[k]);
   /* with the temps ahead of the call, what an argument reads ahead of the
      last part that acts is read there too, in source order, as CRuby reads
      it before that part runs; the parts after it are read by the call */
   int lk = -1, le = -1;
   for (int k = 0; kw_acts && k < ac; k++)
-    if (fwd_arg_acts(nt, av[k])) { lk = k; le = fwd_kw_last_acting(nt, av[k]); }
+    if (fwd_arg_acts(c, av[k])) { lk = k; le = fwd_kw_last_acting(c, av[k]); }
   for (int k = 0; k < ac; k++) nav[k] = fwd_arg_hoist(c, id, k + 1, av[k], k < lk ? INT_MAX : k == lk ? le : 0, stm, &ns);
   if (ac) nt_node_set_arr(nt, args, "arguments", nav, ac);
   stm[ns++] = w;
@@ -13297,7 +13299,7 @@ int desugar_value_callable_forwards(Compiler *c) {
        round: the exits below that skip the wrap are node-table exhaustion,
        where nt_new_node aborts, so none is taken with temps pending) */
     int *ahead = NULL, nahead = 0;
-    if (hoist) fwd_hoist_callable(c, id, blk, &ex, ex >= 0 && nt_kind(nt, ex) == NK_CallNode && !bo_may_act(nt, ex), &ahead, &nahead);
+    if (hoist) fwd_hoist_callable(c, id, blk, &ex, ex >= 0 && nt_kind(nt, ex) == NK_CallNode && !bo_may_act(c, ex), &ahead, &nahead);
     int fill_test = -1;
     if (fill_nilable || blk_nilable) {
       /* the callable is read once, into the temp the test assigns */

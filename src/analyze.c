@@ -45724,7 +45724,7 @@ static void refuse_mixin_after_calls(Compiler *c) {
   for (int q = 0; q < n; q++) {
     NodeKind qk = nt_kind(nt, st[q]);
     if (qk == NK_ClassNode || qk == NK_ModuleNode || qk == NK_DefNode || qk == NK_LoadNode) continue;
-    if (!bo_may_act(nt, st[q])) continue;
+    if (!bo_may_act(c, st[q])) continue;
     int f, r;
     elab_top_place(c, st[q], &f, &r);
     if (r >= 0) run[nrun++] = r;
@@ -45812,10 +45812,27 @@ static void refuse_mixin_after_calls(Compiler *c) {
   mtab_leave(c);
 }
 
+/* Is e (or the absent end of a Range) a literal of a builtin class, whose
+   hash and comparison are the builtin's? */
+static int bo_builtin_value(const NodeTable *nt, int e) {
+  if (e < 0) return 1;
+  switch (nt_kind(nt, e)) {
+  case NK_SymbolNode: case NK_StringNode: case NK_IntegerNode: case NK_FloatNode:
+  case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
+    return 1;
+  default:
+    return 0;
+  }
+}
 /* Can evaluating `e` do anything observable? A read of a local, an ivar or a
    constant, a literal, self, `&:sym`, and a lambda or `proc { }` literal
-   cannot; anything else (a call, above all) may. */
-int bo_may_act(const NodeTable *nt, int e) {
+   cannot, nor a literal container of such values; anything else (a call,
+   above all) may. A `proc`, `lambda` or `method` call is the builtin's only
+   while the program defines no method of that name, and a Hash pair's key or
+   a Range's ends that are no builtin literal run the program's `hash` or
+   `<=>` where it defines one. */
+int bo_may_act(Compiler *c, int e) {
+  const NodeTable *nt = c->nt;
   if (e < 0) return 0;
   switch (nt_kind(nt, e)) {
   case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
@@ -45826,30 +45843,40 @@ int bo_may_act(const NodeTable *nt, int e) {
   /* a literal container of such values, and parentheses around one */
   case NK_ArrayNode: case NK_HashNode: case NK_KeywordHashNode: {
     int en = 0; const int *el = nt_arr(nt, e, "elements", &en);
-    for (int k = 0; k < en; k++) if (bo_may_act(nt, el[k])) return 1;
+    for (int k = 0; k < en; k++) if (bo_may_act(c, el[k])) return 1;
     return 0;
   }
+  /* (a pair's key is hashed as the Hash takes it: a key that is no builtin
+     value runs the program's `hash` where it defines one) */
   case NK_AssocNode:
-    return bo_may_act(nt, nt_ref(nt, e, "key")) || bo_may_act(nt, nt_ref(nt, e, "value"));
-  case NK_RangeNode:
-    return bo_may_act(nt, nt_ref(nt, e, "left")) || bo_may_act(nt, nt_ref(nt, e, "right"));
+    return bo_may_act(c, nt_ref(nt, e, "key")) || bo_may_act(c, nt_ref(nt, e, "value")) ||
+           (!bo_builtin_value(nt, nt_ref(nt, e, "key")) && an_user_defines_method(c, "hash"));
+  /* (a Range's ends are compared with `<=>`, which the program may define) */
+  case NK_RangeNode: {
+    int lo = nt_ref(nt, e, "left"), hi = nt_ref(nt, e, "right");
+    return bo_may_act(c, lo) || bo_may_act(c, hi) ||
+           ((!bo_builtin_value(nt, lo) || !bo_builtin_value(nt, hi)) && an_user_defines_method(c, "<=>"));
+  }
   case NK_ParenthesesNode: case NK_StatementsNode: {
     int b = nt_kind(nt, e) == NK_ParenthesesNode ? nt_ref(nt, e, "body") : e;
     if (b < 0) return 0;
-    if (b != e) return bo_may_act(nt, b);
+    if (b != e) return bo_may_act(c, b);
     int bn = 0; const int *bb = nt_arr(nt, b, "body", &bn);
-    for (int k = 0; k < bn; k++) if (bo_may_act(nt, bb[k])) return 1;
+    for (int k = 0; k < bn; k++) if (bo_may_act(c, bb[k])) return 1;
     return 0;
   }
   case NK_CallNode: {
     const char *nm = nt_str(nt, e, "name");
     int blk = nt_ref(nt, e, "block");
+    /* (a name the program defines itself runs its code: `proc`, `lambda` and
+       `method` are the builtins' only while it does not) */
+    if (nm && (is_proc_constructor(nm) || is_method_ref_name(nm)) && an_user_defines_method(c, nm)) return 1;
     if (nt_ref(nt, e, "receiver") < 0 && nm && (is_proc_constructor(nm)) &&
         blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && nt_ref(nt, e, "arguments") < 0)
       return 0;
     /* `method(:m)` / `obj.method(:m)` only builds the Method object, and the
        block-argument emitters lower that spelling to the method itself */
-    if (nm && sp_streq(nm, "method") && blk < 0 && !bo_may_act(nt, nt_ref(nt, e, "receiver"))) {
+    if (nm && is_method_ref_name(nm) && blk < 0 && !bo_may_act(c, nt_ref(nt, e, "receiver"))) {
       int ma = nt_ref(nt, e, "arguments"), mn = 0;
       const int *mv = ma >= 0 ? nt_arr(nt, ma, "arguments", &mn) : NULL;
       if (mn == 1 && nt_kind(nt, mv[0]) == NK_SymbolNode) return 0;
@@ -45904,19 +45931,35 @@ typedef struct {
   Compiler *c;
   Scope *sc;
   int id, seq, lread, ns, serial;
-  int stm[256];
+  /* the statements, sized for every operand the call has (bo_hoist_init) */
+  int *stm;
 } BoHoist;
+/* h for call id, with room for every statement its rewrite can make: one per
+   operand (the receiver, each argument, each pair's key and value, the block
+   expression), the block's sequence and the call itself; 0 when out of
+   memory */
+static int bo_hoist_init(BoHoist *h, Compiler *c, Scope *sc, int id, int seq, int lread, int nops) {
+  *h = (BoHoist){ c, sc, id, seq, lread, 0, 0, malloc(sizeof(int) * (size_t)nops) };
+  return h->stm != NULL;
+}
 /* One `__bo_<id>_<k> = e` statement of h; answers the read that replaces e, or
    e itself when nothing says it must be held: a sequence can reassign even a
    plain read, and so can an operand that rebinds `&s`'s s, under an operand
    that reads it (`[s]`; a literal with no read it cannot). */
 static int bo_hoist(BoHoist *h, int e) {
   NodeTable *nt = (NodeTable *)h->c->nt;
-  if (h->ns >= 255 || e < 0 || !(h->seq || bo_may_act(nt, e) || (h->lread && bo_reads_local(nt, e)))) return e;
+  if (e < 0 || !(h->seq || bo_may_act(h->c, e) || (h->lread && bo_reads_local(nt, e)))) return e;
   char tn[64];
   snprintf(tn, sizeof tn, "__bo_%s_%d", comp_node_tag(h->c, h->id), h->serial++);
   h->stm[h->ns++] = an_temp_node(nt, h->sc, tn, e);
   return an_temp_node(nt, h->sc, tn, -1);
+}
+/* Set ref `key` of `node` to the read that replaces it (bo_hoist); none
+   when nothing was held. */
+static void bo_hold_ref(BoHoist *h, int node, const char *key) {
+  NodeTable *nt = (NodeTable *)h->c->nt;
+  int from = nt_ref(nt, node, key), to = bo_hoist(h, from);
+  if (to != from) nt_node_set_ref(nt, node, key, to);
 }
 /* `recv.m(args, &expr)`: Ruby evaluates the receiver, then the arguments, then
    the block expression. The emitted C passes the block as one more function
@@ -45945,26 +45988,26 @@ static void desugar_block_arg_order(Compiler *c) {
        rebind it (`m((s = :downcase), &s)`): a block made from it keeps what
        it read, so s is read in its turn */
     int lread = nt_kind(nt, be) == NK_LocalVariableReadNode;
-    if (!seq && !lread && !bo_may_act(nt, be)) continue;
-    if (is_super && (seq || !lread || bo_may_act(nt, be))) continue;
+    if (!seq && !lread && !bo_may_act(c, be)) continue;
+    if (is_super && (seq || !lread || bo_may_act(c, be))) continue;
     int recv = nt_ref(nt, id, "receiver");
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av0 = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    int ahead = bo_may_act(nt, recv), plain = 1;
+    int ahead = bo_may_act(c, recv), plain = 1;
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av0[k]);
       if (ak == NK_BlockArgumentNode || ak == NK_ForwardingArgumentsNode) plain = 0;
-      else if (ak == NK_SplatNode) ahead |= bo_may_act(nt, nt_ref(nt, av0[k], "expression"));
+      else if (ak == NK_SplatNode) ahead |= bo_may_act(c, nt_ref(nt, av0[k], "expression"));
       else if (ak == NK_KeywordHashNode) {
         int en = 0; const int *el = nt_arr(nt, av0[k], "elements", &en);
         for (int e = 0; e < en; e++) {
           if (nt_kind(nt, el[e]) != NK_AssocNode) { plain = 0; break; }
-          ahead |= bo_may_act(nt, nt_ref(nt, el[e], "key")) | bo_may_act(nt, nt_ref(nt, el[e], "value"));
+          ahead |= bo_may_act(c, nt_ref(nt, el[e], "key")) | bo_may_act(c, nt_ref(nt, el[e], "value"));
         }
       }
-      else ahead |= bo_may_act(nt, av0[k]);
+      else ahead |= bo_may_act(c, av0[k]);
     }
-    if (lread && !seq && !bo_may_act(nt, be)) {
+    if (lread && !seq && !bo_may_act(c, be)) {
       const char *bn = nt_str(nt, be, "name");
       int rebinds = bn && rr_writes_var(nt, recv, "LocalVariable", bn);
       for (int k = 0; bn && k < an && !rebinds; k++) rebinds = rr_writes_var(nt, av0[k], "LocalVariable", bn);
@@ -45977,26 +46020,29 @@ static void desugar_block_arg_order(Compiler *c) {
     int *av = an > 0 ? malloc(sizeof(int) * (size_t)an) : NULL;
     if (an > 0 && !av) continue;
     for (int k = 0; k < an; k++) av[k] = av0[k];
-    int first = nt->count;
-    BoHoist h = { c, sc, id, seq, lread, 0, 0, { 0 } };
+    int first = nt->count, nops = 3 + an + pn;
+    for (int k = 0; k < an; k++) {
+      int en = 0;
+      if (nt_kind(nt, av[k]) == NK_KeywordHashNode) nt_arr(nt, av[k], "elements", &en);
+      nops += 2 * en;
+    }
+    BoHoist h;
+    if (!bo_hoist_init(&h, c, sc, id, seq, lread, nops)) { free(av); continue; }
     /* A sequence can reassign even a plain read: capture the receiver and
        arguments before it, inside the call's own evaluation site. */
     int nrecv = bo_hoist(&h, recv);
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
       if (ak == NK_SplatNode) {
-        int ex = nt_ref(nt, av[k], "expression");
-        int nex = bo_hoist(&h, ex);
-        if (nex != ex) nt_node_set_ref(nt, av[k], "expression", nex);
+        bo_hold_ref(&h, av[k], "expression");
       }
       else if (ak == NK_KeywordHashNode) {
         int en = 0; const int *el0 = nt_arr(nt, av[k], "elements", &en);
         int *el = malloc(sizeof(int) * (size_t)(en > 0 ? en : 1));
         for (int e = 0; e < en; e++) el[e] = el0[e];
         for (int e = 0; e < en; e++) {
-          int key = nt_ref(nt, el[e], "key"), val = nt_ref(nt, el[e], "value");
-          int nk = bo_hoist(&h, key); if (nk != key) nt_node_set_ref(nt, el[e], "key", nk);
-          int nv = bo_hoist(&h, val); if (nv != val) nt_node_set_ref(nt, el[e], "value", nv);
+          bo_hold_ref(&h, el[e], "key");
+          bo_hold_ref(&h, el[e], "value");
         }
         free(el);
       }
@@ -46009,23 +46055,24 @@ static void desugar_block_arg_order(Compiler *c) {
     if (nt_kind(nt, be) == NK_ParenthesesNode) {
       int pb = nt_ref(nt, be, "body");
       int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
-      if (ps && pn >= 2 && h.ns + pn < 255 &&
+      if (ps && pn >= 2 &&
           (nt_kind(nt, ps[pn - 1]) == NK_LambdaNode || is_proc_create(c, ps[pn - 1]))) {
         for (int k = 0; k < pn - 1; k++) h.stm[h.ns++] = ps[k];
         be = ps[pn - 1];
       }
     }
     int nbe = bo_hoist(&h, be);
-    if (h.ns == 0 || h.ns >= 255) { free(av); continue; }
+    if (h.ns == 0) { free(h.stm); free(av); continue; }
     nt_node_set_ref(nt, blk, "expression", nbe);
     if (args >= 0) nt_node_set_arr(nt, args, "arguments", av, an);
     free(av);
     int nc = bo_shallow_copy(nt, id);
-    if (nc < 0) continue;
+    if (nc < 0) { free(h.stm); continue; }
     if (recv >= 0) nt_node_set_ref(nt, nc, "receiver", nrecv);
     h.stm[h.ns++] = nc;
     int stmts = nt_new_node(nt, "StatementsNode");
     nt_node_set_arr(nt, stmts, "body", h.stm, h.ns);
+    free(h.stm);
     /* the node keeps its id, line and file: the parentheses */
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0),
               col = nt_int(nt, id, "node_col", 0);

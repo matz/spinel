@@ -5535,6 +5535,11 @@ static TyKind masgn_runtime_target_ty(Compiler *c, int mw, int is_rest) {
     TyKind elems[16];
     int en = multi_return_elem_types(c, value, elems, 16);
     if (en == 0) en = map_literal_elem_types(c, value, elems, 16);
+    /* (a call answering a tuple of that many values is typed element by
+       element whatever each is: one of them boxed, an Integer under
+       --int-overflow=promote, leaves the others their own kinds) */
+    const int *els = NULL;
+    if (en != ln && multi_return_elem_nodes(c, value, &els) == ln) en = ln;
     if (en == ln) return TY_UNKNOWN;
   }
   TyKind st = infer_type(c, value);

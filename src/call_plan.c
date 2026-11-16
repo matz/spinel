@@ -7390,8 +7390,8 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
        class can never be the receiver of this poly value anyway. */
     /* A yielding candidate has a proc form emitted for exactly this
        dispatch (#3399); it is as callable as any other symbol here. */
-    { char zexp[600]; int rdc0 = -1;
-      if (poly_arm_refuses_none(c, mi, zexp, sizeof zexp) && !comp_reader_in_chain(c, k, name, &rdc0)) {
+    { char zexp[600];
+      if (poly_arm_refuses_none(c, mi, zexp, sizeof zexp) && !call_attr_target(c, -1, k, name, CT_ATTR, NULL)) {
         cpoly_add(p, &cap, PA_ARITY, k, mi, TY_UNKNOWN, PC_VOID);
         continue;
       } }
@@ -7420,8 +7420,9 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
       p->arm[p->n - 1].def = (short)defcls;
       continue;
     }
-    int rdcls = -1;
-    if (comp_reader_in_chain(c, k, name, &rdcls)) {
+    MethodLookup rml = { .def_class = -1 };
+    if (call_attr_target(c, -1, k, name, CT_ATTR, &rml)) {
+      int rdcls = rml.def_class;
       const char *rn = comp_resolve_alias(c, k, name);
       char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", rn);
       int ivx = comp_ivar_index(&c->classes[rdcls], ivn);

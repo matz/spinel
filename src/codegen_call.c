@@ -2988,7 +2988,7 @@ int poly_ostruct_member_call(Compiler *c, int id) {
 static int poly_name_user_claimed_walk(Compiler *c, const char *name, int argc) {
   for (int k = 0; k < c->nclasses; k++)
     if (comp_poly_arm_defines_n(c, k, name, argc) ||
-        (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL))) return 1;
+        (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL))) return 1;
   return 0;
 }
 /* The answer per name and arity, kept as user_defines_or_reads keeps its
@@ -24194,7 +24194,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
       /* a generated reader has no method entry, but the switch has its arm
          (`[lobby].first.members`), so its visibility and an `undef` of it
          are checked here, as a method's are */
-      if (!comp_reader_in_chain(c, k, vnm, NULL)) continue;
+      if (!call_attr_target(c, -1, k, vnm, CT_ATTR | CT_SHARED, NULL)) continue;
       /* undefined unless a class below the `undef` declares the reader
          again, or an alias of that name (comp_is_undeffed_in_chain stops
          only at a method; a reader is not inherited past an `undef`, so a

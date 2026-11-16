@@ -17046,7 +17046,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user; kk++)
       if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-          (!c->classes[kk].is_native_class && comp_reader_in_chain(c, kk, name, NULL)) ||
+          (!c->classes[kk].is_native_class && call_attr_target(c, -1, kk, name, CT_ATTR | CT_SHARED, NULL)) ||
           call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
     if (!has_user && sp_streq(name, "polar")) {
       buf_puts(b, "sp_poly_polar("); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; }
@@ -17132,7 +17132,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user; kk++) {
         if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-            (!c->classes[kk].is_native_class && comp_reader_in_chain(c, kk, name, NULL))) has_user = 1;
+            (!c->classes[kk].is_native_class && call_attr_target(c, -1, kk, name, CT_ATTR | CT_SHARED, NULL))) has_user = 1;
         if (nf && call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_cm = 1;
       }
       /* A class method of next_float / prev_float is a boxed Class's: the
@@ -19913,7 +19913,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user; kk++)
       if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-          (!c->classes[kk].is_native_class && comp_reader_in_chain(c, kk, name, NULL)) ||
+          (!c->classes[kk].is_native_class && call_attr_target(c, -1, kk, name, CT_ATTR | CT_SHARED, NULL)) ||
           call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
     if (!has_user && argc == 0) {
       buf_puts(b, "sp_poly_cycle("); emit_boxed(c, recv, b); buf_puts(b, ")");

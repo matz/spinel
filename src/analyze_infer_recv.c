@@ -1614,7 +1614,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     int own = oci >= 0 && call_target(c, id, oci, name, 0, NULL) >= 0;
     for (int k = 0; k < c->nclasses && !own && !an_builtin_only_p(); k++)
       if (comp_poly_arm_defines_n(c, k, name, argc) ||
-          (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ||
+          (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL)) ||
           call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
     if (!own) { *out = TY_ENUMERATOR; return 1; }
   }
@@ -1656,7 +1656,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     int own = 0;
     for (int k = 0; k < c->nclasses && !own && !an_builtin_only_p(); k++)
       if (comp_poly_arm_defines_n(c, k, name, argc) ||
-          (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ||
+          (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL)) ||
           call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
     if (!own) { *out = TY_POLY; return 1; }
   }
@@ -1672,7 +1672,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     int own = 0;
     for (int k = 0; k < c->nclasses && !own && !an_builtin_only_p(); k++)
       if (comp_poly_arm_defines_n(c, k, name, argc) ||
-          (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ||
+          (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL)) ||
           call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) own = 1;
     if (!own) {
       *out = (is_rectangular_alias(name) || sp_streq(name, "polar")) ? TY_POLY_ARRAY : TY_POLY;

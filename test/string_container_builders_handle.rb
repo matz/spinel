@@ -34,8 +34,9 @@ p w.values_at(2, 0)[0].equal?(w[2]), w.fetch_values(1)[0].equal?(w[1])
 p w.cycle.first(4)[3].equal?(w[0])
 p w.take_while { |e| e != "c" }[1].equal?(w[1])
 u = [+"k", +"k", +"j"]
+first = u[0]
 u.uniq!
-p u.size, u[0].equal?(u[0])
+p u.size, u[0].equal?(first)
 x = +"val"
 p [["key", x]].to_h["key"].equal?(x)
 S = Struct.new(:a)

@@ -8590,7 +8590,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     }
     if (pt == TY_EXCEPTION) {
       /* an exception scrutinee matches by name up its class chain (#2759) */
-      int eci = comp_class_index(c, cn2);
+      int eci = aliased ? const_node_class_index(c, pat) : -1;
       const char *en = eci >= 0 ? class_ruby_name(c, eci) : NULL;
       buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t,
                  aliased ? (en ? en : cn2) : exc_when_cls_name(c, pat, cq, sizeof cq));

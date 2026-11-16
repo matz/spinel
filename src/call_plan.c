@@ -979,7 +979,7 @@ static void cplan_resolve_poly(Compiler *c, int call, const char *name, CallPlan
 static void cplan_descendant_call(Compiler *c, int call, int cid, const char *name, int cmeth, CallPlan *p) {
   int nd = 0;
   const int *ds = comp_descendants(c, cid, &nd);
-  int reader = !cmeth && comp_reader_in_chain(c, cid, name, NULL);
+  int reader = !cmeth && call_attr_target(c, -1, cid, name, CT_ATTR, NULL);
   for (int i = 0; i < nd; i++) {
     int mi = call_target(c, call, ds[i], name, reader ? 0 : CT_OWN | (cmeth ? CT_CMETHOD : 0), NULL);
     if (mi < 0) continue;
@@ -8865,8 +8865,8 @@ int cplan_class_answers_ahead_of_object(Compiler *c, int call, int k, const char
   cplan_method_vis(c, call, k, name, 0, &at);
   if (at >= 0 && at != oc) return 1;
   char base[256];
-  return comp_reader_in_chain(c, k, name, NULL) ||
-         (setter_base_name(name, base, sizeof base) && comp_writer_in_chain(c, k, base, NULL)) ||
+  return call_attr_target(c, -1, k, name, CT_ATTR, NULL) ||
+         (setter_base_name(name, base, sizeof base) && call_attr_target(c, -1, k, base, CT_ATTR | CT_WRITER, NULL)) ||
          cplan_has_method_missing(c, call, k, 0);
 }
 /* See call_plan.h. */

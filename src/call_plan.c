@@ -1927,7 +1927,7 @@ static int ver_kern_by_self(Compiler *c, const VerKernSelf *x, int (*arm)(Compil
   int *is = malloc(sizeof *is * (size_t)(nd > 0 ? nd : 1)), *then = malloc(sizeof *then * (size_t)(nd > 0 ? nd : 1));
   if (!is || !then) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < nd; i++) {
-    int t = arm(c, x, ds[i]);
+    int t = c->classes[ds[i]].is_singleton_of ? -1 : arm(c, x, ds[i]);
     if (t >= 0 && (is[n] = disp_self_class_is(c, ds[i])) >= 0) then[n++] = t;
   }
   if (n) els = disp_case((NodeTable *)c->nt, is, then, n, els);

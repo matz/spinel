@@ -248,3 +248,30 @@ class SentNew
 end
 show { sent.t }
 show { psent.t }
+
+# an instance with a singleton method answers as the other instances of its
+# class do, below the holder and the holder's own, with or without the
+# holder's method_missing
+class SgHold < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class SgSub < SgHold; end
+class SgMiss < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def method_missing(n, *a) = [:sg_mm, n]
+  def t = respond_to_missing?(:x, false)
+end
+sg_plain = SgSub.new
+sg_sub = SgSub.new
+def sg_sub.x = 1
+sg_hold = SgHold.new
+def sg_hold.x = 1
+sg_miss = SgMiss.new
+def sg_miss.x = 1
+show { sg_plain.t }
+show { sg_sub.t }
+show { sg_hold.t }
+show { SgHold.new.t }
+show { sg_miss.t }
+show { SgMiss.new.t }

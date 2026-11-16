@@ -34890,6 +34890,14 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
      range does; the probe below has no reading for them (#3619) */
   if (!resolved && recv >= 0 &&
       (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE)) return -1;
+  /* an Enumerator slot may hold a chain or a product, which CRuby makes
+     without next, peek, next_values, peek_values and feed: the site reads
+     which one it holds (emit_respond_to's Enumerator arm) */
+  if (!resolved && recv >= 0 && rt == TY_ENUMERATOR) {
+    static const char *const iterm[] = {
+      "next", "peek", "next_values", "peek_values", "feed", NULL };
+    for (int u = 0; iterm[u]; u++) if (sp_streq(qm, iterm[u])) return -1;
+  }
   if (!resolved && recv >= 0 && rt == TY_PROC) {
     static const char *const procm[] = {
       "call", "()", "[]", "yield", "arity", "lambda?", "curry",

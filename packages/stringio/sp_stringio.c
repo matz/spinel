@@ -451,7 +451,7 @@ static sp_RbVal sio_readlines_n(sp_StringIO *s, const sp_RbVal *a, int n) {SP_GC
   sp_PolyArray *r = sp_PolyArray_new();
   SP_GC_ROOT(r);
   const char *l;
-  while ((l = sio_getline(s, sep, limit, chomp)) != NULL) sp_PolyArray_push(r, sp_box_str(l));
+  while ((l = sio_getline(s, sep, limit, chomp)) != NULL) sp_PolyArray_push(r, sp_box_str_new(l));
   return sp_box_poly_array(r);
 }
 sp_RbVal sp_StringIO_readlines_a1(sp_StringIO *s, sp_RbVal a) {SP_GC_ROOT(s);SP_GC_ROOT_RBVAL(a); return sio_readlines_n(s, &a, 1); }
@@ -479,7 +479,7 @@ sp_RbVal sp_StringIO_readlines(sp_StringIO *s) {SP_GC_ROOT(s);
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
   const char *l;
-  while ((l = sp_StringIO_gets(s)) != NULL) sp_PolyArray_push(a, sp_box_str(l));
+  while ((l = sp_StringIO_gets(s)) != NULL) sp_PolyArray_push(a, sp_box_str_new(l));
   return sp_box_poly_array(a);
 }
 

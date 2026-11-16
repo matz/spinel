@@ -14515,13 +14515,13 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
         TyKind kt3 = comp_ntype(c, argv[i]);
         switch (kt3) {
         case TY_SYMBOL:
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref_name(_t%d, ", at, mt);
+          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str_new(sp_MatchData_aref_name(_t%d, ", at, mt);
           if (hold) buf_printf(b, "_t%d", held[i]);
           else { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[i], b); buf_puts(b, ")"); }
           buf_puts(b, ")));");
           break;
         case TY_STRING:
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref_name(_t%d, ", at, mt);
+          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str_new(sp_MatchData_aref_name(_t%d, ", at, mt);
           if (hold) buf_printf(b, "_t%d", held[i]);
           else emit_expr(c, argv[i], b);
           buf_puts(b, ")));");
@@ -14549,7 +14549,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
                         " : ((_t%d.last < 0 ? _t%d.last + _t%d : _t%d.last) - (_t%d.excl ? 1 : 0));",
                      rhi, rk, rn, rk, rk, rn, rk, rk);
           buf_printf(b, " for (sp_int _t%d = _t%d; _t%d <= _t%d; _t%d++)"
-                        " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref(_t%d, _t%d)));",
+                        " sp_PolyArray_push(_t%d, sp_box_nullable_str_new(sp_MatchData_aref(_t%d, _t%d)));",
                      rj, rlo, rj, rhi, rj, at, mt, rj);
           break;
         }
@@ -14561,7 +14561,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, " sp_RbVal _t%d = %s", kt, needle_needs_deref(c, argv[i]) ? "sp_poly_strbuf_deref(" : "");
           if (hold) buf_printf(b, "_t%d", held[i]);
           else emit_expr(c, argv[i], b); if (needle_needs_deref(c, argv[i])) buf_puts(b, ")");
-          buf_printf(b, "; sp_PolyArray_push(_t%d, sp_box_nullable_str("
+          buf_printf(b, "; sp_PolyArray_push(_t%d, sp_box_nullable_str_new("
                         "_t%d.tag == SP_TAG_SYM ? sp_MatchData_aref_name(_t%d, sp_sym_to_s((sp_sym)_t%d.v.i)) :"
                         " _t%d.tag == SP_TAG_STR ? sp_MatchData_aref_name(_t%d, _t%d.v.s) :"
                         " sp_MatchData_aref(_t%d, sp_poly_arg_int_chk(_t%d))));",
@@ -14569,7 +14569,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
           break;
         }
         default:
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref(_t%d, ", at, mt);
+          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str_new(sp_MatchData_aref(_t%d, ", at, mt);
           if (hold) buf_printf(b, "_t%d", held[i]);
           else emit_int_expr(c, argv[i], b);
           buf_puts(b, ")));");

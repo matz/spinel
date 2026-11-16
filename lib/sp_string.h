@@ -390,6 +390,9 @@ static inline sp_RbVal sp_box_str_new(const char *v) {
   return sp_box_str(v);
 }
 
+/* sp_box_str_new for a String that may be nil (NULL): the nil box, else the new String's handle box */
+static inline sp_RbVal sp_box_nullable_str_new(const char *v) { return v ? sp_box_str_new(v) : sp_box_nil(); }
+
 /* A new String a call answers in bytes it may share with others (Integer#chr
    answers a one-character table's), boxed for something that keeps the box:
    a new handle over a copy of them, which an append through any copy of the

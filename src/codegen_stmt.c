@@ -9419,7 +9419,7 @@ static int emit_md_deconstruct_keys(Buf *b, int indent, const char *md) {
     " const char *_dnm = re_named_name((%s)->pat, _di, NULL);"
     /* a name repeated across branches reads the group that matched */
     " if (_dnm) sp_SymPolyHash_set(_t%d, sp_sym_intern(_dnm),"
-    " sp_box_nullable_str(sp_MatchData_aref((%s), sp_re_name_group((%s)->pat, _dnm, (%s)->caps, (%s)->ncap * 2)))); }\n",
+    " sp_box_nullable_str_new(sp_MatchData_aref((%s), sp_re_name_group((%s)->pat, _dnm, (%s)->caps, (%s)->ncap * 2)))); }\n",
     md, md, md, dk, md, md, md, md);
   return dk;
 }

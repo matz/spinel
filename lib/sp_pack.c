@@ -1278,7 +1278,7 @@ else {
         char *s = sp_str_alloc(z);
         memcpy(s, src, z); s[z] = 0; sp_str_set_len(s, z);
         sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
-        sp_PolyArray_push(out, sp_box_str(s));
+        sp_PolyArray_push(out, sp_box_str_new(s));
         off += z;
         if (off < slen && str[off] == 0) off++;
       }
@@ -1298,7 +1298,7 @@ else if (spec == 'Z') {
         }
         sp_str_set_len(s, real);
         sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
-        sp_PolyArray_push(out, sp_box_str(s));
+        sp_PolyArray_push(out, sp_box_str_new(s));
         off += take;
       }
       continue;
@@ -1317,7 +1317,7 @@ else if (spec == 'Z') {
         s[i] = "0123456789abcdef"[nib];
       }
       s[n] = 0; sp_str_set_len(s, n);
-      sp_PolyArray_push(out, sp_box_str(s));
+      sp_PolyArray_push(out, sp_box_str_new(s));
       off += (n + 1) / 2;
       continue;
     }
@@ -1333,7 +1333,7 @@ else if (spec == 'Z') {
         s[i] = (char)('0' + bit);
       }
       s[n] = 0; sp_str_set_len(s, n);
-      sp_PolyArray_push(out, sp_box_str(s));
+      sp_PolyArray_push(out, sp_box_str_new(s));
       off += (n + 7) / 8;
       continue;
     }
@@ -1345,7 +1345,7 @@ else if (spec == 'Z') {
       char *s = (spec == 'm') ? uk_b64_decode_strict(str + off, avail, count == 0)
                               : uk_qp_decode(str + off, avail);
       sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
-      sp_PolyArray_push(out, sp_box_str(s));
+      sp_PolyArray_push(out, sp_box_str_new(s));
       off = slen;
       continue;
     }
@@ -1371,7 +1371,7 @@ else if (spec == 'Z') {
       }
       s[o] = 0; sp_str_set_len(s, o);
       sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
-      sp_PolyArray_push(out, sp_box_str(s));
+      sp_PolyArray_push(out, sp_box_str_new(s));
       off = slen;
       continue;
     }

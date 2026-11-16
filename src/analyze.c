@@ -13711,7 +13711,7 @@ static int desugar_class_literal_ctors(Compiler *c) {
     if (nt_argv_has_splat(nt, argv, argc)) continue;
     int ci = const_node_class_index(c, recv);
     if (sp_streq(rn, "Array") && sp_streq(mn, "[]")) {
-      if (ci >= 0 && call_target(c, -1, ci, "[]", CT_CMETHOD, NULL) >= 0) continue;
+      if (ci >= 0 && call_target(c, id, ci, "[]", CT_CMETHOD, NULL) >= 0) continue;
       int els[64];
       if (argc > (int)(sizeof els / sizeof els[0])) continue;
       for (int k = 0; k < argc; k++) els[k] = argv[k];
@@ -13721,7 +13721,7 @@ static int desugar_class_literal_ctors(Compiler *c) {
     else if (sp_streq(rn, "Range") && sp_streq(mn, "new") && argc != 2 && argc != 3) {
       /* any other count: the arguments, then CRuby's ArgumentError. A
          keyword hash may come out empty, so its count is the run time's. */
-      if (ci >= 0 && call_target(c, -1, ci, "new", CT_CMETHOD, NULL) >= 0) continue;
+      if (ci >= 0 && cplan_user_new(c, id, ci) >= 0) continue;
       if (argc > 15 || nt_argv_has(nt, argv, argc, NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
       int body[16];
       for (int k = 0; k < argc; k++) body[k] = argv[k];
@@ -13760,7 +13760,7 @@ static int desugar_class_literal_ctors(Compiler *c) {
       }
     }
     else if (sp_streq(rn, "Range") && sp_streq(mn, "new")) {
-      if (ci >= 0 && call_target(c, -1, ci, "new", CT_CMETHOD, NULL) >= 0) continue;
+      if (ci >= 0 && cplan_user_new(c, id, ci) >= 0) continue;
       /* the exclusive flag is part of the literal's shape, so it has to be
          readable here */
       int excl = 0;

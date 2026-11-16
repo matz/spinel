@@ -377,8 +377,6 @@ typedef struct{sp_strelem*data;sp_int len;sp_int cap;int32_t frozen;int32_t head
 /* (each evaluates its operand once: `SP_SEBOX(sp_StrArray_pop_e(a))` popped
    twice and boxed the second, empty, answer) */
 #define SP_SEB(e) ({ struct sp_String_s *_seb_e = (e); _seb_e ? _seb_e->data : (const char *)NULL; })
-/* the same for a header ahead of sp_string.h (sp_string.c) */
-struct sp_String_s *sp_strelem_of(const char *b);
 #define SP_SEBOX(e) ({ struct sp_String_s *_sebox_e = (e); _sebox_e ? sp_box_obj((void *)_sebox_e, SP_BUILTIN_STRBUF) : sp_box_nil(); })
 
 /* ---- Non-poly typed hashes ---- */

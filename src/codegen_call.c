@@ -13671,6 +13671,8 @@ int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp,
                              int hoisted, int rt2, Buf *b) {
   int kmi = cplan_user_new(c, id, ci);
   if (kmi < 0) return 0;
+  /* (a class the call cannot reach has no arm of its own `new`) */
+  if (cls_fact_excludes_class_value(c, nt_ref(c->nt, id, "receiver"), ci) || !dynamic_new_may_reach(c, id, ci)) return 1;
   Scope *ks = &c->scopes[kmi];
   if (!scope_has_callable_symbol(c, kmi)) return 1;   /* no symbol: the default raises */
   /* A `self.new` that YIELDS has no proc parameter to hand the block to --

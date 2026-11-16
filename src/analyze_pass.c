@@ -12466,7 +12466,9 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (!static_cls && infer_type(c, recv) == TY_CLASS) {
         int bound_any = 0;
         for (int k = 0; k < c->nclasses; k++) {
-          int cmi = cplan_cmethod_target(c, id, k, name, CT_OWN);
+          /* (a class the call cannot reach binds nothing) */
+          int cmi = is_new_name(name) && (cls_fact_excludes_class_value(c, recv, k) || !dynamic_new_may_reach(c, id, k)) ? -1
+                  : cplan_cmethod_target(c, id, k, name, CT_OWN);
           if (cmi >= 0) { changed |= bind_call_params(c, id, cmi); bound_any = 1; }
         }
         if (bound_any) continue;

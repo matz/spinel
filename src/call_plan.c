@@ -4127,7 +4127,8 @@ int cplan_class_value_allocate(Compiler *c, int id) {
 }
 /* See call_plan.h. */
 int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name, unsigned flags) {
-  return is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD | flags, NULL);
+  if (!is_new_name(name)) return call_target(c, id, ci, name, CT_CMETHOD | flags, NULL);
+  return (flags & CT_OWN) && call_target(c, -1, ci, name, CT_CMETHOD | CT_OWN, NULL) < 0 ? -1 : cplan_user_new(c, id, ci);
 }
 /* Is call id a `new` (or a record class's `[]`) on a record class whose
    target the record cannot place (user_new_at)? The class is the

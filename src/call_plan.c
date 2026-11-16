@@ -1534,8 +1534,8 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
      override answering something other than a String cannot ride the
      const char * helper, so call it directly (#3868) */
   if (own < 0 && is_message_name(name)) {
-    int mi8 = comp_method_in_chain(c, xcm, "message", NULL);
-    if (mi8 < 0) mi8 = comp_method_in_chain(c, xcm, "to_s", NULL);
+    int mi8 = call_target(c, -1, xcm, "message", CT_METHODS | CT_SHARED, NULL);
+    if (mi8 < 0) mi8 = call_target(c, -1, xcm, "to_s", CT_METHODS | CT_SHARED, NULL);
     if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
         (TyKind)c->scopes[mi8].ret != TY_UNKNOWN)
       own = mi8;
@@ -1546,7 +1546,7 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
     int sub_str = 0, sub_other = 0;
     for (int k = 0; k < c->nclasses; k++) {
       if (k == xcm || !is_descendant(c, k, xcm)) continue;
-      int ko = comp_method_in_class(c, k, "to_s");
+      int ko = call_target(c, -1, k, "to_s", CT_OWN | CT_SHARED, NULL);
       if (ko < 0) continue;
       if ((TyKind)c->scopes[ko].ret == TY_STRING) sub_str = 1;
       else sub_other = 1;
@@ -5637,7 +5637,7 @@ CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {
       builtin_object_method_known(name) || is_kernel_module_function(name) ||
       (is_comparable_module_method(name) && class_is_comparable(c, cid)) ||
       (name_is_enumerable_module_method(name) && class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0)) ||
-      comp_method_in_chain(c, cid, METHOD_MISSING_NAME, NULL) >= 0 || an_user_defines_method(c, METHOD_MISSING_NAME))
+      call_target(c, -1, cid, METHOD_MISSING_NAME, CT_METHODS | CT_SHARED, NULL) >= 0 || an_user_defines_method(c, METHOD_MISSING_NAME))
     return CM_NONE;
   for (int k = cid, d = 0; k >= 0 && d <= c->nclasses; k = c->classes[k].parent, d++)
     if (c->classes[k].is_native_class) return CM_NONE;
@@ -5942,8 +5942,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
     int nd = 0;
     comp_descendants(c, cid, &nd);
     if (nd == 1) {
-      int mi = is_to_s_name(name) ? -1 : comp_method_in_chain(c, cid, "message", NULL);
-      if (mi < 0) mi = comp_method_in_chain(c, cid, "to_s", NULL);
+      int mi = is_to_s_name(name) ? -1 : call_target(c, -1, cid, "message", CT_METHODS | CT_SHARED, NULL);
+      if (mi < 0) mi = call_target(c, -1, cid, "to_s", CT_METHODS | CT_SHARED, NULL);
       if (mi >= 0) out[0] = mi;
       return mi >= 0;
     }
@@ -5956,8 +5956,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
       int k = cs[i].cls;
       if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) continue;
       if (cid >= 0 && k != cid && !is_descendant(c, k, cid)) continue;
-      int mi = is_to_s_name(name) ? -1 : comp_method_in_chain(c, k, "message", NULL);
-      if (mi < 0) mi = comp_method_in_chain(c, k, "to_s", NULL);
+      int mi = is_to_s_name(name) ? -1 : call_target(c, -1, k, "message", CT_METHODS | CT_SHARED, NULL);
+      if (mi < 0) mi = call_target(c, -1, k, "to_s", CT_METHODS | CT_SHARED, NULL);
       if (mi < 0) continue;
       int j = 0;
       while (j < n && out[j] != mi) j++;
@@ -6491,12 +6491,11 @@ static int cplan_own_define_method_answers(Compiler *c, int host) {
   int k = hs->class_id, kinds = an_user_define_method_kinds(c);
   if (k < 0 || k >= c->nclasses || k == c->toplevel_class || (kinds & UDM_ANY_SELF)) return 1;
   if (!(kinds & (hs->is_cmethod ? UDM_CLASS_SELF : UDM_INSTANCE_SELF))) return 0;
-  if (hs->is_cmethod ? comp_cmethod_in_chain(c, k, "define_method", NULL) >= 0
-                     : comp_method_in_chain(c, k, "define_method", NULL) >= 0) return 1;
+  if (call_target(c, -1, k, "define_method", (hs->is_cmethod ? CT_CMETHOD : CT_METHODS) | CT_SHARED, NULL) >= 0) return 1;
   for (int j = 0; hs->is_cmethod && j < c->nclasses; j++) {
     const char *n = c->classes[j].name;
-    if (n && (sp_streq(n, "Module") || sp_streq(n, "Class")) && is_builtin_reopen(n) &&
-        comp_method_in_class(c, j, "define_method") >= 0) return 1;
+    if (n && (is_module_const_name(n) || is_class_const_name(n)) && is_builtin_reopen(n) &&
+        call_target(c, -1, j, "define_method", CT_OWN | CT_SHARED, NULL) >= 0) return 1;
   }
   return 0;
 }
@@ -6512,7 +6511,7 @@ int cplan_define_method_early(Compiler *c, int id) {
   if (dm < 0 || dm >= c->nscopes) return 1;
   const Scope *ds = &c->scopes[dm];
   if (!ds->name || ds->class_id < 0 || object_method_name(ds->name)) return 1;
-  int dc = -1, mi = comp_method_in_chain(c, ds->class_id, ds->name, &dc);
+  int mi = call_target(c, -1, ds->class_id, ds->name, CT_METHODS | CT_SHARED, NULL);
   if (mi >= 0 && mi != dm) return 1;
   for (int t = 0; t < c->nscopes; t++) {
     const Scope *ts = &c->scopes[t];

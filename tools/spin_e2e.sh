@@ -32,7 +32,7 @@ expect "scaffold run" "Hello from app" "$("$SPIN" run 2>&1 | tail -1)"
 # `[package] allocator` links as a bare -l<name>, which the linker looks for
 # only in its default directories; Homebrew's jemalloc on Apple Silicon lives
 # in /opt/homebrew/lib, outside them, and failed to link although installed.
-# spin puts pkg-config's -L directories on LIBRARY_PATH for the compile. A
+# spin puts pkg-config's -L directories into its flags as --link -L<dir>. A
 # stand-in library in a directory no linker searches, and a stand-in
 # pkg-config that knows it, make the case portable. The directory has a space
 # in its name, which pkg-config writes escaped ("lib\ dir"), and the build
@@ -59,6 +59,27 @@ fi
 PATH="$WORK/alloc/bin:$PATH" LIBRARY_PATH="$WORK/alloc/it's elsewhere" "$SPIN" build >/dev/null 2>&1 ||
   fail "allocator: not found in the directory pkg-config reports"
 expect "allocator run" "Hello from app" "$(./build/bin/app 2>&1 | tail -1)"
+# `spin flags` carries the directory beside the library, so a driver that
+# compiles with the printed flags links what `spin build` links.
+PATH="$WORK/alloc/bin:$PATH" "$SPIN" flags > "$WORK/alloc/flags.out" 2>/dev/null
+grep -q -- "--link -lspine2efakealloc --link '-L$WORK/alloc/lib dir'" "$WORK/alloc/flags.out" ||
+  fail "allocator: spin flags does not carry the library's directory: $(cat "$WORK/alloc/flags.out")"
+SPINEL_BIN=$(dirname "$SPIN")/spinel
+eval "env -u LIBRARY_PATH \"\$SPINEL_BIN\" bin/app.rb $(cat "$WORK/alloc/flags.out") -o \"\$WORK/alloc/driver\"" >/dev/null 2>&1 ||
+  fail "allocator: a driver compiling with spin flags did not link"
+expect "allocator driver run" "Hello from app" "$("$WORK/alloc/driver" 2>&1 | tail -1)"
+# A directory of plain path characters is printed bare: $(spin flags) splits it.
+ln -s "$WORK/alloc/lib dir" "$WORK/alloc/plainlib"
+cat > "$WORK/alloc/bin/pkg-config" <<EOF
+#!/bin/sh
+[ "\$1 \$2" = "--libs-only-L spine2efakealloc" ] && { echo "-L$WORK/alloc/plainlib"; exit 0; }
+exit 1
+EOF
+env -u LIBRARY_PATH "$SPINEL_BIN" bin/app.rb $(PATH="$WORK/alloc/bin:$PATH" "$SPIN" flags 2>/dev/null) -o "$WORK/alloc/driver2" >/dev/null 2>&1 ||
+  fail "allocator: the words of spin flags did not link with a plain directory"
+# The directory is the build host's: a pack does not carry it.
+PATH="$WORK/alloc/bin:$PATH" "$SPIN" pack >/dev/null 2>&1 || fail "allocator: pack failed"
+if grep -rq "alloc/plainlib" build/pack; then fail "allocator: the pack holds the host's library directory"; fi
 # Not a library name: refused before anything reaches a shell.
 mv spin.toml.orig spin.toml
 cp spin.toml spin.toml.orig

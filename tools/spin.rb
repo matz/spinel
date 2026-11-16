@@ -1480,6 +1480,11 @@ def spin_flags(prj)
   # slower than what was asked for. Ordering is free -- this is a whole -l,
   # not an object the earlier ones resolve symbols against.
   f += " --link -l" + prj.allocator if prj.allocator != "" && prj.allocator != "system"
+  # Where that library is, beside it: the directory travels with the library
+  # it qualifies, so a driver that compiles with `spin flags` links what
+  # `spin build` links. A directory of plain path characters is printed bare,
+  # which a `$(spin flags)` splits correctly; any other is one quoted word.
+  allocator_library_dirs(prj).each { |d| f += " --link " + sh_word("-L" + d) }
   f
 end
 
@@ -1492,7 +1497,7 @@ def compile_cmd(prj, entry, out, extra)
   # spin (it always compiles release).
   cmd += " --debug" if ENV["SPIN_DEBUG"].to_s != ""
   cmd += " -o #{out}"
-  allocator_library_path(prj) + cmd
+  cmd
 end
 
 # The allocator links as a bare -l<name> (spin_flags), which the linker looks
@@ -1500,16 +1505,17 @@ end
 # always among them: Homebrew on Apple Silicon installs jemalloc under
 # /opt/homebrew/lib, which Apple's ld does not search, so a manifest naming a
 # library that IS installed failed with "library 'jemalloc' not found".
-# pkg-config knows where it is; its -L directories go on LIBRARY_PATH, which
-# gcc and clang both read, for the compile. "" when the manifest names no
-# allocator, pkg-config is not installed, or it does not know the library --
-# the link then fails as before, which is still the intended answer for an
-# allocator that is genuinely missing. Only the build's own link sees it:
-# `spin pack` writes no host path into what it packs.
-def allocator_library_path(prj)
+# pkg-config knows where it is; its -L directories go into the flags as
+# --link -L<dir>. Empty when the manifest names no allocator, pkg-config is
+# not installed, or it does not know the library -- the link then fails as
+# before, which is still the intended answer for an allocator that is
+# genuinely missing. Only the link sees them: the compiler leaves a -L out of
+# its build report, so `spin pack` writes no host path into what it packs.
+def allocator_library_dirs(prj)
+  dirs = []
   lib = prj.allocator
-  return "" if lib == "" || lib == "system"
-  return "" if which("pkg-config") == ""
+  return dirs if lib == "" || lib == "system"
+  return dirs if which("pkg-config") == ""
   tmp = ENV["TMPDIR"].to_s
   tmp = "/tmp" if tmp == ""
   out = File.join(tmp, "spin-pkg-config-#{Process.pid}.out")
@@ -1518,13 +1524,21 @@ def allocator_library_path(prj)
   _, status = Process.waitpid2(pid)
   flags = File.exist?(out) ? File.read(out) : ""
   File.unlink(out) if File.exist?(out)
-  return "" unless status.success?
-  dirs = []
+  return dirs unless status.success?
   pkg_config_words(flags).each { |f| dirs.push(f[2, f.length - 2]) if f.start_with?("-L") && f.length > 2 }
-  return "" if dirs.empty?
-  prev = ENV["LIBRARY_PATH"].to_s
-  dirs.push(prev) if prev != ""
-  "LIBRARY_PATH=" + sh_single_quote(dirs.join(":")) + " "
+  dirs
+end
+
+# s as one shell word: bare when every character is a plain path character,
+# single-quoted otherwise.
+def sh_word(s)
+  plain = s != ""
+  s.each_char do |c|
+    ok = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") ||
+         c == "_" || c == "." || c == "+" || c == "-" || c == "/" || c == ":" || c == "," || c == "@" || c == "="
+    plain = false unless ok
+  end
+  plain ? s : sh_single_quote(s)
 end
 
 # A name -l takes: letters, digits and _ . + -. Anything else in

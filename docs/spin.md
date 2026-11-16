@@ -361,10 +361,11 @@ comes to differ from another's without anyone noticing.
 
 Installed but outside the linker's default directories is a different case:
 Homebrew on Apple Silicon puts jemalloc in `/opt/homebrew/lib`, which Apple's
-linker does not search. When `pkg-config` knows the library, `spin` puts the
-directories it reports on `LIBRARY_PATH` for the build, so such a library links
-without any setup. `spin pack` writes no host path into what it packs; the
-build host's own linker and `LIBRARY_PATH` find it there.
+linker does not search. When `pkg-config` knows the library, `spin` adds the
+directories it reports to its flags as `--link -L<dir>`, so such a library
+links without any setup, under `spin build` and under a driver that compiles
+with `spin flags` alike. `spin pack` writes no host path into what it packs;
+the build host's own linker and `LIBRARY_PATH` find it there.
 
 On two Rails-derived applications compiled by spinel, `"jemalloc"` was worth
 +58% on one OS worker and +25% on twelve for a 420 KB page, and +22% and +59%

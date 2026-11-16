@@ -1669,6 +1669,10 @@ int main(int argc, char **argv) {
      right. --link -l flags go after -lm below, where DSOs belong. */
   for (int li = 0; li < n_link_extra; li++) {
     if (strncmp(link_extra[li], "-l", 2) == 0) continue;
+    /* --link -L<dir>: where a --link -l library is searched for. It is a
+       fact about this host, so the build report does not carry it: a pack
+       made from the report holds no host path. */
+    if (strncmp(link_extra[li], "-L", 2) == 0) { s_add_arg(&cmd, link_extra[li]); continue; }
     /* A threaded program needs the package's threaded object for the same
        reason the runtime archive has one: an object built without
        -DSP_THREADS reads the runtime's per-worker globals as non-TLS and the

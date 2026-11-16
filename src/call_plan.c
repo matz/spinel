@@ -6626,7 +6626,11 @@ static int limit_exempt(Compiler *c, int id, int lx) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   switch (lx) {
-  case LX_NAME: return diag_user_defines(c, id, name);
+  case LX_NAME:
+    /* a `refine` with no receiver that runs on main is no Module#refine (main has none: NoMethodError), as
+       scan_prologue_features reads it: the limit is for a refine a module can run */
+    return diag_user_defines(c, id, name) ||
+           (sp_streq(name, "refine") && nt_ref(nt, id, "receiver") < 0 && cplan_runs_on_main(c, id));
   case LX_RECV_CMETHOD: {
     int recv = nt_ref(nt, id, "receiver");
     NodeKind rk = nt_kind(nt, recv);

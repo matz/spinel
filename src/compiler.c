@@ -5680,7 +5680,10 @@ const char *comp_super_bowner(Compiler *c, const Scope *s, const char *uname) {
    have no such path: `self.m` there reaches no method at run time, or
    returns an Enumerator where the method answers a boxed value. */
 BsuperPath comp_bsuper_carried(Compiler *c, int id, const Scope *st, const char *uname, const char *bowner) {
-  if (builtin_owner_kind(bowner) == BOWN_KERNEL && is_kernel_module_function(uname) && !is_frame_reading_function(uname) &&
+  /* (the stand-in a version entry's else arm calls for the call made before a later include or prepend is that
+     call's method: a Kernel function is private, and the visibility-blind call a lowered super is would answer an
+     explicit receiver where CRuby raises) */
+  if (builtin_owner_kind(bowner) == BOWN_KERNEL && !st->super_behind && is_kernel_module_function(uname) && !is_frame_reading_function(uname) &&
       !iter_row(BOP_KERNEL, uname, -1, 0))
     return BSP_KERNEL;
   int self = 0;

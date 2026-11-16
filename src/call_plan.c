@@ -2299,10 +2299,12 @@ static int ct_pin_of(const Compiler *c, int id) {
   return p ? p->scope : -1;
 }
 /* ...as it answers a lookup of name at the call: a pin answers the call's
-   own name, not another a lookup asks at it (the hook's, method_missing) */
+   own name, not another a lookup asks at it (the hook's, method_missing).
+   The pins are asked first: a call with none reads no node. */
 static int ct_pin_for(const Compiler *c, int id, const char *name) {
-  const char *own = nt_str(c->nt, id, "name");
-  return own && sp_streq(own, name) ? ct_pin_of(c, id) : -1;
+  int pin = ct_pin_of(c, id);
+  const char *own = pin != -1 ? nt_str(c->nt, id, "name") : NULL;
+  return own && sp_streq(own, name) ? pin : -1;
 }
 /* ...a pin of call id, of name, to a method of a class below cls on the side flags ask (CT_CMETHOD), which a lookup
    on cls's chain does not find: a blank slate's Kernel guard calls a subclass's own method_missing where self is of

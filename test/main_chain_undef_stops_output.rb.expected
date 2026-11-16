@@ -1,0 +1,16 @@
+L:a
+L:p1
+L:printb
+L:x
+arg 1
+NoMethodError: undefined method 'puts' for main
+arg 2
+NoMethodError: undefined method 'p' for main
+arg 3
+NoMethodError: undefined method 'print' for main
+arg 4
+NoMethodError: undefined method 'format' for main
+NameError: undefined method 'puts' 
+in def: NoMethodError: undefined method 'puts' for main
+in def: NoMethodError: undefined method 'p' for main
+end

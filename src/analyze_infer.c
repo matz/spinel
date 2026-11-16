@@ -6832,7 +6832,8 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
       int cb = cplan_builtin_call(c, id) || (iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0)
                ? -1 : comp_cbody_call_mi(c, id, name);
       if (cb >= 0) { *out = an_user_call(c, id, cb, UC_CMETH, c->node_cbody[id]); return 1; } }
-    int mi = cplan_builtin_call(c, id) ? -1 : call_target(c, id, -1, name, CT_TOP, NULL), fvia = UC_TOP;
+    int mi = cplan_builtin_call(c, id) ? -1 : call_target(c, id, -1, name, CT_TOP | CT_INCLUDED, NULL), fvia = UC_TOP;
+    if (mi >= 0 && c->scopes[mi].class_id >= 0 && !c->scopes[mi].is_cmethod) fvia = UC_INCLUDED;   /* (a module main extends or Object includes) */
     /* in a block run by instance_eval, the receiver's own method answers
        before a top-level def of the same name (#7213) */
     { int iec = ie_class_of(c, id);
@@ -9493,8 +9494,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      any builtin arm, keeps the two halves of the compiler on the same method. */
   if (recv < 0 && nt_ref(nt, id, "block") < 0 &&
       !nt_str(nt, id, "vis_enforce") && !cplan_builtin_call(c, id)) {
-    int bmi = call_target(c, id, -1, name, CT_TOP, NULL), bvia = UC_TOP;
-    if (bmi < 0) { bmi = call_target(c, id, -1, name, CT_INCLUDED, NULL); bvia = UC_INCLUDED; }
+    int bmi = call_target(c, id, -1, name, CT_TOP | CT_INCLUDED, NULL);
+    int bvia = bmi >= 0 && c->scopes[bmi].class_id >= 0 && !c->scopes[bmi].is_cmethod ? UC_INCLUDED : UC_TOP;
     if (bmi >= 0) {
       Scope *bsc = comp_scope_of(c, id);
       /* in a block run by instance_eval, self is the receiver (#7213) */

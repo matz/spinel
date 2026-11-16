@@ -5390,6 +5390,18 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
      method lookup, comp_self_call_mi) */
   if (recv < 0) {
     int mi = comp_self_call_mi(c, node, sym);
+    /* (a module main extends or Object includes, where main's chain meets it at the capture: its owner's. Not an
+       Object prepend's: Object's prepends emit no body a Method can bind yet) */
+    int mst = mi < 0 ? cplan_main_chain_step(c, node, sym) : -1;
+    if (mst > EMC_CORE && mst != EMC_PREPEND) {
+      int im = call_target(c, node, -1, sym, CT_INCLUDED, NULL);
+      if (im >= 0) {
+        k = c->scopes[im].origin_module_ci > 0 ? c->scopes[im].origin_module_ci - 1 : c->scopes[im].class_id, side = 0;
+        if (k >= 0) goto found;
+      }
+      /* (Object's own entry the program's `class Object` reopening makes: bound on Object) */
+      if (mst == EMC_OWN) { k = comp_core_class(c, CORE_OBJECT), side = 0; if (k >= 0) goto found; }
+    }
     if (mi < 0) return cplan_capture_missing(c, node);
     k = c->scopes[mi].class_id, side = k >= 0 && c->scopes[mi].is_cmethod;
     if (k < 0) {

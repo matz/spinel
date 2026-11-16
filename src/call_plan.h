@@ -54,15 +54,17 @@ typedef enum {
   CRF_BIND_CALL,   /* a bind_call on a Class value with an armless class */
   CRF_TOP_SELF,    /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
   CRF_CAPTURE,     /* a record class's class method captured where its def may not have run, or a module's absent one where its NameError's class is not told (emit_call_method_obj_arms) */
-  CRF_RECORD_NEW   /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
+  CRF_RECORD_NEW,  /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
+  CRF_MAIN_CHAIN   /* a bare call of a name a conditional or may-not-have-run mixin of main or Object defines (reject_main_chain) */
 } CplanRefuseFrom;
 
 /* CallPlan.absent: the side a `method(:sym)` that finds no method names in
    CRuby's NameError: an instance side ('K'), a class side ('#<Class:K>'),
-   or a module's class side before its singleton class is made ('Module');
+   or a module's class side before its singleton class is made ('Module'), or main's
+   singleton class (CP_ABSENT_MAIN: a name the program defines only later, or main's chain meets nothing of);
    untold: a module's, where the record cannot tell which of the last two,
    whose capture the plan refuses (cplan_refuse_resolve) */
-enum { CP_ABSENT_NONE, CP_ABSENT_INST, CP_ABSENT_SG, CP_ABSENT_MODULE, CP_ABSENT_UNTOLD };
+enum { CP_ABSENT_NONE, CP_ABSENT_INST, CP_ABSENT_SG, CP_ABSENT_MODULE, CP_ABSENT_UNTOLD, CP_ABSENT_MAIN };
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */
@@ -131,6 +133,11 @@ int cplan_object_method_named(Compiler *c, const char *name);
 /* does call id run with main as self (receiverless or on self, at a file's
    top level or in a method of main's own)? */
 int cplan_runs_on_main(Compiler *c, int id);
+/* The step of main's chain (EMC_*, elab_main_chain_at) a self-call of name at call id meets, at its point or over the
+   window it may run in; EMC_NONE for none of the program's, EMC_STOP where an undef stops the lookup (no method answers,
+   nor the core's); -1 where the record cannot say or the answer moves with
+   when the body runs */
+int cplan_main_chain_step(Compiler *c, int id, const char *name);
 /* Does call `call`, which takes a block, throw away every value its block
    answers? A builtin iterator of the each family does
    (is_block_value_dropped_iter: each, times, loop, each_char, ...), on any
@@ -458,6 +465,7 @@ int cplan_recv_class(Compiler *c, int id, int recv);
 int ct_version_named(Compiler *c, const char *nm);
 int ct_version_marked(Compiler *c, const char *nm);
 void ver_hold_free(Compiler *c);
+void main_chain_free(Compiler *c);   /* the main-chain fact's memo (ct_main_chain) */
 void ver_chain_free(Compiler *c);
 void new_inits_free(Compiler *c);
 void new_sites_free(Compiler *c);

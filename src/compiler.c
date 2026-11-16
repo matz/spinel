@@ -579,6 +579,7 @@ void comp_free(Compiler *c) {
   for (int i = 0; i < c->nver_late; i++) free(c->ver_late[i].name);
   free(c->ver_late); c->ver_late = NULL; c->nver_late = 0;
   ver_hold_free(c);
+  main_chain_free(c);
   ver_chain_free(c);
   new_inits_free(c);
   new_sites_free(c);

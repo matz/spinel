@@ -2080,6 +2080,7 @@ defer-refusals-test: $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-defer.XXXXXX); \
 	for t in $(shell grep -l '^\# spinel: defer-refusals: ' test/defer/*.rb); do \
 	  rest=$$(sed -n 's/^# spinel: defer-refusals: //p' "$$t"); n=$${rest%%:*}; want="$${rest#*:} "; \
+	  msg=$$(sed -n 's/^# spinel: defer-message: //p' "$$t"); msg=$${msg:-ruby2_keywords is not supported}; \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/p.c" >"$$tmp/p.out" 2>&1; then \
 	    echo "defer-refusals-test: FAIL ($$t compiled without the flag)"; ok=0; fi; \
 	  if ! $(SPINEL) --defer-refusals "$$t" -o "$$tmp/d" >"$$tmp/d.out" 2>&1; then \
@@ -2089,7 +2090,7 @@ defer-refusals-test: $(SPINEL)
 	    { echo "defer-refusals-test: FAIL ($$t: deferred refusals not counted)"; sed -n 1,5p "$$tmp/d.out"; ok=0; }; \
 	  "$$tmp/d" >"$$tmp/r.out" 2>"$$tmp/r.err"; st=$$?; out=$$(tr '\n' ' ' <"$$tmp/r.out"); \
 	  [ "$$out" = "$$want" ] || { echo "defer-refusals-test: FAIL ($$t ran wrong: $$out)"; ok=0; }; \
-	  [ $$st -ne 0 ] && grep -q "ruby2_keywords is not supported.*(NotImplementedError)" "$$tmp/r.err" || \
+	  [ $$st -ne 0 ] && grep -q "$$msg.*(NotImplementedError)" "$$tmp/r.err" || \
 	    { echo "defer-refusals-test: FAIL ($$t: a refused line did not raise NotImplementedError, exit $$st)"; sed -n 1,3p "$$tmp/r.err"; ok=0; }; \
 	done; \
 	rm -rf "$$tmp"; \

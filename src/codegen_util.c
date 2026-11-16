@@ -4594,6 +4594,7 @@ void refuse_prepass_at_emit(Compiler *c, int id) {
   refuse_from_plan(c, id, CRF_CONST_GET, "refuse-const-get");
   refuse_from_plan(c, id, CRF_BINDING, "refuse-binding");
   refuse_from_plan(c, id, CRF_TOP_SELF, "refuse-top-self");
+  refuse_from_plan(c, id, CRF_MAIN_CHAIN, "refuse-main-chain");
 }
 
 __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what) {

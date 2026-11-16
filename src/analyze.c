@@ -11648,6 +11648,16 @@ static int desugar_builtin_method_obj(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  /* (the main-chain fact of every receiverless capture, asked before the rewrites below add nodes: an ask after one
+     would re-walk the program's points per capture) */
+  int *kst_of = calloc((size_t)(n0 > 0 ? n0 : 1), sizeof *kst_of);
+  if (!kst_of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int id = 0; id < n0; id++) {
+    kst_of[id] = -1;
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *ks = is_bound_method_maker(nt_str(nt, id, "name")) ? method_sym_arg(c, id) : NULL;
+    if (ks && ks[0] && ks[0] != '_') kst_of[id] = cplan_main_chain_step(c, id, ks);
+  }
   for (int id = 0; id < n0; id++) {
     NodeKind ty_k = nt_kind(nt, id);
     if (ty_k != NK_CallNode) continue;
@@ -11677,13 +11687,22 @@ static int desugar_builtin_method_obj(Compiler *c) {
            inherited class method is its own self */
         int kd = 0;
         if (ks >= 0 && ks < c->nscopes && c->scopes[ks].is_cmethod && c->scopes[ks].class_id >= 0 &&
-            call_target(c, -1, c->scopes[ks].class_id, ksym, CT_CMETHOD | CT_SHARED, NULL) < 0 &&
+            call_target(c, id, c->scopes[ks].class_id, ksym, CT_CMETHOD | CT_CAPTURE, NULL) < 0 &&
             (comp_descendants(c, c->scopes[ks].class_id, &kd), kd == 0))
           kcls = c->scopes[ks].class_id;
         if (kcls < 0) continue;
       }
       else if (!kknown) continue;
-      if (call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0) continue;   /* a user def wins */
+      /* a user def wins where main has it at the capture; one that main defines only later (or removed) is not the
+         Method's: it binds Kernel's, whose wrapper calls it through Kernel, not through main (CRuby's lookup at the
+         capture) */
+      int kst = kcls < 0 ? kst_of[id] : -1;
+      if (kst == EMC_PREPEND) kst = -1;   /* (an Object prepend: the table's, as before) */
+      if (kst == EMC_MAIN || kst == EMC_STOP || kst > EMC_CORE) continue;   /* (an undef stops the lookup: the plan's NameError) */
+      int tbl = call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0;
+      /* (where the fact cannot say, the table's, and for a class method's const_get the call's own ask) */
+      if (kst < 0 && (kcls >= 0 ? call_target(c, id, -1, ksym, CT_TOP | CT_CAPTURE, NULL) >= 0 : tbl)) continue;
+      int kern = kst == EMC_NONE && tbl;
       char kwname[48];
       snprintf(kwname, sizeof kwname, "__bam_%s", comp_node_tag(c, id));
       if (call_target(c, -1, -1, kwname, CT_TOP | CT_SHARED, NULL) >= 0) continue;
@@ -11710,9 +11729,11 @@ static int desugar_builtin_method_obj(Compiler *c) {
       int kcall = nt_new_node(nt, "CallNode");
       nt_node_set_str(nt, kcall, "name", ksym);
       nt_node_set_ref(nt, kcall, "arguments", kargs);
-      if (kcls >= 0) {
+      /* (a class method's capture of Module's const_get is the builtin's, whatever the class defines afterwards) */
+      if (kcls >= 0) nt_mark_builtin_call(nt, kcall);
+      if (kcls >= 0 || kern) {
         int krecv = nt_new_node(nt, "ConstantReadNode");
-        nt_node_set_str(nt, krecv, "name", c->classes[kcls].name);
+        nt_node_set_str(nt, krecv, "name", kcls >= 0 ? c->classes[kcls].name : "Kernel");
         nt_node_set_ref(nt, kcall, "receiver", krecv);
       }
       int kbody = nt_new_node(nt, "StatementsNode");
@@ -11818,7 +11839,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     /* main's own `to_s` (cplan_main_singleton_call) comes ahead of a
        same-named top-level def, which otherwise wins */
     int main_sg = cplan_main_singleton_call(c, id);
-    if (!main_sg && call_target(c, -1, -1, sym, CT_TOP | CT_SHARED, NULL) >= 0) continue;
+    int bown = 0;   /* the receiver's builtin class answers the name itself, ahead of Object's private top-level defs */
     int cmp_only = 0;   /* a Comparable method the class does not define itself */
     int num_only = 0;   /* a Numeric method Integer or Float inherits */
     int sym_arity = 0, have_arity = 0;   /* the builtin's Method#arity */
@@ -11843,13 +11864,17 @@ static int desugar_builtin_method_obj(Compiler *c) {
       /* TrueClass/FalseClass define the logical operators (#2835) */
       int bool_op = rt == TY_BOOL &&
                     is_bit_op(sym);
+      /* the Method captured on a receiver is the receiver's class's own where its builtin has the name; a top-level def
+         of the name is Object's private method, behind it (`5.method(:succ)` beside a `def succ`), and wins only where
+         nothing in front answers */
+      bown = bcls && !bool_op && (builtin_method_known(bcls, sym) || builtin_comparable_owns(bcls, sym) ||
+             builtin_numeric_owns(bcls, sym) || builtin_enumerable_owns(bcls, sym) || builtin_object_method_known(sym));
+      MethodLookup rml = { .def_class = -1 };
+      if (!main_sg && !bown && (call_target(c, id, -1, sym, CT_TOP | CT_CAPTURE, &rml) >= 0 || rml.kind == ML_OBJECT)) continue;
       /* Comparable's methods (between?, clamp) and Numeric's (abs2, quo,
          positive?) are the class's through the module or the superclass,
          which the class's own table leaves out */
-      if (bcls && !bool_op &&
-          !builtin_method_known(bcls, sym) && !builtin_comparable_owns(bcls, sym) &&
-          !builtin_numeric_owns(bcls, sym) && !builtin_enumerable_owns(bcls, sym) &&
-          !builtin_object_method_known(sym)) {
+      if (bcls && !bool_op && !bown) {
         int rd = rt == TY_BOOL ? -1 : cplan_builtin_reopen_def(c, id, bcls, sym, NULL);
         if (rd >= 0 && nt_int(nt, id, "public_capture", 0) && !cplan_reopen_def_public(c, id, rd, sym)) rd = -1;
         if (rd < 0) continue;
@@ -12000,6 +12025,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     }
     changed = 1;
   }
+  free(kst_of);
   bam_tab_free();
   bsu_tab_free();
   return changed;
@@ -12186,7 +12212,7 @@ static int expand_literal_splat_args(Compiler *c) {
       if (!lit) continue; }
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) {
-      if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || call_target(c, id, -1, nm, CT_INCLUDED, NULL) >= 0)
+      if (call_target(c, id, -1, nm, CT_TOP | CT_INCLUDED, NULL) >= 0)
         continue;   /* a user method: native splat path */
     }
     else {

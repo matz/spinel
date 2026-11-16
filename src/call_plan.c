@@ -141,7 +141,7 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
   for (int i = 0; i < nd; i++) {
     int k = ds[i];
     if (k == scls) continue;
-    if (comp_reader_in_chain(c, k, name, NULL)) return 0;
+    if (call_attr_target(c, -1, k, name, CT_ATTR, NULL)) return 0;
     int kmi = call_target(c, id, k, name, 0, NULL);
     if (kmi < 0 || kmi == root_mi) continue;
     if (c->scopes[kmi].yields) return 0;
@@ -979,7 +979,7 @@ static void cplan_resolve_poly(Compiler *c, int call, const char *name, CallPlan
 static void cplan_descendant_call(Compiler *c, int call, int cid, const char *name, int cmeth, CallPlan *p) {
   int nd = 0;
   const int *ds = comp_descendants(c, cid, &nd);
-  int reader = !cmeth && comp_reader_in_chain(c, cid, name, NULL);
+  int reader = !cmeth && call_attr_target(c, -1, cid, name, CT_ATTR, NULL);
   for (int i = 0; i < nd; i++) {
     int mi = call_target(c, call, ds[i], name, reader ? 0 : CT_OWN | (cmeth ? CT_CMETHOD : 0), NULL);
     if (mi < 0) continue;
@@ -1151,7 +1151,10 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
        `!=` through `==`, the comparisons through `<=>` when Comparable
        supplies them (class_is_comparable). Not one a subclass defines
        itself: the call dispatches at run time (#4023). */
-    const char *via_op = comp_subclass_answers(c, cid, name) ? NULL : builtin_operator_delegate(name);
+    mtab_enter(c);   /* (the plan's own candidate read: the strict subclasses that answer the name) */
+    int sub_answers = comp_subclass_answers(c, cid, name);
+    mtab_leave(c);
+    const char *via_op = sub_answers ? NULL : builtin_operator_delegate(name);
     if (via_op && sp_streq(via_op, "<=>") && !class_is_comparable(c, cid)) via_op = NULL;
     int dmi = via_op ? call_target(c, id, cid, via_op, 0, NULL) : -1;
     if (dmi < 0 && via_op) {
@@ -1531,8 +1534,8 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
      override answering something other than a String cannot ride the
      const char * helper, so call it directly (#3868) */
   if (own < 0 && is_message_name(name)) {
-    int mi8 = comp_method_in_chain(c, xcm, "message", NULL);
-    if (mi8 < 0) mi8 = comp_method_in_chain(c, xcm, "to_s", NULL);
+    int mi8 = call_target(c, -1, xcm, "message", CT_METHODS | CT_SHARED, NULL);
+    if (mi8 < 0) mi8 = call_target(c, -1, xcm, "to_s", CT_METHODS | CT_SHARED, NULL);
     if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
         (TyKind)c->scopes[mi8].ret != TY_UNKNOWN)
       own = mi8;
@@ -1543,7 +1546,7 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
     int sub_str = 0, sub_other = 0;
     for (int k = 0; k < c->nclasses; k++) {
       if (k == xcm || !is_descendant(c, k, xcm)) continue;
-      int ko = comp_method_in_class(c, k, "to_s");
+      int ko = call_target(c, -1, k, "to_s", CT_OWN | CT_SHARED, NULL);
       if (ko < 0) continue;
       if ((TyKind)c->scopes[ko].ret == TY_STRING) sub_str = 1;
       else sub_other = 1;
@@ -2456,8 +2459,10 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
 static int ct_accessor_class(Compiler *c, int cls, const char *name) {
   int dc = -1;
   char base[256];
+  mtab_enter(c);   /* (entry construction: the accessor lists' own answer) */
   int found = setter_base_name(name, base, sizeof base) ? comp_writer_in_chain(c, cls, base, &dc)
                                                          : comp_reader_in_chain(c, cls, name, &dc);
+  mtab_leave(c);
   return found ? dc : -1;
 }
 /* (the Struct or the Data on cls's superclass chain whose member `name`
@@ -4656,7 +4661,8 @@ CvCtor cplan_cv_ctor(Compiler *c, int id) {
 int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k) {
   if (f == CVC_NONE || comp_ary_root(c, k) < 0 || !comp_class_builds_by_aref(c, k))
     return 0;
-  return f != CVC_NEW || (comp_method_in_chain(c, k, "initialize", NULL) < 0 && comp_cmethod_in_chain(c, k, "new", NULL) < 0);
+  return f != CVC_NEW || (call_target(c, -1, k, "initialize", CT_METHODS | CT_SHARED, NULL) < 0 &&
+                          call_target(c, -1, k, "new", CT_CMETHOD | CT_SHARED, NULL) < 0);
 }
 
 int cplan_cv_ctor_builds(Compiler *c, int id, int k) {
@@ -5130,7 +5136,10 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
 /* See call_plan.h. */
 int cplan_undef_stops(Compiler *c, int id, int cls, const char *name) {
   MethodLookup ml = { .def_class = -1 };
-  if (!comp_is_undeffed_in_chain(c, cls, name)) return 0;
+  mtab_enter(c);   /* (the plan's own read: whether an undef on the chain takes the name away, before its answer is asked) */
+  int undef = comp_is_undeffed_in_chain(c, cls, name);
+  mtab_leave(c);
+  if (!undef) return 0;
   int e = call_target(c, id, cls, name, 0, &ml);
   return e < 0 || ml.kind != ML_ENTRY || c->scopes[e].entry != ENTRY_DISPATCH;
 }
@@ -5517,24 +5526,34 @@ static int ct_def_sure(Compiler *c, const LrDef *d) {
   return d && d->kind == LR_DEF && !d->may && !d->unplaced && !elab_point_partial(c, d->node);
 }
 static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int ar, int blk);
-/* See call_plan.h. */
-int cplan_capture_misses(Compiler *c, int id, int k, const char *sym) {
-  static const char *const hooks[] = { METHOD_MISSING_NAME, RESPOND_TO_MISSING_NAME };
+/* Do the tables leave a capture of sym on class k to the two hooks: nothing of the name answers on k's chain or a
+   class under it, and k's chain holds both hooks? */
+static int ct_capture_hooked(Compiler *c, int k, const char *sym, const char *const *hooks) {
   if (k < 0 || !sym || capture_builtin_answers(c, k, sym) || ver_builtin_chain(c, k, 0, sym, 0, 0) ||
       ct_accessor_class(c, k, sym) >= 0)
     return 0;
   for (int i = 0; i < 2; i++)
-    if (comp_method_in_chain(c, k, hooks[i], NULL) < 0) return 0;
+    if (call_target(c, -1, k, hooks[i], CT_METHODS | CT_SHARED, NULL) < 0) return 0;
   /* (a method of the name, but for the stand-in a later include or
      prepend puts in front of none, cplan_capture_arm) */
+  mtab_enter(c);   /* (the plan's own read: the captured name, on k's chain and under it) */
   int mi = comp_method_in_chain(c, k, sym, NULL), nd = 0;
+  mtab_leave(c);
   if (mi >= 0 && !c->scopes[mi].mixin_guarded && c->scopes[mi].entry == ENTRY_NONE) return 0;
   /* a class under k that has one: the receiver may be of it */
   const int *ds = comp_descendants(c, k, &nd);
   for (int i = 0; i < nd; i++) {
+    mtab_enter(c);
     int d = ds[i], dm = comp_method_in_chain(c, d, sym, NULL);
+    mtab_leave(c);
     if (!c->classes[d].unreferenced && ((dm >= 0 && dm != mi) || ct_accessor_class(c, d, sym) >= 0)) return 0;
   }
+  return 1;
+}
+/* See call_plan.h. */
+int cplan_capture_misses(Compiler *c, int id, int k, const char *sym) {
+  static const char *const hooks[] = { METHOD_MISSING_NAME, RESPOND_TO_MISSING_NAME };
+  if (!ct_capture_hooked(c, k, sym, hooks)) return 0;
   /* both hooks a def surely live where the capture runs */
   int framed = elab_plan_enter(c, id), live = 1, none;
   for (int i = 0; i < 2 && live; i++) live = ct_def_sure(c, ct_met_version(c, id, k, hooks[i], 0, &none));
@@ -5618,7 +5637,7 @@ CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {
       builtin_object_method_known(name) || is_kernel_module_function(name) ||
       (is_comparable_module_method(name) && class_is_comparable(c, cid)) ||
       (name_is_enumerable_module_method(name) && class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0)) ||
-      comp_method_in_chain(c, cid, METHOD_MISSING_NAME, NULL) >= 0 || an_user_defines_method(c, METHOD_MISSING_NAME))
+      call_target(c, -1, cid, METHOD_MISSING_NAME, CT_METHODS | CT_SHARED, NULL) >= 0 || an_user_defines_method(c, METHOD_MISSING_NAME))
     return CM_NONE;
   for (int k = cid, d = 0; k >= 0 && d <= c->nclasses; k = c->classes[k].parent, d++)
     if (c->classes[k].is_native_class) return CM_NONE;
@@ -5923,8 +5942,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
     int nd = 0;
     comp_descendants(c, cid, &nd);
     if (nd == 1) {
-      int mi = is_to_s_name(name) ? -1 : comp_method_in_chain(c, cid, "message", NULL);
-      if (mi < 0) mi = comp_method_in_chain(c, cid, "to_s", NULL);
+      int mi = is_to_s_name(name) ? -1 : call_target(c, -1, cid, "message", CT_METHODS | CT_SHARED, NULL);
+      if (mi < 0) mi = call_target(c, -1, cid, "to_s", CT_METHODS | CT_SHARED, NULL);
       if (mi >= 0) out[0] = mi;
       return mi >= 0;
     }
@@ -5937,8 +5956,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
       int k = cs[i].cls;
       if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) continue;
       if (cid >= 0 && k != cid && !is_descendant(c, k, cid)) continue;
-      int mi = is_to_s_name(name) ? -1 : comp_method_in_chain(c, k, "message", NULL);
-      if (mi < 0) mi = comp_method_in_chain(c, k, "to_s", NULL);
+      int mi = is_to_s_name(name) ? -1 : call_target(c, -1, k, "message", CT_METHODS | CT_SHARED, NULL);
+      if (mi < 0) mi = call_target(c, -1, k, "to_s", CT_METHODS | CT_SHARED, NULL);
       if (mi < 0) continue;
       int j = 0;
       while (j < n && out[j] != mi) j++;
@@ -6204,7 +6223,7 @@ static int ct_mixed_new_entries(Compiler *c, int id, int *out) {
   }
   for (int i = 0; i < ncls; i++) {
     int k = cls[i], init[CPT_MAX];
-    if (comp_class_is_module(c, &c->classes[k]) || comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
+    if (comp_class_is_module(c, &c->classes[k]) || call_target(c, -1, k, "new", CT_CMETHOD | CT_SHARED, NULL) >= 0) continue;
     int ni = ct_class_initializers(c, -1, k, 0, init);
     if (ni < 0) return CPT_UNKNOWN;
     for (int j = 0; j < ni; j++) {
@@ -6472,12 +6491,11 @@ static int cplan_own_define_method_answers(Compiler *c, int host) {
   int k = hs->class_id, kinds = an_user_define_method_kinds(c);
   if (k < 0 || k >= c->nclasses || k == c->toplevel_class || (kinds & UDM_ANY_SELF)) return 1;
   if (!(kinds & (hs->is_cmethod ? UDM_CLASS_SELF : UDM_INSTANCE_SELF))) return 0;
-  if (hs->is_cmethod ? comp_cmethod_in_chain(c, k, "define_method", NULL) >= 0
-                     : comp_method_in_chain(c, k, "define_method", NULL) >= 0) return 1;
+  if (call_target(c, -1, k, "define_method", (hs->is_cmethod ? CT_CMETHOD : CT_METHODS) | CT_SHARED, NULL) >= 0) return 1;
   for (int j = 0; hs->is_cmethod && j < c->nclasses; j++) {
     const char *n = c->classes[j].name;
-    if (n && (sp_streq(n, "Module") || sp_streq(n, "Class")) && is_builtin_reopen(n) &&
-        comp_method_in_class(c, j, "define_method") >= 0) return 1;
+    if (n && (is_module_const_name(n) || is_class_const_name(n)) && is_builtin_reopen(n) &&
+        call_target(c, -1, j, "define_method", CT_OWN | CT_SHARED, NULL) >= 0) return 1;
   }
   return 0;
 }
@@ -6493,7 +6511,7 @@ int cplan_define_method_early(Compiler *c, int id) {
   if (dm < 0 || dm >= c->nscopes) return 1;
   const Scope *ds = &c->scopes[dm];
   if (!ds->name || ds->class_id < 0 || object_method_name(ds->name)) return 1;
-  int dc = -1, mi = comp_method_in_chain(c, ds->class_id, ds->name, &dc);
+  int mi = call_target(c, -1, ds->class_id, ds->name, CT_METHODS | CT_SHARED, NULL);
   if (mi >= 0 && mi != dm) return 1;
   for (int t = 0; t < c->nscopes; t++) {
     const Scope *ts = &c->scopes[t];
@@ -7107,8 +7125,12 @@ static int cplan_bind_call_gap(Compiler *c, int id) {
 static int cplan_top_self_gap(Compiler *c, int id) {
   const char *name = nt_str(c->nt, id, "name");
   const Scope *s = comp_scope_of(c, id);
-  return nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0 && name && s->class_id < 0 &&
-         !s->is_cmethod && !s->entry && s->def_node >= 0 && !prog_is_top_scope(c, s) && comp_main_method(c, name) >= 0;
+  if (!(nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0 && name && s->class_id < 0 &&
+        !s->is_cmethod && !s->entry && s->def_node >= 0 && !prog_is_top_scope(c, s))) return 0;
+  mtab_enter(c);   /* (the plan's own root read: whether main has a singleton method of the name) */
+  int gap = comp_main_method(c, name) >= 0;
+  mtab_leave(c);
+  return gap;
 }
 
 /* Does call id bind, on a class it may reach, what no cell tells whether it ran (a call the plan cannot bind at its count):
@@ -8865,8 +8887,8 @@ int cplan_class_answers_ahead_of_object(Compiler *c, int call, int k, const char
   cplan_method_vis(c, call, k, name, 0, &at);
   if (at >= 0 && at != oc) return 1;
   char base[256];
-  return comp_reader_in_chain(c, k, name, NULL) ||
-         (setter_base_name(name, base, sizeof base) && comp_writer_in_chain(c, k, base, NULL)) ||
+  return call_attr_target(c, -1, k, name, CT_ATTR, NULL) ||
+         (setter_base_name(name, base, sizeof base) && call_attr_target(c, -1, k, base, CT_ATTR | CT_WRITER, NULL)) ||
          cplan_has_method_missing(c, call, k, 0);
 }
 /* See call_plan.h. */
@@ -10065,7 +10087,11 @@ static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *nam
   case VK_BUILTIN: case VK_TEXT: return VER_FINDS_PUBLIC;
   case VK_CELL: return VER_FINDS_HIDDEN;   /* (a Kernel row's is private: not found where the cell is clear either) */
   case VK_KEEP:   /* (main's: the versions', a private one unless declared) */
-    if (cls >= 0) vis = sg ? comp_cmethod_vis_declared(c, cls, name, NULL) : comp_method_vis_in_chain(c, cls, name);
+    if (cls >= 0) {
+      mtab_enter(c);   /* (entry construction: the visibility the versions' table leaves the name) */
+      vis = sg ? comp_cmethod_vis_declared(c, cls, name, NULL) : comp_method_vis_in_chain(c, cls, name);
+      mtab_leave(c);
+    }
     break;
   case VK_SUPER:
     if (last < 0 || cplan_super_target(c, -1, &c->scopes[last], NULL) < 0) vis = SP_VIS_PRIVATE;
@@ -10818,7 +10844,10 @@ void ver_entries_build(Compiler *c) {
        the module's own class method, called on the module itself) */
     if (m->class_id >= 0 && !m->is_cmethod && comp_class_is_module(c, &c->classes[m->class_id])) continue;
     const char *name = comp_scope_user_name(m);
-    if ((m->is_cmethod ? comp_cmethod_in_class(c, m->class_id, name) : comp_method_in_class(c, m->class_id, name)) != s) continue;
+    mtab_enter(c);   /* (entry construction: the guarded copy is the table's last of its name) */
+    int last = m->is_cmethod ? comp_cmethod_in_class(c, m->class_id, name) : comp_method_in_class(c, m->class_id, name);
+    mtab_leave(c);
+    if (last != s) continue;
     if (!(ngc & (ngc - 1)) && !(gc = realloc(gc, sizeof *gc * (size_t)(ngc ? 2 * ngc : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     gc[ngc++] = s;
     int to[VER_MAX_ARMS + 1];

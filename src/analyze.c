@@ -11673,6 +11673,16 @@ static int desugar_builtin_method_obj(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  /* (the main-chain fact of every receiverless capture, asked before the rewrites below add nodes: an ask after one
+     would re-walk the program's points per capture) */
+  int *kst_of = calloc((size_t)(n0 > 0 ? n0 : 1), sizeof *kst_of);
+  if (!kst_of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int id = 0; id < n0; id++) {
+    kst_of[id] = -1;
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name"), *ks = nm && sp_streq(nm, "method") ? method_sym_arg(c, id) : NULL;
+    if (ks && ks[0] && ks[0] != '_') kst_of[id] = cplan_main_chain_step(c, id, ks);
+  }
   for (int id = 0; id < n0; id++) {
     NodeKind ty_k = nt_kind(nt, id);
     if (ty_k != NK_CallNode) continue;
@@ -11711,8 +11721,13 @@ static int desugar_builtin_method_obj(Compiler *c) {
       /* a user def wins where main has it at the capture; one that main defines only later (or removed) is not the
          Method's: it binds Kernel's, whose wrapper calls it through Kernel, not through main (CRuby's lookup at the
          capture) */
-      if (call_target(c, id, -1, ksym, CT_TOP | CT_CAPTURE, NULL) >= 0) continue;
-      int kern = kcls < 0 && call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0;
+      int kst = kcls < 0 ? kst_of[id] : -1;
+      if (kst == EMC_PREPEND) kst = -1;   /* (an Object prepend: the table's, as before) */
+      if (kst == EMC_MAIN || kst > EMC_CORE) continue;
+      int tbl = call_target(c, -1, -1, ksym, CT_TOP | CT_SHARED, NULL) >= 0;
+      /* (where the fact cannot say, the table's, and for a class method's const_get the call's own ask) */
+      if (kst < 0 && (kcls >= 0 ? call_target(c, id, -1, ksym, CT_TOP | CT_CAPTURE, NULL) >= 0 : tbl)) continue;
+      int kern = kst == EMC_NONE && tbl;
       char kwname[48];
       snprintf(kwname, sizeof kwname, "__bam_%s", comp_node_tag(c, id));
       if (call_target(c, -1, -1, kwname, CT_TOP | CT_SHARED, NULL) >= 0) continue;
@@ -12029,6 +12044,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     }
     changed = 1;
   }
+  free(kst_of);
   bam_tab_free();
   bsu_tab_free();
   return changed;

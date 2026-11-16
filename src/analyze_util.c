@@ -6130,11 +6130,14 @@ static int param_handed_computed_name(Compiler *c, int arg, const char *vn, int 
   if (key >= 0 && c->send_param_memo && c->send_param_memo[key]) return c->send_param_memo[key] == 2;
   int res = 0;
   /* the calls of the method's name, off the calls-by-name index: every
-     call of the program was read for each parameter asked about */
-  for (int id = an_calls_named_first(c, sc->name); id >= 0 && !res; id = an_calls_named_next(id)) {
+     call of the program was read for each parameter asked about. An
+     initialize's callers are the `new` calls, whose arguments it takes */
+  const char *cnames[2] = { sc->name, sp_streq(sc->name, "initialize") ? "new" : NULL };
+  for (int ci = 0; ci < 2 && cnames[ci] && !res; ci++)
+  for (int id = an_calls_named_first(c, cnames[ci]); id >= 0 && !res; id = an_calls_named_next(id)) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *cn = nt_str(nt, id, "name");
-    if (!cn || !sp_streq(cn, sc->name)) continue;
+    if (!cn || !sp_streq(cn, cnames[ci])) continue;
     int a = nt_ref(nt, id, "arguments");
     int an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
@@ -6155,6 +6158,24 @@ static int send_name_is_computed(Compiler *c, int arg, int depth) {
   if (node_is_container_read(nt, arg)) return container_read_holds_computed(c, arg);
   if (node_is_computed_name(nt, arg)) return 1;
   NodeKind ak = nt_kind(nt, arg);
+  /* an instance variable holds what its writes store (`@name = name` in
+     initialize, then `send(@name)`, #12025): one that stores a computed
+     name, or a variable handed one, holds a name no literal spells */
+  if (ak == NK_InstanceVariableReadNode) {
+    const char *iv = nt_str(nt, arg, "name");
+    int nw = 0;
+    const int *ws = iv && depth < 4 ? nt_nodes_of_kind(nt, NK_InstanceVariableWriteNode, &nw) : NULL;
+    for (int i = 0; i < nw; i++) {
+      const char *wn = nt_str(nt, ws[i], "name");
+      if (!wn || !sp_streq(wn, iv)) continue;
+      int wv = nt_ref(nt, ws[i], "value");
+      NodeKind wk = nt_kind(nt, wv);
+      if (value_is_computed_name(c, wv) ||
+          ((wk == NK_LocalVariableReadNode || wk == NK_InstanceVariableReadNode) && send_name_is_computed(c, wv, depth + 1)))
+        return 1;
+    }
+    return 0;
+  }
   if (ak != NK_LocalVariableReadNode) return 0;
   const char *vn = nt_str(nt, arg, "name");
   int scope = (arg >= 0 && arg < nt->count) ? c->nscope[arg] : -1;

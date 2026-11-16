@@ -187,8 +187,11 @@ typedef enum {
   TY_FLOAT_ARRAY_ARRAY,
   TY_TIME_RANGE,   /* (t1..t2): a Range of Times (sp_TimeRange *), after the
                       last for the same reason */
-  TY_OBJ_RANGE     /* (d1..d2): a Range of the program's objects whose class
+  TY_OBJ_RANGE,    /* (d1..d2): a Range of the program's objects whose class
                       defines <=> (sp_ObjRange *, its ends boxed) */
+  TY_ENV           /* ENV, the process environment: one value, a pointer to
+                      the static sp_env_obj as ARGF's is to its own (sp_Env *),
+                      after the last for the same reason */
 } TyKind;
 
 /* The receiver type an owner bit re-enters the typed emitter with. */
@@ -439,7 +442,7 @@ typedef struct {
   const char *elem_sfx;       /* typed_elem_sfx: the element-store entries of a typed Array or a String Hash's values */
   unsigned char elem_held;    /* typed_elem_held: the kind its element (a Hash's value) is held as */
 } TyTraits;
-#define TY_TRAITS_N ((int)TY_OBJ_RANGE + 1)
+#define TY_TRAITS_N ((int)TY_ENV + 1)
 extern const TyTraits ty_traits[TY_TRAITS_N];
 /* the row of builtin kind t, or NULL (a user object's kind) */
 extern int g_traits_promote;   /* --int-overflow=promote (main.c) */

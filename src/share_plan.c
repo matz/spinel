@@ -1017,6 +1017,7 @@ static int share_plan_builtin_keeps(Compiler *c, int call) {
   else if (ty_is_array(rt) || ty_is_ptr_array(rt)) fams[nf++] = BOP_ANY_ARRAY;
   else if (ty_is_hash(rt)) fams[nf++] = BOP_ANY_HASH;
   else if (rt == TY_PROC || rt == TY_METHOD || rt == TY_CURRY) fams[nf++] = BOP_CALLABLE;
+  else if (rt == TY_ENV) fams[nf++] = BOP_ENV;
   else if (recv >= 0 && rt != TY_POLY && rt != TY_UNKNOWN) fams[nf++] = rt;
   else { fams[nf++] = BOP_ANY_ARRAY; fams[nf++] = BOP_ANY_HASH; fams[nf++] = TY_CLASS; fams[nf++] = BOP_CALLABLE; }
   fams[nf++] = BOP_ANY_RECV;

@@ -2462,6 +2462,18 @@ void emit_param_cell_publish(Compiler *c, int blk, const char *pname, Buf *b, in
   else
     buf_printf(b, "*_cell_%s = lv_%s;\n", prn, prn);
 }
+/* A fresh cell for a captured block parameter about to be bound again: each
+   call of the receiving block keeps its own binding for readers that outlive
+   the call, as emit_param_cell_publish's callers do for ordinary parameters. */
+void emit_param_cell_fresh(Compiler *c, int blk, const char *pname, Buf *b, int indent) {
+  Scope *psc = blk >= 0 ? comp_scope_of(c, blk) : NULL;
+  LocalVar *plv = psc ? scope_local(psc, pname) : NULL;
+  if (!plv || !plv->is_cell) return;
+  const char *prn = rename_local(pname);
+  if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, prn)) return;
+  char pcell_buf[160];
+  emit_fresh_cell(c, plv, cell_var_name(prn, pcell_buf, sizeof pcell_buf), b, indent);
+}
 void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent) {
   if (blk < 0) return;
   const char *locs = nt_str(c->nt, blk, "locals");
@@ -3984,7 +3996,18 @@ int str_changing_name(const char *nm) {
 int strbuf_poly_ivar_mutated(Compiler *c, int n) {
   int pc = comp_recv_parent(c, n);
   const char *pn = pc >= 0 ? nt_str(c->nt, pc, "name") : NULL;
-  return pn && str_changing_name(pn) && !is_freeze_name(pn);
+  if (!pn || !str_changing_name(pn) || is_freeze_name(pn)) return 0;
+  /* (a mutator's name a Hash or an Array answers too, `[]=` or `<<`: only
+     a slot of the name some class keeps a String in has a handle to give) */
+  int a = nt_ref(c->nt, n, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &ac) : NULL;
+  const char *ivn = ac == 1 ? nt_str(c->nt, av[0], "value") : NULL;
+  if (!ivn) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int iv = comp_ivar_index(&c->classes[k], ivn);
+    if (iv >= 0 && (c->classes[k].ivar_types[iv] == TY_STRING || c->classes[k].ivar_types[iv] == TY_STRBUF)) return 1;
+  }
+  return 0;
 }
 int strbuf_call_reads_handle(Compiler *c, int recv) {
   return recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode &&
@@ -4411,6 +4434,11 @@ int unsup_message(Compiler *c, int id, const char *what, int self_ci, char *msg,
   NodeKind k = nt_kind(c->nt, id);
   const char *mname = k == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;
   if (mname) {
+    /* a define_method handed a parameter of its method as the body: the
+       words of the pass that refuses it ahead of emission, which
+       --defer-refusals leaves to this site (reject_define_method_runtime_block) */
+    const char *dm = define_method_param_body_refusal(c, id);
+    if (dm) { snprintf(msg, cap, "%s", dm); return CR_FEATURE; }
     int recv = nt_ref(c->nt, id, "receiver");
     int args = nt_ref(c->nt, id, "arguments");
     int ac = 0; const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &ac) : NULL;
@@ -7101,7 +7129,18 @@ static char *mc_version_name(const Scope *s) {
   else memcpy(v, s->name, (size_t)n + 1);
   return v;
 }
+/* A replaced version no call marked reachable has no number and no
+   function: spelled from its name it would be the table's method */
+static int mc_version_unkept(const Scope *s) {
+  return s->replaced && !s->reachable && !s->version_n && !s->main_n && !s->entry && !s->c_name;
+}
 const char *mc_method(Compiler *c, const Scope *s) {
+  /* a call that names one would run the wrong version without a word */
+  if (mc_version_unkept(s)) {
+    fprintf(stderr, "spinel: internal error: a call names the replaced version %s#%s, which no call kept reachable\n",
+            s->class_id >= 0 ? c->classes[s->class_id].name : "main", s->name ? s->name : "?");
+    exit(1);
+  }
   char *name = mc_version_name(s);
   const char *out;
   if (s->c_name) out = mc_ring_setf(c, "sp_%s", s->c_name);
@@ -7249,7 +7288,7 @@ static int mc_find_clash(Compiler *c, int *first, int *later) {
     const Scope *s = i >= 0 ? &c->scopes[i] : NULL;
     const char *nm;
     if (s) {
-      if (!s->name || s->c_name) continue;
+      if (!s->name || s->c_name || mc_version_unkept(s)) continue;   /* (a function nothing emits spells no name) */
       nm = mc_method(c, s);
     } else if (i < -nh) {
       const ClassInfo *ci = &c->classes[-i - 1 - nh];

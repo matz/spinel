@@ -148,6 +148,7 @@ static inline void sp_builtin_cls_ids_distinct(int id) {
     case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_FLOAT_RANGE:
     case SP_BUILTIN_STR_RANGE: case SP_BUILTIN_OPENSTRUCT:
     case SP_BUILTIN_RANDOM: case SP_BUILTIN_ARGF: case SP_BUILTIN_TIME_RANGE: case SP_BUILTIN_OBJ_RANGE:
+    case SP_BUILTIN_ENV:
     case SP_BUILTIN_PROCESS_STATUS:   /* agentwm/dvtm: Process.waitpid2's boxed
                                           return value, dispatches signaled?/exited?/
                                           termsig/... via runtime type tag. */
@@ -1557,6 +1558,16 @@ extern sp_Argf sp_argf_obj;
 #else
 sp_Argf sp_argf_obj = {NULL, 0, NULL};   /* type in sp_argf.h */
 #endif
+/* ENV's one object (sp_argf.h) */
+#ifndef SPINEL_EXT_HOST
+sp_env_object sp_env_obj = {0};
+#endif
+/* ENV boxed: for now the environment's snapshot as a String Hash, the value a
+   use of ENV as a value was before it had a kind of its own (#11340) */
+static inline sp_RbVal sp_box_env(sp_env_object *e) {
+  (void)e;
+  return sp_box_nullable_obj((void *)sp_env_value(), SP_BUILTIN_STR_STR_HASH);
+}
 
 /* Mark active in-flight exception messages. Most raises pass string
    literals (rodata, marker byte ≠ 0xfe → no-op for sp_mark_string),
@@ -2507,6 +2518,13 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
       NULL };
     return sp_str_in_list(m, enumm) || sp_str_in_list(m, enumrm);
   }
+  /* a chain or a product is an Enumerator whose #class names its subclass.
+     CRuby undefines next, peek, next_values, peek_values and feed there,
+     so only rewind and with_index of the Enumerator's own names stay. */
+  if (strcmp(cn, "Enumerator::Chain") == 0 || strcmp(cn, "Enumerator::Product") == 0) {
+    static const char *const enumcm[] = { "rewind", "with_index", NULL };
+    return sp_str_in_list(m, enumm) || sp_str_in_list(m, enumcm);
+  }
   /* an IO handle in a boxed slot -- a File, a socket, $stderr, a stat --
      by its kind */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p)
@@ -2623,6 +2641,35 @@ static inline sp_bool sp_poly_is_socket(sp_RbVal v) {
    name up (1), false or :numeric does not (0), nil follows the socket (-1).
    Another Symbol is ArgumentError, anything else TypeError. */
 static int sp_sock_rl_flag(sp_RbVal v) SP_UNUSED;
+/* Process.clock_gettime(id, unit) / clock_getres(id, unit) with a unit
+   that only the run time knows (a local, a parameter, a keyword hash). A
+   Symbol names the unit and nil is the default :float_second. Anything
+   else, such as a Hash or a String, is CRuby's ArgumentError. An integer
+   unit gives an Integer, the other units a Float. */
+static SP_UNUSED sp_RbVal sp_process_clock_dyn(sp_int clock_id, sp_RbVal unit, int res) {
+  const char *u = unit.tag == SP_TAG_NIL ? "float_second"
+                : unit.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)unit.v.i) : NULL;
+  int64_t div = 0; double fdiv = 0;
+  if (!u) {}
+  else if (strcmp(u, "nanosecond") == 0) div = 1;
+  else if (strcmp(u, "microsecond") == 0) div = 1000;
+  else if (strcmp(u, "millisecond") == 0) div = 1000000;
+  else if (strcmp(u, "second") == 0) div = 1000000000;
+  else if (strcmp(u, "float_microsecond") == 0) fdiv = 1e3;
+  else if (strcmp(u, "float_millisecond") == 0) fdiv = 1e6;
+  else if (strcmp(u, "float_second") == 0) fdiv = 1e9;
+  if (!div && !fdiv)
+    sp_raise_cls("ArgumentError", sp_sprintf("unexpected unit: %s", sp_poly_to_s(unit)));
+  if (fdiv) return sp_box_float((sp_float)(res ? sp_process_clock_res_ns(clock_id)
+                                               : sp_process_clock_units(clock_id, 1)) / fdiv);
+  /* as the literal unit does: clock_gettime reads ticks of the unit (whole
+     seconds come from nanoseconds), clock_getres divides nanoseconds,
+     rounding toward negative infinity */
+  int64_t per = !res && div < 1000000000 ? div : 1;
+  int64_t t = res ? sp_process_clock_res_ns(clock_id) : sp_process_clock_units(clock_id, per);
+  int64_t d = div / per;
+  return sp_box_int((sp_int)(t / d - (t % d < 0)));
+}
 static int sp_sock_rl_flag(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) return -1;
   if (v.tag == SP_TAG_BOOL) return v.v.i ? 1 : 0;
@@ -5638,9 +5685,10 @@ static sp_int sp_poly_struct_size(sp_RbVal v) {
 }
 /* A boxed value with no #empty?: a program object (its own empty? is
    dispatched before this), a builtin with no length, a Process::Tms (a
-   Struct) or a Range of any kind. */
+   Struct), a Range of any kind, or a Class (a class value sent `empty?`
+   by name read its length, 0, and answered true where CRuby raises). */
 static SP_INLINE SP_UNUSED int sp_poly_no_empty(sp_RbVal v) {
-  return sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
+  return v.tag == SP_TAG_CLASS || sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
          (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_TMS || (v.cls_id == SP_BUILTIN_IO && !sp_poly_root_defines("empty?")) || v.cls_id == SP_BUILTIN_RANGE ||
                                   v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_FLOAT_RANGE ||
                                   v.cls_id == SP_BUILTIN_TIME_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE));
@@ -11459,8 +11507,10 @@ struct sp_StrPolyHash{const char**keys;sp_RbVal*vals;const char**order;sp_int le
 static void sp_StrPolyHash_fin(void*p){sp_StrPolyHash*h=(sp_StrPolyHash*)p;sp_gc_payload_resize(h,(size_t)h->cap*SP_STRPOLYHASH_SLOT,0);sp_pl_free(h->keys);sp_pl_free(h->vals);sp_pl_free(h->order);}
 static void sp_StrPolyHash_scan(void*p){sp_StrPolyHash*h=(sp_StrPolyHash*)p;for(sp_int i=0;i<h->cap;i++){if(h->keys[i]){sp_mark_string(h->keys[i]);sp_mark_rbval(h->vals[i]);}}sp_mark_rbval(h->default_v);if(h->dproc_self)sp_gc_mark(h->dproc_self);}
 /* set up inside a Hash subclass instance, as sp_StrIntHash_init_embedded */
-static void sp_StrPolyHash_init_embedded(sp_StrPolyHash*h){h->cap=16;h->mask=15;h->keys=(const char**)sp_pl_zalloc((size_t)h->cap*sizeof(const char*));h->vals=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->order=(const char**)sp_pl_alloc(sizeof(const char*)*h->cap);h->len=0;h->default_v=sp_box_nil();sp_gc_payload_resize(h,0,(size_t)h->cap*SP_STRPOLYHASH_SLOT);}
+static void sp_StrPolyHash_init_cap(sp_StrPolyHash*h,sp_int cap){h->cap=cap;h->mask=cap-1;h->keys=(const char**)sp_pl_zalloc((size_t)h->cap*sizeof(const char*));h->vals=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->order=(const char**)sp_pl_alloc(sizeof(const char*)*h->cap);h->len=0;h->default_v=sp_box_nil();sp_gc_payload_resize(h,0,(size_t)h->cap*SP_STRPOLYHASH_SLOT);}
+static void sp_StrPolyHash_init_embedded(sp_StrPolyHash*h){sp_StrPolyHash_init_cap(h,16);}
 static sp_StrPolyHash*sp_StrPolyHash_new(void){sp_StrPolyHash*h=(sp_StrPolyHash*)sp_gc_alloc(sizeof(sp_StrPolyHash),sp_StrPolyHash_fin,sp_StrPolyHash_scan);sp_StrPolyHash_init_embedded(h);return h;}
+static sp_StrPolyHash*sp_StrPolyHash_new_cap(sp_int n){sp_StrPolyHash*h=(sp_StrPolyHash*)sp_gc_alloc(sizeof(sp_StrPolyHash),sp_StrPolyHash_fin,sp_StrPolyHash_scan);sp_StrPolyHash_init_cap(h,sp_hash_cap_for(n));return h;}
 /* The default is a value the hash answers, and it is a temporary at the call
    site: `Hash.new([])` boxes a fresh array as the argument. sp_*Hash_new below
    is an allocation, so an unrooted default was collected before the store that
@@ -11612,8 +11662,10 @@ typedef struct sp_SymPolyHash{sp_sym*keys;sp_RbVal*vals;sp_sym*order;sp_int len;
 #define SP_SYMPOLYHASH_SLOT (2*sizeof(sp_sym)+sizeof(sp_RbVal))
 static void sp_SymPolyHash_fin(void*p){sp_SymPolyHash*h=(sp_SymPolyHash*)p;sp_gc_payload_resize(h,(size_t)h->cap*SP_SYMPOLYHASH_SLOT,0);sp_pl_free(h->keys);sp_pl_free(h->vals);sp_pl_free(h->order);}
 static void sp_SymPolyHash_scan(void*p){sp_SymPolyHash*h=(sp_SymPolyHash*)p;for(sp_int i=0;i<h->cap;i++){if(h->keys[i]>=0)sp_mark_rbval(h->vals[i]);}sp_mark_rbval(h->default_v);if(h->dproc_self)sp_gc_mark(h->dproc_self);}
-static void sp_SymPolyHash_init_embedded(sp_SymPolyHash*h){h->cap=16;h->mask=15;h->keys=(sp_sym*)sp_pl_alloc(sizeof(sp_sym)*(size_t)h->cap);for(sp_int i=0;i<h->cap;i++)h->keys[i]=-1;h->vals=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->order=(sp_sym*)sp_pl_alloc(sizeof(sp_sym)*(size_t)h->cap);h->len=0;h->default_v=sp_box_nil();h->ident=FALSE;sp_gc_payload_resize(h,0,(size_t)h->cap*SP_SYMPOLYHASH_SLOT);}
+static void sp_SymPolyHash_init_cap(sp_SymPolyHash*h,sp_int cap){h->cap=cap;h->mask=cap-1;h->keys=(sp_sym*)sp_pl_alloc(sizeof(sp_sym)*(size_t)h->cap);for(sp_int i=0;i<h->cap;i++)h->keys[i]=-1;h->vals=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->order=(sp_sym*)sp_pl_alloc(sizeof(sp_sym)*(size_t)h->cap);h->len=0;h->default_v=sp_box_nil();h->ident=FALSE;sp_gc_payload_resize(h,0,(size_t)h->cap*SP_SYMPOLYHASH_SLOT);}
+static void sp_SymPolyHash_init_embedded(sp_SymPolyHash*h){sp_SymPolyHash_init_cap(h,16);}
 static sp_SymPolyHash*sp_SymPolyHash_new(void){sp_SymPolyHash*h=(sp_SymPolyHash*)sp_gc_alloc(sizeof(sp_SymPolyHash),sp_SymPolyHash_fin,sp_SymPolyHash_scan);sp_SymPolyHash_init_embedded(h);return h;}
+static sp_SymPolyHash*sp_SymPolyHash_new_cap(sp_int n){sp_SymPolyHash*h=(sp_SymPolyHash*)sp_gc_alloc(sizeof(sp_SymPolyHash),sp_SymPolyHash_fin,sp_SymPolyHash_scan);sp_SymPolyHash_init_cap(h,sp_hash_cap_for(n));return h;}
 static sp_SymPolyHash*sp_SymPolyHash_new_with_default(sp_RbVal d){SP_GC_ROOT_RBVAL(d);sp_SymPolyHash*h=sp_SymPolyHash_new();h->default_v=d;return h;}
 static sp_SymPolyHash*sp_SymPolyHash_new_dproc(sp_sympoly_dproc_t fn,void*self){sp_SymPolyHash*h=sp_SymPolyHash_new();h->dproc=fn;h->dproc_self=self;return h;}
 static void sp_SymPolyHash_grow(sp_SymPolyHash*h){ sp_gc_wb((void*)h);sp_int oc=h->cap;sp_sym*ok=h->keys;sp_RbVal*ov=h->vals;h->cap*=2;if(h->cap<=0||h->cap>(INTPTR_MAX>>8))sp_oom_die();   /* `1 << 40` is 0 in a 32-bit sp_int, which refused every growth */h->mask=h->cap-1;h->keys=(sp_sym*)sp_pl_alloc(sizeof(sp_sym)*(size_t)h->cap);for(sp_int i=0;i<h->cap;i++)h->keys[i]=-1;h->vals=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->order=(sp_sym*)sp_pl_realloc(h->order,sizeof(sp_sym)*(size_t)h->cap);h->len=0;for(sp_int i=0;i<oc;i++){if(ok[i]>=0){sp_int idx=(sp_int)(((sp_int)ok[i])&h->mask);while(h->keys[idx]>=0)idx=(idx+1)&h->mask;h->keys[idx]=ok[i];h->vals[idx]=ov[i];h->len++;}}sp_pl_free(ok);sp_pl_free(ov);sp_gc_payload_resize(h,(size_t)oc*SP_SYMPOLYHASH_SLOT,(size_t)h->cap*SP_SYMPOLYHASH_SLOT);}
@@ -12305,8 +12357,10 @@ typedef struct sp_PolyPolyHash{sp_RbVal*keys;sp_RbVal*vals;sp_int*hs;sp_int*orde
 #define SP_POLYPOLYHASH_SLOT (2*sizeof(sp_RbVal)+2*sizeof(sp_int)+sizeof(sp_bool))
 static void sp_PolyPolyHash_fin(void*p){sp_PolyPolyHash*h=(sp_PolyPolyHash*)p;sp_gc_payload_resize(h,(size_t)h->cap*SP_POLYPOLYHASH_SLOT,0);sp_pl_free(h->keys);sp_pl_free(h->vals);sp_pl_free(h->hs);sp_pl_free(h->order);sp_pl_free(h->occ);}
 static void sp_PolyPolyHash_scan(void*p){sp_PolyPolyHash*h=(sp_PolyPolyHash*)p;for(sp_int i=0;i<h->cap;i++){if(h->occ[i]){sp_mark_rbval(h->keys[i]);sp_mark_rbval(h->vals[i]);}}sp_mark_rbval(h->default_v);if(h->dproc_self)sp_gc_mark(h->dproc_self);}
-static void sp_PolyPolyHash_init_embedded(sp_PolyPolyHash*h){h->cap=16;h->mask=15;h->keys=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->vals=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->hs=(sp_int*)sp_pl_alloc(sizeof(sp_int)*(size_t)h->cap);h->order=(sp_int*)sp_pl_alloc(sizeof(sp_int)*(size_t)h->cap);h->occ=(sp_bool*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_bool));h->len=0;h->default_v=sp_box_nil();h->ident=FALSE;sp_gc_payload_resize(h,0,(size_t)h->cap*SP_POLYPOLYHASH_SLOT);}
+static void sp_PolyPolyHash_init_cap(sp_PolyPolyHash*h,sp_int cap){h->cap=cap;h->mask=cap-1;h->keys=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->vals=(sp_RbVal*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_RbVal));h->hs=(sp_int*)sp_pl_alloc(sizeof(sp_int)*(size_t)h->cap);h->order=(sp_int*)sp_pl_alloc(sizeof(sp_int)*(size_t)h->cap);h->occ=(sp_bool*)sp_pl_zalloc((size_t)h->cap*sizeof(sp_bool));h->len=0;h->default_v=sp_box_nil();h->ident=FALSE;sp_gc_payload_resize(h,0,(size_t)h->cap*SP_POLYPOLYHASH_SLOT);}
+static void sp_PolyPolyHash_init_embedded(sp_PolyPolyHash*h){sp_PolyPolyHash_init_cap(h,16);}
 static sp_PolyPolyHash*sp_PolyPolyHash_new(void){sp_PolyPolyHash*h=(sp_PolyPolyHash*)sp_gc_alloc(sizeof(sp_PolyPolyHash),sp_PolyPolyHash_fin,sp_PolyPolyHash_scan);sp_PolyPolyHash_init_embedded(h);return h;}
+static sp_PolyPolyHash*sp_PolyPolyHash_new_cap(sp_int n){sp_PolyPolyHash*h=(sp_PolyPolyHash*)sp_gc_alloc(sizeof(sp_PolyPolyHash),sp_PolyPolyHash_fin,sp_PolyPolyHash_scan);sp_PolyPolyHash_init_cap(h,sp_hash_cap_for(n));return h;}
 static sp_PolyPolyHash*sp_PolyPolyHash_new_with_default(sp_RbVal d){SP_GC_ROOT_RBVAL(d);sp_PolyPolyHash*h=sp_PolyPolyHash_new();h->default_v=d;return h;}
 static sp_PolyPolyHash*sp_PolyPolyHash_new_dproc(sp_polypoly_dproc_t fn,void*self){sp_PolyPolyHash*h=sp_PolyPolyHash_new();h->dproc=fn;h->dproc_self=self;return h;}
 /* The table keeps each key's hash beside it, as CRuby's does, so the
@@ -18098,11 +18152,19 @@ SP_NORETURN SP_COLD static void sp_abort_raise(const char *msg) {
   }
   exit(sp_at_exit_run(1));
 }
+/* The TypeError a raise makes when its operands are not an exception: it is
+   not the exception the raise names, so an explicit `cause:` the raise
+   staged is not its cause. Its cause is the exception being handled, as in
+   CRuby. */
+SP_NORETURN SP_COLD static void sp_raise_operand_type(const char *msg) {
+  sp_explicit_cause = NULL; sp_explicit_cause_set = 0;
+  sp_raise_cls("TypeError", msg);
+}
 static void sp_raise_exc(volatile sp_Exception *ve) {
   sp_sig_async_ok = 0;   /* see sp_raise_cls */
   sp_Exception *e = (sp_Exception *)ve;
   /* `raise nil`, or a raise of an Exception slot that holds nil */
-  if (!e) sp_raise_cls("TypeError", "exception class/object expected");
+  if (!e) sp_raise_operand_type("exception class/object expected");
   /* Carry the object so a user subclass keeps its ivars across the
      longjmp; sp_raise_cls moves it into the current frame's slot. */
   sp_pending_exc_obj = (void *)e;
@@ -18127,23 +18189,36 @@ SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_obj(const char *ms
   sp_raise_exc(e);
   SP_UNREACHABLE();   /* sp_raise_exc longjmps */
 }
-SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call(const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, ...) {
+/* A raise with an explicit `cause:` stages its cause (cz, NULL for
+   `cause: nil`) through these _cz entries once its operands have run (see
+   sp_raise_cls_cz). */
+#define SP_CAUSE_STAGE(cz) (sp_explicit_cause = (cz), sp_explicit_cause_set = 1)
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_va(int czset, void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, va_list ap) {
   SP_GC_SAVE();
   SP_GC_ROOT_STR(msg);
   SP_GC_ROOT_RBVAL(name);
   SP_GC_ROOT_RBVAL(recv);
   sp_RbVal v[n > 0 ? n : 1];
-  va_list ap;
-  va_start(ap, n);
   for (sp_int i = 0; i < n; i++) v[i] = va_arg(ap, sp_RbVal);
-  va_end(ap);
   for (sp_int i = 0; i < n; i++) _sp_gc_root_push((void **)((uintptr_t)&v[i] | (uintptr_t)1));
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
   for (sp_int i = 0; i < n; i++) sp_PolyArray_push(a, v[i]);
+  /* (a raise's explicit cause, staged once the operands ran: sp_raise_cls_cz) */
+  if (czset) SP_CAUSE_STAGE(cz);
   sp_raise_nomethod_obj(msg, name, recv, a);
 }
-SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call(const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  sp_raise_nomethod_va(0, NULL, msg, name, recv, n, ap);
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_cz(void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  sp_raise_nomethod_va(1, cz, msg, name, recv, n, ap);
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_rest_c(int czset, void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
   SP_GC_SAVE();
   SP_GC_ROOT_STR(msg);
   SP_GC_ROOT_RBVAL(name);
@@ -18156,7 +18231,14 @@ SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const ch
   SP_GC_ROOT(r);
   for (sp_int i = 0; r && i < r->len; i++) sp_PolyArray_push(a, r->data[i]);
   if (sp_poly_length(kw) > 0) sp_PolyArray_push(a, kw);
+  if (czset) SP_CAUSE_STAGE(cz);
   sp_raise_nomethod_obj(msg, name, recv, a);
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
+  sp_raise_nomethod_rest_c(0, NULL, msg, name, recv, rest, kw);
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest_cz(void *cz, const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
+  sp_raise_nomethod_rest_c(1, cz, msg, name, recv, rest, kw);
 }
 /* e.message as the String handle it holds (sp_Exception.msg_h), from the
    shared dispatch's stored message, which tells a message given from one
@@ -18410,7 +18492,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly(sp_RbVal v) {
       sp_raise_cls(cn, sp_str_empty);
     }
   }
-  sp_raise_cls("TypeError", "exception class/object expected");
+  sp_raise_operand_type("exception class/object expected");
 }
 /* Kernel#raise(klass_or_exc, msg) with a runtime-typed first operand: a Class
    value raises that class with the message, an exception object raises
@@ -18443,7 +18525,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg(sp_RbVal v, sp_RbVal m) {
       sp_raise_cls(cn, msg ? msg : sp_str_empty);
     }
   }
-  sp_raise_cls("TypeError", "exception class/object expected");
+  sp_raise_operand_type("exception class/object expected");
 }
 /* --share-strings: `raise k, m` with k a class known only at run time and m
    the box of a shared String's handle: the exception keeps the handle, as a
@@ -18470,6 +18552,56 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg_h(sp_RbVal v, sp_RbVal m) {
     }
   }
   sp_raise_poly_msg(v, m);
+}
+/* A raise with an explicit `cause:` stages the cause here, once its
+   operands have run: the argument list of the call below is evaluated
+   before the call, so a raise inside an operand (a method that raises, or
+   one that rescues its own raise) does not see the cause, and the cause is
+   not cleared before the raise it belongs to. cz is the cause, NULL for
+   none (`cause: nil`); the caller holds it rooted. */
+SP_NORETURN SP_COLD static void sp_raise_cls_cz(void *cz, const char *cls, const char *msg) {
+  SP_CAUSE_STAGE(cz); sp_raise_cls(cls, msg);
+}
+SP_NORETURN SP_COLD static void sp_raise_cz(void *cz, const char *msg) {
+  SP_CAUSE_STAGE(cz); sp_raise_cls("RuntimeError", msg);
+}
+SP_NORETURN SP_COLD static void sp_raise_exc_cz(void *cz, volatile sp_Exception *e) {
+  SP_CAUSE_STAGE(cz); sp_raise_exc(e); SP_UNREACHABLE();
+}
+SP_NORETURN SP_COLD static void sp_raise_poly_cz(void *cz, sp_RbVal v) {
+  SP_CAUSE_STAGE(cz); sp_raise_poly(v);
+}
+SP_NORETURN SP_COLD static void sp_raise_poly_msg_h_cz(void *cz, sp_RbVal v, sp_RbVal m) {
+  /* What sp_raise_poly_msg runs before its raise runs here, before the
+     cause is staged: the message's own to_s (which may rescue a raise of
+     its own), and the signal name SignalException looks up (an unknown one
+     is an ArgumentError, which does not take the cause). */
+  SP_GC_ROOT_RBVAL(v);
+  SP_GC_ROOT_RBVAL(m);
+  /* the SystemCallError family builds from the operand itself (a lone
+     Integer is the errno: SystemCallError, 2 is an Errno::ENOENT), so it is
+     built here as sp_raise_poly_msg builds it, before the cause */
+  if (v.tag == SP_TAG_CLASS) {
+    const char *cn = sp_class_val_name(v);
+    if (cn && *cn && sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE &&
+        ((sp_user_exc_parent_fn && sp_user_exc_parent_fn(cn)) || sp_exc_parent_of_name(cn))) {
+      sp_Exception *se = sp_syserr_build(cn, 1, &m);
+      SP_GC_ROOT(se);
+      SP_CAUSE_STAGE(cz);
+      if (!(sp_user_exc_parent_fn && sp_user_exc_parent_fn(cn))) sp_raise_exc(se);
+      sp_raise_cls(cn, se->msg);
+    }
+  }
+  if (m.tag != SP_TAG_NIL && m.tag != SP_TAG_STR && !sp_poly_is_strbuf(m)) m = sp_box_str(sp_poly_to_s(m));
+  if (v.tag == SP_TAG_CLASS) {
+    const char *cn = sp_class_val_name(v);
+    if (cn && !strcmp(cn, "SignalException")) {
+      sp_Exception *e = sp_signal_exc_new(m);
+      SP_GC_ROOT(e);
+      SP_CAUSE_STAGE(cz); sp_raise_exc(e); SP_UNREACHABLE();
+    }
+  }
+  SP_CAUSE_STAGE(cz); sp_raise_poly_msg_h(v, m);
 }
 /* Raise StopIteration carrying the iteration's return value as #result. Built as
    a carried object so a `rescue StopIteration => e` binding reads e.result; a
@@ -21898,6 +22030,9 @@ static inline void sp_proc_arg_set(sp_int k, sp_RbVal v) {
   sp_ProcWide *w = _sp_proc_poly_wide;
   if (w && k - SP_PROC_ARG_SLOTS < w->n) { w->v[k - SP_PROC_ARG_SLOTS] = v; sp_gc_wb((void *)w); }
 }
+/* The boxed result of the call that entered, as its caller reads it: the fn
+   of a Proc that a host makes (sp_proc_new) answers with it. */
+static inline void sp_proc_ret_set(sp_RbVal v) { _sp_proc_poly_ret = v; }
 /* The block channel (_sp_proc_blk, declared above): the kernel TU owns it. */
 #ifndef SPINEL_EXT_HOST
 SP_TLS sp_Proc *_sp_proc_blk;

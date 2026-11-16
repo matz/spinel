@@ -87,7 +87,7 @@ typedef struct {
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
-  unsigned char core_hook; /* a super in a class method that reaches only a core hook's no-op: nothing of the program's answers it, and emit_super answers nil */
+  const char *bowner;      /* UC_SUPER with no program method (mi -1): the builtin class or module whose method the super reaches (MethodLookup.bowner); in a class method, the owner of a definition hook (cplan_core_hook) */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */
   int vis_cell;             /* the history cell + 1 whose visibility cell guards the call (a top-level def's visibility only the run tells, cplan_root_top_def), 0 for none */
@@ -248,7 +248,9 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT
    sides (CT_CMETHOD, CT_OWN, CT_TOP, CT_CAPTURE) are as they are. CT_SHARED marks the ask of a reader the call sites
    share: a node's frame that is open keeps its read counted as the node's (--method-table-check) until the site asks
    the plan itself. CT_ATTR asks the attribute alone (the writer's with CT_WRITER): ML_ATTR where the chain holds
-   one, whatever def is nearer, as comp_reader_in_chain answers it. */
+   one, whatever def is nearer, as comp_reader_in_chain answers it. An accessor has a load point: asked at a call (id >= 0), the ask answers none where no attr_*
+   call of the name has run by the call's point (ct_attr_point); with no call (id -1) it is a candidate scan of
+   every class, and an accessor with versions is reported as an `accessor` table answer. */
 /* CT_NOFACE asks the instance lookup with no visibility face, as a call
    that enforces nothing does: a private def is found. It is the one flag
    that says so by itself; every other flag but CT_WRITER (which asks the
@@ -306,6 +308,9 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
    the class a super's lookup started from, written by those two only.
+   bowner: where no program method answers a super, the builtin class or
+   module whose method it reaches (builtin_super_owner: its table's name),
+   NULL for none; written by cplan_super_target only.
    kind is read by cplan_resolve_super, cplan_presence, cplan_implied_target,
    cplan_boxed_to_ary_classes and cplan_main_singleton_call, and ML_OBJECT by
    cplan_missing and method_obj_lookup; why by the method-table check
@@ -328,16 +333,18 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, 
    without asking the record, as for a call with no node or a name the node
    does not itself call (UNASKED); a Method's arm on a class whose accessor
    the tables have and whose capture meets neither a version of it nor a
-   def (cplan_capture_class_arms: ACCESSOR). For ML_NONE: the record's none
+   def (cplan_capture_class_arms: ACCESSOR); a visibility the plan
+   answers from the tables, for a name whose visibility the record may tell
+   apart where it has no answer at the call (cplan_method_vis: VIS). For ML_NONE: the record's none
    (RECORD): for a method, none is live at the call's point and the call
    takes no version entry to tell a later run, so it raises there wherever
    it runs, as nothing proves it runs after a def; for a name the tables
    hold no method scope of (an accessor's), asked only under CT_REACH, the
    record proves the call runs before every version of it
    (ct_before_versions). Any other why on an ML_NONE (0, or UNASKED from
-   cplan_new_initialize) is a none the tables give */
-typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD } MlWhy;
-typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
+   cplan_hook_target) is a none the tables give */
+typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD, MLW_VIS } MlWhy;
+typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; const char *bowner; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
 /* Does an attribute (attr_reader, attr_writer, a Struct member) answer this
@@ -355,6 +362,13 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    chain's); ml as call_target's, and ml->from the class the lookup started
    from (-1: a prepend chain with no next) */
 int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
+/* The class a super in instance method scope s starts its chain at: the parent (Object for a root class), but
+   none for a class with no program superclass that sits under a builtin answering the name ahead of Object (an
+   exception, an Array, a Struct): the builtin's method is the answer, and a reopening of Object's is behind it.
+   Every reader of a super's target starts here. */
+int cplan_super_start(Compiler *c, const Scope *s);
+/* Is super node id, in a class method, the call of a definition hook (`inherited`, `method_added`) that only a builtin's no-op answers? */
+int cplan_core_hook(Compiler *c, int id);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */
 /* Does call id run Kernel's raise: a receiverless `raise` or `fail` that no
    method of the program answers (a class's own `raise`, a top-level def)? */
@@ -445,6 +459,7 @@ void ver_hold_free(Compiler *c);
 void ver_chain_free(Compiler *c);
 void new_inits_free(Compiler *c);
 void new_sites_free(Compiler *c);
+void attr_facts_free(Compiler *c);
 /* the method call id reaches when it can reach only main's own method of
    name, -1 for none (a call on main where main's method is defined) */
 int ct_main_target(Compiler *c, int id, const char *name);
@@ -478,8 +493,20 @@ int cplan_cell_write_dropped(Compiler *c, int id);
    word stands inside an expression (`c && public(:m, :n)`), which may not
    run when its statement does, so no write beside the statement can stand
    for it (ver_cells_put). *g is NULL for a cell no emitted code reads. 0
-   past the last, and for any other node. */
-int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v);
+   past the last, and for any other node. The cells of an include that
+   brings Kernel into a class come after the visibility cells, each written
+   as 1; *only is the class whose cell it is where the include writes the
+   cells of several classes by the class it ran on (_sp_cls), else -1. */
+int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v, int *only);
+/* The name of class cls's Kernel cell, `$__spinel_kern_<cls>`, which a blank slate's readers test where an include
+   brings Kernel into it at run time (cplan_class_kernel: KERN_CELL), and whether the class method of scope index
+   scope holds an include that writes the cells of several classes by the receiving class, which the method then
+   takes (cmethod_takes_self_cls). */
+void cplan_kernel_cell_name(int cls, char out[32]);
+int cplan_kern_site_by_class(Compiler *c, int scope);
+/* elab_class_kernel with the cells: KERN_CELL for a class whose chain lacks Kernel and holds a class or module an
+   include of the program may bring Kernel into at run time */
+int cplan_class_kernel(Compiler *c, int cls);
 /* `cell = v` put in statement list `list` at its statement `at` (after it
    when after): the write, for the caller to record (elab_record_write) */
 int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int v);
@@ -588,9 +615,12 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
    (no row, or an undef on the chain) */
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
-/* The initialize the builtin Class#new runs when node id (a `new` the
+/* The method the builtin runs for node id on class ci: with name
+   "initialize", the initialize Class#new runs when id (a `new` the
    program's `new` does not answer, a `raise K`) builds an instance of
-   class ci: the version the record proves where id runs (*ml ML_METHOD),
+   class ci; with "initialize_copy", the hook a dup or clone id runs on the
+   copy of an instance of ci (no entry is made for it). The version the
+   record proves where id runs (*ml ML_METHOD),
    else the table's method (ML_TABLE); ML_NONE and -1 where ci has no
    initialize of the program's, or the record proves none where id runs (a
    def that comes later): the builtin construction. Every reader of a
@@ -599,10 +629,11 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
    block decisions, ask cplan_new_arm_initialize, which may answer the
    table's for a class no run of the site can build. A reader whose
    receiver is a self in a class method asks with id -1, the table's
-   answer: self may be a class under ci. ml may be NULL. */
-int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml);
+   answer: self may be a class under ci. ml may be NULL; its def_class is
+   the class that holds the method, as comp_method_in_chain gives it. */
+int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLookup *ml);
 /* The initialize the arm for class ci of a `new` on a Class value (call
-   id) runs: the site's (cplan_new_initialize), else the table's where ci
+   id) runs: the site's (cplan_hook_target), else the table's where ci
    is opened at no statement the call may run at (its window): no run
    takes that arm, which keeps the constructor's own */
 int cplan_new_arm_initialize(Compiler *c, int id, int ci);
@@ -624,7 +655,7 @@ int cplan_new_arm_initialize(Compiler *c, int id, int ci);
 int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole);
 /* The initialize a Kernel `raise K` or `raise K, msg` (call id) runs, K a
    constant naming an exception class of the program's: K.new's there
-   (cplan_new_initialize); -1 for any other call */
+   (cplan_hook_target); -1 for any other call */
 int cplan_raise_initialize(Compiler *c, int id);
 /* The to_ary of the program's through which a value of type t converts
    where node `at` takes it apart (the implied to_ary call a row makes on
@@ -741,6 +772,18 @@ int cplan_def_takes_argc(Compiler *c, int mi, int argc);
    binds through the gather, which judges the count there. Codegen's arms
    and the inference of their answer both ask this. */
 int cplan_cls_arm_takes(Compiler *c, int id, int mi, int argc, int splat);
+/* The arms of the class-valued dispatch of a class method call (a Class value held in a variable, a
+   parameter or a constant that names no one class): the classes it has one for into *cls and the
+   class method each calls into *mi (malloc'd, the caller frees; NULL for a direct call), their number.
+   *lower (may be NULL): CLS_LOWER_SWITCH where the call is lowered as the switch of these arms, CLS_LOWER_PROC
+   where a candidate takes the block as a proc. The emitter writes these arms and reachability keeps
+   the versions they name. */
+enum { CLS_LOWER_SWITCH = 1, CLS_LOWER_PROC = 2 };   /* how cplan_cls_value_arms says the call is lowered */
+int cplan_cls_value_arms(Compiler *c, int id, const char *name, int argc, int **cls, int **mi, unsigned *lower);
+/* Can class k be a run-time class value: named by reached code, or an ancestor of one that is */
+int cplan_class_value_possible(Compiler *c, int k);
+/* Does class k answer call `call`'s `name` by a `class << self` accessor, not a class method? */
+int cplan_cls_own_sg_answers(Compiler *c, int call, int k, const char *name, int argc);
 /* Is call id a class body's call on self (receiverless or `self.`) that
    the plan binds to one method of the body's class (UC_CMETH, CP_DIRECT)?
    That binding is the one method the call runs, so reachability follows it

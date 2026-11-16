@@ -214,6 +214,8 @@ module URI
 
     # The port a scheme's class implies (nil for a scheme with none); a
     # parsed URI with no port of its own takes it.
+    DEFAULT_PORT = nil
+
     def self.default_port
       nil
     end
@@ -724,6 +726,8 @@ module URI
   # Array of [userinfo, host, port, path, query, fragment]. A port not
   # given is the scheme's default, which #to_s leaves off, as CRuby does.
   class HTTP < Generic
+    DEFAULT_PORT = 80
+
     def self.default_port
       80
     end
@@ -767,6 +771,8 @@ module URI
   end
 
   class HTTPS < HTTP
+    DEFAULT_PORT = 443
+
     def self.default_port
       443
     end
@@ -778,6 +784,8 @@ module URI
   # its typecode.
   class FTP < Generic
     attr_reader :typecode
+
+    DEFAULT_PORT = 21
 
     def self.default_port
       21
@@ -927,6 +935,8 @@ module URI
   end
 
   class WS < Generic
+    DEFAULT_PORT = 80
+
     def self.default_port
       80
     end
@@ -950,6 +960,8 @@ module URI
   end
 
   class WSS < WS
+    DEFAULT_PORT = 443
+
     def self.default_port
       443
     end
@@ -1109,6 +1121,8 @@ module URI
 
     attr_reader :dn, :attributes, :scope, :filter, :extensions
 
+    DEFAULT_PORT = 389
+
     def self.default_port
       389
     end
@@ -1212,6 +1226,8 @@ module URI
   end
 
   class LDAPS < LDAP
+    DEFAULT_PORT = 636
+
     def self.default_port
       636
     end

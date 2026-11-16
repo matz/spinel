@@ -272,6 +272,7 @@ const char *ty_name(TyKind t) {
     case TY_METHOD:  return "method";
     case TY_IO:      return "io";
     case TY_ARGF:    return "argf";
+    case TY_ENV:     return "env";
     case TY_ENUMERATOR: return "enumerator";
     case TY_CLASS:   return "class";
     case TY_POLY:    return "poly";

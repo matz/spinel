@@ -2,6 +2,7 @@
    lowering, split out of codegen_call.c. Pure code movement, no logic change. */
 
 #include "codegen_internal.h"
+#include "codegen_call_arms.h"
 #include "codegen_poly.h"
 #include "share.h"
 #include "repr.h"
@@ -570,7 +571,6 @@ static void inline_target_lookup(Compiler *c, int id, const char *name, int recv
                         ? key_name(c, recv) : NULL;
     /* (the class the node names: an alias's too) */
   int ci = cname ? const_node_class_index(c, recv) : rk == NK_SelfNode && class_body_self_ci(c, recv) >= 0 ? class_body_self_ci(c, recv) : self_class_static_ci(c, recv);
-  if (ci < 0 && cname) ci = comp_class_index(c, cname);
     if ((t->mi = class_reopen_cmethod(c, id, recv, name)) >= 0) {
       t->cm_class = c->scopes[t->mi].class_id;
       t->cm_self_id = builtin_class_id(cname);
@@ -686,7 +686,6 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
   }
   /* (the class the node names: an alias's too) */
   int ci = cname ? const_node_class_index(c, recv) : bci >= 0 ? bci : self_class_static_ci(c, recv);
-  if (ci < 0 && cname) ci = comp_class_index(c, cname);
   if (p.via == UC_CMETH && !p.by_name && (cname || ci >= 0)) {
     if (ci >= 0 && p.owner_ci == ci) { t->mi = p.mi; t->cm_class = ci; return 1; }
     if (!narrow && cname && builtin_class_id(cname) && p.owner_ci == c->scopes[p.mi].class_id &&
@@ -1403,8 +1402,22 @@ void emit_yield_proc_call(Compiler *c, int site, TyKind result_ty, Buf *b, int i
   for (int i = 0; i < nk; i++) needed |= proc_body_node(c, ks[i]) < 0 || used_block_param(c, ks[i]) != NULL;
   if (proc_body_node(c, g_yield_proc_expr) >= 0) needed = used_block_param(c, g_yield_proc_expr) != NULL;
   int blk = needed ? literal : -1;
+  if (literal >= 0 && nt_safe_nav(nt, site) && g_sn_skip != site) {
+    int receiver = nt_ref(nt, site, "receiver"), rv = view_push(c, receiver, TY_PROC);
+    int slot = view_bind(receiver, "%s", g_yield_proc_ref);
+    int view = view_push(c, site, as_expr ? result_ty : TY_POLY);
+    int guarded = emit_call_safe_nav_arms(c, site, b, nt, nt_str(nt, site, "name"), receiver);
+    view_pop(c, view);
+    view_unbind(slot); view_pop(c, rv);
+    if (guarded) { if (!as_expr) buf_puts(b, ";\n"); return; }
+  }
   Buf recv = {0};
-  if (literal >= 0) buf_printf(&recv, "sp_proc_recv(%s, \"%s\")", g_yield_proc_ref, blockless_block_param_call_name(c, site));
+  if (literal >= 0) {
+    buf_puts(&recv, "sp_proc_recv(");
+    if (g_sn_skip == site) emit_expr(c, nt_ref(nt, site, "receiver"), &recv);
+    else buf_puts(&recv, g_yield_proc_ref);
+    buf_printf(&recv, ", \"%s\")", blockless_block_param_call_name(c, site));
+  }
   const char *ref = recv.p ? recv.p : g_yield_proc_ref;
   if (!as_expr && blk < 0) {
     emit_indent(b, indent);
@@ -2726,7 +2739,14 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
     }
     char ref[32] = "NULL"; if (t >= 0) snprintf(ref, sizeof ref, "_t%d", t);
     BI_BLOCK_SIDE();
-    emit_iter_param_assign(c, blk, bpn, rename_local(bpn), TY_PROC, ref, b, indent);
+    Scope *bsc = comp_scope_of(c, blk); LocalVar *blv = bsc ? scope_local(bsc, bpn) : NULL;
+    emit_param_cell_fresh(c, blk, bpn, b, as_expr ? 0 : indent);
+    if (emit_proc_cell_lvalue(c, blk, bpn, b)) buf_printf(b, "%s);\n", ref);
+    else if (blv && blv->is_cell) {
+      emit_local_ref(c, blk, bpn, b); buf_puts(b, " = ");
+      emit_boxed_text(c, TY_PROC, ref, b); buf_puts(b, ";\n");
+    }
+    else emit_iter_param_assign(c, blk, bpn, rename_local(bpn), TY_PROC, ref, b, indent);
     BI_METHOD_SIDE();
   }
   emit_block_binds(c, blk, yargs, yc, b, indent, as_expr, &bi);
@@ -3808,7 +3828,6 @@ int call_targets_yielding_method(Compiler *c, int id) {
                      ? key_name(c, recv) : NULL;
     /* (the class the node names, as inline_target_lookup asks) */
     int ci = cn ? const_node_class_index(c, recv) : rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
-    if (ci < 0 && cn) ci = comp_class_index(c, cn);
     if (ci >= 0) mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
     else if (ty_is_object(rt)) mi = call_target(c, id, ty_object_class(rt), name, 0, NULL);
   }

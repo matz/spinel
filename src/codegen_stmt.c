@@ -2,6 +2,7 @@
 #include "order_plan.h"
 static void emit_ivar_lhs_otext(Compiler *c, int cid, int iv, const char *ivn, const char *lhs, const char *otext, Buf *b);
 static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
+static void emit_args_for_effect(Compiler *c, int call, Buf *b, int indent);
 #include "repr.h"
 #include "holder.h"
 #include "share.h"
@@ -5456,11 +5457,14 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
      new handle below, as any other bytes; aliased, the handle slot took a
      `const char *`) */
   /* (nor is a String literal, typed the handle where it fills one -- the
-     arm of `s || "lit"` -- which renders as its bytes, #10350; an
-     interpolated one renders as the handle) */
+     arm of `s || "lit"` -- which renders as its bytes, #10350; nor an
+     interpolation, which builds its bytes (emit_interp) whatever its type:
+     typed the handle where an extension's demand reached the slot it fills
+     (`opaque = "#{opaque}?#{query}"` in URI's parser, beside a package
+     with a C extension), the slot took a `const char *`) */
   else if (rpv.as_ty == TY_STRBUF && !fresh &&
            nt_kind(c->nt, v) != NK_BackReferenceReadNode && nt_kind(c->nt, v) != NK_NumberedReferenceReadNode &&
-           nt_kind(c->nt, v) != NK_StringNode &&
+           nt_kind(c->nt, v) != NK_StringNode && nt_kind(c->nt, v) != NK_InterpolatedStringNode &&
            (nt_kind(c->nt, v) != NK_CallNode || strbuf_marked_yields_handle(c, v))) {
     emit_expr(c, v, b);
   }
@@ -7639,7 +7643,7 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
   else if (sp_streq(cn, "Hash"))
     buf_printf(b, "(%s.tag == SP_TAG_OBJ && ((%s.cls_id <= -13 && %s.cls_id >= -20) || %s.cls_id == -34))", tmp, tmp, tmp, tmp);
   else {
-    int cid = ncid >= 0 ? ncid : comp_class_index(c, cn);
+    int cid = ncid >= 0 ? ncid : const_node_class_index(c, cond_id);
     /* a reopened builtin's entry (`class Dir; include M; end`) is not the
        class a boxed Dir carries: the runtime answers, as emit_poly_isa_test
        does */
@@ -8589,7 +8593,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     }
     if (pt == TY_EXCEPTION) {
       /* an exception scrutinee matches by name up its class chain (#2759) */
-      int eci = comp_class_index(c, cn2);
+      int eci = aliased ? const_node_class_index(c, pat) : -1;
       const char *en = eci >= 0 ? class_ruby_name(c, eci) : NULL;
       buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t,
                  aliased ? (en ? en : cn2) : exc_when_cls_name(c, pat, cq, sizeof cq));
@@ -15334,6 +15338,21 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
   free(tmp.p);
 }
 
+/* Are the classes of object types a and b one line (one an ancestor of the
+   other), neither a value type, and not the same? A pointer of one is
+   layout-compatible with the other's (a subclass replicates its parent's
+   fields at the same offsets), so a cast between them is a no-op C needs
+   spelled out. */
+static int obj_classes_related(Compiler *c, TyKind a, TyKind b) {
+  if (!ty_is_object(a) || !ty_is_object(b)) return 0;
+  int ac = ty_object_class(a), bc = ty_object_class(b);
+  if (ac < 0 || bc < 0 || ac == bc) return 0;
+  if (c->classes[ac].is_value_type || c->classes[bc].is_value_type) return 0;
+  for (int k = c->classes[ac].parent; k >= 0; k = c->classes[k].parent) if (k == bc) return 1;
+  for (int k = c->classes[bc].parent; k >= 0; k = c->classes[k].parent) if (k == ac) return 1;
+  return 0;
+}
+
 /* A literal whose evaluation has no side effects -- used to decide whether a
    discarded `return <expr>` in a void function needs `(void)(<expr>)` to keep
    the side effects or can collapse to a bare `return;`. Callers unwrap parens
@@ -16008,7 +16027,8 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
       first = 0;
       const char *ename = key_name(c, exc[i]);
       /* a class alias matches as the class it names */
-      if (ename && comp_class_index(c, ename) < 0 && comp_const(c, ename)) {
+      int rci = const_node_match_class_or_named(c, exc[i]);
+      if (ename && rci < 0 && comp_const(c, ename)) {
         const char *an = const_node_match_class_name(c, exc[i]);
         if (an) ename = an;
       }
@@ -16034,7 +16054,7 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
          (`rescue App::Error`, whose AST name is the leaf) and a
          leaf-referenced arm inside the module match the raised name. Resolve
          the index BEFORE swapping in the qualified name. */
-      int uci = (ename && !is_exc_name(ename)) ? comp_class_index(c, ename) : -1;
+      int uci = (ename && !is_exc_name(ename)) ? rci : -1;
       if (uci >= 0) {
         const char *qn = class_ruby_name(c, uci);
         if (qn) ename = qn;
@@ -20694,9 +20714,17 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
         buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\");\n");
         return 1;
       }
+      /* a form with main's `protected` among its operands (`private(protected(public(:m)))`, marked by the
+         load record) never finishes: its operands run in order, and the word's raise leaves it */
+      if (nt_int(nt, id, "form_raises", 0)) {
+        emit_args_for_effect(c, id, b, indent);
+        return 1;
+      }
       /* main has no `protected` (a Module's method): the word raises where it runs, and
          the def it may wrap (`protected def m`) is made first, as in CRuby */
       if (visibility_of_name(nm) == BVIS_PROTECTED && g_class_body_id < 0 && cplan_runs_on_main(c, id)) {
+        /* its arguments run first, in order, as any call's do (a def among them is made at load) */
+        emit_args_for_effect(c, id, b, indent);
         emit_indent(b, indent);
         /* (written bare, with no parentheses or argument, it is a variable-or-method read: a NameError) */
         if (nt_vcall(nt, id))
@@ -21960,20 +21988,31 @@ int missing_call_raised(Compiler *c, int v) {
   int m = cplan_missing_in_order(c, v);
   return m >= 0 && cplan_missing(c, m, self, sizeof self, NULL) != CM_NONE ? m : -1;
 }
+/* Run expression e at indent for its effect, its prelude in front of it. */
+static void emit_effect_stmt(Compiler *c, int e, Buf *b, int indent) {
+  Buf op, oe; memset(&op, 0, sizeof op); memset(&oe, 0, sizeof oe);
+  Buf *sv = g_pre; g_pre = &op;
+  emit_expr(c, e, &oe);
+  g_pre = sv;
+  if (op.p) buf_puts(b, op.p);
+  emit_indent(b, indent); buf_printf(b, "(void)(%s);\n", oe.p ? oe.p : "0");
+  free(op.p); free(oe.p);
+}
 /* Run, as statements at indent, the operands of run ahead of the call m
    that finds no method (missing_call_in_order), then m. Each operand's
    prelude goes in front of it, not in front of the statement: an earlier
    operand runs before a later one's. */
+/* Run the arguments of call, in order, each for its effect: a def is made at load, and an operand that acts on
+   nothing and cannot raise is skipped. */
+static void emit_args_for_effect(Compiler *c, int call, Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  int an = nt_ref(nt, call, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  for (int i = 0; i < ac; i++)
+    if (nt_kind(nt, av[i]) != NK_DefNode && !order_operand_inert(c, call, av[i], 0)) emit_effect_stmt(c, av[i], b, indent);
+}
 static void emit_missing_run(Compiler *c, int m, const OrderRun *run, Buf *b, int indent) {
-  for (int i = 0; i <= run->n; i++) {
-    Buf op, oe; memset(&op, 0, sizeof op); memset(&oe, 0, sizeof oe);
-    Buf *sv = g_pre; g_pre = &op;
-    emit_expr(c, i < run->n ? run->ids[i] : m, &oe);
-    g_pre = sv;
-    if (op.p) buf_puts(b, op.p);
-    emit_indent(b, indent); buf_printf(b, "(void)(%s);\n", oe.p ? oe.p : "0");
-    free(op.p); free(oe.p);
-  }
+  for (int i = 0; i <= run->n; i++) emit_effect_stmt(c, i < run->n ? run->ids[i] : m, b, indent);
 }
 
 static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
@@ -22779,6 +22818,20 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
   const char *ty = nt_type(nt, id);
   NodeKind ty_k = nt_kind(nt, id);
   if (!ty) unsupported(c, id, "statement (no type)");
+
+  /* A statement in parentheses whose last statement jumps (`(return v) if
+     c`, `(break) if i == 3`, a ternary's `(return v)` arm): nothing reads
+     the parentheses' value, so its statements run as the statements they
+     are. As an expression, the return had no place to be emitted. */
+  if (ty_k == NK_ParenthesesNode) {
+    int pb = nt_ref(nt, id, "body"), pn = 0;
+    const int *ps = pb >= 0 && nt_kind(nt, pb) == NK_StatementsNode ? nt_arr(nt, pb, "body", &pn) : NULL;
+    NodeKind lk = pn > 0 ? nt_kind(nt, ps[pn - 1]) : NK_NilNode;
+    if (lk == NK_ReturnNode || lk == NK_BreakNode || lk == NK_NextNode || lk == NK_RedoNode || lk == NK_RetryNode) {
+      for (int i = 0; i < pn; i++) emit_stmt(c, ps[i], b, indent);
+      return;
+    }
+  }
 
   /* `y << v` / `y.yield(v)` inside an Enumerator.new generator lowers to a
      Fiber.yield. Intercept here so the statement-level `<<` mutation fast path
@@ -23963,6 +24016,14 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
          reads, and each arm's, published others) */
       else if (!g_result_var && g_ret_type == TY_STRBUF && rt == TY_STRBUF)
         buf_printf(b, "sp_strface_pub_h(_t%d);\n", t);
+      /* an object into a slot typed another class of its line: cast, as a
+         plain tail's is (emit_obj_upcast_prefix), and the other way too --
+         the slot a subclass's copy of a `new` fills (a module an ancestor
+         extends writes it, `super` inside an ensure) is the subclass, while
+         the begin's own type is the class the method was analyzed on, the
+         ancestor; the object is the subclass's */
+      else if (ty_is_object(slot_t) && ty_is_object(rt) && obj_classes_related(c, slot_t, rt))
+        buf_printf(b, "(%s *)_t%d;\n", class_ctype(c, ty_object_class(slot_t)), t);
       else buf_printf(b, "_t%d;\n", t);
       return;
     }
@@ -25846,6 +25907,17 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
   { int rv = str_mutate_append_bang_arms(c, id, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }
   { int rv = str_mutate_reassign_arms(c, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }
 
+  /* `h[x] = (x = 5)`, `a[i] = (i = 2; v)`: CRuby reads the receiver and
+     the key before the value runs. The statement arms below read the key
+     inside the set's argument list, after the value's assignment, so a
+     value that can give the key's variable a new value declines here, to
+     the expression form, whose operands run in order
+     (emit_operands_in_order). (A receiver the key or the value can
+     rebind stays here: the arms below hold it first.) */
+  if ((is_store_alias(name) || sp_streq(name, "[]=")) && argc == 2 && recv >= 0 &&
+      (ty_is_hash(rt) || ty_is_array(rt)) && read_rebound_by(c, argv[0], argv[1]) &&
+      !read_rebound_by(c, recv, argv[1]) && !read_rebound_by(c, recv, argv[0]))
+    return 0;
   if (ty_is_hash(rt)) {
     const char *hn = ty_hash_cname(rt);
     /* Hash#store is the method form of []= */
@@ -27336,7 +27408,7 @@ int strbuf_flow_unseen(Compiler *c, int v) {
   if (share_value_fresh(c, v, 0)) return 1;
   int recv = nt_kind(nt, v) == NK_CallNode ? nt_ref(nt, v, "receiver") : -1;
   const char *rname = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
-  return is_argv_const(rname) || (is_env_const(rname) &&
+  return is_argv_const(rname) || (env_value_recv(c, recv, comp_ntype(c, recv)) &&
          bop_share_named(BOP_ENV, nt_str(nt, v, "name")) == BSH_PURE) || strbuf_flow_unseen_arms(c, v);
 }
 static int strbuf_flow_seen_leaf(Compiler *c, int v) { return !strbuf_flow_unseen(c, v); }

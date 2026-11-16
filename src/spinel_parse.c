@@ -3133,15 +3133,15 @@ static void sp_file_tiers_mark(NodeTable *nt) {
     if ((sp_file_tier[src] & ~SP_FILE_DEFERRED) != SP_LIB_NONE) nt_put_file_tier(nt, i, sp_file_tier[src] & ~SP_FILE_DEFERRED);
   }
 }
-/* Was file fid spliced from a require in a method, a block or a lambda, or
-   inside such a file? */
+/* Was file fid spliced from a require that does not always run where it stands (sp_req_always_runs), or from inside
+   such a file? */
 static int sp_file_deferred(int fid) {
   return sp_file_tier && fid >= 0 && fid < sp_file_count && (sp_file_tier[fid] & SP_FILE_DEFERRED);
 }
 /* Stamp top-level statement id, on source line bl under its owner's line ol,
    with the splice it ends (req_pop) when the two lines' splices differ, and
-   req_deferred when its file was spliced from a require in a method, a block
-   or a lambda, so it runs only when that code does. */
+   req_deferred when its file was spliced from a require that may not run
+   (sp_req_always_runs says no), so its statements may not have run. */
 static void sp_stamp_req_pop(int id, int32_t bl, int32_t ol) {
   if (bl < 1 || bl > sp_line_map_n || sp_line_pop[bl] <= 0 || sp_line_pop[bl] == sp_line_pop[ol]) return;
   emit_int(id, "req_pop", sp_line_pop[bl]);
@@ -4425,7 +4425,7 @@ typedef struct {
   int rel_stmt;              /* (in a rewrite) stmt_start and ctl_stmt_start are offsets in its text */
   int plain;                 /* a plain `require` (the load graph's; the plain pass still scans) */
   int line;                  /* the call's line in its file */
-  int deferred;              /* inside a method, a block or a lambda */
+  int deferred;              /* the require may not run where it stands (not sp_req_always_runs) */
 } SpReqSite;
 
 /* A rewrite the tree asks for: the text [a, b) becomes `text`, and the
@@ -4438,6 +4438,8 @@ typedef struct {
   int nsites;
 } SpReqEdit;
 
+/* A file's first `return` of its own (sp_req_always_runs): where it starts, NULL for none, once known. */
+typedef struct { const uint8_t *at; int known; } SpFileReturn;
 typedef struct {
   const pm_parser_t *parser;
   const char *text;
@@ -4452,6 +4454,7 @@ typedef struct {
   SpReqEdit *ed;
   int ned, edcap;
   SpReqEdit tail;            /* a required file's autoloads, written at its end */
+  SpFileReturn ret;          /* its first return (sp_req_always_runs) */
 } SpReqSiteScan;
 
 static size_t sp_line_start_of(const char *text, size_t at) {
@@ -4503,10 +4506,55 @@ static int sp_req_quoted_line(const pm_location_t *open, const pm_location_t *cl
          open->end - open->start == 1 && !memchr(open->start, '\n', (size_t)(close->end - open->start));
 }
 
+/* Where a file's first `return` of its own (not in a method, block or lambda) starts, once for the file's tree: every
+   require of the file asks it (sp_req_always_runs). at is NULL for none; known once the tree was visited. */
+static bool sp_first_return_visit(const pm_node_t *node, void *data) {
+  int t = PM_NODE_TYPE(node);
+  const uint8_t **at = data;
+  if (t == PM_DEF_NODE || t == PM_BLOCK_NODE || t == PM_LAMBDA_NODE) return false;
+  if (t == PM_RETURN_NODE && (!*at || node->location.start < *at)) *at = node->location.start;
+  return true;
+}
+
+/* Does the require `node` (below the ancestors stack[0..depth), the file's ProgramNode first) always run where its
+   file's statements run? The one fact the inline splice and the load graph's LoadNode both carry as req_deferred
+   (its negation), written here and nowhere else. It does when both hold:
+   - the require is a statement of its own, and every ancestor is the file's top-level statement list, a class,
+     module or singleton class body, or the body of a `begin` that has no rescue clause (with one, an earlier
+     statement's raise can skip it; without, the raise ends the program, and nothing observes the difference);
+   - no `return` of the file's own (conditional or not) starts before it, in an earlier statement of the top level or of
+     an enclosing begin, which ends the load before the require.
+   Every other placement (a method, a block, a lambda, a branch, a loop, a condition or short-circuit in expression
+   position, a rescue clause, an argument) is deferred; and a file required from a deferred one is deferred
+   (sp_file_deferred, below). */
+static int sp_req_always_runs(const pm_node_t *const *stack, int depth, const pm_node_t *node, SpFileReturn *ret) {
+  if (depth < 1 || PM_NODE_TYPE(stack[0]) != PM_PROGRAM_NODE) return 0;
+  pm_node_type_t pt = PM_NODE_TYPE(stack[depth - 1]);
+  if (pt != PM_STATEMENTS_NODE && pt != PM_PROGRAM_NODE) return 0;
+  for (int i = 0; i < depth; i++) {
+    const pm_node_t *a = stack[i], *child = i + 1 < depth ? stack[i + 1] : node;
+    switch (PM_NODE_TYPE(a)) {
+    case PM_PROGRAM_NODE: case PM_STATEMENTS_NODE: break;
+    case PM_BEGIN_NODE:
+      if (((const pm_begin_node_t *)a)->rescue_clause || child != (const pm_node_t *)((const pm_begin_node_t *)a)->statements) return 0;
+      break;
+    case PM_CLASS_NODE: if (child != ((const pm_class_node_t *)a)->body) return 0; break;
+    case PM_MODULE_NODE: if (child != ((const pm_module_node_t *)a)->body) return 0; break;
+    case PM_SINGLETON_CLASS_NODE: if (child != ((const pm_singleton_class_node_t *)a)->body) return 0; break;
+    default: return 0;
+    }
+  }
+  /* (every ancestor above is a list, a class or module body or a begin body, and a `return` in a class body is a
+     syntax error: one that starts before the require is in an earlier statement of a list on the way to it) */
+  if (!ret->known) { pm_visit_node(stack[0], sp_first_return_visit, &ret->at); ret->known = 1; }
+  if (ret->at && ret->at < node->location.start) return 0;
+  return 1;
+}
+
 /* Where `node` (a require, or the statement a rewrite puts requires in
    place of) stands: the facts a site's splice is chosen by, read from its
    ancestors on `s`'s stack. `st->kw` and `st->end` are its span. */
-static void sp_req_site_place(const SpReqSiteScan *s, const pm_node_t *node, SpReqSite *st) {
+static void sp_req_site_place(SpReqSiteScan *s, const pm_node_t *node, SpReqSite *st) {
   const char *t = s->text;
   st->line = (int)pm_newline_list_line(&s->parser->newline_list, node->location.start, s->parser->start_line);
   size_t ls = sp_line_start_of(t, st->kw);
@@ -4533,10 +4581,7 @@ static void sp_req_site_place(const SpReqSiteScan *s, const pm_node_t *node, SpR
     for (int i = 1; st->control_only && i < s->depth; i++)
       if (!sp_node_is_control(s->stack[i])) st->control_only = 0;
   }
-  for (int i = 0; i < s->depth; i++) {
-    pm_node_type_t at = PM_NODE_TYPE(s->stack[i]);
-    if (at == PM_DEF_NODE || at == PM_BLOCK_NODE || at == PM_LAMBDA_NODE) st->deferred = 1;
-  }
+  st->deferred = !sp_req_always_runs(s->stack, s->depth, node, &s->ret);
   const pm_node_t *top = s->depth > 2 ? s->stack[2] : node;
   st->stmt_start = sp_line_start_of(t, (size_t)((const char *)top->location.start - t));
   /* the innermost statement (the call or an ancestor right under a list of
@@ -5091,6 +5136,7 @@ static void sp_req_autoload(SpReqSiteScan *s, const pm_call_node_t *c) {
     place.kw = a; place.end = b;
     sp_req_site_place(s, (const pm_node_t *)c, &place);
     place.plain = !rel;
+    place.deferred = 1;                    /* an autoload's file runs at its constant's first reference, not here */
     sp_req_edit_put(sp_req_edit_new(s, a, b), buf, 0, flen, &place);
   }
   else {                                   /* nil in place, the require at the end */
@@ -5100,6 +5146,7 @@ static void sp_req_autoload(SpReqSiteScan *s, const pm_call_node_t *c) {
     memset(&place, 0, sizeof place);
     place.margin = 1; place.rel_stmt = 1; place.stmt_start = place.ctl_stmt_start = at;
     place.plain = !rel;
+    place.deferred = 1;                    /* (as above) */
     place.line = (int)pm_newline_list_line(&pp->newline_list, c->base.location.start, pp->start_line);
     sp_req_edit_put(&s->tail, buf, at, flen, &place);
     sp_req_edit_put(&s->tail, "\n", 0, 0, NULL);
@@ -5300,7 +5347,7 @@ typedef struct {
 
 /* --load-model=graph: a require of a file's tree: its edge, the call node it
    was found at, and how many LoadNodes flatten made of that call (one). */
-typedef struct { int edge; const pm_node_t *call; int taken; } SpGraphSite;
+typedef struct { int edge; const pm_node_t *call; int taken; int deferred; } SpGraphSite;   /* deferred: sp_req_always_runs says no */
 
 /* --load-model=graph: one file of the graph, read and parsed before any file
    is flattened, and its sites, in the order its tree has them. */
@@ -8037,7 +8084,7 @@ static char *sp_seed_dirs(const SpLoadGraph *g) {
    kept with its call node, which flatten's LoadNode looks it up by
    (sp_graph_site_take). `stack` holds the nodes above the one visited,
    from the file's root. */
-typedef struct { SpLoadGraph *g; int f, stmt; const pm_node_t *top; const pm_node_t **stack; int depth, cap; } SpSiteWalk;
+typedef struct { SpLoadGraph *g; int f, stmt; const pm_node_t *top; const pm_node_t **stack; int depth, cap; SpFileReturn ret; } SpSiteWalk;
 
 /* The edge of a require whose path is no literal: the one file a known path
    names, as that literal does; the files a known set or the files beside
@@ -8164,7 +8211,7 @@ static bool sp_graph_site_visit(const pm_node_t *node, void *data) {
       r->site = realloc(r->site, sizeof *r->site * (size_t)r->sitecap);
       if (!r->site) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
     }
-    r->site[r->nsite++] = (SpGraphSite){ e, node, 0 };
+    r->site[r->nsite++] = (SpGraphSite){ e, node, 0, !auto_load && !sp_req_always_runs(w->stack, w->depth, node, &w->ret) };
     free(method);
     free(path);
   }
@@ -8237,7 +8284,7 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
   g_parser = &r->src.parser;
   const pm_node_t *root = r->src.root;
   const pm_statements_node_t *st = PM_NODE_TYPE_P(root, PM_PROGRAM_NODE) ? ((const pm_program_node_t *)root)->statements : NULL;
-  SpSiteWalk w = { g, f, 0, NULL, NULL, 0, 0 };
+  SpSiteWalk w = { g, f, 0, NULL, NULL, 0, 0, { NULL, 0 } };
   if (st) {
     w.stack = malloc(sizeof *w.stack * (size_t)(w.cap = 32));
     if (!w.stack) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
@@ -8285,6 +8332,7 @@ static int sp_graph_site_take(int id, const pm_node_t *call) {
     for (int k = 0; k < e->nauto; k++)
       nt_add_autoload(out_nt, id, e->auto_file[k], e->autoload[k], e->auto_path[k]);
     if (sp_pm_name_is(g_parser, ((const pm_call_node_t *)call)->name, "autoload")) return 0;
+    if (r->site[k].deferred) emit_int(id, "req_deferred", 1);
     emit_str(id, "how", how_name[e->how]);
     if (e->to >= 0) emit_int(id, "target_file", e->to);
     /* the path a computed expression names, when it names one */

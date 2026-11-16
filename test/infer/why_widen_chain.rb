@@ -1,6 +1,6 @@
 # --warn-widen's why: a send on a poly receiver is followed to the candidate
 # whose return degraded, not to the receiver; an empty literal filled with
-# objects (its value goes on to a sort_by) is untyped by representation, not
+# objects (its value goes on to a first(n)) is untyped by representation, not
 # by the round; and a return that met two kinds names the other `return`.
 class Bad
   def initialize(v) = @v = v
@@ -28,4 +28,4 @@ def pick(n)
   :x
 end
 b = Bad.new(mk(ARGV.length))
-puts label(mk(ARGV.length)), b.to_s.to_s, load(ARGV.length).sort_by(&:object_id).length, pick(ARGV.length).to_s
+puts label(mk(ARGV.length)), b.to_s.to_s, load(ARGV.length).first(2).length, pick(ARGV.length).to_s

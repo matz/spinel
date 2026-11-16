@@ -86,6 +86,13 @@ static int emit_p_splat_value(Compiler *c, const char *name, int argc, const int
   return 1;
 }
 
+/* A block parameter the conversion method takes but does not yield to is a
+   parameter of its C function (emit_method_signature); the conversion passes
+   none. */
+static const char *kconv_blk_arg(const Compiler *c, int mi) {
+  const Scope *s = &c->scopes[mi];
+  return s->blk_param && s->blk_param[0] && !s->yields ? ", NULL" : "";
+}
 static int emit_kconv_obj_nil(Compiler *c, int arg, int ci, const char *m1, const char *m2, Buf *b) {
   int d = ci, mi = comp_method_in_chain(c, ci, m1, &d);
   if (mi < 0 && m2) { m1 = m2; mi = comp_method_in_chain(c, ci, m2, &d); }
@@ -96,7 +103,7 @@ static int emit_kconv_obj_nil(Compiler *c, int arg, int ci, const char *m1, cons
   const char *cn = c->classes[d].c_name;
   int t = ++g_tmp;
   buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", cn, t, cn); emit_expr(c, arg, b);
-  buf_printf(b, "); SP_GC_ROOT(_t%d); _t%d ? %s(_t%d) : %s; })", t, t, mc_method(c, &c->scopes[mi]), t, nil_c);
+  buf_printf(b, "); SP_GC_ROOT(_t%d); _t%d ? %s(_t%d%s) : %s; })", t, t, mc_method(c, &c->scopes[mi]), t, kconv_blk_arg(c, mi), nil_c);
   return 1;
 }
 
@@ -687,14 +694,14 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         int ami = comp_method_in_chain(c, acid, anm, &adef);
         if (expr_is_held_ref(c, av[0])) {
           buf_printf(b, "%s((sp_%s *)(", mc_method(c, &c->scopes[ami]), c->classes[adef].c_name);
-          emit_expr(c, av[0], b); buf_puts(b, "))");
+          emit_expr(c, av[0], b); buf_printf(b, ")%s)", kconv_blk_arg(c, ami));
         }
         else {
           /* rooted, as Kernel#String roots its #to_str receiver */
           int tao = ++g_tmp;
           buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", c->classes[adef].c_name, tao, c->classes[adef].c_name);
           emit_expr(c, av[0], b);
-          buf_printf(b, "); SP_GC_ROOT(_t%d); %s(_t%d); })", tao, mc_method(c, &c->scopes[ami]), tao);
+          buf_printf(b, "); SP_GC_ROOT(_t%d); %s(_t%d%s); })", tao, mc_method(c, &c->scopes[ami]), tao, kconv_blk_arg(c, ami));
         }
       }
       else { buf_puts(b, "sp_kernel_array("); emit_boxed(c, av[0], b); buf_puts(b, ")"); }
@@ -1099,8 +1106,7 @@ int env_delete_block_value(Compiler *c, int v) {
   const char *nm = v >= 0 && nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
   int recv = is_delete_name(nm) ? nt_ref(nt, v, "receiver") : -1;
   int blk = recv >= 0 ? nt_ref(nt, v, "block") : -1, argc = 0;
-  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || nt_kind(nt, recv) != NK_ConstantReadNode ||
-      !is_env_const(nt_str(nt, recv, "name")) || comp_const(c, "ENV"))
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || !env_value_recv(c, recv, comp_ntype(c, recv)))
     return -1;
   call_args(nt, v, &argc);
   if (argc != 1) return -1;
@@ -1527,9 +1533,11 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
      validation (#2743, #2746, #2747, #2765, #2766, #2773). */
   {
     int erecv = nt_ref(nt, id, "receiver");
-    NodeKind erk = nt_kind(nt, erecv);
-    const char *ern = (erk == NK_ConstantReadNode) ? key_name(c, erecv) : NULL;
-    if (ern && sp_streq(ern, "ENV")) {
+    /* (a receiver typed ENV that runs code: the arms below answer from the environment and would drop it) */
+    if (erecv >= 0 && comp_ntype(c, erecv) == TY_ENV && !env_value_recv(c, erecv, TY_ENV))
+      unsupported_feature(c, id, "a call on ENV through an expression that runs code (a method answering ENV) is not supported yet; "
+                                 "hold ENV in a variable or call it on ENV itself");
+    if (env_value_recv(c, erecv, comp_ntype(c, erecv))) {
       const char *enm = nt_str(nt, id, "name");
       int eac = 0; const int *eav = call_args(nt, id, &eac);
       /* a non-String key never converts: TypeError at the call (#2765/#2766) */
@@ -1743,10 +1751,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   }
   /* ENV[key] -> getenv */
   if (recv >= 0 && sp_streq(name, "[]") && argc == 1) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = key_name(c, recv);
-      if (rn && sp_streq(rn, "ENV")) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         buf_puts(b, "sp_env_str(getenv("); emit_env_str(c, argv[0], 0, b); buf_puts(b, "))");
         return 1;
       }
@@ -1754,10 +1760,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   }
   /* ENV[key] = value -> setenv (value nil unsets, like CRuby) */
   if (recv >= 0 && sp_streq(name, "[]=") && argc == 2) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         TyKind evt = comp_ntype(c, argv[1]);
         NodeKind v1k = nt_kind(nt, argv[1]);
         int lit_nil = v1k == NK_NilNode;
@@ -1790,10 +1794,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   /* ENV.size/count/length -> environ entry count */
   if (recv >= 0 && argc == 0 &&
       is_count_alias(name)) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         buf_puts(b, "sp_env_size()");
         return 1;
       }
@@ -1802,10 +1804,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   /* ENV.key?/has_key?/include?/member?(key) -> getenv presence test */
   if (recv >= 0 && argc == 1 &&
       is_key_query(name)) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         buf_puts(b, "(getenv("); emit_env_str(c, argv[0], 0, b); buf_puts(b, ") != NULL)");
         return 1;
       }
@@ -1813,10 +1813,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   }
   /* ENV.fetch(key, default) -> getenv with fallback */
   if (recv >= 0 && sp_streq(name, "fetch") && argc >= 1) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         /* The call's type is String joined with the default's: a String or
            nil default keeps the nullable string, any other default boxes both
            arms. (The block form is the ENV snapshot's Hash#fetch, #2742.) */

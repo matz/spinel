@@ -1,0 +1,17 @@
+#<struct B1 width=3, height=1>
+4
+6
+#<struct B2 width=1, height=1>
+2
+2
+#<struct B3 width=5, height=5>
+8
+#<struct B4 width=8, height=1>
+16
+#<struct B5 width=2.5, height=1>
+2.5
+#<struct B6 width=nil, height=1>
+"nil"
+#<struct B7 width=75, height=74>
+5550
+"ANN"

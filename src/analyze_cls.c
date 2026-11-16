@@ -114,6 +114,8 @@ typedef struct CF {
   unsigned char *dead;                  /* per scope: a protocol method of a runtime module the program never names (cf_mark_dead_protocols) */
   const char **dyn; int ndyn, cdyn;     /* method names a send, a method(:m) or a define_method names */
   int dyn_all, all_ivars, has_mm;
+  int *dsend, ndsend, cdsend;   /* (closed) the sends of a computed name, whose receivers' methods they reach (cf_dsend_wake) */
+  int *dsend_pend, ndsend_pend, cdsend_pend;   /* the methods only such a send calls, not yet reached by one */
   int exc_set;                          /* every user exception class */
   int fiber_ch;                         /* what a Fiber.yield answers: a resume's arguments */
   unsigned char *yval_used;             /* per scope: a yield's value is read (else the blocks' values go nowhere) */
@@ -1109,7 +1111,7 @@ static int cf_is_class_const(CF *f, int n) {
   if (n < 0) return -1;
   NodeKind k = nt_kind(f->nt, n);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
-  return comp_class_index(f->c, const_key_at(f->c, n));
+  return const_node_class_index(f->c, n);
 }
 /* the methods named `name`, memoized: the class structure does not move
    during the pass */
@@ -1183,9 +1185,17 @@ static CFByName *cf_byname(CF *f, const char *name) {
 }
 
 static int cf_is_dyn(CF *f, const char *name) {
-  if (f->dyn_all) return 1;
+  if (f->dyn_all || f->ndsend) return 1;
   for (int i = 0; i < f->ndyn; i++) if (sp_streq(f->dyn[i], name)) return 1;
   return 0;
+}
+static int cf_opaque_name(const char *nm);
+/* a method a send of a computed name may call, which no other way of the
+   analysis reaches by name: it waits for such a send's receivers */
+static int cf_dyn_by_send(CF *f, const char *name) {
+  if (f->dyn_all || !f->ndsend || cf_opaque_name(name)) return 0;
+  for (int i = 0; i < f->ndyn; i++) if (sp_streq(f->dyn[i], name)) return 0;
+  return 1;
 }
 static void cf_dyn_add(CF *f, const char *name) {
   if (!name) return;
@@ -1658,6 +1668,7 @@ static int cf_owner_block(CF *f, int v, int loop_stop) {
 
 static int cf_in_exec_block(CF *f, int v);
 static void cf_ivar_write_any(CF *f, const char *name, int v);
+static const char *cf_ivar_lit(CF *f, int call);
 
 /* the loop a break under v leaves: the nearest enclosing while, until or
    for, or -1 when a block, a lambda or a def is nearer */
@@ -3156,7 +3167,11 @@ static void cf_send_writers(CF *f, int v, int r, const int *argv, int argc) {
         char ivn[256];
         snprintf(ivn, sizeof ivn, "@%s", c->classes[x].writers[w]);
         int ie = cf_entry(f, f->fam[k], ivn);
-        cf_all(f, ie);
+        /* (a writer takes one argument: a send's value, unless a splat or a
+           keyword hash hands it another) */
+        NodeKind vk = argc == 2 ? nt_kind(f->nt, argv[1]) : NK_SplatNode;
+        if (vk != NK_SplatNode && vk != NK_KeywordHashNode && vk != NK_BlockArgumentNode) cf_flow(f, argv[1], ie);
+        else cf_all(f, ie);
       }
   }
 }
@@ -3296,6 +3311,55 @@ static int cf_proto_wake(CF *f) {
   f->nproto_pend = keep;
   return woke;
 }
+/* a method only a send of a computed name calls, once one's receiver may
+   be an object of its class (a class method: the Class object): its
+   parameters take what such sends hand on, as in cf_solve's seeding */
+static int cf_dsend_wake(CF *f) {
+  Compiler *c = f->c;
+  int woke = 0, keep = 0, all = 0;
+  int *rs = malloc(sizeof(int) * ((size_t)f->ndsend + 1));
+  if (!rs) cf_oom();
+  for (int i = 0; i < f->ndsend; i++) {
+    int v = f->dsend[i], r = nt_ref(f->nt, v, "receiver");
+    /* (a class method's self is its Class object, which no self element holds) */
+    int si = cf_scope_of(f, v);
+    int re = r >= 0 ? r : c->scopes[si].is_cmethod || cf_owner_block(f, v, 0) >= 0 ? -1 : cf_self_recv(f, v, si, nt_str(f->nt, v, "name"));
+    rs[i] = re >= 0 ? cf_set_of(f, re) : CF_ALL;
+    if (rs[i] == CF_ALL) all = 1;
+  }
+  for (int i = 0; i < f->ndsend_pend; i++) {
+    int mi = f->dsend_pend[i];
+    Scope *s = &c->scopes[mi];
+    int k = s->class_id, now = all || k < 0 || k >= c->nclasses || is_builtin_class_name(c->classes[k].name) ||
+                               sp_streq(c->classes[k].name, "Object") || sp_streq(c->classes[k].name, "BasicObject") ||
+                               sp_streq(c->classes[k].name, "Kernel");
+    const ClsSet *d = !now ? &f->pool[f->desc[k]] : NULL;
+    /* (a computed `new` on the Class object runs initialize; a module's
+       desc leaves the module out, whose Class object answers its own
+       singleton methods) */
+    int by_cls = s->is_cmethod || sp_streq(s->name, "initialize");
+    for (int j = 0; j < f->ndsend && !now; j++) {
+      if (rs[j] == CF_EMPTY) continue;
+      const ClsSet *r = &f->pool[rs[j]];
+      if (s->is_cmethod && cls_set_has(r, k + c->nclasses)) now = 1;
+      /* a module's instance method is a singleton method of each Class
+         object that extends it, or extends a module including it: any
+         Class object in the set may be one */
+      if (!s->is_cmethod && f->mod[k])
+        for (int x = c->nclasses; x < 2 * c->nclasses && !now; x++) now = cls_set_has(r, x);
+      for (int x = cls_set_next(d, -1); x >= 0 && !now; x = cls_set_next(d, x))
+        now = (!s->is_cmethod && cls_set_has(r, x)) || (by_cls && cls_set_has(r, x + c->nclasses));
+    }
+    if (!now) { f->dsend_pend[keep++] = mi; continue; }
+    for (int j = 0; j < s->nparams; j++) cf_edge(f, f->dynarg, cf_param_el(f, mi, j));
+    if (s->blk_param && s->blk_param[0]) cf_add_set(f, cf_lv_in(f, mi, s->blk_param), cf_proc_set(f));
+    cf_edge(f, f->ret_el[mi], f->dynarg);
+    woke = 1;
+  }
+  free(rs);
+  f->ndsend_pend = keep;
+  return woke;
+}
 /* A module_function is one scope for both of its spellings, `Mod.m(x)`
    and an includer's private `m(x)`, and the second reaches no class
    method by its chain: every call of the name binds it (a call of
@@ -3420,6 +3484,8 @@ static void cf_opaque_answer(CF *f, int v, int r, const char *nm, const int *arg
       if (rv >= 0) cf_flow(f, rv, v);
     }
     else if (argc >= 2) cf_flow(f, argv[argc - 1], v);
+    /* (into the ivar of every class: the receiver's classes are not asked) */
+    if (sp_streq(nm, "instance_variable_set") && argc == 2 && cf_ivar_lit(f, v)) cf_ivar_write_any(f, cf_ivar_lit(f, v), argv[1]);
     return;
   }
   if (sp_streq(nm, "const_get")) {
@@ -3430,8 +3496,10 @@ static void cf_opaque_answer(CF *f, int v, int r, const char *nm, const int *arg
   if (sp_streq(nm, "instance_variable_get")) {
     cf_add_set(f, v, cf_bv_set(f));
     cf_edge(f, f->rtc, v);
+    const char *lit = cf_ivar_lit(f, v);
     for (int i = 0; i < f->ent_cap; i++)
-      if (f->ent[i].name && f->ent[i].cls >= 0 && f->ent[i].name[0] == '@' && f->ent[i].name[1] != '@') cf_flow(f, f->ent[i].el, v);
+      if (f->ent[i].name && f->ent[i].cls >= 0 && f->ent[i].name[0] == '@' && f->ent[i].name[1] != '@' &&
+          (!lit || sp_streq(f->ent[i].name, lit))) cf_flow(f, f->ent[i].el, v);
     return;
   }
   if (cf_name_in(nm, execs)) {
@@ -3530,6 +3598,7 @@ static void cf_call(CF *f, int v) {
   if (cf_opaque_name(nm)) {
     cf_all(f, v);
     for (int i = 0; i < argc; i++) cf_all(f, argv[i]);
+    if (sp_streq(nm, "instance_variable_set") && argc == 2 && cf_ivar_lit(f, v)) cf_ivar_write_any(f, cf_ivar_lit(f, v), argv[1]);
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) { cf_all_block_params(f, blk); cf_all(f, blk); }
     if (argc >= 2 && (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) &&
         nt_kind(nt, argv[0]) != NK_SymbolNode && nt_kind(nt, argv[0]) != NK_StringNode)
@@ -4556,6 +4625,26 @@ static void cf_node(CF *f, int v) {
 
 /* ---- the pass ---- */
 
+/* the ivar a literal first argument names (`instance_variable_set(:@a, v)`,
+   `instance_variable_get(:@a)`), else NULL: a splat, a block argument or a
+   keyword hash may hand it other arguments than the ones written */
+static const char *cf_ivar_lit(CF *f, int call) {
+  const NodeTable *nt = f->nt;
+  const char *cn = nt_str(nt, call, "name");
+  int want = cn && sp_streq(cn, "instance_variable_set") ? 2 : cn && sp_streq(cn, "instance_variable_get") ? 1 : 0;
+  int a = nt_ref(nt, call, "arguments"), n = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+  if (!want || n != want || nt_ref(nt, call, "block") >= 0) return NULL;
+  for (int i = 0; i < n; i++) {
+    NodeKind ak = nt_kind(nt, av[i]);
+    if (ak == NK_SplatNode || ak == NK_BlockArgumentNode || ak == NK_KeywordHashNode) return NULL;
+  }
+  NodeKind k = nt_kind(nt, av[0]);
+  const char *nm = k == NK_SymbolNode ? nt_str(nt, av[0], "value") : k == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
+  if (!nm || nm[0] != '@' || nm[1] == '@' || !nm[1]) return NULL;
+  return nm;
+}
+
 static void cf_collect_dyn(CF *f) {
   const NodeTable *nt = f->nt;
   /* the constants the program writes: a read of any other names a builtin */
@@ -4574,7 +4663,18 @@ static void cf_collect_dyn(CF *f) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cn = nt_str(nt, id, "name");
     if (!cn) continue;
-    if (sp_streq(cn, "instance_variable_set") || sp_streq(cn, "instance_variable_get") || sp_streq(cn, "remove_instance_variable")) f->all_ivars = 1;
+    if (sp_streq(cn, "instance_variable_set") || sp_streq(cn, "instance_variable_get") || sp_streq(cn, "remove_instance_variable")) {
+      /* (a literal name reads or writes that ivar alone, at the call) */
+      if (sp_streq(cn, "remove_instance_variable") || !cf_ivar_lit(f, id)) f->all_ivars = 1;
+    }
+    /* (a send of one of them is no literal call of it) */
+    if (sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send")) {
+      int a1 = nt_ref(nt, id, "arguments"), n1 = 0;
+      const int *v1 = a1 >= 0 ? nt_arr(nt, a1, "arguments", &n1) : NULL;
+      NodeKind k1 = n1 > 0 ? nt_kind(nt, v1[0]) : NK_NilNode;
+      const char *sn = k1 == NK_SymbolNode ? nt_str(nt, v1[0], "value") : k1 == NK_StringNode ? nt_str(nt, v1[0], "content") : NULL;
+      if (sn && (sp_streq(sn, "instance_variable_set") || sp_streq(sn, "instance_variable_get") || sp_streq(sn, "remove_instance_variable"))) f->all_ivars = 1;
+    }
     /* `inject(:m)`, `inject(init, :m)` and `each_with_object(x, &:m)` call m
        with arguments the pass does not see: m takes any class */
     {
@@ -4615,7 +4715,10 @@ static void cf_collect_dyn(CF *f) {
       any = 1;
     }
     if (!any && !sp_streq(cn, "respond_to?") && !sp_streq(cn, "method_defined?")) {
-      f->dyn_all = 1;
+      /* (closed) a send, or a Method it makes, reaches the methods its
+         receiver's classes have: one with no receiver, its self's */
+      if ((is_send || sp_streq(cn, "method") || sp_streq(cn, "public_method")) && CF_CLOSED(f)) cf_push_int(&f->dsend, &f->ndsend, &f->cdsend, id);
+      else f->dyn_all = 1;
     }
   }
   /* (their names reach only the methods their receivers have,
@@ -5320,7 +5423,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     int sd_modfn = !CF_CLOSED(&f) && s->is_module_function;
     if (sd_proto || cf_opaque_name(s->name) || cf_is_dyn(&f, s->name) ||
         s->is_proc_form || s->is_lowered_yield ||
-        s->cs_synth || sd_modfn || sd_prelude ||
+        s->cs_synth || sd_modfn || sd_prelude || s->is_ext_entry || s->is_ext_method ||
         (c->n_cext_extensions && s->def_node >= 0 && nt_int(c->nt, s->def_node, "cext_stub", 0))) {
       f.protocol[mi] = 1;
       /* a C extension's method answers whatever VALUE its C returns (a
@@ -5342,8 +5445,13 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
            90001 a protocol name, 90002 a prelude helper,
            90003 a module_function, 90004 an opaque or dynamic name, 90005 a
            proc form, a lowered yield or a synthesized scope, 90006 the rest
-           (a C extension's stub) */
-        int why = sd_proto ? 90001 : sd_prelude ? 90002 : sd_modfn ? 90003 :
+           (a C extension's stub, or an --ext-entry or --ext-class method,
+           which the host calls with whatever it holds) */
+        /* (ahead of a dynamic name: the host's call is not a send the walk
+           sees, which cf_dsend_wake would wait for) */
+        int sd_host = s->is_ext_entry || s->is_ext_method ||
+                      (c->n_cext_extensions && s->def_node >= 0 && nt_int(c->nt, s->def_node, "cext_stub", 0));
+        int why = sd_proto ? 90001 : sd_prelude ? 90002 : sd_modfn ? 90003 : sd_host ? 90006 :
                   (cf_opaque_name(s->name) || cf_is_dyn(&f, s->name)) ? 90004 :
                   (s->is_proc_form || s->is_lowered_yield || s->cs_synth) ? 90005 : 90006;
         if (why == 90001 && f.rvis >= 0) {
@@ -5352,7 +5460,9 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
           cf_push_int(&f.proto_pend, &f.nproto_pend, &f.cproto_pend, mi);
         }
         else {
-          if (why == 90004 && f.dynarg >= 0 && (!cf_opaque_name(s->name) || CF_CLOSED(&f)) && !sd_proto && !sd_prelude && !sd_modfn) {
+          if (why == 90004 && f.dynarg >= 0 && cf_dyn_by_send(&f, s->name) && !sd_proto && !sd_prelude && !sd_modfn)
+            cf_push_int(&f.dsend_pend, &f.ndsend_pend, &f.cdsend_pend, mi);
+          else if (why == 90004 && f.dynarg >= 0 && (!cf_opaque_name(s->name) || CF_CLOSED(&f)) && !sd_proto && !sd_prelude && !sd_modfn) {
             for (int i = 0; i < s->nparams; i++) cf_edge(&f, f.dynarg, cf_param_el(&f, mi, i));
             if (s->blk_param && s->blk_param[0]) cf_add_set(&f, cf_lv_in(&f, mi, s->blk_param), cf_proc_set(&f));
             cf_edge(&f, f.ret_el[mi], f.dynarg);   /* (a memo handed back, a value sent on) */
@@ -5383,6 +5493,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
       if (s->body >= 0 && !f.dead[mi]) cf_flow(&f, cf_tail(&f, s->body), f.ret_el[mi]);
     }
     if (f.nproto_pend && cf_proto_wake(&f)) f.changed = 1;
+    if (f.ndsend_pend && cf_dsend_wake(&f)) f.changed = 1;
     if (f.changed) { f.phase = 0; continue; }
     if (f.phase == 1 || f.pending == 0) break;
     f.phase = 1;
@@ -5415,7 +5526,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
   free(f.sw); free(f.swi);
   for (int mi = 0; mi < c->nscopes; mi++) { free(f.lv_el[mi]); free(f.yarg_el[mi]); free(f.pm[mi].kw); free(f.pm[mi].el); }
   free(f.pm);
-  free(f.lv_el); free(f.nlv); free(f.ret_el); free(f.yval_el); free(f.yarg_el); free(f.has_super); free(f.protocol); free(f.dead); free(f.byname); free(f.proto_pend); free(f.bn_names);
+  free(f.lv_el); free(f.nlv); free(f.ret_el); free(f.yval_el); free(f.yarg_el); free(f.has_super); free(f.protocol); free(f.dead); free(f.byname); free(f.proto_pend); free(f.dsend); free(f.dsend_pend); free(f.bn_names);
   for (int q = 0; q < CF_PRN; q++) if (f.pr_built) { free(f.pr_mi[q]); free(f.pr_disp[q]); }
   for (int i = 0; i < f.okey_cap; i++) free(f.okey_k[i]);
   free(f.okey_k); free(f.okey_o);

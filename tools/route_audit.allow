@@ -79,7 +79,6 @@ src/codegen.c exc_class_defines a name's presence on an exception class
 src/codegen_call.c emit_class_value_responds_helper comp_cmethod_in_chain each class's own class methods, for respond_to? with a run-time name
 src/codegen_call.c emit_reopen_arm_test comp_cmethod_in_chain which classes define a class Class reopening's name otherwise
 src/codegen_call.c class_method_named a name's presence as a class method
-src/codegen_call.c diag_user_defines a name's presence
 src/codegen_call.c format_method_is_own a name's presence in a reopened Array or Hash
 src/codegen_call.c obj_member_shadows a name's presence
 src/codegen_call.c poly_name_cmethod_claimed a name's presence as a class method
@@ -112,7 +111,8 @@ src/call_plan.c cplan_conversion the conversion protocol's names
 src/call_plan.c cplan_mm_method =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
 src/call_plan.c cplan_mm_chain =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
 src/call_plan.c cplan_dispatch_miss =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
-src/call_plan.c cplan_capture_misses a capture's Symbol argument's method, and the method_missing and respond_to_missing? that answer for it, not one call's name
+src/call_plan.c cplan_hook_target comp_method_in_chain the initialize a builtin construction or the initialize_copy a builtin copy runs, a hook's name, not the call's
+src/call_plan.c ct_capture_hooked a capture's Symbol argument's method, and the method_missing and respond_to_missing? that answer for it, not one call's name
 src/call_plan.c capture_hook_reach =RESPOND_TO_MISSING_NAME the respond_to_missing? a capture asks where it finds no method, on a class and the classes under it, not one call's name
 src/codegen.c emit_exc_text_dispatch_at message / to_s
 src/codegen.c emit_obj_conv the conversion protocol's names
@@ -254,6 +254,7 @@ src/call_plan.c cplan_check_missing the independent check of resolution
 # a helper the compiler synthesizes, by its own name
 src/analyze.c desugar_to_enum a synthesized helper's name
 src/analyze_desugar.c desugar_builtin_enum_calls a synthesized helper's name
+src/analyze_desugar.c poly_recv_cmethod_answers which classes have a class method of an Enumerable name a boxed Class value may answer
 src/analyze_desugar.c desugar_builtin_scalar_calls =gn a synthesized helper's name
 src/analyze_desugar.c fwd_bam_lambda_count a synthesized helper's name
 src/analyze_desugar.c ie_enum_reopen_answers a name's presence in the Enumerable reopen

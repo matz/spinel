@@ -13079,7 +13079,6 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       int cid = ty_object_class(rt);
       /* (the class the constant names: an alias's is the class it holds) */
       int target = const_node_class_index(c, argv[0]);
-      if (target < 0) target = comp_class_index(c, cn);
       /* an exception-subclass instance walks its carried cls_name chain --
          the class-index fold below answers 0 for builtin targets like
          StandardError, which have no user class index. Exception class names
@@ -17043,11 +17042,11 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   if ((sp_streq(name, "arg") || sp_streq(name, "angle") || sp_streq(name, "phase") ||
        sp_streq(name, "rect") || sp_streq(name, "rectangular") || sp_streq(name, "polar")) && argc == 0) {
     int has_user = 0;
-    if (!g_poly_builtin_arm)
-    for (int kk = 0; kk < c->nclasses && !has_user; kk++)
-      if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-          (!c->classes[kk].is_native_class && comp_reader_in_chain(c, kk, name, NULL)) ||
-          call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
+    if (!g_poly_builtin_arm) {
+      has_user = comp_poly_arm_reader_any(c, name, argc);
+      for (int kk = 0; kk < c->nclasses && !has_user; kk++)
+        if (call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
+    }
     if (!has_user && sp_streq(name, "polar")) {
       buf_puts(b, "sp_poly_polar("); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; }
     }
@@ -17132,7 +17131,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user; kk++) {
         if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-            (!c->classes[kk].is_native_class && comp_reader_in_chain(c, kk, name, NULL))) has_user = 1;
+            (!c->classes[kk].is_native_class && call_attr_target(c, id, kk, name, CT_ATTR, NULL))) has_user = 1;
         if (nf && call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_cm = 1;
       }
       /* A class method of next_float / prev_float is a boxed Class's: the
@@ -17157,7 +17156,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
            before sp_poly_ord answered a Bignum, rather than answer the
            builtin value the program overrode. */
         int ici = sp_streq(name, "ord") ? comp_core_class(c, CORE_INTEGER) : -1;
-        if (ici >= 0 && comp_method_in_class(c, ici, "ord") >= 0) {
+        if (ici >= 0 && call_target(c, id, ici, "ord", CT_OWN, NULL) >= 0) {
           int tg = ++g_tmp;
           buf_printf(b, "({ sp_RbVal _t%d = ", tg); emit_expr(c, recv, b);
           buf_printf(b, "; if (_t%d.tag == SP_TAG_BIGINT) sp_raise_poly_nomethod(\"ord\", _t%d);"
@@ -17393,8 +17392,97 @@ static int aref_cmethod_owns(Compiler *c, int id) {
 /* Element access on a boxed receiver: an index read, []= and [] with one or two arguments (emit_poly_call's arms, in their order) */
 static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   /* poly receiver: arr[start, len] = src -- 3-arg splice assign
-     Skip Fiber/Fiber.current storage receivers (handled later). */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 &&
+     Skip Fiber/Fiber.current storage receivers (handled later). A program
+     class with its own `[]=` owns the name, as for the two-argument store
+     below: the call goes to the class dispatch, which calls the method on
+     the class's instance (`m[y, x] = v` on a two-index matrix; a class
+     whose `[]=` takes other arguments raises ArgumentError there, as in
+     Ruby) and whose builtin arm re-enters here for a real Array or String.
+     Taken here, the store spliced the box as an Array and never ran the
+     class's method. */
+  int user_aset3 = 0;
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 && !g_poly_builtin_arm)
+    for (int kk = 0; kk < c->nclasses && !user_aset3; kk++)
+      if (comp_poly_arm_defines_n(c, kk, "[]=", 3)) user_aset3 = 1;
+  /* The dispatch evaluates the receiver once, and its builtin arm re-enters
+     the splice below, which reads a receiver `outer[k]` through outer and k
+     again to store a spliced String or a promoted Array back into outer's
+     slot: an outer or a k that runs code (`rows[i += 1]`, `rows_of(b)[1]`)
+     ran twice, and k's second value chose the next row. Such an outer and
+     k run here, once and in that order, into temps the whole store reads:
+     a box, what a pointer holds (an Array, a Hash, an object), or an object
+     held inline (a value type), copied by value and rooted field by field
+     as a local of its kind is. */
+  if (user_aset3) {
+    int so, sk;
+    if (splice_recv_index_slot(c, recv, &so, &sk) &&
+        (!subtree_is_pure_read(c, so) || !subtree_is_pure_read(c, sk))) {
+      TyKind ot = comp_ntype(c, so), kt = comp_ntype(c, sk);
+      int held = ot == TY_POLY || comp_ty_value_obj(c, ot);
+      if (!held && ty_is_object(ot)) {
+        int ocid = ty_object_class(ot);
+        held = ocid >= 0 && ocid < c->nclasses;
+      }
+      else if (!held) {
+        const char *n = c_type_name(ot);
+        held = n && n[strlen(n) - 1] == '*';
+      }
+      if (!held || (kt != TY_INT && kt != TY_POLY) || g_n_argov + 2 > MAX_ARG_OVERRIDE) user_aset3 = 0;
+      else {
+        int to = ++g_tmp, tk = ++g_tmp;
+        Buf dcl, call, oct;
+        memset(&dcl, 0, sizeof dcl); memset(&call, 0, sizeof call); memset(&oct, 0, sizeof oct);
+        emit_ctype(c, ot, &oct);
+        buf_printf(&dcl, "%s _t%d = ", oct.p ? oct.p : "sp_RbVal", to);
+        free(oct.p);
+        emit_expr(c, so, &dcl);
+        buf_puts(&dcl, "; ");
+        if (ty_gc_holds_refs(c, ot)) { emit_gc_root_tmp_refs(c, ot, to, &dcl); buf_puts(&dcl, " "); }
+        size_t key_mark = g_pre ? g_pre->len : 0;
+        Buf kdc; memset(&kdc, 0, sizeof kdc);
+        buf_printf(&kdc, "%s _t%d = ", kt == TY_INT ? "sp_int" : "sp_RbVal", tk);
+        emit_expr(c, sk, &kdc);
+        buf_puts(&kdc, "; ");
+        if (kt == TY_POLY) buf_printf(&kdc, "SP_GC_ROOT_RBVAL(_t%d); ", tk);
+        /* k's own preludes (a literal it reads, built above the statement:
+           `[$k][0]`) run where they are hoisted: the outer is read ahead of
+           them there, as Ruby reads the receiver first, so an outer that
+           changes what k reads (`shelf_of_call[[$k][0]]`) is seen */
+        if (g_pre && g_pre->len > key_mark) {
+          Buf od; memset(&od, 0, sizeof od);
+          emit_indent(&od, g_indent);
+          buf_printf(&od, "%s\n", dcl.p ? dcl.p : "");
+          buf_insert_at(g_pre, key_mark, od.p ? od.p : "");
+          free(od.p);
+          dcl.len = 0; if (dcl.p) dcl.p[0] = 0;
+        }
+        buf_puts(&dcl, kdc.p ? kdc.p : "");
+        free(kdc.p);
+        size_t pre_mark = g_pre ? g_pre->len : 0;
+        int mk = view_bind_temp(so, to);
+        view_bind_temp(sk, tk);
+        emit_call(c, id, &call);
+        view_unbind(mk);
+        /* A part of the call the dispatch hoists above the statement (an
+           argument boxed for a `[]` that takes it boxed, under
+           --int-overflow=promote) reads the temps: they are declared there,
+           ahead of it, in the same order */
+        if (g_pre && g_pre->len > pre_mark &&
+            (text_uses_tmp(g_pre->p + pre_mark, to) || text_uses_tmp(g_pre->p + pre_mark, tk))) {
+          Buf hd; memset(&hd, 0, sizeof hd);
+          emit_indent(&hd, g_indent);
+          buf_printf(&hd, "%s\n", dcl.p ? dcl.p : "");
+          buf_insert_at(g_pre, pre_mark, hd.p ? hd.p : "");
+          free(hd.p);
+          buf_printf(b, "(%s)", call.p ? call.p : "");
+        }
+        else buf_printf(b, "({ %s%s; })", dcl.p ? dcl.p : "", call.p ? call.p : "");
+        free(dcl.p); free(call.p);
+        { *out = 1; return 1; }
+      }
+    }
+  }
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]=") && argc == 3 && !user_aset3 &&
       !sp_is_fiber_storage_recv(nt, recv)) {
     int tv = ++g_tmp;
     NodeKind rcvk = nt_kind(nt, recv);
@@ -18704,11 +18792,12 @@ static int emit_poly_numeric_call(Compiler *c, int id, Buf *b, const NodeTable *
      Hash, Range or Enumerator (sp_poly_count_val) */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "count") &&
       nt_ref(nt, id, "block") < 0) {
-    /* Only a user definition that can TAKE one positional argument blocks
-       this arm: a `count(a, b)` or a reader cannot answer the call, and
-       counting it steered a genuine String or Array receiver into the
-       dispatch, whose arity filter then dropped every arm and raised
-       (#4195). Same judgement as the dispatch's own candidate filter. */
+    /* A user definition of a class the receiver can be, of any arity, claims
+       the call: the dispatch's arm raises ArgumentError where it cannot
+       take the argument, and genuine Array, Hash and String receivers keep
+       their builtin arms (#4195's concern). A count on a class the
+       receiver never is leaves the builtin call direct. Same judgement as
+       the analysis (infer_poly_operand_call). */
     int has_user_cnt = 0;
     if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user_cnt; kk++) {
@@ -18716,12 +18805,7 @@ static int emit_poly_numeric_call(Compiler *c, int id, Buf *b, const NodeTable *
         if (comp_poly_arm_defines_n(c, kk, "count", 1)) has_user_cnt = 1;
         continue;
       }
-      int mi_k = comp_method_in_chain(c, kk, "count", NULL);
-      if (mi_k >= 0) {
-        Scope *cs_k = &c->scopes[mi_k];
-        if (cs_k->rest_idx >= 0 || (1 >= cs_k->nrequired && 1 <= cs_k->nparams))
-          has_user_cnt = 1;
-      }
+      if (poly_recv_may_be(c, id, kk) && call_target(c, id, kk, "count", CT_METHODS, NULL) >= 0) has_user_cnt = 1;
     }
     if (!has_user_cnt) {
       /* boxed where the analyzer counted a count this arm cannot reach (a
@@ -19266,8 +19350,17 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      emit_hash_call), as every other arm of this function assumes: refused on
      the name alone, a user class's own compare_by_identity was rejected. */
   if (recv >= 0 && rt == TY_POLY &&
-      sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
+      sp_streq(name, "compare_by_identity")) {  /* any arity: identity hashing is unsupported */
+    /* An arm of a run-time name's dispatch (dyn_arm) runs only when the name
+       is this one, which the program spelling it anywhere gives every such
+       send. A probe drops the arm (its send then raises NoMethodError); one
+       emitted outside a probe, a builtin Method wrapper's, raises here. */
+    if (nt_int(nt, id, "dyn_arm", 0) && !g_unsup_probe) {
+      buf_puts(b, "({ sp_raise_cls(\"NotImplementedError\", \"Hash#compare_by_identity (identity-keyed hashing) is not supported\"); sp_box_nil(); })");
+      return 1;
+    }
     unsupported(c, id, "Hash#compare_by_identity (identity-keyed hashing)");
+  }
   /* obj.methods / public_methods / singleton_methods on a boxed receiver: the
      list of whichever class of the program it is an instance of
      (emit_poly_object_methods_reflection); anything else is the
@@ -19910,11 +20003,11 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        (argc == 0 && comp_ntype(c, id) == TY_ENUMERATOR))) {
     int oci = comp_core_class(c, CORE_OBJECT);
     int has_user = oci >= 0 && call_target(c, id, oci, name, 0, NULL) >= 0;
-    if (!g_poly_builtin_arm)
-    for (int kk = 0; kk < c->nclasses && !has_user; kk++)
-      if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-          (!c->classes[kk].is_native_class && comp_reader_in_chain(c, kk, name, NULL)) ||
-          call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
+    if (!g_poly_builtin_arm) {
+      if (!has_user) has_user = comp_poly_arm_reader_any(c, name, argc);
+      for (int kk = 0; kk < c->nclasses && !has_user; kk++)
+        if (call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
+    }
     if (!has_user && argc == 0) {
       buf_puts(b, "sp_poly_cycle("); emit_boxed(c, recv, b); buf_puts(b, ")");
       return 1;

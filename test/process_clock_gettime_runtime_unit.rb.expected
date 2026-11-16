@@ -1,0 +1,25 @@
+gettime nanosecond: Integer
+getres nanosecond: Integer
+gettime microsecond: Integer
+getres microsecond: Integer
+gettime millisecond: Integer
+getres millisecond: Integer
+gettime second: Integer
+getres second: Integer
+gettime float_microsecond: Float
+getres float_microsecond: Float
+gettime float_millisecond: Float
+getres float_millisecond: Float
+gettime float_second: Float
+getres float_second: Float
+local: Integer
+nil: Float
+kwargs: ArgumentError: unexpected unit: {x: 1}
+hash: ArgumentError: unexpected unit: {x: 1}
+string: ArgumentError: unexpected unit: millisecond
+integer: ArgumentError: unexpected unit: 5
+bad symbol: ArgumentError: unexpected unit: bogus
+getres kwargs: ArgumentError: unexpected unit: {x: 1}
+true
+true
+true

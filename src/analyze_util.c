@@ -510,6 +510,16 @@ static int const_node_record_class(Compiler *c, int id, int *core) {
     return elab_header_class(c, hp, NULL, NULL);
   return elab_class_ref_at(c, id, core);
 }
+/* Is recv, typed t, ENV's value as a call's receiver: the constant, or a read
+   of a variable that holds ENV and nothing else (TY_ENV)? The ENV arms answer
+   from the environment and do not evaluate their receiver, so a receiver that
+   runs code (a method answering ENV) is not one. */
+int env_value_recv(Compiler *c, int recv, TyKind t) {
+  if (recv < 0 || t != TY_ENV) return 0;
+  NodeKind k = nt_kind(c->nt, nt_paren_single(c->nt, recv));
+  return k == NK_ConstantReadNode || k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode ||
+         k == NK_ClassVariableReadNode || k == NK_GlobalVariableReadNode;
+}
 int const_node_class_index(Compiler *c, int id) {
   /* a constant a pass made to name a builtin class (cvb_split's arms) */
   if (id >= 0 && id < c->nt->count && nt_int(c->nt, id, "builtin_ref", 0)) return comp_builtin_class_named(c, nt_str(c->nt, id, "name"));
@@ -549,6 +559,17 @@ const char *const_node_match_class_name(Compiler *c, int node) {
   const char *key = const_key_at(c, node), *real = key ? resolve_class_alias(c, key) : NULL;
   if (!real || sp_streq(real, key)) return NULL;
   return is_builtin_class_name(real) || is_builtin_exception_name(real) ? real : NULL;
+}
+/* ...and where it names none, the class by that name or by the name as
+   written: a raise and a rescue arm both match an alias of a builtin
+   exception, and a path a const_missing hook answers, by the name. -1 for
+   none. */
+int const_node_match_class_or_named(Compiler *c, int node) {
+  int k = const_node_match_class(c, node);
+  if (k >= 0) return k;
+  const char *n = const_node_match_class_name(c, node);
+  if (!n) n = nt_str(c->nt, node, "name");
+  return n ? comp_class_index(c, n) : -1;
 }
 static int const_node_class_index_tree(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
@@ -3468,14 +3489,14 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
     TyKind crt = infer_type(c, crecv);
     if (ty_is_object(crt)) rmi = call_target(c, cid, ty_object_class(crt), cn, 0, NULL);
     /* `Klass.new { block }`: the block feeds the initialize the plan
-       answers the site with (cplan_new_initialize), the version current
+       answers the site with (cplan_hook_target), the version current
        there. A scoped receiver (`NS::Klass`) resolves by its leaf name,
        the key classes are indexed under. */
     else if (is_new_name(cn) && nt_type(nt, crecv) &&
              (nt_kind(nt, crecv) == NK_ConstantReadNode ||
               nt_kind(nt, crecv) == NK_ConstantPathNode)) {
       int nci = const_node_class_index(c, crecv);
-      if (nci >= 0) rmi = cplan_new_initialize(c, cid, nci, NULL);
+      if (nci >= 0) rmi = cplan_hook_target(c, cid, nci, "initialize", NULL);
     }
     /* `Klass.m { block }` / `Mod.m { block }` / `NS::Klass.m { block }`: a
        class/module self-method (singleton). Resolve the constant and look
@@ -4557,15 +4578,24 @@ static TyKind method_yield_ret(Compiler *c, int mi, TyKind ret) {
    the walk of its values gives up or there are none (the pin stands);
    otherwise 1, with *out the join, TY_UNKNOWN while a value is not typed yet. */
 static int pinned_block_form_ret(Compiler *c, int mi, TyKind *out) {
+  /* (the methods whose values are being joined: one of them that calls
+     itself with its block, `Paged.new(n).each(&block)` as each's last
+     value, asks its own answer from inside it. That value is not typed
+     yet, as any leaf still unknown; asked again without end, the
+     inference overran the stack) */
+  static int active[32], nactive;
+  for (int i = 0; i < nactive; i++) if (active[i] == mi) { *out = TY_UNKNOWN; return 1; }
+  if (nactive == 32) { *out = TY_UNKNOWN; return 1; }
   int lv[16];
   int n = method_value_leaves_or_nil(c, mi, lv, 16);
   TyKind acc = TY_UNKNOWN;
   int any = 0, nil = 0;
+  active[nactive++] = mi;
   for (int i = 0; i < n; i++) {
     if (lv[i] == c->scopes[mi].ret_pin_guard || return_in_lambda(c, lv[i])) continue;   /* a lambda's return leaves the lambda */
     TyKind t = infer_type(c, lv[i]);
     any = 1;
-    if (t == TY_UNKNOWN) { *out = TY_UNKNOWN; return 1; }
+    if (t == TY_UNKNOWN) { nactive--; *out = TY_UNKNOWN; return 1; }
     if (t == TY_VOID) t = TY_NIL;
     nil |= t == TY_NIL;
     acc = ty_unify(acc, t);
@@ -4574,6 +4604,7 @@ static int pinned_block_form_ret(Compiler *c, int mi, TyKind *out) {
   if (any && n >= 0 && method_value_leaves(c, mi, lv, 16) < 0) { nil = 1; acc = ty_unify(acc, TY_NIL); }
   /* an Integer or a Float beside a nil is boxed: the nil flag of a call's slot is a mark that settles later */
   if (nil && (acc == TY_INT || acc == TY_FLOAT)) acc = TY_POLY;
+  nactive--;
   *out = acc;
   return any;
 }
@@ -4910,8 +4941,7 @@ int is_handler_proc_block(Compiler *c, int id) {
     return hrk == NK_ConstantReadNode &&
     nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Signal");
   }
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      key_name(c, recv) && sp_streq(key_name(c, recv), "ENV") &&
+  if (env_value_recv(c, recv, infer_type(c, recv)) &&
       is_select_bang(name))
     return 1;
   return 0;
@@ -6657,7 +6687,7 @@ static void si_call_targets(Compiler *c, SiFacts *f, int from, int id, const cha
   if (r >= 0 && sp_streq(nm, "new") && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
     int k = const_node_class_index(c, r);
     if (k >= 0) {
-      int mi = cplan_new_initialize(c, id, k, NULL);
+      int mi = cplan_hook_target(c, id, k, "initialize", NULL);
       if (mi >= 0) si_target(f, from, mi, hit);
       return;
     }
@@ -7047,9 +7077,9 @@ int ext_class_exported(Compiler *c, int class_id) {
 /* Whether the method of scope si has a shape the thunk calls, seen from
    class_id (the class it is answered for): public there, not initialize,
    fixed positional parameters (no optional, rest, keyword or block
-   parameter, no yield). A method with optional or rest parameters is
-   called through its forwarders, which have that shape
-   (desugar_ext_forwarders). */
+   parameter, no yield). A method with optional or rest parameters, or
+   one that takes a block, is called through its forwarders, which have
+   that shape (desugar_ext_forwarders). */
 static int ext_method_shape(Compiler *c, int class_id, int si) {
   if (si <= 0 || si >= c->nscopes || class_id < 0 || class_id >= c->nclasses) return 0;
   Scope *sc = &c->scopes[si];
@@ -7057,7 +7087,7 @@ static int ext_method_shape(Compiler *c, int class_id, int si) {
   if (sc->replaced || sc->entry != ENTRY_NONE) return 0;
   /* a forwarder stands for the method it calls: that method is public,
      and the class answers the one the forwarder was written beside */
-  const char *vis_name = ext_fwd_orig(sc->name, NULL, NULL);
+  const char *vis_name = ext_fwd_orig(sc->name, NULL, NULL, NULL);
   if (vis_name) {
     int osi = sc->is_cmethod ? comp_cmethod_in_chain(c, class_id, vis_name, NULL)
                              : comp_method_in_chain(c, class_id, vis_name, NULL);
@@ -7149,13 +7179,16 @@ int ext_class_def_wanted(Compiler *c, const char *key) {
 /* A forwarder of desugar_ext_forwarders is named
    `spinel_ext_fwd__<n>__<name>` (n fixed arguments) or
    `spinel_ext_fwdr__<n>__<name>` (n fixed arguments, then the rest in an
-   Array). Answers <name> with n in *nfixed and the rest flag in *rest, or
-   NULL for another name. */
-const char *ext_fwd_orig(const char *name, int *nfixed, int *rest) {
+   Array). A `b` before the `__` (`fwdb`, `fwdrb`) is a last parameter that
+   holds the block. Answers <name> with n in *nfixed, the rest flag in
+   *rest and the block flag in *block, or NULL for another name. */
+const char *ext_fwd_orig(const char *name, int *nfixed, int *rest, int *block) {
   if (!name || strncmp(name, "spinel_ext_fwd", 14)) return NULL;
   const char *p = name + 14;
   int r = *p == 'r';
   if (r) p++;
+  int b = *p == 'b';
+  if (b) p++;
   if (p[0] != '_' || p[1] != '_') return NULL;
   p += 2;
   int n = 0;
@@ -7164,6 +7197,7 @@ const char *ext_fwd_orig(const char *name, int *nfixed, int *rest) {
   if (p[0] != '_' || p[1] != '_' || !p[2]) return NULL;
   if (nfixed) *nfixed = n;
   if (rest) *rest = r;
+  if (block) *block = b;
   return p + 2;
 }
 

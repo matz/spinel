@@ -22,6 +22,9 @@ const int *poly_recv_classes(Compiler *c, int call, int *n);
 /* Does an instantiated class of the program that the boxed receiver of `call`
    can be (any, when the walk does not bound it) define a method `name`? */
 int poly_recv_defines(Compiler *c, int call, const char *name);
+/* May the receiver of poly call `call` be an instance of class k: the classes the analysis bounds it to, or any class
+   where it does not (poly_recv_classes); a reopened builtin always may be */
+int poly_recv_may_be(Compiler *c, int call, int k);
 /* Does a method of the program answer the call `call` (the builtin reflection
    it names, a program's method of that name in its receiver's class chain)? A
    boxed receiver is asked by the classes it can be, a typed one by the call
@@ -158,6 +161,7 @@ int prog_root_stmts(const Compiler *c, int i);
 int prog_defines_only(const Compiler *c, int i);
 void prog_file_tops(Compiler *c, unsigned char *has, void (*native)(void *ud, int load), void *ud);
 int prog_load_sets_flag(Compiler *c, int id);
+int prog_load_deferred(const Compiler *c, int f);
 int prog_ordered_load(const Compiler *c, int id);
 int prog_site_places(const Compiler *c, int id);
 int prog_load_ncand(const NodeTable *nt, int load);
@@ -285,6 +289,11 @@ typedef struct {
   unsigned char arm_vis; /* a version's: the visibility its face arm takes
                             (elab_version_vis, -1 for the run's), plus 2;
                             0 not asked yet */
+  int arm1;             /* a conditional def's dispatcher (cond_lone_disp): the
+                           first of its arms (`name#__condN`, cond_arm) by
+                           node, which runs where its branch does and makes
+                           the method as the dispatcher stands after the
+                           last (lr_cond_first_arm); 0 for any other version */
 } LrDef;
 enum { LR_UNPLACED_LATER = 2 };   /* LrDef.unplaced */
 typedef struct { int node, body; } LrOpen;
@@ -556,10 +565,28 @@ int elab_body_def(Compiler *c, int node);
    which the record leaves to its body */
 int elab_def_applied(Compiler *c, int def);
 int elab_version_held_row(const LrDef *v, const char *name, int cside);   /* a version recorded under a condition of a name a Kernel row answers, on the instance side */
+/* Whether class cls has Kernel among its ancestors, as the record resolves its chain: KERN_HAS where it does or the
+   record cannot tell (a superclass of another expression, a module it cannot name); KERN_LACKS where the chain ends at
+   BasicObject without reaching Object, and no include on it that surely runs may bring Kernel in. An include that may
+   not run, and one a method body makes, bring none here: the call plan's cells say whether they ran (KERN_CELL,
+   cplan_class_kernel). */
+enum { KERN_HAS, KERN_LACKS, KERN_CELL };
+int elab_class_kernel(Compiler *c, int cls);
+/* Does the module a mixin call's argument node names bring Kernel into the class that mixes it in: 1 for the core
+   Kernel and for a module of the program that includes it, 0 for a module that does not, -1 for one the record cannot
+   name (a parameter, an expression) */
+int elab_mixin_brings_kernel(Compiler *c, int ref);
+/* ...and surely, through mixins that surely run (an include under a condition does not count) */
+int elab_mixin_certain_kernel(Compiler *c, int ref);
+int elab_mixin_may_not_run(Compiler *c, const LrMixin *m);   /* under a condition, or after one that decides */
+/* A number that changes with every change to the record's histories and mixins (a cache of an answer read from them is of it) */
+unsigned long elab_mixin_gen(Compiler *c);
 /* call_target's questions about call id read the record's facts as its
    first such question found them (analyze_elab.c): 1 when the frame is in,
    until elab_plan_leave; 0 for a node it cannot place */
 int elab_plan_enter(Compiler *c, int id);
+int elab_accessor_first(Compiler *c, int node, const char *name, int cls);
+unsigned long elab_hgen(Compiler *c);   /* bumped by every change to the histories and the mixins */
 void elab_plan_leave(Compiler *c);
 void elab_check_version(Compiler *c, int id, int vi, int dc, int now, int ndc);   /* SPINEL_ELAB_CHECK */
 void elab_check_surface(Compiler *c);   /* SPINEL_ELAB_CHECK: the record's surface against the class tables */
@@ -732,6 +759,9 @@ int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int 
    ELAB_UNKNOWN where the record cannot say */
 int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p);
 /* ...and whether main's top-level history of `name` holds a version whose node carries the int mark `mark` (set by a desugar) */
+/* is `name` made on cls's instance side for sure by point p (elab_method_at, but a def under a condition or in an iterator's body
+   that p does not follow answers ELAB_UNKNOWN, as elab_own_method_at's) */
+int elab_method_made_at(Compiler *c, int cls, const char *name, LoadPoint p);
 int elab_main_history_marked(Compiler *c, const char *name, const char *mark);
 /* The state of the record and the node table an answer of elab_chain_versions
    was read from: a kept answer holds while the stamp does (the table's
@@ -1194,10 +1224,11 @@ TyKind infer_type(Compiler *c, int id);
 /* Does a receiver of type `rt` have a real method named `name`, among the
    per-call-site-cloned generic Enumerable names (analyze_desugar.c's
    builtin_enum_name_index list) or transform_keys!/transform_values!?
-   Used by rt_probe_answer (codegen_call.c) for a respond_to? probe on
+   Used by rt_probe_answer (analyze_desugar.c) for a respond_to? probe on
    one of these names, which the one-shot rewrites that actually type
    them never reach (K-026 cause A). */
-int enum_builtin_responds(Compiler *c, const char *name, TyKind rt);
+int enum_builtin_responds(Compiler *c, int id, const char *name, TyKind rt);
+int rt_probe_answer(Compiler *c, int id, int *yes);   /* the respond_to? probes' answer: 1 when a probe types or a builtin receiver has the name (*yes); 0 where none was synthesized */
 int enum_unrename(NodeTable *nt, int id);
 /* empty infer_type's memo of earlier queries' answers: the start or end of
    a pass whose writes are not all counted (#8852) */

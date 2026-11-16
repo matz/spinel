@@ -144,13 +144,14 @@ void emit_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv)
 extern const char *const enumerable_names[];
 extern int g_rto_nil_obj;
 extern int g_rto_by_cls;
-int emit_respond_to_by_cls(Compiler *c, int recv, const char *qm, int argc, const int *argv, Buf *b);
+int emit_respond_to_by_cls(Compiler *c, int id, int recv, const char *qm, int argc, const int *argv, Buf *b);
 extern int g_rto_exc;
 extern int g_rto_force_ia;
 int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc, const int *argv, Buf *b);
 int method_hidden_from_reflection(Compiler *c, int cid, const char *m);
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m);
 int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv);
+int is_enum_cursor_name(const char *n);
 /* nil's static answer to respond_to?(qm, ...); *prog: by a method of the program's */
 int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int *argv, int *prog);
 /* respond_to? call id (its argc arguments argv, asking qm) of a class's own
@@ -159,10 +160,12 @@ int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int
    written to b. 0, writing nothing, for a call the plan does not answer
    so; with b NULL, only asked. */
 int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b);
-/* The writes visibility word `id` makes to its visibility cells as its own
-   call runs (cplan_vis_cell_after), as an expression with no value of its
-   own, `gv_<cell> = <v>, ...`, written to b. 0, writing nothing, for a
-   word that writes none. */
+/* The writes visibility word or include call `id` makes to its cells as its
+   own call runs (cplan_vis_cell_after: the visibility cells, and the Kernel
+   cells of the classes an include brings Kernel into), as an expression with
+   no value of its own, `gv_<cell> = <v>, ...` (one of several classes' cells
+   `_sp_cls.cls_id == <class> ? (void)(gv_<cell> = 1) : (void)0`), written to
+   b. 0, writing nothing, for a call that writes none. */
 int emit_vis_cell_write(Compiler *c, int id, Buf *b);
 int respond_to_user_defined(Compiler *c, int id, int recv);
 extern const char *const respond_universal[];
@@ -184,7 +187,6 @@ int refl_im_params_used(Compiler *c);
 int emit_refl_im_params_call(Compiler *c, int id, Buf *b);
 void emit_refl_im_params(Compiler *c, Buf *b);
 void emit_refl_method_defined(Compiler *c, Buf *b);
-int rt_probe_answer(Compiler *c, int id, int *yes);
 extern const char *const struct_names[];
 void emit_call_body(Compiler *c, int id, Buf *b);
 void emit_ffi_callback_arg(Compiler *c, int cbidx, int argnode, Buf *out);

@@ -81,7 +81,6 @@ int is_tap_name(const char *n);       /* tap */
 int is_quantifier(const char *n);     /* all? any? none? one? */
 int is_name_error_class(const char *n);   /* NameError NoMethodError: .new(msg, name, ...) */
 int is_no_method_error_class(const char *n);   /* NoMethodError: .new(msg, name, args, ...) */
-int is_name_error_root_class(const char *n);   /* NameError alone: a variable-like call's error */
 int is_set_op(const char *n);         /* & intersection | union - difference */
 int is_combination_family(const char *n);  /* combination permutation repeated_combination repeated_permutation */
 /* the visibility word a call names: module_function first, so that a
@@ -295,6 +294,7 @@ int is_select_alias(const char *n); /* filter select */
 int is_format_alias(const char *n); /* format sprintf */
 int is_initialize_name(const char *n); /* initialize */
 int is_initialize_family(const char *n); /* initialize initialize_copy */
+int is_initialize_copy_name(const char *n); /* initialize_copy */
 
 int is_iso8601_alias(const char *n); /* iso8601 xmlschema */
 int is_rfc2822_alias(const char *n);   /* rfc2822 rfc822 */
@@ -425,6 +425,12 @@ int is_string_read_only_method(const char *name);
 int str_mutator_str_args(const char *n, int argc, int *int_ok); /* the arguments a String mutator takes as Strings */
 
 int builtin_answers_ahead_of(const char *cls, const char *m, const char *root); /* an ancestor of cls ahead of root (NULL: any) owns instance method m, or undefines it (CRuby's tables) */
+const char *builtin_super_owner(const char *root, const char *m, int after_root);   /* the table name of the ancestor of root that a super's method m reaches, NULL for none */
+/* What an owner is, for the readers that ask: Kernel (the default inspect and to_s of a plain class), Struct or Data (the default
+   #<struct ...> text), any other builtin. */
+typedef enum { BOWN_NONE, BOWN_KERNEL, BOWN_STRUCT, BOWN_OTHER } BownKind;
+BownKind builtin_owner_kind(const char *owner);
+int builtin_table_known(const char *name);   /* CRuby's method tables hold the class or module, in a library the program has */
 const char *builtin_ancestor_at(const char *cls, int i);   /* the i-th ancestor (0: cls) in CRuby's lookup order, NULL past the last */
 int builtin_owns_instance_method(const char *cls, const char *m);   /* cls's own instance method m, any visibility (CRuby's tables) */
 const char *builtin_next_class_answering(int *i, const char *m);   /* the next class of the tables, from table *i, that Spinel has as a value and that answers m ahead of Object */
@@ -522,6 +528,8 @@ const char *dir_surface_alias(const char *n, int blockless_iter);
 int is_dir_blockless_iter(const char *n);  /* foreach each_child: an Enumerator without a block */
 
 int is_kernel_module_name(const char *n);
+int is_frame_reading_function(const char *n);   /* __method__ __callee__ __dir__ binding block_given? caller caller_locations local_variables: Kernel functions that read the calling frame */
+int builtin_method_takes_keywords(const char *owner, const char *m);   /* CRuby's parameters of owner's instance method m (BAP) list a keyword or a keyword rest */
 int is_kernel_module_function(const char *n);
 /* ...and one that never consults self (not `binding`). */
 int kernel_function_ignores_self(const char *n);

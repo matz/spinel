@@ -1,0 +1,3 @@
+[NoMethodError, "undefined method 'tag' for an instance of Foo", :tag]
+[NoMethodError, "undefined method 'take' for an instance of Foo", :take]
+[NameError, "undefined local variable or method 'tag2' for an instance of Foo", :tag2]

@@ -1120,7 +1120,9 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       Repr ie_call_repr = repr_of(c, ie_fwd_boxed ? id : -1);
       if (scalar_res && ie_call_repr.kind == RK_BOXED && body_ty != TY_POLY) {
         char tv[32]; snprintf(tv, sizeof tv, "_t%d", tres);
-        emit_boxed_text(c, body_ty, tv, b);
+        /* (an oint result slot boxes as its oint: its nil is the block's) */
+        if (res_oint) buf_printf(b, "%s(%s)", oint_box(body_ty), tv);
+        else emit_boxed_text(c, body_ty, tv, b);
       }
       else if (scalar_res) buf_printf(b, "_t%d", tres);
       else if (ie_call_repr.kind == RK_BOXED && (body_ty == TY_NIL || body_ty == TY_VOID)) buf_puts(b, "sp_box_nil()");
@@ -1474,7 +1476,9 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* the class's initialize_copy hook, as for any program object; its
          super into Array is a replace, which the copy has already done */
       int defcls = -1;
-      int ic = comp_method_in_chain(c, cid, "initialize_copy", &defcls);
+      MethodLookup icm;
+      int ic = cplan_hook_target(c, id, cid, "initialize_copy", &icm);
+      if (ic >= 0) defcls = icm.def_class;
       /* the original handed as the parameter's class, or boxed -- as its
          Array or Hash, its class read back off its scan -- to a parameter
          the program also hands other values; the parameters after it take
@@ -1525,7 +1529,9 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         ClassInfo *dci = &c->classes[cid];
         const char *cn = dci->c_name;
         int defcls = -1;
-        int ic = comp_method_in_chain(c, dup_cls, "initialize_copy", &defcls);
+        MethodLookup icm;
+        int ic = cplan_hook_target(c, id, dup_cls, "initialize_copy", &icm);
+        if (ic >= 0) defcls = icm.def_class;
         LocalVar *icp = (ic >= 0 && c->scopes[ic].nparams >= 1)
           ? scope_local(&c->scopes[ic], c->scopes[ic].pnames[0]) : NULL;
         TyKind ictp = icp ? icp->type : TY_UNKNOWN;
@@ -2352,7 +2358,13 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          call ran on the nil (#11851) */
       int sn_ptr = ty_null_is_nil(rrt) && rrt != TY_POLY && rrt != TY_STRING &&
                    rrr.kind != RK_VOBJ && node_may_be_null_nil(c, recv);
-      if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont || sn_ptr) && g_sn_skip != id) {
+      /* a Class value is a by-value sp_Class whose nil is the sentinel
+         (a nil-defaulted Class parameter, `def f(x = nil) = x&.name`):
+         the guard asks sp_class_nil_p (not a class writer, `k&.x = v`,
+         whose value the writer's arm answers past the guard) */
+      int sn_cls = rrt == TY_CLASS && rrr.kind != RK_BOXED && node_may_be_null_nil(c, recv) &&
+                   !call_is_setter_assign(nt, id);
+      if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont || sn_ptr || sn_cls) && g_sn_skip != id) {
         int tsn2 = ++g_tmp;
         /* (an attribute assignment marked to hand out its handle answers it,
            and so does a String Array's element read written as the handle
@@ -2422,6 +2434,8 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         else if (sn_scalar)
           buf_printf(g_pre, "%s _sn%d = %s; %s _snv%d = _sn%d.v;\n", oint_ctype(rrt), tsn2,
                      rsn.p ? rsn.p : oint_nil(rrt), c_type_name(rrt), tsn2, tsn2);
+        else if (sn_cls)
+          buf_printf(g_pre, "sp_Class _sn%d = %s;\n", tsn2, rsn.p ? rsn.p : "SP_CLASS_NIL");
         else if (sn_cont || sn_ptr) {
           emit_ctype(c, rrt, g_pre);
           buf_printf(g_pre, " _sn%d = %s;", tsn2, rsn.p ? rsn.p : "NULL");
@@ -2441,6 +2455,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         }
         char nilt[64];
         if (sn_scalar) snprintf(nilt, sizeof nilt, "_sn%d.nil", tsn2);
+        else if (sn_cls) snprintf(nilt, sizeof nilt, "sp_class_nil_p(_sn%d)", tsn2);
         else           snprintf(nilt, sizeof nilt, "_sn%d == NULL", tsn2);
         const char *nilv;
         if (ret2 == TY_POLY) nilv = "sp_box_nil()";
@@ -2911,7 +2926,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         nt_ref(nt, id, "block") < 0) {
       int ac0 = 0; call_args(nt, id, &ac0);
       TyKind irt0 = comp_ntype(c, nt_ref(nt, id, "receiver"));
-      if (ac0 == 0 && !diag_user_defines(c, "itself") &&
+      if (ac0 == 0 && !diag_user_defines(c, id, "itself") &&
           /* a generated READER of the name owns it, as in CRuby (#4190) */
           !(ty_is_object(irt0) &&
             call_attr_target(c, -1, ty_object_class(irt0), "itself", 0, NULL))) {
@@ -2959,7 +2974,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
     /* a boolean has no #=~ (so #!~ fails the same way): CRuby's NoMethodError.
        A program that REOPENS TrueClass/FalseClass with its own #=~ keeps it. */
     if (nm0 && (is_match_operator(nm0)) && ac0 == 1 && rt0 == TY_BOOL &&
-        !diag_user_defines(c, "=~")) {
+        !diag_user_defines(c, id, "=~")) {
       int t1 = ++g_tmp;
       buf_printf(b, "({ sp_int _t%d = ", t1); emit_expr(c, rv0, b);
       buf_printf(b, "; (void)("); emit_expr_for_effect(c, av0[0], b);

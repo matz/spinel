@@ -1211,6 +1211,24 @@ static const BuiltinOp bop_rows[] = {
   { TY_OBJ_RANGE, "to_a", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_orange_to_a($r)", 0 },
   { TY_OBJ_RANGE, "entries", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_orange_to_a($r)", 0 },
   { TY_OBJ_RANGE, "freeze", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; _t$T->unfrozen = 0; _t$T; })", 0 },
+  /* ENV. Its calls are emitted by the name-matched arms still (BOPE_NONE);
+     these rows type the ones a rule for any typed receiver would answer
+     first. ENV cannot be copied or frozen: each raises TypeError. */
+  { TY_ENV, "dup", 0, 0, BF_ANY, TY_POLY, BOPE_NONE },
+  { TY_ENV, "clone", 0, 0, BF_ANY, TY_POLY, BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
+  { TY_ENV, "freeze", 0, 0, BF_ANY, TY_POLY, BOPE_NONE },
+  /* ENV is one object: it is equal to itself and to nothing else (a value of
+     another kind is never ENV) */
+  { TY_ENV, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)1)", BOP_K(TY_ENV) },
+  { TY_ENV, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_ENV, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)1)", BOP_K(TY_ENV) },
+  { TY_ENV, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_ENV, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)1)", BOP_K(TY_ENV) },
+  { TY_ENV, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_ENV, "!=", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", BOP_K(TY_ENV) },
+  { TY_ENV, "!=", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)1)", 0 },
+  { TY_ENV, "nil?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (sp_bool)0)", 0 },
+  { TY_ENV, "itself", 0, 0, BF_ANY, TY_ENV, BOPE_TEMPLATE, "$r", 0 },
   /* String range ("a".."e"): the endpoints answer natively (with a count,
      the materialized prefix); every traversal rides the element array
      (#3064). step(n) / %(n) is an Enumerator over every nth member (#3671).

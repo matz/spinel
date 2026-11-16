@@ -180,6 +180,8 @@ module Psych
   # `@i - @ls`, and lines are counted for Psych::SyntaxError's position.
   class SpParser
     def initialize(src, file, resolver, aliases, symbolize_names)
+      @kept = nil
+      src = normalize_breaks(src)
       @s = src
       @n = src.bytesize
       @i = 0
@@ -190,6 +192,49 @@ module Psych
       @aliases = aliases
       @symbolize_names = symbolize_names
       @anchors = {}
+    end
+
+    # The line breaks, as libyaml's YAML 1.1 reading has them: CR LF, CR,
+    # LF and U+0085 are one newline each, and U+2028 and U+2029 are breaks
+    # too, kept as themselves where a newline would be folded or copied.
+    # The reader tests one byte for a break, so the source is rewritten:
+    # every newline is a LF, and a CR stands for a U+2028 or a U+2029, which
+    # @kept names by the CR's byte offset (break_text).
+    def normalize_breaks(src)
+      unless src.include?("\r") || src.include?("\u0085") || src.include?("\u2028") || src.include?("\u2029")
+        return src
+      end
+      s = src.gsub("\r\n", "\n").gsub("\r", "\n").gsub("\u0085", "\n")
+      return s unless s.include?("\u2028") || s.include?("\u2029")
+      out = +""
+      kept = {}
+      s.each_char do |ch|
+        if ch == "\u2028" || ch == "\u2029"
+          kept[out.bytesize] = ch
+          out << "\r"
+        else
+          out << ch
+        end
+      end
+      @kept = kept
+      out
+    end
+
+    # The text of the break at the cursor: a newline, or the U+2028 or
+    # U+2029 a CR stands for.
+    def break_text
+      return "\n" unless byte == 13
+      k = @kept
+      t = k.nil? ? nil : k[@i]
+      t.nil? ? "\n" : t
+    end
+
+    # What a run of breaks inside a flow scalar becomes: a lone newline
+    # folds to a space, more newlines keep all but the first, and a first
+    # break that is U+2028 or U+2029 is kept with the rest.
+    def fold_breaks(lead, trail)
+      return lead + trail unless lead == "\n"
+      trail.empty? ? " " : trail
     end
 
     # ---- the cursor ----
@@ -222,8 +267,7 @@ module Psych
     end
 
     def newline
-      @i += 1 if byte == 13
-      @i += 1 if byte == 10
+      @i += 1  # one break: one byte, after normalize_breaks
       @ls = @i
       @line += 1
     end
@@ -634,7 +678,9 @@ module Psych
           if col == indent && byte == 58 && blank_at?(1)
             @i += 1
             skip_space
-            value = mapping_value(indent)
+            # (an explicit key's value may be a block collection that starts
+            # on the `:` line: `? a` / `: b: c`, `: - b`)
+            value = eol? ? mapping_value(indent) : parse_block_node(indent)
           else
             value = nil
           end
@@ -762,15 +808,14 @@ module Psych
         save_line = @line
         skip_space
         break unless byte == 10 || byte == 13
-        breaks = 0
-        loop do
+        lead = break_text
+        trail = +""
+        newline
+        skip_space
+        while byte == 10 || byte == 13
+          trail << break_text
           newline
           skip_space
-          if byte == 10 || byte == 13
-            breaks += 1
-          else
-            break
-          end
         end
         if eof? || col <= parent || byte == 35 || doc_marker? || (parent < 0 && col == 0 && continuation_is_structure?)
           @i = save_i
@@ -783,14 +828,16 @@ module Psych
           @i += 1 until byte == 58 && blank_at?(1)
           error("mapping values are not allowed in this context")
         end
-        text += breaks > 0 ? "\n" * breaks : " "
+        text += fold_breaks(lead, trail)
         text += plain_line(inline)
       end
       text
     end
 
+    # (a `? ` on a plain scalar's continuation line is the scalar's text, as
+    # libyaml reads it: only a `key:` or a `- ` there is structure)
     def continuation_is_structure?
-      seq_entry? || mapping_key_here?
+      seq_entry? || (mapping_key_here? && !(byte == 63 && blank_at?(1)))
     end
 
     def plain_line(inline)
@@ -866,13 +913,16 @@ module Psych
         out << @s.byteslice(ws_start, @i - ws_start)
         return
       end
-      breaks = 0
+      lead = break_text
+      trail = +""
+      newline
+      skip_space
       while byte == 10 || byte == 13
+        trail << break_text
         newline
-        breaks += 1
         skip_space
       end
-      out << (breaks == 1 ? " " : "\n" * (breaks - 1))
+      out << fold_breaks(lead, trail)
     end
 
     def read_char
@@ -938,7 +988,7 @@ module Psych
         @i += 1 while byte == 32 && (indent == 0 || col < indent)
         max_indent = col if col > max_indent
         if byte == 10 || byte == 13
-          trailing << "\n"
+          trailing << break_text
           newline
           next
         end
@@ -968,12 +1018,12 @@ module Psych
         @i += 1 until eof? || byte == 10 || byte == 13
         out << @s.byteslice(start, @i - start)
         break if eof?
-        leading_break = +"\n"
+        leading_break = +break_text
         newline
         loop do
           @i += 1 while byte == 32 && col < indent
           if byte == 10 || byte == 13
-            trailing << "\n"
+            trailing << break_text
             newline
             next
           end

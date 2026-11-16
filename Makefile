@@ -1383,7 +1383,11 @@ endif
 # float_to_r_bounded and rational_string_overflow pin the closest Rational
 # that fits and the RangeError a Rational past the word answers outside
 # promote, where it is a big Rational (promote_rational_bignum).
-RAISE_MODE_PINS := test/float_to_r_bounded.rb test/rational_string_overflow.rb test/int_overflow_raises.rb test/int_overflow_op_assign.rb test/poly_int_overflow_raises.rb test/str_to_i_overflow.rb test/string_to_i_overflow_raises.rb test/bounded_counter_unchecked_add.rb test/float_to_int_out_of_range.rb test/bigrational_to_i_out_of_range.rb test/float_to_int_boundary.rb test/poly_call_legacy_abi_gate.rb test/poly_call_fast_abi_gate.rb test/poly_method_return_kinds.rb test/int_min_overflow_raises.rb test/masgn_boxed_ivar_slot_mismatch.rb test/array_index_sum_overflow.rb
+# literal_array_hash_capacity counts the bytes a three-Integer Array literal
+# keeps alive, as the typed Integer Array it is outside promote; promote boxes
+# its elements, and a boxed Array literal still takes the sixteen-element
+# buffer an empty one does.
+RAISE_MODE_PINS := test/literal_array_hash_capacity.rb test/float_to_r_bounded.rb test/rational_string_overflow.rb test/int_overflow_raises.rb test/int_overflow_op_assign.rb test/poly_int_overflow_raises.rb test/str_to_i_overflow.rb test/string_to_i_overflow_raises.rb test/bounded_counter_unchecked_add.rb test/float_to_int_out_of_range.rb test/bigrational_to_i_out_of_range.rb test/float_to_int_boundary.rb test/poly_call_legacy_abi_gate.rb test/poly_call_fast_abi_gate.rb test/poly_method_return_kinds.rb test/int_min_overflow_raises.rb test/masgn_boxed_ivar_slot_mismatch.rb test/array_index_sum_overflow.rb
 # Tests a promote gap fails, out of the promote lane until it is fixed.
 # step_boxed_float_bound: under promote every Integer local is boxed, so a
 # boxed limit or step is not known to be a Float or Rational, and an
@@ -1915,6 +1919,17 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  else echo "ext-test: FAIL (late_new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/field_elems.rb -c --no-line-map --ext-init Init_ext_field_elems \
+	      --ext-entry ExtFieldElems.grid,ExtFieldElems.sum_x,ExtFieldElems.box,ExtFieldElems.count_done \
+	      -o "$$tmp/f.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (field_elems emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/field_elems_host.c "$$tmp/f.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/fhost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/fhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '4\n2\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (field_elems host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (field_elems host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/methods.rb -c --no-line-map --ext-init Init_ext_methods \
 	      --ext-entry ExtMethods.make,ExtMethods.loud --ext-class all -o "$$tmp/m.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class emission)"; ok=0; \
@@ -1933,6 +1948,16 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  else echo "ext-test: FAIL (--ext-class subclass host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/classes.rb -c --no-line-map --ext-init Init_ext_classes \
+	      --ext-entry ExtClasses.new_list,ExtClasses.add,ExtClasses.pt,ExtClasses.oops -o "$$tmp/c.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (class-typed entries emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/classes_host.c "$$tmp/c.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/chost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/chost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '2\n3 6\nOops bad\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (class-typed entries host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (class-typed entries host C did not compile against the header alone)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/methods_opt.rb -c --no-line-map --ext-init Init_ext_methods_opt \
 	      --ext-entry ExtOpt.make --ext-class ExtOpt::Rel -o "$$tmp/m.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class optional parameter emission)"; ok=0; \
@@ -1940,6 +1965,25 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    "$$tmp/mohost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    cmp -s "$$tmp/out" test/ext/expected_methods_opt && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class optional parameter host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_opt "$$tmp/out" || true; ok=0; }; \
 	  else echo "ext-test: FAIL (--ext-class optional parameter host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/methods_blk.rb -c --no-line-map --ext-init Init_ext_methods_blk \
+	      --ext-entry ExtBlk.make --ext-class ExtBlk::Rel -o "$$tmp/b.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (--ext-class block emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_blk_host.c "$$tmp/b.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/bhost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/bhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected_methods_blk && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class block host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_blk "$$tmp/out" || true; ok=0; }; \
+	    SPINEL_GC_STRESS=1 "$$tmp/bhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected_methods_blk && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class block host output mismatch under GC stress, or status $$rc)"; diff -u test/ext/expected_methods_blk "$$tmp/out" || true; ok=0; }; \
+	  else echo "ext-test: FAIL (--ext-class block host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/unreached_return.rb -c --no-line-map --ext-init Init_ext_unreached \
+	      --ext-entry ExtUnreached.mk,ExtUnreached.add,ExtUnreached.open_ids -o "$$tmp/u.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (unreached_return emission)"; ok=0; \
+	  elif ! awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/u.c" | grep -Fq 'sp_PtrArray * iv_items;'; then \
+	    echo "ext-test: FAIL (an --ext-entry whose value joins an Array of one class kept it boxed)"; ok=0; \
+	  fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/dup_leaf.rb -c --no-line-map --ext-init Init_ext_dup \
@@ -2566,11 +2610,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  else grep -q "an Errno constant defined in a subclass of SystemCallError" "$$tmp/sce.out" || \
 	    { echo "reject-test: FAIL ($$t: refused without saying why)"; sed -n 1,5p "$$tmp/sce.out"; ok=0; }; fi; \
 	done; \
-	t=test/reject/systemcallerror_zsuper_keyword.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/szk.c" >"$$tmp/szk.out" 2>&1; then \
-	  echo "reject-test: FAIL (a bare super forwarding a keyword to SystemCallError#initialize compiled)"; ok=0; \
-	else grep -q "a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize" "$$tmp/szk.out" || \
-	  { echo "reject-test: FAIL (a bare super forwarding a keyword refused without saying why)"; sed -n 1,5p "$$tmp/szk.out"; ok=0; }; fi; \
 	for t in test/reject/object_receiver_include*.rb; do \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ori.c" >"$$tmp/ori.out" 2>&1; then \
 	    echo "reject-test: FAIL ($$t: an include into Object through an explicit receiver compiled)"; ok=0; \
@@ -4760,6 +4799,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	awk '/^struct sp_Left_s \{/,/^\}/' "$$tmp/gbo.c" | grep -Fq 'sp_PolyPolyHash * iv_letters;' && awk '/^struct sp_Right_s \{/,/^\}/' "$$tmp/gbo.c" | grep -Fq 'sp_PolyPolyHash * iv_numbers;' || { echo "infer-test: FAIL (a boxed getter receiver lost a possible owner)"; ok=0; }; \
 	$(SPINEL) test/obj_array_reduce_narrows.rb -c --no-line-map -o "$$tmp/oar.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile obj_array_reduce_narrows)"; exit 1; }; \
 	awk '/^struct sp_Bin_s \{/,/^\}/' "$$tmp/oar.c" | grep -Fq 'sp_PtrArray * iv_cells;' || { echo "infer-test: FAIL (a reduce or an inject over an Array of one class kept it boxed)"; ok=0; }; \
+	$(SPINEL) test/infer/object_array_unnamed_method.rb -c --no-line-map -o "$$tmp/oau.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_unnamed_method)"; exit 1; }; \
+	awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/oau.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a select a method nothing names answers kept an Array of one class boxed)"; ok=0; }; \
 	$(SPINEL) test/is_a_user_class_guard_narrows.rb -c --no-line-map -o "$$tmp/iug.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (is_a_user_class_guard_narrows: -c)"; ok=0; }; \
 	grep -q 'sp_Int_tag((sp_Int \*)(sp_Int \*)sp_poly_unbox_cls(lv_x' "$$tmp/iug.c" || { echo "infer-test: FAIL (is_a?(Int) left a guarded call on a user class in boxed dispatch)"; ok=0; }; \
 	$(SPINEL) test/obj_array_zip_narrows.rb -c --no-line-map -o "$$tmp/oaz.c" >/dev/null 2>"$$tmp/oaz.err" || { echo "infer-test: FAIL (compile obj_array_zip_narrows)"; exit 1; }; \
@@ -5104,6 +5145,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	if [ $$ok -eq 1 ]; then echo "infer-test: pass (1 of 2)"; else exit 1; fi
 infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-infer.XXXXXX); ok=1; \
+	$(SPINEL) test/object_array_map_identity.rb -c --no-line-map -o "$$tmp/oai.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_map_identity)"; ok=0; }; \
+	awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/oai.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a map answering its element kept an Array of one class boxed)"; ok=0; }; \
 	$(SPINEL) test/object_array_push_element_read.rb -c --no-line-map -o "$$tmp/oap.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_push_element_read: -c)"; ok=0; }; \
 	[ "$$(awk '/^struct sp_(Node|Ring|Bin)_s \{/ { c = $$2 } c && /iv_(links|members|items)/ { print c, $$1; c = "" }' "$$tmp/oap.c" | tr '\n' ' ')" = "sp_Node_s sp_PtrArray sp_Ring_s sp_PtrArray sp_Bin_s sp_PolyArray " ] || { echo "infer-test: FAIL (an element read of an Array of one class stored into another gave it no class, or one of a mixed Array narrowed it)"; ok=0; }; \
 	$(SPINEL) test/object_array_walk_ends_branch.rb -c --no-line-map -o "$$tmp/oaw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_walk_ends_branch: -c)"; ok=0; }; \
@@ -5453,6 +5496,8 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	  done; \
 	  grep -Fq 'local LibC.__ffi_call(extend) fns: ptr ty=str_poly_hash' "$$tmp/fi.repr" || { echo "infer-test: FAIL (Fiddle function-table read became boxed)"; ok=0; }; \
 	fi; \
+	$(SPINEL) test/object_array_sort_by.rb -c --no-line-map -o "$$tmp/oas.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_sort_by)"; ok=0; }; \
+	awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/oas.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a sort_by or a sort with a comparator kept an Array of one class boxed)"; ok=0; }; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "infer-test: pass (2 of 2)"; else exit 1; fi
 

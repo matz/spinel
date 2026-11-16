@@ -256,7 +256,7 @@ static int new_site_reaches(Compiler *c, int id, int init) {
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode)
     return 0;
   int cid = const_node_class_index(c, recv);
-  return cid >= 0 && cplan_new_initialize(c, id, cid, NULL) == init;
+  return cid >= 0 && cplan_hook_target(c, id, cid, "initialize", NULL) == init;
 }
 
 /* `def initialize(...)` is reached through `Klass.new(...)`, never a call named
@@ -3542,7 +3542,7 @@ static int sg_block_handoff(const NodeTable *nt, int n, const char *blk) {
    `self` first? */
 static int sg_initialize_yields_self(Compiler *c, int id, int ci) {
   const NodeTable *nt = c->nt;
-  int mi = cplan_new_initialize(c, id, ci, NULL);
+  int mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   if (mi < 0 || c->scopes[mi].body < 0) return 0;
   const char *blk = c->scopes[mi].blk_param;
   if (blk && !blk[0]) blk = NULL;
@@ -8094,10 +8094,15 @@ static int module_aliases_name(const ClassInfo *mod, const char *m) {
 
 /* Does class cls alias its instance method m? Then an include keeps a copy
    of the module's m under a shadow name where the class defines m too: the
-   alias may name the module's (settle_mixin_aliases). */
-static int class_aliases_name(const ClassInfo *cls, const char *m) {
-  for (int a = 0; a < cls->naliases; a++)
-    if (!(cls->alias_sg && cls->alias_sg[a]) && sp_streq(cls->alias_old[a], m)) return 1;
+   alias may name the module's (settle_mixin_aliases). With from, only an
+   alias at or after that point counts: one before it names what stood there,
+   and a copy the include made later would change that (the include's own
+   refusal asks the record). */
+static int class_aliases_name(Compiler *c, const ClassInfo *cls, const char *m, const LoadPoint *from) {
+  for (int a = 0; a < cls->naliases; a++) {
+    if ((cls->alias_sg && cls->alias_sg[a]) || !sp_streq(cls->alias_old[a], m)) continue;
+    if (!from || cls->alias_node[a] < 0 || elab_cmp(elab_point_of(c, cls->alias_node[a]), *from) != PROG_BEFORE) return 1;
+  }
   return 0;
 }
 
@@ -8236,7 +8241,7 @@ static int mixin_brings(Compiler *c, int m, int mod, char *seen) {
    then. An include also looks at the class's prepends and at what its
    superclasses mix in; a prepend does not look at its includes, as a
    module included before is listed again behind the class. */
-static int mixin_already_brought(Compiler *c, int ci, int mod, LrMixKind kind, const int *mods, int n) {
+static int mixin_already_brought(Compiler *c, int ci, int mod, LrMixKind kind, const int *mods, int n, const Scope *method, int stmt) {
   char *seen = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
   if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int brought = 0;
@@ -8251,6 +8256,23 @@ static int mixin_already_brought(Compiler *c, int ci, int mod, LrMixKind kind, c
       brought = mixin_brings(c, cls->prepended_mods[m], mod, seen);
   }
   free(seen);
+  /* A method of the module (an include at statement stmt asks it of each): the module is among Object's
+     ancestors there, the class's chain reaches Object (no blank slate, whose chain stops at BasicObject), and it
+     answers the method's name at that point with another definition than the module's (a superclass's, another
+     module's in front, a top-level def already run): the include adds nothing for it, as for a module among the
+     ancestors */
+  if (!brought && method && kind == LR_INCLUDE && stmt >= 0 && !comp_class_is_module(c, &c->classes[ci]) &&
+      ci != comp_core_class(c, CORE_OBJECT) && !class_is_blank_slate(c, ci) && method->name) {
+    LoadPoint at = elab_point_of(c, stmt);
+    const LrDef *d = NULL;
+    const char *nm = comp_scope_user_name(method);
+    /* (an alias the module makes, or the class makes of the name, goes with its original: the alias's copy reads
+       the original's by name in the class, so the original keeps its copy) */
+    brought = !module_aliases_name(&c->classes[mod], nm) && sp_streq(module_alias_root(&c->classes[mod], nm), nm) &&
+              !class_aliases_name(c, &c->classes[ci], nm, &at) &&
+              elab_mixed_at(c, comp_core_class(c, CORE_OBJECT), 0, mod, at) == ELAB_YES &&
+              elab_method_at(c, ci, nm, 0, at, &d) == ELAB_YES && d && d->node != method->def_node;
+  }
   return brought;
 }
 
@@ -8387,7 +8409,7 @@ static void mixin_copies_rename(Compiler *c, int ci, int own, const char *shadow
    module's method a layer of its own in front of the earlier one's
    renamed copy (no version of it: mixin_prev_version), as the call before
    the include cannot be told from the call after it. */
-static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, int plain, int *cells) {
+static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, int plain, int *cells, int stmt) {
   mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
   const NodeTable *nt = c->nt;
   /* snapshot count before adding new scopes to avoid re-scanning them */
@@ -8435,6 +8457,11 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
       int top = comp_method_index(c, src->name);
       if (top >= 0 && !c->scopes[top].is_cmethod) own = top;
     }
+    /* (a method the class has no def of its own of, where the include adds nothing for it) */
+    if ((own < 0 || c->scopes[own].is_include_copy) && !src->is_cmethod && !src->shadow && mixin_already_brought(c, ci, mod_id, LR_INCLUDE, NULL, 0, src, stmt)) {
+      if (!src->is_module_function) src->is_transplanted_source = 1;
+      continue;
+    }
     int guarded = guard && !src->is_cmethod && !src->shadow;
     if (src->shadow) {
       /* (one the class has already, from the module mixed in before that
@@ -8446,7 +8473,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
          through the class's prepends or its superclasses' mixins: CRuby's
          include skips that module, so the module's chain ends there and a
          super falls through to what the class's own super reaches) */
-      if (mixin_already_brought(c, ci, mixin_def_module(c, src), LR_INCLUDE, NULL, 0)) continue;
+      if (mixin_already_brought(c, ci, mixin_def_module(c, src), LR_INCLUDE, NULL, 0, NULL, -1)) continue;
       mixin_shadow_name(c, ci, src, inc_shadow, sizeof inc_shadow);
       dst_name = inc_shadow;
     }
@@ -8506,7 +8533,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        module or the class makes of it names it */
     if (own < 0 && is_builtin_reopen_name(c->classes[ci].name) &&
         builtin_method_known(c->classes[ci].name, src->name) &&
-        !module_aliases_name(&c->classes[mod_id], src->name) && !class_aliases_name(&c->classes[ci], src->name)) {
+        !module_aliases_name(&c->classes[mod_id], src->name) && !class_aliases_name(c, &c->classes[ci], src->name, NULL)) {
       if (!src->is_module_function) src->is_transplanted_source = 1;
       continue;
     }
@@ -8524,7 +8551,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
          Otherwise the module method is simply shadowed -- nothing to emit. */
       int behind_own = elab_history_absent(c, ci, 0, src->name) || mixin_reached_behind_own(c, ci, 0, own, ms);
       if (!behind_own && !module_aliases_name(&c->classes[mod_id], src->name) &&
-          !class_aliases_name(&c->classes[ci], src->name)) {
+          !class_aliases_name(c, &c->classes[ci], src->name, NULL)) {
         if (!src->is_module_function) src->is_transplanted_source = 1;
         continue;
       }
@@ -8921,6 +8948,25 @@ static int mixin_layers_call_super(Compiler *c, int ci, int mod, int late, int s
   }
   return hit;
 }
+/* A builtin module with no class of its own that class ci includes, by name (`IO::WaitReadable`, `Math`), once. */
+static void class_note_mod_name(ClassInfo *ci, const char *name) {
+  for (int m = 0; m < ci->nincluded_mod_names; m++)
+    if (sp_streq(ci->included_mod_names[m], name)) return;
+  if (ci->nincluded_mod_names >= ci->cincluded_mod_names) {
+    ci->cincluded_mod_names = ci->cincluded_mod_names ? ci->cincluded_mod_names * 2 : 4;
+    char **nn = realloc(ci->included_mod_names, sizeof(char *) * (size_t)ci->cincluded_mod_names);
+    if (!nn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    ci->included_mod_names = nn;
+  }
+  ci->included_mod_names[ci->nincluded_mod_names++] = strdup(name);
+}
+/* Does the builtin root of class ci's chain have builtin module `mod` among its ancestors already (Kernel, under
+   Object)? CRuby's include of it is then a no-op, and the class's own ancestry does not gain it. */
+static int mod_in_root_ancestors(Compiler *c, int ci, const char *mod) {
+  const char *root = comp_super_builtin_root(c, ci, NULL);
+  int rs = root ? builtin_core_class_slot(root) : -1, ms = builtin_core_class_slot(mod);
+  return rs >= 0 && ms >= 0 && builtin_core_is_a(rs, ms);
+}
 void process_include_body(Compiler *c, int ci, int body_node) {
   const NodeTable *nt = c->nt;
   /* (a core class's or module's reopening keeps its includes as they were:
@@ -8987,20 +9033,14 @@ void process_include_body(Compiler *c, int ci, int body_node) {
           strncat(qual, "::", sizeof qual - strlen(qual) - 1);
         }
         strncat(qual, mname, sizeof qual - strlen(qual) - 1);
-        ClassInfo *cif2 = &c->classes[ci];
-        int dup = 0;
-        for (int m = 0; m < cif2->nincluded_mod_names; m++)
-          if (sp_streq(cif2->included_mod_names[m], qual)) { dup = 1; break; }
-        if (!dup) {
-          if (cif2->nincluded_mod_names >= cif2->cincluded_mod_names) {
-            cif2->cincluded_mod_names = cif2->cincluded_mod_names ? cif2->cincluded_mod_names * 2 : 4;
-            char **nn = realloc(cif2->included_mod_names,
-                                sizeof(char *) * (size_t)cif2->cincluded_mod_names);
-            if (!nn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-            cif2->included_mod_names = nn;
-          }
-          cif2->included_mod_names[cif2->nincluded_mod_names++] = strdup(qual);
-        }
+        class_note_mod_name(&c->classes[ci], qual);
+      }
+      /* (a builtin module named bare, `include Math`: the class's fact as the path form is, unless its builtin root has it
+         among its ancestors already, where CRuby's include is a no-op (`include Kernel`); Comparable and Enumerable
+         have their own flags above) */
+      else if (ak == NK_ConstantReadNode && mname && is_builtin_module_const_name(mname) && !is_comparable_module_name(mname) &&
+               !is_enumerable_module_name(mname)) {
+        if (!mod_in_root_ancestors(c, ci, mname)) class_note_mod_name(&c->classes[ci], mname);
       }
       continue;
     }
@@ -9010,7 +9050,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
        (`include M, then include Base` where M includes Base keeps M#g in
        front; `include M` twice runs M#g once) */
     int brought = mixin_already_brought(c, ci, mod_id, LR_INCLUDE, c->classes[ci].included_mods,
-                                        c->classes[ci].nincluded_mods);
+                                        c->classes[ci].nincluded_mods, NULL, -1);
     /* record membership for `rescue M` matching (dedup across reopenings) */
     class_note_included_mod(c, ci, mod_id);
     /* (one an earlier late include that may not have run brought: this
@@ -9028,7 +9068,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
     if (guard && !cells) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     int s0 = c->nscopes;
     int plain = (here && !guard) || unplaced;
-    include_module_methods(c, ci, mod_id, guard, plain, cells);
+    include_module_methods(c, ci, mod_id, guard, plain, cells, mx[j].stmt);
     for (int s = s0; plain && s < c->nscopes; s++)
       if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) c->scopes[s].mixin_unversioned = 1;
     for (int s = s0; here && !guard && !layered && s < c->nscopes; s++)
@@ -9185,12 +9225,12 @@ void register_includes(Compiler *c) {
        (#9292): what that class and the classes up to Struct define is
        answered with this class's members, as a reopening of Struct is */
     for (int k = par, g = 0; k >= 0 && g < 64; k = c->classes[k].parent, g++) {
-      include_module_methods(c, ci, k, 0, 0, NULL);
+      include_module_methods(c, ci, k, 0, 0, NULL, -1);
       if (k == c->classes[k].parent) break;
     }
     int base = comp_core_class(c, c->classes[ci].is_data ? CORE_DATA : CORE_STRUCT);
     if (base >= 0 && base != ci && !c->classes[base].is_struct)
-      include_module_methods(c, ci, base, 0, 0, NULL);
+      include_module_methods(c, ci, base, 0, 0, NULL, -1);
   }
   /* A reopening of Struct in a program with no Struct.new class (activesupport's
      core_ext/object/json gives Struct an #as_json): a Struct value is always a
@@ -9920,7 +9960,7 @@ void register_extends(Compiler *c) {
       /* extending a module the class already extends, or one such a module
          brings, is a no-op: it stays where it was, and a second copy in
          front would hide the later one */
-      int again = mod_id < 0 || mixin_already_brought(c, ci, mod_id, LR_EXTEND, seen, nseen);
+      int again = mod_id < 0 || mixin_already_brought(c, ci, mod_id, LR_EXTEND, seen, nseen, NULL, -1);
       if (!again) {
         if (nseen == capseen) {
           capseen *= 2;
@@ -10532,10 +10572,8 @@ void specialize_inherited_cls_new(Compiler *c) {
     else {
       NodeKind rk = nt_kind(nt, recv);
       if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
-      const char *cn = key_name(c, recv);
       /* (the class the node names: an alias's too) */
       ci = const_node_class_index(c, recv);
-      if (ci < 0) ci = cn ? comp_class_index(c, cn) : -1;
       if (ci < 0) continue;
     }
     const char *mname = cls_call_name(c, id);
@@ -10902,7 +10940,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
         if (!done) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
         for (int m = 0; m < cls->nprepended_mods; m++)
           if (mixin_prepended(c, ci, cls->prepended_mods[m])) done[nd++] = cls->prepended_mods[m];
-        int brought = mixin_already_brought(c, ci, mod_id, LR_PREPEND, done, nd);
+        int brought = mixin_already_brought(c, ci, mod_id, LR_PREPEND, done, nd, NULL, -1);
         free(done);
         if (brought && here) mixin_cells_set(c, ci, mod_id, 1, body, mx[j].stmt);
         if (brought) continue;
@@ -12054,7 +12092,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       int rc = rn ? const_node_class_index(c, r) : -1;
       if (rc < 0) { if (rn && is_builtin_class_name(rn)) continue; return 0; }
       if (comp_cmethod_in_chain(c, rc, "new", NULL) >= 0) return 0;
-      if (cplan_new_initialize(c, u, rc, NULL) != (int)(s - c->scopes)) continue;
+      if (cplan_hook_target(c, u, rc, "initialize", NULL) != (int)(s - c->scopes)) continue;
     }
     if (!pn) {
       int r = nt_ref(nt, u, "receiver");
@@ -12795,16 +12833,20 @@ const int *poly_recv_classes(Compiler *c, int call, int *n) {
   return pivs_call_set(c, call, &cls, n, 0) ? cls : NULL;
 }
 /* See analyze.h. */
+int poly_recv_may_be(Compiler *c, int call, int k) {
+  if (is_builtin_reopen(c->classes[k].name)) return 1;   /* (a reopened builtin: its values are no tracked instances) */
+  int nk = 0;
+  const int *ks = poly_recv_classes(c, call, &nk);
+  for (int j = 0; ks && j < nk; j++) if (ks[j] == k) return 1;
+  return !ks;
+}
+/* See analyze.h. */
 int poly_recv_defines(Compiler *c, int call, const char *name) {
   if (an_builtin_only_p()) return 0;   /* deriving the builtin-only answer (#3459) */
   if (cplan_core_method(c, call, CORE_OBJECT, name) >= 0) return 1;   /* every value is an Object */
-  int nk = 0;
-  const int *ks = poly_recv_classes(c, call, &nk);
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    int held = !ks;
-    for (int j = 0; j < nk && !held; j++) held = ks[j] == k;
-    if (held && comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
+    if (poly_recv_may_be(c, call, k) && call_target(c, call, k, name, CT_METHODS, NULL) >= 0) return 1;
   }
   return 0;
 }

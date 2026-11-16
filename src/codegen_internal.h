@@ -106,6 +106,9 @@ static inline const char *isa_const_qualname(const NodeTable *nt, int arg, char 
 extern Buf *g_pre;
 extern int  g_indent;
 extern int  g_tmp;
+/* a raise's explicit cause temp (codegen_call_exception.c) */
+extern int  g_raise_cz;
+const char *raise_fn(const char *fn);
 /* one representation: the String operands now being rendered are held across
    a block the program runs (emit_call sets it for a call with a block,
    emit_stmt_inner clears it for the statements inside), so a handle's read
@@ -966,9 +969,12 @@ extern const char *g_method_pr_label;
 extern const char *g_method_pr_var;
 extern const char *g_proc_return_home;
 int cmethod_takes_self_cls(Compiler *c, const Scope *s);
+/* self, boxed, in method scope s of class s->class_id: a builtin's reopening holds it as the builtin's own value */
+void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b);
 const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, Buf *b);
 int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b);
 const char *cmethod_cls_token(Compiler *c, Scope *encl);
+const char *cmethod_self_cls(Compiler *c, Scope *encl);
 Scope *open_default_method(void);
 int reopen_self_defaults(Compiler *c, int mi);
 int ctor_needs_self_defaults(Compiler *c, int initm, int argc);
@@ -1787,6 +1793,7 @@ int obj_arm_calls_own_inspect(Compiler *c, int cid);
 /* a pp that prints through sp_pp_inspect (codegen_stmt.c) */
 int pp_leaves_own_inspect(Compiler *c, const char *name);
 void emit_param_cell_publish(Compiler *c, int blk, const char *pname, Buf *b, int indent);
+void emit_param_cell_fresh(Compiler *c, int blk, const char *pname, Buf *b, int indent);
 void nameset_add(NameSet *s, const char *nm);
 /* Emit the C lvalue for local `name` in the current emission context: a
    captured var inside a proc body -> the cell in _cap; a cell local in its
@@ -1878,6 +1885,9 @@ int defer_refusals(void);
 int defer_refusals_at(const Compiler *c, int node);
 extern int g_deferred_diags;   /* the refusals a deferral took (codegen_util.c) */
 int time_parse_refusal(Compiler *c, int id, char *msg, size_t cap);
+/* the refusal of a define_method in a method's body handed a parameter of
+   that method as its body (codegen.c), or NULL */
+const char *define_method_param_body_refusal(Compiler *c, int id);
 int emit_stmt_or_defer(Compiler *c, int st, Buf *b, int indent);
 extern int g_stmt_deferrals;       /* refusals emit_stmt_or_defer turned into a raise in place */
 extern int g_unsup_probe;          /* silent emittability probe (drop a dynamic-send arm) */
@@ -3071,7 +3081,7 @@ int emit_boxed_recv_call(Compiler *c, int id, Buf *b);
 int diagnose_eval_call(Compiler *c, int id);
 int diagnose_unsupported_call(Compiler *c, int id);
 int cls_value_owns_name(Compiler *c, int id, const char *name);
-int diag_user_defines(Compiler *c, const char *name);
+int diag_user_defines(Compiler *c, int id, const char *name);
 int recv_user_defines(Compiler *c, const char *name);
 int emit_object_ivar_list(Compiler *c, int recv, int cid, Buf *b);
 void emit_object_ivar_remove(Compiler *c, int id, int recv, TyKind rt, int cid, const char *sym, Buf *b);
@@ -3251,6 +3261,9 @@ int needs_root(TyKind t);
 int ty_gc_rootable(Compiler *c, TyKind t);
 void emit_gc_root_var(Compiler *c, TyKind t, const char *name, Buf *b);
 void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b);
+/* Does `txt` mention the temp `_t<n>` as that temp, not as a prefix of a
+   longer number? (codegen_call.c) */
+int text_uses_tmp(const char *txt, int n);
 int ty_gc_holds_refs(Compiler *c, TyKind t);
 void emit_gc_root_tmp_refs(Compiler *c, TyKind t, int tmp, Buf *b);
 void emit_srange_handle_roots(Compiler *c, const char *ref, Buf *b);

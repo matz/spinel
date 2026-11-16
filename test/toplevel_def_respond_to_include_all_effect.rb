@@ -18,3 +18,17 @@ $l = []
 p "s".respond_to?(:f, ($l << :ia1; false)), $l
 p nil.respond_to?(:f, ($l << :ia2; false)), $l
 p K2.new.respond_to?(:m, ($l << :ia3; false)), $l
+
+# an argument that can raise is run too, though it has no other effect
+def probe_s(n) = "s".respond_to?(:f, 1 / n)
+def probe_nil(n) = nil.respond_to?(:f, 1 / n)
+def probe_obj(n) = K2.new.respond_to?(:m, 1 / n)
+[0, 1].each do |n|
+  [:probe_s, :probe_nil, :probe_obj].each do |m|
+    begin
+      p send(m, n)
+    rescue ZeroDivisionError => e
+      p e.class
+    end
+  end
+end

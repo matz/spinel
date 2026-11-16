@@ -1,0 +1,29 @@
+A1 0: A1 "No such file or directory" errno=2
+A1 2: A1 "No such file or directory @ open - f" errno=2
+A1 3: raises ArgumentError: wrong number of arguments (given 3, expected 0..2)
+A2 1: A2 "No such file or directory - x" errno=2
+A2 3: raises ArgumentError: wrong number of arguments (given 3, expected 0..2)
+A3 kw: A3 "No such file or directory @ {foo: 1} - x" errno=2
+A3 nokw: A3 "No such file or directory @ y - x" errno=2
+A4: raises TypeError: no implicit conversion of Hash into String
+A5 empty: A5 "No such file or directory" errno=2
+A5 kw: raises TypeError: no implicit conversion of Hash into String
+:t
+A6: A6 "Broken pipe - f" errno=32
+A7: raises TypeError: no implicit conversion of Module into Integer
+B1 0: B1 "B1" status=0
+B1 2: B1 "m" status=4
+B1 str: B1 "only" status=0
+B1 f: B1 "m" status=2
+B2 kw: B2 "{a: 2}" status=1
+B2 nokw: B2 "ok" status=0
+B3: B3 "no" status=1
+B4: B4 "{msg: \"x\"}" status=0
+B5 splat: B5 "m" status=3
+SE splat: SystemExit "z" status=5
+ENOENT splat: Errno::ENOENT "No such file or directory @ open - f" errno=2
+ENOENT kw: Errno::ENOENT "No such file or directory - x" errno=2
+SCE splat: Errno::ENOENT "No such file or directory - m" errno=2
+raise: A1 "No such file or directory @ open - f" errno=2
+C1: C1 "No such file or directory - x" errno=2
+C2: C2 "C2" status=1

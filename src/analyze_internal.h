@@ -933,7 +933,9 @@ int desugar_static_class_eval(Compiler *c, HostStep *h);   /* analyze_desugar.c:
 int sce_span(Compiler *c, HostStep *h, int owner, int body, int at, int n, const char *locals, const char *gone);   /* ... over spliced statements */
 void sce_facts_free(struct SceFacts *f);
 int sce_graft_text(Compiler *c, HostStep *h, int owner, const char *text, int site, LoadPoint at, int **out, int *n);   /* a macro's computed class_eval text, grafted, not placed */
-int bo_may_act(const NodeTable *nt, int e);   /* analyze.c: can evaluating e do anything observable (a call may; a read of a local, an instance variable or a constant, a literal cannot) */
+int an_temp_node(NodeTable *nt, Scope *sc, const char *nm, int value);   /* analyze_desugar.c: a local temp's write of value, or (value < 0) its read */
+int bo_shallow_copy(NodeTable *nt, int id);   /* analyze.c: a copy of a call's fields in a fresh node, for the parentheses that run it in the call's place */
+int bo_may_act(Compiler *c, int e);   /* analyze.c: can evaluating e do anything observable (a call may; a read of a local, an instance variable or a constant, a literal cannot) */
 int host_prewalk_shape(NodeTable *nt, const int *ids, int n);   /* a node of the span a pre-walk step reads, or -1 */
 void lower_finish(Compiler *c, LowerCtx *lc);   /* frees; under the check, reports and exits */
 
@@ -1047,6 +1049,8 @@ int type_block_rest_params(Compiler *c);
 void check_block_rest_support(Compiler *c);
 int desugar_dynamic_send(Compiler *c);
 void expand_static_splat_args(Compiler *c, int from, int count);
+void rest_param_copy_name(char *out, size_t cap, const char *rp);   /* the local the reads of an assigned *rest move to */
+int fwd_fixed_call_arity(const NodeTable *nt, const char *name);   /* the one positional count every call of a `...` forwarder passes, -1 when they differ or pass a splat or keywords, -2 for no call */
 int desugar_dynamic_method(Compiler *c);
 int desugar_method_call_runtime_name(Compiler *c);
 int desugar_builtin_method_defined_conds(Compiler *c);
@@ -1080,6 +1084,8 @@ int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_when_unspread(Compiler *c, int call);
 int disp_cell_test(NodeTable *nt, const char *sel, int val, int then, int els);
+int disp_cell_choose(NodeTable *nt, const DispArm *arm, int narm, int then, int els);
+int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_super_call(NodeTable *nt, int ar, int blk);
 int disp_method_missing_call(NodeTable *nt, const char *name, int ar, int blk);
 int desugar_dynamic_respond_to(Compiler *c);
@@ -1087,6 +1093,7 @@ int desugar_toplevel_instance_exec(Compiler *c);
 int desugar_binding_lvget(Compiler *c);
 int desugar_step_kwargs(Compiler *c);
 int desugar_defined_method_call(Compiler *c);
+int desugar_respond_to_flag(Compiler *c);
 int desugar_respond_to_missing(Compiler *c);
 int desugar_respond_to_probe(Compiler *c);
 int desugar_symbol_to_proc_call(Compiler *c);
@@ -1211,6 +1218,10 @@ struct ElabNames { ANameIndex hdr; int hdr_unknown, hdr_built; ANameIndex byname
 /* The qualified names the class pass gave constants written under a module
    path ("Mod__LIMIT"), and each tail after a "__": see qc_leaf_qualified. */
 struct QcConstNames { ANameHash quals, leaves; };
+/* the callers memo of the share-strings walks under a pass (analyze.c,
+   strbuf_scope_callers): the pass's `changed` and `any` */
+void sb_targets_share_begin(int *changed, int *any);
+void sb_targets_share_end(void);
 void cr_class_only_names(Compiler *c, ANameHash *out);   /* the names only plain classes' methods hold */
 /* The block-passing call sites, and the supers, of the node table, indexed
    for yield_value_type and its kin (yvt_build, analyze_util.c): built once

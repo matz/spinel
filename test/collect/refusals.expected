@@ -194,6 +194,16 @@ spinel: 1 refusal, nothing written
 == test/reject/bind_call_class_value_block_target.rb [promote] rc=1
 spinel: test/reject/bind_call_class_value_block_target.rb:12: unsupported call: node N (CallNode `bind_call`) recv=CallNode/ty0 argc=1 arg0ty1001
 spinel: 1 refusal, nothing written
+== test/reject/block_method_self_call_enum_guard.rb [default] rc=1
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: 3 refusals, nothing written
+== test/reject/block_method_self_call_enum_guard.rb [promote] rc=1
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
+spinel: 3 refusals, nothing written
 == test/reject/bool_reopen_block_return_in_lambda.rb [default] rc=1
 spinel: test/reject/bool_reopen_block_return_in_lambda.rb:8: a `return` in a block given to a TrueClass's or FalseClass's yielding method, inside a lambda, is not supported by AOT compilation
 spinel: 1 refusal, nothing written
@@ -1444,12 +1454,6 @@ spinel: 1 refusal, nothing written
 == test/reject/method_of_package_native_func.rb [promote] rc=1
 spinel: test/reject/method_of_package_native_func.rb:8: Base64.method(:strict_decode64) is not supported: a Method object of a package's native function has no compiled function to bind. Call Base64.strict_decode64 directly, or wrap it in a lambda
 spinel: 1 refusal, nothing written
-== test/reject/method_string_handed_to_appender.rb [default] rc=1
-spinel: test/reject/method_string_handed_to_appender.rb:15: a String is passed through `g.call`, and a proc or Method it can reach appends to the String it is handed: this call hands it a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc or Method and assign it, or append to it in the caller.
-spinel: 1 refusal, nothing written
-== test/reject/method_string_handed_to_appender.rb [promote] rc=1
-spinel: test/reject/method_string_handed_to_appender.rb:15: a String is passed through `g.call`, and a proc or Method it can reach appends to the String it is handed: this call hands it a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc or Method and assign it, or append to it in the caller.
-spinel: 1 refusal, nothing written
 == test/reject/module_method_capture_singleton_untold.rb [default] rc=1
 spinel: test/reject/module_method_capture_singleton_untold.rb:12: a Method of a module's class method it does not have, made where the program does not tell whether the module's singleton class is made yet (a form that makes it may run before): CRuby's NameError names the class `#<Class:V>` once it is, `Module` before
 spinel: 1 refusal, nothing written
@@ -1533,12 +1537,6 @@ spinel: test/reject/pattern_value_const_range.rb:7: unsupported value constant p
 spinel: 1 refusal, nothing written
 == test/reject/pattern_value_const_range.rb [promote] rc=1
 spinel: test/reject/pattern_value_const_range.rb:7: unsupported value constant pattern other than an Integer, Float, String or Symbol: node N (ConstantPathNode)
-spinel: 1 refusal, nothing written
-== test/reject/proc_string_handed_on_to_appender.rb [default] rc=1
-spinel: test/reject/proc_string_handed_on_to_appender.rb:11: a String is passed to a proc's parameter `s__bp6Buffer_3run_3` through `f.call`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc and assign it, or append to it in the caller.
-spinel: 1 refusal, nothing written
-== test/reject/proc_string_handed_on_to_appender.rb [promote] rc=1
-spinel: test/reject/proc_string_handed_on_to_appender.rb:11: a String is passed to a proc's parameter `s__bp6Buffer_3run_3` through `f.call`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc and assign it, or append to it in the caller.
 spinel: 1 refusal, nothing written
 == test/reject/range_prepended_alias_chain_endpoint_write.rb [default] rc=1
 spinel: test/reject/range_prepended_alias_chain_endpoint_write.rb:17: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
@@ -1637,6 +1635,12 @@ spinel: test/reject/rescue_modifiers_nested_too_deep.rb:6: this expression nests
 spinel: 1 refusal, nothing written
 == test/reject/rescue_modifiers_nested_too_deep.rb [promote] rc=1
 spinel: test/reject/rescue_modifiers_nested_too_deep.rb:6: this expression nests more levels of conditionals, rescue modifiers or blocks than the compiler's emission stack holds; bind an inner part to a local or a method
+spinel: 1 refusal, nothing written
+== test/reject/respond_to_missing_blank_slate_kernel_below.rb [default] rc=1
+spinel: test/reject/respond_to_missing_blank_slate_kernel_below.rb:13: a def under a condition only the run time decides, in a class without Kernel, called on a subclass that includes Kernel, is not supported: Kernel's method answers in front of the def whether the branch ran or not, and the def's entry stands for the def; see docs/limitations.md
+spinel: 1 refusal, nothing written
+== test/reject/respond_to_missing_blank_slate_kernel_below.rb [promote] rc=1
+spinel: test/reject/respond_to_missing_blank_slate_kernel_below.rb:13: a def under a condition only the run time decides, in a class without Kernel, called on a subclass that includes Kernel, is not supported: Kernel's method answers in front of the def whether the branch ran or not, and the def's entry stands for the def; see docs/limitations.md
 spinel: 1 refusal, nothing written
 == test/reject/retry_in_ensure.rb [default] rc=1
 spinel: test/reject/retry_in_ensure.rb:12: Invalid retry (SyntaxError)
@@ -2004,14 +2008,18 @@ spinel: test/reject/struct_subclass_own_new_superclass.rb:7: unsupported supercl
 spinel: test/reject/subclass_array_class_new_call.rb:5: Class.new(Array) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Array`
 == test/reject/subclass_array_class_new_call.rb [promote] rc=1
 spinel: test/reject/subclass_array_class_new_call.rb:5: Class.new(Array) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Array`
-== test/reject/subclass_array_zsuper_post.rb [default] rc=1
-spinel: test/reject/subclass_array_zsuper_post.rb:8: a bare `super` into Array from a method with keyword, post-rest or destructured parameters is not supported yet; pass the arguments explicitly
-== test/reject/subclass_array_zsuper_post.rb [promote] rc=1
-spinel: test/reject/subclass_array_zsuper_post.rb:8: a bare `super` into Array from a method with keyword, post-rest or destructured parameters is not supported yet; pass the arguments explicitly
 == test/reject/subclass_hash_class_new.rb [default] rc=1
 spinel: test/reject/subclass_hash_class_new.rb:5: Class.new(Hash) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Hash`
 == test/reject/subclass_hash_class_new.rb [promote] rc=1
 spinel: test/reject/subclass_hash_class_new.rb:5: Class.new(Hash) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Hash`
+== test/reject/subclass_hash_zsuper_fwd_counts.rb [default] rc=1
+spinel: test/reject/subclass_hash_zsuper_fwd_counts.rb:7: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/subclass_hash_zsuper_fwd_counts.rb [promote] rc=1
+spinel: test/reject/subclass_hash_zsuper_fwd_counts.rb:7: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/subclass_hash_zsuper_keyword.rb [default] rc=1
+spinel: test/reject/subclass_hash_zsuper_keyword.rb:7: a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword parameters are not known is not supported yet; pass the arguments explicitly
+== test/reject/subclass_hash_zsuper_keyword.rb [promote] rc=1
+spinel: test/reject/subclass_hash_zsuper_keyword.rb:7: a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword parameters are not known is not supported yet; pass the arguments explicitly
 == test/reject/subclass_range.rb [default] rc=1
 spinel: test/reject/subclass_range.rb:3: class Span < Range: subclassing Range is not supported yet (a subclass would answer differently from CRuby); wrap a Range in an instance variable instead
 == test/reject/subclass_range.rb [promote] rc=1
@@ -2080,12 +2088,6 @@ spinel: test/reject/systemcallerror_subclass_errno_const.rb:5: an Errno constant
 spinel: test/reject/systemcallerror_subclass_errno_const_nested.rb:5: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
 == test/reject/systemcallerror_subclass_errno_const_nested.rb [promote] rc=1
 spinel: test/reject/systemcallerror_subclass_errno_const_nested.rb:5: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
-== test/reject/systemcallerror_zsuper_keyword.rb [default] rc=1
-spinel: test/reject/systemcallerror_zsuper_keyword.rb:6: unsupported a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize: node N (ForwardingSuperNode)
-spinel: 1 refusal, nothing written
-== test/reject/systemcallerror_zsuper_keyword.rb [promote] rc=1
-spinel: test/reject/systemcallerror_zsuper_keyword.rb:6: unsupported a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize: node N (ForwardingSuperNode)
-spinel: 1 refusal, nothing written
 == test/reject/table_loop_class_intersection.rb [default] rc=1
 spinel: test/reject/table_loop_class_intersection.rb:7: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty6
 spinel: 1 refusal, nothing written

@@ -264,7 +264,9 @@ static const char *reader_family(Compiler *c, const MtSite *s) {
        are calls of their own, each the frame of what is asked of it
        (emit_dynamic_send_arm). */
     if ((is_send_family(nm) || is_method_object_maker(nm)) && tgt && !own) return "send";
-    if (is_respond_to_name(nm) || is_method_defined_query(nm)) return "presence";
+    /* the presence query's question is the queried name's; a read of its own name (`respond_to?` asked of a class
+       that may define one) is the call's, as any call's is */
+    if (is_respond_to_name(nm) || is_method_defined_query(nm)) return own ? "call" : "presence";
     /* a read under a list's node is the list's own where a builder made it (the window of mtab_build_enter), the
        call's where the plan's resolution of the list's call did */
     if (is_instance_method_list(nm) || is_method_presence_query(nm) >= 2) return s->build ? "lists" : "call";

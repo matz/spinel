@@ -4475,11 +4475,14 @@ static int cplan_main_chain_unsure(Compiler *c, int id) {
 }
 /* Does the main-chain fact put a mixin's method ahead of main's and Object's own at call id (an extend, an Object
    prepend), so that the top-level def of the name does not answer where the ask goes to the mixin (CT_TOP | CT_INCLUDED;
-   CT_TOP alone keeps the top-level def)? */
+   CT_TOP alone keeps the top-level def)? Not an extend over a top-level def of the name: the emitters ask CT_TOP alone
+   and bind that def, so inference answers it too, where both would otherwise type the call differently (a bare call
+   of an extend's method over a top-level def of the name is the follow-up's, with the emitters' ask). */
 static int ct_main_mixin_ahead(Compiler *c, int id, const char *name) {
   int step;
   const LrDef *d;
-  return ct_main_chain(c, id, name, 0, &step, &d) == ELAB_YES && (step == EMC_EXTEND || step == EMC_PREPEND);
+  if (ct_main_chain(c, id, name, 0, &step, &d) != ELAB_YES || (step != EMC_EXTEND && step != EMC_PREPEND)) return 0;
+  return step == EMC_PREPEND || call_target(c, id, -1, name, CT_TOP, NULL) < 0;
 }
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
   /* (CT_TOP | CT_INCLUDED asks main's whole chain at the call: a module main extends or Object prepends answers ahead of

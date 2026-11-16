@@ -8023,9 +8023,11 @@ static int ct_init_forwards(Compiler *c, int mi, int ci) {
 /* What the chain of program initializes of builtin class ci reduces to from
    start (cplan_builtin_new_form's rule): each takes what the call passes
    (argc positional arguments, or an open list), and forwards or ends the walk. */
-static int ct_new_chain_form(Compiler *c, int ci, int start, int argc, int open) {
+static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open) {
   for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
     const Scope *sc = &c->scopes[mi];
+    /* (a def of the class's own that the call runs ahead of, in the order the load phase runs, is not made yet: the chain goes on past it) */
+    if (!sc->is_prepend_copy && !sc->is_include_copy && cplan_runs_before_def_node(c, id, sc->def_node)) continue;
     /* (each takes what the call passes, or CRuby raises ArgumentError there) */
     if (!(open ? sc->rest_idx >= 0 && sc->nrequired == 0 : cplan_def_takes_argc(c, mi, argc))) return BNF_REFUSE;
     if (ct_init_forwards(c, mi, ci)) continue;
@@ -8049,20 +8051,20 @@ int cplan_builtin_new_form(Compiler *c, int id) {
   const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
   int open = nt_argv_has(c->nt, av, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING);
   for (int i = 0; i < argc; i++) argc -= nt_kind(c->nt, av[i]) == NK_BlockArgumentNode;
-  /* the chain's head: a prepended module's copy answers the name ahead of the class's own def, which the plan's answer for a
-     site names only past the prepends */
-  int head = comp_method_in_class(c, ci, "initialize"), start = head >= 0 && c->scopes[head].is_prepend_copy ? head : tmp[0];
+  /* the chain's head, as the plan answers it where the call runs (a prepended module's copy answers the name ahead of the class's own
+     def); a def the call runs ahead of is not in force there (ct_new_chain_form) */
+  int start = tmp[0];
   /* a prepend a later statement makes is chosen at run time by its guard (guard_chain): every chain it may run must reduce alike */
   if (c->scopes[start].mixin_guarded || c->scopes[start].entry == ENTRY_TABLE) {
     int to[VER_MAX_ARMS + 1], n = guard_chain(c, start, to, NULL, NULL), f = BNF_NONE;
     for (int k = 0; k < n; k++) {
-      int fk = ct_new_chain_form(c, ci, to[k], argc, open);
+      int fk = ct_new_chain_form(c, id, ci, to[k], argc, open);
       if (f != BNF_NONE && fk != f) return BNF_REFUSE;
       f = fk;
     }
     return f;
   }
-  return ct_new_chain_form(c, ci, start, argc, open);
+  return ct_new_chain_form(c, id, ci, start, argc, open);
 }
 /* Is call id a builtin class's `new` the plan does not answer: it runs a program
    initialize the builtin construction does not (the effect and the block_given? a

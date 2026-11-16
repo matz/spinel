@@ -22377,9 +22377,9 @@ static int sym_proc_blockify_op(Compiler *c, int id) {
 /* Whether some user class has a block-taking method `nm`, which a poly
    receiver reaches through the class-id dispatch
    (poly_block_call_needs_dispatch) rather than the poly map loop. */
-static int user_block_method(Compiler *c, const char *nm) {
+static int user_block_method(Compiler *c, int id, const char *nm) {
   for (int k = 0; k < c->nclasses; k++) {
-    int mi = call_target(c, -1, k, nm, CT_METHODS | CT_SHARED, NULL);
+    int mi = call_target(c, id, k, nm, CT_METHODS, NULL);
     if (mi < 0) continue;
     Scope *m = &c->scopes[mi];
     if (m->yields || (m->blk_param && m->blk_param[0])) return 1;
@@ -22466,7 +22466,7 @@ int sym_proc_poly_pair_view(Compiler *c, int id) {
   if (!nm || argc || ty_iter_shape(nm) != TY_ITER_MAP || nt_ref(nt, id, "block") < 0) return 0;
   int changed = sym_proc_blockify_op(c, id);
   int blk = nt_ref(nt, id, "block");
-  int rest = user_block_method(c, nm);
+  int rest = user_block_method(c, id, nm);
   const char *mn = nt_kind(nt, blk) == NK_BlockNode ? sym_proc_name_of(nt, blk, rest) : NULL;
   if (!mn || nt_ref(nt, blk, "sym_proc_pair") >= 0) return changed;
   if (rest) return sym_proc_rest_view(c, blk, mn) | changed;

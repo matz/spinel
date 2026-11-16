@@ -7990,7 +7990,7 @@ static int ct_params_plain(Compiler *c, const Scope *sc, int kwrest_ok, int defa
 /* Does the super call sup (a `super`, or the builtin-lowered call of it) of
    method sc pass on exactly what sc received: its parameters in order, a rest
    parameter splatted, no keywords, and its caller's block (super_forwards_caller_block)? */
-static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int argc, int open) {
+static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int argc, int open, int kw_ok) {
   const NodeTable *nt = c->nt;
   /* (the call fills every positional parameter: a default never runs) */
   int pos = sc->nparams - (sc->rest_idx >= 0) - (sc->kwrest_idx >= 0);
@@ -8017,16 +8017,17 @@ static int ct_super_passes_params(Compiler *c, const Scope *sc, int sup, int arg
         !sp_streq(nt_str(nt, ex, "name"), sc->pnames[np]) || (nt_kind(nt, av[i]) == NK_SplatNode) != (np == sc->rest_idx)) return 0;
     np++;
   }
-  /* (a keyword rest the `super` leaves out: the call's keywords are the builtin's own to take, as `String.new` takes `encoding:` before
-     its initialize runs; where the initialize then drops them, the answer is the builtin's own, master's, which this does not model) */
-  return np == sc->nparams || (np + 1 == sc->nparams && sc->kwrest_idx == np);
+  /* (a keyword rest the `super` leaves out drops the keywords a call passes: a forward where the call passes none, or the builtin's
+     `new` applies them itself or they make no difference, as String's and Hash's do (BC_NEW_KEYWORDS); not for Time's `in:` or
+     Fiber's `blocking:`, which take effect in initialize) */
+  return np == sc->nparams || (np + 1 == sc->nparams && sc->kwrest_idx == np && kw_ok);
 }
 /* Is method mi, which the chain of builtin class ci holds for initialize, a
    forward: a prepended module's copy whose body only calls `super` with what
    it received? Then the builtin's own initialize runs as if it were not there.
    A reopening's own def is never one: its `super` skips the builtin (the
    reopening replaced it) and reaches BasicObject's. */
-static int ct_init_forwards(Compiler *c, int mi, int ci, int argc, int open) {
+static int ct_init_forwards(Compiler *c, int mi, int ci, int argc, int open, int kw_ok) {
   const Scope *sc = &c->scopes[mi];
   int b = sc->body, n = 0;
   const int *bb = b >= 0 && nt_kind(c->nt, b) == NK_StatementsNode ? nt_arr(c->nt, b, "body", &n) : NULL;
@@ -8034,12 +8035,16 @@ static int ct_init_forwards(Compiler *c, int mi, int ci, int argc, int open) {
   NodeKind k = nt_kind(c->nt, bb[0]);
   const char *cn = k == NK_CallNode ? nt_str(c->nt, bb[0], "name") : NULL;
   return k == NK_SuperNode || k == NK_ForwardingSuperNode || (cn && is_initialize_name(comp_scope_user_name(sc)) && sp_streq(cn, sc->name) && cplan_builtin_call(c, bb[0]))
-         ? ct_super_passes_params(c, sc, bb[0], argc, open) : 0;
+         ? ct_super_passes_params(c, sc, bb[0], argc, open, kw_ok) : 0;
 }
 /* What the chain of program initializes of builtin class ci reduces to from
    start (cplan_builtin_new_form's rule): each takes what the call passes
    (argc positional arguments, or an open list), and forwards or ends the walk. */
 static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open) {
+  /* (keywords the call passes, `...` too: a keyword-dropping forward is one only where dropping them cannot be observed) */
+  int nargs = 0, args = nt_ref(c->nt, id, "arguments");
+  const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL;
+  int kw_ok = !nt_argv_has(c->nt, av, nargs, NT_ARG_KEYWORDS | NT_ARG_FORWARDING) || builtin_new_keywords(c->classes[ci].name);
   for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
     const Scope *sc = &c->scopes[mi];
     /* (a def of the class's own counts where the load record proves it made before the call can first run; where the call runs
@@ -8047,7 +8052,7 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
     if (!sc->is_prepend_copy && !sc->is_include_copy && !elab_def_before_call(c, id, sc->def_node)) continue;
     /* (each takes what the call passes, or CRuby raises ArgumentError there) */
     if (!(open ? sc->rest_idx >= 0 && sc->nrequired == 0 : cplan_def_takes_argc(c, mi, argc))) return BNF_REFUSE;
-    if (ct_init_forwards(c, mi, ci, argc, open)) continue;
+    if (ct_init_forwards(c, mi, ci, argc, open, kw_ok)) continue;
     /* (the first that does not forward: an empty one builds the builtin's empty value, if it has one, from what the call
        passes; an open list's splat, keywords and block pass are evaluated by the rewrite, which refuses what it cannot) */
     return cplan_body_empty(c, mi) && builtin_empty_new(c->classes[ci].name) && !sc->yields && ct_params_plain(c, sc, 0, 0)

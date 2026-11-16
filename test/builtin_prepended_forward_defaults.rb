@@ -11,3 +11,5 @@ module Rest
 end
 String.prepend(Rest)
 p String.new("ab")
+# ...String's `new` applies `encoding:` itself, before the initialize that drops it runs
+p String.new("ab", encoding: "BINARY").encoding

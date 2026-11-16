@@ -3050,6 +3050,10 @@ int builtin_empty_new(const char *name) {
   const BuiltinClass *r = builtin_class_at(builtin_core_class_slot(name));
   return r && (r->flags & BC_EMPTY_NEW);
 }
+int builtin_new_keywords(const char *name) {
+  const BuiltinClass *r = builtin_class_at(builtin_core_class_slot(name));
+  return r && (r->flags & BC_NEW_KEYWORDS);
+}
 int builtin_boxed_by_tag(int slot) {
   const BuiltinClass *r = builtin_class_at(slot);
   return r && (r->flags & BC_TAGGED);

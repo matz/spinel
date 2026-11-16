@@ -272,7 +272,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   }
   else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 0)) {
     /* a class whose to_s the record proves undefined here: CRuby's call raises */
-    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "to_s", "(const char *)\"\"", b); buf_puts(b, ";\n");
+    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "to_s", "(const char *)\"\"", NULL, b); buf_puts(b, ";\n");
   }
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s (user-defined or a generated struct/data one) */
@@ -405,7 +405,7 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "(void)("); emit_expr_for_effect(c, arg, b); buf_puts(b, ");\n");
   }
   else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 0)) {
-    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "to_s", "(const char *)\"\"", b); buf_puts(b, ";\n");
+    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "to_s", "(const char *)\"\"", NULL, b); buf_puts(b, ";\n");
   }
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s: call it directly (like the puts arm) */
@@ -670,7 +670,7 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "fputs(\"[]\\n\", stdout);\n");  /* p [] */
   }
   else if (ty_is_object(t) && obj_str_undef(c, arg, ty_object_class(t), 1)) {
-    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "inspect", "(const char *)\"\"", b); buf_puts(b, ";\n");
+    buf_puts(b, "(void)"); emit_nomethod_raise(c, arg, 0, NULL, "inspect", "(const char *)\"\"", NULL, b); buf_puts(b, ";\n");
   }
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 1)) {
     /* an object with #inspect (user-defined or a generated struct/data one);
@@ -10963,7 +10963,7 @@ static int emit_when_user_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   if (weq < 0 && wml.why == MLW_RECORD) {
     /* the arm's class undefines === where the record places it: CRuby's call of it raises */
     buf_printf(b, "((void)_t%d, ", t);
-    emit_nomethod_raise(c, cond, 0, NULL, "===", "(sp_bool)0", b);
+    emit_nomethod_raise(c, cond, 0, NULL, "===", "(sp_bool)0", NULL, b);
     buf_puts(b, ")");
     return 1;
   }

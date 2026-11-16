@@ -1363,7 +1363,7 @@ const char *scope_def_file(Compiler *c, Scope *s);
 int display_method_scope(Compiler *c, int site, int cid, int want_inspect, int *defcls);
 const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect);
 int obj_str_undef(Compiler *c, int site, int cid, int want_inspect);
-void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, Buf *b);
+void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, Buf *b);
 int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b);
 const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect);
 const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect);

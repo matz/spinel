@@ -7515,14 +7515,18 @@ static sp_bool sp_poly_cmp_eq(sp_RbVal a, sp_RbVal b) {
    bound clamps one-sided; both bounds present and lo > hi (or incomparable)
    raise ArgumentError; the result is the receiver or the applied bound. The
    user `<=>` dispatches through sp_obj_cmp_hook (via sp_poly_cmp). */
+static void sp_obj_clamp_bounds_ck(sp_RbVal lo, sp_RbVal hi) SP_UNUSED;
+static void sp_obj_clamp_bounds_ck(sp_RbVal lo, sp_RbVal hi) {
+  if (lo.tag != SP_TAG_NIL && hi.tag != SP_TAG_NIL && sp_poly_cmp_ck(lo, hi) > 0)
+    sp_raise_cls("ArgumentError", "min argument must be less than or equal to max argument");
+}
 static sp_RbVal sp_obj_clamp(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) SP_UNUSED;
 static sp_RbVal sp_obj_clamp(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) {
   /* Each operand can be a heap object and sp_poly_cmp_ck dispatches the user
      `<=>` (which allocates), so root all three -- v is live but unused across
      the first lo<=>hi comparison, lo/hi across the later ones. */
   SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(lo); SP_GC_ROOT_RBVAL(hi);
-  if (lo.tag != SP_TAG_NIL && hi.tag != SP_TAG_NIL && sp_poly_cmp_ck(lo, hi) > 0)
-    sp_raise_cls("ArgumentError", "min argument must be less than or equal to max argument");
+  sp_obj_clamp_bounds_ck(lo, hi);
   if (lo.tag != SP_TAG_NIL) {
     sp_int c1 = sp_poly_cmp_ck(v, lo);
     if (c1 == 0) return v;
@@ -7531,18 +7535,41 @@ static sp_RbVal sp_obj_clamp(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) {
   if (hi.tag != SP_TAG_NIL && sp_poly_cmp_ck(v, hi) > 0) return hi;
   return v;
 }
+/* Comparable#clamp(lo, hi) on a receiver whose `<=>` is undefined: CRuby's
+   order before it calls it -- both bounds nil answers the receiver, both
+   present and lo above hi is the ArgumentError -- else the NoMethodError
+   naming `m` (the same text sp_nomethod_msg builds for the receiver). */
+static sp_RbVal sp_obj_clamp_gone(sp_RbVal v, sp_RbVal lo, sp_RbVal hi, const char *m) SP_UNUSED;
+static sp_RbVal sp_obj_clamp_gone(sp_RbVal v, sp_RbVal lo, sp_RbVal hi, const char *m) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(lo); SP_GC_ROOT_RBVAL(hi);
+  sp_obj_clamp_bounds_ck(lo, hi);
+  if (lo.tag == SP_TAG_NIL && hi.tag == SP_TAG_NIL) return v;
+  return sp_raise_nomethod(sp_nomethod_msg(m, v));
+}
 /* Comparable#clamp(range) for user objects: an exclusive range with a real
    end cannot clamp (CRuby); beginless/endless endpoints (the nobeg/noend
    range sentinels) clamp one-sided as nil bounds. Integer endpoints are boxed
    and flow to the user `<=>` like any operand. */
-static sp_RbVal sp_obj_clamp_range(sp_RbVal v, sp_Range r) SP_UNUSED;
-static sp_RbVal sp_obj_clamp_range(sp_RbVal v, sp_Range r) {
+static void sp_obj_clamp_range_bounds(sp_Range r, sp_RbVal *lo, sp_RbVal *hi) SP_UNUSED;
+static void sp_obj_clamp_range_bounds(sp_Range r, sp_RbVal *lo, sp_RbVal *hi) {
   if (sp_range_excl_end(r) && (r.fe || r.noend == 0))
     sp_raise_cls("ArgumentError", "cannot clamp with an exclusive range");
-  sp_RbVal lo = r.nobeg ? sp_box_nil() : sp_box_int(r.first);
+  *lo = r.nobeg ? sp_box_nil() : sp_box_int(r.first);
   /* an end written as a Float is the bound as written */
-  sp_RbVal hi = r.fe ? sp_box_float(r.fend) : r.noend ? sp_box_nil() : sp_box_int(r.last);
+  *hi = r.fe ? sp_box_float(r.fend) : r.noend ? sp_box_nil() : sp_box_int(r.last);
+}
+static sp_RbVal sp_obj_clamp_range(sp_RbVal v, sp_Range r) SP_UNUSED;
+static sp_RbVal sp_obj_clamp_range(sp_RbVal v, sp_Range r) {
+  sp_RbVal lo, hi;
+  sp_obj_clamp_range_bounds(r, &lo, &hi);
   return sp_obj_clamp(v, lo, hi);
+}
+/* ...and on a receiver whose `<=>` is undefined (sp_obj_clamp_gone) */
+static sp_RbVal sp_obj_clamp_range_gone(sp_RbVal v, sp_Range r, const char *m) SP_UNUSED;
+static sp_RbVal sp_obj_clamp_range_gone(sp_RbVal v, sp_Range r, const char *m) {
+  sp_RbVal lo, hi;
+  sp_obj_clamp_range_bounds(r, &lo, &hi);
+  return sp_obj_clamp_gone(v, lo, hi, m);
 }
 /* Stable ascending sort of idx[0..n) by the poly key keys[idx[k]], leaving equal
    (or incomparable) keys in their original relative order. Backs sort_by's

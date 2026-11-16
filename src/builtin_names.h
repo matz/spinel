@@ -630,6 +630,9 @@ int is_pop_name(const char *n);               /* pop */
 
 const char *encoding_const_name(const char *nm);  /* Encoding::NM's encoding name, or NULL */
 const char *builtin_operator_delegate(const char *name);
+/* what CRuby answers before it calls the delegate `gone` of operator `name` (BCUT_*) */
+enum { BCUT_NONE, BCUT_SAME_TRUE, BCUT_SAME_FALSE, BCUT_CLAMP };
+int builtin_operator_cut(const char *name, const char *gone);
 int is_mul_op(const char *n); /* * */
 int is_pow_op(const char *n); /* ** */
 int is_minus_op(const char *n); /* - */

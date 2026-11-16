@@ -202,6 +202,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->send_fallback = -1;
   p->delegate = NULL;
   p->delegate_undef = 0;
+  p->delegate_cut = BCUT_NONE;
   p->mi = mi; p->owner_ci = (short)owner;
   p->via = (unsigned char)via; p->dispatch = (unsigned char)dispatch;
   p->by_name = 0;
@@ -1235,9 +1236,14 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     /* (the delegate is an implied call of the operator: asked as the emitter asks it, which sees an undef) */
     MethodLookup dl = { .def_class = -1 };
     const char *gone = NULL;
-    int dmi = via_op ? cplan_implied_target(c, id, recv, cid, via_op, 0, &dl) : -1;
-    if (via_op && dmi < 0 && dl.kind == ML_NONE && dl.why == MLW_RECORD) gone = via_op;
-    if (dmi < 0 && via_op) {
+    /* (the operator itself undefined where the record places the call: the call raises naming it) */
+    if (via_op) {
+      cplan_implied_target(c, id, recv, cid, name, 0, &dl);
+      if (dl.kind == ML_NONE && dl.why == MLW_RECORD) gone = name;
+    }
+    int dmi = via_op && !gone ? cplan_implied_target(c, id, recv, cid, via_op, 0, &dl) : -1;
+    if (via_op && !gone && dmi < 0 && dl.kind == ML_NONE && dl.why == MLW_RECORD) gone = via_op;
+    if (dmi < 0 && via_op && !gone) {   /* (stops at the first undefined delegate: CRuby raises there) */
       via_op = builtin_operator_delegate(via_op);
       if (via_op && sp_streq(via_op, "<=>") && !class_is_comparable(c, cid)) via_op = NULL;
       dmi = via_op ? cplan_implied_target(c, id, recv, cid, via_op, 0, &dl) : -1;
@@ -1251,6 +1257,8 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     if (gone) {
       p->delegate = gone;
       p->delegate_undef = 1;
+      /* what the builtin answers before it reaches the undefined method (the delegate row's cut) */
+      p->delegate_cut = (unsigned char)builtin_operator_cut(name, gone);
       return;
     }
     /* a reader a subclass overrides with a method: the switch reaches the

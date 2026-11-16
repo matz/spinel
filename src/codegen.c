@@ -12224,19 +12224,31 @@ int obj_str_undef(Compiler *c, int site, int cid, int want_inspect) {
    nodes argv (the call's arguments), and NoMethodError names method `name`
    and the object; `dflt` is the C value the expression stands for. The one
    emission of every site that reads the plan's none with MLW_RECORD
-   (cplan_implied_target). */
-void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, Buf *b) {
-  int tv = ++g_tmp;
+   (cplan_implied_target). With `same` (a C value), the builtin's own shortcut
+   comes first: the first argument being the receiver itself answers `same`
+   and raises nothing. The operands are rooted temporaries (the caller has
+   normally hoisted them, so reading one runs nothing twice). */
+void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, Buf *b) {
+  int tv = ++g_tmp, ta = same && argc > 0 ? ++g_tmp : -1;
   buf_printf(b, "({ sp_RbVal _t%d = ", tv);
   emit_boxed(c, obj, b);
   /* rooted: the arguments run, and the message is built, while the object is its only reference */
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
-  for (int i = 0; i < argc; i++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[i], b); buf_puts(b, "); "); }
-  buf_printf(b, "(void)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d))); %s; })", name, tv, dflt);
+  if (ta >= 0) {
+    buf_printf(b, "sp_RbVal _t%d = ", ta);
+    emit_boxed(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", ta);
+  }
+  for (int i = ta >= 0 ? 1 : 0; i < argc; i++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[i], b); buf_puts(b, "); "); }
+  if (ta >= 0) buf_printf(b, "(_t%d.tag == _t%d.tag && _t%d.v.p == _t%d.v.p) ? (%s) : ", tv, ta, tv, ta, same);
+  buf_printf(b, "((void)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d))), %s); })", name, tv, dflt);
 }
-/* Does call id, a Comparable operator or between? (or Comparable#== / !=)
-   on recv, reach a `<=>` the record proves undefined (the plan's
-   delegate_undef)? Then it is the raise naming `<=>`, CRuby's. */
+/* Does call id, a Comparable method (an operator, between?, clamp, `==` and
+   `!=`) or Kernel#===, on recv reach a method the record proves undefined (the
+   plan's delegate_undef: `<=>`, or `==` for `!=` and `===`)? Then it is the
+   raise naming that method, CRuby's, after the builtin's own shortcut
+   (the plan's delegate_cut: the same object answers true or false, clamp's nil
+   bounds and min above max). */
 int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b) {
   if (recv < 0) return 0;
   CallPlan p = cplan_user(c, id);
@@ -12244,12 +12256,44 @@ int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *
   /* the raise stands for the call's value: nil where it is boxed, else a zero of its C type */
   Repr r = repr_of(c, id);
   if (comp_ty_value_obj(c, r.as_ty)) return 0;
-  Buf dflt; memset(&dflt, 0, sizeof dflt);
+  Buf dflt, same, ct;
+  memset(&dflt, 0, sizeof dflt); memset(&same, 0, sizeof same); memset(&ct, 0, sizeof ct);
+  if (r.kind != RK_BOXED) emit_ctype(c, r.as_ty, &ct);
   if (r.kind == RK_BOXED) buf_puts(&dflt, "sp_box_nil()");
-  else { buf_puts(&dflt, "("); emit_ctype(c, r.as_ty, &dflt); buf_puts(&dflt, ")0"); }
-  emit_nomethod_raise(c, recv, argc, argv, p.delegate, dflt.p ? dflt.p : "sp_box_nil()", b);
-  free(dflt.p);
-  return 1;
+  else buf_printf(&dflt, "(%s)0", ct.p ? ct.p : "int");
+  int done = 0;
+  if (p.delegate_cut == BCUT_CLAMP && argc == 2) {
+    int tv = ++g_tmp, tl = ++g_tmp, th = ++g_tmp, tr = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tv, tl); emit_boxed(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tl, th); emit_boxed(c, argv[1], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = sp_obj_clamp_gone(_t%d, _t%d, _t%d, \"%s\"); ", th, tr, tv, tl, th, p.delegate);
+    if (r.kind == RK_BOXED) buf_printf(b, "_t%d; })", tr);
+    else buf_printf(b, "(%s)_t%d.v.p; })", ct.p ? ct.p : "void *", tr);
+    done = 1;
+  }
+  else if (p.delegate_cut == BCUT_CLAMP && argc == 1 && comp_ntype(c, argv[0]) == TY_RANGE) {
+    /* clamp(range): the same order, the range unpacked as sp_obj_clamp_range does */
+    int tv = ++g_tmp, tr = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = sp_obj_clamp_range_gone(_t%d, ", tv, tr, tv);
+    emit_expr(c, argv[0], b);
+    buf_printf(b, ", \"%s\"); ", p.delegate);
+    if (r.kind == RK_BOXED) buf_printf(b, "_t%d; })", tr);
+    else buf_printf(b, "(%s)_t%d.v.p; })", ct.p ? ct.p : "void *", tr);
+    done = 1;
+  }
+  else {
+    if (p.delegate_cut == BCUT_SAME_TRUE || p.delegate_cut == BCUT_SAME_FALSE) {
+      int yes = p.delegate_cut == BCUT_SAME_TRUE;
+      if (r.kind == RK_BOXED) buf_printf(&same, "sp_box_bool(%d)", yes);
+      else buf_printf(&same, "(%s)%d", ct.p ? ct.p : "int", yes);
+    }
+    emit_nomethod_raise(c, recv, argc, argv, p.delegate, dflt.p ? dflt.p : "sp_box_nil()", same.p, b);
+    done = 1;
+  }
+  free(dflt.p); free(same.p); free(ct.p);
+  return done;
 }
 
 const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect) {

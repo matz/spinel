@@ -325,13 +325,34 @@ int is_int_step(const char *n) {
   return sp_streq(n, "times") || sp_streq(n, "upto") || sp_streq(n, "downto");
 }
 
-/* The builtin protocol's next method when the receiver has no override. */
+/* The builtin protocol's next method when the receiver has no override, and
+   what CRuby answers before it calls that method (BuiltinCut): the same object
+   answers true for Comparable#== and Kernel#===, `!=` negates the `==` it
+   calls so the same object answers false once that `==` goes on to `<=>` (a
+   `==` that is itself undefined raises: `when` names the one delegate the
+   shortcut is defined for), and clamp checks its bounds first. */
+static const struct { const char *name, *delegate; int cut; const char *cut_when_gone; } k_operator_rows[] = {
+  { "!=",       "==",  BCUT_SAME_FALSE, "<=>" },
+  { "===",      "==",  BCUT_SAME_TRUE,  NULL },
+  { "==",       "<=>", BCUT_SAME_TRUE,  NULL },
+  { "<",        "<=>", BCUT_NONE,       NULL },
+  { "<=",       "<=>", BCUT_NONE,       NULL },
+  { ">",        "<=>", BCUT_NONE,       NULL },
+  { ">=",       "<=>", BCUT_NONE,       NULL },
+  { "between?", "<=>", BCUT_NONE,       NULL },
+  { "clamp",    "<=>", BCUT_CLAMP,      NULL },
+};
 const char *builtin_operator_delegate(const char *name) {
-  if (sp_streq(name, "!=") || sp_streq(name, "===")) return "==";
-  if (sp_streq(name, "==") || sp_streq(name, "<") || sp_streq(name, "<=") ||
-      sp_streq(name, ">") || sp_streq(name, ">=") || sp_streq(name, "between?") ||
-      sp_streq(name, "clamp")) return "<=>";
+  for (size_t i = 0; i < sizeof k_operator_rows / sizeof k_operator_rows[0]; i++)
+    if (sp_streq(name, k_operator_rows[i].name)) return k_operator_rows[i].delegate;
   return NULL;
+}
+int builtin_operator_cut(const char *name, const char *gone) {
+  if (sp_streq(name, gone)) return BCUT_NONE;   /* the operator itself is undefined: no shortcut runs */
+  for (size_t i = 0; i < sizeof k_operator_rows / sizeof k_operator_rows[0]; i++)
+    if (sp_streq(name, k_operator_rows[i].name))
+      return !k_operator_rows[i].cut_when_gone || sp_streq(gone, k_operator_rows[i].cut_when_gone) ? k_operator_rows[i].cut : BCUT_NONE;
+  return BCUT_NONE;
 }
 
 int is_rindex_name(const char *n) { return n && sp_streq(n, "rindex"); }

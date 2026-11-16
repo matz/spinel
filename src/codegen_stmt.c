@@ -15338,6 +15338,21 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
   free(tmp.p);
 }
 
+/* Are the classes of object types a and b one line (one an ancestor of the
+   other), neither a value type, and not the same? A pointer of one is
+   layout-compatible with the other's (a subclass replicates its parent's
+   fields at the same offsets), so a cast between them is a no-op C needs
+   spelled out. */
+static int obj_classes_related(Compiler *c, TyKind a, TyKind b) {
+  if (!ty_is_object(a) || !ty_is_object(b)) return 0;
+  int ac = ty_object_class(a), bc = ty_object_class(b);
+  if (ac < 0 || bc < 0 || ac == bc) return 0;
+  if (c->classes[ac].is_value_type || c->classes[bc].is_value_type) return 0;
+  for (int k = c->classes[ac].parent; k >= 0; k = c->classes[k].parent) if (k == bc) return 1;
+  for (int k = c->classes[bc].parent; k >= 0; k = c->classes[k].parent) if (k == ac) return 1;
+  return 0;
+}
+
 /* A literal whose evaluation has no side effects -- used to decide whether a
    discarded `return <expr>` in a void function needs `(void)(<expr>)` to keep
    the side effects or can collapse to a bare `return;`. Callers unwrap parens
@@ -24001,6 +24016,14 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
          reads, and each arm's, published others) */
       else if (!g_result_var && g_ret_type == TY_STRBUF && rt == TY_STRBUF)
         buf_printf(b, "sp_strface_pub_h(_t%d);\n", t);
+      /* an object into a slot typed another class of its line: cast, as a
+         plain tail's is (emit_obj_upcast_prefix), and the other way too --
+         the slot a subclass's copy of a `new` fills (a module an ancestor
+         extends writes it, `super` inside an ensure) is the subclass, while
+         the begin's own type is the class the method was analyzed on, the
+         ancestor; the object is the subclass's */
+      else if (ty_is_object(slot_t) && ty_is_object(rt) && obj_classes_related(c, slot_t, rt))
+        buf_printf(b, "(%s *)_t%d;\n", class_ctype(c, ty_object_class(slot_t)), t);
       else buf_printf(b, "_t%d;\n", t);
       return;
     }

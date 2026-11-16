@@ -4562,12 +4562,20 @@ static void cf_node(CF *f, int v) {
 
 /* ---- the pass ---- */
 
-/* the ivar a literal first argument names (`instance_variable_set(:@a, v)`), else NULL */
+/* the ivar a literal first argument names (`instance_variable_set(:@a, v)`,
+   `instance_variable_get(:@a)`), else NULL: a splat, a block argument or a
+   keyword hash may hand it other arguments than the ones written */
 static const char *cf_ivar_lit(CF *f, int call) {
   const NodeTable *nt = f->nt;
+  const char *cn = nt_str(nt, call, "name");
+  int want = cn && sp_streq(cn, "instance_variable_set") ? 2 : cn && sp_streq(cn, "instance_variable_get") ? 1 : 0;
   int a = nt_ref(nt, call, "arguments"), n = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
-  if (n < 1) return NULL;
+  if (!want || n != want || nt_ref(nt, call, "block") >= 0) return NULL;
+  for (int i = 0; i < n; i++) {
+    NodeKind ak = nt_kind(nt, av[i]);
+    if (ak == NK_SplatNode || ak == NK_BlockArgumentNode || ak == NK_KeywordHashNode) return NULL;
+  }
   NodeKind k = nt_kind(nt, av[0]);
   const char *nm = k == NK_SymbolNode ? nt_str(nt, av[0], "value") : k == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
   if (!nm || nm[0] != '@' || nm[1] == '@' || !nm[1]) return NULL;
@@ -4595,6 +4603,14 @@ static void cf_collect_dyn(CF *f) {
     if (sp_streq(cn, "instance_variable_set") || sp_streq(cn, "instance_variable_get") || sp_streq(cn, "remove_instance_variable")) {
       /* (a literal name reads or writes that ivar alone, at the call) */
       if (sp_streq(cn, "remove_instance_variable") || !cf_ivar_lit(f, id)) f->all_ivars = 1;
+    }
+    /* (a send of one of them is no literal call of it) */
+    if (sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send")) {
+      int a1 = nt_ref(nt, id, "arguments"), n1 = 0;
+      const int *v1 = a1 >= 0 ? nt_arr(nt, a1, "arguments", &n1) : NULL;
+      NodeKind k1 = n1 > 0 ? nt_kind(nt, v1[0]) : NK_NilNode;
+      const char *sn = k1 == NK_SymbolNode ? nt_str(nt, v1[0], "value") : k1 == NK_StringNode ? nt_str(nt, v1[0], "content") : NULL;
+      if (sn && (sp_streq(sn, "instance_variable_set") || sp_streq(sn, "instance_variable_get") || sp_streq(sn, "remove_instance_variable"))) f->all_ivars = 1;
     }
     /* `inject(:m)`, `inject(init, :m)` and `each_with_object(x, &:m)` call m
        with arguments the pass does not see: m takes any class */

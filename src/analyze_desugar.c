@@ -12748,6 +12748,78 @@ static int raise_kw_split(Compiler *c, int id, const int *av, int npos) {
   }
   return 1;
 }
+/* `raise(**h)` (or `raise(cause: c)`, `raise(k => v)`): keywords and no
+   positional operand. CRuby takes :cause out of the hash; a cause alone is
+   an ArgumentError, nothing left is a bare raise, and a Hash left over is
+   the operand. The raise becomes
+     t = {**h}
+     if t.key?(:cause)
+       t.delete(:cause)
+       t.empty? ? raise(ArgumentError, "only cause is given with no arguments") : raise(t)
+     else
+       t.empty? ? raise : raise(t)
+     end */
+static int raise_kw_only(Compiler *c, int id, int kh) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int base = nt->count;
+  const char *tag = comp_node_tag(c, id);
+  char th[48];
+  snprintf(th, sizeof th, "__rko_h%s", tag);
+  int kn = 0; const int *ke = nt_arr(nt, kh, "elements", &kn);
+  int *kc = malloc(sizeof(int) * (kn > 0 ? kn : 1));
+  for (int j = 0; j < kn; j++) kc[j] = ke[j];
+  int hn = fwd_new_node_like(nt, id, "HashNode");
+  nt_node_set_arr(nt, hn, "elements", kc, kn);
+  free(kc);
+  int stm[2], ns = 0;
+  stm[ns++] = rbt_var(c, nt, id, th, hn);
+  /* a raise named like id's on the hash temp, or on no operand */
+  int bare = fwd_new_call(nt, -1, nt_str(nt, id, "name"), -1);
+  fwd_copy_loc(nt, bare, id);
+  int on_t = raise_kw_split_raise(c, nt, id, NULL, NULL, 0, th, 1, NULL);
+  int on_t2 = raise_kw_split_raise(c, nt, id, NULL, NULL, 0, th, 1, NULL);
+  /* raise(ArgumentError, "only cause is given with no arguments") */
+  int ae = fwd_new_node_like(nt, id, "ConstantReadNode");
+  nt_node_set_str(nt, ae, "name", "ArgumentError");
+  int am = fwd_new_node_like(nt, id, "StringNode");
+  nt_node_set_str(nt, am, "content", "only cause is given with no arguments");
+  int aargs[2] = { ae, am };
+  int ar = fwd_new_call(nt, -1, nt_str(nt, id, "name"), -1), aa = nt_new_node(nt, "ArgumentsNode");
+  nt_node_set_arr(nt, aa, "arguments", aargs, 2);
+  nt_node_set_ref(nt, ar, "arguments", aa);
+  fwd_copy_loc(nt, ar, id);
+  int del = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "delete", raise_kw_split_sym(nt, "cause"));
+  fwd_copy_loc(nt, del, id);
+  /* the builtin Hash's key?, delete and empty?: a program's own Hash
+     methods do not decide which raise runs */
+  nt_node_set_int(nt, del, "builtin_only", 1);
+  int e1 = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "empty?", -1);
+  nt_node_set_int(nt, e1, "builtin_only", 1);
+  int ce = raise_kw_split_if(nt, e1, ar, on_t);
+  int cst = nt_new_node(nt, "StatementsNode"), cb[2] = { del, ce };
+  nt_node_set_arr(nt, cst, "body", cb, 2);
+  int cpar = fwd_new_node_like(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, cpar, "body", cst);
+  int e2 = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "empty?", -1);
+  nt_node_set_int(nt, e2, "builtin_only", 1);
+  int ne = raise_kw_split_if(nt, e2, bare, on_t2);
+  int has = fwd_new_call(nt, rbt_var(c, nt, id, th, -1), "key?", raise_kw_split_sym(nt, "cause"));
+  nt_node_set_int(nt, has, "builtin_only", 1);
+  stm[ns++] = raise_kw_split_if(nt, has, cpar, ne);
+  int ob = nt_new_node(nt, "StatementsNode");
+  nt_node_set_arr(nt, ob, "body", stm, ns);
+  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, id, "body", ob);
+  nt_node_set_int(nt, id, "node_line", line);
+  nt_node_set_int(nt, id, "node_file", file);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    c->node_cbody[j] = c->node_cbody[id];
+  }
+  return 1;
+}
 int desugar_raise_own_exception(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -12765,8 +12837,15 @@ int desugar_raise_own_exception(Compiler *c) {
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
     if (ac < 1 || nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
     int kw = nt_kind(nt, av[ac - 1]) == NK_KeywordHashNode, npos = ac - kw;
-    if (npos < 1 || npos > 3) continue;
     if (nt_int(nt, id, "raise_own_kept", 0)) continue;
+    /* keywords and no positional operand */
+    if (kw && npos == 0) {
+      int sfi = nm[0] == 'f';
+      if (owned[sfi] < 0) owned[sfi] = raise_name_program_defined(c, nm);
+      if (!owned[sfi] && raise_kw_only(c, id, av[0])) changed = 1;
+      continue;
+    }
+    if (npos < 1 || npos > 3) continue;
     /* keys only the run time knows: split out :cause at run time */
     if (kw && npos <= 2 && raise_kw_needs_split(nt, av[ac - 1])) {
       int sfi = nm[0] == 'f';

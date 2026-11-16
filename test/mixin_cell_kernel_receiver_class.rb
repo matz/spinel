@@ -54,6 +54,22 @@ class OwnUndefLeaf < OwnUndefSub
   undef_method :respond_to_missing?
 end
 
+# a subclass's method_missing undefined in its own body, or in a class below it
+class UndefMiss < BasicObject
+  include ::Kernel if ::ARGV.size == 3
+  def t = respond_to_missing?(:x, false)
+end
+class UndefMissOwn < UndefMiss
+  def method_missing(n, *a) = [:undef_own, n]
+  undef_method :method_missing
+end
+class UndefMissSub < UndefMiss
+  def method_missing(n, *a) = [:undef_sub, n]
+end
+class UndefMissLeaf < UndefMissSub
+  undef_method :method_missing
+end
+
 # a class method's include run on a subclass, a deeper one, and one called by super
 class Mix < BasicObject
   def self.mix = include(::Kernel)
@@ -275,3 +291,16 @@ show { sg_hold.t }
 show { SgHold.new.t }
 show { sg_miss.t }
 show { SgMiss.new.t }
+
+# a method_missing undefined in a reopening of the subclass, after an object was made
+class UndefLater < UndefMiss
+  def method_missing(n, *a) = [:undef_later, n]
+end
+undef_later = UndefLater.new
+class UndefLater
+  undef_method :method_missing
+end
+show { UndefMissOwn.new.t }
+show { UndefMissLeaf.new.t }
+show { UndefMissSub.new.t }
+show { undef_later.t }

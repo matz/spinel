@@ -49,3 +49,7 @@ false
 :nme
 [:sg_mm, :respond_to_missing?]
 [:sg_mm, :respond_to_missing?]
+:nme
+:nme
+[:undef_sub, :respond_to_missing?]
+:nme

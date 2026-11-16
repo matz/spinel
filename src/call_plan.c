@@ -1934,6 +1934,11 @@ static int ver_kern_by_self(Compiler *c, const VerKernSelf *x, int (*arm)(Compil
   free(is); free(then);
   return els;
 }
+/* The method scope found, which D's lookup of name finds, unless an undef of the name on D's chain ends the lookup
+   ahead of it (comp_is_undeffed_in_chain): -1 there, and where found is -1 */
+static int ver_kern_reach(Compiler *c, int d, const char *name, int found) {
+  return found >= 0 && !comp_is_undeffed_in_chain(c, d, name) ? found : -1;
+}
 /* May a call on a D run ahead of the def that makes method scope mi (elab_def_late)? For a version entry (one a call
    whose version only the run tells reaches, or an open history's), ahead of the def of any version of its class
    its arms call (ver_entry_targets) */
@@ -1949,11 +1954,11 @@ static int ver_kern_late(Compiler *c, int mi) {
 }
 /* Does a call of x->name on a D find a method of its own, below x->cls, which the holder's chain does not hold: CRuby
    calls it, whatever Kernel says (not a super, which looks above the holder's method; not one behind an undef of the
-   name, where the lookup ends; not one a call may run ahead of: ver_kern_late) */
+   name, where the lookup ends: ver_kern_reach; not one a call may run ahead of: ver_kern_late) */
 static int ver_kern_own(Compiler *c, const VerKernSelf *x, int d) {
-  int own = x->how != 2 ? comp_method_in_chain(c, d, x->name, NULL) : -1, oc = own >= 0 ? c->scopes[own].class_id : -1;
-  return oc >= 0 && oc != x->cls && is_descendant(c, oc, x->cls) && is_descendant(c, d, oc) &&
-         !comp_is_undeffed_in_chain(c, d, x->name) && !ver_kern_late(c, own);
+  int own = x->how != 2 ? ver_kern_reach(c, d, x->name, comp_method_in_chain(c, d, x->name, NULL)) : -1;
+  int oc = own >= 0 ? c->scopes[own].class_id : -1;
+  return oc >= 0 && oc != x->cls && is_descendant(c, oc, x->cls) && is_descendant(c, d, oc) && !ver_kern_late(c, own);
 }
 /* The test of self's Kernel where self is a D (ver_kern_by_self; the holder's own is the else): true where D finds a
    method of its own (ver_kern_own), whose call the guard's then arm makes, or where D surely has Kernel
@@ -1991,10 +1996,10 @@ static void ver_pin(Compiler *c, int node, int scope, int vis);
 /* The guard's arm where no cell is set and self is a D (ver_kern_by_self; the holder's, its method_missing or the raise,
    is the else): D's own method_missing where it is another than the holder's, called with a copy of the call's operands
    and block and pinned to it (ver_pin), as the holder's chain does not hold it; none where D finds a method of its own
-   (the test's arm is true there), or where a call may run ahead of the def that makes D's method_missing
-   (ver_kern_late) */
+   (the test's arm is true there), where an undef of method_missing on D's chain ends the lookup ahead of it
+   (ver_kern_reach), or where a call may run ahead of the def that makes D's method_missing (ver_kern_late) */
 static int ver_kern_mm_arm(Compiler *c, const VerKernSelf *x, int d) {
-  int dm = cplan_mm_method(c, -1, d, 0), call;
+  int dm = ver_kern_reach(c, d, METHOD_MISSING_NAME, cplan_mm_method(c, -1, d, 0)), call;
   if (dm < 0 || dm == x->mm || ver_kern_own(c, x, d) || ver_kern_late(c, dm)) return -1;
   ver_pin(c, call = ver_kern_mm_call(c, x->id, x->name), dm, 0);
   return call;

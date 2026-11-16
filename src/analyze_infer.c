@@ -3680,10 +3680,12 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
           { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
         if (argc == 2 && sp_streq(name, "store")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
         /* count(v): the value-equality count (sp_poly_count_val). A user
-           definition blocks it only when it can TAKE one positional
-           argument -- the same judgement codegen's arm makes; an
-           arity-incompatible `count(a, b)` cannot answer this call, and
-           counting it left the two halves naming different methods. */
+           definition of a class the receiver can be, of any arity, claims
+           the call (as codegen's arm does): the dispatch's arm raises
+           ArgumentError where it cannot take the argument, and genuine
+           Array, Hash and String receivers keep their builtin arms
+           (#4195's concern). A count on a class the receiver never is
+           leaves the builtin call direct. */
         if (sp_streq(name, "count")) {
           int can1 = 0;
           for (int k2 = 0; k2 < c->nclasses && !can1; k2++) {
@@ -3691,7 +3693,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
               if (comp_poly_arm_defines_n(c, k2, "count", 1)) can1 = 1;
               continue;
             }
-            int mi2 = call_target(c, id, k2, "count", CT_METHODS, NULL);
+            int mi2 = poly_recv_may_be(c, id, k2) ? call_target(c, id, k2, "count", CT_METHODS, NULL) : -1;
             if (mi2 >= 0 && mi2 < c->nscopes) can1 = 1;
           }
           if (!can1) { *out = TY_INT; return 1; }

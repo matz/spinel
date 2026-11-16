@@ -12833,16 +12833,19 @@ const int *poly_recv_classes(Compiler *c, int call, int *n) {
   return pivs_call_set(c, call, &cls, n, 0) ? cls : NULL;
 }
 /* See analyze.h. */
+int poly_recv_may_be(Compiler *c, int call, int k) {
+  int nk = 0;
+  const int *ks = poly_recv_classes(c, call, &nk);
+  for (int j = 0; ks && j < nk; j++) if (ks[j] == k) return 1;
+  return !ks;
+}
+/* See analyze.h. */
 int poly_recv_defines(Compiler *c, int call, const char *name) {
   if (an_builtin_only_p()) return 0;   /* deriving the builtin-only answer (#3459) */
   if (cplan_core_method(c, call, CORE_OBJECT, name) >= 0) return 1;   /* every value is an Object */
-  int nk = 0;
-  const int *ks = poly_recv_classes(c, call, &nk);
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    int held = !ks;
-    for (int j = 0; j < nk && !held; j++) held = ks[j] == k;
-    if (held && call_target(c, call, k, name, CT_METHODS, NULL) >= 0) return 1;
+    if (poly_recv_may_be(c, call, k) && call_target(c, call, k, name, CT_METHODS, NULL) >= 0) return 1;
   }
   return 0;
 }

@@ -18776,11 +18776,12 @@ static int emit_poly_numeric_call(Compiler *c, int id, Buf *b, const NodeTable *
      Hash, Range or Enumerator (sp_poly_count_val) */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "count") &&
       nt_ref(nt, id, "block") < 0) {
-    /* Only a user definition that can TAKE one positional argument blocks
-       this arm: a `count(a, b)` or a reader cannot answer the call, and
-       counting it steered a genuine String or Array receiver into the
-       dispatch, whose arity filter then dropped every arm and raised
-       (#4195). Same judgement as the dispatch's own candidate filter. */
+    /* A user definition of a class the receiver can be, of any arity, claims
+       the call: the dispatch's arm raises ArgumentError where it cannot
+       take the argument, and genuine Array, Hash and String receivers keep
+       their builtin arms (#4195's concern). A count on a class the
+       receiver never is leaves the builtin call direct. Same judgement as
+       the analysis (infer_poly_operand_call). */
     int has_user_cnt = 0;
     if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user_cnt; kk++) {
@@ -18788,8 +18789,7 @@ static int emit_poly_numeric_call(Compiler *c, int id, Buf *b, const NodeTable *
         if (comp_poly_arm_defines_n(c, kk, "count", 1)) has_user_cnt = 1;
         continue;
       }
-      int mi_k = call_target(c, id, kk, "count", CT_METHODS, NULL);
-      if (mi_k >= 0) has_user_cnt = 1;
+      if (poly_recv_may_be(c, id, kk) && call_target(c, id, kk, "count", CT_METHODS, NULL) >= 0) has_user_cnt = 1;
     }
     if (!has_user_cnt) {
       /* boxed where the analyzer counted a count this arm cannot reach (a

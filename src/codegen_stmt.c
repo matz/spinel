@@ -980,6 +980,9 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name || recv >= 0) return 0;
+  /* (a tail output call, a proc's or a block's last statement, comes here and not through emit_call_stmt: under
+     --defer-refusals its refusal stands at the call all the same) */
+  refuse_prepass_at_emit(c, id);
   /* a user method shadows the builtin: the enclosing class's own chain first
      (it sits above Kernel), then the top-level table (Object) */
   if (bare_call_class_owned(c, id)) return 0;

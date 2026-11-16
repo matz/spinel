@@ -7068,9 +7068,9 @@ int ext_class_exported(Compiler *c, int class_id) {
 /* Whether the method of scope si has a shape the thunk calls, seen from
    class_id (the class it is answered for): public there, not initialize,
    fixed positional parameters (no optional, rest, keyword or block
-   parameter, no yield). A method with optional or rest parameters is
-   called through its forwarders, which have that shape
-   (desugar_ext_forwarders). */
+   parameter, no yield). A method with optional or rest parameters, or
+   one that takes a block, is called through its forwarders, which have
+   that shape (desugar_ext_forwarders). */
 static int ext_method_shape(Compiler *c, int class_id, int si) {
   if (si <= 0 || si >= c->nscopes || class_id < 0 || class_id >= c->nclasses) return 0;
   Scope *sc = &c->scopes[si];
@@ -7078,7 +7078,7 @@ static int ext_method_shape(Compiler *c, int class_id, int si) {
   if (sc->replaced || sc->entry != ENTRY_NONE) return 0;
   /* a forwarder stands for the method it calls: that method is public,
      and the class answers the one the forwarder was written beside */
-  const char *vis_name = ext_fwd_orig(sc->name, NULL, NULL);
+  const char *vis_name = ext_fwd_orig(sc->name, NULL, NULL, NULL);
   if (vis_name) {
     int osi = sc->is_cmethod ? comp_cmethod_in_chain(c, class_id, vis_name, NULL)
                              : comp_method_in_chain(c, class_id, vis_name, NULL);
@@ -7170,13 +7170,16 @@ int ext_class_def_wanted(Compiler *c, const char *key) {
 /* A forwarder of desugar_ext_forwarders is named
    `spinel_ext_fwd__<n>__<name>` (n fixed arguments) or
    `spinel_ext_fwdr__<n>__<name>` (n fixed arguments, then the rest in an
-   Array). Answers <name> with n in *nfixed and the rest flag in *rest, or
-   NULL for another name. */
-const char *ext_fwd_orig(const char *name, int *nfixed, int *rest) {
+   Array). A `b` before the `__` (`fwdb`, `fwdrb`) is a last parameter that
+   holds the block. Answers <name> with n in *nfixed, the rest flag in
+   *rest and the block flag in *block, or NULL for another name. */
+const char *ext_fwd_orig(const char *name, int *nfixed, int *rest, int *block) {
   if (!name || strncmp(name, "spinel_ext_fwd", 14)) return NULL;
   const char *p = name + 14;
   int r = *p == 'r';
   if (r) p++;
+  int b = *p == 'b';
+  if (b) p++;
   if (p[0] != '_' || p[1] != '_') return NULL;
   p += 2;
   int n = 0;
@@ -7185,6 +7188,7 @@ const char *ext_fwd_orig(const char *name, int *nfixed, int *rest) {
   if (p[0] != '_' || p[1] != '_' || !p[2]) return NULL;
   if (nfixed) *nfixed = n;
   if (rest) *rest = r;
+  if (block) *block = b;
   return p + 2;
 }
 

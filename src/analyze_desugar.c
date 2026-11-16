@@ -23306,12 +23306,45 @@ int desugar_send_aliases(Compiler *c) {
    (ext_fwd_orig), and the thunk of an `fwdr` forwarder makes the Array of
    the arguments after the fixed ones. The call inside a forwarder is a
    call of the program, so the defaults and the rest Array are those of any
-   call. A method with a keyword or block parameter, or a required
-   parameter after the optional ones, gets none. */
-static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfixed, int rest, int singleton) {
+   call. A method with a keyword parameter, or a required parameter after
+   the optional ones, gets none.
+
+   A method with a block parameter, or one that yields, gets the same
+   forwarders for a call with no block, and a second set whose last
+   parameter holds the block of the host:
+
+     def each_slice(n = 1, &blk)
+     def spinel_ext_fwd__0__each_slice = each_slice
+     def spinel_ext_fwd__1__each_slice(a0) = each_slice(a0)
+     def spinel_ext_fwdb__0__each_slice(b) = each_slice(&b)
+     def spinel_ext_fwdb__1__each_slice(a0, b) = each_slice(a0, &b) */
+/* Whether the body of a def can use the block of its call: a yield, a
+   block_given?, or a super, which hands the block on. A def, a class or a
+   module inside the body has a block of its own. The test is loose (a
+   super whose method takes no block): the table drops a row that a row
+   before it has already (ext_emit_method_tables). */
+static int ext_body_uses_block(const NodeTable *nt, int id) {
+  if (id < 0 || id >= nt->count) return 0;
+  if (fwd_node_is(nt, id, "DefNode") || fwd_node_is(nt, id, "ClassNode") || fwd_node_is(nt, id, "ModuleNode") ||
+      fwd_node_is(nt, id, "SingletonClassNode"))
+    return 0;
+  if (fwd_node_is(nt, id, "YieldNode") || fwd_node_is(nt, id, "SuperNode") || fwd_node_is(nt, id, "ForwardingSuperNode"))
+    return 1;
+  if (fwd_node_is(nt, id, "CallNode")) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && sp_streq(nm, "block_given?")) return 1;
+  }
+  const SpNode *nd = &nt->nodes[id];
+  for (int j = 0; j < nd->nr; j++) if (ext_body_uses_block(nt, nd->r[j].ref)) return 1;
+  for (int j = 0; j < nd->na; j++)
+    for (int k = 0; k < nd->a[j].n; k++) if (ext_body_uses_block(nt, nd->a[j].ids[k])) return 1;
+  return 0;
+}
+static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfixed, int rest, int blk, int singleton) {
   char nw[320];
-  snprintf(nw, sizeof nw, "spinel_ext_fwd%s__%d__%s", rest ? "r" : "", nfixed, name);
-  int n = nfixed + (rest ? 1 : 0);
+  snprintf(nw, sizeof nw, "spinel_ext_fwd%s%s__%d__%s", rest ? "r" : "", blk ? "b" : "", nfixed, name);
+  int na = nfixed + (rest ? 1 : 0);   /* the positional arguments of the call */
+  int n = na + (blk ? 1 : 0);
   int d = fwd_new_node_like(nt, like, "DefNode");
   int call = fwd_new_node_like(nt, like, "CallNode");
   if (d < 0 || call < 0) return -1;
@@ -23319,7 +23352,6 @@ static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfi
   nt_node_set_ref(nt, call, "receiver", -1);
   if (n > 0) {
     int ps = fwd_new_node_like(nt, like, "ParametersNode");
-    int args = fwd_new_node_like(nt, like, "ArgumentsNode");
     int *req = malloc(sizeof(int) * (size_t)n), *av = malloc(sizeof(int) * (size_t)n);
     if (!req || !av) { fprintf(stderr, "out of memory\n"); exit(1); }
     for (int i = 0; i < n; i++) {
@@ -23328,16 +23360,24 @@ static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfi
       req[i] = fwd_new_node_like(nt, like, "RequiredParameterNode");
       nt_node_set_str(nt, req[i], "name", pn);
       av[i] = local_read_like(nt, like, pn);
-      if (rest && i == n - 1) {
+      if (rest && i == na - 1) {
         int sp = fwd_new_node_like(nt, like, "SplatNode");
         nt_node_set_ref(nt, sp, "expression", av[i]);
         av[i] = sp;
       }
     }
     nt_node_set_arr(nt, ps, "requireds", req, n);
-    nt_node_set_arr(nt, args, "arguments", av, n);
     nt_node_set_ref(nt, d, "parameters", ps);
-    nt_node_set_ref(nt, call, "arguments", args);
+    if (na > 0) {
+      int args = fwd_new_node_like(nt, like, "ArgumentsNode");
+      nt_node_set_arr(nt, args, "arguments", av, na);
+      nt_node_set_ref(nt, call, "arguments", args);
+    }
+    if (blk) {
+      int ba = fwd_new_node_like(nt, like, "BlockArgumentNode");
+      nt_node_set_ref(nt, ba, "expression", av[n - 1]);
+      nt_node_set_ref(nt, call, "block", ba);
+    }
     free(req);
     free(av);
   }
@@ -23364,25 +23404,32 @@ int desugar_ext_forwarders(Compiler *c) {
       if (nt_kind(nt, s) != NK_DefNode) continue;
       const char *name = nt_str(nt, s, "name");
       int rc = nt_ref(nt, s, "receiver"), ps = nt_ref(nt, s, "parameters");
-      if (!name || ps < 0 || ext_fwd_orig(name, NULL, NULL) || is_initialize_name(name)) continue;
+      if (!name || ext_fwd_orig(name, NULL, NULL, NULL) || is_initialize_name(name)) continue;
       if (rc >= 0 && nt_kind(nt, rc) != NK_SelfNode) continue;
-      int nr = 0, no = 0, np = 0, nk = 0;
-      nt_arr(nt, ps, "requireds", &nr);
-      nt_arr(nt, ps, "optionals", &no);
-      nt_arr(nt, ps, "posts", &np);
-      nt_arr(nt, ps, "keywords", &nk);
-      int rest = nt_ref(nt, ps, "rest") >= 0;
-      if ((no == 0 && !rest) || np > 0 || nk > 0 || nt_ref(nt, ps, "keyword_rest") >= 0 || nt_ref(nt, ps, "block") >= 0)
-        continue;
+      int nr = 0, no = 0, np = 0, nk = 0, rest = 0, blk = 0;
+      if (ps >= 0) {
+        nt_arr(nt, ps, "requireds", &nr);
+        nt_arr(nt, ps, "optionals", &no);
+        nt_arr(nt, ps, "posts", &np);
+        nt_arr(nt, ps, "keywords", &nk);
+        rest = nt_ref(nt, ps, "rest") >= 0;
+        if (nt_ref(nt, ps, "keyword_rest") >= 0) continue;
+        blk = nt_ref(nt, ps, "block") >= 0;
+      }
+      if (!blk) blk = ext_body_uses_block(nt, nt_ref(nt, s, "body"));
+      if ((no == 0 && !rest && !blk) || np > 0 || nk > 0) continue;
       /* the fixed counts: nr .. nr+no, the last one only with no rest;
-         then the rest forwarder */
-      int nf = no + (rest ? 0 : 1), nfw = nf + (rest ? 1 : 0);
+         then the rest forwarder; and each of them again with the block */
+      int nf = no + (rest ? 0 : 1), nset = nf + (rest ? 1 : 0), nfw = nset * (blk ? 2 : 1);
       char nmc[256];
       snprintf(nmc, sizeof nmc, "%s", name);
       int *fw = malloc(sizeof(int) * (size_t)nfw);
       if (!fw) { fprintf(stderr, "out of memory\n"); exit(1); }
-      for (int j = 0; j < nf; j++) fw[j] = ext_forwarder_like(nt, s, nmc, nr + j, 0, rc >= 0);
-      if (rest) fw[nf] = ext_forwarder_like(nt, s, nmc, nr + no, 1, rc >= 0);
+      for (int b = 0; b <= blk; b++) {
+        int *set = fw + b * nset;
+        for (int j = 0; j < nf; j++) set[j] = ext_forwarder_like(nt, s, nmc, nr + j, 0, b, rc >= 0);
+        if (rest) set[nf] = ext_forwarder_like(nt, s, nmc, nr + no, 1, b, rc >= 0);
+      }
       /* the forwarders after the def (st is read again: the new nodes may
          have moved the table's arrays) */
       st = nt_arr(nt, body, "body", &n);

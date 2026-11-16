@@ -56,9 +56,8 @@ int main(void) {
   call(k, "pick", 2, a);
   try_call(k, "pick", 0, NULL);
   try_call(k, "pick", 3, a);
-  /* not in the table: private, a keyword parameter, a block parameter */
+  /* not in the table: private, a keyword parameter */
   call(r, "hid", 0, NULL);
   call(r, "kw", 0, NULL);
-  call(r, "blk", 0, NULL);
   return 0;
 }

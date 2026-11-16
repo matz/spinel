@@ -2717,7 +2717,7 @@ int        ext_item_classes(Compiler *c, const char *item, int *a, int *b);
 int        ext_method_exported(Compiler *c, int class_id, int si, int typed);
 int        ext_scope_host_callable(Compiler *c, int si);
 int        ext_class_def_wanted(Compiler *c, const char *key);
-const char *ext_fwd_orig(const char *name, int *nfixed, int *rest);
+const char *ext_fwd_orig(const char *name, int *nfixed, int *rest, int *block);
 int        ext_ty_crosses(TyKind t);
 int        comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at);
 /* Is method mi (the one the plan answered for a call, -1 for none) an

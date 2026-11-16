@@ -141,7 +141,7 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
   for (int i = 0; i < nd; i++) {
     int k = ds[i];
     if (k == scls) continue;
-    if (comp_reader_in_chain(c, k, name, NULL)) return 0;
+    if (call_attr_target(c, -1, k, name, CT_ATTR, NULL)) return 0;
     int kmi = call_target(c, id, k, name, 0, NULL);
     if (kmi < 0 || kmi == root_mi) continue;
     if (c->scopes[kmi].yields) return 0;

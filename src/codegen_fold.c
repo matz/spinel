@@ -12911,7 +12911,7 @@ static int dispatch_accessor_answers(Compiler *c, int call, int cid, const char 
   int is_wr = setter_base_name(name, wbase, sizeof wbase);
   for (int k = 0; k < c->nclasses; k++) {
     if (!is_descendant(c, k, cid) || dispatch_arm_scope(c, call_target(c, call, k, name, 0, NULL)) >= 0) continue;
-    if (comp_reader_in_chain(c, k, name, NULL) || (is_wr && comp_writer_in_chain(c, k, wbase, NULL))) return 1;
+    if (call_attr_target(c, -1, k, name, CT_ATTR, NULL) || (is_wr && call_attr_target(c, -1, k, wbase, CT_ATTR | CT_WRITER, NULL))) return 1;
   }
   return 0;
 }

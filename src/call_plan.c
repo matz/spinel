@@ -33,6 +33,11 @@ struct CplanMemo {
      freed with the Compiler: no ask frees or reuses one an answer holds */
   void **kept;
   int nkept, ckept;
+  /* cplan_rtr_lists's entries, one per class and the Object reopening's (slot cls + 1), kept under the key the tables
+     had when they were built; loose is the entry of an ask made where the tables may move */
+  CplanRtrLists *rtr, loose;
+  int rtr_n;
+  struct { const Compiler *c; int ncls, nscp, nnat; unsigned sgen, shape, tgen, vgen; } rtr_key;
 };
 
 static void cplan_oom(void) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -79,9 +84,37 @@ static void cplan_table_free(struct CplanTable *t) {
   for (int i = 0; i < t->cap; i++) free(t->name[i]);
   free(t->plan); free(t->have); free(t->name);
 }
+static void cplan_rtr_free(CplanRtrLists *e) {
+  free(e->pub); free(e->priv); free((void *)e->undef_priv);
+  *e = (CplanRtrLists){0};
+}
+/* See call_plan.h. */
+CplanRtrLists *cplan_rtr_lists(Compiler *c, int cls) {
+  struct CplanMemo *m = cplan_memo(c);
+  int keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
+  if (!keyed) {
+    cplan_rtr_free(&m->loose);
+    return &m->loose;
+  }
+  if (m->rtr_key.c != c || m->rtr_key.ncls != c->nclasses || m->rtr_key.nscp != c->nscopes ||
+      m->rtr_key.nnat != c->n_native_methods || m->rtr_key.sgen != comp_scope_index_gen() ||
+      m->rtr_key.shape != comp_class_shape_gen() || m->rtr_key.tgen != comp_table_gen || m->rtr_key.vgen != comp_vis_gen) {
+    for (int i = 0; i < m->rtr_n; i++) cplan_rtr_free(&m->rtr[i]);
+    free(m->rtr);
+    m->rtr_n = c->nclasses + 1;
+    if (!(m->rtr = calloc((size_t)m->rtr_n, sizeof *m->rtr))) cplan_oom();
+    m->rtr_key.c = c; m->rtr_key.ncls = c->nclasses; m->rtr_key.nscp = c->nscopes; m->rtr_key.nnat = c->n_native_methods;
+    m->rtr_key.sgen = comp_scope_index_gen(); m->rtr_key.shape = comp_class_shape_gen();
+    m->rtr_key.tgen = comp_table_gen; m->rtr_key.vgen = comp_vis_gen;
+  }
+  return &m->rtr[cls + 1];
+}
 void cplan_memo_free(Compiler *c) {
   struct CplanMemo *m = c->cplan_memo;
   if (!m) return;
+  for (int i = 0; i < m->rtr_n; i++) cplan_rtr_free(&m->rtr[i]);
+  free(m->rtr);
+  cplan_rtr_free(&m->loose);
   cplan_table_free(&m->user);
   cplan_table_free(&m->refuse);
   for (int i = 0; i < m->poly_cap; i++) free(m->poly_name[i]);

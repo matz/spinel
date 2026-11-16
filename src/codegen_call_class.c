@@ -226,8 +226,7 @@ int respond_to_runtime_reaches(Compiler *c, TyKind rt) {
    priv when k's chain does not answer it and u is the first root with it. */
 static void object_reopen_responds_name(Compiler *c, int k, const int *roots, int u, const char *nm,
                                         Buf *pub, Buf *priv) {
-  if (k >= 0 && (call_answers(c, -1, k, nm, 0, NULL) ||
-                 comp_is_undeffed_in_chain(c, k, nm))) return;
+  if (k >= 0 && (call_answers(c, -1, k, nm, 0, NULL) || cplan_undefined(c, k, 0, nm))) return;
   /* the first root that defines it answers (Object over Kernel) */
   for (int v = 0; v < u; v++) {
     int rv = comp_core_class(c, roots[v]);
@@ -312,52 +311,33 @@ static void rtr_lists_build(Compiler *c, int k, Buf *pb, Buf *vb) {
      reach (the class table keeps Object apart), by Object's visibility */
   emit_object_reopen_responds(c, k, pb, vb);
 }
-/* The lists, kept from one emission to the next while nothing they read
-   has moved: the scope index frozen, with its epoch, the scope and class
-   counts, the class shape (parents, aliases), the reader and writer tables
-   and the visibility and undef tables (comp_vis_gen) as they were. The
-   dynamic send's default-arm probes emit a respond_to? over and over (39
-   emissions on an application, a billion chain lookups between them). An
-   empty list is NULL. */
-typedef struct { char *pub, *priv; unsigned char built; } RtrLists;
-static RtrLists *g_rtr;
-static int g_rtr_n;
-static struct { const Compiler *c; int ncls, nscp, nnat; unsigned sgen, shape, tgen, vgen; } g_rtr_key;
-static void rtr_lists(Compiler *c, int k, const char **pub, const char **priv) {
-  int keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
-  if (keyed && (g_rtr_key.c != c || g_rtr_key.ncls != c->nclasses || g_rtr_key.nscp != c->nscopes ||
-                g_rtr_key.nnat != c->n_native_methods || g_rtr_key.sgen != comp_scope_index_gen() ||
-                g_rtr_key.shape != comp_class_shape_gen() || g_rtr_key.tgen != comp_table_gen ||
-                g_rtr_key.vgen != comp_vis_gen)) {
-    for (int i = 0; i < g_rtr_n; i++) { free(g_rtr[i].pub); free(g_rtr[i].priv); }
-    free(g_rtr);
-    g_rtr_n = c->nclasses + 1;
-    g_rtr = calloc((size_t)g_rtr_n, sizeof *g_rtr);
-    if (!g_rtr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    g_rtr_key.c = c; g_rtr_key.ncls = c->nclasses; g_rtr_key.nscp = c->nscopes; g_rtr_key.nnat = c->n_native_methods;
-    g_rtr_key.sgen = comp_scope_index_gen(); g_rtr_key.shape = comp_class_shape_gen();
-    g_rtr_key.tgen = comp_table_gen; g_rtr_key.vgen = comp_vis_gen;
-  }
-  RtrLists *e = keyed ? &g_rtr[k + 1] : NULL;
-  if (!e || !e->built) {
-    Buf pb, vb;
-    memset(&pb, 0, sizeof pb);
-    memset(&vb, 0, sizeof vb);
-    rtr_lists_build(c, k, &pb, &vb);
-    if (!e) {
-      /* not kept: handed out until the next ask */
-      static char *held[2];
-      free(held[0]); free(held[1]);
-      held[0] = pb.len ? pb.p : (free(pb.p), NULL);
-      held[1] = vb.len ? vb.p : (free(vb.p), NULL);
-      *pub = held[0]; *priv = held[1];
-      return;
-    }
-    e->pub = pb.len ? pb.p : (free(pb.p), NULL);
-    e->priv = vb.len ? vb.p : (free(vb.p), NULL);
-    e->built = 1;
-  }
-  *pub = e->pub; *priv = e->priv;
+/* Class k's lists (the plan keeps them from one emission to the next: the dynamic send's default-arm probes emit a
+   respond_to? over and over, 39 emissions on an application, a billion chain lookups between them). An empty list is
+   NULL. */
+static const CplanRtrLists *rtr_lists(Compiler *c, int k) {
+  CplanRtrLists *e = cplan_rtr_lists(c, k);
+  if (e->built) return e;
+  Buf pb, vb;
+  memset(&pb, 0, sizeof pb);
+  memset(&vb, 0, sizeof vb);
+  rtr_lists_build(c, k, &pb, &vb);
+  e->pub = pb.len ? pb.p : (free(pb.p), NULL);
+  e->priv = vb.len ? vb.p : (free(vb.p), NULL);
+  e->built = 1;
+  return e;
+}
+/* The Object private names class k's undef_method takes away, asked once per class (cplan_undefined) */
+static const CplanRtrLists *rtr_undef(Compiler *c, int k) {
+  CplanRtrLists *e = cplan_rtr_lists(c, k);
+  if (e->undef_built) return e;
+  const char *const *op = object_private_method_names();
+  int n = 0;
+  while (op[n]) n++;
+  if (n && !(e->undef_priv = calloc((size_t)n, sizeof *e->undef_priv))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int u = 0; u < n; u++)
+    if (cplan_undefined(c, k, 0, op[u])) e->undef_priv[e->nundef_priv++] = op[u];
+  e->undef_built = 1;
+  return e;
 }
 /* respond_to? asked at run time, by the name's string: each class's own
    methods by the value's class, then what every object has. */
@@ -383,8 +363,8 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
   buf_printf(b, "; ((({ sp_bool _r%d = 0; switch (_k%d) {", tv, tv);
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_class_is_module(c, &c->classes[k])) continue;
-    const char *pub, *priv;
-    rtr_lists(c, k, &pub, &priv);
+    const CplanRtrLists *rl = rtr_lists(c, k);
+    const char *pub = rl->pub, *priv = rl->priv;
     /* a class with no names answers none (its undef took them): the
        default arm below is a builtin value's */
     if (!pub && !priv) buf_printf(b, " case %d: break;", k);
@@ -398,8 +378,8 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
   /* a builtin value, or an object of a class with no names of its own,
      answers the Object reopening's methods */
   {
-    const char *pub, *priv;
-    rtr_lists(c, -1, &pub, &priv);
+    const CplanRtrLists *rl = rtr_lists(c, -1);
+    const char *pub = rl->pub, *priv = rl->priv;
     if (pub || priv) {
       buf_printf(b, " default: _r%d = ", tv);
       if (pub) buf_printf(b, "sp_str_in_list(_n%d, (const char *const[]){%sNULL}) || ", tv, pub);
@@ -423,12 +403,12 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
   buf_puts(b, "NULL})");
   for (int k = 0; k < c->nclasses; k++) {
     if (class_is_blank_slate(c, k)) { buf_printf(b, " && _k%d != %d", tv, k); continue; }
-    for (int u = 0; priv[u]; u++)
-      if (comp_is_undeffed_in_chain(c, k, priv[u])) {
-        buf_printf(b, " && !(_k%d == %d && !strcmp(_n%d, \"", tv, k, tv);
-        emit_c_escaped(b, priv[u]);
-        buf_puts(b, "\"))");
-      }
+    const CplanRtrLists *rl = rtr_undef(c, k);
+    for (int u = 0; u < rl->nundef_priv; u++) {
+      buf_printf(b, " && !(_k%d == %d && !strcmp(_n%d, \"", tv, k, tv);
+      emit_c_escaped(b, rl->undef_priv[u]);
+      buf_puts(b, "\"))");
+    }
   }
   buf_puts(b, ")");
   buf_printf(b, " || sp_str_in_list(_n%d, (const char *const[]){", tv);
@@ -6751,30 +6731,40 @@ int refl_md_dynamic_used(Compiler *c) {
   return 0;
 }
 
+/* The names the reflection table lists, each once */
+typedef struct { const char **names; int n, cap; } MdNames;
+static void md_names_add(MdNames *r, const char *x) {
+  for (int i = 0; i < r->n; i++)
+    if (sp_streq(r->names[i], x)) return;
+  if (r->n == r->cap) {
+    r->cap *= 2;
+    if (!(r->names = realloc(r->names, sizeof(char *) * (size_t)r->cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  r->names[r->n++] = x;
+}
+
 /* sp_refl_method_defined(klass, name, mask, inherit): what the literal
    method_defined? branch answers at compile time, as a table per class.
    mask: 1 public, 2 protected, 4 private. */
 void emit_refl_method_defined(Compiler *c, Buf *b) {
   /* every name a method or attr accessor of any class carries */
-  int cap = 64, nn = 0;
-  const char **names = malloc(sizeof(char *) * (size_t)cap);
-  #define REFL_ADD(x) do { const char *_x = (x); int _d = 0; \
-    for (int _i = 0; _i < nn && !_d; _i++) _d = sp_streq(names[_i], _x); \
-    if (!_d) { if (nn == cap) { cap *= 2; names = realloc(names, sizeof(char *) * (size_t)cap); } names[nn++] = _x; } } while (0)
+  MdNames rn = { malloc(sizeof(char *) * 64), 0, 64 };
+  if (!rn.names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].name && c->scopes[s].class_id >= 0) REFL_ADD(c->scopes[s].name);
+    if (c->scopes[s].name && c->scopes[s].class_id >= 0) md_names_add(&rn, c->scopes[s].name);
   char **wnames = NULL; int nw = 0, wcap = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    for (int r = 0; r < c->classes[k].nreaders; r++) REFL_ADD(c->classes[k].readers[r]);
+    for (int r = 0; r < c->classes[k].nreaders; r++) md_names_add(&rn, c->classes[k].readers[r]);
     for (int w = 0; w < c->classes[k].nwriters; w++) {
       size_t l = strlen(c->classes[k].writers[w]);
       char *x = malloc(l + 2); memcpy(x, c->classes[k].writers[w], l); x[l] = '='; x[l + 1] = 0;
       if (nw == wcap) { wcap = wcap ? wcap * 2 : 16; wnames = realloc(wnames, sizeof(char *) * (size_t)wcap); }
       wnames[nw++] = x;
-      REFL_ADD(x);
+      md_names_add(&rn, x);
     }
   }
-  #undef REFL_ADD
+  const char **names = rn.names;
+  int nn = rn.n;
   buf_puts(b, "static int sp_refl_method_defined(sp_Class k, const char *name, int mask, int inherit) {\n  if (sp_class_sclass_p(k)) sp_raise_cls(\"NotImplementedError\", \"spinel: the methods of a singleton class held in a variable are not modeled\");\n");
   buf_puts(b, "  if (!strcmp(name, \"initialize\") || !strcmp(name, \"initialize_copy\") ||\n"
               "      !strcmp(name, \"initialize_clone\") || !strcmp(name, \"initialize_dup\")) return (mask & 4) != 0;\n");
@@ -6786,7 +6776,7 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
     for (int i = 0; i < nn; i++) {
       const char *qm = names[i];
       if (sp_streq(qm, "initialize") || name_is_synth_method(c, qm) || comp_method_is_private_helper(c, k, qm) ||
-          comp_is_undeffed_in_chain(c, k, qm)) continue;
+          cplan_undefined(c, k, 0, qm)) continue;
       char base[256]; base[0] = 0;
       int is_setter = setter_base_name(qm, base, sizeof base);
       int mc = -1;
@@ -6800,8 +6790,9 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
       int wr_own = is_setter && comp_is_writer(&c->classes[k], base) &&
                    (parent < 0 || !comp_writer_in_chain(c, parent, base, NULL));
       int own = (mi >= 0 && mc == k && c->scopes[mi].origin_module_ci == 0) || rd_own || wr_own;
-      int v = comp_method_vis_in_chain(c, k, qm);
-      int vis = v == SP_VIS_PRIVATE ? 4 : v == SP_VIS_PROTECTED ? 2 : 1;
+      CplanPresence pr;
+      cplan_table_presence(c, k, 0, qm, &pr);
+      int vis = pr.vis == SP_VIS_PRIVATE ? 4 : pr.vis == SP_VIS_PROTECTED ? 2 : 1;
       buf_puts(&rows, "      if (!strcmp(name, \"");
       emit_c_escaped(&rows, qm);
       buf_printf(&rows, "\")) return (inherit || %d) && (%d & mask) != 0;\n", own, vis);

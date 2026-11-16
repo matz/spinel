@@ -20408,7 +20408,7 @@ static int rt_probe_unfounded(Compiler *c, TyKind rt, const char *qm) {
 int respond_to_user_defined(Compiler *c, int id, int recv) {
   int any = 0;
   for (int k = 0; k < c->nclasses && !any; k++)
-    if (comp_method_in_class(c, k, "respond_to?") >= 0) any = 1;
+    if (call_target(c, -1, k, RESPOND_TO_NAME, CT_OWN, NULL) >= 0) any = 1;
   if (!any) return 0;
   /* the dispatch's default arm re-enters for a boxed value that is not an
      overriding class's, which answers by the fold */
@@ -20425,11 +20425,11 @@ int respond_to_user_defined(Compiler *c, int id, int recv) {
     if (ty_is_object(t)) k = ty_object_class(t);
     else if (tr.kind == RK_BOXED) {
       for (int j = 0; j < c->nclasses; j++)
-        if (c->classes[j].instantiated && comp_method_in_chain(c, j, "respond_to?", NULL) >= 0) return 1;
+        if (c->classes[j].instantiated && call_target(c, id, j, RESPOND_TO_NAME, CT_METHODS, NULL) >= 0) return 1;
       return 0;
     }
   }
-  return k >= 0 && comp_method_in_chain(c, k, "respond_to?", NULL) >= 0;
+  return k >= 0 && call_target(c, id, k, RESPOND_TO_NAME, CT_METHODS, NULL) >= 0;
 }
 
 /* Name `nm` of class k into the list its visibility answers by: `pub` for
@@ -20438,8 +20438,10 @@ void emit_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv)
   if (name_is_synth_method(c, nm) || comp_method_is_private_helper(c, k, nm) || is_initialize_family(nm)) return;
   /* a name class k or a class between it and the definer undefines
      (`undef_method :x` in a subclass) is answered by none of k's objects */
-  if (k >= 0 && comp_is_undeffed_in_chain(c, k, nm)) return;
-  Buf *b = comp_method_vis_in_chain(c, k, nm) == SP_VIS_PUBLIC ? pub : priv;
+  CplanPresence pr;
+  cplan_table_presence(c, k, 0, nm, &pr);
+  if (k >= 0 && pr.undef) return;
+  Buf *b = pr.vis == SP_VIS_PUBLIC ? pub : priv;
   buf_puts(b, "\"");
   emit_c_escaped(b, nm);
   buf_puts(b, "\", ");
@@ -34814,15 +34816,12 @@ int emit_respond_to_by_cls(Compiler *c, int id, int recv, const char *qm, int ar
    Then the name is left to the class chain, as it was read before Object's
    private methods were answered. */
 int root_reopen_defines(Compiler *c, const char *qm) {
-  static const NodeTable *memo_nt = NULL; static int memo_ncl = -1, roots[8], nroots = 0;
-  if (memo_nt != c->nt || memo_ncl != c->nclasses) {
-    memo_nt = c->nt; memo_ncl = c->nclasses; nroots = 0;
-    for (int k = 0; k < c->nclasses && nroots < 8; k++)
-      if (c->classes[k].name && is_object_root(c->classes[k].name)) roots[nroots++] = k;
-  }
-  for (int i = 0; i < nroots; i++) {
-    ClassInfo *kc = &c->classes[roots[i]];
-    if (call_target(c, -1, roots[i], qm, CT_OWN | CT_SHARED, NULL) >= 0 || comp_is_reader(kc, qm)) return 1;
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  for (int i = 0; roots[i] >= 0; i++) {
+    int k = comp_core_class(c, roots[i]);
+    if (k < 0) continue;
+    ClassInfo *kc = &c->classes[k];
+    if (call_target(c, -1, k, qm, CT_OWN | CT_SHARED, NULL) >= 0 || comp_is_reader(kc, qm)) return 1;
     for (int u = 0; u < kc->nundefs; u++) if (sp_streq(kc->undefs[u], qm)) return 1;
   }
   return 0;

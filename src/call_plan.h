@@ -1540,6 +1540,17 @@ int cplan_undefined(Compiler *c, int cls, unsigned side, const char *name);
    order (refl_any, lr_late_asked), so call_target answers there from the
    tables, the list with it: only the class side answers at the point. */
 int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name);
+/* The lists a run-time `respond_to?` tests per class (emit_respond_to_runtime_name): class cls's public names and the
+   private ones include_all adds, as the C text `"a", "b", `, and the Object private names its undef_method takes away
+   (the entries of object_private_method_names, in its order); cls -1 is the Object reopening's. The lists are built
+   from the final tables with no site (every name is asked cplan_table_presence: no program class's instance side is
+   absent at a point, as cplan_presence proves), so the plan keeps them while nothing they read has moved, as each
+   emission asks them again: the scope index frozen, with its epoch, the scope and class counts, the class shape, the
+   reader and writer tables and the visibility and undef tables as they were. The entry is the caller's to fill (the
+   lists when `built` is 0, the undef names when `undef_built` is), and is kept only while a later ask finds the tables unmoved; where the tables may move (the scope
+   index is not frozen) every ask hands out a fresh entry, valid until the next ask. */
+typedef struct { char *pub, *priv; const char **undef_priv; int nundef_priv; unsigned char built, undef_built; } CplanRtrLists;
+CplanRtrLists *cplan_rtr_lists(Compiler *c, int cls);
 /* The names a method list on cls's side asks about, as the final tables
    hold them (a class's scopes, aliases and accessors, and for the class side
    those of its superclasses and extended modules unless CT_OWN), in the

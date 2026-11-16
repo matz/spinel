@@ -21447,7 +21447,7 @@ static void ext_emit_header_class_decls(Compiler *c, const char *sigs, Buf *hb) 
 static void ext_emit_method_typedef(Buf *b) {
   buf_puts(b, "#ifndef SP_EXT_METHOD_T\n#define SP_EXT_METHOD_T 1\n"
               "typedef sp_RbVal (*sp_ext_thunk)(sp_RbVal self, int argc, const sp_RbVal *argv);\n"
-              "typedef struct { const char *name; int argc; int owner; int singleton; sp_ext_thunk fn; } sp_ext_method;\n"
+              "typedef struct { const char *name; int argc; int owner; int singleton; sp_ext_thunk fn; int block; } sp_ext_method;\n"
               "#endif\n");
 }
 /* The --ext-class part of the contract header: the row type and the two
@@ -21457,17 +21457,26 @@ static void ext_emit_contract_decls(Buf *hb) {
                "   name. sp_ext_methods answers the table of a class id (NULL for a class\n"
                "   not exported), each row the method's name, its arity, the id of the\n"
                "   class that defines it, whether it is a singleton method (one of the\n"
-               "   class value, else of an instance) and its thunk; a row of NULLs ends\n"
-               "   it. A method with optional or rest parameters has a row for each count\n"
-               "   of arguments it takes; an arity -(n + 1) takes n arguments or more.\n"
+               "   class value, else of an instance), its thunk and whether the row takes\n"
+               "   a block; a row of NULLs ends it. A method with optional or rest\n"
+               "   parameters has a row for each count of arguments it takes; an arity\n"
+               "   -(n + 1) takes n arguments or more. A method that takes a block has\n"
+               "   its rows twice: for a call with no block (block 0) and for a call\n"
+               "   with one (block 1).\n"
                "   sp_ext_send calls the method `name` of recv (a boxed object, or a\n"
                "   boxed class value for a singleton method) with argc boxed arguments,\n"
                "   writes the boxed result to *out and answers 1; 0 when recv's class\n"
                "   has no such method. A wrong count of arguments raises ArgumentError,\n"
-               "   an argument of a wrong kind TypeError, as a call in the program would. */\n");
+               "   an argument of a wrong kind TypeError, as a call in the program would.\n"
+               "   sp_ext_send_block does the same with a block, a boxed Proc: the Proc\n"
+               "   of a host is sp_proc_new(fn, cap, cap_scan), whose\n"
+               "   fn(void *cap, sp_int argc, sp_int *args) reads its boxed argument k\n"
+               "   with sp_proc_arg(k) and answers with sp_proc_ret_set(v). A method\n"
+               "   that takes no block goes on without it. */\n");
   ext_emit_method_typedef(hb);
   buf_puts(hb, "const sp_ext_method *sp_ext_methods(int cls_id);\n"
-               "int sp_ext_send(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, sp_RbVal *out);\n");
+               "int sp_ext_send(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, sp_RbVal *out);\n"
+               "int sp_ext_send_block(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, sp_RbVal block, sp_RbVal *out);\n");
 }
 /* A host's argument for an Integer or a Float parameter, checked as a
    builtin checks one: an Integer, or a number for a Float; anything else
@@ -21493,6 +21502,13 @@ static void ext_emit_method_thunk(Compiler *c, int ci, int s, Buf *b) {
   int vt = comp_ty_value_obj(c, st);
   buf_printf(b, "static sp_RbVal sp_extm_%d_%d(sp_RbVal self, int argc, const sp_RbVal *argv) {\n"
                 "  (void)argc; (void)argv;\n", ci, s);
+  /* a forwarder of a block (`fwdb`): its last parameter is the block of the
+     host, which sp_ext_send_block leaves in sp_extm_block. The thunk reads
+     it first, into a rooted local of its own: a conversion of an argument
+     can run code that calls sp_ext_send_block again. */
+  int fw_rest = 0, fw_blk = 0;
+  if (!ext_fwd_orig(sc->name, NULL, &fw_rest, &fw_blk)) fw_rest = fw_blk = 0;
+  if (fw_blk) buf_puts(b, "  sp_RbVal _blk = sp_extm_block;\n  SP_GC_ROOT_RBVAL(_blk);\n");
   /* self: a singleton method's is the class value, which only a method
      dispatched on the subclass reads; an instance's box is checked against
      the class, and a method an ancestor defines takes the ancestor's
@@ -21505,17 +21521,18 @@ static void ext_emit_method_thunk(Compiler *c, int ci, int s, Buf *b) {
   }
   /* a forwarder of a rest parameter (desugar_ext_forwarders): its last
      parameter is the Array of the arguments after the fixed ones */
-  int fw_rest = 0;
-  if (ext_fwd_orig(sc->name, NULL, &fw_rest) && fw_rest && sc->nparams > 0)
+  int rest_at = sc->nparams - 1 - (fw_blk ? 1 : 0);
+  if (fw_rest && rest_at >= 0)
     buf_printf(b, "  sp_PolyArray *_rest = sp_PolyArray_new();\n  SP_GC_ROOT(_rest);\n"
                   "  for (int _i = %d; _i < argc; _i++) sp_PolyArray_push(_rest, argv[_i]);\n"
-                  "  sp_RbVal _restv = sp_box_poly_array(_rest);\n", sc->nparams - 1);
+                  "  sp_RbVal _restv = sp_box_poly_array(_rest);\n", rest_at);
   else fw_rest = 0;
   for (int p = 0; p < sc->nparams; p++) {
     LocalVar *lv = scope_local(sc, sc->pnames[p]);
     char ex[32], nm[16];
     snprintf(ex, sizeof ex, "argv[%d]", p);
-    if (fw_rest && p == sc->nparams - 1) snprintf(ex, sizeof ex, "_restv");
+    if (fw_rest && p == rest_at) snprintf(ex, sizeof ex, "_restv");
+    if (fw_blk && p == sc->nparams - 1) snprintf(ex, sizeof ex, "_blk");
     snprintf(nm, sizeof nm, "_a%d", p);
     buf_puts(b, "  ");
     /* a call in the program is typed, so the plain unbox checks nothing; a
@@ -21656,51 +21673,82 @@ static void ext_emit_attr_rows(Compiler *c, int ci, const char ***names, int *nn
         }
         buf_puts(rows, "  { ");
         emit_str_literal(rows, mname);
-        buf_printf(rows, ", %d, %d, 0, sp_extm_%c_%d_%d_%d },\n", w, owner, w ? 'w' : 'r', ci, k, i);
+        buf_printf(rows, ", %d, %d, 0, sp_extm_%c_%d_%d_%d, 0 },\n", w, owner, w ? 'w' : 'r', ci, k, i);
       }
     }
   }
 }
+/* Whether the table under construction has a row of this name, count,
+   singleton flag and block flag already; it has one after the call. keys
+   holds a line for each row. */
+static int ext_row_seen(Buf *keys, const char *name, int argc, int singleton, int block) {
+  char key[400];
+  snprintf(key, sizeof key, "\n%d %d %d %s\n", argc, singleton, block, name);
+  if (keys->p && strstr(keys->p, key)) return 1;
+  if (!keys->p) buf_puts(keys, "\n");
+  buf_puts(keys, key + 1);
+  return 0;
+}
 static void ext_emit_method_tables(Compiler *c, Buf *b) {
   if (!g_ext_classes || !*g_ext_classes) return;
   ext_emit_method_typedef(b);
+  /* the block of the call that sp_ext_send_block makes, for the thunk of a
+     block row */
+  buf_puts(b, "static SP_TLS sp_RbVal sp_extm_block;\n");
   for (int ci = 0; ci < c->nclasses; ci++) {
     if (!ext_class_exported(c, ci)) continue;
     const char **names = NULL;
     int nn = 0, cap = 0;
     Buf rows; memset(&rows, 0, sizeof rows);
+    Buf keys; memset(&keys, 0, sizeof keys);
     for (int s = 1; s < c->nscopes; s++) {
       if (!ext_method_exported(c, ci, s, 1)) continue;
       Scope *sc = &c->scopes[s];
+      /* a forwarder's row has the name of the method it calls; one of a
+         rest parameter has the arity -(n + 1) for n fixed arguments, as
+         Method#arity counts */
+      int fw_rest = 0, fw_blk = 0;
+      const char *orig = ext_fwd_orig(sc->name, NULL, &fw_rest, &fw_blk);
+      const char *rname = orig ? orig : sc->name;
+      if (!orig) fw_rest = fw_blk = 0;
+      /* the forwarders of a block are made for any method with a super
+         (ext_body_uses_block); the row stays only when the method it calls
+         takes a block */
+      if (fw_blk) {
+        int osi = sc->is_cmethod ? comp_cmethod_in_chain(c, ci, orig, NULL) : comp_method_in_chain(c, ci, orig, NULL);
+        if (osi >= 0 && !c->scopes[osi].yields && !(c->scopes[osi].blk_param && c->scopes[osi].blk_param[0])) continue;
+      }
+      int npos = sc->nparams - (fw_blk ? 1 : 0);   /* the block is no argument of the count */
+      int argc = fw_rest ? -npos : npos;
+      /* one row for a name, a count and a block flag: a method whose super
+         takes no block is in the table itself, and its forwarder of a call
+         with no block says the same (ext_body_uses_block) */
+      if (ext_row_seen(&keys, rname, argc, sc->is_cmethod ? 1 : 0, fw_blk ? 1 : 0)) continue;
       ext_emit_method_thunk(c, ci, s, b);
       int def = -1;
       if (sc->is_cmethod) comp_cmethod_in_chain(c, ci, sc->name, &def);
       else comp_method_in_chain(c, ci, sc->name, &def);
-      /* a forwarder's row has the name of the method it calls; one of a
-         rest parameter has the arity -(n + 1) for n fixed arguments, as
-         Method#arity counts */
-      int fw_rest = 0;
-      const char *orig = ext_fwd_orig(sc->name, NULL, &fw_rest);
-      const char *rname = orig ? orig : sc->name;
       buf_puts(&rows, "  { ");
       emit_str_literal(&rows, rname);
-      buf_printf(&rows, ", %d, %d, %d, sp_extm_%d_%d },\n", orig && fw_rest ? -sc->nparams : sc->nparams,
-                 def < 0 ? ci : def, sc->is_cmethod ? 1 : 0, ci, s);
+      buf_printf(&rows, ", %d, %d, %d, sp_extm_%d_%d, %d },\n", argc,
+                 def < 0 ? ci : def, sc->is_cmethod ? 1 : 0, ci, s, fw_blk ? 1 : 0);
       if (sc->is_cmethod) continue;   /* an attr shares no name with an instance method */
       if (nn == cap) { cap = cap ? cap * 2 : 16; names = realloc(names, sizeof *names * (size_t)cap); }
       names[nn++] = strdup(rname);
     }
     if (!comp_class_is_module(c, &c->classes[ci])) ext_emit_attr_rows(c, ci, &names, &nn, &cap, b, &rows);
-    buf_printf(b, "static const sp_ext_method sp_extm_tab_%d[] = {\n%s  { 0, 0, 0, 0, 0 }\n};\n", ci, rows.p ? rows.p : "");
+    buf_printf(b, "static const sp_ext_method sp_extm_tab_%d[] = {\n%s  { 0, 0, 0, 0, 0, 0 }\n};\n", ci, rows.p ? rows.p : "");
     for (int i = 0; i < nn; i++) free((char *)names[i]);
     free(names);
     free(rows.p);
+    free(keys.p);
   }
   buf_puts(b, "const sp_ext_method *sp_ext_methods(int cls_id) {\n  switch (cls_id) {\n");
   for (int ci = 0; ci < c->nclasses; ci++)
     if (ext_class_exported(c, ci)) buf_printf(b, "  case %d: return sp_extm_tab_%d;\n", ci, ci);
   buf_puts(b, "  default: return 0;\n  }\n}\n"
-              "int sp_ext_send(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, sp_RbVal *out) {\n"
+              "/* the rows with a block parameter (block 1) or the rows with none */\n"
+              "static int sp_ext_send_rows(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, int block, sp_RbVal *out) {\n"
               "  /* a class value calls a singleton method, an object an instance method */\n"
               "  int singleton = recv.tag == SP_TAG_CLASS;\n"
               "  if (singleton ? recv.cls_id == SP_CLASS_BY_NAME : (recv.tag != SP_TAG_OBJ || !recv.v.p)) return 0;\n"
@@ -21710,7 +21758,7 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
               "     negative arity -(n + 1) that takes n arguments or more */\n"
               "  int seen = 0, lo = 0, hi = 0;\n"
               "  for (; m->name; m++) {\n"
-              "    if (m->singleton != singleton || strcmp(m->name, name)) continue;\n"
+              "    if (m->singleton != singleton || m->block != block || strcmp(m->name, name)) continue;\n"
               "    int fixed = m->argc < 0 ? -m->argc - 1 : m->argc;\n"
               "    if (m->argc < 0 ? argc >= fixed : argc == fixed) {\n"
               "      *out = m->fn(recv, argc, argv);\n"
@@ -21722,7 +21770,15 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
               "    seen = 1;\n"
               "  }\n"
               "  if (seen) sp_raise_arity(argc, lo, hi, 0);\n"
-              "  return 0;\n}\n");
+              "  return 0;\n}\n"
+              "int sp_ext_send(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, sp_RbVal *out) {\n"
+              "  return sp_ext_send_rows(recv, name, argc, argv, 0, out);\n}\n"
+              "int sp_ext_send_block(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, sp_RbVal block, sp_RbVal *out) {\n"
+              "  /* the thunk of a block row reads the block at its entry; a method\n"
+              "     with no block row takes no block, and the call goes on without\n"
+              "     it, as a call in the program does */\n"
+              "  sp_extm_block = block;\n"
+              "  return sp_ext_send_rows(recv, name, argc, argv, 1, out) || sp_ext_send_rows(recv, name, argc, argv, 0, out);\n}\n");
 }
 
 /* The #message (want_message) or #to_s override a text dispatcher's arm for

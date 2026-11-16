@@ -1,0 +1,14 @@
+each/0 each/0& up/1 up/1& plain/0 nest/0 map/0 map/0& pick/0 pick/-2 pick/0& pick/-2& maybe/0 maybe/0& .twice/1 .twice/1& size/0
+each ran the block 3 times
+map -> [11, 12, 13]
+pick -> 11
+pick -> 17
+maybe -> 17
+maybe -> "no block"
+maybe -> "no block"
+up -> 15
+plain -> "plain!"
+nest -> "nest"
+twice -> 25
+size -> 3
+raised LocalJumpError: no block given (yield)

@@ -593,13 +593,24 @@ which calls the method `name` of a boxed object, or the singleton method
 `name` of a boxed class value, with boxed arguments, and answers 0 when
 the class has no such method; and `sp_ext_methods(cls_id)`, the table of a
 class (each row a name, its arity, the class that defines it, whether it
-is a singleton method, and the thunk). The table holds the methods a `def`
+is a singleton method, the thunk, and whether the row takes a block). The
+table holds the methods a `def`
 or a `def self.` defines, inherited ones included, and the `attr_*`
 readers and writers. A method with optional or rest parameters has one row
 for each count of arguments it takes: `def m(a, b = 1)` has the rows `m`
 of arity 1 and of arity 2, and a rest parameter makes a row of a negative
 arity, `-(n + 1)` for `n` arguments or more, as `Method#arity` counts. A
-method with a keyword or block parameter, or with a required parameter
+method with a block parameter, or one that yields, has its rows twice: the
+rows of a call with no block, and the same rows with `block` set, which
+`sp_ext_send_block(recv, name, argc, argv, block, &out)` calls with a
+boxed Proc. A host makes its Proc with `sp_proc_new(fn, cap, cap_scan)`:
+the runtime calls `fn(cap, argc, args)`, which reads its boxed argument
+`k` with `sp_proc_arg(k)` and answers with `sp_proc_ret_set(v)`
+(`test/ext/methods_blk_host.c`). A method that takes no block goes on
+without the block. The forwarders of a block are calls of the program
+with a block of no known kind, so a local of the method that holds what
+the block answers is boxed for every call of the method. A
+method with a keyword parameter, or with a required parameter
 after an optional one, stays out of the table, as does a private or
 protected one, and one
 with a parameter whose kind the thunk cannot check a host's argument

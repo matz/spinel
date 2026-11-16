@@ -22012,6 +22012,9 @@ static inline void sp_proc_arg_set(sp_int k, sp_RbVal v) {
   sp_ProcWide *w = _sp_proc_poly_wide;
   if (w && k - SP_PROC_ARG_SLOTS < w->n) { w->v[k - SP_PROC_ARG_SLOTS] = v; sp_gc_wb((void *)w); }
 }
+/* The boxed result of the call that entered, as its caller reads it: the fn
+   of a Proc that a host makes (sp_proc_new) answers with it. */
+static inline void sp_proc_ret_set(sp_RbVal v) { _sp_proc_poly_ret = v; }
 /* The block channel (_sp_proc_blk, declared above): the kernel TU owns it. */
 #ifndef SPINEL_EXT_HOST
 SP_TLS sp_Proc *_sp_proc_blk;

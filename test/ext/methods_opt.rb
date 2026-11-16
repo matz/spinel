@@ -2,8 +2,9 @@
 # host calls by name with each count of arguments they take
 # (methods_opt_host.c): a method the named class inherits, a singleton
 # method, a method the named class defines again with fixed parameters, a
-# method made private after its def, and methods with a keyword or a block
-# parameter, which the table leaves out.
+# method made private after its def, and a method with a keyword
+# parameter, which the table leaves out. methods_blk.rb has the methods
+# with a block.
 module ExtOpt
   class Base
     def initialize
@@ -48,10 +49,6 @@ module ExtOpt
 
     def kw(a = 1, k: 2)
       a + k
-    end
-
-    def blk(a = 1, &b)
-      a
     end
   end
 

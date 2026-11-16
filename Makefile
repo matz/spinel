@@ -910,6 +910,32 @@ $(SP_RT_NOGC_LIB): $(patsubst lib/regexp/%.c,build/nogc/regexp/%.o,$(RE_SRC)) $(
 $(SP_RT_MT_NOGC_LIB): $(patsubst lib/regexp/%.c,build/mt-nogc/regexp/%.o,$(RE_SRC)) $(addprefix build/mt-nogc/,$(addsuffix .o,$(RT_MEMBERS) sp_gc_none)) $(PLATFORM_MT_OBJ)
 	$(AR_DET) ar rcs $@ $^
 
+# ---- Position-independent runtime (-fPIC) ----
+# The same sources, compiled -fPIC, for a library (--ext-init/--ext-entry)
+# a host loads as a shared object: a Python ctypes, Swift or C# host, or a
+# C one through dlopen. The regular archive is built for an executable, and
+# `cc -shared` refuses its relocations ("relocation R_X86_64_PC32 against
+# symbol ... can not be used when making a shared object; recompile with
+# -fPIC"). Opt-in, as the C extension runtime is: `make runtime-pic`. The
+# threaded runtime has no such variant: its TLS is initial-exec, which an
+# object a host dlopens may not get room for.
+SP_RT_PIC_LIB = lib/libspinel_rt_pic.a
+PIC_DEF = -fPIC
+
+build/pic/regexp/%.o: lib/regexp/%.c $(RE_HDRS)
+	@mkdir -p $(@D)
+	$(CC) -c $(COPT) $(SEC_FLAGS) $(RE_CASE_FLAGS) $(PIC_DEF) -Ilib/regexp -Ilib/regexp/shim $< -o $@
+
+build/pic/%.o: lib/%.c $(RT_HDRS)
+	@mkdir -p $(@D)
+	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PIC_DEF) -Ilib -Ilib/regexp -Ilib/regexp/shim $< -o $@
+
+$(SP_RT_PIC_LIB): $(patsubst lib/regexp/%.c,build/pic/regexp/%.o,$(RE_SRC)) $(addprefix build/pic/,$(addsuffix .o,$(RT_MEMBERS))) $(PLATFORM_OBJ)
+	$(AR_DET) ar rcs $@ $^
+
+.PHONY: runtime-pic
+runtime-pic: $(SP_RT_PIC_LIB)
+
 # ---- ThreadSanitizer build of the threaded runtime (Phase 1 validation) ----
 # The gate links a threaded test against the mt archive, as the driver does,
 # but uninstrumented, so a race shows only when it corrupts the output. This
@@ -1755,7 +1781,7 @@ test-corpus-summary: test-corpus-results
 # one whose at_exit hooks run when the host exits, not as its init returns,
 # and one whose entry calls a Struct's `new` the load redefined, and an
 # --ext-entry list longer than 2048 bytes exports every method it names.
-ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
+ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map \
 	  --ext-init Init_ext_kernel \
@@ -1795,6 +1821,18 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	    printf 'init returned\nentry 41\n42\nmain returns\nentry hook 41\ntoplevel hook\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 3 ] || \
 	      { echo "ext-test: FAIL (at_exit hooks not run at host exit, or status $$rc is not the host's 3)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (at_exit host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/pic.rb -c --no-line-map --ext-init Init_ext_pic \
+	      --ext-entry ExtPic.triple,ExtPic.label,ExtPic.must_pos -o "$$tmp/p.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (pic emission)"; ok=0; \
+	  elif ! $(CC) -fPIC -shared -O1 -w -Ilib -I"$$tmp" "$$tmp/p.c" $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libpic.so" 2>"$$tmp/cc.err"; then \
+	    echo "ext-test: FAIL (the library did not link as a shared object over $(SP_RT_PIC_LIB))"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
+	  elif $(CC) -O1 -w test/ext/pic_host.c $(LDFLAGS) -ldl -o "$$tmp/phost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/phost" "$$tmp/libpic.so" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '42\np0,p1,p2\np0,p1,p2,p3,p4\nraised ArgumentError: not positive: -3\nok 7\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (the shared object's host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (pic host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/late_new.rb -c --no-line-map --ext-init Init_ext_late_new \

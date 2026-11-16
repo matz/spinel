@@ -39,6 +39,7 @@ static int trait_has_box_text(TyKind t) {
   case TY_TIME: case TY_COMPLEX: case TY_RATIONAL: case TY_CLASS: case TY_INT_ARRAY:
   case TY_FLOAT_ARRAY: case TY_STR_ARRAY: case TY_POLY_ARRAY: case TY_OPENSTRUCT:
   case TY_INT_ARRAY_ARRAY: case TY_FLOAT_ARRAY_ARRAY:
+  case TY_ENV:   /* (boxed as the environment's snapshot, for now: no box id of its own) */
     return 1;
   default:
     return 0;

@@ -3248,6 +3248,12 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
       RC(RF_NULLABLE, RW_NONE);
       return;
     } }
+  /* ENV: its box function (sp_box_env, the environment's snapshot for now) */
+  if (t == TY_ENV) {
+    buf_puts(b, "sp_box_env("); emit_expr(c, node, b); buf_puts(b, ")");
+    RC(RF_NULLABLE, RW_NONE);
+    return;
+  }
   if (ty_is_object(t)) {
     /* A reference-type object is a nilable C pointer (a hash/cache lookup or a
        method that can `return nil`, e.g. doom's TextureManager#[] boxing

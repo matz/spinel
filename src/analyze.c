@@ -3532,53 +3532,6 @@ void mark_ie_subtree(Compiler *c, int node, int cls) {
   }
 }
 
-/* `ENV` is compile-time modeled only as a call RECEIVER (`ENV[...]`,
-   `ENV.fetch`, ...). Flowing as a VALUE -- an argument, a parameter
-   default, an assignment, a Hash value (`params["e"] = ENV`) -- it is the
-   environment's StrStr-hash snapshot taken where ENV is read, the same
-   value the enumeration surface and ENV.update answer (#2742): reads see
-   the variables set at that point, and writing through it leaves the
-   environment alone. defined?(ENV) evaluates nothing and is exempt. */
-static void desugar_env_values(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  char *ok = calloc((size_t)nt->count, 1);
-  if (!ok) { perror("calloc"); exit(1); }
-  NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    int r = nt_ref(nt, id, "receiver");
-    if (r >= 0) ok[r] = 1;
-  }
-  NT_FOREACH_KIND(nt, NK_DefinedNode, id) {
-    int v = nt_ref(nt, id, "value");
-    if (v >= 0) ok[v] = 1;
-  }
-  /* `ENV[k] op= v` with one plain key: desugar_index_assign_user_recv
-     writes it as the [] and []= calls (when ENV is the environment's) */
-  static const NodeKind opw[] = { NK_IndexOperatorWriteNode, NK_IndexOrWriteNode, NK_IndexAndWriteNode };
-  for (size_t w = 0; w < sizeof opw / sizeof *opw && !comp_const(c, "ENV"); w++)
-  NT_FOREACH_KIND(nt, opw[w], id) {
-    int r = nt_ref(nt, id, "receiver"), args = nt_ref(nt, id, "arguments"), an = 0;
-    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    NodeKind ak = an == 1 ? nt_kind(nt, av[0]) : NK_SplatNode;
-    if (r >= 0 && nt_ref(nt, id, "block") < 0 && ak != NK_SplatNode && ak != NK_BlockArgumentNode &&
-        ak != NK_KeywordHashNode) ok[r] = 1;
-  }
-  /* a program that assigns its own ENV constant reads that one */
-  int n0 = comp_const(c, "ENV") ? 0 : nt->count;
-  for (int id = 0; id < n0; id++) {
-    if (nt_kind(nt, id) != NK_ConstantReadNode || ok[id]) continue;
-    const char *nm = key_name(c, id);
-    if (!nm || !sp_streq(nm, "ENV")) continue;
-    nt_node_set_type(nt, id, "CallNode");
-    /* (ENV itself as a value, a store into which copies as ENV's does:
-       the row of its own, __env_value) */
-    nt_node_set_str(nt, id, "name", "__env_value");
-    nt_mark_builtin_call(nt, id);
-    nt_node_set_ref(nt, id, "receiver", -1);
-    nt_node_set_ref(nt, id, "arguments", -1);
-    nt_node_set_ref(nt, id, "block", -1);
-  }
-  free(ok);
-}
 
 /* `include x` / `extend x` / `prepend x` in a class or module body (or at
    the top level) whose argument is not a constant -- `include w(Registry)` --
@@ -50600,7 +50553,6 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_dyn_parent_class_leaf", desugar_dyn_parent_class_leaf(c));
   AN_STEP_V("rewrite_builtin_cm_alias_calls", rewrite_builtin_cm_alias_calls(c));   /* Time.stamp -> Time.now, the builtin's */
   AN_STEP_V("route_self_builtin_calls", route_self_builtin_calls(c));   /* U.rand(2) before U's def self.rand -> rand(2), Kernel's */
-  desugar_env_values(c);
   AN_STEP_V("register_ffi_decls", register_ffi_decls(c));
   AN_STEP_V("register_cext_layouts", register_cext_layouts(c));
   an_const_presence(c);
@@ -56750,6 +56702,7 @@ static void an_phase_enum_late(Compiler *c) {
   g_enum_late = 1;
   int any = AN_PASS("desugar_poly_to_h_block_late", desugar_poly_to_h_block_late(c));
   any |= AN_PASS("desugar_builtin_enum_calls_late", desugar_builtin_enum_calls(c));
+  any |= AN_PASS("desugar_env_enum_late", desugar_env_enum(c));   /* a variable holding ENV, its type settled */
   if (!any) { g_enum_late = 0; return; }
   AN_PASS_V("mark_empty_literal_args", mark_empty_literal_args(c));
   /* The types widen until they settle, and then the rewrite looks again
@@ -56784,6 +56737,18 @@ static void an_phase_enum_late(Compiler *c) {
 /* A String mutator's receiver that a program method answers (a reader's
    String, `c.name << "x"`) is mutated through the handle the call's view
    carries: the String the method's slot holds, not a copy of it. */
+/* A call desugar_env_enum moved onto ENV's snapshot through a variable that held ENV and nothing else when it
+   ran: the variable's type is the fixpoint's last now, and one that widened past TY_ENV (a Hash assigned to it in a
+   later round) may hold another value, whose call the snapshot does not answer. Refused, not answered from ENV. */
+static void an_env_value_recv_check(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_CallNode, u) {
+    int r = nt_int(nt, u, "env_value_recv", 0) - 1;
+    if (r < 0 || infer_type(c, r) == TY_ENV) continue;
+    unsupported_feature(c, u, "a call that enumerates ENV through a variable that may also hold another value is not "
+                              "supported yet; call it on ENV itself");
+  }
+}
 static void an_phase_mutated_answers(Compiler *c) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_CallNode, u) {
@@ -56861,6 +56826,7 @@ void analyze_program(Compiler *c) {
   AN_PHASE("storage", an_phase_storage(c));
   AN_PHASE("value_types", an_phase_value_types(c));
   AN_PHASE("mutated_answers", an_phase_mutated_answers(c));
+  AN_PHASE("env_value_recv_check", an_env_value_recv_check(c));
   AN_PHASE("reconcile_check", an_phase_reconcile_check(c));
   /* once more on the settled types, which tell a builtin receiver's call
      from a program method's (cr_recv_builtin_value) */

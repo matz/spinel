@@ -148,6 +148,7 @@ static inline void sp_builtin_cls_ids_distinct(int id) {
     case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_FLOAT_RANGE:
     case SP_BUILTIN_STR_RANGE: case SP_BUILTIN_OPENSTRUCT:
     case SP_BUILTIN_RANDOM: case SP_BUILTIN_ARGF: case SP_BUILTIN_TIME_RANGE: case SP_BUILTIN_OBJ_RANGE:
+    case SP_BUILTIN_ENV:
     case SP_BUILTIN_PROCESS_STATUS:   /* agentwm/dvtm: Process.waitpid2's boxed
                                           return value, dispatches signaled?/exited?/
                                           termsig/... via runtime type tag. */
@@ -1557,6 +1558,16 @@ extern sp_Argf sp_argf_obj;
 #else
 sp_Argf sp_argf_obj = {NULL, 0, NULL};   /* type in sp_argf.h */
 #endif
+/* ENV's one object (sp_argf.h) */
+#ifndef SPINEL_EXT_HOST
+sp_env_object sp_env_obj = {0};
+#endif
+/* ENV boxed: for now the environment's snapshot as a String Hash, the value a
+   use of ENV as a value was before it had a kind of its own (#11340) */
+static inline sp_RbVal sp_box_env(sp_env_object *e) {
+  (void)e;
+  return sp_box_nullable_obj((void *)sp_env_value(), SP_BUILTIN_STR_STR_HASH);
+}
 
 /* Mark active in-flight exception messages. Most raises pass string
    literals (rodata, marker byte ≠ 0xfe → no-op for sp_mark_string),

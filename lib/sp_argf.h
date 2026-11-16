@@ -17,6 +17,12 @@ extern sp_Argv sp_argv;               /* defined in the generated TU */
 typedef struct { FILE *cur; int started; const char *fname; } sp_Argf;
 extern sp_Argf sp_argf_obj;            /* defined in the generated TU */
 
+/* ENV: the process environment has no state of its own to hold; the object
+   is what the ENV value points at, so that it has an identity, can share a
+   slot with nil and boxes under SP_BUILTIN_ENV. */
+typedef struct { char unused; } sp_env_object;
+extern sp_env_object sp_env_obj;              /* defined in the generated TU */
+
 /* the ARGV-as-poly-array materialization cache: allocated lazily by
    sp_get_ARGV (lib/sp_cold.c), read by sp_re_mark_globals's GC root scan
    (spinel_rt.h) -- extern so both sides see the same object. */

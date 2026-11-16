@@ -7967,6 +7967,11 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
     if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
   }
+  /* ENV's value: its identity rows (builtin_ops.c), past the ENV rules above */
+  if (recv >= 0 && rt == TY_ENV) {
+    const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+  }
   /* Process::Status readers: builtin-op rows (builtin_ops.c) */
   if (recv >= 0 && rt == TY_PROCESS_STATUS) {
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
@@ -8157,7 +8162,7 @@ int node_is_scope_tail(Compiler *c, int mi, int id) {
 
 /* A Kernel method that runs its block: loop, catch and throw, instance_eval and instance_exec, a trampoline's block (infer_call_inner's rules, in their order) */
 static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, TyKind rt, TyKind *out) {
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && rt == TY_ENV &&
+  if (env_value_recv(c, recv, rt) &&
       bop_share_named(BOP_ENV, name) == BSH_FETCH) {
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0) {
@@ -10064,11 +10069,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (rname && sp_streq(rname, "Kernel")) return TY_INT;
     }
   }
-  /* Signal.trap / Signal.list / Signal.signame; Process.kill (#2735, #2750) */
-  if (recv >= 0 && nt_type(nt, recv) &&
-      (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
-    const char *rname = key_name(c, recv);
-    if (rt == TY_ENV) {
+  /* ENV's value, the constant or a variable holding it */
+  if (env_value_recv(c, recv, rt)) {
       if (sp_streq(name, "class")) return TY_CLASS;
       if (sp_streq(name, "frozen?")) return TY_BOOL;
       if (sp_streq(name, "shift")) return TY_POLY;
@@ -10078,6 +10080,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
           sp_streq(name, "replace") || sp_streq(name, "delete_if") || sp_streq(name, "keep_if"))
         return TY_STR_STR_HASH;   /* filter-block params seed in mark_proc_captures */
     }
+  /* Signal.trap / Signal.list / Signal.signame; Process.kill (#2735, #2750) */
+  if (recv >= 0 && nt_type(nt, recv) &&
+      (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
+    const char *rname = key_name(c, recv);
     if (rname && sp_streq(rname, "Signal")) {
       if (sp_streq(name, "trap") && argc >= 1) return TY_POLY;
       if (sp_streq(name, "list") && argc == 0) return TY_STR_INT_HASH;
@@ -10118,10 +10124,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      the const char * slot as it stood. (The block form is the ENV snapshot's
      Hash#fetch, #2742, and types there.) */
   if (recv >= 0 && argc >= 1 && (sp_streq(name, "[]") || sp_streq(name, "fetch"))) {
-    NodeKind rk = nt_kind(nt, recv);
-    if (rk == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rt == TY_ENV) {
+    {
+      if (env_value_recv(c, recv, rt)) {
         if (sp_streq(name, "fetch") && argc >= 2) {
           TyKind dt = infer_type(c, argv[1]);
           if (dt == TY_UNKNOWN || dt == TY_NIL || dt == TY_VOID) return TY_STRING;
@@ -10134,16 +10138,13 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   /* ENV.key?/has_key?/include?/member?(key) -> bool */
   if (recv >= 0 && argc == 1 &&
       is_key_query(name)) {
-    NodeKind rk = nt_kind(nt, recv);
-    if (rk == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rt == TY_ENV) return TY_BOOL;
+    {
+      if (env_value_recv(c, recv, rt)) return TY_BOOL;
     }
   }
   /* ENV direct arms (#2743, #2746): typed results so p/interp accept them */
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode) {
-    const char *rn = key_name(c, recv);
-    if (rt == TY_ENV) {
+  {
+    if (env_value_recv(c, recv, rt)) {
       if (sp_streq(name, "to_s")) return TY_STRING;
       /* a non-String key raises TypeError; type the (diverging) call poly */
       if (argc >= 1 &&

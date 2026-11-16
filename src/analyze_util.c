@@ -510,6 +510,16 @@ static int const_node_record_class(Compiler *c, int id, int *core) {
     return elab_header_class(c, hp, NULL, NULL);
   return elab_class_ref_at(c, id, core);
 }
+/* Is recv, typed t, ENV's value as a call's receiver: the constant, or a read
+   of a variable that holds ENV and nothing else (TY_ENV)? The ENV arms answer
+   from the environment and do not evaluate their receiver, so a receiver that
+   runs code (a method answering ENV) is not one. */
+int env_value_recv(Compiler *c, int recv, TyKind t) {
+  if (recv < 0 || t != TY_ENV) return 0;
+  NodeKind k = nt_kind(c->nt, nt_paren_single(c->nt, recv));
+  return k == NK_ConstantReadNode || k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode ||
+         k == NK_ClassVariableReadNode || k == NK_GlobalVariableReadNode;
+}
 int const_node_class_index(Compiler *c, int id) {
   /* a constant a pass made to name a builtin class (cvb_split's arms) */
   if (id >= 0 && id < c->nt->count && nt_int(c->nt, id, "builtin_ref", 0)) return comp_builtin_class_named(c, nt_str(c->nt, id, "name"));
@@ -4931,8 +4941,7 @@ int is_handler_proc_block(Compiler *c, int id) {
     return hrk == NK_ConstantReadNode &&
     nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Signal");
   }
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      infer_type(c, recv) == TY_ENV &&
+  if (env_value_recv(c, recv, infer_type(c, recv)) &&
       is_select_bang(name))
     return 1;
   return 0;

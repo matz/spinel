@@ -4970,9 +4970,16 @@ int desugar_env_enum(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
-    if (!nm || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    const char *rn = key_name(c, recv);
-    if (!rn || !sp_streq(rn, "ENV")) continue;
+    if (!nm || recv < 0) continue;
+    /* ENV itself in the fixpoint; a variable that holds ENV and nothing else (TY_ENV) only after it
+       (an_phase_enum_late), where its type is settled: in a round of the fixpoint a parameter defaulting to ENV is
+       TY_ENV before a caller's Hash reaches it, and the snapshot's marks (env_key's NUL check) would then apply to
+       that Hash. Its read is dropped, which runs no code; an_env_value_recv_check refuses the call should the type
+       still widen after. */
+    extern int g_enum_late;
+    int lit = nt_kind(nt, recv) == NK_ConstantReadNode && key_name(c, recv) && sp_streq(key_name(c, recv), "ENV");
+    if (lit ? g_enum_late : (!g_enum_late || nt_kind(nt, recv) == NK_ConstantReadNode ||
+                             !env_value_recv(c, recv, infer_type(c, recv)))) continue;
     int is_enum = env_enum_method(nm);
     /* fetch WITH a block rides the snapshot's block-aware Hash#fetch (#2745) */
     if (!is_enum && sp_streq(nm, "fetch") && nt_ref(nt, id, "block") >= 0) is_enum = 1;
@@ -5021,6 +5028,7 @@ int desugar_env_enum(Compiler *c) {
     nt_node_set_ref(nt, snap, "arguments", -1);
     nt_node_set_ref(nt, snap, "block", -1);
     nt_node_set_int(nt, id, "env_snapshot", 1);
+    if (!lit) nt_node_set_int(nt, id, "env_value_recv", recv + 1);
     /* the reads that take variable names check them as ENV[] does: an
        embedded NUL raises (emit_hash_key reads the mark) */
     if (sp_streq(nm, "assoc") || sp_streq(nm, "slice") || sp_streq(nm, "values_at") || sp_streq(nm, "fetch")) {

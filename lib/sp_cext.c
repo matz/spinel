@@ -183,7 +183,7 @@ static int live(sp_cext_handle *h, int full) {
     sp_RbVal v = h->value;
     if (SP_ATOMIC_LOAD(&h->pins, __ATOMIC_RELAXED) || (v.tag == SP_TAG_CLASS && v.cls_id != SP_CLASS_BY_NAME)) return 1;
     if ((v.tag == SP_TAG_OBJ && v.cls_id != SP_BUILTIN_FOREIGN_PTR &&
-        v.cls_id != SP_BUILTIN_REGEX && v.cls_id != SP_BUILTIN_ARGF) || v.tag == SP_TAG_BIGINT) {
+        v.cls_id != SP_BUILTIN_REGEX && v.cls_id != SP_BUILTIN_ARGF && v.cls_id != SP_BUILTIN_ENV) || v.tag == SP_TAG_BIGINT) {
         if (!v.v.p) return 0;
         const sp_gc_hdr *hdr = (const sp_gc_hdr *)v.v.p - 1;
         return hdr->marked == sp_gc_mark_gen || (!full && hdr->old);

@@ -1106,8 +1106,7 @@ int env_delete_block_value(Compiler *c, int v) {
   const char *nm = v >= 0 && nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
   int recv = is_delete_name(nm) ? nt_ref(nt, v, "receiver") : -1;
   int blk = recv >= 0 ? nt_ref(nt, v, "block") : -1, argc = 0;
-  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || nt_kind(nt, recv) != NK_ConstantReadNode ||
-      comp_ntype(c, recv) != TY_ENV)
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || !env_value_recv(c, recv, comp_ntype(c, recv)))
     return -1;
   call_args(nt, v, &argc);
   if (argc != 1) return -1;
@@ -1534,8 +1533,11 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
      validation (#2743, #2746, #2747, #2765, #2766, #2773). */
   {
     int erecv = nt_ref(nt, id, "receiver");
-    NodeKind erk = nt_kind(nt, erecv);
-    if (erk == NK_ConstantReadNode && comp_ntype(c, erecv) == TY_ENV) {
+    /* (a receiver typed ENV that runs code: the arms below answer from the environment and would drop it) */
+    if (erecv >= 0 && comp_ntype(c, erecv) == TY_ENV && !env_value_recv(c, erecv, TY_ENV))
+      unsupported_feature(c, id, "a call on ENV through an expression that runs code (a method answering ENV) is not supported yet; "
+                                 "hold ENV in a variable or call it on ENV itself");
+    if (env_value_recv(c, erecv, comp_ntype(c, erecv))) {
       const char *enm = nt_str(nt, id, "name");
       int eac = 0; const int *eav = call_args(nt, id, &eac);
       /* a non-String key never converts: TypeError at the call (#2765/#2766) */
@@ -1749,10 +1751,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   }
   /* ENV[key] -> getenv */
   if (recv >= 0 && sp_streq(name, "[]") && argc == 1) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = key_name(c, recv);
-      if (comp_ntype(c, recv) == TY_ENV) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         buf_puts(b, "sp_env_str(getenv("); emit_env_str(c, argv[0], 0, b); buf_puts(b, "))");
         return 1;
       }
@@ -1760,10 +1760,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   }
   /* ENV[key] = value -> setenv (value nil unsets, like CRuby) */
   if (recv >= 0 && sp_streq(name, "[]=") && argc == 2) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (comp_ntype(c, recv) == TY_ENV) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         TyKind evt = comp_ntype(c, argv[1]);
         NodeKind v1k = nt_kind(nt, argv[1]);
         int lit_nil = v1k == NK_NilNode;
@@ -1796,10 +1794,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   /* ENV.size/count/length -> environ entry count */
   if (recv >= 0 && argc == 0 &&
       is_count_alias(name)) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (comp_ntype(c, recv) == TY_ENV) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         buf_puts(b, "sp_env_size()");
         return 1;
       }
@@ -1808,10 +1804,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   /* ENV.key?/has_key?/include?/member?(key) -> getenv presence test */
   if (recv >= 0 && argc == 1 &&
       is_key_query(name)) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (comp_ntype(c, recv) == TY_ENV) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         buf_puts(b, "(getenv("); emit_env_str(c, argv[0], 0, b); buf_puts(b, ") != NULL)");
         return 1;
       }
@@ -1819,10 +1813,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   }
   /* ENV.fetch(key, default) -> getenv with fallback */
   if (recv >= 0 && sp_streq(name, "fetch") && argc >= 1) {
-    NodeKind rty2_k = nt_kind(nt, recv);
-    if (rty2_k == NK_ConstantReadNode) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (comp_ntype(c, recv) == TY_ENV) {
+    {
+      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         /* The call's type is String joined with the default's: a String or
            nil default keeps the nullable string, any other default boxes both
            arms. (The block form is the ENV snapshot's Hash#fetch, #2742.) */

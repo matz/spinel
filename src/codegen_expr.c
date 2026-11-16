@@ -3604,6 +3604,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     if (nm && sp_streq(nm, "RUBY_COPYRIGHT"))   { emit_engine_const_str(c, "sp_str_ruby_copyright", "\"ruby - Copyright (C) 1993-2026 Yukihiro Matsumoto\"", b); return 1; }
     if (nm && sp_streq(nm, "ARGV")) { buf_puts(b, "sp_get_ARGV()"); return 1; }
     if (nm && sp_streq(nm, "ARGF")) { buf_puts(b, "(&sp_argf_obj)"); return 1; }
+    if (nm && is_env_const(nm) && comp_ntype(c, id) == TY_ENV) { buf_puts(b, "(&sp_env_obj)"); return 1; }
     if (nm && sp_streq(nm, "STDOUT")) { buf_puts(b, "sp_io_stdout()"); return 1; }
     if (nm && sp_streq(nm, "STDERR")) { buf_puts(b, "sp_io_stderr()"); return 1; }
     if (nm && sp_streq(nm, "STDIN"))  { buf_puts(b, "sp_io_stdin()"); return 1; }
@@ -3847,6 +3848,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     if (cpcv && cpcv->type != TY_UNKNOWN) { emit_const_slot_read(c, id, cpcv, nm, slot, 1, b); return 1; }
     if (nm && sp_streq(nm, "ARGV")) { buf_puts(b, "sp_get_ARGV()"); return 1; }
     if (nm && sp_streq(nm, "ARGF")) { buf_puts(b, "(&sp_argf_obj)"); return 1; }
+    if (nm && is_env_const(nm) && comp_ntype(c, id) == TY_ENV) { buf_puts(b, "(&sp_env_obj)"); return 1; }
     /* well-known module constants */
     if (par_nmc && sp_streq(par_nmc, "Float") && nm) {
       if (sp_streq(nm, "MAX"))      { buf_puts(b, "DBL_MAX"); return 1; }

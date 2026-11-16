@@ -723,6 +723,7 @@ void *sp_pl_realloc(void *p, size_t newn);   /* lib/sp_slab.c: a slab block know
                                            generator in an Array or a poly slot
                                            keeps its identity; it read as nil */
 /* SP_BUILTIN_ARGF (-51) is in sp_gc.h: the collector must not trace it */
+/* SP_BUILTIN_ENV (-54) too */
 #define SP_BUILTIN_TIME_RANGE    (-52)  /* a Range of Times (sp_TimeRange *) */
 #define SP_BUILTIN_OBJ_RANGE     (-53)  /* a Range of the program's objects (sp_ObjRange *) */
 #define SP_BUILTIN_YIELDER       (-49)  /* Enumerator::Yielder: the generator's

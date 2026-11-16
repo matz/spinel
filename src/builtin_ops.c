@@ -1217,6 +1217,18 @@ static const BuiltinOp bop_rows[] = {
   { TY_ENV, "dup", 0, 0, BF_ANY, TY_POLY, BOPE_NONE },
   { TY_ENV, "clone", 0, 0, BF_ANY, TY_POLY, BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_ENV, "freeze", 0, 0, BF_ANY, TY_POLY, BOPE_NONE },
+  /* ENV is one object: it is equal to itself and to nothing else (a value of
+     another kind is never ENV) */
+  { TY_ENV, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)1)", BOP_K(TY_ENV) },
+  { TY_ENV, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_ENV, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)1)", BOP_K(TY_ENV) },
+  { TY_ENV, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_ENV, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)1)", BOP_K(TY_ENV) },
+  { TY_ENV, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_ENV, "!=", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", BOP_K(TY_ENV) },
+  { TY_ENV, "!=", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)1)", 0 },
+  { TY_ENV, "nil?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (sp_bool)0)", 0 },
+  { TY_ENV, "itself", 0, 0, BF_ANY, TY_ENV, BOPE_TEMPLATE, "$r", 0 },
   /* String range ("a".."e"): the endpoints answer natively (with a count,
      the materialized prefix); every traversal rides the element array
      (#3064). step(n) / %(n) is an Enumerator over every nth member (#3671).

@@ -5253,34 +5253,45 @@ int elab_method_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p, 
   return o == LR_STOP ? ELAB_NO : o;
 }
 
+/* main's singleton class's part of the lookup at p: EMC_MAIN (its prepends and own methods, *out the definition),
+   EMC_CORE (the core's methods main has, main_self_method), EMC_EXTEND (an extended module's, *out), EMC_STOP (an undef
+   there: no method, and none behind it), EMC_NONE (nothing: the lookup goes on into Object's chain), or -1 where the
+   record cannot say (*unsure the grade of what could not be placed: 2 for a mixin that may not have run and holds the
+   name, lr_search_one). */
+static int lr_main_singleton_step(Compiler *c, const char *name, LoadPoint p, const LrDef **out, int *unsure) {
+  int late = p.region < 0;
+  *out = NULL;
+  /* its prepends, then its own table (LR_SHADOW: not its extends); a mixin's undef stops the lookup, as main's own does */
+  int o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, unsure, LR_SHADOW | LR_MIXIN_STOPS);
+  if (*unsure || o == ELAB_UNKNOWN) return -1;
+  if (o == ELAB_YES) return EMC_MAIN;
+  *out = NULL;
+  if (o == LR_STOP) return EMC_STOP;
+  /* an own table no entry has touched by p holds the core's methods of main's (main_self_method: to_s and inspect, and
+     the private include, public, private, define_method, ...), ahead of the extends; a removal took one (or the
+     program's def that replaced it) away, and the search goes on past it */
+  const LrDef *v = NULL;
+  lr_own(c, lr_hist(c->lrec, LR_MAIN, 1, name, 0), NULL, p, late, 0, &v);
+  if (!v && main_self_method(name)) return EMC_CORE;
+  o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, unsure, LR_MIXIN_STOPS);
+  if (*unsure || o == ELAB_UNKNOWN) return -1;
+  if (o == ELAB_YES) return EMC_EXTEND;
+  *out = NULL;
+  return o == LR_STOP ? EMC_STOP : EMC_NONE;
+}
 int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrDef **out) {
   if (out) *out = NULL;
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
-  int late = p.region < 0, unsure = 0;
-  /* its prepends, then its own table (LR_SHADOW: not its extends); a
-     mixin's undef stops the lookup, as main's own does */
-  int o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, LR_SHADOW | LR_MIXIN_STOPS);
-  if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
-  if (o == ELAB_YES) return ELAB_YES;
-  if (out) *out = NULL;
-  if (o == LR_STOP) return ELAB_STOP;   /* an undef there: no method, and none behind it */
-  /* an own table no entry has touched by p holds the core's methods of
-     main's (main_self_method: to_s and inspect, and the private include,
-     public, private, define_method, ...), ahead of the extends; a removal
-     took one (or the program's def that replaced it) away, and the search
-     goes on past it */
-  const LrDef *v = NULL;
-  lr_own(c, lr_hist(c->lrec, LR_MAIN, 1, name, 0), NULL, p, late, 0, &v);
-  if (!v && main_self_method(name)) return ELAB_YES;
-  o = lr_search_one(c, LR_MAIN, 1, name, -1, p, late, 0, out, 0, &unsure, LR_MIXIN_STOPS);
-  if (unsure || o == ELAB_UNKNOWN) return ELAB_UNKNOWN;
-  if (o == ELAB_YES) return ELAB_YES;
-  if (out) *out = NULL;
-  if (o == LR_STOP) return ELAB_STOP;   /* (an extended module's undef) */
-  /* (a point that may run before and after the removal, late: a method's
-     body, reads the core's where nothing past it answers, as live at the
-     load's start) */
-  return late && o == ELAB_NO && main_self_method(name) ? ELAB_YES : ELAB_NO;
+  const LrDef *d = NULL;
+  int unsure = 0, st = lr_main_singleton_step(c, name, p, &d, &unsure);
+  if (st < 0) return ELAB_UNKNOWN;
+  if (st == EMC_STOP) return ELAB_STOP;   /* an undef there (or an extended module's): no method, and none behind it */
+  if (st == EMC_NONE)
+    /* (a point that may run before and after the removal, late: a method's body, reads the core's where nothing past it
+       answers, as live at the load's start) */
+    return p.region < 0 && main_self_method(name) ? ELAB_YES : ELAB_NO;
+  if (out && (st == EMC_MAIN || st == EMC_EXTEND)) *out = d;
+  return ELAB_YES;
 }
 /* See analyze.h. One ancestor's part, then the step it is: a found
    definition's own class tells an extend's or a mixin's module from main's
@@ -5297,21 +5308,14 @@ int elab_main_chain_at(Compiler *c, const char *name, LoadPoint p, int from_obje
   *out = NULL;
   *step = EMC_NONE;
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
-  int unsure = 0, o, late = p.region < 0;
+  int unsure = 0, o;
   const LrDef *d = NULL;
   if (!from_object) {
-    /* main's singleton: its prepends and own methods, the core's own of main's, then its extends */
-    o = lr_main_chain_one(c, LR_MAIN, 1, name, p, LR_SHADOW, &d, &unsure);
-    if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
-    if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
-    if (o == ELAB_YES) { *step = EMC_MAIN; *out = d; return ELAB_YES; }
-    const LrDef *v = NULL;
-    lr_own(c, lr_hist(r, LR_MAIN, 1, name, 0), NULL, p, late, 0, &v);
-    if (!v && main_self_method(name)) { *step = EMC_CORE; return ELAB_YES; }
-    o = lr_main_chain_one(c, LR_MAIN, 1, name, p, 0, &d, &unsure);
-    if (unsure || o == ELAB_UNKNOWN) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
-    if (o == LR_STOP) { *step = EMC_STOP; return ELAB_NO; }
-    if (o == ELAB_YES) { *step = EMC_EXTEND; *out = d; return ELAB_YES; }
+    /* main's singleton class: its prepends and own methods, the core's own of main's, then its extends */
+    int st = lr_main_singleton_step(c, name, p, &d, &unsure);
+    if (st < 0) { if (unsure == 2) *step = EMC_UNSURE; return ELAB_UNKNOWN; }
+    if (st == EMC_STOP) { *step = EMC_STOP; return ELAB_NO; }
+    if (st != EMC_NONE) { *step = st; *out = st == EMC_CORE ? NULL : d; return ELAB_YES; }
   }
   /* Object's prepends, its own entries with main's top-level ones (one table), its includes; then Kernel's
      reopening. A definition of a module's on Object's shadow pass is a prepend's. */

@@ -3080,7 +3080,7 @@ int emit_boxed_recv_call(Compiler *c, int id, Buf *b);
 int diagnose_eval_call(Compiler *c, int id);
 int diagnose_unsupported_call(Compiler *c, int id);
 int cls_value_owns_name(Compiler *c, int id, const char *name);
-int diag_user_defines(Compiler *c, const char *name);
+int diag_user_defines(Compiler *c, int id, const char *name);
 int recv_user_defines(Compiler *c, const char *name);
 int emit_object_ivar_list(Compiler *c, int recv, int cid, Buf *b);
 void emit_object_ivar_remove(Compiler *c, int id, int recv, TyKind rt, int cid, const char *sym, Buf *b);

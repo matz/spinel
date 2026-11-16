@@ -3824,20 +3824,24 @@ static int ct_block_keeps_self(Compiler *c, const char *rn, const char *nm) {
    climb. */
 static int ct_block_self_call(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
-  int n = 0;
+  int n = 0, found = -1;
+  /* (the parents are read in the record's frame, which a node a pass appended since takes the facts of its origin
+     in: outside it, each ask after an append rebuilds the map) */
+  int framed = node >= 0 ? elab_plan_enter(c, node) : 0;
   const int *par = elab_node_parents(c, &n);
   for (int p = node >= 0 && node < n ? par[node] : -1, k = 0; p >= 0 && p < n && k < n; p = par[p], k++) {
     NodeKind pk = nt_kind(nt, p);
-    if (pk == NK_DefNode || pk == NK_ClassNode || pk == NK_ModuleNode || pk == NK_SingletonClassNode) return -1;
-    if (pk == NK_LambdaNode) return p;
+    if (pk == NK_DefNode || pk == NK_ClassNode || pk == NK_ModuleNode || pk == NK_SingletonClassNode) break;
+    if (pk == NK_LambdaNode) { found = p; break; }
     int call = pk == NK_BlockNode ? par[p] : -1;
     if (call < 0 || call >= n || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != p) continue;
     int rv = nt_ref(nt, call, "receiver");
     const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
     const char *nm = nt_str(nt, call, "name");
-    if (is_block_self_call(rn, nm) || !ct_block_keeps_self(c, rn, nm)) return call;
+    if (is_block_self_call(rn, nm) || !ct_block_keeps_self(c, rn, nm)) { found = call; break; }
   }
-  return -1;
+  if (framed) elab_plan_leave(c);
+  return found;
 }
 static int ct_runs_on_main(Compiler *c, int id);
 /* Does call id on main, of `nm`, reach the builtin: no method of the
@@ -3890,10 +3894,13 @@ int cplan_runs_on_main(Compiler *c, int id) { return ct_runs_on_main(c, id); }
    does not place (a block given in a call's arguments) makes no entry. */
 static int ct_main_own(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
+  /* (the point is read in the record's frame, as ct_version reads it: outside it, every call a pass asks after
+     appending a node rebuilds the map) */
+  int framed = elab_plan_enter(c, id);
   LoadPoint p = elab_point_of(c, id);
-  if (p.region < 0) return 1;
-  int s = elab_main_singleton_at(c, name, p, &d);
-  if (s == ELAB_UNKNOWN || (s == ELAB_YES && d && d->scope > 0 && c->scopes[d->scope].class_id < 0)) return 1;
+  int s = p.region < 0 ? ELAB_YES : elab_main_singleton_at(c, name, p, &d);
+  if (framed) elab_plan_leave(c);
+  if (p.region < 0 || s == ELAB_UNKNOWN || (s == ELAB_YES && d && d->scope > 0 && c->scopes[d->scope].class_id < 0)) return 1;
   /* (an undef: where a program method_missing keeps it from stopping the
      call, ct_main_stopped, main's own method is gone all the same) */
   if (s != ELAB_NO && s != ELAB_STOP) return -1;
@@ -3919,8 +3926,11 @@ static int ct_on_main(Compiler *c, int id, const char *name) {
 static int ct_main_stopped(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
   if (!ct_runs_on_main(c, id)) return 0;
+  int framed = elab_plan_enter(c, id);
   LoadPoint p = elab_point_of(c, id);
-  if (p.region < 0 || elab_main_singleton_at(c, name, p, &d) != ELAB_STOP) return 0;
+  int stop = p.region >= 0 && elab_main_singleton_at(c, name, p, &d) == ELAB_STOP;
+  if (framed) elab_plan_leave(c);
+  if (!stop) return 0;
   /* (a program method_missing main reaches, its singleton's or Object's,
      answers the call instead: not told apart here, so none stops) */
   return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, -1, 0) < 0;
@@ -4057,8 +4067,13 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
     if (ml) ml->kind = ML_NONE;
     return -1;
   }
-  if ((*flags & CT_TOP) && id >= 0 && main_singleton_method(name) && ct_runs_on_main(c, id) &&
-      elab_main_singleton_at(c, name, elab_point_of(c, id), &d) == ELAB_YES && !d) {
+  int sg = 0;
+  if ((*flags & CT_TOP) && id >= 0 && main_singleton_method(name) && ct_runs_on_main(c, id)) {
+    int framed = elab_plan_enter(c, id);
+    sg = elab_main_singleton_at(c, name, elab_point_of(c, id), &d) == ELAB_YES && !d;
+    if (framed) elab_plan_leave(c);
+  }
+  if (sg) {
     if (ml) ml->kind = ML_SINGLETON;
     return -1;
   }
@@ -6611,7 +6626,7 @@ static int limit_exempt(Compiler *c, int id, int lx) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   switch (lx) {
-  case LX_NAME: return diag_user_defines(c, name);
+  case LX_NAME: return diag_user_defines(c, id, name);
   case LX_RECV_CMETHOD: {
     int recv = nt_ref(nt, id, "receiver");
     NodeKind rk = nt_kind(nt, recv);

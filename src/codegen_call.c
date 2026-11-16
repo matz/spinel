@@ -2941,9 +2941,9 @@ int cls_value_owns_name(Compiler *c, int id, const char *name) {
   return 0;
 }
 
-int diag_user_defines(Compiler *c, const char *name) {
+int diag_user_defines(Compiler *c, int id, const char *name) {
   if (comp_name_is_shadow_copy(c, name, SHADOW_PREP)) return 0;
-  return recv_user_defines(c, name) || comp_method_index(c, name) >= 0;
+  return recv_user_defines(c, name) || call_target(c, id, -1, name, CT_TOP, NULL) >= 0;
 }
 
 /* diag_user_defines for a call with an explicit receiver: a top-level def
@@ -4541,7 +4541,7 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
   int src_is_range = (sr.range == TY_INT), src_is_intarr = (sr.elem == TY_INT);
   int src_is_enum = (st == TY_ENUMERATOR);
   /* a boxed source streams as an Enumerator over it (sp_poly_lazy_src) */
-  int src_is_poly = (st == TY_POLY && !diag_user_defines(c, "lazy"));
+  int src_is_poly = (st == TY_POLY && !diag_user_defines(c, id, "lazy"));
   if (src_is_poly) src_is_enum = 1;
   /* a String Range streams the same way once boxed, an endless one by succ */
   int src_is_srange = (st == TY_STR_RANGE);
@@ -25770,7 +25770,7 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
          constant), its `lazy` reached no method at run time, where CRuby's
          collection answers one: refused here, naming the line (#9160). */
       if (nm && sp_streq(nm, "lazy") && recv >= 0 && nt_ref(nt, id, "block") < 0 &&
-          nt_ref(nt, id, "arguments") < 0 && !diag_user_defines(c, "lazy") &&
+          nt_ref(nt, id, "arguments") < 0 && !diag_user_defines(c, id, "lazy") &&
           (ty_is_array(grt) || ty_is_hash(grt) || grt == TY_RANGE || grt == TY_FLOAT_RANGE ||
            grt == TY_STR_RANGE || grt == TY_ENUMERATOR))
         unsupported(c, id, "a lazy chain held in an instance, class or global variable or a "

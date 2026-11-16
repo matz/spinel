@@ -25,6 +25,8 @@ src/analyze.c:ur_iter_overridden
 src/analyze.c:synth_enum_to_a
 src/analyze.c:synth_struct_each
 src/analyze.c:synth_to_enum_generators
+src/analyze.c:bsu_own_method
+src/analyze.c:desugar_builtin_method_obj
 src/analyze_desugar.c:desugar_array_at
 src/analyze_desugar.c:desugar_array_first_last
 src/analyze_desugar.c:desugar_enum_walk_calls

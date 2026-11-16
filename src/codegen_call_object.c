@@ -2915,7 +2915,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         nt_ref(nt, id, "block") < 0) {
       int ac0 = 0; call_args(nt, id, &ac0);
       TyKind irt0 = comp_ntype(c, nt_ref(nt, id, "receiver"));
-      if (ac0 == 0 && !diag_user_defines(c, "itself") &&
+      if (ac0 == 0 && !diag_user_defines(c, id, "itself") &&
           /* a generated READER of the name owns it, as in CRuby (#4190) */
           !(ty_is_object(irt0) &&
             call_attr_target(c, -1, ty_object_class(irt0), "itself", 0, NULL))) {
@@ -2963,7 +2963,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
     /* a boolean has no #=~ (so #!~ fails the same way): CRuby's NoMethodError.
        A program that REOPENS TrueClass/FalseClass with its own #=~ keeps it. */
     if (nm0 && (is_match_operator(nm0)) && ac0 == 1 && rt0 == TY_BOOL &&
-        !diag_user_defines(c, "=~")) {
+        !diag_user_defines(c, id, "=~")) {
       int t1 = ++g_tmp;
       buf_printf(b, "({ sp_int _t%d = ", t1); emit_expr(c, rv0, b);
       buf_printf(b, "; (void)("); emit_expr_for_effect(c, av0[0], b);

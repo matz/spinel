@@ -322,7 +322,7 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    NULL for none; written by cplan_super_target only.
    kind is read by cplan_resolve_super, cplan_presence, cplan_implied_target,
    cplan_boxed_to_ary_classes and cplan_main_singleton_call, and ML_OBJECT by
-   cplan_missing and method_obj_lookup; why by the method-table check
+   cplan_missing and method_obj_lookup, ML_BUILTIN by cplan_missing; why by the method-table check
    (mtab_table), and an ML_NONE's (MLW_RECORD) by cplan_presence.
    ML_SINGLETON: a call on main that main's own singleton answers by the
    core's method it has from the start (`to_s`, `inspect`:
@@ -331,8 +331,13 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    Struct member) and no method of the instance side's chain ranks ahead of
    it, as CRuby's lookup finds the nearer definition (a def of the same
    class wins a tie); the scope is -1, def_class the class that declares
-   the attribute. Asked with CT_WRITER, the writer. */
-typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, ML_ATTR } MlKind;
+   the attribute. Asked with CT_WRITER, the writer. ML_BUILTIN: the call
+   binds the builtin's own method of the name it asks (cplan_builtin_call),
+   whatever the program defines under it; the scope is -1. A reader that
+   proves a method absent (cplan_missing) reads it as answered. Never for a
+   CT_REACH, CT_CAPTURE or CT_IMPLIED ask, or a name the call does not call
+   itself. */
+typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, ML_ATTR, ML_BUILTIN } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
    with no version, and no entry (MANY); a version the plan cannot map

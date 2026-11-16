@@ -3874,8 +3874,11 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
 }
 static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, int comparable) {
   /* the table's answer at the call: the program's method or reader anywhere in the chain, whatever its visibility (a
-     private def comes first in a lookup too); with no call (-1) a no-site ask of the program-wide dispatchers */
-  int tbl = !call_answers(c, id, cid, name, CT_NOFACE | (id < 0 ? CT_SHARED : 0), NULL);
+     private def comes first in a lookup too); with no call (-1) a no-site ask of the program-wide dispatchers. A call that
+     binds the builtin's own method (cplan_builtin_call) asks no site: its answer none (call_target's ML_BUILTIN) is not the
+     program's method the Enumerable-first rewrite is asked about, which the class's own def of the name gives */
+  int at = id >= 0 && cplan_builtin_call(c, id) ? -1 : id;
+  int tbl = !call_answers(c, at, cid, name, CT_NOFACE | (at < 0 ? CT_SHARED : 0), NULL);
   if (cid < 0 || cid >= c->nclasses || !name) return tbl;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
   if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return tbl;

@@ -4698,6 +4698,27 @@ static void ct_attr_point(Compiler *c, int id, int cls, unsigned flags, const ch
   }
   if (g_method_table_check) mtab_table(c, id, cls, flags, name, MLW_ACCESSOR);
 }
+/* Is call id inside a native twin's def (desugar_native_func_defs), the call
+   into C it makes? Its builtin_only record means "never back into this def",
+   not the builtin's own method. */
+static int ct_native_twin_call(Compiler *c, int id) {
+  const Scope *s = comp_scope_of(c, id);
+  return comp_scope_native_twin(c, (int)(s - c->scopes));
+}
+/* Does call id, asked for name, bind the builtin's own method (ML_BUILTIN)?
+   Only the name the call itself calls: a send's sent name, a reach (super's
+   lookup), a capture and an implied call are other asks. Not main's own text
+   (cplan_main_text_call): that call is flagged for the same reason, and main's
+   singleton answers it (ML_SINGLETON), as the plan's question about it asks.
+   Nor the forward a program's Array#concat keeps as its builtin version
+   (desugar_concat_builtin_version): the version tables bind it to that
+   version, whose parameter its argument types. */
+static int ct_builtin_own(Compiler *c, int id, const char *name, unsigned flags) {
+  if (id < 0 || !name || (flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) || !cplan_builtin_call(c, id) ||
+      cplan_main_text_call(c, id) || nt_int(c->nt, id, "concat_builtin_version", 0)) return 0;
+  const char *own = nt_str(c->nt, id, "name"), *orig = nt_str(c->nt, id, "orig_name");
+  return ((own && sp_streq(own, name)) || (orig && sp_streq(orig, name))) && !ct_native_twin_call(c, id);
+}
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
   MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
   int dc0 = ml->def_class, mi = -1, pin, r;
@@ -4714,6 +4735,10 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   *ml = (MethodLookup){ .def_class = dc0 };
   if (ct_send_shadow(c, id, name)) {
     ml->kind = ML_NONE;
+    r = -1;
+  }
+  else if (ct_builtin_own(c, id, name, flags)) {
+    ml->kind = ML_BUILTIN;
     r = -1;
   }
   else if ((mi = ct_lookup_object_top(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (flags & CT_INCLUDED) ||
@@ -5742,9 +5767,9 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   int cm = ci >= 0 && call_target(c, -1, ci, name, CT_CMETHOD, NULL) >= 0;
   int top = (ci < 0 || recv < 0) && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0;
   int oc = top && ci < 0 ? comp_core_class(c, CORE_OBJECT) : -1;
-  MethodLookup tl = { .def_class = -1 };   /* (ML_OBJECT: Object's method answers the call) */
-  if ((!cm && !top) || (cm && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) ||
-      (top && (call_target(c, id, -1, name, CT_TOP, &tl) >= 0 || tl.kind == ML_OBJECT)))
+  MethodLookup cl = { .def_class = -1 }, tl = { .def_class = -1 };   /* (ML_OBJECT: Object's method answers the call; ML_BUILTIN: the builtin's) */
+  if ((!cm && !top) || (cm && (call_target(c, id, ci, name, CT_CMETHOD, &cl) >= 0 || cl.kind == ML_BUILTIN)) ||
+      (top && (call_target(c, id, -1, name, CT_TOP, &tl) >= 0 || tl.kind == ML_OBJECT || tl.kind == ML_BUILTIN)))
     return CM_NONE;
   /* (a call on main that main's own method does not answer where it runs,
      removed or not yet defined, reaches Object's chain: ct_lookup) */

@@ -1614,8 +1614,9 @@ int cplan_class_value_allocate(Compiler *c, int id);
 /* The class method of program class ci that call id, named name, runs:
    for a `new` the one cplan_user_new answers (none where the builtin
    constructor answers a call before the class's `def self.new`), for any
-   other name the one call_target finds there. */
-int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name);
+   other name the one call_target finds there, with flags (CT_OWN: the
+   class's own method) added to its side. */
+int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name, unsigned flags);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

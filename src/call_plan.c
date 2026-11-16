@@ -1189,7 +1189,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;   /* a class body's self */
   if (sci >= 0 || bci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     int ci = sci >= 0 ? sci : bci >= 0 ? bci : const_node_class_index(c, recv);
-    int mi = ci < 0 ? -1 : cplan_cmethod_target(c, id, ci, name);
+    int mi = ci < 0 ? -1 : cplan_cmethod_target(c, id, ci, name, 0);
     /* a package's native_func, which the constant calls in C directly; its
        def is for the module reached as a value */
     if (sci < 0 && comp_scope_native_twin(c, mi)) return;
@@ -4126,8 +4126,8 @@ int cplan_class_value_allocate(Compiler *c, int id) {
   return 1;
 }
 /* See call_plan.h. */
-int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name) {
-  return is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
+int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name, unsigned flags) {
+  return is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD | flags, NULL);
 }
 /* Is call id a `new` (or a record class's `[]`) on a record class whose
    target the record cannot place (user_new_at)? The class is the
@@ -5777,7 +5777,7 @@ const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *c
   const char *a;
   for (int i = 0; cop && (a = builtin_ancestor_at(cls, i)); i++) {
     int ci = comp_class_index(c, a);
-    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return NULL;
+    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name, 0) >= 0) return NULL;
     if (sp_streq(a, cop->cls)) break;
   }
   return cop;

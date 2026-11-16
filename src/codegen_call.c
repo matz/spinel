@@ -21794,7 +21794,7 @@ static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char
   for (int i = 0; a; a = builtin_ancestor_at(cls, ++i)) {
     if (i > 0 && is_builtin_module_name(a)) continue;
     int ci = i > 0 ? comp_class_index(c, a) : -1;
-    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
+    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name, 0) >= 0) return 0;
     if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name, 0)) {
       if (kwh && !hash_counted(c, id, a, name, 1, argc)) return 0;
       return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);

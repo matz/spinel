@@ -2005,7 +2005,7 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
     /* a Struct member of a Struct with no initialize of its own is set by
        the constructor's arguments, which struct_new_types_members_at widens
        with it or, where they cannot widen, keeps the member boxed */
-    int member = ci->is_struct && iv >= 0 && iv < ci->nmembers && comp_method_in_chain(c, dc, "initialize", NULL) < 0;
+    int member = ci->is_struct && iv >= 0 && iv < ci->nmembers && cplan_hook_target(c, -1, dc, "initialize", NULL) < 0;
     if (iv < 0 || class_ivar_pinned(ci, ivn) || ci->ivar_int_table[iv] ||
         reader_ivar_set_outside(c, dc, ivn) || (!member && !ivar_writes_fresh(c, dc, ivn, 0, NULL))) return 0;
     out->slot = &ci->ivar_types[iv]; out->cid = dc; out->iv = iv; out->reader = 1;
@@ -12466,7 +12466,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (!static_cls && infer_type(c, recv) == TY_CLASS) {
         int bound_any = 0;
         for (int k = 0; k < c->nclasses; k++) {
-          int cmi = is_new_name(name) ? cplan_user_new(c, id, k) : call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL);
+          int cmi = cplan_cmethod_target(c, id, k, name, CT_OWN);
           if (cmi >= 0) { changed |= bind_call_params(c, id, cmi); bound_any = 1; }
         }
         if (bound_any) continue;

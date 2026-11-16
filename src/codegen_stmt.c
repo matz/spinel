@@ -20451,9 +20451,9 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
     buf_printf(b, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", k, tr, k, tr);
     if (rest_arr_t == TY_POLY_ARRAY) {
       for (int i = rstart; i < rend; i++) {
-        char tmp_expr[32]; snprintf(tmp_expr, sizeof tmp_expr, "_t%d", tmps[i]);
+        /* (a number that can be nil boxes with it: emit_boxed_tmp) */
         Buf bx; memset(&bx, 0, sizeof bx);
-        emit_boxed_text(c, tmpts[i], tmp_expr, &bx);
+        emit_boxed_tmp(c, tmpts[i], tmps[i], &bx);
         emit_indent(b, indent);
         buf_printf(b, "sp_PolyArray_push(_t%d, %s);\n", tr, bx.p ? bx.p : "sp_box_nil()");
         free(bx.p);
@@ -20465,8 +20465,27 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
       int sb = rest_arr_t == TY_STR_ARRAY;
       for (int i = rstart; i < rend; i++) {
         emit_indent(b, indent);
-        buf_printf(b, sb ? "sp_%sArray_push%s(_t%d, SP_STR_B(_t%d));\n" : "sp_%sArray_push%s(_t%d, _t%d);\n",
-                   k, nil_store_sfx(c, k, els[i]), tr, tmps[i]);
+        /* a number that can be nil is stored with its nil from its oint
+           `_tNo` (the _nilable store takes the sp_oint); without one, the
+           value held is the plain number */
+        char te[32]; snprintf(te, sizeof te, "_t%d", tmps[i]);
+        const char *sfx = nil_store_sfx(c, k, els[i]);
+        if (sfx[0] && !sb && masgn_oint_temp(te) >= 0) {
+          /* (converted to the Array's kind: an Integer into a Float Array) */
+          Buf ov; memset(&ov, 0, sizeof ov);
+          masgn_conv_o(c, ty_array_elem(rest_arr_t), tmpts[i], te, &ov);
+          buf_printf(b, "sp_%sArray_push%s(_t%d, %s);\n", k, sfx, tr, ov.p ? ov.p : "");
+          free(ov.p);
+        }
+        /* a boxed value (a number under --int-overflow=promote) goes in
+           checked against the element's kind, its nil with it, as a store
+           takes one (emit_elem_store_value) */
+        else if (!sb && tmpts[i] == TY_POLY && (sp_streq(k, "Int") || sp_streq(k, "Float")))
+          buf_printf(b, "sp_%sArray_push_nilable(_t%d, %s(_t%d));\n", k, tr,
+                     sp_streq(k, "Float") ? "sp_poly_elem_f" : "sp_poly_elem_i", tmps[i]);
+        else
+          buf_printf(b, sb ? "sp_%sArray_push%s(_t%d, SP_STR_B(_t%d));\n" : "sp_%sArray_push%s(_t%d, _t%d);\n",
+                     k, sfx[0] && !sb ? "" : sfx, tr, tmps[i]);
       }
     }
     char rx[32]; snprintf(rx, sizeof rx, "_t%d", tr);

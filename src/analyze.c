@@ -11754,9 +11754,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
       int kcall = nt_new_node(nt, "CallNode");
       nt_node_set_str(nt, kcall, "name", ksym);
       nt_node_set_ref(nt, kcall, "arguments", kargs);
-      /* (a class method's capture of Module's const_get is the builtin's, whatever the class defines afterwards) */
-      if (kcls >= 0) nt_mark_builtin_call(nt, kcall);
+      /* (a class method's capture of Module's const_get is the builtin's, whatever the class defines afterwards; a Kernel
+         function's wrapper calls Kernel's own, not a singleton method of the program's on Kernel) */
       if (kcls >= 0 || kern) {
+        nt_mark_builtin_call(nt, kcall);
         int krecv = nt_new_node(nt, "ConstantReadNode");
         nt_node_set_str(nt, krecv, "name", kcls >= 0 ? c->classes[kcls].name : "Kernel");
         nt_node_set_ref(nt, kcall, "receiver", krecv);

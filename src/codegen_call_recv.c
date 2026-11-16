@@ -16716,9 +16716,11 @@ static int aref_arg_in_place(const NodeTable *nt, int a) {
    reads each argument as the type the compiler gave the member it fills.
    Answers 1 when some argument's type is another type, or is not known, so
    that class is left to the `[]` the value took before. */
-static int aref_arg_mistyped(Compiler *c, int id, int ci, const int *argv, int argc) {
+static int aref_arg_mistyped(Compiler *c, int ci, const int *argv, int argc) {
   ClassInfo *k = &c->classes[ci];
-  if (cplan_new_arm_initialize(c, id, ci) >= 0) return 0;
+  /* (the table's initialize types the members: the members of a class that has none at the call would be typed
+     from this call's arguments, which needs the classes the boxed receiver may hold) */
+  if (cplan_hook_target(c, -1, ci, "initialize", NULL) >= 0) return 0;
   for (int j = 0; j < argc && j < k->nreaders; j++) {
     char mvn[300]; snprintf(mvn, sizeof mvn, "@%s", k->readers[j]);
     int mvi = comp_ivar_index(k, mvn);
@@ -16762,7 +16764,7 @@ int emit_boxed_class_aref(Compiler *c, int id, Buf *b) {
     unsigned char *only = calloc((size_t)c->nclasses, 1);
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (!cplan_aref_builds(c, id, ci)) continue;
-      if (aref_arg_mistyped(c, id, ci, argv, argc)) continue;
+      if (aref_arg_mistyped(c, ci, argv, argc)) continue;
       if (!ncls) tsv = ++g_tmp;
       buf_printf(&ids, "%s_t%d.cls_id == %d", ncls++ ? " || " : "", tsv, ci);
       only[ci] = 1;

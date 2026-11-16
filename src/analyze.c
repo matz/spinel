@@ -56789,6 +56789,22 @@ static void an_phase_enum_late(Compiler *c) {
 /* A call desugar_env_enum moved onto ENV's snapshot through a variable that held ENV and nothing else when it
    ran: the variable's type is the fixpoint's last now, and one that widened past TY_ENV (a Hash assigned to it in a
    later round) may hold another value, whose call the snapshot does not answer. Refused, not answered from ENV. */
+/* Is ENV used as a value anywhere (a read of the constant that is no call's
+   receiver)? Then a boxed value may be ENV, and a call on one reads it
+   through the environment (emit_call, sp_env_box_read); a program that only
+   calls ENV's methods on ENV itself has no such value and no such read. */
+static void an_env_value_flows(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  c->env_value_flows = 0;
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, id) {
+    if (!is_env_const(nt_str(nt, id, "name")) || infer_type(c, id) != TY_ENV) continue;
+    int p = par ? par[id] : -1;
+    if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id) continue;
+    c->env_value_flows = 1;
+    return;
+  }
+}
 static void an_env_value_recv_check(Compiler *c) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_CallNode, u) {
@@ -56876,6 +56892,7 @@ void analyze_program(Compiler *c) {
   AN_PHASE("value_types", an_phase_value_types(c));
   AN_PHASE("mutated_answers", an_phase_mutated_answers(c));
   AN_PHASE("env_value_recv_check", an_env_value_recv_check(c));
+  AN_PHASE("env_value_flows", an_env_value_flows(c));
   AN_PHASE("reconcile_check", an_phase_reconcile_check(c));
   /* once more on the settled types, which tell a builtin receiver's call
      from a program method's (cr_recv_builtin_value) */

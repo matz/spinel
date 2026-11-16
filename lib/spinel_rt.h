@@ -1562,11 +1562,17 @@ sp_Argf sp_argf_obj = {NULL, 0, NULL};   /* type in sp_argf.h */
 #ifndef SPINEL_EXT_HOST
 sp_env_object sp_env_obj = {0};
 #endif
-/* ENV boxed: for now the environment's snapshot as a String Hash, the value a
-   use of ENV as a value was before it had a kind of its own (#11340) */
-static inline sp_RbVal sp_box_env(sp_env_object *e) {
-  (void)e;
-  return sp_box_nullable_obj((void *)sp_env_value(), SP_BUILTIN_STR_STR_HASH);
+/* ENV boxed: the one object under its own class id, so it keeps its
+   identity in a slot that holds other values too (#11340) */
+static inline sp_RbVal sp_box_env(sp_env_object *e) { return sp_box_obj((void *)e, SP_BUILTIN_ENV); }
+/* A call on a boxed value that may be ENV reads ENV through a String Hash of
+   the environment taken at the call (its marked snapshot, whose stores,
+   deletes and clear go on to the environment, lib/sp_hash.c): the boxed
+   dispatch's Hash arms then answer it as ENV's own read would. Any other
+   value is itself. */
+static inline sp_RbVal sp_env_box_read(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENV) return sp_box_obj((void *)sp_env_value(), SP_BUILTIN_STR_STR_HASH);
+  return v;
 }
 
 /* Mark active in-flight exception messages. Most raises pass string

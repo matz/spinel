@@ -1143,21 +1143,21 @@ The other hash's boxed keys and values are left to the store, which raises
 with a default, keyword or post-rest parameter, into a Hash a call widened for
 such a merge, is refused.
 
-#### ENV mixed with other values in one place is a snapshot
+#### ENV as a value
 
-`ENV` held where nothing else is held (`x = ENV`, `def m(env = ENV)`,
-`@env = ENV`, `lookup(ENV)`) is ENV itself: reads see the variables set
-later, writes through it change the process environment, and
-`x.equal?(ENV)` is true. A call on it that runs code to find it (a method
-that answers ENV) is refused: hold ENV in a variable, or call ENV itself.
+`ENV` used as a value is ENV itself, held alone (`x = ENV`,
+`def m(env = ENV)`, `@env = ENV`) or beside values of other classes
+(`params["e"] = ENV`, `[ENV].first`, a method that answers ENV or a Hash):
+reads see the variables set later, writes through it change the process
+environment, and it is `equal?` to ENV. A call on ENV through an
+expression that runs code to find it (a method that answers ENV and
+nothing else, called and used on the spot) is refused: hold the value in a
+variable, or call ENV itself.
 
-Where ENV shares a place with values of other classes (`params["e"] = ENV`
-in a Hash of Strings and ENV, `[ENV].first`, a method that answers ENV or a
-Hash), it is still a Hash of the environment taken where it is put there.
-Reads through it answer as CRuby's do for the variables set at that point.
-It does not see variables set later, writing through it (`env["K"] = "v"`)
-changes the Hash, not the process environment, and its class is Hash, not
-Object.
+Where ENV shares a place with other values, a call on that place reads
+ENV through a String Hash of the environment taken at the call, whose
+stores and deletes (`[]=`, `store`, `update`, `delete`, `reject!`,
+`replace`, `clear`, `shift` and the rest) go on to the environment.
 
 #### A String's in-place change through a `Method` or a lazy stage
 

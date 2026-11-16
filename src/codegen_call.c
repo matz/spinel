@@ -31177,7 +31177,40 @@ static int emit_call_on_missing_builtin_path(Compiler *c, int id, Buf *b) {
   buf_printf(b, "), %s)", default_value_from_compiler(c, repr_of(c, id).as_ty));
   return 1;
 }
+/* A call on a boxed value that may be ENV (env_value_flows) reads it
+   through the environment's String Hash taken at the call: the receiver is
+   held once, in the prelude, as sp_env_box_read makes it (ENV's box turned
+   into that Hash, any other value itself), and the call is the one it was
+   on that held value. The names that ask the object itself keep it. */
+static int g_env_read_skip = -1;
+static int env_box_keeps_name(const char *n) {
+  static const char *const K[] = { "equal?", "eql?", "==", "!=", "===", "object_id", "__id__", "class",
+                                   "frozen?", "nil?", "is_a?", "kind_of?", "instance_of?", "to_s", "hash",
+                                   "itself", "respond_to?", NULL };
+  for (int i = 0; K[i]; i++) if (sp_streq(n, K[i])) return 1;
+  return 0;
+}
+static int emit_call_env_box_read(Compiler *c, int id, Buf *b) {
+  int rv = nt_ref(c->nt, id, "receiver");
+  const char *nm = nt_str(c->nt, id, "name");
+  if (!c->env_value_flows || g_env_read_skip == id || rv < 0 || !nm || env_box_keeps_name(nm) ||
+      repr_of(c, rv).kind != RK_BOXED || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
+  int t = ++g_tmp;
+  Buf rb; memset(&rb, 0, sizeof rb);
+  emit_expr(c, rv, &rb);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_RbVal _t%d = sp_env_box_read(%s); SP_GC_ROOT_RBVAL(_t%d);\n", t, rb.p ? rb.p : "sp_box_nil()", t);
+  free(rb.p);
+  int mk = view_bind_temp(rv, t);
+  int sv = g_env_read_skip;
+  g_env_read_skip = id;
+  emit_call(c, id, b);
+  g_env_read_skip = sv;
+  view_unbind(mk);
+  return 1;
+}
 void emit_call(Compiler *c, int id, Buf *b) {
+  if (emit_call_env_box_read(c, id, b)) return;
   if (sp_streq(nt_str(c->nt, id, "name"), "===") &&
       emit_undefined_const_test(c, nt_ref(c->nt, id, "receiver"), repr_of(c, id).as_ty, b)) return;
   /* a String, Integer or Float that may be nil, for a name the program's

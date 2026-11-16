@@ -1673,6 +1673,7 @@ typedef struct {
   int ntoplevel_includes;
   unsigned char *toplevel_extends;  /* per entry: 1 for `extend` (main alone), 0 for `include` */
   int has_include_math;    /* program has `include Math`: expose bare PI/E/fns */
+  int env_value_flows;   /* ENV is used as a value somewhere, so a boxed value may be ENV (an_env_value_flows) */
   /* some store in the program can put a nil VALUE into a typed Hash of this
      Integer-valued kind (hash_vals_nullable, DESIGN.md D3b-ii) */
   unsigned char hash_vnil_str_int, hash_vnil_int_int;

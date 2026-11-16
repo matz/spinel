@@ -6570,13 +6570,24 @@ static void emit_forwarded_block_value(Compiler *c, int id, Buf *b) {
   if (optional) buf_puts(b, ")");
 }
 
+/* The receiver temp of an index-or/and-write is the container's only holder once the index or the
+   value drops it (an assignment of the variable that held it, a delete), and a receiver that
+   allocates has no holder at all: root it when either can, so the value's allocations and the
+   store reach a live container */
+static void emit_index_recv_root(Compiler *c, TyKind irt, int ir, int idx, int iv, int ta, Buf *b) {
+  if (subtree_may_allocate(c, ir) || subtree_has_side_effect(c, idx) || subtree_has_side_effect(c, iv)) {
+    emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " ");
+  }
+}
+
 /* `a[i] ||= v` / `a[i] &&= v` on a String Array: the slot is read as the handle the Array
    holds, a write takes the value's handle (the row's hold) and stores that one, and the
    expression answers its bytes: the String the Array holds, so a consumer that takes the
    bytes face reaches the stored String, as the Hash's form below does */
 static void emit_index_or_str_array(Compiler *c, int ir, int idx, int iv, TyKind irt, int is_or, int ta, int tb, int tc, Buf *b) {
-  buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_expr(c, ir, b);
-  buf_printf(b, "; sp_int _t%d = ", tb); emit_int_expr(c, idx, b);
+  buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_expr(c, ir, b); buf_puts(b, "; ");
+  emit_index_recv_root(c, irt, ir, idx, iv, ta, b);
+  buf_printf(b, "sp_int _t%d = ", tb); emit_int_expr(c, idx, b);
   buf_printf(b, "; sp_String *_t%d = sp_StrArray_get_e(_t%d, _t%d);", tc, ta, tb);
   buf_printf(b, " if (%s_t%d) { ", is_or ? "!" : "", tc);
   Buf rvb; memset(&rvb, 0, sizeof rvb);
@@ -6875,13 +6886,9 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       TyKind kt = ty_hash_key(irt);
       TyKind vt = ty_hash_val(irt);
       if (!hn) { unsupported(c, id, "index-or/and-write (expr, unknown hash)"); return; }
-      /* The receiver's temp is the hash's only holder once the key or the
-         value drops it, and a key that can allocate has no holder at all:
-         root the receiver when either can -- a call, a write -- and the key
-         when it can allocate, as the statement form does. */
-      int drops = subtree_has_side_effect(c, iav[0]) || subtree_has_side_effect(c, iv);
+      /* (the key, when it can allocate, is rooted below, as the statement form does) */
       buf_printf(b, "({ %s _t%d = ", c_type_name(irt), ta2); emit_expr(c, ir, b); buf_puts(b, "; ");
-      if (subtree_may_allocate(c, ir) || drops) { emit_gc_root_tmp(c, irt, ta2, b); buf_puts(b, " "); }
+      emit_index_recv_root(c, irt, ir, iav[0], iv, ta2, b);
       /* a key that may be nil or of another class: held boxed, the read
          misses on it and the store converts it (hash_opw_okey) */
       int ok = hash_opw_okey(c, iav[0], irt);

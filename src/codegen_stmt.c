@@ -5457,11 +5457,14 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
      new handle below, as any other bytes; aliased, the handle slot took a
      `const char *`) */
   /* (nor is a String literal, typed the handle where it fills one -- the
-     arm of `s || "lit"` -- which renders as its bytes, #10350; an
-     interpolated one renders as the handle) */
+     arm of `s || "lit"` -- which renders as its bytes, #10350; nor an
+     interpolation, which builds its bytes (emit_interp) whatever its type:
+     typed the handle where an extension's demand reached the slot it fills
+     (`opaque = "#{opaque}?#{query}"` in URI's parser, beside a package
+     with a C extension), the slot took a `const char *`) */
   else if (rpv.as_ty == TY_STRBUF && !fresh &&
            nt_kind(c->nt, v) != NK_BackReferenceReadNode && nt_kind(c->nt, v) != NK_NumberedReferenceReadNode &&
-           nt_kind(c->nt, v) != NK_StringNode &&
+           nt_kind(c->nt, v) != NK_StringNode && nt_kind(c->nt, v) != NK_InterpolatedStringNode &&
            (nt_kind(c->nt, v) != NK_CallNode || strbuf_marked_yields_handle(c, v))) {
     emit_expr(c, v, b);
   }

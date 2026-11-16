@@ -205,7 +205,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     /* #inspect on an exception subclass is "#<Class: message>"; the generic
        object renderer had no idea and printed "#<Object>" (#3713) */
     if (sp_streq(name, "inspect") && argc == 0 &&
-        comp_method_in_chain(c, ty_object_class(comp_ntype(c, recv)), "inspect", NULL) < 0) {
+        call_target(c, -1, ty_object_class(comp_ntype(c, recv)), "inspect", CT_METHODS | CT_SHARED, NULL) < 0) {
       buf_puts(b, "sp_exc_inspect((void *)("); emit_expr(c, recv, b); buf_puts(b, "))");
       return 1;
     }

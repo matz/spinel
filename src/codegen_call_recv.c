@@ -17043,11 +17043,11 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   if ((sp_streq(name, "arg") || sp_streq(name, "angle") || sp_streq(name, "phase") ||
        sp_streq(name, "rect") || sp_streq(name, "rectangular") || sp_streq(name, "polar")) && argc == 0) {
     int has_user = 0;
-    if (!g_poly_builtin_arm)
-    for (int kk = 0; kk < c->nclasses && !has_user; kk++)
-      if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-          (!c->classes[kk].is_native_class && call_attr_target(c, -1, kk, name, CT_ATTR | CT_SHARED, NULL)) ||
-          call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
+    if (!g_poly_builtin_arm) {
+      has_user = comp_poly_arm_reader_any(c, name, argc);
+      for (int kk = 0; kk < c->nclasses && !has_user; kk++)
+        if (call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
+    }
     if (!has_user && sp_streq(name, "polar")) {
       buf_puts(b, "sp_poly_polar("); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; }
     }
@@ -19910,11 +19910,11 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        (argc == 0 && comp_ntype(c, id) == TY_ENUMERATOR))) {
     int oci = comp_core_class(c, CORE_OBJECT);
     int has_user = oci >= 0 && call_target(c, id, oci, name, 0, NULL) >= 0;
-    if (!g_poly_builtin_arm)
-    for (int kk = 0; kk < c->nclasses && !has_user; kk++)
-      if (comp_poly_arm_defines_n(c, kk, name, argc) ||
-          (!c->classes[kk].is_native_class && call_attr_target(c, -1, kk, name, CT_ATTR | CT_SHARED, NULL)) ||
-          call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
+    if (!g_poly_builtin_arm) {
+      if (!has_user) has_user = comp_poly_arm_reader_any(c, name, argc);
+      for (int kk = 0; kk < c->nclasses && !has_user; kk++)
+        if (call_target(c, id, kk, name, CT_CMETHOD, NULL) >= 0) has_user = 1;
+    }
     if (!has_user && argc == 0) {
       buf_puts(b, "sp_poly_cycle("); emit_boxed(c, recv, b); buf_puts(b, ")");
       return 1;

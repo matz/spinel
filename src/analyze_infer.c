@@ -3285,11 +3285,7 @@ int object_reopen_answers(Compiler *c, int call_id, TyKind *out) {
 /* The analyze twin of codegen's poly_name_user_claimed, readers included: an
    attr_reader is an arm of the dispatch like a def. */
 static int an_user_poly_arm(Compiler *c, const char *name, int argc) {
-  if (an_builtin_only) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_poly_arm_defines_n(c, k, name, argc) ||
-        (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL))) return 1;
-  return 0;
+  return !an_builtin_only && comp_poly_arm_reader_any(c, name, argc);
 }
 
 const BuiltinOp *poly_scalar_row(TyKind k, const char *name, int argc, int has_block) {

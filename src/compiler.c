@@ -2210,6 +2210,14 @@ int comp_name_reader_any(Compiler *c, const char *name) {
   return ans;
 }
 
+/* See compiler.h. */
+int comp_poly_arm_reader_any(Compiler *c, const char *name, int argc) {
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_poly_arm_defines_n(c, k, name, argc) ||
+        (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR | CT_SHARED, NULL))) return 1;
+  return 0;
+}
+
 /* See compiler.h. Kept as comp_name_reader_any's answers are, under the same
    stamps, in a table of its own: the names, each one's list and count. */
 static char **rdo_name; static int **rdo_list; static int *rdo_n; static int rdo_cap, rdo_cnt;

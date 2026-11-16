@@ -4452,7 +4452,7 @@ int ie_poly_self_classes(Compiler *c, int call, const char *name, int body, int 
   if (nn == 64) return 0;
   int ask[64], nask = 0;
   for (int i = 0; i < nn; i++) {
-    if (call_target(c, -1, -1, names[i], CT_TOP, NULL) >= 0) continue;
+    if (call_target(c, -1, -1, names[i], CT_TOP | CT_SHARED, NULL) >= 0) continue;
     for (int k = 0; k < c->nclasses; k++) {
       if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) { ask[nask++] = i; break; }
     }
@@ -5133,8 +5133,7 @@ static int ie_rself_name_selfish(Compiler *c, const char *nm) {
   for (int i = 0; kn[i]; i++) if (sp_streq(nm, kn[i])) return 1;
   for (int s = 0; s < c->nscopes; s++)
     if (c->scopes[s].name && c->scopes[s].class_id >= 0 && !c->scopes[s].is_cmethod && sp_streq(c->scopes[s].name, nm)) return 1;
-  for (int k = 0; k < c->nclasses; k++) if (comp_reader_in_chain(c, k, nm, NULL)) return 1;
-  return 0;
+  return comp_name_reader_any(c, nm);
 }
 
 /* The self_call marker tracks receiver identity through rebinding, rather
@@ -43964,8 +43963,7 @@ static int splat_builtin_spec_range(Compiler *c, int id, const char *name, int *
   for (int si = 0; !sub && si < c->nscopes; si++)
     if (c->scopes[si].name && sp_streq(c->scopes[si].name, name)) return 0;
   /* ...nor a reader it declares of the name */
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_reader_in_chain(c, k, name, NULL)) return 0;
+  if (comp_name_reader_any(c, name)) return 0;
   /* the tables are instance methods': a class's (`File.unlink(*paths)`)
      is no row of theirs */
   int r = nt_ref(nt, id, "receiver");

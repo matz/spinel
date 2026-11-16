@@ -5738,15 +5738,19 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
            cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL);
 }
-/* Does a receiverless capture of `sym` on main find no method where it runs (main's chain meets none: the main-chain
+/* Does a receiverless capture of `sym` that runs on main (not in a class's method, a module's, or a top-level def another
+   object may run) find no method where it runs (main's chain meets none: the main-chain
    fact), though the program defines the name, only later (a def, an include or an extend that has not run)? Then its
    NameError is main's singleton class's, as CRuby's. Not a name the core's Kernel answers (the capture binds that), nor
    where a method_missing or a respond_to_missing? of the program may answer it. */
 static int cplan_main_capture_absent(Compiler *c, int id) {
   const char *name = method_sym_arg(c, id);
   int recv = nt_ref(c->nt, id, "receiver");
-  if (!name || !name[0] || (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) || cplan_main_chain_step(c, id, name) != EMC_NONE ||
+  if (!name || !name[0] || (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) || !ct_runs_on_main(c, id) ||
       core_method_name_any(name) || bop_core_name(name) || !elab_method_versions(c, name)) return 0;
+  /* (nothing of the name, or an undef that stops the lookup) */
+  int st = cplan_main_chain_step(c, id, name);
+  if (st != EMC_NONE && st != EMC_STOP) return 0;
   return an_name_binder_free(c, METHOD_MISSING_NAME) && an_name_binder_free(c, RESPOND_TO_MISSING_NAME);
 }
 /* Is ci's class method `name` defined wherever node at runs? */

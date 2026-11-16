@@ -6583,8 +6583,9 @@ static void lr_calls_scan(Compiler *c, LoadRecord *r) {
 }
 unsigned long elab_hgen(Compiler *c) { return c->lrec ? c->lrec->hgen : 0; }
 
-/* Can a call of `name` meet the attr_* call `node` before it has run, for an instance of class cls? An instance of cls
-   exists only after cls is created (its first opening), so what runs before that matters not. The accessor is made
+/* Can a call of `name` meet the attr_* call `node` before it has run, for an instance of class cls? An instance of a
+   program's class exists only after the class is created (its first opening), so what runs before that matters not;
+   a builtin class's instances exist from the program's start, so its interval starts there, whatever its reopenings. The accessor is made
    first when the attr_* statement is in region 0, on cls or a class above it (not a module a later include may
    bring), and from cls's creation to the attr_* statement (none, where the class is created after it) no statement
    runs code of the program's (lr_run_points) and no call of the name stands outside a method body (a call in a
@@ -6599,12 +6600,13 @@ int elab_accessor_first(Compiler *c, int node, const char *name, int cls) {
   int s = node < r->n ? r->at[node] : -1, body = node < c->nt->count ? c->node_cbody[node] : -1, nb = 0;
   const LrOpen *o = body >= 0 ? elab_class_bodies(c, cls, &nb) : NULL;
   if (s >= 0 && r->st[s].region == 0 && body >= 0 && !comp_class_is_module(c, &c->classes[body]) && (body == cls || is_descendant(c, cls, body)) && nb > 0) {
-    int e = INT_MAX;   /* (the first opening of cls: the earliest statement of its headers) */
-    for (int i = 0; i < nb; i++) {
+    int e = INT_MAX;   /* (the first opening of cls: the earliest statement of its headers; a builtin's instances exist from the start) */
+    for (int i = 0; !c->classes[cls].is_builtin_const && i < nb; i++) {
       int h = o[i].node >= 0 && o[i].node < r->n ? r->at[o[i].node] : -1;
       if (h < 0 || r->st[h].region != 0) { e = -1; break; }
       if (h < e) e = h;
     }
+    if (c->classes[cls].is_builtin_const) e = 0;
     ok = e >= 0 && (e >= s || lr_runs_in(r, e, s) == 0);
     if (ok && e < s) {
       lr_calls_scan(c, r);

@@ -2623,7 +2623,7 @@ static int emit_blank_slate_defined_ask(Compiler *c, int id, int recv, int ci, B
   CplanPresence pr = { 0 };
   if (m) cplan_table_presence(c, ci, CT_REACH, m, &pr);
   int yes = m && ((call_target(c, -1, ci, m, CT_METHODS, NULL) >= 0 && pr.vis == SP_VIS_PUBLIC) ||
-                  call_attr_target(c, -1, ci, m, CT_ATTR, NULL) || call_attr_target(c, -1, ci, m, CT_ATTR | CT_WRITER, NULL) ||
+                  call_attr_target(c, -1, ci, m, 0, NULL) || call_attr_target(c, -1, ci, m, CT_ATTR | CT_WRITER, NULL) ||
                   (basicobject_own_method(m) && !is_initialize_name(m) && !is_method_missing_method(m)));
   buf_puts(b, "((void)(");
   emit_expr_for_effect(c, recv, b);

@@ -4804,10 +4804,12 @@ int join_local_proc_rets(Compiler *c) {
    TY_UNKNOWN for the shapes typed another way (a tuple literal, a call
    answering a fixed tuple, a scalar). infer_write_multi_assign types the
    targets so; rejoin_local_writes asks again once the passes after
-   infer_write_types have widened the value (`t << "s"` after `t = [1.5]`). */
-static TyKind masgn_runtime_target_ty(Compiler *c, int mw, int is_rest) {
+   infer_write_types have widened the value (`t << "s"` after `t = [1.5]`).
+   The element is answered, and the splat target's type set in *whole. */
+static TyKind masgn_runtime_target_ty(Compiler *c, int mw, TyKind *whole) {
   const NodeTable *nt = c->nt;
   int value = nt_ref(nt, mw, "value");
+  *whole = TY_UNKNOWN;
   if (value < 0 || masgn_tuple_rhs(nt, value)) return TY_UNKNOWN;
   NodeKind vk = nt_kind(nt, value);
   int multi_src = vk == NK_CallNode || vk == NK_SuperNode || vk == NK_ForwardingSuperNode || vk == NK_YieldNode;
@@ -4821,9 +4823,11 @@ static TyKind masgn_runtime_target_ty(Compiler *c, int mw, int is_rest) {
     if (en == ln) return TY_UNKNOWN;
   }
   TyKind st = infer_type(c, value);
-  if (ty_is_array(st) || ty_is_obj_array(st)) return is_rest ? st : ty_array_elem(st);
-  if (st == TY_POLY || (st != TY_UNKNOWN && (ty_is_hash(st) || multi_src)))
-    return is_rest ? TY_POLY_ARRAY : TY_POLY;
+  if (ty_is_array(st) || ty_is_obj_array(st)) { *whole = st; return ty_array_elem(st); }
+  if (st == TY_POLY || (st != TY_UNKNOWN && (ty_is_hash(st) || multi_src))) {
+    *whole = TY_POLY_ARRAY;
+    return TY_POLY;
+  }
   return TY_UNKNOWN;
 }
 
@@ -4849,7 +4853,7 @@ static void masgn_runtime_targets(Compiler *c, int mw, MasgnTargetFn fn, void *u
       const char *nm = nt_str(nt, t, "name");
       LocalVar *lv = nm ? scope_local(comp_scope_of(c, mw), nm) : NULL;
       if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
-      if (!got) { elem = masgn_runtime_target_ty(c, mw, 0); whole = masgn_runtime_target_ty(c, mw, 1); got = 1; }
+      if (!got) { elem = masgn_runtime_target_ty(c, mw, &whole); got = 1; }
       fn(c, mw, t, lv, s == 2 ? whole : elem, ud);
     }
   }
@@ -4873,7 +4877,6 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
     int ln = 0;
     const int *lefts = nt_arr(nt, id, "lefts", &ln);
     int value = nt_ref(nt, id, "value");
-    masgn_runtime_targets(c, id, masgn_note_joined, NULL);
     {
       int rn_n = 0;
       const int *rights_n = nt_arr(nt, id, "rights", &rn_n);
@@ -4893,6 +4896,8 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
         if (hen == 0 && !ty_is_hash(c->hash_want[hv])) { comp_set_hash_want(c, hv, TY_POLY_POLY_HASH); changed = 1; }
       }
     }
+    /* (each target as this assignment types it, the empty `{}` settled) */
+    masgn_runtime_targets(c, id, masgn_note_joined, NULL);
     const char *vty = nt_type(nt, value);
     NodeKind vk = nt_kind(nt, value);
     /* `r, w = IO.pipe` / `a, b = Socket.pair(...)` -> both targets are IO

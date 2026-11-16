@@ -79,6 +79,24 @@ shelf = Shelf.new([gs, [1, 2]])
 m = -1
 shelf[m += 1][1, 0] = 4
 p gs[1, 0], m
+# an outer held inline (a value-type object) whose `[]` answers the class's
+class InlineShelf
+  def initialize = @n = 0
+  def [](n) = $inline_rows[n]
+end
+gi = Grid.new
+$inline_rows = [gi, [1, 2]]
+inline = InlineShelf.new
+q = -1
+inline[q += 1][0, 1] = 9
+p gi[0, 1], q
+# and one a method call answers, held by value
+def made_inline = InlineShelf.new
+gm = Grid.new
+$inline_rows[0] = gm
+q = -1
+made_inline[q += 1][1, 0] = 2
+p gm[1, 0], q
 
 # a store whose class takes one index fewer raises, as in Ruby
 c = boxes[1]

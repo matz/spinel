@@ -132,7 +132,8 @@ int cplan_object_method_named(Compiler *c, const char *name);
    top level or in a method of main's own)? */
 int cplan_runs_on_main(Compiler *c, int id);
 /* The step of main's chain (EMC_*, elab_main_chain_at) a self-call of name at call id meets, at its point or over the
-   window it may run in; EMC_NONE for none of the program's; -1 where the record cannot say or the answer moves with
+   window it may run in; EMC_NONE for none of the program's, EMC_STOP where an undef stops the lookup (no method answers,
+   nor the core's); -1 where the record cannot say or the answer moves with
    when the body runs */
 int cplan_main_chain_step(Compiler *c, int id, const char *name);
 /* Does call `call`, which takes a block, throw away every value its block

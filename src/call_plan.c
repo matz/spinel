@@ -3924,14 +3924,23 @@ static int ct_on_main(Compiler *c, int id, const char *name) {
    method_missing may answer it instead. The point is asked only of a
    call that runs on main: outside the plan's frame, it rebuilds the map
    whenever a pass appended nodes since, and every call a pass asks the
-   hook for (cplan_mm_method) comes here. */
+   hook for (cplan_mm_method) comes here. The same stop where a module main extends or Object includes or prepends
+   holds the undef (the main-chain fact's EMC_STOP), in a top-level def's call too. */
 static int ct_main_stopped(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
-  if (!ct_runs_on_main(c, id)) return 0;
-  int framed = elab_plan_enter(c, id);
-  LoadPoint p = elab_point_of(c, id);
-  int stop = p.region >= 0 && elab_main_singleton_at(c, name, p, &d) == ELAB_STOP;
-  if (framed) elab_plan_leave(c);
+  int stop = 0;
+  if (ct_runs_on_main(c, id)) {
+    int framed = elab_plan_enter(c, id);
+    LoadPoint p = elab_point_of(c, id);
+    stop = p.region >= 0 && elab_main_singleton_at(c, name, p, &d) == ELAB_STOP;
+    if (framed) elab_plan_leave(c);
+  }
+  /* (or an undef in a module main extends or Object includes or prepends: the main-chain fact's stop. It holds for a
+     top-level def's call too, whose self is its caller's, main or another object, both of which the fact asks) */
+  if (!stop) {
+    const Scope *s = comp_scope_of(c, id);
+    stop = s && s->class_id < 0 && !s->is_cmethod && cplan_main_chain_step(c, id, name) == EMC_STOP;
+  }
   if (!stop) return 0;
   /* (a program method_missing main reaches, its singleton's or Object's,
      answers the call instead: not told apart here, so none stops) */
@@ -4194,7 +4203,8 @@ static int cplan_main_chain_unsure(Compiler *c, int id) {
          ct_main_chain(c, id, name, 0, &step, &d) == ELAB_UNKNOWN && step == EMC_UNSURE;
 }
 /* Does the main-chain fact put a mixin's method ahead of main's and Object's own at call id (an extend, an Object
-   prepend), so that the top-level ask (CT_TOP) answers none there? */
+   prepend), so that the top-level def of the name does not answer where the ask goes to the mixin (CT_TOP | CT_INCLUDED;
+   CT_TOP alone keeps the top-level def)? */
 static int ct_main_mixin_ahead(Compiler *c, int id, const char *name) {
   int step;
   const LrDef *d;
@@ -5741,16 +5751,16 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
 /* Does a receiverless capture of `sym` that runs on main (not in a class's method, a module's, or a top-level def another
    object may run) find no method where it runs (main's chain meets none: the main-chain
    fact), though the program defines the name, only later (a def, an include or an extend that has not run)? Then its
-   NameError is main's singleton class's, as CRuby's. Not a name the core's Kernel answers (the capture binds that), nor
-   where a method_missing or a respond_to_missing? of the program may answer it. */
+   NameError is main's singleton class's, as CRuby's. Not a name the core's Kernel answers (the capture binds that), unless
+   an undef stops the lookup, nor where a method_missing or a respond_to_missing? of the program may answer it. */
 static int cplan_main_capture_absent(Compiler *c, int id) {
   const char *name = method_sym_arg(c, id);
   int recv = nt_ref(c->nt, id, "receiver");
-  if (!name || !name[0] || (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) || !ct_runs_on_main(c, id) ||
-      core_method_name_any(name) || bop_core_name(name) || !elab_method_versions(c, name)) return 0;
-  /* (nothing of the name, or an undef that stops the lookup) */
+  if (!name || !name[0] || (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) || !ct_runs_on_main(c, id)) return 0;
+  /* (nothing of the name, or an undef that stops the lookup, which no core method answers behind either) */
   int st = cplan_main_chain_step(c, id, name);
   if (st != EMC_NONE && st != EMC_STOP) return 0;
+  if (st != EMC_STOP && (core_method_name_any(name) || bop_core_name(name) || !elab_method_versions(c, name))) return 0;
   return an_name_binder_free(c, METHOD_MISSING_NAME) && an_name_binder_free(c, RESPOND_TO_MISSING_NAME);
 }
 /* Is ci's class method `name` defined wherever node at runs? */

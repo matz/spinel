@@ -7054,6 +7054,42 @@ static void emit_str_poly_merge(Compiler *c, TyKind rt, TyKind at, int recv, int
   else emit_expr(c, arg, b);
   buf_puts(b, th ? "); })" : ")");
 }
+
+/* Cross-layout or boxed operands need the general merge. Inlining may
+   specialize a yield, but cannot change the shared result slot's layout. */
+static int emit_hash_merge_general(Compiler *c, int id, int recv, int arg, TyKind rt, Repr ar, Buf *b) {
+  TyKind at = ar.as_ty;
+  int cross = ty_is_hash(at) && at != rt &&
+              !(ty_hash_key(rt) == TY_STRING && ty_hash_key(at) == TY_STRING);
+  int general = nt_ref(c->nt, id, "block") < 0 && repr_hash_is(repr_of(c, id), TY_POLY, TY_POLY);
+  if (!cross && ar.kind != RK_BOXED && (!general || (rt == TY_POLY_POLY_HASH && at == rt))) return 0;
+  if (!ty_is_hash(at)) {
+    /* A coercing call evaluates its operand before copying the
+       receiver, but converts it afterwards. Keep a typed copy too: a
+       default-proc bridge must retain the pre-conversion defaults. */
+    int tr = ++g_tmp, ta = ++g_tmp, tc = ++g_tmp, td = ++g_tmp;
+    Buf rb = {0, 0, 0}, ab = {0, 0, 0};
+    emit_expr(c, recv, &rb); emit_boxed(c, arg, &ab);
+    buf_printf(b, "({ %s _t%d = %s; SP_GC_ROOT(_t%d);", c_type_name(rt), tr, rb.p, tr);
+    buf_printf(b, " sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);", ta, ab.p, ta);
+    buf_printf(b, " %s _t%d = sp_%sHash_dup(_t%d); SP_GC_ROOT(_t%d);",
+               c_type_name(rt), tc, ty_hash_cname(rt), tr, tc);
+    buf_printf(b, " sp_PolyPolyHash *_t%d = sp_poly_hash_merge(", td);
+    char copy[24]; snprintf(copy, sizeof copy, "_t%d", tc);
+    emit_boxed_text(c, rt, copy, b);
+    buf_printf(b, ", sp_box_nil()); SP_GC_ROOT(_t%d); sp_poly_hash_merge_into(", td);
+    buf_printf(b, "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH), sp_poly_hash_merge_arg(_t%d)); _t%d; })",
+               td, ta, td);
+    free(rb.p); free(ab.p);
+    return 1;
+  }
+  buf_puts(b, "sp_poly_hash_merge("); emit_boxed(c, recv, b); buf_puts(b, ", ");
+  if (!ty_is_hash(at)) buf_puts(b, "sp_poly_hash_merge_arg(");
+  emit_boxed(c, arg, b);
+  buf_puts(b, ty_is_hash(at) ? ")" : "))");
+  return 1;
+}
+
 /* Hash#compare_by_identity on a typed hash (#9171): the identity variant's
    call, or a refusal naming why (cbi_identity_refusal). */
 static int emit_hash_compare_by_identity(Compiler *c, int id, int recv, TyKind rt, int argc, Buf *b) {
@@ -7988,6 +8024,7 @@ else {
            rt == TY_INT_STR_HASH)) {
         Repr at_repr = repr_of(c, argv[0]);
         TyKind at = at_repr.as_ty;
+        if (emit_hash_merge_general(c, id, recv, argv[0], rt, at_repr, b)) return 1;
         /* an empty Hash literal settles at its own default variant, which is
            rarely the receiver's; merging it passed one hash struct as another
            (#3597). It contributes nothing, so the merge is a copy. */
@@ -8001,26 +8038,6 @@ else {
         if ((rt == TY_STR_INT_HASH || rt == TY_STR_STR_HASH) &&
             ty_is_hash(at) && ty_hash_key(at) == TY_STRING && at != rt) {
           emit_str_poly_merge(c, rt, at, recv, argv[0], b);
-          return 1;
-        }
-        /* any other cross-variant merge (mismatched key or value layout):
-           fold both sides through the universal boxed merge -- passing the
-           argument raw into the receiver-layout helper read it through the
-           wrong struct (#3261). Matches the TY_POLY_POLY_HASH inference. */
-        if (ty_is_hash(at) && at != rt &&
-            !(rt == TY_STR_POLY_HASH && (at == TY_STR_STR_HASH || at == TY_STR_INT_HASH))) {
-          buf_puts(b, "sp_poly_hash_merge("); emit_boxed(c, recv, b);
-          buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
-          return 1;
-        }
-        /* a BOXED argument holds whichever variant the value really is: casting
-           it to the receiver's layout read a Sym-keyed hash through a Str-keyed
-           struct, and the Symbol key was then dereferenced as a char * (#3975).
-           Fold through the universal boxed merge instead, as a cross-variant
-           merge already does. */
-        if (at_repr.kind == RK_BOXED) {
-          buf_puts(b, "sp_poly_hash_merge("); emit_boxed(c, recv, b);
-          buf_puts(b, ", sp_poly_hash_merge_arg("); emit_boxed(c, argv[0], b); buf_puts(b, "))");
           return 1;
         }
         if (!ty_is_hash(at) && at != TY_POLY && at != TY_UNKNOWN) {

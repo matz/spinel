@@ -4524,12 +4524,12 @@ int emit_takewhile_with_index(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent + 1);
   if (is_take) {
     buf_printf(g_pre, "if (!(%s)) break;\n", cb.p ? cb.p : "0");
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, sp_streq(k, "Str") ? "sp_%sArray_push(_t%d, SP_STR_B(%s));\n" : "sp_%sArray_push(_t%d, %s);\n", k, tr, es);
+    emit_indent(g_pre, g_indent + 1); emit_kind_push(c, g_pre, k, tr, es); buf_puts(g_pre, ";\n");
   }
   else {
     buf_printf(g_pre, "if (_t%d && (%s)) continue;\n", tdrop, cb.p ? cb.p : "0");
     emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "_t%d = 0;\n", tdrop);
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, sp_streq(k, "Str") ? "sp_%sArray_push(_t%d, SP_STR_B(%s));\n" : "sp_%sArray_push(_t%d, %s);\n", k, tr, es);
+    emit_indent(g_pre, g_indent + 1); emit_kind_push(c, g_pre, k, tr, es); buf_puts(g_pre, ";\n");
   }
   free(cb.p);
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
@@ -5074,6 +5074,9 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
   /* an Integer or Float element is held with its nil, so a kept nil is
      written down as nil */
   int ote = oint_kind(et) && !live;
+  /* an Array that holds the handle compacts by moving the handles, whatever its block's parameter binds
+     (one_h): the row's `_e` entries */
+  const char *hsfx = live || ote ? "" : typed_elem_store_sfx(rt);
   char lv[32], lenf[48], getf[48], setf[48];
   snprintf(lv, sizeof lv, "_t%d", live ? g_face_live_box : t);
   if (live) {
@@ -5084,12 +5087,12 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
   }
   else {
     snprintf(lenf, sizeof lenf, "sp_%sArray_length", kk);
-    snprintf(getf, sizeof getf, "sp_%sArray_%s", kk, ote ? "oget" : one_h ? "get_e" : "get");
+    snprintf(getf, sizeof getf, "sp_%sArray_%s%s", kk, ote ? "oget" : "get", hsfx);
     /* (a kept element written past the end of an array the block cut
        fills the gap with nil, as CRuby's store does, and as the setters of
        the other kinds do; the plain pointer setter drops it) */
-    snprintf(setf, sizeof setf, "sp_%sArray_%s", kk,
-             ote ? "oset" : one_h ? "set_e" : sp_streq(kk, "Ptr") ? "set_grow" : "set");
+    snprintf(setf, sizeof setf, "sp_%sArray_%s%s", kk,
+             ote ? "oset" : sp_streq(kk, "Ptr") ? "set_grow" : "set", hsfx);
   }
   Buf rb = expr_buf(c, recv);
   /* rooted: a receiver that is a temporary has no other holder once its own
@@ -5112,7 +5115,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
   buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tnv, tnv);
   emit_indent(b, indent);
   if (ote) buf_printf(b, "%s _t%d = %s;\n", oint_ctype(et), te, oint_nil(et));
-  else if (one_h) buf_printf(b, "sp_String *_t%d = NULL; SP_GC_ROOT(_t%d);\n", te, te);
+  else if (hsfx[0]) buf_printf(b, "sp_String *_t%d = NULL; SP_GC_ROOT(_t%d);\n", te, te);
   else {
     emit_ctype(c, et, b);
     if (et == TY_POLY) buf_printf(b, " _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", te, te);

@@ -144,6 +144,8 @@ module Gate
     srcs = changed.grep(%r{\Asrc/.*\.c\z})
     at = change.after == ":" ? ["--staged"] : ["--rev", change.after.chomp(":")]
     warn "gate: a call target bypasses call_target (tools/route_audit.rb)" unless srcs.empty? || system(RbConfig.ruby, File.join(__dir__, "route_audit.rb"), *at, *srcs)
+    # a typed container's store and search entries come from its row (tools/entry_names_check.rb): a warning
+    warn "gate: a store or search entry name is formatted by hand (tools/entry_names_check.rb)" unless srcs.empty? || system(RbConfig.ruby, File.join(__dir__, "entry_names_check.rb"), out: File::NULL)
     added = git("diff", *change.diff, "--name-only", "--diff-filter=A", "--", "test/*.rb").to_s.split("\n")
       .reject { |t| t.count("/") > 1 }
     ruby = reference_ruby unless added.empty?

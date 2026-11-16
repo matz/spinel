@@ -52,7 +52,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check runtime-gvar-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test no-bigint-test no-alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
+.PHONY: entry-names-check ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check runtime-gvar-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test no-bigint-test no-alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-stress-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot rubyboy gate-rubyboy scale-test clean install uninstall deps tools
@@ -5900,6 +5900,12 @@ imemo-shadow-corpus: $(SPINEL)
 # drops the const is gcc's -Wdiscarded-qualifiers; clang takes that for an
 # unknown option and has the warning under a name of its own.
 TY_GUARD_QUAL := -Werror=discarded-qualifiers $(if $(filter clang,$(CC_KIND)),-Werror=incompatible-pointer-types-discards-qualifiers)
+# A typed container's store and search entry names come from its row (typed_elem_store_sfx): no src/ line
+# formats one by hand or spells a deleted bytes entry, unless tools/entry_names.allow says why it cannot
+# name one for a String kind.
+entry-names-check:
+	@ruby tools/entry_names_check.rb
+
 ty-setter-check: $(SPINEL)
 	@printf '%s\n' $(patsubst build/csrc/%.o,src/%.c,$(SPINEL_OBJ)) | \
 	 xargs -P $(NPROC) -I{} $(CC) $(CFLAGS) -fsyntax-only -DSP_TY_GUARD $(TY_GUARD_QUAL) -Isrc -Ibuild/csrc {} && \

@@ -2491,7 +2491,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
             const char *getfn  = (ki == 0) ? "sp_IntArray_oget" : "sp_StrArray_get";
             /* the element the typed array is asked to hold: its own kind
                or the refusal, never a coercion (#4481) */
-            const char *unbox  = (ki == 0) ? "sp_poly_elem_i" : "sp_poly_elem_s";
+            /* (an Array that holds the handle stores its row's `_e` entries, the value as its handle) */
+            const char *hs     = typed_elem_store_sfx(array_kind_ty(bk));
+            const char *unbox  = (ki == 0) ? "sp_poly_elem_i" : hs[0] ? "sp_poly_elem_e" : "sp_poly_elem_s";
             const char *boxarr = (ki == 0) ? "sp_box_int_array" : "sp_box_str_array";
             if (oi == 0) {
               buf_printf(&g_proc_protos, "static sp_RbVal _bam_%sArray_get(void *a, sp_RbVal i);\n", bk);
@@ -2501,12 +2503,12 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
             else if (oi == 1) {
               buf_printf(&g_proc_protos, "static sp_RbVal _bam_%sArray_set(void *a, sp_RbVal i, sp_RbVal v);\n", bk);
               buf_printf(&g_procs, "static sp_RbVal _bam_%sArray_set(void *a, sp_RbVal i, sp_RbVal v) {\n"
-                                   "  sp_%sArray_%s((sp_%sArray *)a, sp_poly_arg_int_chk(i), %s(v));\n  return v;\n}\n", bk, bk, ki == 0 ? "oset" : "set", bk, unbox);
+                                   "  sp_%sArray_%s%s((sp_%sArray *)a, sp_poly_arg_int_chk(i), %s(v));\n  return v;\n}\n", bk, bk, ki == 0 ? "oset" : "set", hs, bk, unbox);
             }
             else {
               buf_printf(&g_proc_protos, "static sp_RbVal _bam_%sArray_push(void *a, sp_RbVal v);\n", bk);
               buf_printf(&g_procs, "static sp_RbVal _bam_%sArray_push(void *a, sp_RbVal v) {\n"
-                                   "  sp_%sArray_%s((sp_%sArray *)a, %s(v));\n  return %s(a);\n}\n", bk, bk, ki == 0 ? "push_o" : "push", bk, unbox, boxarr);
+                                   "  sp_%sArray_%s%s((sp_%sArray *)a, %s(v));\n  return %s(a);\n}\n", bk, bk, ki == 0 ? "push_o" : "push", hs, bk, unbox, boxarr);
             }
           }
           else if (oi == 0) {

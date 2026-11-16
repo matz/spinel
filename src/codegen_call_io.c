@@ -46,7 +46,7 @@ static void emit_io_readlines_args(Compiler *c, const char *r, const int *pos, i
                ts, ta, ta, tb, tl, tb);
   buf_printf(b, "SP_GC_ROOT_STR(_t%d); sp_StrArray *_t%d = sp_StrArray_new(); SP_GC_ROOT(_t%d); const char *_t%d; "
                 "while ((_t%d = sp_File_gets_sep(_t%d, _t%d, _t%d < 0 ? 0 : _t%d, _t%d)) != NULL) "
-                "sp_StrArray_push(_t%d, _t%d); _t%d; })",
+                "sp_StrArray_push_e(_t%d, SP_STR_HDL(_t%d)); _t%d; })",
              ts, tr, tr, tn, tn, tf, ts, tl, tl, tc, tr, tn, tr);
 }
 
@@ -2203,7 +2203,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       emit_io_line_args_spread(c, argv, argc, ls, ll, lc, "readlines", b);
       buf_printf(b, "sp_StrArray *_t%d = sp_StrArray_new(); SP_GC_ROOT(_t%d); const char *_t%d; "
                     "while ((_t%d = sp_File_gets_sep(_t%d, _t%d, _t%d, _t%d)) != NULL) "
-                    "sp_StrArray_push(_t%d, _t%d); _t%d; })",
+                    "sp_StrArray_push_e(_t%d, SP_STR_HDL(_t%d)); _t%d; })",
                  tr, tr, tn, tn, rf, ls, ll, lc, tr, tn, tr);
       free(rb.p); return 1;
     }

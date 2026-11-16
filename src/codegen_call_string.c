@@ -1264,7 +1264,7 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
       int eline_whole = eline_sep >= 0 && eline_chomp == 0 &&
                         repr_of(c, argv[0]).as_ty == TY_NIL;
       if (eline_whole)
-        buf_printf(b, "sp_StrArray *_t%d = sp_StrArray_new(); if (sp_str_byte_len(_t%d) > 0) sp_StrArray_push(_t%d, _t%d); ",
+        buf_printf(b, "sp_StrArray *_t%d = sp_StrArray_new(); if (sp_str_byte_len(_t%d) > 0) sp_StrArray_push_e(_t%d, SP_STR_HDL(_t%d)); ",
                    tl, ts, tl, ts);
       else if (eline_sep >= 0) {
         buf_printf(b, "sp_StrArray *_t%d = ", tl);

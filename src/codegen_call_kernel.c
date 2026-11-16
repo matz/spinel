@@ -681,11 +681,17 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
           buf_printf(b, ") sp_%sArray_push(_t%d, %s.v); _t%d; })", ak, t, ref, t);
           return 1;
         }
-        buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d); sp_%sArray_push(_t%d, ", ak, t, ak, t, ak, t);
-        if (at == TY_INT) emit_int_expr(c, av[0], b);
-        else if (at == TY_FLOAT) emit_float_expr(c, av[0], b);
-        else emit_expr(c, av[0], b);
-        buf_printf(b, "); _t%d; })", t);
+        buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d); ", ak, t, ak, t);
+        if (at == TY_STRING) {   /* (a String Array holds the String's handle, of either face) */
+          Buf sb; memset(&sb, 0, sizeof sb); emit_expr(c, av[0], &sb);
+          emit_kind_push(c, b, ak, t, sb.p ? sb.p : "NULL"); free(sb.p);
+        }
+        else {
+          buf_printf(b, "sp_%sArray_push(_t%d, ", ak, t);
+          if (at == TY_INT) emit_int_expr(c, av[0], b); else emit_float_expr(c, av[0], b);
+          buf_puts(b, ")");
+        }
+        buf_printf(b, "; _t%d; })", t);
       }
       else if (ty_is_object(at) && emit_kconv_obj_nil(c, av[0], ty_object_class(at), "to_ary", "to_a", b)) {}
       /* Kernel#Array asks the object for #to_ary, then #to_a (#3721) */

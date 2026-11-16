@@ -6251,7 +6251,7 @@ int emit_array_op_assign(Compiler *c, const char *lval, TyKind t,
     else if (t == TY_INT_ARRAY)
       buf_printf(b, " sp_%sArray_push(_t%d, _t%d->data[_t%d->start + _t%d]);", k, tr, ta, ta, tj);
     else
-      buf_printf(b, " sp_%sArray_push%s(_t%d, _t%d->data[_t%d]);", k, ONE_SA_KE(k), tr, ta, tj);
+      buf_printf(b, " sp_%sArray_push%s(_t%d, _t%d->data[_t%d]);", k, typed_elem_store_sfx(t), tr, ta, tj);
     buf_printf(b, " %s = _t%d; }", lval, tr);
     op_assign_slot_end(src, lval, b);
     return 1;
@@ -10582,8 +10582,8 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
               buf_puts(b, ")) continue;\n");
             }
             emit_indent(b, body_indent + 2);
-            buf_printf(b, "sp_%sHash_set(_t%d, _t%d, sp_%sHash_get(_t%d, _t%d));\n",
-                       hn, tr, tk2, hn, arm_t, tk2);
+            buf_printf(b, "sp_%sHash_set%s(_t%d, _t%d, sp_%sHash_get%s(_t%d, _t%d));\n",
+                       hn, typed_elem_store_sfx(arm_pt), tr, tk2, hn, typed_elem_store_sfx(arm_pt), arm_t, tk2);
             emit_indent(b, body_indent + 1); buf_puts(b, "}\n");
             emit_indent(b, body_indent + 1);
             {
@@ -18376,22 +18376,26 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
       masgn_recv_guard(c, recv, recv_tmp, "[]=", indent, b);
       emit_indent(b, indent);
       /* a masgn element is often nil (a short right side): the store notes it */
-      /* (one representation: a String Array's element is the String's handle) */
-      int str_h = sp_streq(k, "Str") && !nil_store_sfx(c, k, NIL_STORE_BOXED)[0] && vt != TY_POLY;
-      if (str_h) buf_puts(b, "sp_StrArray_set_e(");
-      else buf_printf(b, "sp_%sArray_set%s(", k, nil_store_sfx(c, k, NIL_STORE_BOXED));
+      /* (an Array that holds the handle stores the value's: its row's `_e` entry) */
+      int str_h = rt != TY_POLY_ARRAY && typed_elem_held(rt) == TY_STRBUF;
+      buf_printf(b, "sp_%sArray_set%s(", k, str_h ? typed_elem_store_sfx(rt) : nil_store_sfx(c, k, NIL_STORE_BOXED));
       emit_node_or_tmp(c, recv, recv_tmp, b); buf_puts(b, ", ");
       if (key_tmp >= 0) buf_printf(b, "_t%d", key_tmp); else emit_int_expr(c, argv[0], b);
-      buf_puts(b, str_h ? ", SP_STR_HDL(" : ", ");
+      buf_puts(b, ", ");
       /* a boxed value a typed array cannot hold is refused, as the single
          store refuses it (#4481) */
       TyKind et = rt == TY_POLY_ARRAY ? TY_POLY : ty_array_elem(rt);
+      Buf sv = {0};
       /* the _nilable store takes the element with its nil */
-      if (oint_kind(et) && nil_store_sfx(c, k, NIL_STORE_BOXED)[0]) masgn_conv_o(c, et, vt, val, b);
+      if (oint_kind(et) && nil_store_sfx(c, k, NIL_STORE_BOXED)[0]) masgn_conv_o(c, et, vt, val, &sv);
+      else if (val && vt == TY_POLY && str_h) buf_printf(&sv, "sp_poly_elem_e(%s)", val);   /* (the handle itself) */
       else if (val && vt == TY_POLY && (et == TY_INT || et == TY_FLOAT || et == TY_STRING))
-        buf_printf(b, "sp_poly_elem_%c(%s)", et == TY_INT ? 'i' : et == TY_FLOAT ? 'f' : 's', val);
-      else masgn_conv(c, id, et, vt, val, b);
-      buf_puts(b, str_h ? "));\n" : ");\n");
+        buf_printf(&sv, "sp_poly_elem_%c(%s)", et == TY_INT ? 'i' : et == TY_FLOAT ? 'f' : 's', val);
+      else masgn_conv(c, id, et, vt, val, &sv);
+      if (str_h && !(val && vt == TY_POLY)) emit_typed_elem_hold(c, -1, rt, sv.p ? sv.p : "NULL", b);
+      else buf_puts(b, sv.p ? sv.p : "");
+      free(sv.p);
+      buf_puts(b, ");\n");
     }
     else if (rr.kind == RK_BOXED || rt == TY_UNKNOWN) {
       emit_indent(b, indent);
@@ -18415,14 +18419,16 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
       const char *hbc = hash_box_cls(rt);
       buf_printf(b, ", %s);\n", hbc ? hbc : "0");
       emit_indent(b, indent);
-      buf_printf(b, "sp_%sHash_set(", ty_hash_cname(rt));
+      /* (a Hash that holds the handle: its `_e` store takes the value's, of either face) */
+      const char *hsfx = typed_elem_store_sfx(rt);
+      buf_printf(b, "sp_%sHash_set%s(", ty_hash_cname(rt), hsfx);
       emit_node_or_tmp(c, recv, recv_tmp, b); buf_puts(b, ", ");
       if (key_tmp >= 0) buf_printf(b, "_t%d", key_tmp);
       else if (ty_hash_key(rt) == TY_INT) emit_int_expr(c, argv[0], b);
       else if (ty_hash_key(rt) == TY_POLY) emit_boxed(c, argv[0], b);
       else emit_expr(c, argv[0], b);
       buf_puts(b, ", ");
-      masgn_conv(c, id, ty_hash_val(rt), vt, val, b);
+      { Buf mv = {0}; masgn_conv(c, id, ty_hash_val(rt), vt, val, &mv); emit_typed_elem_hold(c, -1, rt, mv.p ? mv.p : "NULL", b); free(mv.p); }
       buf_puts(b, ");\n");
     }
     else if (ty_is_object(rt) && masgn_index_writer(c, rt, NULL, NULL) >= 0) {
@@ -19053,10 +19059,10 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
          the value aligns to the end and the rest stays empty. */
       if (ln == 0 && rn == 0) {
         emit_indent(b, indent);
-        buf_printf(b, "sp_%sArray_push%s(_t%d, ", rk0, nil_store_sfx(c, rk0, value), tr0);
+        buf_printf(b, "sp_%sArray_push%s(_t%d, ", rk0, elem_push_sfx(rat0, nil_store_sfx(c, rk0, value)), tr0);
         if (rat0 == TY_POLY_ARRAY) emit_boxed(c, value, b);
         else if (sp_streq(rk0, "Int") || sp_streq(rk0, "Float")) emit_elem_store_value(c, rk0, value, b);
-        else emit_expr(c, value, b);
+        else { Buf ev = expr_buf(c, value); emit_typed_elem_hold(c, value, rat0, ev.p ? ev.p : "NULL", b); free(ev.p); }
         buf_puts(b, ");\n");
       }
       char rx[32]; snprintf(rx, sizeof rx, "_t%d", tr0);
@@ -20386,7 +20392,9 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
         if (comp_ntype(c, idx_argv[0]) == TY_RANGE) { unsupported(c, id, "multiple assignment array range index target"); continue; }
         const char *k = (recv_t == TY_POLY_ARRAY) ? "Poly" : array_kind(recv_t);
         if (!k) k = "Int";
-        buf_printf(b, "sp_%sArray_set%s(", k, nil_store_sfx(c, k, els[i]));
+        /* (a String Array holds the handle: its `_e` store takes the value's) */
+        int sh = recv_t != TY_POLY_ARRAY && typed_elem_held(recv_t) == TY_STRBUF;
+        buf_printf(b, "sp_%sArray_set%s(", k, sh ? typed_elem_store_sfx(recv_t) : nil_store_sfx(c, k, els[i]));
         emit_node_or_tmp(c, recv_id, ttr[i], b); buf_puts(b, ", ");
         /* the index slot is an sp_int; a POLY index (a widened local, #4204)
            unboxes here, as the boxed-receiver branch below always has */
@@ -20404,10 +20412,10 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
           if (nl) masgn_conv_o(c, et, valt, masgn_nil_el(c, els[i]) ? NULL : nex, b);
           else if (valt == TY_POLY && et == TY_INT) buf_printf(b, "sp_poly_elem_i(_t%d)", tmps[i]);
           else if (valt == TY_POLY && et == TY_FLOAT) buf_printf(b, "sp_poly_elem_f(_t%d)", tmps[i]);
-          else if (valt == TY_POLY && et == TY_STRING) buf_printf(b, "sp_poly_elem_s(_t%d)", tmps[i]);
-          /* (one representation: the String goes in by either face, which
-             sp_StrArray_set maps to the handle) */
-          else if (et == TY_STRING) buf_printf(b, "SP_STR_B(_t%d)", tmps[i]);
+          else if (et == TY_STRING) {   /* (the handle the element is, of either face) */
+            char tx[48]; snprintf(tx, sizeof tx, valt == TY_POLY ? "sp_poly_elem_s(_t%d)" : "_t%d", tmps[i]);
+            emit_typed_elem_hold(c, els[i], recv_t, tx, b);
+          }
           else buf_printf(b, "_t%d", tmps[i]);
         }
         buf_puts(b, ");\n");
@@ -20438,7 +20446,7 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
         buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_node_or_tmp(c, recv_id, ttr[i], b);
         buf_printf(b, ", %s);\n", hash_box_cls(recv_t));
         emit_indent(b, indent);
-        buf_printf(b, "sp_%sHash_set(", hn);
+        buf_printf(b, "sp_%sHash_set%s(", hn, typed_elem_store_sfx(recv_t));   /* (a String value: the `_e` store, the handle) */
         emit_node_or_tmp(c, recv_id, ttr[i], b); buf_puts(b, ", ");
         if (ttk[i] >= 0) buf_printf(b, "_t%d", ttk[i]);
         else if (ty_hash_key(recv_t) == TY_INT) emit_int_expr(c, idx_argv[0], b);
@@ -20455,8 +20463,8 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
           TyKind hv = ty_hash_val(recv_t);
           if (valt == TY_POLY && hv == TY_INT) buf_printf(b, "sp_poly_to_i(_t%d)", tmps[i]);
           else if (valt == TY_POLY && hv == TY_FLOAT) buf_printf(b, "sp_poly_to_f(_t%d)", tmps[i]);
-          /* (one representation: a String value of either face, as bytes) */
-          else if (hv == TY_STRING) buf_printf(b, "SP_STR_B(_t%d)", tmps[i]);
+          /* (a String value of either face, as the handle the Hash holds) */
+          else if (hv == TY_STRING) { char tx[24]; snprintf(tx, sizeof tx, "_t%d", tmps[i]); emit_typed_elem_hold(c, els[i], recv_t, tx, b); }
           else buf_printf(b, "_t%d", tmps[i]);
         }
         buf_puts(b, ");\n");
@@ -20524,13 +20532,14 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
       }
     }
     else {
-      /* (one representation: a String is held as it is, a handle a
-         variable's; the String Array keeps its bytes) */
+      /* (a String is held as it is, a handle a variable's: the String Array holds the handle) */
       int sb = rest_arr_t == TY_STR_ARRAY;
       for (int i = rstart; i < rend; i++) {
         emit_indent(b, indent);
-        buf_printf(b, sb ? "sp_%sArray_push%s(_t%d, SP_STR_B(_t%d));\n" : "sp_%sArray_push%s(_t%d, _t%d);\n",
-                   k, nil_store_sfx(c, k, els[i]), tr, tmps[i]);
+        char tx[24]; snprintf(tx, sizeof tx, "_t%d", tmps[i]);
+        buf_printf(b, "sp_%sArray_push%s(_t%d, ", k, sb ? typed_elem_store_sfx(rest_arr_t) : nil_store_sfx(c, k, els[i]), tr);
+        emit_typed_elem_hold(c, -1, rest_arr_t, tx, b);
+        buf_puts(b, ");\n");
       }
     }
     char rx[32]; snprintf(rx, sizeof rx, "_t%d", tr);
@@ -26411,11 +26420,13 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
           buf_printf(b, "sp_int _t%d = sp_%sArray_length(_t%d); ", tn, ak, tsrc);
           /* the same kind copies each element with its nil */
           int same_o = sp_streq(ak, k) && (et == TY_INT || et == TY_FLOAT);
-          buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ", ti, ti, tn, ti, k, same_o ? "_o" : ssfx, tr);
-          char getx[128]; snprintf(getx, sizeof getx, "sp_%sArray_%s(_t%d, _t%d)", ak, same_o ? "oget" : "get", tsrc, ti);
+          /* (an Array that holds the handle copies and stores handles: its row's `_e` entries) */
+          const char *hs = same_o ? "" : typed_elem_store_sfx(rt);
+          buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ", ti, ti, tn, ti, k, same_o ? "_o" : hs[0] ? hs : ssfx, tr);
+          char getx[128]; snprintf(getx, sizeof getx, "sp_%sArray_%s%s(_t%d, _t%d)", ak, same_o ? "oget" : "get", sp_streq(ak, k) ? hs : "", tsrc, ti);
           TyKind selem = ty_array_elem(at);
           if (et == TY_POLY && !sp_streq(ak, "Poly")) { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, selem, getx, &bx); buf_puts(b, bx.p ? bx.p : getx); free(bx.p); }
-          else if (sp_streq(ak, "Poly") && et == TY_STRING) buf_printf(b, "sp_poly_elem_s(%s)", getx);
+          else if (sp_streq(ak, "Poly") && et == TY_STRING) buf_printf(b, "sp_poly_elem_%c(%s)", hs[0] ? 'e' : 's', getx);
           else if (sp_streq(ak, "Poly") && et == TY_INT) buf_printf(b, "sp_poly_elem_i(%s)", getx);
           else if (sp_streq(ak, "Poly") && et == TY_FLOAT) buf_printf(b, "sp_poly_elem_f(%s)", getx);
           else buf_puts(b, getx);
@@ -26426,10 +26437,10 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
           /* unknown/poly splat source: normalize to a PolyArray and spread boxed */
           buf_printf(b, "{ sp_PolyArray *_t%d = sp_poly_to_poly_array(", tsrc); emit_boxed(c, inner, b); buf_puts(b, "); ");
           buf_printf(b, "sp_int _t%d = _t%d->len; ", tn, tsrc);
-          buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ", ti, ti, tn, ti, k, nil_store_sfx(c, k, NIL_STORE_BOXED), tr);
+          buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ", ti, ti, tn, ti, k, elem_push_sfx(rt, nil_store_sfx(c, k, NIL_STORE_BOXED)), tr);
           char getx[64]; snprintf(getx, sizeof getx, "sp_PolyArray_get(_t%d, _t%d)", tsrc, ti);
           switch (et) {
-          case TY_STRING: buf_printf(b, "sp_poly_elem_s(%s)", getx); break;
+          case TY_STRING: buf_printf(b, "sp_poly_elem_%c(%s)", typed_elem_store_sfx(rt)[0] ? 'e' : 's', getx); break;
           case TY_INT: buf_printf(b, "sp_poly_elem_i(%s)", getx); break;
           case TY_FLOAT: buf_printf(b, "sp_poly_elem_f(%s)", getx); break;
           default: buf_puts(b, getx); break;
@@ -26924,13 +26935,16 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
          (String#*). The native fallthrough (`char* << char*`, `char* * int`)
          never compiles, so anything else is rejected here explicitly. */
       int tc = ++g_tmp, td = ++g_tmp;
-      buf_printf(b, "sp_StrArray_set(_t%d, _t%d, ({ const char *_t%d = %s; SP_GC_ROOT(_t%d); ",
-                 ta, tb, tc, slot, tc);
-      char *rhs = iow_rhs(c, v, IOW_RHS_EXPR, eff ? b : NULL);
-      if (vr.kind == RK_BOXED) buf_printf(b, "const char *_t%d = sp_poly_to_s(%s)", td, rhs);
-      else buf_printf(b, "const char *_t%d = %s", td, rhs);
+      Buf nv = {0};   /* the new String, then held as the handle the slot is */
+      buf_printf(&nv, "({ const char *_t%d = %s; SP_GC_ROOT(_t%d); ", tc, slot, tc);
+      char *rhs = iow_rhs(c, v, IOW_RHS_EXPR, eff ? &nv : NULL);
+      if (vr.kind == RK_BOXED) buf_printf(&nv, "const char *_t%d = sp_poly_to_s(%s)", td, rhs);
+      else buf_printf(&nv, "const char *_t%d = %s", td, rhs);
       free(rhs);
-      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_str_plus(_t%d, _t%d); })); }\n", td, tc, td);
+      buf_printf(&nv, "; SP_GC_ROOT(_t%d); sp_str_plus(_t%d, _t%d); })", td, tc, td);
+      buf_printf(b, "sp_StrArray_set_e(_t%d, _t%d, ", ta, tb);
+      emit_typed_elem_hold(c, -1, rt, nv.p, b); free(nv.p);
+      buf_puts(b, "); }\n");
       return;
     }
     if (rt == TY_STR_ARRAY && !sp_streq(op, "*"))
@@ -27030,9 +27044,12 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, ")%s; }\n", hc_mark());
       return;
     }
-    buf_printf(b, "sp_%sArray_set(_t%d, _t%d, ", k, ta, tb);
+    buf_printf(b, "sp_%sArray_set%s(_t%d, _t%d, ", k, typed_elem_store_sfx(rt), ta, tb);
     if (rt == TY_POLY_ARRAY) buf_printf(b, "%s(%s, %s)", pf, slot, rhs);
-    else if (rt == TY_STR_ARRAY) buf_printf(b, "sp_str_repeat(%s, %s)", slot, rhs);
+    else if (rt == TY_STR_ARRAY) {
+      Buf rp = {0}; buf_printf(&rp, "sp_str_repeat(%s, %s)", slot, rhs);
+      emit_typed_elem_hold(c, -1, rt, rp.p, b); free(rp.p);
+    }
     /* an Integer slot shifted by a boxed count: the range-checked helper on
        the unboxed count, as a runtime count always is (the poly fold below
        answered a Bignum the slot then truncated: `a[0] <<= n` was 0) */
@@ -27244,13 +27261,12 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
     char *rhs = iow_guarded_rhs(c, v, rt == TY_POLY_ARRAY || nilable ? IOW_RHS_BOXED : IOW_RHS_EXPR, b, &open);
     if (nilable) buf_printf(b, "sp_%sArray_oset(_t%d, _t%d, %s(%s)", k, ta, tb, oint_unbox(ty_array_elem(rt)), rhs);
     else {
-      buf_printf(b, "sp_%sArray_set(_t%d, _t%d, ", k, ta, tb);
+      buf_printf(b, "sp_%sArray_set%s(_t%d, _t%d, ", k, typed_elem_store_sfx(rt), ta, tb);
       if (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY)
         emit_typed_sink_text(c, v, rt == TY_INT_ARRAY ? TY_INT : TY_FLOAT,
                              rhs[0] ? rhs : (rt == TY_INT_ARRAY ? "0" : "0.0"), b);
-      /* (one-String mode: a String Array takes the value's bytes face) */
-      else if (rt == TY_STR_ARRAY) buf_printf(b, "SP_STR_B(%s)", rhs);
-      else buf_puts(b, rhs);
+      /* (a String Array holds the handle: the value's, of either face) */
+      else emit_typed_elem_hold(c, v, rt, rhs, b);
     }
     buf_puts(b, ")");
     iow_guard_close(rhs, open, b);

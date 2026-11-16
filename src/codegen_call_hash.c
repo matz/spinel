@@ -915,6 +915,8 @@ int emit_op_hash_nil_recv(Compiler *c, const BopCtx *x, Buf *b) {
    written. A receiver the nil fact says is never nil keeps the plain call. */
 int emit_hash_has_value(Compiler *c, int recv, int arg, TyKind rt, const char *hn, int poly,
                         const char *name, Buf *b) {
+  /* a Hash that holds the handle searches for the needle's handle (of either face) */
+  int hold = !poly && typed_elem_held(rt) == TY_STRBUF;
   if (!recv_never_nil(c, recv)) {
     Buf rx = expr_buf(c, recv);
     char ct[48]; snprintf(ct, sizeof ct, "sp_%sHash *", hn);
@@ -924,12 +926,16 @@ int emit_hash_has_value(Compiler *c, int recv, int arg, TyKind rt, const char *h
     buf_printf(b, "%s _t%d = ", poly ? "sp_RbVal" : c_type_name(ty_hash_val(rt)), ta);
     if (poly) emit_boxed(c, arg, b); else emit_expr(c, arg, b);
     buf_puts(b, "; "); nil_recv_check(name, t, b);
-    buf_printf(b, " sp_%sHash_has_value(_t%d, _t%d); })", hn, t, ta);
+    char nd[24]; snprintf(nd, sizeof nd, "_t%d", ta);
+    buf_puts(b, " "); emit_hash_entry(b, rt, "has_value"); buf_printf(b, "(_t%d, ", t);
+    emit_typed_elem_hold(c, arg, rt, nd, b);
+    buf_puts(b, "); })");
     return 1;
   }
-  buf_printf(b, "sp_%sHash_has_value(", hn);
+  emit_hash_entry(b, rt, "has_value"); buf_puts(b, "(");
   emit_expr(c, recv, b); buf_puts(b, ", ");
-  if (poly) emit_boxed(c, arg, b); else emit_expr(c, arg, b);
+  if (poly) emit_boxed(c, arg, b);
+  else { Buf ab = expr_buf(c, arg); emit_typed_elem_hold(c, arg, rt, ab.p ? ab.p : "NULL", b); free(ab.p); }
   buf_puts(b, ")");
   return 1;
 }

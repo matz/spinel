@@ -2075,7 +2075,7 @@ int g_re_init_needed = 0;
    handle (sp_strelem), stored through the `_e` entries: the value is taken
    as its handle where it is written (emit_typed_elem_hold), so a String in
    hand is stored as itself rather than handed over as its bytes for the
-   runtime to find the handle again (sp_strelem_fx). */
+   runtime to find the handle again. */
 void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b) {
   TyKind et = typed_elem_kind(rt);
   Repr vr = repr_of(c, node);
@@ -2117,6 +2117,40 @@ const char *typed_elem_sfx(TyKind rt) {
 TyKind typed_elem_held(TyKind rt) {
   const TyTraits *tr = ty_traits_of(rt);
   return tr ? (TyKind)tr->elem_held : TY_UNKNOWN;
+}
+/* The typed Array kind whose element-kind name (array_kind) is k, or TY_UNKNOWN: the way back from the
+   names the emitters carry to the kind whose container row answers how its element is held */
+TyKind array_kind_ty(const char *k) {
+  static const TyKind arrs[] = { TY_INT_ARRAY, TY_FLOAT_ARRAY, TY_STR_ARRAY };
+  for (size_t i = 0; k && i < sizeof arrs / sizeof arrs[0]; i++)
+    if (sp_streq(k, array_kind(arrs[i]))) return arrs[i];
+  return TY_UNKNOWN;
+}
+/* The push entry's suffix for the Array kind rt (or element kind name k, where only the name is in hand)
+   where nil_store_sfx chose sfx: the row's (typed_elem_store_sfx: `_e` for an Array that holds the handle)
+   where the nil store chose none */
+const char *elem_push_sfx(TyKind rt, const char *sfx) {
+  return sfx[0] ? sfx : typed_elem_store_sfx(rt);
+}
+const char *array_push_sfx(const char *k, const char *sfx) {
+  return elem_push_sfx(array_kind_ty(k), sfx);
+}
+/* The name of the entry `op` (push, set, insert, index, rindex, has_value, ...) of the typed Array of element
+   kind k, or of the typed Hash of kind hrt: the container row's suffix (typed_elem_store_sfx) after the
+   operation, so an Array that holds the handle takes the `_e` entry and no name for a deleted bytes entry is
+   ever formatted. tools/entry_names_check.rb keeps a hand-formatted store or search name from coming back. */
+void emit_array_entry(Buf *b, const char *k, const char *op) {
+  buf_printf(b, "sp_%sArray_%s%s", k ? k : "", op, typed_elem_store_sfx(array_kind_ty(k)));
+}
+void emit_hash_entry(Buf *b, TyKind hrt, const char *op) {
+  buf_printf(b, "sp_%sHash_%s%s", ty_hash_cname(hrt), op, typed_elem_store_sfx(hrt));
+}
+/* `sp_<k>Array_push(_t<t>, <text>)` for an element kind k: the text as the kind's push takes it
+   (a String Array: its handle). No semicolon. */
+void emit_kind_push(Compiler *c, Buf *b, const char *k, int t, const char *text) {
+  emit_array_entry(b, k, "push"); buf_printf(b, "(_t%d, ", t);
+  emit_typed_elem_hold(c, -1, array_kind_ty(k), text, b);
+  buf_puts(b, ")");
 }
 /* The element store's suffix for rt, "" where its entries take none */
 const char *typed_elem_store_sfx(TyKind rt) {
@@ -2163,8 +2197,7 @@ int emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, B
 /* text, the value node is written as on its way into an element of rt, as
    the element is held: for the handle, the handle of either face (SP_STR_HDL:
    a handle is itself; bytes adopt the handle they were born in, or name a
-   payload's owner, or get the new handle sp_strelem_fx made for them in the
-   bytes entries) and a frozen literal's static object (strbuf_new_of_text),
+   payload's owner, or get a new handle) and a frozen literal's static object (strbuf_new_of_text),
    nil's NULL; for any other kind the text as it is. */
 void emit_typed_elem_hold(Compiler *c, int node, TyKind rt, const char *text, Buf *b) {
   if (typed_elem_held(rt) != TY_STRBUF) { buf_puts(b, text); return; }

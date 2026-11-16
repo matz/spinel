@@ -4925,8 +4925,8 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
             int rhi2 = nt_ref(nt, rn2, "right");
             Buf lo2; memset(&lo2, 0, sizeof lo2); emit_expr(c, rlo2, &lo2);
             Buf hi2; memset(&hi2, 0, sizeof hi2); emit_expr(c, rhi2, &hi2);
-            buf_printf(g_pre, "{ sp_StrArray *_sa = sp_StrArray_from_string_range(%s, %s, %d); if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_%sArray_push(_t%d, %s); }\n",
-                       lo2.p ? lo2.p : "NULL", hi2.p ? hi2.p : "NULL", rexcl2, k, t, ONE_SA_ELEM);
+            buf_printf(g_pre, "{ sp_StrArray *_sa = sp_StrArray_from_string_range(%s, %s, %d); if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_StrArray_push_e(_t%d, _sa->data[_si]); }\n",
+                       lo2.p ? lo2.p : "NULL", hi2.p ? hi2.p : "NULL", rexcl2, t);
             free(lo2.p); free(hi2.p);
           }
           else {
@@ -4937,7 +4937,7 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
           /* not the slot itself: a nil lives in the bitmap, and the slot alone reads 0 */
           buf_printf(g_pre, "{ sp_IntArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_%sArray_push_o(_t%d, sp_IntArray_oget(_sa, _si)); }\n", ep, k, t);
         else if (ir.elem == TY_STRING && sp_streq(k, "Str"))
-          buf_printf(g_pre, "{ sp_StrArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_%sArray_push(_t%d, %s); }\n", ep, k, t, ONE_SA_ELEM);
+          buf_printf(g_pre, "{ sp_StrArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_StrArray_push_e(_t%d, _sa->data[_si]); }\n", ep, t);
         else if (ir.elem == TY_FLOAT && sp_streq(k, "Float"))
           buf_printf(g_pre, "{ sp_FloatArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_FloatArray_push_o(_t%d, sp_FloatArray_oget(_sa, _si)); }\n", ep, t);
         else if (it == TY_NIL)
@@ -4954,7 +4954,9 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
         }
         else {
           /* Mismatched or unknown element type: emit_expr fallback */
-          buf_printf(g_pre, "sp_%sArray_push%s(_t%d, %s);\n", k, nil_store_sfx(c, k, inner), t, ep);
+          const char *ns = nil_store_sfx(c, k, inner);
+          if (ns[0]) buf_printf(g_pre, "sp_%sArray_push%s(_t%d, %s);\n", k, ns, t, ep);
+          else { emit_kind_push(c, g_pre, k, t, ep); buf_puts(g_pre, ";\n"); }
         }
         free(el.p);
       }
@@ -6566,6 +6568,19 @@ static void emit_forwarded_block_value(Compiler *c, int id, Buf *b) {
   if (optional) buf_puts(b, ")");
 }
 
+/* `a[i] ||= v` / `a[i] &&= v` on a String Array: the slot is read as its bytes for the test and stored as the
+   handle the Array holds (the row's hold) */
+static void emit_index_or_str_array(Compiler *c, int ir, int idx, int iv, TyKind irt, int is_or, int ta, int tb, int tc, Buf *b) {
+  buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_expr(c, ir, b);
+  buf_printf(b, "; sp_int _t%d = ", tb); emit_int_expr(c, idx, b);
+  buf_printf(b, "; const char *_t%d = SP_STR_B(sp_StrArray_get_e(_t%d, _t%d));", tc, ta, tb);
+  buf_printf(b, " if (%s_t%d) { ", is_or ? "!" : "", tc);
+  emit_guarded_slot_assign(c, iv, tc, b);
+  char tcn[24]; snprintf(tcn, sizeof tcn, "_t%d", tc);
+  buf_printf(b, "; sp_StrArray_set_e(_t%d, _t%d, ", ta, tb);
+  emit_typed_elem_hold(c, -1, irt, tcn, b);
+  buf_printf(b, "); } _t%d; })", tc);
+}
 static void emit_expr_node(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -6847,14 +6862,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       emit_guarded_oint_slot_assign(c, iv, et, tc2, b);
       buf_printf(b, "; sp_%sArray_oset(_t%d, _t%d, _t%d); } _t%d%s; })", k, ta2, tb2, tc2, tc2, node_is_oint(c, id) ? "" : ".v");
     }
-    else if (irr.elem == TY_STRING) {
-      buf_printf(b, "({ sp_StrArray *_t%d = ", ta2); emit_expr(c, ir, b);
-      buf_printf(b, "; sp_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
-      buf_printf(b, "; const char *_t%d = SP_STR_B(sp_StrArray_get_e(_t%d, _t%d));", tc2, ta2, tb2);
-      buf_printf(b, " if (%s_t%d) { ", is_or2 ? "!" : "", tc2);
-      emit_guarded_slot_assign(c, iv, tc2, b);
-      buf_printf(b, "; sp_StrArray_set(_t%d, _t%d, _t%d); } _t%d; })", ta2, tb2, tc2, tc2);
-    }
+    else if (irr.elem == TY_STRING) emit_index_or_str_array(c, ir, iav[0], iv, irt, is_or2, ta2, tb2, tc2, b);
     else if (ty_is_hash(irt)) {
       const char *hn = ty_hash_cname(irt);
       TyKind kt = ty_hash_key(irt);

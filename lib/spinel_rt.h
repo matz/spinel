@@ -19451,7 +19451,7 @@ static sp_StrArray *sp_dir_glob_multi_dot(sp_RbVal pats) {
     sp_StrArray *one = sp_dir_glob_dot(sp_poly_arg_path(ps->data[i]));
     SP_GC_ROOT(one);
     for (sp_int j = 0; one && j < one->len; j++)
-      sp_StrArray_push(out, sp_StrArray_get(one, j));
+      sp_StrArray_push_e(out, sp_StrArray_get_e(one, j));
   }
   return out;
 }

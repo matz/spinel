@@ -22483,9 +22483,18 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   g_ivar_nil_guarded_id = sv_ng;
   if (pre.p) buf_puts(b, pre.p);
   if (guard.p) buf_puts(b, guard.p);
+  /* Not the call's own type when the receiver is held as a concrete Hash or
+     Array and the call is boxed: a poly receiver viewed as its Hash face
+     (`[h, Klass][i].merge`) re-enters here under that view, and the arm it
+     makes answers the receiver's own copy, not a boxed value. */
+  int dboxed = ret_repr.kind == RK_BOXED;
+  if (ret == TY_POLY && rr.kind != RK_BOXED && rt != TY_POLY && (bop_answers_self(rt, nm, argc, 0) & BOPF_COPY_CLASS)) {
+    ret = rt;
+    dboxed = 0;
+  }
   emit_ctype(c, ret, b); buf_printf(b, " %s = %s", dn, call.p ? call.p : "");
   free(pre.p); free(guard.p); free(call.p);
-  buf_printf(b, ret_repr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); " : "; SP_GC_ROOT(%s); ", dn);
+  buf_printf(b, dboxed ? "; SP_GC_ROOT_RBVAL(%s); " : "; SP_GC_ROOT(%s); ", dn);
   if (boxed_copy == 2 && !is_object_copy(nm))
     buf_printf(b, "if (%s.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(%s.cls_id)) ", rn, rn);
   buf_puts(b, "sp_bivar_copy(");

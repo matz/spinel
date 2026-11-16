@@ -6544,6 +6544,32 @@ static int lr_runs_in(const LoadRecord *r, int a, int b) {
   return (b < r->nst ? r->st[b].nrun : r->nrun) - (a < r->nst ? r->st[a].nrun : r->nrun);
 }
 
+/* Is node, an attr_* call, the first thing of the program's that matters to a call of `name`: its statement is in
+   region 0 with no statement before it running code of the program's (lr_run_points), and no call of `name` (or a
+   send, a Method maker or an op-assign naming it) stands outside a method body before it? Then every call that can
+   run, in a method body or after it, runs after the accessor is made, whatever its window. */
+int elab_accessor_first(Compiler *c, int node, const char *name) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || node < 0 || !name) return 0;
+  int framed = elab_plan_enter(c, node), ok;
+  lr_run_points(c);
+  r = c->lrec;
+  int s = node < r->n ? r->at[node] : -1;
+  ok = s >= 0 && r->st[s].region == 0 && r->st[s].nrun == 0;
+  for (int id = 0; ok && id < r->n; id++) {
+    if (nt_kind(c->nt, id) != NK_CallNode) continue;
+    int at = r->at[id];
+    /* (a call in a method body or a kept block runs after code of the program's; one after the attr_* statement of
+       region 0 runs after it) */
+    if (at >= 0 && ((r->bits[id] & LR_LATE) || (at >= s && r->st[at].region == 0))) continue;
+    const char *nm[2];
+    int n = call_node_names(c, id, nm);
+    for (int i = 0; i < n; i++) if (nm[i] && sp_streq(nm[i], name)) ok = 0;
+  }
+  if (framed) elab_plan_leave(c);
+  return ok;
+}
+
 /* The node the climb to a point goes on to from a: its parent; from a
    clone no file's root reaches (a method body a pass copied: a mixin's
    copy, a module_function's), the node it copies, where it stands as the

@@ -459,6 +459,7 @@ void ver_hold_free(Compiler *c);
 void ver_chain_free(Compiler *c);
 void new_inits_free(Compiler *c);
 void new_sites_free(Compiler *c);
+void attr_facts_free(Compiler *c);
 /* the method call id reaches when it can reach only main's own method of
    name, -1 for none (a call on main where main's method is defined) */
 int ct_main_target(Compiler *c, int id, const char *name);

@@ -4182,9 +4182,56 @@ static int ct_lookup_object_top(Compiler *c, int id, int cls, const char *name, 
    as versions (ct_attr_version), so where none has run by id's point and the class has no Struct or Data member of the
    name, the ask answers none (MLW_RECORD). Where the name has versions otherwise, the answer is the table's, reported
    as an `accessor` table answer (id -1 asks it of every class: a candidate scan). */
+typedef struct AttrFact { int cls, first; char *name; } AttrFact;
+struct AttrFacts { AttrFact *slot; int cap, used; ElabStamp stamp; };
+void attr_facts_free(Compiler *c) {
+  if (!c->attr_facts) return;
+  for (int i = 0; i < c->attr_facts->cap; i++) free(c->attr_facts->slot[i].name);
+  free(c->attr_facts->slot);
+  free(c->attr_facts);
+  c->attr_facts = NULL;
+}
+/* Is the attr_* call that is the only version of `name` on cls's chain the first thing of the program's that matters
+   to a call of it (elab_accessor_first)? Kept by (class, name) while the record's shape stands: a node a pass appends,
+   or the rebuild of the map it causes, moves no attr_* call's place, and a pass that appends between asks would
+   otherwise drop the facts at each. */
+static int attr_first(Compiler *c, int cls, const char *name) {
+  struct AttrFacts *m = c->attr_facts;
+  ElabStamp cur = elab_stamp(c);
+  if (m) cur.nt = m->stamp.nt, cur.rec = m->stamp.rec;
+  if (m && !elab_stamp_same(m->stamp, cur)) { attr_facts_free(c); m = NULL; }
+  if (!m) {
+    if (!(c->attr_facts = m = calloc(1, sizeof *m))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    m->stamp = elab_stamp(c);
+  }
+  if (2 * (m->used + 1) > m->cap) {
+    AttrFact *old = m->slot;
+    int ocap = m->cap;
+    m->cap = ocap ? 2 * ocap : 256;
+    if (!(m->slot = calloc((size_t)m->cap, sizeof *m->slot))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < ocap; i++) {
+      if (!old[i].name) continue;
+      int j = (int)(ver_mix(sp_strhash(old[i].name) + (unsigned)old[i].cls * 0x9E3779B1u) & (unsigned)(m->cap - 1));
+      while (m->slot[j].name) j = (j + 1) & (m->cap - 1);
+      m->slot[j] = old[i];
+    }
+    free(old);
+  }
+  int j = (int)(ver_mix(sp_strhash(name) + (unsigned)cls * 0x9E3779B1u) & (unsigned)(m->cap - 1));
+  for (; m->slot[j].name; j = (j + 1) & (m->cap - 1))
+    if (m->slot[j].cls == cls && sp_streq(m->slot[j].name, name)) return m->slot[j].first;
+  ElabVersion vs[2];
+  int n = elab_chain_versions(c, cls, 0, name, vs, 2), first = n == 1 && ct_attr_version(vs[0].v) && vs[0].v->node >= 0 &&
+                                                                 elab_accessor_first(c, vs[0].v->node, name);
+  m->slot[j] = (AttrFact){ cls, first, name_dup(name) };
+  m->used++;
+  return first;
+}
 static void ct_attr_point(Compiler *c, int id, int cls, unsigned flags, const char *name, MethodLookup *ml) {
   if (!ct_version_named(c, name)) return;
   if (id >= 0) {
+    /* (made before any code of the program's can run: live at every call, none asks a window) */
+    if (attr_first(c, cls, name)) return;
     int none, framed = elab_plan_enter(c, id);
     const LrDef *d = ct_met_version(c, id, cls, name, 0, &none);
     if (framed) elab_plan_leave(c);
@@ -11687,6 +11734,7 @@ void ver_memo_drop(Compiler *c) {
   free(c->guard_memo.at); free(c->guard_memo.to);
   c->guard_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
   new_sites_free(c);
+  attr_facts_free(c);
 }
 static int ver_late_key_cmp(const struct VerLate *x, const struct VerLate *y) {
   int d = strcmp(x->name, y->name);

@@ -2356,7 +2356,11 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          call ran on the nil (#11851) */
       int sn_ptr = ty_null_is_nil(rrt) && rrt != TY_POLY && rrt != TY_STRING &&
                    rrr.kind != RK_VOBJ && node_may_be_null_nil(c, recv);
-      if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont || sn_ptr) && g_sn_skip != id) {
+      /* a Class value is a by-value sp_Class whose nil is the sentinel
+         (a nil-defaulted Class parameter, `def f(x = nil) = x&.name`):
+         the guard asks sp_class_nil_p */
+      int sn_cls = rrt == TY_CLASS && rrr.kind != RK_BOXED && node_may_be_null_nil(c, recv);
+      if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont || sn_ptr || sn_cls) && g_sn_skip != id) {
         int tsn2 = ++g_tmp;
         /* (an attribute assignment marked to hand out its handle answers it,
            and so does a String Array's element read written as the handle
@@ -2426,6 +2430,8 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         else if (sn_scalar)
           buf_printf(g_pre, "%s _sn%d = %s; %s _snv%d = _sn%d.v;\n", oint_ctype(rrt), tsn2,
                      rsn.p ? rsn.p : oint_nil(rrt), c_type_name(rrt), tsn2, tsn2);
+        else if (sn_cls)
+          buf_printf(g_pre, "sp_Class _sn%d = %s;\n", tsn2, rsn.p ? rsn.p : "SP_CLASS_NIL");
         else if (sn_cont || sn_ptr) {
           emit_ctype(c, rrt, g_pre);
           buf_printf(g_pre, " _sn%d = %s;", tsn2, rsn.p ? rsn.p : "NULL");
@@ -2445,6 +2451,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         }
         char nilt[64];
         if (sn_scalar) snprintf(nilt, sizeof nilt, "_sn%d.nil", tsn2);
+        else if (sn_cls) snprintf(nilt, sizeof nilt, "sp_class_nil_p(_sn%d)", tsn2);
         else           snprintf(nilt, sizeof nilt, "_sn%d == NULL", tsn2);
         const char *nilv;
         if (ret2 == TY_POLY) nilv = "sp_box_nil()";

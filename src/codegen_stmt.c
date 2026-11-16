@@ -8284,13 +8284,16 @@ static int emit_io_enumerable_when(TyKind pt, const char *cn, int t, Buf *b) {
    wrote a condition, 0 when the pattern names neither a root the object
    belongs to, a class nil belongs to, the subject's class or one above it,
    nor a module one of those includes (the caller decides the rest). A class
-   below the subject's class gets a run-time test of the object's class id. */
-static int emit_obj_class_when(Compiler *c, TyKind pt, const char *cn, int t, Buf *b) {
+   below the subject's class gets a run-time test of the object's class id.
+   pat is the pattern's constant node, cn its name (an alias's class's). */
+static int emit_obj_class_when(Compiler *c, TyKind pt, const char *cn, int pat, int t, Buf *b) {
   int cid = ty_object_class(pt);
+  /* (the class the pattern's constant names, at its point: an alias's among them) */
+  int pk = const_node_class_index(c, pat);
   /* a class-aliasing constant (Alias = SomeClass) tests the aliased class,
      as the poly arm does (emit_poly_class_when), when the alias is written
      once at the top level and names no class of its own */
-  if (comp_class_index(c, cn) < 0 && const_toplevel_alias(c, cn)) {
+  if (pk < 0 && const_toplevel_alias(c, cn)) {
     const char *ra = resolve_class_alias(c, cn);
     if (ra) cn = ra;
   }
@@ -8305,7 +8308,7 @@ static int emit_obj_class_when(Compiler *c, TyKind pt, const char *cn, int t, Bu
   /* the class itself or a superclass by index; a module the class (or a
      superclass) includes by its `include` line, whether a user module or a
      builtin one such as Comparable (a module is never a parent) */
-  int tcid = comp_class_index(c, cn);
+  int tcid = pk;
   int is_mod = tcid >= 0 ? comp_class_is_module(c, &c->classes[tcid]) : is_builtin_module_name(cn);
   if ((tcid >= 0 && (cid == tcid || is_descendant(c, cid, tcid))) ||
       (is_mod && class_mixes_in(c, cid, tcid >= 0 ? tcid : elab_module_named(c, cn), 0))) {
@@ -8633,7 +8636,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
        the scrutinee's class is the pattern class or below it, and by the
        runtime tag when the pattern names a descendant of the static type. */
     if (ty_is_object(pt)) {
-      if (emit_obj_class_when(c, pt, cn2, t, b)) return 1;
+      if (emit_obj_class_when(c, pt, cn2, pat, t, b)) return 1;
       buf_puts(b, "0");
       return 1;
     }
@@ -11771,7 +11774,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
               buf_puts(b, "0");
           }
           else if (cn2 && ty_is_object(pt)) {
-            if (!emit_obj_class_when(c, pt, cn2, t, b)) buf_puts(b, "0");
+            if (!emit_obj_class_when(c, pt, cn2, conds[j], t, b)) buf_puts(b, "0");
           }
           else if (cn2 && pt == TY_CLASS) {
             /* `when <ClassName>` is ===: a Class VALUE is an instance only
@@ -12227,7 +12230,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
           if (!emit_poly_class_when(c, conds[j], tmp, b)) buf_puts(b, "0");
         }
         else if (cn2 && ty_is_object(pt)) {
-          if (!emit_obj_class_when(c, pt, cn2, t, b)) buf_puts(b, "0");
+          if (!emit_obj_class_when(c, pt, cn2, conds[j], t, b)) buf_puts(b, "0");
         }
         else if (cn2 && pt == TY_CLASS) {
           /* a Class VALUE is an instance only of Class/Module and the roots

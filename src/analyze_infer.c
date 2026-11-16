@@ -10745,7 +10745,7 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
      the bare constant `Name`; resolve it as a class when it is one so is_a?,
      case/when, etc. treat `::Integer` exactly like `Integer` (#2683). */
   if (nm && nt_ref(nt, id, "parent") < 0 &&
-      (comp_class_index(c, nm) >= 0 || is_builtin_class_name(nm) ||
+      (const_node_class_index(c, id) >= 0 || is_builtin_class_name(nm) ||
        is_builtin_exception_name(nm)))
     { *out = TY_CLASS; return 1; }
   if (nm && sp_streq(nm, "ARGV")) { *out = TY_STR_ARRAY; return 1; }

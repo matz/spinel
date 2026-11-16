@@ -3052,8 +3052,7 @@ static int ct_raise_class(Compiler *c, int id, int *val) {
     *val = ac > 0 && class_recv_may_be_dynamic(c, av[0]);
     return -1;
   }
-  const char *cn = const_node_match_class_name(c, av[0]);
-  int xc = comp_class_index(c, cn ? cn : nt_str(nt, av[0], "name"));
+  int xc = const_node_match_class_or_named(c, av[0]);
   return xc >= 0 && class_is_exc_subclass(c, xc) ? xc : -1;
 }
 /* See call_plan.h. The class ct_raise_class names. */

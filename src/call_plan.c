@@ -4201,6 +4201,22 @@ static int ct_main_mixin_ahead(Compiler *c, int id, const char *name) {
   return ct_main_chain(c, id, name, 0, &step, &d) == ELAB_YES && (step == EMC_EXTEND || step == EMC_PREPEND);
 }
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
+  /* (CT_TOP | CT_INCLUDED asks main's whole chain at the call: a module main extends or Object prepends answers ahead of
+     the top-level def where the fact puts it there, else the top-level def, else a module Object includes. CT_TOP alone
+     is the top-level functions' ask and keeps that meaning) */
+  if ((*flags & (CT_TOP | CT_INCLUDED)) == (CT_TOP | CT_INCLUDED)) {
+    unsigned f = *flags & ~(unsigned)CT_TOP;
+    int mi = -1;
+    if (id < 0 || !ct_main_mixin_ahead(c, id, name)) {
+      f = *flags & ~(unsigned)CT_INCLUDED;
+      mi = ct_lookup(c, id, cls, name, &f, ml);
+      if (mi >= 0 || (ml && (ml->kind == ML_NONE || ml->kind == ML_SINGLETON))) { *flags = f; return mi; }   /* (an undef's stop or main's own core method answers none: nothing behind it) */
+      f = *flags & ~(unsigned)CT_TOP;
+    }
+    mi = ct_lookup(c, id, cls, name, &f, ml);
+    *flags = f | CT_TOP;
+    return mi;
+  }
   /* (a module the top level includes brings its method into Object's chain: where the name has versions there, a
      top-level def after the include among them, the call's own point chooses, as a call on Object's does) */
   if (*flags & CT_INCLUDED) {
@@ -4231,11 +4247,6 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
   }
   if (sg) {
     if (ml) ml->kind = ML_SINGLETON;
-    return -1;
-  }
-  /* (an extend's or Object prepend's method answers ahead of main's top-level def: the mixin ask's, CT_INCLUDED) */
-  if ((*flags & CT_TOP) && !(*flags & CT_CAPTURE) && id >= 0 && ct_main_mixin_ahead(c, id, name)) {
-    if (ml) ml->kind = ML_NONE;
     return -1;
   }
   int si = (*flags & CT_TOP) && id >= 0 ? comp_main_method(c, name) : -1;

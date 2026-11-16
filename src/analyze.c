@@ -12238,7 +12238,7 @@ static int expand_literal_splat_args(Compiler *c) {
       if (!lit) continue; }
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) {
-      if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || call_target(c, id, -1, nm, CT_INCLUDED, NULL) >= 0)
+      if (call_target(c, id, -1, nm, CT_TOP | CT_INCLUDED, NULL) >= 0)
         continue;   /* a user method: native splat path */
     }
     else {

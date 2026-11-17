@@ -7781,12 +7781,16 @@ static void emit_arg_or_default_at(Compiler *c, Scope *m, int idx, int provided,
 /* The handles emit_arg_temp took of the shared String slots it ran first:
    each names the override it rode with -- its index in g_argov, the node,
    and the value temp that override reads -- and the temp holding the handle.
-   An override the call has dropped since (a later call reuses its index)
-   is pruned when the next one is taken, so the list is no longer than the
-   overrides live at once. */
+   Dropping an override drops its handle record at the same time. */
 typedef struct { int idx, node, t, th, read; } RanHandle;
 static RanHandle *g_ran_hnd;
 static int g_n_ran_hnd, g_cap_ran_hnd;
+
+/* Records append at increasing binding indices. A rollback drops the
+   suffix before another view can reuse those nodes and temporary numbers. */
+void ran_first_unbind(int n) {
+  while (g_n_ran_hnd && g_ran_hnd[g_n_ran_hnd - 1].idx >= n) g_n_ran_hnd--;
+}
 
 /* The handle temp emit_arg_temp took of the shared String slot `node` that
    the call ran first, -1 when there is none. It is the one recorded with the
@@ -9392,10 +9396,6 @@ static void ran_first_bind_o(int v, int t, int th, int to) {
      entries the rest never ran where a static check refuses the call, or ran
      at their slots, after the ones that follow them */
   argov_reserve();
-  int k = 0;
-  for (int j = 0; j < g_n_ran_hnd; j++)
-    if (g_ran_hnd[j].idx < g_n_argov) g_ran_hnd[k++] = g_ran_hnd[j];
-  g_n_ran_hnd = k;
   if (th >= 0) {
     if (g_n_ran_hnd == g_cap_ran_hnd) {
       g_cap_ran_hnd = g_cap_ran_hnd ? g_cap_ran_hnd * 2 : 16;
@@ -9419,7 +9419,6 @@ void ran_first_bind_read(int v, int th) {
 int ran_first_read_handle(int node) {
   for (int i = g_n_argov - 1; i >= 0; i--) {
     if (g_argov_node[i] != node) continue;
-    /* Not the record's word alone: one left by a binding since unbound outlives it when a view_bind reuses its slot. */
     for (int j = 0; j < g_n_ran_hnd; j++) {
       if (g_ran_hnd[j].idx != i || g_ran_hnd[j].node != node) continue;
       char want[40];

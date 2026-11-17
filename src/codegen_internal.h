@@ -1455,6 +1455,7 @@ int arg_ran_first(int node, int from);
 /* The handle temp a shared String slot's argument took when it ran first
    (emit_arg_temp), -1 when there is none. */
 int ran_first_handle(int node);
+void ran_first_unbind(int n);
 /* Bind node v to its value temp _t<t>, with th its handle's temp or -1
    (codegen_fold.c) */
 void ran_first_bind(int v, int t, int th);

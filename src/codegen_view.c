@@ -153,7 +153,10 @@ int view_bind_temp_read(int node, const char *reader, int t) {
   return view_ran(view_bind(node, "%s(_t%d)", reader, t));
 }
 
-void view_unbind(int n) { g_n_argov = n; }
+void view_unbind(int n) {
+  ran_first_unbind(n);
+  g_n_argov = n;
+}
 
 /* See codegen_internal.h. A parked binding keeps its slot and its text; its
    node reads as none any lookup asks for (-1 is one they do ask for: a call
@@ -491,7 +494,7 @@ void view_unwind(int mark) {
     view_sp--;
     view_close(view_sp);
   }
-  if (g_n_argov > (mark & 0xffff)) g_n_argov = mark & 0xffff;
+  if (g_n_argov > (mark & 0xffff)) view_unbind(mark & 0xffff);
 }
 
 /* ---- per-arm facts (#7483) ---- */

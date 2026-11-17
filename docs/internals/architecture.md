@@ -47,6 +47,8 @@ static empty or one-character result. The Hash stores the key's byte view.
 
 A default argument is evaluated on the callee. Binding a String default
 uses the same handle as the expression that supplied it.
+An ordered operand keeps its saved handle until its argument binding is
+removed. An abandoned emission also removes the corresponding binding.
 
 A method inferred or declared to return String returns `sp_String *`.
 `repr_method_ret_storage` supplies the physical result type to signatures,

@@ -1813,14 +1813,29 @@ int builtin_numeric_owns(const char *cls, const char *m) {
   return is_numeric_class_name(cls) && builtin_name_in(m, num);
 }
 
-int is_gated_exception_accessor(const char *n) {
-  static const char *const names[] = {
-    "key", "receiver", "args", "private_call?", "reason", "exit_value", "tag",
-    "value", "status", "success?", "signo", "signm", "name", "errno", "error_code", "result", NULL };
-  if (!n) return 0;
-  for (int i = 0; names[i]; i++) if (sp_streq(n, names[i])) return 1;
-  return 0;
+/* The builtin exception classes that define each class-gated accessor, one
+   row per name (receiver has three owners). is_gated_exception_accessor and
+   gated_exception_accessor_owners read this one table; the runtime's own
+   gate (sp_exc_has_acc in lib/sp_exc.c) restates it, and
+   test/exception_respond_to_gated_accessor*.rb compare every name against
+   CRuby for every class, which is what keeps the two in step. */
+static const struct { const char *name; const char *owners[4]; } gated_exc_acc[] = {
+  {"key", {"KeyError"}}, {"receiver", {"NameError", "KeyError", "FrozenError"}},
+  {"args", {"NoMethodError"}}, {"private_call?", {"NoMethodError"}},
+  {"reason", {"LocalJumpError"}}, {"exit_value", {"LocalJumpError"}},
+  {"tag", {"UncaughtThrowError"}}, {"value", {"UncaughtThrowError"}},
+  {"status", {"SystemExit"}}, {"success?", {"SystemExit"}},
+  {"signo", {"SignalException"}}, {"signm", {"SignalException"}},
+  {"name", {"NameError"}}, {"errno", {"SystemCallError"}},
+  {"error_code", {"Socket::ResolutionError"}}, {"result", {"StopIteration"}},
+};
+const char *const *gated_exception_accessor_owners(const char *n) {
+  if (!n) return NULL;
+  for (size_t i = 0; i < sizeof gated_exc_acc / sizeof gated_exc_acc[0]; i++)
+    if (sp_streq(n, gated_exc_acc[i].name)) return gated_exc_acc[i].owners;
+  return NULL;
 }
+int is_gated_exception_accessor(const char *n) { return gated_exception_accessor_owners(n) != NULL; }
 
 int is_symbol_exception_accessor(const char *n) {
   return sp_streq(n, "reason") || sp_streq(n, "tag") || sp_streq(n, "key") || sp_streq(n, "name");

@@ -35968,7 +35968,7 @@ int strbuf_call_picks_up(Compiler *c, int id) {
     const char *cn = nt_kind(c->nt, r) == NK_ConstantReadNode ? nt_str(c->nt, r, "name") : NULL;
     return !cn || const_node_class_index(c, r) >= 0;
   }
-  return !nm || comp_cmethod_in_chain(c, k, nm, NULL) >= 0;
+  return !nm || call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0;
 }
 /* deep-return pickup (#3227 P6): a marked receiverless call to a method
    whose every return path yields a shared handle -- reset the side

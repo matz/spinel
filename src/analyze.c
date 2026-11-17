@@ -26616,7 +26616,7 @@ static int strbuf_container_source_walk_body(Compiler *c, int node, int depth, i
          class's method of a common name (each class's to_a) from each call
          was quadratic in the classes. */
       int rcid = recv >= 0 && nt_kind(nt, recv) != NK_SelfNode ? ty_object_class(infer_type(c, recv)) : -1;
-      int rdef = rcid >= 0 ? comp_method_in_chain(c, rcid, mn, NULL) : -1;
+      int rdef = rcid >= 0 ? call_target(c, node, rcid, mn, CT_METHODS, NULL) : -1;
       for (int mi = an_scopes_named_first(c, mn); mi >= 1; mi = an_scopes_named_next(c, mn, mi)) {
         Scope *m = &c->scopes[mi];
         if (rcid >= 0 && mi != rdef && !strbuf_class_may_answer(c, m->class_id, rcid)) continue;

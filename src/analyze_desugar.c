@@ -20819,12 +20819,18 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   if (cplan_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
   for (int i = 0; bx_cmp_recv_cls[i]; i++) {
     int k = comp_builtin_class_named(c, bx_cmp_recv_cls[i]);
+    mtab_enter(c);   /* (a survey of the program's own def of nm on each builtin class and top-level include: no call's question) */
     int mi = k >= 0 ? comp_method_in_chain(c, k, nm, NULL) : -1;
+    mtab_leave(c);
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
         !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return 1;
   }
-  for (int i = 0; i < c->ntoplevel_includes; i++)
-    if (comp_method_in_chain(c, c->toplevel_includes[i], nm, NULL) >= 0) return 1;
+  int inc = 0;
+  mtab_enter(c);
+  for (int i = 0; i < c->ntoplevel_includes && !inc; i++)
+    inc = comp_method_in_chain(c, c->toplevel_includes[i], nm, NULL) >= 0;
+  mtab_leave(c);
+  if (inc) return 1;
   /* a def in a module the chains above do not walk: one a mixed-in module
      prepends */
   for (int si = 1; si < c->nscopes; si++) {

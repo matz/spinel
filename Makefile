@@ -1992,6 +1992,19 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  else echo "ext-test: FAIL (--ext-class block host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/methods_new.rb -c --no-line-map --ext-init Init_ext_methods_new \
+	      --ext-entry ExtNew.sample,ExtNew.lazy,ExtNew.oops \
+	      --ext-class ExtNew::Point,ExtNew::Opt,ExtNew::Bare,ExtNew::Kid,ExtNew::Own,ExtNew::Blk,ExtNew::Lazy,ExtNew::Deep,ExtNew::Oops,ExtNew::Kw,ExtNew::Mixed,ExtNew::Inner::Point,ExtNew::Inner::Kid,ExtNew::Home::Room,ExtNew::Priv,ExtNew::Same,ExtNew::Single,ExtNew::Custom,ExtNew::Under,ExtNew::Meta,ExtNew::Far,ExtNew::Shy,ExtNew::FromRoot \
+	      -o "$$tmp/n.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (--ext-class new emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_new_host.c "$$tmp/n.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/nhost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/nhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected_methods_new && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class new host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_new "$$tmp/out" || true; ok=0; }; \
+	    SPINEL_GC_STRESS=1 "$$tmp/nhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected_methods_new && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class new host output mismatch under GC stress, or status $$rc)"; diff -u test/ext/expected_methods_new "$$tmp/out" || true; ok=0; }; \
+	  else echo "ext-test: FAIL (--ext-class new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/unreached_return.rb -c --no-line-map --ext-init Init_ext_unreached \
 	      --ext-entry ExtUnreached.mk,ExtUnreached.add,ExtUnreached.open_ids -o "$$tmp/u.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (unreached_return emission)"; ok=0; \

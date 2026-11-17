@@ -23574,7 +23574,233 @@ int desugar_send_aliases(Compiler *c) {
      def spinel_ext_fwd__0__each_slice = each_slice
      def spinel_ext_fwd__1__each_slice(a0) = each_slice(a0)
      def spinel_ext_fwdb__0__each_slice(b) = each_slice(&b)
-     def spinel_ext_fwdb__1__each_slice(a0, b) = each_slice(a0, &b) */
+     def spinel_ext_fwdb__1__each_slice(a0, b) = each_slice(a0, &b)
+
+   `new` is no def of the class, so each class gets forwarders that call
+   it on the class by name: one for each count of arguments of the
+   initialize that the class runs (its own, or the nearest one of the
+   classes above it), also for an initialize of fixed parameters:
+
+     class Point
+       def initialize(x, y = 0)
+       def self.spinel_ext_fwd__1__new(a0) = Point.new(a0)
+       def self.spinel_ext_fwd__2__new(a0, a1) = Point.new(a0, a1)
+
+   The call names the class, so it makes an object of that class and of
+   no class under it. A class under Point has forwarders of its own, and
+   the table of a class holds only the ones written in it
+   (ext_method_shape). A class with no initialize in its chain gets the
+   forwarder of no argument. A module gets none. Nor does a class that
+   defines `self.new` or is under one, nor a class whose chain leaves the
+   classes of the program (a class under StandardError or Array).
+
+   The defs are read before the classes are known, so the table checks
+   each forwarder again: the method the class answers takes the count
+   (ext_def_takes), and the forwarder answers an object of the class
+   (ext_method_exported). */
+/* What the definitions of one class say about its `new`. */
+typedef struct {
+  char *key;          /* ext_new_class_key */
+  char *ns;           /* the key of the namespace its first definition is written in */
+  char *super_ref;    /* its superclass reference as a key; NULL for none, or one that is no constant */
+  int first;          /* the first definition of the class */
+  int has_super;
+  int init_def;       /* its `def initialize`, -1 for none */
+  int snew;           /* it has a `def self.new` */
+} ExtNewFact;
+typedef struct { ExtNewFact *f; int n; } ExtNewFacts;
+enum { EXT_NEW_KEY = 512 };
+static int ext_new_fact_cmp(const void *a, const void *b) {
+  const ExtNewFact *x = a, *y = b;
+  int r = strcmp(x->key, y->key);
+  return r ? r : (x->first > y->first) - (x->first < y->first);
+}
+static char *ext_strdup(const char *s) {
+  char *d = s ? strdup(s) : NULL;
+  if (s && !d) { fprintf(stderr, "out of memory\n"); exit(1); }
+  return d;
+}
+/* Whether ref is a constant reference whose parts are all constants
+   (`Base`, `A::Base`), not `expr::Base` or another expression. */
+static int ext_new_ref_ok(const NodeTable *nt, int ref) {
+  NodeKind k = ref >= 0 ? nt_kind(nt, ref) : NK_NONE;
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
+  int p = ref;
+  while (p >= 0 && nt_kind(nt, p) == NK_ConstantPathNode) p = nt_ref(nt, p, "parent");
+  return p < 0 || nt_kind(nt, p) == NK_ConstantReadNode;
+}
+/* The key of the constant reference ref (`Base::`, `A::Base::`): the
+   qualifier of its path, then its name. *rooted says whether the
+   reference starts at the root (`::Base`, which stays when a class or a
+   module of the program has a `Base` of its own); the key is the same
+   with and without the `::`. 0 for another expression. */
+static int ext_new_ref_key(const NodeTable *nt, int ref, char *key, size_t cap, int *rooted) {
+  if (!ext_new_ref_ok(nt, ref)) return 0;
+  char full[EXT_NEW_KEY] = "";
+  fwd_path_key(nt, ref, full, sizeof full);
+  fwd_key_add(full, sizeof full, nt_str(nt, ref, "name"));
+  int r = full[0] == ':' && full[1] == ':';
+  if (rooted) *rooted = r;
+  snprintf(key, cap, "%s", full + (r ? 2 : 0));
+  return 1;
+}
+/* The key of the class that the definition d opens (`A::Base::`): the
+   namespace it is opened in, which holds the qualifier of its path
+   (fwd_ns_key), then its name. Two classes of one name in two namespaces
+   have two keys, and `class A::Base` has the key of `class Base` in
+   `module A`. A path from the root (`class ::Base`) is the key itself. */
+static int ext_new_class_key(const NodeTable *nt, int d, char *key, size_t cap) {
+  int path = class_def_path(nt, d), rooted = 0;
+  char ref[EXT_NEW_KEY];
+  if (!ext_new_ref_key(nt, path, ref, sizeof ref, &rooted)) return 0;
+  key[0] = 0;
+  if (rooted) snprintf(key, cap, "%s", ref);
+  else {
+    fwd_ns_key(nt, d, key, cap);
+    fwd_key_add(key, cap, nt_str(nt, path, "name"));
+  }
+  /* a key that fills the buffer is cut: no key */
+  return strlen(key) + 1 < cap;
+}
+/* The facts of the classes of the source, one for a class. */
+static ExtNewFacts ext_new_facts(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  ExtNewFact *f = NULL;
+  int nf = 0, cap = 0;
+  NT_FOREACH_KIND(nt, NK_ClassNode, d) {
+    char key[EXT_NEW_KEY], ns[EXT_NEW_KEY], sr[EXT_NEW_KEY];
+    if (!ext_new_class_key(nt, d, key, sizeof key)) continue;
+    if (nf == cap) {
+      cap = cap ? cap * 2 : 16;
+      f = realloc(f, sizeof *f * (size_t)cap);
+      if (!f) { fprintf(stderr, "out of memory\n"); exit(1); }
+    }
+    ExtNewFact *x = &f[nf++];
+    int sup = class_def_super(nt, d), rooted = 0;
+    ns[0] = sr[0] = 0;
+    int ref = sup >= 0 && ext_new_ref_key(nt, sup, sr, sizeof sr, &rooted);
+    /* the superclass reference is read where the definition is written,
+       not in the qualifier of the path of the class; one from the root
+       (`::Base`) is read at the root */
+    if (!rooted) fwd_lex_ctx(nt, d, ns, sizeof ns);
+    *x = (ExtNewFact){ ext_strdup(key), ext_strdup(ns), ref ? ext_strdup(sr) : NULL, d, sup >= 0, -1, 0 };
+    int body = class_def_body(nt, d), nst = 0;
+    const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &nst) : NULL;
+    for (int k = 0; k < nst; k++) {
+      /* a `new` of the class: `def self.new`, or `def new` in `class << self`
+         (a `class << X` of another object holds no method of the class) */
+      if (nt_kind(nt, st[k]) == NK_SingletonClassNode) {
+        int ex = nt_ref(nt, st[k], "expression");
+        if (ex < 0 || nt_kind(nt, ex) != NK_SelfNode) continue;
+        int sb = nt_ref(nt, st[k], "body"), nsb = 0;
+        const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &nsb) : NULL;
+        for (int j = 0; j < nsb; j++) {
+          int sd = fwd_body_def(nt, ss[j]);
+          const char *sn = sd >= 0 ? nt_str(nt, sd, "name") : NULL;
+          if (sn && sp_streq(sn, "new")) x->snew = 1;
+        }
+        continue;
+      }
+      /* the def of a statement, also under a visibility call
+         (`private def initialize`) */
+      int def = fwd_body_def(nt, st[k]);
+      const char *nm = def >= 0 ? nt_str(nt, def, "name") : NULL;
+      if (!nm) continue;
+      int rc = nt_ref(nt, def, "receiver");
+      if (rc < 0 && is_initialize_name(nm)) x->init_def = def;
+      if (rc >= 0 && nt_kind(nt, rc) == NK_SelfNode && sp_streq(nm, "new")) x->snew = 1;
+    }
+  }
+  /* one fact for a class: the first definition, with what the later ones
+     add (a superclass reference too: a later definition can write it) */
+  if (nf > 1) qsort(f, (size_t)nf, sizeof *f, ext_new_fact_cmp);
+  int w = 0;
+  for (int i = 0; i < nf; i++) {
+    if (w > 0 && sp_streq(f[w - 1].key, f[i].key)) {
+      ExtNewFact *x = &f[w - 1];
+      if (f[i].init_def >= 0) x->init_def = f[i].init_def;
+      x->snew |= f[i].snew;
+      if (!x->has_super && f[i].has_super) {
+        x->has_super = 1;
+        free(x->ns);
+        x->ns = f[i].ns;
+        x->super_ref = f[i].super_ref;
+        f[i].ns = f[i].super_ref = NULL;
+      }
+      free(f[i].key);
+      free(f[i].ns);
+      free(f[i].super_ref);
+    }
+    else f[w++] = f[i];
+  }
+  return (ExtNewFacts){ f, w };
+}
+static void ext_new_facts_free(ExtNewFacts *fs) {
+  for (int i = 0; i < fs->n; i++) {
+    free(fs->f[i].key);
+    free(fs->f[i].ns);
+    free(fs->f[i].super_ref);
+  }
+  free(fs->f);
+}
+static const ExtNewFact *ext_new_fact(const ExtNewFacts *fs, const char *key) {
+  int lo = 0, hi = fs->n;
+  while (lo < hi) {
+    int mid = lo + (hi - lo) / 2, r = strcmp(fs->f[mid].key, key);
+    if (!r) return &fs->f[mid];
+    if (r < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return NULL;
+}
+/* The class of the program that the superclass reference of f means: the
+   reference in the namespace of the definition, then in each namespace
+   around it, as the lexical scope reads a constant. NULL for a class that
+   is not of the program. */
+static const ExtNewFact *ext_new_super(const ExtNewFacts *fs, const ExtNewFact *f) {
+  if (!f->super_ref) return NULL;
+  char key[EXT_NEW_KEY * 2];
+  size_t n = strlen(f->ns);
+  for (;;) {
+    snprintf(key, sizeof key, "%.*s%s", (int)n, f->ns, f->super_ref);
+    const ExtNewFact *s = ext_new_fact(fs, key);
+    if (s || n == 0) return s;
+    /* the namespace around: without its last `Name::` */
+    n -= 2;
+    while (n > 0 && f->ns[n - 1] != ':') n--;
+  }
+}
+/* The initialize that the class of f runs: its def in *def, -1 for a class
+   with none in its chain, whose `new` takes no argument. Answers 0 for a
+   class that gets no forwarder of `new`: a class in its chain defines
+   `new`, or the chain leaves the classes of the program (the `new` of a
+   class under StandardError or Array is not the `new` of an object). */
+static int ext_new_init(const ExtNewFacts *fs, const ExtNewFact *f, int *def) {
+  *def = -1;
+  for (int hop = 0; f && hop < 64; hop++) {
+    if (f->snew) return 0;
+    if (*def < 0 && f->init_def >= 0) *def = f->init_def;
+    if (!f->has_super) return 1;
+    f = ext_new_super(fs, f);
+  }
+  return 0;
+}
+/* A copy of the constant reference src (`Point`, `A::Point`), for a
+   forwarder to call `new` on; -1 for another expression. */
+static int ext_const_copy(NodeTable *nt, int like, int src) {
+  NodeKind k = src >= 0 ? nt_kind(nt, src) : NK_NONE;
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
+  char nm[256];
+  snprintf(nm, sizeof nm, "%s", nt_str(nt, src, "name") ? nt_str(nt, src, "name") : "");
+  int par = k == NK_ConstantPathNode ? nt_ref(nt, src, "parent") : -1;
+  int pc = par >= 0 ? ext_const_copy(nt, like, par) : -1;
+  if (par >= 0 && pc < 0) return -1;
+  int r = fwd_new_node_like(nt, like, k == NK_ConstantPathNode ? "ConstantPathNode" : "ConstantReadNode");
+  if (r < 0) return -1;
+  if (k == NK_ConstantPathNode) nt_node_set_ref(nt, r, "parent", pc);
+  nt_node_set_str(nt, r, "name", nm);
+  return r;
+}
 /* Whether the body of a def can use the block of its call: a yield, a
    block_given?, or a super, which hands the block on. A def, a class or a
    module inside the body has a block of its own. The test is loose (a
@@ -23597,7 +23823,11 @@ static int ext_body_uses_block(const NodeTable *nt, int id) {
     for (int k = 0; k < nd->a[j].n; k++) if (ext_body_uses_block(nt, nd->a[j].ids[k])) return 1;
   return 0;
 }
-static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfixed, int rest, int blk, int singleton) {
+/* One forwarder: a def of nfixed parameters (then one for the rest, then
+   one for the block) that calls `name` with them, on a copy of the
+   constant reference recv, or on self for recv < 0. */
+static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfixed, int rest, int blk, int singleton,
+                              int recv) {
   char nw[320];
   snprintf(nw, sizeof nw, "spinel_ext_fwd%s%s__%d__%s", rest ? "r" : "", blk ? "b" : "", nfixed, name);
   int na = nfixed + (rest ? 1 : 0);   /* the positional arguments of the call */
@@ -23606,7 +23836,7 @@ static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfi
   int call = fwd_new_node_like(nt, like, "CallNode");
   if (d < 0 || call < 0) return -1;
   nt_node_set_str(nt, call, "name", name);
-  nt_node_set_ref(nt, call, "receiver", -1);
+  nt_node_set_ref(nt, call, "receiver", recv >= 0 ? ext_const_copy(nt, like, recv) : -1);
   if (n > 0) {
     int ps = fwd_new_node_like(nt, like, "ParametersNode");
     int *req = malloc(sizeof(int) * (size_t)n), *av = malloc(sizeof(int) * (size_t)n);
@@ -23646,47 +23876,88 @@ static int ext_forwarder_like(NodeTable *nt, int like, const char *name, int nfi
   return d;
 }
 
+/* The forwarders of the method def (a def node, or -1 for a method of no
+   parameter) that call `name`: one for each count of arguments it takes,
+   and each of them again with the block when the method can use one. With
+   `all`, a method of fixed parameters gets its forwarder too. The nodes go
+   to *out (the caller frees it); answers their count, 0 for a method that
+   gets none. */
+static int ext_forwarder_set(NodeTable *nt, int like, int def, const char *name, int singleton, int recv, int all,
+                             int **out) {
+  int ps = def >= 0 ? nt_ref(nt, def, "parameters") : -1;
+  int nr = 0, no = 0, np = 0, nk = 0, rest = 0, blk = 0;
+  if (ps >= 0) {
+    nt_arr(nt, ps, "requireds", &nr);
+    nt_arr(nt, ps, "optionals", &no);
+    nt_arr(nt, ps, "posts", &np);
+    nt_arr(nt, ps, "keywords", &nk);
+    rest = nt_ref(nt, ps, "rest") >= 0;
+    if (nt_ref(nt, ps, "keyword_rest") >= 0) return 0;
+    blk = nt_ref(nt, ps, "block") >= 0;
+  }
+  if (!blk && def >= 0) blk = ext_body_uses_block(nt, nt_ref(nt, def, "body"));
+  if ((no == 0 && !rest && !blk && !all) || np > 0 || nk > 0) return 0;
+  /* the fixed counts: nr .. nr+no, the last one only with no rest;
+     then the rest forwarder; and each of them again with the block */
+  int nf = no + (rest ? 0 : 1), nset = nf + (rest ? 1 : 0), nfw = nset * (blk ? 2 : 1);
+  char nmc[256];
+  snprintf(nmc, sizeof nmc, "%s", name);
+  int *fw = malloc(sizeof(int) * (size_t)nfw);
+  if (!fw) { fprintf(stderr, "out of memory\n"); exit(1); }
+  for (int b = 0; b <= blk; b++) {
+    int *set = fw + b * nset;
+    for (int j = 0; j < nf; j++) set[j] = ext_forwarder_like(nt, like, nmc, nr + j, 0, b, singleton, recv);
+    if (rest) set[nf] = ext_forwarder_like(nt, like, nmc, nr + no, 1, b, singleton, recv);
+  }
+  *out = fw;
+  return nfw;
+}
+
 int desugar_ext_forwarders(Compiler *c) {
   if (!g_ext_classes || !*g_ext_classes) return 0;
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
+  ExtNewFacts facts = ext_new_facts(c);
   for (int m = 0; m < n0; m++) {
     if (!class_def_opens_cref(nt, m)) continue;
     const char *cls = class_def_key(c, m);
     int body = class_def_body(nt, m);
-    if (!cls || body < 0 || nt_kind(nt, body) != NK_StatementsNode || !ext_class_def_wanted(c, cls)) continue;
+    if (!cls || (body >= 0 && nt_kind(nt, body) != NK_StatementsNode) || !ext_class_def_wanted(c, cls)) continue;
+    /* the forwarders of `new`, last in the first body of the class, which
+       an empty class gets here */
+    char nkey[EXT_NEW_KEY];
+    const ExtNewFact *fact = nt_kind(nt, m) == NK_ClassNode && ext_new_class_key(nt, m, nkey, sizeof nkey)
+                               ? ext_new_fact(&facts, nkey) : NULL;
+    int init = -1, *fw = NULL;
+    int nfw = fact && fact->first == m && ext_new_init(&facts, fact, &init)
+                ? ext_forwarder_set(nt, m, init, "new", 1, class_def_path(nt, m), 1, &fw) : 0;
+    if (nfw > 0) {
+      int n = 0;
+      const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+      int *out = malloc(sizeof(int) * (size_t)(n + nfw));
+      if (!out) { fprintf(stderr, "out of memory\n"); exit(1); }
+      if (n > 0) memcpy(out, st, sizeof(int) * (size_t)n);
+      memcpy(out + n, fw, sizeof(int) * (size_t)nfw);
+      if (body < 0) {
+        body = fwd_new_node_like(nt, m, "StatementsNode");
+        class_def_set_body(nt, m, body);
+      }
+      nt_node_set_arr(nt, body, "body", out, n + nfw);
+      free(out);
+      free(fw);
+      changed = 1;
+    }
+    if (body < 0) continue;
     int n = 0; const int *st = nt_arr(nt, body, "body", &n);
     for (int k = 0; k < n; k++) {
       int s = st[k];
       if (nt_kind(nt, s) != NK_DefNode) continue;
       const char *name = nt_str(nt, s, "name");
-      int rc = nt_ref(nt, s, "receiver"), ps = nt_ref(nt, s, "parameters");
+      int rc = nt_ref(nt, s, "receiver");
       if (!name || ext_fwd_orig(name, NULL, NULL, NULL) || is_initialize_name(name)) continue;
       if (rc >= 0 && nt_kind(nt, rc) != NK_SelfNode) continue;
-      int nr = 0, no = 0, np = 0, nk = 0, rest = 0, blk = 0;
-      if (ps >= 0) {
-        nt_arr(nt, ps, "requireds", &nr);
-        nt_arr(nt, ps, "optionals", &no);
-        nt_arr(nt, ps, "posts", &np);
-        nt_arr(nt, ps, "keywords", &nk);
-        rest = nt_ref(nt, ps, "rest") >= 0;
-        if (nt_ref(nt, ps, "keyword_rest") >= 0) continue;
-        blk = nt_ref(nt, ps, "block") >= 0;
-      }
-      if (!blk) blk = ext_body_uses_block(nt, nt_ref(nt, s, "body"));
-      if ((no == 0 && !rest && !blk) || np > 0 || nk > 0) continue;
-      /* the fixed counts: nr .. nr+no, the last one only with no rest;
-         then the rest forwarder; and each of them again with the block */
-      int nf = no + (rest ? 0 : 1), nset = nf + (rest ? 1 : 0), nfw = nset * (blk ? 2 : 1);
-      char nmc[256];
-      snprintf(nmc, sizeof nmc, "%s", name);
-      int *fw = malloc(sizeof(int) * (size_t)nfw);
-      if (!fw) { fprintf(stderr, "out of memory\n"); exit(1); }
-      for (int b = 0; b <= blk; b++) {
-        int *set = fw + b * nset;
-        for (int j = 0; j < nf; j++) set[j] = ext_forwarder_like(nt, s, nmc, nr + j, 0, b, rc >= 0);
-        if (rest) set[nf] = ext_forwarder_like(nt, s, nmc, nr + no, 1, b, rc >= 0);
-      }
+      nfw = ext_forwarder_set(nt, s, s, name, rc >= 0, -1, 0, &fw);
+      if (nfw == 0) continue;
       /* the forwarders after the def (st is read again: the new nodes may
          have moved the table's arrays) */
       st = nt_arr(nt, body, "body", &n);
@@ -23703,6 +23974,7 @@ int desugar_ext_forwarders(Compiler *c) {
       changed = 1;
     }
   }
+  ext_new_facts_free(&facts);
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }

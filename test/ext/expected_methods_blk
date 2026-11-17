@@ -1,4 +1,4 @@
-each/0 each/0& up/1 up/1& plain/0 nest/0 map/0 map/0& pick/0 pick/-2 pick/0& pick/-2& maybe/0 maybe/0& .twice/1 .twice/1& size/0
+each/0 each/0& up/1 up/1& plain/0 nest/0 map/0 map/0& pick/0 pick/-2 pick/0& pick/-2& maybe/0 maybe/0& .twice/1 .twice/1& size/0 .new/0
 each ran the block 3 times
 map -> [11, 12, 13]
 pick -> 11

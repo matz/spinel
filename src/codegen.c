@@ -21884,7 +21884,7 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
          (ext_body_uses_block); the row stays only when the method it calls
          takes a block */
       if (fw_blk) {
-        int osi = sc->is_cmethod ? comp_cmethod_in_chain(c, ci, orig, NULL) : comp_method_in_chain(c, ci, orig, NULL);
+        int osi = ext_fwd_callee(c, ci, s, NULL);
         if (osi >= 0 && !c->scopes[osi].yields && !(c->scopes[osi].blk_param && c->scopes[osi].blk_param[0])) continue;
       }
       int npos = sc->nparams - (fw_blk ? 1 : 0);   /* the block is no argument of the count */

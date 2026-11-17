@@ -1,0 +1,51 @@
+Point: new/2
+sum -> 11
+raised ArgumentError: wrong number of arguments (given 1, expected 2)
+Opt: new/1 new/-3
+n -> 7
+n -> 11
+n -> 13
+raised ArgumentError: wrong number of arguments (given 0, expected 1+)
+Bare: new/0
+hello -> "bare"
+raised ArgumentError: wrong number of arguments (given 1, expected 0)
+Kid: new/1 new/-3
+kid -> "kid 11"
+Own: new/1
+s -> "host"
+raised ArgumentError: wrong number of arguments (given 2, expected 1)
+Deep: new/2
+deep -> "deep 11"
+Far: new/2
+far -> "far 11"
+FromRoot: new/1
+twice -> 10
+Shy: new/1
+x -> 5
+Blk: new/0 new/1 new/0& new/1&
+v -> 11
+v -> 15
+raised LocalJumpError: no block given (yield)
+Inner::Point: new/1
+z -> 5
+Inner::Kid: new/1
+z -> 5
+Lazy: new/1
+name -> "host"
+Home::Room: new/1
+more -> 6
+Priv: new/1
+x -> 5
+Oops:
+Kw:
+Mixed:
+Same:
+Single:
+no method new
+Custom: new/0 new/1
+v -> 3
+v -> 5
+Under: new/0 new/1
+v -> 5
+Meta: new/2
+v -> 11

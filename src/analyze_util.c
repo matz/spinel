@@ -7116,6 +7116,44 @@ int ext_class_exported(Compiler *c, int class_id) {
   return ext_class_exportable(c, class_id) && ext_class_listed(c, class_id);
 }
 
+/* The method that the forwarder of scope si stands for, seen from
+   class_id: the method of the name it calls. A forwarder of `new` in a
+   class with no `self.new` stands for the initialize that the class runs
+   (-1 for a class with none), and *is_new says so. -1 for no method, and
+   for a scope that is no forwarder. */
+int ext_fwd_callee(Compiler *c, int class_id, int si, int *is_new) {
+  const Scope *sc = &c->scopes[si];
+  const char *orig = ext_fwd_orig(sc->name, NULL, NULL, NULL);
+  if (is_new) *is_new = 0;
+  if (!orig) return -1;
+  if (!sc->is_cmethod) return comp_method_in_chain(c, class_id, orig, NULL);
+  int osi = comp_cmethod_in_chain(c, class_id, orig, NULL);
+  if (osi >= 0 || !sp_streq(orig, "new")) return osi;
+  if (is_new) *is_new = 1;
+  return comp_method_in_chain(c, class_id, "initialize", NULL);
+}
+
+/* Whether the method of scope osi takes a call of n positional arguments,
+   or of n or more for `rest`, by the parameters its def writes. osi < 0 is
+   a method of no parameter (the `new` of a class with no initialize). A
+   method with no def of its own (an attr, a define_method) takes any
+   count here. */
+static int ext_def_takes(Compiler *c, int osi, int n, int rest) {
+  const NodeTable *nt = c->nt;
+  int def = osi >= 0 ? c->scopes[osi].def_node : -1;
+  if (osi >= 0 && (def < 0 || nt_kind(nt, def) != NK_DefNode)) return 1;
+  int ps = def >= 0 ? nt_ref(nt, def, "parameters") : -1;
+  int nr = 0, no = 0, np = 0, has_rest = 0;
+  if (ps >= 0) {
+    nt_arr(nt, ps, "requireds", &nr);
+    nt_arr(nt, ps, "optionals", &no);
+    nt_arr(nt, ps, "posts", &np);
+    has_rest = nt_ref(nt, ps, "rest") >= 0;
+  }
+  if (rest) return has_rest && n >= nr + np;
+  return n >= nr + np && (has_rest || n <= nr + no + np);
+}
+
 /* Whether scope si is the method the chain of class_id answers for its
    name, public there, and of a shape the thunk can call: fixed positional
    parameters (no optional, rest, keyword or block parameter, no yield),
@@ -7133,12 +7171,27 @@ static int ext_method_shape(Compiler *c, int class_id, int si) {
   if (!sc->name || sc->class_id < 0 || is_initialize_name(sc->name)) return 0;
   if (sc->replaced || sc->entry != ENTRY_NONE) return 0;
   /* a forwarder stands for the method it calls: that method is public,
-     and the class answers the one the forwarder was written beside */
+     and the class answers the one the forwarder was written beside. A
+     forwarder of `new` names its class in the call: the class answers the
+     one written in its own body, not the copy of one of a class above it
+     (is_cmethod_copy). The forwarder has the counts of the initialize of
+     a class; with an initialize of a module, the class has no row. */
   const char *vis_name = ext_fwd_orig(sc->name, NULL, NULL, NULL);
   if (vis_name) {
-    int osi = sc->is_cmethod ? comp_cmethod_in_chain(c, class_id, vis_name, NULL)
-                             : comp_method_in_chain(c, class_id, vis_name, NULL);
-    if (osi < 0 || c->scopes[osi].class_id != sc->class_id) return 0;
+    int is_new = 0, osi = ext_fwd_callee(c, class_id, si, &is_new);
+    if (is_new) {
+      if (sc->is_cmethod_copy || sc->class_id != class_id) return 0;
+      if (osi >= 0 && (c->scopes[osi].origin_module_ci > 0 || c->scopes[osi].class_id < 0 ||
+                       comp_class_is_module(c, &c->classes[c->scopes[osi].class_id])))
+        return 0;
+    }
+    else if (osi < 0 || c->scopes[osi].class_id != sc->class_id) return 0;
+    /* the forwarders are written from the defs of the source, before the
+       classes are known; the method the class answers says here whether
+       it takes the count */
+    int nfixed = 0, rest = 0;
+    ext_fwd_orig(sc->name, &nfixed, &rest, NULL);
+    if (!ext_def_takes(c, osi, nfixed, rest)) return 0;
   }
   else vis_name = sc->name;
   if (sc->is_cmethod) {
@@ -7171,6 +7224,12 @@ int ext_method_exported(Compiler *c, int class_id, int si, int typed) {
     LocalVar *lv = scope_local(sc, sc->pnames[p]);
     if (!lv || !ext_param_ty_checked(lv->type)) return 0;
   }
+  /* a forwarder of `new` answers an object of the class. The name of the
+     class in its call can mean another class: a constant of that name
+     inside the class */
+  int is_new = 0;
+  ext_fwd_callee(c, class_id, si, &is_new);
+  if (is_new && !(ty_is_object(sc->ret) && ty_object_class(sc->ret) == class_id)) return 0;
   if (sc->ret != TY_VOID && sc->ret != TY_NIL && !ext_ty_crosses(sc->ret)) return 0;
   return 1;
 }

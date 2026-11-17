@@ -870,8 +870,10 @@ int node_has_side_effect(Compiler *c, int id) {
       k == NK_YieldNode || strstr(ty, "WriteNode"))
     return 1;
   /* a bare Array.new / Hash.new is as empty and as unobservable as the
-     literal `[]` / `{}`, which is no effect */
-  if (k == NK_CallNode && !call_is_scalar_op(c, id) && !node_is_empty_container(c, id)) return 1;
+     literal `[]` / `{}`, which is no effect; a builtin operator over
+     scalars is none where its operand's implicit call (to_int, coerce)
+     reaches no method of the program's (scalar_op_runs_no_code) */
+  if (k == NK_CallNode && !scalar_op_runs_no_code(c, id) && !node_is_empty_container(c, id)) return 1;
   return -1;
 }
 int subtree_has_side_effect(Compiler *c, int id) {

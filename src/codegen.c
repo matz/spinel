@@ -4436,10 +4436,7 @@ int scope_is_initialize(const Scope *s) {
 }
 
 int method_is_void(Scope *s) {
-  /* initialize is void (mutates *self) unless a copy's super reads its
-     value (init_value); else by return type */
-  if (scope_is_initialize(s) && !s->init_value) return 1;
-  return !is_scalar_ret(s->ret);
+  return !is_scalar_ret(repr_method_ret_storage(s));
 }
 
 /* Does this class method's body read the class it was called ON? A class
@@ -6036,7 +6033,7 @@ void emit_boxed_ret_call(Compiler *c, const Scope *s, const char *call, Buf *b) 
 /* A method's Integer or Float return that can be nil (the analysis's
    ret_nullable_int, an RBS `Integer?`) is an sp_oint / sp_ofloat. */
 int method_ret_is_oint(const Scope *s) {
-  return s && oint_kind(s->ret) && (s->ret_nullable_int || s->ret_rbs_nilable);
+  return s && (s->ret_nullable_int || s->ret_rbs_nilable) && oint_kind(repr_method_ret_storage(s));
 }
 void emit_method_ret_ctype(Compiler *c, const Scope *s, Buf *b) {
   if (method_ret_is_oint(s)) buf_puts(b, oint_ctype(s->ret));

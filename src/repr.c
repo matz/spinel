@@ -1819,6 +1819,10 @@ TyKind repr_poly_result_slot(TyKind result) {
 }
 
 TyKind repr_method_ret_storage(const Scope *sc) {
+  /* An initializer called for its effects has no C result, even when
+     its last Ruby expression is a String. A super whose caller consumes
+     the value has already marked its target init_value. */
+  if (!sc->init_value && scope_is_initialize(sc)) return TY_VOID;
   return repr_call_result_storage(sc->ret);
 }
 
@@ -1833,7 +1837,7 @@ Repr repr_of_ret(const Compiler *c, const Scope *sc) {
   r.narrowed = TY_UNKNOWN;
   repr_layout(&r, r.ty);
   r.kind = (unsigned char)repr_kind_of_type(c, r.as_ty);
-  if ((r.ty == TY_INT || r.ty == TY_FLOAT) && (sc->ret_nullable_int || sc->ret_rbs_nilable)) {
+  if (method_ret_is_oint(sc)) {
     r.kind = RK_OPT;
     r.may_nil = r.nil_scalar = 1;
   }

@@ -1,0 +1,30 @@
+NotImplementedError
+ASN.1 indefinite-length Sequence (tag 16) is unavailable
+NotImplementedError
+ASN.1 high-tag-number Integer (tag 2) is unavailable
+NotImplementedError
+ASN.1 constructed Integer (tag 2) is unavailable
+NotImplementedError
+ASN.1 primitive Sequence (tag 16) is unavailable
+NotImplementedError
+ASN.1 OctetString (tag 4) is unavailable
+NotImplementedError
+ASN.1 Null (tag 5) is unavailable
+NotImplementedError
+ASN.1 context-specific tag (tag 0) is unavailable
+NotImplementedError
+ASN.1 high-tag-number tag (tag 31) is unavailable
+NotImplementedError
+ASN.1 constructed Set (tag 17) is unavailable
+NotImplementedError
+ASN.1 Boolean (tag 1) is unavailable
+NotImplementedError
+ASN.1 application tag (tag 0) is unavailable
+NotImplementedError
+ASN.1 private tag (tag 0) is unavailable
+NotImplementedError
+ASN.1 tag (tag 0) is unavailable
+NotImplementedError
+ASN.1 nesting beyond 1000 levels is unavailable
+NotImplementedError
+ASN.1 nesting beyond 1000 levels is unavailable

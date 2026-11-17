@@ -1,0 +1,23 @@
+OpenSSL::ASN1::Sequence
+Array
+OpenSSL::ASN1::Sequence
+OpenSSL::ASN1::ObjectId
+id-ecPublicKey
+1.2.840.10045.2.1
+id-ecPublicKey
+id-ecPublicKey
+OpenSSL::ASN1::ObjectId
+prime256v1
+1.2.840.10045.3.1.7
+prime256v1
+prime256v1
+OpenSSL::ASN1::BitString
+0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb67903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299
+[0, true]
+true
+[16, 3]
+true
+true
+true
+["1.2.3.4", "1.2.3.4", nil, nil]
+"06032a0304"

@@ -5032,7 +5032,9 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
     if (t >= 0) cls = cls == -1 || cls == t ? t : -2 - id;
   }
   const char *names[64];
-  int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, NULL, 0, 64) : 0;
+  /* (a target whose own method_missing answers every name has none it misses) */
+  int mm = cls >= 0 && call_target(c, id, cls, "method_missing", 0, NULL) >= 0;
+  int nn = rt == TY_POLY && cls >= 0 && !mm ? ie_self_call_names(c, ie_block_body(c, blk), names, NULL, 0, 64) : 0;
   for (int i = 0; i < nn; i++)
     for (int k = 0; k < c->nclasses && !call_answers(c, -1, cls, names[i], 0, NULL) && call_target(c, id, -1, names[i], CT_TOP, NULL) < 0; k++)
       if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) return -1;

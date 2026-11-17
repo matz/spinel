@@ -17,10 +17,15 @@
 # (<synthesized> for a node no source line made, - for none), not the
 # compiler's.
 #
-# Each step of #10866's second stage converts one family to ask call_target,
-# and then lists the family in FAIL_FAMILIES (names from the list above): the
-# run fails when a listed family has any site left. The run also fails when a
-# program compiles without the flag and fails or crashes with it.
+# Every family is listed in FAIL_FAMILIES (names from the list above): a read
+# of the method tables outside call_target fails the run, in whatever family it
+# is classed, so a pass or an emitter that needs a method asks the call plan
+# (call_target, call_answers, call_attr_target, cplan_implied_target). The
+# plan's own reads and the surveys and dispatchers that no call stands behind
+# stand in a bracket and are not counted; the `table <why>` lines count the
+# answers of call_target that are the table's last definition (ML_TABLE), which
+# stay until the plan proves the cell. The run also fails when a program
+# compiles without the flag and fails or crashes with it.
 #
 # A read under a call or a super of a name other than the node's own (a
 # super's own, its shadow's or its clone's) is implied only for one of the

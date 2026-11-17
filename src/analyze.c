@@ -16860,7 +16860,11 @@ static int oa_filter_call(Compiler *c, int id) {
    without a bang answers a new array of the same class, an edge to the slot
    that takes it (call_ret), or a value thrown away: value_ok also passes
    the last statement of a block, whose value the block's caller reads, so
-   the copy needs walk_disc too. */
+   the copy needs walk_disc too. delete_if, keep_if, sort! and sort_by! never
+   answer nil: their value is the receiver itself, the same edge to the slot
+   as a copy's. Killed with the nil-answering bangs, `def drop(n) =
+   @items.delete_if { ... }` left @items a poly array wherever drop's value
+   was read, an --ext-entry's return among them. */
 static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *claimed, int *call_ret,
                          char *value_ok, const char *walk_disc, int nc) {
   int fk = oa_filter_call(c, id);
@@ -16869,8 +16873,10 @@ static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *cl
   sl[S].removes = 1;
   sl[S].row_iter |= 1;
   int disc = id < nc && walk_disc[id];
-  if (fk == 1 && !disc) sl[S].alive = 0;
-  if (fk == 2 && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
+  const char *fnm = nt_str(c->nt, id, "name");
+  int self_ans = fk == 1 && fnm && !is_select_reject_bang(fnm);
+  if (fk == 1 && !self_ans && !disc) sl[S].alive = 0;
+  if ((fk == 2 || self_ans) && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
   return 1;
 }
 /* Is call id one of Kernel's printers (`p t`, `puts t`, `print t`, `pp t`)

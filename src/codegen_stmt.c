@@ -1519,8 +1519,7 @@ void emit_program_string_handle(Compiler *c, int v, Buf *b) {
   int vt = view_push(c, v, TY_STRBUF);
   int vd = view_push_repr(c, v, VR_HANDLE_DEMAND, 1);
   int vb = view_push_repr(c, v, VR_STRBUF_BOX, 0);
-  if (nt_kind(c->nt, v) == NK_CallNode) emit_call(c, v, b);
-  else emit_super(c, v, b);
+  emit_expr(c, v, b);
   view_pop(c, vb); view_pop(c, vd); view_pop(c, vt);
 }
 

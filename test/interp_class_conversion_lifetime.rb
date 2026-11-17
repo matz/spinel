@@ -18,3 +18,20 @@ p "#{Caption}" "#{change}"
 $word = +"old"
 p "#{Caption}#{$word = +"new"}"
 p $calls
+
+class Révision
+end
+class Plain
+end
+def binary_tail = "x".b
+def text_tail = "x"
+p "#{Révision}#{binary_tail}".encoding.name
+p "#{Plain}#{binary_tail}".encoding.name
+p "#{Révision}#{text_tail}".encoding.name
+p "#{Plain}#{text_tail}".encoding.name
+
+$word = "x".b
+p "#{Caption}#{text_tail}".encoding.name
+$word = "x"
+p "#{Caption}#{binary_tail}".encoding.name
+p $calls

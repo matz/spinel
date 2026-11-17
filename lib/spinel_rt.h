@@ -3506,6 +3506,13 @@ static inline sp_String *sp_interp_string(sp_RbVal value, int *neutral) {
   sp_RbVal text = value;
   if (!sp_strface_b_box(value)) {
     if (!sp_user_display_box(value, 0, &text)) {
+      if (value.tag == SP_TAG_CLASS) {
+        /* ASCII class names are US-ASCII. A name containing a non-ASCII
+           character contributes its encoding to the segment. */
+        const char *name = sp_class_val_display(value);
+        *neutral = !sp_str_is_binary(name) && sp_str_ascii_only(name);
+        return sp_String_new_fresh(name);
+      }
       *neutral = 1;
       return sp_String_new_fresh(sp_poly_to_s(value));
     }

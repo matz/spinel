@@ -2761,13 +2761,16 @@ static int a_frame_cells_params(Compiler *c, int q, int is_proc) {
 /* every arm counts: the dispatch makes one proc for all of them, so the resolved method ignoring the block proves nothing */
 static int a_dispatch_arm_takes_block(Compiler *c, int cls, const char *name) {
   if (dispatch_impl_count(c, -1, cls, name) < 2) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
+  int takes = 0;
+  mtab_enter(c);   /* (the candidate owner of the dispatch's arms: every class under cls is asked by design, no call's question) */
+  for (int k = 0; k < c->nclasses && !takes; k++) {
     if (!is_descendant(c, k, cls)) continue;
     int mk = comp_method_in_chain(c, k, name, NULL);
     if (mk < 0 || c->scopes[mk].is_cmethod) continue;
-    if (scope_proc_form_of(c, mk) >= 0 || (c->scopes[mk].blk_param && c->scopes[mk].blk_param[0])) return 1;
+    takes = scope_proc_form_of(c, mk) >= 0 || (c->scopes[mk].blk_param && c->scopes[mk].blk_param[0]);
   }
-  return 0;
+  mtab_leave(c);
+  return takes;
 }
 
 /* Does yield-inlined scope `mi` hand its block on to a method that KEEPS it --
@@ -2905,8 +2908,7 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
     int p = comp_super_parent(c, st->class_id, st->is_cmethod);
     if (p < 0) return 0;
     const char *u = comp_super_name(c, p, st);
-    int tmi = st->is_cmethod ? comp_cmethod_in_chain(c, p, u, NULL)
-                             : comp_method_in_chain(c, p, u, NULL);
+    int tmi = u ? cplan_super_chain_mi(c, id, st, p, u, NULL) : -1;
     return tmi >= 0 && c->scopes[tmi].is_proc_form;
   }
   if (k != NK_CallNode) return 0;
@@ -4950,7 +4952,7 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
     if (cr >= 0 && nt_kind(nt, cr) == NK_ConstantReadNode) cls = comp_class_at_ruby_path(c, nt_str(nt, cr, "name"));
     else if (cs && cs->def_node >= 0) cls = cs->class_id, cside = cs->is_cmethod;
     else if (in_body) cls = c->node_cbody[call];
-    int mi = cls < 0 ? -1 : cside ? comp_cmethod_in_chain(c, cls, nm, NULL) : comp_method_in_chain(c, cls, nm, NULL);
+    int mi = cls < 0 ? -1 : call_target(c, call, cls, nm, cside ? CT_CMETHOD : CT_METHODS, NULL);
     int reaches = 0;
     for (int r = 0; r < nreaders && !reaches; r++) reaches = readers[r] == mi;
     if (!reaches) continue;
@@ -5032,7 +5034,7 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
   const char *names[64];
   int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, NULL, 0, 64) : 0;
   for (int i = 0; i < nn; i++)
-    for (int k = 0; k < c->nclasses && !call_answers(c, -1, cls, names[i], 0, NULL) && comp_method_index(c, names[i]) < 0; k++)
+    for (int k = 0; k < c->nclasses && !call_answers(c, -1, cls, names[i], 0, NULL) && call_target(c, id, -1, names[i], CT_TOP, NULL) < 0; k++)
       if (ie_poly_class_ok(c, k) && call_answers(c, -1, k, names[i], 0, NULL)) return -1;
   return cls < -1 && !arg && sp_streq(nm, "new") ? -1 : cls;
 }
@@ -12134,7 +12136,10 @@ static int desugar_missing_method_obj(Compiler *c) {
     changed = 1;
     /* (they may run where the capture may: as the reach of the capture
        marks them, cr_add_missing, for the passes before it runs again) */
-    int run = sc >= 0 && comp_scope_may_run(c, sc), had = comp_method_in_class(c, k, wname);
+    int run = sc >= 0 && comp_scope_may_run(c, sc);
+    mtab_enter(c);   /* (construction: the wrapper this pass made for the name in an earlier round) */
+    int had = comp_method_in_class(c, k, wname);
+    mtab_leave(c);
     if (had >= 0) {
       nt_node_set_int(nt, id, "mm_target", had + 1);
       if (run) mm_helper_reach(c, had), mm_helper_reach(c, cplan_missing_guard(c, had));
@@ -12171,7 +12176,7 @@ static int desugar_missing_method_obj(Compiler *c) {
     nt_node_set_str(nt, wdef, "bam_sym", sym);   /* its #name and #original_name */
     nt_node_set_int(nt, wdef, "mm_test", qs + 1);
     nt_node_set_int(nt, wdef, "bam_owner_ci", k + 1);   /* its #owner */
-    int ws = synth_def_scope(c, k, wname, wdef, run), mmi = comp_method_in_chain(c, k, METHOD_MISSING_NAME, NULL);
+    int ws = synth_def_scope(c, k, wname, wdef, run), mmi = call_target(c, id, k, METHOD_MISSING_NAME, CT_METHODS, NULL);
     nt_node_set_int(nt, id, "mm_target", ws + 1);
     /* (a forwarder of its block, inlined where what it hands the block to
        is, as the yield marking before this pass decided for the others) */
@@ -12591,7 +12596,7 @@ static int rms_builtin_receiver(Compiler *c, int id, const char *nm) {
   TyKind rt = infer_type(c, recv);
   if (ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt) || rt == TY_RANGE || rt == TY_FLOAT_RANGE) return 1;
   if (!ty_is_object(rt)) return 0;
-  int mi = comp_method_in_chain(c, ty_object_class(rt), nm, NULL);
+  int mi = call_target(c, id, ty_object_class(rt), nm, CT_METHODS, NULL);
   return mi < 0 || (c->scopes[mi].name && !strncmp(c->scopes[mi].name, "__enum_", 7));
 }
 static int desugar_reduce_method_symbol(Compiler *c) {
@@ -16157,7 +16162,7 @@ static int desugar_for_enumerable(Compiler *c) {
     TyKind rt = infer_type(c, coll);
     if (!ty_is_object(rt)) continue;
     int cid = ty_object_class(rt);
-    if (cid < 0 || comp_method_in_chain(c, cid, "__enum_to_a", NULL) < 0) continue;
+    if (cid < 0 || call_target(c, id, cid, "__enum_to_a", CT_METHODS, NULL) < 0) continue;
     if (c->classes[cid].is_struct) continue;  /* struct to_a is native */
     int idxn = nt_ref(nt, id, "index");
     const char *ixt = idxn >= 0 ? nt_type(nt, idxn) : NULL;
@@ -16168,7 +16173,7 @@ static int desugar_for_enumerable(Compiler *c) {
        variable takes the first, `x = x[0]`. */
     int stmts = nt_ref(nt, id, "statements");
     if (c->classes[cid].enum_yield_packed && ixk == NK_LocalVariableTargetNode &&
-        comp_method_in_chain(c, cid, "__enum_to_a_raw", NULL) >= 0 &&
+        call_target(c, id, cid, "__enum_to_a_raw", CT_METHODS, NULL) >= 0 &&
         (stmts < 0 || nt_kind(nt, stmts) == NK_StatementsNode)) {
       int n1 = nt->count;
       const char *xn = nt_str(nt, idxn, "name");
@@ -16314,7 +16319,7 @@ static int desugar_multi_yield_map_param(Compiler *c) {
        unless Enumerable's comes first in the receiver's ancestors */
     if (call_target(c, id, cid, nm, 0, NULL) >= 0 && !comp_enum_answers_first(c, id, cid, nm)) continue;
     int packed = c->classes[cid].enum_yield_packed;
-    if (packed && comp_method_in_chain(c, cid, "__enum_to_a_raw", NULL) < 0) continue;
+    if (packed && call_target(c, id, cid, "__enum_to_a_raw", CT_METHODS, NULL) < 0) continue;
     int bp = nt_ref(nt, blk, "parameters");
     if (bp < 0) continue;
     NodeKind bpk = nt_kind(nt, bp);
@@ -16682,7 +16687,7 @@ static int desugar_to_enum(Compiler *c) {
     if (rt == TY_POLY && recv >= 0 && !self_recv && extra == 0 && sp_streq(m, "each")) {
       int any_helper = 0;
       for (int k = 0; k < c->nclasses && !any_helper; k++)
-        if (comp_method_in_class(c, k, "__to_enum_each") >= 0) any_helper = 1;
+        if (call_target(c, id, k, "__to_enum_each", CT_OWN, NULL) >= 0) any_helper = 1;
       nt_node_set_str(nt, id, "name", any_helper ? "__to_enum_each" : "__poly_enum_for");
       int empty = nt_new_node(nt, "ArgumentsNode");
       nt_node_set_arr(nt, empty, "arguments", NULL, 0);
@@ -16701,8 +16706,8 @@ static int desugar_to_enum(Compiler *c) {
       reopen_ci = es->class_id;
     if (ty_is_object(rt) || toplevel || reopen_ci >= 0) {
       char hname[160]; snprintf(hname, sizeof hname, "__to_enum_%s", m);
-      int helper = toplevel ? comp_method_index(c, hname)
-                 : comp_method_in_chain(c, reopen_ci >= 0 ? reopen_ci : ty_object_class(rt), hname, NULL);
+      int helper = toplevel ? call_target(c, id, -1, hname, CT_TOP, NULL)
+                 : call_target(c, id, reopen_ci >= 0 ? reopen_ci : ty_object_class(rt), hname, CT_METHODS, NULL);
       if (helper < 0) continue;  /* no yielding m: leave */
       if (extra > 0) continue;   /* user-class to_enum with args: PR follow-up (loud downstream) */
       /* `return enum_for(:m) unless block_given?` inside method m: a blockless
@@ -26614,7 +26619,7 @@ static int strbuf_container_source_walk_body(Compiler *c, int node, int depth, i
          class's method of a common name (each class's to_a) from each call
          was quadratic in the classes. */
       int rcid = recv >= 0 && nt_kind(nt, recv) != NK_SelfNode ? ty_object_class(infer_type(c, recv)) : -1;
-      int rdef = rcid >= 0 ? comp_method_in_chain(c, rcid, mn, NULL) : -1;
+      int rdef = rcid >= 0 ? call_target(c, node, rcid, mn, CT_METHODS, NULL) : -1;
       for (int mi = an_scopes_named_first(c, mn); mi >= 1; mi = an_scopes_named_next(c, mn, mi)) {
         Scope *m = &c->scopes[mi];
         if (rcid >= 0 && mi != rdef && !strbuf_class_may_answer(c, m->class_id, rcid)) continue;
@@ -28357,7 +28362,7 @@ static int an_tail_tap_blind(Compiler *c, int n) {
   TyKind rt = comp_ntype(c, recv);
   if (rt != TY_STRING && rt != TY_STRBUF) return 0;
   int si = comp_core_class(c, CORE_STRING);
-  return si < 0 || comp_method_in_chain(c, si, "tap", NULL) < 0;
+  return si < 0 || call_target(c, n, si, "tap", CT_METHODS, NULL) < 0;
 }
 /* ---- a local a method builds its answer up in (#9258) ----
    `out = +""; ...; out << x; ...; out`: every write of the local is a new
@@ -32829,15 +32834,15 @@ static void dyn_fold(DynReach *r, unsigned bits, int k, int bound, int open, TyK
    no method of that name in the program and no String#inspect or #to_s of
    its own? Such a Method neither changes nor keeps the String it is
    handed (#9207). */
-static int dyn_method_prints(Compiler *c, int mi) {
+static int dyn_method_prints(Compiler *c, int mn, int mi) {
   int dn = mi >= 0 && mi < c->nscopes ? c->scopes[mi].def_node : -1;
   const char *sym = dn >= 0 ? nt_str(c->nt, dn, "bam_sym") : NULL;
   static const char *const printers[] = { "p", "pp", "puts", "print", "warn", NULL };
   int printer = 0;
   for (int i = 0; sym && printers[i]; i++) if (sp_streq(sym, printers[i])) printer = 1;
-  if (!printer || comp_method_index(c, sym) >= 0) return 0;
+  if (!printer || call_target(c, mn, -1, sym, CT_TOP, NULL) >= 0) return 0;
   int si = comp_core_class(c, CORE_STRING);
-  return si < 0 || (comp_method_in_chain(c, si, "inspect", NULL) < 0 && comp_method_in_chain(c, si, "to_s", NULL) < 0);
+  return si < 0 || (call_target(c, mn, si, "inspect", CT_METHODS, NULL) < 0 && call_target(c, mn, si, "to_s", CT_METHODS, NULL) < 0);
 }
 
 static void dyn_reach_method_node(Compiler *c, int mn, int k, DynReach *r) {
@@ -32846,7 +32851,7 @@ static void dyn_reach_method_node(Compiler *c, int mn, int k, DynReach *r) {
      called with `bind_call`) names its method as a Method does */
   int mi = method_obj_target_mi(c, mn);
   if (mi < 0) { r->unknown = 1; return; }
-  if (dyn_method_prints(c, mi)) return;
+  if (dyn_method_prints(c, mn, mi)) return;
   /* a bound builtin's wrapper (`"ab".method(:center)`, `a.method(:push)`)
      may keep what it is handed (push stores it) */
   if (method_call_param_shift(c, mn, mi)) { r->keeps = 1; return; }
@@ -33032,7 +33037,7 @@ static void dyn_reach_value(Compiler *c, int v, int k, int depth, DynReach *r) {
       "clear", "[]=", "setbyte", "force_encoding", "encode!", NULL };
     size_t sl = sv ? strlen(sv) : 0;
     if (!sv || (sl > 0 && sv[sl - 1] == '!') || dyn_name_in(sv, inplace) ||
-        comp_method_index(c, sv) >= 0)
+        call_target(c, v, -1, sv, CT_TOP, NULL) >= 0)
       r->app = 1;
     return;
   }
@@ -33405,7 +33410,10 @@ static int dyn_site_may_reach(Compiler *c, int n, int mi) {
   /* mi's class is cls or one below it */
   for (int k = m->class_id; k >= 0; k = c->classes[k].parent) if (k == cls) return 1;
   /* or cls inherits mi from a class above it */
-  return comp_method_in_chain(c, cls, m->name, NULL) == mi;
+  mtab_enter(c);   /* (the candidate owner of the scopes of the name: whether cls's chain holds scope mi, one of every scope of the name this survey walks) */
+  int holds = comp_method_in_chain(c, cls, m->name, NULL) == mi;
+  mtab_leave(c);
+  return holds;
 }
 
 /* What parameter j of method mi can be handed: the argument each call
@@ -48330,7 +48338,7 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
   else {
     if (comp_super_shadow(c, st)) return;
     int p = c->classes[st->class_id].parent;
-    if (p >= 0 && comp_method_in_chain(c, p, mname, NULL) >= 0) return;
+    if (p >= 0 && call_target(c, id, p, mname, CT_METHODS | CT_REACH, NULL) >= 0) return;
     init = is_initialize_name(mname);
   }
   /* Array#initialize_copy is a replace, which the copy dup and clone make
@@ -48550,7 +48558,7 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
        class; ie_class_of is not built yet, as this runs before the fixpoint) */
     if (time_maker && (sr < 0 || nt_kind(nt, sr) == NK_SelfNode) && s && !s->is_cmethod && s->class_id >= 0 &&
         comp_ary_is_time(c, s->class_id) && (comp_descendants(c, s->class_id, &nd), nd == 0) &&
-        comp_method_in_chain(c, s->class_id, "class", NULL) < 0 && !self_rebound_at(c, id)) {
+        call_target(c, id, s->class_id, "class", CT_METHODS, NULL) < 0 && !self_rebound_at(c, id)) {
       int kc = arysub_node(c, "ConstantReadNode", id);
       if (kc >= 0) {
         nt_node_set_str((NodeTable *)nt, kc, "name", c->classes[s->class_id].name);
@@ -56464,7 +56472,7 @@ static void an_presence_observe(Compiler *c, int id) {
     /* only where no inspect of the program's sits above: that one runs */
     const Scope *st = s ? comp_super_site(c, s) : NULL;
     int up = own >= 0 ? comp_super_parent(c, st->class_id, 0) : -1;
-    if (own >= 0 && s->name && is_inspect_name(st->name) && (up < 0 || comp_method_in_chain(c, up, st->name, NULL) < 0))
+    if (own >= 0 && s->name && is_inspect_name(st->name) && (up < 0 || call_target(c, id, up, st->name, CT_METHODS | CT_REACH, NULL) < 0))
       an_presence_class(c, id, own, OBS_INSPECT, -1);
     return;
   }
@@ -56599,7 +56607,7 @@ static void an_phase_value_types(Compiler *c) {
           Scope *fs = comp_scope_of(c, id);
           if (fs && fs->class_id >= 0 && !fs->is_cmethod) q = fs->class_id;
         }
-        if (fz_clone && q >= 0 && q < c->nclasses && comp_method_in_chain(c, q, fzn, NULL) >= 0) q = -1;
+        if (fz_clone && q >= 0 && q < c->nclasses && call_target(c, id, q, fzn, CT_METHODS, NULL) >= 0) q = -1;
         /* the receiver (or self) may be an instance of a subclass: a
            freeze in Base#initialize freezes a Child's instance too, so
            Child's ivar stores take the guard as well */

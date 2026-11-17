@@ -3373,7 +3373,7 @@ static int arysub_container_evidence(Compiler *c, int id, int recv, int is_push,
   /* a String subclass's String has one kind, whatever goes into it */
   if (c->classes[root].ary_str) return 1;
   if (nt_kind(c->nt, id) == NK_CallNode ? !comp_arysub_call(c, id, rt, &k)
-                                        : comp_method_in_chain(c, ty_object_class(rt), "[]=", NULL) >= 0)
+                                        : call_target(c, id, ty_object_class(rt), "[]=", CT_METHODS, NULL) >= 0)
     return 1;
   TyKind *slot = &c->classes[root].ary_kind, was = *slot, now = was;
   if (c->classes[root].ary_hash) {
@@ -3413,10 +3413,9 @@ static TyKind index_op_write_value_type(Compiler *c, int id, int recv, TyKind vt
    `@v << a << b` pushes b into @v, as `@v << a; @v << b` does. Only the
    builtin Array push answers its receiver; any other `<<` (an Integer
    shift, a user class's, a reopened Array's) ends the chain. */
-static int array_push_reopened(Compiler *c, const char *nm) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (sp_streq(c->classes[k].name, "Array") && comp_method_in_chain(c, k, nm, NULL) >= 0) return 1;
-  return 0;
+static int array_push_reopened(Compiler *c, int id, const char *nm) {
+  int ak = comp_core_class(c, CORE_ARRAY);
+  return ak >= 0 && call_target(c, id, ak, nm, CT_METHODS, NULL) >= 0;
 }
 static int push_chain_base(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
@@ -3427,7 +3426,7 @@ static int push_chain_base(Compiler *c, int recv) {
     if (base < 0 || !nm || an < 1) break;
     if (!(sp_streq(nm, "<<") && an == 1) && !sp_streq(nm, "push") && !sp_streq(nm, "append")) break;
     TyKind bt = infer_type(c, base);
-    if (!ty_is_array(bt) || infer_type(c, recv) != bt || array_push_reopened(c, nm)) break;
+    if (!ty_is_array(bt) || infer_type(c, recv) != bt || array_push_reopened(c, recv, nm)) break;
     recv = base;
   }
   return recv;
@@ -14079,7 +14078,8 @@ static int block_with_own_self(Compiler *c, int call) {
    name / to_s / inspect (which `Foo.name` reaches as the bare call does)? */
 static int bare_call_on_class(Compiler *c, int ci, const char *nm) {
   if (ci < 0 || !nm) return 0;
-  return comp_cmethod_in_chain(c, ci, nm, NULL) >= 0 || is_name_reader(nm);
+  /* (what self is inside the block does not move with where the def is: the class's table, asked with no site) */
+  return call_target(c, -1, ci, nm, CT_CMETHOD | CT_SHARED, NULL) >= 0 || is_name_reader(nm);
 }
 static void subtree_self_to_const(Compiler *c, int root, const char *cname, int ci, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -19462,7 +19462,7 @@ int infer_block_params(Compiler *c) {
            method's argument, as a call would */
         if (ty_is_object(wt)) {
           TyKind st = infer_type(c, pred);
-          int mi = comp_method_in_chain(c, ty_object_class(wt), "===", NULL);
+          int mi = cplan_implied_target(c, whens[k], wconds[j], ty_object_class(wt), "===", CIT_TABLE, NULL);
           Scope *ms = mi >= 0 ? &c->scopes[mi] : NULL;
           /* the one shape the case emitter calls (emit_when_user_eq) */
           LocalVar *plv = ms && ms->nparams == 1 && ms->rest_idx < 0 && ms->kwrest_idx < 0 && !ms->blk_param

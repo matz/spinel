@@ -38,6 +38,7 @@ src/analyze_elab.c:lr_sg_makers
 src/analyze.c:inline_replacing_def
 src/analyze.c:check_seed_contradictions
 src/codegen_util.c:mc_number_versions
+src/analyze.c:desugar_missing_method_obj
 "
 REFUSALS="
 src/analyze.c:refuse_mixin_after_calls

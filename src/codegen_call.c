@@ -1933,12 +1933,14 @@ int emit_reopen_arm_test(Compiler *c, int kmi, const char *name, const char *cls
   Buf t; memset(&t, 0, sizeof t);
   buf_printf(&t, "!sp_class_nil_p(%s) && !sp_class_is_module_val(%s) && ((%s).cls_id < 0 || ((%s).cls_id != SP_CLASS_BY_NAME", cls, cls, cls, cls);
   int rc = comp_core_class(c, CORE_CLASS_REOPEN), kdef = c->scopes[kmi].def_node;
+  mtab_enter(c);   /* (the candidate owner of the classes whose class side answers name otherwise: every class is asked by design, no call's question) */
   for (int k = 0; k < c->nclasses; k++) {
     if (k == rc || comp_class_is_module(c, &c->classes[k])) continue;
     int own = comp_cmethod_in_chain(c, k, name, NULL);
     if (own >= 0 && own != kmi && c->scopes[own].def_node != kdef)
       buf_printf(&t, " && (%s).cls_id != %d", cls, k);
   }
+  mtab_leave(c);
   buf_puts(&t, "))");
   if (raise) buf_printf(b, " default: if (!(%s)) { %s; break; } ", t.p, raise);
   else buf_printf(b, "(%s) ? ", t.p);
@@ -22247,7 +22249,7 @@ static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const
      the classes were walked at every boxed dispatch, #10546) */
   if (comp_any_class_accessor(c, name)) return 0;
   for (int k = 0; nmm < 0 && k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
+    if (call_target(c, id, k, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0) return 0;
   return poly_arity_rows(c, id, name, with_block, argc, kwh, 0, tests, exps);
 }
 
@@ -36007,7 +36009,7 @@ int strbuf_call_picks_up(Compiler *c, int id) {
     const char *cn = nt_kind(c->nt, r) == NK_ConstantReadNode ? nt_str(c->nt, r, "name") : NULL;
     return !cn || const_node_class_index(c, r) >= 0;
   }
-  return !nm || comp_cmethod_in_chain(c, k, nm, NULL) >= 0;
+  return !nm || call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0;
 }
 /* deep-return pickup (#3227 P6): a marked receiverless call to a method
    whose every return path yields a shared handle -- reset the side

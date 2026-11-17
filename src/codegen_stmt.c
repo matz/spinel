@@ -816,7 +816,7 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
 int pp_leaves_own_inspect(Compiler *c, const char *name) {
   return name && sp_streq(name, "pp") && pp_prints_by_rt(c);
 }
-int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv, Buf *b, int indent) {
+int emit_output_spilled(Compiler *c, int id, const char *name, int argc, const int *argv, Buf *b, int indent) {
   /* such a pp: every argument is boxed first, then printed through
      sp_pp_inspect */
   int pp_own = argc >= 1 && pp_leaves_own_inspect(c, name);
@@ -826,7 +826,7 @@ int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv
      its typed emission. A Struct or Data prints its record layout) */
   for (int k = 0; k < argc && pp_own; k++) {
     TyKind at = repr_of(c, argv[k]).as_ty;
-    if (ty_is_object(at) && comp_method_in_chain(c, ty_object_class(at), "inspect", NULL) >= 0 &&
+    if (ty_is_object(at) && cplan_implied_target(c, id, argv[k], ty_object_class(at), "inspect", CIT_TABLE, NULL) >= 0 &&
         !record_pp_skips_inspect(c, argv[k], ty_object_class(at)) && !obj_arm_calls_own_inspect(c, ty_object_class(at)))
       pp_own = 0;
   }
@@ -1017,7 +1017,7 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
      leave theirs in the buffer, as CRuby's do) */
   int p_flush = sp_streq(name, "p") && argc >= 1;
   if (sp_streq(name, "puts") || sp_streq(name, "print") || sp_streq(name, "p") || sp_streq(name, "pp")) {
-    if (emit_output_spilled(c, name, argc, argv, b, indent)) {
+    if (emit_output_spilled(c, id, name, argc, argv, b, indent)) {
       if (p_flush) { emit_indent(b, indent); buf_puts(b, "fflush(stdout);\n"); }
       return 1;
     }
@@ -12648,13 +12648,13 @@ int hc_promoted_int(Compiler *c, int n) {
 
 /* Is type t an IO::Buffer whose binding `nm` (argc arguments) the call
    reaches -- no method of the program's answering it instead? */
-static int hc_iob_binding(Compiler *c, TyKind t, const char *nm, int argc) {
+static int hc_iob_binding(Compiler *c, int id, TyKind t, const char *nm, int argc) {
   if (!ty_is_object(t)) return 0;
   int cid = ty_object_class(t);
   if (cid < 0 || cid >= c->nclasses || !c->classes[cid].is_native_class || !c->classes[cid].c_struct ||
       !sp_streq(c->classes[cid].c_struct, "sp_IOBuffer"))
     return 0;
-  return comp_native_method_find(c, cid, nm, argc, 0) >= 0 && comp_method_in_chain(c, cid, nm, NULL) < 0;
+  return comp_native_method_find(c, cid, nm, argc, 0) >= 0 && call_target(c, id, cid, nm, CT_METHODS, NULL) < 0;
 }
 /* `buf.get_value(:U8, i)`: a read emit_native_binding_call lowers inline --
    a literal type symbol of 32 bits or fewer, or a float (the 64-bit
@@ -12666,7 +12666,7 @@ int hc_iob_read(Compiler *c, int id) {
   int a = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   if (!nm || !sp_streq(nm, "get_value") || recv < 0 || ac != 2 || nt_ref(nt, id, "block") >= 0 ||
-      nt_kind(nt, av[0]) != NK_SymbolNode || !hc_iob_binding(c, comp_ntype(c, recv), nm, 2))
+      nt_kind(nt, av[0]) != NK_SymbolNode || !hc_iob_binding(c, id, comp_ntype(c, recv), nm, 2))
     return 0;
   int it = comp_iob_sym_type(nt_str(nt, av[0], "value"));
   return it >= 0 && !comp_iob_ty_is_64(it) && (comp_ntype(c, av[1]) == TY_INT || hc_promoted_int(c, av[1]));
@@ -12683,7 +12683,7 @@ int hc_iob_write(Compiler *c, int id) {
   int a = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   if (!nm || !sp_streq(nm, "set_value") || recv < 0 || ac != 3 || nt_ref(nt, id, "block") >= 0 ||
-      nt_kind(nt, av[0]) != NK_SymbolNode || !hc_iob_binding(c, comp_ntype(c, recv), nm, 3))
+      nt_kind(nt, av[0]) != NK_SymbolNode || !hc_iob_binding(c, id, comp_ntype(c, recv), nm, 3))
     return 0;
   int it = comp_iob_sym_type(nt_str(nt, av[0], "value"));
   if (it < 0 || !(comp_ntype(c, av[1]) == TY_INT || hc_promoted_int(c, av[1]))) return 0;
@@ -12720,7 +12720,7 @@ static int hc_call_ok(Compiler *c, int id, int stmt) {
     return 1;
   if (sp_streq(nm, "bytesize") && ac == 0 && rt == TY_STRING) return 1;
   if (hc_iob_read(c, id) || hc_iob_write(c, id) ||
-      (ac == 0 && sp_streq(nm, "size") && hc_iob_binding(c, rt, nm, 0))) return 1;
+      (ac == 0 && sp_streq(nm, "size") && hc_iob_binding(c, id, rt, nm, 0))) return 1;
   int alloc = 0;
   if (ac == 0 && call_is_field_read(c, id, &alloc) && !alloc) return 1;
   if (ac == 0 && (rt == TY_INT || rt == TY_FLOAT)) {
@@ -18779,9 +18779,12 @@ static int class_body_name_undefined(Compiler *c, const char *nm) {
   if (builtin_object_method_known(nm)) return 0;
   for (int s = 0; s < c->nscopes; s++)
     if (c->scopes[s].name && sp_streq(c->scopes[s].name, nm)) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_cmethod_in_chain(c, k, nm, NULL) >= 0) return 0;
-  return 1;
+  int defined = 0;
+  mtab_enter(c);   /* (the candidate owner of the classes that define nm on either side: every class is asked by design, no call's question) */
+  for (int k = 0; k < c->nclasses && !defined; k++)
+    defined = comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_cmethod_in_chain(c, k, nm, NULL) >= 0;
+  mtab_leave(c);
+  return !defined;
 }
 
 static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int indent) {
@@ -27478,7 +27481,7 @@ int strbuf_poly_user_boxes(Compiler *c, int v) {
     int hit = 0;
     for (int i = 0; i < p.n && !hit; i++) hit = p.arm[i].key == ks[j];
     if (!hit && (ks[j] < 0 || ks[j] >= c->nclasses || name_is_plain_setter(nm) ||
-                 comp_method_in_chain(c, ks[j], "method_missing", NULL) >= 0 ||
+                 call_target(c, v, ks[j], METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0 ||
                  call_answers(c, -1, ks[j], nm, 0, NULL)))
       return 0;
   }

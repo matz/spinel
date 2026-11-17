@@ -16,6 +16,7 @@
 #include "builtin_ops.h"
 #include "builtin_names.h"
 #include "call_plan.h"
+#include "method_table_check.h"
 #include "share.h"
 #include "repr.h"
 #include "codegen_internal.h"
@@ -214,7 +215,7 @@ static int sh_copied_self_targets(Compiler *c, int call, int *out, int cap) {
   for (int k = comp_def_oldest(c, s->def_node); k >= 0; k = comp_def_newer(c, k)) {
     const Scope *cp = &c->scopes[k];
     if (k == si || cp->class_id < 0 || cp->is_cmethod) continue;
-    int mi = comp_method_in_chain(c, cp->class_id, name, NULL);
+    int mi = call_target(c, call, cp->class_id, name, CT_METHODS, NULL);
     if (mi < 0) return 0;
     int seen = 0;
     for (int j = 0; j < n && !seen; j++) seen = out[j] == mi;
@@ -320,7 +321,7 @@ static int sh_string_conv_methods(Compiler *c, int arg, int *mis, int cap) {
       int k = pc[i].cls;
       if ((obj && k != ocid && (exact || !is_descendant(c, k, ocid))) || cls_fact_excludes(c, arg, k)) continue;
       /* (Kernel#String asks #to_str first: a class with one never runs its #to_s) */
-      if (j && comp_method_in_chain(c, k, "to_str", NULL) >= 0) continue;
+      if (j && call_target(c, arg, k, "to_str", CT_METHODS, NULL) >= 0) continue;
       if (pc[i].native) continue;
       if (n < cap) mis[n] = pc[i].mi;
       n++;
@@ -1147,29 +1148,31 @@ static int sh_self_call_targets(Compiler *c, int call, const char *nm, int *out,
   sh_dyn_names_build(c);
   if (g_rebind) return -1;
   for (int i = 0; i < g_nalias_src; i++) if (sp_streq(g_alias_src[i], cur->name)) return -1;
-  int k = 0;
-  for (int cid = 0; cid < c->nclasses; cid++) {
+  int k = 0, r = 0;
+  mtab_enter(c);   /* (the candidate owner of the classes the enclosing method runs on: every class is asked by design, no call's question) */
+  for (int cid = 0; cid < c->nclasses && !r; cid++) {
     if (!c->classes[cid].instantiated && !c->classes[cid].is_builtin_const) continue;
     int emi = comp_method_in_chain(c, cid, cur->name, NULL);
     if (emi != ci) {
       /* (a class below the method's own, or any where it is a module's) */
       int below = comp_class_is_module(c, &c->classes[cur->class_id]) || is_descendant(c, cid, cur->class_id);
-      if (below && emi > 0 && emi < c->nscopes && sh_subtree_has_super(nt, c->scopes[emi].def_node, 0)) return -1;
+      if (below && emi > 0 && emi < c->nscopes && sh_subtree_has_super(nt, c->scopes[emi].def_node, 0)) r = -1;
       continue;
     }
     int mi = comp_method_in_chain(c, cid, nm, NULL);
     if (mi < 0) {
-      if (comp_method_in_chain(c, cid, "method_missing", NULL) >= 0) return -1;
+      if (comp_method_in_chain(c, cid, METHOD_MISSING_NAME, NULL) >= 0) r = -1;
       continue;
     }
-    if (c->scopes[mi].is_cmethod) return -1;
+    if (c->scopes[mi].is_cmethod) { r = -1; continue; }
     int seen = 0;
     for (int i = 0; i < k && !seen; i++) seen = out[i] == mi;
     if (seen) continue;
-    if (k >= cap) return -1;
+    if (k >= cap) { r = -1; continue; }
     out[k++] = mi;
   }
-  return k;
+  mtab_leave(c);
+  return r ? -1 : k;
 }
 /* Does any class have an attr_reader `nm`? From a set of every class's
    reader names, built again only when a reader table grows (comp_table_gen;
@@ -1475,7 +1478,7 @@ static int sh_callable_fresh(Compiler *c, int k, int depth) {
   if (is_method_ref_name(un)) {
     int a = nt_ref(nt, k, "arguments"), ac = 0;
     const int *av = nt_arr(nt, a, "arguments", &ac);
-    int mi = comp_method_index(c, nt_str(nt, av[0], "value"));
+    int mi = call_target(c, k, -1, nt_str(nt, av[0], "value"), CT_TOP, NULL);
     body = mi >= 0 && c->scopes[mi].def_node >= 0 ? nt_ref(nt, c->scopes[mi].def_node, "body") : -1;
   }
   else body = nt_ref(nt, un ? nt_ref(nt, k, "block") : k, "body");

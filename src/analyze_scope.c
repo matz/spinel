@@ -223,7 +223,7 @@ static int forwarding_target_scan(Compiler *c, Scope *s, int *sole) {
       const Scope *st = comp_super_site(c, s);
       if (st->class_id >= 0 && !st->is_cmethod && st->name) {
         int par = comp_super_parent(c, st->class_id, 0);
-        mi = par >= 0 ? comp_method_in_chain(c, par, st->name, NULL) : -1;
+        mi = par >= 0 ? call_target(c, id, par, st->name, CT_METHODS | CT_REACH, NULL) : -1;
       }
     }
     else {
@@ -7874,7 +7874,7 @@ void resolve_parents(Compiler *c) {
       Scope *s = comp_scope_of(c, id);
       if (!s || s->class_id < 0 || !s->name || s->is_cmethod || c->classes[s->class_id].nsub_root <= 0) continue;
       int par = c->classes[s->class_id].parent;
-      if (par >= 0 && comp_method_in_chain(c, par, s->name, NULL) >= 0) continue;
+      if (par >= 0 && call_target(c, id, par, s->name, CT_METHODS | CT_REACH, NULL) >= 0) continue;
       int pnd = s->def_node >= 0 ? nt_ref(ntw, s->def_node, "parameters") : -1, nkw = 0;
       if (pnd >= 0) (void)nt_arr(ntw, pnd, "keywords", &nkw);
       if (s->rest_idx >= 0 || s->kwrest_idx >= 0 || nkw > 0 || s->blk_param || s->nparams > 64) continue;
@@ -14655,8 +14655,8 @@ void refuse_self_singleton_calls(Compiler *c) {
     /* Refused also with an instance method of the name: the compiled call
        runs it, but an instance that ran the def runs its own method. */
     if (!ssc_def_reaches(c, k, nm, self_call)) {
-      if (comp_method_in_chain(c, k, nm, NULL) >= 0) continue;
-      int cm = comp_cmethod_in_chain(c, k, nm, NULL);
+      if (call_target(c, id, k, nm, CT_METHODS, NULL) >= 0) continue;
+      int cm = call_target(c, id, k, nm, CT_CMETHOD, NULL);
       if (cm < 0 || c->scopes[cm].def_node < 0 || !nt_int(nt, c->scopes[cm].def_node, "sg_self_in_method", 0)) continue;
     }
     unsupported_feature(c, id, "singleton method on self inside an instance method: self is whichever instance runs it, "

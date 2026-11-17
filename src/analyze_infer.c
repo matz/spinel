@@ -6461,14 +6461,15 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
          alone (emit_cls_value_sg_accessor) or, a reader, beside the classes
          with a class method of the name (emit_cls_value_sg_arms); a writer
          there answers the value it was given, as an assignment does */
-      if (recv_is_var && (ncc == 0 || (nc > 0 && argc == 0)) && cls_value_sg_accessor_any(c, name, argc)) { *out = TY_POLY; return 1; }
+      if (recv_is_var && (ncc == 0 || ((nc > 0 || nwrong > 0) && !call_is_setter_assign(nt, id))) &&
+          cls_value_sg_accessor_any(c, name, argc)) { *out = TY_POLY; return 1; }
       /* a candidate that answers nothing (a raise-only body) keeps its
          void: the consumer then runs the call for its effect and reads nil,
          as it does for the same call on a constant receiver (#8645) */
       /* `k.label = v` is v whatever the writer's body answers, as on a
          constant receiver: the dispatch calls the writer for effect and
          yields the argument */
-      if (nc > 0 && !has_blk && argc == 1 && call_is_setter_assign(nt, id)) {
+      if ((nc > 0 || nwrong > 0) && !has_blk && argc == 1 && call_is_setter_assign(nt, id)) {
         TyKind at = infer_type(c, argv[0]);
         if (at == TY_STRBUF) at = TY_STRING;
         if (at != TY_UNKNOWN) { *out = at; return 1; }

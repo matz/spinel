@@ -5255,7 +5255,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           }
           buf_puts(b, " default:");
           emit_class_constants_push(c, self_ci, inherit, ta, b);
-          buf_puts(b, " }");
+          /* (a statement after the label: a class with no constants pushes
+             none, and a label that ends its block is C23, which clang's
+             -Werror refuses) */
+          buf_puts(b, " break; }");
         }
         else
           emit_class_constants_push(c, rci, inherit, ta, b);

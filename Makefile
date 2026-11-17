@@ -2365,6 +2365,19 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  echo "reject-test: FAIL (an ffi_source call to an undeclared function built)"; ok=0; \
 	else grep -Eq "(undeclared function|implicit declaration of function) .lfind" "$$tmp/r.out" || \
 	  { echo "reject-test: FAIL (an ffi_source call to an undeclared function refused without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/ffi_lib_runtime_name.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (an ffi_lib name that does not fold compiled)"; ok=0; \
+	else grep -q "ffi_lib. expects a compile-time string" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (an ffi_lib name that does not fold refused without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/ffi_lib_runtime_candidate.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (an ffi_lib Array candidate that does not fold compiled)"; ok=0; \
+	else grep -q "ffi_lib. expects a compile-time string" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (an ffi_lib Array candidate that does not fold refused without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	$(SPINEL) test/ffi-lib/cwd_relative.rb -c --no-line-map -o "$$tmp/fcr.c" >/dev/null 2>&1 || { echo "reject-test: FAIL (ffi-lib/cwd_relative: -c)"; ok=0; }; \
+	grep -Fq "/* SPINEL_LINK: $$(pwd)/libspinel_cwd_probe.so */" "$$tmp/fcr.c" || \
+	  { echo "reject-test: FAIL (a one-argument File.expand_path in ffi_lib did not name the working directory)"; grep 'SPINEL_LINK' "$$tmp/fcr.c"; ok=0; }; \
 	t=test/reject/singleton_on_untraceable_recv.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
 	  echo "reject-test: FAIL (a singleton def on an untraceable receiver compiled)"; ok=0; \
@@ -4827,6 +4840,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	grep -q 'static sp_PointValue sp_PointValue_new(' "$$tmp/oir.c" && ! grep -q 'iv_unused;' "$$tmp/oir.c" || { echo "infer-test: FAIL (an Object setter changes unrelated layouts)"; ok=0; }; \
 	$(SPINEL) test/hash_store_boxed_unbounded.rb -c --no-line-map -o "$$tmp/hbu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_store_boxed_unbounded: -c)"; ok=0; }; \
 	! grep -q 'sp_PolyPolyHash_new' "$$tmp/hbu.c" || { echo "infer-test: FAIL (an unbounded boxed store widened a known Hash)"; ok=0; }; \
+	$(SPINEL) test/hash_key_walk_param_same_name.rb -c --no-line-map -o "$$tmp/hkw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_key_walk_param_same_name: -c)"; ok=0; }; \
+	grep -Fq 'static inline sp_StrIntHash * sp_A_s_w(' "$$tmp/hkw.c" && grep -Eq '^static inline sp_Str[A-Za-z]*Hash \* sp_TodoApp_s_tag_counts\(' "$$tmp/hkw.c" || { echo "infer-test: FAIL (a walk parameter boxed for a round keyed its empty Hash poly)"; ok=0; }; \
 	$(SPINEL) test/container_alias_untracked_local.rb -c --no-line-map -o "$$tmp/cau.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (container_alias_untracked_local: -c)"; ok=0; }; \
 	awk '/^struct sp_Area_s \{/,/^\}/' "$$tmp/cau.c" | grep -Fq 'sp_StrArray * iv_except;' || { echo "infer-test: FAIL (a local that may hold an untracked container joined an alias group and widened an Array[String])"; ok=0; }; \
 	$(SPINEL) test/ivar_push_unsettled_block_value.rb -c --no-line-map -o "$$tmp/ipu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_push_unsettled_block_value: -c)"; ok=0; }; \
@@ -5212,6 +5227,10 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) test/obj_array_filters.rb -c --no-line-map -o "$$tmp/oaf.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_filters: -c)"; ok=0; }; \
 	for v in iv_herd iv_arrows iv_eggs iv_pen lv_babies lv_adults; do \
 	  grep -q "sp_PtrArray \\* $$v\b" "$$tmp/oaf.c" || { echo "infer-test: FAIL (obj_array_filters: a filter left $$v boxed)"; ok=0; }; \
+	done; \
+	$(SPINEL) test/obj_array_self_answering_filters.rb -c --no-line-map -o "$$tmp/osa.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_self_answering_filters: -c)"; ok=0; }; \
+	for cls in Shelf Bin Queue2; do \
+	  awk "/^struct sp_$${cls}_s \\{/,/^\\}/" "$$tmp/osa.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a read of delete_if, keep_if, sort! or sort_by!'s value left $$cls's @items boxed)"; ok=0; }; \
 	done; \
 	$(SPINEL) test/obj_array_nested_block.rb -c --no-line-map -o "$$tmp/onb.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_nested_block: -c)"; ok=0; }; \
 	for v in arrows pts; do \

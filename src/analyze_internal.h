@@ -803,6 +803,9 @@ int desugar_reader_index_write(Compiler *c);
 int desugar_body_module_eval(Compiler *c);
 int desugar_instance_eval_defs(Compiler *c);
 int desugar_user_send_others(Compiler *c);
+int desugar_missing_method_calls(Compiler *c);
+int ie_receiverless_self_class_of(Compiler *c, int id);
+int ie_block_self_class_of(Compiler *c, int id);
 int desugar_self_class_eval_blocks(Compiler *c);
 int enumerator_own_with_object(Compiler *c, int id);
 int block_body_breaks(const NodeTable *nt, int node);   /* a break that leaves this block */

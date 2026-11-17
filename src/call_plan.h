@@ -772,7 +772,8 @@ int cplan_entries(Compiler *c, int id, int *out, int cap);
    the forwards leave unfilled after the call's arguments, as a bare `super`
    passes them (cplan_builtin_new_fills; desugar_builtin_new_init_args places
    them on the call, which is then BNF_OWN; rmi: the forward without a keyword rest whose binding
-   checks the keys a `**` passes, before the defaults run). BNF_RAISE: a forward without a keyword rest is given a literal keyword it
+   checks the keys a `**` passes, before the defaults run, or for a BNF_EMPTY after them where rlate is set: every default
+   with an effect is then filled ahead of that forward). BNF_RAISE: a forward without a keyword rest is given a literal keyword it
    does not name, and CRuby's binding raises `unknown keyword` before its body runs: the call evaluates what BNF_EMPTY's
    does, then raises (rmi: that forward's scope). */
 enum { BNF_NONE, BNF_OWN, BNF_EMPTY, BNF_REFUSE, BNF_FILL, BNF_RAISE };
@@ -785,7 +786,7 @@ int cplan_builtin_new_form(Compiler *c, int id);
    the call does not: keyword parameter kp[k] of method scope kmi[k], each one
    more keyword, ahead of the call's `**`. */
 enum { NEW_FILLS_MAX = 16 };
-typedef struct NewFills { int n, kwat, nk, rmi, mi[NEW_FILLS_MAX], pi[NEW_FILLS_MAX], kmi[NEW_FILLS_MAX], kp[NEW_FILLS_MAX]; } NewFills;
+typedef struct NewFills { int n, kwat, nk, rmi, rlate, mi[NEW_FILLS_MAX], pi[NEW_FILLS_MAX], kmi[NEW_FILLS_MAX], kp[NEW_FILLS_MAX]; } NewFills;
 void cplan_builtin_new_fills(Compiler *c, int id, NewFills *f);
 /* Where cplan_entries cannot list them (CPT_UNKNOWN), the names whose
    program methods hold every method call node id may enter, into names (at

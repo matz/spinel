@@ -13425,7 +13425,8 @@ static int bni_unknown_keys(Compiler *c, int id, int rmi) {
    an effect run after the held operands. One that a forward's binding refuses for a
    keyword it does not name (BNF_RAISE) runs as an empty one does up to the raise of
    CRuby's `unknown keyword` (kwb_reject); a BNF_FILL or BNF_EMPTY whose `**` a forward's binding checks raises
-   the keys it does not name after the held operands and ahead of the defaults (bni_unknown_keys). The call left is the builtin's own
+   the keys it does not name after the held operands and ahead of the defaults (bni_unknown_keys), or for a BNF_EMPTY
+   after them where the forwards ahead of that one fill each with an effect (NewFills.rlate). The call left is the builtin's own
    (nt_mark_builtin_call), which the plan does not answer again. */
 static int desugar_builtin_new_init_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -13433,7 +13434,7 @@ static int desugar_builtin_new_init_args(Compiler *c) {
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
     if (nt_kind(nt, id) != NK_CallNode || id >= c->node_cap) continue;
     int form = cplan_builtin_new_form(c, id);
-    NewFills fl = { .n = 0, .kwat = -1, .rmi = -1 };
+    NewFills fl = { .n = 0, .kwat = -1, .rmi = -1, .rlate = 0 };
     if (form == BNF_FILL || form == BNF_EMPTY || form == BNF_RAISE) cplan_builtin_new_fills(c, id, &fl);
     if (form != BNF_FILL && form != BNF_RAISE &&
         (form != BNF_EMPTY || (nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0 && !fl.n && !fl.nk))) continue;
@@ -13443,9 +13444,10 @@ static int desugar_builtin_new_init_args(Compiler *c) {
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
     /* (the keys a forward's binding raises for, from the held operands: a BNF_FILL's or a BNF_EMPTY's ahead of the defaults, a
-       BNF_RAISE's after those of the forwards ahead) */
+       BNF_RAISE's, and a BNF_EMPTY's whose defaults with an effect the forwards ahead fill (rlate), after them) */
     int sk = bni_unknown_keys(c, id, fl.rmi);
-    if (sk >= 0 && form != BNF_RAISE) {
+    int late = form == BNF_RAISE || fl.rlate;
+    if (sk >= 0 && !late) {
       char xn[32];
       snprintf(xn, sizeof xn, "__bnu%d", id);
       pre = realloc(pre, sizeof(int) * (size_t)(np + 2));
@@ -13468,7 +13470,7 @@ static int desugar_builtin_new_init_args(Compiler *c) {
       for (int i = 0; i < np; i++)
         if (fl.n || fl.nk || sk >= 0) pre[i] = nt_clone_subtree(nt, pre[i]);
         else if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
-      if (sk >= 0 && form == BNF_RAISE) {
+      if (sk >= 0 && late) {
         char xn[32];
         snprintf(xn, sizeof xn, "__bnu%d", id);
         pre[np++] = kwb_lv(nt, comp_scope_of(c, id), xn, sk);

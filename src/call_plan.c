@@ -8151,8 +8151,8 @@ static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws
   }
   return placed ? 1 : FILL_UNPLACED;
 }
-/* The check of a `**h`'s keys at the first forward that may raise for one (f->rmi), which the rewrite makes once the operands
-   are held and ahead of every default, given the effects the walk filled (effects), ek of them ahead of that forward: kept
+/* The check of a `**h`'s keys at the first forward that may raise for one (f->rmi), where the chain ends in the builtin's own
+   initialize (BNF_FILL, BNF_OWN), which the rewrite makes once the operands are held and ahead of every default, given the effects the walk filled (effects), ek of them ahead of that forward: kept
    where a default with an effect is filled at or after that forward, which runs only once its binding has passed; dropped
    where none is, as then the builtin's own binding raises alike after the defaults; 0 (the call is refused) where one is
    filled ahead of it and another at or after it, as the first runs before the raise. A later forward is given every
@@ -8261,7 +8261,13 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
     if (!cplan_body_empty(c, mi) || !builtin_empty_new(c->classes[ci].name) || sc->yields || !ct_params_plain(c, sc, 0, 0, 0))
       return BNF_REFUSE;
     if (unplaced || !effects) f->n = f->nk = 0, f->kwat = -1;
-    return ct_key_check(f, effects, ek) ? BNF_EMPTY : BNF_REFUSE;
+    /* (nothing past an empty one raises for a key: the check stays, ahead of the defaults it runs before, or after them where
+       each with an effect is filled ahead of that forward; one ahead of it and another at or after it, the call is refused) */
+    if (f->rmi >= 0 && !unplaced && ek) {
+      if (effects != ek) return BNF_REFUSE;
+      f->rlate = 1;
+    }
+    return BNF_EMPTY;
   }
   /* (the builtin's own takes the keywords a forward's bare `super` passes, or CRuby raises ArgumentError there) */
   if (kwpass && !builtin_new_keywords(c->classes[ci].name)) return BNF_REFUSE;
@@ -8272,7 +8278,7 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
 /* cplan_builtin_new_form's answer, and the defaults of a BNF_FILL, BNF_EMPTY or BNF_RAISE into f */
 static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
   int ci, own, tmp[CPT_MAX];
-  f->n = f->nk = 0, f->kwat = f->rmi = -1;
+  f->n = f->nk = f->rlate = 0, f->kwat = f->rmi = -1;
   /* (the empty value desugar_builtin_new_init_args builds once it has run the arguments is the builtin's own `new`) */
   if (id < 0 || id >= c->node_cap || nt_kind(c->nt, id) != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name")) ||
       cplan_builtin_call(c, id)) return BNF_NONE;
@@ -8302,7 +8308,7 @@ static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
     NewFills nf[1];
     for (int k = 0; k < n; k++) {
       /* (a chain whose defaults run at the call is one only where no guard chooses it) */
-      nf->n = nf->nk = 0, nf->kwat = nf->rmi = -1;
+      nf->n = nf->nk = nf->rlate = 0, nf->kwat = nf->rmi = -1;
       int fk = ct_new_chain_form(c, id, ci, to[k], argc, open, kw, nf);
       if (fk == BNF_NONE) return BNF_NONE;
       if ((g != BNF_NONE && fk != g) || fk == BNF_FILL || nf->n || nf->nk || (k && fk == BNF_RAISE && nf->rmi != f->rmi)) return BNF_REFUSE;

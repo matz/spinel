@@ -187,6 +187,9 @@ endif
 ifeq ($(FFI_AVAILABLE),yes)
 BUNDLED_NATIVE_OBJS += packages/ffi/sp_ffi.o
 endif
+# A package the target has no such facility for (pty on Windows, as CRuby
+# builds no ext/pty there): PLATFORM_NO_PKG_OBJS, set by win32.mk.
+BUNDLED_NATIVE_OBJS := $(filter-out $(PLATFORM_NO_PKG_OBJS),$(BUNDLED_NATIVE_OBJS))
 # Threaded variant of every bundled package object. A program that uses threads
 # compiles its TU (and links the runtime archive) with -DSP_THREADS, which makes
 # the runtime's per-worker globals thread-local; a package object built without

@@ -61,6 +61,10 @@ lib/win32/lib%.a:
 	ar rcs $@
 lib/libspinel_rt.a lib/libspinel_rt_mt.a: | $(PLATFORM_STUB_LIBS)
 
+# Windows has no pseudo-terminal a POSIX pty package can open, and CRuby
+# builds no ext/pty there: the package's C is not compiled here.
+PLATFORM_NO_PKG_OBJS = packages/pty/sp_pty.o
+
 # every bundled package object includes the runtime headers, and so the shim's
 $(foreach p,$(wildcard packages/*/sp_*.c),$(p:.c=.o) $(p:.c=_mt.o)): $(PLATFORM_HDRS)
 
@@ -92,6 +96,8 @@ TEST_SKIP += test/process_spawn_splat_and_pair.rb test/std_stream_stat.rb
 TEST_SKIP += packages/etc/test/etc_each.rb packages/etc/test/etc_getgr.rb packages/etc/test/etc_getpw.rb
 # no fork: Process.daemon is NotImplementedError there, as in CRuby
 TEST_SKIP += test/process_daemon.rb
+# no pty package (PLATFORM_NO_PKG_OBJS above)
+TEST_SKIP += $(wildcard packages/pty/test/*.rb)
 # no job control: SIGSTOP ends a child, so no wait sees one stopped
 TEST_SKIP += test/process_wait_wuntraced.rb test/process_wait_flags_thread.rb
 # FIFOs (File.mkfifo)

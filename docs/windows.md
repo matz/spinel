@@ -113,6 +113,11 @@ What `lib/` itself carries for Windows is small and named:
 - **No `fork`**: `Process.fork` and a prefork server answer `Errno::ENOSYS`.
   `exec` runs the program and exits with its status when it ends (Windows
   cannot replace a process image), as the MSVC runtime's `_exec` does.
+- **No `pty`**: CRuby builds no `ext/pty` on Windows, and there is no
+  pseudo-terminal a POSIX pty package can open. The bundled `pty` package
+  is not built (`PLATFORM_NO_PKG_OBJS` in `win32.mk`), and `require "pty"`
+  finds no library, as for any library Spinel does not have: the compiler
+  warns, and `PTY` is not defined.
 - **Permissions and owners**: a file's mode is what Windows can say --
   read-only or not, and executable for `.exe`/`.com`/`.bat`/`.cmd` -- so
   `File.chmod(0600, f)` followed by `File.stat(f).mode` answers `0100644`.

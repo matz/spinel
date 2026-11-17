@@ -78,3 +78,15 @@ jobs:
           bin/spinel gc_smoke.rb -o gc_smoke.exe
           output="$(timeout 60 ./gc_smoke.exe)" &&
           test "$output" = "collected"
+
+      # Every bundled package's C, as a shared object takes it: a package
+      # that compiles only on POSIX stops this build here.
+      - name: Build the bundled packages
+        run: make -j$(nproc) runtime-pic
+
+      - name: A package Windows has no facility for is absent
+        run: |
+          printf 'require "pty"\np defined?(PTY)\n' > no_pty.rb
+          bin/spinel no_pty.rb -o no_pty.exe 2> no_pty.err
+          grep -q "'pty' is not available" no_pty.err
+          test "$(./no_pty.exe)" = "nil"

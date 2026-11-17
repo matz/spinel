@@ -41,6 +41,7 @@ _Static_assert(NT_RE_UTF_8 == PM_REGULAR_EXPRESSION_FLAGS_UTF_8, "regexp /u flag
 
 #if defined(_WIN32)
 char *sp_w32_overlay(char *content, const char *path);   /* lib/win32/sp_win32_driver.c */
+int sp_w32_package_absent(const char *pkg);               /* lib/win32/sp_win32_driver.c */
 #endif
 
 /* ---- Output ----
@@ -5501,6 +5502,10 @@ static int sp_lib_lookup(const char *lib_dir, const char *lib_name, char *out, s
   if (fl >= sizeof first) fl = sizeof first - 1;
   memcpy(first, pkg, fl);
   first[fl] = 0;
+#if defined(_WIN32)
+  /* a package Windows has no facility for (pty): none to find there */
+  if (sp_w32_package_absent(first)) return SP_LIB_NONE;
+#endif
   if (!sp_package_file(lib_dir, first, pkg, out, n)) return SP_LIB_NONE;
   /* the ffi package is glue over the system libffi and fiddle its native
      layer: without the built object the require stays the builtin DSL's */

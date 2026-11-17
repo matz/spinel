@@ -30,3 +30,13 @@ p [Conf.new, 3].map { |o| o.send(ARGV[1] || "class") }
 def fwd(o, *args) = o.send(*args)
 fwd(conf, :column=, 9)
 p conf.column
+class Strict
+  def self.===(_) = false
+  def send(x) = "strict #{x}"
+end
+s = [Strict.new, conf][ARGV.size]
+p s.send(msg)
+none = [nil, conf][ARGV.size]
+p none&.send(msg)
+r = objs[ARGV.size]
+p r.send((r = conf; "column"))

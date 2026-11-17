@@ -1293,14 +1293,18 @@ int poly_block_call_needs_dispatch(Compiler *c, int id) {
   return 0;
 }
 
-/* Whether a `&.` call has yet to pass through its nil guard. The guard re-enters the emission with g_sn_skip set on the node, so
-   this answers false on that second pass. */
+/* Whether a `&.` call has yet to pass through its nil guard (the guard on
+   its receiver, or on the chain's source at a lazy terminal:
+   an_lazy_sn_guard_src). The guard re-enters the emission with g_sn_skip set
+   on the node, so this answers false on that second pass. */
 int sn_guard_pending(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (g_sn_skip == id) return 0;
   if (!nt_safe_nav(nt, id)) return 0;
-  int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0) return 0;
+  int recv0 = nt_ref(nt, id, "receiver");
+  if (recv0 < 0) return 0;
+  int src = an_lazy_sn_guard_src(c, id);
+  int recv = src >= 0 ? src : recv0;
   Repr rr = repr_of(c, recv);
   if (rr.kind == RK_BOXED) return 1;
   /* every receiver holding a nil of its own C kind -- an Integer's or a
@@ -1312,11 +1316,10 @@ int sn_guard_pending(Compiler *c, int id) {
   TyKind rt = rr.as_ty;
   /* `v&.lazy&.map { }&.first(2)` is a pipeline the lazy emitters fuse from
      its terminal; standing a link of it down here left `lazy` with no
-     emitter of its own */
-  for (int k = id; k >= 0 && nt_kind(nt, k) == NK_CallNode; k = nt_ref(nt, k, "receiver")) {
-    const char *kn = nt_str(nt, k, "name");
-    if (kn && sp_streq(kn, "lazy")) return 0;
-  }
+     emitter of its own (the terminal itself waits for its guard, on the
+     chain's source) */
+  for (int k = id; src < 0 && k >= 0 && nt_kind(nt, k) == NK_CallNode; k = nt_ref(nt, k, "receiver"))
+    if (is_lazy_name(nt_str(nt, k, "name"))) return 0;
   if ((ty_is_object(rt) && rr.kind != RK_VOBJ) || rt == TY_STRING || rt == TY_STRBUF ||
       /* an Integer / Float receiver only when it can be nil (its oint form):
          `3&.fdiv(2)` has no guard and no nil to answer */
@@ -4434,31 +4437,23 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
 }
 static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
-  const char *tname = nt_str(nt, id, "name");
-  if (!tname) return 0;
   /* `first(n)` / `to_a` / `force` force the lazy chain; `take(n)` stays lazy in
      CRuby (returns another Lazy) so it is not a forcing terminal here. */
-  int is_first = sp_streq(tname, "first");
+  if (!an_lazy_terminal_fuses(nt, id)) return 0;
+  const char *tname = nt_str(nt, id, "name");
+  int is_first = is_lazy_first(tname);
   int is_toa = is_lazy_force(tname);
-  if (!is_first && !is_toa) return 0;
-  if (nt_ref(nt, id, "block") >= 0) return 0;
   int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0) return 0;
   /* the chain may be held in a variable (`p = src.lazy.select{}; p.first(n)`);
      resolve the alias to its lazy chain and fuse it inline (#2932) */
   recv = lazy_resolve_chain(c, recv);
 
-  int has_count = 0, count_node = -1;
-  {
+  /* bare `first` is first(1) unwrapped to the single element (#2994) */
+  int has_count = is_first, count_node = -1;
+  if (is_first) {
     int ar = nt_ref(nt, id, "arguments");
     int ac = 0; const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &ac) : NULL;
-    if (is_first) {
-      if (ac == 1) { has_count = 1; count_node = av[0]; }
-      /* bare `first` is first(1) unwrapped to the single element (#2994) */
-      else if (ac == 0) has_count = 1;
-      else return 0;
-    }
-    else if (ac != 0) return 0;
+    if (ac == 1) count_node = av[0];
   }
 
   /* arg/cnt/lim are used only by the blockless counter stages (take/drop):

@@ -1944,6 +1944,55 @@ static int chain_is_lazy_valued_1(Compiler *c, int node) {
   return 0;
 }
 
+/* Is call id a terminal the lazy emitters fuse a chain into
+   (emit_lazy_pipeline_expr): a blockless `first`, `first(n)`, `to_a` or
+   `force`? The other calls that force a Lazy (`size`, `each { }`, `eager`)
+   run the chain through the Lazy's own methods. */
+int an_lazy_terminal_fuses(const NodeTable *nt, int id) {
+  if (id < 0 || nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") >= 0 || nt_ref(nt, id, "receiver") < 0) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  int ar = nt_ref(nt, id, "arguments");
+  int ac = 0;
+  if (ar >= 0) (void)nt_arr(nt, ar, "arguments", &ac);
+  if (is_lazy_first(nm)) return ac <= 1;
+  return is_lazy_force(nm) && ac == 0;
+}
+
+/* The node the nil guard of safe-navigation call id tests in place of its
+   receiver, or -1. A lazy chain has no value of its own: the lazy emitters
+   fuse it into the terminal that forces it (an_lazy_terminal_fuses), and a
+   Lazy is never nil. So where id is such a terminal and every link from its
+   receiver down to the chain's `lazy` is a `&.` (`x&.lazy&.map { }&.first`),
+   the chain answers nil exactly where lazy's receiver is nil. That receiver
+   is the node id's guard tests, and id, run on it, fuses the whole chain. A
+   guard at each link split the chain, and the `lazy` it held alone reached no
+   method. Codegen's guard (sn_guard_pending, emit_call_safe_nav_arms) and
+   inference's safe-navigation rule (an_lazy_link_guarded_above) read this one
+   answer. */
+int an_lazy_sn_guard_src(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || !nt_safe_nav(nt, id) || !an_lazy_terminal_fuses(nt, id)) return -1;
+  int lz = nt_ref(nt, id, "receiver");
+  if (!chain_is_lazy_valued(c, lz)) return -1;
+  while (lz >= 0 && nt_kind(nt, lz) == NK_CallNode && nt_safe_nav(nt, lz) &&
+         !(is_lazy_name(nt_str(nt, lz, "name")) && nt_ref(nt, lz, "block") < 0))
+    lz = nt_ref(nt, lz, "receiver");
+  if (lz < 0 || nt_kind(nt, lz) != NK_CallNode || !nt_safe_nav(nt, lz) || !is_lazy_name(nt_str(nt, lz, "name")))
+    return -1;
+  int src = nt_paren_single(nt, nt_ref(nt, lz, "receiver"));
+  return src >= 0 && !chain_is_lazy_valued(c, src) ? src : -1;
+}
+
+/* Is node n a link of a lazy chain whose terminal's guard tests the chain's
+   source (an_lazy_sn_guard_src)? Its nil is not its own, so inference types
+   it as the chain without `&.` is. */
+int an_lazy_link_guarded_above(Compiler *c, int n) {
+  if (!chain_is_lazy_valued(c, n)) return 0;
+  int p = comp_recv_parent(c, n);
+  while (p >= 0 && chain_is_lazy_valued(c, p)) p = comp_recv_parent(c, p);
+  return p >= 0 && an_lazy_sn_guard_src(c, p) >= 0;
+}
+
 /* If VAR (a LocalVariableReadNode) is a single-plain-write alias for a lazy
    chain in the same scope, return the chain node so a forcing call on the
    variable can fuse it as if written inline; else -1. Models sym_static_value.

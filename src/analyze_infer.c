@@ -8431,9 +8431,14 @@ static int infer_nil_scalar_call(Compiler *c, int id, const NodeTable *nt, const
 }
 
 static int infer_last_resort_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, TyKind rt, TyKind *out) {
-  /* safe navigation &. with unresolved type: return poly (receiver may be nil at runtime) */
+  /* safe navigation &. with unresolved type: return poly (receiver may be
+     nil at runtime). Not a link of a lazy chain whose fused terminal's
+     guard tests lazy's receiver (`v&.lazy&.map { }&.first`,
+     an_lazy_link_guarded_above): the chain has no value of its own, so the
+     link is typed as the chain without `&.` is. Made poly,
+     `v&.lazy&.map { }` was an eager map over a boxed value. */
   {
-    if (recv >= 0 && nt_safe_nav(nt, id)) { *out = TY_POLY; return 1; }
+    if (recv >= 0 && nt_safe_nav(nt, id) && !an_lazy_link_guarded_above(c, id)) { *out = TY_POLY; return 1; }
   }
 
   /* Builtin class reopening: look up user-defined methods on Array/Numeric/Object

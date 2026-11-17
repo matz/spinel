@@ -2481,6 +2481,9 @@ int ostruct_keeps_method(const char *n);
    which reads the member ahead of the other arms (analyze_infer_recv.c) */
 int ostruct_member_read(Compiler *c, int id, TyKind rt);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
+int an_lazy_terminal_fuses(const NodeTable *nt, int id); /* a terminal the lazy emitters fuse a chain into */
+int an_lazy_sn_guard_src(Compiler *c, int id);      /* the node a `&.` lazy terminal's guard tests, or -1 */
+int an_lazy_link_guarded_above(Compiler *c, int n); /* a lazy chain link whose terminal's guard tests the source */
 int poly_str_iter_enum(Compiler *c, int id);        /* boxed String iterator answers an Enumerator (analyze_infer_recv.c) */
 int poly_each_line_args_enum(Compiler *c, int id); /* boxed each_line(sep / chomp:) asked .size answers its Enumerator (analyze_infer_recv.c) */
 int poly_io_codepoint_enum(Compiler *c, int id);   /* boxed each_codepoint takes the IO arm (analyze_infer_recv.c) */

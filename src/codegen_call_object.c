@@ -2146,6 +2146,8 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         }
         free(hb.p);
       }
+      int lzsrc = an_lazy_sn_guard_src(c, id);
+      if (lzsrc >= 0) recv = lzsrc;
       Repr rrr = repr_of(c, recv);
       TyKind rrt = rrr.as_ty;
       if (rrt == TY_NIL) {

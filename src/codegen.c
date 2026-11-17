@@ -5764,8 +5764,9 @@ static int sg_parent_answers_as_object(Compiler *c, int par, const char *n) {
   /* `!=` and `===` answer by the class's `==` */
   int eqs = sp_streq(n, "==") || sp_streq(n, "!=") || sp_streq(n, "===");
   if (eqs && !sp_streq(n, "==") && !sg_parent_answers_as_object(c, par, "==")) return 0;
-  if (call_answers(c, -1, par, n, 0, NULL) ||
-      class_implicit_responds(c, par, n) || (eqs && class_is_comparable(c, par)))
+  CplanPresence pr;
+  cplan_table_presence(c, par, 0, n, &pr);
+  if (call_answers(c, -1, par, n, 0, NULL) || pr.implied || (eqs && class_is_comparable(c, par)))
     return 0;
   for (int p = par, d = 0; p >= 0 && d <= c->nclasses; d++) {
     ClassInfo *k = &c->classes[p];

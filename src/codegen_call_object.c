@@ -2634,10 +2634,11 @@ static int emit_blank_slate_defined_ask(Compiler *c, int id, int recv, int ci, B
   int an = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   const char *m = ac == 1 && nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
-  int yes = m && ((comp_method_in_chain(c, ci, m, NULL) >= 0 &&
-                   comp_method_vis_in_chain(c, ci, m) == SP_VIS_PUBLIC) ||
-                  comp_reader_in_chain(c, ci, m, NULL) || comp_writer_in_chain(c, ci, m, NULL) ||
-                  (basicobject_own_method(m) && !sp_streq(m, "initialize") && !sp_streq(m, "method_missing")));
+  CplanPresence pr = { 0 };
+  if (m) cplan_table_presence(c, ci, CT_REACH, m, &pr);
+  int yes = m && ((call_target(c, -1, ci, m, CT_METHODS, NULL) >= 0 && pr.vis == SP_VIS_PUBLIC) ||
+                  call_attr_target(c, -1, ci, m, 0, NULL) || call_attr_target(c, -1, ci, m, CT_ATTR | CT_WRITER, NULL) ||
+                  (basicobject_own_method(m) && !is_initialize_name(m) && !is_method_missing_method(m)));
   buf_puts(b, "((void)(");
   emit_expr_for_effect(c, recv, b);
   buf_printf(b, "), %d)", yes);

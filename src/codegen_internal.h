@@ -1347,7 +1347,6 @@ int cls_id_masquerades(Compiler *c, int cid);
 int visible_as_target(Compiler *c, int k, int target);
 int class_mixes_in(Compiler *c, int cid, int mod, int depth);
 int class_is_comparable(Compiler *c, int cid);
-int class_implicit_responds(Compiler *c, int cid, const char *qm);
 void emit_visible_cls_id(Compiler *c, const char *var, Buf *b);
 void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, size_t na);
 void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b);

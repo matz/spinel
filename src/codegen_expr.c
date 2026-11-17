@@ -4190,8 +4190,9 @@ static int defined_super_reaches(Compiler *c, int sup) {
   int setter = setter_base_name(u, base, sizeof base);
   /* an ancestor that undefs the name ahead of any definition: the super
      reaches nothing (`undef :test` in the superclass) */
-  if (p >= 0 && comp_is_undeffed_in_chain(c, p, u)) return 0;
-  if (mi >= 0 || (p >= 0 && (comp_reader_in_chain(c, p, u, NULL) || (setter && comp_writer_in_chain(c, p, base, NULL)))))
+  if (p >= 0 && cplan_undefined(c, p, 0, u)) return 0;
+  if (mi >= 0 || (p >= 0 && (call_attr_target(c, -1, p, u, CT_ATTR, NULL) ||
+                             (setter && call_attr_target(c, -1, p, base, CT_ATTR | CT_WRITER, NULL)))))
     return 1;
   int v = refl_builtin_vis(c, s->class_id, u, 2, NULL);
   return v < 0 ? -1 : v > 0;

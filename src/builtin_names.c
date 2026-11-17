@@ -893,6 +893,7 @@ int definition_form_hooks(const char *form, int sg, const char **out) {
 }
 
 const char METHOD_MISSING_NAME[] = "method_missing";
+int is_method_missing_method(const char *n) { return n && sp_streq(n, METHOD_MISSING_NAME); }
 const char RESPOND_TO_MISSING_NAME[] = "respond_to_missing?";
 int is_method_missing_name(const char *n) {
   return n && (sp_streq(n, METHOD_MISSING_NAME) || sp_streq(n, RESPOND_TO_MISSING_NAME));
@@ -1381,13 +1382,15 @@ int is_check_funcall_name(const char *n) {
 /* The methods CRuby makes private wherever they are defined:
    initialize, its copy forms, and respond_to_missing? */
 int is_implicitly_private_name(const char *n) {
-  return n && (is_initialize_family(n) || sp_streq(n, "initialize_clone") || sp_streq(n, "initialize_dup") ||
-               sp_streq(n, "respond_to_missing?"));
+  return n && (is_initialize_hook_name(n) || sp_streq(n, "respond_to_missing?"));
 }
 
 int is_initialize_copy_name(const char *n) { return sp_streq(n, "initialize_copy"); }
 int is_initialize_family(const char *n) {
   return is_initialize_copy_name(n) || is_initialize_name(n);
+}
+int is_initialize_hook_name(const char *n) {
+  return is_initialize_family(n) || sp_streq(n, "initialize_clone") || sp_streq(n, "initialize_dup");
 }
 
 int is_intersection_alias(const char *n) {
@@ -2124,6 +2127,17 @@ const char *builtin_function_owner(const char *m) {
    with include_all any */
 const char RESPOND_TO_NAME[] = "respond_to?";
 int is_respond_to_name(const char *n) { return n && sp_streq(n, RESPOND_TO_NAME); }
+/* The names a Struct's instance answers from Struct itself. Data answers none of them: its own are the members and
+   `with`, beside the names both have. */
+const char *const struct_names[] = {
+    "to_a", "values", "values_at", "dig", "each", "each_pair", "size",
+    "length", "[]", "[]=", NULL };
+const char *const struct_core_names[] = { "members", "to_h", "deconstruct", "deconstruct_keys", "with", NULL };
+int is_struct_core_name(const char *n, int kind) {
+  if (!n || !kind) return 0;
+  if (sp_streq(n, "with")) return kind == 2;
+  return builtin_name_in(n, struct_core_names) || (kind == 1 && builtin_name_in(n, struct_names));
+}
 /* A question whether a receiver has a method: of one by name (1), or a
    list of its methods: one that answers the whole program (2), or one a
    receiver's own chain decides (3) */
@@ -2762,8 +2776,16 @@ int is_ffi_decl_name(const char *n) {
 }
 /* Module#method_defined? and its visibility kin */
 int is_method_defined_query(const char *n) {
-  return n && (sp_streq(n, "method_defined?") || sp_streq(n, "public_method_defined?") ||
-               sp_streq(n, "private_method_defined?") || sp_streq(n, "protected_method_defined?"));
+  return method_defined_vis_mask(n) != 0;
+}
+/* The visibilities a *method_defined? query counts (bit 1 public, 2 protected, 4 private), 0 for any other name:
+   method_defined? is public and protected, each prefixed form its own */
+int method_defined_vis_mask(const char *n) {
+  if (!n) return 0;
+  if (sp_streq(n, "method_defined?")) return 1 | 2;
+  if (sp_streq(n, "public_method_defined?")) return 1;
+  if (sp_streq(n, "protected_method_defined?")) return 2;
+  return sp_streq(n, "private_method_defined?") ? 4 : 0;
 }
 int is_undef_method_name(const char *n) { return n && sp_streq(n, "undef_method"); }
 int is_remove_method_name(const char *n) { return n && sp_streq(n, "remove_method"); }

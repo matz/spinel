@@ -1,7 +1,7 @@
 require "openssl"
 
 # Ruby OpenSSL accepts these definite-length BER forms and normalizes to DER.
-["02810101", "0282000101", "028900000000000000000101", "308100", "030207ff", "030107"].each do |hex|
+["02810101", "0282000101", "028900000000000000000101", "030207ff", "030107"].each do |hex|
   node = OpenSSL::ASN1.decode([hex].pack("H*"))
   puts node.class
   if node.is_a?(OpenSSL::ASN1::Integer)

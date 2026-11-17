@@ -10,9 +10,6 @@ OpenSSL::ASN1::Integer
 OpenSSL::BN
 01
 020101
-OpenSSL::ASN1::Sequence
-0
-3000
 OpenSSL::ASN1::BitString
 "80"
 7

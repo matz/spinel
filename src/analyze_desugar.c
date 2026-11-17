@@ -8672,7 +8672,11 @@ static int desugar_dynamic_send_inner(Compiler *c) {
          say. Lowered now, its arms were the program's classes' methods and
          literals alone, and a String's `size` was no arm of the dispatch,
          which is never lowered again: the send raised NoMethodError. */
-      if (rt == TY_UNKNOWN && g_infer_optimistic) continue;
+      /* Nor does one typed nil so far: a ternary or method answer whose
+         other branch is not typed yet reads as nil (`k == A ? k : nil` on a
+         `const_get` local), and lowered then its only arms were nil's, so
+         `pick("A").public_send(name)` raised NoMethodError on A. */
+      if ((rt == TY_UNKNOWN || rt == TY_NIL) && g_infer_optimistic) continue;
       if (ty_is_object(rt)) { obj_recv = ty_object_class(rt); nown = dsend_receiver_names(c, obj_recv, 1, &own); }
       else if (rt == TY_POLY || rt == TY_UNKNOWN) {
         int cap = 0; ANameHash seen; memset(&seen, 0, sizeof seen);

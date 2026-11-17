@@ -51,6 +51,12 @@ m << "\xFE"
 gen("mutated") { JSON.generate([m]) }
 long = "x" * 2000
 gen("long") { JSON.generate([long, long + "\xFF"]) }
+# pretty_generate past its stack buffer, with leaves of every kind: the
+# refusal comes from the walk's own buffer, and the next call works
+mixed = Array.new(60) { |i| ["s#{i}", i, i * 1.5, :"y#{i}", nil, true, 2**70] }.flatten
+gen("pretty long") { JSON.pretty_generate(mixed + ["é\xFF"]) }
+gen("pretty long nan") { JSON.pretty_generate(mixed + [Float::NAN]) }
+gen("pretty long ok") { JSON.pretty_generate(mixed + ["é"]).bytesize }
 
 # a #to_json of the program's own is its own text, written as it is
 class RawDocument

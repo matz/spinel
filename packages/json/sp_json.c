@@ -477,6 +477,9 @@ static void sp_json_leaf_b(jbuf *b, sp_RbVal v) {
     case SP_TAG_INT: jb_int(b, v.v.i); return;
     case SP_TAG_FLT:
       if (isfinite(v.v.f)) { char out[64]; jb_add(b, out, (size_t)sp_json_float_fmt(v.v.f, out)); return; }
+      /* NaN and the Infinities raise below unless this is dump's walk: the
+         walk's buffer is released first, as for its other raises */
+      if (!b->dump) jb_release(b);
       break;
     case SP_TAG_STR: jb_rstr(b, v.v.s); return;
     case SP_TAG_SYM: jb_sym(b, (sp_sym)v.v.i); return;
@@ -635,7 +638,9 @@ static void sp_json_pretty_val(jbuf *b, sp_RbVal v, int depth) {
       jb_gcs(b, js, (size_t)sp_str_byte_len(js)); }
     return;
   }
-  { const char *sc = sp_json_val(v); jb_gcs(b, sc, strlen(sc)); }
+  /* a leaf into this buffer, as the compact walk writes it, so a String
+     that is not UTF-8 or a NaN raises with this walk's buffer released */
+  sp_json_leaf_b(b, v);
 }
 
 /* The document is rooted for the walk, for the reason sp_json_parse roots its

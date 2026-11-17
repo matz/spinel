@@ -22,6 +22,9 @@ dump: JSON::GeneratorError: source sequence is illegal/malformed utf-8
 built: JSON::GeneratorError: source sequence is illegal/malformed utf-8
 mutated: JSON::GeneratorError: source sequence is illegal/malformed utf-8
 long: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+pretty long: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+pretty long nan: JSON::GeneratorError: NaN not allowed in JSON
+pretty long ok: 4413
 user to_json: [91, 34, 97, 255, 98, 34, 93]
 user to_json pretty: [91, 10, 32, 32, 34, 97, 255, 98, 34, 10, 93]
 user to_json object: [123, 34, 97, 34, 58, 123, 34, 107, 255, 34, 58, 91, 34, 118, 254, 34, 93, 125, 125]

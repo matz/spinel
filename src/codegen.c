@@ -13075,7 +13075,7 @@ static void emit_struct_display_decls(Compiler *c, int cid, Buf *b) {
 static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, const char *fn, Buf *b) {
   const char *rn = class_ruby_name(c, cid); if (!rn) rn = ci->name;
   buf_printf(b, "static const char *sp_%s_%s(sp_%s *self) {\n", ci->c_name, fn, ci->c_name);
-  buf_puts(b, "  if (!self) return \"nil\";\n");
+  buf_puts(b, "  if (!self) return SPL(\"nil\");\n");
   /* the String built below allocates while the members are still to be
      read, and the caller may hold the object only in an unrooted temp
      (`p D.make(1)`): swept at the first allocation, the members read
@@ -13104,7 +13104,7 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
                ci->is_data ? "data" : "struct", rt_name ? "_anm" : "_anm ? _anm : ", rt_name ? "" : fb);
   }
   else if (ci->nmembers > 0)
-    buf_printf(b, "  if (sp_poly_recur_seen(SP_POLY_RECUR_INSPECT, self, NULL)) return \"#<%s %s:...>\";\n"
+    buf_printf(b, "  if (sp_poly_recur_seen(SP_POLY_RECUR_INSPECT, self, NULL)) return SPL(\"#<%s %s:...>\");\n"
                   "  int _rcm = sp_poly_recur_push(SP_POLY_RECUR_INSPECT, self, NULL);\n",
                ci->is_data ? "data" : "struct", ci->is_anon_struct ? "" : rn);
   if (anon_now)

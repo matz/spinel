@@ -28644,6 +28644,15 @@ int desugar_missing_method_calls(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     int r = nt_ref(nt, id, "receiver");
     if (!nm || sp_streq(nm, "method_missing")) continue;
+    /* (an assignment's value is what it assigns, not what method_missing answers) */
+    size_t nl = strlen(nm);
+    if (nl > 1 && nm[nl - 1] == '=' && !sp_streq(nm, "==") && !sp_streq(nm, "!=") && !sp_streq(nm, "<=") &&
+        !sp_streq(nm, ">=") && !sp_streq(nm, "===")) continue;
+    /* (a defined? operand is not run: it answers for the name as written) */
+    if (!parent) parent = an_parent_map(nt);
+    { int d = parent ? parent[id] : -1;
+      while (d >= 0 && d < n0 && (nt_kind(nt, d) == NK_StatementsNode || nt_kind(nt, d) == NK_ParenthesesNode)) d = parent[d];
+      if (d >= 0 && d < n0 && nt_kind(nt, d) == NK_DefinedNode) continue; }
     int miss[16], nmiss = 0, others = 0, reread = 0;
     if (r < 0) {
       /* a receiverless call: self is the method's class or a subclass, or
@@ -28731,6 +28740,8 @@ int desugar_missing_method_calls(Compiler *c) {
       nt_node_set_str(nt, q, "name", "instance_of?");
       nt_node_set_ref(nt, q, "receiver", rr);
       nt_node_set_ref(nt, q, "arguments", qa);
+      /* (Kernel's, not a class's own `instance_of?`) */
+      nt_mark_builtin_call(nt, q);
       if (pred < 0) pred = q;
       else {
         int o = fwd_new_node_like(nt, id, "OrNode");

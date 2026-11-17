@@ -13476,6 +13476,9 @@ static int desugar_builtin_new_init_args(Compiler *c) {
       }
       pre[np++] = nt_clone_subtree(nt, id);
       nt_mark_builtin_call(nt, pre[np - 1]);
+      /* (the call left out of the tree keeps no operands a later desugar would rewrite again: the clone has them) */
+      nt_node_set_ref(nt, id, "arguments", -1);
+      nt_node_set_ref(nt, id, "block", -1);
       nt_node_set_arr(nt, stmts, "body", pre, np);
       nt_node_set_ref(nt, seq, "body", stmts);
       comp_grow_node_arrays(c);

@@ -1407,6 +1407,20 @@ static int lr_root_read(const NodeTable *nt, int node) {
 
 /* *core (when asked): the slot of the core class the name is registered as,
    also through an alias of it, and -1 for any other. */
+/* The native class a `native_struct "Par::Name"` declared, by the path
+   it declared (ClassInfo.ruby_name_cache), when Par is a builtin's name; -1
+   for none */
+static int lr_native_qualified(Compiler *c, const char *par, const char *name) {
+  if (!par || !name || !is_builtin_class_name(par)) return -1;
+  size_t pl = strlen(par);
+  for (int i = 0; i < c->nclasses; i++) {
+    const ClassInfo *k = &c->classes[i];
+    const char *q = k->ruby_name_cache;
+    if (k->is_native_class && k->native_decl && q && !strncmp(q, par, pl) && q[pl] == ':' && q[pl + 1] == ':' && sp_streq(q + pl + 2, name))
+      return i;
+  }
+  return -1;
+}
 static int lr_class_ref_at(Compiler *c, int node, int *core) {
   const NodeTable *nt = c->nt;
   const LrDef *d = NULL;
@@ -1421,6 +1435,12 @@ static int lr_class_ref_at(Compiler *c, int node, int *core) {
     int par = k == NK_ConstantPathNode ? nt_ref(nt, node, "parent") : -1;
     LoadPoint p = elab_point_of(c, node);
     if (par >= 0) pc = lr_class_ref_at(c, par, NULL);
+    /* a native class a binding declared under a builtin the program does
+       not open (`native_struct "IO::Buffer"`): the class it declared */
+    if (pc < LR_MAIN && par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode) {
+      int nc = lr_native_qualified(c, nt_str(nt, par, "name"), nm);
+      if (nc >= 0) return nc;
+    }
     if (pc < LR_MAIN) return LR_UNKNOWN_CLASS;
     o = lr_const_in(c, pc, nm, p, p.region < 0, pc == LR_MAIN, &d, 0, LR_KEY_CONST);
   }

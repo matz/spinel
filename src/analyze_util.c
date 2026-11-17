@@ -1285,8 +1285,11 @@ int an_calls_named_next(int id) { return (id >= 0 && id < g_cn_cnt) ? g_cn_next[
 
 /* Interposes a call named `name` (with arguments args, -1 for none) between
    call id and its receiver (`r.m` becomes `r.name.m`): a desugar's
-   materializing, converting or mapping step. It takes the visibility the
-   call's receiver was read with, and the call's `&.`: `r&.m` becomes
+   materializing, converting or mapping step. The step is a call on the
+   call's receiver, so it takes the private-call permission the call was
+   written with (`self.m` becomes `self.name.m`), and the call keeps it: it
+   is still the call written on self, the one CRuby checks (`self.to_h { }`
+   reaches a private to_h). It takes the call's `&.` too: `r&.m` becomes
    `r&.name&.m`, so a nil receiver answers nil before the step runs, as the
    whole call does in CRuby. Returns the new call, or -1. */
 int an_interpose_recv_call(Compiler *c, int id, const char *name, int args) {
@@ -1300,7 +1303,6 @@ int an_interpose_recv_call(Compiler *c, int id, const char *name, int args) {
   nt_node_set_ref(nt, wrap, "block", -1);
   if (nt_safe_nav(nt, id)) nt_set_safe_nav(nt, wrap, 1);
   nt_node_set_ref(nt, id, "receiver", wrap);
-  nt_set_ignore_visibility(nt, id, 0);
   comp_grow_node_arrays(c);
   c->nscope[wrap] = c->nscope[id];
   return wrap;

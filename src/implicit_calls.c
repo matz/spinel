@@ -143,6 +143,13 @@ static int ic_calls(Compiler *c, int id, IcSink *s, IcMode mode) {
   if (mode != IC_ROWS && (nk == NK_CallNode || nk == NK_IndexAndWriteNode || nk == NK_IndexOrWriteNode || nk == NK_IndexOperatorWriteNode)) {
     const char *name = nk == NK_CallNode ? nt_str(nt, id, "name") : "[]=";
     if (!name) return s->n;
+    /* the count a copy of builtins/enumerable.rb converts (__enum_count_int,
+       as min_by(n) and max_by(n) do): CRuby's rb_num2long asks it for to_int,
+       as it asks a native count */
+    if (nk == NK_CallNode && sp_streq(name, "__enum_count_int") && nt_ref(nt, id, "receiver") < 0) {
+      if (s->roles & BCR_ARG) ic_push(s, "to_int", id, BCR_ARG, 0, NULL);
+      return s->n;
+    }
     /* a method a C extension defines receives values the extension's C code
        calls CRuby's protocol methods on (rb_num2long asks for to_int, and so
        on) and sends names it computes: any callback name, as for a core name

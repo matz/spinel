@@ -29,3 +29,22 @@ ArgumentError: comparison of Node with Node failed
 -1
 6
 0
+[3]
+[3]
+[0, 0]
+[9, 9]
+[3, 2]
+[3, 1, 2]
+[]
+[]
+0
+[0, 1, 2]
+[49, 48, 47, 46]
+[49, 48, 47, 46, 45, 44, 43]
+[39, 38, 37, 36, 35]
+[0, 1]
+"comparison of String with 2 failed"
+"comparison of Symbol with 2 failed"
+"comparison of Integer with String failed"
+"comparison of Integer with nil failed"
+"comparison of Integer with nil failed"

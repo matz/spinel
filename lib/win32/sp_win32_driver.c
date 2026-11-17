@@ -103,6 +103,11 @@ void sp_w32_driver_init(void) {
   _wputenv_s(L"PATH", np);   /* the CRT's copy and the process's, which children inherit */
   free(np);
 }
+/* A pre-installed package Windows has no facility for, whose C win32.mk
+   leaves out (PLATFORM_NO_PKG_OBJS): pty, as CRuby builds no ext/pty here. */
+int sp_w32_package_absent(const char *pkg) {
+  return strcmp(pkg, "pty") == 0;
+}
 /* lib/win32/overlay/<P>, appended to the file <root>/<P> the compiler read
    (P under builtins/ or packages/): the root is wherever that file's
    builtins/ or packages/ directory is, in the source tree or an install. */

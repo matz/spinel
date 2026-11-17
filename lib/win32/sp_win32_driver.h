@@ -19,6 +19,9 @@ const char *sp_w32_driver_path(const char *p);
    reopening what the file defines (RbConfig's mingw32, Gem.win_platform?,
    Pathname's C:/ root). The file's own lines keep their numbers. */
 char *sp_w32_overlay(char *content, const char *path);
+/* a pre-installed package that is not there on Windows (pty): a require
+   finds none, as for any library Spinel does not have */
+int sp_w32_package_absent(const char *pkg);
 #define SPINEL_PLATFORM_INIT()  sp_w32_driver_init()
 #define SPINEL_PLATFORM_PATH(p) sp_w32_driver_path(p)
 #endif

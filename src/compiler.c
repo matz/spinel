@@ -2469,17 +2469,19 @@ const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n) {
 }
 /* Whether a call named n on an instance of Array subclass cid is Array's:
    no method, reader or writer of the class chain takes the name (as
-   call_target answers call id; -1 for no call), it asks nothing about the
-   object itself, and Array (or Enumerable, which Array includes) has it. */
+   call_target and call_attr_target answer call id, an accessor where an
+   attr_* of the name has run at the call; -1 for no call), it asks nothing
+   about the object itself, and Array (or Enumerable, which Array includes)
+   has it. */
 int comp_arysub_name_is_array(Compiler *c, int id, int cid, const char *n) {
   if (comp_ary_root(c, cid) < 0 || !n) return 0;
   /* a method of the builtin's reopen is the builtin's */
   MethodLookup ml = { .def_class = -1 };
   int ro = comp_arysub_reopen(c, cid);
   if (((call_target(c, id, cid, n, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) ||
-       comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, id, cid, n)) return 0;
+       call_attr_target(c, id, cid, n, CT_ATTR, NULL)) && !comp_enum_answers_first(c, id, cid, n)) return 0;
   char base[256];
-  if (setter_base_name(n, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return 0;
+  if (setter_base_name(n, base, sizeof base) && call_attr_target(c, id, cid, base, CT_ATTR | CT_WRITER, NULL)) return 0;
   /* != is BasicObject's, which calls == and negates it: a class with its
      own == answers != with that == (the call plan's delegate) */
   if (sp_streq(n, "!=")) {
@@ -3612,16 +3614,20 @@ int comp_native_binding_class(Compiler *c, int k, const char *name) {
 /* The native class whose binding answers `name` on an instance of class
    cid: cid itself for a native class, and for a subclass of one (#9269)
    the native class its chain reaches, where no method or reader of the
-   program's in the chain answers the name first. -1 otherwise. */
+   program's in the chain answers the name first. -1 otherwise. The plan's
+   no-site asks: the answer picks the binding (and the slot layout) that
+   inference, the arms and repr_of all serve for every object of cid,
+   several of them with no call to ask at, so a def or accessor that runs
+   anywhere stands the binding down. */
 int comp_native_answer_class(Compiler *c, int cid, const char *name) {
   if (cid < 0 || cid >= c->nclasses) return -1;
   if (c->classes[cid].is_native_class) return cid;
   int r = c->classes[cid].nsub_root - 1;
   if (r < 0 || !name) return -1;
-  if (comp_method_in_chain(c, cid, name, NULL) >= 0 || comp_reader_in_chain(c, cid, name, NULL)) return -1;
+  if (call_target(c, -1, cid, name, CT_METHODS, NULL) >= 0 || call_attr_target(c, -1, cid, name, CT_ATTR, NULL)) return -1;
   /* (nor an attribute writer of the program's) */
   char base[256];
-  if (setter_base_name(name, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return -1;
+  if (setter_base_name(name, base, sizeof base) && call_attr_target(c, -1, cid, base, CT_ATTR | CT_WRITER, NULL)) return -1;
   return r;
 }
 

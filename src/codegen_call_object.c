@@ -2921,8 +2921,9 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
       if (bsci >= 0 && class_is_blank_slate(c, bsci) &&
           !basicobject_own_method(bsnm) &&
           call_target(c, id, bsci, bsnm, 0, NULL) < 0 &&
-          !comp_reader_in_chain(c, bsci, bsnm, NULL) &&
-          !comp_writer_in_chain(c, bsci, bsnm, NULL)) {
+          /* (nor an accessor of the name that has run where the call runs) */
+          !call_attr_target(c, id, bsci, bsnm, CT_ATTR, NULL) &&
+          !call_attr_target(c, id, bsci, bsnm, CT_ATTR | CT_WRITER, NULL)) {
         const char *bscn = class_ruby_name(c, bsci) ? class_ruby_name(c, bsci) : c->classes[bsci].name;
         /* (a bare identifier the walk gave self as its receiver is still
            CRuby's variable-like call: its NameError and wording) */

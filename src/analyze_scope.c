@@ -9370,8 +9370,9 @@ void register_include_attrs(Compiler *c) {
    an attribute: attr_reader/writer/accessor or a Struct member, declared there
    or by a module it includes. A reader or writer is copied down into every
    subclass (inherit_members), so the class that declares it is the highest one
-   still holding it; a `def` found on the way up answers first. */
-static int super_lands_on_attr(Compiler *c, int ci, const char *base, int want_write) {
+   still holding it; a `def` found on the way up answers first, as the plan
+   answers super `id`'s reach of each class's own table. */
+static int super_lands_on_attr(Compiler *c, int id, int ci, const char *base, int want_write) {
   char mname[300];
   snprintf(mname, sizeof mname, want_write ? "%s=" : "%s", base);
   ClassInfo *self_cls = &c->classes[ci];
@@ -9386,7 +9387,7 @@ static int super_lands_on_attr(Compiler *c, int ci, const char *base, int want_w
     if (want_write ? comp_is_writer(mod, base) : comp_is_reader(mod, base)) return 1;
   }
   for (int k = self_cls->parent; k >= 0; k = c->classes[k].parent) {
-    if (comp_method_in_class(c, k, mname) >= 0) return 0;
+    if (call_target(c, id, k, mname, CT_OWN | CT_REACH, NULL) >= 0) return 0;
     ClassInfo *kc = &c->classes[k];
     if (!(want_write ? comp_is_writer(kc, base) : comp_is_reader(kc, base))) continue;
     int up = kc->parent;
@@ -9479,7 +9480,7 @@ void rewrite_attr_supers(Compiler *c) {
     }
     /* (a prepended module's copy reaches the class's own accessor first) */
     if (!(s->is_prepend_copy && class_own_attr_live(c, s->class_id, uname, base, is_write)) &&
-        !super_lands_on_attr(c, s->class_id, base, is_write)) continue;
+        !super_lands_on_attr(c, id, s->class_id, base, is_write)) continue;
     char ivn[260];
     snprintf(ivn, sizeof ivn, "@%s", base);
     int line = (int)nt_int(nt, id, "node_line", 0);

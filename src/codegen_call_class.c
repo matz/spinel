@@ -1971,11 +1971,12 @@ static void ffi_arg_hold(Buf *call, size_t at, Buf *pre, int tb, int ai) {
    `x`), reach the field of an attr writer, rather than an explicit `def x=` at an
    equal-or-more-derived class? The class that defines the writer in *defc,
    or -1 for the receiver's own. CRuby: attr_accessor defines an ordinary
-   writer method. */
+   writer method. Both as the plan answers the call: the writer where an
+   attr_writer of the name has run at it, the def it binds. */
 static int attr_writer_field(Compiler *c, int call, int arc, const char *base, const char *name, int *defc) {
-  MethodLookup ml = { .def_class = -1 };
-  *defc = -1;
-  int awins = comp_writer_in_chain(c, arc, base, defc);
+  MethodLookup ml = { .def_class = -1 }, wml = { .def_class = -1 };
+  int awins = call_attr_target(c, call, arc, base, CT_ATTR | CT_WRITER, &wml);
+  *defc = awins ? wml.def_class : -1;
   if (awins && call_target(c, call, arc, name, 0, &ml) >= 0) {
     for (int k = arc; k >= 0; k = c->classes[k].parent) {
       if (k == ml.def_class) { awins = 0; break; }

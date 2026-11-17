@@ -474,28 +474,14 @@ int an_program_spawns_threads(Compiler *c) {
 
 /* Does a class other than a native one read `name` as an attribute: an
    attr_reader, a Struct/Data member, or an alias of one? Asked the way the
-   emitter asks (poly_name_user_claimed, comp_reader_in_chain),
-   so inference and emission take the same arm. */
+   emitter asks (poly_name_user_claimed: the accessor of a class, with no
+   site, as a boxed dispatch's arm of any class is), so inference and
+   emission take the same arm. */
 static int an_class_reads_name(Compiler *c, const char *name) {
   if (an_builtin_only) return 0;   /* deriving the builtin-only answer (#3459) */
-  /* asked per call site: one answer per name while the class and scope
-     tables stand still (the memo an_user_defines_or_reads keeps, for the
-     one name this is asked about) */
-  static char memo_name[64];
-  static unsigned memo_gen;
-  static int memo_ncls = -1, memo_nsc = -1, memo_ans;
-  int memo = comp_scope_index_is_frozen() && strlen(name) < sizeof memo_name;
-  if (memo && memo_ncls == c->nclasses && memo_nsc == c->nscopes &&
-      memo_gen == comp_scope_index_gen() && sp_streq(memo_name, name)) return memo_ans;
-  int ans = 0;
-  for (int k = 0; k < c->nclasses && !ans; k++)
-    if (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ans = 1;
-  if (memo) {
-    snprintf(memo_name, sizeof memo_name, "%s", name);
-    memo_gen = comp_scope_index_gen(); memo_ncls = c->nclasses; memo_nsc = c->nscopes;
-    memo_ans = ans;
-  }
-  return ans;
+  for (int k = 0; k < c->nclasses; k++)
+    if (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR, NULL)) return 1;
+  return 0;
 }
 
 /* Does the program define a Struct or a Data class? */
@@ -6600,9 +6586,10 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       }
     }
     /* a member/method literally named `class` (a Data/Struct member) shadows
-       Object#class: fall through to the reader/method dispatch (#2975) */
+       Object#class: fall through to the reader/method dispatch (#2975),
+       where the accessor answers the call (it has run where the call runs) */
     if (ty_is_object(rt) &&
-        !(ty_object_class(rt) >= 0 && comp_reader_in_chain(c, ty_object_class(rt), "class", NULL)))
+        !(ty_object_class(rt) >= 0 && call_attr_target(c, id, ty_object_class(rt), name, CT_ATTR, NULL)))
       { *out = TY_CLASS; return 1; }
     if (ty_is_numeric(rt) || rt == TY_STRING || rt == TY_SYMBOL || rt == TY_BOOL ||
         rt == TY_RANGE || rt == TY_TIME || rt == TY_NIL || rt == TY_POLY ||

@@ -20936,13 +20936,13 @@ static void narrow_poly_int_locals(Compiler *c) {
    so reading the binding as that class there is a pointer cast, not a guess.
 
    Marked in c->nilnarrow, the same read-site table the nil and is_a? guards
-   use, and only for the names the arm's class chain actually owns: everything
-   the builtin exception surface answers (#message, #backtrace) keeps the arms
-   it has today. A slot already specialized to one class needs nothing. */
+   use, for every call on the binding inside the arm, the builtin exception
+   surface's (#message, #backtrace) too: the arm's class is what the object
+   is there, whatever answers the name. A slot already specialized to one
+   class needs nothing. */
 static int nng_has_write(Compiler *c, int root, const char *pn);
 
-static void nrar_mark_calls(Compiler *c, int root, Scope *s, const char *nm,
-                            int cid, TyKind t) {
+static void nrar_mark_calls(Compiler *c, int root, Scope *s, const char *nm, TyKind t) {
   if (root < 0) return;
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, root);
@@ -20957,18 +20957,16 @@ static void nrar_mark_calls(Compiler *c, int root, Scope *s, const char *nm,
     const char *mn = nt_str(nt, root, "name");
     if (rk == NK_LocalVariableReadNode && mn) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, nm) && comp_scope_of(c, recv) == s &&
-          (call_target(c, root, cid, mn, 0, NULL) >= 0 ||
-           comp_reader_in_chain(c, cid, mn, NULL) >= 0))
+      if (rn && sp_streq(rn, nm) && comp_scope_of(c, recv) == s)
         comp_set_nilnarrow(c, recv, t);
     }
   }
   int nr = nt_num_refs(nt, root);
-  for (int i = 0; i < nr; i++) nrar_mark_calls(c, nt_ref_at(nt, root, i), s, nm, cid, t);
+  for (int i = 0; i < nr; i++) nrar_mark_calls(c, nt_ref_at(nt, root, i), s, nm, t);
   int na = nt_num_arrs(nt, root);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, root, i, &n);
-    for (int k = 0; k < n; k++) nrar_mark_calls(c, ids[k], s, nm, cid, t);
+    for (int k = 0; k < n; k++) nrar_mark_calls(c, ids[k], s, nm, t);
   }
 }
 
@@ -21000,7 +20998,7 @@ static void narrow_rescue_arm_reads(Compiler *c) {
     /* an arm that reassigns the name is no longer holding what it caught:
        the cast would be reading a class the value never was */
     if (nng_has_write(c, body, nm)) continue;
-    nrar_mark_calls(c, body, vsc, nm, cid, ty_object(cid));
+    nrar_mark_calls(c, body, vsc, nm, ty_object(cid));
   }
 }
 

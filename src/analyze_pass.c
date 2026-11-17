@@ -2701,11 +2701,12 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
 }
 
 /* Does class `k` itself define the instance getter `mname`, as a method or
-   an attr_reader (not one it inherits)? */
+   an attr_reader (not one it inherits)? A candidate owner of the getter, at
+   any point: the evidence it gives is for every call of it. */
 static int class_owns_getter(Compiler *c, int k, const char *mname) {
   MethodLookup ml = { .def_class = -1 };
   if (call_attr_target(c, -1, k, mname, 0, &ml)) return ml.def_class == k;
-  return comp_method_in_class(c, k, mname) >= 0;
+  return comp_name_responder(c, k, mname, CT_OWN) >= 0;
 }
 
 /* The getter call or ivar read a hash local aliases: `x` read at `recv`,

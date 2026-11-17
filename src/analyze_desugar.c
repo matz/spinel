@@ -28411,10 +28411,13 @@ int desugar_user_send_others(Compiler *c) {
   int paths[16];
   for (int i = 0; i < nown; i++)
     if ((paths[i] = us_owner_path(nt, parent, own[i], own[i])) < 0) { free(parent); return 0; }
-  for (int id = 0; id < n0; id++) {
-    if (nt_kind(nt, id) != NK_CallNode) continue;
+  /* (past n0 too: an arm's copy of the arguments or the `&` holds a send of its own, which the original's split does not reach) */
+  int pn = n0;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "us_split", 0)) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "send")) continue;
+    if (id >= pn) { free(parent); parent = an_parent_map(nt); pn = nt->count; if (!parent) return changed; }
     int r = nt_ref(nt, id, "receiver");
     /* (a literal block would be written twice: a `&b` the other call takes as well) */
     int ublk = nt_ref(nt, id, "block");
@@ -28525,6 +28528,7 @@ int desugar_user_send_others(Compiler *c) {
 #undef US_RECV
     nt_node_set_ref(nt, par, "body", st);
     nt_replace_child(nt, p, id, par);
+    nt_node_set_int(nt, id, "us_split", 1);
     changed = 1;
   }
   free(parent);

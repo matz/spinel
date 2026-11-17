@@ -27180,10 +27180,9 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
        value drops it, and a key that can allocate has no holder at all: root
        the receiver when either can -- a call, a write -- and the key when it
        can allocate, as the op-assign form above does. */
-    int drops = subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, v);
     buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b);
     buf_puts(b, "; ");
-    if (subtree_may_allocate(c, recv) || drops) { emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " "); }
+    { int ops[2] = { argv[0], v }; emit_index_recv_root(c, rt, recv, ops, 2, ta, b); }
     /* a key that may be nil or of another class: held boxed, the read
        misses on it and a store converts it (hash_opw_okey) */
     int ok = hash_opw_okey(c, argv[0], rt);

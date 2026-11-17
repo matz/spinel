@@ -14227,18 +14227,6 @@ static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
     mtab_leave(c);
   }
   if (defc) *defc = ml_mi.def_class;
-  if (mi < 0) {
-    /* `alias to_a entries`: the method the alias names */
-    int start = cid;
-    const char *tn = comp_resolve_alias_at(c, cid, "to_a", &start);
-    if (!is_to_a_name(tn)) {
-      MethodLookup ml_tn = { .def_class = defc ? *defc : -1 };
-      mtab_enter(c);   /* (the alias's target, a name of the class: the dispatcher's arm, no call's question) */
-      mi = call_target(c, -1, start, tn, CT_METHODS | CT_SHARED, &ml_tn);
-      mtab_leave(c);
-      if (defc) *defc = ml_tn.def_class;
-    }
-  }
   { int pfi = mi >= 0 ? scope_proc_form_of(c, mi) : -1; if (pfi >= 0) mi = pfi; }   /* the emitted clone (#3399) */
   char tail[64];
   if (mi >= 0 && obj_to_a_call_tail(&c->scopes[mi], tail, sizeof tail) && scope_has_callable_symbol(c, mi)) return mi;

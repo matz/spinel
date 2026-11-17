@@ -5599,7 +5599,11 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "%s _t%d = _t%d;\n", ecs, tmax, tmin);
   /* an object element is held by these alone while the comparator runs,
      and the comparator may take it out of the array: rooted */
-  if (objs) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d); SP_GC_ROOT(_t%d);\n", tmin, tmax); }
+  if (objs) {
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d); SP_GC_ROOT(_t%d);\n", tmin, tmax);
+    /* (and the element being compared, in a slot rooted once for the walk) */
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "%s _t%d = NULL; SP_GC_ROOT(_t%d);\n", ecs, te, te);
+  }
   /* an object array's walk reads its length at every step, as CRuby's
      does: a comparator that takes elements out ends the walk there, where
      a read past the end would bind no element */
@@ -5607,8 +5611,9 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   if (objs) buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < sp_PtrArray_length(_t%d); _t%d++) {\n", ti, ti, trv, ti);
   else buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
   { char rd[96]; fold_elem_getf(rd, sizeof rd, ono, 0, rt, k, trv, "_t%d", ti);
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "%s _t%d = %s;\n", ecs, te, rd);
-    if (objs) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", te); } }
+    emit_indent(g_pre, g_indent + 1);
+    if (objs) buf_printf(g_pre, "_t%d = %s;\n", te, rd);
+    else buf_printf(g_pre, "%s _t%d = %s;\n", ecs, te, rd); }
   /* Block params may be widened to TY_POLY across multiple block sites.
      Pin them to the element type for body emission:
      - temporarily set scope types to `et`

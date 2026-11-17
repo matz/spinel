@@ -5797,9 +5797,20 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       buf_puts(b, sp_streq(name, "first") ? ", 0))" : ", -1))");
       return 1;
     }
-    /* the removals and sample, which the pass admits for an object array
-       only: each function is named as the method is */
-    if (!nested && (((sp_streq(name, "pop") || sp_streq(name, "shift") || sp_streq(name, "sample")) && argc == 0) ||
+    /* sample: an element at random, nil when there is none, inline as the
+       boxed path's sp_PolyArray_sample is (no call, nothing to root) */
+    if (!nested && sp_streq(name, "sample") && argc == 0) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_PtrArray *_t%d = ", t);
+      if (!nil_ok) buf_puts(b, "(sp_PtrArray *)sp_nil_recv_named(");
+      emit_expr(c, recv, b);
+      if (!nil_ok) buf_puts(b, ", \"sample\")");
+      buf_printf(b, "; _t%d->len > 0 ? (%s *)_t%d->data[sp_krand_below(_t%d->len)] : (%s *)NULL; })", t, ecn, t, t, ecn);
+      return 1;
+    }
+    /* the removals, which the pass admits for an object array only: each
+       function is named as the method is */
+    if (!nested && (((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 0) ||
                     (sp_streq(name, "delete_at") && argc == 1))) {
       buf_printf(b, "((%s *)sp_PtrArray_%s(", ecn, name);
       if (!nil_ok) buf_puts(b, "(sp_PtrArray *)sp_nil_recv_named(");

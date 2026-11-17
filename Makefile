@@ -4525,8 +4525,10 @@ test/%.rb.err.expected: test/%.rb
 	$(call regen-snapshot,2>$@.tmp >/dev/null)
 
 # Each benchmark is independent: compile it, run it, diff against CRuby (or its
-# .expected), and drop a one-word verdict file. `xargs -P` runs them across the
-# cores (serial under a jobserver -- see BENCH_PJOBS). Scratch paths are keyed by
+# .expected), and drop a one-word verdict file. Both processes must succeed;
+# matching partial output does not make a failed execution pass. `xargs -P`
+# runs them across the cores (serial under a jobserver -- see BENCH_PJOBS).
+# Scratch paths are keyed by
 # the benchmark's basename: unique per benchmark (so parallel workers never
 # collide) AND stable across runs, so the generated C's embedded __FILE__ stays
 # constant and the cc (ccache) cache keeps hitting -- a per-run mktemp path would
@@ -4566,15 +4568,18 @@ bench: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	  if [ -f "$$c" ] \
 	     && $(CC) $(CFLAGS) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) -Ilib -c "$$c" -o "$$o" 2>/dev/null \
 	     && $(CC) $(CFLAGS) "$$o" $$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $(GC_FLAGS) -o "$$bin" 2>/dev/null; then \
-	    if [ -f "$$f.expected" ]; then cp "$$f.expected" "$$exp"; rc=0; \
-	    else $(TIMEOUT60) $(REF_RUBY) "$$f" >"$$exp" 2>/dev/null; rc=$$?; \
-	      if [ $$rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then $(TIMEOUT60) ruby "$$f" >"$$exp" 2>/dev/null; rc=$$?; fi; \
+	    if [ -f "$$f.expected" ]; then cp "$$f.expected" "$$exp" 2>"$$exp.err"; rc=$$?; \
+	    else $(TIMEOUT60) $(REF_RUBY) "$$f" >"$$exp" 2>"$$exp.err"; rc=$$?; \
+	      if [ $$rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then $(TIMEOUT60) ruby "$$f" >"$$exp" 2>"$$exp.err"; rc=$$?; fi; \
 	    fi; \
 	    if [ $$rc -eq 124 ]; then echo SKIP >"$$res"; \
-	    else $(TIMEOUT60) "$$bin" >"$$act" 2>/dev/null; \
+	    else $(TIMEOUT60) "$$bin" >"$$act" 2>"$$act.err"; run_rc=$$?; \
 	      LC_ALL=C sed "s/\r$$//" "$$exp" >"$$exp.n"; LC_ALL=C sed "s/\r$$//" "$$act" >"$$act.n"; \
-	      if cmp -s "$$exp.n" "$$act.n"; then echo PASS >"$$res"; \
-	      else { echo FAIL; diff -u "$$exp.n" "$$act.n" 2>&1 | head -40; } >"$$res"; fi; \
+	      if [ $$rc -eq 0 ] && [ $$run_rc -eq 0 ] && cmp -s "$$exp.n" "$$act.n"; then echo PASS >"$$res"; \
+	      else { echo FAIL; \
+	        if [ $$rc -ne 0 ]; then echo "Reference exit status: $$rc"; head -10 "$$exp.err"; fi; \
+	        if [ $$run_rc -ne 0 ]; then echo "Spinel exit status: $$run_rc"; head -10 "$$act.err"; fi; \
+	        diff -u "$$exp.n" "$$act.n" 2>&1 | head -40; } >"$$res"; fi; \
 	    fi; \
 	  else echo ERR >"$$res"; fi' sh
 	@pass=0; fail=0; err=0; skip=0; \

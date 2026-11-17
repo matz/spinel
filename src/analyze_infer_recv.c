@@ -868,6 +868,10 @@ static int res_body_ok(Compiler *c, int n, int parent, int top, const char *p0, 
    seed or block. */
 TyKind reduce_empty_seed_kind(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
+  /* under promote the pushed Integers are boxed once the fixpoint is done
+     (as an Integer Range#sum seed is, infer_range_call), so the accumulator
+     stays the boxed Array, and the seed takes no part in the fixpoint */
+  if (g_promote_mode) return TY_POLY_ARRAY;
   int args = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   int blk = nt_ref(nt, id, "block");

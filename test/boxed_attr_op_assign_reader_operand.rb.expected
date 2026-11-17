@@ -97,3 +97,23 @@ rhs
 [:nm, :str=, RS]
 [:nm, :+, NilClass]
 [:nm, :str, NilClass]
+eff 1
+[:ok, 2]
+eff 2
+[:nm, :q=, RQ1]
+eff 3
+[:nm, :q=, RQ2]
+eff 4
+[:nm, :+, NilClass]
+[:nm, :q, NilClass]
+4
+eff 5
+[:nm, :q=, RQ1]
+eff 6
+[:nm, :q=, RQ2]
+[:nm, :q, NilClass]
+6
+eff 7
+[:nm, :q=, RQ1]
+[:nm, :q, NilClass]
+7

@@ -195,3 +195,46 @@ end
     p [:nm, e.name, e.receiver.class]
   end
 end
+
+# an operand that needs a prelude (an Array literal, an interpolation, a Hash) runs once, in the case
+# that runs: not for a nil receiver, and not once for every reader-only class of the switch
+class RQ1
+  attr_reader :q
+  def initialize(v) = @q = v
+end
+class RQ2
+  attr_reader :q
+  def initialize(v) = @q = v
+end
+class WQ
+  attr_accessor :q
+  def initialize(v) = @q = v
+end
+$qn = 0
+def eff = ($qn += 1; puts "eff #{$qn}"; 1)
+[WQ.new(1), RQ1.new(1), RQ2.new(2), RQ1.new(nil), nil].each do |r|
+  begin
+    r.q += [eff].first
+    p [:ok, r.q]
+  rescue NoMethodError => e
+    p [:nm, e.name, e.receiver.class]
+  end
+end
+p $qn
+[RQ1.new(1), RQ2.new(2), nil].each do |r|
+  begin
+    r.q += "#{eff}".to_i
+    p [:ok, r.q]
+  rescue NoMethodError => e
+    p [:nm, e.name, e.receiver.class]
+  end
+end
+p $qn
+[RQ1.new(1), nil].each do |r|
+  begin
+    r.q += {a: eff}[:a]
+  rescue NoMethodError => e
+    p [:nm, e.name, e.receiver.class]
+  end
+end
+p $qn

@@ -55935,7 +55935,12 @@ static void an_phase_storage(Compiler *c) {
            longer fits. Once the rule has widened a holder, each store whose
            input has widened since the rule began joins again; the rest keep
            what they settled on. */
-        if ((g_share_widened_holder || params_late) && infer_changed_store_types(c, &before_rule)) ch = late_widened = 1;
+        if ((g_share_widened_holder || params_late) && infer_changed_store_types(c, &before_rule)) {
+          ch = late_widened = 1;
+          /* an ivar a base's store widened here is its subclasses' slot too: their copies of the method
+             wrote what their own parameter held (OpenSSL::Digest's @name, `super("SHA256")` in SHA256) */
+          for (int iter = 0; iter < 16; iter++) if (!(infer_inherited_ivars(c) | propagate_ivars_up(c))) break;
+        }
       }
       if (!ch) break;
       handle_arg_tab_free(&hat);

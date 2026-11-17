@@ -4137,19 +4137,38 @@ int cplan_aref_builds(Compiler *c, int id, int ci) {
    in an Exception class, ...) nor a parent's own allocate that answers:
    that super has no target here, so such a call keeps Class#allocate as
    before. */
+static int own_allocate_answers(Compiler *c, int call, int mi);
 int cplan_own_allocate(Compiler *c, int call, int ci) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (ci < 0 || ci >= c->nclasses) return 0;
   if (call >= 0 && nt_int(nt, call, "cnew_alloc", 0)) return 0;
   int mi = call_target(c, call, ci, "allocate", CT_CMETHOD, NULL);
   if (mi >= 0 && call >= 0) mi = ct_cmethod_made_at(c, call, ci, "allocate", mi);
-  int d = mi >= 0 ? c->scopes[mi].def_node : -1;
-  if (mi < 0) return 0;
+  return mi >= 0 && own_allocate_answers(c, call, mi);
+}
+/* Does the program's allocate mi answer for call `call` (-1: any)? Not when
+   it calls a super that reaches neither Class#allocate nor a parent's own
+   allocate that answers. The parent's is the version in force at the
+   call (ct_met_version), found without the call's pin: a call pinned to a
+   version of the child's allocate answers that scope for every class
+   asked, and the question would not end. Where the record cannot tell
+   which version the call meets, the table's, kept only where it is made
+   at the call (ct_cmethod_made_at). Each level above it is asked the
+   same way. */
+static int own_allocate_answers(Compiler *c, int call, int mi) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int d = c->scopes[mi].def_node;
   if (d < 0) return 1;
-  /* a super that reaches a parent's own allocate has that target, when
-     that method itself answers (its own supers checked the same way) */
   int pc = c->scopes[mi].class_id >= 0 ? comp_super_parent(c, c->scopes[mi].class_id, 1) : -1;
-  int parent_own = pc >= 0 && cplan_own_allocate(c, call, pc);
+  int pm = pc >= 0 ? call_target(c, -1, pc, "allocate", CT_CMETHOD, NULL) : -1;
+  if (pm >= 0 && call >= 0) {
+    int none = 0, dc = -1, framed = elab_plan_enter(c, call);
+    const LrDef *v = ct_met_version(c, call, pc, "allocate", 1, &none);
+    int at = v ? ct_def_version(c, pc, "allocate", 1, v, &dc) : -1;
+    if (framed) elab_plan_leave(c);
+    pm = none ? -1 : at >= 0 ? at : ct_cmethod_made_at(c, call, pc, "allocate", pm);
+  }
+  int parent_own = pm >= 0 && own_allocate_answers(c, call, pm);
   int n = 0, sup = 0, *ids = nt_subtree_ids(nt, &d, 1, &n);
   for (int i = 0; i < n && !sup; i++)
     sup = (nt_kind(nt, ids[i]) == NK_SuperNode || nt_kind(nt, ids[i]) == NK_ForwardingSuperNode) &&
@@ -4928,6 +4947,9 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->why = 0;
   }
   if ((flags & CT_ATTR) && ml->kind == ML_ATTR) ct_attr_point(c, id, cls, flags, name, ml);
+  /* (the method answered is one the asker reads: a version, pin or entry the record chose past the table's, which
+     the table lookup did not note; infer_type's memo notes it) */
+  if (r >= 0) IMEMO_DEP_SCOPE(r);
   if (open) mtab_leave(c);
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;

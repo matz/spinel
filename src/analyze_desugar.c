@@ -19240,6 +19240,9 @@ int desugar_builtin_splat_forward(Compiler *c) {
       c->nscope[j] = c->nscope[id];
       nt_node_set_int(nt, j, "node_line", line);
       nt_node_set_int(nt, j, "node_file", file);
+      /* each arm runs where the call stood, in its frame, once: node_in_place says so to the load record
+         (lr_unplaced), which places them there */
+      nt_node_set_int(nt, j, "node_in_place", 1);
     }
     changed = 1;
   }

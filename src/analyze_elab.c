@@ -9986,7 +9986,11 @@ static int lr_src_opaque(const LoadRecord *r, const NodeTable *nt, const char *n
     }
     NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
     if (vk != NK_ConstantReadNode && vk != NK_ConstantPathNode) return 1;
-    if (lr_src_opaque(r, nt, nt_str(nt, v, "name"), depth - 1)) return 1;
+    /* (a value spelled with the name itself, `CipherError =
+       ::OpenSSL::Cipher::CipherError`, names one of the writes asked here) */
+    const char *vn = nt_str(nt, v, "name");
+    if (vn && sp_streq(vn, name)) continue;
+    if (lr_src_opaque(r, nt, vn, depth - 1)) return 1;
   }
   return 0;
 }

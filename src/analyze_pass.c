@@ -18535,6 +18535,7 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
     int rargc = 0;
     const int *rargv = rargs >= 0 ? nt_arr(nt, rargs, "arguments", &rargc) : NULL;
     TyKind acc_t = (rargc > 0 && rargv) ? infer_type(c, rargv[0]) : et2;
+    int acc_wait = 0;
     /* An empty `[]` / `{}` seed the block only hands to a callable has no
        fill to type it from; the element type of the RECEIVER is not what it
        holds, so answer the general boxed container (#3657). */
@@ -18545,6 +18546,14 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
           (nt_arr(nt, rargv[0], "elements", &sn0), sn0 == 0) &&
           ewo_memo_passed_to_callable_at(c, id, 0))
         acc_t = TY_POLY_ARRAY;
+      /* one the block only pushes Integers or Floats into is that Array
+         (reduce_empty_seed_kind); while a pushed value is not typed yet the
+         accumulator waits */
+      else if (s0_k == NK_ArrayNode && sn0 == 0) {
+        TyKind sk = reduce_empty_seed_kind(c, id);
+        if (sk == TY_UNKNOWN) acc_wait = 1;
+        else if (sk != TY_POLY_ARRAY) acc_t = sk;
+      }
       else if (s0_k == NK_HashNode &&
                (nt_arr(nt, rargv[0], "elements", &sn0), sn0 == 0))
         acc_t = TY_POLY_POLY_HASH;
@@ -18562,7 +18571,7 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
       if (bt3 == TY_POLY || ty_is_object(bt3) || bt3 == TY_RATIONAL ||
           bt3 == TY_COMPLEX || bt3 == TY_BIGINT) acc_t = TY_POLY;
     }
-    if (bp_widen(rs, p0, acc_t)) changed = 1;
+    if (!acc_wait && bp_widen(rs, p0, acc_t)) changed = 1;
     const char *rp1 = block_param_name(c, block, 1);
     if (rp1) {
       if (bp_widen(rs, rp1, et2)) changed = 1;

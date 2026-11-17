@@ -5248,6 +5248,11 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	for cls in Shelf Bin Queue2; do \
 	  awk "/^struct sp_$${cls}_s \\{/,/^\\}/" "$$tmp/osa.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a read of delete_if, keep_if, sort! or sort_by!'s value left $$cls's @items boxed)"; ok=0; }; \
 	done; \
+	$(SPINEL) test/inject_empty_seed_typed.rb -c --no-line-map -o "$$tmp/ies.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (inject_empty_seed_typed: -c)"; ok=0; }; \
+	for m in evens squares kept nested small; do \
+	  grep -q "^static inline sp_IntArray \\* sp_$$m(" "$$tmp/ies.c" || { echo "infer-test: FAIL (inject_empty_seed_typed: an empty [] seed the block pushes Integers into left $$m boxed)"; ok=0; }; \
+	done; \
+	grep -q "^static inline sp_FloatArray \\* sp_odd_halves(" "$$tmp/ies.c" || { echo "infer-test: FAIL (inject_empty_seed_typed: an empty [] seed the block pushes Floats into left odd_halves boxed)"; ok=0; }; \
 	$(SPINEL) test/obj_array_nested_block.rb -c --no-line-map -o "$$tmp/onb.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_nested_block: -c)"; ok=0; }; \
 	for v in arrows pts; do \
 	  grep -q "sp_PtrArray \\* iv_$$v;" "$$tmp/onb.c" || { echo "infer-test: FAIL (obj_array_nested_block: a block in a walk's block left @$$v boxed)"; ok=0; }; \

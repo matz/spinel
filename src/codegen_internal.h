@@ -676,6 +676,10 @@ int loop_has_valued_break(Compiler *c, int root);
    write to one, or anything that runs Ruby code it does not show; not scalar
    arithmetic, a typed-array read or a plain field read (codegen_call.c). */
 int subtree_may_reassign_state(Compiler *c, int id);
+/* Can evaluating the subtree run code of the program's or store into an ivar, class variable, global or constant,
+   counting the calls its nodes make without naming them (an interpolation's to_s, a case's ===, a splat's to_a;
+   codegen_call.c)? A local's write is not one. */
+int subtree_may_run_code(Compiler *c, int id);
 /* Does the receiver of element write `node` (a store, an index-and/or-write, a slice store) need a root of its own
    while its operands run (store_recv_needs_root, codegen_call.c)? held_ok 0 keeps the older rule the Hash arms use. */
 int store_recv_needs_root(Compiler *c, int node, int recv, const int *ops, int nops, int held_ok);

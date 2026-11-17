@@ -26748,63 +26748,38 @@ int subtree_may_reassign_state(Compiler *c, int id) {
   return 0;
 }
 
-/* Can evaluating the subtree run code of the program's, or store into an ivar, a class variable, a global or a
-   constant? What subtree_may_reassign_state asks (a write, a call that runs code), and what its nodes call without being
-   named: an interpolation's to_s, a case's ===, a splat's to_a, a builtin's callbacks (ic_node_may_call_program). A
-   local's write is neither: a local is no state another operand's code reaches. Every node is asked, so one the
-   tables do not know of counts as code. */
-int subtree_may_run_code(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  if (id < 0) return 0;
-  const char *ty = nt_type(nt, id);
-  if (node_may_reassign_state(c, id) > 0 || (ty && strncmp(ty, "Constant", 8) == 0 && (strstr(ty, "Write") || strstr(ty, "Target"))) ||
-      (!(nt_kind(nt, id) == NK_CallNode && order_call_runs_no_code(c, id)) && ic_node_may_call_program(c, id)))
-    return 1;
-  for (int i = 0; i < nt_num_refs(nt, id); i++)
-    if (subtree_may_run_code(c, nt_ref_at(nt, id, i))) return 1;
-  for (int i = 0; i < nt_num_arrs(nt, id); i++) {
-    int n = 0;
-    const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int j = 0; j < n; j++)
-      if (subtree_may_run_code(c, ids[j])) return 1;
-  }
-  return 0;
-}
-
-/* Does the receiver of an element write (`a[i] = v`, `a[i] ||= v`, `a[i, n] = v`; `node` the write) need a root of its
-   own while its operands (the index, the length, the value) run? Its temp is the container's only holder once an
-   operand drops it (an assignment of the variable that held it, a delete), and a receiver that allocates has no holder
-   at all. Held without one: a temp the binder holds, rooted where a later operand allocates (Repr head_held) or for the
-   binding's life (view_held); self;
-   a local that is not a closure cell, unless an operand writes it (read_rebound_by), since the frame roots it and no
-   code else can rebind it. Every other receiver (an ivar, a global, a class variable, a cell local, a call's answer)
-   needs one whenever an operand can run code, counting what its nodes call without naming it (subtree_may_run_code: an
-   interpolation's to_s, a when's ===, a splat's to_a) and what the write itself calls on its operands
-   (ic_node_may_call_program), and an index not known to be a number, whose to_int may be the program's. With held_ok 0 the receiver is asked the older rule, any operand
-   with a side effect, which the Hash arms keep. */
+/* Does the receiver of an element write (`a[i] = v`, `a[i] ||= v`, `a[i, n] = v`; `node` the write) need a root of
+   its own while its operands (the index, the length, the value) run? Its temp is the container's only holder once
+   an operand drops it (an assignment of the variable that held it, a delete).
+   Held without one:
+   - a temp the binder ran first and rooted (view_held, view_ran_first, Repr head_held), and `self`;
+   - a local that is not a closure cell, unless an operand writes it (read_rebound_by): the frame roots it;
+   - a constant (`C`, `M::C`), unless an operand writes it (read_rebound_by).
+   Every other receiver (an ivar, a global, a class variable, a cell local, a call's answer) needs one when an operand
+   can store into state or run code of the program's, named or not (order_may_drop_state, and the write's own implicit
+   calls on its operands: ic_node_may_call_program, an index's to_int), or writes a local the receiver reads
+   (read_rebound_by: `bx.a[i] = (bx = nil; v)`). A receiver that builds a new object has no
+   holder but its temp: it needs one when an operand can allocate (operand_allocates_beside). An operand the binder
+   ran first is already done. With held_ok 0 the receiver is asked the older rule, any operand with a side effect,
+   which the Hash arms keep. */
 int store_recv_needs_root(Compiler *c, int node, int recv, const int *ops, int nops, int held_ok) {
   const NodeTable *nt = c->nt;
-  int runs = !held_ok ? 0 : ic_node_may_call_program(c, node);
+  int runs = held_ok && ic_node_may_call_program(c, node);
   if (held_ok) {
     NodeKind rk = nt_kind(nt, recv);
-    if (repr_of(c, recv).head_held || view_held(recv) || rk == NK_SelfNode) return 0;
+    if (repr_of(c, recv).head_held || view_held(recv) || view_ran_first(recv) || rk == NK_SelfNode) return 0;
     LocalVar *lv = rk == NK_LocalVariableReadNode ? scope_local(comp_scope_of(c, recv), nt_str(nt, recv, "name")) : NULL;
-    if (lv && !lv->is_cell) {
+    if ((lv && !lv->is_cell) || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
       for (int i = 0; i < nops; i++) if (ops[i] >= 0 && read_rebound_by(c, recv, ops[i])) return 1;
       return 0;
     }
   }
-  for (int i = 0; i < nops && !runs; i++) {
-    if (ops[i] < 0) continue;
-    /* (an index not known to be a number is converted by to_int, which may be the program's: the last operand is the value) */
-    TyKind it = held_ok && i < nops - 1 ? comp_ntype(c, ops[i]) : TY_INT;
-    runs = (it != TY_INT && it != TY_FLOAT && it != TY_RANGE) ||
-           (held_ok ? subtree_may_run_code(c, ops[i]) : subtree_has_side_effect(c, ops[i]));
-  }
-  if (runs || !subtree_may_allocate(c, recv)) return runs;
-  /* (a receiver that allocates has no holder but its temp: only an operand that allocates can collect it) */
+  for (int i = 0; i < nops && !runs; i++)
+    runs = ops[i] >= 0 && !(held_ok && view_ran_first(ops[i])) &&
+           (held_ok ? order_may_drop_state(c, ops[i]) || read_rebound_by(c, recv, ops[i]) : subtree_has_side_effect(c, ops[i]));
+  if (runs || !(held_ok ? operand_allocates_beside(c, recv) : subtree_may_allocate(c, recv))) return runs;
   for (int i = 0; i < nops; i++)
-    if (ops[i] >= 0 && (!held_ok || operand_may_allocate(c, ops[i]))) return 1;
+    if (ops[i] >= 0 && (!held_ok ? 1 : !view_ran_first(ops[i]) && operand_may_allocate(c, ops[i]))) return 1;
   return 0;
 }
 /* The receiver temp of an element write, rooted where store_recv_needs_root says it needs it (the value forms'

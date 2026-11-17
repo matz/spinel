@@ -125,6 +125,42 @@ What `lib/` itself carries for Windows is small and named:
 - **Symlinks** need Developer Mode or an elevated process, as for any
   Windows program.
 
+## A library as a DLL
+
+A library (`--ext-init`/`--ext-entry`, [spin.md](spin.md)) builds into a
+DLL that a host loads with `LoadLibrary` -- Python's ctypes, a C#
+`DllImport` -- over the same archives a shared object takes on Linux:
+`make runtime-pic` builds them here too, and the library is compiled with
+the flags `win32.mk` gives every compile.
+
+```sh
+gcc -shared -Ilib -Ilib/win32 -D_FILE_OFFSET_BITS=64 -DWIN32_LEAN_AND_MEAN \
+  -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 kernel.c lib/libspinel_rt_pic.a \
+  -static -lws2_32 -lbcrypt -lwinpthread -o kernel.dll
+```
+
+- **No position-independent build is needed**: x64 Windows code is
+  relocated at load time, gcc ignores `-fPIC` there, and the `_pic`
+  archives and package objects compile as the regular ones do. A threaded
+  library links `lib/libspinel_rt_mt_pic.a` with `-DSP_THREADS`.
+- **Thread-local state** is the native kind, which a DLL loaded at run time
+  gets for every thread. Windows allocates it, about 600 KB a thread, for
+  each thread of the host -- those the host started before loading the DLL
+  included.
+- **The DLL needs no DLL** beyond the system's own, as a program does
+  (`-static`).
+- **Exports**: with no `.def` file and no `__declspec(dllexport)`, the
+  linker exports every global symbol of the DLL, the runtime's thousands
+  included. A `.def` file that lists the init, its `_try` helper and the
+  entries, given on the same command line, exports those alone:
+
+  ```
+  EXPORTS
+  Init_kernel
+  Init_kernel_try
+  sp_Kernel_s_triple
+  ```
+
 ## Tests
 
 `make test-corpus` runs the corpus as on Linux, from an MSYS2 shell. The
@@ -134,3 +170,6 @@ are listed in `win32.mk` (`TEST_SKIP`, each group with its reason) and are
 not run there; the tests themselves carry nothing for Windows. CI does not
 run the corpus on Windows; whoever changes `lib/win32/` runs it, and adds a
 test to the list when it asserts something only POSIX can answer.
+
+`make ext-test` runs here as well: its shared objects are DLLs, which its
+hosts load through the shim's `dlopen` (they link `PLATFORM_OBJ`).

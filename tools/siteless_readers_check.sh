@@ -21,7 +21,10 @@ cd "$ROOT" || exit 2
 # class whose `hash` is a reader), emit_cls_answers_dispatch (Struct's members and keyword_init?) and
 # emit_exc_text_dispatch_at (the exception text hooks of a builtin exception's reopenings). No call stands behind an
 # arm: the switch is the class's, so its question is the table's with no site, asked for every class of the program,
-# as the others of this list are.
+# as the others of this list are. The next four read the compiler's own synthesized helpers (`__enum_to_a`, `__bind x`)
+# or the `each` the helper drives: obj_each_elems_text and an_phase_procs for every class an `__enum_to_a` call may reach,
+# class_value_bind_call_target and class_value_bind_call_gap for every class a Class#instance_method bind_call may reach.
+# Their calls are the synthesized nodes', which name no method of the program's, so the question has no site of its own.
 FUNCS="
 src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
@@ -85,6 +88,10 @@ src/codegen.c:emit_obj_succ_dispatch
 src/codegen.c:hash_reader_ivar
 src/codegen.c:emit_cls_answers_dispatch
 src/codegen.c:emit_exc_text_dispatch_at
+src/codegen.c:obj_each_elems_text
+src/analyze.c:an_phase_procs
+src/analyze_util.c:class_value_bind_call_target
+src/analyze_util.c:class_value_bind_call_gap
 "
 PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain)[[:space:]]*([(]|$)'
 bad=0

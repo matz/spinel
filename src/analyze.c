@@ -9045,8 +9045,10 @@ static const char *inline_spelling(const NodeTable *nt, int id, const char *tok,
    a `define_method` call. -1 when `ms` is the live one. */
 static int inline_replacing_def(Compiler *c, Scope *ms) {
   if (!ms->name) return -1;
+  mtab_enter(c);   /* (construction: it reads the program's own defs to number or judge them, no call asks) */
   int li = ms->is_cmethod ? comp_cmethod_in_class(c, ms->class_id, ms->name)
                           : comp_method_in_class(c, ms->class_id, ms->name);
+  mtab_leave(c);
   int dn = li >= 0 ? c->scopes[li].def_node : -1;
   return dn >= 0 && dn != ms->def_node ? dn : -1;
 }
@@ -36831,8 +36833,10 @@ static void check_seed_contradictions(Compiler *c) {
        replaced body refused a program spinel compiles and runs correctly
        (#4024). Only the definition the chain actually resolves to is judged. */
     if (sc->class_id >= 0 && sc->name) {
+      mtab_enter(c);   /* (construction: it reads the program's own defs to number or judge them, no call asks) */
       int eff = sc->is_cmethod ? comp_cmethod_in_chain(c, sc->class_id, sc->name, NULL)
                                : comp_method_in_chain(c, sc->class_id, sc->name, NULL);
+      mtab_leave(c);
       if (eff >= 0 && eff != s) continue;
     }
     TyKind slot = sc->ret;
@@ -53980,7 +53984,7 @@ static void an_phase_procs(Compiler *c) {
     if (recv < 0) continue;
     TyKind rt = infer_type(c, recv);
     if (!ty_is_object(rt)) continue;
-    int ec = comp_method_in_chain(c, ty_object_class(rt), "each", NULL);
+    int ec = call_target(c, -1, ty_object_class(rt), "each", CT_METHODS | CT_SHARED, NULL);
     if (ec < 0) continue;
     Scope *m = &c->scopes[ec];
     if (m->blk_param || !m->yields) continue;   /* already lowered, or no yielding each */

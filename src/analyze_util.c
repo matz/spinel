@@ -5514,12 +5514,14 @@ const char *class_value_instance_method_sym(Compiler *c, int node) {
    do not pass: *armless is set for them. */
 int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *armless) {
   if (ci < 0 || ci >= c->nclasses || is_builtin_reopen(c->classes[ci].name)) return -1;
-  int mdc = -1, mi = comp_method_in_chain(c, ci, sym, &mdc);
+  MethodLookup mml = { .def_class = -1 };
+  int mi = call_target(c, -1, ci, sym, CT_METHODS | CT_SHARED, &mml), mdc = mml.def_class;
   /* an attr reader or writer declared below any def of the name binds its
      `__bind x`, a method of the class that declares it
      (desugar_bind_attr_helpers) */
   char hn[300], base[256];
-  int hdc = -1, hmi = snprintf(hn, sizeof hn, "__bind %s", sym) < (int)sizeof hn ? comp_method_in_chain(c, ci, hn, &hdc) : -1;
+  MethodLookup hml = { .def_class = -1 };
+  int hmi = snprintf(hn, sizeof hn, "__bind %s", sym) < (int)sizeof hn ? call_target(c, -1, ci, hn, CT_METHODS | CT_SHARED, &hml) : -1, hdc = hml.def_class;
   MethodLookup aml = { .def_class = -1 };
   int wr = setter_base_name(sym, base, sizeof base);
   call_target(c, -1, ci, wr ? base : sym, wr ? CT_WRITER : 0, &aml);
@@ -5549,7 +5551,7 @@ int class_value_bind_call_gap(Compiler *c, int node) {
   int sci = infer_type(c, recv) == TY_CLASS && !class_recv_is_dynamic(c, recv) ? class_recv_static_ci(c, recv) : -1;
   int armless = 0;
   for (int k = sci >= 0 ? sci : 0; k < (sci >= 0 ? sci + 1 : c->nclasses) && !armless; k++) {
-    if (is_builtin_reopen(c->classes[k].name)) armless = comp_method_in_chain(c, k, sym, NULL) >= 0;
+    if (is_builtin_reopen(c->classes[k].name)) armless = call_target(c, -1, k, sym, CT_METHODS | CT_SHARED, NULL) >= 0;
     else (void)class_value_bind_call_target(c, k, sym, &armless);
   }
   return armless || (core_method_name(sym) && class_recv_static_ci(c, recv) < 0);

@@ -6172,8 +6172,12 @@ int self_class_static_ci(Compiler *c, int recv) {
   /* (not a self an instance_exec rebinds: a stored block's, whose class is
      the receiver's at run time, not the method's it is written in) */
   if (nt_int(nt, cr, "ie_rself", 0)) return -1;
+  /* (nor a literal block's an instance_eval or instance_exec runs on
+     another object: its self is that object, whose class the block gives) */
+  int ie = ie_class_of(c, cr);
+  if (ie < -1) return -1;
   Scope *s = comp_scope_of(c, recv);
-  int cid = s ? s->class_id : -1;
+  int cid = ie >= 0 ? ie : s ? s->class_id : -1;
   if (cid < 0 || comp_class_is_module(c, &c->classes[cid])) return -1;
   return comp_class_is_leaf(c, cid) ? cid : -1;
 }

@@ -1600,6 +1600,10 @@ static int block_tail_needs_value_form(Compiler *c, int id) {
      if-modifier) left the outer splice void (`{ |__fwd| yield __fwd }`, the
      forward of a named &block, handed on to a builtin). */
   if (nt_kind(nt, id) == NK_YieldNode) return 1;
+  /* a tail `super` into a parent that yields: the statement form splices
+     the parent's body as a compound statement, whose value is void
+     (`tx { super }`, the parent using its &block) */
+  if (nt_kind(nt, id) == NK_SuperNode || nt_kind(nt, id) == NK_ForwardingSuperNode) return 1;
   /* a definition as the tail (`{ def m = 1 }`, `{ attr_reader :a }`,
      `{ private def m = 1 }`): the definition emits with its class and its
      statement form is nothing, while the expression is the name as a

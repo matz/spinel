@@ -15502,6 +15502,15 @@ int exc_reopen_initialize(Compiler *c, int id, int ci) {
   return (mi >= 0 && c->scopes[mi].class_id == ci && c->scopes[mi].reachable) ? mi : -1;
 }
 
+/* The initialize a program's reopening gives an exception built as the
+   builtin class named cn: its own reopening's, else the nearest one above it
+   (ArgumentError.new under a reopened StandardError#initialize), or -1. */
+int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn) {
+  int rci = comp_builtin_class_named(c, cn);
+  int rim = rci >= 0 ? exc_reopen_initialize(c, id, rci) : -1;
+  return rim >= 0 ? rim : exc_reopen_initialize_above(c, cn, 0, -1);
+}
+
 /* Build the runtime's exception of the reopened class ci and run the
    reopening's initialize on it: from the call's argument list (args >= 0),
    or from one message node (the raise forms, `raise Cls, msg` and `raise
@@ -15518,6 +15527,12 @@ int exc_reopen_initialize(Compiler *c, int id, int ci) {
    An explicit `cause:` is not staged while the initialize runs: the
    raise's own call stages it once the exception is built (raise_fn). */
 void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg_node, Buf *b) {
+  emit_exc_reopen_construct_as(c, c->classes[ci].name, initm, args, msg_node, b);
+}
+/* The same for the builtin exception class named cname, whose initialize is
+   the one of a reopening above it (cname's own reopening, or a builtin's it
+   descends from: ArgumentError.new under a reopened StandardError#initialize). */
+void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int args, int msg_node, Buf *b) {
   Scope *im = &c->scopes[initm];
   int lo, hi, argc = msg_node >= 0;
   if (args < 0 && class_new_pos_arity(c, initm, &lo, &hi) && (argc < lo || argc > hi)) {
@@ -15529,7 +15544,7 @@ void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg
     return;
   }
   int te = ++g_tmp;
-  buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", (&(\"\\xff\")[1])); SP_GC_ROOT(_t%d); ", te, c->classes[ci].name, te);
+  buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", (&(\"\\xff\")[1])); SP_GC_ROOT(_t%d); ", te, cname, te);
   buf_printf(b, "%s(_t%d", mc_method(c, im), te);
   if (args >= 0) emit_args_filled(c, initm, args, ", ", b);
   else emit_args_filled_argv(c, initm, argc ? &msg_node : NULL, argc, -1, ", ", b);
@@ -16053,9 +16068,9 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (cn && is_exc_name(cn)) {
       /* a reopening's own initialize runs on the runtime's exception, but
          not for the error a dispatcher's no-method arm builds (builtin_new) */
-      if (!nt_int(nt, id, "builtin_new", 0)) { int rci = comp_builtin_class_named(c, cn);
-        int rim = rci >= 0 ? exc_reopen_initialize(c, id, rci) : -1;
-        if (rim >= 0) { emit_exc_reopen_construct(c, rci, rim, nt_ref(nt, id, "arguments"), -1, b); { *out = 1; return 1; } } }
+      if (!nt_int(nt, id, "builtin_new", 0)) {
+        int rim = exc_builtin_reopen_initialize(c, id, cn);
+        if (rim >= 0) { emit_exc_reopen_construct_as(c, cn, rim, nt_ref(nt, id, "arguments"), -1, b); { *out = 1; return 1; } } }
       /* SystemCallError#initialize builds the message from the errno:
          Errno::ENOENT.new("x") is "No such file or directory - x", and
          SystemCallError.new("x", 2) an Errno::ENOENT */

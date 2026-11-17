@@ -12101,27 +12101,34 @@ int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max) {
   return n;
 }
 
-/* The scope of the initialize a `super` from the initialize of exception class
-   ci reaches among the program's reopenings of builtin exception classes, or
-   -1 when it reaches the builtin's own. The chain is static: a reopening
-   continues at the builtin above it (NoMethodError's at NameError's), and a
-   class of the program continues at the builtin it descends from, inclusive. */
-int exc_super_reopen_initialize(Compiler *c, int ci) {
-  int reopen = class_is_exc_reopen(c, ci);
-  const char *from = reopen ? c->classes[ci].name : exc_builtin_parent(c, ci);
+/* The scope of the initialize that the program's reopenings of builtin
+   exception classes give an exception built as the builtin `from`: the
+   nearest reopening that defines one, going up the builtin ancestry from
+   `from` (itself too when `inclusive`), or -1 when the builtin's own runs.
+   skip_ci is a class to pass over (the reopening whose super is asked). The
+   chain is static: a reopening continues at the builtin above it
+   (NoMethodError's at NameError's). */
+int exc_reopen_initialize_above(Compiler *c, const char *from, int inclusive, int skip_ci) {
   int seen = 0;
   for (int i = 0; builtin_ancestor_at(from, i); i++) {
     const char *a = builtin_ancestor_at(from, i);
-    if (!seen) { seen = sp_streq(a, from); if (!seen || reopen) continue; }
+    if (!seen) { seen = sp_streq(a, from); if (!seen || !inclusive) continue; }
     /* each ancestor's own reopening is asked by name: a list of every
        reopening that defines initialize is capped (exc_reopen_definers), and
        one past the cap would hide a reopened ancestor */
     int rci = comp_builtin_class_named(c, a);
-    if (rci < 0 || rci == ci || !class_is_exc_reopen(c, rci)) continue;
+    if (rci < 0 || rci == skip_ci || !class_is_exc_reopen(c, rci)) continue;
     int mi = call_target(c, -1, rci, "initialize", 0, NULL);
     if (mi >= 0 && c->scopes[mi].class_id == rci) return mi;
   }
   return -1;
+}
+/* The initialize a `super` from the initialize of exception class ci reaches
+   among those reopenings: a reopening continues at the builtin above it, a
+   class of the program at the builtin it descends from, inclusive. */
+int exc_super_reopen_initialize(Compiler *c, int ci) {
+  int reopen = class_is_exc_reopen(c, ci);
+  return exc_reopen_initialize_above(c, reopen ? c->classes[ci].name : exc_builtin_parent(c, ci), !reopen, ci);
 }
 
 /* Emits the head of a pick among the reopenings xr[0..xn) that define one

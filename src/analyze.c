@@ -22255,6 +22255,50 @@ static int ekh_value_literals(const NodeTable *nt, int recv, int *lits, int cap)
   if (for_each_value_position(nt, recv, VPS_IF | VPS_UNLESS | VPS_CASE, ekh_lit_leaf, &a)) return 0;
   return a.n;
 }
+/* What a boxed key is when it reads the first parameter of an iteration
+   block over an Array -- each, map and the others whose lock
+   reset_locked_iter_block_params clears -- that nothing writes: such a
+   parameter is poly only because its walk's receiver read poly on some round
+   (bp_widen never narrows during the fixpoint), and the re-narrow re-derives
+   it from the receiver's element type. The key mark is permanent, so taking
+   that stale poly pinned the poly-keyed variant for keys the re-narrow types
+   as Strings. Answers the element type of a receiver typed by now, TY_POLY
+   while a receiver still reads boxed or untyped, and TY_UNKNOWN when `key`
+   is no such read. */
+static TyKind ekh_locked_iter_param_elem(Compiler *c, int key) {
+  const NodeTable *nt = c->nt;
+  if (key < 0 || nt_kind(nt, key) != NK_LocalVariableReadNode) return TY_UNKNOWN;
+  const char *nm = nt_str(nt, key, "name");
+  Scope *ks = comp_scope_of(c, key);
+  LocalVar *kl = nm && ks ? scope_local(ks, nm) : NULL;
+  if (!kl || kl->type != TY_POLY || !kl->is_block_param || kl->is_param) return TY_UNKNOWN;
+  if (ks->body >= 0 && blkp_name_written(c, ks->body, nm)) return TY_UNKNOWN;
+  TyKind elem = TY_UNKNOWN;
+  int found = 0, open = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    int block = nt_ref(nt, id, "block");
+    if (block < 0 || nt_kind(nt, block) != NK_BlockNode) continue;
+    const char *pn = block_param_name(c, block, 0);
+    if (!pn || !sp_streq(pn, nm)) continue;
+    Scope *bs = comp_scope_of(c, block);
+    if (!bs || scope_local(bs, pn) != kl) continue;
+    /* every block binding this slot has to be such a walk, over one type */
+    const char *cn = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    if (!cn || !iter_elem_block_method(cn) || sp_streq(cn, "reduce") || sp_streq(cn, "inject") ||
+        recv < 0)
+      return TY_UNKNOWN;
+    if (blkp_name_written(c, nt_ref(nt, block, "body"), nm)) return TY_UNKNOWN;
+    TyKind rt = infer_type(c, recv);
+    if (rt == TY_POLY || rt == TY_POLY_ARRAY || rt == TY_UNKNOWN) { open = 1; continue; }
+    if (!ty_is_array(rt)) return TY_UNKNOWN;
+    TyKind e = ty_array_elem(rt);
+    if (found && e != elem) return TY_UNKNOWN;
+    elem = e; found = 1;
+  }
+  if (open) return TY_POLY;
+  return found ? elem : TY_UNKNOWN;
+}
 /* (set while the class structure is built, ahead of any inference: a write
    of no type yet says nothing then, and the mark it would pin only widens) */
 static int g_eh_pre_infer = 0;
@@ -22354,6 +22398,13 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
     int an = 0; const int *av = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
     if (an < 1) continue;
     TyKind kt = infer_type(c, av[0]);
+    /* (a walk's parameter locked poly by a transient receiver keys the
+       element type it re-narrows to; while its receiver is open, wait) */
+    if (kt == TY_POLY) {
+      TyKind ek = ekh_locked_iter_param_elem(c, av[0]);
+      if (ek == TY_POLY) continue;
+      if (ek != TY_UNKNOWN) kt = ek;
+    }
     TyKind want = TY_UNKNOWN;
     switch (kt) {
     case TY_SYMBOL: want = TY_SYM_POLY_HASH; break;

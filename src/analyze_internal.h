@@ -344,7 +344,7 @@ int yield_value_diverges(Compiler *c, int mi);
 int node_is_scope_tail(Compiler *c, int mi, int id);
 TyKind yield_aware_elem_ty(Compiler *c, int node);
 int an_user_defines_method(Compiler *c, const char *name);
-int an_enum_own_find_index(Compiler *c);
+int an_enum_own_find_index(Compiler *c, int id);
 int an_enum_prog_method(Compiler *c, const char *nm);
 /* Can no method of the program take `name`: no def of it or of method_missing, and no alias, define_method, attr_* or Struct / Data member that names it (or names a method only the run time knows)? */
 int an_name_binder_free(Compiler *c, const char *name);
@@ -653,6 +653,9 @@ TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int write);
 TyKind infer_int_pow_type(Compiler *c, int id, int recv, int exp);
 int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out);
+/* The Array kind an empty `[]` seed of reduce/inject call id takes from its block's pushes
+   (analyze_infer_recv.c): an Integer or Float Array, TY_UNKNOWN while not typed, else TY_POLY_ARRAY */
+TyKind reduce_empty_seed_kind(Compiler *c, int id);
 int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out);
 /* bop_find for the call `id`, recording the row under --plan-check */
 struct BuiltinOp;

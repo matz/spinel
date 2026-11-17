@@ -985,13 +985,13 @@ int repr_call_returns_handle(Compiler *c, int v) {
     if (!ks || n <= 0 || n > CPT_MAX) return 0;
     for (int i = 0; i < n; i++) {
       /* (ret_nil_pickup is decided with ret_handle) */
-      int mi = comp_method_in_chain(c, ks[i], "to_str", NULL);
+      int mi = cplan_implied_target(c, v, av[0], ks[i], "to_str", CIT_TABLE, NULL);
       if (mi >= 0 && (scope_ret_handle(c, mi), c->scopes[mi].ret_nil_pickup)) {
-        int fallback = comp_method_in_chain(c, ks[i], "to_s", NULL);
+        int fallback = cplan_implied_target(c, v, av[0], ks[i], "to_s", CIT_TABLE, NULL);
         if (fallback < 0 || !scope_ret_handle(c, fallback) || c->scopes[fallback].ret_nil_pickup) return 0;
       }
       if (mi < 0) {
-        mi = comp_method_in_chain(c, ks[i], "to_s", NULL);
+        mi = cplan_implied_target(c, v, av[0], ks[i], "to_s", CIT_TABLE, NULL);
         if (mi >= 0 && (scope_ret_handle(c, mi), c->scopes[mi].ret_nil_pickup)) return 0;
       }
       if (mi < 0) return 0;

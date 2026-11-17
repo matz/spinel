@@ -619,7 +619,11 @@ int is_lambda_constructor(const char *n) {
    forces a Lazy at all, for the record's reading of where a chain runs, is
    is_lazy_forcing_name's question; these are a subset of its names. */
 int is_lazy_force(const char *n) {
-  return sp_streq(n, "to_a") || sp_streq(n, "force");
+  return n && (sp_streq(n, "to_a") || sp_streq(n, "force"));
+}
+/* first: the terminal of a lazy chain that takes a count (bare, the element) */
+int is_lazy_first(const char *n) {
+  return n && sp_streq(n, "first");
 }
 
 int is_with_object_alias(const char *n) {

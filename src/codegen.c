@@ -10089,7 +10089,7 @@ static int proc_body_uses_self(Compiler *c, int id, int class_id) {
     if (nm && (sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval"))) return 1;
     /* an attr_reader is not a method in the chain -- it reads the ivar
        directly off self, which the body needs captured all the same (#3750) */
-    if (nm && comp_reader_in_chain(c, class_id, nm, NULL)) return 1;
+    if (nm && call_attr_target(c, id, class_id, nm, CT_ATTR, NULL)) return 1;
     /* respond_to? in a class with subclasses asks self's own class at run
        time when the subclasses answer differently */
     if (nm && sp_streq(nm, "respond_to?") && class_id >= 0 && class_has_subclass(c, class_id)) return 1;
@@ -13902,8 +13902,11 @@ static int obj_to_json_method(Compiler *c, int cid, int *defc) {
   ClassInfo *ci = &c->classes[cid];
   if (ci->is_native_class || !ci->instantiated) return -1;
   int dc = cid;
-  int mi = comp_method_in_chain(c, cid, "to_json", &dc);
+  /* (the dispatcher's arm for every class: no call's point, the final tables' answer) */
+  MethodLookup jml = { .def_class = -1 };
+  int mi = call_target(c, -1, cid, "to_json", CT_METHODS | CT_SHARED, &jml);
   if (mi < 0) return -1;
+  if (jml.def_class >= 0) dc = jml.def_class;
   Scope *m = &c->scopes[mi];
   if (m->is_cmethod) return -1;
   if (m->ret != TY_STRING) {
@@ -13913,7 +13916,7 @@ static int obj_to_json_method(Compiler *c, int cid, int *defc) {
        reaches, so it serializes the object instead. Both fell through to the
        reflection arm before this arm existed, and still do. */
     if (!scope_ret_is_void(c, mi) || m->blk_param) return -1;
-    if (comp_method_vis_in_chain(c, cid, "to_json") != SP_VIS_PUBLIC) return -1;
+    if (cplan_method_vis(c, -1, cid, "to_json", 0, NULL) != SP_VIS_PUBLIC) return -1;
   }
   if (!scope_has_callable_symbol(c, mi)) return -1;
   if (m->nparams > 1 || (m->nparams == 1 && m->rest_idx != 0)) return -1;
@@ -14216,19 +14219,14 @@ static void emit_obj_struct_values_dispatch(Compiler *c, Buf *b) {
 static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
   MethodLookup ml_mi = { .def_class = defc ? *defc : -1 };
   /* (the implied to_a a splat makes, asked at its node; a dispatcher of the whole program asks with no site) */
-  int mi = host >= 0 ? cplan_implied_target(c, host, op, cid, "to_a", CIT_TABLE, &ml_mi)
-                     : call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
-  if (defc) *defc = ml_mi.def_class;
-  if (mi < 0) {
-    /* `alias to_a entries`: the method the alias names */
-    int start = cid;
-    const char *tn = comp_resolve_alias_at(c, cid, "to_a", &start);
-    if (!is_to_a_name(tn)) {
-      MethodLookup ml_tn = { .def_class = defc ? *defc : -1 };
-      mi = call_target(c, -1, start, tn, CT_METHODS | CT_SHARED, &ml_tn);
-      if (defc) *defc = ml_tn.def_class;
-    }
+  int mi = -1;
+  if (host >= 0) mi = cplan_implied_target(c, host, op, cid, "to_a", CIT_TABLE, &ml_mi);
+  else {
+    mtab_enter(c);   /* (the dispatcher's arm for every class: it serves a value at run time, no call's question) */
+    mi = call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
+    mtab_leave(c);
   }
+  if (defc) *defc = ml_mi.def_class;
   { int pfi = mi >= 0 ? scope_proc_form_of(c, mi) : -1; if (pfi >= 0) mi = pfi; }   /* the emitted clone (#3399) */
   char tail[64];
   if (mi >= 0 && obj_to_a_call_tail(&c->scopes[mi], tail, sizeof tail) && scope_has_callable_symbol(c, mi)) return mi;
@@ -14236,7 +14234,10 @@ static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
      answering its members here turned that NameError into an array. */
   if (cid >= 0 && cid < c->nclasses && c->classes[cid].is_data) return -1;
   MethodLookup ml_ea = { .def_class = defc ? *defc : -1 };
+  /* (the compiler's own synthesized helper: it names no method of the program's, no call's question) */
+  mtab_enter(c);
   mi = call_target(c, -1, cid, "__enum_to_a", CT_METHODS | CT_SHARED, &ml_ea);
+  mtab_leave(c);
   if (defc) *defc = ml_ea.def_class;
   if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return mi;
   return -1;
@@ -14260,7 +14261,10 @@ static int obj_to_a_reader(Compiler *c, int cid) {
    V is the boxed receiver. 0 when the class has none to call. */
 int obj_each_elems_text(Compiler *c, int cid, const char *v, char *out, size_t cap) {
   MethodLookup ml_mi = { .def_class = -1 };
+  /* (the compiler's own synthesized helper, asked for every class a boxed receiver may be: no call's question) */
+  mtab_enter(c);
   int mi = call_target(c, -1, cid, "__enum_to_a", CT_METHODS | CT_SHARED, &ml_mi), defc = ml_mi.def_class;
+  mtab_leave(c);
   if (mi < 0 || defc < 0 || c->scopes[mi].nparams != 0 || !scope_has_callable_symbol(c, mi)) return 0;
   int vobj = comp_ty_value_obj(c, ty_object(defc));
   char callx[256];
@@ -14827,7 +14831,7 @@ static void emit_kconv_bridge(Compiler *c, Buf *b) {
       }
       /* one with no #to_f at all is rb_to_float's TypeError, which is also
          Numeric#coerce's beside a Float (a division by it) */
-      else if (comp_method_in_chain(c, i, "to_f", NULL) < 0) {
+      else if (cplan_implied_target(c, -1, -1, i, "to_f", CIT_TABLE, NULL) < 0) {
         if (rows++ == 0) buf_printf(b, "    case %d: switch (which) {\n", i);
         const char *rn = class_ruby_name(c, i);
         buf_printf(b, "      case 4: sp_raise_cls(\"TypeError\", \"can't convert %s into Float\"); return 0;\n",
@@ -23667,7 +23671,10 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
 int array_user_inspect_mi(Compiler *c) {
   int ac = comp_core_class(c, CORE_ARRAY);
   if (ac < 0 || !share_builtin_overridden(c, "Array", "inspect")) return -1;
-  int mi = comp_method_in_chain(c, ac, "inspect", NULL);
+  /* (the one hook every `inspect` of an Array shares, registered once for the program: no call's question) */
+  mtab_enter(c);
+  int mi = call_target(c, -1, ac, "inspect", CT_METHODS | CT_SHARED, NULL);
+  mtab_leave(c);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
   if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;

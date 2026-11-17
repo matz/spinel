@@ -81,7 +81,6 @@ src/codegen.c:conv_bridge_callee
 src/codegen_call.c:root_reopen_defines
 src/compiler.c:mixin_answers_first
 src/compiler.c:toplevel_mod_method
-src/codegen_call_exception.c:emit_call_exception_arms
 src/compiler.c:comp_poly_arm_reader_any
 src/codegen.c:emit_user_coerce_dispatch
 src/codegen.c:emit_obj_succ_dispatch
@@ -92,6 +91,16 @@ src/codegen.c:sg_delegate_scope
 src/codegen.c:emit_method
 src/analyze_pass.c:sg_override_ret
 src/codegen.c:obj_each_elems_text
+src/analyze.c:oa_copy_name
+src/codegen_stmt.c:exc_message_boxed_call
+src/codegen.c:obj_to_json_method
+src/codegen.c:array_user_inspect_mi
+src/codegen_call_class.c:emit_refl_im_params
+src/analyze_util.c:class_value_bind_call_target
+src/call_plan.c:cplan_to_ary_entries
+src/analyze_pass.c:bs_object_to_ary
+src/codegen.c:emit_kconv_bridge
+src/codegen_call.c:emit_poly_enum_for
 src/analyze.c:an_phase_procs
 src/analyze_desugar.c:send_split_by_owner
 src/analyze_pass.c:bare_call_on_class

@@ -1293,14 +1293,18 @@ int poly_block_call_needs_dispatch(Compiler *c, int id) {
   return 0;
 }
 
-/* Whether a `&.` call has yet to pass through its nil guard. The guard re-enters the emission with g_sn_skip set on the node, so
-   this answers false on that second pass. */
+/* Whether a `&.` call has yet to pass through its nil guard (the guard on
+   its receiver, or on the chain's source at a lazy terminal:
+   an_lazy_sn_guard_src). The guard re-enters the emission with g_sn_skip set
+   on the node, so this answers false on that second pass. */
 int sn_guard_pending(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (g_sn_skip == id) return 0;
   if (!nt_safe_nav(nt, id)) return 0;
-  int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0) return 0;
+  int recv0 = nt_ref(nt, id, "receiver");
+  if (recv0 < 0) return 0;
+  int src = an_lazy_sn_guard_src(c, id);
+  int recv = src >= 0 ? src : recv0;
   Repr rr = repr_of(c, recv);
   if (rr.kind == RK_BOXED) return 1;
   /* every receiver holding a nil of its own C kind -- an Integer's or a
@@ -1312,11 +1316,10 @@ int sn_guard_pending(Compiler *c, int id) {
   TyKind rt = rr.as_ty;
   /* `v&.lazy&.map { }&.first(2)` is a pipeline the lazy emitters fuse from
      its terminal; standing a link of it down here left `lazy` with no
-     emitter of its own */
-  for (int k = id; k >= 0 && nt_kind(nt, k) == NK_CallNode; k = nt_ref(nt, k, "receiver")) {
-    const char *kn = nt_str(nt, k, "name");
-    if (kn && sp_streq(kn, "lazy")) return 0;
-  }
+     emitter of its own (the terminal itself waits for its guard, on the
+     chain's source) */
+  for (int k = id; src < 0 && k >= 0 && nt_kind(nt, k) == NK_CallNode; k = nt_ref(nt, k, "receiver"))
+    if (is_lazy_name(nt_str(nt, k, "name"))) return 0;
   if ((ty_is_object(rt) && rr.kind != RK_VOBJ) || rt == TY_STRING || rt == TY_STRBUF ||
       /* an Integer / Float receiver only when it can be nil (its oint form):
          `3&.fdiv(2)` has no guard and no nil to answer */
@@ -4434,31 +4437,23 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
 }
 static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
-  const char *tname = nt_str(nt, id, "name");
-  if (!tname) return 0;
   /* `first(n)` / `to_a` / `force` force the lazy chain; `take(n)` stays lazy in
      CRuby (returns another Lazy) so it is not a forcing terminal here. */
-  int is_first = sp_streq(tname, "first");
+  if (!an_lazy_terminal_fuses(nt, id)) return 0;
+  const char *tname = nt_str(nt, id, "name");
+  int is_first = is_lazy_first(tname);
   int is_toa = is_lazy_force(tname);
-  if (!is_first && !is_toa) return 0;
-  if (nt_ref(nt, id, "block") >= 0) return 0;
   int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0) return 0;
   /* the chain may be held in a variable (`p = src.lazy.select{}; p.first(n)`);
      resolve the alias to its lazy chain and fuse it inline (#2932) */
   recv = lazy_resolve_chain(c, recv);
 
-  int has_count = 0, count_node = -1;
-  {
+  /* bare `first` is first(1) unwrapped to the single element (#2994) */
+  int has_count = is_first, count_node = -1;
+  if (is_first) {
     int ar = nt_ref(nt, id, "arguments");
     int ac = 0; const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &ac) : NULL;
-    if (is_first) {
-      if (ac == 1) { has_count = 1; count_node = av[0]; }
-      /* bare `first` is first(1) unwrapped to the single element (#2994) */
-      else if (ac == 0) has_count = 1;
-      else return 0;
-    }
-    else if (ac != 0) return 0;
+    if (ac == 1) count_node = av[0];
   }
 
   /* arg/cnt/lim are used only by the blockless counter stages (take/drop):
@@ -12938,11 +12933,11 @@ int ctor_needs_self_defaults_argv(Compiler *c, int initm, const int *argv, int a
 /* Does any class have an attribute writer for `name` (`pos=` from
    `attr_accessor :pos`, a Struct member)? Writers are kept under the base
    name, which the arm's method and reader test does not ask. */
-int attr_writer_named(Compiler *c, int cls, const char *name) {
+int attr_writer_named(Compiler *c, int id, int cls, const char *name) {
   char base[256];
   if (!setter_base_name(name, base, sizeof base)) return 0;
   for (int k = 0; k < c->nclasses; k++)
-    if ((cls < 0 || k == cls) && comp_writer_in_chain(c, k, base, NULL)) return 1;
+    if ((cls < 0 || k == cls) && call_attr_target(c, id, k, base, CT_ATTR | CT_WRITER, NULL)) return 1;
   return 0;
 }
 
@@ -17608,7 +17603,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
                        c->classes[ty_object_class(rt)].is_struct &&
                        /* an eql? written in the Struct.new block answers
                           for itself, as a struct's own == does below */
-                       comp_method_in_chain(c, ty_object_class(rt), "eql?", NULL) < 0))))) {
+                       call_target(c, id, ty_object_class(rt), "eql?", 0, NULL) < 0))))) {
     /* Array#eql? is structural like == but class-strict per element
        (1 is not eql? to 1.0): box both sides through the strict poly
        comparator. Scalar eql? is handled by the per-type emitters. */
@@ -18712,6 +18707,22 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   else buf_printf(b, "%s; })", valtmp);
 }
 
+/* Is arg of call id an object whose class has no #coerce (the call plan's
+   answer, which inference asks too)? A number's arithmetic with it raises
+   TypeError. */
+static int num_arg_cannot_coerce(Compiler *c, int id, int arg) {
+  TyKind t = comp_ntype(c, arg);
+  return ty_is_object(t) && cplan_implied_target(c, id, arg, ty_object_class(t), "coerce", CIT_TABLE, NULL) < 0;
+}
+/* `recv <op> arg` raising CRuby's "<arg> can't be coerced into <into>" after
+   both operands ran, as an expression of the number's C type ctype */
+static void emit_coerce_type_error(Compiler *c, int recv, int arg, const char *into, const char *ctype, Buf *b) {
+  int ta = ++g_tmp;
+  buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
+  buf_printf(b, "); sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
+  buf_printf(b, "; sp_raise_cls(\"TypeError\", sp_sprintf(\"%%s can't be coerced into %s\", sp_cmperr_desc(_t%d))); (%s)0; })",
+             into, ta, ctype);
+}
 /* Float repeat counts use NUM2LONG, including its range errors. The Array
    offset converter's nonempty form also rejects nil rather than defaulting
    it to zero. Other counts retain their existing conversion path. */
@@ -18913,6 +18924,10 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s can't be coerced into Integer\"); (sp_int)0; })", cn9);
         return 1;
       }
+      /* an object of a class with no #coerce (the call plan's answer, as
+         inference asks it): named by its class, as CRuby's rb_num_coerce
+         names it */
+      if (num_arg_cannot_coerce(c, id, argv[0])) { emit_coerce_type_error(c, recv, argv[0], "Integer", "sp_int", b); return 1; }
     }
     /* the same coercion rule on the Float side, which had no guard at all:
        `1.5 + nil` evaluated to nil and `1.5 + "s"` emitted double + char *
@@ -18943,6 +18958,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s can't be coerced into Float\"); (sp_float)0; })", cn8);
         return 1;
       }
+      if (num_arg_cannot_coerce(c, id, argv[0])) { emit_coerce_type_error(c, recv, argv[0], "Float", "sp_float", b); return 1; }
     }
     if (rt == TY_STRING && sp_streq(name, "+")) {
       /* `str + <non-string>` is a TypeError in CRuby (no implicit conversion);
@@ -20980,7 +20996,7 @@ static int json_user_to_json_any(Compiler *c) {
   }
   return 0;
 }
-int json_to_json_is_builtin(Compiler *c, int recv) {
+int json_to_json_is_builtin(Compiler *c, int id, int recv) {
   Repr rr = repr_of(c, recv);
   TyKind rt = rr.as_ty;
   /* A BOXED receiver goes through the generator too. It used to be declined
@@ -21009,7 +21025,7 @@ int json_to_json_is_builtin(Compiler *c, int recv) {
      unresolved, where CRuby answers "#<struct S x=1>" (#4387). */
   if (ty_is_object(rt)) {
     int oc = ty_object_class(rt);
-    return oc >= 0 && comp_method_in_chain(c, oc, "to_json", NULL) < 0;
+    return oc >= 0 && call_target(c, id, oc, "to_json", 0, NULL) < 0;
   }
   const char *bn = ty_is_hash(rt) ? "Hash"
                  : ty_is_array(rt) ? "Array"
@@ -21019,7 +21035,7 @@ int json_to_json_is_builtin(Compiler *c, int recv) {
                  : rt == TY_SYMBOL ? "Symbol" : NULL;
   if (bn) {
     int bc = comp_builtin_class_named(c, bn);
-    if (bc >= 0 && comp_method_in_chain(c, bc, "to_json", NULL) >= 0) return 0;
+    if (bc >= 0 && call_target(c, id, bc, "to_json", 0, NULL) >= 0) return 0;
   }
   return 1;
 }
@@ -23709,8 +23725,6 @@ static void emit_vis_msg_boxed(int vis, const char *vnm, int tv, const char *arg
   else buf_printf(b, "_t%d; })", tm);
 }
 static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard);
-static void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
-static void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
 static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
 /* Does a reopened builtin class or module (`class Proc; def top`, `module
    Comparable; def top`) other than own (the closed method's) answer vnm?
@@ -24833,7 +24847,7 @@ static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
    its own prelude: its boxed value into temp t, rooted unless the box
    proves it holds no heap pointer (repr_box_holds_heap), for t > 0, else
    run for its effect */
-static void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
+void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
   Buf ap, ae; memset(&ap, 0, sizeof ap); memset(&ae, 0, sizeof ae);
   Buf *sv = g_pre; g_pre = &ap;
   if (t > 0) emit_boxed(c, op, &ae); else emit_expr(c, op, &ae);
@@ -24888,7 +24902,7 @@ static void emit_block_arg_operand(Compiler *c, int id, int fe, Buf *b) {
    hands on the method's own block (resolve_forwarded_block) runs nothing
    and is a Proc or nil already, and an inlined copy of the method binds no
    C variable for it, so it is left out. */
-static void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b) {
+void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b) {
   const NodeTable *nt = c->nt;
   int argc = 0; const int *argv = call_args(nt, m, &argc);
   for (int k = 0; k < argc; k++) emit_missing_operand(c, argv[k], staged ? t0 + k : 0, b);
@@ -25201,13 +25215,13 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
      inside a block that runs with another self (instance_eval, class_exec,
      define_method, a class builder's): there self is not the class. */
   if (recv < 0 && is_name_reader(name) && nt_ref(nt, id, "block") < 0 &&
-      class_name_reader_argc_raises(c, name, argc, argv)) {
+      class_name_reader_argc_raises(c, id, name, argc, argv)) {
     Scope *ms = comp_scope_of(c, id);
     if (ms && ms->is_cmethod && ms->class_id >= 0 && ms->def_node >= 0 &&
         call_target(c, id, ms->class_id, name, CT_CMETHOD, NULL) < 0 &&
         node_self_kept(c, ms->def_node, id, 0) == 1) {
       char am[96];
-      class_name_reader_arity_msg(c, name, argc, argv, am, sizeof am);
+      class_name_reader_arity_msg(c, id, name, argc, argv, am, sizeof am);
       buf_puts(b, "(");
       for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "), "); }
       buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\")", am);
@@ -25712,7 +25726,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           /* a Class value without a method of the name: Module#name, to_s
              and inspect take no argument, so CRuby raises ArgumentError */
           char cls_raise[256], am[96];
-          if (is_name_reader(nm) && class_name_reader_arity_msg(c, nm, argc, argv, am, sizeof am))
+          if (is_name_reader(nm) && class_name_reader_arity_msg(c, id, nm, argc, argv, am, sizeof am))
             snprintf(cls_raise, sizeof cls_raise, "(sp_raise_cls(\"ArgumentError\", \"%s\"), sp_box_nil())", am);
           else snprintf(cls_raise, sizeof cls_raise, "%s", raise);
           buf_printf(b, "%s) : %s; })", cls_raise,
@@ -31087,10 +31101,13 @@ static void refuse_string_copies(Compiler *c, int id) {
 void emit_poly_enum_for(Compiler *c, const char *val, Buf *b) {
   int t = ++g_tmp;
   buf_printf(b, "({ sp_RbVal _e%d = %s; (_e%d.tag == SP_TAG_OBJ && (0", t, val, t);
+  /* (the arm for every class a boxed value may be, and the compiler's own `__to_enum_each`: no call's question) */
+  mtab_enter(c);
   for (int k = 0; k < c->nclasses; k++)
-    if (c->classes[k].instantiated && comp_method_in_chain(c, k, "each", NULL) >= 0 &&
-        comp_method_in_chain(c, k, "__to_enum_each", NULL) < 0)
+    if (c->classes[k].instantiated && call_target(c, -1, k, "each", CT_METHODS | CT_SHARED, NULL) >= 0 &&
+        call_target(c, -1, k, "__to_enum_each", CT_METHODS | CT_SHARED, NULL) < 0)
       buf_printf(b, " || _e%d.cls_id == %d", t, k);
+  mtab_leave(c);
   buf_printf(b, ")) ? sp_Enumerator_new_from(_e%d) : sp_poly_enum_for_each(_e%d); })", t, t);
 }
 /* ENV's synthetic receiver is a snapshot taken by the call, after its
@@ -34373,7 +34390,8 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
     free(kb.p);
     buf_printf(b, "switch (_t%d.cls_id) {", tk);
     for (int k = 0; k < c->nclasses; k++)
-      if (class_value_bind_call_target(c, k, sym, NULL) >= 0) buf_printf(b, " case %d:", k);
+      if (class_value_bind_call_target(c, nt_ref(c->nt, id, "receiver"), k, sym, NULL) >= 0)
+        buf_printf(b, " case %d:", k);
     buf_printf(b, " break; default: sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%s' for %%s '%%s'\", "
                   "sp_class_is_module_fn && sp_class_is_module_fn(_t%d) ? \"module\" : \"class\", "
                   "sp_class_to_s(_t%d))); } ", sym, tk, tk);
@@ -34395,7 +34413,7 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
   else {
     buf_printf(b, "switch (_t%d.cls_id) {", tk);
     for (int k = 0; k < c->nclasses; k++) {
-      int tmi = class_value_bind_call_target(c, k, sym, NULL);
+      int tmi = class_value_bind_call_target(c, nt_ref(c->nt, id, "receiver"), k, sym, NULL);
       if (tmi < 0) continue;
       buf_printf(b, " case %d: { ", k);
       emit_bind_call_arm(c, id, tmi, argv, argc, to, tr, slot, b);

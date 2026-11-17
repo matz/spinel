@@ -1066,17 +1066,16 @@ int loop_never_completes(Compiler *c, int node) {
 /* Whether the program's own `kept` (Range or Array), Enumerator or
    Enumerable defines `name`: the kept value would then answer the
    program's method, not the Enumerator's. */
-static int kept_enum_reopen_defines(Compiler *c, int kept, const char *name) {
+static int kept_enum_reopen_defines(Compiler *c, int id, int kept, const char *name) {
   const int CLS[] = { kept, CORE_ENUMERATOR, CORE_ENUMERABLE, -1 };
   for (int i = 0; CLS[i] >= 0; i++) {
     int ci = comp_core_class(c, CLS[i]);
-    int dc = -1;
-    if (ci >= 0 && comp_method_in_chain(c, ci, name, &dc) >= 0 && dc == ci) return 1;
+    if (ci >= 0 && call_target(c, id, ci, name, CT_OWN, NULL) >= 0) return 1;
   }
   return 0;
 }
-static int range_enum_reopen_defines(Compiler *c, const char *name) {
-  return kept_enum_reopen_defines(c, CORE_RANGE, name);
+static int range_enum_reopen_defines(Compiler *c, int id, const char *name) {
+  return kept_enum_reopen_defines(c, id, CORE_RANGE, name);
 }
 /* The walks with a block, and the argless readers, whose answer over the
    members laid out ahead is the Enumerator's answer */
@@ -1108,7 +1107,7 @@ int an_int_step_range_chain(Compiler *c, int id) {
   const char *pn = nt_str(nt, p, "name");
   /* the `to_a` hop a desugar puts under an Enumerator's walk (enum_recv)
      is not a reader: the walk answers this receiver */
-  if (!pn || nt_str(nt, p, "enum_recv") || range_enum_reopen_defines(c, pn)) return 0;
+  if (!pn || nt_str(nt, p, "enum_recv") || range_enum_reopen_defines(c, p, pn)) return 0;
   /* a Bignum limit walks past the Integer word, which a Range of words
      cannot hold: the Enumerator walks it (a boxed one that is a Bignum at
      run time is read by sp_int_step_range) */
@@ -1129,7 +1128,7 @@ int an_int_step_range_chain(Compiler *c, int id) {
         nt_safe_nav(nt, g)) return 0;
     const char *gn = nt_str(nt, g, "name");
     int gblk = nt_ref(nt, g, "block");
-    if (!gn || range_enum_reopen_defines(c, gn)) return 0;
+    if (!gn || range_enum_reopen_defines(c, g, gn)) return 0;
     if ((sp_streq(gn, "with_index") || sp_streq(gn, "each_with_index") ||
          sp_streq(gn, "with_object") || sp_streq(gn, "each_with_object")) &&
         gblk >= 0 && nt_kind(nt, gblk) == NK_BlockNode) return 1;
@@ -1180,7 +1179,7 @@ int an_blockless_tuples_kept(Compiler *c, int id) {
   /* nor is a `to_a` a desugar puts under a walk (made_to_a): the walk
      reads the Enumerator through it and may answer its source */
   if (!pn || nt_str(nt, p, "enum_recv") || nt_int(nt, p, "made_to_a", 0) ||
-      kept_enum_reopen_defines(c, CORE_ARRAY, pn)) return 0;
+      kept_enum_reopen_defines(c, p, CORE_ARRAY, pn)) return 0;
   int pblk = nt_ref(nt, p, "block");
   int pac = 0; { int pa = nt_ref(nt, p, "arguments"); if (pa >= 0) nt_arr(nt, pa, "arguments", &pac); }
   int each = sp_streq(pn, "each"), ewi = sp_streq(pn, "each_with_index");
@@ -2332,9 +2331,9 @@ int range_enum_redispatch(Compiler *c, int id) {
 /* Does Enumerable's method chain hold a find_index the program wrote (an
    Enumerable reopen; the builtin definition carries node_bi)? That method
    then answers a Hash's or an Enumerator's find_index, block and all. */
-int an_enum_own_find_index(Compiler *c) {
+int an_enum_own_find_index(Compiler *c, int id) {
   int en = comp_core_class(c, CORE_ENUMERABLE);
-  int mi = en >= 0 ? comp_method_in_chain(c, en, "find_index", NULL) : -1;
+  int mi = en >= 0 ? call_target(c, id, en, "find_index", 0, NULL) : -1;
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }
@@ -2375,7 +2374,7 @@ int hash_enum_redispatch(Compiler *c, int id) {
      zip, tally, reverse_each ride the materialized redispatch, block or not
      (#2372) */
   /* (an Enumerable reopen's own find_index is the call's target) */
-  if (sp_streq(name, "find_index") && an_enum_own_find_index(c)) return 0;
+  if (is_find_index(name) && an_enum_own_find_index(c, id)) return 0;
   if (sp_streq(name, "find_index") || sp_streq(name, "uniq") ||
       sp_streq(name, "zip") || sp_streq(name, "tally") ||
       sp_streq(name, "reverse_each")) return 1;
@@ -6009,6 +6008,13 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
            never gets computed. */
         { *out = TY_POLY; return 1; }
       }
+      /* ...and an object with no #coerce cannot be coerced: CRuby raises
+         TypeError, which codegen raises as an expression of the number's
+         type, as for a String or nil operand below (#2471, #3645). Left
+         UNKNOWN, a ternary's other arm alone typed the ternary while the
+         operation emitted a box (`c ? 1 : 1 + obj` did not compile). */
+      else if (rt == TY_INT || rt == TY_BIGINT) { *out = TY_INT; return 1; }
+      else if (rt == TY_FLOAT) { *out = TY_FLOAT; return 1; }
     }
     /* a poly operand makes the +,-,*,/ result poly: codegen lowers these to
        sp_poly_<op>, which returns a (boxed) poly, so the static type must agree. */
@@ -6244,9 +6250,15 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
    passes host -1, the no-site ask, which keeps its read counted as the open
    node's. */
 int class_any_cmethod_eqq(Compiler *c, int host, int op, int ci) {
-  int mi = ci < 0 ? -1 : host < 0 ? call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL)
-         : op < 0 ? call_target(c, host, ci, "===", CT_CMETHOD, NULL)
-         : cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD | CIT_TABLE, NULL);
+  int mi = -1;
+  if (ci >= 0 && host < 0) {
+    mtab_enter(c);   /* (a survey of the program's classes, or the dispatcher's arm for each: no call's question) */
+    mi = call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL);
+    mtab_leave(c);
+  }
+  else if (ci >= 0)
+    mi = op < 0 ? call_target(c, host, ci, "===", CT_CMETHOD, NULL)
+                : cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD | CIT_TABLE, NULL);
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
       nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
   /* (a super in it reaches Module#===, which the call cannot run yet: the
@@ -6328,7 +6340,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
        dispatch below types the call. A class known only at run time may be
        one with such a method or one without: boxed, either answer. With
        arguments the builtin raises ArgumentError, so its slot stays a String. */
-    if (is_name_reader(name) && (argc == 0 || class_name_reader_argc_raises(c, name, argc, argv)) &&
+    if (is_name_reader(name) && (argc == 0 || class_name_reader_argc_raises(c, id, name, argc, argv)) &&
         class_recv_user_cmethod(c, id, recv, name) < 0) {
       int ncc = 0, other = 0;
       const PolyCand *pc = NULL;
@@ -8231,9 +8243,16 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
     }
   }
 
-  /* int_array.chunk_while/slice_when/chunk { |...| } .to_a -> a poly array (runs / pairs) */
+  /* int_array.chunk_while/slice_when/chunk { |...| } .to_a -> a poly array
+     (runs / pairs). Where the chunk call is itself typed as the array of
+     runs (an_chunk_family_to_a: the rule below for an Array or a Range, the
+     boxed receiver's arm), the `.to_a` on it answers from that array's own
+     builtin row, as codegen emits it; this rule answers only for the
+     receivers that call is not typed for (a Hash's chunk, an untyped Array
+     literal). */
   if (recv >= 0 && sp_streq(name, "to_a") &&
       nt_kind(nt, recv) == NK_CallNode &&
+      infer_type(c, recv) != TY_POLY_ARRAY &&
       nt_str(nt, recv, "name") &&
       (sp_streq(nt_str(nt, recv, "name"), "chunk_while") ||
        sp_streq(nt_str(nt, recv, "name"), "slice_when") ||
@@ -8265,9 +8284,12 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
     }
   }
 
-  /* chunk_while/slice_when/chunk { } standing on its own (no .to_a terminal,
-     which the arm above claims first): a first-class Enumerator over the
-     eagerly materialized runs */
+  /* chunk_while/slice_when/chunk { } standing on its own: a first-class
+     Enumerator over the eagerly materialized runs. Where a `.to_a` consumes
+     it (an_chunk_family_to_a), the array of runs, as for a boxed receiver:
+     the `.to_a` emits the two as one, but where a `&.` stands between them
+     (`v&.chunk_while { }&.to_a`) the guard emits the call alone, and the
+     two answers have to agree. */
   if (recv >= 0 && nt_ref(nt, id, "block") >= 0 &&
       (sp_streq(name, "chunk_while") || sp_streq(name, "slice_when") ||
        sp_streq(name, "chunk") ||
@@ -8276,7 +8298,8 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
     TyKind crt = infer_type(c, recv);
     if (crt == TY_POLY_ARRAY || crt == TY_INT_ARRAY || crt == TY_FLOAT_ARRAY || crt == TY_STR_ARRAY ||
         (crt == TY_RANGE && range_enum_redispatch(c, id))) {
-      if (!an_chunk_family_to_a(c, id)) { *out = TY_ENUMERATOR; return 1; }
+      *out = an_chunk_family_to_a(c, id) ? TY_POLY_ARRAY : TY_ENUMERATOR;
+      return 1;
     }
   }
   return 0;
@@ -8427,9 +8450,14 @@ static int infer_nil_scalar_call(Compiler *c, int id, const NodeTable *nt, const
 }
 
 static int infer_last_resort_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, TyKind rt, TyKind *out) {
-  /* safe navigation &. with unresolved type: return poly (receiver may be nil at runtime) */
+  /* safe navigation &. with unresolved type: return poly (receiver may be
+     nil at runtime). Not a link of a lazy chain whose fused terminal's
+     guard tests lazy's receiver (`v&.lazy&.map { }&.first`,
+     an_lazy_link_guarded_above): the chain has no value of its own, so the
+     link is typed as the chain without `&.` is. Made poly,
+     `v&.lazy&.map { }` was an eager map over a boxed value. */
   {
-    if (recv >= 0 && nt_safe_nav(nt, id)) { *out = TY_POLY; return 1; }
+    if (recv >= 0 && nt_safe_nav(nt, id) && !an_lazy_link_guarded_above(c, id)) { *out = TY_POLY; return 1; }
   }
 
   /* Builtin class reopening: look up user-defined methods on Array/Numeric/Object
@@ -11770,7 +11798,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* a clamp of the program's own receives the Range itself, not its bounds */
     if (clamp_arg) {
       TyKind ct = infer_type(c, nt_ref(nt, clamp_arg - 1, "receiver"));
-      if (ty_is_object(ct) && comp_method_in_chain(c, ty_object_class(ct), "clamp", NULL) >= 0) clamp_arg = 0;
+      if (ty_is_object(ct) && call_target(c, clamp_arg - 1, ty_object_class(ct), "clamp", 0, NULL) >= 0) clamp_arg = 0;
     }
     if (!clamp_arg && (lt == TY_TIME || ht == TY_TIME) &&
         (lo < 0 || lt == TY_TIME || lt == TY_NIL) && (hi < 0 || ht == TY_TIME || ht == TY_NIL))
@@ -12371,7 +12399,7 @@ TyKind infer_uncached(Compiler *c, int id) {
         if (!ty_is_hash(sh) && sh != TY_POLY && sh != TY_UNKNOWN && sh != TY_VOID &&
             !(ty_is_object(sh) && (ty_object_class(sh) < 0 ||
               cplan_implied_target(c, els[k], src, ty_object_class(sh), "to_hash", CIT_TABLE, NULL) >= 0 ||
-              comp_method_in_chain(c, ty_object_class(sh), "method_missing", NULL) >= 0))) {
+              cplan_implied_target(c, els[k], src, ty_object_class(sh), "method_missing", CIT_TABLE, NULL) >= 0))) {
           empty_spread = 1;
           continue;
         }

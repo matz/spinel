@@ -5268,6 +5268,11 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) test/opassign_poly_slot_class_facts.rb -c --no-line-map -o "$$tmp/opc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: -c)"; ok=0; }; \
 	grep -q "sp_Vec__plus(sp_Vec \*self, sp_Vec \* lv_other)" "$$tmp/opc.c" || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: a boxed sum of no Vec boxed Vec#+ other)"; ok=0; }; \
 	grep -A3 "struct sp_Vec_s {" "$$tmp/opc.c" | grep -q "sp_float iv_x;" || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: Vec @x boxed)"; ok=0; }; \
+	$(SPINEL) test/inject_empty_seed_typed.rb -c --no-line-map -o "$$tmp/ies.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (inject_empty_seed_typed: -c)"; ok=0; }; \
+	for m in evens squares kept nested small; do \
+	  grep -q "^static inline sp_IntArray \\* sp_$$m(" "$$tmp/ies.c" || { echo "infer-test: FAIL (inject_empty_seed_typed: an empty [] seed the block pushes Integers into left $$m boxed)"; ok=0; }; \
+	done; \
+	grep -q "^static inline sp_FloatArray \\* sp_odd_halves(" "$$tmp/ies.c" || { echo "infer-test: FAIL (inject_empty_seed_typed: an empty [] seed the block pushes Floats into left odd_halves boxed)"; ok=0; }; \
 	$(SPINEL) test/obj_array_nested_block.rb -c --no-line-map -o "$$tmp/onb.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_nested_block: -c)"; ok=0; }; \
 	for v in arrows pts; do \
 	  grep -q "sp_PtrArray \\* iv_$$v;" "$$tmp/onb.c" || { echo "infer-test: FAIL (obj_array_nested_block: a block in a walk's block left @$$v boxed)"; ok=0; }; \

@@ -247,7 +247,7 @@ void emit_class_id_is(Compiler *c, int cname, const char *expr, Buf *b);
 int emit_reopen_arm_test(Compiler *c, int kmi, const char *name, const char *cls, const char *raise, Buf *b);
 /* The ArgumentError text of Module#name / to_s / inspect given these
    arguments; 0 when there are none or only the run time knows the count */
-int class_name_reader_arity_msg(Compiler *c, const char *nm, int argc, const int *argv, char *am, size_t n);
+int class_name_reader_arity_msg(Compiler *c, int id, const char *nm, int argc, const int *argv, char *am, size_t n);
 extern int g_cls_value_recv;
 int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw);
 /* A boxed Integer or Float at a call no target answers: the arms that
@@ -306,7 +306,7 @@ void emit_time_in_zone(Compiler *c, int ts, int zone, Buf *b);
 void emit_utime_arg_ns(Compiler *c, int node, const char *sv, const char *nv, Buf *b);
 int emit_clock_id(Compiler *c, int node, Buf *b);
 void emit_math_arg(Compiler *c, int node, Buf *out);
-int json_to_json_is_builtin(Compiler *c, int recv);
+int json_to_json_is_builtin(Compiler *c, int id, int recv);
 int node_is_stringio(Compiler *c, int node);
 void emit_exc_exception(Compiler *c, int recv, int arg, Buf *b);
 int emit_name_error_new_kw(Compiler *c, const char *cn, int argc, const int *argv, int recv_v, Buf *b);
@@ -326,7 +326,7 @@ void emit_kconv_call(Compiler *c, int id, const int *av, int ac, int raise, Buf 
 void emit_pre_format_args(Compiler *c, const int *av, int ac, int ta);
 void emit_fiber_storage_key(Compiler *c, int key, Buf *b);
 int poly_binop_recv_temp(Compiler *c, int recv, int arg, Buf *b, int *stmt_expr);
-int attr_writer_named(Compiler *c, int cls, const char *name);
+int attr_writer_named(Compiler *c, int id, int cls, const char *name);
 int boxed_desc_control_arity(const char *name, int argc);
 int boxed_printf_list_ok(Compiler *c, const int *argv, int argc);
 int boxed_write_takes_list(Compiler *c, int id, const int *argv, int argc);

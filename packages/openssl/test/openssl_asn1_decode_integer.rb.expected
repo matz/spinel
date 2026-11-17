@@ -1,0 +1,75 @@
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"-8000000000000000000000000000000000000000000000000000000000000007"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"-010000000000000001"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"-81"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"-80"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"-01"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"0"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"01"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"7F"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"80"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"FF"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"0100"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"8000000000000000"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"010000000000000001"
+[2, :UNIVERSAL, true]
+OpenSSL::ASN1::Integer
+OpenSSL::BN
+true
+"8000000000000000000000000000000000000000000000000000000000000007"
+[2, :UNIVERSAL, true]
+OpenSSL::BN
+8000000000000000000000000000000000000000000000000000000000000007
+5
+true
+true

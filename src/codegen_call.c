@@ -26755,6 +26755,15 @@ void emit_index_recv_root(Compiler *c, TyKind irt, int ir, int idx, int iv, int 
   }
 }
 
+/* Is the receiver of an element store held by program state alone (an ivar, a global, a class variable or a call's
+   answer), with an index or a value that may reassign that state? Then the receiver is read first into a rooted temp:
+   read inside the store's argument list it is unrooted while they run, and C leaves its order to the compiler. */
+int store_recv_dropped_by(Compiler *c, int recv, int idx, int val) {
+  NodeKind rk = nt_kind(c->nt, recv);
+  return (rk == NK_InstanceVariableReadNode || rk == NK_GlobalVariableReadNode || rk == NK_ClassVariableReadNode ||
+          rk == NK_CallNode) &&
+         (subtree_may_reassign_state(c, idx) || subtree_may_reassign_state(c, val));
+}
 /* A value of a kind whose builtin methods run no Ruby code of the
    program's: numbers, Strings, Symbols, their ranges and typed Arrays. A
    Proc, an object, a boxed value or a container of them may call back into

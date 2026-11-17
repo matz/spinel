@@ -26090,10 +26090,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       /* the receiver read first, as the typed Arrays' store holds it: in
          the prelude, ahead of any statement the index or the value puts
          there (a block's, a rescue's) */
-      NodeKind prk = nt_kind(nt, recv);
-      int phold = (prk == NK_InstanceVariableReadNode || prk == NK_GlobalVariableReadNode ||
-                   prk == NK_ClassVariableReadNode) &&
-                  (subtree_may_reassign_state(c, argv[0]) || subtree_may_reassign_state(c, argv[1]));
+      int phold = store_recv_dropped_by(c, recv, argv[0], argv[1]);
       int pth = phold ? ++g_tmp : 0;
       if (phold) {
         emit_indent(g_pre, g_indent);
@@ -26334,10 +26331,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
        `@data[swap(i)] = v`'s swap ahead of @data. The hold goes to the
        prelude, ahead of any statement the index or the value puts there (a
        block's, a rescue's). */
-    NodeKind rk = nt_kind(nt, recv);
-    int hold = (rk == NK_InstanceVariableReadNode || rk == NK_GlobalVariableReadNode ||
-                rk == NK_ClassVariableReadNode) &&
-               (subtree_may_reassign_state(c, argv[0]) || subtree_may_reassign_state(c, argv[1]));
+    int hold = store_recv_dropped_by(c, recv, argv[0], argv[1]);
     int th = hold ? ++g_tmp : 0;
     if (hold) {
       emit_indent(g_pre, g_indent);

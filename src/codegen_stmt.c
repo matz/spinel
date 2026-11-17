@@ -22156,34 +22156,26 @@ static int emit_poly_attr_write_missing(Compiler *c, Buf *b, int indent, int k, 
                                         const AttrOpWrite *w) {
   TyKind ivt = c->classes[pdcls].ivar_types[ivx];
   int ivs = ivt == TY_STRING || ivt == TY_STRBUF;
+  /* a String slot takes the String `+` alone, which raises for a nil slot as `s + t` does */
+  if (ivs ? !(w->op && is_plus_op(w->op)) : !(ivt != TY_UNKNOWN && ivt != TY_VOID &&
+      (ivt == TY_POLY || ivt == TY_INT || ivt == TY_FLOAT || emit_boxed_text_form(c, ivt) > 0))) return 0;
+  /* the slot boxed as a read of it boxes (its nil bit too), then the operator on boxed operands, both
+     of them evaluated before it applies: a nil or wrong-typed slot raises CRuby's error after the
+     operand has run */
+  if (!w->cpf && !w->bitop) return 0;
   char slot[320];
   snprintf(slot, sizeof slot, "_o->iv_%s", iv_c(rn));
-  Buf sb; memset(&sb, 0, sizeof sb);
-  if (ivs) {
-    if (!w->op || !is_plus_op(w->op)) return 0;
-    buf_printf(&sb, "(void)sp_str_concat(SP_STR_B(%s), ", slot);
-    emit_poly_unboxed(c, w->val, w->rhst, "sp_poly_to_s(", &sb);
-    buf_puts(&sb, "); ");
-  }
-  else if (ivt != TY_UNKNOWN && ivt != TY_VOID && (ivt == TY_POLY || ivt == TY_INT || ivt == TY_FLOAT || emit_boxed_text_form(c, ivt) > 0)) {
-    /* the slot boxed as a read of it boxes (its nil bit too), then the operator on boxed operands, both
-       of them evaluated before it applies: a nil or wrong-typed slot raises CRuby's error after the
-       operand has run */
-    if (!w->cpf && !w->bitop) return 0;
-    Buf bx; memset(&bx, 0, sizeof bx);
-    emit_member_boxed_text(c, &c->classes[pdcls], ivx, "_o->", slot, &bx);
-    if (w->cpf) buf_printf(&sb, "(void)%s(%s, ", w->cpf, bx.p ? bx.p : "sp_box_nil()");
-    else buf_printf(&sb, "(void)sp_poly_bitop(%s, ", bx.p ? bx.p : "sp_box_nil()");
-    emit_boxed(c, w->val, &sb);
-    if (w->cpf) buf_puts(&sb, "); ");
-    else buf_printf(&sb, ", %d); ", w->op[0] == '&' ? 0 : w->op[0] == '|' ? 1 : 2);
-    free(bx.p);
-  }
-  else return 0;
+  Buf bx, sb; memset(&bx, 0, sizeof bx); memset(&sb, 0, sizeof sb);
+  emit_member_boxed_text(c, &c->classes[pdcls], ivx, "_o->", slot, &bx);
+  if (w->cpf) buf_printf(&sb, "(void)%s(%s, ", w->cpf, bx.p ? bx.p : "sp_box_nil()");
+  else buf_printf(&sb, "(void)sp_poly_bitop(%s, ", bx.p ? bx.p : "sp_box_nil()");
+  emit_boxed(c, w->val, &sb);
+  if (w->cpf) buf_puts(&sb, "); ");
+  else buf_printf(&sb, ", %d); ", w->op[0] == '&' ? 0 : w->op[0] == '|' ? 1 : 2);
   emit_indent(b, indent);
   buf_printf(b, "case %d: { sp_%s *_o = (sp_%s *)_t%d.v.p; %ssp_raise_poly_nomethod(\"%s=\", _t%d); break; }\n",
              k, c->classes[pdcls].c_name, c->classes[pdcls].c_name, w->trecv, sb.p ? sb.p : "", w->attr, w->trecv);
-  free(sb.p);
+  free(bx.p); free(sb.p);
   return 1;
 }
 /* A class the switch cannot place: it raises for the writer without the read and the operator, as the

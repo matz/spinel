@@ -93,3 +93,7 @@ rhs
 [:nm, :x, NilClass]
 [:nm, :x, NilClass]
 23
+[:ok, "ab"]
+[:nm, :str=, RS]
+[:nm, :+, NilClass]
+[:nm, :str, NilClass]

@@ -176,3 +176,22 @@ run_xor([RB.new(nil), RB.new(false)])
   end
 end
 p $bn
+
+# a String slot of a reader-only class that holds nil: `nil + "b"` raises for `+` before the
+# writer's error, as `s + t` does; a String slot that holds a String reaches the writer's
+class RS
+  attr_reader :str
+  def initialize(v) = @str = v
+end
+class WS
+  attr_accessor :str
+  def initialize(v) = @str = v
+end
+[WS.new("a"), RS.new("a"), RS.new(nil), nil].each do |r|
+  begin
+    r.str += "b"
+    p [:ok, r.str]
+  rescue NoMethodError => e
+    p [:nm, e.name, e.receiver.class]
+  end
+end

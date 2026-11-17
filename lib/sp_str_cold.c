@@ -72,13 +72,14 @@ else if(c<0x20||c==0x7f){/* other control bytes render as \uNNNN (UTF-8 default,
 /* A byte that is not part of a valid UTF-8 sequence escapes as \xNN, the way
    CRuby renders it: `"a\x80b".inspect` is "a\x80b". Passing the raw byte
    through made the inspect output itself invalid UTF-8, so a terminal drew
-   U+FFFD -- inspect lost the one thing it was being asked about. A BINARY
-   string escapes every high byte, as the control-byte arm above already does
-   for it. A valid sequence is copied through unchanged. */
+   U+FFFD -- inspect lost the one thing it was being asked about. An overlong
+   form, a surrogate half and a code point past U+10FFFF are no character
+   either: each of their bytes escapes ("\xED\xB0\x80", not "\uDC00"). A
+   BINARY string escapes every high byte, as the control-byte arm above
+   already does for it. A valid sequence is copied through unchanged. */
 else if(c>=0x80){
-  int extra=(c&0xE0)==0xC0?1:(c&0xF0)==0xE0?2:(c&0xF8)==0xF0?3:-1;
-  int ok=extra>0&&!sp_str_is_binary(s)&&i+(size_t)extra<sl;
-  for(int k=1;ok&&k<=extra;k++)if(((unsigned char)s[i+(size_t)k]&0xC0)!=0x80)ok=0;
+  int extra=sp_str_is_binary(s)?0:sp_utf8_valid_len((const unsigned char*)s+i,sl-i)-1;
+  int ok=extra>0;
   if(!ok){snprintf(r+o,5,"\\x%02X",c);o+=4;}
   else{
     /* a valid character that does not print is spelled by its codepoint,
@@ -248,22 +249,19 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
     /* CRuby dumps a NUL as \x00, never \0: the short form would run into a
        following digit (`"\0" "1"` dumps as "\x001", not "\01") */
     else if(c==0){out[oi++]='\\';out[oi++]='x';out[oi++]='0';out[oi++]='0';}
-    else if(c<0x20){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);}
+    /* DEL is a control byte too: \x7F, as CRuby writes it */
+    else if(c<0x20||c==0x7f){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);}
     /* #dump promises a pure-ASCII, re-evaluable form: a non-ASCII character
        is written as its \uXXXX escape (#3558) */
     /* a BINARY String's high bytes are bytes, each \xXX */
     else if(c>=0x80&&bin){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);}
     else if(c>=0x80){
-      unsigned cp=0;int extra=0;
-      if((c&0xE0)==0xC0){cp=c&0x1Fu;extra=1;}
-      else if((c&0xF0)==0xE0){cp=c&0x0Fu;extra=2;}
-      else if((c&0xF8)==0xF0){cp=c&0x07u;extra=3;}
-      else{oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}
-      if(i+(size_t)extra>=n){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}
-      /* a lead byte without its continuation bytes is no character: the
-         byte alone (\xD8\x00 is no U+0600) */
-      {int ok=1;for(int k=1;k<=extra;k++)if(((unsigned char)s[i+(size_t)k]&0xC0u)!=0x80u)ok=0;
-       if(!ok){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}}
+      /* a byte that starts no valid character is the byte alone: a lead
+         byte without its continuation bytes (\xD8\x00 is no U+0600), an
+         overlong form, a surrogate half, a code point past U+10FFFF */
+      int extra=sp_utf8_valid_len((const unsigned char*)s+i,n-i)-1;
+      if(extra<1){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}
+      unsigned cp=c&(extra==1?0x1Fu:extra==2?0x0Fu:0x07u);
       for(int k=0;k<extra;k++)cp=(cp<<6)|((unsigned char)s[++i]&0x3Fu);
       if(cp>0xFFFFu)oi+=(size_t)sprintf(out+oi,"\\u{%X}",cp);
       else oi+=(size_t)sprintf(out+oi,"\\u%04X",cp);

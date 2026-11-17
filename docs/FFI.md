@@ -55,11 +55,13 @@ candidates, as the ffi gem takes them:
 Each name is a compile-time string, folded as `ffi_cflags` folds its
 argument: a literal, adjacent literals, `String#+`, `__dir__`, or
 `File.expand_path` of those, so a library beside the source is
-`ffi_lib File.expand_path("lib/libfoo.so", __dir__)`. A name that does not
-fold (one read from a variable or `ENV`) is a compile error; under
+`ffi_lib File.expand_path("lib/libfoo.so", __dir__)`; with no base,
+`File.expand_path` is relative to the working directory of the compile,
+where the link runs. A name that does not fold (one read from a variable or
+`ENV`) is a compile error, every candidate of an Array included; under
 `require "ffi"` a module that `extend`s `FFI::Library` takes such a name at
 run time instead. The ffi gem's constants (`FFI::Library::LIBC`) name
-what every program links already.
+what every program links already, alone or as an Array's only candidates.
 
 ### `ffi_cflags "..."`
 

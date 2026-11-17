@@ -980,6 +980,10 @@ spinel: test/reject/extend_alias_of_own_class_method.rb:7: K.copied: alias in th
 spinel: test/reject/extend_alias_over_earlier_copy.rb:11: K.copied: alias in the extended module M of a class method K defines itself is not supported; see docs/limitations.md
 == test/reject/extend_alias_over_earlier_copy.rb [promote] rc=1
 spinel: test/reject/extend_alias_over_earlier_copy.rb:11: K.copied: alias in the extended module M of a class method K defines itself is not supported; see docs/limitations.md
+== test/reject/ffi_lib_runtime_candidate.rb [default] rc=1
+spinel: test/reject/ffi_lib_runtime_candidate.rb:8: `ffi_lib` expects a compile-time string (a literal, adjacent literals, String#+, __dir__, or File.expand_path of those), or an Array of them
+== test/reject/ffi_lib_runtime_candidate.rb [promote] rc=1
+spinel: test/reject/ffi_lib_runtime_candidate.rb:8: `ffi_lib` expects a compile-time string (a literal, adjacent literals, String#+, __dir__, or File.expand_path of those), or an Array of them
 == test/reject/ffi_lib_runtime_name.rb [default] rc=1
 spinel: test/reject/ffi_lib_runtime_name.rb:6: `ffi_lib` expects a compile-time string (a literal, adjacent literals, String#+, __dir__, or File.expand_path of those), or an Array of them
 == test/reject/ffi_lib_runtime_name.rb [promote] rc=1

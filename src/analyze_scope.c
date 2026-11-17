@@ -5892,9 +5892,19 @@ static char *ffi_fold_str(Compiler *c, int nid) {
       if (!rel) return NULL;
       char *base = NULL;
       if (an == 2) { base = ffi_fold_str(c, av[1]); if (!base) { free(rel); return NULL; } }
-      char joined[1024];
-      if (rel[0] == '/' || !base) snprintf(joined, sizeof joined, "%s", rel);
-      else snprintf(joined, sizeof joined, "%s/%s", base, rel);
+      /* A relative path with no base is relative to the working directory,
+         as CRuby's File.expand_path has it: here the compile's, where the
+         link that takes it runs. Kept relative, `ffi_lib
+         File.expand_path("libfoo.so")` linked as `-l:libfoo.so`, searched on
+         the library path instead of read from that directory. `~` and a
+         drive-letter path stay as written. */
+      char joined[1024], cwd[1024];
+      int abs = rel[0] == '/' || rel[0] == '\\' || rel[0] == '~' ||
+                (((rel[0] | 0x20) >= 'a' && (rel[0] | 0x20) <= 'z') && rel[1] == ':');
+      if (abs) snprintf(joined, sizeof joined, "%s", rel);
+      else if (base) snprintf(joined, sizeof joined, "%s/%s", base, rel);
+      else if (getcwd(cwd, sizeof cwd)) snprintf(joined, sizeof joined, "%s/%s", cwd, rel);
+      else snprintf(joined, sizeof joined, "%s", rel);
       free(rel); free(base);
       ffi_path_collapse(joined, sizeof joined);
       return strdup(joined);
@@ -6291,18 +6301,25 @@ void register_ffi_decls(Compiler *c) {
         const char *libname = NULL;
         char flag[1024];
         if (nt_kind(nt, args[0]) == NK_ArrayNode) {
+          /* every candidate folds, the ones after the library found here
+             too, so whether a name is refused does not depend on what this
+             machine has installed; an Array of constants only adds nothing,
+             as one constant does */
           int en = 0; const int *els = nt_arr(nt, args[0], "elements", &en);
           char *first = NULL;
-          for (int e = 0; e < en && !libname; e++) {
-            if (nt_kind_is_constant(nt_kind(nt, els[e]))) continue;
+          int nconst = 0;
+          for (int e = 0; e < en; e++) {
+            if (nt_kind_is_constant(nt_kind(nt, els[e]))) { nconst++; continue; }
             char *nm = ffi_fold_str(c, els[e]);
             if (!nm) ffi_decl_error(c, s, lib_fold_msg);
-            if (ffi_lib_flag(nm, flag, sizeof flag, 1)) libname = flag;
+            if (!libname && ffi_lib_flag(nm, flag, sizeof flag, 1)) libname = flag;
             if (!first) first = nm;
             else free(nm);
           }
           if (!libname && first && ffi_lib_flag(first, flag, sizeof flag, 0)) libname = flag;
+          int consts_only = !first && nconst > 0;
           free(first);
+          if (consts_only) continue;
           if (!libname) ffi_decl_error(c, s, "`ffi_lib` with an Array needs String library names");
         }
         else if (nt_kind_is_constant(nt_kind(nt, args[0]))) continue;

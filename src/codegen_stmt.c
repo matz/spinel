@@ -27239,9 +27239,9 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
     const char *k = (rt == TY_POLY_ARRAY) ? "Poly" : array_kind(rt);
     if (!k) { unsupported(c, id, "index and/or write (array kind)"); return; }
     emit_indent(b, indent);
-    buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b);
-    if (g_pre && subtree_has_side_effect(c, v)) buf_printf(b, "; SP_GC_ROOT(_t%d)", ta);
-    buf_printf(b, "; sp_int _t%d = ", tb); emit_int_expr(c, argv[0], b);
+    buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b); buf_puts(b, "; ");
+    if (g_pre) { int ops[2] = { argv[0], v }; emit_index_recv_root(c, rt, recv, ops, 2, ta, b); }
+    buf_printf(b, "sp_int _t%d = ", tb); emit_int_expr(c, argv[0], b);
     buf_puts(b, "; ");
     /* int slots are nil only out of bounds (0 is truthy); ||= writes when
        nil, &&= when present. Compare with == / != to avoid `!x != NIL`. */

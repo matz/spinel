@@ -20606,11 +20606,11 @@ static void class_value_name_once(Buf *b, Buf *seen, const char *nm) {
   buf_puts(b, "\""); emit_c_escaped(b, nm); buf_puts(b, "\", ");
 }
 typedef struct { Compiler *c; Buf *b, *seen; } ClassValueNames;
-/* one class-side name of the call plan's list, left out where it is the compiler's own */
+/* one class-side name of the call plan's list that a respond_to? answers: a public one (the helper has no include_all),
+   and not the compiler's own */
 static void class_value_name(void *ud, const char *name, int vis) {
   const ClassValueNames *o = ud;
-  (void)vis;
-  if (!name_is_synth_method(o->c, name)) class_value_name_once(o->b, o->seen, name);
+  if (vis == SP_VIS_PUBLIC && !name_is_synth_method(o->c, name)) class_value_name_once(o->b, o->seen, name);
 }
 void class_value_responds_runtime(int tv, Buf *b) {
   buf_printf(b, " || sp_class_value_responds(_t%d, _n%d)", tv, tv);

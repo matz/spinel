@@ -5956,6 +5956,7 @@ static void bare_native_func_calls(Compiler *c) {
     int cr = nt_new_node(nt, "ConstantReadNode");
     if (cr < 0) continue;
     nt_node_set_str(nt, cr, "name", mod);
+    nt_node_set_int(nt, cr, "made_class", sc->class_id + 1);
     comp_grow_node_arrays(c);
     c->nscope[cr] = c->nscope[id];
     nt_node_set_ref(nt, id, "receiver", cr);

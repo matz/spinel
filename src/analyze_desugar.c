@@ -32714,7 +32714,7 @@ int comp_ffi_library_module(const NodeTable *nt, const char *mn) {
   return mn && ffi_library_module(nt, mn, nt->count);
 }
 
-static int native_twin_def(NodeTable *nt, int like, const char *mn, const char *fname, int np);
+static int native_twin_def(NodeTable *nt, int like, const char *mn, int mci, const char *fname, int np);
 int desugar_ffi_library_functions(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -32746,7 +32746,7 @@ int desugar_ffi_library_functions(Compiler *c) {
         int arr = -1, np = 0;
         ffi_attach_direct(nt, at[i].at, NULL, NULL, &arr, NULL);
         (void)nt_arr(nt, arr, "elements", &np);
-        int d = native_twin_def(nt, at[i].at, mn, at[i].name, np);
+        int d = native_twin_def(nt, at[i].at, mn, elab_header_class(c, m, NULL, NULL), at[i].name, np);
         if (d >= 0) out[no++] = d;
       }
       else if (at[i].kind == 0) {
@@ -32789,7 +32789,7 @@ int desugar_ffi_library_functions(Compiler *c) {
    on the constant that reaches this def calls C directly instead
    (cplan_resolve_call), keeping the binding's own argument handling
    (JSON.parse's symbolize_names). */
-static int native_twin_def(NodeTable *nt, int like, const char *mn, const char *fname, int np) {
+static int native_twin_def(NodeTable *nt, int like, const char *mn, int mci, const char *fname, int np) {
   int body = -1;
   int def = self_def_start(nt, like, &body);
   int call = fwd_new_node_like(nt, like, "CallNode");
@@ -32803,6 +32803,7 @@ static int native_twin_def(NodeTable *nt, int like, const char *mn, const char *
   nt_node_set_arr(nt, args, "arguments", el, np);
   free(el);
   nt_node_set_str(nt, recv, "name", mn);
+  if (mci >= 0) nt_node_set_int(nt, recv, "made_class", mci + 1);   /* (the module the def is in) */
   nt_node_set_ref(nt, call, "receiver", recv);
   nt_node_set_str(nt, call, "name", fname);
   /* the call into C, never back into this def (a twin gets a record of its
@@ -32841,7 +32842,7 @@ int desugar_native_func_defs(Compiler *c) {
       if (dup) continue;
       int np = 0;
       (void)nt_arr(nt, av[1], "elements", &np);
-      int def = native_twin_def(nt, s, mn, fname, np);
+      int def = native_twin_def(nt, s, mn, elab_header_class(c, m, NULL, NULL), fname, np);
       if (def < 0) continue;
       if (!out) out = malloc(sizeof(int) * (size_t)(n + 1));
       if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

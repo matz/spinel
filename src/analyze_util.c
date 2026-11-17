@@ -523,6 +523,10 @@ int env_value_recv(Compiler *c, int recv, TyKind t) {
 int const_node_class_index(Compiler *c, int id) {
   /* a constant a pass made to name a builtin class (cvb_split's arms) */
   if (id >= 0 && id < c->nt->count && nt_int(c->nt, id, "builtin_ref", 0)) return comp_builtin_class_named(c, nt_str(c->nt, id, "name"));
+  /* a constant a pass made to name a class it held (made_class: the index,
+     +1), as the receiver of a call it gave a module's own receiverless one */
+  { long long mc = id >= 0 && id < c->nt->count ? nt_int(c->nt, id, "made_class", 0) : 0;
+    if (mc > 0 && mc <= c->nclasses) return (int)mc - 1; }
   int core = -1;
   int r = const_node_record_class(c, id, &core);
   if (r >= 0) return r;

@@ -18442,7 +18442,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
 
   if (rt == TY_POLY_ARRAY) {
     buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, recv, b); buf_puts(b, "; ");
-    emit_index_recv_root(c, rt, recv, splice_ops, 4, ta, b);
+    emit_index_recv_root(c, rt, recv, splice_ops, 4, ta, 1, b);
     if (tam >= 0) {
       /* object RHS with to_ary: splice the coercion, yield the object */
       Buf call; memset(&call, 0, sizeof call);
@@ -18485,7 +18485,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   int poly_so = 0;   /* the boxed-RHS branch tracks its array source in _soN */
   int voint = 0;     /* the value is the oint _t<ts>, answered as the consumer takes it */
   buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b); buf_puts(b, "; ");
-  emit_index_recv_root(c, rt, recv, splice_ops, 4, ta, b);
+  emit_index_recv_root(c, rt, recv, splice_ops, 4, ta, 1, b);
   buf_printf(b, "%s_src%d; sp_int _srcn%d; ", srcty, ta, ta);
 
   if (rhs_empty) {
@@ -26753,6 +26753,7 @@ int subtree_may_reassign_state(Compiler *c, int id) {
    read inside the store's argument list it is unrooted while they run, and C leaves its order to the compiler. */
 int store_recv_dropped_by(Compiler *c, int recv, int idx, int val) {
   NodeKind rk = nt_kind(c->nt, recv);
+  if (repr_of(c, recv).head_held) return 0;   /* (a temp the binder holds, rooted where a later operand allocates) */
   return (rk == NK_InstanceVariableReadNode || rk == NK_GlobalVariableReadNode || rk == NK_ClassVariableReadNode ||
           rk == NK_CallNode) &&
          (subtree_may_reassign_state(c, idx) || subtree_may_reassign_state(c, val));
@@ -26760,10 +26761,17 @@ int store_recv_dropped_by(Compiler *c, int recv, int idx, int val) {
 /* The receiver temp of an element write (`a[i] ||= v`, `a[i] = v`, `a[i, n] = v`) is the container's only holder once
    an operand (the index, the length, the value) drops it (an assignment of the variable that held it, a delete), and a
    receiver that allocates has no holder at all: root it when either can, so the operands' allocations and the store
-   reach a live container. */
-void emit_index_recv_root(Compiler *c, TyKind irt, int ir, const int *ops, int nops, int ta, Buf *b) {
-  int drops = subtree_may_allocate(c, ir);
-  for (int i = 0; i < nops && !drops; i++) drops = ops[i] >= 0 && subtree_has_side_effect(c, ops[i]);
+   reach a live container. With held_ok, a receiver already held (a temp the binder holds, rooted where a later operand allocates), or a read of
+   self, a local, an ivar, a global or a class variable that no operand rebinds (read_rebound_by: a write of it, a proc
+   that assigns its cell, code that may assign state), is held by its variable or its object and takes no root of its
+   own. */
+void emit_index_recv_root(Compiler *c, TyKind irt, int ir, const int *ops, int nops, int ta, int held_ok, Buf *b) {
+  NodeKind rk = nt_kind(c->nt, ir);
+  int held = held_ok && (repr_of(c, ir).head_held || rk == NK_SelfNode || rk == NK_LocalVariableReadNode ||
+                         rk == NK_InstanceVariableReadNode || rk == NK_GlobalVariableReadNode || rk == NK_ClassVariableReadNode);
+  for (int i = 0; i < nops && held; i++) held = ops[i] < 0 || !read_rebound_by(c, ir, ops[i]);
+  int drops = !held && subtree_may_allocate(c, ir);
+  for (int i = 0; i < nops && !drops && !held; i++) drops = ops[i] >= 0 && subtree_has_side_effect(c, ops[i]);
   if (drops) { emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " "); }
 }
 

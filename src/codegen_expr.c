@@ -6576,7 +6576,7 @@ static void emit_forwarded_block_value(Compiler *c, int id, Buf *b) {
    bytes face reaches the stored String, as the Hash's form below does */
 static void emit_index_or_str_array(Compiler *c, int ir, int idx, int iv, TyKind irt, int is_or, int ta, int tb, int tc, Buf *b) {
   buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_expr(c, ir, b); buf_puts(b, "; ");
-  { int ops[2] = { idx, iv }; emit_index_recv_root(c, irt, ir, ops, 2, ta, b); }
+  { int ops[2] = { idx, iv }; emit_index_recv_root(c, irt, ir, ops, 2, ta, 1, b); }
   buf_printf(b, "sp_int _t%d = ", tb); emit_int_expr(c, idx, b);
   buf_printf(b, "; sp_String *_t%d = sp_StrArray_get_e(_t%d, _t%d);", tc, ta, tb);
   buf_printf(b, " if (%s_t%d) { ", is_or ? "!" : "", tc);
@@ -6851,7 +6851,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     int ta2 = ++g_tmp, tb2 = ++g_tmp, tc2 = ++g_tmp;
     if (irr.elem == TY_POLY) {
       buf_printf(b, "({ sp_PolyArray *_t%d = ", ta2); emit_expr(c, ir, b); buf_puts(b, "; ");
-      { int ops[2] = { iav[0], iv }; emit_index_recv_root(c, irt, ir, ops, 2, ta2, b); }
+      { int ops[2] = { iav[0], iv }; emit_index_recv_root(c, irt, ir, ops, 2, ta2, 1, b); }
       buf_printf(b, "sp_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
       buf_printf(b, "; sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);", tc2, ta2, tb2);
       buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
@@ -6865,7 +6865,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       const char *k = irr.elem == TY_INT ? "Int" : "Float";
       TyKind et = irr.elem;
       buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta2); emit_expr(c, ir, b); buf_puts(b, "; ");
-      { int ops[2] = { iav[0], iv }; emit_index_recv_root(c, irt, ir, ops, 2, ta2, b); }
+      { int ops[2] = { iav[0], iv }; emit_index_recv_root(c, irt, ir, ops, 2, ta2, 1, b); }
       buf_printf(b, "sp_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
       buf_printf(b, "; %s _t%d = sp_%sArray_oget(_t%d, _t%d);", oint_ctype(et), tc2, k, ta2, tb2);
       buf_printf(b, " if (%s_t%d.nil) { ", is_or2 ? "" : "!", tc2);
@@ -6880,7 +6880,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       if (!hn) { unsupported(c, id, "index-or/and-write (expr, unknown hash)"); return; }
       /* (the key, when it can allocate, is rooted below, as the statement form does) */
       buf_printf(b, "({ %s _t%d = ", c_type_name(irt), ta2); emit_expr(c, ir, b); buf_puts(b, "; ");
-      { int ops[2] = { iav[0], iv }; emit_index_recv_root(c, irt, ir, ops, 2, ta2, b); }
+      { int ops[2] = { iav[0], iv }; emit_index_recv_root(c, irt, ir, ops, 2, ta2, 0, b); }
       /* a key that may be nil or of another class: held boxed, the read
          misses on it and the store converts it (hash_opw_okey) */
       int ok = hash_opw_okey(c, iav[0], irt);

@@ -22378,7 +22378,9 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
          value to a sentinel matching no case so it lands in the default raise
          rather than dereferencing v.p through a wrong cast. */
       buf_puts(b, "switch ("); emit_obj_switch_key(c, trecv, b); buf_puts(b, ") {\n");
-      int any = 0;
+      /* any: an arm stores. wmiss: a class has the reader and no writer.
+         unplaced: a class has the writer but its store cannot be placed */
+      int any = 0, wmiss = 0, unplaced = 0;
       for (int k = 0; k < c->nclasses; k++) {
         if (!c->classes[k].instantiated) continue;
         MethodLookup pml = { .def_class = -1 };
@@ -22389,11 +22391,8 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         if (!call_attr_target(c, id, k, attr, CT_ATTR, &pml)) continue;
         if (!call_attr_target(c, id, k, attr, CT_ATTR | CT_WRITER, NULL)) {
           /* a class with the reader and no writer raises NoMethodError for
-             `attr=` as CRuby does: an arm, so a switch of only these is
-             emitted. The two cases below have the writer and only cannot
-             place the store: they do not count, and a switch of only those
-             stays refused. */
-          any = 1;
+             `attr=` as CRuby does */
+          wmiss = 1;
           emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
           continue;
         }
@@ -22402,6 +22401,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", rn);
         int ivx = comp_ivar_index(&c->classes[pdcls], ivn);
         if (ivx < 0) {   /* no resolvable backing slot: don't guess */
+          unplaced = 1;
           emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
           continue;
         }
@@ -22414,6 +22414,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         /* (one representation: a handle slot is a String slot too) */
         int ivs = ivt == TY_STRING || (ivt == TY_STRBUF);
         if ((ivs && !(op && sp_streq(op, "+"))) || (ivt == TY_POLY && !cpf && !bitop)) {
+          unplaced = 1;
           emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
           continue;
         }
@@ -22477,7 +22478,10 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       buf_printf(b, "default: sp_raise_poly_nomethod(\"%s\", _t%d);\n", attr, trecv);
       emit_indent(b, indent);
       buf_puts(b, "}\n");
-      if (any) return 1;
+      /* a switch whose only arms raise for a missing writer is CRuby's
+         answer; one where a class has the writer but no store to place
+         stays refused, unless another arm stores */
+      if (any || (wmiss && !unplaced)) return 1;
     }
     unsupported(c, id, "call operator write (unsupported receiver/attr)");
   }

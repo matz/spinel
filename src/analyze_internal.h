@@ -653,6 +653,9 @@ TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int write);
 TyKind infer_int_pow_type(Compiler *c, int id, int recv, int exp);
 int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out);
+/* The Array kind an empty `[]` seed of reduce/inject call id takes from its block's pushes
+   (analyze_infer_recv.c): an Integer or Float Array, TY_UNKNOWN while not typed, else TY_POLY_ARRAY */
+TyKind reduce_empty_seed_kind(Compiler *c, int id);
 int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out);
 /* bop_find for the call `id`, recording the row under --plan-check */
 struct BuiltinOp;

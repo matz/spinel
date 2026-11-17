@@ -706,6 +706,191 @@ TyKind infer_op_assign_type(Compiler *c, TyKind lhs, int write) {
   return ty_promote_numeric(lhs, rhs);
 }
 
+/* The nodes reduce_empty_seed_kind finds answering the block's value: a
+   few, so a short list rather than a mark per node of the table */
+typedef struct { int ids[32]; int n; } ResTail;
+static int res_tail_has(const ResTail *t, int id) {
+  for (int i = 0; i < t->n; i++) if (t->ids[i] == id) return 1;
+  return 0;
+}
+static int res_tail_add(ResTail *t, int id) {
+  if (t->n >= (int)(sizeof t->ids / sizeof t->ids[0])) return 0;
+  t->ids[t->n++] = id;
+  return 1;
+}
+/* reduce_empty_seed_kind's walk: does n (the block's value, or a
+   statement's last expression) answer the accumulator p0 -- p0 itself, a
+   push into it, or a branch whose arms all do? The reads of p0 and the
+   pushes found there are listed in `tail`. */
+static int res_tail_is_acc(Compiler *c, int n, const char *p0, ResTail *tail, int cap) {
+  const NodeTable *nt = c->nt;
+  if (n < 0 || n >= cap) return 0;
+  switch (nt_kind(nt, n)) {
+  case NK_LocalVariableReadNode:
+    if (!sp_streq(nt_str(nt, n, "name"), p0)) return 0;
+    return res_tail_add(tail, n);
+  case NK_CallNode: {
+    int r = nt_ref(nt, n, "receiver");
+    const char *nm = nt_str(nt, n, "name");
+    if (!nm || !is_push_alias(nm) || r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode ||
+        !sp_streq(nt_str(nt, r, "name"), p0)) return 0;
+    return res_tail_add(tail, n);
+  }
+  case NK_StatementsNode: case NK_ParenthesesNode: {
+    int sn = 0;
+    int body = nt_kind(nt, n) == NK_ParenthesesNode ? nt_ref(nt, n, "body") : n;
+    if (body < 0) return 0;
+    if (nt_kind(nt, body) != NK_StatementsNode) return res_tail_is_acc(c, body, p0, tail, cap);
+    const int *sv = nt_arr(nt, body, "body", &sn);
+    return sn > 0 && res_tail_is_acc(c, sv[sn - 1], p0, tail, cap);
+  }
+  case NK_IfNode: {
+    int st = nt_ref(nt, n, "statements"), el = nt_ref(nt, n, "subsequent");
+    return st >= 0 && el >= 0 && res_tail_is_acc(c, st, p0, tail, cap) && res_tail_is_acc(c, el, p0, tail, cap);
+  }
+  case NK_UnlessNode: {
+    int st = nt_ref(nt, n, "statements"), el = nt_ref(nt, n, "else_clause");
+    return st >= 0 && el >= 0 && res_tail_is_acc(c, st, p0, tail, cap) && res_tail_is_acc(c, el, p0, tail, cap);
+  }
+  case NK_ElseNode: {
+    int st = nt_ref(nt, n, "statements");
+    return st >= 0 && res_tail_is_acc(c, st, p0, tail, cap);
+  }
+  default:
+    return 0;
+  }
+}
+/* Is the value of node n, the last statement of a statement list, thrown
+   away: the list sits (through branches and parentheses) in a statement
+   before the last of another list, a loop's body, or the block of an
+   iterator that ignores its block's value? The top block's own value is
+   the tail res_tail_is_acc reads, and anything else hands the value on. */
+static int res_value_dropped(Compiler *c, int n, int top) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  for (int cur = n, up = par[n]; up >= 0; cur = up, up = par[up]) {
+    NodeKind uk = nt_kind(nt, up);
+    if (uk == NK_StatementsNode) {
+      int sn = 0; const int *sv = nt_arr(nt, up, "body", &sn);
+      if (sn > 0 && sv[sn - 1] != cur) return 1;
+      continue;
+    }
+    if (uk == NK_IfNode || uk == NK_UnlessNode) {
+      /* (the predicate's value is a test, read and dropped) */
+      if (nt_ref(nt, up, "predicate") == cur) return 1;
+      continue;
+    }
+    if (uk == NK_ElseNode || uk == NK_ParenthesesNode) continue;
+    if (uk == NK_WhileNode || uk == NK_UntilNode) return 1;
+    if (uk == NK_BlockNode) {
+      if (up == top) return 0;
+      int call = par[up];
+      const char *cn = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+      static const char *const drops[] = { "each", "reverse_each", "each_with_index", "times", "upto",
+                                           "downto", "step", "each_char", "each_byte", "each_line", NULL };
+      if (!cn) return 0;
+      for (int q = 0; drops[q]; q++) if (sp_streq(cn, drops[q])) return 1;
+      return 0;
+    }
+    return 0;
+  }
+  return 0;
+}
+/* reduce_empty_seed_kind's walk over the block body: every use of p0 is a
+   push into it whose value is thrown away or answered (tail), a read whose
+   value the block answers (tail), or the receiver of a read that keeps no
+   reference (size, first, sum, ...); nothing assigns p0 and nothing leaves
+   the block early. The pushed values' kinds join into *elem (TY_VOID for
+   none yet, TY_UNKNOWN once one is not typed). 0 for any other use. */
+static int res_body_ok(Compiler *c, int n, int parent, int top, const char *p0, const ResTail *tail, int cap, TyKind *elem) {
+  const NodeTable *nt = c->nt;
+  if (n < 0 || n >= cap) return 1;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_NextNode || k == NK_BreakNode || k == NK_RedoNode || k == NK_RetryNode || k == NK_ReturnNode)
+    return 0;
+  if ((k == NK_LocalVariableWriteNode || k == NK_LocalVariableOperatorWriteNode ||
+       k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode ||
+       k == NK_LocalVariableTargetNode) && sp_streq(nt_str(nt, n, "name"), p0))
+    return 0;
+  /* a nested block or lambda that names its own p0 hides the accumulator:
+     left to the boxed fold */
+  if ((k == NK_BlockNode || k == NK_LambdaNode) && n != parent) {
+    for (int j = 0; j < 8; j++) {
+      const char *bn = block_param_name(c, n, j);
+      if (!bn) break;
+      if (sp_streq(bn, p0)) return 0;
+    }
+  }
+  if (k == NK_LocalVariableReadNode && sp_streq(nt_str(nt, n, "name"), p0)) {
+    if (res_tail_has(tail, n)) return 1;
+    if (parent < 0 || nt_kind(nt, parent) != NK_CallNode || nt_ref(nt, parent, "receiver") != n) return 0;
+    const char *pn = nt_str(nt, parent, "name");
+    int pa = nt_ref(nt, parent, "arguments"), pac = 0;
+    const int *pav = pa >= 0 ? nt_arr(nt, pa, "arguments", &pac) : NULL;
+    if (!pn || nt_ref(nt, parent, "block") >= 0) return 0;
+    if (is_push_alias(pn)) return pac == 1 && nt_kind(nt, pav[0]) != NK_SplatNode;
+    static const char *const reads[] = { "size", "length", "empty?", "any?", "include?", "first",
+                                         "last", "sum", "count", "[]", NULL };
+    for (int q = 0; reads[q]; q++) if (sp_streq(pn, reads[q])) return 1;
+    return 0;
+  }
+  if (k == NK_CallNode && is_push_alias(nt_str(nt, n, "name"))) {
+    int r = nt_ref(nt, n, "receiver");
+    if (r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, r, "name"), p0)) {
+      /* the push answers the accumulator: thrown away (a statement before
+         the last) or the block's value */
+      if (!res_tail_has(tail, n) &&
+          (parent < 0 || nt_kind(nt, parent) != NK_StatementsNode || !res_value_dropped(c, n, top))) return 0;
+      int a = nt_ref(nt, n, "arguments"), ac = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+      if (ac == 1) {
+        TyKind t = infer_type(c, av[0]);
+        if (*elem == TY_VOID) *elem = t;
+        else if (*elem != t) *elem = *elem == TY_UNKNOWN || t == TY_UNKNOWN ? TY_UNKNOWN : TY_POLY;
+      }
+    }
+  }
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) if (!res_body_ok(c, nt_ref_at(nt, n, i), n, top, p0, tail, cap, elem)) return 0;
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *a = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (!res_body_ok(c, a[j], n, top, p0, tail, cap, elem)) return 0;
+  }
+  return 1;
+}
+/* reduce / inject over an empty `[]` seed with a block that only pushes into
+   its accumulator, reads it, and answers it (`inject([]) { |acc, i| acc << i
+   if i.odd?; acc }`): the Array kind those pushes give the accumulator --
+   an Integer or a Float Array when every pushed value is one -- as an
+   each_with_object([]) memo takes it. TY_UNKNOWN while a pushed value is
+   not typed yet, and TY_POLY_ARRAY (the boxed fold, as before) for any other
+   seed or block. */
+TyKind reduce_empty_seed_kind(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  /* under promote the pushed Integers are boxed once the fixpoint is done
+     (as an Integer Range#sum seed is, infer_range_call), so the accumulator
+     stays the boxed Array, and the seed takes no part in the fixpoint */
+  if (g_promote_mode) return TY_POLY_ARRAY;
+  int args = nt_ref(nt, id, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  int blk = nt_ref(nt, id, "block");
+  if (argc != 1 || nt_kind(nt, argv[0]) != NK_ArrayNode || blk < 0 || nt_kind(nt, blk) != NK_BlockNode)
+    return TY_POLY_ARRAY;
+  int en = 0; nt_arr(nt, argv[0], "elements", &en);
+  if (en) return TY_POLY_ARRAY;
+  const char *p0 = block_param_name(c, blk, 0);
+  if (!p0 || block_param_is_multi(c, blk, 0)) return TY_POLY_ARRAY;
+  int body = nt_ref(nt, blk, "body");
+  int cap = nt->count;
+  ResTail tail = { {0}, 0 };
+  TyKind elem = TY_VOID;
+  int ok = body >= 0 && res_tail_is_acc(c, body, p0, &tail, cap) && res_body_ok(c, body, blk, blk, p0, &tail, cap, &elem);
+  if (!ok || elem == TY_VOID) return TY_POLY_ARRAY;
+  if (elem == TY_UNKNOWN) return TY_UNKNOWN;
+  return elem == TY_INT ? TY_INT_ARRAY : elem == TY_FLOAT ? TY_FLOAT_ARRAY : TY_POLY_ARRAY;
+}
+
 /* Array receivers: the array face of infer_call */
 /* What a reduce or an inject on Array kind rt answers (infer_array_call's
    arm), its own function so a narrowed Array of one class, whose element
@@ -772,7 +957,12 @@ int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out) {
          block decides the element mix (`reduce([]) { |a, x| a << x }`). */
       if (it == TY_UNKNOWN && a0k == NK_ArrayNode) {
         int sen = 0; nt_arr(nt, argv[0], "elements", &sen);
-        if (sen == 0) it = TY_POLY_ARRAY;
+        /* ... unless the block only pushes Integers or Floats into it
+           (reduce_empty_seed_kind); not typed yet, the call waits */
+        if (sen == 0) {
+          it = reduce_empty_seed_kind(c, id);
+          if (it == TY_UNKNOWN) { *out = TY_UNKNOWN; return 1; }
+        }
       }
       /* An empty `{}` seed accumulates a general boxed-key/value hash, like
          each_with_object({}); the block decides the key/value mix (#2958). */

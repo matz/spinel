@@ -1827,7 +1827,7 @@ test-corpus-summary: test-corpus-results
 # one whose at_exit hooks run when the host exits, not as its init returns,
 # and one whose entry calls a Struct's `new` the load redefined, and an
 # --ext-entry list longer than 2048 bytes exports every method it names.
-ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC_LIB) $(BUNDLED_NATIVE_PIC_OBJS) $(SPINEL_TIMEOUT)
+ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC_LIB) $(BUNDLED_NATIVE_PIC_OBJS) $(SPINEL_TIMEOUT) $(PLATFORM_OBJ)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map \
 	  --ext-init Init_ext_kernel \
@@ -1842,7 +1842,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  grep -q "toplevel ran" "$$tmp/k.c" || { echo "ext-test: FAIL (toplevel missing from init)"; ok=0; }; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
-	  if $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/host.c "$$tmp/k.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/host" 2>"$$tmp/cc.err"; then \
+	  if $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/host.c "$$tmp/k.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/host" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/host" > "$$tmp/out" 2>&1; rc=$$?; \
 	    cmp -s "$$tmp/out" test/ext/expected && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (host output mismatch, or status $$rc)"; diff -u test/ext/expected "$$tmp/out" || true; ok=0; }; \
@@ -1852,7 +1852,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/threads.rb -c --no-line-map --ext-init Init_ext_threads \
 	      --ext-entry ExtThreads.par,ExtThreads.bg -o "$$tmp/t.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (threads emission)"; ok=0; \
-	  elif $(CC) -O1 -w $(MT_DEF) -Ilib -I"$$tmp" test/ext/threads_host.c "$$tmp/t.c" $(SP_RT_MT_LIB) $(LDFLAGS) -lm -lpthread -o "$$tmp/thost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) $(MT_DEF) -Ilib -I"$$tmp" test/ext/threads_host.c "$$tmp/t.c" $(SP_RT_MT_LIB) $(LDFLAGS) -lm -lpthread -o "$$tmp/thost" 2>"$$tmp/cc.err"; then \
 	    $(TIMEOUT10) "$$tmp/thost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '60\n150\n1\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (threads host output mismatch, or it hung, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1862,7 +1862,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/at_exit.rb -c --no-line-map --ext-init Init_ext_at_exit \
 	      --ext-entry ExtAtExit.go -o "$$tmp/a.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (at_exit emission)"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/at_exit_host.c "$$tmp/a.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/ahost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/at_exit_host.c "$$tmp/a.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/ahost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/ahost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf 'init returned\nentry 41\n42\nmain returns\nentry hook 41\ntoplevel hook\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 3 ] || \
 	      { echo "ext-test: FAIL (at_exit hooks not run at host exit, or status $$rc is not the host's 3)"; cat "$$tmp/out"; ok=0; }; \
@@ -1872,9 +1872,9 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/pic.rb -c --no-line-map --ext-init Init_ext_pic \
 	      --ext-entry ExtPic.triple,ExtPic.label,ExtPic.must_pos -o "$$tmp/p.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (pic emission)"; ok=0; \
-	  elif ! $(CC) -fPIC -shared -O1 -w -Ilib -I"$$tmp" "$$tmp/p.c" $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libpic.so" 2>"$$tmp/cc.err"; then \
+	  elif ! $(CC) -fPIC -shared -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" "$$tmp/p.c" $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libpic.so" 2>"$$tmp/cc.err"; then \
 	    echo "ext-test: FAIL (the library did not link as a shared object over $(SP_RT_PIC_LIB))"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
-	  elif $(CC) -O1 -w test/ext/pic_host.c $(LDFLAGS) -ldl -o "$$tmp/phost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) test/ext/pic_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/phost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/phost" "$$tmp/libpic.so" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '42\np0,p1,p2\np0,p1,p2,p3,p4\nraised ArgumentError: not positive: -3\nok 7\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (the shared object's host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1884,9 +1884,9 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/threads.rb -c --no-line-map --ext-init Init_ext_threads \
 	      --ext-entry ExtThreads.par,ExtThreads.bg -o "$$tmp/tp.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (threads emission for a shared object)"; ok=0; \
-	  elif ! $(CC) -DSP_THREADS -fPIC -shared -O1 -w -Ilib -I"$$tmp" "$$tmp/tp.c" $(SP_RT_MT_PIC_LIB) $(LDFLAGS) -lm -lpthread -o "$$tmp/libtp.so" 2>"$$tmp/cc.err"; then \
+	  elif ! $(CC) -DSP_THREADS -fPIC -shared -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" "$$tmp/tp.c" $(SP_RT_MT_PIC_LIB) $(LDFLAGS) -lm -lpthread -o "$$tmp/libtp.so" 2>"$$tmp/cc.err"; then \
 	    echo "ext-test: FAIL (the threaded library did not link as a shared object over $(SP_RT_MT_PIC_LIB))"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
-	  elif $(CC) -O1 -w test/ext/threads_pic_host.c $(LDFLAGS) -ldl -o "$$tmp/tphost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) test/ext/threads_pic_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/tphost" 2>"$$tmp/cc.err"; then \
 	    $(TIMEOUT10) "$$tmp/tphost" "$$tmp/libtp.so" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '60\n150\n1\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (the threaded shared object's host output mismatch, or it hung, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1899,9 +1899,9 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  else \
 	    objs=$$(sed -n 's|^/\* SPINEL_LINK_OBJ: \(.*\)\.o \*/$$|\1_pic.o|p' "$$tmp/q.c"); \
 	    if [ -z "$$objs" ]; then echo "ext-test: FAIL (pic_pkg's C names no package object)"; ok=0; \
-	    elif ! $(CC) -fPIC -shared -O1 -w -Ilib -I"$$tmp" "$$tmp/q.c" $$objs $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libq.so" 2>"$$tmp/cc.err"; then \
+	    elif ! $(CC) -fPIC -shared -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" "$$tmp/q.c" $$objs $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libq.so" 2>"$$tmp/cc.err"; then \
 	      echo "ext-test: FAIL (a library requiring a package did not link as a shared object over $$objs)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
-	    elif $(CC) -O1 -w test/ext/pic_pkg_host.c $(LDFLAGS) -ldl -o "$$tmp/qhost" 2>"$$tmp/cc.err"; then \
+	    elif $(CC) -O1 -w $(PLATFORM_FLAGS) test/ext/pic_pkg_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/qhost" 2>"$$tmp/cc.err"; then \
 	      "$$tmp/qhost" "$$tmp/libq.so" > "$$tmp/out" 2>&1; rc=$$?; \
 	      printf '{"n":7,"list":[1,2,3]}\n16\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	        { echo "ext-test: FAIL (the package's shared object host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1912,7 +1912,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/late_new.rb -c --no-line-map --ext-init Init_ext_late_new \
 	      --ext-entry ExtLateNew.e -o "$$tmp/l.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (late_new emission)"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/late_new_host.c "$$tmp/l.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/lhost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/late_new_host.c "$$tmp/l.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/lhost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/lhost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '2\n3\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (late_new host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1926,7 +1926,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    echo "ext-test: FAIL (a signature naming Array[Point] was not applied)"; grep "not applied" "$$tmp/g.out" | head -2; ok=0; \
 	  elif ! grep -Fq 'sp_ExtGeo_s_length(sp_PtrArray * lv_pts)' "$$tmp/g.h" || ! grep -Fq 'sp_ExtGeo_s_pts(sp_int lv_n)' "$$tmp/g.h"; then \
 	    echo "ext-test: FAIL (an entry's Array[Point] parameter is no sp_PtrArray, or its Integer no sp_int)"; grep 'sp_ExtGeo_s_' "$$tmp/g.h"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/rbs_object_array_host.c "$$tmp/g.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/ghost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/rbs_object_array_host.c "$$tmp/g.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/ghost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/ghost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '15.0\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (rbs_object_array host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1937,7 +1937,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	      --ext-entry ExtFieldElems.grid,ExtFieldElems.sum_x,ExtFieldElems.box,ExtFieldElems.count_done \
 	      -o "$$tmp/f.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (field_elems emission)"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/field_elems_host.c "$$tmp/f.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/fhost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/field_elems_host.c "$$tmp/f.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/fhost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/fhost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '4\n2\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (field_elems host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1947,7 +1947,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/methods.rb -c --no-line-map --ext-init Init_ext_methods \
 	      --ext-entry ExtMethods.make,ExtMethods.loud --ext-class all -o "$$tmp/m.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class emission)"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mhost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/methods_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mhost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/mhost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    cmp -s "$$tmp/out" test/ext/expected_methods && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods "$$tmp/out" || true; ok=0; }; \
 	  else echo "ext-test: FAIL (--ext-class host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
@@ -1956,7 +1956,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/methods_sub.rb -c --no-line-map --ext-init Init_ext_methods_sub \
 	      --ext-entry ExtSub.make --ext-class ExtSub::Sub -o "$$tmp/m.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class subclass emission)"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_sub_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mshost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/methods_sub_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mshost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/mshost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    cmp -s "$$tmp/out" test/ext/expected_methods_sub && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class subclass host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_sub "$$tmp/out" || true; ok=0; }; \
 	  else echo "ext-test: FAIL (--ext-class subclass host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
@@ -1965,7 +1965,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/classes.rb -c --no-line-map --ext-init Init_ext_classes \
 	      --ext-entry ExtClasses.new_list,ExtClasses.add,ExtClasses.pt,ExtClasses.oops -o "$$tmp/c.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (class-typed entries emission)"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/classes_host.c "$$tmp/c.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/chost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/classes_host.c "$$tmp/c.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/chost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/chost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '2\n3 6\nOops bad\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (class-typed entries host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1975,7 +1975,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/methods_opt.rb -c --no-line-map --ext-init Init_ext_methods_opt \
 	      --ext-entry ExtOpt.make --ext-class ExtOpt::Rel -o "$$tmp/m.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class optional parameter emission)"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_opt_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mohost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/methods_opt_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mohost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/mohost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    cmp -s "$$tmp/out" test/ext/expected_methods_opt && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class optional parameter host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_opt "$$tmp/out" || true; ok=0; }; \
 	  else echo "ext-test: FAIL (--ext-class optional parameter host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
@@ -1984,7 +1984,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  if ! $(SPINEL) test/ext/methods_blk.rb -c --no-line-map --ext-init Init_ext_methods_blk \
 	      --ext-entry ExtBlk.make --ext-class ExtBlk::Rel -o "$$tmp/b.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class block emission)"; ok=0; \
-	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_blk_host.c "$$tmp/b.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/bhost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/methods_blk_host.c "$$tmp/b.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/bhost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/bhost" > "$$tmp/out" 2>&1; rc=$$?; \
 	    cmp -s "$$tmp/out" test/ext/expected_methods_blk && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class block host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_blk "$$tmp/out" || true; ok=0; }; \
 	    SPINEL_GC_STRESS=1 "$$tmp/bhost" > "$$tmp/out" 2>&1; rc=$$?; \

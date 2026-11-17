@@ -39,12 +39,22 @@ Three rules follow from it:
 | membership in a family of names                                                                                   | the name predicates                                | `builtin_names.c:is_call_alias`, `is_then_alias`, ...                                                                                           | the same inline `sp_streq` chain in inference and in codegen                                                                                                 |
 | when a pass runs, and what inference reads                                                                        | the phase driver and the counted setters           | `analyze.c:analyze_program`; `comp_set_ntype`, `lv_set_type`, `ivar_set_type`                                                                   | a loop appended to `analyze_program`; a direct write to a table `infer_type` reads                                                                           |
 
-The String plan's row is what is left of the two String representations
-(#9258): every String slot is now its handle, the share analysis is gone,
-and the String plan and the byte routes are being removed. A change does
-not add to them.
+String slots hold object handles. The remaining String plan, sharing facts
+and byte routes serve builtin producers still being migrated under #11391.
+Hash key insertion consults the runtime String's frozen state. It retains a
+frozen key and makes a frozen key object for an unfrozen input, including a
+static empty or one-character result. The Hash stores the key's byte view.
+
 A default argument is evaluated on the callee. Binding a String default
 uses the same handle as the expression that supplied it.
+
+A method inferred or declared to return String returns `sp_String *`.
+`repr_method_ret_storage` supplies the physical result type to signatures,
+return slots and callers. A nullable String uses the same pointer and returns
+`NULL` for nil. The caller can retain the handle, box it for a Ruby value,
+or read its bytes for a text operation. Mixed receiver dispatch joins Ruby
+values in the switch and projects the result once. Proc and C extension
+callback signatures retain their declared result representation.
 
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for

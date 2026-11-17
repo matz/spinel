@@ -3308,9 +3308,9 @@ int emit_arysub_call(Compiler *c, int id, Buf *b) {
     buf_printf(ob, "; _t%d.tag == SP_TAG_NIL ? NULL : (sp_%s *)_t%d.v.p; })", t, cn, t);
   }
   else if (v.copy && cn && comp_ary_is_str(c, ty_object_class(rt))) {
-    /* to_s / to_str of a String subclass instance: a String of its bytes,
-       which the view already copied */
-    emit_call(c, id, ob);
+    /* The inherited conversion returns a fresh, unfrozen base String.
+       A frozen receiver's read can borrow its original buffer. */
+    buf_puts(ob, "sp_str_dup("); emit_call(c, id, ob); buf_puts(ob, ")");
   }
   else if (v.copy) {
     buf_printf(ob, "%s_dup(", arysub_array_ctype(c, ty_object_class(rt)));

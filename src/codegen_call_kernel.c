@@ -604,42 +604,14 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       }
       else if (at == TY_INT) { buf_puts(b, "sp_int_to_s("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_FLOAT) { buf_puts(b, "sp_float_to_s("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
-      /* a boxed object answering #to_str converts through it
-         (sp_poly_check_str), as a typed one does below, and only then through
-         #to_s; the root here holds it across both, where sp_poly_check_str
-         holds it only across #to_str */
-      else if (at == TY_POLY) {
-        int ts = ++g_tmp;
-        buf_puts(b, "({ "); ts = hold_operand(c, av[0], TY_POLY, 0, ts, 1, " ", b);
-        buf_printf(b, "const char *_s%d = sp_poly_check_str(_t%d);"
-                      " _s%d ? _s%d : sp_poly_to_s(_t%d); })", ts, ts, ts, ts, ts);
+      else if (at == TY_POLY || ty_is_object(at)) {
+        buf_puts(b, "sp_poly_unbox_s(sp_kernel_string("); emit_boxed(c, av[0], b); buf_puts(b, "))");
       }
       /* the frozen "true" / "false" true.to_s answers; a bare C literal here
          had no marker byte at all */
       else if (at == TY_BOOL) { buf_puts(b, "(("); emit_expr(c, av[0], b); buf_puts(b, ") ? sp_str_frozen_true : sp_str_frozen_false)"); }
       else if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s_new("); emit_expr(c, av[0], b); buf_puts(b, ")"); }   /* String(sym) calls to_s: a new String */
       else if (at == TY_NIL || at == TY_UNKNOWN) { buf_puts(b, "sp_poly_to_s(sp_box_nil())"); }
-      else if (ty_is_object(at) && emit_kconv_obj_nil(c, av[0], ty_object_class(at), "to_str", NULL, b)) {}
-      /* Kernel#String asks for #to_str first, and only then #to_s (#3721) */
-      else if (ty_is_object(at) &&
-               cplan_implied_target(c, id, av[0], ty_object_class(at), "to_str", CIT_TABLE, NULL) >= 0) {
-        int tsc = ty_object_class(at);
-        MethodLookup tml = { .def_class = -1 };
-        (void)cplan_implied_target(c, id, av[0], tsc, "to_str", CIT_TABLE, &tml);
-        int tsd = tml.def_class;
-        if (expr_is_held_ref(c, av[0])) {
-          buf_printf(b, "sp_%s_to_str((sp_%s *)(", c->classes[tsd].c_name, c->classes[tsd].c_name);
-          emit_expr(c, av[0], b); buf_puts(b, "))");
-        }
-        else {
-          /* rooted: `String(C.new)` holds the fresh object nowhere else while
-             its #to_str allocates */
-          int tso = ++g_tmp;
-          buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", c->classes[tsd].c_name, tso, c->classes[tsd].c_name);
-          emit_expr(c, av[0], b);
-          buf_printf(b, "); SP_GC_ROOT(_t%d); sp_%s_to_str(_t%d); })", tso, c->classes[tsd].c_name, tso);
-        }
-      }
       else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, av[0], b); buf_puts(b, ")"); }  /* container/range/object: #to_s */
       return 1;
     }

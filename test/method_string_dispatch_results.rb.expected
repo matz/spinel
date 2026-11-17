@@ -1,0 +1,17 @@
+["String", true]
+["String", true]
+["DispatchText", true]
+nil
+"no string"
+["word!!", "fancy!"]
+"base"
+"child"
+[42, ok, 1]
+"a"
+"assigned"
+true
+"singleton"
+"parent!"
+"assigned!"
+true
+true

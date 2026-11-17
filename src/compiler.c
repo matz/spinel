@@ -541,7 +541,6 @@ void comp_free(Compiler *c) {
   yvt_free(c);
   free(c->bsl_gen);
   free(c->bsl_val);
-  if (g_repr_check) repr_channel_free(c);
   pivs_facts_free(c);
   strbuf_arg_index_free(c);
   free(c->vs_head); free(c->vs_site); free(c->vs_var); free(c->vs_next); free(c->vs_kind);

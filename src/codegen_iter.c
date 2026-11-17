@@ -1157,6 +1157,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
        GCC statement-expression ({ ... result_var; }) context. */
     Repr rr = repr_of(c, id);
     TyKind rt = rr.as_ty;
+    rt = repr_call_result_storage(rt);
     if (fwd_yield_proc) g_yield_slot_ty = rt;  /* value-position yield unboxes to this */
     int rtag = ++g_tmp;
     char rvbuf[32]; snprintf(rvbuf, sizeof rvbuf, "_t%d", rtag);

@@ -331,6 +331,16 @@ int cplan_class_value_answers(Compiler *c, int id, int recv, const char *name) {
          (bid ? builtin_class_id_answers(bid, name, 1) : builtin_cmethod_known(bn, name));
 }
 
+/* obj.class can select a program singleton method when the class object
+   carries a program class id. Exceptions instead carry their class by name. */
+int cplan_class_reader_overridden(Compiler *c, TyKind type, const char *name) {
+  int own = type == TY_POLY || (ty_is_object(type) && !class_is_exc_subclass(c, ty_object_class(type))) ||
+            ((type == TY_STRING || type == TY_STRBUF) && program_has_strsub(c));
+  int count = 0;
+  if (own) comp_cmethod_candidates(c, name, &count);
+  return count != 0;
+}
+
 /* Does call id enforce visibility: public_send, or a call with an explicit
    receiver that is not self (`send`, a call on self and one that skips
    visibility run the method)? */
@@ -8883,7 +8893,7 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
          got an arm calling it with none, which C refused (#5359). A
          receiver of that class then lands in the default arm. */
       if (nmi >= 0 && native_takes(&c->native_methods[nmi], 0)) {
-        TyKind mret = comp_native_ret_ty(c, nmi, k);
+        TyKind mret = repr_native_arm_handle(c, id, k) ? TY_STRBUF : comp_native_ret_ty(c, nmi, k);
         cpoly_add(p, &cap, PA_NATIVE, k, -1, mret, mret == TY_NIL ? PC_VOID : cpoly_conv(ret, mret));
       }
       /* one that needs arguments is CRuby's ArgumentError for this call */
@@ -8938,7 +8948,7 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
          method never needed (#3399). */
       int pfi = scope_proc_form_of(c, mi);
       Scope *ms = &c->scopes[pfi >= 0 ? pfi : mi];
-      TyKind cret = ms->ret;
+      TyKind cret = repr_method_ret_storage(ms);
       int conv;
       if (method_is_void(ms)) conv = PC_VOID;
       else {
@@ -9316,7 +9326,7 @@ static void cpoly_user_arms_n(Compiler *c, int id, const char *name, int argc, c
     int fits = cplan_arm_args_fit(c, ks, &L, pos_argc, atmp_ty, kwall_any);
     arg_layout_free(&L);
     if (!fits) continue;
-    TyKind mret = ks->ret;
+    TyKind mret = repr_method_ret_storage(ks);
     int conv = is_setter_val || mret == TY_VOID || mret == TY_NIL || method_is_void(ks) ? PC_VOID
              : mret == TY_STRBUF && ret == TY_STRING ? PC_COPY
              : cpoly_conv(ret, mret);
@@ -9342,14 +9352,14 @@ static void cpoly_obj_default0(Compiler *c, int id, const char *name, TyKind ret
   char oexp[600];
   if (obj_pf >= 0) {
     Scope *ps = &c->scopes[obj_pf];
-    cpoly_add(p, cap, PA_PROC_FORM, PA_KEY_DEFAULT, obj_mi, ps->ret,
-              method_is_void(ps) ? PC_VOID : cpoly_conv(ret, ps->ret));
+    cpoly_add(p, cap, PA_PROC_FORM, PA_KEY_DEFAULT, obj_mi, repr_method_ret_storage(ps),
+              method_is_void(ps) ? PC_VOID : cpoly_conv(ret, repr_method_ret_storage(ps)));
   }
   else if (obj_mi >= 0 && ml.def_class == obj_cls && c->scopes[obj_mi].nrequired == 0 &&
            scope_has_callable_symbol(c, obj_mi)) {
     Scope *ms = &c->scopes[obj_mi];
-    cpoly_add(p, cap, PA_USER, PA_KEY_DEFAULT, obj_mi, ms->ret,
-              method_is_void(ms) ? PC_VOID : cpoly_conv(ret, ms->ret));
+    cpoly_add(p, cap, PA_USER, PA_KEY_DEFAULT, obj_mi, repr_method_ret_storage(ms),
+              method_is_void(ms) ? PC_VOID : cpoly_conv(ret, repr_method_ret_storage(ms)));
   }
   else if (ml.def_class == obj_cls && poly_arm_refuses_none(c, obj_mi, oexp, sizeof oexp))
     cpoly_add(p, cap, PA_ARITY, PA_KEY_DEFAULT, obj_mi, TY_UNKNOWN, PC_VOID);
@@ -9442,9 +9452,11 @@ static int cpoly_cls_value_arms(Compiler *c, int id, const char *name, int argc,
   for (int i = 0; i < n; i++) {
     Scope *ks = &c->scopes[cmi[i]];
     if (cexp[i][0]) cpoly_add(p, cap, PA_ARITY, PA_KEY_CLASS_VALUE + ccls[i], cmi[i], TY_UNKNOWN, PC_VOID);
-    else
-      cpoly_add(p, cap, PA_USER, PA_KEY_CLASS_VALUE + ccls[i], cmi[i], ks->ret,
-                !has_tr || method_is_void(ks) ? PC_VOID : cpoly_conv(ret, ks->ret));
+    else {
+      TyKind result = repr_method_ret_storage(ks);
+      cpoly_add(p, cap, PA_USER, PA_KEY_CLASS_VALUE + ccls[i], cmi[i], result,
+                !has_tr || method_is_void(ks) ? PC_VOID : cpoly_conv(ret, result));
+    }
   }
   free(ccls); free(cmi); free(cexp);
   return n;
@@ -9555,7 +9567,8 @@ static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, Pol
 static void cpoly_resolve(Compiler *c, int id, PolyPlan *p, int full) {
   free(p->arm);
   p->arm = NULL; p->n = 0; p->flags = 0; p->full = full;
-  p->ntype = p->ret = comp_ntype(c, id);
+  p->ntype = comp_ntype(c, id);
+  p->ret = repr_poly_result_slot(p->ntype);
   p->edits = comp_ty_edits;
   const char *name = nt_str(c->nt, id, "name");
   int recv = nt_ref(c->nt, id, "receiver");
@@ -9566,9 +9579,7 @@ static void cpoly_resolve(Compiler *c, int id, PolyPlan *p, int full) {
   if (argc == 0) {
     PolySpecials0 ps;
     cpoly_flags0(c, id, name, p, &ps);
-    /* (one-String mode: a String answer the arms hand on as its bytes, as
-       the emitter's slot takes it: a handle ivar's reader reads it out) */
-    cpoly_user_arms0(c, id, name, p->ret == TY_STRBUF ? TY_STRING : p->ret, p);
+    cpoly_user_arms0(c, id, name, p->ret, p);
     if (!full) return;
     int cap = p->n;
     cpoly_prearms0(c, id, name, &ps, p->ret, p, &cap);

@@ -1177,18 +1177,7 @@ int an_value_top(Compiler *c, int n);
    isn't the start of a non-capturing/extension group '(?...'. scan returns
    nested arrays for capturing patterns, which the str_array path can't model. */
 int an_re_has_captures(const char *src);
-/* --share-strings: can method mi's last statement answer nil (a nil, or
-   a conditional with an arm that is nil or missing)? The deep-return
-   pickup of a call to it then answers the call's nil as nil
-   (an_tail_is_shared_handle). */
-int an_tail_answers_nil(Compiler *c, int mi);
-/* --share-strings: does method mi answer a shared String's handle it
-   publishes (Scope.ret_handle, with its ret_nil_pickup, ret_pub_fresh and
-   ret_pub_bang), or a new String or a parameter on every path
-   (Scope.ret_fresh, ret_param)? While an_mark_handle_returns decides them,
-   a method not decided yet is decided where it is asked, whatever order
-   the methods are defined in; after it, the facts as decided. */
-int scope_ret_handle(Compiler *c, int mi);
+/* Whether every String result is fresh, or comes from one parameter. */
 int scope_ret_fresh(Compiler *c, int mi);
 /* Does method mi answer a String literal on every path (no `return`)? A
    frozen literal keeps one identity, the handle its site has,

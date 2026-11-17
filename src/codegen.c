@@ -1014,7 +1014,7 @@ void emit_rbs_checked_text(Compiler *c, TyKind slot, const char *slotname,
   switch (slot) {
     case TY_INT:    tag = "SP_TAG_INT"; want = "Integer"; break;
     case TY_FLOAT:  tag = "SP_TAG_FLT"; want = "Float";   break;
-    case TY_STRING: tag = "SP_TAG_STR"; want = "String";  break;
+    case TY_STRBUF: case TY_STRING: tag = "SP_TAG_STR"; want = "String"; break;
     case TY_SYMBOL: tag = "SP_TAG_SYM"; want = "Symbol";  break;
     case TY_BOOL:   tag = "SP_TAG_BOOL"; want = "a boolean"; break;
     /* a builtin class's value an RBS type names (builtin_value_kind): boxed
@@ -1273,7 +1273,9 @@ static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, 
     snprintf(str_tail, sizeof str_tail, ", \"%s\")", rn ? rn : "Object");
     tail = str_tail;
   }
-  if (nil_string) { unbox = "sp_poly_arg_str_chk(sp_box_str("; tail = "))"; }
+  if (nil_string) { unbox = "sp_poly_arg_str_chk(SP_STR_BOX("; tail = "))"; }
+  else if (mi_c >= 0 && repr_method_ret_storage(&c->scopes[mi_c]) == TY_STRBUF)
+    unbox = "sp_strbuf_read(";
   /* a #to_int whose answer can be nil answers its oint: a nil is the
      conversion's TypeError, any other the Integer */
   if (!unbox && mi_c >= 0 && sp_streq(conv, "to_int") && c->scopes[mi_c].ret == TY_INT &&
@@ -3412,23 +3414,14 @@ static void emit_boxed_string(Compiler *c, int node, Buf *b);
 void emit_boxed(Compiler *c, int node, Buf *b) {
   if (b == g_pre) { emit_into_pre_line(c, emit_boxed, node); return; }
   if (emit_const_class_call_wrap(c, node, b, emit_boxed)) return;
-  int frame = g_repr_check ? repr_channel_begin(c, node) : -1;
   if (c->n_cext_extensions && ran_first_handle(node) >= 0) {
     str_box_handle_tmp(b, ran_first_handle(node));
-    if (g_repr_check) repr_channel_boxed(c, node, frame);
     return;
   }
-  if(c->n_cext_extensions && node>=0 &&
-     nt_kind(c->nt,node)==NK_CallNode && comp_ntype(c,node)==TY_STRING && repr_call_returns_handle(c,node)) {
-    int temp=++g_tmp;
-    buf_printf(b,"({ _sp_ret_strbuf = NULL; const char *_cext_string%d = ",temp);
-    emit_expr(c,node,b);
-    buf_puts(b, "; _sp_ret_strbuf ? ");
+  if (!arg_ran_first(node, 0) && repr_program_call_handle(c, node)) {
     str_box_open(b, 0);
-    buf_puts(b, "(sp_String *)_sp_ret_strbuf");   /* (one representation: the handle, typed) */
+    emit_program_string_handle(c, node, b);
     str_box_close(b);
-    buf_printf(b, " : _cext_string%d ? sp_box_str(_cext_string%d) : sp_box_nil(); })", temp, temp);
-    if(g_repr_check)repr_channel_boxed(c,node,frame);
     return;
   }
   /* --share-strings: a String stored into a boxed slot the rule shares (an
@@ -3443,7 +3436,6 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
     emit_stmt(c, node, b, g_indent + 1);
     emit_indent(b, g_indent + 1);
     buf_puts(b, "sp_box_nil(); })");
-    if (g_repr_check) repr_channel_boxed(c, node, frame);
     return;
   }
   /* --share-strings: a `next v` that is a block's boxed answer (a proc's
@@ -3454,12 +3446,10 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
     TyKind at = na == 1 ? comp_ntype(c, av[0]) : TY_UNKNOWN;
     if ((at == TY_STRING || at == TY_STRBUF) && strbuf_value_carries(c, av[0])) {
       emit_boxed_next_value(c, av[0], b);
-      if (g_repr_check) repr_channel_boxed(c, node, frame);
       return;
     }
   }
   emit_boxed_string(c, node, b);
-  if (g_repr_check) repr_channel_boxed(c, node, frame);
 }
 
 /* The lift a String stored into a boxed slot the rule shares takes
@@ -5798,7 +5788,7 @@ static int sg_object_default(Compiler *c, Scope *s, int par, Buf *out) {
   const char *n = s->name;
   if (s->nparams == 0 && s->ret == TY_STRING && (sp_streq(n, "inspect") || sp_streq(n, "to_s"))) {
     /* the boxed dispatch on the parent's id renders it as the parent does */
-    buf_printf(out, "sp_poly_%s(sp_box_obj((void *)self, %d))", n, par);
+    buf_printf(out, "sp_poly_as_strbuf(sp_poly_%s_box(sp_box_obj((void *)self, %d)))", n, par);
     return 1;
   }
   if (s->nparams == 0 && s->ret == TY_INT && !method_ret_is_oint(s) && sp_streq(n, "hash")) {
@@ -6026,7 +6016,7 @@ static void bt_block_table(Buf *b) {
    through sp_box_oint / sp_box_ofloat, the rest through emit_boxed_text. */
 void emit_boxed_ret_call(Compiler *c, const Scope *s, const char *call, Buf *b) {
   if (method_ret_is_oint(s)) buf_printf(b, "%s(%s)", oint_box(s->ret), call);
-  else emit_boxed_text(c, s->ret, call, b);
+  else emit_boxed_text(c, repr_method_ret_storage(s), call, b);
 }
 /* A method's Integer or Float return that can be nil (the analysis's
    ret_nullable_int, an RBS `Integer?`) is an sp_oint / sp_ofloat. */
@@ -6035,14 +6025,14 @@ int method_ret_is_oint(const Scope *s) {
 }
 void emit_method_ret_ctype(Compiler *c, const Scope *s, Buf *b) {
   if (method_ret_is_oint(s)) buf_puts(b, oint_ctype(s->ret));
-  else emit_ctype(c, s->ret, b);
+  else emit_ctype(c, repr_method_ret_storage(s), b);
 }
 /* The dead value a method of scope s answers where control never arrives
    (a raise's tail, the fall-off of a body that always returns). */
 const char *method_ret_zero(Compiler *c, const Scope *s) {
   if (method_ret_is_oint(s)) return oint_nil(s->ret);
   if (ty_is_object(s->ret) && !comp_ty_value_obj(c, s->ret)) return "NULL";
-  return default_value_from_compiler(c, s->ret);
+  return default_value_from_compiler(c, repr_method_ret_storage(s));
 }
 
 void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
@@ -8054,9 +8044,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
     }
     else {
       buf_puts(b, "  return ");
-      if (ty_is_object(s->ret)) buf_puts(b, "NULL");
-      else if (method_ret_is_oint(s)) buf_puts(b, oint_nil(s->ret));
-      else buf_puts(b, default_value_from_compiler(c, s->ret));
+      buf_puts(b, method_ret_zero(c, s));
       buf_puts(b, ";\n}\n");
     }
     g_yield_proc_ref = sv_ypr9; g_yield_slot_ty = sv_yst9; free(ypr9.p);
@@ -8162,14 +8150,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
           buf_printf(b, "%s(%s)", oint_of(s->ret), cb.p ? cb.p : "");
         else if (method_is_void(s) || s->ret == ps->ret) buf_puts(b, cb.p ? cb.p : "");
         else if (s->ret == TY_POLY) emit_boxed_ret_call(c, ps, cb.p ? cb.p : "", b);
-        else {
-          /* (a handle slot's answer is published as it returns, as the
-             body's returns publish theirs) */
-          int pub_h = s->ret == TY_STRBUF;
-          if (pub_h) buf_puts(b, "sp_strface_pub_h(");
-          emit_unbox_text(c, s->ret, cb.p ? cb.p : "", b);
-          if (pub_h) buf_puts(b, ")");
-        }
+        else emit_unbox_text(c, repr_method_ret_storage(s), cb.p ? cb.p : "", b);
         buf_puts(b, ";");
         buf_puts(b, method_is_void(s) ? " return; }\n" : "\n");
       }
@@ -8231,7 +8212,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
       snprintf(cm_self9, sizeof cm_self9, "((sp_Class){%d})", s->class_id);
     g_self = cm_self9;
   }
-  g_ret_type = method_is_void(s) ? TY_VOID : s->ret;
+  g_ret_type = method_is_void(s) ? TY_VOID : repr_method_ret_storage(s);
   int saved_ro = g_ret_oint; g_ret_oint = method_ret_is_oint(s);
   g_exc_frame_depth = 0; g_method_pr_exc_depth = 0; g_rescue_save_depth = 0;
   /* real-function funnel mirror: no proc-return frame yet (set below when
@@ -8279,16 +8260,8 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
       /* the longjmp-home delivery also restores sp_catch_top: a return out of a
          catch block inside the home (or a callee) must not leak its catch slot. */
       buf_printf(b, "    if (setjmp(_h.jb)) { sp_proc_ret_head = _h.prev; sp_catch_top = _h.catch_top; sp_brk_top = _h.brk_top;%s return ", hic);
-      /* The box is the selected return, even if its evaluation or an
-         intervening ensure published a different String. */
-      int pub = s->ret == TY_STRING && (s->ret_handle || s->ret_pub_fresh);
-      /* (a handle slot answers the handle, which it publishes) */
-      int pub_h = s->ret == TY_STRBUF;
-      if (pub) buf_puts(b, "(_sp_ret_strbuf = sp_poly_is_strbuf(_h.val) ? _h.val.v.p : NULL, ");
-      if (pub_h) buf_puts(b, "sp_strface_pub_h(");
       if (method_ret_is_oint(s)) buf_printf(b, "%s(_h.val)", oint_unbox(s->ret));
-      else emit_unbox_text(c, s->ret, "_h.val", b);
-      if (pub || pub_h) buf_puts(b, ")");
+      else emit_unbox_text(c, repr_method_ret_storage(s), "_h.val", b);
       buf_puts(b, "; }\n");
     }
     else {
@@ -8305,7 +8278,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   /* the slot is the method's return: its oint where the method answers one */
   if (pr_frame && !is_void) {
     g_result_var = "_prret"; g_result_poly = (s->ret == TY_POLY);
-    g_result_ty = (TyKind)s->ret; g_result_oint = method_ret_is_oint(s);
+    g_result_ty = g_ret_type; g_result_oint = method_ret_is_oint(s);
   }
 
   if (is_void) {
@@ -8316,7 +8289,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
     emit_stmts_tail(c, s->body, b, 1);
     g_result_var = sv_rv2; g_result_poly = sv_rp2; g_result_ty = sv_rty2; g_result_oint = sv_ro2;
     buf_puts(b, "    }\n  _pr_done: ;\n  sp_proc_ret_head = _h.prev;\n");
-    buf_puts(b, s->ret == TY_STRBUF ? "  return sp_strface_pub_h(_prret);\n" : "  return _prret;\n");
+    buf_puts(b, "  return _prret;\n");
   }
   else {
     /* no call reads the value (an_mark_unread_returns): the body runs as
@@ -8324,21 +8297,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
     if (s->ret_unread) emit_stmts(c, s->body, b, 1);
     else emit_stmts_tail(c, s->body, b, 1);
     buf_puts(b, "  return ");
-    if (ty_is_object(s->ret)) {
-      if (comp_ty_value_obj(c, s->ret)) buf_printf(b, "(sp_%s){0};\n", c->classes[ty_object_class(s->ret)].c_name);
-      else buf_puts(b, "NULL;\n"); /* unreachable default (object pointer) */
-    }
-    /* Falling off the end answers nil. For most kinds the slot's default IS
-       what a caller reads back as nil, but a seeded nilable return has a
-       sentinel of its own: `() -> String?` pinned the slot to `const char *`
-       and the tail returned the empty string, so `.nil?` answered false and
-       `compact` kept it (#4250). */
-    else if (method_ret_is_oint(s)) buf_printf(b, "%s;\n", oint_nil(s->ret));
-    /* (a handle slot's nil is published as its handle is) */
-    else if (s->ret == TY_STRBUF) buf_puts(b, "sp_strface_pub_h(NULL);\n");
-    else if (s->ret_rbs_nilable)
-      buf_printf(b, "%s;\n", s->ret == TY_STRING ? "NULL" : default_value_from_compiler(c, s->ret));
-    else buf_printf(b, "%s;\n", default_value_from_compiler(c, s->ret));
+    buf_printf(b, "%s;\n", method_ret_zero(c, s));
   }
   g_result_var = sv_rv2; g_result_poly = sv_rp2; g_result_ty = sv_rty2; g_result_oint = sv_ro2;
   free(g_cdefer_text.p);
@@ -12155,8 +12114,8 @@ int emit_exc_reopen_pick_head(Compiler *c, const int *xr, int xn, const char *cl
    class exists, so the object is nil. */
 void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b) {
   if (!g_emit_obj_dispatch) buf_puts(b, "\"nil\"");
-  else if (repr_dyn_cls(c, ty_object(cid))) buf_printf(b, "sp_obj_inspect_sw((int)*(sp_int *)%s, %s)", p, p);
-  else buf_printf(b, "sp_obj_inspect_sw(%d, %s)", cid, p);
+  else if (repr_dyn_cls(c, ty_object(cid))) buf_printf(b, "sp_poly_to_s(sp_obj_inspect_sw((int)*(sp_int *)%s, %s, &(int){0}))", p, p);
+  else buf_printf(b, "sp_poly_to_s(sp_obj_inspect_sw(%d, %s, &(int){0}))", cid, p);
 }
 
 /* The class name a default Object#to_s / #inspect of class `ci` prints, as the
@@ -13944,12 +13903,12 @@ static void emit_obj_to_json_dispatch(Compiler *c, Buf *b) {
     if (mi < 0) continue;
     int vobj = comp_ty_value_obj(c, ty_object(defc));
     int novalue = scope_ret_is_void(c, mi);
-    buf_printf(b, "    case %d: %s", i, novalue ? "" : "return ");
-    buf_printf(b, "%s(%s(sp_%s *)v.v.p%s);",
+    buf_printf(b, "    case %d: %s", i, novalue ? "" : "return sp_strbuf_read(");
+    buf_printf(b, "%s(%s(sp_%s *)v.v.p%s)",
                mc_method(c, &c->scopes[mi]), vobj ? "*" : "",
                c->classes[defc].c_name,
                c->scopes[mi].nparams == 1 ? ", sp_PolyArray_new()" : "");
-    buf_puts(b, novalue ? " return NULL;\n" : "\n");
+    buf_puts(b, novalue ? "; return NULL;\n" : ");\n");
   }
   buf_puts(b, "    default: return NULL;\n  }\n}\n");
 }
@@ -14681,21 +14640,19 @@ const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect) {
 }
 
 static void emit_conv_bridge(Compiler *c, Buf *b, const char *mname, TyKind want,
-                             const char *rett, const char *sig, int with_ok,
+                             const char *sig, TyKind result,
                              const char *dflt) {
   /* a #to_int is called whatever it answers: CRuby names a non-Integer
      answer ("B#to_int gives String"), where no row was "no implicit
      conversion of B" */
-  int shape = want == TY_INT ? 2 : 0;
+  int with_ok = result == TY_INT;
+  int shape = result == TY_STRING ? 0 : 2;
   for (int i = 0; i < c->nclasses; i++) {
     int tmi = -1;
     int callee = conv_bridge_callee(c, i, mname, want, shape, &tmi);
     if (callee != i) continue;   /* an ancestor's own row declares it */
-    int poly_ret = c->scopes[tmi].ret == TY_POLY;
     buf_puts(b, g_debug ? "" : "static ");
-    if (poly_ret || c->scopes[tmi].ret == want)
-      buf_puts(b, poly_ret ? "sp_RbVal" : method_ret_is_oint(&c->scopes[tmi]) ? oint_ctype(c->scopes[tmi].ret) : rett);
-    else emit_method_ret_ctype(c, &c->scopes[tmi], b);   /* a #to_int's other answer */
+    emit_method_ret_ctype(c, &c->scopes[tmi], b);
     buf_printf(b, " %s(sp_%s *self%s);\n", mc_method(c, &c->scopes[tmi]),
                c->classes[callee].c_name, bridge_blk_param(c, tmi));
   }
@@ -14717,26 +14674,21 @@ static void emit_conv_bridge(Compiler *c, Buf *b, const char *mname, TyKind want
       free(call.p);
       continue;
     }
-    /* A conversion whose answer is BOXED is still a conversion. Its static
-       type is the analysis's business and changes with the mode -- under
-       --int-overflow=promote a method returning a plain `1` can be poly --
-       but the protocol is CRuby's: call it, and judge the answer. Judged
-       here rather than refused at compile time, a class whose #to_int the
-       analysis happened to widen kept its conversion, where before the row
-       was dropped and every boxed use of the object raised "no implicit
-       conversion" (#4747). An answer of the wrong kind is not-ok, which is
-       the TypeError CRuby raises for exactly that. */
-    if (c->scopes[tmi].ret == TY_POLY) {
-      buf_printf(b, "    case %d: { sp_RbVal _cv = %s((sp_%s *)p%s);\n",
-                 i, mc_method(c, &c->scopes[tmi]),
-                 c->classes[callee].c_name, bridge_blk_arg(c, tmi));
-      /* a String held in a shared handle (SP_BUILTIN_STRBUF, as an Array
-         element or a lifted local is) is still a String answer (a #to_int
-         is judged above) */
-      buf_printf(b, "      _cv = sp_rbval_str(_cv);\n"
-                    "      if (_cv.tag == SP_TAG_STR && _cv.v.s) { %sreturn _cv.v.s; }\n",
-                 with_ok ? "*ok = 1; " : "");
-      buf_printf(b, "      %s }\n", dflt);
+    if (want == TY_STRING) {
+      Scope *m = &c->scopes[tmi];
+      char call[256];
+      snprintf(call, sizeof call, "%s((sp_%s *)p%s)", mc_method(c, m),
+               c->classes[callee].c_name, bridge_blk_arg(c, tmi));
+      buf_printf(b, "    case %d: ", i);
+      if (repr_method_ret_storage(m) == TY_STRBUF ||
+          (ty_is_object(m->ret) && comp_ary_is_str(c, ty_object_class(m->ret)))) {
+        buf_printf(b, "return sp_strbuf_read((sp_String *)%s);\n", call);
+      }
+      else {
+        buf_puts(b, "{ sp_RbVal r = ");
+        emit_boxed_ret_call(c, m, call, b);
+        buf_puts(b, "; return sp_poly_unbox_s(r); }\n");
+      }
       continue;
     }
     /* a target answering its nil beside the value: nil is no conversion */
@@ -15163,49 +15115,71 @@ static void emit_obj_cls_name_rt(Buf *b) {
    out of the method leaves the flag cleared, the state outside a pp.) */
 static const char *ppu_open(Compiler *c) { return pp_prints_by_rt(c) ? "SP_PP_USER(" : ""; }
 static const char *ppu_close(Compiler *c) { return pp_prints_by_rt(c) ? ")" : ""; }
-static int emit_display_yield_arm(Compiler *c, int cid, int mi, int def, int by_value, Buf *b) {
-  if (mi < 0 || !c->scopes[mi].yields) return 0;
-  int pf = scope_proc_form_of(c, mi);
-  if (pf >= 0 && proc_form_live(c, pf) && c->scopes[mi].nparams == 0)
-    buf_printf(b, "    case %d: return %ssp_poly_to_s(%s(%s(sp_%s %s)p, NULL))%s;\n", cid, ppu_open(c),
-               mc_method(c, &c->scopes[pf]), by_value ? "*" : "", c->classes[def].c_name, by_value ? "*" : "*",
-               ppu_close(c));
-  return 1;
+/* String's implicit conversion accepts any zero-argument Ruby call,
+   including one whose arguments all have defaults. A String subclass is
+   already a String. Judge every other object's actual return once. */
+static void emit_obj_to_str_bridge(Compiler *c, Buf *b) {
+  buf_puts(b, "static sp_String *sp_obj_to_str_sw(int k, void *p) {\n"
+              "  SP_GC_ROOT(p); switch (k) {\n");
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!class_has_obj_arm(c, k) || c->classes[k].is_native_class) continue;
+    if (comp_ary_is_str(c, k)) {
+      buf_printf(b, "    case %d: return (sp_String *)p;\n", k);
+      continue;
+    }
+    MethodLookup lookup = { .def_class = -1 };
+    int mi = call_target(c, -1, k, "to_str", CT_METHODS | CT_SHARED, &lookup);
+    if (mi < 0 || !c->scopes[mi].reachable || c->scopes[mi].yields) continue;
+    int def = lookup.def_class;
+    if (def < 0) continue;
+    if (comp_class_is_module(c, &c->classes[def])) def = k;
+    char self[160];
+    snprintf(self, sizeof self, "%s((sp_%s *)p)", comp_ty_value_obj(c, ty_object(def)) ? "*" : "", c->classes[def].c_name);
+    buf_printf(b, "    case %d: { sp_RbVal r = ", k);
+    emit_zero_arg_boxed_call(c, mi, self, b);
+    buf_puts(b, "; SP_GC_ROOT_RBVAL(r); return sp_str_cmp_conv(r, sp_box_obj(p, k)) ? sp_poly_as_strbuf(r) : NULL; }\n");
+  }
+  buf_puts(b, "    default: return NULL;\n  }\n}\n");
+}
+static void emit_display_overrides(Compiler *c, Buf *b) {
+  buf_puts(b, "static int sp_display_override(int k, void *p, int inspect, sp_RbVal *out) {\n");
+  for (int inspect = 0; inspect < 2; inspect++) {
+    buf_printf(b, "  if (inspect == %d) switch (k) {\n", inspect);
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!class_has_obj_arm(c, k) || c->classes[k].is_native_class) continue;
+      int def = -1;
+      int mi = display_method_scope(c, -1, k, inspect, &def);
+      if (mi < 0 || !c->scopes[mi].reachable || def < 0) continue;
+      if (comp_class_is_module(c, &c->classes[def])) def = k;
+      char self[160];
+      snprintf(self, sizeof self, "%s((sp_%s *)p)", comp_ty_value_obj(c, ty_object(def)) ? "*" : "", c->classes[def].c_name);
+      if (c->scopes[mi].yields) {
+        int pf = scope_proc_form_of(c, mi);
+        if (pf < 0 || !proc_form_live(c, pf) || c->scopes[mi].nparams != 0) continue;
+        Buf call = {0};
+        buf_printf(&call, "%s(%s, NULL)", mc_method(c, &c->scopes[pf]), self);
+        buf_printf(b, "    case %d: *out = %s", k, ppu_open(c));
+        emit_boxed_ret_call(c, &c->scopes[pf], call.p, b);
+        buf_printf(b, "%s; return 1;\n", ppu_close(c));
+        free(call.p);
+      }
+      else {
+        buf_printf(b, "    case %d: *out = %s", k, ppu_open(c));
+        emit_zero_arg_boxed_call(c, mi, self, b);
+        buf_printf(b, "%s; return 1;\n", ppu_close(c));
+      }
+    }
+    buf_puts(b, "  }\n");
+  }
+  buf_puts(b, "  return 0;\n}\n");
 }
 static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
-  /* Forward-declare the user to_s/inspect methods the switches dispatch to --
-     the switch bodies are emitted ahead of the method definitions. */
-  for (int i = 0; i < c->nclasses; i++) {
-    ClassInfo *fci = &c->classes[i];
-    if (is_builtin_reopen(fci->name) || fci->is_native_class) continue;
-    if (comp_class_is_module(c, fci)) continue;
-    /* a value-type class's methods take self by value */
-    int is_val = comp_ty_value_obj(c, ty_object(i));
-    const char *mnames[2] = { "to_s", "inspect" };
-    for (int m = 0; m < 2; m++) {
-      int fdef = -1;
-      MethodLookup ml_fmi = { .def_class = fdef };
-      int fmi = call_target(c, -1, i, mnames[m], CT_METHODS | CT_SHARED, &ml_fmi);
-      fdef = ml_fmi.def_class;
-      /* (a to_s answering a String subclass instance returns its struct) */
-      TyKind fret = fmi >= 0 ? (TyKind)c->scopes[fmi].ret : TY_UNKNOWN;
-      int fstrsub = m == 0 && !is_val && obj_str_ret_strsub(c, -1, i, 0);
-      if (fmi < 0 || !c->scopes[fmi].reachable || (fret != TY_STRING && !fstrsub) ||
-          c->scopes[fmi].nparams != 0 || fdef != i || c->scopes[fmi].yields) continue;
-      /* a debug (-g) build gives user methods external linkage (see
-         emit_method_signature); this forward decl must match it */
-      if (fstrsub) buf_printf(b, "%ssp_%s *", g_debug ? "" : "static ", c->classes[ty_object_class(fret)].c_name);
-      else buf_printf(b, "%sconst char *", g_debug ? "" : "static ");
-      /* (with the &blk the definition takes, which the arms pass as NULL) */
-      buf_printf(b, "%s(sp_%s %sself%s);\n",
-                 mc_method(c, &c->scopes[fmi]), c->classes[fdef].c_name,
-                 is_val ? "" : "*", bridge_has_blk(c, fmi) ? ", sp_Proc *const" : "");
-    }
-  }
+  buf_puts(b, "static int sp_display_override(int, void *, int, sp_RbVal *);\n");
   /* user #to_s dispatcher: only classes defining one get an arm; NULL means
      "no user to_s" and the caller renders the #<Name:0xADDR> default. */
-  buf_puts(b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) {\n");
+  buf_puts(b, "static sp_RbVal sp_obj_to_s_sw(int cls_id, void *p, int *found) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT", "p");
+  buf_puts(b, "  *found = 1; sp_RbVal r; if (sp_display_override(cls_id, p, 0, &r)) return r;\n");
   buf_puts(b, "  switch (cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *tci = &c->classes[i];
@@ -15215,7 +15189,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     if (tci->is_native_class && tci->c_struct) {
       int nts = comp_native_method_find(c, i, "to_s", 0, 0);
       if (nts >= 0 && sp_streq(c->native_methods[nts].ret, "string"))
-        buf_printf(b, "    case %d: return %s((%s *)p);\n",
+        buf_printf(b, "    case %d: return SP_STR_BOX(%s((%s *)p));\n",
                    i, c->native_methods[nts].csym, tci->c_struct);
       continue;
     }
@@ -15224,39 +15198,6 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        includer's (sp_V_to_s, never sp_M_to_s): an arm for it referenced a
        function no TU defines and the program did not link (#4533) */
     if (comp_class_is_module(c, tci)) continue;
-    int tdef = -1;
-    int tmi = display_method_scope(c, -1, i, 0, &tdef);
-    /* a #to_s answering its String through a boxed value (one that may also
-       answer something else) renders through sp_poly_to_s */
-    int tspoly = tmi >= 0 && c->scopes[tmi].ret == TY_POLY;
-    int tsok = tmi >= 0 && c->scopes[tmi].reachable &&
-               (c->scopes[tmi].ret == TY_STRING || tspoly) && c->scopes[tmi].nparams == 0;
-    /* A boxed value-type object carries a pointer to its struct and the
-       method takes self by value, as the inline poly dispatch calls it.
-       Skipping value types sent `puts obj` / "#{obj}" to the #<A:0x...>
-       default past the user's #to_s. */
-    if (comp_ty_value_obj(c, ty_object(i))) {
-      if (tdef == i && emit_display_yield_arm(c, i, tmi, tdef, 1, b)) continue;
-      if (tsok && tdef == i)
-        buf_printf(b, "    case %d: return %s%s(*(sp_%s *)p%s)%s;\n",
-                   i, tspoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[tmi]), tci->c_name,
-                   bridge_blk_arg(c, tmi), tspoly ? ")" : "");
-      continue;
-    }
-    if (tmi >= 0 && c->scopes[tmi].reachable && emit_display_yield_arm(c, i, tmi, tdef, 0, b)) continue;
-    if (tsok) {
-      buf_printf(b, "    case %d: return %s%s((sp_%s *)p%s)%s;\n",
-                 i, tspoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[tmi]),
-                 c->classes[tdef].c_name, bridge_blk_arg(c, tmi), tspoly ? ")" : "");
-      continue;
-    }
-    /* one answering a String subclass instance: that String's bytes, where
-       the object default rendered #<Name:0x...> */
-    if (tmi >= 0 && c->scopes[tmi].reachable && c->scopes[tmi].nparams == 0 && obj_str_ret_strsub(c, -1, i, 0)) {
-      buf_printf(b, "    case %d: return sp_str_or_empty(sp_strbuf_read((sp_String *)%s((sp_%s *)p%s)));\n",
-                 i, mc_method(c, &c->scopes[tmi]), c->classes[tdef].c_name, bridge_blk_arg(c, tmi));
-      continue;
-    }
     /* Struct/Data #to_s IS #inspect in CRuby, and they have a generated one
        (`#<struct S x=1>` / `#<data ...>`). Without this arm a BOXED struct fell
        to the object default and rendered `#<S:0x...>` -- so `b.to_s` and
@@ -15266,28 +15207,28 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        it is taken above. The generated to_s, not inspect: a member or a user
        method owning inspect does not change to_s. */
     if (tci->is_struct || tci->is_data) {
-      buf_printf(b, "    case %d: return sp_%s_%s((sp_%s *)p);\n", i, tci->c_name,
+      buf_printf(b, "    case %d: return SP_STR_BOX(sp_%s_%s((sp_%s *)p));\n", i, tci->c_name,
                  call_target(c, -1, i, "to_s", CT_METHODS | CT_SHARED, NULL) < 0 ? "to_s" : "inspect", tci->c_name);
       continue;
     }
     /* an Array subclass instance's #to_s is its Array's (#7449) */
     if (tci->ary_root > 0 && comp_ary_is_str(c, i)) {
-      buf_printf(b, "    case %d: return sp_strbuf_read((sp_String *)p);\n", i);
+      buf_printf(b, "    case %d: return sp_box_str_new(sp_str_dup(sp_String_cstr((sp_String *)p)));\n", i);
       continue;
     }
     /* a Time subclass instance's #to_s is its Time's */
     if (tci->ary_root > 0 && comp_ary_is_time(c, i)) {
-      buf_printf(b, "    case %d: return sp_Time_to_s((sp_Time *)p);\n", i);
+      buf_printf(b, "    case %d: return SP_STR_BOX(sp_Time_to_s((sp_Time *)p));\n", i);
       continue;
     }
     if (tci->ary_root > 0) {
       const char *at = arysub_array_ctype(c, i);
-      buf_printf(b, "    case %d: return %s_inspect((%s *)p);\n", i, at, at);
+      buf_printf(b, "    case %d: return SP_STR_BOX(%s_inspect((%s *)p));\n", i, at, at);
       continue;
     }
     continue;
   }
-  buf_puts(b, "    default: return NULL;\n  }\n}\n");
+  buf_puts(b, "    default: *found = 0; return sp_box_nil();\n  }\n}\n");
   /* user #to_int / #to_str bridges: the runtime's implicit-conversion sites
      (pack and friends) reach a compiled conversion method on a BOXED object
      through these; a class without one falls to the default (not-ok / NULL)
@@ -15297,15 +15238,12 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
      module rows are skipped, and a def that RESOLVES to a module calls the
      includer's own copy. */
   emit_conv_bridge(c, b, "to_int", TY_INT,
-                   "sp_int", "static sp_int sp_obj_to_int_sw(int cls_id, void *p, int *ok)",
-                   1, "*ok = 0; return 0;");
-  emit_conv_bridge(c, b, "to_str", TY_STRING,
-                   "const char *", "static const char *sp_obj_to_str_sw(int cls_id, void *p)",
-                   0, "return NULL;");
+                   "static sp_int sp_obj_to_int_sw(int cls_id, void *p, int *ok)",
+                   TY_INT, "*ok = 0; return 0;");
   /* #to_path, asked first by the path slots (sp_poly_arg_path) */
   emit_conv_bridge(c, b, "to_path", TY_STRING,
-                   "const char *", "static const char *sp_obj_to_path_sw(int cls_id, void *p)",
-                   0, "return NULL;");
+                   "static const char *sp_obj_to_path_sw(int cls_id, void *p)",
+                   TY_STRING, "return NULL;");
   if (c->uses_kconv || c->uses_kw_to_hash || c->uses_blk_conv) emit_kconv_bridge(c, b);
   emit_obj_cls_name_rt(b);
   /* the switch is built aside: the walk's table, built with it, comes first */
@@ -15316,8 +15254,9 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   if (!iwalk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int any_anon_walk = 0;
   Buf *outer = b; b = &sw;
-  buf_puts(b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) {\n");
+  buf_puts(b, "static sp_RbVal sp_obj_inspect_sw(int cls_id, void *p, int *found) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT", "p");
+  buf_puts(b, "  *found = 1;\n");
   /* inside a pp (sp_pp_printing), a Struct or Data class with its own
      #inspect prints its record layout, as CRuby's pp does
      (record_pp_skips_inspect) */
@@ -15327,11 +15266,12 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       if (!class_has_obj_arm(c, i) || !record_pp_skips_inspect(c, -1, i)) continue;
       if (!any) buf_puts(b, "  if (sp_pp_printing) switch (cls_id) {\n");
       any = 1;
-      buf_printf(b, "    case %d: return sp_%s_%s((sp_%s *)p);\n", i, c->classes[i].c_name,
+      buf_printf(b, "    case %d: return SP_STR_BOX(sp_%s_%s((sp_%s *)p));\n", i, c->classes[i].c_name,
                  struct_default_text_fn(c, i), c->classes[i].c_name);
     }
     if (any) buf_puts(b, "    default: break;\n  }\n");
   }
+  buf_puts(b, "  sp_RbVal r; if (sp_display_override(cls_id, p, 1, &r)) return r;\n");
   buf_puts(b, "  switch (cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     if (!class_has_obj_arm(c, i)) continue;
@@ -15339,77 +15279,45 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     if (c->classes[i].is_native_class && c->classes[i].c_struct) {
       int nin = comp_native_method_find(c, i, "inspect", 0, 0);
       if (nin >= 0 && sp_streq(c->native_methods[nin].ret, "string"))
-        buf_printf(b, "    case %d: return %s((%s *)p);\n",
+        buf_printf(b, "    case %d: return SP_STR_BOX(%s((%s *)p));\n",
                    i, c->native_methods[nin].csym, c->classes[i].c_struct);
       /* one without renders Object#inspect's default, #<StringIO:0x...>, as
          its #to_s does: the walk has no row for it and answered #<Object> */
       else {
         char drn[512], darg[96];
         obj_default_name(c, i, drn, sizeof drn, darg, sizeof darg);
-        buf_printf(b, "    case %d: return sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)p);\n",
+        buf_printf(b, "    case %d: return SP_STR_BOX(sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)p));\n",
                    i, drn, darg);
       }
       continue;
     }
-    /* a value-type class: a user #inspect of its own answers (self by
-       value, as in the #to_s dispatcher). One without any renders by the
-       default walk below, as a directly-inspected one does: the boxed value
-       points at its struct. Left without an arm, an element of a Hash or an
-       Array printed #<Object>. */
-    if (comp_ty_value_obj(c, ty_object(i)) && !comp_class_is_module(c, &c->classes[i])) {
-      int vdef = -1;
-      int vmi = display_method_scope(c, -1, i, 1, &vdef);
-      int vpoly = vmi >= 0 && c->scopes[vmi].ret == TY_POLY;
-      if (vdef == i && emit_display_yield_arm(c, i, vmi, vdef, 1, b)) continue;
-      if (vmi >= 0 && vdef == i && c->scopes[vmi].reachable &&
-          (c->scopes[vmi].ret == TY_STRING || vpoly) && c->scopes[vmi].nparams == 0)
-        buf_printf(b, "    case %d: return %s%s%s(*(sp_%s *)p%s)%s%s;\n",
-                   i, ppu_open(c), vpoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[vmi]),
-                   c->classes[i].c_name, bridge_blk_arg(c, vmi), vpoly ? ")" : "", ppu_close(c));
-      if (vmi >= 0) continue;
-    }
     if (!class_inspectable(c, i)) continue;
     ClassInfo *ci = &c->classes[i];
-    /* a user #inspect wins over the default ivar walk, so a contained
-       element renders the same as a directly-inspected one. A module's own
-       arm would name a function only its includers define (#4533). */
-    int uidef = -1;
-    int uimi = comp_class_is_module(c, ci) ? -1 : display_method_scope(c, -1, i, 1, &uidef);
-    /* ...also when it answers the String through a boxed value */
-    int uipoly = uimi >= 0 && c->scopes[uimi].ret == TY_POLY;
-    if (uimi >= 0 && c->scopes[uimi].reachable && emit_display_yield_arm(c, i, uimi, uidef, 0, b)) continue;
-    if (uimi >= 0 && c->scopes[uimi].reachable && (c->scopes[uimi].ret == TY_STRING || uipoly) &&
-        c->scopes[uimi].nparams == 0) {
-      buf_printf(b, "    case %d: return %s%s%s((sp_%s *)p%s)%s%s;\n",
-                 i, ppu_open(c), uipoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[uimi]),
-                 c->classes[uidef].c_name, bridge_blk_arg(c, uimi), uipoly ? ")" : "", ppu_close(c));
-      continue;
-    }
     /* Struct/Data have a generated #inspect (#<struct Name a=1> / #<data ...>);
        route the contained-element render to it instead of the object default
        so [d] and {k: d} print like a directly-inspected d (#2698). */
     if (ci->is_struct || ci->is_data) {
-      buf_printf(b, "    case %d: return sp_%s_inspect((sp_%s *)p);\n", i, ci->c_name, ci->c_name);
+      buf_printf(b, "    case %d: return SP_STR_BOX(sp_%s_inspect((sp_%s *)p));\n", i, ci->c_name, ci->c_name);
       continue;
     }
     if (class_is_exc_subclass(c, i)) {
-      buf_printf(b, "    case %d: return sp_exc_inspect(p);\n", i);
+      buf_printf(b, "    case %d: return SP_STR_BOX(sp_exc_inspect(p));\n", i);
       continue;
     }
     /* an Array subclass instance inspects as its Array (#7449) */
     if (ci->ary_root > 0 && comp_ary_is_str(c, i)) {
-      buf_printf(b, "    case %d: return sp_str_inspect(sp_String_cstr((sp_String *)p));\n", i);
+      buf_printf(b, "    case %d: return SP_STR_BOX(sp_str_inspect(sp_String_cstr((sp_String *)p)));\n", i);
       continue;
     }
     if (ci->ary_root > 0) {
       const char *at = arysub_array_ctype(c, i);
-      buf_printf(b, "    case %d: return %s_inspect((%s *)p);\n", i, at, at);
+      buf_printf(b, "    case %d: return SP_STR_BOX(%s_inspect((%s *)p));\n", i, at, at);
       continue;
     }
     /* the default walk: a row of the table sp_insp_walk reads */
     iwalk[i] |= 1;
   }
-  buf_puts(b, "    default: return sp_insp_walk(cls_id, p);\n  }\n}\n");
+  buf_puts(b, "    default: return SP_STR_BOX(sp_insp_walk(cls_id, p));\n  }\n}\n");
   /* Kernel#inspect itself, which `def inspect = super` reaches: the default
      walk of every class, whatever inspect it defines (emit_super), over the
      rows of a table of its own. Only a program with such a super has it. */
@@ -16521,6 +16429,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   char inl_lbl[32]; snprintf(inl_lbl, sizeof inl_lbl, "_sret%d", tag);
   if (as_expr) {
     TyKind rt = repr_of(c, id).as_ty;
+    if (rt == TY_STRING) rt = TY_STRBUF;
     /* A nil or non-returning block has no C value type. As for an ordinary
        yielding call, its result still needs a slot while the body runs. */
     if (rt == TY_NIL || rt == TY_VOID || rt == TY_UNKNOWN) rt = TY_POLY;
@@ -16973,9 +16882,16 @@ static void emit_exc_attrs_zsuper(Compiler *c, int id, Scope *s, const char *sel
   }
   buf_printf(b, "sp_exc_attrs_super(%s, _t%d->len, _t%d->data, _t%d); })", self_text, ta, ta, tk);
 }
+static void emit_super_value(Compiler *c, int id, Buf *b);
 void emit_super(Compiler *c, int id, Buf *b) {
+  int read = repr_of(c, id).as_ty == TY_STRING && repr_program_call_handle(c, id);
+  if (read) buf_puts(b, "SP_STR_B(");
+  emit_super_value(c, id, b);
+  if (read) buf_puts(b, ")");
+}
+static void emit_super_value(Compiler *c, int id, Buf *b) {
   refuse_from_plan(c, id, CRF_LIMIT, "super-refusal");
-  if (repr_of(c, id).demand && repr_call_returns_handle(c, id) && emit_strbuf_route(c, id, b)) return;
+  if (repr_of(c, id).demand && !repr_program_call_handle(c, id) && repr_call_returns_handle(c, id) && emit_strbuf_route(c, id, b)) return;
   if (g_plan_check) ucall_emitted(id);
   refuse_super_splat(c, id, super_plan_mi(c, id));
   Scope *s = comp_scope_of(c, id);
@@ -17587,13 +17503,17 @@ void emit_super(Compiler *c, int id, Buf *b) {
         int pk = emit_exc_reopen_pick_head(c, xr, xn, from, b);
         /* none above it: #message / #to_s are Exception's own, the stored
            message; any other name has no superclass method */
-        int tos[16];
-        if (is_exception_message(uname) && repr_of(c, id).as_ty == TY_STRING &&
-            is_message_name(uname) && exc_message_super_to_s(c, id, tos, 16) != 0 && exc_has_user_msg_override(c))
-          /* (Exception#message answers #to_s, as below) */
-          buf_printf(b, "_xi%d < 0 ? sp_user_exc_to_s((sp_Exception *)%s) : ", pk, g_self);
-        else if ((is_exception_message(uname)) && repr_of(c, id).as_ty == TY_STRING)
-          buf_printf(b, "_xi%d < 0 ? sp_exc_message((struct sp_Exception_s *)%s) : ", pk, g_self);
+        Repr r = repr_of(c, id);
+        int text = is_exception_message(uname);
+        if (text) {
+          int tos[16];
+          int dynamic = is_message_name(uname) && exc_message_super_to_s(c, id, tos, 16) != 0 &&
+                        exc_has_user_msg_override(c);
+          if (r.kind != RK_BOXED)
+            buf_puts(b, r.as_ty == TY_STRBUF || repr_program_call_handle(c, id) ? "sp_poly_as_strbuf(" : "sp_poly_unbox_s(");
+          buf_printf(b, "_xi%d < 0 ? %s((sp_Exception *)%s) : ", pk,
+                     dynamic ? "sp_user_exc_to_s_v" : "sp_exc_message_idbox", g_self);
+        }
         else
           buf_printf(b, "if (_xi%d < 0) sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for an instance of %s\"); ",
                      pk, uname, scn);
@@ -17602,44 +17522,30 @@ void emit_super(Compiler *c, int id, Buf *b) {
           /* (a record that finds no version at the super leaves the reopening's last def) */
           if (xm < 0) xm = call_target(c, -1, xr[q], uname, 0, NULL);
           if (q != xn - 1) buf_printf(b, "_xi%d == %d ? ", pk, q);
-          buf_printf(b, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[xm]), g_self);
-          if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[xm], ", ", b);
-          else emit_args_filled(c, xm, nt_ref(c->nt, id, "arguments"), ", ", b);
-          buf_puts(b, ")");
+          Buf call; memset(&call, 0, sizeof call);
+          buf_printf(&call, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[xm]), g_self);
+          if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[xm], ", ", &call);
+          else emit_args_filled(c, xm, nt_ref(c->nt, id, "arguments"), ", ", &call);
+          buf_puts(&call, ")");
+          if (text) emit_boxed_ret_call(c, &c->scopes[xm], call.p, b);
+          else buf_puts(b, call.p);
+          free(call.p);
           if (q != xn - 1) buf_puts(b, " : ");
         }
+        if (text && r.kind != RK_BOXED) buf_puts(b, ")");
         buf_puts(b, "; })");
         return;
       }
     }
     if ((class_is_exc_subclass(c, s->class_id) || class_is_exc_reopen(c, s->class_id)) && !s->is_cmethod &&
         (is_exception_message(uname))) {
-      int rt_boxed = repr_of(c, id).kind == RK_BOXED;
-      Buf mb; memset(&mb, 0, sizeof mb);
-      /* --share-strings: in a method that hands the String on
-         (Scope.ret_handle), the message's handle published, which the
-         override's callers pick up */
-      int pub = s->ret_handle && super_reaches_exc_text(c, id, 1);
-      /* Exception#message answers #to_s: where the program defines one for
-         this class or one below it, the #to_s dispatcher, which falls back
-         to the stored message (published under the flag, as above) */
       int tos[16];
-      int nts = is_message_name(uname) ? exc_message_super_to_s(c, id, tos, 16) : 0;
-      if (nts != 0 && exc_has_user_msg_override(c)) {
-        if (pub) c->uses_exc_text_handle |= 1;
-        buf_printf(&mb, "sp_user_exc_to_s%s((sp_Exception *)%s)", pub ? "_shared" : "", g_self);
-      }
-      else if (pub) {
-        Buf kb;
-        memset(&kb, 0, sizeof kb);
-        buf_printf(&kb, "sp_exc_stored_message_handle((sp_Exception *)%s)", g_self);
-        str_read_handle(&mb, kb.p, 1);
-        free(kb.p);
-      }
-      else buf_printf(&mb, "sp_exc_message((struct sp_Exception_s *)%s)", g_self);
-      if (rt_boxed) str_box_bytes(b, mb.p);
-      else buf_puts(b, mb.p);
-      free(mb.p);
+      int dynamic = is_message_name(uname) && exc_message_super_to_s(c, id, tos, 16) != 0 &&
+                    exc_has_user_msg_override(c);
+      Repr r = repr_of(c, id);
+      if (r.kind != RK_BOXED) buf_puts(b, r.as_ty == TY_STRBUF ? "sp_poly_as_strbuf(" : "sp_poly_unbox_s(");
+      buf_printf(b, "%s((sp_Exception *)%s)", dynamic ? "sp_user_exc_to_s_v" : "sp_exc_message_idbox", g_self);
+      if (r.kind != RK_BOXED) buf_puts(b, ")");
       return;
     }
     /* `super` in a respond_to? override no ancestor defines is Object's:
@@ -21336,9 +21242,10 @@ static int ext_rb_out(TyKind t, int oint, const char *expr, Buf *b) {
     case TY_BOOL:
       buf_printf(b, "(%s) ? Qtrue : Qfalse", expr);
       return 1;
-    case TY_STRING:
-      buf_printf(b, "(%s) ? rb_utf8_str_new(%s, (long)sp_str_byte_len(%s)) : Qnil",
-                 expr, expr, expr);
+    case TY_STRBUF:
+      buf_printf(b, "(%s) ? rb_enc_str_new(sp_String_cstr(%s), (long)sp_String_length(%s), "
+                    "(%s)->binary ? rb_ascii8bit_encoding() : rb_utf8_encoding()) : Qnil",
+                 expr, expr, expr, expr);
       return 1;
     case TY_INT_ARRAY:
       buf_printf(b, "spx_out_int_array(%s)", expr);
@@ -21522,7 +21429,7 @@ static void ext_generate_cruby_shim(Compiler *c) {
       }
     }
     { Buf probe; memset(&probe, 0, sizeof probe);
-      if (!ext_rb_out(sc->ret, method_ret_is_oint(sc), "x", &probe)) {
+      if (!ext_rb_out(repr_method_ret_storage(sc), method_ret_is_oint(sc), "x", &probe)) {
         fprintf(stderr, "spinel: --ext cruby: %s.%s: return type %s cannot "
                         "cross the extension boundary in v1\n",
                 c->classes[sc->class_id].name, sc->name, ty_name(sc->ret));
@@ -21535,8 +21442,9 @@ static void ext_generate_cruby_shim(Compiler *c) {
       LocalVar *lv = scope_local(sc, sc->pnames[p9]);
       buf_printf(&sb, " %s a%d;", ext_param_is_handle(c, lv) ? "sp_String *" : c_type_name(lv->type), p9);
     }
-    if (sc->ret != TY_VOID && sc->ret != TY_NIL)
-      buf_printf(&sb, " %s ret;", c_type_name(sc->ret));
+    if (sc->ret != TY_VOID && sc->ret != TY_NIL) {
+      buf_puts(&sb, " "); emit_method_ret_ctype(c, sc, &sb); buf_puts(&sb, " ret;");
+    }
     buf_printf(&sb, " } spx_c_%d;\n", s9);
     buf_printf(&sb, "static void spx_body_%d(void *p) { spx_c_%d *c = (spx_c_%d *)p; ",
                s9, s9, s9);
@@ -21573,6 +21481,10 @@ static void ext_generate_cruby_shim(Compiler *c) {
                         "_SP_GC_SLOT_TAG(a->c->a%d)));", p9, p9);
       buf_puts(&sb, "\n");
     }
+    /* The caller zeroed the slot. Its root survives the worker, the
+       GVL reacquisition and the copy into Ruby under spx_entry's ensure. */
+    if (repr_method_ret_storage(sc) == TY_STRBUF)
+      buf_puts(&sb, "  _sp_gc_root_push((void **)&a->c->ret);\n");
     buf_puts(&sb, "  return Qnil;\n}\n");
     /* The Ruby mutex serializes conversions, the off-GVL kernel and return
        copying: the single-threaded Spinel runtime shares its heap and roots.
@@ -21592,7 +21504,7 @@ static void ext_generate_cruby_shim(Compiler *c) {
     buf_puts(&sb, "  return ");
     { char rexpr[32]; snprintf(rexpr, sizeof rexpr, "c__->ret");
       if (sc->ret == TY_VOID || sc->ret == TY_NIL) buf_puts(&sb, "Qnil");
-      else ext_rb_out(sc->ret, method_ret_is_oint(sc), rexpr, &sb); }
+      else ext_rb_out(repr_method_ret_storage(sc), method_ret_is_oint(sc), rexpr, &sb); }
     buf_puts(&sb, ";\n}\n\n");
     buf_printf(&sb, "static VALUE spx_entry_%d(VALUE p) {\n"
                     "  return rb_ensure(spx_locked_%d, p, spx_restore_roots, (VALUE)sp_gc_nroots);\n}\n",
@@ -22010,7 +21922,7 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
    text methods once one of it can exist (cr_collect_program_end), and with
    them everything they call. A class no code builds has no arm, as its
    override has no body. */
-static int exc_text_method(Compiler *c, int i, int want_message, int *dcls) {
+int exc_text_method(Compiler *c, int i, int want_message, int *dcls) {
   int dmsg = -1, dtos = -1;
   MethodLookup ml_mi_msg = { .def_class = dmsg };
   int mi_msg = call_target(c, -1, i, "message", CT_METHODS | CT_SHARED, &ml_mi_msg);
@@ -22020,8 +21932,8 @@ static int exc_text_method(Compiler *c, int i, int want_message, int *dcls) {
   dtos = ml_mi_tos.def_class;
   if (mi_msg >= 0 && !c->scopes[mi_msg].reachable) mi_msg = -1;
   if (mi_tos >= 0 && !c->scopes[mi_tos].reachable) mi_tos = -1;
-  if (want_message && mi_msg >= 0) { *dcls = dmsg; return mi_msg; }
-  if (mi_tos >= 0) { *dcls = dtos; return mi_tos; }
+  if (want_message && mi_msg >= 0) { if (dcls) *dcls = dmsg; return mi_msg; }
+  if (mi_tos >= 0) { if (dcls) *dcls = dtos; return mi_tos; }
   return -1;
 }
 
@@ -22980,6 +22892,8 @@ static void emit_ffi_decls(Compiler *c, Buf *b) {
       }
     }
     int any_binstr = 0, any_extern = 0;
+    for (int i = 0; i < cf->n_ffi_callbacks; i++)
+      if (sp_streq(cf->ffi_callbacks[i].ret_spec, "binstr")) any_binstr = 1;
     for (int fi = 0; fi < cf->n_ffi_funcs; fi++) {
       const char *ret = cf->ffi_funcs[fi].ret;
       if (sp_streq(ret, "binstr")) any_binstr = 1;
@@ -23072,7 +22986,7 @@ static void emit_ffi_decls(Compiler *c, Buf *b) {
     /* sp_alloc.h already declares it, and declares it SP_TLS in the threaded
        build -- re-declaring it here without the storage class is a conflict,
        so name it the same way. */
-    if (any_binstr) buf_puts(b, "extern SP_TLS int sp_ffi_bin_len;\n");
+    if (any_binstr) buf_puts(b, "#include <limits.h>\nextern SP_TLS int sp_ffi_bin_len;\n");
 
     /* native_func externs (Path B): prototype each bound C symbol so the
        generated TU needs no package header. Deduped by symbol (generate and
@@ -23590,10 +23504,10 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
        alongside it, and identical to it when no such class exists. */
     /* a class's own class method to_s prints it (sp_class_user_to_s, below
        main's body, installed through the runtime's hook) */
-    if (prog_has_cls_user_display(c, "to_s")) buf_puts(b, "static const char *sp_class_user_to_s(sp_Class c);\n");
-    if (prog_has_cls_user_display(c, "inspect")) buf_puts(b, "static const char *sp_class_user_inspect(sp_Class c);\n");
+    if (prog_has_cls_user_display(c, "to_s")) buf_puts(b, "static sp_RbVal sp_class_user_to_s(sp_Class c, int *found);\n");
+    if (prog_has_cls_user_display(c, "inspect")) buf_puts(b, "static sp_RbVal sp_class_user_inspect(sp_Class c, int *found);\n");
     if (prog_has_cls_user_display(c, "to_s"))
-      buf_printf(b, "static const char *sp_class_to_s_disp(sp_Class c){if(sp_class_user_to_s_fn){const char *_u=sp_class_user_to_s_fn(c);if(_u)return _u;}return %s(c);}\n\n",
+      buf_printf(b, "static const char *sp_class_to_s_disp(sp_Class c){if(sp_class_user_to_s_fn){int f;const char *_u=sp_display_bytes(sp_class_user_to_s_fn(c,&f));if(f&&_u)return _u;}return %s(c);}\n\n",
                  comp_class_base_display_fn(c));
     /* (apart from the hook's table only where the program has a hook:
        sp_class_inspect_text, which an else arm that runs the builtin calls) */
@@ -23617,7 +23531,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
     buf_printf(b, "default:break;} return %s(c); }\n\n", comp_class_base_display_fn(c));
     if (ihook)
       buf_puts(b, "static const char *sp_class_inspect_name(sp_Class c){"
-                  "if(sp_class_user_inspect_fn){const char *_u=sp_class_user_inspect_fn(c);if(_u)return _u;}"
+                  "if(sp_class_user_inspect_fn){int f;const char *_u=sp_display_bytes(sp_class_user_inspect_fn(c,&f));if(f&&_u)return _u;}"
                   "return sp_class_inspect_text(c); }\n\n");
     /* #name of an ANONYMOUS class is nil, where #to_s and #inspect are the
        address form sp_class_to_s renders. The static spelling
@@ -23709,151 +23623,88 @@ static void emit_cls_user_display_hooks(Compiler *c, Buf *b) {
   static const char *const nms[] = { "to_s", "inspect" };
   for (int q = 0; q < 2; q++) {
     if (!prog_has_cls_user_display(c, nms[q])) continue;
-    buf_printf(b, "static const char *sp_class_user_%s(sp_Class c){switch(c.cls_id){", nms[q]);
+    buf_printf(b, "static sp_RbVal sp_class_user_%s(sp_Class c, int *found){*found=1;switch(c.cls_id){", nms[q]);
     for (int k = 0; k < c->nclasses; k++) {
       int mi = cls_user_display_mi(c, -1, k, nms[q]);
       if (mi < 0) continue;
+      Buf call = {0};
+      buf_printf(&call, "%s(", mc_method(c, &c->scopes[mi]));
+      emit_cmethod_self_cls_arg(c, mi, k, &call);
+      buf_puts(&call, ")");
       buf_printf(b, "case %d:return ", k);
-      buf_puts(b, mc_method(c, &c->scopes[mi]));
-      buf_puts(b, "(");
-      emit_cmethod_self_cls_arg(c, mi, k, b);
-      buf_puts(b, ");");
+      emit_boxed_ret_call(c, &c->scopes[mi], call.p, b);
+      buf_puts(b, ";");
+      free(call.p);
     }
-    buf_puts(b, "default:return NULL;}}\n");
+    buf_puts(b, "default:*found=0;return sp_box_nil();}}\n");
   }
 }
 
-/* An override publishes only its own answer. Fresh and borrowed byte
-   results clear publications made by calls inside the override. Mode 2
-   answers the identity of that result instead of its bytes: the handle it
-   published, else the bytes themselves. */
-static void emit_exc_text_return(Compiler *c, int mi, const char *call, int mode, Buf *b) {
-  if (!mode) { buf_printf(b, "return %s;", call); return; }
-  buf_printf(b, "{ _sp_ret_strbuf = NULL; const char *_v = %s; ", call);
-  if (!c->scopes[mi].ret_handle) buf_puts(b, "_sp_ret_strbuf = NULL; ");
-  if (mode == 2) {
-    buf_puts(b, "return _sp_ret_strbuf ? ");
-    str_box_open(b, 0);
-    buf_puts(b, "(sp_String *)_sp_ret_strbuf");   /* (one representation: the handle, typed) */
-    str_box_close(b);
-    buf_puts(b, " : _v ? ");
-    str_box_bytes(b, "_v");
-    buf_puts(b, " : sp_box_nil(); }");
+/* Bind a zero-argument render to its selected method, including defaults on
+   that receiver. The caller holds the receiver across default evaluation. */
+void emit_zero_arg_boxed_call(Compiler *c, int mi, const char *self, Buf *b) {
+  Buf args = {0}, pre = {0}, call = {0};
+  int builds = 0;
+  char raise[640];
+  if (emit_arm_args_text(c, mi, self, NULL, 0, &pre, &args, &builds, raise, sizeof raise)) {
+    buf_printf(&call, "%s(%s%s)", mc_method(c, &c->scopes[mi]), self, args.p ? args.p : "");
+    if (builds) buf_printf(b, "({ %s", pre.p ? pre.p : "");
+    emit_boxed_ret_call(c, &c->scopes[mi], call.p, b);
+    if (builds) buf_puts(b, "; })");
   }
-  else buf_puts(b, "return _v; }");
+  else buf_printf(b, "({ %s sp_box_nil(); })", raise);
+  free(call.p); free(pre.p); free(args.p);
 }
 
-/* mode 0: the plain dispatchers; 1: the route's (_shared), which answer the
-   result and its handle; 2: the identity reads' (_id), which answer the
-   result as the box an identity compare reads and never attach a handle
-   to the stored message */
-static void emit_exc_text_dispatch_at(Compiler *c, Buf *b, int mode, int *late) {
-  if (exc_has_user_msg_override(c)) {
-    for (int pass = 0; pass < 2; pass++) {
-      if (mode && !(c->uses_exc_text_handle & ((mode == 2 ? 4 : 1) << pass))) continue;
-      int want_message = pass;  /* 0 = to_s dispatcher, 1 = message dispatcher */
-      if (mode == 2) buf_printf(b, "SP_UNUSED static sp_RbVal %s_id(sp_Exception *e){\n",
-                                want_message ? "sp_user_exc_message" : "sp_user_exc_to_s");
-      else buf_printf(b, "SP_UNUSED static const char *%s%s(sp_Exception *e){\n",
-                      want_message ? "sp_user_exc_message" : "sp_user_exc_to_s", mode ? "_shared" : "");
-      if (mode == 2)
-        buf_puts(b, "  if(!e)return sp_box_str(sp_str_frozen_empty);\n  const char *cls=e->cls_name;\n");
-      else if (mode)
-        buf_puts(b, "  if(!e){ _sp_ret_strbuf = NULL; return sp_str_frozen_empty; }\n  const char *cls=e->cls_name;\n");
-      else buf_puts(b, "  if(!e)return (&(\"\\xff\")[1]);\n  const char *cls=e->cls_name;\n");
-      for (int i = 0; i < c->nclasses; i++) {
-        if (!class_is_exc_subclass(c, i)) continue;
-        int dcls = -1;
-        int mi = exc_text_method(c, i, want_message, &dcls);
-        if (mi < 0) continue;
-        if ((TyKind)c->scopes[mi].ret != TY_STRING) continue;  /* string-returning only */
-        /* a reopening's method is picked by the runtime class below */
-        if (class_is_exc_reopen(c, dcls)) continue;
-        const char *dcn = c->classes[dcls].c_name;
-        const char *cn0 = class_ruby_name(c, i);
-        if (!cn0) cn0 = c->classes[i].name;
-        if (!cn0) continue;
-        /* a call with no arguments: an optional or rest parameter takes
-           its default (emit_arm_args_text), and one that cannot be left
-           empty raises ArgumentError as the call does */
-        Buf call = {0}, pre = {0}, args = {0}, arm = {0};
-        char selfp[160], raise[640];
-        snprintf(selfp, sizeof selfp, "((sp_%s*)e)", dcn);
-        int builds = 0;
-        if (emit_arm_args_text(c, mi, selfp, NULL, 0, &pre, &args, &builds, raise, sizeof raise)) {
-          /* (the method found, which an alias names by its original) */
-          buf_puts(&call, "(const char*)");
-          buf_puts(&call, mc_method(c, &c->scopes[mi]));
-          buf_printf(&call, "((sp_%s*)e%s)", dcn, args.p ? args.p : "");
-          /* (a default can read a global or a constant, declared after this
-             point: such a dispatcher is defined late, emit_exc_text_dispatch) */
-          if (args.p || pre.p) *late = 1;
-          /* (the exception is rooted while the arm builds its defaults) */
-          if (builds) buf_printf(&arm, "{ SP_GC_ROOT(e); %s", pre.p ? pre.p : "");
-          emit_exc_text_return(c, mi, call.p, mode, &arm);
-          if (builds) buf_puts(&arm, " }");
-        }
-        else buf_printf(&arm, "{ %s %s }", raise, mode == 2 ? "return sp_box_nil();" : "return NULL;");
-        buf_printf(b, "  if(!strcmp(cls,\"%s\"))%s\n", cn0, arm.p);
-        if (c->classes[i].name && !sp_streq(cn0, c->classes[i].name))
-          buf_printf(b, "  if(!strcmp(cls,\"%s\"))%s\n", c->classes[i].name, arm.p);
-        free(call.p); free(pre.p); free(args.p); free(arm.p);
-      }
-      /* a builtin exception's reopening: #message is the nearest reopening's
-         #message, else (Exception#message calls #to_s) the nearest #to_s,
-         else the stored message */
-      for (int f = want_message ? 0 : 1; f < 2; f++) {
-        const char *fn = f ? "to_s" : "message";
-        int xr0[8], xr[8], xn = 0;
-        int xn0 = exc_reopen_definers(c, fn, xr0, 8);
-        for (int q = 0; q < xn0; q++) {
-          int mi = call_target(c, -1, xr0[q], fn, CT_METHODS | CT_SHARED, NULL);
-          /* (one reachability kept, as exc_text_method's) */
-          if (c->scopes[mi].reachable && (TyKind)c->scopes[mi].ret == TY_STRING) xr[xn++] = xr0[q];
-        }
-        if (xn == 0) continue;
-        buf_puts(b, "  { ");
-        int pk = emit_exc_reopen_pick_head(c, xr, xn, "cls", b);
-        buf_puts(b, "\n");
-        for (int q = 0; q < xn; q++) {
-          Buf call = {0};
-          int xm = call_target(c, -1, xr[q], fn, CT_METHODS | CT_SHARED, NULL);
-          buf_printf(&call, "%s(e)", mc_method(c, &c->scopes[xm]));
-          buf_printf(b, "    if (_xi%d == %d) ", pk, q);
-          emit_exc_text_return(c, xm, call.p, mode, b);
-          buf_puts(b, "\n"); free(call.p);
-        }
-        buf_puts(b, "  }\n");
-      }
-      if (mode == 2) buf_puts(b, "  return sp_exc_message_idbox(e);\n}\n");
-      else if (mode)
-        buf_puts(b, "  sp_String *_h = sp_exc_stored_message_handle(e); SP_GC_ROOT(_h);\n"
-                    "  _sp_ret_strbuf = _h; return sp_String_cstr(_h);\n}\n");
-      else buf_puts(b, "  return sp_exc_message(e);\n}\n");
-    }
-  }
-}
-
-/* The dispatchers of mode (emit_exc_text_dispatch_at). The plain pair whose
-   arms fill a parameter's default is declared here and defined with the
-   shared ones, after the program's globals and constants (c->exc_text_late),
-   which a default can read. */
-static void emit_exc_text_dispatch(Compiler *c, Buf *b, int mode) {
-  if (mode) { emit_exc_text_dispatch_at(c, b, mode, &(int){0}); return; }
-  Buf d; memset(&d, 0, sizeof d);
-  int late = 0;
-  emit_exc_text_dispatch_at(c, &d, 0, &late);
-  if (!late) { if (d.p) buf_puts(b, d.p); free(d.p); return; }
-  buf_puts(b, "SP_UNUSED static const char *sp_user_exc_to_s(sp_Exception *e);\n"
-              "SP_UNUSED static const char *sp_user_exc_message(sp_Exception *e);\n");
-  free(c->exc_text_late);
-  c->exc_text_late = d.p;
-}
-/* After the program's globals and constants: the text dispatchers held back
-   because an arm fills a default that reads them, then the handle ones. */
+/* Ruby reads the override's actual value. Library reporting reads its
+   text once at the archive boundary. Defaults can refer to program globals,
+   so define this pair after the globals and method prototypes. */
 static void emit_exc_text_tail(Compiler *c, Buf *b) {
-  if (c->exc_text_late) { buf_puts(b, c->exc_text_late); free(c->exc_text_late); c->exc_text_late = NULL; }
-  if (c->uses_exc_text_handle) { emit_exc_text_dispatch(c, b, 1); emit_exc_text_dispatch(c, b, 2); }
+  if (!exc_has_user_msg_override(c)) return;
+  for (int msg = 0; msg < 2; msg++) {
+    const char *name = msg ? "message" : "to_s";
+    buf_printf(b, "static sp_RbVal sp_user_exc_%s_v(sp_Exception *e) {\n", name);
+    buf_puts(b, "  if (!e) return SP_STR_BOX(sp_str_frozen_empty);\n"
+                "  SP_GC_ROOT(e); const char *cls = e->cls_name;\n");
+    for (int i = 0; i < c->nclasses; i++) {
+      if (!class_is_exc_subclass(c, i)) continue;
+      int owner = -1;
+      int mi = exc_text_method(c, i, msg, &owner);
+      if (mi < 0 || class_is_exc_reopen(c, owner)) continue;
+      const char *cn = c->classes[i].name;
+      const char *qn = class_ruby_name(c, i);
+      if (!qn) qn = cn;
+      if (!qn) continue;
+      buf_printf(b, "  if (!strcmp(cls, \"%s\")", qn);
+      if (cn && !sp_streq(qn, cn)) buf_printf(b, " || !strcmp(cls, \"%s\")", cn);
+      buf_puts(b, ") return ");
+      char self[160];
+      snprintf(self, sizeof self, "((sp_%s *)e)", c->classes[owner].c_name);
+      emit_zero_arg_boxed_call(c, mi, self, b);
+      buf_puts(b, ";\n");
+    }
+    for (int f = msg ? 0 : 1; f < 2; f++) {
+      const char *fn = f ? "to_s" : "message";
+      int xr[8], n = exc_reopen_definers(c, fn, xr, 8), kept = 0;
+      for (int q = 0; q < n; q++) {
+        int mi = call_target(c, -1, xr[q], fn, CT_METHODS | CT_SHARED, NULL);
+        if (mi >= 0 && c->scopes[mi].reachable) xr[kept++] = xr[q];
+      }
+      if (!kept) continue;
+      buf_puts(b, "  { ");
+      int pk = emit_exc_reopen_pick_head(c, xr, kept, "cls", b);
+      for (int q = 0; q < kept; q++) {
+        int mi = call_target(c, -1, xr[q], fn, CT_METHODS | CT_SHARED, NULL);
+        buf_printf(b, " if (_xi%d == %d) return ", pk, q);
+        emit_zero_arg_boxed_call(c, mi, "e", b);
+        buf_puts(b, ";");
+      }
+      buf_puts(b, " }\n");
+    }
+    buf_puts(b, "  return sp_exc_message_idbox(e);\n}\n");
+    buf_printf(b, "static const char *sp_user_exc_%s(sp_Exception *e) { const char *s = sp_display_bytes(sp_user_exc_%s_v(e)); return %s; }\n",
+               name, name, msg ? "s ? s : sp_str_empty" : "s");
+  }
 }
 
 /* User exception classes: the class-name to index map a poly dispatch keys them by, and the #message / #to_s override dispatchers (const char * and boxed) (codegen_program's steps, in their order) */
@@ -23931,94 +23782,11 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
      message. Emitted after the method prototypes it calls. Marked unused: a
      program can define an override yet never query it, and the call sites only
      reference these when a query is compiled. */
-  /* a reopening's #message / #to_s answering something other than a String
-     cannot stand in for the stored message the runtime reads: refused
-     rather than left unseen by #message */
-  if (any_exc_reopen(c))
-    for (int i = 0; i < c->nclasses; i++) {
-      if (!class_is_exc_reopen(c, i)) continue;
-      for (int k = 0; k < 2; k++) {
-        int mi = call_target(c, -1, i, k ? "to_s" : "message", CT_METHODS, NULL);
-        if (mi < 0 || c->scopes[mi].class_id != i) continue;
-        TyKind mr = (TyKind)c->scopes[mi].ret;
-        if (mr != TY_STRING && mr != TY_UNKNOWN)
-          unsupported_feature(c, c->scopes[mi].def_node,
-                              "a builtin exception reopening's #message / #to_s that answers a non-String");
-      }
-    }
-  emit_exc_text_dispatch(c, b, 0);
-  /* The boxed pair: an override answering something other than a String cannot
-     be represented by the const char * dispatchers above, so #message on an
-     exception whose class is only known at run time reported the stored message
-     (the class name) instead of what #to_s answered (#3868). */
-  if (exc_has_nonstring_msg_override(c)) {
-    /* (like the plain pair, defined after the globals where an arm fills a
-       default, emit_exc_text_dispatch) */
-    Buf *outer = b, vbuf; memset(&vbuf, 0, sizeof vbuf);
-    int vlate = 0;
-    b = &vbuf;
-    for (int pass = 0; pass < 2; pass++) {
-      int want_message = pass;
-      buf_printf(b, "SP_UNUSED static sp_RbVal %s(sp_Exception *e){\n",
-                 want_message ? "sp_user_exc_message_v" : "sp_user_exc_to_s_v");
-      /* e is rooted for the whole dispatch: an arm reads the message's bytes,
-         which e owns, and boxes them (a fresh String's handle, an
-         allocation), and e may be a temp nothing else holds
-         (`E.new("j").message`) */
-      buf_puts(b, "  if(!e)return sp_box_str((&(\"\\xff\")[1]));\n  SP_GC_ROOT(e);\n  const char *cls=e->cls_name;\n");
-      for (int i = 0; i < c->nclasses; i++) {
-        if (!class_is_exc_subclass(c, i)) continue;
-        int dcls = -1;
-        int mi = exc_text_method(c, i, want_message, &dcls);
-        if (mi < 0) continue;
-        TyKind mret = (TyKind)c->scopes[mi].ret;
-        if (mret == TY_UNKNOWN || mret == TY_VOID) continue;
-        if (class_is_exc_reopen(c, dcls)) continue;   /* picked by sp_user_exc_message */
-        const char *dcn = c->classes[dcls].c_name;
-        const char *cn0 = class_ruby_name(c, i);
-        if (!cn0) cn0 = c->classes[i].name;
-        if (!cn0) continue;
-        /* a call with no arguments, defaults filled (as the plain pair) */
-        Buf callx = {0}, pre = {0}, args = {0}, arm = {0};
-        char selfp[160], raise[640];
-        int builds = 0;
-        snprintf(selfp, sizeof selfp, "((sp_%s*)e)", dcn);
-        if (emit_arm_args_text(c, mi, selfp, NULL, 0, &pre, &args, &builds, raise, sizeof raise)) {
-          buf_puts(&callx, mc_method(c, &c->scopes[mi]));
-          buf_printf(&callx, "((sp_%s*)e%s)", dcn, args.p ? args.p : "");
-          if (args.p || pre.p) vlate = 1;
-          Buf bx; memset(&bx, 0, sizeof bx);
-          if (mret == TY_POLY) buf_puts(&bx, callx.p);
-          else emit_boxed_text(c, mret, callx.p, &bx);
-          if (builds) buf_printf(&arm, "{ %sreturn %s; }", pre.p ? pre.p : "", bx.p ? bx.p : "sp_box_nil()");
-          else buf_printf(&arm, "return %s;", bx.p ? bx.p : "sp_box_nil()");
-          free(bx.p);
-        }
-        else buf_printf(&arm, "{ %s return sp_box_nil(); }", raise);
-        buf_printf(b, "  if(!strcmp(cls,\"%s\"))%s\n", cn0, arm.p);
-        if (c->classes[i].name && !sp_streq(cn0, c->classes[i].name))
-          buf_printf(b, "  if(!strcmp(cls,\"%s\"))%s\n", c->classes[i].name, arm.p);
-        free(callx.p); free(pre.p); free(args.p); free(arm.p);
-      }
-      buf_printf(b, "  return sp_box_str(%s(e));\n}\n",
-                 exc_has_user_msg_override(c)
-                   ? (want_message ? "sp_user_exc_message" : "sp_user_exc_to_s")
-                   : "sp_exc_message");
-    }
-    b = outer;
-    if (!vlate) { if (vbuf.p) buf_puts(b, vbuf.p); }
-    else {
-      buf_puts(b, "SP_UNUSED static sp_RbVal sp_user_exc_to_s_v(sp_Exception *e);\n"
-                  "SP_UNUSED static sp_RbVal sp_user_exc_message_v(sp_Exception *e);\n");
-      size_t ol = c->exc_text_late ? strlen(c->exc_text_late) : 0, nl = strlen(vbuf.p);
-      char *cat = malloc(ol + nl + 1);
-      if (!cat) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      if (ol) memcpy(cat, c->exc_text_late, ol);
-      memcpy(cat + ol, vbuf.p, nl + 1);
-      free(c->exc_text_late);
-      c->exc_text_late = cat;
-    }
-    free(vbuf.p);
+  if (exc_has_user_msg_override(c)) {
+    buf_puts(b, "static sp_RbVal sp_user_exc_message_v(sp_Exception *);\n"
+                "static sp_RbVal sp_user_exc_to_s_v(sp_Exception *);\n"
+                "static const char *sp_user_exc_message(sp_Exception *);\n"
+                "static const char *sp_user_exc_to_s(sp_Exception *);\n");
   }
 }
 
@@ -24206,6 +23974,10 @@ static void emit_obj_dispatchers(Compiler *c, Buf *body) {
    out of whatever unit the text before them ended in; without it they write
    nothing. */
 static void emit_program_tail(Compiler *c, Buf *b, Buf *body) {
+  if (g_emit_obj_dispatch) {
+    emit_obj_to_str_bridge(c, b);
+    emit_display_overrides(c, b);
+  }
   emit_exc_text_tail(c, b);
   if (g_proc_protos.len) { buf_puts(b, g_proc_protos.p); buf_puts(b, "\n"); }
   unit_pragma_reset(b);   /* g_pd_protos carries no pragma of its own */
@@ -24686,11 +24458,11 @@ char *codegen_program(const NodeTable *nt) {
      emitted with the marshal dispatch near the end of the TU. Only user-class
      instances route through it, so a classless program emits neither. */
   if (g_emit_obj_dispatch) {
-    buf_puts(&b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
-    buf_puts(&b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
+    buf_puts(&b, "static sp_RbVal sp_obj_inspect_sw(int cls_id, void *p, int *found) SP_COLD SP_NOINLINE;\n");
+    buf_puts(&b, "static sp_RbVal sp_obj_to_s_sw(int cls_id, void *p, int *found) SP_COLD SP_NOINLINE;\n");
     if (obj_kernel_inspect_used(c)) buf_puts(&b, "static const char *sp_obj_kernel_inspect(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
     buf_puts(&b, "static sp_int sp_obj_to_int_sw(int cls_id, void *p, int *ok) SP_COLD SP_NOINLINE;\n");
-    buf_puts(&b, "static const char *sp_obj_to_str_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
+    buf_puts(&b, "static sp_String *sp_obj_to_str_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
     buf_puts(&b, "static const char *sp_obj_to_path_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
     if (c->uses_kconv || c->uses_kw_to_hash || c->uses_blk_conv)
       buf_puts(&b, "static int sp_obj_conv_sw(int cls_id, void *p, int which, sp_RbVal *out) SP_COLD SP_NOINLINE;\n");
@@ -25369,7 +25141,6 @@ char *codegen_program(const NodeTable *nt) {
     exit(0);
   }
   if (g_plan_check) ucall_report(c);
-  if (g_repr_check) repr_channel_report(c);
   sp_timing_end(tcg, "cg_finish", "");
   cg_slow_report(c);
   comp_free(c);

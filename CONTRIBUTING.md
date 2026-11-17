@@ -94,14 +94,12 @@ Use `ruby tools/share_verify.rb -v` for classified observations and coverage
 gaps, or pass Ruby files to check a focused subset. `--extra DIR` includes
 another directory's Ruby files. This target is separate from `make gate`.
 
-The String channel shadow records the existing return-tail analysis and
-observes publishing reads, fresh-tail clearing, nil guards at pickups, and
-the existing polymorphic arm records. Boxed proc/block results use their
-own value channel. `channel-unobserved` identifies a publication or target
-the shadow cannot verify; it is not a clean bill of health. In particular,
-the shadow does not yet prove channel preservation across an ensure body
-that publishes another value. The ordinary repr shadow still checks boxes
-and coercions; not every handwritten argument or element store uses it.
+Method String results use a handle return signature and a rooted handle
+slot when the result crosses an ensure. There is no method publication
+channel to check. The repr shadow checks boxes and coercions; not every
+handwritten argument or element store uses it. Return changes also need
+execution tests for identity, nil, mutation and GC rooting through callers
+and callbacks.
 
 ## What the review checks
 
@@ -185,13 +183,15 @@ and coercions; not every handwritten argument or element store uses it.
   put a fact in the layer that owns it; convert old-style code on the lines
   you touch; when the right layer lacks the fact, add it there rather than
   special-casing one call site.
-- **Strings (#9258).** A String is one object, as in CRuby: every String
+- **Strings (#11391).** A String is one object, as in CRuby: every String
   slot holds its handle, so a change made through one name is seen through
   every other name that holds the same String (`dup`, `clone` and
-  `String.new` make a new one). It is the only representation. The share
-  analysis that chose between two representations is gone; what is left of
-  the String plan and the byte routes (`share_plan_*`, `strbuf_*`,
-  `emit_strbuf_*`) is being removed, so a change does not add to them. A
+  `String.new` make a new one). A method's String result is a handle too;
+  its physical return type comes from Repr. Builtin results and boxes are
+  still being migrated to that contract. The remaining sharing analysis,
+  String plan and byte routes (`share_plan_*`, `strbuf_*`,
+  `emit_strbuf_*`) are scheduled for deletion, so a change does not add to
+  them, freshness rules, copy refusals or bytes boxes. A
   program that answers differently from CRuby is welcome as a new issue,
   with a reduction.
 

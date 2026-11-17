@@ -1428,13 +1428,18 @@ const char *sp_exc_inspect(void *p) {
   SP_GC_ROOT(cn);
   cn = sp_exc_cls_display(cn);
   SP_GC_ROOT(cn);
-  return (!msg || !sp_str_byte_len(msg)) ? cn : sp_exc_cat(5, SPL("#<"), cn, SPL(": "), msg, SPL(">"));
+  return !sp_str_byte_len(msg) ? cn : sp_exc_cat(5, SPL("#<"), cn, SPL(": "), msg, SPL(">"));
 }
 
 const char *(*sp_user_exc_to_s_fn)(sp_Exception *) = NULL;
 const char *(*sp_user_exc_message_fn)(sp_Exception *) = NULL;
 const char *sp_exc_to_s_text(sp_Exception *e) {
-  return sp_user_exc_to_s_fn ? sp_user_exc_to_s_fn(e) : sp_exc_message(e);
+  SP_GC_ROOT(e);
+  const char *text = sp_user_exc_to_s_fn ? sp_user_exc_to_s_fn(e) : sp_exc_message(e);
+  if (text) return text;
+  /* Ruby formats the receiver itself when its #to_s returned a non-String. */
+  const char *cn = sp_exc_cls_display(sp_exc_class_name(e));
+  return sp_sprintf("#<%s:0x%016llx>", cn, (unsigned long long)(uintptr_t)e);
 }
 
 /* CRuby's arity ArgumentError (sp_exc.h): the message is built once here for

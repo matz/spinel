@@ -237,13 +237,6 @@ int share_plan_targets_cover(Compiler *c, int u);
    box of them, is the literal's handle, and
    its identity is its bytes' pointer, as a frozen String's is? */
 int share_plan_call_answers_literal(Compiler *c, int v);
-/* Is target mi of call v one answering a String literal whose answer the
-   pickup after the call renders as the literal itself, among targets that
-   publish their handle: a method whose body is one String literal
-   (`def tag_name = "Group/SectionName"`), called on self with no
-   arguments or block, every value of whose receiver answers the name by
-   the program's own methods? */
-int share_plan_literal_pickup_clean(Compiler *c, int v, int mi);
 /* Is node v, a String call a store lifts into a handle (poly_strbuf_lift),
    boxed by the handle its producer supplies (the plan's SPR_BOX form
    with the object a lift needs), not from its bytes? A call whose route

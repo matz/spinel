@@ -26,35 +26,44 @@ static void emit_exc_own_render_raw(Compiler *c, int id, int recv, int xcm, cons
     int tested = view_push_repr(c, recv, VR_NIL_TESTED, 1);
     emit_exc_own_render_raw(c, id, recv, xcm, plan, b);
     view_pop(c, tested); view_unbind(mark);
-    buf_puts(b, " : sp_str_frozen_empty; })");
+    buf_puts(b, " : SP_STR_BOX(sp_str_frozen_empty); })");
     return;
   }
   int defc = plan->owner_ci;
   int cv = plan->delegate ? view_push_conversion(c, id, plan) : -1;
   if (g_plan_check) ucall_observe(c, id, own, defc, 0);
   if (cv >= 0) view_pop(c, cv);
-  if (expr_is_held_ref(c, recv)) {
-    buf_printf(b, "%s((sp_%s *)(", mc_method(c, &c->scopes[own]), c->classes[defc].c_name);
-    emit_expr(c, recv, b); buf_puts(b, "))");
-  }
-  else {
-    /* rooted: a fresh exception (`E.new.to_s`) held by nothing else
-       while its own #to_s allocates */
-    int tex = ++g_tmp;
-    buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", c->classes[defc].c_name, tex, c->classes[defc].c_name);
-    emit_expr(c, recv, b);
-    buf_printf(b, "); SP_GC_ROOT(_t%d); %s(_t%d); })", tex, mc_method(c, &c->scopes[own]), tex);
-  }
+  int t = ++g_tmp;
+  char self[48]; snprintf(self, sizeof self, "_t%d", t);
+  buf_printf(b, "({ sp_%s *%s = (sp_%s *)(", c->classes[defc].c_name, self, c->classes[defc].c_name);
+  emit_expr(c, recv, b);
+  buf_printf(b, "); SP_GC_ROOT(%s); ", self);
+  emit_zero_arg_boxed_call(c, own, self, b);
+  buf_puts(b, "; })");
 }
 
 static void emit_exc_own_render(Compiler *c, int id, int recv, int xcm, const CallPlan *plan, Buf *b) {
-  int own = plan->mi;
   Buf call = {0};
   emit_exc_own_render_raw(c, id, recv, xcm, plan, &call);
   Repr r = repr_of(c, id);
-  emit_coerce_text(c, id, (TyKind)c->scopes[own].ret, r.kind == RK_BOXED ? TY_POLY : r.as_ty,
-                   CO_HOLD, call.p, "an exception renderer result", b);
+  if (r.kind == RK_BOXED) buf_puts(b, call.p);
+  else {
+    TyKind t = repr_program_call_handle(c, id) ? TY_STRBUF : r.as_ty;
+    emit_unbox_text(c, t, call.p, b);
+  }
   free(call.p);
+}
+
+/* Ruby accessors return the override's box, its original String handle, or
+   a bytes view at a reader. Report formatting has a separate adapter. */
+static void emit_exc_result(Compiler *c, int id, const char *name, const char *e, Buf *b) {
+  Repr r = repr_of(c, id);
+  const char *fn = !exc_has_user_msg_override(c) ? "sp_exc_message_idbox"
+                 : is_message_name(name) ? "sp_user_exc_message_v" : "sp_user_exc_to_s_v";
+  if (r.kind != RK_BOXED) buf_puts(b, r.as_ty == TY_STRBUF || repr_program_call_handle(c, id)
+                                        ? "sp_poly_as_strbuf(" : "sp_poly_unbox_s(");
+  buf_printf(b, "%s((sp_Exception *)(%s))", fn, e);
+  if (r.kind != RK_BOXED) buf_puts(b, ")");
 }
 
 static int emit_exception_object_accessor(Compiler *c, int id, int recv, const char *name,
@@ -79,7 +88,7 @@ static int emit_exception_object_accessor(Compiler *c, int id, int recv, const c
     buf_puts(&ob, ")");
     Repr rp = repr_of(c, id);
     TyKind slot = rp.kind == RK_BOXED ? TY_POLY : rp.as_ty;
-    TyKind omr = (TyKind)c->scopes[xom].ret;
+    TyKind omr = repr_method_ret_storage(&c->scopes[xom]);
     buf_printf(b, "({ sp_Exception *_t%d = ", xt);
     emit_coerce(c, recv, TY_EXCEPTION, CO_HOLD, "an exception accessor receiver", b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); sp_exc_has_acc(_t%d, \"%s\") ? ", xt, xt, name);
@@ -289,23 +298,9 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
         emit_exc_own_render(c, id, recv, xcm, &render, b);
         return 1;
       }
-      /* The helpers answer text. A call the inference typed boxed takes it
-         as a boxed String -- `message =~ re` in a base exception class whose
-         subclasses override message, one of them answering no String, is
-         poly -- and where such an override exists, #message is the value
-         itself (sp_user_exc_message_v), as the boxed receiver's arm reads it.
-         Left as text, the C did not compile. */
-      int boxed = repr_of(c, id).kind == RK_BOXED;
-      if (sp_streq(name, "message") && exc_has_nonstring_msg_override(c)) {
-        buf_puts(b, boxed ? "sp_user_exc_message_v((sp_Exception *)(" : "sp_poly_to_s(sp_user_exc_message_v((sp_Exception *)(");
-        emit_expr(c, recv, b); buf_puts(b, boxed ? "))" : ")))");
-        return 1;
-      }
-      const char *fn = exc_has_user_msg_override(c)
-        ? (sp_streq(name, "message") ? "sp_user_exc_message" : "sp_user_exc_to_s")
-        : "sp_exc_message";
-      if (boxed) buf_puts(b, "sp_box_str(");
-      buf_printf(b, "%s((sp_Exception *)(", fn); emit_expr(c, recv, b); buf_puts(b, boxed ? ")))" : "))");
+      Buf e = {0}; emit_expr(c, recv, &e);
+      emit_exc_result(c, id, name, e.p, b);
+      free(e.p);
       return 1;
     }
   }
@@ -466,24 +461,11 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
         int t = ++g_tmp;
         buf_printf(b, "({ sp_RbVal _t%d = ", t);
         emit_expr(c, recv, b);
-        buf_printf(b, "; (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION"
-                   " || sp_is_exc_subclass_cls(_t%d.cls_id))) ? ", t, t, t, t);
-        int boxed = repr_of(c, id).kind == RK_BOXED;
-        /* a dispatch whose call reads the handle its arms publish: an
-           exception no override owns publishes the handle it holds too, so
-           each read of it answers the same String */
-        int pub = g_poly_builtin_arm && !boxed && !exc_has_nonstring_msg_override(c) &&
-                  repr_call_returns_handle(c, id);
-        if (pub) c->uses_exc_text_handle |= 2;
-        const char *arm = exc_has_nonstring_msg_override(c)
-          ? (boxed ? "sp_user_exc_message_v(%s)" : "sp_poly_to_s(sp_user_exc_message_v(%s))")
-          : (boxed ? "sp_box_str(sp_user_exc_message(%s))"
-                   : pub ? "sp_user_exc_message_shared(%s)" : "sp_user_exc_message(%s)");
-        char ep[64];
-        snprintf(ep, sizeof ep, "(sp_Exception *)_t%d.v.p", t);
-        buf_printf(b, arm, ep);
-        if (boxed) buf_printf(b, " : sp_poly_exc_acc_m(_t%d, \"message\"); })", t);
-        else buf_printf(b, " : sp_poly_to_s(sp_poly_exc_acc_m(_t%d, \"message\")); })", t);
+        buf_printf(b, "; if (!(_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION"
+                     " || sp_is_exc_subclass_cls(_t%d.cls_id)))) (void)sp_poly_exc_acc_m(_t%d, \"message\"); ", t, t, t, t, t);
+        char ep[64]; snprintf(ep, sizeof ep, "_t%d.v.p", t);
+        emit_exc_result(c, id, name, ep, b);
+        buf_puts(b, "; })");
         return 1;
       }
       /* the renderings read the overridden #message, as the typed receiver's do */
@@ -681,18 +663,14 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     if (sp_streq(name, "message") || sp_streq(name, "to_s") || sp_streq(name, "to_str")) {
       /* NULL-guard: a nil $! (outside any rescue) has no message. */
       int t = hoist_exc_recv(c, recv);
-      /* An override answering something other than a String cannot ride the
-         const char * dispatcher; the boxed pair carries it, and the call types
-         poly to match (#3868). */
-      if (exc_has_nonstring_msg_override(c) && repr_of(c, id).kind == RK_BOXED) {
-        buf_printf(b, "(_t%d ? %s(_t%d) : sp_box_str(sp_str_empty))", t,
-                   sp_streq(name, "message") ? "sp_user_exc_message_v" : "sp_user_exc_to_s_v", t);
-        return 1;
-      }
-      const char *fn = exc_has_user_msg_override(c)
-        ? (sp_streq(name, "message") ? "sp_user_exc_message" : "sp_user_exc_to_s")
-        : "sp_exc_message";
-      buf_printf(b, "(_t%d ? %s(_t%d) : sp_str_empty)", t, fn, t);
+      char e[48]; snprintf(e, sizeof e, "_t%d", t);
+      buf_printf(b, "(_t%d ? ", t);
+      emit_exc_result(c, id, name, e, b);
+      Repr r = repr_of(c, id);
+      if (r.kind == RK_BOXED) buf_puts(b, " : SP_STR_BOX(sp_str_frozen_empty))");
+      else if (r.as_ty == TY_STRBUF || repr_program_call_handle(c, id))
+        buf_puts(b, " : SP_STR_HDL(sp_str_frozen_empty))");
+      else buf_puts(b, " : sp_str_frozen_empty)");
       return 1;
     }
     if (sp_streq(name, "cause")) {

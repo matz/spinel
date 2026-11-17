@@ -7,7 +7,6 @@
 
 #include "codegen_internal.h"
 
-void emit_poly_user_box(Compiler *c, int id, Scope *m, const char *call, Buf *b);
 int  class_is_prim_reopen(Compiler *c, int k);
 const int *comp_prim_reopen_classes(Compiler *c, int *n);   /* the classes it answers for, per class table */
 const int *comp_exc_subclasses(Compiler *c, int *n);        /* ...and class_is_exc_subclass's */
@@ -72,7 +71,6 @@ int  emit_poly_user_arm_n(Compiler *c, int id, int k, const char *call, TyKind m
                           int tr, int so, int is_setter_val, Buf *b);
 /* The temp a String dispatch whose answer a pickup takes keeps a user arm's
    publication in, set while its user arms are written (0: none) */
-extern int g_poly_pub_keep;
 void emit_poly_index_cases(TyKind ret, int tr, int tv, const char *idxref, int so, Buf *b);
 int  poly_pred_kind(const char *name, int argc);
 int  poly_exc_cand(Compiler *c, const char *name);

@@ -12987,7 +12987,7 @@ static int g_disp_outer_t[MAX_ARG_OVERRIDE], g_n_disp_outer = 0;
    arm lifted into an oint one; a void arm answers nil */
 static void emit_disp_arm_assign(Compiler *c, const Scope *s, const char *call, TyKind ret,
                                  TyKind disp_ret, int rtmp, Buf *b) {
-  TyKind arm_ret = (TyKind)s->ret;
+  TyKind arm_ret = repr_method_ret_storage(s);
   int arm_o = oint_kind(arm_ret) && method_ret_is_oint(s);
   /* a void dispatch's int temp is a dummy: an arm answering a value
      (a proc-form clone's box) is run for its effect */
@@ -13010,6 +13010,8 @@ static void emit_disp_arm_assign(Compiler *c, const Scope *s, const char *call, 
     if (g_disp_ro) buf_printf(b, "%s(%s)", oint_unbox(disp_ret), call);
     else emit_unbox_text(c, disp_ret, call, b);
   }
+  else if (one_s && ty_is_object(arm_ret) && comp_ary_is_str(c, ty_object_class(arm_ret)))
+    buf_printf(b, "(sp_String *)(%s)", call);
   else if (g_disp_ro && !arm_o) buf_printf(b, "%s(%s)", oint_of(disp_ret), call);
   else if (!g_disp_ro && arm_o) buf_printf(b, "%s(%s)", oint_arg(arm_ret), call);
   /* ty_unify widens an Integer arm beside a Bignum one: the slot is a pointer */
@@ -13398,13 +13400,8 @@ int emit_reader_override_dispatch(Compiler *c, int id, int cid, const char *name
   return 1;
 }
 
-/* --share-strings: can a call `id` of reader `name` on cid, whose slot
-   holds a String handle and which a descendant overrides with a def, answer
-   a handle on every arm (emit_reader_override_handle)? Each override is a
-   method answering a String: the handle it publishes (Scope.ret_handle),
-   or a new String (ret_fresh). The share walk joins the overrides' answers
-   to the read's (sh_reader_overrides), so one that answers a String with an
-   identity (a variable's, a field's, an element) publishes it. */
+/* Every overriding method must return a String handle, or the universal
+   box accepted by a boxed caller. The base reader returns its field. */
 int reader_override_handle_arms(Compiler *c, int id, int cid, const char *name, int boxed) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "block") >= 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
@@ -13417,28 +13414,20 @@ int reader_override_handle_arms(Compiler *c, int id, int cid, const char *name, 
     if (arm < 0) return 0;
     /* (read as a box, an override answering a box hands on what it holds) */
     if (boxed && (TyKind)c->scopes[kmi].ret == TY_POLY) { any = 1; continue; }
-    if ((TyKind)c->scopes[kmi].ret != TY_STRING || (!scope_ret_handle(c, arm) && !scope_ret_fresh(c, arm)))
+    if (repr_method_ret_storage(&c->scopes[arm]) != TY_STRBUF)
       return 0;
     any = 1;
   }
   return any;
 }
 
-/* The handle such a call answers (reader_override_handle_arms): a switch
-   on the runtime class, an overriding descendant's arm taking the handle
-   its method publishes, or wrapping the new String it answers in a handle,
-   and
-   the rest the slot's handle (`reader`). A subclass's alias of another
-   method over the reader's name is such an override. 0 when none applies. */
+/* Select the runtime class's override or read the inherited field. */
 int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, const char *selfptr,
                                 const char *reader, int boxed, Buf *b) {
   if (!reader_override_handle_arms(c, id, cid, name, boxed)) return 0;
   int base_mi = call_target(c, id, cid, name, 0, NULL);
   int rtmp = ++g_tmp;
   if (boxed) {
-    /* read as a box: each arm boxes its own answer (emit_poly_user_box: the
-       handle an override publishes, a new String's new one, a box as it
-       is), the reader's arm its field's handle */
     buf_printf(b, "({ sp_RbVal _t%d; switch (", rtmp);
     emit_obj_dispatch_key(c, cid, selfptr, b);
     buf_puts(b, ") {");
@@ -13453,7 +13442,7 @@ int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, 
       Buf call; memset(&call, 0, sizeof call);
       emit_dispatch_arm_text(c, ml.def_class, arm, selfptr, -1, -1, &apre, &call);
       buf_printf(b, " case %d: { %s_t%d = ", k, apre.p ? apre.p : "", rtmp);
-      emit_poly_user_box(c, id, &c->scopes[arm], call.p, b);
+      emit_boxed_ret_call(c, &c->scopes[arm], call.p, b);
       buf_puts(b, "; break; }");
       free(apre.p); free(call.p);
     }
@@ -13470,18 +13459,12 @@ int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, 
     MethodLookup ml = { .def_class = -1 };
     int kmi0 = call_target(c, id, k, name, 0, &ml);
     if (kmi0 < 0 || kmi0 == base_mi) continue;
-    int arm = dispatch_arm_scope(c, kmi0), pub = c->scopes[arm].ret_handle, tv = ++g_tmp;
+    int arm = dispatch_arm_scope(c, kmi0);
     nd_callee(c, g_nd_call_id, kmi0, ml.def_class, 1);
     Buf apre; memset(&apre, 0, sizeof apre);
     Buf call; memset(&call, 0, sizeof call);
     emit_dispatch_arm_text(c, ml.def_class, arm, selfptr, -1, -1, &apre, &call);
-    buf_printf(b, " case %d: { %s%sconst char *_v%d = %s; _t%d = !_v%d ? NULL : ", k, apre.p ? apre.p : "",
-               pub ? "_sp_ret_strbuf = NULL; " : "", tv, call.p, rtmp, tv);
-    if (pub) buf_puts(b, "_sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf : ");
-    str_new_handle_open(b);
-    buf_printf(b, "_v%d", tv);
-    str_new_handle_close(b);
-    buf_puts(b, "; break; }");
+    buf_printf(b, " case %d: { %s_t%d = %s; break; }", k, apre.p ? apre.p : "", rtmp, call.p);
     free(apre.p); free(call.p);
   }
   buf_printf(b, " default: _t%d = %s; break; } _t%d; })", rtmp, reader, rtmp);
@@ -13749,7 +13732,7 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
      the switch, it was called on the base's function, the override
      skipped, and with no base method on none: the compiler crashed. */
   int ret_is_void = !is_scalar_ret(ret);
-  TyKind disp_ret = ret_is_void ? TY_INT : ret;
+  TyKind disp_ret = ret_is_void ? TY_INT : repr_call_result_storage(ret);
   /* the switch, for the dispatch the plan's form makes one */
   int virtual = form >= CP_SWITCH;
   nd_stamp(g_nd_call_id, virtual ? ND_SWITCH : ND_DIRECT);

@@ -506,15 +506,12 @@ static int64_t sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROO
          user #to_s answers a Ruby String, measured by its recorded length so
          an embedded NUL survives; the generic renderer may answer a static
          class or symbol name with no length in front of it. */
-      if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_s_fn) {
-        const char *t = sp_obj_to_s_fn((int)v.cls_id, v.v.p);
-        if (t) { w += sio_write(s, t, (int64_t)sp_str_byte_len(t)); break; }
+      {
+        const char *t = sp_poly_to_s(v);
+        size_t n = v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p ? sp_str_byte_len(t) : strlen(t);
+        w += sio_write(s, t, (int64_t)n);
+        break;
       }
-      if (sp_poly_to_s_fn) {
-        const char *t = sp_poly_to_s_fn(v);
-        w += sio_write(s, t, (int64_t)strlen(t)); break;
-      }
-      sp_raise_cls("TypeError", "can't write value to StringIO");
   }
   /* terminate the line unless THIS value's bytes already ended with one */
   if (is_puts && (s->pos == p0 || s->buf[s->pos - 1] != '\n')) w += sio_write(s, "\n", 1);

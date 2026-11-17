@@ -584,6 +584,12 @@ init function and an `.h` contract that states each entry's C signature;
 the emitted `ext/<name>/<name>.h` of any scaffolded gem is a worked example
 of the contract.
 
+A native String result has type `sp_String *`. Include the generated header
+and use `sp_String_cstr` for a text read after checking for `NULL`. The
+handle carries the byte length and encoding. Root it while calling back into
+Spinel if the host still needs it afterwards. The CRuby shim copies the
+String with its length and encoding and returns `nil` for a null result.
+
 A host that loads the library as a shared object (`dlopen`, Python's
 ctypes, a Swift or C# binding) links it over the position-independent
 runtime: `make runtime-pic` builds `lib/libspinel_rt_pic.a`, and

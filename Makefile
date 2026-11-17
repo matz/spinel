@@ -1877,7 +1877,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    echo "ext-test: FAIL (pic emission)"; ok=0; \
 	  elif ! $(CC) -fPIC -shared -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" "$$tmp/p.c" $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libpic.so" 2>"$$tmp/cc.err"; then \
 	    echo "ext-test: FAIL (the library did not link as a shared object over $(SP_RT_PIC_LIB))"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
-	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) test/ext/pic_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/phost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/pic_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/phost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/phost" "$$tmp/libpic.so" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '42\np0,p1,p2\np0,p1,p2,p3,p4\nraised ArgumentError: not positive: -3\nok 7\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (the shared object's host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1904,7 +1904,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    if [ -z "$$objs" ]; then echo "ext-test: FAIL (pic_pkg's C names no package object)"; ok=0; \
 	    elif ! $(CC) -fPIC -shared -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" "$$tmp/q.c" $$objs $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libq.so" 2>"$$tmp/cc.err"; then \
 	      echo "ext-test: FAIL (a library requiring a package did not link as a shared object over $$objs)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
-	    elif $(CC) -O1 -w $(PLATFORM_FLAGS) test/ext/pic_pkg_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/qhost" 2>"$$tmp/cc.err"; then \
+	    elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/pic_pkg_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/qhost" 2>"$$tmp/cc.err"; then \
 	      "$$tmp/qhost" "$$tmp/libq.so" > "$$tmp/out" 2>&1; rc=$$?; \
 	      printf '{"n":7,"list":[1,2,3]}\n16\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	        { echo "ext-test: FAIL (the package's shared object host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -2054,7 +2054,7 @@ ext-cruby-test: $(SPINEL) $(SP_RT_LIB)
 	tmp=$$(mktemp -d /tmp/spinel-extrb.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map --ext cruby \
 	  --ext-init spx_init_extk \
-	  --ext-entry ExtKernel.triple,ExtKernel.shout,ExtKernel.total,ExtKernel.pair_sum,ExtKernel.must_pos,ExtKernel.pause_total \
+	  --ext-entry ExtKernel.triple,ExtKernel.shout,ExtKernel.sample,ExtKernel.total,ExtKernel.pair_sum,ExtKernel.must_pos,ExtKernel.pause_total \
 	  -o "$$tmp/extk.c" >/dev/null 2>&1 || { echo "ext-cruby-test: FAIL (emission)"; ok=0; }; \
 	if [ $$ok -eq 1 ]; then \
 	  if $(CC) $$SOFLAGS -fPIC -O1 -w -I"$$RH" -I"$$RA" -Ilib -Ilib/regexp -Ilib/regexp/shim -I"$$tmp" \
@@ -4062,7 +4062,7 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	else echo "inline-rbs-test: FAIL (override_family: C did not compile)"; ok=0; fi; \
 	;; \
 	check_false) \
-	for f in check_false check_false_builtin; do \
+	for f in check_false check_false_builtin check_false_string_ensure; do \
 	if ! $(SPINEL) $(IRB)/$$f.rb -c --no-line-map -o "$$tmp/f.c" 2>/dev/null; then \
 	  echo "inline-rbs-test: FAIL ($$f: the compile failed)"; ok=0; continue; fi; \
 	if $(CC) -O0 -Ilib $(RBS_SEED_STRICT) -DSP_RBS_CHECK "$$tmp/f.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/f" 2>/dev/null; then \

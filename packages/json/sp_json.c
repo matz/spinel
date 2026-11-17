@@ -134,23 +134,6 @@ static const char *jb_finish(jbuf *b) {
   return r;
 }
 
-/* An object's #to_s, the way sp_poly_to_s renders it: the class's own method
-   through the generated dispatcher, a built-in object's (a Time) through
-   sp_poly_to_s, and otherwise CRuby's default form. The generated TU's
-   renderer is a static inline in spinel_rt.h, which this TU deliberately does
-   not include (see the note at the top), so these arms are reached through
-   the hooks the generated program installs. */
-static const char *sp_json_obj_to_s(sp_RbVal v) {
-  if (v.cls_id >= 0 && sp_obj_to_s_fn) {
-    const char *us = sp_obj_to_s_fn(v.cls_id, v.v.p);
-    if (us) return us;
-  }
-  if (v.cls_id < 0 && sp_poly_to_s_fn) return sp_poly_to_s_fn(v);
-  return sp_sprintf("#<%s:0x%016llx>",
-                    sp_obj_cls_name_fn ? sp_obj_cls_name_fn(v.cls_id) : "Object",
-                    (unsigned long long)(uintptr_t)v.v.p);
-}
-
 /* The escape a byte takes in a JSON string: 0 for none, 'u' for \u00XX, and
    otherwise the letter after the backslash. */
 static const char jb_esc[256] = {
@@ -331,8 +314,7 @@ static sp_RbVal sp_json_user_view(sp_RbVal v) {
    json reads a String subclass instance's bytes, not its #to_s); any other
    object is its #to_s, as Object#to_json is. */
 static const char *sp_json_obj_text(sp_RbVal v) {
-  if (sp_json_is_strbuf(v)) return sp_json_rstr(sp_poly_to_s(v));
-  return sp_json_rstr(sp_json_obj_to_s(v));
+  return sp_json_rstr(sp_poly_to_s(v));
 }
 
 /* CRuby's json refuses to serialize past 100 levels of nesting, which is how

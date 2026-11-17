@@ -1187,6 +1187,7 @@ int cplan_nil_scalar_reach(Compiler *c, int id);
    a class held in a variable could be any builtin one. id is the call, for
    the named class's singleton accessor (cplan_sg_accessor). */
 int cplan_class_value_answers(Compiler *c, int id, int recv, const char *name);
+int cplan_class_reader_overridden(Compiler *c, TyKind type, const char *name);
 /* ...and the analysis' reading of it, before the nullability settles: call
    id of name on recv (type rt) is answered boxed, NilClass's method for nil
    and Object's for the rest (cplan_nil_scalar_form_ok, NilClass's public

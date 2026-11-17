@@ -13754,121 +13754,8 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
     int mi = opl.mi;
     if (g_plan_check && mi >= 0) cplan_served("object-call");
     cplan_check_missing(c, id, mi, cid, name, 0, "object-call");
-    /* a demand-marked read through a simple hand-written reader
-       (`def body = @body`) hands out the ivar HANDLE via a field access:
-       the C reader function returns the safe copy (#3227 P5). Either mark
-       is the demand, as for the attr reader above: strbuf_handle_demand
-       alone (an `equal?` operand, mark_reader_identity_operands) left the
-       call to the reader, which answered a copy, and `b.v.equal?(w)` was
-       false for one String. */
-    /* a singleton class's method answers something else until its def has
-       run (the guard emit_method_body puts first): it is called, and its
-       slot is the handle only once the def has run */
-    int sg_guarded = mi >= 0 && c->scopes[mi].class_id >= 0 &&
-                     c->classes[c->scopes[mi].class_id].is_singleton_of &&
-                     !c->classes[c->scopes[mi].class_id].is_value_type;
-    if (sg_guarded && (repr_of(c, id).handle || repr_of(c, id).demand)) {
-      int lastG = scope_body_last(c, mi);
-      const char *ivnG = lastG >= 0 && nt_kind(nt, lastG) == NK_InstanceVariableReadNode
-                         ? nt_str(nt, lastG, "name") : an_memo_reader_ivar(c, mi);
-      int defcG = c->scopes[mi].class_id;
-      int ivG = ivnG ? comp_ivar_index(&c->classes[defcG], ivnG) : -1;
-      TyKind retG = (TyKind)c->scopes[mi].ret;
-      if (ivG >= 0 && c->classes[defcG].ivar_types[ivG] == TY_STRBUF &&
-          (retG == TY_STRING || retG == TY_STRBUF)) {
-        int tG = ++g_tmp;
-        Buf rbG = expr_buf(c, recv);
-        buf_puts(b, "({ "); emit_ctype(c, rt, b);
-        buf_printf(b, " _t%d = %s; SP_GC_ROOT(_t%d); ", tG, rbG.p ? rbG.p : "", tG);
-        free(rbG.p);
-        emit_ctype(c, retG, b);
-        buf_printf(b, " _v%d = ", tG);
-        char selfG[32]; snprintf(selfG, sizeof selfG, "_t%d", tG);
-        emit_dispatch(c, cid, name, selfG, nt_ref(nt, id, "arguments"), nt_ref(nt, id, "block"), b);
-        buf_printf(b, "; sp_class_le((sp_Class){_t%d->cls_id}, (sp_Class){%d}) ? _t%d->iv_%s : ",
-                   tG, defcG, tG, iv_c(ivnG + 1));
-        /* before the def, the parent's own method answered: a reader of a
-           String slot hands out that slot, as it would without the def */
-        int pmG = call_target(c, id, c->classes[defcG].parent, name, 0, NULL);
-        const char *pivn = NULL;
-        if (pmG >= 0 && c->scopes[pmG].nparams == 0 && c->scopes[pmG].class_id >= 0) {
-          int lastP = scope_body_last(c, pmG);
-          pivn = lastP >= 0 && nt_kind(nt, lastP) == NK_InstanceVariableReadNode
-                 ? nt_str(nt, lastP, "name") : an_memo_reader_ivar(c, pmG);
-          int pc = c->scopes[pmG].class_id;
-          int piv = pivn ? comp_ivar_index(&c->classes[pc], pivn) : -1;
-          if (piv < 0 || c->classes[pc].ivar_types[piv] != TY_STRBUF) pivn = NULL;
-        }
-        if (pivn) buf_printf(b, "_t%d->iv_%s; })", tG, iv_c(pivn + 1));
-        else if (retG == TY_STRING) {
-          buf_printf(b, "(_v%d ? ", tG);
-          str_new_handle_open(b);
-          buf_printf(b, "_v%d", tG);
-          str_new_handle_close(b);
-          buf_puts(b, " : NULL); })");
-        }
-        else buf_printf(b, "_v%d; })", tG);
-        return 1;
-      }
-    }
-    /* (the slot is the answer only of a method that answers nothing else:
-       an explicit `return x` before the read answers x, and the slot would
-       be read in its place) */
-    if (mi >= 0 && !sg_guarded && repr_of(c, id).kind != RK_BOXED &&
-        (repr_of(c, id).handle || repr_of(c, id).demand) && !scope_has_return(c, mi)) {
-      int lastH = scope_body_last(c, mi);
-      if (lastH >= 0 && nt_kind(nt, lastH) == NK_InstanceVariableReadNode) {
-        const char *ivnH = nt_str(nt, lastH, "name");
-        int defcH = c->scopes[mi].class_id;
-        int ivH = (ivnH && defcH >= 0) ? comp_ivar_index(&c->classes[defcH], ivnH) : -1;
-        if (ivH >= 0 && c->classes[defcH].ivar_types[ivH] == TY_STRBUF) {
-          /* a body with statements before the read (`@reads += 1; @s`)
-             runs them first, then the slot is the handle it answered */
-          int nH = 0;
-          nt_arr(nt, c->scopes[mi].body, "body", &nH);
-          if (nH > 1 && !comp_ty_value_obj(c, rt)) {
-            int tH = ++g_tmp;
-            Buf rbH = expr_buf(c, recv);
-            buf_puts(b, "({ "); emit_ctype(c, rt, b);
-            buf_printf(b, " _t%d = %s; SP_GC_ROOT(_t%d); (void)", tH, rbH.p ? rbH.p : "", tH);
-            free(rbH.p);
-            char selfH[32]; snprintf(selfH, sizeof selfH, "_t%d", tH);
-            emit_dispatch(c, cid, name, selfH, nt_ref(nt, id, "arguments"), nt_ref(nt, id, "block"), b);
-            buf_printf(b, "; _t%d->iv_%s; })", tH, iv_c(ivnH + 1));
-            return 1;
-          }
-          buf_puts(b, "(");
-          emit_expr(c, recv, b);
-          buf_printf(b, ")%siv_%s", comp_ty_value_obj(c, rt) ? "." : "->", iv_c(ivnH + 1));
-          return 1;
-        }
-      }
-    }
-    /* a memoizing reader (`def s = (@s ||= +"")`) has to run to fill the
-       slot first; then the slot is the handle */
-    if (mi >= 0 && !sg_guarded && repr_of(c, id).kind != RK_BOXED &&
-        (repr_of(c, id).handle || repr_of(c, id).demand) && !scope_has_return(c, mi)) {
-      const char *ivnM = an_memo_reader_ivar(c, mi);
-      int defcM = c->scopes[mi].class_id;
-      int ivM = (ivnM && defcM >= 0) ? comp_ivar_index(&c->classes[defcM], ivnM) : -1;
-      if (ivM >= 0 && c->classes[defcM].ivar_types[ivM] == TY_STRBUF && !comp_ty_value_obj(c, rt)) {
-        int tM = ++g_tmp;
-        Buf rbM = expr_buf(c, recv);
-        buf_puts(b, "({ "); emit_ctype(c, rt, b);
-        buf_printf(b, " _t%d = %s; SP_GC_ROOT(_t%d); (void)", tM, rbM.p ? rbM.p : "", tM);
-        free(rbM.p);
-        char selfM[32]; snprintf(selfM, sizeof selfM, "_t%d", tM);
-        emit_dispatch(c, cid, name, selfM, nt_ref(nt, id, "arguments"), nt_ref(nt, id, "block"), b);
-        buf_printf(b, "; _t%d->iv_%s; })", tM, iv_c(ivnM + 1));
-        return 1;
-      }
-    }
-    /* Keep the reader shortcuts above. Other marked String calls still
-       return bytes: take the proved return channel before boxing them,
-       using the same fact as strbuf_marked_yields_handle. */
-    /* (an attribute assignment is its own route, which reaches here again) */
-    if (repr_of(c, id).handle && repr_call_returns_handle(c, id) && !strbuf_assign_leaf(c, id))
-      return emit_strbuf_route(c, id, b);
+    /* A method returns the selected object directly, including a reader,
+       memoizing body or singleton guard delegating to a parent. */
     if (mi >= 0) {
       /* a value-type receiver is passed by value; an ordinary object by
          pointer. For a value recv we hand emit_dispatch the value expression
@@ -16676,36 +16563,6 @@ int face_str_bang_sn_call(Compiler *c, int id) {
   return f;
 }
 
-static void emit_face_str_bang(Compiler *c, int id, unsigned own, int pub, Buf *b);
-/* --share-strings: a bang tail on a boxed receiver (strbuf_bang_tail) as a
-   method's value: its bytes or NULL, the receiver's handle published; 0 with
-   nothing emitted for a call the face table does not take. A local an is_a?
-   guard narrows out of its box (strbuf_narrowed_box_mutator) is lifted to
-   its handle first, as emit_narrowed_box_mutator lifts it: in the prelude,
-   ahead of the receiver capture emit_face_str_bang puts there, so the bang
-   writes into the lifted box and publishes its handle. */
-int emit_face_str_bang_pub(Compiler *c, int id, Buf *b) {
-  const NodeTable *nt = c->nt;
-  int narrowed = strbuf_narrowed_box_mutator(c, id) && nt_kind(nt, nt_ref(nt, id, "receiver")) == NK_LocalVariableReadNode;
-  if (!narrowed && !face_str_bang_call(c, id)) return 0;
-  int argc;
-  call_args(nt, id, &argc);
-  unsigned own = ty_poly_face_owners(nt_str(nt, id, "name"), argc, nt_ref(nt, id, "block") >= 0,
-                                     nt_call_args_plain(nt, id), 0);
-  if (!(own & PF_STR_BANG)) return 0;
-  Buf lv; memset(&lv, 0, sizeof lv);
-  int r = nt_ref(nt, id, "receiver"), vr = -1;
-  if (narrowed) {
-    emit_local_ref(c, r, nt_str(nt, r, "name"), &lv);
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "%s = sp_poly_strbuf_lift(%s);\n", lv.p, lv.p);
-    vr = view_push(c, r, TY_POLY);   /* the receiver read as its box */
-  }
-  emit_face_str_bang(c, id, own, 1, b);
-  if (vr >= 0) view_pop(c, vr);
-  free(lv.p);
-  return 1;
-}
 /* A POLY local's or instance variable's read `recv` lifted to its handle in
    the prelude (sp_poly_strbuf_lift), taken into a temp first as
    emit_poly_lift_ref does, so what the call reads from the variable, writes
@@ -16729,10 +16586,7 @@ static void emit_poly_recv_lift_pre(Compiler *c, int recv) {
    CRuby's NoMethodError, where its #to_s rendering had the transform
    applied and the write-back took the box for a string: a Symbol or an
    Integer crashed there, and an Array answered its own rendering. */
-/* With pub (a method's tail, emit_face_str_bang_pub) the answer is the
-   String's bytes, or NULL, and the receiver's handle -- its box's, where the
-   box holds one -- is published (Scope.ret_handle). */
-static void emit_face_str_bang(Compiler *c, int id, unsigned own, int pub, Buf *b) {
+static void emit_face_str_bang(Compiler *c, int id, unsigned own, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
@@ -16747,7 +16601,7 @@ static void emit_face_str_bang(Compiler *c, int id, unsigned own, int pub, Buf *
      receiver's own box when it holds a handle -- so `x.strip! || x` is x
      itself, as in CRuby, where the bytes boxed again were a new String.
      The plain form re-entered below answers its String. */
-  int boxed = !pub && comp_ntype(c, id) == TY_POLY;
+  int boxed = comp_ntype(c, id) == TY_POLY;
   /* The receiver's own box is its String only where the box holds the
      handle: a plain String box has none, become() answers a new box of the
      new bytes, and a name the answer reaches (`t = s.upcase!`, an argument,
@@ -16755,7 +16609,7 @@ static void emit_face_str_bang(Compiler *c, int id, unsigned own, int pub, Buf *
      an append through it never reached s. A variable receiver whose answer
      is kept is lifted to its handle first, as a second name for it is
      (lift_poly_read). */
-  if ((boxed || (pub)) && !an_node_dropped(c, id)) emit_poly_recv_lift_pre(c, recv);
+  if (boxed && !an_node_dropped(c, id)) emit_poly_recv_lift_pre(c, recv);
   int tvb = ++g_tmp, tob = ++g_tmp, tnb = ++g_tmp;
   Buf rbb; memset(&rbb, 0, sizeof rbb); emit_expr(c, recv, &rbb);
   emit_indent(g_pre, g_indent);
@@ -16774,7 +16628,7 @@ static void emit_face_str_bang(Compiler *c, int id, unsigned own, int pub, Buf *
      result to its handle below: those reads are no copy. The answer of a bang
      used as a value (`x.strip! || x`) is the transformed bytes, which boxing
      makes a new String: only a dropped answer is declared, one answered
-     as the receiver's box, and a method's tail that publishes it (pub). */
+     as the receiver's box. */
   nt_node_restore_str((NodeTable *)nt, id, "name", sv_nm);
   if (vb >= 0) view_pop(c, vb);
   view_pop(c, v);
@@ -16812,13 +16666,8 @@ static void emit_face_str_bang(Compiler *c, int id, unsigned own, int pub, Buf *
     }
     else buf_printf(b, "sp_poly_str_become(_t%d, _t%d); ", tvb, tnb);
   }
-  if (pub && nil_nc)
-    buf_printf(b, "_sp_ret_strbuf = _t%d && sp_poly_is_strbuf(_t%d) ? _t%d.v.p : NULL; ", tchg, tbox, tbox);
-  else if (pub) buf_printf(b, "_sp_ret_strbuf = sp_poly_is_strbuf(_t%d) ? _t%d.v.p : NULL; ", tbox, tbox);
   if (!boxed && nil_nc) buf_printf(b, "_t%d ? sp_poly_unbox_s(_t%d) : NULL; })", tchg, tbox);
   else if (!boxed) buf_printf(b, "sp_poly_unbox_s(_t%d); })", tbox);
-  else if (pub && nil_nc) buf_printf(b, "_t%d ? _t%d : NULL; })", tchg, tnb);
-  else if (pub) buf_printf(b, "_t%d; })", tnb);
   else if (tbox && nil_nc) buf_printf(b, "_t%d ? _t%d : sp_box_nil(); })", tchg, tbox);
   else if (tbox) buf_printf(b, "_t%d; })", tbox);
   else if (nil_nc) buf_printf(b, "_t%d ? _t%d : NULL; })", tchg, tnb);
@@ -17175,9 +17024,13 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     for (int k = 0; k < c->nclasses && !cplan_builtin_call(c, id); k++)
       if (comp_poly_arm_defines_n(c, k, name, argc)) { has_user_method = 1; break; }
     if (!has_user_method) {
-      /* (to_s as the program calls it: a Symbol's is a new String) */
-      buf_printf(b, "%s(", sp_streq(name, "to_s") ? "sp_poly_to_s_call" : "sp_poly_inspect");
-      emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; }
+      const char *fn = is_to_s_name(name) ? "sp_poly_to_s_box" : "sp_poly_inspect_box";
+      Repr r = repr_of(c, id);
+      if (r.as_ty == TY_STRBUF) buf_puts(b, "sp_poly_as_strbuf(");
+      else if (r.kind != RK_BOXED) buf_puts(b, "sp_poly_to_s(");
+      buf_printf(b, "%s(", fn); emit_expr(c, recv, b); buf_puts(b, ")");
+      if (r.kind != RK_BOXED) buf_puts(b, ")");
+      *out = 1; return 1;
     }
   }
   /* Same guard as #to_s above: a user class defining the conversion wins
@@ -19761,7 +19614,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     unsigned own = an_zero_arg_builtin_shadowed(c, name, argc) ? 0
                    : ty_poly_face_owners(name, argc, has_blk, nt_call_args_plain(nt, id), 0);
     unsigned kinds = own & PF_OWNERS;
-    if (own & PF_STR_BANG) { emit_face_str_bang(c, id, own, 0, b); return 1; }
+    if (own & PF_STR_BANG) { emit_face_str_bang(c, id, own, b); return 1; }
     /* one owner an argument rules out takes the switch's misfit arm: the
        re-entry's typed emitter declines the argument, and the call fell
        to NoMethodError where CRuby raises the conversion's TypeError */

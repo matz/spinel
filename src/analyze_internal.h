@@ -625,9 +625,6 @@ int lazy_endpoint_is_infinite(Compiler *c, int right);           /* codegen_call
 int proc_form_source(Compiler *c, int s);                        /* codegen_util.c */
 int scope_is_shadowed(Compiler *c, int s);                       /* codegen_util.c */
 int str_append_chain(Compiler *c, int recv, int *chain, int *base);  /* codegen_util.c */
-int strbuf_bang_tail(Compiler *c, int v);                        /* codegen_stmt.c */
-int strbuf_builtin_tail(Compiler *c, int v);                     /* codegen_stmt.c */
-int strbuf_iter_box_tail(Compiler *c, int v);                    /* codegen_stmt.c */
 int strbuf_route_clamp(Compiler *c, int v, int *ops);           /* codegen_stmt.c */
 int subtree_may_reassign_state(Compiler *c, int id);             /* codegen_call.c */
 int subtree_may_run_proc(Compiler *c, int id);                   /* codegen_call.c */

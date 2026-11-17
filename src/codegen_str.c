@@ -203,6 +203,10 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, StrForm *
 static int str_handle_by_kind(Compiler *c, int v, int form, unsigned dest, StrForm *sf);
 static int str_render_handle(Compiler *c, int v, int form, unsigned dest, StrForm *sf) {
   sf->cty = TY_STRBUF;
+  if (!arg_ran_first(v, 0) && repr_program_call_handle(c, v)) {
+    emit_program_string_handle(c, v, &sf->expr);
+    return SPF_HANDLE;
+  }
   return str_handle_by_kind(c, v, form, dest, sf);
 }
 
@@ -312,6 +316,11 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
     if (x < 0) x = kernel_string_operand(c, ev);
     if (x < 0) break;
     ev = nt_paren_single(nt, x);
+  }
+  if (!arg_ran_first(v, 0) && repr_program_call_handle(c, v)) {
+    sf->cty = TY_STRBUF;
+    emit_program_string_handle(c, v, b);
+    return SPF_HANDLE;
   }
   sf->cty = TY_POLY;
   if (form != SPF_HANDLE) { }
@@ -513,48 +522,13 @@ static void str_box_note(StrForm *sf, int rf, int rw) {
   sf->rw = rw;
 }
 
-/* --share-strings: Kernel#String of a boxed value (`String(v)`), boxed: a
-   String's own box, a plain String's or a shared handle's, which is the
-   String itself (String(s) answers s), else the String the value's #to_str
-   or #to_s answers, boxed as its bytes. Boxed as the bytes of a handle's
-   String it came out as a copy that a change through the result never
-   reached the original by. 1 with the box written; 0, nothing emitted, for
-   any other operand route (`+y`, `y.to_s`). */
-/* Does a class of the program define #to_str, and does each such method
-   publish the handle of the String it answers (Scope.ret_handle), which
-   String(o) then hands on as it is? */
-static int str_to_str_publishes(Compiler *c) {
-  int any = 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_chain(c, k, "to_str", NULL);
-    if (mi < 0) continue;
-    if (!scope_ret_handle(c, mi)) return 0;
-    any = 1;
-  }
-  return any;
-}
+/* Kernel.String on a boxed operand preserves the conversion's own String. */
 static int str_box_kernel_string(Compiler *c, int v, Buf *b) {
-  const NodeTable *nt = c->nt;
   int x = strbuf_route_box_operand(c, v);
   if (x < 0 || kernel_string_operand(c, v) < 0) return 0;
-  size_t at = b->len;
-  int t = ++g_tmp;
-  buf_puts(b, "({ ");
-  t = hold_operand(c, x, TY_POLY, 1, t, 1, " ", b);
-  if (str_to_str_publishes(c)) {
-    /* an object's #to_str answers a String of the program's, whose handle the
-       method published: that String is String(o)'s answer */
-    buf_printf(b, "(_t%d.tag == SP_TAG_STR && _t%d.v.s) || sp_poly_is_strbuf(_t%d) ? _t%d : ({ "
-                  "_sp_ret_strbuf = NULL; const char *_s%d = sp_poly_check_str(_t%d); "
-                  "_s%d ? (_sp_ret_strbuf ? ",
-               t, t, t, t, t, t, t);
-    str_box_handle(b, "(sp_String *)_sp_ret_strbuf");
-    buf_printf(b, " : sp_box_str(_s%d)) : sp_box_str(sp_poly_to_s(_t%d)); }); })", t, t);
-  }
-  else
-    buf_printf(b, "(_t%d.tag == SP_TAG_STR && _t%d.v.s) || sp_poly_is_strbuf(_t%d) ? _t%d : sp_box_str(({ "
-                  "const char *_s%d = sp_poly_check_str(_t%d); _s%d ? _s%d : sp_poly_to_s(_t%d); })); })",
-               t, t, t, t, t, t, t, t, t);
+  buf_puts(b, "sp_kernel_string(");
+  emit_boxed(c, x, b);
+  buf_puts(b, ")");
   return 1;
 }
 
@@ -630,32 +604,15 @@ static int str_box_by_kind(Compiler *c, int node, StrForm *sf) {
       return 1;
     }
     return 0;
-  /* a call whose targets publish their handle, where the plan boxes that
-     handle but no store marked the call for its pickup (a block's value
-     that map collects, read through a typed receiver's reader): the
-     pickup, boxed, where the bytes boxed whole were a copy that a later
-     change to the String through the receiver never reached */
-  case SPK_PUBLISHED: {
-    /* only a call to user methods, each publishing on its return (or the
-       Kernel#String of an object, which calls its #to_str): a builtin
-       (ENV.fetch with a default) never clears or sets the channel, so the
-       pickup could take a handle an earlier call left there. A read into a
-       buffer (strbuf_io_outbuf) is the builtin that does: it answers the
-       buffer's handle through sp_strbuf_read_pub, which publishes it */
-    int u = nt_paren_single(c->nt, node), tg[CPT_MAX];
-    if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && !strbuf_call_picks_up(c, u) &&
-        nt_ref(c->nt, u, "block") < 0 && comp_ntype(c, u) != TY_POLY && repr_call_returns_handle(c, u) &&
-        (cplan_targets(c, u, tg, CPT_MAX) > 0 || strbuf_io_outbuf(c, u) >= 0 || kernel_string_operand(c, u) >= 0) &&
-        strbuf_pickup_published(c, u) && !arg_ran_first(node, 0) &&
-        !emit_boxed_lift(c, node) && share_plan_of(c, node, SPR_BOX, NULL).form == SPF_HANDLE) {
-      str_box_open(b, 1);
-      emit_published_pickup(c, u, b);
-      str_box_close(b);
+  /* A call with a known handle result boxes that object. Builtin adapters
+     that still publish a handle are consumed by emit_strbuf_pickup. */
+  case SPK_PUBLISHED:
+    if (!arg_ran_first(node, 0) && !emit_boxed_lift(c, node)) {
+      emit_strbuf_pickup(c, nt_paren_single(c->nt, node), 1, b);
       str_box_note(sf, RF_STRBUF_HANDLE, RW_HANDLE_ROUTE);
       return 1;
     }
     return 0;
-  }
   case SPK_SLOT: case SPK_DEMANDED: case SPK_ELEM: case SPK_SLOT_POLY: case SPK_SELF: case SPK_BANG_BOX:
   case SPK_POLY_ARMS: case SPK_EXC_MESSAGE: case SPK_EXC_SUPER: case SPK_READER:
   /* a yield that calls the block's proc: the box the proc answered */

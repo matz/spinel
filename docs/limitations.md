@@ -731,6 +731,9 @@ the member:
   (`frozen_string_literal: true` semantics, with no opt-out) -- see
   "String literals are frozen by default" below for what that changes and
   where mutable strings come from.
+- A compiled method returning a String passes the object through direct calls,
+  a bound Method, an extension callback, and a return that crosses an ensure.
+  Each caller receives the same object, including its mutation and freeze state.
 - **`nil` meeting a String is a nullable String, not untyped.** Where a
   value can be either nil or a String -- a ternary, an `if` with no else, a
   `return nil if ...` ahead of a String, a `case` with no matching arm, a

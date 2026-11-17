@@ -486,7 +486,7 @@ static const char *pk_str_elem_bytes(char spec, sp_RbVal v, size_t *n) {
   if (v.tag == SP_TAG_NIL && spec != 'm' && spec != 'u') return "";
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn) {
     SP_GC_ROOT_RBVAL(v);   /* across the user #to_str */
-    const char *r = sp_obj_to_str_fn((int)v.cls_id, v.v.p);
+    const char *r = sp_String_cstr_nil(sp_obj_to_str_fn((int)v.cls_id, v.v.p));
     if (r) { *n = sp_str_byte_len(r); return r; }
   }
   sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", pk_conv_name(v)));

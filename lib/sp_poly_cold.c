@@ -229,8 +229,8 @@ void sp_cext_hash_set(sp_RbVal hash, sp_RbVal key, sp_RbVal value) {
 
 const char *(*sp_class_name_fn)(sp_Class);
 const char *(*sp_class_display_fn)(sp_Class);
-const char *(*sp_class_user_to_s_fn)(sp_Class);
-const char *(*sp_class_user_inspect_fn)(sp_Class);
+sp_RbVal (*sp_class_user_to_s_fn)(sp_Class, int *);
+sp_RbVal (*sp_class_user_inspect_fn)(sp_Class, int *);
 const char *(*sp_array_user_inspect_fn)(sp_RbVal);
 /* set while pp prints: CRuby's pp lays out an Array by its own
    pretty_print, never by the program's Array#inspect. One flag for each
@@ -242,8 +242,12 @@ SP_TLS int sp_pp_printing;
 static const char *sp_poly_time_display(sp_RbVal v, int inspect) {
   int k = sp_bsub_cls_fn ? sp_bsub_cls_fn(v) : -1;
   if (k >= 0) {
-    if (inspect && sp_obj_inspect_fn) return sp_obj_inspect_fn(k, v.v.p);
-    if (!inspect && sp_obj_to_s_fn) return sp_obj_to_s_fn(k, v.v.p);
+    sp_RbVal result;
+    if (sp_user_display_box(v, inspect, &result)) {
+      if (inspect) return sp_poly_to_s(result);
+      const char *s = sp_display_bytes(result);
+      if (s) return s;
+    }
   }
   return inspect ? sp_Time_inspect((sp_Time *)v.v.p) : sp_Time_to_s((sp_Time *)v.v.p);
 }
@@ -469,8 +473,9 @@ const char *sp_poly_to_s(sp_RbVal v)
                  copy may be a fresh object's only reference (`puts(k ?
                  C.new : 1)`), as in sp_poly_check_str_obj */
               SP_GC_ROOT_RBVAL(v);
-              const char *us = sp_obj_to_s_fn(v.cls_id, v.v.p);
-              if (us) return us;
+              int found;
+              const char *us = sp_display_bytes(sp_obj_to_s_fn(v.cls_id, v.v.p, &found));
+              if (found && us) return us;
             }
             /* a user exception subclass boxes under its own class id */
             if (sp_is_exc_subclass_cls(v.cls_id))
@@ -806,7 +811,9 @@ const char *sp_poly_inspect(sp_RbVal v)
              #<Name:0x... @a=..., ...> like CRuby's default inspect */
           if (v.cls_id >= 0 && sp_obj_inspect_fn && v.v.p) {
             SP_GC_ROOT_RBVAL(v);   /* across the user #inspect or the ivar walk, as for #to_s */
-            return sp_obj_inspect_fn(v.cls_id, v.v.p);
+            int found;
+            sp_RbVal r = sp_obj_inspect_fn(v.cls_id, v.v.p, &found);
+            if (found) return sp_poly_to_s(r);
           }
           if (v.cls_id == SP_BUILTIN_OBJECT && v.v.p && v.v.p == sp_main_obj) return SPL("main");
           if ((v.cls_id >= 0 || v.cls_id == SP_BUILTIN_OBJECT) && v.v.p)

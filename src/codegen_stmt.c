@@ -26090,7 +26090,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       /* the receiver read first, as the typed Arrays' store holds it: in
          the prelude, ahead of any statement the index or the value puts
          there (a block's, a rescue's) */
-      int phold = store_recv_dropped_by(c, recv, argv[0], argv[1]);
+      int phold = store_recv_needs_root(c, id, recv, argv, 2, 1);
       int pth = phold ? ++g_tmp : 0;
       if (phold) {
         emit_indent(g_pre, g_indent);
@@ -26331,7 +26331,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
        `@data[swap(i)] = v`'s swap ahead of @data. The hold goes to the
        prelude, ahead of any statement the index or the value puts there (a
        block's, a rescue's). */
-    int hold = store_recv_dropped_by(c, recv, argv[0], argv[1]);
+    int hold = store_recv_needs_root(c, id, recv, argv, 2, 1);
     int th = hold ? ++g_tmp : 0;
     if (hold) {
       emit_indent(g_pre, g_indent);
@@ -27182,7 +27182,7 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
        can allocate, as the op-assign form above does. */
     buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b);
     buf_puts(b, "; ");
-    { int ops[2] = { argv[0], v }; emit_index_recv_root(c, rt, recv, ops, 2, ta, 0, b); }
+    { int ops[2] = { argv[0], v }; emit_index_recv_root(c, rt, id, recv, ops, 2, ta, 0, b); }
     /* a key that may be nil or of another class: held boxed, the read
        misses on it and a store converts it (hash_opw_okey) */
     int ok = hash_opw_okey(c, argv[0], rt);
@@ -27239,7 +27239,7 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
     if (!k) { unsupported(c, id, "index and/or write (array kind)"); return; }
     emit_indent(b, indent);
     buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b); buf_puts(b, "; ");
-    if (g_pre) { int ops[2] = { argv[0], v }; emit_index_recv_root(c, rt, recv, ops, 2, ta, 1, b); }
+    if (g_pre) { int ops[2] = { argv[0], v }; emit_index_recv_root(c, rt, id, recv, ops, 2, ta, 1, b); }
     buf_printf(b, "sp_int _t%d = ", tb); emit_int_expr(c, argv[0], b);
     buf_puts(b, "; ");
     /* int slots are nil only out of bounds (0 is truthy); ||= writes when

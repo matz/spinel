@@ -676,8 +676,11 @@ int loop_has_valued_break(Compiler *c, int root);
    write to one, or anything that runs Ruby code it does not show; not scalar
    arithmetic, a typed-array read or a plain field read (codegen_call.c). */
 int subtree_may_reassign_state(Compiler *c, int id);
-int store_recv_dropped_by(Compiler *c, int recv, int idx, int val);   /* (codegen_call.c) */
-void emit_index_recv_root(Compiler *c, TyKind irt, int ir, const int *ops, int nops, int ta, int held_ok, Buf *b);   /* (codegen_call.c) */
+/* Does the receiver of element write `node` (a store, an index-and/or-write, a slice store) need a root of its own
+   while its operands run (store_recv_needs_root, codegen_call.c)? held_ok 0 keeps the older rule the Hash arms use. */
+int store_recv_needs_root(Compiler *c, int node, int recv, const int *ops, int nops, int held_ok);
+/* The root of that receiver's temp ta, written into b where the answer is yes. */
+void emit_index_recv_root(Compiler *c, TyKind irt, int node, int ir, const int *ops, int nops, int ta, int held_ok, Buf *b);
 int node_may_reassign_state(Compiler *c, int id);
 /* Can evaluating the subtree run a proc or block of the program's? A
    yield, a super, a block, a call of a method the program defines (or of a

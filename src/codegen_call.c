@@ -18442,7 +18442,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
 
   if (rt == TY_POLY_ARRAY) {
     buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, recv, b); buf_puts(b, "; ");
-    emit_index_recv_root(c, rt, recv, splice_ops, 4, ta, 1, b);
+    emit_index_recv_root(c, rt, id, recv, splice_ops, 4, ta, 1, b);
     if (tam >= 0) {
       /* object RHS with to_ary: splice the coercion, yield the object */
       Buf call; memset(&call, 0, sizeof call);
@@ -18485,7 +18485,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   int poly_so = 0;   /* the boxed-RHS branch tracks its array source in _soN */
   int voint = 0;     /* the value is the oint _t<ts>, answered as the consumer takes it */
   buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b); buf_puts(b, "; ");
-  emit_index_recv_root(c, rt, recv, splice_ops, 4, ta, 1, b);
+  emit_index_recv_root(c, rt, id, recv, splice_ops, 4, ta, 1, b);
   buf_printf(b, "%s_src%d; sp_int _srcn%d; ", srcty, ta, ta);
 
   if (rhs_empty) {
@@ -26748,31 +26748,36 @@ int subtree_may_reassign_state(Compiler *c, int id) {
   return 0;
 }
 
-/* Is the receiver of an element store held by program state alone (an ivar, a global, a class variable or a call's
-   answer), with an index or a value that may reassign that state? Then the receiver is read first into a rooted temp:
-   read inside the store's argument list it is unrooted while they run, and C leaves its order to the compiler. */
-int store_recv_dropped_by(Compiler *c, int recv, int idx, int val) {
-  NodeKind rk = nt_kind(c->nt, recv);
-  if (repr_of(c, recv).head_held) return 0;   /* (a temp the binder holds, rooted where a later operand allocates) */
-  return (rk == NK_InstanceVariableReadNode || rk == NK_GlobalVariableReadNode || rk == NK_ClassVariableReadNode ||
-          rk == NK_CallNode) &&
-         (subtree_may_reassign_state(c, idx) || subtree_may_reassign_state(c, val));
+/* Does the receiver of an element write (`a[i] = v`, `a[i] ||= v`, `a[i, n] = v`; `node` the write) need a root of its
+   own while its operands (the index, the length, the value) run? Its temp is the container's only holder once an
+   operand drops it (an assignment of the variable that held it, a delete), and a receiver that allocates has no holder
+   at all. Held without one: a temp the binder holds, rooted where a later operand allocates (Repr head_held); self;
+   a local that is not a closure cell, unless an operand writes it (read_rebound_by), since the frame roots it and no
+   code else can rebind it. Every other receiver (an ivar, a global, a class variable, a cell local, a call's answer)
+   needs one whenever an operand can run code, counting what its nodes call without naming it (order_runs_code: an
+   interpolation's to_s, a when's ===, a splat's to_a) and what the write itself calls on its operands
+   (ic_node_may_call_program: an index's to_int). With held_ok 0 the receiver is asked the older rule, any operand
+   with a side effect, which the Hash arms keep. */
+int store_recv_needs_root(Compiler *c, int node, int recv, const int *ops, int nops, int held_ok) {
+  const NodeTable *nt = c->nt;
+  int runs = !held_ok ? 0 : ic_node_may_call_program(c, node);
+  if (held_ok) {
+    NodeKind rk = nt_kind(nt, recv);
+    if (repr_of(c, recv).head_held || rk == NK_SelfNode) return 0;
+    LocalVar *lv = rk == NK_LocalVariableReadNode ? scope_local(comp_scope_of(c, recv), nt_str(nt, recv, "name")) : NULL;
+    if (lv && !lv->is_cell) {
+      for (int i = 0; i < nops; i++) if (ops[i] >= 0 && read_rebound_by(c, recv, ops[i])) return 1;
+      return 0;
+    }
+  }
+  for (int i = 0; i < nops && !runs; i++)
+    runs = ops[i] >= 0 && (held_ok ? order_runs_code(c, ops[i]) : subtree_has_side_effect(c, ops[i]));
+  return runs || subtree_may_allocate(c, recv);
 }
-/* The receiver temp of an element write (`a[i] ||= v`, `a[i] = v`, `a[i, n] = v`) is the container's only holder once
-   an operand (the index, the length, the value) drops it (an assignment of the variable that held it, a delete), and a
-   receiver that allocates has no holder at all: root it when either can, so the operands' allocations and the store
-   reach a live container. With held_ok, a receiver already held (a temp the binder holds, rooted where a later operand allocates), or a read of
-   self, a local, an ivar, a global or a class variable that no operand rebinds (read_rebound_by: a write of it, a proc
-   that assigns its cell, code that may assign state), is held by its variable or its object and takes no root of its
-   own. */
-void emit_index_recv_root(Compiler *c, TyKind irt, int ir, const int *ops, int nops, int ta, int held_ok, Buf *b) {
-  NodeKind rk = nt_kind(c->nt, ir);
-  int held = held_ok && (repr_of(c, ir).head_held || rk == NK_SelfNode || rk == NK_LocalVariableReadNode ||
-                         rk == NK_InstanceVariableReadNode || rk == NK_GlobalVariableReadNode || rk == NK_ClassVariableReadNode);
-  for (int i = 0; i < nops && held; i++) held = ops[i] < 0 || !read_rebound_by(c, ir, ops[i]);
-  int drops = !held && subtree_may_allocate(c, ir);
-  for (int i = 0; i < nops && !drops && !held; i++) drops = ops[i] >= 0 && subtree_has_side_effect(c, ops[i]);
-  if (drops) { emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " "); }
+/* The receiver temp of an element write, rooted where store_recv_needs_root says it needs it (the value forms'
+   `({ T _t = recv; ... })`). */
+void emit_index_recv_root(Compiler *c, TyKind irt, int node, int ir, const int *ops, int nops, int ta, int held_ok, Buf *b) {
+  if (store_recv_needs_root(c, node, ir, ops, nops, held_ok)) { emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " "); }
 }
 
 /* A value of a kind whose builtin methods run no Ruby code of the

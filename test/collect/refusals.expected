@@ -1670,6 +1670,28 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/reinit_bound_subclass_initialize.rb:8: a method calls initialize on an object whose class's initialize uses super, yield or block_given?, so the call cannot run it as a plain method here. Move the shared code to a method of its own and call that from both.
 == test/reject/reinit_bound_subclass_initialize.rb [promote] rc=1
 spinel: test/reject/reinit_bound_subclass_initialize.rb:8: a method calls initialize on an object whose class's initialize uses super, yield or block_given?, so the call cannot run it as a plain method here. Move the shared code to a method of its own and call that from both.
+== test/reject/reopened_exception_self_new_explicit_super.rb [default] rc=1
+spinel: test/reject/reopened_exception_self_new_explicit_super.rb:4: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (SuperNode)
+spinel: test/reject/reopened_exception_self_new_explicit_super.rb:6: warning: Exception#message is not supported (raises NotImplementedError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_explicit_super.rb [promote] rc=1
+spinel: test/reject/reopened_exception_self_new_explicit_super.rb:4: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (SuperNode)
+spinel: test/reject/reopened_exception_self_new_explicit_super.rb:6: warning: Exception#message is not supported (raises NotImplementedError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_forwarding_super.rb [default] rc=1
+spinel: test/reject/reopened_exception_self_new_forwarding_super.rb:6: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (ForwardingSuperNode)
+spinel: test/reject/reopened_exception_self_new_forwarding_super.rb:8: warning: Exception#message is not supported (raises NotImplementedError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_forwarding_super.rb [promote] rc=1
+spinel: test/reject/reopened_exception_self_new_forwarding_super.rb:6: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (ForwardingSuperNode)
+spinel: test/reject/reopened_exception_self_new_forwarding_super.rb:8: warning: Exception#message is not supported (raises NotImplementedError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_keyword_super.rb [default] rc=1
+spinel: test/reject/reopened_exception_self_new_keyword_super.rb:6: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (ForwardingSuperNode)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_keyword_super.rb [promote] rc=1
+spinel: test/reject/reopened_exception_self_new_keyword_super.rb:6: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (ForwardingSuperNode)
+spinel: 1 refusal, nothing written
 == test/reject/require_relative_adjacent_literals.rb [default] rc=1
 spinel: test/reject/require_relative_adjacent_literals.rb:4: require_relative needs its path as one string literal
 == test/reject/require_relative_adjacent_literals.rb [promote] rc=1

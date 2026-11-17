@@ -8482,7 +8482,12 @@ static int dsend_name_only_outside(Compiler *c, int id, int recv, const char *na
     int inst = call_target(c, id, k, name, CT_OWN, NULL) >= 0, cls = call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL) >= 0;
     if (!inst && !cls) continue;
     if (inst && !cls_fact_excludes(c, recv, k)) return 0;
-    if (cls && !cls_fact_excludes_class_value(c, recv, k)) return 0;
+    /* (and on the Class object of every class under k, which inherits it:
+       `[A, C][i]` holds A's and C's Class objects, not Base's, and A.hello
+       answers Base's `self.hello`) */
+    if (cls)
+      for (int j = 0; j < c->nclasses; j++)
+        if (is_descendant(c, j, k) && !cls_fact_excludes_class_value(c, recv, j)) return 0;
     any = 1;
   }
   return any;

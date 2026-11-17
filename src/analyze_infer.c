@@ -8236,9 +8236,16 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
     }
   }
 
-  /* int_array.chunk_while/slice_when/chunk { |...| } .to_a -> a poly array (runs / pairs) */
+  /* int_array.chunk_while/slice_when/chunk { |...| } .to_a -> a poly array
+     (runs / pairs). Where the chunk call is itself typed as the array of
+     runs (an_chunk_family_to_a: the rule below for an Array or a Range, the
+     boxed receiver's arm), the `.to_a` on it answers from that array's own
+     builtin row, as codegen emits it; this rule answers only for the
+     receivers that call is not typed for (a Hash's chunk, an untyped Array
+     literal). */
   if (recv >= 0 && sp_streq(name, "to_a") &&
       nt_kind(nt, recv) == NK_CallNode &&
+      infer_type(c, recv) != TY_POLY_ARRAY &&
       nt_str(nt, recv, "name") &&
       (sp_streq(nt_str(nt, recv, "name"), "chunk_while") ||
        sp_streq(nt_str(nt, recv, "name"), "slice_when") ||

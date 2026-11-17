@@ -705,7 +705,9 @@ module Enumerable
         end
       end
       __nmin_filter(keys, elems, n, rev) if keys.size > n
-      sorted = keys.size <= 16 ? __nmin_sort(keys, elems) : (0...keys.size).sort_by { |i| keys[i] }.map { |i| elems[i] }
+      # (fetch, not keys[i]: a key that could be nil would sort through
+      # the checked comparison, where Integer keys compare natively)
+      sorted = keys.size <= 16 ? __nmin_sort(keys, elems) : (0...keys.size).sort_by { |i| keys.fetch(i) }.map { |i| elems[i] }
       rev ? sorted.reverse! : sorted
     end
   end

@@ -28416,7 +28416,9 @@ int desugar_user_send_others(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "send")) continue;
     int r = nt_ref(nt, id, "receiver");
-    if (r < 0 || nt_kind(nt, r) == NK_SelfNode || nt_ref(nt, id, "block") >= 0) continue;
+    /* (a literal block would be written twice: a `&b` the other call takes as well) */
+    int ublk = nt_ref(nt, id, "block");
+    if (r < 0 || nt_kind(nt, r) == NK_SelfNode || (ublk >= 0 && nt_kind(nt, ublk) != NK_BlockArgumentNode)) continue;
     /* (`o&.send(n)` skips its arguments on nil, which the split would read first) */
     if (nt_safe_nav(nt, id)) continue;
     int a = nt_ref(nt, id, "arguments"), an = 0;
@@ -28505,6 +28507,7 @@ int desugar_user_send_others(Compiler *c) {
     nt_node_set_str(nt, obj, "name", "__send__");
     nt_node_set_ref(nt, obj, "receiver", US_RECV());
     nt_node_set_ref(nt, obj, "arguments", nt_clone_subtree(nt, a));
+    if (ublk >= 0) nt_node_set_ref(nt, obj, "block", nt_clone_subtree(nt, ublk));
     int ts = fwd_new_node_like(nt, id, "StatementsNode"), es = fwd_new_node_like(nt, id, "StatementsNode");
     int els = fwd_new_node_like(nt, id, "ElseNode"), ifn = fwd_new_node_like(nt, id, "IfNode");
     nt_node_set_arr(nt, ts, "body", &id, 1);

@@ -9,3 +9,5 @@ say 6
 undefined method 'class_eval' for an instance of Obj
 42
 "undefined method 'class_eval' for an instance of Object"
+[:class_eval, [], NamedObj]
+:class_eval

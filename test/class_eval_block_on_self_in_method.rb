@@ -66,3 +66,23 @@ class Nest
   end
 end
 p Nest.run
+module Named
+  def go = class_eval { 1 }
+end
+class NamedObj
+  include Named
+end
+begin
+  NamedObj.new.go
+rescue NoMethodError => e
+  p [e.name, e.args, e.receiver.class]
+end
+class OwnRaise
+  include Named
+  def raise(*) = nil
+end
+begin
+  OwnRaise.new.go
+rescue NoMethodError => e
+  p e.name
+end

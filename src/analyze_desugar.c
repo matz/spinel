@@ -26611,32 +26611,13 @@ static int sce_defines(const NodeTable *nt, int id) {
   }
   return 0;
 }
-/* `raise ::NoMethodError, "undefined method 'nm' for an instance of " + self.class.to_s unless ::Module === self` */
-static int sce_module_guard(NodeTable *nt, int like, const char *nm) {
-  char msg[128];
-  snprintf(msg, sizeof msg, "undefined method '%s' for an instance of ", nm);
-  int str = fwd_new_node_like(nt, like, "StringNode");
-  nt_node_set_str(nt, str, "content", msg);
-  int kls = fwd_new_node_like(nt, like, "CallNode");
-  nt_node_set_str(nt, kls, "name", "class");
-  nt_node_set_ref(nt, kls, "receiver", fwd_new_node_like(nt, like, "SelfNode"));
-  int ks = fwd_new_node_like(nt, like, "CallNode");
-  nt_node_set_str(nt, ks, "name", "to_s");
-  nt_node_set_ref(nt, ks, "receiver", kls);
-  int cat = fwd_new_node_like(nt, like, "CallNode"), cata = fwd_new_node_like(nt, like, "ArgumentsNode");
-  nt_node_set_arr(nt, cata, "arguments", &ks, 1);
-  nt_node_set_str(nt, cat, "name", "+");
-  nt_node_set_ref(nt, cat, "receiver", str);
-  nt_node_set_ref(nt, cat, "arguments", cata);
-  /* (`::NoMethodError` and `::Module`: a constant of the method's nesting may take either name) */
-  int ne = fwd_new_node_like(nt, like, "ConstantPathNode");
-  nt_node_set_str(nt, ne, "name", "NoMethodError");
-  nt_node_set_ref(nt, ne, "parent", -1);
-  int rav[2] = { ne, cat };
-  int rc = fwd_new_node_like(nt, like, "CallNode"), rca = fwd_new_node_like(nt, like, "ArgumentsNode");
-  nt_node_set_arr(nt, rca, "arguments", rav, 2);
-  nt_node_set_str(nt, rc, "name", "raise");
-  nt_node_set_ref(nt, rc, "arguments", rca);
+/* `raise ::NoMethodError.new("undefined method 'nm' for an instance of #{self.class}", :nm, [], receiver: self) unless ::Module === self` */
+static int sce_module_guard(Compiler *c, NodeTable *nt, int like, const char *nm) {
+  char head[128];
+  snprintf(head, sizeof head, "undefined method '%s' for an instance of ", nm);
+  int rc = disp_raise_no_method_self(c, nm, head, 1, 0, 0);
+  /* (Kernel's, as a written `Kernel.raise` is: a module method's copy in an includer with its own `raise` called that one) */
+  nt_mark_builtin_call(nt, rc);
   int mod = fwd_new_node_like(nt, like, "ConstantPathNode");
   nt_node_set_str(nt, mod, "name", "Module");
   nt_node_set_ref(nt, mod, "parent", -1);
@@ -26680,6 +26661,8 @@ int desugar_self_class_eval_blocks(Compiler *c) {
     if (eval_form && (an > 0 || nt_ref(nt, blk, "parameters") >= 0)) continue;
     int body = nt_ref(nt, blk, "body");
     if (cls && sce_defines(nt, body)) continue;
+    /* (a method of the program's own of either name is the one the call or its rewrite would run) */
+    if (program_defines_name(nt, n0, nm) || program_defines_name(nt, n0, "instance_exec")) continue;
     if (!parent) parent = an_parent_map(nt);
     if (!parent) continue;
     int d = parent[id], in_block = 0;
@@ -26698,8 +26681,10 @@ int desugar_self_class_eval_blocks(Compiler *c) {
         mod = ex >= 0 && nt_kind(nt, ex) == NK_SelfNode;
         break;
       }
+      /* (a block parameter's default would run before the guard raises, where CRuby's call raises first) */
+      if (!mod && nt_ref(nt, blk, "parameters") >= 0) continue;
       if (!mod) {
-        int g = sce_module_guard(nt, id, nm), bn = 0;
+        int g = sce_module_guard(c, nt, id, nm), bn = 0;
         const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
         if (body >= 0 && !bb) continue;
         int *nb = malloc(sizeof(int) * ((size_t)bn + 1));

@@ -15505,10 +15505,28 @@ int exc_reopen_initialize(Compiler *c, int id, int ci) {
 /* The initialize a program's reopening gives an exception built as the
    builtin class named cn: its own reopening's, else the nearest one above it
    (ArgumentError.new under a reopened StandardError#initialize), or -1. */
-int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn) {
+int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn, int argc, const int *argv) {
   int rci = comp_builtin_class_named(c, cn);
   int rim = rci >= 0 ? exc_reopen_initialize(c, id, rci) : -1;
-  return rim >= 0 ? rim : exc_reopen_initialize_above(c, cn, 0, -1);
+  if (rim >= 0) return rim;
+  /* The reopening above gets the arguments as its own initialize takes them,
+     which is the message alone. A class whose own initialize takes more
+     (NameError's name, KeyError's key: and receiver:, SystemExit's status)
+     reads them natively and then calls super with the message: with more than
+     a message, or a splat or keywords, the native arms keep the call and the
+     reopening is left out, as before it was looked for. */
+  const NodeTable *nt = c->nt;
+  if (argc > 1 || exc_init_takes_own_args(cn)) return -1;
+  for (int i = 0; i < argc; i++) {
+    NodeKind k = nt_kind(nt, argv[i]);
+    if (k == NK_KeywordHashNode || k == NK_SplatNode) return -1;
+  }
+  int mi = exc_reopen_initialize_above(c, cn, 0, -1);
+  /* a yielding initialize has no function of its own (its proc-form clone runs
+     it, as ctor_alloc_init arranges); this helper calls the plain one, so the
+     call would name a function that is not emitted: such a call keeps the native
+     construction, as before the reopening was looked for */
+  return mi >= 0 && !c->scopes[mi].yields ? mi : -1;
 }
 
 /* Build the runtime's exception of the reopened class ci and run the
@@ -15527,12 +15545,12 @@ int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn) {
    An explicit `cause:` is not staged while the initialize runs: the
    raise's own call stages it once the exception is built (raise_fn). */
 void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg_node, Buf *b) {
-  emit_exc_reopen_construct_as(c, c->classes[ci].name, initm, args, msg_node, b);
+  emit_exc_reopen_construct_as(c, c->classes[ci].name, initm, args, msg_node, -1, b);
 }
 /* The same for the builtin exception class named cname, whose initialize is
    the one of a reopening above it (cname's own reopening, or a builtin's it
    descends from: ArgumentError.new under a reopened StandardError#initialize). */
-void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int args, int msg_node, Buf *b) {
+void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int args, int msg_node, int call_id, Buf *b) {
   Scope *im = &c->scopes[initm];
   int lo, hi, argc = msg_node >= 0;
   if (args < 0 && class_new_pos_arity(c, initm, &lo, &hi) && (argc < lo || argc > hi)) {
@@ -15545,11 +15563,34 @@ void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int
   }
   int te = ++g_tmp;
   buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", (&(\"\\xff\")[1])); SP_GC_ROOT(_t%d); ", te, cname, te);
-  buf_printf(b, "%s(_t%d", mc_method(c, im), te);
-  if (args >= 0) emit_args_filled(c, initm, args, ", ", b);
-  else emit_args_filled_argv(c, initm, argc ? &msg_node : NULL, argc, -1, ", ", b);
-  if (ctor_init_takes_block(c, initm)) buf_puts(b, ", NULL");
-  buf_printf(b, "); _t%d; })", te);
+  /* sp_exc_new marks a receiver and a key as recorded: the native arms clear
+     them, so `.key` / `.receiver` raise until an initialize records one */
+  if (sp_streq(cname, "KeyError") || sp_streq(cname, "NameError") || sp_streq(cname, "NoMethodError") ||
+      sp_streq(cname, "FrozenError"))
+    buf_printf(b, "_t%d->has_recv = 0; ", te);
+  if (sp_streq(cname, "KeyError")) buf_printf(b, "_t%d->has_key = 0; ", te);
+  /* a default that reads `self` (`msg = self.class.name`) reads the exception
+     being built, not the caller's self; a statement it has to hoist goes inside
+     this statement expression, as ctor_alloc_init puts it, since the enclosing
+     prelude runs before the exception exists */
+  char selfb[32];
+  snprintf(selfb, sizeof selfb, "_t%d", te);
+  const char *sv_cs = g_ctor_self, *sv_csd = g_ctor_self_deref;
+  g_ctor_self = selfb; g_ctor_self_deref = "->";
+  Buf apre, abuf;
+  memset(&apre, 0, sizeof apre); memset(&abuf, 0, sizeof abuf);
+  Buf *sv_pre = g_pre; int sv_ind = g_indent;
+  g_pre = &apre; g_indent = 0;
+  if (args >= 0) emit_args_filled(c, initm, args, ", ", &abuf);
+  else emit_args_filled_argv(c, initm, argc ? &msg_node : NULL, argc, -1, ", ", &abuf);
+  /* the call's own block goes to the initialize's `&blk`; a raise form has none */
+  if (call_id >= 0) emit_ctor_block_slot(c, call_id, initm, ", ", &abuf);
+  else if (ctor_init_takes_block(c, initm)) buf_puts(&abuf, ", NULL");
+  g_pre = sv_pre; g_indent = sv_ind;
+  g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
+  if (apre.p) buf_puts(b, apre.p);
+  buf_printf(b, "%s(_t%d%s); _t%d; })", mc_method(c, im), te, abuf.p ? abuf.p : "", te);
+  free(apre.p); free(abuf.p);
 }
 
 /* Klass.try_convert(x) on a boxed x: whether x already is one of the
@@ -16069,8 +16110,8 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* a reopening's own initialize runs on the runtime's exception, but
          not for the error a dispatcher's no-method arm builds (builtin_new) */
       if (!nt_int(nt, id, "builtin_new", 0)) {
-        int rim = exc_builtin_reopen_initialize(c, id, cn);
-        if (rim >= 0) { emit_exc_reopen_construct_as(c, cn, rim, nt_ref(nt, id, "arguments"), -1, b); { *out = 1; return 1; } } }
+        int rim = exc_builtin_reopen_initialize(c, id, cn, argc, argv);
+        if (rim >= 0) { emit_exc_reopen_construct_as(c, cn, rim, nt_ref(nt, id, "arguments"), -1, id, b); { *out = 1; return 1; } } }
       /* SystemCallError#initialize builds the message from the errno:
          Errno::ENOENT.new("x") is "No such file or directory - x", and
          SystemCallError.new("x", 2) an Errno::ENOENT */

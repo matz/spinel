@@ -1421,6 +1421,22 @@ static int lr_native_qualified(Compiler *c, const char *par, const char *name) {
   }
   return -1;
 }
+/* The node whose place a read the record does not hold is asked at: the
+   read itself when the walk placed it, else the node a pass made it from
+   (nt_origin: the call it rewrote, the node it copied), up its chain. A
+   constant a pass wrote is spelled where its source stood, so its name
+   resolves in that source's lexical scope, at that source's point. */
+static int lr_anchor(Compiler *c, int node) {
+  LoadRecord *r = elab_fresh(c);
+  for (int d = 0; d < 8 && node >= 0; d++) {
+    if (node < r->n && r->at[node] >= 0) return node;
+    char how = 0; int a = 0, k = 0; unsigned ph = 0;
+    int from = nt_origin(c->nt, node, &how, &a, &ph, &k);
+    if (from < 0) return node;
+    node = from;
+  }
+  return node;
+}
 static int lr_class_ref_at(Compiler *c, int node, int *core) {
   const NodeTable *nt = c->nt;
   const LrDef *d = NULL;
@@ -1429,11 +1445,11 @@ static int lr_class_ref_at(Compiler *c, int node, int *core) {
   if (k != NK_ConstantPathNode && k != NK_ConstantReadNode) return LR_UNKNOWN_CLASS;
   if (c->lrec->plan_depth) lr_plan_place(c, node, 0);
   const char *nm = lr_written_name(nt, node);
-  int o, ci, pc = LR_MAIN;
-  if (k == NK_ConstantReadNode && !lr_root_read(nt, node)) o = lr_const_at(c, node, nm, elab_point_of(c, node), &d, LR_KEY_CONST);
+  int o, ci, pc = LR_MAIN, at = lr_anchor(c, node);
+  if (k == NK_ConstantReadNode && !lr_root_read(nt, node)) o = lr_const_at(c, at, nm, elab_point_of(c, at), &d, LR_KEY_CONST);
   else {
     int par = k == NK_ConstantPathNode ? nt_ref(nt, node, "parent") : -1;
-    LoadPoint p = elab_point_of(c, node);
+    LoadPoint p = elab_point_of(c, at);
     if (par >= 0) pc = lr_class_ref_at(c, par, NULL);
     /* a native class a binding declared under a builtin the program does
        not open (`native_struct "IO::Buffer"`): the class it declared */

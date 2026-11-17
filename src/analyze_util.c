@@ -498,7 +498,17 @@ static int const_node_class_index_tree(Compiler *c, int id);
    is then the one. */
 static int const_node_record_class(Compiler *c, int id, int *core) {
   const NodeTable *nt = c->nt;
-  if (id < 0 || id >= nt->count || nt_int(nt, id, "node_line", 0) == 0) return -2;
+  if (id < 0 || id >= nt->count) return -2;
+  /* a node a pass made (no line of its own) is asked where its source
+     stood, when that source has one (elab_class_ref_at's anchor) */
+  if (nt_int(nt, id, "node_line", 0) == 0) {
+    int src = id;
+    for (int d = 0; d < 8 && src >= 0 && nt_int(nt, src, "node_line", 0) == 0; d++) {
+      char how = 0; int a = 0, k = 0; unsigned ph = 0;
+      src = nt_origin(nt, src, &how, &a, &ph, &k);
+    }
+    if (src < 0 || nt_int(nt, src, "node_line", 0) == 0) return -2;
+  }
   NodeKind ik = nt_kind(nt, id);
   if (ik == NK_ConstantWriteNode || ik == NK_ConstantPathWriteNode) {
     int k = elab_builder_class(c, id);

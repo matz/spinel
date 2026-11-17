@@ -4296,7 +4296,10 @@ static void cf_node(CF *f, int v) {
     return;
   }
   case NK_LocalVariableOperatorWriteNode: {
-    /* `x op= y`: the operator's value, a builtin's or the class's own */
+    /* `x op= y`: the operator's value, a builtin's or the class's own, and
+       what x held, the operator's receiver: a pass asking which classes the
+       operator is called on reads it from this node (a Struct's `+` that
+       answers another class is still x's) */
     int val = nt_ref(nt, v, "value");
     int el = cf_lv(f, v, nt_str(nt, v, "name"));
     const char *op = nt_str(nt, v, "binary_operator");
@@ -4306,6 +4309,7 @@ static void cf_node(CF *f, int v) {
     if (pidx == CF_ALL) cf_all(f, v);
     else cf_call_known(f, v, pidx, el, op, argv1, 1, -1);
     cf_flow(f, v, el);
+    cf_flow(f, el, v);
     return;
   }
   case NK_LocalVariableTargetNode: {
@@ -4341,7 +4345,8 @@ static void cf_node(CF *f, int v) {
     else cf_flow(f, val, v);
     for (int i = 0; i < n; i++) {
       cf_flow(f, v, els[i]);
-      if (k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode) cf_flow(f, els[i], v);
+      /* (an operator write's receiver is what the ivar held, as for x op= y above) */
+      if (k != NK_InstanceVariableWriteNode) cf_flow(f, els[i], v);
     }
     if (f->all_ivars) cf_all(f, v);
     return;

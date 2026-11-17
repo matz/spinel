@@ -4763,20 +4763,23 @@ static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, 
       }
     }
   }
-  int nr = nt_num_refs(nt, node);
+  /* (a forward to a boxed receiver answers only where no later one names a class: that one answered before) */
+  int poly = -1, nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) {
     int f = ie_forward_find(c, nt_ref_at(nt, node, i), s, self_cls, depth + 1, rb);
-    if (f >= 0 || f <= IE_FWD_POLY) return f;
+    if (f >= 0) return f;
+    if (f <= IE_FWD_POLY && poly == -1) poly = f;
   }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
     for (int j = 0; j < n; j++) {
       int f = ie_forward_find(c, ids[j], s, self_cls, depth + 1, rb);
-      if (f >= 0 || f <= IE_FWD_POLY) return f;
+      if (f >= 0) return f;
+      if (f <= IE_FWD_POLY && poly == -1) poly = f;
     }
   }
-  return -1;
+  return poly;
 }
 
 /* A method on `cls` that hands its own block to `X.instance_eval/exec(&blk)`

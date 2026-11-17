@@ -463,11 +463,18 @@ static void cplan_top_self_marks(Compiler *c) {
 /* May any version of the top-level defs named `name`, or the def an alias of that name stands for, read self? Asked before
    the lookup, so a def that stays private to a receiver costs nothing more. */
 static int cplan_top_name_reads_self(Compiler *c, const char *name) {
+  int any = 0;
+  for (int t = an_scopes_named_first(c, name); t >= 0 && !any; t = an_scopes_named_next(c, name, t))
+    any = cplan_is_top_def_scope(c, t);
+  int tm = call_target(c, -1, -1, name, CT_TOP, NULL);   /* (an alias names a def under another name) */
+  int tm_top = tm >= 0 && cplan_is_top_def_scope(c, tm);
+  /* (no def of the name, no marks to read: the marks are made again after each edit of the tree, and the
+     supers and guards the pre-fixpoint phases look up ask between edits) */
+  if (!any && !tm_top) return 0;
   cplan_top_self_marks(c);
   for (int t = an_scopes_named_first(c, name); t >= 0; t = an_scopes_named_next(c, name, t))
     if (cplan_is_top_def_scope(c, t) && c->top_self_marks[t]) return 1;
-  int tm = call_target(c, -1, -1, name, CT_TOP, NULL);   /* (an alias names a def under another name) */
-  return tm >= 0 && cplan_is_top_def_scope(c, tm) && c->top_self_marks[tm];
+  return tm_top && c->top_self_marks[tm];
 }
 
 static void ver_vis_read_add(Compiler *c, int call, const char *name, int cell);

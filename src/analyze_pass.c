@@ -648,7 +648,7 @@ int local_all_writes_empty_array(Compiler *c, Scope *sc, const char *name) {
 /* 1 iff every write of local `name` in `sc` builds a new array (and there is
    one): a value nothing else holds, so rebuilding it as another array kind
    loses no sharing. */
-static int local_all_writes_fresh_array(Compiler *c, Scope *sc, const char *name) {
+int local_all_writes_fresh_array(Compiler *c, Scope *sc, const char *name) {
   const NodeTable *nt = c->nt;
   int saw = 0;
   int si = (int)(sc - c->scopes);
@@ -2768,7 +2768,7 @@ static int ivar_has_array_write(Compiler *c, const LWIndex *ivw, int cls, const 
 
 static int widen_arg_hash(Compiler *c, int arg);
 static int widen_returned_hashes(Compiler *c, int call);
-static int widen_arg_array(Compiler *c, int arg);
+int widen_arg_array(Compiler *c, int arg);
 static int widen_boxed_array_sources(Compiler *c, int v, TyKind elem, int depth);
 static int widen_proc_call_hash_args(Compiler *c, int lit, const char *pn, TyKind hk, TyKind hv);
 
@@ -3446,7 +3446,7 @@ static int push_chain_base(Compiler *c, int recv) {
    reads, a path inference does not follow), given an element the Array
    cannot hold: the Arrays the call can answer become the general Array.
    One rule for every such path, not a walk of each. */
-static int widen_arg_array(Compiler *c, int arg);
+int widen_arg_array(Compiler *c, int arg);
 static int push_widens_arrays(const NodeTable *nt, int call, TyKind t);
 static int push_escape_widen(Compiler *c, int id, int recv, int is_push, TyKind vt) {
   if (!is_push || g_infer_optimistic || vt == TY_UNKNOWN || vt == TY_POLY) return 0;
@@ -7946,6 +7946,12 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   return ch;
 }
 
+/* Can every array the value `v` can be be the general Array
+   (array_src_walk without applying it)? */
+int array_sources_widenable(Compiler *c, int v) {
+  int stack[8];
+  return array_src_walk(c, v, 0, 0, stack, 0) == 1;
+}
 /* Widens every array the value `v` can be to the general Array, when all
    of them can be (array_src_walk). Returns 1 on a change. */
 static int widen_array_sources(Compiler *c, int v) {
@@ -7967,7 +7973,7 @@ static int widen_array_sources(Compiler *c, int v) {
 static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth);
 static int g_wcause_scope = -1;
 static const char *g_wcause_name = NULL;
-static int widen_arg_array(Compiler *c, int arg) {
+int widen_arg_array(Compiler *c, int arg) {
   const NodeTable *nt = c->nt;
   arg = value_node_or_self(nt, arg);   /* `(a; [1])` is the literal */
   NodeKind ak = nt_kind(nt, arg);

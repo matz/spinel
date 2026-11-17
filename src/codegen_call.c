@@ -22472,6 +22472,7 @@ int bam_binop_wrapper(const Scope *tm) {
 }
 
 static void emit_call_unwrapped(Compiler *c, int id, Buf *b);
+static int array_hash_reopen_mi(Compiler *c, int id, TyKind rt, const char *nm, int *aci_out);
 /* A copy of the receiver carries its instance variables (BOPF_COPY_CLASS:
    dup, clone, Hash#merge and #compact; Kernel's dup and clone on any other
    value, is_object_copy). An Array's, a Hash's, a Random's or an
@@ -22500,6 +22501,9 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
      when only the Hash's copies (bop_boxed_answers_copy) */
   int boxed_copy = rt == TY_POLY && rr.kind == RK_BOXED ? bop_boxed_answers_copy(nm, argc) : 0;
   if (!(bop_answers_self(rt, nm, argc, 0) & BOPF_COPY_CLASS) && !is_object_copy(nm) && !boxed_copy) return 0;
+  /* (not a reopened Array's or Hash's own method of the name: it answers
+     what it returns, which need be no copy of the receiver's type) */
+  if (array_hash_reopen_mi(c, id, rt, nm, NULL) >= 0) return 0;
   int t = ++g_tmp;
   char rn[24], dn[24];
   snprintf(rn, sizeof rn, "_t%d", t); snprintf(dn, sizeof dn, "_d%d", t);
@@ -35817,14 +35821,21 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
    answered 1. Only a method the reopen defines itself under this very name,
    as the analyzer types it; a yielding one has no function of its own and
    goes through its proc form. Answers whether it emitted the call. */
-static int emit_array_hash_reopen_call(Compiler *c, int id, int recv, TyKind rt, const char *nm, Buf *b) {
-  if (!ty_is_array(rt) && !ty_is_obj_array(rt) && !ty_is_hash(rt)) return 0;
+/* The method of a reopened Array or Hash that answers call id, or -1 */
+static int array_hash_reopen_mi(Compiler *c, int id, TyKind rt, const char *nm, int *aci_out) {
+  if (!ty_is_array(rt) && !ty_is_obj_array(rt) && !ty_is_hash(rt)) return -1;
   const char *acn = ty_is_hash(rt) ? "Hash" : "Array";
   int aci = comp_builtin_class_named(c, acn);
   MethodLookup ml = { .def_class = -1 };
   int ami = aci >= 0 ? call_target(c, id, aci, nm, 0, &ml) : -1;
-  if (ami < 0 || ml.def_class != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, nm)) return 0;
-  if (cplan_reopen_runs_builtin(c, id, ami)) return 0;
+  if (ami < 0 || ml.def_class != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, nm)) return -1;
+  if (cplan_reopen_runs_builtin(c, id, ami)) return -1;
+  if (aci_out) *aci_out = aci;
+  return ami;
+}
+static int emit_array_hash_reopen_call(Compiler *c, int id, int recv, TyKind rt, const char *nm, Buf *b) {
+  int aci = -1, ami = array_hash_reopen_mi(c, id, rt, nm, &aci);
+  if (ami < 0) return 0;
   if (c->scopes[ami].yields && emit_reopen_block_call(c, id, recv, ami, NULL, b)) return 1;
   if (g_plan_check) ucall_observe(c, id, ami, aci, 0);
   size_t at = b->len;

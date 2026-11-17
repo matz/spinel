@@ -23553,7 +23553,7 @@ int desugar_send_aliases(Compiler *c) {
 /* What the definitions of one class say about its `new`. */
 typedef struct {
   char *key;          /* ext_new_class_key */
-  char *ns;           /* the key of the namespace its first definition is in */
+  char *ns;           /* the key of the namespace its first definition is written in */
   char *super_ref;    /* its superclass reference as a key; NULL for none, or one that is no constant */
   int first;          /* the first definition of the class */
   int has_super;
@@ -23572,27 +23572,47 @@ static char *ext_strdup(const char *s) {
   if (s && !d) { fprintf(stderr, "out of memory\n"); exit(1); }
   return d;
 }
-/* The key of the constant reference ref (`Base::`, `A::Base::`) after
-   what key holds; 0 for another expression. */
-static int ext_new_ref_key(const NodeTable *nt, int ref, char *key, size_t cap) {
+/* Whether ref is a constant reference whose parts are all constants
+   (`Base`, `A::Base`), not `expr::Base` or another expression. */
+static int ext_new_ref_ok(const NodeTable *nt, int ref) {
   NodeKind k = ref >= 0 ? nt_kind(nt, ref) : NK_NONE;
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
-  /* a path whose first part is no constant (`expr::Base`) is no key */
   int p = ref;
   while (p >= 0 && nt_kind(nt, p) == NK_ConstantPathNode) p = nt_ref(nt, p, "parent");
-  if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode) return 0;
-  fwd_path_key(nt, ref, key, cap);
-  fwd_key_add(key, cap, nt_str(nt, ref, "name"));
+  return p < 0 || nt_kind(nt, p) == NK_ConstantReadNode;
+}
+/* The key of the constant reference ref (`Base::`, `A::Base::`): the
+   qualifier of its path, then its name. *rooted says whether the
+   reference starts at the root (`::Base`, which stays when a class or a
+   module of the program has a `Base` of its own); the key is the same
+   with and without the `::`. 0 for another expression. */
+static int ext_new_ref_key(const NodeTable *nt, int ref, char *key, size_t cap, int *rooted) {
+  if (!ext_new_ref_ok(nt, ref)) return 0;
+  char full[EXT_NEW_KEY] = "";
+  fwd_path_key(nt, ref, full, sizeof full);
+  fwd_key_add(full, sizeof full, nt_str(nt, ref, "name"));
+  int r = full[0] == ':' && full[1] == ':';
+  if (rooted) *rooted = r;
+  snprintf(key, cap, "%s", full + (r ? 2 : 0));
   return 1;
 }
-/* The key of the class that the definition d opens: the namespace the
-   definition is in, then its path (`A::Base::`). Two classes of one name
-   in two namespaces have two keys. */
+/* The key of the class that the definition d opens (`A::Base::`): the
+   namespace it is opened in, which holds the qualifier of its path
+   (fwd_ns_key), then its name. Two classes of one name in two namespaces
+   have two keys, and `class A::Base` has the key of `class Base` in
+   `module A`. A path from the root (`class ::Base`) is the key itself. */
 static int ext_new_class_key(const NodeTable *nt, int d, char *key, size_t cap) {
+  int path = class_def_path(nt, d), rooted = 0;
+  char ref[EXT_NEW_KEY];
+  if (!ext_new_ref_key(nt, path, ref, sizeof ref, &rooted)) return 0;
   key[0] = 0;
-  fwd_ns_key(nt, d, key, cap);
+  if (rooted) snprintf(key, cap, "%s", ref);
+  else {
+    fwd_ns_key(nt, d, key, cap);
+    fwd_key_add(key, cap, nt_str(nt, path, "name"));
+  }
   /* a key that fills the buffer is cut: no key */
-  return ext_new_ref_key(nt, class_def_path(nt, d), key, cap) && strlen(key) + 1 < cap;
+  return strlen(key) + 1 < cap;
 }
 /* The facts of the classes of the source, one for a class. */
 static ExtNewFacts ext_new_facts(Compiler *c) {
@@ -23608,16 +23628,22 @@ static ExtNewFacts ext_new_facts(Compiler *c) {
       if (!f) { fprintf(stderr, "out of memory\n"); exit(1); }
     }
     ExtNewFact *x = &f[nf++];
-    int sup = class_def_super(nt, d);
+    int sup = class_def_super(nt, d), rooted = 0;
     ns[0] = sr[0] = 0;
-    fwd_ns_key(nt, d, ns, sizeof ns);
-    *x = (ExtNewFact){ ext_strdup(key), ext_strdup(ns), NULL, d, sup >= 0, -1, 0 };
-    if (sup >= 0 && ext_new_ref_key(nt, sup, sr, sizeof sr)) x->super_ref = ext_strdup(sr);
+    int ref = sup >= 0 && ext_new_ref_key(nt, sup, sr, sizeof sr, &rooted);
+    /* the superclass reference is read where the definition is written,
+       not in the qualifier of the path of the class; one from the root
+       (`::Base`) is read at the root */
+    if (!rooted) fwd_lex_ctx(nt, d, ns, sizeof ns);
+    *x = (ExtNewFact){ ext_strdup(key), ext_strdup(ns), ref ? ext_strdup(sr) : NULL, d, sup >= 0, -1, 0 };
     int body = class_def_body(nt, d), nst = 0;
     const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &nst) : NULL;
     for (int k = 0; k < nst; k++) {
-      /* a `new` of the class: `def self.new`, or `def new` in `class << self` */
+      /* a `new` of the class: `def self.new`, or `def new` in `class << self`
+         (a `class << X` of another object holds no method of the class) */
       if (nt_kind(nt, st[k]) == NK_SingletonClassNode) {
+        int ex = nt_ref(nt, st[k], "expression");
+        if (ex < 0 || nt_kind(nt, ex) != NK_SelfNode) continue;
         int sb = nt_ref(nt, st[k], "body"), nsb = 0;
         const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &nsb) : NULL;
         for (int j = 0; j < nsb; j++) {

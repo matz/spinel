@@ -3,7 +3,9 @@
 # one with optional and rest parameters, a class with no initialize, a
 # class that inherits its initialize, a class with an initialize of its
 # own under a class with another one, an initialize that yields, a class
-# the program never makes, a class written by its path, two classes of
+# the program never makes, a class written by its path and a class under
+# it, a class under a class that is named from the root (`::Top`), a
+# `class << X` of another object in a class body, two classes of
 # one name, a class opened again from inside another module, an
 # initialize under a visibility call, and the classes whose
 # table has no row of an initialize: a class under a class that is not of
@@ -201,12 +203,30 @@ module ExtNew
     def keep(v) = @v = v
   end
 
+  # a `class << X` of another object inside a class body: its `def new`
+  # is no `new` of the class, which has the row of its initialize
+  class Tool
+    def self.label = "tool"
+  end
+
+  class Shy
+    attr_reader :x
+
+    class << Tool
+      def new(a, b) = a + b
+    end
+
+    def initialize(x)
+      @x = x
+    end
+  end
+
   # one object of each class, for the class values of the host
   #: () -> Array[untyped]
   def self.sample
     [Point.new(1, 2), Opt.new(1), Bare.new, Kid.new(1), Own.new("s"), Blk.new { |k| k }, Single.instance, Custom.new,
      Deep.new(1, 2), Inner::Point.new(1), Inner::Kid.new(1), Kw.new(a: 1), Mixed.new(1), Priv.new(1), Same.new(1),
-     Under.new, Meta.new(1, 2), Home::Room.new(1)]
+     Under.new, Meta.new(1, 2), Home::Room.new(1), Far.new(1, 2), Shy.new(1), FromRoot.new(1)]
   end
 
   #: () -> singleton(Lazy)
@@ -219,4 +239,31 @@ end
 # a class written by its path, with the initialize of the class above it
 class ExtNew::Deep < ExtNew::Point
   def deep = "deep #{sum}"
+end
+
+# a class under that class, written in the module: the same initialize
+module ExtNew
+  class Far < Deep
+    def far = "far #{sum}"
+  end
+end
+
+# a class at the root, and a class of the module that names it from the
+# root. The module has a class of the same name, so the reference keeps
+# its `::`
+class ExtNewTop
+  attr_reader :x
+
+  def initialize(x)
+    @x = x
+  end
+end
+
+module ExtNew
+  class ExtNewTop
+  end
+
+  class FromRoot < ::ExtNewTop
+    def twice = @x * 2
+  end
 end

@@ -51,7 +51,7 @@ int main(void) {
   Init_ext_methods_new();
   sp_PolyArray *all = sp_ExtNew_s_sample();
   SP_GC_ROOT(all);
-  enum { NSAMPLE = 18 };
+  enum { NSAMPLE = 21 };
   sp_RbVal k[NSAMPLE];
   for (int i = 0; i < NSAMPLE; i++) k[i] = sp_box_class((sp_Class){ all->data[i].cls_id, 0 });
   sp_RbVal lazy = sp_box_class(sp_ExtNew_s_lazy()), oops = sp_box_class(sp_ExtNew_s_oops());
@@ -83,9 +83,20 @@ int main(void) {
   news("Own", k[4]);
   make(k[4], 1, s, "s");
   make(k[4], 2, a, "s");
-  /* a class written by its path, with the initialize of Point */
+  /* a class written by its path, with the initialize of Point, and a
+     class under that class */
   news("Deep", k[8]);
   make(k[8], 2, a, "deep");
+  news("Far", k[18]);
+  make(k[18], 2, a, "far");
+  /* a class under a class named from the root, with a class of that name
+     in the module: the initialize of the class at the root */
+  news("FromRoot", k[20]);
+  make(k[20], 1, a, "twice");
+  /* a `class << X` of another object in the body: the row of the
+     initialize stays */
+  news("Shy", k[19]);
+  make(k[19], 1, a, "x");
   /* an initialize that yields: with the block of the host, and with none */
   news("Blk", k[5]);
   make_blk(k[5], 0, NULL, b, "v");

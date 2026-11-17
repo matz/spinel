@@ -1994,7 +1994,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/methods_new.rb -c --no-line-map --ext-init Init_ext_methods_new \
 	      --ext-entry ExtNew.sample,ExtNew.lazy,ExtNew.oops \
-	      --ext-class ExtNew::Point,ExtNew::Opt,ExtNew::Bare,ExtNew::Kid,ExtNew::Own,ExtNew::Blk,ExtNew::Lazy,ExtNew::Deep,ExtNew::Oops,ExtNew::Kw,ExtNew::Mixed,ExtNew::Inner::Point,ExtNew::Inner::Kid,ExtNew::Home::Room,ExtNew::Priv,ExtNew::Same,ExtNew::Single,ExtNew::Custom,ExtNew::Under,ExtNew::Meta \
+	      --ext-class ExtNew::Point,ExtNew::Opt,ExtNew::Bare,ExtNew::Kid,ExtNew::Own,ExtNew::Blk,ExtNew::Lazy,ExtNew::Deep,ExtNew::Oops,ExtNew::Kw,ExtNew::Mixed,ExtNew::Inner::Point,ExtNew::Inner::Kid,ExtNew::Home::Room,ExtNew::Priv,ExtNew::Same,ExtNew::Single,ExtNew::Custom,ExtNew::Under,ExtNew::Meta,ExtNew::Far,ExtNew::Shy,ExtNew::FromRoot \
 	      -o "$$tmp/n.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class new emission)"; ok=0; \
 	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_new_host.c "$$tmp/n.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/nhost" 2>"$$tmp/cc.err"; then \

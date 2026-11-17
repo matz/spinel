@@ -585,7 +585,8 @@ extern int sp_gc_ph_on;
 void sp_gc_collect(void);
 /* the collector the program installs; NULL under --gc=none (sp_alloc.c) */
 extern void (*sp_gc_collect_fn)(void);
-extern int sp_gc_full_next;   /* GC.start's: the next collection is a full one (sp_alloc.c) */
+extern int sp_gc_full_next;
+long long sp_gc_live_objects(void);   /* GC.stat's heap_live_slots: the objects the heap holds (sp_gc.c) */   /* GC.start's: the next collection is a full one (sp_alloc.c) */
 #ifdef SP_THREADS
 /* Sweep one worker's young list on that worker (see sp_gc.c). Survivors come
    back as a local list for the collector to splice into the old heap. */

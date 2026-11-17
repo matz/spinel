@@ -4582,7 +4582,10 @@ sp_StrIntHash*sp_gc_stat(void){
   for(sp_str_hdr*sh=sp_str_old; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; }
   SP_HEAP_UNLOCK();
 #endif
-  sp_StrIntHash*h=sp_StrIntHash_new();sp_StrIntHash_set(h,SPL("bytes"),(sp_int)SP_GC_CTR_GET(sp_gc_bytes));sp_StrIntHash_set(h,SPL("old_bytes"),(sp_int)sp_gc_old_bytes);sp_StrIntHash_set(h,SPL("threshold"),(sp_int)sp_gc_threshold);sp_StrIntHash_set(h,SPL("cycle"),(sp_int)sp_gc_cycle);sp_StrIntHash_set(h,SPL("full_runs"),(sp_int)sp_gc_full_runs);sp_StrIntHash_set(h,SPL("remembered"),(sp_int)sp_gc_nremembered);sp_StrIntHash_set(h,SPL("remembered_peak"),(sp_int)sp_gc_rem_peak);sp_StrIntHash_set(h,SPL("str_bytes"),(sp_int)str_bytes);sp_StrIntHash_set(h,SPL("str_count"),str_count);return h;}
+  /* CRuby's count of the objects the heap holds (sp_gc_live_objects), so a
+     program can measure a release the same way on both */
+  long long live_objs=sp_gc_live_objects();
+  sp_StrIntHash*h=sp_StrIntHash_new();sp_StrIntHash_set(h,SPL("bytes"),(sp_int)SP_GC_CTR_GET(sp_gc_bytes));sp_StrIntHash_set(h,SPL("heap_live_slots"),(sp_int)live_objs);sp_StrIntHash_set(h,SPL("old_bytes"),(sp_int)sp_gc_old_bytes);sp_StrIntHash_set(h,SPL("threshold"),(sp_int)sp_gc_threshold);sp_StrIntHash_set(h,SPL("cycle"),(sp_int)sp_gc_cycle);sp_StrIntHash_set(h,SPL("full_runs"),(sp_int)sp_gc_full_runs);sp_StrIntHash_set(h,SPL("remembered"),(sp_int)sp_gc_nremembered);sp_StrIntHash_set(h,SPL("remembered_peak"),(sp_int)sp_gc_rem_peak);sp_StrIntHash_set(h,SPL("str_bytes"),(sp_int)str_bytes);sp_StrIntHash_set(h,SPL("str_count"),str_count);return h;}
 /* String#setbyte over value-semantics strings: copy-on-write (a literal's
    bytes are static storage). The caller re-binds an lvalue receiver. */
 const char *sp_str_setbyte_cow(const char *s, sp_int i, sp_int v) {SP_GC_ROOT_STR(s);

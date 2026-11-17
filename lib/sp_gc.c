@@ -194,6 +194,24 @@ int sp_gc_rem_peak = 0;
    caller that would deref it next. */
 void sp_oom_die(void){fputs("unhandled exception: out of memory\n",stderr);exit(1);}
 
+/* The objects the heap holds, for GC.stat's heap_live_slots: the young
+   lists (per worker in the threaded runtime), the old list and the slab's
+   objects of either generation. Right after a collection it is the live
+   set; between collections it counts the garbage not swept yet too, as
+   CRuby's does. An O(n) walk, asked only by GC.stat. */
+static void sp_gc_count_obj_cb(void *hdr, void *arg){ (void)hdr; (*(long long *)arg)++; }
+long long sp_gc_live_objects(void){
+  long long n=0;
+#ifdef SP_THREADS
+  { int nw=sp_active_workers; if(nw<1)nw=1; if(nw>SP_MAX_WORKERS)nw=SP_MAX_WORKERS; for(int i=0;i<nw;i++)for(sp_gc_hdr*p=sp_gc_wslot[i].young;p;p=p->next)n++; }
+#else
+  for(sp_gc_hdr*p=sp_gc_heap;p;p=p->next)n++;
+#endif
+  for(sp_gc_hdr*p=sp_gc_old_heap;p;p=p->next)n++;
+  sp_slab_each_object(1,1,sp_gc_count_obj_cb,&n);
+  return n;
+}
+
 /* ---- GC verify (SPINEL_GC_VERIFY=1): a sorted snapshot of every
  * registered header, so the scan-time membership test is O(log n). ---- */
 static int sp_gc_vsnap_cmp(const void *a, const void *b){ uintptr_t x=(uintptr_t)*(sp_gc_hdr*const*)a, y=(uintptr_t)*(sp_gc_hdr*const*)b; return x<y?-1:x>y?1:0; }

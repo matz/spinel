@@ -9,13 +9,13 @@
 "c2"
 no method secret
 no method nothing
-bump/1 label/1 half/0 twin/0 keys/1 half_of/1 greet/1 twin_name/1 pick/1 spare/0 named/0 stamp/1 .opts/0 .zero/0 .tally/0 .install_dyn/0 dyn/0 .call_dyn/1 name/0 n/0 tag/0 tag=/1
+bump/1 label/1 half/0 twin/0 keys/1 half_of/1 greet/1 twin_name/1 pick/1 spare/0 named/0 stamp/1 .opts/0 .zero/0 .tally/0 .install_dyn/0 dyn/0 .call_dyn/1 .new/1 name/0 n/0 tag/0 tag=/1
 2
 "L"
 1
-label/1^ half/0^ twin/0^ keys/1^ half_of/1^ greet/1^ twin_name/1^ pick/1^ spare/0^ named/0^ stamp/1^ .opts/0^ .zero/0^ .install_dyn/0^ dyn/0^ .call_dyn/1^ shout/0 bump/1 .tally/0 name/0^ n/0^ tag/0^ tag=/1^
+label/1^ half/0^ twin/0^ keys/1^ half_of/1^ greet/1^ twin_name/1^ pick/1^ spare/0^ named/0^ stamp/1^ .opts/0^ .zero/0^ .install_dyn/0^ dyn/0^ .call_dyn/1^ shout/0 bump/1 .new/1 .tally/0 name/0^ n/0^ tag/0^ tag=/1^
 "C"
-label/1^ half/0^ twin/0^ keys/1^ half_of/1^ greet/1^ twin_name/1^ pick/1^ spare/0^ named/0^ stamp/1^ .opts/0^ .zero/0^ .install_dyn/0^ dyn/0^ .call_dyn/1^ shout/0 bump/1 .tally/0 name/0^ n/0^ tag/0^ tag=/1^
+label/1^ half/0^ twin/0^ keys/1^ half_of/1^ greet/1^ twin_name/1^ pick/1^ spare/0^ named/0^ stamp/1^ .opts/0^ .zero/0^ .install_dyn/0^ dyn/0^ .call_dyn/1^ shout/0 bump/1 .new/1 .tally/0 name/0^ n/0^ tag/0^ tag=/1^
 "spare"
 "s!"
 "s!"

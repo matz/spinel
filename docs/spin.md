@@ -630,7 +630,19 @@ the runtime calls `fn(cap, argc, args)`, which reads its boxed argument
 (`test/ext/methods_blk_host.c`). A method that takes no block goes on
 without the block. The forwarders of a block are calls of the program
 with a block of no known kind, so a local of the method that holds what
-the block answers is boxed for every call of the method. A
+the block answers is boxed for every call of the method. The table of a
+class holds `new` too, as a singleton method of the class value: a row
+for each count of arguments its `initialize` takes (with `block` set too,
+when the `initialize` yields), or a row of no argument for a class with
+no `initialize`. A class that inherits its `initialize` has the rows of
+that `initialize`, and its `new` answers an object of the class itself
+(`test/ext/methods_new_host.c`). A class with a private `new`
+(`private_class_method :new`) has no row, and a class that defines
+`self.new`, or is under one that does, has the rows of that method. These
+have no row of `new`: a class under a class that is not of the program
+(`StandardError`, `Array`, a `Struct.new(...)`), a class that a
+`Class.new` or `Struct.new` call makes, and a class with the `initialize`
+of a module. A
 method with a keyword parameter, or with a required parameter
 after an optional one, stays out of the table, as does a private or
 protected one, and one

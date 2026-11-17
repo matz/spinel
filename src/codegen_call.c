@@ -34529,6 +34529,20 @@ int root_reopen_method_vis(Compiler *c, int id, int cid, const char *qm) {
    override's `super` asks. The table's entry, visibility and undef, and the
    names the class carries with no entry, come from the call plan
    (cplan_table_presence). */
+/* Does a program class below a builtin exception inherit one of the class-gated
+   accessors (KeyError#key, NameError#name, NoMethodError#args, ...) from the
+   builtin it descends from? The instance is the builtin's own object, so the
+   runtime gate (sp_exc_has_acc) admits it; the program's method table has no
+   entry for it, and a name no ancestor of the builtin defines stays false. */
+static int exc_subclass_inherits_gated_acc(Compiler *c, int cid, const char *qm) {
+  if (!class_is_exc_subclass(c, cid)) return 0;
+  const char *const *owners = gated_exception_accessor_owners(qm);
+  const char *par = exc_builtin_parent(c, cid);
+  for (int o = 0; owners && owners[o]; o++)
+    for (int i = 0; builtin_ancestor_at(par, i); i++)
+      if (sp_streq(builtin_ancestor_at(par, i), owners[o])) return 1;
+  return 0;
+}
 static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
   if (name_is_synth_method(c, qm) || comp_method_is_private_helper(c, cid, qm)) return 0;
   if (is_initialize_copy_name(qm)) return 1;
@@ -34560,6 +34574,8 @@ static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
      Enumerable includer's, a Comparable's, a Struct's or a Data's
      core names (#2663) */
   if (!found && pr.implied) return 2;
+  /* a class-gated accessor of the builtin exception the class descends from (K-055) */
+  if (!found && exc_subclass_inherits_gated_acc(c, cid, qm)) return 2;
   /* a method of a program's Object, Kernel or BasicObject reopening that
      the chain does not reach (the class table keeps them apart): the
      root's, by its visibility there */

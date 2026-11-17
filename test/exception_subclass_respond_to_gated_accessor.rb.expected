@@ -1,0 +1,21 @@
+MyKE: key receiver
+MyNE: receiver name
+MyNM: receiver args private_call? name
+MyFE: receiver
+MySE: status success?
+MyRT: 
+MyKE2: key receiver
+MyENT: errno
+MyST: result
+MyLJ: reason exit_value
+true
+true
+true
+false
+true
+false
+true
+false
+true
+false
+MyKE

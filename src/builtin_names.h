@@ -479,6 +479,7 @@ int builtin_numeric_owns(const char *cls, const char *name); /* Numeric's, on In
 int builtin_numeric_arity(const char *name, int *out);
 
 int is_gated_exception_accessor(const char *n); /* accessors owned by specific exception classes */
+const char *const *gated_exception_accessor_owners(const char *n); /* the builtin classes that define it, NULL-terminated; NULL when n is not gated */
 int is_symbol_exception_accessor(const char *n); /* exception accessors that can return a Symbol */
 
 int is_builtin_reopen_name(const char *name);

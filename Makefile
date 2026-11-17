@@ -678,10 +678,10 @@ packages/json/sp_json_mt.o: packages/json/sp_json.c packages/json/sp_json.h \
 # missing, leaving `require "openssl"` an unsatisfiable require rather than a
 # link error. -lssl/-lcrypto reach the link line through openssl.rb's ffi_lib,
 # which is parsed only when a program requires it.
-packages/openssl/sp_openssl.o: packages/openssl/sp_openssl.c \
+packages/openssl/sp_openssl.o: packages/openssl/sp_openssl.c packages/openssl/sp_asn1.h \
                                lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(OPENSSL_CPPFLAGS) -Ilib -Ipackages/openssl packages/openssl/sp_openssl.c -o $@
-packages/openssl/sp_openssl_mt.o: packages/openssl/sp_openssl.c \
+packages/openssl/sp_openssl_mt.o: packages/openssl/sp_openssl.c packages/openssl/sp_asn1.h \
                                   lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) $(OPENSSL_CPPFLAGS) -Ilib -Ipackages/openssl packages/openssl/sp_openssl.c -o $@
 

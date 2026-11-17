@@ -34575,7 +34575,8 @@ static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
      core names (#2663) */
   if (!found && pr.implied) return 2;
   /* a class-gated accessor of the builtin exception the class descends from (K-055) */
-  if (!found && exc_subclass_inherits_gated_acc(c, cid, qm)) return 2;
+  /* (a `private :key` the class declares on it is the class's own visibility word) */
+  if (!found && exc_subclass_inherits_gated_acc(c, cid, qm)) return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
   /* a method of a program's Object, Kernel or BasicObject reopening that
      the chain does not reach (the class table keeps them apart): the
      root's, by its visibility there */

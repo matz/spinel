@@ -19401,34 +19401,48 @@ static void oa_tuple_targets(Compiler *c, OAS *sl, int n, const int *read_slot, 
    - an --ext-entry or --ext-class method is entered by the host, through the
      header written from the types this pass leaves;
    - a method nothing in the program names (no call, Symbol or String spells
-     it) is never entered at all.
+     it) is never entered at all, unless a route this pass does not see
+     enters it by a name no call spells (oa_entered_unseen: a pattern's
+     deconstruct, a runtime protocol, an operator, a setter), whose caller
+     reads the value boxed.
    Killed, the slot took down the component its value joined: an ivar whose
    `select` an exported method answered stayed a poly array, and a call on one
    of its elements went through the boxed dispatch. */
 /* Every name a call, a Symbol or a String spells, gathered on the first ask
-   of a round. */
-typedef struct { ANameHash h; int built; } OaSpelled;
+   of a round. A send, a Method or the like whose name is not a literal may
+   reach any method, and then every name counts as spelled. */
+typedef struct { ANameHash h; int built, any; } OaSpelled;
 static int oa_name_spelled(Compiler *c, OaSpelled *nm, const char *name) {
   const NodeTable *nt = c->nt;
   if (!nm->built) {
-    NT_FOREACH_KIND(nt, NK_CallNode, k) { const char *v = nt_str(nt, k, "name"); if (v && !anh_has(&nm->h, v)) anh_add(&nm->h, v); }
+    NT_FOREACH_KIND(nt, NK_CallNode, k) {
+      const char *v = nt_str(nt, k, "name");
+      if (v && !anh_has(&nm->h, v)) anh_add(&nm->h, v);
+      if (!v || nm->any || !(is_method_handoff_name(v) || sp_streq(v, "respond_to?"))) continue;
+      int a = nt_ref(nt, k, "arguments"), an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      NodeKind ak = an > 0 ? nt_kind(nt, av[0]) : NK_CallNode;
+      if (ak != NK_SymbolNode && ak != NK_StringNode) nm->any = 1;
+    }
     NT_FOREACH_KIND(nt, NK_SymbolNode, k) { const char *v = nt_str(nt, k, "value"); if (v && !anh_has(&nm->h, v)) anh_add(&nm->h, v); }
     NT_FOREACH_KIND(nt, NK_StringNode, k) { const char *v = nt_str(nt, k, "content"); if (v && !anh_has(&nm->h, v)) anh_add(&nm->h, v); }
     nm->built = 1;
   }
-  return anh_has(&nm->h, name);
+  return nm->any || anh_has(&nm->h, name);
 }
 static void oa_unreached_returns(Compiler *c, OAS *sl, int n, OaSpelled *named) {
   for (int i = 0; i < n; i++) {
     if (sl[i].lv || sl[i].ici >= 0 || sl[i].saw_call) continue;
     Scope *M = &c->scopes[sl[i].sidx];
     if (M->is_ext_entry || M->is_ext_method) continue;
-    if (M->name && !oa_name_spelled(c, named, M->name)) continue;
+    if (M->name && !oa_entered_unseen(M) && !oa_name_spelled(c, named, M->name)) continue;
     sl[i].alive = 0;
   }
 }
 /* Is scope s a method nothing can enter: a def no call, Symbol or String
-   names, and no --ext-entry or --ext-class method or runtime protocol? A
+   names, and none a route this pass does not see enters (oa_entered_unseen:
+   an --ext-entry or --ext-class method, a runtime protocol, method_missing,
+   a pattern's deconstruct, an operator or a setter)? A
    call in it never runs, so a dynamic receiver there reaches no slot: a
    reader such a method calls on an untyped parameter kept the ivar of every
    class with that reader boxed (oa_unreached_returns asks the same of a
@@ -19436,8 +19450,7 @@ static void oa_unreached_returns(Compiler *c, OAS *sl, int n, OaSpelled *named) 
 static int oa_scope_never_entered(Compiler *c, OaSpelled *named, int s) {
   if (s <= 0 || s >= c->nscopes) return 0;
   Scope *M = &c->scopes[s];
-  if (!M->name || M->def_node < 0 || M->is_ext_entry || M->is_ext_method) return 0;
-  if (sp_streq(M->name, "initialize") || method_name_implicitly_invoked(M->name)) return 0;
+  if (!M->name || M->def_node < 0 || oa_entered_unseen(M) || sp_streq(M->name, "initialize")) return 0;
   return !oa_name_spelled(c, named, M->name);
 }
 static int narrow_object_arrays(Compiler *c) {

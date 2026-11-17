@@ -105,7 +105,7 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      rides the materialized element array (#3064). */
   if (rt == TY_STR_RANGE) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     if (range_object_face(name)) return 0;
     /* everything else is served by the element array (see the desugar) */
     { *out = TY_UNKNOWN; return 1; }

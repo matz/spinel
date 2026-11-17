@@ -153,6 +153,7 @@ src/analyze_infer.c infer_uncached a scope's own shadow name
 src/analyze_infer.c super_reaches_exc_text super, by its def's name
 src/analyze_infer.c an_rat_op_own1 whether a reopened Rational, Integer or Object defines the operator itself (then no Rational is counted)
 src/analyze_infer.c an_poly_object_methods_listable whether a class the receiver can hold defines methods (public_methods, singleton_methods) itself
+src/analyze_infer.c an_int_nil_sensitive_static whether Integer, NilClass or Object find a method of the program's name at all, program-wide, not one call's target
 src/analyze_pass.c infer_param_types_ex =s->name super, by its def's name
 src/analyze_scope.c cmethod_reaches_class_ivar_walk =c->scopes[mi].name a scope's own name
 src/analyze_scope.c forwarding_target_scan =st->name the super site scope's own name

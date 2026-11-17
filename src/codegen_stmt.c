@@ -19853,9 +19853,8 @@ static void masgn_hoist_targets(Compiler *c, int id, MasgnTmps *mt) {
   }
 }
 /* A MultiWriteNode statement (a, b = ...) (emit_stmt_inner's arms, in their order) */
-static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
+static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
   g_masgn_notmps = 0;   /* the oint temps are this assignment's (temp numbers restart per function) */
-  if (!(sp_streq(ty, "MultiWriteNode"))) return 0;
   int ln = 0;
   const int *lefts = nt_arr(nt, id, "lefts", &ln);
   int value = nt_ref(nt, id, "value");
@@ -20638,6 +20637,17 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
   }
   return 1;
   return 0;
+}
+/* An assignment nested in another's values (`a, *r = x, (b, c = 1, 2; y)`)
+   starts with temps of its own and leaves the outer one's registered */
+static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
+  if (!(sp_streq(ty, "MultiWriteNode"))) return 0;
+  int saved_n = g_masgn_notmps, saved[64];
+  memcpy(saved, g_masgn_otmps, (size_t)saved_n * sizeof saved[0]);
+  int r = emit_multi_write_stmt_body(c, id, b, indent, nt, ty);
+  g_masgn_notmps = saved_n;
+  memcpy(g_masgn_otmps, saved, (size_t)saved_n * sizeof saved[0]);
+  return r;
 }
 
 /* Does definition n (a def, or a define_method call with its block) hold

@@ -3489,6 +3489,9 @@ TyKind an_bop_result(Compiler *c, const BuiltinOp *op, TyKind rt, int id, int ar
    are laid out before the latch could flip on a type. */
 static const NodeTable *g_ibx_nt;
 static int g_ibx_latched;
+/* (the flip retypes index queries whose kept answers did not read what
+   flipped it, so every kept answer goes) */
+static int ibx_latch(void) { comp_touch_global(); return g_ibx_latched = 1; }
 static int is_bit_op_name(const char *n) { return n && (sp_streq(n, "&") || sp_streq(n, "|") || sp_streq(n, "^")); }
 /* The part no type decides: a `method` call, a method of the program's in
    Integer's chain under a name nil answers, a Symbol naming `& | ^` -- the
@@ -3569,7 +3572,7 @@ static int an_int_nil_sensitive_use(Compiler *c) {
   if (st_nscopes != c->nscopes || st_edits != nt->edits) {
     st_ans = an_int_nil_sensitive_static(c); st_nscopes = c->nscopes; st_edits = nt->edits; dy_valid = 0;
   }
-  if (st_ans) return g_ibx_latched = 1;
+  if (st_ans) return ibx_latch();
   if (dy_valid && dy_ty == comp_ty_edits && dy_edits == nt->edits) return 0;
   static const char *const names[] = { "&", "|", "^", "clone", "sum", NULL };
   for (int k = 0; names[k]; k++)
@@ -3583,14 +3586,14 @@ static int an_int_nil_sensitive_use(Compiler *c) {
       else if (k == 3) hit = n >= 1 && comp_ntype(c, r) == TY_INT;
       else hit = n == 1 && nt_ref(nt, cl, "block") >= 0 && av && comp_ntype(c, av[0]) == TY_INT &&
                  (comp_ntype(c, r) == TY_INT_ARRAY || comp_ntype(c, r) == TY_FLOAT_ARRAY);
-      if (hit) return g_ibx_latched = 1;
+      if (hit) return ibx_latch();
     }
   static const NodeKind opw[] = { NK_LocalVariableOperatorWriteNode, NK_InstanceVariableOperatorWriteNode,
                                   NK_ClassVariableOperatorWriteNode, NK_GlobalVariableOperatorWriteNode,
                                   NK_IndexOperatorWriteNode, NK_CallOperatorWriteNode, NK_ConstantOperatorWriteNode };
   for (size_t q = 0; q < sizeof opw / sizeof opw[0]; q++) NT_FOREACH_KIND(nt, opw[q], w) {
     if (is_bit_op_name(nt_str(nt, w, "binary_operator")) && comp_ntype(c, w) == TY_INT)
-      return g_ibx_latched = 1;
+      return ibx_latch();
   }
   dy_ty = comp_ty_edits; dy_edits = nt->edits; dy_valid = 1;
   return 0;

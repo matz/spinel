@@ -676,6 +676,7 @@ int loop_has_valued_break(Compiler *c, int root);
    write to one, or anything that runs Ruby code it does not show; not scalar
    arithmetic, a typed-array read or a plain field read (codegen_call.c). */
 int subtree_may_reassign_state(Compiler *c, int id);
+void emit_index_recv_root(Compiler *c, TyKind irt, int ir, int idx, int iv, int ta, Buf *b);   /* (codegen_call.c) */
 int node_may_reassign_state(Compiler *c, int id);
 /* Can evaluating the subtree run a proc or block of the program's? A
    yield, a super, a block, a call of a method the program defines (or of a

@@ -26745,6 +26745,16 @@ int subtree_may_reassign_state(Compiler *c, int id) {
   return 0;
 }
 
+/* The receiver temp of an element write (`a[i] ||= v`, `a[i] = v`, `a[i, n] = v`) is the container's only holder once the index or the
+   value drops it (an assignment of the variable that held it, a delete), and a receiver that
+   allocates has no holder at all: root it when either can, so the value's allocations and the
+   store reach a live container */
+void emit_index_recv_root(Compiler *c, TyKind irt, int ir, int idx, int iv, int ta, Buf *b) {
+  if (subtree_may_allocate(c, ir) || subtree_has_side_effect(c, idx) || subtree_has_side_effect(c, iv)) {
+    emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " ");
+  }
+}
+
 /* A value of a kind whose builtin methods run no Ruby code of the
    program's: numbers, Strings, Symbols, their ranges and typed Arrays. A
    Proc, an object, a boxed value or a container of them may call back into

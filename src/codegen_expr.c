@@ -6570,16 +6570,6 @@ static void emit_forwarded_block_value(Compiler *c, int id, Buf *b) {
   if (optional) buf_puts(b, ")");
 }
 
-/* The receiver temp of an index-or/and-write is the container's only holder once the index or the
-   value drops it (an assignment of the variable that held it, a delete), and a receiver that
-   allocates has no holder at all: root it when either can, so the value's allocations and the
-   store reach a live container */
-static void emit_index_recv_root(Compiler *c, TyKind irt, int ir, int idx, int iv, int ta, Buf *b) {
-  if (subtree_may_allocate(c, ir) || subtree_has_side_effect(c, idx) || subtree_has_side_effect(c, iv)) {
-    emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " ");
-  }
-}
-
 /* `a[i] ||= v` / `a[i] &&= v` on a String Array: the slot is read as the handle the Array
    holds, a write takes the value's handle (the row's hold) and stores that one, and the
    expression answers its bytes: the String the Array holds, so a consumer that takes the
@@ -6860,8 +6850,9 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     TyKind irt = irr.as_ty;
     int ta2 = ++g_tmp, tb2 = ++g_tmp, tc2 = ++g_tmp;
     if (irr.elem == TY_POLY) {
-      buf_printf(b, "({ sp_PolyArray *_t%d = ", ta2); emit_expr(c, ir, b);
-      buf_printf(b, "; sp_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
+      buf_printf(b, "({ sp_PolyArray *_t%d = ", ta2); emit_expr(c, ir, b); buf_puts(b, "; ");
+      emit_index_recv_root(c, irt, ir, iav[0], iv, ta2, b);
+      buf_printf(b, "sp_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
       buf_printf(b, "; sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);", tc2, ta2, tb2);
       buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
       emit_guarded_poly_slot_assign(c, iv, tc2, b);
@@ -6873,8 +6864,9 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
          the element's plain scalar */
       const char *k = irr.elem == TY_INT ? "Int" : "Float";
       TyKind et = irr.elem;
-      buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta2); emit_expr(c, ir, b);
-      buf_printf(b, "; sp_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
+      buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta2); emit_expr(c, ir, b); buf_puts(b, "; ");
+      emit_index_recv_root(c, irt, ir, iav[0], iv, ta2, b);
+      buf_printf(b, "sp_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
       buf_printf(b, "; %s _t%d = sp_%sArray_oget(_t%d, _t%d);", oint_ctype(et), tc2, k, ta2, tb2);
       buf_printf(b, " if (%s_t%d.nil) { ", is_or2 ? "" : "!", tc2);
       emit_guarded_oint_slot_assign(c, iv, et, tc2, b);

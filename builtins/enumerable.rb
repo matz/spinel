@@ -733,14 +733,15 @@ module Enumerable
       while i <= right - npiv
         c = keys[i] <=> keys[piv]
         __nmin_cmp_fail(keys[i], keys[piv]) if c.nil?
-        c = -c if rev
         if c == 0
           w = right - npiv
           t = keys[i]; keys[i] = keys[w]; keys[w] = t
           t = elems[i]; elems[i] = elems[w]; elems[w] = t
           npiv += 1
         else
-          if c < 0
+          # by its sign, as CRuby's rb_cmpint reads it: negating a key's own
+          # `<=>` answer could overflow
+          if rev ? c > 0 : c < 0
             t = keys[i]; keys[i] = keys[store]; keys[store] = t
             t = elems[i]; elems[i] = elems[store]; elems[store] = t
             store += 1

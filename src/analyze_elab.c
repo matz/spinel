@@ -4571,17 +4571,26 @@ static int lr_last_before(Compiler *c, const LrHist *h, const LrHist *t, LoadPoi
   return unsure ? ELAB_UNKNOWN : ELAB_NO;
 }
 
+/* Does a body around point p run again, and hold statement q (any when q is -1): one a loop or an iterator makes
+   (LrStmt.rep: a loop's, an iterator's block, a begin body a rescue may retry), or a begin with a rescue clause,
+   which `retry` runs over from its start and whose clauses it reaches again? A statement after p in such a body may
+   run before p, and the walk has not recorded it yet when it stands at p. */
+static int lr_repeat_holds(const LoadRecord *r, const NodeTable *nt, LoadPoint p, int q) {
+  for (int e = r->st[p.seq].rep; e >= 0; e = r->st[e].rep)
+    if (q < 0 || q <= r->st[e].last) return 1;
+  for (int e = r->st[p.seq].up; e >= 0; e = r->st[e].up)
+    if (nt_kind(nt, r->st[e].node) == NK_BeginNode && nt_ref(nt, r->st[e].node, "rescue_clause") >= 0 && (q < 0 || q <= r->st[e].last)) return 1;
+  return 0;
+}
 /* May node's statement, which comes after p, also run before p: is it in
-   a body around p that runs again (LrStmt.rep), or in the body of a loop
-   whose condition p is? */
+   a body around p that runs again (lr_repeat_holds), or in the body of a
+   loop whose condition p is? */
 static int lr_runs_again(Compiler *c, int node, LoadPoint p) {
   LoadRecord *r = c->lrec;
   LoadPoint q = elab_point_of(c, node);
   if (p.region < 0 || elab_cmp(p, q) != PROG_BEFORE) return 0;
   NodeKind k = nt_kind(c->nt, r->st[p.seq].node);
-  for (int e = k == NK_WhileNode || k == NK_UntilNode ? p.seq : r->st[p.seq].rep; e >= 0; e = r->st[e].rep)
-    if (q.seq <= r->st[e].last) return 1;
-  return 0;
+  return ((k == NK_WhileNode || k == NK_UntilNode) && q.seq <= r->st[p.seq].last) || lr_repeat_holds(r, c->nt, p, q.seq);
 }
 /* ...for an entry of history h (past its visibility versions with
    skip_vis) */
@@ -7932,25 +7941,13 @@ static int lr_name_drops_block(Compiler *c, const char *name) {
   return !lr_name_taken_away(c->nt, name);
 }
 
-/* May the statement at p run more than once: is it in a body that runs
-   again (LrStmt.rep: a loop's, an iterator's block, a begin body a rescue
-   may retry), or in a clause of a begin with rescue clauses, which a retry
-   reaches again? A statement after p in such a body may run before p, and
-   the walk has not recorded it yet when it stands at p. */
-static int lr_point_runs_again(const LoadRecord *r, const NodeTable *nt, LoadPoint p) {
-  if (r->st[p.seq].rep >= 0) return 1;
-  for (int e = r->st[p.seq].up; e >= 0; e = r->st[e].up)
-    if (nt_kind(nt, r->st[e].node) == NK_BeginNode && nt_ref(nt, r->st[e].node, "rescue_clause") >= 0) return 1;
-  return 0;
-}
-
 /* See analyze.h. */
 int elab_runs_again(Compiler *c, int node) {
   LoadRecord *r = elab_fresh(c);
   LoadPoint p = elab_point_of(c, node);
   if (p.region < 0) return 1;
   NodeKind k = nt_kind(c->nt, r->st[p.seq].node);
-  return k == NK_WhileNode || k == NK_UntilNode || lr_point_runs_again(r, c->nt, p);
+  return k == NK_WhileNode || k == NK_UntilNode || lr_repeat_holds(r, c->nt, p, -1);
 }
 /* See analyze.h. */
 int elab_runs_before(Compiler *c, int node, int at) {
@@ -7970,7 +7967,7 @@ int elab_block_never_runs(Compiler *c, int call, int cls) {
   LoadPoint p = elab_point_of(c, call);
   const LrDef *d = NULL;
   /* (a builtin's reopening answers by class methods the record does not hold) */
-  if (p.region < 0 || !lr_ready(c, p) || elab_self_at(c, call) != cls || lr_point_runs_again(c->lrec, nt, p) ||
+  if (p.region < 0 || !lr_ready(c, p) || elab_self_at(c, call) != cls || lr_repeat_holds(c->lrec, nt, p, -1) ||
       is_builtin_class_name(c->classes[cls].name) || is_builtin_module_name(c->classes[cls].name)) return 0;
   return lr_sg_chain_find(c, cls, nm, p, &d, NULL) == ELAB_YES && d && d->kind == LR_DEF && lr_name_drops_block(c, nm);
 }

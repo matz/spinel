@@ -6008,6 +6008,13 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
            never gets computed. */
         { *out = TY_POLY; return 1; }
       }
+      /* ...and an object with no #coerce cannot be coerced: CRuby raises
+         TypeError, which codegen raises as an expression of the number's
+         type, as for a String or nil operand below (#2471, #3645). Left
+         UNKNOWN, a ternary's other arm alone typed the ternary while the
+         operation emitted a box (`c ? 1 : 1 + obj` did not compile). */
+      else if (rt == TY_INT || rt == TY_BIGINT) { *out = TY_INT; return 1; }
+      else if (rt == TY_FLOAT) { *out = TY_FLOAT; return 1; }
     }
     /* a poly operand makes the +,-,*,/ result poly: codegen lowers these to
        sp_poly_<op>, which returns a (boxed) poly, so the static type must agree. */

@@ -1,0 +1,16 @@
+50
+2.0
+"Item can't be coerced into Integer"
+"Item can't be coerced into Float"
+"Item can't be coerced into Integer"
+"Item can't be coerced into Integer"
+"Item can't be coerced into Float"
+"Special can't be coerced into Integer"
+"Special can't be coerced into Float"
+"Special can't be coerced into Integer"
+"Special can't be coerced into Integer"
+"Special can't be coerced into Float"
+"Item can't be coerced into Integer"
+[:left, :right]
+7
+0.5

@@ -223,7 +223,7 @@ static int forwarding_target_scan(Compiler *c, Scope *s, int *sole) {
       const Scope *st = comp_super_site(c, s);
       if (st->class_id >= 0 && !st->is_cmethod && st->name) {
         int par = comp_super_parent(c, st->class_id, 0);
-        mi = par >= 0 ? comp_method_in_chain(c, par, st->name, NULL) : -1;
+        mi = par >= 0 ? call_target(c, id, par, st->name, CT_METHODS | CT_REACH, NULL) : -1;
       }
     }
     else {

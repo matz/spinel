@@ -9396,12 +9396,15 @@ static int rtm_bool_of(NodeTable *nt, int pred) {
    (comp_method_in_chain names the owner)? */
 static int rtm_may_reach(Compiler *c, int cid, int k) {
   if (cid < 0) return 1;
-  for (int j = 0; j < c->nclasses; j++) {
+  int hit = 0;
+  mtab_enter(c);   /* (the candidate owner of respond_to_missing? over cid and the classes under it: it asks every class by design, no call's question) */
+  for (int j = 0; j < c->nclasses && !hit; j++) {
     if (j != cid && !is_descendant(c, j, cid)) continue;
     int dc = -1;
-    if (comp_method_in_chain(c, j, RESPOND_TO_MISSING_NAME, &dc) >= 0 && dc == k) return 1;
+    hit = comp_method_in_chain(c, j, RESPOND_TO_MISSING_NAME, &dc) >= 0 && dc == k;
   }
-  return 0;
+  mtab_leave(c);
+  return hit;
 }
 /* May a call at p run on an instance of class k or of a class under it? A
    module's holders are not followed: 1. */

@@ -3484,6 +3484,11 @@ static void mark_ie_own(Compiler *c, int body, int cls) {
 static int ie_nested_own_block(Compiler *c, int node) {
   return node >= 0 && node < c->ie_map.cap && (c->ie_map.rb[node] & IE_RB_ROOT);
 }
+/* ...or the body of a literal a call hands on to one (ie_forward_target): a
+   typed arm's retype of the block it sits in would mark it with that arm's self */
+static int ie_nested_own_body(Compiler *c, int node) {
+  return node >= 0 && node < c->ie_map.cap && c->ie_map.own[node] != -1;
+}
 /* Set a per-node ie_map flag (nonobj, pending) over a block's subtree, short
    of the defs, classes and modules in it, whose self is their own. */
 static void mark_ie_flag(Compiler *c, unsigned char *flag, int node) {
@@ -3523,12 +3528,14 @@ void mark_ie_subtree(Compiler *c, int node, int cls) {
   /* ... nor into the block a nested instance_eval/exec runs on a receiver
      of its own, a `&` proc's too: that call marks it (build_ie_map) */
   int nr = nt_num_refs(c->nt, node);
-  for (int i = 0; i < nr; i++)
-    if (!ie_nested_own_block(c, nt_ref_at(c->nt, node, i))) mark_ie_subtree(c, nt_ref_at(c->nt, node, i), cls);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(c->nt, node, i);
+    if (!ie_nested_own_block(c, ch) && !ie_nested_own_body(c, ch)) mark_ie_subtree(c, ch, cls);
+  }
   int na = nt_num_arrs(c->nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n);
-    for (int k = 0; k < n; k++) if (!ie_nested_own_block(c, ids[k])) mark_ie_subtree(c, ids[k], cls);
+    for (int k = 0; k < n; k++) if (!ie_nested_own_block(c, ids[k]) && !ie_nested_own_body(c, ids[k])) mark_ie_subtree(c, ids[k], cls);
   }
 }
 

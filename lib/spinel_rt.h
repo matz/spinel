@@ -16965,6 +16965,14 @@ static sp_RbVal sp_poly_mutex_lock(sp_RbVal v) { sp_Mutex_lock(sp_poly_as_mutex(
 static sp_RbVal sp_poly_mutex_unlock(sp_RbVal v) { sp_Mutex_unlock(sp_poly_as_mutex(v, "unlock")); return v; }
 static sp_bool sp_poly_mutex_try_lock(sp_RbVal v) { return sp_Mutex_try_lock(sp_poly_as_mutex(v, "try_lock")); }
 static sp_bool sp_poly_mutex_locked(sp_RbVal v) { return sp_Mutex_locked(sp_poly_as_mutex(v, "locked?")); }
+/* ConditionVariable#signal and #broadcast on a boxed receiver: they answer the receiver */
+static sp_condvar *sp_poly_as_condvar(sp_RbVal v, const char *name) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_CONDVAR && v.v.p) return (sp_condvar *)v.v.p;
+  sp_raise_nomethod(sp_nomethod_msg(name, v));
+  return NULL;
+}
+static SP_UNUSED sp_RbVal sp_poly_condvar_signal(sp_RbVal v) { sp_CondVar_signal(sp_poly_as_condvar(v, "signal")); return v; }
+static SP_UNUSED sp_RbVal sp_poly_condvar_broadcast(sp_RbVal v) { sp_CondVar_broadcast(sp_poly_as_condvar(v, "broadcast")); return v; }
 /* pop/shift/deq(non_block): an Array's pop(true) is still CRuby's TypeError */
 static sp_RbVal sp_poly_queue_pop_flag(sp_RbVal v, const char *name, sp_bool nb) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id))

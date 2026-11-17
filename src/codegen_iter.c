@@ -1402,7 +1402,10 @@ void emit_yield_proc_call(Compiler *c, int site, TyKind result_ty, Buf *b, int i
   for (int i = 0; i < nk; i++) needed |= proc_body_node(c, ks[i]) < 0 || used_block_param(c, ks[i]) != NULL;
   if (proc_body_node(c, g_yield_proc_expr) >= 0) needed = used_block_param(c, g_yield_proc_expr) != NULL;
   int blk = needed ? literal : -1;
-  if (literal >= 0 && nt_safe_nav(nt, site) && g_sn_skip != site) {
+  /* (also a forwarded proc's `blk&.call`: a super into a block-taking
+     parent drives its yields through the caller's &blk, which is nil
+     when the caller got no block) */
+  if (nt_safe_nav(nt, site) && g_sn_skip != site) {
     int receiver = nt_ref(nt, site, "receiver"), rv = view_push(c, receiver, TY_PROC);
     int slot = view_bind(receiver, "%s", g_yield_proc_ref);
     int view = view_push(c, site, as_expr ? result_ty : TY_POLY);

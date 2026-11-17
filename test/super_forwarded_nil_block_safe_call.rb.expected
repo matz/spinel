@@ -1,0 +1,6 @@
+[:go, nil]
+[:stop, "blk stop"]
+[:go, nil]
+[:stop, "STOP"]
+[:go, nil]
+[:stop, :stop]

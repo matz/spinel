@@ -55989,6 +55989,11 @@ static void an_phase_storage(Compiler *c) {
      same reason and feeds the same propagation, so the two run to a joint
      fixpoint rather than one after the other (#4363). */
   int late_widened = 0;
+  /* a parameter this late re-bind widened: the stores written from it join
+     their slots again, as under a widened holder (an initialize's `w` a
+     typed entry gave an Integer, widened by an untyped caller's argument
+     only here, writing `@sizes = { "w" => w }`) */
+  int params_late = 0;
   HandleArgTab hat;
   /* The refresh below moves node types the rule's facts are built from: a
      variable an expression over a widened read joins can only now meet a
@@ -56024,7 +56029,7 @@ static void an_phase_storage(Compiler *c) {
            again through the existing worklist, including super's chain,
            until those bindings settle too. */
         c->sb_args->changed = infer_param_types_settle(c);
-        if (c->sb_args->changed) ch = late_widened = 1;
+        if (c->sb_args->changed) ch = late_widened = params_late = 1;
         /* and the block parameters a widened parameter's iteration hands
            its blocks */
         if (c->sb_args->changed && infer_block_params(c)) ch = 1;
@@ -56042,7 +56047,7 @@ static void an_phase_storage(Compiler *c) {
            longer fits. Once the rule has widened a holder, each store whose
            input has widened since the rule began joins again; the rest keep
            what they settled on. */
-        if (g_share_widened_holder && infer_changed_store_types(c, &before_rule)) ch = late_widened = 1;
+        if ((g_share_widened_holder || params_late) && infer_changed_store_types(c, &before_rule)) ch = late_widened = 1;
       }
       if (!ch) break;
       handle_arg_tab_free(&hat);

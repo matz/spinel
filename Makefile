@@ -1829,7 +1829,8 @@ test-corpus-summary: test-corpus-results
 # whose entries start and join threads after an init that started some, and
 # one whose at_exit hooks run when the host exits, not as its init returns,
 # and one whose entry calls a Struct's `new` the load redefined, a typed and
-# an untyped entry that `new` one class compile, and an
+# an untyped entry that `new` one class compile, so do a typed entry and an
+# --ext-class table that `new` one class, and an
 # --ext-entry list longer than 2048 bytes exports every method it names.
 ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC_LIB) $(BUNDLED_NATIVE_PIC_OBJS) $(SPINEL_TIMEOUT) $(PLATFORM_OBJ)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
@@ -2021,6 +2022,11 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	      --ext-entry ExtTU.shape,ExtTU.mk -o "$$tmp/tu.c" >"$$tmp/tu.out" 2>&1; then \
 	    echo "ext-test: FAIL (a typed and an untyped --ext-entry that new one class did not compile)"; sed -n 1,3p "$$tmp/tu.out"; ok=0; \
 	  fi; \
+	  for xc in ExtTC::Shape ExtTC::Maker ExtTC; do \
+	    $(SPINEL) test/ext/typed_ext_class_new.rb -c --no-line-map --ext-init Init_ext_tc \
+	      --ext-entry ExtTC.shape --ext-class $$xc -o "$$tmp/tc.c" >"$$tmp/tc.out" 2>&1 || \
+	      { echo "ext-test: FAIL (a typed --ext-entry and --ext-class $$xc that new one class did not compile)"; sed -n 1,3p "$$tmp/tc.out"; ok=0; }; \
+	  done; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/dup_leaf.rb -c --no-line-map --ext-init Init_ext_dup \

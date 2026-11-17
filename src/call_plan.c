@@ -1665,7 +1665,7 @@ CallPlan cplan_send_arm(Compiler *c, int id) {
 
 CallPlan cplan_conversion(Compiler *c, int id, int op, int ci, const char *name) {
   CallPlan p;
-  int mi = cplan_implied_target(c, id, op, ci, name, CT_TABLE, NULL);
+  int mi = cplan_implied_target(c, id, op, ci, name, CIT_TABLE, NULL);
   cplan_set(&p, mi, ci, UC_INST, cplan_dispatch_form(c, -1, ci, name, mi >= 0));
   p.chain = 1;
   p.delegate = name;
@@ -1679,7 +1679,7 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
      override answering something other than a String cannot ride the
      const char * helper, so call it directly (#3868) */
   if (own < 0 && is_message_name(name)) {
-    int mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "message", CT_TABLE, NULL);
+    int mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "message", CIT_TABLE, NULL);
     /* (Exception#message's to_s, a callback the call makes on its receiver: asked at the call) */
     if (mi8 < 0) mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "to_s", 0, NULL);
     if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
@@ -2943,8 +2943,8 @@ int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *nam
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
   *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   if (cls < 0 && !(side & CT_TOP)) return -1;
-  int table_only = (side & CT_TABLE) != 0;   /* (a reader the plan has not taken over yet: the table's answer, as the table primitive gave it) */
-  side &= ~(unsigned)CT_TABLE;
+  int table_only = (side & CIT_TABLE) != 0;   /* (a reader the plan has not taken over yet: the table's answer, as the table primitive gave it) */
+  side &= ~(unsigned)CIT_TABLE;
   mtab_enter(c);
   /* (an undef the table no longer holds, a later def having replaced it, is in the record's versions) */
   int undef = !table_only && !(side & (CT_CMETHOD | CT_TOP)) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name)));
@@ -6890,8 +6890,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
     int nd = 0;
     comp_descendants(c, cid, &nd);
     if (nd == 1) {
-      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, cid, "message", CT_TABLE, NULL);
-      if (mi < 0) mi = cplan_implied_target(c, id, recv, cid, "to_s", CT_TABLE, NULL);
+      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, cid, "message", CIT_TABLE, NULL);
+      if (mi < 0) mi = cplan_implied_target(c, id, recv, cid, "to_s", CIT_TABLE, NULL);
       if (mi >= 0) out[0] = mi;
       return mi >= 0;
     }
@@ -6904,8 +6904,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
       int k = cs[i].cls;
       if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) continue;
       if (cid >= 0 && k != cid && !is_descendant(c, k, cid)) continue;
-      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, k, "message", CT_TABLE, NULL);
-      if (mi < 0) mi = cplan_implied_target(c, id, recv, k, "to_s", CT_TABLE, NULL);
+      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, k, "message", CIT_TABLE, NULL);
+      if (mi < 0) mi = cplan_implied_target(c, id, recv, k, "to_s", CIT_TABLE, NULL);
       if (mi < 0) continue;
       int j = 0;
       while (j < n && out[j] != mi) j++;

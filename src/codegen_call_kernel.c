@@ -622,10 +622,10 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       else if (ty_is_object(at) && emit_kconv_obj_nil(c, av[0], ty_object_class(at), "to_str", NULL, b)) {}
       /* Kernel#String asks for #to_str first, and only then #to_s (#3721) */
       else if (ty_is_object(at) &&
-               cplan_implied_target(c, id, av[0], ty_object_class(at), "to_str", CT_TABLE, NULL) >= 0) {
+               cplan_implied_target(c, id, av[0], ty_object_class(at), "to_str", CIT_TABLE, NULL) >= 0) {
         int tsc = ty_object_class(at);
         MethodLookup tml = { .def_class = -1 };
-        (void)cplan_implied_target(c, id, av[0], tsc, "to_str", CT_TABLE, &tml);
+        (void)cplan_implied_target(c, id, av[0], tsc, "to_str", CIT_TABLE, &tml);
         int tsd = tml.def_class;
         if (expr_is_held_ref(c, av[0])) {
           buf_printf(b, "sp_%s_to_str((sp_%s *)(", c->classes[tsd].c_name, c->classes[tsd].c_name);
@@ -698,12 +698,12 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       else if (ty_is_object(at) && emit_kconv_obj_nil(c, av[0], ty_object_class(at), "to_ary", "to_a", b)) {}
       /* Kernel#Array asks the object for #to_ary, then #to_a (#3721) */
       else if (ty_is_object(at) &&
-               (cplan_implied_target(c, id, av[0], ty_object_class(at), "to_ary", CT_TABLE, NULL) >= 0 ||
-                cplan_implied_target(c, id, av[0], ty_object_class(at), "to_a", CT_TABLE, NULL) >= 0)) {
+               (cplan_implied_target(c, id, av[0], ty_object_class(at), "to_ary", CIT_TABLE, NULL) >= 0 ||
+                cplan_implied_target(c, id, av[0], ty_object_class(at), "to_a", CIT_TABLE, NULL) >= 0)) {
         int acid = ty_object_class(at);
-        const char *anm = cplan_implied_target(c, id, av[0], acid, "to_ary", CT_TABLE, NULL) >= 0 ? "to_ary" : "to_a";
+        const char *anm = cplan_implied_target(c, id, av[0], acid, "to_ary", CIT_TABLE, NULL) >= 0 ? "to_ary" : "to_a";
         MethodLookup aml = { .def_class = -1 };
-        int ami = cplan_implied_target(c, id, av[0], acid, anm, CT_TABLE, &aml), adef = aml.def_class;
+        int ami = cplan_implied_target(c, id, av[0], acid, anm, CIT_TABLE, &aml), adef = aml.def_class;
         if (expr_is_held_ref(c, av[0])) {
           buf_printf(b, "%s((sp_%s *)(", mc_method(c, &c->scopes[ami]), c->classes[adef].c_name);
           emit_expr(c, av[0], b); buf_printf(b, ")%s)", kconv_blk_arg(c, ami));
@@ -751,10 +751,10 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       else if (ty_is_object(at) && emit_kconv_obj_nil(c, av[0], ty_object_class(at), "to_hash", NULL, b)) {}
       /* an object answers through its own #to_hash (#3721) */
       else if (ty_is_object(at) &&
-               cplan_implied_target(c, id, av[0], ty_object_class(at), "to_hash", CT_TABLE, NULL) >= 0) {
+               cplan_implied_target(c, id, av[0], ty_object_class(at), "to_hash", CIT_TABLE, NULL) >= 0) {
         int hci = ty_object_class(at);
         MethodLookup hml = { .def_class = -1 };
-        int hmi = cplan_implied_target(c, id, av[0], hci, "to_hash", CT_TABLE, &hml), hdef = hml.def_class;
+        int hmi = cplan_implied_target(c, id, av[0], hci, "to_hash", CIT_TABLE, &hml), hdef = hml.def_class;
         if (sp_streq(c->scopes[hmi].name, "to_hash")) buf_printf(b, "sp_%s_to_hash(", c->classes[hdef].c_name);
         else { buf_puts(b, mc_method(c, &c->scopes[hmi])); buf_puts(b, "("); }
         buf_printf(b, "(sp_%s *)(", c->classes[hdef].c_name);

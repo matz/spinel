@@ -2076,7 +2076,7 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
       return;
     }
     MethodLookup pml = { .def_class = -1 };
-    mi = cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_path", CT_TABLE, &pml);
+    mi = cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_path", CIT_TABLE, &pml);
     def = pml.def_class;
     if (mi >= 0) {
       /* a #to_path the analysis could not pin to String -- one backed by an
@@ -2100,7 +2100,7 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
                cn ? cn : "Object", cn ? cn : "Object");
       unsupported_feature(c, node, msg);
     }
-    if (cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_str", CT_TABLE, NULL) < 0) {
+    if (cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_str", CIT_TABLE, NULL) < 0) {
       const char *cn = class_ruby_name(c, cid);
       char msg[256];
       snprintf(msg, sizeof msg,
@@ -4599,7 +4599,7 @@ static int iter_scope_emitted(Compiler *c, int s) {
    already does; a `def each; ...yield...; end` has a proc-form clone (#3399). */
 static int iter_each_proc_form(Compiler *c, int site, int k) {
   /* (the walk asks every class of the program: one no definition answers `each` asks nothing of the record) */
-  int mi = comp_name_responder(c, k, "each", 0) >= 0 ? cplan_implied_target(c, site, -1, k, "each", CT_TABLE, NULL) : -1;
+  int mi = comp_name_responder(c, k, "each", 0) >= 0 ? cplan_implied_target(c, site, -1, k, "each", CIT_TABLE, NULL) : -1;
   /* an #each reopened on Object reaches every instance, but a user class's
      chain does not name Object: the poly dispatch serves it as its default
      arm, and the normalization walked the object as an empty container
@@ -4608,7 +4608,7 @@ static int iter_each_proc_form(Compiler *c, int site, int k) {
     int oc = comp_core_class(c, CORE_OBJECT);
     MethodLookup oml = { .def_class = -1 };
     if (oc >= 0 && oc != k) {
-      mi = cplan_implied_target(c, site, -1, oc, "each", CT_TABLE, &oml);
+      mi = cplan_implied_target(c, site, -1, oc, "each", CIT_TABLE, &oml);
       if (oml.def_class != oc) mi = -1;
     }
   }
@@ -4706,7 +4706,7 @@ void emit_poly_iter_obj_normalize(Compiler *c, int site, int tv, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
     /* a never-instantiated class can't be the runtime class (#1608) */
     if (!c->classes[k].instantiated) continue;
-    int mi = cplan_implied_target(c, site, -1, k, "to_a", CT_TABLE, NULL);
+    int mi = cplan_implied_target(c, site, -1, k, "to_a", CIT_TABLE, NULL);
     /* a to_a forwarding its block has a proc-form clone; that is the emitted
        function for a call from poly dispatch (#3399) */
     { int pfi = mi >= 0 ? scope_proc_form_of(c, mi) : -1; if (pfi >= 0) mi = pfi; }
@@ -14183,7 +14183,7 @@ static void emit_obj_struct_values_dispatch(Compiler *c, Buf *b) {
 static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
   MethodLookup ml_mi = { .def_class = defc ? *defc : -1 };
   /* (the implied to_a a splat makes, asked at its node; a dispatcher of the whole program asks with no site) */
-  int mi = host >= 0 ? cplan_implied_target(c, host, op, cid, "to_a", CT_TABLE, &ml_mi)
+  int mi = host >= 0 ? cplan_implied_target(c, host, op, cid, "to_a", CIT_TABLE, &ml_mi)
                      : call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
   if (defc) *defc = ml_mi.def_class;
   if (mi < 0) {
@@ -18364,7 +18364,7 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
 int class_to_io_dispatched(Compiler *c, int host, int op, int k) {
   if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated) return 0;
   MethodLookup ml = { .def_class = -1 };
-  int mi = host >= 0 ? cplan_implied_target(c, host, op, k, "to_io", CT_TABLE, &ml)
+  int mi = host >= 0 ? cplan_implied_target(c, host, op, k, "to_io", CIT_TABLE, &ml)
                      : call_target(c, -1, k, "to_io", CT_METHODS | CT_SHARED, &ml);
   if (mi < 0 || ml.def_class < 0) return 0;
   Scope *m = &c->scopes[mi];

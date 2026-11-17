@@ -17213,7 +17213,7 @@ static void emit_cmp_derived_eq(Compiler *c, int id, int recv, int arg, int ecid
   int same_ok = !comp_ty_value_obj(c, rt) &&
                 ((ty_is_object(at) && !comp_ty_value_obj(c, at)) || at == TY_POLY);
   Buf selfb = emit_cmp_self(c, recv, rt, NULL);
-  int cmi = cplan_implied_target(c, id, recv, ecid, "<=>", CT_TABLE, NULL);
+  int cmi = cplan_implied_target(c, id, recv, ecid, "<=>", CIT_TABLE, NULL);
   /* a Bignum answer is a pointer, which `== 0` would read as NULL */
   int big = cmi >= 0 && c->scopes[cmi].ret == TY_BIGINT;
   if (!same_ok) {
@@ -17307,7 +17307,7 @@ static void emit_poly_nil_eq_user(Compiler *c, int id, int recv, int eq, Buf *b)
 static int nil_eq_is_the_programs(Compiler *c, int id) {
   static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   /* (the top-level `==` or `!=` as the table holds it: call_target's CT_TOP at a node asks main's own singleton first) */
-  if (cplan_implied_target(c, id, -1, -1, "==", CT_TOP | CT_TABLE, NULL) >= 0 || cplan_implied_target(c, id, -1, -1, "!=", CT_TOP | CT_TABLE, NULL) >= 0) return 1;
+  if (cplan_implied_target(c, id, -1, -1, "==", CT_TOP | CIT_TABLE, NULL) >= 0 || cplan_implied_target(c, id, -1, -1, "!=", CT_TOP | CIT_TABLE, NULL) >= 0) return 1;
   for (int i = 0; owners[i] >= 0; i++) {
     int k = comp_core_class(c, owners[i]);
     if (k >= 0 && (call_target(c, id, k, "==", 0, NULL) >= 0 || call_target(c, id, k, "!=", 0, NULL) >= 0))
@@ -18006,7 +18006,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       }
       /* obj.!= synthesized from obj.== when != is not explicitly defined */
       if (!eq) {
-        int eqm2 = cplan_implied_target(c, id, recv, ecid, "==", CT_TABLE, NULL);
+        int eqm2 = cplan_implied_target(c, id, recv, ecid, "==", CIT_TABLE, NULL);
         if (eqm2 >= 0) {
           if (emit_eq_on_nil_slot(c, id, recv, argv[0], ecid, "==", 0, b)) return 1;
           Buf selfb = emit_cmp_self(c, recv, rt, NULL);
@@ -18080,7 +18080,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       TyKind prim_t = ty_is_object(a0) ? rt : a0;
       int    prim_n = ty_is_object(a0) ? recv : argv[0];
       int    obj_cid = ty_object_class(obj_t);
-      int    eqm = call_target(c, id, obj_cid, "==", 0, NULL);
+      int    eqm = cplan_implied_target(c, id, obj_n, obj_cid, "==", CIT_TABLE, NULL);
       /* Numeric types delegate == to other.==(self) when types mismatch */
       if (ty_is_numeric(prim_t) && eqm >= 0) {
         Scope *ms = &c->scopes[eqm];
@@ -18768,7 +18768,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
     int acls = ty_object_class(a0);
     MethodLookup ml = { .def_class = -1 };
     MethodLookup coerce_ml = { .def_class = -1 };
-    int coerce_mi = cplan_implied_target(c, id, argv[0], acls, "coerce", CT_TABLE, &coerce_ml), coerce_def = coerce_ml.def_class;
+    int coerce_mi = cplan_implied_target(c, id, argv[0], acls, "coerce", CIT_TABLE, &coerce_ml), coerce_def = coerce_ml.def_class;
     int op_mi = call_target(c, id, acls, name, 0, &ml);
     if (coerce_mi >= 0 && op_mi >= 0) {
       int tp = ++g_tmp;

@@ -247,7 +247,9 @@ static int super_reads_own_name(Compiler *c, int fn, const char *name) {
    every call may reach as its lookup's tail. A frame with no names of its
    own is `implied` for a row of a node it holds directly (ic_held_rows_name),
    and for an implied call of the call it is an operand of (ic_operand_host);
-   `other` otherwise. */
+   `call` where the name is that host call's own (the Range a `clamp` is
+   given), and `implied` for a row of its direct parent where that is no call
+   (the receiver of `a[i] += 1`: its `[]` and `[]=`); `other` otherwise. */
 static const char *reader_family(Compiler *c, const MtSite *s) {
   const NodeTable *nt = c->nt;
   int fn = s->node;

@@ -1665,7 +1665,7 @@ CallPlan cplan_send_arm(Compiler *c, int id) {
 
 CallPlan cplan_conversion(Compiler *c, int id, int op, int ci, const char *name) {
   CallPlan p;
-  int mi = cplan_implied_target(c, id, op, ci, name, 0, NULL);
+  int mi = cplan_implied_target(c, id, op, ci, name, CT_TABLE, NULL);
   cplan_set(&p, mi, ci, UC_INST, cplan_dispatch_form(c, -1, ci, name, mi >= 0));
   p.chain = 1;
   p.delegate = name;
@@ -1679,7 +1679,7 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
      override answering something other than a String cannot ride the
      const char * helper, so call it directly (#3868) */
   if (own < 0 && is_message_name(name)) {
-    int mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "message", 0, NULL);
+    int mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "message", CT_TABLE, NULL);
     /* (Exception#message's to_s, a callback the call makes on its receiver: asked at the call) */
     if (mi8 < 0) mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "to_s", 0, NULL);
     if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
@@ -2943,14 +2943,16 @@ int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *nam
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
   *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   if (cls < 0 && !(side & CT_TOP)) return -1;
+  int table_only = (side & CT_TABLE) != 0;   /* (a reader the plan has not taken over yet: the table's answer, as the table primitive gave it) */
+  side &= ~(unsigned)CT_TABLE;
   mtab_enter(c);
   /* (an undef the table no longer holds, a later def having replaced it, is in the record's versions) */
-  int undef = !(side & (CT_CMETHOD | CT_TOP)) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name)));
+  int undef = !table_only && !(side & (CT_CMETHOD | CT_TOP)) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name)));
   mtab_leave(c);
   /* (a call no planned row makes, a builtin's callback or a row not planned
      yet, is not asked of the record: the table's method, as call_target
      answers a call whose node does not make it) */
-  int vi = -1, planned = !side && site >= 0 && ct_implied_row(c, site, name, op);
+  int vi = -1, planned = !table_only && !side && site >= 0 && ct_implied_row(c, site, name, op);
   /* (a planned row's undef stays the table's, program-wide, as to_ary's readers
      always had it: its lowering, an explicit call of the name, would raise at
      the sites before the undef, as cplan_undef_stops takes the undef
@@ -3413,7 +3415,9 @@ int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
 /* See call_plan.h. */
 int cplan_index_writer(Compiler *c, int cls, int *cdef) {
   int dc = -1;
+  mtab_enter(c);   /* (the plan's own read: the class's `[]=` an index target stores through, as the plan states it) */
   int wmi = cls >= 0 ? comp_method_in_chain(c, cls, "[]=", &dc) : -1;
+  mtab_leave(c);
   if (wmi < 0 || dc < 0 || c->scopes[wmi].nparams != 2) return -1;
   if (cdef) *cdef = dc;
   return wmi;
@@ -6886,8 +6890,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
     int nd = 0;
     comp_descendants(c, cid, &nd);
     if (nd == 1) {
-      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, cid, "message", 0, NULL);
-      if (mi < 0) mi = cplan_implied_target(c, id, recv, cid, "to_s", 0, NULL);
+      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, cid, "message", CT_TABLE, NULL);
+      if (mi < 0) mi = cplan_implied_target(c, id, recv, cid, "to_s", CT_TABLE, NULL);
       if (mi >= 0) out[0] = mi;
       return mi >= 0;
     }
@@ -6900,8 +6904,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
       int k = cs[i].cls;
       if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) continue;
       if (cid >= 0 && k != cid && !is_descendant(c, k, cid)) continue;
-      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, k, "message", 0, NULL);
-      if (mi < 0) mi = cplan_implied_target(c, id, recv, k, "to_s", 0, NULL);
+      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, k, "message", CT_TABLE, NULL);
+      if (mi < 0) mi = cplan_implied_target(c, id, recv, k, "to_s", CT_TABLE, NULL);
       if (mi < 0) continue;
       int j = 0;
       while (j < n && out[j] != mi) j++;

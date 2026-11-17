@@ -20321,8 +20321,9 @@ static TyKind sg_override_ret(Compiler *c, const Scope *sc, TyKind r) {
   if (sc->class_id < 0 || sc->is_cmethod || !sc->name) return r;
   const ClassInfo *k = &c->classes[sc->class_id];
   if (!k->is_singleton_of || k->is_value_type || k->parent < 0) return r;
-  /* (the method the override's super reaches: the parent link's, asked at the def) */
-  int pm = call_target(c, sc->def_node, k->parent, sc->name, CT_REACH, NULL);
+  /* (the method the override's super reaches: the parent link's, as the table holds it; the delegate answers a call that
+     runs after any later redefinition, so no point of the load is its own) */
+  int pm = call_target(c, -1, k->parent, sc->name, CT_METHODS | CT_SHARED, NULL);
   if (pm < 0 || pm >= c->nscopes || &c->scopes[pm] == sc) return r;
   const Scope *ps = &c->scopes[pm];
   if (ps->nparams != sc->nparams) return r;

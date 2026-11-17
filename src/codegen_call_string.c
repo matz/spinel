@@ -47,7 +47,7 @@ static const char *boxed_number_value(char *text, TyKind at, char **val) {
    the TypeError naming the operand's class. */
 static int re_operand_at_runtime(Compiler *c, int arg, TyKind a0) {
   if (a0 == TY_STRING || a0 == TY_NIL) return 0;
-  if (ty_is_object(a0) && cplan_implied_target(c, ic_operand_host(c, arg), arg, ty_object_class(a0), "to_str", 0, NULL) >= 0) return 0;
+  if (ty_is_object(a0) && cplan_implied_target(c, ic_operand_host(c, arg), arg, ty_object_class(a0), "to_str", CT_TABLE, NULL) >= 0) return 0;
   return 1;
 }
 /* A matcher's operand as the `const char *` subject; `strict` is
@@ -846,7 +846,7 @@ no_gsub_enum:
        object of a class of the program's that is no Array and has no to_ary
        is one argument, whose %s is its to_s, as CRuby formats it boxed. */
     int plain_obj = ty_is_object(at) && class_builtin_parent(c, ty_object_class(at)) == -116 &&
-                    cplan_implied_target(c, id, argv[0], ty_object_class(at), "to_ary", 0, NULL) < 0;
+                    cplan_implied_target(c, id, argv[0], ty_object_class(at), "to_ary", CT_TABLE, NULL) < 0;
     if (at == TY_POLY || plain_obj) {
       const char *fend = emit_str_format_held(c, recv, argv[0], -1, b);
       if (!fend) { buf_puts(b, "sp_str_format_polyarr("); emit_expr(c, recv, b); }

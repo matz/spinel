@@ -2076,7 +2076,7 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
       return;
     }
     MethodLookup pml = { .def_class = -1 };
-    mi = cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_path", 0, &pml);
+    mi = cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_path", CT_TABLE, &pml);
     def = pml.def_class;
     if (mi >= 0) {
       /* a #to_path the analysis could not pin to String -- one backed by an
@@ -2100,7 +2100,7 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
                cn ? cn : "Object", cn ? cn : "Object");
       unsupported_feature(c, node, msg);
     }
-    if (cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_str", 0, NULL) < 0) {
+    if (cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_str", CT_TABLE, NULL) < 0) {
       const char *cn = class_ruby_name(c, cid);
       char msg[256];
       snprintf(msg, sizeof msg,
@@ -4599,7 +4599,7 @@ static int iter_scope_emitted(Compiler *c, int s) {
    already does; a `def each; ...yield...; end` has a proc-form clone (#3399). */
 static int iter_each_proc_form(Compiler *c, int site, int k) {
   /* (the walk asks every class of the program: one no definition answers `each` asks nothing of the record) */
-  int mi = comp_name_responder(c, k, "each", 0) >= 0 ? cplan_implied_target(c, site, -1, k, "each", 0, NULL) : -1;
+  int mi = comp_name_responder(c, k, "each", 0) >= 0 ? cplan_implied_target(c, site, -1, k, "each", CT_TABLE, NULL) : -1;
   /* an #each reopened on Object reaches every instance, but a user class's
      chain does not name Object: the poly dispatch serves it as its default
      arm, and the normalization walked the object as an empty container
@@ -4608,7 +4608,7 @@ static int iter_each_proc_form(Compiler *c, int site, int k) {
     int oc = comp_core_class(c, CORE_OBJECT);
     MethodLookup oml = { .def_class = -1 };
     if (oc >= 0 && oc != k) {
-      mi = cplan_implied_target(c, site, -1, oc, "each", 0, &oml);
+      mi = cplan_implied_target(c, site, -1, oc, "each", CT_TABLE, &oml);
       if (oml.def_class != oc) mi = -1;
     }
   }
@@ -4706,7 +4706,7 @@ void emit_poly_iter_obj_normalize(Compiler *c, int site, int tv, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
     /* a never-instantiated class can't be the runtime class (#1608) */
     if (!c->classes[k].instantiated) continue;
-    int mi = cplan_implied_target(c, site, -1, k, "to_a", 0, NULL);
+    int mi = cplan_implied_target(c, site, -1, k, "to_a", CT_TABLE, NULL);
     /* a to_a forwarding its block has a proc-form clone; that is the emitted
        function for a call from poly dispatch (#3399) */
     { int pfi = mi >= 0 ? scope_proc_form_of(c, mi) : -1; if (pfi >= 0) mi = pfi; }
@@ -5888,7 +5888,7 @@ static int sg_delegate_scope(Compiler *c, Scope *s) {
      chain of them (one per extended module) and each body stands in front of
      the next, which is what makes `super` stack */
   int par = c->classes[sub].parent;
-  int pm = call_target(c, s->def_node, par, s->name, CT_REACH, NULL);
+  int pm = call_target(c, -1, par, s->name, CT_METHODS | CT_SHARED, NULL);
   if (pm < 0 || pm >= c->nscopes) return -1;
   Scope *ps = &c->scopes[pm];
   if (ps->nparams != s->nparams) return -1;
@@ -8107,9 +8107,9 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
                  s->class_id, db.p);
       free(db.p);
     }
-    else if (pm < 0 && s->name && (!sg_builtin || !sg_as_obj) && call_target(c, s->def_node, sg_par, s->name, CT_REACH, NULL) < 0 &&
-        !call_attr_target(c, s->def_node, sg_par, s->name, CT_ATTR | CT_REACH, NULL) &&
-        !call_attr_target(c, s->def_node, sg_par, s->name, CT_ATTR | CT_WRITER | CT_REACH, NULL)) {
+    else if (pm < 0 && s->name && (!sg_builtin || !sg_as_obj) && call_target(c, -1, sg_par, s->name, CT_METHODS | CT_SHARED, NULL) < 0 &&
+        !call_attr_target(c, -1, sg_par, s->name, CT_ATTR | CT_SHARED, NULL) &&
+        !call_attr_target(c, -1, sg_par, s->name, CT_ATTR | CT_WRITER | CT_SHARED, NULL)) {
       /* the singleton ADDS a name the parent does not have: before its
          statement runs there is nothing to delegate to, and CRuby answers a
          NoMethodError there (#4084). One every object has answers as Object
@@ -14183,7 +14183,7 @@ static void emit_obj_struct_values_dispatch(Compiler *c, Buf *b) {
 static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
   MethodLookup ml_mi = { .def_class = defc ? *defc : -1 };
   /* (the implied to_a a splat makes, asked at its node; a dispatcher of the whole program asks with no site) */
-  int mi = host >= 0 ? cplan_implied_target(c, host, op, cid, "to_a", 0, &ml_mi)
+  int mi = host >= 0 ? cplan_implied_target(c, host, op, cid, "to_a", CT_TABLE, &ml_mi)
                      : call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
   if (defc) *defc = ml_mi.def_class;
   if (mi < 0) {
@@ -18364,7 +18364,7 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
 int class_to_io_dispatched(Compiler *c, int host, int op, int k) {
   if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated) return 0;
   MethodLookup ml = { .def_class = -1 };
-  int mi = host >= 0 ? cplan_implied_target(c, host, op, k, "to_io", 0, &ml)
+  int mi = host >= 0 ? cplan_implied_target(c, host, op, k, "to_io", CT_TABLE, &ml)
                      : call_target(c, -1, k, "to_io", CT_METHODS | CT_SHARED, &ml);
   if (mi < 0 || ml.def_class < 0) return 0;
   Scope *m = &c->scopes[mi];

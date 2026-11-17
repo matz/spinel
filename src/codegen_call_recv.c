@@ -591,7 +591,7 @@ static void emit_values_at_boxed(const char *an, const char *pe, const char *vg,
 /* The direct call of the container conversion obj_container_conv found:
    the compiled #to_ary / #to_hash of the defining class on the operand. */
 static void emit_obj_conv_call(Compiler *c, int op, int def, const char *conv, int by_value, const char *recv, Buf *b) {
-  int mi = cplan_implied_target(c, ic_operand_host(c, op), op, def, conv, 0, NULL);
+  int mi = cplan_implied_target(c, ic_operand_host(c, op), op, def, conv, CT_TABLE, NULL);
   buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
   if (!by_value) buf_printf(b, "(sp_%s *)", c->classes[def].c_name);
   buf_printf(b, "(%s)", recv);
@@ -901,7 +901,7 @@ static void emit_zip_args(Compiler *c, int id, const int *argv, int nargs, const
         continue;
       }
       int zcid = ty_object_class(at[j]);
-      if (zcid >= 0 && cplan_implied_target(c, id, argv[j], zcid, "each", 0, NULL) < 0) {
+      if (zcid >= 0 && cplan_implied_target(c, id, argv[j], zcid, "each", CT_TABLE, NULL) < 0) {
         /* sp_zip_arg would send :each and answer NoMethodError; the
            class is settled, so name CRuby's TypeError here */
         buf_printf(b, " sp_PolyArray *_t%d = ({ (void)(", tb[j]); emit_expr_for_effect(c, argv[j], b);
@@ -6803,7 +6803,7 @@ static int emit_merge_any_block_boxed(Compiler *c, int id, int recv, int arg, Bu
    prelude, so one built in place does not run ahead of the ones before
    it. */
 static int merge_arg_dyn_to_hash(Compiler *c, int op, TyKind at) {
-  int mi = ty_is_object(at) ? cplan_implied_target(c, ic_operand_host(c, op), op, ty_object_class(at), "to_hash", 0, NULL) : -1;
+  int mi = ty_is_object(at) ? cplan_implied_target(c, ic_operand_host(c, op), op, ty_object_class(at), "to_hash", CT_TABLE, NULL) : -1;
   return mi >= 0 && c->scopes[mi].nrequired == 0 && c->scopes[mi].rest_idx < 0 && !ty_is_hash(c->scopes[mi].ret);
 }
 
@@ -6856,7 +6856,7 @@ static int emit_hash_merge_misfit(Compiler *c, int id, TyKind rt, Buf *b) {
     TyKind at = comp_ntype(c, argv[i]);
     int def = -1;
     MethodLookup hml = { .def_class = -1 };
-    int hmi = ty_is_object(at) ? cplan_implied_target(c, id, argv[i], ty_object_class(at), "to_hash", 0, &hml) : -1;
+    int hmi = ty_is_object(at) ? cplan_implied_target(c, id, argv[i], ty_object_class(at), "to_hash", CT_TABLE, &hml) : -1;
     if (hmi >= 0) def = hml.def_class;
     if (i != bad && ty_is_object(at) && hmi >= 0 && c->scopes[hmi].nparams && conv_takes_no_args(c, hmi)) {
       int byv = comp_ty_value_obj(c, at);
@@ -7178,7 +7178,7 @@ static int emit_hash_merge_general(Compiler *c, int id, int recv, int arg, TyKin
     buf_printf(b, "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH), ", td);
     int def = -1;
     TyKind mk = ar.kind != RK_BOXED ? obj_container_conv(c, arg, at, "to_hash", &def) : TY_UNKNOWN;
-    Scope *s = mk == TY_UNKNOWN ? NULL : &c->scopes[cplan_implied_target(c, id, arg, def, "to_hash", 0, NULL)];
+    Scope *s = mk == TY_UNKNOWN ? NULL : &c->scopes[cplan_implied_target(c, id, arg, def, "to_hash", CT_TABLE, NULL)];
     if (s && s->reachable && !s->yields && (!s->blk_param || !*s->blk_param)) {
       /* Typed converters pass defaults that the boxed bridge cannot supply. */
       char av[24]; snprintf(av, sizeof av, "_t%d", ta);
@@ -13355,7 +13355,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      receiver's class only when both bounds are statically that class (the
      inference arm matches); otherwise it stays boxed. */
   if (recv >= 0 && ty_is_object(rt) && sp_streq(name, "clamp") && argc == 2 &&
-      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", 0, NULL) >= 0 &&
+      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", CT_TABLE, NULL) >= 0 &&
       class_is_comparable(c, ty_object_class(rt))) {
     TyKind clo = comp_ntype(c, argv[0]), chi = comp_ntype(c, argv[1]);
     int same_cls = (clo == rt || clo == TY_NIL) && (chi == rt || chi == TY_NIL);
@@ -13372,7 +13372,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      range: unfold to the two-argument object clamp (an sp_Range cannot carry
      the endpoints' class, so the range helper would compare raw pointers). */
   if (recv >= 0 && ty_is_object(rt) && sp_streq(name, "clamp") && argc == 1 &&
-      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", 0, NULL) >= 0 &&
+      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", CT_TABLE, NULL) >= 0 &&
       class_is_comparable(c, ty_object_class(rt))) {
     int rn2 = nt_paren_single(c->nt, argv[0]);
     if (rn2 >= 0 && nt_kind(nt, rn2) == NK_RangeNode) {
@@ -13418,7 +13418,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      itself, so the value stays boxed (inference: TY_POLY). */
   if (recv >= 0 && ty_is_object(rt) && sp_streq(name, "clamp") && argc == 1 &&
       repr_range_value(c, argv[0]) &&
-      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", 0, NULL) >= 0 &&
+      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", CT_TABLE, NULL) >= 0 &&
       class_is_comparable(c, ty_object_class(rt))) {
     buf_puts(b, "sp_obj_clamp_range(");
     emit_boxed(c, recv, b); buf_puts(b, ", ");

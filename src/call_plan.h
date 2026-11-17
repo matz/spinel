@@ -250,7 +250,7 @@ CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, in
    (`x`), and the call is the setter `x=` (an attr_writer's, or a def's of
    that name); without it, name is the method's own name, and a plain
    name that happens to end in `=` finds no attribute. */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256, CT_NOFACE = 512, CT_WRITER = 1024, CT_METHODS = 2048, CT_SHARED = 4096, CT_ATTR = 8192 };
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64, CT_PUBLIC = 128, CT_PROTECTED = 256, CT_NOFACE = 512, CT_WRITER = 1024, CT_METHODS = 2048, CT_SHARED = 4096, CT_ATTR = 8192, CT_TABLE = 16384 };
 /* The no-site ask (id -1) of a dispatcher or a survey that takes the final tables' answer for a name, the call sites
    having none to give it: CT_METHODS asks the instance chain for the method scope as the table primitive answers it,
    without ct_member's attribute precedence (an attribute nearer than a def answers with the def's scope); the other
@@ -624,7 +624,10 @@ enum { CPT_UNKNOWN = -1, CPT_MAX = 64 };
 int cplan_targets(Compiler *c, int id, int *out, int cap);
 /* The method the implied call `name` node id makes on operand op runs on
    an instance of cls (side 0; CT_CMETHOD its class object, CT_OWN its own
-   method, CT_TOP the top-level function of the name, cls not read): the
+   method, CT_TOP the top-level function of the name, cls not read; CT_TABLE
+   the table's method alone: no undef the record proves, no version, which
+   is what a reader answered before the plan asked at its node, until step 4
+   plans its row): the
    version the record proves there where a row of tools/implied_calls.yml is planned for the call (a multiple assignment's
    to_ary of its value), else an entry whose every state finds a method;
    anything else the table's method (*ml ML_TABLE, or ML_METHOD where the

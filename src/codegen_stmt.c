@@ -4304,7 +4304,7 @@ int strbuf_poly_to_s(Compiler *c, int v) {
     return 1;
   int targets[CPT_MAX];
   /* The call plan also sees overrides when several classes define to_s. */
-  return r >= 0 && cplan_implied_target(c, v, r, -1, "to_s", CT_TOP, NULL) < 0 && cplan_targets(c, v, targets, CPT_MAX) == 0 &&
+  return r >= 0 && cplan_implied_target(c, v, r, -1, "to_s", CT_TOP | CT_TABLE, NULL) < 0 && cplan_targets(c, v, targets, CPT_MAX) == 0 &&
          (repr_of(c, r).kind == RK_BOXED || strbuf_var_handle(c, r, NULL));
 }
 
@@ -18214,7 +18214,7 @@ static int masgn_writer_overridden(Compiler *c, int tgt, int cid, const char *nm
   if (cplan_overridden(c, cid, nm, 0)) return 1;
   char base[256];
   /* (the writer the target makes on its receiver: the implied call of its row) */
-  if (!setter_base_name(nm, base, sizeof base) || cplan_implied_target(c, tgt, nt_ref(c->nt, tgt, "receiver"), cid, nm, 0, NULL) < 0) return 0;
+  if (!setter_base_name(nm, base, sizeof base) || cplan_implied_target(c, tgt, nt_ref(c->nt, tgt, "receiver"), cid, nm, CT_TABLE, NULL) < 0) return 0;
   int nd = 0;
   const int *ds = comp_descendants(c, cid, &nd);
   for (int i = 0; i < nd; i++)

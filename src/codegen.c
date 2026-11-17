@@ -1135,9 +1135,21 @@ int conv_takes_no_args(Compiler *c, int mi) {
   return 1;
 }
 
+/* A conversion method declared with a named `&block` parameter takes it as a
+   second C parameter (emit_method_signature's rule: a named block on a method
+   that does not yield); the bridges declare it and pass no block, as a bare
+   call does. An anonymous `&` adds no parameter. */
+static int bridge_has_blk(Compiler *c, int mi) {
+  Scope *s = &c->scopes[mi];
+  return s->blk_param && s->blk_param[0] && !s->yields;
+}
+static const char *bridge_blk_param(Compiler *c, int mi) { return bridge_has_blk(c, mi) ? ", sp_Proc *blk" : ""; }
+static const char *bridge_blk_arg(Compiler *c, int mi)   { return bridge_has_blk(c, mi) ? ", NULL" : ""; }
+
 void emit_conv_dflt_args(Compiler *c, int mi, Buf *b) {
   Scope *s = &c->scopes[mi];
   for (int i = 0; i < s->nparams; i++) { buf_puts(b, ", "); emit_arg_or_default(c, s, i, -1, b); }
+  buf_puts(b, bridge_blk_arg(c, mi));
 }
 
 int obj_conv_method(Compiler *c, int op, TyKind t, const char *conv, TyKind want, int *def_out) {
@@ -2166,7 +2178,9 @@ void emit_str_cmp_conv(Compiler *c, int node, int tmp, Buf *b) {
   if (mi < 0) { buf_puts(b, "NULL"); return; }
   Scope *m = &c->scopes[mi];
   Buf call = {0};
-  buf_printf(&call, "%s((sp_%s *)_t%d.v.p)", mc_method(c, m), c->classes[lookup.def_class].c_name, tmp);
+  buf_printf(&call, "%s((sp_%s *)_t%d.v.p", mc_method(c, m), c->classes[lookup.def_class].c_name, tmp);
+  emit_conv_dflt_args(c, mi, &call);
+  buf_puts(&call, ")");
   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ ? ", tmp);
   if (repr_method_ret_storage(m) == TY_STRBUF) buf_printf(b, "sp_String_cstr_nil(%s)", call.p);
   else {
@@ -14647,16 +14661,6 @@ static int program_has_obj_arm(Compiler *c) {
     if (class_has_obj_arm(c, i)) return 1;
   return 0;
 }
-/* A conversion method declared with a named `&block` parameter takes it as a
-   second C parameter (emit_method_signature's rule: a named block on a method
-   that does not yield); the bridges declare it and pass no block, as a bare
-   call does. An anonymous `&` adds no parameter. */
-static int bridge_has_blk(Compiler *c, int mi) {
-  Scope *s = &c->scopes[mi];
-  return s->blk_param && s->blk_param[0] && !s->yields;
-}
-static const char *bridge_blk_param(Compiler *c, int mi) { return bridge_has_blk(c, mi) ? ", sp_Proc *blk" : ""; }
-static const char *bridge_blk_arg(Compiler *c, int mi)   { return bridge_has_blk(c, mi) ? ", NULL" : ""; }
 /* The block argument a direct call of a class's #to_s or #inspect passes:
    a C extension method always takes one. */
 const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect) {

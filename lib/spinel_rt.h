@@ -17498,7 +17498,7 @@ static SP_NOINLINE SP_NORETURN void sp_json_gen_unsupported(const char *name, in
 /* indent / space / space_before / object_nl / array_nl: nil, false and ""
    are the empty String; anything else but a String is a TypeError. WANT is
    what the call writes there. */
-static int sp_json_gen_layout_ok(sp_RbVal value, const char *want) {
+static inline int sp_json_gen_layout_ok(sp_RbVal value, const char *want) {
   if (!sp_poly_truthy(value)) return want[0] == 0;
   sp_RbVal sv = sp_rbval_str(value);
   if (sv.tag != SP_TAG_STR)
@@ -17506,7 +17506,7 @@ static int sp_json_gen_layout_ok(sp_RbVal value, const char *want) {
   size_t n = (size_t)sp_str_byte_len(sv.v.s);
   return n == strlen(want) && memcmp(sv.v.s, want, n) == 0;
 }
-static SP_UNUSED const char *sp_json_generate_options(sp_RbVal v, sp_RbVal options, int mode) {
+static inline const char *sp_json_generate_options(sp_RbVal v, sp_RbVal options, int mode) {
   SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(options);
   int pretty = mode & 1;
   int esc = 0, allow_nan = 0, limit_set = 0;

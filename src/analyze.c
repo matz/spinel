@@ -16867,7 +16867,15 @@ static int oa_filter_call(Compiler *c, int id) {
    answer nil: their value is the receiver itself, the same edge to the slot
    as a copy's. Killed with the nil-answering bangs, `def drop(n) =
    @items.delete_if { ... }` left @items a poly array wherever drop's value
-   was read, an --ext-entry's return among them. */
+   was read, an --ext-entry's return among them. Where the program defines
+   the filter's name on Array (share_builtin_overridden, which a module put
+   ahead of any class answers too), its value is the program's method's,
+   neither the receiver nor a copy of its elements: no edge, and the slot
+   dies, its value read or thrown away, as the walk arm's does under a
+   program's own each. (The edge typed the method that returns it an
+   sp_PtrArray over a body inferred boxed, a refusal; and thrown away, the
+   narrowed receiver went into a body that may store any element in it --
+   `self << "x"` raised TypeError where CRuby appends.) */
 static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *claimed, int *call_ret,
                          char *value_ok, const char *walk_disc, int nc) {
   int fk = oa_filter_call(c, id);
@@ -16878,8 +16886,9 @@ static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *cl
   int disc = id < nc && walk_disc[id];
   const char *fnm = nt_str(c->nt, id, "name");
   int self_ans = fk == 1 && fnm && !is_select_reject_bang(fnm);
-  if (fk == 1 && !self_ans && !disc) sl[S].alive = 0;
-  if ((fk == 2 || self_ans) && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
+  int own = fnm && share_builtin_overridden(c, "Array", fnm);
+  if (own || (fk == 1 && !self_ans && !disc)) sl[S].alive = 0;
+  if ((fk == 2 || self_ans) && !own && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
   return 1;
 }
 /* Is call id one of Kernel's printers (`p t`, `puts t`, `print t`, `pp t`)

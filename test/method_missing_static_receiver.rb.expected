@@ -1,0 +1,11 @@
+{x: 1}
+{from: :draft}
+{y: 2}
+{from: :a, to: :b}
+"ghost anything [1, 2]"
+true
+"ghost t []"
+"parent mm foo"
+"child foo"
+"parent mm foo"
+"child foo"

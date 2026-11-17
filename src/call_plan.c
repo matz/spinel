@@ -11976,7 +11976,7 @@ static void ver_main_undef_guards(Compiler *c) {
   }
   if (nat) qsort(at, (size_t)nat, sizeof *at, ver_guard_at_cmp);
   for (int g = 0; g < nat; g++) {
-    int id = at[g].id, top = at[g].top, na = 0, *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
+    int id = at[g].id, top = at[g].top, na = 0, *pre = NULL, np = sd_hold_call_operands(c, id, &pre, 0);
     const char *name = nt_str(nt, id, "name");
     if (np < 0) { free(pre); continue; }   /* (left as the table answers it) */
     for (int i = 0, nv = elab_chain_versions(c, -1, 1, name, vs, VER_MAX_ARMS); i < nv; i++) {

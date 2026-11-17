@@ -1088,7 +1088,7 @@ int disp_ahead(NodeTable *nt, const int *st, int n, int expr);
 /* The operands of call id that run code held in locals in CRuby's order,
    their writes into *pre, malloc'd with room for one more (analyze.c): how
    many, -1 for a form not held */
-int sd_hold_call_operands(Compiler *c, int id, int **pre);
+int sd_hold_call_operands(Compiler *c, int id, int **pre, int tail);
 int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar, int vcall);
 int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);

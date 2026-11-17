@@ -13441,7 +13441,11 @@ static int desugar_builtin_new_init_args(Compiler *c) {
     /* (where the call stands is known before its operands are held: holding them rewrites the call) */
     int *par = du_parent_map(nt);
     if (!par || par[id] < 0) { free(par); continue; }
-    int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
+    /* (a default with an effect runs after the operands and may change what a read among them reads: each is held) */
+    int tail = 0;
+    for (int f = 0; f < fl.n + fl.nk; f++)
+      tail |= subtree_has_side_effect(c, f < fl.n ? c->scopes[fl.mi[f]].pdefault[fl.pi[f]] : nt_ref(nt, fl.kp[f - fl.n], "value"));
+    int *pre = NULL, np = sd_hold_call_operands(c, id, &pre, tail);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
     /* (the keys a forward's binding raises for, from the held operands: a BNF_FILL's or a BNF_EMPTY's ahead of the defaults, a
        BNF_RAISE's, and a BNF_EMPTY's whose defaults with an effect the forwards ahead fill (rlate), after them) */
@@ -44579,12 +44583,15 @@ static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pf
    pair's key is an operand of its own, ahead of its value. A local or
    ivar read ahead of an operand that runs code is held too, as that code
    may change it (as split_kwsplat_calls and the splat dispatch hold
-   them); the other leaves (splat_leaf_node) stay where they are. A splat
+   them), and so is every one where the caller runs code of its own after
+   the operands and before the call (tail: a builtin `new`'s defaults with
+   an effect, desugar_builtin_new_init_args); the other leaves
+   (splat_leaf_node) stay where they are. A splat
    is held as `[*x]`, a `**` as `{**x}`, a `&` that is no Symbol literal
    as its conversion (`__blk_conv`). Answers how many writes, in *prep
    (malloc'd, with room for one statement more), -1 for an operand form it
    does not hold (`...`). */
-int sd_hold_call_operands(Compiler *c, int id, int **prep) {
+int sd_hold_call_operands(Compiler *c, int id, int **prep, int tail) {
   NodeTable *nt = (NodeTable *)c->nt;
   Scope *sc = comp_scope_of(c, id);
   int an = nt_ref(nt, id, "arguments"), n = 0, blk = nt_ref(nt, id, "block"), npre = 0, cap = 1;
@@ -44616,6 +44623,7 @@ int sd_hold_call_operands(Compiler *c, int id, int **prep) {
     if (sk == NK_AssocNode && !splat_leaf_node(nt, nt_ref(nt, slot[k], "key"))) last = 2 * k;
     if (sk == NK_SplatNode || sk == NK_AssocSplatNode || sk == NK_BlockArgumentNode || !splat_leaf_node(nt, v)) last = 2 * k + 1;
   }
+  if (tail) last = 2 * ns;
   for (int k = 0; k < ns; k++) {
     NodeKind sk = nt_kind(nt, slot[k]);
     if (sk == NK_SplatNode || sk == NK_AssocSplatNode || sk == NK_BlockArgumentNode) {

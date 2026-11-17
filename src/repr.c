@@ -909,7 +909,8 @@ int repr_program_call_handle(Compiler *c, int v) {
   TyKind t = comp_ntype_settled(c, v);
   if (t != TY_STRING && t != TY_STRBUF) return 0;
   if (k == NK_CallNode) {
-    if (call_is_setter_assign(nt, v)) return 0;
+    /* The fallback arm of a versioned entry invokes the builtin's ABI. */
+    if (call_is_setter_assign(nt, v) || cplan_pinned_builtin(c, v)) return 0;
     const char *name = nt_str(nt, v, "name");
     if (is_method_invoke(name) || is_bind_call(name)) {
       CallPlan method = cplan_method_call(c, v);

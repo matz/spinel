@@ -593,7 +593,7 @@ int share_plan_call_answers_literal(Compiler *c, int v) {
   for (int k = 0; k < c->nclasses; k++) {
     if (k != s->class_id && !is_descendant(c, k, s->class_id)) continue;
     if (!c->classes[k].instantiated && !c->classes[k].is_builtin_const) continue;
-    int mi = comp_method_in_chain(c, k, nm, NULL);
+    int mi = call_target(c, u, k, nm, 0, NULL);
     if (mi < 0 || !scope_ret_str_literal(c, mi)) return 0;
     any = 1;
   }

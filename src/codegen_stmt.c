@@ -2655,9 +2655,15 @@ int exc_message_boxed_call(Compiler *c, int v) {
      where the walk cannot tell the classes, any of the program's can be in
      the box, which the loop below judges) */
   for (int i = 0; ks && i < nk; i++)
-    if (!class_is_exc_subclass(c, ks[i]) && !comp_reader_in_chain(c, ks[i], "message", NULL)) return 0;
+    if (!class_is_exc_subclass(c, ks[i]) && !call_attr_target(c, v, ks[i], "message", CT_ATTR, NULL)) return 0;
+  /* (a survey of the program's classes, no call's question) */
+  mtab_enter(c);
   for (int k = 0; k < c->nclasses; k++)
-    if (!class_is_exc_subclass(c, k) && comp_method_in_class(c, k, "message") >= 0) return 0;
+    if (!class_is_exc_subclass(c, k) && call_target(c, -1, k, "message", CT_OWN | CT_SHARED, NULL) >= 0) {
+      mtab_leave(c);
+      return 0;
+    }
+  mtab_leave(c);
   return 1;
 }
 /* --share-strings: an exception's #message or #to_s with no override of
@@ -22135,6 +22141,12 @@ static void emit_missing_run(Compiler *c, int m, const OrderRun *run, Buf *b, in
   for (int i = 0; i <= run->n; i++) emit_effect_stmt(c, i < run->n ? run->ids[i] : m, b, indent);
 }
 
+/* The case of class k in a boxed `recv.attr op= v` switch where the class cannot take the write: its
+   reader answered, so CRuby's NoMethodError is for the writer `attr=` */
+static void emit_poly_attr_write_missing(Buf *b, int indent, int k, const char *attr, int trecv) {
+  emit_indent(b, indent);
+  buf_printf(b, "case %d: sp_raise_poly_nomethod(\"%s=\", _t%d); break;\n", k, attr, trecv);
+}
 static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
   if (sp_streq(ty, "CallOperatorWriteNode")) {
     /* `recv.attr op= value` (e.g. doom's `sector.ceiling_height -=
@@ -22369,15 +22381,24 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       int any = 0;
       for (int k = 0; k < c->nclasses; k++) {
         if (!c->classes[k].instantiated) continue;
-        int pdcls = -1;
-        /* both accessors, same as the concrete arm: a reader-only class must
-           raise NoMethodError for `attr=` (via the default arm), not store */
-        if (!comp_reader_in_chain(c, k, attr, &pdcls)) continue;
-        if (!comp_writer_in_chain(c, k, attr, NULL)) continue;
+        MethodLookup pml = { .def_class = -1 };
+        /* both accessors, same as the concrete arm: CRuby reads first, so a
+           class with no reader raises NoMethodError for `attr` (the default
+           arm), one with a reader and no writer for `attr=` (its own case),
+           and neither stores */
+        if (!call_attr_target(c, id, k, attr, CT_ATTR, &pml)) continue;
+        if (!call_attr_target(c, id, k, attr, CT_ATTR | CT_WRITER, NULL)) {
+          emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
+          continue;
+        }
+        int pdcls = pml.def_class;
         const char *rn = comp_resolve_alias(c, pdcls, attr);
         char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", rn);
         int ivx = comp_ivar_index(&c->classes[pdcls], ivn);
-        if (ivx < 0) continue;  /* no resolvable backing slot: don't guess */
+        if (ivx < 0) {   /* no resolvable backing slot: don't guess */
+          emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
+          continue;
+        }
         TyKind ivt = c->classes[pdcls].ivar_types[ivx];
         /* skip a class whose slot can't take this operator (the raw C
            fallthrough would be pointer arithmetic on an sp_Str* or a type
@@ -22386,8 +22407,10 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
            as the poly attr-write dispatch above. */
         /* (one representation: a handle slot is a String slot too) */
         int ivs = ivt == TY_STRING || (ivt == TY_STRBUF);
-        if (ivs && !(op && sp_streq(op, "+"))) continue;
-        if (ivt == TY_POLY && !cpf && !bitop) continue;
+        if ((ivs && !(op && sp_streq(op, "+"))) || (ivt == TY_POLY && !cpf && !bitop)) {
+          emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
+          continue;
+        }
         const char *cn = c->classes[pdcls].c_name;
         any = 1;
         emit_indent(b, indent + 1);
@@ -22442,10 +22465,10 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
           buf_puts(b, "; break; }\n");
         }
       }
-      /* a receiver whose runtime class has no such accessor pair (or a boxed
-         scalar) is CRuby's NoMethodError, not a silent no-op */
+      /* a receiver whose runtime class has no reader (or a boxed scalar) is
+         CRuby's NoMethodError for the reader, which it calls first */
       emit_indent(b, indent + 1);
-      buf_printf(b, "default: sp_raise_poly_nomethod(\"%s=\", _t%d);\n", attr, trecv);
+      buf_printf(b, "default: sp_raise_poly_nomethod(\"%s\", _t%d);\n", attr, trecv);
       emit_indent(b, indent);
       buf_puts(b, "}\n");
       if (any) return 1;

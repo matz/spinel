@@ -1590,7 +1590,7 @@ static int emit_poly_reopened_binop(Compiler *c, int id, const char *name, int r
 }
 
 /* A nullable Bigint holds nil or an Integer. Only their overrides matter. */
-static int bigint_not_overridden(Compiler *c) {
+static int bigint_not_overridden(Compiler *c, int id) {
   static const int roots[] = { CORE_NILCLASS, CORE_INTEGER, CORE_NUMERIC, CORE_COMPARABLE,
                               CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   int top = comp_name_responder(c, -1, "!", 0);
@@ -1598,7 +1598,7 @@ static int bigint_not_overridden(Compiler *c) {
   for (int r = 0; roots[r] >= 0; r++) {
     int k = comp_core_class(c, roots[r]);
     if (k < 0) continue;
-    if (comp_is_undeffed_in_chain(c, k, "!") || comp_name_responder(c, k, "!", 0) >= 0 ||
+    if (cplan_undef_stops(c, id, k, "!") || comp_name_responder(c, k, "!", 0) >= 0 ||
         comp_native_method_find(c, k, "!", 0, 0) >= 0) return 1;
     /* The load record also holds prepends to builtin modules such as Kernel.
        With no output slots, any version or an unknown chain returns -1. */
@@ -1885,7 +1885,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)");
     }
     else if (rt == TY_STRING || ty_is_array(rt) || ty_is_hash(rt) || ty_is_object(rt) ||
-             (rt == TY_BIGINT && !bigint_not_overridden(c)) || rt == TY_PROC ||
+             (rt == TY_BIGINT && !bigint_not_overridden(c, id)) || rt == TY_PROC ||
              rt == TY_MATCHDATA || rt == TY_EXCEPTION || rt == TY_FIBER || rt == TY_IO) {
       buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == 0)");  /* NULL pointer is falsy */
     }

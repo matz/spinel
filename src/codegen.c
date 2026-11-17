@@ -10089,7 +10089,7 @@ static int proc_body_uses_self(Compiler *c, int id, int class_id) {
     if (nm && (sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval"))) return 1;
     /* an attr_reader is not a method in the chain -- it reads the ivar
        directly off self, which the body needs captured all the same (#3750) */
-    if (nm && comp_reader_in_chain(c, class_id, nm, NULL)) return 1;
+    if (nm && call_attr_target(c, id, class_id, nm, CT_ATTR, NULL)) return 1;
     /* respond_to? in a class with subclasses asks self's own class at run
        time when the subclasses answer differently */
     if (nm && sp_streq(nm, "respond_to?") && class_id >= 0 && class_has_subclass(c, class_id)) return 1;
@@ -13902,8 +13902,11 @@ static int obj_to_json_method(Compiler *c, int cid, int *defc) {
   ClassInfo *ci = &c->classes[cid];
   if (ci->is_native_class || !ci->instantiated) return -1;
   int dc = cid;
-  int mi = comp_method_in_chain(c, cid, "to_json", &dc);
+  /* (the dispatcher's arm for every class: no call's point, the final tables' answer) */
+  MethodLookup jml = { .def_class = -1 };
+  int mi = call_target(c, -1, cid, "to_json", CT_METHODS | CT_SHARED, &jml);
   if (mi < 0) return -1;
+  if (jml.def_class >= 0) dc = jml.def_class;
   Scope *m = &c->scopes[mi];
   if (m->is_cmethod) return -1;
   if (m->ret != TY_STRING) {
@@ -13913,7 +13916,7 @@ static int obj_to_json_method(Compiler *c, int cid, int *defc) {
        reaches, so it serializes the object instead. Both fell through to the
        reflection arm before this arm existed, and still do. */
     if (!scope_ret_is_void(c, mi) || m->blk_param) return -1;
-    if (comp_method_vis_in_chain(c, cid, "to_json") != SP_VIS_PUBLIC) return -1;
+    if (cplan_method_vis(c, -1, cid, "to_json", 0, NULL) != SP_VIS_PUBLIC) return -1;
   }
   if (!scope_has_callable_symbol(c, mi)) return -1;
   if (m->nparams > 1 || (m->nparams == 1 && m->rest_idx != 0)) return -1;

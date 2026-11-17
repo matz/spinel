@@ -1763,12 +1763,13 @@ int const_class_value_only(Compiler *c, int node) {
    Module or Class (or a module they include), or a class method of Object or
    BasicObject, which every class inherits? Then the builtin reader, and its
    arity, is not what a call reaches. */
-int prog_owns_class_name_reader(Compiler *c, const char *nm) {
+int prog_owns_class_name_reader(Compiler *c, int id, const char *nm) {
   for (int k = 0; k < c->nclasses; k++) {
     const char *n = c->classes[k].name;
-    if (!n) continue;
-    if ((sp_streq(n, "Module") || sp_streq(n, "Class")) && comp_method_in_chain(c, k, nm, NULL) >= 0) return 1;
-    if ((sp_streq(n, "Object") || sp_streq(n, "BasicObject")) && comp_cmethod_in_chain(c, k, nm, NULL) >= 0) return 1;
+    int core = n ? builtin_core_class_slot(n) : -1;
+    if ((core == CORE_MODULE || core == CORE_CLASS) && call_target(c, id, k, nm, CT_METHODS, NULL) >= 0) return 1;
+    if ((core == CORE_OBJECT || core == CORE_BASIC_OBJECT) && call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0)
+      return 1;
   }
   return 0;
 }
@@ -1776,9 +1777,9 @@ int prog_owns_class_name_reader(Compiler *c, const char *nm) {
    compiler knows, so the call raises the arity ArgumentError: one or more
    arguments, no splat and no `**h` (only the run time knows those), and
    no program method answering the reader for every class? */
-int class_name_reader_argc_raises(Compiler *c, const char *nm, int argc, const int *argv) {
+int class_name_reader_argc_raises(Compiler *c, int id, const char *nm, int argc, const int *argv) {
   const NodeTable *nt = c->nt;
-  if (argc <= 0 || nt_argv_has_splat(nt, argv, argc) || prog_owns_class_name_reader(c, nm)) return 0;
+  if (argc <= 0 || nt_argv_has_splat(nt, argv, argc) || prog_owns_class_name_reader(c, id, nm)) return 0;
   for (int i = 0; i < argc; i++) {
     if (nt_kind(nt, argv[i]) != NK_KeywordHashNode) continue;
     int en = 0; const int *el = nt_arr(nt, argv[i], "elements", &en);

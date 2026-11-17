@@ -12933,11 +12933,11 @@ int ctor_needs_self_defaults_argv(Compiler *c, int initm, const int *argv, int a
 /* Does any class have an attribute writer for `name` (`pos=` from
    `attr_accessor :pos`, a Struct member)? Writers are kept under the base
    name, which the arm's method and reader test does not ask. */
-int attr_writer_named(Compiler *c, int cls, const char *name) {
+int attr_writer_named(Compiler *c, int id, int cls, const char *name) {
   char base[256];
   if (!setter_base_name(name, base, sizeof base)) return 0;
   for (int k = 0; k < c->nclasses; k++)
-    if ((cls < 0 || k == cls) && comp_writer_in_chain(c, k, base, NULL)) return 1;
+    if ((cls < 0 || k == cls) && call_attr_target(c, id, k, base, CT_ATTR | CT_WRITER, NULL)) return 1;
   return 0;
 }
 
@@ -20934,7 +20934,7 @@ static int json_user_to_json_any(Compiler *c) {
   }
   return 0;
 }
-int json_to_json_is_builtin(Compiler *c, int recv) {
+int json_to_json_is_builtin(Compiler *c, int id, int recv) {
   Repr rr = repr_of(c, recv);
   TyKind rt = rr.as_ty;
   /* A BOXED receiver goes through the generator too. It used to be declined
@@ -20963,7 +20963,7 @@ int json_to_json_is_builtin(Compiler *c, int recv) {
      unresolved, where CRuby answers "#<struct S x=1>" (#4387). */
   if (ty_is_object(rt)) {
     int oc = ty_object_class(rt);
-    return oc >= 0 && comp_method_in_chain(c, oc, "to_json", NULL) < 0;
+    return oc >= 0 && call_target(c, id, oc, "to_json", 0, NULL) < 0;
   }
   const char *bn = ty_is_hash(rt) ? "Hash"
                  : ty_is_array(rt) ? "Array"
@@ -20973,7 +20973,7 @@ int json_to_json_is_builtin(Compiler *c, int recv) {
                  : rt == TY_SYMBOL ? "Symbol" : NULL;
   if (bn) {
     int bc = comp_builtin_class_named(c, bn);
-    if (bc >= 0 && comp_method_in_chain(c, bc, "to_json", NULL) >= 0) return 0;
+    if (bc >= 0 && call_target(c, id, bc, "to_json", 0, NULL) >= 0) return 0;
   }
   return 1;
 }
@@ -25153,13 +25153,13 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
      inside a block that runs with another self (instance_eval, class_exec,
      define_method, a class builder's): there self is not the class. */
   if (recv < 0 && is_name_reader(name) && nt_ref(nt, id, "block") < 0 &&
-      class_name_reader_argc_raises(c, name, argc, argv)) {
+      class_name_reader_argc_raises(c, id, name, argc, argv)) {
     Scope *ms = comp_scope_of(c, id);
     if (ms && ms->is_cmethod && ms->class_id >= 0 && ms->def_node >= 0 &&
         call_target(c, id, ms->class_id, name, CT_CMETHOD, NULL) < 0 &&
         node_self_kept(c, ms->def_node, id, 0) == 1) {
       char am[96];
-      class_name_reader_arity_msg(c, name, argc, argv, am, sizeof am);
+      class_name_reader_arity_msg(c, id, name, argc, argv, am, sizeof am);
       buf_puts(b, "(");
       for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "), "); }
       buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\")", am);
@@ -25664,7 +25664,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           /* a Class value without a method of the name: Module#name, to_s
              and inspect take no argument, so CRuby raises ArgumentError */
           char cls_raise[256], am[96];
-          if (is_name_reader(nm) && class_name_reader_arity_msg(c, nm, argc, argv, am, sizeof am))
+          if (is_name_reader(nm) && class_name_reader_arity_msg(c, id, nm, argc, argv, am, sizeof am))
             snprintf(cls_raise, sizeof cls_raise, "(sp_raise_cls(\"ArgumentError\", \"%s\"), sp_box_nil())", am);
           else snprintf(cls_raise, sizeof cls_raise, "%s", raise);
           buf_printf(b, "%s) : %s; })", cls_raise,

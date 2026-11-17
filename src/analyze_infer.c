@@ -2332,9 +2332,9 @@ int range_enum_redispatch(Compiler *c, int id) {
 /* Does Enumerable's method chain hold a find_index the program wrote (an
    Enumerable reopen; the builtin definition carries node_bi)? That method
    then answers a Hash's or an Enumerator's find_index, block and all. */
-int an_enum_own_find_index(Compiler *c) {
+int an_enum_own_find_index(Compiler *c, int id) {
   int en = comp_core_class(c, CORE_ENUMERABLE);
-  int mi = en >= 0 ? comp_method_in_chain(c, en, "find_index", NULL) : -1;
+  int mi = en >= 0 ? call_target(c, id, en, "find_index", 0, NULL) : -1;
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }
@@ -2375,7 +2375,7 @@ int hash_enum_redispatch(Compiler *c, int id) {
      zip, tally, reverse_each ride the materialized redispatch, block or not
      (#2372) */
   /* (an Enumerable reopen's own find_index is the call's target) */
-  if (sp_streq(name, "find_index") && an_enum_own_find_index(c)) return 0;
+  if (is_find_index(name) && an_enum_own_find_index(c, id)) return 0;
   if (sp_streq(name, "find_index") || sp_streq(name, "uniq") ||
       sp_streq(name, "zip") || sp_streq(name, "tally") ||
       sp_streq(name, "reverse_each")) return 1;
@@ -6334,7 +6334,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
        dispatch below types the call. A class known only at run time may be
        one with such a method or one without: boxed, either answer. With
        arguments the builtin raises ArgumentError, so its slot stays a String. */
-    if (is_name_reader(name) && (argc == 0 || class_name_reader_argc_raises(c, name, argc, argv)) &&
+    if (is_name_reader(name) && (argc == 0 || class_name_reader_argc_raises(c, id, name, argc, argv)) &&
         class_recv_user_cmethod(c, id, recv, name) < 0) {
       int ncc = 0, other = 0;
       const PolyCand *pc = NULL;

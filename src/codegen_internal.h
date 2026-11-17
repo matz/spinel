@@ -2566,7 +2566,7 @@ int an_arg_is_shared_handle(Compiler *c, int node);
 int an_super_object_text(Compiler *c, int n, int mi);
 int an_super_struct_text(Compiler *c, int n, int mi);
 int an_user_defines_method(Compiler *c, const char *name);
-int an_enum_own_find_index(Compiler *c);
+int an_enum_own_find_index(Compiler *c, int id);
 /* Can no method of the program take `name`: no def of it or of method_missing, and no alias, define_method, attr_* or Struct / Data member that names it (or names a method only the run time knows)? */
 int an_name_binder_free(Compiler *c, const char *name);
 int an_scopes_named_first(Compiler *c, const char *nm);

@@ -12160,10 +12160,13 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
   /* (a call that enforces visibility binds the face entry where the
      versions differ in it: call_target asks with the same flags) */
   flags = ct_vis_flags(c, id, flags);
-  /* (an implied call takes no entry where an undef of the name is on the
-     chain: cplan_implied_target) */
-  if ((flags & CT_IMPLIED) && k >= 0 && comp_is_undeffed_in_chain(c, k, nm)) return;
   mtab_enter(c);
+  /* (an implied call takes no entry where an undef of the name is on the
+     chain: cplan_implied_target; the plan's own read, in its bracket) */
+  if ((flags & CT_IMPLIED) && k >= 0 && comp_is_undeffed_in_chain(c, k, nm)) {
+    mtab_leave(c);
+    return;
+  }
   /* (an entry arms two or more versions of the chain: with fewer, or a
      chain the record does not hold, no call is asked. A call on main may
      ask main's chain, which ends in Object's: ct_lookup. A later prepend's

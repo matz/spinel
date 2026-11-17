@@ -1,0 +1,23 @@
+construction defers validation
+OpenSSL::ASN1::ASN1Error
+true
+OpenSSL::ASN1::ASN1Error
+ArgumentError
+setter accepts value
+OpenSSL::ASN1::ASN1Error
+setter accepts value
+OpenSSL::ASN1::ASN1Error
+setter accepts value
+TypeError
+setter accepts value
+TypeError
+setter accepts value
+RangeError
+TypeError
+TypeError
+TypeError
+TypeError
+TypeError
+TypeError
+3000
+TypeError

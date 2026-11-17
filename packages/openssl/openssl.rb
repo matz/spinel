@@ -32,6 +32,7 @@ require "openssl/digest"
 require "openssl/cipher"
 require "openssl/kdf"
 require "openssl/pkey"
+require "openssl/asn1"
 require "openssl/x509"
 require "openssl/random"
 

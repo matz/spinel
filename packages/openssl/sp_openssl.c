@@ -2100,3 +2100,5 @@ sp_int sp_ssl_server_check(const char *chain, const char *curve, const char *pri
   SSL_CTX_free(ctx);
   return 1;
 }
+
+#include "sp_asn1.h"

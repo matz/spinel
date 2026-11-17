@@ -15525,12 +15525,17 @@ int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn, int argc,
      a message, or a splat or keywords, the native arms keep the call and the
      reopening is left out, as before it was looked for. */
   const NodeTable *nt = c->nt;
-  if (argc > 1 || (argc == 1 && exc_init_takes_own_args(cn))) return -1;
+  if (argc > 1 || exc_init_takes_own_args(cn)) return -1;
   for (int i = 0; i < argc; i++) {
     NodeKind k = nt_kind(nt, argv[i]);
     if (k == NK_KeywordHashNode || k == NK_SplatNode) return -1;
   }
-  return exc_reopen_initialize_above(c, cn, 0, -1);
+  int mi = exc_reopen_initialize_above(c, cn, 0, -1);
+  /* a yielding initialize has no function of its own (its proc-form clone runs
+     it, as ctor_alloc_init arranges); this helper calls the plain one, so the
+     call would name a function that is not emitted: such a call keeps the native
+     construction, as before the reopening was looked for */
+  return mi >= 0 && !c->scopes[mi].yields ? mi : -1;
 }
 
 /* Build the runtime's exception of the reopened class ci and run the
@@ -15567,6 +15572,12 @@ void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int
   }
   int te = ++g_tmp;
   buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", (&(\"\\xff\")[1])); SP_GC_ROOT(_t%d); ", te, cname, te);
+  /* sp_exc_new marks a receiver and a key as recorded: the native arms clear
+     them, so `.key` / `.receiver` raise until an initialize records one */
+  if (sp_streq(cname, "KeyError") || sp_streq(cname, "NameError") || sp_streq(cname, "NoMethodError") ||
+      sp_streq(cname, "FrozenError"))
+    buf_printf(b, "_t%d->has_recv = 0; ", te);
+  if (sp_streq(cname, "KeyError")) buf_printf(b, "_t%d->has_key = 0; ", te);
   /* a default that reads `self` (`msg = self.class.name`) reads the exception
      being built, not the caller's self; a statement it has to hoist goes inside
      this statement expression, as ctor_alloc_init puts it, since the enclosing

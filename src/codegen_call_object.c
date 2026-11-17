@@ -83,8 +83,10 @@ static void emit_str_between_cmp(int tv, int tbnd, const char *op, Buf *b) {
 /* between?, object_id / __id__, hash, nil? and === on a receiver whose kind decides them */
 /* Is there a class whose hash is a reader rather than a def? */
 static int hash_reader_class(Compiler *c) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_reader_in_chain(c, k, "hash", NULL) && comp_method_in_chain(c, k, "hash", NULL) < 0) return 1;
+  int n;
+  const int *owners = comp_name_reader_owners(c, "hash", &n);
+  for (int i = 0; i < n; i++)
+    if (comp_name_responder(c, owners[i], "hash", 0) < 0) return 1;
   return 0;
 }
 

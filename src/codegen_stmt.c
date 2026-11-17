@@ -12512,7 +12512,7 @@ static int ops_builtin(Compiler *c, const char *const *cls, const char *const *c
   for (int k = 0; k < c->nclasses; k++) {
     if (!hcp_in(cls, c->classes[k].name)) continue;
     for (int l = 0; ops[l]; l++)
-      for (int i = 0; ops[l][i]; i++) if (comp_method_in_chain(c, k, ops[l][i], NULL) >= 0) return 0;
+      for (int i = 0; ops[l][i]; i++) if (comp_name_responder(c, k, ops[l][i], 0) >= 0) return 0;
   }
   for (int s = 1; s < c->nscopes; s++) {
     const char *nm = c->scopes[s].name;

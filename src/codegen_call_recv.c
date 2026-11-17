@@ -698,11 +698,11 @@ static int name_is_literal(Compiler *c, const char *name) {
 static int obj_may_answer(Compiler *c, int cid, const char *name) {
   if (call_answers(c, -1, cid, name, 0, NULL) ||
       comp_subclass_answers(c, cid, name) || root_reopen_defines(c, -1, name) ||
-      comp_method_index(c, name) >= 0)
+      comp_name_responder(c, -1, name, 0) >= 0)
     return 1;
   for (int i = 0; i < c->ntoplevel_includes; i++) {
     int mk = c->toplevel_includes[i];
-    if (mk >= 0 && (comp_method_in_chain(c, mk, name, NULL) >= 0 || comp_reader_in_chain(c, mk, name, NULL)))
+    if (mk >= 0 && (comp_name_responder(c, mk, name, 0) >= 0 || call_attr_target(c, -1, mk, name, CT_ATTR, NULL)))
       return 1;
   }
   return name_is_literal(c, name);
@@ -18342,7 +18342,7 @@ void emit_ivar_reflect_answer(Compiler *c, int id, const char *ivn, Buf *b) {
 static int poly_class_defines(Compiler *c, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
     if (c->classes[k].instantiated && !is_builtin_reopen(c->classes[k].name) &&
-        comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
+        comp_name_responder(c, k, name, 0) >= 0) return 1;
   return 0;
 }
 /* ...and may the literal-name reflection `name` on a boxed receiver be read

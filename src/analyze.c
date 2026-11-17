@@ -18224,7 +18224,7 @@ static int oa_one_class_may_answer(Compiler *c, int ci, const char *name) {
   if (call_answers(c, -1, ci, name, 0, &ml)) return 1;
   const char *rn = comp_resolve_alias(c, ci, name);
   if (rn && !sp_streq(rn, name) && (call_answers(c, -1, ci, rn, 0, &ml))) return 1;
-  return comp_method_in_chain(c, ci, "method_missing", NULL) >= 0;
+  return comp_name_responder(c, ci, "method_missing", 0) >= 0;
 }
 static int oa_class_may_answer(Compiler *c, int ci, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
@@ -18722,7 +18722,7 @@ static int oa_component_narrows(Compiler *c, const OAS *s) {
   /* a component using no-block sort/min/max narrows only when the element
      class can actually compare (has `<=>` in its chain); otherwise it stays
      poly, where the boxed comparator raises the CRuby ArgumentError. */
-  return !(s->needs_cmp && comp_method_in_chain(c, s->cls, "<=>", NULL) < 0);
+  return !(s->needs_cmp && comp_name_responder(c, s->cls, "<=>", 0) < 0);
 }
 /* A class taken from another slot's last decision (oa_note_elem_from) holds
    only if that slot narrows to it again; otherwise the slot that took it

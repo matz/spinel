@@ -1592,12 +1592,12 @@ static int emit_poly_reopened_binop(Compiler *c, int id, const char *name, int r
 static int bigint_not_overridden(Compiler *c) {
   static const int roots[] = { CORE_NILCLASS, CORE_INTEGER, CORE_NUMERIC, CORE_COMPARABLE,
                               CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  int top = comp_method_index(c, "!");
+  int top = comp_name_responder(c, -1, "!", 0);
   if (top >= 0 && !c->scopes[top].is_cmethod) return 1;
   for (int r = 0; roots[r] >= 0; r++) {
     int k = comp_core_class(c, roots[r]);
     if (k < 0) continue;
-    if (comp_is_undeffed_in_chain(c, k, "!") || comp_method_in_chain(c, k, "!", NULL) >= 0 ||
+    if (comp_is_undeffed_in_chain(c, k, "!") || comp_name_responder(c, k, "!", 0) >= 0 ||
         comp_native_method_find(c, k, "!", 0, 0) >= 0) return 1;
     /* The load record also holds prepends to builtin modules such as Kernel.
        With no output slots, any version or an unknown chain returns -1. */

@@ -1642,7 +1642,7 @@ static int recv_class_value_defines(Compiler *c, int id, const char *name) {
   for (int uk = 0; uk < c->nclasses; uk++) {
     const char *kn = c->classes[uk].name;
     if ((comp_class_is_module(c, &c->classes[uk]) || (kn && sp_streq(kn, "Module"))) &&
-        comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
+        comp_name_responder(c, uk, name, 0) >= 0) return 1;
   }
   return 0;
 }

@@ -2999,8 +2999,8 @@ int recv_user_defines(Compiler *c, const char *name) {
   if (ni > 0) return 1;
   if (ni == 0) { comp_name_responders(c, name, 1, &nc); if (nc >= 0) return nc > 0; }
   for (int uk = 0; uk < c->nclasses; uk++) {
-    if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
-    if (comp_cmethod_in_chain(c, uk, name, NULL) >= 0) return 1;
+    if (comp_name_responder(c, uk, name, 0) >= 0) return 1;
+    if (comp_name_responder(c, uk, name, CT_CMETHOD) >= 0) return 1;
   }
   return 0;
 }
@@ -3081,9 +3081,7 @@ int poly_name_user_claimed(Compiler *c, const char *name, int argc) {
    Module read out of a container answers it through the poly dispatch. */
 int poly_name_cmethod_claimed(Compiler *c, const char *name) {
   if (g_poly_builtin_arm) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_cmethod_in_chain(c, k, name, NULL) >= 0) return 1;
-  return 0;
+  return comp_name_answered(c, name, 1);
 }
 
 /* 1 iff a user class that descends from an exception class defines `name`,
@@ -6863,7 +6861,7 @@ int object_defines_cmp(Compiler *c) {
    builtin type (`rescue => e`) may be one of its instances. */
 int exc_subclass_defines_cmp(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++)
-    if (class_is_exc_subclass(c, k) && comp_method_in_chain(c, k, "<=>", NULL) >= 0) return 1;
+    if (class_is_exc_subclass(c, k) && comp_name_responder(c, k, "<=>", 0) >= 0) return 1;
   return 0;
 }
 
@@ -12935,9 +12933,7 @@ int ctor_needs_self_defaults_argv(Compiler *c, int initm, const int *argv, int a
    reaches that method through the general dispatch, so an IO name only the
    poly-IO arm answers must not claim the call. */
 int class_method_named(Compiler *c, const char *name) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_cmethod_in_chain(c, k, name, NULL) >= 0) return 1;
-  return 0;
+  return comp_name_answered(c, name, 1);
 }
 
 /* Does any class have an attribute writer for `name` (`pos=` from
@@ -20921,7 +20917,7 @@ int class_includes_module(Compiler *c, int cid, int mod) {
    not one of them -- only a reopen of that builtin could be. */
 static int json_user_to_json_any(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_chain(c, k, "to_json", NULL);
+    int mi = comp_name_responder(c, k, "to_json", 0);
     if (mi >= 0 && !c->scopes[mi].is_cmethod) return 1;
   }
   return 0;

@@ -205,8 +205,8 @@ static int recv_has_array_write(Compiler *c, int recv) {
          class through a reader named `gname` (alias resolution is per-class,
          so this asks every class, exactly as the outer loop did). */
       for (int k = 0; k < c->nclasses; k++) {
-        int rdcls = k;
-        if (comp_reader_in_chain(c, k, gname, &rdcls) && rdcls == wc) return 1;
+        MethodLookup rl = { .def_class = k };
+        if (call_attr_target(c, -1, k, gname, CT_ATTR, &rl) && rl.def_class == wc) return 1;
       }
     }
     /* A hand-written getter (`def list = @list`) is the same READER: its

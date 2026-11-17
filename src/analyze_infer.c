@@ -51,7 +51,7 @@ TyKind ivar_value_ty(ClassInfo *ci, int iv) {
 /* Does any program class define a <=> whose answer is typed Bignum? */
 static int an_some_cmp_answers_bigint(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_chain(c, k, "<=>", NULL);
+    int mi = comp_name_responder(c, k, "<=>", 0);
     if (mi >= 0 && c->scopes[mi].ret == TY_BIGINT) return 1;
   }
   return 0;
@@ -2439,7 +2439,7 @@ int reduce_tail_from_acc(Compiler *c, int tail, const char *accp) {
 int an_object_methods_listable(Compiler *c, int cid, const char *name) {
   const NodeTable *nt = c->nt;
   if (cid < 0 || cid >= c->nclasses || class_is_exc_subclass(c, cid)) return 0;
-  if (comp_method_in_chain(c, cid, name, NULL) >= 0) return 0;
+  if (comp_name_responder(c, cid, name, 0) >= 0) return 0;
   /* nor where it answers the name with a reader of its own: a Struct member
      or an attr named `methods` (#10345) */
   if (call_answers(c, -1, cid, name, 0, NULL)) return 0;
@@ -2498,7 +2498,7 @@ const char *an_value_methods_class(Compiler *c, int recv, TyKind rt, const char 
     char an[64];
     snprintf(an, sizeof an, "%.*s", (int)l, p);
     int uk = comp_builtin_class_named(c, an);
-    if (uk >= 0 && comp_method_in_class(c, uk, name) >= 0) return NULL;
+    if (uk >= 0 && comp_name_responder(c, uk, name, CT_OWN) >= 0) return NULL;
     p += l + (e ? 1 : 0);
   }
   return cn;
@@ -2511,7 +2511,7 @@ const char *an_value_methods_class(Compiler *c, int recv, TyKind rt, const char 
 int an_class_singleton_methods_listable(Compiler *c, int cid) {
   const NodeTable *nt = c->nt;
   if (cid < 0 || cid >= c->nclasses || class_is_exc_subclass(c, cid)) return 0;
-  if (comp_cmethod_in_chain(c, cid, "singleton_methods", NULL) >= 0) return 0;
+  if (comp_name_responder(c, cid, "singleton_methods", CT_CMETHOD) >= 0) return 0;
   for (int k = cid, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     ClassInfo *ci = &c->classes[k];
     if (ci->is_native_class || ci->is_struct || ci->is_data) return 0;
@@ -2525,7 +2525,7 @@ int an_class_singleton_methods_listable(Compiler *c, int cid) {
 int an_singleton_methods_foldable(Compiler *c, int recv) {
   const char *cn = nt_str(c->nt, recv, "name");
   int ci = const_node_class_index(c, recv);
-  if (builtin_class_id(cn)) return ci < 0 || comp_cmethod_in_chain(c, ci, "singleton_methods", NULL) < 0;
+  if (builtin_class_id(cn)) return ci < 0 || comp_name_responder(c, ci, "singleton_methods", CT_CMETHOD) < 0;
   return an_class_singleton_methods_listable(c, ci);
 }
 

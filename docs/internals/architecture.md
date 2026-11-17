@@ -43,6 +43,8 @@ The String plan's row is what is left of the two String representations
 (#9258): every String slot is now its handle, the share analysis is gone,
 and the String plan and the byte routes are being removed. A change does
 not add to them.
+A default argument is evaluated on the callee. Binding a String default
+uses the same handle as the expression that supplied it.
 
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for

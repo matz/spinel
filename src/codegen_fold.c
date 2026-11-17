@@ -7951,40 +7951,21 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
   if (repr_of_slot(c, p).kind == RK_STRBUF && emit_strbuf_local_write_handle(c, provided, out)) return;
   if (repr_of_slot(c, p).handle) {
     int dvP = m->pdefault[idx];
-    if (dvP >= 0 && comp_ntype(c, dvP) == TY_NIL) {
-      /* (in the callee's context, as below: a call answering nil runs) */
-      if (subtree_is_pure_read(c, dvP)) { buf_puts(out, "NULL"); return; }
-      const char *svs = g_self, *svd = g_self_deref;
-      int sve = g_emitting_class_id;
-      char dself[32];
-      dflt_self_enter(m, dvP, dself, sizeof dself);
-      buf_puts(out, "({ (void)("); emit_expr_for_effect(c, dvP, out); buf_puts(out, "); NULL; })");
-      g_self = svs; g_self_deref = svd; g_emitting_class_id = sve;
-      return;
-    }
-    if (repr_self_shared(c, dvP)) { emit_strbuf_handle_of(c, dvP, out); return; }
-    /* a default that is an earlier parameter binds that parameter's handle,
-       the one String both names hold (promote_default_alias_params) */
-    { Buf srefD; memset(&srefD, 0, sizeof srefD);
-      if (dvP >= 0 && nt_kind(c->nt, dvP) == NK_LocalVariableReadNode &&
-          strbuf_slot_text(c, dvP, &srefD)) {
-        buf_puts(out, srefD.p);
-        free(srefD.p);
-        return;
-      } }
-    /* a default that writes a slot holding the --share-strings handle
-       (`v = (@s = +"s")`) binds that handle */
-    if (dvP >= 0 && emit_strbuf_write_handle(c, dvP, out)) return;
-    buf_puts(out, "SP_STR_HDL(");
-    /* (in the callee's context, as below) */
+    /* The default runs on the callee. As for a provided argument, bind
+       the selected String itself, including a captured receiver's ivar. */
     const char *svs = g_self, *svd = g_self_deref;
     int sve = g_emitting_class_id;
     char dself[32];
     dflt_self_enter(m, dvP, dself, sizeof dself);
-    if (dvP >= 0) emit_str_expr(c, dvP, out);
-    else buf_puts(out, "(&(\"\\xff\")[1])");
+    if (dvP < 0) buf_puts(out, "SP_STR_HDL((&(\"\\xff\")[1]))");
+    else if (repr_of(c, dvP).as_ty == TY_NIL) {
+      if (!subtree_is_pure_read(c, dvP)) {
+        buf_puts(out, "({ (void)("); emit_expr_for_effect(c, dvP, out); buf_puts(out, "); NULL; })");
+      }
+      else buf_puts(out, "NULL");
+    }
+    else emit_strbuf_handle_of(c, dvP, out);
     g_self = svs; g_self_deref = svd; g_emitting_class_id = sve;
-    buf_puts(out, ")");
     return;
   }
   /* An unused/unresolved param is declared poly (sp_RbVal) in the method

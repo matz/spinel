@@ -56259,6 +56259,23 @@ static void an_phase_value_types(Compiler *c) {
         }
       }
     }
+    /* Interpolation falls back to Object#to_s when the selected method
+       answers a non-String. That text includes the receiver's identity. */
+    if (ty_k == NK_EmbeddedStatementsNode) {
+      int stmts = nt_ref(c->nt, id, "statements"), n = 0;
+      const int *body = stmts >= 0 ? nt_arr(c->nt, stmts, "body", &n) : NULL;
+      int part = n ? body[n - 1] : -1;
+      TyKind type = part >= 0 ? comp_ntype(c, part) : TY_UNKNOWN;
+      if (ty_is_object(type)) {
+        int cid = ty_object_class(type);
+        if (c->classes[cid].is_value_type) {
+          int mi = cplan_implied_target(c, ic_operand_host(c, part), part, cid, "to_s", 0, NULL);
+          if (mi < 0 || c->scopes[mi].ret != TY_STRING || c->scopes[mi].ret_obj_may_nil ||
+              c->scopes[mi].ret_rbs_nilable)
+            c->classes[cid].is_value_type = 0;
+        }
+      }
+    }
     /* unsafe uses that would need a heap pointer / boxing (void* slot) */
     if (ty_k == NK_ArrayNode || ty_k == NK_HashNode ||
         ty_k == NK_KeywordHashNode) {

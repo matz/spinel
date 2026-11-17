@@ -913,13 +913,13 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           an Array element, and WEBrick sets autoclose = false on each before
           wrapping its fd as a TCPServer */
        ((sp_streq(name, "autoclose=") || sp_streq(name, "close_on_exec=")) && argc == 1 &&
-        !attr_writer_named(c, -1, name)) ||
+        !attr_writer_named(c, id, -1, name)) ||
        /* the descriptor controls, at CRuby's arities, unless a splat carries
           the arguments, the advice is not a Symbol, or a class method or an
           attribute writer of that name may be the receiver's */
        (boxed_desc_control_arity(name, argc) && !nt_argv_has_splat(nt, argv, argc) &&
         !(sp_streq(name, "advise") && comp_ntype(c, argv[0]) != TY_SYMBOL) &&
-        !comp_name_answered(c, name, 1) && !attr_writer_named(c, -1, name)) ||
+        !comp_name_answered(c, name, 1) && !attr_writer_named(c, id, -1, name)) ||
        /* the descriptor surface a boxed handle needs as much as a typed one:
           an fd table is a mixed Hash (0/1/2 an IO, the rest Files), so every
           one of these reached the unresolved-call gate (#4611) */

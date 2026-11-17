@@ -250,6 +250,7 @@ int is_unary_plus(const char *n); /* +@ */
 int is_loop_name(const char *n); /* loop */
 int is_first_or_take(const char *n); /* first take */
 int is_lazy_force(const char *n); /* force to_a */
+int is_lazy_first(const char *n); /* first */
 int is_local_time(const char *n); /* getlocal localtime */
 int is_line_read(const char *n); /* gets readline */
 int is_open_constructor(const char *n); /* new open */

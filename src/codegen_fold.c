@@ -3364,7 +3364,10 @@ int emit_chunk_family_poly_expr(Compiler *c, int id, Buf *b) {
 int emit_chunk_family_enum_expr(Compiler *c, int id, Buf *b) {
   int tout = emit_chunk_family_runs(c, id);
   if (tout < 0) return 0;
-  buf_printf(b, "sp_enum_as_gen(sp_Enumerator_new_from_items(_t%d))", tout);
+  /* (a call a `.to_a` consumes is the array of runs, as inference types it:
+     reached here inside the `&.` guard of `v&.chunk_while { }&.to_a`) */
+  if (ty_is_array(repr_of(c, id).as_ty)) buf_printf(b, "_t%d", tout);
+  else buf_printf(b, "sp_enum_as_gen(sp_Enumerator_new_from_items(_t%d))", tout);
   return 1;
 }
 
@@ -3967,7 +3970,13 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
        inference rule; the block decides the element mix) */
     if (it == TY_UNKNOWN && nt_kind(nt, init) == NK_ArrayNode) {
       int sen = 0; nt_arr(nt, init, "elements", &sen);
-      if (sen == 0) { it = TY_POLY_ARRAY; init_empty_arr = 1; }
+      /* (or the Integer or Float Array the block's pushes give it,
+         reduce_empty_seed_kind) */
+      if (sen == 0) {
+        TyKind sk = reduce_empty_seed_kind(c, id);
+        it = sk == TY_INT_ARRAY || sk == TY_FLOAT_ARRAY ? sk : TY_POLY_ARRAY;
+        init_empty_arr = 1;
+      }
     }
     /* an empty `{}` seed accumulates a general (boxed key/value) hash so any
        key type the block writes fits -- matches each_with_object({}) (#2958) */
@@ -4114,6 +4123,7 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
        A slot that widened to poly (the block hands the accumulator to a
        callable, whose result is boxed) takes the boxed form (#3657). */
     if (acc_ty == TY_POLY) buf_puts(b, "sp_box_poly_array(sp_PolyArray_new()); ");
+    else if (acc_ty == TY_INT_ARRAY || acc_ty == TY_FLOAT_ARRAY) buf_printf(b, "sp_%sArray_new(); ", array_kind(acc_ty));
     else buf_puts(b, "sp_PolyArray_new(); ");
     start = 0;
   }

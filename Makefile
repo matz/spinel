@@ -1877,7 +1877,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    echo "ext-test: FAIL (pic emission)"; ok=0; \
 	  elif ! $(CC) -fPIC -shared -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" "$$tmp/p.c" $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libpic.so" 2>"$$tmp/cc.err"; then \
 	    echo "ext-test: FAIL (the library did not link as a shared object over $(SP_RT_PIC_LIB))"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
-	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/pic_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/phost" 2>"$$tmp/cc.err"; then \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib test/ext/pic_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/phost" 2>"$$tmp/cc.err"; then \
 	    "$$tmp/phost" "$$tmp/libpic.so" > "$$tmp/out" 2>&1; rc=$$?; \
 	    printf '42\np0,p1,p2\np0,p1,p2,p3,p4\nraised ArgumentError: not positive: -3\nok 7\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (the shared object's host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
@@ -1904,7 +1904,7 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    if [ -z "$$objs" ]; then echo "ext-test: FAIL (pic_pkg's C names no package object)"; ok=0; \
 	    elif ! $(CC) -fPIC -shared -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" "$$tmp/q.c" $$objs $(SP_RT_PIC_LIB) $(LDFLAGS) -lm -o "$$tmp/libq.so" 2>"$$tmp/cc.err"; then \
 	      echo "ext-test: FAIL (a library requiring a package did not link as a shared object over $$objs)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; \
-	    elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/pic_pkg_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/qhost" 2>"$$tmp/cc.err"; then \
+	    elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib test/ext/pic_pkg_host.c $(PLATFORM_OBJ) $(LDFLAGS) -ldl -o "$$tmp/qhost" 2>"$$tmp/cc.err"; then \
 	      "$$tmp/qhost" "$$tmp/libq.so" > "$$tmp/out" 2>&1; rc=$$?; \
 	      printf '{"n":7,"list":[1,2,3]}\n16\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	        { echo "ext-test: FAIL (the package's shared object host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \

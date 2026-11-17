@@ -1,11 +1,11 @@
 /* A host that loads the library as a shared object (dlopen) and calls its
    entries through dlsym: the init, an Integer entry, a String entry that
    allocates in the shared object's runtime (often enough for its collector
-   to run there), and a raise caught through the try helper. The generated
-   header supplies the String layout and the entry signature. */
+   to run there), and a raise caught through the try helper. The String header
+   supplies the native result type and its byte projection. */
 #include <dlfcn.h>
 #include <stdio.h>
-#include "p.h"
+#include "sp_string.h"
 
 typedef struct { sp_int (*fn)(sp_int); sp_int n; sp_int ret; } call_t;
 static void call(void *p) {

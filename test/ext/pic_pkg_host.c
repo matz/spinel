@@ -1,10 +1,10 @@
 /* test/ext/pic_pkg.rb built into a shared object with the json package's
    position-independent object, loaded with dlopen: each entry runs the
    package's C (JSON.generate, JSON.parse) inside the shared object. The
-   generated header supplies the String layout and the entry signature. */
+   String header supplies the native result type and its byte projection. */
 #include <dlfcn.h>
 #include <stdio.h>
-#include "q.h"
+#include "sp_string.h"
 
 int main(int argc, char **argv) {
   if (argc < 2) return 2;

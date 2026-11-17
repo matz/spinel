@@ -1,0 +1,6 @@
+OpenSSL::ASN1::Sequence
+OpenSSL::ASN1::Integer
+OpenSSL::ASN1::ObjectId
+OpenSSL::ASN1::BitString
+07
+"300d02010706032a030403030000ff"

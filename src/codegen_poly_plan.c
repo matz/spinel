@@ -96,10 +96,10 @@ static void pa_arm_text(Compiler *c, const PolyArm *a, char *out, size_t n) {
                                      "default to_i/to_f", "default any?/none?", "default to_h", "default display",
                                      "default hash",
                                      "each_index", "join", "alive?", "kill", "status", "queue", "io-read",
-                                     "io-flush", "io-close", "enum-to_a",
+                                     "io-flush", "io-close", "enum-to_a", "condvar",
                                      "cover?", "try_convert", "gcdlcm", "unpack1", "include?", "str-delete",
                                      "str-partition", "str-setop", "store", "str-encode", "str-split",
-                                     "int-bitref", "index-cases", "io-read_nonblock", "io-readpartial", "io-readpartial(buf)",
+                                     "int-bitref", "str-aset", "index-cases", "io-read_nonblock", "io-readpartial", "io-readpartial(buf)",
                                      "io-setsockopt", "io-write",
                                      "io-syswrite", "io-print", "io-putc", "io-seek/read", "unshift", "push",
                                      "pack", "join(sep)", "include?-cases", "array-index", "intersect?",
@@ -112,6 +112,8 @@ static void pa_arm_text(Compiler *c, const PolyArm *a, char *out, size_t n) {
                                      "block map!", "subclass re-entry", "array re-entry",
                                      "array re-entry (receiver)", "face str-bang", "io-timeout",
                                      "enum-inline" };
+  /* (one label per family, in the enum's order: a family added without one shifted every label after it) */
+  _Static_assert(sizeof fam / sizeof fam[0] == PB_NFAMILIES, "pa_arm_text's fam[] and the PB_ families differ");
   char kb[48];
   if (a->key >= 0 && a->key < c->nclasses) snprintf(kb, sizeof kb, "%s", c->classes[a->key].name);
   else if (a->key == PA_KEY_DEFAULT) snprintf(kb, sizeof kb, "default");

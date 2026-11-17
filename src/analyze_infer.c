@@ -8265,9 +8265,12 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
     }
   }
 
-  /* chunk_while/slice_when/chunk { } standing on its own (no .to_a terminal,
-     which the arm above claims first): a first-class Enumerator over the
-     eagerly materialized runs */
+  /* chunk_while/slice_when/chunk { } standing on its own: a first-class
+     Enumerator over the eagerly materialized runs. Where a `.to_a` consumes
+     it (an_chunk_family_to_a), the array of runs, as for a boxed receiver:
+     the `.to_a` emits the two as one, but where a `&.` stands between them
+     (`v&.chunk_while { }&.to_a`) the guard emits the call alone, and the
+     two answers have to agree. */
   if (recv >= 0 && nt_ref(nt, id, "block") >= 0 &&
       (sp_streq(name, "chunk_while") || sp_streq(name, "slice_when") ||
        sp_streq(name, "chunk") ||
@@ -8276,7 +8279,8 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
     TyKind crt = infer_type(c, recv);
     if (crt == TY_POLY_ARRAY || crt == TY_INT_ARRAY || crt == TY_FLOAT_ARRAY || crt == TY_STR_ARRAY ||
         (crt == TY_RANGE && range_enum_redispatch(c, id))) {
-      if (!an_chunk_family_to_a(c, id)) { *out = TY_ENUMERATOR; return 1; }
+      *out = an_chunk_family_to_a(c, id) ? TY_POLY_ARRAY : TY_ENUMERATOR;
+      return 1;
     }
   }
   return 0;

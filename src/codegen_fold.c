@@ -3364,7 +3364,10 @@ int emit_chunk_family_poly_expr(Compiler *c, int id, Buf *b) {
 int emit_chunk_family_enum_expr(Compiler *c, int id, Buf *b) {
   int tout = emit_chunk_family_runs(c, id);
   if (tout < 0) return 0;
-  buf_printf(b, "sp_enum_as_gen(sp_Enumerator_new_from_items(_t%d))", tout);
+  /* (a call a `.to_a` consumes is the array of runs, as inference types it:
+     reached here inside the `&.` guard of `v&.chunk_while { }&.to_a`) */
+  if (ty_is_array(repr_of(c, id).as_ty)) buf_printf(b, "_t%d", tout);
+  else buf_printf(b, "sp_enum_as_gen(sp_Enumerator_new_from_items(_t%d))", tout);
   return 1;
 }
 

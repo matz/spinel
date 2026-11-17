@@ -2585,6 +2585,12 @@ int        comp_scope_own_class(const Compiler *c, int s, int *is_cmethod);
 void       comp_scope_index_set_frozen(int frozen);
 /* Whether the scope-index is currently frozen (scope shape fixed). */
 int        comp_scope_index_is_frozen(void);
+/* Lookups made between these two, while no scope is added, moved or
+   renamed, share one walk of the scopes per name asked (comp_name_answered's
+   ask of every class's chain). They nest; the batch answers nothing once the
+   scope count, a move or ver_built changes. */
+void       comp_scope_batch_begin(Compiler *c);
+void       comp_scope_batch_end(void);
 /* Generation counter, bumped on every freeze/unfreeze transition. */
 unsigned   comp_scope_index_gen(void);
 /* An alias or a class's parent changed: drops what the chain lookups memoized. */

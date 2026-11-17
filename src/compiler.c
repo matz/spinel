@@ -1838,9 +1838,96 @@ static int sm_owns_side(const Compiler *c, int s, int class_id, int side) {
   if (side < 2) return sm_owns(c, s, class_id, side);
   return sm_owns(c, s, class_id, 0) || (scope_on_side(&c->scopes[s], 0) && sm_owns(c, s, class_id, 1));
 }
+/* A batch of lookups made while no scope changes (comp_scope_batch_begin):
+   for each (name, side) asked, the scope the reverse scan below answers for
+   every class at once, from one forward walk of the scopes (the highest
+   scope that owns the side of its own class and carries the name). An ask
+   for each class of the program in turn (comp_name_answered: every class's
+   chain, while the index is not frozen) otherwise scanned every scope per
+   class and per ancestor. The batch answers only while the scope count, the
+   moved scopes and ver_built are as they were when it began; any other ask
+   scans. */
+typedef struct { char *name; int side; int *best; } SmbEntry;
+static struct { const Compiler *c; int depth, nscopes, nclasses, ver_built, n, cap; SmbEntry *e; int *slot, nslot; } smb;
+void comp_scope_batch_begin(Compiler *c) {
+  if (smb.depth++ > 0) return;
+  smb.c = c; smb.nscopes = c->nscopes; smb.nclasses = c->nclasses; smb.ver_built = c->ver_built; smb.n = 0;
+}
+void comp_scope_batch_end(void) {
+  if (smb.depth <= 0 || --smb.depth > 0) return;
+  for (int i = 0; i < smb.n; i++) { free(smb.e[i].name); free(smb.e[i].best); }
+  free(smb.slot); smb.slot = NULL; smb.nslot = 0;
+  smb.n = 0; smb.c = NULL;
+}
+static int sm_name_matches(const Compiler *c, int s, const char *name) {
+  return c->scopes[s].name && (sp_streq(c->scopes[s].name, name) ||
+         (!c->ver_built && c->scopes[s].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[s]), name)));
+}
+/* The batch's answer for (class_id, name, side), or -2 when the batch does
+   not answer. Side 3 + side is a top-level method's (sm_top_last), whose
+   answer is kept at class slot nclasses. */
+static int sm_batch_lookup(Compiler *c, int class_id, const char *name, int side) {
+  if (smb.depth <= 0 || smb.c != c || mv_n || c->nscopes != smb.nscopes || c->nclasses != smb.nclasses ||
+      c->ver_built != smb.ver_built || class_id < (side >= 3 ? -1 : 0) || class_id >= smb.nclasses) return -2;
+  if (side >= 3) class_id = smb.nclasses;
+  /* (the entries by (name, side): open addressing over twice their count) */
+  if (2 * (smb.n + 1) > smb.nslot) {
+    int ns = smb.nslot ? 2 * smb.nslot : 64;
+    int *sl = malloc(sizeof(int) * (size_t)ns);
+    if (!sl) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k < ns; k++) sl[k] = -1;
+    for (int k = 0; k < smb.n; k++) {
+      unsigned h = (sp_strhash(smb.e[k].name) ^ (unsigned)smb.e[k].side * 2654435761u) & (unsigned)(ns - 1);
+      while (sl[h] >= 0) h = (h + 1) & (unsigned)(ns - 1);
+      sl[h] = k;
+    }
+    free(smb.slot); smb.slot = sl; smb.nslot = ns;
+  }
+  unsigned h = (sp_strhash(name) ^ (unsigned)side * 2654435761u) & (unsigned)(smb.nslot - 1);
+  while (smb.slot[h] >= 0 && !(smb.e[smb.slot[h]].side == side && sp_streq(smb.e[smb.slot[h]].name, name)))
+    h = (h + 1) & (unsigned)(smb.nslot - 1);
+  int i = smb.slot[h];
+  if (i < 0) {
+    i = smb.n;
+    smb.slot[h] = i;
+    if (smb.n == smb.cap) {
+      smb.cap = smb.cap ? 2 * smb.cap : 8;
+      smb.e = realloc(smb.e, sizeof(SmbEntry) * (size_t)smb.cap);
+      if (!smb.e) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    int *best = malloc(sizeof(int) * (size_t)(smb.nclasses + 1));
+    char *nm = strdup(name);
+    if (!best || !nm) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k <= smb.nclasses; k++) best[k] = -1;
+    /* (ascending, so the last scope that answers a class is the one kept:
+       the reverse scan's first) */
+    for (int s = 0; s < c->nscopes; s++) {
+      if (side >= 3) {
+        if (sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&
+            sp_streq(c->scopes[s].name, name)) best[smb.nclasses] = s;
+        continue;
+      }
+      int cls = c->scopes[s].class_id;
+      if (cls < 0 || cls >= smb.nclasses || !sm_name_matches(c, s, name) || !sm_owns_side(c, s, cls, side)) continue;
+      best[cls] = s;
+    }
+    smb.e[i].name = nm; smb.e[i].side = side; smb.e[i].best = best; smb.n++;
+  }
+  return smb.e[i].best[class_id];
+}
 static int sm_lookup(Compiler *c, int class_id, const char *name, int is_cm) {
   if (!name) return -1;
   if (!sm_frozen) {
+    int b = sm_batch_lookup(c, class_id, name, is_cm);
+    if (b != -2) {
+#ifdef SP_SCOPE_BATCH_CHECK
+      int r = -1;
+      for (int s = c->nscopes - 1; s >= 0 && r < 0; s--)
+        if (sm_owns_side(c, s, class_id, is_cm) && sm_name_matches(c, s, name)) r = s;
+      if (r != b) { fprintf(stderr, "spinel: scope batch answered %d for %d/%s/%d, the scan %d\n", b, class_id, name, is_cm, r); abort(); }
+#endif
+      return b;
+    }
     /* scope shape may still change: scan in reverse so a later (reopened /
        transplanted) definition wins, matching the frozen index's ordering. */
     for (int s = c->nscopes - 1; s >= 0; s--)
@@ -2284,8 +2371,10 @@ int comp_name_answered(Compiler *c, const char *name, int is_cm) {
   if (n >= 0) return n > 0;
   int ans = 0;
   mtab_enter(c);
+  comp_scope_batch_begin(c);   /* (every class's chain asks the same names: one walk of the scopes per name) */
   for (int k = 0; k < c->nclasses && !ans; k++)
     ans = (is_cm ? comp_cmethod_in_chain(c, k, name, NULL) : comp_method_in_chain(c, k, name, NULL)) >= 0;
+  comp_scope_batch_end();
   mtab_leave(c);
   return ans;
 }
@@ -5346,6 +5435,16 @@ static int comp_method_index_1(Compiler *c, const char *name) {
 static int sm_top_last(Compiler *c, const char *name, int side) {
   if (!name) return -1;
   if (!sm_frozen) {
+    int b = sm_batch_lookup(c, -1, name, 3 + side);
+    if (b != -2) {
+#ifdef SP_SCOPE_BATCH_CHECK
+      int r = -1;
+      for (int s = c->nscopes - 1; s >= 0 && r < 0; s--)
+        if (sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !side && c->scopes[s].name && sp_streq(c->scopes[s].name, name)) r = s;
+      if (r != b) { fprintf(stderr, "spinel: scope batch answered %d for top %s/%d, the scan %d\n", b, name, side, r); abort(); }
+#endif
+      return b;
+    }
     /* in reverse, so a redefinition wins, matching the frozen index */
     for (int s = c->nscopes - 1; s >= 0; s--)
       if (sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !side && c->scopes[s].name &&

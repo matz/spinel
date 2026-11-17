@@ -60,7 +60,6 @@ src/codegen.c:prepare_obj_cmp_dispatch
 src/codegen.c:emit_struct_display_decls
 src/codegen.c:exc_text_method
 src/codegen.c:range_rat_walk_own_def
-src/codegen.c:emit_poly_iter_obj_normalize
 src/codegen.c:user_aset_scope
 src/codegen.c:obj_to_ary_method
 src/codegen.c:obj_to_a_method

@@ -7313,7 +7313,7 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     emit_poly_iter_obj_reject_as(c, id, trecv, name, enum_walk_name(c, id, recv, name), g_pre);
     emit_indent(g_pre, g_indent);
-    emit_poly_iter_obj_normalize(c, trecv, g_pre);
+    emit_poly_iter_obj_normalize(c, id, trecv, g_pre);
     emit_walk_arity_raise(c, id, recv, name, trecv, g_indent, g_pre);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tlen, trecv);

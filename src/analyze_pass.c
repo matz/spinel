@@ -11927,7 +11927,7 @@ static int bind_case_eqq_subjects(Compiler *c, int *changed, int *any) {
         NodeKind ck = nt_kind(nt, conds[j]);
         if (ck != NK_ConstantReadNode && ck != NK_ConstantPathNode) continue;
         int ci = const_node_class_index(c, conds[j]);
-        int mi = ci >= 0 ? class_own_cmethod_eqq(c, ci) : -1;
+        int mi = ci >= 0 ? class_own_cmethod_eqq(c, -1, -1, ci) : -1;
         if (mi < 0) continue;
         LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[0]);
         if (!p || p->type != TY_POLY) continue;
@@ -11970,7 +11970,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
      arms, grep and a class held as a value, with any kind of value: its
      parameter takes a boxed value. */
   for (int k = 0; k < c->nclasses; k++) {
-    int emi = class_own_cmethod_eqq(c, k);
+    int emi = class_own_cmethod_eqq(c, -1, -1, k);
     if (emi < 0 || c->scopes[emi].nparams < 1) continue;
     LocalVar *ep = scope_local(&c->scopes[emi], c->scopes[emi].pnames[0]);
     if (ep && !ep->rbs_seeded && lv_widen(ep, TY_POLY)) changed = 1;

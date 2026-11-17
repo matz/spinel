@@ -155,7 +155,7 @@ int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
    holds below a later one. How many, 0 for none */
 int cplan_super_runs(Compiler *c, Scope *s, int *to);
 /* A conversion performed by a helper, separately from the enclosing call. */
-CallPlan cplan_conversion(Compiler *c, int ci, const char *name);
+CallPlan cplan_conversion(Compiler *c, int id, int op, int ci, const char *name);
 CallPlan cplan_method_call(Compiler *c, int id);
 /* The Method a capture (`k.method(:a)`) makes where it finds no method of
    the name and k's class answers respond_to_missing?: the method
@@ -435,8 +435,9 @@ CvCtor cplan_cv_ctor_shape(Compiler *c, int id);
 /* ...whether a call of form f builds an instance of class k when its
    receiver holds k: a subclass of Array or Hash that runs no constructor of
    its own for the call (`new` reaches an initialize or a self.new; `[]`
-   skips an initialize, as CRuby's does) */
-int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k);
+   skips an initialize, as CRuby's does); the initialize is the one in force
+   where call id runs (cplan_hook_target; -1, the table's, for a survey) */
+int cplan_cv_ctor_class(Compiler *c, int id, CvCtor f, int k);
 /* ...and whether class k is one call id builds: one cplan_cv_ctor_class
    takes that the receiver may hold (poly_cls_value_reaches) */
 int cplan_cv_ctor_builds(Compiler *c, int id, int k);
@@ -623,8 +624,8 @@ enum { CPT_UNKNOWN = -1, CPT_MAX = 64 };
 int cplan_targets(Compiler *c, int id, int *out, int cap);
 /* The method the implied call `name` node id makes on operand op runs on
    an instance of cls (side 0; CT_CMETHOD its class object, CT_OWN its own
-   method): the version the record proves there where a row of
-   tools/implied_calls.yml is planned for the call (a multiple assignment's
+   method, CT_TOP the top-level function of the name, cls not read): the
+   version the record proves there where a row of tools/implied_calls.yml is planned for the call (a multiple assignment's
    to_ary of its value), else an entry whose every state finds a method;
    anything else the table's method (*ml ML_TABLE, or ML_METHOD where the
    name has one version), so a reader of the implied call asks here and

@@ -8,6 +8,7 @@
 #include "builtin_ops.h"
 #include "call_plan.h"
 #include "codegen_call_arms.h"
+#include "implicit_calls.h"
 #include "repr.h"
 #include "share.h"
 static int emit_boxed_positional_io(Compiler *c, int recv, const char *name, int argc,
@@ -186,7 +187,7 @@ static int reopen_arg_may_be_io(Compiler *c, int arg) {
   if (yield_site_type(c, arg) == TY_POLY) return 1;
   TyKind t = comp_ntype(c, arg);
   int cid = ty_is_object(t) ? ty_object_class(t) : -1;
-  return cid >= 0 && !c->classes[cid].is_native_class && class_to_io_dispatched(c, cid);
+  return cid >= 0 && !c->classes[cid].is_native_class && class_to_io_dispatched(c, ic_operand_host(c, arg), arg, cid);
 }
 
 /* reopen(other) on the handle text r: the IO other is or answers, else

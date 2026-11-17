@@ -5429,7 +5429,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            those methods answers more than true or false. */
         TyKind at = infer_type(c, argv[0]);
         int own = 0, bx = class_eqq_answers_value(c);
-        for (int k = 0; k < c->nclasses && !own; k++) own = class_own_cmethod_eqq(c, k) >= 0;
+        for (int k = 0; k < c->nclasses && !own; k++) own = class_own_cmethod_eqq(c, -1, -1, k) >= 0;
         buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
         if (own && at != TY_POLY && at != TY_UNKNOWN && at != TY_NIL && !needs_root(at) && c_type_name(at)) {
           buf_printf(b, "; %s _a%d = ", c_type_name(at), o); emit_expr(c, argv[0], b);
@@ -5441,7 +5441,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         char sref[24]; snprintf(sref, sizeof sref, at == TY_POLY ? "_t%d" : "_a%d", o);
         for (int k = 0; k < c->nclasses && own; k++) {
           Buf t; memset(&t, 0, sizeof t);
-          if (class_own_cmethod_eqq(c, k) >= 0 && emit_class_cmethod_eqq(c, k, sref, at, -1, bx, &t) && t.p) {
+          if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, sref, at, -1, bx, &t) && t.p) {
             if (!sw) { buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s _r%d; switch (_cl%d.cls_id) { ", o, bx ? "sp_RbVal" : "sp_bool", o, _clt); sw = 1; }
             buf_printf(b, "case %d: _r%d = %s; break; ", k, o, t.p);
           }

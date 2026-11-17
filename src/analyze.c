@@ -1609,7 +1609,7 @@ void compute_reachable(Compiler *c, int typed) {
       /* a class method `===` of the program's own, which a `when Klass` or
          `in Klass` arm calls once Klass is named */
       for (int k = 0; k < c->nclasses; k++) {
-        int emi = class_own_cmethod_eqq(c, k);
+        int emi = class_own_cmethod_eqq(c, -1, -1, k);
         if (emi < 0) continue;
         char sk[24]; snprintf(sk, sizeof sk, "\x01%d", emi);
         MARK_NAME(sk);
@@ -2107,7 +2107,7 @@ void compute_instantiated(Compiler *c, int early) {
     }
   if (cv_aref)
     for (int k = 0; k < c->nclasses; k++)
-      if (cplan_cv_ctor_class(c, CVC_AREF, k)) c->classes[k].instantiated = 1;
+      if (cplan_cv_ctor_class(c, -1, CVC_AREF, k)) c->classes[k].instantiated = 1;
   if (disable)
     for (int k = 0; k < c->nclasses; k++) {
       /* main's ivars live on the Toplevel pseudo-class, which is never built */

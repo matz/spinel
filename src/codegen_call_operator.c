@@ -490,7 +490,7 @@ static int emit_untyped_recv_cmp(Compiler *c, const char *name, int recv, int ar
 void emit_poly_quantifier_walk(Compiler *c, int id, int ta, int tp, int tn, int tcnt, int ti,
                                const char *name, char *ans, size_t cap, Buf *b) {
   emit_poly_iter_obj_reject(c, id, ta, name, b);
-  emit_poly_iter_obj_normalize(c, ta, b);
+  emit_poly_iter_obj_normalize(c, id, ta, b);
   /* the same receiver check the each emitter makes: nil is no collection,
      and a zero-length loop answered `nil.any?` false and `nil.all?` true
      (#4485) */
@@ -1901,7 +1901,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     const char *cn = rci->c_name;
     /* a class whose == is not identity (its own, or a Struct's or a Data's
        field-wise one): CRuby's rb_equal, the same object first, then == */
-    if (rci->is_struct || rci->is_data || comp_method_in_chain(c, ty_object_class(rt), "==", NULL) >= 0) {
+    if (rci->is_struct || rci->is_data || cplan_implied_target(c, id, recv, ty_object_class(rt), "==", 0, NULL) >= 0) {
       int ta = ++g_tmp, tb = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tb); emit_boxed(c, argv[0], b);

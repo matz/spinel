@@ -3518,10 +3518,10 @@ static int an_int_nil_sensitive_static(Compiler *c) {
     for (int mi = 1; ic >= 0 && mi < c->nscopes; mi++) {
       const Scope *ms = &c->scopes[mi];
       if (ms->class_id < 0 || ms->is_cmethod || ms->def_node < 0 || !ms->name) continue;
-      int imi = comp_method_in_chain(c, ic, ms->name, NULL);
+      int imi = comp_name_responder(c, ic, ms->name, 0);
       if (imi < 0 || c->scopes[imi].class_id == oc) continue;
-      int own = object_public_method_name(ms->name) || (nc >= 0 && comp_method_in_chain(c, nc, ms->name, NULL) >= 0) ||
-                (oc >= 0 && comp_method_in_chain(c, oc, ms->name, NULL) >= 0);
+      int own = object_public_method_name(ms->name) || (nc >= 0 && comp_name_responder(c, nc, ms->name, 0) >= 0) ||
+                (oc >= 0 && comp_name_responder(c, oc, ms->name, 0) >= 0);
       for (int q = 0; !own && nil_own[q]; q++) own = sp_streq(ms->name, nil_own[q]);
       if (own) return 1;
     } }
@@ -5955,7 +5955,7 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
     if (sp_streq(name, "*") && (ty_is_array(rt) || rt == TY_POLY_ARRAY) && (a0 == TY_INT || a0 == TY_FLOAT)) { *out = rt; return 1; }
     if (sp_streq(name, "*") && (ty_is_array(rt) || rt == TY_POLY_ARRAY) && a0 == TY_STRING) { *out = TY_STRING; return 1; }
     if (sp_streq(name, "*") && (ty_is_array(rt) || rt == TY_POLY_ARRAY) && ty_is_object(a0)) {
-      int smi = comp_method_in_chain(c, ty_object_class(a0), "to_str", NULL);
+      int smi = cplan_implied_target(c, id, argv[0], ty_object_class(a0), "to_str", 0, NULL);
       *out = smi >= 0 && c->scopes[smi].nrequired == 0 ? TY_STRING : rt;
       return 1;
     }
@@ -6001,7 +6001,7 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
     if ((rt == TY_INT || rt == TY_FLOAT || rt == TY_RATIONAL || rt == TY_BIGINT) &&
         ty_is_object(a0)) {
       int acls = ty_object_class(a0);
-      if (comp_method_in_chain(c, acls, "coerce", NULL) >= 0) {
+      if (cplan_implied_target(c, id, argv[0], acls, "coerce", 0, NULL) >= 0) {
         int op_mi = call_target(c, id, acls, name, 0, NULL);
         /* Only when the pair is of the object's own class does its operator
            decide the type. The documented plain-number idiom never reaches
@@ -6246,9 +6246,14 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
 
 /* A Class receiver, Class and Module reflection, and the declarations of a class body (infer_call_inner's rules, in their order) */
 /* The class method `===` that class `ci` (or a class above it) defines in
-   the program, or -1. A builtin row's own `===` does not count. */
-int class_any_cmethod_eqq(Compiler *c, int ci) {
-  int mi = ci >= 0 ? call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL) : -1;
+   the program, or -1. A builtin row's own `===` does not count. A `when` or
+   `in` arm asks as the implied call its row makes (host, the node that holds
+   the row; op its operand); a reader that stands behind no such node (a
+   survey of the program's classes) passes host -1, the no-site ask, which
+   keeps its read counted as the open node's. */
+int class_any_cmethod_eqq(Compiler *c, int host, int op, int ci) {
+  int mi = ci < 0 ? -1 : host >= 0 ? cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD, NULL)
+                                   : call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL);
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
       nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
   /* (a super in it reaches Module#===, which the call cannot run yet: the
@@ -6277,8 +6282,8 @@ static int eqq_default_is_plain(const NodeTable *nt, int node) {
    optional ones whose defaults are plain (eqq_default_is_plain). Another
    one (a keyword, a rest, a default that needs the method's frame) is
    called only by a written `Klass === x`, through its call plan. */
-int class_own_cmethod_eqq(Compiler *c, int ci) {
-  int mi = class_any_cmethod_eqq(c, ci);
+int class_own_cmethod_eqq(Compiler *c, int host, int op, int ci) {
+  int mi = class_any_cmethod_eqq(c, host, op, ci);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
   if (s->nparams < 1 || s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->ps_nkw > 0 || s->blk_param || s->yields ||
@@ -6293,7 +6298,7 @@ int class_own_cmethod_eqq(Compiler *c, int ci) {
    answers a boxed value. */
 int class_eqq_answers_value(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++) {
-    int mi = class_own_cmethod_eqq(c, k);
+    int mi = class_own_cmethod_eqq(c, -1, -1, k);
     if (mi >= 0 && c->scopes[mi].ret != TY_BOOL && c->scopes[mi].ret != TY_UNKNOWN) return 1;
   }
   return 0;
@@ -6378,7 +6383,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     if (argc == 1 && sp_streq(name, "===")) {
       int eci = nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode
                 ? const_node_class_index(c, recv) : -2;
-      int emi = eci >= 0 ? class_any_cmethod_eqq(c, eci) : -1;
+      int emi = eci >= 0 ? class_any_cmethod_eqq(c, -1, -1, eci) : -1;
       if (emi >= 0 && c->scopes[emi].ret != TY_UNKNOWN) { *out = c->scopes[emi].ret; return 1; }
       if (eci == -2 && class_eqq_answers_value(c)) { *out = TY_POLY; return 1; }
     }
@@ -6929,8 +6934,8 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
           if (kat == TY_STRING) { *out = TY_STR_ARRAY; return 1; }
           /* an object answers through its own to_ary/to_a (#3721) */
           if (ty_is_object(kat)) {
-            int aci = ty_object_class(kat), ami = comp_method_in_chain(c, aci, "to_ary", NULL);
-            if (ami < 0) ami = comp_method_in_chain(c, aci, "to_a", NULL);
+            int aci = ty_object_class(kat), ami = cplan_implied_target(c, id, argv[0], aci, "to_ary", 0, NULL);
+            if (ami < 0) ami = cplan_implied_target(c, id, argv[0], aci, "to_a", 0, NULL);
             if (ami >= 0) { *out = (TyKind)c->scopes[ami].ret; return 1; }
           }
         }
@@ -6972,8 +6977,8 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
       if (ty_is_array(at)) { *out = at; return 1; }
       /* an object answers through its own to_ary/to_a (#3721) */
       if (ty_is_object(at)) {
-        int aci2 = ty_object_class(at), ami2 = comp_method_in_chain(c, aci2, "to_ary", NULL);
-        if (ami2 < 0) ami2 = comp_method_in_chain(c, aci2, "to_a", NULL);
+        int aci2 = ty_object_class(at), ami2 = cplan_implied_target(c, id, argv[0], aci2, "to_ary", 0, NULL);
+        if (ami2 < 0) ami2 = cplan_implied_target(c, id, argv[0], aci2, "to_a", 0, NULL);
         if (ami2 >= 0) { *out = (TyKind)c->scopes[ami2].ret; return 1; }
       }
       if (at == TY_INT)    { *out = TY_INT_ARRAY; return 1; }    /* Array(int)   -> [int]   */
@@ -7492,7 +7497,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
      own, which answers what it answers */
   if (sp_streq(name, "===") && argc == 1 && recv >= 0 &&
       nt_kind(nt, recv) == NK_ConstantReadNode &&
-      class_any_cmethod_eqq(c, const_node_class_index(c, recv)) < 0)
+      class_any_cmethod_eqq(c, -1, -1, const_node_class_index(c, recv)) < 0)
     { *out = TY_BOOL; return 1; }
 
   if ((is_unary_sign(name)) && recv >= 0 && argc == 0) {
@@ -9474,7 +9479,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
           if (!c->classes[k].unreferenced &&
               (call_target(c, id, k, name, CT_OWN, NULL) >= 0 || (rn && call_target(c, id, k, rn, CT_OWN, NULL) >= 0))) over = 1;
         }
-        if (!over && c->classes[oci].naliases > 0 && rn && !sp_streq(rn, name) && comp_reader_in_chain(c, oci, rn, NULL) &&
+        if (!over && c->classes[oci].naliases > 0 && rn && !sp_streq(rn, name) && call_attr_target(c, -1, oci, rn, CT_ATTR, NULL) &&
             comp_method_vis_in_chain(c, oci, name) == SP_VIS_PUBLIC) {
           if (!an_pure_reads) {
             /* the name it was written as stays: nil answers that one
@@ -11782,7 +11787,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     {
       TyKind ot = ty_is_object(lt) ? lt : ty_is_object(ht) ? ht : TY_UNKNOWN;
       if (!clamp_arg && ot != TY_UNKNOWN && (lo < 0 || lt == ot || lt == TY_NIL) && (hi < 0 || ht == ot || ht == TY_NIL) &&
-          comp_method_in_chain(c, ty_object_class(ot), "<=>", NULL) >= 0)
+          cplan_implied_target(c, id, ty_is_object(lt) ? lo : hi, ty_object_class(ot), "<=>", 0, NULL) >= 0)
         return TY_OBJ_RANGE;
     }
     /* (1.0..3.0): a BOUNDED range with both endpoints float lowers to the
@@ -12365,7 +12370,7 @@ TyKind infer_uncached(Compiler *c, int id) {
            #to_hash through method_missing, is known only at run time. */
         if (!ty_is_hash(sh) && sh != TY_POLY && sh != TY_UNKNOWN && sh != TY_VOID &&
             !(ty_is_object(sh) && (ty_object_class(sh) < 0 ||
-              comp_method_in_chain(c, ty_object_class(sh), "to_hash", NULL) >= 0 ||
+              cplan_implied_target(c, els[k], src, ty_object_class(sh), "to_hash", 0, NULL) >= 0 ||
               comp_method_in_chain(c, ty_object_class(sh), "method_missing", NULL) >= 0))) {
           empty_spread = 1;
           continue;

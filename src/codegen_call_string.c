@@ -10,6 +10,7 @@
 #include "call_plan.h"
 #include "value_pos.h"
 #include "codegen_call_arms.h"
+#include "implicit_calls.h"
 
 /* a Regexp literal's match / match? / ===, the match family on a String, gsub, and String#% */
 /* The text emit_boxed gives an Integer or a Float is most often one box
@@ -44,22 +45,22 @@ static const char *boxed_number_value(char *text, TyKind at, char **val) {
    -- a boxed value, a Symbol, an object with no #to_str, a number -- takes
    CRuby's reg_operand: a Symbol by its name, a #to_str found at run time, or
    the TypeError naming the operand's class. */
-static int re_operand_at_runtime(Compiler *c, TyKind a0) {
+static int re_operand_at_runtime(Compiler *c, int arg, TyKind a0) {
   if (a0 == TY_STRING || a0 == TY_NIL) return 0;
-  if (ty_is_object(a0) && comp_method_in_chain(c, ty_object_class(a0), "to_str", NULL) >= 0) return 0;
+  if (ty_is_object(a0) && cplan_implied_target(c, ic_operand_host(c, arg), arg, ty_object_class(a0), "to_str", 0, NULL) >= 0) return 0;
   return 1;
 }
 /* A matcher's operand as the `const char *` subject; `strict` is
    sp_re_operand's (all but === raise on a non-String). */
 static void emit_re_subject(Compiler *c, int arg, TyKind a0, int strict, Buf *b) {
-  if (!re_operand_at_runtime(c, a0)) { emit_str_expr_nilable(c, arg, b); return; }
+  if (!re_operand_at_runtime(c, arg, a0)) { emit_str_expr_nilable(c, arg, b); return; }
   buf_puts(b, "sp_re_operand("); emit_boxed(c, arg, b); buf_printf(b, ", %d)", strict);
 }
 /* `fn(pat, subject, pos)`: a converted subject is held rooted while the
    position, which may allocate, is evaluated after it. */
 static void emit_re_subject_at(Compiler *c, const char *fn, const char *pat, int arg, TyKind a0,
                                int pos, Buf *b) {
-  if (!re_operand_at_runtime(c, a0)) {
+  if (!re_operand_at_runtime(c, arg, a0)) {
     buf_printf(b, "%s(%s, ", fn, pat); emit_str_expr_nilable(c, arg, b);
     buf_puts(b, ", "); emit_int_expr(c, pos, b); buf_puts(b, ")");
     return;
@@ -692,7 +693,7 @@ no_gsub_enum:
           if (sp_streq(name, "===") && argc == 1) {
             /* === sets $~ as =~ does (the literal arm's sp_re_case_eq), and
                answers false for an operand match? raises on */
-            if (re_operand_at_runtime(c, a0)) {
+            if (re_operand_at_runtime(c, argv[0], a0)) {
               buf_printf(b, "sp_re_case_eq(%s, ", rp.p); emit_boxed(c, argv[0], b); buf_puts(b, ")");
             }
             else {
@@ -845,7 +846,7 @@ no_gsub_enum:
        object of a class of the program's that is no Array and has no to_ary
        is one argument, whose %s is its to_s, as CRuby formats it boxed. */
     int plain_obj = ty_is_object(at) && class_builtin_parent(c, ty_object_class(at)) == -116 &&
-                    comp_method_in_chain(c, ty_object_class(at), "to_ary", NULL) < 0;
+                    cplan_implied_target(c, id, argv[0], ty_object_class(at), "to_ary", 0, NULL) < 0;
     if (at == TY_POLY || plain_obj) {
       const char *fend = emit_str_format_held(c, recv, argv[0], -1, b);
       if (!fend) { buf_puts(b, "sp_str_format_polyarr("); emit_expr(c, recv, b); }

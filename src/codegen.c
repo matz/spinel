@@ -2075,7 +2075,9 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
       emit_obj_conv_call(c, node, t, def, mi, "to_path", b);
       return;
     }
-    mi = comp_method_in_chain(c, cid, "to_path", &def);
+    MethodLookup pml = { .def_class = -1 };
+    mi = cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_path", 0, &pml);
+    def = pml.def_class;
     if (mi >= 0) {
       /* a #to_path the analysis could not pin to String -- one backed by an
          accessor, or with a nil branch -- answers a boxed value. CRuby checks
@@ -2098,7 +2100,7 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
                cn ? cn : "Object", cn ? cn : "Object");
       unsupported_feature(c, node, msg);
     }
-    if (comp_method_in_chain(c, cid, "to_str", NULL) < 0) {
+    if (cplan_implied_target(c, ic_operand_host(c, node), node, cid, "to_str", 0, NULL) < 0) {
       const char *cn = class_ruby_name(c, cid);
       char msg[256];
       snprintf(msg, sizeof msg,
@@ -4595,18 +4597,19 @@ static int iter_scope_emitted(Compiler *c, int s) {
 
 /* The class's #each in a form that takes a real block, or -1. A `def each(&b)`
    already does; a `def each; ...yield...; end` has a proc-form clone (#3399). */
-static int iter_each_proc_form(Compiler *c, int k) {
-  int mi = comp_method_in_chain(c, k, "each", NULL);
+static int iter_each_proc_form(Compiler *c, int site, int k) {
+  /* (the walk asks every class of the program: one no definition answers `each` asks nothing of the record) */
+  int mi = comp_name_responder(c, k, "each", 0) >= 0 ? cplan_implied_target(c, site, -1, k, "each", 0, NULL) : -1;
   /* an #each reopened on Object reaches every instance, but a user class's
      chain does not name Object: the poly dispatch serves it as its default
      arm, and the normalization walked the object as an empty container
      (#5101) */
   if (mi < 0) {
     int oc = comp_core_class(c, CORE_OBJECT);
-    int od = -1;
+    MethodLookup oml = { .def_class = -1 };
     if (oc >= 0 && oc != k) {
-      mi = comp_method_in_chain(c, oc, "each", &od);
-      if (od != oc) mi = -1;
+      mi = cplan_implied_target(c, site, -1, oc, "each", 0, &oml);
+      if (oml.def_class != oc) mi = -1;
     }
   }
   if (mi < 0 || c->scopes[mi].is_cmethod || c->scopes[mi].nrequired != 0) return -1;
@@ -4698,12 +4701,12 @@ void emit_poly_iter_recv_reject(Compiler *c, int call, const char *name, Buf *rb
   free(rj.p);
 }
 
-void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b) {
+void emit_poly_iter_obj_normalize(Compiler *c, int site, int tv, Buf *b) {
   Buf arms; memset(&arms, 0, sizeof arms);
   for (int k = 0; k < c->nclasses; k++) {
     /* a never-instantiated class can't be the runtime class (#1608) */
     if (!c->classes[k].instantiated) continue;
-    int mi = call_target(c, -1, k, "to_a", CT_METHODS | CT_SHARED, NULL);
+    int mi = cplan_implied_target(c, site, -1, k, "to_a", 0, NULL);
     /* a to_a forwarding its block has a proc-form clone; that is the emitted
        function for a call from poly dispatch (#3399) */
     { int pfi = mi >= 0 ? scope_proc_form_of(c, mi) : -1; if (pfi >= 0) mi = pfi; }
@@ -4714,7 +4717,7 @@ void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b) {
          enumerable, forwarding the block on. Drive it with a collector and walk
          what it yielded; without this the lowering walked the object AS A
          CONTAINER and found nothing, so the loop body never ran (#4088). */
-      int pf = iter_each_proc_form(c, k);
+      int pf = iter_each_proc_form(c, site, k);
       if (pf < 0) continue;
       emit_iter_collect_proc();
       buf_printf(&arms, " case %d: { sp_PolyArray *_ia%d = sp_PolyArray_new(); SP_GC_ROOT(_ia%d);"
@@ -14177,9 +14180,11 @@ static void emit_obj_struct_values_dispatch(Compiler *c, Buf *b) {
    #each. Without the second, an instance of such a class read out of a
    container was opaque to the poly machinery, which answered for an empty
    collection (0 / nil / false) (#3761). */
-static int obj_to_a_method(Compiler *c, int cid, int *defc) {
+static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
   MethodLookup ml_mi = { .def_class = defc ? *defc : -1 };
-  int mi = call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
+  /* (the implied to_a a splat makes, asked at its node; a dispatcher of the whole program asks with no site) */
+  int mi = host >= 0 ? cplan_implied_target(c, host, op, cid, "to_a", 0, &ml_mi)
+                     : call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
   if (defc) *defc = ml_mi.def_class;
   if (mi < 0) {
     /* `alias to_a entries`: the method the alias names */
@@ -14237,11 +14242,11 @@ int obj_each_elems_text(Compiler *c, int cid, const char *v, char *out, size_t c
   free(bx.p);
   return 1;
 }
-int obj_to_a_any(Compiler *c) {
+int obj_to_a_any(Compiler *c, int host, int op) {
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
     if (ci->is_native_class || !ci->instantiated || comp_class_is_module(c, ci)) continue;   /* a module has no instances (#4654) */
-    if (obj_to_a_method(c, i, NULL) >= 0 || obj_to_a_reader(c, i) >= 0) return 1;
+    if (obj_to_a_method(c, host, op, i, NULL) >= 0 || obj_to_a_reader(c, i) >= 0) return 1;
   }
   return 0;
 }
@@ -14266,7 +14271,7 @@ static void emit_basicobject_singleton_to_a_wrappers(Compiler *c, Buf *b) {
   }
 }
 static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
-  if (obj_to_a_any(c)) {
+  if (obj_to_a_any(c, -1, -1)) {
     buf_puts(b, "static sp_RbVal sp_obj_to_a(sp_RbVal v) {\n");
     emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
     buf_puts(b, "  switch (v.cls_id) {\n");
@@ -14274,7 +14279,7 @@ static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
       ClassInfo *ci = &c->classes[i];
       if (ci->is_native_class || !ci->instantiated || comp_class_is_module(c, ci)) continue;   /* a module has no instances (#4654) */
       int defc = -1;
-      int mi = obj_to_a_method(c, i, &defc);
+      int mi = obj_to_a_method(c, -1, -1, i, &defc);
       if (mi < 0) {
         int j = obj_to_a_reader(c, i);
         if (j < 0) continue;
@@ -18084,7 +18089,7 @@ static int user_init_copy_scope(Compiler *c, int k, int *defcls) {
 /* Does a class of the program define its own class method `===`? */
 static int program_has_own_cmethod_eqq(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++)
-    if (class_own_cmethod_eqq(c, k) >= 0) return 1;
+    if (class_own_cmethod_eqq(c, -1, -1, k) >= 0) return 1;
   return 0;
 }
 
@@ -18097,7 +18102,7 @@ static void emit_cmeth_eqq_dispatch(Compiler *c, Buf *b) {
               "  switch (cl.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     Buf t; memset(&t, 0, sizeof t);
-    if (class_own_cmethod_eqq(c, k) >= 0 && emit_class_cmethod_eqq(c, k, "e", TY_POLY, -1, 1, &t) && t.p)
+    if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, "e", TY_POLY, -1, 1, &t) && t.p)
       buf_printf(b, "    case %d: *out = %s; return 1;\n", k, t.p);
     free(t.p);
   }
@@ -18356,10 +18361,11 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
    the direct cast: that function still returns sp_File * directly. */
 /* Does class k's #to_io take an arm of sp_user_to_io_dispatch? Then the
    runtime finds the IO an instance answers (sp_user_to_io_hook). */
-int class_to_io_dispatched(Compiler *c, int k) {
+int class_to_io_dispatched(Compiler *c, int host, int op, int k) {
   if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated) return 0;
   MethodLookup ml = { .def_class = -1 };
-  int mi = call_target(c, -1, k, "to_io", CT_METHODS | CT_SHARED, &ml);
+  int mi = host >= 0 ? cplan_implied_target(c, host, op, k, "to_io", 0, &ml)
+                     : call_target(c, -1, k, "to_io", CT_METHODS | CT_SHARED, &ml);
   if (mi < 0 || ml.def_class < 0) return 0;
   Scope *m = &c->scopes[mi];
   if (!m->reachable || m->yields || m->nparams != 0) return 0;
@@ -18455,7 +18461,7 @@ static void emit_user_to_io_dispatch(Compiler *c, Buf *b) {
   emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
-    if (!class_to_io_dispatched(c, k)) continue;
+    if (!class_to_io_dispatched(c, -1, -1, k)) continue;
     MethodLookup ml = { .def_class = -1 };
     int mi = call_target(c, -1, k, "to_io", CT_METHODS | CT_SHARED, &ml);
     int defcls = ml.def_class;
@@ -18884,7 +18890,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_RbVal sp_obj_to_h(sp_RbVal v);\n");
   if (g_gen_obj_struct_values)
     buf_puts(b, "static sp_RbVal sp_obj_struct_values(sp_RbVal v);\n");
-  if (obj_to_a_any(c))
+  if (obj_to_a_any(c, -1, -1))
     buf_puts(b, "static sp_RbVal sp_obj_to_a(sp_RbVal v);\n");
   if (obj_to_ary_any(c))
     buf_puts(b, "static sp_RbVal sp_obj_to_ary(sp_RbVal v);\n");
@@ -19097,7 +19103,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
       }
     if (any) buf_puts(b, ", NULL }; sp_poly_enum_lacks_names = el; }\n");
   }
-  if (obj_to_a_any(c))
+  if (obj_to_a_any(c, -1, -1))
     buf_puts(b, "  sp_obj_to_a_fn = sp_obj_to_a;\n");
   if (obj_to_ary_any(c))
     buf_puts(b, "  sp_obj_to_ary_fn = sp_obj_to_ary;\n");
@@ -24881,7 +24887,7 @@ char *codegen_program(const NodeTable *nt) {
     if (class_coerce_emittable(c, k)) { g_has_user_coerce = 1; break; }
   }
   g_has_user_to_io = 0;
-  for (int k = 0; k < c->nclasses && !g_has_user_to_io; k++) g_has_user_to_io = class_to_io_dispatched(c, k);
+  for (int k = 0; k < c->nclasses && !g_has_user_to_io; k++) g_has_user_to_io = class_to_io_dispatched(c, -1, -1, k);
   g_has_user_succ = 0;
   g_obj_range_used = 0;
   /* a Range with boxed ends (sp_range_new_box) may turn out a Range of objects */

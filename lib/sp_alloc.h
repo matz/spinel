@@ -1082,8 +1082,8 @@ const char *sp_str_keep_copy(const char *s);
 static inline const char *sp_str_keep(const char *s) {
   return s && ((const unsigned char *)s)[-1] == 0xfd && !sp_str_fd_owner_frozen(s) ? sp_str_keep_copy(s) : sp_str_retained(s);
 }
-/* A String key as a Hash stores it: a mutable string is copied into a frozen
-   0xfa, so a later `<<` or setbyte on the caller's string cannot move the key
+/* A String key as a Hash stores it: an unfrozen String is copied into a frozen
+   handle, so a later `<<` or setbyte on the caller's string cannot move the key
    (CRuby's rb_hash_key_str). A frozen or literal key is stored as is, and so
    is the payload of a frozen String handle (0xfd, whose header's `next` is
    the owning handle, sp_fd_own): nothing can change or move it any more,
@@ -1097,9 +1097,9 @@ static inline const char *sp_str_keep(const char *s) {
    so the key's handle, sp_String_key_handle, is that one String each time) */
 const char *sp_hash_key_from_bytes(const char *data, size_t len, int bin);
 static inline const char *sp_hash_key_str(const char *s) {
-  unsigned char m = ((const unsigned char *)s)[-1];
-  if (m != 0xfe && m != 0xfc && m != 0xfd) return s;
-  if (m == 0xfd && sp_str_fd_owner_frozen(s)) return s;
+  /* Static byte results are unfrozen too; storage that cannot be modified
+     is not itself the frozen String object a Hash key must be. */
+  if (sp_str_is_frozen_val(s)) return s;
   return sp_hash_key_from_bytes(s, sp_str_byte_len(s), sp_str_is_binary(s));
 }
 

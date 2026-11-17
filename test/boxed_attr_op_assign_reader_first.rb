@@ -33,3 +33,18 @@ rescue NoMethodError
   :x
 end
 p r, bump(box[1])
+
+# every class that has the reader lacks the writer: the switch is still emitted, and
+# raises at run time instead of the statement being refused
+class OnlyReader
+  attr_reader :x
+  def initialize = @x = 1
+end
+[OnlyReader.new, nil].each do |r|
+  begin
+    r.x += 1
+    p r.x
+  rescue NoMethodError => e
+    p e.name
+  end
+end

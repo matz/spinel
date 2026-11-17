@@ -22388,6 +22388,12 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
            and neither stores */
         if (!call_attr_target(c, id, k, attr, CT_ATTR, &pml)) continue;
         if (!call_attr_target(c, id, k, attr, CT_ATTR | CT_WRITER, NULL)) {
+          /* a class with the reader and no writer raises NoMethodError for
+             `attr=` as CRuby does: an arm, so a switch of only these is
+             emitted. The two cases below have the writer and only cannot
+             place the store: they do not count, and a switch of only those
+             stays refused. */
+          any = 1;
           emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
           continue;
         }

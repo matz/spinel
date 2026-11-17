@@ -12583,6 +12583,8 @@ void emit_reopen_self_arg(Compiler *c, int id, int mi, Buf *b) {
   int from = s && repr_self_handle(c, (int)(s - c->scopes));
   int to = repr_self_handle(c, mi);
   if (from && !to) buf_printf(b, "sp_strbuf_read_pub(%s)", g_self);
+  else if (to && !from && s && repr_self_string_object(c, s->idx))
+    buf_printf(b, "(sp_String *)(%s)", g_self);
   else if (to && !from) buf_printf(b, "SP_STR_HDL(%s)", g_self);
   else buf_puts(b, g_self);
 }

@@ -61,7 +61,8 @@ Interpolation and printing call the display method selected at that site.
 They read the bytes of its native String result or format its boxed result
 while the receiver is rooted. Interpolation keeps a mutable conversion
 result until its literal segment is assembled, then reads its bytes and
-length together. A generated String member reader named to_s or inspect
+length together. This includes registered class conversions and a rescued
+exception’s override or stored message. A generated String member reader named to_s or inspect
 returns its stored field. The default Struct or Data renderer produces
 counted text. String comparisons borrow bytes from the selected conversion
 result.

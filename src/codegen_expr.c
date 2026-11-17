@@ -583,8 +583,17 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         free(ivb.p);
       }
       else if (t == TY_CLASS) {
-        buf_printf(&conv, "%s(", comp_class_display_fn(c));
-        EMIT_IV(); buf_puts(&conv, ")");
+        if (prog_has_cls_user_display(c, "to_s")) {
+          held_string = 1;
+          neutral = ++g_tmp;
+          buf_printf(&decls, "int _t%d = 0; ", neutral);
+          buf_puts(&conv, "sp_interp_string(sp_box_class(");
+          EMIT_IV(); buf_printf(&conv, "), &_t%d)", neutral);
+        }
+        else {
+          buf_printf(&conv, "%s(", comp_class_base_display_fn(c));
+          EMIT_IV(); buf_puts(&conv, ")");
+        }
       }
       else if (t == TY_BIGINT) {
         /* NULL is this slot's nil, which interpolates as the empty string

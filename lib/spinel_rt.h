@@ -1963,17 +1963,16 @@ static inline void sp_pp_user_leave(int *w) { sp_pp_printing = *w; }
    the program's Array#inspect as outside a pp */
 #define SP_PP_USER(e) ({ int _ppw = sp_pp_printing; sp_pp_printing = 0; \
   __typeof__(e) _ppr = (e); sp_pp_printing = _ppw; _ppr; })
-/* A text consumer borrows a checked String result's bytes, and uses its
-   own rendering fallback when the override answered another Ruby value. */
-static inline const char *sp_display_bytes(sp_RbVal r) {
-  if (r.tag == SP_TAG_OBJ && r.cls_id == SP_BUILTIN_STRBUF)
-    return sp_String_cstr_nil((sp_String *)r.v.p);
-  return r.tag == SP_TAG_STR ? r.v.s : NULL;
+/* (and a String some emitters answer boxed, a String-typed read whose nil
+   or raise arm is a box: the box's String, the handle it holds, or nil) */
+static inline const char *sp_strface_b_box(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF) return v.v.p ? ((sp_String *)v.v.p)->data : NULL;
+  return v.tag == SP_TAG_STR ? v.v.s : NULL;
 }
 static inline const char *sp_class_val_user(sp_RbVal v, sp_RbVal (*fn)(sp_Class, int *)) {
   if (fn && v.cls_id != SP_CLASS_BY_NAME) {
     int found;
-    const char *s = sp_display_bytes(fn((sp_Class){v.v.i, NULL}, &found));
+    const char *s = sp_strface_b_box(fn((sp_Class){v.v.i, NULL}, &found));
     if (found && s) return s;
   }
   return sp_class_val_display(v);
@@ -4011,7 +4010,7 @@ static SP_NOINLINE sp_String *sp_poly_check_str_obj(sp_RbVal v) {
 /* A conversion returning a Ruby value keeps the original String object.
    A comparison or a native argument borrows its bytes at the read. */
 static inline sp_RbVal sp_poly_check_str_box(sp_RbVal v) {
-  if ((v.tag == SP_TAG_STR && v.v.s) || sp_poly_is_strbuf(v)) return v;
+  if (sp_poly_is_strbuf(v) || sp_strface_b_box(v)) return v;
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn)
     return sp_box_nullable_obj(sp_poly_check_str_obj(v), SP_BUILTIN_STRBUF);
   return sp_box_nil();
@@ -4022,7 +4021,7 @@ static inline sp_RbVal sp_kernel_string(sp_RbVal v) {
   if (!sp_poly_nil_p(s)) return s;
   s = sp_poly_to_s_box(v);
   SP_GC_ROOT_RBVAL(s);
-  if (!sp_display_bytes(s))
+  if (!sp_strface_b_box(s))
     sp_raise_cls("TypeError", sp_sprintf("can't convert %s to String (%s#to_s gives %s)",
                  sp_poly_class_name(v), sp_poly_class_name(v), sp_poly_class_name(s)));
   return s;
@@ -24491,12 +24490,6 @@ static inline sp_RbVal sp_strface_box_new(const char *s) {
 static inline const char *sp_strface_zero_b(int z) { (void)z; return NULL; }
 static inline sp_String *sp_strface_zero_h(int z) { (void)z; return NULL; }
 static inline sp_RbVal sp_strface_zero_box(int z) { (void)z; return sp_box_nil(); }
-/* (and a String some emitters answer boxed, a String-typed read whose nil
-   or raise arm is a box: the box's String, the handle it holds, or nil) */
-static inline const char *sp_strface_b_box(sp_RbVal v) {
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF) return v.v.p ? ((sp_String *)v.v.p)->data : NULL;
-  return v.tag == SP_TAG_STR ? v.v.s : NULL;
-}
 static inline sp_String *sp_strface_h_box(sp_RbVal v) { return sp_poly_nil_p(v) ? NULL : sp_poly_as_strbuf(v); }
 static inline sp_RbVal sp_strface_box_self(sp_RbVal v) { return v; }
 /* (an untyped pointer is bytes: a conditional with a bare NULL arm, `c ?

@@ -245,7 +245,7 @@ static const char *sp_poly_time_display(sp_RbVal v, int inspect) {
     sp_RbVal result;
     if (sp_user_display_box(v, inspect, &result)) {
       if (inspect) return sp_poly_to_s(result);
-      const char *s = sp_display_bytes(result);
+      const char *s = sp_strface_b_box(result);
       if (s) return s;
     }
   }
@@ -474,7 +474,7 @@ const char *sp_poly_to_s(sp_RbVal v)
                  C.new : 1)`), as in sp_poly_check_str_obj */
               SP_GC_ROOT_RBVAL(v);
               int found;
-              const char *us = sp_display_bytes(sp_obj_to_s_fn(v.cls_id, v.v.p, &found));
+              const char *us = sp_strface_b_box(sp_obj_to_s_fn(v.cls_id, v.v.p, &found));
               if (found && us) return us;
             }
             /* a user exception subclass boxes under its own class id */

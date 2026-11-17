@@ -23507,7 +23507,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
     if (prog_has_cls_user_display(c, "to_s")) buf_puts(b, "static sp_RbVal sp_class_user_to_s(sp_Class c, int *found);\n");
     if (prog_has_cls_user_display(c, "inspect")) buf_puts(b, "static sp_RbVal sp_class_user_inspect(sp_Class c, int *found);\n");
     if (prog_has_cls_user_display(c, "to_s"))
-      buf_printf(b, "static const char *sp_class_to_s_disp(sp_Class c){if(sp_class_user_to_s_fn){int f;const char *_u=sp_display_bytes(sp_class_user_to_s_fn(c,&f));if(f&&_u)return _u;}return %s(c);}\n\n",
+      buf_printf(b, "static const char *sp_class_to_s_disp(sp_Class c){if(sp_class_user_to_s_fn){int f;const char *_u=sp_strface_b_box(sp_class_user_to_s_fn(c,&f));if(f&&_u)return _u;}return %s(c);}\n\n",
                  comp_class_base_display_fn(c));
     /* (apart from the hook's table only where the program has a hook:
        sp_class_inspect_text, which an else arm that runs the builtin calls) */
@@ -23531,7 +23531,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
     buf_printf(b, "default:break;} return %s(c); }\n\n", comp_class_base_display_fn(c));
     if (ihook)
       buf_puts(b, "static const char *sp_class_inspect_name(sp_Class c){"
-                  "if(sp_class_user_inspect_fn){int f;const char *_u=sp_display_bytes(sp_class_user_inspect_fn(c,&f));if(f&&_u)return _u;}"
+                  "if(sp_class_user_inspect_fn){int f;const char *_u=sp_strface_b_box(sp_class_user_inspect_fn(c,&f));if(f&&_u)return _u;}"
                   "return sp_class_inspect_text(c); }\n\n");
     /* #name of an ANONYMOUS class is nil, where #to_s and #inspect are the
        address form sp_class_to_s renders. The static spelling
@@ -23702,7 +23702,7 @@ static void emit_exc_text_tail(Compiler *c, Buf *b) {
       buf_puts(b, " }\n");
     }
     buf_puts(b, "  return sp_exc_message_idbox(e);\n}\n");
-    buf_printf(b, "static const char *sp_user_exc_%s(sp_Exception *e) { const char *s = sp_display_bytes(sp_user_exc_%s_v(e)); return %s; }\n",
+    buf_printf(b, "static const char *sp_user_exc_%s(sp_Exception *e) { const char *s = sp_strface_b_box(sp_user_exc_%s_v(e)); return %s; }\n",
                name, name, msg ? "s ? s : sp_str_empty" : "s");
   }
 }

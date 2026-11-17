@@ -14456,7 +14456,9 @@ static void emit_super_new_forward(Compiler *c, int id, int ci, Scope *s,
 static void emit_super_new_ctor(Compiler *c, int id, int ci, Buf *b) {
   const NodeTable *nt = c->nt;
   ClassInfo *k = &c->classes[ci];
-  if (k->is_struct || k->is_native_class || class_is_exc_subclass(c, ci))
+  /* (a reopened builtin exception has no struct of its own: its `self.new`
+     typed an `sp_NoMethodError` the C side never declared, K-056) */
+  if (k->is_struct || k->is_native_class || class_is_exc_subclass(c, ci) || class_is_exc_reopen(c, ci))
     unsupported(c, id, "super in `self.new` of a Struct, Data, exception or native class");
   int initm = cplan_hook_target(c, -1, ci, "initialize", NULL);
   int argsn = nt_ref(nt, id, "arguments");

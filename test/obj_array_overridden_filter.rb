@@ -5,7 +5,8 @@
 # returns the value an sp_PtrArray over a body inferred boxed, and spinel
 # refused the program (for delete_if, keep_if, sort! and sort_by! since they
 # took that edge; for reject, select and sort_by before). Where the value is
-# thrown away (Tidy) the Array still narrows.
+# thrown away (Tidy) the Array stays boxed too: the program's select! stores
+# a String in it, which an Array narrowed to Item raised TypeError on.
 module Sorted
   def sort_by! = [:sorted, 1]
 end
@@ -15,6 +16,10 @@ class Array
   def delete_if = [1, "two", :three]
   def keep_if = []
   def reject = ["r", 2.5]
+  def select!
+    self << "intruder"
+    nil
+  end
 end
 
 class Item
@@ -49,10 +54,11 @@ end
 class Tidy
   def initialize = @items = [Item.new("i"), Item.new("j")]
   def tidy
-    @items.delete_if { |i| i.name == "j" }
+    @items.select! { |i| i.name == "j" }
     nil
   end
   def size = @items.size
+  def kinds = @items.map { |i| i.class.name }
 end
 
 s = Shelf.new
@@ -78,3 +84,4 @@ p k.first_name
 t = Tidy.new
 p t.tidy
 p t.size
+p t.kinds

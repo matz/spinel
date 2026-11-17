@@ -11,4 +11,5 @@ true
 2
 "g"
 nil
-2
+3
+["Item", "Item", "String"]

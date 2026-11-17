@@ -16868,9 +16868,11 @@ static int oa_filter_call(Compiler *c, int id) {
    the filter's name on Array (share_builtin_overridden, which a module put
    ahead of any class answers too), its value is the program's method's,
    neither the receiver nor a copy of its elements: no edge, and the slot
-   narrows only where that value is thrown away. (The edge typed the
-   method that returns it an sp_PtrArray over a body inferred boxed, a
-   refusal.) */
+   dies, its value read or thrown away, as the walk arm's does under a
+   program's own each. (The edge typed the method that returns it an
+   sp_PtrArray over a body inferred boxed, a refusal; and thrown away, the
+   narrowed receiver went into a body that may store any element in it --
+   `self << "x"` raised TypeError where CRuby appends.) */
 static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *claimed, int *call_ret,
                          char *value_ok, const char *walk_disc, int nc) {
   int fk = oa_filter_call(c, id);
@@ -16882,7 +16884,7 @@ static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *cl
   const char *fnm = nt_str(c->nt, id, "name");
   int self_ans = fk == 1 && fnm && !is_select_reject_bang(fnm);
   int own = fnm && share_builtin_overridden(c, "Array", fnm);
-  if (((fk == 1 && !self_ans) || own) && !disc) sl[S].alive = 0;
+  if (own || (fk == 1 && !self_ans && !disc)) sl[S].alive = 0;
   if ((fk == 2 || self_ans) && !own && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
   return 1;
 }

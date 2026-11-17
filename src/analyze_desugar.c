@@ -28057,8 +28057,13 @@ static int us_owner_path(NodeTable *nt, const int *parent, int d, int like) {
   }
   if (nc == 0) return -1;
   const char *seg[64]; int n = 0;
-  for (int i = nc - 1; i >= 0; i--)
-    if ((n = us_path_segs(nt, nt_ref(nt, chain[i], "constant_path"), seg, n, 64)) < 0) return -1;
+  /* (a compact header `class A::B` inside another body resolves A
+     lexically, which the path written here does not: left out) */
+  for (int i = nc - 1; i >= 0; i--) {
+    int cp = nt_ref(nt, chain[i], "constant_path");
+    if (nc > 1 && cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode && nt_ref(nt, cp, "parent") >= 0) return -1;
+    if ((n = us_path_segs(nt, cp, seg, n, 64)) < 0) return -1;
+  }
   int path = -1;
   for (int i = 0; i < n; i++) {
     if (!seg[i]) return -1;
@@ -28094,9 +28099,13 @@ int desugar_user_send_others(Compiler *c) {
     if (!nm || !sp_streq(nm, "send")) continue;
     int r = nt_ref(nt, id, "receiver");
     if (r < 0 || nt_kind(nt, r) == NK_SelfNode || nt_ref(nt, id, "block") >= 0) continue;
+    /* (`o&.send(n)` skips its arguments on nil, which the split would read first) */
+    if (nt_safe_nav(nt, id)) continue;
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     if (an < 1) continue;
+    /* (a socket's send(data, flags) is the datagram write, not Object#send) */
+    if (an >= 2 && sp_feature_required("socket")) continue;
     NodeKind k0 = nt_kind(nt, av[0]);
     if (k0 == NK_SymbolNode || k0 == NK_StringNode) continue;
     /* (a `...` or keywords first is no one name a local can hold; a splat
@@ -28111,14 +28120,15 @@ int desugar_user_send_others(Compiler *c) {
     int p = parent[id];
     if (p < 0) continue;
     char tn[32]; snprintf(tn, sizeof tn, "__us_r%d", id);
-    /* (a receiver that reads a variable or names a class is read again in
-       each place, so the arms still see what it is: `self.class.send(n)`
-       answers that class's methods, desugar_dynamic_send) */
+    /* (a receiver that names a class is read again in each place, so the
+       arms still see what it is: `self.class.send(n)` answers that class's
+       methods, desugar_dynamic_send) */
     NodeKind rk = nt_kind(nt, r);
     const char *rn = rk == NK_CallNode ? nt_str(nt, r, "name") : NULL;
     int rr = rk == NK_CallNode ? nt_ref(nt, r, "receiver") : -1;
-    int reread = rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode ||
-                 rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ||
+    /* (not a variable: the name's expression may write it before the
+       receiver, read first, is used) */
+    int reread = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ||
                  (rn && sp_streq(rn, "class") && nt_ref(nt, r, "arguments") < 0 && nt_ref(nt, r, "block") < 0 &&
                   (rr < 0 || nt_kind(nt, rr) == NK_SelfNode));
 #define US_RECV() (reread ? nt_clone_subtree(nt, r) : local_read_like(nt, id, tn))
@@ -28155,6 +28165,8 @@ int desugar_user_send_others(Compiler *c) {
       nt_node_set_str(nt, q, "name", "===");
       nt_node_set_ref(nt, q, "receiver", i ? nt_clone_subtree(nt, paths[i]) : paths[i]);
       nt_node_set_ref(nt, q, "arguments", qa);
+      /* (Module#===, not a class's own `self.===`) */
+      nt_mark_builtin_call(nt, q);
       if (pred < 0) pred = q;
       else {
         int o = fwd_new_node_like(nt, id, "OrNode");

@@ -4,3 +4,6 @@
 "own 2"
 [Conf, Integer]
 9
+"strict hello"
+nil
+"sent column"

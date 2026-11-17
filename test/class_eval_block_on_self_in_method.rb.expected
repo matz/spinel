@@ -1,0 +1,13 @@
+tag 1
+tag 4
+tag 4
+tag 4
+L 5
+tag 2
+true
+say 6
+undefined method 'class_eval' for an instance of Obj
+42
+"undefined method 'class_eval' for an instance of Object"
+[:class_eval, [], NamedObj]
+:class_eval

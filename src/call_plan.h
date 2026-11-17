@@ -1583,10 +1583,16 @@ void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud);
 /* The names a run-time-name respond_to? may leave out of its shared lists for a call: the program's top-level defs
    (root -1) and the methods of its Object, Kernel and BasicObject reopenings (root: the class holding it) that have
    versions, which no class of the program defines besides the roots, no builtin answers and no private Kernel
-   function is. Built once while the tables are as they were (the key of cplan_rtr_lists); the names are the plan's.
-   Which of them a call leaves out is the record's, asked per call. */
-typedef struct { char *name; int root; } CplanOmitCand;
+   function is, and that the tables hold as the top-level def or the root's own. Built once while the tables are as they
+   were (the key of cplan_rtr_lists); the names are the plan's, and so are the facts of a name no call changes (chain:
+   the class a top-level def's record ask runs on; mi: the scope the tables hold it as; self_main: whether main
+   answers it as a builtin self method). Which of them a call leaves out is the record's, asked per call
+   (cplan_omit_absent). */
+typedef struct { char *name; int root, chain, mi, self_main; } CplanOmitCand;
 const CplanOmitCand *cplan_omit_candidates(Compiler *c, int *n);
+/* Does the record prove candidate k has not run where call `call` runs (cplan_top_def_absent, cplan_root_def_absent
+   without the table asks the candidate already answers)? */
+int cplan_omit_absent(Compiler *c, int call, const CplanOmitCand *k);
 /* The lists a run-time `respond_to?` tests per class (emit_respond_to_runtime_name): class cls's public names and the
    private ones include_all adds, as the C text `"a", "b", `, and the Object private names its undef_method takes
    away (entries of object_private_method_names, in its order); cls -1 is the Object reopening's. They are built
@@ -1594,9 +1600,15 @@ const CplanOmitCand *cplan_omit_candidates(Compiler *c, int *n);
    absent at a point, as cplan_presence proves), so the plan keeps them while nothing they read has moved: the scope
    index frozen, with its epoch, the scope and class counts, the class shape, the reader and writer tables and the
    visibility and undef tables as they were. The caller fills an entry (the lists when `built` is 0, the undef
-   names when `undef_built` is). Where the tables may move (the scope index is not frozen) each ask hands out a
+   names when `undef_built` is, the held names when `held_built` is). Where the tables may move (the scope index is not frozen) each ask hands out a
    fresh entry, valid until the next ask. */
-typedef struct { char *pub, *priv; const char **undef_priv; int nundef_priv; unsigned char built, undef_built; } CplanRtrLists;
+typedef struct {
+  char *pub, *priv; const char **undef_priv; int nundef_priv;
+  /* held_priv: the Object private names some root reopening's table holds or undefines (the Object reopening's entry
+     only, `held_built` when filled), the ones a call's record ask must still decide */
+  const char **held_priv; int nheld_priv;
+  unsigned char built, undef_built, held_built;
+} CplanRtrLists;
 CplanRtrLists *cplan_rtr_lists(Compiler *c, int cls);
 /* The names a method list on cls's side asks about, as the final tables
    hold them (a class's scopes, aliases and accessors, and for the class side

@@ -304,6 +304,20 @@ static const CplanRtrLists *rtr_undef(Compiler *c, int k) {
   e->undef_built = 1;
   return e;
 }
+/* The Object private names some root reopening holds or undefines (root_reopen_holds), asked once per program: the only
+   ones a call's record ask (root_reopen_defines) can still change, in object_private_method_names' order */
+static const CplanRtrLists *rtr_held(Compiler *c) {
+  CplanRtrLists *e = cplan_rtr_lists(c, -1);
+  if (e->held_built) return e;
+  const char *const *op = object_private_method_names();
+  int n = 0;
+  while (op[n]) n++;
+  if (n && !(e->held_priv = calloc((size_t)n, sizeof *e->held_priv))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int u = 0; u < n; u++)
+    if (root_reopen_holds(c, op[u])) e->held_priv[e->nheld_priv++] = op[u];
+  e->held_built = 1;
+  return e;
+}
 /* The names a respond_to? at call id leaves out of the lists a run-time name tests (the shared lists hold every
    def of the program): a top-level def, or a method of an Object or Kernel reopening no class of the program
    defines itself, that the record proves has not run where the call runs, and no builtin answers (it would still).
@@ -318,9 +332,7 @@ static char **rtr_omitted(Compiler *c, int id, int *n) {
   /* (the record answers only for a call that runs once where it stands) */
   if (!cplan_runs_once(c, id)) return NULL;
   for (int i = 0; i < nc; i++) {
-    int gone = cand[i].root < 0 ? cplan_top_def_absent(c, id, cand[i].name)
-                                : cplan_root_def_absent(c, id, cand[i].root, cand[i].name);
-    if (!gone) continue;
+    if (!cplan_omit_absent(c, id, &cand[i])) continue;
     if (*n == cap && !(v = realloc(v, sizeof *v * (size_t)(cap = cap ? cap * 2 : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     if (!(v[(*n)++] = strdup(cand[i].name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
@@ -393,12 +405,16 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
      or undefines is left to the arms above */
   const char *const *priv = object_private_method_names();
   buf_printf(b, "0)) || (_a%d && (!strcmp(_n%d, \"initialize\") || (_t%d.tag != SP_TAG_CLASS && sp_str_in_list(_n%d, (const char *const[]){", tv, tv, tv, tv);
-  for (int u = 0; priv[u]; u++)
-    if (!root_reopen_defines(c, id, priv[u])) {
-      buf_puts(b, "\"");
-      emit_c_escaped(b, priv[u]);
-      buf_puts(b, "\", ");
-    }
+  const CplanRtrLists *held = rtr_held(c);
+  for (int u = 0, h = 0; priv[u]; u++) {
+    /* (a name no root holds is no root's to define: the record is asked only for the held ones) */
+    int hold = h < held->nheld_priv && held->held_priv[h] == priv[u];
+    if (hold) h++;
+    if (hold && root_reopen_defines(c, id, priv[u])) continue;
+    buf_puts(b, "\"");
+    emit_c_escaped(b, priv[u]);
+    buf_puts(b, "\", ");
+  }
   buf_puts(b, "NULL})");
   for (int k = 0; k < c->nclasses; k++) {
     if (class_is_blank_slate(c, k)) { buf_printf(b, " && _k%d != %d", tv, k); continue; }

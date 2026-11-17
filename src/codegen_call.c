@@ -34784,14 +34784,27 @@ int emit_respond_to_by_cls(Compiler *c, int id, int recv, const char *qm, int ar
    where call id runs (-1: anywhere in the program)? Then the name is left
    to the class chain, as it was read before Object's private methods were
    answered. A def the record proves has not run there is none yet. */
+int root_reopen_holds(Compiler *c, const char *qm) {
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  for (int i = 0; roots[i] >= 0; i++) {
+    int k = comp_core_class(c, roots[i]);
+    CplanPresence pr;
+    if (k < 0) continue;
+    cplan_table_presence(c, k, CT_REACH, qm, &pr);
+    if (pr.table || pr.undef) return 1;
+  }
+  return 0;
+}
 int root_reopen_defines(Compiler *c, int id, const char *qm) {
   static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  /* (the tables hold none: the record is asked only for a name they hold) */
+  if (!root_reopen_holds(c, qm)) return 0;
   for (int i = 0; roots[i] >= 0; i++) {
     int k = comp_core_class(c, roots[i]);
     if (k < 0) continue;
     CplanPresence pr;
     cplan_table_presence(c, k, CT_REACH, qm, &pr);
-    if (!pr.table && !pr.undef) continue;   /* (the tables hold none: the record is asked only for a name they hold) */
+    if (!pr.table && !pr.undef) continue;
     PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
     if ((pk != PR_ABSENT && pr.table) || pr.undef) return 1;
   }

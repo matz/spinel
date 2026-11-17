@@ -173,6 +173,9 @@ int object_private_method_name(const char *qm);
 const char *const *object_private_method_names(void); /* NULL-terminated */
 int respond_to_runtime_reaches(Compiler *c, TyKind rt);
 int root_reopen_defines(Compiler *c, int id, const char *qm);
+/* ...and the ask with no site: do the tables of an Object, Kernel or BasicObject reopening hold or undefine qm at all
+   (root_reopen_defines is 0 for every call where they do not) */
+int root_reopen_holds(Compiler *c, const char *qm);
 /* 1 when the program's reopen of the builtin class or module `cls` (its
    chain) defines `name`, as call_target answers call id (-1: no call asks) */
 int reopened_owns(Compiler *c, int id, const char *cls, const char *name);

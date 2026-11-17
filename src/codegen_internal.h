@@ -1341,6 +1341,7 @@ void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b);
 void emit_super_blockarg_effect(Compiler *c, int id, Buf *b);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 int exc_super_reopen_initialize(Compiler *c, int ci);
+int exc_reopen_initialize_above(Compiler *c, const char *from, int inclusive, int skip_ci);
 int emit_exc_reopen_pick_head(Compiler *c, const int *xr, int xn, const char *cls_expr, Buf *b);
 int class_has_subclass(Compiler *c, int ocid);
 int exc_has_user_msg_override(Compiler *c);

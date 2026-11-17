@@ -12101,16 +12101,19 @@ int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max) {
    continues at the builtin above it (NoMethodError's at NameError's), and a
    class of the program continues at the builtin it descends from, inclusive. */
 int exc_super_reopen_initialize(Compiler *c, int ci) {
-  int xr[8], xn = exc_reopen_definers(c, "initialize", xr, 8);
-  if (xn <= 0) return -1;
   int reopen = class_is_exc_reopen(c, ci);
   const char *from = reopen ? c->classes[ci].name : exc_builtin_parent(c, ci);
   int seen = 0;
   for (int i = 0; builtin_ancestor_at(from, i); i++) {
     const char *a = builtin_ancestor_at(from, i);
     if (!seen) { seen = sp_streq(a, from); if (!seen || reopen) continue; }
-    for (int q = 0; q < xn; q++)
-      if (xr[q] != ci && sp_streq(c->classes[xr[q]].name, a)) return call_target(c, -1, xr[q], "initialize", 0, NULL);
+    /* each ancestor's own reopening is asked by name: a list of every
+       reopening that defines initialize is capped (exc_reopen_definers), and
+       one past the cap would hide a reopened ancestor */
+    int rci = comp_builtin_class_named(c, a);
+    if (rci < 0 || rci == ci || !class_is_exc_reopen(c, rci)) continue;
+    int mi = call_target(c, -1, rci, "initialize", 0, NULL);
+    if (mi >= 0 && c->scopes[mi].class_id == rci) return mi;
   }
   return -1;
 }
@@ -17265,6 +17268,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
         buf_printf(b, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[upi]), g_self);
         if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[upi], ", ", b);
         else emit_args_filled(c, upi, args_id, ", ", b);
+        /* the reopening's initialize may keep a block parameter: a separate C parameter */
+        emit_super_block_arg(c, id, s, &c->scopes[upi], 1, b);
         buf_puts(b, ")");
         return;
       }

@@ -3482,7 +3482,9 @@ static void mark_ie_own(Compiler *c, int body, int cls) {
 /* Is a child node the block a nested instance_eval/exec runs on a receiver
    of its own (ie_own_recv_block)? The markers below leave it to that call. */
 static int ie_nested_own_block(Compiler *c, int node) {
-  return node >= 0 && node < c->ie_map.cap && (c->ie_map.rb[node] & IE_RB_ROOT);
+  /* (a literal a call hands on to another receiver too: a typed arm's retype of
+     the block it sits in would mark it, and its parameters, with that arm's self) */
+  return node >= 0 && node < c->ie_map.cap && (c->ie_map.rb[node] & (IE_RB_ROOT | IE_RB_FWD));
 }
 /* Set a per-node ie_map flag (nonobj, pending) over a block's subtree, short
    of the defs, classes and modules in it, whose self is their own. */
@@ -5449,6 +5451,7 @@ void build_ie_map(Compiler *c) {
     }
     if (body < 0) continue;
     if (rb) ie_rb_mark(nt, rb_new, rb_n, nt_kind(nt, blk) == NK_BlockNode ? blk : body, IE_RB_IN);
+    if (rb && !is_instance_eval_family(nm) && nt_kind(nt, blk) == NK_BlockNode && blk < rb_n) rb_new[blk] |= IE_RB_FWD;
     if (pass) pend[body] = pend[body] == -1 || pend[body] == cls ? cls : -2 - id;
     mark_ie_own(c, body, pass ? pend[body] : cls);
   }

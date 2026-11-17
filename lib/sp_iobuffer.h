@@ -155,8 +155,17 @@ static inline uint8_t *sp_iob_view(sp_IOBuffer *b, sp_int *len) {
 static inline int sp_iob_fits(sp_int len, sp_int off, sp_int ty) {
   return (uint64_t)off < (uint64_t)len && (uint64_t)len - (uint64_t)off >= (uint64_t)sp_iob_width(ty);
 }
-/* Resolve the current view for each read, then check its public length. */
+/* Check the owning buffer directly. Resolve a slice's backing on each read. */
 static inline const uint8_t *sp_iob_inline_ptr(sp_IOBuffer *b, sp_int off, sp_int ty) {
+  if (SP_LIKELY(b && b->data)) {
+#if INTPTR_MAX < INT64_MAX
+    if (b->size > INTPTR_MAX) return NULL;
+#endif
+    if (SP_LIKELY((uint64_t)off < (uint64_t)b->size &&
+                  (uint64_t)b->size - (uint64_t)off >= (uint64_t)sp_iob_width(ty)))
+      return b->data + off;
+    return NULL;
+  }
   sp_int len;
   const uint8_t *base = sp_iob_view(b, &len);
   return sp_iob_fits(len, off, ty) ? base + off : NULL;

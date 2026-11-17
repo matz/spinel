@@ -52,6 +52,15 @@ candidates, as the ffi gem takes them:
 - an Array (`["libz.1.dylib", "z"]`) links the first candidate this machine
   has a library file for, or the first one when it has none.
 
+Each name is a compile-time string, folded as `ffi_cflags` folds its
+argument: a literal, adjacent literals, `String#+`, `__dir__`, or
+`File.expand_path` of those, so a library beside the source is
+`ffi_lib File.expand_path("lib/libfoo.so", __dir__)`. A name that does not
+fold (one read from a variable or `ENV`) is a compile error; under
+`require "ffi"` a module that `extend`s `FFI::Library` takes such a name at
+run time instead. The ffi gem's constants (`FFI::Library::LIBC`) name
+what every program links already.
+
 ### `ffi_cflags "..."`
 
 Declares cflags (include dirs, defines, link-search paths) needed for

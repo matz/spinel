@@ -2365,6 +2365,11 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  echo "reject-test: FAIL (an ffi_source call to an undeclared function built)"; ok=0; \
 	else grep -Eq "(undeclared function|implicit declaration of function) .lfind" "$$tmp/r.out" || \
 	  { echo "reject-test: FAIL (an ffi_source call to an undeclared function refused without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/ffi_lib_runtime_name.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (an ffi_lib name that does not fold compiled)"; ok=0; \
+	else grep -q "ffi_lib. expects a compile-time string" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (an ffi_lib name that does not fold refused without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
 	t=test/reject/singleton_on_untraceable_recv.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
 	  echo "reject-test: FAIL (a singleton def on an untraceable receiver compiled)"; ok=0; \

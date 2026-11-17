@@ -6278,25 +6278,41 @@ void register_ffi_decls(Compiler *c) {
         if (an < 1) ffi_decl_error(c, s, "`ffi_lib` needs a library name");
         /* the link flag of a name, a file name or a path, or of the first
            of an Array's candidates found here (ffi_lib_flag, #11363) */
+        /* Each name folds as an ffi_cflags string does (__dir__,
+           File.expand_path, String#+), and one that does not fold is a
+           loud error: a dropped name surfaces only as an undefined symbol
+           at link. A constant (the ffi gem's FFI::Library::LIBC or
+           CURRENT_PROCESS) names what every program links already, and
+           adds nothing. */
+        static const char *const lib_fold_msg =
+          "`ffi_lib` expects a compile-time string (a literal, adjacent "
+          "literals, String#+, __dir__, or File.expand_path of those), "
+          "or an Array of them";
         const char *libname = NULL;
         char flag[1024];
         if (nt_kind(nt, args[0]) == NK_ArrayNode) {
           int en = 0; const int *els = nt_arr(nt, args[0], "elements", &en);
-          const char *first = NULL;
+          char *first = NULL;
           for (int e = 0; e < en && !libname; e++) {
-            const char *nm = ffi_arg_str(nt, els[e]);
-            if (!nm) continue;
-            if (!first) first = nm;
+            if (nt_kind_is_constant(nt_kind(nt, els[e]))) continue;
+            char *nm = ffi_fold_str(c, els[e]);
+            if (!nm) ffi_decl_error(c, s, lib_fold_msg);
             if (ffi_lib_flag(nm, flag, sizeof flag, 1)) libname = flag;
+            if (!first) first = nm;
+            else free(nm);
           }
           if (!libname && first && ffi_lib_flag(first, flag, sizeof flag, 0)) libname = flag;
+          free(first);
           if (!libname) ffi_decl_error(c, s, "`ffi_lib` with an Array needs String library names");
         }
+        else if (nt_kind_is_constant(nt_kind(nt, args[0]))) continue;
         else {
-          const char *nm = ffi_arg_str(nt, args[0]);
-          if (nm && ffi_lib_flag(nm, flag, sizeof flag, 0)) libname = flag;
+          char *nm = ffi_fold_str(c, args[0]);
+          if (!nm) ffi_decl_error(c, s, lib_fold_msg);
+          if (ffi_lib_flag(nm, flag, sizeof flag, 0)) libname = flag;
+          free(nm);
         }
-        if (!libname) continue;  /* non-literal (e.g. a compile-time fold): tolerate */
+        if (!libname) continue;  /* an empty name: nothing to link */
         /* find or create the per-module lib entry, then semicolon-merge */
         int mi = -1;
         for (int li = 0; li < c->n_ffi_libs; li++)

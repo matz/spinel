@@ -14,6 +14,8 @@ const char *sp_json_str(const char *s);   /* quote + escape a string */
 const char *sp_json_val(sp_RbVal v);      /* serialize any boxed value */
 const char *sp_json_dump(sp_RbVal v, sp_int limit); /* JSON.dump: its limit, NaN allowed */
 const char *sp_json_pretty(sp_RbVal v);   /* two-space-indented serialization */
+/* generate / pretty_generate with options already read (see spinel_rt.h) */
+const char *sp_json_generate_with(sp_RbVal v, int esc, int allow_nan, int limit_set, sp_int max_nesting, int pretty);
 sp_RbVal sp_json_parse(const char *s);    /* parse JSON text into a boxed value */
 sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting);
 sp_RbVal sp_json_parse_duplicates(const char *s, sp_int max_nesting, int allow_duplicate_key);

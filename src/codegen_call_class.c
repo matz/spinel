@@ -2458,6 +2458,17 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           if (ostruct) buf_puts(b, ")");
           return 1;
         }
+        /* JSON.generate(obj, opts) and JSON.pretty_generate(obj, opts): the
+           options are read at run time (sp_json_generate_options), where the
+           binding's one argument would drop them */
+        if (sp_streq(nvmod, "JSON") && (sp_streq(name, "generate") || sp_streq(name, "pretty_generate")) &&
+            argc == 2) {
+          int t = ++g_tmp;
+          buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_boxed(c, argv[0], b);
+          buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_json_generate_options(_t%d, ", t, t); emit_boxed(c, argv[1], b);
+          buf_printf(b, ", %d); })", sp_streq(name, "pretty_generate"));
+          return 1;
+        }
         /* one String representation: a handle argument's read publishes it
            to the deep-return channel, which a caller's pickup would take for
            this new String; the answer clears it, as the method's own body

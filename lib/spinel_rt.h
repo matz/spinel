@@ -17478,14 +17478,16 @@ static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options, in
   return symbolize ? sp_json_symbolize(value) : value;
 }
 /* JSON.generate(obj, opts) and JSON.pretty_generate(obj, opts): the options
-   read as CRuby's json reads them (its State#configure). ascii_only,
-   script_safe, allow_nan and max_nesting are honoured; buffer_initial_length
-   changes nothing, nor does allow_duplicate_key (the writer does not look for
-   duplicate keys either way). An option Spinel would ignore while CRuby's
-   answer changes -- a layout String other than the one the call writes,
-   sort_keys, strict, as_json, a depth to start from -- raises ArgumentError
-   by name, as JSON.parse's do; a name CRuby does not know raises its
-   "unknown keyword". nil and false are no options.
+   read as Ruby 4.0's bundled json (2.18) reads them, in its State#configure.
+   ascii_only, script_safe (and its other name escape_slash), allow_nan and
+   max_nesting are honoured; buffer_initial_length changes nothing, nor does
+   a true allow_duplicate_key (the writer writes every key, as that json does
+   by default). An option Spinel would ignore while that json's answer
+   changes -- a layout String other than the one the call writes, strict,
+   as_json, a depth to start from, a false allow_duplicate_key (which raises
+   on a duplicate there) -- raises ArgumentError by name, as JSON.parse's do.
+   A name that json does not know is ignored, as there (sort_keys among them,
+   which json 3 reads). nil and false are no options.
    MODE: 1 for pretty_generate; 2 for a builtin's #to_json(state), which
    reads a Hash as these options and takes anything else for no options
    (CRuby's State.from_state), where generate refuses it. */
@@ -17513,8 +17515,6 @@ static SP_UNUSED const char *sp_json_generate_options(sp_RbVal v, sp_RbVal optio
   if (sp_poly_truthy(options) && !is_hash && !(mode & 2))
     sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Hash)", sp_poly_class_name(options)));
   if (is_hash) {
-    const char *unknown = NULL; int nunknown = 0;
-    SP_GC_ROOT_STR(unknown);
     for (sp_int i = 0; i < sp_poly_length(options); i++) {
       sp_RbVal key, value; sp_poly_hash_pair(options, i, &key, &value);
       SP_GC_ROOT_RBVAL(key); SP_GC_ROOT_RBVAL(value);
@@ -17528,7 +17528,9 @@ static SP_UNUSED const char *sp_json_generate_options(sp_RbVal v, sp_RbVal optio
         !strcmp(name, "object_nl") || !strcmp(name, "array_nl") ? (pretty ? "\n" : "") : NULL;
       if (layout) { if (!sp_json_gen_layout_ok(value, layout)) sp_json_gen_unsupported(name, pretty); }
       else if (name && !strcmp(name, "ascii_only")) { if (sp_poly_truthy(value)) esc |= 1; else esc &= ~1; }
-      else if (name && !strcmp(name, "script_safe")) { if (sp_poly_truthy(value)) esc |= 2; else esc &= ~2; }
+      else if (name && (!strcmp(name, "script_safe") || !strcmp(name, "escape_slash"))) {
+        if (sp_poly_truthy(value)) esc |= 2; else esc &= ~2;
+      }
       else if (name && !strcmp(name, "allow_nan")) allow_nan = sp_poly_truthy(value);
       else if (name && !strcmp(name, "max_nesting")) {
         limit_set = 1;
@@ -17537,19 +17539,14 @@ static SP_UNUSED const char *sp_json_generate_options(sp_RbVal v, sp_RbVal optio
       else if (name && !strcmp(name, "depth")) {
         if (sp_poly_truthy(value) && sp_poly_to_int_arg(value) != 0) sp_json_gen_unsupported(name, pretty);
       }
-      else if (name && (!strcmp(name, "strict") || !strcmp(name, "sort_keys") || !strcmp(name, "as_json"))) {
+      else if (name && (!strcmp(name, "strict") || !strcmp(name, "as_json"))) {
         if (sp_poly_truthy(value)) sp_json_gen_unsupported(name, pretty);
       }
-      else if (name && (!strcmp(name, "buffer_initial_length") || !strcmp(name, "allow_duplicate_key"))) ;
-      else {
-        /* CRuby lists every name it does not know, after the others are read */
-        const char *kn = name ? name : sp_poly_to_s(key);
-        unknown = unknown ? sp_sprintf("%s, %s", unknown, kn) : kn;
-        nunknown++;
+      else if (name && !strcmp(name, "allow_duplicate_key")) {
+        if (!sp_poly_truthy(value)) sp_json_gen_unsupported(name, pretty);
       }
+      /* buffer_initial_length, and any name json does not know, change nothing */
     }
-    if (nunknown)
-      sp_raise_cls("ArgumentError", sp_sprintf("unknown keyword%s: %s", nunknown > 1 ? "s" : "", unknown));
   }
   return sp_json_generate_with(v, esc, allow_nan, limit_set, limit, pretty);
 }

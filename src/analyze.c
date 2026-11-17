@@ -5438,6 +5438,9 @@ void build_ie_map(Compiler *c) {
     else {
       TyKind rt = infer_type(c, recv);
       cls = ty_is_object(rt) ? ty_object_class(rt) : ie_poly_mark(c, id, rt);
+      /* (`self.m { }` in a block the map runs on one class, its self typed boxed: that class's m forwards it) */
+      if (cls == -1 && nt_kind(nt, recv) == NK_SelfNode && !ty_is_object(rt) && !is_instance_eval_family(nm) && ie_class_of(c, id) >= 0)
+        cls = ie_fwd_resolve(c, ie_forward_target(c, id, ie_class_of(c, id), 0, nm, 1, &rb), blk, &rb);
       if (cls == -1 && !ty_is_object(rt)) cls = ie_class_value_target(c, id, recv, rt, blk, &rb);
       /* (a boxed receiver no class of the program's can be -- Object.new --
          counts too: ie_poly_mark found none, or found the self rebound with

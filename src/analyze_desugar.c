@@ -28643,10 +28643,12 @@ int desugar_missing_method_calls(Compiler *c) {
     int r = nt_ref(nt, id, "receiver");
     if (!nm || sp_streq(nm, "method_missing")) continue;
     int miss[16], nmiss = 0, others = 0, reread = 0;
-    if (r < 0) {
+    /* (`self.m` in a block the map runs on one class asks that class, as a bare `m` there does: its self is typed boxed) */
+    int ie_self = r >= 0 && nt_kind(nt, r) == NK_SelfNode && ie_block_self_class_of(c, id) >= 0;
+    if (r < 0 || ie_self) {
       /* a receiverless call: self is the method's class or a subclass, or
          an instance_eval block's receiver (ie_receiverless_self_class) */
-      if (nt_ref(nt, id, "arguments") < 0 && nt_vcall(nt, id)) {
+      if (r < 0 && nt_ref(nt, id, "arguments") < 0 && nt_vcall(nt, id)) {
         Scope *sc = comp_scope_of(c, id);
         int is_local = 0;
         for (int i = 0; sc && i < sc->nlocals; i++) if (sc->locals[i].name && sp_streq(sc->locals[i].name, nm)) is_local = 1;
@@ -28685,7 +28687,7 @@ int desugar_missing_method_calls(Compiler *c) {
     }
     if (nmiss <= 0) continue;
     /* (a split reads the receiver twice: a variable or self, or none) */
-    if (r < 0) reread = 1;
+    if (r < 0 || ie_self) reread = 1;
     if (others && !reread) continue;
     int a = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
     int mark = nt->count;

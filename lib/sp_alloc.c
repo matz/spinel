@@ -738,6 +738,10 @@ void (*sp_gc_collect_fn)(void) = sp_gc_collect;
 #else
 SP_WEAK void (*sp_gc_collect_fn)(void) = sp_gc_collect;
 #endif
+/* Set by GC.start for the next collection: a full one, whatever the cadence
+   (sp_gc_collect clears it). Here, not in sp_gc.c, so the --gc=none archive
+   that names no collector still links GC.start. */
+int sp_gc_full_next = 0;
 static int sp_gc_collect_installed(void) {
   if (sp_gc_collect_fn) return 1;
   SP_GC_CTR_SET(sp_gc_threshold, (size_t)-1 / 4);

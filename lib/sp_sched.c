@@ -1073,6 +1073,7 @@ void sp_stw_collect(void) { sp_stw_collect_impl(0); }
    any threaded program calling GC.start hung (#3781). Forced: an explicit
    request collects even when neither heap is over its trigger. */
 void sp_gc_collect_request(void) {
+  sp_gc_full_next = 1;   /* GC.start: a full collection (sp_gc_collect) */
 #ifdef SP_THREADS
   sp_stw_collect_impl(1);
 #else

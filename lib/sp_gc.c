@@ -1515,6 +1515,9 @@ void sp_gc_collect(void){
      a slab object promoted this cycle would go unrecorded: aging is off then. */
   if(sp_gc_age_on&&sp_slab_on>0)sp_gc_age_on=0;
   int full=(sp_gc_cycle%sp_gc_full_interval==0);sp_gc_cycle++;
+  /* GC.start asks for a full collection, as CRuby's does: an object promoted
+     while it was live, then dropped, is old, and a minor cycle keeps it */
+  if(sp_gc_full_next){ full=1; sp_gc_full_next=0; }
   /* Forced by growth rather than by the schedule: the old generation has
      outgrown what the last full found live in it. */
   int forced_full=0;

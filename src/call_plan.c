@@ -8152,26 +8152,16 @@ static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws
   return placed ? 1 : FILL_UNPLACED;
 }
 /* The check of a `**h`'s keys at the first forward that may raise for one (f->rmi), which the rewrite makes once the operands
-   are held and ahead of every default, given the effects the walk filled (effects), ek of them ahead of that forward and ek2
-   ahead of a later one that may raise for a key the first names (-1: none): kept where a default with an effect is filled
-   at or after that forward, which runs only once its binding has passed; dropped where none is, as then the builtin's own
-   binding raises alike after the defaults; 0 (the call is refused) where one is filled ahead of it too, which runs before
-   the raise, or after the later one, which a second check would take. */
-static int ct_key_check(NewFills *f, int effects, int ek, int ek2) {
+   are held and ahead of every default, given the effects the walk filled (effects), ek of them ahead of that forward: kept
+   where a default with an effect is filled at or after that forward, which runs only once its binding has passed; dropped
+   where none is, as then the builtin's own binding raises alike after the defaults; 0 (the call is refused) where one is
+   filled ahead of it and another at or after it, as the first runs before the raise. A later forward is given every
+   keyword the first names, the call's or the first's defaults, and the walk refuses one that does not name them all
+   (FILL_RAISE beside the check, or a keyword fill riding past one with keywords of its own). */
+static int ct_key_check(NewFills *f, int effects, int ek) {
   if (f->rmi < 0) return 1;
-  if (ek2 >= 0 && effects > ek2) return 0;
   if (effects == ek) { f->rmi = -1; return 1; }
   return !ek;
-}
-/* Does every keyword parameter of method sc name one of kws? */
-static int ct_names_keywords(Compiler *c, const Scope *sc, const int *kws, int nkw) {
-  int pn = sc->def_node >= 0 ? nt_ref(c->nt, sc->def_node, "parameters") : -1, n = 0;
-  const int *own = pn >= 0 ? nt_arr(c->nt, pn, "keywords", &n) : NULL;
-  for (int j = 0, named = 0; j < n; j++, named = 0) {
-    for (int i = 0; i < nkw && !named; i++) named = sp_streq(nt_str(c->nt, own[j], "name"), nt_str(c->nt, kws[i], "name"));
-    if (!named) return 0;
-  }
-  return 1;
 }
 /* Is the prepend that made copy sc on class ci in force at call id: ELAB_YES where the load record proves one of its
    statements made before the call can first run (elab_def_before_call), ELAB_NO where every run of the call ends before
@@ -8198,9 +8188,8 @@ static int ct_prepend_in_force(Compiler *c, int id, int ci, const Scope *sc) {
 static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open, int kw, NewFills *f) {
   /* (a keyword-dropping forward is one only where dropping them cannot be observed) */
   int kw_ok = !kw || builtin_new_keywords(c->classes[ci].name), unplaced = 0, effects = 0, kwpass = 0;
-  /* (the effects filled ahead of the first forward that may raise for a `**h` key (rmi), and of a later one that may raise
-     for a key that one names: ct_key_check) */
-  int ek = 0, ek2 = -1;
+  /* (the effects filled ahead of the first forward that may raise for a `**h` key (rmi): ct_key_check) */
+  int ek = 0;
   /* (a `**h` alone, the call's only argument) */
   int lone = kw == NEWKW_MAYBE && !open && !argc, nargs = 0, args = nt_ref(c->nt, id, "arguments");
   /* (literal keys beside a `**h`, which may add any) */
@@ -8241,19 +8230,19 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
       if (kw == NEWKW_SURE && !kwrest) f->kwat = f->n;
       int n0 = f->n, e0 = effects, maybe = kw == NEWKW_MAYBE || (kw == NEWKW_SURE && ksplat), fill = !dopen && dargc < pos ? ct_fill_defaults(c, sc, mi, dargc, f, &effects) : 1, kfill = 1;
       if (fill && nkw) kfill = ct_fill_keywords(c, sc, mi, kws, nkw, id, kw, maybe, f, &effects);
-      /* (a key this one does not name raises as it binds, before its own defaults run: what the forwards ahead fill has run) */
+      /* (a key this one does not name raises as it binds, before its own defaults run: what the forwards ahead fill has run;
+         past the check of a `**h`'s keys at one ahead (rmi), which raises first where `h` holds a key that one does not name,
+         the call would need both, which the rewrite does not make) */
       if (kfill == FILL_RAISE) {
+        if (f->rmi >= 0) return BNF_REFUSE;
         f->n = n0, effects = e0, f->rmi = mi;
         if (unplaced || !effects) f->n = f->nk = 0, f->kwat = -1;
         return unplaced && effects ? BNF_REFUSE : BNF_RAISE;
       }
       if (!fill || !kfill) return BNF_REFUSE;
       /* (a `**h` may hold a key this one does not name, which raises as it binds, before its defaults and every later one's
-         run; a later one is given only the keys the first names, and may raise only where it does not name them all) */
-      if (maybe && nkw && sc->kwrest_idx < 0) {
-        if (f->rmi < 0) f->rmi = mi, ek = e0;
-        else if (ek2 < 0 && !ct_names_keywords(c, &c->scopes[f->rmi], kws, nkw)) ek2 = e0;
-      }
+         run) */
+      if (maybe && nkw && sc->kwrest_idx < 0 && f->rmi < 0) f->rmi = mi, ek = e0;
       /* (a default that reads the object being built (self, an ivar, a call on self) or the def's lexical scope runs only once
          CRuby has made the object, which the builtin's construction does not model yet: the walk goes on, and the call keeps
          master's answer, which runs no default) */
@@ -8271,12 +8260,12 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
     if (!cplan_body_empty(c, mi) || !builtin_empty_new(c->classes[ci].name) || sc->yields || !ct_params_plain(c, sc, 0, 0, 0))
       return BNF_REFUSE;
     if (unplaced || !effects) f->n = f->nk = 0, f->kwat = -1;
-    return ct_key_check(f, effects, ek, ek2) ? BNF_EMPTY : BNF_REFUSE;
+    return ct_key_check(f, effects, ek) ? BNF_EMPTY : BNF_REFUSE;
   }
   /* (the builtin's own takes the keywords a forward's bare `super` passes, or CRuby raises ArgumentError there) */
   if (kwpass && !builtin_new_keywords(c->classes[ci].name)) return BNF_REFUSE;
   if (unplaced) f->n = f->nk = 0, f->kwat = -1;
-  if (!ct_key_check(f, unplaced ? 0 : effects, ek, ek2)) return BNF_REFUSE;
+  if (!ct_key_check(f, unplaced ? 0 : effects, ek)) return BNF_REFUSE;
   return f->n || f->nk ? BNF_FILL : BNF_OWN;
 }
 /* cplan_builtin_new_form's answer, and the defaults of a BNF_FILL, BNF_EMPTY or BNF_RAISE into f */

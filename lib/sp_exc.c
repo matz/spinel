@@ -1433,13 +1433,16 @@ const char *sp_exc_inspect(void *p) {
 
 const char *(*sp_user_exc_to_s_fn)(sp_Exception *) = NULL;
 const char *(*sp_user_exc_message_fn)(sp_Exception *) = NULL;
-const char *sp_exc_to_s_text(sp_Exception *e) {
+const char *sp_exc_to_s_fallback(sp_Exception *e) {
   SP_GC_ROOT(e);
-  const char *text = sp_user_exc_to_s_fn ? sp_user_exc_to_s_fn(e) : sp_exc_message(e);
-  if (text) return text;
   /* Ruby formats the receiver itself when its #to_s returned a non-String. */
   const char *cn = sp_exc_cls_display(sp_exc_class_name(e));
   return sp_sprintf("#<%s:0x%016llx>", cn, (unsigned long long)(uintptr_t)e);
+}
+const char *sp_exc_to_s_text(sp_Exception *e) {
+  SP_GC_ROOT(e);
+  const char *text = sp_user_exc_to_s_fn ? sp_user_exc_to_s_fn(e) : sp_exc_message(e);
+  return text ? text : sp_exc_to_s_fallback(e);
 }
 
 /* CRuby's arity ArgumentError (sp_exc.h): the message is built once here for

@@ -189,6 +189,7 @@ extern const char *(*sp_user_exc_to_s_fn)(sp_Exception *);
 /* #message the same way (the program's sp_user_exc_message), for the report of
    an uncaught exception; NULL when no exception class overrides its text */
 extern const char *(*sp_user_exc_message_fn)(sp_Exception *);
+const char *sp_exc_to_s_fallback(sp_Exception *e);
 const char *sp_exc_to_s_text(sp_Exception *e);
 const char *sp_exc_inspect(void *p);   /* #<Cls: msg>, for the inspect dispatch */
 sp_Exception *sp_exc_cause(volatile sp_Exception *ve);

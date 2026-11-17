@@ -4126,17 +4126,26 @@ int cplan_own_allocate(Compiler *c, int call, int ci) {
 }
 /* Does the program's allocate mi answer for call `call` (-1: any)? Not when
    it calls a super that reaches neither Class#allocate nor a parent's own
-   allocate that answers. The parent's is the one made at the call, found
-   without the call's pin: a call pinned to a version of the child's
-   allocate answers that scope for every class asked, and the question
-   would not end. Each level above it is asked the same way. */
+   allocate that answers. The parent's is the version in force at the
+   call (ct_met_version), found without the call's pin: a call pinned to a
+   version of the child's allocate answers that scope for every class
+   asked, and the question would not end. Where the record cannot tell
+   which version the call meets, the table's, kept only where it is made
+   at the call (ct_cmethod_made_at). Each level above it is asked the
+   same way. */
 static int own_allocate_answers(Compiler *c, int call, int mi) {
   NodeTable *nt = (NodeTable *)c->nt;
   int d = c->scopes[mi].def_node;
   if (d < 0) return 1;
   int pc = c->scopes[mi].class_id >= 0 ? comp_super_parent(c, c->scopes[mi].class_id, 1) : -1;
   int pm = pc >= 0 ? call_target(c, -1, pc, "allocate", CT_CMETHOD, NULL) : -1;
-  if (pm >= 0 && call >= 0) pm = ct_cmethod_made_at(c, call, pc, "allocate", pm);
+  if (pm >= 0 && call >= 0) {
+    int none = 0, dc = -1, framed = elab_plan_enter(c, call);
+    const LrDef *v = ct_met_version(c, call, pc, "allocate", 1, &none);
+    int at = v ? ct_def_version(c, pc, "allocate", 1, v, &dc) : -1;
+    if (framed) elab_plan_leave(c);
+    pm = none ? -1 : at >= 0 ? at : ct_cmethod_made_at(c, call, pc, "allocate", pm);
+  }
   int parent_own = pm >= 0 && own_allocate_answers(c, call, pm);
   int n = 0, sup = 0, *ids = nt_subtree_ids(nt, &d, 1, &n);
   for (int i = 0; i < n && !sup; i++)

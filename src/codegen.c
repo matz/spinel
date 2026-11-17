@@ -12095,6 +12095,26 @@ int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max) {
   return n;
 }
 
+/* The scope of the initialize a `super` from the initialize of exception class
+   ci reaches among the program's reopenings of builtin exception classes, or
+   -1 when it reaches the builtin's own. The chain is static: a reopening
+   continues at the builtin above it (NoMethodError's at NameError's), and a
+   class of the program continues at the builtin it descends from, inclusive. */
+int exc_super_reopen_initialize(Compiler *c, int ci) {
+  int xr[8], xn = exc_reopen_definers(c, "initialize", xr, 8);
+  if (xn <= 0) return -1;
+  int reopen = class_is_exc_reopen(c, ci);
+  const char *from = reopen ? c->classes[ci].name : exc_builtin_parent(c, ci);
+  int seen = 0;
+  for (int i = 0; builtin_ancestor_at(from, i); i++) {
+    const char *a = builtin_ancestor_at(from, i);
+    if (!seen) { seen = sp_streq(a, from); if (!seen || reopen) continue; }
+    for (int q = 0; q < xn; q++)
+      if (xr[q] != ci && sp_streq(c->classes[xr[q]].name, a)) return call_target(c, -1, xr[q], "initialize", 0, NULL);
+  }
+  return -1;
+}
+
 /* Emits the head of a pick among the reopenings xr[0..xn) that define one
    method: the one the runtime class cls_expr (a const char * expression)
    reaches first up its ancestry, as Ruby's lookup takes the most-derived
@@ -17237,6 +17257,17 @@ void emit_super(Compiler *c, int id, Buf *b) {
          arguments as Exception#initialize does for any other class. */
       int sci = s->class_id;
       const char *spar = class_is_exc_reopen(c, sci) ? c->classes[sci].name : exc_builtin_parent(c, sci);
+      /* a reopening of a builtin exception above this class defines initialize
+         (NoMethodError's super reaches a reopened NameError#initialize): it
+         runs, and reaches the builtin's through its own super */
+      int upi = exc_super_reopen_initialize(c, sci);
+      if (upi >= 0) {
+        buf_printf(b, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[upi]), g_self);
+        if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[upi], ", ", b);
+        else emit_args_filled(c, upi, args_id, ", ", b);
+        buf_puts(b, ")");
+        return;
+      }
       int spread = ty_k != NK_ForwardingSuperNode && argv2 && nt_argv_has_splat(c->nt, argv2, argc2) &&
                    !class_is_syserr(c, sci) && !exc_init_takes_own_args(spar);
       /* a bare super hands on a rest parameter's elements (and a **rest's

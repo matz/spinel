@@ -22502,8 +22502,11 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   int boxed_copy = rt == TY_POLY && rr.kind == RK_BOXED ? bop_boxed_answers_copy(nm, argc) : 0;
   if (!(bop_answers_self(rt, nm, argc, 0) & BOPF_COPY_CLASS) && !is_object_copy(nm) && !boxed_copy) return 0;
   /* (not a reopened Array's or Hash's own method of the name: it answers
-     what it returns, which need be no copy of the receiver's type) */
-  if (array_hash_reopen_mi(c, id, rt, nm, NULL) >= 0) return 0;
+     what it returns, which need be no copy of the receiver's type; one
+     that calls super hands on the builtin's copy, which the wrap keeps
+     the receiver's ivars on) */
+  { int rmi = array_hash_reopen_mi(c, id, rt, nm, NULL);
+    if (rmi >= 0 && !scope_calls_super(c, rmi)) return 0; }
   int t = ++g_tmp;
   char rn[24], dn[24];
   snprintf(rn, sizeof rn, "_t%d", t); snprintf(dn, sizeof dn, "_d%d", t);

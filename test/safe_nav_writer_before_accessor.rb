@@ -15,8 +15,8 @@ b = Box.new
 q = pick(true, b)
 z = pick(false, b)
 begin
-  v = (q&.x = 4; q&.x)
-  puts "before: #{v.inspect}"
+  q&.x = 4
+  puts "before: stored"
 rescue NoMethodError => e
   puts "before: #{e.class}"
 end

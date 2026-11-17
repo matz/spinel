@@ -31199,7 +31199,10 @@ static void env_box_arm(Compiler *c, int id, int rv, const char *bound, Buf *b) 
   emit_call(c, id, &tval);
   if (bound) view_unbind(mk);
   g_pre = sv_pre; g_indent = sv_ind;
-  buf_printf(b, "({ %s%s; })", tpre.p ? tpre.p : "", tval.p ? tval.p : "0");
+  /* (an arm with no prelude is its text as it stands: a raise the callers
+     read by its text, emitted_nomethod_token, stays readable) */
+  if (!tpre.p || !*tpre.p) buf_puts(b, tval.p ? tval.p : "0");
+  else buf_printf(b, "({ %s%s; })", tpre.p, tval.p ? tval.p : "0");
   free(tpre.p); free(tval.p);
 }
 static int emit_call_env_box_read(Compiler *c, int id, Buf *b) {
@@ -31219,6 +31222,27 @@ static int emit_call_env_box_read(Compiler *c, int id, Buf *b) {
               rk == NK_GlobalVariableReadNode || rk == NK_ConstantReadNode || rk == NK_SelfNode;
   int sv = g_env_read_skip;
   g_env_read_skip = id;
+  /* The call as it was, on a plain read: a call that no class of the
+     receiver answers is the raise alone, ENV's arm the same raise, and the
+     raise is emitted as it is, unwrapped. The text its callers read
+     (emitted_nomethod_token, the slot coercion that follows a raise) stays
+     at the front, as it was before the read through ENV existed. */
+  if (plain) {
+    Buf ob; memset(&ob, 0, sizeof ob);
+    Buf *sv_pre = g_pre; Buf opre; memset(&opre, 0, sizeof opre);
+    int sv_ind = g_indent;
+    g_pre = &opre; g_indent = 0;
+    emit_call(c, id, &ob);
+    g_pre = sv_pre; g_indent = sv_ind;
+    int raise_only = (!opre.p || !*opre.p) && ob.p && strncmp(past_open_parens(ob.p), "sp_raise", 8) == 0;
+    if (raise_only) {
+      buf_puts(b, ob.p);
+      free(ob.p); free(opre.p); free(rb.p);
+      g_env_read_skip = sv;
+      return 1;
+    }
+    free(ob.p); free(opre.p);
+  }
   int tr = plain ? 0 : ++g_tmp, te = ++g_tmp;
   char rtext[64], etext[48];
   if (plain) snprintf(rtext, sizeof rtext, "%s", "");

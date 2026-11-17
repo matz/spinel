@@ -28061,6 +28061,180 @@ static int cg_def(NodeTable *nt, int like, const char *mname, const char *op,
   return def;
 }
 
+/* ---- `o.send(name, ...)` where some class has its own `send` ----
+ * A program that defines `send` in a class (a WebSocket's `send(data)`)
+ * leaves every `o.send(computed, ...)` to the user method (send_family_
+ * user_answers): on a receiver that may be another object that dispatch
+ * had no arm, and the call raised `undefined method 'send'` where CRuby's
+ * Object#send calls the named method. desugar_user_send_others splits the
+ * call on the receiver's class:
+ *   (__us_rN = o; __us_nN = n; (::WS === __us_rN) ? __us_rN.send(__us_nN, a) : __us_rN.__send__(__us_nN, a))
+ * `__send__` is Object's, which the dynamic-send lowering takes. */
+
+/* the segments of a class header's constant path, appended to seg (rooted
+   resets the list: `class ::A::B`); -1 for a path of another shape */
+static int us_path_segs(const NodeTable *nt, int p, const char **seg, int n, int cap) {
+  NodeKind k = p >= 0 ? nt_kind(nt, p) : NK_NONE;
+  if (k == NK_ConstantReadNode) {
+    if (n >= cap) return -1;
+    seg[n++] = nt_str(nt, p, "name");
+    return n;
+  }
+  if (k != NK_ConstantPathNode) return -1;
+  int par = nt_ref(nt, p, "parent");
+  if (par < 0) n = 0;
+  else if ((n = us_path_segs(nt, par, seg, n, cap)) < 0) return -1;
+  if (n >= cap) return -1;
+  seg[n++] = nt_str(nt, p, "name");
+  return n;
+}
+/* `::A::B` for the class or module whose body holds def d, or -1 (a def at
+   the top level, in a `class << self`, a block or another def) */
+static int us_owner_path(NodeTable *nt, const int *parent, int d, int like) {
+  int chain[32], nc = 0;
+  for (int p = parent[d]; p >= 0; p = parent[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_SingletonClassNode || k == NK_DefNode || k == NK_BlockNode || k == NK_LambdaNode) return -1;
+    if (k == NK_ClassNode || k == NK_ModuleNode) { if (nc >= 32) return -1; chain[nc++] = p; }
+  }
+  if (nc == 0) return -1;
+  const char *seg[64]; int n = 0;
+  for (int i = nc - 1; i >= 0; i--)
+    if ((n = us_path_segs(nt, nt_ref(nt, chain[i], "constant_path"), seg, n, 64)) < 0) return -1;
+  int path = -1;
+  for (int i = 0; i < n; i++) {
+    if (!seg[i]) return -1;
+    int cp = fwd_new_node_like(nt, like, "ConstantPathNode");
+    nt_node_set_str(nt, cp, "name", seg[i]);
+    nt_node_set_ref(nt, cp, "parent", path);
+    path = cp;
+  }
+  return path;
+}
+int desugar_user_send_others(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0, nown = 0, own[16];
+  int *parent = NULL;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_DefNode) continue;
+    const char *dn = nt_str(nt, id, "name");
+    if (!dn) continue;
+    if (sp_streq(dn, "__send__")) { free(parent); return 0; }
+    if (!sp_streq(dn, "send")) continue;
+    if (!parent) parent = an_parent_map(nt);
+    /* (a `def self.send`, or one of no class to name: every receiver may answer it) */
+    if (!parent || nt_ref(nt, id, "receiver") >= 0 || nown >= 16) { free(parent); return 0; }
+    own[nown++] = id;
+  }
+  if (nown == 0) { free(parent); return 0; }
+  int paths[16];
+  for (int i = 0; i < nown; i++)
+    if ((paths[i] = us_owner_path(nt, parent, own[i], own[i])) < 0) { free(parent); return 0; }
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "send")) continue;
+    int r = nt_ref(nt, id, "receiver");
+    if (r < 0 || nt_kind(nt, r) == NK_SelfNode || nt_ref(nt, id, "block") >= 0) continue;
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (an < 1) continue;
+    NodeKind k0 = nt_kind(nt, av[0]);
+    if (k0 == NK_SymbolNode || k0 == NK_StringNode) continue;
+    /* (a `...` or keywords first is no one name a local can hold; a splat
+       of a variable is read again by each call, its name among it) */
+    int splat = k0 == NK_SplatNode;
+    if (splat) {
+      int se = nt_ref(nt, av[0], "expression");
+      NodeKind sk = se >= 0 ? nt_kind(nt, se) : NK_NONE;
+      if (sk != NK_LocalVariableReadNode && sk != NK_InstanceVariableReadNode) continue;
+    }
+    if (k0 == NK_ForwardingArgumentsNode || k0 == NK_KeywordHashNode || k0 == NK_BlockArgumentNode) continue;
+    int p = parent[id];
+    if (p < 0) continue;
+    char tn[32]; snprintf(tn, sizeof tn, "__us_r%d", id);
+    /* (a receiver that reads a variable or names a class is read again in
+       each place, so the arms still see what it is: `self.class.send(n)`
+       answers that class's methods, desugar_dynamic_send) */
+    NodeKind rk = nt_kind(nt, r);
+    const char *rn = rk == NK_CallNode ? nt_str(nt, r, "name") : NULL;
+    int rr = rk == NK_CallNode ? nt_ref(nt, r, "receiver") : -1;
+    int reread = rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode ||
+                 rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ||
+                 (rn && sp_streq(rn, "class") && nt_ref(nt, r, "arguments") < 0 && nt_ref(nt, r, "block") < 0 &&
+                  (rr < 0 || nt_kind(nt, rr) == NK_SelfNode));
+#define US_RECV() (reread ? nt_clone_subtree(nt, r) : local_read_like(nt, id, tn))
+    int w = -1;
+    if (!reread) {
+      w = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+      nt_node_set_str(nt, w, "name", tn);
+      nt_node_set_int(nt, w, "depth", 0);
+      nt_node_set_ref(nt, w, "value", r);
+    }
+    /* the name too, read once: the two calls take it as the same local, as
+       a written split does (an `||` read in each arm handed the user
+       method's String parameter the expression's handle) */
+    char nn[32]; snprintf(nn, sizeof nn, "__us_n%d", id);
+    int wn = -1;
+    if (!splat) {
+    wn = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+    nt_node_set_str(nt, wn, "name", nn);
+    nt_node_set_int(nt, wn, "depth", 0);
+    nt_node_set_ref(nt, wn, "value", av[0]);
+    }
+    if (!splat) { int *na = malloc(sizeof(int) * (size_t)an);
+      if (!na) continue;
+      for (int i = 0; i < an; i++) na[i] = av[i];
+      na[0] = local_read_like(nt, id, nn);
+      nt_node_set_arr(nt, a, "arguments", na, an);
+      free(na);
+      av = nt_arr(nt, a, "arguments", &an); }
+    int pred = -1;
+    for (int i = 0; i < nown; i++) {
+      int q = fwd_new_node_like(nt, id, "CallNode"), qa = fwd_new_node_like(nt, id, "ArgumentsNode");
+      int rd = US_RECV();
+      nt_node_set_arr(nt, qa, "arguments", &rd, 1);
+      nt_node_set_str(nt, q, "name", "===");
+      nt_node_set_ref(nt, q, "receiver", i ? nt_clone_subtree(nt, paths[i]) : paths[i]);
+      nt_node_set_ref(nt, q, "arguments", qa);
+      if (pred < 0) pred = q;
+      else {
+        int o = fwd_new_node_like(nt, id, "OrNode");
+        nt_node_set_ref(nt, o, "left", pred);
+        nt_node_set_ref(nt, o, "right", q);
+        pred = o;
+      }
+    }
+    /* the user method's call: the original node, its receiver the temp */
+    nt_node_set_ref(nt, id, "receiver", reread ? r : local_read_like(nt, id, tn));
+    int obj = fwd_new_node_like(nt, id, "CallNode");
+    nt_node_set_str(nt, obj, "name", "__send__");
+    nt_node_set_ref(nt, obj, "receiver", US_RECV());
+    nt_node_set_ref(nt, obj, "arguments", nt_clone_subtree(nt, a));
+    int ts = fwd_new_node_like(nt, id, "StatementsNode"), es = fwd_new_node_like(nt, id, "StatementsNode");
+    int els = fwd_new_node_like(nt, id, "ElseNode"), ifn = fwd_new_node_like(nt, id, "IfNode");
+    nt_node_set_arr(nt, ts, "body", &id, 1);
+    nt_node_set_arr(nt, es, "body", &obj, 1);
+    nt_node_set_ref(nt, els, "statements", es);
+    nt_node_set_ref(nt, ifn, "predicate", pred);
+    nt_node_set_ref(nt, ifn, "statements", ts);
+    nt_node_set_ref(nt, ifn, "subsequent", els);
+    int body[3], nb = 0;
+    if (w >= 0) body[nb++] = w;
+    if (wn >= 0) body[nb++] = wn;
+    body[nb++] = ifn;
+    int st = fwd_new_node_like(nt, id, "StatementsNode"), par = fwd_new_node_like(nt, id, "ParenthesesNode");
+    nt_node_set_arr(nt, st, "body", body, nb);
+#undef US_RECV
+    nt_node_set_ref(nt, par, "body", st);
+    nt_replace_child(nt, p, id, par);
+    changed = 1;
+  }
+  free(parent);
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
+}
+
 int desugar_dynamic_const_get(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;

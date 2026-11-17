@@ -50550,6 +50550,7 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_TAP_VALUE_WRITE);            /* x = E.tap { } -> x = (x = E).tap { } (--share-strings) */
   AN_STEP_V("desugar_self_const_get", desugar_self_const_get(c));            /* const_get(:X) / self::X in a class method -> per subclass */
   AN_STEP_V("desugar_holder_block_self_const", desugar_holder_block_self_const(c));  /* self.class::X in a Data.define block -> Holder::X */
+  AN_STEP_V("desugar_user_send_others", desugar_user_send_others(c));          /* o.send(n, a) beside a class's own send -> (WS === o) ? o.send(n, a) : o.__send__(n, a) */
   AN_STEP_V("desugar_dynamic_const_get", desugar_dynamic_const_get(c));          /* M.const_get(expr) -> a table of M's constants */
   AN_STEP_V("desugar_builtin_reopen_const_reads", desugar_builtin_reopen_const_reads(c));  /* class Integer; X = 3; def m = X -> Integer::X */
   AN_STEP_V("desugar_builtin_reopen_self_calls", desugar_builtin_reopen_self_calls(c));  /* class Hash; def m = each {..} -> self.each */

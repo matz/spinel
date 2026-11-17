@@ -3,6 +3,7 @@
 #include "share.h"
 #include "call_plan.h"
 #include "implicit_calls.h"
+#include "method_table_check.h"
 #include <errno.h>
 #include <limits.h>
 
@@ -6481,8 +6482,8 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
   if (an_kernel_const_recv(c, id, recv, fresh)) return 1;
   if (recv < 0) return 0;
   int ob = comp_core_class(c, CORE_OBJECT), ke = comp_core_class(c, CORE_KERNEL);
-  if ((ob >= 0 && comp_method_in_chain(c, ob, "`", NULL) >= 0) ||
-      (ke >= 0 && comp_method_in_chain(c, ke, "`", NULL) >= 0) ||
+  if ((ob >= 0 && call_target(c, id, ob, "`", CT_METHODS, NULL) >= 0) ||
+      (ke >= 0 && call_target(c, id, ke, "`", CT_METHODS, NULL) >= 0) ||
       comp_toplevel_mod_defines(c, "`", 0)) return 0;
   int self_recv = nt_kind(nt, recv) == NK_SelfNode;
   if (!self_recv && !nt_ignore_visibility(nt, id)) return 0;
@@ -6493,7 +6494,7 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
   const char *cn = rt == TY_CLASS || ty_is_object(rt) ? NULL : builtin_class_of_type(rt);
   if (!cn) return 0;
   int ci = comp_builtin_class_named(c, cn);
-  return ci < 0 || comp_method_in_chain(c, ci, "`", NULL) < 0;
+  return ci < 0 || call_target(c, id, ci, "`", CT_METHODS, NULL) < 0;
 }
 
 /* The instantiated BasicObject subclasses whose chain has no method `name`
@@ -6503,6 +6504,7 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
 int *an_blank_slates_lacking(Compiler *c, const char *name, int *n) {
   int *out = NULL;
   *n = 0;
+  mtab_enter(c);   /* (the candidate owner of the blank slates that lack name: every class is asked by design, no call's question) */
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].instantiated || !class_is_blank_slate(c, k) || comp_method_in_chain(c, k, name, NULL) >= 0)
       continue;
@@ -6510,6 +6512,7 @@ int *an_blank_slates_lacking(Compiler *c, const char *name, int *n) {
     if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     out[(*n)++] = k;
   }
+  mtab_leave(c);
   return out;
 }
 

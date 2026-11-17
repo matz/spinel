@@ -2761,13 +2761,16 @@ static int a_frame_cells_params(Compiler *c, int q, int is_proc) {
 /* every arm counts: the dispatch makes one proc for all of them, so the resolved method ignoring the block proves nothing */
 static int a_dispatch_arm_takes_block(Compiler *c, int cls, const char *name) {
   if (dispatch_impl_count(c, -1, cls, name) < 2) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
+  int takes = 0;
+  mtab_enter(c);   /* (the candidate owner of the dispatch's arms: every class under cls is asked by design, no call's question) */
+  for (int k = 0; k < c->nclasses && !takes; k++) {
     if (!is_descendant(c, k, cls)) continue;
     int mk = comp_method_in_chain(c, k, name, NULL);
     if (mk < 0 || c->scopes[mk].is_cmethod) continue;
-    if (scope_proc_form_of(c, mk) >= 0 || (c->scopes[mk].blk_param && c->scopes[mk].blk_param[0])) return 1;
+    takes = scope_proc_form_of(c, mk) >= 0 || (c->scopes[mk].blk_param && c->scopes[mk].blk_param[0]);
   }
-  return 0;
+  mtab_leave(c);
+  return takes;
 }
 
 /* Does yield-inlined scope `mi` hand its block on to a method that KEEPS it --
@@ -2905,8 +2908,7 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
     int p = comp_super_parent(c, st->class_id, st->is_cmethod);
     if (p < 0) return 0;
     const char *u = comp_super_name(c, p, st);
-    int tmi = st->is_cmethod ? comp_cmethod_in_chain(c, p, u, NULL)
-                             : comp_method_in_chain(c, p, u, NULL);
+    int tmi = u ? cplan_super_chain_mi(c, id, st, p, u, NULL) : -1;
     return tmi >= 0 && c->scopes[tmi].is_proc_form;
   }
   if (k != NK_CallNode) return 0;
@@ -28357,7 +28359,7 @@ static int an_tail_tap_blind(Compiler *c, int n) {
   TyKind rt = comp_ntype(c, recv);
   if (rt != TY_STRING && rt != TY_STRBUF) return 0;
   int si = comp_core_class(c, CORE_STRING);
-  return si < 0 || comp_method_in_chain(c, si, "tap", NULL) < 0;
+  return si < 0 || call_target(c, n, si, "tap", CT_METHODS, NULL) < 0;
 }
 /* ---- a local a method builds its answer up in (#9258) ----
    `out = +""; ...; out << x; ...; out`: every write of the local is a new
@@ -33032,7 +33034,7 @@ static void dyn_reach_value(Compiler *c, int v, int k, int depth, DynReach *r) {
       "clear", "[]=", "setbyte", "force_encoding", "encode!", NULL };
     size_t sl = sv ? strlen(sv) : 0;
     if (!sv || (sl > 0 && sv[sl - 1] == '!') || dyn_name_in(sv, inplace) ||
-        comp_method_index(c, sv) >= 0)
+        call_target(c, v, -1, sv, CT_TOP, NULL) >= 0)
       r->app = 1;
     return;
   }
@@ -33405,7 +33407,10 @@ static int dyn_site_may_reach(Compiler *c, int n, int mi) {
   /* mi's class is cls or one below it */
   for (int k = m->class_id; k >= 0; k = c->classes[k].parent) if (k == cls) return 1;
   /* or cls inherits mi from a class above it */
-  return comp_method_in_chain(c, cls, m->name, NULL) == mi;
+  mtab_enter(c);   /* (the candidate owner of the scopes of the name: whether cls's chain holds scope mi, one of every scope of the name this survey walks) */
+  int holds = comp_method_in_chain(c, cls, m->name, NULL) == mi;
+  mtab_leave(c);
+  return holds;
 }
 
 /* What parameter j of method mi can be handed: the argument each call
@@ -56385,7 +56390,7 @@ static void an_presence_observe(Compiler *c, int id) {
     /* only where no inspect of the program's sits above: that one runs */
     const Scope *st = s ? comp_super_site(c, s) : NULL;
     int up = own >= 0 ? comp_super_parent(c, st->class_id, 0) : -1;
-    if (own >= 0 && s->name && is_inspect_name(st->name) && (up < 0 || comp_method_in_chain(c, up, st->name, NULL) < 0))
+    if (own >= 0 && s->name && is_inspect_name(st->name) && (up < 0 || call_target(c, id, up, st->name, CT_METHODS | CT_REACH, NULL) < 0))
       an_presence_class(c, id, own, OBS_INSPECT, -1);
     return;
   }
@@ -56520,7 +56525,7 @@ static void an_phase_value_types(Compiler *c) {
           Scope *fs = comp_scope_of(c, id);
           if (fs && fs->class_id >= 0 && !fs->is_cmethod) q = fs->class_id;
         }
-        if (fz_clone && q >= 0 && q < c->nclasses && comp_method_in_chain(c, q, fzn, NULL) >= 0) q = -1;
+        if (fz_clone && q >= 0 && q < c->nclasses && call_target(c, id, q, fzn, CT_METHODS, NULL) >= 0) q = -1;
         /* the receiver (or self) may be an instance of a subclass: a
            freeze in Base#initialize freezes a Child's instance too, so
            Child's ivar stores take the guard as well */

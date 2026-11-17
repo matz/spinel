@@ -2245,7 +2245,7 @@ static void emit_poly_shl_call(Compiler *c, int id, const int *argv, int t, cons
     Buf cb; TyKind mret;
     /* (a reopening's own `<<` is sp_poly_shl's user arm) */
     if (k < 0 || k >= c->nclasses || !c->classes[k].is_native_class || !c->classes[k].instantiated ||
-        comp_method_in_chain(c, k, "<<", NULL) >= 0)
+        call_target(c, id, k, "<<", CT_METHODS, NULL) >= 0)
       continue;
     if (ta < 0) { ta = ++g_tmp; tr = ++g_tmp; }
     if (!poly_native_arm_call(c, k, "<<", 1, argv, &ta, &aty, t, &cb, &mret)) continue;

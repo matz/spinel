@@ -95,6 +95,7 @@ src/analyze_pass.c:sg_override_ret
 src/codegen.c:obj_each_elems_text
 src/analyze.c:an_phase_procs
 src/analyze_desugar.c:send_split_by_owner
+src/analyze_pass.c:bare_call_on_class
 src/analyze_desugar.c:dsend_class_names
 "
 PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain)[[:space:]]*([(]|$)'

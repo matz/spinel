@@ -1020,7 +1020,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       nt_ref(nt, id, "block") < 0) {
     buf_puts(b, "({ ");
     if (argc == 0 && sp_streq(name, "puts")) buf_puts(b, "putchar('\n');\n");
-    if (!emit_output_spilled(c, name, argc, argv, b, 0)) {
+    if (!emit_output_spilled(c, id, name, argc, argv, b, 0)) {
       for (int k = 0; k < argc; k++) {
         if (sp_streq(name, "puts")) emit_puts_one(c, argv[k], b, 0);
         else emit_print_one(c, argv[k], b, 0);

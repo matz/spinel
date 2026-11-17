@@ -11443,12 +11443,14 @@ int std_stream_foreign_writer(Compiler *c, const char *nm) {
   char *set = calloc((size_t)c->nclasses + 1, 1);
   int bounded = set && std_stream_value_classes(c, set);
   int sio = comp_core_class(c, CORE_STRINGIO), hit = 0;
+  mtab_enter(c);   /* (the candidate owner of the classes that write without answering nm: every class is asked by design, no call's question) */
   for (int k = 0; k < c->nclasses && !hit; k++) {
     if (k == sio || (bounded && !set[k])) continue;
     int writes = comp_method_in_chain(c, k, "write", NULL) >= 0;
     if (nm) hit = writes && comp_method_in_chain(c, k, nm, NULL) < 0;
     else hit = bounded || writes || (sio >= 0 && c->classes[k].parent == sio);
   }
+  mtab_leave(c);
   free(set);
   return hit;
 }

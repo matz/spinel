@@ -13194,7 +13194,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && ty_is_object(rt) && argc == 1 &&
       (is_eql_or_equal(name)) &&
       call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0 &&
-      comp_method_in_chain(c, ty_object_class(rt), "eql?", NULL) < 0) {
+      call_target(c, id, ty_object_class(rt), "eql?", CT_METHODS, NULL) < 0) {
     TyKind a0 = comp_ntype(c, argv[0]);
     if (!c->classes[ty_object_class(rt)].is_value_type) {
       emit_identity_equal(c, recv, argv[0], rt, a0, b);

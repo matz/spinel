@@ -6159,8 +6159,13 @@ int cplan_level_answers(Compiler *c, int id, int k, const char *name) {
      level's own body. An entry a mixin copied into the level (a prepend's
      def or reader, an alias an include copied, which has no statement of
      its own) is no source the record models there, and the tables answer. */
-  if (own == ELAB_NO) return (def && c->scopes[mi].is_prepend_copy) || rd_copy || al_copy;
-  return def || rd || al;
+  int ans = own == ELAB_NO ? (def && c->scopes[mi].is_prepend_copy) || rd_copy || al_copy : def || rd || al;
+  /* (the tables' answer is noted, as call_target's are: unasked with no
+     site, where the record cannot tell, or a copy against the record's none) */
+  if (g_method_table_check && (own == ELAB_UNKNOWN || ans))
+    mtab_table(c, id, k, 0, name, id < 0 ? MLW_UNASKED : own == ELAB_NO ? MLW_DISAGREE :
+                                  elab_in_unplaced_block(c, id) ? MLW_UNPLACED : MLW_MANY);
+  return ans;
 }
 /* The builtin class a program class's class side inherits from (Object
    unless it names another), for the singleton methods it answers; NULL where

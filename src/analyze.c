@@ -56806,11 +56806,42 @@ int an_written_call(int id) { return g_an_src_nodes < 0 || id < g_an_src_nodes; 
    call the copy's own body makes. Types only widen, so the rounds end; a
    slot the re-narrow would have narrowed stays wider, which costs speed,
    never an answer. A program with no such call does none of this. */
+/* A call on ENV through an expression that runs code to find it (`def e =
+   ENV`, then `e.fetch("X")`): the ENV arms answer from the environment and
+   do not evaluate their receiver, so the receiver is held in a local first,
+   `(__envr = e; __envr.fetch("X"))`. It runs once, in its place, and the
+   call is one on a variable that holds ENV (env_value_recv). Asked once the
+   receiver's type has settled to TY_ENV. */
+static int desugar_env_call_recv_hold(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const int *par = comp_parent_map(c);
+  int n = 0, cap = 0, *ids = NULL;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    int r = nt_ref(nt, id, "receiver");
+    if (r < 0 || infer_type(c, r) != TY_ENV || env_value_recv(c, r, TY_ENV)) continue;
+    if (!par || par[id] < 0) continue;
+    if (n == cap && !(ids = realloc(ids, sizeof(int) * (size_t)(cap = cap ? 2 * cap : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    ids[n++] = id;
+  }
+  for (int i = 0; i < n; i++) {
+    int id = ids[i], r = nt_ref(nt, id, "receiver"), pre[1], np = 0, at = nt->count;
+    Scope *sc = comp_scope_of(c, id);
+    int rd = sd_hold(c, nt, sc, id, "envr", -1, r, pre, &np);
+    nt_node_set_ref(nt, id, "receiver", rd);
+    nt_replace_child(nt, par[id], id, disp_ahead(nt, pre, np, id));
+    /* (the new nodes are the call's: its scope and its class body) */
+    comp_grow_node_arrays(c);
+    for (int j = at; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id]; }
+  }
+  free(ids);
+  return n > 0;
+}
 int g_enum_late;   /* desugar_builtin_enum_calls runs for an_phase_enum_late */
 static void an_phase_enum_late(Compiler *c) {
   g_enum_late = 1;
   int any = AN_PASS("desugar_poly_to_h_block_late", desugar_poly_to_h_block_late(c));
   any |= AN_PASS("desugar_builtin_enum_calls_late", desugar_builtin_enum_calls(c));
+  any |= AN_PASS("desugar_env_call_recv_hold", desugar_env_call_recv_hold(c));   /* (ahead of the enumeration: the call it holds is then one on a variable) */
   any |= AN_PASS("desugar_env_enum_late", desugar_env_enum(c));   /* a variable holding ENV, its type settled */
   if (!any) { g_enum_late = 0; return; }
   AN_PASS_V("mark_empty_literal_args", mark_empty_literal_args(c));
@@ -56836,7 +56867,10 @@ static void an_phase_enum_late(Compiler *c) {
       if (iter + 1 < rc.cap) continue;
       break;
     }
-    if (!AN_STEP("desugar_builtin_enum_calls", desugar_builtin_enum_calls(c))) break;
+    int more = AN_STEP("desugar_builtin_enum_calls", desugar_builtin_enum_calls(c));
+    /* (and ENV's, on a local a held receiver made, typed now: desugar_env_call_recv_hold) */
+    more |= AN_STEP("desugar_env_enum", desugar_env_enum(c));
+    if (!more) break;
     AN_STEP_V("mark_empty_literal_args", mark_empty_literal_args(c));
   }
   free(rc.seen);

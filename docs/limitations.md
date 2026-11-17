@@ -1151,8 +1151,9 @@ such a merge, is refused.
 reads see the variables set later, writes through it change the process
 environment, and it is `equal?` to ENV. A call on ENV through an
 expression that runs code to find it (a method that answers ENV and
-nothing else, called and used on the spot) is refused: hold the value in a
-variable, or call ENV itself.
+nothing else, called and used on the spot: `def env = ENV`, then
+`env.fetch("X")`) runs that expression once, in its place, and answers as
+on ENV.
 
 Where ENV shares a place with other values, a call on that place reads
 ENV through a String Hash of the environment taken at the call, whose

@@ -16,6 +16,12 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
+# The last five are the program-level dispatchers, each emitted once per program for every class (a switch on the class
+# id): emit_user_coerce_dispatch and emit_obj_succ_dispatch (the numeric hooks), hash_reader_ivar (the key hash of a
+# class whose `hash` is a reader), emit_cls_answers_dispatch (Struct's members and keyword_init?) and
+# emit_exc_text_dispatch_at (the exception text hooks of a builtin exception's reopenings). No call stands behind an
+# arm: the switch is the class's, so its question is the table's with no site, asked for every class of the program,
+# as the others of this list are.
 FUNCS="
 src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
@@ -74,6 +80,11 @@ src/compiler.c:mixin_answers_first
 src/compiler.c:toplevel_mod_method
 src/codegen_call_exception.c:emit_call_exception_arms
 src/compiler.c:comp_poly_arm_reader_any
+src/codegen.c:emit_user_coerce_dispatch
+src/codegen.c:emit_obj_succ_dispatch
+src/codegen.c:hash_reader_ivar
+src/codegen.c:emit_cls_answers_dispatch
+src/codegen.c:emit_exc_text_dispatch_at
 "
 PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain)[[:space:]]*([(]|$)'
 bad=0

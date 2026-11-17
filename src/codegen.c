@@ -5885,7 +5885,7 @@ static int sg_delegate_scope(Compiler *c, Scope *s) {
      chain of them (one per extended module) and each body stands in front of
      the next, which is what makes `super` stack */
   int par = c->classes[sub].parent;
-  int pm = comp_method_in_chain(c, par, s->name, NULL);
+  int pm = call_target(c, s->def_node, par, s->name, CT_REACH, NULL);
   if (pm < 0 || pm >= c->nscopes) return -1;
   Scope *ps = &c->scopes[pm];
   if (ps->nparams != s->nparams) return -1;
@@ -8104,9 +8104,9 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
                  s->class_id, db.p);
       free(db.p);
     }
-    else if (pm < 0 && s->name && (!sg_builtin || !sg_as_obj) && comp_method_in_chain(c, sg_par, s->name, NULL) < 0 &&
-        !comp_reader_in_chain(c, sg_par, s->name, NULL) &&
-        !comp_writer_in_chain(c, sg_par, s->name, NULL)) {
+    else if (pm < 0 && s->name && (!sg_builtin || !sg_as_obj) && call_target(c, s->def_node, sg_par, s->name, CT_REACH, NULL) < 0 &&
+        !call_attr_target(c, s->def_node, sg_par, s->name, CT_ATTR | CT_REACH, NULL) &&
+        !call_attr_target(c, s->def_node, sg_par, s->name, CT_ATTR | CT_WRITER | CT_REACH, NULL)) {
       /* the singleton ADDS a name the parent does not have: before its
          statement runs there is nothing to delegate to, and CRuby answers a
          NoMethodError there (#4084). One every object has answers as Object
@@ -14029,7 +14029,7 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
               "  switch (sp_cls_answers_id(v)) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
-    if (!ci->is_struct || comp_cmethod_in_chain(c, i, "members", NULL) >= 0) continue;
+    if (!ci->is_struct || call_target(c, -1, i, "members", CT_CMETHOD | CT_SHARED, NULL) >= 0) continue;
     buf_printf(b, "    case %d:", i);
     for (int j = 0; j < ci->nmembers; j++)
       buf_printf(b, " sp_PolyArray_push(a, sp_box_sym(sp_sym_intern(\"%s\")));", ci->ivars[j] + 1);
@@ -14041,7 +14041,7 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
               "  switch (sp_cls_answers_id(v)) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
-    if (!ci->is_struct || comp_cmethod_in_chain(c, i, "keyword_init?", NULL) >= 0) continue;
+    if (!ci->is_struct || call_target(c, -1, i, "keyword_init?", CT_CMETHOD | CT_SHARED, NULL) >= 0) continue;
     buf_printf(b, "    case %d: return %s;\n", i,
                ci->kw_init == 1 ? "sp_box_bool(TRUE)" : ci->kw_init == -1 ? "sp_box_bool(FALSE)" : "sp_box_nil()");
   }
@@ -18416,8 +18416,8 @@ static void emit_obj_succ_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "  if (probe == 3) {\n    switch (v.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     if (class_range_linear(c, k) != 2) continue;
-    int defcls = -1;
-    int mi = comp_method_in_chain(c, k, "to_int", &defcls);
+    MethodLookup ml_mi = { .def_class = -1 };
+    int mi = call_target(c, -1, k, "to_int", CT_METHODS | CT_SHARED, &ml_mi), defcls = ml_mi.def_class;
     Scope *m = &c->scopes[mi];
     int has_blk = m->blk_param && m->blk_param[0];
     char call[256];
@@ -18434,8 +18434,8 @@ static void emit_obj_succ_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_succ_dispatched(c, k)) continue;
-    int defcls = -1;
-    int mi = comp_method_in_chain(c, k, "succ", &defcls);
+    MethodLookup ml_mi = { .def_class = -1 };
+    int mi = call_target(c, -1, k, "succ", CT_METHODS | CT_SHARED, &ml_mi), defcls = ml_mi.def_class;
     Scope *m = &c->scopes[mi];
     const char *dcn = c->classes[defcls].c_name;
     int has_blk = m->blk_param && m->blk_param[0];
@@ -18495,8 +18495,8 @@ static void emit_user_coerce_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "  *handled = FALSE;\n  sp_PolyArray *_pr = NULL;\n  switch (obj.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].instantiated || !class_coerce_emittable(c, k)) continue;
-    int defcls = -1;
-    int mi = comp_method_in_chain(c, k, "coerce", &defcls);
+    MethodLookup ml_mi = { .def_class = -1 };
+    int mi = call_target(c, -1, k, "coerce", CT_METHODS | CT_SHARED, &ml_mi), defcls = ml_mi.def_class;
     if (mi < 0) continue;
     Scope *m = &c->scopes[mi];
     TyKind pt = scope_param_type(m, 0);
@@ -18551,8 +18551,10 @@ static void emit_user_coerce_dispatch(Compiler *c, Buf *b) {
    class holding the attr; -1 when hash is no reader, or one whose ivar is
    neither an Integer nor boxed. */
 static int hash_reader_ivar(Compiler *c, int k, int *rdcls) {
-  int d = -1;
-  if (comp_method_in_chain(c, k, "hash", NULL) >= 0 || !comp_reader_in_chain(c, k, "hash", &d) || d < 0) return -1;
+  MethodLookup rl = { .def_class = -1 };
+  if (call_target(c, -1, k, "hash", CT_METHODS | CT_SHARED, NULL) >= 0 || !call_attr_target(c, -1, k, "hash", CT_ATTR | CT_SHARED, &rl)) return -1;
+  int d = rl.def_class;
+  if (d < 0) return -1;
   const char *rn = comp_resolve_alias(c, k, "hash");
   char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", rn);
   int ivx = comp_ivar_index(&c->classes[d], ivn);
@@ -23753,7 +23755,7 @@ static void emit_exc_text_dispatch_at(Compiler *c, Buf *b, int mode, int *late) 
         int xr0[8], xr[8], xn = 0;
         int xn0 = exc_reopen_definers(c, fn, xr0, 8);
         for (int q = 0; q < xn0; q++) {
-          int mi = comp_method_in_chain(c, xr0[q], fn, NULL);
+          int mi = call_target(c, -1, xr0[q], fn, CT_METHODS | CT_SHARED, NULL);
           /* (one reachability kept, as exc_text_method's) */
           if (c->scopes[mi].reachable && (TyKind)c->scopes[mi].ret == TY_STRING) xr[xn++] = xr0[q];
         }
@@ -23763,7 +23765,7 @@ static void emit_exc_text_dispatch_at(Compiler *c, Buf *b, int mode, int *late) 
         buf_puts(b, "\n");
         for (int q = 0; q < xn; q++) {
           Buf call = {0};
-          int xm = comp_method_in_chain(c, xr[q], fn, NULL);
+          int xm = call_target(c, -1, xr[q], fn, CT_METHODS | CT_SHARED, NULL);
           buf_printf(&call, "%s(e)", mc_method(c, &c->scopes[xm]));
           buf_printf(b, "    if (_xi%d == %d) ", pk, q);
           emit_exc_text_return(c, xm, call.p, mode, b);

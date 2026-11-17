@@ -1222,7 +1222,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;   /* a class body's self */
   if (sci >= 0 || bci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     int ci = sci >= 0 ? sci : bci >= 0 ? bci : const_node_class_index(c, recv);
-    int mi = ci < 0 ? -1 : cplan_cmethod_target(c, id, ci, name);
+    int mi = ci < 0 ? -1 : cplan_cmethod_target(c, id, ci, name, 0);
     /* a package's native_func, which the constant calls in C directly; its
        def is for the module reached as a value */
     if (sci < 0 && comp_scope_native_twin(c, mi)) return;
@@ -3042,6 +3042,9 @@ int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLooku
   int undef = tm >= 0 && id >= 0 && comp_is_undeffed_in_chain(c, ci, name);
   mtab_leave(c);
   *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = dc };
+  /* (a siteless ask, which every reader of a class's constructions makes with id -1, answers the table's method:
+     for a name with versions that is an unasked table line, as call_target's no-site ask reports one) */
+  if (g_method_table_check && id < 0 && tm >= 0 && ct_versioned(c, tm, name)) mtab_table(c, id, ci, 0, name, MLW_UNASKED);
   if (tm < 0 || id < 0 || undef) return tm;
   /* (one version on the chain: the table's, the only one a site meets
      where there is one) */
@@ -3093,6 +3096,12 @@ int cplan_raise_initialize(Compiler *c, int id) {
   int val, xc = ct_raise_class(c, id, &val);
   return xc >= 0 ? cplan_hook_target(c, id, xc, "initialize", NULL) : -1;
 }
+/* See call_plan.h. */
+int cplan_raise_class_value(Compiler *c, int id) {
+  int val;
+  ct_raise_class(c, id, &val);
+  return val;
+}
 /* See call_plan.h. A class not opened yet at the last statement of the
    site's window (elab_class_live_at) is opened at none of them. */
 int cplan_new_arm_initialize(Compiler *c, int id, int ci) {
@@ -3135,7 +3144,10 @@ static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodL
    every one where the record cannot tell them apart. How many; *whole as
    cplan_new_initializers says. */
 static int new_inits_list(Compiler *c, int ci, int *out, int *whole) {
-  int tm = comp_method_in_chain(c, ci, "initialize", NULL), n = 0, dc;
+  int n = 0, dc;
+  mtab_enter(c);   /* (the plan's own read: the table's method, which the versions of its history then refine) */
+  int tm = comp_method_in_chain(c, ci, "initialize", NULL);
+  mtab_leave(c);
   *whole = 1;
   if (tm < 0) return 0;
   out[n++] = tm;
@@ -4047,6 +4059,17 @@ int cplan_entry_finds(const Compiler *c, int e) {
     if (c->ver_entries[i].scope == e) return c->ver_entries[i].finds;
   return -1;
 }
+/* The class method t of the program's that a call id of the builtin's own name (`new`, `allocate`) on class ci
+   finds, where the record proves the call runs before t is made: the builtin runs, -1. That holds for one a
+   superclass defines as well (the record's chain answers it where the call runs). Not one no def makes
+   (define_singleton_method), which the record does not see. */
+static int ct_cmethod_made_at(Compiler *c, int id, int ci, const char *nm, int t) {
+  int dn = c->scopes[t].def_node;
+  if (nt_kind(c->nt, dn) != NK_DefNode || elab_point_of(c, dn).region < 0) return t;
+  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1);
+  if (framed) elab_plan_leave(c);
+  return at == ELAB_NO ? -1 : t;
+}
 /* The program's `new` a call reaches on class ci (cplan_user_new): the one
    call_target finds, and on a record class also in *unplaced whether the
    record can tell neither that version nor the builtin constructor there:
@@ -4062,17 +4085,8 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   int t = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   if (t < 0 || c->scopes[t].entry != ENTRY_NONE) return t;
   /* Any other class: the builtin constructor where the record proves the
-     call runs before the class's own `def self.new` is made. Not one a
-     superclass defines (the class then has no constructor of its own to
-     call), nor one no def makes (define_singleton_method), which the
-     record does not see. */
-  if (!c->classes[ci].is_struct) {
-    int dn = c->scopes[t].def_node;
-    if (c->scopes[t].class_id != ci || nt_kind(c->nt, dn) != NK_DefNode || elab_point_of(c, dn).region < 0) return t;
-    int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1);
-    if (framed) elab_plan_leave(c);
-    return at == ELAB_NO ? -1 : t;
-  }
+     call runs before the `def self.new` it finds is made (ct_cmethod_made_at) */
+  if (!c->classes[ci].is_struct) return ct_cmethod_made_at(c, id, ci, nm, t);
   int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1), absent = at == ELAB_NO;
   /* (a call in a method or a block: the def in force over its window, or
      none over all of it) */
@@ -4084,10 +4098,69 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   return made ? t : -1;
 }
 /* See call_plan.h. */
-int cplan_user_new(Compiler *c, int id, int ci) { return user_new_at(c, id, ci, NULL); }
+int cplan_user_new(Compiler *c, int id, int ci) {
+  return id < 0 ? call_target(c, -1, ci, "new", CT_CMETHOD, NULL) : user_new_at(c, id, ci, NULL);
+}
 /* See call_plan.h. */
-int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name) {
-  return is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
+int cplan_aref_builds(Compiler *c, int id, int ci) {
+  const ClassInfo *k = &c->classes[ci];
+  return k->is_struct && !is_builtin_reopen(k->name) && !k->is_native_class && call_target(c, id, ci, "[]", CT_CMETHOD, NULL) < 0;
+}
+/* See call_plan.h. Does call `call` (-1: any) of `allocate` on class or module ci reach a
+   class method `allocate` of the program's own: on ci, its singleton
+   class, a parent or a module it extends? Not a call the analysis made
+   for Class#new's allocation (cnew_alloc: CRuby's new does not call
+   allocate), and not one whose method calls a super that reaches neither
+   Class#allocate (allocate_super_reaches_class: not one with arguments,
+   in an Exception class, ...) nor a parent's own allocate that answers:
+   that super has no target here, so such a call keeps Class#allocate as
+   before. */
+int cplan_own_allocate(Compiler *c, int call, int ci) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (ci < 0 || ci >= c->nclasses) return 0;
+  if (call >= 0 && nt_int(nt, call, "cnew_alloc", 0)) return 0;
+  int mi = call_target(c, call, ci, "allocate", CT_CMETHOD, NULL);
+  if (mi >= 0 && call >= 0) mi = ct_cmethod_made_at(c, call, ci, "allocate", mi);
+  int d = mi >= 0 ? c->scopes[mi].def_node : -1;
+  if (mi < 0) return 0;
+  if (d < 0) return 1;
+  /* a super that reaches a parent's own allocate has that target, when
+     that method itself answers (its own supers checked the same way) */
+  int pc = c->scopes[mi].class_id >= 0 ? comp_super_parent(c, c->scopes[mi].class_id, 1) : -1;
+  int parent_own = pc >= 0 && cplan_own_allocate(c, call, pc);
+  int n = 0, sup = 0, *ids = nt_subtree_ids(nt, &d, 1, &n);
+  for (int i = 0; i < n && !sup; i++)
+    sup = (nt_kind(nt, ids[i]) == NK_SuperNode || nt_kind(nt, ids[i]) == NK_ForwardingSuperNode) &&
+          !allocate_super_reaches_class(c, ids[i]) && !parent_own;
+  free(ids);
+  return !sup;
+}
+/* `<class value>.allocate` where the class value is no written-out constant
+   (`x.class.allocate`, a local holding a class): a call the generated
+   sp_cls_allocate answers, as it does a boxed class value, and whose value is
+   boxed. A constant has its own static arm; a `self` receiver and a program
+   that gives some class a class method `allocate` of its own keep the paths
+   they had (that method is the user dispatch's). One rule for the analyzer's
+   type of the call, the emitter, and the pass that asks for the sp_cls_*
+   answers (g_gen_cls_answers). */
+int cplan_class_value_allocate(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || !name || !is_allocate_name(name) || nt_ref(nt, id, "arguments") >= 0 ||
+      nt_ref(nt, id, "block") >= 0 || comp_ntype(c, recv) != TY_CLASS)
+    return 0;
+  NodeKind rk = nt_kind(nt, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode || rk == NK_SelfNode) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (call_target(c, -1, k, "allocate", CT_CMETHOD, NULL) >= 0) return 0;
+  return 1;
+}
+/* See call_plan.h. */
+int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name, unsigned flags) {
+  if (!is_new_name(name)) return call_target(c, id, ci, name, CT_CMETHOD | flags, NULL);
+  return (flags & CT_OWN) && call_target(c, -1, ci, name, CT_CMETHOD | CT_OWN, NULL) < 0 ? -1 : cplan_user_new(c, id, ci);
 }
 /* Is call id a `new` (or a record class's `[]`) on a record class whose
    target the record cannot place (user_new_at)? The class is the
@@ -5826,7 +5899,7 @@ const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *c
   const char *a;
   for (int i = 0; cop && (a = builtin_ancestor_at(cls, i)); i++) {
     int ci = comp_class_index(c, a);
-    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return NULL;
+    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name, 0) >= 0) return NULL;
     if (sp_streq(a, cop->cls)) break;
   }
   return cop;

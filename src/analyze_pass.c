@@ -2005,7 +2005,7 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
     /* a Struct member of a Struct with no initialize of its own is set by
        the constructor's arguments, which struct_new_types_members_at widens
        with it or, where they cannot widen, keeps the member boxed */
-    int member = ci->is_struct && iv >= 0 && iv < ci->nmembers && comp_method_in_chain(c, dc, "initialize", NULL) < 0;
+    int member = ci->is_struct && iv >= 0 && iv < ci->nmembers && cplan_hook_target(c, -1, dc, "initialize", NULL) < 0;
     if (iv < 0 || class_ivar_pinned(ci, ivn) || ci->ivar_int_table[iv] ||
         reader_ivar_set_outside(c, dc, ivn) || (!member && !ivar_writes_fresh(c, dc, ivn, 0, NULL))) return 0;
     out->slot = &ci->ivar_types[iv]; out->cid = dc; out->iv = iv; out->reader = 1;
@@ -11319,7 +11319,7 @@ static int struct_with_super_types_members(Compiler *c) {
     if (!s || !s->name || !sp_streq(s->name, "with") || s->is_cmethod || s->class_id < 0) continue;
     ClassInfo *cls = &c->classes[s->class_id];
     if (!cls->is_struct || !cls->is_data ||
-        (cls->parent >= 0 && comp_method_in_chain(c, cls->parent, "with", NULL) >= 0)) continue;
+        (cls->parent >= 0 && call_target(c, -1, cls->parent, "with", CT_METHODS, NULL) >= 0)) continue;
     if (pass) {
       for (int j = 0; j < s->nparams; j++) {
         const char *pn = s->pnames[j];
@@ -12466,7 +12466,9 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (!static_cls && infer_type(c, recv) == TY_CLASS) {
         int bound_any = 0;
         for (int k = 0; k < c->nclasses; k++) {
-          int cmi = call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL);
+          /* (a class the call cannot reach binds nothing) */
+          int cmi = is_new_name(name) && (cls_fact_excludes_class_value(c, recv, k) || !dynamic_new_may_reach(c, id, k)) ? -1
+                  : cplan_cmethod_target(c, id, k, name, CT_OWN);
           if (cmi >= 0) { changed |= bind_call_params(c, id, cmi); bound_any = 1; }
         }
         if (bound_any) continue;
@@ -12491,7 +12493,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         int cpath_struct = ci >= 0 && sp_streq(name, "new") && c->classes[ci].is_struct;
         if (cpath_struct) { /* handled below, with the short-name spelling */ }
         else if (ci >= 0 && sp_streq(name, "new")) {
-          int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
+          int ucnew = cplan_user_new(c, id, ci);
           if (ucnew >= 0)
             changed |= bind_call_params(c, id, ucnew);
           else
@@ -12523,7 +12525,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
             continue;
           }
           if (sp_streq(name, "new")) {
-            int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
+            int ucnew = cplan_user_new(c, id, ci);
             if (ucnew >= 0)
               changed |= bind_call_params(c, id, ucnew);
             else
@@ -12574,7 +12576,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     /* obj.method -> instance method params */
     TyKind rt = infer_type(c, recv);
     if (name && sp_streq(name, "with") && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
-        comp_method_in_chain(c, ty_object_class(rt), "with", NULL) < 0) {
+        call_target(c, -1, ty_object_class(rt), "with", CT_METHODS, NULL) < 0) {
       int wci = ty_object_class(rt);
       int wimi = cplan_hook_target(c, -1, wci, "initialize", NULL);
       changed |= wimi >= 0 ? struct_with_binds_initialize(c, id, wci, wimi)
@@ -12592,7 +12594,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         int k = ks ? ks[q] : q;
         if (k < 0 || k >= c->nclasses || !c->classes[k].is_data ||
             cplan_hook_target(c, -1, k, "initialize", NULL) >= 0 ||
-            comp_method_in_chain(c, k, "with", NULL) >= 0) continue;
+            call_target(c, -1, k, "with", CT_METHODS, NULL) >= 0) continue;
         changed |= struct_with_types_members(c, id, k);
       }
     }
@@ -17453,8 +17455,9 @@ static int new_block_initialize(Compiler *c, int id, int *several) {
   for (int e = 0; e < n; e++) {
     int k = cls >= 0 ? (e == 0 ? cls : ds[e - 1]) : e;
     if (cls < 0 && !dynamic_new_may_reach(c, id, k)) continue;
-    if (comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
-    int mi = comp_method_in_chain(c, k, "initialize", NULL);
+    /* (`self.new` in a class method builds the class or one below it: no one point, the table's) */
+    if (cplan_user_new(c, cls >= 0 ? -1 : id, k) >= 0) continue;
+    int mi = cls >= 0 ? cplan_hook_target(c, -1, k, "initialize", NULL) : cplan_new_arm_initialize(c, id, k);
     if (mi < 0 || c->scopes[mi].is_cmethod || mi == found) continue;
     Scope *m = &c->scopes[mi];
     if (!m->yields && !(m->blk_param && m->blk_param[0]) && forwarding_yield_target(c, mi, 0) < 0)
@@ -21260,9 +21263,12 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
       cr_add_name(out, n, cap, mark);
     }
     /* a `new` on a class value: the arm of each class it may reach runs the
-       initialize the plan answers it (cplan_new_arm_initialize) */
-    for (int k = 0; ni == CPT_UNKNOWN && k < c->nclasses; k++) {
-      int mi = cplan_as_new(c, id, k) && dynamic_new_may_reach(c, id, k) ? cplan_new_arm_initialize(c, id, k) : -1;
+       initialize the plan answers it (cplan_new_arm_initialize), as does the
+       arm of each exception class of a `raise` of a class value */
+    int rv = ni == 0 && cplan_raise_class_value(c, id);
+    for (int k = 0; (ni == CPT_UNKNOWN || rv) && k < c->nclasses; k++) {
+      int mi = rv ? (class_is_exc_subclass(c, k) ? cplan_new_arm_initialize(c, id, k) : -1)
+                  : cplan_as_new(c, id, k) && dynamic_new_may_reach(c, id, k) ? cplan_new_arm_initialize(c, id, k) : -1;
       char mark[24];
       if (mi < 0 || !is_initialize_name(c->scopes[mi].name)) continue;
       snprintf(mark, sizeof mark, "\x01%d", mi);

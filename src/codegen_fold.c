@@ -9204,7 +9204,7 @@ static int kw_splat_operand_nilable(Compiler *c, int node, TyKind t) {
       if (cn && sp_streq(cn, "new") && rcv >= 0 &&
           (nt_kind(c->nt, rcv) == NK_ConstantReadNode || nt_kind(c->nt, rcv) == NK_ConstantPathNode)) {
         int ci = const_node_class_index(c, rcv);
-        if (ci >= 0 && comp_cmethod_in_chain(c, ci, "new", NULL) < 0) return 0;
+        if (ci >= 0 && cplan_user_new(c, node, ci) < 0) return 0;
       }
       break;
     }
@@ -12735,8 +12735,14 @@ else {
 else {
         framed = emit_rest_pack_kwh(c, i, rest_end, argv, L.rest_kwh, &rb);
       }
-      if (framed) buf_puts(out, rb.p ? rb.p : "sp_PolyArray_new()");
-      else emit_rest_held(0, rb.p, out);
+      /* (a rest parameter whose slot is boxed takes the array boxed, as the gathered one does) */
+      LocalVar *rp = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
+      int boxed = rp && rp->type == TY_POLY;
+      Buf bb; memset(&bb, 0, sizeof bb);
+      if (boxed) emit_boxed_text(c, TY_POLY_ARRAY, rb.p ? rb.p : "sp_PolyArray_new()", &bb);
+      if (framed) buf_puts(out, bb.p ? bb.p : rb.p ? rb.p : "sp_PolyArray_new()");
+      else emit_rest_held(boxed, bb.p ? bb.p : rb.p, out);
+      free(bb.p);
       free(rb.p);
     }
 else if (L.from[i] == ARG_ELEM)

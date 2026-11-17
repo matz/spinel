@@ -13234,8 +13234,8 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     unit_begin_in(b, nt_, class_unit_group(c, (int)(ci - c->classes), ci->def_node, grp, sizeof grp)); }
   int cid = (int)(ci - c->classes);
   if (ci->is_struct) {
-    int sinit_def = cid;
-    int sinit = comp_method_in_chain(c, cid, "initialize", &sinit_def);
+    MethodLookup sml = { .def_class = -1 };
+    int sinit = cplan_hook_target(c, -1, cid, "initialize", &sml), sinit_def = sinit >= 0 && sml.def_class >= 0 ? sml.def_class : cid;
     if (struct_ctor_runs_init(c, cid)) {
       /* Custom `initialize` override (a `Struct.new(...) do def initialize ...
          super(...) end end` block, e.g. doom's Visplane): the constructor
@@ -13304,7 +13304,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     /* Struct/Data #inspect: the default representation, generated unless the
        user redefined the method, so a user override wins. */
     /* the same ownership for a member named inspect (#4190) */
-    if (comp_method_in_chain(c, cid, "inspect", NULL) < 0) {
+    if (call_target(c, -1, cid, "inspect", CT_METHODS, NULL) < 0) {
       /* (one-String mode: the member is the handle, answered as its bytes face) */
       if (struct_member_owns(c, cid, "inspect"))
         buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self) { return SP_STR_B(self->iv_inspect); }\n",
@@ -13312,7 +13312,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
       else
         emit_struct_default_inspect(c, ci, cid, "inspect", b);
     }
-    if (comp_method_in_chain(c, cid, "to_s", NULL) < 0) {
+    if (call_target(c, -1, cid, "to_s", CT_METHODS, NULL) < 0) {
       /* A MEMBER named to_s owns the name, as any generated reader does in
          CRuby: `Data.define(:to_s)` answers the member, not the default
          representation (struct_member_owns). */
@@ -13338,8 +13338,8 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     if (class_pooled(c, cid) && !comp_class_is_module(c, ci)) buf_printf(b, "SP_POOL_DEFINE(%s)\n", ci->c_name);
     return;
   }
-  int initcls = cid;
-  int init = comp_method_in_chain(c, cid, "initialize", &initcls);
+  MethodLookup iml = { .def_class = -1 };
+  int init = cplan_hook_target(c, -1, cid, "initialize", &iml), initcls = init >= 0 && iml.def_class >= 0 ? iml.def_class : cid;
   /* An explicit `&blk` block parameter on a non-yielding initialize is a real
      sp_Proc* the constructor must accept and forward (a yielding initialize is
      inlined at the call site instead, see emit_ctor_yield_inline). */
@@ -14515,7 +14515,7 @@ static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
     /* A custom `initialize` gives sp_X_new the init's own param signature (not
        one-per-member), and #with must not re-run it -- skip; poly #with on such
        a Data falls through to NoMethodError (rare). */
-    int scust = comp_method_in_chain(c, i, "initialize", NULL);
+    int scust = cplan_hook_target(c, -1, i, "initialize", NULL);
     if (scust >= 0 && c->scopes[scust].reachable) continue;
     int idx = i;
     buf_printf(b, "    case %d: {\n", idx);
@@ -18070,8 +18070,10 @@ static void emit_user_aset_dispatch(Compiler *c, Buf *b) {
 
 static int g_has_user_init_copy = 0;
 static int user_init_copy_scope(Compiler *c, int k, int *defcls) {
-  int mi = c->classes[k].instantiated ? comp_method_in_chain(c, k, "initialize_copy", defcls) : -1;
+  MethodLookup ml = { .def_class = -1 };
+  int mi = c->classes[k].instantiated ? cplan_hook_target(c, -1, k, "initialize_copy", &ml) : -1;
   if (mi < 0) return -1;
+  *defcls = ml.def_class;
   Scope *m = &c->scopes[mi];
   LocalVar *p = m->nparams == 1 && m->rest_idx < 0 ? scope_local(m, m->pnames[0]) : NULL;
   if (!p || !(ty_is_object(p->type) || p->type == TY_POLY) || !m->reachable || m->yields ||
@@ -20519,7 +20521,7 @@ static void scan_prologue_features(Compiler *c) {
         (nt_kind(c->nt, nrv) != NK_ConstantReadNode ||
          const_node_class_index(c, nrv) < 0)) { g_gen_cls_answers = 1; break; }
     /* and #allocate on one (`x.class.allocate`) */
-    if (comp_class_value_allocate(c, nid)) { g_gen_cls_answers = 1; break; }
+    if (cplan_class_value_allocate(c, nid)) { g_gen_cls_answers = 1; break; }
     if (nrv < 0 || (repr_of(c, nrv).kind != RK_BOXED && comp_ntype(c, nrv) != TY_UNKNOWN)) continue;
     if (nnm && (sp_streq(nnm, "subclasses") || sp_streq(nnm, "allocate") ||
                 sp_streq(nnm, "members") || sp_streq(nnm, "keyword_init?")))
@@ -20530,7 +20532,7 @@ static void scan_prologue_features(Compiler *c) {
   g_gen_obj_with = 0;
   for (int i = 0; i < c->nclasses; i++) {
     if (!c->classes[i].is_data || !c->classes[i].instantiated) continue;
-    int sc = comp_method_in_chain(c, i, "initialize", NULL);
+    int sc = cplan_hook_target(c, -1, i, "initialize", NULL);
     if (sc >= 0 && c->scopes[sc].reachable) continue;
     g_gen_obj_with = 1; break;
   }
@@ -23882,7 +23884,7 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
     for (int i = 0; i < c->nclasses; i++) {
       if (!class_is_exc_reopen(c, i)) continue;
       for (int k = 0; k < 2; k++) {
-        int mi = comp_method_in_chain(c, i, k ? "to_s" : "message", NULL);
+        int mi = call_target(c, -1, i, k ? "to_s" : "message", CT_METHODS, NULL);
         if (mi < 0 || c->scopes[mi].class_id != i) continue;
         TyKind mr = (TyKind)c->scopes[mi].ret;
         if (mr != TY_STRING && mr != TY_UNKNOWN)
@@ -24657,7 +24659,7 @@ char *codegen_program(const NodeTable *nt) {
     if (ci->is_struct) {
       /* struct constructor takes typed member params -- the prototype must
          match the definition (an empty () prototype + a _Bool param differ) */
-      int scust = comp_method_in_chain(c, i, "initialize", NULL);
+      int scust = cplan_hook_target(c, -1, i, "initialize", NULL);
       /* a custom initialize -- yielding or not -- gives sp_X_new the init's own
          param signature (a yielding one is run inlined; see emit_class_new). */
       int has_custom = scust >= 0 && c->scopes[scust].reachable;
@@ -24683,8 +24685,7 @@ char *codegen_program(const NodeTable *nt) {
       emit_struct_display_decls(c, i, &b);
     }
     else if (class_has_ctor(ci)) {
-      int icid = i;
-      int init = comp_method_in_chain(c, i, "initialize", &icid);
+      int init = cplan_hook_target(c, -1, i, "initialize", NULL);
       const char *star = ci->is_value_type ? "" : "*";
       int p_has_blk = init >= 0 && c->scopes[init].blk_param &&
                       c->scopes[init].blk_param[0] && !c->scopes[init].yields;

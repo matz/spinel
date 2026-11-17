@@ -2512,7 +2512,7 @@ static int a_block_call_target(Compiler *c, int id, int roots, int *cls, int *cl
     Scope *self = comp_scope_of(c, id);
     if (self && self->class_id >= 0 && !self->is_cmethod) *cls = self->class_id;
     if (mi < 0 && self && self->class_id >= 0 && self->is_cmethod && is_new_name(name))
-      mi = comp_method_in_chain(c, self->class_id, "initialize", NULL);
+      mi = cplan_hook_target(c, -1, self->class_id, "initialize", NULL);
     return mi;
   }
   NodeKind rk = nt_kind(nt, recv);
@@ -2523,9 +2523,9 @@ static int a_block_call_target(Compiler *c, int id, int roots, int *cls, int *cl
     if (mi < 0 && is_new_name(name)) mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   }
   else if (rk == NK_SelfNode && is_new_name(name) && cs && cs->is_cmethod && cs->class_id >= 0 &&
-           comp_cmethod_in_chain(c, cs->class_id, "new", NULL) < 0) {
+           cplan_user_new(c, -1, cs->class_id) < 0) {
     ci = cs->class_id;
-    mi = comp_method_in_chain(c, ci, "initialize", NULL);
+    mi = cplan_hook_target(c, -1, ci, "initialize", NULL);
   }
   else {
     TyKind rt = infer_type(c, recv);
@@ -5249,7 +5249,7 @@ static int ie_new_takes_block(Compiler *c, int id, int recv) {
   NodeKind rk = nt_kind(nt, recv);
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? const_node_class_index(c, recv) : -1;
   if (ci < 0) return -1;
-  int mi = comp_cmethod_in_chain(c, ci, "new", NULL);
+  int mi = cplan_user_new(c, id, ci);
   if (mi < 0) mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   return mi >= 0 && c->scopes[mi].blk_param;
 }
@@ -9882,11 +9882,12 @@ static void desugar_data_positional_new(Compiler *c) {
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
     int ci = const_node_class_index(c, recv);
-    mtab_push_in(c, id);   /* (the initialize the call runs) */
-    if (ci < 0 || comp_method_in_chain(c, ci, "initialize", NULL) < 0) continue;
+    if (ci < 0) continue;
     int dc = ci;
     for (int g = 0; dc >= 0 && !c->classes[dc].is_data && g < 64; g++) dc = c->classes[dc].parent;
     if (dc < 0 || !c->classes[dc].is_data) continue;
+    mtab_push_in(c, id);   /* (the initialize the call runs, where it runs) */
+    if (cplan_hook_target(c, id, ci, "initialize", NULL) < 0) continue;
     ClassInfo *dcls = &c->classes[dc];
     int args = nt_ref(nt, id, "arguments");
     int an = 0;
@@ -13711,7 +13712,7 @@ static int desugar_class_literal_ctors(Compiler *c) {
     if (nt_argv_has_splat(nt, argv, argc)) continue;
     int ci = const_node_class_index(c, recv);
     if (sp_streq(rn, "Array") && sp_streq(mn, "[]")) {
-      if (ci >= 0 && comp_cmethod_in_chain(c, ci, "[]", NULL) >= 0) continue;
+      if (ci >= 0 && call_target(c, id, ci, "[]", CT_CMETHOD, NULL) >= 0) continue;
       int els[64];
       if (argc > (int)(sizeof els / sizeof els[0])) continue;
       for (int k = 0; k < argc; k++) els[k] = argv[k];
@@ -13721,7 +13722,7 @@ static int desugar_class_literal_ctors(Compiler *c) {
     else if (sp_streq(rn, "Range") && sp_streq(mn, "new") && argc != 2 && argc != 3) {
       /* any other count: the arguments, then CRuby's ArgumentError. A
          keyword hash may come out empty, so its count is the run time's. */
-      if (ci >= 0 && comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+      if (ci >= 0 && cplan_user_new(c, id, ci) >= 0) continue;
       if (argc > 15 || nt_argv_has(nt, argv, argc, NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
       int body[16];
       for (int k = 0; k < argc; k++) body[k] = argv[k];
@@ -13760,7 +13761,7 @@ static int desugar_class_literal_ctors(Compiler *c) {
       }
     }
     else if (sp_streq(rn, "Range") && sp_streq(mn, "new")) {
-      if (ci >= 0 && comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+      if (ci >= 0 && cplan_user_new(c, id, ci) >= 0) continue;
       /* the exclusive flag is part of the literal's shape, so it has to be
          readable here */
       int excl = 0;
@@ -23502,7 +23503,7 @@ static int scope_seeds_ivar(Compiler *c, int mi, const char *ivname) {
    a version that does not leaves it nil too. */
 static int ctor_writes_ivar(Compiler *c, int ci, const char *ivname) {
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
-    int mi = comp_method_in_class(c, k, "initialize");
+    int mi = call_target(c, -1, k, "initialize", CT_OWN, NULL);
     if (mi < 0 || c->scopes[mi].def_node < 0) continue;
     int ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, k, ms, VER_MAX_ARMS, &whole), all = n > 0 && whole;
     for (int i = 0; i < n && all; i++) all = c->scopes[ms[i]].def_node >= 0 && scope_seeds_ivar(c, ms[i], ivname);
@@ -29789,7 +29790,7 @@ static int an_class_dynamic_new_risk(Compiler *c, int cid) {
         /* the initialize `new` runs: an inherited one for a class with none
            of its own, as an_call_targets_of ties it (a subclass passed
            MyFragment.new(h) beside an unpinnable Base::Fragment.new(doc)) */
-        int mi = comp_method_in_chain(c, ci, "initialize", NULL);
+        int mi = cplan_hook_target(c, -1, ci, "initialize", NULL);
         if (mi < 0) continue;        /* no initialize: no parameter to protect */
         int pn = (mi < c->nscopes && c->scopes[mi].def_node >= 0)
                      ? nt_ref(nt, c->scopes[mi].def_node, "parameters") : -1;
@@ -30241,7 +30242,7 @@ static int param_borrow_builtin_new(Compiler *c, int n) {
   const char *cn = key_name(c, recv);
   if (!cn || (!sp_streq(cn, "Array") && !sp_streq(cn, "Hash"))) return 0;
   int cid = comp_builtin_class_named(c, cn);
-  return cid < 0 || comp_method_in_class(c, cid, "initialize") < 0;
+  return cid < 0 || call_target(c, -1, cid, "initialize", CT_OWN, NULL) < 0;
 }
 
 /* The user methods call n reaches (its plan's method and, for a switch,
@@ -33614,7 +33615,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
   if (any) {
     for (int k = 0; k < c->nclasses && n < cap; k++) {
       if (any == 2 ? !cplan_as_new(c, u, k) || !dynamic_new_may_reach(c, u, k) : !class_is_exc_subclass(c, k)) continue;
-      int mi = comp_method_in_chain(c, k, "initialize", NULL);
+      int mi = cplan_new_arm_initialize(c, u, k);
       if (mi < 0 || c->scopes[mi].is_cmethod) continue;
       int dup = 0;
       for (int e = 0; e < n && !dup; e++) dup = out[e] == mi;
@@ -33625,7 +33626,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
   int nd = 0; const int *ds = sub ? comp_descendants(c, cls, &nd) : NULL;
   for (int d = -1; d < nd && n < cap; d++) {
     int k = d < 0 ? cls : ds[d];
-    if (comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
+    if (cplan_user_new(c, sub ? -1 : u, k) >= 0) continue;
     /* (a `new` in a class method builds self, which may be a subclass: the
        constructor's switch, whose arms run the table's) */
     int mi = cplan_hook_target(c, sub ? -1 : u, k, "initialize", NULL);
@@ -33727,7 +33728,7 @@ static int ctor_pull_args(Compiler *c) {
       int nd = 0; const int *ds = comp_descendants(c, s->class_id, &nd);
       for (int d = -1; d < nd; d++) {
         int k = d < 0 ? s->class_id : ds[d];
-        int mi = comp_method_in_chain(c, k, "initialize", NULL);
+        int mi = cplan_hook_target(c, -1, k, "initialize", NULL);
         if (mi < 0) continue;
         Scope *m = &c->scopes[mi];
         for (int j = 0; j < m->nparams && j < DYN_ARGS; j++) {
@@ -35276,7 +35277,7 @@ static int fwd_call_target(Compiler *c, int u) {
     Scope *es = comp_scope_of(c, u);
     /* `new` in a class method builds the class */
     if (sp_streq(nm, "new") && es && es->is_cmethod && es->class_id >= 0)
-      return comp_method_in_chain(c, es->class_id, "initialize", NULL);
+      return cplan_hook_target(c, -1, es->class_id, "initialize", NULL);
     int mi = es && es->class_id >= 0 && !es->is_cmethod ? call_target(c, u, es->class_id, nm, 0, NULL) : -1;
     return mi >= 0 ? mi : an_any_scope_by_name(c, nm);
   }
@@ -35717,7 +35718,7 @@ static int promote_ivar_handle_stores(Compiler *c) {
     TyKind ut = infer_type(c, u);
     int ci = ty_is_object(ut) ? ty_object_class(ut) : -1;
     if (ci < 0 || !(c->classes[ci].is_struct || c->classes[ci].is_data) ||
-        comp_method_in_chain(c, ci, "initialize", NULL) >= 0) continue;
+        cplan_hook_target(c, u, ci, "initialize", NULL) >= 0) continue;
     for (int a = 0; a < c->classes[ci].nmembers; a++) {
       if (c->classes[ci].ivar_types[a] != TY_STRBUF || !c->classes[ci].ivar_str_shared[a]) continue;
       int v = struct_new_member_arg(c, u, ci, a);
@@ -38659,8 +38660,10 @@ int ivar_assigned_in_initialize(Compiler *c, int k, const char *ivn) {
   }
   /* every initialize a `new` of k may run writes it (the table's first, as
      its class finds it; a version as the class it is a method of) */
-  int defcls = -1, ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, k, ms, VER_MAX_ARMS, &whole), v = n > 0 && whole;
-  if (n > 0) comp_method_in_chain(c, k, "initialize", &defcls);
+  MethodLookup iml = { .def_class = -1 };
+  int ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(c, k, ms, VER_MAX_ARMS, &whole), v = n > 0 && whole;
+  if (n > 0) cplan_hook_target(c, -1, k, "initialize", &iml);
+  int defcls = iml.def_class;
   for (int i = 0; i < n && v; i++)
     v = ivs_body_writes(c, k, i ? c->scopes[ms[i]].class_id : defcls, c->scopes[ms[i]].body, ivn, 0) == 1;
   if (iai_used * 2 >= iai_cap) {
@@ -42694,7 +42697,7 @@ static int mark_with_member_nullable(Compiler *c, int cid, const char *mn) {
   int changed = 0;
   for (int k = cid < 0 ? 0 : cid; k < (cid < 0 ? c->nclasses : cid + 1); k++) {
     ClassInfo *sci = &c->classes[k];
-    if (cid < 0 && (!sci->is_data || comp_method_in_chain(c, k, "initialize", NULL) >= 0)) continue;
+    if (cid < 0 && (!sci->is_data || cplan_hook_target(c, -1, k, "initialize", NULL) >= 0)) continue;
     for (int m = 0; m < sci->nmembers; m++) {
       if (mn && !sp_streq(sci->ivars[m] + 1, mn)) continue;
       if (sci->ivar_nullable_int[m] || (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT)) continue;
@@ -43370,7 +43373,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         if (!ws || !ws->name || !sp_streq(ws->name, "with") || ws->is_cmethod || ws->class_id < 0) continue;
         ClassInfo *sci = &c->classes[ws->class_id];
         if (!sci->is_struct || !sci->is_data ||
-            (sci->parent >= 0 && comp_method_in_chain(c, sci->parent, "with", NULL) >= 0)) continue;
+            (sci->parent >= 0 && call_target(c, -1, sci->parent, "with", CT_METHODS, NULL) >= 0)) continue;
         if (pass) {
           for (int pi = 0; pi < ws->nparams; pi++) {
             const char *pn = ws->pnames ? ws->pnames[pi] : NULL;
@@ -43448,8 +43451,8 @@ static void mark_nullable_int_locals(Compiler *c) {
       /* with an initialize of its own the values are its keywords'
          (struct_with_binds_initialize): a given nil is the nil of the
          keyword it names, and so is a nil the copy takes from the receiver */
-      int wimi = comp_method_in_chain(c, sci->idx, "initialize", NULL);
-      if (wimi >= 0 && comp_method_in_chain(c, sci->idx, "with", NULL) < 0) {
+      int wimi = cplan_hook_target(c, -1, sci->idx, "initialize", NULL);
+      if (wimi >= 0 && call_target(c, -1, sci->idx, "with", CT_METHODS, NULL) < 0) {
         changed |= mark_nullable_params_of_call(c, id, wimi);
         Scope *wm = &c->scopes[wimi];
         for (int k = 0; k < wm->nparams; k++) {
@@ -47763,8 +47766,8 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
 static int arysub_cnew_kept(Compiler *c, int k) {
   int nd = 0;
   comp_descendants(c, k, &nd);
-  return nd > 0 || comp_method_in_chain(c, k, "initialize", NULL) >= 0 ||
-         comp_cmethod_in_chain(c, k, "allocate", NULL) >= 0;
+  return nd > 0 || cplan_hook_target(c, -1, k, "initialize", NULL) >= 0 ||
+         call_target(c, -1, k, "allocate", CT_CMETHOD, NULL) >= 0;
 }
 /* Whether a call with a block may reach class k's `new` (or a
    descendant's): a super with no block of its own passes that block on.
@@ -48173,7 +48176,7 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
   int tim = comp_ary_is_time(c, k);
   if ((brackets || time_maker) && tim != time_maker) return;
   if (tim && brackets) return;
-  if (!brackets && !time_maker && comp_method_in_chain(c, k, "initialize", NULL) >= 0) return;
+  if (!brackets && !time_maker && cplan_hook_target(c, id, k, "initialize", NULL) >= 0) return;
   int args = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
   int an = 0;
   if (args >= 0) nt_arr(nt, args, "arguments", &an);

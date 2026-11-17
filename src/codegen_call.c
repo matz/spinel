@@ -194,7 +194,7 @@ static int ctor_block_fresh(Compiler *c, int id) {
    constructors goes the same way, as a proc. 0 when the class has no such
    clone. */
 int emit_ctor_new_with_proc(Compiler *c, int id, int ci, Buf *b) {
-  if (nt_kind(c->nt, id) == NK_CallNode && call_target(c, id, ci, "new", CT_CMETHOD, NULL) >= 0) return 0;
+  if (nt_kind(c->nt, id) == NK_CallNode && cplan_user_new(c, id, ci) >= 0) return 0;
   int blk = nt_ref(c->nt, id, "block");
   int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
   Scope *sblk = blk < 0 && (nt_kind(c->nt, id) == NK_SuperNode || nt_kind(c->nt, id) == NK_ForwardingSuperNode)
@@ -239,7 +239,7 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   const NodeTable *nt = c->nt;
   /* An ordinary new runs the class method first. Only its Class#new super
      bypasses that method and splices initialize here. */
-  if (nt_kind(nt, id) == NK_CallNode && call_target(c, id, ci, "new", CT_CMETHOD, NULL) >= 0) return 0;
+  if (nt_kind(nt, id) == NK_CallNode && cplan_user_new(c, id, ci) >= 0) return 0;
   int block = nt_ref(nt, id, "block");
   if (block < 0 && (nt_kind(nt, id) == NK_SuperNode || nt_kind(nt, id) == NK_ForwardingSuperNode)) {
     Scope *sblk = comp_scope_of(c, id);
@@ -504,8 +504,17 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
       if (krp && krp->type == TY_POLY) buf_printf(b, "sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH)", krhash);
       else buf_printf(b, "_t%d", krhash);
     }
-    else if (L.from[i] == ARG_REST)
-      emit_rest_pack_kwh(c, i, L.rest_argc - m->npost_rest, argv2, L.rest_kwh, b);
+    else if (L.from[i] == ARG_REST) {
+      /* (a rest parameter whose slot is boxed takes the array boxed, as the kwrest does) */
+      LocalVar *rp = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
+      if (rp && rp->type == TY_POLY) {
+        Buf rb; memset(&rb, 0, sizeof rb);
+        emit_rest_pack_kwh(c, i, L.rest_argc - m->npost_rest, argv2, L.rest_kwh, &rb);
+        emit_boxed_text(c, TY_POLY_ARRAY, rb.p ? rb.p : "sp_PolyArray_new()", b);
+        free(rb.p);
+      }
+      else emit_rest_pack_kwh(c, i, L.rest_argc - m->npost_rest, argv2, L.rest_kwh, b);
+    }
     else if (provided < 0 && ds_tmp >= 0 && callee_has_kwarg(c, m, m->pnames[i])) {
       inline_block_ctx_restore(&callee_bc);   /* may evaluate the keyword's default */
       emit_ds_param_extract(c, m, i, ds_tmp, ds_type, b);
@@ -13652,8 +13661,10 @@ void ctor_arity_emit(CtorArityArms *g, Buf *b) {
    are laid out from the call's own argument list (keywords, a splat). */
 int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp,
                              int hoisted, int rt2, Buf *b) {
-  int kmi = comp_cmethod_in_chain(c, ci, "new", NULL);
-  if (kmi < 0 || call_target(c, id, ci, "new", CT_CMETHOD, NULL) < 0) return 0;
+  int kmi = cplan_user_new(c, id, ci);
+  if (kmi < 0) return 0;
+  /* (a class the call cannot reach has no arm of its own `new`) */
+  if (cls_fact_excludes_class_value(c, nt_ref(c->nt, id, "receiver"), ci) || !dynamic_new_may_reach(c, id, ci)) return 1;
   Scope *ks = &c->scopes[kmi];
   if (!scope_has_callable_symbol(c, kmi)) return 1;   /* no symbol: the default raises */
   /* A `self.new` that YIELDS has no proc parameter to hand the block to --
@@ -13912,7 +13923,7 @@ int emit_exc_sub_new_arm_splat(Compiler *c, int id, int ci, int tsa, const char 
    as the constant form is: a user exception class with an initialize of its
    own is constructed through it, so its `super("...")` sets the message. The
    runtime helper, which only has the class name, takes every other value. */
-void emit_raise_class_value(Compiler *c, int kn, int mn, Buf *b) {
+void emit_raise_class_value(Compiler *c, int id, int kn, int mn, Buf *b) {
   int argc = mn >= 0 ? 1 : 0;
   int kt = ++g_tmp, mt = ++g_tmp, rt = ++g_tmp;
   buf_puts(b, "({ "); kt = hold_operand(c, kn, TY_POLY, 1, kt, 1, " ", b);
@@ -13925,7 +13936,7 @@ void emit_raise_class_value(Compiler *c, int kn, int mn, Buf *b) {
   for (int ci = 0; ci < c->nclasses; ci++) {
     if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
     if (!class_is_exc_subclass(c, ci) || !class_has_ctor(&c->classes[ci])) continue;
-    int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+    int initm = cplan_new_arm_initialize(c, id, ci);
     if (initm < 0 || !c->scopes[initm].reachable) continue;
     Scope *is = &c->scopes[initm];
     char am[256];
@@ -14107,7 +14118,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
     }
     /* a class below KeyError and its like reads the keywords itself */
     if (initm < 0 && class_takes_exc_attrs(c, ci)) {
-      if (comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+      if (cplan_user_new(c, id, ci) >= 0) continue;
       Buf val; memset(&val, 0, sizeof val);
       Buf apre; memset(&apre, 0, sizeof apre);
       Buf *sv_pre = g_pre; g_pre = &apre;
@@ -14142,7 +14153,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
       if ((spl >= 0 ? !splat_operand_ok(c, spl)
                     : !plain || argc == 0 || !dynamic_new_may_reach(c, id, ci) ||
                       !ctor_arity_error(c, ci, -1, exc ? 2 : 1, am, sizeof am)) ||
-          comp_class_is_module(c, &c->classes[ci]) || comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+          comp_class_is_module(c, &c->classes[ci]) || cplan_user_new(c, id, ci) >= 0) continue;
       /* an exception class takes the array's first element as its message,
          as Exception#initialize(msg = nil) does; a non-empty `**h` after the
          positionals is one more, a Hash (one spread only, and no literal
@@ -14443,7 +14454,7 @@ static void emit_super_new_ctor(Compiler *c, int id, int ci, Buf *b) {
   ClassInfo *k = &c->classes[ci];
   if (k->is_struct || k->is_native_class || class_is_exc_subclass(c, ci))
     unsupported(c, id, "super in `self.new` of a Struct, Data, exception or native class");
-  int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+  int initm = cplan_hook_target(c, -1, ci, "initialize", NULL);
   int argsn = nt_ref(nt, id, "arguments");
   int argc = 0; if (argsn >= 0) nt_arr(nt, argsn, "arguments", &argc);
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
@@ -15489,10 +15500,10 @@ static int array_new_block_needs_fresh_locals(Compiler *c, int blk) {
 
 /* The reopening of builtin exception class ci (`class KeyError; def
    initialize(msg = "no key") super("wrapped: " + msg) end`) defining its
-   own initialize: the index of that method, or -1. */
-int exc_reopen_initialize(Compiler *c, int ci) {
+   own initialize that call id runs: the index of that method, or -1. */
+int exc_reopen_initialize(Compiler *c, int id, int ci) {
   if (!class_is_exc_reopen(c, ci)) return -1;
-  int mi = comp_method_in_chain(c, ci, "initialize", NULL);
+  int mi = cplan_hook_target(c, id, ci, "initialize", NULL);
   return (mi >= 0 && c->scopes[mi].class_id == ci && c->scopes[mi].reachable) ? mi : -1;
 }
 
@@ -15958,7 +15969,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     int reopen_builtin_new = ci >= 0 &&
                              (rk == NK_ConstantReadNode || nt_int(nt, id, "builtin_new", 0)) &&
                              is_builtin_reopen(key_name(c, recv)) &&
-                             comp_cmethod_in_chain(c, ci, "new", NULL) < 0;
+                             cplan_user_new(c, id, ci) < 0;
     /* native (C-backed) class: the declared constructor (see emit_native_ctor) */
     if (!reopen_builtin_new && emit_native_ctor(c, id, ci, argc, argv, b)) { *out = 1; return 1; }
     if (ci >= 0 && c->classes[ci].is_struct) refuse_from_plan(c, id, CRF_RECORD_NEW, "refuse-record-new");
@@ -16048,7 +16059,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* a reopening's own initialize runs on the runtime's exception, but
          not for the error a dispatcher's no-method arm builds (builtin_new) */
       if (!nt_int(nt, id, "builtin_new", 0)) { int rci = comp_builtin_class_named(c, cn);
-        int rim = rci >= 0 ? exc_reopen_initialize(c, rci) : -1;
+        int rim = rci >= 0 ? exc_reopen_initialize(c, id, rci) : -1;
         if (rim >= 0) { emit_exc_reopen_construct(c, rci, rim, nt_ref(nt, id, "arguments"), -1, b); { *out = 1; return 1; } } }
       /* SystemCallError#initialize builds the message from the errno:
          Errno::ENOENT.new("x") is "No such file or directory - x", and
@@ -21752,7 +21763,7 @@ static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char
   for (int i = 0; a; a = builtin_ancestor_at(cls, ++i)) {
     if (i > 0 && is_builtin_module_name(a)) continue;
     int ci = i > 0 ? comp_class_index(c, a) : -1;
-    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
+    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name, 0) >= 0) return 0;
     if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name, 0)) {
       if (kwh && !hash_counted(c, id, a, name, 1, argc)) return 0;
       return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);
@@ -30373,7 +30384,7 @@ static int refuse_fwd_target(Compiler *c, int id, const char *name) {
   if (rk == NK_SelfNode) {
     Scope *encl = comp_scope_of(c, id);
     if (encl && encl->is_cmethod && encl->class_id >= 0 && sp_streq(name, "new"))
-      return comp_method_in_chain(c, encl->class_id, "initialize", NULL);
+      return cplan_hook_target(c, -1, encl->class_id, "initialize", NULL);
     cls = encl && !encl->is_cmethod ? encl->class_id : -1;
   }
   else {

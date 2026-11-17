@@ -679,6 +679,10 @@ int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole);
    constant naming an exception class of the program's: K.new's there
    (cplan_hook_target); -1 for any other call */
 int cplan_raise_initialize(Compiler *c, int id);
+/* Is call id a Kernel#raise whose first argument is a value that may hold
+   an exception class at run time (not a constant naming one)? Its arm for
+   each exception class runs cplan_new_arm_initialize's initialize. */
+int cplan_raise_class_value(Compiler *c, int id);
 /* The to_ary of the program's through which a value of type t converts
    where node `at` takes it apart (the implied to_ary call a row makes on
    operand op: a multiple assignment's value, the element a nested target
@@ -1618,13 +1622,31 @@ int cplan_entry_finds(const Compiler *c, int e);
    before); for any other class the one call_target finds where the call
    runs, its version entry where the call may reach two or more of the
    class's `self.new`, so that inference, the emitter and the call plan
-   name one method. */
+   name one method. With id -1, the table's `self.new` (a reader that
+   answers for every call of a class, as cplan_hook_target's). */
 int cplan_user_new(Compiler *c, int id, int ci);
+/* Does the `[]` call id, on a boxed value that may hold the class ci,
+   build an instance of ci itself: a Struct or Data class of the program
+   (not a builtin's reopening, not a native class) with no `[]` of the
+   program's where the call runs? CRuby's `[]` on a record class does not
+   call a program's `new`, so none is asked. */
+int cplan_aref_builds(Compiler *c, int id, int ci);
+/* Does call id (-1: any) of `allocate` on class or module ci reach a class
+   method `allocate` of the program's own that is in force where the call
+   runs: on ci, its singleton class, a parent or a module it extends, and
+   not Class#new's own allocation (cnew_alloc)? */
+int cplan_own_allocate(Compiler *c, int id, int ci);
+/* `x.class.allocate`: a class value no constant names, which the generated
+   sp_cls_allocate answers; none where a class of the program has an
+   `allocate` of its own. */
+int cplan_class_value_allocate(Compiler *c, int id);
 /* The class method of program class ci that call id, named name, runs:
    for a `new` the one cplan_user_new answers (none where the builtin
    constructor answers a call before the class's `def self.new`), for any
-   other name the one call_target finds there. */
-int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name);
+   other name the one call_target finds there, with flags (CT_OWN: only the
+   class's own method, for a `new` too: one a superclass or an alias
+   defines is not its own) added to its side. */
+int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name, unsigned flags);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

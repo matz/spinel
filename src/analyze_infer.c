@@ -2917,13 +2917,8 @@ static int boxed_struct_aref_may_construct(Compiler *c, int id) {
   const char *nm = nt_str(c->nt, id, "name");
   int recv = nt_ref(c->nt, id, "receiver");
   if (!nm || !sp_streq(nm, "[]") || recv < 0 || comp_ntype(c, recv) != TY_POLY) return 0;
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    ClassInfo *k = &c->classes[ci];
-    if (!k->is_struct || is_builtin_reopen(k->name) || k->is_native_class) continue;
-    if (comp_cmethod_in_chain(c, ci, "[]", NULL) >= 0 ||
-        comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
-    return 1;
-  }
+  for (int ci = 0; ci < c->nclasses; ci++)
+    if (cplan_aref_builds(c, id, ci)) return 1;
   return 0;
 }
 
@@ -6731,7 +6726,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       /* a class method `allocate` of the program's own (on the class or
          module, its singleton class, or a module it extends) is the call's
          target: the user dispatch types it */
-      if (comp_own_allocate(c, ci, id)) return 0;
+      if (cplan_own_allocate(c, id, ci)) return 0;
       /* a module's allocate raises (no instance of a module): boxed, as the
          raise's expression is (#10751) */
       if (ci >= 0 && comp_class_is_module(c, &c->classes[ci])) { *out = TY_POLY; return 1; }
@@ -6746,8 +6741,8 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       if (bcn && sp_streq(bcn, "Integer")) { *out = TY_POLY; return 1; }
     }
     /* a class value no constant names (`x.class.allocate`): boxed, as the
-       sp_cls_allocate that answers it is (comp_class_value_allocate) */
-    if (comp_class_value_allocate(c, id)) { *out = TY_POLY; return 1; }
+       sp_cls_allocate that answers it is (cplan_class_value_allocate) */
+    if (cplan_class_value_allocate(c, id)) { *out = TY_POLY; return 1; }
   }
   return 0;
 }
@@ -11385,7 +11380,7 @@ static int ssv_value(Compiler *c, int v, char *set, int depth) {
       const char *rn = nt_str(nt, r, "name");
       int ci = rn ? const_node_class_index(c, r) : -1;
       if (sp_streq(un, "new") && ci >= 0) {
-        if (comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) return 0;
+        if (cplan_user_new(c, v, ci) >= 0) return 0;
         set[ci] = 1;
         return 1;
       }

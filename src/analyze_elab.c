@@ -7608,15 +7608,34 @@ static int lr_unplaced(Compiler *c, int node) {
    pass made into a class on the chain, or code the record cannot follow
    (a send, an eval of a String) run on one before p, but code that only
    writes (LR_OPAQUE_WRITES)? */
+static int lr_unplaced_def(const LrDef *v) { return v->kind <= LR_REMOVE && v->unplaced == 1 && !v->absent; }
 static int lr_unordered_supply(Compiler *c, int cls, int sg, const char *name, LoadPoint p, int own) {
   LoadRecord *r = c->lrec;
   const LrVers *x = own ? NULL : lr_vers(r, name);
-  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink)
-    for (int j = 0; j < r->hist[i].n; j++)
-      if (lr_is_version(&r->hist[i].v[j]) && lr_unplaced(c, r->hist[i].v[j].node)) return 1;
+  /* (a def of the name in a body the record holds at no point, a class body in a value or a builder's
+     block, runs when that body does, which the record does not order against p: it counts where its class may
+     be on cls's chain (cls, a superclass, a module mixed in: lr_in_ancestry), or is no class the record
+     names, and where no def of the name the record places is on the chain, whose points the record orders
+     the call by, as it does a version of the name a pass made) */
+  int unpl = 0, placed = 0;
+  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink) {
+    int on = -1;
+    for (int j = 0; j < r->hist[i].n; j++) {
+      const LrDef *v = &r->hist[i].v[j];
+      if (lr_is_version(v) && lr_unplaced(c, v->node)) return 1;
+      if (!lr_unplaced_def(v) && !lr_is_version(v)) continue;
+      if (on < 0) on = r->hist[i].a <= LR_MAIN || lr_in_ancestry(c, cls, sg, r->hist[i].a, p);
+      if (on && lr_unplaced_def(v)) unpl = 1;
+      else if (on) placed = 1;
+    }
+  }
   const LrHist *oh = own ? lr_hist(r, cls, sg, name, 0) : NULL;
-  for (int j = 0; oh && j < oh->n; j++)
+  for (int j = 0; oh && j < oh->n; j++) {
     if (lr_is_version(&oh->v[j]) && lr_unplaced(c, oh->v[j].node)) return 1;
+    if (lr_unplaced_def(&oh->v[j])) unpl = 1;
+    else if (lr_is_version(&oh->v[j])) placed = 1;
+  }
+  if (unpl && !placed) return 1;
   /* (an ask of cls's own history (own) can be supplied only on cls itself:
      what its ancestry mixes in is not its own, so the owners are not
      walked, which would make one ask per class read every class; any

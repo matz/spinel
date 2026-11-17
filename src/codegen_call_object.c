@@ -2714,7 +2714,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
     int ic_c = 0; const int *ic_v = ic_a >= 0 ? nt_arr(nt, ic_a, "arguments", &ic_c) : NULL;
     if (ic_r >= 0 && ic_n && sp_streq(ic_n, "initialize_copy") && ic_c == 1 &&
         ty_is_object(comp_ntype(c, ic_r)) &&
-        comp_method_in_chain(c, ty_object_class(comp_ntype(c, ic_r)), "initialize_copy", NULL) < 0) {
+        call_target(c, id, ty_object_class(comp_ntype(c, ic_r)), "initialize_copy", CT_METHODS, NULL) < 0) {
       buf_puts(b, "((void)("); emit_expr_for_effect(c, ic_v[0], b); buf_puts(b, "), ");
       emit_expr(c, ic_r, b); buf_puts(b, ")");
       return 1;
@@ -3383,7 +3383,7 @@ static int ivar_list_mixed(Compiler *c, int recv, int cid) {
   if (recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode && is_new_name(nt_str(c->nt, recv, "name"))) {
     int r = nt_ref(c->nt, recv, "receiver");
     if (r >= 0 && nt_kind(c->nt, r) == NK_ConstantReadNode && const_node_class_index(c, r) == cid &&
-        comp_cmethod_in_chain(c, cid, "new", NULL) < 0) return 0;
+        cplan_user_new(c, recv, cid) < 0) return 0;
   }
   int ranked = ivar_ranked(c, cid);
   int nbase, *base = ivar_listing_order_new(c, cid, &nbase), mixed = 0;

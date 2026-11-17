@@ -3658,7 +3658,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       repr_of(c, recv).kind == RK_BOXED && repr_of(c, id).kind == RK_BOXED &&
       !subtree_has_side_effect(c, recv)) {
     int inst_new = 0;
-    for (int k = 0; k < c->nclasses && !inst_new; k++) inst_new = comp_method_in_class(c, k, "new") >= 0;
+    for (int k = 0; k < c->nclasses && !inst_new; k++) inst_new = call_target(c, -1, k, "new", CT_OWN, NULL) >= 0;
     if (inst_new) {
       buf_puts(b, "(("); emit_boxed(c, recv, b); buf_puts(b, ").tag == SP_TAG_CLASS ? ");
       g_poly_new_instance_pass = 2;   /* this emission: the constructor arms */
@@ -3867,7 +3867,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
     int acid = const_node_class_index(c, recv);
     /* (a class method `allocate` of the program's own is the user dispatch's) */
-    if (comp_own_allocate(c, acid, id)) return 0;
+    if (cplan_own_allocate(c, id, acid)) return 0;
     /* allocate is Class's: a module raises NoMethodError (#10751) */
     if (acid >= 0 && comp_class_is_module(c, &c->classes[acid])) {
       const char *mn = class_ruby_name(c, acid); if (!mn) mn = c->classes[acid].name;
@@ -3896,8 +3896,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
 
   /* Class#allocate on a class value no constant names (`x.class.allocate`):
      the dispatch a boxed class value gets, sp_cls_allocate, which the program
-     has generated when comp_class_value_allocate asks (g_gen_cls_answers). */
-  if (comp_class_value_allocate(c, id)) {
+     has generated when cplan_class_value_allocate asks (g_gen_cls_answers). */
+  if (cplan_class_value_allocate(c, id)) {
     buf_puts(b, "sp_cls_allocate(sp_box_class("); emit_expr(c, recv, b); buf_puts(b, "))");
     return 1;
   }
@@ -3906,7 +3906,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     int cid = self_class_static_ci(c, recv);
     /* a Struct's `self.class.new(*a)` or keywords: spread and bound as
        `S.new(*a)` is, where each was passed as one argument */
-    if (c->classes[cid].is_struct && comp_method_in_chain(c, cid, "initialize", NULL) < 0 &&
+    if (c->classes[cid].is_struct && cplan_hook_target(c, -1, cid, "initialize", NULL) < 0 &&
         (nt_argv_has_splat(nt, argv, argc) || nt_argv_kwh(nt, argv, argc) >= 0) &&
         emit_struct_new_call(c, id, cid, argc, argv, b))
       return 1;
@@ -3914,7 +3914,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     /* the arguments converted to initialize's parameter types, as
        `V.new(...)` does: an `x.to_i` narrowed to sp_int passed raw into a
        poly parameter did not compile (#4534) */
-    int initm = comp_method_in_chain(c, cid, "initialize", NULL);
+    int initm = cplan_hook_target(c, -1, cid, "initialize", NULL);
     if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
     else for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_expr(c, argv[a], b); }
     if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : "", b);
@@ -5775,7 +5775,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               ClassInfo *kc = &c->classes[k];
               int ik = cplan_hook_target(c, -1, k, "initialize", NULL);
               if (kc->is_value_type || kc->is_struct || kc->is_native_class || ik < 0 || c->scopes[ik].yields ||
-                  call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) plain = 0;
+                  cplan_user_new(c, id, k) >= 0) plain = 0;
               subs++;
             }
             for (int a = 0; subs && plain && a < dargc; a++)
@@ -5817,7 +5817,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             int ik = cplan_hook_target(c, -1, k, "initialize", NULL);
             if (kc->is_value_type || kc->is_struct || kc->is_native_class ||
                 (ik >= 0 && c->scopes[ik].yields) ||
-                call_target(c, id, k, "new", CT_CMETHOD, NULL) >= 0) { plain = 0; break; }
+                cplan_user_new(c, id, k) >= 0) { plain = 0; break; }
             nsub++;
           }
           if (plain && nsub > 0) {

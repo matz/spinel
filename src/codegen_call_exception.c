@@ -1002,7 +1002,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
       /* a reopened builtin exception is still the builtin: raised by name,
          through the reopening's own initialize when it has one */
       if (xc >= 0 && cn && is_exc_name(cn) && is_builtin_reopen(cn)) {
-        int rim = exc_reopen_initialize(c, xc);
+        int rim = exc_reopen_initialize(c, id, xc);
         if (rim >= 0) {
           buf_puts(b, raise_fn("sp_raise_exc"));
           emit_exc_reopen_construct(c, xc, rim, -1, -1, b);
@@ -1063,7 +1063,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
       /* a reopened builtin exception is still the builtin: raised by name,
          through the reopening's own initialize when it has one */
       if (xc >= 0 && cn && is_exc_name(cn) && is_builtin_reopen(cn)) {
-        int rim = exc_reopen_initialize(c, xc);
+        int rim = exc_reopen_initialize(c, id, xc);
         if (rim >= 0) {
           buf_puts(b, raise_fn("sp_raise_exc"));
           emit_exc_reopen_construct(c, xc, rim, -1, av[1], b);
@@ -1174,7 +1174,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
       TyKind at = ar.as_ty;
       if (ac == 1 && emit_raise_nomethod_new(c, av[0], b)) { }
       else if (ac >= 2 && (at == TY_POLY || at == TY_CLASS))
-        emit_raise_class_value(c, av[0], av[1], b);
+        emit_raise_class_value(c, id, av[0], av[1], b);
       else if (ac >= 2 && ar.exc) {
         /* `raise e, msg` with an exception object in a variable: the message
            was dropped and the class name answered */
@@ -1216,7 +1216,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
            (emit_exc_reopen_construct). Raised by name, it skipped the
            initialize, so its ivars and side effects were missing. */
         int rxc = comp_builtin_class_named(c, "RuntimeError");
-        int rim = rxc >= 0 ? exc_reopen_initialize(c, rxc) : -1;
+        int rim = rxc >= 0 ? exc_reopen_initialize(c, id, rxc) : -1;
         if (rim >= 0) {
           buf_puts(b, raise_fn("sp_raise_exc"));
           emit_exc_reopen_construct(c, rxc, rim, -1, av[0], b);
@@ -1244,7 +1244,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
            by the codegen when their static type is known (see the
            ty_is_object branch above). Reading parent_cls_name on an
            arbitrary poly-tagged object is a wrong-offset read (segfault). */
-        emit_raise_class_value(c, av[0], -1, b);
+        emit_raise_class_value(c, id, av[0], -1, b);
       }
       else {
         /* Integer/nil/Array/Symbol/Float/...: valid Ruby, TypeError at

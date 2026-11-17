@@ -54751,6 +54751,12 @@ static void an_phase_method_backstops(Compiler *c) {
           if (cid >= 0 && cplan_hook_target(c, id, cid, "initialize", NULL) == s) called = 1;
         }
       }
+      /* an --ext-entry method is called from C: its untyped parameters bind
+         onward as a called method's do. Left to the widening below, a
+         callee it shares with a typed entry kept the typed entry's kind, and
+         a later re-bind widened that parameter after the instance variables
+         it is stored in had settled */
+      if (!called && sc->is_ext_entry) called = 1;
       if (!called) continue;
       for (int i = 0; i < sc->nparams; i++) {
         LocalVar *p = sc->pnames[i] ? scope_local(sc, sc->pnames[i]) : NULL;

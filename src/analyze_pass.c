@@ -1051,12 +1051,11 @@ static TyKind pm_deconstruct_arr_ty(Compiler *c, TyKind scrutinee_t) {
    which read a boxed Symbol's bits as a small int and bound 1 and 2 for
    `[:x, :y]` (#3954). The method's return type says what the elements really
    are; TY_UNKNOWN means the class has no #deconstruct to ask. */
-static TyKind pm_object_deconstruct_array(Compiler *c, TyKind scrut) {
+static TyKind pm_object_deconstruct_array(Compiler *c, int pat, TyKind scrut) {
   if (!ty_is_object(scrut)) return TY_UNKNOWN;
   int cid = ty_object_class(scrut);
   if (cid < 0 || cid >= c->nclasses) return TY_UNKNOWN;
-  int defcls = cid;
-  int mi = comp_method_in_chain(c, cid, "deconstruct", &defcls);
+  int mi = cplan_implied_target(c, pat, NTI_MATCHED, cid, "deconstruct", CIT_TABLE, NULL);
   if (mi < 0) return TY_UNKNOWN;
   TyKind rt = c->scopes[mi].ret;
   return ty_is_array(rt) ? rt : TY_POLY_ARRAY;
@@ -1371,7 +1370,7 @@ static int infer_case_pattern_locals(Compiler *c) {
              element's bits and produced garbage. An object scrutinee's elements
              come from its own #deconstruct, whose return type says what they
              are; only an object with none left to ask keeps the legacy default. */
-          TyKind darr = pm_object_deconstruct_array(c, array_scrutinee);
+          TyKind darr = pm_object_deconstruct_array(c, array_pat, array_scrutinee);
           TyKind et = (elem_t != TY_UNKNOWN) ? elem_t
                     : (darr != TY_UNKNOWN) ? ty_array_elem(darr)
                     : ty_is_object(array_scrutinee) ? TY_INT : TY_POLY;
@@ -1394,7 +1393,7 @@ static int infer_case_pattern_locals(Compiler *c) {
                  array, so its rest slice is a poly array -- not an int array.
                  TY_INT_ARRAY reinterpreted sp_poly_slice's boxed poly array and
                  rendered garbage. Object scrutinees keep the legacy default. */
-              TyKind darr2 = pm_object_deconstruct_array(c, array_scrutinee);
+              TyKind darr2 = pm_object_deconstruct_array(c, array_pat, array_scrutinee);
               TyKind rest_arr = ty_is_array(array_scrutinee) ? array_scrutinee
                               : (darr2 != TY_UNKNOWN) ? darr2
                               : ty_is_object(array_scrutinee) ? TY_INT_ARRAY : TY_POLY_ARRAY;
@@ -11013,7 +11012,7 @@ int bind_coerce_operator_params(Compiler *c) {
     TyKind a0 = infer_type(c, argv[0]);
     if (!ty_is_object(a0)) continue;
     int acls = ty_object_class(a0);
-    int coerce_mi = comp_method_in_chain(c, acls, "coerce", NULL);
+    int coerce_mi = cplan_implied_target(c, id, recv, acls, "coerce", CIT_TABLE, NULL);
     if (coerce_mi < 0) continue;
     /* The coerce call this route emits has no node of its own either, and it
        passes the numeric receiver BOXED. Nothing else binds that parameter:
@@ -13703,7 +13702,7 @@ static int bs_object_to_ary(Compiler *c, TyKind t) {
      census; `instantiated` is unset while the fixpoint runs) */
   const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
   for (int i = 0; i < np; i++) {
-    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, -1, -1, k);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0) continue;
     if (!(c->classes[k].ctor_reachable || c->classes[k].instantiated)) continue;
     if (k == oc || is_descendant(c, k, oc)) return 1;
@@ -14947,7 +14946,7 @@ static void key_cmps_build(Compiler *c, KeyCmps *K) {
    a builtin value hands the program's classes nothing. A boxed value the class
    facts show can hold no object of the program, itself or in a container it may
    be (ClsSet: no class, and not bv), is a builtin value too. */
-static int widen_key_cmp_operands(Compiler *c, KeyCmps *K, TyKind kt, int node) {
+static int widen_key_cmp_operands(Compiler *c, KeyCmps *K, int call, TyKind kt, int node) {
   int changed = 0;
   if (!ty_is_object(kt)) {
     if (kt != TY_POLY) return 0;   /* a builtin value, or a type not settled yet */
@@ -14957,7 +14956,8 @@ static int widen_key_cmp_operands(Compiler *c, KeyCmps *K, TyKind kt, int node) 
   if (!K->built) key_cmps_build(c, K);
   for (int j = 0; j < K->n; j++) {
     int mi = K->v[j];
-    if (ty_is_object(kt) && comp_method_in_chain(c, ty_object_class(kt), "<=>", NULL) != mi) continue;
+    if (ty_is_object(kt) &&
+        cplan_implied_target(c, call, node, ty_object_class(kt), "<=>", CIT_TABLE, NULL) != mi) continue;
     LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[K->op[j]]);
     if (!p || p->rbs_seeded) continue;
     if (!ty_is_object(kt)) {
@@ -14972,19 +14972,19 @@ static int widen_key_cmp_operands(Compiler *c, KeyCmps *K, TyKind kt, int node) 
 /* The keys a block's answer `node` makes: an Array literal's elements are keys
    of their own (the sort compares them one by one), each typed alone, so that
    a tuple of builtin values widens nothing; any other answer is one key. */
-static int widen_answer_cmp_operands(Compiler *c, KeyCmps *K, int node, int depth) {
+static int widen_answer_cmp_operands(Compiler *c, KeyCmps *K, int call, int node, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0) return 0;
   if (nt_kind(nt, node) == NK_ArrayNode && depth < 4) {
     int n = 0, changed = 0;
     const int *el = nt_arr(nt, node, "elements", &n);
-    for (int i = 0; i < n; i++) changed |= widen_answer_cmp_operands(c, K, el[i], depth + 1);
+    for (int i = 0; i < n; i++) changed |= widen_answer_cmp_operands(c, K, call, el[i], depth + 1);
     return changed;
   }
   TyKind kt = nt_kind(nt, node) == NK_SplatNode ? TY_POLY : infer_type(c, node);
   /* an Array key compares element by element: its elements are the keys */
   for (int d = 0; d < 4 && ty_is_array(kt); d++) kt = ty_array_elem(kt);
-  return widen_key_cmp_operands(c, K, kt, node);
+  return widen_key_cmp_operands(c, K, call, kt, node);
 }
 
 /* A user `<=>` that a builtin calls on the values a block answers (sort_by
@@ -15010,12 +15010,12 @@ int widen_block_key_cmp_params(Compiler *c) {
     int blk = nt_ref(nt, id, "block");
     if (!nm || blk < 0 || !builtin_orders_block_keys(nm)) continue;
     if (nt_kind(nt, blk) == NK_BlockNode) {
-      changed |= widen_answer_cmp_operands(c, &K, ic_block_value(nt, blk), 0);
+      changed |= widen_answer_cmp_operands(c, &K, id, ic_block_value(nt, blk), 0);
     }
     else if (nt_kind(nt, blk) == NK_BlockArgumentNode) {
       int ex = nt_ref(nt, blk, "expression");
       if (ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode) continue;   /* an operator symbol */
-      changed |= widen_key_cmp_operands(c, &K, TY_POLY, -1);
+      changed |= widen_key_cmp_operands(c, &K, id, TY_POLY, -1);
     }
   }
   free(K.v); free(K.op);

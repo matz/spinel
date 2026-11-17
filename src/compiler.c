@@ -2389,10 +2389,12 @@ int comp_ary_is_array_proper(Compiler *c, int cid) {
   return comp_ary_root(c, cid) >= 0 && comp_arysub_emb(c, cid) == 0;
 }
 /* The scope of the #to_ary an implicit Array conversion of a class cid
-   instance calls, or -1 (comp_ary_is_array_proper: none). */
-int comp_implicit_to_ary_mi(Compiler *c, int cid) {
+   instance calls, or -1 (comp_ary_is_array_proper: none): the table's, as
+   the call plan answers it for the implied call of node site on operand op
+   (-1 for a survey of the classes a box may hold). */
+int comp_implicit_to_ary_mi(Compiler *c, int site, int op, int cid) {
   if (comp_ary_is_array_proper(c, cid)) return -1;
-  return comp_method_in_chain(c, cid, "to_ary", NULL);
+  return cplan_implied_target(c, site, op, cid, "to_ary", CIT_TABLE, NULL);
 }
 
 int builtin_instance_method_known(const char *cls, const char *m);

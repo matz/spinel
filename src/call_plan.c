@@ -3332,9 +3332,7 @@ const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
   es->cls = cls;
   es->scope = scope;
   for (int i = 0; i < np; i++) {
-    mtab_enter(c);
-    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
-    mtab_leave(c);
+    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, -1, -1, k);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     int e = cplan_implied_entry(c, k, "to_ary", mi);
     if (e < 0 || !c->scopes[e].reachable) continue;
@@ -3388,9 +3386,7 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
   if (oc < 0 && ot != TY_POLY) return 0;
   const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
   for (int i = 0; i < np && n < cap; i++) {
-    mtab_enter(c);
-    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
-    mtab_leave(c);
+    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, id, op, k);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     if (oc >= 0 && !is_descendant(c, k, oc)) continue;
     MethodLookup ml;
@@ -3407,9 +3403,7 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
 int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
   if (boxed) *boxed = 0;
   int cls = ty_is_object(t) ? ty_object_class(t) : -1;
-  mtab_enter(c);
-  int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
-  mtab_leave(c);
+  int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, at, op, cls) : -1;
   if (mi < 0 || c->scopes[mi].nparams != 0) return -1;
   MethodLookup ml;
   int vi = cplan_implied_target(c, at, op, cls, "to_ary", 0, &ml);

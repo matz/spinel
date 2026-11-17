@@ -1409,7 +1409,7 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
         cplan_implied_target(c, id, nt_ref(nt, id, "receiver"), cid, "<=>", CIT_TABLE, NULL) >= 0 && class_is_comparable(c, cid)) { *out = TY_BOOL; return 1; }
     /* default Object#<=> (no user method): 0 or nil, so poly (#2686). */
     if (sp_streq(name, "<=>") && argc == 1 &&
-        comp_method_in_chain(c, cid, "<=>", NULL) < 0) { *out = TY_POLY; return 1; }
+        call_target(c, id, cid, "<=>", 0, NULL) < 0) { *out = TY_POLY; return 1; }
     /* instance_variable_get(:@x) yields @x's declared type; instance_variable_set
        yields the field type too (C `lvalue = v` evaluates to the lvalue). The
        codegen lowers both to a direct iv_ field access on the known layout. */

@@ -14827,7 +14827,7 @@ static void emit_kconv_bridge(Compiler *c, Buf *b) {
       }
       /* one with no #to_f at all is rb_to_float's TypeError, which is also
          Numeric#coerce's beside a Float (a division by it) */
-      else if (comp_method_in_chain(c, i, "to_f", NULL) < 0) {
+      else if (cplan_implied_target(c, -1, -1, i, "to_f", CIT_TABLE, NULL) < 0) {
         if (rows++ == 0) buf_printf(b, "    case %d: switch (which) {\n", i);
         const char *rn = class_ruby_name(c, i);
         buf_printf(b, "      case 4: sp_raise_cls(\"TypeError\", \"can't convert %s into Float\"); return 0;\n",

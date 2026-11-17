@@ -11779,7 +11779,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* a clamp of the program's own receives the Range itself, not its bounds */
     if (clamp_arg) {
       TyKind ct = infer_type(c, nt_ref(nt, clamp_arg - 1, "receiver"));
-      if (ty_is_object(ct) && comp_method_in_chain(c, ty_object_class(ct), "clamp", NULL) >= 0) clamp_arg = 0;
+      if (ty_is_object(ct) && call_target(c, clamp_arg - 1, ty_object_class(ct), "clamp", 0, NULL) >= 0) clamp_arg = 0;
     }
     if (!clamp_arg && (lt == TY_TIME || ht == TY_TIME) &&
         (lo < 0 || lt == TY_TIME || lt == TY_NIL) && (hi < 0 || ht == TY_TIME || ht == TY_NIL))
@@ -12380,7 +12380,7 @@ TyKind infer_uncached(Compiler *c, int id) {
         if (!ty_is_hash(sh) && sh != TY_POLY && sh != TY_UNKNOWN && sh != TY_VOID &&
             !(ty_is_object(sh) && (ty_object_class(sh) < 0 ||
               cplan_implied_target(c, els[k], src, ty_object_class(sh), "to_hash", CIT_TABLE, NULL) >= 0 ||
-              comp_method_in_chain(c, ty_object_class(sh), "method_missing", NULL) >= 0))) {
+              cplan_implied_target(c, els[k], src, ty_object_class(sh), "method_missing", CIT_TABLE, NULL) >= 0))) {
           empty_spread = 1;
           continue;
         }

@@ -92,6 +92,9 @@ src/codegen.c:sg_delegate_scope
 src/codegen.c:emit_method
 src/analyze_pass.c:sg_override_ret
 src/codegen.c:obj_each_elems_text
+src/call_plan.c:cplan_to_ary_entries
+src/analyze_pass.c:bs_object_to_ary
+src/codegen.c:emit_kconv_bridge
 src/analyze.c:an_phase_procs
 src/analyze_desugar.c:send_split_by_owner
 src/analyze_pass.c:bare_call_on_class

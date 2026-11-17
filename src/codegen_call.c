@@ -17562,7 +17562,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
                        c->classes[ty_object_class(rt)].is_struct &&
                        /* an eql? written in the Struct.new block answers
                           for itself, as a struct's own == does below */
-                       comp_method_in_chain(c, ty_object_class(rt), "eql?", NULL) < 0))))) {
+                       call_target(c, id, ty_object_class(rt), "eql?", 0, NULL) < 0))))) {
     /* Array#eql? is structural like == but class-strict per element
        (1 is not eql? to 1.0): box both sides through the strict poly
        comparator. Scalar eql? is handled by the per-type emitters. */

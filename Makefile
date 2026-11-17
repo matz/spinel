@@ -678,10 +678,10 @@ packages/json/sp_json_mt.o: packages/json/sp_json.c packages/json/sp_json.h \
 # missing, leaving `require "openssl"` an unsatisfiable require rather than a
 # link error. -lssl/-lcrypto reach the link line through openssl.rb's ffi_lib,
 # which is parsed only when a program requires it.
-packages/openssl/sp_openssl.o: packages/openssl/sp_openssl.c \
+packages/openssl/sp_openssl.o: packages/openssl/sp_openssl.c packages/openssl/sp_asn1.h \
                                lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(OPENSSL_CPPFLAGS) -Ilib -Ipackages/openssl packages/openssl/sp_openssl.c -o $@
-packages/openssl/sp_openssl_mt.o: packages/openssl/sp_openssl.c \
+packages/openssl/sp_openssl_mt.o: packages/openssl/sp_openssl.c packages/openssl/sp_asn1.h \
                                   lib/spinel/runtime.h lib/sp_string.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) $(OPENSSL_CPPFLAGS) -Ilib -Ipackages/openssl packages/openssl/sp_openssl.c -o $@
 
@@ -1828,7 +1828,9 @@ test-corpus-summary: test-corpus-results
 # entries, and a raise caught through the exported try helper -- and a kernel
 # whose entries start and join threads after an init that started some, and
 # one whose at_exit hooks run when the host exits, not as its init returns,
-# and one whose entry calls a Struct's `new` the load redefined, and an
+# and one whose entry calls a Struct's `new` the load redefined, a typed and
+# an untyped entry that `new` one class compile, so do a typed entry and an
+# --ext-class table that `new` one class, and an
 # --ext-entry list longer than 2048 bytes exports every method it names.
 ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC_LIB) $(BUNDLED_NATIVE_PIC_OBJS) $(SPINEL_TIMEOUT) $(PLATFORM_OBJ)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
@@ -2014,6 +2016,17 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  elif ! awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/u.c" | grep -Fq 'sp_PtrArray * iv_items;'; then \
 	    echo "ext-test: FAIL (an --ext-entry whose value joins an Array of one class kept it boxed)"; ok=0; \
 	  fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/typed_untyped_new.rb -c --no-line-map --ext-init Init_ext_tu \
+	      --ext-entry ExtTU.shape,ExtTU.mk -o "$$tmp/tu.c" >"$$tmp/tu.out" 2>&1; then \
+	    echo "ext-test: FAIL (a typed and an untyped --ext-entry that new one class did not compile)"; sed -n 1,3p "$$tmp/tu.out"; ok=0; \
+	  fi; \
+	  for xc in ExtTC::Shape ExtTC::Maker ExtTC; do \
+	    $(SPINEL) test/ext/typed_ext_class_new.rb -c --no-line-map --ext-init Init_ext_tc \
+	      --ext-entry ExtTC.shape --ext-class $$xc -o "$$tmp/tc.c" >"$$tmp/tc.out" 2>&1 || \
+	      { echo "ext-test: FAIL (a typed --ext-entry and --ext-class $$xc that new one class did not compile)"; sed -n 1,3p "$$tmp/tc.out"; ok=0; }; \
+	  done; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/dup_leaf.rb -c --no-line-map --ext-init Init_ext_dup \
@@ -5252,6 +5265,10 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) test/obj_array_self_answering_filters.rb -c --no-line-map -o "$$tmp/osa.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_self_answering_filters: -c)"; ok=0; }; \
 	for cls in Shelf Bin Queue2; do \
 	  awk "/^struct sp_$${cls}_s \\{/,/^\\}/" "$$tmp/osa.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a read of delete_if, keep_if, sort! or sort_by!'s value left $$cls's @items boxed)"; ok=0; }; \
+	done; \
+	$(SPINEL) test/obj_array_pick_narrowed.rb -c --no-line-map -o "$$tmp/opn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_pick_narrowed: -c)"; ok=0; }; \
+	for v in by_max by_min cmp_max cmp_min pool empty one bad shrink grow; do \
+	  grep -q "sp_PtrArray \\* lv_$$v\b" "$$tmp/opn.c" || { echo "infer-test: FAIL (obj_array_pick_narrowed: max_by, min_by, a comparator's max or min, or sample left $$v boxed)"; ok=0; }; \
 	done; \
 	$(SPINEL) test/obj_array_nested_block.rb -c --no-line-map -o "$$tmp/onb.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_nested_block: -c)"; ok=0; }; \
 	for v in arrows pts; do \

@@ -1369,6 +1369,15 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
    raises: ver_entry_make)? The call then raises NoMethodError where it
    is. */
 int cplan_undef_stops(Compiler *c, int id, int cls, const char *name);
+/* Does class or module k itself answer `name` at its own level of call id's
+   instance lookup: a def of its own (not a copy an include made), a reader
+   its own body declared, or an alias? As the record proves it where the
+   call runs (elab_call_own_method), where the record is complete for the
+   level: its none stands only where it places every entry the tables hold
+   there (not a prepend's copy, nor an alias an include copied); elsewhere,
+   and for no call (-1), the tables' answer. The Enumerable- and Comparable-first level walk
+   asks it (comp_enum_answers_first). */
+int cplan_level_answers(Compiler *c, int id, int k, const char *name);
 /* ---- CU_*: a builtin name CRuby answers that no route of the compiler took ----
    cplan_missing's mirror: that one proves CRuby raises for a program's
    name; this one reads CRuby's tables for a builtin's. Whether call id --

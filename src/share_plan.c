@@ -257,7 +257,7 @@ static int share_plan_leaf_ok(Compiler *c, int a, int foreign, int depth) {
   if (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k))
     return depth < 16 && share_plan_supplies_d(c, a, depth + 1);
   const char *nm = k == NK_CallNode ? nt_str(nt, a, "name") : NULL;
-  if (nm && is_raise_alias(nm) && nt_ref(nt, a, "receiver") < 0 && comp_method_index(c, nm) < 0) return 1;
+  if (nm && is_raise_alias(nm) && nt_ref(nt, a, "receiver") < 0 && call_target(c, a, -1, nm, CT_TOP, NULL) < 0) return 1;
   if (share_plan_need(c, a) != SPN_OBJECT) return 1;
   return depth < 16 && share_plan_supplies_d(c, a, depth + 1);
 }

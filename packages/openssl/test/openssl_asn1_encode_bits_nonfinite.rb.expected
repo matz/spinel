@@ -1,0 +1,6 @@
+RangeError
+float Inf out of range of integer
+RangeError
+float -Inf out of range of integer
+RangeError
+float NaN out of range of integer

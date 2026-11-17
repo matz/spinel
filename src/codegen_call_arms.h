@@ -133,12 +133,12 @@ int emit_io_pick(Compiler *c, int id, int tv, const char *name, int public_only,
 void emit_io_pick_public(Compiler *c, int id, const char *qm, const char *pick, Buf *b);
 void emit_io_reopen_responds(Compiler *c, int id, int tv, const char *qm, int include_all, Buf *b);
 void emit_poly_dispatch_key(Compiler *c, int tv, int cls0_cand, int prim_cand, int exc_cand, Buf *b);
-/* The key the switch of a named dispatch of `name` reads off the boxed
-   value in _t<tv>, in the plan's key form (PolyPlan.flags, PPF_KEY_*): the
-   value takes the arm whose key it equals. A dispatch's switch and the test
+/* The key the switch of call id's named dispatch of `name` reads off the
+   boxed value in _t<tv>, in the plan's key form (PolyPlan.flags, PPF_KEY_*):
+   the value takes the arm whose key it equals. A dispatch's switch and the test
    of a send split that leads into it (emit_send_blind) both read it, so the
    split's arm takes exactly the values the arms do. */
-void emit_poly_plan_key(Compiler *c, unsigned form, int tv, const char *name, Buf *b);
+void emit_poly_plan_key(Compiler *c, int id, unsigned form, int tv, const char *name, Buf *b);
 void emit_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv);
 extern const char *const enumerable_names[];
 extern int g_rto_nil_obj;
@@ -316,8 +316,8 @@ const char *exc_gated_acc_fn(const char *name);
 int hoist_exc_recv(Compiler *c, int recv);
 int ctor_init_takes_block(Compiler *c, int initm);
 void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg_node, Buf *b);
-int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn);
-void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int args, int msg_node, Buf *b);
+int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn, int argc, const int *argv);
+void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int args, int msg_node, int call_id, Buf *b);
 void emit_raise_class_value(Compiler *c, int id, int kn, int mn, Buf *b);
 int exc_reopen_initialize(Compiler *c, int id, int ci);
 void emit_exc_new_no_init(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);

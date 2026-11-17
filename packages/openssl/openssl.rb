@@ -9,8 +9,8 @@
 # is its DER, read from PEM or DER and written back, and its fields are not
 # read (openssl/x509.rb). PKey::EC and Cipher are subsets of
 # CRuby's in a second sense, each spelled out in its own file: EC keeps
-# CRuby's method names but trades BN and EC::Point for the raw
-# bytes every protocol that names an EC key means by them, and Cipher keeps
+# its key material as bytes, with BN and EC::Point wrappers for group order
+# and public-point export, and Cipher keeps
 # CRuby's object while buffering rather than streaming, over aes-128-gcm and
 # aes-256-gcm only.
 #
@@ -32,6 +32,7 @@ require "openssl/digest"
 require "openssl/cipher"
 require "openssl/kdf"
 require "openssl/pkey"
+require "openssl/asn1"
 require "openssl/x509"
 require "openssl/random"
 
@@ -112,6 +113,11 @@ module OpenSSL
     native_func :ecdsa_verify,  [:string, :string, :string, :string, :int], :int,     "sp_ecdsa_verify"
     native_func :ec_check_point, [:string, :string],                  :int,     "sp_ec_check_point"
     native_func :ec_curve_name, [:string, :int], :string, "sp_ec_curve_name"
+    native_func :ec_group_order, [:string], :any, "sp_ec_group_order"
+    native_func :bn_integer, [:string, :int], :any, "sp_openssl_bn_integer"
+    native_func :bn_string, [:any, :int], :cbinstr, "sp_openssl_bn_string"
+    native_func :bn_compare, [:any, :any], :int, "sp_openssl_bn_compare"
+    native_func :ec_point_octets, [:string, :string, :int], :cbinstr, "sp_ec_point_octets"
     native_func :ec_export, [:string, :string, :string, :int, :int, :int], :cbinstr, "sp_ec_export"
     native_func :ed25519_sign, [:string, :string], :cbinstr, "sp_ed25519_sign"
     native_func :ed25519_verify, [:string, :string, :string, :int], :int, "sp_ed25519_verify"

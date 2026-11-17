@@ -1,0 +1,72 @@
+%: NoMethodError
+*: NoMethodError
+**: NoMethodError
++@: NoMethodError
+-@: NoMethodError
+/: NoMethodError
+<<: NoMethodError
+>>: NoMethodError
+abs: NoMethodError
+bit_set?: NoMethodError
+clear_bit!: NoMethodError
+cmp: NoMethodError
+copy: NoMethodError
+eql?: NoMethodError
+gcd: NoMethodError
+get_flags: NoMethodError
+hash: NoMethodError
+lshift!: NoMethodError
+mask_bits!: NoMethodError
+mod_add: NoMethodError
+mod_exp: NoMethodError
+mod_inverse: NoMethodError
+mod_mul: NoMethodError
+mod_sqr: NoMethodError
+mod_sqrt: NoMethodError
+mod_sub: NoMethodError
+negative?: NoMethodError
+num_bits: NoMethodError
+num_bytes: NoMethodError
+odd?: NoMethodError
+one?: NoMethodError
+pretty_print: NoMethodError
+prime?: NoMethodError
+prime_fasttest?: NoMethodError
+rshift!: NoMethodError
+set_bit!: NoMethodError
+set_flags: NoMethodError
+sqr: NoMethodError
+to_bn: NoMethodError
+to_int: NoMethodError
+ucmp: NoMethodError
+zero?: NoMethodError
+hash-key: NoMethodError
+< form 0: NoMethodError
+< form 1: NoMethodError
+< form 2: NoMethodError
+<= form 0: NoMethodError
+<= form 1: NoMethodError
+<= form 2: NoMethodError
+> form 0: NoMethodError
+> form 1: NoMethodError
+> form 2: NoMethodError
+>= form 0: NoMethodError
+>= form 1: NoMethodError
+>= form 2: NoMethodError
+clamp form 0: NoMethodError
+clamp form 1: NoMethodError
+clamp form 2: NoMethodError
+between? form 0: NoMethodError
+between? form 1: NoMethodError
+between? form 2: NoMethodError
+coerce form 0: NoMethodError
+coerce form 1: NoMethodError
+coerce form 2: NoMethodError
++ form 0: NoMethodError
++ form 1: NoMethodError
++ form 2: NoMethodError
+- form 0: NoMethodError
+- form 1: NoMethodError
+- form 2: NoMethodError
+Integer arithmetic 0: NoMethodError
+Integer arithmetic 1: NoMethodError

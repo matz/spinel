@@ -2068,7 +2068,21 @@ static sp_PolyArray *sp_PolyArray_intersect(sp_PolyArray *a, sp_PolyArray *b);
 static sp_PolyArray *sp_PolyArray_union(sp_PolyArray *a, sp_PolyArray *b);
 static inline int sp_poly_is_user_obj(sp_RbVal v);
 static sp_RbVal sp_poly_ary_operand(sp_RbVal v);
-static sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ */
+/* `&`, `|` or `^` on two boxed values: two Integers answer inline, and every
+   other pair (a user class's method, nil and booleans, Arrays, a Bignum, a
+   refusal) goes to sp_poly_bitop_slow, kept out of line. Whole, the body
+   was large enough that the C compiler inlined it, Bignum arm and all, into
+   a caller's loop once the caller was small, and the loop ran slower than
+   with the call. */
+static SP_NOINLINE sp_RbVal sp_poly_bitop_slow(sp_RbVal a, sp_RbVal b, int op);
+static inline sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ */
+  if (SP_LIKELY(a.tag == SP_TAG_INT && b.tag == SP_TAG_INT)) {
+    sp_int ai = a.v.i, bi = b.v.i;
+    return sp_box_int(op == 0 ? (ai & bi) : op == 1 ? (ai | bi) : (ai ^ bi));
+  }
+  return sp_poly_bitop_slow(a, b, op);
+}
+static SP_NOINLINE sp_RbVal sp_poly_bitop_slow(sp_RbVal a, sp_RbVal b, int op) {
   /* a user class's own &/|/^ comes first: coercing the object to an integer
      answered a builtin result for a method the class had written (#3501) */
   if (a.tag == SP_TAG_OBJ && a.cls_id >= 0)
@@ -8470,7 +8484,7 @@ static sp_RbVal sp_poly_shr(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_BIGINT)
     return sp_box_bigint(sp_bigint_shr((sp_Bigint *)a.v.p, (int64_t)sp_poly_bit_operand(b, 1)));
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad(">>", a, b);
-  /* Integer#>> is Integer's alone (see sp_poly_bitop) */
+  /* Integer#>> is Integer's alone (see sp_poly_bitop_slow) */
   if (a.tag != SP_TAG_INT) return sp_poly_binop_bad(">>", a, b);
   sp_int v = sp_poly_to_i(a), s = sp_poly_bit_operand(b, 1);
   /* a shift by the word or more is all sign bits (C leaves it undefined:
@@ -8505,7 +8519,7 @@ static sp_RbVal sp_poly_band(sp_RbVal a, sp_RbVal b) {
     return sp_box_poly_array(sp_PolyArray_intersect(pa, pb));
   }
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("&", a, b);
-  /* Integer#& is Integer's alone (see sp_poly_bitop) */
+  /* Integer#& is Integer's alone (see sp_poly_bitop_slow) */
   if (a.tag != SP_TAG_INT && a.tag != SP_TAG_BIGINT) return sp_poly_binop_bad("&", a, b);
   if (sp_poly_bitop_wide(a, b)) return sp_poly_bitop(a, b, 0);
   return sp_box_int(sp_poly_to_i(a) & sp_poly_bit_operand(b, 0));
@@ -8520,7 +8534,7 @@ static sp_RbVal sp_poly_bor(sp_RbVal a, sp_RbVal b) {
     return sp_box_poly_array(sp_PolyArray_union(pa, pb));
   }
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("|", a, b);
-  /* Integer#| is Integer's alone (see sp_poly_bitop) */
+  /* Integer#| is Integer's alone (see sp_poly_bitop_slow) */
   if (a.tag != SP_TAG_INT && a.tag != SP_TAG_BIGINT) return sp_poly_binop_bad("|", a, b);
   if (sp_poly_bitop_wide(a, b)) return sp_poly_bitop(a, b, 1);
   return sp_box_int(sp_poly_to_i(a) | sp_poly_bit_operand(b, 0));
@@ -8529,7 +8543,7 @@ static sp_RbVal sp_poly_bxor(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_NIL) return sp_box_bool(sp_poly_truthy(b));
   if (a.tag == SP_TAG_BOOL) return sp_box_bool(a.v.b != sp_poly_truthy(b));
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("^", a, b);
-  /* Integer#^ is Integer's alone (see sp_poly_bitop) */
+  /* Integer#^ is Integer's alone (see sp_poly_bitop_slow) */
   if (a.tag != SP_TAG_INT && a.tag != SP_TAG_BIGINT) return sp_poly_binop_bad("^", a, b);
   if (sp_poly_bitop_wide(a, b)) return sp_poly_bitop(a, b, 2);
   return sp_box_int(sp_poly_to_i(a) ^ sp_poly_bit_operand(b, 0));
@@ -14906,6 +14920,10 @@ static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   if (v.tag == SP_TAG_CLASS && strcmp(cn, "Class") == 0 && sp_poly_is_a_hook)
     return (sp_bool)(sp_poly_is_a_hook(v, (sp_Class){-109, NULL}) != 0);
   if (strcmp(sp_poly_class_name(v), cn) == 0) return TRUE;  /* exact builtin class */
+  /* (Mutex, Queue, SizedQueue and ConditionVariable name Thread's: the value's class is named Thread::Mutex) */
+  { const char *vn = sp_poly_class_name(v);
+    if (strncmp(vn, "Thread::", 8) == 0 && strcmp(vn + 8, cn) == 0) return TRUE;
+    if (strcmp(vn, "Thread::SizedQueue") == 0 && (strcmp(cn, "Queue") == 0 || strcmp(cn, "Thread::Queue") == 0)) return TRUE; }
   /* a chain or a product is an Enumerator whose #class names its subclass
      (Enumerator::Chain, Enumerator::Product), so the exact name above misses it */
   if (strcmp(cn, "Enumerator") == 0 && v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)
@@ -17549,6 +17567,79 @@ static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options, in
   }
   sp_RbVal value = sp_json_parse_duplicates(s, limit, duplicates);
   return symbolize ? sp_json_symbolize(value) : value;
+}
+/* JSON.generate(obj, opts) and JSON.pretty_generate(obj, opts): the options
+   read as Ruby 4.0's bundled json (2.18) reads them, in its State#configure.
+   ascii_only, script_safe (and its other name escape_slash), allow_nan and
+   max_nesting are honoured; buffer_initial_length changes nothing, nor does
+   a true allow_duplicate_key (the writer writes every key, as that json does
+   by default). An option Spinel would ignore while that json's answer
+   changes -- a layout String other than the one the call writes, strict,
+   as_json, a depth to start from, a false allow_duplicate_key (which raises
+   on a duplicate there) -- raises ArgumentError by name, as JSON.parse's do.
+   A name that json does not know is ignored, as there (sort_keys among them,
+   which json 3 reads). nil and false are no options.
+   MODE: 1 for pretty_generate; 2 for a builtin's #to_json(state), which
+   reads a Hash as these options and takes anything else for no options
+   (CRuby's State.from_state), where generate refuses it. */
+extern const char *sp_json_generate_with(sp_RbVal v, int esc, int allow_nan, int limit_set, sp_int max_nesting, int pretty);
+static SP_NOINLINE SP_NORETURN void sp_json_gen_unsupported(const char *name, int pretty) {
+  sp_raise_cls("ArgumentError", sp_sprintf("unsupported JSON.%s option: %s", pretty ? "pretty_generate" : "generate", name));
+}
+/* indent / space / space_before / object_nl / array_nl: nil, false and ""
+   are the empty String; anything else but a String is a TypeError. WANT is
+   what the call writes there. */
+static inline int sp_json_gen_layout_ok(sp_RbVal value, const char *want) {
+  if (!sp_poly_truthy(value)) return want[0] == 0;
+  sp_RbVal sv = sp_rbval_str(value);
+  if (sv.tag != SP_TAG_STR)
+    sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected String)", sp_poly_class_name(value)));
+  size_t n = (size_t)sp_str_byte_len(sv.v.s);
+  return n == strlen(want) && memcmp(sv.v.s, want, n) == 0;
+}
+static inline const char *sp_json_generate_options(sp_RbVal v, sp_RbVal options, int mode) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(options);
+  int pretty = mode & 1;
+  int esc = 0, allow_nan = 0, limit_set = 0;
+  sp_int limit = 0;
+  int is_hash = options.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(options.cls_id);
+  if (sp_poly_truthy(options) && !is_hash && !(mode & 2))
+    sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Hash)", sp_poly_class_name(options)));
+  if (is_hash) {
+    for (sp_int i = 0; i < sp_poly_length(options); i++) {
+      sp_RbVal key, value; sp_poly_hash_pair(options, i, &key, &value);
+      SP_GC_ROOT_RBVAL(key); SP_GC_ROOT_RBVAL(value);
+      const char *name = key.tag == SP_TAG_SYM ? sp_sym_name_fn((sp_sym)key.v.i) : NULL;
+      /* pretty_generate lays out with CRuby's PRETTY_GENERATE_OPTIONS, which
+         an option of the caller's replaces */
+      const char *layout = !name ? NULL :
+        !strcmp(name, "indent") ? (pretty ? "  " : "") :
+        !strcmp(name, "space") ? (pretty ? " " : "") :
+        !strcmp(name, "space_before") ? "" :
+        !strcmp(name, "object_nl") || !strcmp(name, "array_nl") ? (pretty ? "\n" : "") : NULL;
+      if (layout) { if (!sp_json_gen_layout_ok(value, layout)) sp_json_gen_unsupported(name, pretty); }
+      else if (name && !strcmp(name, "ascii_only")) { if (sp_poly_truthy(value)) esc |= 1; else esc &= ~1; }
+      else if (name && (!strcmp(name, "script_safe") || !strcmp(name, "escape_slash"))) {
+        if (sp_poly_truthy(value)) esc |= 2; else esc &= ~2;
+      }
+      else if (name && !strcmp(name, "allow_nan")) allow_nan = sp_poly_truthy(value);
+      else if (name && !strcmp(name, "max_nesting")) {
+        limit_set = 1;
+        limit = sp_poly_truthy(value) ? sp_poly_to_int_arg(value) : 0;
+      }
+      else if (name && !strcmp(name, "depth")) {
+        if (sp_poly_truthy(value) && sp_poly_to_int_arg(value) != 0) sp_json_gen_unsupported(name, pretty);
+      }
+      else if (name && (!strcmp(name, "strict") || !strcmp(name, "as_json"))) {
+        if (sp_poly_truthy(value)) sp_json_gen_unsupported(name, pretty);
+      }
+      else if (name && !strcmp(name, "allow_duplicate_key")) {
+        if (!sp_poly_truthy(value)) sp_json_gen_unsupported(name, pretty);
+      }
+      /* buffer_initial_length, and any name json does not know, change nothing */
+    }
+  }
+  return sp_json_generate_with(v, esc, allow_nan, limit_set, limit, pretty);
 }
 /* JSON.parse(object_class: OpenStruct): every parsed object becomes an
    OpenStruct over its members. CRuby's parser makes one per object and

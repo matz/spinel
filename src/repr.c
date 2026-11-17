@@ -844,7 +844,7 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
     /* (a class with no arm and no method_missing raises NoMethodError,
        which answers no String: strbuf_poly_user_boxes) */
     if (arm < 0) {
-      if (ks[j] < 0 || ks[j] >= c->nclasses || comp_method_in_chain(c, ks[j], "method_missing", NULL) >= 0 ||
+      if (ks[j] < 0 || ks[j] >= c->nclasses || call_target(c, v, ks[j], METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0 ||
           call_answers(c, -1, ks[j], nm, 0, NULL))
         return 0;
       continue;

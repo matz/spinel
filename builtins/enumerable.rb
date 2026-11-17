@@ -112,9 +112,9 @@ module Enumerable
     if block_given?
       __no_false(n, "Integer")
       if n
-        n = __enum_count_int(n)
-        raise ArgumentError, "negative size (#{n})" if n < 0
-        sort_by { |x| yield x }.first(n)
+        # the count's walk is its own method (__nmin_by), so a call without one
+        # runs only the walk below
+        __nmin_by(__enum_count_int(n), false) { |x| yield x }
       else
         # one walk: the first element's key is taken as it comes, so a
         # receiver that yields once is not read twice, and a leading nil is
@@ -148,11 +148,9 @@ module Enumerable
     if block_given?
       __no_false(n, "Integer")
       if n
-        n = __enum_count_int(n)
-        raise ArgumentError, "negative size (#{n})" if n < 0
-        # descending by key, ties in encounter order: a stable ascending sort
-        # of the reversed elements, read backwards
-        to_a.reverse.sort_by { |x| yield x }.reverse.first(n)
+        # the count's walk is its own method (__nmin_by), so a call without one
+        # runs only the walk below
+        __nmin_by(__enum_count_int(n), true) { |x| yield x }
       else
         # one walk: the first element's key is taken as it comes, so a
         # receiver that yields once is not read twice, and a leading nil is
@@ -669,6 +667,144 @@ module Enumerable
   # An optional argument is absent only when it is nil: false is one, which
   # CRuby refuses. The test is on truthiness, so an omitted argument folds
   # it away.
+  # min_by(n) / max_by(n) (rev): CRuby's nmin_run. Each key is taken as its
+  # element comes (a key block that changes the receiver changes the walk),
+  # into a buffer of up to 4n; a full buffer is cut to the n best
+  # (__nmin_filter), whose cut key a later key must then beat, so most
+  # elements cost one comparison. The kept ones are sorted by key at the end
+  # (a few in place, __nmin_sort; equal keys keep their order), reversed for
+  # max_by. A count of 0 walks nothing. The receiver itself is only walked,
+  # so a call keeps an Array of objects narrowed.
+  def __nmin_by(n, rev)
+    raise ArgumentError, "negative size (#{n})" if n < 0
+    if n == 0
+      []
+    else
+      keys = []
+      elems = []
+      limit = nil
+      limited = false
+      each do |x|
+        k = yield x
+        keep = true
+        if limited
+          c = k <=> limit
+          __nmin_cmp_fail(k, limit) if c.nil?
+          keep = rev ? c > 0 : c < 0
+        end
+        if keep
+          keys << k
+          elems << x
+          # (full at 4n: the buffer grows by one, so its size reaches 4n
+          # before any other size whose quarter is n, and no 4n is computed
+          # that could overflow)
+          if keys.size / 4 == n
+            limit = __nmin_filter(keys, elems, n, rev)
+            limited = true
+          end
+        end
+      end
+      __nmin_filter(keys, elems, n, rev) if keys.size > n
+      # (sort_by takes each element's key once, in order, so j walks keys
+      # beside elems; fetch, not keys[j]: a key that could be nil would sort
+      # through the checked comparison, where Integer keys compare natively)
+      j = -1
+      sorted = keys.size <= 16 ? __nmin_sort(keys, elems) : elems.sort_by { j += 1; keys.fetch(j) }
+      rev ? sorted.reverse! : sorted
+    end
+  end
+
+  # min_by(n) / max_by(n)'s cut, CRuby's nmin_filter: a quickselect over the
+  # buffered keys (elems moved alongside) that leaves the n best first --
+  # reversed for max_by -- and answers the cut key, the last pivot. The
+  # comparisons, and so a comparison's error, run in CRuby's order.
+  def __nmin_filter(keys, elems, n, rev)
+    left = 0
+    right = keys.size - 1
+    store = 0
+    while true
+      piv = left + (right - left) / 2
+      t = keys[piv]; keys[piv] = keys[right]; keys[right] = t
+      t = elems[piv]; elems[piv] = elems[right]; elems[right] = t
+      piv = right
+      store = left
+      npiv = 1
+      i = left
+      while i <= right - npiv
+        c = keys[i] <=> keys[piv]
+        __nmin_cmp_fail(keys[i], keys[piv]) if c.nil?
+        if c == 0
+          w = right - npiv
+          t = keys[i]; keys[i] = keys[w]; keys[w] = t
+          t = elems[i]; elems[i] = elems[w]; elems[w] = t
+          npiv += 1
+        else
+          # by its sign, as CRuby's rb_cmpint reads it: negating a key's own
+          # `<=>` answer could overflow
+          if rev ? c > 0 : c < 0
+            t = keys[i]; keys[i] = keys[store]; keys[store] = t
+            t = elems[i]; elems[i] = elems[store]; elems[store] = t
+            store += 1
+          end
+          i += 1
+        end
+      end
+      j = store
+      i = right
+      while right - npiv < i
+        if j <= i
+          t = keys[i]; keys[i] = keys[j]; keys[j] = t
+          t = elems[i]; elems[i] = elems[j]; elems[j] = t
+          j += 1
+        end
+        i -= 1
+      end
+      break if store <= n && n <= store + npiv
+      if n < store
+        right = store - 1
+      else
+        left = store + npiv
+      end
+    end
+    limit = keys[store]
+    while keys.size > n
+      keys.pop
+      elems.pop
+    end
+    limit
+  end
+
+  # min_by(n) / max_by(n)'s kept ones in key order, in place: an insertion
+  # sort of the few keys (elems moved alongside), a later equal key after an
+  # earlier one, as the stable sort of the positions orders them. Answers
+  # elems.
+  def __nmin_sort(keys, elems)
+    m = keys.size
+    i = 1
+    while i < m
+      k = keys[i]
+      x = elems[i]
+      j = i - 1
+      while j >= 0
+        c = k <=> keys[j]
+        __nmin_cmp_fail(k, keys[j]) if c.nil?
+        break if c >= 0
+        keys[j + 1] = keys[j]
+        elems[j + 1] = elems[j]
+        j -= 1
+      end
+      keys[j + 1] = k
+      elems[j + 1] = x
+      i += 1
+    end
+    elems
+  end
+
+  # the ArgumentError <=> raises for a key it cannot order (rb_cmperr)
+  def __nmin_cmp_fail(a, b)
+    raise ArgumentError, "comparison of #{a.class} with #{(b.nil? || b == true || b == false || b.is_a?(Numeric) || b.is_a?(Symbol)) ? b.inspect : b.class} failed"
+  end
+
   def __no_false(opt, what)
     raise TypeError, "no implicit conversion of false into #{what}" if !opt && !opt.nil?
   end

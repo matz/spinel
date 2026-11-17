@@ -2468,17 +2468,19 @@ const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n) {
 }
 /* Whether a call named n on an instance of Array subclass cid is Array's:
    no method, reader or writer of the class chain takes the name (as
-   call_target answers call id; -1 for no call), it asks nothing about the
-   object itself, and Array (or Enumerable, which Array includes) has it. */
+   call_target and call_attr_target answer call id, an accessor where an
+   attr_* of the name has run at the call; -1 for no call), it asks nothing
+   about the object itself, and Array (or Enumerable, which Array includes)
+   has it. */
 int comp_arysub_name_is_array(Compiler *c, int id, int cid, const char *n) {
   if (comp_ary_root(c, cid) < 0 || !n) return 0;
   /* a method of the builtin's reopen is the builtin's */
   MethodLookup ml = { .def_class = -1 };
   int ro = comp_arysub_reopen(c, cid);
   if (((call_target(c, id, cid, n, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) ||
-       comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, id, cid, n)) return 0;
+       call_attr_target(c, id, cid, n, CT_ATTR, NULL)) && !comp_enum_answers_first(c, id, cid, n)) return 0;
   char base[256];
-  if (setter_base_name(n, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return 0;
+  if (setter_base_name(n, base, sizeof base) && call_attr_target(c, id, cid, base, CT_ATTR | CT_WRITER, NULL)) return 0;
   /* != is BasicObject's, which calls == and negates it: a class with its
      own == answers != with that == (the call plan's delegate) */
   if (sp_streq(n, "!=")) {
@@ -3611,16 +3613,22 @@ int comp_native_binding_class(Compiler *c, int k, const char *name) {
 /* The native class whose binding answers `name` on an instance of class
    cid: cid itself for a native class, and for a subclass of one (#9269)
    the native class its chain reaches, where no method or reader of the
-   program's in the chain answers the name first. -1 otherwise. */
+   program's in the chain answers the name first. -1 otherwise. The plan's
+   no-site asks: the answer picks the binding (and the slot layout) that
+   inference, the arms and repr_of all serve for every object of cid,
+   several of them with no call to ask at, so a def or accessor that runs
+   anywhere stands the binding down. */
 int comp_native_answer_class(Compiler *c, int cid, const char *name) {
   if (cid < 0 || cid >= c->nclasses) return -1;
   if (c->classes[cid].is_native_class) return cid;
   int r = c->classes[cid].nsub_root - 1;
   if (r < 0 || !name) return -1;
-  if (comp_method_in_chain(c, cid, name, NULL) >= 0 || comp_reader_in_chain(c, cid, name, NULL)) return -1;
+  if (call_target(c, -1, cid, name, CT_METHODS, NULL) >= 0 ||
+      call_attr_target(c, -1, cid, name, CT_ATTR, NULL)) return -1;
   /* (nor an attribute writer of the program's) */
   char base[256];
-  if (setter_base_name(name, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return -1;
+  if (setter_base_name(name, base, sizeof base) &&
+      call_attr_target(c, -1, cid, base, CT_ATTR | CT_WRITER, NULL)) return -1;
   return r;
 }
 
@@ -3793,18 +3801,6 @@ int comp_writer_in_chain(Compiler *c, int class_id, const char *name, int *def_c
   return accessor_chain(c, class_id, name, def_class, 1);
 }
 
-/* Whether the program answers `name` at one level of the lookup, class or
-   module k itself: a def of its own (not a copy an include made), a reader
-   its own body declared, or an alias. */
-static int mixin_level_answers(Compiler *c, int k, const char *name) {
-  ClassInfo *ci = &c->classes[k];
-  int mi = comp_method_in_class(c, k, name);
-  if (mi >= 0 && (!c->scopes[mi].is_include_copy || c->scopes[mi].is_prepend_copy)) return 1;
-  if (comp_is_own_reader(ci, name)) return 1;
-  for (int a = 0; a < ci->naliases; a++)
-    if ((!ci->alias_sg || !ci->alias_sg[a]) && sp_streq(ci->alias_new[a], name)) return 1;
-  return 0;
-}
 /* Ruby's lookup from level k: 1 when the program answers first, 2 when
    Enumerable does, 0 when neither does at k or below the modules it
    includes (the last included first, Enumerable at its place among them).
@@ -3854,23 +3850,24 @@ static int mixin_reaches(Compiler *c, int k, int what, const char *name) {
   free(seen);
   return r;
 }
-static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, int comparable, int depth) {
+static int mixin_level_walk(Compiler *c, int id, int k, const char *name, int own_enum, int comparable, int depth) {
   ClassInfo *ci = &c->classes[k];
   /* A prepended module's method precedes its includes. Its transplanted
      scope records the module whose own lookup supplies that order. */
   if (comparable && ci->cmp_prepended == 2) {
-    int mi = comp_method_in_class(c, k, name);
+    /* (the copy the prepend made: its module, the walk's next level) */
+    int mi = comp_name_responder(c, k, name, CT_OWN);
     if (mi >= 0 && c->scopes[mi].is_prepend_copy && depth < c->nclasses) {
       int m = c->scopes[mi].origin_module_ci - 1;
       if (m >= 0 && m != k) {
-        int r = mixin_level_walk(c, m, name, own_enum, comparable, depth + 1);
+        int r = mixin_level_walk(c, id, m, name, own_enum, comparable, depth + 1);
         if (r) return r;
       }
     }
     return 2;
   }
   if (comparable ? ci->cmp_prepended == 1 : ci->enum_prepended) return 2;   /* in front of the class's own */
-  if (mixin_level_answers(c, k, name)) return 1;
+  if (cplan_level_answers(c, id, k, name)) return 1;
   int pos = comparable ? ci->cmp_inc_at : ci->enum_inc_at;
   int at = own_enum && pos ? pos - 1 : -1;
   for (int j = ci->nincluded_mods - 1; ; j--) {
@@ -3878,7 +3875,7 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
     if (j < 0) return 0;
     int m = ci->included_mods[j];
     if (m < 0 || m >= c->nclasses || m == k || depth >= (comparable ? c->nclasses : 16)) continue;
-    int r = mixin_level_walk(c, m, name, own_enum, comparable, depth + 1);
+    int r = mixin_level_walk(c, id, m, name, own_enum, comparable, depth + 1);
     if (r) return r;
   }
 }
@@ -3903,7 +3900,7 @@ static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, i
          prepended to, behind the ones below it */
       for (int j = cid, g = 0; g < 256; j = c->classes[j].parent, g++) {
         if (c->classes[j].enum_prepended) return 1;
-        if (mixin_level_answers(c, j, name)) return 0;
+        if (cplan_level_answers(c, at, j, name)) return 0;
         if (j == k || c->classes[j].parent < 0) break;
       }
       return tbl;
@@ -3913,7 +3910,7 @@ static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, i
   }
   n = 0;
   for (int k = cid; k >= 0 && k < c->nclasses && n < 256; k = c->classes[k].parent, n++) {
-    int r = mixin_level_walk(c, k, name, k == top, comparable, 0);
+    int r = mixin_level_walk(c, at, k, name, k == top, comparable, 0);
     if (r) return r == 2;
     if (k == c->classes[k].parent) break;
   }

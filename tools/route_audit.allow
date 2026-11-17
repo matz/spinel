@@ -53,8 +53,6 @@ src/compiler.c comp_native_binding_class which classes answer the name
 src/compiler.c comp_poly_arm_defines which classes answer the name
 src/compiler.c comp_poly_arm_defines_n which classes answer the name
 src/compiler.c comp_subclass_answers which subclasses answer the name
-src/compiler.c mixin_level_answers which modules answer the name
-src/compiler.c mixin_level_walk which modules answer the name
 src/compiler.c pc_build which classes answer the name
 
 # is a name defined (or listable) for a class, module or the program
@@ -108,6 +106,7 @@ src/analyze_cls.c cf_scal_build Enumerable's iterator names
 src/analyze_desugar.c class_answers_own to_ary / to_a
 src/analyze_infer.c kconv_integer_kind to_int / to_i
 src/call_plan.c cplan_conversion the conversion protocol's names
+src/call_plan.c cplan_level_answers one level of a mixin walk's lookup, its own table, where the record cannot tell
 src/call_plan.c cplan_mm_method =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
 src/call_plan.c cplan_mm_chain =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
 src/call_plan.c cplan_dispatch_miss =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name

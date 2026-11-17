@@ -5806,6 +5806,17 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       buf_puts(b, sp_streq(name, "first") ? ", 0))" : ", -1))");
       return 1;
     }
+    /* sample: an element at random, nil when there is none, inline as the
+       boxed path's sp_PolyArray_sample is (no call, nothing to root) */
+    if (!nested && sp_streq(name, "sample") && argc == 0) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_PtrArray *_t%d = ", t);
+      if (!nil_ok) buf_puts(b, "(sp_PtrArray *)sp_nil_recv_named(");
+      emit_expr(c, recv, b);
+      if (!nil_ok) buf_puts(b, ", \"sample\")");
+      buf_printf(b, "; _t%d->len > 0 ? (%s *)_t%d->data[sp_krand_below(_t%d->len)] : (%s *)NULL; })", t, ecn, t, t, ecn);
+      return 1;
+    }
     /* the removals, which the pass admits for an object array only: each
        function is named as the method is */
     if (!nested && (((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 0) ||
@@ -5945,6 +5956,18 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       buf_printf(b, "((%s *)sp_PtrArray_minmax_obj(", ecn);
       emit_expr(c, recv, b);
       buf_printf(b, ", %d, %d))", ecls, sp_streq(name, "max") ? 1 : 0);
+      return 1;
+    }
+    /* min or max with a comparator the loop does not lower (emit_minmax_cmp_expr:
+       a tail that answers no number and no nil, a break as the tail): as on
+       the boxed path, the compile warns and the call raises
+       NotImplementedError where it runs, after its receiver */
+    if (!nested && is_minmax_query(name) && argc == 0 && nt_ref(nt, id, "block") >= 0) {
+      char what[16]; snprintf(what, sizeof what, "Array#%s", name);
+      warn_unrouted_call(c, id, what);
+      buf_printf(b, "((%s *)(sp_raise_cls(\"NotImplementedError\", ({ (void)(", ecn);
+      emit_expr_for_effect(c, recv, b);
+      buf_printf(b, "); \"spinel: Array#%s is not supported\"; })), (void *)0))", name);
       return 1;
     }
     return 0;  /* unsupported obj-array op: pass should have prevented this. */
@@ -11964,6 +11987,50 @@ int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
   return 1;
 }
 
+/* Keep the pair's key alive while its value runs. A String key stays a
+   handle until the Hash store reads its bytes, after any mutation by the
+   value. Each expression's prelude follows the preceding value's hold. */
+static void emit_struct_to_h_pair(Compiler *c, int block, int body, int key, int value,
+                                 Repr hr, const char *hn, int hash, Buf *b) {
+  Buf pre = {0}, kb = {0}, vb = {0};
+  Buf *saved_pre = g_pre;
+  g_pre = &pre;
+  emit_block_locals_reset(c, block, &pre, 0);
+  int redo = emit_iter_step_stmts(c, body, &pre, 0, NULL);
+  TyKind hold = hr.key == TY_STRING ? TY_STRBUF : hr.key;
+  if (key >= 0) {
+    if (hold == TY_STRBUF) emit_strbuf_value(c, key, &kb);
+    else if (hold == TY_POLY && repr_of(c, key).kind != RK_BOXED) emit_boxed(c, key, &kb);
+    else emit_expr(c, key, &kb);
+  }
+  if (pre.p) { buf_puts(b, " "); buf_puts(b, pre.p); }
+  free(pre.p);
+  memset(&pre, 0, sizeof pre);
+  int tk = ++g_tmp;
+  buf_puts(b, " "); emit_ctype(c, hold, b);
+  buf_printf(b, " _t%d = %s; ", tk, kb.p ? kb.p : "0");
+  free(kb.p);
+  emit_gc_root_tmp_refs(c, hold, tk, b);
+  if (value >= 0) {
+    if (hr.val == TY_POLY && repr_of(c, value).kind != RK_BOXED) emit_boxed(c, value, &vb);
+    else emit_expr(c, value, &vb);
+  }
+  if (redo) g_redo_depth--;
+  g_pre = saved_pre;
+  if (pre.p) { buf_puts(b, " "); buf_puts(b, pre.p); }
+  free(pre.p);
+  int tv = ++g_tmp;
+  buf_puts(b, " "); emit_ctype(c, typed_elem_held(hr.as_ty), b);
+  buf_printf(b, " _t%d = ", tv);
+  emit_typed_elem_hold(c, value, hr.as_ty, vb.p ? vb.p : "0", b);
+  free(vb.p);
+  buf_puts(b, "; "); emit_elem_entry(b, 1, hr.as_ty, hn, "set", "");
+  buf_printf(b, "(_t%d, ", hash);
+  if (hold == TY_STRBUF) buf_printf(b, "SP_STR_B(_t%d)", tk);
+  else buf_printf(b, "_t%d", tk);
+  buf_printf(b, ", _t%d);", tv);
+}
+
 static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind res, int *out) {
   /* Struct instance methods (to_h / to_a / values / members / dig). */
   if (!(recv >= 0 && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
@@ -12024,37 +12091,13 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
         int en = 0; const int *els = nt_arr(nt, last, "elements", &en);
         if (en == 2) { ke = els[0]; ve = els[1]; }
       }
-      TyKind kt = hr.key, vt = hr.val;
       for (int i = 0; i < sc->nmembers; i++) {
         if (kp) buf_printf(b, " lv_%s = (sp_sym)%d;", kp, comp_sym_intern(c, sc->ivars[i] + 1));
         if (vp) {
           char fb[300]; snprintf(fb, sizeof fb, "_t%d->iv_%s", t, iv_c(sc->ivars[i] + 1));
           buf_printf(b, " lv_%s = ", vp); emit_member_box(c, sc, i, fb, b); buf_puts(b, ";");
         }
-        /* a composite key/value (an Array or Hash literal built from the
-           block parameters) hoists its construction into the prelude, which
-           runs BEFORE these per-member assignments -- so it read stale
-           parameters. Emit that setup here, after them (#3603). */
-        Buf kpre; memset(&kpre, 0, sizeof kpre);
-        Buf kbuf; memset(&kbuf, 0, sizeof kbuf);
-        Buf vbuf; memset(&vbuf, 0, sizeof vbuf);
-        Buf *sv_pre = g_pre; g_pre = &kpre;
-        /* the step's setup and the body's leading statements, which ran
-           nowhere */
-        emit_block_locals_reset(c, block, &kpre, 0);
-        int rd_lbl = emit_iter_step_stmts(c, bbody, &kpre, 0, NULL);
-        if (ke >= 0) { if (kt == TY_POLY && repr_of(c, ke).kind != RK_BOXED) emit_boxed(c, ke, &kbuf); else emit_expr(c, ke, &kbuf); }
-        if (ve >= 0) { if (vt == TY_POLY && repr_of(c, ve).kind != RK_BOXED) emit_boxed(c, ve, &vbuf); else emit_expr(c, ve, &vbuf); }
-        if (rd_lbl) g_redo_depth--;
-        g_pre = sv_pre;
-        if (kpre.p) { buf_puts(b, " "); buf_puts(b, kpre.p); }
-        free(kpre.p);
-        /* (a Hash that holds the handle stores the value's, of either face) */
-        buf_puts(b, " "); emit_elem_entry(b, 1, hr.as_ty, hn, "set", ""); buf_printf(b, "(_t%d, ", rh);
-        buf_puts(b, kbuf.p ? kbuf.p : "0"); free(kbuf.p);
-        buf_puts(b, ", ");
-        emit_typed_elem_hold(c, ve, hr.as_ty, vbuf.p ? vbuf.p : "0", b); free(vbuf.p);
-        buf_puts(b, ");");
+        emit_struct_to_h_pair(c, block, bbody, ke, ve, hr, hn, rh, b);
       }
     }
     else {
@@ -13194,7 +13237,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && ty_is_object(rt) && argc == 1 &&
       (is_eql_or_equal(name)) &&
       call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0 &&
-      comp_method_in_chain(c, ty_object_class(rt), "eql?", NULL) < 0) {
+      call_target(c, id, ty_object_class(rt), "eql?", CT_METHODS, NULL) < 0) {
     TyKind a0 = comp_ntype(c, argv[0]);
     if (!c->classes[ty_object_class(rt)].is_value_type) {
       emit_identity_equal(c, recv, argv[0], rt, a0, b);

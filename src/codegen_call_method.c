@@ -3377,7 +3377,7 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
         if (nkeys) {
           int kt = ++g_tmp;
           buf_printf(b, "((({ int _t%d = ", kt);
-          emit_poly_plan_key(c, arms.flags & ~PPF_SEEN, tv, nt_str(c->nt, id, "name"), b);
+          emit_poly_plan_key(c, id, arms.flags & ~PPF_SEEN, tv, nt_str(c->nt, id, "name"), b);
           buf_printf(b, "; (0");
           for (int k = 0; k < arms.n; k++)
             if (split_arm_key(c, &arms, k, surface) >= 0)

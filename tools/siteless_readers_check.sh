@@ -28,7 +28,6 @@ cd "$ROOT" || exit 2
 # without the override (a dup, or the object before its def ran), after any later redefinition of the parent's method, so
 # no point of the load is that call's own; the table's method is the answer until the entries of step 4.
 FUNCS="
-src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
 src/codegen_util.c:exc_text_override_calls_super
 src/analyze_util.c:class_coerce_emittable
@@ -94,6 +93,9 @@ src/codegen.c:emit_method
 src/analyze_pass.c:sg_override_ret
 src/codegen.c:obj_each_elems_text
 src/analyze.c:an_phase_procs
+src/analyze_desugar.c:send_split_by_owner
+src/analyze_pass.c:bare_call_on_class
+src/analyze_desugar.c:dsend_class_names
 "
 PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain)[[:space:]]*([(]|$)'
 bad=0

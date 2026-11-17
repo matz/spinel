@@ -12344,6 +12344,8 @@ const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect) {
                       want_inspect ? "inspect" : "to_s");
 }
 
+static TyKind struct_display_storage(Compiler *c, int cid, const char *name);
+
 /* A display consumer reads the result of the method selected at this site.
    The receiver stays rooted across that call and its non-String fallback. */
 int emit_obj_display(Compiler *c, int site, int cid, DisplayUse use, const char *recv, Buf *b) {
@@ -12352,7 +12354,9 @@ int emit_obj_display(Compiler *c, int site, int cid, DisplayUse use, const char 
   /* A selected Ruby conversion can return an existing mutable String. The
      interpolation caller requests its handle through the end of the segment.
      Generated record renderers produce private formatting bytes. */
-  int retain = use == DISPLAY_INTERP_PART && mi >= 0;
+  TyKind result = mi >= 0 ? repr_method_ret_storage(&c->scopes[mi])
+                          : struct_display_storage(c, cid, inspect ? "inspect" : "to_s");
+  int retain = use == DISPLAY_INTERP_PART && (mi >= 0 || result == TY_STRBUF);
   TyKind self_ty = ty_object(cid);
   int value_self = comp_ty_value_obj(c, self_ty), temp = ++g_tmp;
   char self[32];
@@ -12366,10 +12370,8 @@ int emit_obj_display(Compiler *c, int site, int cid, DisplayUse use, const char 
   buf_printf(&call, "%s(", obj_str_fn(c, site, cid, inspect));
   if (mi >= 0 && owner != cid) buf_printf(&call, "(sp_%s *)", c->classes[owner].c_name);
   buf_printf(&call, "%s%s)", self, obj_str_blockarg(c, site, cid, inspect));
-  if (mi < 0) buf_puts(b, call.p);  /* the generated record renderer returns bytes */
+  if (mi < 0 && result == TY_STRING) buf_puts(b, call.p);  /* private record formatting bytes */
   else {
-    Scope *m = &c->scopes[mi];
-    TyKind result = repr_method_ret_storage(m);
     int handle = result == TY_STRBUF;
     int v = ++g_tmp;
     if (handle)
@@ -12377,7 +12379,7 @@ int emit_obj_display(Compiler *c, int site, int cid, DisplayUse use, const char 
                  retain ? "" : "sp_String_cstr(", v, retain ? "" : ")");
     else {
       buf_printf(b, "({ sp_RbVal _t%d = ", v);
-      emit_boxed_ret_call(c, m, call.p, b);
+      emit_boxed_ret_call(c, &c->scopes[mi], call.p, b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", v);
     }
     if (inspect) {
@@ -13061,16 +13063,28 @@ static int class_pooled(Compiler *c, int cid) {
    to_s), as any generated reader does in CRuby (#4190)? Only a String member
    takes it: a non-String one falls back to the default at interpolation in
    CRuby too, and the direct call goes through the reader arm. */
-static int struct_member_owns(Compiler *c, int cid, const char *nm) {
+static int struct_display_member(Compiler *c, int cid, const char *nm) {
   ClassInfo *ci = &c->classes[cid];
   char iv[64]; snprintf(iv, sizeof iv, "@%s", nm);
   int idx = comp_ivar_index(ci, iv);
-  return idx >= 0 && (ci->ivar_types[idx] == TY_STRING || ci->ivar_types[idx] == TY_STRBUF) &&
-         call_attr_target(c, -1, cid, nm, 0, NULL);
+  if (idx < 0 || (ci->ivar_types[idx] != TY_STRING && ci->ivar_types[idx] != TY_STRBUF)) return -1;
+  return call_attr_target(c, -1, cid, nm, 0, NULL) ? idx : -1;
+}
+/* A generated member reader returns the field in its stored representation.
+   Only the private record formatter produces a new byte string. */
+static TyKind struct_display_storage(Compiler *c, int cid, const char *name) {
+  int member = struct_display_member(c, cid, name);
+  return member >= 0 ? repr_of_ivar(c, cid, member).as_ty : TY_STRING;
+}
+static void emit_struct_display_signature(Compiler *c, int cid, const char *name, Buf *b) {
+  const char *cn = c->classes[cid].c_name;
+  buf_puts(b, "static ");
+  emit_ctype(c, struct_display_storage(c, cid, name), b);
+  buf_printf(b, " sp_%s_%s(sp_%s *self)", cn, name, cn);
 }
 /* Does the program (a def) or a member own class cid's inspect or to_s? */
 static int struct_display_owned(Compiler *c, int cid, const char *nm) {
-  return call_target(c, -1, cid, nm, 0, NULL) >= 0 || struct_member_owns(c, cid, nm);
+  return call_target(c, -1, cid, nm, 0, NULL) >= 0 || struct_display_member(c, cid, nm) >= 0;
 }
 /* The sp_<C name>_<fn> that answers class cid's default text: inspect when
    nothing owns it, else to_s when nothing owns that, else a copy of its own
@@ -13086,10 +13100,14 @@ static const char *struct_default_text_fn(Compiler *c, int cid) {
    reach its default text, whatever the order of definition. */
 static void emit_struct_display_decls(Compiler *c, int cid, Buf *b) {
   const char *cn = c->classes[cid].c_name;
-  if (call_target(c, -1, cid, "inspect", CT_METHODS | CT_SHARED, NULL) < 0)
-    buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self);\n", cn, cn);
-  if (call_target(c, -1, cid, "to_s", CT_METHODS | CT_SHARED, NULL) < 0)
-    buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self);\n", cn, cn);
+  if (call_target(c, -1, cid, "inspect", CT_METHODS | CT_SHARED, NULL) < 0) {
+    emit_struct_display_signature(c, cid, "inspect", b);
+    buf_puts(b, ";\n");
+  }
+  if (call_target(c, -1, cid, "to_s", CT_METHODS | CT_SHARED, NULL) < 0) {
+    emit_struct_display_signature(c, cid, "to_s", b);
+    buf_puts(b, ";\n");
+  }
   if (sp_streq(struct_default_text_fn(c, cid), "_struct_inspect"))
     buf_printf(b, "static const char *sp_%s__struct_inspect(sp_%s *self);\n", cn, cn);
 }
@@ -13352,20 +13370,21 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
        user redefined the method, so a user override wins. */
     /* the same ownership for a member named inspect (#4190) */
     if (call_target(c, -1, cid, "inspect", CT_METHODS, NULL) < 0) {
-      /* (one-String mode: the member is the handle, answered as its bytes face) */
-      if (struct_member_owns(c, cid, "inspect"))
-        buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self) { return SP_STR_B(self->iv_inspect); }\n",
-                   ci->c_name, ci->c_name);
+      if (struct_display_member(c, cid, "inspect") >= 0) {
+        emit_struct_display_signature(c, cid, "inspect", b);
+        buf_puts(b, " { return self->iv_inspect; }\n");
+      }
       else
         emit_struct_default_inspect(c, ci, cid, "inspect", b);
     }
     if (call_target(c, -1, cid, "to_s", CT_METHODS, NULL) < 0) {
       /* A MEMBER named to_s owns the name, as any generated reader does in
          CRuby: `Data.define(:to_s)` answers the member, not the default
-         representation (struct_member_owns). */
-      if (struct_member_owns(c, cid, "to_s"))
-        buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return SP_STR_B(self->iv_to_s); }\n",
-                   ci->c_name, ci->c_name);
+         representation (struct_display_member). */
+      if (struct_display_member(c, cid, "to_s") >= 0) {
+        emit_struct_display_signature(c, cid, "to_s", b);
+        buf_puts(b, " { return self->iv_to_s; }\n");
+      }
       /* to_s is the default representation even when inspect is not */
       else if (struct_display_owned(c, cid, "inspect"))
         emit_struct_default_inspect(c, ci, cid, "to_s", b);

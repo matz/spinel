@@ -61,8 +61,10 @@ Interpolation and printing call the display method selected at that site.
 They read the bytes of its native String result or format its boxed result
 while the receiver is rooted. Interpolation keeps a mutable conversion
 result until its literal segment is assembled, then reads its bytes and
-length together. String comparisons likewise borrow bytes
-from the selected conversion result.
+length together. A generated String member reader named to_s or inspect
+returns its stored field. The default Struct or Data renderer produces
+counted text. String comparisons borrow bytes from the selected conversion
+result.
 
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for

@@ -3292,10 +3292,11 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (ty_is_object(drt2) && c->classes[ty_object_class(drt2)].is_struct &&
         cplan_implied_target(c, id, recv, ty_object_class(drt2), "to_s", 0, NULL) < 0 &&
         cplan_implied_target(c, id, recv, ty_object_class(drt2), "inspect", 0, NULL) < 0) {
-      buf_printf(b, "((void)fputs(sp_%s_inspect(",
-                 c->classes[ty_object_class(drt2)].c_name);
-      emit_expr(c, recv, b);
-      buf_puts(b, "), stdout))");
+      Buf obj = expr_buf(c, recv);
+      buf_puts(b, "((void)sp_print_str_bin(");
+      emit_obj_display(c, recv, ty_object_class(drt2), DISPLAY_TO_S, obj.p, b);
+      buf_puts(b, "))");
+      free(obj.p);
       return 1;
     }
     buf_puts(b, "((void)fputs(sp_poly_to_s(");

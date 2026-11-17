@@ -3096,6 +3096,16 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
       buf_puts(b, "; break;");
     }
   }
+  /* a boxed ConditionVariable's #signal and #broadcast, beside a user class's own */
+  if (argc == 0 && (sp_streq(name, "signal") || sp_streq(name, "broadcast"))) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_N_CONDVAR, -1, TY_UNKNOWN, PC_SAME);
+    char cv[96];
+    snprintf(cv, sizeof cv, "((void)sp_CondVar_%s((sp_condvar *)_t%d.v.p), _t%d)", name, tv, tv);
+    buf_printf(b, " case SP_BUILTIN_CONDVAR: _t%d = ", tr);
+    if (ret == TY_POLY) buf_puts(b, cv);
+    else emit_unbox_text(c, ret, cv, b);
+    buf_puts(b, "; break;");
+  }
   /* IO#read on a poly value when a user class owns `read` (ffi's
      Pointer#read(type)): a File in the same slot still reads itself */
   if (argc == 0 && sp_streq(name, "read") && (ret == TY_POLY || ret == TY_STRING)) {

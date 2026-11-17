@@ -314,5 +314,18 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     free(mv.p);
     return 1;
   }
+  /* and a boxed ConditionVariable's #signal and #broadcast (one a reader answers from either of two classes) */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "signal") || sp_streq(name, "broadcast")) && !poly_name_user_claimed(c, name, argc)) {
+    Buf mv; memset(&mv, 0, sizeof mv);
+    buf_printf(&mv, "sp_poly_condvar_%s(", name);
+    emit_boxed(c, recv, &mv);
+    buf_puts(&mv, ")");
+    Repr wr = repr_of(c, id);
+    if (wr.kind == RK_BOXED) buf_puts(b, mv.p);
+    else emit_unbox_text(c, wr.as_ty, mv.p, b);
+    free(mv.p);
+    return 1;
+  }
   return 0;
 }

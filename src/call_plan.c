@@ -8147,6 +8147,24 @@ static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws
   }
   return placed ? 1 : FILL_UNPLACED;
 }
+/* Is the prepend that made copy sc on class ci in force at call id: ELAB_YES where the load record proves one of its
+   statements made before the call can first run (elab_def_before_call), ELAB_NO where every run of the call ends before
+   each of them (a closed window: elab_call_window), ELAB_UNKNOWN where the record cannot tell (the call may run on both
+   sides, a prepend it does not place or does not name). A guarded copy's entry decides at run time (Scope.mixin_guarded). */
+static int ct_prepend_in_force(Compiler *c, int id, int ci, const Scope *sc) {
+  int nm = 0, after = 0, n = 0;
+  const LrMixin *mx = elab_class_mixins(c, ci, &nm);
+  ElabWindow w;
+  int placed = elab_call_window(c, id, &w) == ELAB_YES && w.closed;
+  for (int j = 0; j < nm; j++) {
+    if (mx[j].kind != LR_PREPEND || elab_mixin_module(c, &mx[j]) != sc->origin_module_ci - 1) continue;
+    n++;
+    if (elab_def_before_call(c, id, mx[j].node)) return ELAB_YES;
+    int o = placed ? elab_cmp(elab_point_of(c, mx[j].node), w.to) : PROG_UNKNOWN;
+    after += o == PROG_SAME || o == PROG_AFTER;
+  }
+  return n && after == n ? ELAB_NO : ELAB_UNKNOWN;
+}
 /* What the chain of program initializes of builtin class ci reduces to from
    start (cplan_builtin_new_form's rule): each takes what the call passes
    (argc positional arguments and its keywords kw, or an open list), and
@@ -8161,6 +8179,13 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
     /* (a def of the class's own counts where the load record proves it made before the call can first run; where the call runs
        ahead of it, or may, it does not: the chain is the one without it, as the builtin's own is where nothing else stands) */
     if (!sc->is_prepend_copy && !sc->is_include_copy && !elab_def_before_call(c, id, sc->def_node)) continue;
+    /* (a prepend's copy, the same: proved in force, or proved made after every run of the call, which the chain without it
+       answers; where the record cannot tell, the call keeps master's answer, which runs no initialize: BNF_NONE) */
+    if (sc->is_prepend_copy && !sc->mixin_guarded) {
+      int in = ct_prepend_in_force(c, id, ci, sc);
+      if (in == ELAB_NO) continue;
+      if (in != ELAB_YES) return BNF_NONE;
+    }
     int pn = sc->def_node >= 0 ? nt_ref(c->nt, sc->def_node, "parameters") : -1, nkw = 0;
     const int *kws = pn >= 0 ? nt_arr(c->nt, pn, "keywords", &nkw) : NULL;
     /* (keywords go to a keyword rest (`...` holds one), and the positional parameters take the positional arguments; a def
@@ -8258,13 +8283,14 @@ static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
       /* (a chain whose defaults run at the call is one only where no guard chooses it) */
       nf->n = nf->nk = 0, nf->kwat = nf->rmi = -1;
       int fk = ct_new_chain_form(c, id, ci, to[k], argc, open, kw, nf);
+      if (fk == BNF_NONE) return BNF_NONE;
       if ((g != BNF_NONE && fk != g) || fk == BNF_FILL || nf->n || nf->nk || (k && fk == BNF_RAISE && nf->rmi != f->rmi)) return BNF_REFUSE;
       g = fk, f->rmi = nf->rmi;
     }
     return kw_own && g != BNF_OWN ? BNF_REFUSE : g;
   }
   int g = ct_new_chain_form(c, id, ci, start, argc, open, kw, f);
-  return kw_own && g != BNF_OWN ? BNF_REFUSE : g;
+  return kw_own && g != BNF_OWN && g != BNF_NONE ? BNF_REFUSE : g;
 }
 /* See call_plan.h. */
 int cplan_builtin_new_form(Compiler *c, int id) {

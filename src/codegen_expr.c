@@ -280,6 +280,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
   int *flat = NULL, fcap = 0, *own = NULL;
   interp_flatten_own(nt, id, &flat, &own, &n, &fcap);
   const int *parts = flat;
+  int last_operand = n - 1;
+  while (last_operand >= 0 && nt_kind(nt, parts[last_operand]) == NK_StringNode) last_operand--;
   /* (each adjacent literal is built on its own: a part is held only until
      the end of its segment, sn[k] parts in) */
   int *sn = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
@@ -400,6 +402,7 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
          converts to a marker-carrying string whose byte length is summed. */
       Buf conv; memset(&conv, 0, sizeof conv);
       int wkind = WK_DYN, neutral = -1;
+      int held_string = 0;
       char *iv_pre = NULL;   /* the value's text, emitted once by the probe below */
       #define EMIT_IV() do { if (vexpr[0]) buf_puts(&conv, vexpr); \
                              else if (iv_pre) buf_puts(&conv, iv_pre); \
@@ -474,8 +477,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         buf_printf(&decls, "int _t%d = 0; ", neutral);
         buf_printf(&conv, "({ sp_RbVal _t%d = ", tvp);
         EMIT_IV();
-        buf_printf(&conv, "; _t%d = !(sp_poly_is_strbuf(_t%d) || _t%d.tag == SP_TAG_STR); sp_poly_to_s(_t%d); })",
-                   neutral, tvp, tvp, tvp);
+        held_string = 1;
+        buf_printf(&conv, "; sp_interp_string(_t%d, &_t%d); })", tvp, neutral);
       }
       else if (t == TY_EXCEPTION) {
         /* an exception interpolates as its to_s, the same helper e.to_s
@@ -542,10 +545,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
            #to_s, the instance's pointer landed in the const char * and the
            C did not build. A part that may be nil is nil's to_s, the empty
            String. */
-        int to = ++g_tmp;
-        buf_printf(&conv, "({ sp_String *_t%d = (sp_String *)(", to);
-        EMIT_IV();
-        buf_printf(&conv, "); _t%d ? sp_strbuf_read(_t%d) : sp_str_empty; })", to, to);
+        held_string = 1;
+        buf_puts(&conv, "(sp_String *)("); EMIT_IV(); buf_puts(&conv, ")");
       }
       else if (ty_is_object(t) && obj_str_undef(c, expr, ty_object_class(t), 0)) {
         emit_nomethod_raise_unless_nil(c, expr, "to_s", "(const char *)\"\"", "sp_str_empty", &conv);   /* (to_s undefined where the record places it: CRuby raises, for nil's own to_s is the empty String) */
@@ -555,7 +556,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         if (vexpr[0]) buf_puts(&receiver, vexpr);
         else if (iv_pre) buf_puts(&receiver, iv_pre);
         else emit_expr(c, expr, &receiver);
-        emit_obj_display_text(c, expr, ty_object_class(t), 0, receiver.p, &conv);
+        DisplayUse use = k < last_operand ? DISPLAY_INTERP_PART : DISPLAY_TO_S;
+        held_string = emit_obj_display(c, expr, ty_object_class(t), use, receiver.p, &conv);
         free(receiver.p);
       }
       else if (ty_is_ptr_array(t) || ty_is_obj_array(t)) {
@@ -659,6 +661,16 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
       else if (wkind == WK_NIL) {
         buf_printf(&decls, "(void)(%s); ", conv.p ? conv.p : "0");
         tv2 = -1;
+      }
+      else if (held_string) {
+        int th = ++g_tmp;
+        buf_printf(&decls, "sp_String *_t%d = %s; SP_GC_ROOT(_t%d); ", th, conv.p, th);
+        /* Adjacent literals finish separately. Preserve a completed
+           segment's bytes while subsequent literals evaluate. */
+        int snapshot = sn[k] <= last_operand;
+        buf_printf(&late, "const char *_t%d = %ssp_str_or_empty(sp_String_cstr_nil(_t%d))%s; "
+                   "SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
+                   tv2, snapshot ? "sp_str_dup(" : "", th, snapshot ? ")" : "", tv2, tv2, tv2);
       }
       else if (t == TY_STRING && !vexpr[0] && repr_of(c, expr).strbuf_src == RS_HANDLE &&
                (nt_kind(nt, expr) == NK_LocalVariableReadNode || nt_kind(nt, expr) == NK_InstanceVariableReadNode) &&

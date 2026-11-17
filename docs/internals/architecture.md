@@ -59,7 +59,9 @@ values in the switch and projects the result once. Proc and C extension
 callback signatures retain their declared result representation.
 Interpolation and printing call the display method selected at that site.
 They read the bytes of its native String result or format its boxed result
-while the receiver is rooted. String comparisons likewise borrow bytes
+while the receiver is rooted. Interpolation keeps a mutable conversion
+result until its literal segment is assembled, then reads its bytes and
+length together. String comparisons likewise borrow bytes
 from the selected conversion result.
 
 The load record's rows are described in [load-model.md](load-model.md):

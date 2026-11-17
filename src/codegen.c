@@ -12346,8 +12346,13 @@ const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect) {
 
 /* A display consumer reads the result of the method selected at this site.
    The receiver stays rooted across that call and its non-String fallback. */
-void emit_obj_display_text(Compiler *c, int site, int cid, int inspect, const char *recv, Buf *b) {
+int emit_obj_display(Compiler *c, int site, int cid, DisplayUse use, const char *recv, Buf *b) {
+  int inspect = use == DISPLAY_INSPECT;
   int owner = cid, mi = display_method_scope(c, site, cid, inspect, &owner);
+  /* A selected Ruby conversion can return an existing mutable String. The
+     interpolation caller requests its handle through the end of the segment.
+     Generated record renderers produce private formatting bytes. */
+  int retain = use == DISPLAY_INTERP_PART && mi >= 0;
   TyKind self_ty = ty_object(cid);
   int value_self = comp_ty_value_obj(c, self_ty), temp = ++g_tmp;
   char self[32];
@@ -12368,7 +12373,8 @@ void emit_obj_display_text(Compiler *c, int site, int cid, int inspect, const ch
     int handle = result == TY_STRBUF;
     int v = ++g_tmp;
     if (handle)
-      buf_printf(b, "({ sp_String *_t%d = %s; _t%d ? sp_String_cstr(_t%d) : ", v, call.p, v, v);
+      buf_printf(b, "({ sp_String *_t%d = %s; _t%d ? %s_t%d%s : ", v, call.p, v,
+                 retain ? "" : "sp_String_cstr(", v, retain ? "" : ")");
     else {
       buf_printf(b, "({ sp_RbVal _t%d = ", v);
       emit_boxed_ret_call(c, m, call.p, b);
@@ -12379,16 +12385,22 @@ void emit_obj_display_text(Compiler *c, int site, int cid, int inspect, const ch
       else buf_printf(b, "sp_poly_to_s(_t%d)", v);
     }
     else {
-      if (!handle) buf_printf(b, "const char *_s = sp_strface_b_box(_t%d); _s ? _s : ", v);
+      if (!handle) {
+        buf_printf(b, "const char *_s = sp_strface_b_box(_t%d); _s ? ", v);
+        if (retain) buf_printf(b, "sp_poly_as_strbuf(_t%d) : ", v);
+        else buf_puts(b, "_s : ");
+      }
+      if (retain) buf_puts(b, "sp_String_new_fresh(");
       buf_puts(b, "sp_obj_to_s_fallback(");
       emit_boxed_text(c, self_ty, self, b);
-      buf_puts(b, ")");
+      buf_puts(b, retain ? "))" : ")");
     }
     buf_puts(b, "; })");
   }
   free(call.p);
-  if (!value_self) buf_puts(b, inspect ? " : SPL(\"nil\")" : " : sp_str_empty");
+  if (!value_self) buf_puts(b, retain ? " : NULL" : inspect ? " : SPL(\"nil\")" : " : sp_str_empty");
   buf_puts(b, "; })");
+  return retain;
 }
 
 /* Return the builtin exception parent name for user exc subclass ci,
@@ -13151,7 +13163,7 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
       int mc = ty_object_class(mt);
       Buf receiver = {0}, text = {0};
       buf_printf(&receiver, "self->iv_%s", ivn);
-      emit_obj_display_text(c, -1, mc, 1, receiver.p, &text);
+      emit_obj_display(c, -1, mc, DISPLAY_INSPECT, receiver.p, &text);
       /* Inside pp, a member with an overridden inspect can still use its
          record layout. */
       if (pp_prints_by_rt(c) && record_pp_skips_inspect(c, -1, mc))

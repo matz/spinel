@@ -28,7 +28,7 @@ static void emit_const_write_last_value(Compiler *c, const LocalVar *lv, const c
 /* an object arg's #to_s as a C string expression (the puts/print arms) */
 static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
   Buf receiver = expr_buf(c, arg);
-  emit_obj_display_text(c, arg, ty_object_class(t), 0, receiver.p, b);
+  emit_obj_display(c, arg, ty_object_class(t), DISPLAY_TO_S, receiver.p, b);
   free(receiver.p);
 }
 
@@ -652,7 +652,7 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 1)) {
     Buf receiver = expr_buf(c, arg);
     buf_puts(b, "{ sp_print_str_bin(");
-    emit_obj_display_text(c, arg, ty_object_class(t), 1, receiver.p, b);
+    emit_obj_display(c, arg, ty_object_class(t), DISPLAY_INSPECT, receiver.p, b);
     buf_puts(b, "); putchar('\\n'); }\n");
     free(receiver.p);
   }
@@ -742,7 +742,7 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     if (icn) {
       Buf receiver = expr_buf(c, arg);
       buf_puts(b, "{ const char *_pi = ");
-      emit_obj_display_text(c, arg, cid, 1, receiver.p, b);
+      emit_obj_display(c, arg, cid, DISPLAY_INSPECT, receiver.p, b);
       buf_puts(b, "; sp_print_str_bin(_pi); putchar('\\n'); }\n");
       free(receiver.p);
     }

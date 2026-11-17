@@ -276,7 +276,7 @@ const char *sp_poly_cold_class_to_s(sp_Class c) {
 /* The class name a default #to_s / #inspect prints for a user object: the
    display form of a Class.new class when the program installed one, else its name. */
 static const char *sp_poly_obj_class_display(sp_RbVal v) {
-  if (sp_class_display_fn && v.cls_id >= 0) {
+  if (v.tag == SP_TAG_OBJ && sp_class_display_fn && v.cls_id >= 0) {
     sp_Class c = {v.cls_id, NULL};
     return sp_class_display_fn(c);
   }

@@ -1350,7 +1350,10 @@ void emit_nomethod_raise_unless_nil(Compiler *c, int obj, const char *name, cons
 int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b);
 const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect);
 const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect);
-void emit_obj_display_text(Compiler *c, int site, int cid, int inspect, const char *recv, Buf *b);
+typedef enum { DISPLAY_TO_S, DISPLAY_INSPECT, DISPLAY_INTERP_PART } DisplayUse;
+/* A held interpolation part returns one when the emitted value is a
+   String handle. Generated record text and immediate displays yield bytes. */
+int emit_obj_display(Compiler *c, int site, int cid, DisplayUse use, const char *recv, Buf *b);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 #ifdef SP_EMIT_TRACE

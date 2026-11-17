@@ -3499,6 +3499,24 @@ static inline int sp_user_display_box(sp_RbVal v, int inspect, sp_RbVal *r) {
   }
   return 0;
 }
+/* Interpolation keeps the String itself until the literal is assembled.
+   A non-String conversion answer displays the identity of its receiver. */
+static inline sp_String *sp_interp_string(sp_RbVal value, int *neutral) {
+  SP_GC_ROOT_RBVAL(value);
+  sp_RbVal text = value;
+  if (!sp_strface_b_box(value)) {
+    if (!sp_user_display_box(value, 0, &text)) {
+      *neutral = 1;
+      return sp_String_new_fresh(sp_poly_to_s(value));
+    }
+    if (!sp_strface_b_box(text)) {
+      *neutral = 1;
+      return sp_String_new_fresh(sp_obj_to_s_fallback(value));
+    }
+  }
+  SP_GC_ROOT_RBVAL(text);
+  return sp_poly_as_strbuf(text);
+}
 static inline sp_RbVal sp_poly_to_s_box(sp_RbVal v) {
   sp_RbVal user;
   if (sp_user_display_box(v, 0, &user)) return user;

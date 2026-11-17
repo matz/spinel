@@ -2226,11 +2226,10 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
   int argc = 0; const int *argv = call_args(nt, id, &argc);
   if (recv < 0 || nt_ref(nt, id, "block") >= 0 || g_n_argov + 1 > MAX_ARG_OVERRIDE ||
       nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return 0;
-  /* (a name the class side does not answer keeps the switch's raise, as
-     above: the emitters under the face would answer for a value of
-     another class) */
-  const char *nm = nt_str(nt, id, "name");
-  if (!nm || (!builtin_method_answers("Object", nm, 1, 0) && !cls_side_program_answers(c, id, nm))) return 0;
+  /* (the plan makes a trial arm only for a Module reflection name
+     (cpoly_cls_value_trials), which every class value answers, so the
+     switch's raise for a name the class side does not answer is not
+     this arm's to keep) */
   /* each argument runs once, in the arm that is taken */
   for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
   int sv_tmp = g_tmp;

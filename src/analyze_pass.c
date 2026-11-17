@@ -15315,14 +15315,7 @@ int desugar_dir_surface(Compiler *c) {
       if (dnm && drecv >= 0 && dir_enumerable_name(dnm) &&
           infer_type(c, drecv) == TY_DIR) {
         int base = nt->count;
-        int ent = nt_new_node(nt, "CallNode");
-        if (ent >= 0) {
-          nt_node_set_ref(nt, ent, "receiver", drecv);
-          nt_node_set_str(nt, ent, "name", "entries");
-          nt_node_set_ref(nt, ent, "arguments", -1);
-          nt_node_set_ref(nt, ent, "block", -1);
-          nt_node_set_ref(nt, id, "receiver", ent);
-          comp_grow_node_arrays(c);
+        if (an_interpose_recv_call(c, id, "entries", -1) >= 0) {
           int encl = c->nscope[id];
           for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
           changed = 1;
@@ -15377,16 +15370,9 @@ int desugar_dir_surface(Compiler *c) {
     if (nm && recv >= 0 && sp_streq(nm, "lazy") && nt_ref(nt, id, "block") < 0) {
       TyKind hrt = infer_type(c, recv);
       if (ty_is_hash(hrt)) {
-        int toa2 = nt_new_node(nt, "CallNode");
+        int toa2 = an_interpose_recv_call(c, id, "to_a", -1);
         if (toa2 >= 0) {
-          nt_node_set_str(nt, toa2, "name", "to_a");
           nt_node_set_int(nt, toa2, "made_to_a", 1);
-          nt_node_set_ref(nt, toa2, "receiver", recv);
-          nt_node_set_ref(nt, toa2, "arguments", -1);
-          nt_node_set_ref(nt, toa2, "block", -1);
-          comp_grow_node_arrays(c);
-          c->nscope[toa2] = c->nscope[id];
-          nt_node_set_ref(nt, id, "receiver", toa2);
           changed = 1;
           continue;
         }

@@ -11054,26 +11054,19 @@ static void enum_chain_node(Compiler *c, LowerCtx *lc, int id) {
                    ? nt_kind(nt, nt_ref(nt, mblk, "expression")) : NK_NONE;
     if (man == 1 && mbty && (mbk == NK_BlockNode || mek == NK_LocalVariableReadNode ||
                              mek == NK_ConstantReadNode || mek == NK_SymbolNode)) {
-      int sortc = nt_new_node(nt, "CallNode");
-      nt_node_set_str(nt, sortc, "name", "sort");
-      nt_node_set_ref(nt, sortc, "receiver", recv);
+      int sortc = an_interpose_recv_call(c, id, "sort", -1);
+      if (sortc < 0) return;
       nt_node_set_ref(nt, sortc, "block", mblk);
       if (sp_streq(nm, "min")) {
         nt_node_set_str(nt, id, "name", "first");
-        nt_node_set_ref(nt, id, "receiver", sortc);
         nt_node_set_ref(nt, id, "block", -1);
       }
       else {
-        int lastc = nt_new_node(nt, "CallNode");
-        nt_node_set_str(nt, lastc, "name", "last");
-        nt_node_set_ref(nt, lastc, "receiver", sortc);
-        nt_node_set_ref(nt, lastc, "arguments", margs);
+        if (an_interpose_recv_call(c, id, "last", margs) < 0) return;
         nt_node_set_str(nt, id, "name", "reverse");
-        nt_node_set_ref(nt, id, "receiver", lastc);
         nt_node_set_ref(nt, id, "arguments", -1);
         nt_node_set_ref(nt, id, "block", -1);
       }
-      comp_grow_node_arrays(c);
       return;
     }
   }
@@ -11278,11 +11271,8 @@ static void enum_chain_node(Compiler *c, LowerCtx *lc, int id) {
                     sp_streq(rn, "each_char") ? "chars" :
                     sp_streq(rn, "each_line") ? "lines" :
                     sp_streq(rn, "each_byte") ? "bytes" : "codepoints");
-    int eachn = nt_new_node(nt, "CallNode");
+    int eachn = an_interpose_recv_call(c, id, "each", -1);
     if (eachn < 0) return;
-    nt_node_set_str(nt, eachn, "name", "each");
-    nt_node_set_ref(nt, eachn, "receiver", recv);
-    nt_node_set_ref(nt, id, "receiver", eachn);
     /* with a block the call answers the String, not the pieces the walk
        now goes over: (s.chars.each.with_index { }; s), for a String a
        variable names, read again rather than evaluated twice */
@@ -12453,20 +12443,12 @@ static int desugar_str_range_methods(Compiler *c) {
     int int_stride = an == 0 ||
         (an == 1 && infer_type(c, nt_arr(nt, argn, "arguments", &an)[0]) == TY_INT);
     if (native && sp_streq(nm, "step") && nt_ref(nt, id, "block") >= 0 && !int_stride) {
-      int inner = nt_new_node(nt, "CallNode");
-      if (inner < 0) continue;
-      nt_node_set_str(nt, inner, "name", "step");
-      nt_node_set_ref(nt, inner, "receiver", recv);
-      nt_node_set_ref(nt, inner, "arguments", argn);
-      nt_node_set_ref(nt, inner, "block", -1);
-      nt_node_set_ref(nt, id, "receiver", inner);
+      if (an_interpose_recv_call(c, id, "step", argn) < 0) continue;
       nt_node_set_str(nt, id, "name", "each");
       nt_node_set_ref(nt, id, "arguments", -1);
       /* the Enumerator#each fold in desugar_enum_method_recv would turn this
          straight back into the block-driven step, every round (#4962) */
       nt_node_set_int(nt, id, "lowered_each", 1);
-      comp_grow_node_arrays(c);
-      c->nscope[inner] = c->nscope[id];
       changed = 1;
       continue;
     }
@@ -12500,11 +12482,9 @@ static int desugar_str_range_methods(Compiler *c) {
        instance_variables, `!` and `=~` raised RangeError where CRuby answers */
     if (range_object_face(nm)) native = 1;
     if (native) continue;
-    int toa = nt_new_node(nt, "CallNode");
+    int toa = an_interpose_recv_call(c, id, "to_a", -1);
     if (toa < 0) continue;
-    nt_node_set_str(nt, toa, "name", "to_a");
     nt_node_set_int(nt, toa, "made_to_a", 1);
-    nt_node_set_ref(nt, toa, "receiver", recv);
     /* each, each_entry, reverse_each, each_with_index, each_slice and
        each_cons with a block walk the members but answer the RANGE: mark the
        hop, as the Hash and Enumerable routes do (#3842), so inference and the
@@ -12513,11 +12493,8 @@ static int desugar_str_range_methods(Compiler *c) {
       if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
           ((an == 0 && is_each_walk_or_with_index(nm)) || (an == 1 && is_each_window(nm))))
         nt_node_set_str(nt, toa, "enum_recv", "1"); }
-    nt_node_set_ref(nt, id, "receiver", toa);
     /* an Enumerator the blockless call answers has no size (emit_call) */
     if (nt_ref(nt, id, "block") < 0) nt_node_set_int(nt, id, "srange_enum", 1);
-    comp_grow_node_arrays(c);
-    c->nscope[toa] = c->nscope[id];
     changed = 1;
   }
   return changed;
@@ -12786,13 +12763,7 @@ static int desugar_symbol_string_methods(Compiler *c) {
       }
     }
     /* symbol-to-symbol comparisons need BOTH sides as text */
-    int toa = nt_new_node(nt, "CallNode");
-    if (toa < 0) continue;
-    nt_node_set_str(nt, toa, "name", "to_s");
-    nt_node_set_ref(nt, toa, "receiver", recv);
-    nt_node_set_ref(nt, id, "receiver", toa);
-    comp_grow_node_arrays(c);
-    c->nscope[toa] = c->nscope[id];
+    if (an_interpose_recv_call(c, id, "to_s", -1) < 0) continue;
     /* symbol ARGUMENTS to the comparisons also read as their names */
     int argsn = nt_ref(nt, id, "arguments");
     int an = 0;
@@ -14217,21 +14188,13 @@ static int rewrite_poly_to_h_block(Compiler *c, int id, NodeTable *nt, const cha
   if (pn >= 0) { nt_arr(nt, pn, "optionals", &on); nt_arr(nt, pn, "posts", &qn); nt_arr(nt, pn, "keywords", &kn); }
   int one_key = rn == 1 && on == 0 && qn == 0 && kn == 0 && nt_ref(nt, pn, "rest") < 0 &&
                 nt_ref(nt, pn, "keyword_rest") < 0 && nt_kind(nt, rq[0]) == NK_RequiredParameterNode;
-  int mapc = nt_new_node(nt, "CallNode");
   /* a Struct or Data value maps over its [member, value] pairs, not its
      values: the receiver is read through __to_h_subject first */
-  int subj = nt_new_node(nt, "CallNode");
-  if (mapc < 0 || subj < 0) return 0;
-  nt_node_set_str(nt, subj, "name", one_key ? "__to_h_key_subject" : "__to_h_subject");
-  nt_node_set_ref(nt, subj, "receiver", trecv);
-  nt_node_set_str(nt, mapc, "name", "map");
-  nt_node_set_ref(nt, mapc, "receiver", subj);
+  if (an_interpose_recv_call(c, id, one_key ? "__to_h_key_subject" : "__to_h_subject", -1) < 0) return 0;
+  int mapc = an_interpose_recv_call(c, id, "map", -1);
+  if (mapc < 0) return 0;
   nt_node_set_ref(nt, mapc, "block", blk);
-  nt_node_set_ref(nt, id, "receiver", mapc);
   nt_node_set_ref(nt, id, "block", -1);
-  comp_grow_node_arrays(c);
-  c->nscope[mapc] = c->nscope[id];
-  c->nscope[subj] = c->nscope[id];
   return 1;
 }
 
@@ -14282,12 +14245,9 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
         if (hrecv >= 0 && ty_is_hash(infer_type(c, hrecv)) &&
             !(nt_kind(nt, hrecv) == NK_CallNode &&
               nt_str(nt, hrecv, "name") && sp_streq(nt_str(nt, hrecv, "name"), "to_a"))) {
-          int toa = nt_new_node(nt, "CallNode");
+          int toa = an_interpose_recv_call(c, wrecv, "to_a", -1);
           if (toa >= 0) {
-            nt_node_set_str(nt, toa, "name", "to_a");
             nt_node_set_int(nt, toa, "made_to_a", 1);
-            nt_node_set_ref(nt, toa, "receiver", hrecv);
-            nt_node_set_ref(nt, wrecv, "receiver", toa);
             /* `h.each.with_index { }` answers h, not the pairs the walk
                now goes over: (h.to_a.each.with_index { }; h). A Hash no
                variable names is held in a temp first, read once. */
@@ -14584,17 +14544,12 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     int sbreaks = sblk >= 0 && nt_kind(nt, sblk) == NK_BlockNode &&
                   block_has_top_break(c, nt_ref(nt, sblk, "body"));
     if (srecv >= 0 && sac == 0 && !sbreaks && infer_type(c, srecv) == TY_POLY_ARRAY) {
-      int mapc = nt_new_node(nt, "CallNode");
-      nt_node_set_str(nt, mapc, "name", "map");
-      nt_node_set_ref(nt, mapc, "receiver", srecv);
+      int mapc = an_interpose_recv_call(c, id, "map", -1);
+      if (mapc < 0) return 0;
       nt_node_set_ref(nt, mapc, "block", nt_ref(nt, id, "block"));
       /* emitted as the one walk it stands for (emit_sum_of_map_expr) */
       nt_node_set_int(nt, mapc, "sum_map", 1);
-      nt_node_set_str(nt, id, "name", "sum");
-      nt_node_set_ref(nt, id, "receiver", mapc);
       nt_node_set_ref(nt, id, "block", -1);
-      comp_grow_node_arrays(c);
-      c->nscope[mapc] = c->nscope[id];
       *changed = 1;
       return 1;
     }
@@ -14619,19 +14574,15 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       if (rrn && rrac == 0 &&
           (sp_streq(rrn, "each_index") || sp_streq(rrn, "each_with_index") ||
            sp_streq(rrn, "each") || sp_streq(rrn, "each_entry"))) {
-        int toa2 = nt_new_node(nt, "CallNode");
-        nt_node_set_str(nt, toa2, "name", "to_a");
+        int toa2 = an_interpose_recv_call(c, id, "to_a", -1);
+        if (toa2 < 0) return 0;
         nt_node_set_int(nt, toa2, "made_to_a", 1);
-        nt_node_set_ref(nt, toa2, "receiver", rr);
         /* The block form of reverse_each answers the RECEIVER, and after this
            hop that is the interposed array rather than the Enumerator the
            program wrote (#4325). `enum_recv` is the marker the value emitter
            already reads for exactly this: it yields the marked hop's own
            receiver instead of the hop. */
         nt_node_set_str(nt, toa2, "enum_recv", "1");
-        nt_node_set_ref(nt, id, "receiver", toa2);
-        comp_grow_node_arrays(c);
-        c->nscope[toa2] = c->nscope[id];
         *changed = 1;
         return 1;
       }
@@ -14695,13 +14646,9 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       if (fra >= 0) nt_arr(nt, fra, "arguments", &frac);
       if (frn && frac == 0 &&
           (is_indexed_each(frn))) {
-        int toa3 = nt_new_node(nt, "CallNode");
-        nt_node_set_str(nt, toa3, "name", "to_a");
+        int toa3 = an_interpose_recv_call(c, id, "to_a", -1);
+        if (toa3 < 0) return 0;
         nt_node_set_int(nt, toa3, "made_to_a", 1);
-        nt_node_set_ref(nt, toa3, "receiver", fr);
-        nt_node_set_ref(nt, id, "receiver", toa3);
-        comp_grow_node_arrays(c);
-        c->nscope[toa3] = c->nscope[id];
         *changed = 1;
         return 1;
       }
@@ -14728,14 +14675,10 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
         int open_ended = rlit >= 0 && nt_kind(nt, rlit) == NK_RangeNode &&
                          (nt_ref(nt, rlit, "left") < 0 || nt_ref(nt, rlit, "right") < 0);
         if (!open_ended) {
-          int toa = nt_new_node(nt, "CallNode");
-          nt_node_set_str(nt, toa, "name", "to_a");
+          int toa = an_interpose_recv_call(c, id, "to_a", -1);
+          if (toa < 0) return 0;
           nt_node_set_int(nt, toa, "made_to_a", 1);
-          nt_node_set_ref(nt, toa, "receiver", rrecv);
           nt_node_set_int(nt, toa, "range_hop", 1);   /* srange_member_hop */
-          nt_node_set_ref(nt, id, "receiver", toa);
-          comp_grow_node_arrays(c);
-          c->nscope[toa] = c->nscope[id];
           *changed = 1;
           return 1;
         }
@@ -14750,14 +14693,10 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
   if (wor) {
     int erecv = nt_ref(nt, id, "receiver");
     if (infer_type(c, erecv) == TY_ENUMERATOR && !enumerator_own_with_object(c, id)) {
-      int toa = nt_new_node(nt, "CallNode");
-      nt_node_set_str(nt, toa, "name", "to_a");
+      int toa = an_interpose_recv_call(c, id, "to_a", -1);
+      if (toa < 0) return 0;
       nt_node_set_int(nt, toa, "made_to_a", 1);
-      nt_node_set_ref(nt, toa, "receiver", erecv);
       nt_node_set_str(nt, id, "name", wor->target);
-      nt_node_set_ref(nt, id, "receiver", toa);
-      comp_grow_node_arrays(c);
-      c->nscope[toa] = c->nscope[id];
       *changed = 1;
       return 1;
     }
@@ -14981,15 +14920,10 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       !an_enum_prog_method(c, nm)) {   /* a program's Enumerable#reverse_each runs for a Hash */
     int hrc = nt_ref(nt, id, "receiver");
     if (hrc >= 0 && ty_is_hash(infer_type(c, hrc))) {
-      int toa = nt_new_node(nt, "CallNode");
+      int toa = an_interpose_recv_call(c, id, "to_a", -1);
       if (toa >= 0) {
-        nt_node_set_str(nt, toa, "name", "to_a");
         nt_node_set_int(nt, toa, "made_to_a", 1);
-        nt_node_set_ref(nt, toa, "receiver", hrc);
         nt_node_set_str(nt, toa, "enum_recv", "1");
-        nt_node_set_ref(nt, id, "receiver", toa);
-        comp_grow_node_arrays(c);
-        c->nscope[toa] = c->nscope[id];
         *changed = 1;
       }
       return 1;
@@ -15091,15 +15025,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
          itself (the "rfind" flag below); a poly receiver goes through the
          generic find clone, which only walks forwards, so it needs the
          reversed copy as its receiver */
-      int rev = nt_ref(nt, id, "block") >= 0 ? -1 : nt_new_node(nt, "CallNode");
-      if (rev >= 0) {
-        nt_node_set_str(nt, rev, "name", "reverse");
-        nt_node_set_ref(nt, rev, "receiver", rrc);
-        nt_node_set_ref(nt, id, "receiver", rev);
-        comp_grow_node_arrays(c);
-        c->nscope[rev] = c->nscope[id];
-      }
-      else nt_node_set_int(nt, id, "rfind", 1);
+      int rev = nt_ref(nt, id, "block") >= 0 ? -1 : an_interpose_recv_call(c, id, "reverse", -1);
+      if (rev < 0) nt_node_set_int(nt, id, "rfind", 1);
       nt_node_set_str(nt, id, "name", "find");
       *changed = 1;
       return 1;
@@ -15169,18 +15096,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     int own = (smi >= 0 && !scope_is_struct_synth(c, smi)) || cmi >= 0 ||
               (okc && c->classes[pcid].is_struct && struct_has_member(&c->classes[pcid], nm));
     if (okc && c->classes[pcid].is_struct && !c->classes[pcid].is_data && !own) {
-      int wrap = nt_new_node(nt, "CallNode");
-      if (wrap >= 0) {
-        nt_node_set_str(nt, wrap, "name", wix ? "to_a" : "to_h");
-        nt_node_set_ref(nt, wrap, "receiver", prv);
-        nt_set_ignore_visibility(nt, wrap, nt_ignore_visibility(nt, id));
-        nt_node_set_ref(nt, wrap, "arguments", -1);
-        nt_node_set_ref(nt, wrap, "block", -1);
-        nt_node_set_ref(nt, id, "receiver", wrap);
-        nt_set_ignore_visibility(nt, id, 0);
+      if (an_interpose_recv_call(c, id, wix ? "to_a" : "to_h", -1) >= 0) {
         if (!wix) nt_node_set_str(nt, id, "name", "each");
-        comp_grow_node_arrays(c);
-        c->nscope[wrap] = c->nscope[id];
         *changed = 1;
         return 1;
       }
@@ -15299,23 +15216,15 @@ int desugar_enum_method_recv(Compiler *c) {
           nt_node_set_int(nt, one, "value", 1);
           int targs = nt_new_node(nt, "ArgumentsNode");
           nt_node_set_arr(nt, targs, "arguments", &one, 1);
-          int tk = nt_new_node(nt, "CallNode");
-          nt_node_set_str(nt, tk, "name", "take");
-          nt_node_set_ref(nt, tk, "receiver", recv);
-          nt_set_ignore_visibility(nt, tk, nt_ignore_visibility(nt, id));
-          nt_node_set_ref(nt, tk, "arguments", targs);
-          nt_node_set_ref(nt, tk, "block", -1);
+          if (an_interpose_recv_call(c, id, "take", targs) < 0) continue;
           int zero = nt_new_node(nt, "IntegerNode");
           nt_node_set_int(nt, zero, "value", 0);
           int zargs = nt_new_node(nt, "ArgumentsNode");
           nt_node_set_arr(nt, zargs, "arguments", &zero, 1);
           nt_node_set_str(nt, id, "name", "[]");
-          nt_node_set_ref(nt, id, "receiver", tk);
-          nt_set_ignore_visibility(nt, id, 0);
           nt_node_set_ref(nt, id, "arguments", zargs);
           comp_grow_node_arrays(c);
           c->nscope[one] = c->nscope[id]; c->nscope[targs] = c->nscope[id];
-          c->nscope[tk] = c->nscope[id];
           c->nscope[zero] = c->nscope[id]; c->nscope[zargs] = c->nscope[id];
           changed = 1;
           continue;
@@ -15359,32 +15268,18 @@ int desugar_enum_method_recv(Compiler *c) {
         !enum_lazy_driven && !sp_streq(nm, "map") && !sp_streq(nm, "collect") &&
         !sp_streq(nm, "with_index") && !sp_streq(nm, "each_with_index") &&
         !sp_streq(nm, "to_a") && !sp_streq(nm, "entries")) {
-      int wrap3 = nt_new_node(nt, "CallNode");
+      int wrap3 = an_interpose_recv_call(c, id, "to_a", -1);
       if (wrap3 >= 0) {
-        nt_node_set_str(nt, wrap3, "name", "to_a");
         nt_node_set_int(nt, wrap3, "made_to_a", 1);
-        nt_node_set_ref(nt, wrap3, "receiver", recv);
-        nt_set_ignore_visibility(nt, wrap3, nt_ignore_visibility(nt, id));
-        nt_node_set_ref(nt, id, "receiver", wrap3);
-        nt_set_ignore_visibility(nt, id, 0);
-        comp_grow_node_arrays(c);
-        c->nscope[wrap3] = c->nscope[id];
         changed = 1;
         continue;
       }
     }
     if (rt == TY_ENUMERATOR && recv_is_index_enum && enum_terminal && !enum_lazy_driven &&
         !sp_streq(nm, "size")) {
-      int wrap2 = nt_new_node(nt, "CallNode");
+      int wrap2 = an_interpose_recv_call(c, id, "to_a", -1);
       if (wrap2 >= 0) {
-        nt_node_set_str(nt, wrap2, "name", "to_a");
         nt_node_set_int(nt, wrap2, "made_to_a", 1);
-        nt_node_set_ref(nt, wrap2, "receiver", recv);
-        nt_set_ignore_visibility(nt, wrap2, nt_ignore_visibility(nt, id));
-        nt_node_set_ref(nt, id, "receiver", wrap2);
-        nt_set_ignore_visibility(nt, id, 0);
-        comp_grow_node_arrays(c);
-        c->nscope[wrap2] = c->nscope[id];
         changed = 1;
         continue;
       }
@@ -15409,7 +15304,8 @@ int desugar_enum_method_recv(Compiler *c) {
           (sp_streq(nm, "each_slice") || sp_streq(nm, "each_cons") ||
            sp_streq(nm, "each_entry")))
         nt_node_set_int(nt, id, "enum_self_result", recv);
-      int wrap = nt_new_node(nt, "CallNode");
+      int wrap = an_interpose_recv_call(c, id, "to_a", -1);
+      if (wrap < 0) continue;
       /* When the call answers its receiving Enumerator, that receiver has to
          STAY one: a blockless `.each` over a Range otherwise reads the to_a
          hop as its consumer and settles as the materialized element array,
@@ -15422,14 +15318,7 @@ int desugar_enum_method_recv(Compiler *c) {
         nt_node_set_str(nt, wrap, "enum_each_wrap", "1");
       /* the call still yields what the Enumerator yields (enum_pair_source_call) */
       nt_node_set_str(nt, wrap, "enum_hop", "1");
-      nt_node_set_str(nt, wrap, "name", "to_a");
       nt_node_set_int(nt, wrap, "made_to_a", 1);
-      nt_node_set_ref(nt, wrap, "receiver", recv);
-      nt_set_ignore_visibility(nt, wrap, nt_ignore_visibility(nt, id));
-      nt_node_set_ref(nt, id, "receiver", wrap);
-      nt_set_ignore_visibility(nt, id, 0);
-      comp_grow_node_arrays(c);
-      c->nscope[wrap] = c->nscope[id];
       enum_hop_yield_view(c, id, wrap);
       changed = 1;
       continue;
@@ -15487,17 +15376,10 @@ int desugar_enum_method_recv(Compiler *c) {
        enumerator. (each_entry was already renamed to each upstream.) */
     if (c->classes[cid].is_struct && nt_ref(nt, id, "block") < 0 &&
         (sp_streq(nm, "each") || sp_streq(nm, "each_entry"))) {
-      int wrap = nt_new_node(nt, "CallNode");
-      nt_node_set_str(nt, wrap, "name", "__enum_to_a");
-      nt_node_set_ref(nt, wrap, "receiver", recv);
-      nt_set_ignore_visibility(nt, wrap, nt_ignore_visibility(nt, id));
-      nt_node_set_ref(nt, id, "receiver", wrap);
-      nt_set_ignore_visibility(nt, id, 0);
+      if (an_interpose_recv_call(c, id, "__enum_to_a", -1) < 0) continue;
       /* the array's blockless #each yields the Enumerator; each_entry keeps its
          own name (array #each_entry with no block also materializes one) */
       if (sp_streq(nm, "each_entry")) nt_node_set_str(nt, id, "name", "each");
-      comp_grow_node_arrays(c);
-      c->nscope[wrap] = c->nscope[id];
       changed = 1;
       continue;
     }
@@ -15545,15 +15427,7 @@ int desugar_enum_method_recv(Compiler *c) {
          ((is_membership_alias(nm)) &&
           nt_ref(nt, id, "block") < 0)))
       matn = "__to_enum_each";
-    int wrap = nt_new_node(nt, "CallNode");
-    nt_node_set_str(nt, wrap, "name", matn);
-    nt_node_set_ref(nt, wrap, "receiver", recv);
-    nt_set_ignore_visibility(nt, wrap, nt_ignore_visibility(nt, id));
-    nt_node_set_ref(nt, id, "receiver", wrap);
-    nt_set_ignore_visibility(nt, id, 0);
-    comp_grow_node_arrays(c);
-    c->nscope[wrap] = c->nscope[id];
-    changed = 1;
+    if (an_interpose_recv_call(c, id, matn, -1) >= 0) changed = 1;
   }
   mtab_pop(c, mt_pass);
   return changed;
@@ -16131,16 +16005,9 @@ static int desugar_lazy_terminal(Compiler *c) {
     if (!hit) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || !chain_is_lazy_valued(c, recv)) continue;
-    int wrap = nt_new_node(nt, "CallNode");
+    int wrap = an_interpose_recv_call(c, id, "to_a", -1);
     if (wrap < 0) continue;
-    nt_node_set_str(nt, wrap, "name", "to_a");
     nt_node_set_int(nt, wrap, "made_to_a", 1);
-    nt_node_set_ref(nt, wrap, "receiver", recv);
-    nt_node_set_ref(nt, wrap, "arguments", -1);
-    nt_node_set_ref(nt, wrap, "block", -1);
-    nt_node_set_ref(nt, id, "receiver", wrap);
-    comp_grow_node_arrays(c);
-    c->nscope[wrap] = c->nscope[id];
     changed = 1;
   }
   return changed;

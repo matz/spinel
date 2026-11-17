@@ -3482,12 +3482,9 @@ static void mark_ie_own(Compiler *c, int body, int cls) {
 /* Is a child node the block a nested instance_eval/exec runs on a receiver
    of its own (ie_own_recv_block)? The markers below leave it to that call. */
 static int ie_nested_own_block(Compiler *c, int node) {
-  return node >= 0 && node < c->ie_map.cap && (c->ie_map.rb[node] & IE_RB_ROOT);
-}
-/* ...or the body of a literal a call hands on to one (ie_forward_target): a
-   typed arm's retype of the block it sits in would mark it with that arm's self */
-static int ie_nested_own_body(Compiler *c, int node) {
-  return node >= 0 && node < c->ie_map.cap && c->ie_map.own[node] != -1;
+  /* (a literal a call hands on to another receiver too: a typed arm's retype of
+     the block it sits in would mark it, and its parameters, with that arm's self) */
+  return node >= 0 && node < c->ie_map.cap && (c->ie_map.rb[node] & (IE_RB_ROOT | IE_RB_FWD));
 }
 /* Set a per-node ie_map flag (nonobj, pending) over a block's subtree, short
    of the defs, classes and modules in it, whose self is their own. */
@@ -3528,14 +3525,12 @@ void mark_ie_subtree(Compiler *c, int node, int cls) {
   /* ... nor into the block a nested instance_eval/exec runs on a receiver
      of its own, a `&` proc's too: that call marks it (build_ie_map) */
   int nr = nt_num_refs(c->nt, node);
-  for (int i = 0; i < nr; i++) {
-    int ch = nt_ref_at(c->nt, node, i);
-    if (!ie_nested_own_block(c, ch) && !ie_nested_own_body(c, ch)) mark_ie_subtree(c, ch, cls);
-  }
+  for (int i = 0; i < nr; i++)
+    if (!ie_nested_own_block(c, nt_ref_at(c->nt, node, i))) mark_ie_subtree(c, nt_ref_at(c->nt, node, i), cls);
   int na = nt_num_arrs(c->nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n);
-    for (int k = 0; k < n; k++) if (!ie_nested_own_block(c, ids[k]) && !ie_nested_own_body(c, ids[k])) mark_ie_subtree(c, ids[k], cls);
+    for (int k = 0; k < n; k++) if (!ie_nested_own_block(c, ids[k])) mark_ie_subtree(c, ids[k], cls);
   }
 }
 
@@ -5456,6 +5451,7 @@ void build_ie_map(Compiler *c) {
     }
     if (body < 0) continue;
     if (rb) ie_rb_mark(nt, rb_new, rb_n, nt_kind(nt, blk) == NK_BlockNode ? blk : body, IE_RB_IN);
+    if (rb && !is_instance_eval_family(nm) && nt_kind(nt, blk) == NK_BlockNode && blk < rb_n) rb_new[blk] |= IE_RB_FWD;
     if (pass) pend[body] = pend[body] == -1 || pend[body] == cls ? cls : -2 - id;
     mark_ie_own(c, body, pass ? pend[body] : cls);
   }
@@ -16874,7 +16870,15 @@ static int oa_filter_call(Compiler *c, int id) {
    answer nil: their value is the receiver itself, the same edge to the slot
    as a copy's. Killed with the nil-answering bangs, `def drop(n) =
    @items.delete_if { ... }` left @items a poly array wherever drop's value
-   was read, an --ext-entry's return among them. */
+   was read, an --ext-entry's return among them. Where the program defines
+   the filter's name on Array (share_builtin_overridden, which a module put
+   ahead of any class answers too), its value is the program's method's,
+   neither the receiver nor a copy of its elements: no edge, and the slot
+   dies, its value read or thrown away, as the walk arm's does under a
+   program's own each. (The edge typed the method that returns it an
+   sp_PtrArray over a body inferred boxed, a refusal; and thrown away, the
+   narrowed receiver went into a body that may store any element in it --
+   `self << "x"` raised TypeError where CRuby appends.) */
 static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *claimed, int *call_ret,
                          char *value_ok, const char *walk_disc, int nc) {
   int fk = oa_filter_call(c, id);
@@ -16885,8 +16889,9 @@ static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *cl
   int disc = id < nc && walk_disc[id];
   const char *fnm = nt_str(c->nt, id, "name");
   int self_ans = fk == 1 && fnm && !is_select_reject_bang(fnm);
-  if (fk == 1 && !self_ans && !disc) sl[S].alive = 0;
-  if ((fk == 2 || self_ans) && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
+  int own = fnm && share_builtin_overridden(c, "Array", fnm);
+  if (own || (fk == 1 && !self_ans && !disc)) sl[S].alive = 0;
+  if ((fk == 2 || self_ans) && !own && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
   return 1;
 }
 /* Is call id one of Kernel's printers (`p t`, `puts t`, `print t`, `pp t`)

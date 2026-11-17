@@ -1299,7 +1299,7 @@ int ie_own_recv_block(Compiler *c, int call);
    nodes, and IE_RB_IN on the nodes whose self is another object than their
    scope's: OWN ones, and the blocks build_ie_map resolves to a call that
    hands them to another receiver, a forwarding method's (`def build(&b) =
-   @root.instance_eval(&b)`) too. Read afresh by each build_ie_map, the
+   @root.instance_eval(&b)`) too, IE_RB_FWD on each such literal block. Read afresh by each build_ie_map, the
    structure's also when the tree grew; c->ie_map.rb_ver moves with them. */
 const unsigned char *ie_rebound_marks(Compiler *c);
 int ie_rebound_node(Compiler *c, int node);

@@ -2115,7 +2115,7 @@ typedef struct {
   struct { unsigned long ty, edits; unsigned version, scope_gen; int nscopes; } bvi_stamp;
 } Compiler;
 enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
-enum { IE_RB_IN = 1, IE_RB_OWN = 2, IE_RB_ROOT = 4 };
+enum { IE_RB_IN = 1, IE_RB_OWN = 2, IE_RB_ROOT = 4, IE_RB_FWD = 8 };
 
 AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);

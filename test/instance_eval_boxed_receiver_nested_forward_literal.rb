@@ -18,6 +18,7 @@ class Base
   def initialize = @events = {}
   def events = @events
   def event(name, &block) = @events[name] = Event.new(&block)
+  def tag = :base
 end
 h = { a: Base.new }
 b = h[:a]
@@ -25,3 +26,5 @@ h[:a].instance_eval do
   event :publish do transitions 1 end
 end
 p b.events[:publish].t
+# a receiverless instance_eval in the same block still runs on the arm's self
+p(h[:a].instance_eval { instance_eval { tag } })

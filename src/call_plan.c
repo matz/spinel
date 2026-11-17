@@ -5150,6 +5150,17 @@ void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud) {
 }
 
 typedef struct { Compiler *c; struct CplanMemo *m; int root, cap; } OmitBuild;
+/* Does class k answer `name` on a side (CT_CMETHOD: the class's own) by a def, an alias or an accessor of a class or
+   module of the program, not one of the roots'? The roots' defs and the top-level ones are what a respond_to? leaves
+   out, and every class reaches them (a `Child < Object`'s instance side, a class value's Object ancestry): only a
+   def another class holds can keep the name answering where they have not run. */
+static int omit_class_answers(Compiler *c, int k, const char *name, unsigned side) {
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, -1, k, name, side, &ml);
+  if (mi < 0) return ml.kind == ML_ATTR;
+  int dc = c->scopes[mi].class_id;
+  return dc >= 0 && !(c->classes[dc].name && is_object_root(c->classes[dc].name));
+}
 /* a name a respond_to? may leave out of the shared lists, once its siteless facts hold: it has versions, and no class
    of the program defines it besides the roots, no builtin answers it, and it is no private Kernel function */
 static void omit_note(void *ud, const char *name) {
@@ -5158,7 +5169,8 @@ static void omit_note(void *ud, const char *name) {
   if (!elab_method_versions(c, name) || builtin_object_method_known(name) || builtin_instance_name_known(name) ||
       object_private_method_name(name)) return;
   for (int k = 0; k < c->nclasses; k++)
-    if (!(c->classes[k].name && is_object_root(c->classes[k].name)) && call_answers(c, -1, k, name, 0, NULL)) return;
+    if (!(c->classes[k].name && is_object_root(c->classes[k].name)) &&
+        (omit_class_answers(c, k, name, 0) || omit_class_answers(c, k, name, CT_CMETHOD))) return;
   /* (the tables must hold the name as the top-level def, or as the root's own: where they do not, no call leaves it out) */
   int mi = o->root < 0 ? call_target(c, -1, -1, name, CT_TOP, NULL) : call_target(c, -1, o->root, name, CT_OWN, NULL);
   if (mi < 0) return;

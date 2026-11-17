@@ -24,3 +24,11 @@ rescue NoMethodError => e
   puts e.message
 end
 p K.send("it" + "self")
+class B2
+  def self.who = :b2
+end
+class A2
+  def self.who = :a2
+  def run(n) = B2.new.instance_eval { self.class.send(n) }
+end
+p A2.new.run(ARGV[0] || "who")

@@ -8018,9 +8018,12 @@ static int dsend_class_recv(Compiler *c, int send, int recv) {
       nt_ref(nt, recv, "block") < 0) {
     int sr = nt_ref(nt, recv, "receiver");
     const Scope *sc = comp_scope_of(c, send);
-    /* (nor where the program defines `class`, which may answer another class) */
+    /* (nor where the program defines `class`, which may answer another
+       class, nor in a block an instance_eval or instance_exec may run on
+       another object) */
     if ((sr < 0 || nt_kind(nt, sr) == NK_SelfNode) && sc && !sc->is_cmethod && sc->class_id >= 0 &&
-        !an_user_defines_method(c, "class") &&
+        !an_user_defines_method(c, "class") && ie_class_of(c, recv) == -1 &&
+        (sr < 0 || (!nt_int(nt, sr, "ie_rself", 0) && ie_class_of(c, sr) == -1)) &&
         sc->class_id < c->nclasses && !comp_class_is_module(c, &c->classes[sc->class_id]))
       return sc->class_id;
   }

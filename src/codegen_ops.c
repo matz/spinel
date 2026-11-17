@@ -36,7 +36,9 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
           for a String Array (the handle), "" for the other kinds
      $<   open and $> close an unwrap of the row's sp_oint / sp_ofloat
           answer where the call's consumer wants it plain (sp_oint_arg, by
-          node_is_oint of the call); nothing where it takes the oint. The
+          node_is_oint of the call); nothing where it takes the oint; a box
+          (sp_box_oint) where its facts type the row's answer boxed
+          (BOPX_BOXED_USE, op_row_boxed). The
           kind is the row's result, or the call's type when the row has none.
           For a String Array's element, the handle $O names: the bytes of
           it (SP_STR_B) unless the call is the raw read (typed_elem_read_raw)
@@ -119,6 +121,7 @@ static int op_operand_is_plain_read(Compiler *c, int id) {
   }
 }
 
+static int op_row_boxed(Compiler *c, const BopCtx *x);
 static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
   static const char tnames[] = "tuvwxyz";
   const char *tmpl = x->op->arg;
@@ -237,7 +240,11 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
     else if (p[0] == '$' && (p[1] == '<' || p[1] == '>')) {
       TyKind rk = bop_result(x->op, x->rt);
       if (!oint_kind(rk)) rk = repr_of(c, x->id).as_ty;
-      if (oint_kind(rk) && !node_is_oint(c, x->id)) buf_printf(b, p[1] == '<' ? "%s(" : ")", oint_arg(rk));
+      /* (a row its facts type boxed for this call, BOPX_BOXED_USE, answers
+         the oint boxed: not a row answered boxed by a dispatch that boxes
+         the row's own answer, emit_builtin_op_arm_boxed) */
+      if (oint_kind(rk) && op_row_boxed(c, x)) buf_printf(b, p[1] == '<' ? "%s(" : ")", oint_box(rk));
+      else if (oint_kind(rk) && !node_is_oint(c, x->id)) buf_printf(b, p[1] == '<' ? "%s(" : ")", oint_arg(rk));
       /* a String Array's element is its handle: the node's text where it
          is the raw read, else the bytes */
       else if (typed_elem_held(x->rt) == TY_STRBUF && !typed_elem_read_raw(x->rt, x->id))
@@ -397,6 +404,16 @@ typedef struct { const Compiler *c; const int *argv; } BopArgs;
 static TyKind bop_arg_ntype(const void *ud, int i) {
   const BopArgs *a = ud;
   return comp_ntype(a->c, a->argv[i]);
+}
+
+/* Does the row answer this call boxed by its facts (an index query in a
+   program that reads an Integer as nil would not, BOPX_BOXED_USE)? */
+static int op_row_boxed(Compiler *c, const BopCtx *x) {
+  if (x->op->result != BOPR_ARRAY_INDEX) return 0;
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  BopArgs a = { c, argv };
+  return bop_result_args(x->op, x->rt, argc, bop_arg_ntype, &a, an_bop_facts(c, x->op, x->id)) == TY_POLY;
 }
 
 /* The same empty-literal seed kind that inference supplied to the row. */

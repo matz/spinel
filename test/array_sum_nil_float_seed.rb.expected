@@ -1,0 +1,8 @@
+e 0: 1.5
+ia 0: 4.5
+e 1: nil
+ia 1: NoMethodError
+e 2: -0.0
+ia 2: 3.0
+4.5
+5.5

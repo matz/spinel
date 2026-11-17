@@ -2416,7 +2416,8 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
     /* a float initial value promotes an integer-array sum to Float: add the
        float init to the integer total in floating point (sp_IntArray_sum
        returns sp_int, so accumulating the init through it would truncate). */
-    if (rt == TY_INT_ARRAY && init_t == TY_FLOAT) {
+    if (rt == TY_INT_ARRAY && init_t == TY_FLOAT &&
+        !(oint_kind(comp_ntype(c, id)) && cmp_operand_may_be_nil(c, argv[0]))) {   /* (the nullable-seed arm's below) */
       int tr = ++g_tmp, ts = ++g_tmp;
       buf_puts(b, "({ ");
       tr = hold_operand(c, recv, TY_INT_ARRAY, 0, tr, 1, " ", b);
@@ -2452,8 +2453,11 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
       TyKind st = comp_ntype(c, id);
       /* a seed that is no nil takes the typed fold, as one that cannot be
          nil does; only a nil one folds boxed, to answer as nil's `+` */
+      /* (a Float seed over Integers adds the Integer total to it, as the
+         promoting arm above does for a seed that cannot be nil) */
+      int promote_f = rt == TY_INT_ARRAY && init_t == TY_FLOAT && st == TY_FLOAT;
       int fast = (rt == TY_INT_ARRAY && init_t == TY_INT && st == TY_INT && !g_promote_mode) ||
-                 (rt == TY_FLOAT_ARRAY && st == TY_FLOAT && (init_t == TY_FLOAT || init_t == TY_INT));
+                 (rt == TY_FLOAT_ARRAY && st == TY_FLOAT && (init_t == TY_FLOAT || init_t == TY_INT)) || promote_f;
       if (!fast) {
         Buf sb; memset(&sb, 0, sizeof sb);
         emit_poly_sum_seed(c, recv, argv[0], &sb);
@@ -2467,14 +2471,19 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
       buf_printf(b, "%s _t%d = ", oint_ctype(init_t), ts); emit_oint_expr(c, argv[0], init_t, b); buf_puts(b, "; ");
       char an[32]; snprintf(an, sizeof an, "_t%d", ta);
       Buf ck; memset(&ck, 0, sizeof ck);
-      const char *ar = nil_sum_ck_text(c, recv, rt, rt == TY_FLOAT_ARRAY && init_t == TY_FLOAT, an, &ck);
+      const char *ar = nil_sum_ck_text(c, recv, rt, init_t == TY_FLOAT, an, &ck);
       Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, rt, an, &bx);
       /* the nil arm answers the oint (nil over no elements), the other the
          plain sum; the call's form wraps the one that is not it */
       Buf nilv, fastv; memset(&nilv, 0, sizeof nilv); memset(&fastv, 0, sizeof fastv);
       buf_printf(&nilv, "%s(sp_poly_sum_seed(%s, sp_box_nil()))", oint_unbox(st), bx.p ? bx.p : "sp_box_nil()");
-      buf_printf(&fastv, "sp_%sArray_sum(%s, %s_t%d.v)", rt == TY_FLOAT_ARRAY ? "Float" : "Int", ar,
-                 rt == TY_FLOAT_ARRAY && init_t == TY_INT ? "(sp_float)" : "", ts);
+      if (promote_f) {
+        buf_printf(&fastv, "(sp_IntArray_length(%s) == 0 ? _t%d.v : _t%d.v + ", an, ts, ts);
+        if (g_promote_mode) buf_printf(&fastv, "sp_poly_to_f(sp_IntArray_sum_promote(%s, 0)))", ar);
+        else buf_printf(&fastv, "(sp_float)sp_IntArray_sum(%s, 0))", ar);
+      } else
+        buf_printf(&fastv, "sp_%sArray_sum(%s, %s_t%d.v)", rt == TY_FLOAT_ARRAY ? "Float" : "Int", ar,
+                   rt == TY_FLOAT_ARRAY && init_t == TY_INT ? "(sp_float)" : "", ts);
       if (node_is_oint(c, id)) buf_printf(b, "_t%d.nil ? %s : %s(%s); })", ts, nilv.p, oint_of(st), fastv.p);
       else buf_printf(b, "_t%d.nil ? %s(%s) : %s; })", ts, oint_arg(st), nilv.p, fastv.p);
       free(nilv.p); free(fastv.p); free(ck.p); free(bx.p);

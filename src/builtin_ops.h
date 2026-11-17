@@ -398,8 +398,9 @@ typedef struct BuiltinOp {
                                            kind; a String array's is boxed (it only
                                            raises, or answers 0 when empty). Float results are
                                            boxed too; Integer results defer to mode-aware inference. */
-#define BOPR_ARRAY_INDEX ((TyKind)-18)  /* Array#index/find_index/rindex(v): an Integer,
-                                           nil on a miss (an oint), whatever the array */
+#define BOPR_ARRAY_INDEX ((TyKind)-18)  /* Array#index/find_index/rindex(v), and a String
+                                           Range's find_index(v): an Integer, nil on a
+                                           miss (an oint), whatever the receiver */
 #define BOPR_ARRAY_TUPLES ((TyKind)-19) /* blockless combination & co.: a poly array
                                            whose position keeps the tuples (BOPX_KEPT)
                                            materializes them, any other call answers an
@@ -559,7 +560,7 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
 #define BOPX_PROMOTE 1  /* --int-overflow=promote */
 #define BOPX_KEPT    2  /* a blockless combination & co. whose position keeps
                            the tuples as an Array (an_blockless_tuples_kept) */
-#define BOPX_BOXED_USE 4 /* an index query of a typed Array in a program
+#define BOPX_BOXED_USE 4 /* an index query of a typed Array or a String Range in a program
                            that reads an Integer with a call nil answers
                            otherwise -- `& | ^`, `method`, ...
                            (an_int_nil_sensitive_use): it answers boxed, as it

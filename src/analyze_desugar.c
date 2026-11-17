@@ -7991,6 +7991,16 @@ static int dsend_class_recv(Compiler *c, int send, int recv) {
   if (rk == NK_SelfNode && dsend_in_def_self(c, send)) return comp_scope_of(c, send)->class_id;
   /* (self in a class or module body is that class, as a constant naming it is) */
   if (rk == NK_SelfNode) return class_body_self_ci(c, recv);
+  /* `self.class` in an instance method is its class or a subclass, whose
+     class methods dsend_class_names gathers; a module's is its includer's */
+  if (rk == NK_CallNode && sp_streq(nt_str(nt, recv, "name"), "class") && nt_ref(nt, recv, "arguments") < 0 &&
+      nt_ref(nt, recv, "block") < 0) {
+    int sr = nt_ref(nt, recv, "receiver");
+    const Scope *sc = comp_scope_of(c, send);
+    if ((sr < 0 || nt_kind(nt, sr) == NK_SelfNode) && sc && !sc->is_cmethod && sc->class_id >= 0 &&
+        sc->class_id < c->nclasses && !comp_class_is_module(c, &c->classes[sc->class_id]))
+      return sc->class_id;
+  }
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, recv, "name");
     return cn ? const_node_class_index(c, recv) : -1;
@@ -8827,9 +8837,21 @@ static int desugar_dynamic_send_inner(Compiler *c) {
          refused rather than raising NoMethodError for a method that
          exists. */
       if (class_recv >= 0) {
-        for (int k = 0; k < nown && shaped; k++)
-          if (comp_cmethod_in_chain(c, class_recv, own[k], NULL) < 0) shaped = 0;
-        if (!shaped) { for (int j = 0; j < nown; j++) free(own[j]); nown = 0; }
+        int whole = !shaped;
+        for (int k = 0; k < nown && (shaped || whole); k++)
+          if (comp_cmethod_in_chain(c, class_recv, own[k], NULL) < 0) shaped = whole = 0;
+        /* A name nothing fixes (`self.class.send(enum_name)`) may name
+           Class's own methods too (`name`, `new`): they are arms beside the
+           class methods, so the send raises only where CRuby's does. */
+        if (whole) {
+          int cap = nown; ANameHash seen; memset(&seen, 0, sizeof seen);
+          for (int k = 0; k < nown; k++) anh_add(&seen, own[k]);
+          /* (the arms past nprog take a builtin row's arity, not a program method's of the name) */
+          nprog = nown;
+          dsend_add_builtin_names(c, "Class", &own, &nown, &cap, &seen);
+          anh_free(&seen);
+        }
+        else if (!shaped) { for (int j = 0; j < nown; j++) free(own[j]); nown = 0; }
       }
       /* A boxed receiver's builtin names come after the program's: past
          their cap they go, and the send dispatches over what it did before

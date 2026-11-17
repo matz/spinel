@@ -28444,6 +28444,9 @@ int desugar_user_send_others(Compiler *c) {
       nt_node_set_arr(nt, a, "arguments", na, an);
       free(na);
       av = nt_arr(nt, a, "arguments", &an); }
+    /* (prism numbers a call before its arguments and receiver: a send among them is split after this one, from where it now sits) */
+    if (wn >= 0) parent[nt_ref(nt, wn, "value")] = wn;
+    if (w >= 0) parent[r] = w;
     int pred = -1;
     for (int i = 0; i < nown + sock; i++) {
       int q = fwd_new_node_like(nt, id, "CallNode"), qa = fwd_new_node_like(nt, id, "ArgumentsNode");

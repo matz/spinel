@@ -8192,8 +8192,9 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
   int ek = 0;
   /* (a `**h` alone, the call's only argument) */
   int lone = kw == NEWKW_MAYBE && !open && !argc, nargs = 0, args = nt_ref(c->nt, id, "arguments");
+  const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL;
   /* (literal keys beside a `**h`, which may add any) */
-  int ksplat = nt_argv_has_kwsplat(c->nt, args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL, nargs);
+  int ksplat = nt_argv_has_kwsplat(c->nt, av, nargs);
   for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
     const Scope *sc = &c->scopes[mi];
     /* (a def of the class's own counts where the load record proves it made before the call can first run; where the call runs

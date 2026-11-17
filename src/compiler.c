@@ -3624,10 +3624,12 @@ int comp_native_answer_class(Compiler *c, int cid, const char *name) {
   if (c->classes[cid].is_native_class) return cid;
   int r = c->classes[cid].nsub_root - 1;
   if (r < 0 || !name) return -1;
-  if (call_target(c, -1, cid, name, CT_METHODS, NULL) >= 0 || call_attr_target(c, -1, cid, name, CT_ATTR, NULL)) return -1;
+  if (call_target(c, -1, cid, name, CT_METHODS, NULL) >= 0 ||
+      call_attr_target(c, -1, cid, name, CT_ATTR, NULL)) return -1;
   /* (nor an attribute writer of the program's) */
   char base[256];
-  if (setter_base_name(name, base, sizeof base) && call_attr_target(c, -1, cid, base, CT_ATTR | CT_WRITER, NULL)) return -1;
+  if (setter_base_name(name, base, sizeof base) &&
+      call_attr_target(c, -1, cid, base, CT_ATTR | CT_WRITER, NULL)) return -1;
   return r;
 }
 
@@ -3854,7 +3856,8 @@ static int mixin_level_walk(Compiler *c, int id, int k, const char *name, int ow
   /* A prepended module's method precedes its includes. Its transplanted
      scope records the module whose own lookup supplies that order. */
   if (comparable && ci->cmp_prepended == 2) {
-    int mi = comp_name_responder(c, k, name, CT_OWN);   /* (the copy the prepend made: its module, the walk's next level) */
+    /* (the copy the prepend made: its module, the walk's next level) */
+    int mi = comp_name_responder(c, k, name, CT_OWN);
     if (mi >= 0 && c->scopes[mi].is_prepend_copy && depth < c->nclasses) {
       int m = c->scopes[mi].origin_module_ci - 1;
       if (m >= 0 && m != k) {

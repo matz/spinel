@@ -49,6 +49,10 @@ typedef struct {
      written out rather than refused */
   int dump, dump_limit;
   int stk;      /* p is the caller's stack array: grown by a copy, never freed */
+  /* the walk is laying out a user #to_json's own document again (the pretty
+     printer's re-read), whose text CRuby writes as it is: its Strings are
+     not checked as UTF-8 */
+  int raw;
 } jbuf;
 #define JB_STACK_N 512
 #define JB_ON_STACK(b, arr) do { memset(&(b), 0, sizeof (b)); (b).p = (arr); (b).cap = sizeof (arr); (b).stk = 1; } while (0)
@@ -155,11 +159,54 @@ static const char jb_esc[256] = {
   0, 0, '"', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   ['\\'] = '\\',
 };
+/* The length of the well-formed UTF-8 character at P, whose first byte is
+   0x80 or above, or 0 when the bytes there are not one: a stray continuation
+   byte, a sequence cut short, an overlong form, a surrogate half, or a code
+   point past U+10FFFF (RFC 3629, as String#valid_encoding? reads it). Each
+   of those is told by the lead byte and the range of the byte after it
+   (RFC 3629's table), so no code point is put together. */
+static inline size_t jb_utf8_len(const unsigned char *p, const unsigned char *end) {
+  unsigned c = p[0];
+  size_t left = (size_t)(end - p);
+  if (c < 0xC2) return 0;                       /* a continuation byte, or C0/C1 (overlong) */
+  if (c < 0xE0) return left >= 2 && (p[1] & 0xC0) == 0x80 ? 2 : 0;
+  if (c < 0xF0) {
+    if (left < 3) return 0;
+    unsigned lo = c == 0xE0 ? 0xA0 : 0x80;      /* E0 80..9F is overlong */
+    unsigned hi = c == 0xED ? 0x9F : 0xBF;      /* ED A0..BF is a surrogate half */
+    return p[1] >= lo && p[1] <= hi && (p[2] & 0xC0) == 0x80 ? 3 : 0;
+  }
+  if (c < 0xF5) {
+    if (left < 4) return 0;
+    unsigned lo = c == 0xF0 ? 0x90 : 0x80;      /* F0 80..8F is overlong */
+    unsigned hi = c == 0xF4 ? 0x8F : 0xBF;      /* F4 90.. is past U+10FFFF */
+    return p[1] >= lo && p[1] <= hi && (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80 ? 4 : 0;
+  }
+  return 0;                                     /* F5..FF start nothing */
+}
+/* CRuby's json refuses a String that is not valid UTF-8 rather than write
+   bytes no JSON parser reads back. A text String gets the generator's own
+   message. A binary one is taken when its bytes happen to be UTF-8 (CRuby
+   warns that json 3.x will raise there; Spinel prints nothing), and otherwise
+   fails converting to UTF-8, which names its first byte past ASCII, as
+   ASCII-8BIT gives no such byte a character in UTF-8. */
+SP_COLD static SP_NOINLINE SP_NORETURN void jb_bad_utf8(jbuf *b, const char *s, size_t n) {
+  jb_release(b);
+  if (sp_str_is_binary(s)) {
+    unsigned char c = 0;
+    for (size_t i = 0; i < n; i++)
+      if ((unsigned char)s[i] >= 0x80) { c = (unsigned char)s[i]; break; }
+    sp_raise_cls("JSON::GeneratorError", sp_sprintf("\"\\x%02X\" from ASCII-8BIT to UTF-8", c));
+  }
+  sp_raise_cls("JSON::GeneratorError", "source sequence is illegal/malformed utf-8");
+}
 /* A String quoted and escaped straight into the buffer, the bytes between two
    escapes copied as one run. S is read while the buffer grows, and a moved
    buffer's growth can collect: every caller's S is held by the document the
    walk has rooted (a value, a key, a Symbol's name) or is not on the GC heap,
-   and the collector moves nothing, so it is still there to read. */
+   and the collector moves nothing, so it is still there to read. A byte past
+   ASCII has to start a well-formed UTF-8 character, which is copied with its
+   run; anything else raises (jb_bad_utf8). */
 static void jb_strn(jbuf *b, const char *s, size_t n) {
   jb_c(b, '"');
   if (s) {
@@ -168,7 +215,24 @@ static void jb_strn(jbuf *b, const char *s, size_t n) {
     while (p < end) {
       c = (unsigned char)*p;
       char e = jb_esc[c];
-      if (!e) { p++; continue; }
+      if (!e) {
+        if (c < 0x80) { p++; continue; }
+        /* a byte past ASCII: the characters from here to the next ASCII
+           byte stay in the run, each checked as UTF-8 */
+        const unsigned char *q = (const unsigned char *)p, *qe = (const unsigned char *)end;
+        do {
+          unsigned lead = *q;
+          /* the common three-byte lead first: E1..EC and EE..EF take any
+             continuation bytes */
+          if (lead - 0xE1u < 0x0Fu && lead != 0xEDu && qe - q >= 3 &&
+              ((q[1] & 0xC0u) | ((q[2] & 0xC0u) >> 2)) == 0xA0u) { q += 3; continue; }
+          size_t k = jb_utf8_len(q, qe);
+          if (!k) { if (!b->raw) jb_bad_utf8(b, s, n); k = 1; }
+          q += k;
+        } while (q < qe && *q >= 0x80);
+        p = (const char *)q;
+        continue;
+      }
       if (p > run) jb_add(b, run, (size_t)(p - run));
       if (e == 'u') {
         char u[6] = { '\\', 'u', '0', '0', "0123456789abcdef"[c >> 4], "0123456789abcdef"[c & 15] };
@@ -413,6 +477,9 @@ static void sp_json_leaf_b(jbuf *b, sp_RbVal v) {
     case SP_TAG_INT: jb_int(b, v.v.i); return;
     case SP_TAG_FLT:
       if (isfinite(v.v.f)) { char out[64]; jb_add(b, out, (size_t)sp_json_float_fmt(v.v.f, out)); return; }
+      /* NaN and the Infinities raise below unless this is dump's walk: the
+         walk's buffer is released first, as for its other raises */
+      if (!b->dump) jb_release(b);
       break;
     case SP_TAG_STR: jb_rstr(b, v.v.s); return;
     case SP_TAG_SYM: jb_sym(b, (sp_sym)v.v.i); return;
@@ -500,6 +567,12 @@ static void sp_json_indent(jbuf *b, int depth) {
 }
 
 static void sp_json_pretty_val(jbuf *b, sp_RbVal v, int depth) {
+  if (b->raw) {
+    /* a String of a re-read document (held as its handle or not) straight
+       into this buffer, unchecked */
+    sp_RbVal sv = sp_rbval_str(v);
+    if (sv.tag == SP_TAG_STR) { jb_rstr(b, sv.v.s); return; }
+  }
   if (v.tag == SP_TAG_OBJ) {
     int kind = sp_json_kind_fn ? sp_json_kind_fn(v) : 0;
     if (kind == 1) {  /* array */
@@ -550,7 +623,10 @@ static void sp_json_pretty_val(jbuf *b, sp_RbVal v, int depth) {
         /* the re-parsed document is this walk's only reference to it */
         sp_RbVal d = sp_json_parse(uj);
         SP_GC_ROOT_RBVAL(d);
+        int raw = b->raw;
+        b->raw = 1;
         sp_json_pretty_val(b, d, depth);
+        b->raw = raw;
         return;
       }
     }
@@ -562,7 +638,9 @@ static void sp_json_pretty_val(jbuf *b, sp_RbVal v, int depth) {
       jb_gcs(b, js, (size_t)sp_str_byte_len(js)); }
     return;
   }
-  { const char *sc = sp_json_val(v); jb_gcs(b, sc, strlen(sc)); }
+  /* a leaf into this buffer, as the compact walk writes it, so a String
+     that is not UTF-8 or a NaN raises with this walk's buffer released */
+  sp_json_leaf_b(b, v);
 }
 
 /* The document is rooted for the walk, for the reason sp_json_parse roots its

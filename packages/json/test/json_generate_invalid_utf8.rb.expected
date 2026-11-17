@@ -1,0 +1,31 @@
+stray: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+cut: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+surrogate: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+overlong: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+past max: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+bad continuation: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+cut at a lead: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+binary: JSON::GeneratorError: "\xFF" from ASCII-8BIT to UTF-8
+binary cut: JSON::GeneratorError: "\xE3" from ASCII-8BIT to UTF-8
+binary after utf8: JSON::GeneratorError: "\xC3" from ASCII-8BIT to UTF-8
+binary utf8: ["é"]
+binary ascii: ["abc"]
+valid: ["héllo","日本","😀","\"é\n\""]
+edges: 4611
+key: JSON::GeneratorError: "\xFF" from ASCII-8BIT to UTF-8
+text key: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+nested: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+to_json: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+binary to_json: JSON::GeneratorError: "\xFF" from ASCII-8BIT to UTF-8
+pretty: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+dump: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+built: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+mutated: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+long: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+pretty long: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+pretty long nan: JSON::GeneratorError: NaN not allowed in JSON
+pretty long ok: 4413
+user to_json: [91, 34, 97, 255, 98, 34, 93]
+user to_json pretty: [91, 10, 32, 32, 34, 97, 255, 98, 34, 10, 93]
+user to_json object: [123, 34, 97, 34, 58, 123, 34, 107, 255, 34, 58, 91, 34, 118, 254, 34, 93, 125, 125]
+after: ["fine","é"]

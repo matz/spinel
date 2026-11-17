@@ -2989,7 +2989,7 @@ int emit_call_array_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
     if (k) {
       int t = ++g_tmp, ti = ++g_tmp, tv = ++g_tmp;
       buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_expr(c, recv, b); buf_puts(b, "; ");
-      emit_index_recv_root(c, rt, recv, argv[0], argv[1], t, b);
+      emit_index_recv_root(c, rt, recv, argv, 2, t, b);
       buf_printf(b, "sp_int _t%d = ", ti); emit_int_expr(c, argv[0], b); buf_puts(b, "; ");
       if (rt == TY_POLY_ARRAY) {
         buf_printf(b, "sp_RbVal _t%d = ", tv); emit_boxed(c, argv[1], b);

@@ -18438,9 +18438,11 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   }
   int ta = ++g_tmp, ts = ++g_tmp, tg = ++g_tmp;  /* recv, src, range temps */
   int tam = splice_to_ary_mi(c, rhs_node, rhs_ty);
+  const int splice_ops[4] = { start_node, len_node, range_node, rhs_node };   /* (what can drop the receiver) */
 
   if (rt == TY_POLY_ARRAY) {
     buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, recv, b); buf_puts(b, "; ");
+    emit_index_recv_root(c, rt, recv, splice_ops, 4, ta, b);
     if (tam >= 0) {
       /* object RHS with to_ary: splice the coercion, yield the object */
       Buf call; memset(&call, 0, sizeof call);
@@ -18483,6 +18485,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   int poly_so = 0;   /* the boxed-RHS branch tracks its array source in _soN */
   int voint = 0;     /* the value is the oint _t<ts>, answered as the consumer takes it */
   buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b); buf_puts(b, "; ");
+  emit_index_recv_root(c, rt, recv, splice_ops, 4, ta, b);
   buf_printf(b, "%s_src%d; sp_int _srcn%d; ", srcty, ta, ta);
 
   if (rhs_empty) {
@@ -26745,16 +26748,6 @@ int subtree_may_reassign_state(Compiler *c, int id) {
   return 0;
 }
 
-/* The receiver temp of an element write (`a[i] ||= v`, `a[i] = v`, `a[i, n] = v`) is the container's only holder once the index or the
-   value drops it (an assignment of the variable that held it, a delete), and a receiver that
-   allocates has no holder at all: root it when either can, so the value's allocations and the
-   store reach a live container */
-void emit_index_recv_root(Compiler *c, TyKind irt, int ir, int idx, int iv, int ta, Buf *b) {
-  if (subtree_may_allocate(c, ir) || subtree_has_side_effect(c, idx) || subtree_has_side_effect(c, iv)) {
-    emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " ");
-  }
-}
-
 /* Is the receiver of an element store held by program state alone (an ivar, a global, a class variable or a call's
    answer), with an index or a value that may reassign that state? Then the receiver is read first into a rooted temp:
    read inside the store's argument list it is unrooted while they run, and C leaves its order to the compiler. */
@@ -26764,6 +26757,16 @@ int store_recv_dropped_by(Compiler *c, int recv, int idx, int val) {
           rk == NK_CallNode) &&
          (subtree_may_reassign_state(c, idx) || subtree_may_reassign_state(c, val));
 }
+/* The receiver temp of an element write (`a[i] ||= v`, `a[i] = v`, `a[i, n] = v`) is the container's only holder once
+   an operand (the index, the length, the value) drops it (an assignment of the variable that held it, a delete), and a
+   receiver that allocates has no holder at all: root it when either can, so the operands' allocations and the store
+   reach a live container. */
+void emit_index_recv_root(Compiler *c, TyKind irt, int ir, const int *ops, int nops, int ta, Buf *b) {
+  int drops = subtree_may_allocate(c, ir);
+  for (int i = 0; i < nops && !drops; i++) drops = ops[i] >= 0 && subtree_has_side_effect(c, ops[i]);
+  if (drops) { emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " "); }
+}
+
 /* A value of a kind whose builtin methods run no Ruby code of the
    program's: numbers, Strings, Symbols, their ranges and typed Arrays. A
    Proc, an object, a boxed value or a container of them may call back into

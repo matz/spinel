@@ -312,6 +312,8 @@ static char **rtr_omitted(Compiler *c, int id, int *n) {
   char **v = NULL;
   int cap = 0, nc = 0;
   *n = 0;
+  /* (cand is the plan's own array, held across the asks below: it is rebuilt only when the tables it was built from
+     move, and an ask of the record moves none) */
   const CplanOmitCand *cand = cplan_omit_candidates(c, &nc);
   /* (the record answers only for a call that runs once where it stands) */
   if (!cplan_runs_once(c, id)) return NULL;

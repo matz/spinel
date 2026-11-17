@@ -4925,6 +4925,9 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->why = 0;
   }
   if ((flags & CT_ATTR) && ml->kind == ML_ATTR) ct_attr_point(c, id, cls, flags, name, ml);
+  /* (the method answered is one the asker reads: a version, pin or entry the record chose past the table's, which
+     the table lookup did not note; infer_type's memo notes it) */
+  if (r >= 0) IMEMO_DEP_SCOPE(r);
   if (open) mtab_leave(c);
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;

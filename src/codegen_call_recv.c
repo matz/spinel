@@ -5806,6 +5806,17 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       buf_puts(b, sp_streq(name, "first") ? ", 0))" : ", -1))");
       return 1;
     }
+    /* sample: an element at random, nil when there is none, inline as the
+       boxed path's sp_PolyArray_sample is (no call, nothing to root) */
+    if (!nested && sp_streq(name, "sample") && argc == 0) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_PtrArray *_t%d = ", t);
+      if (!nil_ok) buf_puts(b, "(sp_PtrArray *)sp_nil_recv_named(");
+      emit_expr(c, recv, b);
+      if (!nil_ok) buf_puts(b, ", \"sample\")");
+      buf_printf(b, "; _t%d->len > 0 ? (%s *)_t%d->data[sp_krand_below(_t%d->len)] : (%s *)NULL; })", t, ecn, t, t, ecn);
+      return 1;
+    }
     /* the removals, which the pass admits for an object array only: each
        function is named as the method is */
     if (!nested && (((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 0) ||
@@ -5945,6 +5956,18 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       buf_printf(b, "((%s *)sp_PtrArray_minmax_obj(", ecn);
       emit_expr(c, recv, b);
       buf_printf(b, ", %d, %d))", ecls, sp_streq(name, "max") ? 1 : 0);
+      return 1;
+    }
+    /* min or max with a comparator the loop does not lower (emit_minmax_cmp_expr:
+       a tail that answers no number and no nil, a break as the tail): as on
+       the boxed path, the compile warns and the call raises
+       NotImplementedError where it runs, after its receiver */
+    if (!nested && is_minmax_query(name) && argc == 0 && nt_ref(nt, id, "block") >= 0) {
+      char what[16]; snprintf(what, sizeof what, "Array#%s", name);
+      warn_unrouted_call(c, id, what);
+      buf_printf(b, "((%s *)(sp_raise_cls(\"NotImplementedError\", ({ (void)(", ecn);
+      emit_expr_for_effect(c, recv, b);
+      buf_printf(b, "); \"spinel: Array#%s is not supported\"; })), (void *)0))", name);
       return 1;
     }
     return 0;  /* unsupported obj-array op: pass should have prevented this. */

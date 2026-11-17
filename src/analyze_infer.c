@@ -7858,7 +7858,7 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
     if (sp_streq(name, "empty?") && argc == 0) { *out = TY_BOOL; return 1; }
     /* the removals: an element (NULL-encoded nil when there is none), and
        clear the array */
-    if ((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 0) { *out = ty_object(ecls); return 1; }
+    if ((sp_streq(name, "pop") || sp_streq(name, "shift") || sp_streq(name, "sample")) && argc == 0) { *out = ty_object(ecls); return 1; }
     if (sp_streq(name, "delete_at") && argc == 1) { *out = ty_object(ecls); return 1; }
     if (sp_streq(name, "clear") && argc == 0) { *out = rt; return 1; }
     /* the searches: delete answers the element it takes out (NULL-encoded

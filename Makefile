@@ -4827,6 +4827,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	grep -q 'static sp_PointValue sp_PointValue_new(' "$$tmp/oir.c" && ! grep -q 'iv_unused;' "$$tmp/oir.c" || { echo "infer-test: FAIL (an Object setter changes unrelated layouts)"; ok=0; }; \
 	$(SPINEL) test/hash_store_boxed_unbounded.rb -c --no-line-map -o "$$tmp/hbu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_store_boxed_unbounded: -c)"; ok=0; }; \
 	! grep -q 'sp_PolyPolyHash_new' "$$tmp/hbu.c" || { echo "infer-test: FAIL (an unbounded boxed store widened a known Hash)"; ok=0; }; \
+	$(SPINEL) test/hash_key_walk_param_same_name.rb -c --no-line-map -o "$$tmp/hkw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_key_walk_param_same_name: -c)"; ok=0; }; \
+	grep -Fq 'static inline sp_StrIntHash * sp_A_s_w(' "$$tmp/hkw.c" && grep -Eq '^static inline sp_Str[A-Za-z]*Hash \* sp_TodoApp_s_tag_counts\(' "$$tmp/hkw.c" || { echo "infer-test: FAIL (a walk parameter boxed for a round keyed its empty Hash poly)"; ok=0; }; \
 	$(SPINEL) test/container_alias_untracked_local.rb -c --no-line-map -o "$$tmp/cau.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (container_alias_untracked_local: -c)"; ok=0; }; \
 	awk '/^struct sp_Area_s \{/,/^\}/' "$$tmp/cau.c" | grep -Fq 'sp_StrArray * iv_except;' || { echo "infer-test: FAIL (a local that may hold an untracked container joined an alias group and widened an Array[String])"; ok=0; }; \
 	$(SPINEL) test/ivar_push_unsettled_block_value.rb -c --no-line-map -o "$$tmp/ipu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_push_unsettled_block_value: -c)"; ok=0; }; \

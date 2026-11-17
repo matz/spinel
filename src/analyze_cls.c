@@ -4648,6 +4648,7 @@ static const char *cf_ivar_lit(CF *f, int call) {
 
 static void cf_collect_dyn(CF *f) {
   const NodeTable *nt = f->nt;
+  int ivr_spelled = -1;   /* (the program spells a reflection's name: asked once) */
   /* the constants the program writes: a read of any other names a builtin */
   static const NodeKind cw[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode,
     NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
@@ -4675,6 +4676,22 @@ static void cf_collect_dyn(CF *f) {
       NodeKind k1 = n1 > 0 ? nt_kind(nt, v1[0]) : NK_NilNode;
       const char *sn = k1 == NK_SymbolNode ? nt_str(nt, v1[0], "value") : k1 == NK_StringNode ? nt_str(nt, v1[0], "content") : NULL;
       if (sn && (sp_streq(sn, "instance_variable_set") || sp_streq(sn, "instance_variable_get") || sp_streq(sn, "remove_instance_variable"))) f->all_ivars = 1;
+      /* nor is a computed name that may be one: its arms are made after this
+         pass (desugar_dynamic_send), over the names the program spells */
+      if (!sn && n1 > 0 && !f->all_ivars) {
+        if (ivr_spelled < 0) {
+          ivr_spelled = 0;
+          NT_FOREACH_KIND(nt, NK_SymbolNode, sid) {
+            const char *sv = nt_str(nt, sid, "value");
+            if (sv && (sp_streq(sv, "instance_variable_set") || sp_streq(sv, "instance_variable_get") || sp_streq(sv, "remove_instance_variable"))) { ivr_spelled = 1; break; }
+          }
+          if (!ivr_spelled) NT_FOREACH_KIND(nt, NK_StringNode, sid) {
+            const char *sv = nt_str(nt, sid, "content");
+            if (sv && (sp_streq(sv, "instance_variable_set") || sp_streq(sv, "instance_variable_get") || sp_streq(sv, "remove_instance_variable"))) { ivr_spelled = 1; break; }
+          }
+        }
+        if (ivr_spelled) f->all_ivars = 1;
+      }
     }
     /* `inject(:m)`, `inject(init, :m)` and `each_with_object(x, &:m)` call m
        with arguments the pass does not see: m takes any class */

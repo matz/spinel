@@ -17489,6 +17489,79 @@ static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options, in
   sp_RbVal value = sp_json_parse_duplicates(s, limit, duplicates);
   return symbolize ? sp_json_symbolize(value) : value;
 }
+/* JSON.generate(obj, opts) and JSON.pretty_generate(obj, opts): the options
+   read as Ruby 4.0's bundled json (2.18) reads them, in its State#configure.
+   ascii_only, script_safe (and its other name escape_slash), allow_nan and
+   max_nesting are honoured; buffer_initial_length changes nothing, nor does
+   a true allow_duplicate_key (the writer writes every key, as that json does
+   by default). An option Spinel would ignore while that json's answer
+   changes -- a layout String other than the one the call writes, strict,
+   as_json, a depth to start from, a false allow_duplicate_key (which raises
+   on a duplicate there) -- raises ArgumentError by name, as JSON.parse's do.
+   A name that json does not know is ignored, as there (sort_keys among them,
+   which json 3 reads). nil and false are no options.
+   MODE: 1 for pretty_generate; 2 for a builtin's #to_json(state), which
+   reads a Hash as these options and takes anything else for no options
+   (CRuby's State.from_state), where generate refuses it. */
+extern const char *sp_json_generate_with(sp_RbVal v, int esc, int allow_nan, int limit_set, sp_int max_nesting, int pretty);
+static SP_NOINLINE SP_NORETURN void sp_json_gen_unsupported(const char *name, int pretty) {
+  sp_raise_cls("ArgumentError", sp_sprintf("unsupported JSON.%s option: %s", pretty ? "pretty_generate" : "generate", name));
+}
+/* indent / space / space_before / object_nl / array_nl: nil, false and ""
+   are the empty String; anything else but a String is a TypeError. WANT is
+   what the call writes there. */
+static inline int sp_json_gen_layout_ok(sp_RbVal value, const char *want) {
+  if (!sp_poly_truthy(value)) return want[0] == 0;
+  sp_RbVal sv = sp_rbval_str(value);
+  if (sv.tag != SP_TAG_STR)
+    sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected String)", sp_poly_class_name(value)));
+  size_t n = (size_t)sp_str_byte_len(sv.v.s);
+  return n == strlen(want) && memcmp(sv.v.s, want, n) == 0;
+}
+static inline const char *sp_json_generate_options(sp_RbVal v, sp_RbVal options, int mode) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(options);
+  int pretty = mode & 1;
+  int esc = 0, allow_nan = 0, limit_set = 0;
+  sp_int limit = 0;
+  int is_hash = options.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(options.cls_id);
+  if (sp_poly_truthy(options) && !is_hash && !(mode & 2))
+    sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Hash)", sp_poly_class_name(options)));
+  if (is_hash) {
+    for (sp_int i = 0; i < sp_poly_length(options); i++) {
+      sp_RbVal key, value; sp_poly_hash_pair(options, i, &key, &value);
+      SP_GC_ROOT_RBVAL(key); SP_GC_ROOT_RBVAL(value);
+      const char *name = key.tag == SP_TAG_SYM ? sp_sym_name_fn((sp_sym)key.v.i) : NULL;
+      /* pretty_generate lays out with CRuby's PRETTY_GENERATE_OPTIONS, which
+         an option of the caller's replaces */
+      const char *layout = !name ? NULL :
+        !strcmp(name, "indent") ? (pretty ? "  " : "") :
+        !strcmp(name, "space") ? (pretty ? " " : "") :
+        !strcmp(name, "space_before") ? "" :
+        !strcmp(name, "object_nl") || !strcmp(name, "array_nl") ? (pretty ? "\n" : "") : NULL;
+      if (layout) { if (!sp_json_gen_layout_ok(value, layout)) sp_json_gen_unsupported(name, pretty); }
+      else if (name && !strcmp(name, "ascii_only")) { if (sp_poly_truthy(value)) esc |= 1; else esc &= ~1; }
+      else if (name && (!strcmp(name, "script_safe") || !strcmp(name, "escape_slash"))) {
+        if (sp_poly_truthy(value)) esc |= 2; else esc &= ~2;
+      }
+      else if (name && !strcmp(name, "allow_nan")) allow_nan = sp_poly_truthy(value);
+      else if (name && !strcmp(name, "max_nesting")) {
+        limit_set = 1;
+        limit = sp_poly_truthy(value) ? sp_poly_to_int_arg(value) : 0;
+      }
+      else if (name && !strcmp(name, "depth")) {
+        if (sp_poly_truthy(value) && sp_poly_to_int_arg(value) != 0) sp_json_gen_unsupported(name, pretty);
+      }
+      else if (name && (!strcmp(name, "strict") || !strcmp(name, "as_json"))) {
+        if (sp_poly_truthy(value)) sp_json_gen_unsupported(name, pretty);
+      }
+      else if (name && !strcmp(name, "allow_duplicate_key")) {
+        if (!sp_poly_truthy(value)) sp_json_gen_unsupported(name, pretty);
+      }
+      /* buffer_initial_length, and any name json does not know, change nothing */
+    }
+  }
+  return sp_json_generate_with(v, esc, allow_nan, limit_set, limit, pretty);
+}
 /* JSON.parse(object_class: OpenStruct): every parsed object becomes an
    OpenStruct over its members. CRuby's parser makes one per object and
    stores each pair with []=, which interns the key, so the keys are

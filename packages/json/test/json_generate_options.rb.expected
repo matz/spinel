@@ -1,0 +1,65 @@
+ascii: ["\u00e9\u65e5\ud83d\ude00\u0001","plain"]
+ascii key: {"\u00e9":1,"\u00fc":2,"1.5":"\u00e9"}
+ascii sym: ["\u00e9"]
+ascii binary: ["\u00e9"]
+ascii scalar: "\u00e9"
+ascii false: ["é"]
+ascii invalid: JSON::GeneratorError: source sequence is illegal/malformed utf-8
+script: ["<\/script>\u2028\u2029é"]
+script key: {"a\/b":"\u2029"}
+escape_slash: ["<\/"]
+both: ["\/\u2028\u00e9"]
+nan: [NaN,Infinity,-Infinity]
+nan scalar: NaN
+nan false: JSON::GeneratorError: NaN not allowed in JSON
+nest 3: [[[1]]]
+nest 2: JSON::NestingError: nesting of 2 is too deep. Did you try to serialize objects with circular references?
+nest hash: JSON::NestingError: nesting of 1 is too deep. Did you try to serialize objects with circular references?
+nest 0: [[[[1]]]]
+nest nil: [[[[1]]]]
+nest -1: JSON::NestingError: nesting of 0 is too deep. Did you try to serialize objects with circular references?
+nest 200: 303
+defaults: {"a":[1]}
+noop: [1]
+dup keys: {"a":1,"a":2}
+none: [1]
+nil: ["é"]
+false: ["é"]
+hash value: ["\/\u00e9"]
+splat: ["\/\u00e9"]
+unknown: [1]
+unknowns: [1]
+unknown and known: ["\u00e9"]
+string key: ["é"]
+sort_keys: {"b":1,"a":2}
+not a hash: TypeError: wrong argument type Integer (expected Hash)
+layout not a string: TypeError: wrong argument type Integer (expected String)
+pretty ascii: {
+  "a": [
+    "\u00e9"
+  ]
+}
+pretty script: [
+  "<\/"
+]
+pretty nesting: JSON::NestingError: nesting of 2 is too deep. Did you try to serialize objects with circular references?
+pretty nan: [
+  NaN
+]
+pretty layout: [
+  1
+]
+pretty unknown: [
+  1
+]
+to_json: "\u00e9"
+to_json hash: {"a":"\/"}
+to_json nan: [NaN]
+to_json nesting: JSON::NestingError: nesting of 1 is too deep. Did you try to serialize objects with circular references?
+to_json unknown: "x"
+to_json nil: "é"
+to_json int: "x"
+own text: ["é/"]
+own text pretty: [
+  "é/"
+]

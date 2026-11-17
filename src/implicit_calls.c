@@ -137,7 +137,7 @@ static int ic_calls(Compiler *c, int id, IcSink *s, IcMode mode) {
     if (row[i].operand >= 0) ic_builtin_callbacks(s, row[i].name, NULL, row[i].operand, BCR_ELEM | BCR_SELF, 1);
   }
   free(big);
-  /* an index-and/or-write is a call of `[]=` (and `[]`) on its receiver with its index as the argument: the index's
+  /* an index-and/or-write is a call of `[]=` on its receiver with its index as the argument: the index's
      to_int is as much its callback as a call's */
   NodeKind nk = nt_kind(nt, id);
   if (mode != IC_ROWS && (nk == NK_CallNode || nk == NK_IndexAndWriteNode || nk == NK_IndexOrWriteNode || nk == NK_IndexOperatorWriteNode)) {

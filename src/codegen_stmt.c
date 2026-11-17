@@ -23400,6 +23400,13 @@ int str_alias_chain_base(Compiler *c, int id) {
   return base != id && strbuf_chain_user_target(c, id, base, 0) ? id : base;
 }
 
+/* A String iterator is inferred as String while a method answers its handle.
+   Matching only the storage type drops the receiver instead of returning it. */
+static int tail_receiver_matches_slot(Repr value, TyKind slot) {
+  return value.as_ty != TY_VOID && value.as_ty != TY_UNKNOWN &&
+         (value.as_ty == slot || (value.ty == TY_STRING && slot == TY_STRBUF));
+}
+
 /* Tail position: the value of this statement is the method's return value. */
 /* A block-taking call whose value is its receiver -- `each`, `each_pair`,
    `times`, `upto` and the rest -- emitted as a loop, so wherever that value is
@@ -24008,8 +24015,8 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       emit_boxed(c, _rr, b);
       buf_puts(b, ";\n");
     }
-    else if (_named && comp_ntype(c, id) == (g_result_var ? g_result_ty : g_ret_type) &&
-             comp_ntype(c, id) != TY_VOID && comp_ntype(c, id) != TY_UNKNOWN) {
+    else if (_named && tail_receiver_matches_slot(repr_of(c, id),
+                                                  g_result_var ? g_result_ty : g_ret_type)) {
       emit_indent(b, indent);
       emit_tail_lead(b);
       /* a slot holding its nil (`def c(v) = v&.upto(3) { }`) takes the

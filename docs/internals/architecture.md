@@ -60,6 +60,8 @@ joined to a String handle uses a null of that pointer type, so boxing the
 result still selects the handle representation. Mixed receiver dispatch joins
 Ruby values in the switch and projects the result once. Proc and C extension
 callback signatures retain their declared result representation.
+A receiver-answering iterator at method tail returns that receiver through
+the physical result slot, including a String handle slot.
 Interpolation and printing call the display method selected at that site.
 They read the bytes of its native String result or format its boxed result
 while the receiver is rooted. Interpolation keeps a mutable conversion

@@ -1,3 +1,5 @@
+# spinel: gc-minor
+# spinel: gc-stress
 # An index-and/or-write on an Integer, Float or general Array keeps its Array alive while
 # the index and the value run, when they drop the last other reference to it.
 def churn(n)

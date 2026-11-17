@@ -1,3 +1,5 @@
+# spinel: gc-minor
+# spinel: gc-stress
 # An element store `a[i] = v` keeps its Array alive while the index and the value run, when
 # they drop the last other reference to it: in statement and in value position.
 def churn(n)

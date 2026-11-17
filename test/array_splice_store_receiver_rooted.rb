@@ -1,3 +1,5 @@
+# spinel: gc-minor
+# spinel: gc-stress
 # A slice store `a[i, n] = v` / `a[r] = v` keeps its Array alive while the index, the length
 # and the value run, when they drop the last other reference to it.
 def churn(n)

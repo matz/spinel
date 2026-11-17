@@ -1,3 +1,5 @@
+# spinel: gc-minor
+# spinel: gc-stress
 # A statement `a[i] &&= v` / `a[i] ||= v` keeps its Array alive while the index runs, when it
 # drops the last other reference to the Array.
 def churn(n)

@@ -37,6 +37,10 @@ struct CplanMemo {
      had when they were built; loose is the entry of an ask made where the tables may move */
   CplanRtrLists *rtr, loose;
   int rtr_n;
+  /* cplan_omit_candidates's names, built once under the same key (omit_ok) */
+  CplanOmitCand *omit;
+  int nomit;
+  unsigned char omit_ok;
   struct { const Compiler *c; int ncls, nscp, nnat; unsigned sgen, shape, tgen, vgen; } rtr_key;
 };
 
@@ -85,27 +89,38 @@ static void cplan_table_free(struct CplanTable *t) {
   free(t->plan); free(t->have); free(t->name);
 }
 static void cplan_rtr_free(CplanRtrLists *e) {
-  free(e->pub); free(e->priv); free((void *)e->undef_priv);
+  free(e->pub); free(e->priv); free((void *)e->undef_priv); free((void *)e->held_priv);
   *e = (CplanRtrLists){0};
 }
-/* See call_plan.h. */
-CplanRtrLists *cplan_rtr_lists(Compiler *c, int cls) {
-  struct CplanMemo *m = cplan_memo(c);
-  int keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
-  if (!keyed) {
-    cplan_rtr_free(&m->loose);
-    return &m->loose;
-  }
+static void cplan_omit_free(struct CplanMemo *m) {
+  for (int i = 0; i < m->nomit; i++) free(m->omit[i].name);
+  free(m->omit);
+  m->omit = NULL; m->nomit = 0; m->omit_ok = 0;
+}
+/* The lists and the omission candidates are kept while the tables they read are as they were built (the key); 1 where
+   the tables are fixed (the scope index is frozen), else 0 and nothing is kept */
+static int cplan_rtr_sync(Compiler *c, struct CplanMemo *m) {
+  if (!(comp_scope_index_is_frozen() && !comp_scope_moving())) return 0;
   if (m->rtr_key.c != c || m->rtr_key.ncls != c->nclasses || m->rtr_key.nscp != c->nscopes ||
       m->rtr_key.nnat != c->n_native_methods || m->rtr_key.sgen != comp_scope_index_gen() ||
       m->rtr_key.shape != comp_class_shape_gen() || m->rtr_key.tgen != comp_table_gen || m->rtr_key.vgen != comp_vis_gen) {
     for (int i = 0; i < m->rtr_n; i++) cplan_rtr_free(&m->rtr[i]);
     free(m->rtr);
+    cplan_omit_free(m);
     m->rtr_n = c->nclasses + 1;
     if (!(m->rtr = calloc((size_t)m->rtr_n, sizeof *m->rtr))) cplan_oom();
     m->rtr_key.c = c; m->rtr_key.ncls = c->nclasses; m->rtr_key.nscp = c->nscopes; m->rtr_key.nnat = c->n_native_methods;
     m->rtr_key.sgen = comp_scope_index_gen(); m->rtr_key.shape = comp_class_shape_gen();
     m->rtr_key.tgen = comp_table_gen; m->rtr_key.vgen = comp_vis_gen;
+  }
+  return 1;
+}
+/* See call_plan.h. */
+CplanRtrLists *cplan_rtr_lists(Compiler *c, int cls) {
+  struct CplanMemo *m = cplan_memo(c);
+  if (!cplan_rtr_sync(c, m)) {
+    cplan_rtr_free(&m->loose);
+    return &m->loose;
   }
   return &m->rtr[cls + 1];
 }
@@ -114,6 +129,7 @@ void cplan_memo_free(Compiler *c) {
   if (!m) return;
   for (int i = 0; i < m->rtr_n; i++) cplan_rtr_free(&m->rtr[i]);
   free(m->rtr);
+  cplan_omit_free(m);
   cplan_rtr_free(&m->loose);
   cplan_table_free(&m->user);
   cplan_table_free(&m->refuse);
@@ -3872,14 +3888,10 @@ static int ct_builtin_reopen_undefined_at(Compiler *c, int id, int cls, const ch
   if (framed) elab_plan_leave(c);
   return none;
 }
-static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi) {
-  if (ct_builtin_reopen_undefined_at(c, id, cls, name, flags)) return 1;
-  if (!(flags & (CT_CMETHOD | CT_TOP)) || !elab_method_versions(c, name)) return 0;
-  /* (a capture that cannot state the NameError keeps the table's method
-     on a chain a method body makes a version on, as in ct_version_at) */
-  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? ct_top_chain(c, name, sg) : cls, first_def = 0, body = 0, cl = 0;
-  if (ct_capture_keeps_table(c, id, rcls, sg, name, flags, 0) && (ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), body))
-    return 0;
+/* ct_undefined_at's ask of the record, once the chain it asks on (rcls) is known: the side of the call's own receiver
+   and the builtin self methods apart from it (self_known: builtin_self_method_known of the name, -1 to ask it here). */
+static int ct_undefined_in(Compiler *c, int id, int cls, int rcls, const char *name, unsigned flags, int mi, int self_known) {
+  int sg = (flags & CT_CMETHOD) != 0;
   /* CT_OWN asks of the method the tables hold as cls's own (mi): for its
      own def, cls's own history at the call, whatever an ancestor or an
      extended module holds; for a module's copy (an extend's), that and
@@ -3891,8 +3903,18 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   int none = (own ? elab_call_own_method(c, id, rcls, name, sg, copy) : elab_call_method(c, id, rcls, name, sg, 1)) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
-                   builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
+                   (self_known >= 0 ? self_known : builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls))) &&
                    !((flags & CT_CMETHOD) && elab_record_cmethod(c, cls, name)));
+}
+static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi) {
+  if (ct_builtin_reopen_undefined_at(c, id, cls, name, flags)) return 1;
+  if (!(flags & (CT_CMETHOD | CT_TOP)) || !elab_method_versions(c, name)) return 0;
+  /* (a capture that cannot state the NameError keeps the table's method
+     on a chain a method body makes a version on, as in ct_version_at) */
+  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? ct_top_chain(c, name, sg) : cls, first_def = 0, body = 0, cl = 0;
+  if (ct_capture_keeps_table(c, id, rcls, sg, name, flags, 0) && (ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), body))
+    return 0;
+  return ct_undefined_in(c, id, cls, rcls, name, flags, mi, -1);
 }
 /* Does call id run before every version of `name` on cls's route (flags
    and mi as ct_undefined_at's), as the record proves it: none is live at
@@ -5003,10 +5025,38 @@ static int pr_in_untyped_block(Compiler *c, int id) {
   }
   return 0;
 }
+/* Does node run at once, where it stands (ct_before_versions' proof for a call: no method body, and no block or lambda
+   that may run later, ct_after_point and elab_blocks_run_at_once)? */
+int cplan_runs_at_once(Compiler *c, int node) {
+  if (elab_in_method_body(c, node)) return 0;
+  int framed = elab_plan_enter(c, node);
+  int once = !ct_after_point(c, node) && elab_blocks_run_at_once(c, node);
+  if (framed) elab_plan_leave(c);
+  return once;
+}
+/* See call_plan.h. */
+int cplan_runs_once(Compiler *c, int node) {
+  return cplan_runs_at_once(c, node) && !elab_runs_again(c, node);
+}
+/* See call_plan.h. */
+int cplan_undef_at(Compiler *c, int id, int cls, const char *name) {
+  LoadPoint p = elab_point_of(c, id);
+  if (p.region < 0 || !cplan_runs_once(c, id)) return -1;
+  const LrDef *d = NULL;
+  int o = elab_method_at(c, cls, name, 0, p, &d);
+  if (o == ELAB_UNKNOWN) return -1;
+  return o == ELAB_NO && d && d->kind == LR_UNDEF;
+}
 /* See call_plan.h. */
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
   MethodLookup ml = { .def_class = -1 };
   pr_table(c, cls, side, name, out);
+  /* an undef_method of a reopened builtin's own method answers where it runs (as ct_builtin_reopen_undefined_at asks a
+     reopened builtin's defs); a program class's keeps the table's, whose chain the record does not place */
+  if (out->undef && id >= 0 && !(side & (CT_CMETHOD | CT_TOP | CT_OWN)) && cls >= 0 && cls < c->nclasses && c->classes[cls].name &&
+      c->classes[cls].enclosing_class < 0 && builtin_class_id(c->classes[cls].name) &&
+      name_list_has(c->classes[cls].undefs, c->classes[cls].nundefs, name))
+    out->undef = cplan_undef_at(c, id, cls, name) != 0;   /* (where the record cannot tell, the table's) */
   if (pr_in_untyped_block(c, id)) return PR_TABLE;
   call_target(c, id, cls, name, side | CT_REACH, &ml);
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
@@ -5097,6 +5147,61 @@ void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud) {
     mtab_leave(c);
     if (!shadowed) fn(ud, nm);
   }
+}
+
+typedef struct { Compiler *c; struct CplanMemo *m; int root, cap; } OmitBuild;
+/* Does class k answer `name` on a side (CT_CMETHOD: the class's own) by a def, an alias or an accessor of a class or
+   module of the program, not one of the roots'? The roots' defs and the top-level ones are what a respond_to? leaves
+   out, and every class reaches them (a `Child < Object`'s instance side, a class value's Object ancestry): only a
+   def another class holds can keep the name answering where they have not run. */
+static int omit_class_answers(Compiler *c, int k, const char *name, unsigned side) {
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, -1, k, name, side, &ml);
+  if (mi < 0) return ml.kind == ML_ATTR;
+  int dc = c->scopes[mi].class_id;
+  return dc >= 0 && !(c->classes[dc].name && is_object_root(c->classes[dc].name));
+}
+/* a name a respond_to? may leave out of the shared lists, once its siteless facts hold: it has versions, and no class
+   of the program defines it besides the roots, no builtin answers it, and it is no private Kernel function */
+static void omit_note(void *ud, const char *name) {
+  OmitBuild *o = ud;
+  Compiler *c = o->c;
+  if (!elab_method_versions(c, name) || builtin_object_method_known(name) || builtin_instance_name_known(name) ||
+      object_private_method_name(name)) return;
+  for (int k = 0; k < c->nclasses; k++)
+    if (!(c->classes[k].name && is_object_root(c->classes[k].name)) &&
+        (omit_class_answers(c, k, name, 0) || omit_class_answers(c, k, name, CT_CMETHOD))) return;
+  /* (the tables must hold the name as the top-level def, or as the root's own: where they do not, no call leaves it out) */
+  int mi = o->root < 0 ? call_target(c, -1, -1, name, CT_TOP, NULL) : call_target(c, -1, o->root, name, CT_OWN, NULL);
+  if (mi < 0) return;
+  if (o->m->nomit == o->cap && !(o->m->omit = realloc(o->m->omit, sizeof *o->m->omit * (size_t)(o->cap = o->cap ? o->cap * 2 : 16)))) cplan_oom();
+  if (!(o->m->omit[o->m->nomit].name = strdup(name))) cplan_oom();
+  CplanOmitCand *k = &o->m->omit[o->m->nomit++];
+  /* (the facts of the name no call changes: the chain a top-level def's record ask runs on, the scope the tables hold
+     it as, and whether main answers it as a builtin self method) */
+  *k = (CplanOmitCand){ .name = k->name, .root = o->root, .chain = o->root < 0 ? ct_top_chain(c, name, 0) : -1, .mi = mi,
+                        .self_main = builtin_self_method_known(name, BSELF_MAIN) };
+}
+/* See call_plan.h. */
+const CplanOmitCand *cplan_omit_candidates(Compiler *c, int *n) {
+  struct CplanMemo *m = cplan_memo(c);
+  int keyed = cplan_rtr_sync(c, m);
+  if (!keyed || !m->omit_ok) {
+    cplan_omit_free(m);
+    OmitBuild o = { c, m, -1, 0 };
+    for (int s = 0; s < c->nscopes; s++) {
+      const Scope *ts = &c->scopes[s];
+      if (ts->name && ts->def_node >= 0 && ts->class_id < 0 && !ts->is_cmethod && !ts->is_proc_form) omit_note(&o, ts->name);
+    }
+    static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+    for (int u = 0; roots[u] >= 0; u++) {
+      o.root = comp_core_class(c, roots[u]);
+      if (o.root >= 0) cplan_own_names(c, o.root, omit_note, &o);
+    }
+    m->omit_ok = (unsigned char)keyed;
+  }
+  *n = m->nomit;
+  return m->omit;
 }
 
 /* A candidate of a list: nm asked of cls on the list's side, with no site
@@ -6043,7 +6148,7 @@ static CplanUnrouted cu_lookup_by_name(Compiler *c, int id, const char *name, in
   int pub = is_public_method_lookup(name);
   /* a program class's chain is the record's; a builtin's, CRuby's tables (any
      visibility for the plain forms) */
-  int v = ci >= 0 && !c->classes[ci].is_builtin_const ? refl_builtin_vis(c, ci, sym, 1, NULL) : core_method_vis(cls, sym, 1, NULL);
+  int v = ci >= 0 && !c->classes[ci].is_builtin_const ? refl_builtin_vis(c, ci, sym, 1, 1, NULL) : core_method_vis(cls, sym, 1, NULL);
   if (v < 0) return CU_NONE;
   if (v > 0) return (pub && v != 1) ? CU_NONE : CU_GAP;
   /* not in the tables: absent only where the record proves it; else a method
@@ -6117,7 +6222,7 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
       v = core_method_vis("Object", name, 1, &own);
       if (v <= 0 && main_self && main_self_method(name)) { v = 4; own = "main"; }
     }
-    else if (inst >= 0) { v = refl_builtin_vis(c, inst, name, 1, &own); undef_ci = inst; }
+    else if (inst >= 0) { v = refl_builtin_vis(c, inst, name, 1, 1, &own); undef_ci = inst; }
     else {
       int mod = comp_class_is_module(c, &c->classes[cval]);
       cside = mod ? NULL : cu_class_root(c, cval);
@@ -6145,7 +6250,7 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
     if (ty_is_object(rt)) {
       undef_ci = ty_object_class(rt);
       if (!cu_class_root(c, undef_ci)) return CU_NONE;
-      v = refl_builtin_vis(c, undef_ci, name, 1, &own);
+      v = refl_builtin_vis(c, undef_ci, name, 1, 1, &own);
     }
     else {
       int k = core_of_type(rt);
@@ -6399,12 +6504,12 @@ static int cplan_object_entry_vis(Compiler *c, int node, int ci, const char *m) 
   return elab_method_vis_at(c, ci, m, 0, elab_point_of(c, node));
 }
 /* See call_plan.h. */
-int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit) {
+int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit, int own) {
   const ClassInfo *ki = ci >= 0 ? &c->classes[ci] : NULL;
   /* (an alias in Object of a builtin's name, with main's entries of it) */
   int ov = cplan_object_entry_vis(c, node, ci, m);
   if (ov >= 0) return core_bit_of_vis(ov);
-  int bv = ki ? refl_builtin_vis(c, ci, m, inherit, NULL) : core_method_vis(cls, m, inherit, NULL);
+  int bv = ki ? refl_builtin_vis(c, ci, m, inherit, own, NULL) : core_method_vis(cls, m, inherit, NULL);
   /* main's defs are Object's own methods, ahead of its and Kernel's rows */
   const char *on = ki ? (ki->is_builtin_const && ki->enclosing_class < 0 ? ki->name : NULL) : cls;
   int mv = bv >= 0 && on && is_object_class_name(on) ? elab_main_method_vis_at(c, node, m) : -1;
@@ -6413,7 +6518,11 @@ int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, con
 /* See call_plan.h. */
 int cplan_program_method_vis(Compiler *c, int node, int ci, const char *m, int inherit) {
   int v = cplan_object_entry_vis(c, node, ci, m);
-  return v >= 0 ? v : inherit ? comp_method_vis_in_chain(c, ci, m) : comp_method_vis(&c->classes[ci], m);
+  if (v >= 0) return v;
+  mtab_enter(c);
+  v = inherit ? comp_method_vis_in_chain(c, ci, m) : comp_method_vis(&c->classes[ci], m);
+  mtab_leave(c);
+  return v;
 }
 /* Does call id's form reach a Kernel function (they are private)? Receiverless,
    `self.`, or a send (the retargeted call) whose receiver's class does not own
@@ -9905,6 +10014,30 @@ int cplan_top_def_vis(Compiler *c, int call, const char *name) {
 }
 
 /* See call_plan.h. */
+int cplan_top_def_absent(Compiler *c, int call, const char *name) {
+  int tm = call >= 0 && name ? call_target(c, -1, -1, name, CT_TOP, NULL) : -1;
+  return tm >= 0 && ct_undefined_at(c, call, -1, name, CT_TOP, tm);
+}
+
+/* The record's ask of a root's method, once the tables are known to hold it as the root's own */
+static int root_def_absent_at(Compiler *c, int call, int root, const char *name) {
+  MethodLookup ml = { .def_class = -1 };
+  call_target(c, call, root, name, CT_REACH, &ml);
+  return ml.kind == ML_NONE && ml.why == MLW_RECORD;
+}
+/* See call_plan.h. */
+int cplan_root_def_absent(Compiler *c, int call, int root, const char *name) {
+  if (call < 0 || root < 0 || !name || call_target(c, -1, root, name, CT_OWN, NULL) < 0) return 0;
+  return root_def_absent_at(c, call, root, name);
+}
+/* See call_plan.h. */
+int cplan_omit_absent(Compiler *c, int call, const CplanOmitCand *k) {
+  if (call < 0) return 0;
+  return k->root >= 0 ? root_def_absent_at(c, call, k->root, k->name)
+                      : ct_undefined_in(c, call, -1, k->chain, k->name, CT_TOP, k->mi, k->self_main);
+}
+
+/* See call_plan.h. */
 const LocalVar *cplan_top_def_cell(Compiler *c, int call, const char *name) {
   int v = -1, cell = -1;
   if (!name || call_target(c, -1, -1, name, CT_TOP, NULL) < 0 || builtin_name_below_object(name)) return NULL;
@@ -9935,7 +10068,9 @@ int cplan_nil_program_responds(Compiler *c, int call, const char *name, int incl
   /* an undef on NilClass or Object (above the first definer) hides the
      lower owners' method */
   int nk = comp_core_class(c, CORE_NILCLASS);
-  if (nk >= 0 && comp_is_undeffed_in_chain(c, nk, name)) return 0;
+  CplanPresence npr = { 0 };
+  if (nk >= 0) cplan_presence(c, call, nk, 0, name, &npr);
+  if (npr.undef) return 0;
   int ia = include_all < 0 ? 2 : include_all;
   /* NilClass's own public methods (CRuby's NilClass.public_instance_methods
      false): one sits below every program method of Object, Kernel and
@@ -9943,7 +10078,7 @@ int cplan_nil_program_responds(Compiler *c, int call, const char *name, int incl
   for (int i = 0; owners[i] >= 0; i++) {
     if (owners[i] == CORE_OBJECT && builtin_answers_ahead_of("NilClass", name, "Object")) return 1;
     int k = comp_core_class(c, owners[i]);
-    if (k < 0 || call_target(c, -1, k, name, 0, NULL) < 0) {
+    if (k < 0 || call_target(c, call, k, name, CT_REACH, NULL) < 0) {
       if (owners[i] == CORE_OBJECT && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0)
         return cplan_top_def_vis(c, call, name) == SP_VIS_PUBLIC ? 1 : ia;
       continue;

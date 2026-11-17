@@ -1235,6 +1235,11 @@ int cplan_nil_program_responds(Compiler *c, int call, const char *name, int incl
    such def, or the record cannot tell. The question of the reflection readers
    (respond_to?). */
 int cplan_top_def_vis(Compiler *c, int call, const char *name);
+/* Does the record prove the top-level def of `name`, which the tables hold, has not run where call `call` runs (as a call
+   of the name there raises)? 0 where it has, where the record cannot tell, and where there is no such def. */
+int cplan_top_def_absent(Compiler *c, int call, const char *name);
+/* ...and the same of the method `name` that Object's, Kernel's or BasicObject's reopening `root` holds. */
+int cplan_root_def_absent(Compiler *c, int call, int root, const char *name);
 /* ...and the cell that holds it where only the run tells (cplan_top_def_vis answers -1): main's def
    `name`, its one version, has run where call `call` runs, with a word whose order against the
    call the run decides. The global holds SP_VIS_* (CallPlan.vis_cell); NULL for any other
@@ -1356,8 +1361,21 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
    top-level def is Object's; where main's history and Object's are one
    entry, its later version (cplan_program_method_vis), an alias in Object
    of a builtin's name among them. 0 for none; -1 where the rows do not
-   hold the class. */
-int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit);
+   hold the class. `own` 0 asks CRuby's rows alone, for a reopened builtin
+   whose def of the name the record proves has not run where the call runs:
+   the visibilities the program's defs and words gave its classes do not
+   count. */
+int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit, int own);
+/* Does node run once, where it stands: at once (ct_before_versions' proof for a call) and not again, as the record's
+   repetition fact has it (a loop's body, an iterator's block, a retried begin)? Where the record cannot tell, no. */
+int cplan_runs_once(Compiler *c, int node);
+/* ...at once alone (ct_before_versions' proof for a call: in no method body, lambda or block that may run later), the
+   repetition left to the caller. */
+int cplan_runs_at_once(Compiler *c, int node);
+/* Has the undef_method of `name` that builtin class cls itself holds run where call id runs: 1 where the record
+   proves it has (the call runs once, at a point after the undef), 0 where it proves it has not, -1 where it cannot
+   tell (the table's undef then stands for a reader that always took it). */
+int cplan_undef_at(Compiler *c, int id, int cls, const char *name);
 /* The visibility (SP_VIS_*) a reflection call node that finds program
    method m of class ci (its own, or along its chain with inherit) reads:
    for Object's reopening, where main's history of m and Object's are one
@@ -1562,6 +1580,19 @@ void cplan_chain_names(Compiler *c, int cls, CplanNameFn fn, void *ud);
    and BasicObject's reopenings contribute to the run-time lists, which is not cplan_list_candidates': that one lists
    the class's aliases and keeps only what the question holds. */
 void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud);
+/* The names a run-time-name respond_to? may leave out of its shared lists for a call: the program's top-level defs
+   (root -1) and the methods of its Object, Kernel and BasicObject reopenings (root: the class holding it) that have
+   versions, which no class of the program defines besides the roots, no builtin answers and no private Kernel
+   function is, and that the tables hold as the top-level def or the root's own. Built once while the tables are as they
+   were (the key of cplan_rtr_lists); the names are the plan's, and so are the facts of a name no call changes (chain:
+   the class a top-level def's record ask runs on; mi: the scope the tables hold it as; self_main: whether main
+   answers it as a builtin self method). Which of them a call leaves out is the record's, asked per call
+   (cplan_omit_absent). */
+typedef struct { char *name; int root, chain, mi, self_main; } CplanOmitCand;
+const CplanOmitCand *cplan_omit_candidates(Compiler *c, int *n);
+/* Does the record prove candidate k has not run where call `call` runs (cplan_top_def_absent, cplan_root_def_absent
+   without the table asks the candidate already answers)? */
+int cplan_omit_absent(Compiler *c, int call, const CplanOmitCand *k);
 /* The lists a run-time `respond_to?` tests per class (emit_respond_to_runtime_name): class cls's public names and the
    private ones include_all adds, as the C text `"a", "b", `, and the Object private names its undef_method takes
    away (entries of object_private_method_names, in its order); cls -1 is the Object reopening's. They are built
@@ -1569,9 +1600,15 @@ void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud);
    absent at a point, as cplan_presence proves), so the plan keeps them while nothing they read has moved: the scope
    index frozen, with its epoch, the scope and class counts, the class shape, the reader and writer tables and the
    visibility and undef tables as they were. The caller fills an entry (the lists when `built` is 0, the undef
-   names when `undef_built` is). Where the tables may move (the scope index is not frozen) each ask hands out a
+   names when `undef_built` is, the held names when `held_built` is). Where the tables may move (the scope index is not frozen) each ask hands out a
    fresh entry, valid until the next ask. */
-typedef struct { char *pub, *priv; const char **undef_priv; int nundef_priv; unsigned char built, undef_built; } CplanRtrLists;
+typedef struct {
+  char *pub, *priv; const char **undef_priv; int nundef_priv;
+  /* held_priv: the Object private names some root reopening's table holds or undefines (the Object reopening's entry
+     only, `held_built` when filled), the ones a call's record ask must still decide */
+  const char **held_priv; int nheld_priv;
+  unsigned char built, undef_built, held_built;
+} CplanRtrLists;
 CplanRtrLists *cplan_rtr_lists(Compiler *c, int cls);
 /* The names a method list on cls's side asks about, as the final tables
    hold them (a class's scopes, aliases and accessors, and for the class side

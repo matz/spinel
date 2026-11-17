@@ -1143,7 +1143,7 @@ static int me_stmt_defines(const NodeTable *nt, int s, const char *m) {
   if (nn >= 0) return nt_kind(nt, nn) == NK_SymbolNode && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), m);
   const char *cn = sk == NK_CallNode ? nt_str(nt, s, "name") : NULL;
   int w = cn && (is_attr_writer_family(cn)), r = cn && !sp_streq(cn, "attr_writer");
-  if (!cn || (!w && !sp_streq(cn, "attr") && !sp_streq(cn, "attr_reader") && !sp_streq(cn, "define_method") && !sp_streq(cn, "alias_method"))) return 0;
+  if (!cn || (!is_attr_name(cn) && !is_define_method_name(cn) && !is_alias_method_name(cn))) return 0;
   int an = 0; const int *av = nt_arr(nt, nt_ref(nt, s, "arguments"), "arguments", &an);
   for (int a = 0; a < an; a++) {
     NodeKind ak = nt_kind(nt, av[a]);
@@ -1153,8 +1153,20 @@ static int me_stmt_defines(const NodeTable *nt, int s, const char *m) {
   }
   return 0;
 }
-/* does any body of the class/module named `leaf` define instance method `m`? */
-static int me_body_defines(const NodeTable *nt, const char *leaf, const char *m, int skip) {
+/* Does the load record prove that node `a` (a def or the class body holding it) runs after node `at` and never
+   before it: `at` runs at once where it stands (cplan_runs_at_once), `a` comes after it, and `a` is in no body around
+   `at` that runs again (a loop's, an iterator's block, a retried begin: elab_runs_before)? Where the record cannot
+   tell, no. */
+static int me_runs_after(Compiler *c, int a, int at, int *once) {
+  if (at < 0 || elab_order(c, a, at) != PROG_AFTER) return 0;
+  if (*once < 0) *once = cplan_runs_at_once(c, at);   /* (asked once per guard, for the first def that is after it) */
+  return *once && !elab_runs_before(c, a, at);
+}
+/* does any body of the class/module named `leaf` (outside skip) define instance method `m` where the node `at` runs
+   (-1: anywhere in the program)? */
+static int me_body_defines(Compiler *c, const char *leaf, const char *m, int skip, int at) {
+  const NodeTable *nt = c->nt;
+  int once = -1;
   for (int id = 0; id < nt->count; id++) {
     if (!class_def_is_class(nt, id) && !class_def_is_module(nt, id)) continue;
     const char *nm = class_def_name(nt, id);
@@ -1163,7 +1175,9 @@ static int me_body_defines(const NodeTable *nt, const char *leaf, const char *m,
     int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int i = 0; i < bn; i++) {
       int rv = nt_ref(nt, bb[i], "receiver");
-      if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m)) return 1;
+      /* a def the load record proves runs after the point asked is not there yet; one it cannot order counts */
+      if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m) &&
+          !(me_runs_after(c, bb[i], at, &once) || (!subtree_has(nt, id, at) && me_runs_after(c, id, at, &once)))) return 1;
     }
   }
   return 0;
@@ -1185,7 +1199,8 @@ static int me_path_defined(const NodeTable *nt, int n) {
   return 0;
 }
 /* 1 / 0 when the predicate is decided by the program's text, else -1 */
-static int me_static_pred(const NodeTable *nt, int pred) {
+static int me_static_pred(Compiler *c, int pred) {
+  const NodeTable *nt = c->nt;
   if (pred < 0) return -1;
   NodeKind k = nt_kind(nt, pred);
   if (k == NK_TrueNode) return 1;
@@ -1193,7 +1208,7 @@ static int me_static_pred(const NodeTable *nt, int pred) {
   if (k == NK_ParenthesesNode) {
     int body = nt_ref(nt, pred, "body");
     int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-    return bn == 1 ? me_static_pred(nt, bb[0]) : -1;
+    return bn == 1 ? me_static_pred(c, bb[0]) : -1;
   }
   if (k == NK_DefinedNode) {
     int v = nt_ref(nt, pred, "value");
@@ -1201,15 +1216,15 @@ static int me_static_pred(const NodeTable *nt, int pred) {
     return me_path_defined(nt, v) ? 1 : 0;
   }
   if (k == NK_AndNode) {
-    int l = me_static_pred(nt, nt_ref(nt, pred, "left"));
+    int l = me_static_pred(c, nt_ref(nt, pred, "left"));
     if (l == 0) return 0;
-    if (l == 1) return me_static_pred(nt, nt_ref(nt, pred, "right"));
+    if (l == 1) return me_static_pred(c, nt_ref(nt, pred, "right"));
     return -1;
   }
   if (k == NK_OrNode) {
-    int l = me_static_pred(nt, nt_ref(nt, pred, "left"));
+    int l = me_static_pred(c, nt_ref(nt, pred, "left"));
     if (l == 1) return 1;
-    if (l == 0) return me_static_pred(nt, nt_ref(nt, pred, "right"));
+    if (l == 0) return me_static_pred(c, nt_ref(nt, pred, "right"));
     return -1;
   }
   if (k == NK_CallNode) {
@@ -1224,12 +1239,13 @@ static int me_static_pred(const NodeTable *nt, int pred) {
     NodeKind ak = nt_kind(nt, av[0]);
     const char *m = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") : ak == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
     if (!m) return -1;
-    return me_body_defines(nt, leaf, m, -1) ? 1 : 0;
+    return me_body_defines(c, leaf, m, -1, pred) ? 1 : 0;
   }
   return -1;
 }
 /* does the expression name the body's own class, by the program's text? */
-static int me_is_own(const NodeTable *nt, int e, const char *own, int depth) {
+static int me_is_own(Compiler *c, int e, const char *own, int depth) {
+  const NodeTable *nt = c->nt;
   if (e < 0 || depth > 8) return 0;
   NodeKind k = nt_kind(nt, e);
   if (k == NK_SelfNode) return 1;
@@ -1238,10 +1254,10 @@ static int me_is_own(const NodeTable *nt, int e, const char *own, int depth) {
   if (k == NK_ParenthesesNode) {
     int body = nt_ref(nt, e, "body");
     int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-    return bn == 1 && me_is_own(nt, bb[0], own, depth + 1);
+    return bn == 1 && me_is_own(c, bb[0], own, depth + 1);
   }
   if (k == NK_IfNode || k == NK_UnlessNode) {
-    int p = me_static_pred(nt, nt_ref(nt, e, "predicate"));
+    int p = me_static_pred(c, nt_ref(nt, e, "predicate"));
     if (p < 0) return 0;
     int take_then = k == NK_IfNode ? p : !p;
     int arm;
@@ -1254,9 +1270,9 @@ static int me_is_own(const NodeTable *nt, int e, const char *own, int depth) {
     if (arm < 0) return 0;
     if (nt_kind(nt, arm) == NK_StatementsNode) {
       int bn = 0; const int *bb = nt_arr(nt, arm, "body", &bn);
-      return bn == 1 && me_is_own(nt, bb[0], own, depth + 1);
+      return bn == 1 && me_is_own(c, bb[0], own, depth + 1);
     }
-    return me_is_own(nt, arm, own, depth + 1);
+    return me_is_own(c, arm, own, depth + 1);
   }
   return 0;
 }
@@ -1304,9 +1320,9 @@ int desugar_body_module_eval(Compiler *c) {
             for (int j = 0; j < i; j++)
               if (nt_kind(nt, bb[j]) == NK_LocalVariableWriteNode && nt_str(nt, bb[j], "name") &&
                   sp_streq(nt_str(nt, bb[j], "name"), v))
-                is_own = me_is_own(nt, nt_ref(nt, bb[j], "value"), own, 0);
+                is_own = me_is_own(c, nt_ref(nt, bb[j], "value"), own, 0);
         }
-        else is_own = me_is_own(nt, recv, own, 0);
+        else is_own = me_is_own(c, recv, own, 0);
       }
       int bbody = is_own ? nt_ref(nt, blk, "body") : -1;
       /* a block of defs alone needs no splice: the walk records them on the
@@ -6659,7 +6675,7 @@ static const char *engine_body_class(NodeTable *nt, int stmt) {
 static int me_record_defines(Compiler *c, const char *cls, const char *m, int in, int *is_data);
 static int engine_method_absent(Compiler *c, const char *cls, const char *m, int in, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
-  if (builtin_method_known(cls, m) || me_body_defines(nt, cls, m, in)) return 0;
+  if (builtin_method_known(cls, m) || me_body_defines(c, cls, m, in, in)) return 0;
   /* a Struct's or Data's members, the defs in its block, and the methods
      Struct or Data gives every instance (each, with ...) */
   int data = 0, rec = me_record_defines(c, cls, m, in, &data);
@@ -6995,7 +7011,7 @@ static int me_record_defines(Compiler *c, const char *cls, const char *m, int in
    class here, or one the program does not define. */
 static int engine_method_own_absent(Compiler *c, const char *cls, const char *m, int in) {
   NodeTable *nt = (NodeTable *)c->nt;
-  if (me_body_defines(nt, cls, m, in)) return 0;
+  if (me_body_defines(c, cls, m, in, in)) return 0;
   /* (a Struct's or Data's members and the defs in its block are its own) */
   if (me_record_defines(c, cls, m, in, NULL) > 0) return 0;
   if (is_builtin_class_name(cls) || is_builtin_module_name(cls) || builtin_class_id(cls)) return -1;
@@ -7006,7 +7022,7 @@ static int engine_absent(Compiler *c, int e, int in) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *x = NULL;
   const char *en = nt_kind(nt, e) == NK_CallNode && nt_ref(nt, e, "block") < 0 ? nt_str(nt, e, "name") : NULL;
-  if (en && (sp_streq(en, "method_defined?") || sp_streq(en, "public_method_defined?"))) {
+  if (en && (method_defined_vis_mask(en) & 1)) {
     int r = nt_ref(nt, e, "receiver"), ac = 0;
     const int *av = nt_arr(nt, nt_ref(nt, e, "arguments"), "arguments", &ac);
     const char *cls = r < 0 || nt_kind(nt, r) == NK_SelfNode ? engine_body_class(nt, in) :
@@ -7020,9 +7036,11 @@ static int engine_absent(Compiler *c, int e, int in) {
     int a = !cls || !m ? -1 : own ? engine_method_own_absent(c, cls, m, in) :
             builtin_object_method_known(m) ? 0 : engine_method_absent(c, cls, m, in, 0);
     /* (a def elsewhere could reach the class through a mixin; not asked of the own bodies alone) */
+    int once = -1;
     if (a > 0 && !own)
       for (int id = 0; id < nt->count; id++)
-        if (me_stmt_defines(nt, id, m) && !engine_inside(nt, in, id, 0) && !engine_def_mixed_in_only(nt, id, in)) return -1;
+        if (me_stmt_defines(nt, id, m) && !engine_inside(nt, in, id, 0) && !engine_def_mixed_in_only(nt, id, in) &&
+            !me_runs_after(c, id, in, &once)) return -1;
     if (a >= 0) comp_def_asked_add(c, m);
     return a;
   }
@@ -7036,7 +7054,7 @@ static int engine_absent(Compiler *c, int e, int in) {
                       ? nt_str(nt, r, "name") : NULL;
     const char *m = ac == 1 && nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
     return cls && m && !is_builtin_class_name(cls) && !is_builtin_module_name(cls) &&
-           me_body_defines(nt, cls, m, in) ? 0 : -1;
+           me_body_defines(c, cls, m, in, in) ? 0 : -1;
   }
   /* Socket.const_defined?(:X) / defined?(Socket::X): the constants every
      platform defines are there; the rest only the run time knows */
@@ -9650,7 +9668,7 @@ int desugar_respond_to_probe(Compiler *c) {
     if (user_rto && !lit_recv) {
       TyKind rt = infer_type(c, recv);
       if (rt == TY_POLY || rt == TY_UNKNOWN) continue;
-      if (ty_is_object(rt) && comp_method_in_chain(c, ty_object_class(rt), "respond_to?", NULL) >= 0) continue;
+      if (ty_is_object(rt) && call_target(c, id, ty_object_class(rt), RESPOND_TO_NAME, CT_METHODS, NULL) >= 0) continue;
     }
     { int pn = 0; nt_arr(nt, id, "rt_probes", &pn); if (pn > 0) continue; }  /* already probed */
     int args = nt_ref(nt, id, "arguments");

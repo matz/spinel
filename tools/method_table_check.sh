@@ -54,7 +54,7 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
-FAIL_FAMILIES="super send lists"
+FAIL_FAMILIES="super send lists presence"
 # the run's last line when it stops early: why, and its exit status
 stop() { echo "method-table-check: FAIL ($2)"; exit "$1"; }
 FAMILIES="call implied presence super send lists other pass"
@@ -77,6 +77,12 @@ if [ "$QUIET" = 1 ]; then
   lr=$("$ROOT/tools/lists_readers_check.sh" 2>&1) || { printf "%s\n" "$lr"; stop 1 "tools/lists_readers_check.sh"; }
 else
   "$ROOT/tools/lists_readers_check.sh" || stop 1 "tools/lists_readers_check.sh"
+fi
+# the presence family keeps its static rule too: the readers of respond_to? and method_defined? read no table themselves
+if [ "$QUIET" = 1 ]; then
+  pr=$("$ROOT/tools/presence_readers_check.sh" 2>&1) || { printf "%s\n" "$pr"; stop 1 "tools/presence_readers_check.sh"; }
+else
+  "$ROOT/tools/presence_readers_check.sh" || stop 1 "tools/presence_readers_check.sh"
 fi
 # and the siteless readers: the dispatchers and surveys no call stands behind ask the plan with no site, naming no primitive
 if [ "$QUIET" = 1 ]; then

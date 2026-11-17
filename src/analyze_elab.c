@@ -124,6 +124,8 @@ struct LoadRecord {
   int *up;                   /* [n] the parent each node's point was climbed from */
   int *plan_par, plan_depth;
   unsigned char plan_made;
+  /* lr_call_point's last answer, under the state it was asked in */
+  struct LrCallPt { int made, id, cls, plan, ok; unsigned long edits; unsigned shape; unsigned long hgen; ElabStamp st; LoadPoint p; } callpt;
   unsigned char hold;        /* elab_hold: 1 asked for, 2 the map is made and kept as it is */
   /* the histories (elab_program) */
   int recorded;
@@ -4574,17 +4576,26 @@ static int lr_last_before(Compiler *c, const LrHist *h, const LrHist *t, LoadPoi
   return unsure ? ELAB_UNKNOWN : ELAB_NO;
 }
 
+/* Does a body around point p run again, and hold statement q (any when q is -1): one a loop or an iterator makes
+   (LrStmt.rep: a loop's, an iterator's block, a begin body a rescue may retry), or a begin with a rescue clause,
+   which `retry` runs over from its start and whose clauses it reaches again? A statement after p in such a body may
+   run before p, and the walk has not recorded it yet when it stands at p. */
+static int lr_repeat_holds(const LoadRecord *r, const NodeTable *nt, LoadPoint p, int q) {
+  for (int e = r->st[p.seq].rep; e >= 0; e = r->st[e].rep)
+    if (q < 0 || q <= r->st[e].last) return 1;
+  for (int e = r->st[p.seq].up; e >= 0; e = r->st[e].up)
+    if (nt_kind(nt, r->st[e].node) == NK_BeginNode && nt_ref(nt, r->st[e].node, "rescue_clause") >= 0 && (q < 0 || q <= r->st[e].last)) return 1;
+  return 0;
+}
 /* May node's statement, which comes after p, also run before p: is it in
-   a body around p that runs again (LrStmt.rep), or in the body of a loop
-   whose condition p is? */
+   a body around p that runs again (lr_repeat_holds), or in the body of a
+   loop whose condition p is? */
 static int lr_runs_again(Compiler *c, int node, LoadPoint p) {
   LoadRecord *r = c->lrec;
   LoadPoint q = elab_point_of(c, node);
   if (p.region < 0 || elab_cmp(p, q) != PROG_BEFORE) return 0;
   NodeKind k = nt_kind(c->nt, r->st[p.seq].node);
-  for (int e = k == NK_WhileNode || k == NK_UntilNode ? p.seq : r->st[p.seq].rep; e >= 0; e = r->st[e].rep)
-    if (q.seq <= r->st[e].last) return 1;
-  return 0;
+  return ((k == NK_WhileNode || k == NK_UntilNode) && q.seq <= r->st[p.seq].last) || lr_repeat_holds(r, c->nt, p, q.seq);
 }
 /* ...for an entry of history h (past its visibility versions with
    skip_vis) */
@@ -7773,8 +7784,18 @@ int elab_record_cmethod(Compiler *c, int cls, const char *name) {
    unplaced, a chain through a class whose superclass it does not hold) */
 static int lr_call_point(Compiler *c, int id, int cls, LoadPoint *p) {
   LoadRecord *r = elab_fresh(c);
+  /* (the last ask kept, for the calls one site makes by many names: a respond_to? at a computed name asks every
+     candidate of the program. Not while the record is made, whose statements are still added) */
+  struct LrCallPt *k = &r->callpt;
+  ElabStamp st = elab_stamp(c);
+  int same = !r->walk && k->made && k->id == id && k->cls == cls && k->plan == (r->plan_depth != 0) && k->edits == c->nt->edits &&
+             k->shape == comp_class_shape_gen() && k->hgen == r->hgen && elab_stamp_same(k->st, st);
+  if (same) { *p = k->p; return k->ok; }
   *p = elab_point_of(c, id);
-  return p->region >= 0 && r->recorded && !r->st[p->seq].kept && !lr_unplaced(c, id) && !lr_chain_open(c, cls);
+  int ok = p->region >= 0 && r->recorded && !r->st[p->seq].kept && !lr_unplaced(c, id) && !lr_chain_open(c, cls);
+  if (!r->walk) *k = (struct LrCallPt){ .made = 1, .id = id, .cls = cls, .plan = r->plan_depth != 0, .edits = c->nt->edits,
+                                         .shape = comp_class_shape_gen(), .hgen = r->hgen, .st = st, .p = *p, .ok = ok };
+  return ok;
 }
 /* A class-side ask of the Class reopening that finds none on its
    singleton: the tables' side holds the reopening's class methods as its
@@ -7925,16 +7946,18 @@ static int lr_name_drops_block(Compiler *c, const char *name) {
   return !lr_name_taken_away(c->nt, name);
 }
 
-/* May the statement at p run more than once: is it in a body that runs
-   again (LrStmt.rep: a loop's, an iterator's block, a begin body a rescue
-   may retry), or in a clause of a begin with rescue clauses, which a retry
-   reaches again? A statement after p in such a body may run before p, and
-   the walk has not recorded it yet when it stands at p. */
-static int lr_point_runs_again(const LoadRecord *r, const NodeTable *nt, LoadPoint p) {
-  if (r->st[p.seq].rep >= 0) return 1;
-  for (int e = r->st[p.seq].up; e >= 0; e = r->st[e].up)
-    if (nt_kind(nt, r->st[e].node) == NK_BeginNode && nt_ref(nt, r->st[e].node, "rescue_clause") >= 0) return 1;
-  return 0;
+/* See analyze.h. */
+int elab_runs_again(Compiler *c, int node) {
+  LoadRecord *r = elab_fresh(c);
+  LoadPoint p = elab_point_of(c, node);
+  if (p.region < 0) return 1;
+  NodeKind k = nt_kind(c->nt, r->st[p.seq].node);
+  return k == NK_WhileNode || k == NK_UntilNode || lr_repeat_holds(r, c->nt, p, -1);
+}
+/* See analyze.h. */
+int elab_runs_before(Compiler *c, int node, int at) {
+  LoadPoint p = elab_point_of(c, at);
+  return p.region < 0 || lr_runs_again(c, node, p);
 }
 
 int elab_block_never_runs(Compiler *c, int call, int cls) {
@@ -7949,7 +7972,7 @@ int elab_block_never_runs(Compiler *c, int call, int cls) {
   LoadPoint p = elab_point_of(c, call);
   const LrDef *d = NULL;
   /* (a builtin's reopening answers by class methods the record does not hold) */
-  if (p.region < 0 || !lr_ready(c, p) || elab_self_at(c, call) != cls || lr_point_runs_again(c->lrec, nt, p) ||
+  if (p.region < 0 || !lr_ready(c, p) || elab_self_at(c, call) != cls || lr_repeat_holds(c->lrec, nt, p, -1) ||
       is_builtin_class_name(c->classes[cls].name) || is_builtin_module_name(c->classes[cls].name)) return 0;
   return lr_sg_chain_find(c, cls, nm, p, &d, NULL) == ELAB_YES && d && d->kind == LR_DEF && lr_name_drops_block(c, nm);
 }
@@ -9691,7 +9714,12 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *
            (class_def_builder(c->nt, c->classes[ci].def_node) < 0 ||
             !class_def_is_class(c->nt, c->classes[ci].def_node) ||
             !elab_names_object(c->nt, class_def_super(c->nt, node))))
-    { comp_class_set_def(c, ci, node); if (c->lrec) { free(c->lrec->rclass); c->lrec->rclass = NULL; } }   /* (the record class of a class is of its definition: elab_record_class_of) */
+    {
+      comp_class_set_def(c, ci, node);
+      /* (the record class of a class is of its definition: elab_record_class_of; a call's kept point read the
+         definition too: lr_chain_open) */
+      if (c->lrec) { free(c->lrec->rclass); c->lrec->rclass = NULL; c->lrec->callpt.made = 0; }
+    }
   elab_header_opened(c, node, ci, made);
   if (made) lr_fire_inherited(c, node);
   return ci;

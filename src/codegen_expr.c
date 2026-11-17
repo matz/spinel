@@ -4194,7 +4194,7 @@ static int defined_super_reaches(Compiler *c, int sup) {
   if (mi >= 0 || (p >= 0 && (call_attr_target(c, -1, p, u, CT_ATTR, NULL) ||
                              (setter && call_attr_target(c, -1, p, base, CT_ATTR | CT_WRITER, NULL)))))
     return 1;
-  int v = refl_builtin_vis(c, s->class_id, u, 2, NULL);
+  int v = refl_builtin_vis(c, s->class_id, u, 2, 1, NULL);
   return v < 0 ? -1 : v > 0;
 }
 

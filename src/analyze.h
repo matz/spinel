@@ -567,6 +567,14 @@ int elab_runs_with(Compiler *c, int node, int def);
    it and the body it runs in (a def's, or a file's root) runs at once
    where its call runs, with no lambda or END body between? */
 int elab_blocks_run_at_once(Compiler *c, int node);
+/* May the statement `node` stands in run more than once, as the record has it (LrStmt.rep: a loop's body, an iterator's
+   block, a begin body a rescue may retry, a clause of such a begin; a loop's own condition)? 1 too where the record
+   places no point for it: it cannot tell. */
+int elab_runs_again(Compiler *c, int node);
+/* Does `node`, which stands after node `at`, also run before it, as the record has it (lr_runs_again: its statement is
+   in a body around `at` that runs again, a loop's, an iterator's block, a retried begin)? 1 where the record places
+   no point for `at`. */
+int elab_runs_before(Compiler *c, int node, int at);
 /* may a method of the program's take a call of nm over from the builtin's:
    one it defines by that name anywhere (elab_names_method), or a
    method_missing? (NULL: not known, so it may.) */

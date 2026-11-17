@@ -16824,6 +16824,13 @@ static int oa_vetted_literal(Compiler *c, int node, int rows) {
   }
   return en > 0;
 }
+/* Is blk a comparator block: the two elements it orders, each a plain
+   parameter (sort's, min's and max's)? */
+static int oa_comparator_block(Compiler *c, int blk) {
+  return !(block_param_name(c, blk, 2) || block_param_is_multi(c, blk, 0) || block_param_is_multi(c, blk, 1) ||
+           block_opt_name(c, blk, 0) || block_post_name(c, blk, 0) || block_keyword_name(c, blk, 0) ||
+           block_rest_marker(c, blk));
+}
 /* The filters: 1 for reject!, select! and filter!, which answer the array
    or nil, and for delete_if, keep_if, sort_by! and sort!, which answer the
    array, and 2 for select, filter, reject, sort_by and sort, which answer a
@@ -16842,9 +16849,7 @@ static int oa_filter_call(Compiler *c, int id) {
   /* a comparator takes the two elements it orders, each a plain parameter:
      sort answers a new array of them, sort! the array itself */
   if (is_sort_family(nm)) {
-    if (block_param_name(c, blk, 2) || block_param_is_multi(c, blk, 0) || block_param_is_multi(c, blk, 1) ||
-        block_opt_name(c, blk, 0) || block_post_name(c, blk, 0) || block_keyword_name(c, blk, 0) ||
-        block_rest_marker(c, blk)) return 0;
+    if (!oa_comparator_block(c, blk)) return 0;
     return sp_streq(nm, "sort!") ? 1 : 2;
   }
   if (block_param_name(c, blk, 1) || block_param_is_multi(c, blk, 0) || block_opt_name(c, blk, 0) ||
@@ -17155,6 +17160,8 @@ static int oa_recv_op_ok(const char *nm, int argc, int has_block) {
      an Integer index (step 4 checks the type), and clear the array itself */
   if ((sp_streq(nm, "pop") || sp_streq(nm, "shift") || sp_streq(nm, "clear")) && argc == 0) return 1;
   if (sp_streq(nm, "delete_at") && argc == 1) return 1;
+  /* sample answers an element at random, nil when there is none */
+  if (sp_streq(nm, "sample") && argc == 0) return 1;
   /* the searches, which compare each element with == */
   if (oa_search_name(nm) && argc == 1) return 1;
   /* no-block comparisons: usable when the element class has `<=>` (the
@@ -19038,13 +19045,13 @@ static void oa_recv_use(Compiler *c, OAS *sl, int S, int id, int recv, const int
          an element no slot sees */
       if (!(id < nc && value_ok[id])) sl[S].alive = 0;
     }
-    /* the removals and the searches have emitters for an object array
-       only (the removes bit, checked at component resolution). clear
+    /* the removals, sample and the searches have emitters for an object
+       array only (the removes bit, checked at component resolution). clear
        answers the array, so like an append it must land in a modeled
        consumer, and the emitter reads delete_at's index as a C integer. */
     else if (name && (sp_streq(name, "pop") || sp_streq(name, "shift") ||
                       sp_streq(name, "clear") || sp_streq(name, "delete_at") ||
-                      oa_search_name(name))) {
+                      sp_streq(name, "sample") || oa_search_name(name))) {
       sl[S].removes = 1;
       if (sp_streq(name, "clear") && !(id < nc && value_ok[id])) sl[S].alive = 0;
       /* (a boxed index too, which the emitter takes as an Integer the way
@@ -19078,6 +19085,19 @@ static void oa_recv_use(Compiler *c, OAS *sl, int S, int id, int recv, const int
           !(id < nc && value_ok[id]))
         sl[S].alive = 0;
     }
+  }
+  /* min and max with a comparator answer an element, which the
+     comparator loop binds as the class's pointer, for an object array only
+     (the removes bit), as sort's does; a program's own min or max on Array
+     answers its own value */
+  else if (name && is_minmax_query(name) && argc == 0 && has_block &&
+           nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode &&
+           !nt_int(nt, nt_ref(nt, id, "block"), "bs_lowered", 0) &&
+           oa_comparator_block(c, nt_ref(nt, id, "block"))) {
+    claimed[recv] = 1;
+    sl[S].removes = 1;
+    sl[S].row_iter |= 1;
+    if (share_builtin_overridden(c, "Array", name)) sl[S].alive = 0;
   }
   else if (!oa_walk_arm(c, id, recv, sl, S, claimed, walk_disc, nc) &&
            !oa_filter_arm(c, id, recv, sl, S, claimed, call_ret, value_ok, walk_disc, nc)) sl[S].alive = 0;

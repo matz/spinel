@@ -5245,6 +5245,10 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	for cls in Shelf Bin Queue2; do \
 	  awk "/^struct sp_$${cls}_s \\{/,/^\\}/" "$$tmp/osa.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a read of delete_if, keep_if, sort! or sort_by!'s value left $$cls's @items boxed)"; ok=0; }; \
 	done; \
+	$(SPINEL) test/obj_array_pick_narrowed.rb -c --no-line-map -o "$$tmp/opn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_pick_narrowed: -c)"; ok=0; }; \
+	for v in by_max by_min cmp_max cmp_min pool empty one bad shrink grow; do \
+	  grep -q "sp_PtrArray \\* lv_$$v\b" "$$tmp/opn.c" || { echo "infer-test: FAIL (obj_array_pick_narrowed: max_by, min_by, a comparator's max or min, or sample left $$v boxed)"; ok=0; }; \
+	done; \
 	$(SPINEL) test/obj_array_nested_block.rb -c --no-line-map -o "$$tmp/onb.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_nested_block: -c)"; ok=0; }; \
 	for v in arrows pts; do \
 	  grep -q "sp_PtrArray \\* iv_$$v;" "$$tmp/onb.c" || { echo "infer-test: FAIL (obj_array_nested_block: a block in a walk's block left @$$v boxed)"; ok=0; }; \

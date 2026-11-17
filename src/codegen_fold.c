@@ -5541,10 +5541,13 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
     view_unbind(g_n_argov - 1);
     return handled;
   }
-  if (!ty_is_array(rt)) return 0;
-  const char *k = (rr.elem == TY_POLY) ? "Poly" : array_kind(rt);
+  /* an Array of one class (narrow_object_arrays) is an sp_PtrArray whose
+     elements the comparator takes as the class's pointers, as sort's does */
+  int objs = ty_is_obj_array(rt);
+  if (!ty_is_array(rt) && !objs) return 0;
+  const char *k = objs ? "Ptr" : (rr.elem == TY_POLY) ? "Poly" : array_kind(rt);
   if (!k) return 0;
-  TyKind et = rr.elem;
+  TyKind et = objs ? ty_object(ty_obj_array_class(rt)) : rr.elem;
   /* A comparator block of fewer than two parameters still runs: CRuby hands
      it the first of the two values, or none. Standing down here let the
      blockless arm run without it, and the block vanished from the C. */
@@ -5594,9 +5597,18 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
              ono ? oint_nil(et) : et == TY_INT ? "0" : et == TY_FLOAT ? "0.0" :
              et == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, et));
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "%s _t%d = _t%d;\n", ecs, tmax, tmin);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
+  /* an object element is held by these alone while the comparator runs,
+     and the comparator may take it out of the array: rooted */
+  if (objs) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d); SP_GC_ROOT(_t%d);\n", tmin, tmax); }
+  /* an object array's walk reads its length at every step, as CRuby's
+     does: a comparator that takes elements out ends the walk there, where
+     a read past the end would bind no element */
+  emit_indent(g_pre, g_indent);
+  if (objs) buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < sp_PtrArray_length(_t%d); _t%d++) {\n", ti, ti, trv, ti);
+  else buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
   { char rd[96]; fold_elem_getf(rd, sizeof rd, ono, 0, rt, k, trv, "_t%d", ti);
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "%s _t%d = %s;\n", ecs, te, rd); }
+    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "%s _t%d = %s;\n", ecs, te, rd);
+    if (objs) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", te); } }
   /* Block params may be widened to TY_POLY across multiple block sites.
      Pin them to the element type for body emission:
      - temporarily set scope types to `et`

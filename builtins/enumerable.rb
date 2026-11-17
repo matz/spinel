@@ -114,7 +114,11 @@ module Enumerable
       if n
         n = __enum_count_int(n)
         raise ArgumentError, "negative size (#{n})" if n < 0
-        sort_by { |x| yield x }.first(n)
+        # the elements gathered by a walk, as to_a does: the receiver itself
+        # is only walked, so a call without n keeps an Array of objects narrowed
+        all = []
+        each { |x| all << x }
+        all.sort_by { |x| yield x }.first(n)
       else
         # one walk: the first element's key is taken as it comes, so a
         # receiver that yields once is not read twice, and a leading nil is
@@ -151,8 +155,11 @@ module Enumerable
         n = __enum_count_int(n)
         raise ArgumentError, "negative size (#{n})" if n < 0
         # descending by key, ties in encounter order: a stable ascending sort
-        # of the reversed elements, read backwards
-        to_a.reverse.sort_by { |x| yield x }.reverse.first(n)
+        # of the reversed elements, read backwards. The elements are gathered
+        # by a walk, as to_a does (min_by says why)
+        all = []
+        each { |x| all << x }
+        all.reverse.sort_by { |x| yield x }.reverse.first(n)
       else
         # one walk: the first element's key is taken as it comes, so a
         # receiver that yields once is not read twice, and a leading nil is

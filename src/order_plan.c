@@ -303,6 +303,7 @@ typedef struct OrderFacts {
   int *row_of;            /* [n] the owner's row; -1 visited, nothing bound; -2 not visited */
   int *slot_at;           /* [n] the operand's slot, -1 */
   unsigned char *code;    /* [n] the walk's memo: 1 runs no code, 2 runs code */
+  unsigned char *drop;    /* [n] order_may_drop_state's answer: the OS_REASSIGN and OS_IMPL bits of order_sum, kept past the phase */
   /* --dump-order=all: the lists with no row, and why (1 every operand a
      pure read, 2 one code operand last beside immutable values) */
   int *none;
@@ -404,7 +405,8 @@ static OrderFacts *order_facts_new(int n) {
   f->row_of = malloc(sizeof *f->row_of * (size_t)(n + 1));
   f->slot_at = malloc(sizeof *f->slot_at * (size_t)(n + 1));
   f->code = calloc((size_t)n + 1, 1);
-  if (!f->row_of || !f->slot_at || !f->code) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  f->drop = calloc((size_t)n + 1, 1);
+  if (!f->row_of || !f->slot_at || !f->code || !f->drop) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < n; i++) { f->row_of[i] = -2; f->slot_at[i] = -1; }
   return f;
 }
@@ -429,7 +431,7 @@ static void order_facts_scratch_free(OrderFacts *f) {
 }
 static void order_facts_del(OrderFacts *f) {
   if (!f) return;
-  free(f->row); free(f->slot); free(f->row_of); free(f->slot_at); free(f->code);
+  free(f->row); free(f->slot); free(f->row_of); free(f->slot_at); free(f->code); free(f->drop);
   free(f->none); free(f->none_why);
   order_facts_scratch_free(f);
   free(f);
@@ -608,6 +610,12 @@ static unsigned order_sum(Compiler *c, OrderFacts *f, int id) {
   if (m) f->sum[id] = (unsigned char)r;
   return r;
 }
+/* See order_plan.h. */
+int order_may_drop_state(Compiler *c, int node) {
+  if (node < 0) return 0;
+  return !c->order || node >= c->order->n || c->order->drop[node] != 0;
+}
+
 /* A local's write at `x`, at place pos of the local index. */
 static void order_local_write_at(Compiler *c, OrderFacts *f, int x, int pos) {
   const char *wn = comp_is_local_write(nt_kind(c->nt, x)) ? nt_str(c->nt, x, "name") : NULL;
@@ -901,6 +909,7 @@ static OrderFacts *order_facts_make(Compiler *c) {
     facts_decide(c, f, id, &l);
   }
   oplist_free(&l);
+  for (int id = 0; id < f->n; id++) f->drop[id] = (unsigned char)(order_sum(c, f, id) & (OS_REASSIGN | OS_IMPL));
   order_facts_scratch_free(f);
   return f;
 }

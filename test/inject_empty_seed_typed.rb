@@ -20,8 +20,10 @@ s = 0
 100.times { |k| s += (0...50).inject([]) { |acc, i| acc << i * k if i.odd?; acc }.sum }
 p s
 
-# a nil among the pushes, a mixed kind, and a block that hands the
-# accumulator on keep the boxed fold, as before
+# a receiver that mixes nil with its Integers, a mixed kind of push, and a
+# block that hands the accumulator on or leaves early keep the boxed fold,
+# as before (a nil an Integer read answers, `acc << a[i]` past the end, is
+# kept in the Integer Array)
 p [1, nil, 3].inject([]) { |acc, x| acc << x; acc }
 p (0...4).inject([]) { |acc, i| acc << i; acc << "s" if i == 2; acc }
 def keep(x) = x

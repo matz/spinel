@@ -1350,8 +1350,7 @@ void emit_nomethod_raise_unless_nil(Compiler *c, int obj, const char *name, cons
 int emit_delegate_undef_arm(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b);
 const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect);
 const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect);
-int obj_str_ret_poly(Compiler *c, int site, int cid, int want_inspect);
-int obj_str_ret_strsub(Compiler *c, int site, int cid, int want_inspect);
+void emit_obj_display_text(Compiler *c, int site, int cid, int inspect, const char *recv, Buf *b);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 #ifdef SP_EMIT_TRACE
@@ -3407,7 +3406,6 @@ int class_is_exc_subclass(Compiler *c, int ci);
 const char *class_ruby_name(Compiler *c, int ci);
 const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect);
 const char *obj_str_blockarg(Compiler *c, int site, int cid, int want_inspect);
-int obj_str_ret_poly(Compiler *c, int site, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_class_struct(Compiler *c, ClassInfo *ci, Buf *b);
 int class_needs_scan(ClassInfo *ci);

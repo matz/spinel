@@ -2161,18 +2161,19 @@ void emit_str_cmp_conv(Compiler *c, int node, int tmp, Buf *b) {
   TyKind t = tr.as_ty;
   if (tr.kind == RK_BOXED) { buf_printf(b, "sp_poly_check_str(_t%d)", tmp); return; }
   if (!str_cmp_conv_shape(c, node)) { buf_puts(b, "NULL"); return; }
-  int def = -1;
-  int poly = obj_conv_method_typed(c, node, t, "to_str", TY_STRING, &def) < 0;
-  if (poly) {
-    MethodLookup ml;
-    cplan_implied_target(c, ic_operand_host(c, node), node, ty_object_class(t), "to_str", 0, &ml);
-    def = ml.def_class;
-  }
+  MethodLookup lookup = { .def_class = ty_object_class(t) };
+  int mi = cplan_implied_target(c, ic_operand_host(c, node), node, ty_object_class(t), "to_str", 0, &lookup);
+  if (mi < 0) { buf_puts(b, "NULL"); return; }
+  Scope *m = &c->scopes[mi];
+  Buf call = {0};
+  buf_printf(&call, "%s((sp_%s *)_t%d.v.p)", mc_method(c, m), c->classes[lookup.def_class].c_name, tmp);
   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ ? ", tmp);
-  if (poly) buf_puts(b, "sp_str_cmp_conv(");
-  buf_printf(b, "sp_%s_to_str((sp_%s *)_t%d.v.p)",
-             c->classes[def].c_name, c->classes[def].c_name, tmp);
-  if (poly) buf_printf(b, ", _t%d)", tmp);
+  if (repr_method_ret_storage(m) == TY_STRBUF) buf_printf(b, "sp_String_cstr_nil(%s)", call.p);
+  else {
+    buf_puts(b, "sp_str_cmp_conv("); emit_boxed_ret_call(c, m, call.p, b);
+    buf_printf(b, ", _t%d)", tmp);
+  }
+  free(call.p);
   buf_puts(b, " : NULL)");
 }
 
@@ -12329,27 +12330,51 @@ const char *obj_str_fn(Compiler *c, int site, int cid, int want_inspect) {
                       want_inspect ? "inspect" : "to_s");
 }
 
-/* True when the resolved user to_s/inspect returns a boxed sp_RbVal (its
-   value flows through more than one branch type, e.g. a String on one arm
-   and nil on another). Callers that consume the result as a `const char *`
-   must route it through sp_poly_to_s instead of a pointer cast (#3266). */
-int obj_str_ret_poly(Compiler *c, int site, int cid, int want_inspect) {
-  if (cid < 0 || cid >= c->nclasses) return 0;
-  int mi = display_method_scope(c, site, cid, want_inspect, NULL);
-  return mi >= 0 && (TyKind)c->scopes[mi].ret == TY_POLY;
-}
+/* A display consumer reads the result of the method selected at this site.
+   The receiver stays rooted across that call and its non-String fallback. */
+void emit_obj_display_text(Compiler *c, int site, int cid, int inspect, const char *recv, Buf *b) {
+  int owner = cid, mi = display_method_scope(c, site, cid, inspect, &owner);
+  TyKind self_ty = ty_object(cid);
+  int value_self = comp_ty_value_obj(c, self_ty), temp = ++g_tmp;
+  char self[32];
+  snprintf(self, sizeof self, "_t%d", temp);
+  buf_puts(b, "({ "); emit_ctype(c, self_ty, b);
+  buf_printf(b, " %s = (%s); ", self, recv);
+  if (!value_self) buf_printf(b, "SP_GC_ROOT(%s); %s ? ", self, self);
+  else if (ty_gc_holds_refs(c, self_ty)) emit_gc_root_tmp_refs(c, self_ty, temp, b);
 
-/* True when it answers an instance of a String subclass (a `def to_s =
-   SafeBuffer.new(...)`): the instance is the String CRuby reads, and its
-   struct begins with that String, so callers read its bytes through
-   sp_strbuf_read instead of taking the struct pointer as a const char *.
-   Not for a String subclass's own instances, which are read as the String
-   they are without a #to_s call (rb_obj_as_string). */
-int obj_str_ret_strsub(Compiler *c, int site, int cid, int want_inspect) {
-  if (cid < 0 || cid >= c->nclasses || comp_ary_is_str(c, cid)) return 0;
-  int mi = display_method_scope(c, site, cid, want_inspect, NULL);
-  TyKind r = mi >= 0 ? (TyKind)c->scopes[mi].ret : TY_UNKNOWN;
-  return ty_is_object(r) && comp_ary_is_str(c, ty_object_class(r));
+  Buf call = {0};
+  buf_printf(&call, "%s(", obj_str_fn(c, site, cid, inspect));
+  if (mi >= 0 && owner != cid) buf_printf(&call, "(sp_%s *)", c->classes[owner].c_name);
+  buf_printf(&call, "%s%s)", self, obj_str_blockarg(c, site, cid, inspect));
+  if (mi < 0) buf_puts(b, call.p);  /* the generated record renderer returns bytes */
+  else {
+    Scope *m = &c->scopes[mi];
+    TyKind result = repr_method_ret_storage(m);
+    int handle = result == TY_STRBUF;
+    int v = ++g_tmp;
+    if (handle)
+      buf_printf(b, "({ sp_String *_t%d = %s; _t%d ? sp_String_cstr(_t%d) : ", v, call.p, v, v);
+    else {
+      buf_printf(b, "({ sp_RbVal _t%d = ", v);
+      emit_boxed_ret_call(c, m, call.p, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", v);
+    }
+    if (inspect) {
+      if (handle) buf_puts(b, "sp_str_empty");
+      else buf_printf(b, "sp_poly_to_s(_t%d)", v);
+    }
+    else {
+      if (!handle) buf_printf(b, "const char *_s = sp_strface_b_box(_t%d); _s ? _s : ", v);
+      buf_puts(b, "sp_obj_to_s_fallback(");
+      emit_boxed_text(c, self_ty, self, b);
+      buf_puts(b, ")");
+    }
+    buf_puts(b, "; })");
+  }
+  free(call.p);
+  if (!value_self) buf_puts(b, inspect ? " : SPL(\"nil\")" : " : sp_str_empty");
+  buf_puts(b, "; })");
 }
 
 /* Return the builtin exception parent name for user exc subclass ci,
@@ -13110,15 +13135,16 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
       /* a struct/data (or user-#inspect) member recurses into its own inspect */
       char ivn[128]; snprintf(ivn, sizeof ivn, "%s", iv_c(ci->ivars[i] + 1));
       int mc = ty_object_class(mt);
-      /* inside a pp, a Struct or Data member with its own #inspect shows its
-         record layout too (record_pp_skips_inspect) */
+      Buf receiver = {0}, text = {0};
+      buf_printf(&receiver, "self->iv_%s", ivn);
+      emit_obj_display_text(c, -1, mc, 1, receiver.p, &text);
+      /* Inside pp, a member with an overridden inspect can still use its
+         record layout. */
       if (pp_prints_by_rt(c) && record_pp_skips_inspect(c, -1, mc))
-        buf_printf(b, "  sp_String_append(s, !self->iv_%s ? \"nil\" : sp_pp_printing ? sp_%s_%s((sp_%s *)self->iv_%s) : %s((sp_%s *)self->iv_%s));\n",
-                   ivn, c->classes[mc].c_name, struct_default_text_fn(c, mc), c->classes[mc].c_name, ivn,
-                   obj_str_fn(c, -1, mc, 1), mcn, ivn);
-      else
-        buf_printf(b, "  sp_String_append(s, self->iv_%s ? %s((sp_%s *)self->iv_%s) : \"nil\");\n",
-                   ivn, obj_str_fn(c, -1, mc, 1), mcn, ivn);
+        buf_printf(b, "  sp_String_append_bin(s, !self->iv_%s ? SPL(\"nil\") : sp_pp_printing ? sp_%s_%s(%s) : %s);\n",
+                   ivn, c->classes[mc].c_name, struct_default_text_fn(c, mc), receiver.p, text.p);
+      else buf_printf(b, "  sp_String_append_bin(s, self->iv_%s ? %s : SPL(\"nil\"));\n", ivn, text.p);
+      free(receiver.p); free(text.p);
     }
     else {
       Buf ivb; memset(&ivb, 0, sizeof ivb); buf_printf(&ivb, "self->iv_%s", iv_c(ci->ivars[i] + 1));

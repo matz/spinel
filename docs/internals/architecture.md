@@ -57,6 +57,10 @@ return slots and callers. A nullable String uses the same pointer and returns
 or read its bytes for a text operation. Mixed receiver dispatch joins Ruby
 values in the switch and projects the result once. Proc and C extension
 callback signatures retain their declared result representation.
+Interpolation and printing call the display method selected at that site.
+They read the bytes of its native String result or format its boxed result
+while the receiver is rooted. String comparisons likewise borrow bytes
+from the selected conversion result.
 
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for

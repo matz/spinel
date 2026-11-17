@@ -2005,6 +2005,7 @@ static inline sp_bool sp_class_eq(sp_Class a, sp_Class b) {
   const char *bn = sp_class_to_s(b);
   return (an && bn) ? strcmp(an, bn) == 0 : an == bn;
 }
+const char *sp_obj_to_s_fallback(sp_RbVal v);
 const char *sp_poly_to_s(sp_RbVal v);   /* defined below; used by the user-object arm */
 struct sp_OpenStruct_s;
 const char *sp_OpenStruct_inspect(struct sp_OpenStruct_s *o);   /* defined below */

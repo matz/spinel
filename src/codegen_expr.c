@@ -551,39 +551,12 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         emit_nomethod_raise_unless_nil(c, expr, "to_s", "(const char *)\"\"", "sp_str_empty", &conv);   /* (to_s undefined where the record places it: CRuby raises, for nil's own to_s is the empty String) */
       }
       else if (ty_is_object(t) && obj_str_cname(c, expr, ty_object_class(t), 0)) {
-        const char *cn = obj_str_cname(c, expr, ty_object_class(t), 0);
-        /* a poly-returning to_s (String unioned with e.g. nil) yields a boxed
-           sp_RbVal -- render it through sp_poly_to_s so it's a const char *
-           in the interpolation (#3266). */
-        int ret_poly = obj_str_ret_poly(c, expr, ty_object_class(t), 0);
-        /* one answering a String subclass instance reads its bytes */
-        const char *ss_open = !ret_poly && obj_str_ret_strsub(c, expr, ty_object_class(t), 0) ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "";
-        const char *ss_close = *ss_open ? ")))" : "";
-        if (ret_poly) buf_puts(&conv, "sp_poly_to_s(");
-        /* a part that may be nil (the nil fact, #7444) reads as nil's to_s,
-           the empty String, where its class's to_s would run on no object */
-        int part_nil = !ret_poly && !comp_ty_value_obj(c, t) && nil_fact_tracked(t) && nil_fact_node(c, expr);
-        /* a value-type object (single-ivar) has a by-VALUE to_s signature;
-           casting its receiver to a pointer is a C type error (#2357) */
-        if (!part_nil && (comp_ty_value_obj(c, t) || (!vexpr[0] && !iv_pre && expr_is_held_ref(c, expr)))) {
-          const char *tsf = obj_str_fn(c, expr, ty_object_class(t), 0);
-          buf_puts(&conv, ss_open);
-          if (comp_ty_value_obj(c, t)) buf_printf(&conv, "%s(", tsf);
-          else buf_printf(&conv, "%s((sp_%s *)", tsf, cn);
-          EMIT_IV(); buf_printf(&conv, "%s)%s", obj_str_blockarg(c, expr, ty_object_class(t), 0), ss_close);
-        }
-        else {
-          /* rooted: the part may be a fresh object (`"#{C.new}"`) held
-             nowhere else while its #to_s allocates */
-          int to = ++g_tmp;
-          buf_printf(&conv, "({ sp_%s *_t%d = (sp_%s *)(", cn, to, cn);
-          EMIT_IV();
-          buf_printf(&conv, "); SP_GC_ROOT(_t%d); ", to);
-          if (part_nil) buf_printf(&conv, "_t%d ? ", to);
-          buf_printf(&conv, "%s%s(_t%d%s)%s%s; })", ss_open, obj_str_fn(c, expr, ty_object_class(t), 0), to,
-                     obj_str_blockarg(c, expr, ty_object_class(t), 0), ss_close, part_nil ? " : sp_str_empty" : "");
-        }
-        if (ret_poly) buf_puts(&conv, ")");
+        Buf receiver = {0};
+        if (vexpr[0]) buf_puts(&receiver, vexpr);
+        else if (iv_pre) buf_puts(&receiver, iv_pre);
+        else emit_expr(c, expr, &receiver);
+        emit_obj_display_text(c, expr, ty_object_class(t), 0, receiver.p, &conv);
+        free(receiver.p);
       }
       else if (ty_is_ptr_array(t) || ty_is_obj_array(t)) {
         Buf ivb; memset(&ivb, 0, sizeof ivb);

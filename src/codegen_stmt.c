@@ -27,34 +27,9 @@ static void emit_const_write_last_value(Compiler *c, const LocalVar *lv, const c
 
 /* an object arg's #to_s as a C string expression (the puts/print arms) */
 static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
-  const char *cn = obj_str_cname(c, arg, ty_object_class(t), 0);
-  int ret_poly = obj_str_ret_poly(c, arg, ty_object_class(t), 0);
-  /* A to_s that unions a String with another branch type (e.g. nil)
-     returns a boxed sp_RbVal; route it through sp_poly_to_s rather than a
-     pointer cast (#3266). */
-  /* one answering a String subclass instance: that String's bytes */
-  int ret_strsub = !ret_poly && obj_str_ret_strsub(c, arg, ty_object_class(t), 0);
-  buf_puts(b, ret_poly ? "sp_poly_to_s(" : ret_strsub ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "(const char *)(");
-  buf_printf(b, "%s((sp_%s *)", obj_str_fn(c, arg, ty_object_class(t), 0), cn);
-  NodeKind rk = nt_kind(c->nt, arg);
-  if (rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode || rk == NK_SelfNode || rk == NK_ConstantReadNode) {
-    emit_expr(c, arg, b);
-  }
-  else {
-    /* evaluate the argument first: its emission may hoist declarations of
-       its own into g_pre, which must land as complete statements before
-       this temp's declaration head is written */
-    int tt = ++g_tmp;
-    Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, arg, &rb);
-    emit_indent(g_pre, g_indent); emit_ctype(c, t, g_pre);
-    buf_printf(g_pre, " _t%d = ", tt);
-    buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
-    /* the temp may be the object's only reference (`puts C.new`), and #to_s
-       allocates before it reads the object's ivars */
-    if (!comp_ty_value_obj(c, t)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tt); }
-    buf_printf(b, "_t%d", tt);
-  }
-  buf_printf(b, "%s))%s", obj_str_blockarg(c, arg, ty_object_class(t), 0), ret_strsub ? "))" : "");
+  Buf receiver = expr_buf(c, arg);
+  emit_obj_display_text(c, arg, ty_object_class(t), 0, receiver.p, b);
+  free(receiver.p);
 }
 
 static int emit_splat_io(Compiler *c, int arg, const char *fn, Buf *b, int indent) {
@@ -278,7 +253,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s (user-defined or a generated struct/data one) */
     buf_puts(b, "{ const char *_ps = "); emit_obj_to_s(c, arg, t, b);
-    buf_puts(b, "; sp_puts_cstr_line(_ps); }\n");
+    buf_puts(b, "; sp_puts_str_line(_ps); }\n");
   }
   else if (t == TY_TIME_RANGE) {
     buf_puts(b, "{ sp_TimeRange *_ptr = ("); emit_expr(c, arg, b);
@@ -411,7 +386,7 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 0)) {
     /* an object with #to_s: call it directly (like the puts arm) */
     buf_puts(b, "{ const char *_ps = "); emit_obj_to_s(c, arg, t, b);
-    buf_puts(b, "; if (_ps) fputs(_ps, stdout); }\n");
+    buf_puts(b, "; sp_print_str_bin(_ps); }\n");
   }
   else if (tr.kind == RK_BOXED || ty_is_object(t)) {
     int tv = ++g_tmp;
@@ -675,18 +650,11 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "sp_puts_line("); emit_nomethod_raise_unless_nil(c, arg, "inspect", "(const char *)\"\"", "(const char *)\"nil\"", b); buf_puts(b, ");\n");
   }
   else if (ty_is_object(t) && obj_str_cname(c, arg, ty_object_class(t), 1)) {
-    /* an object with #inspect (user-defined or a generated struct/data one);
-       a NULL pointer is nil (nullable-object convention, e.g. Set#add?) */
-    const char *cn = obj_str_cname(c, arg, ty_object_class(t), 1);
-    int pv = ++g_tmp;
-    /* rooted: a fresh object (`p mk`) has no other reference while its
-       #inspect allocates */
-    buf_printf(b, "{ sp_%s *_t%d = (sp_%s *)(", cn, pv, cn); emit_expr(c, arg, b);
-    buf_puts(b, "); ");
-    if (!expr_is_held_ref(c, arg)) buf_printf(b, "SP_GC_ROOT(_t%d); ", pv);
-    int rp = obj_str_ret_poly(c, arg, ty_object_class(t), 1);
-    buf_printf(b, "sp_puts_line(_t%d ? %s%s(_t%d%s)%s : \"nil\"); }\n", pv, rp ? "sp_poly_to_s(" : "",
-               obj_str_fn(c, arg, ty_object_class(t), 1), pv, obj_str_blockarg(c, arg, ty_object_class(t), 1), rp ? ")" : "");
+    Buf receiver = expr_buf(c, arg);
+    buf_puts(b, "{ sp_print_str_bin(");
+    emit_obj_display_text(c, arg, ty_object_class(t), 1, receiver.p, b);
+    buf_puts(b, "); putchar('\\n'); }\n");
+    free(receiver.p);
   }
   else if (t == TY_PROC) {
     buf_puts(b, "{ sp_Proc *_pp = ("); emit_expr(c, arg, b);
@@ -771,20 +739,12 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
        walk renders CRuby's default #<Name:0xADDR @a=..., ...> */
     int cid = ty_object_class(t);
     const char *icn = obj_str_cname(c, arg, cid, 1);
-    if (icn && expr_is_held_ref(c, arg)) {
-      int rp = obj_str_ret_poly(c, arg, cid, 1);
-      buf_printf(b, "{ const char *_pi = %s%s((sp_%s *)(", rp ? "sp_poly_to_s(" : "", obj_str_fn(c, arg, cid, 1), icn);
-      emit_expr(c, arg, b);
-      buf_printf(b, ")%s)%s; sp_puts_line(_pi ? _pi : \"nil\"); }\n", obj_str_blockarg(c, arg, cid, 1), rp ? ")" : "");
-    }
-    else if (icn) {
-      /* the receiver rooted across its #inspect, as in the arm above */
-      int pv = ++g_tmp;
-      buf_printf(b, "{ sp_%s *_t%d = (sp_%s *)(", icn, pv, icn); emit_expr(c, arg, b);
-      int rp = obj_str_ret_poly(c, arg, cid, 1);
-      buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_pi = %s%s(_t%d%s)%s;"
-                    " sp_puts_line(_pi ? _pi : \"nil\"); }\n", pv, rp ? "sp_poly_to_s(" : "", obj_str_fn(c, arg, cid, 1), pv,
-                    obj_str_blockarg(c, arg, cid, 1), rp ? ")" : "");
+    if (icn) {
+      Buf receiver = expr_buf(c, arg);
+      buf_puts(b, "{ const char *_pi = ");
+      emit_obj_display_text(c, arg, cid, 1, receiver.p, b);
+      buf_puts(b, "; sp_print_str_bin(_pi); putchar('\\n'); }\n");
+      free(receiver.p);
     }
     else {
       buf_printf(b, "{ void *_po = (void *)("); emit_expr(c, arg, b);

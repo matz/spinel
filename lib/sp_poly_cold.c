@@ -408,6 +408,13 @@ const char *sp_poly_to_s_call(sp_RbVal v)
   return sp_poly_to_s(v);
 }
 
+/* Object#to_s when a user override returns a non-String. */
+const char *sp_obj_to_s_fallback(sp_RbVal v)
+{
+  return sp_sprintf("#<%s:0x%016llx>", sp_poly_obj_class_display(v),
+                    (unsigned long long)(uintptr_t)v.v.p);
+}
+
 const char *sp_poly_to_s(sp_RbVal v)
 {
   switch (v.tag) {
@@ -481,8 +488,7 @@ const char *sp_poly_to_s(sp_RbVal v)
             if (sp_is_exc_subclass_cls(v.cls_id))
               return sp_exc_message((volatile struct sp_Exception_s *)v.v.p);
             if (v.v.p == sp_main_obj) return SPL("main");
-            return sp_sprintf("#<%s:0x%016llx>", sp_poly_obj_class_display(v),
-                              (unsigned long long)(uintptr_t)v.v.p);
+            return sp_obj_to_s_fallback(v);
           }
           /* a builtin container kind with no explicit arm above (the hash
              variants): to_s is its inspect */

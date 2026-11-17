@@ -31039,10 +31039,13 @@ static void refuse_string_copies(Compiler *c, int id) {
 void emit_poly_enum_for(Compiler *c, const char *val, Buf *b) {
   int t = ++g_tmp;
   buf_printf(b, "({ sp_RbVal _e%d = %s; (_e%d.tag == SP_TAG_OBJ && (0", t, val, t);
+  /* (the arm for every class a boxed value may be, and the compiler's own `__to_enum_each`: no call's question) */
+  mtab_enter(c);
   for (int k = 0; k < c->nclasses; k++)
-    if (c->classes[k].instantiated && comp_method_in_chain(c, k, "each", NULL) >= 0 &&
-        comp_method_in_chain(c, k, "__to_enum_each", NULL) < 0)
+    if (c->classes[k].instantiated && call_target(c, -1, k, "each", CT_METHODS | CT_SHARED, NULL) >= 0 &&
+        call_target(c, -1, k, "__to_enum_each", CT_METHODS | CT_SHARED, NULL) < 0)
       buf_printf(b, " || _e%d.cls_id == %d", t, k);
+  mtab_leave(c);
   buf_printf(b, ")) ? sp_Enumerator_new_from(_e%d) : sp_poly_enum_for_each(_e%d); })", t, t);
 }
 /* ENV's synthetic receiver is a snapshot taken by the call, after its

@@ -6579,13 +6579,13 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
   int ob = comp_core_class(c, CORE_OBJECT), ke = comp_core_class(c, CORE_KERNEL);
   if ((ob >= 0 && call_target(c, id, ob, "`", CT_METHODS, NULL) >= 0) ||
       (ke >= 0 && call_target(c, id, ke, "`", CT_METHODS, NULL) >= 0) ||
-      comp_toplevel_mod_defines(c, "`", 0)) return 0;
+      comp_toplevel_mod_defines(c, id, "`", 0)) return 0;
   int self_recv = nt_kind(nt, recv) == NK_SelfNode;
   if (!self_recv && !nt_ignore_visibility(nt, id)) return 0;
   TyKind rt = self_recv ? TY_POLY : infer_type(c, recv);
   /* (a spliced receiver's temp held boxed, as an Integer is under
      --int-overflow=promote, is a poly self too) */
-  if (rt == TY_POLY) return in_default && !comp_toplevel_mod_defines(c, "`", 1);
+  if (rt == TY_POLY) return in_default && !comp_toplevel_mod_defines(c, id, "`", 1);
   const char *cn = rt == TY_CLASS || ty_is_object(rt) ? NULL : builtin_class_of_type(rt);
   if (!cn) return 0;
   int ci = comp_builtin_class_named(c, cn);

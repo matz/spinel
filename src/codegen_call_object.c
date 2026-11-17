@@ -1231,9 +1231,9 @@ static void emit_obj_struct_copy(Compiler *c, int cid, int to, int td, Buf *b) {
 }
 /* Does Object's own chain, as the program reopens it, hold an instance
    method `name` (its own def or a module it includes)? */
-static int main_object_chain_defines(Compiler *c, const char *name) {
+static int main_object_chain_defines(Compiler *c, int id, const char *name) {
   int oc = comp_core_class(c, CORE_OBJECT);
-  return oc >= 0 && oc < c->nclasses && comp_method_in_chain(c, oc, name, NULL) >= 0;
+  return oc >= 0 && oc < c->nclasses && call_target(c, id, oc, name, 0, NULL) >= 0;
 }
 int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc) {
   MethodLookup ml = { .def_class = -1 };
@@ -1659,7 +1659,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* main is an Object: a method Object's chain holds (a module
          `Object.include` gave it, `Mine#clone`) answers ahead of Kernel's */
       !(!cplan_builtin_call(c, id) && nt_kind(nt, recv) == NK_SelfNode && self_is_main_raw(c, recv) &&
-        main_object_chain_defines(c, name))) {
+        main_object_chain_defines(c, id, name))) {
     int args = nt_ref(nt, id, "arguments");
     int argc0 = 0; if (args >= 0) nt_arr(nt, args, "arguments", &argc0);
     /* hash, string, array, and native-bound object dup/clone require real

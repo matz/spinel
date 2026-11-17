@@ -2279,7 +2279,7 @@ TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int 
 int    comp_ffi_const_at(Compiler *c, int node, int *out);
 int    comp_included_method_index(Compiler *c, const char *name, int call_id);
 int    class_is_blank_slate(Compiler *c, int ci);   /* explicit `< BasicObject` descent */
-int    comp_toplevel_mod_defines(Compiler *c, const char *name, int extend);
+int    comp_toplevel_mod_defines(Compiler *c, int id, const char *name, int extend);
 
 /* Locals within a scope. */
 LocalVar *scope_local(Scope *s, const char *name);

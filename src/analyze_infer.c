@@ -1066,17 +1066,16 @@ int loop_never_completes(Compiler *c, int node) {
 /* Whether the program's own `kept` (Range or Array), Enumerator or
    Enumerable defines `name`: the kept value would then answer the
    program's method, not the Enumerator's. */
-static int kept_enum_reopen_defines(Compiler *c, int kept, const char *name) {
+static int kept_enum_reopen_defines(Compiler *c, int id, int kept, const char *name) {
   const int CLS[] = { kept, CORE_ENUMERATOR, CORE_ENUMERABLE, -1 };
   for (int i = 0; CLS[i] >= 0; i++) {
     int ci = comp_core_class(c, CLS[i]);
-    int dc = -1;
-    if (ci >= 0 && comp_method_in_chain(c, ci, name, &dc) >= 0 && dc == ci) return 1;
+    if (ci >= 0 && call_target(c, id, ci, name, CT_OWN, NULL) >= 0) return 1;
   }
   return 0;
 }
-static int range_enum_reopen_defines(Compiler *c, const char *name) {
-  return kept_enum_reopen_defines(c, CORE_RANGE, name);
+static int range_enum_reopen_defines(Compiler *c, int id, const char *name) {
+  return kept_enum_reopen_defines(c, id, CORE_RANGE, name);
 }
 /* The walks with a block, and the argless readers, whose answer over the
    members laid out ahead is the Enumerator's answer */
@@ -1108,7 +1107,7 @@ int an_int_step_range_chain(Compiler *c, int id) {
   const char *pn = nt_str(nt, p, "name");
   /* the `to_a` hop a desugar puts under an Enumerator's walk (enum_recv)
      is not a reader: the walk answers this receiver */
-  if (!pn || nt_str(nt, p, "enum_recv") || range_enum_reopen_defines(c, pn)) return 0;
+  if (!pn || nt_str(nt, p, "enum_recv") || range_enum_reopen_defines(c, p, pn)) return 0;
   /* a Bignum limit walks past the Integer word, which a Range of words
      cannot hold: the Enumerator walks it (a boxed one that is a Bignum at
      run time is read by sp_int_step_range) */
@@ -1129,7 +1128,7 @@ int an_int_step_range_chain(Compiler *c, int id) {
         nt_safe_nav(nt, g)) return 0;
     const char *gn = nt_str(nt, g, "name");
     int gblk = nt_ref(nt, g, "block");
-    if (!gn || range_enum_reopen_defines(c, gn)) return 0;
+    if (!gn || range_enum_reopen_defines(c, g, gn)) return 0;
     if ((sp_streq(gn, "with_index") || sp_streq(gn, "each_with_index") ||
          sp_streq(gn, "with_object") || sp_streq(gn, "each_with_object")) &&
         gblk >= 0 && nt_kind(nt, gblk) == NK_BlockNode) return 1;
@@ -1180,7 +1179,7 @@ int an_blockless_tuples_kept(Compiler *c, int id) {
   /* nor is a `to_a` a desugar puts under a walk (made_to_a): the walk
      reads the Enumerator through it and may answer its source */
   if (!pn || nt_str(nt, p, "enum_recv") || nt_int(nt, p, "made_to_a", 0) ||
-      kept_enum_reopen_defines(c, CORE_ARRAY, pn)) return 0;
+      kept_enum_reopen_defines(c, p, CORE_ARRAY, pn)) return 0;
   int pblk = nt_ref(nt, p, "block");
   int pac = 0; { int pa = nt_ref(nt, p, "arguments"); if (pa >= 0) nt_arr(nt, pa, "arguments", &pac); }
   int each = sp_streq(pn, "each"), ewi = sp_streq(pn, "each_with_index");

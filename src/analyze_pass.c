@@ -4562,7 +4562,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
            a module main extends answers the name first. */
         int at_main = (!caller || (caller->class_id < 0 && !caller->is_cmethod && caller->def_node < 0)) &&
                       self_is_main(c, recv);
-        if (at_main && !comp_toplevel_mod_defines(c, mname, 1))
+        if (at_main && !comp_toplevel_mod_defines(c, recv, mname, 1))
           tl_getter = call_target(c, recv, -1, mname, CT_TOP, NULL);
         const char *tl_ivs[8];
         if (tl_getter >= 0 && (c->scopes[tl_getter].class_id >= 0 || c->scopes[tl_getter].is_cmethod ||

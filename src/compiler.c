@@ -5476,9 +5476,9 @@ int comp_main_extend_defines(Compiler *c, int call_id, const char *name) {
 }
 /* Whether a module the top level includes (extend 0) or main extends
    (extend 1) has an instance method `name`. */
-int comp_toplevel_mod_defines(Compiler *c, const char *name, int extend) {
+int comp_toplevel_mod_defines(Compiler *c, int id, const char *name, int extend) {
   for (int k = 0; k < c->ntoplevel_includes; k++)
-    if (c->toplevel_extends[k] == extend && comp_method_in_chain(c, c->toplevel_includes[k], name, NULL) >= 0)
+    if (c->toplevel_extends[k] == extend && call_target(c, id, c->toplevel_includes[k], name, CT_METHODS, NULL) >= 0)
       return 1;
   return 0;
 }

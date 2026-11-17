@@ -98,6 +98,7 @@ src/analyze_util.c:class_value_bind_call_target
 src/call_plan.c:cplan_to_ary_entries
 src/analyze_pass.c:bs_object_to_ary
 src/codegen.c:emit_kconv_bridge
+src/codegen_call.c:emit_poly_enum_for
 src/analyze.c:an_phase_procs
 src/analyze_desugar.c:send_split_by_owner
 src/analyze_pass.c:bare_call_on_class

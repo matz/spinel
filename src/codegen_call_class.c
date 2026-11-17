@@ -662,9 +662,9 @@ int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, int own, c
 
 /* Whether RECV is an object of a class whose chain defines NAME itself: its
    const_get is that method, not Module's. */
-static int obj_defines_own(Compiler *c, int recv, const char *name) {
+static int obj_defines_own(Compiler *c, int id, int recv, const char *name) {
   TyKind t = repr_of(c, recv).as_ty;
-  return ty_is_object(t) && comp_method_in_chain(c, ty_object_class(t), name, NULL) >= 0;
+  return ty_is_object(t) && call_target(c, id, ty_object_class(t), name, 0, NULL) >= 0;
 }
 
 /* The builtin classes whose values reach `qm` through the program's
@@ -1483,7 +1483,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
      <Name>" for a valid constant name, "wrong constant name <name>" for one that
      is not (no leading uppercase). A dynamic name can't be resolved ahead of time
      and is diagnosed. */
-  if (sp_streq(name, "const_get") && recv >= 0 && argc >= 1 && !obj_defines_own(c, recv, name)) {
+  if (sp_streq(name, "const_get") && recv >= 0 && argc >= 1 && !obj_defines_own(c, id, recv, name)) {
     NodeKind cg_ak = nt_kind(nt, argv[0]);
     const char *cg_qm = NULL;
     if (cg_ak == NK_SymbolNode) cg_qm = nt_str(nt, argv[0], "value");

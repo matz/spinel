@@ -2925,14 +2925,17 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         const char *bscn = class_ruby_name(c, bsci) ? class_ruby_name(c, bsci) : c->classes[bsci].name;
         /* (a bare identifier the walk gave self as its receiver is still
            CRuby's variable-like call: its NameError and wording) */
-        int bsac = 0; const int *bsav = call_args(nt, id, &bsac);
+        int bsac = 0; call_args(nt, id, &bsac);
         int bsv = nt_kind(nt, bsrecv) == NK_SelfNode && bsac == 0 && nt_ref(nt, id, "block") < 0 && nt_vcall(nt, id);
-        buf_printf(b, "({ (void)("); emit_expr_for_effect(c, bsrecv, b); buf_puts(b, ");");
-        /* (the arguments run, in order, before the raise, as CRuby's run before the dispatch) */
-        for (int i = 0; i < bsac; i++) { buf_puts(b, " (void)("); emit_expr_for_effect(c, bsav[i], b); buf_puts(b, ");"); }
+        /* (the receiver, then the arguments and the `&expr`, run in order
+           before the raise, as CRuby's run before the dispatch, each after
+           its own prelude) */
+        buf_puts(b, "({ ");
+        emit_missing_operand(c, bsrecv, 0, b);
+        emit_raise_operands(c, id, 0, 0, b);
         {
           char head[200]; snprintf(head, sizeof head, "%s '%s' for an instance of ", bsv ? "undefined local variable or method" : "undefined method", bsnm);
-          buf_printf(b, " sp_raise_cls(\"%s\", ", bsv ? "NameError" : "NoMethodError");
+          buf_printf(b, "sp_raise_cls(\"%s\", ", bsv ? "NameError" : "NoMethodError");
           if (!anon_class_text(c, bsci, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, bscn);
           buf_printf(b, "); %s; })", default_value_from_compiler(c, repr_of(c, id).as_ty));
         }

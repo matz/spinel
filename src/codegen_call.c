@@ -23668,8 +23668,6 @@ static void emit_vis_msg_boxed(int vis, const char *vnm, int tv, const char *arg
   else buf_printf(b, "_t%d; })", tm);
 }
 static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard);
-static void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
-static void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
 static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
 /* Does a reopened builtin class or module (`class Proc; def top`, `module
    Comparable; def top`) other than own (the closed method's) answer vnm?
@@ -24792,7 +24790,7 @@ static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
    its own prelude: its boxed value into temp t, rooted unless the box
    proves it holds no heap pointer (repr_box_holds_heap), for t > 0, else
    run for its effect */
-static void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
+void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
   Buf ap, ae; memset(&ap, 0, sizeof ap); memset(&ae, 0, sizeof ae);
   Buf *sv = g_pre; g_pre = &ap;
   if (t > 0) emit_boxed(c, op, &ae); else emit_expr(c, op, &ae);
@@ -24847,7 +24845,7 @@ static void emit_block_arg_operand(Compiler *c, int id, int fe, Buf *b) {
    hands on the method's own block (resolve_forwarded_block) runs nothing
    and is a Proc or nil already, and an inlined copy of the method binds no
    C variable for it, so it is left out. */
-static void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b) {
+void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b) {
   const NodeTable *nt = c->nt;
   int argc = 0; const int *argv = call_args(nt, m, &argc);
   for (int k = 0; k < argc; k++) emit_missing_operand(c, argv[k], staged ? t0 + k : 0, b);

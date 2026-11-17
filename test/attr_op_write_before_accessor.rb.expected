@@ -1,0 +1,6 @@
+before: undefined method 'x' for an instance of Box
+before: undefined method 'x' for an instance of Box
+never: undefined method 'x' for an instance of Bare
+side
+2
+20

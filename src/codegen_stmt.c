@@ -22173,9 +22173,9 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
        an attr_reader-only attribute raises NoMethodError for `attr=`, so a
        reader-only match must not silently lower into an ivar store. */
     MethodLookup rml = { .def_class = -1 };
-    if (recv >= 0 && attr && ty_is_object(rt) &&
-        call_attr_target(c, id, ty_object_class(rt), attr, CT_ATTR, &rml) &&
-        call_attr_target(c, id, ty_object_class(rt), attr, CT_ATTR | CT_WRITER, NULL)) {
+    int rd_at = recv >= 0 && attr && ty_is_object(rt) &&
+                call_attr_target(c, id, ty_object_class(rt), attr, CT_ATTR, &rml);
+    if (rd_at && call_attr_target(c, id, ty_object_class(rt), attr, CT_ATTR | CT_WRITER, NULL)) {
       rdcls = rml.def_class;
       const char *rn = comp_resolve_alias(c, rdcls, attr);
       char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", rn);
@@ -22329,6 +22329,21 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         }
         return 1;
       }
+    }
+    /* The reader the op-write calls first is no method where it runs, as the
+       plan answers at the node (its attr_* runs later, or never; a def of the
+       name made this write the two calls in desugar_call_op_write), and no
+       method_missing takes the call: CRuby's NoMethodError naming the reader,
+       once the receiver is evaluated; the value is never evaluated. */
+    if (recv >= 0 && attr && ty_is_object(rt) && !rd_at &&
+        !c->classes[ty_object_class(rt)].is_native_class &&
+        call_target(c, id, ty_object_class(rt), attr, 0, NULL) < 0 &&
+        !cplan_has_method_missing(c, id, ty_object_class(rt), 0)) {
+      emit_indent(b, indent);
+      buf_puts(b, "(void)");
+      emit_nomethod_raise(c, recv, 0, NULL, attr, "0", NULL, b);
+      buf_puts(b, ";\n");
+      return 1;
     }
     if (recv >= 0 && attr && rt == TY_POLY) {
       /* poly receiver (e.g. a Hash value that was never narrowed to a

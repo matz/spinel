@@ -398,18 +398,20 @@ int desugar_bare_class_self_calls(Compiler *c) {
    receiver's chain: `module Enumerable; def bar` wins over a top-level `def
    bar` there. A private one, or one of a module Enumerable includes, is not
    reached through self on these receivers yet, so it keeps the bare call. */
-static int ie_enum_reopen_answers(Compiler *c, int cls, const char *nm) {
+static int ie_enum_reopen_answers(Compiler *c, int id, int cls, const char *nm) {
   if (comp_ary_root(c, cls) < 0 || comp_ary_is_str(c, cls) || comp_ary_is_time(c, cls)) return 0;
+  /* (Enumerable's method of the name and its modules', as the plan answers bare call id for them: the method scope,
+     a private one too, its visibility the one the call meets) */
   int en = comp_core_class(c, CORE_ENUMERABLE);
-  int mi = en >= 0 ? comp_method_in_chain(c, en, nm, NULL) : -1;
+  int mi = en >= 0 ? call_target(c, id, en, nm, CT_METHODS, NULL) : -1;
   if (mi < 0) return 0;
   for (int m = 0; m < c->classes[en].nincluded_mods; m++) {
     int x = c->classes[en].included_mods[m];
-    if (x >= 0 && x < c->nclasses && comp_method_in_chain(c, x, nm, NULL) >= 0) return 0;
+    if (x >= 0 && x < c->nclasses && call_target(c, id, x, nm, CT_METHODS, NULL) >= 0) return 0;
   }
   return mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0) &&
-         comp_method_vis_in_chain(c, en, nm) == SP_VIS_PUBLIC;
+         cplan_method_vis(c, id, en, nm, 0, NULL) == SP_VIS_PUBLIC;
 }
 int desugar_ie_bare_object_calls(Compiler *c) {
   static const char *const names[] = {
@@ -438,7 +440,7 @@ int desugar_ie_bare_object_calls(Compiler *c) {
        a method of the program's Enumerable come ahead of it too. An
        undefined name is not the builtin's either. */
     int ro = nm ? comp_arysub_reopen(c, cls) : -1;
-    int enumr = nm && !hit && !is_arysub_kernel_name(nm) && ie_enum_reopen_answers(c, cls, nm) &&
+    int enumr = nm && !hit && !is_arysub_kernel_name(nm) && ie_enum_reopen_answers(c, id, cls, nm) &&
                 !cplan_undef_stops(c, id, cls, nm);
     int own = nm && (comp_arysub_name_is_array(c, id, cls, nm) || enumr ||
                      (comp_ary_is_str(c, cls) && sp_streq(nm, "dup"))) &&
@@ -10646,16 +10648,18 @@ static int ixw_held_store(NodeTable *nt, int source, const char *rname, const ch
    a class that defines both, or an Array, Hash or String subclass that
    defines one of the two, where the call on the instance reaches the
    builtin's other one (no undef of it, and no private or protected on it,
-   which would make the op-write raise NoMethodError)? */
-static int ixw_builtin_reaches(Compiler *c, int k, const char *name) {
-  return !comp_is_undeffed_in_chain(c, k, name) && comp_method_vis_in_chain(c, k, name) == SP_VIS_PUBLIC;
+   which would make the op-write raise NoMethodError)? As the plan answers
+   the op-write id for the name: the undef where it stops the call
+   (cplan_undef_stops), the visibility where the call runs (cplan_method_vis). */
+static int ixw_builtin_reaches(Compiler *c, int id, int k, const char *name) {
+  return !cplan_undef_stops(c, id, k, name) && cplan_method_vis(c, id, k, name, 0, NULL) == SP_VIS_PUBLIC;
 }
 static int ixw_user_class(Compiler *c, int id, int k) {
   int own_get = call_target(c, id, k, "[]", CT_METHODS, NULL) >= 0;
   int own_set = call_target(c, id, k, "[]=", CT_METHODS, NULL) >= 0;
   if (own_get && own_set) return 1;
   if (!own_get && !own_set) return 0;
-  return comp_ary_root(c, k) >= 0 && ixw_builtin_reaches(c, k, own_get ? "[]=" : "[]");
+  return comp_ary_root(c, k) >= 0 && ixw_builtin_reaches(c, id, k, own_get ? "[]=" : "[]");
 }
 
 int desugar_index_op_write_user(Compiler *c) {

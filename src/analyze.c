@@ -14806,12 +14806,15 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
        its own: Hash's []=, even where the class defines its own []=, which
        Hash#store does not call. Not where the class undefines store or
        makes it private (NoMethodError on a receiver other than self), nor
-       where a Hash reopen defines its own []=. */
+       where a Hash reopen defines its own []=. The visibility is the one
+       the plan answers where the call runs; the undef is the tables' (the
+       call is renamed, so no entry of store's tells at run time whether it
+       has run). */
     int scid = ty_is_object(hrt) ? ty_object_class(hrt) : -1;
     int sub = hrc >= 0 && scid >= 0 && comp_ary_is_hash(c, scid) &&
               (cplan_builtin_call(c, id) ||
-               (comp_arysub_name_is_array(c, id, scid, nm) && !comp_is_undeffed_in_chain(c, scid, nm) &&
-                (comp_method_vis_in_chain(c, scid, nm) == SP_VIS_PUBLIC ||
+               (comp_arysub_name_is_array(c, id, scid, nm) && !cplan_undefined(c, scid, 0, nm) &&
+                (cplan_method_vis(c, id, scid, nm, 0, NULL) == SP_VIS_PUBLIC ||
                  nt_kind(nt, hrc) == NK_SelfNode))) &&
               comp_builtin_kind_reopen_mi(c, id, TY_POLY_POLY_HASH, "[]=") < 0;
     if (hrc >= 0 && hac == 2 && nt_ref(nt, id, "block") < 0 &&

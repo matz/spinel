@@ -9487,7 +9487,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
               (call_target(c, id, k, name, CT_OWN, NULL) >= 0 || (rn && call_target(c, id, k, rn, CT_OWN, NULL) >= 0))) over = 1;
         }
         if (!over && c->classes[oci].naliases > 0 && rn && !sp_streq(rn, name) && call_attr_target(c, -1, oci, rn, CT_ATTR, NULL) &&
-            comp_method_vis_in_chain(c, oci, name) == SP_VIS_PUBLIC) {
+            cplan_method_vis(c, id, oci, name, 0, NULL) == SP_VIS_PUBLIC) {
           if (!an_pure_reads) {
             /* the name it was written as stays: nil answers that one
                (cplan_nil), as `nil.to_a` does under `alias to_a children` */

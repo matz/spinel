@@ -31,6 +31,9 @@ class Article
   extend Dsl
   machine do
     event :publish do transitions 1 end
+    # (an explicit self there is the receiver the block runs on too)
+    self.event(:hide) { transitions 2 }
   end
 end
 p Article.machine.events[:publish].t
+p Article.machine.events[:hide].t

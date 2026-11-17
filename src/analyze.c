@@ -4659,9 +4659,10 @@ int ie_tramp_effective_arg(Compiler *c, int caller_id, int p) {
 }
 
 static int ie_forward_target(Compiler *c, int call, int cls, int cm, const char *name, int receiverless, int *rb);
-/* ie_forward_target's answer for a forward to `X.instance_eval/exec(&blk)` on a boxed X at site: IE_FWD_POLY - site */
+/* ie_forward_target's answer for a forward to `X.instance_eval/exec(&blk)` on a boxed X at site: IE_FWD_POLY - 2 * site - rebound */
 #define IE_FWD_POLY (-(1 << 29))
-static int ie_fwd_resolve(Compiler *c, int t, int blk);
+static int ie_fwd_mark(int t, int rb) { int v = IE_FWD_POLY - t; return IE_FWD_POLY - (v | (rb ? 1 : 0)); }
+static int ie_fwd_resolve(Compiler *c, int t, int blk, int *rb);
 static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int blk, int *rb);
 static int ie_forward_hops;
 
@@ -4728,7 +4729,7 @@ static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, 
         if (is_instance_eval_family(cn)) {
           if (!cm && (r < 0 || rcls >= 0)) { *rb |= other; return rcls; }
           /* (the literal's own self calls say which classes it runs on: the caller asks, ie_fwd_resolve) */
-          if (!cm && rt == TY_POLY) { *rb |= other; return IE_FWD_POLY - node; }
+          if (!cm && rt == TY_POLY) return IE_FWD_POLY - (2 * node + other);
         }
         else if (ie_forward_hops < 8) {
           int hop = 0;
@@ -4736,7 +4737,8 @@ static int ie_forward_find(Compiler *c, int node, const Scope *s, int self_cls, 
           int t = ie_forward_target(c, node, rcls, cm, cn, r < 0, &hop);
           if (t < 0 && rt == TY_POLY) t = ie_class_value_target(c, node, r, rt, barg, &hop);
           ie_forward_hops--;
-          if (t >= 0 || t <= IE_FWD_POLY) { *rb |= other | hop; return t; }
+          if (t <= IE_FWD_POLY) return ie_fwd_mark(t, other | hop);
+          if (t >= 0) { *rb |= other | hop; return t; }
         }
       }
     }
@@ -4964,17 +4966,19 @@ static int ie_name_may_forward(Compiler *c, const char *nm) {
 /* A forward to a boxed receiver's instance_eval/exec runs literal blk on the
    one class its self calls pick (ie_poly_self_classes), the proc checked
    there at run time (emit_ie_proc); -1 when they pick none or several. */
-static int ie_fwd_resolve(Compiler *c, int t, int blk) {
+static int ie_fwd_resolve(Compiler *c, int t, int blk, int *rb) {
   if (t > IE_FWD_POLY) return t;
-  int site = IE_FWD_POLY - t, body = blk >= 0 && nt_kind(c->nt, blk) == NK_BlockNode ? nt_ref(c->nt, blk, "body") : -1, k[2];
+  int site = (IE_FWD_POLY - t) >> 1, body = blk >= 0 && nt_kind(c->nt, blk) == NK_BlockNode ? nt_ref(c->nt, blk, "body") : -1, k[2];
   if (body < 0) return -1;
-  return ie_poly_self_classes(c, site, nt_str(c->nt, site, "name"), body, k, 2, NULL) == 1 ? k[0] : -1;
+  if (ie_poly_self_classes(c, site, nt_str(c->nt, site, "name"), body, k, 2, NULL) != 1) return -1;
+  *rb |= (IE_FWD_POLY - t) & 1;
+  return k[0];
 }
 static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int blk, int *rb) {
   const char *nm = nt_str(c->nt, id, "name");
   int arg = nt_kind(c->nt, blk) == NK_BlockArgumentNode, cls = -1;
   if (rt == TY_CLASS && is_instance_eval_family(nm)) return -2 - id;
-  if (rt == TY_CLASS) return ie_fwd_resolve(c, ie_forward_target(c, id, class_recv_static_ci(c, recv), 1, nm, 0, rb), blk);
+  if (rt == TY_CLASS) return ie_fwd_resolve(c, ie_forward_target(c, id, class_recv_static_ci(c, recv), 1, nm, 0, rb), blk, rb);
   int may = rt == TY_POLY && ie_name_may_forward(c, nm);
   /* The classes whose chain answers the name, on each side, in place of
      every class on both: a class whose chain does not answer forwards
@@ -5407,8 +5411,8 @@ void build_ie_map(Compiler *c) {
     if (recv < 0) {
       /* receiverless instance_eval/exec inside an instance method: self. */
       cls = ie_implicit_self_class(c, id);
-      if (cls < 0) cls = ie_fwd_resolve(c, ie_forward_target(c, id, ie_receiverless_self_class(c, id), 0, nm, 1, &rb), blk);
-      if (cls < 0 && id < c->node_cap) cls = ie_fwd_resolve(c, ie_forward_target(c, id, c->node_cbody[id], 1, nm, 0, &rb), blk);
+      if (cls < 0) cls = ie_fwd_resolve(c, ie_forward_target(c, id, ie_receiverless_self_class(c, id), 0, nm, 1, &rb), blk, &rb);
+      if (cls < 0 && id < c->node_cap) cls = ie_fwd_resolve(c, ie_forward_target(c, id, c->node_cbody[id], 1, nm, 0, &rb), blk, &rb);
       if (cls < 0) continue;
     }
     else {
@@ -5435,7 +5439,7 @@ void build_ie_map(Compiler *c) {
       if (ty_is_object(rt) && !is_instance_eval_family(nm)) {
         /* not a direct instance_eval/exec: maybe a trampoline method on `cls`? */
         if (!comp_trampoline_kind(c, call_target(c, id, cls, nm, 0, NULL))) {
-          cls = ie_fwd_resolve(c, ie_forward_target(c, id, cls, 0, nm, 0, &rb), blk);
+          cls = ie_fwd_resolve(c, ie_forward_target(c, id, cls, 0, nm, 0, &rb), blk, &rb);
           if (cls < 0) continue;
         }
       }

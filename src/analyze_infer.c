@@ -3567,6 +3567,10 @@ static int an_int_nil_sensitive_use(Compiler *c) {
   static unsigned long dy_ty; static unsigned dy_edits; static int dy_valid;
   if (g_ibx_nt != nt) { g_ibx_nt = nt; g_ibx_latched = 0; st_nscopes = -1; dy_valid = 0; }
   if (g_ibx_latched) return 1;
+  /* (not latched yet, the answer reads every scope's calls and types: an
+     inferred type that asked it is kept only while nothing changes, as the
+     latch may flip on a type any scope settles later) */
+  imemo_dep_global();
   if (st_nscopes != c->nscopes || st_edits != nt->edits) {
     st_ans = an_int_nil_sensitive_static(c); st_nscopes = c->nscopes; st_edits = nt->edits; dy_valid = 0;
   }

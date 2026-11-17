@@ -2463,10 +2463,14 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
            binding's one argument would drop them */
         if (sp_streq(nvmod, "JSON") && (sp_streq(name, "generate") || sp_streq(name, "pretty_generate")) &&
             argc == 2) {
+          /* the options may run a user conversion (max_nesting's #to_int, an
+             unknown key's #to_s), as JSON.parse's may; and the answer is a new
+             String, so a handle a #to_s published on the way is cleared */
+          g_conv_emitted++;
           int t = ++g_tmp;
-          buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_boxed(c, argv[0], b);
+          buf_printf(b, "sp_strface_unpub(({ sp_RbVal _t%d = ", t); emit_boxed(c, argv[0], b);
           buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_json_generate_options(_t%d, ", t, t); emit_boxed(c, argv[1], b);
-          buf_printf(b, ", %d); })", sp_streq(name, "pretty_generate"));
+          buf_printf(b, ", %d); }))", sp_streq(name, "pretty_generate"));
           return 1;
         }
         /* one String representation: a handle argument's read publishes it

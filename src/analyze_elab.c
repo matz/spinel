@@ -8642,8 +8642,13 @@ static int lr_singleton_const_written(Compiler *c, const char *name, int own) {
   const LoadRecord *r = c->lrec;
   const int *par = NULL;
   for (int i = lr_srcw_next(r, c->nt, name, -1, 0); i >= 0; i = lr_srcw_next(r, c->nt, name, i, 0)) {
-    if (!own) return 1;
     if (!par) par = comp_parent_map(c);
+    /* (a write at a file's top level is Object's, which the lookup has
+       searched: `class Time` reopening the builtin in a library) */
+    if (!own) {
+      if (elab_lexical_header(c->nt, par, r->srcw[i].node) >= 0) return 1;
+      continue;
+    }
     for (int a = par[r->srcw[i].node]; a >= 0; a = par[a]) {
       NodeKind k = nt_kind(c->nt, a);
       if (k == NK_SingletonClassNode) return 1;

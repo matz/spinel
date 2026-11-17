@@ -13387,30 +13387,12 @@ static int bni_place_defaults(Compiler *c, int id, const NewFills *fl, int **pre
 }
 static int kwb_lv(NodeTable *nt, Scope *sc, const char *nm, int value);
 static int kwb_reject(NodeTable *nt, Scope *sc, const char *xn);
-/* The literal keys of call id's keywords that the keyword parameters of scope rmi do not name, as an Array of Symbols
-   (BNF_RAISE: the keys CRuby's `unknown keyword` names). */
-static int bni_unknown_keys(Compiler *c, int id, int rmi) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int an = nt_ref(nt, id, "arguments"), n = 0, en = 0, nkw = 0, m = 0, ar = nt_new_node(nt, "ArrayNode");
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL, kh = nt_argv_kwh(nt, av, n);
-  const int *el = kh >= 0 ? nt_arr(nt, kh, "elements", &en) : NULL;
-  int pn = nt_ref(nt, c->scopes[rmi].def_node, "parameters"), *ks = malloc(sizeof(int) * (size_t)(en + 1));
-  const int *kws = pn >= 0 ? nt_arr(nt, pn, "keywords", &nkw) : NULL;
-  if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int j = 0, named = 0; j < en; j++, named = 0) {
-    int key = nt_kind(nt, el[j]) == NK_AssocNode ? nt_ref(nt, el[j], "key") : -1;
-    if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) continue;
-    for (int i = 0; i < nkw && !named; i++) named = sp_streq(nt_str(nt, kws[i], "name"), nt_str(nt, key, "value"));
-    if (!named) ks[m++] = nt_clone_subtree(nt, key);
-  }
-  nt_node_set_arr(nt, ar, "elements", ks, m);
-  free(ks);
-  return ar;
-}
 static int sd_bcall(NodeTable *nt, const char *name, int recv, const int *args, int n);
-/* BNF_FILL's check of the keys a `**` passes, once the operands are held (rmi >= 0): `{the call's keywords}.keys - [the
-   keys scope rmi names]`, which its binding raises for before its defaults run (-1 where the call has no keywords). */
-static int bni_splat_unknown(Compiler *c, int id, int rmi) {
+/* The keys of call id's keywords that the keyword parameters of scope rmi do not name, once the operands are held (rmi >= 0):
+   `{the call's keywords}.keys - [the keys scope rmi names]`, the keys CRuby's `unknown keyword` names as rmi binds its
+   parameters, a `**`'s and the literal ones alike (BNF_RAISE, and a BNF_FILL whose `**` that binding checks; -1 where
+   the call has no keywords). */
+static int bni_unknown_keys(Compiler *c, int id, int rmi) {
   NodeTable *nt = (NodeTable *)c->nt;
   int an = nt_ref(nt, id, "arguments"), n = 0, en = 0, nkw = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL, kh = rmi >= 0 ? nt_argv_kwh(nt, av, n) : -1;
@@ -13443,7 +13425,7 @@ static int bni_splat_unknown(Compiler *c, int id, int rmi) {
    an effect run after the held operands. One that a forward's binding refuses for a
    keyword it does not name (BNF_RAISE) runs as an empty one does up to the raise of
    CRuby's `unknown keyword` (kwb_reject); a BNF_FILL whose `**` a forward's binding checks raises the keys
-   it does not name after the held operands and ahead of the defaults (bni_splat_unknown). The call left is the builtin's own
+   it does not name after the held operands and ahead of the defaults (bni_unknown_keys). The call left is the builtin's own
    (nt_mark_builtin_call), which the plan does not answer again. */
 static int desugar_builtin_new_init_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -13458,13 +13440,12 @@ static int desugar_builtin_new_init_args(Compiler *c) {
     /* (where the call stands is known before its operands are held: holding them rewrites the call) */
     int *par = du_parent_map(nt);
     if (!par || par[id] < 0) { free(par); continue; }
-    /* (the call's keys the raising forward does not name, before holding takes the keywords apart) */
-    int unk = form == BNF_RAISE ? bni_unknown_keys(c, id, fl.rmi) : -1;
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
-    /* (the keys a forward's binding raises for, after the held operands and ahead of the defaults, held ones too) */
-    int sk = form == BNF_FILL ? bni_splat_unknown(c, id, fl.rmi) : -1;
-    if (sk >= 0) {
+    /* (the keys a forward's binding raises for, from the held operands: a BNF_FILL's ahead of the defaults, a BNF_RAISE's after
+       those of the forwards ahead) */
+    int sk = form == BNF_FILL || form == BNF_RAISE ? bni_unknown_keys(c, id, fl.rmi) : -1;
+    if (sk >= 0 && form == BNF_FILL) {
       char xn[32];
       snprintf(xn, sizeof xn, "__bnu%d", id);
       pre = realloc(pre, sizeof(int) * (size_t)(np + 2));
@@ -13473,7 +13454,7 @@ static int desugar_builtin_new_init_args(Compiler *c) {
       pre[np++] = kwb_reject(nt, comp_scope_of(c, id), xn);
     }
     if (fl.n || fl.nk) np = bni_place_defaults(c, id, &fl, &pre, np, form != BNF_FILL);
-    if (np > 0 || unk >= 0) {
+    if (np > 0 || sk >= 0) {
       /* (a sequence of its own in the call's place, of fresh nodes throughout: the order plan keeps what it recorded of the old
          call and its operands by node; the held values run as statements of their own, the plain `new` last, after the
          raise of the keys a forward does not name) */
@@ -13485,12 +13466,12 @@ static int desugar_builtin_new_init_args(Compiler *c) {
       pre = realloc(pre, sizeof(int) * (size_t)(np + 3));
       if (!pre) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       for (int i = 0; i < np; i++)
-        if (fl.n || fl.nk) pre[i] = nt_clone_subtree(nt, pre[i]);
+        if (fl.n || fl.nk || sk >= 0) pre[i] = nt_clone_subtree(nt, pre[i]);
         else if (nt_kind(nt, pre[i]) == NK_LocalVariableWriteNode) pre[i] = nt_clone_subtree(nt, nt_ref(nt, pre[i], "value"));
-      if (unk >= 0) {
+      if (sk >= 0 && form == BNF_RAISE) {
         char xn[32];
         snprintf(xn, sizeof xn, "__bnu%d", id);
-        pre[np++] = kwb_lv(nt, comp_scope_of(c, id), xn, unk);
+        pre[np++] = kwb_lv(nt, comp_scope_of(c, id), xn, sk);
         pre[np++] = kwb_reject(nt, comp_scope_of(c, id), xn);
       }
       pre[np++] = nt_clone_subtree(nt, id);

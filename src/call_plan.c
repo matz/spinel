@@ -8122,25 +8122,29 @@ static int ct_call_keywords(const NodeTable *nt, const int *av, int nargs) {
   return kw;
 }
 /* ...and the keyword parameters kws of method sc (scope mi), which a bare `super` passes on as keywords: each the call
-   does not pass (kw: ct_call_keywords; a `**h` may pass any, which leaves only a default without an effect to fill,
-   ahead of it) into f, as ct_fill_defaults answers. FILL_RAISE where a literal key the call passes names none and no
-   keyword rest takes it (CRuby's ArgumentError, raised as the def binds its parameters). */
-static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws, int nkw, int id, int kw, NewFills *f, int *effects) {
-  int nargs = 0, args = nt_ref(c->nt, id, "arguments"), en = 0, placed = 1;
+   does not pass (kw: ct_call_keywords; a `**h` may pass any (maybe), which leaves only a default without an effect to
+   fill, ahead of it) into f, as ct_fill_defaults answers. FILL_RAISE where a literal key the call passes names none and
+   no keyword rest takes it (CRuby's ArgumentError, raised as the def binds its parameters, for every key it does not
+   name, a `**h`'s too). */
+static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws, int nkw, int id, int kw, int maybe, NewFills *f, int *effects) {
+  int nargs = 0, args = nt_ref(c->nt, id, "arguments"), en = 0, placed = 1, raise = 0;
   const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL;
   int kh = kw == NEWKW_SURE ? nt_argv_kwh(c->nt, av, nargs) : -1;
   const int *el = kh >= 0 ? nt_arr(c->nt, kh, "elements", &en) : NULL;
   for (int j = 0, named = 0; j < en; j++, named = 0) {
+    if (nt_kind(c->nt, el[j]) == NK_AssocSplatNode) continue;
     int key = nt_kind(c->nt, el[j]) == NK_AssocNode ? nt_ref(c->nt, el[j], "key") : -1;
     if (key < 0 || nt_kind(c->nt, key) != NK_SymbolNode) return 0;
     for (int i = 0; i < nkw && !named; i++) named = sp_streq(nt_str(c->nt, kws[i], "name"), nt_str(c->nt, key, "value"));
-    if (!named && sc->kwrest_idx < 0) return FILL_RAISE;
+    raise |= !named && sc->kwrest_idx < 0;
   }
+  if (raise) return FILL_RAISE;
   for (int i = 0, passed = 0; i < nkw; i++, passed = 0) {
-    for (int j = 0; j < en && !passed; j++) passed = sp_streq(nt_str(c->nt, kws[i], "name"), nt_str(c->nt, nt_ref(c->nt, el[j], "key"), "value"));
+    for (int j = 0; j < en && !passed; j++)
+      passed = nt_kind(c->nt, el[j]) == NK_AssocNode && sp_streq(nt_str(c->nt, kws[i], "name"), nt_str(c->nt, nt_ref(c->nt, el[j], "key"), "value"));
     if (passed) continue;
     int d = nt_ref(c->nt, kws[i], "value"), eff = d >= 0 && subtree_has_side_effect(c, d);
-    if (d < 0 || (kw == NEWKW_MAYBE && eff) || f->nk >= NEW_FILLS_MAX) return 0;
+    if (d < 0 || (maybe && eff) || f->nk >= NEW_FILLS_MAX) return 0;
     *effects |= eff;
     if (!ct_default_placeable(c, sc, d, ct_positionals(c, sc))) placed = 0;
     else { f->kmi[f->nk] = mi; f->kp[f->nk++] = kws[i]; }
@@ -8173,7 +8177,9 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
   /* (a keyword-dropping forward is one only where dropping them cannot be observed) */
   int kw_ok = !kw || builtin_new_keywords(c->classes[ci].name), unplaced = 0, effects = 0, kwpass = 0;
   /* (a `**h` alone, the call's only argument) */
-  int lone = kw == NEWKW_MAYBE && !open && !argc;
+  int lone = kw == NEWKW_MAYBE && !open && !argc, nargs = 0, args = nt_ref(c->nt, id, "arguments");
+  /* (literal keys beside a `**h`, which may add any) */
+  int ksplat = nt_argv_has_kwsplat(c->nt, args >= 0 ? nt_arr(c->nt, args, "arguments", &nargs) : NULL, nargs);
   for (int mi = start; mi >= 0 && !ct_behind_builtin_init(c, ci, mi); mi = cplan_super_target(c, -1, &c->scopes[mi], NULL)) {
     const Scope *sc = &c->scopes[mi];
     /* (a def of the class's own counts where the load record proves it made before the call can first run; where the call runs
@@ -8208,8 +8214,8 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
          rewrite would run ahead of them) */
       if (f->nk && (!kwrest || nkw || (!dopen && dargc < pos))) return BNF_REFUSE;
       if (kw == NEWKW_SURE && !kwrest) f->kwat = f->n;
-      int n0 = f->n, e0 = effects, fill = !dopen && dargc < pos ? ct_fill_defaults(c, sc, mi, dargc, f, &effects) : 1, kfill = 1;
-      if (fill && nkw) kfill = ct_fill_keywords(c, sc, mi, kws, nkw, id, kw, f, &effects);
+      int n0 = f->n, e0 = effects, maybe = kw == NEWKW_MAYBE || (kw == NEWKW_SURE && ksplat), fill = !dopen && dargc < pos ? ct_fill_defaults(c, sc, mi, dargc, f, &effects) : 1, kfill = 1;
+      if (fill && nkw) kfill = ct_fill_keywords(c, sc, mi, kws, nkw, id, kw, maybe, f, &effects);
       /* (a key this one does not name raises as it binds, before its own defaults run: what the forwards ahead fill has run) */
       if (kfill == FILL_RAISE) {
         f->n = n0, effects = e0, f->rmi = mi;
@@ -8220,7 +8226,7 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
       /* (a `**h` may hold a key this one does not name, which raises as it binds, before its defaults run: the rewrite checks
          the keys once the operands are held and ahead of the defaults (rmi), where no default with an effect is filled ahead
          of this one, which would run before the raise) */
-      if (kw == NEWKW_MAYBE && nkw && sc->kwrest_idx < 0 && effects != e0) {
+      if (maybe && nkw && sc->kwrest_idx < 0 && effects != e0) {
         if (e0 || f->rmi >= 0) return BNF_REFUSE;
         f->rmi = mi;
       }

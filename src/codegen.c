@@ -20315,6 +20315,11 @@ static int thread_current_only(const NodeTable *nt, int **par, int i) {
 static int loop_value_live(Compiler *c, int id) {
   return loop_has_valued_break(c, nt_ref(c->nt, id, "statements"));
 }
+/* Boxed values and containers can reach the runtime walkers, including
+   a pointer Array whose element kind names a program class. */
+static int value_needs_poly_hooks(TyKind t) {
+  return t == TY_POLY || ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t);
+}
 /* A position of a method's answer that holds a poly, Array or Hash value
    (a jump the walk does not follow, or one it gave up on, may) */
 static int scan_ret_leaf_polyish(const VpLeaf *leaf, void *ud) {
@@ -20326,7 +20331,7 @@ static int scan_ret_leaf_polyish(const VpLeaf *leaf, void *ud) {
   /* (the settled type, as program_needs_class_machinery reads it and for
      its reason) */
   TyKind t = comp_ntype_settled(c, leaf->node);
-  return t == TY_POLY || ty_is_array(t) || ty_is_hash(t);
+  return value_needs_poly_hooks(t);
 }
 /* Does the read of a thread-family constant (node i) run no thread: it sits
    in a method codegen does not write out (one nothing reaches,
@@ -20568,7 +20573,7 @@ static void scan_prologue_features(Compiler *c) {
   g_emit_obj_dispatch = program_has_obj_arm(c);
   {
     int polyish = 0, has_class = 0;
-#define SP_TT(t) do { TyKind _t = (t);       if (_t == TY_POLY || ty_is_array(_t) || ty_is_hash(_t)) polyish = 1;       else if (_t == TY_SYMBOL) g_emit_sym_rt = 1;       else if (_t == TY_CLASS) has_class = 1; } while (0)
+#define SP_TT(t) do { TyKind _t = (t);       if (value_needs_poly_hooks(_t)) polyish = 1;       else if (_t == TY_SYMBOL) g_emit_sym_rt = 1;       else if (_t == TY_CLASS) has_class = 1; } while (0)
     /* a def's Symbol where nothing uses it is no value of the program's
        (an_phase_pre_fixpoint leaves its name out of the table too) */
     int *par = an_parent_map(nt);

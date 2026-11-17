@@ -104,13 +104,7 @@ p pool2.max_by(5, &:score).map(&:v), pool2.min_by(2) { |x| x.v }.map(&:v)
   end
 end
 
-# more than 16 kept: the buffer is cut and the kept ones are sorted whole;
-# a key whose `<=>` answers the most negative Integer is read by its sign
+# more than 16 kept: the buffer is cut and the kept ones are sorted whole
+# (a key whose `<=>` answers the most negative Integer: max_by_n_cut_sign.rb)
 wide = Array.new(80) { |i| (i * 37) % 80 }
 p wide.min_by(17) { |x| x }, wide.max_by(17) { |x| x * 3 }
-class Far
-  attr_reader :v
-  def initialize(v) = @v = v
-  def <=>(o) = v == o.v ? 0 : (v < o.v ? -(2**62) * 2 : 2**62)
-end
-p wide.max_by(17) { |x| Far.new(x) }, wide.min_by(17) { |x| Far.new(x) }

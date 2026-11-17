@@ -9712,7 +9712,12 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *
            (class_def_builder(c->nt, c->classes[ci].def_node) < 0 ||
             !class_def_is_class(c->nt, c->classes[ci].def_node) ||
             !elab_names_object(c->nt, class_def_super(c->nt, node))))
-    { comp_class_set_def(c, ci, node); if (c->lrec) { free(c->lrec->rclass); c->lrec->rclass = NULL; } }   /* (the record class of a class is of its definition: elab_record_class_of) */
+    {
+      comp_class_set_def(c, ci, node);
+      /* (the record class of a class is of its definition: elab_record_class_of; a call's kept point read the
+         definition too: lr_chain_open) */
+      if (c->lrec) { free(c->lrec->rclass); c->lrec->rclass = NULL; c->lrec->callpt.made = 0; }
+    }
   elab_header_opened(c, node, ci, made);
   if (made) lr_fire_inherited(c, node);
   return ci;

@@ -124,6 +124,8 @@ struct LoadRecord {
   int *up;                   /* [n] the parent each node's point was climbed from */
   int *plan_par, plan_depth;
   unsigned char plan_made;
+  /* lr_call_point's last answer, under the state it was asked in */
+  struct LrCallPt { int made, id, cls, plan, ok; unsigned long edits; unsigned shape; unsigned long hgen; ElabStamp st; LoadPoint p; } callpt;
   unsigned char hold;        /* elab_hold: 1 asked for, 2 the map is made and kept as it is */
   /* the histories (elab_program) */
   int recorded;
@@ -7768,8 +7770,18 @@ int elab_record_cmethod(Compiler *c, int cls, const char *name) {
    unplaced, a chain through a class whose superclass it does not hold) */
 static int lr_call_point(Compiler *c, int id, int cls, LoadPoint *p) {
   LoadRecord *r = elab_fresh(c);
+  /* (the last ask kept, for the calls one site makes by many names: a respond_to? at a computed name asks every
+     candidate of the program. Not while the record is made, whose statements are still added) */
+  struct LrCallPt *k = &r->callpt;
+  ElabStamp st = elab_stamp(c);
+  int same = !r->walk && k->made && k->id == id && k->cls == cls && k->plan == (r->plan_depth != 0) && k->edits == c->nt->edits &&
+             k->shape == comp_class_shape_gen() && k->hgen == r->hgen && elab_stamp_same(k->st, st);
+  if (same) { *p = k->p; return k->ok; }
   *p = elab_point_of(c, id);
-  return p->region >= 0 && r->recorded && !r->st[p->seq].kept && !lr_unplaced(c, id) && !lr_chain_open(c, cls);
+  int ok = p->region >= 0 && r->recorded && !r->st[p->seq].kept && !lr_unplaced(c, id) && !lr_chain_open(c, cls);
+  if (!r->walk) *k = (struct LrCallPt){ .made = 1, .id = id, .cls = cls, .plan = r->plan_depth != 0, .edits = c->nt->edits,
+                                         .shape = comp_class_shape_gen(), .hgen = r->hgen, .st = st, .p = *p, .ok = ok };
+  return ok;
 }
 /* A class-side ask of the Class reopening that finds none on its
    singleton: the tables' side holds the reopening's class methods as its

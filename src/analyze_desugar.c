@@ -398,18 +398,20 @@ int desugar_bare_class_self_calls(Compiler *c) {
    receiver's chain: `module Enumerable; def bar` wins over a top-level `def
    bar` there. A private one, or one of a module Enumerable includes, is not
    reached through self on these receivers yet, so it keeps the bare call. */
-static int ie_enum_reopen_answers(Compiler *c, int cls, const char *nm) {
+static int ie_enum_reopen_answers(Compiler *c, int id, int cls, const char *nm) {
   if (comp_ary_root(c, cls) < 0 || comp_ary_is_str(c, cls) || comp_ary_is_time(c, cls)) return 0;
+  /* (Enumerable's method of the name and its modules', as the plan answers bare call id for them: the method scope,
+     a private one too, its visibility the one the call meets) */
   int en = comp_core_class(c, CORE_ENUMERABLE);
-  int mi = en >= 0 ? comp_method_in_chain(c, en, nm, NULL) : -1;
+  int mi = en >= 0 ? call_target(c, id, en, nm, CT_METHODS, NULL) : -1;
   if (mi < 0) return 0;
   for (int m = 0; m < c->classes[en].nincluded_mods; m++) {
     int x = c->classes[en].included_mods[m];
-    if (x >= 0 && x < c->nclasses && comp_method_in_chain(c, x, nm, NULL) >= 0) return 0;
+    if (x >= 0 && x < c->nclasses && call_target(c, id, x, nm, CT_METHODS, NULL) >= 0) return 0;
   }
   return mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0) &&
-         comp_method_vis_in_chain(c, en, nm) == SP_VIS_PUBLIC;
+         cplan_method_vis(c, id, en, nm, 0, NULL) == SP_VIS_PUBLIC;
 }
 int desugar_ie_bare_object_calls(Compiler *c) {
   static const char *const names[] = {
@@ -438,7 +440,7 @@ int desugar_ie_bare_object_calls(Compiler *c) {
        a method of the program's Enumerable come ahead of it too. An
        undefined name is not the builtin's either. */
     int ro = nm ? comp_arysub_reopen(c, cls) : -1;
-    int enumr = nm && !hit && !is_arysub_kernel_name(nm) && ie_enum_reopen_answers(c, cls, nm) &&
+    int enumr = nm && !hit && !is_arysub_kernel_name(nm) && ie_enum_reopen_answers(c, id, cls, nm) &&
                 !cplan_undef_stops(c, id, cls, nm);
     int own = nm && (comp_arysub_name_is_array(c, id, cls, nm) || enumr ||
                      (comp_ary_is_str(c, cls) && sp_streq(nm, "dup"))) &&
@@ -3543,16 +3545,7 @@ int desugar_compose_method_operand(Compiler *c) {
         !(at == TY_METHOD || at == TY_PROC || at == TY_POLY)) continue;
     int a0 = av[0];
     int base = nt->count;
-    if (r_m) {
-      int tp = nt_new_node(nt, "CallNode");
-      if (tp < 0) continue;
-      nt_node_set_ref(nt, tp, "receiver", recv);
-      nt_node_set_str(nt, tp, "name", "to_proc");
-      nt_node_set_ref(nt, tp, "arguments", -1);
-      nt_node_set_ref(nt, tp, "block", -1);
-      nt_node_set_ref(nt, id, "receiver", tp);
-      nt_set_ignore_visibility(nt, id, 0);
-    }
+    if (r_m && an_interpose_recv_call(c, id, "to_proc", -1) < 0) continue;
     if (a_m) {
       int tp = nt_new_node(nt, "CallNode");
       int na = nt_new_node(nt, "ArgumentsNode");
@@ -4468,15 +4461,7 @@ int desugar_method_curry(Compiler *c) {
     if (recv < 0) continue;
     if (infer_type(c, recv) != TY_METHOD) continue;
     int base = nt->count;
-    int tp = nt_new_node(nt, "CallNode");
-    if (tp < 0) continue;
-    nt_node_set_ref(nt, tp, "receiver", recv);
-    nt_node_set_str(nt, tp, "name", "to_proc");
-    nt_node_set_ref(nt, tp, "arguments", -1);
-    nt_node_set_ref(nt, tp, "block", -1);
-    nt_node_set_ref(nt, id, "receiver", tp);
-    nt_set_ignore_visibility(nt, id, 0);
-    comp_grow_node_arrays(c);
+    if (an_interpose_recv_call(c, id, "to_proc", -1) < 0) continue;
     int encl = c->nscope[id];
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;
@@ -4554,15 +4539,7 @@ int desugar_int_enum_with_index(Compiler *c) {
       nt_node_set_ref(nt, id, "block", -1);
       nt_node_set_ref(nt, id, "arguments", -1);
     }
-    else {
-      int ec = nt_new_node(nt, "CallNode");
-      if (ec < 0) continue;
-      nt_node_set_ref(nt, ec, "receiver", recv);
-      nt_node_set_str(nt, ec, "name", "each");
-      nt_node_set_ref(nt, ec, "arguments", -1);
-      nt_node_set_ref(nt, ec, "block", -1);
-      nt_node_set_ref(nt, id, "receiver", ec);
-    }
+    else if (an_interpose_recv_call(c, id, "each", -1) < 0) continue;
     comp_grow_node_arrays(c);
     int encl = c->nscope[id];
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
@@ -4962,16 +4939,9 @@ int desugar_user_not_match(Compiler *c) {
     int cid = ty_object_class(rt);
     if (cid < 0 || call_target(c, id, cid, "=~", CT_METHODS, NULL) < 0) continue;
     if (call_target(c, id, cid, "!~", CT_METHODS, NULL) >= 0) continue;  /* user !~ wins */
-    int inner = nt_new_node(nt, "CallNode");
-    nt_node_set_str(nt, inner, "name", "=~");
-    nt_node_set_ref(nt, inner, "receiver", recv);
-    nt_node_set_ref(nt, inner, "arguments", nt_ref(nt, id, "arguments"));
-    nt_node_set_ref(nt, inner, "block", -1);
+    if (an_interpose_recv_call(c, id, "=~", nt_ref(nt, id, "arguments")) < 0) continue;
     nt_node_set_str(nt, id, "name", "!");
-    nt_node_set_ref(nt, id, "receiver", inner);
     nt_node_set_ref(nt, id, "arguments", -1);
-    comp_grow_node_arrays(c);
-    c->nscope[inner] = c->nscope[id];
     changed = 1;
   }
   free(calls);
@@ -5185,16 +5155,9 @@ int desugar_obj_range_via_a(Compiler *c) {
       }
       continue;
     }
-    int toa = nt_new_node(nt, "CallNode");
+    int toa = an_interpose_recv_call(c, id, "to_a", -1);
     if (toa < 0) continue;
-    nt_node_set_str(nt, toa, "name", "to_a");
     nt_node_set_int(nt, toa, "made_to_a", 1);
-    nt_node_set_ref(nt, toa, "receiver", recv);
-    nt_node_set_ref(nt, toa, "arguments", -1);
-    nt_node_set_ref(nt, toa, "block", -1);
-    comp_grow_node_arrays(c);
-    c->nscope[toa] = c->nscope[id];
-    nt_node_set_ref(nt, id, "receiver", toa);
     changed = 1;
   }
   return changed;
@@ -10646,16 +10609,18 @@ static int ixw_held_store(NodeTable *nt, int source, const char *rname, const ch
    a class that defines both, or an Array, Hash or String subclass that
    defines one of the two, where the call on the instance reaches the
    builtin's other one (no undef of it, and no private or protected on it,
-   which would make the op-write raise NoMethodError)? */
-static int ixw_builtin_reaches(Compiler *c, int k, const char *name) {
-  return !comp_is_undeffed_in_chain(c, k, name) && comp_method_vis_in_chain(c, k, name) == SP_VIS_PUBLIC;
+   which would make the op-write raise NoMethodError)? As the plan answers
+   the op-write id for the name: the undef where it stops the call
+   (cplan_undef_stops), the visibility where the call runs (cplan_method_vis). */
+static int ixw_builtin_reaches(Compiler *c, int id, int k, const char *name) {
+  return !cplan_undef_stops(c, id, k, name) && cplan_method_vis(c, id, k, name, 0, NULL) == SP_VIS_PUBLIC;
 }
 static int ixw_user_class(Compiler *c, int id, int k) {
   int own_get = call_target(c, id, k, "[]", CT_METHODS, NULL) >= 0;
   int own_set = call_target(c, id, k, "[]=", CT_METHODS, NULL) >= 0;
   if (own_get && own_set) return 1;
   if (!own_get && !own_set) return 0;
-  return comp_ary_root(c, k) >= 0 && ixw_builtin_reaches(c, k, own_get ? "[]=" : "[]");
+  return comp_ary_root(c, k) >= 0 && ixw_builtin_reaches(c, id, k, own_get ? "[]=" : "[]");
 }
 
 int desugar_index_op_write_user(Compiler *c) {
@@ -10897,15 +10862,11 @@ int desugar_to_h_block(Compiler *c) {
       }
     }
     int mapargs = nt_new_node(nt, "ArgumentsNode");
-    int mapcall = nt_new_node(nt, "CallNode");
-    if (mapargs < 0 || mapcall < 0) continue;          /* node-table OOM: leave as-is */
+    if (mapargs < 0) continue;                          /* node-table OOM: leave as-is */
     nt_node_set_arr(nt, mapargs, "arguments", NULL, 0); /* map takes no positional args */
-    nt_node_set_ref(nt, mapcall, "receiver", recv);
-    nt_node_set_str(nt, mapcall, "name", "map");
-    nt_node_set_ref(nt, mapcall, "arguments", mapargs);
+    int mapcall = an_interpose_recv_call(c, id, "map", mapargs);   /* to_h now consumes the mapped pairs */
+    if (mapcall < 0) continue;
     nt_node_set_ref(nt, mapcall, "block", blk);
-    nt_node_set_ref(nt, id, "receiver", mapcall);      /* to_h now consumes the mapped pairs */
-    nt_set_ignore_visibility(nt, id, 0);
     nt_node_set_ref(nt, id, "block", -1);              /* and no longer carries the block */
     comp_grow_node_arrays(c);
     int encl = c->nscope[id];
@@ -14126,22 +14087,15 @@ int desugar_enumerable_via_to_a(Compiler *c) {
        Hash has no such arm, so it routes either way. */
     if (how == 2 && rt == TY_RANGE && nt_ref(nt, id, "block") < 0) continue;
     int base = nt->count;
-    int toa = nt_new_node(nt, "CallNode");
+    int toa = an_interpose_recv_call(c, id, "to_a", -1);
     if (toa < 0) continue;
-    nt_node_set_ref(nt, toa, "receiver", recv);
-    nt_node_set_str(nt, toa, "name", "to_a");
     nt_node_set_int(nt, toa, "made_to_a", 1);
-    nt_node_set_ref(nt, toa, "arguments", -1);
-    nt_node_set_ref(nt, toa, "block", -1);
     /* The with-block group answers the RECEIVER, not the pairs it walked, so
        mark the synthesized hop: inference and the value emitter read it to
        yield the original Hash / Range (#3842). A `to_a` the program wrote
        itself carries no mark and keeps answering its array. */
     if (how == 2) nt_node_set_str(nt, toa, "enum_recv", "1");
     nt_node_set_int(nt, toa, "range_hop", 1);   /* srange_member_hop */
-    nt_node_set_ref(nt, id, "receiver", toa);
-    nt_set_ignore_visibility(nt, id, 0);
-    comp_grow_node_arrays(c);
     for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
     changed = 1;
   }

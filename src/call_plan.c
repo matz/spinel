@@ -6129,6 +6129,44 @@ int cplan_undef_stops(Compiler *c, int id, int cls, const char *name) {
   int e = call_target(c, id, cls, name, 0, &ml);
   return e < 0 || ml.kind != ML_ENTRY || c->scopes[e].entry != ENTRY_DISPATCH;
 }
+/* See call_plan.h. */
+int cplan_level_answers(Compiler *c, int id, int k, const char *name) {
+  int own = ELAB_UNKNOWN;
+  if (id >= 0) {
+    int framed = elab_plan_enter(c, id);
+    own = elab_call_own_method(c, id, k, name, 0, 0);
+    if (framed) elab_plan_leave(c);
+  }
+  if (own == ELAB_YES) return 1;
+  ClassInfo *ci = &c->classes[k];
+  mtab_enter(c);   /* (the tables' entries of the level: their answer where the record cannot tell, and their origin) */
+  int mi = comp_method_in_class(c, k, name);
+  int def = mi >= 0 && (!c->scopes[mi].is_include_copy || c->scopes[mi].is_prepend_copy);
+  int rd = comp_is_own_reader(ci, name), rd_copy = 0;
+  for (int m = 0; rd && m < ci->nprepended_mods; m++) {
+    int p = ci->prepended_mods[m];
+    rd_copy = rd_copy || (p >= 0 && p < c->nclasses && comp_is_reader(&c->classes[p], name));
+  }
+  mtab_leave(c);
+  int al = 0, al_copy = 0;
+  for (int a = 0; a < ci->naliases; a++)
+    if ((!ci->alias_sg || !ci->alias_sg[a]) && sp_streq(ci->alias_new[a], name)) {
+      al = 1;
+      al_copy = al_copy || ci->alias_node[a] < 0;
+    }
+  /* The record's none answers where the record places every entry the
+     tables hold for the name at this level: a def, reader or alias of the
+     level's own body. An entry a mixin copied into the level (a prepend's
+     def or reader, an alias an include copied, which has no statement of
+     its own) is no source the record models there, and the tables answer. */
+  int ans = own == ELAB_NO ? (def && c->scopes[mi].is_prepend_copy) || rd_copy || al_copy : def || rd || al;
+  /* (the tables' answer is noted, as call_target's are: unasked with no
+     site, where the record cannot tell, or a copy against the record's none) */
+  if (g_method_table_check && (own == ELAB_UNKNOWN || ans))
+    mtab_table(c, id, k, 0, name, id < 0 ? MLW_UNASKED : own == ELAB_NO ? MLW_DISAGREE :
+                                  elab_in_unplaced_block(c, id) ? MLW_UNPLACED : MLW_MANY);
+  return ans;
+}
 /* The builtin class a program class's class side inherits from (Object
    unless it names another), for the singleton methods it answers; NULL where
    the chain ends at a native class, a Struct or a superclass that is no

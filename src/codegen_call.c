@@ -1443,7 +1443,7 @@ int poly_exc_cand(Compiler *c, const char *name) {
 
 static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int prim_cand, int exc_cand,
                                         const char *pick_name, Buf *b);
-static void emit_poly_dispatch_key_top(Compiler *c, int tv, int key_guard, int prim_cand, int exc_cand,
+static void emit_poly_dispatch_key_top(Compiler *c, int id, int tv, int key_guard, int prim_cand, int exc_cand,
                                        const char *pick_name, Buf *b);
 /* `sp_io_pick_class(<handle>, names, idx)` over the reopened IO classes
    that define `name` (public ones only when asked): the one the handle's
@@ -1654,8 +1654,9 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
 }
 /* The dispatch key of a whole dispatch: emit_poly_dispatch_key_pick's, and
    an Array subclass instance, boxed as its Array, keys by the class its
-   scan names (#7449). The pick's own recursions take the pick alone. */
-static void emit_poly_dispatch_key_top(Compiler *c, int tv, int key_guard, int prim_cand, int exc_cand,
+   scan names (#7449), as the plan answers call id (-1 for a key of no one
+   name). The pick's own recursions take the pick alone. */
+static void emit_poly_dispatch_key_top(Compiler *c, int id, int tv, int key_guard, int prim_cand, int exc_cand,
                                        const char *pick_name, Buf *b) {
   if (!program_has_arysub(c)) {
     emit_poly_dispatch_key_pick(c, tv, key_guard, prim_cand, exc_cand, pick_name, b);
@@ -1669,17 +1670,17 @@ static void emit_poly_dispatch_key_top(Compiler *c, int tv, int key_guard, int p
   /* a class that leaves the name to Array keys by its Array's kind, to
      the builtin arms (comp_arysub_name_is_array) */
   for (int k = 0; pick_name && k < c->nclasses; k++)
-    if (comp_arysub_name_is_array(c, -1, k, pick_name)) buf_printf(b, " && _t%d != %d", kt, k);
+    if (comp_arysub_name_is_array(c, id, k, pick_name)) buf_printf(b, " && _t%d != %d", kt, k);
   buf_printf(b, " ? _t%d : ", kt);
   emit_poly_dispatch_key_pick(c, tv, key_guard, prim_cand, exc_cand, pick_name, b);
   buf_puts(b, "; })");
 }
 void emit_poly_dispatch_key(Compiler *c, int tv, int key_guard, int prim_cand, int exc_cand, Buf *b) {
-  emit_poly_dispatch_key_top(c, tv, key_guard, prim_cand, exc_cand, NULL, b);
+  emit_poly_dispatch_key_top(c, -1, tv, key_guard, prim_cand, exc_cand, NULL, b);
 }
 /* See codegen_call_arms.h. */
-void emit_poly_plan_key(Compiler *c, unsigned form, int tv, const char *name, Buf *b) {
-  emit_poly_dispatch_key_top(c, tv, (form & (PPF_KEY_CLS0 | PPF_KEY_CLSV)) != 0, (form & PPF_KEY_PRIM) != 0,
+void emit_poly_plan_key(Compiler *c, int id, unsigned form, int tv, const char *name, Buf *b) {
+  emit_poly_dispatch_key_top(c, id, tv, (form & (PPF_KEY_CLS0 | PPF_KEY_CLSV)) != 0, (form & PPF_KEY_PRIM) != 0,
                              (form & PPF_KEY_EXC) != 0, name, b);
 }
 
@@ -1808,14 +1809,16 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
   }
   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ ? _t%d.cls_id", tv, tv);
   /* an Integer or Float whose own reopening (if any) lacks the name takes
-     the Numeric reopening's arm */
+     the Numeric reopening's arm (the plan's no-site asks: the key picks
+     among the arms the dispatch emits, one per reopening that has the
+     method anywhere, as poly_key_reopen asks) */
   int nmi = comp_builtin_class_named(c, "Numeric");
   if (nmi >= 0 && !(class_is_prim_reopen(c, nmi) &&
-                    (!pick_name || comp_method_in_chain(c, nmi, pick_name, NULL) >= 0))) nmi = -1;
+                    (!pick_name || call_target(c, -1, nmi, pick_name, CT_METHODS, NULL) >= 0))) nmi = -1;
   for (unsigned i = 0; i < sizeof P / sizeof P[0]; i++) {
     int idx = comp_core_class(c, P[i].cls);
     if (nmi >= 0 && (P[i].cls == CORE_INTEGER || P[i].cls == CORE_FLOAT) &&
-        (idx < 0 || (pick_name && comp_method_in_chain(c, idx, pick_name, NULL) < 0))) idx = nmi;
+        (idx < 0 || (pick_name && call_target(c, -1, idx, pick_name, CT_METHODS, NULL) < 0))) idx = nmi;
     if (idx >= 0) buf_printf(b, " : _t%d.tag == %s ? %d", tv, P[i].tag, idx);
   }
   { int ti = comp_core_class(c, CORE_TRUECLASS), fi = comp_core_class(c, CORE_FALSECLASS);
@@ -2110,12 +2113,13 @@ static int cls_value_answer_raises(const char *t) {
    answer does not fit the slot the dispatch assigns. */
 /* Does the program give a class value the name through a method of its own on what every class value is an
    object of: Object, Module, Class, Kernel or BasicObject (`class Object; private def top`)? Such a method answers
-   for a class value whatever the builtin tables hold (`Integer.send(:top)`). */
-static int cls_side_program_answers(Compiler *c, const char *name) {
+   for a class value whatever the builtin tables hold (`Integer.send(:top)`). As the plan answers class-value call id
+   for the name: the version live where it runs. */
+static int cls_side_program_answers(Compiler *c, int id, const char *name) {
   static const int owners[] = { CORE_OBJECT, CORE_MODULE, CORE_CLASS, CORE_KERNEL, CORE_BASIC_OBJECT };
   for (unsigned i = 0; i < sizeof owners / sizeof *owners; i++) {
     int k = comp_core_class(c, owners[i]);
-    if (k >= 0 && call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+    if (k >= 0 && call_target(c, id, k, name, CT_METHODS, NULL) >= 0) return 1;
   }
   return 0;
 }
@@ -2133,7 +2137,7 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
      and the Hash emitter answered `empty?` and `none?` on the class value
      (its conversion of a Class is NULL, "empty"): `String.send(:empty?)`
      was true where CRuby raises NoMethodError. */
-  if (!builtin_method_answers("Object", name, 1, 0) && !cls_side_program_answers(c, name)) return 0;
+  if (!builtin_method_answers("Object", name, 1, 0) && !cls_side_program_answers(c, id, name)) return 0;
   for (int a = 0; a < argc; a++) {
     if (nt_kind(nt, argv[a]) == NK_SplatNode) return 0;
     if (subtree_has_side_effect(c, argv[a]) && repr_of(c, argv[a]).as_ty != atmp_ty[a]) return 0;
@@ -2222,11 +2226,10 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
   int argc = 0; const int *argv = call_args(nt, id, &argc);
   if (recv < 0 || nt_ref(nt, id, "block") >= 0 || g_n_argov + 1 > MAX_ARG_OVERRIDE ||
       nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return 0;
-  /* (a name the class side does not answer keeps the switch's raise, as
-     above: the emitters under the face would answer for a value of
-     another class) */
-  const char *nm = nt_str(nt, id, "name");
-  if (!nm || (!builtin_method_answers("Object", nm, 1, 0) && !cls_side_program_answers(c, nm))) return 0;
+  /* (the plan makes a trial arm only for a Module reflection name
+     (cpoly_cls_value_trials), which every class value answers, so the
+     switch's raise for a name the class side does not answer is not
+     this arm's to keep) */
   /* each argument runs once, in the arm that is taken */
   for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
   int sv_tmp = g_tmp;
@@ -11054,7 +11057,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* a genuine String in a slot whose name a user class owns (#4816) */
       emit_poly_str_prearm(c, id, recv, name, 0, NULL, NULL, NULL, ret, tv, tr, b);
       buf_puts(b, "switch (");
-      emit_poly_plan_key(c, form, tv, name, b);
+      emit_poly_plan_key(c, id, form, tv, name, b);
       buf_puts(b, ") {");
       if (g_plan_check) pa_resume(pa_frame0);
       if (g_plan_check) pa_flags(form);
@@ -11532,7 +11535,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* where this switch starts, so its end can tell whether any arm below
          wrote the `default:` label (see the builtin default at the close) */
       size_t sw_start = b->len;
-      emit_poly_plan_key(c, form, tv, name, b);
+      emit_poly_plan_key(c, id, form, tv, name, b);
       buf_puts(b, ") {");
       if (g_plan_check) pa_resume(pa_frame);
       if (g_plan_check) pa_flags(form);
@@ -12139,7 +12142,8 @@ static int emit_new_arity_check(Compiler *c, int initm, int argc,
 /* Does this initialize's parameter `idx` default to an expression that reads
    the object being constructed -- self, an ivar, or an implicit-self call the
    class answers? Such a default cannot be emitted at the call site: there is no
-   instance there yet. */
+   instance there yet. (A reader asks the plan with no site: the default runs at
+   every construction, the ones after an attr_reader of the name has run too.) */
 static int ctor_default_reads_self(Compiler *c, Scope *m, int node, int depth) {
   if (node < 0 || depth > 60) return 0;
   const NodeTable *nt = c->nt;
@@ -12150,7 +12154,7 @@ static int ctor_default_reads_self(Compiler *c, Scope *m, int node, int depth) {
   if (k == NK_CallNode && nt_ref(nt, node, "receiver") < 0 && m->class_id >= 0) {
     const char *cn = nt_str(nt, node, "name");
     if (cn && (call_target(c, node, m->class_id, cn, 0, NULL) >= 0 ||
-               comp_reader_in_chain(c, m->class_id, cn, NULL) ||
+               call_attr_target(c, -1, m->class_id, cn, CT_ATTR, NULL) ||
                builtin_instance_method_known(c->classes[m->class_id].name, cn))) return 1;
   }
   const SpNode *nd = &nt->nodes[node];
@@ -23717,7 +23721,7 @@ static int object_reopen_builtin_owns(Compiler *c, int id, int own, const char *
   for (int k = 0; k < c->nclasses; k++) {
     if (k == own || !c->classes[k].name) continue;
     if (!class_is_builtin_reopen(c, k) && builtin_class_id(c->classes[k].name) == 0) continue;
-    if (call_target(c, id, k, vnm, CT_OWN, NULL) >= 0 || comp_reader_in_chain(c, k, vnm, NULL)) return 1;
+    if (call_target(c, id, k, vnm, CT_OWN, NULL) >= 0 || call_attr_target(c, id, k, vnm, CT_ATTR, NULL)) return 1;
   }
   return 0;
 }
@@ -33498,7 +33502,9 @@ int ie_body_ivar_write(const NodeTable *nt, int node) {
 /* Does the body still make a receiverless call that one of the candidate
    classes answers? A literal block's calls were given a `self` receiver
    (desugar_instance_eval_builtin); a forwarded block's were not, and only a
-   class that answers them can run it. */
+   class that answers them can run it. (A reader asks the plan with no site:
+   the block runs whenever the instance_eval does, after an attr_reader of
+   the name has run too.) */
 static int ie_body_bare_call(Compiler *c, int node, const int *cand, int nc) {
   const NodeTable *nt = c->nt;
   if (node < 0) return 0;
@@ -33507,7 +33513,7 @@ static int ie_body_bare_call(Compiler *c, int node, const int *cand, int nc) {
   if (k == NK_CallNode && nt_ref(nt, node, "receiver") < 0) {
     const char *nm = nt_str(nt, node, "name");
     for (int i = 0; nm && i < nc; i++)
-      if (call_target(c, node, cand[i], nm, 0, NULL) >= 0 || comp_reader_in_chain(c, cand[i], nm, NULL))
+      if (call_target(c, node, cand[i], nm, 0, NULL) >= 0 || call_attr_target(c, -1, cand[i], nm, CT_ATTR, NULL))
         return 1;
   }
   int nr = nt_num_refs(nt, node);

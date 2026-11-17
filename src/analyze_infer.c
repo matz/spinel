@@ -474,28 +474,14 @@ int an_program_spawns_threads(Compiler *c) {
 
 /* Does a class other than a native one read `name` as an attribute: an
    attr_reader, a Struct/Data member, or an alias of one? Asked the way the
-   emitter asks (poly_name_user_claimed, comp_reader_in_chain),
-   so inference and emission take the same arm. */
+   emitter asks (poly_name_user_claimed: the accessor of a class, with no
+   site, as a boxed dispatch's arm of any class is), so inference and
+   emission take the same arm. */
 static int an_class_reads_name(Compiler *c, const char *name) {
   if (an_builtin_only) return 0;   /* deriving the builtin-only answer (#3459) */
-  /* asked per call site: one answer per name while the class and scope
-     tables stand still (the memo an_user_defines_or_reads keeps, for the
-     one name this is asked about) */
-  static char memo_name[64];
-  static unsigned memo_gen;
-  static int memo_ncls = -1, memo_nsc = -1, memo_ans;
-  int memo = comp_scope_index_is_frozen() && strlen(name) < sizeof memo_name;
-  if (memo && memo_ncls == c->nclasses && memo_nsc == c->nscopes &&
-      memo_gen == comp_scope_index_gen() && sp_streq(memo_name, name)) return memo_ans;
-  int ans = 0;
-  for (int k = 0; k < c->nclasses && !ans; k++)
-    if (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ans = 1;
-  if (memo) {
-    snprintf(memo_name, sizeof memo_name, "%s", name);
-    memo_gen = comp_scope_index_gen(); memo_ncls = c->nclasses; memo_nsc = c->nscopes;
-    memo_ans = ans;
-  }
-  return ans;
+  for (int k = 0; k < c->nclasses; k++)
+    if (!c->classes[k].is_native_class && call_attr_target(c, -1, k, name, CT_ATTR, NULL)) return 1;
+  return 0;
 }
 
 /* Does the program define a Struct or a Data class? */
@@ -6252,12 +6238,15 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
 /* The class method `===` that class `ci` (or a class above it) defines in
    the program, or -1. A builtin row's own `===` does not count. A `when` or
    `in` arm asks as the implied call its row makes (host, the node that holds
-   the row; op its operand); a reader that stands behind no such node (a
-   survey of the program's classes) passes host -1, the no-site ask, which
-   keeps its read counted as the open node's. */
+   the row; op its operand); a written `K === x` asks as the call it is (host
+   the call, op -1), which binds the version live where it runs; a reader
+   that stands behind no such node (a survey of the program's classes)
+   passes host -1, the no-site ask, which keeps its read counted as the open
+   node's. */
 int class_any_cmethod_eqq(Compiler *c, int host, int op, int ci) {
-  int mi = ci < 0 ? -1 : host >= 0 ? cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD | CIT_TABLE, NULL)
-                                   : call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL);
+  int mi = ci < 0 ? -1 : host < 0 ? call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL)
+         : op < 0 ? call_target(c, host, ci, "===", CT_CMETHOD, NULL)
+         : cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD | CIT_TABLE, NULL);
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
       nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
   /* (a super in it reaches Module#===, which the call cannot run yet: the
@@ -6387,7 +6376,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     if (argc == 1 && sp_streq(name, "===")) {
       int eci = nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode
                 ? const_node_class_index(c, recv) : -2;
-      int emi = eci >= 0 ? class_any_cmethod_eqq(c, -1, -1, eci) : -1;
+      int emi = eci >= 0 ? class_any_cmethod_eqq(c, id, -1, eci) : -1;
       if (emi >= 0 && c->scopes[emi].ret != TY_UNKNOWN) { *out = c->scopes[emi].ret; return 1; }
       if (eci == -2 && class_eqq_answers_value(c)) { *out = TY_POLY; return 1; }
     }
@@ -6600,9 +6589,10 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       }
     }
     /* a member/method literally named `class` (a Data/Struct member) shadows
-       Object#class: fall through to the reader/method dispatch (#2975) */
+       Object#class: fall through to the reader/method dispatch (#2975),
+       where the accessor answers the call (it has run where the call runs) */
     if (ty_is_object(rt) &&
-        !(ty_object_class(rt) >= 0 && comp_reader_in_chain(c, ty_object_class(rt), "class", NULL)))
+        !(ty_object_class(rt) >= 0 && call_attr_target(c, id, ty_object_class(rt), name, CT_ATTR, NULL)))
       { *out = TY_CLASS; return 1; }
     if (ty_is_numeric(rt) || rt == TY_STRING || rt == TY_SYMBOL || rt == TY_BOOL ||
         rt == TY_RANGE || rt == TY_TIME || rt == TY_NIL || rt == TY_POLY ||
@@ -7504,7 +7494,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
      own, which answers what it answers */
   if (sp_streq(name, "===") && argc == 1 && recv >= 0 &&
       nt_kind(nt, recv) == NK_ConstantReadNode &&
-      class_any_cmethod_eqq(c, -1, -1, const_node_class_index(c, recv)) < 0)
+      class_any_cmethod_eqq(c, id, -1, const_node_class_index(c, recv)) < 0)
     { *out = TY_BOOL; return 1; }
 
   if ((is_unary_sign(name)) && recv >= 0 && argc == 0) {
@@ -9487,7 +9477,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
               (call_target(c, id, k, name, CT_OWN, NULL) >= 0 || (rn && call_target(c, id, k, rn, CT_OWN, NULL) >= 0))) over = 1;
         }
         if (!over && c->classes[oci].naliases > 0 && rn && !sp_streq(rn, name) && call_attr_target(c, -1, oci, rn, CT_ATTR, NULL) &&
-            comp_method_vis_in_chain(c, oci, name) == SP_VIS_PUBLIC) {
+            cplan_method_vis(c, id, oci, name, 0, NULL) == SP_VIS_PUBLIC) {
           if (!an_pure_reads) {
             /* the name it was written as stays: nil answers that one
                (cplan_nil), as `nil.to_a` does under `alias to_a children` */

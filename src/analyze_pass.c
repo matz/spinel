@@ -2701,11 +2701,12 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
 }
 
 /* Does class `k` itself define the instance getter `mname`, as a method or
-   an attr_reader (not one it inherits)? */
+   an attr_reader (not one it inherits)? A candidate owner of the getter, at
+   any point: the evidence it gives is for every call of it. */
 static int class_owns_getter(Compiler *c, int k, const char *mname) {
   MethodLookup ml = { .def_class = -1 };
   if (call_attr_target(c, -1, k, mname, 0, &ml)) return ml.def_class == k;
-  return comp_method_in_class(c, k, mname) >= 0;
+  return comp_name_responder(c, k, mname, CT_OWN) >= 0;
 }
 
 /* The getter call or ivar read a hash local aliases: `x` read at `recv`,
@@ -15320,14 +15321,7 @@ int desugar_dir_surface(Compiler *c) {
       if (dnm && drecv >= 0 && dir_enumerable_name(dnm) &&
           infer_type(c, drecv) == TY_DIR) {
         int base = nt->count;
-        int ent = nt_new_node(nt, "CallNode");
-        if (ent >= 0) {
-          nt_node_set_ref(nt, ent, "receiver", drecv);
-          nt_node_set_str(nt, ent, "name", "entries");
-          nt_node_set_ref(nt, ent, "arguments", -1);
-          nt_node_set_ref(nt, ent, "block", -1);
-          nt_node_set_ref(nt, id, "receiver", ent);
-          comp_grow_node_arrays(c);
+        if (an_interpose_recv_call(c, id, "entries", -1) >= 0) {
           int encl = c->nscope[id];
           for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
           changed = 1;
@@ -15382,16 +15376,9 @@ int desugar_dir_surface(Compiler *c) {
     if (nm && recv >= 0 && sp_streq(nm, "lazy") && nt_ref(nt, id, "block") < 0) {
       TyKind hrt = infer_type(c, recv);
       if (ty_is_hash(hrt)) {
-        int toa2 = nt_new_node(nt, "CallNode");
+        int toa2 = an_interpose_recv_call(c, id, "to_a", -1);
         if (toa2 >= 0) {
-          nt_node_set_str(nt, toa2, "name", "to_a");
           nt_node_set_int(nt, toa2, "made_to_a", 1);
-          nt_node_set_ref(nt, toa2, "receiver", recv);
-          nt_node_set_ref(nt, toa2, "arguments", -1);
-          nt_node_set_ref(nt, toa2, "block", -1);
-          comp_grow_node_arrays(c);
-          c->nscope[toa2] = c->nscope[id];
-          nt_node_set_ref(nt, id, "receiver", toa2);
           changed = 1;
           continue;
         }

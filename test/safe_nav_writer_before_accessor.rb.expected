@@ -1,0 +1,5 @@
+before: NoMethodError
+nil
+after: 5
+nil
+2

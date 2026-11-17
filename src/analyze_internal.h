@@ -224,6 +224,9 @@ int blk_locals_have(const char *locals, const char *nm);
    id >= 0; id = an_calls_named_next(id)). Check each node as before. */
 int an_calls_named_first(Compiler *c, const char *name);
 int an_calls_named_next(int id);
+/* Puts a call `name` (args, -1 for none) between call id and its receiver,
+   carrying id's `&.` and receiver visibility; the new call, or -1. */
+int an_interpose_recv_call(Compiler *c, int id, const char *name, int args);
 /* The calls below n0 named any of names (NULL-terminated), ascending, into
    *out, which the caller frees: their count. A pass that acts only on calls
    of those names, and renames no call it has not reached yet, walks these

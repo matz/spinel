@@ -247,7 +247,7 @@ static int call_is_poly_field_read(Compiler *c, int id) {
   for (int k = cls_set_next(s, -1); k >= 0; k = cls_set_next(s, k)) {
     if (k >= c->nclasses || c->classes[k].is_native_class) return 0;
     if (!call_attr_target(c, -1, k, nm, 0, NULL)) return 0;
-    if (comp_method_vis_in_chain(c, k, nm) != SP_VIS_PUBLIC) return 0;
+    if (cplan_method_vis(c, id, k, nm, 0, NULL) != SP_VIS_PUBLIC) return 0;
   }
   return 1;
 }

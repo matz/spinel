@@ -6125,6 +6125,7 @@ void register_ffi_decls(Compiler *c) {
       if (native_cid < 0) native_cid = cid;
       ClassInfo *nc = &c->classes[cid];
       nc->is_native_class = 1;
+      if (!nc->native_decl) nc->native_decl = s + 1;
       if (leaf != clsname && !nc->ruby_name_cache) nc->ruby_name_cache = strdup(clsname);
       free(nc->c_struct); nc->c_struct = strdup(cstruct);
       if (freesym) { free(nc->native_free); nc->native_free = strdup(freesym); }

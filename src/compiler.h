@@ -1054,6 +1054,7 @@ typedef struct {
   int cext_extension; /* +1 extension index for a TypedData allocator */
   int cext_allocator; /* recorder registration slot */
   int is_native_class;
+  int native_decl;     /* the `native_struct` call that declared it, +1 (0: none) */
   int is_builtin_const; /* builtin class/module name, classified at registration */
   /* --share-strings: a native class whose binding declares that its object
      keeps a String (`native_share ... "keeps"`): its objects are holders */

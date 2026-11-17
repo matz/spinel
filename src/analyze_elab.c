@@ -1322,6 +1322,19 @@ int elab_builder_class(Compiler *c, int node) {
   return ci >= 0 ? ci : -1;
 }
 
+/* The name a receiverless `native_struct "Name", "sp_CStruct"` declaration
+   writes as a constant of Object, NULL for any other node and for a
+   qualified name ("IO::Buffer"), which the record leaves to its leaf */
+static const char *lr_native_struct_name(const NodeTable *nt, int node) {
+  if (nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "receiver") >= 0) return NULL;
+  const char *nm = nt_str(nt, node, "name");
+  int a = nt_ref(nt, node, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  if (!nm || !sp_streq(nm, "native_struct") || an < 2 || nt_kind(nt, av[0]) != NK_StringNode) return NULL;
+  const char *name = vis_arg_name(nt, av[0]);
+  return name && name[0] && !strchr(name, ':') ? name : NULL;
+}
+
 /* The class a constant's write or definition holds: a class or module
    header's (the node -> class map), a class builder's; an alias's, a
    write whose value is a constant reference (`A = Foo`, `A = M::Foo`),
@@ -1333,6 +1346,12 @@ static int lr_class_of(Compiler *c, const LrDef *d, int *core) {
   NodeKind k = d ? nt_kind(c->nt, d->node) : NK_NilNode;
   if (k == NK_ClassNode || k == NK_ModuleNode || (d && class_def_builder(c->nt, d->node) >= 0))
     return elab_header_class(c, d->node, NULL, NULL);
+  /* a `native_struct "Name", ...` declaration: the native class it declared
+     (register_ffi_decls) */
+  if (k == NK_CallNode && lr_native_struct_name(c->nt, d->node)) {
+    for (int i = 0; i < c->nclasses; i++) if (c->classes[i].native_decl == d->node + 1) return i;
+    return LR_UNKNOWN_CLASS;
+  }
   if (k != NK_ConstantWriteNode) return LR_UNKNOWN_CLASS;
   int v = nt_ref(c->nt, d->node, "value");
   if (class_def_is_record_call(c->nt, v)) {   /* `S = Struct.new(:a)`, its block or none: the class made at the write */
@@ -2000,6 +2019,12 @@ static void lr_const_write(Compiler *c, int node, int e, int fc, int fs, int may
       const char *nm = nt_str(nt, node, "name");
       int a = nt_ref(nt, node, "arguments"), an = 0;
       const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      /* a native binding's class declaration names it at Object, as its
+         class table holds it (register_ffi_decls) */
+      if ((name = lr_native_struct_name(nt, node))) {
+        lr_write(c->lrec, ELAB_CONST, lr_const_owner(LR_MAIN), name, node, 0, may);
+        return;
+      }
       if (!nm || !is_const_set_name(nm) || an < 2 || !(name = vis_arg_name(nt, av[0]))) return;
       int rv = nt_ref(nt, node, "receiver");
       owner = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ?

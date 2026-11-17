@@ -1,0 +1,26 @@
+"unknown keyword: :foo"
+"unknown keyword: :foo"
+"unknown keywords: :foo, :bar"
+"unknown keyword: :\"a-b\""
+"unknown keyword: :foo"
+[:a, :f]
+{r: 1}
+[1, 2]
+ArgumentError
+"unknown keyword: :foo"
+3
+[:a, :f, :d]
+"unknown keyword: :foo"
+[]
+3
+3
+3
+[:d, :d, :th, :d]
+"unknown keyword: :foo"
+"unknown keyword: :foo"
+[:h]
+"unknown keyword: :foo"
+3
+[:h, :d]
+"unknown keyword: :foo"
+"unknown keyword: :foo"

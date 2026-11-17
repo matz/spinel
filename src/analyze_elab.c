@@ -3902,6 +3902,19 @@ int elab_method_vis_varies(Compiler *c, const char *name) {
   return x->visvar == 2;
 }
 
+/* See analyze.h. */
+int elab_method_may_be_protected(Compiler *c, const char *name) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded) return 1;
+  const LrVers *x = name ? lr_vers(r, name) : NULL;
+  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink)
+    for (int j = 0; j < r->hist[i].n; j++) {
+      const LrDef *v = &r->hist[i].v[j];
+      if (v->kind != LR_UNDEF && v->kind != LR_REMOVE && v->vis == SP_VIS_PROTECTED) return 1;
+    }
+  return 0;
+}
+
 int elab_method_holder(Compiler *c, const char *name, int i, int *cls, int *sg) {
   LoadRecord *r = c->lrec;
   if (!r || !r->recorded) return -1;
@@ -6810,6 +6823,16 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
     w->from.seq = lo - 1;
   }
   return ELAB_YES;
+}
+
+/* See analyze.h. The call's window starts where it may first run (elab_call_window: a method's body from the statement its
+   first run reaches, past statements that run no code of the program's), so a def before that point is made before any run. */
+int elab_def_before_call(Compiler *c, int id, int def) {
+  ElabWindow w;
+  if (def < 0 || elab_call_window(c, id, &w) != ELAB_YES) return 0;
+  LoadPoint d = elab_point_of(c, def);
+  /* (and made for sure: not under a condition or in a block that may not run) */
+  return d.region >= 0 && !elab_point_may(c, def) && !elab_point_partial(c, def) && elab_cmp(d, w.from) == PROG_BEFORE;
 }
 
 /* ...in a block the record takes to run at once, one whose typed call

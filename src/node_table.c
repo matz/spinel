@@ -1181,7 +1181,11 @@ int nt_import_subtree(NodeTable *dst, const NodeTable *src, int root) {
     node_add_str(&dst->nodes[id], sn->s[j].key, strlen(sn->s[j].key), v, sn->s[j].val_len);
   }
   for (int k = 0; k < 4; k++) if ((sn->posmask >> k) & 1) nt_node_set_int(dst, id, NT_POS_KEYS[k], sn->pos[k]);
-  for (int j = 0; j < sn->ni; j++) nt_node_set_int(dst, id, sn->i[j].key, sn->i[j].val);
+  for (int j = 0; j < sn->ni; j++) {
+    nt_node_set_int(dst, id, sn->i[j].key, sn->i[j].val);
+    /* (an imported builtin-call mark counts in dst as nt_mark_builtin_call's does) */
+    dst->builtin_marks += sn->i[j].val != 0 && !strcmp(sn->i[j].key, "builtin_only");
+  }
   for (int j = 0; j < sn->nr; j++) {
     int ch = sn->r[j].ref >= 0 ? nt_import_subtree(dst, src, sn->r[j].ref) : -1;
     nt_node_set_ref(dst, id, sn->r[j].key, ch);

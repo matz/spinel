@@ -137,6 +137,10 @@ typedef struct {
   /* the class builder each constant write holds (class_def_builder), asked
      node by node; NULL until the first */
   struct NtBuilders *builders;
+  /* how many times a call was marked to bind the builtin's own method
+     (nt_mark_builtin_call): none, and no call is marked, which an ask can
+     tell without a node read (a clone copies a marked node's mark) */
+  int builtin_marks;
 } NodeTable;
 
 /* An index of the tree kept on the table it was made of: for each node, the
@@ -556,6 +560,11 @@ static inline void nt_set_attr_write(NodeTable *nt, int id, int on) {
    record stays on the node, so a clone of the subtree carries it. */
 static inline void nt_mark_builtin_call(NodeTable *nt, int id) {
   nt_node_set_int(nt, id, "builtin_only", 1);
+  nt->builtin_marks++;
+}
+/* Is some call marked (nt_mark_builtin_call)? 0 says none is. */
+static inline int nt_any_builtin_call(const NodeTable *nt) {
+  return nt->builtin_marks != 0;
 }
 static inline void nt_clear_builtin_call(NodeTable *nt, int id) {
   nt_node_set_int(nt, id, "builtin_only", 0);

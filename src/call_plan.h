@@ -322,7 +322,7 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    NULL for none; written by cplan_super_target only.
    kind is read by cplan_resolve_super, cplan_presence, cplan_implied_target,
    cplan_boxed_to_ary_classes and cplan_main_singleton_call, and ML_OBJECT by
-   cplan_missing and method_obj_lookup; why by the method-table check
+   cplan_missing and method_obj_lookup, ML_BUILTIN by cplan_missing; why by the method-table check
    (mtab_table), and an ML_NONE's (MLW_RECORD) by cplan_presence.
    ML_SINGLETON: a call on main that main's own singleton answers by the
    core's method it has from the start (`to_s`, `inspect`:
@@ -331,8 +331,13 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    Struct member) and no method of the instance side's chain ranks ahead of
    it, as CRuby's lookup finds the nearer definition (a def of the same
    class wins a tie); the scope is -1, def_class the class that declares
-   the attribute. Asked with CT_WRITER, the writer. */
-typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, ML_ATTR } MlKind;
+   the attribute. Asked with CT_WRITER, the writer. ML_BUILTIN: the call
+   binds the builtin's own method of the name it asks (cplan_builtin_call),
+   whatever the program defines under it; the scope is -1. A reader that
+   proves a method absent (cplan_missing) reads it as answered. Never for a
+   CT_REACH, CT_CAPTURE or CT_IMPLIED ask, or a name the call does not call
+   itself. */
+typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, ML_ATTR, ML_BUILTIN } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
    with no version, and no entry (MANY); a version the plan cannot map
@@ -758,6 +763,35 @@ int cplan_targets_unknown_why(Compiler *c, int id, int cap);
    its cplan_targets. Same answers as cplan_targets otherwise (n >= 0,
    CPT_UNKNOWN). Never what the call answers: that is cplan_targets'. */
 int cplan_entries(Compiler *c, int id, int *out, int cap);
+/* What a builtin class's `new` call id (Array.new, Hash.new, Fiber.new) reduces
+   to where a program initialize stands ahead of the builtin's own, a prepend's or
+   the reopening's (CRuby's chain order, ct_behind_builtin_init): BNF_OWN the
+   builtin's own initialize runs (every initialize ahead only forwards its
+   parameters to it); BNF_EMPTY the first that does not is empty, and the builtin
+   has an empty value (builtin_empty_new): the call evaluates its arguments, then
+   the defaults the forwards leave unfilled where one has an effect
+   (cplan_builtin_new_fills), and builds it; BNF_REFUSE any other, which the builtin construction does not run.
+   BNF_NONE for any other call, and a builtin exception's `new`, which runs the
+   program's. BNF_FILL: the builtin's own runs, given the values of the defaults
+   the forwards leave unfilled after the call's arguments, as a bare `super`
+   passes them (cplan_builtin_new_fills; desugar_builtin_new_init_args places
+   them on the call, which is then BNF_OWN; rmi: the forward without a keyword rest whose binding
+   checks the keys a `**` passes, before the defaults run, or for a BNF_EMPTY after them where rlate is set: every default
+   with an effect is then filled ahead of that forward). BNF_RAISE: a forward without a keyword rest is given a literal keyword it
+   does not name, and CRuby's binding raises `unknown keyword` before its body runs: the call evaluates what BNF_EMPTY's
+   does, then raises (rmi: that forward's scope). */
+enum { BNF_NONE, BNF_OWN, BNF_EMPTY, BNF_REFUSE, BNF_FILL, BNF_RAISE };
+int cplan_builtin_new_form(Compiler *c, int id);
+/* ...and for BNF_FILL, BNF_EMPTY and BNF_RAISE those defaults, in the order CRuby runs them: parameter
+   pi[k] of method scope mi[k], each the next positional argument. kwat: where a
+   forward without a keyword rest made the call's literal keywords one more
+   positional Hash, the count of defaults ahead of that Hash, which every later
+   one follows; -1 where none did. Then the keywords a bare `super` passes that
+   the call does not: keyword parameter kp[k] of method scope kmi[k], each one
+   more keyword, ahead of the call's `**`. */
+enum { NEW_FILLS_MAX = 16 };
+typedef struct NewFills { int n, kwat, nk, rmi, rlate, mi[NEW_FILLS_MAX], pi[NEW_FILLS_MAX], kmi[NEW_FILLS_MAX], kp[NEW_FILLS_MAX]; } NewFills;
+void cplan_builtin_new_fills(Compiler *c, int id, NewFills *f);
 /* Where cplan_entries cannot list them (CPT_UNKNOWN), the names whose
    program methods hold every method call node id may enter, into names (at
    most 2), and how many: the call's own name (a super's, its method's),

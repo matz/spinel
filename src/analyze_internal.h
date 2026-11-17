@@ -293,6 +293,7 @@ int method_value_leaves_or_nil_narrow(Compiler *c, int mi, int *out, int cap);
 int cmethod_receiver_class(Compiler *c, int mi, int ci);
 int block_given_tail_then_last(Compiler *c, int last);
 int super_forwards_caller_block(Compiler *c, int id);
+int block_pass_is_callers(Compiler *c, const Scope *scope, int block);
 /* 1 if `node` is `<&block-param>.call(...)` / .() / [] for method mi -- the
    explicit-call equivalent of `yield`, inlined the same way. */
 int is_blk_param_call(Compiler *c, int node, int mi);
@@ -1092,7 +1093,7 @@ int disp_ahead(NodeTable *nt, const int *st, int n, int expr);
 /* The operands of call id that run code held in locals in CRuby's order,
    their writes into *pre, malloc'd with room for one more (analyze.c): how
    many, -1 for a form not held */
-int sd_hold_call_operands(Compiler *c, int id, int **pre);
+int sd_hold_call_operands(Compiler *c, int id, int **pre, int tail);
 int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar, int vcall);
 int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);

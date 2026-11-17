@@ -240,6 +240,30 @@ spinel: 1 refusal, nothing written
 == test/reject/builtin_include_in_method.rb [promote] rc=1
 spinel: test/reject/builtin_include_in_method.rb:7: String.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class String ... end` (see docs/limitations.md)
 spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_forward_check_then_raise.rb [default] rc=1
+spinel: test/reject/builtin_prepended_forward_check_then_raise.rb:11: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_forward_check_then_raise.rb [promote] rc=1
+spinel: test/reject/builtin_prepended_forward_check_then_raise.rb:11: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_forward_drops_keywords.rb [default] rc=1
+spinel: test/reject/builtin_prepended_forward_drops_keywords.rb:10: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_forward_drops_keywords.rb [promote] rc=1
+spinel: test/reject/builtin_prepended_forward_drops_keywords.rb:10: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_forward_kwsplat_positional.rb [default] rc=1
+spinel: test/reject/builtin_prepended_forward_kwsplat_positional.rb:11: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_forward_kwsplat_positional.rb [promote] rc=1
+spinel: test/reject/builtin_prepended_forward_kwsplat_positional.rb:11: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_initialize_new.rb [default] rc=1
+spinel: test/reject/builtin_prepended_initialize_new.rb:13: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_prepended_initialize_new.rb [promote] rc=1
+spinel: test/reject/builtin_prepended_initialize_new.rb:13: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
 == test/reject/builtin_singleton_alias_call_unordered_block.rb [default] rc=1
 spinel: test/reject/builtin_singleton_alias_call_unordered_block.rb:3: Time.stamp: a call that may run before the singleton alias of a builtin's class method is made (written in a block, on the alias's line, or beside an alias that is not plain class-body code) is not supported; see docs/limitations.md
 == test/reject/builtin_singleton_alias_call_unordered_block.rb [promote] rc=1
@@ -1001,10 +1025,10 @@ spinel: 1 refusal, nothing written
 == test/reject/ffi_source_undeclared_call.rb [default] rc=0
 == test/reject/ffi_source_undeclared_call.rb [promote] rc=0
 == test/reject/fiber_prepended_initialize_block_given.rb [default] rc=1
-spinel: test/reject/fiber_prepended_initialize_block_given.rb:8: unsupported call: node N (CallNode `initialize`) recv=SelfNode/ty33 argc=1 arg0ty28
+spinel: test/reject/fiber_prepended_initialize_block_given.rb:14: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
 spinel: 1 refusal, nothing written
 == test/reject/fiber_prepended_initialize_block_given.rb [promote] rc=1
-spinel: test/reject/fiber_prepended_initialize_block_given.rb:8: unsupported call: node N (CallNode `initialize`) recv=SelfNode/ty33 argc=1 arg0ty28
+spinel: test/reject/fiber_prepended_initialize_block_given.rb:14: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
 spinel: 1 refusal, nothing written
 == test/reject/file_read_other_options.rb [default] rc=1
 spinel: test/reject/file_read_other_options.rb:8: File.read with options other than an encoding (UTF-8 or BINARY) is not supported

@@ -21880,7 +21880,8 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       int ocid = ty_object_class(rt);
       if (ocid >= 0 && ocid < c->nclasses &&
           !call_answers(c, id, ocid, name, 0, NULL) &&
-          !comp_writer_in_chain(c, ocid, name, NULL))
+          /* (the plan's answer for a writer of the name, read through call_target) */
+          !call_attr_target(c, id, ocid, name, CT_ATTR | CT_WRITER, NULL))
         bcn = c->classes[ocid].is_native_class ? c->classes[ocid].name
             : c->classes[ocid].is_struct ? "Struct"
             : c->classes[ocid].is_data ? "Data" : "Object";
@@ -36381,7 +36382,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      block parameter). */
   {
     const char *bn0 = nt_str(c->nt, id, "name");
-    int bmi0 = bn0 && !cplan_builtin_call(c, id) ? call_target(c, id, -1, bn0, CT_TOP, NULL) : -1;
+    int bmi0 = bn0 ? call_target(c, id, -1, bn0, CT_TOP, NULL) : -1;
     if (bmi0 >= 0 && nt_ref(c->nt, id, "receiver") < 0 &&
         nt_ref(c->nt, id, "block") < 0 &&
         !(bmi0 < c->nscopes && c->scopes[bmi0].yields)) {
@@ -36429,7 +36430,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     int erecv = nt_ref(c->nt, id, "receiver");
     TyKind ert = erecv >= 0 ? comp_ntype(c, erecv) : TY_VOID;
     if (erecv >= 0 && (ert == TY_RANGE || ert == TY_TIME || ert == TY_IO || ert == TY_CLASS) &&
-        nt_ref(c->nt, id, "block") < 0 && !cplan_builtin_call(c, id)) {
+        nt_ref(c->nt, id, "block") < 0) {
       const char *ename = nt_str(c->nt, id, "name");
       int eci = ert == TY_IO ? io_reopen_class(c, id, ename)
               : comp_core_class(c, ert == TY_RANGE ? CORE_RANGE : ert == TY_TIME ? CORE_TIME : CORE_CLASS);

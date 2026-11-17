@@ -513,6 +513,7 @@ int is_pow_name(const char *n); /* pow: Integer power, with an optional modulus 
 
 int is_lazy_name(const char *n);         /* lazy: makes a Lazy of its receiver */
 int is_new_name(const char *n);          /* new: a class's constructor */
+int is_capacity_keyword(const char *n);  /* capacity: Hash.new's and String.new's keyword, an Integer through #to_int */
 int is_native_share_decl(const char *n); /* native_share: a package's share declaration */
 int is_proc_new(const char *recv, const char *meth); /* Proc.new */
 int is_method_ref_name(const char *n);   /* method: Kernel#method */
@@ -742,14 +743,34 @@ int boot_package_rank_of_path(const char *path, size_t len);   /* the same for s
    functions'), as Comparable and Enumerable are not; BC_OSTRUCT
    OpenStruct, a constant only after `require "ostruct"` (builtin_row);
    BC_TAGGED a class whose boxed value carries a tag of its own
-   (SP_TAG_INT, SP_TAG_CLASS, SP_TAG_ENCODING ...), not SP_TAG_OBJ. */
+   (SP_TAG_INT, SP_TAG_CLASS, SP_TAG_ENCODING ...), not SP_TAG_OBJ.
+   BC_EMPTY_NEW a class whose `new` with no arguments builds a usable empty
+   value (`[]`, `{}`, `""`), the value CRuby's `new` leaves when the program's
+   own initialize runs instead of the builtin's and sets nothing: Time, Range,
+   Fiber and the like build an uninitialized object that raises when used.
+   BC_NEW_KEYWORDS a class whose `new` applies the keywords it is given itself
+   (String's `encoding:` and `capacity:`) or to which they make no difference
+   (Hash's `capacity:`), so that an initialize which drops them is not observed:
+   Time's `in:`, Fiber's `blocking:` and Regexp's `timeout:` take effect in
+   initialize. BC_INIT_NO_KEYWORDS a class whose initialize takes no
+   keywords and takes the ones it is given as a last positional Hash, so that
+   it sees the same call when a forward passes them on as that Hash (Array's
+   and Range's): Hash's takes `capacity:` as a keyword. BC_KEYWORDS_NEW_OWN
+   a class whose own `new`, given keywords, builds the value from them itself
+   and runs no initialize, a program's or its own (String's: `String.new("ab",
+   capacity: 10)`); its subclasses' `new` runs it. */
 enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64,
-       BC_TAGGED = 128 };
+       BC_TAGGED = 128, BC_EMPTY_NEW = 256, BC_NEW_KEYWORDS = 512, BC_INIT_NO_KEYWORDS = 1024,
+       BC_KEYWORDS_NEW_OWN = 2048 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */
 int is_plain_builtin_superclass(int id);       /* BC_PLAIN or an exception: gives a program's subclass no method of an Enumerable walk */
 int builtin_singleton_at_boot(int slot);      /* BC_SG_BOOT of row slot (CORE_*): the module's singleton class exists before the program runs */
+int builtin_empty_new(const char *name);       /* BC_EMPTY_NEW of the class named name */
+int builtin_new_keywords(const char *name);    /* BC_NEW_KEYWORDS of the class named name */
+int builtin_init_no_keywords(const char *name); /* BC_INIT_NO_KEYWORDS of the class named name */
+int builtin_keywords_new_own(const char *name); /* BC_KEYWORDS_NEW_OWN of the class named name */
 int builtin_boxed_by_tag(int slot);           /* BC_TAGGED of row slot (CORE_*): a boxed value of the class carries a tag of its own, not SP_TAG_OBJ */
 /* names the compile-time evaluation and its questions ask about (ct_eval.c,
    analyze_ct.c) */

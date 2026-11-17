@@ -1,0 +1,9 @@
+[]
+[]
+[]
+[]
+[]
+""
+{}
+"boom"
+[:to_a, :to_hash, :to_proc, :to_a, :to_hash, :to_proc, :one, :to_a, :bad]

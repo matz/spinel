@@ -2502,7 +2502,8 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   const char *n = nt_str(c->nt, id, "name");
   if (!n) return 0;
   MtabMark mt_was = mtab_push_in(c, id);   /* (what the call's name asks of the subclass's chain is the call's) */
-  int builtin = cplan_builtin_call(c, id) || comp_arysub_name_is_array(c, id, cid, n);
+  /* (the identity a dispatch over a splat leaves, nt_set_itself_call, is no builtin method: its value is the instance) */
+  int builtin = (cplan_builtin_call(c, id) && !is_itself_name(n)) || comp_arysub_name_is_array(c, id, cid, n);
   mtab_pop(c, mt_was);
   if (!builtin) return 0;
   *kind = comp_ary_kind(c, cid);
@@ -3529,6 +3530,12 @@ int comp_scope_native_twin(Compiler *c, int mi) {
          nt_int(c->nt, c->scopes[mi].def_node, "native_twin", 0);
 }
 
+/* Is `name` the rest parameter of scope s (`*args`)? */
+int comp_scope_rest_param_is(const Scope *s, const char *name) {
+  return s && name && s->rest_idx >= 0 && s->rest_idx < s->nparams && s->pnames && s->pnames[s->rest_idx] &&
+         sp_streq(s->pnames[s->rest_idx], name);
+}
+
 TyKind native_spec_to_ty(const char *spec) {
   if (!spec) return TY_UNKNOWN;
   if (sp_streq(spec, "any"))    return TY_POLY;
@@ -3873,8 +3880,11 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
 }
 static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, int comparable) {
   /* the table's answer at the call: the program's method or reader anywhere in the chain, whatever its visibility (a
-     private def comes first in a lookup too); with no call (-1) a no-site ask of the program-wide dispatchers */
-  int tbl = !call_answers(c, id, cid, name, CT_NOFACE | (id < 0 ? CT_SHARED : 0), NULL);
+     private def comes first in a lookup too); with no call (-1) a no-site ask of the program-wide dispatchers. A call that
+     binds the builtin's own method (cplan_builtin_call) asks no site: its answer none (call_target's ML_BUILTIN) is not the
+     program's method the Enumerable-first rewrite is asked about, which the class's own def of the name gives */
+  int at = id >= 0 && cplan_builtin_call(c, id) ? -1 : id;
+  int tbl = !call_answers(c, at, cid, name, CT_NOFACE | (at < 0 ? CT_SHARED : 0), NULL);
   if (cid < 0 || cid >= c->nclasses || !name) return tbl;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
   if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return tbl;

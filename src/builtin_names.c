@@ -1967,6 +1967,8 @@ int is_array_constructor(const char *recv, const char *meth) {
 int is_pow_name(const char *n) { return sp_streq(n, "pow"); }
 /* `new`: a class's constructor (a native binding's "new" names them) */
 int is_new_name(const char *n) { return n && sp_streq(n, "new"); }
+/* `capacity:`: Hash.new's and String.new's keyword, converted as an Integer is (#to_int) */
+int is_capacity_keyword(const char *n) { return n && sp_streq(n, "capacity"); }
 /* `native_share`: a package's declaration of what a native binding does
    with the String its object keeps (--share-strings) */
 int is_native_share_decl(const char *n) { return n && sp_streq(n, "native_share"); }
@@ -3067,6 +3069,22 @@ const BuiltinClass *builtin_class_at(int i) {
 int builtin_singleton_at_boot(int slot) {
   const BuiltinClass *r = builtin_class_at(slot);
   return r && (r->flags & BC_SG_BOOT);
+}
+int builtin_empty_new(const char *name) {
+  const BuiltinClass *r = builtin_class_at(builtin_core_class_slot(name));
+  return r && (r->flags & BC_EMPTY_NEW);
+}
+int builtin_new_keywords(const char *name) {
+  const BuiltinClass *r = builtin_class_at(builtin_core_class_slot(name));
+  return r && (r->flags & BC_NEW_KEYWORDS);
+}
+int builtin_init_no_keywords(const char *name) {
+  const BuiltinClass *r = builtin_class_at(builtin_core_class_slot(name));
+  return r && (r->flags & BC_INIT_NO_KEYWORDS);
+}
+int builtin_keywords_new_own(const char *name) {
+  const BuiltinClass *r = builtin_class_at(builtin_core_class_slot(name));
+  return r && (r->flags & BC_KEYWORDS_NEW_OWN);
 }
 int builtin_boxed_by_tag(int slot) {
   const BuiltinClass *r = builtin_class_at(slot);

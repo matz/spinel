@@ -999,7 +999,7 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
   /* a user method shadows the builtin: the enclosing class's own chain first
      (it sits above Kernel), then the top-level table (Object) */
   if (bare_call_class_owned(c, id)) return 0;
-  if (!cplan_builtin_call(c, id) && call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
+  if (call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
   /* (a module main extends, or Object includes or prepends, answers it at the call: the main-chain fact) */
   if (!cplan_builtin_call(c, id)) {
     int st = cplan_main_chain_step(c, id, name);

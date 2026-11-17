@@ -55244,6 +55244,74 @@ static int prci_calls_for(PRCallIdx *x, const char *nm) {
   int n3 = prci_run(x->byname, x->nb, x->cname, "new", &at);
   return prci_merge(t, nt, x->byname + at, n3, out);
 }
+/* Does the program hold method name `name` as a value -- a Symbol or a
+   String that spells it, or a send, a Method or the like whose name is no
+   literal (oa_name_spelled's rule, short of the plain calls)? The names are
+   gathered once per table, as step (9) asks again each round. */
+static struct { ANameHash h; int any; const NodeTable *nt; int count; unsigned ver; } g_pw_held;
+static int pw_name_held_as_value(Compiler *c, const char *name) {
+  const NodeTable *nt = c->nt;
+  if (!name) return 1;
+  if (g_pw_held.nt != nt || g_pw_held.count != nt->count || g_pw_held.ver != nt->version) {
+    anh_free(&g_pw_held.h); memset(&g_pw_held.h, 0, sizeof g_pw_held.h);
+    g_pw_held.any = 0; g_pw_held.nt = nt; g_pw_held.count = nt->count; g_pw_held.ver = nt->version;
+    NT_FOREACH_KIND(nt, NK_SymbolNode, k) { const char *v = nt_str(nt, k, "value"); if (v && !anh_has(&g_pw_held.h, v)) anh_add(&g_pw_held.h, v); }
+    NT_FOREACH_KIND(nt, NK_StringNode, k) { const char *v = nt_str(nt, k, "content"); if (v && !anh_has(&g_pw_held.h, v)) anh_add(&g_pw_held.h, v); }
+    NT_FOREACH_KIND(nt, NK_CallNode, k) {
+      const char *v = nt_str(nt, k, "name");
+      if (!v || !(is_method_handoff_name(v) || sp_streq(v, "respond_to?"))) continue;
+      int a = nt_ref(nt, k, "arguments"), an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      NodeKind ak = an > 0 ? nt_kind(nt, av[0]) : NK_CallNode;
+      if (ak != NK_SymbolNode && ak != NK_StringNode) g_pw_held.any = 1;
+    }
+  }
+  return g_pw_held.any || anh_has(&g_pw_held.h, name);
+}
+static int an_call_targets_scope(Compiler *c, int u, int mi2, Scope *m2);
+/* Promote's step (9) for parameter j of method s, which the method changes
+   in place, fed a poly array by a call: can every call's argument for it be
+   the general Array, so that each goes in by reference once the parameter
+   is one (#4480)? An argument already the general Array, an array literal,
+   or a local of the caller's whose arrays can all be built as the general
+   Array where they are made (its literals, or array_sources_widenable) can.
+   So can the parameter itself, passed back to its own method (a recursive
+   call): it is the slot that widens. Anything else -- another parameter or
+   a block parameter of the caller's, an attribute, a call, or a method a
+   Symbol or String names -- keeps the parameter at its kind, as before.
+   With apply, widens them. */
+static int pw_mutated_param_args(Compiler *c, PRCallIdx *ix, int s, Scope *sc, int j, int apply) {
+  const NodeTable *nt = c->nt;
+  /* a method a Symbol or String names (`method(:cut)`, `send(:cut, w)`) is
+     called on routes the index does not see, whose arguments could not be
+     widened with the rest: it keeps its kind */
+  if (!apply && pw_name_held_as_value(c, sc->name)) return 0;
+  int nk = prci_calls_for(ix, sc->name);
+  for (int q = 0; q < nk; q++) {
+    int u = ix->calls[ix->buf[q]];
+    if (!an_call_targets_scope(c, u, s, sc)) continue;
+    int a = nt_ref(nt, u, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    int aj = call_param_arg(c, sc, av, an, j);
+    if (aj < 0 || infer_type(c, aj) == TY_POLY_ARRAY) continue;
+    NodeKind k = nt_kind(nt, aj);
+    int ok = k == NK_ArrayNode;
+    if (k == NK_LocalVariableReadNode) {
+      const char *vn = nt_str(nt, aj, "name");
+      Scope *cs = vn ? comp_scope_of(c, aj) : NULL;
+      LocalVar *lv = cs ? scope_local(cs, vn) : NULL;
+      /* (the parameter itself, handed back to its own method) */
+      if (lv && cs == sc && lv->is_param && sp_streq(vn, sc->pnames[j])) continue;
+      ok = lv && !lv->is_param && !lv->is_block_param && !lv->rbs_seeded &&
+           (lv->type == TY_INT_ARRAY || lv->type == TY_STR_ARRAY || lv->type == TY_FLOAT_ARRAY) &&
+           (local_all_writes_empty_array(c, cs, vn) || local_all_writes_fresh_array(c, cs, vn) ||
+            array_sources_widenable(c, aj));
+    }
+    if (!ok) return 0;
+    if (apply) widen_arg_array(c, aj);
+  }
+  return 1;
+}
 /* The scopes a call named un can reach, ascending; -1 for every scope (an
    alias reaches past the name). */
 static int prci_scopes_for(Compiler *c, PRCallIdx *x, const char *un) {
@@ -55598,10 +55666,15 @@ static void an_phase_proc_returns(Compiler *c) {
               }
               if (infer_type(c, aj) != TY_POLY_ARRAY) continue;
               /* a parameter the callee mutates in place is passed by
-                 reference at its kind; widened, the argument would be copied
-                 into it and the mutation lost (the #4480 rule), and the
-                 emitter refuses that shape outright */
-              if (pw_scope_mutates_param(c, s, sc->pnames[j])) continue;
+                 reference at its kind (the #4480 rule): kept typed, this
+                 poly argument went in as a copy and the change was lost.
+                 It widens only with every call's argument for it
+                 (pw_mutated_param_args), so each is still the caller's own
+                 array; where one cannot follow, it keeps its kind. */
+              if (pw_scope_mutates_param(c, s, sc->pnames[j])) {
+                if (!pw_mutated_param_args(c, &ix, s, sc, j, 0)) continue;
+                pw_mutated_param_args(c, &ix, s, sc, j, 1);
+              }
               lv_set_type(pv, TY_POLY_ARRAY); changed = 1;
             }
           }

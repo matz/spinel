@@ -570,6 +570,12 @@ int rejoin_local_writes(Compiler *c);
 int widen_arrays_from_map_bang(Compiler *c);
 void intern_block_params(Compiler *c);
 int local_all_writes_empty_array(Compiler *c, Scope *sc, const char *name);
+int local_all_writes_fresh_array(Compiler *c, Scope *sc, const char *name);   /* analyze_pass.c */
+/* Widen what array argument `arg` can be to the general Array (analyze_pass.c):
+   1 on a change */
+int widen_arg_array(Compiler *c, int arg);
+/* Can every array value `v` can be be the general Array (analyze_pass.c)? */
+int array_sources_widenable(Compiler *c, int v);
 int infer_param_hash_value(Compiler *c);
 int bind_call_params(Compiler *c, int call_id, int mi);
 int param_src_misfits(Compiler *c, Scope *m, LocalVar *p, TyKind ct, const int *argv,

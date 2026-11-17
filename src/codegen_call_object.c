@@ -1231,9 +1231,9 @@ static void emit_obj_struct_copy(Compiler *c, int cid, int to, int td, Buf *b) {
 }
 /* Does Object's own chain, as the program reopens it, hold an instance
    method `name` (its own def or a module it includes)? */
-static int main_object_chain_defines(Compiler *c, const char *name) {
+static int main_object_chain_defines(Compiler *c, int id, const char *name) {
   int oc = comp_core_class(c, CORE_OBJECT);
-  return oc >= 0 && oc < c->nclasses && comp_method_in_chain(c, oc, name, NULL) >= 0;
+  return oc >= 0 && oc < c->nclasses && call_target(c, id, oc, name, 0, NULL) >= 0;
 }
 int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc) {
   MethodLookup ml = { .def_class = -1 };
@@ -1659,7 +1659,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* main is an Object: a method Object's chain holds (a module
          `Object.include` gave it, `Mine#clone`) answers ahead of Kernel's */
       !(!cplan_builtin_call(c, id) && nt_kind(nt, recv) == NK_SelfNode && self_is_main_raw(c, recv) &&
-        main_object_chain_defines(c, name))) {
+        main_object_chain_defines(c, id, name))) {
     int args = nt_ref(nt, id, "arguments");
     int argc0 = 0; if (args >= 0) nt_arr(nt, args, "arguments", &argc0);
     /* hash, string, array, and native-bound object dup/clone require real
@@ -2146,6 +2146,8 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         }
         free(hb.p);
       }
+      int lzsrc = an_lazy_sn_guard_src(c, id);
+      if (lzsrc >= 0) recv = lzsrc;
       Repr rrr = repr_of(c, recv);
       TyKind rrt = rrr.as_ty;
       if (rrt == TY_NIL) {
@@ -2925,14 +2927,17 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         const char *bscn = class_ruby_name(c, bsci) ? class_ruby_name(c, bsci) : c->classes[bsci].name;
         /* (a bare identifier the walk gave self as its receiver is still
            CRuby's variable-like call: its NameError and wording) */
-        int bsac = 0; const int *bsav = call_args(nt, id, &bsac);
+        int bsac = 0; call_args(nt, id, &bsac);
         int bsv = nt_kind(nt, bsrecv) == NK_SelfNode && bsac == 0 && nt_ref(nt, id, "block") < 0 && nt_vcall(nt, id);
-        buf_printf(b, "({ (void)("); emit_expr_for_effect(c, bsrecv, b); buf_puts(b, ");");
-        /* (the arguments run, in order, before the raise, as CRuby's run before the dispatch) */
-        for (int i = 0; i < bsac; i++) { buf_puts(b, " (void)("); emit_expr_for_effect(c, bsav[i], b); buf_puts(b, ");"); }
+        /* (the receiver, then the arguments and the `&expr`, run in order
+           before the raise, as CRuby's run before the dispatch, each after
+           its own prelude) */
+        buf_puts(b, "({ ");
+        emit_missing_operand(c, bsrecv, 0, b);
+        emit_raise_operands(c, id, 0, 0, b);
         {
           char head[200]; snprintf(head, sizeof head, "%s '%s' for an instance of ", bsv ? "undefined local variable or method" : "undefined method", bsnm);
-          buf_printf(b, " sp_raise_cls(\"%s\", ", bsv ? "NameError" : "NoMethodError");
+          buf_printf(b, "sp_raise_cls(\"%s\", ", bsv ? "NameError" : "NoMethodError");
           if (!anon_class_text(c, bsci, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, bscn);
           buf_printf(b, "); %s; })", default_value_from_compiler(c, repr_of(c, id).as_ty));
         }

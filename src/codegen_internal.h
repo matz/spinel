@@ -1359,6 +1359,8 @@ void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, siz
 void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b);
 int class_has_ctor(const ClassInfo *ci);   /* does the class get a sp_X_new (an object of it may exist) */
 int anon_class_text(Compiler *c, int ci, const char *head, Buf *b);
+void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
+void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
 int scope_def_line(Compiler *c, Scope *s);
 const char *scope_def_file(Compiler *c, Scope *s);
 int display_method_scope(Compiler *c, int site, int cid, int want_inspect, int *defcls);
@@ -2564,7 +2566,7 @@ int an_arg_is_shared_handle(Compiler *c, int node);
 int an_super_object_text(Compiler *c, int n, int mi);
 int an_super_struct_text(Compiler *c, int n, int mi);
 int an_user_defines_method(Compiler *c, const char *name);
-int an_enum_own_find_index(Compiler *c);
+int an_enum_own_find_index(Compiler *c, int id);
 /* Can no method of the program take `name`: no def of it or of method_missing, and no alias, define_method, attr_* or Struct / Data member that names it (or names a method only the run time knows)? */
 int an_name_binder_free(Compiler *c, const char *name);
 int an_scopes_named_first(Compiler *c, const char *nm);

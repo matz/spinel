@@ -8,6 +8,7 @@
 #include "codegen_poly.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
+#include "method_table_check.h"
 #include "codegen_call_arms.h"
 #include "share.h"
 #include "value_pos.h"
@@ -662,9 +663,9 @@ int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, int own, c
 
 /* Whether RECV is an object of a class whose chain defines NAME itself: its
    const_get is that method, not Module's. */
-static int obj_defines_own(Compiler *c, int recv, const char *name) {
+static int obj_defines_own(Compiler *c, int id, int recv, const char *name) {
   TyKind t = repr_of(c, recv).as_ty;
-  return ty_is_object(t) && comp_method_in_chain(c, ty_object_class(t), name, NULL) >= 0;
+  return ty_is_object(t) && call_target(c, id, ty_object_class(t), name, 0, NULL) >= 0;
 }
 
 /* The builtin classes whose values reach `qm` through the program's
@@ -1483,7 +1484,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
      <Name>" for a valid constant name, "wrong constant name <name>" for one that
      is not (no leading uppercase). A dynamic name can't be resolved ahead of time
      and is diagnosed. */
-  if (sp_streq(name, "const_get") && recv >= 0 && argc >= 1 && !obj_defines_own(c, recv, name)) {
+  if (sp_streq(name, "const_get") && recv >= 0 && argc >= 1 && !obj_defines_own(c, id, recv, name)) {
     NodeKind cg_ak = nt_kind(nt, argv[0]);
     const char *cg_qm = NULL;
     if (cg_ak == NK_SymbolNode) cg_qm = nt_str(nt, argv[0], "value");
@@ -4121,15 +4122,16 @@ static void cls_value_unlisted_default(const char *name, int tc, Buf *b) {
    method of the name: Module#name, to_s and inspect take no argument, and
    CRuby raises the arity ArgumentError. The message for these arguments,
    in `am`; 0 when only the run time knows the count (a splat, a `**h`). */
-int class_name_reader_arity_msg(Compiler *c, const char *nm, int argc, const int *argv, char *am, size_t n) {
-  if (!class_name_reader_argc_raises(c, nm, argc, argv)) return 0;
+int class_name_reader_arity_msg(Compiler *c, int id, const char *nm, int argc, const int *argv, char *am, size_t n) {
+  if (!class_name_reader_argc_raises(c, id, nm, argc, argv)) return 0;
   arity_message(am, n, argc, 0, 0, NULL);
   return 1;
 }
 /* ...the raise itself, after the receiver and the arguments are read */
-static int emit_class_name_reader_arity(Compiler *c, const char *nm, int recv, int argc, const int *argv, Buf *b) {
+static int emit_class_name_reader_arity(Compiler *c, int id, const char *nm, int recv, int argc,
+                                        const int *argv, Buf *b) {
   char am[96];
-  if (!class_name_reader_arity_msg(c, nm, argc, argv, am, sizeof am)) return 0;
+  if (!class_name_reader_arity_msg(c, id, nm, argc, argv, am, sizeof am)) return 0;
   buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); ");
   for (int i = 0; i < argc; i++) {
     buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[i], b); buf_puts(b, "); ");
@@ -5022,7 +5024,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     int fnode = -1; TyKind fkind = TY_UNKNOWN;
     int cls_face = view_face_top(&fnode, &fkind) && fnode == recv && fkind == TY_CLASS;
     if (!cls_shadowed && !cls_face && is_name_reader(name) &&
-        (argc == 0 || class_name_reader_argc_raises(c, name, argc, argv))) {
+        (argc == 0 || class_name_reader_argc_raises(c, id, name, argc, argv))) {
       int ncc = 0;
       if (class_recv_user_cmethod(c, id, recv, name) >= 0) cls_shadowed = 1;
       else if (class_recv_static_ci(c, recv) < 0 && class_recv_is_dynamic(c, recv)) {
@@ -5038,7 +5040,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* Module#name / to_s / inspect take no argument: CRuby raises the
          arity ArgumentError after it reads the receiver and the arguments
          (an anonymous Struct class too) */
-      if (argc > 0 && emit_class_name_reader_arity(c, name, recv, argc, argv, b)) return 1;
+      if (argc > 0 && emit_class_name_reader_arity(c, id, name, recv, argc, argv, b)) return 1;
       if (sp_streq(name, "name")) {
         /* the anon class is registered keyed to the node that produced it
            (analyze_scope), so the receiver node identifies it */
@@ -5706,7 +5708,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             else buf_printf(b, "_t%d = %s; break;", tr9, nb);
           }
           else if (!rdef9 && is_name_reader(name) &&
-                   class_name_reader_arity_msg(c, name, argc, argv, nb9am, sizeof nb9am))
+                   class_name_reader_arity_msg(c, id, name, argc, argv, nb9am, sizeof nb9am))
             buf_printf(b, " default: sp_raise_cls(\"ArgumentError\", \"%s\"); break;", nb9am);
           else if (!rdef9 && argc <= 4 && cls_value_row_default(c, id, recv, name, argc, argv, argt9, tk9, tr9, slot9, b)) {}
           else if (!rdef9) buf_printf(b, " default: %s; break;", rraise9);
@@ -6842,8 +6844,11 @@ void emit_refl_im_params(Compiler *c, Buf *b) {
       if (dup) continue;
       seen = realloc(seen, sizeof(char *) * (size_t)(nseen + 1));
       seen[nseen++] = qm;
-      int mi = comp_method_in_chain(c, k, qm, NULL);
-      if (mi < 0 || comp_is_undeffed_in_chain(c, k, qm)) continue;
+      /* (the dispatcher's row for every class and name of the program: no call's question) */
+      mtab_enter(c);
+      int mi = call_target(c, -1, k, qm, CT_METHODS | CT_SHARED, NULL);
+      mtab_leave(c);
+      if (mi < 0 || cplan_undef_stops(c, -1, k, qm)) continue;
       int tr = ++g_tmp;
       buf_puts(&rows, "    if (!strcmp(name, \"");
       emit_c_escaped(&rows, qm);

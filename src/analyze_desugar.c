@@ -3598,7 +3598,7 @@ int desugar_array_op_to_ary(Compiler *c) {
     if ((sp_streq(nm, "concat") || named) && cplan_user_fresh(c, id).dispatch != CP_NONE) continue;
     TyKind at = infer_type(c, av[0]);
     if (!ty_is_object(at)) continue;
-    int mi = comp_implicit_to_ary_mi(c, ty_object_class(at));
+    int mi = comp_implicit_to_ary_mi(c, id, av[0], ty_object_class(at));
     if (mi < 0 || c->scopes[mi].nparams != 0 || !ty_is_array(c->scopes[mi].ret)) continue;
     int base = nt->count;
     int tp = nt_new_node(nt, "CallNode");
@@ -3697,8 +3697,9 @@ static int masgn_to_ary_kept(Compiler *c, NodeTable *nt, int id, int value) {
 /* May an element of the Array a to_ary answers be an object that
    converts in turn? A nested target would destructure it, and the
    desugar converts only what it can name, so such a value is left whole. */
-static int masgn_element_may_convert(Compiler *c, TyKind e) {
-  return e == TY_UNKNOWN || e == TY_POLY || (ty_is_object(e) && comp_implicit_to_ary_mi(c, ty_object_class(e)) >= 0);
+static int masgn_element_may_convert(Compiler *c, int id, TyKind e) {
+  return e == TY_UNKNOWN || e == TY_POLY ||
+         (ty_is_object(e) && comp_implicit_to_ary_mi(c, id, -1, ty_object_class(e)) >= 0);
 }
 /* ...and the elements of a literal value a nested target destructures
    (`a, (b, c) = 1, obj`): a left target takes the element at its index, a
@@ -3714,7 +3715,7 @@ static int masgn_to_ary_nested(Compiler *c, NodeTable *nt, int id, int value) {
       int e = side ? (rest && en - rn + j >= ln ? en - rn + j : -1) : j, tp;
       els = nt_arr(nt, value, "elements", &en);
       int mi = e < 0 || e >= en || nt_kind(nt, ts[j]) != NK_MultiTargetNode ? -1 : cplan_typed_to_ary(c, infer_type(c, els[e]), ts[j], NTI_YIELDED, NULL);
-      if (mi < 0 || (masgn_nests(nt, ts[j]) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret))) ||
+      if (mi < 0 || (masgn_nests(nt, ts[j]) && masgn_element_may_convert(c, id, ty_array_elem(c->scopes[mi].ret))) ||
           (tp = masgn_to_ary_call(nt, els[e])) < 0) continue;
       int *nels = malloc(sizeof(int) * (size_t)en);
       if (!nels) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -3789,7 +3790,7 @@ int desugar_masgn_to_ary(Compiler *c) {
       free(orig);
     }
     else if (nt_kind(nt, value) != NK_ArrayNode && (mi = cplan_typed_to_ary(c, infer_type(c, value), id, value, NULL)) >= 0 &&
-             !(masgn_nests(nt, id) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret)))) {
+             !(masgn_nests(nt, id) && masgn_element_may_convert(c, id, ty_array_elem(c->scopes[mi].ret)))) {
       if (!an_node_dropped(c, id)) did = masgn_to_ary_kept(c, nt, id, value);
       else if ((tp = masgn_to_ary_call(nt, value)) >= 0) { nt_node_set_ref(nt, id, "value", tp); did = 1; }
     }

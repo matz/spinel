@@ -1559,7 +1559,7 @@ int method_obj_alias_owner(Compiler *c, int node, int *sg); /* the class an alia
    `#<Class:D>(V)#v`; -1 for main's chain or none */
 int method_obj_from_class(Compiler *c, int node);
 const char *class_value_instance_method_sym(Compiler *c, int node); /* instance_method on a run-time class */
-int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *armless);
+int class_value_bind_call_target(Compiler *c, int cap, int ci, const char *sym, int *armless);
 int class_value_bind_call_gap(Compiler *c, int node);
 TyKind method_obj_adapter_ret(TyKind arr, const char *op); /* typed-array adapter Ruby return */
 int method_recv_node(Compiler *c, int recv);          /* the method(:sym) node behind a Method expr */

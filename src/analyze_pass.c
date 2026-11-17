@@ -11958,12 +11958,14 @@ static int plan_top_def_target(Compiler *c, int id) {
 }
 
 /* `slot OP= val` reaching class k's operator: its parameter takes val's
-   type. 1 when it widened. */
+   type. 1 when it widened. A rest first parameter (`def +(*a)`) holds the
+   Array of the arguments and a `**` one a Hash, not val: each is left to
+   the call's own binding (typed as val, its C took the value raw). */
 static int opw_bind_operator(Compiler *c, int id, int k, const char *op, int val) {
   int mi = call_target(c, id, k, op, 0, NULL);
   if (mi < 0) return 0;
   Scope *ms = &c->scopes[mi];
-  if (ms->nparams < 1) return 0;
+  if (ms->nparams < 1 || ms->rest_idx == 0 || ms->kwrest_idx == 0) return 0;
   LocalVar *pp = scope_local(ms, ms->pnames[0]);
   if (!pp || pp->rbs_seeded) return 0;
   return slot_take(c, pp, infer_type(c, val), val);

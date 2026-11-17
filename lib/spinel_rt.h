@@ -2061,7 +2061,21 @@ static sp_PolyArray *sp_PolyArray_intersect(sp_PolyArray *a, sp_PolyArray *b);
 static sp_PolyArray *sp_PolyArray_union(sp_PolyArray *a, sp_PolyArray *b);
 static inline int sp_poly_is_user_obj(sp_RbVal v);
 static sp_RbVal sp_poly_ary_operand(sp_RbVal v);
-static sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ */
+/* `&`, `|` or `^` on two boxed values: two Integers answer inline, and every
+   other pair (a user class's method, nil and booleans, Arrays, a Bignum, a
+   refusal) goes to sp_poly_bitop_slow, kept out of line. Whole, the body
+   was large enough that the C compiler inlined it, Bignum arm and all, into
+   a caller's loop once the caller was small, and the loop ran slower than
+   with the call. */
+static SP_NOINLINE sp_RbVal sp_poly_bitop_slow(sp_RbVal a, sp_RbVal b, int op);
+static inline sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ */
+  if (SP_LIKELY(a.tag == SP_TAG_INT && b.tag == SP_TAG_INT)) {
+    sp_int ai = a.v.i, bi = b.v.i;
+    return sp_box_int(op == 0 ? (ai & bi) : op == 1 ? (ai | bi) : (ai ^ bi));
+  }
+  return sp_poly_bitop_slow(a, b, op);
+}
+static SP_NOINLINE sp_RbVal sp_poly_bitop_slow(sp_RbVal a, sp_RbVal b, int op) {
   /* a user class's own &/|/^ comes first: coercing the object to an integer
      answered a builtin result for a method the class had written (#3501) */
   if (a.tag == SP_TAG_OBJ && a.cls_id >= 0)
@@ -8405,7 +8419,7 @@ static sp_RbVal sp_poly_shr(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_BIGINT)
     return sp_box_bigint(sp_bigint_shr((sp_Bigint *)a.v.p, (int64_t)sp_poly_bit_operand(b, 1)));
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad(">>", a, b);
-  /* Integer#>> is Integer's alone (see sp_poly_bitop) */
+  /* Integer#>> is Integer's alone (see sp_poly_bitop_slow) */
   if (a.tag != SP_TAG_INT) return sp_poly_binop_bad(">>", a, b);
   sp_int v = sp_poly_to_i(a), s = sp_poly_bit_operand(b, 1);
   /* a shift by the word or more is all sign bits (C leaves it undefined:
@@ -8440,7 +8454,7 @@ static sp_RbVal sp_poly_band(sp_RbVal a, sp_RbVal b) {
     return sp_box_poly_array(sp_PolyArray_intersect(pa, pb));
   }
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("&", a, b);
-  /* Integer#& is Integer's alone (see sp_poly_bitop) */
+  /* Integer#& is Integer's alone (see sp_poly_bitop_slow) */
   if (a.tag != SP_TAG_INT && a.tag != SP_TAG_BIGINT) return sp_poly_binop_bad("&", a, b);
   if (sp_poly_bitop_wide(a, b)) return sp_poly_bitop(a, b, 0);
   return sp_box_int(sp_poly_to_i(a) & sp_poly_bit_operand(b, 0));
@@ -8455,7 +8469,7 @@ static sp_RbVal sp_poly_bor(sp_RbVal a, sp_RbVal b) {
     return sp_box_poly_array(sp_PolyArray_union(pa, pb));
   }
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("|", a, b);
-  /* Integer#| is Integer's alone (see sp_poly_bitop) */
+  /* Integer#| is Integer's alone (see sp_poly_bitop_slow) */
   if (a.tag != SP_TAG_INT && a.tag != SP_TAG_BIGINT) return sp_poly_binop_bad("|", a, b);
   if (sp_poly_bitop_wide(a, b)) return sp_poly_bitop(a, b, 1);
   return sp_box_int(sp_poly_to_i(a) | sp_poly_bit_operand(b, 0));
@@ -8464,7 +8478,7 @@ static sp_RbVal sp_poly_bxor(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_NIL) return sp_box_bool(sp_poly_truthy(b));
   if (a.tag == SP_TAG_BOOL) return sp_box_bool(a.v.b != sp_poly_truthy(b));
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("^", a, b);
-  /* Integer#^ is Integer's alone (see sp_poly_bitop) */
+  /* Integer#^ is Integer's alone (see sp_poly_bitop_slow) */
   if (a.tag != SP_TAG_INT && a.tag != SP_TAG_BIGINT) return sp_poly_binop_bad("^", a, b);
   if (sp_poly_bitop_wide(a, b)) return sp_poly_bitop(a, b, 2);
   return sp_box_int(sp_poly_to_i(a) ^ sp_poly_bit_operand(b, 0));

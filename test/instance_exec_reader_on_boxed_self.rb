@@ -12,6 +12,7 @@ class Host
   def initialize = @v = A.new
   def run(g) = g.instance_exec { v }
   def run_eval(g) = g.instance_eval { v.hi }
+  def run_blk(g, &b) = g.instance_exec(&b)
 end
 class G
   attr_reader :v
@@ -21,3 +22,6 @@ p Host.new.run(G.new).hi
 p Host.new.run(Host.new).hi
 p Host.new.run_eval(G.new)
 p Host.new.run_eval(Host.new)
+h = Host.new
+p h.run_blk(G.new) { v }.hi
+p h.run_blk(Host.new) { v }.hi

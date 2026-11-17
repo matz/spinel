@@ -6755,7 +6755,8 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
   /* implicit-self call inside an instance method */
   if (recv < 0 && !kernel) {
     Scope *self = comp_scope_of(c, id);
-    if (self->class_id >= 0 && ie_class_of(c, id) < 0) {
+    /* (not a block an instance_exec runs on a boxed self, whose candidates answer below) */
+    if (self->class_id >= 0 && ie_class_of(c, id) == -1) {
       /* inside a class method self is the class, so its class methods come
          first, as comp_self_call_mi and the inline splice resolve the call:
          an instance method or reader of the same name stood in for

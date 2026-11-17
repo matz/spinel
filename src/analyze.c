@@ -44680,8 +44680,8 @@ static int kwb_seq(NodeTable *nt, const int *st, int n) {
 static int kwb_conv(NodeTable *nt, Scope *sc, const char *hn) {
   int hc = kwb_const(nt, "Hash"), eh = nt_new_node(nt, "HashNode");
   nt_node_set_arr(nt, eh, "elements", NULL, 0);
-  return sd_if(nt, sd_call(nt, "nil?", kwb_lv(nt, sc, hn, -1), NULL, 0), eh,
-               sd_if(nt, sd_call(nt, "is_a?", kwb_lv(nt, sc, hn, -1), &hc, 1), kwb_lv(nt, sc, hn, -1),
+  return sd_if(nt, sd_bcall(nt, "nil?", kwb_lv(nt, sc, hn, -1), NULL, 0), eh,
+               sd_if(nt, sd_bcall(nt, "is_a?", kwb_lv(nt, sc, hn, -1), &hc, 1), kwb_lv(nt, sc, hn, -1),
                      sd_call(nt, "to_hash", kwb_lv(nt, sc, hn, -1), NULL, 0)));
 }
 static int kwb_reject(NodeTable *nt, Scope *sc, const char *xn) {
@@ -44690,35 +44690,40 @@ static int kwb_reject(NodeTable *nt, Scope *sc, const char *xn) {
   int pl = sd_if(nt, sd_bcall(nt, ">", sd_bcall(nt, "size", kwb_lv(nt, sc, xn, -1), NULL, 0), &one, 1),
                  sd_str(nt, "s"), sd_str(nt, ""));
   int lb = sd_str(nt, "["), rb = sd_str(nt, "]"), co = sd_str(nt, ": ");
-  int ls = sd_call(nt, "delete_suffix", sd_call(nt, "delete_prefix", sd_call(nt, "inspect", kwb_lv(nt, sc, xn, -1),
-                                                                              NULL, 0), &lb, 1), &rb, 1);
+  int ls = sd_bcall(nt, "delete_suffix", sd_bcall(nt, "delete_prefix", sd_bcall(nt, "inspect", kwb_lv(nt, sc, xn, -1),
+                                                                                 NULL, 0), &lb, 1), &rb, 1);
   int ra[2] = { kwb_const(nt, "ArgumentError"),
-                sd_call(nt, "+", sd_call(nt, "+", sd_call(nt, "+", sd_str(nt, "unknown keyword"), &pl, 1), &co, 1),
-                        &ls, 1) };
-  return sd_if(nt, sd_call(nt, "empty?", kwb_lv(nt, sc, xn, -1), NULL, 0), nt_new_node(nt, "NilNode"),
+                sd_bcall(nt, "+", sd_bcall(nt, "+", sd_bcall(nt, "+", sd_str(nt, "unknown keyword"), &pl, 1), &co, 1),
+                         &ls, 1) };
+  return sd_if(nt, sd_bcall(nt, "empty?", kwb_lv(nt, sc, xn, -1), NULL, 0), nt_new_node(nt, "NilNode"),
                sd_call(nt, "raise", -1, ra, 2));
 }
 /* The one keyword `key` (`dflt` the node kind of its default) a builtin takes, out of the `**h` that passes it:
-   `key: (hn = h; vn = hn's conversion; xn = vn.keys - [key]; xn empty or the unknown keyword raises; vn.fetch(key,
-   default))`, run in the keyword's place. */
+   `key: (hn = h; vn = hn's conversion; kn = vn.keys; xn = kn - [key]; xn empty or the unknown keyword raises;
+   kn.include?(key) ? vn[key] : default)`, run in the keyword's place. Its calls are the builtin's (sd_bcall): CRuby binds
+   the keyword without calling the program's methods, the operand's to_hash alone (`[]` is read only for a key the Hash
+   holds, so its default is not; a builtin-only `fetch` on a boxed Hash has no arm). */
 static int kwb_explicit(NodeTable *nt, const char *kname, const char *dflt, int h, Scope *sc) {
-  char hn[32], vn[32], xn[32];
+  char hn[32], vn[32], xn[32], kn[32];
   snprintf(hn, sizeof hn, "__kwbh%d", nt->count);
   snprintf(vn, sizeof vn, "__kwbv%d", nt->count);
   snprintf(xn, sizeof xn, "__kwbx%d", nt->count);
+  snprintf(kn, sizeof kn, "__kwbk%d", nt->count);
   int key = nt_new_node(nt, "SymbolNode");
   nt_node_set_str(nt, key, "value", kname);
   int conv = kwb_conv(nt, sc, hn);
   int ka = nt_new_node(nt, "ArrayNode"), kc = nt_clone_subtree(nt, key);
   nt_node_set_arr(nt, ka, "elements", &kc, 1);
-  int fa[2] = { nt_clone_subtree(nt, key), nt_new_node(nt, dflt) };
-  if (nt_kind(nt, fa[1]) == NK_IntegerNode) nt_node_set_int(nt, fa[1], "value", 0);
-  int st[5] = { kwb_lv(nt, sc, hn, nt_clone_subtree(nt, h)), kwb_lv(nt, sc, vn, conv),
-                kwb_lv(nt, sc, xn, sd_call(nt, "-", sd_call(nt, "keys", kwb_lv(nt, sc, vn, -1), NULL, 0), &ka, 1)),
-                kwb_reject(nt, sc, xn), sd_call(nt, "fetch", kwb_lv(nt, sc, vn, -1), fa, 2) };
+  int kk = nt_clone_subtree(nt, key), ki = nt_clone_subtree(nt, key), dv = nt_new_node(nt, dflt);
+  if (nt_kind(nt, dv) == NK_IntegerNode) nt_node_set_int(nt, dv, "value", 0);
+  int st[6] = { kwb_lv(nt, sc, hn, nt_clone_subtree(nt, h)), kwb_lv(nt, sc, vn, conv),
+                kwb_lv(nt, sc, kn, sd_bcall(nt, "keys", kwb_lv(nt, sc, vn, -1), NULL, 0)),
+                kwb_lv(nt, sc, xn, sd_bcall(nt, "-", kwb_lv(nt, sc, kn, -1), &ka, 1)),
+                kwb_reject(nt, sc, xn),
+                sd_if(nt, sd_bcall(nt, "include?", kwb_lv(nt, sc, kn, -1), &kk, 1), sd_bcall(nt, "[]", kwb_lv(nt, sc, vn, -1), &ki, 1), dv) };
   int as = nt_new_node(nt, "AssocNode");
   nt_node_set_ref(nt, as, "key", key);
-  nt_node_set_ref(nt, as, "value", kwb_seq(nt, st, 5));
+  nt_node_set_ref(nt, as, "value", kwb_seq(nt, st, 6));
   int kh = nt_new_node(nt, "KeywordHashNode");
   nt_node_set_arr(nt, kh, "elements", &as, 1);
   return kh;

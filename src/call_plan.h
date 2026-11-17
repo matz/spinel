@@ -1366,10 +1366,12 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
    the visibilities the program's defs and words gave its classes do not
    count. */
 int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit, int own);
-/* Does node run once, where it stands (in no method body, loop, lambda, or block a call may run later or again)? The
-   proof a call's record answer needs (ct_before_versions' ct_after_point and elab_blocks_run_at_once, and the
-   loop). */
+/* Does node run once, where it stands: at once (ct_before_versions' proof for a call) and not again, as the record's
+   repetition fact has it (a loop's body, an iterator's block, a retried begin)? Where the record cannot tell, no. */
 int cplan_runs_once(Compiler *c, int node);
+/* ...at once alone (ct_before_versions' proof for a call: in no method body, lambda or block that may run later), the
+   repetition left to the caller. */
+int cplan_runs_at_once(Compiler *c, int node);
 /* Has the undef_method of `name` that builtin class cls itself holds run where call id runs: 1 where the record
    proves it has (the call runs once, at a point after the undef), 0 where it proves it has not, -1 where it cannot
    tell (the table's undef then stands for a reader that always took it). */

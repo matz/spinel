@@ -7932,6 +7932,20 @@ static int lr_point_runs_again(const LoadRecord *r, const NodeTable *nt, LoadPoi
   return 0;
 }
 
+/* See analyze.h. */
+int elab_runs_again(Compiler *c, int node) {
+  LoadRecord *r = elab_fresh(c);
+  LoadPoint p = elab_point_of(c, node);
+  if (p.region < 0) return 1;
+  NodeKind k = nt_kind(c->nt, r->st[p.seq].node);
+  return k == NK_WhileNode || k == NK_UntilNode || lr_point_runs_again(r, c->nt, p);
+}
+/* See analyze.h. */
+int elab_runs_before(Compiler *c, int node, int at) {
+  LoadPoint p = elab_point_of(c, at);
+  return p.region < 0 || lr_runs_again(c, node, p);
+}
+
 int elab_block_never_runs(Compiler *c, int call, int cls) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;

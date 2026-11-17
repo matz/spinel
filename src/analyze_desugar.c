@@ -1153,13 +1153,14 @@ static int me_stmt_defines(const NodeTable *nt, int s, const char *m) {
   }
   return 0;
 }
-/* Does the load record prove that node `a` (a def or the class body holding it) runs after node `at`, and that `at`
-   runs once where it stands (cplan_runs_once: in no method body, loop or block that may run later or again, which
-   would meet the def)? */
+/* Does the load record prove that node `a` (a def or the class body holding it) runs after node `at` and never
+   before it: `at` runs at once where it stands (cplan_runs_at_once), `a` comes after it, and `a` is in no body around
+   `at` that runs again (a loop's, an iterator's block, a retried begin: elab_runs_before)? Where the record cannot
+   tell, no. */
 static int me_runs_after(Compiler *c, int a, int at, int *once) {
   if (at < 0 || elab_order(c, a, at) != PROG_AFTER) return 0;
-  if (*once < 0) *once = cplan_runs_once(c, at);   /* (asked once per guard, for the first def that is after it) */
-  return *once;
+  if (*once < 0) *once = cplan_runs_at_once(c, at);   /* (asked once per guard, for the first def that is after it) */
+  return *once && !elab_runs_before(c, a, at);
 }
 /* does any body of the class/module named `leaf` (outside skip) define instance method `m` where the node `at` runs
    (-1: anywhere in the program)? */

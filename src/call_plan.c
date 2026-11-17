@@ -5019,21 +5019,18 @@ static int pr_in_untyped_block(Compiler *c, int id) {
   }
   return 0;
 }
-/* Does node `node` run once, where it stands: in no method body, no block that may run later or again, no lambda, no
-   loop (a loop's body runs again, and a block's call may run it any number of times), as ct_before_versions proves
-   for a call (ct_after_point, elab_blocks_run_at_once)? */
-int cplan_runs_once(Compiler *c, int node) {
-  int n;
-  const int *par = elab_node_parents(c, &n);
-  for (int a = node; a >= 0 && a < n; a = par[a]) {
-    NodeKind k = nt_kind(c->nt, a);
-    if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_LambdaNode) return 0;
-  }
+/* Does node run at once, where it stands (ct_before_versions' proof for a call: no method body, and no block or lambda
+   that may run later, ct_after_point and elab_blocks_run_at_once)? */
+int cplan_runs_at_once(Compiler *c, int node) {
   if (elab_in_method_body(c, node)) return 0;
   int framed = elab_plan_enter(c, node);
   int once = !ct_after_point(c, node) && elab_blocks_run_at_once(c, node);
   if (framed) elab_plan_leave(c);
   return once;
+}
+/* See call_plan.h. */
+int cplan_runs_once(Compiler *c, int node) {
+  return cplan_runs_at_once(c, node) && !elab_runs_again(c, node);
 }
 /* See call_plan.h. */
 int cplan_undef_at(Compiler *c, int id, int cls, const char *name) {

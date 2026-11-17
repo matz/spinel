@@ -8034,8 +8034,8 @@ static int ct_default_placeable(Compiler *c, const Scope *sc, int root, int i) {
    leaves unfilled all defaults, the trailing optionals ahead of any rest?
    1 where every one runs at the call (ct_default_placeable), each into f where
    f is given (parameter of scope mi); FILL_UNPLACED where one cannot; 0 where
-   one has no default. *effects is set where effects is given and one has an
-   effect (subtree_has_side_effect). */
+   one has no default. *effects counts, where effects is given, those that
+   have an effect (subtree_has_side_effect). */
 enum { FILL_UNPLACED = -1, FILL_RAISE = -2 };
 /* The index past method sc's positional parameters, its rest among them: its keywords follow (scope_add_param's order). */
 static int ct_positionals(Compiler *c, const Scope *sc) {
@@ -8048,7 +8048,7 @@ static int ct_fill_defaults(Compiler *c, const Scope *sc, int mi, int argc, NewF
   for (int i = 0, k = 0; i < npos; i++) {
     if (i == sc->rest_idx || i == sc->kwrest_idx || k++ < argc) continue;
     if (!sc->pdefault || sc->pdefault[i] < 0 || (sc->rest_idx >= 0 && i > sc->rest_idx) || (f && f->n >= NEW_FILLS_MAX)) return 0;
-    if (effects && subtree_has_side_effect(c, sc->pdefault[i])) *effects = 1;
+    if (effects && subtree_has_side_effect(c, sc->pdefault[i])) ++*effects;
     if (!ct_default_placeable(c, sc, sc->pdefault[i], i)) placed = 0;
     else if (f) { f->mi[f->n] = mi; f->pi[f->n++] = i; }
   }
@@ -8145,11 +8145,33 @@ static int ct_fill_keywords(Compiler *c, const Scope *sc, int mi, const int *kws
     if (passed) continue;
     int d = nt_ref(c->nt, kws[i], "value"), eff = d >= 0 && subtree_has_side_effect(c, d);
     if (d < 0 || (maybe && eff) || f->nk >= NEW_FILLS_MAX) return 0;
-    *effects |= eff;
+    *effects += eff;
     if (!ct_default_placeable(c, sc, d, ct_positionals(c, sc))) placed = 0;
     else { f->kmi[f->nk] = mi; f->kp[f->nk++] = kws[i]; }
   }
   return placed ? 1 : FILL_UNPLACED;
+}
+/* The check of a `**h`'s keys at the first forward that may raise for one (f->rmi), which the rewrite makes once the operands
+   are held and ahead of every default, given the effects the walk filled (effects), ek of them ahead of that forward and ek2
+   ahead of a later one that may raise for a key the first names (-1: none): kept where a default with an effect is filled
+   at or after that forward, which runs only once its binding has passed; dropped where none is, as then the builtin's own
+   binding raises alike after the defaults; 0 (the call is refused) where one is filled ahead of it too, which runs before
+   the raise, or after the later one, which a second check would take. */
+static int ct_key_check(NewFills *f, int effects, int ek, int ek2) {
+  if (f->rmi < 0) return 1;
+  if (ek2 >= 0 && effects > ek2) return 0;
+  if (effects == ek) { f->rmi = -1; return 1; }
+  return !ek;
+}
+/* Does every keyword parameter of method sc name one of kws? */
+static int ct_names_keywords(Compiler *c, const Scope *sc, const int *kws, int nkw) {
+  int pn = sc->def_node >= 0 ? nt_ref(c->nt, sc->def_node, "parameters") : -1, n = 0;
+  const int *own = pn >= 0 ? nt_arr(c->nt, pn, "keywords", &n) : NULL;
+  for (int j = 0, named = 0; j < n; j++, named = 0) {
+    for (int i = 0; i < nkw && !named; i++) named = sp_streq(nt_str(c->nt, own[j], "name"), nt_str(c->nt, kws[i], "name"));
+    if (!named) return 0;
+  }
+  return 1;
 }
 /* Is the prepend that made copy sc on class ci in force at call id: ELAB_YES where the load record proves one of its
    statements made before the call can first run (elab_def_before_call), ELAB_NO where every run of the call ends before
@@ -8176,6 +8198,9 @@ static int ct_prepend_in_force(Compiler *c, int id, int ci, const Scope *sc) {
 static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, int open, int kw, NewFills *f) {
   /* (a keyword-dropping forward is one only where dropping them cannot be observed) */
   int kw_ok = !kw || builtin_new_keywords(c->classes[ci].name), unplaced = 0, effects = 0, kwpass = 0;
+  /* (the effects filled ahead of the first forward that may raise for a `**h` key (rmi), and of a later one that may raise
+     for a key that one names: ct_key_check) */
+  int ek = 0, ek2 = -1;
   /* (a `**h` alone, the call's only argument) */
   int lone = kw == NEWKW_MAYBE && !open && !argc, nargs = 0, args = nt_ref(c->nt, id, "arguments");
   /* (literal keys beside a `**h`, which may add any) */
@@ -8223,12 +8248,11 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
         return unplaced && effects ? BNF_REFUSE : BNF_RAISE;
       }
       if (!fill || !kfill) return BNF_REFUSE;
-      /* (a `**h` may hold a key this one does not name, which raises as it binds, before its defaults run: the rewrite checks
-         the keys once the operands are held and ahead of the defaults (rmi), where no default with an effect is filled ahead
-         of this one, which would run before the raise) */
-      if (maybe && nkw && sc->kwrest_idx < 0 && effects != e0) {
-        if (e0 || f->rmi >= 0) return BNF_REFUSE;
-        f->rmi = mi;
+      /* (a `**h` may hold a key this one does not name, which raises as it binds, before its defaults and every later one's
+         run; a later one is given only the keys the first names, and may raise only where it does not name them all) */
+      if (maybe && nkw && sc->kwrest_idx < 0) {
+        if (f->rmi < 0) f->rmi = mi, ek = e0;
+        else if (ek2 < 0 && !ct_names_keywords(c, &c->scopes[f->rmi], kws, nkw)) ek2 = e0;
       }
       /* (a default that reads the object being built (self, an ivar, a call on self) or the def's lexical scope runs only once
          CRuby has made the object, which the builtin's construction does not model yet: the walk goes on, and the call keeps
@@ -8247,11 +8271,12 @@ static int ct_new_chain_form(Compiler *c, int id, int ci, int start, int argc, i
     if (!cplan_body_empty(c, mi) || !builtin_empty_new(c->classes[ci].name) || sc->yields || !ct_params_plain(c, sc, 0, 0, 0))
       return BNF_REFUSE;
     if (unplaced || !effects) f->n = f->nk = 0, f->kwat = -1;
-    return BNF_EMPTY;
+    return ct_key_check(f, effects, ek, ek2) ? BNF_EMPTY : BNF_REFUSE;
   }
   /* (the builtin's own takes the keywords a forward's bare `super` passes, or CRuby raises ArgumentError there) */
   if (kwpass && !builtin_new_keywords(c->classes[ci].name)) return BNF_REFUSE;
   if (unplaced) f->n = f->nk = 0, f->kwat = -1;
+  if (!ct_key_check(f, unplaced ? 0 : effects, ek, ek2)) return BNF_REFUSE;
   return f->n || f->nk ? BNF_FILL : BNF_OWN;
 }
 /* cplan_builtin_new_form's answer, and the defaults of a BNF_FILL, BNF_EMPTY or BNF_RAISE into f */

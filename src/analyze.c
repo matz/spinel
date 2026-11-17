@@ -13390,8 +13390,8 @@ static int kwb_reject(NodeTable *nt, Scope *sc, const char *xn);
 static int sd_bcall(NodeTable *nt, const char *name, int recv, const int *args, int n);
 /* The keys of call id's keywords that the keyword parameters of scope rmi do not name, once the operands are held (rmi >= 0):
    `{the call's keywords}.keys - [the keys scope rmi names]`, the keys CRuby's `unknown keyword` names as rmi binds its
-   parameters, a `**`'s and the literal ones alike (BNF_RAISE, and a BNF_FILL whose `**` that binding checks; -1 where
-   the call has no keywords). */
+   parameters, a `**`'s and the literal ones alike (BNF_RAISE, and a BNF_FILL or BNF_EMPTY whose `**` that binding checks;
+   -1 where the call has no keywords or there is no such check). */
 static int bni_unknown_keys(Compiler *c, int id, int rmi) {
   NodeTable *nt = (NodeTable *)c->nt;
   int an = nt_ref(nt, id, "arguments"), n = 0, en = 0, nkw = 0;
@@ -13424,8 +13424,8 @@ static int bni_unknown_keys(Compiler *c, int id, int rmi) {
    values after its own (bni_place_defaults); ahead of an empty one, those with
    an effect run after the held operands. One that a forward's binding refuses for a
    keyword it does not name (BNF_RAISE) runs as an empty one does up to the raise of
-   CRuby's `unknown keyword` (kwb_reject); a BNF_FILL whose `**` a forward's binding checks raises the keys
-   it does not name after the held operands and ahead of the defaults (bni_unknown_keys). The call left is the builtin's own
+   CRuby's `unknown keyword` (kwb_reject); a BNF_FILL or BNF_EMPTY whose `**` a forward's binding checks raises
+   the keys it does not name after the held operands and ahead of the defaults (bni_unknown_keys). The call left is the builtin's own
    (nt_mark_builtin_call), which the plan does not answer again. */
 static int desugar_builtin_new_init_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -13433,7 +13433,7 @@ static int desugar_builtin_new_init_args(Compiler *c) {
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
     if (nt_kind(nt, id) != NK_CallNode || id >= c->node_cap) continue;
     int form = cplan_builtin_new_form(c, id);
-    NewFills fl = { .n = 0, .kwat = -1 };
+    NewFills fl = { .n = 0, .kwat = -1, .rmi = -1 };
     if (form == BNF_FILL || form == BNF_EMPTY || form == BNF_RAISE) cplan_builtin_new_fills(c, id, &fl);
     if (form != BNF_FILL && form != BNF_RAISE &&
         (form != BNF_EMPTY || (nt_ref(nt, id, "arguments") < 0 && nt_ref(nt, id, "block") < 0 && !fl.n && !fl.nk))) continue;
@@ -13442,10 +13442,10 @@ static int desugar_builtin_new_init_args(Compiler *c) {
     if (!par || par[id] < 0) { free(par); continue; }
     int *pre = NULL, np = sd_hold_call_operands(c, id, &pre);
     if (np < 0) { free(par); free(pre); continue; }   /* (an operand form it does not hold: the plan refuses the call, its arguments still on it) */
-    /* (the keys a forward's binding raises for, from the held operands: a BNF_FILL's ahead of the defaults, a BNF_RAISE's after
-       those of the forwards ahead) */
-    int sk = form == BNF_FILL || form == BNF_RAISE ? bni_unknown_keys(c, id, fl.rmi) : -1;
-    if (sk >= 0 && form == BNF_FILL) {
+    /* (the keys a forward's binding raises for, from the held operands: a BNF_FILL's or a BNF_EMPTY's ahead of the defaults, a
+       BNF_RAISE's after those of the forwards ahead) */
+    int sk = bni_unknown_keys(c, id, fl.rmi);
+    if (sk >= 0 && form != BNF_RAISE) {
       char xn[32];
       snprintf(xn, sizeof xn, "__bnu%d", id);
       pre = realloc(pre, sizeof(int) * (size_t)(np + 2));

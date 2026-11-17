@@ -49,7 +49,10 @@ s.setbyte(1, 66)
 p s
 
 frozen = "xyz".freeze
-p IO::Buffer.for(frozen) { |buffer| [buffer.readonly?, buffer.get_string] }
+p IO::Buffer.for(frozen) { |buffer|
+  raise "incorrect byte in frozen String view" unless buffer.get_value(:U8, 1) == 121
+  [buffer.readonly?, buffer.get_string]
+}
 begin
   IO::Buffer.for(frozen) { |buffer| buffer.clear(0) }
 rescue IO::Buffer::AccessError => error
@@ -89,6 +92,7 @@ end
 
 bytes = +"abc"
 slice = IO::Buffer.for(bytes) { |buffer| buffer.slice(1, 1) }
+raise "incorrect byte at nonzero String slice offset" unless slice.get_value(:U8, 0) == 98
 p [slice.valid?, slice.get_string, first_byte(slice)]
 bytes.setbyte(1, 90)
 p slice.get_string
@@ -97,7 +101,13 @@ p bytes
 bytes.replace("a")
 p slice.valid?
 begin
+  slice.get_value(:U8, 0)
+  raise "uncached read accepted the invalidated String slice"
+rescue IO::Buffer::InvalidatedError
+end
+begin
   first_byte(slice)
+  raise "cached read accepted the invalidated String slice"
 rescue IO::Buffer::InvalidatedError => error
   p error.class
 end

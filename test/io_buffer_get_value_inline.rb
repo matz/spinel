@@ -1,9 +1,6 @@
-# get_value with a literal type symbol reads inline for every type up to 32
-# bits and the floats (sp_IOBuffer_load_i/_f): an owned buffer and an
-# in-range offset load directly, and every other case -- a slice, a freed,
-# transferred or shrunk root, a negative, edge or wrapping offset -- falls
-# back to the out-of-line read with its CRuby errors. Each `when` below is
-# its own literal-symbol call site.
+# Literal-symbol get_value reads inline for integer types up to 32 bits and
+# floats when the offset fits the owned bytes or a valid slice. Invalid
+# views and offsets fall back to the checked read with its CRuby errors.
 require "tmpdir"
 
 def get(b, t, o)

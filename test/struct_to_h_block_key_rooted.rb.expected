@@ -1,0 +1,33 @@
+explicit_gc
+{"aa!" => "x!", "bb!" => "y!"}
+alias_mutation
+{"key!" => 1, "key!!" => 2}
+"key!!"
+reassign_key
+{"aa!" => 1, "bb!" => 2}
+order
+key aa
+value 1
+key bb
+value 2
+{"aa!" => [1, 2], "bb!" => [2, 3]}
+raise_order
+aa
+key
+aa
+1
+value
+composite
+{["aa!"] => {1 => 2}, ["bb!"] => {2 => 3}}
+leading_stmts
+aa
+bb
+{"aa!" => "1", "bb!" => "2"}
+null_value
+{"aa!" => nil, "bb!" => "value"}
+boxed_alias
+{"key!" => 1, 1 => 2}
+"key!!"
+realloc_key
+[[1003, "key"], [2003, "key"]]
+[1, 2]

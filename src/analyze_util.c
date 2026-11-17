@@ -1785,8 +1785,9 @@ const char *sym_static_value(Compiler *c, int node) {
         k != NK_LocalVariableTargetNode)
       continue;
     const char *wn = nt_str(nt, w, "name");
-    if (!wn || !sp_streq(wn, vn)) continue;
-    if (k != NK_LocalVariableWriteNode || comp_scope_of(c, w) != sc || val >= 0)
+    /* another scope's local of the name is another variable */
+    if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
+    if (k != NK_LocalVariableWriteNode || val >= 0)
       return NULL;
     val = nt_ref(nt, w, "value");
   }

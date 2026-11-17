@@ -7,7 +7,7 @@
 # freed bytes.
 Thread.report_on_exception = false
 boom = Thread.new { raise "thread failed" }
-sleep 0.05
+Thread.pass while boom.alive?
 junk = Array.new(2000) { |i| "s#{i}" * 4 }
 begin
   boom.join

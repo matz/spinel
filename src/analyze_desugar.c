@@ -28424,8 +28424,8 @@ int desugar_user_send_others(Compiler *c) {
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     if (an < 1) continue;
-    /* (a socket's send(data, flags) is the datagram write, not Object#send) */
-    if (an >= 2 && sp_feature_required("socket")) continue;
+    /* (a socket's send(data, flags) is the datagram write, not Object#send: a socket takes the call's arm too) */
+    int sock = an >= 2 && sp_feature_required("socket");
     NodeKind k0 = nt_kind(nt, av[0]);
     if (k0 == NK_SymbolNode || k0 == NK_StringNode) continue;
     /* (a `...` or keywords first is no one name a local can hold; a splat
@@ -28478,12 +28478,18 @@ int desugar_user_send_others(Compiler *c) {
       free(na);
       av = nt_arr(nt, a, "arguments", &an); }
     int pred = -1;
-    for (int i = 0; i < nown; i++) {
+    for (int i = 0; i < nown + sock; i++) {
       int q = fwd_new_node_like(nt, id, "CallNode"), qa = fwd_new_node_like(nt, id, "ArgumentsNode");
       int rd = US_RECV();
       nt_node_set_arr(nt, qa, "arguments", &rd, 1);
       nt_node_set_str(nt, q, "name", "===");
-      nt_node_set_ref(nt, q, "receiver", i ? nt_clone_subtree(nt, paths[i]) : paths[i]);
+      int cp = -1;
+      if (i == nown) {
+        cp = fwd_new_node_like(nt, id, "ConstantPathNode");
+        nt_node_set_str(nt, cp, "name", "BasicSocket");
+        nt_node_set_ref(nt, cp, "parent", -1);
+      }
+      nt_node_set_ref(nt, q, "receiver", i == nown ? cp : i ? nt_clone_subtree(nt, paths[i]) : paths[i]);
       nt_node_set_ref(nt, q, "arguments", qa);
       /* (Module#===, not a class's own `self.===`) */
       nt_mark_builtin_call(nt, q);

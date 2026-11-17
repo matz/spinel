@@ -22141,9 +22141,54 @@ static void emit_missing_run(Compiler *c, int m, const OrderRun *run, Buf *b, in
   for (int i = 0; i <= run->n; i++) emit_effect_stmt(c, i < run->n ? run->ids[i] : m, b, indent);
 }
 
-/* The case of class k in a boxed `recv.attr op= v` switch where the class cannot take the write: its
-   reader answered, so CRuby's NoMethodError is for the writer `attr=` */
-static void emit_poly_attr_write_missing(Buf *b, int indent, int k, const char *attr, int trecv) {
+/* What a boxed `recv.attr op= v` switch knows of its statement: the attribute, the receiver's temp, the
+   operator (and the boxed operator the storing arms use for it, cpf, or whether it is a bitwise one),
+   and the operand with its type */
+typedef struct { const char *attr, *op, *cpf; int trecv, bitop, val; TyKind rhst; } AttrOpWrite;
+/* The case of class k in a boxed `recv.attr op= v` switch where the class cannot take the write and
+   the reader answered: CRuby has read the attribute, run the operand and applied the operator
+   (whose own error, a nil slot's `+`, comes first) before the NoMethodError for the writer
+   `attr=`. A slot the operator can be applied to through the boxed operators the storing arms
+   use (cpf, which both operands reach before it applies; sp_poly_bitop for `&`, `|` and `^`; a
+   String slot's `+`) is read, operated on and dropped, once per run of the case; any other slot
+   or operator answers 0 and the class is unplaced. */
+static int emit_poly_attr_write_missing(Compiler *c, Buf *b, int indent, int k, int pdcls, const char *rn, int ivx,
+                                        const AttrOpWrite *w) {
+  TyKind ivt = c->classes[pdcls].ivar_types[ivx];
+  int ivs = ivt == TY_STRING || ivt == TY_STRBUF;
+  char slot[320];
+  snprintf(slot, sizeof slot, "_o->iv_%s", iv_c(rn));
+  Buf sb; memset(&sb, 0, sizeof sb);
+  if (ivs) {
+    if (!w->op || !is_plus_op(w->op)) return 0;
+    buf_printf(&sb, "(void)sp_str_concat(SP_STR_B(%s), ", slot);
+    emit_poly_unboxed(c, w->val, w->rhst, "sp_poly_to_s(", &sb);
+    buf_puts(&sb, "); ");
+  }
+  else if (ivt != TY_UNKNOWN && ivt != TY_VOID && (ivt == TY_POLY || ivt == TY_INT || ivt == TY_FLOAT || emit_boxed_text_form(c, ivt) > 0)) {
+    /* the slot boxed as a read of it boxes (its nil bit too), then the operator on boxed operands, both
+       of them evaluated before it applies: a nil or wrong-typed slot raises CRuby's error after the
+       operand has run */
+    if (!w->cpf && !w->bitop) return 0;
+    Buf bx; memset(&bx, 0, sizeof bx);
+    emit_member_boxed_text(c, &c->classes[pdcls], ivx, "_o->", slot, &bx);
+    if (w->cpf) buf_printf(&sb, "(void)%s(%s, ", w->cpf, bx.p ? bx.p : "sp_box_nil()");
+    else buf_printf(&sb, "(void)sp_poly_bitop(%s, ", bx.p ? bx.p : "sp_box_nil()");
+    emit_boxed(c, w->val, &sb);
+    if (w->cpf) buf_puts(&sb, "); ");
+    else buf_printf(&sb, ", %d); ", w->op[0] == '&' ? 0 : w->op[0] == '|' ? 1 : 2);
+    free(bx.p);
+  }
+  else return 0;
+  emit_indent(b, indent);
+  buf_printf(b, "case %d: { sp_%s *_o = (sp_%s *)_t%d.v.p; %ssp_raise_poly_nomethod(\"%s=\", _t%d); break; }\n",
+             k, c->classes[pdcls].c_name, c->classes[pdcls].c_name, w->trecv, sb.p ? sb.p : "", w->attr, w->trecv);
+  free(sb.p);
+  return 1;
+}
+/* A class the switch cannot place: it raises for the writer without the read and the operator, as the
+   default arm raises for the reader, and the statement stays refused unless another arm stores */
+static void emit_poly_attr_unplaced(Buf *b, int indent, int k, const char *attr, int trecv) {
   emit_indent(b, indent);
   buf_printf(b, "case %d: sp_raise_poly_nomethod(\"%s=\", _t%d); break;\n", k, attr, trecv);
 }
@@ -22381,6 +22426,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       /* any: an arm stores. wmiss: a class has the reader and no writer.
          unplaced: a class has the writer but its store cannot be placed */
       int any = 0, wmiss = 0, unplaced = 0;
+      AttrOpWrite aow = { attr, op, cpf, trecv, bitop, val, rhst };
       for (int k = 0; k < c->nclasses; k++) {
         if (!c->classes[k].instantiated) continue;
         MethodLookup pml = { .def_class = -1 };
@@ -22389,20 +22435,23 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
            arm), one with a reader and no writer for `attr=` (its own case),
            and neither stores */
         if (!call_attr_target(c, id, k, attr, CT_ATTR, &pml)) continue;
-        if (!call_attr_target(c, id, k, attr, CT_ATTR | CT_WRITER, NULL)) {
-          /* a class with the reader and no writer raises NoMethodError for
-             `attr=` as CRuby does */
-          wmiss = 1;
-          emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
-          continue;
-        }
         int pdcls = pml.def_class;
         const char *rn = comp_resolve_alias(c, pdcls, attr);
         char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", rn);
         int ivx = comp_ivar_index(&c->classes[pdcls], ivn);
         if (ivx < 0) {   /* no resolvable backing slot: don't guess */
           unplaced = 1;
-          emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
+          emit_poly_attr_unplaced(b, indent + 1, k, attr, trecv);
+          continue;
+        }
+        if (!call_attr_target(c, id, k, attr, CT_ATTR | CT_WRITER, NULL)) {
+          /* a class with the reader and no writer reads, evaluates and operates, then raises
+             NoMethodError for `attr=`, as CRuby does */
+          if (emit_poly_attr_write_missing(c, b, indent + 1, k, pdcls, rn, ivx, &aow)) wmiss = 1;
+          else {
+            unplaced = 1;
+            emit_poly_attr_unplaced(b, indent + 1, k, attr, trecv);
+          }
           continue;
         }
         TyKind ivt = c->classes[pdcls].ivar_types[ivx];
@@ -22415,7 +22464,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         int ivs = ivt == TY_STRING || (ivt == TY_STRBUF);
         if ((ivs && !(op && sp_streq(op, "+"))) || (ivt == TY_POLY && !cpf && !bitop)) {
           unplaced = 1;
-          emit_poly_attr_write_missing(b, indent + 1, k, attr, trecv);
+          emit_poly_attr_unplaced(b, indent + 1, k, attr, trecv);
           continue;
         }
         const char *cn = c->classes[pdcls].c_name;

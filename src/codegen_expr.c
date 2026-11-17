@@ -483,12 +483,24 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
       else if (t == TY_EXCEPTION) {
         /* an exception interpolates as its to_s, the same helper e.to_s
            lowers to: the message alone left a user to_s out */
-        if (exc_has_user_msg_override(c)) {
-          buf_puts(&conv, "sp_exc_to_s_text((sp_Exception *)(");
+        int user = exc_has_user_msg_override(c);
+        if (k < last_operand) {
+          held_string = 1;
+          if (user) {
+            int e = ++g_tmp, r = ++g_tmp;
+            buf_printf(&conv, "({ sp_Exception *_t%d = (sp_Exception *)(", e); EMIT_IV();
+            buf_printf(&conv, "); SP_GC_ROOT(_t%d); sp_RbVal _t%d = sp_user_exc_to_s_v(_t%d); "
+                       "SP_GC_ROOT_RBVAL(_t%d); sp_strface_b_box(_t%d) ? sp_poly_as_strbuf(_t%d)"
+                       " : sp_String_new_fresh(sp_exc_to_s_fallback(_t%d)); })", e, r, e, r, r, r, e);
+          }
+          else {
+            buf_puts(&conv, "sp_exc_stored_message_handle((sp_Exception *)(");
+            EMIT_IV(); buf_puts(&conv, "))");
+          }
+        }
+        else {
+          buf_puts(&conv, user ? "sp_exc_to_s_text((sp_Exception *)(" : "sp_exc_message((sp_Exception *)(");
           EMIT_IV(); buf_puts(&conv, "))");
-        } else {
-          buf_puts(&conv, "sp_exc_message(");
-          EMIT_IV(); buf_puts(&conv, ")");
         }
       }
       else if (t == TY_NIL) {

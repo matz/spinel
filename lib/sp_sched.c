@@ -3405,6 +3405,9 @@ static void sp_thread_scan(void *p) {
   sp_mark_rbval(t->retval);
   sp_mark_rbval(t->name);
   if (t->exc_obj) sp_gc_mark(t->exc_obj);
+  /* the message beside it is the copy a raise put on the exception stack,
+     not the object's own: a root until a join or value re-raises it */
+  if (t->exc_msg) sp_mark_string(t->exc_msg);
   if (t->tls) sp_gc_mark(t->tls);
 }
 

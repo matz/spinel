@@ -5601,14 +5601,33 @@ const char *class_value_instance_method_sym(Compiler *c, int node) {
    `ci` has no `sym`. A class held by value and a module (whose method binds
    any object) have no arm, nor has a target taking a block, which the arms
    do not pass: *armless is set for them. */
-int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *armless) {
+int class_value_bind_call_target(Compiler *c, int cap, int ci, const char *sym, int *armless) {
   if (ci < 0 || ci >= c->nclasses || is_builtin_reopen(c->classes[ci].name)) return -1;
-  int mdc = -1, mi = comp_method_in_chain(c, ci, sym, &mdc);
+  /* (the method `ci.instance_method(sym)` captures where cap, the call that makes the Method, runs) */
+  MethodLookup mml = { .def_class = -1 }, hml = { .def_class = -1 };
+  /* (a capture in a block the program keeps and runs later answers an entry or the table's method, and asking its node
+     would only make the entry: the table's method is the answer there) */
+  int mi = call_target(c, cap >= 0 && elab_in_kept_block(c, cap) ? -1 : cap, ci, sym, CT_CAPTURE, &mml);
+  /* (an entry that tells the versions apart at run time is a method these arms have no call of, and no survey asks the
+     capture's entry for them: the table's method stands for that class, as the arm has always bound it) */
+  if (mml.kind == ML_ENTRY) {
+    mtab_enter(c);   /* (the table's method with no site: the answer the arms below bind) */
+    mi = call_target(c, -1, ci, sym, CT_METHODS | CT_SHARED, &mml);
+    mtab_leave(c);
+  }
+  int mdc = mml.def_class;
   /* an attr reader or writer declared below any def of the name binds its
      `__bind x`, a method of the class that declares it
      (desugar_bind_attr_helpers) */
   char hn[300], base[256];
-  int hdc = -1, hmi = snprintf(hn, sizeof hn, "__bind %s", sym) < (int)sizeof hn ? comp_method_in_chain(c, ci, hn, &hdc) : -1;
+  int hmi = -1;
+  if (snprintf(hn, sizeof hn, "__bind %s", sym) < (int)sizeof hn) {
+    /* (the compiler's own synthesized helper: it names no method of the program's, no call's question) */
+    mtab_enter(c);
+    hmi = call_target(c, -1, ci, hn, CT_METHODS | CT_SHARED, &hml);
+    mtab_leave(c);
+  }
+  int hdc = hml.def_class;
   MethodLookup aml = { .def_class = -1 };
   int wr = setter_base_name(sym, base, sizeof base);
   call_target(c, -1, ci, wr ? base : sym, wr ? CT_WRITER : 0, &aml);
@@ -5638,8 +5657,8 @@ int class_value_bind_call_gap(Compiler *c, int node) {
   int sci = infer_type(c, recv) == TY_CLASS && !class_recv_is_dynamic(c, recv) ? class_recv_static_ci(c, recv) : -1;
   int armless = 0;
   for (int k = sci >= 0 ? sci : 0; k < (sci >= 0 ? sci + 1 : c->nclasses) && !armless; k++) {
-    if (is_builtin_reopen(c->classes[k].name)) armless = comp_method_in_chain(c, k, sym, NULL) >= 0;
-    else (void)class_value_bind_call_target(c, k, sym, &armless);
+    if (is_builtin_reopen(c->classes[k].name)) armless = call_target(c, node, k, sym, CT_CAPTURE, NULL) >= 0;
+    else (void)class_value_bind_call_target(c, node, k, sym, &armless);
   }
   return armless || (core_method_name(sym) && class_recv_static_ci(c, recv) < 0);
 }

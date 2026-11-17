@@ -12239,7 +12239,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       int bargs = cvsym ? nt_ref(nt, id, "arguments") : -1;
       int ban = 0; const int *bav = bargs >= 0 ? nt_arr(nt, bargs, "arguments", &ban) : NULL;
       for (int k = 0; ban > 0 && k < c->nclasses; k++) {
-        int tmi = class_value_bind_call_target(c, k, cvsym, NULL);
+        int tmi = class_value_bind_call_target(c, recv, k, cvsym, NULL);
         if (tmi >= 0) changed |= bind_args_params(c, id, tmi, bav + 1, ban - 1);
       }
       if (cvsym) continue;

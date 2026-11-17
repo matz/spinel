@@ -34325,7 +34325,8 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
     free(kb.p);
     buf_printf(b, "switch (_t%d.cls_id) {", tk);
     for (int k = 0; k < c->nclasses; k++)
-      if (class_value_bind_call_target(c, k, sym, NULL) >= 0) buf_printf(b, " case %d:", k);
+      if (class_value_bind_call_target(c, nt_ref(c->nt, id, "receiver"), k, sym, NULL) >= 0)
+        buf_printf(b, " case %d:", k);
     buf_printf(b, " break; default: sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%s' for %%s '%%s'\", "
                   "sp_class_is_module_fn && sp_class_is_module_fn(_t%d) ? \"module\" : \"class\", "
                   "sp_class_to_s(_t%d))); } ", sym, tk, tk);
@@ -34347,7 +34348,7 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
   else {
     buf_printf(b, "switch (_t%d.cls_id) {", tk);
     for (int k = 0; k < c->nclasses; k++) {
-      int tmi = class_value_bind_call_target(c, k, sym, NULL);
+      int tmi = class_value_bind_call_target(c, nt_ref(c->nt, id, "receiver"), k, sym, NULL);
       if (tmi < 0) continue;
       buf_printf(b, " case %d: { ", k);
       emit_bind_call_arm(c, id, tmi, argv, argc, to, tr, slot, b);

@@ -1054,6 +1054,7 @@ typedef struct {
   int cext_extension; /* +1 extension index for a TypedData allocator */
   int cext_allocator; /* recorder registration slot */
   int is_native_class;
+  int native_decl;     /* the `native_struct` call that declared it, +1 (0: none) */
   int is_builtin_const; /* builtin class/module name, classified at registration */
   /* --share-strings: a native class whose binding declares that its object
      keeps a String (`native_share ... "keeps"`): its objects are holders */
@@ -2581,8 +2582,8 @@ int        comp_cmethod_in_class(Compiler *c, int class_id, const char *name);
 /* Find the class (singleton) method scope, walking the superclass chain. */
 int        comp_cmethod_in_chain(Compiler *c, int class_id, const char *name, int *def_class);
 int        allocate_super_reaches_class(Compiler *c, int id);   /* a super in an own allocate that reaches Class#allocate */
-int        class_any_cmethod_eqq(Compiler *c, int ci);
-int        class_own_cmethod_eqq(Compiler *c, int ci);
+int        class_any_cmethod_eqq(Compiler *c, int host, int op, int ci);
+int        class_own_cmethod_eqq(Compiler *c, int host, int op, int ci);
 int        class_eqq_answers_value(Compiler *c);
 /* The IO family: File, IO and the socket classes share the IO handle type.
    io_family_class: class k is a top-level reopening of one of them. */

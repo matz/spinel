@@ -1322,6 +1322,19 @@ int elab_builder_class(Compiler *c, int node) {
   return ci >= 0 ? ci : -1;
 }
 
+/* The name a receiverless `native_struct "Name", "sp_CStruct"` declaration
+   writes as a constant of Object, NULL for any other node and for a
+   qualified name ("IO::Buffer"), which the record leaves to its leaf */
+static const char *lr_native_struct_name(const NodeTable *nt, int node) {
+  if (nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "receiver") >= 0) return NULL;
+  const char *nm = nt_str(nt, node, "name");
+  int a = nt_ref(nt, node, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  if (!nm || !sp_streq(nm, "native_struct") || an < 2 || nt_kind(nt, av[0]) != NK_StringNode) return NULL;
+  const char *name = vis_arg_name(nt, av[0]);
+  return name && name[0] && !strchr(name, ':') ? name : NULL;
+}
+
 /* The class a constant's write or definition holds: a class or module
    header's (the node -> class map), a class builder's; an alias's, a
    write whose value is a constant reference (`A = Foo`, `A = M::Foo`),
@@ -1333,6 +1346,12 @@ static int lr_class_of(Compiler *c, const LrDef *d, int *core) {
   NodeKind k = d ? nt_kind(c->nt, d->node) : NK_NilNode;
   if (k == NK_ClassNode || k == NK_ModuleNode || (d && class_def_builder(c->nt, d->node) >= 0))
     return elab_header_class(c, d->node, NULL, NULL);
+  /* a `native_struct "Name", ...` declaration: the native class it declared
+     (register_ffi_decls) */
+  if (k == NK_CallNode && lr_native_struct_name(c->nt, d->node)) {
+    for (int i = 0; i < c->nclasses; i++) if (c->classes[i].native_decl == d->node + 1) return i;
+    return LR_UNKNOWN_CLASS;
+  }
   if (k != NK_ConstantWriteNode) return LR_UNKNOWN_CLASS;
   int v = nt_ref(c->nt, d->node, "value");
   if (class_def_is_record_call(c->nt, v)) {   /* `S = Struct.new(:a)`, its block or none: the class made at the write */
@@ -1388,6 +1407,36 @@ static int lr_root_read(const NodeTable *nt, int node) {
 
 /* *core (when asked): the slot of the core class the name is registered as,
    also through an alias of it, and -1 for any other. */
+/* The native class a `native_struct "Par::Name"` declared, by the path
+   it declared (ClassInfo.ruby_name_cache), when Par is a builtin's name; -1
+   for none */
+static int lr_native_qualified(Compiler *c, const char *par, const char *name) {
+  if (!par || !name || !is_builtin_class_name(par)) return -1;
+  size_t pl = strlen(par);
+  for (int i = 0; i < c->nclasses; i++) {
+    const ClassInfo *k = &c->classes[i];
+    const char *q = k->ruby_name_cache;
+    if (k->is_native_class && k->native_decl && q && !strncmp(q, par, pl) && q[pl] == ':' && q[pl + 1] == ':' && sp_streq(q + pl + 2, name))
+      return i;
+  }
+  return -1;
+}
+/* The node whose place a read the record does not hold is asked at: the
+   read itself when the walk placed it, else the node a pass made it from
+   (nt_origin: the call it rewrote, the node it copied), up its chain. A
+   constant a pass wrote is spelled where its source stood, so its name
+   resolves in that source's lexical scope, at that source's point. */
+static int lr_anchor(Compiler *c, int node) {
+  LoadRecord *r = elab_fresh(c);
+  for (int d = 0; d < 8 && node >= 0; d++) {
+    if (node < r->n && r->at[node] >= 0) return node;
+    char how = 0; int a = 0, k = 0; unsigned ph = 0;
+    int from = nt_origin(c->nt, node, &how, &a, &ph, &k);
+    if (from < 0) return node;
+    node = from;
+  }
+  return node;
+}
 static int lr_class_ref_at(Compiler *c, int node, int *core) {
   const NodeTable *nt = c->nt;
   const LrDef *d = NULL;
@@ -1396,12 +1445,18 @@ static int lr_class_ref_at(Compiler *c, int node, int *core) {
   if (k != NK_ConstantPathNode && k != NK_ConstantReadNode) return LR_UNKNOWN_CLASS;
   if (c->lrec->plan_depth) lr_plan_place(c, node, 0);
   const char *nm = lr_written_name(nt, node);
-  int o, ci, pc = LR_MAIN;
-  if (k == NK_ConstantReadNode && !lr_root_read(nt, node)) o = lr_const_at(c, node, nm, elab_point_of(c, node), &d, LR_KEY_CONST);
+  int o, ci, pc = LR_MAIN, at = lr_anchor(c, node);
+  if (k == NK_ConstantReadNode && !lr_root_read(nt, node)) o = lr_const_at(c, at, nm, elab_point_of(c, at), &d, LR_KEY_CONST);
   else {
     int par = k == NK_ConstantPathNode ? nt_ref(nt, node, "parent") : -1;
-    LoadPoint p = elab_point_of(c, node);
+    LoadPoint p = elab_point_of(c, at);
     if (par >= 0) pc = lr_class_ref_at(c, par, NULL);
+    /* a native class a binding declared under a builtin the program does
+       not open (`native_struct "IO::Buffer"`): the class it declared */
+    if (pc < LR_MAIN && par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode) {
+      int nc = lr_native_qualified(c, nt_str(nt, par, "name"), nm);
+      if (nc >= 0) return nc;
+    }
     if (pc < LR_MAIN) return LR_UNKNOWN_CLASS;
     o = lr_const_in(c, pc, nm, p, p.region < 0, pc == LR_MAIN, &d, 0, LR_KEY_CONST);
   }
@@ -2000,6 +2055,12 @@ static void lr_const_write(Compiler *c, int node, int e, int fc, int fs, int may
       const char *nm = nt_str(nt, node, "name");
       int a = nt_ref(nt, node, "arguments"), an = 0;
       const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      /* a native binding's class declaration names it at Object, as its
+         class table holds it (register_ffi_decls) */
+      if ((name = lr_native_struct_name(nt, node))) {
+        lr_write(c->lrec, ELAB_CONST, lr_const_owner(LR_MAIN), name, node, 0, may);
+        return;
+      }
       if (!nm || !is_const_set_name(nm) || an < 2 || !(name = vis_arg_name(nt, av[0]))) return;
       int rv = nt_ref(nt, node, "receiver");
       owner = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ?
@@ -8617,8 +8678,13 @@ static int lr_singleton_const_written(Compiler *c, const char *name, int own) {
   const LoadRecord *r = c->lrec;
   const int *par = NULL;
   for (int i = lr_srcw_next(r, c->nt, name, -1, 0); i >= 0; i = lr_srcw_next(r, c->nt, name, i, 0)) {
-    if (!own) return 1;
     if (!par) par = comp_parent_map(c);
+    /* (a write at a file's top level is Object's, which the lookup has
+       searched: `class Time` reopening the builtin in a library) */
+    if (!own) {
+      if (elab_lexical_header(c->nt, par, r->srcw[i].node) >= 0) return 1;
+      continue;
+    }
     for (int a = par[r->srcw[i].node]; a >= 0; a = par[a]) {
       NodeKind k = nt_kind(c->nt, a);
       if (k == NK_SingletonClassNode) return 1;
@@ -9956,7 +10022,11 @@ static int lr_src_opaque(const LoadRecord *r, const NodeTable *nt, const char *n
     }
     NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
     if (vk != NK_ConstantReadNode && vk != NK_ConstantPathNode) return 1;
-    if (lr_src_opaque(r, nt, nt_str(nt, v, "name"), depth - 1)) return 1;
+    /* (a value spelled with the name itself, `CipherError =
+       ::OpenSSL::Cipher::CipherError`, names one of the writes asked here) */
+    const char *vn = nt_str(nt, v, "name");
+    if (vn && sp_streq(vn, name)) continue;
+    if (lr_src_opaque(r, nt, vn, depth - 1)) return 1;
   }
   return 0;
 }

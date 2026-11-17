@@ -4582,7 +4582,7 @@ static int program_defines_ewi(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int k = 0; k < c->nclasses; k++) {
     if (c->classes[k].is_struct || c->classes[k].is_data) continue;
-    int mi = comp_method_in_chain(c, k, "each_with_index", NULL);
+    int mi = comp_name_responder(c, k, "each_with_index", 0);
     int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
     if (dn >= 0 && nt_kind(nt, dn) == NK_DefNode && nt_int(nt, dn, "node_bi", 0) == 0) return 1;
   }
@@ -5548,10 +5548,13 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
     view_unbind(g_n_argov - 1);
     return handled;
   }
-  if (!ty_is_array(rt)) return 0;
-  const char *k = (rr.elem == TY_POLY) ? "Poly" : array_kind(rt);
+  /* an Array of one class (narrow_object_arrays) is an sp_PtrArray whose
+     elements the comparator takes as the class's pointers, as sort's does */
+  int objs = ty_is_obj_array(rt);
+  if (!ty_is_array(rt) && !objs) return 0;
+  const char *k = objs ? "Ptr" : (rr.elem == TY_POLY) ? "Poly" : array_kind(rt);
   if (!k) return 0;
-  TyKind et = rr.elem;
+  TyKind et = objs ? ty_object(ty_obj_array_class(rt)) : rr.elem;
   /* A comparator block of fewer than two parameters still runs: CRuby hands
      it the first of the two values, or none. Standing down here let the
      blockless arm run without it, and the block vanished from the C. */
@@ -5601,9 +5604,23 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
              ono ? oint_nil(et) : et == TY_INT ? "0" : et == TY_FLOAT ? "0.0" :
              et == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, et));
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "%s _t%d = _t%d;\n", ecs, tmax, tmin);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
+  /* an object element is held by these alone while the comparator runs,
+     and the comparator may take it out of the array: rooted */
+  if (objs) {
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d); SP_GC_ROOT(_t%d);\n", tmin, tmax);
+    /* (and the element being compared, in a slot rooted once for the walk) */
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "%s _t%d = NULL; SP_GC_ROOT(_t%d);\n", ecs, te, te);
+  }
+  /* an object array's walk reads its length at every step, as CRuby's
+     does: a comparator that takes elements out ends the walk there, where
+     a read past the end would bind no element */
+  emit_indent(g_pre, g_indent);
+  if (objs) buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < sp_PtrArray_length(_t%d); _t%d++) {\n", ti, ti, trv, ti);
+  else buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
   { char rd[96]; fold_elem_getf(rd, sizeof rd, ono, 0, rt, k, trv, "_t%d", ti);
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "%s _t%d = %s;\n", ecs, te, rd); }
+    emit_indent(g_pre, g_indent + 1);
+    if (objs) buf_printf(g_pre, "_t%d = %s;\n", te, rd);
+    else buf_printf(g_pre, "%s _t%d = %s;\n", ecs, te, rd); }
   /* Block params may be widened to TY_POLY across multiple block sites.
      Pin them to the element type for body emission:
      - temporarily set scope types to `et`
@@ -7320,7 +7337,7 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     emit_poly_iter_obj_reject_as(c, id, trecv, name, enum_walk_name(c, id, recv, name), g_pre);
     emit_indent(g_pre, g_indent);
-    emit_poly_iter_obj_normalize(c, trecv, g_pre);
+    emit_poly_iter_obj_normalize(c, id, trecv, g_pre);
     emit_walk_arity_raise(c, id, recv, name, trecv, g_indent, g_pre);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tlen, trecv);
@@ -9174,7 +9191,7 @@ static const char *kw_splat_bad_cls(Compiler *c, TyKind t) {
   if (t == TY_RATIONAL) return "Rational";
   if (t == TY_COMPLEX) return "Complex";
   if (ty_is_object(t) && (ty_object_class(t) < 0 ||
-      comp_method_in_chain(c, ty_object_class(t), "method_missing", NULL) >= 0)) return NULL;
+      comp_name_responder(c, ty_object_class(t), "method_missing", 0) >= 0)) return NULL;
   return conv_cls_name_of(c, t);
 }
 
@@ -9183,16 +9200,12 @@ static const char *kw_splat_bad_cls(Compiler *c, TyKind t) {
    otherwise its conversion is a TypeError as surely as a builtin's. A
    class's own #to_hash is called through the bridge (sp_kw_splat_conv). */
 int kw_splat_user_may_convert(Compiler *c) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 1;
-  return 0;
+  return comp_name_answered(c, "method_missing", 0);
 }
 
 /* See codegen_internal.h. */
 int kw_splat_user_to_hash(Compiler *c) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, "to_hash", NULL) >= 0) return 1;
-  return 0;
+  return comp_name_answered(c, "to_hash", 0);
 }
 
 /* Can the `**` operand `node`, of the settled kind `t`, be nil at run time? */

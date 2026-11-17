@@ -52,3 +52,16 @@ p a.foo
 p b.foo
 p Parent.new.run
 p Child.new.run
+class Probe
+  def method_missing(name, *args) = :mm
+  def probe = defined?(foo)
+  def instance_of?(k) = false
+end
+p Probe.new.probe
+pr = [Probe.new, e][ARGV.size]
+p pr.foo
+class Slot
+  def method_missing(name, *args) = :handled
+end
+sl = [Slot.new, {}][ARGV.size]
+p(sl[0] = 7)

@@ -490,7 +490,7 @@ static int emit_untyped_recv_cmp(Compiler *c, const char *name, int recv, int ar
 void emit_poly_quantifier_walk(Compiler *c, int id, int ta, int tp, int tn, int tcnt, int ti,
                                const char *name, char *ans, size_t cap, Buf *b) {
   emit_poly_iter_obj_reject(c, id, ta, name, b);
-  emit_poly_iter_obj_normalize(c, ta, b);
+  emit_poly_iter_obj_normalize(c, id, ta, b);
   /* the same receiver check the each emitter makes: nil is no collection,
      and a zero-length loop answered `nil.any?` false and `nil.all?` true
      (#4485) */
@@ -1592,12 +1592,12 @@ static int emit_poly_reopened_binop(Compiler *c, int id, const char *name, int r
 static int bigint_not_overridden(Compiler *c) {
   static const int roots[] = { CORE_NILCLASS, CORE_INTEGER, CORE_NUMERIC, CORE_COMPARABLE,
                               CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  int top = comp_method_index(c, "!");
+  int top = comp_name_responder(c, -1, "!", 0);
   if (top >= 0 && !c->scopes[top].is_cmethod) return 1;
   for (int r = 0; roots[r] >= 0; r++) {
     int k = comp_core_class(c, roots[r]);
     if (k < 0) continue;
-    if (comp_is_undeffed_in_chain(c, k, "!") || comp_method_in_chain(c, k, "!", NULL) >= 0 ||
+    if (comp_is_undeffed_in_chain(c, k, "!") || comp_name_responder(c, k, "!", 0) >= 0 ||
         comp_native_method_find(c, k, "!", 0, 0) >= 0) return 1;
     /* The load record also holds prepends to builtin modules such as Kernel.
        With no output slots, any version or an unknown chain returns -1. */
@@ -1901,7 +1901,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     const char *cn = rci->c_name;
     /* a class whose == is not identity (its own, or a Struct's or a Data's
        field-wise one): CRuby's rb_equal, the same object first, then == */
-    if (rci->is_struct || rci->is_data || comp_method_in_chain(c, ty_object_class(rt), "==", NULL) >= 0) {
+    if (rci->is_struct || rci->is_data || call_target(c, id, ty_object_class(rt), "==", 0, NULL) >= 0) {
       int ta = ++g_tmp, tb = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tb); emit_boxed(c, argv[0], b);

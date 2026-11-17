@@ -7,6 +7,7 @@
 #include "builtin_ops.h"
 #include "implicit_calls.h"
 #include "codegen_call_arms.h"
+#include "method_table_check.h"
 #include <ctype.h>
 
 Buf expr_buf(Compiler *c, int node) {
@@ -870,8 +871,10 @@ int node_has_side_effect(Compiler *c, int id) {
       k == NK_YieldNode || strstr(ty, "WriteNode"))
     return 1;
   /* a bare Array.new / Hash.new is as empty and as unobservable as the
-     literal `[]` / `{}`, which is no effect */
-  if (k == NK_CallNode && !call_is_scalar_op(c, id) && !node_is_empty_container(c, id)) return 1;
+     literal `[]` / `{}`, which is no effect; a builtin operator over
+     scalars is none where its operand's implicit call (to_int, coerce)
+     reaches no method of the program's (scalar_op_runs_no_code) */
+  if (k == NK_CallNode && !scalar_op_runs_no_code(c, id) && !node_is_empty_container(c, id)) return 1;
   return -1;
 }
 int subtree_has_side_effect(Compiler *c, int id) {
@@ -7263,6 +7266,7 @@ static void mc_number_entry(Compiler *c, McDefNames *dn, int s) {
 }
 void mc_number_versions(Compiler *c) {
   const NodeTable *nt = c->nt;
+  mtab_enter(c);   /* (construction: it reads the program's own defs to number or judge them, no call asks) */
   int body = nt_ref(nt, nt->root_id, "statements"), n = 0, top = 0, cls = 0, main = 0;
   const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
   McDefNames dn = { 0 };
@@ -7288,6 +7292,7 @@ void mc_number_versions(Compiler *c) {
     if (sc->class_id < 0) sc->version_n = mc_number_top(c, &dn, sc, "%s__redef%d", &top);
     else sc->version_n = ++cls;
   }
+  mtab_leave(c);
   free(dn.v);
   free(dn.ix.slot);
 }

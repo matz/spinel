@@ -29,7 +29,10 @@
 # method_missing, which any call may reach. A respond_to? that supers is
 # presence. A node with no names of its own is implied for a row of a node it
 # holds directly (an interpolation's to_s on its part, a case's === on its
-# when), and other otherwise.
+# when), for an implied call of the call it is an operand of, and for a row
+# of its direct parent where that is no call (the receiver of `a[i] += 1`
+# and its [] and []=); it is a call where the name is the host call's own
+# (the Range a clamp is given), and other otherwise.
 #
 # A read under a send, a Method maker or an &:sym is the send family's where
 # it asks of the name the node sends or captures. Its own name (`send`,
@@ -54,7 +57,7 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
-FAIL_FAMILIES="super send lists presence"
+FAIL_FAMILIES="super send lists presence implied"
 # the run's last line when it stops early: why, and its exit status
 stop() { echo "method-table-check: FAIL ($2)"; exit "$1"; }
 FAMILIES="call implied presence super send lists other pass"

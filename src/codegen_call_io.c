@@ -8,6 +8,7 @@
 #include "builtin_ops.h"
 #include "call_plan.h"
 #include "codegen_call_arms.h"
+#include "implicit_calls.h"
 #include "repr.h"
 #include "share.h"
 static int emit_boxed_positional_io(Compiler *c, int recv, const char *name, int argc,
@@ -186,7 +187,7 @@ static int reopen_arg_may_be_io(Compiler *c, int arg) {
   if (yield_site_type(c, arg) == TY_POLY) return 1;
   TyKind t = comp_ntype(c, arg);
   int cid = ty_is_object(t) ? ty_object_class(t) : -1;
-  return cid >= 0 && !c->classes[cid].is_native_class && class_to_io_dispatched(c, cid);
+  return cid >= 0 && !c->classes[cid].is_native_class && class_to_io_dispatched(c, ic_operand_host(c, arg), arg, cid);
 }
 
 /* reopen(other) on the handle text r: the IO other is or answers, else
@@ -918,7 +919,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           attribute writer of that name may be the receiver's */
        (boxed_desc_control_arity(name, argc) && !nt_argv_has_splat(nt, argv, argc) &&
         !(sp_streq(name, "advise") && comp_ntype(c, argv[0]) != TY_SYMBOL) &&
-        !class_method_named(c, name) && !attr_writer_named(c, -1, name)) ||
+        !comp_name_answered(c, name, 1) && !attr_writer_named(c, -1, name)) ||
        /* the descriptor surface a boxed handle needs as much as a typed one:
           an fd table is a mixed Hash (0/1/2 an IO, the rest Files), so every
           one of these reached the unresolved-call gate (#4611) */
@@ -926,7 +927,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           container is the same boxed handle. Not where a class method may
           own the name (an OpenStruct's member read takes the poly dispatch
           ahead of here, poly_ostruct_member_call). */
-       (argc == 0 && boxed_stat_name(name) && !class_method_named(c, name)) ||
+       (argc == 0 && boxed_stat_name(name) && !comp_name_answered(c, name, 1)) ||
        sp_streq(name, "stat") || sp_streq(name, "seek") || sp_streq(name, "tell") ||
        sp_streq(name, "pos") || sp_streq(name, "pread") || sp_streq(name, "pwrite") ||
        sp_streq(name, "fsync") || sp_streq(name, "fdatasync") ||
@@ -970,7 +971,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        ((is_io_wait(name)) && argc <= 1) ||
        /* File::Stat's predicates: a stat read out of a container is the
           same boxed handle. Not where a class method may own the name. */
-       (argc == 0 && boxed_stat_pred(name) >= 0 && !class_method_named(c, name)))) {
+       (argc == 0 && boxed_stat_pred(name) >= 0 && !comp_name_answered(c, name, 1)))) {
     int iocand = !g_poly_builtin_arm && cplan_boxed_cmethod(c, id, name);
     /* Inside the builtin default arm of a class-id switch (the call
        re-entered by emit_poly_builtin_default) the value is none of the

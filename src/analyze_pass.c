@@ -205,8 +205,8 @@ static int recv_has_array_write(Compiler *c, int recv) {
          class through a reader named `gname` (alias resolution is per-class,
          so this asks every class, exactly as the outer loop did). */
       for (int k = 0; k < c->nclasses; k++) {
-        int rdcls = k;
-        if (comp_reader_in_chain(c, k, gname, &rdcls) && rdcls == wc) return 1;
+        MethodLookup rl = { .def_class = k };
+        if (call_attr_target(c, -1, k, gname, CT_ATTR, &rl) && rl.def_class == wc) return 1;
       }
     }
     /* A hand-written getter (`def list = @list`) is the same READER: its
@@ -648,7 +648,7 @@ int local_all_writes_empty_array(Compiler *c, Scope *sc, const char *name) {
 /* 1 iff every write of local `name` in `sc` builds a new array (and there is
    one): a value nothing else holds, so rebuilding it as another array kind
    loses no sharing. */
-static int local_all_writes_fresh_array(Compiler *c, Scope *sc, const char *name) {
+int local_all_writes_fresh_array(Compiler *c, Scope *sc, const char *name) {
   const NodeTable *nt = c->nt;
   int saw = 0;
   int si = (int)(sc - c->scopes);
@@ -2701,11 +2701,12 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
 }
 
 /* Does class `k` itself define the instance getter `mname`, as a method or
-   an attr_reader (not one it inherits)? */
+   an attr_reader (not one it inherits)? A candidate owner of the getter, at
+   any point: the evidence it gives is for every call of it. */
 static int class_owns_getter(Compiler *c, int k, const char *mname) {
   MethodLookup ml = { .def_class = -1 };
   if (call_attr_target(c, -1, k, mname, 0, &ml)) return ml.def_class == k;
-  return comp_method_in_class(c, k, mname) >= 0;
+  return comp_name_responder(c, k, mname, CT_OWN) >= 0;
 }
 
 /* The getter call or ivar read a hash local aliases: `x` read at `recv`,
@@ -2768,7 +2769,7 @@ static int ivar_has_array_write(Compiler *c, const LWIndex *ivw, int cls, const 
 
 static int widen_arg_hash(Compiler *c, int arg);
 static int widen_returned_hashes(Compiler *c, int call);
-static int widen_arg_array(Compiler *c, int arg);
+int widen_arg_array(Compiler *c, int arg);
 static int widen_boxed_array_sources(Compiler *c, int v, TyKind elem, int depth);
 static int widen_proc_call_hash_args(Compiler *c, int lit, const char *pn, TyKind hk, TyKind hv);
 
@@ -3373,7 +3374,7 @@ static int arysub_container_evidence(Compiler *c, int id, int recv, int is_push,
   /* a String subclass's String has one kind, whatever goes into it */
   if (c->classes[root].ary_str) return 1;
   if (nt_kind(c->nt, id) == NK_CallNode ? !comp_arysub_call(c, id, rt, &k)
-                                        : comp_method_in_chain(c, ty_object_class(rt), "[]=", NULL) >= 0)
+                                        : call_target(c, id, ty_object_class(rt), "[]=", CT_METHODS, NULL) >= 0)
     return 1;
   TyKind *slot = &c->classes[root].ary_kind, was = *slot, now = was;
   if (c->classes[root].ary_hash) {
@@ -3413,10 +3414,9 @@ static TyKind index_op_write_value_type(Compiler *c, int id, int recv, TyKind vt
    `@v << a << b` pushes b into @v, as `@v << a; @v << b` does. Only the
    builtin Array push answers its receiver; any other `<<` (an Integer
    shift, a user class's, a reopened Array's) ends the chain. */
-static int array_push_reopened(Compiler *c, const char *nm) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (sp_streq(c->classes[k].name, "Array") && comp_method_in_chain(c, k, nm, NULL) >= 0) return 1;
-  return 0;
+static int array_push_reopened(Compiler *c, int id, const char *nm) {
+  int ak = comp_core_class(c, CORE_ARRAY);
+  return ak >= 0 && call_target(c, id, ak, nm, CT_METHODS, NULL) >= 0;
 }
 static int push_chain_base(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
@@ -3427,7 +3427,7 @@ static int push_chain_base(Compiler *c, int recv) {
     if (base < 0 || !nm || an < 1) break;
     if (!(sp_streq(nm, "<<") && an == 1) && !sp_streq(nm, "push") && !sp_streq(nm, "append")) break;
     TyKind bt = infer_type(c, base);
-    if (!ty_is_array(bt) || infer_type(c, recv) != bt || array_push_reopened(c, nm)) break;
+    if (!ty_is_array(bt) || infer_type(c, recv) != bt || array_push_reopened(c, recv, nm)) break;
     recv = base;
   }
   return recv;
@@ -3446,7 +3446,7 @@ static int push_chain_base(Compiler *c, int recv) {
    reads, a path inference does not follow), given an element the Array
    cannot hold: the Arrays the call can answer become the general Array.
    One rule for every such path, not a walk of each. */
-static int widen_arg_array(Compiler *c, int arg);
+int widen_arg_array(Compiler *c, int arg);
 static int push_widens_arrays(const NodeTable *nt, int call, TyKind t);
 static int push_escape_widen(Compiler *c, int id, int recv, int is_push, TyKind vt) {
   if (!is_push || g_infer_optimistic || vt == TY_UNKNOWN || vt == TY_POLY) return 0;
@@ -7946,6 +7946,12 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   return ch;
 }
 
+/* Can every array the value `v` can be be the general Array
+   (array_src_walk without applying it)? */
+int array_sources_widenable(Compiler *c, int v) {
+  int stack[8];
+  return array_src_walk(c, v, 0, 0, stack, 0) == 1;
+}
 /* Widens every array the value `v` can be to the general Array, when all
    of them can be (array_src_walk). Returns 1 on a change. */
 static int widen_array_sources(Compiler *c, int v) {
@@ -7967,7 +7973,7 @@ static int widen_array_sources(Compiler *c, int v) {
 static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth);
 static int g_wcause_scope = -1;
 static const char *g_wcause_name = NULL;
-static int widen_arg_array(Compiler *c, int arg) {
+int widen_arg_array(Compiler *c, int arg) {
   const NodeTable *nt = c->nt;
   arg = value_node_or_self(nt, arg);   /* `(a; [1])` is the literal */
   NodeKind ak = nt_kind(nt, arg);
@@ -11927,7 +11933,7 @@ static int bind_case_eqq_subjects(Compiler *c, int *changed, int *any) {
         NodeKind ck = nt_kind(nt, conds[j]);
         if (ck != NK_ConstantReadNode && ck != NK_ConstantPathNode) continue;
         int ci = const_node_class_index(c, conds[j]);
-        int mi = ci >= 0 ? class_own_cmethod_eqq(c, ci) : -1;
+        int mi = ci >= 0 ? class_own_cmethod_eqq(c, -1, -1, ci) : -1;
         if (mi < 0) continue;
         LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[0]);
         if (!p || p->type != TY_POLY) continue;
@@ -11970,7 +11976,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
      arms, grep and a class held as a value, with any kind of value: its
      parameter takes a boxed value. */
   for (int k = 0; k < c->nclasses; k++) {
-    int emi = class_own_cmethod_eqq(c, k);
+    int emi = class_own_cmethod_eqq(c, -1, -1, k);
     if (emi < 0 || c->scopes[emi].nparams < 1) continue;
     LocalVar *ep = scope_local(&c->scopes[emi], c->scopes[emi].pnames[0]);
     if (ep && !ep->rbs_seeded && lv_widen(ep, TY_POLY)) changed = 1;
@@ -14073,7 +14079,8 @@ static int block_with_own_self(Compiler *c, int call) {
    name / to_s / inspect (which `Foo.name` reaches as the bare call does)? */
 static int bare_call_on_class(Compiler *c, int ci, const char *nm) {
   if (ci < 0 || !nm) return 0;
-  return comp_cmethod_in_chain(c, ci, nm, NULL) >= 0 || is_name_reader(nm);
+  /* (what self is inside the block does not move with where the def is: the class's table, asked with no site) */
+  return call_target(c, -1, ci, nm, CT_CMETHOD | CT_SHARED, NULL) >= 0 || is_name_reader(nm);
 }
 static void subtree_self_to_const(Compiler *c, int root, const char *cname, int ci, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -15314,14 +15321,7 @@ int desugar_dir_surface(Compiler *c) {
       if (dnm && drecv >= 0 && dir_enumerable_name(dnm) &&
           infer_type(c, drecv) == TY_DIR) {
         int base = nt->count;
-        int ent = nt_new_node(nt, "CallNode");
-        if (ent >= 0) {
-          nt_node_set_ref(nt, ent, "receiver", drecv);
-          nt_node_set_str(nt, ent, "name", "entries");
-          nt_node_set_ref(nt, ent, "arguments", -1);
-          nt_node_set_ref(nt, ent, "block", -1);
-          nt_node_set_ref(nt, id, "receiver", ent);
-          comp_grow_node_arrays(c);
+        if (an_interpose_recv_call(c, id, "entries", -1) >= 0) {
           int encl = c->nscope[id];
           for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
           changed = 1;
@@ -15376,16 +15376,9 @@ int desugar_dir_surface(Compiler *c) {
     if (nm && recv >= 0 && sp_streq(nm, "lazy") && nt_ref(nt, id, "block") < 0) {
       TyKind hrt = infer_type(c, recv);
       if (ty_is_hash(hrt)) {
-        int toa2 = nt_new_node(nt, "CallNode");
+        int toa2 = an_interpose_recv_call(c, id, "to_a", -1);
         if (toa2 >= 0) {
-          nt_node_set_str(nt, toa2, "name", "to_a");
           nt_node_set_int(nt, toa2, "made_to_a", 1);
-          nt_node_set_ref(nt, toa2, "receiver", recv);
-          nt_node_set_ref(nt, toa2, "arguments", -1);
-          nt_node_set_ref(nt, toa2, "block", -1);
-          comp_grow_node_arrays(c);
-          c->nscope[toa2] = c->nscope[id];
-          nt_node_set_ref(nt, id, "receiver", toa2);
           changed = 1;
           continue;
         }
@@ -19465,7 +19458,7 @@ int infer_block_params(Compiler *c) {
            method's argument, as a call would */
         if (ty_is_object(wt)) {
           TyKind st = infer_type(c, pred);
-          int mi = comp_method_in_chain(c, ty_object_class(wt), "===", NULL);
+          int mi = cplan_implied_target(c, whens[k], wconds[j], ty_object_class(wt), "===", CIT_TABLE, NULL);
           Scope *ms = mi >= 0 ? &c->scopes[mi] : NULL;
           /* the one shape the case emitter calls (emit_when_user_eq) */
           LocalVar *plv = ms && ms->nparams == 1 && ms->rest_idx < 0 && ms->kwrest_idx < 0 && !ms->blk_param
@@ -20329,7 +20322,9 @@ static TyKind sg_override_ret(Compiler *c, const Scope *sc, TyKind r) {
   if (sc->class_id < 0 || sc->is_cmethod || !sc->name) return r;
   const ClassInfo *k = &c->classes[sc->class_id];
   if (!k->is_singleton_of || k->is_value_type || k->parent < 0) return r;
-  int pm = comp_method_in_chain(c, k->parent, sc->name, NULL);
+  /* (the method the override's super reaches: the parent link's, as the table holds it; the delegate answers a call that
+     runs after any later redefinition, so no point of the load is its own) */
+  int pm = call_target(c, -1, k->parent, sc->name, CT_METHODS | CT_SHARED, NULL);
   if (pm < 0 || pm >= c->nscopes || &c->scopes[pm] == sc) return r;
   const Scope *ps = &c->scopes[pm];
   if (ps->nparams != sc->nparams) return r;

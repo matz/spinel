@@ -83,8 +83,10 @@ static void emit_str_between_cmp(int tv, int tbnd, const char *op, Buf *b) {
 /* between?, object_id / __id__, hash, nil? and === on a receiver whose kind decides them */
 /* Is there a class whose hash is a reader rather than a def? */
 static int hash_reader_class(Compiler *c) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_reader_in_chain(c, k, "hash", NULL) && comp_method_in_chain(c, k, "hash", NULL) < 0) return 1;
+  int n;
+  const int *owners = comp_name_reader_owners(c, "hash", &n);
+  for (int i = 0; i < n; i++)
+    if (comp_name_responder(c, owners[i], "hash", 0) < 0) return 1;
   return 0;
 }
 
@@ -395,8 +397,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      no pointer identity, so hash its bytes for a stable, content-based id that
      agrees across calls (#2284). */
   if (sp_streq(name, "hash") && recv >= 0 && argc == 0 && ty_is_object(rt) &&
-      comp_ty_value_obj(c, rt) && comp_method_in_chain(c, ty_object_class(rt), "hash", NULL) < 0 &&
-      !comp_reader_in_chain(c, ty_object_class(rt), "hash", NULL) &&
+      comp_ty_value_obj(c, rt) && !call_answers(c, id, ty_object_class(rt), name, 0, NULL) &&
       !c->classes[ty_object_class(rt)].is_struct) {
     int t = ++g_tmp;
     buf_printf(b, "({ sp_%s _t%d = ", c->classes[ty_object_class(rt)].c_name, t);
@@ -412,9 +413,8 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
   if (sp_streq(name, "hash") && recv >= 0 && argc == 0 &&
       rt != TY_MATCHDATA &&   /* MatchData has a dedicated content hash (#3014) */
       (!ty_is_object(rt) ||
-       (comp_method_in_chain(c, ty_object_class(rt), "hash", NULL) < 0 &&
-        /* a reader named hash (`attr_reader :hash`) answers its ivar */
-        !comp_reader_in_chain(c, ty_object_class(rt), "hash", NULL) &&
+       /* (nor a def or a reader named hash, `attr_reader :hash`, that answers the call) */
+       (!call_answers(c, id, ty_object_class(rt), name, 0, NULL) &&
         /* structs keep their dedicated value-based hash arm below */
         !c->classes[ty_object_class(rt)].is_struct))) {
     /* The key is never nil, but a user #hash that may answer nil types every
@@ -2827,7 +2827,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
       int eac = 0; call_args(nt, id, &eac);
       TyKind ert = comp_ntype(c, erecv);
       if (eac == 1 && ty_is_object(ert) &&
-          comp_method_in_chain(c, ty_object_class(ert), "===", NULL) < 0 &&
+          call_target(c, id, ty_object_class(ert), enm, CT_METHODS, NULL) < 0 &&
           !comp_subclass_answers(c, ty_object_class(ert), "===")) {
         if (emit_case_eq_identity(c, id, erecv, b)) return 1;
         if (emit_delegated_equality(c, id, 0, b)) return 1;
@@ -2919,17 +2919,20 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
       if (bsci >= 0 && class_is_blank_slate(c, bsci) &&
           !basicobject_own_method(bsnm) &&
           call_target(c, id, bsci, bsnm, 0, NULL) < 0 &&
-          !comp_reader_in_chain(c, bsci, bsnm, NULL) &&
-          !comp_writer_in_chain(c, bsci, bsnm, NULL)) {
+          /* (nor an accessor of the name that has run where the call runs) */
+          !call_attr_target(c, id, bsci, bsnm, CT_ATTR, NULL) &&
+          !call_attr_target(c, id, bsci, bsnm, CT_ATTR | CT_WRITER, NULL)) {
         const char *bscn = class_ruby_name(c, bsci) ? class_ruby_name(c, bsci) : c->classes[bsci].name;
         /* (a bare identifier the walk gave self as its receiver is still
            CRuby's variable-like call: its NameError and wording) */
-        int bsac = 0; call_args(nt, id, &bsac);
+        int bsac = 0; const int *bsav = call_args(nt, id, &bsac);
         int bsv = nt_kind(nt, bsrecv) == NK_SelfNode && bsac == 0 && nt_ref(nt, id, "block") < 0 && nt_vcall(nt, id);
-        buf_printf(b, "({ (void)("); emit_expr_for_effect(c, bsrecv, b);
+        buf_printf(b, "({ (void)("); emit_expr_for_effect(c, bsrecv, b); buf_puts(b, ");");
+        /* (the arguments run, in order, before the raise, as CRuby's run before the dispatch) */
+        for (int i = 0; i < bsac; i++) { buf_puts(b, " (void)("); emit_expr_for_effect(c, bsav[i], b); buf_puts(b, ");"); }
         {
           char head[200]; snprintf(head, sizeof head, "%s '%s' for an instance of ", bsv ? "undefined local variable or method" : "undefined method", bsnm);
-          buf_printf(b, "); sp_raise_cls(\"%s\", ", bsv ? "NameError" : "NoMethodError");
+          buf_printf(b, " sp_raise_cls(\"%s\", ", bsv ? "NameError" : "NoMethodError");
           if (!anon_class_text(c, bsci, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, bscn);
           buf_printf(b, "); %s; })", default_value_from_compiler(c, repr_of(c, id).as_ty));
         }

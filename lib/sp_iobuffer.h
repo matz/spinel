@@ -78,10 +78,9 @@ SP_COLD double sp_IOBuffer_get_f(sp_IOBuffer *b, sp_int ty, sp_int off);
 /* The same reads inline, for the generated program (which includes this
    header when it uses IO::Buffer). `ty` is a literal at every call site, so
    the width, byte order and sign fold away and a read is a bounds check and
-   a load. An owned buffer and an in-range offset take that path; a slice, a
-   freed or transferred buffer, or a negative or out-of-range offset calls
-   sp_IOBuffer_get_i / _get_f, which raise as before. The 64-bit integers
-   never come here: they read boxed, through sp_IOBuffer_get_x.
+   a load. An in-range offset on an owned buffer or a valid slice takes that
+   path. Invalid views and offsets take the checked read. The 64-bit
+   integers read boxed through sp_IOBuffer_get_x.
    Width, order and sign follow iob_types in sp_iobuffer.c: the integers
    after U8/S8 come in (u, s, U, S) groups, the floats are (f32, f64, F32,
    F64), and an odd integer code is a signed type. */
@@ -92,15 +91,6 @@ static inline int sp_iob_width(sp_int ty) {
 static inline int sp_iob_big_endian(sp_int ty) {
   if (ty >= SP_IOB_TY_f32) return ty >= SP_IOB_TY_F32;
   return ty >= SP_IOB_TY_u16 && ((ty - SP_IOB_TY_u16) & 2);
-}
-/* the value's bytes, or NULL for every case the out-of-line read handles.
-   A slice's `data` is always NULL (see the struct), so the `data` test also
-   sends every slice to the out-of-line read. */
-static inline const uint8_t *sp_iob_inline_ptr(sp_IOBuffer *b, sp_int off, int width) {
-  if (SP_LIKELY(b->data && (uint64_t)off < (uint64_t)b->size &&
-                (uint64_t)b->size - (uint64_t)off >= (uint64_t)width))
-    return b->data + off;
-  return NULL;
 }
 /* the width-byte value at p, in the byte order be names: one unaligned load
    (memcpy) and a byte swap when that order is not the host's, so a cached
@@ -129,16 +119,6 @@ static inline double sp_iob_decode_f(const uint8_t *p, sp_int ty) {
   if (w == 4) { union { uint32_t u; float f; } u; u.u = (uint32_t)raw; return u.f; }
   union { uint64_t u; double f; } u; u.u = raw; return u.f;
 }
-static inline sp_int sp_IOBuffer_load_i(sp_IOBuffer *b, sp_int ty, sp_int off) {
-  const uint8_t *p = sp_iob_inline_ptr(b, off, sp_iob_width(ty));
-  if (SP_UNLIKELY(!p)) return sp_IOBuffer_get_i(b, ty, off);
-  return sp_iob_decode_i(p, ty);
-}
-static inline double sp_IOBuffer_load_f(sp_IOBuffer *b, sp_int ty, sp_int off) {
-  const uint8_t *p = sp_iob_inline_ptr(b, off, sp_iob_width(ty));
-  if (SP_UNLIKELY(!p)) return sp_IOBuffer_get_f(b, ty, off);
-  return sp_iob_decode_f(p, ty);
-}
 /* IO::Buffer#size, inline for the same program (a slice's is its own) */
 static inline sp_int sp_IOBuffer_size_inline(sp_IOBuffer *b) { return (sp_int)b->size; }
 static inline uint8_t *sp_iob_slice_base(sp_IOBuffer *b) {
@@ -162,6 +142,10 @@ static inline uint8_t *sp_iob_slice_base(sp_IOBuffer *b) {
 static inline uint8_t *sp_iob_view(sp_IOBuffer *b, sp_int *len) {
   *len = 0;
   if (!b) return NULL;
+#if INTPTR_MAX < INT64_MAX
+  /* Let checked reads handle views whose full length does not fit sp_int. */
+  if (b->size > INTPTR_MAX) return NULL;
+#endif
   if (b->data) { *len = b->size; return b->data; }
   uint8_t *data = b->source ? sp_iob_slice_base(b) : NULL;
   if (data) *len = b->size;
@@ -170,6 +154,31 @@ static inline uint8_t *sp_iob_view(sp_IOBuffer *b, sp_int *len) {
 /* Does a value of type ty at off lie within a view of len bytes? */
 static inline int sp_iob_fits(sp_int len, sp_int off, sp_int ty) {
   return (uint64_t)off < (uint64_t)len && (uint64_t)len - (uint64_t)off >= (uint64_t)sp_iob_width(ty);
+}
+/* Check the owning buffer directly. Resolve a slice's backing on each read. */
+static inline const uint8_t *sp_iob_inline_ptr(sp_IOBuffer *b, sp_int off, sp_int ty) {
+  if (SP_LIKELY(b && b->data)) {
+#if INTPTR_MAX < INT64_MAX
+    if (b->size > INTPTR_MAX) return NULL;
+#endif
+    if (SP_LIKELY((uint64_t)off < (uint64_t)b->size &&
+                  (uint64_t)b->size - (uint64_t)off >= (uint64_t)sp_iob_width(ty)))
+      return b->data + off;
+    return NULL;
+  }
+  sp_int len;
+  const uint8_t *base = sp_iob_view(b, &len);
+  return sp_iob_fits(len, off, ty) ? base + off : NULL;
+}
+static inline sp_int sp_IOBuffer_load_i(sp_IOBuffer *b, sp_int ty, sp_int off) {
+  const uint8_t *p = sp_iob_inline_ptr(b, off, ty);
+  if (SP_UNLIKELY(!p)) return sp_IOBuffer_get_i(b, ty, off);
+  return sp_iob_decode_i(p, ty);
+}
+static inline double sp_IOBuffer_load_f(sp_IOBuffer *b, sp_int ty, sp_int off) {
+  const uint8_t *p = sp_iob_inline_ptr(b, off, ty);
+  if (SP_UNLIKELY(!p)) return sp_IOBuffer_get_f(b, ty, off);
+  return sp_iob_decode_f(p, ty);
 }
 sp_int sp_IOBuffer_set_i(sp_IOBuffer *b, sp_int ty, sp_int off, sp_int v);
 sp_int sp_IOBuffer_set_f(sp_IOBuffer *b, sp_int ty, sp_int off, double v);

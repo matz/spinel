@@ -19,6 +19,7 @@
    handle where its renderer names one. */
 
 #include "codegen_internal.h"
+#include "method_table_check.h"
 #include "call_plan.h"
 #include "codegen_call_arms.h"
 #include "repr.h"
@@ -524,14 +525,16 @@ static void str_box_note(StrForm *sf, int rf, int rw) {
    publish the handle of the String it answers (Scope.ret_handle), which
    String(o) then hands on as it is? */
 static int str_to_str_publishes(Compiler *c) {
-  int any = 0;
-  for (int k = 0; k < c->nclasses; k++) {
+  int any = 0, all = 1;
+  mtab_enter(c);   /* (the candidate owner of the classes that define to_str: every class is asked by design, no call's question) */
+  for (int k = 0; k < c->nclasses && all; k++) {
     int mi = comp_method_in_chain(c, k, "to_str", NULL);
     if (mi < 0) continue;
-    if (!scope_ret_handle(c, mi)) return 0;
+    if (!scope_ret_handle(c, mi)) all = 0;
     any = 1;
   }
-  return any;
+  mtab_leave(c);
+  return all && any;
 }
 static int str_box_kernel_string(Compiler *c, int v, Buf *b) {
   const NodeTable *nt = c->nt;

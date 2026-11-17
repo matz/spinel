@@ -1971,11 +1971,12 @@ static void ffi_arg_hold(Buf *call, size_t at, Buf *pre, int tb, int ai) {
    `x`), reach the field of an attr writer, rather than an explicit `def x=` at an
    equal-or-more-derived class? The class that defines the writer in *defc,
    or -1 for the receiver's own. CRuby: attr_accessor defines an ordinary
-   writer method. */
+   writer method. Both as the plan answers the call: the writer where an
+   attr_writer of the name has run at it, the def it binds. */
 static int attr_writer_field(Compiler *c, int call, int arc, const char *base, const char *name, int *defc) {
-  MethodLookup ml = { .def_class = -1 };
-  *defc = -1;
-  int awins = comp_writer_in_chain(c, arc, base, defc);
+  MethodLookup ml = { .def_class = -1 }, wml = { .def_class = -1 };
+  int awins = call_attr_target(c, call, arc, base, CT_ATTR | CT_WRITER, &wml);
+  *defc = awins ? wml.def_class : -1;
   if (awins && call_target(c, call, arc, name, 0, &ml) >= 0) {
     for (int k = arc; k >= 0; k = c->classes[k].parent) {
       if (k == ml.def_class) { awins = 0; break; }
@@ -2456,6 +2457,21 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           if (ostruct) buf_puts(b, "sp_json_ostructify(");
           emit_json_parse_call(c, nf, argc, argv, b);
           if (ostruct) buf_puts(b, ")");
+          return 1;
+        }
+        /* JSON.generate(obj, opts) and JSON.pretty_generate(obj, opts): the
+           options are read at run time (sp_json_generate_options), where the
+           binding's one argument would drop them */
+        if (sp_streq(nvmod, "JSON") && (sp_streq(name, "generate") || sp_streq(name, "pretty_generate")) &&
+            argc == 2) {
+          /* the options may run a user conversion (max_nesting's #to_int, an
+             unknown key's #to_s), as JSON.parse's may; and the answer is a new
+             String, so a handle a #to_s published on the way is cleared */
+          g_conv_emitted++;
+          int t = ++g_tmp;
+          buf_printf(b, "sp_strface_unpub(({ sp_RbVal _t%d = ", t); emit_boxed(c, argv[0], b);
+          buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_json_generate_options(_t%d, ", t, t); emit_boxed(c, argv[1], b);
+          buf_printf(b, ", %d); }))", sp_streq(name, "pretty_generate"));
           return 1;
         }
         /* one String representation: a handle argument's read publishes it
@@ -5429,7 +5445,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            those methods answers more than true or false. */
         TyKind at = infer_type(c, argv[0]);
         int own = 0, bx = class_eqq_answers_value(c);
-        for (int k = 0; k < c->nclasses && !own; k++) own = class_own_cmethod_eqq(c, k) >= 0;
+        for (int k = 0; k < c->nclasses && !own; k++) own = class_own_cmethod_eqq(c, -1, -1, k) >= 0;
         buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
         if (own && at != TY_POLY && at != TY_UNKNOWN && at != TY_NIL && !needs_root(at) && c_type_name(at)) {
           buf_printf(b, "; %s _a%d = ", c_type_name(at), o); emit_expr(c, argv[0], b);
@@ -5441,7 +5457,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         char sref[24]; snprintf(sref, sizeof sref, at == TY_POLY ? "_t%d" : "_a%d", o);
         for (int k = 0; k < c->nclasses && own; k++) {
           Buf t; memset(&t, 0, sizeof t);
-          if (class_own_cmethod_eqq(c, k) >= 0 && emit_class_cmethod_eqq(c, k, sref, at, -1, bx, &t) && t.p) {
+          if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, sref, at, -1, bx, &t) && t.p) {
             if (!sw) { buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s _r%d; switch (_cl%d.cls_id) { ", o, bx ? "sp_RbVal" : "sp_bool", o, _clt); sw = 1; }
             buf_printf(b, "case %d: _r%d = %s; break; ", k, o, t.p);
           }

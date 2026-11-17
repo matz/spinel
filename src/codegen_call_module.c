@@ -1673,9 +1673,19 @@ else {
                     " (const char *)0; })", argc);
       return 1;
     }
-    for (int a = 0; a < argc; a++) { buf_puts(b, "((void)("); emit_boxed(c, argv[a], b); buf_puts(b, "), "); }
+    /* a state given is read as generate's options (sp_json_generate_options),
+       the receiver evaluated first */
+    if (argc == 1) {
+      /* as JSON.generate's options arm: a user conversion may run, and the
+         new String's answer clears a published handle */
+      g_conv_emitted++;
+      int t = ++g_tmp;
+      buf_printf(b, "sp_strface_unpub(({ sp_RbVal _t%d = ", t); emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_json_generate_options(_t%d, ", t, t); emit_boxed(c, argv[0], b);
+      buf_puts(b, ", 2); }))");
+      return 1;
+    }
     buf_puts(b, "sp_json_val("); emit_boxed(c, recv, b); buf_puts(b, ")");
-    for (int a = 0; a < argc; a++) buf_puts(b, ")");
     return 1;
   }
 

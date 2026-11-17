@@ -16,8 +16,18 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
+# Entries added by the S2-ASKS PR, in three groups. The program-level dispatchers, each emitted once per program for
+# every class (a switch on the class id): emit_user_coerce_dispatch and emit_obj_succ_dispatch (the numeric hooks),
+# hash_reader_ivar (the key hash of a class whose `hash` is a reader), emit_cls_answers_dispatch (Struct's members and
+# keyword_init?) and emit_exc_text_dispatch_at (the exception text hooks of a builtin exception's reopenings). No call
+# stands behind an arm: the switch is the class's, so its question is the table's with no site, asked for every class
+# of the program, as the others of this list are. The readers of the compiler's own synthesized helper: obj_each_elems_text
+# and an_phase_procs, for every class an `__enum_to_a` call may reach (its `each` and `__enum_to_a`), whose call is a
+# synthesized node that names no method of the program's. The singleton-override readers (sg_delegate_scope,
+# sg_override_ret and emit_method's early-call arm): the delegate they build answers a call that runs on an object
+# without the override (a dup, or the object before its def ran), after any later redefinition of the parent's method, so
+# no point of the load is that call's own; the table's method is the answer until the entries of step 4.
 FUNCS="
-src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
 src/codegen_util.c:exc_text_override_calls_super
 src/analyze_util.c:class_coerce_emittable
@@ -51,7 +61,6 @@ src/codegen.c:prepare_obj_cmp_dispatch
 src/codegen.c:emit_struct_display_decls
 src/codegen.c:exc_text_method
 src/codegen.c:range_rat_walk_own_def
-src/codegen.c:emit_poly_iter_obj_normalize
 src/codegen.c:user_aset_scope
 src/codegen.c:obj_to_ary_method
 src/codegen.c:obj_to_a_method
@@ -74,6 +83,19 @@ src/compiler.c:mixin_answers_first
 src/compiler.c:toplevel_mod_method
 src/codegen_call_exception.c:emit_call_exception_arms
 src/compiler.c:comp_poly_arm_reader_any
+src/codegen.c:emit_user_coerce_dispatch
+src/codegen.c:emit_obj_succ_dispatch
+src/codegen.c:hash_reader_ivar
+src/codegen.c:emit_cls_answers_dispatch
+src/codegen.c:emit_exc_text_dispatch_at
+src/codegen.c:sg_delegate_scope
+src/codegen.c:emit_method
+src/analyze_pass.c:sg_override_ret
+src/codegen.c:obj_each_elems_text
+src/analyze.c:an_phase_procs
+src/analyze_desugar.c:send_split_by_owner
+src/analyze_pass.c:bare_call_on_class
+src/analyze_desugar.c:dsend_class_names
 "
 PRIM='comp_(method_in_class|cmethod_in_class|method_in_chain|cmethod_in_chain|self_method_in_chain|method_index|main_method|included_method_index|reader_in_chain|writer_in_chain|is_undeffed_in_chain|method_vis_in_chain)[[:space:]]*([(]|$)'
 bad=0

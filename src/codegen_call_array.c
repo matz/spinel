@@ -1966,7 +1966,7 @@ int emit_builtin_array_concat(Compiler *c, int id, int recv, TyKind rt, const in
          ahead of the dispatch, which read the object through NULL */
       if (op[i].obj_nil)
         buf_printf(b, " if (SP_UNLIKELY(!_t%d)) sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Array\");", tv);
-      emit_to_ary_dispatch(c, id, ty_object_class(op[i].obj_ty), self, &call);
+      emit_to_ary_dispatch(c, id, argv[i], ty_object_class(op[i].obj_ty), self, &call);
       tv = op[i].arr = ++g_tmp;
       buf_puts(b, " "); emit_ctype(c, op[i].repr.as_ty, b);
       buf_printf(b, " _t%d = ", tv);
@@ -2216,7 +2216,7 @@ int emit_op_array_pred_class(Compiler *c, const BopCtx *x, Buf *b) {
   buf_puts(b, "({ "); ta = hold_operand(c, x->recv, TY_POLY, 1, ta, 1, " ", b);
   buf_printf(b, "sp_Class _t%d = ", tc2); emit_expr(c, argv[0], b);
   buf_puts(b, "; "); emit_poly_iter_obj_reject(c, x->id, ta, name, b);
-  emit_poly_iter_obj_normalize(c, ta, b);
+  emit_poly_iter_obj_normalize(c, x->id, ta, b);
   buf_printf(b, "sp_poly_iter_check(_t%d, \"%s\"); ", ta, name);
   buf_printf(b, "sp_int _t%d = sp_poly_arr_len_ex(_t%d); sp_int _t%d = 0;"
                 " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++)"
@@ -2245,7 +2245,7 @@ static void emit_poly_shl_call(Compiler *c, int id, const int *argv, int t, cons
     Buf cb; TyKind mret;
     /* (a reopening's own `<<` is sp_poly_shl's user arm) */
     if (k < 0 || k >= c->nclasses || !c->classes[k].is_native_class || !c->classes[k].instantiated ||
-        comp_method_in_chain(c, k, "<<", NULL) >= 0)
+        call_target(c, id, k, "<<", CT_METHODS, NULL) >= 0)
       continue;
     if (ta < 0) { ta = ++g_tmp; tr = ++g_tmp; }
     if (!poly_native_arm_call(c, k, "<<", 1, argv, &ta, &aty, t, &cb, &mret)) continue;

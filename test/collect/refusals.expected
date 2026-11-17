@@ -234,11 +234,23 @@ spinel: test/reject/builder_conditional_beside_header.rb:7: a Bar = Class.new or
 spinel: test/reject/builder_header_apart_under_rescue.rb:6: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
 == test/reject/builder_header_apart_under_rescue.rb [promote] rc=1
 spinel: test/reject/builder_header_apart_under_rescue.rb:6: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builtin_guarded_prepend_kwsplat_check_both_sides.rb [default] rc=1
+spinel: test/reject/builtin_guarded_prepend_kwsplat_check_both_sides.rb:10: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_guarded_prepend_kwsplat_check_both_sides.rb [promote] rc=1
+spinel: test/reject/builtin_guarded_prepend_kwsplat_check_both_sides.rb:10: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
 == test/reject/builtin_include_in_method.rb [default] rc=1
 spinel: test/reject/builtin_include_in_method.rb:7: String.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class String ... end` (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/builtin_include_in_method.rb [promote] rc=1
 spinel: test/reject/builtin_include_in_method.rb:7: String.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class String ... end` (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/builtin_new_refused_as_rescue_value.rb [default] rc=1
+spinel: test/reject/builtin_new_refused_as_rescue_value.rb:7: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
+spinel: 1 refusal, nothing written
+== test/reject/builtin_new_refused_as_rescue_value.rb [promote] rc=1
+spinel: test/reject/builtin_new_refused_as_rescue_value.rb:7: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
 spinel: 1 refusal, nothing written
 == test/reject/builtin_prepended_forward_check_then_raise.rb [default] rc=1
 spinel: test/reject/builtin_prepended_forward_check_then_raise.rb:11: a builtin class's `new` does not run the initialize the program defines on it (a reopening's or a prepended module's): CRuby calls it, the builtin construction does not
@@ -1658,6 +1670,28 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/reinit_bound_subclass_initialize.rb:8: a method calls initialize on an object whose class's initialize uses super, yield or block_given?, so the call cannot run it as a plain method here. Move the shared code to a method of its own and call that from both.
 == test/reject/reinit_bound_subclass_initialize.rb [promote] rc=1
 spinel: test/reject/reinit_bound_subclass_initialize.rb:8: a method calls initialize on an object whose class's initialize uses super, yield or block_given?, so the call cannot run it as a plain method here. Move the shared code to a method of its own and call that from both.
+== test/reject/reopened_exception_self_new_explicit_super.rb [default] rc=1
+spinel: test/reject/reopened_exception_self_new_explicit_super.rb:4: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (SuperNode)
+spinel: test/reject/reopened_exception_self_new_explicit_super.rb:6: warning: Exception#message is not supported (raises NotImplementedError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_explicit_super.rb [promote] rc=1
+spinel: test/reject/reopened_exception_self_new_explicit_super.rb:4: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (SuperNode)
+spinel: test/reject/reopened_exception_self_new_explicit_super.rb:6: warning: Exception#message is not supported (raises NotImplementedError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_forwarding_super.rb [default] rc=1
+spinel: test/reject/reopened_exception_self_new_forwarding_super.rb:6: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (ForwardingSuperNode)
+spinel: test/reject/reopened_exception_self_new_forwarding_super.rb:8: warning: Exception#message is not supported (raises NotImplementedError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_forwarding_super.rb [promote] rc=1
+spinel: test/reject/reopened_exception_self_new_forwarding_super.rb:6: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (ForwardingSuperNode)
+spinel: test/reject/reopened_exception_self_new_forwarding_super.rb:8: warning: Exception#message is not supported (raises NotImplementedError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_keyword_super.rb [default] rc=1
+spinel: test/reject/reopened_exception_self_new_keyword_super.rb:6: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (ForwardingSuperNode)
+spinel: 1 refusal, nothing written
+== test/reject/reopened_exception_self_new_keyword_super.rb [promote] rc=1
+spinel: test/reject/reopened_exception_self_new_keyword_super.rb:6: unsupported super in `self.new` of a Struct, Data, exception or native class: node N (ForwardingSuperNode)
+spinel: 1 refusal, nothing written
 == test/reject/require_relative_adjacent_literals.rb [default] rc=1
 spinel: test/reject/require_relative_adjacent_literals.rb:4: require_relative needs its path as one string literal
 == test/reject/require_relative_adjacent_literals.rb [promote] rc=1

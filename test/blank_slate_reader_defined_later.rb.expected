@@ -1,0 +1,12 @@
+before: NoMethodError
+"both: NoMethodError"
+maybe nil: NoMethodError
+arg
+with an argument: NoMethodError
+a1
+a2
+never: NoMethodError
+:set
+[:set, :set]
+:set
+:set

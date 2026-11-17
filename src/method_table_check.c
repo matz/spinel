@@ -247,7 +247,9 @@ static int super_reads_own_name(Compiler *c, int fn, const char *name) {
    every call may reach as its lookup's tail. A frame with no names of its
    own is `implied` for a row of a node it holds directly (ic_held_rows_name),
    and for an implied call of the call it is an operand of (ic_operand_host);
-   `other` otherwise. */
+   `call` where the name is that host call's own (the Range a `clamp` is
+   given), and `implied` for a row of its direct parent where that is no call
+   (the receiver of `a[i] += 1`: its `[]` and `[]=`); `other` otherwise. */
 static const char *reader_family(Compiler *c, const MtSite *s) {
   const NodeTable *nt = c->nt;
   int fn = s->node;
@@ -298,6 +300,19 @@ static const char *reader_family(Compiler *c, const MtSite *s) {
   /* an operand's frame (a variable read some emitter converts) is the implied call of the call it is an operand of */
   int host = n == 0 ? ic_operand_host(c, fn) : fn;
   if (host != fn && ic_node_calls_name(c, host, name, s->side == MTS_CMETH)) return "implied";
+  /* ...or the call's own, where the name is the host call's (the Range a `clamp` is given: its question of `clamp`) */
+  if (host != fn) {
+    const char *hn[2];
+    int nh = call_node_names(c, host, hn);
+    for (int i = 0; i < nh; i++)
+      if (hn[i] && sp_streq(hn[i], name)) return "call";
+  }
+  /* ...or the implied call of the node it is the operand of, where that node is no call (the receiver of `a[i] += 1`
+     and its `[]` and `[]=`) */
+  if (n == 0) {
+    int up = comp_parent_map(c)[fn];
+    if (up >= 0 && ic_node_calls_name(c, up, name, s->side == MTS_CMETH)) return "implied";
+  }
   return n > 0 ? "call" : "other";
 }
 

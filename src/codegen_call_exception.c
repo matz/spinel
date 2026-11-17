@@ -1001,11 +1001,11 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
       int xc = cn ? const_node_match_class_or_named(c, av[0]) : -1;
       /* a reopened builtin exception is still the builtin: raised by name,
          through the reopening's own initialize when it has one */
-      if (xc >= 0 && cn && is_exc_name(cn) && is_builtin_reopen(cn)) {
-        int rim = exc_reopen_initialize(c, id, xc);
+      if (cn && is_exc_name(cn) && (xc < 0 || is_builtin_reopen(cn))) {
+        int rim = exc_builtin_reopen_initialize(c, id, cn, 0, NULL);
         if (rim >= 0) {
           buf_puts(b, raise_fn("sp_raise_exc"));
-          emit_exc_reopen_construct(c, xc, rim, -1, -1, b);
+          emit_exc_reopen_construct_as(c, cn, rim, -1, -1, -1, b);
           buf_puts(b, ")");
           if (cause_node >= 0) buf_puts(b, "; })");
           return 1;
@@ -1062,11 +1062,11 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
       int xc = cn ? const_node_match_class_or_named(c, av[0]) : -1;
       /* a reopened builtin exception is still the builtin: raised by name,
          through the reopening's own initialize when it has one */
-      if (xc >= 0 && cn && is_exc_name(cn) && is_builtin_reopen(cn)) {
-        int rim = exc_reopen_initialize(c, id, xc);
+      if (cn && is_exc_name(cn) && (xc < 0 || is_builtin_reopen(cn))) {
+        int rim = exc_builtin_reopen_initialize(c, id, cn, 1, &av[1]);
         if (rim >= 0) {
           buf_puts(b, raise_fn("sp_raise_exc"));
-          emit_exc_reopen_construct(c, xc, rim, -1, av[1], b);
+          emit_exc_reopen_construct_as(c, cn, rim, -1, av[1], -1, b);
           buf_puts(b, ")");
           if (cause_node >= 0) buf_puts(b, "; })");
           return 1;
@@ -1215,11 +1215,10 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
            reopening's own initialize runs on it, as that form's does
            (emit_exc_reopen_construct). Raised by name, it skipped the
            initialize, so its ivars and side effects were missing. */
-        int rxc = comp_builtin_class_named(c, "RuntimeError");
-        int rim = rxc >= 0 ? exc_reopen_initialize(c, id, rxc) : -1;
+        int rim = exc_builtin_reopen_initialize(c, id, "RuntimeError", 1, &av[0]);
         if (rim >= 0) {
           buf_puts(b, raise_fn("sp_raise_exc"));
-          emit_exc_reopen_construct(c, rxc, rim, -1, av[0], b);
+          emit_exc_reopen_construct_as(c, "RuntimeError", rim, -1, av[0], -1, b);
           buf_puts(b, ")");
         }
         else if (strbuf_route_reader(c, av[0])) {

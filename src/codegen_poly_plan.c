@@ -96,10 +96,10 @@ static void pa_arm_text(Compiler *c, const PolyArm *a, char *out, size_t n) {
                                      "default to_i/to_f", "default any?/none?", "default to_h", "default display",
                                      "default hash",
                                      "each_index", "join", "alive?", "kill", "status", "queue", "io-read",
-                                     "io-flush", "io-close", "enum-to_a",
+                                     "io-flush", "io-close", "enum-to_a", "condvar",
                                      "cover?", "try_convert", "gcdlcm", "unpack1", "include?", "str-delete",
                                      "str-partition", "str-setop", "store", "str-encode", "str-split",
-                                     "int-bitref", "index-cases", "io-read_nonblock", "io-readpartial", "io-readpartial(buf)",
+                                     "int-bitref", "str-aset", "index-cases", "io-read_nonblock", "io-readpartial", "io-readpartial(buf)",
                                      "io-setsockopt", "io-write",
                                      "io-syswrite", "io-print", "io-putc", "io-seek/read", "unshift", "push",
                                      "pack", "join(sep)", "include?-cases", "array-index", "intersect?",
@@ -112,6 +112,8 @@ static void pa_arm_text(Compiler *c, const PolyArm *a, char *out, size_t n) {
                                      "block map!", "subclass re-entry", "array re-entry",
                                      "array re-entry (receiver)", "face str-bang", "io-timeout",
                                      "enum-inline" };
+  /* (one label per family, in the enum's order: a family added without one shifted every label after it) */
+  _Static_assert(sizeof fam / sizeof fam[0] == PB_NFAMILIES, "pa_arm_text's fam[] and the PB_ families differ");
   char kb[48];
   if (a->key >= 0 && a->key < c->nclasses) snprintf(kb, sizeof kb, "%s", c->classes[a->key].name);
   else if (a->key == PA_KEY_DEFAULT) snprintf(kb, sizeof kb, "default");
@@ -1642,7 +1644,7 @@ static int recv_class_value_defines(Compiler *c, int id, const char *name) {
   for (int uk = 0; uk < c->nclasses; uk++) {
     const char *kn = c->classes[uk].name;
     if ((comp_class_is_module(c, &c->classes[uk]) || (kn && sp_streq(kn, "Module"))) &&
-        comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
+        comp_name_responder(c, uk, name, 0) >= 0) return 1;
   }
   return 0;
 }
@@ -3095,6 +3097,16 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
       else plan_put_boxed(c, plan_slot_oint(c, id, ret), is_scalar_ret(ret) ? ret : TY_INT, qv, b);
       buf_puts(b, "; break;");
     }
+  }
+  /* a boxed ConditionVariable's #signal and #broadcast, beside a user class's own */
+  if (argc == 0 && (sp_streq(name, "signal") || sp_streq(name, "broadcast"))) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_N_CONDVAR, -1, TY_UNKNOWN, PC_SAME);
+    char cv[96];
+    snprintf(cv, sizeof cv, "((void)sp_CondVar_%s((sp_condvar *)_t%d.v.p), _t%d)", name, tv, tv);
+    buf_printf(b, " case SP_BUILTIN_CONDVAR: _t%d = ", tr);
+    if (ret == TY_POLY) buf_puts(b, cv);
+    else emit_unbox_text(c, ret, cv, b);
+    buf_puts(b, "; break;");
   }
   /* IO#read on a poly value when a user class owns `read` (ffi's
      Pointer#read(type)): a File in the same slot still reads itself */

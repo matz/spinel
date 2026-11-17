@@ -35,6 +35,10 @@ src/analyze_scope.c:include_module_methods
 src/analyze_scope.c:extend_class_with
 src/analyze.c:make_yield_proc_forms
 src/analyze_elab.c:lr_sg_makers
+src/analyze.c:inline_replacing_def
+src/analyze.c:check_seed_contradictions
+src/codegen_util.c:mc_number_versions
+src/analyze.c:desugar_missing_method_obj
 "
 REFUSALS="
 src/analyze.c:refuse_mixin_after_calls
@@ -57,7 +61,7 @@ for ent in $FUNCS $REFUSALS; do
   if [ -n "$res" ]; then echo "construction-readers-check: $f:$fn: $res"; bad=1; fi
 done
 # the other direction: every function carrying the comment is on the list
-for f in src/analyze_scope.c src/analyze.c src/analyze_elab.c; do
+for f in src/analyze_scope.c src/analyze.c src/analyze_elab.c src/codegen_util.c; do
   awk -v f="$f" '
     /^(static )?[a-z][^;]*[(]/ && !/;$/ && /[{]$/ { fn = $0; sub(/[(].*/, "", fn); n = split(fn, w, /[ *]+/); fn = w[n] }
     /[(]construction:/ { print "c " f ":" fn }

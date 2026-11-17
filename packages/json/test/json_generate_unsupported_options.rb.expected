@@ -1,0 +1,20 @@
+indent: unsupported JSON.generate option: indent
+space: unsupported JSON.generate option: space
+space_before: unsupported JSON.generate option: space_before
+object_nl: unsupported JSON.generate option: object_nl
+array_nl: unsupported JSON.generate option: array_nl
+strict: unsupported JSON.generate option: strict
+as_json: unsupported JSON.generate option: as_json
+depth: unsupported JSON.generate option: depth
+allow_duplicate_key: unsupported JSON.generate option: allow_duplicate_key
+allow_duplicate_key nil: unsupported JSON.generate option: allow_duplicate_key
+pretty indent: unsupported JSON.pretty_generate option: indent
+pretty no indent: unsupported JSON.pretty_generate option: indent
+pretty space_before: unsupported JSON.pretty_generate option: space_before
+to_json indent: unsupported JSON.generate option: indent
+generate defaults: {"a":[1]}
+pretty defaults: {
+  "a": [
+    1
+  ]
+}

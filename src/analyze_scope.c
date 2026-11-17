@@ -223,7 +223,7 @@ static int forwarding_target_scan(Compiler *c, Scope *s, int *sole) {
       const Scope *st = comp_super_site(c, s);
       if (st->class_id >= 0 && !st->is_cmethod && st->name) {
         int par = comp_super_parent(c, st->class_id, 0);
-        mi = par >= 0 ? comp_method_in_chain(c, par, st->name, NULL) : -1;
+        mi = par >= 0 ? call_target(c, id, par, st->name, CT_METHODS | CT_REACH, NULL) : -1;
       }
     }
     else {
@@ -5956,6 +5956,7 @@ static void bare_native_func_calls(Compiler *c) {
     int cr = nt_new_node(nt, "ConstantReadNode");
     if (cr < 0) continue;
     nt_node_set_str(nt, cr, "name", mod);
+    nt_node_set_int(nt, cr, "made_class", sc->class_id + 1);
     comp_grow_node_arrays(c);
     c->nscope[cr] = c->nscope[id];
     nt_node_set_ref(nt, id, "receiver", cr);
@@ -6125,6 +6126,7 @@ void register_ffi_decls(Compiler *c) {
       if (native_cid < 0) native_cid = cid;
       ClassInfo *nc = &c->classes[cid];
       nc->is_native_class = 1;
+      if (!nc->native_decl) nc->native_decl = s + 1;
       if (leaf != clsname && !nc->ruby_name_cache) nc->ruby_name_cache = strdup(clsname);
       free(nc->c_struct); nc->c_struct = strdup(cstruct);
       if (freesym) { free(nc->native_free); nc->native_free = strdup(freesym); }
@@ -7872,7 +7874,7 @@ void resolve_parents(Compiler *c) {
       Scope *s = comp_scope_of(c, id);
       if (!s || s->class_id < 0 || !s->name || s->is_cmethod || c->classes[s->class_id].nsub_root <= 0) continue;
       int par = c->classes[s->class_id].parent;
-      if (par >= 0 && comp_method_in_chain(c, par, s->name, NULL) >= 0) continue;
+      if (par >= 0 && call_target(c, id, par, s->name, CT_METHODS | CT_REACH, NULL) >= 0) continue;
       int pnd = s->def_node >= 0 ? nt_ref(ntw, s->def_node, "parameters") : -1, nkw = 0;
       if (pnd >= 0) (void)nt_arr(ntw, pnd, "keywords", &nkw);
       if (s->rest_idx >= 0 || s->kwrest_idx >= 0 || nkw > 0 || s->blk_param || s->nparams > 64) continue;
@@ -9370,8 +9372,9 @@ void register_include_attrs(Compiler *c) {
    an attribute: attr_reader/writer/accessor or a Struct member, declared there
    or by a module it includes. A reader or writer is copied down into every
    subclass (inherit_members), so the class that declares it is the highest one
-   still holding it; a `def` found on the way up answers first. */
-static int super_lands_on_attr(Compiler *c, int ci, const char *base, int want_write) {
+   still holding it; a `def` found on the way up answers first, as the plan
+   answers super `id`'s reach of each class's own table. */
+static int super_lands_on_attr(Compiler *c, int id, int ci, const char *base, int want_write) {
   char mname[300];
   snprintf(mname, sizeof mname, want_write ? "%s=" : "%s", base);
   ClassInfo *self_cls = &c->classes[ci];
@@ -9386,7 +9389,7 @@ static int super_lands_on_attr(Compiler *c, int ci, const char *base, int want_w
     if (want_write ? comp_is_writer(mod, base) : comp_is_reader(mod, base)) return 1;
   }
   for (int k = self_cls->parent; k >= 0; k = c->classes[k].parent) {
-    if (comp_method_in_class(c, k, mname) >= 0) return 0;
+    if (call_target(c, id, k, mname, CT_OWN | CT_REACH, NULL) >= 0) return 0;
     ClassInfo *kc = &c->classes[k];
     if (!(want_write ? comp_is_writer(kc, base) : comp_is_reader(kc, base))) continue;
     int up = kc->parent;
@@ -9479,7 +9482,7 @@ void rewrite_attr_supers(Compiler *c) {
     }
     /* (a prepended module's copy reaches the class's own accessor first) */
     if (!(s->is_prepend_copy && class_own_attr_live(c, s->class_id, uname, base, is_write)) &&
-        !super_lands_on_attr(c, s->class_id, base, is_write)) continue;
+        !super_lands_on_attr(c, id, s->class_id, base, is_write)) continue;
     char ivn[260];
     snprintf(ivn, sizeof ivn, "@%s", base);
     int line = (int)nt_int(nt, id, "node_line", 0);
@@ -13206,7 +13209,7 @@ static int infer_ivar_set_call(Compiler *c, int id, NilWrites *writes) {
           else hit = 0;
           if (!hit || k >= c->nclasses) continue;
           ClassInfo *ck = &c->classes[k];
-          if (ck->is_data || comp_method_in_chain(c, k, "instance_variable_set", NULL) >= 0) continue;
+          if (ck->is_data || comp_name_responder(c, k, "instance_variable_set", 0) >= 0) continue;
           any = 1;
           if (!ck->computed_ivar_set) { ck->computed_ivar_set = 1; changed = 1; }
           for (int iv = ck->is_struct ? ck->nmembers : 0; iv < ck->nivars; iv++) {
@@ -14653,8 +14656,8 @@ void refuse_self_singleton_calls(Compiler *c) {
     /* Refused also with an instance method of the name: the compiled call
        runs it, but an instance that ran the def runs its own method. */
     if (!ssc_def_reaches(c, k, nm, self_call)) {
-      if (comp_method_in_chain(c, k, nm, NULL) >= 0) continue;
-      int cm = comp_cmethod_in_chain(c, k, nm, NULL);
+      if (call_target(c, id, k, nm, CT_METHODS, NULL) >= 0) continue;
+      int cm = call_target(c, id, k, nm, CT_CMETHOD, NULL);
       if (cm < 0 || c->scopes[cm].def_node < 0 || !nt_int(nt, c->scopes[cm].def_node, "sg_self_in_method", 0)) continue;
     }
     unsupported_feature(c, id, "singleton method on self inside an instance method: self is whichever instance runs it, "

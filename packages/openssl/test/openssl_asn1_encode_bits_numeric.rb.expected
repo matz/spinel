@@ -1,0 +1,29 @@
+030200ff
+030201fe
+03020780
+030200ff
+030201fe
+03020780
+OpenSSL::ASN1::ASN1Error
+unused_bits for a bitstring value must be in the range 0 to 7
+RangeError
+integer 2147483648 too big to convert to 'int'
+OpenSSL::ASN1::ASN1Error
+unused_bits for a bitstring value must be in the range 0 to 7
+RangeError
+integer -2147483649 too small to convert to 'int'
+RangeError
+float 1.234567891e+30 out of range of integer
+RangeError
+integer -9223372036854775808 too small to convert to 'int'
+RangeError
+float 9.223372037e+18 out of range of integer
+RangeError
+integer 2147483648 too big to convert to 'int'
+RangeError
+integer -2147483649 too small to convert to 'int'
+RangeError
+bignum too big to convert into 'long'
+030202fc
+1
+true

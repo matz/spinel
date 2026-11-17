@@ -752,8 +752,8 @@ sp_int sp_ssl_discard(sp_int h) {
 /* ---------- EC over the named prime curves ----------
 
    The shape is the one #4221 settled on: one-shot functions over raw bytes.
-   No BN or EC::Point is built on the Ruby side, and -- unlike the
-   connection table above -- nothing here outlives a call. An EC key is fully
+   BN and EC::Point wrappers on the Ruby side hold values, and -- unlike the
+   connection table above -- no native handle outlives a call. An EC key is fully
    described by its two byte strings (the private scalar and the uncompressed
    point), so Ruby holds those and hands them back, rather than holding a
    handle into a table with a slot somebody has to remember to release. A key
@@ -849,6 +849,138 @@ const char *sp_ec_curve_name(const char *curve, sp_int aliases) {
   if (!group) ERR_clear_error();
   EC_GROUP_free(group);
   return name ? name : "";
+}
+
+/* The same boxed Integer boundary used by the JSON package: BN values must
+   stay exact even when ordinary Ruby arithmetic uses machine integers. */
+sp_Bigint *sp_bigint_new_str(const char *s, int base);
+static sp_RbVal sp_openssl_bn_answer(BIGNUM *bn) {
+  char *hex = bn ? BN_bn2hex(bn) : NULL;
+  BN_free(bn);
+  if (!hex) {
+    ERR_clear_error();
+    sp_raise_cls("OpenSSL::BNError", "BIGNUM conversion failed");
+  }
+  sp_RbVal result = sp_box_bigint(sp_bigint_new_str(hex, 16));
+  OPENSSL_free(hex);
+  return result;
+}
+
+static void sp_openssl_bn_radix_error(sp_int base) {
+  char message[80];
+  snprintf(message, sizeof message, "invalid radix %ld", (long)base);
+  sp_raise_cls("ArgumentError", message);
+}
+
+/* Numeric formatting shared by BN and ASN.1, without Ruby method dispatch. */
+static const char *sp_openssl_integer_decimal(sp_RbVal value) {
+  SP_GC_ROOT_RBVAL(value);
+  const char *decimal = value.tag == SP_TAG_INT ? sp_int_to_s(value.v.i) :
+    value.tag == SP_TAG_BIGINT ? sp_bigint_to_s((sp_Bigint *)value.v.p) : NULL;
+  if (!decimal) sp_raise_cls("TypeError", "Cannot convert into OpenSSL::BN");
+  return decimal;
+}
+
+sp_int sp_openssl_bn_compare(sp_RbVal left_value, sp_RbVal right_value) {
+  SP_GC_ROOT_RBVAL(left_value);
+  SP_GC_ROOT_RBVAL(right_value);
+  const char *left = sp_openssl_integer_decimal(left_value); SP_GC_ROOT_STR(left);
+  const char *right = sp_openssl_integer_decimal(right_value); SP_GC_ROOT_STR(right);
+  BIGNUM *a = NULL, *b = NULL;
+  int ok = left && right && BN_dec2bn(&a, left) && BN_dec2bn(&b, right);
+  int result = ok ? BN_cmp(a, b) : 0;
+  BN_free(a);
+  BN_free(b);
+  if (!ok) {
+    ERR_clear_error();
+    sp_raise_cls("OpenSSL::BNError", "BIGNUM comparison failed");
+  }
+  return (result > 0) - (result < 0);
+}
+
+sp_RbVal sp_openssl_bn_integer(const char *bytes, sp_int base) {SP_GC_ROOT_STR(bytes);
+  BIGNUM *bn = NULL;
+  size_t length = bytes ? sp_str_byte_len(bytes) : 0;
+  ERR_clear_error();
+  if (!bytes) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
+  if (length > INT_MAX) sp_raise_cls("RangeError", "BIGNUM input too large");
+  if (base == 2) bn = BN_bin2bn((const unsigned char *)bytes, (int)length, NULL);
+  else if (base == 0) bn = BN_mpi2bn((const unsigned char *)bytes, (int)length, NULL);
+  else if (base == 10) BN_dec2bn(&bn, bytes);
+  else if (base == 16) BN_hex2bn(&bn, bytes);
+  else sp_openssl_bn_radix_error(base);
+  return sp_openssl_bn_answer(bn);
+}
+
+static SP_TLS sp_x509_out sp_openssl_bn_out;
+const char *sp_openssl_bn_string(sp_RbVal value, sp_int base) {
+  SP_GC_ROOT_RBVAL(value);
+  const char *decimal = sp_openssl_integer_decimal(value); SP_GC_ROOT_STR(decimal);
+  BIGNUM *bn = NULL;
+  char *text = NULL;
+  int length = -1;
+  ERR_clear_error();
+  if (decimal && BN_dec2bn(&bn, decimal)) {
+    if (base == 10 || base == 16) {
+      text = base == 10 ? BN_bn2dec(bn) : BN_bn2hex(bn);
+      if (text && strlen(text) <= INT_MAX) length = (int)strlen(text);
+    }
+    else if (base == 2) length = BN_num_bytes(bn);
+    else if (base == 0) length = BN_bn2mpi(bn, NULL);
+    else {
+      BN_free(bn);
+      sp_openssl_bn_radix_error(base);
+    }
+  }
+  if (length >= 0 && sp_x509_room(&sp_openssl_bn_out, (size_t)length + 1)) {
+    if (text) memcpy(sp_openssl_bn_out.p, text, (size_t)length);
+    else if (base == 2) BN_bn2bin(bn, (unsigned char *)sp_openssl_bn_out.p);
+    else BN_bn2mpi(bn, (unsigned char *)sp_openssl_bn_out.p);
+  }
+  else length = -1;
+  BN_free(bn);
+  OPENSSL_free(text);
+  if (length < 0) {
+    ERR_clear_error();
+    sp_raise_cls("OpenSSL::BNError", "BIGNUM conversion failed");
+  }
+  sp_ffi_bin_len = length;
+  return sp_openssl_bn_out.p;
+}
+
+sp_RbVal sp_ec_group_order(const char *curve) {SP_GC_ROOT_STR(curve);
+  EC_GROUP *group = curve ? EC_GROUP_new_by_curve_name(OBJ_txt2nid(curve)) : NULL;
+  BIGNUM *order = BN_new();
+  int ok = group && order && EC_GROUP_get_order(group, order, NULL);
+  EC_GROUP_free(group);
+  if (!ok) {
+    BN_free(order);
+    ERR_clear_error();
+    sp_raise_cls("OpenSSL::PKey::EC::Group::Error", "EC group order unavailable");
+  }
+  return sp_openssl_bn_answer(order);
+}
+
+static SP_TLS sp_x509_out sp_ec_octets_out;
+const char *sp_ec_point_octets(const char *curve, const char *bytes, sp_int form) {
+  EC_GROUP *group = curve ? EC_GROUP_new_by_curve_name(OBJ_txt2nid(curve)) : NULL;
+  EC_POINT *point = group ? EC_POINT_new(group) : NULL;
+  size_t length = 0;
+  sp_ssl_errbuf[0] = 0;
+  if (point && bytes && (form == 2 || form == 4 || form == 6) &&
+      EC_POINT_oct2point(group, point, (const unsigned char *)bytes, sp_str_byte_len(bytes), NULL) &&
+      EC_POINT_is_on_curve(group, point, NULL) == 1) {
+    length = EC_POINT_point2oct(group, point, (point_conversion_form_t)form, NULL, 0, NULL);
+    if (length && length <= INT_MAX && sp_x509_room(&sp_ec_octets_out, length))
+      length = EC_POINT_point2oct(group, point, (point_conversion_form_t)form,
+                                (unsigned char *)sp_ec_octets_out.p, length, NULL);
+    else length = 0;
+  }
+  EC_POINT_free(point);
+  EC_GROUP_free(group);
+  if (!length) return sp_ec_fail("invalid EC point");
+  sp_ffi_bin_len = (int)length;
+  return sp_ec_octets_out.p;
 }
 
 static SP_TLS sp_x509_out sp_ec_export_out;
@@ -1968,3 +2100,5 @@ sp_int sp_ssl_server_check(const char *chain, const char *curve, const char *pri
   SSL_CTX_free(ctx);
   return 1;
 }
+
+#include "sp_asn1.h"

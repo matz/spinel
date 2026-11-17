@@ -3,6 +3,7 @@
 #include "share.h"
 #include "call_plan.h"
 #include "implicit_calls.h"
+#include "method_table_check.h"
 #include <errno.h>
 #include <limits.h>
 
@@ -498,7 +499,17 @@ static int const_node_class_index_tree(Compiler *c, int id);
    is then the one. */
 static int const_node_record_class(Compiler *c, int id, int *core) {
   const NodeTable *nt = c->nt;
-  if (id < 0 || id >= nt->count || nt_int(nt, id, "node_line", 0) == 0) return -2;
+  if (id < 0 || id >= nt->count) return -2;
+  /* a node a pass made (no line of its own) is asked where its source
+     stood, when that source has one (elab_class_ref_at's anchor) */
+  if (nt_int(nt, id, "node_line", 0) == 0) {
+    int src = id;
+    for (int d = 0; d < 8 && src >= 0 && nt_int(nt, src, "node_line", 0) == 0; d++) {
+      char how = 0; int a = 0, k = 0; unsigned ph = 0;
+      src = nt_origin(nt, src, &how, &a, &ph, &k);
+    }
+    if (src < 0 || nt_int(nt, src, "node_line", 0) == 0) return -2;
+  }
   NodeKind ik = nt_kind(nt, id);
   if (ik == NK_ConstantWriteNode || ik == NK_ConstantPathWriteNode) {
     int k = elab_builder_class(c, id);
@@ -523,9 +534,26 @@ int env_value_recv(Compiler *c, int recv, TyKind t) {
 int const_node_class_index(Compiler *c, int id) {
   /* a constant a pass made to name a builtin class (cvb_split's arms) */
   if (id >= 0 && id < c->nt->count && nt_int(c->nt, id, "builtin_ref", 0)) return comp_builtin_class_named(c, nt_str(c->nt, id, "name"));
+  /* a constant a pass made to name a class it held (made_class: the index,
+     +1), as the receiver of a call it gave a module's own receiverless one */
+  { long long mc = id >= 0 && id < c->nt->count ? nt_int(c->nt, id, "made_class", 0) : 0;
+    if (mc > 0 && mc <= c->nclasses) return (int)mc - 1; }
   int core = -1;
   int r = const_node_record_class(c, id, &core);
   if (r >= 0) return r;
+  /* a copy a pass made of a constant the walk saw (nt_clone_subtree): the
+     record answers its source, the read the copy stands for */
+  if (r == -2) {
+    int src = nt_clone_source(c->nt, id);
+    for (int d = 0; src >= 0 && d < 8; d++) {
+      int core2 = -1, rs = const_node_record_class(c, src, &core2);
+      if (rs >= 0) return rs;
+      /* (a source the record does not take for a class leaves the copy to
+         the name, as before: only a class it names stands for the copy) */
+      if (rs != -2) break;
+      src = nt_clone_source(c->nt, src);
+    }
+  }
   int k = const_node_class_index_tree(c, id);
   /* the record resolves the name to the builtin (Object holds no constant of
      the program's by it): only a top-level class of that name can be the
@@ -1254,6 +1282,32 @@ int an_calls_named_first(Compiler *c, const char *name) {
   return k >= 0 ? g_cn_first[k] : -1;
 }
 int an_calls_named_next(int id) { return (id >= 0 && id < g_cn_cnt) ? g_cn_next[id] : -1; }
+
+/* Interposes a call named `name` (with arguments args, -1 for none) between
+   call id and its receiver (`r.m` becomes `r.name.m`): a desugar's
+   materializing, converting or mapping step. The step is a call on the
+   call's receiver, so it takes the private-call permission the call was
+   written with (`self.m` becomes `self.name.m`), and the call keeps it: it
+   is still the call written on self, the one CRuby checks (`self.to_h { }`
+   reaches a private to_h). It takes the call's `&.` too: `r&.m` becomes
+   `r&.name&.m`, so a nil receiver answers nil before the step runs, as the
+   whole call does in CRuby. Returns the new call, or -1. */
+int an_interpose_recv_call(Compiler *c, int id, const char *name, int args) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int wrap = nt_new_node(nt, "CallNode");
+  if (wrap < 0) return -1;
+  nt_node_set_str(nt, wrap, "name", name);
+  nt_node_set_ref(nt, wrap, "receiver", nt_ref(nt, id, "receiver"));
+  nt_set_ignore_visibility(nt, wrap, nt_ignore_visibility(nt, id));
+  nt_node_set_ref(nt, wrap, "arguments", args);
+  nt_node_set_ref(nt, wrap, "block", -1);
+  if (nt_safe_nav(nt, id)) nt_set_safe_nav(nt, wrap, 1);
+  nt_node_set_ref(nt, id, "receiver", wrap);
+  comp_grow_node_arrays(c);
+  c->nscope[wrap] = c->nscope[id];
+  return wrap;
+}
+
 static int an_int_cmp(const void *a, const void *b) {
   int x = *(const int *)a, y = *(const int *)b;
   return (x > y) - (x < y);
@@ -1772,8 +1826,9 @@ const char *sym_static_value(Compiler *c, int node) {
         k != NK_LocalVariableTargetNode)
       continue;
     const char *wn = nt_str(nt, w, "name");
-    if (!wn || !sp_streq(wn, vn)) continue;
-    if (k != NK_LocalVariableWriteNode || comp_scope_of(c, w) != sc || val >= 0)
+    /* another scope's local of the name is another variable */
+    if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
+    if (k != NK_LocalVariableWriteNode || val >= 0)
       return NULL;
     val = nt_ref(nt, w, "value");
   }
@@ -6468,8 +6523,8 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
   if (an_kernel_const_recv(c, id, recv, fresh)) return 1;
   if (recv < 0) return 0;
   int ob = comp_core_class(c, CORE_OBJECT), ke = comp_core_class(c, CORE_KERNEL);
-  if ((ob >= 0 && comp_method_in_chain(c, ob, "`", NULL) >= 0) ||
-      (ke >= 0 && comp_method_in_chain(c, ke, "`", NULL) >= 0) ||
+  if ((ob >= 0 && call_target(c, id, ob, "`", CT_METHODS, NULL) >= 0) ||
+      (ke >= 0 && call_target(c, id, ke, "`", CT_METHODS, NULL) >= 0) ||
       comp_toplevel_mod_defines(c, "`", 0)) return 0;
   int self_recv = nt_kind(nt, recv) == NK_SelfNode;
   if (!self_recv && !nt_ignore_visibility(nt, id)) return 0;
@@ -6480,7 +6535,7 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
   const char *cn = rt == TY_CLASS || ty_is_object(rt) ? NULL : builtin_class_of_type(rt);
   if (!cn) return 0;
   int ci = comp_builtin_class_named(c, cn);
-  return ci < 0 || comp_method_in_chain(c, ci, "`", NULL) < 0;
+  return ci < 0 || call_target(c, id, ci, "`", CT_METHODS, NULL) < 0;
 }
 
 /* The instantiated BasicObject subclasses whose chain has no method `name`
@@ -6490,6 +6545,7 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
 int *an_blank_slates_lacking(Compiler *c, const char *name, int *n) {
   int *out = NULL;
   *n = 0;
+  mtab_enter(c);   /* (the candidate owner of the blank slates that lack name: every class is asked by design, no call's question) */
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].instantiated || !class_is_blank_slate(c, k) || comp_method_in_chain(c, k, name, NULL) >= 0)
       continue;
@@ -6497,6 +6553,7 @@ int *an_blank_slates_lacking(Compiler *c, const char *name, int *n) {
     if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     out[(*n)++] = k;
   }
+  mtab_leave(c);
   return out;
 }
 

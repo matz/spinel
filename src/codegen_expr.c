@@ -1745,7 +1745,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   /* No reader at all -- no method, no attribute, no method_missing to
      answer it -- is the reader call's NoMethodError, raised before the
      value runs. The field-store way below has no ivar to store into. */
-  if (rmi < 0 && rml.kind != ML_ATTR && comp_method_in_chain(c, cid, "method_missing", NULL) < 0) {
+  if (rmi < 0 && rml.kind != ML_ATTR && call_target(c, id, cid, METHOD_MISSING_NAME, CT_REACH, NULL) < 0) {
     TyKind want = repr_of(c, id).as_ty;
     if (want == TY_UNKNOWN || want == TY_VOID) want = TY_POLY;
     int trv = ++g_tmp; char rv[32]; snprintf(rv, sizeof rv, "_t%d", trv);
@@ -4842,7 +4842,7 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
                through sp_splat_to_array for their pairs, members or items, and
                so does a program object when a class defines #to_a. */
             buf_printf(g_pre, "{ sp_RbVal _sv = %s; if (_sv.tag == SP_TAG_OBJ && (sp_poly_is_hash_kind(_sv.cls_id) || _sv.cls_id == SP_BUILTIN_RANGE || _sv.cls_id == SP_BUILTIN_STR_RANGE || _sv.cls_id == SP_BUILTIN_ENUMERATOR || _sv.cls_id == SP_BUILTIN_MATCHDATA%s || ((_sv.cls_id == SP_BUILTIN_OBJECT || _sv.cls_id == SP_BUILTIN_BASIC_OBJECT) && _sv.v.p && ((sp_Object *)_sv.v.p)->singleton_to_a))) _sv = sp_splat_to_array(_sv); if (!sp_poly_nil_p(_sv)) sp_PolyArray_flatten_into_n(_t%d, _sv, 1); }\n",
-                       ep, obj_to_a_any(c) ? " || _sv.cls_id >= 0" : "", t);
+                       ep, obj_to_a_any(c, els[j], inner) ? " || _sv.cls_id >= 0" : "", t);
           /* (not pushed whole: `*md` is md.to_a, its match and its groups) */
           else if (it == TY_MATCHDATA) {
             Buf bx; memset(&bx, 0, sizeof bx); emit_boxed(c, inner, &bx);
@@ -5877,9 +5877,10 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     /* expression arm -- assign result to temp (skip diverging exprs like raise) */
     Repr er = repr_of(c, e);
     TyKind et = er.as_ty;
-    /* An empty container's type reads UNKNOWN for want of an element type; it
-       still produces a value, so it must be assigned rather than emitted for
-       effect and discarded (#3495). */
+    /* An empty container's type reads UNKNOWN for want of an element type (a
+       `Hash.new(default)` too, an_empty_container_kind); it still produces a
+       value, so it must be assigned rather than emitted for effect and
+       discarded (#3495). */
     int one, e_yields = 0, e_nil = 0, e_val = e;
     switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
     case VP1_NODE:
@@ -5891,7 +5892,7 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     case VP1_MANY: break;
     }
     int e_diverges = (er.untyped || et == TY_VOID || (et == TY_NIL && rt != TY_POLY && e_yields)) &&
-                     !node_is_empty_container(c, e);
+                     !an_empty_container_kind(c, e);
     /* --share-strings: under a handle demand (strbuf_route_begin) the
        result slot is the handle, and each value is taken as one */
     int hdem = rt == TY_STRBUF && repr_of(c, id).demand;

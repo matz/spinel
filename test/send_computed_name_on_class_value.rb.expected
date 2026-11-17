@@ -1,0 +1,8 @@
+:none
+{a: 1}
+"Sub"
+{a: 1}
+"Sub"
+"K"
+undefined method 'nope' for class K
+K

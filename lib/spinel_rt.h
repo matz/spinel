@@ -14841,6 +14841,10 @@ static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   if (v.tag == SP_TAG_CLASS && strcmp(cn, "Class") == 0 && sp_poly_is_a_hook)
     return (sp_bool)(sp_poly_is_a_hook(v, (sp_Class){-109, NULL}) != 0);
   if (strcmp(sp_poly_class_name(v), cn) == 0) return TRUE;  /* exact builtin class */
+  /* (Mutex, Queue, SizedQueue and ConditionVariable name Thread's: the value's class is named Thread::Mutex) */
+  { const char *vn = sp_poly_class_name(v);
+    if (strncmp(vn, "Thread::", 8) == 0 && strcmp(vn + 8, cn) == 0) return TRUE;
+    if (strcmp(vn, "Thread::SizedQueue") == 0 && (strcmp(cn, "Queue") == 0 || strcmp(cn, "Thread::Queue") == 0)) return TRUE; }
   /* a chain or a product is an Enumerator whose #class names its subclass
      (Enumerator::Chain, Enumerator::Product), so the exact name above misses it */
   if (strcmp(cn, "Enumerator") == 0 && v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)

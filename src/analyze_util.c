@@ -526,6 +526,19 @@ int const_node_class_index(Compiler *c, int id) {
   int core = -1;
   int r = const_node_record_class(c, id, &core);
   if (r >= 0) return r;
+  /* a copy a pass made of a constant the walk saw (nt_clone_subtree): the
+     record answers its source, the read the copy stands for */
+  if (r == -2) {
+    int src = nt_clone_source(c->nt, id);
+    for (int d = 0; src >= 0 && d < 8; d++) {
+      int core2 = -1, rs = const_node_record_class(c, src, &core2);
+      if (rs >= 0) return rs;
+      /* (a source the record does not take for a class leaves the copy to
+         the name, as before: only a class it names stands for the copy) */
+      if (rs != -2) break;
+      src = nt_clone_source(c->nt, src);
+    }
+  }
   int k = const_node_class_index_tree(c, id);
   /* the record resolves the name to the builtin (Object holds no constant of
      the program's by it): only a top-level class of that name can be the

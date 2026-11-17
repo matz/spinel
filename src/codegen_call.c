@@ -18712,6 +18712,22 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   else buf_printf(b, "%s; })", valtmp);
 }
 
+/* Is arg of call id an object whose class has no #coerce (the call plan's
+   answer, which inference asks too)? A number's arithmetic with it raises
+   TypeError. */
+static int num_arg_cannot_coerce(Compiler *c, int id, int arg) {
+  TyKind t = comp_ntype(c, arg);
+  return ty_is_object(t) && cplan_implied_target(c, id, arg, ty_object_class(t), "coerce", CIT_TABLE, NULL) < 0;
+}
+/* `recv <op> arg` raising CRuby's "<arg> can't be coerced into <into>" after
+   both operands ran, as an expression of the number's C type ctype */
+static void emit_coerce_type_error(Compiler *c, int recv, int arg, const char *into, const char *ctype, Buf *b) {
+  int ta = ++g_tmp;
+  buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
+  buf_printf(b, "); sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
+  buf_printf(b, "; sp_raise_cls(\"TypeError\", sp_sprintf(\"%%s can't be coerced into %s\", sp_cmperr_desc(_t%d))); (%s)0; })",
+             into, ta, ctype);
+}
 /* Float repeat counts use NUM2LONG, including its range errors. The Array
    offset converter's nonempty form also rejects nil rather than defaulting
    it to zero. Other counts retain their existing conversion path. */
@@ -18913,6 +18929,10 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s can't be coerced into Integer\"); (sp_int)0; })", cn9);
         return 1;
       }
+      /* an object of a class with no #coerce (the call plan's answer, as
+         inference asks it): named by its class, as CRuby's rb_num_coerce
+         names it */
+      if (num_arg_cannot_coerce(c, id, argv[0])) { emit_coerce_type_error(c, recv, argv[0], "Integer", "sp_int", b); return 1; }
     }
     /* the same coercion rule on the Float side, which had no guard at all:
        `1.5 + nil` evaluated to nil and `1.5 + "s"` emitted double + char *
@@ -18943,6 +18963,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s can't be coerced into Float\"); (sp_float)0; })", cn8);
         return 1;
       }
+      if (num_arg_cannot_coerce(c, id, argv[0])) { emit_coerce_type_error(c, recv, argv[0], "Float", "sp_float", b); return 1; }
     }
     if (rt == TY_STRING && sp_streq(name, "+")) {
       /* `str + <non-string>` is a TypeError in CRuby (no implicit conversion);

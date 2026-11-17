@@ -13235,8 +13235,8 @@ TyKind infer_type(Compiler *c, int id) {
   if (ty_is_object(t) && comp_ty_ary_root(c, t) >= 0 && !comp_ary_is_str(c, ty_object_class(t)) &&
       !comp_ary_is_time(c, ty_object_class(t))) {
     long long op = nt_int(c->nt, id, "ary_operand", 0);
-    if (op == 1 || (op == 2 && comp_method_in_chain(c, ty_object_class(t), "[]", NULL) < 0 &&
-                    comp_method_in_chain(c, ty_object_class(t), "[]=", NULL) < 0) ||
+    if (op == 1 || (op == 2 && cplan_implied_target(c, id, id, ty_object_class(t), "[]", 0, NULL) < 0 &&
+                    cplan_implied_target(c, id, id, ty_object_class(t), "[]=", 0, NULL) < 0) ||
         (op == 3 && comp_ty_arysub_array(c, t))) {
       t = comp_ary_kind(c, ty_object_class(t));
       an_ary_viewed_mark(c, id);

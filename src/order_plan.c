@@ -1109,6 +1109,12 @@ void order_facts_check(Compiler *c) {
     /* (a node made after the phase has no row there) */
     const OpOrder *a = id < was->n && was->row_of[id] >= 0 ? &was->row[was->row_of[id]] : NULL;
     const OpOrder *b = now->row_of[id] >= 0 ? &now->row[now->row_of[id]] : NULL;
+    /* (the state column of a node the phase saw is what the phase left) */
+    if (id < was->n && was->drop[id] != now->drop[id]) {
+      bad++;
+      fprintf(stderr, "spinel: SPINEL_ORDER_CHECK: the state column of node %d (%s, line %lld) moved between the phase and the seal\n",
+              id, nt_type(c->nt, id) ? nt_type(c->nt, id) : "?", (long long)nt_int(c->nt, id, "node_line", 0));
+    }
     if (!order_rows_differ(was, a, now, b)) continue;
     bad++;
     fprintf(stderr, "spinel: SPINEL_ORDER_CHECK: the row of node %d (%s, line %lld) moved between the phase and the seal\n",

@@ -23671,7 +23671,10 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
 int array_user_inspect_mi(Compiler *c) {
   int ac = comp_core_class(c, CORE_ARRAY);
   if (ac < 0 || !share_builtin_overridden(c, "Array", "inspect")) return -1;
-  int mi = comp_method_in_chain(c, ac, "inspect", NULL);
+  /* (the one hook every `inspect` of an Array shares, registered once for the program: no call's question) */
+  mtab_enter(c);
+  int mi = call_target(c, -1, ac, "inspect", CT_METHODS | CT_SHARED, NULL);
+  mtab_leave(c);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
   if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;

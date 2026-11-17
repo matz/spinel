@@ -8,6 +8,7 @@
 #include "codegen_poly.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
+#include "method_table_check.h"
 #include "codegen_call_arms.h"
 #include "share.h"
 #include "value_pos.h"
@@ -6828,8 +6829,11 @@ void emit_refl_im_params(Compiler *c, Buf *b) {
       if (dup) continue;
       seen = realloc(seen, sizeof(char *) * (size_t)(nseen + 1));
       seen[nseen++] = qm;
-      int mi = comp_method_in_chain(c, k, qm, NULL);
-      if (mi < 0 || comp_is_undeffed_in_chain(c, k, qm)) continue;
+      /* (the dispatcher's row for every class and name of the program: no call's question) */
+      mtab_enter(c);
+      int mi = call_target(c, -1, k, qm, CT_METHODS | CT_SHARED, NULL);
+      mtab_leave(c);
+      if (mi < 0 || cplan_undef_stops(c, -1, k, qm)) continue;
       int tr = ++g_tmp;
       buf_puts(&rows, "    if (!strcmp(name, \"");
       emit_c_escaped(&rows, qm);

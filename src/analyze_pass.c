@@ -205,8 +205,8 @@ static int recv_has_array_write(Compiler *c, int recv) {
          class through a reader named `gname` (alias resolution is per-class,
          so this asks every class, exactly as the outer loop did). */
       for (int k = 0; k < c->nclasses; k++) {
-        int rdcls = k;
-        if (comp_reader_in_chain(c, k, gname, &rdcls) && rdcls == wc) return 1;
+        MethodLookup rl = { .def_class = k };
+        if (call_attr_target(c, -1, k, gname, CT_ATTR, &rl) && rl.def_class == wc) return 1;
       }
     }
     /* A hand-written getter (`def list = @list`) is the same READER: its
@@ -11927,7 +11927,7 @@ static int bind_case_eqq_subjects(Compiler *c, int *changed, int *any) {
         NodeKind ck = nt_kind(nt, conds[j]);
         if (ck != NK_ConstantReadNode && ck != NK_ConstantPathNode) continue;
         int ci = const_node_class_index(c, conds[j]);
-        int mi = ci >= 0 ? class_own_cmethod_eqq(c, ci) : -1;
+        int mi = ci >= 0 ? class_own_cmethod_eqq(c, -1, -1, ci) : -1;
         if (mi < 0) continue;
         LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[0]);
         if (!p || p->type != TY_POLY) continue;
@@ -11970,7 +11970,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
      arms, grep and a class held as a value, with any kind of value: its
      parameter takes a boxed value. */
   for (int k = 0; k < c->nclasses; k++) {
-    int emi = class_own_cmethod_eqq(c, k);
+    int emi = class_own_cmethod_eqq(c, -1, -1, k);
     if (emi < 0 || c->scopes[emi].nparams < 1) continue;
     LocalVar *ep = scope_local(&c->scopes[emi], c->scopes[emi].pnames[0]);
     if (ep && !ep->rbs_seeded && lv_widen(ep, TY_POLY)) changed = 1;
@@ -20320,7 +20320,9 @@ static TyKind sg_override_ret(Compiler *c, const Scope *sc, TyKind r) {
   if (sc->class_id < 0 || sc->is_cmethod || !sc->name) return r;
   const ClassInfo *k = &c->classes[sc->class_id];
   if (!k->is_singleton_of || k->is_value_type || k->parent < 0) return r;
-  int pm = comp_method_in_chain(c, k->parent, sc->name, NULL);
+  /* (the method the override's super reaches: the parent link's, as the table holds it; the delegate answers a call that
+     runs after any later redefinition, so no point of the load is its own) */
+  int pm = call_target(c, -1, k->parent, sc->name, CT_METHODS | CT_SHARED, NULL);
   if (pm < 0 || pm >= c->nscopes || &c->scopes[pm] == sc) return r;
   const Scope *ps = &c->scopes[pm];
   if (ps->nparams != sc->nparams) return r;

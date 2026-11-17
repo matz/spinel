@@ -1663,9 +1663,9 @@ CallPlan cplan_send_arm(Compiler *c, int id) {
   return p;
 }
 
-CallPlan cplan_conversion(Compiler *c, int ci, const char *name) {
+CallPlan cplan_conversion(Compiler *c, int id, int op, int ci, const char *name) {
   CallPlan p;
-  int mi = comp_method_in_chain(c, ci, name, NULL);
+  int mi = cplan_implied_target(c, id, op, ci, name, CIT_TABLE, NULL);
   cplan_set(&p, mi, ci, UC_INST, cplan_dispatch_form(c, -1, ci, name, mi >= 0));
   p.chain = 1;
   p.delegate = name;
@@ -1679,7 +1679,7 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
      override answering something other than a String cannot ride the
      const char * helper, so call it directly (#3868) */
   if (own < 0 && is_message_name(name)) {
-    int mi8 = call_target(c, -1, xcm, "message", CT_METHODS | CT_SHARED, NULL);
+    int mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "message", CIT_TABLE, NULL);
     /* (Exception#message's to_s, a callback the call makes on its receiver: asked at the call) */
     if (mi8 < 0) mi8 = cplan_implied_target(c, id, nt_ref(c->nt, id, "receiver"), xcm, "to_s", 0, NULL);
     if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
@@ -2911,8 +2911,9 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
    MLW_UNASKED where the name has versions, else ML_METHOD; so is one with no
    site (id -1), the ask of a program-wide reader. side is 0 for
    an instance of cls, CT_CMETHOD for the class object, CT_OWN for cls's
-   own method (with CT_CMETHOD, its own class method), as call_target's
-   flags; the planned rows ask instances. -1 with ML_NONE where cls has no
+   own method (with CT_CMETHOD, its own class method), CT_TOP for the top-level
+   function of the name (cls is not read), as call_target's flags; the planned
+   rows ask instances. -1 with ML_NONE where cls has no
    class, the table holds no method, or an undef of the name on cls's chain
    provably ran before id (ct_undef_before: *ml is ML_NONE with MLW_RECORD; a
    planned row's reader takes the table's program-wide undef, as it always
@@ -2941,15 +2942,17 @@ static int ct_undef_before(Compiler *c, int site, int cls, const char *name) {
 int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *name, unsigned side, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
   *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
-  if (cls < 0) return -1;
+  if (cls < 0 && !(side & CT_TOP)) return -1;
+  int table_only = (side & CIT_TABLE) != 0;   /* (a reader the plan has not taken over yet: the table's answer, as the table primitive gave it) */
+  side &= ~(unsigned)CIT_TABLE;
   mtab_enter(c);
   /* (an undef the table no longer holds, a later def having replaced it, is in the record's versions) */
-  int undef = !(side & CT_CMETHOD) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name)));
+  int undef = !table_only && !(side & (CT_CMETHOD | CT_TOP)) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name)));
   mtab_leave(c);
   /* (a call no planned row makes, a builtin's callback or a row not planned
      yet, is not asked of the record: the table's method, as call_target
      answers a call whose node does not make it) */
-  int vi = -1, planned = !side && site >= 0 && ct_implied_row(c, site, name, op);
+  int vi = -1, planned = !table_only && !side && site >= 0 && ct_implied_row(c, site, name, op);
   /* (a planned row's undef stays the table's, program-wide, as to_ary's readers
      always had it: its lowering, an explicit call of the name, would raise at
      the sites before the undef, as cplan_undef_stops takes the undef
@@ -3412,7 +3415,9 @@ int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
 /* See call_plan.h. */
 int cplan_index_writer(Compiler *c, int cls, int *cdef) {
   int dc = -1;
+  mtab_enter(c);   /* (the plan's own read: the class's `[]=` an index target stores through, as the plan states it) */
   int wmi = cls >= 0 ? comp_method_in_chain(c, cls, "[]=", &dc) : -1;
+  mtab_leave(c);
   if (wmi < 0 || dc < 0 || c->scopes[wmi].nparams != 2) return -1;
   if (cdef) *cdef = dc;
   return wmi;
@@ -4358,7 +4363,10 @@ static int ct_main_stopped(Compiler *c, int id, const char *name) {
   if (!stop) return 0;
   /* (a program method_missing main reaches, its singleton's or Object's,
      answers the call instead: not told apart here, so none stops) */
-  return comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, -1, 0) < 0;
+  mtab_enter(c);   /* (the plan's own read: main's lookup tail, which every stop of the lookup has to meet) */
+  int mm = comp_main_method(c, METHOD_MISSING_NAME);
+  mtab_leave(c);
+  return mm < 0 && cplan_mm_method(c, -1, -1, 0) < 0;
 }
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml);
 /* Does call id, by its own name on main (ct_runs_on_main), meet an undef
@@ -5625,15 +5633,15 @@ CvCtor cplan_cv_ctor(Compiler *c, int id) {
   return f;
 }
 
-int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k) {
+int cplan_cv_ctor_class(Compiler *c, int id, CvCtor f, int k) {
   if (f == CVC_NONE || comp_ary_root(c, k) < 0 || !comp_class_builds_by_aref(c, k))
     return 0;
-  return f != CVC_NEW || (call_target(c, -1, k, "initialize", CT_METHODS | CT_SHARED, NULL) < 0 &&
+  return f != CVC_NEW || (cplan_hook_target(c, id, k, "initialize", NULL) < 0 &&
                           call_target(c, -1, k, "new", CT_CMETHOD | CT_SHARED, NULL) < 0);
 }
 
 int cplan_cv_ctor_builds(Compiler *c, int id, int k) {
-  return cplan_cv_ctor_class(c, cplan_cv_ctor(c, id), k) && poly_cls_value_reaches(c, id, k);
+  return cplan_cv_ctor_class(c, id, cplan_cv_ctor(c, id), k) && poly_cls_value_reaches(c, id, k);
 }
 
 int cplan_as_new(Compiler *c, int id, int k) {
@@ -6942,8 +6950,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
     int nd = 0;
     comp_descendants(c, cid, &nd);
     if (nd == 1) {
-      int mi = is_to_s_name(name) ? -1 : call_target(c, -1, cid, "message", CT_METHODS | CT_SHARED, NULL);
-      if (mi < 0) mi = call_target(c, -1, cid, "to_s", CT_METHODS | CT_SHARED, NULL);
+      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, cid, "message", CIT_TABLE, NULL);
+      if (mi < 0) mi = cplan_implied_target(c, id, recv, cid, "to_s", CIT_TABLE, NULL);
       if (mi >= 0) out[0] = mi;
       return mi >= 0;
     }
@@ -6956,8 +6964,8 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
       int k = cs[i].cls;
       if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) continue;
       if (cid >= 0 && k != cid && !is_descendant(c, k, cid)) continue;
-      int mi = is_to_s_name(name) ? -1 : call_target(c, -1, k, "message", CT_METHODS | CT_SHARED, NULL);
-      if (mi < 0) mi = call_target(c, -1, k, "to_s", CT_METHODS | CT_SHARED, NULL);
+      int mi = is_to_s_name(name) ? -1 : cplan_implied_target(c, id, recv, k, "message", CIT_TABLE, NULL);
+      if (mi < 0) mi = cplan_implied_target(c, id, recv, k, "to_s", CIT_TABLE, NULL);
       if (mi < 0) continue;
       int j = 0;
       while (j < n && out[j] != mi) j++;
@@ -11934,12 +11942,7 @@ int cplan_target_runs(const Compiler *c, int t, int mi) {
 /* (may an instance of class cls, or of a class under it, have a
    respond_to_missing?, which a capture asks where it finds no method?) */
 static int capture_hook_reach(Compiler *c, int cls) {
-  int nd = 0;
-  if (comp_method_in_chain(c, cls, RESPOND_TO_MISSING_NAME, NULL) >= 0) return 1;
-  const int *ds = comp_descendants(c, cls, &nd);
-  for (int i = 0; i < nd; i++)
-    if (comp_method_in_chain(c, ds[i], RESPOND_TO_MISSING_NAME, NULL) >= 0) return 1;
-  return 0;
+  return comp_name_responder(c, cls, RESPOND_TO_MISSING_NAME, 0) >= 0 || comp_subclass_answers(c, cls, RESPOND_TO_MISSING_NAME);
 }
 /* (the method a guard entry e's method_missing else arm stands for: the
    one behind its mixins, guard_entry_make; -1 for none) */

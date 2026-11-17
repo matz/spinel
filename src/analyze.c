@@ -1625,7 +1625,7 @@ void compute_reachable(Compiler *c, int typed) {
       /* a class method `===` of the program's own, which a `when Klass` or
          `in Klass` arm calls once Klass is named */
       for (int k = 0; k < c->nclasses; k++) {
-        int emi = class_own_cmethod_eqq(c, k);
+        int emi = class_own_cmethod_eqq(c, -1, -1, k);
         if (emi < 0) continue;
         char sk[24]; snprintf(sk, sizeof sk, "\x01%d", emi);
         MARK_NAME(sk);
@@ -2125,7 +2125,7 @@ void compute_instantiated(Compiler *c, int early) {
     }
   if (cv_aref)
     for (int k = 0; k < c->nclasses; k++)
-      if (cplan_cv_ctor_class(c, CVC_AREF, k)) c->classes[k].instantiated = 1;
+      if (cplan_cv_ctor_class(c, -1, CVC_AREF, k)) c->classes[k].instantiated = 1;
   if (disable)
     for (int k = 0; k < c->nclasses; k++) {
       /* main's ivars live on the Toplevel pseudo-class, which is never built */
@@ -9084,8 +9084,10 @@ static const char *inline_spelling(const NodeTable *nt, int id, const char *tok,
    a `define_method` call. -1 when `ms` is the live one. */
 static int inline_replacing_def(Compiler *c, Scope *ms) {
   if (!ms->name) return -1;
+  mtab_enter(c);   /* (construction: it reads the program's own defs to number or judge them, no call asks) */
   int li = ms->is_cmethod ? comp_cmethod_in_class(c, ms->class_id, ms->name)
                           : comp_method_in_class(c, ms->class_id, ms->name);
+  mtab_leave(c);
   int dn = li >= 0 ? c->scopes[li].def_node : -1;
   return dn >= 0 && dn != ms->def_node ? dn : -1;
 }
@@ -18506,7 +18508,7 @@ static int oa_one_class_may_answer(Compiler *c, int ci, const char *name) {
   if (call_answers(c, -1, ci, name, 0, &ml)) return 1;
   const char *rn = comp_resolve_alias(c, ci, name);
   if (rn && !sp_streq(rn, name) && (call_answers(c, -1, ci, rn, 0, &ml))) return 1;
-  return comp_method_in_chain(c, ci, "method_missing", NULL) >= 0;
+  return comp_name_responder(c, ci, "method_missing", 0) >= 0;
 }
 static int oa_class_may_answer(Compiler *c, int ci, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
@@ -19004,7 +19006,7 @@ static int oa_component_narrows(Compiler *c, const OAS *s) {
   /* a component using no-block sort/min/max narrows only when the element
      class can actually compare (has `<=>` in its chain); otherwise it stays
      poly, where the boxed comparator raises the CRuby ArgumentError. */
-  return !(s->needs_cmp && comp_method_in_chain(c, s->cls, "<=>", NULL) < 0);
+  return !(s->needs_cmp && comp_name_responder(c, s->cls, "<=>", 0) < 0);
 }
 /* A class taken from another slot's last decision (oa_note_elem_from) holds
    only if that slot narrows to it again; otherwise the slot that took it
@@ -37117,8 +37119,10 @@ static void check_seed_contradictions(Compiler *c) {
        replaced body refused a program spinel compiles and runs correctly
        (#4024). Only the definition the chain actually resolves to is judged. */
     if (sc->class_id >= 0 && sc->name) {
+      mtab_enter(c);   /* (construction: it reads the program's own defs to number or judge them, no call asks) */
       int eff = sc->is_cmethod ? comp_cmethod_in_chain(c, sc->class_id, sc->name, NULL)
                                : comp_method_in_chain(c, sc->class_id, sc->name, NULL);
+      mtab_leave(c);
       if (eff >= 0 && eff != s) continue;
     }
     TyKind slot = sc->ret;
@@ -54292,7 +54296,7 @@ static void an_phase_procs(Compiler *c) {
     if (recv < 0) continue;
     TyKind rt = infer_type(c, recv);
     if (!ty_is_object(rt)) continue;
-    int ec = comp_method_in_chain(c, ty_object_class(rt), "each", NULL);
+    int ec = call_target(c, -1, ty_object_class(rt), "each", CT_METHODS | CT_SHARED, NULL);
     if (ec < 0) continue;
     Scope *m = &c->scopes[ec];
     if (m->blk_param || !m->yields) continue;   /* already lowered, or no yielding each */

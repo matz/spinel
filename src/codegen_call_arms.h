@@ -328,7 +328,6 @@ int attr_writer_named(Compiler *c, int cls, const char *name);
 int boxed_desc_control_arity(const char *name, int argc);
 int boxed_printf_list_ok(Compiler *c, const int *argv, int argc);
 int boxed_write_takes_list(Compiler *c, int id, const int *argv, int argc);
-int class_method_named(Compiler *c, const char *name);
 const char *io_line_reader(const char *name, int has_limit);
 void emit_io_line_read(Compiler *c, const char *name, const char *r, const int *argv, int argc, Buf *b);
 void emit_io_wait(Compiler *c, const char *name, int argc, const int *argv, const char *r, Buf *b);

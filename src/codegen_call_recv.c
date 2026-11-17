@@ -590,8 +590,8 @@ static void emit_values_at_boxed(const char *an, const char *pe, const char *vg,
 
 /* The direct call of the container conversion obj_container_conv found:
    the compiled #to_ary / #to_hash of the defining class on the operand. */
-static void emit_obj_conv_call(Compiler *c, int def, const char *conv, int by_value, const char *recv, Buf *b) {
-  int mi = comp_method_in_chain(c, def, conv, NULL);
+static void emit_obj_conv_call(Compiler *c, int op, int def, const char *conv, int by_value, const char *recv, Buf *b) {
+  int mi = cplan_implied_target(c, ic_operand_host(c, op), op, def, conv, CIT_TABLE, NULL);
   buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
   if (!by_value) buf_printf(b, "(sp_%s *)", c->classes[def].c_name);
   buf_printf(b, "(%s)", recv);
@@ -609,10 +609,10 @@ static void emit_obj_container_conv(Compiler *c, int node, int def, const char *
     snprintf(rv, sizeof rv, "_t%d", tr);
     buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(%s); SP_GC_ROOT(_t%d); ", c->classes[def].c_name, tr,
                c->classes[def].c_name, r.p ? r.p : "NULL", tr);
-    emit_obj_conv_call(c, def, conv, 0, rv, b);
+    emit_obj_conv_call(c, node, def, conv, 0, rv, b);
     buf_puts(b, "; })");
   }
-  else emit_obj_conv_call(c, def, conv, byv, r.p ? r.p : "NULL", b);
+  else emit_obj_conv_call(c, node, def, conv, byv, r.p ? r.p : "NULL", b);
   free(r.p);
 }
 
@@ -698,11 +698,11 @@ static int name_is_literal(Compiler *c, const char *name) {
 static int obj_may_answer(Compiler *c, int cid, const char *name) {
   if (call_answers(c, -1, cid, name, 0, NULL) ||
       comp_subclass_answers(c, cid, name) || root_reopen_defines(c, -1, name) ||
-      comp_method_index(c, name) >= 0)
+      comp_name_responder(c, -1, name, 0) >= 0)
     return 1;
   for (int i = 0; i < c->ntoplevel_includes; i++) {
     int mk = c->toplevel_includes[i];
-    if (mk >= 0 && (comp_method_in_chain(c, mk, name, NULL) >= 0 || comp_reader_in_chain(c, mk, name, NULL)))
+    if (mk >= 0 && (comp_name_responder(c, mk, name, 0) >= 0 || call_attr_target(c, -1, mk, name, CT_ATTR, NULL)))
       return 1;
   }
   return name_is_literal(c, name);
@@ -851,7 +851,7 @@ static int zip_hash_arm_builtin(Compiler *c) {
   return 1;
 }
 
-static void emit_zip_args(Compiler *c, const int *argv, int nargs, const int *tb, TyKind *at,
+static void emit_zip_args(Compiler *c, int id, const int *argv, int nargs, const int *tb, TyKind *at,
                           const char *rlen, Buf *b) {
   for (int j = 0; j < nargs; j++) {
     /* an empty `{}` literal has no node type of its own: it is a Hash
@@ -901,7 +901,7 @@ static void emit_zip_args(Compiler *c, const int *argv, int nargs, const int *tb
         continue;
       }
       int zcid = ty_object_class(at[j]);
-      if (zcid >= 0 && comp_method_in_chain(c, zcid, "each", NULL) < 0) {
+      if (zcid >= 0 && cplan_implied_target(c, id, argv[j], zcid, "each", CIT_TABLE, NULL) < 0) {
         /* sp_zip_arg would send :each and answer NoMethodError; the
            class is settled, so name CRuby's TypeError here */
         buf_printf(b, " sp_PolyArray *_t%d = ({ (void)(", tb[j]); emit_expr_for_effect(c, argv[j], b);
@@ -1825,7 +1825,7 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     buf_printf(b, "({ sp_PolyArray *_t%d = %s;", ta, ra.p ? ra.p : "NULL"); free(ra.p);
     buf_printf(b, " SP_GC_ROOT(_t%d);", ta);   /* see the typed arm; the loop re-reads this length every turn and allocates inside it */
     char rlen[64]; snprintf(rlen, sizeof rlen, "sp_PolyArray_length(_t%d)", ta);
-    emit_zip_args(c, argv, nargs, tb, at, rlen, b);
+    emit_zip_args(c, id, argv, nargs, tb, at, rlen, b);
     buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr, tr);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
     buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new();", tpair);
@@ -3047,7 +3047,7 @@ else {
        builtin loops follow (#4367, #4369, #4370). */
     buf_printf(b, " SP_GC_ROOT(_t%d);", ta);
     char rlen[64]; snprintf(rlen, sizeof rlen, "sp_%sArray_length(_t%d)", ka, ta);
-    emit_zip_args(c, argv, nargs, tb, at, rlen, b);
+    emit_zip_args(c, id, argv, nargs, tb, at, rlen, b);
     int tnf; const char *rbox = typed_elem_box_or_null(c, recv, rt, ta, &tnf, b);
     buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr, tr);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {",
@@ -6811,8 +6811,8 @@ static int emit_merge_any_block_boxed(Compiler *c, int id, int recv, int arg, Bu
    to them too). Each argument is a statement of its own after its own
    prelude, so one built in place does not run ahead of the ones before
    it. */
-static int merge_arg_dyn_to_hash(Compiler *c, TyKind at) {
-  int mi = ty_is_object(at) ? comp_method_in_chain(c, ty_object_class(at), "to_hash", NULL) : -1;
+static int merge_arg_dyn_to_hash(Compiler *c, int op, TyKind at) {
+  int mi = ty_is_object(at) ? cplan_implied_target(c, ic_operand_host(c, op), op, ty_object_class(at), "to_hash", CIT_TABLE, NULL) : -1;
   return mi >= 0 && c->scopes[mi].nrequired == 0 && c->scopes[mi].rest_idx < 0 && !ty_is_hash(c->scopes[mi].ret);
 }
 
@@ -6836,7 +6836,7 @@ static int emit_hash_merge_misfit(Compiler *c, int id, TyKind rt, Buf *b) {
     int fits = mk != TY_UNKNOWN && (ty_hash_key(rt) == TY_POLY || ty_hash_key(rt) == ty_hash_key(mk)) &&
                (ty_hash_val(rt) == TY_POLY || ty_hash_val(rt) == ty_hash_val(mk));
     if (mk != TY_UNKNOWN && !fits) { unsupported_feature(c, id, "Hash#merge! with a #to_hash of another layout than the receiver"); return 0; }
-    if (fits || merge_arg_dyn_to_hash(c, at)) boxed = 1;
+    if (fits || merge_arg_dyn_to_hash(c, argv[i], at)) boxed = 1;
     else if (face_arg_misfit(c, PF_HASH, argv[i]) || ty_is_object(at)) bad = i;
     else if (ar.kind == RK_BOXED || at == TY_UNKNOWN) boxed = 1;
   }
@@ -6864,20 +6864,22 @@ static int emit_hash_merge_misfit(Compiler *c, int id, TyKind rt, Buf *b) {
   for (int i = 0; i <= last; i++) {
     TyKind at = comp_ntype(c, argv[i]);
     int def = -1;
-    int hmi = ty_is_object(at) ? comp_method_in_chain(c, ty_object_class(at), "to_hash", &def) : -1;
+    MethodLookup hml = { .def_class = -1 };
+    int hmi = ty_is_object(at) ? cplan_implied_target(c, id, argv[i], ty_object_class(at), "to_hash", CIT_TABLE, &hml) : -1;
+    if (hmi >= 0) def = hml.def_class;
     if (i != bad && ty_is_object(at) && hmi >= 0 && c->scopes[hmi].nparams && conv_takes_no_args(c, hmi)) {
       int byv = comp_ty_value_obj(c, at);
       char rv[96];
       if (byv) snprintf(rv, sizeof rv, "*(sp_%s *)_t%d.v.p", c->classes[def].c_name, t0 + i);
       else snprintf(rv, sizeof rv, "_t%d.v.p", t0 + i);
       Buf cb = {0, 0, 0};
-      emit_obj_conv_call(c, def, "to_hash", byv, rv, &cb);
+      emit_obj_conv_call(c, argv[i], def, "to_hash", byv, rv, &cb);
       buf_printf(b, "_t%d = ", t0 + i);
       emit_boxed_text(c, c->scopes[hmi].ret, cb.p ? cb.p : "NULL", b);
       buf_puts(b, "; ");
       free(cb.p);
     }
-    else if (i != bad && ty_is_object(at) && (obj_container_conv(c, argv[i], at, "to_hash", &def) != TY_UNKNOWN || merge_arg_dyn_to_hash(c, at)))
+    else if (i != bad && ty_is_object(at) && (obj_container_conv(c, argv[i], at, "to_hash", &def) != TY_UNKNOWN || merge_arg_dyn_to_hash(c, argv[i], at)))
       buf_printf(b, "_t%d = sp_kw_splat_conv(_t%d, 0); ", t0 + i, t0 + i);
     buf_printf(b, "if (_t%d.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(_t%d.cls_id))"
                   " sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Hash\", sp_convert_src_name(_t%d))); ",
@@ -7185,13 +7187,13 @@ static int emit_hash_merge_general(Compiler *c, int id, int recv, int arg, TyKin
     buf_printf(b, "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH), ", td);
     int def = -1;
     TyKind mk = ar.kind != RK_BOXED ? obj_container_conv(c, arg, at, "to_hash", &def) : TY_UNKNOWN;
-    Scope *s = mk == TY_UNKNOWN ? NULL : &c->scopes[comp_method_in_chain(c, def, "to_hash", NULL)];
+    Scope *s = mk == TY_UNKNOWN ? NULL : &c->scopes[cplan_implied_target(c, id, arg, def, "to_hash", CIT_TABLE, NULL)];
     if (s && s->reachable && !s->yields && (!s->blk_param || !*s->blk_param)) {
       /* Typed converters pass defaults that the boxed bridge cannot supply. */
       char av[24]; snprintf(av, sizeof av, "_t%d", ta);
       Buf obj = {0, 0, 0}, cv = {0, 0, 0};
       emit_unbox_text(c, at, av, &obj);
-      emit_obj_conv_call(c, def, "to_hash", comp_ty_value_obj(c, at), obj.p, &cv);
+      emit_obj_conv_call(c, arg, def, "to_hash", comp_ty_value_obj(c, at), obj.p, &cv);
       buf_printf(b, "(_t%d.tag == SP_TAG_NIL ? sp_poly_hash_merge_arg(_t%d) : ", ta, ta);
       emit_boxed_text(c, mk, cv.p, b); buf_puts(b, ")");
       free(obj.p); free(cv.p);
@@ -7974,7 +7976,7 @@ else {
         buf_printf(b, " if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", tr, tr, hash_box_cls(rt));   /* (#3001) */
         buf_printf(b, " %s _t%d = ", c_type_name(rt), to);
         if (at != rt) {
-          emit_obj_conv_call(c, mdef, "to_hash", byv, ob, b);
+          emit_obj_conv_call(c, argv[0], mdef, "to_hash", byv, ob, b);
           buf_printf(b, "; if (!_t%d) { const char *_cn%d = sp_poly_class_name(", to, to); emit_boxed_text(c, at, ob, b);
           buf_printf(b, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %%s to Hash (%%s#to_hash gives NilClass)\", _cn%d, _cn%d)); }"
                         " SP_GC_ROOT(_t%d)", to, to, to);
@@ -8042,7 +8044,7 @@ else {
           /* an object slot may hold nil, which has no #to_hash */
           if (!obv) buf_printf(b, " if (!_t%d) sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Hash\"); SP_GC_ROOT(_t%d);", tob, tob);
           buf_printf(b, " %s _t%d = ", c_type_name(oht), toh);
-          emit_obj_conv_call(c, odef, "to_hash", obv, ob, b);
+          emit_obj_conv_call(c, argv[0], odef, "to_hash", obv, ob, b);
           buf_printf(b, "; if (!_t%d) { const char *_cn%d = sp_poly_class_name(", toh, toh); emit_boxed_text(c, oat, ob, b);
           buf_printf(b, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %%s to Hash (%%s#to_hash gives NilClass)\", _cn%d, _cn%d)); }"
                         " SP_GC_ROOT(_t%d);", toh, toh, toh);
@@ -13362,7 +13364,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      receiver's class only when both bounds are statically that class (the
      inference arm matches); otherwise it stays boxed. */
   if (recv >= 0 && ty_is_object(rt) && sp_streq(name, "clamp") && argc == 2 &&
-      comp_method_in_chain(c, ty_object_class(rt), "<=>", NULL) >= 0 &&
+      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", CIT_TABLE, NULL) >= 0 &&
       class_is_comparable(c, ty_object_class(rt))) {
     TyKind clo = comp_ntype(c, argv[0]), chi = comp_ntype(c, argv[1]);
     int same_cls = (clo == rt || clo == TY_NIL) && (chi == rt || chi == TY_NIL);
@@ -13379,7 +13381,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      range: unfold to the two-argument object clamp (an sp_Range cannot carry
      the endpoints' class, so the range helper would compare raw pointers). */
   if (recv >= 0 && ty_is_object(rt) && sp_streq(name, "clamp") && argc == 1 &&
-      comp_method_in_chain(c, ty_object_class(rt), "<=>", NULL) >= 0 &&
+      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", CIT_TABLE, NULL) >= 0 &&
       class_is_comparable(c, ty_object_class(rt))) {
     int rn2 = nt_paren_single(c->nt, argv[0]);
     if (rn2 >= 0 && nt_kind(nt, rn2) == NK_RangeNode) {
@@ -13425,7 +13427,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      itself, so the value stays boxed (inference: TY_POLY). */
   if (recv >= 0 && ty_is_object(rt) && sp_streq(name, "clamp") && argc == 1 &&
       repr_range_value(c, argv[0]) &&
-      comp_method_in_chain(c, ty_object_class(rt), "<=>", NULL) >= 0 &&
+      cplan_implied_target(c, id, recv, ty_object_class(rt), "<=>", CIT_TABLE, NULL) >= 0 &&
       class_is_comparable(c, ty_object_class(rt))) {
     buf_puts(b, "sp_obj_clamp_range(");
     emit_boxed(c, recv, b); buf_puts(b, ", ");
@@ -18351,7 +18353,7 @@ void emit_ivar_reflect_answer(Compiler *c, int id, const char *ivn, Buf *b) {
 static int poly_class_defines(Compiler *c, const char *name) {
   for (int k = 0; k < c->nclasses; k++)
     if (c->classes[k].instantiated && !is_builtin_reopen(c->classes[k].name) &&
-        comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
+        comp_name_responder(c, k, name, 0) >= 0) return 1;
   return 0;
 }
 /* ...and may the literal-name reflection `name` on a boxed receiver be read

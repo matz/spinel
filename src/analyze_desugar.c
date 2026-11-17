@@ -5532,10 +5532,10 @@ static int send_family_user_answers(Compiler *c, int id, int recv, const char *n
    a method that only calls super: while no other override exists every send
    lowers past it, send_family_user_answers). */
 int send_family_defined_anywhere(Compiler *c, const char *name) {
-  int tmi = comp_method_index(c, name);
+  int tmi = comp_name_responder(c, -1, name, 0);
   if (tmi >= 0 && c->scopes[tmi].class_id < 0 && !send_def_just_supers(c, tmi)) return 1;
   for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_class(c, k, name);
+    int mi = comp_name_responder(c, k, name, CT_OWN);
     if (mi >= 0 && !send_def_just_supers(c, mi)) return 1;
   }
   return 0;
@@ -19617,7 +19617,7 @@ static int poly_recv_cmethod_answers(Compiler *c, int id, const char *qn) {
   if (!qn) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (c->classes[k].is_native_class) continue;
-    if (comp_cmethod_in_chain(c, k, qn, NULL) >= 0 && poly_cls_value_reaches(c, id, k)) return 1;
+    if (comp_name_responder(c, k, qn, CT_CMETHOD) >= 0 && poly_cls_value_reaches(c, id, k)) return 1;
   }
   return 0;
 }

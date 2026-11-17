@@ -155,7 +155,7 @@ int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
    holds below a later one. How many, 0 for none */
 int cplan_super_runs(Compiler *c, Scope *s, int *to);
 /* A conversion performed by a helper, separately from the enclosing call. */
-CallPlan cplan_conversion(Compiler *c, int ci, const char *name);
+CallPlan cplan_conversion(Compiler *c, int id, int op, int ci, const char *name);
 CallPlan cplan_method_call(Compiler *c, int id);
 /* The Method a capture (`k.method(:a)`) makes where it finds no method of
    the name and k's class answers respond_to_missing?: the method
@@ -440,8 +440,9 @@ CvCtor cplan_cv_ctor_shape(Compiler *c, int id);
 /* ...whether a call of form f builds an instance of class k when its
    receiver holds k: a subclass of Array or Hash that runs no constructor of
    its own for the call (`new` reaches an initialize or a self.new; `[]`
-   skips an initialize, as CRuby's does) */
-int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k);
+   skips an initialize, as CRuby's does); the initialize is the one in force
+   where call id runs (cplan_hook_target; -1, the table's, for a survey) */
+int cplan_cv_ctor_class(Compiler *c, int id, CvCtor f, int k);
 /* ...and whether class k is one call id builds: one cplan_cv_ctor_class
    takes that the receiver may hold (poly_cls_value_reaches) */
 int cplan_cv_ctor_builds(Compiler *c, int id, int k);
@@ -628,8 +629,11 @@ enum { CPT_UNKNOWN = -1, CPT_MAX = 64 };
 int cplan_targets(Compiler *c, int id, int *out, int cap);
 /* The method the implied call `name` node id makes on operand op runs on
    an instance of cls (side 0; CT_CMETHOD its class object, CT_OWN its own
-   method): the version the record proves there where a row of
-   tools/implied_calls.yml is planned for the call (a multiple assignment's
+   method, CT_TOP the top-level function of the name, cls not read; CIT_TABLE
+   the table's method alone: no undef the record proves, no version, which
+   is what a reader answered before the plan asked at its node, until step 4
+   plans its row): the
+   version the record proves there where a row of tools/implied_calls.yml is planned for the call (a multiple assignment's
    to_ary of its value), else an entry whose every state finds a method;
    anything else the table's method (*ml ML_TABLE, or ML_METHOD where the
    name has one version), so a reader of the implied call asks here and
@@ -637,6 +641,8 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    -1 with ML_NONE where the table has no method or an undef on the chain
    provably ran before the site (an undef the record cannot place there leaves
    the table's method, ML_TABLE). *ml may be NULL */
+/* A flag of cplan_implied_target's side alone (call_target does not read it): see there */
+enum { CIT_TABLE = 16384 };
 int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *name, unsigned side, MethodLookup *ml);
 /* The #to_ary a call node id makes on its operand op, an instance of class
    cid (rb_check_array_type), as cplan_implied_target answers it: -1 for an

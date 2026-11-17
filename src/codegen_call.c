@@ -2999,8 +2999,8 @@ int recv_user_defines(Compiler *c, const char *name) {
   if (ni > 0) return 1;
   if (ni == 0) { comp_name_responders(c, name, 1, &nc); if (nc >= 0) return nc > 0; }
   for (int uk = 0; uk < c->nclasses; uk++) {
-    if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
-    if (comp_cmethod_in_chain(c, uk, name, NULL) >= 0) return 1;
+    if (comp_name_responder(c, uk, name, 0) >= 0) return 1;
+    if (comp_name_responder(c, uk, name, CT_CMETHOD) >= 0) return 1;
   }
   return 0;
 }
@@ -3081,9 +3081,7 @@ int poly_name_user_claimed(Compiler *c, const char *name, int argc) {
    Module read out of a container answers it through the poly dispatch. */
 int poly_name_cmethod_claimed(Compiler *c, const char *name) {
   if (g_poly_builtin_arm) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_cmethod_in_chain(c, k, name, NULL) >= 0) return 1;
-  return 0;
+  return comp_name_answered(c, name, 1);
 }
 
 /* 1 iff a user class that descends from an exception class defines `name`,
@@ -6863,7 +6861,7 @@ int object_defines_cmp(Compiler *c) {
    builtin type (`rescue => e`) may be one of its instances. */
 int exc_subclass_defines_cmp(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++)
-    if (class_is_exc_subclass(c, k) && comp_method_in_chain(c, k, "<=>", NULL) >= 0) return 1;
+    if (class_is_exc_subclass(c, k) && comp_name_responder(c, k, "<=>", 0) >= 0) return 1;
   return 0;
 }
 
@@ -12931,15 +12929,6 @@ int ctor_needs_self_defaults_argv(Compiler *c, int initm, const int *argv, int a
   return ctor_needs_self_defaults(c, initm, nt_argv_has_splat(c->nt, argv, argc) ? 0 : pos_argc);
 }
 
-/* Does any class define `name` as a class method? A boxed Class or Module
-   reaches that method through the general dispatch, so an IO name only the
-   poly-IO arm answers must not claim the call. */
-int class_method_named(Compiler *c, const char *name) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_cmethod_in_chain(c, k, name, NULL) >= 0) return 1;
-  return 0;
-}
-
 /* Does any class have an attribute writer for `name` (`pos=` from
    `attr_accessor :pos`, a Struct member)? Writers are kept under the base
    name, which the arm's method and reader test does not ask. */
@@ -17224,7 +17213,7 @@ static void emit_cmp_derived_eq(Compiler *c, int id, int recv, int arg, int ecid
   int same_ok = !comp_ty_value_obj(c, rt) &&
                 ((ty_is_object(at) && !comp_ty_value_obj(c, at)) || at == TY_POLY);
   Buf selfb = emit_cmp_self(c, recv, rt, NULL);
-  int cmi = comp_method_in_chain(c, ecid, "<=>", NULL);
+  int cmi = cplan_implied_target(c, id, recv, ecid, "<=>", CIT_TABLE, NULL);
   /* a Bignum answer is a pointer, which `== 0` would read as NULL */
   int big = cmi >= 0 && c->scopes[cmi].ret == TY_BIGINT;
   if (!same_ok) {
@@ -17315,12 +17304,13 @@ static void emit_poly_nil_eq_user(Compiler *c, int id, int recv, int eq, Buf *b)
 }
 /* Does the program give nil an `==` or a `!=` of its own: on NilClass, on a
    class every object has, or at the top level? */
-static int nil_eq_is_the_programs(Compiler *c) {
+static int nil_eq_is_the_programs(Compiler *c, int id) {
   static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  if (comp_method_index(c, "==") >= 0 || comp_method_index(c, "!=") >= 0) return 1;
+  /* (the top-level `==` or `!=` as the table holds it: call_target's CT_TOP at a node asks main's own singleton first) */
+  if (cplan_implied_target(c, id, -1, -1, "==", CT_TOP | CIT_TABLE, NULL) >= 0 || cplan_implied_target(c, id, -1, -1, "!=", CT_TOP | CIT_TABLE, NULL) >= 0) return 1;
   for (int i = 0; owners[i] >= 0; i++) {
     int k = comp_core_class(c, owners[i]);
-    if (k >= 0 && (comp_method_in_chain(c, k, "==", NULL) >= 0 || comp_method_in_chain(c, k, "!=", NULL) >= 0))
+    if (k >= 0 && (call_target(c, id, k, "==", 0, NULL) >= 0 || call_target(c, id, k, "!=", 0, NULL) >= 0))
       return 1;
   }
   return 0;
@@ -17348,7 +17338,7 @@ static int emit_eq_on_nil_slot(Compiler *c, int id, int recv, int arg, int ecid,
   int scalar = (ar.kind == RK_SCALAR || ar.kind == RK_OPT) &&
                (at == TY_INT || at == TY_FLOAT || at == TY_BOOL || at == TY_SYMBOL);
   if (!lit_nil && ar.kind != RK_PTR && ar.kind != RK_BOXED && !scalar) return 0;
-  if (nil_eq_is_the_programs(c)) return 0;
+  if (nil_eq_is_the_programs(c, id)) return 0;
   int st;
   Buf selfb = emit_cmp_self(c, recv, rt, &st);
   int mark = -1;
@@ -17645,7 +17635,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       }
       else if (ty_null_is_nil(ot) ||
                (ty_is_object(ot) && repr_of(c, other).kind == RK_PTR && repr_of(c, other).may_nil &&
-                !nil_eq_is_the_programs(c))) {
+                !nil_eq_is_the_programs(c, id))) {
         /* nullable heap pointer: a NULL pointer encodes nil (a `@h = {}` slot is
            still NULL until assigned, so `@h == nil` must be a NULL test, not the
            always-false fallback below). So does an object slot that may be nil
@@ -17668,7 +17658,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
     if (ty_is_object(rt) && rt == a0) {
       int scid = ty_object_class(rt);
       if (scid >= 0 && scid < c->nclasses && c->classes[scid].is_struct &&
-          comp_method_in_chain(c, scid, "==", NULL) < 0) {
+          call_target(c, id, scid, "==", 0, NULL) < 0) {
         ClassInfo *sci = &c->classes[scid];
         const char *peq = name && sp_streq(name, "eql?") ? "sp_poly_eql" : "sp_poly_eq";
         int ta = ++g_tmp, tb2 = ++g_tmp;
@@ -17859,8 +17849,8 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
        user-method call; != (derived from == in Ruby) negates it here. */
     if (rr.kind == RK_BOXED || a0r.kind == RK_BOXED) {
       if (ty_is_object(rt) && !comp_ty_value_obj(c, rt)) {
-        int ueq_def = -1;
-        int ueq_mi = comp_method_in_chain(c, ty_object_class(rt), "==", &ueq_def);
+        MethodLookup ueq_ml = { .def_class = -1 };
+        int ueq_mi = call_target(c, id, ty_object_class(rt), "==", 0, &ueq_ml), ueq_def = ueq_ml.def_class;
         if (ueq_mi >= 0) {
           if (emit_eq_on_nil_slot(c, id, recv, argv[0], ty_object_class(rt), "==", eq, b)) return 1;
           if (eq) return 0;
@@ -18016,7 +18006,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       }
       /* obj.!= synthesized from obj.== when != is not explicitly defined */
       if (!eq) {
-        int eqm2 = comp_method_in_chain(c, ecid, "==", NULL);
+        int eqm2 = cplan_implied_target(c, id, recv, ecid, "==", CIT_TABLE, NULL);
         if (eqm2 >= 0) {
           if (emit_eq_on_nil_slot(c, id, recv, argv[0], ecid, "==", 0, b)) return 1;
           Buf selfb = emit_cmp_self(c, recv, rt, NULL);
@@ -18090,7 +18080,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       TyKind prim_t = ty_is_object(a0) ? rt : a0;
       int    prim_n = ty_is_object(a0) ? recv : argv[0];
       int    obj_cid = ty_object_class(obj_t);
-      int    eqm = comp_method_in_chain(c, obj_cid, "==", NULL);
+      int    eqm = cplan_implied_target(c, id, obj_n, obj_cid, "==", CIT_TABLE, NULL);
       /* Numeric types delegate == to other.==(self) when types mismatch */
       if (ty_is_numeric(prim_t) && eqm >= 0) {
         Scope *ms = &c->scopes[eqm];
@@ -18302,8 +18292,8 @@ int splice_to_ary_mi(Compiler *c, int op, TyKind rhs_ty) {
 
 /* The to_ary call text on a class cid object the caller holds (rooted) in
    selfptr, into out: the class's own conversion, as call id makes it */
-void emit_to_ary_dispatch(Compiler *c, int id, int cid, const char *selfptr, Buf *out) {
-  CallPlan conversion = cplan_conversion(c, cid, "to_ary");
+void emit_to_ary_dispatch(Compiler *c, int id, int op, int cid, const char *selfptr, Buf *out) {
+  CallPlan conversion = cplan_conversion(c, id, op, cid, "to_ary");
   int cv = view_push_conversion(c, id, &conversion);
   emit_dispatch(c, cid, "to_ary", selfptr, -1, -1, out);
   view_pop(c, cv);
@@ -18417,7 +18407,7 @@ TyKind emit_splice_to_ary_src(Compiler *c, int id, int rhs_node, TyKind rhs_ty,
   buf_printf(b, "sp_%s *_tq%d = ", c->classes[cid].c_name, ta);
   emit_expr(c, rhs_node, b);
   buf_printf(b, "; SP_GC_ROOT(_tq%d); ", ta);
-  emit_to_ary_dispatch(c, id, cid, selfptr, out);
+  emit_to_ary_dispatch(c, id, rhs_node, cid, selfptr, out);
   return (TyKind)c->scopes[mi].ret;
 }
 
@@ -18777,8 +18767,8 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       ty_is_object(a0) && is_arith_op(name)) {
     int acls = ty_object_class(a0);
     MethodLookup ml = { .def_class = -1 };
-    int coerce_def = -1;
-    int coerce_mi = comp_method_in_chain(c, acls, "coerce", &coerce_def);
+    MethodLookup coerce_ml = { .def_class = -1 };
+    int coerce_mi = cplan_implied_target(c, id, argv[0], acls, "coerce", CIT_TABLE, &coerce_ml), coerce_def = coerce_ml.def_class;
     int op_mi = call_target(c, id, acls, name, 0, &ml);
     if (coerce_mi >= 0 && op_mi >= 0) {
       int tp = ++g_tmp;
@@ -20921,7 +20911,7 @@ int class_includes_module(Compiler *c, int cid, int mod) {
    not one of them -- only a reopen of that builtin could be. */
 static int json_user_to_json_any(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++) {
-    int mi = comp_method_in_chain(c, k, "to_json", NULL);
+    int mi = comp_name_responder(c, k, "to_json", 0);
     if (mi >= 0 && !c->scopes[mi].is_cmethod) return 1;
   }
   return 0;

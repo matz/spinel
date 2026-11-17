@@ -7113,7 +7113,7 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
        the method called (enum_walk_name) */
     const char *wn = enum_walk_name(c, id, recv, name);
     emit_indent(b, indent); emit_poly_iter_obj_reject_as(c, id, ta, name, wn, b);
-    emit_indent(b, indent); emit_poly_iter_obj_normalize(c, ta, b);
+    emit_indent(b, indent); emit_poly_iter_obj_normalize(c, id, ta, b);
     emit_walk_arity_raise(c, id, recv, name, ta, indent, b);
     /* a boxed Dir walks its entries under `each` (sp_poly_block_iter_check);
        only a program that names Dir can hold one, so any other keeps the

@@ -13206,7 +13206,7 @@ static int infer_ivar_set_call(Compiler *c, int id, NilWrites *writes) {
           else hit = 0;
           if (!hit || k >= c->nclasses) continue;
           ClassInfo *ck = &c->classes[k];
-          if (ck->is_data || comp_method_in_chain(c, k, "instance_variable_set", NULL) >= 0) continue;
+          if (ck->is_data || comp_name_responder(c, k, "instance_variable_set", 0) >= 0) continue;
           any = 1;
           if (!ck->computed_ivar_set) { ck->computed_ivar_set = 1; changed = 1; }
           for (int iv = ck->is_struct ? ck->nmembers : 0; iv < ck->nivars; iv++) {

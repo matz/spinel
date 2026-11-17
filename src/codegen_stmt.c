@@ -4304,7 +4304,7 @@ int strbuf_poly_to_s(Compiler *c, int v) {
     return 1;
   int targets[CPT_MAX];
   /* The call plan also sees overrides when several classes define to_s. */
-  return r >= 0 && comp_method_index(c, "to_s") < 0 && cplan_targets(c, v, targets, CPT_MAX) == 0 &&
+  return r >= 0 && cplan_implied_target(c, v, r, -1, "to_s", CT_TOP | CIT_TABLE, NULL) < 0 && cplan_targets(c, v, targets, CPT_MAX) == 0 &&
          (repr_of(c, r).kind == RK_BOXED || strbuf_var_handle(c, r, NULL));
 }
 
@@ -9508,10 +9508,7 @@ static int pm_diag_lit_bound(const NodeTable *nt, int n) {
 /* Class ci's own class method `===` as the owner of the constant pattern or condition cnode asks it: the
    node that holds the row (the pattern, `in` or `when` above it). */
 static int pm_own_cmethod_eqq(Compiler *c, int cnode, int ci) {
-  MtabMark mt_was = mtab_push_row_owner(c, cnode, "===");
-  int mi = class_own_cmethod_eqq(c, ci);
-  mtab_pop(c, mt_was);
-  return mi;
+  return class_own_cmethod_eqq(c, cnode >= 0 ? ic_operand_host(c, cnode) : -1, cnode, ci);
 }
 static int pm_diag_ok(Compiler *c, int pat) {
   const NodeTable *nt = c->nt;
@@ -12512,7 +12509,7 @@ static int ops_builtin(Compiler *c, const char *const *cls, const char *const *c
   for (int k = 0; k < c->nclasses; k++) {
     if (!hcp_in(cls, c->classes[k].name)) continue;
     for (int l = 0; ops[l]; l++)
-      for (int i = 0; ops[l][i]; i++) if (comp_method_in_chain(c, k, ops[l][i], NULL) >= 0) return 0;
+      for (int i = 0; ops[l][i]; i++) if (comp_name_responder(c, k, ops[l][i], 0) >= 0) return 0;
   }
   for (int s = 1; s < c->nscopes; s++) {
     const char *nm = c->scopes[s].name;
@@ -18212,11 +18209,12 @@ static void masgn_recv_guard(Compiler *c, int recv, int recv_tmp, const char *na
    (`self` in an inherited method), and the single setter dispatches on the
    instance's class then. A descendant's own `def x=` does; so does its
    attr_writer where the typed class's writer is a method. */
-static int masgn_writer_overridden(Compiler *c, int cid, const char *nm) {
+static int masgn_writer_overridden(Compiler *c, int tgt, int cid, const char *nm) {
   if (c->classes[cid].is_native_class || c->classes[cid].c_struct) return 0;
   if (cplan_overridden(c, cid, nm, 0)) return 1;
   char base[256];
-  if (!setter_base_name(nm, base, sizeof base) || comp_method_in_chain(c, cid, nm, NULL) < 0) return 0;
+  /* (the writer the target makes on its receiver: the implied call of its row) */
+  if (!setter_base_name(nm, base, sizeof base) || cplan_implied_target(c, tgt, nt_ref(c->nt, tgt, "receiver"), cid, nm, CIT_TABLE, NULL) < 0) return 0;
   int nd = 0;
   const int *ds = comp_descendants(c, cid, &nd);
   for (int i = 0; i < nd; i++)
@@ -18463,7 +18461,7 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
     TyKind crt = crtr.as_ty;
     /* a boxed receiver dispatches on its class, as the single setter does;
        so does one typed as a class a descendant overrides the writer of */
-    int vdisp = ty_is_object(crt) && masgn_writer_overridden(c, ty_object_class(crt), nm);
+    int vdisp = ty_is_object(crt) && masgn_writer_overridden(c, tgt, ty_object_class(crt), nm);
     if (crtr.kind == RK_BOXED || vdisp) {
       char base[256]; snprintf(base, sizeof base, "%.*s", (int)(snl - 1), nm);
       TyKind at = val && vt != TY_NIL && vt != TY_VOID && vt != TY_UNKNOWN ? vt : TY_POLY;
@@ -20301,7 +20299,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       int rc2 = ty_object_class(rt2);
       MethodLookup wml2 = { .def_class = -1 };
       int wmi2 = call_target(c, lefts[i], rc2, base2, CT_WRITER, &wml2), wr2 = wmi2 < 0 && wml2.kind == ML_ATTR;
-      if (!wr2 || masgn_writer_overridden(c, rc2, setnm)) {
+      if (!wr2 || masgn_writer_overridden(c, lefts[i], rc2, setnm)) {
         /* a writer defined with `def x=` (in the class, a module it includes
            or an ancestor, whichever the plan ranks first), or bound with
            `native_method :x=`, runs as a call, and so does an attr writer a

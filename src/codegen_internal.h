@@ -1555,9 +1555,9 @@ void arity_message(char *out, size_t n, int given, int min, int max, const char 
 void arity_kw_suffix(const Compiler *c, int params, char *out, size_t n);
 void scope_arity_kw_suffix(Compiler *c, const Scope *m, char *out, size_t n);
 void emit_arity_raise(Buf *b, const char *given, int min, int max, const char *kw);
-int class_to_io_dispatched(Compiler *c, int k);
+int class_to_io_dispatched(Compiler *c, int host, int op, int k);
 /* Does an instantiated class answer #to_a through sp_obj_to_a_fn? */
-int obj_to_a_any(Compiler *c);
+int obj_to_a_any(Compiler *c, int host, int op);
 int obj_each_elems_text(Compiler *c, int cid, const char *v, char *out, size_t cap);   /* cid's #each walk, boxed */
 void emit_arity_check(Buf *b, const char *given, int min, int max, const char *kw);
 int scope_refuses_keywords(Compiler *c, const Scope *m);
@@ -3166,7 +3166,7 @@ void emit_aset_range_held(Compiler *c, int id, int recv, TyKind rt, const int *a
 int frange_index_view(Compiler *c, int id);
 int splice_to_ary_mi(Compiler *c, int op, TyKind rhs_ty);
 TyKind emit_splice_to_ary_src(Compiler *c, int id, int rhs_node, TyKind rhs_ty, int mi, int ta, Buf *b, Buf *out);
-void emit_to_ary_dispatch(Compiler *c, int id, int cid, const char *selfptr, Buf *out);
+void emit_to_ary_dispatch(Compiler *c, int id, int op, int cid, const char *selfptr, Buf *out);
 int emit_boxed_to_ary(Compiler *c, int id, int op, int src, Buf *b, int indent);
 struct CplanToAry;   /* (call_plan.h) */
 /* The conversions of the boxed value v (an lvalue) to the Array the
@@ -3389,7 +3389,7 @@ void emit_local_ctype(Compiler *c, TyKind ty, int vol, Buf *b);
 void emit_scope_decls(Compiler *c, Scope *s, Buf *b);
 void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends);
 int method_is_void(Scope *s);
-void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b);
+void emit_poly_iter_obj_normalize(Compiler *c, int site, int tv, Buf *b);
 void emit_poly_iter_obj_reject(Compiler *c, int call, int tv, const char *name, Buf *b);
 /* a boxed quantifier's element walk over _t<ta> (codegen_call_operator.c) */
 void emit_poly_quantifier_walk(Compiler *c, int id, int ta, int tp, int tn, int tcnt, int ti,

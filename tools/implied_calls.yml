@@ -64,7 +64,9 @@
 #               a planned row's sites calls the plan's answer, a version or
 #               the entry (emit_boxed_to_ary_arms). Needs an operand. Temporary: each row gets it in the
 #               change that moves its reader onto the plan, and the key goes
-#               once every row has it (#10866, step 2).
+#               once every row has it (#10866, step 4). Until then the readers of
+#               an unplanned row ask cplan_implied_target at its site, which
+#               answers the table (the end of step 2).
 #
 # Reading the table: an operand that is a pattern construct or an assignment
 # target (see `not_value`) is not a value and receives no call; a node that

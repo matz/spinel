@@ -4575,7 +4575,7 @@ static int program_defines_ewi(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int k = 0; k < c->nclasses; k++) {
     if (c->classes[k].is_struct || c->classes[k].is_data) continue;
-    int mi = comp_method_in_chain(c, k, "each_with_index", NULL);
+    int mi = comp_name_responder(c, k, "each_with_index", 0);
     int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
     if (dn >= 0 && nt_kind(nt, dn) == NK_DefNode && nt_int(nt, dn, "node_bi", 0) == 0) return 1;
   }
@@ -7313,7 +7313,7 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     emit_poly_iter_obj_reject_as(c, id, trecv, name, enum_walk_name(c, id, recv, name), g_pre);
     emit_indent(g_pre, g_indent);
-    emit_poly_iter_obj_normalize(c, trecv, g_pre);
+    emit_poly_iter_obj_normalize(c, id, trecv, g_pre);
     emit_walk_arity_raise(c, id, recv, name, trecv, g_indent, g_pre);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tlen, trecv);
@@ -9167,7 +9167,7 @@ static const char *kw_splat_bad_cls(Compiler *c, TyKind t) {
   if (t == TY_RATIONAL) return "Rational";
   if (t == TY_COMPLEX) return "Complex";
   if (ty_is_object(t) && (ty_object_class(t) < 0 ||
-      comp_method_in_chain(c, ty_object_class(t), "method_missing", NULL) >= 0)) return NULL;
+      comp_name_responder(c, ty_object_class(t), "method_missing", 0) >= 0)) return NULL;
   return conv_cls_name_of(c, t);
 }
 
@@ -9176,16 +9176,12 @@ static const char *kw_splat_bad_cls(Compiler *c, TyKind t) {
    otherwise its conversion is a TypeError as surely as a builtin's. A
    class's own #to_hash is called through the bridge (sp_kw_splat_conv). */
 int kw_splat_user_may_convert(Compiler *c) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 1;
-  return 0;
+  return comp_name_answered(c, "method_missing", 0);
 }
 
 /* See codegen_internal.h. */
 int kw_splat_user_to_hash(Compiler *c) {
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, "to_hash", NULL) >= 0) return 1;
-  return 0;
+  return comp_name_answered(c, "to_hash", 0);
 }
 
 /* Can the `**` operand `node`, of the settled kind `t`, be nil at run time? */

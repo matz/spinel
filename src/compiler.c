@@ -2449,6 +2449,7 @@ int comp_arysub_reopen(Compiler *c, int cid) {
 const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n) {
   static int *ks; static int cap;
   int cnt = 0;
+  mtab_enter(c);   /* (the candidate owner of the String subclasses that answer name: no call's question) */
   for (int k = 0; name && k < c->nclasses; k++) {
     if (c->classes[k].ary_root <= 0 || !c->classes[k].ary_str) continue;
     int dc = -1, ro = comp_arysub_reopen(c, k);
@@ -2462,6 +2463,7 @@ const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n) {
     }
     ks[cnt++] = k;
   }
+  mtab_leave(c);
   *n = cnt;
   return ks;
 }
@@ -3776,13 +3778,16 @@ int comp_subclass_answers(Compiler *c, int class_id, const char *name) {
   if (class_id < 0) return 0;
   /* the strict subclasses alone (comp_descendants), where every class and
      its parent chain was walked at every call asked */
-  int nd = 0;
+  int nd = 0, ans = 0;
   const int *ds = comp_descendants(c, class_id, &nd);
-  for (int i = 0; i < nd; i++) {
+  /* (the candidate owner of "does a subclass answer name": it reads the chains of the program's classes, no call's) */
+  mtab_enter(c);
+  for (int i = 0; i < nd && !ans; i++) {
     int k = ds[i];
-    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
+    ans = comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL);
   }
-  return 0;
+  mtab_leave(c);
+  return ans;
 }
 int comp_writer_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
   if (g_method_table_check) mtab_read(c, MT_WRITER_IN_CHAIN, class_id, MTS_INST, name);

@@ -28019,6 +28019,243 @@ static int cg_def(NodeTable *nt, int like, const char *mname, const char *op,
   return def;
 }
 
+/* ---- a call no method answers, on a class with its own method_missing ----
+ * `proxy.transitions(...)` (aasm's DslHelper::Proxy, `self.transitions` in
+ * the block it instance_evals) on a class that defines no `transitions`
+ * but a method_missing of the program's: CRuby calls
+ * `proxy.method_missing(:transitions, ...)`. Only where the receiver's
+ * class set (cls_fact_node) is known, so the arm is added for the classes
+ * the value can be and no other call widens:
+ *   r.m(a)  ->  r.method_missing(:m, a)                      every class misses m
+ *   r.m(a)  ->  r.instance_of?(K) ? r.method_missing(:m, a) : r.m(a)  some do
+ * A receiver that is read again in each place (self, a local, an ivar). */
+
+int object_instance_method_name(const char *n);
+int builtin_object_method_known(const char *m);
+/* Does class k answer nm without method_missing: a method or an accessor of
+   its chain, or a method every object has? */
+static int mm_answers(Compiler *c, int id, int k, const char *nm) {
+  MethodLookup ml = { .def_class = -1 };
+  if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) return 1;
+  /* (a top-level def is Object's, which every object answers ahead of method_missing) */
+  if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) return 1;
+  for (int i = 0; object_methods[i]; i++) if (sp_streq(nm, object_methods[i])) return 1;
+  return object_instance_method_name(nm) || builtin_object_method_known(nm) || is_kernel_module_function(nm);
+}
+/* `::A::B` for the qualified class name `A::B` */
+static int mm_path_node(NodeTable *nt, int like, const char *qn) {
+  int path = -1;
+  const char *p = qn;
+  while (p && *p) {
+    const char *e = strstr(p, "::");
+    size_t len = e ? (size_t)(e - p) : strlen(p);
+    char seg[256];
+    if (len == 0 || len >= sizeof seg) return -1;
+    memcpy(seg, p, len); seg[len] = 0;
+    int cp = fwd_new_node_like(nt, like, "ConstantPathNode");
+    nt_node_set_str(nt, cp, "name", seg);
+    nt_node_set_ref(nt, cp, "parent", path);
+    path = cp;
+    p = e ? e + 2 : NULL;
+  }
+  return path;
+}
+static int mm_has_super(const NodeTable *nt, int n) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return 1;
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) if (mm_has_super(nt, nt_ref_at(nt, n, i))) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (mm_has_super(nt, ids[j])) return 1;
+  }
+  return 0;
+}
+/* the program's method_missing class k answers with, or -1; not one that
+   calls super, whose BasicObject#method_missing (the NoMethodError naming
+   the call) a spliced super does not reach */
+static int mm_user(Compiler *c, int id, int k) {
+  int mi = call_target(c, id, k, "method_missing", 0, NULL);
+  if (mi < 0 || mi >= c->nscopes) return -1;
+  int d = c->scopes[mi].def_node;
+  if (d < 0 || nt_int(c->nt, d, "node_bi", 0)) return -1;
+  return mm_has_super(c->nt, c->scopes[mi].body) ? -1 : mi;
+}
+/* `r.method_missing(:nm, <args>, &blk)` on a copy of r, with id's facts */
+static int mm_call(Compiler *c, NodeTable *nt, int id, int r, const char *nm, int args, int blk) {
+  int call = fwd_new_node_like(nt, id, "CallNode"), na = fwd_new_node_like(nt, id, "ArgumentsNode");
+  int sym = fwd_new_node_like(nt, id, "SymbolNode");
+  nt_node_set_str(nt, sym, "value", nm);
+  comp_sym_intern(c, nm);
+  int an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  int *nv = malloc(sizeof(int) * (size_t)(an + 1));
+  if (!nv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  nv[0] = sym;
+  for (int i = 0; i < an; i++) nv[i + 1] = av[i];
+  nt_node_set_arr(nt, na, "arguments", nv, an + 1);
+  free(nv);
+  nt_node_set_str(nt, call, "name", "method_missing");
+  nt_node_set_ref(nt, call, "receiver", r);
+  nt_node_set_ref(nt, call, "arguments", na);
+  nt_node_set_ref(nt, call, "block", blk);
+  /* (CRuby's dispatch calls a private method_missing too) */
+  nt_set_ignore_visibility(nt, call, 1);
+  return call;
+}
+/* A send the method_missing of class k makes, lowered before this call
+   handed it nm (desugar_dynamic_send ran in an earlier round, over the
+   names the program spelled then): lowered again, nm among its arms */
+static void mm_relower_sends(Compiler *c, NodeTable *nt, int id, int k, const char *nm) {
+  int mi = mm_user(c, id, k);
+  if (mi < 0) return;
+  for (int n = 0; n < nt->count && n < c->node_cap; n++) {
+    if (c->nscope[n] != mi || nt_kind(nt, n) != NK_CallNode || !is_send_family(nt_str(nt, n, "name"))) continue;
+    int dn = 0; const int *arms = nt_arr(nt, n, "dyn_send_arms", &dn);
+    int has = 0;
+    for (int i = 0; i < dn && !has; i++) { const char *an = nt_str(nt, arms[i], "name"); has = an && sp_streq(an, nm); }
+    if (dn == 0 || has) continue;
+    nt_node_set_arr(nt, n, "dyn_send_arms", NULL, 0);
+    nt_node_set_int(nt, n, "dyn_send_complete", 0);
+  }
+}
+int desugar_missing_method_calls(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (!c->cls_fact) return 0;
+  int any = 0;
+  for (int k = 0; k < c->nclasses && !any; k++) any = mm_user(c, -1, k) >= 0;
+  if (!any) return 0;
+  int n0 = nt->count, changed = 0, *parent = NULL;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "mm_split", 0) || nt_int(nt, id, "dyn_arm", 0)) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int r = nt_ref(nt, id, "receiver");
+    if (!nm || sp_streq(nm, "method_missing")) continue;
+    int miss[16], nmiss = 0, others = 0, reread = 0;
+    if (r < 0) {
+      /* a receiverless call: self is the method's class or a subclass, or
+         an instance_eval block's receiver (ie_receiverless_self_class) */
+      if (nt_ref(nt, id, "arguments") < 0 && nt_vcall(nt, id)) {
+        Scope *sc = comp_scope_of(c, id);
+        int is_local = 0;
+        for (int i = 0; sc && i < sc->nlocals; i++) if (sc->locals[i].name && sp_streq(sc->locals[i].name, nm)) is_local = 1;
+        if (is_local) continue;
+      }
+      /* (self is an object: not a class body's or a class method's Class) */
+      Scope *ss = comp_scope_of(c, id);
+      int ieb = ie_block_self_class_of(c, id);
+      if (!ss || (ieb < 0 && (ss->is_cmethod || !ss->name))) continue;
+      int base = ieb >= 0 ? ieb : ie_receiverless_self_class_of(c, id);
+      if (base < 0 || base >= c->nclasses) continue;
+      for (int k = 0; k < c->nclasses && nmiss >= 0; k++) {
+        if (k != base && !is_descendant(c, k, base)) continue;
+        if (comp_class_is_module(c, &c->classes[k])) continue;
+        if (mm_answers(c, id, k, nm) || mm_user(c, id, k) < 0) { others = 1; continue; }
+        if (nmiss >= 16) { nmiss = -1; break; }
+        miss[nmiss++] = k;
+      }
+    }
+    else {
+      NodeKind rk = nt_kind(nt, r);
+      reread = rk == NK_SelfNode || rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode;
+      /* (an object of the program's, or a box that may hold one) */
+      TyKind rt = infer_type(c, r);
+      if (!ty_is_object(rt) && rt != TY_POLY) continue;
+      const ClsSet *set = cls_fact_node(c, r);
+      if (!set || set->all) continue;
+      for (int k = cls_set_next(set, -1); k >= 0; k = cls_set_next(set, k)) {
+        if (k >= c->nclasses) { others = 1; continue; }
+        if (mm_answers(c, id, k, nm)) { others = 1; continue; }
+        if (mm_user(c, id, k) < 0) { others = 1; continue; }
+        if (nmiss >= 16) { nmiss = -1; break; }
+        miss[nmiss++] = k;
+      }
+      if (set->bv) others = 1;
+    }
+    if (nmiss <= 0) continue;
+    /* (a split reads the receiver twice: a variable or self, or none) */
+    if (r < 0) reread = 1;
+    if (others && !reread) continue;
+    int a = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
+    int mark = nt->count;
+    if (!others) {
+      /* every class the value can be misses nm: the call is method_missing's */
+      int sym = fwd_new_node_like(nt, id, "SymbolNode");
+      nt_node_set_str(nt, sym, "value", nm);
+      comp_sym_intern(c, nm);
+      int an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      int *nv = malloc(sizeof(int) * (size_t)(an + 1));
+      if (!nv) continue;
+      nv[0] = sym;
+      for (int i = 0; i < an; i++) nv[i + 1] = av[i];
+      if (a < 0) { a = fwd_new_node_like(nt, id, "ArgumentsNode"); nt_node_set_ref(nt, id, "arguments", a); }
+      nt_node_set_arr(nt, a, "arguments", nv, an + 1);
+      free(nv);
+      nt_node_set_str(nt, id, "name", "method_missing");
+      nt_set_ignore_visibility(nt, id, 1);
+      for (int i = 0; i < nmiss; i++) mm_relower_sends(c, nt, id, miss[i], nm);
+      comp_grow_node_arrays(c);
+      for (int j = mark; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+      changed = 1;
+      continue;
+    }
+    /* (a literal block would be the two calls' one block) */
+    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) continue;
+    if (!parent) parent = an_parent_map(nt);
+    int p = parent ? parent[id] : -1;
+    if (p < 0) continue;
+    int pred = -1, clones[17], ncl = 0;
+    for (int i = 0; i < nmiss; i++) {
+      const char *cn = c->classes[miss[i]].name;
+      if (!cn) { pred = -1; break; }
+      /* (`instance_of?`, not `===`: a subclass that answers the name is no miss) */
+      int q = fwd_new_node_like(nt, id, "CallNode"), qa = fwd_new_node_like(nt, id, "ArgumentsNode");
+      int rr = r >= 0 ? nt_clone_subtree(nt, r) : fwd_new_node_like(nt, id, "SelfNode");
+      if (r >= 0) clones[ncl++] = rr;
+      int kp = mm_path_node(nt, id, cn);
+      nt_node_set_arr(nt, qa, "arguments", &kp, 1);
+      nt_node_set_str(nt, q, "name", "instance_of?");
+      nt_node_set_ref(nt, q, "receiver", rr);
+      nt_node_set_ref(nt, q, "arguments", qa);
+      if (pred < 0) pred = q;
+      else {
+        int o = fwd_new_node_like(nt, id, "OrNode");
+        nt_node_set_ref(nt, o, "left", pred);
+        nt_node_set_ref(nt, o, "right", q);
+        pred = o;
+      }
+    }
+    if (pred < 0) continue;
+    int mr = r >= 0 ? nt_clone_subtree(nt, r) : fwd_new_node_like(nt, id, "SelfNode");
+    if (r >= 0) clones[ncl++] = mr;
+    int mm = mm_call(c, nt, id, mr, nm, a >= 0 ? nt_clone_subtree(nt, a) : -1, blk >= 0 ? nt_clone_subtree(nt, blk) : -1);
+    nt_node_set_int(nt, id, "mm_split", 1);
+    int ts = fwd_new_node_like(nt, id, "StatementsNode"), es = fwd_new_node_like(nt, id, "StatementsNode");
+    int els = fwd_new_node_like(nt, id, "ElseNode"), ifn = fwd_new_node_like(nt, id, "IfNode");
+    nt_node_set_arr(nt, ts, "body", &mm, 1);
+    nt_node_set_arr(nt, es, "body", &id, 1);
+    nt_node_set_ref(nt, els, "statements", es);
+    nt_node_set_ref(nt, ifn, "predicate", pred);
+    nt_node_set_ref(nt, ifn, "statements", ts);
+    nt_node_set_ref(nt, ifn, "subsequent", els);
+    nt_replace_child(nt, p, id, ifn);
+    parent[id] = es;
+    /* the new nodes stand in id's scope, and each copy of the receiver holds what it holds */
+    comp_grow_node_arrays(c);
+    for (int j = mark; j < nt->count; j++) {
+      c->nscope[j] = c->nscope[id];
+      if (c->node_cbody && j < c->node_cap && id < c->node_cap) c->node_cbody[j] = c->node_cbody[id];
+    }
+    for (int i = 0; i < ncl; i++) cls_fact_same(c, clones[i], r);
+    for (int i = 0; i < nmiss; i++) mm_relower_sends(c, nt, id, miss[i], nm);
+    changed = 1;
+  }
+  free(parent);
+  return changed;
+}
+
 int desugar_dynamic_const_get(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;

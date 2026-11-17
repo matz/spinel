@@ -4788,6 +4788,9 @@ static int ie_receiverless_self_class(Compiler *c, int id) {
   Scope *s = comp_scope_of(c, id);
   return (s && s->class_id >= 0 && !s->is_cmethod) ? s->class_id : -1;
 }
+/* (desugar_missing_method_calls: the class a receiverless call's self is, in a method or an instance_eval block) */
+int ie_receiverless_self_class_of(Compiler *c, int id) { return ie_receiverless_self_class(c, id); }
+int ie_block_self_class_of(Compiler *c, int id) { return ie_class_of(c, id); }
 
 /* The block (a BlockNode, or a LambdaNode) of the proc literal local read x
    holds: the value of its one write in its scope, -1 for another local. */
@@ -52638,6 +52641,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_empty_block_body", desugar_empty_block_body(c));         /* m { } -> m { nil } */
     ch |= AN_PASS("desugar_hash_block_arg", desugar_hash_block_arg(c));           /* m(&hash) -> m { |x| hash[x] } */
     ch |= AN_PASS("desugar_method_call_runtime_name", desugar_method_call_runtime_name(c)); /* method(var).call(a) -> send(var, a) */
+    ch |= AN_PASS("desugar_missing_method_calls", desugar_missing_method_calls(c));   /* proxy.m(a) no method answers -> proxy.method_missing(:m, a) */
     ch |= AN_PASS("desugar_dynamic_send", desugar_dynamic_send(c));             /* recv.send(var, a) -> static name dispatch */
     ch |= AN_PASS("desugar_dynamic_method", desugar_dynamic_method(c));
     ch |= AN_PASS("mark_kept_blocks", an_mark_kept_blocks(c));               /* a block its typed target keeps */

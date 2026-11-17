@@ -8629,15 +8629,22 @@ static int ct_builtin_new_form(Compiler *c, int id, NewFills *f) {
   int start = tmp[0];
   /* a prepend a later statement makes is chosen at run time by its guard (guard_chain): every chain it may run must reduce alike */
   if (c->scopes[start].mixin_guarded || c->scopes[start].entry == ENTRY_TABLE) {
-    int to[VER_MAX_ARMS + 1], n = guard_chain(c, start, to, NULL, NULL), g = BNF_NONE;
+    int to[VER_MAX_ARMS + 1], n = guard_chain(c, start, to, NULL, NULL), g = BNF_NONE, in = 0;
     NewFills nf[1];
     for (int k = 0; k < n; k++) {
+      /* (the chain from to[k] runs where its prepend's copy is in force and none ahead of it is: one the load record proves
+         either way at the call (ct_prepend_in_force) leaves the chains that cannot run out) */
+      int y = c->scopes[to[k]].is_prepend_copy ? ct_prepend_in_force(c, id, ci, &c->scopes[to[k]]) : ELAB_UNKNOWN;
+      if (y == ELAB_NO) continue;
       /* (a chain whose defaults run at the call is one only where no guard chooses it) */
       nf->n = nf->nk = nf->rlate = 0, nf->kwat = nf->rmi = -1;
       int fk = ct_new_chain_form(c, id, ci, to[k], argc, open, kw, nf);
       if (fk == BNF_NONE) return BNF_NONE;
-      if ((g != BNF_NONE && fk != g) || fk == BNF_FILL || nf->n || nf->nk || (k && fk == BNF_RAISE && nf->rmi != f->rmi)) return BNF_REFUSE;
-      g = fk, f->rmi = nf->rmi;
+      /* (and the forward that checks a `**h`'s keys (rmi), BNF_RAISE's or BNF_EMPTY's, is the same in each: the rewrite makes
+         one check, which the chain that runs must make; BNF_OWN's builtin binding raises alike, rmi none) */
+      if ((g != BNF_NONE && fk != g) || fk == BNF_FILL || nf->n || nf->nk || (in && nf->rmi != f->rmi)) return BNF_REFUSE;
+      g = fk, f->rmi = nf->rmi, in = 1;
+      if (y == ELAB_YES) break;
     }
     return kw_own && g != BNF_OWN ? BNF_REFUSE : g;
   }

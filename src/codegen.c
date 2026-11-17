@@ -3096,6 +3096,9 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     const int *hav = haN >= 0 ? nt_arr(c->nt, haN, "arguments", &han) : NULL;
     if ((hk == NK_ConstantReadNode || hk == NK_ConstantPathNode) &&
         hcn && sp_streq(hcn, "Hash") && han <= 1) {
+      /* a `new` the plan refuses (an initialize the builtin construction does not run) is refused here as where
+         the call is emitted for its effect */
+      refuse_from_plan(c, node, CRF_LIMIT, "refuse-limit");
       /* an unknown keyword is CRuby's ArgumentError, not the default */
       if (emit_hash_new_capacity_wrap(c, node, b, 1)) { RC(RF_SPECIAL, RW_LITERAL); return; }
       if (emit_hash_new_arg_guard(c, node, b)) { RC(RF_SPECIAL, RW_LITERAL); return; }

@@ -5872,9 +5872,10 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     /* expression arm -- assign result to temp (skip diverging exprs like raise) */
     Repr er = repr_of(c, e);
     TyKind et = er.as_ty;
-    /* An empty container's type reads UNKNOWN for want of an element type; it
-       still produces a value, so it must be assigned rather than emitted for
-       effect and discarded (#3495). */
+    /* An empty container's type reads UNKNOWN for want of an element type (a
+       `Hash.new(default)` too, an_empty_container_kind); it still produces a
+       value, so it must be assigned rather than emitted for effect and
+       discarded (#3495). */
     int one, e_yields = 0, e_nil = 0, e_val = e;
     switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
     case VP1_NODE:
@@ -5886,7 +5887,7 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     case VP1_MANY: break;
     }
     int e_diverges = (er.untyped || et == TY_VOID || (et == TY_NIL && rt != TY_POLY && e_yields)) &&
-                     !node_is_empty_container(c, e);
+                     !an_empty_container_kind(c, e);
     /* --share-strings: under a handle demand (strbuf_route_begin) the
        result slot is the handle, and each value is taken as one */
     int hdem = rt == TY_STRBUF && repr_of(c, id).demand;

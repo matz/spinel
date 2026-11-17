@@ -26754,8 +26754,7 @@ int subtree_may_reassign_state(Compiler *c, int id) {
    Held without one:
    - a temp the binder ran first and rooted (view_held, view_ran_first, Repr head_held), and `self`;
    - a local that is not a closure cell, unless an operand writes it (read_rebound_by): the frame roots it;
-   - a constant (`C`, `M::C`), unless an operand writes it (read_rebound_by).
-   Every other receiver (an ivar, a global, a class variable, a cell local, a call's answer) needs one when an operand
+   Every other receiver (an ivar, a global, a class variable, a constant, a cell local, a call's answer) needs one when an operand
    can store into state or run code of the program's, named or not (order_may_drop_state, and the write's own implicit
    calls on its operands: ic_node_may_call_program, an index's to_int), or writes a local the receiver reads
    (read_rebound_by: `bx.a[i] = (bx = nil; v)`). A receiver that builds a new object has no
@@ -26769,7 +26768,7 @@ int store_recv_needs_root(Compiler *c, int node, int recv, const int *ops, int n
     NodeKind rk = nt_kind(nt, recv);
     if (repr_of(c, recv).head_held || view_held(recv) || view_ran_first(recv) || rk == NK_SelfNode) return 0;
     LocalVar *lv = rk == NK_LocalVariableReadNode ? scope_local(comp_scope_of(c, recv), nt_str(nt, recv, "name")) : NULL;
-    if ((lv && !lv->is_cell) || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+    if (lv && !lv->is_cell) {
       for (int i = 0; i < nops; i++) if (ops[i] >= 0 && read_rebound_by(c, recv, ops[i])) return 1;
       return 0;
     }

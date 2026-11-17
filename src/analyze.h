@@ -878,6 +878,9 @@ int elab_const_first_write(Compiler *c, const char *name, int *early);
 /* Whether the constant write node `write` assigns is bound once: the only
    write of its name, and no remove_const may take it away (lr_const_final). */
 int elab_const_write_final(Compiler *c, int write);
+/* ...and of a constant by its name: no write but its one (a literal-name const_set is one, desugared), no
+   remove_const of it, and no send or code the record cannot follow (a read of it names what it named when it was set) */
+int elab_const_name_final(Compiler *c, const char *name);
 /* what constant `name` of class owner's own (-1: Object's) was before p,
    as `class X` asks it of its owner: no lexical scope's, no ancestor's;
    *out the write or header found, on ELAB_UNKNOWN the last one that may

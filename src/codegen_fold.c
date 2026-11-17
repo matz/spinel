@@ -9828,8 +9828,9 @@ static int rebound_walk(Compiler *c, int x, int after, int bound) {
     /* a constant an argument assigns (`C.m(C = 2)`) is read before it, as
        CRuby evaluates the receiver first. The walk reads the whole argument,
        a proc body written in it included (`C.m(proc { C = 2 }.call)`); a
-       proc defined elsewhere and called from it is not followed, and a
-       method's body assigns no constant */
+       proc defined elsewhere and a method called from it are not followed,
+       and a method's body may assign one (`Object.const_set(:C, v)` with a
+       literal name is a constant write there) */
     case NK_ConstantReadNode: {
       const char *nm = nt_str(nt, x, "name");
       return nm && subtree_writes_var(c, after, nm, VW_CONST);

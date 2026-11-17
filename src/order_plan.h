@@ -98,6 +98,11 @@ void order_facts_check(Compiler *c);
 /* Does the subtree run code or have an effect (the walk, asking neither of
    emission's questions)? From the phase's column. */
 int order_runs_code(Compiler *c, int node);
+/* Can evaluating the subtree at `node` store into an ivar, a class variable or a global, or run a method of the
+   program's, whether the program names the call or not (an interpolation's to_s, a case's ===, a splat's to_a, an
+   index's to_int)? What can change what a read of one of them answers, or drop what only it holds; a local's write is
+   not one. From the phase's column (the OS_REASSIGN and OS_IMPL bits of order_sum); yes without the record or for a node it never saw. */
+int order_may_drop_state(Compiler *c, int node);
 /* The row of `owner`, or NULL: nothing is bound (every operand a pure read,
    or one code operand last beside immutable values), or the phase did not
    see the list (op_order_visited). */

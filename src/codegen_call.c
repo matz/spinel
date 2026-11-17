@@ -18441,9 +18441,11 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   }
   int ta = ++g_tmp, ts = ++g_tmp, tg = ++g_tmp;  /* recv, src, range temps */
   int tam = splice_to_ary_mi(c, rhs_node, rhs_ty);
+  const int splice_ops[4] = { start_node, len_node, range_node, rhs_node };   /* (what can drop the receiver) */
 
   if (rt == TY_POLY_ARRAY) {
     buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, recv, b); buf_puts(b, "; ");
+    emit_index_recv_root(c, rt, id, recv, splice_ops, 4, ta, 1, b);
     if (tam >= 0) {
       /* object RHS with to_ary: splice the coercion, yield the object */
       Buf call; memset(&call, 0, sizeof call);
@@ -18486,6 +18488,7 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   int poly_so = 0;   /* the boxed-RHS branch tracks its array source in _soN */
   int voint = 0;     /* the value is the oint _t<ts>, answered as the consumer takes it */
   buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b); buf_puts(b, "; ");
+  emit_index_recv_root(c, rt, id, recv, splice_ops, 4, ta, 1, b);
   buf_printf(b, "%s_src%d; sp_int _srcn%d; ", srcty, ta, ta);
 
   if (rhs_empty) {
@@ -26723,6 +26726,48 @@ int subtree_may_reassign_state(Compiler *c, int id) {
       if (subtree_may_reassign_state(c, ids[j])) return 1;
   }
   return 0;
+}
+
+/* Does the receiver of an element write (`a[i] = v`, `a[i] ||= v`, `a[i, n] = v`; `node` the write) need a root of
+   its own while its operands (the index, the length, the value) run? Its temp is the container's only holder once
+   an operand drops it (an assignment of the variable that held it, a delete).
+   Held without one:
+   - a temp the binder ran first and rooted (view_held, view_ran_first, Repr head_held), and `self`;
+   - a local that is not a closure cell, unless an operand writes it (read_rebound_by): the frame roots it;
+   - a constant the record holds bound once (elab_const_name_final), likewise;
+   Every other receiver (an ivar, a global, a class variable, a constant that may be rebound, a cell local, a call's answer) needs one when an operand
+   can store into state or run code of the program's, named or not (order_may_drop_state, and the write's own implicit
+   calls on its operands: ic_node_may_call_program, an index's to_int), or writes a local the receiver reads
+   (read_rebound_by: `bx.a[i] = (bx = nil; v)`). A receiver that builds a new object has no
+   holder but its temp: it needs one when an operand can allocate (operand_allocates_beside). An operand the binder
+   ran first is already done. With held_ok 0 the receiver is asked the older rule, any operand with a side effect,
+   which the Hash arms keep. */
+int store_recv_needs_root(Compiler *c, int node, int recv, const int *ops, int nops, int held_ok) {
+  const NodeTable *nt = c->nt;
+  int runs = held_ok && ic_node_may_call_program(c, node);
+  if (held_ok) {
+    NodeKind rk = nt_kind(nt, recv);
+    if (repr_of(c, recv).head_held || view_held(recv) || view_ran_first(recv) || rk == NK_SelfNode) return 0;
+    LocalVar *lv = rk == NK_LocalVariableReadNode ? scope_local(comp_scope_of(c, recv), nt_str(nt, recv, "name")) : NULL;
+    /* (a constant the record holds bound once, elab_const_name_final, is held by its table) */
+    const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_str(nt, recv, "name") : NULL;
+    if ((lv && !lv->is_cell) || (cn && elab_const_name_final(c, cn))) {
+      for (int i = 0; i < nops; i++) if (ops[i] >= 0 && read_rebound_by(c, recv, ops[i])) return 1;
+      return 0;
+    }
+  }
+  for (int i = 0; i < nops && !runs; i++)
+    runs = ops[i] >= 0 && !(held_ok && view_ran_first(ops[i])) &&
+           (held_ok ? order_may_drop_state(c, ops[i]) || read_rebound_by(c, recv, ops[i]) : subtree_has_side_effect(c, ops[i]));
+  if (runs || !(held_ok ? operand_allocates_beside(c, recv) : subtree_may_allocate(c, recv))) return runs;
+  for (int i = 0; i < nops; i++)
+    if (ops[i] >= 0 && (!held_ok ? 1 : !view_ran_first(ops[i]) && operand_may_allocate(c, ops[i]))) return 1;
+  return 0;
+}
+/* The receiver temp of an element write, rooted where store_recv_needs_root says it needs it (the value forms'
+   `({ T _t = recv; ... })`). */
+void emit_index_recv_root(Compiler *c, TyKind irt, int node, int ir, const int *ops, int nops, int ta, int held_ok, Buf *b) {
+  if (store_recv_needs_root(c, node, ir, ops, nops, held_ok)) { emit_gc_root_tmp(c, irt, ta, b); buf_puts(b, " "); }
 }
 
 /* A value of a kind whose builtin methods run no Ruby code of the

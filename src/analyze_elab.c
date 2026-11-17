@@ -2250,6 +2250,11 @@ static int lr_const_final(Compiler *c, const char *name) {
   return !(writes > 1 || (writes && headers)) && !c->lrec->fin_calls && !(f && f->removed);
 }
 
+/* ...asked of a constant's name (a read of it) once the record is made */
+int elab_const_name_final(Compiler *c, const char *name) {
+  return c->lrec && name && lr_const_final(c, name);
+}
+
 /* ...asked of a write of it after the walk (an_const_presence) */
 int elab_const_write_final(Compiler *c, int write) {
   const char *nm = c->lrec ? lr_const_written(c->nt, write) : NULL;

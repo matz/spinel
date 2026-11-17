@@ -6874,8 +6874,11 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
     TyKind pr = TY_UNKNOWN;
     for (int i = 0; i < npk; i++) {
       int imi = call_target(c, id, pk[i], name, 0, NULL);
-      if (imi < 0) continue;
-      TyKind t = method_call_ret(c, imi, id);
+      TyKind t, at;
+      /* (an accessor answers as the one-class arm above takes it) */
+      if (imi >= 0) t = method_call_ret(c, imi, id);
+      else if (argc == 0 && attr_reader_ty(c, pk[i], name, &at)) t = at;
+      else continue;
       pr = pr == TY_UNKNOWN ? t : ty_unify(pr, t);
     }
     if (pr != TY_UNKNOWN) { *out = pr; return 1; }
@@ -12146,7 +12149,9 @@ TyKind infer_uncached(Compiler *c, int id) {
       self_cls = iec;
     }
     /* `self` inside an instance_eval/exec block is the rebound receiver, in an
-       instance method of another class too */
+       instance method of another class too: a box where it may be one of
+       several (as in a class method above) */
+    if (self_cls >= 0 && !s->is_cmethod && ie_class_of(c, id) < -1) return TY_POLY;
     if (self_cls >= 0 && !s->is_cmethod && ie_class_of(c, id) >= 0) self_cls = ie_class_of(c, id);
     if (self_cls < 0) self_cls = (an_ie_class_id >= 0) ? an_ie_class_id : ie_class_of(c, id);
     /* a statement of a class or module body: the class object itself */

@@ -3667,7 +3667,8 @@ static void cf_call(CF *f, int v) {
           if (ml.kind == ML_ATTR) {
             char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, i, nm));
             cf_flow(f, cf_entry(f, f->fam[i], ivn), v);
-            if (f->all_ivars) cf_all(f, v);
+            /* (in an exec block the reader is the rebound self's, as an ivar read there is) */
+            if (f->all_ivars || (cf_owner_block(f, v, 0) >= 0 && cf_in_exec_block(f, v))) cf_all(f, v);
             found = 1;
           }
         }

@@ -3888,7 +3888,10 @@ static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, i
      binds the builtin's own method (cplan_builtin_call) asks no site: its answer none (call_target's ML_BUILTIN) is not the
      program's method the Enumerable-first rewrite is asked about, which the class's own def of the name gives */
   int at = id >= 0 && cplan_builtin_call(c, id) ? -1 : id;
+  /* (no call's question: a dispatcher of the whole program's, or a call that binds the builtin's own method) */
+  if (at < 0) mtab_enter(c);
   int tbl = !call_answers(c, at, cid, name, CT_NOFACE | (at < 0 ? CT_SHARED : 0), NULL);
+  if (at < 0) mtab_leave(c);
   if (cid < 0 || cid >= c->nclasses || !name) return tbl;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
   if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return tbl;

@@ -81,7 +81,6 @@ src/codegen.c:conv_bridge_callee
 src/codegen_call.c:root_reopen_defines
 src/compiler.c:mixin_answers_first
 src/compiler.c:toplevel_mod_method
-src/codegen_call_exception.c:emit_call_exception_arms
 src/compiler.c:comp_poly_arm_reader_any
 src/codegen.c:emit_user_coerce_dispatch
 src/codegen.c:emit_obj_succ_dispatch

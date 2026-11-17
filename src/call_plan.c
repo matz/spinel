@@ -5640,7 +5640,7 @@ int cplan_cv_ctor_class(Compiler *c, int id, CvCtor f, int k) {
   if (f == CVC_NONE || comp_ary_root(c, k) < 0 || !comp_class_builds_by_aref(c, k))
     return 0;
   return f != CVC_NEW || (cplan_hook_target(c, id, k, "initialize", NULL) < 0 &&
-                          call_target(c, -1, k, "new", CT_CMETHOD | CT_SHARED, NULL) < 0);
+                          call_target(c, id, k, "new", CT_CMETHOD, NULL) < 0);
 }
 
 int cplan_cv_ctor_builds(Compiler *c, int id, int k) {

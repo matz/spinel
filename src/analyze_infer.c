@@ -6244,9 +6244,15 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
    passes host -1, the no-site ask, which keeps its read counted as the open
    node's. */
 int class_any_cmethod_eqq(Compiler *c, int host, int op, int ci) {
-  int mi = ci < 0 ? -1 : host < 0 ? call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL)
-         : op < 0 ? call_target(c, host, ci, "===", CT_CMETHOD, NULL)
-         : cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD | CIT_TABLE, NULL);
+  int mi = -1;
+  if (ci >= 0 && host < 0) {
+    mtab_enter(c);   /* (a survey of the program's classes, or the dispatcher's arm for each: no call's question) */
+    mi = call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL);
+    mtab_leave(c);
+  }
+  else if (ci >= 0)
+    mi = op < 0 ? call_target(c, host, ci, "===", CT_CMETHOD, NULL)
+                : cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD | CIT_TABLE, NULL);
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
       nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
   /* (a super in it reaches Module#===, which the call cannot run yet: the

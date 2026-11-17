@@ -14216,8 +14216,13 @@ static void emit_obj_struct_values_dispatch(Compiler *c, Buf *b) {
 static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
   MethodLookup ml_mi = { .def_class = defc ? *defc : -1 };
   /* (the implied to_a a splat makes, asked at its node; a dispatcher of the whole program asks with no site) */
-  int mi = host >= 0 ? cplan_implied_target(c, host, op, cid, "to_a", CIT_TABLE, &ml_mi)
-                     : call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
+  int mi = -1;
+  if (host >= 0) mi = cplan_implied_target(c, host, op, cid, "to_a", CIT_TABLE, &ml_mi);
+  else {
+    mtab_enter(c);   /* (the dispatcher's arm for every class: it serves a value at run time, no call's question) */
+    mi = call_target(c, -1, cid, "to_a", CT_METHODS | CT_SHARED, &ml_mi);
+    mtab_leave(c);
+  }
   if (defc) *defc = ml_mi.def_class;
   if (mi < 0) {
     /* `alias to_a entries`: the method the alias names */
@@ -14225,7 +14230,9 @@ static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
     const char *tn = comp_resolve_alias_at(c, cid, "to_a", &start);
     if (!is_to_a_name(tn)) {
       MethodLookup ml_tn = { .def_class = defc ? *defc : -1 };
+      mtab_enter(c);   /* (the alias's target, a name of the class: the dispatcher's arm, no call's question) */
       mi = call_target(c, -1, start, tn, CT_METHODS | CT_SHARED, &ml_tn);
+      mtab_leave(c);
       if (defc) *defc = ml_tn.def_class;
     }
   }
@@ -14236,7 +14243,10 @@ static int obj_to_a_method(Compiler *c, int host, int op, int cid, int *defc) {
      answering its members here turned that NameError into an array. */
   if (cid >= 0 && cid < c->nclasses && c->classes[cid].is_data) return -1;
   MethodLookup ml_ea = { .def_class = defc ? *defc : -1 };
+  /* (the compiler's own synthesized helper: it names no method of the program's, no call's question) */
+  mtab_enter(c);
   mi = call_target(c, -1, cid, "__enum_to_a", CT_METHODS | CT_SHARED, &ml_ea);
+  mtab_leave(c);
   if (defc) *defc = ml_ea.def_class;
   if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return mi;
   return -1;
@@ -14260,7 +14270,10 @@ static int obj_to_a_reader(Compiler *c, int cid) {
    V is the boxed receiver. 0 when the class has none to call. */
 int obj_each_elems_text(Compiler *c, int cid, const char *v, char *out, size_t cap) {
   MethodLookup ml_mi = { .def_class = -1 };
+  /* (the compiler's own synthesized helper, asked for every class a boxed receiver may be: no call's question) */
+  mtab_enter(c);
   int mi = call_target(c, -1, cid, "__enum_to_a", CT_METHODS | CT_SHARED, &ml_mi), defc = ml_mi.def_class;
+  mtab_leave(c);
   if (mi < 0 || defc < 0 || c->scopes[mi].nparams != 0 || !scope_has_callable_symbol(c, mi)) return 0;
   int vobj = comp_ty_value_obj(c, ty_object(defc));
   char callx[256];

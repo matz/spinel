@@ -46420,7 +46420,8 @@ static void desugar_block_arg_order(Compiler *c) {
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
     /* (a builtin `new` that builds its empty value holds every operand in CRuby's order itself: desugar_builtin_new_init_args) */
-    if (!is_super && (cplan_builtin_new_form(c, id) == BNF_EMPTY || cplan_builtin_new_form(c, id) == BNF_RAISE)) continue;
+    int bnf = is_super ? BNF_NONE : cplan_builtin_new_form(c, id);
+    if (bnf == BNF_EMPTY || bnf == BNF_RAISE) continue;
     int be = nt_ref(nt, blk, "expression");
     int pb = nt_kind(nt, be) == NK_ParenthesesNode ? nt_ref(nt, be, "body") : -1;
     int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;

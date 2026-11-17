@@ -27620,7 +27620,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
         held[nh++] = view_push(c, node[i], TY_POLY);
         continue;
       }
-      if (operand_binds_handle(c, node[i], harg)) {
+      if (hdl[i] || operand_binds_handle(c, node[i], harg)) {
         ran_first_bind(node[i], tmp[i], tmp[i]);
         /* (one representation: the temp holds the handle; a value read of it is bytes) */
         if (ty[i] == TY_STRING)

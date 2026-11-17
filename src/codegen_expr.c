@@ -1745,7 +1745,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
   /* No reader at all -- no method, no attribute, no method_missing to
      answer it -- is the reader call's NoMethodError, raised before the
      value runs. The field-store way below has no ivar to store into. */
-  if (rmi < 0 && rml.kind != ML_ATTR && comp_method_in_chain(c, cid, "method_missing", NULL) < 0) {
+  if (rmi < 0 && rml.kind != ML_ATTR && call_target(c, id, cid, METHOD_MISSING_NAME, CT_REACH, NULL) < 0) {
     TyKind want = repr_of(c, id).as_ty;
     if (want == TY_UNKNOWN || want == TY_VOID) want = TY_POLY;
     int trv = ++g_tmp; char rv[32]; snprintf(rv, sizeof rv, "_t%d", trv);

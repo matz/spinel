@@ -1809,14 +1809,16 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
   }
   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ ? _t%d.cls_id", tv, tv);
   /* an Integer or Float whose own reopening (if any) lacks the name takes
-     the Numeric reopening's arm */
+     the Numeric reopening's arm (the plan's no-site asks: the key picks
+     among the arms the dispatch emits, one per reopening that has the
+     method anywhere, as poly_key_reopen asks) */
   int nmi = comp_builtin_class_named(c, "Numeric");
   if (nmi >= 0 && !(class_is_prim_reopen(c, nmi) &&
-                    (!pick_name || comp_method_in_chain(c, nmi, pick_name, NULL) >= 0))) nmi = -1;
+                    (!pick_name || call_target(c, -1, nmi, pick_name, CT_METHODS, NULL) >= 0))) nmi = -1;
   for (unsigned i = 0; i < sizeof P / sizeof P[0]; i++) {
     int idx = comp_core_class(c, P[i].cls);
     if (nmi >= 0 && (P[i].cls == CORE_INTEGER || P[i].cls == CORE_FLOAT) &&
-        (idx < 0 || (pick_name && comp_method_in_chain(c, idx, pick_name, NULL) < 0))) idx = nmi;
+        (idx < 0 || (pick_name && call_target(c, -1, idx, pick_name, CT_METHODS, NULL) < 0))) idx = nmi;
     if (idx >= 0) buf_printf(b, " : _t%d.tag == %s ? %d", tv, P[i].tag, idx);
   }
   { int ti = comp_core_class(c, CORE_TRUECLASS), fi = comp_core_class(c, CORE_FALSECLASS);
@@ -2111,12 +2113,13 @@ static int cls_value_answer_raises(const char *t) {
    answer does not fit the slot the dispatch assigns. */
 /* Does the program give a class value the name through a method of its own on what every class value is an
    object of: Object, Module, Class, Kernel or BasicObject (`class Object; private def top`)? Such a method answers
-   for a class value whatever the builtin tables hold (`Integer.send(:top)`). */
-static int cls_side_program_answers(Compiler *c, const char *name) {
+   for a class value whatever the builtin tables hold (`Integer.send(:top)`). As the plan answers class-value call id
+   for the name: the version live where it runs. */
+static int cls_side_program_answers(Compiler *c, int id, const char *name) {
   static const int owners[] = { CORE_OBJECT, CORE_MODULE, CORE_CLASS, CORE_KERNEL, CORE_BASIC_OBJECT };
   for (unsigned i = 0; i < sizeof owners / sizeof *owners; i++) {
     int k = comp_core_class(c, owners[i]);
-    if (k >= 0 && call_target(c, -1, k, name, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
+    if (k >= 0 && call_target(c, id, k, name, CT_METHODS, NULL) >= 0) return 1;
   }
   return 0;
 }
@@ -2134,7 +2137,7 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
      and the Hash emitter answered `empty?` and `none?` on the class value
      (its conversion of a Class is NULL, "empty"): `String.send(:empty?)`
      was true where CRuby raises NoMethodError. */
-  if (!builtin_method_answers("Object", name, 1, 0) && !cls_side_program_answers(c, name)) return 0;
+  if (!builtin_method_answers("Object", name, 1, 0) && !cls_side_program_answers(c, id, name)) return 0;
   for (int a = 0; a < argc; a++) {
     if (nt_kind(nt, argv[a]) == NK_SplatNode) return 0;
     if (subtree_has_side_effect(c, argv[a]) && repr_of(c, argv[a]).as_ty != atmp_ty[a]) return 0;
@@ -2227,7 +2230,7 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
      above: the emitters under the face would answer for a value of
      another class) */
   const char *nm = nt_str(nt, id, "name");
-  if (!nm || (!builtin_method_answers("Object", nm, 1, 0) && !cls_side_program_answers(c, nm))) return 0;
+  if (!nm || (!builtin_method_answers("Object", nm, 1, 0) && !cls_side_program_answers(c, id, nm))) return 0;
   /* each argument runs once, in the arm that is taken */
   for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
   int sv_tmp = g_tmp;

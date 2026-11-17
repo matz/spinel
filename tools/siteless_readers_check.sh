@@ -28,7 +28,6 @@ cd "$ROOT" || exit 2
 # without the override (a dup, or the object before its def ran), after any later redefinition of the parent's method, so
 # no point of the load is that call's own; the table's method is the answer until the entries of step 4.
 FUNCS="
-src/codegen_call.c:cls_side_program_answers
 src/analyze_infer.c:class_any_cmethod_eqq
 src/codegen_util.c:exc_text_override_calls_super
 src/analyze_util.c:class_coerce_emittable

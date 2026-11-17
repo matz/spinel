@@ -6238,12 +6238,15 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
 /* The class method `===` that class `ci` (or a class above it) defines in
    the program, or -1. A builtin row's own `===` does not count. A `when` or
    `in` arm asks as the implied call its row makes (host, the node that holds
-   the row; op its operand); a reader that stands behind no such node (a
-   survey of the program's classes) passes host -1, the no-site ask, which
-   keeps its read counted as the open node's. */
+   the row; op its operand); a written `K === x` asks as the call it is (host
+   the call, op -1), which binds the version live where it runs; a reader
+   that stands behind no such node (a survey of the program's classes)
+   passes host -1, the no-site ask, which keeps its read counted as the open
+   node's. */
 int class_any_cmethod_eqq(Compiler *c, int host, int op, int ci) {
-  int mi = ci < 0 ? -1 : host >= 0 ? cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD | CIT_TABLE, NULL)
-                                   : call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL);
+  int mi = ci < 0 ? -1 : host < 0 ? call_target(c, -1, ci, "===", CT_CMETHOD | CT_SHARED, NULL)
+         : op < 0 ? call_target(c, host, ci, "===", CT_CMETHOD, NULL)
+         : cplan_implied_target(c, host, op, ci, "===", CT_CMETHOD | CIT_TABLE, NULL);
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
       nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
   /* (a super in it reaches Module#===, which the call cannot run yet: the
@@ -6373,7 +6376,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     if (argc == 1 && sp_streq(name, "===")) {
       int eci = nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode
                 ? const_node_class_index(c, recv) : -2;
-      int emi = eci >= 0 ? class_any_cmethod_eqq(c, -1, -1, eci) : -1;
+      int emi = eci >= 0 ? class_any_cmethod_eqq(c, id, -1, eci) : -1;
       if (emi >= 0 && c->scopes[emi].ret != TY_UNKNOWN) { *out = c->scopes[emi].ret; return 1; }
       if (eci == -2 && class_eqq_answers_value(c)) { *out = TY_POLY; return 1; }
     }
@@ -7491,7 +7494,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
      own, which answers what it answers */
   if (sp_streq(name, "===") && argc == 1 && recv >= 0 &&
       nt_kind(nt, recv) == NK_ConstantReadNode &&
-      class_any_cmethod_eqq(c, -1, -1, const_node_class_index(c, recv)) < 0)
+      class_any_cmethod_eqq(c, id, -1, const_node_class_index(c, recv)) < 0)
     { *out = TY_BOOL; return 1; }
 
   if ((is_unary_sign(name)) && recv >= 0 && argc == 0) {

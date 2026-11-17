@@ -3800,18 +3800,6 @@ int comp_writer_in_chain(Compiler *c, int class_id, const char *name, int *def_c
   return accessor_chain(c, class_id, name, def_class, 1);
 }
 
-/* Whether the program answers `name` at one level of the lookup, class or
-   module k itself: a def of its own (not a copy an include made), a reader
-   its own body declared, or an alias. */
-static int mixin_level_answers(Compiler *c, int k, const char *name) {
-  ClassInfo *ci = &c->classes[k];
-  int mi = comp_method_in_class(c, k, name);
-  if (mi >= 0 && (!c->scopes[mi].is_include_copy || c->scopes[mi].is_prepend_copy)) return 1;
-  if (comp_is_own_reader(ci, name)) return 1;
-  for (int a = 0; a < ci->naliases; a++)
-    if ((!ci->alias_sg || !ci->alias_sg[a]) && sp_streq(ci->alias_new[a], name)) return 1;
-  return 0;
-}
 /* Ruby's lookup from level k: 1 when the program answers first, 2 when
    Enumerable does, 0 when neither does at k or below the modules it
    includes (the last included first, Enumerable at its place among them).
@@ -3861,23 +3849,23 @@ static int mixin_reaches(Compiler *c, int k, int what, const char *name) {
   free(seen);
   return r;
 }
-static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, int comparable, int depth) {
+static int mixin_level_walk(Compiler *c, int id, int k, const char *name, int own_enum, int comparable, int depth) {
   ClassInfo *ci = &c->classes[k];
   /* A prepended module's method precedes its includes. Its transplanted
      scope records the module whose own lookup supplies that order. */
   if (comparable && ci->cmp_prepended == 2) {
-    int mi = comp_method_in_class(c, k, name);
+    int mi = comp_name_responder(c, k, name, CT_OWN);   /* (the copy the prepend made: its module, the walk's next level) */
     if (mi >= 0 && c->scopes[mi].is_prepend_copy && depth < c->nclasses) {
       int m = c->scopes[mi].origin_module_ci - 1;
       if (m >= 0 && m != k) {
-        int r = mixin_level_walk(c, m, name, own_enum, comparable, depth + 1);
+        int r = mixin_level_walk(c, id, m, name, own_enum, comparable, depth + 1);
         if (r) return r;
       }
     }
     return 2;
   }
   if (comparable ? ci->cmp_prepended == 1 : ci->enum_prepended) return 2;   /* in front of the class's own */
-  if (mixin_level_answers(c, k, name)) return 1;
+  if (cplan_level_answers(c, id, k, name)) return 1;
   int pos = comparable ? ci->cmp_inc_at : ci->enum_inc_at;
   int at = own_enum && pos ? pos - 1 : -1;
   for (int j = ci->nincluded_mods - 1; ; j--) {
@@ -3885,7 +3873,7 @@ static int mixin_level_walk(Compiler *c, int k, const char *name, int own_enum, 
     if (j < 0) return 0;
     int m = ci->included_mods[j];
     if (m < 0 || m >= c->nclasses || m == k || depth >= (comparable ? c->nclasses : 16)) continue;
-    int r = mixin_level_walk(c, m, name, own_enum, comparable, depth + 1);
+    int r = mixin_level_walk(c, id, m, name, own_enum, comparable, depth + 1);
     if (r) return r;
   }
 }
@@ -3910,7 +3898,7 @@ static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, i
          prepended to, behind the ones below it */
       for (int j = cid, g = 0; g < 256; j = c->classes[j].parent, g++) {
         if (c->classes[j].enum_prepended) return 1;
-        if (mixin_level_answers(c, j, name)) return 0;
+        if (cplan_level_answers(c, at, j, name)) return 0;
         if (j == k || c->classes[j].parent < 0) break;
       }
       return tbl;
@@ -3920,7 +3908,7 @@ static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, i
   }
   n = 0;
   for (int k = cid; k >= 0 && k < c->nclasses && n < 256; k = c->classes[k].parent, n++) {
-    int r = mixin_level_walk(c, k, name, k == top, comparable, 0);
+    int r = mixin_level_walk(c, at, k, name, k == top, comparable, 0);
     if (r) return r == 2;
     if (k == c->classes[k].parent) break;
   }

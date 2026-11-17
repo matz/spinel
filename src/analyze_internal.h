@@ -802,6 +802,7 @@ int desugar_io_console_modes(Compiler *c);
 int desugar_reader_index_write(Compiler *c);
 int desugar_body_module_eval(Compiler *c);
 int desugar_instance_eval_defs(Compiler *c);
+int desugar_self_class_eval_blocks(Compiler *c);
 int enumerator_own_with_object(Compiler *c, int id);
 int block_body_breaks(const NodeTable *nt, int node);   /* a break that leaves this block */
 const LowerRow *lower_row_nt(const NodeTable *nt, int id, int family);   /* the family's row call id's shape matches */

@@ -26595,6 +26595,131 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
   return changed;
 }
 
+/* Does id define or remove a method (a def, an alias, an undef) anywhere
+   below it? */
+static int sce_defines(const NodeTable *nt, int id) {
+  if (id < 0) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_DefNode || k == NK_AliasMethodNode || k == NK_UndefNode) return 1;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) if (sce_defines(nt, nt_ref_at(nt, id, i))) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0;
+    const int *ids = nt_arr_at(nt, id, i, &cnt);
+    for (int j = 0; j < cnt; j++) if (sce_defines(nt, ids[j])) return 1;
+  }
+  return 0;
+}
+/* `raise ::NoMethodError, "undefined method 'nm' for an instance of " + self.class.to_s unless ::Module === self` */
+static int sce_module_guard(NodeTable *nt, int like, const char *nm) {
+  char msg[128];
+  snprintf(msg, sizeof msg, "undefined method '%s' for an instance of ", nm);
+  int str = fwd_new_node_like(nt, like, "StringNode");
+  nt_node_set_str(nt, str, "content", msg);
+  int kls = fwd_new_node_like(nt, like, "CallNode");
+  nt_node_set_str(nt, kls, "name", "class");
+  nt_node_set_ref(nt, kls, "receiver", fwd_new_node_like(nt, like, "SelfNode"));
+  int ks = fwd_new_node_like(nt, like, "CallNode");
+  nt_node_set_str(nt, ks, "name", "to_s");
+  nt_node_set_ref(nt, ks, "receiver", kls);
+  int cat = fwd_new_node_like(nt, like, "CallNode"), cata = fwd_new_node_like(nt, like, "ArgumentsNode");
+  nt_node_set_arr(nt, cata, "arguments", &ks, 1);
+  nt_node_set_str(nt, cat, "name", "+");
+  nt_node_set_ref(nt, cat, "receiver", str);
+  nt_node_set_ref(nt, cat, "arguments", cata);
+  /* (`::NoMethodError` and `::Module`: a constant of the method's nesting may take either name) */
+  int ne = fwd_new_node_like(nt, like, "ConstantPathNode");
+  nt_node_set_str(nt, ne, "name", "NoMethodError");
+  nt_node_set_ref(nt, ne, "parent", -1);
+  int rav[2] = { ne, cat };
+  int rc = fwd_new_node_like(nt, like, "CallNode"), rca = fwd_new_node_like(nt, like, "ArgumentsNode");
+  nt_node_set_arr(nt, rca, "arguments", rav, 2);
+  nt_node_set_str(nt, rc, "name", "raise");
+  nt_node_set_ref(nt, rc, "arguments", rca);
+  int mod = fwd_new_node_like(nt, like, "ConstantPathNode");
+  nt_node_set_str(nt, mod, "name", "Module");
+  nt_node_set_ref(nt, mod, "parent", -1);
+  int self = fwd_new_node_like(nt, like, "SelfNode");
+  int q = fwd_new_node_like(nt, like, "CallNode"), qa = fwd_new_node_like(nt, like, "ArgumentsNode");
+  nt_node_set_arr(nt, qa, "arguments", &self, 1);
+  nt_node_set_str(nt, q, "name", "===");
+  nt_node_set_ref(nt, q, "receiver", mod);
+  nt_node_set_ref(nt, q, "arguments", qa);
+  int unl = fwd_new_node_like(nt, like, "UnlessNode"), ust = fwd_new_node_like(nt, like, "StatementsNode");
+  nt_node_set_arr(nt, ust, "body", &rc, 1);
+  nt_node_set_ref(nt, unl, "predicate", q);
+  nt_node_set_ref(nt, unl, "statements", ust);
+  return unl;
+}
+/* In a method, `class_eval { }` (and module_eval, class_exec, module_exec)
+   on self, written or not, runs its block with self as self, as
+   `self.instance_exec { }` does: the two differ only in where a `def`, an
+   `alias` or an `undef` in the block lands, and such a block is left as it
+   was. A self that may be no Module (a method of a module, or of a class's
+   instances) raises CRuby's NoMethodError first. A receiverless
+   `instance_exec { }` / `instance_eval { }` is `self.`'s. */
+int desugar_self_class_eval_blocks(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  int *parent = NULL;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    int cls = sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval") || sp_streq(nm, "class_exec") || sp_streq(nm, "module_exec");
+    int ins = sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval");
+    int r = nt_ref(nt, id, "receiver");
+    if (!(cls && (r < 0 || nt_kind(nt, r) == NK_SelfNode)) && !(ins && r < 0)) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    /* (an eval form takes a String, and yields self to a block's parameter) */
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    if (a >= 0) nt_arr(nt, a, "arguments", &an);
+    int eval_form = sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval") || sp_streq(nm, "instance_eval");
+    if (eval_form && (an > 0 || nt_ref(nt, blk, "parameters") >= 0)) continue;
+    int body = nt_ref(nt, blk, "body");
+    if (cls && sce_defines(nt, body)) continue;
+    if (!parent) parent = an_parent_map(nt);
+    if (!parent) continue;
+    int d = parent[id], in_block = 0;
+    while (d >= 0 && nt_kind(nt, d) != NK_DefNode && !class_def_opens_frame(nt, d)) {
+      in_block |= nt_kind(nt, d) == NK_BlockNode || nt_kind(nt, d) == NK_LambdaNode;
+      d = parent[d];
+    }
+    if (d < 0 || nt_kind(nt, d) != NK_DefNode) continue;
+    if (cls) {
+      /* self is a Module in a `def self.m` or a `class << self` body's def,
+         but not in a block there, which an instance_exec may run on another */
+      int dr = nt_ref(nt, d, "receiver"), mod = !in_block && dr >= 0 && nt_kind(nt, dr) == NK_SelfNode;
+      for (int p = parent[d]; !mod && !in_block && p >= 0; p = parent[p]) {
+        if (!class_def_opens_frame(nt, p)) continue;
+        int ex = nt_kind(nt, p) == NK_SingletonClassNode ? nt_ref(nt, p, "expression") : -1;
+        mod = ex >= 0 && nt_kind(nt, ex) == NK_SelfNode;
+        break;
+      }
+      if (!mod) {
+        int g = sce_module_guard(nt, id, nm), bn = 0;
+        const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+        if (body >= 0 && !bb) continue;
+        int *nb = malloc(sizeof(int) * ((size_t)bn + 1));
+        if (!nb) continue;
+        nb[0] = g;
+        for (int i = 0; i < bn; i++) nb[i + 1] = bb[i];
+        if (body < 0) { body = fwd_new_node_like(nt, id, "StatementsNode"); nt_node_set_ref(nt, blk, "body", body); }
+        nt_node_set_arr(nt, body, "body", nb, bn + 1);
+        free(nb);
+      }
+      nt_node_set_str(nt, id, "name", "instance_exec");
+    }
+    if (r < 0) nt_set_self_receiver(nt, id, fwd_new_node_like(nt, id, "SelfNode"));
+    changed = 1;
+  }
+  free(parent);
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
+}
+
 int desugar_class_body_object_acts(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

@@ -305,7 +305,7 @@ long long rb_num2ll(VALUE value) {
     sp_RbVal number=sp_cext_rbval(value);
     if(number.tag==SP_TAG_NIL)rb_raise(rb_eTypeError,"no implicit conversion from nil");
     if(number.tag==SP_TAG_BOOL)rb_raise(rb_eTypeError,"no implicit conversion from boolean");
-    if(number.tag==SP_TAG_STR || (number.tag==SP_TAG_OBJ && number.cls_id==SP_BUILTIN_STRBUF))
+    if(sp_rbval_is_string(number))
         rb_raise(rb_eTypeError,"no implicit conversion from string");
     return (long long)rb_num2long(value);
 }
@@ -457,7 +457,7 @@ static const char *type_name(int type) {
 }
 void rb_check_type(VALUE value,int type) {
     sp_RbVal object=sp_cext_rbval(value);
-    if(type==T_STRING && (object.tag==SP_TAG_STR || (object.tag==SP_TAG_OBJ && object.cls_id==SP_BUILTIN_STRBUF)))return;
+    if(type==T_STRING && sp_rbval_is_string(object))return;
     if(type==T_ARRAY && object.tag==SP_TAG_OBJ && object.cls_id==SP_BUILTIN_POLY_ARRAY)return;
     int actual=rb_type(value);
     /* an Array the analysis did not widen, or a String or Array subclass:
@@ -519,8 +519,7 @@ int rb_enc_find_index(const char *name) {
 }
 static int string_binary(VALUE value) {
     sp_RbVal r=sp_cext_rbval(value);
-    if(r.tag==SP_TAG_STR)return r.v.s && sp_str_is_binary(r.v.s);
-    if(r.tag==SP_TAG_OBJ && r.cls_id==SP_BUILTIN_STRBUF && r.v.p)return ((sp_String *)r.v.p)->binary;
+    if(sp_rbval_is_string(r))return sp_str_is_binary(sp_rbval_string_bytes(r));
     rb_raise(rb_eTypeError,"expected a String");
 }
 rb_encoding *rb_enc_get(VALUE value) { return string_binary(value) ? &ascii8bit : &utf8; }
@@ -532,12 +531,9 @@ VALUE rb_enc_from_encoding(rb_encoding *encoding) {
 }
 static rb_encoding *encoding_of(VALUE value) {
     sp_RbVal r=sp_cext_rbval(value);
-    if(r.tag==SP_TAG_ENCODING && r.v.s) {
-        int index=rb_enc_find_index(r.v.s);
-        if(index>=0)return rb_enc_from_index(index);
-    }
-    if(r.tag==SP_TAG_STR && r.v.s) {
-        int index=rb_enc_find_index(r.v.s);
+    const char *name=r.tag==SP_TAG_ENCODING ? r.v.s : sp_rbval_string_bytes(r);
+    if(name) {
+        int index=rb_enc_find_index(name);
         if(index>=0)return rb_enc_from_index(index);
     }
     rb_raise(rb_eArgError,"unknown encoding name");
@@ -605,11 +601,13 @@ char *sp_cext_string_cstr(VALUE value) {
     return bytes;
 }
 char *sp_cext_string_ptr(VALUE v) {
-    sp_RbVal r=sp_cext_rbval(v);if(r.tag==SP_TAG_STR)return (char *)r.v.s;
+    sp_RbVal r=sp_cext_rbval(v);
+    if(sp_rbval_is_string(r))return (char *)sp_rbval_string_bytes(r);
     return string(v)->data;
 }
 long sp_cext_string_len(VALUE v) {
-    sp_RbVal r=sp_cext_rbval(v);if(r.tag==SP_TAG_STR)return (long)sp_str_byte_len(r.v.s);
+    sp_RbVal r=sp_cext_rbval(v);
+    if(sp_rbval_is_string(r))return (long)sp_str_byte_len(sp_rbval_string_bytes(r));
     return (long)string(v)->len;
 }
 VALUE rb_str_cat(VALUE v,const char *s,long len) { if(len<0)rb_raise(rb_eArgError,"negative string size");sp_String_append_n(string(v),s,(size_t)len);return v; }

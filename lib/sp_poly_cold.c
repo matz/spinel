@@ -255,7 +255,7 @@ double sp_cext_num2dbl(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) sp_raise_cls("TypeError", "no implicit conversion to float from nil");
   if (v.tag == SP_TAG_BOOL)
     sp_raise_cls("TypeError", v.v.b ? "no implicit conversion to float from true" : "no implicit conversion to float from false");
-  if (v.tag == SP_TAG_STR || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF))
+  if (sp_rbval_is_string(v))
     sp_raise_cls("TypeError", "no implicit conversion to float from string");
   return sp_poly_to_f(v);
 }

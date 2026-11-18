@@ -9739,13 +9739,22 @@ static int str_arms_pattern(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         const char *pn = rename_local(block_param_name(c, blk, pj));
         emit_indent(g_pre, g_indent + 1);
         char value[256];
-        snprintf(value, sizeof value, "(_t%d && _t%d->len > %d && _t%d->data[%d].tag == SP_TAG_STR) ? _t%d->data[%d].v.s : NULL",
-                 trow, trow, pj, trow, pj, trow, pj);
+        snprintf(value, sizeof value, "sp_PolyArray_get(_t%d, %d)", trow, pj);
         Scope *sc = comp_scope_of(c, blk);
         LocalVar *lv = sc ? scope_local(sc, block_param_name(c, blk, pj)) : NULL;
         buf_printf(g_pre, "lv_%s = ", pn);
-        emit_coerce_text(c, id, TY_STRING, lv ? repr_of_slot(c, lv).as_ty : TY_STRING,
-                         CO_HOLD, value, "a scan capture parameter", g_pre);
+        TyKind slot = repr_of_slot(c, lv).as_ty;
+        /* This row contains only Strings and nil. Retain a handle in a
+           handle slot and project only when the slot reads bytes. */
+        if (slot == TY_POLY) buf_puts(g_pre, value);
+        else if (slot == TY_STRBUF || slot == TY_STRING || slot == TY_UNKNOWN)
+          emit_unbox_text(c, slot == TY_UNKNOWN ? TY_STRING : slot, value, g_pre);
+        else {
+          char bytes[300];
+          snprintf(bytes, sizeof bytes, "sp_rbval_string_bytes(%s)", value);
+          emit_coerce_text(c, id, TY_STRING, slot, CO_HOLD, bytes,
+                           "a scan capture parameter", g_pre);
+        }
         buf_puts(g_pre, ";\n");
         emit_block_param_share(c, sc, lv, pn, g_pre, 1);
       }

@@ -91,3 +91,16 @@ oa.x ||= H.e
 hk = { k: 1 }
 hk[:k] &&= H.f
 p nav1, nav2, dfn, hh, beg, oa.x, hk
+# A lambda or proc held in a constant or a local starts at the first call
+# that invokes it: one nothing invokes never runs, one invoked by one call
+# that runs once runs once, and one read other than as an invoke's receiver
+# (`arity`) starts where it is made.
+class LC
+  NEVER = -> { 1 }
+  ONCE = lambda { 2 }
+  TWICE = proc { 3 }
+  SEEN = -> { 4 }
+end
+p LC::ONCE.call, LC::TWICE.(), LC::TWICE[], LC::SEEN.arity
+ll = -> { 6 }
+p ll.call

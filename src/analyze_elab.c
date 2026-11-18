@@ -221,6 +221,8 @@ struct LoadRecord {
   int runs_of, nrun, *rend;  /* lr_run_points: the build its bits are of, how many statements run code, each region's end */
   int *rinst;                /* ...from which statement on an object of each class may exist (lr_rta) */
   struct LrExt *ext; int *extix, next, cext, cextix;   /* the extents of the map's bodies (LrExt): [next] entries, by body node + 1 in extix[cextix]; made again with the run points (lr_run_points) */
+  struct LrCRead { const char *name; int node; unsigned char opens; } *cread; int ncread;   /* ...the program's constant reads by name, where a closure's invoking calls are read (lr_const_reads), and */
+  signed char creach;                                  /* ...whether the program reaches a constant past them (lr_const_reached, -1 not asked) */
   int *rentry;               /* ...and each region's load (all three statements of region 0) */
   unsigned char defs_computed;          /* ...and whether the program makes or copies a method by a computed name */
   struct LrVers *vers; int nvers, cvers, *vers_head;
@@ -4377,37 +4379,39 @@ static int lr_in_closure(Compiler *c, const int *par, int n, int x) {
    own local). The array is storage, not a limit the reading sets: past
    it, the reading answers -1, as past cap. */
 typedef struct { int n, w[16]; } LrChainWrites;
-/* The call that runs value x as its receiver (is_proc_invoke), for
-   elab_closure_runs, where that call is not itself in a closure, into
-   sites: 1; 0 where x goes anywhere else, -1 past cap */
-static int lr_closure_use(Compiler *c, const int *par, int n, int x, LrChainWrites *seen, int *sites, int cap) {
+/* The call that runs value x as its receiver (is_proc_invoke), into sites:
+   1. For elab_closure_runs (every 0), one not itself in a closure; 0 where x
+   goes anywhere else. For every call that may run it (every 1, lr_closure_sites),
+   one wherever it stands, of a name no method of the program's takes; 0 for a
+   value dropped, -1 where x goes anywhere else. -1 past cap. */
+static int lr_closure_use(Compiler *c, const int *par, int n, int x, LrChainWrites *seen, int every, int *sites, int cap) {
   VpUp up;
   VpUpKind k = vp_climb(c->nt, par, x, VPS_ALL, &up);
+  const char *nm = k == VPU_ENDED && nt_kind(c->nt, up.parent) == NK_CallNode && nt_ref(c->nt, up.parent, "receiver") == up.node ? nt_str(c->nt, up.parent, "name") : NULL;
   (void)seen;
-  if (k != VPU_ENDED || nt_kind(c->nt, up.parent) != NK_CallNode || nt_ref(c->nt, up.parent, "receiver") != up.node ||
-      !is_proc_invoke(nt_str(c->nt, up.parent, "name")) || lr_in_closure(c, par, n, up.parent))
-    return 0;
+  if (every && k == VPU_DROPPED) return 0;
+  if (!nm || !is_proc_invoke(nm) || (every ? lr_named(c, nm) : lr_in_closure(c, par, n, up.parent))) return every ? -1 : 0;
   if (cap < 1) return -1;
   sites[0] = up.parent;
   return 1;
 }
 /* The calls that run value v (a closure, a lazy chain) as their receiver,
    use answering them for each use of the value (how many sites it adds,
-   -1 where it does not know them all, or past cap; seen handed on): v's
-   own, or, where v is written whole to a local, each read of it in the
+   -1 where it does not know them all, or past cap; every and seen handed
+   on): v's own, or, where v is written whole to a local, each read of it in the
    same body (a write that reads it too, `l ||= ...`, does not). How many,
    into sites[0..cap); -1 past cap and where use answers -1. every: -1
    also where a write reads that local, or the write's own value is used
    (`other = (l = v)`, `f(l = v)`), so that the sites are every place v
    runs. */
 static int lr_value_runs(Compiler *c, const int *par, int n, int v,
-                         int (*use)(Compiler *, const int *, int, int, LrChainWrites *, int *, int), int every,
+                         int (*use)(Compiler *, const int *, int, int, LrChainWrites *, int, int *, int), int every,
                          LrChainWrites *seen, int *sites, int cap) {
   const NodeTable *nt = c->nt;
   int ns = 0, m;
   VpUp up;
   if (vp_climb(nt, par, v, VPS_ALL, &up) != VPU_ENDED || nt_kind(nt, up.parent) != NK_LocalVariableWriteNode)
-    return use(c, par, n, v, seen, sites, cap);
+    return use(c, par, n, v, seen, every, sites, cap);
   static const NodeKind reads[] = { NK_LocalVariableReadNode, NK_LocalVariableOperatorWriteNode,
                                     NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode };
   VpUp wu;
@@ -4420,7 +4424,7 @@ static int lr_value_runs(Compiler *c, const int *par, int n, int v,
     NT_FOREACH_KIND(nt, reads[j], x) {
       if (x >= n || !sp_streq(nt_str(nt, x, "name"), ln) || elab_body_def(c, x) != body) continue;
       if (!j) {
-        if ((m = use(c, par, n, x, seen, sites + ns, cap - ns)) < 0) return -1;
+        if ((m = use(c, par, n, x, seen, every, sites + ns, cap - ns)) < 0) return -1;
         ns += m;
       }
       else if (every) return -1;
@@ -4457,8 +4461,9 @@ static int lr_lazy_value_runs(Compiler *c, const int *par, int n, int q, LrChain
    force the chain it answers; -1 where x goes anywhere else (a call that
    hands it on as it is, `each` with no block, `itself`, `dup`: one the
    record does not follow) */
-static int lr_lazy_use(Compiler *c, const int *par, int n, int x, LrChainWrites *seen, int *sites, int cap) {
+static int lr_lazy_use(Compiler *c, const int *par, int n, int x, LrChainWrites *seen, int every, int *sites, int cap) {
   VpUp up;
+  (void)every;
   VpUpKind k = vp_climb(c->nt, par, x, VPS_ALL, &up);
   if (k != VPU_ENDED || nt_kind(c->nt, up.parent) != NK_CallNode || nt_ref(c->nt, up.parent, "receiver") != up.node) return -1;
   if (lr_lazy_forces(c, up.parent)) {
@@ -6915,6 +6920,7 @@ static void lr_run_points(Compiler *c) {
   LoadRecord *r = elab_fresh(c);
   if (r->rend && r->runs_of == r->builds) return;
   r->next = 0;   /* (the extents of the last run points are of statements that moved) */
+  free(r->cread); r->cread = NULL; r->ncread = 0; r->creach = -1;   /* (before any read: lr_const_reads and lr_const_reached, whose -1 means not asked yet, build them again) */
   if (r->extix) memset(r->extix, 0, sizeof(int) * (size_t)r->cextix);
   int implicit = 0, global = 0, seen = 0, n = 0;
   for (int i = 0; i < r->nhist && !global; i++) {
@@ -7005,6 +7011,170 @@ static int lr_block_count(Compiler *c, int call, int blk_now, int *sure) {
   *sure = n >= 1 && ir != IR_ELEMS;
   return n <= 0 ? LR_CNT_ZERO : n == 1 ? LR_CNT_ONCE : LR_CNT_MANY;
 }
+static void lr_ext_time(Compiler *c, const int *par, int n, int i);
+/* The extent entry of the innermost body around node, not node itself: a
+   def's, a lambda's, an END's or a block's; -1 at none */
+static int lr_ext_around(const LoadRecord *r, const NodeTable *nt, const int *par, int n, int node) {
+  for (int p = node >= 0 && node < n ? par[node] : -1; p >= 0 && p < n; p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if ((k == NK_DefNode || k == NK_LambdaNode || k == NK_PostExecutionNode || k == NK_BlockNode) && p < r->cextix && r->extix[p]) return r->extix[p] - 1;
+  }
+  return -1;
+}
+/* Is the value of node x thrown away: a statement before the last of its list,
+   a loop's body or an effect clause, the program's value, or a class or module
+   body's whose own value is? */
+static int lr_value_dropped(const NodeTable *nt, const int *par, int x) {
+  for (VpUp up;;) {
+    VpUpKind k = vp_climb(nt, par, x, VPS_ALL, &up);
+    if (k == VPU_DROPPED || k == VPU_ROOT) return 1;
+    if (k != VPU_ENDED) return 0;
+    NodeKind pk = nt_kind(nt, up.parent);
+    if (pk == NK_ProgramNode || vp_up_loop(nt, &up) >= 0 || vp_up_effect_clause(nt, &up)) return 1;
+    if (pk != NK_ClassNode && pk != NK_ModuleNode && pk != NK_SingletonClassNode) return 0;
+    x = up.parent;
+  }
+}
+/* Does a call of a method named n, once it is a Method or an alias, reach a
+   constant past the program's reads: one that reaches constants by a name,
+   evaluates code, sends, or makes a Method? */
+static int lr_reaching_target(const char *n) {
+  return is_const_reaching_name(n) || is_code_eval_name(n) || is_send_family(n) || is_method_object_maker(n);
+}
+/* Does the program reach a constant, or an object, past the reads its syntax
+   shows (lr_closure_sites): a call of a name is_const_reaching_name gives, a
+   class_eval or instance_eval of a String, either through a send of a literal
+   name (call_sent_name) or a `&:name` block; a Method made of, or an alias
+   (`alias`, alias_method) taken of, a method lr_reaching_target names; a
+   send, a Method or an alias_method of a name no literal gives. Asked once
+   per run points (LoadRecord.creach). */
+static int lr_const_reached(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  if (r->creach >= 0) return r->creach;
+  int *ids = NULL, m = 0, reach = 0;
+  int (*const preds[])(const char *) = { is_const_reaching_name, is_code_eval_name, is_send_family, is_method_object_maker, is_alias_method_name };
+  for (int q = 0; q < 5 && !reach; q++, free(ids), ids = NULL) {
+    m = an_calls_named_if(c, preds[q], nt->count, &ids);
+    for (int k = 0; k < m && !reach; k++) {
+      int used = 0, ac = 0;
+      const int *av = call_args(nt, ids[k], &ac);
+      const char *nm = call_sent_name(nt, ids[k], &used);
+      int alias = is_alias_method_name(nm);
+      if (nm && (alias || is_method_object_maker(nm))) {   /* (the method it takes: alias_method's second argument, a Method maker's first) */
+        const char *on = used + alias < ac ? vis_arg_name(nt, av[used + alias]) : alias ? NULL : "";
+        reach = !on || (alias && !vis_arg_name(nt, av[used])) || lr_reaching_target(on);
+      }
+      else reach = !nm || is_const_reaching_name(nm) || (is_code_eval_name(nm) && nt_ref(nt, ids[k], "block") < 0);
+    }
+  }
+  NT_FOREACH_KIND(nt, NK_AliasMethodNode, a) {
+    int on = nt_ref(nt, a, "old_name");
+    const char *onm = on >= 0 ? vis_arg_name(nt, on) : NULL;
+    reach |= !onm || lr_reaching_target(onm);
+  }
+  NT_FOREACH_KIND(nt, NK_BlockArgumentNode, b) {
+    int x = nt_ref(nt, b, "expression");
+    const char *sn = x >= 0 && nt_kind(nt, x) == NK_SymbolNode ? vis_arg_name(nt, x) : NULL;
+    reach |= sn && (is_const_reaching_name(sn) || is_send_family(sn) || is_method_object_maker(sn) || is_alias_method_name(sn));
+  }
+  return r->creach = (signed char)reach;
+}
+/* The constant name a node reads, for lr_closure_sites: a read (a path not
+   a write's target) gives its name with *opens 0; an op-write (`X ||= v`, a
+   path's too) reads it as well, *opens 1; NULL for any other node */
+static const char *lr_const_read(const NodeTable *nt, const int *par, int n, int x, int *opens) {
+  *opens = 0;
+  switch (nt_kind(nt, x)) {
+    case NK_ConstantReadNode:
+      return lr_written_name(nt, x);
+    case NK_ConstantPathNode:
+      return par[x] >= 0 && par[x] < n && nt_kind(nt, par[x]) == NK_ConstantPathWriteNode && nt_ref(nt, par[x], "target") == x ? NULL : lr_written_name(nt, x);
+    case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantOperatorWriteNode:
+      *opens = 1;
+      return lr_written_name(nt, x);
+    case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode: case NK_ConstantPathOperatorWriteNode:
+      *opens = 1;
+      return lr_written_name(nt, nt_ref(nt, x, "target"));
+    default:
+      return NULL;
+  }
+}
+static int lr_cread_cmp(const void *a, const void *b) {
+  return strcmp(((const struct LrCRead *)a)->name, ((const struct LrCRead *)b)->name);
+}
+/* The program's constant reads by name (lr_const_read), sorted, made once per
+   run points (LoadRecord.cread) */
+static void lr_const_reads(Compiler *c, const int *par, int n) {
+  LoadRecord *r = c->lrec;
+  if (r->cread) return;
+  int cap = 64, opens;
+  if (!(r->cread = malloc(sizeof *r->cread * (size_t)cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int x = 0; x < n; x++) {
+    const char *nm = lr_const_read(c->nt, par, n, x, &opens);
+    if (!nm) continue;
+    if (r->ncread == cap && !(r->cread = realloc(r->cread, sizeof *r->cread * (size_t)(cap *= 2)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    r->cread[r->ncread++] = (struct LrCRead){ nm, x, (unsigned char)opens };
+  }
+  qsort(r->cread, (size_t)r->ncread, sizeof *r->cread, lr_cread_cmp);
+}
+/* Every call that may run closure v (a lambda, the call that makes a Proc of
+   its block), into sites[0..cap): where its value goes, a local's reads
+   (lr_value_runs, every) or, written to a constant whose own value is
+   dropped, each read of a constant of that name anywhere (lr_const_reads),
+   each the receiver of an invoke (lr_closure_use, every; a read of another
+   constant of the name only adds a site). -1 where the set is not closed:
+   another use, a write that reads the constant, a program that reaches
+   constants or objects past its syntax (lr_const_reached), past cap. */
+static int lr_closure_sites(Compiler *c, const int *par, int n, int v, int *sites, int cap) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  VpUp up;
+  if (lr_const_reached(c)) return -1;
+  VpUpKind k = vp_climb(nt, par, v, VPS_ALL, &up);
+  NodeKind wk = k == VPU_ENDED ? nt_kind(nt, up.parent) : NK_NilNode;
+  if (wk != NK_ConstantWriteNode && wk != NK_ConstantPathWriteNode) return lr_value_runs(c, par, n, v, lr_closure_use, 1, NULL, sites, cap);
+  const char *cn = lr_written_name(nt, wk == NK_ConstantPathWriteNode ? nt_ref(nt, up.parent, "target") : up.parent);
+  if (!cn || !lr_value_dropped(nt, par, up.parent)) return -1;
+  lr_const_reads(c, par, n);
+  int lo = 0, hi = r->ncread, ns = 0, m;
+  while (lo < hi) { int mid = (lo + hi) / 2; if (strcmp(r->cread[mid].name, cn) < 0) lo = mid + 1; else hi = mid; }
+  for (int j = lo; j < r->ncread && !strcmp(r->cread[j].name, cn); j++) {
+    if (r->cread[j].opens || (m = lr_closure_use(c, par, n, r->cread[j].node, NULL, 1, sites + ns, cap - ns)) < 0) return -1;
+    ns += m;
+  }
+  return ns;
+}
+/* A closure's from and count (entry i, v its value: lr_closure_sites) from the
+   calls that invoke it, where they are all known: the first statement one may
+   run on, past the statement that makes it; ZERO with none that may run;
+   ONCE for one that runs once (lr_ext_time's reading of a block's call, and no
+   loop between the call and its statement). A call in the closure's own body
+   runs only once it runs. */
+static void lr_closure_time(Compiler *c, const int *par, int n, int i, int v) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  int sites[16], ns = lr_closure_sites(c, par, n, v, sites, 16), from = LR_NEVER, runs = 0, once = 1;
+  if (ns < 0) return;
+  for (int q = 0; q < ns; q++) {
+    int s = sites[q], o = lr_ext_around(r, nt, par, n, s);
+    if (o == i) { once = 0; continue; }   /* (its own call: a run again) */
+    if (o >= 0) lr_ext_time(c, par, n, o);
+    int ofrom = o >= 0 ? r->ext[o].from : 0, ocount = o >= 0 ? r->ext[o].count : LR_CNT_ONCE;
+    int stmt = s < r->n && r->at[s] >= 0 ? lr_ext_stmt(r, r->at[s]) : 0;
+    if (ocount == LR_CNT_ZERO || ofrom == LR_NEVER) continue;
+    const LrStmt *st = lr_stmt_of(r, s);
+    int sf = stmt > ofrom ? stmt : ofrom, loop = 0;
+    for (int p = s < n ? par[s] : -1; st && p >= 0 && p < n && p != st->node; p = par[p])
+      loop |= nt_kind(nt, p) == NK_WhileNode || nt_kind(nt, p) == NK_UntilNode || nt_kind(nt, p) == NK_ForNode;
+    once &= ocount == LR_CNT_ONCE && st && !loop && !lr_stmt_repeats(r, nt, (LoadPoint){ st->region, (int)(st - r->st), s });
+    runs++;
+    if (sf < from) from = sf;
+  }
+  LrExt *e = &r->ext[i];
+  e->from = !runs ? LR_NEVER : from > e->from ? from : e->from;
+  e->count = !runs ? LR_CNT_ZERO : runs == 1 && once ? LR_CNT_ONCE : LR_CNT_MANY;
+}
 /* The extent of entry i (LrExt): from, sure and count of every body but a def's
    (lr_rta's), from the body around it, the statement that makes it and, for a
    block, its call. */
@@ -7013,11 +7183,7 @@ static void lr_ext_time(Compiler *c, const int *par, int n, int i) {
   const NodeTable *nt = c->nt;
   if (r->ext[i].timed) return;
   r->ext[i].timed = 1;
-  int node = r->ext[i].node, body = r->ext[i].body, o = -1;
-  for (int p = node < n ? par[node] : -1; p >= 0 && p < n && o < 0; p = par[p]) {
-    NodeKind k = nt_kind(nt, p);
-    if ((k == NK_DefNode || k == NK_LambdaNode || k == NK_PostExecutionNode || k == NK_BlockNode) && p < r->cextix && r->extix[p]) o = r->extix[p] - 1;
-  }
+  int node = r->ext[i].node, body = r->ext[i].body, o = lr_ext_around(r, nt, par, n, node);
   if (o >= 0) lr_ext_time(c, par, n, o);
   int ofrom = o >= 0 ? r->ext[o].from : 0, ocount = o >= 0 ? r->ext[o].count : LR_CNT_ONCE;
   int call = body == LR_B_BLOCK && node < n ? par[node] : node;
@@ -7028,6 +7194,10 @@ static void lr_ext_time(Compiler *c, const int *par, int n, int i) {
   if (body == LR_B_DEF) return;
   e->from = ocount == LR_CNT_ZERO ? LR_NEVER : stmt > ofrom ? stmt : ofrom;   /* (a body in one that runs no time never runs) */
   e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_MANY;
+  if (e->from != LR_NEVER && (body == LR_B_LAMBDA || (body == LR_B_BLOCK && e->cb && lr_proc_made(c, call) && !lr_named(c, nt_str(nt, call, "name"))))) {   /* (a lambda or proc of the program's own may run the block at once) */
+    lr_closure_time(c, par, n, i, body == LR_B_LAMBDA ? node : call);
+    return;
+  }
   int end = body == LR_B_END || (body == LR_B_BLOCK && e->cb && nt_kind(nt, call) == NK_CallNode && is_at_exit_name(nt_str(nt, call, "name")) && !lr_defines(r, "at_exit"));   /* (a method of the program's of the name may run the block at once) */
   if (end) {   /* registered where it stands, run when the program exits */
     e->from = e->from == LR_NEVER ? LR_NEVER : LR_POST;
@@ -11531,7 +11701,7 @@ void elab_free(Compiler *c) {
   free(r->brings); free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
-  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->ext); free(r->extix); free(r->once); free(r);
+  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r);
   c->lrec = NULL;
 }
 

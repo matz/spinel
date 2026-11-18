@@ -149,7 +149,24 @@ The record holds, for each:
   and is where exit handlers start and where `lr_rta` seeds the
   `--ext-entry` methods. A region's `from` is the statement its load may
   first run on (`rentry`); a node of a body that has no point of its own
-  starts no earlier than the body around it.
+  starts no earlier than the body around it. A lambda or proc starts at the
+  first statement one of the calls that invoke it may run on, where the
+  record knows them all (`lr_closure_sites`): its value goes to a local
+  whose reads are each the receiver of `call`, `()`, `[]`, `yield` or
+  `===` (a name no method of the program's takes), or to a constant whose
+  reads, by name anywhere in the program, all are. That holds only in a
+  program that reaches no constant or local by a name it computes
+  (`lr_const_reached`): no `const_get`, `constants`, `binding`, `eval`,
+  `each_object` or kin called directly, through `send`, `__send__` or
+  `public_send`, as a Method or as an `&:name` block; no `class_eval` or
+  `instance_eval` of a String; no Method made of, and no `alias` or
+  `alias_method` taken of, any of those, a send or a Method maker; no
+  send, Method or `alias_method` of a name that is not a literal. The
+  block of a `lambda` or `proc` call is such a closure only when no
+  method of the program's may take that name (one it defines, or one a
+  computed name may make), since that method may run the block at once.
+  With no invoking call it never runs; past any other use it starts at
+  the statement that makes it.
 - `sure`: the first statement after which it has certainly run at least
   once, or `never`. A method body is sure at a call that binds it alone
   (a constant receiver the record resolves, one public def of the name on
@@ -170,7 +187,10 @@ The record holds, for each:
   reach, is `once`; a block of a literal receiver counts by its iterator
   row (`IterRow.runs`: once, by the receiver's value, a step per element;
   a call with no receiver reads Kernel's, `catch`), and a block with a
-  `redo` in it is `many`.
+  `redo` in it is `many`. A lambda or proc whose invoking calls are known
+  is `once` when one call invokes it and that call runs once (its
+  statement does not repeat, no loop stands between them, and the body
+  around it, if any, runs once).
 - `kept`: it runs at a time the syntax does not tell (a block whose call
   keeps it or the record does not know, a lambda, a handler).
 

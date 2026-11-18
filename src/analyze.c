@@ -29846,6 +29846,8 @@ static void handle_arg_tab_init(Compiler *c, HandleArgTab *t) {
   for (int u = 0; u < nt->count; u++) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
     an_call_targets_of(c, u, &tg);
+    /* (a poly receiver's call names the same argument for each of its targets: each is asked once) */
+    int seen_a[16], seen_h[16], nseen = 0;
     for (int k = 0; k < tg.n; k++) {
       int mi = tg.v[k];
       /* only a parameter's chain is ever read, and a poly receiver's call
@@ -29867,7 +29869,14 @@ static void handle_arg_tab_init(Compiler *c, HandleArgTab *t) {
       int np = c->scopes[mi].nparams;
       for (int pj = 0; pj < np; pj++) {
         int a = arg_layout_param_node(c, &c->scopes[mi], u, pj, NULL);
-        if (a >= 0 && an_arg_hands_handle(c, a)) t->bit[t->off[mi] + pj] = HA_HANDLE;
+        if (a < 0) continue;
+        int h = -1;
+        for (int q = 0; q < nseen; q++) if (seen_a[q] == a) { h = seen_h[q]; break; }
+        if (h < 0) {
+          h = an_arg_hands_handle(c, a);
+          if (nseen < 16) { seen_a[nseen] = a; seen_h[nseen] = h; nseen++; }
+        }
+        if (h) t->bit[t->off[mi] + pj] = HA_HANDLE;
       }
     }
   }

@@ -1753,12 +1753,13 @@ int const_class_value_only(Compiler *c, int node) {
    Module or Class (or a module they include), or a class method of Object or
    BasicObject, which every class inherits? Then the builtin reader, and its
    arity, is not what a call reaches. */
-int prog_owns_class_name_reader(Compiler *c, const char *nm) {
+int prog_owns_class_name_reader(Compiler *c, int id, const char *nm) {
   for (int k = 0; k < c->nclasses; k++) {
     const char *n = c->classes[k].name;
-    if (!n) continue;
-    if ((sp_streq(n, "Module") || sp_streq(n, "Class")) && comp_method_in_chain(c, k, nm, NULL) >= 0) return 1;
-    if ((sp_streq(n, "Object") || sp_streq(n, "BasicObject")) && comp_cmethod_in_chain(c, k, nm, NULL) >= 0) return 1;
+    int core = n ? builtin_core_class_slot(n) : -1;
+    if ((core == CORE_MODULE || core == CORE_CLASS) && call_target(c, id, k, nm, CT_METHODS, NULL) >= 0) return 1;
+    if ((core == CORE_OBJECT || core == CORE_BASIC_OBJECT) && call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0)
+      return 1;
   }
   return 0;
 }
@@ -1766,9 +1767,9 @@ int prog_owns_class_name_reader(Compiler *c, const char *nm) {
    compiler knows, so the call raises the arity ArgumentError: one or more
    arguments, no splat and no `**h` (only the run time knows those), and
    no program method answering the reader for every class? */
-int class_name_reader_argc_raises(Compiler *c, const char *nm, int argc, const int *argv) {
+int class_name_reader_argc_raises(Compiler *c, int id, const char *nm, int argc, const int *argv) {
   const NodeTable *nt = c->nt;
-  if (argc <= 0 || nt_argv_has_splat(nt, argv, argc) || prog_owns_class_name_reader(c, nm)) return 0;
+  if (argc <= 0 || nt_argv_has_splat(nt, argv, argc) || prog_owns_class_name_reader(c, id, nm)) return 0;
   for (int i = 0; i < argc; i++) {
     if (nt_kind(nt, argv[i]) != NK_KeywordHashNode) continue;
     int en = 0; const int *el = nt_arr(nt, argv[i], "elements", &en);
@@ -1933,6 +1934,55 @@ static int chain_is_lazy_valued_1(Compiler *c, int node) {
     cur = nt_ref(nt, cur, "receiver");
   }
   return 0;
+}
+
+/* Is call id a terminal the lazy emitters fuse a chain into
+   (emit_lazy_pipeline_expr): a blockless `first`, `first(n)`, `to_a` or
+   `force`? The other calls that force a Lazy (`size`, `each { }`, `eager`)
+   run the chain through the Lazy's own methods. */
+int an_lazy_terminal_fuses(const NodeTable *nt, int id) {
+  if (id < 0 || nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") >= 0 || nt_ref(nt, id, "receiver") < 0) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  int ar = nt_ref(nt, id, "arguments");
+  int ac = 0;
+  if (ar >= 0) (void)nt_arr(nt, ar, "arguments", &ac);
+  if (is_lazy_first(nm)) return ac <= 1;
+  return is_lazy_force(nm) && ac == 0;
+}
+
+/* The node the nil guard of safe-navigation call id tests in place of its
+   receiver, or -1. A lazy chain has no value of its own: the lazy emitters
+   fuse it into the terminal that forces it (an_lazy_terminal_fuses), and a
+   Lazy is never nil. So where id is such a terminal and every link from its
+   receiver down to the chain's `lazy` is a `&.` (`x&.lazy&.map { }&.first`),
+   the chain answers nil exactly where lazy's receiver is nil. That receiver
+   is the node id's guard tests, and id, run on it, fuses the whole chain. A
+   guard at each link split the chain, and the `lazy` it held alone reached no
+   method. Codegen's guard (sn_guard_pending, emit_call_safe_nav_arms) and
+   inference's safe-navigation rule (an_lazy_link_guarded_above) read this one
+   answer. */
+int an_lazy_sn_guard_src(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || !nt_safe_nav(nt, id) || !an_lazy_terminal_fuses(nt, id)) return -1;
+  int lz = nt_ref(nt, id, "receiver");
+  if (!chain_is_lazy_valued(c, lz)) return -1;
+  while (lz >= 0 && nt_kind(nt, lz) == NK_CallNode && nt_safe_nav(nt, lz) &&
+         !(is_lazy_name(nt_str(nt, lz, "name")) && nt_ref(nt, lz, "block") < 0))
+    lz = nt_ref(nt, lz, "receiver");
+  if (lz < 0 || nt_kind(nt, lz) != NK_CallNode || !nt_safe_nav(nt, lz) || !is_lazy_name(nt_str(nt, lz, "name")))
+    return -1;
+  int src = nt_paren_single(nt, nt_ref(nt, lz, "receiver"));
+  return src >= 0 && !chain_is_lazy_valued(c, src) ? src : -1;
+}
+
+/* Is node n a link of a lazy chain whose terminal's guard tests the chain's
+   source (an_lazy_sn_guard_src)? Its nil is not its own, so inference types
+   it as the chain without `&.` is. */
+int an_lazy_link_guarded_above(Compiler *c, int n) {
+  if (!chain_is_lazy_valued(c, n)) return 0;
+  int p = comp_recv_parent(c, n);
+  while (p >= 0 && chain_is_lazy_valued(c, p)) p = comp_recv_parent(c, p);
+  return p >= 0 && an_lazy_sn_guard_src(c, p) >= 0;
 }
 
 /* If VAR (a LocalVariableReadNode) is a single-plain-write alias for a lazy
@@ -5543,14 +5593,33 @@ const char *class_value_instance_method_sym(Compiler *c, int node) {
    `ci` has no `sym`. A class held by value and a module (whose method binds
    any object) have no arm, nor has a target taking a block, which the arms
    do not pass: *armless is set for them. */
-int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *armless) {
+int class_value_bind_call_target(Compiler *c, int cap, int ci, const char *sym, int *armless) {
   if (ci < 0 || ci >= c->nclasses || is_builtin_reopen(c->classes[ci].name)) return -1;
-  int mdc = -1, mi = comp_method_in_chain(c, ci, sym, &mdc);
+  /* (the method `ci.instance_method(sym)` captures where cap, the call that makes the Method, runs) */
+  MethodLookup mml = { .def_class = -1 }, hml = { .def_class = -1 };
+  /* (a capture in a block the program keeps and runs later answers an entry or the table's method, and asking its node
+     would only make the entry: the table's method is the answer there) */
+  int mi = call_target(c, cap >= 0 && elab_in_kept_block(c, cap) ? -1 : cap, ci, sym, CT_CAPTURE, &mml);
+  /* (an entry that tells the versions apart at run time is a method these arms have no call of, and no survey asks the
+     capture's entry for them: the table's method stands for that class, as the arm has always bound it) */
+  if (mml.kind == ML_ENTRY) {
+    mtab_enter(c);   /* (the table's method with no site: the answer the arms below bind) */
+    mi = call_target(c, -1, ci, sym, CT_METHODS | CT_SHARED, &mml);
+    mtab_leave(c);
+  }
+  int mdc = mml.def_class;
   /* an attr reader or writer declared below any def of the name binds its
      `__bind x`, a method of the class that declares it
      (desugar_bind_attr_helpers) */
   char hn[300], base[256];
-  int hdc = -1, hmi = snprintf(hn, sizeof hn, "__bind %s", sym) < (int)sizeof hn ? comp_method_in_chain(c, ci, hn, &hdc) : -1;
+  int hmi = -1;
+  if (snprintf(hn, sizeof hn, "__bind %s", sym) < (int)sizeof hn) {
+    /* (the compiler's own synthesized helper: it names no method of the program's, no call's question) */
+    mtab_enter(c);
+    hmi = call_target(c, -1, ci, hn, CT_METHODS | CT_SHARED, &hml);
+    mtab_leave(c);
+  }
+  int hdc = hml.def_class;
   MethodLookup aml = { .def_class = -1 };
   int wr = setter_base_name(sym, base, sizeof base);
   call_target(c, -1, ci, wr ? base : sym, wr ? CT_WRITER : 0, &aml);
@@ -5580,8 +5649,8 @@ int class_value_bind_call_gap(Compiler *c, int node) {
   int sci = infer_type(c, recv) == TY_CLASS && !class_recv_is_dynamic(c, recv) ? class_recv_static_ci(c, recv) : -1;
   int armless = 0;
   for (int k = sci >= 0 ? sci : 0; k < (sci >= 0 ? sci + 1 : c->nclasses) && !armless; k++) {
-    if (is_builtin_reopen(c->classes[k].name)) armless = comp_method_in_chain(c, k, sym, NULL) >= 0;
-    else (void)class_value_bind_call_target(c, k, sym, &armless);
+    if (is_builtin_reopen(c->classes[k].name)) armless = call_target(c, node, k, sym, CT_CAPTURE, NULL) >= 0;
+    else (void)class_value_bind_call_target(c, node, k, sym, &armless);
   }
   return armless || (core_method_name(sym) && class_recv_static_ci(c, recv) < 0);
 }
@@ -6501,13 +6570,13 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
   int ob = comp_core_class(c, CORE_OBJECT), ke = comp_core_class(c, CORE_KERNEL);
   if ((ob >= 0 && call_target(c, id, ob, "`", CT_METHODS, NULL) >= 0) ||
       (ke >= 0 && call_target(c, id, ke, "`", CT_METHODS, NULL) >= 0) ||
-      comp_toplevel_mod_defines(c, "`", 0)) return 0;
+      comp_toplevel_mod_defines(c, id, "`", 0)) return 0;
   int self_recv = nt_kind(nt, recv) == NK_SelfNode;
   if (!self_recv && !nt_ignore_visibility(nt, id)) return 0;
   TyKind rt = self_recv ? TY_POLY : infer_type(c, recv);
   /* (a spliced receiver's temp held boxed, as an Integer is under
      --int-overflow=promote, is a poly self too) */
-  if (rt == TY_POLY) return in_default && !comp_toplevel_mod_defines(c, "`", 1);
+  if (rt == TY_POLY) return in_default && !comp_toplevel_mod_defines(c, id, "`", 1);
   const char *cn = rt == TY_CLASS || ty_is_object(rt) ? NULL : builtin_class_of_type(rt);
   if (!cn) return 0;
   int ci = comp_builtin_class_named(c, cn);

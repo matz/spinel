@@ -2198,7 +2198,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     /* a boxed obj: its class is checked at run time */
     if (t2 >= 0 && c->scopes[t2].class_id >= 0 && !c->scopes[t2].is_cmethod &&
         repr_of(c, argv[0]).kind == RK_BOXED && nt_kind(nt, argv[0]) != NK_SplatNode &&
-        class_value_bind_call_target(c, c->scopes[t2].class_id, c->scopes[t2].name, NULL) == t2) {
+        class_value_bind_call_target(c, method_recv_node(c, recv), c->scopes[t2].class_id,
+                                     c->scopes[t2].name, NULL) == t2) {
       emit_bind_call_boxed(c, id, t2, -1, NULL, argv, argc, b);
       return 1;
     }

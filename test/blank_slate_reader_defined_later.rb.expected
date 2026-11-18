@@ -6,6 +6,26 @@ with an argument: NoMethodError
 a1
 a2
 never: NoMethodError
+c1
+c2
+shapes: NoMethodError
+n1
+n2
+shapes: NoMethodError
+s1
+s2
+b1
+shapes: NoMethodError
+y1
+shapes: NoMethodError
+i1
+shapes: NoMethodError
+t1
+shapes: TypeError
+w1
+shapes: NoMethodError
+l1
+shapes: NoMethodError
 :set
 [:set, :set]
 :set

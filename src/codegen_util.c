@@ -5593,12 +5593,12 @@ const char *default_value(TyKind t) {
 static const char *const plain_int_ops[] = {
   "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", NULL
 };
-static int plain_int_op(Compiler *c, const char *nm) {
+static int plain_int_op(Compiler *c, int id, const char *nm) {
   for (int i = 0; plain_int_ops[i]; i++)
     if (!strcmp(nm, plain_int_ops[i])) {
       /* a program that reopens Integer with the operator owns its answer */
       int ci = comp_core_class(c, CORE_INTEGER);
-      return ci < 0 || comp_method_in_chain(c, ci, nm, NULL) < 0;
+      return ci < 0 || call_target(c, id, ci, nm, 0, NULL) < 0;
     }
   return 0;
 }
@@ -5644,7 +5644,7 @@ static int plain_local(Compiler *c, LocalVar *lv, const char *name, int depth) {
     if (k == NK_LocalVariableWriteNode) ok = plain_expr(c, nt_ref(nt, w, "value"), depth + 1);
     else if (k == NK_LocalVariableOperatorWriteNode) {
       const char *op = nt_str(nt, w, "binary_operator");
-      ok = op && plain_int_op(c, op) && comp_ntype(c, w) == TY_INT;
+      ok = op && plain_int_op(c, w, op) && comp_ntype(c, w) == TY_INT;
     }
     else ok = 0;
   }
@@ -5717,7 +5717,7 @@ static int plain_expr(Compiler *c, int n, int depth) {
       if (ci >= 0 && call_target(c, n, ci, nm, 0, NULL) >= 0) return 0;
       return nm[0] == 't' ? plain_expr(c, recv, depth + 1) : 1;
     }
-    return plain_int_op(c, nm) && argc == 1 && comp_ntype(c, argv[0]) == TY_INT;
+    return plain_int_op(c, n, nm) && argc == 1 && comp_ntype(c, argv[0]) == TY_INT;
   }
   default: return 0;
   }

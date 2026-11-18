@@ -2388,10 +2388,12 @@ int comp_ary_is_array_proper(Compiler *c, int cid) {
   return comp_ary_root(c, cid) >= 0 && comp_arysub_emb(c, cid) == 0;
 }
 /* The scope of the #to_ary an implicit Array conversion of a class cid
-   instance calls, or -1 (comp_ary_is_array_proper: none). */
-int comp_implicit_to_ary_mi(Compiler *c, int cid) {
+   instance calls, or -1 (comp_ary_is_array_proper: none): the table's, as
+   the call plan answers it for the implied call of node site on operand op
+   (-1 for a survey of the classes a box may hold). */
+int comp_implicit_to_ary_mi(Compiler *c, int site, int op, int cid) {
   if (comp_ary_is_array_proper(c, cid)) return -1;
-  return comp_method_in_chain(c, cid, "to_ary", NULL);
+  return cplan_implied_target(c, site, op, cid, "to_ary", CIT_TABLE, NULL);
 }
 
 int builtin_instance_method_known(const char *cls, const char *m);
@@ -3885,7 +3887,10 @@ static int mixin_answers_first(Compiler *c, int id, int cid, const char *name, i
      binds the builtin's own method (cplan_builtin_call) asks no site: its answer none (call_target's ML_BUILTIN) is not the
      program's method the Enumerable-first rewrite is asked about, which the class's own def of the name gives */
   int at = id >= 0 && cplan_builtin_call(c, id) ? -1 : id;
+  /* (no call's question: a dispatcher of the whole program's, or a call that binds the builtin's own method) */
+  if (at < 0) mtab_enter(c);
   int tbl = !call_answers(c, at, cid, name, CT_NOFACE | (at < 0 ? CT_SHARED : 0), NULL);
+  if (at < 0) mtab_leave(c);
   if (cid < 0 || cid >= c->nclasses || !name) return tbl;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
   if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return tbl;
@@ -5470,9 +5475,9 @@ int comp_main_extend_defines(Compiler *c, int call_id, const char *name) {
 }
 /* Whether a module the top level includes (extend 0) or main extends
    (extend 1) has an instance method `name`. */
-int comp_toplevel_mod_defines(Compiler *c, const char *name, int extend) {
+int comp_toplevel_mod_defines(Compiler *c, int id, const char *name, int extend) {
   for (int k = 0; k < c->ntoplevel_includes; k++)
-    if (c->toplevel_extends[k] == extend && comp_method_in_chain(c, c->toplevel_includes[k], name, NULL) >= 0)
+    if (c->toplevel_extends[k] == extend && call_target(c, id, c->toplevel_includes[k], name, CT_METHODS, NULL) >= 0)
       return 1;
   return 0;
 }

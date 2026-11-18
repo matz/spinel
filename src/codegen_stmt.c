@@ -2631,9 +2631,15 @@ int exc_message_boxed_call(Compiler *c, int v) {
      where the walk cannot tell the classes, any of the program's can be in
      the box, which the loop below judges) */
   for (int i = 0; ks && i < nk; i++)
-    if (!class_is_exc_subclass(c, ks[i]) && !comp_reader_in_chain(c, ks[i], "message", NULL)) return 0;
+    if (!class_is_exc_subclass(c, ks[i]) && !call_attr_target(c, v, ks[i], "message", CT_ATTR, NULL)) return 0;
+  /* (a survey of the program's classes, no call's question) */
+  mtab_enter(c);
   for (int k = 0; k < c->nclasses; k++)
-    if (!class_is_exc_subclass(c, k) && comp_method_in_class(c, k, "message") >= 0) return 0;
+    if (!class_is_exc_subclass(c, k) && call_target(c, -1, k, "message", CT_OWN | CT_SHARED, NULL) >= 0) {
+      mtab_leave(c);
+      return 0;
+    }
+  mtab_leave(c);
   return 1;
 }
 /* --share-strings: an exception's #message or #to_s with no override of
@@ -21688,6 +21694,53 @@ static void emit_missing_run(Compiler *c, int m, const OrderRun *run, Buf *b, in
   for (int i = 0; i <= run->n; i++) emit_effect_stmt(c, i < run->n ? run->ids[i] : m, b, indent);
 }
 
+/* What a boxed `recv.attr op= v` switch knows of its statement: the attribute, the receiver's temp, the
+   operator (and the boxed operator the storing arms use for it, cpf, or whether it is a bitwise one),
+   and the operand with its type */
+typedef struct { const char *attr, *op, *cpf; int trecv, bitop, val; TyKind rhst; } AttrOpWrite;
+/* The case of class k in a boxed `recv.attr op= v` switch where the class cannot take the write and
+   the reader answered: CRuby has read the attribute, run the operand and applied the operator
+   (whose own error, a nil slot's `+`, comes first) before the NoMethodError for the writer
+   `attr=`. A slot the operator can be applied to through the boxed operators the storing arms
+   use (cpf, which both operands reach before it applies; sp_poly_bitop for `&`, `|` and `^`; a
+   String slot's `+`) is read, operated on and dropped, once per run of the case; any other slot
+   or operator answers 0 and the class is unplaced. */
+static int emit_poly_attr_write_missing(Compiler *c, Buf *b, int indent, int k, int pdcls, const char *rn, int ivx,
+                                        const AttrOpWrite *w) {
+  TyKind ivt = c->classes[pdcls].ivar_types[ivx];
+  int ivs = ivt == TY_STRING || ivt == TY_STRBUF;
+  /* a String slot takes the String `+` alone, which raises for a nil slot as `s + t` does */
+  if (ivs ? !(w->op && is_plus_op(w->op)) : !(ivt != TY_UNKNOWN && ivt != TY_VOID &&
+      (ivt == TY_POLY || ivt == TY_INT || ivt == TY_FLOAT || emit_boxed_text_form(c, ivt) > 0))) return 0;
+  /* the slot boxed as a read of it boxes (its nil bit too), then the operator on boxed operands, both
+     of them evaluated before it applies: a nil or wrong-typed slot raises CRuby's error after the
+     operand has run */
+  if (!w->cpf && !w->bitop) return 0;
+  char slot[320];
+  snprintf(slot, sizeof slot, "_o->iv_%s", iv_c(rn));
+  Buf bx; memset(&bx, 0, sizeof bx);
+  emit_member_boxed_text(c, &c->classes[pdcls], ivx, "_o->", slot, &bx);
+  /* the operand's prelude stays inside the case, after the slot is read and only where the case runs */
+  Buf pre, opd; memset(&pre, 0, sizeof pre); memset(&opd, 0, sizeof opd);
+  Buf *sv_pre = g_pre; g_pre = &pre;
+  emit_boxed(c, w->val, &opd);
+  g_pre = sv_pre;
+  const char *cn = c->classes[pdcls].c_name;
+  emit_indent(b, indent);
+  buf_printf(b, "case %d: { sp_%s *_o = (sp_%s *)_t%d.v.p; sp_RbVal _s = %s; SP_GC_ROOT_RBVAL(_s); ", k, cn, cn, w->trecv, bx.p ? bx.p : "sp_box_nil()");
+  if (pre.p) buf_puts(b, pre.p);
+  if (w->cpf) buf_printf(b, "(void)%s(_s, %s); ", w->cpf, opd.p ? opd.p : "sp_box_nil()");
+  else buf_printf(b, "(void)sp_poly_bitop(_s, %s, %d); ", opd.p ? opd.p : "sp_box_nil()", w->op[0] == '&' ? 0 : w->op[0] == '|' ? 1 : 2);
+  buf_printf(b, "sp_raise_poly_nomethod(\"%s=\", _t%d); break; }\n", w->attr, w->trecv);
+  free(bx.p); free(pre.p); free(opd.p);
+  return 1;
+}
+/* A class the switch cannot place: it raises for the writer without the read and the operator, as the
+   default arm raises for the reader, and the statement stays refused unless another arm stores */
+static void emit_poly_attr_unplaced(Buf *b, int indent, int k, const char *attr, int trecv) {
+  emit_indent(b, indent);
+  buf_printf(b, "case %d: sp_raise_poly_nomethod(\"%s=\", _t%d); break;\n", k, attr, trecv);
+}
 static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
   if (sp_streq(ty, "CallOperatorWriteNode")) {
     /* `recv.attr op= value` (e.g. doom's `sector.ceiling_height -=
@@ -21919,18 +21972,37 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
          value to a sentinel matching no case so it lands in the default raise
          rather than dereferencing v.p through a wrong cast. */
       buf_puts(b, "switch ("); emit_obj_switch_key(c, trecv, b); buf_puts(b, ") {\n");
-      int any = 0;
+      /* any: an arm stores. wmiss: a class has the reader and no writer.
+         unplaced: a class has the writer but its store cannot be placed */
+      int any = 0, wmiss = 0, unplaced = 0;
+      AttrOpWrite aow = { attr, op, cpf, trecv, bitop, val, rhst };
       for (int k = 0; k < c->nclasses; k++) {
         if (!c->classes[k].instantiated) continue;
-        int pdcls = -1;
-        /* both accessors, same as the concrete arm: a reader-only class must
-           raise NoMethodError for `attr=` (via the default arm), not store */
-        if (!comp_reader_in_chain(c, k, attr, &pdcls)) continue;
-        if (!comp_writer_in_chain(c, k, attr, NULL)) continue;
+        MethodLookup pml = { .def_class = -1 };
+        /* both accessors, same as the concrete arm: CRuby reads first, so a
+           class with no reader raises NoMethodError for `attr` (the default
+           arm), one with a reader and no writer for `attr=` (its own case),
+           and neither stores */
+        if (!call_attr_target(c, id, k, attr, CT_ATTR, &pml)) continue;
+        int pdcls = pml.def_class;
         const char *rn = comp_resolve_alias(c, pdcls, attr);
         char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", rn);
         int ivx = comp_ivar_index(&c->classes[pdcls], ivn);
-        if (ivx < 0) continue;  /* no resolvable backing slot: don't guess */
+        if (ivx < 0) {   /* no resolvable backing slot: don't guess */
+          unplaced = 1;
+          emit_poly_attr_unplaced(b, indent + 1, k, attr, trecv);
+          continue;
+        }
+        if (!call_attr_target(c, id, k, attr, CT_ATTR | CT_WRITER, NULL)) {
+          /* a class with the reader and no writer reads, evaluates and operates, then raises
+             NoMethodError for `attr=`, as CRuby does */
+          if (emit_poly_attr_write_missing(c, b, indent + 1, k, pdcls, rn, ivx, &aow)) wmiss = 1;
+          else {
+            unplaced = 1;
+            emit_poly_attr_unplaced(b, indent + 1, k, attr, trecv);
+          }
+          continue;
+        }
         TyKind ivt = c->classes[pdcls].ivar_types[ivx];
         /* skip a class whose slot can't take this operator (the raw C
            fallthrough would be pointer arithmetic on an sp_Str* or a type
@@ -21939,12 +22011,20 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
            as the poly attr-write dispatch above. */
         /* (one representation: a handle slot is a String slot too) */
         int ivs = ivt == TY_STRING || (ivt == TY_STRBUF);
-        if (ivs && !(op && sp_streq(op, "+"))) continue;
-        if (ivt == TY_POLY && !cpf && !bitop) continue;
+        if ((ivs && !(op && sp_streq(op, "+"))) || (ivt == TY_POLY && !cpf && !bitop)) {
+          unplaced = 1;
+          emit_poly_attr_unplaced(b, indent + 1, k, attr, trecv);
+          continue;
+        }
         const char *cn = c->classes[pdcls].c_name;
         any = 1;
         emit_indent(b, indent + 1);
         buf_printf(b, "case %d: { sp_%s *_o = (sp_%s *)_t%d.v.p; ", k, cn, cn, trecv);
+        /* the operand's prelude runs in the case that runs, after the receiver's class is known and before
+           the writer's refusal of a frozen receiver (CRuby runs the operand before the writer) */
+        Buf *real = b, cb, pre, *sv_pre = g_pre;
+        memset(&cb, 0, sizeof cb); memset(&pre, 0, sizeof pre);
+        b = &cb; g_pre = &pre;
         /* the writer is the ivar's store: a frozen receiver refuses it */
         emit_frozen_obj_guard(c, k, "_o", b);
         if (ivs) {
@@ -21981,27 +22061,35 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
           opa_arm_ivar(c, pdcls, ivx, "_o->", ont, sizeof ont, ocl, sizeof ocl);
           if (emit_scalar_op_assign(c, lval, ivt, op, val, 0, 0, 0, b)) {
             emit_indent(b, indent + 1); buf_puts(b, "break; }\n");
-            continue;
           }
-          buf_puts(b, "_o->iv_"); buf_puts(b, iv_c(rn)); buf_puts(b, " = _o->iv_"); buf_puts(b, iv_c(rn));
-          buf_printf(b, " %s ", op ? op : "+");
-          if (rhstr.kind == RK_BOXED && (ivt == TY_INT || ivt == TY_BOOL)) {
-            buf_puts(b, op_assign_int_conv(ivt, op)); emit_expr(c, val, b); buf_puts(b, ")");
+          else {
+            buf_puts(b, "_o->iv_"); buf_puts(b, iv_c(rn)); buf_puts(b, " = _o->iv_"); buf_puts(b, iv_c(rn));
+            buf_printf(b, " %s ", op ? op : "+");
+            if (rhstr.kind == RK_BOXED && (ivt == TY_INT || ivt == TY_BOOL)) {
+              buf_puts(b, op_assign_int_conv(ivt, op)); emit_expr(c, val, b); buf_puts(b, ")");
+            }
+            else if (rhstr.kind == RK_BOXED && ivt == TY_FLOAT) {
+              buf_puts(b, "sp_poly_opnd_f("); emit_expr(c, val, b); buf_puts(b, ")");
+            }
+            else emit_expr(c, val, b);
+            buf_puts(b, "; break; }\n");
           }
-          else if (rhstr.kind == RK_BOXED && ivt == TY_FLOAT) {
-            buf_puts(b, "sp_poly_opnd_f("); emit_expr(c, val, b); buf_puts(b, ")");
-          }
-          else emit_expr(c, val, b);
-          buf_puts(b, "; break; }\n");
         }
+        b = real; g_pre = sv_pre;
+        if (pre.p) buf_puts(b, pre.p);
+        if (cb.p) buf_puts(b, cb.p);
+        free(pre.p); free(cb.p);
       }
-      /* a receiver whose runtime class has no such accessor pair (or a boxed
-         scalar) is CRuby's NoMethodError, not a silent no-op */
+      /* a receiver whose runtime class has no reader (or a boxed scalar) is
+         CRuby's NoMethodError for the reader, which it calls first */
       emit_indent(b, indent + 1);
-      buf_printf(b, "default: sp_raise_poly_nomethod(\"%s=\", _t%d);\n", attr, trecv);
+      buf_printf(b, "default: sp_raise_poly_nomethod(\"%s\", _t%d);\n", attr, trecv);
       emit_indent(b, indent);
       buf_puts(b, "}\n");
-      if (any) return 1;
+      /* a switch whose only arms raise for a missing writer is CRuby's
+         answer; one where a class has the writer but no store to place
+         stays refused, unless another arm stores */
+      if (any || (wmiss && !unplaced)) return 1;
     }
     unsupported(c, id, "call operator write (unsupported receiver/attr)");
   }

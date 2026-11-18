@@ -10773,8 +10773,8 @@ static int scope_takes_argc(Compiler *c, int mi, const char *nm, int an) {
 }
 /* Whether class k answers `nm` with a method of its own (a Hash subclass's
    or Hash's reopened one included) that takes `an` arguments. */
-static int class_takes_merge_argc(Compiler *c, int k, const char *nm, int an) {
-  int mi = comp_method_in_chain(c, k, nm, NULL);
+static int class_takes_merge_argc(Compiler *c, int id, int k, const char *nm, int an) {
+  int mi = call_target(c, id, k, nm, 0, NULL);
   return mi >= 0 && scope_takes_argc(c, mi, nm, an);
 }
 
@@ -10798,7 +10798,7 @@ int desugar_hash_merge_fold(Compiler *c) {
     if (an < 2) continue;
     TyKind t = infer_type(c, recv);
     int own = 0;
-    if (ty_is_object(t)) own = class_takes_merge_argc(c, ty_object_class(t), nm, an);
+    if (ty_is_object(t)) own = class_takes_merge_argc(c, id, ty_object_class(t), nm, an);
     else if (ty_is_hash(t)) {
       int mi = comp_builtin_kind_reopen_mi(c, id, t, nm);
       own = mi >= 0 && scope_takes_argc(c, mi, nm, an);
@@ -10808,7 +10808,7 @@ int desugar_hash_merge_fold(Compiler *c) {
        first one only, so a merge still folds) */
     else if (t == TY_POLY) {
       for (int k = 0; k < c->nclasses && !own && is_hash_merge_bang(nm); k++)
-        own = class_takes_merge_argc(c, k, nm, an);
+        own = class_takes_merge_argc(c, id, k, nm, an);
     }
     /* (a receiver nothing typed, such as a `{}` only these calls fill) */
     else own = t != TY_UNKNOWN;
@@ -18102,7 +18102,7 @@ static int oa_map_obj_evidence(Compiler *c, OAS *sl, int S, int block, int tail,
 static int oa_copy_name(Compiler *c, const char *s) {
   if (!s || !(sp_streq(s, "dup") || sp_streq(s, "clone"))) return 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, s, NULL) >= 0) return 0;
+    if (call_target(c, -1, k, s, CT_METHODS | CT_SHARED, NULL) >= 0) return 0;
   return 1;
 }
 
@@ -55105,7 +55105,12 @@ static void an_phase_storage(Compiler *c) {
            longer fits. Once the rule has widened a holder, each store whose
            input has widened since the rule began joins again; the rest keep
            what they settled on. */
-        if ((g_share_widened_holder || params_late) && infer_changed_store_types(c, &before_rule)) ch = late_widened = 1;
+        if ((g_share_widened_holder || params_late) && infer_changed_store_types(c, &before_rule)) {
+          ch = late_widened = 1;
+          /* an ivar a base's store widened here is its subclasses' slot too: their copies of the method
+             wrote what their own parameter held (OpenSSL::Digest's @name, `super("SHA256")` in SHA256) */
+          for (int iter = 0; iter < 16; iter++) if (!(infer_inherited_ivars(c) | propagate_ivars_up(c))) break;
+        }
       }
       if (!ch) break;
       handle_arg_tab_free(&hat);

@@ -1,0 +1,119 @@
+rhs
+2
+rhs
+[:x=, R]
+rhs
+[:+, NilClass]
+[:x, NilClass]
+rhs
+[:x=, R]
+rhs
+[:+, NilClass]
+[:x, NilClass]
+rhs2
+3
+rhs2
+rhs2
+0
+rhs2
+7
+rhs2
+[:tail, :x=]
+rhs2
+[:two, :x=]
+rhs2
+[:val, :x=]
+rhs2
+[:tail, :+]
+rhs2
+[:two, :+]
+rhs2
+[:val, :+]
+[:tail, :x]
+[:two, :x]
+[:val, :x]
+rhs
+[:f_add, :ok]
+rhs
+[:f_mul, :ok]
+rhs
+[:b_or, :ok]
+rhs
+[:b_shl, :ok]
+rhs
+[:f_pow, :ok]
+rhs
+[:f_add, :f=]
+rhs
+[:f_mul, :f=]
+rhs
+[:b_or, :b=]
+rhs
+[:b_shl, :b=]
+rhs
+[:f_pow, :f=]
+"boom"
+"boom"
+[:nm, :x]
+[:ok, 15]
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+[:nm, :x, NilClass]
+[:nm, :x, NB]
+3
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+[:nm, :x, NilClass]
+5
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+7
+[:ok, 1]
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+[:nm, :x, NilClass]
+11
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+13
+[:ok, 14]
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+[:nm, :x, NilClass]
+17
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+19
+[:nm, :x=, RB]
+[:nm, :x=, RB]
+[:nm, :<<, NilClass]
+[:nm, :>>, NilClass]
+[:nm, :x, NilClass]
+[:nm, :x, NilClass]
+23
+[:ok, "ab"]
+[:nm, :str=, RS]
+[:nm, :+, NilClass]
+[:nm, :str, NilClass]
+eff 1
+[:ok, 2]
+eff 2
+[:nm, :q=, RQ1]
+eff 3
+[:nm, :q=, RQ2]
+eff 4
+[:nm, :+, NilClass]
+[:nm, :q, NilClass]
+4
+eff 5
+[:nm, :q=, RQ1]
+eff 6
+[:nm, :q=, RQ2]
+[:nm, :q, NilClass]
+6
+eff 7
+[:nm, :q=, RQ1]
+[:nm, :q, NilClass]
+7

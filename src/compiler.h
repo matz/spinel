@@ -2248,7 +2248,7 @@ TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int 
 int    comp_ffi_const_at(Compiler *c, int node, int *out);
 int    comp_included_method_index(Compiler *c, const char *name, int call_id);
 int    class_is_blank_slate(Compiler *c, int ci);   /* explicit `< BasicObject` descent */
-int    comp_toplevel_mod_defines(Compiler *c, const char *name, int extend);
+int    comp_toplevel_mod_defines(Compiler *c, int id, const char *name, int extend);
 
 /* Locals within a scope. */
 LocalVar *scope_local(Scope *s, const char *name);
@@ -2412,8 +2412,10 @@ int        record_recv_class(Compiler *c, int node);
 int        const_writes_may_hold_class(Compiler *c, int node); /* ...by its writes alone, no type read (the census ahead of the fixpoint) */
 int        const_class_value_only(Compiler *c, int node); /* constant slot that may hold a class known only at run time */
 int        class_recv_user_cmethod(Compiler *c, int call, int node, const char *name); /* call's user class method of the name on it */
-int        class_name_reader_argc_raises(Compiler *c, const char *nm, int argc, const int *argv); /* the builtin reader's arity raise applies */
-int        prog_owns_class_name_reader(Compiler *c, const char *nm); /* a Module/Class reopen or an Object class method answers name/to_s/inspect */
+/* the builtin reader's arity raise applies */
+int        class_name_reader_argc_raises(Compiler *c, int id, const char *nm, int argc, const int *argv);
+/* a Module/Class reopen or an Object class method answers name/to_s/inspect */
+int        prog_owns_class_name_reader(Compiler *c, int id, const char *nm);
 int        dynamic_new_may_reach(Compiler *c, int call_id, int cid);  /* k.new can build cid */
 int        anon_struct_ci_for_value(Compiler *c, int val);  /* k = Struct.new(...) value node */
 const char *struct_call_dup_member(Compiler *c, int callnode);  /* first duplicate member sym name, or NULL */
@@ -2450,6 +2452,9 @@ int ostruct_keeps_method(const char *n);
    which reads the member ahead of the other arms (analyze_infer_recv.c) */
 int ostruct_member_read(Compiler *c, int id, TyKind rt);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
+int an_lazy_terminal_fuses(const NodeTable *nt, int id); /* a terminal the lazy emitters fuse a chain into */
+int an_lazy_sn_guard_src(Compiler *c, int id);      /* the node a `&.` lazy terminal's guard tests, or -1 */
+int an_lazy_link_guarded_above(Compiler *c, int n); /* a lazy chain link whose terminal's guard tests the source */
 int poly_str_iter_enum(Compiler *c, int id);        /* boxed String iterator answers an Enumerator (analyze_infer_recv.c) */
 int poly_each_line_args_enum(Compiler *c, int id); /* boxed each_line(sep / chomp:) asked .size answers its Enumerator (analyze_infer_recv.c) */
 int poly_io_codepoint_enum(Compiler *c, int id);   /* boxed each_codepoint takes the IO arm (analyze_infer_recv.c) */
@@ -2636,7 +2641,7 @@ int        send_family_defined_anywhere(Compiler *c, const char *name);   /* ana
    inference is past its optimistic stage with no element seen. */
 int        comp_ary_root(Compiler *c, int cid);
 int        comp_ary_is_array_proper(Compiler *c, int cid);
-int        comp_implicit_to_ary_mi(Compiler *c, int cid);
+int        comp_implicit_to_ary_mi(Compiler *c, int site, int op, int cid);
 int        comp_ty_ary_root(Compiler *c, TyKind t);
 int        comp_ty_arysub_array(Compiler *c, TyKind t);
 const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n);

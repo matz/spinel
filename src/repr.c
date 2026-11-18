@@ -1020,6 +1020,12 @@ int repr_self_handle(const Compiler *c, int scope) {
   return scope_self_is_string(c, scope);
 }
 
+int repr_self_string_object(const Compiler *c, int scope) {
+  if (scope < 0 || scope >= c->nscopes) return 0;
+  const Scope *s = &c->scopes[scope];
+  return !s->is_cmethod && s->class_id >= 0 && comp_ary_is_str((Compiler *)c, s->class_id);
+}
+
 /* Is self of instance method `scope` a boxed value (sp_RbVal)? It is in a
    reopening of Object, Numeric, Array or Hash: any value of the builtin, or
    an instance of a program class below it, is the receiver. */

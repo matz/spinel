@@ -1,5 +1,5 @@
-# Definite-length, universal-tag encoding only. libcrypto owns DER and OID
-# interpretation; decoding, tagging and the remaining ASN.1 types are absent.
+# Definite-length, universal decoding. libcrypto owns parsing, encoding and
+# OID interpretation; Ruby builds the four supported node types.
 module OpenSSL
   module Native
     native_lib "openssl"
@@ -8,10 +8,61 @@ module OpenSSL
     native_func :asn1_integer, [:any], :cbinstr, "sp_openssl_asn1_integer"
     native_func :asn1_unused_bits, [:any], :any, "sp_openssl_asn1_unused_bits"
     native_func :asn1_name, [:string, :int], :cbinstr, "sp_openssl_asn1_name"
+    native_func :asn1_decode_info, [:string, :int, :int, :int], :int, "sp_openssl_asn1_decode_info"
+    native_func :asn1_decode_integer, [:string], :any, "sp_openssl_asn1_decode_integer"
+    native_func :asn1_decode_value, [:string, :int], :cbinstr, "sp_openssl_asn1_decode_value"
   end
 
   module ASN1
     class ASN1Error < OpenSSLError; end
+
+    def self.decode(der)
+      der = der.__send__(:to_der) if der.respond_to?(:to_der)
+      der = String.new(OpenSSL.send(:comparison_string, der))
+      node = decode_node(der, 0, der.bytesize, 0)
+      Native.asn1_decode_info(der, 0, der.bytesize, 3)
+      node
+    end
+
+    def self.decode_node(der, offset, limit, depth)
+      raise NotImplementedError, "ASN.1 nesting beyond 1000 levels is unavailable" if depth > 1000
+      tag = Native.asn1_decode_info(der, offset, limit, 0)
+      first = Native.asn1_decode_info(der, offset, limit, 1)
+      last = Native.asn1_decode_info(der, offset, limit, 2)
+      if tag == 16
+        children = []
+        while first < last
+          children << decode_node(der, first, last, depth + 1)
+          first = Native.asn1_decode_info(der, first, last, 2)
+        end
+        # CRuby's decoder also bypasses Ruby-level initializers.
+        node = Sequence.allocate
+        node.instance_variable_set(:@value, children)
+      elsif tag == 2
+        bytes = der.byteslice(offset, last - offset)
+        number = BN.allocate
+        number.instance_variable_set(:@value, Native.asn1_decode_integer(bytes))
+        node = Integer.allocate
+        node.instance_variable_set(:@value, number)
+      elsif tag == 6
+        bytes = der.byteslice(offset, last - offset)
+        value = Native.asn1_decode_value(bytes, tag)
+        name = value.byteslice(1, value.bytesize - 1)
+        name.force_encoding(Encoding::US_ASCII) if value.getbyte(0) == 0
+        node = ObjectId.allocate
+        node.instance_variable_set(:@value, name)
+      else
+        bytes = der.byteslice(offset, last - offset)
+        value = Native.asn1_decode_value(bytes, tag)
+        node = BitString.allocate
+        node.instance_variable_set(:@value, value.byteslice(1, value.bytesize - 1))
+        node.instance_variable_set(:@unused_bits, value.getbyte(0))
+      end
+      node.instance_variable_set(:@tag, tag)
+      node.instance_variable_set(:@tag_class, :UNIVERSAL)
+      node
+    end
+    private_class_method :decode_node
 
     class ASN1Data
       attr_reader :value, :tag, :tag_class

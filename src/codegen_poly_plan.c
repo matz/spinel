@@ -3689,9 +3689,13 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     char tn6[24]; snprintf(tn6, sizeof tn6, "_t%d", atmp[0]);
     if (atmp_ty[0] == TY_POLY) buf_puts(&ab6, tn6);
     else emit_boxed_text(c, atmp_ty[0], tn6, &ab6);
+    /* The needle's to_str may grow the held receiver before the search. */
+    int needle = ++g_tmp;
     buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
-    buf_printf(b, ") { _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), sp_poly_arg_str_chk(%s))%s; }\nelse ",
-               tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, ab6.p ? ab6.p : "sp_box_nil()",
+    buf_printf(b, ") { const char *_t%d = sp_poly_arg_str_chk(%s); SP_GC_ROOT_STR(_t%d);"
+                  " _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), _t%d)%s; }\nelse ",
+               needle, ab6.p ? ab6.p : "sp_box_nil()", needle,
+               tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, needle,
                ret == TY_POLY ? ")" : "");
     free(ab6.p);
   }

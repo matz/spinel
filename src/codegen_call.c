@@ -20005,8 +20005,7 @@ void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r) {
   mtab_build_leave(c);
 }
 
-static int cells_testable(Compiler *c, const CplanCells *cs);
-static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b);
+static int emit_cells_test(Compiler *c, const CplanCells *cs, int tail, Buf *b);
 /* Emit the listed names of `r` as a PolyArray of symbols. Interned at run
    time: a name the source never spells is not in the generated symbol
    table. A name of the program's is left out where the call plan proves
@@ -20031,9 +20030,9 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
     /* a class-side name whose versions the record cannot order against the list: listed where one of its
        cells says it is live (cplan_cmethod_presence), as a respond_to? there answers; public versions only */
     if (r->at && (r->at_side & CT_CMETHOD) && !(r->show[i] & REFL_ROW) &&
-        cplan_list_cells(c, r->at - 1, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, &cs) && cells_testable(c, &cs)) {
+        cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], &cs) && cplan_cells_testable(c, &cs)) {
       buf_puts(b, "if (");
-      int open = emit_cells_test(c, &cs, b);
+      int open = emit_cells_test(c, &cs, 0, b);
       buf_puts(b, "0");
       while (open-- > 0) buf_puts(b, ")");
       buf_printf(b, ") sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", ta);
@@ -20613,23 +20612,21 @@ static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   int sk = class_struct_kind(c, ci);
   return sk && is_record_class_cmethod(qm, sk == 2);
 }
-/* See codegen_call_arms.h. */
-/* Do the cells hold values the run-time test compares (an Integer global: an sp_int, or an sp_RbVal under
-   --int-overflow=promote, compared as the entry's arms compare it)? */
-static int cells_testable(Compiler *c, const CplanCells *cs) {
-  for (int i = 0; i < cs->n; i++) {
-    LocalVar *g = comp_gvar(c, cs->cell[i] + 1);
-    ReprKind k = g ? repr_slot_kind(c, g) : RK_NONE;
-    if (k != RK_SCALAR && k != RK_BOXED) return 0;
-    LocalVar *v = cs->vis[i][0] ? comp_gvar(c, cs->vis[i] + 1) : NULL;
-    if (cs->vis[i][0] && (!v || (repr_slot_kind(c, v) != RK_SCALAR && repr_slot_kind(c, v) != RK_BOXED) || cplan_cell_dropped(c, v))) return 0;
+/* (the global of cell `cell` a test reads, which the C declares: a reader keeps each cell it reads
+   (ver_cells_settle), and one it did not keep is the plan's internal error, not C that fails to compile) */
+static LocalVar *cells_test_cell(Compiler *c, const char *cell) {
+  LocalVar *g = comp_gvar(c, cell + 1);
+  if (!g || cplan_cell_dropped(c, g)) {
+    fprintf(stderr, "spinel: internal error: a presence test reads the version cell %s, which no reader kept\n", cell);
+    exit(1);
   }
-  return 1;
+  return g;
 }
 static void emit_cell_match(Compiler *c, const char *cell, int value, Buf *b) {
-  buf_printf(b, repr_slot_kind(c, comp_gvar(c, cell + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
+  buf_printf(b, repr_slot_kind(c, cells_test_cell(c, cell)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
              cell + 1, value);
 }
+/* See codegen_call_arms.h. */
 void emit_guarded_presence(Compiler *c, const CplanCells *cs, Buf *b) {
   buf_puts(b, "(");
   for (int i = 0; i < cs->n; i++) {
@@ -20647,12 +20644,13 @@ void emit_guarded_presence(Compiler *c, const CplanCells *cs, Buf *b) {
 /* ...the test that some version is live, ahead of the caller's last operand: each cell up to the last one that
    answers 0 (an undef's, a private version's, or a version's whose visibility cell tells) answers its own
    (`c == v ? ans : (`: the def's 1, the undef's 0, or `vis == public`), so a live version ahead of one is not
-   swallowed by its test; the cells after it are ored. How many parentheses the caller closes after its last
-   operand. */
-static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
-  int open = 0, last = -1;
-  for (int i = 0; i < cs->n; i++) if (!cs->ans[i] || cs->vis[i][0]) last = i;
-  for (int i = 0; i < cs->n; i++) {
+   swallowed by its test; the cells after it are ored. tail is the value of that last operand: the versions at the
+   end that answer as it does need no test. How many parentheses the caller closes after its last operand. */
+static int emit_cells_test(Compiler *c, const CplanCells *cs, int tail, Buf *b) {
+  int open = 0, last = -1, n = cs->n;
+  while (n > 0 && !cs->vis[n - 1][0] && cs->ans[n - 1] == tail) n--;
+  for (int i = 0; i < n; i++) if (!cs->ans[i] || cs->vis[i][0]) last = i;
+  for (int i = 0; i < n; i++) {
     emit_cell_match(c, cs->cell[i], cs->val[i], b);
     if (i > last) buf_puts(b, " || ");
     else if (cs->vis[i][0]) {
@@ -20681,13 +20679,26 @@ int emit_implied_entry_test(Compiler *c, int mi, int undefined, Buf *b) {
     return 1;
   }
   CplanCells cells;
-  if (!cplan_implied_entry_cells(c, mi, undefined, &cells) || !cells_testable(c, &cells)) return 0;
-  int open = emit_cells_test(c, &cells, b);
+  if (!cplan_implied_entry_cells(c, mi, undefined, &cells) || !cplan_cells_testable(c, &cells)) return 0;
+  int open = emit_cells_test(c, &cells, 0, b);
   buf_puts(b, "0");
   while (open-- > 0) buf_puts(b, ")");
   return 1;
 }
 
+/* See codegen_call_arms.h. */
+int emit_cells_answer(Compiler *c, const CplanCells *cs, Buf *b) {
+  int fixed = cplan_cells_fixed(cs);
+  if (!fixed && !cplan_cells_testable(c, cs)) return 0;
+  if (!b) return 1;
+  /* (every version answers as none live: no cell to read) */
+  if (fixed) { buf_printf(b, "%d", cs->els); return 1; }
+  buf_puts(b, "(");
+  int open = emit_cells_test(c, cs, cs->els, b);
+  buf_printf(b, "%d", cs->els);
+  while (open-- >= 0) buf_puts(b, ")");
+  return 1;
+}
 /* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
    read it (emit_cells_test) */
 int emit_vis_cell_write(Compiler *c, int id, Buf *b) {
@@ -20702,14 +20713,52 @@ int emit_vis_cell_write(Compiler *c, int id, Buf *b) {
   }
   return n > 0;
 }
-int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b) {
+/* See codegen_call_arms.h. */
+void emit_presence_answer(Compiler *c, const CplanPresArm *a, Buf *b) {
+  if (a->ans == PRA_CELLS) emit_cells_answer(c, &a->cells, b);
+  else buf_printf(b, "%d", a->ans);
+}
+/* See codegen_call_arms.h. */
+void emit_presence_arms(Compiler *c, const CplanPresList *l, const char *key, Buf *b) {
+  for (int i = 0; i < l->n; i++) {
+    buf_printf(b, "%s%d ? ", key, l->arm[i].cls);
+    emit_presence_answer(c, &l->arm[i], b);
+    buf_puts(b, " : ");
+  }
+}
+/* See codegen_call_arms.h. */
+void emit_presence_object(Compiler *c, const CplanPresList *l, int recv, Buf *b) {
+  int t = ++g_tmp;
+  char key[24];
+  snprintf(key, sizeof key, "_k%d == ", t);
+  buf_printf(b, "({ void *_p%d = (void *)(", t);
+  if (recv >= 0) emit_expr(c, recv, b);
+  else buf_puts(b, g_self);
+  buf_printf(b, "); sp_int _k%d = _p%d ? sp_obj_cls_id_of(_p%d) : -1; ", t, t, t);
+  if (l->nil >= 0) buf_printf(b, "_p%d == NULL ? %d : ", t, l->nil);
+  emit_presence_arms(c, l, key, b);
+  buf_puts(b, "0; })");
+}
+int emit_respond_to_cells(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv, Buf *b) {
   int all = argc >= 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode, ci = cplan_presence_class(c, id);
   CplanCells cs;
-  if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, 0, &cs) || !cells_testable(c, &cs)) return 0;
+  /* an instance's, or self's in an instance method: the plan's list (cplan_presence_list) */
+  CplanPresList l;
+  if (cplan_presence_list(c, id, rt, &l) && l.form == PRL_OBJECT) {
+    int boxed = repr_of(c, id).kind == RK_BOXED;
+    if (b && boxed) buf_puts(b, "sp_box_bool(");
+    if (b) emit_presence_object(c, &l, recv, b);
+    if (b && boxed) buf_puts(b, ")");
+    cplan_presence_list_free(&l);
+    return 1;
+  }
+  cplan_presence_list_free(&l);
+  if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, 0, &cs) || !cplan_cells_testable(c, &cs)) return 0;
   if (!b) return 1;
+  int els = cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])));
   buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(" : "(");
-  int open = emit_cells_test(c, &cs, b);
-  buf_printf(b, "%d", cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci]))));
+  int open = emit_cells_test(c, &cs, els, b);
+  buf_printf(b, "%d", els);
   while (open-- >= 0) buf_puts(b, ")");
   return 1;
 }
@@ -34710,120 +34759,6 @@ int object_private_method_name(const char *qm) {
   return 0;
 }
 
-/* What class cls holds of qm on its instance side where call id runs, as the call plan answers it (side: CT_REACH to
-   count the generated iterators of a Struct, CT_OWN for the class's own entries): pr is the table's entry, visibility
-   and undef (an undef of a reopened builtin's own method counts where it has run), and the names the class carries
-   with no entry; PR_ABSENT says the record proves no method of the name live where id runs, though the table holds
-   one. A super's id (its method runs wherever the override is called from: no point is its own) and no id ask the
-   final tables alone (PR_TABLE). */
-PresenceKind presence_at(Compiler *c, int id, int cls, unsigned side, const char *qm, CplanPresence *pr) {
-  NodeKind k = id >= 0 ? nt_kind(c->nt, id) : NK_SuperNode;
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    cplan_table_presence(c, cls, side, qm, pr);
-    return PR_TABLE;
-  }
-  return cplan_presence(c, id, cls, side, qm, pr);
-}
-
-/* The visibility of method qm that a program's reopening of Object, Kernel
-   or BasicObject gives an instance of class cid (-1: a value of no program
-   class) where call id runs (-1 for none), in the order CRuby looks them
-   up, or -1 when none defines it there. A blank slate (BasicObject's
-   subclass) reaches only BasicObject's. The class table keeps these roots
-   apart from cid's own chain; each root's entry, visibility and the record's
-   answer at the call come from the call plan (presence_at). */
-int root_reopen_method_vis(Compiler *c, int id, int cid, const char *qm) {
-  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  int blank = cid >= 0 && class_is_blank_slate(c, cid);
-  for (int u = 0; roots[u] >= 0; u++) {
-    if (blank && roots[u] != CORE_BASIC_OBJECT) continue;
-    int k = comp_core_class(c, roots[u]);
-    if (k < 0 || k == cid) continue;
-    /* an undef here hides a lower root's method of that name; a Kernel reopening's defs land in Object's table */
-    CplanPresence pr;
-    PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
-    if (pr.undef) return -1;
-    if (pk != PR_ABSENT && pr.table) return pr.vis;
-  }
-  return -1;
-}
-
-/* What an instance of user class cid answers to Object#respond_to?(qm): 2 =
-   true, 1 = only with include_all (a private or protected match), 0 = false.
-   The method-table reading of respond_to_static_answer's object branch,
-   without its deferral to the class's own respond_to? -- this is what that
-   override's `super` asks. The table's entry, visibility and undef, and the
-   names the class carries with no entry, come from the call plan
-   (cplan_table_presence). */
-/* Does a program class below a builtin exception inherit one of the class-gated
-   accessors (KeyError#key, NameError#name, NoMethodError#args, ...) from the
-   builtin it descends from? The instance is the builtin's own object, so the
-   runtime gate (sp_exc_has_acc) admits it; the program's method table has no
-   entry for it, and a name no ancestor of the builtin defines stays false. */
-static int exc_subclass_inherits_gated_acc(Compiler *c, int cid, const char *qm) {
-  if (!class_is_exc_subclass(c, cid)) return 0;
-  const char *const *owners = gated_exception_accessor_owners(qm);
-  const char *par = exc_builtin_parent(c, cid);
-  for (int o = 0; owners && owners[o]; o++)
-    for (int i = 0; builtin_ancestor_at(par, i); i++)
-      if (sp_streq(builtin_ancestor_at(par, i), owners[o])) return 1;
-  return 0;
-}
-static int obj_responds_answer(Compiler *c, int cid, const char *qm, int id) {
-  if (name_is_synth_method(c, qm) || comp_method_is_private_helper(c, cid, qm)) return 0;
-  if (is_initialize_copy_name(qm)) return 1;
-  /* BasicObject#initialize is private too, unless the class made it public:
-     a `public :initialize` counts whether or not the chain defines it */
-  if (is_initialize_name(qm)) {
-    int at = -1, vis = cplan_method_vis(c, -1, cid, qm, 0, &at);
-    if (at >= 0) return vis == SP_VIS_PUBLIC ? 2 : 1;
-    return call_target(c, -1, cid, qm, CT_METHODS, NULL) >= 0 && vis == SP_VIS_PUBLIC ? 2 : 1;
-  }
-  for (int u = 0; respond_universal[u]; u++) if (sp_streq(qm, respond_universal[u])) return 2;
-  CplanPresence pr;
-  cplan_table_presence(c, cid, CT_REACH, qm, &pr);
-  if (pr.undef) return 0;
-  /* a singleton alias names a class method, not one of the instance's */
-  if (pr.sg_only) return 0;
-  /* an alias that captured an Object / Kernel method answers as that one */
-  { int bi = 0; const char *bn = comp_resolve_alias_ex(c, cid, qm, NULL, &bi);
-    if (bi == 3 && !sp_streq(bn, qm)) return 2; }
-  int found = pr.table;
-  /* an Array (Hash) subclass instance answers Array's (Hash's) names (#7449) */
-  if (!found && comp_ty_ary_root(c, ty_object(cid)) >= 0 && comp_arysub_builtin_name(c, -1, cid, qm)) return 2;
-  /* Both a native class and its subclasses answer the public bindings.
-     A source visibility declaration applies just as it does to a def. */
-  int nk = comp_native_binding_class(c, cid, qm);
-  if (!found && nk >= 0 && comp_native_method_find(c, nk, qm, 0, 0) >= 0)
-    return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
-  /* the names the class answers without a method-table entry: an
-     Enumerable includer's, a Comparable's, a Struct's or a Data's
-     core names (#2663) */
-  if (!found && pr.implied) return 2;
-  /* a class-gated accessor of the builtin exception the class descends from (K-055) */
-  /* (a `private :key` the class declares on it is the class's own visibility word) */
-  if (!found && exc_subclass_inherits_gated_acc(c, cid, qm)) return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
-  /* a method of a program's Object, Kernel or BasicObject reopening that
-     the chain does not reach (the class table keeps them apart): the
-     root's, by its visibility there */
-  if (!found) {
-    int rv = root_reopen_method_vis(c, id, cid, qm);
-    /* ...or by the top level's def, Object's method from where the call runs (the chain of a class with no
-       explicit superclass ends before it); not for a blank slate, which has no Object */
-    if (rv < 0 && id >= 0 && !class_is_blank_slate(c, cid)) {
-      rv = cplan_top_def_vis(c, id, qm);
-      /* (a visibility word the class's chain holds for the name, `private :tk`, is the class's answer) */
-      int at = -1, dv = cplan_method_vis(c, -1, cid, qm, 0, &at);
-      if (rv >= 0 && at >= 0 && at != comp_core_class(c, CORE_OBJECT)) rv = dv;
-    }
-    if (rv >= 0) return rv == SP_VIS_PUBLIC ? 2 : 1;
-  }
-  /* Object's private methods (exit, puts, raise) answer to include_all;
-     one an Object reopening redefines is left as the chain reads it */
-  if (!found) return object_private_method_name(qm) && !class_is_blank_slate(c, cid) &&
-                     !root_reopen_defines(c, id, qm) ? 1 : 0;
-  return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
-}
 
 /* `super` inside a user-defined respond_to?(m, include_all = false) that no
    ancestor defines is Object#respond_to? for this object: a switch over the
@@ -34935,7 +34870,7 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
       }
       int ans[256], same = 1, any = 0;
       for (int k = 0; k < ncls; k++) {
-        ans[k] = obj_responds_answer(c, cls[k], qm, id);
+        ans[k] = cplan_obj_responds(c, cls[k], qm, id);
         if (ans[k]) any = 1;
         if (ans[k] != ans[0]) same = 0;
       }
@@ -34992,7 +34927,7 @@ static int rto_exc_by_cls(Compiler *c, const char *qm, int include_all, int fold
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_is_exc_subclass(c, k)) continue;
     if (rto_exact_class_answer(c, k, qm, include_all, foldable, -1) < 0) return 0;
-    any |= obj_responds_answer(c, k, qm, -1) != 0;
+    any |= cplan_obj_responds(c, k, qm, -1) != 0;
   }
   return any;
 }
@@ -35030,19 +34965,9 @@ static int rto_exact_class_answer(Compiler *c, int cid, const char *qm,
                                   int include_all, int foldable, int id) {
   /* the class's own respond_to? answers, not the method table */
   if (call_target(c, id, cid, RESPOND_TO_NAME, CT_METHODS, NULL) >= 0) return -1;
-  int a = obj_responds_answer(c, cid, qm, id);
+  int a = cplan_obj_responds(c, cid, qm, id);
   if (a != 1) return a == 2;
   return foldable ? include_all : -1;
-}
-/* Whether a slot typed as class cid may hold an instance of class k: cid's
-   own subclasses, and for a singleton class the classes above it its object
-   carries until its `def obj.m` runs, or after #dup drops it (the links up
-   to the class Ruby sees). */
-static int rto_slot_may_hold(Compiler *c, int k, int cid) {
-  if (is_descendant(c, k, cid)) return 1;
-  for (int p = cid; p >= 0 && c->classes[p].is_singleton_of; )
-    if ((p = c->classes[p].parent) == k) return 1;
-  return 0;
 }
 /* The answer for a receiver typed as class cid, which holds an instance of
    cid or of any subclass: a method the base class runs on self
@@ -35056,7 +34981,7 @@ static int rto_subtree_answer(Compiler *c, int cid, const char *qm,
   if (a < 0 || c->classes[cid].is_value_type) return a;
   int mixed = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    if (k == cid || !rto_slot_may_hold(c, k, cid) ||
+    if (k == cid || !cplan_slot_may_hold(c, k, cid) ||
         (!c->classes[k].instantiated && is_descendant(c, k, cid))) continue;
     int ak = rto_exact_class_answer(c, k, qm, include_all, foldable, id);
     if (ak < 0) return -1;
@@ -35085,7 +35010,7 @@ int emit_respond_to_by_cls(Compiler *c, int id, int recv, const char *qm, int ar
   buf_puts(b, "(");
   int any = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    if (!rto_slot_may_hold(c, k, cid)) continue;
+    if (!cplan_slot_may_hold(c, k, cid)) continue;
     if (rto_exact_class_answer(c, k, qm, include_all, 1, id) != 1) continue;
     buf_printf(b, "%s_t%d == %d", any ? " || " : "", t, k);
     any = 1;
@@ -35095,36 +35020,6 @@ int emit_respond_to_by_cls(Compiler *c, int id, int recv, const char *qm, int ar
   if (nil_slot) buf_printf(b, " : %d", nil_answers_name(qm) || sp_streq(qm, "rationalize"));
   buf_puts(b, "; })");
   return 1;
-}
-/* Does a reopening of Object, Kernel or BasicObject define or undefine qm,
-   where call id runs (-1: anywhere in the program)? Then the name is left
-   to the class chain, as it was read before Object's private methods were
-   answered. A def the record proves has not run there is none yet. */
-int root_reopen_holds(Compiler *c, const char *qm) {
-  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  for (int i = 0; roots[i] >= 0; i++) {
-    int k = comp_core_class(c, roots[i]);
-    CplanPresence pr;
-    if (k < 0) continue;
-    cplan_table_presence(c, k, CT_REACH, qm, &pr);
-    if (pr.table || pr.undef) return 1;
-  }
-  return 0;
-}
-int root_reopen_defines(Compiler *c, int id, const char *qm) {
-  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
-  /* (the tables hold none: the record is asked only for a name they hold) */
-  if (!root_reopen_holds(c, qm)) return 0;
-  for (int i = 0; roots[i] >= 0; i++) {
-    int k = comp_core_class(c, roots[i]);
-    if (k < 0) continue;
-    CplanPresence pr;
-    cplan_table_presence(c, k, CT_REACH, qm, &pr);
-    if (!pr.table && !pr.undef) continue;
-    PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
-    if ((pk != PR_ABSENT && pr.table) || pr.undef) return 1;
-  }
-  return 0;
 }
 /* Could some class answer respond_to?(qm, true) for one of Object's private
    methods other than true? A BasicObject one has none of them, a class that
@@ -35238,7 +35133,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       return -1;
     } }
   /* a class's own class method whose answer the version cells hold */
-  if (emit_respond_to_cells(c, id, qm, argc, argv, NULL)) return -1;
+  if (emit_respond_to_cells(c, id, recv, rt, qm, argc, argv, NULL)) return -1;
   /* a compiler-synthesized helper (__enum_to_a) is not a real method: CRuby
      answers false, so never let the class-chain lookup below report it */
   if (name_is_synth_method(c, qm)) { resolved = 1; yes = 0; }
@@ -35293,7 +35188,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
      whatever public method of the name its own class adds (IO#puts). Only
      while no class could answer otherwise: a BasicObject one, one that
      undefines the name, one with its own respond_to?. A user object answers
-     through its class chain below (obj_responds_answer). */
+     through its class chain below (cplan_obj_responds). */
   if (!resolved && foldable && include_all && recv >= 0 && !ty_is_object(rt) && rt != TY_CLASS &&
       object_private_method_name(qm) && !root_reopen_defines(c, id, qm)) {
     if (!private_answer_overridden(c, qm, rt)) resolved = yes = 1;
@@ -35596,7 +35491,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
          where the program's Object answers the name: every exception
          answers it then, as the probe says */
       int oc = comp_core_class(c, CORE_OBJECT);
-      int gated = is_gated_exception_accessor(qm) && !(oc >= 0 && obj_responds_answer(c, oc, qm, -1) != 0);
+      int gated = is_gated_exception_accessor(qm) && !(oc >= 0 && cplan_obj_responds(c, oc, qm, -1) != 0);
       if (rt == TY_EXCEPTION && recv >= 0 && (gated || rto_exc_by_cls(c, qm, include_all, foldable))) {
         g_rto_exc = 1;
         return -1;

@@ -269,7 +269,7 @@ static const char *reader_family(Compiler *c, const MtSite *s) {
     if ((is_send_family(nm) || is_method_object_maker(nm)) && tgt && !own) return "send";
     /* the presence query's question is the queried name's; a read of its own name (`respond_to?` asked of a class
        that may define one) is the call's, as any call's is */
-    if (is_respond_to_name(nm) || is_method_defined_query(nm)) return own ? "call" : "presence";
+    if (is_method_presence_name_query(nm)) return own ? "call" : "presence";
     /* a read under a list's node is the list's own where a builder made it (the window of mtab_build_enter), the
        call's where the plan's resolution of the list's call did */
     if (is_instance_method_list(nm) || is_method_presence_query(nm) >= 2) return s->build ? "lists" : "call";
@@ -284,7 +284,7 @@ static const char *reader_family(Compiler *c, const MtSite *s) {
     const Scope *sc = comp_scope_of(c, fn);
     sc = sc ? comp_super_site(c, sc) : NULL;
     const char *sn = sc ? comp_scope_user_name(sc) : NULL;
-    if (sn && (is_respond_to_name(sn) || is_method_defined_query(sn))) return "presence";
+    if (is_method_presence_name_query(sn)) return "presence";
     return !sp_streq(name, METHOD_MISSING_NAME) && ic_node_calls_name(c, fn, name, s->side == MTS_CMETH) ? "implied" : "call";
   }
   if (k == NK_BlockArgumentNode) {   /* &:sym calls the name; any other &obj calls its to_proc */

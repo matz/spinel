@@ -1,0 +1,24 @@
+[:none, :j, :none, :none, :none]
+:none
+false
+[:no, :yes, :no, :no, :no]
+[false, true, false]
+false
+false
+false
+:none
+[[:none, :none, false], [:none, :none, false]]
+[:k, :j, :k, :none, :none]
+:k
+false
+[:k]
+[:yes, :yes, :yes, :no, :no]
+[:k, :j, :k]
+true
+false
+true
+:a
+:b
+[[:q, :q, true], [:q, :q, true]]
+[false, true]
+[true, true]

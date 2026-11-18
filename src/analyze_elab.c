@@ -177,6 +177,7 @@ struct LoadRecord {
   char **refl_table[2]; int nrefl_table[2], crefl_table[2];   /* ...those a reader that answers from the table names, by the side it reports (lr_refl_sides) */
   char **refl_cell; int nrefl_cell, crefl_cell;      /* ...a respond_to? the version cells may answer */
   char **refl_capt; int nrefl_capt, crefl_capt;      /* ...a Method's maker that takes the entry, as a call */
+  char **refl_fixed[2]; int nrefl_fixed[2], crefl_fixed[2];   /* ...the table's readers but a respond_to? or method_defined? of an instance's (elab_body_reflected) */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
   unsigned char refl_cell_list;         /* ...a class's class-side method list the version cells may answer, of any class method name */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
@@ -2332,20 +2333,26 @@ static void lr_reopens_take(Compiler *c) {
    read the cells of the entry its call takes (cplan_cmethod_presence), or
    take the entry. Every other reader but a Method's maker answers from
    the table (refl_table, elab_method_reflected), kept by the sides whose
-   methods it may report (sides: 1 the instance side, 2 the class side). */
+   methods it may report (sides: 1 the instance side, 2 the class side);
+   but a respond_to?, defined? or method_defined? of an instance's method,
+   which the plan's presence answers (cplan_presence), to refl_fixed too
+   (pres: its class side alone). */
 enum { LR_REFL_TABLE, LR_REFL_MAKER, LR_REFL_CELL, LR_REFL_CAPT };
 static void lr_refl_list(LoadRecord *r, char ***l, int *n, int *cap, const char *name) {
   *l = lr_grow(*l, cap, *n, sizeof **l);
   if (!((*l)[(*n)++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
 }
-static void lr_refl_add(LoadRecord *r, const char *name, int kind, int sides) {
+static void lr_refl_add(LoadRecord *r, const char *name, int kind, int sides, int pres) {
   if (!name) { r->refl_any = 1; return; }
   if (kind == LR_REFL_CELL) { lr_refl_list(r, &r->refl_cell, &r->nrefl_cell, &r->crefl_cell, name); return; }
   if (kind == LR_REFL_CAPT) { lr_refl_list(r, &r->refl_capt, &r->nrefl_capt, &r->crefl_capt, name); return; }
   lr_refl_list(r, &r->refl, &r->nrefl, &r->crefl, name);
   if (kind != LR_REFL_TABLE) return;
-  for (int sg = 0; sg < 2; sg++)
-    if (sides & (1 << sg)) lr_refl_list(r, &r->refl_table[sg], &r->nrefl_table[sg], &r->crefl_table[sg], name);
+  for (int sg = 0; sg < 2; sg++) {
+    if (!(sides & (1 << sg))) continue;
+    lr_refl_list(r, &r->refl_table[sg], &r->nrefl_table[sg], &r->crefl_table[sg], name);
+    if (sg || !pres) lr_refl_list(r, &r->refl_fixed[sg], &r->nrefl_fixed[sg], &r->crefl_fixed[sg], name);
+  }
 }
 /* The sides whose methods table reader call n, asking rn, may report:
    method_defined? and its kin a receiver's instance methods (1), but a
@@ -2365,7 +2372,7 @@ static void lr_refl_take(Compiler *c) {
     const int *av = call_args(nt, n, &ac);
     const char *rn = call_sent_name(nt, n, &a);
     if (!rn) {
-      if (ac) lr_refl_add(r, NULL, LR_REFL_TABLE, 3);   /* (a send with no argument reads no name) */
+      if (ac) lr_refl_add(r, NULL, LR_REFL_TABLE, 3, 0);   /* (a send with no argument reads no name) */
       continue;
     }
     if (list_cells_shape(nt, n) && sp_streq(rn, nt_str(nt, n, "name"))) {   /* (reads every class method's cells; an instance method it does not name) */
@@ -2375,19 +2382,22 @@ static void lr_refl_take(Compiler *c) {
     if ((pq = is_method_presence_query(rn)))
       lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL,
                   respond_to_cells_shape(nt, n) ? LR_REFL_CELL : capture_cells_shape(nt, n) ? LR_REFL_CAPT :
-                  is_method_object_maker(rn) ? LR_REFL_MAKER : LR_REFL_TABLE, lr_refl_sides(nt, n, rn));
+                  is_method_object_maker(rn) ? LR_REFL_MAKER : LR_REFL_TABLE, lr_refl_sides(nt, n, rn),
+                  is_method_presence_name_query(rn));
   }
   NT_FOREACH_KIND(nt, NK_DefinedNode, n) {
     int v = nt_ref(nt, n, "value"), rv = v >= 0 ? nt_ref(nt, v, "receiver") : -1;
     NodeKind rk = rv >= 0 ? nt_kind(nt, rv) : NK_SelfNode;
     if (v >= 0 && nt_kind(nt, v) == NK_CallNode)
       lr_refl_add(r, nt_str(nt, v, "name"),
-                  rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? LR_REFL_CELL : LR_REFL_TABLE, 3);
+                  rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? LR_REFL_CELL : LR_REFL_TABLE, 3, 1);
   }
-  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i], LR_REFL_TABLE, 3);
+  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i], LR_REFL_TABLE, 3, 0);
   if (r->nrefl > 1) qsort(r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp);
-  for (int sg = 0; sg < 2; sg++)
+  for (int sg = 0; sg < 2; sg++) {
     if (r->nrefl_table[sg] > 1) qsort(r->refl_table[sg], (size_t)r->nrefl_table[sg], sizeof *r->refl_table[sg], lr_name_cmp);
+    if (r->nrefl_fixed[sg] > 1) qsort(r->refl_fixed[sg], (size_t)r->nrefl_fixed[sg], sizeof *r->refl_fixed[sg], lr_name_cmp);
+  }
   if (r->nrefl_cell > 1) qsort(r->refl_cell, (size_t)r->nrefl_cell, sizeof *r->refl_cell, lr_name_cmp);
   if (r->nrefl_capt > 1) qsort(r->refl_capt, (size_t)r->nrefl_capt, sizeof *r->refl_capt, lr_name_cmp);
 }
@@ -4298,7 +4308,10 @@ static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) 
   const LoadRecord *r = c->lrec;
   int cside = h->a >= 0 && h->b;
   int str_reader = !cside && h->a >= 0 && h->a == comp_core_class(c, CORE_STRING) && is_string_boxed_reader(x->name);
-  if (!lr_first_version(h) || r->refl_any || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
+  const LrDef *fv = lr_first_version(h);
+  if (!fv) return 0;
+  if (fv->body ? elab_body_reflected(c, x->name, cside) :
+      r->refl_any || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
       (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside && !str_reader)) return 0;
   if (str_reader) return 1;
   if (cside)
@@ -4427,6 +4440,15 @@ int elab_method_reflected(Compiler *c, const char *name, int sg) {
   return r->refl_any || (!sg && r->refl_cell_list) || lr_refl_has(r->refl_table[sg], r->nrefl_table[sg], name) ||
          (sg && lr_refl_has(r->refl_table[0], r->nrefl_table[0], name) && lr_singleton_mixed(r)) ||
          lr_refl_cell_table(c, name, sg);
+}
+
+int elab_body_reflected(Compiler *c, const char *name, int sg) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || !name) return 0;
+  sg = sg != 0;
+  return r->refl_any || lr_refl_has(r->refl_fixed[sg], r->nrefl_fixed[sg], name) ||
+         (sg && lr_refl_has(r->refl_fixed[0], r->nrefl_fixed[0], name) && lr_singleton_mixed(r)) ||
+         (sg ? lr_refl_cell_table(c, name, 1) : elab_method_asked(c, name) && respond_to_missing_defined(c));
 }
 
 int elab_method_asked(Compiler *c, const char *name) {
@@ -12277,7 +12299,8 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);
   for (int sg = 0; sg < 2; sg++) {
     for (int i = 0; i < r->nrefl_table[sg]; i++) free(r->refl_table[sg][i]);
-    free(r->refl_table[sg]);
+    for (int i = 0; i < r->nrefl_fixed[sg]; i++) free(r->refl_fixed[sg][i]);
+    free(r->refl_table[sg]); free(r->refl_fixed[sg]);
   }
   for (int i = 0; i < r->nrefl_cell; i++) free(r->refl_cell[i]);
   for (int i = 0; i < r->nrefl_capt; i++) free(r->refl_capt[i]);

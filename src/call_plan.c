@@ -2766,7 +2766,7 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
     }
   ElabVersion vs[VER_MAX_ARMS];
   int n = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS), def = n >= 1 && vs[0].v->kind == LR_DEF, any = 0;
-  for (int k = 0; k < n; k++) any |= vs[k].v->body != 0 || elab_version_held_row(vs[k].v, name, sg);
+  for (int k = 0; k < n; k++) any |= (vs[k].v->body != 0 && !elab_body_reflected(c, name, sg)) || elab_version_held_row(vs[k].v, name, sg);
   m->slot[j] = (struct VerChainSlot){ name_dup(name), rcls, sg, n, def, any, elab_versions_late(c, name, vs, n) };
   m->used++;
   *first_def = def;
@@ -4262,6 +4262,53 @@ static void list_asks(Compiler *c, int id, void (*fn)(Compiler *, int, const cha
   ListAsk a = { c, id, cls, fn, arg };
   if (cls >= 0) cplan_list_candidates(c, cls, CT_CMETHOD | (own ? CT_OWN : 0), list_ask_name, &a);
 }
+/* An instance-side presence reader's asks (cplan_presence_cells): a
+   respond_to? (defined?'s) of a literal name on a receiver, or a
+   method_defined? kin on a constant or on `x.class`, asks fn (flags 0) of
+   each class whose instances it may ask of, where it runs, as a call of
+   the name on such an instance there asks it */
+typedef struct { int id; CtClassFn fn; void *arg; } PresAsk;
+static void pres_ask_one(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
+  const PresAsk *a = arg;
+  (void)id;
+  if (k >= 0 && !(flags & (CT_CMETHOD | CT_TOP))) a->fn(c, a->id, nm, k, 0, a->arg);
+}
+/* How presence reader id (a respond_to? or a method_defined? kin of a literal name) reads the cells, as
+   cplan_presence_list asks them: a respond_to?'s are the chain's versions' (CT_REACH), of every visibility where
+   its second argument is `true` (*all); a method_defined? kin's are a list's (*list, cplan_list_cells), its own
+   class's alone where its inherit argument is `false` (CT_OWN) */
+static unsigned presence_reader_side(const NodeTable *nt, int id, int *all, int *list) {
+  int ac = 0;
+  const int *av = call_args(nt, id, &ac);
+  int flag = ac == 2 && nt_kind(nt, av[1]) == NK_TrueNode;
+  *list = !is_respond_to_name(nt_str(nt, id, "name"));
+  *all = flag && !*list;
+  return !*list || ac == 1 || flag ? CT_REACH : CT_OWN;
+}
+static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
+  const NodeTable *nt = c->nt;
+  const char *rn = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  const char *qm = is_method_presence_name_query(rn) ? method_sym_arg(c, id) : NULL;
+  if (!qm || !ct_version_named(c, qm) || respond_to_missing_defined(c)) return;
+  int r = nt_ref(nt, id, "receiver"), k;
+  PresAsk a = { id, fn, arg };
+  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
+  if (is_respond_to_name(rn)) ct_version_classes(c, id, qm, pres_ask_one, &a);
+  else if (!is_method_defined_query(rn) || r < 0) return;
+  else if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+    if ((k = class_recv_static_ci(c, r)) >= 0) fn(c, id, qm, k, 0, arg);
+  }
+  else if (rk == NK_CallNode && is_class_query(nt_str(nt, r, "name")) && nt_ref(nt, r, "receiver") >= 0)
+    ct_version_classes(c, r, qm, pres_ask_one, &a);
+}
+/* ...each such reader's of the program (written: in a scope the C writes, ver_scope_written) */
+static int ver_scope_written(const Scope *s);
+static void presence_readers(Compiler *c, int written, CtClassFn fn, void *arg) {
+  int *ids = NULL, n = an_calls_named_if(c, is_method_presence_name_query, c->nt->count, &ids);
+  for (int i = 0; i < n; i++)
+    if (!written || ver_scope_written(comp_scope_of(c, ids[i]))) presence_asks(c, ids[i], fn, arg);
+  free(ids);
+}
 /* Does respond_to? call id ask the version cells of cls's class method
    name: one the record cannot order there, in a program whose
    respond_to? asks only the methods (respond_to_missing_defined), where
@@ -4276,13 +4323,12 @@ static int ver_entry_vis(const Compiler *c, int scope) {
     if (c->ver_entries[i].scope == scope) return c->ver_entries[i].vis;
   return 0;
 }
-/* See call_plan.h. */
-int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out) {
+/* The cells of entry e over the versions of cls's `name` on side sg (own:
+   cls's own history alone), as cplan_cmethod_presence gives them */
+static int presence_cells(Compiler *c, int e, int cls, int sg, const char *name, int include_all, int own, CplanCells *out) {
   ElabVersion vs[VER_MAX_ARMS];
-  if (!cplan_presence_asks(c, id, cls, name)) return 0;
-  int e = call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL);
   if (e < 0 || c->scopes[e].entry != ENTRY_DISPATCH) return 0;
-  int nv = own ? elab_history_versions(c, cls, 1, name, vs, VER_MAX_ARMS) : elab_chain_versions(c, cls, 1, name, vs, VER_MAX_ARMS);
+  int nv = own ? elab_history_versions(c, cls, sg, name, vs, VER_MAX_ARMS) : elab_chain_versions(c, cls, sg, name, vs, VER_MAX_ARMS);
   out->n = 0;
   for (int i = 0; i < nv; i++) {
     if (vs[i].v->kind == LR_REMOVE) return 0;
@@ -4345,14 +4391,281 @@ int cplan_implied_entry_cells(Compiler *c, int mi, int undefined, CplanCells *ou
 }
 
 /* See call_plan.h. */
-int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, CplanCells *out) {
+int cplan_cells_fixed(const CplanCells *cs) {
+  for (int k = 0; k < cs->n; k++)
+    if (cs->vis[k][0] || cs->ans[k] != cs->els) return 0;
+  return 1;
+}
+/* See call_plan.h. */
+int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out) {
+  if (!cplan_presence_asks(c, id, cls, name)) return 0;
+  return presence_cells(c, call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL), cls, 1, name, include_all, own, out);
+}
+/* See call_plan.h. */
+int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int include_all, CplanCells *out) {
+  MethodLookup ml = { .def_class = -1 };
+  if (id < 0 || cls < 0 || (side & (CT_CMETHOD | CT_TOP)) || respond_to_missing_defined(c)) return 0;
+  int e = call_target(c, id, cls, name, side | CT_REACH, &ml);
+  return ml.kind == ML_ENTRY && presence_cells(c, e, cls, 0, name, include_all, (side & CT_OWN) != 0, out);
+}
+/* See call_plan.h. */
+int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, CplanCells *out) {
   CplanCells all;
+  int own = (side & CT_OWN) != 0, cm = (side & CT_CMETHOD) != 0;
   /* some version has cells, and each answers the same with or without the private ones: a list shows public and
      protected methods, so a version with another visibility is the table's to answer (an undef's cell counts in
      both) */
-  if (!cplan_cmethod_presence(c, id, cls, name, 0, own, out) || out->n == 0 ||
-      !cplan_cmethod_presence(c, id, cls, name, 1, own, &all) || all.n != out->n) return 0;
+  if (!(cm ? cplan_cmethod_presence(c, id, cls, name, 0, own, out) : cplan_presence_cells(c, id, cls, side, name, 0, out)) ||
+      out->n == 0 ||
+      !(cm ? cplan_cmethod_presence(c, id, cls, name, 1, own, &all) : cplan_presence_cells(c, id, cls, side, name, 1, &all)) ||
+      all.n != out->n) return 0;
   for (int k = 0; k < out->n; k++) if (out->ans[k] != all.ans[k]) return 0;
+  return 1;
+}
+/* What class cls holds of qm on its instance side where call id runs, as the call plan answers it (side: CT_REACH to
+   count the generated iterators of a Struct, CT_OWN for the class's own entries): pr is the table's entry, visibility
+   and undef (an undef of a reopened builtin's own method counts where it has run), and the names the class carries
+   with no entry; PR_ABSENT says the record proves no method of the name live where id runs, though the table holds
+   one. A super's id (its method runs wherever the override is called from: no point is its own) and no id ask the
+   final tables alone (PR_TABLE). */
+PresenceKind presence_at(Compiler *c, int id, int cls, unsigned side, const char *qm, CplanPresence *pr) {
+  NodeKind k = id >= 0 ? nt_kind(c->nt, id) : NK_SuperNode;
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+    cplan_table_presence(c, cls, side, qm, pr);
+    return PR_TABLE;
+  }
+  return cplan_presence(c, id, cls, side, qm, pr);
+}
+
+/* The visibility of method qm that a program's reopening of Object, Kernel
+   or BasicObject gives an instance of class cid (-1: a value of no program
+   class) where call id runs (-1 for none), in the order CRuby looks them
+   up, or -1 when none defines it there. A blank slate (BasicObject's
+   subclass) reaches only BasicObject's. The class table keeps these roots
+   apart from cid's own chain; each root's entry, visibility and the record's
+   answer at the call come from the call plan (presence_at). */
+int root_reopen_method_vis(Compiler *c, int id, int cid, const char *qm) {
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  int blank = cid >= 0 && class_is_blank_slate(c, cid);
+  for (int u = 0; roots[u] >= 0; u++) {
+    if (blank && roots[u] != CORE_BASIC_OBJECT) continue;
+    int k = comp_core_class(c, roots[u]);
+    if (k < 0 || k == cid) continue;
+    /* an undef here hides a lower root's method of that name; a Kernel reopening's defs land in Object's table */
+    CplanPresence pr;
+    PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
+    if (pr.undef) return -1;
+    if (pk != PR_ABSENT && pr.table) return pr.vis;
+  }
+  return -1;
+}
+
+/* What an instance of user class cid answers to Object#respond_to?(qm): 2 =
+   true, 1 = only with include_all (a private or protected match), 0 = false.
+   The method-table reading of respond_to_static_answer's object branch,
+   without its deferral to the class's own respond_to? -- this is what that
+   override's `super` asks. The table's entry, visibility and undef, and the
+   names the class carries with no entry, come from the call plan
+   (cplan_table_presence). */
+/* Does a program class below a builtin exception inherit one of the class-gated
+   accessors (KeyError#key, NameError#name, NoMethodError#args, ...) from the
+   builtin it descends from? The instance is the builtin's own object, so the
+   runtime gate (sp_exc_has_acc) admits it; the program's method table has no
+   entry for it, and a name no ancestor of the builtin defines stays false. */
+static int exc_subclass_inherits_gated_acc(Compiler *c, int cid, const char *qm) {
+  if (!class_is_exc_subclass(c, cid)) return 0;
+  const char *const *owners = gated_exception_accessor_owners(qm);
+  const char *par = exc_builtin_parent(c, cid);
+  for (int o = 0; owners && owners[o]; o++)
+    for (int i = 0; builtin_ancestor_at(par, i); i++)
+      if (sp_streq(builtin_ancestor_at(par, i), owners[o])) return 1;
+  return 0;
+}
+int cplan_obj_responds(Compiler *c, int cid, const char *qm, int id) {
+  if (name_is_synth_method(c, qm) || comp_method_is_private_helper(c, cid, qm)) return 0;
+  if (is_initialize_copy_name(qm)) return 1;
+  /* BasicObject#initialize is private too, unless the class made it public:
+     a `public :initialize` counts whether or not the chain defines it */
+  if (is_initialize_name(qm)) {
+    int at = -1, vis = cplan_method_vis(c, -1, cid, qm, 0, &at);
+    if (at >= 0) return vis == SP_VIS_PUBLIC ? 2 : 1;
+    return call_target(c, -1, cid, qm, CT_METHODS, NULL) >= 0 && vis == SP_VIS_PUBLIC ? 2 : 1;
+  }
+  for (int u = 0; respond_universal[u]; u++) if (sp_streq(qm, respond_universal[u])) return 2;
+  CplanPresence pr;
+  /* (where the record proves none of the program's live at the call, the builtin tiers below answer) */
+  PresenceKind pk = presence_at(c, id, cid, CT_REACH, qm, &pr);
+  if (pr.undef) return 0;
+  /* a singleton alias names a class method, not one of the instance's */
+  if (pr.sg_only) return 0;
+  /* an alias that captured an Object / Kernel method answers as that one */
+  { int bi = 0; const char *bn = comp_resolve_alias_ex(c, cid, qm, NULL, &bi);
+    if (bi == 3 && !sp_streq(bn, qm)) return 2; }
+  int found = pk != PR_ABSENT && pr.table;
+  /* an Array (Hash) subclass instance answers Array's (Hash's) names (#7449) */
+  if (!found && comp_ty_ary_root(c, ty_object(cid)) >= 0 && comp_arysub_builtin_name(c, -1, cid, qm)) return 2;
+  /* Both a native class and its subclasses answer the public bindings.
+     A source visibility declaration applies just as it does to a def. */
+  int nk = comp_native_binding_class(c, cid, qm);
+  if (!found && nk >= 0 && comp_native_method_find(c, nk, qm, 0, 0) >= 0)
+    return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
+  /* the names the class answers without a method-table entry: an
+     Enumerable includer's, a Comparable's, a Struct's or a Data's
+     core names (#2663) */
+  if (!found && pr.implied) return 2;
+  /* a class-gated accessor of the builtin exception the class descends from (K-055) */
+  /* (a `private :key` the class declares on it is the class's own visibility word) */
+  if (!found && exc_subclass_inherits_gated_acc(c, cid, qm)) return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
+  /* a method of a program's Object, Kernel or BasicObject reopening that
+     the chain does not reach (the class table keeps them apart): the
+     root's, by its visibility there */
+  if (!found) {
+    int rv = root_reopen_method_vis(c, id, cid, qm);
+    /* ...or by the top level's def, Object's method from where the call runs (the chain of a class with no
+       explicit superclass ends before it); not for a blank slate, which has no Object */
+    if (rv < 0 && id >= 0 && !class_is_blank_slate(c, cid)) {
+      rv = cplan_top_def_vis(c, id, qm);
+      /* (a visibility word the class's chain holds for the name, `private :tk`, is the class's answer) */
+      int at = -1, dv = cplan_method_vis(c, -1, cid, qm, 0, &at);
+      if (rv >= 0 && at >= 0 && at != comp_core_class(c, CORE_OBJECT)) rv = dv;
+    }
+    if (rv >= 0) return rv == SP_VIS_PUBLIC ? 2 : 1;
+  }
+  /* Object's private methods (exit, puts, raise) answer to include_all;
+     one an Object reopening redefines is left as the chain reads it */
+  if (!found) return object_private_method_name(qm) && !class_is_blank_slate(c, cid) &&
+                     !root_reopen_defines(c, id, qm) ? 1 : 0;
+  return pr.vis == SP_VIS_PUBLIC ? 2 : 1;
+}
+
+/* Whether a slot typed as class cid may hold an instance of class k: cid's
+   own subclasses, and for a singleton class the classes above it its object
+   carries until its `def obj.m` runs, or after #dup drops it (the links up
+   to the class Ruby sees). */
+int cplan_slot_may_hold(Compiler *c, int k, int cid) {
+  if (is_descendant(c, k, cid)) return 1;
+  for (int p = cid; p >= 0 && c->classes[p].is_singleton_of; )
+    if ((p = c->classes[p].parent) == k) return 1;
+  return 0;
+}
+
+/* Does a reopening of Object, Kernel or BasicObject define or undefine qm,
+   where call id runs (-1: anywhere in the program)? Then the name is left
+   to the class chain, as it was read before Object's private methods were
+   answered. A def the record proves has not run there is none yet. */
+int root_reopen_holds(Compiler *c, const char *qm) {
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  for (int i = 0; roots[i] >= 0; i++) {
+    int k = comp_core_class(c, roots[i]);
+    CplanPresence pr;
+    if (k < 0) continue;
+    cplan_table_presence(c, k, CT_REACH, qm, &pr);
+    if (pr.table || pr.undef) return 1;
+  }
+  return 0;
+}
+int root_reopen_defines(Compiler *c, int id, const char *qm) {
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  /* (the tables hold none: the record is asked only for a name they hold) */
+  if (!root_reopen_holds(c, qm)) return 0;
+  for (int i = 0; roots[i] >= 0; i++) {
+    int k = comp_core_class(c, roots[i]);
+    if (k < 0) continue;
+    CplanPresence pr;
+    cplan_table_presence(c, k, CT_REACH, qm, &pr);
+    if (!pr.table && !pr.undef) continue;
+    PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
+    if ((pk != PR_ABSENT && pr.table) || pr.undef) return 1;
+  }
+  return 0;
+}
+
+/* Do the cells hold values the run-time test compares (an Integer global: an sp_int, or an sp_RbVal under
+   --int-overflow=promote, compared as the entry's arms compare it)? */
+int cplan_cells_testable(Compiler *c, const CplanCells *cs) {
+  for (int i = 0; i < cs->n; i++) {
+    LocalVar *g = comp_gvar(c, cs->cell[i] + 1);
+    ReprKind k = g ? repr_slot_kind(c, g) : RK_NONE;
+    if (k != RK_SCALAR && k != RK_BOXED) return 0;
+    LocalVar *v = cs->vis[i][0] ? comp_gvar(c, cs->vis[i] + 1) : NULL;
+    if (cs->vis[i][0] && (!v || (repr_slot_kind(c, v) != RK_SCALAR && repr_slot_kind(c, v) != RK_BOXED) || cplan_cell_dropped(c, v))) return 0;
+  }
+  return 1;
+}
+/* ...one arm of list l: class k's answer, from cells *cs where some (PRA_CELLS, or the answer they fix) or
+   from answer a; 0, adding none, where the cells cannot be read (a boxed receiver's or a class value's class
+   then answers as the reader does without cells) */
+static int presence_arm(Compiler *c, CplanPresList *l, int k, const CplanCells *cs, int a) {
+  if (cs && !cplan_cells_fixed(cs) && !cplan_cells_testable(c, cs)) return 0;
+  if (!(l->n & (l->n - 1)) && !(l->arm = realloc(l->arm, sizeof *l->arm * (size_t)(l->n ? 2 * l->n : 1)))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  CplanPresArm *m = &l->arm[l->n++];
+  m->cls = k;
+  m->ans = !cs ? a : cplan_cells_fixed(cs) ? cs->els : PRA_CELLS;
+  if (cs) m->cells = *cs;
+  return 1;
+}
+/* See call_plan.h. */
+void cplan_presence_list_free(CplanPresList *l) {
+  free(l->arm);
+  l->arm = NULL, l->n = 0;
+}
+/* See call_plan.h. */
+int cplan_presence_list(Compiler *c, int id, TyKind rt, CplanPresList *out) {
+  const NodeTable *nt = c->nt;
+  *out = (CplanPresList){ PRL_OBJECT, -1, 0, NULL };
+  /* (`defined?(m)` of a receiverless call: what respond_to?(:m, true) of self answers) */
+  int v = nt_kind(nt, id) == NK_DefinedNode ? nt_ref(nt, id, "value") : -1;
+  int dm = v >= 0 && nt_kind(nt, v) == NK_CallNode && nt_ref(nt, v, "receiver") < 0;
+  const char *rn = dm ? RESPOND_TO_NAME : nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  int ac = 0, recv = dm ? -1 : nt_ref(nt, id, "receiver"), mask = method_defined_vis_mask(rn), cells = 0, ok = 1;
+  const int *av = dm ? NULL : call_args(nt, id, &ac);
+  NodeKind lk = ac == 2 ? nt_kind(nt, av[1]) : NK_TrueNode;
+  /* (a literal name, a literal second argument: include_all, or method_defined?'s inherit) */
+  const char *qm = dm ? nt_str(nt, v, "name") : ac == 1 || ac == 2 ? vis_arg_name(nt, av[0]) : NULL;
+  if (!rn || !qm || (lk != NK_TrueNode && lk != NK_FalseNode) || (!is_respond_to_name(rn) && !(mask & 1)) ||
+      respond_to_missing_defined(c)) return 0;
+  int all = 0, list = 0, cid = -1;
+  unsigned side = dm ? CT_REACH : presence_reader_side(nt, id, &all, &list);
+  int flag = dm || all;
+  CplanCells cs;
+  CplanPresence pr;
+  if (list) {
+    /* a class value's method_defined?: a constant's class, or any the value may be; its public versions' cells */
+    NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+    int one = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? class_recv_static_ci(c, recv) : -1;
+    out->form = PRL_CLASS;
+    for (int k = one >= 0 ? one : 0; k < (one >= 0 ? one + 1 : c->nclasses); k++)
+      if (presence_at(c, id, k, side, qm, &pr) == PR_CELLS && cplan_list_cells(c, id, k, side, qm, &cs)) presence_arm(c, out, k, &cs, -1);
+  }
+  else if (recv >= 0 && (rt == TY_POLY || rt == TY_UNKNOWN)) {
+    /* a boxed receiver: the classes whose cells answer */
+    out->form = PRL_BOXED;
+    for (int k = 0; k < c->nclasses; k++)
+      if (presence_at(c, id, k, CT_REACH, qm, &pr) == PR_CELLS && cplan_presence_cells(c, id, k, CT_REACH, qm, flag, &cs))
+        presence_arm(c, out, k, &cs, -1);
+  }
+  else {
+    /* an object, or self in an instance method: each class the slot may hold (a defined?'s, as its call asks) */
+    int at = dm ? v : id;
+    const Scope *s = recv < 0 ? comp_scope_of(c, at) : NULL;
+    if (recv >= 0 && ty_is_object(rt) && !comp_ty_value_obj(c, rt)) cid = ty_object_class(rt), out->nil = nil_answers_name(qm);
+    else if (s && s->class_id >= 0 && !s->is_cmethod && !c->classes[s->class_id].is_value_type &&
+             !comp_class_is_module(c, &c->classes[s->class_id])) cid = s->class_id;
+    for (int k = 0; ok && cid >= 0 && k < c->nclasses; k++) {
+      if (!cplan_slot_may_hold(c, k, cid) || (k != cid && !c->classes[k].instantiated)) continue;
+      /* (a class's own respond_to? answers for it; not for a defined?) */
+      if (!dm && call_target(c, at, k, RESPOND_TO_NAME, CT_METHODS, NULL) >= 0) ok = 0;
+      else if (cplan_presence_cells(c, at, k, CT_REACH, qm, flag, &cs)) ok = presence_arm(c, out, k, &cs, -1), cells = 1;
+      else {
+        int a = cplan_obj_responds(c, k, qm, at);
+        ok = presence_arm(c, out, k, NULL, a == 2 || (a == 1 && flag) ? PRA_YES : PRA_NO);
+      }
+    }
+  }
+  for (int i = 0; i < out->n; i++) cells |= out->arm[i].ans == PRA_CELLS || out->form != PRL_OBJECT;
+  if (!ok || !cells || !out->n) { cplan_presence_list_free(out); return 0; }
   return 1;
 }
 /* See call_plan.h. */
@@ -5393,6 +5706,8 @@ PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const c
     out->undef = cplan_undef_at(c, id, cls, name) != 0;   /* (where the record cannot tell, the table's) */
   if (pr_in_untyped_block(c, id)) return PR_TABLE;
   call_target(c, id, cls, name, side | CT_REACH, &ml);
+  /* (an instance's entry the call takes there: its cells tell, cplan_presence_cells) */
+  if (ml.kind == ML_ENTRY && !(side & (CT_CMETHOD | CT_TOP)) && !respond_to_missing_defined(c)) return PR_CELLS;
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
   if (ml.kind == ML_NONE && ml.why == MLW_RECORD) return PR_ABSENT;   /* (the record's none) */
   return out->table ? PR_PRESENT : PR_ABSENT;
@@ -12969,6 +13284,10 @@ static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char 
   return !*hooks;
 }
 static void list_ver_need(Compiler *c, int id, const char *name, int cls, void *arg) { ver_need(c, id, name, cls, CT_CMETHOD, arg); }
+static void pres_target(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
+  (void)arg;
+  call_target(c, id, k, nm, flags | CT_REACH, NULL);
+}
 static void list_ver_target(Compiler *c, int id, const char *name, int cls, void *arg) {
   (void)arg;
   call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL);
@@ -13196,6 +13515,7 @@ void ver_entries_build(Compiler *c) {
       }
     }
   }
+  presence_readers(c, 0, ver_need, &o);   /* (an instance's presence reader, of the classes it may ask of) */
   /* the supers whose next method is a layer of a mixin's versions: the
      entry over them for each's arguments (super_layer_entry) */
   for (int k = 0; k < 2; k++)
@@ -13400,15 +13720,29 @@ static void ver_cell_keep(Compiler *c, const char *name) {
    cplan_cmethod_presence, or a class-side list's, cplan_list_cells; own versions or the chain's as the list
    asks, cplan_list_class) */
 static void ver_presence_keep(Compiler *c, int id, const char *name, int cls, void *arg) {
-  (void)arg;
-  int own = 0;
   CplanCells cs;
+  int own = 0;
+  (void)arg;
   if (cplan_list_class(c, id, &own) < 0) own = 0;
-  if (!cplan_cmethod_presence(c, id, cls, name, 1, own, &cs)) return;
-  for (int i = 0; i < cs.n; i++) ver_cell_keep(c, cs.cell[i]);
-  /* (and a respond_to?'s visibility cells, which it reads where a version's visibility is the run's) */
-  if (!cplan_cmethod_presence(c, id, cls, name, 0, own, &cs)) return;
-  for (int i = 0; i < cs.n; i++) if (cs.vis[i][0]) ver_cell_keep(c, cs.vis[i]);
+  for (int all = 1; all >= 0; all--) {
+    if (!cplan_cmethod_presence(c, id, cls, name, all, own, &cs)) return;
+    /* (and a respond_to?'s visibility cells, which it reads where a version's visibility is the run's) */
+    for (int i = 0; i < cs.n; i++) if (all || cs.vis[i][0]) ver_cell_keep(c, all ? cs.cell[i] : cs.vis[i]);
+  }
+}
+/* (...and an instance's presence reader's, presence_asks: the cells it reads, in the form it asks them
+   (presence_reader_side), where they do not fix its answer) */
+static void ver_obj_presence_keep(Compiler *c, int id, const char *name, int cls, unsigned flags, void *arg) {
+  CplanCells cs;
+  int all, list;
+  unsigned side = presence_reader_side(c->nt, id, &all, &list);
+  (void)flags; (void)arg;
+  if (!(list ? cplan_list_cells(c, id, cls, side, name, &cs) : cplan_presence_cells(c, id, cls, side, name, all, &cs)) ||
+      cplan_cells_fixed(&cs)) return;
+  for (int i = 0; i < cs.n; i++) {
+    ver_cell_keep(c, cs.cell[i]);
+    if (cs.vis[i][0]) ver_cell_keep(c, cs.vis[i]);
+  }
 }
 /* See call_plan.h. A cell is kept where the C reads it: a read in a
    scope the C writes (an entry's arms, a prepend guard's, a conditional
@@ -13472,6 +13806,7 @@ void ver_cells_settle(Compiler *c) {
   }
   for (int id = any ? an_calls_named_first(c, SINGLETON_METHODS_NAME) : -1; id >= 0; id = an_calls_named_next(id))
     if (ver_scope_written(comp_scope_of(c, id))) list_asks(c, id, ver_presence_keep, NULL);
+  if (any) presence_readers(c, 1, ver_obj_presence_keep, NULL);
 }
 /* See call_plan.h. */
 int cplan_cell_dropped(const Compiler *c, const LocalVar *g) {
@@ -13562,17 +13897,29 @@ static void ver_vis_after_add(Compiler *c, int node, int cell, int v) {
   }
   c->ver_vis_after[c->nver_vis_after++] = (struct VerVisAfter){ node, cell, v };
 }
-/* (mark the entry each written respond_to? of a class method reads the cells of, cplan_cmethod_presence: its
-   versions' visibility cells are written, as a face that closes would have them, so the test of a version whose
-   visibility only the run knows reads one. The entries all exist: asked here as the emission asks) */
+/* (a String history's entry keeps its own mark, VER_VIS_STRING_HISTORY: its visibility cells are written already) */
+static void ver_entry_vis_mark(Compiler *c, int e) {
+  for (int i = 0; e >= 0 && i < c->nver_entries; i++)
+    if (c->ver_entries[i].scope == e && c->ver_entries[i].vis != VER_VIS_STRING_HISTORY) c->ver_entries[i].vis = VER_VIS_PRESENT;
+}
+/* (an instance's presence reader's, presence_asks: the entry a call there takes) */
+static void ver_obj_presence_mark(Compiler *c, int id, const char *name, int cls, unsigned flags, void *arg) {
+  MethodLookup ml = { .def_class = -1 };
+  (void)flags; (void)arg;
+  int e = call_target(c, id, cls, name, CT_REACH, &ml);
+  if (ml.kind == ML_ENTRY) ver_entry_vis_mark(c, e);
+}
+/* (mark the entry each written respond_to? of a class method reads the cells of, cplan_cmethod_presence, and of
+   an instance's method (ver_obj_presence_mark): its versions' visibility cells are written, as a face that closes
+   would have them, so the test of a version whose visibility only the run knows reads one. The entries all
+   exist: asked here as the emission asks) */
 static void ver_presence_mark(Compiler *c) {
   for (int id = an_calls_named_first(c, RESPOND_TO_NAME); id >= 0; id = an_calls_named_next(id)) {
     int pc = cplan_presence_class(c, id);
     const char *qm = pc >= 0 && ver_scope_written(comp_scope_of(c, id)) ? method_sym_arg(c, id) : NULL;
-    int e = qm && cplan_presence_asks(c, id, pc, qm) ? call_target(c, id, pc, qm, CT_CMETHOD | CT_CAPTURE, NULL) : -1;
-    for (int i = 0; e >= 0 && i < c->nver_entries; i++)
-      if (c->ver_entries[i].scope == e) c->ver_entries[i].vis = VER_VIS_PRESENT;
+    ver_entry_vis_mark(c, qm && cplan_presence_asks(c, id, pc, qm) ? call_target(c, id, pc, qm, CT_CMETHOD | CT_CAPTURE, NULL) : -1);
   }
+  presence_readers(c, 1, ver_obj_presence_mark, NULL);
 }
 /* A guard's cell: the visibility cell of history cell `cell` (of the top-level def
    `name`), where a call reads it for its guard (CallPlan.vis_cell: call >= 0, which
@@ -13924,6 +14271,7 @@ int ver_entries_demand(Compiler *c) {
       for (int i = 0; i < n; i++)
         if (callbacks[i].roles & BCR_ARG) call_target(c, id, symbol, callbacks[i].name, CT_IMPLIED, NULL);
     }
+  presence_readers(c, 0, pres_target, NULL);   /* (an instance's presence reader, of the classes it may ask of) */
   late = c->nver_late;
   int new_guard = c->nver_guards && !c->ver_guards[c->nver_guards - 1].cells;
   if (!any && !late && !c->ver_vis_read_new && !new_guard) return 0;

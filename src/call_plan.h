@@ -1615,15 +1615,54 @@ int cplan_implied_entry_cells(Compiler *c, int mi, int undefined, CplanCells *ou
    number once any of its definitions has run. NULL for other scopes. */
 const char *cplan_conditional_entry_selector(Compiler *c, int mi);
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out);
+/* The same cells for an instance of cls where presence site id runs, which
+   a call of the name there finds through the entry (PR_CELLS; side as
+   cplan_presence's, CT_OWN for cls's own versions): 0 for any other answer,
+   and in a program that defines respond_to_missing? */
+int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int include_all, CplanCells *out);
+/* Does every version of cs answer as none live does (els), each known now: the answer reads no cell */
+int cplan_cells_fixed(const CplanCells *cs);
+/* Do the cells hold Integer slots the run-time test reads (repr_slot_kind), each visibility cell kept? */
+int cplan_cells_testable(Compiler *c, const CplanCells *cs);
+/* The answers of presence reader id by the classes its receiver may be,
+   where the version cells answer for one of them: a respond_to? of a
+   literal Symbol with a literal include_all on an instance (receiver
+   type rt, a program class's object; self in an instance method, which a
+   `defined?(m)` of a receiverless call asks too, include_all), or a
+   method_defined? (public_method_defined?) of one on a class value. Each
+   arm is a class with its answer: PRA_YES, PRA_NO, or PRA_CELLS (cells,
+   which a call of the name there finds through the entry,
+   cplan_presence_cells and cplan_list_cells). form PRL_OBJECT: the
+   receiver is an object of one of the arms' classes (those the slot may
+   hold, cplan_slot_may_hold; any other answers 0), or nil, which answers
+   nil (nil -1: self, never nil); PRL_BOXED: a boxed receiver's classes
+   whose cells answer, the others' answer the reader's own; PRL_CLASS: a
+   class value's classes whose cells answer, any other class the
+   reflection table's. 0, with no arms, where no cell answers, and where a
+   class the receiver may be answers by its own respond_to?. Freed with
+   cplan_presence_list_free. */
+enum { PRA_NO, PRA_YES, PRA_CELLS };
+enum { PRL_OBJECT, PRL_BOXED, PRL_CLASS };
+typedef struct { int cls, ans; CplanCells cells; } CplanPresArm;
+typedef struct { int form, nil, n; CplanPresArm *arm; } CplanPresList;
+int cplan_presence_list(Compiler *c, int id, TyKind rt, CplanPresList *out);
+void cplan_presence_list_free(CplanPresList *l);
+/* What an instance of program class cid answers to Object#respond_to?(qm) where call id runs (-1: no call): 2
+   true, 1 only to include_all (a private or protected match), 0 false; the method-table reading, without the
+   class's own respond_to? */
+int cplan_obj_responds(Compiler *c, int cid, const char *qm, int id);
+/* Whether a slot typed as class cid may hold an instance of class k */
+int cplan_slot_may_hold(Compiler *c, int k, int cid);
 /* The class whose own or inherited class methods class-side list call id lists, when the cells may answer it
    (a `C.singleton_methods` on a constant, list_cells_shape; *own for the `(false)` form); -1 for any other. The
    survey asks each name it may list the entry a call there would take (cplan_presence_asks), so that
    cplan_list_cells gives its cells. */
 int cplan_list_class(Compiler *c, int id, int *own);
-/* The cells that answer whether class-side list id lists class method `name` of cls (own: its own versions): the
-   public versions' cells, where cplan_cmethod_presence gives some and every version is public (a list shows
-   public and protected methods); 0 where the table answers it. */
-int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, CplanCells *out);
+/* The cells that answer whether list id lists method `name` of cls on side (CT_CMETHOD for a class-side list,
+   CT_OWN for its own versions), or a method_defined? there finds it: the public versions' cells, where
+   cplan_cmethod_presence (cplan_presence_cells) gives some and every version is public (a list shows public and
+   protected methods); 0 where the table answers it. */
+int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, CplanCells *out);
 /* Whether name answers on cls's chain where presence site id runs, as a
    call of the name there finds it, from call_target with CT_REACH (side: 0
    for an instance's chain, CT_CMETHOD for the class side, with CT_OWN for
@@ -1632,7 +1671,9 @@ int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, Cp
    record proves none is live where id runs (call_target's MLW_RECORD);
    PR_TABLE: the record gives no proof and the reader keeps the final
    tables' answer, as in a block a call on a receiver of no one type may
-   run later. out->table is that answer for every kind (a hidden method, a
+   run later; PR_CELLS: on the instance side, the call there takes the
+   entry of the name's versions, whose cells tell (cplan_presence_cells),
+   the table's answer where a reader cannot read them. out->table is that answer for every kind (a hidden method, a
    Struct's or Data class's generated iterator and, under CT_OWN, a
    module's copy are no method of the class's; an alias, a prepend's
    renamed body and a class-side accessor are, as the class's own entries);
@@ -1648,9 +1689,15 @@ int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, Cp
    out->sg_only is 1 where the name is in the instance's chain only as the alias
    a `class << self; alias a b` made: a class method's, no method of the
    instance's. */
-typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
+typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE, PR_CELLS } PresenceKind;
 typedef struct { int table, vis, undef, implied, sg_only; } CplanPresence;
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);
+int root_reopen_defines(Compiler *c, int id, const char *qm);
+/* ...and the ask with no site: do the tables of an Object, Kernel or BasicObject reopening hold or undefine qm at all
+   (root_reopen_defines is 0 for every call where they do not) */
+int root_reopen_holds(Compiler *c, const char *qm);
+PresenceKind presence_at(Compiler *c, int id, int cls, unsigned side, const char *qm, CplanPresence *pr);   /* what class cls holds of qm where call id runs (the call plan: cplan_presence; the final tables alone for a super or no id) */
+int root_reopen_method_vis(Compiler *c, int id, int cid, const char *qm);   /* an Object, Kernel or BasicObject reopening's method qm: its visibility, or -1 */
 /* The table part of that answer alone, with no site (table, vis and undef;
    the record is not asked): what a list holds before any point is asked. */
 void cplan_table_presence(Compiler *c, int cls, unsigned side, const char *name, CplanPresence *out);

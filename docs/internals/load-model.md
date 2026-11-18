@@ -272,6 +272,33 @@ unless its body is one the walk does not place. A mixin takes the test
 as the record is made (`LrMixin.applied`). A mixin in a branch the scope
 walk proves unreachable leaves the existing method history in place.
 
+### Readers of a body's versions
+
+A call of a method that a method body defines takes the entry of the
+method's versions before the body has run (its version is late,
+`lr_late_make`). A `respond_to?`, `defined?` or `method_defined?` (and
+`public_method_defined?`) of that name answers as the call there would
+find it: where a call of the name at the reader takes the entry
+(`cplan_presence`'s `PR_CELLS`), the call plan gives the reader's answer
+for each class its receiver may be (`cplan_presence_list`): yes, no, or
+the version cells. That covers an instance (a typed receiver, nil, and
+self in an instance method, which a receiverless `respond_to?(:m)` or
+`defined?(m)` asks), a boxed receiver, and a class value's
+`method_defined?`; codegen renders the list as one test of the
+receiver's class. Each reader asks the entries a call at its point asks
+(`presence_asks`) and keeps the cells it reads, in the form it asks them
+(`presence_reader_side`: a `respond_to?`'s public versions, or every
+visibility with `true`; a `method_defined?`'s as a list asks): a test
+that reads a cell no reader kept is an internal error.
+
+A reader that answers from the final tables instead (a list of methods
+such as `instance_methods.include?`) keeps the table's answer
+for the calls of the names it may read: such a version is not late
+(`elab_body_reflected`), so a guard and the call it guards answer alike.
+Only list readers of the same side count: a class-side list
+(`K.singleton_methods`) leaves an instance method's versions to the
+cells.
+
 ## Freshness and cost
 
 The map of points is a function of the tree as it stands. `elab_fresh`

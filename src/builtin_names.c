@@ -2853,6 +2853,10 @@ int method_defined_vis_mask(const char *n) {
   if (sp_streq(n, "protected_method_defined?")) return 2;
   return sp_streq(n, "private_method_defined?") ? 4 : 0;
 }
+/* respond_to? or a *method_defined? query: whether one method by name is there */
+int is_method_presence_name_query(const char *n) {
+  return is_respond_to_name(n) || is_method_defined_query(n);
+}
 int is_undef_method_name(const char *n) { return n && sp_streq(n, "undef_method"); }
 int is_remove_method_name(const char *n) { return n && sp_streq(n, "remove_method"); }
 

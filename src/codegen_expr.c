@@ -4497,6 +4497,15 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
     else if (vk == NK_CallNode && nt_ref(nt, v, "receiver") < 0) {
       const char *cn = nt_str(nt, v, "name");
+      /* (self's class picks the answer, where the version cells give one: the plan's list) */
+      CplanPresList pl;
+      if (cplan_presence_list(c, id, TY_UNKNOWN, &pl)) {
+        buf_puts(b, "(");
+        emit_presence_object(c, &pl, -1, b);
+        buf_puts(b, " ? SPL(\"method\") : NULL)");
+        cplan_presence_list_free(&pl);
+        return 1;
+      }
       if (cn && call_target(c, v, -1, cn, CT_TOP, NULL) >= 0) res = "method";
       /* an implicit-self call inside a class resolves through the
          enclosing class's method chain (readers included) */

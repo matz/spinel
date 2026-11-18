@@ -625,6 +625,7 @@ int is_native_decl_name(const char *n);     /* native_lib native_struct native_m
 int is_ffi_decl_name(const char *n);        /* ffi_lib attach_function attach_variable callback native_func ...: declarations made methods before the walk */
 int is_method_defined_query(const char *n); /* method_defined? public_/private_/protected_method_defined? */
 int method_defined_vis_mask(const char *n); /* the visibilities that query counts: 1 public, 2 protected, 4 private; 0 for any other name */
+int is_method_presence_name_query(const char *n);   /* respond_to? or a method_defined? query above */
 int is_undef_method_name(const char *n);  /* undef_method */
 int is_remove_method_name(const char *n); /* remove_method */
 int is_check_funcall_name(const char *n);   /* respond_to? respond_to_missing? method_missing: what rb_check_funcall asks */

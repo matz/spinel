@@ -157,11 +157,25 @@ int is_enum_cursor_name(const char *n);
 /* nil's static answer to respond_to?(qm, ...); *prog: by a method of the program's */
 int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int *argv, int *prog);
 /* respond_to? call id (its argc arguments argv, asking qm) of a class's own
-   class method whose answer the version cells hold (cplan_cmethod_presence):
+   class method whose answer the version cells hold (cplan_cmethod_presence),
+   or of an instance (recv, of type rt) whose class's are (cplan_presence_cells):
    one of the versions' cells, or what the class answers with none of them,
    written to b. 0, writing nothing, for a call the plan does not answer
    so; with b NULL, only asked. */
-int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b);
+int emit_respond_to_cells(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv, Buf *b);
+/* The answer version cells cs give (cplan_presence_cells), the else arm's
+   with none live, as one parenthesized C expression to b: 0, writing
+   nothing, where a cell is no Integer slot the test can read; b NULL: only
+   asked. */
+int emit_cells_answer(Compiler *c, const CplanCells *cs, Buf *b);
+/* The answer arm a of a presence list (cplan_presence_list) gives: its cells' (emit_cells_answer), or 1 or 0 */
+void emit_presence_answer(Compiler *c, const CplanPresArm *a, Buf *b);
+/* Each arm of presence list l as `<key><class> ? <answer> : `, to b: key is the test's text ahead of the class id
+   (`_k3 == `), and the caller writes the answer for any other value after the last */
+void emit_presence_arms(Compiler *c, const CplanPresList *l, const char *key, Buf *b);
+/* The answer of PRL_OBJECT presence list l, to b: recv's value (-1: self) picks its class's arm, nil the list's own
+   answer, any other class 0 */
+void emit_presence_object(Compiler *c, const CplanPresList *l, int recv, Buf *b);
 /* The writes visibility word or include call `id` makes to its cells as its
    own call runs (cplan_vis_cell_after: the visibility cells, and the Kernel
    cells of the classes an include brings Kernel into), as an expression with
@@ -175,16 +189,10 @@ extern const char *const respond_universal_all[]; /* public and private */
 int object_private_method_name(const char *qm);
 const char *const *object_private_method_names(void); /* NULL-terminated */
 int respond_to_runtime_reaches(Compiler *c, TyKind rt);
-int root_reopen_defines(Compiler *c, int id, const char *qm);
-/* ...and the ask with no site: do the tables of an Object, Kernel or BasicObject reopening hold or undefine qm at all
-   (root_reopen_defines is 0 for every call where they do not) */
-int root_reopen_holds(Compiler *c, const char *qm);
 /* 1 when the program's reopen of the builtin class or module `cls` (its
    chain) defines `name`, as call_target answers call id (-1: no call asks) */
 int reopened_owns(Compiler *c, int id, const char *cls, const char *name);
-PresenceKind presence_at(Compiler *c, int id, int cls, unsigned side, const char *qm, CplanPresence *pr);   /* what class cls holds of qm where call id runs (the call plan: cplan_presence; the final tables alone for a super or no id) */
 int bool_side_responds(Compiler *c, int id, const char *qm, int include_all, int foldable, int *ta, int *fa);
-int root_reopen_method_vis(Compiler *c, int id, int cid, const char *qm);   /* an Object, Kernel or BasicObject reopening's method qm: its visibility, or -1 */
 int private_answer_overridden(Compiler *c, const char *qm, TyKind rt);
 int refl_md_dynamic_used(Compiler *c);
 void emit_scope_parameters_pushes(Compiler *c, int mi, int tr4, Buf *b);

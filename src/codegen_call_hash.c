@@ -120,6 +120,7 @@ int emit_op_hash_default_proc(Compiler *c, const BopCtx *x, Buf *b) {
       "  return 0;\n}\n"
       "static sp_Proc *_hdp_%s(sp_%sHash *h) {\n"
       "  if (!h || !h->dproc) return NULL;\n"
+      "  SP_GC_ROOT(h);\n"
       "  return sp_proc_new_meta((void *)_hdp_tramp_%s, h, sp_bm_cap_scan, 2, FALSE, 0, NULL, NULL);\n}\n",
       hnn, hnn, hnn, hnn, hnn, kexpr, hnn, hnn, hnn);
   }

@@ -28,3 +28,14 @@ p choose(reader, text, true, replacement)
 p choose(reader, text, false, replacement).equal?(replacement)
 p reader.method(:choose).call(text, true, replacement: text)
 p $cleanups
+
+def pending_text(missing)
+  return missing ? nil : +"pending"
+ensure
+  GC.start
+  scratch = +"ensure"
+  scratch << "!"
+end
+
+p pending_text(false)
+p pending_text(true)

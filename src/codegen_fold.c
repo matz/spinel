@@ -11173,7 +11173,7 @@ static int rest_required_for(Compiler *c, Scope *m) {
    no method. Their existing selector decides whether a count error belongs
    to a live method; otherwise their missing-method arm must run instead. */
 static int arity_conditional_dispatch(Compiler *c, const Scope *m) {
-  return m->def_node >= 0 && nt_int(c->nt, m->def_node, "cond_lone_disp", 0);
+  return m && m->def_node >= 0 && nt_int(c->nt, m->def_node, "cond_lone_disp", 0);
 }
 
 /* Prefix only the check, after argument evaluation: putting the binding

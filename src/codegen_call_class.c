@@ -849,7 +849,7 @@ static int flag_split_root_only(Compiler *c, const char *qm) {
   for (int k = 0; k < c->nclasses; k++) {
     if (name_list_has(c->classes[k].undefs, c->classes[k].nundefs, qm)) return 0;
     if (c->classes[k].name && is_object_root(c->classes[k].name)) continue;
-    if (comp_method_in_class(c, k, qm) >= 0 || comp_is_reader(&c->classes[k], qm)) return 0;
+    if (call_target(c, -1, k, qm, CT_OWN, NULL) >= 0 || comp_is_reader(&c->classes[k], qm)) return 0;
   }
   return 1;
 }

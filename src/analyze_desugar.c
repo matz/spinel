@@ -9509,16 +9509,15 @@ static int rtm_bool_of(NodeTable *nt, int pred) {
 }
 /* May a call whose receiver is an instance of class cid (-1: any value)
    reach a respond_to_missing? of class or module k: is k on the chain of
-   cid or of a class under it, as the class table records it
-   (comp_method_in_chain names the owner)? */
+   cid or of a class under it, as the call plan's by-name lookup records it? */
 static int rtm_may_reach(Compiler *c, int cid, int k) {
   if (cid < 0) return 1;
   int hit = 0;
   mtab_enter(c);   /* (the candidate owner of respond_to_missing? over cid and the classes under it: it asks every class by design, no call's question) */
   for (int j = 0; j < c->nclasses && !hit; j++) {
     if (j != cid && !is_descendant(c, j, cid)) continue;
-    int dc = -1;
-    hit = comp_method_in_chain(c, j, RESPOND_TO_MISSING_NAME, &dc) >= 0 && dc == k;
+    MethodLookup lookup = { .def_class = -1 };
+    hit = call_target(c, -1, j, RESPOND_TO_MISSING_NAME, CT_METHODS, &lookup) >= 0 && lookup.def_class == k;
   }
   mtab_leave(c);
   return hit;
@@ -20948,7 +20947,7 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   for (int i = 0; bx_cmp_recv_cls[i]; i++) {
     int k = comp_builtin_class_named(c, bx_cmp_recv_cls[i]);
     mtab_enter(c);   /* (a survey of the program's own def of nm on each builtin class and top-level include: no call's question) */
-    int mi = k >= 0 ? comp_method_in_chain(c, k, nm, NULL) : -1;
+    int mi = k >= 0 ? call_target(c, -1, k, nm, CT_METHODS, NULL) : -1;
     mtab_leave(c);
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
         !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return 1;
@@ -20956,7 +20955,7 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   int inc = 0;
   mtab_enter(c);
   for (int i = 0; i < c->ntoplevel_includes && !inc; i++)
-    inc = comp_method_in_chain(c, c->toplevel_includes[i], nm, NULL) >= 0;
+    inc = call_target(c, -1, c->toplevel_includes[i], nm, CT_METHODS, NULL) >= 0;
   mtab_leave(c);
   if (inc) return 1;
   /* a def in a module the chains above do not walk: one a mixed-in module

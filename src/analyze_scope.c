@@ -4812,7 +4812,7 @@ static const char *alias_embedding_parent(Compiler *c, ClassInfo *cls, const cha
     ClassInfo *k = &c->classes[i];
     if (!class_def_is_class(c->nt, k->def_node)) return NULL;
     if (hop > 0) {
-      if (comp_method_in_class(c, i, od) >= 0 || comp_is_reader(k, od)) return NULL;
+      if (call_target(c, -1, i, od, CT_OWN, NULL) >= 0 || comp_is_reader(k, od)) return NULL;
       for (int a = 0; a < k->naliases; a++) if (sp_streq(k->alias_new[a], od)) return NULL;
     }
     const char *par = builtin_value_superclass(c, class_def_super(c->nt, k->def_node));
@@ -11173,7 +11173,7 @@ void register_prepends(Compiler *c) {
 /* Does class ci define instance method `name` of its own: a def, or an
    alias the record gives the class (elab_class_surface)? */
 static int class_defines_member(Compiler *c, int ci, const char *name) {
-  if (comp_method_in_class(c, ci, name) >= 0) return 1;
+  if (call_target(c, -1, ci, name, CT_OWN, NULL) >= 0) return 1;
   int n = 0;
   const ElabSurface *v = elab_class_surface(c, ci, 0, &n);
   for (int i = 0; i < n; i++)
@@ -11185,7 +11185,7 @@ static int class_defines_member(Compiler *c, int ci, const char *name) {
    `x=` as attr_writer / attr_accessor :x)? */
 static int module_defines_member(Compiler *c, int mod, const char *name) {
   if (mod < 0 || mod >= c->nclasses) return 0;
-  if (comp_method_in_chain(c, mod, name, NULL) >= 0 || comp_reader_in_chain(c, mod, name, NULL)) return 1;
+  if (call_target(c, -1, mod, name, CT_METHODS, NULL) >= 0 || comp_reader_in_chain(c, mod, name, NULL)) return 1;
   size_t ln = strlen(name);
   char base[300];
   if (ln < 2 || name[ln - 1] != '=' || ln - 1 >= sizeof base) return 0;

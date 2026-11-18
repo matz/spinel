@@ -1,0 +1,12 @@
+["Inner", false, false]
+["Inner", false, false]
+["Inner", true, true]
+["String", false, true]
+["String", false, true]
+["String", false, true]
+["Nope", false, false]
+["Nope", false, false]
+["Nope", false, false]
+true
+false
+false

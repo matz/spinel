@@ -1914,6 +1914,13 @@ write on the particular receiver; see the memoization examples above. A class
 variable instead reports `nil` before assignment and `"class variable"` after
 assignment, including when the assigned value is nil.
 
+#### String line separators
+
+The block forms of `String#lines` and `String#each_line` yield one line at
+a time. A non-nil walk snapshots mutable receiver and separator bytes.
+Mutating the explicit separator inside the block can alter later yields
+on CRuby. The implicit separator in Spinel is newline.
+
 #### `String#grapheme_clusters`
 
 Correct Unicode extended-grapheme segmentation (`"á".grapheme_clusters # => ["á"]`)

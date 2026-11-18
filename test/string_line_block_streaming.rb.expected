@@ -1,0 +1,5 @@
+[true, ["a", "b", "c:d"], "new subject"]
+"head\x00|"
+""
+"last"
+"last\r\n"

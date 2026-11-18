@@ -4229,16 +4229,17 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       /* Root the boxed operand before calling sp_poly_to_s: the
          conversion can allocate and trigger GC, which would lose the
          operand if it were only reachable through a local. */
-      buf_printf(b, "_t%d = sp_poly_strbuf_deref(_t%d); SP_GC_ROOT_RBVAL(_t%d); ", wrr, wrr, wrr);   /* (a shared String's box: its bytes, #9602) */
+      buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", wrr);
       /* Resolve the operand to a (pointer, length) pair once. A marked
          String keeps its header length (binary-safe, embedded NULs
          survive); anything else is a NUL-terminated C string from
          sp_poly_to_s, whose length is the C-string length. */
-      buf_printf(b, "const char *_t%d = (_t%d.tag == SP_TAG_STR) ? _t%d.v.s : sp_poly_to_s(_t%d); "
-                 "sp_int _t%d = (_t%d.tag == SP_TAG_STR) ? "
-                 "sp_str_byte_len(_t%d) : strlen(_t%d); "
+      int is_string = ++g_tmp;
+      buf_printf(b, "sp_bool _t%d = sp_rbval_is_string(_t%d); "
+                 "const char *_t%d = _t%d ? sp_rbval_string_bytes(_t%d) : sp_poly_to_s(_t%d); "
+                 "sp_int _t%d = _t%d ? sp_str_byte_len(_t%d) : strlen(_t%d); "
                  "sp_int _t%d = sp_File_syswrite((sp_File *)_t%d.v.p, _t%d, _t%d); ",
-                 slen, wrr, wrr, wrr, wlen, wrr, slen, slen,
+                 is_string, wrr, slen, is_string, wrr, wrr, wlen, is_string, slen, slen,
                  wres, tv, slen, wlen);
       if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_int(_t%d); ", tr, wres);
       else                buf_printf(b, "_t%d = _t%d; ", tr, wres);
@@ -4265,9 +4266,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       else emit_boxed_text(c, atmp_ty[a], an, b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", pv);
       if (is_puts) buf_printf(b, "sp_File_puts_val((sp_File *)_t%d.v.p, _t%d); ", tv, pv);
-      else buf_printf(b, "if (_t%d.tag == SP_TAG_STR) sp_File_write_bin((sp_File *)_t%d.v.p, _t%d.v.s); "
-                         "else sp_File_write((sp_File *)_t%d.v.p, sp_poly_to_s(_t%d)); ",
-                      pv, tv, pv, tv, pv);
+      else buf_printf(b, "sp_File_write_poly((sp_File *)_t%d.v.p, _t%d); ", tv, pv);
     }
     if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_nil(); ", tr);
     buf_puts(b, "break; }");

@@ -2516,9 +2516,10 @@ static int guard_history_arms(Compiler *c, const struct VerEntry *e, ElabVersion
   for (int i = 0; i < nt - 1; i++) {
     int argc = 0, cell = (int)nt_int(c->nt, tests[i], "ver_hist", 0);
     const int *args = call_args(c->nt, tests[i], &argc);
-    if (!cell || argc != 1 || to[i] < 0) continue;
+    if (!cell || argc != 1) continue;
     int value = (int)nt_int(c->nt, args[0], "value", 0);
     for (int j = 0; j < nv; j++) if (versions[j].cell + 1 == cell && versions[j].n == value) {
+      if (to[i] < 0 && versions[j].v->kind != LR_UNDEF) break;
       out[n] = versions[j];
       if (targets) targets[n] = to[i];
       n++;
@@ -2534,7 +2535,8 @@ static int guard_needs_face(Compiler *c, const int *to, int n) {
   if (history) {
     ElabVersion vs[VER_MAX_ARMS];
     int nv = guard_history_arms(c, history, vs, NULL);
-    for (int k = 0; k < nv; k++) if (elab_physical_version_vis(c, &vs[k]) != SP_VIS_PUBLIC) return 1;
+    for (int k = 0; k < nv; k++)
+      if (vs[k].v->kind != LR_UNDEF && elab_physical_version_vis(c, &vs[k]) != SP_VIS_PUBLIC) return 1;
   }
   return 0;
 }
@@ -6908,7 +6910,12 @@ static int ct_capture_hooked(Compiler *c, int k, const char *sym, const char *co
 /* See call_plan.h. */
 int cplan_capture_misses(Compiler *c, int id, int k, const char *sym) {
   static const char *const hooks[] = { METHOD_MISSING_NAME, RESPOND_TO_MISSING_NAME };
-  if (!ct_capture_hooked(c, k, sym, hooks)) return 0;
+  if (ct_versioned_string_reader(c, k, 0, sym) && conditional_guard_method(c, k, sym) >= 0) {
+    ElabVersion versions[VER_MAX_ARMS];
+    int n = elab_history_versions(c, k, 0, sym, versions, VER_MAX_ARMS), undef = 0;
+    for (int i = 0; i < n; i++) undef |= versions[i].v->kind == LR_UNDEF;
+    if (!undef) return 0;
+  } else if (!ct_capture_hooked(c, k, sym, hooks)) return 0;
   /* both hooks a def surely live where the capture runs */
   int framed = elab_plan_enter(c, id), live = 1, none;
   for (int i = 0; i < 2 && live; i++) live = ct_def_sure(c, ct_met_version(c, id, k, hooks[i], 0, &none));
@@ -11722,9 +11729,11 @@ int cplan_guarded_presence(Compiler *c, int cls, const char *name, int own, Cpla
     ElabVersion vs[VER_MAX_ARMS];
     int nv = guard_history_arms(c, history, vs, NULL);
     for (int i = 0; i < nv && out->n < VER_MAX_ARMS; i++) {
-      int k = out->n++, v = elab_physical_version_vis(c, &vs[i]);
+      int k = out->n++;
       ver_cell_name(vs[i].cell, out->cell[k]);
       out->val[k] = vs[i].n;
+      if (vs[i].v->kind == LR_UNDEF) continue;  /* the selector's answer is absent */
+      int v = elab_physical_version_vis(c, &vs[i]);
       if (v < 0) ver_vis_cell_name(vs[i].cell, out->vis[k]);
       else out->ans[k] = (unsigned char)core_bit_of_vis(v);
     }
@@ -11829,7 +11838,7 @@ static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e) {
    made after the last ask (VerNamed), so that a made entry's nodes
    rebuild no ask's parent map. */
 typedef struct {
-  int cls, sg, hcls, nv, ar, blk, els, espl, refl, atdef, bycount;   /* (espl: the else arm lets a spliced block through, ver_else_block; refl: ver_refl_named; atdef: ver_named_refuse_defs; bycount: ver_named_add) */
+  int cls, sg, hcls, nv, ar, blk, els, espl, refl, atdef, bycount, last;   /* (espl: the else arm lets a spliced block through, ver_else_block; refl: ver_refl_named; atdef: ver_named_refuse_defs; bycount: ver_named_add) */
   const char *name, *refuse;
   ElabVersion vs[VER_MAX_ARMS];
   int to[VER_MAX_ARMS];
@@ -11864,15 +11873,24 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   DispArm arm[VER_MAX_ARMS];
   char sel[VER_MAX_ARMS][32];
   const int *to = w->to;
-  int spliced = w->espl, nv = w->nv;
+  int spliced = w->espl, nv = w->nv, last = w->last;
   char *spell = NULL;
   for (int i = 0; i < nv; i++) {
-    spliced &= c->scopes[to[i]].yields || !c->scopes[to[i]].blk_param;   /* (one with no &b lets it go no further) */
     ver_cell_name(w->vs[i].cell, sel[i]);
     arm[i] = (DispArm){ sel[i], w->vs[i].n, w->name, w->vs[i].cell + 1 };
+    if (to[i] < 0) {
+      VerNamed missing = *w;
+      missing.els = cplan_mm_method(c, -1, w->cls, w->sg) >= 0 ? VK_MM : VK_NOMETHOD;
+      int undef = ver_named_else(c, &missing);
+      nt_node_set_int(nt, undef, "undef_arm", 1);
+      arm[i].stmt = 1 + undef;
+      continue;
+    }
+    spliced &= c->scopes[to[i]].yields || !c->scopes[to[i]].blk_param;   /* (one with no &b lets it go no further) */
     if (c->scopes[to[i]].shadow == SHADOW_PREP && !spell) spell = strdup(c->scopes[to[i]].name);
   }
-  int els, like = c->scopes[to[nv - 1]].def_node;
+  if (!spell && c->scopes[last].shadow == SHADOW_PREP) spell = strdup(c->scopes[last].name);
+  int els, like = c->scopes[last].def_node;
   if (w->bycount) {   /* (no entry of its own: its versions answer reflection as an entry's def does, ver_cond_scope, and only the calls bound to them reach them) */
     for (int i = 0; i < nv; i++) {
       nt_node_set_int(nt, c->scopes[to[i]].def_node, "cond_def_refl", 1);
@@ -11889,7 +11907,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   /* (at the last version, where a refusal names it) */
   static const char *const at[] = { "node_line", "node_file", "node_col" };
   for (int i = 0; i < 3; i++) nt_node_set_int(nt, els, at[i], nt_int(nt, like, at[i], 0));
-  int e = ver_entry_emit(c, w->cls, w->sg, w->name, w->ar, w->blk, spliced, arm, to, NULL, w->refuse ? 0 : nv, to[nv - 1], els, 0);
+  int e = ver_entry_emit(c, w->cls, w->sg, w->name, w->ar, w->blk, spliced, arm, to, NULL, w->refuse ? 0 : nv, last, els, 0);
   c->scopes[e].entry = ENTRY_NAMED;
   if (w->refl) { nt_node_set_int(nt, c->scopes[e].def_node, "cond_def_refl", 1); ver_refl_count(c, w->vs[0].v->vis); }
   if (spell) {
@@ -11898,15 +11916,20 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
     comp_scope_set_shadow(c, e, SHADOW_PREP, u);
     free(u);
   }
-  for (int i = 0; i < nv; i++) { c->scopes[to[i]].replaced = 1; comp_touch_scope(c->scopes[to[i]].idx); }
+  for (int i = 0; i < nv; i++) if (to[i] >= 0) { c->scopes[to[i]].replaced = 1; comp_touch_scope(c->scopes[to[i]].idx); }
   int guarded_history = spell && w->els == VK_BUILTIN && ct_versioned_string_reader(c, w->cls, w->sg, w->name);
   if (guarded_history) {
     /* The guarded send and the module's super enter the same own history. */
     for (int s = 0; s < e; s++) {
       Scope *m = &c->scopes[s];
       if (m->class_id != w->cls || !m->mixin_guarded) continue;
+      if (m->guard_behind == last) {
+        m->guard_behind = e;
+        comp_touch_scope(s);
+        continue;
+      }
       for (int i = 0; i < nv; i++)
-        if (m->guard_behind == to[i]) {
+        if (to[i] >= 0 && m->guard_behind == to[i]) {
           m->guard_behind = e;
           comp_touch_scope(s);
           break;
@@ -11918,7 +11941,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   ver_entry_add(c, comp_scope_user_name(&c->scopes[e]), (struct VerEntry){ NULL, VER_ENTRY_HISTORY, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e,
                                       .behind = captured_builtin + 1,
                                       .vis = guarded_history ? VER_VIS_STRING_HISTORY : 0,
-                                      .finds = ver_else_finds(c, w->refuse ? VK_NOMETHOD : w->els, w->cls, w->sg, w->name, w->vs[0].v->vis, to[nv - 1]) });
+                                      .finds = ver_else_finds(c, w->refuse ? VK_NOMETHOD : w->els, w->cls, w->sg, w->name, w->vs[0].v->vis, last) });
 }
 /* ...its else arm, as ver_named_kind decided: NoMethodError's message
    names the receiver's class by its Ruby name, read at run time when cls
@@ -12000,6 +12023,13 @@ static int guard_history_entry(Compiler *c, const struct VerEntry *history, int 
   for (int i = 0; i < n; i++) {
     ver_cell_name(vs[i].cell, sel[i]);
     arm[i] = (DispArm){ sel[i], vs[i].n, name, vs[i].cell + 1 };
+    if (to[i] < 0) {
+      vis[i] = (VerArmVis){ 0, 0 };
+      arm[i].stmt = 1 + (missing >= 0 ? nt_clone_subtree((NodeTable *)c->nt, missing)
+                                   : ver_no_method_raise(c, cls, sg, name, ar, 0));
+      nt_node_set_int((NodeTable *)c->nt, arm[i].stmt - 1, "undef_arm", 1);
+      continue;
+    }
     int v = elab_physical_version_vis(c, &vs[i]), f = guard_arm_face(c, to[i], face);
     vis[i] = (VerArmVis){ v >= 0 && ver_closed_to(v, f) ? v : 0, v < 0 ? f : 0, missing + 1 };
     if (missing >= 0 && vis[i].raise) {
@@ -12277,8 +12307,22 @@ static int ver_in_dropped_rescue(const Compiler *c, const int *par, int n) {
 static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, const ElabVersion *vs, const int *to, int nv,
                           const char *refuse, int hcls, int held) {
   Compiler *c = q->c;
-  int blk = 0, ar = q->far ? q->far - 1 : ver_arity(c, -1, to, nv), els = VK_NOMETHOD, eb;
-  for (int i = 0; i < nv; i++) blk |= c->scopes[to[i]].blk_param || c->scopes[to[i]].yields;
+  int blk = 0, undef = 0, last = -1, els = VK_NOMETHOD, eb;
+  for (int i = 0; i < nv; i++) {
+    if (to[i] < 0) { undef = 1; continue; }
+    last = to[i];
+    blk |= c->scopes[to[i]].blk_param || c->scopes[to[i]].yields;
+  }
+  /* An undef can be the first and only own version. The guarded chain
+     already holds the builtin behind it, which supplies the entry shape. */
+  if (last < 0) {
+    int guard = conditional_guard_method(c, cls, name);
+    if (guard < 0) return;
+    int chain[VER_MAX_ARMS + 1], n = guard_chain(c, guard, chain, NULL, NULL);
+    last = chain[n - 1];
+    if (!nt_int(c->nt, c->scopes[last].def_node, "bam_native", 0)) return;
+  }
+  int ar = q->far ? q->far - 1 : undef ? -1 : ver_arity(c, -1, to, nv);
   /* a held history of a Kernel row's name that Kernel's row, placed in front of it (a prepend of Kernel), answers first
      on cls's chain: no version of it is found there, so its entry would stand for what no call finds */
   if (held && !refuse && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0)) {
@@ -12314,22 +12358,26 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
      `*r, **k` on to a row that takes none: each call's count makes one (ver_late_make), its else arm
      the row at that count */
   int bycount = held && !refuse && ar < 0 && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0) && cplan_class_kernel(c, cls) != KERN_LACKS;
-  int str_behind = 0;
+  int str_behind = undef;
   if (ct_versioned_string_reader(c, cls, sg, name) && cls == hcls)
     for (int i = 0; i < nv; i++)
-      str_behind |= c->scopes[to[i]].shadow == SHADOW_PREP && !c->scopes[to[i]].origin_module_ci;
+      str_behind |= to[i] >= 0 && c->scopes[to[i]].shadow == SHADOW_PREP && !c->scopes[to[i]].origin_module_ci;
   if (str_behind && ar != is_spaceship_name(name)) ar = -1;
   if (!refuse && !bycount)
     els = str_behind ? VK_BUILTIN : ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
   if (els == VK_KEEP && !held) return;
   if (els == VK_KEEP) refuse = "cond_def_override";
-  eb = refuse ? 0 : ver_else_block(c, cls, sg, to[nv - 1], els);
+  eb = refuse ? 0 : ver_else_block(c, cls, sg, last, els);
+  if (undef && !refuse) {
+    int mb = ver_else_block(c, cls, sg, last, VK_MM);
+    if (mb) blk = 1;
+  }
   blk |= eb != 0;
   if (!(q->n & (q->n - 1)) && !(q->v = realloc(q->v, sizeof *q->v * (size_t)(q->n ? 2 * q->n : 1)))) {
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
   VerNamed *w = &q->v[q->n++];
-  *w = (VerNamed){ cls, sg, hcls, nv, ar, blk, els, blk && eb != 1, !refuse && held, 0, bycount, name, refuse, { { 0 } }, { 0 } };
+  *w = (VerNamed){ cls, sg, hcls, nv, ar, blk, els, blk && eb != 1, !refuse && held, 0, bycount, last, name, refuse, { { 0 } }, { 0 } };
   memcpy(w->vs, vs, sizeof *vs * (size_t)nv);
   memcpy(w->to, to, sizeof *to * (size_t)nv);
 }
@@ -12394,6 +12442,7 @@ static void ver_named_one(void *arg, int cls, int sg, const char *name) {
   const char *refuse = NULL;
   int to[VER_MAX_ARMS], nv = cls < -1 ? -1 : elab_history_versions(c, cls, sg, name, vs, VER_MAX_ARMS), na = 0, bad = 0, held = 0, dc;
   int mod = cls >= 0 && !sg && comp_class_is_module(c, &c->classes[cls]), vis0 = nv > 0 ? vs[0].v->vis : 0;
+  int string_guard = ct_versioned_string_reader(c, cls, sg, name) && conditional_guard_method(c, cls, name) >= 0;
   for (int i = 0; i < nv; i++) {
     const LrDef *d = vs[i].v;
     int s = d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD ||
@@ -12402,9 +12451,15 @@ static void ver_named_one(void *arg, int cls, int sg, const char *name) {
     while (st >= 0 && par[st] >= 0 && nt_kind(c->nt, par[st]) != NK_StatementsNode) st = par[st];   /* (its cell write's, ver_cells_write) */
     if (nt_int(c->nt, d->node, "cond_arm", 0) || ver_in_dropped_rescue(c, par, d->node)) return;
     held |= nt_int(c->nt, d->node, "cond_lone", 0) != 0;
+    if (st < 0 || par[st] < 0 || (d->may == LR_MAY_IN && st != d->node) || ver_in_unrun_body(c, par, d->node)) { bad = 1; continue; }
+    if (string_guard && d->kind == LR_UNDEF) {
+      vs[na] = vs[i];
+      to[na++] = -1;
+      continue;
+    }
     if (s <= 0 || c->scopes[s].class_id != cls || c->scopes[s].is_cmethod != sg || (!mod && c->scopes[s].is_transplanted_source) ||
-        st < 0 || par[st] < 0 || (d->may == LR_MAY_IN && st != d->node) || ver_in_unrun_body(c, par, d->node) ||
-        (d->kind == LR_DEFINE_METHOD && ver_dm_keywords(c->nt, d->node)) || d->vis != vis0) { bad = 1; continue; }
+        (d->kind == LR_DEFINE_METHOD && ver_dm_keywords(c->nt, d->node)) ||
+        (!string_guard && d->vis != vis0)) { bad = 1; continue; }
     vs[na] = vs[i];
     to[na++] = s;
   }
@@ -12575,7 +12630,10 @@ int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests) {
     if (history && ns) sub[ns - 1] = history->behind - 1;
     for (int j = 0; j < ns && m < 2 * (VER_MAX_ARMS + 1); j++, m++) {
       if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = st[j];
-      out[m] = sub[j];
+      if (history && sub[j] < 0 && ver_arm_undef(c, to[k], j)) {
+        int missing = cplan_capture_missing(c, cap);
+        out[m] = missing >= 0 ? missing : CPLAN_ARM_NONE;
+      } else out[m] = sub[j];
     }
     if (ns || m >= 2 * (VER_MAX_ARMS + 1)) continue;
     int sup = to[k] >= 0 && c->scopes[to[k]].super_behind ? cplan_super_target(c, -1, &c->scopes[to[k]], NULL) : -1;
@@ -13300,7 +13358,7 @@ void ver_cells_settle(Compiler *c) {
       char name[32];
       ver_cell_name(vs[k].cell, name);
       ver_cell_keep(c, name);
-      if (elab_physical_version_vis(c, &vs[k]) < 0) {
+      if (vs[k].v->kind != LR_UNDEF && elab_physical_version_vis(c, &vs[k]) < 0) {
         ver_vis_cell_name(vs[k].cell, name);
         ver_cell_keep(c, name);
       }

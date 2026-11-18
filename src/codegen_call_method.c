@@ -2114,12 +2114,12 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
    receiver held in _t<tmp> (-1: self), with include_private false for a
    public_method, as the head of a comma expression the caller closes:
    CRuby's NameError when it answers false */
-static void emit_missing_guard(Compiler *c, int id, int mi, int q, int tmp, Buf *b) {
+static void emit_missing_guard(Compiler *c, int id, int mi, int q, int tmp, const char *sym, Buf *b) {
   buf_printf(b, "((void)(%s(", mc_method(c, &c->scopes[q]));
   if (tmp >= 0) buf_printf(b, "_t%d", tmp);
   else buf_puts(b, g_self);
   buf_printf(b, ", %d) || (sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '%s' for class '%s'\")[1])), 0)), ",
-             !nt_int(c->nt, id, "public_capture", 0), method_sym_arg(c, id), method_desc_class_name(c, c->scopes[mi].class_id));
+             !nt_int(c->nt, id, "public_capture", 0), sym, method_desc_class_name(c, c->scopes[mi].class_id));
 }
 
 /* A public capture rejects a real hidden method before any
@@ -2434,7 +2434,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     int in_c = 1;
     if (bop) builtin_method_params("Array", sym, &in_c);
     const char *pp = proc_params_arg(mi >= 0 ? method_proc_params(c, mi) : bop && in_c ? PROC_PARAMS_ARITY : PROC_PARAMS_LIST);
-    if (mmq >= 0 && (self_rooted || recv < 0)) emit_missing_guard(c, id, mi, mmq, self_rooted ? self_tmp : -1, b);
+    if (mmq >= 0 && (self_rooted || recv < 0)) emit_missing_guard(c, id, mi, mmq, self_rooted ? self_tmp : -1, sym, b);
     char identbuf[256];
     const char *ident = method_builtin_ident(c, id, mi, 0, identbuf, sizeof identbuf);
     /* (a typed array's adapter stands for Array's method of that name, which
@@ -2770,11 +2770,10 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
    Class.new class is named as it prints at run time: by the constant written with it, once written
    (obj_default_name's display). A module whose singleton class is not made yet is named 'Module'.
    The method name is an argument of that format, not part of it: an operator's name may hold a `%`. */
-static void emit_capture_absent_raise(Compiler *c, int id, const CallPlan *plan, Buf *b) {
+static void emit_capture_absent_raise(Compiler *c, const char *mn, const CallPlan *plan, Buf *b) {
   int module = plan->absent == CP_ABSENT_MODULE;
   const char *cn = module ? "Module" : class_ruby_name(c, plan->owner_ci), *open = plan->absent == CP_ABSENT_SG ? "#<Class:" : "", *close = plan->absent == CP_ABSENT_SG ? ">" : "";
   /* (the name is escaped for the C literal: :"a\"b") */
-  const char *mn = method_sym_arg(c, id);
   if (!module && comp_class_anonymous(c, plan->owner_ci)) {
     buf_printf(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%s%%s%s'\", \"", open, close);
     emit_c_escaped(b, mn ? mn : "");
@@ -2804,7 +2803,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     buf_puts(b, "({ ");
     if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
     if (plan.absent == CP_ABSENT_MAIN) emit_main_capture_absent_raise(c, id, b);
-    else emit_capture_absent_raise(c, id, &plan, b);
+    else emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, b);
     /* (a pointer's NULL is cast to the call's C type: a Method's fields
        are read off the value, `.name`) */
     TyKind at = repr_of(c, id).as_ty;
@@ -2861,7 +2860,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        NameError (CallPlan.absent) */
     if (t[0] < 0 && t[1] < 0 && plan.absent) {
       buf_puts(b, "{ ");
-      emit_capture_absent_raise(c, id, &plan, b);
+      emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, b);
       buf_printf(b, " _t%d = NULL; }\n", tr);
       continue;
     }
@@ -2870,6 +2869,13 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (to[i] == CPLAN_ARM_NONE && c->scopes[mi].class_id < 0) {
       buf_puts(b, "{ ");
       emit_main_capture_absent_raise(c, id, b);
+      buf_printf(b, " _t%d = NULL; }\n", tr);
+      continue;
+    }
+    if (to[i] == CPLAN_ARM_NONE && c->scopes[mi].class_id == comp_core_class(c, CORE_STRING)) {
+      CallPlan missing = { .owner_ci = c->scopes[mi].class_id };
+      buf_puts(b, "{ ");
+      emit_capture_absent_raise(c, captured_name ? captured_name : method_sym_arg(c, id), &missing, b);
       buf_printf(b, " _t%d = NULL; }\n", tr);
       continue;
     }

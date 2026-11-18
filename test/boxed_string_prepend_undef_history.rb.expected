@@ -1,0 +1,6 @@
+[true, true, true, true]
+[:bound, 8]
+[false, false, false, false]
+:absent
+[true, true, true, true]
+[:bound, 9]

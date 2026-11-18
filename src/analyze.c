@@ -7211,6 +7211,7 @@ static struct {
   ANameHash wnames;  int *wnode, *wown, nw;    /* the constant writes by name, each write's owner */
   ANameHash wkeys;                             /* the writes' keys (the name where none) */
   ANameHash natives;                           /* native_struct's "A::B::C" names */
+  ANameHash opened;                            /* the builtins a body or library reopens (is_builtin_const) */
   char **keys;
 } qcr;
 static const char *qcr_leaf(Compiler *c, int k) {
@@ -7224,7 +7225,9 @@ void qc_rule_prepare(Compiler *c, char **keys) {
   qcr.keys = keys;
   qcr.lcls = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
   for (int j = 0; j < c->nclasses; j++)
-    if (!c->classes[j].is_builtin_const && class_ruby_name(c, j)) { qcr.lcls[qcr.ncls++] = j; anh_add(&qcr.leaves, qcr_leaf(c, j)); }
+    if (!class_ruby_name(c, j)) continue;
+    else if (!c->classes[j].is_builtin_const) { qcr.lcls[qcr.ncls++] = j; anh_add(&qcr.leaves, qcr_leaf(c, j)); }
+    else anh_add(&qcr.opened, class_ruby_name(c, j));
   int cap = 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
     const char *wn = nt_str(nt, w, "name");
@@ -7253,7 +7256,7 @@ void qc_rule_prepare(Compiler *c, char **keys) {
   }
 }
 void qc_rule_release(void) {
-  anh_free(&qcr.leaves); anh_free(&qcr.wnames); anh_free(&qcr.wkeys); anh_free(&qcr.natives);
+  anh_free(&qcr.leaves); anh_free(&qcr.wnames); anh_free(&qcr.wkeys); anh_free(&qcr.natives); anh_free(&qcr.opened);
   free(qcr.lcls); free(qcr.wnode); free(qcr.wown);
   memset(&qcr, 0, sizeof qcr);
 }
@@ -7305,7 +7308,11 @@ int qc_rule_qualifies(Compiler *c, int id, int k) {
     if (sp_streq(qcr.leaves.key[i], leaf) && qcr.lcls[i] != k) others = 1;
   int builtin = builtin_class_id(leaf) != 0 || (is_builtin_class_name(leaf) && !is_builtin_module_name(leaf)) ||
                 (is_builtin_module_name(leaf) && !is_mod) || is_untabled_native_class_name(leaf) ||
-                is_builtin_exception_name(leaf);
+                is_builtin_exception_name(leaf) ||
+                /* a module of a builtin module's name (`M::Process`) beside a
+                   top-level reopen of the builtin (the program's `module
+                   Process`, or a library's): each is a class of its own */
+                (is_builtin_module_name(leaf) && anh_has(&qcr.opened, leaf));
   /* the header's own path as the record keys a value constant of it */
   char qn[512]; size_t qo = 0; qn[0] = 0;
   { const char *rn = class_ruby_name(c, k); int head = 1;

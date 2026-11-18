@@ -734,11 +734,10 @@ const char *sp_poly_class_name(sp_RbVal v)
 
 sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
 {
-  if (a.tag == SP_TAG_STR) return sp_box_nullable_str(sp_str_sub_range(a.v.s ? a.v.s : "", start, len));
-  /* A shared-string handle is a String: slicing is non-mutating, so it answers
-     as its live value rather than falling through to the array kinds and out
-     the nil default, which is what `s = +""; s << "abc"; s[0, 2]` did (#4279). */
-  if (sp_poly_is_strbuf(a)) return sp_poly_slice(sp_poly_strbuf_deref(a), start, len);
+  if (sp_rbval_is_string(a)) {
+    const char *bytes = sp_rbval_string_bytes(a);
+    return sp_box_nullable_str(sp_str_sub_range(bytes ? bytes : sp_str_empty, start, len));
+  }
   /* An Integer answers `n[start, len]`, the len-bit field starting at bit
      `start` -- the two-argument form of the bit read, which the typed arms
      have had all along. A boxed receiver fell past this to the nil default
@@ -1086,34 +1085,26 @@ sp_RbVal sp_poly_clear(sp_RbVal v)
 
 sp_RbVal sp_poly_slice_or_call(sp_RbVal v, sp_RbVal a, sp_RbVal b)
 {
-  /* a shared String handle receiver reads as its bytes; a capture name
-     does below, while a callable's argument stays the String itself */
-  if (sp_poly_is_strbuf(v)) v = sp_poly_strbuf_deref(v);
-  /* `sym[/re/, n]` on a boxed Symbol matches the name, as Symbol#[] does:
-     read as a two-integer slice, the Regexp operand raised TypeError */
-  if (v.tag == SP_TAG_SYM && a.tag == SP_TAG_OBJ && a.v.p && a.cls_id == SP_BUILTIN_REGEX)
-    v = sp_box_str(sp_sym_to_s((sp_sym)v.v.i));
-  /* `s[/re/, n]` on a boxed String: capture n of the first match, nil when
-     there is none -- the form the typed emitter answers inline. Read as a
-     two-integer slice, the Regexp operand raised TypeError (campfire's
-     `response.headers["Link"][/<(.*)>/, 1]` off a Hash[String, String]). */
-  if (v.tag == SP_TAG_STR && a.tag == SP_TAG_OBJ && a.v.p && a.cls_id == SP_BUILTIN_REGEX &&
-      b.tag == SP_TAG_INT) {
-    sp_int n = b.v.i;
-    if (sp_re_match((mrb_regexp_pattern *)a.v.p, v.v.s ? v.v.s : "") < 0) return sp_box_nil();
-    n = sp_re_group_nth(n);   /* a negative n counts back from the last group */
-    if (n == 0) return sp_box_nullable_str(sp_re_match_str);
-    if (n >= 1 && n <= 9) return sp_box_nullable_str(sp_re_captures[n]);
-    return sp_box_nil();
-  }
-  /* `s[/(?<x>..)/, "x"]` or `, :x`: the named capture of the first match,
-     nil when there is none, as the typed emitter answers it */
-  if (v.tag == SP_TAG_STR && a.tag == SP_TAG_OBJ && a.v.p && a.cls_id == SP_BUILTIN_REGEX &&
-      (b.tag == SP_TAG_STR || b.tag == SP_TAG_SYM || sp_poly_is_strbuf(b))) {
-    if (sp_poly_is_strbuf(b)) b = sp_poly_strbuf_deref(b);
-    const char *nm = b.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)b.v.i) : (b.v.s ? b.v.s : "");
-    if (sp_re_match((mrb_regexp_pattern *)a.v.p, v.v.s ? v.v.s : "") < 0) return sp_box_nil();
-    return sp_box_nullable_str(sp_re_named_capture((mrb_regexp_pattern *)a.v.p, nm));
+  /* A Regexp indexes either a String's bytes or a Symbol's name. */
+  if (a.tag == SP_TAG_OBJ && a.v.p && a.cls_id == SP_BUILTIN_REGEX &&
+      (sp_rbval_is_string(v) || v.tag == SP_TAG_SYM)) {
+    mrb_regexp_pattern *pattern = a.v.p;
+    const char *subject = v.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)v.v.i)
+                                             : sp_rbval_string_bytes(v);
+    if (b.tag == SP_TAG_INT) {
+      if (sp_re_match(pattern, subject ? subject : sp_str_empty) < 0) return sp_box_nil();
+      sp_int n = sp_re_group_nth(b.v.i);
+      if (n == 0) return sp_box_nullable_str(sp_re_match_str);
+      if (n >= 1 && n <= 9) return sp_box_nullable_str(sp_re_captures[n]);
+      return sp_box_nil();
+    }
+    if (sp_rbval_is_string(b) || b.tag == SP_TAG_SYM) {
+      const char *name = b.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)b.v.i)
+                                            : sp_rbval_string_bytes(b);
+      SP_GC_ROOT_STR(name);
+      if (sp_re_match(pattern, subject ? subject : sp_str_empty) < 0) return sp_box_nil();
+      return sp_box_nullable_str(sp_re_named_capture(pattern, name ? name : sp_str_empty));
+    }
   }
   /* a Method's [] too: its arguments of any kind are the call's, where
      sp_poly_slice took a String for an index and raised TypeError (#6179) */

@@ -23334,17 +23334,21 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
          GNU statement expressions, and this is a STATIC initializer, which
          needs constant expressions. A file-scope object with a real sp_str_hdr
          is one -- `_sym_N.d` is an address constant -- so such a name gets its
-         own struct beside the table and the table points at it. Ordinary
-         names keep the compact marked-literal form and cost nothing extra.
+         own static String owner beside the table. The header links to that
+         owner so boxing preserves the already-frozen spelling's identity.
+         Ordinary names keep the compact marked-literal form.
          sp_str_byte_len then reads the header for the 0xf1 entries and falls
          back to strlen for the 0xff ones, which is right for both. */
       for (int i = 0; i < ns; i++) {
         size_t sl = c->symbol_lens ? c->symbol_lens[i] : strlen(c->symbols[i]);
         if (sl <= strlen(c->symbols[i])) continue;
-        buf_printf(b, "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _sym_%d = "
-                       "{ { NULL, %zu, %zu, 0 }, 0xf1, \"", sl + 1, i, sl + 1, sl);
+        buf_printf(b, "static sp_StringLiteral _sym_%d_o;\n"
+                       "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _sym_%d = "
+                       "{ { (sp_str_hdr *)((char *)&_sym_%d_o.s + 1), %zu, %zu, 0 }, 0xf1, \"",
+                   i, sl + 1, i, i, sl + 1, sl);
         emit_c_escaped_n(b, c->symbols[i], sl);
-        buf_puts(b, "\" };\n");
+        buf_printf(b, "\" };\nstatic sp_StringLiteral _sym_%d_o = "
+                      "SP_STRING_LITERAL_INIT(_sym_%d_o, _sym_%d.d, %zu);\n", i, i, i, sl);
       }
       buf_printf(b, "static const char *const sp_sym_names[%d] = {", ns);
       for (int i = 0; i < ns; i++) {

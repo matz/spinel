@@ -329,10 +329,12 @@ int sp_cext_integer_pack(sp_RbVal v, void *words, size_t numwords, size_t wordsi
   if (!fits) return sign < 0 ? -2 : 2;
   return sign;
 }
-/* rb_sym2str: the Symbol's name as a frozen String */
+#ifdef SP_CEXT
+/* rb_sym2str uses the generated unit's frozen Symbol-name handle. */
 sp_RbVal sp_cext_sym2str(sp_sym s) {
-  return sp_box_str(sp_sym_to_s(s));
+  return sp_box_obj(sp_cext_sym_name_handle(s), SP_BUILTIN_STRBUF);
 }
+#endif
 /* rb_str_plus: a new String of both, ASCII-8BIT when either is */
 sp_RbVal sp_cext_str_plus(sp_RbVal a, sp_RbVal b) {
   SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);

@@ -1109,16 +1109,15 @@ static inline const char *sp_str_freeze_val(const char *s) {
   }
   return s;
 }
-/* Frozen-string dedup (String#-@ / #dedup) interning: equal-content dedups
-   must return the SAME immortal frozen object, like CRuby's fstring table, so
-   `-"x".equal?(-"x")` is true. An interned string is a 0xf1 frozen heap string,
-   which sp_str_sweep keeps across every collection, so the table needs no GC
-   rooting; it only grows (interned strings are permanent, as in CRuby). The
-   table is guarded by the heap lock; the frozen copy is allocated OUTSIDE the
-   lock (allocators take the heap lock themselves), then a re-check under the
-   lock keeps a single canonical entry per content. */
+/* String#-@ and #dedup share one frozen String per bytes and encoding.
+   The table holds each payload with its owner and is walked from the
+   generated unit's roots. Allocate the copy outside the heap lock and
+   check for a peer's insertion when taking the lock again. */
 static const char **sp_fstr_tab = NULL;
 static size_t sp_fstr_cap = 0, sp_fstr_len = 0;
+static void sp_mark_fstrings(void) {
+  for (size_t i = 0; i < sp_fstr_cap; i++) sp_mark_string(sp_fstr_tab[i]);
+}
 static const char *sp_fstr_lookup(const char *s) {  /* caller holds the heap lock */
   if (!sp_fstr_cap) return NULL;
   size_t mask = sp_fstr_cap - 1, idx = (size_t)(sp_str_hash(s) & mask);
@@ -1169,16 +1168,10 @@ static const char *sp_str_dedup(const char *s) {
   const char *hit = sp_fstr_lookup(s);
   SP_HEAP_UNLOCK();
   if (hit) return hit;
-  /* byte_len-aware copy so an embedded NUL is preserved (sp_str_dup_external
-     would truncate at the first NUL), then freeze it to the immortal 0xf1.
-     The copy's allocation can collect, and the receiver is often a value
-     nothing else holds (`-s.upcase`, `-s.upcase!` through a shared handle,
-     whose answer the handle copied): it is rooted across it, as sp_str_dup
-     roots its own, or the copy read swept bytes. */
   SP_GC_ROOT_STR(s);
-  char *cp = (char *)sp_str_from_bytes(s, sp_str_byte_len(s));
-  if (sp_str_is_binary(s)) sp_str_mark_binary(cp);   /* the copy keeps its encoding */
-  const char *f = sp_str_freeze_val(cp);
+  sp_String *copy = sp_String_freeze(sp_String_new_unfrozen(s));
+  SP_GC_ROOT(copy);
+  const char *f = sp_String_cstr(copy);
   SP_HEAP_LOCK();
   const char *hit2 = sp_fstr_lookup(f);  /* another thread may have won the race */
   if (hit2) { SP_HEAP_UNLOCK(); return hit2; }
@@ -1188,50 +1181,53 @@ static const char *sp_str_dedup(const char *s) {
 }
 static inline const char *sp_str_uminus_val(const char *s) {
   if (SP_UNLIKELY(!s)) sp_nil_recv("-@");
-  /* An already-frozen receiver (0xf1) still interns by content (CRuby
-     rb_fstring): the first frozen holder of a content registers itself,
-     later dedups of equal contents return that same object -- even when
-     every literal occurrence is its own frozen object under fsl. Frozen
-     entries are immortal, so registering the receiver is copy-free. A
-     0xff rodata value string (frozen? false by design) takes the plain
-     dedup below, which hands back a frozen interned copy. */
-  if (((const unsigned char *)s)[-1] == 0xf1) {
-    SP_HEAP_LOCK();
-    sp_fzl_intern();
-    const char *hit = sp_fstr_lookup(s);
-    if (!hit) { sp_fstr_insert(s); hit = s; }
-    SP_HEAP_UNLOCK();
-    return hit;
-  }
-  /* otherwise intern by content so two dedups of equal contents share one
-     frozen object (#2462). The result reports frozen? (0xf1). */
-  return sp_str_dedup(s);
-}
-/* Symbol#name: the symbol's one frozen String, apart from the fstring
-   table, as CRuby's is (`:a.name.equal?(-"a")` is false). A heap String
-   like the table's entries (immortal at 0xf1), so a String slot that
-   takes it keeps one handle for it and `s.name.equal?(s.name)` holds there
-   too; the static per-symbol copy sp_sym_to_s_frozen answers got a new
-   handle at each store. Made at the first call, kept per symbol. The
-   table is the generated unit's state, as sp_fstr_tab is (the runtime
-   objects own no writable static: tools/poly_cold_check.rb). */
-static const char **sp_sym_name_tab = NULL;
-static sp_int sp_sym_name_cap = 0;
-static SP_UNUSED const char *sp_sym_name_str(sp_sym id)
-{
-  if (id < 0) return sp_sym_to_s_frozen(id);
+  if (!sp_str_is_frozen_val(s)) return sp_str_dedup(s);
+  /* A frozen String with instance state or a subclass keeps that state
+     on its own object instead of entering the base String table. */
+  sp_String *owner = sp_str_fd_owner(s);
+  if (owner && (sp_ivtbl_get(owner) ||
+                (sp_bsub_cls_fn && sp_bsub_cls_fn(sp_box_obj(owner, SP_BUILTIN_STRBUF)) >= 0))) return s;
+  SP_GC_ROOT_STR(s);
+  owner = sp_String_new_shared(s);
+  SP_GC_ROOT(owner);
+  s = sp_String_cstr(owner);
   SP_HEAP_LOCK();
-  const char *hit = id < sp_sym_name_cap ? sp_sym_name_tab[id] : NULL;
+  sp_fzl_intern();
+  const char *hit = sp_fstr_lookup(s);
+  if (!hit) { sp_fstr_insert(s); hit = s; }
+  SP_HEAP_UNLOCK();
+  return hit;
+}
+/* Typed Symbol#name keeps one frozen String per Symbol. The generated
+   unit owns this cache; the bytes reader preserves its canonical handle's
+   counted payload. Native names share this owner; boxed names retain
+   their existing fstring choice. */
+static sp_String **sp_sym_name_tab = NULL;
+static sp_int sp_sym_name_cap = 0;
+static SP_UNUSED sp_String *sp_sym_name_handle(sp_sym id)
+{
+  /* Counted static spellings already are frozen Strings. Reuse their
+     literal owner rather than manufacture a second object around them. */
+  sp_String *literal = sp_String_of_literal(sp_sym_to_s(id));
+  if (literal) return literal;
+  if (id < 0) return sp_String_new_shared(sp_sym_to_s_frozen(id));
+  SP_HEAP_LOCK();
+  sp_String *hit = id < sp_sym_name_cap ? sp_sym_name_tab[id] : NULL;
   SP_HEAP_UNLOCK();
   if (hit) return hit;
   const char *nm = sp_sym_to_s_frozen(id);
-  const char *f = sp_str_freeze_val(sp_str_from_bytes(nm, sp_str_byte_len(nm)));
+  sp_String *f = sp_String_freeze(sp_String_new_unfrozen(nm));
+  SP_GC_ROOT(f);
   SP_HEAP_LOCK();
   if (id >= sp_sym_name_cap) {
     sp_int nc = sp_sym_name_cap ? sp_sym_name_cap : 64;
     while (nc <= id) nc *= 2;
-    const char **t = (const char **)realloc(sp_sym_name_tab, sizeof *t * (size_t)nc);
-    if (!t) { SP_HEAP_UNLOCK(); return f; }
+    sp_String **t = (sp_String **)realloc(sp_sym_name_tab, sizeof *t * (size_t)nc);
+    if (!t) {
+      SP_HEAP_UNLOCK();
+      sp_raise_cls("NoMemoryError", "failed to grow the Symbol name cache");
+      return NULL;
+    }
     for (sp_int i = sp_sym_name_cap; i < nc; i++) t[i] = NULL;
     sp_sym_name_tab = t; sp_sym_name_cap = nc;
   }
@@ -1240,6 +1236,19 @@ static SP_UNUSED const char *sp_sym_name_str(sp_sym id)
   SP_HEAP_UNLOCK();
   return f;
 }
+static SP_UNUSED const char *sp_sym_name_str(sp_sym id)
+{
+  return sp_String_cstr(sp_sym_name_handle(id));
+}
+static void sp_mark_sym_names(void)
+{
+  for (sp_int i = 0; i < sp_sym_name_cap; i++)
+    if (sp_sym_name_tab[i]) sp_gc_mark(sp_sym_name_tab[i]);
+}
+#if defined(SP_CEXT) && !defined(SPINEL_EXT_HOST)
+/* The cold extension runtime reads this unit's canonical Symbol name. */
+sp_String *sp_cext_sym_name_handle(sp_sym id) { return sp_sym_name_handle(id); }
+#endif
 /* String#clone: a copy that preserves the frozen state, unlike #dup which always
    returns an unfrozen copy (CRuby semantics). Carries the 0xf1 heap-frozen marker
    across to the fresh buffer. */
@@ -1637,6 +1646,10 @@ static void sp_re_mark_globals(void) {
      calling convention's side channel: lib/sp_cold.c, compiled once rather
      than in every program */
   sp_mark_rt_roots();
+  SP_GLB_PHASE("globals:fstrings");
+  sp_mark_fstrings();
+  SP_GLB_PHASE("globals:symbol-names");
+  sp_mark_sym_names();
   SP_GLB_PHASE("globals:exceptions");
   sp_mark_in_flight_exceptions();
   SP_GLB_PHASE("globals:proc-homes");
@@ -8614,8 +8627,7 @@ static sp_RbVal sp_poly_neg(sp_RbVal a) {
   if (sp_poly_is_brat(a)) return sp_brat_sub_poly(sp_box_int(0), a);
   /* String#-@ on a boxed String: its frozen, deduplicated form, as the typed
      path answers (it was negated as an Integer, answering 0) */
-  if (a.tag == SP_TAG_STR) return sp_box_str(sp_str_uminus_val(a.v.s));
-  if (sp_poly_is_strbuf(a)) return sp_box_str(sp_str_uminus_val(sp_poly_strbuf_deref(a).v.s));
+  if (sp_rbval_is_string(a)) return sp_box_str_new(sp_str_uminus_val(sp_rbval_string_bytes(a)));
   return sp_box_int(-sp_poly_to_i(a));
 }
 /* -v on a boxed value, the same way: a number and a String answer as

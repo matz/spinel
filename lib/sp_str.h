@@ -133,6 +133,7 @@ sp_bool sp_str_start_with(const char*s,const char*p);
 sp_bool sp_str_end_with(const char*s,const char*suf);
 sp_StrArray *sp_str_partition(const char *s, const char *sep);
 sp_StrArray *sp_str_rpartition(const char *s, const char *sep);
+sp_String *sp_str_line_next(const char *s, const char *sep, size_t *offset, sp_bool chomp);
 sp_StrArray*sp_str_lines(const char*s);
 sp_StrArray*sp_str_lines_sep(const char*s,const char*sep);
 sp_StrArray*sp_str_lines_sep_chomp(const char*s,const char*sep);

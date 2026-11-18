@@ -5697,15 +5697,9 @@ static int infer_string_recv_call(Compiler *c, int id, const NodeTable *nt, cons
         (argc == 1 || argc == 2) &&
         (comp_ntype(c, argv[0]) == TY_STRING || comp_ntype(c, argv[0]) == TY_REGEX))
       { *out = TY_INT; return 1; }
-    /* each_line and lines read their separator argument */
-    if (sp_streq(name, "each_line") && argc == 0 && nt_ref(nt, id, "block") < 0)
+    if (sp_streq(name, "each_line") && nt_ref(nt, id, "block") < 0 &&
+        string_line_enum_args(c, argc, argv))
       { *out = TY_ENUMERATOR; return 1; }
-    if (sp_streq(name, "each_line") && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-        nt_kind(nt, argv[0]) == NK_KeywordHashNode)
-      { *out = TY_ENUMERATOR; return 1; }  /* each_line(chomp: ...) blockless */
-    if (sp_streq(name, "each_line") && nt_ref(nt, id, "block") < 0 && lines_sep_ty(c, argv[0]) &&
-        (argc == 1 || (argc == 2 && nt_kind(nt, argv[1]) == NK_KeywordHashNode)))
-      { *out = TY_ENUMERATOR; return 1; }  /* each_line(sep) blockless */
     if (sp_streq(name, "lines") && argc == 2 && infer_type(c, argv[0]) == TY_STRING &&
         nt_kind(nt, argv[1]) == NK_KeywordHashNode)
       { *out = nt_ref(nt, id, "block") >= 0 ? TY_STRING : TY_STR_ARRAY; return 1; }   /* lines(sep, chomp: true) (#3546) */

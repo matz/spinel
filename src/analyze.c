@@ -31585,7 +31585,7 @@ static int dyn_pure_read_name(const char *n, int rx) {
     "chomp", "chop", "chars", "bytes", "lines", "split", "to_i", "to_f", "to_sym", "hash",
     "inspect", "+", "*", "%", "[]", "slice", "center", "ljust", "rjust", "tr", "delete",
     "squeeze", "sub", "gsub", "scan", "unpack", "unpack1", "sum", "casecmp", "casecmp?",
-    "ascii_only?", "valid_encoding?", "each_char", "each_byte", "each_line", "hex", "oct", NULL };
+    "ascii_only?", "valid_encoding?", "each_char", "each_byte", "hex", "oct", NULL };
   static const char *const NOGLOBALS[] = { "match?", NULL };
   for (int i = 0; n && R[i]; i++) {
     if (!sp_streq(n, R[i])) continue;

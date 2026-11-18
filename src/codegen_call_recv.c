@@ -6255,12 +6255,15 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     buf_puts(b, "; })");
     return 1;
   }
-  /* poly.each_line(sep / chomp: ...): the lines the same arguments give
-     lines; blockless, that array (as the argumentless poly.each_line), and
-     with a block each one yielded and the receiver answered, as
-     poly.each_line { } does */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") &&
-      poly_lines_args(c, argc, argv) &&
+      nt_ref(nt, id, "block") < 0 && string_line_enum_args(c, argc, argv) &&
+      !user_defines_or_reads(c, name) && !poly_cls_value_owns(c, id, name)) {
+    emit_string_line_enum(c, id, recv, argc, argv, b);
+    return 1;
+  }
+  /* The boxed block form walks the same array as lines and returns self. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") &&
+      nt_ref(nt, id, "block") >= 0 && poly_lines_args(c, argc, argv) &&
       !user_defines_or_reads(c, "each_line") && !user_defines_or_reads(c, "lines")) {
     int tl = ++g_tmp, ta = ++g_tmp;
     char rl[32]; snprintf(rl, sizeof rl, "_t%d", tl);
@@ -6274,22 +6277,6 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     int eblk = nt_ref(nt, id, "block");
     int boxed = repr_of(c, id).kind == RK_BOXED;
     char ans[32];
-    if (eblk < 0 && poly_each_line_args_enum(c, id)) {
-      /* asked its size: CRuby's Enumerator over those lines (nil size) */
-      buf_printf(b, " sp_Enumerator *_t%d = sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(_t%d)), sp_box_str(_t%d), SPL(\"each_line\"));", ++g_tmp, ta, tl);
-      snprintf(ans, sizeof ans, "_t%d", g_tmp);
-      buf_puts(b, " ");
-      if (boxed) emit_boxed_text(c, TY_ENUMERATOR, ans, b); else buf_puts(b, ans);
-      buf_puts(b, "; })");
-      return 1;
-    }
-    if (eblk < 0) {
-      snprintf(ans, sizeof ans, "_t%d", ta);
-      buf_puts(b, " ");
-      if (boxed) emit_boxed_text(c, TY_STR_ARRAY, ans, b); else buf_puts(b, ans);
-      buf_puts(b, "; })");
-      return 1;
-    }
     const char *ebp = block_param_name(c, eblk, 0);
     const char *ebpn = ebp ? rename_local(ebp) : NULL;
     int ebody = nt_ref(nt, eblk, "body");
@@ -17397,16 +17384,16 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       buf_puts(b, "sp_str_lines(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"lines\"))"); { *out = 1; return 1; }
     }
   }
-  /* A blockless each_char / each_line / each_byte / each_codepoint is
+  /* A blockless each_char / each_byte / each_codepoint is
      CRuby's Enumerator, as on a typed String (sp_poly_str_each_enum), where
      it outlives its expression or is asked what an Array does not answer
-     (poly_str_iter_enum); walked where it is made, the Array chars / lines
-     / bytes answers walks the same items. The analysis counts a class
+     (poly_str_iter_enum); walked where it is made, the Array chars / bytes
+     answer walks the same items. The analysis counts a class
      nothing instantiates where this does not (StringIO's each_line, loaded
      with net/http and never made), and types the call untyped then: the
      answer is boxed for that slot. */
   if (argc == 0 && nt_ref(nt, id, "block") < 0 && !user_defines_or_reads(c, name) &&
-      is_str_each_iter(name)) {
+      is_str_each_iter(name) && !sp_streq(name, "each_line")) {
     int boxed = repr_of(c, id).kind == RK_BOXED;
     Buf vb; memset(&vb, 0, sizeof vb);
     TyKind vt;
@@ -17416,7 +17403,6 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
     else {
       const char *fn = sp_streq(name, "each_char") ? "sp_str_chars"
-                     : sp_streq(name, "each_line") ? "sp_str_lines"
                      : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
       buf_printf(&vb, "%s(sp_poly_recv_s(", fn); emit_expr(c, recv, &vb); buf_printf(&vb, ", \"%s\"))", name);
       vt = sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint") ? TY_INT_ARRAY : TY_STR_ARRAY;

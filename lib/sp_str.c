@@ -463,7 +463,41 @@ sp_StrArray *sp_str_rpartition(const char *s, const char *sep) {
    "paragraph mode" -- not supported here; callers gate on a non-empty sep. */
 /* lines(sep, chomp: true): the separator's run is trimmed off each piece
    (#3546) */
-static size_t sp_str_nl_at(const char*q,const char*e){return q<e&&*q=='\n'?1:q+1<e&&q[0]=='\r'&&q[1]=='\n'?2:0;}
+static size_t sp_str_nl_at(const char*q,const char*e){return q<e&&*q=='\n'?1:e-q>=2&&q[0]=='\r'&&q[1]=='\n'?2:0;}
+/* Read one line from the byte views taken for this walk. A nil separator
+   is handled by the receiver-owning caller, since its answer is the receiver. */
+sp_String *sp_str_line_next(const char *s, const char *sep, size_t *offset, sp_bool chomp) {
+  const char *end = s + sp_str_byte_len(s);
+  const char *start = s + *offset;
+  if (start == end) return NULL;
+  size_t seplen = sp_str_byte_len(sep);
+  const char *next = end;
+  const char *stop = end;
+  if (seplen) {
+    const char *hit = sp_bytestr(start, (size_t)(end - start), sep, seplen);
+    if (hit) {
+      next = hit + seplen;
+      stop = chomp ? hit : next;
+      if (chomp && seplen == 1 && *sep == '\n' && stop > start && stop[-1] == '\r')
+        stop--;
+    }
+  }
+  else {
+    for (const char *q = start; q < end;) {
+      size_t n = sp_str_nl_at(q, end);
+      size_t second = n ? sp_str_nl_at(q + n, end) : 0;
+      if (!second) { q += n ? n : 1; continue; }
+      next = q + n + second;
+      stop = chomp ? q : next;
+      while ((n = sp_str_nl_at(next, end))) next += n;
+      break;
+    }
+  }
+  *offset = (size_t)(next - s);
+  int binary = sp_str_is_binary(s);
+  sp_String *part = sp_String_new_inline_len(start, (int64_t)(stop - start));
+  return binary ? sp_String_force_encoding(part, 1) : part;
+}
 static sp_StrArray*sp_str_paragraphs(const char*s,int chomp){SP_GC_ROOT_STR(s);sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);const char*e=s+sp_str_byte_len(s),*p=s;while(p<e){const char*q=p,*cut=NULL;size_t k,k2;while(q<e&&!cut){if((k=sp_str_nl_at(q,e))&&(k2=sp_str_nl_at(q+k,e)))cut=q+k+k2;else q+=k?k:1;}size_t n=cut?(size_t)((chomp?q:cut)-p):(size_t)(e-p);char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_str_set_len(r,n);sp_StrArray_push_e(a,sp_String_new_shared(sp_str_bin_like(s,r)));if(!cut)break;p=cut;while((k=sp_str_nl_at(p,e)))p+=k;}return a;}
 sp_StrArray*sp_str_lines_sep_chomp(const char*s,const char*sep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sep);
   if(sep&&!sp_str_byte_len(sep))return sp_str_paragraphs(s,1);

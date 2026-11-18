@@ -2512,11 +2512,17 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   mtab_pop(c, mt_was);
   if (!builtin) return 0;
   *kind = comp_ary_kind(c, cid);
-  /* A String subclass instance's String is a handle (TY_STRBUF). A call
-     that changes it, or answers it, takes it boxed (the poly String arms
-     work on the handle in place); any other reads a copy of its bytes. */
-  if (comp_ary_is_str(c, cid))
-    *kind = comp_arysub_str_boxed(n) ? TY_POLY : TY_STRING;
+  /* An inherited String builtin takes the actual handle when it mutates,
+     returns, or keeps its receiver for a line Enumerator. */
+  if (comp_ary_is_str(c, cid)) {
+    int line_enum = 0;
+    if (sp_streq(n, "each_line") && nt_ref(c->nt, id, "block") < 0) {
+      int argc;
+      const int *argv = call_args(c->nt, id, &argc);
+      line_enum = string_line_enum_args(c, argc, argv);
+    }
+    *kind = comp_arysub_str_boxed(n) || line_enum ? TY_POLY : TY_STRING;
+  }
   return 1;
 }
 /* The builtin-op row flags of call `id` on an Array (#7449): what it answers

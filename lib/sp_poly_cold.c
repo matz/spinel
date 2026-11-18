@@ -24,6 +24,58 @@
 
 sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
 
+typedef struct {
+  sp_RbVal receiver;
+  sp_RbVal separator;
+  sp_bool chomp;
+} sp_StringLineCap;
+
+static void sp_string_line_scan(void *p) {
+  sp_StringLineCap *cap = (sp_StringLineCap *)p;
+  sp_mark_rbval(cap->receiver);
+  sp_mark_rbval(cap->separator);
+}
+
+static void sp_string_line_gen(sp_Fiber *f) {
+  sp_StringLineCap *cap = (sp_StringLineCap *)f->user_data;
+  SP_GC_ROOT(cap);
+  if (cap->separator.tag == SP_TAG_NIL) {
+    sp_Fiber_yield(cap->receiver);
+  }
+  else {
+    /* Convert the captured argument and take the byte views at the start of
+       each walk. A mutation during a yield cannot change its remaining lines. */
+    const char *sep = sp_poly_arg_str_chk(cap->separator);
+    SP_GC_ROOT_STR(sep);
+    sep = sp_str_dup(sep);
+    const char *text = sp_str_dup(sp_poly_recv_s(cap->receiver, "each_line"));
+    SP_GC_ROOT_STR(text);
+    size_t offset = 0;
+    for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, cap->chomp));)
+      sp_Fiber_yield(sp_box_obj(line, SP_BUILTIN_STRBUF));
+  }
+  sp_gc_wb((void *)f);
+  f->yielded_value = cap->receiver;
+}
+
+sp_Enumerator *sp_poly_string_line_enum(sp_RbVal receiver, sp_RbVal separator,
+                                      sp_bool chomp, sp_bool chomp_given) {
+  SP_GC_ROOT_RBVAL(receiver);
+  SP_GC_ROOT_RBVAL(separator);
+  if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod("each_line", receiver);
+  sp_StringLineCap *cap = (sp_StringLineCap *)sp_gc_alloc(sizeof *cap, NULL, sp_string_line_scan);
+  SP_GC_ROOT(cap);
+  cap->receiver = receiver;
+  cap->separator = separator;
+  cap->chomp = chomp;
+  sp_Enumerator *e = sp_Enumerator_new_gen(sp_string_line_gen, cap, sp_box_nil());
+  const char *label = chomp_given
+    ? (chomp ? SPL("each_line(chomp: true)") : SPL("each_line(chomp: false)"))
+    : SPL("each_line");
+  return sp_enum_with_src(e, receiver, label);
+}
+
+
 #ifdef SP_CEXT
 sp_RbVal sp_cext_object_class(sp_RbVal object) {
   return sp_box_class(sp_poly_class_val(object));

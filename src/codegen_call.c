@@ -23273,6 +23273,40 @@ int str_enum_h_made(Compiler *c) {
   }
   return c->str_enum_h == 2;
 }
+/* The typed String and its boxed dispatch arm both capture the Ruby values.
+   Operand preludes stay beside the operand they belong to, after the earlier
+   values have been rooted. The generator converts the separator per walk. */
+void emit_string_line_enum(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b) {
+  int kw = nt_argv_kwh(c->nt, argv, argc);
+  int sep = argc - (kw >= 0) > 0 ? argv[0] : -1;
+  int chomp = kw >= 0 ? struct_kwarg_value(c, kw, "chomp") : -1;
+  int tr = ++g_tmp, ts = ++g_tmp, tc = ++g_tmp;
+  Buf capture = {0};
+  Buf *saved_pre = g_pre;
+  g_pre = &capture;
+  buf_puts(&capture, "({\n");
+  buf_printf(&capture, "sp_RbVal _t%d = ", tr);
+  emit_boxed(c, recv, &capture);
+  buf_printf(&capture, "; SP_GC_ROOT_RBVAL(_t%d);\n", tr);
+  buf_printf(&capture, "sp_RbVal _t%d = ", ts);
+  if (sep >= 0) emit_boxed(c, sep, &capture);
+  else buf_puts(&capture, "sp_box_str(SPL(\"\\n\"))");
+  buf_printf(&capture, "; SP_GC_ROOT_RBVAL(_t%d);\n", ts);
+  buf_printf(&capture, "sp_bool _t%d = ", tc);
+  if (chomp >= 0) emit_into_pre_line(c, emit_cond, chomp);
+  else buf_puts(&capture, "0");
+  buf_puts(&capture, "; ");
+  g_pre = saved_pre;
+  buf_puts(b, capture.p);
+  free(capture.p);
+  int boxed = repr_of(c, id).kind == RK_BOXED;
+  if (boxed) buf_puts(b, "sp_box_obj(");
+  buf_printf(b, "sp_poly_string_line_enum(_t%d, _t%d, _t%d, %d)",
+             tr, ts, tc, sep < 0 && chomp >= 0);
+  if (boxed) buf_puts(b, ", SP_BUILTIN_ENUMERATOR)");
+  buf_puts(b, "; })");
+}
+
 /* A blockless iterator answers an external Enumerator rather than iterating:
    the wrappers for each, reverse_each, each_with_index, each_index, each_char,
    each_line, each_slice, each_cons, cycle, slice_before/after, the two hash
@@ -23389,10 +23423,14 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
     }
     return 1;
   }
-  /* str.each_char / each_line with no block -> an Enumerator over the string's
-     characters / lines. */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && sp_streq(name, "each_line") &&
+      nt_ref(nt, id, "block") < 0 && string_line_enum_args(c, argc, argv)) {
+    emit_string_line_enum(c, id, recv, argc, argv, b);
+    return 1;
+  }
+  /* The other String walks over characters, codepoints and bytes. */
   if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && argc == 0 &&
-      nt_ref(nt, id, "block") < 0 && is_str_each_iter(name)) {
+      nt_ref(nt, id, "block") < 0 && is_str_each_iter(name) && !sp_streq(name, "each_line")) {
     /* --share-strings: over a String the rule shares, the Enumerator holds
        its handle and reads it as it is walked (sp_enum_str_each_h), as
        CRuby's holds the String: one made from a copy of the bytes missed a
@@ -23418,61 +23456,8 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
                     "sp_box_str(_t%d), SPL(\"%s\")); })", fn, tsrc, tsrc, name);
       return 1;
     }
-    const char *itemfn = sp_streq(name, "each_char") ? "sp_str_chars_poly" : "sp_str_lines_poly";
-    buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from_items(%s(_t%d)), "
-                  "sp_box_str(_t%d), SPL(\"%s\")); })", itemfn, tsrc, tsrc, name);
-    return 1;
-  }
-  /* str.each_line(sep) with no block -> an Enumerator over the sep-kept
-     segments. */
-  int sep_kw = argc == 2 && nt_kind(nt, argv[1]) == NK_KeywordHashNode
-             ? struct_kwarg_value(c, argv[1], "chomp") : -1;
-  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && (argc == 1 || (argc == 2 && sep_kw >= 0)) &&
-      nt_ref(nt, id, "block") < 0 && sp_streq(name, "each_line") &&
-      lines_sep_ty(c, argv[0])) {
-    int tsrc3 = ++g_tmp;
-    buf_printf(b, "({ const char *_t%d = ", tsrc3);
-    emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); ", tsrc3);
-    /* (as above, once the separator and chomp: have run, in their order:
-       CRuby runs the arguments ahead of the missing method) */
-    int tsep = 0, tkw = 0, nn = !recv_never_nil(c, recv);
-    if (nn && ((subtree_has_side_effect(c, argv[0]) && !arg_ran_first(argv[0], 0)) ||
-               (sep_kw >= 0 && subtree_has_side_effect(c, sep_kw) && !arg_ran_first(sep_kw, 0)))) {
-      tsep = ++g_tmp;
-      buf_printf(b, "const char *_t%d = ", tsep); emit_lines_sep(c, argv[0], b);
-      buf_printf(b, "; SP_GC_ROOT_STR(_t%d); ", tsep);
-      if (sep_kw >= 0) { tkw = ++g_tmp; buf_printf(b, "int _t%d = ", tkw); emit_cond(c, sep_kw, b); buf_puts(b, "; "); }
-    }
-    if (nn) { nil_recv_check("each_line", tsrc3, b); buf_puts(b, " "); }
-    buf_puts(b, "sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(");
-    if (tkw) buf_printf(b, "(_t%d ? sp_str_lines_sep_chomp : sp_str_lines_sep)", tkw);
-    else if (sep_kw >= 0) { buf_puts(b, "("); emit_cond(c, sep_kw, b); buf_puts(b, " ? sp_str_lines_sep_chomp : sp_str_lines_sep)"); }
-    else buf_puts(b, "sp_str_lines_sep");
-    buf_printf(b, "(_t%d, ", tsrc3);
-    if (tsep) buf_printf(b, "_t%d", tsep); else emit_lines_sep(c, argv[0], b);
-    buf_printf(b, "))), sp_box_str(_t%d), SPL(\"each_line\")); })", tsrc3);
-    return 1;
-  }
-  /* str.each_line(chomp: ...) with no block -> an Enumerator over the
-     (possibly chomped) lines. */
-  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && argc == 1 &&
-      nt_ref(nt, id, "block") < 0 && sp_streq(name, "each_line") &&
-      nt_kind(nt, argv[0]) == NK_KeywordHashNode) {
-    int chomp_v = struct_kwarg_value(c, argv[0], "chomp");
-    int is_chomp = kw_flag_static(c, chomp_v);
-    int tsrc2 = ++g_tmp, tch = ++g_tmp;
-    buf_printf(b, "({ const char *_t%d = ", tsrc2);
-    emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); ", tsrc2);
-    buf_printf(b, "int _t%d = ", tch);
-    if (is_chomp < 0) emit_cond(c, chomp_v, b);
-    else buf_printf(b, "%d", is_chomp);
-    buf_puts(b, "; ");
-    if (!recv_never_nil(c, recv)) { nil_recv_check("each_line", tsrc2, b); buf_puts(b, " "); }   /* as above, once chomp: has run */
-    buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(_t%d ? sp_str_lines_chomp(_t%d) : sp_str_lines(_t%d))), "
-                  "sp_box_str(_t%d), _t%d ? SPL(\"each_line(chomp: true)\") : SPL(\"each_line(chomp: false)\")); })",
-               tch, tsrc2, tsrc2, tsrc2, tch);
+    buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from_items(sp_str_chars_poly(_t%d)), "
+                  "sp_box_str(_t%d), SPL(\"%s\")); })", tsrc, tsrc, name);
     return 1;
   }
   /* e.each_slice(n) / e.each_cons(n) with no block on an Enumerator, which

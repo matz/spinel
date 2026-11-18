@@ -50826,6 +50826,7 @@ static void an_phase_desugar_register(Compiler *c) {
   desugar_builtin_method_defined_conds(c);  /* unless String.method_defined?(:m) -> unless true */
   AN_STEP_V("desugar_builtin_reopen_self_cmethods", desugar_builtin_reopen_self_cmethods(c)); /* self.sqrt in an Integer class method -> Integer.sqrt */
   AN_STEP_V("desugar_engine_branches", desugar_engine_branches(c));
+  AN_STEP_V("desugar_socket_constants", desugar_socket_constants(c));           /* Socket::Constants::X -> Socket::X */
   lower_run(c, &lc, LW_PAREN_DEF_BODY);            /* def m = (a; b) -> def m; a; b; end */
   desugar_def_unless_method_defined(c); /* def m .. end unless method_defined?(:m), answered in program order --
                                            ahead of the runtime-condition defs, which it answers statically */

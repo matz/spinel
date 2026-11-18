@@ -113,6 +113,11 @@ and its `super` share the version history of the String method behind it.
 A placed conditional prepend activates its guard when its statement runs.
 Dispatch and `respond_to?` use the active arm's visibility and fall back
 to the underlying method while the guard is clear.
+
+MatchData's named capture hashes and boxed String scan results construct
+String handles from the counted capture spans. A participating empty
+capture has its own mutable String. A missing capture occupies a nil slot.
+
 A conditional assignment to a String instance variable evaluates
 the right-hand side only when the store is taken. It checks whether the
 receiver is frozen after evaluating that value and before updating the slot.

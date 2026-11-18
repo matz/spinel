@@ -11764,7 +11764,7 @@ static sp_StrPolyHash *sp_md_named_captures(sp_MatchData *m) {
       const char *k = sp_str_dup_external(nm); SP_GC_ROOT_STR(k);
       /* a name repeated across branches reads the group that matched */
       g = sp_re_name_group(m->pat, nm, m->caps, m->ncap * 2);
-      sp_RbVal v = sp_box_nullable_str(sp_MatchData_aref(m, g));
+      sp_RbVal v = sp_MatchData_aref_box(m, g);
       sp_StrPolyHash_set(h, k, v);
     }
   }
@@ -11952,7 +11952,11 @@ static sp_SymPolyHash *sp_md_named_captures_sym(sp_MatchData *m) {
   for (int i = 0; i < n; i++) {
     int g = -1;
     const char *nm = re_named_name(m->pat, i, &g);
-    if (nm) sp_SymPolyHash_set(h, sp_sym_intern(nm), sp_box_nullable_str(sp_MatchData_aref(m, sp_re_name_group(m->pat, nm, m->caps, m->ncap * 2))));
+    if (nm) {
+      sp_sym key = sp_sym_intern(nm);
+      g = sp_re_name_group(m->pat, nm, m->caps, m->ncap * 2);
+      sp_SymPolyHash_set(h, key, sp_MatchData_aref_box(m, g));
+    }
   }
   return h;
 }
@@ -11987,7 +11991,7 @@ static sp_SymPolyHash *sp_md_deconstruct_keys(sp_MatchData *m, sp_RbVal keys) {
       const char *nm = re_named_name(m->pat, j, &g);
       if (nm && strcmp(nm, kn) == 0) {
         g = sp_re_name_group(m->pat, nm, m->caps, m->ncap * 2);
-        sp_SymPolyHash_set(h, (sp_sym)k.v.i, sp_box_nullable_str(sp_MatchData_aref(m, g)));
+        sp_SymPolyHash_set(h, (sp_sym)k.v.i, sp_MatchData_aref_box(m, g));
         break;
       }
     }

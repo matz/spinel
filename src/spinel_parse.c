@@ -8326,6 +8326,51 @@ static void sp_graph_inherit(SpLoadGraph *g, int f) {
   }
   r->ndirs = n;
 }
+/* Each parse error at its position, `file:line:col: message` (the column
+   1-based on stderr, as an editor reads a compiler's message; 0-based in
+   the JSON, as Prism gives it and --emit-types carries it). The file is
+   `shown` when given (a file of the load graph, parsed as written), else
+   the multi-file map's for the line, so an error in a required file names
+   that file. Under --emit-types the JSON is written too, with no types and
+   the errors as its diagnostics: a buffer is unparseable most of the time
+   it is being typed into, and its marker belongs on the token, not on
+   line 1. */
+static void sp_report_parse_errors(pm_parser_t *parser, const char *source_file, const char *shown) {
+  fprintf(stderr, "Parse errors in '%s':\n", source_file);
+  const char *types_out = g_opt_emit_types;
+  FILE *jf = types_out ? fopen(types_out, "w") : NULL;
+  if (types_out && !jf) fprintf(stderr, "spinel: cannot write '%s'\n", types_out);
+  if (jf) fputs("{\n  \"types\": [\n\n  ],\n  \"diagnostics\": [\n", jf);
+  int nd = 0;
+  pm_diagnostic_t *diag;
+  for (diag = (pm_diagnostic_t *)parser->error_list.head; diag; diag = (pm_diagnostic_t *)diag->node.next) {
+    pm_line_column_t lc = pm_newline_list_line_column(&parser->newline_list, diag->location.start, parser->start_line);
+    pm_line_column_t le = pm_newline_list_line_column(&parser->newline_list, diag->location.end, parser->start_line);
+    const char *file = shown ? shown : source_file;
+    int line = lc.line, end_line = le.line;
+    if (!shown && sp_line_map_n > 0 && lc.line >= 1 && lc.line <= sp_line_map_n && sp_line_orig[lc.line] > 0) {
+      file = sp_file_table[sp_line_file[lc.line]];
+      line = sp_line_orig[lc.line];
+      end_line = (le.line >= 1 && le.line <= sp_line_map_n && sp_line_orig[le.line] > 0) ? sp_line_orig[le.line] : line;
+    }
+    fprintf(stderr, "  %s:%d:%d: %s\n", file, line, lc.column + 1, diag->message);
+    if (jf) {
+      if (nd++) fputs(",\n", jf);
+      fputs("    {\"file\":\"", jf);
+      json_fputs(file, jf);
+      fprintf(jf, "\",\"line\":%d,\"col\":%d,\"end_line\":%d,\"end_col\":%d,\"severity\":\"error\",\"message\":\"",
+              line, lc.column, end_line, le.column);
+      json_fputs(diag->message, jf);
+      fputs("\"}", jf);
+    }
+  }
+  if (jf) {
+    fputs("\n  ],\n  \"codegen\": [\n\n  ]\n}\n", jf);
+    fclose(jf);
+    fprintf(stderr, "Wrote %s\n", types_out);
+  }
+}
+
 /* --load-model=graph: file `f` of graph `g` read and parsed, before any
    file is flattened: its requires resolved (each target file a file of the
    graph, read in its turn) and the names it uses added to `facts`. 0 when it
@@ -8345,8 +8390,13 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
   sp_src_file_note_defers(&r->src);
   sp_src_file_warn_encoding(&r->src);
   if (r->src.parser.error_list.size) {
-    const pm_diagnostic_t *d = (const pm_diagnostic_t *)r->src.parser.error_list.head;
-    fprintf(stderr, "Parse errors in '%s':\n  %s\n", path, d->message);
+    /* the file as the program names it: under the current directory, from
+       there (as the entry file is given), else its whole path */
+    char cwd[1024];
+    const char *shown = path;
+    size_t cl = getcwd(cwd, sizeof cwd) ? strlen(cwd) : 0;
+    if (cl && source_file[0] != '/' && strncmp(path, cwd, cl) == 0 && path[cl] == '/') shown = path + cl + 1;
+    sp_report_parse_errors(&r->src.parser, source_file, shown);
     return 0;
   }
   sp_src_file_fsl(&r->src);   /* (its pragma's warning; every literal is frozen) */
@@ -9072,47 +9122,7 @@ else {
   pm_node_t *root = pm_parse(&parser);
 
   if (parser.error_list.size > 0) {
-    /* Each error at its position, `file:line:col: message` (the column
-       1-based on stderr, as an editor reads a compiler's message; 0-based in
-       the JSON, as Prism gives it and --emit-types carries it), through the
-       multi-file map when one was built so an error in a required file
-       names that file. Under --emit-types the JSON is written too, with no
-       types and the errors as its diagnostics: a buffer is unparseable most
-       of the time it is being typed into, and its marker belongs on the
-       token, not on line 1. */
-    fprintf(stderr, "Parse errors in '%s':\n", source_file);
-    const char *types_out = g_opt_emit_types;
-    FILE *jf = types_out ? fopen(types_out, "w") : NULL;
-    if (types_out && !jf) fprintf(stderr, "spinel: cannot write '%s'\n", types_out);
-    if (jf) fputs("{\n  \"types\": [\n\n  ],\n  \"diagnostics\": [\n", jf);
-    int nd = 0;
-    pm_diagnostic_t *diag;
-    for (diag = (pm_diagnostic_t *)parser.error_list.head; diag; diag = (pm_diagnostic_t *)diag->node.next) {
-      pm_line_column_t lc = pm_newline_list_line_column(&parser.newline_list, diag->location.start, parser.start_line);
-      pm_line_column_t le = pm_newline_list_line_column(&parser.newline_list, diag->location.end, parser.start_line);
-      const char *file = source_file;
-      int line = lc.line, end_line = le.line;
-      if (sp_line_map_n > 0 && lc.line >= 1 && lc.line <= sp_line_map_n && sp_line_orig[lc.line] > 0) {
-        file = sp_file_table[sp_line_file[lc.line]];
-        line = sp_line_orig[lc.line];
-        end_line = (le.line >= 1 && le.line <= sp_line_map_n && sp_line_orig[le.line] > 0) ? sp_line_orig[le.line] : line;
-      }
-      fprintf(stderr, "  %s:%d:%d: %s\n", file, line, lc.column + 1, diag->message);
-      if (jf) {
-        if (nd++) fputs(",\n", jf);
-        fputs("    {\"file\":\"", jf);
-        json_fputs(file, jf);
-        fprintf(jf, "\",\"line\":%d,\"col\":%d,\"end_line\":%d,\"end_col\":%d,\"severity\":\"error\",\"message\":\"",
-                line, lc.column, end_line, le.column);
-        json_fputs(diag->message, jf);
-        fputs("\"}", jf);
-      }
-    }
-    if (jf) {
-      fputs("\n  ],\n  \"codegen\": [\n\n  ]\n}\n", jf);
-      fclose(jf);
-      fprintf(stderr, "Wrote %s\n", types_out);
-    }
+    sp_report_parse_errors(&parser, source_file, NULL);
     /* Issue #764: free the registered include paths on the parse-
        error exit path too. */
     pm_node_destroy(&parser, root);

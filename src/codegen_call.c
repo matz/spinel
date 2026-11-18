@@ -8951,7 +8951,7 @@ static int kwh_values_held(const NodeTable *nt, int kwh) {
 }
 static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int argc, const int *argv,
                             const int *atmp, const TyKind *atmp_ty, TyKind ret, TyKind bt, int slot_o,
-                            int nil_fwd, int tv, Buf *nb, char **arm_pre, int *box_o) {
+                            int omit_block, int tv, Buf *nb, char **arm_pre, int *box_o) {
   const NodeTable *nt = c->nt;
   int slot = view_bind_temp(recv, tv);
   /* a splat into Object's own method (poly_default_obj_spreads) spreads the
@@ -9007,7 +9007,7 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
   /* a forwarded `&b` the builtin leaves unused is left out of its arm, whose
      emitters take the call without one (an_builtin_answer asks the same) */
   int dblk = nt_ref(nt, id, "block");
-  int drop_blk = dblk >= 0 && nt_kind(nt, dblk) == NK_BlockArgumentNode && (builtin_read_ignores_block(name) || nil_fwd);
+  int drop_blk = omit_block || (dblk >= 0 && nt_kind(nt, dblk) == NK_BlockArgumentNode && builtin_read_ignores_block(name));
   if (drop_blk) nt_node_set_ref((NodeTable *)nt, id, "block", -1);
   /* Array#at, kept by name where a program class owns it */
   char *sv_nm = NULL;
@@ -9043,10 +9043,13 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
      (resolve_forwarded_block, and no real proc the inline was handed): the
      call is blockless here, and its builtin answers as one (a Hash's
      each_pair its Enumerator) */
-  int nil_fwd = 0;
+  /* The builtin text method accepts a block and leaves it unused. Its
+     Ruby override has already received the block through the dispatch. */
+  int omit_block = 0;
   { int fb0 = nt_ref(nt, id, "block");
-    nil_fwd = fb0 >= 0 && nt_kind(nt, fb0) == NK_BlockArgumentNode &&
-              resolve_forwarded_block(c, fb0) < 0 && !forwarded_real_proc(fb0, -1); }
+    omit_block = fb0 >= 0 && (is_exception_message(name) ||
+                (nt_kind(nt, fb0) == NK_BlockArgumentNode &&
+                 resolve_forwarded_block(c, fb0) < 0 && !forwarded_real_proc(fb0, -1))); }
   /* a block call without arguments takes the builtin's arm only for the
      in-place mutators, which answer the receiver (or nil), into a call
      answering a box, or run for its effect alone (a statement's, whose
@@ -9055,7 +9058,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
      the builtin, and their arm did not build. Every value's methods that
      hand the block the receiver (iter_hands_recv: tap, then) answer it or
      the block's value, the type the analysis records, checked below. */
-  if (nt_ref(nt, id, "block") >= 0 && argc == 0 && !nil_fwd && !iter_hands_recv(name) &&
+  if (nt_ref(nt, id, "block") >= 0 && argc == 0 && !omit_block && !iter_hands_recv(name) &&
       !(poly_block_mutator_name(name) && (ret == TY_POLY || comp_value_dropped(c, id))) &&
       !(is_step_call(name) && ret == TY_POLY)) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;
@@ -9108,7 +9111,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
                      !poly_arg_held_oint(c, argv[a], atmp_ty[a]))))
       return 0;
   }
-  TyKind bt = (c->poly_builtin_ty && id < c->node_cap && !g_arm.count_arm && !nil_fwd)
+  TyKind bt = (c->poly_builtin_ty && id < c->node_cap && !g_arm.count_arm && !omit_block)
                 ? c->poly_builtin_ty[id] : TY_UNKNOWN;
   /* `to_s` / `inspect` answer a String on every builtin receiver, with or
      without an argument (Integer#to_s(base)); the analysis types them by the
@@ -9118,7 +9121,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
   /* respond_to? is every value's: a class overriding it gets an arm, and
      any other value the answer the program would give without the override */
   if (bt == TY_UNKNOWN && argc >= 1 && argc <= 2 && sp_streq(name, "respond_to?")) bt = TY_BOOL;
-  if (bt == TY_UNKNOWN && nil_fwd) {
+  if (bt == TY_UNKNOWN && omit_block) {
     int fb1 = nt_ref(nt, id, "block");
     nt_node_set_ref((NodeTable *)nt, id, "block", -1);
     bt = an_builtin_answer(c, id);
@@ -9168,7 +9171,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
   Buf *nb = calloc(1, sizeof *nb);
   char *arm_pre = NULL;
   int box_o = 0;
-  int ok = bi_default_probe(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, bt, slot_o, nil_fwd, tv, nb, &arm_pre, &box_o);
+  int ok = bi_default_probe(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, bt, slot_o, omit_block, tv, nb, &arm_pre, &box_o);
   Buf ib; memset(&ib, 0, sizeof ib);
   if (ok && nb->p) {
     /* a raise token is no value to box: the test below reads it bare */
@@ -9219,7 +9222,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
       Buf *nb2 = calloc(1, sizeof *nb2);
       char *pre2 = NULL;
       int box2 = 0;
-      int ok2 = bi_default_probe(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, bt, slot_o, nil_fwd, tv,
+      int ok2 = bi_default_probe(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, bt, slot_o, omit_block, tv,
                                  nb2, &pre2, &box2);
       nt_node_set_ref((NodeTable *)nt, blk, "body", body);
       if (ok2 && nb2->p && !arm_raises_nomethod_for(nb2->p, name)) own_raise = 0;

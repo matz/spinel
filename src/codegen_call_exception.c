@@ -54,18 +54,50 @@ static void emit_exc_own_render(Compiler *c, int id, int recv, int xcm, const Ca
   free(call.p);
 }
 
+/* Read the Ruby result in the representation selected for this call. */
+static void emit_exc_answer(Compiler *c, int id, const char *box, Buf *b) {
+  Repr r = repr_of(c, id);
+  TyKind t = repr_native_call_handle(c, id) ? TY_STRBUF : r.as_ty;
+  if (r.kind == RK_BOXED) buf_puts(b, box);
+  else if (oint_kind(t) && node_is_oint(c, id)) buf_printf(b, "%s(%s)", oint_unbox(t), box);
+  else emit_unbox_text(c, t, box, b);
+}
+
+/* A written send can pass arguments and a block to a Ruby override.
+   The ordinary dispatch binds them to the selected exception class.
+   Its setup follows the receiver, inside the call's evaluation site. */
+static int emit_exc_bound_send(Compiler *c, int id, int recv, Buf *b) {
+  int tv = ++g_tmp;
+  Buf call = {0}, pre = {0};
+  Buf *saved = g_pre;
+  g_pre = &pre;
+  int mark = view_bind_temp(recv, tv);
+  int rv = view_push(c, recv, TY_POLY);
+  int result = view_push(c, id, TY_POLY);
+  int ok = emit_poly_method_dispatch(c, id, &call);
+  view_pop(c, result);
+  view_pop(c, rv);
+  view_unbind(mark);
+  g_pre = saved;
+  if (ok) {
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+    emit_boxed(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s", tv, pre.p ? pre.p : "");
+    emit_exc_answer(c, id, call.p, b);
+    buf_puts(b, "; })");
+  }
+  free(call.p); free(pre.p);
+  return ok;
+}
+
 /* Ruby accessors return the override's box, its original String handle, or
    a bytes view at a reader. Report formatting has a separate adapter. */
 static void emit_exc_result(Compiler *c, int id, const char *name, const char *e, Buf *b) {
-  Repr r = repr_of(c, id);
   const char *fn = !exc_has_user_msg_override(c) ? "sp_exc_message_idbox"
                  : is_message_name(name) ? "sp_user_exc_message_v" : "sp_user_exc_to_s_v";
   Buf call = {0};
   buf_printf(&call, "%s((sp_Exception *)(%s))", fn, e);
-  TyKind t = repr_native_call_handle(c, id) ? TY_STRBUF : r.as_ty;
-  if (r.kind == RK_BOXED) buf_puts(b, call.p);
-  else if (oint_kind(t) && node_is_oint(c, id)) buf_printf(b, "%s(%s)", oint_unbox(t), call.p);
-  else emit_unbox_text(c, t, call.p, b);
+  emit_exc_answer(c, id, call.p, b);
   free(call.p);
 }
 
@@ -189,6 +221,8 @@ const char *isa_exc_class_name(Compiler *c, int arg, char *buf, size_t bufsz) {
 }
 
 int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  if (recv >= 0 && is_exception_message(name) && (argc || nt_ref(nt, id, "block") >= 0) &&
+      repr_of(c, recv).exc && exc_has_user_msg_override(c) && emit_exc_bound_send(c, id, recv, b)) return 1;
   if (sp_streq(name, "detailed_message") && emit_exc_detailed_options(c, id, recv, argc, argv, b)) return 1;
   /* A marked message read takes the existing exception handle route,
      including a rescued variable specialized to an exception subclass. */

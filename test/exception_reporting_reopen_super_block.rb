@@ -4,9 +4,13 @@ class StandardError
     "parent"
   end
 end
-
 class TypeError
   def message(&block) = super
 end
-
-p TypeError.new("seed").detailed_message
+def through(exception, &block)
+  exception.message(&block)
+end
+err = TypeError.new("seed")
+p through(err) { puts "forwarded" }
+p err.message { puts "literal" }
+p err.detailed_message

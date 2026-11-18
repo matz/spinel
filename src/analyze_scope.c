@@ -8797,7 +8797,7 @@ static int string_reader_prepend(Compiler *c, int cls, int mod) {
       continue;
     }
     if (!name || (!is_string_boxed_reader(name) &&
-                  builtin_instance_method_known(c->classes[cls].name, name))) return 0;
+                  (is_initialize_hook_name(name) || builtin_instance_method_known(c->classes[cls].name, name)))) return 0;
     found = 1;
   }
   return found;
@@ -9398,7 +9398,7 @@ static void prepend_copy_name(Compiler *c, int mi) {
 }
 static void specialize_cmethod_for(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind);
 static void cmethod_copy_into(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind);
-static int prepend_late_stmt(Compiler *c, int ci, int body, int nested);
+static int prepend_late_stmt(Compiler *c, int ci, int body, int nested, int string_readers);
 static int prepend_cell(Compiler *c, int *cell);
 static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell);
 
@@ -10104,7 +10104,7 @@ void register_extends(Compiler *c) {
         int sprep = mx[j].kind == LR_SG_PREPEND;
         /* (a record-taken extend, `K.extend(M)` at the top level, is the
            record's where it runs: its copies need no guard, foreign_late_stmt) */
-        if (late == -2) late = sprep || bi < nb ? prepend_late_stmt(c, ci, body, 0) : -1;
+        if (late == -2) late = sprep || bi < nb ? prepend_late_stmt(c, ci, body, 0, 0) : -1;
         int guard = late >= 0, plain = !guard && bi > 0 && bi < nb && reopening_may_not_run(c, ob[bi].node);
         int s0 = c->nscopes;
         did_clone |= extend_class_with(c, ci, mod_id, inherited, sprep, plain, guard ? &cell : NULL);
@@ -10956,7 +10956,7 @@ static int prepend_after_call(Compiler *c, int ci, int body) {
   for (int i = 0; i < bn && bb[i] != first; i++) if (body_stmt_calls(nt, bb[i])) return 1;
   return 0;
 }
-static int prepend_late_stmt(Compiler *c, int ci, int body, int nested) {
+static int prepend_late_stmt(Compiler *c, int ci, int body, int nested, int string_readers) {
   const NodeTable *nt = c->nt;
   int nb = 0;
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
@@ -10964,7 +10964,7 @@ static int prepend_late_stmt(Compiler *c, int ci, int body, int nested) {
   if (fl >= 0) return fl;
   /* String already exists before the first body that reopens it, even
      when the load record places that body inside a block. */
-  int core_string = nested && ci == comp_core_class(c, CORE_STRING);
+  int core_string = string_readers && ci == comp_core_class(c, CORE_STRING);
   /* The first body can run a call before its own prepend as well. */
   if (nb >= 1 && ob[0].body == body && nt_kind(nt, ob[0].node) == NK_ClassNode &&
       (core_string || prepend_after_call(c, ci, body))) {
@@ -11034,14 +11034,17 @@ static void prepend_cell_set(Compiler *c, int list, int after, int cell) {
   ver_prepend_cell_name(cell, name);
   cell_write_note(c, ver_cell_put(c, name, list, after, 1, 1));
 }
-static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell) {
+static void prepend_cell_seed(Compiler *c, int late, int cell) {
   int f, rank, n = 0;
   char name[32];
   ver_prepend_cell_name(cell, name);
-  prepend_cell_set(c, list, after, cell);
   elab_top_place(c, late, &f, &rank);
   const int *st = f >= 0 ? nt_arr(c->nt, prog_root_stmts(c, f), "body", &n) : NULL;
   if (n) cell_write_note(c, ver_cell_put(c, name, prog_root_stmts(c, f), st[0], 0, 0));
+}
+static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell) {
+  prepend_cell_set(c, list, after, cell);
+  prepend_cell_seed(c, late, cell);
 }
 
 /* Has module mod been prepended into class ci already: ci holds a copy
@@ -11053,9 +11056,25 @@ static int mixin_prepended(Compiler *c, int ci, int mod) {
   return 0;
 }
 
+/* A later occurrence supplies a second position when the first one may
+   have been skipped. Both positions select on the first executed site. */
+static int conditional_prepend_cell(Compiler *c, int ci, int mod, int placement) {
+  int cell = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *m = &c->scopes[s];
+    if (m->class_id != ci || !m->is_prepend_copy || m->origin_module_ci != mod + 1) continue;
+    if (!m->mixin_conditional) return 0;
+    if (m->mixin_guard_value == placement) return -1;
+    cell = m->mixin_guarded;
+  }
+  return cell;
+}
+
 static void process_prepend_body(Compiler *c, int ci, int body) {
   const NodeTable *nt = c->nt;
-  int late = prepend_late_stmt(c, ci, body, 1);
+  int ordinary_late = prepend_late_stmt(c, ci, body, 1, 0);
+  int core_string = ci == comp_core_class(c, CORE_STRING);
+  int reader_late = core_string ? prepend_late_stmt(c, ci, body, 1, 1) : ordinary_late;
   /* a module's prepend goes wherever the module is mixed in, which brings
      it in front of the module (body_mixins) */
   if (comp_class_is_module(c, &c->classes[ci])) return;
@@ -11068,18 +11087,25 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
       if (mod_id < 0) continue;
       /* a reopening's prepend, also one that may not run: the cell its
          copies' guard entries read is set right after it, where it runs */
+      int string_chain = core_string && string_reader_prepend(c, ci, mod_id);
+      int late = string_chain ? reader_late : ordinary_late;
       int list = mx[j].list, at = list == body ? late : mx[j].stmt;
       int stmt_here = late >= 0 && list_has_stmt(nt, list, mx[j].stmt);
-      int layered = stmt_here && mixin_layers_call_super(c, ci, mod_id, at, mx[j].stmt);
+      int layered = stmt_here && !string_chain && mixin_layers_call_super(c, ci, mod_id, at, mx[j].stmt);
       int here = stmt_here && (mx[j].conditional || !mixin_presence_unguarded(c, ci, mod_id, at)) &&
                  !mixin_rebrought_behind(c, ci, mod_id, at) &&
                  !mixin_meets_plain_late(c, ci, mod_id) && !layered;
       if (mx[j].conditional && !here) continue;
+      int placement = mx[j].stmt + 2;
+      int earlier = string_chain && here ? conditional_prepend_cell(c, ci, mod_id, placement) : 0;
+      if (earlier < 0) continue;   /* the same module already occurs in this call */
+      if (!earlier) placement = 0;
+      if (earlier) cell = earlier;
       /* a module prepended before, or one such a module brings, is among
          the class's ancestors already: CRuby's prepend of it changes
          nothing (`prepend M` then `prepend Base`, where M includes Base),
          but where that prepend may not have run, this one sets its cells */
-      {
+      if (!earlier) {
         const ClassInfo *cls = &c->classes[ci];
         int *done = malloc(sizeof(int) * (size_t)(cls->nprepended_mods > 0 ? cls->nprepended_mods : 1)), nd = 0;
         if (!done) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -11210,7 +11236,8 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
              statement has run (Scope.mixin_guarded) */
           if (guard) { dst->mixin_guarded = prepend_cell(c, &cell); dst->guard_behind = behind; }
           else if (vguard >= 0) { dst->mixin_guarded = c->scopes[vguard].mixin_guarded; dst->guard_behind = c->scopes[vguard].guard_behind; }
-          dst->mixin_conditional = dst->mixin_guarded && mx[j].conditional;
+          if (dst->mixin_guarded) dst->mixin_guard_value = placement;
+          dst->mixin_conditional = dst->mixin_guarded && (mx[j].conditional || earlier);
           dst->mixin_plain_late = stmt_here && !layered && !dst->mixin_guarded;
           dst->mixin_unversioned = stmt_here && !here;
           { dst->origin_module_ci = mod_id + 1; comp_touch_scope(dst->idx); }   /* #owner names the module */
@@ -11235,7 +11262,12 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
          reaches what M includes before the class */
       include_chain_copy(c, ci, mod_id, made, snap, 0);
       free(made);
-      if (cell) prepend_cell_write(c, late, list, mx[j].stmt, cell);
+      if (cell && string_chain && (mx[j].conditional || earlier)) {
+        char name[32];
+        ver_prepend_cell_name(cell, name);
+        cell_write_note(c, ver_cell_put_first(c, name, list, mx[j].stmt, placement ? placement : 1));
+        if (!earlier) prepend_cell_seed(c, late, cell);
+      } else if (cell) prepend_cell_write(c, late, list, mx[j].stmt, cell);
     }
     free(mx);
   }

@@ -539,6 +539,7 @@ int cplan_class_kernel(Compiler *c, int cls);
 /* `cell = v` put in statement list `list` at its statement `at` (after it
    when after): the write, for the caller to record (elab_record_write) */
 int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int v);
+int ver_cell_put_first(Compiler *c, const char *cell, int list, int at, int v);
 void ver_cells_write(Compiler *c);
 /* forgets the versions the calls were answered (Compiler.ver_memo), for a
    fact they read that changed */

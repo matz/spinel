@@ -2970,8 +2970,11 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
       x->r->hgen++;
-      k->mix[k->nmix++] = (LrMixin){ node, lr_mix_kind(nt, node, nm, sg), mod, av[i], .cond = !x->unplaced && x->r->at[node] >= 0 && x->r->st[x->r->at[node]].fmay,
-                                     .applied = lr_stmt_applied(x->unplaced ? NULL : lr_stmt_of(x->r, node), x->unplaced, may) == 1, .open = fnode };
+      const LrStmt *stmt = x->unplaced ? NULL : lr_stmt_of(x->r, node);
+      LrMixKind kind = lr_mix_kind(nt, node, nm, sg);
+      int conditional_reopen = stmt && stmt->bmay && kind == LR_PREPEND && cls == lr_core(x->r, CORE_STRING);
+      k->mix[k->nmix++] = (LrMixin){ node, kind, mod, av[i], .cond = stmt && (stmt->fmay || conditional_reopen),
+                                     .applied = !conditional_reopen && lr_stmt_applied(stmt, x->unplaced, may) == 1, .open = fnode };
       /* `K.include M` in another class's body or at the top level, on a
          class of the program: a mixin the passes take as one of K's
          bodies' (elab_all_bodies), so the statement itself does nothing
@@ -4967,8 +4970,10 @@ static int lr_mixin_dup(Compiler *c, int cls, int sg, LrClass *k, int i) {
     int o = ELAB_NO, pre = m->kind == LR_PREPEND || m->kind == LR_SG_PREPEND;
     for (int j = 0; j < i && o != ELAB_YES; j++) {
       LrMixin *e = &k->mix[j];
-      if ((pre || e->node == m->node) && e->kind == m->kind && lr_mixin_class(c, e) >= 0)
-        o = e->mod == m->mod || lr_search(c, e->mod, 0, NULL, m->mod, p, 0, 0, NULL, 0) == ELAB_YES ? ELAB_YES : ELAB_NO;
+      if (!(pre || e->node == m->node) || e->kind != m->kind || lr_mixin_class(c, e) < 0) continue;
+      if (e->mod != m->mod && lr_search(c, e->mod, 0, NULL, m->mod, p, 0, 0, NULL, 0) != ELAB_YES) continue;
+      o = cls == lr_core(c->lrec, CORE_STRING) && m->kind == LR_PREPEND && e->node != m->node && e->cond
+          ? ELAB_UNKNOWN : ELAB_YES;
     }
     if (o != ELAB_YES && !pre) o = lr_search(c, cls == LR_MAIN && !sg && lr_core(c->lrec, CORE_OBJECT) >= 0 ? lr_core(c->lrec, CORE_OBJECT) : cls, sg, NULL, m->mod, p, 0, 0, NULL, 0);
     m->dup = (unsigned char)(1 + o);
@@ -11104,7 +11109,7 @@ const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n) {
 int elab_conditional_prepend_list(Compiler *c, const LrMixin *m) {
   const LrStmt *s = lr_stmt_of(elab_fresh(c), m->node);
   int frame;
-  if (!s || s->region < 0 || s->kept || !(s->fmay || s->fpartial)) return -1;
+  if (!s || s->region < 0 || s->kept || !(s->fmay || s->bmay || s->fpartial)) return -1;
   if (s->fpartial && (s->rep < 0 || elab_in_unplaced_block(c, m->node))) return -1;
   int list = elab_stmt_list(c, m->node, &frame);
   return list >= 0 && frame == m->open ? list : -1;

@@ -28585,15 +28585,20 @@ int desugar_user_send_others(Compiler *c) {
 
 int object_instance_method_name(const char *n);
 int builtin_object_method_known(const char *m);
+/* Does every object answer nm without method_missing: a top-level def
+   (Object's, answered ahead of method_missing), Object's or Kernel's
+   method? The part of mm_answers that asks nothing of the class. */
+static int mm_object_answers(Compiler *c, int id, const char *nm) {
+  if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) return 1;
+  for (int i = 0; object_methods[i]; i++) if (sp_streq(nm, object_methods[i])) return 1;
+  return object_instance_method_name(nm) || builtin_object_method_known(nm) || is_kernel_module_function(nm);
+}
 /* Does class k answer nm without method_missing: a method or an accessor of
    its chain, or a method every object has? */
 static int mm_answers(Compiler *c, int id, int k, const char *nm) {
   MethodLookup ml = { .def_class = -1 };
   if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) return 1;
-  /* (a top-level def is Object's, which every object answers ahead of method_missing) */
-  if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) return 1;
-  for (int i = 0; object_methods[i]; i++) if (sp_streq(nm, object_methods[i])) return 1;
-  return object_instance_method_name(nm) || builtin_object_method_known(nm) || is_kernel_module_function(nm);
+  return mm_object_answers(c, id, nm);
 }
 /* `::A::B` for the qualified class name `A::B` */
 static int mm_path_node(NodeTable *nt, int like, const char *qn) {
@@ -28694,6 +28699,11 @@ int desugar_missing_method_calls(Compiler *c) {
     { int d = parent ? parent[id] : -1;
       while (d >= 0 && d < n0 && (nt_kind(nt, d) == NK_StatementsNode || nt_kind(nt, d) == NK_ParenthesesNode)) d = parent[d];
       if (d >= 0 && d < n0 && nt_kind(nt, d) == NK_DefinedNode) continue; }
+    /* a name every object answers: no class the receiver can be misses it,
+       so there is nothing to split. Asked once here: asked of each class in
+       turn below (mm_answers), after that class's own lookup, it was a fifth
+       of a large application's fixpoint in call_target. */
+    if (mm_object_answers(c, id, nm)) continue;
     int miss[16], nmiss = 0, others = 0, reread = 0;
     /* (`self.m` in a block the map runs on one class asks that class, as a bare `m` there does: its self is typed boxed) */
     int ie_self = r >= 0 && nt_kind(nt, r) == NK_SelfNode && ie_block_self_class_of(c, id) >= 0;

@@ -2596,21 +2596,21 @@ static void emit_kind_array_fetch(Compiler *c, int id, Buf *b, int recv, int arg
    element is held (emit_typed_elem_value): a literal's static object, a
    new String's own handle. */
 static void emit_str_array_delete(Compiler *c, int id, const char *arr, int needle, TyKind rt, TyKind a0, Buf *b) {
-  const char *sfx = typed_elem_store_sfx(rt);
   int rd = typed_elem_read_open(rt, id, b);
   if (a0 == TY_POLY) {
     int tv = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", tv);
     emit_boxed(c, needle, b);
-    buf_printf(b, "; (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_NIL)"
-                  " ? sp_StrArray_delete%s(%s, sp_poly_elem_e(_t%d)) : (sp_String *)0; })",
-               tv, tv, sfx, arr, tv);
+    buf_printf(b, "; (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_NIL) ? ", tv, tv);
+    emit_array_entry(b, "Str", "delete");
+    buf_printf(b, "(%s, sp_poly_elem_e(_t%d)) : (sp_String *)0; })", arr, tv);
   }
   else {
     /* (a variable whose slot holds the handle is that handle, as a store
        takes it, with no bytes to find it from) */
     Buf slot; memset(&slot, 0, sizeof slot);
-    buf_printf(b, "sp_StrArray_delete%s(%s, ", sfx, arr);
+    emit_array_entry(b, "Str", "delete");
+    buf_printf(b, "(%s, ", arr);
     if (strh_var_read(c->nt, needle) && strbuf_slot_text(c, needle, &slot)) strbuf_new_of_text(c, needle, slot.p, b);
     else emit_typed_elem_value(c, needle, rt, b);
     buf_puts(b, ")");
@@ -3456,8 +3456,8 @@ else {
       buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
       buf_printf(b, "sp_RbVal _t%d = ", tv);
       emit_boxed(c, argv[0], b);
-      buf_printf(b, "; (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_NIL) ? sp_StrArray_%s(_t%d, sp_rbval_string_bytes(_t%d))"
-                    " : FALSE; })", tv, tv, fn, ta, tv);
+      buf_printf(b, "; (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_NIL)"
+                    " ? sp_StrArray_include(_t%d, sp_rbval_string_bytes(_t%d)) : FALSE; })", tv, tv, ta, tv);
       { *out = 1; return 1; }
     }
     /* The same for an Integer array: a search for a value of another kind

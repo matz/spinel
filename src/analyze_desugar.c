@@ -26082,6 +26082,36 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
     int body = cn_body(nt, blk);
     if (body < 0) continue;
     int par = parent[id];
+    /* `X = Module.new.freeze` (a frozen name validator): the write defines
+       the module as `X = Module.new` does, and X is frozen by a statement of
+       its own right after it, `X.freeze`, as the module is made before */
+    if (par >= 0 && nt_kind(nt, par) == NK_CallNode && nt_ref(nt, par, "receiver") == id &&
+        nt_str(nt, par, "name") && sp_streq(nt_str(nt, par, "name"), "freeze") &&
+        nt_ref(nt, par, "arguments") < 0 && nt_ref(nt, par, "block") < 0 &&
+        parent[par] >= 0 && nt_kind(nt, parent[par]) == NK_ConstantWriteNode && nt_ref(nt, parent[par], "value") == par) {
+      int fz = par, w = parent[par], st = parent[w], sn = 0;
+      const int *ss = st >= 0 && nt_kind(nt, st) == NK_StatementsNode ? nt_arr(nt, st, "body", &sn) : NULL;
+      int at = -1;
+      for (int k = 0; k < sn; k++) if (ss[k] == w) at = k;
+      if (at >= 0) {
+        int rd = fwd_new_node_like(nt, w, "ConstantReadNode");
+        if (rd >= 0) {
+          nt_node_set_str(nt, rd, "name", nt_str(nt, w, "name"));
+          nt_node_set_ref(nt, w, "value", id);
+          nt_node_set_ref(nt, fz, "receiver", rd);
+          ss = nt_arr(nt, st, "body", &sn);
+          int *out = malloc(sizeof(int) * (size_t)(sn + 1));
+          if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          memcpy(out, ss, sizeof(int) * (size_t)(at + 1));
+          out[at + 1] = fz;
+          memcpy(out + at + 2, ss + at + 1, sizeof(int) * (size_t)(sn - at - 1));
+          nt_node_set_arr(nt, st, "body", out, sn + 1);
+          free(out);
+          parent[id] = w; parent[fz] = st;
+          par = w;
+        }
+      }
+    }
     /* a class body opens a scope of its own, a block does not: a body reading
        the surrounding locals stays a block */
     int reads_outer = cn_reads_outer_local(nt, body, 0) ||
@@ -29060,7 +29090,10 @@ int desugar_dynamic_const_get(Compiler *c) {
       for (int m = q.head[g]; m >= 0 && first < 0; m = q.next[m]) { if (class_def_body(nt, m) >= 0) first = m; }
     else
       for (int m = 0; m < n0 && first < 0; m++) {
-        if (!class_def_opens_cref(nt, m)) continue;
+        /* a class builder's write (`V = Module.new`, a name validator) opens
+           no constant scope, so the module has no constants of its own, and
+           its block is the body the generated methods go in */
+        if (!class_def_opens_cref(nt, m) && class_def_builder(nt, m) < 0) continue;
         const char *bn = class_def_key(c, m);
         if (bn && sp_streq(bn, mn) && class_def_body(nt, m) >= 0) first = m;
       }

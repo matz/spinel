@@ -3882,7 +3882,7 @@ static void sp_dir_foreach_gen(sp_Fiber *f) {
   while ((name = sp_Dir_read(dir)) != NULL) {
     if (cap->children && (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)) continue;
     if (binary) sp_str_as_binary(name);
-    sp_PolyArray_push(names, sp_box_str(name));
+    sp_PolyArray_push(names, sp_box_str_new(name));
   }
   sp_Dir_close(dir);
   for (sp_int i = 0; i < names->len; i++) sp_Fiber_yield(names->data[i]);
@@ -3953,7 +3953,7 @@ static void sp_dir_each_gen(sp_Fiber *f) {
   const char *entry = NULL; SP_GC_ROOT_STR(entry);
   sp_Dir_rewind(dir);
   while ((entry = sp_Dir_read(dir)) != NULL)
-    sp_Fiber_yield(sp_box_str(entry));
+    sp_Fiber_yield(sp_box_str_new(entry));
   sp_gc_wb((void *)f);
   f->yielded_value = sp_box_obj(dir, SP_BUILTIN_DIR);
 }

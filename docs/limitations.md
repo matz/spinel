@@ -716,7 +716,9 @@ the member:
 
 - **`Dir.foreach` and `Dir.each_child` without a block** -- the Enumerator
   reads the directory's entries on its first pull and closes it then, so an
-  entry removed between pulls is still listed. A splatted argument is refused
+  entry removed between pulls is still listed. A collected entry keeps its
+  String identity when fetched from the resulting Array.
+  A splatted argument is refused
   at compile time (with a block it fails to build).
 
 - **`File::Stat#rdev_major` and `#rdev_minor`** -- refused at compile time

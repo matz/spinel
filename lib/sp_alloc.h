@@ -397,21 +397,24 @@ static inline void sp_str_mark_binary(char *s) {
   if (!s || !sp_str_has_hdr(s)) return;
   (((sp_str_hdr *)(s - 1)) - 1)->size |= SP_STR_SIZE_BINARY;
 }
-/* Fixed-width in ONE header decode: answers the byte length through *out and
-   returns 1 when indexing this string is byte indexing (BINARY, or a scan has
-   proved it 7-bit). Asking is_binary, then is_ascii7, then byte_len re-read the
-   marker and the header three times over -- 66 instructions where the answer is
-   two loads. */
-static inline int sp_str_fixed_width(const char *s, size_t *out) {
-  if (!s) { *out = 0; return 0; }
-  unsigned char m = ((const unsigned char *)s)[-1];
-  if (m == 0xfe || m == 0xfc || m == 0xfd || m == 0xf1 || m == 0xfb || m == 0xfa || m == 0xf8) {
+/* For a fixed-width String, read the byte length and the flags from
+   one header. The encoding flag tells a character slice which bytes to
+   return, even when both encodings index one byte at a time. */
+static inline uint32_t sp_str_fixed_width_flags(const char *s, size_t *out) {
+  if (s && sp_str_has_hdr(s)) {
     const sp_str_hdr *h = ((const sp_str_hdr *)(s - 1)) - 1;
-    if (h->len != SP_STR_LEN_UNSET &&
-        (h->size & (SP_STR_SIZE_BINARY | SP_STR_SIZE_ASCII7))) { *out = h->len; return 1; }
+    uint32_t flags = h->size & (SP_STR_SIZE_BINARY | SP_STR_SIZE_ASCII7);
+    if (flags && h->len != SP_STR_LEN_UNSET) {
+      *out = h->len;
+      return flags;
+    }
   }
   *out = 0;
   return 0;
+}
+
+static inline int sp_str_fixed_width(const char *s, size_t *out) {
+  return sp_str_fixed_width_flags(s, out) != 0;
 }
 /* Mark and hand back, so an emitter can wrap an expression in it. */
 static inline const char *sp_str_as_binary(const char *s) {

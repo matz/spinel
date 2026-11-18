@@ -1105,7 +1105,24 @@ const char*sp_str_sub_range(const char*s,sp_int start,sp_int len){SP_GC_ROOT_STR
    yield CRuby's `"hello"[20] -> nil`. Byte-indexed text (BINARY, or proved
    7-bit) reads the byte at i: counting its characters and slicing one out
    (sp_str_sub_range) was most of a scanning loop's `s[i]`. */
-const char*sp_str_char_at_or_nil(const char*s,sp_int i){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");size_t fb;if(sp_str_fixed_width(s,&fb)){sp_int n=(sp_int)fb;if(i<0)i+=n;if(i<0||i>=n)return NULL;const char*one=sp_char_one((unsigned char)s[i],sp_str_is_binary(s));if(one)return one;}sp_int cl=sp_str_length(s);if(i<0)i+=cl;if(i<0||i>=cl)return NULL;return sp_str_sub_range(s,i,1);}
+const char *sp_str_char_at_or_nil(const char *s, sp_int index) {
+  SP_GC_ROOT_STR(s);
+  if (!s) sp_nil_recv("[]");
+  size_t length;
+  uint32_t flags = sp_str_fixed_width_flags(s, &length);
+  if (flags) {
+    sp_int n = (sp_int)length;
+    if (index < 0) index += n;
+    if (index < 0 || index >= n) return NULL;
+    const char *one = sp_char_one((unsigned char)s[index], (flags & SP_STR_SIZE_BINARY) != 0);
+    if (one) return one;
+  } else {
+    sp_int n = sp_str_length(s);
+    if (index < 0) index += n;
+    if (index < 0 || index >= n) return NULL;
+  }
+  return sp_str_sub_range(s, index, 1);
+}
 /* The width in bytes of the character at byte `at` of s, which ends at
    byte blen: one on a BINARY string, as #chars counts. */
 size_t sp_str_char_width(const char*s,size_t blen,size_t at){

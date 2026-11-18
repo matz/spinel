@@ -87,3 +87,9 @@ ok "{\"a\":1,\"a\":2}" {"a" => 2}
 ok "[\"\\uDC00\"]" ["\xED\xB0\x80"]
 "{\"\\q\":1}" => "invalid escape character in string: '\\q\":1}' at line 1 column 3"
 "{\"a\u0001\":1}" => "invalid ASCII control character in string: '\u0001\":1}' at line 1 column 4"
+"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" => "unexpected character: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' at line 1 column 1"
+"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" => "unexpected character: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' at line 1 column 1"
+"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" => "unexpected character: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' at line 1 column 1"
+"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxé" => "unexpected character: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' at line 1 column 1"
+"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日yz" => "unexpected character: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' at line 1 column 1"
+"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxé" => "unexpected character: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' at line 1 column 1"

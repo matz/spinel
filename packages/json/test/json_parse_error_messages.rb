@@ -95,6 +95,13 @@ TEXTS = [
   "[\"\\uDC00\"]",
   "{\"\\q\":1}",
   "{\"a\u0001\":1}",
+  # the fragment is cut at 32 bytes, and before a last character past ASCII
+  "x" * 31,
+  "x" * 32,
+  "x" * 33,
+  "x" * 31 + "\u00e9",
+  "x" * 30 + "\u65e5yz",
+  "x" * 32 + "\u00e9",
 ]
 TEXTS.each do |s|
   begin

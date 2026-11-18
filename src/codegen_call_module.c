@@ -1182,7 +1182,7 @@ int emit_marshal_value_call(Compiler *c, int id, Buf *b) {
                 "if (!(_t%d.tag == SP_TAG_CLASS && _c%d.cls_id < 0 && _c%d.name && !strcmp(_c%d.name, \"Marshal\"))) "
                 "sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); ",
              ta, tr, tr, tr, tr, tr, tr, tr, name, tr);
-  if (dump) buf_printf(b, "sp_box_str(sp_marshal_dump(_t%d)); })", ta);
+  if (dump) buf_printf(b, "sp_box_str_new(sp_marshal_dump(_t%d)); })", ta);
   else buf_printf(b, "const char *_s%d = sp_poly_arg_str_chk(_t%d); "
                      "sp_marshal_load(_s%d, (sp_int)sp_str_byte_len(_s%d)); })", ta, ta, ta, ta);
   return 1;

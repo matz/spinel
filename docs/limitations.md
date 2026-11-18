@@ -1595,7 +1595,9 @@ Strings store embedded NUL bytes, and the byte-exact core matches CRuby:
 literals (`"a\0b"`), `length` / `bytesize` / `bytes`, `==` (`"a\0b" == "a"`
 is false), Hash keys, slicing (`s[i]`, `s[a, n]`, ranges, `byteslice`),
 `dup` / `clone`, concatenation, `0.chr`, `File.write` / `File.read`
-round-trips, StringIO, pack/unpack, and Marshal.
+round-trips, StringIO, pack/unpack, and Marshal. In a decoded Marshal
+graph, references to one String share the same object, including its
+encoding and any subsequent changes.
 
 The transforms and searches are byte-exact too: the case ops, the `strip`
 family, `chomp` / `chop` / `delete_prefix` / `delete_suffix`, `index` /

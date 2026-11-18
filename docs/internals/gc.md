@@ -60,6 +60,11 @@ whose address is taken, the runtime's own C) keep the per-root macro; the two
 forms coexist. `--no-root-frame` keeps every root in the per-root form, for
 bisecting.
 
+Comparing Struct or Data members can allocate boxes for by-value fields
+(such as Complex). The comparison retains each new box while boxing the
+other member and until the comparison returns. Rooting the containing
+Struct or Data alone does not retain those separate boxes.
+
 Beyond the root array the mark walk consults three hook groups, in this order:
 
 1. **fibers** -- `sp_gc_mark_suspended_fibers_hook`: the saved root stacks of

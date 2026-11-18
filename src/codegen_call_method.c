@@ -749,7 +749,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
          is receiver-bound, a class method is not */
       int _prb = c->scopes[pmip].class_id >= 0 && !c->scopes[pmip].is_cmethod;
       int _tmin = 0, _tmax = 0;
-      const char *_th = sup_unb ? NULL : emit_method_thunk(c, fmip, _prb, &_tmin, &_tmax);
+      const char *_th = sup_unb ? NULL : emit_method_thunk(c, fmip, _prb, -1, &_tmin, &_tmax);
       emit_bm_abi_args(b, _rbb, _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
     if (sup_unb) buf_puts(b, ")");
     if (pp) buf_printf(b, ", %s)", pp);
@@ -818,7 +818,7 @@ static int emit_method_bind_target(Compiler *c, const BopCtx *x, Buf *b, int t2)
       int _ab = method_legacy_int_abi(c, t2, 1, _s, sizeof _s, &_fx, &_rs, &_rt);
       int _pa = method_poly_abi(c, t2, 1, &_pf, &_prt);
       int _tmin = 0, _tmax = 0;
-      const char *_th = emit_method_thunk(c, t2, 1, &_tmin, &_tmax);
+      const char *_th = emit_method_thunk(c, t2, 1, -1, &_tmin, &_tmax);
       emit_bm_abi_args(b, "1", _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
     if (pp) buf_printf(b, ", %s)", pp);
     buf_puts(b, "; })");
@@ -2176,6 +2176,27 @@ static void emit_guarded_public_capture(Compiler *c, int id, const char *sym, in
   }
 }
 
+/* A bind_call's call of the Method bound in block temp tr (recv read as
+   it, view_bind_temp): what the call hoists (emit_bound_method_call,
+   emit_bm_spread_call) goes in the block too, after the temp, where the
+   temp is in scope */
+static void emit_bound_call_in_block(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv, int tr, int argc,
+                                     const int *argv) {
+  Buf pre = {0}, call = {0};
+  Buf *sv_pre = g_pre;
+  int sv_indent = g_indent;
+  g_pre = &pre;
+  g_indent = 0;
+  int vr = view_bind_temp(recv, tr);
+  emit_call_callable_arms(c, id, &call, nt, "call", recv, argc, argv);
+  view_unbind(vr);
+  g_pre = sv_pre;
+  g_indent = sv_indent;
+  if (pre.p) buf_puts(b, pre.p);
+  if (call.p) buf_puts(b, call.p);
+  free(pre.p); free(call.p);
+}
+
 static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture, const char *captured_name) {
   /* Klass.instance_method(:sym) -> the unbound object: the same
      sp_BoundMethod with a NULL self, so name/arity/owner ride the Method
@@ -2198,7 +2219,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         int _pa = method_poly_abi(c, umi, 0, &_pf, &_prt);
         /* an instance method binds at #bind, which stamps the bound thunk */
         int _tmin = 0, _tmax = 0;
-        const char *_th = c->scopes[umi].is_cmethod ? emit_method_thunk(c, umi, 0, &_tmin, &_tmax) : NULL;
+        const char *_th = c->scopes[umi].is_cmethod ? emit_method_thunk(c, umi, 0, -1, &_tmin, &_tmax) : NULL;
         emit_bm_abi_args(b, "0", _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
       buf_puts(b, ")");
       if (pp) buf_printf(b, ", %s)", pp);
@@ -2241,9 +2262,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         return 0;
       }
       buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
-      int vr = view_bind_temp(recv, tr);
-      emit_call_callable_arms(c, id, b, nt, "call", recv, argc - 1, argv + 1);
-      view_unbind(vr);
+      emit_bound_call_in_block(c, id, b, nt, recv, tr, argc - 1, argv + 1);
       buf_puts(b, "; })");
       return 1;
     }
@@ -2705,7 +2724,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     buf_puts(b, ")");
     { char _rbb[16]; snprintf(_rbb, sizeof _rbb, "%d", recv_bound);
       int _tmin = 0, _tmax = 0;
-      const char *_th = mi >= 0 && !mi_unemitted ? emit_method_thunk(c, mi, recv_bound, &_tmin, &_tmax) : NULL;
+      const char *_th = mi >= 0 && !mi_unemitted ? emit_method_thunk(c, mi, recv_bound, method_node_recv_class(c, id, c->scopes[mi].class_id), &_tmin, &_tmax) : NULL;
       emit_bm_abi_args(b, _rbb, mi_legacy, mi >= 0 ? mi_sig : bop_sig,
                        mi >= 0 ? mi_fixed : bop_argc, mi >= 0 ? mi_rest : bop_rest,
                        mi >= 0 ? (mi_legacy ? mi_ret : mi_pret) : bop_ret, mi_poly, mi_pfixed, _th, _tmin, _tmax); }
@@ -2818,8 +2837,8 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   refuse_from_plan(c, id, CRF_CAPTURE, "refuse-capture");
   CallPlan plan = cplan_method_call(c, id);
   /* no method of the name where it runs: CRuby's NameError, its receiver
-     evaluated first */
-  if (plan.absent && plan.mi < 0) {
+     evaluated first (the capture's own; a reader's is its receiver's) */
+  if (plan.absent && plan.mi < 0 && is_method_object_maker(name)) {
     buf_puts(b, "({ ");
     if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
     if (plan.absent == CP_ABSENT_MAIN) emit_main_capture_absent_raise(c, id, b);

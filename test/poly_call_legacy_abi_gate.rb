@@ -7,12 +7,12 @@
 # sites stamp method_legacy_int_abi as 1 (callable) with a per-position type
 # signature, or 0 (decline), and the poly `.call`/`[]` paths compare each
 # position's type against it. A target that cannot ride the cast -- a
-# float return, a keyword parameter, a rest parameter, a class
-# method that needs its receiving class, an argument count that does not match
-# the signature, or a pointer of the wrong kind (a String parameter fed an
-# IntArray, or an object of another class) -- falls through to NoMethodError
-# instead of reading (or being read as) the wrong C type: garbage or a
-# segfault.
+# float return, a keyword parameter, a rest parameter, an argument count
+# that does not match the signature, or a pointer of the wrong kind (a
+# String parameter fed an IntArray, or an object of another class) -- falls
+# through to NoMethodError instead of reading (or being read as) the wrong
+# C type: garbage or a segfault. A class method that needs its receiving
+# class runs through its Method's thunk, which passes the class.
 #
 # A parameter nothing typed is no longer one of those cases. It used to be
 # pinned to `sp_int`, so a String handed to it would have been read as an

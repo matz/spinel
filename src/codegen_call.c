@@ -8194,15 +8194,41 @@ int method_poly_abi(Compiler *c, int mi, int recv_bound, int *out_fixed, int *ou
    signature binds -- a Float parameter, an omitted optional, a rest, a
    mixed promote signature -- where the two ABI stamps decline. Answers the
    function name, or NULL when the target's shape declines (keywords, a
-   builtin's __bam_ wrapper, a class method taking its class, more than 16
-   parameters), with the count range it binds. */
+   builtin's __bam_ wrapper, more than 16 parameters), with the count range
+   it binds. A class method taking its receiving class
+   (cmethod_takes_self_cls) has one per class it is bound on, self_cls (the
+   class `K.method(:m)` names: method_node_recv_class), `_bmt_<scope>_c<class>`,
+   which passes that class first; with no self_cls it declines. */
 int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
                          int boxed_src, int self_cls, int *out_min, int *out_max);
 static char **g_bmt_name = NULL;   /* per (scope * 2 + rb): the thunk's name, "" when declined, NULL untried */
 static int *g_bmt_min = NULL, *g_bmt_max = NULL;
 static int g_bmt_cap = 0;
-const char *emit_method_thunk(Compiler *c, int mi, int recv_bound, int *out_min, int *out_max) {
+const char *emit_method_thunk(Compiler *c, int mi, int recv_bound, int self_cls, int *out_min, int *out_max) {
   if (mi < 0 || mi >= c->nscopes) return NULL;
+  Scope *ts = &c->scopes[mi];
+  if (cmethod_takes_self_cls(c, ts)) {
+    char nm[48];
+    if (self_cls < 0 || ts->body < 0 || !ts->name || ts->cs_synth) return NULL;
+    snprintf(nm, sizeof nm, "_bmt_%d_c%d", mi, self_cls);
+    struct BmtCls *t = NULL;
+    for (int i = 0; i < c->nbmt_cls && !t; i++) if (c->bmt_cls[i].mi == mi && c->bmt_cls[i].cls == self_cls) t = &c->bmt_cls[i];
+    if (!t) {
+      if (!(c->nbmt_cls & (c->nbmt_cls - 1)) &&
+          !(c->bmt_cls = realloc(c->bmt_cls, sizeof *c->bmt_cls * (size_t)(c->nbmt_cls ? 2 * c->nbmt_cls : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      t = &c->bmt_cls[c->nbmt_cls++];
+      *t = (struct BmtCls){ mi, self_cls, 0, 0, 0, name_dup(nm) };
+      int ok, tmin = 0, tmax = 0, ix = (int)(t - c->bmt_cls);
+      ok = emit_method_tramp_fn(c, ts, 0, nm, 1, self_cls, &tmin, &tmax);   /* (may bind more: t moves) */
+      t = &c->bmt_cls[ix];
+      t->ok = ok; t->tmin = tmin; t->tmax = tmax;
+      if (ok) buf_printf(&g_proc_protos, "static sp_int %s(void *cap, sp_int argc, sp_int *args);\n", nm);
+    }
+    if (!t->ok) return NULL;
+    if (out_min) *out_min = t->tmin;
+    if (out_max) *out_max = t->tmax;
+    return t->name;
+  }
   int key = mi * 2 + (recv_bound ? 1 : 0);
   if (key >= g_bmt_cap) {
     int nc = c->nscopes * 2 + 16;

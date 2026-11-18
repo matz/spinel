@@ -85,7 +85,11 @@ typedef struct {
                               owner_ci's side (CP_ABSENT_*): CRuby's
                               NameError, where it runs (mi -1) or while no
                               version of the entry mi is live
-                              (cplan_capture_absent) */
+                              (cplan_capture_absent); for a reader of the
+                              Method that capture makes, read on it directly
+                              (`K.method(:m).owner`), the capture's where it
+                              raises wherever it runs (mi -1): the reader
+                              never runs */
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */

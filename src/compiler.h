@@ -1985,6 +1985,11 @@ typedef struct {
   char **rsc_names;   /* the names a class or module body defines, which `::Name` must not be read as the bare Name for (analyze_desugar.c, desugar_root_scoped_constants) */
   int n_rsc_names;
   int nvcall_twins;   /* the VF_VCALL twins ver_vcall_twins made: call_target asks for one only when there are any */
+  /* the thunks of class methods taking their receiving class (cmethod_takes_self_cls) a
+     bind site stamps, one per (method scope, class) (emit_method_thunk): ok 0 where the
+     trampoline declines */
+  struct BmtCls { int mi, cls, ok, tmin, tmax; char *name; } *bmt_cls;
+  int nbmt_cls;
   int ncond_lone_disp;  /* those of them a lone def at the top level, in a module or in Object or BasicObject is lowered to (call_plan.c, feature_limit) */
   /* the open histories no reader names yet, sorted by name (call_plan.c,
      ver_named_one): made once a call names one, taken 1 when asked for and

@@ -1646,9 +1646,11 @@ CallPlan cplan_method_call(Compiler *c, int id) {
   an_pure_read_end();
   if (mi >= 0) cplan_set(&p, mi, c->scopes[mi].class_id, c->scopes[mi].is_cmethod ? UC_CMETH : UC_INST, CP_DIRECT);
   if (mi >= 0 && (c->scopes[mi].entry || cplan_bam_string_guard(c, mn, mi) >= 0)) p.dispatch = CP_SWITCH;
-  p.absent = capture ? (unsigned char)cplan_capture_absent(c, id, mi) : 0;
-  if (capture && mi < 0 && !p.absent && cplan_main_capture_absent(c, id)) p.absent = CP_ABSENT_MAIN;
-  if (p.absent && mi < 0) p.owner_ci = (short)cm_capture_class(c, id, NULL);
+  /* (a reader on the capture itself: the capture's own, where it has no target) */
+  int mk = capture ? id : mi < 0 && mn >= 0 && mn == recv ? mn : -1;
+  p.absent = mk >= 0 ? (unsigned char)cplan_capture_absent(c, mk, mi) : 0;
+  if (mk >= 0 && mi < 0 && !p.absent && cplan_main_capture_absent(c, mk)) p.absent = CP_ABSENT_MAIN;
+  if (p.absent && mi < 0) p.owner_ci = (short)cm_capture_class(c, mk, NULL);
   p.method_node = mn;
   p.method_call = 1;
   return p;

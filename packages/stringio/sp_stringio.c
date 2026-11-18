@@ -72,7 +72,22 @@ static void sio_grow(sp_StringIO *sio, int64_t need) {SP_GC_ROOT(sio);
     return;
   }
   sio_own(sio); int64_t req = sio->pos + need; if (req <= sio->cap) return; int64_t nc = sio->cap ? sio->cap : 64; while (nc < req) nc *= 2; char *nb = (char *)realloc(sio->buf, nc + 1); if (!nb) sp_oom_die(); sio->buf = nb; sio->cap = nc; }
-static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) { sio_sync(sio); sio_grow(sio, dl); if (sio->pos > sio->len) memset(sio->buf + sio->len, 0, sio->pos - sio->len); memcpy(sio->buf + sio->pos, d, dl); sio->pos += dl; if (sio->pos > sio->len) sio->len = sio->pos; sio->buf[sio->len] = '\0'; sio_publish(sio); return dl; }
+static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) {
+  sio_sync(sio);
+  /* A to_s result can be the stream's own String. Growth can move it,
+     and writes can overlap it even when its capacity is sufficient. */
+  uintptr_t offset = (uintptr_t)d - (uintptr_t)sio->buf;
+  sp_bool aliases = dl > 0 && offset < (uintptr_t)sio->len;
+  sio_grow(sio, dl);
+  if (aliases) d = sio->buf + offset;
+  if (sio->pos > sio->len) memset(sio->buf + sio->len, 0, sio->pos - sio->len);
+  memmove(sio->buf + sio->pos, d, (size_t)dl);
+  sio->pos += dl;
+  if (sio->pos > sio->len) sio->len = sio->pos;
+  sio->buf[sio->len] = '\0';
+  sio_publish(sio);
+  return dl;
+}
 
 /* the bytes of a shared handle (s->str) are the handle's: it keeps them
    alive and frees them */

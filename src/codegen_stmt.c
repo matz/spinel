@@ -16766,13 +16766,15 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
 static void emit_tail_with_receiver(Compiler *c, int id, Buf *b, int indent) {
   int recv = tail_iter_receiver(c, id);
   Repr receiver = repr_of(c, recv);
+  int mark = -1;
   if (recv >= 0 && (receiver.ty == TY_STRING || receiver.ty == TY_STRBUF) &&
       !arg_ran_first(recv, 0)) {
     emit_indent(g_pre, indent);
-    hold_string_handle(c, recv, g_pre);
+    mark = hold_string_handle(c, recv, g_pre);
     buf_puts(g_pre, "\n");
   }
   emit_stmt_tail_inner(c, id, b, indent);
+  if (mark >= 0) view_unbind(mark);
 }
 
 void emit_stmt_tail(Compiler *c, int id, Buf *b, int indent) {

@@ -176,6 +176,119 @@ static void nt_place(NodeTable *nt, int parent, int child, char how, int a) {
   if (!nt_aux(nt, child)->how) nt_set_origin(nt, child, parent, how, a);
 }
 
+/* ---- the parent map kept across edits (nt_parents) ---- */
+
+/* the map a caller may still read, freed at the next ask */
+static void par_retire(NodeTable *nt, int *p) {
+  if (nt->npar_old == nt->cpar_old) {
+    nt->cpar_old = nt->cpar_old ? 2 * nt->cpar_old : 4;
+    nt->par_old = realloc(nt->par_old, sizeof(int *) * (size_t)nt->cpar_old);
+    if (!nt->par_old) nt_oom();
+  }
+  nt->par_old[nt->npar_old++] = p;
+}
+static void par_drop(NodeTable *nt) {
+  if (nt->par) par_retire(nt, nt->par);
+  free(nt->par_nref);
+  nt->par = nt->par_nref = NULL; nt->par_cap = 0; nt->par_ahead = 0;
+}
+/* the map covers the nodes below count: a new node is a root no slot holds yet */
+static void par_cover(NodeTable *nt) {
+  if (!nt->par) return;
+  /* (a slot named this node before it was made: the rebuild counts it now) */
+  if (nt->par_ahead && nt->count > nt->par_ahead) { par_drop(nt); return; }
+  if (nt->count <= nt->par_cap) return;
+  int cap = nt->par_cap * 2 > nt->count ? nt->par_cap * 2 : nt->count;
+  int *p = malloc(sizeof(int) * ((size_t)cap + 1)), *r = malloc(sizeof(int) * ((size_t)cap + 1));
+  if (!p || !r) nt_oom();
+  memcpy(p, nt->par, sizeof(int) * (size_t)nt->par_cap);
+  memcpy(r, nt->par_nref, sizeof(int) * (size_t)nt->par_cap);
+  for (int i = nt->par_cap; i <= cap; i++) { p[i] = -1; r[i] = 0; }
+  /* (not realloc: a caller may still read the map it borrowed before the growth) */
+  par_retire(nt, nt->par);
+  free(nt->par_nref);
+  nt->par = p; nt->par_nref = r; nt->par_cap = cap;
+}
+static void par_link(NodeTable *nt, int parent, int child) {
+  if (!nt->par || child < 0) return;
+  if (child >= nt->count) { if (!nt->par_ahead || child < nt->par_ahead) nt->par_ahead = child; return; }
+  nt->par_nref[child]++;
+  if (nt->par[child] < parent) nt->par[child] = parent;
+}
+static int par_holds(const SpNode *nd, int child) {
+  for (int j = 0; j < nd->nr; j++) if (nd->r[j].ref == child) return 1;
+  for (int j = 0; j < nd->na; j++) for (int e = 0; e < nd->a[j].n; e++) if (nd->a[j].ids[e] == child) return 1;
+  return 0;
+}
+/* parent's slot no longer holds child; called after the slot is written */
+static void par_unlink(NodeTable *nt, int parent, int child) {
+  if (!nt->par || child < 0 || child >= nt->count) return;
+  if (--nt->par_nref[child] <= 0) { nt->par_nref[child] = 0; nt->par[child] = -1; return; }
+  /* (another node holds it too, and which is the highest is not kept: the rebuild finds it) */
+  if (nt->par[child] == parent && !par_holds(&nt->nodes[parent], child)) par_drop(nt);
+}
+static void par_node(NodeTable *nt, int id) {
+  const SpNode *nd = &nt->nodes[id];
+  for (int j = 0; j < nd->nr; j++) par_link(nt, id, nd->r[j].ref);
+  for (int j = 0; j < nd->na; j++) for (int e = 0; e < nd->a[j].n; e++) par_link(nt, id, nd->a[j].ids[e]);
+}
+
+const int *nt_parents(NodeTable *nt) {
+  for (int i = 0; i < nt->npar_old; i++) free(nt->par_old[i]);
+  nt->npar_old = 0;
+  if (nt->par) return nt->par;
+  int cap = nt->count;
+  nt->par = malloc(sizeof(int) * ((size_t)cap + 1));
+  nt->par_nref = malloc(sizeof(int) * ((size_t)cap + 1));
+  if (!nt->par || !nt->par_nref) nt_oom();
+  nt->par_cap = cap;
+  for (int i = 0; i <= cap; i++) { nt->par[i] = -1; nt->par_nref[i] = 0; }
+  for (int id = 0; id < nt->count; id++) {
+    NT_WORK();   /* (a rebuilt map is a walk of the table, which the scale test counts) */
+    par_node(nt, id);
+  }
+  return nt->par;
+}
+
+static int par_int_cmp(const void *a, const void *b) { int x = *(const int *)a, y = *(const int *)b; return (x > y) - (x < y); }
+/* id's list `was` is `now` (already written): a list rewritten mostly keeps
+   its entries, so only the ones it gained or lost move */
+static void par_relist(NodeTable *nt, int id, const int *was, int wn, const int *now, int n) {
+  if (!nt->par || (!wn && !n)) return;
+  int *o = nt_alloc(sizeof(int) * ((size_t)wn + (size_t)n + 1)), *w = o + wn;
+  if (wn) memcpy(o, was, sizeof(int) * (size_t)wn);
+  if (n) memcpy(w, now, sizeof(int) * (size_t)n);
+  qsort(o, (size_t)wn, sizeof(int), par_int_cmp); qsort(w, (size_t)n, sizeof(int), par_int_cmp);
+  int i = 0, j = 0, nlost = 0;
+  while (i < wn || j < n) {
+    int v = i < wn && (j >= n || o[i] <= w[j]) ? o[i] : w[j], a = 0, b = 0;
+    while (i < wn && o[i] == v) { i++; a++; }
+    while (j < n && w[j] == v) { j++; b++; }
+    for (; b > a; b--) par_link(nt, id, v);
+    /* (one the list still holds keeps id as a parent; one it lost is kept in o's front, asked once the counts are settled) */
+    if (a > b && v >= 0 && v < nt->count) {
+      if (b) nt->par_nref[v] -= a - b;
+      else { nt->par_nref[v] -= a - 1; o[nlost++] = v; }
+    }
+    if (!nt->par) break;
+  }
+  for (int k = 0; k < nlost && nt->par; k++) par_unlink(nt, id, o[k]);
+  free(o);
+}
+
+void nt_truncate(NodeTable *nt, int count) {
+  if (count < 0 || count >= nt->count) return;
+  /* (the dropped nodes' slots counted toward the nodes they held) */
+  par_drop(nt);
+  nt->count = count;
+}
+
+void nt_parents_moved(NodeTable *nt, int parent, int old, int with) {
+  if (old == with) return;
+  par_link(nt, parent, with);
+  par_unlink(nt, parent, old);
+}
+
 void nt_track_origins(NodeTable *nt) { nt->orig_lo = nt->count > 0 ? nt->count : 1; }
 
 const char *nt_set_pass(NodeTable *nt, const char *pass) {
@@ -221,7 +334,7 @@ static SpNode *node_put(NodeTable *nt, int id) {
     nt->nodes = grown;
     nt->node_cap = nc;
   }
-  if (id >= nt->count) { nt_aux_reset(nt, nt->count, id + 1); nt->count = id + 1; }
+  if (id >= nt->count) { nt_aux_reset(nt, nt->count, id + 1); nt->count = id + 1; par_cover(nt); }
   return &nt->nodes[id];
 }
 
@@ -243,12 +356,13 @@ void nt_put_ref(NodeTable *nt, int id, const char *key, int child) {
   if (!nd) return;
   node_add_ref(nd, key, strlen(key), child);
   nt_place(nt, id, child, 'r', nd->nr - 1);
+  par_link(nt, id, child);
 }
 void nt_put_arr(NodeTable *nt, int id, const char *key, int *ids, int n) {
   SpNode *nd = node_put(nt, id);
   if (!nd) { free(ids); return; }
   node_add_arr(nd, key, strlen(key), ids, n);
-  for (int e = 0; e < n; e++) nt_place(nt, id, ids[e], 'a', nd->na - 1);
+  for (int e = 0; e < n; e++) { nt_place(nt, id, ids[e], 'a', nd->na - 1); par_link(nt, id, ids[e]); }
 }
 void nt_put_content(NodeTable *nt, int id, const char *content) {
   SpNode *nd = node_put(nt, id);
@@ -483,6 +597,8 @@ int nt_clone_subtree(NodeTable *nt, int root) {
   nt_aux_reset(nt, base, nt->count);
   if (nt->orig_lo) for (int i = 0; i < sn; i++) nt_set_origin(nt, base + i, list[i], 'c', 0);
   nt->version++; nt->edits++; nt->clone_version++;
+  par_cover(nt);
+  for (int i = 0; i < sn; i++) par_node(nt, base + i);
   free(list);
   return base;   /* the root is the first node collected */
 }
@@ -519,6 +635,7 @@ int nt_new_node(NodeTable *nt, const char *type) {
   SpNode *nd = &nt->nodes[id];
   memset(nd, 0, sizeof(SpNode));
   if (type) node_set_type(nt, nd, type, strlen(type));
+  par_cover(nt);
   return id;
 }
 int nt_appended_only_local_reads(const NodeTable *nt, int from) {
@@ -572,9 +689,19 @@ void nt_node_reset(NodeTable *nt, int id, const char *type) {
   nt_retire(nt, nd->content); nd->content = NULL;
   for (int j = 0; j < nd->ns; j++) { nt_retire(nt, nd->s[j].key); nt_retire(nt, nd->s[j].val); }
   for (int j = 0; j < nd->ni; j++) free(nd->i[j].key);
+  int nk = 0, *kids = NULL;
+  if (nt->par) {
+    for (int j = 0; j < nd->na; j++) nk += nd->a[j].n;
+    kids = nt_alloc(sizeof(int) * ((size_t)nk + (size_t)nd->nr + 1));
+    nk = 0;
+    for (int j = 0; j < nd->nr; j++) kids[nk++] = nd->r[j].ref;
+    for (int j = 0; j < nd->na; j++) for (int e = 0; e < nd->a[j].n; e++) kids[nk++] = nd->a[j].ids[e];
+  }
   for (int j = 0; j < nd->nr; j++) free(nd->r[j].key);
   for (int j = 0; j < nd->na; j++) { free(nd->a[j].key); free(nd->a[j].ids); }
   nd->ns = nd->ni = nd->nr = nd->na = 0;
+  for (int i = 0; i < nk; i++) par_unlink(nt, id, kids[i]);
+  free(kids);
   nd->posmask = 0;
   nd->kind = 0;
   if (type) node_set_type(nt, nd, type, strlen(type));
@@ -678,13 +805,14 @@ void nt_node_set_ref(NodeTable *nt, int id, const char *key, int child) {
   if (!nd) return;
   for (int j = 0; j < nd->nr; j++)
     if (sp_streq(nd->r[j].key, key)) {
-      if (nd->r[j].ref != child) { nd->r[j].ref = child; nt->edits++; }
+      if (nd->r[j].ref != child) { int was = nd->r[j].ref; nd->r[j].ref = child; nt->edits++; nt_parents_moved(nt, id, was, child); }
       nt_place(nt, id, child, 'r', j);
       return;
     }
   nt->edits++;
   node_add_ref(nd, key, strlen(key), child);
   nt_place(nt, id, child, 'r', nd->nr - 1);
+  par_link(nt, id, child);
 }
 
 void nt_node_set_arr(NodeTable *nt, int id, const char *key, const int *ids, int n) {
@@ -696,11 +824,13 @@ void nt_node_set_arr(NodeTable *nt, int id, const char *key, const int *ids, int
     copy = nt_alloc(sizeof(int) * (size_t)n);
     memcpy(copy, ids, sizeof(int) * (size_t)n);
   }
-  int j = 0;
+  int j = 0, *was = NULL, wn = 0;
   while (j < nd->na && !sp_streq(nd->a[j].key, key)) j++;
-  if (j < nd->na) { free(nd->a[j].ids); nd->a[j].ids = copy; nd->a[j].n = n; }
+  if (j < nd->na) { was = nd->a[j].ids; wn = nd->a[j].n; nd->a[j].ids = copy; nd->a[j].n = n; }
   else node_add_arr(nd, key, strlen(key), copy, n);
   for (int e = 0; e < n; e++) nt_place(nt, id, copy[e], 'a', j);
+  par_relist(nt, id, was, wn, copy, n);
+  free(was);
 }
 
 /* See node_table.h. */
@@ -779,6 +909,9 @@ void nt_free(NodeTable *nt) {
   free(nt->autoloads);
   free(nt->aux);
   free(nt->counts);
+  free(nt->par); free(nt->par_nref);
+  for (int i = 0; i < nt->npar_old; i++) free(nt->par_old[i]);
+  free(nt->par_old);
   if (nt->holders) { free(nt->holders->par); free(nt->holders->stamp); free(nt->holders); }
   if (nt->builders) { free(nt->builders->call); free(nt->builders->module); free(nt->builders->stamp); free(nt->builders); }
   free(nt);
@@ -1039,6 +1172,7 @@ void nt_swap_nodes(NodeTable *nt, int a, int b) {
   nt->nodes[a] = nt->nodes[b];
   nt->nodes[b] = t;
   nt->version++; nt->edits++;
+  par_drop(nt);   /* every node a or b held, and each that holds them, moves */
   nki_drop(nt);   /* the kind index lists ids by kind: rebuild it */
 }
 
@@ -1086,6 +1220,7 @@ void nt_renumber(NodeTable *nt, const int *order) {
   for (int i = 0; i < nt->nautoloads; i++) nt->autoloads[i].node = perm[nt->autoloads[i].node];
   free(perm);
   nt->version++; nt->edits++;
+  par_drop(nt);
   nki_drop(nt);   /* the ids of each kind moved */
   free(nt->aux); nt->aux = NULL; nt->aux_cap = 0;   /* and so did each one's entry */
 }

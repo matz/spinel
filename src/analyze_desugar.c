@@ -11240,7 +11240,7 @@ int desugar_unpack_block(Compiler *c) {
     /* node-table OOM: leave the call as-is, and drop the nodes made before
        the failure -- unreferenced, but every later all-node walk would
        visit them, past the per-node arrays comp_grow_node_arrays sizes */
-    if (!ok) { nt->count = base; continue; }
+    if (!ok) { nt_truncate(nt, base); continue; }
     nt_node_set_ref(nt, call, "receiver", recv);
     nt_node_set_str(nt, call, "name", "unpack");
     nt_node_set_ref(nt, call, "arguments", args);

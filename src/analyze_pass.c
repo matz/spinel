@@ -9591,9 +9591,9 @@ static int cext_pin_array_producer(Compiler *c, int v) {
    * held by another active call-plan query remain valid. */
   for (int parent = 0; parent < base; parent++) {
     SpNode *node = &nt->nodes[parent];
-    for (int r = 0; r < node->nr; r++) if (node->r[r].ref == v) node->r[r].ref = parens;
+    for (int r = 0; r < node->nr; r++) if (node->r[r].ref == v) { node->r[r].ref = parens; nt_parents_moved(nt, parent, v, parens); }
     for (int a = 0; a < node->na; a++) for (int j = 0; j < node->a[a].n; j++)
-      if (node->a[a].ids[j] == v) node->a[a].ids[j] = parens;
+      if (node->a[a].ids[j] == v) { node->a[a].ids[j] = parens; nt_parents_moved(nt, parent, v, parens); }
   }
   nt->version++;
   for (int q = 0; q < c->nscopes; q++) {
@@ -14122,7 +14122,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
       comp_grow_node_arrays(c);
       c->nscope[cr] = c->nscope[root];
       nd = &nt->nodes[root];        /* nt_new_node may realloc nt->nodes */
-      nd->r[i].ref = cr;
+      nd->r[i].ref = cr; nt_parents_moved(nt, root, ch, cr);
     }
     else subtree_self_to_const(c, ch, cname, ci, depth + 1);
     nd = &nt->nodes[root];
@@ -14138,7 +14138,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
         comp_grow_node_arrays(c);
         c->nscope[cr] = c->nscope[root];
         nd = &nt->nodes[root];
-        nd->a[i].ids[j] = cr;
+        nd->a[i].ids[j] = cr; nt_parents_moved(nt, root, ch, cr);
       }
       else subtree_self_to_const(c, ch, cname, ci, depth + 1);
       nd = &nt->nodes[root];
@@ -14397,7 +14397,7 @@ static void ie_subtree_retarget(Compiler *c, int root, const char *tmp, int dept
       comp_grow_node_arrays(c);
       c->nscope[rd] = c->nscope[root];
       nd = &nt->nodes[root];
-      nd->r[i].ref = rd;
+      nd->r[i].ref = rd; nt_parents_moved(nt, root, ch, rd);
     }
     else ie_subtree_retarget(c, ch, tmp, depth + 1);
     nd = &nt->nodes[root];
@@ -14412,7 +14412,7 @@ static void ie_subtree_retarget(Compiler *c, int root, const char *tmp, int dept
         comp_grow_node_arrays(c);
         c->nscope[rd] = c->nscope[root];
         nd = &nt->nodes[root];
-        nd->a[i].ids[j] = rd;
+        nd->a[i].ids[j] = rd; nt_parents_moved(nt, root, ch, rd);
       }
       else ie_subtree_retarget(c, ch, tmp, depth + 1);
       nd = &nt->nodes[root];

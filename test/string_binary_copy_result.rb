@@ -24,6 +24,7 @@ source = +"é\0z"
 first = source.b
 second = boxed(source, 0).b
 p [first.bytes, first.encoding.name, first.frozen?, first.equal?(source), first.equal?(second)]
+p [second.encoding.name, second.frozen?, second.equal?(source)]
 first << "!"
 p [first.bytes, second.bytes, source.bytes]
 p ["".b.bytesize, "".b.encoding.name, "".b.equal?("".b)]

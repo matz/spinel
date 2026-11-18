@@ -18,6 +18,7 @@ class ConditionalPair
 end
 pair = ConditionalPair.new
 call_pair(pair)
+p $events.dup
 if ARGV.empty?
   class ConditionalPair
     def pair(left, right)

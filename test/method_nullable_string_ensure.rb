@@ -1,10 +1,12 @@
 # spinel: share
+$cleanups = 0
 class SelectText
   def choose(text, missing, replacement: nil)
     text = replacement unless replacement.nil?
     begin
       return missing ? nil : text
     ensure
+      $cleanups += 1
       GC.start
       scratch = +"ensure"
       scratch << "!"
@@ -15,12 +17,14 @@ end
 class TextChild < SelectText
 end
 
-def choose(reader, text, missing)
-  TextChild.instance_method(:choose).bind(reader).call(text, missing, replacement: text)
+def choose(reader, text, missing, replacement)
+  TextChild.instance_method(:choose).bind(reader).call(text, missing, replacement: replacement)
 end
 
 reader = TextChild.new
 text = +"selected"
-p choose(reader, text, true)
-p choose(reader, text, false).equal?(text)
+replacement = +"replacement"
+p choose(reader, text, true, replacement)
+p choose(reader, text, false, replacement).equal?(replacement)
 p reader.method(:choose).call(text, true, replacement: text)
+p $cleanups

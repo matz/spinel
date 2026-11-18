@@ -4,8 +4,8 @@
 # A key made from a byte-producing builtin is one frozen String in the Hash.
 # Inverting the table retains that key while constructing the result.
 def check_key(table)
-  inverse = table.invert
   key = table.keys[0]
+  inverse = table.invert
   raise "key is mutable" unless key.frozen?
   raise "key changed identity" unless key.equal?(table.keys[0])
   raise "inverse copied key" unless inverse["value"].equal?(key)

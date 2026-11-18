@@ -31,7 +31,7 @@ end
 def kept_with_ensure(s)
   s.scan(/\d/) { }
 ensure
-  s.size
+  puts :ensured
 end
 s = +"a1"
 r = kept(s)

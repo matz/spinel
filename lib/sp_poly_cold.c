@@ -1021,7 +1021,7 @@ sp_StrStrHash *sp_StrPolyHash_to_s_values(sp_StrPolyHash *h)
 const char *sp_PolyPolyHash_repl(sp_PolyPolyHash *h, const char *key)
 {
   SP_GC_ROOT(h);
-  return sp_poly_to_s(sp_PolyPolyHash_get(h, sp_box_str(key)));
+  return sp_poly_to_s(sp_PolyPolyHash_get(h, sp_box_str_new(key)));
 }
 
 sp_SymPolyHash*sp_SymPolyHash_merge(sp_SymPolyHash*a,sp_SymPolyHash*b)
@@ -1390,8 +1390,8 @@ static sp_RbVal sp_poly_pair_copy(sp_RbVal e) {
   SP_GC_ROOT_RBVAL(e);
   sp_PolyArray *p = sp_PolyArray_new(); SP_GC_ROOT(p);
   sp_RbVal k = sp_poly_arr_get(e, 0); SP_GC_ROOT_RBVAL(k);
-  if (k.tag == SP_TAG_STR && k.v.s) k.v.s = sp_hash_key_str(k.v.s);
-  else if (sp_poly_is_strbuf(k)) k = sp_box_str(sp_hash_key_str(sp_String_cstr((sp_String *)k.v.p)));
+  const char *bytes = sp_rbval_string_bytes(k);
+  if (bytes) k = sp_box_str_new(sp_hash_key_str(bytes));
   sp_PolyArray_push(p, k);
   sp_PolyArray_push(p, sp_poly_arr_get(e, 1));
   return sp_box_poly_array(p);

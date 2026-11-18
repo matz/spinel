@@ -12680,7 +12680,7 @@ static void sp_PolyPolyHash_set(sp_PolyPolyHash *h, sp_RbVal k, sp_RbVal v) {
      An ordinary Hash stores a frozen copy of a mutable String key. */
   if (!h->ident) {
     const char *bytes = sp_rbval_string_bytes(k);
-    if (bytes) k = sp_box_str(sp_hash_key_str(bytes));
+    if (bytes) k = sp_box_str_new(sp_hash_key_str(bytes));
   }
   sp_gc_wb(h);
   h->keys[idx] = k;
@@ -13158,20 +13158,31 @@ static sp_RbVal sp_poly_get_str(sp_RbVal v, const char *key) {
   /* A match is a new mutable String, with the needle's encoding. */
   if (sp_rbval_is_string(v))
     return sp_box_nullable_obj(sp_str_slice_key(sp_rbval_string_bytes(v), key), SP_BUILTIN_STRBUF);
-  if (sp_poly_is_call_aref(v)) return sp_poly_call_aref(v, sp_box_str(key));
+  if (sp_poly_is_call_aref(v)) {
+    SP_GC_ROOT_RBVAL(v);
+    return sp_poly_call_aref(v, sp_box_str_new(key));
+  }
   sp_poly_coll_chk(v, "[]");
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();
   switch (v.cls_id) {
-    case SP_BUILTIN_CURRY: return sp_curry_call_poly((sp_Curry *)v.v.p, 1, (sp_RbVal[]){sp_box_str(key)});
+    case SP_BUILTIN_CURRY: {
+      SP_GC_ROOT_RBVAL(v);
+      return sp_curry_call_poly((sp_Curry *)v.v.p, 1, (sp_RbVal[]){sp_box_str_new(key)});
+    }
     case SP_BUILTIN_STR_POLY_HASH: return sp_StrPolyHash_get((sp_StrPolyHash*)v.v.p, key);
     case SP_BUILTIN_STR_STR_HASH: { sp_strelem s = sp_StrStrHash_get_e((sp_StrStrHash*)v.v.p, key); return s ? SP_SEBOX(s) : sp_box_nil(); }
     case SP_BUILTIN_STR_INT_HASH: return sp_box_oint(sp_StrIntHash_oget((sp_StrIntHash*)v.v.p, key));
-    case SP_BUILTIN_POLY_POLY_HASH: return sp_PolyPolyHash_get((sp_PolyPolyHash*)v.v.p, sp_box_str(key));
+    case SP_BUILTIN_POLY_POLY_HASH: {
+      SP_GC_ROOT_RBVAL(v);
+      return sp_PolyPolyHash_get((sp_PolyPolyHash*)v.v.p, sp_box_str_new(key));
+    }
     /* OpenStruct#["name"] is the member of that name, as with a Symbol */
     case SP_BUILTIN_OPENSTRUCT: return key ? sp_OpenStruct_get((sp_OpenStruct*)v.v.p, sp_sym_intern(key)) : sp_box_nil();
     /* a String is no key of a Symbol- or Integer-keyed Hash: a miss */
-    case SP_BUILTIN_SYM_POLY_HASH: case SP_BUILTIN_INT_INT_HASH: case SP_BUILTIN_INT_STR_HASH:
-      return sp_poly_hash_foreign_miss(v, sp_box_str(key));
+    case SP_BUILTIN_SYM_POLY_HASH: case SP_BUILTIN_INT_INT_HASH: case SP_BUILTIN_INT_STR_HASH: {
+      SP_GC_ROOT_RBVAL(v);
+      return sp_poly_hash_foreign_miss(v, sp_box_str_new(key));
+    }
     default: break;
   }
   /* Struct#["member"] names the member, like the symbol form (#3369) */
@@ -13350,14 +13361,14 @@ static SP_NOINLINE sp_RbVal sp_poly_each_elem_slow(sp_RbVal a, sp_int i) {
       sp_StrIntHash *h = (sp_StrIntHash*)a.v.p;
       if (!h || i < 0 || i >= h->len) return sp_box_nil();
       sp_PolyArray *pair = sp_PolyArray_new(); SP_GC_ROOT(pair);
-      sp_PolyArray_push(pair, sp_box_str(h->order[i]));
+      sp_PolyArray_push(pair, sp_box_str_new(h->order[i]));
       sp_PolyArray_push(pair, sp_box_oint(sp_StrIntHash_vget(h, h->order[i])));
       return sp_box_poly_array(pair); }
     case SP_BUILTIN_STR_STR_HASH: {
       sp_StrStrHash *h = (sp_StrStrHash*)a.v.p;
       if (!h || i < 0 || i >= h->len) return sp_box_nil();
       sp_PolyArray *pair = sp_PolyArray_new(); SP_GC_ROOT(pair);
-      sp_PolyArray_push(pair, sp_box_str(h->order[i]));
+      sp_PolyArray_push(pair, sp_box_str_new(h->order[i]));
       sp_strelem sv = sp_StrStrHash_get_e(h, h->order[i]);
       sp_PolyArray_push(pair, sv ? SP_SEBOX(sv) : sp_box_nil());
       return sp_box_poly_array(pair); }
@@ -13365,7 +13376,7 @@ static SP_NOINLINE sp_RbVal sp_poly_each_elem_slow(sp_RbVal a, sp_int i) {
       sp_StrPolyHash *h = (sp_StrPolyHash*)a.v.p;
       if (!h || i < 0 || i >= h->len) return sp_box_nil();
       sp_PolyArray *pair = sp_PolyArray_new(); SP_GC_ROOT(pair);
-      sp_PolyArray_push(pair, sp_box_str(h->order[i]));
+      sp_PolyArray_push(pair, sp_box_str_new(h->order[i]));
       sp_PolyArray_push(pair, sp_StrPolyHash_get(h, h->order[i]));
       return sp_box_poly_array(pair); }
     case SP_BUILTIN_SYM_POLY_HASH: {
@@ -15225,7 +15236,10 @@ static sp_RbVal sp_poly_set_str(sp_RbVal v, const char *key, sp_RbVal val) {
   }
   /* Every other hash stores it or says it cannot: a typed hash of another key
      or value class dropped the entry here without a word. */
-  if (sp_poly_is_hash_kind(v.cls_id)) return sp_poly_set_poly(v, sp_box_str(key), val);
+  if (sp_poly_is_hash_kind(v.cls_id)) {
+    SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(val);
+    return sp_poly_set_poly(v, sp_box_str_new(key), val);
+  }
   return val;
 }
 /* Merge every pair of one boxed hash into another, whatever variants the two
@@ -15561,17 +15575,6 @@ static sp_RbVal sp_poly_set_poly(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
      original key. */
   if (v.cls_id != SP_BUILTIN_POLY_POLY_HASH && sp_poly_is_strbuf(key))
     key = sp_poly_strbuf_deref(key);
-  /* A handle into a typed String value, which keeps its own copy of each
-     String it is handed, as the compiler's stores into one do (and
-     sp_poly_elem_s, a typed Array's): a new String the runtime boxed as its
-     handle under --share-strings (sp_box_str_new, `h[k] += "s"` on a boxed
-     receiver; the rule widens a typed Hash whose Strings another name
-     shares), or in any build a poly local's String lifted to its handle for
-     a `[]=` that another of the name's targets appends to in place
-     (poly_strbuf_lift, #6179). Kept behind the --share-strings guard, the
-     lifted one was refused as a store of another kind. */
-  if ((v.cls_id == SP_BUILTIN_STR_STR_HASH || v.cls_id == SP_BUILTIN_INT_STR_HASH) && sp_poly_is_strbuf(val) && val.v.p)
-    val = sp_box_str(sp_strbuf_read((sp_String *)val.v.p));
   switch (v.cls_id) {
     case SP_BUILTIN_STR_POLY_HASH:
       if (key.tag == SP_TAG_STR) sp_StrPolyHash_set((sp_StrPolyHash*)v.v.p, key.v.s, val);
@@ -15582,8 +15585,10 @@ static sp_RbVal sp_poly_set_poly(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
        widened the hash (a copy through dup, #4540), and the program went on
        with the entry missing. Say so instead. */
     case SP_BUILTIN_STR_STR_HASH:
-      if (key.tag == SP_TAG_STR && val.tag == SP_TAG_STR)
-        sp_StrStrHash_set_e((sp_StrStrHash*)v.v.p, key.v.s, sp_String_new_shared(val.v.s));
+      if (key.tag == SP_TAG_STR && sp_rbval_is_string(val)) {
+        SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(key);
+        sp_StrStrHash_set_e((sp_StrStrHash*)v.v.p, key.v.s, sp_poly_as_strbuf(val));
+      }
       else sp_poly_typed_hash_store_miss(key, val, "String", "String");
       break;
     case SP_BUILTIN_STR_INT_HASH:
@@ -15601,8 +15606,10 @@ static sp_RbVal sp_poly_set_poly(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
       else sp_poly_typed_hash_store_miss(key, val, "Integer", "Integer");
       break;
     case SP_BUILTIN_INT_STR_HASH:
-      if (key.tag == SP_TAG_INT && val.tag == SP_TAG_STR)
-        sp_IntStrHash_set_e((sp_IntStrHash*)v.v.p, key.v.i, sp_String_new_shared(val.v.s));
+      if (key.tag == SP_TAG_INT && sp_rbval_is_string(val)) {
+        SP_GC_ROOT_RBVAL(v);
+        sp_IntStrHash_set_e((sp_IntStrHash*)v.v.p, key.v.i, sp_poly_as_strbuf(val));
+      }
       else sp_poly_typed_hash_store_miss(key, val, "Integer", "String");
       break;
     case SP_BUILTIN_SYM_POLY_HASH:
@@ -17387,7 +17394,7 @@ static sp_PolyArray*sp_PolyPolyHash_values(sp_PolyPolyHash*h){SP_GC_ROOT(h);sp_P
 static sp_PolyArray *sp_poly_str_keys(void *h, const char **order, sp_int len) {
   SP_GC_ROOT(h);
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
-  for (sp_int i = 0; i < len; i++) sp_PolyArray_push(a, sp_box_str(order[i]));
+  for (sp_int i = 0; i < len; i++) sp_PolyArray_push(a, sp_box_str_new(order[i]));
   return a;
 }
 static sp_PolyArray *sp_poly_keys(sp_RbVal v) {
@@ -17484,18 +17491,19 @@ const char*sp_PolyPolyHash_inspect(sp_PolyPolyHash*h);
    poly_poly_hash so any (key, value) pair shape is uniformly
    representable. str_str_hash_invert lives above (line ~1132)
    and stays as a same-type round-trip. */
-static sp_PolyPolyHash*sp_StrIntHash_invert_poly(sp_StrIntHash*h){SP_GC_ROOT(h);sp_PolyPolyHash*r=sp_PolyPolyHash_new();if (SP_UNLIKELY(!h)) sp_nil_recv("invert");for(sp_int i=0;i<h->len;i++)sp_PolyPolyHash_set(r,sp_box_oint(sp_StrIntHash_vget(h,h->order[i])),sp_box_str(h->order[i]));return r;}
+static sp_PolyPolyHash*sp_StrIntHash_invert_poly(sp_StrIntHash*h){SP_GC_ROOT(h);sp_PolyPolyHash*r=sp_PolyPolyHash_new();SP_GC_ROOT(r);if (SP_UNLIKELY(!h)) sp_nil_recv("invert");for(sp_int i=0;i<h->len;i++)sp_PolyPolyHash_set(r,sp_box_oint(sp_StrIntHash_vget(h,h->order[i])),sp_box_str_new(h->order[i]));return r;}
 static sp_PolyPolyHash*sp_IntStrHash_invert(sp_IntStrHash*h){SP_GC_ROOT(h);sp_PolyPolyHash*r=sp_PolyPolyHash_new();if (SP_UNLIKELY(!h)) sp_nil_recv("invert");for(sp_int i=0;i<h->len;i++)sp_PolyPolyHash_set(r,SP_SEBOX(sp_IntStrHash_get_e(h,h->order[i])),sp_box_int(h->order[i]));return r;}
 static sp_bool sp_PolyPolyHash_eq(sp_PolyPolyHash*a,sp_PolyPolyHash*b){if(!a||!b)return a==b;if(a->len!=b->len)return FALSE;for(sp_int i=0;i<a->len;i++){sp_RbVal k=a->keys[a->order[i]];if(!sp_PolyPolyHash_has_key(b,k))return FALSE;if(!sp_poly_rb_equal(sp_PolyPolyHash_get(a,k),sp_PolyPolyHash_get(b,k)))return FALSE;}return TRUE;}
 /* --- cross-variant hash equality ------------------------------------------
    Boxed key/value of the i-th insertion-ordered pair, per variant. */
 static void sp_poly_hash_pair_i(sp_RbVal h, sp_int i, sp_RbVal *k, sp_RbVal *v) {
+  SP_GC_ROOT_RBVAL(h);
   switch (h.cls_id) {
-    case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *x=(sp_StrIntHash*)h.v.p; *k=sp_box_str(x->order[i]); *v=sp_box_oint(sp_StrIntHash_vget(x,x->order[i])); return; }
-    case SP_BUILTIN_STR_STR_HASH: { sp_StrStrHash *x=(sp_StrStrHash*)h.v.p; *k=sp_box_str(x->order[i]); *v=SP_SEBOX(sp_StrStrHash_get_e(x,x->order[i])); return; }
+    case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *x=(sp_StrIntHash*)h.v.p; *k=sp_box_str_new(x->order[i]); *v=sp_box_oint(sp_StrIntHash_vget(x,x->order[i])); return; }
+    case SP_BUILTIN_STR_STR_HASH: { sp_StrStrHash *x=(sp_StrStrHash*)h.v.p; *k=sp_box_str_new(x->order[i]); *v=SP_SEBOX(sp_StrStrHash_get_e(x,x->order[i])); return; }
     case SP_BUILTIN_INT_STR_HASH: { sp_IntStrHash *x=(sp_IntStrHash*)h.v.p; *k=sp_box_int(x->order[i]); *v=SP_SEBOX(sp_IntStrHash_get_e(x,x->order[i])); return; }
     case SP_BUILTIN_INT_INT_HASH: { sp_IntIntHash *x=(sp_IntIntHash*)h.v.p; *k=sp_box_int(x->order[i]); *v=sp_box_oint(sp_IntIntHash_vget(x,x->order[i])); return; }
-    case SP_BUILTIN_STR_POLY_HASH: { sp_StrPolyHash *x=(sp_StrPolyHash*)h.v.p; *k=sp_box_str(x->order[i]); *v=sp_StrPolyHash_get(x,x->order[i]); return; }
+    case SP_BUILTIN_STR_POLY_HASH: { sp_StrPolyHash *x=(sp_StrPolyHash*)h.v.p; *k=sp_box_str_new(x->order[i]); *v=sp_StrPolyHash_get(x,x->order[i]); return; }
     case SP_BUILTIN_SYM_POLY_HASH: { sp_SymPolyHash *x=(sp_SymPolyHash*)h.v.p; *k=sp_box_sym(x->order[i]); *v=sp_SymPolyHash_get(x,x->order[i]); return; }
     case SP_BUILTIN_POLY_POLY_HASH: { sp_PolyPolyHash *x=(sp_PolyPolyHash*)h.v.p; *k=x->keys[x->order[i]]; *v=sp_PolyPolyHash_get(x,*k); return; }
     default: *k = sp_box_nil(); *v = sp_box_nil(); return;
@@ -17565,14 +17573,15 @@ static sp_bool sp_poly_hash_eq_cross(sp_RbVal a, sp_RbVal b, sp_bool eql) {
 /* sp_json_kind: moved to lib/sp_cold.c */
 int sp_json_kind(sp_RbVal v);
 static void sp_poly_hash_pair(sp_RbVal v, sp_int i, sp_RbVal *k, sp_RbVal *out) {
+  SP_GC_ROOT_RBVAL(v);
   *k = sp_box_nil(); *out = sp_box_nil();
   if (v.tag != SP_TAG_OBJ) return;
   switch (v.cls_id) {
-    case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *h=(sp_StrIntHash*)v.v.p; const char *key=h->order[i]; *k=sp_box_str(key); *out=sp_box_oint(sp_StrIntHash_vget(h,key)); break; }
-    case SP_BUILTIN_STR_STR_HASH: { sp_StrStrHash *h=(sp_StrStrHash*)v.v.p; const char *key=h->order[i]; *k=sp_box_str(key); *out=SP_SEBOX(sp_StrStrHash_get_e(h,key)); break; }
+    case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *h=(sp_StrIntHash*)v.v.p; const char *key=h->order[i]; *k=sp_box_str_new(key); *out=sp_box_oint(sp_StrIntHash_vget(h,key)); break; }
+    case SP_BUILTIN_STR_STR_HASH: { sp_StrStrHash *h=(sp_StrStrHash*)v.v.p; const char *key=h->order[i]; *k=sp_box_str_new(key); *out=SP_SEBOX(sp_StrStrHash_get_e(h,key)); break; }
     case SP_BUILTIN_INT_STR_HASH: { sp_IntStrHash *h=(sp_IntStrHash*)v.v.p; sp_int key=h->order[i]; *k=sp_box_int(key); *out=SP_SEBOX(sp_IntStrHash_get_e(h,key)); break; }
     case SP_BUILTIN_INT_INT_HASH: { sp_IntIntHash *h=(sp_IntIntHash*)v.v.p; sp_int key=h->order[i]; *k=sp_box_int(key); *out=sp_box_oint(sp_IntIntHash_vget(h,key)); break; }
-    case SP_BUILTIN_STR_POLY_HASH: { sp_StrPolyHash *h=(sp_StrPolyHash*)v.v.p; const char *key=h->order[i]; *k=sp_box_str(key); *out=sp_StrPolyHash_get(h,key); break; }
+    case SP_BUILTIN_STR_POLY_HASH: { sp_StrPolyHash *h=(sp_StrPolyHash*)v.v.p; const char *key=h->order[i]; *k=sp_box_str_new(key); *out=sp_StrPolyHash_get(h,key); break; }
     case SP_BUILTIN_SYM_POLY_HASH: { sp_SymPolyHash *h=(sp_SymPolyHash*)v.v.p; sp_sym key=h->order[i]; *k=sp_box_sym(key); *out=sp_SymPolyHash_get(h,key); break; }
     case SP_BUILTIN_POLY_POLY_HASH: { sp_PolyPolyHash *h=(sp_PolyPolyHash*)v.v.p; sp_int oi=h->order[i]; *k=h->keys[oi]; *out=h->vals[oi]; break; }
     default: break;
@@ -20674,9 +20683,9 @@ static sp_RbVal sp_poly_hash_shift(sp_RbVal v) {
   if (sp_gc_is_frozen(v.v.p)) sp_raise_frozen_hash_at(v.v.p, v.cls_id);
   sp_RbVal k;
   switch (v.cls_id) {
-    case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *h = (sp_StrIntHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_str(h->order[0]); break; }
-    case SP_BUILTIN_STR_STR_HASH: { sp_StrStrHash *h = (sp_StrStrHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_str(h->order[0]); break; }
-    case SP_BUILTIN_STR_POLY_HASH: { sp_StrPolyHash *h = (sp_StrPolyHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_str(h->order[0]); break; }
+    case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *h = (sp_StrIntHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_str_new(h->order[0]); break; }
+    case SP_BUILTIN_STR_STR_HASH: { sp_StrStrHash *h = (sp_StrStrHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_str_new(h->order[0]); break; }
+    case SP_BUILTIN_STR_POLY_HASH: { sp_StrPolyHash *h = (sp_StrPolyHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_str_new(h->order[0]); break; }
     case SP_BUILTIN_INT_STR_HASH: { sp_IntStrHash *h = (sp_IntStrHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_int(h->order[0]); break; }
     case SP_BUILTIN_INT_INT_HASH: { sp_IntIntHash *h = (sp_IntIntHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_int(h->order[0]); break; }
     case SP_BUILTIN_SYM_POLY_HASH: { sp_SymPolyHash *h = (sp_SymPolyHash *)v.v.p; if (h->len <= 0) return sp_box_nil(); k = sp_box_sym(h->order[0]); break; }
@@ -24780,8 +24789,9 @@ static sp_StrPolyHash *sp_StrPolyHash_from_poly_hash(sp_PolyPolyHash *src) {
   sp_StrPolyHash *h = sp_StrPolyHash_new(); SP_GC_ROOT(h);
   for (sp_int i = 0; src && i < src->len; i++) {
     sp_RbVal k = src->keys[src->order[i]], v = sp_PolyPolyHash_get(src, k);
-    if (k.tag != SP_TAG_STR) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
-    sp_StrPolyHash_set(h, k.v.s, v);
+    const char *key = sp_rbval_string_bytes(k);
+    if (!key) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
+    sp_StrPolyHash_set(h, key, v);
   }
   return h;
 }

@@ -1731,10 +1731,14 @@ sp_PolyArray *sp_sock_getaddrinfo(const char *host, sp_int port, sp_int family, 
     const char *ips = sp_str_from_bytes(ip, strlen(ip));
     SP_GC_ROOT_STR(ips);   /* held across the row's allocation */
     sp_PolyArray *row = sp_PolyArray_new();
-    sp_PolyArray_push(row, sp_box_str(fam == AF_INET6 ? SPL("AF_INET6") : SPL("AF_INET")));
+    SP_GC_ROOT(row);
+    sp_PolyArray_push(row, sp_box_str_new(fam == AF_INET6 ? SPL("AF_INET6") : SPL("AF_INET")));
     sp_PolyArray_push(row, sp_box_int((sp_int)p));
-    sp_PolyArray_push(row, sp_box_str(ips));
-    sp_PolyArray_push(row, sp_box_str(ips));
+    /* The numeric host and IP share one String in this row. */
+    sp_RbVal address = sp_box_str_new(ips);
+    SP_GC_ROOT_RBVAL(address);
+    sp_PolyArray_push(row, address);
+    sp_PolyArray_push(row, address);
     sp_PolyArray_push(row, sp_box_int((sp_int)fam));
     sp_PolyArray_push(row, sp_box_int((sp_int)stype));
     sp_PolyArray_push(row, sp_box_int((sp_int)proto));
@@ -1807,7 +1811,7 @@ sp_PolyArray *sp_sock_unpack_sockaddr_in(const char *sa) {SP_GC_ROOT_STR(sa);
   sp_PolyArray *out = sp_PolyArray_new();
   SP_GC_ROOT(out);
   sp_PolyArray_push(out, sp_box_int((sp_int)port));
-  sp_PolyArray_push(out, sp_box_str(sp_str_from_bytes(ip, strlen(ip))));
+  sp_PolyArray_push(out, sp_box_str_new(sp_str_from_bytes(ip, strlen(ip))));
   return out;
 }
 

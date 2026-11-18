@@ -385,23 +385,16 @@ static inline const char*sp_String_cstr(sp_String*s){return s->data;}
 static inline const char*sp_String_cstr_nil(sp_String*s){return s?s->data:NULL;}
 static inline int64_t sp_String_length(sp_String*s){return s->len;}
 
-/* A String no other name holds, boxed for something that keeps the box:
-   boxes a mutable heap String as a new handle over its bytes,
-   which sp_String_new_fresh copies before it allocates, so every copy of
-   the box names the one String. So is an unfrozen static one (0xff, a
-   folded interpolation's bytes): it stands for a new String, which a
-   mutation through the box changes (`a = ["#{v}?"]; a[0] << "!"`). A
-   frozen String is boxed as itself, as nothing can change it and its
-   identity is its bytes'; so is any String otherwise (sp_box_str). */
+/* Box a new String or the owner of a live payload. An emitted frozen
+   literal already has its static handle. Other frozen bytes keep their
+   current box until their producers supply the handle. */
 static inline sp_RbVal sp_box_str_new(const char *v) {
-  if (v) {
-    unsigned char m = ((const unsigned char *)v)[-1];
-    if (m == 0xfe || m == 0xfc || m == 0xff) return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
-    /* the runtime's empty answer is static, but stands for the new empty
-       String the call made (`"" * 2`): nil.to_s's frozen one is not this */
-    if (v == sp_str_empty) return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
-  }
-  return sp_box_str(v);
+  if (!v) return sp_box_nil();
+  unsigned char m = ((const unsigned char *)v)[-1];
+  if (m == 0xfd || m == 0xfe || m == 0xfc || m == 0xff)
+    return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
+  sp_String *literal = sp_String_of_literal(v);
+  return literal ? sp_box_obj(literal, SP_BUILTIN_STRBUF) : sp_box_str(v);
 }
 
 /* sp_box_str_new for a String that may be nil (NULL): the nil box, else the new String's handle box */
@@ -412,8 +405,7 @@ static inline sp_RbVal sp_box_nullable_str_new(const char *v) { return v ? sp_bo
    a new handle over a copy of them, which an append through any copy of the
    box changes. */
 static inline sp_RbVal sp_box_str_fresh(const char *v) {
-  if (v) return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
-  return sp_box_str(v);
+  return v ? sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF) : sp_box_nil();
 }
 
 /* encode! on a handle, given the String encode answered for it (lib/sp_cold.c) */

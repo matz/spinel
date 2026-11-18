@@ -25,10 +25,10 @@
  *                              is: a parser's object keys)
  *
  *   Boxing a new String (sp_string.h):
- *     sp_box_str_new  (a String the package just built, boxed as the String's
- *                      own handle: a change through the box reaches every copy
- *                      of it, as in CRuby. A parser's String values, not its
- *                      object keys)
+ *     sp_box_str_new  (the package's newly built String or the owner of a
+ *                      live String payload. A change through the box reaches
+ *                      all copies. Use it for a parser's String values.
+ *                      Object keys follow the frozen Hash key contract.)
  *
  *   Float digits (sp_dtoa.h):
  *     sp_float_shortest  (the shortest round-trip digits and exponent, for a

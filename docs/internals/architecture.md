@@ -113,6 +113,12 @@ identifies this layout when a subclass passes self to a reopened String
 method; the caller passes the existing handle, preserving identity and
 mutation through the superclass call.
 
+An immediate String append can consume the bytes of a boxed builtin
+`to_s` directly. The call plan allows that view when the recorded call
+selects the builtin display path. Calls that may reach another method
+produce the usual result. A multi-argument append stages its argument
+values before the first write.
+
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for
 a pass that edits the tree.

@@ -422,6 +422,9 @@ int cplan_hash_holds_key_past(Compiler *c, int h, const char *key);
 const struct BuiltinOp *cplan_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name, int stage, int *argcp);
 /* The boxed display or Symbol fallback when it can answer the given slot. */
 const struct BuiltinOp *cplan_boxed_fallback_row(Compiler *c, int id, const char *name, TyKind slot, int *argc);
+/* The boxed receiver of a call that can use builtin display bytes at an
+   immediate text consumer, or -1 if it needs the ordinary result. */
+int cplan_builtin_display_operand(Compiler *c, int id);
 /* The builtin operation selected for this call when it returns a String
    handle directly. User dispatch and declinable builtin rows have their own
    result representations. */

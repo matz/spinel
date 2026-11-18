@@ -225,6 +225,19 @@ static void str_append_arg(Compiler *c, int arg, const char *rtext, int own, Buf
 void emit_str_append_arg(Compiler *c, int arg, const char *rtext, Buf *b) {
   str_append_arg(c, arg, rtext, 0, b);
 }
+void emit_str_append_arg_immediate(Compiler *c, int arg, const char *rtext, Buf *b) {
+  int call = nt_paren_single(c->nt, arg);
+  int recv = arg_ran_first(arg, 0) || arg_ran_first(call, 0)
+             ? -1 : cplan_builtin_display_operand(c, call);
+  if (recv < 0) {
+    emit_str_append_arg(c, arg, rtext, b);
+    return;
+  }
+  buf_puts(b, "sp_poly_to_s(");
+  emit_boxed(c, recv, b);
+  buf_puts(b, ")");
+}
+
 void emit_str_append_arg_own(Compiler *c, int arg, const char *rtext, Buf *b) {
   str_append_arg(c, arg, rtext, 1, b);
 }
@@ -5261,7 +5274,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
           int arg = j > 0 ? chain[j - 1] : argv[0];
           buf_printf(b, " sp_String_append_bin(_t%d, ", tb9);
           { char rt[48]; snprintf(rt, sizeof rt, "sp_String_cstr(_t%d)", tb9);
-            emit_str_append_arg(c, arg, rt, b); }
+            emit_str_append_arg_immediate(c, arg, rt, b); }
           buf_puts(b, ");");
         }
         buf_printf(b, " sp_strbuf_read(_t%d); })", tb9);

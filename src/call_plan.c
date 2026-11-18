@@ -6194,6 +6194,23 @@ const BuiltinOp *cplan_boxed_fallback_row(Compiler *c, int id, const char *name,
 }
 
 /* See call_plan.h. */
+int cplan_builtin_display_operand(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_safe_nav(nt, id) ||
+      nt_ref(nt, id, "block") >= 0 || cplan_pinned_vis(c, id) || call_plain_argc(c, id) != 0)
+    return -1;
+  const char *name = view_call_name(c, id);
+  int recv = nt_ref(nt, id, "receiver");
+  if (!is_to_s_name(name) || recv < 0 || repr_of(c, recv).kind != RK_BOXED ||
+      cplan_user(c, id).dispatch != CP_NONE) return -1;
+  /* A method-table history includes aliases, undef and visibility changes,
+     even when a program method has no C body to emit. */
+  if (!elab_stamp(c).recorded || elab_runs_unseen(c) || elab_method_versions(c, name) ||
+      elab_method_vis_varies(c, name) || comp_name_answered_any_side(c, name)) return -1;
+  return cplan_boxed_fallback_row(c, id, name, TY_POLY, NULL) ? recv : -1;
+}
+
+/* See call_plan.h. */
 const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls) {
   const char *name = nt_str(c->nt, id, "name");
   int argc = 0;

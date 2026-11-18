@@ -25171,7 +25171,7 @@ static int str_mutate_append_bang_arms(Compiler *c, int id, Buf *b, int indent, 
            keeps the raise instead of passing the sp_RbVal through raw. */
         { Buf rt; memset(&rt, 0, sizeof rt);
           buf_printf(&rt, "sp_String_cstr(%s)", srefC.p);
-          emit_str_append_arg(c, arg, rt.p, b);
+          emit_str_append_arg_immediate(c, arg, rt.p, b);
           free(rt.p); }
         buf_puts(b, ");\n");
       }
@@ -25265,7 +25265,7 @@ static int str_mutate_append_bang_arms(Compiler *c, int id, Buf *b, int indent, 
            poly (`s << time_or_nil.strftime(...)`). */
         { Buf rt; memset(&rt, 0, sizeof rt);
           emit_expr(c, cur, &rt);
-          emit_str_append_arg(c, arg, rt.p, b);
+          emit_str_append_arg_immediate(c, arg, rt.p, b);
           free(rt.p); }
         buf_puts(b, ");\n");
       }

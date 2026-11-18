@@ -1524,7 +1524,7 @@ static char *emit_io_builtin_call(Compiler *c, int id, int recv, int tv, int wan
   TyKind bt = an_builtin_answer(c, id);
   Repr cr = repr_of(c, id);
   TyKind ct = cr.as_ty;
-  if (bt == TY_UNKNOWN || (bt != ct && cr.kind != RK_BOXED)) {
+  if (bt == TY_UNKNOWN || (repr_call_result_storage(bt) != repr_call_result_storage(ct) && cr.kind != RK_BOXED)) {
     g_io_skip_reopen = sv_skip; g_io_skip_node = sv_skip_node;
     return NULL;
   }
@@ -1554,6 +1554,8 @@ static char *emit_io_builtin_call(Compiler *c, int id, int recv, int tv, int wan
   Buf out; memset(&out, 0, sizeof out);
   if (pre) buf_printf(&out, "({ %s ", pb->p);
   if (cr.kind == RK_BOXED && bt != TY_POLY) emit_boxed_text(c, bt, nb->p, &out);
+  else if (bt != ct && cr.kind != RK_BOXED)
+    emit_coerce_text(c, id, bt, ct, CO_HOLD, nb->p, "an IO builtin result", &out);
   else buf_puts(&out, nb->p);
   if (pre) buf_puts(&out, "; })");
   free(nb->p); free(nb); free(pb->p); free(pb);
@@ -1625,7 +1627,7 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
       emit_io_vis_msg(vis, name, h, &vb);
       buf_puts(&vb, "), ");
     }
-    if (boxed) emit_boxed_text(c, c->scopes[kmi].ret, cb.p, &vb);
+    if (boxed) emit_boxed_ret_call(c, &c->scopes[kmi], cb.p, &vb);
     else if (want_o && !method_ret_is_oint(&c->scopes[kmi])) buf_printf(&vb, "%s(%s)", oint_of(ot), cb.p);
     else if (!want_o && oint_kind(ot) && method_ret_is_oint(&c->scopes[kmi])) buf_printf(&vb, "%s(%s)", oint_arg(ot), cb.p);
     else buf_puts(&vb, cb.p);

@@ -1930,6 +1930,7 @@ static SP_INLINE void *sp_exc_implicit_cause(void *c, void *obj) {
    uncaught and traps (sp_setjmp.h) */
 #ifdef SP_EXC_ABORT
 # define SP_EXC_UNWINDS 0
+static SP_TLS const char *sp_exc_reporting_class;
 #else
 # define SP_EXC_UNWINDS 1
 #endif
@@ -1960,6 +1961,12 @@ static void sp_exc_report_message(void *data) {
 }
 
 SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
+#ifdef SP_EXC_ABORT
+  if (sp_exc_reporting_class) {
+    sp_exc_print_uncaught_text(sp_exc_reporting_class, NULL, 1);
+    sp_exc_abort_trap();
+  }
+#endif
   /* a raise leaves any region a signal may be raised in at once (#9222):
      what follows allocates */
   sp_sig_async_ok = 0;
@@ -2092,8 +2099,13 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
     SP_GC_ROOT(e);
     sp_ExcReport report = { e, NULL };
     sp_pending_exc_obj = NULL;
-    if (SP_EXC_UNWINDS) report_failed = sp_exc_protect(sp_exc_report_message, &report);
-    else sp_exc_report_message(&report);
+#ifdef SP_EXC_ABORT
+    sp_exc_reporting_class = cls;
+    sp_exc_report_message(&report);
+    sp_exc_reporting_class = NULL;
+#else
+    report_failed = sp_exc_protect(sp_exc_report_message, &report);
+#endif
     sp_pending_exc_obj = pending;
     if (report.text) msg = sp_msg_heapify(report.text);
   }

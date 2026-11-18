@@ -1957,6 +1957,9 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   int is_lengthlike = ps->lengthlike, is_empty = ps->empty, is_class_named = ps->class_named;
   int is_class_reflect = ps->class_reflect, is_ostruct = ps->ostruct, is_poly_to_a = ps->poly_to_a;
   int is_io_rewind = ps->io_rewind;
+  int str_reopen_owns = 0;
+  { int sci = comp_core_class(c, CORE_STRING);
+    if (sci >= 0 && call_target(c, id, sci, name, 0, NULL) >= 0) str_reopen_owns = 1; }
   /* When the dispatch result feeds a poly context, tr is sp_RbVal, so the
      length-like answer is boxed */
   /* ...and an oint result slot (plan_slot_oint) takes it lifted */
@@ -1977,11 +1980,18 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       MethodLookup ml = { .def_class = -1 };
       int sci = comp_core_class(c, CORE_STRING);
       int str_own = sci >= 0 && call_target(c, id, sci, name, 0, &ml) >= 0 && ml.def_class == sci;
-      if (!str_own)
-        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) _t%d = %ssp_poly_count(_t%d)%s; else ", tv, tr, bopen, tv, bclose);
+      if (!str_own) {
+        buf_puts(b, "if (");
+        emit_poly_str_guard(c, tv, name, b);
+        buf_printf(b, ") _t%d = %ssp_poly_count(_t%d)%s; else ", tr, bopen, tv, bclose);
+      }
     } else {
       buf_printf(b, "if (_t%d.tag == SP_TAG_SYM) _t%d = %ssp_str_length(sp_sym_to_s((sp_sym)_t%d.v.i))%s; else ", tv, tr, bopen, tv, bclose);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_STR) _t%d = %s(sp_int)sp_str_length(_t%d.v.s)%s; else ", tv, tr, bopen, tv, bclose);
+      if (!str_reopen_owns) {
+        buf_puts(b, "if (");
+        emit_poly_str_guard(c, tv, name, b);
+        buf_printf(b, ") _t%d = %s(sp_int)sp_str_length(sp_rbval_string_bytes(_t%d))%s; else ", tr, bopen, tv, bclose);
+      }
     }
   }
   if (is_lengthlike) {
@@ -2001,7 +2011,11 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   /* a string/symbol-tagged poly value answers empty? directly (#1438) */
   if (is_empty) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_EMPTY, -1, TY_UNKNOWN, PC_SAME);
-    buf_printf(b, "if (_t%d.tag == SP_TAG_STR) _t%d = %ssp_str_length(_t%d.v.s) == 0%s; else ", tv, tr, ebopen, tv, ebclose);
+    if (!str_reopen_owns) {
+      buf_puts(b, "if (");
+      emit_poly_str_guard(c, tv, name, b);
+      buf_printf(b, ") _t%d = %ssp_str_length(sp_rbval_string_bytes(_t%d)) == 0%s; else ", tr, ebopen, tv, ebclose);
+    }
     buf_printf(b, "if (_t%d.tag == SP_TAG_SYM) _t%d = %sstrlen(sp_sym_to_s((sp_sym)_t%d.v.i)) == 0%s; else ", tv, tr, ebopen, tv, ebclose);
   }
   /* a class-tagged poly value answers its name: `Base.subclasses` and
@@ -2306,9 +2320,6 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
      answer and this shortcut would take it away: `class String; def
      upcase; "nope"; end` has to reach "nope" for a run-time-typed
      receiver too, the way it now does for a concrete one. */
-  int str_reopen_owns = 0;
-  { int sci = comp_core_class(c, CORE_STRING);
-    if (sci >= 0 && call_target(c, id, sci, name, 0, NULL) >= 0) str_reopen_owns = 1; }
   if (argc == 0 && !str_reopen_owns) {
     const BuiltinZeroOp *str_op = bop_zero_find(TY_STRING, name);
     /* The result has to fit the slot the dispatch assigns into. */

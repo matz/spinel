@@ -554,6 +554,7 @@ void comp_free(Compiler *c) {
   free(c->cg_parent);
   free(c->hdr_cp);
   c->cg_parent = NULL;
+  c->hdr_cp = NULL; c->hdr_cp_n = 0;
   c->cg_parent_n = 0;
   free(c->lazy_hoist);
   c->lazy_hoist = NULL;

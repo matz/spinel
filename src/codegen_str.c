@@ -203,8 +203,8 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, StrForm *
 static int str_handle_by_kind(Compiler *c, int v, int form, unsigned dest, StrForm *sf);
 static int str_render_handle(Compiler *c, int v, int form, unsigned dest, StrForm *sf) {
   sf->cty = TY_STRBUF;
-  if (!arg_ran_first(v, 0) && repr_program_call_handle(c, v)) {
-    emit_program_string_handle(c, v, &sf->expr);
+  if (!arg_ran_first(v, 0) && repr_native_call_handle(c, v)) {
+    emit_native_string_handle(c, v, &sf->expr);
     return SPF_HANDLE;
   }
   return str_handle_by_kind(c, v, form, dest, sf);
@@ -308,18 +308,16 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
   }
   Repr r = repr_of(c, v);
   int bx, u = strbuf_srange_tail(c, v);
-  /* (a conversion that answers its String (`m.message.itself`,
-     `String(m.message)`) has the identity of the String it converts) */
+  /* The identity conversion of an exception message keeps its String. */
   int ev = v;
   for (;;) {
     int x = repr_string_conversion_operand(c, ev);
-    if (x < 0) x = kernel_string_operand(c, ev);
     if (x < 0) break;
     ev = nt_paren_single(nt, x);
   }
-  if (!arg_ran_first(v, 0) && repr_program_call_handle(c, v)) {
+  if (!arg_ran_first(v, 0) && repr_native_call_handle(c, v)) {
     sf->cty = TY_STRBUF;
-    emit_program_string_handle(c, v, b);
+    emit_native_string_handle(c, v, b);
     return SPF_HANDLE;
   }
   sf->cty = TY_POLY;
@@ -522,16 +520,6 @@ static void str_box_note(StrForm *sf, int rf, int rw) {
   sf->rw = rw;
 }
 
-/* Kernel.String on a boxed operand preserves the conversion's own String. */
-static int str_box_kernel_string(Compiler *c, int v, Buf *b) {
-  int x = strbuf_route_box_operand(c, v);
-  if (x < 0 || kernel_string_operand(c, v) < 0) return 0;
-  buf_puts(b, "sp_kernel_string(");
-  emit_boxed(c, x, b);
-  buf_puts(b, ")");
-  return 1;
-}
-
 /* --share-strings: the box face of a String value (or one the rule
    holds as the handle), by its producer's kind (share.h's SPK_*), asked
    where it is boxed; 0 with nothing emitted for any other value:
@@ -549,6 +537,13 @@ static int str_box_kernel_string(Compiler *c, int v, Buf *b) {
                    a bang off a handle, a box's to_s, a chain). */
 static int str_box_by_kind(Compiler *c, int node, StrForm *sf) {
   Buf *b = &sf->expr;
+  if (!arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
+    str_box_open(b, 1);
+    emit_native_string_handle(c, node, b);
+    str_box_close(b);
+    str_box_note(sf, RF_STRBUF_HANDLE, RW_HANDLE_ROUTE);
+    return 1;
+  }
   TyKind t = comp_ntype(c, node);
   if (t != TY_STRING && t != TY_STRBUF) return 0;
   int kind = share_plan_producer(c, node, NULL);
@@ -626,11 +621,6 @@ static int str_box_by_kind(Compiler *c, int node, StrForm *sf) {
     }
     return 1;
   case SPK_OPERAND:
-    if (!arg_ran_first(node, 0) && !emit_boxed_lift(c, node) && str_box_kernel_string(c, node, b)) {
-      str_box_note(sf, RF_PASS, RW_HANDLE_ROUTE);
-      return 1;
-    }
-    return 0;
   case SPK_ASSIGN: case SPK_COND: case SPK_SEQUENCE:
   case SPK_LIFT:
     return 0;

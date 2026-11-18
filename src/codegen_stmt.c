@@ -1513,9 +1513,9 @@ static int strbuf_uplus_operand(Compiler *c, int v) {
 }
 /* The handle a slot the rule shares takes from value v (emit_strbuf_value
    into such a slot): a handle's own, a fresh String's a new one. */
-/* Read a method's declared String result through its handle view. The
+/* Read a call's native String result through its handle view. The
    call still performs its normal dispatch, evaluation and nil checks. */
-void emit_program_string_handle(Compiler *c, int v, Buf *b) {
+void emit_native_string_handle(Compiler *c, int v, Buf *b) {
   int vt = view_push(c, v, TY_STRBUF);
   int vd = view_push_repr(c, v, VR_HANDLE_DEMAND, 1);
   int vb = view_push_repr(c, v, VR_STRBUF_BOX, 0);
@@ -1543,7 +1543,7 @@ void emit_strbuf_handle_of(Compiler *c, int v, Buf *b) {
     buf_puts(b, "(sp_String *)("); emit_expr(c, v, b); buf_puts(b, ")");
     return;
   }
-  if (repr_program_call_handle(c, v)) { emit_program_string_handle(c, v, b); return; }
+  if (repr_native_call_handle(c, v)) { emit_native_string_handle(c, v, b); return; }
   if (v >= 0 && nt_kind(c->nt, v) == NK_NilNode) { buf_puts(b, "(sp_String *)NULL"); return; }
   /* --share-strings: a call without a bang that answers its receiver is
      that receiver's handle; its demand-marked read would wrap a copy. */
@@ -1748,18 +1748,6 @@ static int strbuf_route_inject(Compiler *c, int v) {
   return bsc && block_param_name(c, blk, 1) &&
          (repr_of_slot(c, scope_local(bsc, rename_local(p0))).handle ||
           repr_of_slot(c, scope_local(bsc, rename_local(p0))).kind == RK_BOXED);
-}
-/* Kernel#String's operand when call v is `String(x)` with no method of the
-   program's own of the name (it converts x: its #to_str, then its #to_s),
-   else -1. */
-int kernel_string_operand(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  v = nt_paren_single(c->nt, v);
-  const char *nm = v >= 0 && nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
-  if (!nm || !is_string_class_name(nm) || nt_ref(nt, v, "receiver") >= 0 || nt_ref(nt, v, "block") >= 0 ||
-      call_plain_argc(c, v) != 1 || call_target(c, v, -1, nm, CT_TOP, NULL) >= 0 || bare_call_class_owned(c, v)) return -1;
-  int na = 0;
-  return call_args(nt, v, &na)[0];
 }
 /* --share-strings: a value route that answers the String it is handed, not
    a new one -- `+s` (s itself unless s is frozen), `String(s)` (s itself, ""
@@ -2985,17 +2973,10 @@ void emit_strbuf_pickup(Compiler *c, int v, int box, Buf *b) {
           else buf_puts(b, g_argov_text[i]);
           return;
         } }
-  if (repr_program_call_handle(c, v)) {
+  if (repr_native_call_handle(c, v)) {
     if (box) str_box_open(b, 0);
-    emit_program_string_handle(c, v, b);
+    emit_native_string_handle(c, v, b);
     if (box) str_box_close(b);
-    return;
-  }
-  int x = kernel_string_operand(c, v);
-  if (x >= 0) {
-    if (!box) buf_puts(b, "sp_poly_as_strbuf(");
-    buf_puts(b, "sp_kernel_string("); emit_boxed(c, x, b); buf_puts(b, ")");
-    if (!box) buf_puts(b, ")");
     return;
   }
   int t = ++g_tmp;
@@ -5186,7 +5167,7 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
      into the handle slot, which did not compile. */
   { int vp = nt_paren_single(c->nt, v);
     if (arg_ran_first(v, 0) || (vp >= 0 && arg_ran_first(vp, 0))) { emit_strbuf_handle_of(c, v, b); return; } }
-  if (repr_program_call_handle(c, v)) { emit_program_string_handle(c, v, b); return; }
+  if (repr_native_call_handle(c, v)) { emit_native_string_handle(c, v, b); return; }
   /* `x&.itself` is x, nil or not, and so is its handle */
   { int w = nt_paren_single(c->nt, v);
     if (w >= 0 && nt_kind(c->nt, w) == NK_CallNode &&

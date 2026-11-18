@@ -61,6 +61,11 @@ joined to a String handle uses a null of that pointer type, so boxing the
 result still selects the handle representation. Mixed receiver dispatch joins
 Ruby values in the switch and projects the result once. Proc and C extension
 callback signatures retain their declared result representation.
+A builtin row can declare the same native handle result with `BuiltinOp.result`
+set to `TY_STRBUF`. Semantic inference reads the result as `TY_STRING`.
+The call plan gives the renderer and Repr the same selected producer. Boxed
+dispatch arms use the row they emitted to box the result. An override-capable
+display conversion still returns its actual boxed value.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

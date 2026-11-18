@@ -379,9 +379,15 @@ static const BuiltinOp bop_rows[] = {
     BOP_K(TY_STR_INT_HASH) | BOP_K(TY_STR_STR_HASH) | BOP_K(TY_INT_INT_HASH) | BOP_K(TY_INT_STR_HASH) |
     BOP_K(TY_SYM_POLY_HASH) | BOP_K(TY_STR_POLY_HASH) | BOP_K(TY_POLY_POLY_HASH), 0, BOPF_INTERNAL },
   { BOP_KERNEL, "__blk_conv",  1, 1, BF_NONE, TY_POLY, BOPE_CONV_USER_OK, "sp_poly_blk_conv", 0, 0, BOPF_INTERNAL },
+  { BOP_KERNEL, "String", 1, 1, BF_ANY, TY_STRBUF, BOPE_KERNEL_STRING },
   /* Kernel#respond_to_missing?: false, its two operands, where they have an effect, run first (private: a program's own definition, and the explicit forms that reach it, are the plan's) */
   { BOP_KERNEL, "respond_to_missing?", 2, 2, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "($j0$j1(sp_bool)0)" },
 #include "builtin_zero_ops.inc"
+  /* Stage 1 is the boxed display fallback after ordinary dispatch. Only
+     id2name guarantees a String handle where it returns. */
+  { BOP_BOXED_FALLBACK, "to_s", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_poly_to_s_box($r)", 0, 0, 0, 1 },
+  { BOP_BOXED_FALLBACK, "inspect", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_poly_inspect_box($r)", 0, 0, 0, 1 },
+  { BOP_BOXED_FALLBACK, "id2name", 0, 0, BF_ANY, TY_STRBUF, BOPE_TEMPLATE, "sp_poly_sym_id2name($r)", 0, 0, 0, 1 },
   /* Boxed reads that answer a new Array. A zero-argument rotate uses one;
      shuffle has no count. Reached after the earlier routes: a call inference
      types by a rule of its own (a builtin's super from its reopening, the
@@ -1939,10 +1945,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_REGEX, "timeout",         0, 127, BF_ANY,      TY_POLY,          BOPE_NONE },  /* nil: no per-instance timeout */
   { TY_REGEX, "hash",            0,   0, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "(sp_int)sp_re_hash((void *)($r))", 0 },
 
-  /* Symbol: result kinds; emission stays in emit_call_body. <=> and
-     casecmp/casecmp? are typed by the operand (nil for a non-Symbol). */
-  { TY_SYMBOL, "to_s",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
-  { TY_SYMBOL, "id2name",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
+  /* Symbol: <=> and casecmp/casecmp? are typed by the operand (nil for a
+     non-Symbol). */
+  { TY_SYMBOL, "to_s",            0,   0, BF_ANY,      TY_STRBUF,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
+  { TY_SYMBOL, "id2name",         0,   0, BF_ANY,      TY_STRBUF,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
   { TY_SYMBOL, "name",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_name_str($r)", 0 },
   { TY_SYMBOL, "inspect",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_inspect($r)", 0 },
   { TY_SYMBOL, "upcase",          0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "sp_sym_intern(sp_str_upcase$C(sp_sym_to_s($r)))", 0 },

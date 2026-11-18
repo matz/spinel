@@ -2020,6 +2020,12 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, int own, Buf *b)
     return;
   }
   if (emit_nilbool_conv_raise_w(c, node, TY_STRING, !strict, 0, b)) return;
+  if (!arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
+    buf_puts(b, own || (g_one_held && !node_is_block_stmt(c, node)) ? "SP_STR_BC(" : "SP_STR_B(");
+    emit_native_string_handle(c, node, b);
+    buf_puts(b, ")");
+    return;
+  }
   if (emit_obj_conv(c, node, "to_str", TY_STRING, "String", b)) return;
   /* The unresolved-call gate's sp_raise_nomethod(...) is a side-effecting poly
      value (it raises): coerce it to the const char* slot, keeping the call,
@@ -3433,9 +3439,9 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
     str_box_handle_tmp(b, ran_first_handle(node));
     return;
   }
-  if (!arg_ran_first(node, 0) && repr_program_call_handle(c, node)) {
+  if (!arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
     str_box_open(b, 0);
-    emit_program_string_handle(c, node, b);
+    emit_native_string_handle(c, node, b);
     str_box_close(b);
     return;
   }
@@ -16971,14 +16977,14 @@ static void emit_exc_attrs_zsuper(Compiler *c, int id, Scope *s, const char *sel
 }
 static void emit_super_value(Compiler *c, int id, Buf *b);
 void emit_super(Compiler *c, int id, Buf *b) {
-  int read = repr_of(c, id).as_ty == TY_STRING && repr_program_call_handle(c, id);
+  int read = repr_of(c, id).as_ty == TY_STRING && repr_native_call_handle(c, id);
   if (read) buf_puts(b, "SP_STR_B(");
   emit_super_value(c, id, b);
   if (read) buf_puts(b, ")");
 }
 static void emit_super_value(Compiler *c, int id, Buf *b) {
   refuse_from_plan(c, id, CRF_LIMIT, "super-refusal");
-  if (repr_of(c, id).demand && !repr_program_call_handle(c, id) && repr_call_returns_handle(c, id) && emit_strbuf_route(c, id, b)) return;
+  if (repr_of(c, id).demand && !repr_native_call_handle(c, id) && repr_call_returns_handle(c, id) && emit_strbuf_route(c, id, b)) return;
   if (g_plan_check) ucall_emitted(id);
   refuse_super_splat(c, id, super_plan_mi(c, id));
   Scope *s = comp_scope_of(c, id);
@@ -17597,7 +17603,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
           int dynamic = is_message_name(uname) && exc_message_super_to_s(c, id, tos, 16) != 0 &&
                         exc_has_user_msg_override(c);
           if (r.kind != RK_BOXED)
-            buf_puts(b, r.as_ty == TY_STRBUF || repr_program_call_handle(c, id) ? "sp_poly_as_strbuf(" : "sp_poly_unbox_s(");
+            buf_puts(b, r.as_ty == TY_STRBUF || repr_native_call_handle(c, id) ? "sp_poly_as_strbuf(" : "sp_poly_unbox_s(");
           buf_printf(b, "_xi%d < 0 ? %s((sp_Exception *)%s) : ", pk,
                      dynamic ? "sp_user_exc_to_s_v" : "sp_exc_message_idbox", g_self);
         }

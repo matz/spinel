@@ -110,6 +110,62 @@ static int emit_kconv_obj_nil(Compiler *c, int arg, int ci, const char *m1, cons
   return 1;
 }
 
+/* Kernel.String applies the ordinary protocol to a boxed operand. A
+   reopened Symbol uses the zero-argument targets of the conversion site,
+   because a Symbol's immediate tag does not use the user-object bridge. */
+int emit_op_kernel_string(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc = x->argc;
+  const int *argv = x->argv ? x->argv : call_args(c->nt, x->id, &argc);
+  int arg = argv[0], sym = comp_core_class(c, CORE_SYMBOL);
+  int str = sym >= 0 ? call_target(c, x->id, sym, "to_str", CT_IMPLIED, NULL) : -1;
+  MethodLookup lookup = { .def_class = -1 };
+  int text = sym >= 0 ? call_target(c, x->id, sym, "to_s", CT_IMPLIED, &lookup) : -1;
+  int text_undef = lookup.kind == ML_NONE && lookup.why == MLW_UNDEF;
+  if (str < 0 && text < 0 && !text_undef) {
+    buf_puts(b, "sp_poly_as_strbuf(sp_kernel_string(");
+    emit_boxed(c, arg, b);
+    buf_puts(b, "))");
+    return 1;
+  }
+  int tv = ++g_tmp, tr = ++g_tmp;
+  char argtext[56];
+  snprintf(argtext, sizeof argtext, "(sp_sym)_t%d.v.i", tv);
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+  emit_boxed(c, arg, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d); ", tv, tr, tr);
+  buf_printf(b, "if (_t%d.tag == SP_TAG_SYM) { ", tv);
+  Buf str_live = {0}, text_live = {0}, text_gone = {0};
+  emit_implied_entry_test(c, str, 0, &str_live);
+  emit_implied_entry_test(c, text, 0, &text_live);
+  emit_implied_entry_test(c, text, 1, &text_gone);
+  if (str >= 0) {
+    if (str_live.p) buf_printf(b, "if (%s) ", str_live.p);
+    buf_printf(b, "_t%d = ", tr);
+    emit_zero_arg_boxed_call(c, str, argtext, b);
+    buf_printf(b, "; if (!sp_str_cmp_conv(_t%d, _t%d)) { ", tr, tv);
+  }
+  if (text >= 0) {
+    if (text_live.p) buf_printf(b, "if (%s) { ", text_live.p);
+    buf_printf(b, "_t%d = sp_kernel_string_to_s_result(_t%d, ", tr, tv);
+    emit_zero_arg_boxed_call(c, text, argtext, b);
+    buf_puts(b, "); ");
+    if (text_live.p) buf_puts(b, "}\nelse ");
+  }
+  if (text < 0 || text_live.p) {
+    if (text_gone.p) buf_printf(b, "if (%s) ", text_gone.p);
+    if (text_undef || text_gone.p)
+      buf_puts(b, "{ sp_raise_cls(\"TypeError\", \"can't convert Symbol into String\"); } ");
+    if (text_gone.p) buf_puts(b, "\nelse ");
+    if (!text_undef) buf_printf(b, "{ _t%d = sp_kernel_string(_t%d); } ", tr, tv);
+  }
+  free(str_live.p);
+  free(text_live.p);
+  free(text_gone.p);
+  if (str >= 0) buf_puts(b, "} ");
+  buf_printf(b, "}\nelse { _t%d = sp_kernel_string(_t%d); } sp_poly_as_strbuf(_t%d); })", tr, tv, tr);
+  return 1;
+}
+
 /* See codegen_internal.h. */
 int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, TyKind ret, Buf *b) {
   int argc = 0;
@@ -120,8 +176,7 @@ int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, Ty
     for (int a = 0; a < argc && a < natmp; a++)
       if (subtree_has_side_effect(c, argv[a])) view_bind_temp(argv[a], atmp[a]);
   /* The result is the dispatch's, so do not observe the row as the full call. */
-  int ok = ret == TY_POLY ? emit_builtin_op_arm_boxed(c, id, -1, BOP_KERNEL, name, b)
-                          : emit_builtin_op_arm_text(c, id, -1, BOP_KERNEL, name, NULL, 0, b);
+  int ok = emit_builtin_kernel_dispatch_arm(c, id, name, ret, b);
   view_unbind(ov);
   return ok;
 }
@@ -584,32 +639,6 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         emit_boxed(c, av[0], b);
         buf_puts(b, "))), 0.0)");
       }
-      return 1;
-    }
-    if (sp_streq(name, "String") && ac == 1) {
-      TyKind at = repr_of(c, av[0]).as_ty;
-      if (at == TY_STRING && nt_kind(nt, av[0]) == NK_StringNode) emit_expr(c, av[0], b);
-      else if (at == TY_STRING) {
-        int ts = ++g_tmp;
-        buf_printf(b, "({ const char *_t%d = ", ts); emit_expr(c, av[0], b);
-        buf_printf(b, "; _t%d ? _t%d : sp_str_frozen_empty; })", ts, ts);
-      }
-      /* a nullable Integer or Float whose nil flag is set is nil, whose
-         String is "": box it, as nil where it is one */
-      else if ((at == TY_INT || at == TY_FLOAT) && call_returns_nullable_int(c, av[0])) {
-        buf_puts(b, "sp_poly_to_s("); emit_boxed(c, av[0], b); buf_puts(b, ")");
-      }
-      else if (at == TY_INT) { buf_puts(b, "sp_int_to_s("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
-      else if (at == TY_FLOAT) { buf_puts(b, "sp_float_to_s("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
-      else if (at == TY_POLY || ty_is_object(at)) {
-        buf_puts(b, "sp_poly_unbox_s(sp_kernel_string("); emit_boxed(c, av[0], b); buf_puts(b, "))");
-      }
-      /* the frozen "true" / "false" true.to_s answers; a bare C literal here
-         had no marker byte at all */
-      else if (at == TY_BOOL) { buf_puts(b, "(("); emit_expr(c, av[0], b); buf_puts(b, ") ? sp_str_frozen_true : sp_str_frozen_false)"); }
-      else if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s_new("); emit_expr(c, av[0], b); buf_puts(b, ")"); }   /* String(sym) calls to_s: a new String */
-      else if (at == TY_NIL || at == TY_UNKNOWN) { buf_puts(b, "sp_poly_to_s(sp_box_nil())"); }
-      else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, av[0], b); buf_puts(b, ")"); }  /* container/range/object: #to_s */
       return 1;
     }
     if (sp_streq(name, "Array") && ac == 1) {

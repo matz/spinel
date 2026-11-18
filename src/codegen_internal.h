@@ -203,7 +203,7 @@ int masgn_value_changes(Compiler *c, int mw, int part);
 void emit_poly_arms_handle(Compiler *c, int base, Buf *b);
 void emit_poly_user_handle(Compiler *c, int v, Buf *b);
 /* Emit a program call in the destination view that takes its native String. */
-void emit_program_string_handle(Compiler *c, int id, Buf *b);
+void emit_native_string_handle(Compiler *c, int id, Buf *b);
 int strbuf_self_reader_slot(Compiler *c, int id);
 int strbuf_self_reader_handle(Compiler *c, int id);
 int strbuf_poly_ivar_get(Compiler *c, int n);
@@ -314,7 +314,6 @@ int emit_strbuf_route_box(Compiler *c, int v, Buf *b);
 /* --share-strings: the boxed operand whose String a route answers, or -1
    (codegen_stmt.c) */
 int strbuf_route_box_operand(Compiler *c, int v);
-int kernel_string_operand(Compiler *c, int v);   /* String(x)'s x, else -1 */
 /* A call result as a handle or a box. Builtins with a legacy published
    result consume it here (codegen_stmt.c). */
 void emit_strbuf_pickup(Compiler *c, int v, int box, Buf *b);
@@ -2657,6 +2656,7 @@ int arm_arg_param(Compiler *c, Scope *m);
    compile time. A rest takes its arguments boxed, as a PolyArray: each
    text in argv must be a boxed value then. (codegen_fold.c) */
 int exc_text_method(Compiler *c, int i, int want_message, int *dcls);
+int emit_implied_entry_test(Compiler *c, int mi, int undefined, Buf *b);
 void emit_zero_arg_boxed_call(Compiler *c, int mi, const char *self, Buf *b);
 int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *const *argv, int argc,
                        Buf *pre, Buf *out, int *builds, char *raise, size_t rn);
@@ -2714,14 +2714,18 @@ typedef struct {
   int t0;              /* a temp the caller took for the family ($T), or 0 */
   const int *argv;     /* the operands, when the call node does not hold them (a bare super's parameters); NULL: its own */
 } BopCtx;
-/* Emit the selected Kernel template over supplied operands, such as the
+/* Emit the selected Kernel operation over supplied operands, such as the
    parameters of a forwarding super. */
 int emit_builtin_op_operands(Compiler *c, int id, const struct BuiltinOp *op, const int *argv, int argc, Buf *b);
+int emit_builtin_handle_call(Compiler *c, int id, Buf *b);
+int emit_builtin_boxed_fallback(Compiler *c, int id, int recv, const char *name,
+                               const char *rtext, TyKind slot, Buf *b);
 int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b);
 /* The answer of call id's Kernel row (BOP_KERNEL, cplan_dispatch_row) for a
    dispatch's default arm, boxed when the slot is a poly (ret); the operands
    ran ahead, those with a side effect read their natmp temps atmp (NULL: they
    are bound already; an operand past them has not run). 0 and nothing written when the row does not emit. */
+int emit_builtin_kernel_dispatch_arm(Compiler *c, int id, const char *name, TyKind slot, Buf *b);
 int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, TyKind ret, Buf *b);
 int emit_builtin_op_unguarded(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b);
 /* the same, the receiver already rendered as rtext by a family that renders
@@ -3016,6 +3020,7 @@ int emit_op_array_slice_groups(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_join_str(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_pred_class(Compiler *c, const BopCtx *x, Buf *b);
 /* IO's class-side rows and io/console's writer (codegen_call_io.c) */
+int emit_op_kernel_string(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_for_fd(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_select(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b);

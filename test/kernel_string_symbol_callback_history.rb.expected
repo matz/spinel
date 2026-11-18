@@ -1,0 +1,6 @@
+"abc"
+[ArgumentError, "wrong number of arguments (given 0, expected 1)"]
+"optional"
+[TypeError, "can't convert Symbol into String"]
+[TypeError, "can't convert Symbol into String"]
+"recovered"

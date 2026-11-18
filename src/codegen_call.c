@@ -11073,7 +11073,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         int hoisted0 = pd_hoist(c, id, name, b, pd_from, tr, is_scalar_ret(ret) ? ret : TY_INT, pid0, pty0, blk_tmp0 >= 0 ? 2 : 1);
         g_pd_ret_ctype = NULL;
         if (!hoisted0) buf_puts(b, " }");
-        if (string_result) buf_printf(b, " %s(_t%d); })", repr_of(c, id).as_ty == TY_STRBUF || repr_program_call_handle(c, id)
+        if (string_result) buf_printf(b, " %s(_t%d); })", repr_of(c, id).as_ty == TY_STRBUF || repr_native_call_handle(c, id)
                                     ? "sp_poly_as_strbuf" : "sp_poly_unbox_s", tr);
         else buf_printf(b, " _t%d; })", tr); }
       return 1;
@@ -11592,7 +11592,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_puts(b, "; })");
       }
       else if (string_result && !is_setter_val)
-        buf_printf(b, " %s(_t%d); })", rr.as_ty == TY_STRBUF || repr_program_call_handle(c, id) ? "sp_poly_as_strbuf" : "sp_poly_unbox_s", tr);
+        buf_printf(b, " %s(_t%d); })", rr.as_ty == TY_STRBUF || repr_native_call_handle(c, id) ? "sp_poly_as_strbuf" : "sp_poly_unbox_s", tr);
       else buf_printf(b, " _t%d; })", pd_done || !is_setter_val ? tr : atmp[0]);
       free(atmp);
       free(atmp_ty);
@@ -20549,6 +20549,26 @@ static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
   }
   return open;
 }
+int emit_implied_entry_test(Compiler *c, int mi, int undefined, Buf *b) {
+  const char *selector = undefined ? NULL : cplan_conditional_entry_selector(c, mi);
+  if (selector) {
+    const char *name = selector + 1;
+    const LocalVar *g = comp_gvar(c, name);
+    if (repr_slot_kind(c, g) == RK_BOXED)
+      buf_printf(b, "({ sp_RbVal _sel = gv_%s; _sel.tag == SP_TAG_INT && _sel.v.i > 0; })", name);
+    else if (gvar_is_oint(c, g))
+      buf_printf(b, "({ sp_oint _sel = gv_%s; !_sel.nil && _sel.v > 0; })", name);
+    else buf_printf(b, "(gv_%s > 0)", name);
+    return 1;
+  }
+  CplanCells cells;
+  if (!cplan_implied_entry_cells(c, mi, undefined, &cells) || !cells_testable(c, &cells)) return 0;
+  int open = emit_cells_test(c, &cells, b);
+  buf_puts(b, "0");
+  while (open-- > 0) buf_puts(b, ")");
+  return 1;
+}
+
 /* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
    read it (emit_cells_test) */
 int emit_vis_cell_write(Compiler *c, int id, Buf *b) {
@@ -28918,7 +28938,7 @@ static const char *nil_answer_text(Compiler *c, int id, char *buf, size_t cap) {
   if (!nm) return NULL;
   /* nil.to_s is its one frozen empty String (equal? across calls) */
   if ((is_to_s_name(nm) || is_inspect_name(nm)) && repr_call_result_storage(t) == TY_STRBUF && an == 0) {
-    if (tr.as_ty == TY_STRBUF || repr_program_call_handle(c, id))
+    if (tr.as_ty == TY_STRBUF || repr_native_call_handle(c, id))
       return is_to_s_name(nm) ? "SP_STR_HDL(sp_str_frozen_empty)" : "sp_poly_as_strbuf(sp_poly_inspect_box(sp_box_nil()))";
     return is_to_s_name(nm) ? "sp_str_frozen_empty" : "(&(\"\\xff\" \"nil\")[1])";
   }
@@ -29106,7 +29126,7 @@ int cplan_nil_program_served(Compiler *c, int id) {
    the String arm. A void pointer would erase its handle before boxing. */
 static const char *nil_method_zero(Compiler *c, int id, Repr want) {
   if (want.kind == RK_BOXED) return "sp_box_nil()";
-  if (want.as_ty == TY_STRBUF || repr_program_call_handle(c, id)) return "(sp_String *)NULL";
+  if (want.as_ty == TY_STRBUF || repr_native_call_handle(c, id)) return "(sp_String *)NULL";
   return default_value_from_compiler(c, want.as_ty);
 }
 
@@ -31401,7 +31421,7 @@ static void emit_call_lifted(Compiler *c, int id, Buf *b) {
   int held = g_one_held;
   if (nt_ref(c->nt, id, "block") >= 0) g_one_held = 1;
   int nk = call_ret_narrow_cls(c, id);
-  int reads_string = repr_of(c, id).as_ty == TY_STRING && repr_program_call_handle(c, id);
+  int reads_string = repr_of(c, id).as_ty == TY_STRING && repr_native_call_handle(c, id);
   if (reads_string) buf_puts(b, "SP_STR_B(");
   if (nk >= 0) buf_printf(b, "((%s *)(", class_ctype(c, nk));
   emit_reading_no_value(c, id, emit_call_inner, b);
@@ -34327,7 +34347,7 @@ static void emit_bind_call_arm(Compiler *c, int id, int target, const int *argv,
 void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *sym,
                                  const int *argv, int argc, Buf *b) {
   TyKind slot = repr_of(c, id).as_ty;
-  if (repr_program_call_handle(c, id)) slot = repr_call_result_storage(slot);
+  if (repr_native_call_handle(c, id)) slot = repr_call_result_storage(slot);
   if (slot == TY_VOID || slot == TY_UNKNOWN) slot = TY_POLY;
   int tk = ++g_tmp, to = ++g_tmp, tr = ++g_tmp;
   buf_puts(b, "({ ");
@@ -36210,7 +36230,7 @@ void emit_call_body(Compiler *c, int id, Buf *b) {
   emit_trace_node(c, id, 'c');
 #endif
   if (emit_cext_call(c, id, b) || emit_missing_call(c, id, b)) return;
-  emit_call_body_ordinary(c, id, b);
+  if (!emit_builtin_handle_call(c, id, b)) emit_call_body_ordinary(c, id, b);
 }
 
 static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {

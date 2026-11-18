@@ -4412,7 +4412,8 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       if (argc == 1 && sp_streq(name, "getbyte")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
       /* After the random: forms, read the same boxed fallback as emission. */
       {
-        const BuiltinOp *op = bop_find(BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0);
+        const BuiltinOp *op = bop_find_stage(BOP_BOXED_FALLBACK, name, argc,
+                                             nt_ref(nt, id, "block") >= 0, NULL, NULL, 0);
         if (op && !an_user_poly_arm(c, name, argc)) {
           if (an_bop_records(c, id)) c->bop_inf[id] = op;
           *out = an_poly_concrete(c, id, name, bop_result(op, rt));

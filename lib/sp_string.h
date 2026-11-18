@@ -209,7 +209,7 @@ static inline void sp_String_append_bin(sp_String*s,const char*t){
    callers pass bare C literals with NO marker -- they must use the plain
    sp_String_new above (reading s[-1] there is OOB and, under clang's rodata
    layout, misreads as frozen; cf. the #282 marker-probe lesson). */
-/* Symbol#to_s and #id2name: the symbol's name, frozen (lib/sp_string.c) */
+/* The frozen spelling for Symbol#name and internal byte readers. */
 const char*sp_sym_to_s_frozen(sp_sym id);
 /* The handle a literal or a live payload already has is found inline,
    and only a String that needs a new handle calls the constructor below:

@@ -1146,15 +1146,10 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
     int save = g_indent; g_indent++;
     if (oset_v && bret == TY_INT) emit_oint_expr(c, lastv, TY_INT, &vb);
-    /* a String the block answers, into a poly value, that the plan boxes as
-       the handle (a bang on a boxed receiver answers the receiver's own
-       box, a conditional its arm's String): boxed as the box face renders
-       it, not as the bytes of the expression already emitted. A
-       conversion of the value (`v.to_s`, the plan's operand route) or a
-       new String, which a store would only lift into a handle of its own,
-       needs none, and one around each value would only allocate. */
+    /* The converter boxes the result directly, including the native
+       handle of a fresh Symbol spelling and the value of a user override. */
     else if (conv_op >= 0) {
-      buf_puts(&vb, "sp_poly_to_s_box_plain(");
+      buf_puts(&vb, "sp_poly_to_s_box(");
       emit_boxed(c, conv_op, &vb);
       buf_puts(&vb, ")");
     }

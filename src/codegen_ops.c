@@ -607,6 +607,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_PROC_PARAMETERS] = emit_op_proc_parameters,
   [BOPE_PROC_SOURCE_LOCATION] = emit_op_proc_source_location,
   [BOPE_ARRAY_PRED_CLASS] = emit_op_array_pred_class,
+  [BOPE_KERNEL_STRING] = emit_op_kernel_string,
   [BOPE_CONV_USER_OK] = emit_op_conv_user_ok,
   [BOPE_IO_FOR_FD] = emit_op_io_for_fd,
   [BOPE_IO_SELECT] = emit_op_io_select,
@@ -633,6 +634,42 @@ static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const ch
   const BuiltinOp *op = cplan_builtin_op_row(c, id, rt, name, stage, &argc);
   BopCtx x = { id, recv, argc, rt, name, op, rtext, t0 };
   return emit_selected_op(c, &x, observe && g_arm.send_split != id, b);
+}
+
+int emit_builtin_handle_call(Compiler *c, int id, Buf *b) {
+  const BuiltinOp *op = cplan_builtin_handle_row(c, id);
+  if (!op) return 0;
+  int recv = nt_ref(c->nt, id, "receiver"), argc;
+  call_args(c->nt, id, &argc);
+  int explicit_kernel = op->recv == BOP_KERNEL && recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode;
+  if (explicit_kernel) { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); }
+  Repr r = repr_of(c, id);
+  int box = r.as_ty != TY_STRBUF && r.kind == RK_BOXED;
+  if (box) buf_puts(b, "SP_STR_BOX(");
+  TyKind rt = op->recv == BOP_BOXED_FALLBACK ? TY_POLY : op->recv;
+  BopCtx x = { id, recv, argc, rt, op->name, op, NULL, 0 };
+  emit_selected_op(c, &x, g_arm.send_split != id, b);
+  if (box) buf_puts(b, ")");
+  if (explicit_kernel) buf_puts(b, ")");
+  return 1;
+}
+
+/* The result of the actual boxed fallback, adapted to the containing
+   call or switch's result slot. A dynamic display may answer any Ruby
+   value. The Symbol-only id2name arm answers a String handle or raises. */
+int emit_builtin_boxed_fallback(Compiler *c, int id, int recv, const char *name,
+                               const char *rtext, TyKind slot, Buf *b) {
+  int argc;
+  const BuiltinOp *op = cplan_boxed_fallback_row(c, id, name, slot, &argc);
+  if (!op) return 0;
+  TyKind result = bop_native_result(op, TY_POLY);
+  BopCtx x = { id, recv, argc, TY_POLY, name, op, rtext, 0 };
+  if (result == slot) return emit_selected_op(c, &x, 0, b);
+  if (result == TY_STRBUF) buf_puts(b, slot == TY_POLY ? "SP_STR_BOX(" : "SP_STR_B(");
+  else buf_puts(b, slot == TY_STRBUF ? "sp_poly_as_strbuf(" : "sp_poly_to_s(");
+  emit_selected_op(c, &x, 0, b);
+  buf_puts(b, ")");
+  return 1;
 }
 
 int emit_builtin_op_text(Compiler *c, int id, int recv, TyKind rt, const char *name,
@@ -674,15 +711,32 @@ int emit_builtin_op_arm_boxed(Compiler *c, int id, int recv, TyKind rt, const ch
   return 1;
 }
 
+int emit_builtin_kernel_dispatch_arm(Compiler *c, int id, const char *name, TyKind slot, Buf *b) {
+  if (slot == TY_POLY) return emit_builtin_op_arm_boxed(c, id, -1, BOP_KERNEL, name, b);
+  int argc;
+  const BuiltinOp *op = cplan_builtin_op_row(c, id, BOP_KERNEL, name, 0, &argc);
+  if (!op) return 0;
+  BopCtx x = { id, -1, argc, BOP_KERNEL, name, op, NULL, 0 };
+  int read = slot == TY_STRING && bop_native_result(op, BOP_KERNEL) == TY_STRBUF;
+  if (read) {
+    Buf arm = {0};
+    int emitted = emit_selected_op(c, &x, 0, &arm);
+    if (emitted) buf_printf(b, "SP_STR_B(%s)", arm.p);
+    free(arm.p);
+    return emitted;
+  }
+  return emit_selected_op(c, &x, 0, b);
+}
+
 int emit_builtin_op_tmp(Compiler *c, int id, int recv, TyKind rt, const char *name,
                         int t0, Buf *b) {
   return emit_builtin_op_ex(c, id, recv, rt, name, NULL, t0, 0, 1, b);
 }
 
 int emit_builtin_op_operands(Compiler *c, int id, const BuiltinOp *op, const int *argv, int argc, Buf *b) {
-  if (!op || op->emit != BOPE_TEMPLATE) return 0;
+  if (!op) return 0;
   BopCtx x = { id, -1, argc, op->recv, op->name, op, NULL, 0, argv };
-  return emit_op_template(c, &x, b);
+  return emit_selected_op(c, &x, 0, b);
 }
 
 int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b) {

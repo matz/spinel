@@ -1772,6 +1772,33 @@ int call_node_names(Compiler *c, int id, const char *out[2]) {
   }
   return n;
 }
+/* Kernel.String's scalar conversion calls use the version machinery as a
+   normal call at the conversion site. The builtin callback table owns the
+   names and marks those called on the argument. */
+static int kernel_string_implied_calls(Compiler *c, int id, const BopCallback **out) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || comp_core_class(c, CORE_SYMBOL) < 0) return 0;
+  const char *name = nt_str(nt, id, "name");
+  if (!is_string_class_name(name)) return 0;
+  int recv = nt_ref(nt, id, "receiver"), argc;
+  if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode && !nt_str(nt, id, "send_blind")) return 0;
+  (void)call_args(nt, id, &argc);
+  if (argc != 1 || call_plain_argc(c, id) != 1) return 0;
+  const BuiltinOp *op = bop_find(BOP_KERNEL, name, argc, nt_ref(nt, id, "block") >= 0);
+  if (!op || op->emit != BOPE_KERNEL_STRING) return 0;
+  int count = bop_class_callbacks("Kernel", op->name, out);
+  return count > 0 ? count : 0;
+}
+
+static int kernel_string_implies(Compiler *c, int id, int cls, const char *name, unsigned flags) {
+  if (!(flags & CT_IMPLIED) || (flags & (CT_CMETHOD | CT_TOP)) || cls != comp_core_class(c, CORE_SYMBOL)) return 0;
+  const BopCallback *callbacks;
+  int n = kernel_string_implied_calls(c, id, &callbacks);
+  for (int i = 0; i < n; i++)
+    if ((callbacks[i].roles & BCR_ARG) && sp_streq(callbacks[i].name, name)) return 1;
+  return 0;
+}
+
 /* See call_plan.h. */
 IcCall *call_node_implied_names(Compiler *c, int id, IcCall *buf, int cap, int *count) {
   NtImplied rb[16], *rows = rb;
@@ -2342,6 +2369,9 @@ static int ver_arity(Compiler *c, int id, const int *to, int nto) {
 /* ...for a version entry of `name` on rcls (mi, the table's answer): the
    versions an entry arms (ver_entry_make) */
 static int ver_call_arity(Compiler *c, int id, int rcls, int sg, const char *name, int mi) {
+  /* Kernel.String's argument belongs to the outer call. Both conversion
+     callbacks receive zero arguments, even if their versions take others. */
+  if (!sg && kernel_string_implies(c, id, rcls, name, CT_IMPLIED)) return 0;
   ElabVersion vs[VER_MAX_ARMS];
   int to[VER_MAX_ARMS + 1], nto = 0, dc;
   int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
@@ -3687,7 +3717,8 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
      one that cannot state that error (cplan_capture_names) keeps the
      table's method, as a capture reader keeps a name off the late bit */
   int nc = ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl);
-  int late = (cl == 2 || body) && !ct_capture_keeps_table(c, id, rcls, sg, name, flags, 1);
+  int kernel_callback = kernel_string_implies(c, id, rcls, name, flags);
+  int late = (cl == 2 || body || kernel_callback) && !ct_capture_keeps_table(c, id, rcls, sg, name, flags, 1);
   /* one def on rcls's whole chain, which no call runs ahead of: the
      table's (a name with versions on other chains only) */
   if (nc == 1 && first_def && !late) {
@@ -3733,6 +3764,14 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   int at = m.at;
   ElabWindow w = m.w;
   d = m.d;
+  if (kernel_callback) {
+    const LrDef *only = at == ELAB_NO ? d : at == ELAB_UNKNOWN && m.win == ELAB_YES && m.n == 1 ? ds[0] : NULL;
+    if (at == ELAB_NO || (only && only->kind == LR_UNDEF)) {
+      ml->kind = ML_NONE;
+      ml->why = only && only->kind == LR_UNDEF ? MLW_UNDEF : MLW_RECORD;
+      return -1;
+    }
+  }
   if (at == ELAB_YES) {
     vi = ct_def_version(c, rcls, name, sg, d, &dc);
     if (vi < 0 && (flags & CT_CAPTURE) && d && d->kind == LR_DEF && rcls >= 0) vi = comp_shadowed_body(c, rcls, sg, d->node, &dc);
@@ -3771,8 +3810,10 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     int settled = at == ELAB_NO || elab_chain_settled(c, rcls, sg, name, w.from);
     const Scope *in = comp_scope_of(c, id);
     /* (an entry only where the call takes it, in a body that may run; an
-       implied call takes one made for another call and makes none) */
-    if (none && !(flags & CT_IMPLIED) && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey && (ix < 0 || !c->ver_entries[ix].absent))
+       Kernel.String's Symbol callback can also look up a late history) */
+    if (none && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey &&
+        (ix < 0 || !c->ver_entries[ix].absent) &&
+        (!(flags & CT_IMPLIED) || kernel_callback))
       ver_absent_note(c, rcls, sg, name, mi, ar, ver_mm_at(c, rcls, sg, p, at, &w), 0, VF_NONE);
     /* a call the build did not ask (one in a method made after it, a
        dynamic send's arm) whose window spans versions asks the entry the
@@ -4086,6 +4127,49 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
   out->els = cplan_entry_finds(c, e) >= (include_all ? VER_FINDS_HIDDEN : VER_FINDS_PUBLIC);
   return 1;
 }
+static int ver_first_stmt(const NodeTable *nt, int stmts);
+
+/* The selector made by conditional def lowering uses positive arm
+   numbers. Before any definition runs the slot has no arm selected. */
+const char *cplan_conditional_entry_selector(Compiler *c, int mi) {
+  if (mi < 0) return NULL;
+  const NodeTable *nt = c->nt;
+  int def = c->scopes[mi].def_node;
+  if (def < 0 || !nt_int(nt, def, "cond_lone_disp", 0)) return NULL;
+  int first = ver_first_stmt(nt, nt_ref(nt, def, "body"));
+  int predicate = nt_ref(nt, first, "predicate");
+  int selector = nt_ref(nt, predicate, "receiver");
+  return nt_kind(nt, selector) == NK_GlobalVariableReadNode ? nt_str(nt, selector, "name") : NULL;
+}
+
+/* See call_plan.h. */
+int cplan_implied_entry_cells(Compiler *c, int mi, int undefined, CplanCells *out) {
+  if (mi < 0) return 0;
+  memset(out, 0, sizeof *out);
+  const Scope *scope = &c->scopes[mi];
+  if (scope->entry != ENTRY_DISPATCH && scope->entry != ENTRY_NAMED) return 0;
+  const struct VerEntry *entry = NULL;
+  for (int i = 0; i < c->nver_entries && !entry; i++)
+    if (c->ver_entries[i].scope == mi) entry = &c->ver_entries[i];
+  if (!entry || (entry->guard != VER_ENTRY_CHAIN && entry->guard != VER_ENTRY_HISTORY)) return 0;
+  ElabVersion versions[VER_MAX_ARMS];
+  int n = entry->guard == VER_ENTRY_HISTORY
+        ? elab_history_versions(c, entry->cls, entry->sg, entry->name, versions, VER_MAX_ARMS)
+        : elab_chain_versions(c, entry->from ? entry->from - 1 : entry->cls,
+                              entry->from ? 0 : entry->sg, entry->name, versions, VER_MAX_ARMS);
+  if (n <= 0 || n > VER_MAX_ARMS) return 0;
+  int any = 0;
+  for (int i = 0; i < n; i++) {
+    if (versions[i].v->kind == LR_REMOVE) continue;
+    int k = out->n++;
+    ver_cell_name(versions[i].cell, out->cell[k]);
+    out->val[k] = versions[i].n;
+    out->ans[k] = (versions[i].v->kind == LR_UNDEF) == undefined;
+    any |= out->ans[k];
+  }
+  return any;
+}
+
 /* See call_plan.h. */
 int cplan_list_cells(Compiler *c, int id, int cls, const char *name, int own, CplanCells *out) {
   CplanCells all;
@@ -4978,7 +5062,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     }
   }
   else {
-    int asked = ct_versioned(c, mi, name) || (flags & CT_CAPTURE);
+    int asked = ct_versioned(c, mi, name) || (flags & CT_CAPTURE) || kernel_string_implies(c, id, cls, name, flags);
     if (asked) mi = ct_version(c, id, cls, name, flags, mi, ml);
     /* An alias's record already selected its captured definition. */
     if (mi >= 0 && c->scopes[mi].mixin_guarded && sp_streq(name, c->scopes[mi].name)) r = ct_guard(c, id, mi, flags, ml);
@@ -5965,6 +6049,15 @@ void ct_implied_classes(Compiler *c, int id, int (*versioned)(Compiler *, const 
                                              calls[i].operand, calls[i].target ? builtin_core_class_slot(calls[i].target) : -1 },
                          calls[i].name, ct_implied_ask, &a);
   if (calls != buf) free(calls);
+  /* The receiver of the native Kernel.String callback arm is a Symbol,
+     even at a call site whose operand can hold other values. The ordinary
+     holder survey only knows histories with two or more definitions. */
+  const BopCallback *callbacks;
+  int nc = kernel_string_implied_calls(c, id, &callbacks);
+  int symbol = comp_core_class(c, CORE_SYMBOL);
+  for (int i = 0; i < nc; i++)
+    if ((callbacks[i].roles & BCR_ARG) && versioned(c, callbacks[i].name))
+      fn(c, id, callbacks[i].name, symbol, CT_IMPLIED, arg);
 }
 
 /* "class U" / "module M" for program class self, "main" for -1, into buf;
@@ -6090,6 +6183,12 @@ const BuiltinOp *cplan_builtin_op_row(Compiler *c, int id, TyKind rt, const char
   if (argcp) *argcp = argc;
   return bop_find_stage(fam, name, argc, nt_ref(c->nt, id, "block") >= 0,
                         stage >= 0 ? cplan_bop_arg : NULL, &args, stage);
+}
+
+const BuiltinOp *cplan_boxed_fallback_row(Compiler *c, int id, const char *name, TyKind slot, int *argc) {
+  if (slot != TY_POLY && slot != TY_STRING && slot != TY_STRBUF) return NULL;
+  const BuiltinOp *op = cplan_builtin_op_row(c, id, BOP_BOXED_FALLBACK, name, 1, argc);
+  return op && op->emit == BOPE_TEMPLATE && (op->result == TY_POLY || op->result == TY_STRBUF) ? op : NULL;
 }
 
 /* See call_plan.h. */
@@ -6814,6 +6913,45 @@ int cplan_kernel_row(Compiler *c, int id, const char *name) {
   /* ...and no method of the program's answers the call by the plan (a descendant's override) */
   const CallPlan p = cplan_user_fresh(c, id);
   return p.mi < 0 && p.send_fallback < 0;
+}
+
+/* The native result view requires a row that is guaranteed to emit.
+   Only emitters that take this row's call unconditionally qualify. */
+static int cplan_handle_emitter(const BuiltinOp *op) {
+  return op && op->result == TY_STRBUF && (op->emit == BOPE_TEMPLATE || op->emit == BOPE_KERNEL_STRING);
+}
+
+const BuiltinOp *cplan_builtin_handle_row(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return NULL;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+    const Scope *s = comp_scope_of(c, id);
+    if (!s || s->class_id < 0 || c->classes[s->class_id].is_value_type) return NULL;
+    const Scope *site = comp_super_site(c, s);
+    if (comp_super_shadow(c, site)) return NULL;
+    const char *name = comp_super_name(c, cplan_super_start(c, site), site);
+    if (comp_super_object_builtin(c, s, name, id) != SUPER_OBJ_ROW) return NULL;
+    const BuiltinOp *op = comp_super_kernel_row(c, s, name, id);
+    return cplan_handle_emitter(op) ? op : NULL;
+  }
+  if (k != NK_CallNode || cplan_pinned_vis(c, id) ||
+      call_is_setter_assign(nt, id) || call_plain_argc(c, id) < 0) return NULL;
+  const char *name = view_call_name(c, id);
+  int recv = nt_ref(nt, id, "receiver");
+  int kernel = recv < 0 || nt_kind(nt, recv) == NK_SelfNode || nt_str(nt, id, "send_blind");
+  if (kernel) {
+    const BuiltinOp *op = cplan_builtin_op_row(c, id, BOP_KERNEL, name, 0, NULL);
+    if (cplan_handle_emitter(op) && cplan_kernel_row(c, id, name)) return op;
+  }
+  if (recv < 0) return NULL;
+  TyKind rt = comp_ntype(c, recv);
+  const BuiltinOp *op = rt == TY_POLY ? cplan_boxed_fallback_row(c, id, name, TY_STRBUF, NULL)
+                                      : cplan_builtin_op_row(c, id, rt, name, 0, NULL);
+  if (!cplan_handle_emitter(op)) return NULL;
+  if (cplan_pinned_builtin(c, id) || cplan_builtin_call(c, id)) return op;
+  if (rt == TY_POLY && (an_user_defines_or_reads(c, name) || ostruct_member_read(c, id, rt))) return NULL;
+  return cplan_user(c, id).dispatch == CP_NONE ? op : NULL;
 }
 
 const char *cplan_self_text(Compiler *c, int id, int ci, char *buf, size_t cap) {
@@ -9576,7 +9714,7 @@ static void cpoly_defaults0(Compiler *c, int id, const char *name, const PolySpe
   int fam = -1;
   if (obj_done) fam = -1;
   else if (sp_streq(name, "__to_enum_each") && (ret == TY_POLY || ret == TY_ENUMERATOR)) fam = PB_D_ENUM_EACH;
-  else if (is_text_conversion(name)) fam = PB_D_TO_S;
+  else if (cplan_boxed_fallback_row(c, id, name, ret, NULL)) fam = PB_D_TO_S;
   else if (cpoly_name_in(name, case_conv)) fam = PB_D_CASE_CONV;
   else if (cpoly_name_in(name, num)) fam = PB_D_NUM;
   else if (sp_streq(name, "digits")) fam = PB_D_DIGITS;
@@ -10992,6 +11130,17 @@ static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int
     if (c->classes[k].is_builtin_const && !is_object_base_name(c->classes[k].name)) return 1;
   return 0;
 }
+/* These implied calls can see precisely whether a Symbol conversion
+   callback is installed. The argument callbacks come from the builtin
+   row's declaration, including the optional conversion. */
+static int ver_symbol_conversion_callback(Compiler *c, int cls, int sg, const char *name, int ar) {
+  if (sg || ar || cls < 0 || cls != comp_core_class(c, CORE_SYMBOL)) return 0;
+  const BopCallback *callbacks;
+  int n = bop_class_callbacks("Kernel", "String", &callbacks);
+  for (int i = 0; i < n; i++)
+    if ((callbacks[i].roles & BCR_ARG) && sp_streq(callbacks[i].name, name)) return 1;
+  return 0;
+}
 /* The version entry of name on rcls's chain (side sg) for ar arguments:
    an arm per version, nearest history first, each testing its version's
    cell; asked for a call that may meet no version (q), its else arm what
@@ -11075,6 +11224,10 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
   /* (on a reopened builtin's instance side, a method the builtin itself
      has: with no version run, the builtin's own, #11819) */
   else if (q && na == nd && nd && vis && !sg && ver_builtin_instance_answers(c, rcls, name, ar)) kind = VK_BUILTIN;
+  /* An optional Symbol conversion is absent until its first override.
+     Model the absence even if the call sites only name Kernel.String. */
+  else if (q && na == nd && nd && vis && !(mm & 1) && ver_symbol_conversion_callback(c, rcls, sg, name, ar))
+    kind = VK_NOMETHOD;
   if (kind != VK_KEEP) els = ver_absent_else(c, kind, rcls, sg, name, dto, nd, ar, &blk, &spliced);
   if (absent) *absent = els >= 0;
   *finds = ver_else_finds(c, kind, rcls, sg, name, nd > 0 ? vs[0].v->vis : SP_VIS_PUBLIC, nd ? dto[nd - 1] : -1);
@@ -12200,7 +12353,8 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
   mtab_enter(c);
   /* (an implied call takes no entry where an undef of the name is on the
      chain: cplan_implied_target; the plan's own read, in its bracket) */
-  if ((flags & CT_IMPLIED) && k >= 0 && comp_is_undeffed_in_chain(c, k, nm)) {
+  if ((flags & CT_IMPLIED) && k >= 0 && comp_is_undeffed_in_chain(c, k, nm) &&
+      !kernel_string_implies(c, id, k, nm, flags)) {
     mtab_leave(c);
     return;
   }
@@ -13182,6 +13336,17 @@ int ver_entries_demand(Compiler *c) {
   }
   for (int id = an_calls_named_first(c, SINGLETON_METHODS_NAME); id >= 0; id = an_calls_named_next(id))
     list_asks(c, id, list_ver_target, NULL);   /* (a class-side list asks the cells of each name it may list, as respond_to? does) */
+  /* A Kernel.String on a Symbol can also meet the builtin before the
+     first override. Such calls ask for the same history and cells even
+     when no explicit call has asked for the override's entry. */
+  int symbol = comp_core_class(c, CORE_SYMBOL);
+  if (symbol >= 0)
+    for (int id = an_calls_named_first(c, "String"); id >= 0; id = an_calls_named_next(id)) {
+      const BopCallback *callbacks;
+      int n = kernel_string_implied_calls(c, id, &callbacks);
+      for (int i = 0; i < n; i++)
+        if (callbacks[i].roles & BCR_ARG) call_target(c, id, symbol, callbacks[i].name, CT_IMPLIED, NULL);
+    }
   late = c->nver_late;
   if (!any && !late && !c->ver_vis_read_new) return 0;
   const NodeTable *nt = c->nt;

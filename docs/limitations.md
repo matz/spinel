@@ -1484,6 +1484,7 @@ literals: `:a.to_s.frozen?`, `:a.id2name.frozen?` and `String(:a).frozen?`
 are `true`, `:a.to_s << "x"` raises FrozenError, and a mutable copy comes
 from `+:a.to_s` or `dup`. Each call still answers its own object
 (`:a.to_s.equal?(:a.to_s)` is `false`), as in CRuby.
+`Symbol#name` returns the same frozen spelling on each call.
 
 **Strings are UTF-8, whatever the source encoding.** An `# encoding:` (or
 `coding:`) magic comment naming another encoding warns at compile time,
@@ -1514,15 +1515,6 @@ of its content to be deduped, but a run-time string deduped before that is
 not the literal (`(-("ab" + "c")).equal?("abc")` is `false`), and the
 literal's own `-@` then returns that earlier object. `str.dup.freeze` is
 never deduplicated, in CRuby either.
-
-`Symbol#to_s` and `#id2name` answer a new String on every call in CRuby, so
-`:abc.to_s.equal?(:abc.to_s)` is `false`. Spinel keeps one chilled String per
-symbol and answers it each time, so that is `true`. The value is the same,
-and so is every mutation: the String is chilled, so `s = :abc.to_s; t = +s`
-copies, and `s << "x"` makes `s` its own String and leaves the next `to_s`
-alone (`:abc.to_s` is still `"abc"`). Only the identity of two `to_s` results
-differs; a new String per call would cost an allocation at every symbol read,
-which programs that build names from symbols do in loops.
 
 **Aliased in-place mutation is observed.** A mutable string (from
 `String.new`, `+"lit"`, interpolation, or `dup`) that is both aliased and mutated in

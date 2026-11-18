@@ -898,10 +898,10 @@ int scope_always_raises(Compiler *c, int mi) {
   return !for_each_value_position(c->nt, s->body, VPS_ALL, repr_leaf_not_raise, c);
 }
 
-/* A program call with a String result has an object to pass to its caller.
+/* A call with a native String result has an object to pass to its caller.
    Reflection keeps its callee's signature. A setter expression selects its
    argument independently of what the invoked method returns. */
-int repr_program_call_handle(Compiler *c, int v) {
+int repr_native_call_handle(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0) return 0;
   NodeKind k = nt_kind(nt, v);
@@ -909,7 +909,7 @@ int repr_program_call_handle(Compiler *c, int v) {
   TyKind t = comp_ntype_settled(c, v);
   if (t != TY_STRING && t != TY_STRBUF) return 0;
   if (k == NK_CallNode) {
-    /* The fallback arm of a versioned entry invokes the builtin's ABI. */
+    if (cplan_builtin_handle_row(c, v)) return 1;
     if (call_is_setter_assign(nt, v) || cplan_pinned_builtin(c, v)) return 0;
     const char *name = nt_str(nt, v, "name");
     if (is_method_invoke(name) || is_bind_call(name)) {
@@ -923,7 +923,8 @@ int repr_program_call_handle(Compiler *c, int v) {
   if (plan.dispatch == CP_DIRECT && plan.mi >= 0)
     return repr_method_ret_storage(&c->scopes[plan.mi]) == TY_STRBUF;
   if (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM)
-    return k == NK_CallNode ? repr_boxed_native_handle(c, v) : repr_super_native_keeps(c, v) != NULL;
+    return k == NK_CallNode ? repr_boxed_native_handle(c, v)
+                            : cplan_builtin_handle_row(c, v) || repr_super_native_keeps(c, v);
   /* The switch has an explicit join even when its target set exceeds
      CPT_MAX. This says nothing about what an unknown arm does with arguments. */
   return repr_call_result_storage(t) == TY_STRBUF;
@@ -931,7 +932,7 @@ int repr_program_call_handle(Compiler *c, int v) {
 int repr_call_returns_handle(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
-  if (repr_program_call_handle(c, v)) return 1;
+  if (repr_native_call_handle(c, v)) return 1;
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
   /* a String's value, or one the pickup marks to be stored as the handle */
   TyKind t = comp_ntype_settled(c, v);
@@ -950,11 +951,6 @@ int repr_call_returns_handle(Compiler *c, int v) {
     if (nt_ref(nt, v, "block") < 0 ? argc == 2 && repr_of(c, argv[1]).kind == RK_STRBUF
                                    : tail >= 0 && (repr_of(c, tail).kind == RK_STRBUF || strbuf_value_carries(c, tail)))
       return 1;
-  }
-  int x = kernel_string_operand(c, v);
-  if (x >= 0) {
-    Repr r = repr_of(c, x);
-    return r.kind == RK_BOXED || ty_is_object(r.ty);
   }
   return 0;
 }

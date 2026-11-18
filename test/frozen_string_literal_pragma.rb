@@ -31,8 +31,8 @@ cpy = "abc".dup
 cpy << "y"
 p cpy
 
-# synthesized strings are not literals: Symbol#to_s and Integer#to_s stay
-# unfrozen under the pragma
-p :sym.to_s.dup.frozen?    # false (Symbol#to_s itself is frozen in Spinel)
+# Spinel freezes the fresh Symbol#to_s result. Its dup remains mutable.
+# Integer#to_s returns a mutable String under the pragma.
+p :sym.to_s.dup.frozen?    # false
 p 42.to_s.frozen?          # false
 p __FILE__.frozen?         # true -- __FILE__ is a literal of its file

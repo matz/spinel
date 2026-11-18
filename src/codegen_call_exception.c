@@ -48,7 +48,7 @@ static void emit_exc_own_render(Compiler *c, int id, int recv, int xcm, const Ca
   Repr r = repr_of(c, id);
   if (r.kind == RK_BOXED) buf_puts(b, call.p);
   else {
-    TyKind t = repr_program_call_handle(c, id) ? TY_STRBUF : r.as_ty;
+    TyKind t = repr_native_call_handle(c, id) ? TY_STRBUF : r.as_ty;
     emit_unbox_text(c, t, call.p, b);
   }
   free(call.p);
@@ -60,7 +60,7 @@ static void emit_exc_result(Compiler *c, int id, const char *name, const char *e
   Repr r = repr_of(c, id);
   const char *fn = !exc_has_user_msg_override(c) ? "sp_exc_message_idbox"
                  : is_message_name(name) ? "sp_user_exc_message_v" : "sp_user_exc_to_s_v";
-  if (r.kind != RK_BOXED) buf_puts(b, r.as_ty == TY_STRBUF || repr_program_call_handle(c, id)
+  if (r.kind != RK_BOXED) buf_puts(b, r.as_ty == TY_STRBUF || repr_native_call_handle(c, id)
                                         ? "sp_poly_as_strbuf(" : "sp_poly_unbox_s(");
   buf_printf(b, "%s((sp_Exception *)(%s))", fn, e);
   if (r.kind != RK_BOXED) buf_puts(b, ")");
@@ -668,7 +668,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       emit_exc_result(c, id, name, e, b);
       Repr r = repr_of(c, id);
       if (r.kind == RK_BOXED) buf_puts(b, " : SP_STR_BOX(sp_str_frozen_empty))");
-      else if (r.as_ty == TY_STRBUF || repr_program_call_handle(c, id))
+      else if (r.as_ty == TY_STRBUF || repr_native_call_handle(c, id))
         buf_puts(b, " : SP_STR_HDL(sp_str_frozen_empty))");
       else buf_puts(b, " : sp_str_frozen_empty)");
       return 1;

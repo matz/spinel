@@ -123,7 +123,7 @@ extern const char sp_str_empty_data[];
 extern const char *const sp_str_frozen_empty;
 extern const char *const sp_str_frozen_true;
 extern const char *const sp_str_frozen_false;
-/* Symbol#to_s's String (sp_sym_to_s_frozen): frozen static storage with a
+/* The cached Symbol spelling (sp_sym_to_s_frozen): frozen static storage with a
    header, 0xf1, whose `next` link names sp_sym_str_tag. The link is free to
    carry the mark: the String is on no sweep list and is no literal (an
    even link names no literal's handle). A Hash compared by identity asks

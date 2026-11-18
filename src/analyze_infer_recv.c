@@ -1772,12 +1772,13 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
   (void)argv; (void)recv; (void)nt;
   if (!name) return 0;
-  /* to_s and inspect answer a String whatever the box holds (the String
-     rows that stand for a boxed receiver), unless a class of the program
-     owns the name */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && !an_user_recv_defines_method(c, name)) {
-    const BuiltinOp *op = an_bop_find_boxed(c, id, TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op) { *out = bop_result(op, TY_STRING); return 1; }
+  /* The builtin display answers a String. When dispatch can reach an
+     override, its native box carries whatever that method answers. */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && is_text_conversion(name) &&
+      !an_user_recv_defines_method(c, name) &&
+      an_bop_find(c, id, BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0)) {
+    *out = TY_STRING;
+    return 1;
   }
   /* #hash on a boxed receiver is always the Integer sp_rbval_hash_key
      answers -- a user #hash in the program is reached through
@@ -1789,10 +1790,14 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      since Set#hash is exactly that loop (#4728). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "hash"))
     { *out = TY_INT; return 1; }
-  /* Symbol#id2name on a boxed receiver: the name as a String (sp_poly_sym_id2name) */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "id2name") &&
-      !an_user_defines_or_reads(c, name))
-    { *out = TY_STRING; return 1; }
+  if (recv >= 0 && rt == TY_POLY && argc == 0) {
+    const BuiltinOp *op = bop_find(BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result == TY_STRBUF && !an_user_defines_or_reads(c, name)) {
+      an_bop_find(c, id, BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0);
+      *out = bop_result(op, rt);
+      return 1;
+    }
+  }
   /* blockless cycle(n) on a boxed receiver: the Enumerator sp_poly_cycle_n
      builds, and a countless cycle the endless one sp_poly_cycle builds,
      unless a class of the program's own has a method or a class

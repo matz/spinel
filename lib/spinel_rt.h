@@ -2175,10 +2175,8 @@ static inline int sp_is_exc_subclass_cls(sp_int cls_id) {
   return 0;
 }
 const char *sp_poly_to_s(sp_RbVal v);
-/* Symbol#to_s / #id2name and a boxed receiver's to_s as a program calls
-   them: a Symbol's is a new frozen String each call (lib/sp_poly_cold.c) */
-const char *sp_sym_to_s_new(sp_sym id);
-const char *sp_poly_to_s_call(sp_RbVal v);
+/* Symbol#to_s and #id2name return a distinct frozen String. */
+sp_String *sp_sym_to_s_new(sp_sym id);
 /* Unwrap a boxed IO value to its sp_File *. The user-#to_io dispatch
    asks this for a poly return type, because the generated arm is forced
    to box the answer through sp_RbVal (the codegen of a poly body has
@@ -3541,20 +3539,11 @@ static inline sp_String *sp_interp_string(sp_RbVal value, int *neutral) {
 static inline sp_RbVal sp_poly_to_s_box(sp_RbVal v) {
   sp_RbVal user;
   if (sp_user_display_box(v, 0, &user)) return user;
-  if (sp_poly_is_str_subclass(v)) return sp_box_str_new(sp_str_dup(sp_String_cstr((sp_String *)v.v.p)));
+  if (sp_poly_is_str_subclass(v))
+    return sp_box_obj(sp_String_new_unfrozen(sp_String_cstr((sp_String *)v.v.p)), SP_BUILTIN_STRBUF);
   if ((v.tag == SP_TAG_STR && v.v.s) || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)) return v;
-  return sp_box_str_new(sp_poly_to_s_call(v));   /* (a Symbol's to_s is a new String) */
-}
-/* ...for a value stored where no handle is wanted for what is not a String
-   (a Hash's value a block answers): a String answers its own box as
-   sp_poly_to_s_box does, anything else its to_s boxed as bytes, with no
-   handle made around it */
-static inline sp_RbVal sp_poly_to_s_box_plain(sp_RbVal v) {
-  sp_RbVal user;
-  if (sp_user_display_box(v, 0, &user)) return user;
-  if (sp_poly_is_str_subclass(v)) return sp_box_str(sp_str_dup(sp_String_cstr((sp_String *)v.v.p)));
-  if ((v.tag == SP_TAG_STR && v.v.s) || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)) return v;
-  return sp_box_str(sp_poly_to_s_call(v));
+  if (v.tag == SP_TAG_SYM) return sp_box_obj(sp_sym_to_s_new((sp_sym)v.v.i), SP_BUILTIN_STRBUF);
+  return sp_box_str_new(sp_poly_to_s(v));
 }
 static inline sp_RbVal sp_poly_inspect_box(sp_RbVal v) {
   sp_RbVal r;
@@ -4055,16 +4044,18 @@ static inline sp_RbVal sp_poly_check_str_box(sp_RbVal v) {
     return sp_box_nullable_obj(sp_poly_check_str_obj(v), SP_BUILTIN_STRBUF);
   return sp_box_nil();
 }
-static inline sp_RbVal sp_kernel_string(sp_RbVal v) {
-  SP_GC_ROOT_RBVAL(v);
-  sp_RbVal s = sp_poly_check_str_box(v);
-  if (!sp_poly_nil_p(s)) return s;
-  s = sp_poly_to_s_box(v);
+static inline sp_RbVal sp_kernel_string_to_s_result(sp_RbVal v, sp_RbVal s) {
   SP_GC_ROOT_RBVAL(s);
   if (!sp_strface_b_box(s))
     sp_raise_cls("TypeError", sp_sprintf("can't convert %s to String (%s#to_s gives %s)",
                  sp_poly_class_name(v), sp_poly_class_name(v), sp_poly_class_name(s)));
   return s;
+}
+static inline sp_RbVal sp_kernel_string(sp_RbVal v) {
+  SP_GC_ROOT_RBVAL(v);
+  sp_RbVal s = sp_poly_check_str_box(v);
+  if (!sp_poly_nil_p(s)) return s;
+  return sp_kernel_string_to_s_result(v, sp_poly_to_s_box(v));
 }
 static SP_INLINE const char *sp_poly_check_str(sp_RbVal v) {
   if (v.tag == SP_TAG_STR) return v.v.s;
@@ -4647,7 +4638,7 @@ static SP_UNUSED sp_int sp_poly_cmp_ans(sp_RbVal r, sp_RbVal a, sp_RbVal b) {
    NoMethodError, answered as a value so it sits in an expression arm. */
 /* Symbol#id2name on a boxed receiver: the Symbol's name as a String, as
    to_s answers it; a value of any other kind has no id2name. */
-static const char *sp_poly_sym_id2name(sp_RbVal v) {
+static sp_String *sp_poly_sym_id2name(sp_RbVal v) {
   if (v.tag != SP_TAG_SYM) sp_raise_nomethod(sp_nomethod_msg("id2name", v));
   return sp_sym_to_s_new((sp_sym)v.v.i);
 }

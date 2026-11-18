@@ -158,7 +158,7 @@ typedef enum {
    held as the String, and the handle taken as its route takes it. */
 int repr_handle_apart(Compiler *c, int v, Repr r);
 /* Does a call's settled return route hand back a shared String handle? */
-int repr_program_call_handle(Compiler *c, int node);
+int repr_native_call_handle(Compiler *c, int node);
 int repr_call_returns_handle(Compiler *c, int v);
 int scope_always_raises(Compiler *c, int mi);
 const NativeMethod *repr_super_native_keeps(Compiler *c, int n); /* super into a native keeps binding (#9258) */

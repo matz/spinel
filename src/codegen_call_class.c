@@ -5672,7 +5672,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             buf_printf(b, " default: sp_raise_cls(\"ArgumentError\", \"%s\"); break;", nb9am);
           else if (!rdef9 && argc <= 4 && cls_value_row_default(c, id, recv, name, argc, argv, argt9, tk9, tr9, slot9, b)) {}
           else if (!rdef9) buf_printf(b, " default: %s; break;", rraise9);
-          if (slot9 == TY_STRBUF && repr_of(c, id).as_ty == TY_STRING && !repr_program_call_handle(c, id))
+          if (slot9 == TY_STRBUF && repr_of(c, id).as_ty == TY_STRING && !repr_native_call_handle(c, id))
             buf_printf(b, " } sp_strbuf_read(_t%d); })", tr9);
           else buf_printf(b, " } _t%d; })", tr9);
           unhoist_dispatch_args(c, hn9, hsv9, hty9);
@@ -6369,7 +6369,7 @@ static int emit_root_reopen_call_plain(Compiler *c, int id, Buf *b, const NodeTa
   /* a method with no value (it raises, or ends in a void call) where the
      site's slot wants one: nil in that slot's type */
   Repr want_repr = repr_of(c, id);
-  TyKind want3 = repr_program_call_handle(c, id) ? repr_call_result_storage(want_repr.as_ty) : want_repr.as_ty;
+  TyKind want3 = repr_native_call_handle(c, id) ? repr_call_result_storage(want_repr.as_ty) : want_repr.as_ty;
   int void3 = method_is_void(&c->scopes[mi]) && want3 != TY_VOID && want3 != TY_UNKNOWN && want3 != TY_NIL;
   if (void3) buf_puts(b, "(");
   Buf call = {0};

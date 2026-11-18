@@ -1,0 +1,6 @@
+["abc", "abc", [:argument]]
+["explicit", "explicit", [:argument, :to_s, :argument, :to_s]]
+["explicit", "explicit", "abc"]
+["implicit", "implicit", "explicit", "12", [:argument, :to_s, :argument, :to_s, :to_s, :argument, :to_s, :to_str, :argument, :to_str, :argument, :to_str, :to_s, :argument]]
+["", "literal"]
+[12, "12"]

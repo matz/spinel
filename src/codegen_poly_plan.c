@@ -2690,20 +2690,16 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
     buf_puts(b, "; break;");
     obj_default_done = 1;
   }
-  /* to_s / inspect are universal: a poly value that is a builtin scalar
-     (int, float, string, ...) rather than one of the enumerated user
-     classes still answers them. Without a default arm the result stayed
-     the empty-string default, so `@x.to_s` on a poly-widened int printed
-     blank. Route the fallthrough through the runtime poly converter. */
-  if (!obj_default_done && (is_text_conversion(name))) {
-    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_D_TO_S, -1, TY_UNKNOWN, PC_SAME);
-    const char *fn = is_to_s_name(name) ? "sp_poly_to_s_box" : "sp_poly_inspect_box";
-    buf_printf(b, " default: _t%d = ", tr);
-    if (ret == TY_STRBUF) buf_printf(b, "sp_poly_as_strbuf(%s(_t%d))", fn, tv);
-    else if (ret == TY_POLY) buf_printf(b, "%s(_t%d)", fn, tv);
-    else buf_printf(b, "sp_poly_to_s(%s(_t%d))", fn, tv);
-    buf_puts(b, "; break;");
-    obj_default_done = 1;
+  if (!obj_default_done) {
+    char self[32];
+    snprintf(self, sizeof self, "_t%d", tv);
+    Buf arm = {0};
+    if (emit_builtin_boxed_fallback(c, id, recv, name, self, ret, &arm)) {
+      if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_D_TO_S, -1, TY_UNKNOWN, PC_SAME);
+      buf_printf(b, " default: _t%d = %s; break;", tr, arm.p);
+      obj_default_done = 1;
+    }
+    free(arm.p);
   }
   /* The case conversions are String's AND Symbol's. A String receiver is
      recognised by a tag pre-arm before the switch, but a Symbol had no arm

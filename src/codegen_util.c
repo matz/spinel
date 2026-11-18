@@ -2187,6 +2187,10 @@ int emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, B
   TyKind et = typed_elem_kind(rt), from = TY_UNKNOWN;
   if (typed_elem_held(rt) == TY_STRBUF && repr_coerce_plan(c, node, et, CO_HOLD, &from) == CF_FIT &&
       (from == TY_STRING || from == TY_STRBUF)) {
+    if (!arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
+      emit_native_string_handle(c, node, b);
+      return 1;
+    }
     if (repr_of(c, node).kind != RK_BOXED && one_str_elem_call(c, node, TY_UNKNOWN)) {
       strh_elem_handle_text(c, node, b);
       return 1;

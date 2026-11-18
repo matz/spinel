@@ -438,12 +438,14 @@ static void pk_ber_poly(sp_RbVal v, char **buf, size_t *len, size_t *cap) {
 
 /* Keep the ordinary loop's inlined conversion with a second packing entry. */
 static inline double pk_poly_to_flt(sp_RbVal v) {
-  v = sp_rbval_str(v);
+  if (sp_rbval_is_string(v)) {
+    const char *s = sp_rbval_string_bytes(v);
+    return s ? strtod(s, NULL) : 0.0;
+  }
   switch (v.tag) {
     case SP_TAG_FLT:  return v.v.f;
     case SP_TAG_INT:  return (double)v.v.i;
     case SP_TAG_BOOL: return v.v.b ? 1.0 : 0.0;
-    case SP_TAG_STR:  return v.v.s ? strtod(v.v.s, NULL) : 0.0;
     default:          return 0.0;
   }
 }
@@ -846,14 +848,11 @@ static void pk_ptr_poly(char spec, int64_t count, sp_PolyArray *arr, sp_int *idx
   for (int64_t k = 0; k < n; k++) {
     if (*idx >= arr->len) pk_too_few(*buf);
     sp_RbVal e = arr->data[(*idx)++];
-    const char *s = NULL;
-    if (e.tag == SP_TAG_STR) s = e.v.s;
-    else if (e.tag == SP_TAG_OBJ && e.cls_id == SP_BUILTIN_STRBUF && e.v.p) s = ((sp_String *)e.v.p)->data;
-    else if (e.tag != SP_TAG_NIL) {
+    if (!sp_rbval_is_string(e) && e.tag != SP_TAG_NIL) {
       free(*buf);
       sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", pk_conv_name(e)));
     }
-    pk_int_directive('J', (int64_t)(intptr_t)s, 0, buf, len, cap);
+    pk_int_directive('J', (int64_t)(intptr_t)sp_rbval_string_bytes(e), 0, buf, len, cap);
   }
 }
 

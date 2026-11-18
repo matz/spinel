@@ -1688,11 +1688,10 @@ sp_int sp_sock_named_const(const char *name, sp_int is_family) {SP_GC_ROOT_STR(n
    (unrestricted), an Integer as given, a String or Symbol by name
    (sp_sock_named_const). */
 sp_int sp_sock_addrinfo_hint(sp_RbVal v, sp_int is_family) {
-  v = sp_rbval_str(v);
   if (v.tag == SP_TAG_NIL) return 0;
   if (v.tag == SP_TAG_INT) return v.v.i;
   const char *name = NULL;
-  if (v.tag == SP_TAG_STR) name = v.v.s;
+  if (sp_rbval_is_string(v)) name = sp_rbval_string_bytes(v);
   else if (v.tag == SP_TAG_SYM && sp_sym_name_fn) name = sp_sym_name_fn((sp_sym)v.v.i);
   if (!name) sp_raise_cls("TypeError", "no implicit conversion into Integer");
   return sp_sock_named_const(name, is_family);
@@ -2076,15 +2075,14 @@ sp_int sp_sock_shutdown(sp_File *f, sp_int how) {SP_GC_ROOT(f);
 /* A setsockopt value as the int the option takes: an Integer, true/false as
    1/0, or the option's packed bytes ([1].pack("i")), as CRuby accepts it. */
 sp_int sp_sock_optval(sp_RbVal v) {
-  /* a shared String handle reads as its bytes (sp_String's first field) */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p) { v.tag = SP_TAG_STR; v.v.s = *(const char **)v.v.p; }
   if (v.tag == SP_TAG_INT) return v.v.i;
   if (v.tag == SP_TAG_BOOL) return v.v.i != 0;
-  if (v.tag == SP_TAG_STR && v.v.s) {
+  const char *bytes = sp_rbval_string_bytes(v);
+  if (bytes) {
     int n = 0;
-    if (sp_str_byte_len(v.v.s) != sizeof n)
+    if (sp_str_byte_len(bytes) != sizeof n)
       sp_raise_cls("ArgumentError", "only an int-sized packed option value is supported");
-    memcpy(&n, v.v.s, sizeof n);
+    memcpy(&n, bytes, sizeof n);
     return n;
   }
   sp_raise_cls("TypeError", "no implicit conversion into Integer");

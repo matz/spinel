@@ -59,10 +59,13 @@ sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
     sp_StrArray_push_e(lines, sp_poly_as_strbuf(receiver));
     return lines;
   }
-  const char *sep = argc ? sp_poly_arg_str_chk(separator) : SPL("\n");
-  SP_GC_ROOT_STR(sep);
   const char *text = sp_poly_recv_s(receiver, method);
   SP_GC_ROOT_STR(text);
+  if (!sp_str_byte_len(text)) return lines;
+  /* Separator conversion can change the receiver. Read the text first. */
+  if (argc && sp_poly_is_user_obj(separator)) text = sp_str_dup(text);
+  const char *sep = argc ? sp_poly_arg_str_chk(separator) : SPL("\n");
+  SP_GC_ROOT_STR(sep);
   size_t offset = 0;
   for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, chomp));)
     sp_StrArray_push_e(lines, line);
@@ -92,19 +95,22 @@ static void sp_string_line_gen(sp_Fiber *f) {
     sp_Fiber_yield(cap->receiver);
   }
   else {
-    /* Convert the captured argument and take the byte views at the start of
-       each walk. A mutation during a yield cannot change its remaining lines. */
-    const char *sep = SPL("\n");
-    SP_GC_ROOT_STR(sep);
-    if (cap->argc) {
-      sep = sp_poly_arg_str_chk(cap->separator);
-      sep = sp_str_dup(sep);
-    }
-    const char *text = sp_str_dup(sp_poly_recv_s(cap->receiver, "each_line"));
+    const char *text = sp_poly_recv_s(cap->receiver, "each_line");
     SP_GC_ROOT_STR(text);
-    size_t offset = 0;
-    for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, chomp));)
-      sp_Fiber_yield(sp_box_obj(line, SP_BUILTIN_STRBUF));
+    if (sp_str_byte_len(text)) {
+      /* Keep the text selected at the start of this walk through separator
+         conversion and through any mutations in the block. */
+      text = sp_str_dup(text);
+      const char *sep = SPL("\n");
+      SP_GC_ROOT_STR(sep);
+      if (cap->argc) {
+        sep = sp_poly_arg_str_chk(cap->separator);
+        sep = sp_str_dup(sep);
+      }
+      size_t offset = 0;
+      for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, chomp));)
+        sp_Fiber_yield(sp_box_obj(line, SP_BUILTIN_STRBUF));
+    }
   }
   sp_gc_wb((void *)f);
   f->yielded_value = cap->receiver;

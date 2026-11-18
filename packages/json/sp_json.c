@@ -322,15 +322,14 @@ static void jb_int(jbuf *b, sp_int n) {
    raise, throw, or return past the walk: the buffer moves to the heap first,
    as before any user code. */
 static void sp_json_key_b(jbuf *b, sp_RbVal k) {
-  /* the usual keys straight into the buffer, as sp_json_key would write them */
-  sp_RbVal ks = sp_rbval_str(k);
-  switch (ks.tag) {
-    case SP_TAG_STR: jb_rstr(b, ks.v.s); return;
-    case SP_TAG_SYM: jb_sym(b, (sp_sym)ks.v.i); return;
-    case SP_TAG_INT: jb_c(b, '"'); jb_int(b, ks.v.i); jb_c(b, '"'); return;
+  /* the usual keys straight into the buffer, without calling #to_s */
+  if (sp_rbval_is_string(k)) { jb_rstr(b, sp_rbval_string_bytes(k)); return; }
+  switch (k.tag) {
+    case SP_TAG_SYM: jb_sym(b, (sp_sym)k.v.i); return;
+    case SP_TAG_INT: jb_c(b, '"'); jb_int(b, k.v.i); jb_c(b, '"'); return;
     default: break;
   }
-  if (ks.tag == SP_TAG_BOOL) { jb_str(b, ks.v.b ? "true" : "false"); return; }
+  if (k.tag == SP_TAG_BOOL) { jb_str(b, k.v.b ? "true" : "false"); return; }
   /* any other key is its #to_s, as CRuby's json generates it: a Float, nil,
      an Array, an object of the program's own. It is written through this
      buffer, so the walk's options escape it too, and rooted while the buffer
@@ -480,7 +479,7 @@ static const char *sp_json_float(double d) {
 
 /* Everything but a container: the leaf arms, answering one GC string. */
 static const char *sp_json_scalar_o(sp_RbVal v, int allow_nan) {
-  v = sp_rbval_str(v);
+  if (sp_rbval_is_string(v)) return sp_json_rstr(sp_rbval_string_bytes(v));
   switch (v.tag) {
     case SP_TAG_INT:  return sp_int_to_s(v.v.i);
     case SP_TAG_BIGINT: return sp_bigint_to_s((sp_Bigint *)v.v.p);
@@ -496,7 +495,6 @@ static const char *sp_json_scalar_o(sp_RbVal v, int allow_nan) {
       return sp_json_float(v.v.f);
     case SP_TAG_BOOL: return v.v.b ? JSPL("true") : JSPL("false");
     case SP_TAG_NIL:  return JSPL("null");
-    case SP_TAG_STR:  return sp_json_rstr(v.v.s);
     case SP_TAG_SYM:  return sp_json_sym((sp_sym)v.v.i);
     default: return JSPL("null");
   }
@@ -538,7 +536,7 @@ const char *sp_json_dump(sp_RbVal v, sp_int limit) {
    for the collector -- a dozen per small object; the rest (a Bigint,
    NaN and the Infinities, which raise or are dump's) as before. */
 static void sp_json_leaf_b(jbuf *b, sp_RbVal v) {
-  v = sp_rbval_str(v);
+  if (sp_rbval_is_string(v)) { jb_rstr(b, sp_rbval_string_bytes(v)); return; }
   switch (v.tag) {
     case SP_TAG_INT: jb_int(b, v.v.i); return;
     case SP_TAG_FLT:
@@ -547,7 +545,6 @@ static void sp_json_leaf_b(jbuf *b, sp_RbVal v) {
          walk's buffer is released first, as for its other raises */
       if (!b->dump && !b->allow_nan) jb_release(b);
       break;
-    case SP_TAG_STR: jb_rstr(b, v.v.s); return;
     case SP_TAG_SYM: jb_sym(b, (sp_sym)v.v.i); return;
     case SP_TAG_BOOL: if (v.v.b) jb_add(b, "true", 4); else jb_add(b, "false", 5); return;
     case SP_TAG_NIL: jb_add(b, "null", 4); return;
@@ -632,11 +629,10 @@ static void sp_json_indent(jbuf *b, int depth) {
 }
 
 static void sp_json_pretty_val(jbuf *b, sp_RbVal v, int depth) {
-  if (b->raw) {
-    /* a String of a re-read document (held as its handle or not) straight
-       into this buffer, unchecked */
-    sp_RbVal sv = sp_rbval_str(v);
-    if (sv.tag == SP_TAG_STR) { jb_rstr(b, sv.v.s); return; }
+  if (b->raw && sp_rbval_is_string(v)) {
+    /* A String of a re-read document goes straight into the buffer. */
+    jb_rstr(b, sp_rbval_string_bytes(v));
+    return;
   }
   if (v.tag == SP_TAG_OBJ) {
     int kind = sp_json_kind_fn ? sp_json_kind_fn(v) : 0;

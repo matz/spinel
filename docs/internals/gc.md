@@ -27,6 +27,10 @@ and it is also the source of the collector's most persistent bug family (see
 GCC/clang's `cleanup` attribute to pop it when the declaring scope ends. There
 is no manual unroot, and no way to leak a root by taking an early return.
 
+A generated adapter that captures an existing object in a Proc roots that
+object across Proc allocation. The Hash default-Proc adapter does this for
+its source Hash; the Proc owns that reference only after allocation finishes.
+
 The low two bits of the stored address are a tag:
 
 | Tag | Macro               | Marked through                                    |

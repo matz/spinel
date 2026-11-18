@@ -872,7 +872,12 @@ void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
     return;
   }
   /* an object array boxes by reference, stamped with its element class */
-  if (ty_is_obj_array(t)) { RCT(RF_PTR_ARRAY); buf_printf(b, "sp_box_ptr_array_k((void *)(%s), %s)", expr, ptr_array_stamp(c, t)); return; }
+  if (ty_is_obj_array(t)) {
+    g_tu_poly_values = 1;
+    RCT(RF_PTR_ARRAY);
+    buf_printf(b, "sp_box_ptr_array_k((void *)(%s), %s)", expr, ptr_array_stamp(c, t));
+    return;
+  }
   fprintf(stderr, "spinel: emit_boxed_text: cannot box type %d into a poly value\n", (int)t);
   exit(1);
 }
@@ -882,6 +887,7 @@ void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
    touches is put back. ty_traits_check.c reads the box_form column off it. */
 int emit_boxed_text_form(Compiler *c, TyKind t) {
   int sv_check = g_repr_check, sv_depth = rc_depth, sv_form = rc_text_form, sv_tmp = g_tmp;
+  int sv_poly_values = g_tu_poly_values;
   TyKind sv_ty = rc_text_ty;
   g_repr_check = 1; rc_depth = 1;
   Buf b; memset(&b, 0, sizeof b);
@@ -889,6 +895,7 @@ int emit_boxed_text_form(Compiler *c, TyKind t) {
   free(b.p);
   int form = rc_text_form;
   g_repr_check = sv_check; rc_depth = sv_depth; rc_text_form = sv_form; rc_text_ty = sv_ty; g_tmp = sv_tmp;
+  g_tu_poly_values = sv_poly_values;
   return form < 0 ? 0 : form;
 }
 
@@ -3365,6 +3372,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
   /* a nested table or an object array boxes by reference, stamped with what
      its elements are, where it used to be refused (#4486) */
   if (ty_is_ptr_array(t)) {
+    if (ty_is_obj_array(t)) g_tu_poly_values = 1;
     buf_puts(b, "sp_box_ptr_array_k((void *)("); emit_expr(c, node, b);
     buf_printf(b, "), %s)", ptr_array_stamp(c, t));
     RC(RF_PTR_ARRAY, RW_NONE);
@@ -15701,6 +15709,7 @@ static int emit_marshal_class_row(Compiler *c, int i, MarRows *R, Buf *b) {
 }
 /* The generic dumper and loader, over the rows */
 static void emit_marshal_generic(Compiler *c, int nn, int nanon, int any_anon, int any_rank, int any_oarr, Buf *b) {
+  if (any_oarr) g_tu_poly_values = 1;
   const char *anon_load = g_uses_threads ? "SP_ATOMIC_LOAD(d->anon, __ATOMIC_ACQUIRE)" : "(*d->anon)";
   /* an Array of objects (obj 3) boxes and loads stamped with its element
      class (ptr_array_stamp); with none, the walk does not link either */
@@ -20409,10 +20418,9 @@ static int thread_current_only(const NodeTable *nt, int **par, int i) {
 static int loop_value_live(Compiler *c, int id) {
   return loop_has_valued_break(c, nt_ref(c->nt, id, "statements"));
 }
-/* Boxed values and containers can reach the runtime walkers, including
-   a pointer Array whose element kind names a program class. */
+/* A typed object Array only needs the walkers at a boxing boundary. */
 static int value_needs_poly_hooks(TyKind t) {
-  return t == TY_POLY || ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t);
+  return t == TY_POLY || ty_is_array(t) || ty_is_hash(t);
 }
 /* A position of a method's answer that holds a poly, Array or Hash value
    (a jump the walk does not follow, or one it gave up on, may) */
@@ -24566,11 +24574,8 @@ char *codegen_program(const NodeTable *nt) {
      this TU deliberately omits). */
   if (!g_emit_sym_rt)
     buf_puts(&b, "#define SP_TU_NO_POLY_RENDER 1\n");
-  /* Classes or Symbols but no poly, Array or Hash value: the render banks
-     are emitted, but no value the poly walkers and renderers take exists,
-     so the header installs none of them (sp_json_install_hooks) */
-  else if (!g_tu_poly_values)
-    buf_puts(&b, "#define SP_TU_NO_POLY_VALUES 1\n");
+  /* Emitting a boxed object Array can still require the poly walkers. */
+  size_t no_poly_at = b.len;
   /* a reopened builtin class: sp_class_eq maps its id to the builtin's */
   if (g_needs_class_machinery && program_reopens_builtin_class(c))
     buf_puts(&b, "#define SP_TU_REOPENS_BUILTIN_CLASS 1\n");
@@ -25291,7 +25296,6 @@ char *codegen_program(const NodeTable *nt) {
   if (!g_ext_init_name) emit_cls_user_display_hooks(c, &hooks);
   emit_exc_text_tail(c, &hooks);
   emit_exc_reinit_dispatch(c, &hooks);
-  emit_regex_section(c, &b);
   { const char *pdt[] = { g_procs.p, body->p, b.p, hooks.p };
     pd_emit_used(pdt, 4, &g_pd_protos, &g_pd_defs);
     /* and the dispatch bodies pd_emit_used just wrote, which can hold a
@@ -25310,6 +25314,7 @@ char *codegen_program(const NodeTable *nt) {
       buf_insert_at(&b, isa_ext_at, isa_ext);
     free(isa_ext);
   }
+  emit_regex_section(c, &b);
   emit_program_tail(&b, body, &hooks);
   free(hooks.p);
   free(body->p);
@@ -25324,6 +25329,8 @@ char *codegen_program(const NodeTable *nt) {
     fzl_emit_defs(b.p ? b.p : "", &fz);
     if (fz.len) buf_insert_at(&b, fzl_at, fz.p);
     free(fz.p); }
+  if (g_emit_sym_rt && !g_tu_poly_values)
+    buf_insert_at(&b, no_poly_at, "#define SP_TU_NO_POLY_VALUES 1\n");
   if (g_debug) bt_block_table(&b);
   if (g_line_map) line_map_reanchor(&b);
   free(g_procs.p); free(g_proc_protos.p);

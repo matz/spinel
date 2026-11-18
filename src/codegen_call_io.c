@@ -2328,8 +2328,13 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
         int tf = ++g_tmp, tw = ++g_tmp;
         int values[argc];
         buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); ", tf, r, tf);
+        /* An operand can emit setup before its expression. Keep that
+           setup beside its own hold and after the preceding operands. */
+        Buf *saved_pre = g_pre;
+        g_pre = b;
         for (int k = 0; k < argc; k++)
           values[k] = hold_operand(c, argv[k], TY_POLY, 1, ++g_tmp, 1, " ", b);
+        g_pre = saved_pre;
         buf_printf(b, "sp_int _t%d = 0;", tw);
         for (int k = 0; k < argc; k++)
           buf_printf(b, " _t%d += sp_File_write_poly(_t%d, _t%d);", tw, tf, values[k]);

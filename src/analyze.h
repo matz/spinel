@@ -274,11 +274,16 @@ typedef struct {
                              applies at no point nor as the load ends, and
                              leaves which entry is live as it was
                              (lr_hist_unarmed) */
-  int body;             /* a version a method body makes (lr_body_versions):
-                           the def whose body holds it; such a version has
-                           no load point but an extent, from the first
-                           statement that body may run on, any number of
-                           times (lr_version_order); 0 for one at a point */
+  int body;             /* a def's version a body makes (lr_body_versions,
+                           lr_body_defs; no other kind is one yet,
+                           lr_method): the node of the body that holds it
+                           (a def, a lambda, a block, an exit handler); such
+                           a version has no load point but an extent, from
+                           the first statement that body may run on, any
+                           number of times (lr_version_order); 0 for one at
+                           a point, and for one of a body that first runs
+                           only once the load is over, which is kept
+                           unplaced (lr_post_unplace) */
   int scope;            /* a def's or a define_method's: the method scope
                            the scope walk made of it (its Scope index; 0,
                            the program's top level, for none); a

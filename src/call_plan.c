@@ -11449,15 +11449,16 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
     if (nt_int(c->nt, c->scopes[s].def_node, "concat_builtin_version", 0)) fallback = s;
     same &= ver_same_source(c->nt, c->scopes[s].def_node, c->scopes[mi].def_node);
   }
-  /* (an open history's else arm with an undef on the chain: not told) */
-  if (q && na == nd && nd && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, dto, nd, vs[nv - 1].hist, vs[0].v->vis, ar, blk, mm, 0);
+  /* (an undef on the chain has run no more than the defs where no version has: the else arm is what the lookup finds
+     past all of them, as without one) */
+  if (q && nd && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, dto, nd, vs[nd - 1].hist, vs[0].v->vis, ar, blk, mm, 0);
   /* (on a reopened builtin's instance side, a method the builtin itself
      has: with no version run, the builtin's own, #11819) */
   else if (q && nd && ar >= 0 && ct_versioned_string_reader(c, rcls, sg, name)) kind = VK_BUILTIN;
-  else if (q && na == nd && nd && vis && !sg && ver_builtin_instance_answers(c, rcls, name, ar)) kind = VK_BUILTIN;
+  else if (q && nd && vis && !sg && ver_builtin_instance_answers(c, rcls, name, ar)) kind = VK_BUILTIN;
   /* An optional Symbol conversion is absent until its first override.
      Model the absence even if the call sites only name Kernel.String. */
-  else if (q && na == nd && nd && vis && !(mm & 1) && ver_symbol_conversion_callback(c, rcls, sg, name, ar))
+  else if (q && nd && vis && !(mm & 1) && ver_symbol_conversion_callback(c, rcls, sg, name, ar))
     kind = VK_NOMETHOD;
   /* (an else arm that runs a method raises nothing of its own, whatever
      the call's form or its method_missing: asked with a variable-like

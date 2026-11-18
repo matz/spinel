@@ -556,7 +556,8 @@ TyKind bop_native_result(const BuiltinOp *op, TyKind rt);
    states no kind for these operands. It reads no node: the caller brings
    the kinds. BOPR_ARRAY_SUM_SEED reads the seed through fold_seed_kind at
    the caller and takes the integer overflow mode, and BOPR_ARRAY_TUPLES
-   whether the call keeps its tuples, through facts (BOPX_*). */
+   whether the call keeps its tuples, through facts (BOPX_*).
+   BOPR_ARRAY_INDEX can keep the boxed nil result under BOPX_BOXED_USE. */
 TyKind bop_native_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts);
 /* The Ruby type of the result. A row declaring a String handle answers
    TY_STRING to inference. Derived kinds keep the type supplied by their

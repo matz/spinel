@@ -586,8 +586,10 @@ of the contract.
 
 A native String result has type `sp_String *`. Include the generated header
 and use `sp_String_cstr` for a text read after checking for `NULL`. The
-handle carries the byte length and encoding. Root it while calling back into
-Spinel if the host still needs it afterwards. The CRuby shim copies the
+handle carries the byte length and encoding. A host sharing the kernel's
+Spinel runtime can root the handle while calling back into it. When the
+loaded library has its own runtime, the host copies the bytes using their
+length before another call into the kernel. The CRuby shim also copies the
 String with its length and encoding and returns `nil` for a null result.
 
 A host that loads the library as a shared object (`dlopen`, Python's

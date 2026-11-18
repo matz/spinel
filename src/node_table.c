@@ -256,7 +256,8 @@ static int par_int_cmp(const void *a, const void *b) { int x = *(const int *)a, 
 static void par_relist(NodeTable *nt, int id, const int *was, int wn, const int *now, int n) {
   if (!nt->par || (!wn && !n)) return;
   int *o = nt_alloc(sizeof(int) * ((size_t)wn + (size_t)n + 1)), *w = o + wn;
-  memcpy(o, was, sizeof(int) * (size_t)wn); memcpy(w, now, sizeof(int) * (size_t)n);
+  if (wn) memcpy(o, was, sizeof(int) * (size_t)wn);
+  if (n) memcpy(w, now, sizeof(int) * (size_t)n);
   qsort(o, (size_t)wn, sizeof(int), par_int_cmp); qsort(w, (size_t)n, sizeof(int), par_int_cmp);
   int i = 0, j = 0, nlost = 0;
   while (i < wn || j < n) {
@@ -264,8 +265,11 @@ static void par_relist(NodeTable *nt, int id, const int *was, int wn, const int 
     while (i < wn && o[i] == v) { i++; a++; }
     while (j < n && w[j] == v) { j++; b++; }
     for (; b > a; b--) par_link(nt, id, v);
-    /* (lost ones are kept in o's front, asked once the counts are settled) */
-    if (a > b && v >= 0 && v < nt->count) { nt->par_nref[v] -= a - b - 1; o[nlost++] = v; }
+    /* (one the list still holds keeps id as a parent; one it lost is kept in o's front, asked once the counts are settled) */
+    if (a > b && v >= 0 && v < nt->count) {
+      if (b) nt->par_nref[v] -= a - b;
+      else { nt->par_nref[v] -= a - 1; o[nlost++] = v; }
+    }
     if (!nt->par) break;
   }
   for (int k = 0; k < nlost && nt->par; k++) par_unlink(nt, id, o[k]);
@@ -898,7 +902,7 @@ void nt_free(NodeTable *nt) {
   free(nt->autoloads);
   free(nt->aux);
   free(nt->counts);
-  par_drop(nt);
+  free(nt->par); free(nt->par_nref);
   for (int i = 0; i < nt->npar_old; i++) free(nt->par_old[i]);
   free(nt->par_old);
   if (nt->holders) { free(nt->holders->par); free(nt->holders->stamp); free(nt->holders); }

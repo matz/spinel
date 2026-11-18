@@ -27040,6 +27040,19 @@ static int operand_hoists_effect(Compiler *c, int node) {
   int a = nt_ref(nt, node, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   for (int i = 0; i < ac; i++) if (!subtree_is_pure_read(c, av[i])) return 1;
+  /* a call of the program's method that leaves out an optional argument:
+     the default is emitted at the call, so a default that runs code
+     (`def nxt(step = set(6))`) is code the operand hoists */
+  const char *nm = nt_str(nt, node, "name");
+  Scope *in = comp_scope_of(c, node);
+  int cls = recv < 0 || nt_kind(nt, recv) == NK_SelfNode ? (in ? in->class_id : -1) : -1;
+  int mi = nm && (recv < 0 || cls >= 0) ? call_target(c, node, cls, nm, 0, NULL) : -1;
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1, ps = dn >= 0 ? nt_ref(nt, dn, "parameters") : -1, on = 0;
+  const int *ov = ps >= 0 ? nt_arr(nt, ps, "optionals", &on) : NULL;
+  int rn = 0;
+  if (ps >= 0) (void)nt_arr(nt, ps, "requireds", &rn);
+  for (int i = ac - rn; i < on; i++)
+    if (i >= 0 && !subtree_is_pure_read(c, nt_ref(nt, ov[i], "value"))) return 1;
   return 0;
 }
 

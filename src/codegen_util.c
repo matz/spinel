@@ -918,6 +918,9 @@ int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, v
     if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) return 1;
     int mi = cls >= 0 && nm && depth < 3 ? call_target(c, id, cls, nm, 0, NULL) : -1;
     if (mi < 0 || c->scopes[mi].def_node < 0 || dispatch_impl_count(c, id, cls, nm) != 1) return 1;
+    /* the body, and the parameters' defaults, which run in the callee for
+       an argument the call leaves out (`def nxt(step = set(6))`) */
+    if (subtree_ivar_writes(c, nt_ref(nt, c->scopes[mi].def_node, "parameters"), cls, depth + 1, add, ctx)) return 1;
     if (subtree_ivar_writes(c, nt_ref(nt, c->scopes[mi].def_node, "body"), cls, depth + 1, add, ctx)) return 1;
   }
   return -1;

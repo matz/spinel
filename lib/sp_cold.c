@@ -6993,6 +6993,10 @@ const char *sp_str_encode(const char *s, int npos, sp_RbVal dst, sp_RbVal src,
   sp_enc_opt_check(undef, "undefined");
   const char *repl = replace.tag == SP_TAG_NIL ? NULL : sp_enc_str_arg(replace);
   SP_GC_ROOT_STR(repl);
+  /* Encoding names can run to_str and mutate the selected replacement. */
+  if (repl && ((npos > 0 && dst.tag == SP_TAG_OBJ && dst.cls_id >= 0) ||
+               (npos > 1 && src.tag == SP_TAG_OBJ && src.cls_id >= 0)))
+    repl = sp_str_dup(repl);
   sp_int bad_len;
   if (repl && !sp_str_is_binary(repl) &&
       sp_str_scrub_bad(repl, (sp_int)sp_str_byte_len(repl), 0, &bad_len) < (sp_int)sp_str_byte_len(repl))

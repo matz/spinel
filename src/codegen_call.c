@@ -33030,11 +33030,18 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
      bound builtin's wrapper of a fixed count keeps the plain positional
      binding. An argument past the channel's slots is read from the call's
      wide store (sp_proc_arg), so any count binds. */
-  int bind = !tm->cs_synth && (!bam_wrapper(tm) || tm->rest_idx >= 0);
+  /* A boxed Method with String capture arms can also carry its original
+     wrapper for a different receiver. Give that wrapper the same boxed
+     call path as the captured String methods. */
+  int site = (int)nt_int(nt, tm->def_node, "bam_site", 0) - 1;
+  int fixed_boxed_wrapper = boxed_src && nt_int(nt, tm->def_node, "bam_poly", 0) &&
+                           cplan_bam_string_guard(c, site, (int)(tm - c->scopes)) >= 0;
+  int bind = !tm->cs_synth && (!bam_wrapper(tm) || tm->rest_idx >= 0 || fixed_boxed_wrapper);
   int nreq = 0, nfixed = 0;
   for (int k = shift; k < np && bind; k++) {
     if (k == tm->rest_idx || k == tm->kwrest_idx) continue;
-    if (!tm->pnames[k] || (tm->pnames[k][0] == '_' && tm->pnames[k][1] == '_')) { bind = 0; break; }
+    if (!tm->pnames[k] ||
+        (!fixed_boxed_wrapper && tm->pnames[k][0] == '_' && tm->pnames[k][1] == '_')) { bind = 0; break; }
     if (callee_has_kwarg(c, tm, tm->pnames[k])) {
       /* A declared keyword param is not positional: it binds from the
          call's keyword hash and does not count against the positional

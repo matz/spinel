@@ -8251,9 +8251,7 @@ static int mixin_method_behind(Compiler *c, int ci, const char *name, int like, 
   int line = (int)nt_int(nt, like, "node_line", 0);
   int call, def;
   if (builtin_arity >= 0) {
-    call = disp_self_call(nt, name, builtin_arity, 0);
-    nt_mark_builtin_call(nt, call);
-    def = disp_def_build(nt, like, name, 0, builtin_arity, 0, NULL, 0, call);
+    def = disp_string_reader_def(nt, name, builtin_arity, &call);
   }
   else {
     call = nt_new_node(nt, "ForwardingSuperNode");

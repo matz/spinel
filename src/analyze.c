@@ -45041,7 +45041,18 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
       /* A constructor's receiver names its class: another class's own
          `def self.new` is not the one `Hash.new` reaches. */
       if (ctor >= 0 && splat_ctor_other_cnew(c, s, recv)) continue;
-      if (s->kwrest_idx >= 0) return 0;
+      if (s->kwrest_idx >= 0) {
+        const Scope *caller = comp_scope_of(c, id);
+        if (s->entry == ENTRY_TABLE && s->class_id == comp_core_class(c, CORE_STRING) &&
+            is_string_boxed_reader(cnm) && caller && nt_int(nt, caller->def_node, "bam_poly", 0)) {
+          /* The String entry gathers arbitrary counts. Keep that route
+             for the other counts, and keep the fixed builtin arms for
+             other receivers of the boxed Method wrapper. */
+          variadic = 2;
+          continue;
+        }
+        return 0;
+      }
       /* Only where the old expansion would cut the list: a splat of a
          local, into a name it cuts to its arity. Any other keeps its splat
          call, which reaches a rest parameter whole, as does a dynamic

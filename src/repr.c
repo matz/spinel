@@ -898,6 +898,21 @@ int scope_always_raises(Compiler *c, int mi) {
   return !for_each_value_position(c->nt, s->body, VPS_ALL, repr_leaf_not_raise, c);
 }
 
+/* The ENV fallback can hand the caller an existing String. */
+static int repr_env_string_handle(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, v, "receiver");
+  if (!env_value_recv(c, recv, comp_ntype(c, recv))) return 0;
+  const char *name = nt_str(nt, v, "name");
+  if (bop_share_named(BOP_ENV, name) != BSH_FETCH) return 0;
+  if (nt_ref(nt, v, "block") >= 0) {
+    int tail = env_delete_block_value(c, v);
+    return tail >= 0 && (repr_of(c, tail).kind == RK_STRBUF || strbuf_value_carries(c, tail));
+  }
+  int argc = 0; const int *argv = call_args(nt, v, &argc);
+  return argc == 2 && repr_of(c, argv[1]).kind == RK_STRBUF;
+}
+
 /* A call with a native String result has an object to pass to its caller.
    Reflection keeps its callee's signature. A setter expression selects its
    argument independently of what the invoked method returns. */
@@ -910,6 +925,7 @@ int repr_native_call_handle(Compiler *c, int v) {
   if (t != TY_STRING && t != TY_STRBUF) return 0;
   if (k == NK_CallNode) {
     if (cplan_builtin_handle_row(c, v)) return 1;
+    if (repr_env_string_handle(c, v)) return 1;
     if (call_is_setter_assign(nt, v) || cplan_pinned_builtin(c, v)) return 0;
     const char *name = nt_str(nt, v, "name");
     if (is_method_invoke(name) || is_bind_call(name)) {
@@ -938,20 +954,6 @@ int repr_call_returns_handle(Compiler *c, int v) {
   TyKind t = comp_ntype_settled(c, v);
   if (t != TY_STRING && !(t == TY_STRBUF && (comp_strbuf_box_stored(c, v) || c->n_cext_extensions))) return 0;
   if (strbuf_io_outbuf(c, v) >= 0) return 1;
-  /* a Method's call: the method `method(:m)` names */
-  int recv = nt_ref(nt, v, "receiver");
-  const char *nm = nt_str(nt, v, "name");
-  /* A missing ENV key answers the default handle; a present one clears
-     the return channel before making its own String. delete's
-     missing-key block answers its value the same way. */
-  if (env_value_recv(c, recv, comp_ntype(c, recv)) &&
-      bop_share_named(BOP_ENV, nm) == BSH_FETCH) {
-    int argc = 0; const int *argv = call_args(nt, v, &argc);
-    int tail = env_delete_block_value(c, v);
-    if (nt_ref(nt, v, "block") < 0 ? argc == 2 && repr_of(c, argv[1]).kind == RK_STRBUF
-                                   : tail >= 0 && (repr_of(c, tail).kind == RK_STRBUF || strbuf_value_carries(c, tail)))
-      return 1;
-  }
   return 0;
 }
 /* A boxed receiver's reader arms already box their shared fields as

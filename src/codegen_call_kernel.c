@@ -1685,10 +1685,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         int t1 = ++g_tmp, t2 = ++g_tmp;
         int dblk = nt_ref(nt, id, "block");
         int dpoly = repr_of(c, id).kind == RK_BOXED;
-        int result = dpoly ? ++g_tmp : t2;
-        /* --share-strings: a block value that is a handle is published, as
-           fetch's default is; a present key clears the return channel */
-        int dhandle = repr_call_returns_handle(c, id);
+        int dhandle = repr_of(c, id).as_ty == TY_STRBUF && repr_native_call_handle(c, id);
+        int result = dpoly || dhandle ? ++g_tmp : t2;
         /* --share-strings: a variable's handle is read as a copy of its
            bytes, which reach unsetenv past sp_env_str's allocation */
         Buf kref; memset(&kref, 0, sizeof kref);
@@ -1702,8 +1700,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_printf(b, "; const char *_t%d = getenv(_t%d);"
                       " _t%d = _t%d ? sp_env_str(_t%d) : NULL;"
                       " unsetenv(_t%d); ", t2, t1, t2, t2, t2, t1);
-        if (dhandle) buf_puts(b, "_sp_ret_strbuf = NULL; ");
-        if (dpoly) buf_printf(b, "sp_RbVal _t%d = sp_box_str(_t%d); ", result, t2);
+        if (dhandle) buf_printf(b, "sp_String *_t%d = sp_String_new_shared(_t%d); ", result, t2);
+        else if (dpoly) buf_printf(b, "sp_RbVal _t%d = sp_box_str(_t%d); ", result, t2);
         if (dblk >= 0) {
           const char *dp0 = block_param_name(c, dblk, 0);
           int dbody = nt_ref(nt, dblk, "body");
@@ -1736,9 +1734,9 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           }
           for (int k = 0; k < dbn - 1; k++) emit_stmt(c, dbb[k], b, 0);
           if (dval >= 0 && dhandle) {
-            buf_printf(b, "_t%d = sp_strbuf_read_pub(", result);
+            buf_printf(b, "_t%d = ", result);
             emit_strbuf_handle_of(c, dval, b);
-            buf_puts(b, "); ");
+            buf_puts(b, "; ");
           }
           else if (dval >= 0) {
             buf_printf(b, "_t%d = ", result);
@@ -1830,7 +1828,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            nil default keeps the nullable string, any other default boxes both
            arms. (The block form is the ENV snapshot's Hash#fetch, #2742.) */
         int fpoly = repr_of(c, id).kind == RK_BOXED;
-        int fhandle = repr_call_returns_handle(c, id);
+        int fhandle = repr_of(c, id).as_ty == TY_STRBUF && repr_native_call_handle(c, id);
         int tk = ++g_tmp, tky = ++g_tmp, tv = ++g_tmp, td = ++g_tmp;
         buf_printf(b, "({ const char *_t%d = ", tky); emit_str_expr(c, argv[0], b);
         /* a key the operand builds is held across a default that can allocate */
@@ -1849,13 +1847,12 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         /* the name is checked after the default evaluates, as CRuby does */
         buf_printf(b, "; const char *_t%d = getenv(%s%s_t%d%s%s); ", tk, env_str_checked(c, argv[0]) ? "sp_env_chk(" : "",
                    "SP_STR_B(", tky, ")", env_str_checked(c, argv[0]) ? ", 0)" : "");
-        emit_ctype(c, fpoly ? TY_POLY : TY_STRING, b);
+        emit_ctype(c, fhandle ? TY_STRBUF : fpoly ? TY_POLY : TY_STRING, b);
         buf_printf(b, " _t%d = _t%d ? ", tv, tk);
-        if (fhandle) buf_printf(b, "(_sp_ret_strbuf = NULL, sp_env_str(_t%d)) : ", tk);
+        if (fhandle) buf_printf(b, "sp_String_new_shared(sp_env_str(_t%d)) : ", tk);
         else if (fpoly) buf_printf(b, "sp_box_str(sp_env_str(_t%d)) : ", tk);
         else buf_printf(b, "sp_env_str(_t%d) : ", tk);
-        if (fhandle) buf_printf(b, "sp_strbuf_read_pub(_t%d)", td);
-        else if (argc >= 2) buf_printf(b, "_t%d", td);
+        if (argc >= 2) buf_printf(b, "_t%d", td);
         else
           /* no default: CRuby raises KeyError naming the key. Route it through
              sp_raise_key_not_found so the key is staged for #key (#3027). */

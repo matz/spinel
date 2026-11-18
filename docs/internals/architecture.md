@@ -74,6 +74,9 @@ set to `TY_STRBUF`. Semantic inference reads the result as `TY_STRING`.
 The call plan gives the renderer and Repr the same selected producer. Boxed
 dispatch arms use the row they emitted to box the result. An override-capable
 display conversion still returns its actual boxed value.
+The ENV read paths that return a String default or a missing-key block's
+String use the same result view. The selected branch hands back its
+String handle directly.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

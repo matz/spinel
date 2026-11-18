@@ -5432,6 +5432,40 @@ static void alias_init_super_values(Compiler *c, int di) {
   }
 }
 
+/* A String reader alias can capture the builtin before any Ruby body is
+   installed. Give that version a scope the call plan can arm. */
+static int alias_string_reader_scope(Compiler *c, const ElabEntry *e) {
+  const LrDef *d = NULL;
+  const char *target = e->target;
+  LoadPoint p = elab_point_of(c, e->node);
+  int found = elab_method_at(c, e->cls, target, 0, p, &d);
+  if (found == ELAB_YES && d && d->kind == LR_ALIAS && d->scope > 0) {
+    const Scope *original = &c->scopes[d->scope];
+    if (original->class_id != e->cls || !original->alias_of ||
+        !nt_int(c->nt, original->def_node, "alias_forwarder", 0)) return 0;
+    target = original->alias_of;
+  }
+  else if (found != ELAB_NO || d) return 0;
+  if (!is_string_boxed_reader(target)) return 0;
+  NodeTable *nt = (NodeTable *)c->nt;
+  int arity = is_spaceship_name(target);
+  int call = disp_self_call(nt, target, arity, 0);
+  nt_mark_builtin_call(nt, call);
+  int def = disp_def_build(nt, e->node, target, 0, arity, 0, NULL, 0, call);
+  nt_node_set_int(nt, def, "alias_forwarder", 1);
+  int scope = c->nscopes;
+  comp_grow_node_arrays(c);
+  walk_scope(c, def, c->nscope[e->node], e->cls);
+  Scope *alias = &c->scopes[scope];
+  free(alias->name);
+  alias->name = strdup(e->name);
+  alias->alias_of = strdup(target);
+  if (!alias->name || !alias->alias_of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  comp_touch_scope(alias->idx);
+  elab_attr_scope(c, e, scope);
+  return 1;
+}
+
 /* An alias of an ancestor class's def, or of an initialize, the class's own
    too (alias_copy_source, which register_aliases asks before any method is
    made and keeps on the alias as alias_copy_src), is a method of the
@@ -5462,7 +5496,13 @@ void register_alias_methods(Compiler *c, int modules) {
     src[i] = a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
              !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules ? (int)nt_int(c->nt, a[i].node, "alias_copy_src", 0) - 1 : -1;
   int copied = 0;
+  int string_cls = modules ? -1 : comp_core_class(c, CORE_STRING);
   for (int i = 0; i < n; i++) {
+    if (string_cls >= 0 && a[i].cls == string_cls && !a[i].sg && a[i].kind == LR_ALIAS &&
+        a[i].target && alias_string_reader_scope(c, &a[i])) {
+      copied = 1;
+      continue;
+    }
     if (src[i] < 0 && a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
         !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules && alias_writer_unresolved(c, &a[i])) {
       /* a member's store is the method; any other writer, or a failure to make it, is bound by name as it was */

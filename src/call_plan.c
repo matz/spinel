@@ -12110,7 +12110,9 @@ static void ver_named_one(void *arg, int cls, int sg, const char *name) {
   int mod = cls >= 0 && !sg && comp_class_is_module(c, &c->classes[cls]), vis0 = nv > 0 ? vs[0].v->vis : 0;
   for (int i = 0; i < nv; i++) {
     const LrDef *d = vs[i].v;
-    int s = d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD ? d->scope : 0, st = d->node;
+    int s = d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD ||
+            (d->kind == LR_ALIAS && ct_versioned_string_reader(c, cls, sg, name)) ? d->scope : 0;
+    int st = d->node;
     while (st >= 0 && par[st] >= 0 && nt_kind(c->nt, par[st]) != NK_StatementsNode) st = par[st];   /* (its cell write's, ver_cells_write) */
     if (nt_int(c->nt, d->node, "cond_arm", 0) || ver_in_dropped_rescue(c, par, d->node)) return;
     held |= nt_int(c->nt, d->node, "cond_lone", 0) != 0;

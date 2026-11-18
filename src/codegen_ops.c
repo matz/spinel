@@ -641,6 +641,7 @@ static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const ch
 }
 
 int emit_builtin_handle_call(Compiler *c, int id, Buf *b) {
+  if (sn_guard_pending(c, id)) return 0;
   const BuiltinOp *op = cplan_builtin_handle_row(c, id);
   if (!op) return 0;
   int recv = nt_ref(c->nt, id, "receiver"), argc;

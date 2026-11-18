@@ -34,3 +34,11 @@ begin
 rescue NoMethodError => error
   p error.name
 end
+
+def nullable_copy(flag)
+  value = flag ? +"é" : nil
+  value&.b&.bytes
+end
+
+p nullable_copy(false)
+p nullable_copy(true)

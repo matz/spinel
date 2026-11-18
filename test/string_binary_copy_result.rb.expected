@@ -4,3 +4,5 @@
 ["String", "ASCII-8BIT", [195, 169]]
 [:override, :override]
 :b
+nil
+[195, 169]

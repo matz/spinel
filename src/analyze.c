@@ -5205,9 +5205,13 @@ static int ie_rself_use(Compiler *c, int n, int nested) {
   /* A receiverless call to a method self answers (`title`, `respond_to?(m)`)
      takes self as its receiver (ie_rself_give_self) and so dispatches on the
      rebound self, as `self.title` does; inside a nested block it would be
-     that block's self, which no binding reaches. */
+     that block's self, which no binding reaches. A Kernel function (`raise`,
+     `puts`) is dispatched globally whatever self is, so it is no use of self
+     even when a class of the program defines a method of its name: give_self
+     leaves it receiverless, and a body whose only such call is one of these
+     would be marked as running on a runtime self yet hold no self to read. */
   if (k == NK_CallNode && nt_ref(nt, n, "receiver") < 0 && nt_str(nt, n, "name") &&
-      ie_rself_name_selfish(c, nt_str(nt, n, "name"))) return nested ? 2 : 1;
+      !ie_kernel_global(nt_str(nt, n, "name")) && ie_rself_name_selfish(c, nt_str(nt, n, "name"))) return nested ? 2 : 1;
   if (ie_rself_cmethod_call(c, n)) return nested ? 2 : 1;
   int in = nested || k == NK_BlockNode || k == NK_LambdaNode, r = 0;
   for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) r |= ie_rself_use(c, nt_ref_at(nt, n, i), in);

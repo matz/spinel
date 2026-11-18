@@ -3744,16 +3744,27 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
         (!is_cnt && (ret == TY_POLY || ret == TY_STRING))) {
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_SETOP, -1, TY_UNKNOWN, PC_SAME);
       int sci = comp_core_class(c, CORE_STRING);
-      int undef = sci < 0 || cplan_builtin_call(c, T->id) ? 0 : cplan_undef_at(c, T->id, sci, name);
+      int builtin = cplan_string_builtin_fallback(c, T->id, name);
+      int undef = sci < 0 || builtin ? 0 : cplan_undef_at(c, T->id, sci, name);
       if (undef < 0) undef = cplan_undef_before(c, T->id, sci, name) || cplan_undef_stops(c, T->id, sci, name);
       int raise_undef = undef && !cplan_has_method_missing(c, T->id, sci, 0);
-      if (raise_undef || (!undef && !string_reopen_defines(c, T->id, name)))
+      if (raise_undef || builtin || (!undef && !string_reopen_defines(c, T->id, name)))
         buf_printf(b, "if (sp_rbval_is_string(_t%d) && !sp_poly_is_str_subclass(_t%d)) { ", tv, tv);
       else
         buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { ", tv);
       if (raise_undef) {
-        buf_printf(b, "sp_exc_stage_recv(_t%d); sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); }\nelse ",
-                   tv, name, tv);
+        int first = g_tmp + 1;
+        g_tmp += argc;
+        for (int a = 0; a < argc; a++) {
+          char arg[32];
+          snprintf(arg, sizeof arg, "_t%d", atmp[a]);
+          buf_printf(b, "sp_RbVal _t%d = ", first + a);
+          emit_boxed_text(c, atmp_ty[a], arg, b);
+          buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", first + a);
+        }
+        buf_printf(b, "sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", _t%d, %d, (sp_RbVal[]){", name, tv, argc);
+        for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", first + a);
+        buf_puts(b, "})); }\nelse ");
       } else {
         char sets[256]; int sl;
         sl = snprintf(sets, sizeof sets, "(const char *[]){");

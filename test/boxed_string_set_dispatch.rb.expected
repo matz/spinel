@@ -1,4 +1,4 @@
 "hi"
 :override
-[:strip, true]
+[:strip, ["x"], true]
 :restored

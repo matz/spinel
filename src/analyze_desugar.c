@@ -16965,33 +16965,37 @@ static int cdef_name_inherited(const NodeTable *nt, const char *nm, int own) {
    the object it runs on */
 /* (vcall: `raise NameError.new(msg, :name, receiver: self)`, which takes
    no arguments: a variable-like call has none) */
-static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vcall) {
+static int disp_raise_parts(Compiler *c, const char *name, int em, int recv, int args, int ar, int vcall) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *cls = vcall ? "NameError" : "NoMethodError";
-  char pn[32];
   /* ::NoMethodError, spelled as desugar_root_scoped_constants left it for the
      program's own: a path where a class or module body defines the name */
   int shadowed = rsc_shadowed(c->rsc_names, c->n_rsc_names, cls);
-  int ec = nt_new_node(nt, shadowed ? "ConstantPathNode" : "ConstantReadNode"), sym = nt_new_node(nt, "SymbolNode"), args = nt_new_node(nt, "ArrayNode");
+  int ec = nt_new_node(nt, shadowed ? "ConstantPathNode" : "ConstantReadNode"), sym = nt_new_node(nt, "SymbolNode");
+  int forwarded = args < 0;
+  if (forwarded) args = nt_new_node(nt, "ArrayNode");
   int key = nt_new_node(nt, "SymbolNode"), as = nt_new_node(nt, "AssocNode"), kh = nt_new_node(nt, "KeywordHashNode");
-  int ne = ar < 0 ? 2 : ar, ev[ne > 0 ? ne : 1];
-  for (int a = 0; a < ar; a++) { snprintf(pn, sizeof pn, "__cond%d", a); ev[a] = cdef_local(nt, "LocalVariableReadNode", pn); }
-  if (ar < 0) {
-    ev[0] = nt_new_node(nt, "SplatNode");
-    nt_node_set_ref(nt, ev[0], "expression", cdef_local(nt, "LocalVariableReadNode", "__condr"));
-    int rs = nt_new_node(nt, "AssocSplatNode");
-    nt_node_set_ref(nt, rs, "value", cdef_local(nt, "LocalVariableReadNode", "__condk"));
-    ev[1] = nt_new_node(nt, "KeywordHashNode");
-    nt_node_set_arr(nt, ev[1], "elements", &rs, 1);
+  if (forwarded) {
+    char pn[32];
+    int ne = ar < 0 ? 2 : ar, ev[ne > 0 ? ne : 1];
+    for (int a = 0; a < ar; a++) { snprintf(pn, sizeof pn, "__cond%d", a); ev[a] = cdef_local(nt, "LocalVariableReadNode", pn); }
+    if (ar < 0) {
+      ev[0] = nt_new_node(nt, "SplatNode");
+      nt_node_set_ref(nt, ev[0], "expression", cdef_local(nt, "LocalVariableReadNode", "__condr"));
+      int rs = nt_new_node(nt, "AssocSplatNode");
+      nt_node_set_ref(nt, rs, "value", cdef_local(nt, "LocalVariableReadNode", "__condk"));
+      ev[1] = nt_new_node(nt, "KeywordHashNode");
+      nt_node_set_arr(nt, ev[1], "elements", &rs, 1);
+    }
+    nt_node_set_arr(nt, args, "elements", ev, ne);
   }
-  nt_node_set_arr(nt, args, "elements", ev, ne);
   nt_node_set_str(nt, ec, "name", cls);
   if (shadowed) nt_node_set_ref(nt, ec, "parent", -1);   /* ::NoMethodError, which a nested definition of the name must not capture */
   nt_node_set_str(nt, sym, "value", name);
   nt_node_set_str(nt, key, "value", "receiver");
   nt_node_set_int(nt, key, "key_only", 1);   /* never a value of the program: not interned for the Symbol table */
   nt_node_set_ref(nt, as, "key", key);
-  nt_node_set_ref(nt, as, "value", nt_new_node(nt, "SelfNode"));
+  nt_node_set_ref(nt, as, "value", recv >= 0 ? recv : nt_new_node(nt, "SelfNode"));
   nt_node_set_arr(nt, kh, "elements", &as, 1);
   int na[4] = { em, sym, args, kh }, nargs = nt_new_node(nt, "ArgumentsNode"), made = fwd_new_call(nt, ec, "new", -1);
   if (vcall) na[2] = kh;
@@ -17011,6 +17015,9 @@ static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vc
   int raise = fwd_new_call(nt, -1, "raise", made);
   nt_node_set_int(nt, raise, "kernel_recv", 1);
   return raise;
+}
+static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vcall) {
+  return disp_raise_parts(c, name, em, -1, -1, ar, vcall);
 }
 int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar, int vcall) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -28936,11 +28943,34 @@ static int mm_call(Compiler *c, NodeTable *nt, int id, int r, const char *nm, in
   nt_set_ignore_visibility(nt, call, 1);
   return call;
 }
+static int mm_string_raise(Compiler *c, int id, int recv, const char *name, int args) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int list = fwd_new_node_like(nt, id, "ArrayNode"), n = 0;
+  const int *items = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+  nt_node_set_arr(nt, list, "elements", items, n);
+  int msg = fwd_new_node_like(nt, id, "StringNode");
+  char text[256];
+  snprintf(text, sizeof text, "undefined method '%s' for an instance of String", name);
+  nt_node_set_str(nt, msg, "content", text);
+  comp_sym_intern(c, name);
+  return disp_raise_parts(c, name, msg, recv, list, 0, 0);
+}
+static int mm_if_call(NodeTable *nt, int id, int pred, int yes, int no, int *else_stmts) {
+  int ts = fwd_new_node_like(nt, id, "StatementsNode"), es = fwd_new_node_like(nt, id, "StatementsNode");
+  int els = fwd_new_node_like(nt, id, "ElseNode"), ifn = fwd_new_node_like(nt, id, "IfNode");
+  nt_node_set_arr(nt, ts, "body", &yes, 1);
+  nt_node_set_arr(nt, es, "body", &no, 1);
+  nt_node_set_ref(nt, els, "statements", es);
+  nt_node_set_ref(nt, ifn, "predicate", pred);
+  nt_node_set_ref(nt, ifn, "statements", ts);
+  nt_node_set_ref(nt, ifn, "subsequent", els);
+  if (else_stmts) *else_stmts = es;
+  return ifn;
+}
 /* A send the method_missing of class k makes, lowered before this call
    handed it nm (desugar_dynamic_send ran in an earlier round, over the
    names the program spelled then): lowered again, nm among its arms */
-static void mm_relower_sends(Compiler *c, NodeTable *nt, int id, int k, const char *nm) {
-  int mi = mm_user(c, id, k);
+static void mm_relower_sends(Compiler *c, NodeTable *nt, int mi, const char *nm) {
   if (mi < 0) return;
   for (int n = 0; n < nt->count && n < c->node_cap; n++) {
     if (c->nscope[n] != mi || nt_kind(nt, n) != NK_CallNode || !is_send_family(nt_str(nt, n, "name"))) continue;
@@ -28955,7 +28985,9 @@ static void mm_relower_sends(Compiler *c, NodeTable *nt, int id, int k, const ch
 int desugar_missing_method_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (!c->cls_fact) return 0;
-  int any = 0;
+  int str_class = comp_core_class(c, CORE_STRING);
+  int str_missing = str_class >= 0;
+  int any = str_missing;
   for (int k = 0; k < c->nclasses && !any; k++) any = mm_user(c, -1, k) >= 0;
   if (!any) return 0;
   int n0 = nt->count, changed = 0, *parent = NULL;
@@ -28977,11 +29009,16 @@ int desugar_missing_method_calls(Compiler *c) {
        so there is nothing to split. Asked once here: asked of each class in
        turn below (mm_answers), after that class's own lookup, it was a fifth
        of a large application's fixpoint in call_target. */
-    if (mm_object_answers(c, id, nm)) continue;
-    int miss[16], nmiss = 0, others = 0, reread = 0;
+    int object_answers = mm_object_answers(c, id, nm);
+    if (object_answers && !str_missing) continue;
+    int mark = nt->count;
+    int miss[16], nmiss = 0, others = 0, reread = 0, str_mi = -1;
+    int str_arm = 0, str_guard = -1, hook_guard = -1;
+    int a = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
     /* (`self.m` in a block the map runs on one class asks that class, as a bare `m` there does: its self is typed boxed) */
     int ie_self = r >= 0 && nt_kind(nt, r) == NK_SelfNode && ie_block_self_class_of(c, id) >= 0;
     if (r < 0 || ie_self) {
+      if (object_answers) continue;
       /* a receiverless call: self is the method's class or a subclass, or
          an instance_eval block's receiver (ie_receiverless_self_class) */
       if (r < 0 && nt_ref(nt, id, "arguments") < 0 && nt_vcall(nt, id)) {
@@ -29009,24 +29046,39 @@ int desugar_missing_method_calls(Compiler *c) {
       reread = rk == NK_SelfNode || rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode;
       /* (an object of the program's, or a box that may hold one) */
       TyKind rt = infer_type(c, r);
-      if (!ty_is_object(rt) && rt != TY_POLY) continue;
-      const ClsSet *set = cls_fact_node(c, r);
-      if (!set || set->all) continue;
-      for (int k = cls_set_next(set, -1); k >= 0; k = cls_set_next(set, k)) {
-        if (k >= c->nclasses) { others = 1; continue; }
-        if (mm_answers(c, id, k, nm)) { others = 1; continue; }
-        if (mm_user(c, id, k) < 0) { others = 1; continue; }
-        if (nmiss >= 16) { nmiss = -1; break; }
-        miss[nmiss++] = k;
+      if (str_missing && elab_method_versions(c, nm) && (rt == TY_STRING || rt == TY_POLY) && cls_fact_may_hold_builtin(c, r, CORE_STRING) &&
+          (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) && parent && parent[id] >= 0) {
+        int undef;
+        if (cplan_string_missing(c, id, nm, &str_mi, &undef)) {
+          if (undef < 0) str_guard = cplan_string_undef_guard(c, id, nm);
+          str_arm = undef < 0 ? str_guard >= 0 : str_mi >= 0;
+          if (str_arm && str_mi >= 0) hook_guard = cplan_string_hook_guard(c, id, str_mi);
+        }
       }
-      if (set->bv) others = 1;
+      if (object_answers && !str_arm) continue;
+      if (!ty_is_object(rt) && rt != TY_POLY && !str_arm) continue;
+      const ClsSet *set = cls_fact_node(c, r);
+      if (!object_answers && set && !set->all) {
+        for (int k = cls_set_next(set, -1); k >= 0; k = cls_set_next(set, k)) {
+          if (str_arm && k == str_class) continue;
+          if (k >= c->nclasses) { others = 1; continue; }
+          if (mm_answers(c, id, k, nm)) { others = 1; continue; }
+          if (mm_user(c, id, k) < 0) { others = 1; continue; }
+          if (nmiss >= 16) { nmiss = -1; break; }
+          miss[nmiss++] = k;
+        }
+        if (set->bv) others = 1;
+      } else if (!str_arm) continue;
+      if (str_arm && nmiss >= 0 && nmiss < 16) {
+        miss[nmiss++] = str_class;
+        others = 1;
+      }
+      else str_arm = 0;
     }
     if (nmiss <= 0) continue;
     /* (a split reads the receiver twice: a variable or self, or none) */
     if (r < 0 || ie_self) reread = 1;
-    if (others && !reread) continue;
-    int a = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
-    int mark = nt->count;
+    if (others && !reread && !str_arm) continue;
     if (!others) {
       /* every class the value can be misses nm: the call is method_missing's */
       int sym = fwd_new_node_like(nt, id, "SymbolNode");
@@ -29043,7 +29095,7 @@ int desugar_missing_method_calls(Compiler *c) {
       free(nv);
       nt_node_set_str(nt, id, "name", "method_missing");
       nt_set_ignore_visibility(nt, id, 1);
-      for (int i = 0; i < nmiss; i++) mm_relower_sends(c, nt, id, miss[i], nm);
+      for (int i = 0; i < nmiss; i++) mm_relower_sends(c, nt, mm_user(c, id, miss[i]), nm);
       comp_grow_node_arrays(c);
       for (int j = mark; j < nt->count; j++) c->nscope[j] = c->nscope[id];
       changed = 1;
@@ -29054,13 +29106,31 @@ int desugar_missing_method_calls(Compiler *c) {
     if (!parent) parent = an_parent_map(nt);
     int p = parent ? parent[id] : -1;
     if (p < 0) continue;
-    int pred = -1, clones[17], ncl = 0;
+    int *pre = NULL, npre = 0;
+    if (str_arm && (str_guard >= 0 || hook_guard >= 0)) {
+      npre = sd_hold_call_operands(c, id, &pre, 1);
+      if (npre < 0) { free(pre); continue; }
+      reread = 0;
+    }
+    char held[32];
+    int hold = -1;
+    if (!reread) {
+      snprintf(held, sizeof held, "__mm_r%d", id);
+      scope_local_intern(comp_scope_of(c, id), held);
+      hold = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+      nt_node_set_str(nt, hold, "name", held);
+      nt_node_set_int(nt, hold, "depth", 0);
+      nt_node_set_ref(nt, hold, "value", r);
+      if (r < n0) parent[r] = hold;
+    }
+    int pred = -1, str_pred = -1, clones[19], ncl = 0;
     for (int i = 0; i < nmiss; i++) {
       const char *cn = c->classes[miss[i]].name;
       if (!cn) { pred = -1; break; }
       /* (`instance_of?`, not `===`: a subclass that answers the name is no miss) */
       int q = fwd_new_node_like(nt, id, "CallNode"), qa = fwd_new_node_like(nt, id, "ArgumentsNode");
-      int rr = r >= 0 ? nt_clone_subtree(nt, r) : fwd_new_node_like(nt, id, "SelfNode");
+      int rr = hold >= 0 ? local_read_like(nt, id, held)
+             : r >= 0 ? nt_clone_subtree(nt, r) : fwd_new_node_like(nt, id, "SelfNode");
       if (r >= 0) clones[ncl++] = rr;
       int kp = mm_path_node(nt, id, cn);
       nt_node_set_arr(nt, qa, "arguments", &kp, 1);
@@ -29069,6 +29139,16 @@ int desugar_missing_method_calls(Compiler *c) {
       nt_node_set_ref(nt, q, "arguments", qa);
       /* (Kernel's, not a class's own `instance_of?`) */
       nt_mark_builtin_call(nt, q);
+      if (str_arm && miss[i] == str_class) {
+        if (str_guard >= 0) {
+          int test = fwd_new_node_like(nt, id, "AndNode");
+          nt_node_set_ref(nt, test, "left", q);
+          nt_node_set_ref(nt, test, "right", str_guard);
+          q = test;
+        }
+        str_pred = q;
+        continue;
+      }
       if (pred < 0) pred = q;
       else {
         int o = fwd_new_node_like(nt, id, "OrNode");
@@ -29077,29 +29157,71 @@ int desugar_missing_method_calls(Compiler *c) {
         pred = o;
       }
     }
-    if (pred < 0) continue;
-    int mr = r >= 0 ? nt_clone_subtree(nt, r) : fwd_new_node_like(nt, id, "SelfNode");
-    if (r >= 0) clones[ncl++] = mr;
-    int mm = mm_call(c, nt, id, mr, nm, a >= 0 ? nt_clone_subtree(nt, a) : -1, blk >= 0 ? nt_clone_subtree(nt, blk) : -1);
+    if (pred < 0 && str_pred < 0) { free(pre); continue; }
+    int es = -1, replacement = id;
+    if (pred >= 0) {
+      int mr = hold >= 0 ? local_read_like(nt, id, held)
+             : r >= 0 ? nt_clone_subtree(nt, r) : fwd_new_node_like(nt, id, "SelfNode");
+      if (r >= 0) clones[ncl++] = mr;
+      int mm = mm_call(c, nt, id, mr, nm, a >= 0 ? nt_clone_subtree(nt, a) : -1, blk >= 0 ? nt_clone_subtree(nt, blk) : -1);
+      replacement = mm_if_call(nt, id, pred, mm, replacement, &es);
+    }
+    if (str_pred >= 0) {
+      int dispatch = -1;
+      if (str_mi >= 0) {
+        int mr = hold >= 0 ? local_read_like(nt, id, held) : nt_clone_subtree(nt, r);
+        clones[ncl++] = mr;
+        dispatch = mm_call(c, nt, id, mr, nm, a >= 0 ? nt_clone_subtree(nt, a) : -1, blk >= 0 ? nt_clone_subtree(nt, blk) : -1);
+      }
+      if (dispatch < 0 || hook_guard >= 0) {
+        int er = local_read_like(nt, id, held);
+        clones[ncl++] = er;
+        int missing = mm_string_raise(c, id, er, nm, a >= 0 ? nt_clone_subtree(nt, a) : -1);
+        dispatch = dispatch < 0 ? missing : mm_if_call(nt, id, hook_guard, dispatch, missing, NULL);
+      }
+      replacement = mm_if_call(nt, id, str_pred, dispatch, replacement, es < 0 ? &es : NULL);
+      if (str_guard >= 0) nt_node_set_int(nt, id, "string_live_builtin", 1);
+    }
     nt_node_set_int(nt, id, "mm_split", 1);
-    int ts = fwd_new_node_like(nt, id, "StatementsNode"), es = fwd_new_node_like(nt, id, "StatementsNode");
-    int els = fwd_new_node_like(nt, id, "ElseNode"), ifn = fwd_new_node_like(nt, id, "IfNode");
-    nt_node_set_arr(nt, ts, "body", &mm, 1);
-    nt_node_set_arr(nt, es, "body", &id, 1);
-    nt_node_set_ref(nt, els, "statements", es);
-    nt_node_set_ref(nt, ifn, "predicate", pred);
-    nt_node_set_ref(nt, ifn, "statements", ts);
-    nt_node_set_ref(nt, ifn, "subsequent", els);
-    nt_replace_child(nt, p, id, ifn);
+    if (hold >= 0) {
+      int saved = local_read_like(nt, id, held);
+      nt_node_set_ref(nt, id, "receiver", saved);
+      if (npre > 0) {
+        replacement = disp_ahead(nt, pre, npre, replacement);
+        if (nt_safe_nav(nt, id)) {
+          int nil = fwd_new_call(nt, local_read_like(nt, id, held), "nil?", -1);
+          nt_mark_builtin_call(nt, nil);
+          replacement = mm_if_call(nt, id, nil, fwd_new_node_like(nt, id, "NilNode"), replacement, NULL);
+        }
+      }
+      replacement = disp_ahead(nt, &hold, 1, replacement);
+    }
+    nt_replace_child(nt, p, id, replacement);
+    free(pre);
     parent[id] = es;
     /* the new nodes stand in id's scope, and each copy of the receiver holds what it holds */
     comp_grow_node_arrays(c);
     for (int j = mark; j < nt->count; j++) {
       c->nscope[j] = c->nscope[id];
       if (c->node_cbody && j < c->node_cap && id < c->node_cap) c->node_cbody[j] = c->node_cbody[id];
+      if (npre > 0) {
+        for (int k = 0, nr = nt_num_refs(nt, j); k < nr; k++) {
+          int child = nt_ref_at(nt, j, k);
+          if (child >= 0 && child < n0) parent[child] = j;
+        }
+        for (int k = 0, na = nt_num_arrs(nt, j); k < na; k++) {
+          int ne = 0;
+          const int *items = nt_arr_at(nt, j, k, &ne);
+          for (int e = 0; e < ne; e++)
+            if (items[e] >= 0 && items[e] < n0) parent[items[e]] = j;
+        }
+      }
     }
     for (int i = 0; i < ncl; i++) cls_fact_same(c, clones[i], r);
-    for (int i = 0; i < nmiss; i++) mm_relower_sends(c, nt, id, miss[i], nm);
+    for (int i = 0; i < nmiss; i++) {
+      int mi = str_arm && miss[i] == str_class ? str_mi : mm_user(c, id, miss[i]);
+      mm_relower_sends(c, nt, mi, nm);
+    }
     changed = 1;
   }
   free(parent);

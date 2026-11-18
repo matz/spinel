@@ -12,7 +12,7 @@ end
 begin
   p value.strip("x")
 rescue NoMethodError => error
-  p [error.name, error.receiver.equal?(value)]
+  p [error.name, error.args, error.receiver.equal?(value)]
 end
 
 class String

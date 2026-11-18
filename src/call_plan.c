@@ -5779,7 +5779,7 @@ int cplan_own_class_reflection(Compiler *c, int id, int recv, const char *name) 
     if (elab_history_versions(c, dc, 1, name, vs, 8) != 1) return 0;
     int p = comp_super_parent(c, dc, 1), pdc = -1;
     mtab_enter(c);   /* (the plan's own walk: the class method each super of the chain reaches, above the one the ask at id found) */
-    int pm = p >= 0 ? comp_cmethod_in_chain(c, p, name, &pdc) : -1;
+    int pm = p >= 0 ? ct_table(c, p, name, CT_CMETHOD, &pdc, NULL) : -1;
     mtab_leave(c);
     if (pm < 0 || pdc < 0) return 0;
     int nv = elab_history_versions(c, pdc, 1, name, vs, 8);

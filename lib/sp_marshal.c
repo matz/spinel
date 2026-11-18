@@ -450,12 +450,12 @@ static sp_RbVal sp_mar_r_range(sp_mar_rd *r) {
     else if (!strcmp(kn, "begin")) bg = val;
     else if (!strcmp(kn, "end")) ed = val;
   }
-  int bs = bg.tag == SP_TAG_STR, es = ed.tag == SP_TAG_STR;
+  int bs = sp_rbval_is_string(bg), es = sp_rbval_is_string(ed);
   int bf = bg.tag == SP_TAG_FLT, ef = ed.tag == SP_TAG_FLT;
   int bi = bg.tag == SP_TAG_INT, ei = ed.tag == SP_TAG_INT;
   int bn = bg.tag == SP_TAG_NIL, en = ed.tag == SP_TAG_NIL;
   if ((bs || es) && (bs || bn) && (es || en))
-    return sp_box_srange(sp_srange_new(bs ? bg.v.s : NULL, es ? ed.v.s : NULL, excl));
+    return sp_box_srange(sp_srange_new(sp_rbval_string_bytes(bg), sp_rbval_string_bytes(ed), excl));
   if (bi && ef) return sp_box_range(sp_range_new_fend(bg.v.i, ed.v.f, excl));
   if ((bf || ef) && (bf || bi || bn) && (ef || ei || en)) {
     int om = (bn ? 1 : bi ? SP_FRANGE_INT_BEGIN : 0) | (en ? 2 : ei ? SP_FRANGE_INT_END : 0);
@@ -513,16 +513,16 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
       for (long i = 0; i < nivar; i++) {
         sp_RbVal k = sp_mar_r(r);
         sp_RbVal val = sp_mar_r(r);
-        if (inner.tag != SP_TAG_STR || k.tag != SP_TAG_SYM || !sp_sym_name_fn) continue;
-        /* the String's encoding: `:E` true (UTF-8) or false (US-ASCII), or
-           `:encoding` and a name. Spinel's two encodings are UTF-8 and
-           ASCII-8BIT, so any encoding but ASCII-8BIT reads as UTF-8. */
+        if (!sp_rbval_is_string(inner) || k.tag != SP_TAG_SYM || !sp_sym_name_fn) continue;
+        /* The encoding ivar is :E for text or :encoding with a name. */
         const char *kn = sp_sym_name_fn((sp_sym)k.v.i);
-        if (!strcmp(kn, "E")) sp_str_as_text(inner.v.s);
-        else if (!strcmp(kn, "encoding")) {
-          const char *en = val.tag == SP_TAG_STR ? val.v.s : "";
-          if (strcasecmp(en, "ASCII-8BIT") && strcasecmp(en, "BINARY")) sp_str_as_text(inner.v.s);
+        if (strcmp(kn, "E")) {
+          if (strcmp(kn, "encoding")) continue;
+          const char *enc = sp_rbval_string_bytes(val);
+          if (enc && (!strcasecmp(enc, "ASCII-8BIT") || !strcasecmp(enc, "BINARY"))) continue;
         }
+        if (inner.tag == SP_TAG_OBJ) sp_String_force_encoding((sp_String *)inner.v.p, 0);
+        else sp_str_as_text(sp_rbval_string_bytes(inner));
       }
       return inner;
     }

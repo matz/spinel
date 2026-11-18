@@ -475,6 +475,10 @@ void refuse_super_init_value(Compiler *c) {
   const NodeTable *nt = c->nt;
   int *par = NULL;
   static const NodeKind kinds[] = { NK_SuperNode, NK_ForwardingSuperNode };
+  /* (the pass only reads: each super's lookups up its chain, and the
+     top-level defs a super that reaches Object asks about, share one walk of
+     the scopes per name instead of a scan per super) */
+  comp_scope_batch_begin(c);
   for (int k = 0; k < 2; k++) {
     int cnt = 0;
     const int *ids = nt_nodes_of_kind(nt, kinds[k], &cnt);
@@ -498,11 +502,13 @@ void refuse_super_init_value(Compiler *c) {
         }
       }
       if (!node_value_used_in_body(nt, par, v)) continue;
+      comp_scope_batch_end();   /* (a refusal does not come back here) */
       unsupported_feature(c, v, "unsupported value of `super` in initialize: initialize is compiled to "
                                 "return nothing, so the parent's last value is not there to answer "
                                 "(see docs/limitations.md)");
     }
   }
+  comp_scope_batch_end();
   free(par);
 }
 
@@ -10547,6 +10553,10 @@ void specialize_inherited_cls_new(Compiler *c) {
       }
     }
   }
+  /* (the lookups below change no scope: they share one walk of the scopes
+     per name asked, a batch made again after each copy, which adds a scope
+     and sets its class) */
+  comp_scope_batch_begin(c);
   for (int id = 0; id < node_count; id++) {
     NodeKind ty_k = nt_kind(nt, id);
     if (ty_k != NK_CallNode) continue;
@@ -10584,8 +10594,11 @@ void specialize_inherited_cls_new(Compiler *c) {
             if (def_cls == k) continue;
           }
           int has_new = 0;
-          if (cmethod_needs_specialization(c, mi, k, def_cls, &has_new))
+          if (cmethod_needs_specialization(c, mi, k, def_cls, &has_new)) {
+            comp_scope_batch_end();
             specialize_cmethod_for(c, mi, NULL, def_cls, k, 0, -1);
+            comp_scope_batch_begin(c);
+          }
         }
       }
       continue;
@@ -10637,8 +10650,11 @@ void specialize_inherited_cls_new(Compiler *c) {
     if (!cmethod_needs_specialization(c, mi, ci, def_cls, &has_new)) continue;
     /* Clone mi for ci and, transitively, the inherited intermediates it reaches
        (#1451). nscopes growth below stands in for the old did_clone flag. */
+    comp_scope_batch_end();
     specialize_cmethod_for(c, mi, NULL, def_cls, ci, 0, -1);
+    comp_scope_batch_begin(c);
   }
+  comp_scope_batch_end();
   /* A Class value the analysis cannot pin (`CONTAINERS.fetch(ext).open`)
      runs an inherited class method on whichever class it holds, so its bare
      `new` must construct that class. Each class escaping as a value gets its
@@ -10646,6 +10662,7 @@ void specialize_inherited_cls_new(Compiler *c) {
      targets are chosen before any copy exists: a copy made for an
      intermediate class would otherwise hide the original from its
      subclasses. */
+  comp_scope_batch_begin(c);   /* (as above: the targets are chosen by lookups alone) */
   for (int mi = 1; mi < snap; mi++) {
     if (!c->scopes[mi].is_cmethod || !c->scopes[mi].name || c->scopes[mi].class_id < 0) continue;
     int def_cls = c->scopes[mi].class_id;
@@ -10663,10 +10680,14 @@ void specialize_inherited_cls_new(Compiler *c) {
       if (!nt2) break;
       tgt = nt2; tgt[ntgt++] = k;
     }
-    if (ntgt > 0 && name_called_on_dynamic_recv(c, mi, tgt, ntgt, node_count, &an))
+    if (ntgt > 0 && name_called_on_dynamic_recv(c, mi, tgt, ntgt, node_count, &an)) {
+      comp_scope_batch_end();
       for (int t = 0; t < ntgt; t++) specialize_cmethod_for(c, mi, NULL, def_cls, tgt[t], 0, -1);
+      comp_scope_batch_begin(c);
+    }
     free(tgt);
   }
+  comp_scope_batch_end();
   /* A host calls an inherited class method on the class value of a class
      --ext-class exports with no call node in the program (sp_ext_send by
      name), so the row of that class must run it on the class's own

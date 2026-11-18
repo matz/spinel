@@ -6300,6 +6300,17 @@ COND_DEFS_CPU_LIMIT ?= 9.0
 # without). A time ratio moves with the machine's load; only a rise past the
 # limit is a finding.
 FACE_LANDINGS_LIMIT ?= 2.6
+# N classes under a chain of six, each calling four class methods the
+# chain's root defines in its body (test/scale/inherited_class_calls.sh), at
+# N=200 and N=800, by the CPU time of the class structure phase (the best of
+# three): before the scope index is frozen each lookup of a call's name up
+# the class's chain scanned every scope (specialize_inherited_cls_new,
+# comp_name_answered), work the count does not see (15.1x at 4x the classes;
+# 7.8x to 8.5x with one walk of the scopes per name for every class,
+# comp_scope_batch_begin, where the rest of the phase grows faster than
+# linearly in the classes). A time ratio moves with the machine's load; only
+# a rise past the limit is a finding.
+INHERITED_CLASS_CALLS_LIMIT ?= 11.5
 # N nested classes, each of a leaf name of its own (test/scale/class_qualification.sh),
 # and ten calls per class, at N=400 and N=800: the work of the nested program
 # less the work of the same program with the classes at the top level, which
@@ -6556,6 +6567,9 @@ scale-test: $(SPINEL_WORK)
 	gen face_landings 400 fl4.rb; gen face_landings 800 fl8.rb; \
 	fla=$$(phase fl4.rb an_pre_fixpoint) || { rm -rf "$$tmp"; exit 1; }; \
 	flb=$$(phase fl8.rb an_pre_fixpoint) || { rm -rf "$$tmp"; exit 1; }; \
+	gen inherited_class_calls 200 ih2.rb; gen inherited_class_calls 800 ih8.rb; \
+	iha=$$(phase ih2.rb an_class_structure) || { rm -rf "$$tmp"; exit 1; }; \
+	ihb=$$(phase ih8.rb an_class_structure) || { rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || [ -z "$$pa" ] || [ -z "$$pb" ] || \
 	   [ -z "$$ha" ] || [ -z "$$hb" ] || [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
@@ -6659,7 +6673,10 @@ scale-test: $(SPINEL_WORK)
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }; \
 	awk -v a="$$fla" -v b="$$flb" -v lim="$(FACE_LANDINGS_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: visibility face CPU time at 2x the landing classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (each class a call may land on asked lookups that answer the same for every class: see ct_face_for)"; exit 1; }
+	  { echo "scale-test: FAIL (each class a call may land on asked lookups that answer the same for every class: see ct_face_for)"; exit 1; }; \
+	awk -v a="$$iha" -v b="$$ihb" -v lim="$(INHERITED_CLASS_CALLS_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
+	  printf "scale-test: inherited class method lookup CPU time at 4x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (each class-body call scanned every scope per ancestor for its name: see comp_scope_batch_begin)"; exit 1; }
 
 .PHONY: bisect-test
 # `spinel bisect`, end to end. The search has its own corpus test

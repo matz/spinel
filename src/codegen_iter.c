@@ -4244,6 +4244,9 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
     if (!hlv && hsc) hlv = scope_local(hsc, block_param_name(c, block, 0));
     hparam = repr_of_slot(c, hlv).handle;
   }
+  /* A String tap retains the receiver it will return. The block can
+     rebind its slot or move its payload before a byte consumer reads it. */
+  int tap_handle = is_tap && et == TY_STRING;
   /* the adopted empty-literal receiver materializes as a FRESH mutable container
      of the block-param type -- emit_expr would render `[]` as its own untyped
      default (sp_IntArray_new()), mismatching et (#3200). */
@@ -4251,12 +4254,15 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
     if (et == TY_POLY_ARRAY) buf_puts(&rb, "sp_PolyArray_new()");
     else buf_printf(&rb, "sp_%sArray_new()", array_kind(et) ? array_kind(et) : "Int");
   }
-  else if (hparam) { emit_strbuf_handle_of(c, recv, &rb); et = TY_STRBUF; }
+  else if (hparam || tap_handle) {
+    emit_strbuf_handle_of(c, recv, &rb);
+    et = TY_STRBUF;
+  }
   /* a receiver that can be nil is held as its oint: the parameter gets
      the nil (`x = nil; x.then { |y| y.nil? }`), and unwrapping it here
      raised before the block ran */
   int ro = !empty_arr_adopt && !hparam && !et_nil && !et_void && oint_kind(et) && node_is_oint(c, recv);
-  if (empty_arr_adopt || hparam) ;
+  if (empty_arr_adopt || hparam || tap_handle) ;
   else if (et_void) {
     Buf vb; memset(&vb, 0, sizeof vb);
     emit_expr(c, recv, &vb);

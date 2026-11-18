@@ -716,6 +716,10 @@ the member:
   is not converted: typed, it is refused at compile time; boxed, it raises
   TypeError. The other FileTest predicates take no IO operand at all.
 
+- **`File#pread` with an output buffer** -- returns the converted String
+  itself. A zero-length read leaves its contents and encoding intact. A read
+  that reaches EOF clears the buffer before raising `EOFError`.
+
 - **`Dir.foreach` and `Dir.each_child` without a block** -- the Enumerator
   reads the directory's entries on its first pull and closes it then, so an
   entry removed between pulls is still listed. A collected entry keeps its
@@ -1490,7 +1494,10 @@ literals: `:a.to_s.frozen?`, `:a.id2name.frozen?` and `String(:a).frozen?`
 are `true`. Appending to either `:a.to_s` or `:a.id2name` raises
 FrozenError. Use unary `+` or `dup` for a mutable copy. Each call still answers its own object
 (`:a.to_s.equal?(:a.to_s)` is `false`), as in CRuby.
-`Symbol#name` returns the same frozen spelling on each call.
+Repeated `Symbol#name` calls through the same dispatch path return the
+same frozen spelling. The native extension API `rb_sym2str` shares the
+typed call's String. A boxed Ruby call can choose a different object when
+its spelling also occurs in the frozen String pool.
 
 **Strings are UTF-8, whatever the source encoding.** An `# encoding:` (or
 `coding:`) magic comment naming another encoding warns at compile time,
@@ -2037,7 +2044,10 @@ UTF-8 agree on every one. What differs:
 1.chr.inspect        # CRuby: "\x01"        Spinel: "\u0001"
 ```
 
-The encoding's NAME, and `inspect`'s escape form for a non-printable byte.
+The encoding's name, and `inspect`'s escape form for a non-printable byte.
+Normalization can also affect object identity. A boxed `Symbol#name` can
+share an object with an equal-byte deduplicated UTF-8 String where CRuby
+keeps separate objects for their encodings.
 CRuby needs the name because encodings are first-class objects and every string
 must report one; a program cannot name an encoding in spinel, so there is
 nothing for the third name to distinguish. The 7-bit fact itself is not lost --

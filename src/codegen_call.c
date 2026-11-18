@@ -32851,10 +32851,9 @@ void emit_adapter_arg_static(Compiler *c, int node, char kind, Buf *out) {
 /* Emit a boxed runtime value as one typed-array adapter argument. */
 void emit_adapter_arg_boxed(const char *v, char kind, Buf *out) {
   if (kind == 's') {
-    /* (one-String mode: a String arrives as its handle's box, and the
-       adapter takes the handle its bytes face names) */
-    buf_printf(out, "({ sp_RbVal _ade = sp_poly_strbuf_deref(%s); if (_ade.tag != SP_TAG_STR)"
-                    " sp_raise_typed_elem(_ade, \"String\"); (sp_int)(uintptr_t)SP_STR_HDL(_ade.v.s); })", v);
+    buf_printf(out, "({ sp_RbVal _ade = %s; if (!sp_rbval_is_string(_ade))"
+                    " sp_raise_typed_elem(_ade, \"String\"); (sp_int)(uintptr_t)"
+                    "(sp_poly_is_strbuf(_ade) ? (sp_String *)_ade.v.p : SP_STR_HDL(sp_rbval_string_bytes(_ade))); })", v);
   }
   else if (kind == 'v') {
     buf_printf(out, "({ sp_RbVal _ade = %s; if (_ade.tag != SP_TAG_INT)"

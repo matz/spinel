@@ -300,10 +300,9 @@ no_gsub_enum:
          expression position (an `if`/ternary condition) where a g_pre prelude
          would not be flushed and would splice a stray statement into the
          condition (#3187). */
-      /* a shared String handle matches its live bytes, through the deref */
       int tv = ++g_tmp;
-      buf_printf(b, "({ sp_RbVal _t%d = sp_poly_strbuf_deref(", tv); emit_expr(c, recv, b);
-      buf_printf(b, "); (_t%d.tag == SP_TAG_STR ? sp_re_match_poly(sp_re_pat_%d, _t%d.v.s)"
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; (sp_rbval_is_string(_t%d) ? sp_re_match_poly(sp_re_pat_%d, sp_rbval_string_bytes(_t%d))"
                     " : _t%d.tag == SP_TAG_SYM ? sp_re_match_poly(sp_re_pat_%d, sp_sym_to_s((sp_sym)_t%d.v.i))"
                     " : _t%d.tag == SP_TAG_NIL ? sp_box_nil()"
                     " : (sp_raise_nomethod(sp_nomethod_msg(\"=~\", _t%d)), sp_box_nil())); })",
@@ -315,8 +314,8 @@ no_gsub_enum:
        non-poly (string) receiver keeps the direct negated-match emit. */
     if (are >= 0 && sp_streq(name, "!~") && rpoly) {
       int tv = ++g_tmp;
-      buf_printf(b, "({ sp_RbVal _t%d = sp_poly_strbuf_deref(", tv); emit_expr(c, recv, b);
-      buf_printf(b, "); (_t%d.tag == SP_TAG_STR ? sp_re_match(sp_re_pat_%d, _t%d.v.s) < 0"
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; (sp_rbval_is_string(_t%d) ? sp_re_match(sp_re_pat_%d, sp_rbval_string_bytes(_t%d)) < 0"
                     " : _t%d.tag == SP_TAG_SYM ? sp_re_match(sp_re_pat_%d, sp_sym_to_s((sp_sym)_t%d.v.i)) < 0"
                     " : _t%d.tag == SP_TAG_NIL ? 1"
                     " : (sp_raise_nomethod(sp_nomethod_msg(\"=~\", _t%d)), 0)); })",
@@ -355,10 +354,10 @@ no_gsub_enum:
         buf_printf(b, " sp_RbVal _t%d = ", tq); emit_boxed(c, argv[1], b);
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tq);
       }
-      buf_printf(b, " sp_RbVal _t%d = sp_poly_strbuf_deref(_t%d);", tv, tr);
-      buf_printf(b, " const char *_s%d = _t%d.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)_t%d.v.i) : _t%d.v.s;",
+      buf_printf(b, " sp_RbVal _t%d = _t%d;", tv, tr);
+      buf_printf(b, " const char *_s%d = _t%d.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)_t%d.v.i) : sp_rbval_string_bytes(_t%d);",
                  tv, tv, tv, tv);
-      buf_printf(b, " (sp_bool)((_t%d.tag == SP_TAG_STR || _t%d.tag == SP_TAG_SYM) ? ", tv, tv);
+      buf_printf(b, " (sp_bool)((sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_SYM) ? ", tv, tv);
       if (argc == 1) buf_printf(b, "sp_re_match_p(sp_re_pat_%d, _s%d)", are, tv);
       else buf_printf(b, "sp_str_re_match_p_at(sp_re_pat_%d, _s%d, sp_poly_arg_int_chk(_t%d))", are, tv, tq);
       /* any other receiver raises as CRuby does (sp_poly_match_check): a
@@ -619,8 +618,8 @@ no_gsub_enum:
           if (sp_streq(name, "=~") && rt == TY_POLY) {
             int tv = ++g_tmp;
             emit_indent(g_pre, g_indent);
-            buf_printf(g_pre, "sp_RbVal _t%d = sp_poly_strbuf_deref(", tv); emit_expr(c, recv, g_pre); buf_puts(g_pre, ");\n");
-            buf_printf(b, "(_t%d.tag == SP_TAG_STR ? sp_re_match_poly(%s, _t%d.v.s)"
+            buf_printf(g_pre, "sp_RbVal _t%d = ", tv); emit_expr(c, recv, g_pre); buf_puts(g_pre, ";\n");
+            buf_printf(b, "(sp_rbval_is_string(_t%d) ? sp_re_match_poly(%s, sp_rbval_string_bytes(_t%d))"
                           " : sp_raise_nomethod(\"undefined method '=~' for poly\"))",
                        tv, rp.p, tv);
             free(rp.p); return 1;
@@ -632,8 +631,8 @@ no_gsub_enum:
                sp_re_match's const char * slot. */
             if (rt == TY_POLY) {
               int tv = ++g_tmp;
-              buf_printf(b, "({ sp_RbVal _t%d = sp_poly_strbuf_deref(", tv); emit_expr(c, recv, b);
-              buf_printf(b, "); SP_GC_ROOT_RBVAL(_t%d); (_t%d.tag == SP_TAG_STR ? sp_re_match(%s, _t%d.v.s) < 0"
+              buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+              buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (sp_rbval_is_string(_t%d) ? sp_re_match(%s, sp_rbval_string_bytes(_t%d)) < 0"
                             " : _t%d.tag == SP_TAG_SYM ? sp_re_match(%s, sp_sym_to_s((sp_sym)_t%d.v.i)) < 0"
                             " : _t%d.tag == SP_TAG_NIL ? 1"
                             " : (sp_raise_nomethod(sp_nomethod_msg(\"=~\", _t%d)), 0)); })",

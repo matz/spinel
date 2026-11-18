@@ -1848,26 +1848,29 @@ static void *sp_exc_recover_named(const char *cls, const char *msg) {
    the class in parentheses. The class is shown as it prints: an unnamed
    Class.new class prints its #<Class:0x...> form, and CRuby adds no
    "(Class)" suffix for it. */
-static void sp_exc_print_uncaught_text(const char *cls, const char *msg) {
+static void sp_exc_print_uncaught_text(const char *cls, const char *msg, int class_only) {
   const char *shown = sp_exc_cls_display(cls);
-  const char *text = (msg && *msg) ? msg : shown;
-  if (sp_exc_cls_unnamed(shown)) fprintf(stderr, "%s\n", text);
+  const char *text = (!class_only && msg && *msg) ? msg : shown;
+  if (class_only || sp_exc_cls_unnamed(shown)) fprintf(stderr, "%s\n", text);
   else fprintf(stderr, "%s (%s)\n", text, shown);
 }
-void sp_exc_print_uncaught(const char *cls, const char *msg, sp_StrArray *bt) {
+static void sp_exc_write_uncaught(const char *cls, const char *msg, sp_StrArray *bt, int class_only) {
 #if SP_BT_AVAILABLE
   if (sp_bt_enabled) {
     if (!bt && sp_bt_n > 0) bt = sp_bt_format(sp_bt_buf, sp_bt_n);
     if (bt && bt->len > 0) {
       fprintf(stderr, "%s: ", sp_StrArray_get(bt, 0));
-      sp_exc_print_uncaught_text(cls, msg);
+      sp_exc_print_uncaught_text(cls, msg, class_only);
       for (sp_int _i = 1; _i < bt->len; _i++)
         fprintf(stderr, "\tfrom %s\n", sp_StrArray_get(bt, _i));
       return;
     }
   }
 #endif
-  sp_exc_print_uncaught_text(cls, msg);
+  sp_exc_print_uncaught_text(cls, msg, class_only);
+}
+void sp_exc_print_uncaught(const char *cls, const char *msg, sp_StrArray *bt) {
+  sp_exc_write_uncaught(cls, msg, bt, 0);
 }
 /* The C stack ran out. Unlike the handler-stack exhaustion below, this one
    CAN be rescued: the frames that filled the stack are about to be unwound,
@@ -1943,6 +1946,19 @@ static void *sp_exc_raise_cause(int cont, void *raised) {
   if (h) return h == raised ? (void *)((sp_Exception *)raised)->cause : sp_exc_implicit_cause(h, raised);
   return sp_exc_implicit_cause(sp_inflight_cause, raised);
 }
+
+typedef struct {
+  sp_Exception *exception;
+  const char *text;
+} sp_ExcReport;
+
+int sp_exc_protect(void (*fn)(void *), void *ctx);
+
+static void sp_exc_report_message(void *data) {
+  sp_ExcReport *report = data;
+  report->text = sp_user_exc_message_fn(report->exception);
+}
+
 SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* a raise leaves any region a signal may be raised in at once (#9222):
      what follows allocates */
@@ -2048,17 +2064,6 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* A killed main fiber (Fiber#kill, lib/sp_fiber.c) ends the program with
      status 1 after the at_exit hooks, as CRuby does. */
   if (strcmp(cls, "FiberKillSignal") == 0) exit(sp_exc_at_exit(1));
-  /* CRuby's report prints what #message answers, so an exception class that
-     defines its own #message (or #to_s, which the default #message calls)
-     prints that text rather than the one stored at #new. A `raise Class`
-     carries no object, so one is made to ask. Ask before the hooks run: once
-     they allocate, nothing roots the pending object. */
-  if (sp_user_exc_message_fn) {
-    sp_Exception *e = sp_pending_exc_obj ? (sp_Exception *)sp_pending_exc_obj : sp_exc_new(cls, msg);
-    SP_GC_ROOT(e);
-    const char *own = sp_user_exc_message_fn(e);
-    if (own) { msg = sp_msg_heapify(own); SP_GC_ROOT_STR(msg); }
-  }
   /* An uncaught exception prints its text AFTER the hooks have run, which is
      the order CRuby prints them in, and the status is theirs to change (a hook
      that calls `exit 5` makes an uncaught raise exit 5, still printing the
@@ -2077,12 +2082,31 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   int _bt_keep_n = (sp_bt_enabled && sp_bt_n > 0) ? sp_bt_n : 0;
   if (_bt_keep_n > 0) memcpy(_bt_keep, sp_bt_buf, sizeof(void *) * (size_t)_bt_keep_n);
 #endif
+  /* A reporting callback can itself raise. Keep the original exception
+     and report its class when its message cannot be rendered. */
+  int report_failed = 0;
+  if (sp_user_exc_message_fn) {
+    sp_Exception *pending = sp_pending_exc_obj;
+    SP_GC_ROOT(pending);
+    sp_Exception *e = pending ? pending : sp_exc_new(cls, msg);
+    SP_GC_ROOT(e);
+    sp_ExcReport report = { e, NULL };
+    sp_pending_exc_obj = NULL;
+    if (SP_EXC_UNWINDS) report_failed = sp_exc_protect(sp_exc_report_message, &report);
+    else sp_exc_report_message(&report);
+    sp_pending_exc_obj = pending;
+    if (report.text) msg = sp_msg_heapify(report.text);
+  }
+#if SP_BT_AVAILABLE
+  if (_bt_keep_n > 0) memcpy(sp_bt_buf, _bt_keep, sizeof(void *) * (size_t)_bt_keep_n);
+  sp_bt_n = _bt_keep_n;
+#endif
   { int status = sp_exc_at_exit(1);
 #if SP_BT_AVAILABLE
     if (_bt_keep_n > 0) { memcpy(sp_bt_buf, _bt_keep, sizeof(void *) * (size_t)_bt_keep_n); sp_bt_n = _bt_keep_n; }
-    sp_exc_print_uncaught(cls, msg, _bt_obj);
+    sp_exc_write_uncaught(cls, msg, _bt_obj, report_failed);
 #else
-    sp_exc_print_uncaught(cls, msg, NULL);
+    sp_exc_write_uncaught(cls, msg, NULL, report_failed);
 #endif
     sp_exc_resignal(cls, msg);
 #ifdef SP_EXC_ABORT

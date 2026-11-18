@@ -2829,13 +2829,16 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   int sent_args = 0;
   const char *sent = nm && is_send_family(nm) ? call_sent_name(nt, node, &sent_args) : NULL;
   if (sent && sent_args < ac && is_mixin_call(sent)) { nm = sent; av += sent_args; ac -= sent_args; }
+  /* An unreachable mixin cannot hide a method's recorded history. */
+  int mix = nm && is_mixin_call(nm);
+  if (mix && nt_int(nt, node, "refusal_dead", 0)) return;
   /* `singleton_class.attr_reader :x` in a class or module body: an attr of
      the body's singleton, as `class << self; attr_reader :x; end` records */
   if (nm && (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) && fc >= 0 && fs == LR_FS_NONE &&
       nt_self_singleton_class(nt, recv)) { cls = fc; sg = 1; }
   /* `singleton_class.include M` in a body, `K.singleton_class.prepend M`: a
      mixin of the singleton, as in `class << K` */
-  else if (nm && is_mixin_call(nm) && recv >= 0 && nt_kind(nt, recv) == NK_CallNode &&
+  else if (mix && recv >= 0 && nt_kind(nt, recv) == NK_CallNode &&
            is_singleton_class_name(nt_str(nt, recv, "name")) && nt_ref(nt, recv, "arguments") < 0 &&
            nt_ref(nt, recv, "block") < 0) {
     int in = nt_ref(nt, recv, "receiver");
@@ -2851,7 +2854,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
     if (!lr_main_protected(x, node, fc, fs)) nt_node_set_int((NodeTable *)nt, node, "form_raises", 1);
     return;
   }
-  if (!nested && nm && (bvis || is_method_naming_call(nm) || is_mixin_call(nm))) lr_form_runs(x, node, cls, sg, may);
+  if (!nested && nm && (bvis || is_method_naming_call(nm) || mix)) lr_form_runs(x, node, cls, sg, may);
   if (bvis && !ac && self) {
     /* the frame's visibility from here on: kept by the frame's node, so
        also in a body whose class the record does not know */
@@ -2861,7 +2864,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   }
   /* a mixin onto a receiver the record holds no class of (`o.extend M` on an object): the module has a position the
      record cannot list, which the queries of a module's `super` take as not known */
-  if (nm && cls < LR_MAIN && is_mixin_call(nm))
+  if (mix && cls < LR_MAIN)
     for (int i = 0; i < ac; i++) {
       int m = lr_class_ref_at(x->c, av[i], NULL);
       LrClass *mk = m >= LR_MAIN ? lr_class(x->r, m) : NULL;
@@ -2873,7 +2876,6 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   /* `include A, B` puts A nearest the class (ancestors [C, A, B]), as
      `include B` then `include A` would, and so do prepend and extend: the
      arguments of a mixin are recorded last first */
-  int mix = is_mixin_call(nm);
   /* `include M` where the class's own `def self.include` (or a
      superclass's) is what the call finds: that method runs, and it mixes
      nothing in by itself. The call is the program's, which may do anything

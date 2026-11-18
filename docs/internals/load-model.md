@@ -233,7 +233,8 @@ condition is folded, so `attr_reader :x if true` applies. An entry under
 a run-time condition in its class body gives its name its visibility
 only (`elab_class_surface`). An entry with no point does not apply,
 unless its body is one the walk does not place. A mixin takes the test
-as the record is made (`LrMixin.applied`).
+as the record is made (`LrMixin.applied`). A mixin in a branch the scope
+walk proves unreachable leaves the existing method history in place.
 
 ## Freshness and cost
 

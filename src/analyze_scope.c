@@ -1713,9 +1713,13 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   if (proc >= 0 && nt_kind(c->nt, id) == NK_CallNode &&
       (refused_builder || is_ivar_access(nt_str(c->nt, id, "name"))))
     nt_node_set_int((NodeTable *)c->nt, id, "refusal_proc", proc);
-  if (dead && nt_kind(c->nt, id) == NK_CallNode &&
-      (refused_builder || is_define_method_name(nt_str(c->nt, id, "name")) || is_ivar_access(nt_str(c->nt, id, "name"))))
-    nt_node_set_int((NodeTable *)c->nt, id, "refusal_dead", 1);
+  if (dead && nt_kind(c->nt, id) == NK_CallNode) {
+    const char *name = nt_str(c->nt, id, "name");
+    const char *sent = call_sent_name(c->nt, id, NULL);
+    if (refused_builder || is_define_method_name(name) || is_ivar_access(name) ||
+        (sent && is_mixin_call(sent)))
+      nt_node_set_int((NodeTable *)c->nt, id, "refusal_dead", 1);
+  }
   if (nt_kind(c->nt, id) == NK_DefNode) proc = -1;
   else if (is_proc_create(c, id)) proc = id;
   NodeKind ty_k = nt_kind(c->nt, id);

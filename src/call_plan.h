@@ -193,6 +193,8 @@ CallPlan cplan_user(Compiler *c, int id);
    the builtin where its Method is made (a reopen's def of the name), -1
    where it stands for the builtin, -2 where the record cannot tell */
 int cplan_bam_reopen_target(Compiler *c, int mi);
+/* A guarded String chain a builtin Method wrapper selects at capture. */
+int cplan_bam_string_guard(Compiler *c, int cap, int scope);
 /* The program's def of sym that the Method maker node site meets on the
    ancestors of builtin class cls up to own (NULL: all of them), the walk
    cplan_bam_reopen_target asks of a wrapper's classes, asked before there

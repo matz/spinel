@@ -1575,8 +1575,10 @@ A placed conditional `prepend` in a String reopening can install a module
 whose methods are ordinary program methods or supported String readers.
 The first executed prepend of a module determines its place in the chain.
 `super` skips layers that have not run. Calls and reflection use the
-visibility of the method currently installed. A module with its own
-mixins, accessors, aliases, or mixin hooks is outside this conditional path.
+visibility of the method currently installed. A bound `Method` keeps
+the String reader selected when the Method was made. A module with
+its own mixins, accessors, aliases, or mixin hooks is outside this
+conditional path.
 
 #### Embedded NUL bytes: byte-exact core, C-string transforms
 

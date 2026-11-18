@@ -21074,7 +21074,7 @@ static void cr_add_missing(Compiler *c, int m, char ***out, int *n, int *cap, in
    stands for (cplan_method_arms), which it does not */
 static void cr_add_capture_arms(Compiler *c, int m, char ***out, int *n, int *cap) {
   int mi = method_obj_target_mi(c, m), to[2 * (VER_MAX_ARMS + 1)];
-  if (mi < 0 || c->scopes[mi].entry == ENTRY_NONE) return;
+  if (mi < 0 || (c->scopes[mi].entry == ENTRY_NONE && cplan_bam_string_guard(c, m, mi) < 0)) return;
   for (int k = 0, nh = cplan_method_held(c, mi, m, to); k < nh; k++) {
     char mark[24];
     snprintf(mark, sizeof mark, "\x01%d", to[k]);

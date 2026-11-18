@@ -17066,6 +17066,24 @@ int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk) {
   nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
   return call;
 }
+/* The String builtin behind a prepend. It can also be bound as a Method,
+   so give its comparison operand a slot the Method thunk can bind. */
+int disp_string_reader_def(NodeTable *nt, const char *name, int arity, int *call) {
+  *call = disp_self_call(nt, name, arity, 0);
+  nt_mark_builtin_call(nt, *call);
+  int def = disp_def_build(nt, -1, name, 0, arity, 0, NULL, 0, *call);
+  if (arity) {
+    int argc, np;
+    const int *args = call_args(nt, *call, &argc);
+    const int *req = nt_arr(nt, nt_ref(nt, def, "parameters"), "requireds", &np);
+    nt_node_set_str(nt, args[0], "name", "other");
+    nt_node_set_str(nt, req[0], "name", "other");
+  }
+  nt_node_set_str(nt, def, "bam_sym", name);
+  nt_node_set_str(nt, def, "bam_owner", core_class_name(CORE_STRING));
+  nt_node_set_int(nt, def, "bam_native", 1);
+  return def;
+}
 /* A dispatcher accepting *args and **keywords calls a builtin at its
    fixed arity. The keyword Hash is one argument when it is present. */
 int disp_when_fixed_arity(Compiler *c, int call, int arity) {

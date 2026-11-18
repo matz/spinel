@@ -1645,7 +1645,7 @@ CallPlan cplan_method_call(Compiler *c, int id) {
   int mi = mn >= 0 ? method_obj_target_mi(c, mn) : -1;
   an_pure_read_end();
   if (mi >= 0) cplan_set(&p, mi, c->scopes[mi].class_id, c->scopes[mi].is_cmethod ? UC_CMETH : UC_INST, CP_DIRECT);
-  if (mi >= 0 && c->scopes[mi].entry) p.dispatch = CP_SWITCH;
+  if (mi >= 0 && (c->scopes[mi].entry || cplan_bam_string_guard(c, mn, mi) >= 0)) p.dispatch = CP_SWITCH;
   p.absent = capture ? (unsigned char)cplan_capture_absent(c, id, mi) : 0;
   if (capture && mi < 0 && !p.absent && cplan_main_capture_absent(c, id)) p.absent = CP_ABSENT_MAIN;
   if (p.absent && mi < 0) p.owner_ci = (short)cm_capture_class(c, id, NULL);
@@ -2583,6 +2583,19 @@ static int conditional_guard_method(Compiler *c, int cls, const char *name) {
   if (!c->n_prepend_cells || cls < 0 || !name) return -1;
   int mi = call_target(c, -1, cls, name, CT_METHODS, NULL);
   return mi >= 0 && c->scopes[mi].mixin_guarded ? mi : -1;
+}
+int cplan_bam_string_guard(Compiler *c, int cap, int scope) {
+  if (!c->ver_built || scope < 0 || cap < 0) return -1;
+  const Scope *wrapper = &c->scopes[scope];
+  const char *name = nt_str(c->nt, wrapper->def_node, "bam_sym");
+  if (!name || !is_string_boxed_reader(name)) return -1;
+  int recv = nt_ref(c->nt, cap, "receiver");
+  TyKind type = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  if (type != TY_STRING && type != TY_STRBUF && type != TY_POLY) return -1;
+  int mi = conditional_guard_method(c, comp_core_class(c, CORE_STRING), name);
+  if (mi < 0) return -1;
+  int targets[VER_MAX_ARMS + 1], n = guard_chain(c, mi, targets, NULL, NULL);
+  return guard_is_conditional(c, targets, n) && c->scopes[mi].entry == ENTRY_TABLE ? mi : -1;
 }
 /* Visibility of an installed conditional prepend belongs to the entry,
    including the case where a known earlier call reaches its fallback. */
@@ -11834,6 +11847,18 @@ static void ver_refl_count(Compiler *c, int vis) {
   if (vis == SP_VIS_PRIVATE) c->nver_refl_priv++;
   else c->nver_refl++;
 }
+/* A captured Method's empty history arm calls the pinned builtin directly. */
+static int ver_capture_builtin(Compiler *c, const VerNamed *w) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int call;
+  int def = disp_string_reader_def(nt, w->name, is_spaceship_name(w->name), &call);
+  ver_pin(c, call, CT_PIN_BUILTIN, 0);
+  char hidden[320];
+  comp_shadow_name(c, w->cls, w->name, hidden, sizeof hidden);
+  int mi = synth_def_scope(c, w->cls, hidden, def, 0);
+  comp_scope_set_shadow(c, mi, SHADOW_PREP, w->name);
+  return mi;
+}
 static void ver_named_make(Compiler *c, const VerNamed *w) {
   NodeTable *nt = (NodeTable *)c->nt;
   DispArm arm[VER_MAX_ARMS];
@@ -11888,8 +11913,10 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
         }
     }
   }
+  int captured_builtin = guarded_history ? ver_capture_builtin(c, w) : -1;
   /* (an includer's: under the module's instance side) */
   ver_entry_add(c, comp_scope_user_name(&c->scopes[e]), (struct VerEntry){ NULL, VER_ENTRY_HISTORY, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e,
+                                      .behind = captured_builtin + 1,
                                       .vis = guarded_history ? VER_VIS_STRING_HISTORY : 0,
                                       .finds = ver_else_finds(c, w->refuse ? VK_NOMETHOD : w->els, w->cls, w->sg, w->name, w->vs[0].v->vis, to[nv - 1]) });
 }
@@ -12543,7 +12570,9 @@ int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests) {
   int to[VER_MAX_ARMS + 1], t[VER_MAX_ARMS + 1], n = ver_entry_targets(c, e, to, t), m = 0;
   for (int k = 0; k < n; k++) {
     int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1], ns = 0;
-    if (to[k] >= 0 && c->scopes[to[k]].entry == ENTRY_DISPATCH) ns = ver_entry_targets(c, to[k], sub, st);
+    const struct VerEntry *history = to[k] >= 0 ? guard_history_of(c, to[k]) : NULL;
+    if (history || (to[k] >= 0 && c->scopes[to[k]].entry == ENTRY_DISPATCH)) ns = ver_entry_targets(c, to[k], sub, st);
+    if (history && ns) sub[ns - 1] = history->behind - 1;
     for (int j = 0; j < ns && m < 2 * (VER_MAX_ARMS + 1); j++, m++) {
       if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = st[j];
       out[m] = sub[j];
@@ -12557,10 +12586,11 @@ int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests) {
 }
 /* See call_plan.h. */
 int cplan_method_held(Compiler *c, int e, int cap, int *out) {
-  int n = cplan_method_arms(c, e, cap, out, NULL), m = 0;
+  int guard = cplan_bam_string_guard(c, cap, e);
+  int n = cplan_method_arms(c, guard >= 0 ? guard : e, cap, out, NULL), m = 0;
   for (int k = 0; k < n; k++)
     if (out[k] != CPLAN_ARM_NONE) out[m++] = out[k];
-  if (!m) out[m++] = e;
+  if ((!m || guard >= 0) && m < 2 * (VER_MAX_ARMS + 1)) out[m++] = e;
   return m;
 }
 typedef struct { int guard, cls, sg, mi, ar; const char *name; int from, face; } VerNeed;   /* (from: VerEntry.from; face: VerEntry.face) */

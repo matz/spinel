@@ -1935,7 +1935,8 @@ typedef struct {
      them (call_plan.c, mixin_copies_module); 0 for cls's chain; behind:
      1 + the method a guard entry's method_missing else arm stands for,
      the one behind the mixins that finds no method (guard_entry_make),
-     0 for none; face: VF_NONE, or the visibility the arms of the versions
+     or the pinned builtin a String history's empty arm captures.
+     Zero for none. Face: VF_NONE, or the visibility the arms of the versions
      that are closed to it raise for (call_plan.h); vis, 1 where a class method's respond_to? reads the
      entry's cells (cplan_cmethod_presence), so its versions' visibility cells are written whatever the face
      (ver_presence_mark), or 2 where an instance guard reflects a hidden

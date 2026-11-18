@@ -331,11 +331,12 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
      after its own, `C#bar(foo)(...)`, as CRuby does */
   if (orig && strcmp(orig, nm) != 0) buf_printf(&d, "(%s)", orig);
   buf_puts(&d, "(");
+  int native = nt_int(c->nt, m->def_node, "bam_native", 0);
   for (int i = 0; i < m->nparams; i++) {
     if (!m->pnames[i]) continue;
     if (i) buf_puts(&d, ", ");
     /* a method made of an accessor: its parameter has no name (`x=(_)`) */
-    if (scope_of_accessor(m)) buf_puts(&d, "_");
+    if (native || scope_of_accessor(m)) buf_puts(&d, "_");
     else if (i == m->rest_idx) buf_printf(&d, "*%s", m->pnames[i]);
     else if (i == m->kwrest_idx) buf_printf(&d, "**%s", m->pnames[i]);
     else if (callee_param_is_declared_kwarg(c, m, m->pnames[i]))
@@ -560,6 +561,7 @@ static void node_source_pos(const NodeTable *nt, int dn, const char **file, int 
 static int method_source_pos(Compiler *c, int mi, const char **file, int *line) {
   const NodeTable *nt = c->nt;
   int dn = mi >= 0 ? c->scopes[mi].def_node : -1, known = 1;
+  if (nt_int(nt, dn, "bam_native", 0)) return 0;
   if (bam_builtin_sym(c, mi, NULL)) {
     int src = (int)nt_int(nt, dn, "bam_src", -1);
     /* (a method_missing Method's is nil, as CRuby's) */
@@ -1101,6 +1103,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
   int mn = plan.method_node, target = plan.mi;
   int unbound = mn >= 0 && is_instance_method_name(nt_str(nt, mn, "name"));
   if (plan.dispatch == CP_SWITCH) {
+    if (cplan_bam_string_guard(c, mn, target) >= 0 && method_recv_owner_unknown(c, recv)) return 0;
     int to[2 * (VER_MAX_ARMS + 1)], n = cplan_method_held(c, target, mn, to), tr = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
@@ -2153,7 +2156,7 @@ static void emit_guarded_public_capture(Compiler *c, int id, const char *sym, in
   }
 }
 
-static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture) {
+static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture, const char *captured_name) {
   /* Klass.instance_method(:sym) -> the unbound object: the same
      sp_BoundMethod with a NULL self, so name/arity/owner ride the Method
      arms; #bind supplies the self (#2676). */
@@ -2251,7 +2254,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
   /* method(:sym) / <recv>.method(:sym) -> a bound Method object. */
   if (sp_streq(name, "method") && method_sym_arg(c, id) != NULL &&
       (cplan_builtin_call(c, id) || !method_user_override_recv(c, id))) {
-    const char *sym = method_sym_arg(c, id);
+    const char *sym = captured_name ? captured_name : method_sym_arg(c, id);
     int mi = capture;
     if ((mi < 0 || method_obj_of_native_func(c, recv, sym)) &&
         emit_method_obj_on_constant(c, id, recv, sym, b)) return 1;
@@ -2267,7 +2270,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
        compiler to a clean runtime error. */
     int bam_poly = mi >= 0 && c->scopes[mi].def_node >= 0 &&
                    nt_int(nt, c->scopes[mi].def_node, "bam_poly", 0);
-    if (recv >= 0 && !bam_poly && repr_of(c, recv).kind == RK_BOXED) {
+    if (recv >= 0 && !captured_name && !bam_poly && repr_of(c, recv).kind == RK_BOXED) {
       buf_puts(b, "({ sp_RbVal _rpm = ");
       emit_expr(c, recv, b);
       buf_puts(b, "; SP_GC_ROOT_RBVAL(_rpm); sp_raise_cls(\"NameError\", sp_nomethod_class_msg(");
@@ -2364,8 +2367,10 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       buf_printf(b, "void *_t%d = (void *)sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
                     " sp_PolyArray_push((sp_PolyArray *)_t%d, _t%d); ", self_tmp, self_tmp, self_tmp, tbr);
     }
-    else if (self_receiver && method_call_param_shift(c, id, mi) &&
-             repr_of_slot(c, scope_local(&c->scopes[mi], c->scopes[mi].pnames[0])).kind == RK_STRBUF) {
+    else if (self_receiver &&
+             (captured_name ||
+              (method_call_param_shift(c, id, mi) &&
+               repr_of_slot(c, scope_local(&c->scopes[mi], c->scopes[mi].pnames[0])).kind == RK_STRBUF))) {
       /* Capture the representation the wrapper receives, including the
          root kind the Method's collector follows after construction. */
       self_tmp = ++g_tmp;
@@ -2375,6 +2380,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       buf_printf(b, "({ void *_t%d = (void *)(", self_tmp);
       emit_strbuf_handle_of(c, recv, b);
       buf_printf(b, "); SP_GC_ROOT(_t%d); ", self_tmp);
+      if (captured_name && nil_fact_node(c, recv))
+        buf_printf(b, "if (!_t%d) sp_raise_cls(\"NameError\", \"undefined method '%s' for class 'NilClass'\"); ",
+                   self_tmp, sym);
     }
     else if (self_receiver) {
       Repr rr2 = repr_of(c, recv);
@@ -2410,7 +2418,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
           buf_printf(b, "if (!_t%d) sp_raise_cls(\"NameError\", \"undefined method '%s' for class 'NilClass'\"); ", self_tmp, sym);
       }
     }
-    if (self_rooted && !bam_poly && nt_int(nt, id, "public_capture", 0)) {
+    if (self_rooted && !captured_name && !bam_poly && nt_int(nt, id, "public_capture", 0)) {
       TyKind receiver_type = repr_of(c, recv).as_ty;
       const char *bsym = bam_builtin_sym(c, mi, NULL);
       if (bsym && (receiver_type == TY_STRING || receiver_type == TY_STRBUF))
@@ -2804,21 +2812,42 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     else buf_printf(b, " %s; })", default_value_from_compiler(c, at));
     return 1;
   }
-  int mi = is_method_object_maker(name) ? plan.mi : -1;
+  int wrapper = is_method_object_maker(name) ? plan.mi : -1;
+  int string_guard = cplan_bam_string_guard(c, id, wrapper);
+  int mi = string_guard >= 0 ? string_guard : wrapper;
   if (mi < 0 || plan.dispatch != CP_SWITCH)
-    return emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, mi);
+    return emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, mi, NULL);
+  const char *captured_name = string_guard >= 0 ? bam_builtin_sym(c, wrapper, NULL) : NULL;
   size_t start = b->len;
+  int mark = view_mark();
   int to[2 * (VER_MAX_ARMS + 1)], tests[4 * (VER_MAX_ARMS + 1)], n = cplan_method_arms(c, mi, id, to, tests);
-  int tr = ++g_tmp, vr = -1, boxed_receiver = -1;
+  int tr = ++g_tmp, boxed_receiver = -1;
   buf_puts(b, "({ ");
   /* Evaluate and root the receiver before testing the cells. */
   if (recv >= 0) {
     int rr = hold_operand(c, recv, repr_of(c, recv).as_ty, 0, ++g_tmp, 1, " ", b);
-    vr = view_bind_temp(recv, rr);
+    view_bind_temp(recv, rr);
     if (repr_of(c, recv).kind == RK_BOXED) boxed_receiver = rr;
   }
-  emit_guarded_public_capture(c, id, method_sym_arg(c, id), plan.owner_ci, boxed_receiver, b);
   buf_printf(b, "sp_BoundMethod *_t%d; ", tr);
+  if (captured_name && boxed_receiver >= 0) {
+    buf_printf(b, "if (!sp_rbval_is_string(_t%d)) { _t%d = ", boxed_receiver, tr);
+    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, wrapper, NULL)) {
+      view_unwind(mark);
+      buf_erase(b, start, b->len - start);
+      return 0;
+    }
+    int string = ++g_tmp;
+    buf_printf(b, "; } else { sp_String *_t%d = sp_poly_as_strbuf(_t%d); SP_GC_ROOT(_t%d); ",
+               string, boxed_receiver, string);
+    view_push_repr(c, recv, VR_STRBUF_BOX, 1);
+    view_push(c, recv, TY_STRBUF);
+    int bind = view_bind_temp(recv, string);
+    if (bind >= 0) view_hold_handle(bind);
+  }
+  emit_guarded_public_capture(c, id, captured_name ? captured_name : method_sym_arg(c, id),
+                              captured_name ? c->scopes[mi].class_id : plan.owner_ci,
+                              captured_name ? -1 : boxed_receiver, b);
   for (int i = 0; i < n; i++) {
     if (i) buf_puts(b, "else ");
     /* (an arm of an arm: under both tests, cplan_method_arms) */
@@ -2845,14 +2874,16 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       continue;
     }
     buf_printf(b, "{ _t%d = ", tr);
-    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]))) {
-      if (vr >= 0) view_unbind(vr);
+    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv,
+                                to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]), captured_name)) {
+      view_unwind(mark);
       buf_erase(b, start, b->len - start);
       return 0;
     }
     buf_puts(b, "; }\n");
   }
-  if (vr >= 0) view_unbind(vr);
+  if (captured_name && boxed_receiver >= 0) buf_puts(b, "} ");
+  view_unwind(mark);
   buf_printf(b, "_t%d; })", tr);
   return 1;
 }

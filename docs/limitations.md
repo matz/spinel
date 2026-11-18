@@ -1573,6 +1573,9 @@ further: since 3.4 CRuby steps a non-numeric range by repeated `+`, so
 `("a".."e").step("x")` diverges, while spinel takes every Nth element -- a
 stride a String cannot name -- and raises.
 
+An endless String range yields a fresh String at each step. `peek` and
+the following `next` return the same item.
+
 #### Conditional prepends on String
 
 A placed conditional `prepend` in a String reopening can install a module

@@ -5268,7 +5268,7 @@ sp_RbVal sp_box_srange(sp_StrRange v) {
 }
 
 /* An endless String Range (last NULL) walked as it is read: String#succ from
-   the begin, stepping `step` successors at a time, one fresh String per value,
+   the begin, stepping `step` successors at a time, one fresh handle per String,
    through the fiber-generator path (the String Range's mirror of
    sp_endless_range_gen), so #next, #first(n) and a lazy chain over it need no
    member Array, which an endless range cannot make. The capture holds the
@@ -5285,7 +5285,7 @@ static void sp_endless_srange_gen(sp_Fiber *f) {
   for (;;) {
     /* a Range of Symbols yields the Symbol of the name */
     if (cap->sym) sp_Fiber_yield(sp_box_sym(sp_json_sym_intern_fn(cur)));   /* the program's interner */
-    else sp_Fiber_yield(sp_box_str(sp_str_from_bytes(cur, sp_str_byte_len(cur))));
+    else sp_Fiber_yield(sp_box_obj(sp_String_new_unfrozen(cur), SP_BUILTIN_STRBUF));
     cur = sp_str_succ_n(cur, cap->step);
   }
 }

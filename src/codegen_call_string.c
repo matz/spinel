@@ -1254,21 +1254,11 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
       buf_printf(b, "%s _t%d = lv_%s; ", "__auto_type", tsv_ech, p0); free(sv_ech.p);
     }
     if (is_line) {
-      int tl = ++g_tmp;
-      buf_printf(b, "sp_StrArray *_t%d = sp_poly_string_lines(_t%d, _t%d, _t%d, _t%d, \"%s\"); ",
-                 tl, tr_line, ts_line, tc_line, n_line, name);
-      /* The array of lines is this loop's own value -- nothing in the Ruby
-         program names it -- and its length is the loop bound, re-read every
-         turn. Unrooted, a block that allocated collected it, and the loop
-         then ended early rather than yielding a wrong line: the symptom is a
-         short answer, not a bad one. */
-      buf_printf(b, "SP_GC_ROOT(_t%d); ", tl);
-      buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) { ",
-                 ti, ti, tl, ti);
+      int line = emit_string_line_loop_start(tr_line, ts_line, tc_line, n_line, name, b);
       if (p0) {
-        if (p0_box_poly_ech) buf_printf(b, "lv_%s = %ssp_StrArray_get%s(_t%d, _t%d)); ", p0, ONE_SA_BOXO, ONE_SA_GE, tl, ti);
-        else if (p0_handle_ech) buf_printf(b, "lv_%s = sp_StrArray_get_e(_t%d, _t%d); ", p0, tl, ti);
-        else buf_printf(b, "lv_%s = SP_STR_B(sp_StrArray_get_e(_t%d, _t%d)); ", p0, tl, ti);   /* (the line is a handle, the parameter's slot bytes) */
+        if (p0_box_poly_ech) buf_printf(b, "lv_%s = SP_SEBOX(_t%d); ", p0, line);
+        else if (p0_handle_ech) buf_printf(b, "lv_%s = _t%d; ", p0, line);
+        else buf_printf(b, "lv_%s = SP_STR_B(_t%d); ", p0, line);
       }
     }
     /* codepoints yields each character's codepoint, not each byte: the String

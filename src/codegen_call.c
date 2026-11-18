@@ -23394,6 +23394,22 @@ int emit_string_line_operands(Compiler *c, int recv, int argc, const int *argv,
   return sep < 0 && chomp >= 0;
 }
 
+/* Open a loop and bind its rooted native String element. A mixed dispatch
+   with no arguments supplies the already-bound receiver alone. */
+int emit_string_line_loop_start(int receiver, int separator, int keywords, int count,
+                                const char *method, Buf *b) {
+  int walk = ++g_tmp, line = ++g_tmp;
+  buf_printf(b, "sp_StringLineWalk _t%d = {0}; SP_GC_ROOT_STR(_t%d.text); "
+                "SP_GC_ROOT_STR(_t%d.separator); SP_GC_ROOT(_t%d.whole); ",
+             walk, walk, walk, walk);
+  buf_printf(b, "sp_string_line_begin(&_t%d, _t%d, ", walk, receiver);
+  if (separator) buf_printf(b, "_t%d, _t%d, _t%d, ", separator, keywords, count);
+  else buf_puts(b, "sp_box_nil(), sp_box_nil(), 0, ");
+  buf_printf(b, "\"%s\"); sp_String *_t%d; while ((_t%d = sp_string_line_step(&_t%d))) { SP_GC_ROOT(_t%d); ",
+             method, line, line, walk, line);
+  return line;
+}
+
 void emit_string_line_enum(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b) {
   int tr, ts, tc, n;
   int chomp_given = emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, &n, b);

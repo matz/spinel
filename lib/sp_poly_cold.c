@@ -72,6 +72,33 @@ sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
   return lines;
 }
 
+void sp_string_line_begin(sp_StringLineWalk *walk, sp_RbVal receiver, sp_RbVal separator,
+                          sp_RbVal keywords, sp_int argc, const char *method) {
+  if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod(method, receiver);
+  if (argc > 1) sp_raise_arity(argc, 0, 1, NULL);
+  walk->chomp = sp_string_line_chomp(keywords);
+  if (argc && sp_poly_nil_p(separator)) {
+    walk->whole = sp_poly_as_strbuf(receiver);
+    return;
+  }
+  const char *text = sp_poly_recv_s(receiver, method);
+  if (!sp_str_byte_len(text)) return;
+  /* Select the subject before converting the separator or running the block. */
+  walk->text = sp_str_is_frozen_val(text) ? text : sp_str_dup(text);
+  const char *sep = argc ? sp_poly_arg_str_chk(separator) : SPL("\n");
+  walk->separator = sep;
+  if (argc && !sp_str_is_frozen_val(sep)) walk->separator = sp_str_dup(sep);
+}
+
+sp_String *sp_string_line_step(sp_StringLineWalk *walk) {
+  if (walk->whole) {
+    sp_String *whole = walk->whole;
+    walk->whole = NULL;
+    return whole;
+  }
+  return walk->text ? sp_str_line_next(walk->text, walk->separator, &walk->offset, walk->chomp) : NULL;
+}
+
 typedef struct {
   sp_RbVal receiver;
   sp_RbVal separator;

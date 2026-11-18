@@ -394,23 +394,23 @@ static void emit_typed_arr_scan(Compiler *c, int id, TyKind rt, int ta, int tv, 
    it stays on the comparing path when it does. Also the value slots that
    compare the same way: Hash#value?, Range#include? and #eql?. */
 
-/* Bind a String iterator's block parameter to element `_t<ti>` of the
-   StrArray `_t<ta>`. The parameter is the block's own String, unless the
+/* Bind a String iterator's block parameter to the native String element.
+   The parameter is the block's own String, unless the
    scope holds it boxed -- the same block is another receiver's arm too (an
    object whose each_line yields it), so the body reads the box: then the
    line is stored into that boxed local rather than shadowing it. */
 static void emit_str_elem_param(Compiler *c, int blk, const char *bp, const char *bpn,
-                                int ta, int ti, Buf *b) {
+                                const char *element, Buf *b) {
   Scope *bs = bp ? comp_scope_of(c, blk) : NULL;
   LocalVar *blv = bs ? scope_local(bs, bp) : NULL;
   if (bp && file_block_param_poly(c, blk, bp))
-    buf_printf(b, " lv_%s = %ssp_StrArray_get%s(_t%d, _t%d));", bpn, ONE_SA_BOXO, ONE_SA_GE, ta, ti);
+    buf_printf(b, " lv_%s = SP_SEBOX(%s);", bpn, element);
   /* a parameter the scope holds as the shared handle takes the element
      itself (as the typed each_char binds it), any other its bytes */
   else if (elem_param_is_handle(blv, TY_STRING))
-    buf_printf(b, " lv_%s = sp_StrArray_get%s(_t%d, _t%d);", bpn, typed_elem_store_sfx(TY_STR_ARRAY), ta, ti);
+    buf_printf(b, " lv_%s = %s;", bpn, element);
   else
-    buf_printf(b, " const char *lv_%s = SP_STR_B(sp_StrArray_get%s(_t%d, _t%d));", bpn, typed_elem_store_sfx(TY_STR_ARRAY), ta, ti);
+    buf_printf(b, " const char *lv_%s = SP_STR_B(%s);", bpn, element);
 }
 static int value_kind_misses(Compiler *c, int node, TyKind ek) {
   TyKind t = comp_ntype(c, node);
@@ -6250,25 +6250,25 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     emit_string_line_enum(c, id, recv, argc, argv, b);
     return 1;
   }
-  /* The boxed block form walks the same array as lines and returns self. */
+  /* The boxed block form yields one line per step and returns self. */
   if (recv >= 0 && rt == TY_POLY && is_str_line_method(name) &&
       nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode &&
       (argc == 0 || poly_lines_args(c, argc, argv)) && string_line_args(c, argc, argv) &&
       !user_defines_or_reads(c, name)) {
-    int tr, ts, tc, n, ta = ++g_tmp;
+    int tr, ts, tc, n;
     emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, &n, b);
-    buf_printf(b, "sp_StrArray *_t%d = sp_poly_string_lines(_t%d, _t%d, _t%d, _t%d, \"%s\"); SP_GC_ROOT(_t%d);",
-               ta, tr, ts, tc, n, name, ta);
+    int line = emit_string_line_loop_start(tr, ts, tc, n, name, b);
     int eblk = nt_ref(nt, id, "block");
     Repr result = repr_of(c, id);
     const char *ebp = block_param_name(c, eblk, 0);
     const char *ebpn = ebp ? rename_local(ebp) : NULL;
     int ebody = nt_ref(nt, eblk, "body");
-    int ebn = 0; const int *ebb = ebody >= 0 ? nt_arr(nt, ebody, "body", &ebn) : NULL;
-    int ti = ++g_tmp;
-    buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
-    if (ebpn) emit_str_elem_param(c, eblk, ebp, ebpn, ta, ti, b);
-    for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
+    if (ebpn) {
+      char element[24];
+      snprintf(element, sizeof element, "_t%d", line);
+      emit_str_elem_param(c, eblk, ebp, ebpn, element, b);
+    }
+    emit_iter_loop_stmts(c, ebody, b, 0);
     if (result.kind == RK_BOXED) buf_printf(b, " } _t%d; })", tr);
     else if (result.as_ty == TY_STRBUF) buf_printf(b, " } sp_poly_as_strbuf(_t%d); })", tr);
     else buf_printf(b, " } sp_poly_recv_s(_t%d, \"%s\"); })", tr, name);
@@ -17300,7 +17300,12 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     buf_printf(b, ", \"%s\"); SP_GC_ROOT(_t%d);", name, ts);
     buf_printf(b, " sp_StrArray *_t%d = sp_str_chars(_t%d); SP_GC_ROOT(_t%d);", ta, ts, ta);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
-    if (ebpn) emit_str_elem_param(c, eblk, ebp, ebpn, ta, ti, b);
+    if (ebpn) {
+      char element[96];
+      snprintf(element, sizeof element, "sp_StrArray_get%s(_t%d, _t%d)",
+               typed_elem_store_sfx(TY_STR_ARRAY), ta, ti);
+      emit_str_elem_param(c, eblk, ebp, ebpn, element, b);
+    }
     for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
     buf_printf(b, " } _t%d; })", ts);
     { *out = 1; return 1; }

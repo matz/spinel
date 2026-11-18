@@ -21932,6 +21932,18 @@ sp_Enumerator *sp_poly_string_line_enum(sp_RbVal receiver, sp_RbVal separator,
                                       sp_RbVal keywords, sp_int argc, sp_bool chomp_given);
 sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
                                 sp_RbVal keywords, sp_int argc, const char *method);
+/* A walk across Ruby block calls. The caller roots text, separator and whole
+   before beginning the walk, and roots the current line around each yield. */
+typedef struct {
+  const char *text;
+  const char *separator;
+  sp_String *whole;
+  size_t offset;
+  sp_bool chomp;
+} sp_StringLineWalk;
+void sp_string_line_begin(sp_StringLineWalk *walk, sp_RbVal receiver, sp_RbVal separator,
+                          sp_RbVal keywords, sp_int argc, const char *method);
+sp_String *sp_string_line_step(sp_StringLineWalk *walk);
 /* A blockless each_char / each_line / each_byte / each_codepoint on a boxed
    receiver: CRuby's Enumerator, as on a typed String. A box of a shared
    String's handle (--share-strings) gives the Enumerator over that handle,

@@ -1,0 +1,7 @@
+case equality: TypeError: wrong argument type Float (expected String)
+splat: TypeError: wrong argument type Float (expected String)
+:s
+keyword splat: TypeError: wrong argument type Float (expected String)
+:s
+"b"
+"c"

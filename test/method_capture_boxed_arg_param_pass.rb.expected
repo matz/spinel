@@ -1,0 +1,10 @@
+"Integer"
+"Float"
+"String"
+:sym
+"Integer"
+"NilClass"
+["Float", 2.5]
+["Float", "String", "NilClass"]
+["Integer", "Float"]
+"Integer"

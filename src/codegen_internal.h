@@ -1414,6 +1414,12 @@ void emit_vis_raise_boxed(int vis, const char *vnm, int tv, Buf *b);
    box_tv is the boxed receiver's temp (-1 for a typed one), src_tv src's;
    native_answer: a send's native arm stores the binding's answer in src. */
 extern int g_writer_arms_attr_only;
+/* Does class k's writer `base=` resolve to an attr writer, the field write
+   emit_boxed_writer_arms gives it an arm for (codegen_stmt.c)? */
+int boxed_writer_attr_wins(Compiler *c, int k, const char *base);
+/* The classes (by id, 1 = skip) emit_poly_user_arms_n emits no user arm
+   for while set: another arm of the same switch takes them. */
+extern const unsigned char *g_poly_user_arm_skip;
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, int vnode,
                             int box_tv, int src_tv, int native_answer, Buf *b);

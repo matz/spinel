@@ -11538,7 +11538,20 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (g_plan_check) pa_flags(form);
       { PolyUserArgs U = { argc, pos_argc, kwh, kwall, kwall_any, kw_pos, has_splat_arg, splat_a, stk,
                            is_setter_val, blk_tmp2, tv, tr, ret, argv, atmp, htmp, atmp_ty, &kw, &pform };
+        /* The classes whose writer is an attr writer take the attr arms
+           below: no user arm for them. The plan gave such a class the def
+           an ancestor has (`attr_accessor :logger` in a subclass of a class
+           with `def logger=`), and the switch held its id twice. */
+        unsigned char *skip = NULL;
+        if (attr_wr) {
+          skip = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
+          if (!skip) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          for (int k = 0; k < c->nclasses; k++) skip[k] = (unsigned char)boxed_writer_attr_wins(c, k, wbase);
+          g_poly_user_arm_skip = skip;
+        }
         emit_poly_user_arms_n(c, id, name, &U, b);
+        g_poly_user_arm_skip = NULL;
+        free(skip);
       }
       if (attr_wr) {
         char an[32], objp[32];

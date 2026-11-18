@@ -16888,6 +16888,27 @@ static void emit_writer_arm_src_root(TyKind at, const char *src, Buf *b) {
   else if (at == TY_STRING || at == TY_STRBUF) buf_printf(b, "SP_GC_ROOT(%s); ", src);
 }
 
+/* The writer `base=` a boxed receiver of class k reaches, as the dispatch's
+   arm for k stores through it: *mi its explicit `def base=` (-1 for none),
+   *def_class the class that defines it. 1 when an attr writer answers at k
+   (the arm is the field write, whatever def an ancestor has), 0 when the
+   def does, -1 when k has no writer of the name. */
+static int boxed_writer_of(Compiler *c, int k, const char *base, int *mi, int *def_class) {
+  MethodLookup wml = { .def_class = -1 };
+  int kmi = call_target(c, -1, k, base, CT_WRITER, &wml), wmdc = wml.def_class;
+  int attr = wml.kind == ML_ATTR;
+  if (kmi >= 0 && !scope_has_callable_symbol(c, kmi)) {
+    attr = comp_writer_in_chain(c, k, base, &wmdc);
+    if (!attr) kmi = -1;
+  }
+  *mi = kmi; *def_class = wmdc;
+  return kmi < 0 && !attr ? -1 : attr;
+}
+int boxed_writer_attr_wins(Compiler *c, int k, const char *base) {
+  int mi, dc;
+  return boxed_writer_of(c, k, base, &mi, &dc) == 1;
+}
+
 int g_writer_arms_attr_only;
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, int vnode,
@@ -16931,14 +16952,9 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
         continue;
       }
     }
-    MethodLookup wml = { .def_class = -1 };
-    int kmi = call_target(c, -1, k, base, CT_WRITER, &wml), wmdc = wml.def_class;
-    int attr = wml.kind == ML_ATTR;
-    if (kmi >= 0 && !scope_has_callable_symbol(c, kmi)) {
-      attr = comp_writer_in_chain(c, k, base, &wmdc);
-      if (!attr) kmi = -1;
-    }
-    if (kmi < 0 && !attr) continue;
+    int kmi, wmdc;
+    int attr = boxed_writer_of(c, k, base, &kmi, &wmdc);
+    if (attr < 0) continue;
     int writer_wins = attr;
     /* (beside a method dispatch's own arms: only the classes it has none for) */
     if (g_writer_arms_attr_only && !writer_wins) continue;

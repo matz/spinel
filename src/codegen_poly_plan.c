@@ -1430,6 +1430,7 @@ static int poly_user_arm_n_decide(Compiler *c, int id, const char *name, const P
    dispatch's own decision, into a scratch buffer, for what it does besides
    an arm; a plan for another result type falls back on that decision for
    every class. --plan-check holds the plan against the decision. */
+const unsigned char *g_poly_user_arm_skip;
 void emit_poly_user_arms_n(Compiler *c, int id, const char *name, const PolyUserArgs *U, Buf *b) {
   const PolyPlan *p = U->plan;
   int served = p->ret == U->ret;
@@ -1454,6 +1455,13 @@ void emit_poly_user_arms_n(Compiler *c, int id, const char *name, const PolyUser
   int nat = 0, cat = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (cls_fact_excludes(c, recv, k)) continue;   /* a class the receiver never holds has no arm (#8530) */
+    /* a class another arm of the switch takes (a computed send's attr writer
+       arm, emit_boxed_writer_arms): a user arm for it, the def an ancestor
+       gives it, was a second `case` of its id */
+    if (g_poly_user_arm_skip && g_poly_user_arm_skip[k]) {
+      if (served && j < n && arms[j].key == k) j++;
+      continue;
+    }
     at = arm_text_next(at, &nat, &cat, k);
     Buf *ab = &at[nat - 1].t;
     if (!served) { poly_user_arm_n_replay(c, id, name, U, k, ab); continue; }

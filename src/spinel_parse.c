@@ -7416,13 +7416,14 @@ static void sp_lower_rows_note(const pm_node_t *node, int id) {
 }
 
 /* Method name `b` given as a value (a Symbol, a String a reflection is
-   given): a row that asks only the name (an Enumerable alias) is reached
-   by it as by a call */
+   given): a row that asks only the name and a receiver (an Enumerable
+   alias, to_set) is reached by it as by a call, whatever arguments the
+   call is given (a superset only loads more) */
 static void sp_names_method(SpNames *s, const uint8_t *b, size_t n) {
   sp_names_add(s, "m:", (const char *)b, n);
   const LowerRow *r;
   for (int i = 0; (r = lower_row_at(i)) != NULL; i++)
-    if (r->recv == LR_RECV_ANY && !r->flags && r->argc_min == 0 && r->argc_max < 0 &&
+    if ((r->recv == LR_RECV_ANY || r->recv == LR_RECV_SOME) && !r->flags && r->argc_min == 0 &&
         strlen(r->name) == n && memcmp(r->name, b, n) == 0)
       sp_names_add(s, sp_names_target_tag(r->target), r->target, strlen(r->target));
 }
@@ -7450,11 +7451,13 @@ static void sp_names_call(SpNamesWalk *w, const pm_call_node_t *c) {
       if (reflect) sp_names_method(w->s, pm_string_source(str), pm_string_length(str));
       else sp_names_add(w->s, "c:", (const char *)pm_string_source(str), pm_string_length(str));
     }
-    else if (cget && t == PM_SYMBOL_NODE) {
+    else if (t == PM_SYMBOL_NODE) {
+      /* respond_to?(:to_set), send(:to_set): the method the Symbol names */
       const pm_string_t *str = &((const pm_symbol_node_t *)a0)->unescaped;
-      sp_names_add(w->s, "c:", (const char *)pm_string_source(str), pm_string_length(str));
+      if (reflect) sp_names_method(w->s, pm_string_source(str), pm_string_length(str));
+      else sp_names_add(w->s, "c:", (const char *)pm_string_source(str), pm_string_length(str));
     }
-    else if (a0 && t != PM_SYMBOL_NODE) sp_names_add(w->s, "dyn", "", 0);   /* (`req.method` names none) */
+    else if (a0) sp_names_add(w->s, "dyn", "", 0);   /* (`req.method` names none) */
   }
   /* a Symbol made of a String names what the String says */
   if (is_symbol_conversion(name)) sp_names_add(w->s, "dyn", "", 0);

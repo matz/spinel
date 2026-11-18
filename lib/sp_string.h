@@ -148,6 +148,18 @@ static inline sp_String*sp_String_new_inline_len(const char*s,int64_t len){
   sp_fd_publish(r);
   return r;
 }
+/* Foreign code can lend static bytes or a pointer into a managed String.
+   The inline constructor copies the bytes before allocating in either case. */
+static inline sp_String *sp_String_from_cstr(const char *s) {
+  return s ? sp_String_new_inline_len(s, (int64_t)strlen(s)) : NULL;
+}
+static inline sp_String *sp_String_from_cbinstr(const char *s, int len) {
+  sp_String *value = sp_String_new_inline_len(s ? s : "", s && len > 0 ? len : 0);
+  value->binary = 1;
+  sp_fd_publish(value);
+  return value;
+}
+
 /* Shared append core: `tl` is the operand byte length (strlen for the
    bare-literal-safe entry, sp_str_byte_len for the binary one). */
 /* the operand may be a view of this very payload (`s << s`, `s.replace(s)`):
@@ -209,7 +221,7 @@ static inline void sp_String_append_bin(sp_String*s,const char*t){
    callers pass bare C literals with NO marker -- they must use the plain
    sp_String_new above (reading s[-1] there is OOB and, under clang's rodata
    layout, misreads as frozen; cf. the #282 marker-probe lesson). */
-/* Symbol#to_s and #id2name: the symbol's name, frozen (lib/sp_string.c) */
+/* The frozen spelling for Symbol#name and internal byte readers. */
 const char*sp_sym_to_s_frozen(sp_sym id);
 /* The handle a literal or a live payload already has is found inline,
    and only a String that needs a new handle calls the constructor below:
@@ -253,9 +265,11 @@ static SP_NOINLINE sp_String*sp_String_new_static1(unsigned char c){
   h->next=(sp_str_hdr*)(void*)r;h->len=c!=0;
   data[-1]=(char)0xfd;data[0]=(char)c;
   r->data=data;r->len=c!=0;r->cap=CAP;
-  sp_str_lcache_drop(data);
-  /* (one byte below 0x80, or none, is 7-bit: indexing it is byte indexing) */
-  if(c<0x80)h->size=SP_STR_SIZE_ASCII7;
+  /* Fixed-width reads use the header. Writes that invalidate that fact
+     also drop the cache entry, and collection clears the workers' length
+     caches before releasing slab slots. */
+  if (c < 0x80) h->size = SP_STR_SIZE_ASCII7;
+  else sp_str_lcache_drop(data);
   return r;
 }
 static SP_NOINLINE sp_String*sp_String_new_shared_make(const char*s);

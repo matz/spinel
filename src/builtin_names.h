@@ -130,6 +130,7 @@ int is_len_alias(const char *n);      /* length size */
 int is_length_spelling(const char *n); /* size count empty? */
 int is_difference_spelling(const char *n); /* difference */
 int is_str_each_iter(const char *n);  /* each_char each_line each_byte each_codepoint: String's element iterators */
+int is_str_line_method(const char *name); /* String's lines and each_line */
 int is_freeze_name(const char *n);    /* freeze */
 int is_str_string_yield(const char *n); /* each_char each_line upto chars lines split scrub: String methods whose block takes a String */
 int is_unpack_name(const char *n); /* unpack: a String decoded into values, which a block takes one by one */

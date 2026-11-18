@@ -1,5 +1,8 @@
 15
 "HEY!"
+[[195, 169, 0, 120], "UTF-8"]
+[[255, 0, 120], "ASCII-8BIT"]
+nil
 6
 ArgumentError: needs a positive number
 TypeError

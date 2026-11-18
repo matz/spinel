@@ -9,6 +9,12 @@ module ExtKernel
     s.upcase + "!"
   end
 
+  # Embedded NULs, binary encoding, and nil survive an exported String return.
+  def self.sample(binary, missing)
+    return nil if missing
+    binary ? "\xff\0x".b : "é\0x"
+  end
+
   def self.total(arr)
     t = 0
     i = 0
@@ -69,6 +75,7 @@ TOPLEVEL_NOTE = "toplevel ran"
 if __FILE__ == $0
   p ExtKernel.triple(5)
   p ExtKernel.shout("hey")
+  p ExtKernel.sample(false, false)
   p ExtKernel.total([1, 2, 3])
   p ExtKernel.must_pos(9)
   p ExtKernel.pair_sum(["ab", "c"], ["def"])

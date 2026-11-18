@@ -133,10 +133,8 @@ sp_bool sp_str_start_with(const char*s,const char*p);
 sp_bool sp_str_end_with(const char*s,const char*suf);
 sp_StrArray *sp_str_partition(const char *s, const char *sep);
 sp_StrArray *sp_str_rpartition(const char *s, const char *sep);
+sp_String *sp_str_line_next(const char *s, const char *sep, size_t *offset, sp_bool chomp);
 sp_StrArray*sp_str_lines(const char*s);
-sp_StrArray*sp_str_lines_sep(const char*s,const char*sep);
-sp_StrArray*sp_str_lines_sep_chomp(const char*s,const char*sep);
-sp_StrArray*sp_str_lines_chomp(const char*s);
 const char*sp_str_byteslice(const char*s,sp_int start,sp_int len);
 const char*sp_str_byteslice1(const char*s,sp_int i);
 const char*sp_str_byteslice_range(const char*s,sp_int lo,sp_int hi,int excl,int lo_none,int hi_none);
@@ -168,7 +166,7 @@ const char*sp_str_dup(const char*s);
 static inline const char*sp_str_one_answer(const char*s){return s&&((const unsigned char*)s)[-1]==0xfd?sp_str_dup(s):s;}
 const char *sp_plain_char(unsigned char c);
 const char *sp_bin_char(unsigned char c);
-const char*sp_str_b(const char*s);
+sp_String *sp_String_binary_copy(const char *s);
 
 /* ---- utf8-dependent cold transforms (lib/sp_str.c, lib/sp_str_cold.c) ---- */
 /* nil-receiver raise: a nullable string carries nil as NULL, and CRuby

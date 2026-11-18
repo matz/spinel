@@ -1,0 +1,11 @@
+[Enumerator, Enumerator, nil, nil]
+["first/", "second"]
+["first", "second"]
+["next:", "end"]
+["next", "end"]
+[LineSubject, true, true]
+true
+true
+"later"
+["a", "b"]
+[[[128], "ASCII-8BIT"], [[129], "ASCII-8BIT"]]

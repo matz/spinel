@@ -123,6 +123,9 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg);
 /* A Bigint return: a nullable `sp_Bigint *` riding the register, boxed into
    the Ruby value it points at (NULL boxes as nil). */
 #define SP_BM_RET_BIGINT   10
+/* Native Ruby methods return String handles. The typed-array adapter still
+   returns a byte view under SP_BM_RET_STR. */
+#define SP_BM_RET_STRBUF   11
 #define SP_BM_RET_KIND(r)   ((r) & 0xff)
 #define SP_BM_RET_OBJ_OF(cls) (SP_BM_RET_OBJ | ((sp_int)(cls) << 8))
 typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int arity;
@@ -283,6 +286,7 @@ static inline sp_bool sp_bm_thunk_ok(sp_BoundMethod *m, sp_int argc) {
 static inline sp_RbVal sp_bm_box_ret(sp_BoundMethod *m, sp_int raw) {
   sp_int r = m ? m->legacy_ret : SP_BM_RET_INT;
   switch (SP_BM_RET_KIND(r)) {
+    case SP_BM_RET_STRBUF:    return sp_box_nullable_obj((void *)(uintptr_t)raw, SP_BUILTIN_STRBUF);
     case SP_BM_RET_STR:       return sp_box_str((const char *)(uintptr_t)raw);
     case SP_BM_RET_INT_ARRAY: return sp_box_nullable_obj((void *)(uintptr_t)raw, SP_BUILTIN_INT_ARRAY);
     case SP_BM_RET_STR_ARRAY: return sp_box_nullable_obj((void *)(uintptr_t)raw, SP_BUILTIN_STR_ARRAY);

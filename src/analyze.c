@@ -28022,14 +28022,7 @@ static void an_returns_by_scope(Compiler *c, int **start, int **list) {
   free(fill);
   *start = st; *list = ls;
 }
-/* --share-strings: does statement list `st` end in nil, or in a tail
-   an_tail_is_shared_handle accepts? */
-/* What a return tail answers, counted by an_tail_is_shared_handle: shared
-   slot reads and nils. */
-/* fresh_ok (--share-strings, the pickup's own ask): a tail answering a
-   fresh String (share_node_fresh) is admitted too, counted in fresh; bangs
-   counts the reads that are a bang on a handle (ret_pub_bang) */
-typedef struct { int reads, nils, fresh_ok, fresh, mi, param, arg_depth, bangs, in_begin; } TailCount;
+typedef struct { int mi, param; } ReturnOrigin;
 /* Is node a String `||` or `&&` whose left operand is a String, so that it
    answers one of its operands or nil (never false): the tail walk takes
    its operands as arms, and emit_tail_value emits them so. */
@@ -28046,174 +28039,16 @@ int an_tail_logic_op(Compiler *c, int node) {
    still being walked (a cycle) answers this round; with meet set, each
    method's answer this round is also held to no more than its prev
    (an_fresh_meet) */
-typedef struct RetHandles { unsigned char *st; int *prev; int *ret_start, *ret_list; int fresh, settling, meet; int *par; } RetHandles;
-static int an_tail_handle(Compiler *c, RetHandles *R, int n, TailCount *tc);
-static int an_tail_is_shared_handle(Compiler *c, int node, int nil_ok, TailCount *n, RetHandles *R);
-/* A box a seeded String method answers: its unboxing at the return
-   publishes the handle the box holds (sp_poly_unbox_s_pub). */
-/* A boxed `x || y` / `x && y` builds its box from its operands. A String
-   call's operand is boxed from the handle the call publishes (its pickup),
-   as an unseeded method's is (share_lift_seeded_tail marks it), where it
-   holds one, or lifted into a new handle where it answers a new String; any
-   other call's answer is boxed from its bytes, which holds no handle, so
-   that operand keeps the tail refused. A box, a variable or a literal
-   operand is boxed whole. */
-static int an_boxed_logic_ok(Compiler *c, int node) {
-  const NodeTable *nt = c->nt;
-  node = nt_paren_single(nt, node);
-  if (node < 0) return 0;
-  NodeKind k = nt_kind(nt, node);
-  if (k == NK_OrNode || k == NK_AndNode)
-    return an_boxed_logic_ok(c, nt_ref(nt, node, "left")) && an_boxed_logic_ok(c, nt_ref(nt, node, "right"));
-  return k != NK_CallNode || comp_ntype_settled(c, node) == TY_POLY || repr_call_returns_handle(c, node) ||
-         share_value_fresh(c, node, 0) || share_plan_box_handle(c, node);
-}
-static int an_tail_boxed_string(Compiler *c, int node, TailCount *tc) {
-  int mi = tc->mi;
-  if (tc->in_begin || mi <= 0 || !c->scopes[mi].ret_rbs_seeded ||
-      c->scopes[mi].ret != TY_STRING || node < 0 || comp_ntype_settled(c, node) != TY_POLY) return 0;
-  /* the kinds whose unboxing at the return is the one that publishes */
-  NodeKind k = nt_kind(c->nt, node);
-  if (k == NK_OrNode || k == NK_AndNode) {
-    if (!an_boxed_logic_ok(c, node)) return 0;
-    /* its call operands are boxed as an unseeded method's are (the lift
-       emit_boxed reads), a call by the handle it publishes */
-    share_lift_value(c, node);
-    return 1;
-  }
-  return k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || k == NK_CallNode;
-}
-static int an_stmts_tail_shared(Compiler *c, int st, int nil_ok, TailCount *tc, RetHandles *R) {
-  int n = 0; const int *b = st >= 0 && nt_kind(c->nt, st) == NK_StatementsNode ? nt_arr(c->nt, st, "body", &n) : NULL;
-  if (st < 0) { tc->nils += nil_ok; return nil_ok; }
-  return n > 0 && (R ? an_tail_handle(c, R, b[n - 1], tc)
-                      : an_tail_is_shared_handle(c, b[n - 1], nil_ok, tc, NULL));
-}
-/* A method tail that publishes the shared handle it answers, for the
-   deep-return pickup (an_returns_shared_handles): a shared slot's read
-   (an_arg_is_shared_handle, counted in tc->reads), and under
-   --share-strings a conditional each of whose arms ends in one (`f ? x :
-   y`, an elsif chain) and a begin each of whose arms does (its body's, each
-   rescue's, its else's; an ensure's value is dropped). With nil_ok, nil
-   too, and an arm that answers it, written or missing (`x if f`, `if f;
-   else; x; end`, `begin; x; rescue; nil; end`), counted in tc->nils: nil
-   publishes nothing, and the pickup reads the call's nil as nil whatever
-   an earlier read published (an_tail_answers_nil). With the settled return
-   analysis, each arm asks an_tail_handle too: a call can publish the handle,
-   and its method's active-visit guard bounds recursive arms. Case/when and
-   case/in share the same arm list for the pickup and settled return walk.
-   A builtin raise leaves no value, so contributes neither a read nor nil;
-   nor does a loop that never completes (`while true` with no break of its
-   own, loop_never_completes), whose `return`s the walk takes apart. */
-static int an_tail_is_shared_handle(Compiler *c, int node, int nil_ok, TailCount *tc, RetHandles *R) {
-  const NodeTable *nt = c->nt;
-  NodeKind k = node >= 0 ? nt_kind(nt, node) : NK_NONE;
-  if ((an_call_raises(c, node) || loop_never_completes(c, node))) return 1;
-  if (k == NK_NilNode) {
-    if (g_repr_check && tc->mi > 0 && (!R || !R->fresh)) repr_channel_predict(c, node, tc->mi, RCH_NIL);
-    tc->nils += nil_ok; return nil_ok;
-  }
-  if (k == NK_ParenthesesNode) return an_stmts_tail_shared(c, nt_ref(nt, node, "body"), nil_ok, tc, R);
-  if (k == NK_BeginNode) {
-    /* the body's value is the begin's only when no else follows it (a box
-       its arms answer is unboxed in the begin's result slot, which does not
-       publish: in_begin) */
-    int be = nt_ref(nt, node, "else_clause"), ok = 1;
-    tc->in_begin++;
-    if (be < 0 && !an_stmts_tail_shared(c, nt_ref(nt, node, "statements"), nil_ok, tc, R)) ok = 0;
-    for (int rc = nt_ref(nt, node, "rescue_clause"); ok && rc >= 0; rc = nt_ref(nt, rc, "subsequent"))
-      if (!an_stmts_tail_shared(c, nt_ref(nt, rc, "statements"), nil_ok, tc, R)) ok = 0;
-    ok = ok && (be < 0 || an_stmts_tail_shared(c, nt_ref(nt, be, "statements"), nil_ok, tc, R));
-    tc->in_begin--;
-    return ok;
-  }
-  if ((k == NK_CaseNode || k == NK_CaseMatchNode)) {
-    int n = 0; const int *arms = nt_arr(nt, node, "conditions", &n);
-    for (int i = 0; i < n; i++)
-      if (!an_stmts_tail_shared(c, nt_ref(nt, arms[i], "statements"), nil_ok, tc, R)) return 0;
-    int el = nt_ref(nt, node, "else_clause");
-    /* Without an else, a failed pattern raises NoMatchingPatternError. */
-    if (el < 0 && k == NK_CaseMatchNode) return 1;
-    return an_stmts_tail_shared(c, el >= 0 ? nt_ref(nt, el, "statements") : -1, nil_ok, tc, R);
-  }
-  if (R && k == NK_ReturnNode) {
-    int args = nt_ref(nt, node, "arguments"), n = 0;
-    const int *v = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
-    if (n == 0) { tc->nils += nil_ok; return nil_ok; }
-    return n == 1 && an_tail_handle(c, R, v[0], tc);
-  }
-  if (k == NK_RescueModifierNode) {
-    int e = nt_ref(nt, node, "expression"), r = nt_ref(nt, node, "rescue_expression");
-    tc->in_begin++;
-    int ok = R ? an_tail_handle(c, R, e, tc) && an_tail_handle(c, R, r, tc)
-               : an_tail_is_shared_handle(c, e, nil_ok, tc, NULL) &&
-                 an_tail_is_shared_handle(c, r, nil_ok, tc, NULL);
-    tc->in_begin--;
-    return ok;
-  }
-  /* A String `x || y` answers x, or y where x answers nil: both are arms
-     (`a.squeeze!("b") || a` answers a's String either way). A String
-     `x && y` answers y, or the nil x answers: y is an arm beside a nil. */
-  if (an_tail_logic_op(c, node)) {
-    int l = nt_ref(nt, node, "left"), r = nt_ref(nt, node, "right");
-    if (k == NK_AndNode) {
-      if (!nil_ok) return 0;
-      tc->nils++;
-    }
-    else if (!(R ? an_tail_handle(c, R, l, tc) : an_tail_is_shared_handle(c, l, nil_ok, tc, NULL))) return 0;
-    return R ? an_tail_handle(c, R, r, tc) : an_tail_is_shared_handle(c, r, nil_ok, tc, NULL);
-  }
-  if (k != NK_IfNode && k != NK_UnlessNode) {
-    if (R && R->fresh) return share_value_fresh(c, node, 0);
-    int ok = an_arg_is_shared_handle(c, node) || strbuf_builtin_tail(c, node) || an_tail_boxed_string(c, node, tc);
-    tc->reads += ok;
-    /* a bang on a handle (strbuf_builtin_tail) answers it, or nil */
-    if (ok && strbuf_bang_tail(c, node)) {
-      tc->nils += nil_ok;
-      tc->bangs++;
-    }
-    if (g_repr_check && tc->mi > 0 && ok) repr_channel_predict(c, node, tc->mi, RCH_PUBLISH);
-    return ok;
-  }
-  int el = nt_ref(nt, node, k == NK_IfNode ? "subsequent" : "else_clause");
-  if (!an_stmts_tail_shared(c, nt_ref(nt, node, "statements"), nil_ok, tc, R)) return 0;
-  if (el < 0) { tc->nils += nil_ok; return nil_ok; }
-  return nt_kind(nt, el) == NK_ElseNode ? an_stmts_tail_shared(c, nt_ref(nt, el, "statements"), nil_ok, tc, R)
-                                        : R ? an_tail_handle(c, R, el, tc) : an_tail_is_shared_handle(c, el, nil_ok, tc, NULL);
-}
-/* Can method mi answer nil, through its last statement or a `return`? The
-   same walk that admitted the tail for the pickup counts its nils, so the
-   two cannot disagree (asking a conditional's arms apart missed an empty
-   one); a last statement it does not admit answers yes, and the returns'
-   nils are the ones an_returns_shared_handles counted. */
-int an_tail_answers_nil(Compiler *c, int mi) {
-  TailCount tc = { 0, 0 };
-  return !an_tail_is_shared_handle(c, scope_body_last(c, mi), 1, &tc, NULL) || tc.nils > 0 ||
-         c->scopes[mi].ret_nil_pickup;
-}
-/* --share-strings, once the analysis settles: a method whose every return
-   path reads a String the rule shares (an_returns_shared_handles), or calls
-   (or `super`s into) methods that each answer one, answers that String, and
-   the read that answers it publishes the handle last (sp_strbuf_read_pub):
-   any call of the method can take the handle as the deep-return pickup does
-   (Scope.ret_handle). A method spliced at its calls (one that yields, a proc
-   form) has no call to pick up from; one typed other than String answers
-   no handle to pick up. Fresh String and nil arms use the pickup's existing
-   fresh-tail clearing and nil check. Each method is decided once, its tail calls'
-   targets first (a cycle answers no in the handle walk, and in the fresh
-   walk what an_fresh_returns' previous round found), and so is a method whose answer a
-   tail's own test asks (a builtin tail over a call, strbuf_builtin_tail,
-   asks whether that call publishes): the walk is Compiler.ret_walk while
-   it runs, and scope_ret_handle, scope_ret_fresh and scope_ret_param decide
-   such a method where they are asked, not in the order the methods are
-   defined. Each such decision runs on the stack of the one that asked it
-   (about a dozen frames a link), so a chain of them is bounded
-   (RH_SETTLE_MAX, well inside the 8 MB main stack the compiler runs on):
-   past the bound an answer is read as the walk has it so far, undecided
-   (no), and the method is decided where the walk reaches it. */
+typedef struct ReturnWalk {
+  unsigned char *st;
+  int *prev, *ret_start, *ret_list;
+  int settling, meet;
+} ReturnWalk;
 enum { RH_UNSEEN, RH_BUSY, RH_YES, RH_NO };
 enum { RH_SETTLE_MAX = 256 };
-static int an_ret_handle(Compiler *c, RetHandles *R, int mi);
+static int an_ret_origin(Compiler *c, ReturnWalk *R, int mi);
+static int an_tail_origin(Compiler *c, ReturnWalk *R, int n, ReturnOrigin *tc);
+
 /* A super in an instance method `inspect` or `to_s` (no arguments of its
    own) of a plain class -- no ancestor of the program defines the name,
    none embeds a builtin or is a Struct, a native class or an Exception,
@@ -28265,16 +28100,10 @@ int an_super_struct_text(Compiler *c, int n, int mi) {
   CallPlan p = cplan_user_fresh(c, n);
   return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_STRUCT;
 }
-/* Method mi is decided: yes or no, and for the handle walk its field. */
-static int an_ret_decided(Compiler *c, RetHandles *R, int mi, int yes) {
-  R->st[mi] = yes ? RH_YES : RH_NO;
-  if (!R->fresh) c->scopes[mi].ret_handle = (unsigned char)yes;
-  return yes;
-}
 /* A parameter's identity survives mutation, but not rebinding. The local
    write index is a bucket: check both its scope and name. All borrowed
    tails must name the same parameter of the method being decided. */
-static int an_tail_param(Compiler *c, int n, TailCount *tc) {
+static int an_tail_param(Compiler *c, int n, ReturnOrigin *tc) {
   const NodeTable *nt = c->nt;
   if (n < 0 || nt_kind(nt, n) != NK_LocalVariableReadNode) return 0;
   Scope *m = &c->scopes[tc->mi];
@@ -28289,7 +28118,7 @@ static int an_tail_param(Compiler *c, int n, TailCount *tc) {
 }
 /* A conditional's arm a in the fresh walk: what its statements end in, a
    nested conditional's arms, or nil when it is empty or missing. */
-static int an_tail_arm(Compiler *c, RetHandles *R, int a, TailCount *tc) {
+static int an_tail_arm(Compiler *c, ReturnWalk *R, int a, ReturnOrigin *tc) {
   const NodeTable *nt = c->nt;
   a = nt_paren_single(nt, a);
   if (a >= 0 && nt_kind(nt, a) == NK_ElseNode) a = nt_ref(nt, a, "statements");
@@ -28297,13 +28126,9 @@ static int an_tail_arm(Compiler *c, RetHandles *R, int a, TailCount *tc) {
     int n = 0; const int *bb = nt_arr(nt, a, "body", &n);
     a = n > 0 ? bb[n - 1] : -1;
   }
-  if (a < 0 || nt_kind(nt, a) == NK_NilNode) { tc->nils++; return 1; }
-  return an_tail_handle(c, R, a, tc);
+  if (a < 0 || nt_kind(nt, a) == NK_NilNode) return 1;
+  return an_tail_origin(c, R, a, tc);
 }
-/* Does tail node n answer a shared handle it publishes last: a handle's
-   read, or a call or `super` whose every target method does? A nullable
-   tail can also answer nil, which the existing pickup tests before using
-   the return channel. Count it with the pickup's own tail predicate. */
 /* Is tail n a String method answering its receiver (`<<`, concat,
    force_encoding: the String share row's BSH_RECV), called on a typed
    String no reopening gives a method of the name? It answers what its
@@ -28563,7 +28388,7 @@ int an_target_answers_new(Compiler *c, int mi) {
 /* The fresh walk's tail call n past the plan's list (#9258): a new String
    where the builtin arms answer one and every method of the name does, or
    answers none or Object's own (an_target_answers_new). */
-static int an_tail_name_fresh(Compiler *c, RetHandles *R, int n, TailCount *tc) {
+static int an_tail_name_fresh(Compiler *c, ReturnWalk *R, int n) {
   if (!share_builtin_fresh(c, n)) return 0;
   int *mis = malloc(sizeof(int) * (size_t)(c->nscopes + 1));
   if (!mis) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -28571,189 +28396,81 @@ static int an_tail_name_fresh(Compiler *c, RetHandles *R, int n, TailCount *tc) 
   for (int i = 0; ok && i < cnt; i++) {
     if (an_target_answers_new(c, mis[i])) continue;
     Scope *m = &c->scopes[mis[i]];
-    if (!an_ret_handle(c, R, mis[i]) || !m->ret_fresh) ok = 0;
+    if (!an_ret_origin(c, R, mis[i]) || !m->ret_fresh) ok = 0;
   }
   free(mis);
-  if (ok) tc->reads++;
   return ok;
 }
-/* The handle walk's tail call n past the plan's list (#9258): every method
-   it can run (share_name_targets) publishes the handle, answers a new String
-   (which then clears the side channel at its tails, ret_pub_fresh), or
-   answers a String literal where nothing between the pickup's reset and its
-   return can publish another (share_plan_literal_pickup_clean), and one
-   publishes -- as for a call whose targets the plan lists. */
-static int an_tail_name_handle(Compiler *c, RetHandles *R, int n, TailCount *tc) {
-  int *mis = malloc(sizeof(int) * (size_t)(c->nscopes + 1) * 2);
-  if (!mis) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int *fresh_t = mis + c->nscopes + 1;
-  int cnt = share_name_targets(c, n, mis, c->nscopes + 1), ok = cnt > 0, npub = 0, nfresh = 0;
-  for (int i = 0; ok && i < cnt; i++) {
-    Scope *m = &c->scopes[mis[i]];
-    if (an_ret_handle(c, R, mis[i])) { npub++; continue; }
-    if (scope_always_raises(c, mis[i]) || share_plan_literal_pickup_clean(c, n, mis[i])) continue;
-    if (m->ret_fresh && m->ret == TY_STRING) fresh_t[nfresh++] = mis[i];
-    else ok = 0;
-  }
-  if (ok && npub == 0) ok = 0;
-  if (ok && nfresh > 0) {
-    for (int i = 0; i < nfresh; i++) c->scopes[fresh_t[i]].ret_pub_fresh = 1;
-    tc->fresh++;
-  }
-  free(mis);
-  if (!ok) return 0;
-  tc->reads++;
-  if (g_repr_check) repr_channel_predict(c, n, tc->mi, RCH_PUBLISH);
-  return 1;
+/* The origin walk distinguishes a missing arm, which supplies nil, from
+   a present statement list with no last expression. */
+static int an_origin_stmts(Compiler *c, ReturnWalk *R, int st, ReturnOrigin *tc) {
+  if (st < 0) return 1;
+  int count = 0;
+  const int *body = nt_kind(c->nt, st) == NK_StatementsNode ? nt_arr(c->nt, st, "body", &count) : NULL;
+  return count > 0 && an_tail_origin(c, R, body[count - 1], tc);
 }
-static int an_tail_handle(Compiler *c, RetHandles *R, int n, TailCount *tc) {
+static int an_origin_value(Compiler *c, ReturnWalk *R, int n, ReturnOrigin *tc) {
   const NodeTable *nt = c->nt;
-  /* the fresh walk: a receiver-answering String method's tail is its
-     receiver's (a new String appended to is one still), and so is a tap's
-     whose block cannot name it */
-  if (R->fresh && n >= 0 && nt_kind(nt, n) == NK_CallNode && (an_tail_recv_answer(c, n) || an_tail_tap_blind(c, n)))
-    return an_tail_handle(c, R, nt_ref(nt, n, "receiver"), tc);
-  if (!R->fresh && c->n_cext_extensions && n >= 0 &&
-      nt_kind(nt, n) == NK_InstanceVariableReadNode && comp_ntype(c, n) == TY_STRBUF) {
-    if (g_repr_check) repr_channel_predict(c, n, tc->mi, RCH_PUBLISH);
-    tc->reads++;
-    return 1;
-  }
-  if(!R->fresh && c->n_cext_extensions && n>=0 && nt_kind(nt,n)==NK_LocalVariableReadNode) {
-    Scope *scope=comp_scope_of(c,n);
-    const char *name=nt_str(nt,n,"name");
-    LocalVar *local=scope && name ? scope_local(scope,name) : NULL;
-    if(local && local->type==TY_STRBUF) {
-      if(g_repr_check)repr_channel_predict(c,n,tc->mi,RCH_PUBLISH);
-      tc->reads++;return 1;
-    }
-  }
-  /* the fresh walk: a local the method builds its answer up in */
-  if (R->fresh && an_builder_local_fresh(c, tc->mi, n)) { tc->fresh++; return 1; }
-  if (an_tail_is_shared_handle(c, n, 1, tc, R)) return 1;
-  if (R->fresh && an_tail_param(c, n, tc)) return 1;
   NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
-  /* the fresh walk: a conditional answers what each arm ends in (a
-     missing arm, nil); a builtin's new String, as the share walk found */
-  if (R->fresh && (k == NK_IfNode || k == NK_UnlessNode))
-    return an_tail_arm(c, R, nt_ref(nt, n, "statements"), tc) &&
-           an_tail_arm(c, R, nt_ref(nt, n, k == NK_IfNode ? "subsequent" : "else_clause"), tc);
-  if (k == NK_CallNode && comp_ntype_settled(c, n) == TY_NIL) { tc->nils++; return 1; }
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    /* a super into a native class's binding that keeps the String it is
-       handed answers that String's handle (#9258) */
-    if (!R->fresh && repr_super_native_keeps(c, n)) {
-      if (g_repr_check) repr_channel_predict(c, n, tc->mi, RCH_PUBLISH);
-      tc->reads++;
-      return 1;
-    }
-    /* Exception's text publishes the message's handle (the super emitter's
-       exception arm) */
-    int tos[16];
-    if (!R->fresh && super_reaches_exc_text(c, n, 1) &&
-        (!is_message_name(c->scopes[tc->mi].name) ||
-         exc_message_super_to_s(c, n, tos, 16) >= 0)) {
-      if (g_repr_check) repr_channel_predict(c, n, tc->mi, RCH_PUBLISH);
-      tc->reads++;
-      return 1;
-    }
-    const CallPlan p = cplan_user_fresh(c, n);
-    int mi = p.mi;
-    /* Kernel#inspect / #to_s through super: a new String (an_super_object_text) */
-    if (R->fresh && (p.dispatch != CP_DIRECT || mi <= 0) && an_super_object_text(c, n, tc->mi)) {
-      if (g_repr_check) repr_channel_predict(c, n, tc->mi, RCH_CLEAR);
-      tc->fresh++;
-      return 1;
-    }
-    if (p.dispatch != CP_DIRECT || mi <= 0 || !an_ret_handle(c, R, mi)) return 0;
-    if (g_repr_check && !R->fresh) repr_channel_predict(c, n, tc->mi, RCH_PUBLISH);
-    tc->reads++;
-    return !R->fresh || c->scopes[mi].ret_fresh;
+  if (an_call_raises(c, n) || loop_never_completes(c, n) || k == NK_NilNode) return 1;
+  if (k == NK_ParenthesesNode) return an_origin_stmts(c, R, nt_ref(nt, n, "body"), tc);
+  if (k == NK_BeginNode) {
+    int el = nt_ref(nt, n, "else_clause");
+    if (el < 0 && !an_origin_stmts(c, R, nt_ref(nt, n, "statements"), tc)) return 0;
+    for (int rc = nt_ref(nt, n, "rescue_clause"); rc >= 0; rc = nt_ref(nt, rc, "subsequent"))
+      if (!an_origin_stmts(c, R, nt_ref(nt, rc, "statements"), tc)) return 0;
+    return el < 0 || an_origin_stmts(c, R, nt_ref(nt, el, "statements"), tc);
   }
-  if (k != NK_CallNode || (!R->fresh && comp_ntype_settled(c, n) != TY_STRING)) return 0;
-  if (R->fresh && cplan_user_fresh(c, n).via == UC_POLY && !share_builtin_fresh(c, n)) return 0;
-  int mis[CPT_MAX];
-  int cnt = cplan_targets(c, n, mis, CPT_MAX);
-  /* past the plan's list: every method of the name (#9258) */
-  if (R->fresh && cnt == CPT_UNKNOWN) return an_tail_name_fresh(c, R, n, tc);
-  if (!R->fresh && cnt == CPT_UNKNOWN) return an_tail_name_handle(c, R, n, tc);
-  /* A raising arm contributes no String. A user override still returns. */
-  if (R->fresh && cnt == 0 && isa_node_diverges(c, n) && !bare_call_class_owned(c, n)) return 1;
-  if (cnt <= 0) return 0;
-  /* (the handle walk: a target answering only new Strings, as the fresh
-     walk settled, beside targets that publish a handle, clears the return
-     channel at its tails, ret_pub_fresh, so the pickup wraps its String) */
-  int fresh_t[CPT_MAX], nfresh = 0, npub = 0;
-  for (int i = 0; i < cnt; i++) {
-    /* (a target that cannot bind the arguments only raises) */
-    if (R->fresh && !cplan_target_binds(c, n, mis[i])) continue;
-    /* (a class method no box can reach, or a method of a class the
-       receiver's class fact rules out: an inspect of a box that holds its
-       own object or a String reaches no other class's inspect, #9258) */
-    if (R->fresh && (!share_target_reachable(c, n, mis[i]) || !share_target_armed(c, n, mis[i]))) continue;
-    Scope *m = &c->scopes[mis[i]];
-    if (!an_ret_handle(c, R, mis[i])) {
-      if (R->fresh || !m->ret_fresh || m->ret != TY_STRING) return 0;
-      fresh_t[nfresh++] = mis[i];
-      continue;
-    }
-    npub++;
-    if (R->fresh && !m->ret_fresh) return 0;
+  if (k == NK_CaseNode || k == NK_CaseMatchNode) {
+    int count = 0;
+    const int *arms = nt_arr(nt, n, "conditions", &count);
+    for (int i = 0; i < count; i++)
+      if (!an_origin_stmts(c, R, nt_ref(nt, arms[i], "statements"), tc)) return 0;
+    int el = nt_ref(nt, n, "else_clause");
+    return an_origin_stmts(c, R, el >= 0 ? nt_ref(nt, el, "statements") : -1, tc);
   }
-  if (nfresh > 0) {
-    if (npub == 0) return 0;
-    for (int i = 0; i < nfresh; i++) c->scopes[fresh_t[i]].ret_pub_fresh = 1;
-    tc->fresh++;
+  if (k == NK_ReturnNode) {
+    int args = nt_ref(nt, n, "arguments"), count = 0;
+    const int *v = args >= 0 ? nt_arr(nt, args, "arguments", &count) : NULL;
+    return count == 0 || (count == 1 && an_tail_origin(c, R, v[0], tc));
   }
-  tc->reads++;
-  if (g_repr_check && !R->fresh) repr_channel_predict(c, n, tc->mi, RCH_PUBLISH);
-  return 1;
+  if (k == NK_RescueModifierNode)
+    return an_tail_origin(c, R, nt_ref(nt, n, "expression"), tc) &&
+           an_tail_origin(c, R, nt_ref(nt, n, "rescue_expression"), tc);
+  if (an_tail_logic_op(c, n))
+    return (k == NK_AndNode || an_tail_origin(c, R, nt_ref(nt, n, "left"), tc)) &&
+           an_tail_origin(c, R, nt_ref(nt, n, "right"), tc);
+  if (k != NK_IfNode && k != NK_UnlessNode) return share_value_fresh(c, n, 0);
+  return an_tail_arm(c, R, nt_ref(nt, n, "statements"), tc) &&
+         an_tail_arm(c, R, nt_ref(nt, n, k == NK_IfNode ? "subsequent" : "else_clause"), tc);
 }
-/* Is body tail n an append chain over a shared handle's read (`buf << a <<
-   b`)? The tail appends in place and answers the base's read, which
-   publishes it (emit_stmt_tail_inner's `<<` arm). */
-static int an_tail_append_chain(Compiler *c, int n) {
-  int chain[64], base = -1;
-  return n >= 0 && nt_kind(c->nt, n) == NK_CallNode && str_append_chain(c, n, chain, &base) > 0 &&
-         an_arg_is_shared_handle(c, base);
-}
-/* Is `return` node ret inside a begin with an ensure (a def's or a block's
-   own `ensure` is one)? Its value is held in a result slot until the ensure
-   has run, which does not publish a box's handle. */
-static int an_return_in_ensure(Compiler *c, RetHandles *R, int ret) {
+
+/* Follow the origins used by the sharing analysis. The method ABI carries
+   its result independently of this optional provenance fact. */
+static int an_tail_origin(Compiler *c, ReturnWalk *R, int n, ReturnOrigin *tc) {
   const NodeTable *nt = c->nt;
-  if (!R->par) R->par = an_parent_map(nt);
-  if (!R->par) return 1;
-  for (int p = R->par[ret]; p >= 0; p = R->par[p]) {
-    NodeKind k = nt_kind(nt, p);
-    if (k == NK_DefNode) return 0;
-    if (k == NK_BeginNode && nt_ref(nt, p, "ensure_clause") >= 0) return 1;
+  NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
+  if (k == NK_CallNode && (an_tail_recv_answer(c, n) || an_tail_tap_blind(c, n)))
+    return an_tail_origin(c, R, nt_ref(nt, n, "receiver"), tc);
+  if (an_builder_local_fresh(c, tc->mi, n) || an_origin_value(c, R, n, tc) || an_tail_param(c, n, tc)) return 1;
+  if (k == NK_CallNode && comp_ntype_settled(c, n) == TY_NIL) return 1;
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+    const CallPlan p = cplan_user_fresh(c, n);
+    if (p.dispatch != CP_DIRECT || p.mi <= 0) return an_super_object_text(c, n, tc->mi);
+    return an_ret_origin(c, R, p.mi) && c->scopes[p.mi].ret_fresh;
   }
-  return 0;
+  if (k != NK_CallNode || (cplan_user_fresh(c, n).via == UC_POLY && !share_builtin_fresh(c, n))) return 0;
+  int mis[CPT_MAX], cnt = cplan_targets(c, n, mis, CPT_MAX);
+  if (cnt == CPT_UNKNOWN) return an_tail_name_fresh(c, R, n);
+  if (cnt == 0) return isa_node_diverges(c, n) && !bare_call_class_owned(c, n);
+  for (int i = 0; i < cnt; i++) {
+    if (!cplan_target_binds(c, n, mis[i]) || !share_target_reachable(c, n, mis[i]) ||
+        !share_target_armed(c, n, mis[i])) continue;
+    if (!an_ret_origin(c, R, mis[i]) || !c->scopes[mis[i]].ret_fresh) return 0;
+  }
+  return cnt > 0;
 }
-static int an_ret_handle_body(Compiler *c, RetHandles *R, int mi) {
-  Scope *m = &c->scopes[mi];
-  /* A String reopening's proc form reads the same incoming handle. */
-  if (!R->fresh && m->def_node >= 0 && m->is_proc_form && m->ret == TY_STRING && repr_self_handle(c, mi)) return 1;
-  /* A proc form is emitted as a function and publishes its tails just as
-     a non-yielding method does; only the original inline body has no call. */
-  return !(m->def_node < 0 || (!R->fresh && !m->is_proc_form && (m->yields || m->is_lowered_yield)) ||
-           (m->ret != TY_STRING && (!R->fresh || m->ret != TY_POLY)));
-}
-/* Is n, the last statement of a method no signature types (not an arm of
-   it, and no `return`, whose value may wait in an ensure's result slot,
-   which publishes nothing), an iterator over a box answering its receiver
-   (`s.scan(re) { }`, strbuf_iter_box_tail)? It answers the box's String,
-   so it publishes the box's handle, as a seeded method's tail does
-   (an_tail_boxed_string); a box with none (a new String, nil) clears the
-   side channel, and it may answer nil. */
-static int an_ret_box_tail(Compiler *c, RetHandles *R, int n, TailCount *tc) {
-  if (R->fresh || c->scopes[tc->mi].ret_rbs_seeded || strbuf_iter_box_tail(c, n) < 0) return 0;
-  if (g_repr_check) repr_channel_predict(c, n, tc->mi, RCH_PUBLISH);
-  tc->reads++;
-  tc->nils++;
-  return 1;
-}
+
 /* The fresh walk's answer for method mi this round, taken as no more than
    the previous round's: only new Strings ranks above its parameter p,
    which ranks above no, and two different parameters meet at no. A
@@ -28761,7 +28478,7 @@ static int an_ret_box_tail(Compiler *c, RetHandles *R, int n, TailCount *tc) {
    settle (a method answering its parameter once a cycle answers no, and
    no once it answers its parameter, would turn round forever), and where
    they settle every answer holds of the answers the round read. */
-static void an_fresh_meet(Compiler *c, RetHandles *R, int mi) {
+static void an_fresh_meet(Compiler *c, ReturnWalk *R, int mi) {
   Scope *m = &c->scopes[mi];
   int p = R->prev[mi];
   if (p == 1 || R->st[mi] != RH_YES) return;
@@ -28774,53 +28491,29 @@ static void an_fresh_meet(Compiler *c, RetHandles *R, int mi) {
   m->ret_fresh = 0;
   m->ret_param = p - 2;
 }
-static int an_ret_handle(Compiler *c, RetHandles *R, int mi) {
-  if (R->st[mi] != RH_UNSEEN) return R->st[mi] == RH_YES || (R->st[mi] == RH_BUSY && R->prev && R->prev[mi]);
+static int an_ret_origin(Compiler *c, ReturnWalk *R, int mi) {
+  if (R->st[mi] != RH_UNSEEN) return R->st[mi] == RH_YES || (R->st[mi] == RH_BUSY && R->prev[mi]);
   Scope *m = &c->scopes[mi];
-  if (!R->fresh && m->yields && repr_self_handle(c, mi)) {
-    int pf = scope_proc_form_of(c, mi);
-    R->st[mi] = RH_BUSY;
-    return an_ret_decided(c, R, mi, pf >= 0 && an_ret_handle(c, R, pf));
+  if (m->def_node < 0 || (m->ret != TY_STRING && m->ret != TY_POLY)) {
+    R->st[mi] = RH_NO;
+    return 0;
   }
-  if (!an_ret_handle_body(c, R, mi)) return an_ret_decided(c, R, mi, 0);
   R->st[mi] = RH_BUSY;
   const NodeTable *nt = c->nt;
-  int ok = 1, saw = 0;
   int last = scope_body_last(c, mi);
-  /* a body with its own rescue is a begin, whose arms answer */
   if (last < 0 && m->body >= 0 && nt_kind(nt, m->body) == NK_BeginNode) last = m->body;
-  /* The settled walk accepts fresh arms beside handle reads, as the
-     earlier pickup does; their tails clear the return channel. */
-  TailCount tc = { .fresh_ok = 1, .mi = mi, .param = -1 };
-  if (last >= 0) {
-    saw = 1;
-    ok = an_ret_box_tail(c, R, last, &tc) || an_tail_handle(c, R, last, &tc);
-    /* The implicit append tail publishes its base's handle read too. */
-    if (!ok && !R->fresh && an_tail_append_chain(c, last)) { tc.reads++; ok = 1; }
-  }
+  ReturnOrigin tc = { .mi = mi, .param = -1 };
+  int saw = last >= 0, ok = !saw || an_tail_origin(c, R, last, &tc);
   for (int r = R->ret_start[mi]; ok && r < R->ret_start[mi + 1]; r++) {
-    int ra = nt_ref(nt, R->ret_list[r], "arguments");
-    int rn = 0; const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rn) : NULL;
+    int ra = nt_ref(nt, R->ret_list[r], "arguments"), rn = 0;
+    const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rn) : NULL;
     saw = 1;
-    if (rn == 0) tc.nils++;
-    else {
-      int ens = an_return_in_ensure(c, R, R->ret_list[r]);
-      tc.in_begin += ens;
-      ok = rn == 1 && an_tail_handle(c, R, rv[0], &tc);
-      tc.in_begin -= ens;
-    }
+    ok = rn == 0 || (rn == 1 && an_tail_origin(c, R, rv[0], &tc));
   }
-  if (tc.nils && !R->fresh) m->ret_nil_pickup = 1;
-  if (ok && tc.reads > 0 && tc.fresh) m->ret_pub_fresh = 1;
-  if (ok && tc.reads > 0 && tc.bangs && !R->fresh) m->ret_pub_bang = 1;
-  /* An all-raising body publishes no handle for a caller to pick up (a fresh
-     String answered beside no handle read is the fresh pickup's own). */
-  an_ret_decided(c, R, mi, ok && saw && (R->fresh || tc.reads > 0));
-  if (R->fresh) {
-    m->ret_fresh = R->st[mi] == RH_YES && tc.param < 0;
-    m->ret_param = R->st[mi] == RH_YES ? tc.param : -1;
-    if (R->meet) an_fresh_meet(c, R, mi);
-  }
+  R->st[mi] = ok && saw ? RH_YES : RH_NO;
+  m->ret_fresh = ok && saw && tc.param < 0;
+  m->ret_param = ok && saw ? tc.param : -1;
+  if (R->meet) an_fresh_meet(c, R, mi);
   return R->st[mi] == RH_YES;
 }
 /* The fresh walk (ret_fresh, ret_param) is a greatest fixpoint: a method
@@ -28833,18 +28526,16 @@ static int an_ret_handle(Compiler *c, RetHandles *R, int mi) {
    rounds do not own.
    (A walk that does not settle within its rounds falls back to taking a
    cycle as not fresh, from no method known fresh.) */
-static void an_fresh_returns(Compiler *c, RetHandles *R) {
+static void an_fresh_returns(Compiler *c, ReturnWalk *R) {
   int n = c->nscopes;
-  unsigned char *pub = malloc((size_t)n + 1);
   R->prev = malloc(((size_t)n + 1) * sizeof(int));
-  if (!pub || !R->prev) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (!R->prev) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int mi = 0; mi <= n; mi++) R->prev[mi] = 1;
-  R->fresh = 1;
   R->meet = 1;
   for (int mi = 1; mi < n; mi++) {
-    pub[mi] = c->scopes[mi].ret_pub_fresh;
     /* (a method whose body the walk does not take answers no new String) */
-    c->scopes[mi].ret_fresh = (unsigned char)an_ret_handle_body(c, R, mi);
+    Scope *m = &c->scopes[mi];
+    m->ret_fresh = m->def_node >= 0 && (m->ret == TY_STRING || m->ret == TY_POLY);
     c->scopes[mi].ret_param = -1;
   }
   for (int round = 0, changed = 1; changed; round++) {
@@ -28859,8 +28550,7 @@ static void an_fresh_returns(Compiler *c, RetHandles *R) {
       }
     }
     memset(R->st, 0, (size_t)n + 1);
-    for (int mi = 1; mi < n; mi++) c->scopes[mi].ret_pub_fresh = pub[mi];
-    for (int mi = 1; mi < n; mi++) an_ret_handle(c, R, mi);
+    for (int mi = 1; mi < n; mi++) an_ret_origin(c, R, mi);
     changed = 0;
     for (int mi = 1; mi < n; mi++) {
       /* (the whole answer: a method answering its parameter is not one
@@ -28869,33 +28559,19 @@ static void an_fresh_returns(Compiler *c, RetHandles *R) {
       if (round < 16 && y != R->prev[mi]) { changed = 1; R->prev[mi] = y; }
     }
   }
-  free(pub);
   free(R->prev);
   R->prev = NULL;
   R->meet = 0;
 }
-static void an_mark_handle_returns(Compiler *c) {
-  RetHandles R = { 0 };
+static void an_mark_return_origins(Compiler *c) {
+  ReturnWalk R = { 0 };
   R.st = calloc((size_t)c->nscopes + 1, 1);
   if (!R.st) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   an_returns_by_scope(c, &R.ret_start, &R.ret_list);
   c->ret_walk = &R;
-  /* The sibling fact, a new String or a parameter on every path (ret_fresh,
-     ret_param), uses the same tails, return index and active-visit guard;
-     only its leaf question differs, and it reads no handle fact. It is
-     decided first: the handle walk's own tests read it (a boxed to_s whose
-     every user method answers a handle or a new String,
-     repr_boxed_to_s_operand; a call answering a new String beside handle
-     reads, share_call_fresh), and read before it they saw no method fresh.
-     Each method is asked once per round; the fresh fact takes a cycle as
-     its rounds settle (an_fresh_returns), the handle fact as not
-     publishing. */
   an_fresh_returns(c, &R);
-  memset(R.st, 0, (size_t)c->nscopes + 1);
-  R.fresh = 0;
-  for (int mi = 1; mi < c->nscopes; mi++) an_ret_handle(c, &R, mi);
   c->ret_walk = NULL;
-  free(R.st); free(R.ret_start); free(R.ret_list); free(R.par);
+  free(R.st); free(R.ret_start); free(R.ret_list);
   /* A deep-return pickup marked while the types settled, on a call whose
      method answers a box after all (a parameter that settled poly): the
      box holds the String itself, and the pickup's String read of it would
@@ -28909,19 +28585,13 @@ static void an_mark_handle_returns(Compiler *c) {
     if (poly) comp_set_strbuf_box(c, n, 0);
   }
 }
-/* The accessors of analyze.h. A fact is decided here only while its own
-   walk runs: the fresh walk runs first and reads no handle fact, and the
-   handle walk reads the fresh facts it settled. */
-static void an_ret_settle(Compiler *c, int mi, int fresh) {
-  RetHandles *R = c->ret_walk;
-  if (!R || R->fresh != fresh || mi <= 0 || mi >= c->nscopes || R->settling >= RH_SETTLE_MAX) return;
+/* Resolve a return origin on demand during the fixpoint. */
+static void an_ret_settle(Compiler *c, int mi) {
+  ReturnWalk *R = c->ret_walk;
+  if (!R || mi <= 0 || mi >= c->nscopes || R->settling >= RH_SETTLE_MAX) return;
   R->settling++;
-  an_ret_handle(c, R, mi);
+  an_ret_origin(c, R, mi);
   R->settling--;
-}
-int scope_ret_handle(Compiler *c, int mi) {
-  an_ret_settle(c, mi, 0);
-  return mi > 0 && mi < c->nscopes && c->scopes[mi].ret_handle;
 }
 /* Is every value node v can answer a String literal: v itself, the last
    statement of a list, the arms of an `if`, `unless` or `case`? A `return`
@@ -29077,11 +28747,11 @@ int scope_ret_str_literal(Compiler *c, int mi) {
   return m == AL_LIT;
 }
 int scope_ret_fresh(Compiler *c, int mi) {
-  an_ret_settle(c, mi, 1);
+  an_ret_settle(c, mi);
   return mi > 0 && mi < c->nscopes && c->scopes[mi].ret_fresh;
 }
 int scope_ret_param(Compiler *c, int mi) {
-  an_ret_settle(c, mi, 1);
+  an_ret_settle(c, mi);
   return mi > 0 && mi < c->nscopes ? c->scopes[mi].ret_param : -1;
 }
 /* A String builtin answering a new Array of new Strings nothing else holds
@@ -31990,7 +31660,7 @@ static int dyn_pure_read_name(const char *n, int rx) {
     "chomp", "chop", "chars", "bytes", "lines", "split", "to_i", "to_f", "to_sym", "hash",
     "inspect", "+", "*", "%", "[]", "slice", "center", "ljust", "rjust", "tr", "delete",
     "squeeze", "sub", "gsub", "scan", "unpack", "unpack1", "sum", "casecmp", "casecmp?",
-    "ascii_only?", "valid_encoding?", "each_char", "each_byte", "each_line", "hex", "oct", NULL };
+    "ascii_only?", "valid_encoding?", "each_char", "each_byte", "hex", "oct", NULL };
   static const char *const NOGLOBALS[] = { "match?", NULL };
   for (int i = 0; n && R[i]; i++) {
     if (!sp_streq(n, R[i])) continue;
@@ -36523,10 +36193,13 @@ int make_yield_proc_forms(Compiler *c) {
        object (string interpolation, puts, p of a container) */
     int display = src->class_id >= 0 && !src->is_cmethod && src->nparams == 0 &&
                   (sp_streq(src->name, "to_s") || sp_streq(src->name, "inspect"));
+    /* Exception text also runs through a runtime hook with no block. */
+    int exc_text = src->class_id >= 0 && !src->is_cmethod && is_exception_message(src->name) &&
+                   (class_is_exc_subclass(c, src->class_id) || class_is_exc_reopen(c, src->class_id));
     /* an initialize version a construction runs by a proc form of its own
        (pf_init_versions) */
     int init_version = s < n0 && init_versions[s] && pf_scope_named(c, src, src->name) != s;
-    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !init_version && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src), src) &&
+    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !exc_text && !init_version && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src), src) &&
         !pf_in_class_dispatch(c, src) && !(src->ctor_cycle && ctor_graph_init(c, s)))
       continue;
     /* A method the program reopens has two definitions in the scope table
@@ -51866,512 +51539,6 @@ int an_def_value_used(const NodeTable *nt, const int *par, int v) {
   return 1;
 }
 
-/* ---- String methods whose value no call reads (Scope.ret_unread) ----
-
-   `def write(n) ... @out << ")" end` answers @out, and a String held in a
-   shared handle answers a copy of its bytes. Every call then copied the
-   whole buffer, and a writer called once per node of a tree took time
-   quadratic in its output, though every caller dropped the value. Where no
-   call that can reach the method reads the value, its body runs as
-   statements instead.
-
-   A call of the method's name can reach it unless its receiver's class is
-   known and is neither the method's class, an ancestor, nor a descendant:
-   self in an instance method of a class, or a receiver typed as one. A
-   method of a module, of a singleton or at the top level is reached by
-   every call of its name, and so is a class method. Each `super` in a def
-   of the name counts as a call of it.
-
-   A call's value is dropped when it stands as a statement before its list's
-   last, in a loop body, in an ensure, or in a builtin iterator's block (each
-   on an Array), reaching there through the tails of statement lists, the
-   arms of conditionals and the right of && / ||. The tail of a def hands it
-   on as that def's value, read where that def's value is. Anything else
-   reads it. A name written as a Symbol or a String where a method name is
-   taken (send, method, alias, respond_to?, &:name) is read, every name is
-   when a call computes the name it sends, and the names the runtime calls
-   on its own are never candidates. */
-/* the walk's view of the program: each node's parent and how many places
-   hold it (ur_walk), which iterators a program class overrides, and whether
-   a block can be handed to instance_exec and the like as a value */
-typedef struct {
-  const int *par;
-  const unsigned char *nref;
-  unsigned char iter_over[16];
-  int rebind_any;
-} UrCtx;
-/* a name the runtime or the compiler may call with no call of its own in
-   the program, or one that is not a plain method name */
-static int ur_name_excluded(const char *nm) {
-  static const char *const names[] = {
-    "initialize", "method_missing", "respond_to_missing?", "respond_to?", "message",
-    "full_message", "detailed_message", "exception", "to_json", "as_json", "name",
-    "succ", "pred", "marshal_dump", "_dump", "encode_with", "pretty_print",
-    "pretty_inspect", "deconstruct", "deconstruct_keys", "each_pair", "dup", "clone", "with", NULL };
-  if (!nm || !nm[0] || !strncmp(nm, "to_", 3)) return 1;   /* the conversions the runtime asks for */
-  if (!(nm[0] == '_' || (nm[0] >= 'a' && nm[0] <= 'z') || (nm[0] >= 'A' && nm[0] <= 'Z'))) return 1;
-  if (nm[strlen(nm) - 1] == '=') return 1;
-  /* an accessor's helper, which a bind_call's arm calls for its value
-     (desugar_bind_attr_helpers) */
-  if (!strncmp(nm, "__bind ", 7)) return 1;
-  return method_name_implicitly_invoked(nm) || is_definition_hook_name(nm) || str_in(nm, names);
-}
-/* a plain String method, emitted as a function of its own under the name
-   its def gives it (not a prepend's shadow, which a `super` reaches). An
-   --ext-entry is no candidate: the host reads its value. Neither is a
-   version entry: the calls it answers carry the method's own name, not
-   the entry's. */
-static int ur_candidate(Compiler *c, const Scope *s) {
-  return s->ret == TY_STRING && s->name && s->def_node >= 0 && nt_kind(c->nt, s->def_node) == NK_DefNode &&
-         nt_str(c->nt, s->def_node, "name") && sp_streq(nt_str(c->nt, s->def_node, "name"), s->name) &&
-         s->body >= 0 && !s->yields && !s->is_proc_form && !s->cs_synth && !s->is_ext_entry && !s->is_ext_method &&
-         !s->entry &&
-         !ur_name_excluded(s->name);
-}
-/* the builtin iterators that drop their block's value */
-static const char *const ur_dropping_iters[] = {
-  "each", "each_with_index", "reverse_each", "each_index", "each_key", "each_value",
-  "times", "upto", "downto", NULL };
-/* Does a program class that is a builtin container (or reopens one) define
-   iterator `it`, so that its block's value may be read after all? */
-static int ur_iter_overridden(Compiler *c, const char *it) {
-  static const char *const builtins[] = { "Array", "Hash", "Range", "Integer", NULL };
-  for (int k = 0; k < c->nclasses; k++) {
-    int contained = 0;
-    for (int a = k, d = 0; a >= 0 && d < 64 && !contained; a = c->classes[a].parent, d++)
-      contained = c->classes[a].name && str_in(c->classes[a].name, builtins);
-    if (contained && call_target(c, -1, k, it, CT_METHODS | CT_SHARED, NULL) >= 0) return 1;
-  }
-  return 0;
-}
-/* Does the block of call `call` drop its value: a builtin iterator over a
-   builtin Array, Hash, Range or Integer? */
-static int ur_block_dropped(Compiler *c, const UrCtx *u, int call) {
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, call, "name");
-  int recv = nt_ref(nt, call, "receiver");
-  if (!nm || recv < 0) return 0;
-  int k = -1;
-  for (int i = 0; ur_dropping_iters[i]; i++) if (sp_streq(nm, ur_dropping_iters[i])) k = i;
-  if (k < 0 || u->iter_over[k]) return 0;
-  TyKind rt = comp_ntype(c, recv);
-  if (sp_streq(nm, "times") || sp_streq(nm, "upto") || sp_streq(nm, "downto")) return rt == TY_INT;
-  return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_RANGE;
-}
-/* The edges ur_value_use climbs: the arms of an if, unless and case (and so
-   their else and when clauses), the right of `&&` and both sides of `||`
-   (its left is tested, so a node there is read: VpUp.reach), and a begin
-   with no rescue clause, else or ensure. A begin with an ensure alone also
-   answers its body; the climb goes on from it by hand. */
-enum { UR_CLIMB = VPS_IF | VPS_UNLESS | VPS_CASE | VPS_LOGIC | VPS_BEGIN_PLAIN };
-
-/* How the value of node v is taken: 0 dropped, 1 read, 2 + d handed on as
-   the value of def d (its body's tail). nref counts each node's parents: a
-   node the desugaring shares between two places is read. The climb
-   (vp_climb, over UR_CLIMB) ends at a statement before its list's last
-   (dropped), a loop's body (dropped) or its condition, an ensure clause
-   (dropped), a def's body, the block of a builtin iterator that drops its
-   value, or anything else, which reads it. */
-static int ur_value_use(Compiler *c, const UrCtx *u, int v) {
-  const NodeTable *nt = c->nt;
-  const int *par = u->par;
-  for (long guard = nt->count; guard >= 0; guard--) {
-    VpUp up;
-    VpUpKind ended = vp_climb(nt, par, v, UR_CLIMB, &up);
-    for (int n = v;; n = par[n]) {
-      if (u->nref[n] > 1) return 1;
-      if (n == up.node) break;
-    }
-    if (up.reach) return 1;
-    if (ended == VPU_DROPPED) return 0;
-    if (ended != VPU_ENDED) return 1;
-    int p = up.parent;
-    switch (nt_kind(nt, p)) {
-    case NK_WhileNode: case NK_UntilNode:
-      return nt_ref(nt, p, "predicate") == up.node;
-    case NK_BeginNode:
-      if (nt_ref(nt, p, "statements") != up.node || nt_ref(nt, p, "rescue_clause") >= 0 ||
-          nt_ref(nt, p, "else_clause") >= 0) return 1;
-      v = p;
-      continue;
-    case NK_DefNode:
-      return nt_ref(nt, p, "body") == up.node ? 2 + p : 1;
-    case NK_BlockNode: {
-      int call = vp_up_block_call(nt, par, &up);
-      return !(call >= 0 && nt_ref(nt, call, "block") == p && ur_block_dropped(c, u, call));
-    }
-    case NK_EnsureNode:
-      return 0;
-    default:
-      return 1;
-    }
-  }
-  return 1;
-}
-/* the def a node sits in, -1 outside one */
-static int ur_enclosing_def(const NodeTable *nt, const int *par, int v) {
-  for (int d = 0; v >= 0 && d < 4096; v = par[v], d++)
-    if (nt_kind(nt, v) == NK_DefNode) return v;
-  return -1;
-}
-/* Is call n one that sends a name it computes (`send(x)`, `method(name)`,
-   `x.to_proc`), or an `alias_method` either of whose names it computes (a
-   call by the new name may read the old one's value)? */
-static int ur_computed_send(const NodeTable *nt, int n) {
-  static const char *const senders[] = { "send", "__send__", "public_send", "method", "public_method",
-    "instance_method", "public_instance_method", "singleton_method", "alias_method", NULL };
-  const char *nm = nt_str(nt, n, "name");
-  if (!nm) return 0;
-  if (sp_streq(nm, "to_proc")) {
-    int r = nt_ref(nt, n, "receiver");
-    return r >= 0 && nt_kind(nt, r) != NK_SymbolNode;
-  }
-  if (!str_in(nm, senders)) return 0;
-  int args = nt_ref(nt, n, "arguments");
-  int an = 0;
-  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (an == 0) return 0;
-  for (int i = 0; i < (sp_streq(nm, "alias_method") ? an : 1); i++) {
-    NodeKind k = nt_kind(nt, av[i]);
-    if (k != NK_SymbolNode && k != NK_StringNode) return 1;
-  }
-  return 0;
-}
-/* Is `&e` (BlockArgumentNode b) a block the program may have computed from a
-   name? Forwarding the method's own block parameter is not: what it holds
-   came in through a `&` of some call, which is asked where it stands. */
-static int ur_computed_block_arg(Compiler *c, const int *par, int b) {
-  const NodeTable *nt = c->nt;
-  int e = nt_ref(nt, b, "expression");
-  if (e < 0 || nt_kind(nt, e) == NK_SymbolNode) return 0;
-  if (nt_kind(nt, e) == NK_LocalVariableReadNode) {
-    int d = ur_enclosing_def(nt, par, b);
-    int ps = d >= 0 ? nt_ref(nt, d, "parameters") : -1;
-    int bp = ps >= 0 ? nt_ref(nt, ps, "block") : -1;
-    const char *bn = bp >= 0 ? nt_str(nt, bp, "name") : NULL;
-    const char *en = nt_str(nt, e, "name");
-    if (bn && en && sp_streq(bn, en)) return 0;
-  }
-  TyKind et = comp_ntype(c, e);
-  return et == TY_SYMBOL || et == TY_POLY || et == TY_UNKNOWN;
-}
-/* Does the Symbol or String literal v name a method where it stands: an
-   argument of a call that takes a method name (send, method, alias_method,
-   define_method, respond_to? ...), an alias, a `&:name`, or a `:name.to_proc`?
-   A literal anywhere else reaches such a call only as a computed name, which
-   ur_computed_send answers for the whole program. */
-static int ur_names_method(const NodeTable *nt, const int *par, int v) {
-  static const char *const takers[] = { "send", "__send__", "public_send", "method", "public_method",
-    "instance_method", "public_instance_method", "singleton_method", "define_method", "alias_method",
-    "respond_to?", "method_defined?", "public_method_defined?", "private_method_defined?",
-    "protected_method_defined?", "try", "inject", "reduce", "def_delegator", "def_delegators",
-    "def_instance_delegator", "def_instance_delegators", "def_single_delegator", "def_single_delegators",
-    "delegate", "instance_delegate", "single_delegate", NULL };
-  int p = par[v];
-  if (p < 0) return 1;
-  NodeKind pk = nt_kind(nt, p);
-  if (pk == NK_BlockArgumentNode || pk == NK_AliasMethodNode) return 1;
-  if (pk == NK_CallNode) {   /* `:name.to_proc` */
-    const char *nm = nt_str(nt, p, "name");
-    return nt_ref(nt, p, "receiver") == v && nm && sp_streq(nm, "to_proc");
-  }
-  if (pk != NK_ArgumentsNode) return 0;
-  int call = par[p];
-  const char *nm = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
-  return !nm || str_in(nm, takers);
-}
-/* the calls that run a block with a self of their own */
-static const char *const ur_rebinders[] = { "instance_eval", "instance_exec", "class_eval", "class_exec",
-  "module_eval", "module_exec", "define_method", "define_singleton_method", NULL };
-/* Can a block be run with another self as a value: is an instance_exec
-   (or the like) handed one with `&`? Then no block's self is known. */
-static int ur_block_rebound(Compiler *c, const unsigned char *nref) {
-  const NodeTable *nt = c->nt;
-  for (int id = 0; id < nt->count; id++) {
-    if (!nref[id] || nt_kind(nt, id) != NK_CallNode) continue;
-    const char *nm = nt_str(nt, id, "name");
-    int blk = nt_ref(nt, id, "block");
-    if (nm && blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode && str_in(nm, ur_rebinders)) return 1;
-  }
-  return 0;
-}
-/* Is class a among b's ancestors (b itself included)? */
-static int ur_ancestor(Compiler *c, int a, int b) {
-  for (int d = 0; b >= 0 && d < 256; b = c->classes[b].parent, d++)
-    if (b == a) return 1;
-  return 0;
-}
-/* Is local v written anywhere under node root? Asked of a short
-   expression; a long one (over 256 nodes) answers yes. */
-static int ur_local_written_under(const NodeTable *nt, int root, const char *v) {
-  int stack[256], sp = 0, seen = 0;
-  stack[sp++] = root;
-  while (sp > 0) {
-    int id = stack[--sp];
-    if (++seen > 256) return 1;
-    const char *ty = nt_type(nt, id);
-    NodeKind k = nt_kind(nt, id);
-    const char *nm = nt_str(nt, id, "name");
-    if (ty && nm && sp_streq(nm, v) && strstr(ty, "LocalVariable") && k != NK_LocalVariableReadNode) return 1;
-    int nr = nt_num_refs(nt, id), na = nt_num_arrs(nt, id);
-    for (int i = 0; i < nr + na; i++) {
-      int an = 1, one = i < nr ? nt_ref_at(nt, id, i) : -1;
-      const int *av = i < nr ? &one : nt_arr_at(nt, id, i - nr, &an);
-      for (int j = 0; av && j < an; j++) {
-        if (av[j] < 0) continue;
-        if (sp == 256) return 1;
-        stack[sp++] = av[j];
-      }
-    }
-  }
-  return 0;
-}
-/* The class a conjunct `v.is_a?(K)` (kind_of?, instance_of?) under the &&
-   chain x tests local v for, -1 for none */
-static int ur_isa_conjunct(Compiler *c, int x, const char *v) {
-  const NodeTable *nt = c->nt;
-  for (int d = 0; x >= 0 && d < 64; d++) {
-    NodeKind k = nt_kind(nt, x);
-    if (k == NK_ParenthesesNode) {
-      int body = nt_ref(nt, x, "body"), n = 0;
-      const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
-      x = n == 1 ? st[0] : -1;
-      continue;
-    }
-    if (k == NK_AndNode) {
-      int r = ur_isa_conjunct(c, nt_ref(nt, x, "right"), v);
-      if (r >= 0) return r;
-      x = nt_ref(nt, x, "left");
-      continue;
-    }
-    if (k != NK_CallNode) return -1;
-    const char *nm = nt_str(nt, x, "name");
-    int r = nt_ref(nt, x, "receiver"), args = nt_ref(nt, x, "arguments"), an = 0;
-    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    if (!nm || (!sp_streq(nm, "is_a?") && !sp_streq(nm, "kind_of?") && !sp_streq(nm, "instance_of?")) ||
-        an != 1 || r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode || !nt_str(nt, r, "name") ||
-        !sp_streq(nt_str(nt, r, "name"), v)) return -1;
-    NodeKind ak = nt_kind(nt, av[0]);
-    if (ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) return -1;
-    /* by its last segment, as the emitted test names it */
-    int cls = const_node_class_index(c, av[0]);
-    return cls >= 0 && !comp_class_is_module(c, &c->classes[cls]) ? cls : -1;
-  }
-  return -1;
-}
-/* Is node n in a body typed once per place it runs: a yielding method's,
-   or a block that runs with a self of its own? */
-static int ur_retyped(Compiler *c, const UrCtx *u, int n) {
-  const Scope *s = comp_scope_of(c, n);
-  if (!s || s->yields || s->is_proc_form) return 1;
-  for (int a = n, d = 0; a >= 0 && d < 4096; a = u->par[a], d++) {
-    NodeKind ak = nt_kind(c->nt, a);
-    if (ak == NK_DefNode) break;
-    if (ak == NK_BlockNode) {
-      int call = u->par[a];
-      const char *cn = call >= 0 && nt_kind(c->nt, call) == NK_CallNode ? nt_str(c->nt, call, "name") : NULL;
-      if (cn && str_in(cn, ur_rebinders)) return 1;
-    }
-  }
-  return 0;
-}
-/* the class call n's receiver is known to be: self in an instance method of
-   a class, a receiver typed as an instance of one, or a local the left of
-   an enclosing && tested with is_a? (`o.is_a?(K) && o.m`); -1 otherwise */
-static int ur_recv_class(Compiler *c, const UrCtx *u, int n) {
-  const NodeTable *nt = c->nt;
-  const int *par = u->par;
-  int r = nt_kind(nt, n) == NK_CallNode ? nt_ref(nt, n, "receiver") : -1;
-  if (r < 0 || nt_kind(nt, r) == NK_SelfNode) {
-    /* a block that may run with another self (instance_eval, define_method
-       ...) leaves self unknown */
-    for (int a = n, d = 0; a >= 0 && d < 4096; a = par[a], d++) {
-      NodeKind ak = nt_kind(nt, a);
-      if (ak == NK_DefNode) break;
-      if (ak == NK_BlockNode || ak == NK_LambdaNode) {
-        int call = par[a];
-        const char *cn = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
-        if (!cn || u->rebind_any || str_in(cn, ur_rebinders)) return -1;
-      }
-    }
-    const Scope *s = comp_scope_of(c, n);
-    return s && s->class_id >= 0 && !s->is_cmethod ? s->class_id : -1;
-  }
-  /* a type read where the body is typed once per place it runs (a yielding
-     method's, spliced into each caller, or an instance_eval block's) is
-     only one of its types */
-  TyKind rt = ur_retyped(c, u, n) ? TY_UNKNOWN : comp_ntype(c, r);
-  if (ty_is_object(rt)) return ty_object_class(rt);
-  const char *v = nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
-  for (int a = n, d = 0; v && a >= 0 && d < 64; a = par[a], d++) {
-    int p = par[a];
-    NodeKind pk = p >= 0 ? nt_kind(nt, p) : NK_NONE;
-    /* within the one expression: a parenthesized one's statements count */
-    if (p < 0 || pk == NK_DefNode || pk == NK_BlockNode ||
-        (pk == NK_StatementsNode && (par[p] < 0 || nt_kind(nt, par[p]) != NK_ParenthesesNode))) break;
-    if (pk != NK_AndNode || nt_ref(nt, p, "right") != a) continue;
-    int cls = ur_isa_conjunct(c, nt_ref(nt, p, "left"), v);
-    if (cls >= 0 && !ur_local_written_under(nt, p, v)) return cls;
-  }
-  return -1;
-}
-/* Can call (or super) n reach method t? Not when its receiver's class cls
-   is known (ur_recv_class) and is neither t's class, an ancestor nor a
-   descendant, nor when every class its receiver can hold (cls_fact_node)
-   is one that does not inherit t. */
-static int ur_may_reach(Compiler *c, const UrCtx *u, const Scope *t, int n, int cls) {
-  int k = t->class_id;
-  /* a class the program follows from its construction: not a module, a
-     reopened builtin (Object, whose methods every class inherits), a
-     native class or a singleton */
-  if (k < 0 || t->is_cmethod || !cls_fact_bounded(c, k) || c->classes[k].is_singleton_of) return 1;
-  if (cls >= 0)
-    /* self in a method of Object (or a module) can be anything */
-    return !cls_fact_bounded(c, cls) || ur_ancestor(c, k, cls) || ur_ancestor(c, cls, k);
-  int r = nt_kind(c->nt, n) == NK_CallNode ? nt_ref(c->nt, n, "receiver") : -1;
-  const ClsSet *f = r >= 0 && !ur_retyped(c, u, n) ? cls_fact_node(c, r) : NULL;
-  if (!f || f->all) return 1;
-  for (int fk = cls_set_next(f, -1); fk >= 0; fk = cls_set_next(f, fk))
-    if (!cls_fact_bounded(c, fk) || ur_ancestor(c, k, fk)) return 1;
-  return 0;
-}
-typedef struct { const char *name; int mi; } UrCand;
-static int ur_cand_cmp(const void *a, const void *b) {
-  int r = strcmp(((const UrCand *)a)->name, ((const UrCand *)b)->name);
-  return r ? r : ((const UrCand *)a)->mi - ((const UrCand *)b)->mi;
-}
-/* the first candidate named nm, -1 for none */
-static int ur_first(const UrCand *tab, int n, const char *nm) {
-  if (!nm) return -1;
-  int lo = 0, hi = n;
-  while (lo < hi) { int m = (lo + hi) / 2; if (strcmp(tab[m].name, nm) < 0) lo = m + 1; else hi = m; }
-  return lo < n && strcmp(tab[lo].name, nm) == 0 ? lo : -1;
-}
-/* Walk the tree under root, filling par (each node's parent) and nref (1
-   for a node reached once, 2 for one reached again); stack has room for
-   every node. */
-static void ur_walk(const NodeTable *nt, int root, int *par, unsigned char *nref, int *stack) {
-  int nn = nt->count, sp = 0;
-  nref[root] = 1;
-  stack[sp++] = root;
-  while (sp > 0) {
-    int id = stack[--sp];
-    int nr = nt_num_refs(nt, id), na = nt_num_arrs(nt, id);
-    for (int i = 0; i < nr + na; i++) {
-      int an = 1, one = i < nr ? nt_ref_at(nt, id, i) : -1;
-      const int *av = i < nr ? &one : nt_arr_at(nt, id, i - nr, &an);
-      for (int j = 0; av && j < an; j++) {
-        int ch = av[j];
-        if (ch < 0 || ch >= nn) continue;
-        if (nref[ch]) { nref[ch] = 2; continue; }
-        nref[ch] = 1; par[ch] = id; stack[sp++] = ch;
-      }
-    }
-  }
-}
-static void an_mark_unread_returns(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  int nn = nt->count, ns = c->nscopes;
-  UrCand *tab = calloc((size_t)ns + 1, sizeof *tab);
-  unsigned char *read = calloc((size_t)ns + 1, 1);
-  if (!tab || !read) { perror("calloc"); exit(1); }
-  int nc = 0;
-  for (int mi = 0; mi < ns; mi++)
-    if (ur_candidate(c, &c->scopes[mi])) { tab[nc].name = c->scopes[mi].name; tab[nc].mi = mi; nc++; }
-  if (nc == 0) { free(tab); free(read); return; }
-  qsort(tab, (size_t)nc, sizeof *tab, ur_cand_cmp);
-  /* the parents in the program as it stands, from its root: a node the
-     desugaring left behind (an orphan) is not visited, and one it shares
-     between two places is counted twice (nref) */
-  int *par = malloc(sizeof(int) * ((size_t)nn + 1));
-  unsigned char *nref = calloc((size_t)nn + 1, 1);
-  int *stack = malloc(sizeof(int) * ((size_t)nn + 1));
-  /* per def node: its one candidate scope, -2 when a scope of it is not one */
-  int *defscope = malloc(sizeof(int) * ((size_t)nn + 1));
-  if (!par || !nref || !stack || !defscope) { perror("malloc"); exit(1); }
-  for (int id = 0; id < nn; id++) { par[id] = -1; defscope[id] = -1; }
-  if (nt->root_id >= 0 && nt->root_id < nn) ur_walk(nt, nt->root_id, par, nref, stack);
-  /* then every method's own def and body that the tree does not hold (a
-     synthesized method's) */
-  for (int mi = 0; mi < ns; mi++) {
-    int r[2] = { c->scopes[mi].def_node, c->scopes[mi].body };
-    for (int i = 0; i < 2; i++)
-      if (r[i] >= 0 && r[i] < nn && !nref[r[i]]) ur_walk(nt, r[i], par, nref, stack);
-  }
-  free(stack);
-  for (int mi = 0; mi < ns; mi++) {
-    int d = c->scopes[mi].def_node;
-    if (d < 0 || d >= nn) continue;
-    defscope[d] = !ur_candidate(c, &c->scopes[mi]) || defscope[d] != -1 ? -2 : mi;
-  }
-  UrCtx ux;
-  memset(&ux, 0, sizeof ux);
-  ux.par = par; ux.nref = nref;
-  for (int i = 0; ur_dropping_iters[i]; i++) ux.iter_over[i] = (unsigned char)ur_iter_overridden(c, ur_dropping_iters[i]);
-  ux.rebind_any = ur_block_rebound(c, nref);
-  /* edges: method eto[e] is read when method efrom[e] is */
-  int ne = 0, ce = 0, computed = 0;
-  int *efrom = NULL, *eto = NULL;
-  for (int id = 0; id < nn && !computed; id++) {
-    if (!nref[id]) continue;   /* not in the program */
-    NodeKind k = nt_kind(nt, id);
-    if (k == NK_SymbolNode || k == NK_StringNode) {
-      int f = ur_first(tab, nc, nt_str(nt, id, k == NK_SymbolNode ? "value" : "content"));
-      if (f >= 0 && ur_names_method(nt, par, id))
-        for (int j = f; j < nc && sp_streq(tab[j].name, tab[f].name); j++) read[tab[j].mi] = 1;
-      continue;
-    }
-    if (k == NK_BlockArgumentNode) { computed = ur_computed_block_arg(c, par, id); continue; }
-    const char *nm = NULL;
-    if (k == NK_CallNode) {
-      if (ur_computed_send(nt, id)) { computed = 1; continue; }
-      nm = nt_str(nt, id, "name");
-    }
-    else if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-      int d = ur_enclosing_def(nt, par, id);
-      nm = d >= 0 ? nt_str(nt, d, "name") : NULL;
-    }
-    int f = ur_first(tab, nc, nm);
-    if (f < 0) continue;
-    int use = -1, cls = ur_recv_class(c, &ux, id);
-    for (int j = f; j < nc && sp_streq(tab[j].name, nm); j++) {
-      int t = tab[j].mi;
-      if (read[t] || !ur_may_reach(c, &ux, &c->scopes[t], id, cls)) continue;
-      if (use < 0) use = ur_value_use(c, &ux, id);
-      if (use == 0) continue;
-      int from = use >= 2 ? defscope[use - 2] : -2;
-      if (from < 0) { read[t] = 1; continue; }
-      if (ne == ce) {
-        ce = ce ? ce * 2 : 64;
-        efrom = realloc(efrom, sizeof(int) * (size_t)ce); eto = realloc(eto, sizeof(int) * (size_t)ce);
-        if (!efrom || !eto) { perror("realloc"); exit(1); }
-      }
-      efrom[ne] = from; eto[ne] = t; ne++;
-    }
-  }
-  if (!computed) {
-    /* hand each read on along the tails: the edges grouped by the method
-       they leave (a counting sort), then a worklist from every read one */
-    int *first = calloc((size_t)ns + 2, sizeof(int)), *to = malloc(sizeof(int) * ((size_t)ne + 1));
-    int *work = malloc(sizeof(int) * ((size_t)ns + 1)), wn = 0;
-    if (!first || !to || !work) { perror("malloc"); exit(1); }
-    for (int e = 0; e < ne; e++) first[efrom[e] + 1]++;
-    for (int m = 0; m < ns; m++) first[m + 1] += first[m];
-    for (int e = 0; e < ne; e++) to[first[efrom[e]]++] = eto[e];
-    for (int m = ns; m > 0; m--) first[m] = first[m - 1];
-    first[0] = 0;
-    for (int m = 0; m < ns; m++) if (read[m]) work[wn++] = m;
-    while (wn > 0) {
-      int m = work[--wn];
-      for (int e = first[m]; e < first[m + 1]; e++)
-        if (!read[to[e]]) { read[to[e]] = 1; work[wn++] = to[e]; }
-    }
-    free(first); free(to); free(work);
-    for (int j = 0; j < nc; j++) if (!read[tab[j].mi]) c->scopes[tab[j].mi].ret_unread = 1;
-  }
-  free(par); free(nref); free(defscope); free(efrom); free(eto); free(tab); free(read);
-}
-
 /* Ahead of the fixpoint: intern the symbol literals and Proc#parameters names, apply the --rbs seeds, freeze the method-lookup index, compute the reachable and instantiated classes (analyze_program's steps, in their order) */
 static void an_phase_pre_fixpoint(Compiler *c) {
   int *par = an_parent_map(c->nt);
@@ -53697,15 +52864,6 @@ static void an_phase_post_fixpoint(Compiler *c) {
     int iv = comp_ivar_index(ci, nt_str(c->nt, id, "name"));
     if (iv >= 0 && ci->ivar_types[iv] == TY_UNKNOWN) ivar_set_type(ci, iv, TY_POLY_ARRAY);
   }
-  /* An ivar write in VALUE position evaluates to the slot. When the slot is
-     a strbuf, the value is presented exactly as an ordinary read of the slot
-     is: the const char * face with the live handle in _sp_ret_strbuf, so the
-     write's type, the return of a method whose body it is and every call to
-     that method agree on `const char *`. The write used to be marked to
-     yield the handle itself (#3993), which typed the function `sp_String *`
-     while its callers, typed from the String face, read a `const char *`:
-     `p obj.w("a")` for `def w(v) = (@body = v.to_s)` printed garbage, and
-     the C did not build under -Werror (#4567). */
   /* Backstop: a local variable assigned only empty arrays -- a `[]` literal
      or a bare `Array.new`, the same empty array (#3613) -- with no push
      evidence stays TY_UNKNOWN. Default it to TY_POLY_ARRAY so array
@@ -56696,6 +55854,23 @@ static void an_phase_value_types(Compiler *c) {
         }
       }
     }
+    /* Interpolation falls back to Object#to_s when the selected method
+       answers a non-String. That text includes the receiver's identity. */
+    if (ty_k == NK_EmbeddedStatementsNode) {
+      int stmts = nt_ref(c->nt, id, "statements"), n = 0;
+      const int *body = stmts >= 0 ? nt_arr(c->nt, stmts, "body", &n) : NULL;
+      int part = n ? body[n - 1] : -1;
+      TyKind type = part >= 0 ? comp_ntype(c, part) : TY_UNKNOWN;
+      if (ty_is_object(type)) {
+        int cid = ty_object_class(type);
+        if (c->classes[cid].is_value_type) {
+          int mi = cplan_implied_target(c, ic_operand_host(c, part), part, cid, "to_s", 0, NULL);
+          if (mi < 0 || c->scopes[mi].ret != TY_STRING || c->scopes[mi].ret_obj_may_nil ||
+              c->scopes[mi].ret_rbs_nilable)
+            c->classes[cid].is_value_type = 0;
+        }
+      }
+    }
     /* unsafe uses that would need a heap pointer / boxing (void* slot) */
     if (ty_k == NK_ArrayNode || ty_k == NK_HashNode ||
         ty_k == NK_KeywordHashNode) {
@@ -57577,9 +56752,7 @@ void analyze_program(Compiler *c) {
      types and flags */
   share_mark_borrows(c);
   /* --share-strings: the methods whose value is a shared String's handle */
-  AN_STEP_V("an_mark_handle_returns", an_mark_handle_returns(c));
-  /* the String methods whose value no call reads, once the handle flags are */
-  an_mark_unread_returns(c);
+  AN_STEP_V("an_mark_return_origins", an_mark_return_origins(c));
   /* Identity operands can ask the settled call-return fact now. */
   AN_STEP_V("mark_reader_identity_operands", mark_reader_identity_operands(c));
   /* the representation flags are final from here (repr.h) */

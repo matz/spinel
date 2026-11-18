@@ -444,7 +444,7 @@ static void emit_io_read_nonblock_buffer(Compiler *c, int id, int handle, Buf *b
                 "sp_raise_cls(\"IO::EAGAINWaitReadable\", \"Resource temporarily unavailable - read would block\"); } ",
              tb, te, eof);
   if (shared && (handle || repr_of(c, id).kind != RK_BOXED)) {
-    if (!handle) buf_puts(b, "sp_strbuf_read_pub(");
+    if (!handle) buf_puts(b, "sp_strbuf_read(");
     buf_printf(b, "!_t%d ? NULL : sp_poly_nil_p(_t%d) ? sp_String_new_shared(_t%d) : sp_poly_as_strbuf(_t%d)",
                tb, held[1], tb, held[1]);
     if (!handle) buf_puts(b, ")");
@@ -478,7 +478,7 @@ static const char *io_pread_entry(int argc) {
 
 int emit_io_read_nonblock_outbuf(Compiler *c, int id, Buf *b) {
   if (!io_read_nonblock_outbuf(c, id)) return 0;
-  emit_io_read_nonblock_buffer(c, id, 0, b);
+  emit_io_read_nonblock_buffer(c, id, repr_of(c, id).as_ty == TY_STRBUF, b);
   return 1;
 }
 
@@ -868,7 +868,7 @@ int io_library_count_refused(Compiler *c, int id, const BuiltinOp *op, const cha
    the stream check of emit_call_poly_io_arms raises as ArgumentError. An
    operand no row takes (`winsize = "x"`) is left to the general dispatch. */
 static int boxed_io_library_call(Compiler *c, int id, const char *name) {
-  const BuiltinOp *op = emit_builtin_op_row(c, id, TY_IO, name);
+  const BuiltinOp *op = cplan_builtin_op_row(c, id, TY_IO, name, 0, NULL);
   return bop_io_library_row(op) || io_library_count_refused(c, id, op, name);
 }
 
@@ -1141,7 +1141,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       char tio[32]; snprintf(tio, sizeof tio, "_t%d", tio2);
       /* winsize=: the receiver, then the size, then the handle, as the
          typed arm sets it; a PTY master returned through a lambda is boxed */
-      const BuiltinOp *lop = emit_builtin_op_row(c, id, TY_IO, name);
+      const BuiltinOp *lop = cplan_builtin_op_row(c, id, TY_IO, name, 0, NULL);
       if (lop && lop->emit == BOPE_IO_SET_WINSIZE) {
         int trv = ++g_tmp, tsz = ++g_tmp;
         buf_puts(b, "({ "); trv = hold_operand(c, recv, TY_POLY, 1, trv, 1, " ", b);
@@ -1792,9 +1792,10 @@ static int emit_boxed_positional_io(Compiler *c, int recv, const char *name, int
 int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   if (emit_io_read_nonblock_outbuf(c, id, b)) return 1;
   if (strbuf_io_outbuf(c, id) >= 0) {
-    buf_puts(b, "sp_strbuf_read_pub(");
+    int handle = repr_of(c, id).as_ty == TY_STRBUF;
+    if (!handle) buf_puts(b, "sp_strbuf_read(");
     emit_strbuf_io_read(c, id, b);
-    buf_puts(b, ")");
+    if (!handle) buf_puts(b, ")");
     return 1;
   }
   if (recv >= 0 && comp_ntype(c, recv) == TY_IO) {

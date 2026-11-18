@@ -12,8 +12,8 @@ static void call_must_pos(void *p) {
 int main(void) {
   Init_ext_kernel();
   printf("%lld\n", (long long)sp_ExtKernel_s_triple(14LL));
-  /* a String parameter is the String's handle, as the header says */
-  printf("%s\n", sp_ExtKernel_s_shout(SP_STR_HDL(sp_str_from_bytes("hey", 3))));
+  /* The String parameter and result use the handle declared in k.h. */
+  printf("%s\n", sp_String_cstr(sp_ExtKernel_s_shout(SP_STR_HDL(sp_str_from_bytes("hey", 3)))));
   sp_IntArray *a = sp_IntArray_new();
   SP_GC_ROOT(a);
   sp_IntArray_push(a, 10); sp_IntArray_push(a, 20); sp_IntArray_push(a, 12);
@@ -30,7 +30,7 @@ int main(void) {
   printf("%lld\n", (long long)sp_ExtKernel_s_opt_inc(sp_oint_nil()));
   printf("%lld\n", (long long)sp_ExtKernel_s_opt_inc(sp_oint_of(41LL)));
   printf("%lld\n", (long long)sp_ExtKernel_s_opt_inc(sp_oint_of(INT64_MIN)));
-  printf("%s\n", sp_ExtKernel_s_label(sp_box_int(21LL)));
+  printf("%s\n", sp_String_cstr(sp_ExtKernel_s_label(sp_box_int(21LL))));
   sp_oint pos = sp_ExtKernel_s_find_pos(a, 20LL);
   if (pos.nil) puts("nil"); else printf("%lld\n", (long long)pos.v);
   pos = sp_ExtKernel_s_find_pos(a, 99LL);

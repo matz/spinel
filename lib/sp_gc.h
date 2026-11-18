@@ -702,9 +702,11 @@ extern void (*sp_json_hash_set_fn)(sp_RbVal, const char *, sp_RbVal);
 /* Recursive #inspect of a boxed value, for lib/sp_inspect.c's container walker
    (set to sp_poly_inspect; same idiom as the JSON hooks). */
 extern const char *(*sp_poly_inspect_fn)(sp_RbVal);
-/* #to_s of any boxed value, for a package that writes one (StringIO#puts):
-   the generated TU installs sp_poly_to_s, which renders a user object
-   through its own #to_s or the #<Name:0xADDR> default. */
+/* The archive formatter invokes an object override once. Native packages
+   can call it even in a program without a boxed-value renderer installed. */
+const char *sp_poly_to_s(sp_RbVal v);
+/* The display result and its byte length for native writers. */
+const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length);
 extern const char *(*sp_poly_to_s_fn)(sp_RbVal);
 /* Convert a plain object (a Struct) to a boxed StrPoly hash of its members,
    generic (no format knowledge). The generated program installs it (switch on
@@ -742,16 +744,16 @@ extern sp_RbVal (*sp_obj_with_fn)(sp_RbVal, sp_RbVal);
 /* default Object#inspect for user objects: the generated TU installs a
    per-class ivar walk (sp_obj_inspect_sw); sp_poly_inspect's OBJ default
    consults it so nested/boxed objects render like CRuby */
-extern const char *(*sp_obj_inspect_fn)(int cls_id, void *p);
+extern sp_RbVal (*sp_obj_inspect_fn)(int cls_id, void *p, int *found);
 /* Same shape for user #to_s: sp_poly_to_s's OBJ default consults it so a
    boxed user object with a custom to_s renders through it. */
-extern const char *(*sp_obj_to_s_fn)(int cls_id, void *p);
+extern sp_RbVal (*sp_obj_to_s_fn)(int cls_id, void *p, int *found);
 /* CRuby's implicit conversion protocol on BOXED user objects: the runtime's
    Integer/String conversion sites (pack, typed-slot coercions) reach a
    compiled #to_int / #to_str through these. A class without the method is
    the default arm (*ok = 0 / NULL) and the caller raises CRuby's TypeError. */
 extern sp_int (*sp_obj_to_int_fn)(int cls_id, void *p, int *ok);
-extern const char *(*sp_obj_to_str_fn)(int cls_id, void *p);
+extern struct sp_String_s *(*sp_obj_to_str_fn)(int cls_id, void *p);
 /* #to_path, which File/Dir/IO's path slots ask before #to_str (CRuby's
    rb_get_path); NULL when the class defines none. */
 extern const char *(*sp_obj_to_path_fn)(int cls_id, void *p);

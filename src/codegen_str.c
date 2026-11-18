@@ -19,7 +19,6 @@
    handle where its renderer names one. */
 
 #include "codegen_internal.h"
-#include "method_table_check.h"
 #include "call_plan.h"
 #include "codegen_call_arms.h"
 #include "repr.h"
@@ -204,6 +203,10 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, StrForm *
 static int str_handle_by_kind(Compiler *c, int v, int form, unsigned dest, StrForm *sf);
 static int str_render_handle(Compiler *c, int v, int form, unsigned dest, StrForm *sf) {
   sf->cty = TY_STRBUF;
+  if (!arg_ran_first(v, 0) && repr_native_call_handle(c, v)) {
+    emit_native_string_handle(c, v, &sf->expr);
+    return SPF_HANDLE;
+  }
   return str_handle_by_kind(c, v, form, dest, sf);
 }
 
@@ -226,7 +229,7 @@ static int str_handle_by_kind(Compiler *c, int v, int form, unsigned dest, StrFo
     if (str_handle_ran_first(c, v, sf)) return SPF_HANDLE;
     return str_handle_new(c, v, form, dest, sf);
   case SPK_SLOT: case SPK_DEMANDED: case SPK_ELEM: case SPK_SLOT_POLY: case SPK_SELF: case SPK_BANG_BOX:
-  case SPK_PROC_CALL: case SPK_POLY_ARMS: case SPK_EXC_MESSAGE: case SPK_EXC_SUPER: case SPK_PUBLISHED:
+  case SPK_PROC_CALL: case SPK_POLY_ARMS: case SPK_EXC_MESSAGE: case SPK_EXC_SUPER: case SPK_NATIVE_CALL:
   case SPK_READER: case SPK_WRITE: case SPK_ASSIGN: case SPK_OPERAND: case SPK_BLOCK_VALUE: case SPK_YIELD:
   case SPK_COND: case SPK_SEQUENCE: case SPK_LIFT:
     if (emit_strbuf_local_write_handle(c, v, &sf->expr)) return SPF_HANDLE;
@@ -267,7 +270,7 @@ static int str_route_names_handle(Compiler *c, int v) {
        Range endpoint's (the handle the Range keeps, else the String it
        holds), the box a proc's answer or a spliced call's tails are handed
        on in (emit_strbuf_route_box), a call's published handle else the
-       String it answered (emit_strbuf_pickup), or a route over a box
+       String it answered (emit_string_call_handle), or a route over a box
        answering the String the box holds, read live and boxed by
        sp_box_str as the handle that owns it (no copy);
      - a handle: a variable's or a reader's slot, an element a String
@@ -305,14 +308,17 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
   }
   Repr r = repr_of(c, v);
   int bx, u = strbuf_srange_tail(c, v);
-  /* (a conversion that answers its String (`m.message.itself`,
-     `String(m.message)`) has the identity of the String it converts) */
+  /* The identity conversion of an exception message keeps its String. */
   int ev = v;
   for (;;) {
     int x = repr_string_conversion_operand(c, ev);
-    if (x < 0) x = kernel_string_operand(c, ev);
     if (x < 0) break;
     ev = nt_paren_single(nt, x);
+  }
+  if (!arg_ran_first(v, 0) && repr_native_call_handle(c, v)) {
+    sf->cty = TY_STRBUF;
+    emit_native_string_handle(c, v, b);
+    return SPF_HANDLE;
   }
   sf->cty = TY_POLY;
   if (form != SPF_HANDLE) { }
@@ -336,7 +342,7 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
     return SPF_HANDLE;
   }
   else if (repr_call_returns_handle(c, v)) {
-    emit_strbuf_pickup(c, v, 1, b);
+    emit_string_call_handle(c, v, 1, b);
     return SPF_HANDLE;
   }
   else if ((bx = share_plan_producer(c, v, NULL) == SPK_OPERAND ? strbuf_route_box_operand(c, v) : -1) >= 0) {
@@ -413,28 +419,21 @@ void str_box_handle_tmp(Buf *b, int tmp) {
   str_box_close(b);
 }
 
-/* The bytes a String handle reads as (a copy of its String, NULL for nil,
-   frozen for a frozen handle): the one place its text is written, as it is
-   for the box. `pub` is the read that also publishes the handle to the
-   deep-return channel (sp_strbuf_read_pub), for a consumer whose value a
-   caller picks the handle up from. str_read_handle reads text already
-   written, str_read_handle_tmp a temp. */
-/* (one representation: a read held across a block is a copy, g_one_held) */
-static const char *str_read_face(int pub) {
-  if (g_one_held) return pub ? "sp_strbuf_read_pub_own" : "sp_strbuf_read_own";
-  return pub ? "sp_strbuf_read_pub" : "sp_strbuf_read";
+/* A read held across a block borrows a snapshot. */
+static const char *str_read_face(void) {
+  return g_one_held ? "sp_strbuf_read_own" : "sp_strbuf_read";
 }
-void str_read_handle(Buf *b, const char *h, int pub) {
-  buf_printf(b, "%s(%s)", str_read_face(pub), h ? h : "NULL");
+void str_read_handle(Buf *b, const char *h) {
+  buf_printf(b, "%s(%s)", str_read_face(), h ? h : "NULL");
 }
-void str_read_handle_tmp(Buf *b, int tmp, int pub) {
-  buf_printf(b, "%s(_t%d)", str_read_face(pub), tmp);
+void str_read_handle_tmp(Buf *b, int tmp) {
+  buf_printf(b, "%s(_t%d)", str_read_face(), tmp);
 }
 /* ...and around the handle's text the caller emits between the open and the
    close, as the box of a handle and a new handle are written around theirs
    (a return tail reads the handle that an emitter renders in place). */
-void str_read_handle_open(Buf *b, int pub) {
-  buf_printf(b, "%s(", str_read_face(pub));
+void str_read_handle_open(Buf *b) {
+  buf_printf(b, "%s(", str_read_face());
 }
 void str_read_handle_close(Buf *b) {
   buf_puts(b, ")");
@@ -453,10 +452,7 @@ void str_new_handle_close(Buf *b) {
   buf_puts(b, ")");
 }
 
-/* The box of a String's bytes (sp_box_str, the String row's box template),
-   written in one place beside the box of a handle: `e` is the bytes' text
-   already written, a temp or a C string. A return pickup boxes the bytes it
-   took where no handle was published. */
+/* A box for the String expression already rendered in e. */
 void str_box_bytes(Buf *b, const char *e) {
   /* (one representation: the text may be the handle whatever the plan
      read it as, so it is boxed through its face) */
@@ -514,53 +510,6 @@ static void str_box_note(StrForm *sf, int rf, int rw) {
   sf->rw = rw;
 }
 
-/* --share-strings: Kernel#String of a boxed value (`String(v)`), boxed: a
-   String's own box, a plain String's or a shared handle's, which is the
-   String itself (String(s) answers s), else the String the value's #to_str
-   or #to_s answers, boxed as its bytes. Boxed as the bytes of a handle's
-   String it came out as a copy that a change through the result never
-   reached the original by. 1 with the box written; 0, nothing emitted, for
-   any other operand route (`+y`, `y.to_s`). */
-/* Does a class of the program define #to_str, and does each such method
-   publish the handle of the String it answers (Scope.ret_handle), which
-   String(o) then hands on as it is? */
-static int str_to_str_publishes(Compiler *c) {
-  int any = 0, all = 1;
-  mtab_enter(c);   /* (the candidate owner of the classes that define to_str: every class is asked by design, no call's question) */
-  for (int k = 0; k < c->nclasses && all; k++) {
-    int mi = comp_method_in_chain(c, k, "to_str", NULL);
-    if (mi < 0) continue;
-    if (!scope_ret_handle(c, mi)) all = 0;
-    any = 1;
-  }
-  mtab_leave(c);
-  return all && any;
-}
-static int str_box_kernel_string(Compiler *c, int v, Buf *b) {
-  const NodeTable *nt = c->nt;
-  int x = strbuf_route_box_operand(c, v);
-  if (x < 0 || kernel_string_operand(c, v) < 0) return 0;
-  size_t at = b->len;
-  int t = ++g_tmp;
-  buf_puts(b, "({ ");
-  t = hold_operand(c, x, TY_POLY, 1, t, 1, " ", b);
-  if (str_to_str_publishes(c)) {
-    /* an object's #to_str answers a String of the program's, whose handle the
-       method published: that String is String(o)'s answer */
-    buf_printf(b, "(_t%d.tag == SP_TAG_STR && _t%d.v.s) || sp_poly_is_strbuf(_t%d) ? _t%d : ({ "
-                  "_sp_ret_strbuf = NULL; const char *_s%d = sp_poly_check_str(_t%d); "
-                  "_s%d ? (_sp_ret_strbuf ? ",
-               t, t, t, t, t, t, t);
-    str_box_handle(b, "(sp_String *)_sp_ret_strbuf");
-    buf_printf(b, " : sp_box_str(_s%d)) : sp_box_str(sp_poly_to_s(_t%d)); }); })", t, t);
-  }
-  else
-    buf_printf(b, "(_t%d.tag == SP_TAG_STR && _t%d.v.s) || sp_poly_is_strbuf(_t%d) ? _t%d : sp_box_str(({ "
-                  "const char *_s%d = sp_poly_check_str(_t%d); _s%d ? _s%d : sp_poly_to_s(_t%d); })); })",
-               t, t, t, t, t, t, t, t, t);
-  return 1;
-}
-
 /* --share-strings: the box face of a String value (or one the rule
    holds as the handle), by its producer's kind (share.h's SPK_*), asked
    where it is boxed; 0 with nothing emitted for any other value:
@@ -578,6 +527,13 @@ static int str_box_kernel_string(Compiler *c, int v, Buf *b) {
                    a bang off a handle, a box's to_s, a chain). */
 static int str_box_by_kind(Compiler *c, int node, StrForm *sf) {
   Buf *b = &sf->expr;
+  if (!arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
+    str_box_open(b, 1);
+    emit_native_string_handle(c, node, b);
+    str_box_close(b);
+    str_box_note(sf, RF_STRBUF_HANDLE, RW_HANDLE_ROUTE);
+    return 1;
+  }
   TyKind t = comp_ntype(c, node);
   if (t != TY_STRING && t != TY_STRBUF) return 0;
   int kind = share_plan_producer(c, node, NULL);
@@ -633,32 +589,14 @@ static int str_box_by_kind(Compiler *c, int node, StrForm *sf) {
       return 1;
     }
     return 0;
-  /* a call whose targets publish their handle, where the plan boxes that
-     handle but no store marked the call for its pickup (a block's value
-     that map collects, read through a typed receiver's reader): the
-     pickup, boxed, where the bytes boxed whole were a copy that a later
-     change to the String through the receiver never reached */
-  case SPK_PUBLISHED: {
-    /* only a call to user methods, each publishing on its return (or the
-       Kernel#String of an object, which calls its #to_str): a builtin
-       (ENV.fetch with a default) never clears or sets the channel, so the
-       pickup could take a handle an earlier call left there. A read into a
-       buffer (strbuf_io_outbuf) is the builtin that does: it answers the
-       buffer's handle through sp_strbuf_read_pub, which publishes it */
-    int u = nt_paren_single(c->nt, node), tg[CPT_MAX];
-    if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && !strbuf_call_picks_up(c, u) &&
-        nt_ref(c->nt, u, "block") < 0 && comp_ntype(c, u) != TY_POLY && repr_call_returns_handle(c, u) &&
-        (cplan_targets(c, u, tg, CPT_MAX) > 0 || strbuf_io_outbuf(c, u) >= 0 || kernel_string_operand(c, u) >= 0) &&
-        strbuf_pickup_published(c, u) && !arg_ran_first(node, 0) &&
-        !emit_boxed_lift(c, node) && share_plan_of(c, node, SPR_BOX, NULL).form == SPF_HANDLE) {
-      str_box_open(b, 1);
-      emit_published_pickup(c, u, b);
-      str_box_close(b);
+  /* A call with a known handle result boxes that object. */
+  case SPK_NATIVE_CALL:
+    if (!arg_ran_first(node, 0) && !emit_boxed_lift(c, node)) {
+      emit_string_call_handle(c, nt_paren_single(c->nt, node), 1, b);
       str_box_note(sf, RF_STRBUF_HANDLE, RW_HANDLE_ROUTE);
       return 1;
     }
     return 0;
-  }
   case SPK_SLOT: case SPK_DEMANDED: case SPK_ELEM: case SPK_SLOT_POLY: case SPK_SELF: case SPK_BANG_BOX:
   case SPK_POLY_ARMS: case SPK_EXC_MESSAGE: case SPK_EXC_SUPER: case SPK_READER:
   /* a yield that calls the block's proc: the box the proc answered */
@@ -672,11 +610,6 @@ static int str_box_by_kind(Compiler *c, int node, StrForm *sf) {
     }
     return 1;
   case SPK_OPERAND:
-    if (!arg_ran_first(node, 0) && !emit_boxed_lift(c, node) && str_box_kernel_string(c, node, b)) {
-      str_box_note(sf, RF_PASS, RW_HANDLE_ROUTE);
-      return 1;
-    }
-    return 0;
   case SPK_ASSIGN: case SPK_COND: case SPK_SEQUENCE:
   case SPK_LIFT:
     return 0;

@@ -1873,7 +1873,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       buf_puts(b, "((");
       if (bm_kinds) buf_puts(b, pass == 0 ? "sp_RbVal" : pass == 2 ? "void" : "sp_int");
       else if (oret) buf_puts(b, oint_ctype(tret));
-      else emit_ctype(c, tret, b);
+      else emit_ctype(c, tm ? repr_call_result_storage(tret) : tret, b);
       buf_puts(b, " (*)(");
       const char *sct = bm_self_ctype(c, tm, shift);
       if (arm == 0) buf_puts(b, sct);

@@ -1943,8 +1943,8 @@ static inline const char *sp_class_val_display(sp_RbVal v) {
 /* A class method to_s or inspect a class of the program defines answers
    for it where the class is printed: a program with one installs these,
    which answer NULL for any other class */
-extern const char *(*sp_class_user_to_s_fn)(sp_Class);
-extern const char *(*sp_class_user_inspect_fn)(sp_Class);
+extern sp_RbVal (*sp_class_user_to_s_fn)(sp_Class, int *);
+extern sp_RbVal (*sp_class_user_inspect_fn)(sp_Class, int *);
 /* the program's own Array#inspect, for an Array printed boxed (sp_poly_inspect),
    NULL where it has none */
 extern const char *(*sp_array_user_inspect_fn)(sp_RbVal);
@@ -1962,14 +1962,34 @@ static inline void sp_pp_user_leave(int *w) { sp_pp_printing = *w; }
    sp_pp_printing is cleared for it, so inside that method p and inspect run
    the program's Array#inspect as outside a pp */
 #define SP_PP_USER(e) ({ int _ppw = sp_pp_printing; sp_pp_printing = 0; \
-  const char *_ppr = (e); sp_pp_printing = _ppw; _ppr; })
-static inline const char *sp_class_val_user(sp_RbVal v, const char *(*fn)(sp_Class)) {
+  __typeof__(e) _ppr = (e); sp_pp_printing = _ppw; _ppr; })
+/* (and a String some emitters answer boxed, a String-typed read whose nil
+   or raise arm is a box: the box's String, the handle it holds, or nil) */
+static inline const char *sp_strface_b_box(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.v.p &&
+      (v.cls_id == SP_BUILTIN_STRBUF ||
+       (v.cls_id >= 0 && sp_class_kind_of_name_fn && sp_class_kind_of_name_fn(v.cls_id, "String"))))
+    return ((sp_String *)v.v.p)->data;
+  return v.tag == SP_TAG_STR ? v.v.s : NULL;
+}
+const char *sp_obj_to_s_fallback(sp_RbVal v);
+static inline const char *sp_class_val_user_bytes(sp_RbVal v, sp_RbVal (*fn)(sp_Class, int *),
+                                                  size_t *length) {
   if (fn && v.cls_id != SP_CLASS_BY_NAME) {
-    sp_Class _c = {v.v.i, NULL};
-    const char *u = fn(_c);
-    if (u) return u;
+    int found;
+    const char *s = sp_strface_b_box(fn((sp_Class){v.v.i, NULL}, &found));
+    if (found) {
+      if (!s) s = sp_obj_to_s_fallback(v);
+      if (length) *length = sp_str_byte_len(s);
+      return s;
+    }
   }
-  return sp_class_val_display(v);
+  const char *name = sp_class_val_display(v);
+  if (length) *length = strlen(name);
+  return name;
+}
+static inline const char *sp_class_val_user(sp_RbVal v, sp_RbVal (*fn)(sp_Class, int *)) {
+  return sp_class_val_user_bytes(v, fn, NULL);
 }
 /* A program that reopens a builtin class (`class Module ... end`) gives the
    reopening a user class id of its own, while the builtin's values (a class
@@ -2168,10 +2188,8 @@ static inline int sp_is_exc_subclass_cls(sp_int cls_id) {
   return 0;
 }
 const char *sp_poly_to_s(sp_RbVal v);
-/* Symbol#to_s / #id2name and a boxed receiver's to_s as a program calls
-   them: a Symbol's is a new frozen String each call (lib/sp_poly_cold.c) */
-const char *sp_sym_to_s_new(sp_sym id);
-const char *sp_poly_to_s_call(sp_RbVal v);
+/* Symbol#to_s and #id2name return a distinct frozen String. */
+sp_String *sp_sym_to_s_new(sp_sym id);
 /* Unwrap a boxed IO value to its sp_File *. The user-#to_io dispatch
    asks this for a poly return type, because the generated arm is forced
    to box the answer through sp_RbVal (the codegen of a poly body has
@@ -3269,25 +3287,8 @@ static inline sp_RbVal sp_StrArray_box_handle(sp_StrArray *a, sp_int i) {
   sp_strelem s = sp_StrArray_get_e(a, i);
   return s ? sp_box_nullable_obj(s, SP_BUILTIN_STRBUF) : sp_box_nil();
 }
-/* A shared String handle's read face with the handle published to the
-   deep-return side channel: the call sequences the write, where two inline
-   `(_sp_ret_strbuf = h, ...)` among one call's arguments were unsequenced
-   writes to the channel. */
-/* One representation (string-one-repr-design.md): no slot holds bytes, so a
-   read face never outlives a change of the handle, and it is the bytes
-   themselves (the payload is laid out as a byte string, marker 0xfd). A
-   frozen handle's payload, which nothing can change or move any more, is
-   its read face too: it reads frozen through its handle
-   (sp_str_is_frozen_val), its mark reaches the handle, and the bytes are
-   that String's own, equal? to every name of it (`inject(s)` over a frozen
-   s answered a String `<<` changed). The runtime objects read it so as well
-   as the generated unit: a boxed Hash#merge! of a frozen String kept a
-   copy. NULL for nil. */
+/* Borrow the current payload of a nullable String handle. */
 static inline const char *sp_strbuf_read(sp_String *h) {
-  return h ? sp_String_cstr(h) : NULL;
-}
-static inline const char *sp_strbuf_read_pub(sp_String *h) {
-  _sp_ret_strbuf = (void *)h;
   return h ? sp_String_cstr(h) : NULL;
 }
 /* ...except a read held across a block the program runs (the receiver or
@@ -3297,10 +3298,6 @@ static inline const char *sp_strbuf_read_pub(sp_String *h) {
 static inline const char *sp_strbuf_read_own(sp_String *h) {
   if (h && SP_UNLIKELY(sp_String_is_frozen(h))) return sp_String_cstr(h);
   return h ? sp_str_concat(sp_String_cstr(h), (&("\xff")[1])) : NULL;
-}
-static inline const char *sp_strbuf_read_pub_own(sp_String *h) {
-  _sp_ret_strbuf = (void *)h;
-  return sp_strbuf_read_own(h);
 }
 /* --share-strings (#8321): a String Range made from shared handles keeps
    them (hf / hl), and a read of the Range takes each handle's bytes as they
@@ -3483,20 +3480,69 @@ static inline sp_String *sp_poly_to_s_strbuf(sp_RbVal v) {
 static inline sp_RbVal sp_strbuf_to_s_box(sp_String *h) {
   return h ? sp_box_nullable_obj(h, SP_BUILTIN_STRBUF) : sp_box_str(sp_str_frozen_empty);
 }
+/* Missing a target and returning nil have different Ruby answers.
+   The dispatch writes the actual result once and reports target presence. */
+static inline int sp_user_display_box(sp_RbVal v, int inspect, sp_RbVal *r) {
+  if (v.tag == SP_TAG_CLASS && v.cls_id != SP_CLASS_BY_NAME) {
+    sp_RbVal (*fn)(sp_Class, int *) = inspect ? sp_class_user_inspect_fn : sp_class_user_to_s_fn;
+    if (fn) {
+      int found;
+      *r = fn((sp_Class){v.v.i, NULL}, &found);
+      return found;
+    }
+  }
+  if (v.tag == SP_TAG_OBJ && v.v.p) {
+    int k = v.cls_id >= 0 ? v.cls_id : sp_bsub_cls_fn ? sp_bsub_cls_fn(v) : -1;
+    sp_RbVal (*fn)(int, void *, int *) = inspect ? sp_obj_inspect_fn : sp_obj_to_s_fn;
+    if (k >= 0 && fn) {
+      int found;
+      SP_GC_ROOT_RBVAL(v);
+      *r = fn(k, v.v.p, &found);
+      return found;
+    }
+  }
+  return 0;
+}
+/* Interpolation keeps the String itself until the literal is assembled.
+   A non-String conversion answer displays the identity of its receiver. */
+static inline sp_String *sp_interp_string(sp_RbVal value, int *neutral) {
+  SP_GC_ROOT_RBVAL(value);
+  sp_RbVal text = value;
+  if (!sp_strface_b_box(value)) {
+    if (!sp_user_display_box(value, 0, &text)) {
+      if (value.tag == SP_TAG_CLASS) {
+        /* ASCII class names are US-ASCII. A name containing a non-ASCII
+           character contributes its encoding to the segment. */
+        const char *name = sp_class_val_display(value);
+        *neutral = !sp_str_is_binary(name) && sp_str_ascii_only(name);
+        return sp_String_new_fresh(name);
+      }
+      *neutral = 1;
+      return sp_String_new_fresh(sp_poly_to_s(value));
+    }
+    if (!sp_strface_b_box(text)) {
+      *neutral = 1;
+      return sp_String_new_fresh(sp_obj_to_s_fallback(value));
+    }
+  }
+  SP_GC_ROOT_RBVAL(text);
+  return sp_poly_as_strbuf(text);
+}
 static inline sp_RbVal sp_poly_to_s_box(sp_RbVal v) {
-  if (sp_poly_is_str_subclass(v)) return sp_box_str_new(sp_str_dup(sp_String_cstr((sp_String *)v.v.p)));
+  sp_RbVal user;
+  if (sp_user_display_box(v, 0, &user)) return user;
+  if (sp_poly_is_str_subclass(v))
+    return sp_box_obj(sp_String_new_unfrozen(sp_String_cstr((sp_String *)v.v.p)), SP_BUILTIN_STRBUF);
   if ((v.tag == SP_TAG_STR && v.v.s) || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)) return v;
-  return sp_box_str_new(sp_poly_to_s_call(v));   /* (a Symbol's to_s is a new String) */
+  if (v.tag == SP_TAG_SYM) return sp_box_obj(sp_sym_to_s_new((sp_sym)v.v.i), SP_BUILTIN_STRBUF);
+  return sp_box_str_new(sp_poly_to_s(v));
 }
-/* ...for a value stored where no handle is wanted for what is not a String
-   (a Hash's value a block answers): a String answers its own box as
-   sp_poly_to_s_box does, anything else its to_s boxed as bytes, with no
-   handle made around it */
-static inline sp_RbVal sp_poly_to_s_box_plain(sp_RbVal v) {
-  if (sp_poly_is_str_subclass(v)) return sp_box_str(sp_str_dup(sp_String_cstr((sp_String *)v.v.p)));
-  if ((v.tag == SP_TAG_STR && v.v.s) || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)) return v;
-  return sp_box_str(sp_poly_to_s_call(v));
+static inline sp_RbVal sp_poly_inspect_box(sp_RbVal v) {
+  sp_RbVal r;
+  if (sp_user_display_box(v, 1, &r)) return r;
+  return sp_box_str_new(sp_poly_inspect(v));
 }
+
 /* A boxed value unboxed into a String slot. A mutable String's box carries
    its sp_String handle in the union, so reading `.v.s` there hands the slot
    the handle, not the bytes; the bytes are the handle's data, the same live
@@ -3505,13 +3551,6 @@ static inline sp_RbVal sp_poly_to_s_box_plain(sp_RbVal v) {
 static inline const char *sp_poly_unbox_s(sp_RbVal v) {
   if (sp_poly_is_strbuf(v) && v.v.p) return sp_String_cstr((sp_String *)v.v.p);
   return v.v.s;
-}
-/* sp_poly_unbox_s for a method answering the String a box holds: the box's
-   handle (NULL when it holds plain bytes) goes to the deep-return side
-   channel, which the caller picks up as it does a handle's read. */
-static inline const char *sp_poly_unbox_s_pub(sp_RbVal v) {
-  _sp_ret_strbuf = (sp_poly_is_strbuf(v) && v.v.p) ? v.v.p : NULL;
-  return sp_poly_unbox_s(v);
 }
 /* The object pointer a boxed value carries, for a slot that holds pointers
    rather than sp_RbVal (a PtrArray of one user class). nil is a NULL element,
@@ -3939,16 +3978,16 @@ static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v) {
                           sp_obj_cls_name_fn ? sp_obj_cls_name_fn((int)v.cls_id) : "Object"));
   return 0;
 }
-static SP_NOINLINE const char *sp_poly_arg_str_obj(sp_RbVal v) {
+static SP_NOINLINE sp_String *sp_poly_arg_str_obj(sp_RbVal v) {
   if (v.v.p && sp_obj_to_str_fn) {
     SP_GC_ROOT_RBVAL(v);   /* across the user #to_str, as sp_poly_check_str_obj roots it */
-    const char *r = sp_obj_to_str_fn((int)v.cls_id, v.v.p);
+    sp_String *r = sp_obj_to_str_fn((int)v.cls_id, v.v.p);
     if (r) return r;
   }
   sp_raise_cls("TypeError",
                sp_sprintf("no implicit conversion of %s into String",
                           sp_obj_cls_name_fn ? sp_obj_cls_name_fn((int)v.cls_id) : "Object"));
-  return sp_str_empty;
+  return NULL;
 }
 /* A boxed value entering a `const char *` ARGUMENT slot. sp_poly_to_s cannot
    carry the protocol the way sp_poly_to_i does: its object arm renders through
@@ -3957,7 +3996,7 @@ static SP_NOINLINE const char *sp_poly_arg_str_obj(sp_RbVal v) {
    looseness (an Integer argument still stringifies) -- a separate
    compatibility question from this protocol, deliberately left alone. */
 static SP_NOINLINE const char *sp_poly_arg_str_slow(sp_RbVal v) {
-  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_str_obj(v);
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_String_cstr_nil(sp_poly_arg_str_obj(v));
   return sp_poly_to_s(v);
 }
 static SP_INLINE const char *sp_poly_arg_str(sp_RbVal v) {
@@ -3985,28 +4024,37 @@ static SP_INLINE sp_oint sp_poly_gets_olim(sp_RbVal v) { return v.tag == SP_TAG_
    is handed, so rooting this copy keeps that object alive. Both callers rely
    on this one root: sp_poly_cmp_to_str below, and the poly casecmp arm the
    emitter renders. */
-static SP_NOINLINE const char *sp_poly_check_str_obj(sp_RbVal v) {
+static SP_NOINLINE sp_String *sp_poly_check_str_obj(sp_RbVal v) {
   SP_GC_ROOT_RBVAL(v);
   return sp_obj_to_str_fn((int)v.cls_id, v.v.p);
 }
-/* CRuby's rb_check_string_type, which the String COMPARISONS ask where the
-   argument slots above ask the raising forms: a String answers itself, a user
-   object whose #to_str the conversion bridge carries answers its conversion,
-   and every other value answers NULL without raising. "Not a string" is a real
-   answer here -- it is `"abc" <=> obj`'s nil and `"abc" < obj`'s comparison
-   error -- where in an argument slot it is a TypeError.
-
-   The bridge carries only a #to_str whose static return is a String
-   (conv_bridge_callee), so an object whose #to_str the analysis could pin no
-   further than poly answers NULL here and converts on the TYPED side alone.
-   That asymmetry is deliberate for now, not an oversight to tidy away: giving
-   the bridge a boxed-answer entry is its own change. */
+/* A conversion returning a Ruby value keeps the original String object.
+   A comparison or a native argument borrows its bytes at the read. */
+static inline sp_RbVal sp_poly_check_str_box(sp_RbVal v) {
+  if (sp_poly_is_strbuf(v) || sp_strface_b_box(v)) return v;
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn)
+    return sp_box_nullable_obj(sp_poly_check_str_obj(v), SP_BUILTIN_STRBUF);
+  return sp_box_nil();
+}
+static inline sp_RbVal sp_kernel_string_to_s_result(sp_RbVal v, sp_RbVal s) {
+  SP_GC_ROOT_RBVAL(s);
+  if (!sp_strface_b_box(s))
+    sp_raise_cls("TypeError", sp_sprintf("can't convert %s to String (%s#to_s gives %s)",
+                 sp_poly_class_name(v), sp_poly_class_name(v), sp_poly_class_name(s)));
+  return s;
+}
+static inline sp_RbVal sp_kernel_string(sp_RbVal v) {
+  SP_GC_ROOT_RBVAL(v);
+  sp_RbVal s = sp_poly_check_str_box(v);
+  if (!sp_poly_nil_p(s)) return s;
+  return sp_kernel_string_to_s_result(v, sp_poly_to_s_box(v));
+}
 static SP_INLINE const char *sp_poly_check_str(sp_RbVal v) {
   if (v.tag == SP_TAG_STR) return v.v.s;
   /* a shared String (--share-strings) is a String: its bytes as they are now */
   if (sp_poly_is_strbuf(v)) return sp_String_cstr((sp_String *)v.v.p);
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn)
-    return sp_poly_check_str_obj(v);
+    return sp_String_cstr_nil(sp_poly_check_str_obj(v));
   return NULL;
 }
 /* The ANSWER of a #to_str the analysis could pin no further than poly, on its
@@ -4076,6 +4124,13 @@ static SP_NOINLINE const char *sp_poly_arg_str_chk_slow(sp_RbVal v) {
 static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
   if (v.tag == SP_TAG_STR) return v.v.s;
   return sp_poly_arg_str_chk_slow(v);
+}
+/* A native binding retaining a String accepts the same implicit conversion
+   as a strict text argument and keeps the object the conversion returns. */
+static SP_INLINE sp_String *sp_poly_arg_str_handle(sp_RbVal v) {
+  if (sp_poly_is_strbuf(v)) return (sp_String *)v.v.p;
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_str_obj(v);
+  return sp_String_new_shared(sp_poly_arg_str_chk(v));
 }
 /* A String argument that is nil at run time (a String-or-nil, such as
    byteslice answers): TypeError, where a NULL passed on was taken as
@@ -4575,7 +4630,7 @@ static SP_UNUSED sp_int sp_poly_cmp_ans(sp_RbVal r, sp_RbVal a, sp_RbVal b) {
    NoMethodError, answered as a value so it sits in an expression arm. */
 /* Symbol#id2name on a boxed receiver: the Symbol's name as a String, as
    to_s answers it; a value of any other kind has no id2name. */
-static const char *sp_poly_sym_id2name(sp_RbVal v) {
+static sp_String *sp_poly_sym_id2name(sp_RbVal v) {
   if (v.tag != SP_TAG_SYM) sp_raise_nomethod(sp_nomethod_msg("id2name", v));
   return sp_sym_to_s_new((sp_sym)v.v.i);
 }
@@ -6951,7 +7006,7 @@ static sp_RbVal sp_poly_class_try_convert(sp_RbVal k, sp_RbVal x) {
   int ok;
   if (strcmp(n, "Array") == 0) ok = x.tag == SP_TAG_OBJ && sp_poly_is_array_kind(x.cls_id);
   else if (strcmp(n, "Hash") == 0) ok = x.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(x.cls_id);
-  else if (strcmp(n, "String") == 0) ok = x.tag == SP_TAG_STR || sp_poly_is_strbuf(x);
+  else if (strcmp(n, "String") == 0) return sp_poly_check_str_box(x);
   else if (strcmp(n, "Regexp") == 0) ok = x.tag == SP_TAG_OBJ && x.cls_id == SP_BUILTIN_REGEX;
   else if (strcmp(n, "IO") == 0) ok = x.tag == SP_TAG_OBJ && x.cls_id == SP_BUILTIN_IO;
   else if (strcmp(n, "Integer") == 0) {
@@ -10694,9 +10749,9 @@ static sp_RbVal sp_poly_pattern_chk(sp_RbVal v, int nil_ok) {
   /* a user object without #to_str is no pattern either */
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) {
     SP_GC_ROOT_RBVAL(v);
-    const char *r = v.v.p && sp_obj_to_str_fn ? sp_obj_to_str_fn((int)v.cls_id, v.v.p) : NULL;
+    sp_String *r = v.v.p && sp_obj_to_str_fn ? sp_obj_to_str_fn((int)v.cls_id, v.v.p) : NULL;
     if (!r) sp_scan_bad_pattern(v);
-    return sp_box_str(r);
+    return sp_box_obj(r, SP_BUILTIN_STRBUF);
   }
   return v;
 }
@@ -18405,18 +18460,6 @@ static inline sp_String *sp_exc_kept_message_handle(sp_Exception *e) {
   return h;
 }
 
-/* The identity of what #message answers for the stored message, as the box
-   an identity compare reads (sp_poly_equal, sp_poly_identity_ptr), read
-   without attaching a handle: the handle's box once one is attached, else the
-   stored bytes, which every plain read answers until then. A message never
-   given answers a new String on each read, so each ask is a new identity. */
-static inline sp_RbVal sp_exc_message_idbox(sp_Exception *e) {
-  if (!e) return sp_box_str(sp_str_frozen_empty);
-  if (e->msg_h) return sp_box_obj(e->msg_h, SP_BUILTIN_STRBUF);
-  if (!sp_exc_msg_absent(e)) return sp_box_str(e->msg);
-  return sp_box_str_new(sp_exc_message(e));
-}
-
 /* A shared dispatch returns the stored message object without a byte copy.
    An absent message still answers a fresh class-name String each time. */
 static inline sp_String *sp_exc_stored_message_handle(sp_Exception *e) {
@@ -18426,6 +18469,10 @@ static inline sp_String *sp_exc_stored_message_handle(sp_Exception *e) {
   sp_String *h = sp_String_new_shared(e->msg);
   sp_exc_attach_msg(e, h);
   return h;
+}
+
+static inline sp_RbVal sp_exc_message_idbox(sp_Exception *e) {
+  return sp_box_nullable_obj(sp_exc_stored_message_handle(e), SP_BUILTIN_STRBUF);
 }
 
 /* SystemCallError#initialize, as CRuby's syserr_initialize runs it for an
@@ -18684,7 +18731,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg_h(sp_RbVal v, sp_RbVal m) {
     sp_String *h = (sp_String *)m.v.p;
     SP_GC_ROOT(h);
     sp_raise_exc((sp_Exception *)sp_exc_attach_msg(
-      sp_exc_exception((sp_Exception *)v.v.p, sp_exc_msg_given(sp_strbuf_read_pub(h))), h));
+      sp_exc_exception((sp_Exception *)v.v.p, sp_exc_msg_given(sp_strbuf_read(h))), h));
   }
   if (m.tag == SP_TAG_OBJ && m.cls_id == SP_BUILTIN_STRBUF && m.v.p && v.tag == SP_TAG_CLASS) {
     const char *cn = sp_class_val_name(v);
@@ -18694,7 +18741,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg_h(sp_RbVal v, sp_RbVal m) {
       sp_String *h = (sp_String *)m.v.p;
       SP_GC_ROOT(h);
       sp_raise_exc((sp_Exception *)sp_exc_attach_msg(
-        sp_exc_new_for_catch(cn, sp_exc_msg_given(sp_strbuf_read_pub(h))), h));
+        sp_exc_new_for_catch(cn, sp_exc_msg_given(sp_strbuf_read(h))), h));
     }
   }
   sp_raise_poly_msg(v, m);
@@ -18817,7 +18864,7 @@ static sp_RbVal sp_poly_exc_acc(sp_RbVal v, const char *which) {
     sp_raise_cls("NoMethodError",
                  sp_sprintf("undefined method '%s' for an instance of %s", which, sp_poly_class_name(v)));
   sp_Exception *e = (sp_Exception *)v.v.p;
-  if (!strcmp(which, "message")) return sp_box_str(sp_exc_message(e));
+  if (!strcmp(which, "message")) return sp_exc_message_idbox(e);
   if (!strcmp(which, "result"))  return sp_exc_result_acc(e);
   if (!strcmp(which, "args"))    return sp_exc_args_acc(e);
   if (!strcmp(which, "private_call?")) return sp_box_bool(sp_exc_private_call_acc(e));
@@ -21844,6 +21891,10 @@ sp_Enumerator *sp_Enumerator_new_gen(void (*gen)(sp_Fiber *), void *cap, sp_RbVa
    each_codepoint over a shared String's handle, read as it is walked
    (lib/sp_cold.c) */
 sp_Enumerator *sp_enum_str_each_h(sp_String *h, const char *meth);
+sp_Enumerator *sp_poly_string_line_enum(sp_RbVal receiver, sp_RbVal separator,
+                                      sp_RbVal keywords, sp_int argc, sp_bool chomp_given);
+sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
+                                sp_RbVal keywords, sp_int argc, const char *method);
 /* A blockless each_char / each_line / each_byte / each_codepoint on a boxed
    receiver: CRuby's Enumerator, as on a typed String. A box of a shared
    String's handle (--share-strings) gives the Enumerator over that handle,
@@ -24565,17 +24616,10 @@ static inline sp_RbVal sp_strface_box_new(const char *s) {
 static inline const char *sp_strface_zero_b(int z) { (void)z; return NULL; }
 static inline sp_String *sp_strface_zero_h(int z) { (void)z; return NULL; }
 static inline sp_RbVal sp_strface_zero_box(int z) { (void)z; return sp_box_nil(); }
-/* (and a String some emitters answer boxed, a String-typed read whose nil
-   or raise arm is a box: the box's String, the handle it holds, or nil) */
-static inline const char *sp_strface_b_box(sp_RbVal v) {
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF) return v.v.p ? ((sp_String *)v.v.p)->data : NULL;
-  return v.tag == SP_TAG_STR ? v.v.s : NULL;
-}
 static inline sp_String *sp_strface_h_box(sp_RbVal v) { return sp_poly_nil_p(v) ? NULL : sp_poly_as_strbuf(v); }
 static inline sp_RbVal sp_strface_box_self(sp_RbVal v) { return v; }
 /* (an untyped pointer is bytes: a conditional with a bare NULL arm, `c ?
-   s : NULL` or a raise arm's `(raise, NULL)`, is a void *; the emitters
-   that hand the published handle on cast it, (sp_String *)_sp_ret_strbuf) */
+   s : NULL` or a raise arm's `(raise, NULL)`, has type void *. */
 #define SP_ONE_FACE(x, hf, bf, zf, rf) ({ __auto_type _sp_fv = (x); \
   _Generic(_sp_fv, sp_String *: hf, sp_RbVal: rf, int: zf, long: zf, long long: zf, default: bf)(_sp_fv); })
 #define SP_STR_B(x) SP_ONE_FACE(x, sp_strface_b_of, sp_strface_b_self, sp_strface_zero_b, sp_strface_b_box)
@@ -24591,19 +24635,6 @@ static inline sp_RbVal sp_strface_box_self(sp_RbVal v) { return v; }
 /* ...and a String of either face as the face slot `dst` has, where the
    emitter of `dst = v` knows neither (a block parameter a typed walk binds) */
 #define SP_STR_TO(dst, v) _Generic((dst), sp_String *: SP_STR_HDL(v), default: SP_STR_B(v))
-/* A String method's answer that is a new String: the channel a read of a
-   handle inside it published is cleared after the answer is made, so a
-   caller's pickup does not take that handle for it (one_tail_fresh) */
-static inline const char *sp_strface_unpub(const char *s) { _sp_ret_strbuf = NULL; return s; }
-/* At a method's return the channel names what its body read last (the test
-   of `c ? (t = s) : "Z"` publishes s), so the return names its answer: a
-   handle slot's handle, or the handle a conditional's bytes are a view of
-   (none for a new String) */
-static inline sp_String *sp_strface_pub_h(sp_String *h) { _sp_ret_strbuf = (void *)h; return h; }
-static inline const char *sp_strface_pub_b(const char *s) {
-  _sp_ret_strbuf = s && ((const unsigned char *)s)[-1] == 0xfd ? (void *)((sp_str_hdr *)sp_fd_base(s))->next : NULL;
-  return s;
-}
 /* A mutator whose receiver is no variable (`String(a[0]) << "!"`): when
    the receiver's bytes are a live payload's view the String is the
    payload's owner, which takes the new bytes, and the answer is its view

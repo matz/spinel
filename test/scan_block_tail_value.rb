@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 # String#scan with a block answers its receiver, at a method's tail too,
 # where the method answered nil.
 def f(s) = s.scan(/\d/) { print _1 }
@@ -21,3 +22,24 @@ class S
 end
 def m(o) = o.scan(1) { }
 p m(S.new)
+
+# A handle result preserves the walked String, including through a rescue
+# result slot; callers can mutate that same receiver after the walk.
+def kept(s)
+  s.scan(/\d/) { }
+end
+def kept_with_ensure(s)
+  s.scan(/\d/) { }
+ensure
+  puts :ensured
+end
+s = +"a1"
+r = kept(s)
+p r.equal?(s)
+r << "b2"
+p s
+r = kept_with_ensure(s)
+p r.equal?(s)
+r << "c3"
+p s
+p kept("").frozen?

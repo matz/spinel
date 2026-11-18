@@ -453,37 +453,50 @@ sp_StrArray *sp_str_rpartition(const char *s, const char *sep) {
   sp_StrArray_push_e(r, sp_String_new_shared(sp_str_byteslice(s, pre + sl, bl - pre - sl)));
   return r;
 }
-/* String#lines: split on \n but PRESERVE the trailing newline on each
-   line (CRuby semantics). The last line keeps its terminator if present;
-   if absent, it just stops there. Empty string returns an empty array.
-   `end` is computed once at entry so a string with no newlines avoids
-   a redundant strlen call on the trailing piece. */
-/* String#lines(sep) / #each_line(sep): segments each keeping the separator
-   (the trailing fragment keeps whatever remains). An empty sep is CRuby's
-   "paragraph mode" -- not supported here; callers gate on a non-empty sep. */
-/* lines(sep, chomp: true): the separator's run is trimmed off each piece
-   (#3546) */
-static size_t sp_str_nl_at(const char*q,const char*e){return q<e&&*q=='\n'?1:q+1<e&&q[0]=='\r'&&q[1]=='\n'?2:0;}
-static sp_StrArray*sp_str_paragraphs(const char*s,int chomp){SP_GC_ROOT_STR(s);sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);const char*e=s+sp_str_byte_len(s),*p=s;while(p<e){const char*q=p,*cut=NULL;size_t k,k2;while(q<e&&!cut){if((k=sp_str_nl_at(q,e))&&(k2=sp_str_nl_at(q+k,e)))cut=q+k+k2;else q+=k?k:1;}size_t n=cut?(size_t)((chomp?q:cut)-p):(size_t)(e-p);char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_str_set_len(r,n);sp_StrArray_push_e(a,sp_String_new_shared(sp_str_bin_like(s,r)));if(!cut)break;p=cut;while((k=sp_str_nl_at(p,e)))p+=k;}return a;}
-sp_StrArray*sp_str_lines_sep_chomp(const char*s,const char*sep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sep);
-  if(sep&&!sp_str_byte_len(sep))return sp_str_paragraphs(s,1);
-  sp_StrArray*src=sp_str_lines_sep(s,sep);SP_GC_ROOT(src);
-  if(!sep)return src;
-  sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);
-  size_t sl=sep?sp_str_byte_len(sep):0;
-  for(sp_int i=0;i<sp_StrArray_length(src);i++){
-    const char*e=sp_StrArray_get(src,i);size_t n=e?sp_str_byte_len(e):0;
-    if(n>=sl&&memcmp(e+n-sl,sep,sl)==0)n-=sl;
-    char*r=sp_str_alloc_raw(n+1);memcpy(r,e,n);r[n]=0;sp_str_set_len(r,n);
-    sp_StrArray_push_e(a,sp_String_new_shared(r));
-  }
-  return a;
+static void sp_str_check_compatible_encoding(const char *s, const char *other) {
+  int binary = sp_str_is_binary(s);
+  if (binary != sp_str_is_binary(other) && !sp_str_ascii_only(other) && !sp_str_ascii_only(s))
+    sp_raise_cls("Encoding::CompatibilityError", binary
+      ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
+      : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
 }
-sp_StrArray*sp_str_lines_sep(const char*s,const char*sep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sep);sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);if (SP_UNLIKELY(!s)) sp_nil_recv("lines");if(!sep){sp_StrArray_push_e(a,sp_String_new_shared(sp_str_bin_like(s,(char*)sp_str_dup(s))));return a;}if(!sp_str_byte_len(s))return a;size_t sl=sp_str_byte_len(sep);/* an empty separator is CRuby's paragraph mode: split after each run of two
-   or more newlines, keeping the run with the paragraph (#3546) */
-if(sl==0)return sp_str_paragraphs(s,0);const char*end=s+sp_str_byte_len(s);const char*p=s;while(p<end){const char*hit=sp_bytestr(p,(size_t)(end-p),sep,sl);size_t n=hit?(size_t)(hit-p)+sl:(size_t)(end-p);char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_str_set_len(r,n);sp_StrArray_push_e(a,sp_String_new_shared(sp_str_bin_like(s,r)));if(!hit)break;p=hit+sl;}return a;}
+static size_t sp_str_nl_at(const char*q,const char*e){return q<e&&*q=='\n'?1:e-q>=2&&q[0]=='\r'&&q[1]=='\n'?2:0;}
+/* Read one line from the byte views taken for this walk. A nil separator
+   is handled by the receiver-owning caller, since its answer is the receiver. */
+sp_String *sp_str_line_next(const char *s, const char *sep, size_t *offset, sp_bool chomp) {
+  const char *end = s + sp_str_byte_len(s);
+  const char *start = s + *offset;
+  if (start == end) return NULL;
+  if (!*offset) sp_str_check_compatible_encoding(s, sep);
+  size_t seplen = sp_str_byte_len(sep);
+  const char *next = end;
+  const char *stop = end;
+  if (seplen) {
+    const char *hit = sp_bytestr(start, (size_t)(end - start), sep, seplen);
+    if (hit) {
+      next = hit + seplen;
+      stop = chomp ? hit : next;
+      if (chomp && seplen == 1 && *sep == '\n' && stop > start && stop[-1] == '\r')
+        stop--;
+    }
+  }
+  else {
+    for (const char *q = start; q < end;) {
+      size_t n = sp_str_nl_at(q, end);
+      size_t second = n ? sp_str_nl_at(q + n, end) : 0;
+      if (!second) { q += n ? n : 1; continue; }
+      next = q + n + second;
+      stop = chomp ? q : next;
+      while ((n = sp_str_nl_at(next, end))) next += n;
+      break;
+    }
+  }
+  *offset = (size_t)(next - s);
+  int binary = sp_str_is_binary(s);
+  sp_String *part = sp_String_new_inline_len(start, (int64_t)(stop - start));
+  return binary ? sp_String_force_encoding(part, 1) : part;
+}
 sp_StrArray*sp_str_lines(const char*s){SP_GC_ROOT_STR(s);sp_StrArray*a=sp_StrArray_new();size_t bl=sp_str_byte_len(s);if(bl==0)return a;SP_GC_ROOT(a);const char*end=s+bl;const char*p=s;while(p<end){const char*nl=memchr(p,'\n',(size_t)(end-p));size_t n=nl?(size_t)(nl-p+1):(size_t)(end-p);char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_str_set_len(r,n);sp_StrArray_push_e(a,sp_String_new_shared(sp_str_bin_like(s,r)));if(!nl)break;p=nl+1;}return a;}
-sp_StrArray*sp_str_lines_chomp(const char*s){SP_GC_ROOT_STR(s);sp_StrArray*a=sp_StrArray_new();size_t bl=sp_str_byte_len(s);if(bl==0)return a;SP_GC_ROOT(a);const char*end=s+bl;const char*p=s;while(p<end){const char*nl=memchr(p,'\n',(size_t)(end-p));size_t n=nl?(size_t)(nl-p):(size_t)(end-p);if(nl&&nl>s&&nl[-1]=='\r')n--;char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_str_set_len(r,n);sp_StrArray_push_e(a,sp_String_new_shared(r));if(!nl)break;p=nl+1;}return a;}
 /* String#byteslice(start,len): byte-indexed (unlike the char-indexed
    sp_str_sub_range). Negative start counts back from the byte length.
    Out-of-range yields the empty string rather than CRuby nil. */
@@ -534,10 +547,7 @@ static void sp_str_bsp_span(const char*s,sp_int*beg,sp_int*len){
    result is BINARY. */
 int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen){
   sp_str_bsp_span(s,start,len);sp_str_bsp_span(val,vstart,vlen);
-  if(sp_str_is_binary(s)!=sp_str_is_binary(val)&&!sp_str_ascii_only(val)&&!sp_str_ascii_only(s))
-    sp_raise_cls("Encoding::CompatibilityError",sp_str_is_binary(s)
-      ?"incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
-      :"incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
+  sp_str_check_compatible_encoding(s, val);
   return sp_str_cat_binary(s,val);
 }
 const char*sp_str_bytesplice5(const char*s,sp_int start,sp_int len,const char*val,sp_int vstart,sp_int vlen){
@@ -625,7 +635,12 @@ const char*sp_str_rstrip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("rstr
    left the copy UTF-8, so `"caf\u00e9".b.inspect` printed the characters where
    CRuby prints the escaped bytes, and length kept counting characters. pack
    already marks its answer; #b is the sibling that did not. */
-const char*sp_str_b(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("b");char*r=(char*)sp_str_dup(s);sp_str_mark_binary(r);return r;}
+sp_String *sp_String_binary_copy(const char *s) {
+  SP_GC_ROOT_STR(s);
+  if (!s) sp_nil_recv("b");
+  sp_String *copy = sp_String_new_inline_len(s, (int64_t)sp_str_byte_len(s));
+  return sp_String_force_encoding(copy, 1);
+}
 const char*sp_str_dup(const char*s){SP_GC_ROOT_STR(s);if(!s)return NULL;size_t l=sp_str_byte_len(s);char*r=sp_str_alloc(l);memcpy(r,s,l);if(sp_str_is_binary(s))sp_str_mark_binary(r);return r;}
 
 /* ===================== utf8-dependent transforms ===================== */
@@ -1095,7 +1110,24 @@ const char*sp_str_sub_range(const char*s,sp_int start,sp_int len){SP_GC_ROOT_STR
    yield CRuby's `"hello"[20] -> nil`. Byte-indexed text (BINARY, or proved
    7-bit) reads the byte at i: counting its characters and slicing one out
    (sp_str_sub_range) was most of a scanning loop's `s[i]`. */
-const char*sp_str_char_at_or_nil(const char*s,sp_int i){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");size_t fb;if(sp_str_fixed_width(s,&fb)){sp_int n=(sp_int)fb;if(i<0)i+=n;if(i<0||i>=n)return NULL;const char*one=sp_char_one((unsigned char)s[i],sp_str_is_binary(s));if(one)return one;}sp_int cl=sp_str_length(s);if(i<0)i+=cl;if(i<0||i>=cl)return NULL;return sp_str_sub_range(s,i,1);}
+const char *sp_str_char_at_or_nil(const char *s, sp_int index) {
+  SP_GC_ROOT_STR(s);
+  if (!s) sp_nil_recv("[]");
+  size_t length;
+  uint32_t flags = sp_str_fixed_width_flags(s, &length);
+  if (flags) {
+    sp_int n = (sp_int)length;
+    if (index < 0) index += n;
+    if (index < 0 || index >= n) return NULL;
+    const char *one = sp_char_one((unsigned char)s[index], (flags & SP_STR_SIZE_BINARY) != 0);
+    if (one) return one;
+  } else {
+    sp_int n = sp_str_length(s);
+    if (index < 0) index += n;
+    if (index < 0 || index >= n) return NULL;
+  }
+  return sp_str_sub_range(s, index, 1);
+}
 /* The width in bytes of the character at byte `at` of s, which ends at
    byte blen: one on a BINARY string, as #chars counts. */
 size_t sp_str_char_width(const char*s,size_t blen,size_t at){

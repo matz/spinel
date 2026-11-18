@@ -1146,15 +1146,10 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
     int save = g_indent; g_indent++;
     if (oset_v && bret == TY_INT) emit_oint_expr(c, lastv, TY_INT, &vb);
-    /* a String the block answers, into a poly value, that the plan boxes as
-       the handle (a bang on a boxed receiver answers the receiver's own
-       box, a conditional its arm's String): boxed as the box face renders
-       it, not as the bytes of the expression already emitted. A
-       conversion of the value (`v.to_s`, the plan's operand route) or a
-       new String, which a store would only lift into a handle of its own,
-       needs none, and one around each value would only allocate. */
+    /* The converter boxes the result directly, including the native
+       handle of a fresh Symbol spelling and the value of a user override. */
     else if (conv_op >= 0) {
-      buf_puts(&vb, "sp_poly_to_s_box_plain(");
+      buf_puts(&vb, "sp_poly_to_s_box(");
       emit_boxed(c, conv_op, &vb);
       buf_puts(&vb, ")");
     }
@@ -7808,12 +7803,16 @@ static void emit_arg_or_default_at(Compiler *c, Scope *m, int idx, int provided,
 /* The handles emit_arg_temp took of the shared String slots it ran first:
    each names the override it rode with -- its index in g_argov, the node,
    and the value temp that override reads -- and the temp holding the handle.
-   An override the call has dropped since (a later call reuses its index)
-   is pruned when the next one is taken, so the list is no longer than the
-   overrides live at once. */
+   Dropping an override drops its handle record at the same time. */
 typedef struct { int idx, node, t, th, read; } RanHandle;
 static RanHandle *g_ran_hnd;
 static int g_n_ran_hnd, g_cap_ran_hnd;
+
+/* Records append at increasing binding indices. A rollback drops the
+   suffix before another view can reuse those nodes and temporary numbers. */
+void ran_first_unbind(int n) {
+  while (g_n_ran_hnd && g_ran_hnd[g_n_ran_hnd - 1].idx >= n) g_n_ran_hnd--;
+}
 
 /* The handle temp emit_arg_temp took of the shared String slot `node` that
    the call ran first, -1 when there is none. It is the one recorded with the
@@ -7978,40 +7977,21 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
   if (repr_of_slot(c, p).kind == RK_STRBUF && emit_strbuf_local_write_handle(c, provided, out)) return;
   if (repr_of_slot(c, p).handle) {
     int dvP = m->pdefault[idx];
-    if (dvP >= 0 && comp_ntype(c, dvP) == TY_NIL) {
-      /* (in the callee's context, as below: a call answering nil runs) */
-      if (subtree_is_pure_read(c, dvP)) { buf_puts(out, "NULL"); return; }
-      const char *svs = g_self, *svd = g_self_deref;
-      int sve = g_emitting_class_id;
-      char dself[32];
-      dflt_self_enter(m, dvP, dself, sizeof dself);
-      buf_puts(out, "({ (void)("); emit_expr_for_effect(c, dvP, out); buf_puts(out, "); NULL; })");
-      g_self = svs; g_self_deref = svd; g_emitting_class_id = sve;
-      return;
-    }
-    if (repr_self_shared(c, dvP)) { emit_strbuf_handle_of(c, dvP, out); return; }
-    /* a default that is an earlier parameter binds that parameter's handle,
-       the one String both names hold (promote_default_alias_params) */
-    { Buf srefD; memset(&srefD, 0, sizeof srefD);
-      if (dvP >= 0 && nt_kind(c->nt, dvP) == NK_LocalVariableReadNode &&
-          strbuf_slot_text(c, dvP, &srefD)) {
-        buf_puts(out, srefD.p);
-        free(srefD.p);
-        return;
-      } }
-    /* a default that writes a slot holding the --share-strings handle
-       (`v = (@s = +"s")`) binds that handle */
-    if (dvP >= 0 && emit_strbuf_write_handle(c, dvP, out)) return;
-    buf_puts(out, "SP_STR_HDL(");
-    /* (in the callee's context, as below) */
+    /* The default runs on the callee. As for a provided argument, bind
+       the selected String itself, including a captured receiver's ivar. */
     const char *svs = g_self, *svd = g_self_deref;
     int sve = g_emitting_class_id;
     char dself[32];
     dflt_self_enter(m, dvP, dself, sizeof dself);
-    if (dvP >= 0) emit_str_expr(c, dvP, out);
-    else buf_puts(out, "(&(\"\\xff\")[1])");
+    if (dvP < 0) buf_puts(out, "SP_STR_HDL((&(\"\\xff\")[1]))");
+    else if (repr_of(c, dvP).as_ty == TY_NIL) {
+      if (!subtree_is_pure_read(c, dvP)) {
+        buf_puts(out, "({ (void)("); emit_expr_for_effect(c, dvP, out); buf_puts(out, "); NULL; })");
+      }
+      else buf_puts(out, "NULL");
+    }
+    else emit_strbuf_handle_of(c, dvP, out);
     g_self = svs; g_self_deref = svd; g_emitting_class_id = sve;
-    buf_puts(out, ")");
     return;
   }
   /* An unused/unresolved param is declared poly (sp_RbVal) in the method
@@ -9438,10 +9418,6 @@ static void ran_first_bind_o(int v, int t, int th, int to) {
      entries the rest never ran where a static check refuses the call, or ran
      at their slots, after the ones that follow them */
   argov_reserve();
-  int k = 0;
-  for (int j = 0; j < g_n_ran_hnd; j++)
-    if (g_ran_hnd[j].idx < g_n_argov) g_ran_hnd[k++] = g_ran_hnd[j];
-  g_n_ran_hnd = k;
   if (th >= 0) {
     if (g_n_ran_hnd == g_cap_ran_hnd) {
       g_cap_ran_hnd = g_cap_ran_hnd ? g_cap_ran_hnd * 2 : 16;
@@ -9454,22 +9430,21 @@ static void ran_first_bind_o(int v, int t, int th, int to) {
   if (to) view_bind_temp_o(v, t); else view_bind_temp(v, t);
 }
 /* --share-strings: String node v whose handle ran into _t<th>: its reads
-   are that handle's String (sp_strbuf_read_pub), as a variable's that holds
+   are that handle's String (sp_strbuf_read), as a variable's that holds
    the handle are, and ran_first_handle (strbuf_slot_text) answers _t<th>. */
 void ran_first_bind_read(int v, int th) {
   ran_first_bind_o(v, th, th, 0);
-  snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "sp_strbuf_read_pub(_t%d)", th);
+  snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "sp_strbuf_read(_t%d)", th);
   g_ran_hnd[g_n_ran_hnd - 1].read = 1;
 }
 /* The handle temp of node v's live ran_first_bind_read binding, or -1. */
 int ran_first_read_handle(int node) {
   for (int i = g_n_argov - 1; i >= 0; i--) {
     if (g_argov_node[i] != node) continue;
-    /* Not the record's word alone: one left by a binding since unbound outlives it when a view_bind reuses its slot. */
     for (int j = 0; j < g_n_ran_hnd; j++) {
       if (g_ran_hnd[j].idx != i || g_ran_hnd[j].node != node) continue;
       char want[40];
-      snprintf(want, sizeof want, "sp_strbuf_read_pub(_t%d)", g_ran_hnd[j].th);
+      snprintf(want, sizeof want, "sp_strbuf_read(_t%d)", g_ran_hnd[j].th);
       return g_ran_hnd[j].read && sp_streq(g_argov_text[i], want) ? g_ran_hnd[j].th : -1;
     }
     return -1;
@@ -9595,7 +9570,7 @@ static void emit_arg_temp(Compiler *c, int v) {
        it holds where it keeps none: no String the rule shares */
     char rt[24]; snprintf(rt, sizeof rt, "_t%d", tr);
     emit_srange_kept_test(c, stail, rt, &hb);
-    buf_printf(&hb, " ? sp_strbuf_read_pub(_t%d) : ", th);
+    buf_printf(&hb, " ? sp_strbuf_read(_t%d) : ", th);
     size_t arm_at = hb.len;
     emit_expr(c, stail, &hb);
   }
@@ -9605,7 +9580,7 @@ static void emit_arg_temp(Compiler *c, int v) {
   else if (conversion && at == TY_STRING &&
            (arg_bang_on_handle(c, v) || face_str_bang_call(c, nt_paren_single(c->nt, v)) ||
             (strbuf_arg_bang_value(c, v) && !strbuf_arg_bang(c, v)))) {
-    buf_printf(&hb, "sp_strbuf_read_pub(_t%d)", th);
+    buf_printf(&hb, "sp_strbuf_read(_t%d)", th);
   }
   else if (wshare) {
     char thr[24]; snprintf(thr, sizeof thr, "_t%d", th);
@@ -9774,7 +9749,7 @@ int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, c
      (ran_first_bind_read): that handle, no second hold */
   int rh = !boxed && ty == TY_STRING && vb.p ? ran_first_read_handle(node) : -1;
   char rd[40];
-  if (rh >= 0 && snprintf(rd, sizeof rd, "sp_strbuf_read_pub(_t%d)", rh) > 0 && sp_streq(vb.p, rd)) {
+  if (rh >= 0 && snprintf(rd, sizeof rd, "sp_strbuf_read(_t%d)", rh) > 0 && sp_streq(vb.p, rd)) {
     free(vb.p);
     one_face_mark(rh, node);
     return rh;
@@ -11194,6 +11169,22 @@ static int rest_required_for(Compiler *c, Scope *m) {
   return req;
 }
 
+/* Conditional dispatchers forward real arguments, but can still answer
+   no method. Their existing selector decides whether a count error belongs
+   to a live method; otherwise their missing-method arm must run instead. */
+static int arity_conditional_dispatch(Compiler *c, const Scope *m) {
+  return m && m->def_node >= 0 && nt_int(c->nt, m->def_node, "cond_lone_disp", 0);
+}
+
+/* Prefix only the check, after argument evaluation: putting the binding
+   inside this guard would leave its held argument temps out of scope. */
+static void emit_arity_presence(Compiler *c, const Scope *m) {
+  Buf live = {0};
+  if (arity_conditional_dispatch(c, m) && emit_implied_entry_test(c, (int)(m - c->scopes), 0, &live))
+    buf_printf(g_pre, "if (%s) ", live.p);
+  free(live.p);
+}
+
 /* The count check of a call whose positional count only the run time knows
    (a splat, a gather), the C expression `given`, against `m`'s positional
    parameters -- keywords apart, and named in the message as CRuby names
@@ -11208,6 +11199,7 @@ static void emit_positional_count_check(Compiler *c, Scope *m, const char *given
   /* no upper bound where the static count has none: a rest, or a Kernel
      wrapper whose builtin takes any count (bam_variadic_kernel) */
   int unbounded = m && (m->rest_idx >= 0 || bam_variadic_kernel(c->nt, m));
+  emit_arity_presence(c, m);
   emit_arity_check(g_pre, given, pos_required, unbounded ? -1 : pos_params, kw);
   buf_puts(g_pre, ";\n");
 }
@@ -11249,9 +11241,11 @@ static int bam_variadic_kernel(const NodeTable *nt, const Scope *m) {
    emit_unreached_splat_count), which judged such a scope's synthesized
    slots as if they were arguments. A version entry's synthesized
    parameters are its call's arguments one for one: it forwards them to
-   versions that all take the same count, so that count is judged here. */
+   versions that all take the same count, so that count is judged here.
+   Conditional dispatchers likewise expose real positional arguments; their
+   synthesized names do not exempt callers from the argument contract. */
 static int arity_unjudged(Compiler *c, Scope *m) {
-  if (m->entry) return 0;
+  if (m->entry || arity_conditional_dispatch(c, m)) return 0;
   if (m->cs_synth) return 1;
   for (int i = 0; i < m->nparams; i++)
     if (m->pnames[i] && m->pnames[i][0] == '_' && m->pnames[i][1] == '_' &&
@@ -11382,7 +11376,9 @@ void emit_call_arity_check(Compiler *c, Scope *m, int argc, const int *argv) {
     /* A keyword hash that is keywords is no positional, `**` spreads among
        them too: `def r(a, k:)` called `r(**{k: 5})` is given 0. */
     if (arity_count_error(c, m, pos_argc + P.count, msg, sizeof msg)) {
-      args_raise(c, argv, argc, "%s", msg);
+      emit_args_run(c, argv, argc);
+      emit_arity_presence(c, m);
+      emit_argument_error(msg);
       return;
     }
   }
@@ -12982,7 +12978,8 @@ static Scope *dispatch_first_arm(Compiler *c, int call, int cid, const char *nam
    against pm? Not when an argument is forwarded or a block argument, nor
    when a parameter is synthesized (every __-prefixed one, a __bam_
    wrapper's too: a receiver-bound wrapper's first one is its receiver, not
-   an argument). */
+   an argument). Conditional dispatchers' parameters are real arguments;
+   their count check is guarded by the dispatcher's availability. */
 static int dispatch_count_judged(Compiler *c, const Scope *pm, const int *argv, int argc) {
   const NodeTable *nt = c->nt;
   if (!pm || (!argv && argc)) return 0;
@@ -12990,6 +12987,7 @@ static int dispatch_count_judged(Compiler *c, const Scope *pm, const int *argv, 
     NodeKind ak = nt_kind(nt, argv[k]);
     if (ak == NK_ForwardingArgumentsNode || ak == NK_BlockArgumentNode) return 0;
   }
+  if (arity_conditional_dispatch(c, pm)) return 1;
   for (int i = 0; i < pm->nparams; i++)
     if (pm->pnames[i] && pm->pnames[i][0] == '_' && pm->pnames[i][1] == '_') return 0;
   return 1;
@@ -13033,7 +13031,7 @@ static int g_disp_outer_t[MAX_ARG_OVERRIDE], g_n_disp_outer = 0;
    arm lifted into an oint one; a void arm answers nil */
 static void emit_disp_arm_assign(Compiler *c, const Scope *s, const char *call, TyKind ret,
                                  TyKind disp_ret, int rtmp, Buf *b) {
-  TyKind arm_ret = (TyKind)s->ret;
+  TyKind arm_ret = repr_method_ret_storage(s);
   int arm_o = oint_kind(arm_ret) && method_ret_is_oint(s);
   /* a void dispatch's int temp is a dummy: an arm answering a value
      (a proc-form clone's box) is run for its effect */
@@ -13056,6 +13054,8 @@ static void emit_disp_arm_assign(Compiler *c, const Scope *s, const char *call, 
     if (g_disp_ro) buf_printf(b, "%s(%s)", oint_unbox(disp_ret), call);
     else emit_unbox_text(c, disp_ret, call, b);
   }
+  else if (one_s && ty_is_object(arm_ret) && comp_ary_is_str(c, ty_object_class(arm_ret)))
+    buf_printf(b, "(sp_String *)(%s)", call);
   else if (g_disp_ro && !arm_o) buf_printf(b, "%s(%s)", oint_of(disp_ret), call);
   else if (!g_disp_ro && arm_o) buf_printf(b, "%s(%s)", oint_arg(arm_ret), call);
   /* ty_unify widens an Integer arm beside a Bignum one: the slot is a pointer */
@@ -13436,7 +13436,7 @@ int emit_reader_override_dispatch(Compiler *c, int id, int cid, const char *name
   }
   buf_printf(b, " default: _t%d = ", rtmp);
   if (ret == TY_POLY && reader_ty != TY_POLY) emit_boxed_text(c, reader_ty, reader, b);
-  else if (ret == TY_STRING && reader_ty == TY_STRBUF) str_read_handle(b, reader, 0);
+  else if (ret == TY_STRING && reader_ty == TY_STRBUF) str_read_handle(b, reader);
   else if (g_disp_ro && !reader_oint) buf_printf(b, "%s(%s)", oint_of(ret), reader);
   else buf_puts(b, reader);
   buf_printf(b, "; break; } _t%d; })", rtmp);
@@ -13444,13 +13444,8 @@ int emit_reader_override_dispatch(Compiler *c, int id, int cid, const char *name
   return 1;
 }
 
-/* --share-strings: can a call `id` of reader `name` on cid, whose slot
-   holds a String handle and which a descendant overrides with a def, answer
-   a handle on every arm (emit_reader_override_handle)? Each override is a
-   method answering a String: the handle it publishes (Scope.ret_handle),
-   or a new String (ret_fresh). The share walk joins the overrides' answers
-   to the read's (sh_reader_overrides), so one that answers a String with an
-   identity (a variable's, a field's, an element) publishes it. */
+/* Every overriding method must return a String handle, or the universal
+   box accepted by a boxed caller. The base reader returns its field. */
 int reader_override_handle_arms(Compiler *c, int id, int cid, const char *name, int boxed) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "block") >= 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
@@ -13463,28 +13458,20 @@ int reader_override_handle_arms(Compiler *c, int id, int cid, const char *name, 
     if (arm < 0) return 0;
     /* (read as a box, an override answering a box hands on what it holds) */
     if (boxed && (TyKind)c->scopes[kmi].ret == TY_POLY) { any = 1; continue; }
-    if ((TyKind)c->scopes[kmi].ret != TY_STRING || (!scope_ret_handle(c, arm) && !scope_ret_fresh(c, arm)))
+    if (repr_method_ret_storage(&c->scopes[arm]) != TY_STRBUF)
       return 0;
     any = 1;
   }
   return any;
 }
 
-/* The handle such a call answers (reader_override_handle_arms): a switch
-   on the runtime class, an overriding descendant's arm taking the handle
-   its method publishes, or wrapping the new String it answers in a handle,
-   and
-   the rest the slot's handle (`reader`). A subclass's alias of another
-   method over the reader's name is such an override. 0 when none applies. */
+/* Select the runtime class's override or read the inherited field. */
 int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, const char *selfptr,
                                 const char *reader, int boxed, Buf *b) {
   if (!reader_override_handle_arms(c, id, cid, name, boxed)) return 0;
   int base_mi = call_target(c, id, cid, name, 0, NULL);
   int rtmp = ++g_tmp;
   if (boxed) {
-    /* read as a box: each arm boxes its own answer (emit_poly_user_box: the
-       handle an override publishes, a new String's new one, a box as it
-       is), the reader's arm its field's handle */
     buf_printf(b, "({ sp_RbVal _t%d; switch (", rtmp);
     emit_obj_dispatch_key(c, cid, selfptr, b);
     buf_puts(b, ") {");
@@ -13499,7 +13486,7 @@ int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, 
       Buf call; memset(&call, 0, sizeof call);
       emit_dispatch_arm_text(c, ml.def_class, arm, selfptr, -1, -1, &apre, &call);
       buf_printf(b, " case %d: { %s_t%d = ", k, apre.p ? apre.p : "", rtmp);
-      emit_poly_user_box(c, id, &c->scopes[arm], call.p, b);
+      emit_boxed_ret_call(c, &c->scopes[arm], call.p, b);
       buf_puts(b, "; break; }");
       free(apre.p); free(call.p);
     }
@@ -13516,18 +13503,12 @@ int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, 
     MethodLookup ml = { .def_class = -1 };
     int kmi0 = call_target(c, id, k, name, 0, &ml);
     if (kmi0 < 0 || kmi0 == base_mi) continue;
-    int arm = dispatch_arm_scope(c, kmi0), pub = c->scopes[arm].ret_handle, tv = ++g_tmp;
+    int arm = dispatch_arm_scope(c, kmi0);
     nd_callee(c, g_nd_call_id, kmi0, ml.def_class, 1);
     Buf apre; memset(&apre, 0, sizeof apre);
     Buf call; memset(&call, 0, sizeof call);
     emit_dispatch_arm_text(c, ml.def_class, arm, selfptr, -1, -1, &apre, &call);
-    buf_printf(b, " case %d: { %s%sconst char *_v%d = %s; _t%d = !_v%d ? NULL : ", k, apre.p ? apre.p : "",
-               pub ? "_sp_ret_strbuf = NULL; " : "", tv, call.p, rtmp, tv);
-    if (pub) buf_puts(b, "_sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf : ");
-    str_new_handle_open(b);
-    buf_printf(b, "_v%d", tv);
-    str_new_handle_close(b);
-    buf_puts(b, "; break; }");
+    buf_printf(b, " case %d: { %s_t%d = %s; break; }", k, apre.p ? apre.p : "", rtmp, call.p);
     free(apre.p); free(call.p);
   }
   buf_printf(b, " default: _t%d = %s; break; } _t%d; })", rtmp, reader, rtmp);
@@ -13795,7 +13776,7 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
      the switch, it was called on the base's function, the override
      skipped, and with no base method on none: the compiler crashed. */
   int ret_is_void = !is_scalar_ret(ret);
-  TyKind disp_ret = ret_is_void ? TY_INT : ret;
+  TyKind disp_ret = ret_is_void ? TY_INT : repr_call_result_storage(ret);
   /* the switch, for the dispatch the plan's form makes one */
   int virtual = form >= CP_SWITCH;
   nd_stamp(g_nd_call_id, virtual ? ND_SWITCH : ND_DIRECT);

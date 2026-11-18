@@ -154,7 +154,7 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     }
     {
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     if (range_object_face(name)) return 0;
     /* A name with no row is genuinely undefined: leave it UNKNOWN. The
@@ -280,7 +280,7 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   /* Complex: builtin-op rows (builtin_ops.c) */
   if (rt == TY_COMPLEX) {
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
   /* Proc#curry and curry application via []. A curried call stays TY_CURRY until
      it reaches the proc's arity, when it realizes to the proc's return type (the
@@ -387,7 +387,7 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        arguments' kinds (the rows' argument guards) */
     {
       const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     /* round/truncate: no digits (or a literal <= 0) is an Integer, a literal
        positive precision keeps the Rational, and a non-literal precision boxes
@@ -1458,7 +1458,7 @@ int infer_arysub_call(Compiler *c, int id, TyKind *out) {
     r = infer_call(c, id);
     an_face_pop();
   }
-  *out = self ? rt : r;
+  *out = self && (g_infer_ignore_brk || !call_breaks(c, id)) ? rt : r;
   return 1;
 }
 
@@ -1727,6 +1727,17 @@ int poly_lines_args(Compiler *c, int argc, const int *argv) {
   return 0;
 }
 
+/* A lone positional splat and a literal keyword hash can be captured
+   without general argument packing. Explicit positionals keep their count. */
+int string_line_args(Compiler *c, int argc, const int *argv) {
+  const NodeTable *nt = c->nt;
+  int kw = nt_argv_kwh(nt, argv, argc);
+  int positional = argc - (kw >= 0);
+  return (positional <= 1 || !nt_argv_has_splat(nt, argv, positional)) &&
+         !nt_argv_has(nt, argv, argc, NT_ARG_FORWARDING | NT_ARG_BLOCK) &&
+         (kw < 0 || !nt_hash_has_splat(nt, kw));
+}
+
 int lines_sep_ty(Compiler *c, int a) {
   TyKind t = infer_type(c, a);
   return t == TY_STRING || t == TY_POLY || t == TY_NIL;
@@ -1772,12 +1783,13 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
   (void)argv; (void)recv; (void)nt;
   if (!name) return 0;
-  /* to_s and inspect answer a String whatever the box holds (the String
-     rows that stand for a boxed receiver), unless a class of the program
-     owns the name */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && !an_user_recv_defines_method(c, name)) {
-    const BuiltinOp *op = an_bop_find_boxed(c, id, TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op) { *out = op->result; return 1; }
+  /* The builtin display answers a String. When dispatch can reach an
+     override, its native box carries whatever that method answers. */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && is_text_conversion(name) &&
+      !an_user_recv_defines_method(c, name) &&
+      an_bop_find(c, id, BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0)) {
+    *out = TY_STRING;
+    return 1;
   }
   /* #hash on a boxed receiver is always the Integer sp_rbval_hash_key
      answers -- a user #hash in the program is reached through
@@ -1789,10 +1801,14 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      since Set#hash is exactly that loop (#4728). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "hash"))
     { *out = TY_INT; return 1; }
-  /* Symbol#id2name on a boxed receiver: the name as a String (sp_poly_sym_id2name) */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "id2name") &&
-      !an_user_defines_or_reads(c, name))
-    { *out = TY_STRING; return 1; }
+  if (recv >= 0 && rt == TY_POLY && argc == 0) {
+    const BuiltinOp *op = bop_find(BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result == TY_STRBUF && !an_user_defines_or_reads(c, name)) {
+      an_bop_find(c, id, BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0);
+      *out = bop_result(op, rt);
+      return 1;
+    }
+  }
   /* blockless cycle(n) on a boxed receiver: the Enumerator sp_poly_cycle_n
      builds, and a countless cycle the endless one sp_poly_cycle builds,
      unless a class of the program's own has a method or a class
@@ -2103,13 +2119,10 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "lines") && nt_ref(nt, id, "block") < 0 &&
       poly_lines_args(c, argc, argv))
     { *out = an_user_defines_or_reads(c, name) ? TY_POLY : TY_STR_ARRAY; return 1; }
-  /* ...and each_line with those arguments and no block: the same Array,
-     as the argumentless poly.each_line materializes */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") && nt_ref(nt, id, "block") < 0 &&
-      poly_lines_args(c, argc, argv)) {
-    if (an_user_defines_or_reads(c, name) || an_user_defines_or_reads(c, "lines")) { *out = TY_POLY; return 1; }
-    /* (asked its size, it is CRuby's Enumerator, which has none: nil) */
-    *out = poly_each_line_args_enum(c, id) ? TY_ENUMERATOR : TY_STR_ARRAY; return 1;
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") &&
+      nt_ref(nt, id, "block") < 0 && string_line_args(c, argc, argv)) {
+    *out = an_user_defines_or_reads(c, name) ? TY_POLY : TY_ENUMERATOR;
+    return 1;
   }
   /* A blockless grouping enumerator on a boxed Array -- an Array read out of a
      container -- materializes to the groups themselves, an Array of Arrays. */
@@ -2132,17 +2145,32 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        (poly_blockless_enum_name(name) && !nt_safe_nav(nt, id))) &&
       !an_user_defines_or_reads(c, name))
     { *out = TY_ENUMERATOR; return 1; }
-  /* A blockless each_char / each_line / each_byte / each_codepoint on the same
+  /* A blockless each_char / each_byte / each_codepoint on the same
      boxed String is CRuby's Enumerator; spinel materializes the elements, so
      it answers exactly what chars / lines / bytes do. Without this the
      enumerator stayed untyped and reduce/to_a/sum on it all failed. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      is_str_each_iter(name) && !an_user_defines_or_reads(c, name)) {
+      is_str_each_iter(name) && !sp_streq(name, "each_line") && !an_user_defines_or_reads(c, name)) {
     if (poly_str_iter_enum(c, id)) { *out = TY_ENUMERATOR; return 1; }
     /* an IO's codepoints are an Enumerator over the stream, a String's an Array */
     if (poly_io_codepoint_enum(c, id)) { *out = TY_POLY; return 1; }
     if (is_byte_codepoint_each(name)) { *out = TY_INT_ARRAY; return 1; }
     { *out = TY_STR_ARRAY; return 1; }
+  }
+  /* A boxed String line call returns the box it traversed. */
+  if (recv >= 0 && rt == TY_POLY && is_str_line_method(name) &&
+      nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode &&
+      (argc == 0 || poly_lines_args(c, argc, argv)) && string_line_args(c, argc, argv) &&
+      !an_user_defines_or_reads(c, name)) {
+    int block = nt_ref(nt, id, "block");
+    const char *param = block_param_name(c, block, 0);
+    Scope *scope = param ? comp_scope_of(c, block) : NULL;
+    LocalVar *slot = scope ? scope_local(scope, param) : NULL;
+    if (slot && slot->type != TY_STRING && !(slot->type == TY_STRBUF && slot->str_shared))
+      lv_set_type(slot, slot->type == TY_INT ||
+                        (slot->type == TY_POLY && block_yields_int_too(nt, block)) ? TY_POLY : TY_STRING);
+    *out = TY_POLY;
+    return 1;
   }
   /* poly.each_char { |c| } / each_line { |l| }: the block param is a String
      (one char, one line) and the call answers the receiver's string, as
@@ -2475,22 +2503,6 @@ int poly_io_codepoint_enum(Compiler *c, int id) {
   return name && sp_streq(name, "each_codepoint") && nt_ref(nt, id, "arguments") < 0 &&
          nt_ref(nt, id, "block") < 0 && an_program_makes_io(c);
 }
-/* Does a blockless each_line with a separator or chomp: on a boxed
-   receiver (call id) answer CRuby's Enumerator? Where its parent asks
-   `size`: the Enumerator has no size (nil), where the Array its lines give
-   would answer the line count. Elsewhere it walks that Array. */
-int poly_each_line_args_enum(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  int q = comp_recv_parent(c, id);
-  if (q < 0) return 0;
-  const char *qn = nt_str(nt, q, "name");
-  int qac = 0;
-  call_args(nt, q, &qac);
-  /* (`x&.each_line(",").size` on nil asks nil its size, which raises; the
-     Enumerator slot's nil would answer nil) */
-  return qn && sp_streq(qn, "size") && qac == 0 && nt_ref(nt, q, "block") < 0 &&
-         !nt_safe_nav(nt, id);
-}
 int poly_str_iter_enum(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int q = comp_recv_parent(c, id);
@@ -2499,9 +2511,5 @@ int poly_str_iter_enum(Compiler *c, int id) {
   if (is_lazy_name(qn)) return 1;
   int qac = 0;
   call_args(nt, q, &qac);
-  /* (each_line's Enumerator has no size: CRuby's `s.each_line.size` is nil,
-     where the Array lines would answer its length) */
-  const char *nm = nt_str(nt, id, "name");
-  if (qn && nm && sp_streq(qn, "size") && qac == 0 && sp_streq(nm, "each_line")) return 1;
   return qn && !bop_find(BOP_ANY_ARRAY, qn, qac, nt_ref(nt, q, "block") >= 0);
 }

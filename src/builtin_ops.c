@@ -379,9 +379,15 @@ static const BuiltinOp bop_rows[] = {
     BOP_K(TY_STR_INT_HASH) | BOP_K(TY_STR_STR_HASH) | BOP_K(TY_INT_INT_HASH) | BOP_K(TY_INT_STR_HASH) |
     BOP_K(TY_SYM_POLY_HASH) | BOP_K(TY_STR_POLY_HASH) | BOP_K(TY_POLY_POLY_HASH), 0, BOPF_INTERNAL },
   { BOP_KERNEL, "__blk_conv",  1, 1, BF_NONE, TY_POLY, BOPE_CONV_USER_OK, "sp_poly_blk_conv", 0, 0, BOPF_INTERNAL },
+  { BOP_KERNEL, "String", 1, 1, BF_ANY, TY_STRBUF, BOPE_KERNEL_STRING },
   /* Kernel#respond_to_missing?: false, its two operands, where they have an effect, run first (private: a program's own definition, and the explicit forms that reach it, are the plan's) */
   { BOP_KERNEL, "respond_to_missing?", 2, 2, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "($j0$j1(sp_bool)0)" },
 #include "builtin_zero_ops.inc"
+  /* Stage 1 is the boxed display fallback after ordinary dispatch. Only
+     id2name guarantees a String handle where it returns. */
+  { BOP_BOXED_FALLBACK, "to_s", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_poly_to_s_box($r)", 0, 0, 0, 1 },
+  { BOP_BOXED_FALLBACK, "inspect", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_poly_inspect_box($r)", 0, 0, 0, 1 },
+  { BOP_BOXED_FALLBACK, "id2name", 0, 0, BF_ANY, TY_STRBUF, BOPE_TEMPLATE, "sp_poly_sym_id2name($r)", 0, 0, 0, 1 },
   /* Boxed reads that answer a new Array. A zero-argument rotate uses one;
      shuffle has no count. Reached after the earlier routes: a call inference
      types by a rule of its own (a builtin's super from its reopening, the
@@ -411,8 +417,8 @@ static const BuiltinOp bop_rows[] = {
      (an_poly_concrete). */
   { TY_POLY, "dump", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
     "sp_str_dump(sp_poly_recv_s($r, \"dump\"))", 0, 0, 0, 1 },
-  { TY_POLY, "b", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
-    "sp_str_b(sp_poly_recv_s($r, \"b\"))", 0, 0, 0, 1 },   /* a binary copy (#4441) */
+  { TY_POLY, "b", 0, 0, BF_ANY, TY_STRBUF, BOPE_TEMPLATE,
+    "sp_String_binary_copy(sp_poly_recv_s($r, \"b\"))", 0, 0, 0, 1 },   /* a binary copy (#4441) */
   { TY_POLY, "scrub", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,   /* a block is not called yet, as before */
     "sp_str_scrub(sp_poly_recv_s($r, \"scrub\"), 0)", 0, 0, 0, 1 },
   { TY_POLY, "encode", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
@@ -1474,7 +1480,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_ENUMERATOR, "each",            0,   0, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "$r", 0 },  /* a blockless #each is the Enumerator itself */
   { TY_ENUMERATOR, "each_with_index", 0,   0, BF_NONE,     TY_ENUMERATOR,  BOPE_NONE },  /* #2487 */
   { TY_ENUMERATOR, "each_index",      0,   0, BF_NONE,     TY_ENUMERATOR,  BOPE_NONE },  /* #2487 */
-  { TY_ENUMERATOR, "size",            0,   0, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "sp_Enumerator_size($r)", 0 },
+  { TY_ENUMERATOR, "size",            0,   0, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "sp_Enumerator_size(sp_nil_recv_named($r, \"size\"))", 0 },
   { TY_ENUMERATOR, "size",            0, 127, BF_ANY,      TY_POLY,        BOPE_NONE },  /* nil, an Integer or a stored size */
   { TY_ENUMERATOR, "take",            1,   1, BF_ANY,      TY_POLY_ARRAY,  BOPE_TEMPLATE, "sp_Enumerator_take($r, $i0)" },
   { TY_ENUMERATOR, "first",           1,   1, BF_ANY,      TY_POLY_ARRAY,  BOPE_TEMPLATE, "sp_Enumerator_take($r, $i0)" },
@@ -1939,10 +1945,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_REGEX, "timeout",         0, 127, BF_ANY,      TY_POLY,          BOPE_NONE },  /* nil: no per-instance timeout */
   { TY_REGEX, "hash",            0,   0, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "(sp_int)sp_re_hash((void *)($r))", 0 },
 
-  /* Symbol: result kinds; emission stays in emit_call_body. <=> and
-     casecmp/casecmp? are typed by the operand (nil for a non-Symbol). */
-  { TY_SYMBOL, "to_s",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
-  { TY_SYMBOL, "id2name",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
+  /* Symbol: <=> and casecmp/casecmp? are typed by the operand (nil for a
+     non-Symbol). */
+  { TY_SYMBOL, "to_s",            0,   0, BF_ANY,      TY_STRBUF,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
+  { TY_SYMBOL, "id2name",         0,   0, BF_ANY,      TY_STRBUF,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
   { TY_SYMBOL, "name",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_name_str($r)", 0 },
   { TY_SYMBOL, "inspect",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_inspect($r)", 0 },
   { TY_SYMBOL, "upcase",          0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "sp_sym_intern(sp_str_upcase$C(sp_sym_to_s($r)))", 0 },
@@ -2284,6 +2290,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "delete",          2, 127, BF_ANY,      TY_STRING,     BOPE_STR_SET_N, NULL, 0 },
   { TY_STRING, "delete",          1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_delete($r, $s0)", 0 },
   { TY_STRING, "delete",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
+  { TY_STRING, "scan", 1, 1, BF_REQUIRED, TY_STRING, BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   /* Pattern analysis determines the result's element shape. */
   { TY_STRING, "scan", 1, 1, BF_NONE, TY_UNKNOWN, BOPE_STRING_SCAN_CHECKED, NULL, 0, 0, BOPF_INFERRED },  /* typed from the pattern's source (infer_string_recv_call) */
   { TY_STRING, "slice!", 1, 2, BF_ANY, TY_STRING, BOPE_STRING_SLICE, 0, 0, 0, 0, 7 },
@@ -2301,7 +2308,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "append_as_bytes", 0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_str_check_mutable(_t$t); _t$t; })", 0, 0, BOPF_SELF, 6 },
   { TY_STRING, "append_as_bytes", 0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "force_encoding",  0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "b",               0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_b($r)", 0 },
+  { TY_STRING, "b",               0,   0, BF_ANY,      TY_STRBUF,     BOPE_TEMPLATE, "sp_String_binary_copy($r)", 0 },
   { TY_STRING, "b",               0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "encode",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "((const char *)sp_nil_recv_named($r, \"encode\"))", 0, 0, BOPF_KEYWORDS },  /* the receiver, so nil raises */
   { TY_STRING, "encode",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
@@ -2437,16 +2444,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "casecmp?",        1,   1, BF_ANY,      TY_POLY,       BOPE_TEMPLATE, "({ const char *_t$t = $r; SP_GC_ROOT_STR(_t$t); sp_RbVal _t$u = $e0; const char *_t$v = sp_poly_check_str(_t$u); (_t$v || _t$u.tag == SP_TAG_STR) ? sp_box_bool(sp_str_casecmp_p(_t$t, _t$v ? _t$v : \"\")) : sp_box_nil(); })", BOP_K(TY_POLY) },
   { TY_STRING, "casecmp",         1,   1, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "sp_str_casecmp($r, $e0)", BOP_K(TY_STRING) | BOP_K(TY_UNKNOWN) },
   { TY_STRING, "casecmp?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_casecmp_p($r, $e0)", BOP_K(TY_STRING) | BOP_K(TY_UNKNOWN) },
-  /* sp_str_lines reads nil as "" (each_line's arms take it too); a nil
-     receiver raises as lines(sep)'s sp_str_lines_sep does */
-  { TY_STRING, "lines",           0,   0, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines(sp_nil_recv_named($r, \"lines\"))", 0, 0, BOPF_KEYWORDS },
-  { TY_STRING, "lines",           0,   0, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines(sp_nil_recv_named($r, \"lines\"))", 0, 0, BOPF_SELF | BOPF_KEYWORDS },  /* the block form iterates and answers the receiver */
-  /* lines(sep): without a block the Array, with one the receiver (the block
-     form iterates), whatever the separator's kind */
-  { TY_STRING, "lines",           1,   1, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines_sep($r, $e0)", BOP_K(TY_STRING), 0, BOPF_KEYWORDS },
-  { TY_STRING, "lines",           1,   1, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines_sep($r, $e0)", BOP_K(TY_STRING), 0, BOPF_SELF | BOPF_KEYWORDS },
-  { TY_STRING, "lines",           1,   1, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines_sep($r, sp_poly_arg_str_or_null($b0))", BOP_K(TY_POLY) | BOP_K(TY_NIL), 0, BOPF_KEYWORDS },
-  { TY_STRING, "lines",           1,   1, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines_sep($r, sp_poly_arg_str_or_null($b0))", BOP_K(TY_POLY) | BOP_K(TY_NIL), 0, BOPF_SELF | BOPF_KEYWORDS },
+  { TY_STRING, "lines",           0,   2, BF_NONE,     TY_STR_ARRAY,  BOPE_STRING_LINES, NULL, 0, 0, BOPF_KEYWORDS },
+  { TY_STRING, "lines",           0,   2, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },
   { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH) },
   { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, sp_StrPolyHash_to_s_values($e1))", 0, BOP_K(TY_STR_POLY_HASH) },
   { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, sp_StrIntHash_to_s_values($e1))", 0, BOP_K(TY_STR_INT_HASH) },
@@ -2484,7 +2483,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "unicode_normalize",   0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { TY_STRING, "unicode_normalize!",  0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "unicode_normalized?", 0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "each_line",           0,   1, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },  /* the walks answer the receiver */
+  { TY_STRING, "each_line",           0,   2, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },  /* the walks answer the receiver */
   { TY_STRING, "each_grapheme_cluster", 0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "each_codepoint",      0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "grapheme_clusters",   0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
@@ -3432,7 +3431,7 @@ int bop_args_as_builtin(TyKind rt, const char *name, int argc, int has_block) {
   return (bop_call_flags(rt, name, argc, has_block) & BOPF_ARGS_BUILTIN) != 0;
 }
 
-TyKind bop_result(const BuiltinOp *op, TyKind rt) {
+TyKind bop_native_result(const BuiltinOp *op, TyKind rt) {
   switch ((int)op->result) {
   case (int)BOPR_SELF:      return rt;
   case (int)BOPR_HASH_VAL:  return ty_hash_val(rt);
@@ -3466,16 +3465,16 @@ TyKind bop_result(const BuiltinOp *op, TyKind rt) {
   }
 }
 
-TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts) {
+TyKind bop_native_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts) {
   switch ((int)op->result) {
   case (int)BOPR_ARRAY_SUM_SEED:
     return argc == 1 ? fold_sum_type(arg_of(ud, 0), ty_array_elem(rt), facts & BOPX_PROMOTE) : TY_UNKNOWN;
   case (int)BOPR_ARRAY_TUPLES:
-    return rt == TY_POLY_ARRAY && !(facts & BOPX_KEPT) ? TY_ENUMERATOR : bop_result(op, rt);
+    return rt == TY_POLY_ARRAY && !(facts & BOPX_KEPT) ? TY_ENUMERATOR : bop_native_result(op, rt);
   case (int)BOPR_ARRAY_INDEX:
     return (facts & BOPX_BOXED_USE) && (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY ||
                                         rt == TY_STR_RANGE)
-           ? TY_POLY : bop_result(op, rt);
+           ? TY_POLY : bop_native_result(op, rt);
   case (int)BOPR_ARRAY_PLUS:
   case (int)BOPR_ARRAY_SETOP:
     break;
@@ -3496,7 +3495,7 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
   case (int)BOPR_HASH_STORE:
     return argc >= 2 ? ty_unify(arg_of(ud, 1), ty_hash_val(rt)) : TY_UNKNOWN;
   default:
-    return bop_result(op, rt);
+    return bop_native_result(op, rt);
   }
   if (argc < 1) return TY_UNKNOWN;
   /* An Array of the receiver's kind, or an untyped operand (an empty
@@ -3519,6 +3518,14 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
     if (!ty_is_array(aj) && aj != TY_POLY) boxable = 0;
   }
   return same ? rt : boxable ? TY_POLY_ARRAY : TY_UNKNOWN;
+}
+
+TyKind bop_result(const BuiltinOp *op, TyKind rt) {
+  return op->result == TY_STRBUF ? TY_STRING : bop_native_result(op, rt);
+}
+
+TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts) {
+  return op->result == TY_STRBUF ? TY_STRING : bop_native_result_args(op, rt, argc, arg_of, ud, facts);
 }
 
 int bop_covers(TyKind rt) {

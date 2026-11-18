@@ -1,0 +1,12 @@
+[true, LineLabel, []]
+true
+[true, "a\nb!"]
+true
+[true, [:receiver, :separator, :chomp, :yield], "new"]
+["a", "b"]
+Enumerator
+"wrong number of arguments (given 2, expected 0..1)"
+true
+keyword evaluated
+Enumerator
+"unknown keyword: :bogus"

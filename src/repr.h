@@ -158,6 +158,7 @@ typedef enum {
    held as the String, and the handle taken as its route takes it. */
 int repr_handle_apart(Compiler *c, int v, Repr r);
 /* Does a call's settled return route hand back a shared String handle? */
+int repr_native_call_handle(Compiler *c, int node);
 int repr_call_returns_handle(Compiler *c, int v);
 int scope_always_raises(Compiler *c, int mi);
 const NativeMethod *repr_super_native_keeps(Compiler *c, int n); /* super into a native keeps binding (#9258) */
@@ -190,6 +191,9 @@ Repr repr_array_operand(Compiler *c, int node);
    slot idx, and of method scope sc's value. */
 Repr repr_of_ivar(const Compiler *c, int cid, int iv);
 Repr repr_of_cvar(const Compiler *c, int cid, int idx);
+TyKind repr_call_result_storage(TyKind result);
+TyKind repr_poly_result_slot(TyKind result);
+TyKind repr_method_ret_storage(const Scope *sc);
 Repr repr_of_ret(const Compiler *c, const Scope *sc);
 /* repr_of_slot(c, lv).kind and repr_of_cvar(c, cid, idx).kind alone,
    without the rest (dyn_cls scans the classes): what inference asks of a
@@ -264,19 +268,6 @@ extern int g_repr_check;
 /* --repr-check: ask repr_of of a node codegen is about to emit, whose
    answer is dropped; the C must not change (repr_of changes nothing) */
 void repr_check_ask(const Compiler *c, int node);
-/* The settled return walk's leaf decisions and the emitter's observations.
-   All callers guard these with g_repr_check; no shadow exists otherwise. */
-enum { RCH_NONE, RCH_PUBLISH, RCH_CLEAR, RCH_NIL, RCH_HANDLE, RCH_BYTES, RCH_BOXED };
-void repr_channel_predict(Compiler *c, int node, int mi, int form);
-int repr_channel_begin(Compiler *c, int node);
-int repr_channel_ensure(Compiler *c, int node);
-void repr_channel_note(Compiler *c, int node, int form);
-void repr_channel_end(Compiler *c, int frame);
-void repr_channel_boxed(Compiler *c, int node, int frame);
-void repr_channel_call(Compiler *c, int node, int mi);
-void repr_channel_pickup(Compiler *c, int node, int nil_guard);
-void repr_channel_report(Compiler *c);
-void repr_channel_free(Compiler *c);
 /* --dump-repr is on (#7501) */
 extern int g_dump_repr;
 /* --dump-repr: each slot's representation, one sorted line per slot, as

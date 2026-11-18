@@ -214,6 +214,7 @@ static const char *why_name(int why) {
   case MLW_UNASKED: return "unasked";
   case MLW_ACCESSOR: return "accessor";
   case MLW_VIS: return "visibility";
+  case MLW_UNDEF: return "undefined";
   }
   return "?";
 }

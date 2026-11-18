@@ -123,7 +123,7 @@ extern const char sp_str_empty_data[];
 extern const char *const sp_str_frozen_empty;
 extern const char *const sp_str_frozen_true;
 extern const char *const sp_str_frozen_false;
-/* Symbol#to_s's String (sp_sym_to_s_frozen): frozen static storage with a
+/* The cached Symbol spelling (sp_sym_to_s_frozen): frozen static storage with a
    header, 0xf1, whose `next` link names sp_sym_str_tag. The link is free to
    carry the mark: the String is on no sweep list and is no literal (an
    even link names no literal's handle). A Hash compared by identity asks
@@ -217,13 +217,6 @@ static inline void sp_str_lcache_drop(const char *s) {
   for (unsigned w = 0; w < SP_STR_LCACHE_WAYS; w++)
     if (sp_str_lcache[h + w].s == s) sp_str_lcache[h + w].s = NULL;
 }
-/* Deep-return side channel (#3227): a method whose every return path yields
-   a shared-mutable string publishes the sp_String* handle here as the copy
-   is read out; a demand-marked call site picks it up right after the call
-   (resetting it to NULL first). Never read unless the analysis marked the
-   site, so ordinary callers are untouched. */
-extern SP_TLS void *_sp_ret_strbuf;
-
 /* Cold; single definitions in sp_alloc.c. sp_str_sweep is wired to the GC via a
    constructor so it runs from sp_gc_collect regardless of which TU triggered
    the collection. */
@@ -404,21 +397,24 @@ static inline void sp_str_mark_binary(char *s) {
   if (!s || !sp_str_has_hdr(s)) return;
   (((sp_str_hdr *)(s - 1)) - 1)->size |= SP_STR_SIZE_BINARY;
 }
-/* Fixed-width in ONE header decode: answers the byte length through *out and
-   returns 1 when indexing this string is byte indexing (BINARY, or a scan has
-   proved it 7-bit). Asking is_binary, then is_ascii7, then byte_len re-read the
-   marker and the header three times over -- 66 instructions where the answer is
-   two loads. */
-static inline int sp_str_fixed_width(const char *s, size_t *out) {
-  if (!s) { *out = 0; return 0; }
-  unsigned char m = ((const unsigned char *)s)[-1];
-  if (m == 0xfe || m == 0xfc || m == 0xfd || m == 0xf1 || m == 0xfb || m == 0xfa || m == 0xf8) {
+/* For a fixed-width String, read the byte length and the flags from
+   one header. The encoding flag tells a character slice which bytes to
+   return, even when both encodings index one byte at a time. */
+static inline uint32_t sp_str_fixed_width_flags(const char *s, size_t *out) {
+  if (s && sp_str_has_hdr(s)) {
     const sp_str_hdr *h = ((const sp_str_hdr *)(s - 1)) - 1;
-    if (h->len != SP_STR_LEN_UNSET &&
-        (h->size & (SP_STR_SIZE_BINARY | SP_STR_SIZE_ASCII7))) { *out = h->len; return 1; }
+    uint32_t flags = h->size & (SP_STR_SIZE_BINARY | SP_STR_SIZE_ASCII7);
+    if (flags && h->len != SP_STR_LEN_UNSET) {
+      *out = h->len;
+      return flags;
+    }
   }
   *out = 0;
   return 0;
+}
+
+static inline int sp_str_fixed_width(const char *s, size_t *out) {
+  return sp_str_fixed_width_flags(s, out) != 0;
 }
 /* Mark and hand back, so an emitter can wrap an expression in it. */
 static inline const char *sp_str_as_binary(const char *s) {
@@ -1082,8 +1078,8 @@ const char *sp_str_keep_copy(const char *s);
 static inline const char *sp_str_keep(const char *s) {
   return s && ((const unsigned char *)s)[-1] == 0xfd && !sp_str_fd_owner_frozen(s) ? sp_str_keep_copy(s) : sp_str_retained(s);
 }
-/* A String key as a Hash stores it: a mutable string is copied into a frozen
-   0xfa, so a later `<<` or setbyte on the caller's string cannot move the key
+/* A String key as a Hash stores it: an unfrozen String is copied into a frozen
+   handle, so a later `<<` or setbyte on the caller's string cannot move the key
    (CRuby's rb_hash_key_str). A frozen or literal key is stored as is, and so
    is the payload of a frozen String handle (0xfd, whose header's `next` is
    the owning handle, sp_fd_own): nothing can change or move it any more,
@@ -1097,9 +1093,9 @@ static inline const char *sp_str_keep(const char *s) {
    so the key's handle, sp_String_key_handle, is that one String each time) */
 const char *sp_hash_key_from_bytes(const char *data, size_t len, int bin);
 static inline const char *sp_hash_key_str(const char *s) {
-  unsigned char m = ((const unsigned char *)s)[-1];
-  if (m != 0xfe && m != 0xfc && m != 0xfd) return s;
-  if (m == 0xfd && sp_str_fd_owner_frozen(s)) return s;
+  /* Static byte results are unfrozen too; storage that cannot be modified
+     is not itself the frozen String object a Hash key must be. */
+  if (sp_str_is_frozen_val(s)) return s;
   return sp_hash_key_from_bytes(s, sp_str_byte_len(s), sp_str_is_binary(s));
 }
 

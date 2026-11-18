@@ -2142,51 +2142,6 @@ const NativeMethod *native_assign_keeps(Compiler *c, int id) {
   return m && m->kind == 0 && (m->share & NSH_KEEPS) && m->share_csym && !m->rest && m->nargs == 1 ? m : NULL;
 }
 
-/* The edges the assignment walkers climb: the conditionals, a begin and its
-   rescue clauses (its body also when an else follows), not `||`, `&&` or a
-   rescue modifier. */
-enum { ASSIGN_CLIMB = VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN | VP_BEGIN_BOTH };
-
-/* Is call id the value its own method answers: the last statement of the
-   method's body, or of a branch body of a conditional, case or begin that
-   is itself the last? Climbs from the call (vp_climb), so its cost is the
-   depth. */
-static int assign_is_tail(Compiler *c, int id, const int *par) {
-  VpUp up;
-  vp_climb(c->nt, par, id, ASSIGN_CLIMB, &up);
-  return vp_up_def(c->nt, &up) >= 0;
-}
-
-/* Is call id the value of a `return` of its own method: through parentheses
-   and the return's argument list, with no block, lambda or method between
-   them? Climbs from the call (vp_climb, through nothing but parentheses and
-   statements), so its cost is the nesting depth. */
-static int assign_is_returned(Compiler *c, int id, const int *par) {
-  const NodeTable *nt = c->nt;
-  VpUp up;
-  vp_climb(nt, par, id, VPS_NONE, &up);
-  /* up.parent is the return's argument list */
-  int ret = up.kind == VPU_ENDED ? par[up.parent] : -1;
-  if (ret < 0 || nt_kind(nt, ret) != NK_ReturnNode || nt_ref(nt, ret, "arguments") != up.parent) return 0;
-  for (int q = par[ret]; q >= 0; q = par[q]) {
-    NodeKind qk = nt_kind(nt, q);
-    if (qk == NK_BlockNode || qk == NK_LambdaNode) return 0;
-    if (qk == NK_DefNode) return 1;
-  }
-  return 0;
-}
-
-
-
-
-/* An attribute assignment's value that is taken as a String, not as the
-   handle (the call is not marked to hand it out), is a copy of the one
-   object the writer was handed. That is right where the rule does not share
-   the String, and refused where it does (share_route_defer), the consumer
-   being one that takes a copy of the value. The tail of a method that
-   answers handles is no such consumer: the read of the field publishes its
-   handle for the caller to pick up (Scope.ret_handle), and so is a `return`
-   of it. */
 /* Does the subtree at n change local `name` in place (a mutator called on
    its read; not freeze)? */
 /* (with share set, under --share-strings: a mutator called on a call that
@@ -2229,20 +2184,11 @@ int writers_change_param(Compiler *c, int id) {
 }
 
 
-/* The value of a native binding's attribute assignment (native_assign_keeps)
-   that is taken as a String, not as the handle: href is the binding's
-   handle form, called, which answers the handle it was handed. The String is
-   a read of that one object, published for the caller to pick up as the
-   handle where it is the tail of a method that answers handles. A consumer
-   that keeps it as a String is the share analysis' to refuse, which sees
-   the value as the object's String. */
+/* The native setter returns the argument handle. A text consumer reads that
+   handle after the store, when the assignment has finished. */
 void emit_native_assign_read(Compiler *c, int id, const char *href, Buf *b) {
-  const int *par = codegen_node_parents(c, id);
-  Scope *sc = comp_scope_of(c, id);
-  if (par && sc && sc->def_node >= 0 && sc->ret_handle && (assign_is_tail(c, id, par) || assign_is_returned(c, id, par)))
-    emit_strbuf_node_read(c, id, href, b);
-  else
-    buf_printf(b, "sp_strbuf_read(%s)", href);
+  if (repr_of(c, id).as_ty == TY_STRBUF) buf_puts(b, href);
+  else buf_printf(b, "sp_strbuf_read(%s)", href);
 }
 
 /* The writer call of `obj.x = v`, whose value the caller supplies. Where
@@ -2436,20 +2382,11 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       const char *feat = c->native_funcs[nvi].feat;
       if (!feat || !feat[0] || sp_feature_enabled(feat)) {
         NativeFunc *nf = &c->native_funcs[nvi];
-        /* a `cstring` return is a borrowed C string (typically the callee's
-           static buffer, e.g. sp_crypto's per-function buffers): the next call
-           to the same symbol clobbers it, so dup onto the GC string heap
-           before the value escapes into Ruby. */
+        /* Borrowed C returns are copied into a Ruby String before the
+           provider's next call. Binary bindings publish the byte count. */
         int nv_cstr_ret = sp_streq(nf->ret, "cstring");
-        /* a `cbinstr` return is the same borrowed buffer, but holding raw
-           bytes rather than a C string: dup exactly the count the callee
-           published in sp_ffi_bin_len, since strlen would stop at the first
-           NUL byte in (say) a binary digest. The result is tagged BINARY --
-           declaring this return mode is the callee saying its answer is
-           bytes, which is the same thing CRuby says by handing back
-           ASCII-8BIT, and an untagged one does not == the same bytes from
-           pack or File.binread once any of them is >= 0x80. */
         int nv_bin_ret = sp_streq(nf->ret, "cbinstr");
+        int bytes = (nv_cstr_ret || nv_bin_ret) && repr_of(c, id).as_ty != TY_STRBUF;
         int nv_bin_tmp = nv_bin_ret ? ++g_tmp : 0;
         /* Evaluate JSON's options once, including max_nesting and dynamic
            symbolize_names. OpenStruct still needs its known class here. */
@@ -2460,28 +2397,18 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           if (ostruct) buf_puts(b, ")");
           return 1;
         }
-        /* JSON.generate(obj, opts) and JSON.pretty_generate(obj, opts): the
-           options are read at run time (sp_json_generate_options), where the
-           binding's one argument would drop them */
+        /* JSON.generate and JSON.pretty_generate take runtime options. */
         if (sp_streq(nvmod, "JSON") && (sp_streq(name, "generate") || sp_streq(name, "pretty_generate")) &&
             argc == 2) {
-          /* the options may run a user conversion (max_nesting's #to_int, an
-             unknown key's #to_s), as JSON.parse's may; and the answer is a new
-             String, so a handle a #to_s published on the way is cleared */
           g_conv_emitted++;
           int t = ++g_tmp;
-          buf_printf(b, "sp_strface_unpub(({ sp_RbVal _t%d = ", t); emit_boxed(c, argv[0], b);
+          buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_boxed(c, argv[0], b);
           buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_json_generate_options(_t%d, ", t, t); emit_boxed(c, argv[1], b);
-          buf_printf(b, ", %d); }))", sp_streq(name, "pretty_generate"));
+          buf_printf(b, ", %d); })", sp_streq(name, "pretty_generate"));
           return 1;
         }
-        /* one String representation: a handle argument's read publishes it
-           to the deep-return channel, which a caller's pickup would take for
-           this new String; the answer clears it, as the method's own body
-           does (sp_strface_unpub) */
-        int nv_unpub = (nv_cstr_ret || nv_bin_ret);
-        if (nv_unpub) buf_puts(b, "sp_strface_unpub(");
-        if (nv_cstr_ret) buf_puts(b, "sp_str_dup_external(");
+        if (bytes) buf_puts(b, "sp_strbuf_read(");
+        if (nv_cstr_ret) buf_puts(b, "sp_String_from_cstr(");
         /* Sequence the call before the sp_ffi_bin_len read: C leaves argument
            evaluation order unspecified, so bind the result to a temp first. */
         if (nv_bin_ret) buf_printf(b, "({ const char *_t%d = ", nv_bin_tmp);
@@ -2505,9 +2432,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         buf_puts(b, ")");
         if (nv_cstr_ret) buf_puts(b, ")");
         if (nv_bin_ret)
-          buf_printf(b, "; sp_str_as_binary(sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len))); })",
-                     nv_bin_tmp);
-        if (nv_unpub) buf_puts(b, ")");
+          buf_printf(b, "; sp_String_from_cbinstr(_t%d, sp_ffi_bin_len); })", nv_bin_tmp);
+        if (bytes) buf_puts(b, ")");
         return 1;
       }
     }
@@ -2576,10 +2502,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           if (!c->classes[ty_object_class(pat)].is_native_class)
             unsupported(c, argv[ai], "ffi pointer argument (a Ruby object has no C address; pass an IO::Buffer, a String or a :ptr value)");
         }
-        /* Two String arguments each read a shared handle as `(_sp_ret_strbuf = h,
-           copy(h))`; side by side in one C call those are unsequenced writes of
-           the same variable (clang -Wunsequenced, an error under -Werror), so
-           with two or more they go out to ordered temps like the buffers do. */
+        /* Hold several String arguments through evaluation of the later
+           ones, as with the rooted pointer arguments. */
         int nstr_args = 0;
         for (int ai = 0; ai < fixed_argc && ai < argc; ai++) {
           if (!ffi_spec_is_str(c->ffi_funcs[fi].args[ai])) continue;
@@ -2841,21 +2765,17 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           /* wrap the foreign void* in a poly sp_RbVal that the GC won't trace */
           buf_printf(b, "sp_box_foreign_ptr((void *)(%s))", call_buf.p);
         }
-        else if (is_str_ret) {
-          /* (one representation: the answer clears the channel a handle
-             argument's read published, as a native_func's does) */
-          buf_printf(b, "sp_strface_unpub(sp_str_dup_external(%s))", call_buf.p);
-        }
-        else if (is_binstr_ret) {
-          /* Binary-safe: build the String from the exact byte count the callee
-             published in sp_ffi_bin_len, not strlen (which truncates at an
-             embedded NUL). Sequence the call before reading the length -- C
-             leaves argument evaluation order unspecified -- via a temp. Tagged
-             BINARY for the reason the `cbinstr` arm above gives. */
-          int tp = ++g_tmp;
-          buf_printf(b, "({ const char *_t%d = %s; %s"
-                        "sp_str_as_binary(sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len))); })",
-                     tp, call_buf.p, "_sp_ret_strbuf = NULL; ", tp);
+        else if (is_str_ret || is_binstr_ret) {
+          int bytes = repr_of(c, id).as_ty != TY_STRBUF;
+          if (bytes) buf_puts(b, "sp_strbuf_read(");
+          if (is_str_ret) buf_printf(b, "sp_String_from_cstr(%s)", call_buf.p);
+          else {
+            /* Sequence the foreign call before reading its byte count. */
+            int tp = ++g_tmp;
+            buf_printf(b, "({ const char *_t%d = %s; sp_String_from_cbinstr(_t%d, sp_ffi_bin_len); })",
+                       tp, call_buf.p, tp);
+          }
+          if (bytes) buf_puts(b, ")");
         }
         else {
           /* numeric / bool: cast to sp_int or sp_float */
@@ -3099,7 +3019,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
             else {
               char _asr[300]; snprintf(_asr, sizeof _asr, "_t%d->iv_%s", _atmp, iv_c(_abase));
               buf_printf(b, "; %s", _amsp);
-              if (_avt == TY_STRBUF) buf_printf(b, "sp_strbuf_read_pub(%s)", _asr);
+              if (_avt == TY_STRBUF) buf_printf(b, "sp_strbuf_read(%s)", _asr);
               /* (one representation: an assignment whose value is boxed,
                  a writer a subclass overrides, boxes the handle) */
               else if (_avt == TY_POLY) buf_printf(b, "SP_STR_BOX(%s)", _asr);
@@ -3171,7 +3091,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       for (int k = 0; k < ncand; k++) if (call_target(c, id, cand[k], name, CT_CMETHOD, NULL) >= 0) valid++;
       if (valid > 0) {
         Repr rr = repr_of(c, id);
-        TyKind res = rr.as_ty;
+        TyKind res = repr_call_result_storage(rr.as_ty);
         int void_res = (res == TY_VOID || res == TY_UNKNOWN);
         /* A literal block at the call site is lowered to one sp_Proc * temp
            shared by every candidate branch (lowering it per-branch would
@@ -3233,7 +3153,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
               emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), leadb, &cb); }
             emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp, &cb);
             buf_puts(&cb, ")");
-            emit_poly_user_box(c, id, &c->scopes[mi], cb.p ? cb.p : "0", b);
+            emit_boxed_ret_call(c, &c->scopes[mi], cb.p ? cb.p : "0", b);
             free(cb.p);
           }
           else {
@@ -4583,11 +4503,11 @@ static void emit_exc_cls_name_pick(Compiler *c, int id, const char *name, int tk
     char call[256];
     if (cmethod_takes_self_cls(c, s)) snprintf(call, sizeof call, "%s(_t%d)", mc_method(c, s), tk);
     else snprintf(call, sizeof call, "%s()", mc_method(c, s));
-    TyKind kr = (TyKind)s->ret;
+    TyKind kr = repr_method_ret_storage(s);
     buf_printf(b, " case %d: _t%d = ", q, tr);
-    if (slot == TY_POLY && kr != TY_POLY) emit_poly_user_box(c, id, s, call, b);
+    if (slot == TY_POLY && kr != TY_POLY) emit_boxed_ret_call(c, s, call, b);
     else if (slot != TY_POLY && kr == TY_POLY) emit_unbox_text(c, slot, call, b);
-    else buf_puts(b, call);
+    else emit_coerce_text(c, id, kr, slot, CO_HOLD, call, "an exception class method result", b);
     buf_puts(b, "; break;");
   }
   buf_printf(b, " } if (_xi%d >= 0) break; } ", t);
@@ -4603,7 +4523,7 @@ static int cls_value_row_default(Compiler *c, int id, int recv, const char *name
      the template's, which the arm text below finds */
   const BuiltinOp *op = bop_find(TY_CLASS, name, argc, nt_ref(c->nt, id, "block") >= 0);
   if (!op) return 0;
-  TyKind res = bop_result(op, TY_CLASS);
+  TyKind res = bop_native_result(op, TY_CLASS);
   if (res == TY_UNKNOWN || res == TY_VOID || (slot != TY_POLY && slot != res)) return 0;
   char rt[32];
   snprintf(rt, sizeof rt, "_t%d", tk);
@@ -4727,6 +4647,12 @@ static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int r
       buf_printf(b, "({ sp_MatchData *_t%d = ", tm); emit_expr(c, recv, b);
       buf_printf(b, "; _t%d ? ", tm); emit_builtin_class_value(c, "MatchData", b);
       buf_puts(b, " : "); emit_builtin_class_value(c, "NilClass", b); buf_puts(b, "; })");
+      return 1;
+    }
+    if ((rt == TY_STRING || rt == TY_STRBUF) && program_has_strsub(c)) {
+      buf_puts(b, "sp_poly_class_val(");
+      emit_boxed(c, recv, b);
+      buf_puts(b, ")");
       return 1;
     }
     const char *cn = NULL;
@@ -5588,6 +5514,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         if (simple9) {
           TyKind slot9 = is_scalar_ret(uret9) && uret9 != TY_VOID && uret9 != TY_UNKNOWN
                          ? uret9 : (ty_is_object(uret9) ? uret9 : TY_POLY);
+          slot9 = repr_call_result_storage(slot9);
           /* a class answering by its `class << self` accessor answers boxed,
              and so does the call the inference typed boxed because some
              class has the accessor, though each class here answers by its
@@ -5682,8 +5609,14 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             if (onil9 && !method_ret_is_oint(&c->scopes[kmi]))
               buf_printf(b, "%s(%s)", slot9 == TY_FLOAT ? "sp_ofloat_of" : "sp_oint_of", cb9.p ? cb9.p : "");
             else if (onil9) buf_puts(b, cb9.p ? cb9.p : "");
-            else if (slot9 == TY_POLY && kr != TY_POLY) emit_poly_user_box(c, id, &c->scopes[kmi], cb9.p ? cb9.p : "", b);
+            else if (slot9 == TY_POLY && kr != TY_POLY) emit_boxed_ret_call(c, &c->scopes[kmi], cb9.p ? cb9.p : "", b);
             else if (slot9 != TY_POLY && kr == TY_POLY) emit_unbox_text(c, slot9, cb9.p ? cb9.p : "", b);
+            else if (slot9 == TY_STRBUF && repr_method_ret_storage(&c->scopes[kmi]) != TY_STRBUF) {
+              Buf box = {0};
+              emit_boxed_ret_call(c, &c->scopes[kmi], cb9.p, &box);
+              buf_printf(b, "sp_poly_as_strbuf(%s)", box.p);
+              free(box.p);
+            }
             else buf_puts(b, cb9.p ? cb9.p : "");
             if (apre9.p && apre9.p[0]) buf_puts(b, "; }");
             free(apre9.p);
@@ -5705,6 +5638,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             buf_puts(b, " default: ");
             emit_exc_cls_name_pick(c, id, name, tk9, tr9, slot9, onil9, 0, b);
             if (slot9 == TY_POLY) buf_printf(b, "_t%d = sp_box_nullable_str(%s); break;", tr9, nb);
+            else if (slot9 == TY_STRBUF) buf_printf(b, "_t%d = SP_STR_HDL(%s); break;", tr9, nb);
             else buf_printf(b, "_t%d = %s; break;", tr9, nb);
           }
           else if (!rdef9 && is_name_reader(name) &&
@@ -5712,7 +5646,9 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             buf_printf(b, " default: sp_raise_cls(\"ArgumentError\", \"%s\"); break;", nb9am);
           else if (!rdef9 && argc <= 4 && cls_value_row_default(c, id, recv, name, argc, argv, argt9, tk9, tr9, slot9, b)) {}
           else if (!rdef9) buf_printf(b, " default: %s; break;", rraise9);
-          buf_printf(b, " } _t%d; })", tr9);
+          if (slot9 == TY_STRBUF && repr_of(c, id).as_ty == TY_STRING && !repr_native_call_handle(c, id))
+            buf_printf(b, " } sp_strbuf_read(_t%d); })", tr9);
+          else buf_printf(b, " } _t%d; })", tr9);
           unhoist_dispatch_args(c, hn9, hsv9, hty9);
           (void)defmi9;
           free(arm_k9); free(arm_mi9);
@@ -5949,7 +5885,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         TyKind kr = (TyKind)ms->ret;
         if (slot_tr.kind == RK_BOXED && kr != TY_POLY && kr != TY_UNKNOWN && kr != TY_VOID &&
             !method_is_void(ms))
-          emit_poly_user_box(c, id, ms, cb.p ? cb.p : "", b);
+          emit_boxed_ret_call(c, ms, cb.p ? cb.p : "", b);
         /* ...and the other way: a user `self.new` answers a boxed object
            where the site is typed as the class it builds (#5409) */
         else if (kr == TY_POLY && slot_tr.kind != RK_BOXED && slot_t != TY_UNKNOWN &&
@@ -6067,10 +6003,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       TyKind ort = orr >= 0 ? comp_ntype(c, orr) : TY_UNKNOWN;
       int ocid = ty_is_object(ort) ? ty_object_class(ort) : -1;
       int exc_recv = ort == TY_EXCEPTION || (ocid >= 0 && class_is_exc_subclass(c, ocid));
-      int own_cls = ort == TY_POLY || (ocid >= 0 && !exc_recv);
-      int ncc = 0;
-      if (own_cls) comp_cmethod_candidates(c, name, &ncc);
-      if (ncc > 0) return 0;
+      if (cplan_class_reader_overridden(c, ort, name)) return 0;
       /* An exception's `name`: the exception classes that define it
          themselves -- a program one, or a reopened builtin one -- answer by
          the class's name, the nearest up its ancestry first
@@ -6180,7 +6113,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           }
           else if (wr.kind == RK_BOXED && cret != TY_POLY && cret != TY_UNKNOWN &&
               cret != TY_VOID && cret != TY_NIL)
-            emit_poly_user_box(c, id, &c->scopes[defmi], dc, b);
+            emit_boxed_ret_call(c, &c->scopes[defmi], dc, b);
           else if (cret == TY_POLY && wr.kind != RK_BOXED && want != TY_UNKNOWN &&
                    is_scalar_ret(want) && want != TY_VOID && want != TY_NIL)
             emit_unbox_text(c, want, dc, b);
@@ -6199,6 +6132,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           }
           /* arms that all answer nothing: nil, boxed */
           if (unified == TY_VOID || unified == TY_UNKNOWN || unified == TY_NIL) unified = TY_POLY;
+          unified = repr_call_result_storage(unified);
           int rtmp = ++g_tmp;
           /* an arm that can answer nil makes the switch an sp_oint, the
              others' plain values wrapped (node_is_oint asks the same) */
@@ -6240,7 +6174,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               buf_puts(&ab, ")");
               buf_printf(b, "_t%d = ", rtmp);
               if (unified == TY_POLY && kr != TY_POLY)
-                emit_poly_user_box(c, id, &c->scopes[kmi], ab.p ? ab.p : "0", b);
+                emit_boxed_ret_call(c, &c->scopes[kmi], ab.p ? ab.p : "0", b);
               else if (oarms && !method_ret_is_oint(&c->scopes[kmi]))
                 buf_printf(b, "%s(%s)", oint_of(unified), ab.p ? ab.p : "0");
               else buf_puts(b, ab.p ? ab.p : "0");
@@ -6269,7 +6203,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               buf_puts(&db, ")");
               buf_printf(b, "_t%d = ", rtmp);
               if (unified == TY_POLY && dr != TY_POLY)
-                emit_poly_user_box(c, id, &c->scopes[defmi], db.p ? db.p : "0", b);
+                emit_boxed_ret_call(c, &c->scopes[defmi], db.p ? db.p : "0", b);
               else if (oarms && !method_ret_is_oint(&c->scopes[defmi]))
                 buf_printf(b, "%s(%s)", oint_of(unified), db.p ? db.p : "0");
               else buf_puts(b, db.p ? db.p : "0");
@@ -6409,7 +6343,7 @@ static int emit_root_reopen_call_plain(Compiler *c, int id, Buf *b, const NodeTa
   /* a method with no value (it raises, or ends in a void call) where the
      site's slot wants one: nil in that slot's type */
   Repr want_repr = repr_of(c, id);
-  TyKind want3 = want_repr.as_ty;
+  TyKind want3 = repr_native_call_handle(c, id) ? repr_call_result_storage(want_repr.as_ty) : want_repr.as_ty;
   int void3 = method_is_void(&c->scopes[mi]) && want3 != TY_VOID && want3 != TY_UNKNOWN && want3 != TY_NIL;
   if (void3) buf_puts(b, "(");
   Buf call = {0};
@@ -6431,7 +6365,7 @@ static int emit_root_reopen_call_plain(Compiler *c, int id, Buf *b, const NodeTa
   else if (method_ret_is_oint(&c->scopes[mi]) && want_repr.kind == RK_OPT) buf_puts(b, call.p);
   else if (method_ret_is_oint(&c->scopes[mi]) && want_repr.kind == RK_BOXED) emit_boxed_ret_call(c, &c->scopes[mi], call.p, b);
   else if (method_ret_is_oint(&c->scopes[mi])) buf_printf(b, "%s(%s)", oint_arg((TyKind)c->scopes[mi].ret), call.p);
-  else emit_coerce_text(c, id, (TyKind)c->scopes[mi].ret, want_repr.kind == RK_BOXED ? TY_POLY : want3,
+  else emit_coerce_text(c, id, repr_method_ret_storage(&c->scopes[mi]), want_repr.kind == RK_BOXED ? TY_POLY : want3,
                         CO_HOLD, call.p, "an Object method result", b);
   free(call.p);
   if (void3) buf_printf(b, ", %s)", want_repr.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want3));

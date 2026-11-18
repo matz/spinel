@@ -72,7 +72,22 @@ static void sio_grow(sp_StringIO *sio, int64_t need) {SP_GC_ROOT(sio);
     return;
   }
   sio_own(sio); int64_t req = sio->pos + need; if (req <= sio->cap) return; int64_t nc = sio->cap ? sio->cap : 64; while (nc < req) nc *= 2; char *nb = (char *)realloc(sio->buf, nc + 1); if (!nb) sp_oom_die(); sio->buf = nb; sio->cap = nc; }
-static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) { sio_sync(sio); sio_grow(sio, dl); if (sio->pos > sio->len) memset(sio->buf + sio->len, 0, sio->pos - sio->len); memcpy(sio->buf + sio->pos, d, dl); sio->pos += dl; if (sio->pos > sio->len) sio->len = sio->pos; sio->buf[sio->len] = '\0'; sio_publish(sio); return dl; }
+static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) {
+  sio_sync(sio);
+  /* A to_s result can be the stream's own String. Growth can move it,
+     and writes can overlap it even when its capacity is sufficient. */
+  uintptr_t offset = (uintptr_t)d - (uintptr_t)sio->buf;
+  sp_bool aliases = dl > 0 && offset < (uintptr_t)sio->len;
+  sio_grow(sio, dl);
+  if (aliases) d = sio->buf + offset;
+  if (sio->pos > sio->len) memset(sio->buf + sio->len, 0, sio->pos - sio->len);
+  memmove(sio->buf + sio->pos, d, (size_t)dl);
+  sio->pos += dl;
+  if (sio->pos > sio->len) sio->len = sio->pos;
+  sio->buf[sio->len] = '\0';
+  sio_publish(sio);
+  return dl;
+}
 
 /* the bytes of a shared handle (s->str) are the handle's: it keeps them
    alive and frees them */
@@ -502,19 +517,13 @@ static int64_t sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROO
         for (sp_int i = 0; i < n; i++) w += sio_write_val(s, sp_json_aref_fn(v, i), 1);
         return w;  /* elements each terminated their own line */
       }
-      /* anything else writes its #to_s, as IO#write and Kernel#print do. A
-         user #to_s answers a Ruby String, measured by its recorded length so
-         an embedded NUL survives; the generic renderer may answer a static
-         class or symbol name with no length in front of it. */
-      if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_s_fn) {
-        const char *t = sp_obj_to_s_fn((int)v.cls_id, v.v.p);
-        if (t) { w += sio_write(s, t, (int64_t)sp_str_byte_len(t)); break; }
+      /* Write the selected display result and its byte length. */
+      {
+        size_t n;
+        const char *t = sp_poly_to_s_bytes(v, &n);
+        w += sio_write(s, t, (int64_t)n);
+        break;
       }
-      if (sp_poly_to_s_fn) {
-        const char *t = sp_poly_to_s_fn(v);
-        w += sio_write(s, t, (int64_t)strlen(t)); break;
-      }
-      sp_raise_cls("TypeError", "can't write value to StringIO");
   }
   /* terminate the line unless THIS value's bytes already ended with one */
   if (is_puts && (s->pos == p0 || s->buf[s->pos - 1] != '\n')) w += sio_write(s, "\n", 1);

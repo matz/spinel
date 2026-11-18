@@ -146,7 +146,7 @@ static int share_plan_exc_super(Compiler *c, int v) {
   if (mi < 0 || cls < 0 || cls >= c->nclasses || sc->def_node < 0 || !sc->name ||
       (!is_exception_message(sc->name)) || (!class_is_exc_subclass(c, cls) && !class_is_exc_reopen(c, cls)))
     return 0;
-  return scope_ret_handle(c, mi) && cplan_super_target(c, v, sc, NULL) < 0;
+  return repr_method_ret_storage(sc) == TY_STRBUF && cplan_super_target(c, v, sc, NULL) < 0;
 }
 
 static int share_plan_yield_supply(Compiler *c, int v, int depth);
@@ -169,16 +169,13 @@ static int share_plan_yield_supply(Compiler *c, int v, int depth);
      5. a new String (share_value_fresh), which has no handle to hand over,
         whatever a route says about whether its copy can be seen: none;
      6. super in an exception's text override (SPK_EXC_SUPER);
-     7. a call whose answer the C picks up after it, the handle its targets
-        publish (SPK_PUBLISHED, strbuf_call_picks_up), whatever route the
-        call is besides;
-     8. the route the analysis checks a carry against
+     7. the route the analysis checks a carry against
         (share_node_carry_kind, which names each route by its kind: a
         callee that publishes the handle, a reader, a write, a value route
         over an operand, a block's value, a conditional ...); a `||` or
         `&&` with a bang on a boxed receiver on an arm (SPK_COND); a yield
         a block splices, asked outside the splice (SPK_YIELD);
-     9. parentheses or statements: their last statement (SPK_SEQUENCE).
+     8. parentheses or statements: their last statement (SPK_SEQUENCE).
    Anything else has its bytes only (SPK_NONE). */
 static int share_plan_producer_core(Compiler *c, int v, int *op, int unlifted) {
   const NodeTable *nt = c->nt;
@@ -207,10 +204,6 @@ static int share_plan_producer_core(Compiler *c, int v, int *op, int unlifted) {
   if (strbuf_poly_user_base(c, v) >= 0) return SPK_POLY_ARMS;
   if (share_value_fresh(c, v, 0)) return SPK_NONE;
   if (share_plan_exc_super(c, v)) return SPK_EXC_SUPER;
-  /* (a call whose answer the C picks up after it, the handle its targets
-     publish: that pickup, whatever route the call is besides) */
-  { int u = nt_paren_single(nt, v);
-    if (u >= 0 && nt_kind(nt, u) == NK_CallNode && strbuf_call_picks_up(c, u)) return SPK_PUBLISHED; }
   int k = unlifted ? share_node_carry_kind_unlifted(c, v, op) : share_node_carry_kind(c, v, op);
   if (k != SPK_NONE) return k;
   /* (a yield a block splices, asked outside the splice: its method's
@@ -522,28 +515,6 @@ static int share_plan_recv_answers_by_targets(Compiler *c, int u, const char *na
   }
   return !ty_is_object(rt) || share_plan_below_has(c, ty_object_class(rt), name);
 }
-/* See share.h. The pickup resets the side channel before the call and
-   takes what is there after it, else a new handle of the bytes, which for
-   a literal is the literal's own. Such a target publishes nothing, and
-   neither does anything that runs between the reset and its return: no
-   argument, no receiver but self, a body that computes nothing (a
-   condition or a call may publish another String's handle, which the
-   pickup would then read as this target's answer). */
-int share_plan_literal_pickup_clean(Compiler *c, int v, int mi) {
-  const NodeTable *nt = c->nt;
-  int u = nt_paren_single(nt, v);
-  if (u < 0 || nt_kind(nt, u) != NK_CallNode) return 0;
-  int recv = nt_ref(nt, u, "receiver");
-  const char *nm = nt_str(nt, u, "name");
-  if ((recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) || nt_ref(nt, u, "arguments") >= 0 ||
-      nt_ref(nt, u, "block") >= 0 || !nm || mi <= 0 || mi >= c->nscopes || !scope_ret_str_literal(c, mi))
-    return 0;
-  int b = c->scopes[mi].body, bn = 1;
-  const int *bv = &b;
-  if (b >= 0 && nt_kind(nt, b) == NK_StatementsNode) bv = nt_arr(nt, b, "body", &bn);
-  return bv && bn == 1 && bv[0] >= 0 && nt_kind(nt, bv[0]) == NK_StringNode &&
-         share_plan_recv_answers_by_targets(c, u, nm);
-}
 /* See share.h. */
 int share_plan_targets_cover(Compiler *c, int u) {
   const char *nm = u >= 0 && nt_kind(c->nt, u) == NK_CallNode ? nt_str(c->nt, u, "name") : NULL;
@@ -610,13 +581,7 @@ static int share_plan_supply_kind(Compiler *c, int v, int k, int *op, int depth)
     if (*op < 0) return 1;
     return share_plan_poly_base(c, *op) ? 0 : -1;
   case SPK_SEQUENCE: return -1;
-  /* a call whose targets publish their handle: where it picks the handle
-     up after the call, only if every target publishes it on each path
-     (strbuf_pickup_published); else the pickup falls back to a new one */
-  case SPK_PUBLISHED: {
-    int u = nt_paren_single(c->nt, v);
-    return !(u >= 0 && nt_kind(c->nt, u) == NK_CallNode && strbuf_call_picks_up(c, u)) || strbuf_pickup_published(c, u);
-  }
+  case SPK_NATIVE_CALL: return 1;
   case SPK_OPERAND: {
     if (*op >= 0) return -1;
     /* a String clamp: each operand it can answer */

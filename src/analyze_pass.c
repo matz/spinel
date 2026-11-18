@@ -21348,7 +21348,14 @@ static void cr_mark_implied(Compiler *c, char ***out, int *n, int *cap, const ch
     char cls_name[300]; snprintf(cls_name, sizeof cls_name, "\x05%s", name);
     if (cr_add_name(out, n, cap, cls_name) && cause) ic_record(c, name, cause);
   }
-  else if (cr_add_name(out, n, cap, name) && cause) ic_record(c, name, cause);
+  else {
+    if (cr_add_name(out, n, cap, name) && cause) ic_record(c, name, cause);
+    /* A handed value may itself be a class with a singleton callback.
+       Admit the implied name through the same live-class lookup as a send. */
+    char dyn[300];
+    snprintf(dyn, sizeof dyn, "\x02%s", name);
+    cr_add_name(out, n, cap, dyn);
+  }
   /* A callback resolves the table answer, not an argument-specific entry. */
   if (c->ver_ix_nb)
     for (int i = c->ver_names[sp_strhash(name) % c->ver_ix_nb]; i >= 0; i = c->ver_names_next[i]) {
@@ -21436,6 +21443,8 @@ void cr_collect_program_end(Compiler *c, char ***out, int *n, int *cap) {
       snprintf(mark, sizeof mark, "\x01%d", s);
       snprintf(cause, sizeof cause, "ProgramNode: %s of an uncaught exception", rows[i].name);
       if (cr_add_name(out, n, cap, mark) && g_dump_implicit) ic_record(c, rows[i].name, cause);
+      if (is_exception_message(rows[i].name))
+        cr_mark_implied(c, out, n, cap, "to_str", 0, "ProgramNode: exception message text");
     }
   }
 }

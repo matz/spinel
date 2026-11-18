@@ -24,6 +24,118 @@
 
 sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
 
+/* A sole chomp: arrives with its truth value. General keyword lists
+   still have their original keys for argument checking at method entry. */
+static sp_bool sp_string_line_chomp(sp_RbVal keywords) {
+  if (keywords.tag == SP_TAG_BOOL) return keywords.v.b;
+  if (sp_poly_nil_p(keywords)) return 0;
+  SP_GC_ROOT_RBVAL(keywords);
+  sp_bool chomp = 0;
+  char unknown[256] = "";
+  int used = 0, count = 0;
+  sp_int length = sp_poly_length(keywords);
+  for (sp_int i = 0; i < length; i++) {
+    sp_RbVal key, value;
+    sp_poly_hash_pair(keywords, i, &key, &value);
+    if (key.tag == SP_TAG_SYM && (sp_sym)key.v.i == sp_sym_intern("chomp"))
+      chomp = sp_poly_truthy(value);
+    else sp_kwargs_list_add(unknown, &used, &count, sp_poly_inspect(key));
+  }
+  if (count) sp_raise_kw_error("unknown", count, unknown);
+  return chomp;
+}
+
+sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
+                                sp_RbVal keywords, sp_int argc, const char *method) {
+  SP_GC_ROOT_RBVAL(receiver);
+  SP_GC_ROOT_RBVAL(separator);
+  SP_GC_ROOT_RBVAL(keywords);
+  if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod(method, receiver);
+  if (argc > 1) sp_raise_arity(argc, 0, 1, NULL);
+  sp_bool chomp = sp_string_line_chomp(keywords);
+  sp_StrArray *lines = sp_StrArray_new();
+  SP_GC_ROOT(lines);
+  if (argc && sp_poly_nil_p(separator)) {
+    sp_StrArray_push_e(lines, sp_poly_as_strbuf(receiver));
+    return lines;
+  }
+  const char *text = sp_poly_recv_s(receiver, method);
+  SP_GC_ROOT_STR(text);
+  if (!sp_str_byte_len(text)) return lines;
+  /* Separator conversion can change the receiver. Read the text first. */
+  if (argc && sp_poly_is_user_obj(separator)) text = sp_str_dup(text);
+  const char *sep = argc ? sp_poly_arg_str_chk(separator) : SPL("\n");
+  SP_GC_ROOT_STR(sep);
+  size_t offset = 0;
+  for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, chomp));)
+    sp_StrArray_push_e(lines, line);
+  return lines;
+}
+
+typedef struct {
+  sp_RbVal receiver;
+  sp_RbVal separator;
+  sp_RbVal keywords;
+  sp_int argc;
+} sp_StringLineCap;
+
+static void sp_string_line_scan(void *p) {
+  sp_StringLineCap *cap = (sp_StringLineCap *)p;
+  sp_mark_rbval(cap->receiver);
+  sp_mark_rbval(cap->separator);
+  sp_mark_rbval(cap->keywords);
+}
+
+static void sp_string_line_gen(sp_Fiber *f) {
+  sp_StringLineCap *cap = (sp_StringLineCap *)f->user_data;
+  SP_GC_ROOT(cap);
+  if (cap->argc > 1) sp_raise_arity(cap->argc, 0, 1, NULL);
+  sp_bool chomp = sp_string_line_chomp(cap->keywords);
+  if (cap->argc && sp_poly_nil_p(cap->separator)) {
+    sp_Fiber_yield(cap->receiver);
+  }
+  else {
+    const char *text = sp_poly_recv_s(cap->receiver, "each_line");
+    SP_GC_ROOT_STR(text);
+    if (sp_str_byte_len(text)) {
+      /* Keep the text selected at the start of this walk through separator
+         conversion and through any mutations in the block. */
+      text = sp_str_dup(text);
+      const char *sep = SPL("\n");
+      SP_GC_ROOT_STR(sep);
+      if (cap->argc) {
+        sep = sp_poly_arg_str_chk(cap->separator);
+        sep = sp_str_dup(sep);
+      }
+      size_t offset = 0;
+      for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, chomp));)
+        sp_Fiber_yield(sp_box_obj(line, SP_BUILTIN_STRBUF));
+    }
+  }
+  sp_gc_wb((void *)f);
+  f->yielded_value = cap->receiver;
+}
+
+sp_Enumerator *sp_poly_string_line_enum(sp_RbVal receiver, sp_RbVal separator,
+                                      sp_RbVal keywords, sp_int argc, sp_bool chomp_given) {
+  SP_GC_ROOT_RBVAL(receiver);
+  SP_GC_ROOT_RBVAL(separator);
+  SP_GC_ROOT_RBVAL(keywords);
+  if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod("each_line", receiver);
+  sp_StringLineCap *cap = (sp_StringLineCap *)sp_gc_alloc(sizeof *cap, NULL, sp_string_line_scan);
+  SP_GC_ROOT(cap);
+  cap->receiver = receiver;
+  cap->separator = separator;
+  cap->keywords = keywords;
+  cap->argc = argc;
+  sp_Enumerator *e = sp_Enumerator_new_gen(sp_string_line_gen, cap, sp_box_nil());
+  const char *label = chomp_given && keywords.tag == SP_TAG_BOOL
+    ? (keywords.v.b ? SPL("each_line(chomp: true)") : SPL("each_line(chomp: false)"))
+    : SPL("each_line");
+  return sp_enum_with_src(e, receiver, label);
+}
+
+
 #ifdef SP_CEXT
 sp_RbVal sp_cext_object_class(sp_RbVal object) {
   return sp_box_class(sp_poly_class_val(object));
@@ -229,8 +341,8 @@ void sp_cext_hash_set(sp_RbVal hash, sp_RbVal key, sp_RbVal value) {
 
 const char *(*sp_class_name_fn)(sp_Class);
 const char *(*sp_class_display_fn)(sp_Class);
-const char *(*sp_class_user_to_s_fn)(sp_Class);
-const char *(*sp_class_user_inspect_fn)(sp_Class);
+sp_RbVal (*sp_class_user_to_s_fn)(sp_Class, int *);
+sp_RbVal (*sp_class_user_inspect_fn)(sp_Class, int *);
 const char *(*sp_array_user_inspect_fn)(sp_RbVal);
 /* set while pp prints: CRuby's pp lays out an Array by its own
    pretty_print, never by the program's Array#inspect. One flag for each
@@ -239,11 +351,20 @@ SP_TLS int sp_pp_printing;
 /* A boxed Time's to_s (inspect 0) or inspect (1): a Time subclass
    instance's goes through its class's own dispatcher, which runs an
    override of the class's and falls back to Time's. */
-static const char *sp_poly_time_display(sp_RbVal v, int inspect) {
+static const char *sp_display_counted_bytes(const char *text, size_t *length) {
+  if (length) *length = sp_str_byte_len(text);
+  return text;
+}
+
+static const char *sp_poly_time_display(sp_RbVal v, int inspect, size_t *length) {
   int k = sp_bsub_cls_fn ? sp_bsub_cls_fn(v) : -1;
   if (k >= 0) {
-    if (inspect && sp_obj_inspect_fn) return sp_obj_inspect_fn(k, v.v.p);
-    if (!inspect && sp_obj_to_s_fn) return sp_obj_to_s_fn(k, v.v.p);
+    sp_RbVal result;
+    if (sp_user_display_box(v, inspect, &result)) {
+      if (inspect) return sp_poly_to_s(result);
+      const char *s = sp_strface_b_box(result);
+      if (s) return sp_display_counted_bytes(s, length);
+    }
   }
   return inspect ? sp_Time_inspect((sp_Time *)v.v.p) : sp_Time_to_s((sp_Time *)v.v.p);
 }
@@ -272,7 +393,7 @@ const char *sp_poly_cold_class_to_s(sp_Class c) {
 /* The class name a default #to_s / #inspect prints for a user object: the
    display form of a Class.new class when the program installed one, else its name. */
 static const char *sp_poly_obj_class_display(sp_RbVal v) {
-  if (sp_class_display_fn && v.cls_id >= 0) {
+  if (v.tag == SP_TAG_OBJ && sp_class_display_fn && v.cls_id >= 0) {
     sp_Class c = {v.cls_id, NULL};
     return sp_class_display_fn(c);
   }
@@ -352,7 +473,7 @@ void sp_poly_puts(sp_RbVal v)
         case SP_BUILTIN_STR_RANGE: puts(sp_srange_to_s(SP_SRANGE_OF(v.v.p))); break;
         /* a Time subclass instance, boxed as its Time, shows through its
            class's to_s (an override of its own included) */
-        case SP_BUILTIN_TIME: sp_puts_str_line(sp_poly_time_display(v, 0)); break;
+        case SP_BUILTIN_TIME: sp_puts_str_line(sp_poly_time_display(v, 0, NULL)); break;
         case SP_BUILTIN_STRBUF: sp_puts_str_line(sp_String_cstr((sp_String *)v.v.p)); break;
         case SP_BUILTIN_COMPLEX: puts(sp_complex_to_s(*(sp_Complex *)v.v.p)); break;
         case SP_BUILTIN_RATIONAL: puts(sp_rational_to_s(*(sp_Rational *)v.v.p)); break;
@@ -386,34 +507,30 @@ void sp_poly_puts(sp_RbVal v)
   }
 }
 
-/* Symbol#to_s and #id2name as a program calls them: a new String at each
-   call, as CRuby answers one, and frozen, as Spinel answers it (CRuby's is
-   chilled; docs/limitations.md). sp_sym_to_s_frozen is the one frozen copy
-   the runtime renders a Symbol with (puts, interpolation, inspect); two
-   calls answered that one object, so `s.to_s.equal?(s.to_s)` was true. */
-const char *sp_sym_to_s_new(sp_sym id)
+/* Symbol conversions make a distinct frozen handle from the cached spelling.
+   Symbol#name and byte readers can reuse the spelling itself. */
+sp_String *sp_sym_to_s_new(sp_sym id)
 {
-  const char *nm = sp_sym_to_s_frozen(id);
-  return sp_str_freeze_val(sp_str_from_bytes(nm, sp_str_byte_len(nm)));
-}
-/* a boxed receiver's to_s as a program calls it: a Symbol's is a new
-   String (sp_sym_to_s_new), every other value's is sp_poly_to_s's */
-const char *sp_poly_to_s_call(sp_RbVal v)
-{
-  if (v.tag == SP_TAG_SYM) return sp_sym_to_s_new((sp_sym)v.v.i);
-  return sp_poly_to_s(v);
+  return sp_String_freeze(sp_String_new_unfrozen(sp_sym_to_s_frozen(id)));
 }
 
-const char *sp_poly_to_s(sp_RbVal v)
+/* Object#to_s when a user override returns a non-String. */
+const char *sp_obj_to_s_fallback(sp_RbVal v)
+{
+  return sp_sprintf("#<%s:0x%016llx>", sp_poly_obj_class_display(v),
+                    (unsigned long long)(uintptr_t)v.v.p);
+}
+
+static const char *sp_poly_to_s_impl(sp_RbVal v, size_t *length)
 {
   switch (v.tag) {
     case SP_TAG_INT: return sp_int_to_s(v.v.i);
-    case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_frozen_empty;
+    case SP_TAG_STR: return sp_display_counted_bytes(v.v.s ? v.v.s : sp_str_frozen_empty, length);
     case SP_TAG_FLT: return sp_float_to_s(v.v.f);
     case SP_TAG_BOOL: return v.v.b ? sp_str_frozen_true : sp_str_frozen_false;
     case SP_TAG_NIL: return sp_str_frozen_empty;
-    case SP_TAG_SYM: return sp_sym_to_s_frozen((sp_sym)v.v.i);
-    case SP_TAG_CLASS: return sp_class_val_user(v, sp_class_user_to_s_fn);
+    case SP_TAG_SYM: return sp_display_counted_bytes(sp_sym_to_s_frozen((sp_sym)v.v.i), length);
+    case SP_TAG_CLASS: return sp_class_val_user_bytes(v, sp_class_user_to_s_fn, length);
     case SP_TAG_ENCODING: return v.v.s ? v.v.s : sp_str_empty;
     case SP_TAG_BIGINT: return sp_bigint_to_s((sp_Bigint *)v.v.p);
     case SP_TAG_OBJ:
@@ -429,8 +546,8 @@ const char *sp_poly_to_s(sp_RbVal v)
         case SP_BUILTIN_RANGE: return sp_range_str(*(sp_Range *)v.v.p);
         case SP_BUILTIN_FLOAT_RANGE: return sp_frange_inspect(*(sp_FloatRange *)v.v.p);
         case SP_BUILTIN_STR_RANGE: return sp_srange_to_s(SP_SRANGE_OF(v.v.p));
-        case SP_BUILTIN_TIME: return sp_poly_time_display(v, 0);
-        case SP_BUILTIN_STRBUF: return sp_String_cstr((sp_String *)v.v.p);   /* live buffer (#3227) */
+        case SP_BUILTIN_TIME: return sp_poly_time_display(v, 0, length);
+        case SP_BUILTIN_STRBUF: return sp_display_counted_bytes(sp_String_cstr((sp_String *)v.v.p), length);   /* live buffer (#3227) */
         case SP_BUILTIN_METHOD: return sp_method_desc_cstr((sp_BoundMethod *)v.v.p);
         /* Proc#to_s is its inspect; a boxed one (an element of a mixed Array)
            fell through to "" */
@@ -441,8 +558,8 @@ const char *sp_poly_to_s(sp_RbVal v)
         case SP_BUILTIN_BIG_RATIONAL: return sp_brat_to_s((sp_BigRational *)v.v.p);
         case SP_BUILTIN_REGEX: return sp_re_to_s_str(v.v.p);
         /* MatchData#to_s is the whole match (#3641) */
-        case SP_BUILTIN_MATCHDATA: { const char *_m0 = sp_MatchData_aref((sp_MatchData *)v.v.p, 0); return _m0 ? _m0 : sp_str_empty; }
-        case SP_BUILTIN_EXCEPTION: return sp_exc_message((volatile struct sp_Exception_s *)v.v.p);
+        case SP_BUILTIN_MATCHDATA: { const char *_m0 = sp_MatchData_aref((sp_MatchData *)v.v.p, 0); return sp_display_counted_bytes(_m0 ? _m0 : sp_str_empty, length); }
+        case SP_BUILTIN_EXCEPTION: return sp_display_counted_bytes(sp_exc_to_s_text((sp_Exception *)v.v.p), length);
         /* Object#to_s on a boxed handle of the IO family, as the typed arm
            renders it: a boxed one fell through to "" (`puts [f, d]`) */
         case SP_BUILTIN_IO: return sp_io_to_s((sp_File *)v.v.p);
@@ -469,15 +586,15 @@ const char *sp_poly_to_s(sp_RbVal v)
                  copy may be a fresh object's only reference (`puts(k ?
                  C.new : 1)`), as in sp_poly_check_str_obj */
               SP_GC_ROOT_RBVAL(v);
-              const char *us = sp_obj_to_s_fn(v.cls_id, v.v.p);
-              if (us) return us;
+              int found;
+              const char *us = sp_strface_b_box(sp_obj_to_s_fn(v.cls_id, v.v.p, &found));
+              if (found && us) return sp_display_counted_bytes(us, length);
             }
             /* a user exception subclass boxes under its own class id */
             if (sp_is_exc_subclass_cls(v.cls_id))
-              return sp_exc_message((volatile struct sp_Exception_s *)v.v.p);
+              return sp_display_counted_bytes(sp_exc_message((volatile struct sp_Exception_s *)v.v.p), length);
             if (v.v.p == sp_main_obj) return SPL("main");
-            return sp_sprintf("#<%s:0x%016llx>", sp_poly_obj_class_display(v),
-                              (unsigned long long)(uintptr_t)v.v.p);
+            return sp_obj_to_s_fallback(v);
           }
           /* a builtin container kind with no explicit arm above (the hash
              variants): to_s is its inspect */
@@ -486,6 +603,19 @@ const char *sp_poly_to_s(sp_RbVal v)
       }
     default: return sp_str_empty;
   }
+}
+
+const char *sp_poly_to_s(sp_RbVal v) {
+  return sp_poly_to_s_impl(v, NULL);
+}
+
+const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length) {
+  /* A selected Ruby String provides its length in its header. Fixed C
+     display text leaves the count unset and uses its terminating NUL. */
+  *length = SIZE_MAX;
+  const char *text = sp_poly_to_s_impl(v, length);
+  if (*length == SIZE_MAX) *length = strlen(text);
+  return text;
 }
 
 /* The class name of a boxed value, and in *id the builtin class id of that name
@@ -766,7 +896,7 @@ const char *sp_poly_inspect(sp_RbVal v)
         case SP_BUILTIN_RANGE:     return sp_Range_inspect((sp_Range *)v.v.p);
         case SP_BUILTIN_FLOAT_RANGE: return sp_frange_inspect(*(sp_FloatRange *)v.v.p);
         case SP_BUILTIN_STR_RANGE: return sp_srange_inspect(SP_SRANGE_OF(v.v.p));
-        case SP_BUILTIN_TIME:      return sp_poly_time_display(v, 1);
+        case SP_BUILTIN_TIME:      return sp_poly_time_display(v, 1, NULL);
       case SP_BUILTIN_STRBUF: return sp_str_inspect(sp_String_cstr((sp_String *)v.v.p));   /* (#3227) */
       case SP_BUILTIN_METHOD: return sp_method_desc_cstr((sp_BoundMethod *)v.v.p);
       case SP_BUILTIN_PROC: return sp_proc_inspect((sp_Proc *)v.v.p);
@@ -806,7 +936,9 @@ const char *sp_poly_inspect(sp_RbVal v)
              #<Name:0x... @a=..., ...> like CRuby's default inspect */
           if (v.cls_id >= 0 && sp_obj_inspect_fn && v.v.p) {
             SP_GC_ROOT_RBVAL(v);   /* across the user #inspect or the ivar walk, as for #to_s */
-            return sp_obj_inspect_fn(v.cls_id, v.v.p);
+            int found;
+            sp_RbVal r = sp_obj_inspect_fn(v.cls_id, v.v.p, &found);
+            if (found) return sp_poly_to_s(r);
           }
           if (v.cls_id == SP_BUILTIN_OBJECT && v.v.p && v.v.p == sp_main_obj) return SPL("main");
           if ((v.cls_id >= 0 || v.cls_id == SP_BUILTIN_OBJECT) && v.v.p)

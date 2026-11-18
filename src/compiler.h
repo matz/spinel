@@ -721,11 +721,6 @@ typedef struct {
                           settled in its poly form, the boxes holding the
                           handles (share_default_apply); the same Ruby type in its
                           shared C form, not a contradiction of the seed (#9626) */
-  int ret_pub_fresh;   /* --share-strings: a deep-return pickup takes this
-                          method's value, and a tail of it answers a fresh
-                          String (share_node_fresh) beside the handle reads
-                          the others publish: that tail clears the side
-                          channel (emit_tail_value), so the caller wraps it */
   unsigned char ret_rbs_cont; /* a container return seed (RBS_CONT_HASH, a
                           Hash; RBS_CONT_ARRAY, an Array) gave way to the box
                           the body answers (ret_seed_holds): the slot stays
@@ -745,22 +740,6 @@ typedef struct {
                            methods (`def pass(x) = x.p_`) and methods whose value
                            is their block's (`def key_of(x) = yield x`), which no
                            RBS signature covers (#3505). */
-  unsigned char ret_handle; /* --share-strings: every return path reads a String
-                               the rule shares, so a call's value is that
-                               String's handle, which the callee's tail read
-                               publishes (_sp_ret_strbuf); set once the
-                               analysis settles (an_mark_handle_returns) */
-  unsigned char ret_pub_bang; /* --share-strings: ret_handle, and a tail is a bang
-                                 on a handle (`a.upcase!`), whose value form
-                                 answers its bytes and publishes nothing: each
-                                 tail is emitted by itself (emit_tail_value),
-                                 the bang's as its handle's read, as for
-                                 ret_pub_fresh */
-  unsigned char ret_channel_check; /* --repr-check: the earlier pickup proof succeeded */
-  unsigned char ret_unread; /* a String method no call reads the value of: every
-                               call of its name drops it (an_mark_unread_returns),
-                               so its body runs as statements and builds no value
-                               -- a tail `@out << x` read the whole buffer out */
   unsigned char ret_fresh; /* the same return-tail walk proves a new String
                               (or nil) on every path; no incoming handle */
   int ret_param;       /* --share-strings: every non-fresh return reads this
@@ -768,9 +747,6 @@ typedef struct {
   int ret_obj_may_nil; /* the nil fact for the method's value (analyze_nil.c,
                           #7444): its body's value or a `return` may be nil;
                           nonzero, where the nil comes from (NFW_*) */
-  unsigned char ret_nil_pickup; /* --share-strings: a `return` of the method
-                          answers nil and the deep-return pickup takes it
-                          (an_returns_shared_handles, an_tail_answers_nil) */
   TyKind ret_oa_pin;   /* the pointer-array return type the narrowing pass gave
                           this method, re-asserted every round for the same
                           reason LocalVar.oa_pin is. TY_UNKNOWN = not narrowed. */
@@ -1349,9 +1325,6 @@ typedef struct {
                           read yields the sp_String* HANDLE (typed TY_STRBUF,
                           boxed SP_BUILTIN_STRBUF), not the demoted cstr
                           (#3227 phase 3) */
-  /* --share-strings: the names of the calls whose answer is kept (not
-     dropped), sorted, built once on first ask (strbuf_tail_answer_kept) */
-  const char **kept_call_names; int nkept_call_names, kept_call_built;
   SP_TY_FIELD unsigned char *strbuf_handle_demand; /* [node_cap] the same demand -- hand out
                           the HANDLE, not a reading of it -- carried WITHOUT
                           moving the node's type. strbuf_box above is read as
@@ -1771,14 +1744,11 @@ typedef struct {
   struct IcState *ic;
   struct QcConstNames *qc_consts;   /* the qualified names the class pass gave constants, and their leaves (analyze_internal.h) */
   struct YvtIndex *yvt;   /* yield_value_type's call-site index (analyze_internal.h), built on first use */
-  int uses_exc_text_handle;  /* emitted shared exception text routes, to_s/message bits */
   /* a boxed site converts through sp_obj_to_ary_entry (emit_boxed_to_ary_arms):
      codegen writes that switch after the bodies */
   int uses_obj_to_ary_entry;
   /* the classes that switch serves, with their entries (cplan_to_ary_entries) */
   struct CplanToAryEntries *to_ary_entries;
-  char *exc_text_late;  /* the plain exception text dispatchers, defined after the globals (emit_exc_text_dispatch) */
-  int exc_text_super;        /* exc_text_override_calls_super's memo: 0 unasked, 1 no, 2 yes */
   /* emitting a body that lands in g_procs ahead of the constructors: a
      fiber's, a Hash default block's (ahead_body_enter, emit_pool_fwd) */
   int ahead_bodies;
@@ -1787,7 +1757,6 @@ typedef struct {
      grows; -1 = not a block body. */
   int *blk_body_map;
   int blk_body_map_n;
-  struct ReprChannelCheck *repr_channel_check; /* --repr-check return-channel shadow */
   /* parsed node id -> the number a name invented from the node carries
      (comp_node_tag), bit 0 set for one counted in a base, and that base. A
      node counts within its base, the def, class or module it is in or the
@@ -1862,10 +1831,9 @@ typedef struct {
   struct SharePlanSup *share_sup;
   int share_sup_n;
   /* --share-strings: the walk deciding the methods' answers while
-     an_mark_handle_returns runs (analyze.c), else NULL: a method's answer
-     asked meanwhile is decided where it is asked (scope_ret_handle,
-     scope_ret_fresh, scope_ret_param) */
-  struct RetHandles *ret_walk;
+     an_mark_return_origins runs (analyze.c), else NULL: a method's answer
+     asked meanwhile is decided where it is asked (scope_ret_fresh, scope_ret_param) */
+  struct ReturnWalk *ret_walk;
   /* per class, whether its class object can be a value
      (comp_class_may_be_value), built for the node and class counts kept */
   unsigned char *cls_value;
@@ -2498,7 +2466,7 @@ int an_lazy_terminal_fuses(const NodeTable *nt, int id); /* a terminal the lazy 
 int an_lazy_sn_guard_src(Compiler *c, int id);      /* the node a `&.` lazy terminal's guard tests, or -1 */
 int an_lazy_link_guarded_above(Compiler *c, int n); /* a lazy chain link whose terminal's guard tests the source */
 int poly_str_iter_enum(Compiler *c, int id);        /* boxed String iterator answers an Enumerator (analyze_infer_recv.c) */
-int poly_each_line_args_enum(Compiler *c, int id); /* boxed each_line(sep / chomp:) asked .size answers its Enumerator (analyze_infer_recv.c) */
+int string_line_args(Compiler *c, int argc, const int *argv);
 int poly_io_codepoint_enum(Compiler *c, int id);   /* boxed each_codepoint takes the IO arm (analyze_infer_recv.c) */
 int lazy_alias_chain(Compiler *c, int var_read);
 int lazy_method_chain(Compiler *c, int call);      /* parameterless method whose body is a lazy chain -> chain node, else -1 */

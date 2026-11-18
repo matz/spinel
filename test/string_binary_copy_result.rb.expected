@@ -1,0 +1,9 @@
+[[195, 169, 0, 122], "ASCII-8BIT", false, false, false]
+["ASCII-8BIT", false, false]
+[[195, 169, 0, 122, 33], [195, 169, 0, 122], [195, 169, 0, 122]]
+[0, "ASCII-8BIT", false]
+["String", "ASCII-8BIT", [195, 169]]
+[:override, :override]
+:b
+nil
+[195, 169]

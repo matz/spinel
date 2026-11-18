@@ -39,15 +39,85 @@ Three rules follow from it:
 | membership in a family of names                                                                                   | the name predicates                                | `builtin_names.c:is_call_alias`, `is_then_alias`, ...                                                                                                       | the same inline `sp_streq` chain in inference and in codegen                                                                                                                                                                                                                                                           |
 | when a pass runs, and what inference reads                                                                        | the phase driver and the counted setters           | `analyze.c:analyze_program`; `comp_set_ntype`, `lv_set_type`, `ivar_set_type`                                                                               | a loop appended to `analyze_program`; a direct write to a table `infer_type` reads                                                                                                                                                                                                                                     |
 
-The String plan's row is what is left of the two String representations
-(#9258): every String slot is now its handle, the share analysis is gone,
-and the String plan and the byte routes are being removed. A change does
-not add to them.
+String slots hold object handles. The remaining String plan, sharing facts
+and byte routes serve builtin producers still being migrated under #11391.
+Hash key insertion consults the runtime String's frozen state. It retains a
+frozen key and makes a frozen key object for an unfrozen input, including a
+static empty or one-character result. The Hash stores the key's byte view.
+
+Conditional method dispatchers expose real call arguments even when their
+parameter names are synthesized. The shared argument binder judges those
+counts for ordinary calls and implicit conversion callbacks alike. A
+possibly absent dispatcher uses its existing availability selector to guard
+count errors, after evaluating the arguments; its missing-method arm still
+owns the absent case. Variable-arity dispatchers forward their arguments to
+the selected arm, where that method's defaults and keywords are checked.
+
+A default argument is evaluated on the callee. Binding a String default
+uses the same handle as the expression that supplied it.
+An ordered operand keeps its saved handle until its argument binding is
+removed. An abandoned emission also removes the corresponding binding.
+
+A method inferred or declared to return String returns `sp_String *`.
+`repr_method_ret_storage` supplies the physical result type to signatures,
+return slots and callers. A nullable String uses the same pointer and returns
+`NULL` for nil. The caller can retain the handle, box it for a Ruby value,
+or read its bytes for a text operation. An initializer used for its effects
+has a void C signature even if its last expression is a String. Other String
+methods return their selected object even when the caller drops it. A nil arm
+joined to a String handle uses a null of that pointer type, so boxing the
+result still selects the handle representation. Mixed receiver dispatch joins
+Ruby values in the switch and projects the result once. Proc and C extension
+callback signatures retain their declared result representation.
+A builtin row can declare the same native handle result with `BuiltinOp.result`
+set to `TY_STRBUF`. Semantic inference reads the result as `TY_STRING`.
+The call plan gives the renderer and Repr the same selected producer. Boxed
+dispatch arms use the row they emitted to box the result. An override-capable
+display conversion still returns its actual boxed value.
+The ENV read paths that return a String default or a missing-key block's
+String use the same result view. The selected branch hands back its
+String handle directly.
+The IO output-buffer emitters return the rooted buffer through that view
+when the result is a String. Calls that can also return a wait Symbol keep
+their boxed result.
+The native String result passes its handle directly through C. Byte
+consumers project the contents and take a snapshot where the read is
+held across a block. Fiber context switches carry the active
+GC roots and exception state.
+A receiver-answering iterator at method tail keeps its receiver in the
+operand view across the block and returns it through the physical result
+slot, including a String handle slot. Builtin rows identify self answers;
+the subclass adapter retains the original object when its builtin reads
+String bytes. A block break keeps its own boxed result outside that adapter.
+String line methods retain the receiver through separator and chomp
+evaluation. With a nil separator the receiver is the only line, including
+for an empty String. A line Enumerator retains its receiver and separator
+and reads their contents when each walk begins.
+A foreign binding that loans bytes copies them into a String handle before
+an allocation can retire the provider's buffer. Binary bindings pass their
+published count so embedded NUL bytes survive.
+Interpolation and printing call the display method selected at that site.
+They read the bytes of its native String result or format its boxed result
+while the receiver is rooted. Interpolation keeps a mutable conversion
+result until its literal segment is assembled, then reads its bytes and
+length together. This includes registered class conversions and a rescued
+exception’s override or stored message. A generated String member reader named to_s or inspect
+returns its stored field. The default Struct or Data renderer produces
+counted text. String comparisons borrow bytes from the selected conversion
+result. A conditional assignment to a String instance variable evaluates
+the right-hand side only when the store is taken. It checks whether the
+receiver is frozen after evaluating that value and before updating the slot.
 
 A String subclass embeds the String handle as its leading payload. Repr
 identifies this layout when a subclass passes self to a reopened String
 method; the caller passes the existing handle, preserving identity and
 mutation through the superclass call.
+
+An immediate String append can consume the bytes of a boxed builtin
+`to_s` directly. The call plan allows that view when the recorded call
+selects the builtin display path. Calls that may reach another method
+produce the usual result. A multi-argument append stages its argument
+values before the first write.
 
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for

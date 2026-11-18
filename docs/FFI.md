@@ -229,8 +229,13 @@ the call and for one handed to C earlier, as an event loop calls back what was
 registered with it, so `[NSApp run]` can be declared blocking while its timers
 run Ruby. The method runs like any other: it allocates, starts threads and
 raises, and a raise unwinds out of the call as it does from a plain one. A
-String the method returns to C is the program's to keep alive: once the worker
-is out again, a collection can take it.
+String result crosses the callback boundary as borrowed bytes. A `:str`
+callback returns a C string. A `:binstr` callback also sets `sp_ffi_bin_len`
+to the byte length, including any embedded NUL. A nil result returns NULL
+and sets the binary length to zero. Keep the Ruby String alive while C uses
+the borrowed bytes. An operation that mutates the String can replace its
+buffer. Copy the bytes before reentering such an operation if C needs to
+retain them, using the reported byte count for `:binstr`.
 
 ### `offload: true` (Spinel's own)
 

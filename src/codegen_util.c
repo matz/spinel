@@ -180,7 +180,6 @@ void ucall_arm_pop(void) { if (g_ucall_arm_depth > 0) g_ucall_arm_depth--; }
 void ucall_observe(Compiler *c, int id, int mi, int owner_ci, int add) {
   if (g_ucall_arm_depth > 0) add = 1;
   const CallPlan *conversion = view_conversion(c, &id);
-  if (g_repr_check) repr_channel_call(c, id, mi);
   if (conversion) {
     int member = cplan_virtual_member(c, id, conversion, mi, NULL);
     fprintf(stderr, "plan-check: conversion-%s: node %d %s: plan %d, codegen %d\n",
@@ -2191,6 +2190,10 @@ int emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, B
   TyKind et = typed_elem_kind(rt), from = TY_UNKNOWN;
   if (typed_elem_held(rt) == TY_STRBUF && repr_coerce_plan(c, node, et, CO_HOLD, &from) == CF_FIT &&
       (from == TY_STRING || from == TY_STRBUF)) {
+    if (!arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
+      emit_native_string_handle(c, node, b);
+      return 1;
+    }
     if (repr_of(c, node).kind != RK_BOXED && one_str_elem_call(c, node, TY_UNKNOWN)) {
       strh_elem_handle_text(c, node, b);
       return 1;
@@ -4149,7 +4152,6 @@ void typed_elem_getf(char *out, size_t n, TyKind rt, const char *k, const char *
    Hash's value, which the runtime answers as the handle the container
    keeps? The handle element emitters then render v as the call it is. */
 int g_one_elem_raw = -1;
-int g_one_arm_bytes_node = -1;
 /* One representation: the temps held by face (__auto_type, a handle or
    bytes), which view_bind reads through SP_STR_B wherever the node held is
    bound to one: the binder writes `_t<n>` and the consumer takes bytes.
@@ -4172,44 +4174,6 @@ void one_face_mark(int t, int node) {
   g_one_face_node[t] = node + 1;
 }
 int one_face_is(int t, int node) { return t >= 0 && t < g_one_face_cap && g_one_face_node[t] == node + 1; }
-/* One representation: does a String method's answer `n` make a new String
-   (a literal, an interpolation, a builtin call's answer), whose bytes no
-   handle names? Its return clears the published channel (sp_strface_unpub):
-   a read of a handle inside it (`x.dup`'s receiver) published that handle,
-   and a caller's pickup took it for the answer. A read, self, a user
-   method's answer and a branch keep the channel: a held read is a copy,
-   and the channel is how the caller finds the handle. */
-int one_tail_fresh(Compiler *c, int n) {
-  if (n < 0) return 0;
-  n = nt_paren_single(c->nt, n);
-  if (n < 0) return 0;
-  NodeKind k = nt_kind(c->nt, n);
-  if (k == NK_StringNode || k == NK_InterpolatedStringNode) return 1;
-  if (k == NK_CallNode) {
-    const CallPlan pl = cplan_user(c, n);
-    if (pl.mi >= 0 || pl.dispatch != CP_NONE) return 0;
-    /* (a builtin answering its receiver, `s.tap { }`, is that String: the
-       channel is how the caller finds its handle, which the block may keep;
-       without a block it is new when the receiver is, `s[i, n].to_s`) */
-    int r = nt_ref(c->nt, n, "receiver"), argc = 0, blk = nt_ref(c->nt, n, "block") >= 0;
-    call_args(c->nt, n, &argc);
-    if (r >= 0 && bop_answers_recv(comp_ntype(c, r), nt_str(c->nt, n, "name"), argc, blk))
-      return !blk && one_tail_fresh(c, r);
-    return 1;
-  }
-  return 0;
-}
-/* One representation: is String answer `n` a conditional (`c ? s : "Z"`, a
-   case), seen through its parentheses and their leading statements? Its arms
-   differ, a read of a handle beside a new String, and the read in its test
-   published another handle: its return publishes the handle of the bytes it
-   answers (sp_strface_pub_b), which a caller's pickup takes. */
-int one_tail_cond(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  if (vp_one(nt, n, VPS_NONE | VP_PARENS_ONLY, &n) != VP1_NODE) return 0;
-  NodeKind k = nt_kind(nt, n);
-  return k == NK_IfNode || k == NK_UnlessNode || k == NK_CaseNode || k == NK_CaseMatchNode;
-}
 /* One representation: a write `dst = v` into a String slot, where the
    emitter writes v in the type's face (bytes) and the slot is the handle
    (every String holder is, repr_str_class_shares): v goes in through
@@ -5365,6 +5329,10 @@ void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
    the handle), so the text goes through the face macro of the declared
    type; anything else is the node as it is. */
 void emit_expr_face(Compiler *c, int node, TyKind t, Buf *b) {
+  if (t == TY_STRING && !arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
+    emit_str_expr(c, node, b);
+    return;
+  }
   if ((t == TY_STRING || t == TY_STRBUF)) {
     buf_puts(b, t == TY_STRBUF ? "SP_STR_HDL(" : "SP_STR_B(");
     emit_expr(c, node, b);
@@ -6933,65 +6901,23 @@ const char *bigint_arith_fn(const char *op) {
    an override reachability kept counts: the dispatcher has an arm for no
    other (exc_text_method). */
 int exc_has_user_msg_override(Compiler *c) {
-  /* a builtin exception's reopening defining either (`class StandardError;
-     def to_s`) serves every exception under it */
-  if (any_exc_reopen(c))
-    for (int i = 0; i < c->nclasses; i++) {
-      if (!class_is_exc_reopen(c, i)) continue;
-      for (int k = 0; k < 2; k++) {
-        int mi = call_target(c, -1, i, k ? "to_s" : "message", 0, NULL);
-        if (mi >= 0 && c->scopes[mi].class_id == i && c->scopes[mi].reachable && (TyKind)c->scopes[mi].ret == TY_STRING) return 1;
-      }
-    }
   for (int i = 0; i < c->nclasses; i++) {
-    if (!class_is_exc_subclass(c, i)) continue;
-    /* Only a string-returning override is dispatched (see codegen_program),
-       so gate on TY_STRING to match -- otherwise a non-string override would
-       route every exception query through an empty dispatcher for nothing. */
-    int mi_msg = call_target(c, -1, i, "message", 0, NULL);
-    if (mi_msg >= 0 && c->scopes[mi_msg].reachable && (TyKind)c->scopes[mi_msg].ret == TY_STRING)
-      return 1;
-    int mi_tos = call_target(c, -1, i, "to_s", 0, NULL);
-    if (mi_tos >= 0 && c->scopes[mi_tos].reachable && (TyKind)c->scopes[mi_tos].ret == TY_STRING)
-      return 1;
+    if (!class_is_exc_subclass(c, i) && !class_is_exc_reopen(c, i)) continue;
+    for (int k = 0; k < 2; k++) {
+      int mi = exc_text_method(c, i, k, NULL);
+      if (mi >= 0) return 1;
+    }
   }
   return 0;
 }
 
-/* Does an exception's #message or #to_s override of the program's own call
-   `super` and can answer what super answers? That reaches Exception's, the
-   stored message, which a body cannot hand on as the stored handle yet (its
-   answer is the stored bytes' copy), so a shared route over such a class
-   stays refused. One that answers a new String (Scope.ret_fresh) does not
-   block it. Asked once, after the return facts settle. */
-int exc_text_override_calls_super(Compiler *c) {
-  if (c->exc_text_super) return c->exc_text_super == 2;
-  c->exc_text_super = 1;
-  for (int i = 0; i < c->nclasses && c->exc_text_super == 1; i++) {
-    if (!class_is_exc_subclass(c, i) && !class_is_exc_reopen(c, i)) continue;
-    for (int k = 0; k < 2; k++) {
-      int mi = cplan_implied_target(c, -1, -1, i, k ? "to_s" : "message", CT_OWN, NULL);
-      /* (--share-strings: one that answers a new String of its own,
-         `"B:" + super`, never hands on super's answer, and one that
-         publishes the handle it answers, `def message = super`, hands on
-         that String) */
-      if (mi >= 0 && scope_calls_super(c, mi) &&
-          !((scope_ret_fresh(c, mi) || scope_ret_handle(c, mi)))) {
-        c->exc_text_super = 2;
-        break;
-      }
-    }
-  }
-  return c->exc_text_super == 2;
-}
-
 /* An override that answers something other than a String: Exception#message
    is #to_s, so such a class carries a non-string value out of #message and the
-   const char * dispatchers cannot represent it. A boxed pair of dispatchers is
-   emitted instead, and the call sites type as poly (#3868). */
+   result must reach its caller in a box (#3868). This applies equally to a
+   builtin exception reopened by the program. */
 int exc_has_nonstring_msg_override(Compiler *c) {
   for (int i = 0; i < c->nclasses; i++) {
-    if (!class_is_exc_subclass(c, i)) continue;
+    if (!class_is_exc_subclass(c, i) && !class_is_exc_reopen(c, i)) continue;
     for (int k = 0; k < 2; k++) {
       int mi = call_target(c, -1, i, k ? "to_s" : "message", 0, NULL);
       if (mi < 0) continue;
@@ -8284,9 +8210,6 @@ void emit_retf_return(int eid, int has_retval, Buf *b) {
      go anyway -- a void function's caller cannot read it. Drop it and
      return, which is what the generated code already did in practice. */
   else if (has_retval && g_c_ret_void) buf_printf(b, "if (_retf%d) return;\n", eid);
-  /* (a handle slot's answer is published as it returns: the ensure's reads
-     published others) */
-  else if (has_retval && g_ret_type == TY_STRBUF) buf_printf(b, "if (_retf%d) return sp_strface_pub_h(_retv%d);\n", eid, eid);
   else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d;\n", eid, eid);
   else if (g_in_proc_body && g_result_var && g_result_poly)
     buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; }\n", eid, g_result_var);

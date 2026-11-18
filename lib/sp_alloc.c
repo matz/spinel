@@ -195,7 +195,7 @@ const char sp_str_empty_data[] = "\xff";
    object wherever it is boxed or held, as CRuby's is */
 static sp_StringLiteral sp_fz_empty_l, sp_fz_true_l, sp_fz_false_l;
 #define SP_FZ_LINK(l) ((sp_str_hdr *)((char *)&(l).s + 1))
-/* the link Symbol#to_s's String carries in its header (sp_str_is_sym_name) */
+/* the cached Symbol spelling's header link (sp_str_is_sym_name) */
 const sp_str_hdr sp_sym_str_tag = { NULL, 0, 0, 0 };
 static struct { sp_str_hdr h; unsigned char m; char d[1]; } sp_fz_empty_s = { { SP_FZ_LINK(sp_fz_empty_l), 1 | SP_STR_SIZE_ASCII7, 0, 0 }, 0xf1, "" };
 static struct { sp_str_hdr h; unsigned char m; char d[5]; } sp_fz_true_s = { { SP_FZ_LINK(sp_fz_true_l), 5 | SP_STR_SIZE_ASCII7, 4, 0 }, 0xf1, "true" };
@@ -830,7 +830,6 @@ void sp_gc_poll_collect(void) {
 }
 
 SP_TLS struct sp_str_lcache_entry sp_str_lcache[SP_STR_LCACHE_SIZE];
-SP_TLS void *_sp_ret_strbuf;
 
 void sp_str_lcache_clear(void) {
   for (unsigned i = 0; i < SP_STR_LCACHE_SIZE; i++) sp_str_lcache[i].s = NULL;

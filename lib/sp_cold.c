@@ -6891,7 +6891,7 @@ static const char *sp_enc_str_arg(sp_RbVal v) {
     return sp_String_cstr((sp_String *)v.v.p);
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn) {
     SP_GC_ROOT_RBVAL(v);   /* across the user #to_str */
-    const char *r = sp_obj_to_str_fn((int)v.cls_id, v.v.p);
+    const char *r = sp_String_cstr_nil(sp_obj_to_str_fn((int)v.cls_id, v.v.p));
     if (r) return r;
   }
   sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String",
@@ -6977,6 +6977,10 @@ const char *sp_str_encode(const char *s, int npos, sp_RbVal dst, sp_RbVal src,
   sp_enc_opt_check(undef, "undefined");
   const char *repl = replace.tag == SP_TAG_NIL ? NULL : sp_enc_str_arg(replace);
   SP_GC_ROOT_STR(repl);
+  /* Encoding names can run to_str and mutate the selected replacement. */
+  if (repl && ((npos > 0 && dst.tag == SP_TAG_OBJ && dst.cls_id >= 0) ||
+               (npos > 1 && src.tag == SP_TAG_OBJ && src.cls_id >= 0)))
+    repl = sp_str_dup(repl);
   sp_int bad_len;
   if (repl && !sp_str_is_binary(repl) &&
       sp_str_scrub_bad(repl, (sp_int)sp_str_byte_len(repl), 0, &bad_len) < (sp_int)sp_str_byte_len(repl))

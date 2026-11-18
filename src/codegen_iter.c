@@ -1157,6 +1157,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
        GCC statement-expression ({ ... result_var; }) context. */
     Repr rr = repr_of(c, id);
     TyKind rt = rr.as_ty;
+    rt = repr_call_result_storage(rt);
     if (fwd_yield_proc) g_yield_slot_ty = rt;  /* value-position yield unboxes to this */
     int rtag = ++g_tmp;
     char rvbuf[32]; snprintf(rvbuf, sizeof rvbuf, "_t%d", rtag);
@@ -4243,6 +4244,9 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
     if (!hlv && hsc) hlv = scope_local(hsc, block_param_name(c, block, 0));
     hparam = repr_of_slot(c, hlv).handle;
   }
+  /* A String tap retains the receiver it will return. The block can
+     rebind its slot or move its payload before a byte consumer reads it. */
+  int tap_handle = is_tap && et == TY_STRING;
   /* the adopted empty-literal receiver materializes as a FRESH mutable container
      of the block-param type -- emit_expr would render `[]` as its own untyped
      default (sp_IntArray_new()), mismatching et (#3200). */
@@ -4250,12 +4254,15 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
     if (et == TY_POLY_ARRAY) buf_puts(&rb, "sp_PolyArray_new()");
     else buf_printf(&rb, "sp_%sArray_new()", array_kind(et) ? array_kind(et) : "Int");
   }
-  else if (hparam) { emit_strbuf_handle_of(c, recv, &rb); et = TY_STRBUF; }
+  else if (hparam || tap_handle) {
+    emit_strbuf_handle_of(c, recv, &rb);
+    et = TY_STRBUF;
+  }
   /* a receiver that can be nil is held as its oint: the parameter gets
      the nil (`x = nil; x.then { |y| y.nil? }`), and unwrapping it here
      raised before the block ran */
   int ro = !empty_arr_adopt && !hparam && !et_nil && !et_void && oint_kind(et) && node_is_oint(c, recv);
-  if (empty_arr_adopt || hparam) ;
+  if (empty_arr_adopt || hparam || tap_handle) ;
   else if (et_void) {
     Buf vb; memset(&vb, 0, sizeof vb);
     emit_expr(c, recv, &vb);
@@ -4417,7 +4424,7 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   if (is_tap && (hparam || et == TY_STRBUF) && repr_of(c, id).demand)
     buf_printf(b, "_t%d", tr);
   else if (is_tap && hparam && repr_of(c, id).as_ty == TY_STRING && strbuf_value_carries(c, recv))
-    str_read_handle_tmp(b, tr, 1);
+    str_read_handle_tmp(b, tr);
   else if (is_tap && et == TY_STRBUF && repr_of(c, id).as_ty == TY_STRING)
     buf_printf(b, "(_t%d ? sp_String_cstr(_t%d) : NULL)", tr, tr);
   /* tap's value is the receiver's oint, unwrapped for a plain reader */

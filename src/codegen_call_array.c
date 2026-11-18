@@ -2294,6 +2294,8 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
        the next argument runs. */
     const char *rvn = nt_kind(nt, recv) == NK_LocalVariableReadNode ? nt_str(nt, recv, "name") : NULL;
     int slot = rvn && strncmp(rvn, "__cap_", 6) == 0 ? recv : poly_shl_root_slot(c, recv);
+    HolderRef holder;
+    if (slot >= 0 && (!holder_of_node(c, slot, &holder) || holder.r.kind != RK_BOXED)) slot = -1;
     int se = 0;
     int t = poly_binop_recv_temp(c, recv, argv[0], b, &se);
     Buf ab; memset(&ab, 0, sizeof ab);
@@ -2312,9 +2314,9 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     emit_poly_shl_call(c, id, argv, t, ab.p, b);
     free(ab.p);
     buf_printf(b, "; if (_t%d.tag == SP_TAG_STR) { sp_RbVal _t%d = ", t, cur);
-    emit_expr(c, slot, b);
+    holder_slot_buf(c, &holder, b);
     buf_printf(b, "; if (_t%d.tag == SP_TAG_STR && _t%d.v.s == _t%d.v.s) ", cur, cur, t);
-    emit_expr(c, slot, b);
+    holder_slot_buf(c, &holder, b);
     buf_printf(b, " = _t%d; } _t%d; })", got, got);
     c->args_in_call = recv;
     return 1;
@@ -3157,14 +3159,14 @@ int emit_scalar_array_transpose(Compiler *c, int id, int recv, TyKind rt,
    under the kind the inference pinned it to (infer_arysub_call), as a boxed
    receiver's face does (emit_face_arm). A call whose answer is its receiver
    answers the instance. */
-typedef struct { int bound, vr, vf, vi, nv, views[16]; TyKind nat; int copy, copy_class, trecv, tcls; } ArysubView;
+typedef struct { int bound, vr, vf, vi, nv, views[16]; TyKind nat; int copy, copy_class, trecv, tcls, string_receiver; } ArysubView;
 /* The receiver a view reads as its Time, and its Time subclass (-1: none):
    the Time emitters see the face, so they ask here what it stands for */
 int g_timesub_view_recv = -1, g_timesub_view_cls = -1;
 
 /* Bind node n, an Array subclass instance, to its Array -- the same pointer
    cast -- evaluating anything but a variable once, ahead of the call. */
-static int arysub_bind(Compiler *c, int n, TyKind k, int keep) {
+static int arysub_bind(Compiler *c, int n, TyKind k, int keep, int *held) {
   int cid = ty_object_class(repr_of(c, n).as_ty);
   const char *at = arysub_array_ctype(c, cid);
   NodeKind nk = nt_kind(c->nt, n);
@@ -3174,6 +3176,7 @@ static int arysub_bind(Compiler *c, int n, TyKind k, int keep) {
      its bytes (comp_arysub_call) */
   if (comp_ary_is_str(c, cid)) {
     int t = ++g_tmp;
+    if (held) *held = t;
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_String *_t%d = (sp_String *)(%s); SP_GC_ROOT(_t%d);\n", t, rb.p ? rb.p : "NULL", t);
     free(rb.p);
@@ -3221,6 +3224,7 @@ static int arysub_view_open(Compiler *c, int id, ArysubView *v) {
   int recv = nt_ref(nt, id, "receiver");
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN, k = TY_UNKNOWN;
   v->bound = -1; v->vr = v->vf = v->vi = -1; v->nv = 0; v->nat = TY_UNKNOWN; v->copy = 0; v->copy_class = 0;
+  v->string_receiver = -1;
   v->trecv = g_timesub_view_recv; v->tcls = g_timesub_view_cls;
   int str = recv >= 0 && ty_is_object(rt) && comp_ary_is_str(c, ty_object_class(rt));
   int tim = recv >= 0 && ty_is_object(rt) && comp_ary_is_time(c, ty_object_class(rt));
@@ -3231,7 +3235,7 @@ static int arysub_view_open(Compiler *c, int id, ArysubView *v) {
        the subclass) */
     CallPlan up = str ? cplan_user(c, id) : (CallPlan){ .mi = -1 };
     int sci = comp_core_class(c, CORE_STRING);
-    v->bound = arysub_bind(c, recv, k, str && up.mi >= 0 && sci >= 0 && c->scopes[up.mi].class_id == sci);
+    v->bound = arysub_bind(c, recv, k, str && up.mi >= 0 && sci >= 0 && c->scopes[up.mi].class_id == sci, &v->string_receiver);
     v->vr = view_push(c, recv, k);
     v->vf = view_push_face(recv, k);
     /* a call that answers its receiver: the Array emitter's answer -- the
@@ -3264,7 +3268,7 @@ static int arysub_view_open(Compiler *c, int id, ArysubView *v) {
       if (comp_ty_ary_root(c, at) < 0) continue;
       TyKind ak = comp_ary_kind(c, ty_object_class(at));
       if (ak == TY_STRBUF) ak = TY_STRING;
-      int slot = arysub_bind(c, av[i], ak, 0);
+      int slot = arysub_bind(c, av[i], ak, 0, NULL);
       if (v->bound < 0) v->bound = slot;
       v->views[v->nv++] = view_push(c, av[i], ak);
     }
@@ -3282,6 +3286,7 @@ static void arysub_view_close(Compiler *c, ArysubView *v) {
 
 int emit_arysub_call(Compiler *c, int id, Buf *b) {
   if (!c->has_arysub) return 0;
+  if (id != g_brk_skip_id && call_breaks(c, id)) return 0;
   int ka = comp_arysub_kernel_array(c, id);
   if (ka >= 0 && comp_ty_arysub_array(c, repr_of(c, ka).as_ty)) { emit_expr(c, ka, b); return 1; }
   int recv = nt_ref(c->nt, id, "receiver");
@@ -3307,10 +3312,15 @@ int emit_arysub_call(Compiler *c, int id, Buf *b) {
     emit_call(c, id, ob);
     buf_printf(ob, "; _t%d.tag == SP_TAG_NIL ? NULL : (sp_%s *)_t%d.v.p; })", t, cn, t);
   }
+  else if (v.vi >= 0 && v.string_receiver >= 0 && v.nat == TY_STRING) {
+    /* The builtin reads bytes, but its self answer is the retained object. */
+    buf_puts(ob, "((void)("); emit_call(c, id, ob);
+    buf_printf(ob, "), (sp_%s *)_t%d)", cn, v.string_receiver);
+  }
   else if (v.copy && cn && comp_ary_is_str(c, ty_object_class(rt))) {
-    /* to_s / to_str of a String subclass instance: a String of its bytes,
-       which the view already copied */
-    emit_call(c, id, ob);
+    /* The inherited conversion returns a fresh, unfrozen base String.
+       A frozen receiver's read can borrow its original buffer. */
+    buf_puts(ob, "sp_str_dup("); emit_call(c, id, ob); buf_puts(ob, ")");
   }
   else if (v.copy) {
     buf_printf(ob, "%s_dup(", arysub_array_ctype(c, ty_object_class(rt)));

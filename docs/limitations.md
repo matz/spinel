@@ -731,6 +731,11 @@ the member:
   (`frozen_string_literal: true` semantics, with no opt-out) -- see
   "String literals are frozen by default" below for what that changes and
   where mutable strings come from.
+- A compiled method returning a String passes the object through direct calls,
+  a bound Method, an extension callback, and a return that crosses an ensure.
+  Spinel callers and callbacks that receive the handle see the same object,
+  including its mutation and freeze state. The CRuby extension shim copies
+  the result into a new Ruby String.
 - **`nil` meeting a String is a nullable String, not untyped.** Where a
   value can be either nil or a String -- a ternary, an `if` with no else, a
   `return nil if ...` ahead of a String, a `case` with no matching arm, a
@@ -1478,9 +1483,10 @@ semantics.)
 String (not frozen; its first mutation warns, under `-W:deprecated`, that
 it "will be frozen in the future"); Spinel answers it frozen, as it does
 literals: `:a.to_s.frozen?`, `:a.id2name.frozen?` and `String(:a).frozen?`
-are `true`, `:a.to_s << "x"` raises FrozenError, and a mutable copy comes
-from `+:a.to_s` or `dup`. Each call still answers its own object
+are `true`. Appending to either `:a.to_s` or `:a.id2name` raises
+FrozenError. Use unary `+` or `dup` for a mutable copy. Each call still answers its own object
 (`:a.to_s.equal?(:a.to_s)` is `false`), as in CRuby.
+`Symbol#name` returns the same frozen spelling on each call.
 
 **Strings are UTF-8, whatever the source encoding.** An `# encoding:` (or
 `coding:`) magic comment naming another encoding warns at compile time,
@@ -1511,15 +1517,6 @@ of its content to be deduped, but a run-time string deduped before that is
 not the literal (`(-("ab" + "c")).equal?("abc")` is `false`), and the
 literal's own `-@` then returns that earlier object. `str.dup.freeze` is
 never deduplicated, in CRuby either.
-
-`Symbol#to_s` and `#id2name` answer a new String on every call in CRuby, so
-`:abc.to_s.equal?(:abc.to_s)` is `false`. Spinel keeps one chilled String per
-symbol and answers it each time, so that is `true`. The value is the same,
-and so is every mutation: the String is chilled, so `s = :abc.to_s; t = +s`
-copies, and `s << "x"` makes `s` its own String and leaves the next `to_s`
-alone (`:abc.to_s` is still `"abc"`). Only the identity of two `to_s` results
-differs; a new String per call would cost an allocation at every symbol read,
-which programs that build names from symbols do in loops.
 
 **Aliased in-place mutation is observed.** A mutable string (from
 `String.new`, `+"lit"`, interpolation, or `dup`) that is both aliased and mutated in

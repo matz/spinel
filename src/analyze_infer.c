@@ -4412,7 +4412,8 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       if (argc == 1 && sp_streq(name, "getbyte")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
       /* After the random: forms, read the same boxed fallback as emission. */
       {
-        const BuiltinOp *op = bop_find(BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0);
+        const BuiltinOp *op = bop_find_stage(BOP_BOXED_FALLBACK, name, argc,
+                                             nt_ref(nt, id, "block") >= 0, NULL, NULL, 0);
         if (op && !an_user_poly_arm(c, name, argc)) {
           if (an_bop_records(c, id)) c->bop_inf[id] = op;
           *out = an_poly_concrete(c, id, name, bop_result(op, rt));
@@ -4469,7 +4470,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         AnBopArgs ba = { c, argv };
         const BuiltinOp *lop = bop_find_arg(TY_IO, name, argc, nt_ref(nt, id, "block") >= 0, an_bop_arg_type, &ba);
         if (bop_io_library_row(lop) || io_library_count_refused(c, id, lop, name))
-          { *out = an_poly_concrete(c, id, name, lop->result); return 1; }
+          { *out = an_poly_concrete(c, id, name, an_bop_result(c, lop, TY_IO, id, argc, argv)); return 1; }
       }
       if ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1)
         { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
@@ -4552,7 +4553,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       /* and that handle's readers (boxed_stat_reader), typed by their TY_IO rows */
       if (argc == 0 && boxed_stat_reader(name)) {
         const struct BuiltinOp *sop = an_bop_find(c, id, TY_IO, name, 0, 0);
-        if (sop) { *out = an_poly_concrete(c, id, name, sop->result); return 1; }
+        if (sop) { *out = an_poly_concrete(c, id, name, bop_result(sop, TY_IO)); return 1; }
       }
       /* Dir#seek answers itself; IO#seek answers 0. Keep either in a box. */
       if (sp_streq(name, "seek") && argc == 1 && an_program_makes_dir(c))
@@ -5104,7 +5105,7 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
       const BuiltinClassOp *cop = cplan_builtin_class_row(c, id, key_name(c, recv));
       if (cop && cop->op.result != TY_UNKNOWN) {
         if (an_bop_records(c, id)) c->bop_inf[id] = &cop->op;
-        *out = cop->op.result;
+        *out = an_bop_result(c, &cop->op, TY_CLASS, id, argc, argv);
         return 1;
       }
     }
@@ -5256,7 +5257,7 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
   /* Socket::Option and Addrinfo readers: builtin-op rows */
   if (recv >= 0 && (rt == TY_SOCKOPT || rt == TY_ADDRINFO)) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
   if (recv >= 0 && rt == TY_IO) {
     if (sp_streq(name, "timeout=") && argc == 1) {
@@ -5265,7 +5266,7 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
     }
     {
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     /* sync= answers its argument, whatever it is; only its truth sets the mode */
     if (sp_streq(name, "sync=") && argc >= 1) { *out = infer_type(c, argv[0]); return 1; }
@@ -5345,7 +5346,7 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
        Object) method, which the Object reopen check below never answers. */
     {
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     /* the formats the runtime writes once "time" is required, iso8601 with
        its fraction digits too (xmlschema's rows answer above) */
@@ -5696,15 +5697,9 @@ static int infer_string_recv_call(Compiler *c, int id, const NodeTable *nt, cons
         (argc == 1 || argc == 2) &&
         (comp_ntype(c, argv[0]) == TY_STRING || comp_ntype(c, argv[0]) == TY_REGEX))
       { *out = TY_INT; return 1; }
-    /* each_line and lines read their separator argument */
-    if (sp_streq(name, "each_line") && argc == 0 && nt_ref(nt, id, "block") < 0)
+    if (sp_streq(name, "each_line") && nt_ref(nt, id, "block") < 0 &&
+        string_line_args(c, argc, argv))
       { *out = TY_ENUMERATOR; return 1; }
-    if (sp_streq(name, "each_line") && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-        nt_kind(nt, argv[0]) == NK_KeywordHashNode)
-      { *out = TY_ENUMERATOR; return 1; }  /* each_line(chomp: ...) blockless */
-    if (sp_streq(name, "each_line") && nt_ref(nt, id, "block") < 0 && lines_sep_ty(c, argv[0]) &&
-        (argc == 1 || (argc == 2 && nt_kind(nt, argv[1]) == NK_KeywordHashNode)))
-      { *out = TY_ENUMERATOR; return 1; }  /* each_line(sep) blockless */
     if (sp_streq(name, "lines") && argc == 2 && infer_type(c, argv[0]) == TY_STRING &&
         nt_kind(nt, argv[1]) == NK_KeywordHashNode)
       { *out = nt_ref(nt, id, "block") >= 0 ? TY_STRING : TY_STR_ARRAY; return 1; }   /* lines(sep, chomp: true) (#3546) */
@@ -5815,7 +5810,7 @@ static int infer_int_float_recv_call(Compiler *c, int id, const NodeTable *nt, c
     }
     {
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     /* pow(n) is `**`: the Integer power rule answers a Rational, a boxed
        value or the Bignum where the plain Integer does not hold */
@@ -5896,7 +5891,7 @@ static int infer_int_float_recv_call(Compiler *c, int id, const NodeTable *nt, c
     if (sp_streq(name, "fdiv") && argc == 1) { *out = TY_FLOAT; return 1; }
     {
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     /* clamp with float bounds returns a float (matches codegen in codegen_call.c);
        a mixed/int bound can return the Integer bound, so leave that poly. */
@@ -6409,7 +6404,8 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     /* the Class rows (Module#include?), unless the class answers with a
        class method of its own */
     if (bop_find(TY_CLASS, name, argc, nt_ref(nt, id, "block") >= 0) && cplan_class_row(c, id, recv, name)) {
-      *out = an_bop_find_arg(c, id, TY_CLASS, name, argc, argv, nt_ref(nt, id, "block") >= 0)->result;
+      const BuiltinOp *op = an_bop_find_arg(c, id, TY_CLASS, name, argc, argv, nt_ref(nt, id, "block") >= 0);
+      *out = an_bop_result(c, op, TY_CLASS, id, argc, argv);
       return 1;
     }
     if (argc == 1 && sp_streq(name, "class_variable_defined?")) { *out = TY_BOOL; return 1; }
@@ -7354,7 +7350,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
        rt == TY_NIL || rt == TY_RANGE || rt == TY_COMPLEX || rt == TY_RATIONAL ||
        rt == TY_BIGINT)) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    *out = op && op->result != TY_UNKNOWN ? op->result : TY_BOOL;
+    *out = op && op->result != TY_UNKNOWN ? bop_result(op, rt) : TY_BOOL;
     return 1;
   }
   return 0;
@@ -7396,7 +7392,7 @@ static int infer_method_proc_call(Compiler *c, int id, const NodeTable *nt, cons
   }
   if (recv >= 0 && rt == TY_METHOD) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
   /* A Method read out of a container answers these from its sp_BoundMethod;
      the value is boxed, so the call is poly (#3692). */
@@ -7422,7 +7418,7 @@ static int infer_method_proc_call(Compiler *c, int id, const NodeTable *nt, cons
   }
   if (recv >= 0 && rt == TY_PROC) {
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
   /* Klass.instance_method(:m) -> an (unbound) method object; #bind re-binds (#2676) */
   if (recv >= 0 && sp_streq(name, "instance_method") && method_sym_arg(c, id) != NULL &&
@@ -8012,7 +8008,7 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
   /* Fiber: builtin-op rows (builtin_ops.c) */
   if (recv >= 0 && rt == TY_FIBER) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
 
   /* Object's identity protocol on the native kinds: typed from the same
@@ -8039,7 +8035,7 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
   if (recv >= 0 && (rt == TY_THREAD || rt == TY_QUEUE || rt == TY_MUTEX ||
                     rt == TY_CONDVAR)) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
 
   /* Array#push / #append / #unshift / #prepend answer the RECEIVER, and on a
@@ -8111,17 +8107,17 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
      rule sat, so the rules above still claim first */
   if (recv >= 0 && rt == TY_TMS) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
   /* ENV's value: its identity rows (builtin_ops.c), past the ENV rules above */
   if (recv >= 0 && rt == TY_ENV) {
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
   /* Process::Status readers: builtin-op rows (builtin_ops.c) */
   if (recv >= 0 && rt == TY_PROCESS_STATUS) {
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
   /* The same names on a BOXED status -- which is how one normally arrives,
      since waitpid2 answers an Array and its second element is read out of a
@@ -8136,7 +8132,7 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
     const BuiltinOp *op = bop_find_boxed(TY_PROCESS_STATUS, name, argc, blk);
     /* and a boxed Process::Tms's four CPU times, as on a typed one */
     if (!op) op = bop_find_boxed(TY_TMS, name, argc, blk);
-    if (op) { *out = op->result; return 1; }
+    if (op) { *out = bop_result(op, op->recv); return 1; }
   }
   /* OpenStruct: dynamic members. A member read (any name, arg-less, no
      writer) or `[sym]` returns a boxed value; a writer / `[]=` returns the
@@ -8161,7 +8157,7 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
   /* TY_ENUMERATOR instance methods */
   if (recv >= 0 && rt == TY_ENUMERATOR) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     if (sp_streq(name, "+") && argc == 1 && infer_type(c, argv[0]) == TY_ENUMERATOR) { *out = TY_ENUMERATOR; return 1; }  /* #2481 */
     /* Stored-enumerator block form returns the underlying each return (the
        boxed source). Immediate chains (arr.each.with_index { } and the
@@ -8791,14 +8787,14 @@ static int infer_regexp_call(Compiler *c, int id, const NodeTable *nt, const cha
   /* Regexp instance methods */
   if (recv >= 0 && rt == TY_REGEX) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
 
   /* MatchData instance methods */
   if (recv >= 0 && rt == TY_MATCHDATA) {
     {
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     if (sp_streq(name, "[]") && argc == 1 &&
         (comp_ntype(c, argv[0]) == TY_RANGE ||
@@ -8930,7 +8926,7 @@ static int infer_send_blind(Compiler *c, int id, int recv, const char *name, TyK
    name takes an operand of any other kind, so one is always found */
 static TyKind infer_symbol_identity(Compiler *c, int id, const NodeTable *nt, const char *name, const int *argv) {
   const BuiltinOp *op = an_bop_find_arg(c, id, TY_SYMBOL, name, 1, argv, nt_ref(nt, id, "block") >= 0);
-  return op && op->result != TY_UNKNOWN ? op->result : TY_BOOL;
+  return op && op->result != TY_UNKNOWN ? an_bop_result(c, op, TY_SYMBOL, id, 1, argv) : TY_BOOL;
 }
 
 /* A Symbol receiver: the table's rows (casecmp and clamp by the operand's
@@ -8940,7 +8936,7 @@ static TyKind infer_symbol_call(Compiler *c, int id, const NodeTable *nt, const 
   TyKind rt = TY_SYMBOL;
   {
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) return op->result;
+    if (op && op->result != TY_UNKNOWN) return an_bop_result(c, op, rt, id, argc, argv);
   }
   /* Symbol#to_proc answers a Proc whatever the name (desugar_symbol_var_block_arg
      makes it the lambda). A local it is written to is a Proc from the first
@@ -9442,7 +9438,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && (infer_type(c, recv) == TY_TIME_RANGE || infer_type(c, recv) == TY_OBJ_RANGE)) {
     const BuiltinOp *op = an_bop_find_arg(c, id, infer_type(c, recv), name, argc, argv, nt_ref(nt, id, "block") >= 0);
     if (op && op->result != TY_UNKNOWN)
-      return !g_infer_ignore_brk && call_breaks(c, id) ? an_planned_call_ret(c, id, TY_POLY) : op->result;
+      return !g_infer_ignore_brk && call_breaks(c, id) ? an_planned_call_ret(c, id, TY_POLY) : bop_result(op, op->recv);
   }
   { TyKind kr; if (infer_kernel_row(c, id, name, argc, argv, &kr)) return kr; }
   { TyKind ar; if (infer_arysub_call(c, id, &ar)) return ar; }   /* Array's, on an Array subclass (#7449) */
@@ -11704,7 +11700,7 @@ static TyKind ctr_site_join(TyKind nat, TyKind want) {
    itself, the row's result for Kernel's row, a Boolean for the rest. */
 static TyKind super_object_type(Compiler *c, const Scope *s, const char *uname, int id, int kind) {
   return kind == SUPER_OBJ_SELF ? (repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id))
-       : kind == SUPER_OBJ_ROW ? comp_super_kernel_row(c, s, uname, id)->result : TY_BOOL;
+       : kind == SUPER_OBJ_ROW ? bop_result(comp_super_kernel_row(c, s, uname, id), BOP_KERNEL) : TY_BOOL;
 }
 /* The ivar nm at node id inside an instance_eval/exec block on a boxed
    receiver: the meeting of the slots of the classes the receiver can be,
@@ -11988,9 +11984,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (iv < 0 && nk != NK_InstanceVariableOperatorWriteNode && s->class_id >= 0 && !s->is_cmethod &&
         infer_type(c, nt_ref(nt, id, "value")) == TY_NIL && !infer_ivar_slot_below(c, wcls, nm))
       return TY_NIL;
-    /* a strbuf slot's write, like its read, is the String face (the handle
-       rides _sp_ret_strbuf): the raw STRBUF typed a method whose body is the
-       write `sp_String *` while its callers read the face (#4567) */
+    /* An ivar store has the semantic type of a read from the slot. */
     return ivar_value_ty(ci, iv);
   }
   if (nk == NK_LocalVariableOperatorWriteNode) {
@@ -12566,6 +12560,14 @@ TyKind infer_uncached(Compiler *c, int id) {
        (emit_super_data_with) */
     if (!s->is_cmethod && uname && sp_streq(uname, "with") &&
         c->classes[s->class_id].is_struct && c->classes[s->class_id].is_data) none = ty_object(s->class_id);
+    /* The exception reopening switch can answer either a Ruby override's
+       value or Exception's stored text. Keep that joined result boxed. */
+    if (mi < 0 && !s->is_cmethod && is_exception_message(uname) &&
+        (class_is_exc_subclass(c, s->class_id) || class_is_exc_reopen(c, s->class_id))) {
+      int xr[8], xn = exc_reopen_definers(c, uname, xr, 8);
+      for (int i = 0; i < xn; i++)
+        if (xr[i] != s->class_id) return TY_POLY;
+    }
     if (p < 0 && mi < 0) return none;
     /* a subclass of a native class (#9269): super reaches the native
        class's constructor (initialize) or binding */

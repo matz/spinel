@@ -357,7 +357,7 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, 
    record proves the call runs before every version of it
    (ct_before_versions). Any other why on an ML_NONE (0, or UNASKED from
    cplan_hook_target) is a none the tables give */
-typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD, MLW_VIS } MlWhy;
+typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD, MLW_VIS, MLW_UNDEF } MlWhy;
 typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; const char *bowner; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
@@ -416,6 +416,19 @@ int cplan_builtin_hash_positionals(Compiler *c, int id, const char *cls, const c
    every element is `key:` or spreads nothing; -1 where a key or a `**`
    operand is the run time's (`k => v`, `**h`). */
 int cplan_hash_holds_key_past(Compiler *c, int h, const char *key);
+/* Match the builtin row at the supplied receiver family's emission stage.
+   A negative stage accepts any stage and only unguarded rows. When argcp
+   is supplied, it receives the call's operand count when the family has rows. */
+const struct BuiltinOp *cplan_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name, int stage, int *argcp);
+/* The boxed display or Symbol fallback when it can answer the given slot. */
+const struct BuiltinOp *cplan_boxed_fallback_row(Compiler *c, int id, const char *name, TyKind slot, int *argc);
+/* The boxed receiver of a call that can use builtin display bytes at an
+   immediate text consumer, or -1 if it needs the ordinary result. */
+int cplan_builtin_display_operand(Compiler *c, int id);
+/* The builtin operation selected for this call when it returns a String
+   handle directly. User dispatch and declinable builtin rows have their own
+   result representations. */
+const struct BuiltinOp *cplan_builtin_handle_row(Compiler *c, int id);
 /* The class-side row (bop_class_find) call id takes on builtin class cls,
    its constant receiver: NULL where none of cls's singleton chain has one,
    or where a class method the program gives a class of the chain, up to
@@ -1187,6 +1200,7 @@ int cplan_nil_scalar_reach(Compiler *c, int id);
    a class held in a variable could be any builtin one. id is the call, for
    the named class's singleton accessor (cplan_sg_accessor). */
 int cplan_class_value_answers(Compiler *c, int id, int recv, const char *name);
+int cplan_class_reader_overridden(Compiler *c, TyKind type, const char *name);
 /* ...and the analysis' reading of it, before the nullability settles: call
    id of name on recv (type rt) is answered boxed, NilClass's method for nil
    and Object's for the rest (cplan_nil_scalar_form_ok, NilClass's public
@@ -1563,6 +1577,12 @@ int cplan_presence_class(Compiler *c, int id);
    in a program that defines respond_to_missing?
    (respond_to_missing_defined). */
 typedef struct { int n; char cell[VER_MAX_ARMS][32]; char vis[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char ans[VER_MAX_ARMS]; int els; } CplanCells;
+/* Whether an implied callback has a live definition in its version entry.
+   The caller supplies its own fallback when there is no definition. */
+int cplan_implied_entry_cells(Compiler *c, int mi, int undefined, CplanCells *out);
+/* A lowered conditional dispatcher's selector. It holds a positive arm
+   number once any of its definitions has run. NULL for other scopes. */
+const char *cplan_conditional_entry_selector(Compiler *c, int mi);
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out);
 /* The class whose own or inherited class methods class-side list call id lists, when the cells may answer it
    (a `C.singleton_methods` on a constant, list_cells_shape; *own for the `(false)` form); -1 for any other. The

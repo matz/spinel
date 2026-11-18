@@ -197,6 +197,7 @@ extern const char *(*sp_user_exc_message_fn)(sp_Exception *);
    reopening applies to the class. NULL when the program has none. */
 extern void *(*sp_user_exc_reinit_fn)(const char *cls, const char *msg, void *obj);
 extern SP_TLS int sp_exc_user_raise;   /* set by the raise a program wrote (sp_raise_cls_u / sp_raise_u) */
+const char *sp_exc_to_s_fallback(sp_Exception *e);
 const char *sp_exc_to_s_text(sp_Exception *e);
 const char *sp_exc_inspect(void *p);   /* #<Cls: msg>, for the inspect dispatch */
 sp_Exception *sp_exc_cause(volatile sp_Exception *ve);

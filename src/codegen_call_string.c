@@ -1191,8 +1191,9 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
 
   /* str.each_char / each_line / chars / lines / bytes / codepoints { |x| ... } -> iterate, return self. */
   if (recv >= 0 && rt == TY_STRING && nt_ref(nt, id, "block") >= 0 &&
-      (sp_streq(name, "each_char") || sp_streq(name, "each_line") || sp_streq(name, "each_byte") ||
-       sp_streq(name, "chars") || sp_streq(name, "lines") || sp_streq(name, "bytes") || sp_streq(name, "codepoints"))) {
+      ((is_str_line_method(name) && string_line_args(c, argc, argv)) ||
+       sp_streq(name, "each_char") || sp_streq(name, "each_byte") ||
+       sp_streq(name, "chars") || sp_streq(name, "bytes") || sp_streq(name, "codepoints"))) {
     int block = nt_ref(nt, id, "block");
     /* The loop below runs a literal block's body. A block argument that
        reached here (`s.bytes(&pr)`, `s.chars(&b)` for a method's own &b)
@@ -1205,8 +1206,7 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
        which the scope knows it by */
     const char *p0n = block_param_name(c, block, 0), *p0 = p0n ? rename_local(p0n) : NULL;
     int ts = ++g_tmp, ti = ++g_tmp;
-    Buf rb = expr_buf(c, recv);
-    int is_line = sp_streq(name, "each_line") || sp_streq(name, "lines");
+    int is_line = is_str_line_method(name);
     int is_byte = sp_streq(name, "each_byte") || sp_streq(name, "bytes");
     int is_cp = sp_streq(name, "codepoints");
     Scope *cs_ech = p0 ? comp_scope_of(c, id) : NULL;
@@ -1223,23 +1223,27 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
        root, the way the array iterators root their hoisted receiver. */
     /* One representation: the iterator answers its receiver, which for a
        variable the block can rebind (an ivar, a class variable, a global)
-       is read as a copy of its bytes (sp_strbuf_read_pub_own): the handle
+       is read as a copy of its bytes (sp_strbuf_read_own): the handle
        is held ahead of the loop and its payload's view answered, which
        is the String itself where it is stored (`[@s.each_char { }]`
        stored the copy) */
     int th_ech = 0;
     NodeKind rk_ech = nt_kind(nt, recv);
     Buf hb_ech; memset(&hb_ech, 0, sizeof hb_ech);
-    if ((rk_ech == NK_InstanceVariableReadNode || rk_ech == NK_ClassVariableReadNode ||
-                         rk_ech == NK_GlobalVariableReadNode) && strbuf_slot_text(c, recv, &hb_ech)) {
-      th_ech = ++g_tmp;
-      buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); ", th_ech, hb_ech.p, th_ech);
+    int tr_line = 0, ts_line = 0, tc_line = 0, n_line = 0;
+    if (is_line) emit_string_line_operands(c, recv, argc, argv, &tr_line, &ts_line, &tc_line, &n_line, b);
+    else {
+      Buf rb = expr_buf(c, recv);
+      if ((rk_ech == NK_InstanceVariableReadNode || rk_ech == NK_ClassVariableReadNode ||
+           rk_ech == NK_GlobalVariableReadNode) && strbuf_slot_text(c, recv, &hb_ech)) {
+        th_ech = ++g_tmp;
+        buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); ", th_ech, hb_ech.p, th_ech);
+      }
+      buf_printf(b, "({ const char *_t%d = %s; SP_GC_ROOT_STR(_t%d); ", ts, rb.p ? rb.p : "", ts);
+      free(rb.p);
+      if (!recv_never_nil(c, recv)) buf_printf(b, "if (!_t%d) sp_nil_recv(\"%s\"); ", ts, name);
     }
     free(hb_ech.p);
-    buf_printf(b, "({ const char *_t%d = %s; SP_GC_ROOT_STR(_t%d); ", ts, rb.p ? rb.p : "", ts); free(rb.p);
-    /* a receiver that can be nil (`a[5].each_char { }`) raises NoMethodError,
-       where the loop walked nil as an empty String */
-    if (!recv_never_nil(c, recv)) buf_printf(b, "if (!_t%d) sp_nil_recv(\"%s\"); ", ts, name);
     /* Save outer variable before loop to restore it afterward */
     int tsv_ech = 0;
     if (p0 && clv_ech) {
@@ -1250,40 +1254,8 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
     }
     if (is_line) {
       int tl = ++g_tmp;
-      /* chomp: true keyword arg uses the _chomp variant */
-      int eline_chomp = 0, cv = -1;
-      int kwh = nt_argv_kwh(nt, argv, argc);
-      if (kwh >= 0) {
-        cv = struct_kwarg_value(c, kwh, "chomp");
-        eline_chomp = kw_flag_static(c, cv);
-      }
-      /* a separator argument splits on it, the way the blockless enumerator
-         form already does (#3594) */
-      int eline_sep = (argc >= 1 && argv && argv[0] != kwh && lines_sep_ty(c, argv[0])) ? argv[0] : -1;
-      /* (one-String mode: a nil separator yields the receiver itself, as
-         CRuby does, a String it holds the handle of; none for an empty one) */
-      int eline_whole = eline_sep >= 0 && eline_chomp == 0 &&
-                        repr_of(c, argv[0]).as_ty == TY_NIL;
-      if (eline_whole)
-      { char sn[24]; snprintf(sn, sizeof sn, "_t%d", ts);
-        buf_printf(b, "sp_StrArray *_t%d = sp_StrArray_new(); if (sp_str_byte_len(_t%d) > 0) ", tl, ts);
-        emit_kind_push(c, b, "Str", tl, sn); buf_puts(b, "; "); }
-      else if (eline_sep >= 0) {
-        buf_printf(b, "sp_StrArray *_t%d = ", tl);
-        if (eline_chomp < 0) { emit_kw_flag(c, cv, b); buf_puts(b, " ? "); }
-        if (eline_chomp != 0) { buf_printf(b, "sp_str_lines_sep_chomp(_t%d, ", ts); emit_lines_sep(c, eline_sep, b); buf_puts(b, ")"); }
-        if (eline_chomp < 0) buf_puts(b, " : ");
-        if (eline_chomp != 1) { buf_printf(b, "sp_str_lines_sep(_t%d, ", ts); emit_lines_sep(c, eline_sep, b); buf_puts(b, ")"); }
-        buf_puts(b, "; ");
-      }
-      else if (eline_chomp < 0) {
-        buf_printf(b, "sp_StrArray *_t%d = ", tl);
-        emit_kw_flag(c, cv, b);
-        buf_printf(b, " ? sp_str_lines_chomp(_t%d) : sp_str_lines(_t%d); ", ts, ts);
-      }
-      else
-        buf_printf(b, "sp_StrArray *_t%d = %s(_t%d); ",
-                   tl, eline_chomp ? "sp_str_lines_chomp" : "sp_str_lines", ts);
+      buf_printf(b, "sp_StrArray *_t%d = sp_poly_string_lines(_t%d, _t%d, _t%d, _t%d, \"%s\"); ",
+                 tl, tr_line, ts_line, tc_line, n_line, name);
       /* The array of lines is this loop's own value -- nothing in the Ruby
          program names it -- and its length is the loop bound, re-read every
          turn. Unrooted, a block that allocated collected it, and the loop
@@ -1334,8 +1306,12 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
     }
     emit_iter_loop_stmts(c, body, b, 0);
     if (p0 && tsv_ech > 0) buf_printf(b, " lv_%s = _t%d;", p0, tsv_ech);
-    buf_printf(b, " } _t%d; })", ts);
-    if (th_ech) buf_printf(b, "; sp_strbuf_read_pub(_t%d); })", th_ech);
+    Repr answer = repr_of(c, id);
+    if (is_line && answer.kind == RK_BOXED) buf_printf(b, " } _t%d; })", tr_line);
+    else if (is_line && answer.as_ty == TY_STRBUF) buf_printf(b, " } sp_poly_as_strbuf(_t%d); })", tr_line);
+    else if (is_line) buf_printf(b, " } sp_poly_recv_s(_t%d, \"%s\"); })", tr_line, name);
+    else buf_printf(b, " } _t%d; })", ts);
+    if (th_ech) buf_printf(b, "; sp_strbuf_read(_t%d); })", th_ech);
     return 1;
   }
 
@@ -1527,7 +1503,7 @@ int emit_string_handle_append(Compiler *c, int id, Buf *b, const char *name, int
                     "sp_raise_frozen_str(sp_String_cstr(_t%d)); ", t, ref.p, t, t);
       free(ref.p);
       if (repr_of(c, id).handle) buf_printf(b, "_t%d; })", t);
-      else buf_printf(b, "sp_strbuf_read_pub(_t%d); })", t);
+      else buf_printf(b, "sp_strbuf_read(_t%d); })", t);
       return 1;
     }
   }
@@ -1583,14 +1559,15 @@ int emit_string_handle_append(Compiler *c, int id, Buf *b, const char *name, int
           for (int j = 0; j < argc; j++) {
             buf_printf(b, " sp_String_append_bin(_t%d, ", tb2);
             { char rt[48]; snprintf(rt, sizeof rt, "sp_String_cstr(_t%d)", tb2);
-              emit_str_append_arg(c, argv[j], rt, b); }
+              if (argc == 1) emit_str_append_arg_immediate(c, argv[j], rt, b);
+              else emit_str_append_arg(c, argv[j], rt, b); }
             buf_puts(b, ");");
           }
         }
         /* an append marked to hand out the handle (`r = obj.buf << x`)
            answers the receiver itself; otherwise its String read */
         if (repr_of(c, id).handle) buf_printf(b, " _t%d; })", tb2);
-        else buf_printf(b, " sp_strbuf_read_pub(_t%d); })", tb2);
+        else buf_printf(b, " sp_strbuf_read(_t%d); })", tb2);
         return 1;
       }
     }
@@ -1780,6 +1757,20 @@ int str_fresh_value(Compiler *c, int n) {
 /* String#dedup is -@, and sp_str_uminus_val raises under -@: a nil
    receiver raises under dedup (#9347). The receiver the nil fact says is
    never nil keeps the plain call. */
+void emit_string_lines_array(Compiler *c, int recv, int argc, const int *argv, Buf *b) {
+  int tr, ts, tc, n;
+  emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, &n, b);
+  buf_printf(b, "sp_poly_string_lines(_t%d, _t%d, _t%d, _t%d, \"lines\"); })", tr, ts, tc, n);
+}
+
+int emit_op_string_lines(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  if (x->rtext || !string_line_args(c, argc, argv)) return 0;
+  emit_string_lines_array(c, x->recv, argc, argv, b);
+  return 1;
+}
+
 int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
   int named = !recv_never_nil(c, x->recv);
   buf_printf(b, "sp_str_uminus_val(%s", named ? "sp_nil_recv_named(" : "");
@@ -1849,7 +1840,7 @@ static void str_mut_bytes(Buf *b, int t) { buf_printf(b, "sp_String_cstr(_t%d)",
    finds the handle of */
 static void str_mut_self_answer(Compiler *c, const BopCtx *x, int t, Buf *b) {
   if (repr_of(c, x->id).handle) buf_printf(b, " _t%d; })", t);
-  else buf_printf(b, " sp_strbuf_read_pub(_t%d); })", t);
+  else buf_printf(b, " sp_strbuf_read(_t%d); })", t);
 }
 
 /* An operand of these rows. One that can run code, or read what a later

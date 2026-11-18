@@ -541,7 +541,6 @@ void comp_free(Compiler *c) {
   yvt_free(c);
   free(c->bsl_gen);
   free(c->bsl_val);
-  if (g_repr_check) repr_channel_free(c);
   pivs_facts_free(c);
   strbuf_arg_index_free(c);
   free(c->vs_head); free(c->vs_site); free(c->vs_var); free(c->vs_next); free(c->vs_kind);
@@ -2515,11 +2514,16 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   mtab_pop(c, mt_was);
   if (!builtin) return 0;
   *kind = comp_ary_kind(c, cid);
-  /* A String subclass instance's String is a handle (TY_STRBUF). A call
-     that changes it, or answers it, takes it boxed (the poly String arms
-     work on the handle in place); any other reads a copy of its bytes. */
-  if (comp_ary_is_str(c, cid))
-    *kind = comp_arysub_str_boxed(n) ? TY_POLY : TY_STRING;
+  /* Inherited line methods can return or yield the instance itself. */
+  if (comp_ary_is_str(c, cid)) {
+    int preserves_lines = 0;
+    if (is_str_line_method(n)) {
+      int argc;
+      const int *argv = call_args(c->nt, id, &argc);
+      preserves_lines = string_line_args(c, argc, argv);
+    }
+    *kind = comp_arysub_str_boxed(n) || preserves_lines ? TY_POLY : TY_STRING;
+  }
   return 1;
 }
 /* The builtin-op row flags of call `id` on an Array (#7449): what it answers
@@ -6395,9 +6399,8 @@ int comp_class_anonymous(Compiler *c, int ci) {
 const char *comp_class_base_display_fn(Compiler *c) {
   return c->has_anonymous_classes ? "sp_class_display" : "sp_class_to_s";
 }
-/* A class method to_s / inspect (nm) of class k's own, taking no arguments
-   and answering a String: what prints the class (sp_class_user_to_s and
-   _inspect); -1 when the class has none. The call plan answers it at node
+/* A class method to_s / inspect (nm) for display, or -1 when the class has
+   none. The call plan answers it at node
    site, the class constant a puts prints; -1 for the table behind the run-time
    dispatcher, which no call stands behind. */
 int cls_user_display_mi(Compiler *c, int site, int k, const char *nm) {
@@ -6405,7 +6408,9 @@ int cls_user_display_mi(Compiler *c, int site, int k, const char *nm) {
   int mi = cplan_implied_target(c, ic_operand_host(c, site), site, k, nm, CT_CMETHOD, NULL);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
-  if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;
+  if (!s->reachable || s->yields) return -1;
+  if (is_inspect_name(nm) && (s->nparams > 0 || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING))
+    return -1;
   return mi;
 }
 int prog_has_cls_user_display(Compiler *c, const char *nm) {

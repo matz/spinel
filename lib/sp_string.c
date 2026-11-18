@@ -139,16 +139,11 @@ int sp_fd_grow_inline(sp_String *s, int64_t need){
   return 1;
 }
 
-/* Symbol#to_s and #id2name: the symbol's name, frozen. CRuby 4.0 answers a
-   chilled String that warns at its first mutation and is to be frozen; the
-   program's string literals are frozen here already, and so is this one
-   (docs/limitations.md). The symbol table's own name is a plain static
-   without a header, so each symbol gets one frozen copy with a header (0xf1,
-   its link sp_sym_str_tag, which names no literal's handle: a handle made
-   of it is a new frozen handle), built at its first to_s and kept as long
-   as the symbol is; the collector neither marks nor sweeps it, and its
-   header keeps the length and the hash. The table is guarded by the heap
-   lock, as the dedup table is. */
+/* The cached spelling for Symbol#name and internal byte readers. The symbol
+   table's name has no frozen header of its own, so every symbol has one
+   frozen copy (0xf1, sp_sym_str_tag), built on first use and retained as long
+   as the symbol. Its header holds the length, hash and encoding flags. The
+   public to_s and id2name operations allocate their own String handles. */
 typedef struct { sp_str_hdr h; unsigned char m; char d[]; } sp_sym_str_obj;
 static const char**sp_sym_str_tab=NULL;
 static sp_int sp_sym_str_cap=0;

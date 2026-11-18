@@ -814,8 +814,8 @@ int repr_write_share(const Compiler *c, int node) {
 /* --share-strings: the binding a boxed receiver's call v takes for native
    class k, when it answers the String its object keeps (`native_share ...
    "answers"`), has that String's handle form and the rule shares the
-   receiver's Strings; else NULL. The dispatch's arm for k publishes that
-   handle (emit_poly_user_arm0), as a method arm's tail read does. */
+   receiver's Strings; else NULL. The dispatch's arm for k returns that
+   handle, which carries the native object's String identity. */
 const NativeMethod *repr_native_arm_handle(Compiler *c, int v, int k) {
   const NodeTable *nt = c->nt;
   int recv = v >= 0 && nt_kind(nt, v) == NK_CallNode ? nt_ref(nt, v, "receiver") : -1;
@@ -855,10 +855,6 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
   return any;
 }
 
-/* --share-strings: a call whose every target method answers a shared
-   String's handle (Scope.ret_handle): the value is that handle, which the
-   callee's tail read publishes. (A call marked to be stored as the handle
-   is read with its mark lifted, as a String, and picked up here.) */
 /* --share-strings: `super(v)` in a method of a subclass of a native class
    whose object keeps a String, reaching the class's binding of the name
    that keeps the String it is handed (`native_share "string=" ...
@@ -902,117 +898,55 @@ int scope_always_raises(Compiler *c, int mi) {
   return !for_each_value_position(c->nt, s->body, VPS_ALL, repr_leaf_not_raise, c);
 }
 
-/* Do the n targets mis of call v publish its handle -- each answers no
-   value (scope_always_raises), publishes it, or answers a String literal
-   where nothing between the pickup's reset and its return can publish
-   another handle (share_plan_literal_pickup_clean), and one publishes?
-   With n -1, the targets are every method the call can run past the
-   plan's list (share_name_targets, #9258). */
-static int repr_targets_return_handle(Compiler *c, int v, const int *mis, int n) {
-  int *own = NULL;
-  if (n < 0) {
-    own = malloc(sizeof(int) * (size_t)(c->nscopes + 1));
-    if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    n = share_name_targets(c, v, own, c->nscopes + 1);
-    mis = own;
+/* The ENV fallback can hand the caller an existing String. */
+static int repr_env_string_handle(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, v, "receiver");
+  if (!env_value_recv(c, recv, comp_ntype(c, recv))) return 0;
+  const char *name = nt_str(nt, v, "name");
+  if (bop_share_named(BOP_ENV, name) != BSH_FETCH) return 0;
+  if (nt_ref(nt, v, "block") >= 0) {
+    int tail = env_delete_block_value(c, v);
+    return tail >= 0 && (repr_of(c, tail).kind == RK_STRBUF || strbuf_value_carries(c, tail));
   }
-  int npub = 0, ok = n > 0;
-  for (int i = 0; ok && i < n; i++) {
-    if (scope_always_raises(c, mis[i])) continue;
-    if (scope_ret_handle(c, mis[i])) { npub++; continue; }
-    if (!share_plan_literal_pickup_clean(c, v, mis[i])) ok = 0;
+  int argc = 0; const int *argv = call_args(nt, v, &argc);
+  return argc == 2 && repr_of(c, argv[1]).kind == RK_STRBUF;
+}
+
+/* A call with a native String result has an object to pass to its caller.
+   Reflection keeps its callee's signature. A setter expression selects its
+   argument independently of what the invoked method returns. */
+int repr_native_call_handle(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (v < 0) return 0;
+  NodeKind k = nt_kind(nt, v);
+  if (k != NK_CallNode && k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
+  TyKind t = comp_ntype_settled(c, v);
+  if (t != TY_STRING && t != TY_STRBUF) return 0;
+  if (k == NK_CallNode) {
+    if (cplan_builtin_handle_row(c, v)) return 1;
+    if (repr_env_string_handle(c, v) || strbuf_io_outbuf(c, v) >= 0) return 1;
+    if (call_is_setter_assign(nt, v) || cplan_pinned_builtin(c, v)) return 0;
+    const char *name = nt_str(nt, v, "name");
+    if (is_method_invoke(name) || is_bind_call(name)) {
+      CallPlan method = cplan_method_call(c, v);
+      if (method.method_call)
+        return method.dispatch != CP_SWITCH && method.mi >= 0 &&
+               repr_method_ret_storage(&c->scopes[method.mi]) == TY_STRBUF;
+    }
   }
-  free(own);
-  return ok && npub > 0;
+  const CallPlan plan = cplan_user(c, v);
+  if (plan.dispatch == CP_DIRECT && plan.mi >= 0)
+    return repr_method_ret_storage(&c->scopes[plan.mi]) == TY_STRBUF;
+  if (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM)
+    return k == NK_CallNode ? repr_boxed_native_handle(c, v)
+                            : cplan_builtin_handle_row(c, v) || repr_super_native_keeps(c, v);
+  /* The switch has an explicit join even when its target set exceeds
+     CPT_MAX. This says nothing about what an unknown arm does with arguments. */
+  return repr_call_result_storage(t) == TY_STRBUF;
 }
 int repr_call_returns_handle(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  v = nt_paren_single(c->nt, v);
-  if (repr_super_native_keeps(c, v)) return 1;
-  if (v >= 0 && (nt_kind(nt, v) == NK_SuperNode || nt_kind(nt, v) == NK_ForwardingSuperNode)) {
-    const CallPlan p = cplan_user(c, v);
-    return p.dispatch == CP_DIRECT && repr_self_handle(c, p.mi) && scope_ret_handle(c, p.mi);
-  }
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
-  /* a String's value, or one the pickup marks to be stored as the handle */
-  TyKind t = comp_ntype_settled(c, v);
-  if (t != TY_STRING && !(t == TY_STRBUF && (comp_strbuf_box_stored(c, v) || c->n_cext_extensions))) return 0;
-  if (strbuf_io_outbuf(c, v) >= 0) return 1;
-  /* a Method's call: the method `method(:m)` names */
-  int recv = nt_ref(nt, v, "receiver");
-  const char *nm = nt_str(nt, v, "name");
-  /* A missing ENV key answers the default handle; a present one clears
-     the return channel before making its own String. delete's
-     missing-key block answers its value the same way. */
-  if (env_value_recv(c, recv, comp_ntype(c, recv)) &&
-      bop_share_named(BOP_ENV, nm) == BSH_FETCH) {
-    int argc = 0; const int *argv = call_args(nt, v, &argc);
-    int tail = env_delete_block_value(c, v);
-    if (nt_ref(nt, v, "block") < 0 ? argc == 2 && repr_of(c, argv[1]).kind == RK_STRBUF
-                                   : tail >= 0 && (repr_of(c, tail).kind == RK_STRBUF || strbuf_value_carries(c, tail)))
-      return 1;
-  }
-  if (recv >= 0 && nm && comp_ntype(c, recv) == TY_METHOD && is_call_alias(nm)) {
-    int mn = method_recv_node(c, recv);
-    int mi = mn >= 0 ? method_obj_target_mi(c, mn) : -1;
-    return mi > 0 && scope_ret_handle(c, mi);
-  }
-  int mis[CPT_MAX];
-  int n;
-  /* Kernel#String calls to_str, or to_s where the class has no to_str.
-     A fresh-answering target must keep the ordinary conversion's copy.
-     A nil to_str falls through to to_s; a nil to_s falls to fresh object
-     text in the bridge, so neither may pick up an earlier publication. */
-  if (recv < 0 && is_string_class_name(nm) && call_target(c, v, -1, nm, CT_TOP, NULL) < 0 && !bare_call_class_owned(c, v)) {
-    int ac = 0;
-    const int *av = call_args(nt, v, &ac);
-    if (ac != 1 || nt_ref(nt, v, "block") >= 0) return 0;
-    /* a boxed argument's classes, or an object's own and its subclasses'
-       (the class alone for a `K.new`, which builds exactly K) */
-    TyKind at = comp_ntype(c, av[0]);
-    int ocid = ty_is_object(at) ? ty_object_class(at) : -1;
-    if (ocid < 0 && repr_of(c, av[0]).kind != RK_BOXED) return 0;
-    int own[CPT_MAX];
-    const int *ks = ocid >= 0 ? own : poly_recv_classes(c, v, &n);
-    if (ocid >= 0) {
-      n = 0;
-      for (int k = 0; k < c->nclasses; k++)
-        if (k == ocid || (share_exact_new_class(c, av[0]) != ocid && is_descendant(c, k, ocid))) {
-          if (n == CPT_MAX) return 0;
-          own[n++] = k;
-        }
-    }
-    if (!ks || n <= 0 || n > CPT_MAX) return 0;
-    for (int i = 0; i < n; i++) {
-      /* (ret_nil_pickup is decided with ret_handle) */
-      int mi = cplan_implied_target(c, v, av[0], ks[i], "to_str", CIT_TABLE, NULL);
-      if (mi >= 0 && (scope_ret_handle(c, mi), c->scopes[mi].ret_nil_pickup)) {
-        int fallback = cplan_implied_target(c, v, av[0], ks[i], "to_s", CIT_TABLE, NULL);
-        if (fallback < 0 || !scope_ret_handle(c, fallback) || c->scopes[fallback].ret_nil_pickup) return 0;
-      }
-      if (mi < 0) {
-        mi = cplan_implied_target(c, v, av[0], ks[i], "to_s", CIT_TABLE, NULL);
-        if (mi >= 0 && (scope_ret_handle(c, mi), c->scopes[mi].ret_nil_pickup)) return 0;
-      }
-      if (mi < 0) return 0;
-      mis[i] = mi;
-    }
-  }
-  else n = cplan_targets(c, v, mis, CPT_MAX);
-  /* past the plan's list: every method the call can run (#9258) */
-  if (n == CPT_UNKNOWN) return repr_targets_return_handle(c, v, NULL, -1);
-  /* a boxed receiver's call that reaches no method but native bindings
-     answering their objects' handles, which their arms publish */
-  if (n == 0 && repr_boxed_native_handle(c, v)) return 1;
-  if (n <= 0) return 0;
-  /* a target that answers no value (every path raises: a base class's
-     NotImplementedError stub a subclass overrides) hands on no String; a
-     target answering a String literal publishes none, and the pickup's new
-     handle over its bytes is the literal's own, which keeps one identity,
-     where nothing between the pickup's reset and the target's return can
-     publish another handle (share_plan_literal_pickup_clean); the others
-     each publish their handle, and one has to */
-  return repr_targets_return_handle(c, v, mis, n);
+  return repr_native_call_handle(c, nt_paren_single(c->nt, v));
 }
 /* A boxed receiver's reader arms already box their shared fields as
    handles. A String demand can take that boxed result without a copy.
@@ -1057,8 +991,7 @@ int repr_boxed_to_s_operand(Compiler *c, int v) {
   if (n < 0) return -1;
   for (int i = 0; i < n; i++) {
     if (c->scopes + targets[i] == comp_scope_of(c, v)) continue;
-    if (c->scopes[targets[i]].ret != TY_STRING ||
-        (!scope_ret_handle(c, targets[i]) && !scope_ret_fresh(c, targets[i]))) return -1;
+    if (repr_method_ret_storage(&c->scopes[targets[i]]) != TY_STRBUF) return -1;
   }
   return recv;
 }
@@ -1637,173 +1570,6 @@ void repr_check_ask(const Compiler *c, int node) {
   if (node >= 0 && node < c->nt->count) (void)repr_of(c, node);
 }
 
-/* Like the boxing shadow, this observes emission without changing it. The
-   existing settled return walk records leaves, not a second return walk.
-   Frames distinguish repeated emissions of a node; an enclosing frame
-   drops abandoned trial frames just as pa_end does. */
-typedef struct { int mi, active; unsigned char want, seen; } ChannelLeaf;
-typedef struct { int node, form, ensure, clearing; } ChannelFrame;
-struct ReprChannelCheck {
-  ChannelLeaf *leaf;
-  ChannelFrame *frame;
-  int count, n, cap, clearing;
-  unsigned long checked, conflicts, pickups;
-};
-
-static void channel_grow(struct ReprChannelCheck *q) {
-  if (q->n < q->cap) return;
-  if (q->cap > INT_MAX / 2) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  q->cap = q->cap ? q->cap * 2 : 16;
-  q->frame = realloc(q->frame, (size_t)q->cap * sizeof *q->frame);
-  if (!q->frame) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-}
-
-static void channel_drop(struct ReprChannelCheck *q, int frame) {
-  q->clearing = q->frame[frame].clearing;
-  while (q->n > frame) {
-    ChannelFrame *d = &q->frame[--q->n];
-    if (!d->ensure) q->leaf[d->node].active = 0;
-  }
-}
-
-void repr_channel_predict(Compiler *c, int node, int mi, int form) {
-  if (node < 0) return;
-  struct ReprChannelCheck *q = c->repr_channel_check;
-  if (!q) {
-    q = calloc(1, sizeof *q);
-    if (!q) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    q->count = c->nt->count;
-    q->leaf = calloc((size_t)q->count, sizeof *q->leaf);
-    if (!q->leaf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    c->repr_channel_check = q;
-  }
-  if (node >= q->count) {
-    int count = c->nt->count;
-    q->leaf = realloc(q->leaf, (size_t)count * sizeof *q->leaf);
-    if (!q->leaf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    memset(q->leaf + q->count, 0, (size_t)(count - q->count) * sizeof *q->leaf);
-    q->count = count;
-  }
-  q->leaf[node].mi = mi;
-  q->leaf[node].want = (unsigned char)form;
-}
-
-int repr_channel_begin(Compiler *c, int node) {
-  struct ReprChannelCheck *q = c->repr_channel_check;
-  if (!q || node < 0 || node >= q->count) return -1;
-  ChannelLeaf *l = &q->leaf[node];
-  if (!l->want || l->active || l->mi <= 0 || l->mi >= c->nscopes) return -1;
-  Scope *m = &c->scopes[l->mi];
-  if (!m->ret_handle && !m->ret_channel_check) return -1;
-  channel_grow(q);
-  int f = q->n++;
-  q->frame[f] = (ChannelFrame){ node, RCH_NONE, 0, q->clearing };
-  l->active = f + 1;
-  return f;
-}
-
-
-int repr_channel_ensure(Compiler *c, int node) {
-  struct ReprChannelCheck *q = c->repr_channel_check;
-  Scope *m = q ? comp_scope_of(c, node) : NULL;
-  if (!m || (!m->ret_handle && !m->ret_channel_check)) return -1;
-  channel_grow(q);
-  int f = q->n++;
-  q->frame[f] = (ChannelFrame){ node, RCH_NONE, 1, q->clearing };
-  return f;
-}
-
-void repr_channel_note(Compiler *c, int node, int form) {
-  struct ReprChannelCheck *q = c->repr_channel_check;
-  if (!q || node < 0 || node >= q->count) return;
-  /* An ensure can overwrite a saved return's channel even when its own
-     value is dropped. Report the unproved preservation separately: an
-     ensure that returns instead can deliberately supersede that value. */
-  if (form == RCH_PUBLISH || form == RCH_CLEAR)
-    for (int i = 0; i < q->n; i++) if (q->frame[i].ensure) q->frame[i].form = form;
-  int f = q->leaf[node].active - 1;
-  if (f >= 0 && f < q->n) q->frame[f].form = form;
-}
-
-static const char *channel_form(int form) {
-  const char *const names[] = { "unobserved", "publish", "clear", "nil", "handle", "bytes", "boxed" };
-  return form >= RCH_NONE && form <= RCH_BOXED ? names[form] : "?";
-}
-
-void repr_channel_end(Compiler *c, int frame) {
-  struct ReprChannelCheck *q = c->repr_channel_check;
-  if (!q || frame < 0 || frame >= q->n) return;
-  ChannelFrame f = q->frame[frame];
-  if (f.ensure) {
-    if (f.form != RCH_NONE)
-      fprintf(stderr, "repr-check: channel-gap: node %d ensure: emitted %s after saved value; preservation unproved\n",
-              f.node, channel_form(f.form));
-    channel_drop(q, frame);
-    return;
-  }
-  ChannelLeaf *l = &q->leaf[f.node];
-  if (q->clearing) f.form = RCH_CLEAR;
-  int want = l->want;
-  l->seen = 1;
-  q->checked++;
-  /* nil is decided by the returned bytes, before any pickup reads the
-     channel. A handle-valued view/boxed return carries the value itself. */
-  if (want != RCH_NIL && f.form != RCH_HANDLE && f.form != RCH_BOXED && f.form != want) {
-    int conflict = want == RCH_CLEAR || f.form != RCH_NONE;
-    const char *cls = conflict ? "channel-conflict" : "channel-unobserved";
-    if (conflict) q->conflicts++;
-    fprintf(stderr, "repr-check: %s: node %d %s method %s: emitted %s, predicted %s\n",
-            cls, f.node, nt_type(c->nt, f.node), c->scopes[l->mi].name,
-            channel_form(f.form), channel_form(want));
-  }
-  channel_drop(q, frame);
-}
-
-void repr_channel_call(Compiler *c, int node, int mi) {
-  if (mi > 0 && mi < c->nscopes && c->scopes[mi].ret_handle)
-    repr_channel_note(c, node, RCH_PUBLISH);
-}
-
-void repr_channel_boxed(Compiler *c, int node, int frame) {
-  repr_channel_note(c, node, RCH_BOXED);
-  repr_channel_end(c, frame);
-}
-
-void repr_channel_pickup(Compiler *c, int node, int nil_guard) {
-  int mis[CPT_MAX], n = cplan_targets(c, node, mis, CPT_MAX);
-  if (c->repr_channel_check) c->repr_channel_check->pickups++;
-  for (int i = 0; i < n; i++) {
-    Scope *m = &c->scopes[mis[i]];
-    /* The earlier pickup proof also admits owned handles and mixed fresh
-       tails. ret_handle is the later forwarding proof, not its negation. */
-    if ((m->ret_handle || m->ret_channel_check) && (!m->ret_nil_pickup || nil_guard)) continue;
-    fprintf(stderr, "repr-check: channel-conflict: node %d pickup method %s: "
-            "ret_handle %d ret_fresh %d ret_nil_pickup %d nil_guard %d\n",
-            node, m->name, m->ret_handle, m->ret_fresh, m->ret_nil_pickup, nil_guard);
-  }
-  if (n <= 0)
-    fprintf(stderr, "repr-check: channel-unobserved: node %d pickup: targets %d\n", node, n);
-}
-
-void repr_channel_report(Compiler *c) {
-  struct ReprChannelCheck *q = c->repr_channel_check;
-  if (!q) return;
-  int unseen = 0;
-  for (int i = 0; i < q->count; i++) {
-    ChannelLeaf *l = &q->leaf[i];
-    if (l->want && !l->seen && l->mi > 0 && c->scopes[l->mi].ret_handle) unseen++;
-  }
-  fprintf(stderr, "repr-check: channel: %lu tails, %lu conflicts, %lu pickups, %d unemitted leaves\n",
-          q->checked, q->conflicts, q->pickups, unseen);
-}
-
-void repr_channel_free(Compiler *c) {
-  struct ReprChannelCheck *q = c->repr_channel_check;
-  if (!q) return;
-  free(q->leaf); free(q->frame); free(q);
-  c->repr_channel_check = NULL;
-}
-
 ReprKind repr_slot_kind(const Compiler *c, const LocalVar *lv) {
   if (!lv) return RK_NONE;
   /* an Integer or Float slot that holds its nil beside the value */
@@ -2037,16 +1803,38 @@ Repr repr_of_cvar(const Compiler *c, int cid, int idx) {
   return r;
 }
 
+/* A dispatch with a settled String answer merges its arms into one
+   nullable handle, independently of which class wins at run time. */
+TyKind repr_call_result_storage(TyKind result) {
+  return result == TY_STRING ? TY_STRBUF : result;
+}
+
+/* A heterogeneous receiver switch joins builtin and user arms in the
+   universal representation. Its caller reads the selected String object. */
+TyKind repr_poly_result_slot(TyKind result) {
+  return repr_call_result_storage(result) == TY_STRBUF ? TY_POLY : result;
+}
+
+TyKind repr_method_ret_storage(const Scope *sc) {
+  /* An initializer called for its effects has no C result, even when
+     its last Ruby expression is a String. A super whose caller consumes
+     the value has already marked its target init_value. */
+  if (!sc->init_value && scope_is_initialize(sc)) return TY_VOID;
+  return repr_call_result_storage(sc->ret);
+}
+
 /* a method's value: its nilable scalar (ret_nullable_int, or an RBS
    signature's `?`) is an oint */
 Repr repr_of_ret(const Compiler *c, const Scope *sc) {
   Repr r;
   memset(&r, 0, sizeof r);
-  r.ty = r.as_ty = sc->ret;
+  r.ty = sc->ret;
+  r.as_ty = repr_method_ret_storage(sc);
+  r.handle = r.as_ty == TY_STRBUF;
   r.narrowed = TY_UNKNOWN;
   repr_layout(&r, r.ty);
-  r.kind = (unsigned char)repr_kind_of_type(c, r.ty);
-  if ((r.ty == TY_INT || r.ty == TY_FLOAT) && (sc->ret_nullable_int || sc->ret_rbs_nilable)) {
+  r.kind = (unsigned char)repr_kind_of_type(c, r.as_ty);
+  if (method_ret_is_oint(sc)) {
     r.kind = RK_OPT;
     r.may_nil = r.nil_scalar = 1;
   }

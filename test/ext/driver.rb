@@ -7,6 +7,10 @@ $LOAD_PATH.unshift(File.dirname(__FILE__))
 require "extk"
 p ExtKernel.triple(5)
 p ExtKernel.shout("hey")
+[[false, false], [true, false], [false, true]].each do |binary, missing|
+  value = ExtKernel.sample(binary, missing)
+  p value && [value.bytes, value.encoding.name]
+end
 p ExtKernel.total([1, 2, 3])
 begin
   ExtKernel.must_pos(-2)

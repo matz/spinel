@@ -190,6 +190,7 @@ typedef enum {
   BOPE_ARRAY_SLICE_GROUPS, /* Array#slice_before / slice_after without a block (stage 3) */
   BOPE_ARRAY_JOIN_STR,    /* Array#* with a String (stage 4) */
   BOPE_ARRAY_PRED_CLASS,  /* Array#any? / all? / none? / one? with a Class (stage 5) */
+  BOPE_KERNEL_STRING,     /* Kernel.String with its to_str / to_s protocol */
   BOPE_CONV_USER_OK,      /* a receiverless implicit conversion, arg(boxed x, user_ok): __kw_hash, __blk_conv (user_ok: a program class may answer by method_missing) */
   /* Method and Proc (codegen_call_method.c) */
   BOPE_METHOD_UNBIND,     /* Method#unbind */
@@ -216,6 +217,7 @@ typedef enum {
   BOPE_STRING_BYTESPLICE,
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */
+  BOPE_STRING_LINES,       /* String#lines without a block */
   BOPE_BOXED_ARRAY_COUNT, /* a count-taking Enumerable read through a box */
   BOPE_BOXED_ARRAY_ONLY,  /* a boxed Array read that requires an Array */
   BOPE_BOXED_ARRAY_OR_RANGE, /* a boxed read that accepts Array and Range */
@@ -238,8 +240,8 @@ typedef struct BuiltinOp {
   const char *name;
   signed char argc_min, argc_max;
   BopBlock block;
-  TyKind result;          /* what the call answers; TY_UNKNOWN: inference
-                             leaves the call to the rules after it */
+  TyKind result;          /* the native result kind or a BOPR_* derivation;
+                             TY_UNKNOWN leaves inference to other rules */
   BopEmit emit;
   const char *arg;        /* BOPE_TEMPLATE's C text */
   BopKinds arg0, arg1;    /* the kinds the first and second argument may
@@ -543,18 +545,24 @@ int bop_covers(TyKind rt);
 TyKind bop_family_of(TyKind rt);
 int bop_row_takes(TyKind rt, const char *name, int argc, int has_block);
 
-/* What the call answers on a receiver of kind rt: the row's result, with a
-   derived result (BOPR_*) worked out from rt. */
-TyKind bop_result(const BuiltinOp *op, TyKind rt);
-/* bop_result for the rows whose answer also turns on the call's operands'
+/* The native result on a receiver of kind rt, with a derived result
+   (BOPR_*) worked out from rt. TY_STRBUF declares an sp_String * result. */
+TyKind bop_native_result(const BuiltinOp *op, TyKind rt);
+/* bop_native_result for the rows whose answer also turns on the call's operands'
    kinds (BOPR_ARRAY_PLUS, BOPR_ARRAY_SETOP, BOPR_ARG0, BOPR_ARG1, BOPR_ARG_LAST,
-   BOPR_HASH_REPLACE, BOPR_HASH_STORE); any other row answers as bop_result
+   BOPR_HASH_REPLACE, BOPR_HASH_STORE); any other row answers as bop_native_result
    does. arg_of(ud, i) answers argument i's kind, as for
    bop_find_arg, and is called only for those rows. TY_UNKNOWN where the row
    states no kind for these operands. It reads no node: the caller brings
    the kinds. BOPR_ARRAY_SUM_SEED reads the seed through fold_seed_kind at
    the caller and takes the integer overflow mode, and BOPR_ARRAY_TUPLES
-   whether the call keeps its tuples, through facts (BOPX_*). */
+   whether the call keeps its tuples, through facts (BOPX_*).
+   BOPR_ARRAY_INDEX can keep the boxed nil result under BOPX_BOXED_USE. */
+TyKind bop_native_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts);
+/* The Ruby type of the result. A row declaring a String handle answers
+   TY_STRING to inference. Derived kinds keep the type supplied by their
+   receiver or operands, including any existing type refinement. */
+TyKind bop_result(const BuiltinOp *op, TyKind rt);
 TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts);
 /* Facts about the call that no operand's kind carries, for bop_result_args */
 #define BOPX_PROMOTE 1  /* --int-overflow=promote */

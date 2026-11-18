@@ -280,6 +280,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
   int *flat = NULL, fcap = 0, *own = NULL;
   interp_flatten_own(nt, id, &flat, &own, &n, &fcap);
   const int *parts = flat;
+  int last_operand = n - 1;
+  while (last_operand >= 0 && nt_kind(nt, parts[last_operand]) == NK_StringNode) last_operand--;
   /* (each adjacent literal is built on its own: a part is held only until
      the end of its segment, sn[k] parts in) */
   int *sn = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
@@ -400,6 +402,7 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
          converts to a marker-carrying string whose byte length is summed. */
       Buf conv; memset(&conv, 0, sizeof conv);
       int wkind = WK_DYN, neutral = -1;
+      int held_string = 0;
       char *iv_pre = NULL;   /* the value's text, emitted once by the probe below */
       #define EMIT_IV() do { if (vexpr[0]) buf_puts(&conv, vexpr); \
                              else if (iv_pre) buf_puts(&conv, iv_pre); \
@@ -474,18 +477,30 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         buf_printf(&decls, "int _t%d = 0; ", neutral);
         buf_printf(&conv, "({ sp_RbVal _t%d = ", tvp);
         EMIT_IV();
-        buf_printf(&conv, "; _t%d = !(sp_poly_is_strbuf(_t%d) || _t%d.tag == SP_TAG_STR); sp_poly_to_s(_t%d); })",
-                   neutral, tvp, tvp, tvp);
+        held_string = 1;
+        buf_printf(&conv, "; sp_interp_string(_t%d, &_t%d); })", tvp, neutral);
       }
       else if (t == TY_EXCEPTION) {
         /* an exception interpolates as its to_s, the same helper e.to_s
            lowers to: the message alone left a user to_s out */
-        if (exc_has_user_msg_override(c)) {
-          buf_puts(&conv, "sp_user_exc_to_s((sp_Exception *)(");
+        int user = exc_has_user_msg_override(c);
+        if (k < last_operand) {
+          held_string = 1;
+          if (user) {
+            int e = ++g_tmp, r = ++g_tmp;
+            buf_printf(&conv, "({ sp_Exception *_t%d = (sp_Exception *)(", e); EMIT_IV();
+            buf_printf(&conv, "); SP_GC_ROOT(_t%d); sp_RbVal _t%d = sp_user_exc_to_s_v(_t%d); "
+                       "SP_GC_ROOT_RBVAL(_t%d); sp_strface_b_box(_t%d) ? sp_poly_as_strbuf(_t%d)"
+                       " : sp_String_new_fresh(sp_exc_to_s_fallback(_t%d)); })", e, r, e, r, r, r, e);
+          }
+          else {
+            buf_puts(&conv, "sp_exc_stored_message_handle((sp_Exception *)(");
+            EMIT_IV(); buf_puts(&conv, "))");
+          }
+        }
+        else {
+          buf_puts(&conv, user ? "sp_exc_to_s_text((sp_Exception *)(" : "sp_exc_message((sp_Exception *)(");
           EMIT_IV(); buf_puts(&conv, "))");
-        } else {
-          buf_puts(&conv, "sp_exc_message(");
-          EMIT_IV(); buf_puts(&conv, ")");
         }
       }
       else if (t == TY_NIL) {
@@ -542,48 +557,20 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
            #to_s, the instance's pointer landed in the const char * and the
            C did not build. A part that may be nil is nil's to_s, the empty
            String. */
-        int to = ++g_tmp;
-        buf_printf(&conv, "({ sp_String *_t%d = (sp_String *)(", to);
-        EMIT_IV();
-        buf_printf(&conv, "); _t%d ? sp_strbuf_read(_t%d) : sp_str_empty; })", to, to);
+        held_string = 1;
+        buf_puts(&conv, "(sp_String *)("); EMIT_IV(); buf_puts(&conv, ")");
       }
       else if (ty_is_object(t) && obj_str_undef(c, expr, ty_object_class(t), 0)) {
         emit_nomethod_raise_unless_nil(c, expr, "to_s", "(const char *)\"\"", "sp_str_empty", &conv);   /* (to_s undefined where the record places it: CRuby raises, for nil's own to_s is the empty String) */
       }
       else if (ty_is_object(t) && obj_str_cname(c, expr, ty_object_class(t), 0)) {
-        const char *cn = obj_str_cname(c, expr, ty_object_class(t), 0);
-        /* a poly-returning to_s (String unioned with e.g. nil) yields a boxed
-           sp_RbVal -- render it through sp_poly_to_s so it's a const char *
-           in the interpolation (#3266). */
-        int ret_poly = obj_str_ret_poly(c, expr, ty_object_class(t), 0);
-        /* one answering a String subclass instance reads its bytes */
-        const char *ss_open = !ret_poly && obj_str_ret_strsub(c, expr, ty_object_class(t), 0) ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "";
-        const char *ss_close = *ss_open ? ")))" : "";
-        if (ret_poly) buf_puts(&conv, "sp_poly_to_s(");
-        /* a part that may be nil (the nil fact, #7444) reads as nil's to_s,
-           the empty String, where its class's to_s would run on no object */
-        int part_nil = !ret_poly && !comp_ty_value_obj(c, t) && nil_fact_tracked(t) && nil_fact_node(c, expr);
-        /* a value-type object (single-ivar) has a by-VALUE to_s signature;
-           casting its receiver to a pointer is a C type error (#2357) */
-        if (!part_nil && (comp_ty_value_obj(c, t) || (!vexpr[0] && !iv_pre && expr_is_held_ref(c, expr)))) {
-          const char *tsf = obj_str_fn(c, expr, ty_object_class(t), 0);
-          buf_puts(&conv, ss_open);
-          if (comp_ty_value_obj(c, t)) buf_printf(&conv, "%s(", tsf);
-          else buf_printf(&conv, "%s((sp_%s *)", tsf, cn);
-          EMIT_IV(); buf_printf(&conv, "%s)%s", obj_str_blockarg(c, expr, ty_object_class(t), 0), ss_close);
-        }
-        else {
-          /* rooted: the part may be a fresh object (`"#{C.new}"`) held
-             nowhere else while its #to_s allocates */
-          int to = ++g_tmp;
-          buf_printf(&conv, "({ sp_%s *_t%d = (sp_%s *)(", cn, to, cn);
-          EMIT_IV();
-          buf_printf(&conv, "); SP_GC_ROOT(_t%d); ", to);
-          if (part_nil) buf_printf(&conv, "_t%d ? ", to);
-          buf_printf(&conv, "%s%s(_t%d%s)%s%s; })", ss_open, obj_str_fn(c, expr, ty_object_class(t), 0), to,
-                     obj_str_blockarg(c, expr, ty_object_class(t), 0), ss_close, part_nil ? " : sp_str_empty" : "");
-        }
-        if (ret_poly) buf_puts(&conv, ")");
+        Buf receiver = {0};
+        if (vexpr[0]) buf_puts(&receiver, vexpr);
+        else if (iv_pre) buf_puts(&receiver, iv_pre);
+        else emit_expr(c, expr, &receiver);
+        DisplayUse use = k < last_operand ? DISPLAY_INTERP_PART : DISPLAY_TO_S;
+        held_string = emit_obj_display(c, expr, ty_object_class(t), use, receiver.p, &conv);
+        free(receiver.p);
       }
       else if (ty_is_ptr_array(t) || ty_is_obj_array(t)) {
         Buf ivb; memset(&ivb, 0, sizeof ivb);
@@ -596,8 +583,17 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         free(ivb.p);
       }
       else if (t == TY_CLASS) {
-        buf_printf(&conv, "%s(", comp_class_display_fn(c));
-        EMIT_IV(); buf_puts(&conv, ")");
+        if (prog_has_cls_user_display(c, "to_s")) {
+          held_string = 1;
+          neutral = ++g_tmp;
+          buf_printf(&decls, "int _t%d = 0; ", neutral);
+          buf_puts(&conv, "sp_interp_string(sp_box_class(");
+          EMIT_IV(); buf_printf(&conv, "), &_t%d)", neutral);
+        }
+        else {
+          buf_printf(&conv, "%s(", comp_class_base_display_fn(c));
+          EMIT_IV(); buf_puts(&conv, ")");
+        }
       }
       else if (t == TY_BIGINT) {
         /* NULL is this slot's nil, which interpolates as the empty string
@@ -686,6 +682,16 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
       else if (wkind == WK_NIL) {
         buf_printf(&decls, "(void)(%s); ", conv.p ? conv.p : "0");
         tv2 = -1;
+      }
+      else if (held_string) {
+        int th = ++g_tmp;
+        buf_printf(&decls, "sp_String *_t%d = %s; SP_GC_ROOT(_t%d); ", th, conv.p, th);
+        /* Adjacent literals finish separately. Preserve a completed
+           segment's bytes while subsequent literals evaluate. */
+        int snapshot = sn[k] <= last_operand;
+        buf_printf(&late, "const char *_t%d = %ssp_str_or_empty(sp_String_cstr_nil(_t%d))%s; "
+                   "SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
+                   tv2, snapshot ? "sp_str_dup(" : "", th, snapshot ? ")" : "", tv2, tv2, tv2);
       }
       else if (t == TY_STRING && !vexpr[0] && repr_of(c, expr).strbuf_src == RS_HANDLE &&
                (nt_kind(nt, expr) == NK_LocalVariableReadNode || nt_kind(nt, expr) == NK_InstanceVariableReadNode) &&
@@ -1104,13 +1110,9 @@ static void emit_ternary_arm_o(Compiler *c, int nd, TyKind res, int res_o, Buf *
   NodeKind bk = nt_kind(nt, nd);
   if (res_o && oint_kind(res)) { emit_oint_expr(c, nd, res, b); return; }
   if (res == TY_POLY && repr_of(c, nd).kind != RK_BOXED) { emit_boxed(c, nd, b); return; }
-  /* A String result beside an arm that picks up a handle (`v.is_a?(String)
-     ? v.dup : String.new`, whose narrowed dup is a String): the handle's
-     bytes. Put in as it stands, an sp_String * shared one C conditional
-     with a const char *, and the slot read the handle as bytes. */
-  if (res == TY_STRING && repr_of(c, nd).as_ty == TY_STRBUF && nt_kind(nt, nt_paren_single(c->nt, nd)) == NK_CallNode &&
-      strbuf_call_picks_up(c, nt_paren_single(c->nt, nd))) {
-    str_read_handle_open(b, 0);
+  /* A byte-valued conditional reads a handle arm through its byte face. */
+  if (res == TY_STRING && repr_of(c, nd).as_ty == TY_STRBUF) {
+    str_read_handle_open(b);
     emit_expr(c, nd, b);
     str_read_handle_close(b);
     return;
@@ -1482,7 +1484,17 @@ void emit_orw_guard(Compiler *c, int v, TyKind slot, const char *cond, const cha
 /* What the store of an object's own slot runs first, where the store is taken (the frozen guard `@x = v` takes),
    set by the ivar's value form around the slot's store (emit_ivar_orw_value, the shared-handle forms); NULL for any other slot. */
 const char *g_orw_store_guard = NULL;
-void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *b) {
+/* Evaluate a String or boxed RHS before testing whether the object accepts
+   the store. The caller has already selected the assigning branch. */
+void emit_conditional_slot_store(const char *ref, const char *value, const char *frozen, Buf *b) {
+  if (frozen) {
+    int t = ++g_tmp;
+    buf_printf(b, "__typeof__(%s) _t%d = %s; %s%s = _t%d;", ref, t, value, frozen, ref, t);
+  }
+  else buf_printf(b, "%s = %s;", ref, value);
+}
+
+void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, const char *frozen, Buf *b) {
   Buf vpre; memset(&vpre, 0, sizeof vpre);
   Buf vval; memset(&vval, 0, sizeof vval);
   Buf *saved_pre = g_pre; g_pre = &vpre;
@@ -1493,8 +1505,8 @@ void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *
   g_pre = saved_pre;
   buf_printf(b, "if (%s%s) { ", is_or ? "!" : "", ref);
   if (vpre.p) buf_puts(b, vpre.p);
-  if (g_orw_store_guard) buf_puts(b, g_orw_store_guard);
-  buf_printf(b, "%s = %s; }", ref, vval.p ? vval.p : "");
+  emit_conditional_slot_store(ref, vval.p, frozen, b);
+  buf_puts(b, " }");
   free(vpre.p); free(vval.p);
 }
 
@@ -1514,15 +1526,7 @@ int emit_strbuf_ivar_write_handle(Compiler *c, int v, Buf *b) {
   holder_slot_buf(c, &h, &rb);
   const char *ref = rb.p;
   buf_puts(b, "({ ");
-  if (nt_kind(nt, w) == NK_InstanceVariableWriteNode) emit_stmt_inner(c, w, b, 0);
-  else {
-    int is_or = nt_kind(nt, w) == NK_InstanceVariableOrWriteNode;
-    emit_strbuf_orw_guard(c, ref, nt_ref(nt, w, "value"), is_or, b);
-    /* `||=` leaves the ivar assigned (ivar_write_mark), `&&=` as it was */
-    char mk[300];
-    const char *m = is_or ? ivar_write_mark(c, w, mk, sizeof mk) : NULL;
-    if (m) buf_printf(b, " %s", m);
-  }
+  emit_stmt_inner(c, w, b, 0);
   buf_printf(b, " %s; })", ref);
   free(rb.p);
   return 1;
@@ -1559,9 +1563,9 @@ static void emit_strbuf_slot_read(Compiler *c, int id, Repr rp, const char *sref
    called an unset class variable defined. An ivar's assigned mark
    (ivar_write_mark, or NULL) is set the same way. */
 static void emit_strbuf_orw_share_value(Compiler *c, int id, const char *ref, int v, int is_or,
-                                        int fcid, const char *fnm, const char *mark, Buf *b) {
+                                        int fcid, const char *fnm, const char *mark, const char *frozen, Buf *b) {
   buf_puts(b, "({ ");
-  emit_strbuf_orw_guard(c, ref, v, is_or, b);
+  emit_strbuf_orw_guard(c, ref, v, is_or, frozen, b);
   buf_puts(b, " ");
   if (is_or) emit_cvar_set_flag(c, fcid, fnm, 0, b);
   if (is_or && mark) buf_printf(b, "%s ", mark);
@@ -1607,9 +1611,9 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
      the slot's read face with the handle published, as a plain write's is. */
   if (t == TY_STRBUF) {
     buf_puts(b, "({ ");
-    emit_strbuf_orw_guard(c, ref, v, is_or, b);
+    emit_strbuf_orw_guard(c, ref, v, is_or, g_orw_store_guard, b);
     buf_printf(b, "%s%s ", mark ? " " : "", mark ? mark : "");
-    str_read_handle(b, ref, 1);
+    str_read_handle(b, ref);
     buf_puts(b, "; })");
     return;
   }
@@ -1689,8 +1693,12 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
   else {
     buf_printf(b, "({ if (%s) { ", cond);
     if (vpre.p) buf_puts(b, vpre.p);
-    if (g_orw_store_guard) buf_puts(b, g_orw_store_guard);
-    buf_printf(b, "%s = %s; } %s%s%s; })", ref, vval.p ? vval.p : "", mark ? mark : "", mark ? " " : "", ref);
+    if (t == TY_POLY) emit_conditional_slot_store(ref, vval.p, g_orw_store_guard, b);
+    else {
+      if (g_orw_store_guard) buf_puts(b, g_orw_store_guard);
+      buf_printf(b, "%s = %s;", ref, vval.p ? vval.p : "");
+    }
+    buf_printf(b, " } %s%s%s; })", mark ? mark : "", mark ? " " : "", ref);
   }
   free(vpre.p); free(vval.p);
 }
@@ -1778,7 +1786,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
                                                                     : default_value_from_compiler(c, want));
     return 1;
   }
-  TyKind rdt = rmi >= 0 ? (TyKind)c->scopes[rmi].ret : TY_UNKNOWN;
+  TyKind rdt = rmi >= 0 ? repr_method_ret_storage(&c->scopes[rmi]) : TY_UNKNOWN;
   int rnb = -1;   /* a generated reader's ivar that keeps its nil in a nil bit */
   /* A generated reader is the ivar itself, read straight off the struct, so
      the temp takes the ivar's own type. Taking the expression's type put a
@@ -1818,7 +1826,7 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     Buf rb; memset(&rb, 0, sizeof rb);
     buf_puts(&rb, mc_method(c, &c->scopes[rmi]));
     buf_printf(&rb, "((sp_%s *)_t%d)", rcn, tr);
-    TyKind got = (TyKind)c->scopes[rmi].ret;
+    TyKind got = repr_method_ret_storage(&c->scopes[rmi]);
     if (got == TY_UNKNOWN || got == TY_VOID) got = rdt;
     if (rnil && rdt == TY_POLY) buf_printf(b, "(%s, sp_box_nil())", rb.p ? rb.p : "");
     else if (got == rdt) buf_puts(b, rb.p ? rb.p : "");
@@ -2175,7 +2183,6 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     return;
   }
   if (g_repr_check) repr_check_ask(c, id);
-  int frame = g_repr_check ? repr_channel_begin(c, id) : -1;
   g_expr_depth++;
   /* nil out of band: emit_oint_expr asked for the bare sp_oint of this one
      node (g_want_oint, consumed here before any child is emitted). Without
@@ -2223,7 +2230,6 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       buf_puts(b, side.p ? side.p : "0"); free(side.p);
       g_ck_node = sv_n; g_ck_op = sv_o; g_ck_done = sv_d;
       g_oint_read = 0; g_expr_depth--;
-      if (g_repr_check) repr_channel_end(c, frame);
       return;
     }
     if (wrap_arg) { g_ck_node = sv_n; g_ck_op = sv_o; g_ck_done = sv_d; }
@@ -2238,7 +2244,6 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       free(side.p);
       g_oint_read = 0;
       g_expr_depth--;
-      if (g_repr_check) repr_channel_end(c, frame);
       return;
     }
     int skip = wrap_arg && side.p && text_diverges(side.p);
@@ -2250,7 +2255,6 @@ void emit_expr(Compiler *c, int id, Buf *b) {
   }
   g_oint_read = 0;
   g_expr_depth--;
-  if (g_repr_check) repr_channel_end(c, frame);
 }
 
 /* Node `node` emitted where its value is thrown away: inside `((void)(...))`,
@@ -2526,14 +2530,12 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       /* A container-store / equal?-arg read of a shared-mutable string yields
          the live HANDLE, not a copy (#3227 phase 3). */
       if (rp.handle) {
-        if (g_repr_check) repr_channel_note(c, id, RCH_HANDLE);
         emit_local_ref(c, id, lrn, b);
         return 1;
       }
       /* a parameter that only reads the bytes for the length of the call
          takes the live buffer: the copy below is O(len) per call (#7482) */
       if (rp.read_raw && decide_node(c->nt, id, "strbuf-raw", NULL)) {
-        if (g_repr_check) repr_channel_note(c, id, RCH_BYTES);
         buf_puts(b, "(");
         emit_local_ref(c, id, lrn, b);
         buf_puts(b, " ? sp_String_cstr(");
@@ -2541,20 +2543,9 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
         buf_puts(b, ") : NULL)");
         return 1;
       }
-      /* A mutable-string local read yields an independent GC string copy: its
-         sp_String buffer is not itself a GC object, so a bare cstr pointer
-         would dangle once the wrapper is unreachable (e.g. after `return`).
-         Transient append/length use the raw sp_String via dedicated paths. */
-      /* publish the handle to the deep-return side channel as the copy is
-         read out: a marked caller of a shared-returning method picks it up
-         right after the call (#3227 P6) */
-      /* Through sp_strbuf_read_pub, which sequences the channel's write
-         (two reads among one call's arguments), reads a nil handle as nil
-         (a parameter or a local can be one: `def run(cmd, text: nil)`,
-         `q = nil; q = +"x" if c`), and keeps a frozen handle's mark on the
-         copy it answers. */
-      buf_puts(b, "sp_strbuf_read_pub(");
-      if (g_repr_check) repr_channel_note(c, id, RCH_PUBLISH);
+      /* Borrow the current contents for a byte consumer. The handle
+         remains in the local slot, and a nullable slot reads as NULL. */
+      buf_puts(b, "sp_strbuf_read(");
       emit_local_ref(c, id, lrn, b);
       buf_puts(b, ")");
       return 1;
@@ -2616,8 +2607,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       }
       /* a nil write leaves the handle NULL: the value is nil, not a read
          through it (CodeRabbit on #4990) */
-      buf_puts(b, " sp_strbuf_read_pub(");
-      if (g_repr_check) repr_channel_note(c, id, RCH_PUBLISH);
+      buf_puts(b, " sp_strbuf_read(");
       emit_local_ref(c, id, nm, b);
       buf_puts(b, "); })");
       return 1;
@@ -2703,8 +2693,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
        as a read of the local gives */
     if (olv && repr_of_slot(c, olv).handle && repr_of_slot(c, olv).kind == RK_STRBUF &&
         !(repr_of(c, id).handle && repr_write_share(c, id))) {
-      buf_puts(b, "sp_strbuf_read_pub(");
-      if (g_repr_check) repr_channel_note(c, id, RCH_PUBLISH);
+      buf_puts(b, "sp_strbuf_read(");
       emit_local_ref(c, id, nm, b);
       buf_puts(b, ")");
     }
@@ -2845,11 +2834,9 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       buf_printf(b, "; %s%s", m3 ? m3 : "", m3 ? " " : "");
       if ((repr_of(c, id).handle && repr_write_share(c, id)) || repr_of(c, id).ty == TY_STRBUF) {
         buf_printf(b, "%s; })", ref2e);
-        if (g_repr_check) repr_channel_note(c, id, RCH_HANDLE);
       }
       else {
-        buf_printf(b, "sp_strbuf_read_pub(%s); })", ref2e);
-        if (g_repr_check) repr_channel_note(c, id, RCH_PUBLISH);
+        buf_printf(b, "sp_strbuf_read(%s); })", ref2e);
       }
       return 1;
     }
@@ -2947,7 +2934,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     const char *sv_guard = g_orw_store_guard;
     g_orw_store_guard = fz.p;
     if (repr_of(c, id).handle && repr_write_share(c, id))
-      emit_strbuf_orw_share_value(c, id, ref3, v, is_or, -1, NULL, m3, b);
+      emit_strbuf_orw_share_value(c, id, ref3, v, is_or, -1, NULL, m3, fz.p, b);
     else emit_ivar_orw_value(c, id, ivt3, eh3, ref3, v, is_or, m3, b);
     g_orw_store_guard = sv_guard;
     free(fz.p);
@@ -3050,17 +3037,14 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
 static void emit_strbuf_slot_read(Compiler *c, int id, Repr rp, const char *sref, Buf *b) {
   if (rp.handle) {
     buf_printf(b, "%s", sref);
-    if (g_repr_check) repr_channel_note(c, id, RCH_HANDLE);
   }
   /* a parameter that only reads the bytes for the length of the call
      takes the live buffer (#7482) */
   else if (rp.read_raw && decide_node(c->nt, id, "strbuf-raw", NULL)) {
     buf_printf(b, "(%s ? sp_String_cstr(%s) : NULL)", sref, sref);
-    if (g_repr_check) repr_channel_note(c, id, RCH_BYTES);
   }
   else {
-    str_read_handle(b, sref, 1);   /* (one representation: a copy when held, g_one_held) */
-    if (g_repr_check) repr_channel_note(c, id, RCH_PUBLISH);
+    str_read_handle(b, sref);   /* (one representation: a copy when held, g_one_held) */
   }
 }
 
@@ -3345,7 +3329,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     int is_or = nt_kind(nt, id) == NK_GlobalVariableOrWriteNode;
     /* the handle under the mark, as an ivar's */
     if (repr_of(c, id).handle && repr_write_share(c, id))
-      emit_strbuf_orw_share_value(c, id, gref, nt_ref(nt, id, "value"), is_or, -1, NULL, NULL, b);
+      emit_strbuf_orw_share_value(c, id, gref, nt_ref(nt, id, "value"), is_or, -1, NULL, NULL, NULL, b);
     else if (gvar_is_oint(c, lv)) {
       char gnt[300]; snprintf(gnt, sizeof gnt, "%s.nil", gref);
       emit_slot_orw_value_o(c, lv->type, 0, gref, nt_ref(nt, id, "value"), is_or, gnt, -1, -1, NULL,
@@ -3397,7 +3381,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     /* --share-strings: a class variable holding the shared handle, as the
        statement form (the raw String went into its sp_String * slot) */
     if (h.idx >= 0 && repr_of_cvar(c, cid, h.idx).share) {
-      emit_strbuf_orw_share_value(c, id, ref.p, v, 1, cid, nm, NULL, b);
+      emit_strbuf_orw_share_value(c, id, ref.p, v, 1, cid, nm, NULL, NULL, b);
       free(ref.p);
       return 1;
     }
@@ -3424,7 +3408,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     holder_slot_buf(c, &h, &ref);
     TyKind at = h.idx >= 0 ? c->classes[h.cid].cvar_types[h.idx] : TY_UNKNOWN;
     if (h.idx >= 0 && repr_of_cvar(c, h.cid, h.idx).share) {   /* as `||=` */
-      emit_strbuf_orw_share_value(c, id, ref.p, v, 0, h.cid, nm, NULL, b);
+      emit_strbuf_orw_share_value(c, id, ref.p, v, 0, h.cid, nm, NULL, NULL, b);
       free(ref.p);
       return 1;
     }
@@ -5105,7 +5089,7 @@ else {
         emit_strbuf_handle_of(c, nt_paren_single(c->nt, key), g_pre);
         buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", th);
         free(kb.p); memset(&kb, 0, sizeof kb);
-        buf_printf(&kb, "SP_STR_B(sp_strbuf_read_pub(_t%d))", th);
+        buf_printf(&kb, "SP_STR_B(sp_strbuf_read(_t%d))", th);
         krb = 0;
       }
       if (ty_is_hash(ht) && (subtree_may_allocate(c, key) || krb)) {
@@ -5767,7 +5751,10 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     Buf rarm; memset(&rarm, 0, sizeof rarm);
     Buf rpre; memset(&rpre, 0, sizeof rpre);
     #define EMIT_ARM(IS_RIGHT, TB) do { \
-      if (IS_RIGHT) { emit_ternary_arm_o(c, right, res, ro, (TB)); } \
+      if (IS_RIGHT) { \
+        if (lhandle && (res == TY_STRING || res == TY_STRBUF)) emit_strbuf_handle_of(c, right, (TB)); \
+        else emit_ternary_arm_o(c, right, res, ro, (TB)); \
+      } \
       else { if (res == TY_POLY && lt != TY_POLY) { /* box the temp by left type */ \
                /* In `a && b` the kept-left arm is reached only when the left is
                   FALSY, and for a scalar slot that means it holds nil:
@@ -5828,13 +5815,8 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     EMIT_ARM(0, &larm);
     { Buf *sv_pre2 = g_pre; g_pre = &rpre; EMIT_ARM(1, &rarm); g_pre = sv_pre2; }
     #undef EMIT_ARM
-    if (lhandle && (res == TY_STRING || res == TY_STRBUF) && rarm.p) {
-      Buf hr; memset(&hr, 0, sizeof hr);
-      buf_printf(&hr, "SP_STR_HDL(%s)", rarm.p);
-      free(rarm.p); rarm = hr;
-    }
     /* (one representation: a right arm of either face beside a bytes left) */
-    else if (!lhandle && !lo && lt == TY_STRING && res == TY_STRING && rarm.p) {
+    if (!lhandle && !lo && lt == TY_STRING && res == TY_STRING && rarm.p) {
       Buf hr; memset(&hr, 0, sizeof hr);
       buf_printf(&hr, "SP_STR_B(%s)", rarm.p);
       free(rarm.p); rarm = hr;
@@ -5927,9 +5909,6 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
       Buf ev; memset(&ev, 0, sizeof ev);
       if (rt == TY_POLY && er.kind != RK_BOXED) emit_boxed(c, e, &ev);
       else if (res_o) emit_oint_expr(c, e, rt, &ev);
-      else if (rt == TY_STRING && (comp_scope_of(c, id)->ret_pub_fresh || comp_scope_of(c, id)->ret_pub_bang ||
-                                   (comp_scope_of(c, id)->ret_handle && tail_pub_leaf(c, e))))
-        emit_tail_value(c, e, &ev);
       else if (hdem) emit_strbuf_handle_of(c, e, &ev);
       /* A nil type alone can also be an opaque call that raises. Only
          proven nil values are converted to a slot's own nil here. */
@@ -5993,9 +5972,6 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
       if (r_jumps) emit_expr(c, r, &rv);
       else if (rt == TY_POLY && repr_of(c, r).kind != RK_BOXED) emit_boxed(c, r, &rv);
       else if (res_o) emit_oint_expr(c, r, rt, &rv);
-      else if (rt == TY_STRING && (comp_scope_of(c, id)->ret_pub_fresh || comp_scope_of(c, id)->ret_pub_bang ||
-                                   (comp_scope_of(c, id)->ret_handle && tail_pub_leaf(c, r))))
-        emit_tail_value(c, r, &rv);
       else if (hdem) emit_strbuf_handle_of(c, r, &rv);
       /* an empty `[]` or `{}` has no element type of its own and takes
          the other arm's, as a ternary arm does; emitted bare it is an
@@ -7356,14 +7332,14 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     if (svt == TY_STRBUF && sop && is_plus_op(sop)) {
       if (g_pre) {
         emit_stmt(c, id, g_pre, g_indent);
-        buf_printf(b, "sp_strbuf_read_pub(%s)", ref);
+        buf_printf(b, "sp_strbuf_read(%s)", ref);
       }
       else {
         char mk[300];
         const char *m = ivar_write_mark(c, id, mk, sizeof mk);
         buf_printf(b, "({ %s = ", ref);
         emit_strbuf_ivar_plus(c, nt_ref(nt, id, "value"), ref, b);
-        buf_printf(b, "; %s%ssp_strbuf_read_pub(%s); })", m ? m : "", m ? " " : "", ref);
+        buf_printf(b, "; %s%ssp_strbuf_read(%s); })", m ? m : "", m ? " " : "", ref);
       }
       return;
     }
@@ -7453,7 +7429,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
         emit_frozen_obj_guard(c, class_id, tn, &fz);
         const char *sv_guard = g_orw_store_guard;
         g_orw_store_guard = fz.p;
-        emit_strbuf_orw_share_value(c, id, lhs, v, is_or, -1, NULL, m, b);
+        emit_strbuf_orw_share_value(c, id, lhs, v, is_or, -1, NULL, m, fz.p, b);
         g_orw_store_guard = sv_guard;
         free(fz.p);
       }

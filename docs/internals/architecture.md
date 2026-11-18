@@ -105,7 +105,11 @@ length together. This includes registered class conversions and a rescued
 exception’s override or stored message. A generated String member reader named to_s or inspect
 returns its stored field. The default Struct or Data renderer produces
 counted text. String comparisons borrow bytes from the selected conversion
-result. A conditional assignment to a String instance variable evaluates
+result. Case comparisons hold the receiver through `to_str` and read its
+current bytes after conversion. Boxed String readers use the load record
+to select their builtin or an installed override. A prepend's guard and
+its `super` share the version history of the String method behind it.
+A conditional assignment to a String instance variable evaluates
 the right-hand side only when the store is taken. It checks whether the
 receiver is frozen after evaluating that value and before updating the slot.
 

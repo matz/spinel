@@ -1840,10 +1840,19 @@ static int ct_calls(Compiler *c, int id, const char *name) {
    alias made where the record has no point. A chain of aliases ends: each
    step asks for the version live at an alias's point, one recorded ahead
    of that point, so the points only go back. */
+static int ct_versioned_string_reader(Compiler *c, int cls, int sg, const char *name) {
+  return !sg && cls >= 0 && cls == comp_core_class(c, CORE_STRING) && is_string_boxed_reader(name);
+}
+
 static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const LrDef *d, int *dc) {
   int cls = rcls;
   while (d) {
     if (d->kind == LR_DEF) return comp_method_version(c, rcls, name, sg, d->node, dc);
+    if (d->kind == LR_DEFINE_METHOD && ct_versioned_string_reader(c, rcls, sg, name) &&
+        d->scope > 0 && d->scope < c->nscopes && c->scopes[d->scope].class_id == rcls) {
+      if (dc) *dc = rcls;
+      return d->scope;
+    }
     if ((d->kind == LR_READER || d->kind == LR_WRITER || d->kind == LR_ALIAS) && d->scope > 0)
       return comp_method_version(c, rcls, name, sg, c->scopes[d->scope].def_node, dc);
     /* a module_function copy: the module's singleton method made of the def
@@ -1943,7 +1952,8 @@ static int ver_takes(Compiler *c, int s, int n) {
    target's, whose scope holds one. */
 static int ct_versioned(Compiler *c, int mi, const char *name) {
   const Scope *s = &c->scopes[mi];
-  return s->versioned || (name && s->name && !sp_streq(s->name, name) && elab_method_versions(c, name) > 1);
+  return s->versioned || (name && s->name && !sp_streq(s->name, name) &&
+          (elab_method_versions(c, name) > 1 || (is_string_boxed_reader(name) && elab_method_late(c, name))));
 }
 /* The parameters of the entry call id reaches whose arms call the methods
    to[0..nto): their required ones, when they all take that many and
@@ -2372,6 +2382,10 @@ static int ver_call_arity(Compiler *c, int id, int rcls, int sg, const char *nam
   /* Kernel.String's argument belongs to the outer call. Both conversion
      callbacks receive zero arguments, even if their versions take others. */
   if (!sg && kernel_string_implies(c, id, rcls, name, CT_IMPLIED)) return 0;
+  if (ct_versioned_string_reader(c, rcls, sg, name)) {
+    int ar = ver_call_n(c, id);
+    if (ar >= 0) return ar;
+  }
   ElabVersion vs[VER_MAX_ARMS];
   int to[VER_MAX_ARMS + 1], nto = 0, dc;
   int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
@@ -2427,7 +2441,7 @@ static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32
      cells as an ordinary version entry, after the prepend arms. */
   const Scope *m = &c->scopes[mi];
   const char *name = m->def_node >= 0 ? nt_str(c->nt, m->def_node, "name") : NULL;
-  if (name && ct_version_named(c, name)) {
+  if (name && m->entry != ENTRY_NAMED && ct_version_named(c, name)) {
     ElabVersion vs[VER_MAX_ARMS];
     int nv = elab_chain_versions(c, m->class_id, m->is_cmethod, name, vs, VER_MAX_ARMS), dc;
     for (int i = 0; i < nv && n < VER_MAX_ARMS; i++) {
@@ -11245,6 +11259,7 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
   if (q && na == nd && nd && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, dto, nd, vs[nv - 1].hist, vs[0].v->vis, ar, blk, mm);
   /* (on a reopened builtin's instance side, a method the builtin itself
      has: with no version run, the builtin's own, #11819) */
+  else if (q && nd && ar >= 0 && ct_versioned_string_reader(c, rcls, sg, name)) kind = VK_BUILTIN;
   else if (q && na == nd && nd && vis && !sg && ver_builtin_instance_answers(c, rcls, name, ar)) kind = VK_BUILTIN;
   /* An optional Symbol conversion is absent until its first override.
      Model the absence even if the call sites only name Kernel.String. */
@@ -11630,6 +11645,19 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
     free(u);
   }
   for (int i = 0; i < nv; i++) { c->scopes[to[i]].replaced = 1; comp_touch_scope(c->scopes[to[i]].idx); }
+  if (spell && w->els == VK_BUILTIN && ct_versioned_string_reader(c, w->cls, w->sg, w->name)) {
+    /* The guarded send and the module's super enter the same own history. */
+    for (int s = 0; s < e; s++) {
+      Scope *m = &c->scopes[s];
+      if (m->class_id != w->cls || !m->mixin_guarded) continue;
+      for (int i = 0; i < nv; i++)
+        if (m->guard_behind == to[i]) {
+          m->guard_behind = e;
+          comp_touch_scope(s);
+          break;
+        }
+    }
+  }
   /* (an includer's: under the module's instance side) */
   ver_entry_add(c, comp_scope_user_name(&c->scopes[e]), (struct VerEntry){ NULL, VER_ENTRY_HISTORY, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e,
                                       .finds = ver_else_finds(c, w->refuse ? VK_NOMETHOD : w->els, w->cls, w->sg, w->name, w->vs[0].v->vis, to[nv - 1]) });
@@ -11675,10 +11703,14 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
     int bare = w->ar < 0 && !is_record_class_cmethod_with_args(name);
     /* (an instance side's, a Kernel row's, private: called without a
        receiver; a reopened builtin's own public method, on self) */
+    int str_reader = ct_versioned_string_reader(c, w->cls, sg, name);
     int own = !sg && w->cls >= 0 && w->ar >= 0 && !bop_kernel_answers(name, -1, 0) && ver_builtin_instance_answers(c, w->cls, name, w->ar);
-    int call = sg || own ? disp_self_call(nt, name, bare ? 0 : w->ar, w->blk) : disp_forward_call(nt, name, w->ar, w->blk);
+    int ar = bare ? (str_reader && is_spaceship_name(name)) : w->ar;
+    int call = sg || own || str_reader ? disp_self_call(nt, name, ar, w->blk)
+                                      : disp_forward_call(nt, name, w->ar, w->blk);
+    if (str_reader) nt_mark_builtin_call(nt, call);
     ver_pin(c, call, CT_PIN_BUILTIN, 0);
-    return bare ? disp_when_unspread(c, call) : call;
+    return bare ? disp_when_fixed_arity(c, call, ar) : call;
   }
   case VK_IVAR: {
     char iv[256];
@@ -11996,7 +12028,13 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
      `*r, **k` on to a row that takes none: each call's count makes one (ver_late_make), its else arm
      the row at that count */
   int bycount = held && !refuse && ar < 0 && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0) && cplan_class_kernel(c, cls) != KERN_LACKS;
-  if (!refuse && !bycount) els = ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
+  int str_behind = 0;
+  if (ct_versioned_string_reader(c, cls, sg, name) && cls == hcls)
+    for (int i = 0; i < nv; i++)
+      str_behind |= c->scopes[to[i]].shadow == SHADOW_PREP && !c->scopes[to[i]].origin_module_ci;
+  if (str_behind && ar != is_spaceship_name(name)) ar = -1;
+  if (!refuse && !bycount)
+    els = str_behind ? VK_BUILTIN : ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
   if (els == VK_KEEP && !held) return;
   if (els == VK_KEEP) refuse = "cond_def_override";
   eb = refuse ? 0 : ver_else_block(c, cls, sg, to[nv - 1], els);
@@ -12496,6 +12534,22 @@ static void ver_named_asks(Compiler *c, int demand) {
   VerNamedAsks q;
   ver_named_facts(c, &q, demand);
   elab_open_histories(c, ver_named_one, &q);
+  /* A guaranteed own definition still has an initial builtin while a
+     prepended method calls super before the definition runs. */
+  int sci = comp_core_class(c, CORE_STRING);
+  if (!demand && sci >= 0)
+    for (int s = 0; s < c->nscopes; s++) {
+      const Scope *m = &c->scopes[s];
+      if (m->class_id != sci || m->is_cmethod || !m->mixin_guarded || m->guard_behind < 0) continue;
+      const Scope *behind = &c->scopes[m->guard_behind];
+      if (behind->shadow != SHADOW_PREP || behind->origin_module_ci) continue;
+      const char *name = comp_scope_user_name(m);
+      if (!is_string_boxed_reader(name) || elab_history_open(c, sci, 0, name)) continue;
+      int seen = 0;
+      for (int i = 0; i < q.n && !seen; i++)
+        seen = q.v[i].cls == sci && !q.v[i].sg && sp_streq(q.v[i].name, name);
+      if (!seen) ver_named_one(&q, sci, 0, name);
+    }
   for (int i = 0; i < q.n; i++) if (!q.v[i].atdef) ver_named_make(c, &q.v[i]);
   for (int i = 0; i < q.n; i++) if (q.v[i].atdef) ver_named_refuse_defs(c, &q.v[i]);
   ver_named_facts_free(&q);

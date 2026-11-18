@@ -8200,31 +8200,30 @@ static void prepend_copy_name(Compiler *c, int mi);
    guard entry keeps that arity, as a later prepend's does: a call that
    passes them by position reaches it as it reached the method. The
    entry's else arm calls it by its hidden name. */
-static int inc_super_behind(Compiler *c, int ci, const char *name, int like) {
+static int mixin_method_behind(Compiler *c, int ci, const char *name, int like, int builtin_arity) {
   NodeTable *nt = (NodeTable *)c->nt;
   char shadow[320];
   comp_shadow_name(c, ci, name, shadow, sizeof shadow);
   int line = (int)nt_int(nt, like, "node_line", 0);
-  int sup = nt_new_node(nt, "ForwardingSuperNode");
-  nt_node_set_ref(nt, sup, "block", -1);
-  nt_node_set_int(nt, sup, "node_line", line);
-  /* (the def keeps the program's name, as a renamed copy's does: its
-     super is the superclass's method of that name) */
-  int def = disp_def_build(nt, like, name, 0, 0, 0, NULL, 0, sup);
-  nt_node_set_int(nt, def, "behind_super", sup + 1);   /* (cplan_capture_arm) */
-  /* (the superclass's method's parameters when the program defines one: a
-     module method of another arity makes the entry forward its arguments
-     as they came, and `super` passes on what the shadow took, so
-     Parent#value(x) behind M#value is still reached as value(7)) */
-  int pc = c->classes[ci].parent;
-  int sm = pc >= 0 ? call_target(c, -1, pc, name, 0, NULL) : -1;
-  int lp = nt_ref(nt, sm >= 0 ? c->scopes[sm].def_node : like, "parameters");
-  int params = lp >= 0 ? nt_clone_subtree(nt, lp) : -1;
-  nt_node_set_ref(nt, def, "parameters", params);
-  int body = nt_new_node(nt, "StatementsNode");
-  nt_node_set_arr(nt, body, "body", &sup, 1);
-  nt_node_set_int(nt, body, "node_line", line);
-  nt_node_set_ref(nt, def, "body", body);
+  int call, def;
+  if (builtin_arity >= 0) {
+    call = disp_self_call(nt, name, builtin_arity, 0);
+    nt_mark_builtin_call(nt, call);
+    def = disp_def_build(nt, like, name, 0, builtin_arity, 0, NULL, 0, call);
+  }
+  else {
+    call = nt_new_node(nt, "ForwardingSuperNode");
+    /* Forward the parent's parameters, even when the prepended method
+       accepts a different number of arguments. */
+    int pc = c->classes[ci].parent;
+    int sm = pc >= 0 ? call_target(c, -1, pc, name, 0, NULL) : -1;
+    int lp = nt_ref(nt, sm >= 0 ? c->scopes[sm].def_node : like, "parameters");
+    def = disp_def_build(nt, like, name, 0, 0, 0, NULL, 0, call);
+    nt_node_set_int(nt, def, "behind_super", call + 1);
+    nt_node_set_ref(nt, def, "parameters", lp >= 0 ? nt_clone_subtree(nt, lp) : -1);
+  }
+  nt_node_set_int(nt, call, "node_line", line);
+  nt_node_set_int(nt, nt_ref(nt, def, "body"), "node_line", line);
   int e = c->nscopes;
   comp_grow_node_arrays(c);
   walk_scope(c, def, c->nscope[like], ci);
@@ -8234,7 +8233,7 @@ static int inc_super_behind(Compiler *c, int ci, const char *name, int like) {
   comp_scope_set_shadow(c, e, SHADOW_PREP, name);
   { c->scopes[e].class_id = ci; comp_touch_scope(c->scopes[e].idx); }
   { c->scopes[e].reachable = 1; comp_touch_scope(c->scopes[e].idx); }
-  c->scopes[e].super_behind = 1;
+  c->scopes[e].super_behind = builtin_arity < 0;
   g_inc_did_clone = 1;
   return e;
 }
@@ -8568,7 +8567,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
       own = -1;
     }
     else if (guarded && own < 0) {
-      behind = inc_super_behind(c, ci, src->name, src->def_node);
+      behind = mixin_method_behind(c, ci, src->name, src->def_node, -1);
       src = &c->scopes[ms];   /* inc_super_behind's comp_scope_new may realloc */
     }
     /* A builtin class's own method comes before an included module's, as
@@ -10884,9 +10883,11 @@ static int prepend_late_stmt(Compiler *c, int ci, int body, int nested) {
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
   int fl = foreign_late_stmt(c, ci, body, ob, nb);
   if (fl >= 0) return fl;
-  /* the first body, where a call runs ahead of its prepend: guarded from
-     the class's own statement, as a reopening's are */
-  if (nb >= 1 && ob[0].body == body && nt_kind(nt, ob[0].node) == NK_ClassNode && prepend_after_call(c, ci, body)) {
+  /* String already exists before the first body that reopens it. */
+  int core_string = nested && ci == comp_core_class(c, CORE_STRING);
+  /* The first body can run a call before its own prepend as well. */
+  if (nb >= 1 && ob[0].body == body && nt_kind(nt, ob[0].node) == NK_ClassNode &&
+      (core_string || prepend_after_call(c, ci, body))) {
     int s = ob[0].node, f, rank, cp = nt_ref(nt, s, "constant_path");
     elab_top_place(c, s, &f, &rank);
     if (cp >= 0 && (nt_kind(nt, cp) == NK_ConstantReadNode || nt_kind(nt, cp) == NK_ConstantPathNode) && f >= 0 &&
@@ -11042,15 +11043,16 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           vguard = prev;
         }
         int active_mi = sc->shadow || prev >= 0 ? -1 : comp_method_in_class(c, ci, method_name);
-        int guard = here && !sc->shadow && prev < 0 && (active_mi >= 0 || !is_builtin_reopen(c->classes[ci].name)),
+        int str_reader = ci == comp_core_class(c, CORE_STRING) && is_string_boxed_reader(method_name);
+        int guard = here && !sc->shadow && prev < 0 &&
+                    (active_mi >= 0 || str_reader || !is_builtin_reopen(c->classes[ci].name)),
             behind = active_mi;
-        /* (where the class has no method of the name yet, the copy stands
-           in front of a hidden method whose super reaches the superclass's,
-           as a later include's does: inc_super_behind; a builtin's own
-           method is no super such a method reaches) */
+        /* A later prepend's cell selects the builtin or inherited method
+           behind the copy until the prepend runs. */
         if (guard && active_mi < 0) {
-          behind = inc_super_behind(c, ci, method_name, sc->def_node);
-          sc = &c->scopes[ms];   /* inc_super_behind's comp_scope_new may realloc */
+          int builtin_arity = str_reader ? is_spaceship_name(method_name) : -1;
+          behind = mixin_method_behind(c, ci, method_name, sc->def_node, builtin_arity);
+          sc = &c->scopes[ms];   /* mixin_method_behind's comp_scope_new may realloc */
           method_name = sc->name;
           guard = behind >= 0;
         }

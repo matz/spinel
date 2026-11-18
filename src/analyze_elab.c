@@ -3876,9 +3876,10 @@ int elab_version_held_row(const LrDef *v, const char *name, int cside) {
 static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) {
   const LoadRecord *r = c->lrec;
   int cside = h->a >= 0 && h->b;
+  int str_reader = !cside && h->a >= 0 && h->a == comp_core_class(c, CORE_STRING) && is_string_boxed_reader(x->name);
   if (!lr_first_version(h) || r->refl_any || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
-      (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside)) return 0;
-  return (cside && (bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name))) ||
+      (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside && !str_reader)) return 0;
+  return str_reader || (cside && (bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name))) ||
          !(builtin_object_method_known(x->name) || builtin_instance_name_known(x->name));
 }
 /* May class-side list call id list the class methods of class a: is a on the chain of the class the list names,
@@ -4092,6 +4093,9 @@ void elab_mark_versions(Compiler *c) {
        history replaces; its scope, made after that def's, takes no key */
     if (sc->attr_version) { sc->replaced = 1; continue; }
     int def = nt_kind(c->nt, sc->def_node) == NK_DefNode;
+    if (!def && !sc->is_cmethod && sc->class_id >= 0 && sc->class_id == comp_core_class(c, CORE_STRING) &&
+        is_string_boxed_reader(vname) && nt_kind(c->nt, sc->def_node) == NK_CallNode)
+      def = is_define_method_name(nt_str(c->nt, sc->def_node, "name"));
     if (!x->replaced || (sc->class_id < 0 && !def)) continue;
     if (!(nk & (nk - 1)) && !(keys = realloc(keys, sizeof *keys * (size_t)(nk ? 2 * nk : 1)))) {
       fprintf(stderr, "spinel: out of memory\n"); exit(1);

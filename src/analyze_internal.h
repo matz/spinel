@@ -1110,7 +1110,7 @@ int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar,
 int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk);
-int disp_when_unspread(Compiler *c, int call);
+int disp_when_fixed_arity(Compiler *c, int call, int arity);
 int disp_cell_test(NodeTable *nt, const char *sel, int val, int then, int els);
 int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_super_call(NodeTable *nt, int ar, int blk);

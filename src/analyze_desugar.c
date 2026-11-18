@@ -17067,12 +17067,9 @@ int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk) {
   nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
   return call;
 }
-/* ...and call, a dispatcher arm's call of a method that takes no
-   arguments, where the dispatcher passes on `*__condr, **__condk` (ar -1):
-   `__condr.empty? && __condk.empty? ? call : raise ArgumentError, "wrong
-   number of arguments (given N, expected 0)"`, N the rest's size and one
-   more for keywords, as CRuby counts the call's arguments */
-int disp_when_unspread(Compiler *c, int call) {
+/* A dispatcher accepting *args and **keywords calls a builtin at its
+   fixed arity. The keyword Hash is one argument when it is present. */
+int disp_when_fixed_arity(Compiler *c, int call, int arity) {
   NodeTable *nt = (NodeTable *)c->nt;
   int iff = nt_new_node(nt, "IfNode"), el = nt_new_node(nt, "ElseNode"), both = nt_new_node(nt, "AndNode");
   nt_node_set_ref(nt, both, "left", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "empty?", -1));
@@ -17085,11 +17082,33 @@ int disp_when_unspread(Compiler *c, int call) {
   nt_node_set_ref(nt, kel, "statements", cdef_stmts(nt, one));
   nt_node_set_ref(nt, kw, "subsequent", kel);
   int given = fwd_new_call(nt, fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "size", -1), "+", kw);
+  int condition = both;
+  if (arity > 0) {
+    int values[arity];
+    for (int i = 0; i < arity; i++) {
+      int rest = cdef_local(nt, "LocalVariableReadNode", "__condr");
+      int size = fwd_new_call(nt, rest, "size", -1);
+      int index = nt_new_int(nt, i);
+      int hash_only = nt_new_node(nt, "IfNode"), nth = nt_new_node(nt, "ElseNode");
+      nt_node_set_ref(nt, hash_only, "predicate", fwd_new_call(nt, size, "==", index));
+      nt_node_set_ref(nt, hash_only, "statements",
+                      cdef_stmts(nt, cdef_local(nt, "LocalVariableReadNode", "__condk")));
+      nt_node_set_ref(nt, nth, "statements",
+                      cdef_stmts(nt, fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"),
+                                                  "[]", nt_new_int(nt, i))));
+      nt_node_set_ref(nt, hash_only, "subsequent", nth);
+      values[i] = hash_only;
+    }
+    nt_node_set_arr(nt, nt_ref(nt, call, "arguments"), "arguments", values, arity);
+    condition = fwd_new_call(nt, nt_clone_subtree(nt, given), "==", nt_new_int(nt, arity));
+  }
   int msg = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode"), es = nt_new_node(nt, "EmbeddedStatementsNode"), tl = nt_new_node(nt, "StringNode");
   nt_node_set_str(nt, hd, "unescaped", "wrong number of arguments (given ");
   nt_node_set_str(nt, hd, "content", "wrong number of arguments (given ");
-  nt_node_set_str(nt, tl, "unescaped", ", expected 0)");
-  nt_node_set_str(nt, tl, "content", ", expected 0)");
+  char expected[32];
+  snprintf(expected, sizeof expected, ", expected %d)", arity);
+  nt_node_set_str(nt, tl, "unescaped", expected);
+  nt_node_set_str(nt, tl, "content", expected);
   nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, given));
   int parts[3] = { hd, es, tl };
   nt_node_set_arr(nt, msg, "parts", parts, 3);
@@ -17101,7 +17120,7 @@ int disp_when_unspread(Compiler *c, int call) {
   int ra[2] = { ec, msg }, rargs = nt_new_node(nt, "ArgumentsNode"), raise = fwd_new_call(nt, -1, "raise", -1);
   nt_node_set_arr(nt, rargs, "arguments", ra, 2);
   nt_node_set_ref(nt, raise, "arguments", rargs);
-  nt_node_set_ref(nt, iff, "predicate", both);
+  nt_node_set_ref(nt, iff, "predicate", condition);
   nt_node_set_ref(nt, iff, "statements", cdef_stmts(nt, call));
   nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, raise));
   nt_node_set_ref(nt, iff, "subsequent", el);

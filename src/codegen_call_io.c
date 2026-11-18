@@ -1736,8 +1736,21 @@ static void emit_io_read_overcount(Compiler *c, const char *name, const char *r,
 static int emit_boxed_positional_io(Compiler *c, int recv, const char *name, int argc,
                                     const int *argv, int tio, Buf *b) {
   int is_w = name[1] == 'w';   /* pwrite, beside pread */
-  if (!is_positional_io(name) || argc < 1 || argc > (is_w ? 2 : 3) ||
-      nt_argv_has_splat(c->nt, argv, argc)) return 0;
+  if (!is_positional_io(name)) return 0;
+  if (nt_argv_has_splat(c->nt, argv, argc)) {
+    if (!is_w) return 0;
+    buf_puts(b, "({ ");
+    int receiver = hold_operand(c, recv, TY_POLY, 1, ++g_tmp, 1, " ", b);
+    int args = ++g_tmp;
+    buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", args, args);
+    emit_push_arg_list(c, argv, argc, args, b);
+    buf_printf(b, "sp_File *_t%d = sp_poly_as_io(_t%d, \"pwrite\"); "
+                  "sp_arity_check(_t%d->len, 2, 2, NULL); "
+                  "sp_File_pwrite_poly(_t%d, sp_PolyArray_get(_t%d, 0), sp_PolyArray_get(_t%d, 1)); })",
+               tio, receiver, args, tio, args, args);
+    return 1;
+  }
+  if (argc < 1 || argc > (is_w ? 2 : 3)) return 0;
   int trv = ++g_tmp, th[3] = {0, 0, 0}, toff = ++g_tmp, tfirst = ++g_tmp;
   buf_puts(b, "({ ");
   trv = hold_operand(c, recv, TY_POLY, 1, trv, 1, " ", b);
@@ -2014,6 +2027,10 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       free(rb.p); return 1;
     }
     if (sp_streq(name, "pwrite") && argc >= 1) {
+      if (nt_argv_has_splat(nt, argv, argc) &&
+          emit_boxed_positional_io(c, recv, name, argc, argv, ++g_tmp, b)) {
+        free(rb.p); return 1;
+      }
       Repr operand = repr_of(c, argv[0]);
       if (argc == 2 && (operand.kind == RK_BOXED || operand.as_ty == TY_STRING)) {
         int tf = ++g_tmp;

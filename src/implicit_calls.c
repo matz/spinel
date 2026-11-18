@@ -371,7 +371,12 @@ int ic_operand_may_hold(Compiler *c, const IcCall *k) {
   switch (k->role) {
   case BCR_ARG:
   case BCR_CLASS:
-    for (int i = 0; i < an; i++) if (ic_may_be_object(c, av[i], k->name)) return 1;
+    for (int i = 0; i < an; i++) {
+      int arg = av[i];
+      if (nt_kind(nt, arg) == NK_SplatNode) {
+        if (ic_may_hold_elems(c, nt_ref(nt, arg, "expression"), k->name)) return 1;
+      } else if (ic_may_be_object(c, arg, k->name)) return 1;
+    }
     return 0;
   case BCR_ELEM:
     if (recv < 0 || ic_may_hold_elems(c, recv, k->name)) return 1;

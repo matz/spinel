@@ -3,6 +3,10 @@
 [97, 0, 98, 97, 0, 98]
 3
 3
+wrong number of arguments (given 1, expected 2)
+3
+wrong number of arguments (given 3, expected 2)
+3
 [97, 0, 98]
 259
 [259, 259]

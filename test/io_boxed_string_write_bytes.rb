@@ -25,9 +25,22 @@ file = File.open(path, "w+b")
 handles = [file, 1]
 p file.pwrite(operands[0], 0)
 p handles[0].pwrite(operands[0], 0)
+
+def offsets(n) = Array.new(n, 0)
+
+[0, 1, 2].each do |count|
+  begin
+    p file.pwrite(operands[0], *offsets(count))
+  rescue ArgumentError => error
+    puts error.message
+  end
+end
+args = [operands[0], 0]
+p handles[0].pwrite(*args)
 file.rewind
 p file.read.bytes
-p handles[0].pwrite(operands[0], Offset.new(text))
+offset = [Offset.new(text)]
+p handles[0].pwrite(operands[0], *offset)
 file.rewind
 p [file.read.bytesize, text.bytesize]
 file.close

@@ -50803,6 +50803,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_inherited_aliases", desugar_inherited_aliases(c));         /* alias_method :next, :builtin_m on a chain rooted at Array, Hash or String -> a forwarding def, until such an alias binds from the record */
   AN_STEP_V("desugar_readers_over_inherited_defs", desugar_readers_over_inherited_defs(c)); /* def r in Base; attr_reader :r in Sub < Base -> Sub: def r = @r */
   lower_run(c, &lc, LW_REASSIGNED_BLOCK_PARAMS);   /* |p| p = other -> |p__bpin| p = p__bpin; p = other */
+  AN_STEP_V("desugar_sclass_hooks", desugar_sclass_hooks(c));                 /* class << self; def extended(b) -> def self.extended(b) */
   AN_STEP_V("desugar_instance_eval_defs", desugar_instance_eval_defs(c));         /* K.instance_eval { def m } -> K.class_eval { def K.m } */
   AN_STEP_V("desugar_self_class_eval_blocks", desugar_self_class_eval_blocks(c));   /* class_eval { tag n } in def self.m -> self.instance_exec { tag n } */
   desugar_class_reopen(c);               /* class Class / Class.class_eval -> a module */

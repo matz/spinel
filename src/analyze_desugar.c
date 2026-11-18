@@ -1562,6 +1562,68 @@ static int ied_block_defs(const NodeTable *nt, int id, const int **stmts, int *n
    becomes the class_eval reopening those defs register through. Any other
    instance_eval whose block defines a method is refused: the method would
    land on no singleton the program can name. */
+/* `class << self; def extended(base) ... end; end` in a class or module body: the hook as `def self.extended`,
+   right after the singleton class block. The hook steps (desugar_included_hooks, the walk's firing) find a
+   hook as a def on self, and missed this spelling, so `extend Basic` never ran version_gem's
+   `base.extend(Api)`. */
+int desugar_sclass_hooks(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  for (int owner = 0; owner < n0; owner++) {
+    NodeKind ok = nt_kind(nt, owner);
+    if (ok != NK_ClassNode && ok != NK_ModuleNode) continue;
+    int body = nt_ref(nt, owner, "body");
+    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
+    int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+    int hooked = 0;
+    for (int i = 0; i < n && !hooked; i++) {
+      int sc = st[i];
+      if (nt_kind(nt, sc) != NK_SingletonClassNode || nt_kind(nt, nt_ref(nt, sc, "expression")) != NK_SelfNode) continue;
+      int sb = nt_ref(nt, sc, "body"), m = 0;
+      const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &m) : NULL;
+      for (int j = 0; j < m; j++) {
+        const char *dn = nt_kind(nt, ss[j]) == NK_DefNode && nt_ref(nt, ss[j], "receiver") < 0 ? nt_str(nt, ss[j], "name") : NULL;
+        if (dn && (sp_streq(dn, "included") || sp_streq(dn, "extended") || sp_streq(dn, "prepended"))) hooked = 1;
+      }
+    }
+    if (!hooked) continue;
+    int *out = malloc(sizeof(int) * (size_t)(2 * n + 1));
+    if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int no = 0;
+    for (int i = 0; i < n; i++) {
+      int sc = st[i];
+      out[no++] = sc;
+      if (nt_kind(nt, sc) != NK_SingletonClassNode || nt_kind(nt, nt_ref(nt, sc, "expression")) != NK_SelfNode) continue;
+      int sb = nt_ref(nt, sc, "body"), m = 0;
+      if (sb < 0 || nt_kind(nt, sb) != NK_StatementsNode) continue;
+      const int *ss = nt_arr(nt, sb, "body", &m);
+      int *keep = malloc(sizeof(int) * (size_t)(m + 1)), *moved = malloc(sizeof(int) * (size_t)(m + 1));
+      if (!keep || !moved) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      int nk = 0, nm = 0;
+      for (int j = 0; j < m; j++) {
+        const char *dn = nt_kind(nt, ss[j]) == NK_DefNode && nt_ref(nt, ss[j], "receiver") < 0 ? nt_str(nt, ss[j], "name") : NULL;
+        if (dn && (sp_streq(dn, "included") || sp_streq(dn, "extended") || sp_streq(dn, "prepended"))) moved[nm++] = ss[j];
+        else keep[nk++] = ss[j];
+      }
+      if (nm) {
+        nt_node_set_arr(nt, sb, "body", keep, nk);
+        for (int j = 0; j < nm; j++) {
+          nt_node_set_ref(nt, moved[j], "receiver", fwd_new_node_like(nt, moved[j], "SelfNode"));
+          out = realloc(out, sizeof(int) * (size_t)(no + n + nm + 1));
+          if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          out[no++] = moved[j];
+        }
+        changed = 1;
+      }
+      free(keep); free(moved);
+      st = nt_arr(nt, body, "body", &n);
+    }
+    nt_node_set_arr(nt, body, "body", out, no);
+    free(out);
+  }
+  return changed;
+}
+
 int desugar_instance_eval_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

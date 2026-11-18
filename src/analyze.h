@@ -866,6 +866,7 @@ int elab_foreign_mixin_open(Compiler *c, int cls, int body);   /* the frame of c
    module, in the order they run: `include A, B` as `include B` then
    `include A`, A nearest; *n their number */
 const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n);
+int elab_conditional_prepend_list(Compiler *c, const LrMixin *m);
 int elab_mix_on_singleton(int kind);   /* an extend, or a prepend of the singleton class */
 /* does a body of cls define name with a def of its own on its instance
    side, wherever in the body (under a condition, in a block), placed or

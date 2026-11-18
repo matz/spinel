@@ -8777,7 +8777,32 @@ static int module_prepend_list(Compiler *c, int mod_id, int *out, int max);
 /* One module a mixin call in a class body brings: the call, the argument
    naming it (-1 for one a module it names prepends), the module's class
    (-1 for none of the program's) and the LrMixKind. */
-typedef struct { int stmt, ref, mod, kind; } BodyMix;
+typedef struct { int stmt, ref, mod, kind, list, conditional; } BodyMix;
+
+/* A conditional prepend can guard the replacement of an existing
+   String reader without changing which methods the receiver exposes. */
+static int string_reader_prepend(Compiler *c, int cls, int mod) {
+  if (mod < 0 || mod >= c->nclasses || !comp_class_is_module(c, &c->classes[mod])) return 0;
+  int mixins;
+  elab_class_mixins(c, mod, &mixins);
+  const ClassInfo *module = &c->classes[mod];
+  if (mixins || module->nreaders || module->nwriters || module->naliases) return 0;
+  int found = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *method = &c->scopes[s];
+    if (method->class_id != mod) continue;
+    const char *name = comp_scope_user_name(method);
+    if (method->is_cmethod) {
+      if (name && (is_module_hook_name(name) || is_hook_protocol_name(name))) return 0;
+      continue;
+    }
+    if (!name || !is_string_boxed_reader(name) ||
+        comp_method_vis(&c->classes[mod], name) != SP_VIS_PUBLIC ||
+        comp_method_vis(&c->classes[cls], name) != SP_VIS_PUBLIC) return 0;
+    found = 1;
+  }
+  return found;
+}
 /* The mixins of kinds `kinds` (1 << LrMixKind) the load record holds as
    statements of body `body` of class ci, in the order the passes take
    them: statement by statement, a call's arguments the last first, `include
@@ -8795,10 +8820,21 @@ static BodyMix *body_mixins(Compiler *c, int ci, int body, unsigned kinds, int *
   int foreign = 0;
   if (open < 0 && nmx && body >= 0 && (open = elab_foreign_mixin_open(c, ci, body)) >= 0) foreign = 1;
   BodyMix *v = NULL;
+  int string_prepend = kinds == (1u << LR_PREPEND) && ci >= 0 && ci == comp_core_class(c, CORE_STRING);
   for (int i = 0; i < nmx; i++) {
-    if (!(kinds >> mx[i].kind & 1) || open < 0 || mx[i].open != open || !mx[i].applied) continue;
+    if (!(kinds >> mx[i].kind & 1) || open < 0 || mx[i].open != open) continue;
     if (foreign && !nt_int(c->nt, mx[i].node, "mixin_by_record", 0)) continue;
     int mod = elab_mixin_module(c, &mx[i]), pre[64], np = 0;
+    int list = body;
+    if (!mx[i].applied) {
+      if (!string_prepend) continue;
+      list = elab_conditional_prepend_list(c, &mx[i]);
+      if (list < 0 || !string_reader_prepend(c, ci, mod)) continue;
+    }
+    else if (string_prepend) {
+      int actual = elab_stmt_list(c, mx[i].node, NULL);
+      if (actual >= 0) list = actual;
+    }
     if (mod < 0) mod = -1;
     if (mx[i].kind != LR_PREPEND) np = module_prepend_list(c, mod, pre, 64);
     if (k + 1 + np > cap) {
@@ -8806,8 +8842,8 @@ static BodyMix *body_mixins(Compiler *c, int ci, int body, unsigned kinds, int *
       v = realloc(v, sizeof *v * (size_t)cap);
       if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     }
-    v[k++] = (BodyMix){ mx[i].node, mx[i].ref, mod, mx[i].kind };
-    for (int q = np - 1; q >= 0; q--) v[k++] = (BodyMix){ mx[i].node, -1, pre[q], mx[i].kind };
+    v[k++] = (BodyMix){ mx[i].node, mx[i].ref, mod, mx[i].kind, list, !mx[i].applied };
+    for (int q = np - 1; q >= 0; q--) v[k++] = (BodyMix){ mx[i].node, -1, pre[q], mx[i].kind, list, 0 };
   }
   *n = k;
   return v;
@@ -11033,10 +11069,12 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
       if (mod_id < 0) continue;
       /* a reopening's prepend, also one that may not run: the cell its
          copies' guard entries read is set right after it, where it runs */
-      int stmt_here = late >= 0 && list_has_stmt(nt, body, mx[j].stmt);
-      int layered = stmt_here && mixin_layers_call_super(c, ci, mod_id, late, mx[j].stmt);
-      int here = stmt_here && !mixin_presence_unguarded(c, ci, mod_id, late) && !mixin_rebrought_behind(c, ci, mod_id, late) &&
+      int list = mx[j].list, at = list == body ? late : mx[j].stmt;
+      int stmt_here = late >= 0 && list_has_stmt(nt, list, mx[j].stmt);
+      int layered = stmt_here && mixin_layers_call_super(c, ci, mod_id, at, mx[j].stmt);
+      int here = stmt_here && !mixin_presence_unguarded(c, ci, mod_id, at) && !mixin_rebrought_behind(c, ci, mod_id, at) &&
                  !mixin_meets_plain_late(c, ci, mod_id) && !layered;
+      if (mx[j].conditional && !here) continue;
       /* a module prepended before, or one such a module brings, is among
          the class's ancestors already: CRuby's prepend of it changes
          nothing (`prepend M` then `prepend Base`, where M includes Base),
@@ -11049,7 +11087,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           if (mixin_prepended(c, ci, cls->prepended_mods[m])) done[nd++] = cls->prepended_mods[m];
         int brought = mixin_already_brought(c, ci, mod_id, LR_PREPEND, done, nd, NULL, -1);
         free(done);
-        if (brought && here) mixin_cells_set(c, ci, mod_id, 1, body, mx[j].stmt);
+        if (brought && here) mixin_cells_set(c, ci, mod_id, 1, list, mx[j].stmt);
         if (brought) continue;
       }
       /* its readers answer in front of the class's own, as its methods do */
@@ -11196,7 +11234,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
          reaches what M includes before the class */
       include_chain_copy(c, ci, mod_id, made, snap, 0);
       free(made);
-      if (cell) prepend_cell_write(c, late, body, mx[j].stmt, cell);
+      if (cell) prepend_cell_write(c, late, list, mx[j].stmt, cell);
     }
     free(mx);
   }

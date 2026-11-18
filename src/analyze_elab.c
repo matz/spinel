@@ -11098,6 +11098,18 @@ const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n) {
   return k ? k->mix : NULL;
 }
 
+/* The list that executes a conditional prepend inside its class body.
+   A repeat or rescue can skip the statement, so the guard is written
+   in that list each time the prepend itself runs. */
+int elab_conditional_prepend_list(Compiler *c, const LrMixin *m) {
+  const LrStmt *s = lr_stmt_of(elab_fresh(c), m->node);
+  int frame;
+  if (!s || s->region < 0 || s->kept || !(s->fmay || s->fpartial)) return -1;
+  if (s->fpartial && (s->rep < 0 || elab_in_unplaced_block(c, m->node))) return -1;
+  int list = elab_stmt_list(c, m->node, &frame);
+  return list >= 0 && frame == m->open ? list : -1;
+}
+
 /* See analyze.h. A builtin module's name is asked before the alias chain,
    which reads every constant write: a class's includes of Comparable or
    Enumerable are asked for on every ancestor walk. */

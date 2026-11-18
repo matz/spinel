@@ -29051,6 +29051,14 @@ static int emit_nil_answer_call(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* NilClass and the receiver's class meet at the same result slot. A
+   String method can fill either a handle or a read of its bytes. */
+static int nil_method_result_fits(Scope *s, Repr want) {
+  if (method_is_void(s) || s->ret == TY_NIL)
+    return want.kind == RK_PTR || want.kind == RK_STRBUF || want.as_ty == TY_NIL;
+  return repr_method_ret_storage(s) == repr_call_result_storage(want.as_ty);
+}
+
 /* Has the answer of nil's method for call id (cplan_nil_program_method)
    the call's type: its own, or a boxed slot's, or nil where the call's
    slot holds a nil (a pointer, or a nil)? An Object method's arm converts
@@ -29076,10 +29084,15 @@ int cplan_nil_program_served(Compiler *c, int id) {
      the name) has no type of its own, and is rendered boxed as the raise
      is: nil's answer goes boxed beside it */
   if (want.as_ty == TY_UNKNOWN) return 1;
-  Scope *s = &c->scopes[mi];
-  TyKind t = want.as_ty;
-  if (!method_is_void(s) && (TyKind)s->ret != TY_NIL) return (TyKind)s->ret == t;
-  return want.kind == RK_PTR || t == TY_NIL;
+  return nil_method_result_fits(&c->scopes[mi], want);
+}
+
+/* A nil arm ending in a comma expression still needs the pointer type of
+   the String arm. A void pointer would erase its handle before boxing. */
+static const char *nil_method_zero(Compiler *c, int id, Repr want) {
+  if (want.kind == RK_BOXED) return "sp_box_nil()";
+  if (want.as_ty == TY_STRBUF || repr_program_call_handle(c, id)) return "(sp_String *)NULL";
+  return default_value_from_compiler(c, want.as_ty);
 }
 
 /* Call id where the program gives nil a method of its name, other than
@@ -29142,7 +29155,7 @@ static int emit_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
   else if (nilcls && boxed && !(method_is_void(s) || (TyKind)s->ret == TY_NIL)) emit_boxed_ret_call(c, s, nb.p ? nb.p : "0", &nv);
   else if (nilcls && (method_is_void(s) || (TyKind)s->ret == TY_NIL))
     buf_printf(&nv, "((void)(%s), %s)", nb.p ? nb.p : "0",
-               want.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want.as_ty));
+               nil_method_zero(c, id, want));
   else if (nilcls && want.kind == RK_BOXED) emit_boxed_ret_call(c, s, nb.p ? nb.p : "0", &nv);
   else buf_puts(&nv, nb.p ? nb.p : "0");
   Buf rb; memset(&rb, 0, sizeof rb);
@@ -29216,11 +29229,7 @@ static int onum_nil_program_method(Compiler *c, int id, int *rn, const char **nm
   /* nil's answer has a place in the call's slot (as cplan_nil_program_served) */
   if (*nilcls) {
     Repr want = repr_of(c, id);
-    Scope *s = &c->scopes[nmi];
-    if (want.kind != RK_BOXED &&
-        (!method_is_void(s) && (TyKind)s->ret != TY_NIL ? (TyKind)s->ret != want.as_ty
-                                                        : !(want.kind == RK_PTR || want.as_ty == TY_NIL)))
-      return -1;
+    if (want.kind != RK_BOXED && !nil_method_result_fits(&c->scopes[nmi], want)) return -1;
   }
   *rn = r; *nm = name;
   return nmi;
@@ -29242,7 +29251,7 @@ static int emit_onum_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
   if (stmt) buf_printf(&nv, "(void)(%s)", nb.p);
   else if (method_is_void(s) || (nilcls && (TyKind)s->ret == TY_NIL))
     buf_printf(&nv, "((void)(%s), %s)", nb.p,
-               want.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want.as_ty));
+               nil_method_zero(c, id, want));
   else if (want.kind == RK_BOXED) emit_boxed_ret_call(c, s, nb.p, &nv);
   else emit_coerce_text(c, id, repr_method_ret_storage(s), want.as_ty,
                         CO_HOLD, nb.p, "an Object method result", &nv);

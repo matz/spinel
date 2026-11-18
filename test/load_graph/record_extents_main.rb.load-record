@@ -1,4 +1,4 @@
-load record: 91 points, 2 regions
+load record: 97 points, 2 regions
 r0 #0 f0 ProgramNode line 19
 r0 #1 f0 LoadNode line 0
 r0 #2 f2 ProgramNode line 24
@@ -87,9 +87,15 @@ r0 #80 f0 ClassNode LC line 98
 r0 #85 f0 CallNode p line 104
 r0 #86 f0 LocalVariableWriteNode ll line 105
 r0 #87 f0 CallNode p line 106
-r0 #88 f0 DefNode __enum_each_with_index__0 line 506
-r1 #89 f1 ProgramNode line 1
-r1 #90 f1 DefNode lib_m line 1
+r0 #88 f0 ClassNode DM line 109
+  r0 #89 f0 CallNode define_singleton_method line 110
+  r0 #90 f0 CallNode define_singleton_method line 111
+  r0 #91 f0 CallNode define_method line 112
+r0 #92 f0 CallNode p line 114
+r0 #93 f0 CallNode p line 115
+r0 #94 f0 DefNode __enum_each_with_index__0 line 506
+r1 #95 f1 ProgramNode line 1
+r1 #96 f1 DefNode lib_m line 1
 block times line 28: now
 block times line 34: now
 block times line 35: now
@@ -109,6 +115,9 @@ block tap line 77: assumed
 block then line 78: assumed
 block lambda line 100: later
 block proc line 101: later
+block define_singleton_method line 110: later
+block define_singleton_method line 111: later
+block define_method line 112: later
 block each line 509: assumed
 block new line 526: later
 block each line 528: assumed
@@ -118,12 +127,14 @@ class H: body#54
 class NN: body#61
 class OA: body#63
 class LC: body#80
+class DM: body#88
 entity K: owner main leaf K
 entity G: owner main leaf G
 entity H: owner main leaf H
 entity NN: owner main leaf NN
 entity OA: owner main leaf OA
 entity LC: owner main leaf LC
+entity DM: owner main leaf DM
 region 1: entered #11
 main#load_it: def#4 private end=yes
 const K: write#5
@@ -153,9 +164,13 @@ const LC::NEVER: write#81
 const LC::ONCE: write#82
 const LC::TWICE: write#83
 const LC::SEEN: write#84
-main#__enum_each_with_index__0: def#88 private end=yes
-main#lib_m: def#90 private end=unknown
-post: after #88
+const DM: write#88
+DM.later: define_method#89 end=yes
+DM.unused: define_method#90 end=yes
+DM#inst: define_method#91 end=yes
+main#__enum_each_with_index__0: def#94 private end=yes
+main#lib_m: def#96 private end=unknown
+post: after #94
 extent def load_it line 19: from=#11 sure=never count=many kept=no
 extent def never line 21: from=never sure=never count=zero kept=no
 extent def once line 22: from=#10 sure=#10 count=once kept=no
@@ -195,6 +210,9 @@ extent block lambda line 100: from=#85 sure=never count=once kept=yes
 extent block proc line 101: from=#85 sure=never count=many kept=yes
 extent lambda line 102: from=#84 sure=never count=many kept=yes
 extent lambda line 105: from=#87 sure=never count=once kept=yes
+extent block define_singleton_method line 110: from=#93 sure=never count=many kept=yes
+extent block define_singleton_method line 111: from=never sure=never count=zero kept=yes
+extent block define_method line 112: from=#93 sure=never count=many kept=yes
 extent region line 1: from=#11 sure=never count=once kept=no
 extent def lib_m line 1: from=never sure=never count=zero kept=no
 extent def __enum_each_with_index__0 line 506: from=never sure=never count=zero kept=no

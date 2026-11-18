@@ -104,3 +104,12 @@ end
 p LC::ONCE.call, LC::TWICE.(), LC::TWICE[], LC::SEEN.arity
 ll = -> { 6 }
 p ll.call
+# A define_method or define_singleton_method body starts at the first call
+# of the method it makes, and one whose method nothing calls never runs.
+class DM
+  define_singleton_method(:later) { 7 }
+  define_singleton_method(:unused) { 8 }
+  define_method(:inst) { 9 }
+end
+p :between
+p DM.later, DM.new.inst

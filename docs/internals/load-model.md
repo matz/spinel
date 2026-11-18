@@ -167,6 +167,9 @@ The record holds, for each:
   computed name may make), since that method may run the block at once.
   With no invoking call it never runs; past any other use it starts at
   the statement that makes it.
+  A `define_method` or `define_singleton_method` block of a version the
+  record holds starts as a method body does, at the first statement a call
+  of the method it makes is reached on (`lr_rta`), and never where none is.
 - `sure`: the first statement after which it has certainly run at least
   once, or `never`. A method body is sure at a call that binds it alone
   (a constant receiver the record resolves, one public def of the name on

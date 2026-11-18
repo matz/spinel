@@ -58,8 +58,8 @@ extent def m line 13: from=#16 sure=never count=many kept=no
 extent def make line 15: from=#16 sure=#20 count=many kept=no
 extent def h line 17: from=#16 sure=never count=many kept=no
 extent def uses_h line 18: from=#16 sure=never count=many kept=no
-extent block define_method line 19: from=#12 sure=never count=many kept=yes
-extent block define_method line 21: from=#14 sure=never count=many kept=yes
+extent block define_method line 19: from=#16 sure=never count=many kept=yes
+extent block define_method line 21: from=#16 sure=never count=many kept=yes
 extent block each line 23: from=#15 sure=never count=many kept=no
 extent block define_method line 23: from=#16 sure=never count=many kept=yes
 extent block define line 25: from=#17 sure=never count=many kept=yes

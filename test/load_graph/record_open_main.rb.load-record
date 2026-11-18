@@ -91,7 +91,7 @@ extent def twice#__cond3 line 29: from=#40 sure=never count=many kept=no
 extent def framed line 36: from=#42 sure=never count=many kept=no
 extent def inner#__cond4 line 38: from=#42 sure=never count=many kept=no
 extent def tag#__cond5 line 48: from=#31 sure=never count=many kept=no
-extent block define_method line 50: from=#32 sure=never count=many kept=yes
+extent block define_method line 50: from=#44 sure=never count=many kept=yes
 extent block each line 52: from=#34 sure=never count=once kept=no
 extent def run_time line 17: from=#40 sure=never count=many kept=no
 extent def twice line 29: from=#40 sure=never count=many kept=no

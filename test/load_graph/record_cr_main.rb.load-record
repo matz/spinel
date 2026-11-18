@@ -62,5 +62,5 @@ extent def who line 14: from=#22 sure=never count=many kept=no
 extent def kind line 16: from=#23 sure=never count=many kept=no
 extent def who line 20: from=#22 sure=never count=many kept=no
 extent def kind line 22: from=never sure=never count=zero kept=no
-extent block define_method line 32: from=#18 sure=never count=many kept=yes
+extent block define_method line 32: from=never sure=never count=zero kept=yes
 extent def sure line 34: from=#24 sure=never count=many kept=no

@@ -97,13 +97,15 @@ typedef struct { int node, file, region, top, rank, depth, frame, last, rep; uns
    ask: passes add methods that change what a call may reach, and the parents
    asked through differ (the tree's, the record's), so each ask reads it again.
    hist, bind: what lr_rta saw of a def: the
-   history of its name, the call that reached it alone. */
+   history of its name, the call that reached it alone. dm: a define_method
+   block of a version the record holds, whose from lr_rta gives as a def's (the
+   first statement a call of the method it makes is reached on). */
 enum { LR_NEVER = INT_MAX, LR_POST = INT_MAX - 1 };
 enum { LR_B_DEF, LR_B_LAMBDA, LR_B_BLOCK, LR_B_END, LR_B_REGION };
 enum { LR_CNT_ZERO, LR_CNT_ONCE, LR_CNT_MANY };
 typedef struct LrExt {
   int node, from, sure, hist, bind;
-  unsigned char body, count, kept, cb, timed, redo;
+  unsigned char body, count, kept, cb, timed, redo, dm;
   signed char runs, inplace;
 } LrExt;
 
@@ -6393,16 +6395,28 @@ static void lr_rta_inst(LrRta *t, int a, const char *name, int depth) {
   for (int j = 0; j < h->n; j++)
     if (h->v[j].kind == LR_ALIAS && h->v[j].target) lr_rta_inst(t, a, h->v[j].target, depth + 1);
 }
+/* The block of define_method call d (LrExt.dm), its method reached at
+   statement t->s: its body may run from there on */
+static void lr_rta_dm(LrRta *t, int d) {
+  const LoadRecord *r = t->r;
+  int b = d >= 0 && d < t->n && nt_kind(t->c->nt, d) == NK_CallNode ? nt_ref(t->c->nt, d, "block") : -1;
+  LrExt *e = b >= 0 && b < r->cextix && r->extix[b] ? &r->ext[r->extix[b] - 1] : NULL;
+  if (e && e->dm && e->from == LR_NEVER) e->from = t->s;
+}
 /* A module_function copy (on h, the singleton's history) runs the instance
    method as it stood at the copy: the def of the copy's scope (lr_copy_scopes
-   gives a named copy one); for a copy of a method with none, the instance
-   history of the name */
+   gives a named copy one) or its define_method's block; for a copy of a
+   method with none, the instance history of the name */
 static void lr_rta_copy(LrRta *t, const LrHist *h, const LrDef *v) {
-  if (v->scope > 0) lr_rta_unit(t, t->c->scopes[v->scope].def_node);
+  if (v->scope > 0) {
+    lr_rta_unit(t, t->c->scopes[v->scope].def_node);
+    lr_rta_dm(t, t->c->scopes[v->scope].def_node);
+  }
   else lr_rta_inst(t, h->a, v->target, 0);
 }
 static void lr_rta_version(LrRta *t, const LrHist *h, const LrDef *v) {
   if (v->kind == LR_DEF) lr_rta_unit(t, v->node);
+  else if (v->kind == LR_DEFINE_METHOD) lr_rta_dm(t, v->node);
   else if ((v->kind == LR_ALIAS || v->kind == LR_COPY) && !v->target) lr_rta_all(t, 0);
   else if (v->kind == LR_ALIAS || v->kind == LR_COPY) {
     h->b ? lr_rta_call_on(t, v->target, h->a, 0) : lr_rta_call(t, v->target, RQ_INST);
@@ -6815,7 +6829,15 @@ static void lr_rta(Compiler *c) {
   for (int i = r->nhist - 1; i >= 0; i--) {
     const LrHist *h = &r->hist[i];
     if (h->a < LR_MAIN || !h->name || h->a >= c->nclasses) continue;
-    for (int j = 0; j < h->n; j++) if (h->v[j].kind == LR_DEF && h->v[j].node < n) lr_ext_make(c, h->v[j].node, LR_B_DEF)->from = LR_NEVER;
+    for (int j = 0; j < h->n; j++) {   /* (each def's body, and each define_method block's, runs from the call that reaches it) */
+      int b = h->v[j].kind == LR_DEFINE_METHOD && h->v[j].node < n ? nt_ref(c->nt, h->v[j].node, "block") : -1;
+      if (h->v[j].kind == LR_DEF && h->v[j].node < n) lr_ext_make(c, h->v[j].node, LR_B_DEF)->from = LR_NEVER;
+      else if (b >= 0 && nt_kind(c->nt, b) == NK_BlockNode) {
+        LrExt *e = lr_ext_make(c, b, LR_B_BLOCK);
+        e->from = LR_NEVER;
+        e->dm = 1;
+      }
+    }
     if (!h->b) { t.hnext[i] = t.hfirst[h->a + 1]; t.hfirst[h->a + 1] = i; }
   }
   for (int k = LR_MAIN; k < c->nclasses; k++) {
@@ -7183,7 +7205,7 @@ static void lr_ext_time(Compiler *c, const int *par, int n, int i) {
   const NodeTable *nt = c->nt;
   if (r->ext[i].timed) return;
   r->ext[i].timed = 1;
-  int node = r->ext[i].node, body = r->ext[i].body, o = lr_ext_around(r, nt, par, n, node);
+  int node = r->ext[i].node, body = r->ext[i].body, o = lr_ext_around(r, nt, par, n, node), dm = r->ext[i].dm, urun = r->ext[i].from;
   if (o >= 0) lr_ext_time(c, par, n, o);
   int ofrom = o >= 0 ? r->ext[o].from : 0, ocount = o >= 0 ? r->ext[o].count : LR_CNT_ONCE;
   int call = body == LR_B_BLOCK && node < n ? par[node] : node;
@@ -7193,7 +7215,9 @@ static void lr_ext_time(Compiler *c, const int *par, int n, int i) {
   LrExt *e = &r->ext[i];
   if (body == LR_B_DEF) return;
   e->from = ocount == LR_CNT_ZERO ? LR_NEVER : stmt > ofrom ? stmt : ofrom;   /* (a body in one that runs no time never runs) */
+  if (dm) e->from = urun == LR_NEVER || e->from == LR_NEVER ? LR_NEVER : urun > e->from ? urun : e->from;   /* (a define_method body: from the first call of its method, lr_rta's) */
   e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_MANY;
+  if (dm) return;
   if (e->from != LR_NEVER && (body == LR_B_LAMBDA || (body == LR_B_BLOCK && e->cb && lr_proc_made(c, call) && !lr_named(c, nt_str(nt, call, "name"))))) {   /* (a lambda or proc of the program's own may run the block at once) */
     lr_closure_time(c, par, n, i, body == LR_B_LAMBDA ? node : call);
     return;

@@ -1,0 +1,4 @@
+ZeroDivisionError ZeroDivisionError<divided by 0>
+ArgumentError ArgumentError<invalid value for Integer(): "z">
+IndexError IndexError<index 9 outside of array bounds: -1...1>
+ArgumentError ArgumentError<negative array size>

@@ -1,0 +1,20 @@
+fetch: IndexError "S[index 9 outside of array bounds: -1...1]"
+zero: ZeroDivisionError "S[Z<divided by 0!>]"
+type: TypeError "S[String can't be coerced into Integer]"
+integer: ArgumentError "S[invalid value for Integer(): \"zz\"]"
+float: ArgumentError "S[invalid value for Float(): \"zz\"]"
+range: ArgumentError "S[negative array size]"
+stop: StopIteration "S[SI(iteration reached an end)]"
+errno: Errno::ENOENT "S[No such file or directory @ rb_sysopen - <missing>]"
+nomethod: NoMethodError "undefined method 'foo' for nil"
+key: KeyError "key not found: :b"
+["idx", "idx"]
+:b
+{a: 1}
+"S[index 9 outside of array bounds: -1...1]"
+1
+true
+"S[index 9 outside of array bounds: -1...1]"
+1
+"S[index 9 outside of array bounds: -1...1]"
+1

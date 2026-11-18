@@ -18950,6 +18950,9 @@ static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "    default: break;\n  }\n  return FALSE;\n}\n");
 }
 
+static int exc_has_reopen_initialize(Compiler *c);
+int g_exc_reinit_hook = 0;
+
 /* Emit the static regex-literal globals and, when g_re_init_needed, the
    sp_tu_init() that installs the symbol/regex/class/global-mark hooks and
    compiles the literals at startup. */
@@ -19125,6 +19128,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_cmeth_eqq_hook = sp_cmeth_eqq_dispatch;\n");
   if (exc_has_user_msg_override(c))
     buf_puts(b, "  sp_user_exc_to_s_fn = sp_user_exc_to_s;\n  sp_user_exc_message_fn = sp_user_exc_message;\n");
+  if (exc_has_reopen_initialize(c))
+    buf_puts(b, "  sp_user_exc_reinit_fn = sp_user_exc_reinit;\n");
   if (c->bivar_table)
     buf_puts(b, "  sp_exc_bivar_copy_fn = sp_exc_bivar_copy;\n");
   if (exc_ivar_classes(c))
@@ -23825,6 +23830,80 @@ static void emit_exc_text_return(Compiler *c, int mi, const char *call, int mode
    result and its handle; 2: the identity reads' (_id), which answer the
    result as the box an identity compare reads and never attach a handle
    to the stored message */
+/* Whether a program reopening of a builtin exception defines initialize: the
+   errors the runtime raises itself are then built through it
+   (emit_exc_reinit_dispatch). */
+static int exc_has_reopen_initialize(Compiler *c) {
+  int xr[8];
+  return any_exc_reopen(c) && exc_reopen_definers(c, "initialize", xr, 8) > 0;
+}
+
+/* sp_user_exc_reinit, the hook sp_raise_cls asks for an error the runtime
+   raises itself: CRuby builds it through the class's #initialize, so the
+   nearest reopening up the class's ancestry that defines one runs on the
+   exception with the runtime's message as its one argument, as `raise Cls, msg`
+   does (emit_exc_reopen_construct_as). Answers the exception, or NULL for a
+   class no reopening reaches. A reopening whose initialize cannot take one
+   argument raises ArgumentError, as the call would. */
+static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
+  if (!exc_has_reopen_initialize(c)) return;
+  /* every reopening that defines one, not the first eight: the pick is by the
+     class's ancestry, so a later one must be in it */
+  int *xr = malloc((size_t)c->nclasses * sizeof *xr), xn = exc_reopen_definers(c, "initialize", xr, c->nclasses);
+  /* the body is defined after the program's globals and constants, as the text
+     dispatchers' are (c->exc_text_late): a default that reads one
+     (`def initialize(msg, suffix = $suffix)`) names it there */
+  buf_puts(b, "static void *sp_user_exc_reinit(const char *cls, const char *msg, void *obj);\n");
+  Buf d; memset(&d, 0, sizeof d);
+  b = &d;
+  buf_puts(b, "static void *sp_user_exc_reinit(const char *cls, const char *msg, void *obj){\n  ");
+  int pk = emit_exc_reopen_pick_head(c, xr, xn, "cls", b);
+  buf_printf(b, "\n  if (_xi%d < 0) return NULL;\n"
+                "  sp_Exception *e = (sp_Exception *)obj;\n"
+                "  if (!e) e = sp_exc_new(cls, (&(\"\\xff\")[1]));\n"
+                "  else { e->msg_h = NULL; e->msg = NULL; }   /* an object the runtime made: the message is the initialize's to set */\n"
+                "  SP_GC_ROOT(e);\n", pk);
+  for (int q = 0; q < xn; q++) {
+    int im = call_target(c, -1, xr[q], "initialize", CT_METHODS | CT_SHARED, NULL);
+    if (im < 0) continue;
+    /* a yielding initialize has no function of its own: its proc-form clone runs it, without a block */
+    int pf = c->scopes[im].yields ? scope_proc_form_of(c, im) : -1;
+    if (pf >= 0) im = pf;
+    else if (c->scopes[im].yields) continue;   /* (no clone: the runtime's message stands) */
+    Buf pre = {0}, args = {0};
+    char raise[640];
+    int builds = 0;
+    /* the message as the parameter that takes it holds it: boxed for a poly
+       one or a rest, the String itself for a String one; an initialize whose
+       first parameter has any other type has no arm (the call keeps the
+       runtime's message) */
+    int p0 = arm_arg_param(c, &c->scopes[im]);
+    LocalVar *p0v = p0 >= 0 && c->scopes[im].pnames ? scope_local(&c->scopes[im], c->scopes[im].pnames[p0]) : NULL;
+    TyKind p0t = p0v ? (TyKind)p0v->type : TY_POLY;
+    Buf mb = {0};
+    if (p0t == TY_POLY || p0t == TY_UNKNOWN) buf_puts(&mb, "sp_box_str(msg)");
+    else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, "sp_box_str(msg)", &mb);
+    else { free(pre.p); free(args.p); continue; }
+    const char *argv[1] = { mb.p };
+    buf_printf(b, "  if (_xi%d == %d) {", pk, q);
+    if (emit_arm_args_text(c, im, "e", argv, 1, &pre, &args, &builds, raise, sizeof raise)) {
+      if (pre.p) buf_puts(b, pre.p);
+      buf_printf(b, " %s(e%s); return e;", mc_method(c, &c->scopes[im]), args.p ? args.p : "");
+    }
+    else buf_printf(b, " %s return e;", raise);
+    buf_puts(b, " }\n");
+    free(pre.p); free(args.p); free(mb.p);
+  }
+  buf_puts(b, "  return NULL;\n}\n");
+  size_t ol = c->exc_text_late ? strlen(c->exc_text_late) : 0, nl = strlen(d.p);
+  char *cat = malloc(ol + nl + 1);
+  if (ol) memcpy(cat, c->exc_text_late, ol);
+  memcpy(cat + ol, d.p, nl + 1);
+  free(c->exc_text_late); free(d.p);
+  c->exc_text_late = cat;
+  free(xr);
+}
+
 static void emit_exc_text_dispatch_at(Compiler *c, Buf *b, int mode, int *late) {
   if (exc_has_user_msg_override(c)) {
     for (int pass = 0; pass < 2; pass++) {
@@ -24025,6 +24104,7 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
       }
     }
   emit_exc_text_dispatch(c, b, 0);
+  emit_exc_reinit_dispatch(c, b);
   /* The boxed pair: an override answering something other than a String cannot
      be represented by the const char * dispatchers above, so #message on an
      exception whose class is only known at run time reported the stored message
@@ -25012,6 +25092,7 @@ char *codegen_program(const NodeTable *nt) {
   }
   g_has_user_to_io = 0;
   for (int k = 0; k < c->nclasses && !g_has_user_to_io; k++) g_has_user_to_io = class_to_io_dispatched(c, -1, -1, k);
+  g_exc_reinit_hook = exc_has_reopen_initialize(c);
   g_has_user_succ = 0;
   g_obj_range_used = 0;
   /* a Range with boxed ends (sp_range_new_box) may turn out a Range of objects */

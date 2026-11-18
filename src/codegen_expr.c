@@ -4680,10 +4680,10 @@ static int lit_leaf_row(const char *t, Buf *rows) {
   size_t tl = strlen(t);
   if (tl > sizeof sb && strncmp(t, sb, sizeof sb - 1) == 0 && t[tl - 1] == ')') {
     char *in = strndup(t + sizeof sb - 1, tl - sizeof sb);
-    int ok = fzl_text_id(in) >= 0;
-    if (ok) buf_printf(rows, "SP_LIT_STR(%s),", in);
+    int id = fzl_text_id(in);
+    if (id >= 0) buf_printf(rows, "SP_LIT_STR(&_fzl_%s_o.s),", fzl_id_name(id));
     free(in);
-    return ok;
+    return id >= 0;
   }
   return 0;
 }

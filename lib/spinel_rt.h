@@ -24775,14 +24775,14 @@ static sp_StrPolyHash *sp_StrPolyHash_from_poly_hash(sp_PolyPolyHash *src) {
 #define SP_LIT_BOOL(v) { SP_TAG_BOOL, 0, { .i = (v) } }
 #define SP_LIT_SYM(v) { SP_TAG_SYM, 0, { .i = (sp_int)(v) } }
 #define SP_LIT_NIL { SP_TAG_NIL, 0, { .i = 0 } }
-#define SP_LIT_STR(p) { SP_TAG_STR, 0, { .s = (p) } }
+#define SP_LIT_STR(hd) { SP_TAG_OBJ, SP_BUILTIN_STRBUF, { .p = (hd) } }
 #define SP_LIT_ARRAY(n) { SP_TAG_OBJ, SP_BUILTIN_POLY_ARRAY, { .i = (n) } }
 #define SP_LIT_HASH(n) { SP_TAG_OBJ, 0, { .i = (n) } }
 static sp_PolyArray *sp_lit_build_array(const sp_RbVal *t, sp_int *at, sp_int n);
 static sp_RbVal sp_lit_build(const sp_RbVal *t, sp_int *at) {
   sp_RbVal v = t[(*at)++];
-  if (v.tag == SP_TAG_STR) return SP_STR_BOX((char *)v.v.s);
-  if (v.tag == SP_TAG_OBJ) return sp_box_nullable_obj((void *)sp_lit_build_array(t, at, v.v.i), SP_BUILTIN_POLY_ARRAY);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_POLY_ARRAY)
+    return sp_box_nullable_obj(sp_lit_build_array(t, at, v.v.i), SP_BUILTIN_POLY_ARRAY);
   return v;
 }
 static sp_PolyArray *sp_lit_build_array(const sp_RbVal *t, sp_int *at, sp_int n) {

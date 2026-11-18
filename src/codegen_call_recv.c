@@ -19192,19 +19192,15 @@ static void emit_poly_str_transform(Compiler *c, int recv, int argc, const int *
   view_unbind(mark);
 }
 
-/* emit_poly_str_transform's String, boxed when the call is typed poly: a
-   class method of the name that some boxed Class value reaches widens the
-   call (an_class_concrete, #9192), and its slot takes no bare String. */
+/* The String transform produces fresh bytes. Materialize them in the call's
+   result slot, including a method return or a consumer holding a handle. */
 static void emit_poly_str_transform_answer(Compiler *c, int id, int recv, int argc, const int *argv,
                                            const char *name, const char *fn, Buf *b) {
-  if (comp_ntype(c, id) != TY_POLY) {
-    emit_poly_str_transform(c, recv, argc, argv, name, fn, 0, b);
-    return;
-  }
-  Buf tb; memset(&tb, 0, sizeof tb);
-  emit_poly_str_transform(c, recv, argc, argv, name, fn, 0, &tb);
-  emit_boxed_text(c, TY_STRING, tb.p ? tb.p : "", b);
-  free(tb.p);
+  Buf text = {0};
+  emit_poly_str_transform(c, recv, argc, argv, name, fn, 0, &text);
+  emit_coerce_text(c, id, TY_STRING, repr_of(c, id).as_ty, CO_HOLD,
+                   text.p, "a boxed receiver's String transform", b);
+  free(text.p);
 }
 
 /* Does a program definition of `name` take the match arm's call away? A

@@ -26190,8 +26190,11 @@ int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int exact, Bu
      migration, reproduces with zero migration mechanism involved:
      `def wrap(v)=v; wrap(2**80).is_a?(Integer)` answered false). */
   if (is_integer_class_name(cn)) buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_BIGINT)", v, v);
-  else if (sp_streq(cn, "String"))
-    buf_printf(b, "(%s.tag == SP_TAG_STR || (%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_STRBUF))", v, v, v);
+  else if (sp_streq(cn, "String")) {
+    buf_printf(b, "(sp_rbval_is_string(%s)", v);
+    if (exact && program_has_strsub(c)) buf_printf(b, " && !sp_poly_is_str_subclass(%s)", v);
+    buf_puts(b, ")");
+  }
   else if (sp_streq(cn, "Float"))    buf_printf(b, "%s.tag == SP_TAG_FLT", v);
   else if (sp_streq(cn, "Symbol"))   buf_printf(b, "%s.tag == SP_TAG_SYM", v);
   else if (sp_streq(cn, "NilClass")) buf_printf(b, "%s.tag == SP_TAG_NIL", v);

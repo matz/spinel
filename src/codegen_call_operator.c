@@ -1377,7 +1377,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
          class: its own class name is the one to compare */
       buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_EXCEPTION && _t%d.v.p) ? "
                     "strcmp(((sp_Exception *)_t%d.v.p)->cls_name, sp_class_to_s(_t%d)) == 0 : "
-                    "sp_poly_get_class(_t%d).cls_id == _t%d.cls_id; })", t, t, t, t, k, t, k);
+                    "sp_class_eq(sp_poly_get_class(_t%d), _t%d); })", t, t, t, t, k, t, k);
     else
       buf_printf(b, "sp_poly_is_a(_t%d, _t%d); })", t, k);
     if (boxed_ans) buf_puts(b, ")");

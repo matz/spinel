@@ -36044,7 +36044,8 @@ static int emit_reopen_call_first(Compiler *c, int id, int recv, TyKind rt, cons
   if ((rt != TY_STRING && rt != TY_INT && rt != TY_FLOAT) || !sn_guard_pending(c, id)) return 0;
   Repr rr = repr_of(c, id);
   TyKind ret = rr.as_ty, nat = rr.kind == RK_BOXED ? cg_natural_type(c, id) : ret;
-  if (nat != c->scopes[mi].ret || repr_of(c, recv).kind == RK_BOXED || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
+  if (repr_call_result_storage(nat) != repr_method_ret_storage(&c->scopes[mi]) ||
+      repr_of(c, recv).kind == RK_BOXED || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
   int an = nt_ref(c->nt, id, "arguments"), argc = 0;
   const int *argv = an >= 0 ? nt_arr(c->nt, an, "arguments", &argc) : NULL;
   Scope *m = &c->scopes[mi];

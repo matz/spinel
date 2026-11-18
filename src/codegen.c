@@ -23608,8 +23608,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
     if (prog_has_cls_user_display(c, "to_s")) buf_puts(b, "static sp_RbVal sp_class_user_to_s(sp_Class c, int *found);\n");
     if (prog_has_cls_user_display(c, "inspect")) buf_puts(b, "static sp_RbVal sp_class_user_inspect(sp_Class c, int *found);\n");
     if (prog_has_cls_user_display(c, "to_s"))
-      buf_printf(b, "static const char *sp_class_to_s_disp(sp_Class c){if(sp_class_user_to_s_fn){int f;const char *_u=sp_strface_b_box(sp_class_user_to_s_fn(c,&f));if(f&&_u)return _u;}return %s(c);}\n\n",
-                 comp_class_base_display_fn(c));
+      buf_puts(b, "static const char *sp_class_to_s_disp(sp_Class c){return sp_class_val_user(sp_box_class(c),sp_class_user_to_s_fn);}\n\n");
     /* (apart from the hook's table only where the program has a hook:
        sp_class_inspect_text, which an else arm that runs the builtin calls) */
     int ihook = prog_has_cls_user_display(c, "inspect");
@@ -23731,14 +23730,12 @@ static void emit_cls_user_display_hooks(Compiler *c, Buf *b) {
     for (int k = 0; k < c->nclasses; k++) {
       int mi = cls_user_display_mi(c, -1, k, nms[q]);
       if (mi < 0) continue;
-      Buf call = {0};
-      buf_printf(&call, "%s(", mc_method(c, &c->scopes[mi]));
-      emit_cmethod_self_cls_arg(c, mi, k, &call);
-      buf_puts(&call, ")");
+      Buf self = {0};
+      emit_cmethod_self_cls_arg(c, mi, k, &self);
       buf_printf(b, "case %d:return ", k);
-      emit_boxed_ret_call(c, &c->scopes[mi], call.p, b);
+      emit_zero_arg_boxed_call(c, mi, self.p, b);
       buf_puts(b, ";");
-      free(call.p);
+      free(self.p);
     }
     buf_puts(b, "default:*found=0;return sp_box_nil();}}\n");
   }
@@ -23751,7 +23748,8 @@ void emit_zero_arg_boxed_call(Compiler *c, int mi, const char *self, Buf *b) {
   int builds = 0;
   char raise[640];
   if (emit_arm_args_text(c, mi, self, NULL, 0, &pre, &args, &builds, raise, sizeof raise)) {
-    buf_printf(&call, "%s(%s%s)", mc_method(c, &c->scopes[mi]), self, args.p ? args.p : "");
+    const char *argv = args.p ? args.p + (self ? 0 : 2) : "";
+    buf_printf(&call, "%s(%s%s)", mc_method(c, &c->scopes[mi]), self ? self : "", argv);
     if (builds) buf_printf(b, "({ %s", pre.p ? pre.p : "");
     emit_boxed_ret_call(c, &c->scopes[mi], call.p, b);
     if (builds) buf_puts(b, "; })");
@@ -25144,8 +25142,7 @@ char *codegen_program(const NodeTable *nt) {
        own teardown among them (sp_at_exit_run does the same with hooks) */
     else buf_puts(body, "  _sp_main_rc = 0;\n  sp_fin_run_exit();\n}\n");
     g_c_ret_void = sv_main_cv;
-    unit_pragma_reset(body);   /* the display hooks and int main change with any class, not with main */
-    emit_cls_user_display_hooks(c, body);
+    unit_pragma_reset(body);   /* int main is independent of the main body */
     buf_puts(body, "int main(int argc,char**argv){\n"
                    "  _sp_main_argc = argc; _sp_main_argv = argv;\n");
     /* an unoptimised build's frames are several times an -O2 one's, so the
@@ -25166,6 +25163,7 @@ char *codegen_program(const NodeTable *nt) {
     emit_obj_to_str_bridge(c, &hooks);
     emit_display_overrides(c, &hooks);
   }
+  if (!g_ext_init_name) emit_cls_user_display_hooks(c, &hooks);
   emit_exc_text_tail(c, &hooks);
   emit_regex_section(c, &b);
   { const char *pdt[] = { g_procs.p, body->p, b.p, hooks.p };

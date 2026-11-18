@@ -1966,16 +1966,30 @@ static inline void sp_pp_user_leave(int *w) { sp_pp_printing = *w; }
 /* (and a String some emitters answer boxed, a String-typed read whose nil
    or raise arm is a box: the box's String, the handle it holds, or nil) */
 static inline const char *sp_strface_b_box(sp_RbVal v) {
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF) return v.v.p ? ((sp_String *)v.v.p)->data : NULL;
+  if (v.tag == SP_TAG_OBJ && v.v.p &&
+      (v.cls_id == SP_BUILTIN_STRBUF ||
+       (v.cls_id >= 0 && sp_class_kind_of_name_fn && sp_class_kind_of_name_fn(v.cls_id, "String"))))
+    return ((sp_String *)v.v.p)->data;
   return v.tag == SP_TAG_STR ? v.v.s : NULL;
 }
-static inline const char *sp_class_val_user(sp_RbVal v, sp_RbVal (*fn)(sp_Class, int *)) {
+const char *sp_obj_to_s_fallback(sp_RbVal v);
+static inline const char *sp_class_val_user_bytes(sp_RbVal v, sp_RbVal (*fn)(sp_Class, int *),
+                                                  size_t *length) {
   if (fn && v.cls_id != SP_CLASS_BY_NAME) {
     int found;
     const char *s = sp_strface_b_box(fn((sp_Class){v.v.i, NULL}, &found));
-    if (found && s) return s;
+    if (found) {
+      if (!s) s = sp_obj_to_s_fallback(v);
+      if (length) *length = sp_str_byte_len(s);
+      return s;
+    }
   }
-  return sp_class_val_display(v);
+  const char *name = sp_class_val_display(v);
+  if (length) *length = strlen(name);
+  return name;
+}
+static inline const char *sp_class_val_user(sp_RbVal v, sp_RbVal (*fn)(sp_Class, int *)) {
+  return sp_class_val_user_bytes(v, fn, NULL);
 }
 /* A program that reopens a builtin class (`class Module ... end`) gives the
    reopening a user class id of its own, while the builtin's values (a class
@@ -2005,7 +2019,6 @@ static inline sp_bool sp_class_eq(sp_Class a, sp_Class b) {
   const char *bn = sp_class_to_s(b);
   return (an && bn) ? strcmp(an, bn) == 0 : an == bn;
 }
-const char *sp_obj_to_s_fallback(sp_RbVal v);
 const char *sp_poly_to_s(sp_RbVal v);   /* defined below; used by the user-object arm */
 struct sp_OpenStruct_s;
 const char *sp_OpenStruct_inspect(struct sp_OpenStruct_s *o);   /* defined below */

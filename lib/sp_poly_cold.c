@@ -351,14 +351,19 @@ SP_TLS int sp_pp_printing;
 /* A boxed Time's to_s (inspect 0) or inspect (1): a Time subclass
    instance's goes through its class's own dispatcher, which runs an
    override of the class's and falls back to Time's. */
-static const char *sp_poly_time_display(sp_RbVal v, int inspect) {
+static const char *sp_display_counted_bytes(const char *text, size_t *length) {
+  if (length) *length = sp_str_byte_len(text);
+  return text;
+}
+
+static const char *sp_poly_time_display(sp_RbVal v, int inspect, size_t *length) {
   int k = sp_bsub_cls_fn ? sp_bsub_cls_fn(v) : -1;
   if (k >= 0) {
     sp_RbVal result;
     if (sp_user_display_box(v, inspect, &result)) {
       if (inspect) return sp_poly_to_s(result);
       const char *s = sp_strface_b_box(result);
-      if (s) return s;
+      if (s) return sp_display_counted_bytes(s, length);
     }
   }
   return inspect ? sp_Time_inspect((sp_Time *)v.v.p) : sp_Time_to_s((sp_Time *)v.v.p);
@@ -468,7 +473,7 @@ void sp_poly_puts(sp_RbVal v)
         case SP_BUILTIN_STR_RANGE: puts(sp_srange_to_s(SP_SRANGE_OF(v.v.p))); break;
         /* a Time subclass instance, boxed as its Time, shows through its
            class's to_s (an override of its own included) */
-        case SP_BUILTIN_TIME: sp_puts_str_line(sp_poly_time_display(v, 0)); break;
+        case SP_BUILTIN_TIME: sp_puts_str_line(sp_poly_time_display(v, 0, NULL)); break;
         case SP_BUILTIN_STRBUF: sp_puts_str_line(sp_String_cstr((sp_String *)v.v.p)); break;
         case SP_BUILTIN_COMPLEX: puts(sp_complex_to_s(*(sp_Complex *)v.v.p)); break;
         case SP_BUILTIN_RATIONAL: puts(sp_rational_to_s(*(sp_Rational *)v.v.p)); break;
@@ -516,16 +521,16 @@ const char *sp_obj_to_s_fallback(sp_RbVal v)
                     (unsigned long long)(uintptr_t)v.v.p);
 }
 
-const char *sp_poly_to_s(sp_RbVal v)
+static const char *sp_poly_to_s_impl(sp_RbVal v, size_t *length)
 {
   switch (v.tag) {
     case SP_TAG_INT: return sp_int_to_s(v.v.i);
-    case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_frozen_empty;
+    case SP_TAG_STR: return sp_display_counted_bytes(v.v.s ? v.v.s : sp_str_frozen_empty, length);
     case SP_TAG_FLT: return sp_float_to_s(v.v.f);
     case SP_TAG_BOOL: return v.v.b ? sp_str_frozen_true : sp_str_frozen_false;
     case SP_TAG_NIL: return sp_str_frozen_empty;
-    case SP_TAG_SYM: return sp_sym_to_s_frozen((sp_sym)v.v.i);
-    case SP_TAG_CLASS: return sp_class_val_user(v, sp_class_user_to_s_fn);
+    case SP_TAG_SYM: return sp_display_counted_bytes(sp_sym_to_s_frozen((sp_sym)v.v.i), length);
+    case SP_TAG_CLASS: return sp_class_val_user_bytes(v, sp_class_user_to_s_fn, length);
     case SP_TAG_ENCODING: return v.v.s ? v.v.s : sp_str_empty;
     case SP_TAG_BIGINT: return sp_bigint_to_s((sp_Bigint *)v.v.p);
     case SP_TAG_OBJ:
@@ -541,8 +546,8 @@ const char *sp_poly_to_s(sp_RbVal v)
         case SP_BUILTIN_RANGE: return sp_range_str(*(sp_Range *)v.v.p);
         case SP_BUILTIN_FLOAT_RANGE: return sp_frange_inspect(*(sp_FloatRange *)v.v.p);
         case SP_BUILTIN_STR_RANGE: return sp_srange_to_s(SP_SRANGE_OF(v.v.p));
-        case SP_BUILTIN_TIME: return sp_poly_time_display(v, 0);
-        case SP_BUILTIN_STRBUF: return sp_String_cstr((sp_String *)v.v.p);   /* live buffer (#3227) */
+        case SP_BUILTIN_TIME: return sp_poly_time_display(v, 0, length);
+        case SP_BUILTIN_STRBUF: return sp_display_counted_bytes(sp_String_cstr((sp_String *)v.v.p), length);   /* live buffer (#3227) */
         case SP_BUILTIN_METHOD: return sp_method_desc_cstr((sp_BoundMethod *)v.v.p);
         /* Proc#to_s is its inspect; a boxed one (an element of a mixed Array)
            fell through to "" */
@@ -553,8 +558,8 @@ const char *sp_poly_to_s(sp_RbVal v)
         case SP_BUILTIN_BIG_RATIONAL: return sp_brat_to_s((sp_BigRational *)v.v.p);
         case SP_BUILTIN_REGEX: return sp_re_to_s_str(v.v.p);
         /* MatchData#to_s is the whole match (#3641) */
-        case SP_BUILTIN_MATCHDATA: { const char *_m0 = sp_MatchData_aref((sp_MatchData *)v.v.p, 0); return _m0 ? _m0 : sp_str_empty; }
-        case SP_BUILTIN_EXCEPTION: return sp_exc_to_s_text((sp_Exception *)v.v.p);
+        case SP_BUILTIN_MATCHDATA: { const char *_m0 = sp_MatchData_aref((sp_MatchData *)v.v.p, 0); return sp_display_counted_bytes(_m0 ? _m0 : sp_str_empty, length); }
+        case SP_BUILTIN_EXCEPTION: return sp_display_counted_bytes(sp_exc_to_s_text((sp_Exception *)v.v.p), length);
         /* Object#to_s on a boxed handle of the IO family, as the typed arm
            renders it: a boxed one fell through to "" (`puts [f, d]`) */
         case SP_BUILTIN_IO: return sp_io_to_s((sp_File *)v.v.p);
@@ -583,11 +588,11 @@ const char *sp_poly_to_s(sp_RbVal v)
               SP_GC_ROOT_RBVAL(v);
               int found;
               const char *us = sp_strface_b_box(sp_obj_to_s_fn(v.cls_id, v.v.p, &found));
-              if (found && us) return us;
+              if (found && us) return sp_display_counted_bytes(us, length);
             }
             /* a user exception subclass boxes under its own class id */
             if (sp_is_exc_subclass_cls(v.cls_id))
-              return sp_exc_message((volatile struct sp_Exception_s *)v.v.p);
+              return sp_display_counted_bytes(sp_exc_message((volatile struct sp_Exception_s *)v.v.p), length);
             if (v.v.p == sp_main_obj) return SPL("main");
             return sp_obj_to_s_fallback(v);
           }
@@ -598,6 +603,19 @@ const char *sp_poly_to_s(sp_RbVal v)
       }
     default: return sp_str_empty;
   }
+}
+
+const char *sp_poly_to_s(sp_RbVal v) {
+  return sp_poly_to_s_impl(v, NULL);
+}
+
+const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length) {
+  /* A selected Ruby String provides its length in its header. Fixed C
+     display text leaves the count unset and uses its terminating NUL. */
+  *length = SIZE_MAX;
+  const char *text = sp_poly_to_s_impl(v, length);
+  if (*length == SIZE_MAX) *length = strlen(text);
+  return text;
 }
 
 /* The class name of a boxed value, and in *id the builtin class id of that name
@@ -878,7 +896,7 @@ const char *sp_poly_inspect(sp_RbVal v)
         case SP_BUILTIN_RANGE:     return sp_Range_inspect((sp_Range *)v.v.p);
         case SP_BUILTIN_FLOAT_RANGE: return sp_frange_inspect(*(sp_FloatRange *)v.v.p);
         case SP_BUILTIN_STR_RANGE: return sp_srange_inspect(SP_SRANGE_OF(v.v.p));
-        case SP_BUILTIN_TIME:      return sp_poly_time_display(v, 1);
+        case SP_BUILTIN_TIME:      return sp_poly_time_display(v, 1, NULL);
       case SP_BUILTIN_STRBUF: return sp_str_inspect(sp_String_cstr((sp_String *)v.v.p));   /* (#3227) */
       case SP_BUILTIN_METHOD: return sp_method_desc_cstr((sp_BoundMethod *)v.v.p);
       case SP_BUILTIN_PROC: return sp_proc_inspect((sp_Proc *)v.v.p);

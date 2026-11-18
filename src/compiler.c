@@ -6378,9 +6378,8 @@ int comp_class_anonymous(Compiler *c, int ci) {
 const char *comp_class_base_display_fn(Compiler *c) {
   return c->has_anonymous_classes ? "sp_class_display" : "sp_class_to_s";
 }
-/* A class method to_s / inspect (nm) of class k's own, taking no arguments
-   and answering a String: what prints the class (sp_class_user_to_s and
-   _inspect); -1 when the class has none. The call plan answers it at node
+/* A class method to_s / inspect (nm) for display, or -1 when the class has
+   none. The call plan answers it at node
    site, the class constant a puts prints; -1 for the table behind the run-time
    dispatcher, which no call stands behind. */
 int cls_user_display_mi(Compiler *c, int site, int k, const char *nm) {
@@ -6388,7 +6387,9 @@ int cls_user_display_mi(Compiler *c, int site, int k, const char *nm) {
   int mi = cplan_implied_target(c, ic_operand_host(c, site), site, k, nm, CT_CMETHOD, NULL);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
-  if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;
+  if (!s->reachable || s->yields) return -1;
+  if (is_inspect_name(nm) && (s->nparams > 0 || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING))
+    return -1;
   return mi;
 }
 int prog_has_cls_user_display(Compiler *c, const char *nm) {

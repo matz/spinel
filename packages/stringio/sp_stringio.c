@@ -517,13 +517,10 @@ static int64_t sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROO
         for (sp_int i = 0; i < n; i++) w += sio_write_val(s, sp_json_aref_fn(v, i), 1);
         return w;  /* elements each terminated their own line */
       }
-      /* anything else writes its #to_s, as IO#write and Kernel#print do. A
-         user #to_s answers a Ruby String, measured by its recorded length so
-         an embedded NUL survives; the generic renderer may answer a static
-         class or symbol name with no length in front of it. */
+      /* Write the selected display result and its byte length. */
       {
-        const char *t = sp_poly_to_s(v);
-        size_t n = v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p ? sp_str_byte_len(t) : strlen(t);
+        size_t n;
+        const char *t = sp_poly_to_s_bytes(v, &n);
         w += sio_write(s, t, (int64_t)n);
         break;
       }

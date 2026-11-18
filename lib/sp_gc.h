@@ -705,6 +705,8 @@ extern const char *(*sp_poly_inspect_fn)(sp_RbVal);
 /* The archive formatter invokes an object override once. Native packages
    can call it even in a program without a boxed-value renderer installed. */
 const char *sp_poly_to_s(sp_RbVal v);
+/* The display result and its byte length for native writers. */
+const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length);
 extern const char *(*sp_poly_to_s_fn)(sp_RbVal);
 /* Convert a plain object (a Struct) to a boxed StrPoly hash of its members,
    generic (no format knowledge). The generated program installs it (switch on

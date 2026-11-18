@@ -3433,7 +3433,7 @@ int bop_args_as_builtin(TyKind rt, const char *name, int argc, int has_block) {
   return (bop_call_flags(rt, name, argc, has_block) & BOPF_ARGS_BUILTIN) != 0;
 }
 
-TyKind bop_result(const BuiltinOp *op, TyKind rt) {
+TyKind bop_native_result(const BuiltinOp *op, TyKind rt) {
   switch ((int)op->result) {
   case (int)BOPR_SELF:      return rt;
   case (int)BOPR_HASH_VAL:  return ty_hash_val(rt);
@@ -3467,16 +3467,16 @@ TyKind bop_result(const BuiltinOp *op, TyKind rt) {
   }
 }
 
-TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts) {
+TyKind bop_native_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts) {
   switch ((int)op->result) {
   case (int)BOPR_ARRAY_SUM_SEED:
     return argc == 1 ? fold_sum_type(arg_of(ud, 0), ty_array_elem(rt), facts & BOPX_PROMOTE) : TY_UNKNOWN;
   case (int)BOPR_ARRAY_TUPLES:
-    return rt == TY_POLY_ARRAY && !(facts & BOPX_KEPT) ? TY_ENUMERATOR : bop_result(op, rt);
+    return rt == TY_POLY_ARRAY && !(facts & BOPX_KEPT) ? TY_ENUMERATOR : bop_native_result(op, rt);
   case (int)BOPR_ARRAY_INDEX:
     return (facts & BOPX_BOXED_USE) && (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY ||
                                         rt == TY_STR_RANGE)
-           ? TY_POLY : bop_result(op, rt);
+           ? TY_POLY : bop_native_result(op, rt);
   case (int)BOPR_ARRAY_PLUS:
   case (int)BOPR_ARRAY_SETOP:
     break;
@@ -3497,7 +3497,7 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
   case (int)BOPR_HASH_STORE:
     return argc >= 2 ? ty_unify(arg_of(ud, 1), ty_hash_val(rt)) : TY_UNKNOWN;
   default:
-    return bop_result(op, rt);
+    return bop_native_result(op, rt);
   }
   if (argc < 1) return TY_UNKNOWN;
   /* An Array of the receiver's kind, or an untyped operand (an empty
@@ -3520,6 +3520,14 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
     if (!ty_is_array(aj) && aj != TY_POLY) boxable = 0;
   }
   return same ? rt : boxable ? TY_POLY_ARRAY : TY_UNKNOWN;
+}
+
+TyKind bop_result(const BuiltinOp *op, TyKind rt) {
+  return op->result == TY_STRBUF ? TY_STRING : bop_native_result(op, rt);
+}
+
+TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_of, const void *ud, int facts) {
+  return op->result == TY_STRBUF ? TY_STRING : bop_native_result_args(op, rt, argc, arg_of, ud, facts);
 }
 
 int bop_covers(TyKind rt) {

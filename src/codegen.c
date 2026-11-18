@@ -16867,12 +16867,12 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
       argv = pv;
     }
     Buf rb, eb; memset(&rb, 0, sizeof rb); memset(&eb, 0, sizeof eb);
-    int ok = emit_builtin_op_operands(c, id, BOP_KERNEL, uname, argv, argc, &rb);
+    int ok = emit_builtin_op_operands(c, id, row, argv, argc, &rb);
     view_unbind(ov);
     free(pv);
     if (!ok) { free(rb.p); return 0; }
     emit_super_blockarg_effect(c, id, &eb);
-    vt = row->result;
+    vt = bop_native_result(row, BOP_KERNEL);
     if (eb.p) buf_printf(&vb, "({ %s _r = %s; %s_r; })", c_type_name(vt), rb.p, eb.p);
     else buf_printf(&vb, "({ %s; })", rb.p);
     free(rb.p); free(eb.p);

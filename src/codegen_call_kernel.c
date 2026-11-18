@@ -119,13 +119,10 @@ int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, Ty
   if (atmp)
     for (int a = 0; a < argc && a < natmp; a++)
       if (subtree_has_side_effect(c, argv[a])) view_bind_temp(argv[a], atmp[a]);
-  Buf rb; memset(&rb, 0, sizeof rb);
-  const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(c->nt, id, "block") >= 0) : NULL;
-  int ok = op && emit_builtin_op_arm_text(c, id, -1, BOP_KERNEL, name, NULL, 0, &rb);   /* (one arm of a dispatch: the node answers what the dispatch does) */
+  /* The result is the dispatch's, so do not observe the row as the full call. */
+  int ok = ret == TY_POLY ? emit_builtin_op_arm_boxed(c, id, -1, BOP_KERNEL, name, b)
+                          : emit_builtin_op_arm_text(c, id, -1, BOP_KERNEL, name, NULL, 0, b);
   view_unbind(ov);
-  if (ok && ret == TY_POLY) emit_boxed_text(c, op->result, rb.p ? rb.p : "", b);
-  else if (ok) buf_puts(b, rb.p ? rb.p : "");
-  free(rb.p);
   return ok;
 }
 

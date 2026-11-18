@@ -2714,10 +2714,9 @@ typedef struct {
   int t0;              /* a temp the caller took for the family ($T), or 0 */
   const int *argv;     /* the operands, when the call node does not hold them (a bare super's parameters); NULL: its own */
 } BopCtx;
-/* Kernel's row of kind rt (a template) over operands argv, argc that are not
-   the call id's own arguments. 0 and nothing written when no template row has
-   that count. */
-int emit_builtin_op_operands(Compiler *c, int id, TyKind rt, const char *name, const int *argv, int argc, Buf *b);
+/* Emit the selected Kernel template over supplied operands, such as the
+   parameters of a forwarding super. */
+int emit_builtin_op_operands(Compiler *c, int id, const struct BuiltinOp *op, const int *argv, int argc, Buf *b);
 int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b);
 /* The answer of call id's Kernel row (BOP_KERNEL, cplan_dispatch_row) for a
    dispatch's default arm, boxed when the slot is a poly (ret); the operands
@@ -2744,10 +2743,6 @@ int emit_builtin_op_tmp(Compiler *c, int id, int recv, TyKind rt, const char *na
    there; every other lookup reads stage 0 */
 int emit_builtin_op_stage(Compiler *c, int id, int recv, TyKind rt, const char *name,
                           int stage, Buf *b);
-/* The row emit_builtin_op finds for call id, named name, on a receiver
-   read as kind rt (stage 0, the arguments' kinds as codegen has them), or
-   NULL: what an arm that renders the call itself switches on */
-const struct BuiltinOp *emit_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name);
 /* Call id, named name, on builtin class cls (a constant receiver's name),
    emitted through its class-side row (cplan_builtin_class_row): 0 when no
    row of the class's singleton chain emits it */

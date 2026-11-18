@@ -416,6 +416,10 @@ int cplan_builtin_hash_positionals(Compiler *c, int id, const char *cls, const c
    every element is `key:` or spreads nothing; -1 where a key or a `**`
    operand is the run time's (`k => v`, `**h`). */
 int cplan_hash_holds_key_past(Compiler *c, int h, const char *key);
+/* Match the builtin row at the supplied receiver family's emission stage.
+   A negative stage accepts any stage and only unguarded rows. When argcp
+   is supplied, it receives the call's operand count when the family has rows. */
+const struct BuiltinOp *cplan_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name, int stage, int *argcp);
 /* The class-side row (bop_class_find) call id takes on builtin class cls,
    its constant receiver: NULL where none of cls's singleton chain has one,
    or where a class method the program gives a class of the chain, up to

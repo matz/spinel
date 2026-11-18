@@ -4549,7 +4549,7 @@ static int cls_value_row_default(Compiler *c, int id, int recv, const char *name
      the template's, which the arm text below finds */
   const BuiltinOp *op = bop_find(TY_CLASS, name, argc, nt_ref(c->nt, id, "block") >= 0);
   if (!op) return 0;
-  TyKind res = bop_result(op, TY_CLASS);
+  TyKind res = bop_native_result(op, TY_CLASS);
   if (res == TY_UNKNOWN || res == TY_VOID || (slot != TY_POLY && slot != res)) return 0;
   char rt[32];
   snprintf(rt, sizeof rt, "_t%d", tk);

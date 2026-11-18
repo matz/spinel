@@ -154,7 +154,7 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     }
     {
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     if (range_object_face(name)) return 0;
     /* A name with no row is genuinely undefined: leave it UNKNOWN. The
@@ -280,7 +280,7 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   /* Complex: builtin-op rows (builtin_ops.c) */
   if (rt == TY_COMPLEX) {
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
   /* Proc#curry and curry application via []. A curried call stays TY_CURRY until
      it reaches the proc's arity, when it realizes to the proc's return type (the
@@ -387,7 +387,7 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        arguments' kinds (the rows' argument guards) */
     {
       const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     /* round/truncate: no digits (or a literal <= 0) is an Integer, a literal
        positive precision keeps the Rational, and a non-literal precision boxes
@@ -1777,7 +1777,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      owns the name */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && !an_user_recv_defines_method(c, name)) {
     const BuiltinOp *op = an_bop_find_boxed(c, id, TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0);
-    if (op) { *out = op->result; return 1; }
+    if (op) { *out = bop_result(op, TY_STRING); return 1; }
   }
   /* #hash on a boxed receiver is always the Integer sp_rbval_hash_key
      answers -- a user #hash in the program is reached through

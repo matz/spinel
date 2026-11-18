@@ -92,7 +92,7 @@ static int emit_exception_object_accessor(Compiler *c, int id, int recv, const c
     buf_printf(b, "({ sp_Exception *_t%d = ", xt);
     emit_coerce(c, recv, TY_EXCEPTION, CO_HOLD, "an exception accessor receiver", b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); sp_exc_has_acc(_t%d, \"%s\") ? ", xt, xt, name);
-    emit_coerce_text(c, id, bop_result(op, TY_EXCEPTION), slot, CO_HOLD, ab.p,
+    emit_coerce_text(c, id, bop_native_result(op, TY_EXCEPTION), slot, CO_HOLD, ab.p,
                      "an exception accessor result", b);
     buf_puts(b, " : ");
     if (method_is_void(&c->scopes[xom])) buf_printf(b, "(%s, sp_box_nil())", ob.p);

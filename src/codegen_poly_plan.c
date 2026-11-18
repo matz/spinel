@@ -2183,13 +2183,14 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
        It is one arm of the dispatch, which records nothing for it, as the
        hand-written arm before it did not (emit_builtin_op_arm_text) */
     const BuiltinOp *sop = boxed_stat_reader(name) ? bop_find(TY_IO, name, 0, 0) : NULL;
-    if (sop && (ret == TY_POLY || ret == sop->result)) {
+    TyKind res = sop ? bop_native_result(sop, TY_IO) : TY_UNKNOWN;
+    if (sop && (ret == TY_POLY || ret == res)) {
       Buf sb = {0};
       char sr[48];
       snprintf(sr, sizeof sr, "((sp_File *)_t%d.v.p)", tv);
       if (emit_builtin_op_arm_text(c, id, nt_ref(nt, id, "receiver"), TY_IO, name, sr, 0, &sb)) {
         buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO) { _t%d = ", tv, tv, tr);
-        if (ret == TY_POLY) emit_boxed_text(c, sop->result, sb.p, b);
+        if (ret == TY_POLY) emit_boxed_text(c, res, sb.p, b);
         else buf_puts(b, sb.p);
         buf_puts(b, "; }\nelse ");
       }
@@ -2210,20 +2211,21 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
                io_op->tail);
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO) { ",
                  tv, tv);
+      TyKind res = io_op->result;
       /* the value only lands when the result slot can hold it: poly boxes
          it, an exactly matching concrete slot takes it raw, anything else
          keeps the call for its effect and leaves the seed */
       if (ret == TY_POLY && sp_streq(name, "getbyte"))
         buf_printf(b, "_t%d = sp_box_oint(%s)", tr, ioex);
-      else if (ret == TY_POLY && io_op->result != TY_VOID) {
+      else if (ret == TY_POLY && res != TY_VOID) {
         buf_printf(b, "_t%d = ", tr);
-        emit_boxed_text(c, io_op->result, ioex, b);
+        emit_boxed_text(c, res, ioex, b);
       }
       /* an oint slot (lso) takes a never-nil answer lifted; getbyte's
          answer is an oint already */
-      else if (lso && ret == io_op->result && !sp_streq(name, "getbyte"))
+      else if (lso && ret == res && !sp_streq(name, "getbyte"))
         buf_printf(b, "_t%d = sp_oint_of(%s)", tr, ioex);
-      else if (ret == io_op->result && io_op->result != TY_VOID)
+      else if (ret == res && res != TY_VOID)
         buf_printf(b, "_t%d = %s", tr, ioex);
       else buf_puts(b, ioex);
       buf_puts(b, "; }\nelse ");

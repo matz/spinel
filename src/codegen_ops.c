@@ -238,7 +238,7 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
       p++;
     }
     else if (p[0] == '$' && (p[1] == '<' || p[1] == '>')) {
-      TyKind rk = bop_result(x->op, x->rt);
+      TyKind rk = bop_native_result(x->op, x->rt);
       if (!oint_kind(rk)) rk = repr_of(c, x->id).as_ty;
       /* (a row its facts type boxed for this call, BOPX_BOXED_USE, answers
          the oint boxed: not a row answered boxed by a dispatch that boxes
@@ -254,7 +254,7 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
     /* `$[` ... `$]`: a row answering the plain value, lifted (sp_oint_of)
        where the consumer takes the oint (node_is_oint) */
     else if (p[0] == '$' && (p[1] == '[' || p[1] == ']')) {
-      TyKind rk = bop_result(x->op, x->rt);
+      TyKind rk = bop_native_result(x->op, x->rt);
       if (!oint_kind(rk)) rk = repr_of(c, x->id).as_ty;
       if (oint_kind(rk) && node_is_oint(c, x->id)) buf_printf(b, p[1] == '[' ? "%s(" : ")", oint_of(rk));
       p++;
@@ -413,7 +413,7 @@ static int op_row_boxed(Compiler *c, const BopCtx *x) {
   int argc;
   const int *argv = call_args(c->nt, x->id, &argc);
   BopArgs a = { c, argv };
-  return bop_result_args(x->op, x->rt, argc, bop_arg_ntype, &a, an_bop_facts(c, x->op, x->id)) == TY_POLY;
+  return bop_native_result_args(x->op, x->rt, argc, bop_arg_ntype, &a, an_bop_facts(c, x->op, x->id)) == TY_POLY;
 }
 
 /* The same empty-literal seed kind that inference supplied to the row. */
@@ -615,31 +615,29 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_IO_SET_WINSIZE] = emit_op_io_set_winsize,
 };
 
-static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const char *name,
-                              const char *rtext, int t0, int stage, BopArgKind arg_of, int observe, Buf *b) {
-  if (recv < 0 && rt != BOP_KERNEL) return 0;
-  /* a Hash or Array receiver of any variant reads its family's rows */
-  TyKind lk = bop_family_of(rt);
-  if (!bop_covers(lk)) return 0;
-  int argc;
-  const int *argv = call_args(c->nt, id, &argc);
-  BopArgs a = { c, argv };
-  const BuiltinOp *op = bop_find_stage(lk, name, argc, nt_ref(c->nt, id, "block") >= 0,
-                                       arg_of, &a, stage);
+static int emit_selected_op(Compiler *c, const BopCtx *x, int observe, Buf *b) {
+  const BuiltinOp *op = x->op;
   if (!op || op->emit == BOPE_NONE || !bop_emitters[op->emit]) return 0;
-  BopCtx x = { id, recv, argc, rt, name, op, rtext, t0 };
-  if (!bop_emitters[op->emit](c, &x, b)) return 0;
-  /* A row rendered while the node is the builtin arm of its own boxed send
-     split (emit_send_blind) is one arm of that dispatch, as
-     emit_builtin_op_arm_text's are: the node answers what the dispatch
-     answers (infer_send_blind), so the row is not compared with it */
-  if (g_plan_check && observe && g_arm.send_split != id) plan_check_observe(c, id, rt, op);
+  if (!bop_emitters[op->emit](c, x, b)) return 0;
+  if (g_plan_check && observe) plan_check_observe(c, x->id, x->rt, op);
   return 1;
+}
+
+/* A row rendered while the node is the builtin arm of its own boxed send
+   split (emit_send_blind) is one arm of that dispatch. The node answers
+   what the dispatch answers, so do not compare that row with it. */
+static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const char *name,
+                              const char *rtext, int t0, int stage, int observe, Buf *b) {
+  if (recv < 0 && rt != BOP_KERNEL) return 0;
+  int argc = 0;
+  const BuiltinOp *op = cplan_builtin_op_row(c, id, rt, name, stage, &argc);
+  BopCtx x = { id, recv, argc, rt, name, op, rtext, t0 };
+  return emit_selected_op(c, &x, observe && g_arm.send_split != id, b);
 }
 
 int emit_builtin_op_text(Compiler *c, int id, int recv, TyKind rt, const char *name,
                          const char *rtext, Buf *b) {
-  return emit_builtin_op_ex(c, id, recv, rt, name, rtext, 0, 0, bop_arg_ntype, 1, b);
+  return emit_builtin_op_ex(c, id, recv, rt, name, rtext, 0, 0, 1, b);
 }
 
 /* A row rendered as one arm of a boxed dispatch: the node answers what the
@@ -647,7 +645,7 @@ int emit_builtin_op_text(Compiler *c, int id, int recv, TyKind rt, const char *n
    node (--plan-check). t0 is the dispatch's temp for the row's $T, or 0 */
 int emit_builtin_op_arm_text(Compiler *c, int id, int recv, TyKind rt, const char *name,
                              const char *rtext, int t0, Buf *b) {
-  return emit_builtin_op_ex(c, id, recv, rt, name, rtext, t0, 0, bop_arg_ntype, 0, b);
+  return emit_builtin_op_ex(c, id, recv, rt, name, rtext, t0, 0, 0, b);
 }
 
 /* A row rendered as one arm of a boxed dispatch whose answer is a boxed
@@ -656,19 +654,20 @@ int emit_builtin_op_arm_text(Compiler *c, int id, int recv, TyKind rt, const cha
    nothing written when no row has the call, its emitter declines, or its
    answer is a kind with nothing to box it by. */
 int emit_builtin_op_arm_boxed(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b) {
-  if (recv < 0) return 0;
+  if (recv < 0 && rt != BOP_KERNEL) return 0;
   int argc;
-  const int *argv = call_args(c->nt, id, &argc);
-  BopArgs a = { c, argv };
-  const BuiltinOp *op = bop_find_stage(bop_family_of(rt), name, argc, nt_ref(c->nt, id, "block") >= 0,
-                                       bop_arg_ntype, &a, 0);
+  const BuiltinOp *op = cplan_builtin_op_row(c, id, rt, name, 0, &argc);
   if (!op || op->emit == BOPE_NONE) return 0;
-  TyKind res = bop_result_args(op, rt, argc, bop_arg_ntype, &a, an_bop_facts(c, op, id));
+  int n;
+  const int *argv = call_args(c->nt, id, &n);
+  BopArgs a = { c, argv };
+  TyKind res = bop_native_result_args(op, rt, argc, bop_arg_ntype, &a, an_bop_facts(c, op, id));
   const TyTraits *tr = ty_traits_of(res);
   if (res == TY_UNKNOWN || res == TY_VOID) return 0;   /* a kind inference types in a rule of its own */
   if (res != TY_POLY && res != TY_STRING && !(tr && tr->box_text)) return 0;
   Buf ab; memset(&ab, 0, sizeof ab);
-  if (!emit_builtin_op_arm_text(c, id, recv, rt, name, NULL, 0, &ab)) { free(ab.p); return 0; }
+  BopCtx x = { id, recv, argc, rt, name, op, NULL, 0 };
+  if (!emit_selected_op(c, &x, 0, &ab)) { free(ab.p); return 0; }
   if (res == TY_POLY) buf_puts(b, ab.p ? ab.p : "sp_box_nil()");
   else emit_boxed_text(c, res, ab.p ? ab.p : "", b);
   free(ab.p);
@@ -677,31 +676,22 @@ int emit_builtin_op_arm_boxed(Compiler *c, int id, int recv, TyKind rt, const ch
 
 int emit_builtin_op_tmp(Compiler *c, int id, int recv, TyKind rt, const char *name,
                         int t0, Buf *b) {
-  return emit_builtin_op_ex(c, id, recv, rt, name, NULL, t0, 0, bop_arg_ntype, 1, b);
+  return emit_builtin_op_ex(c, id, recv, rt, name, NULL, t0, 0, 1, b);
 }
 
-int emit_builtin_op_operands(Compiler *c, int id, TyKind rt, const char *name, const int *argv, int argc, Buf *b) {
-  const BuiltinOp *op = bop_find(rt, name, argc, 0);
+int emit_builtin_op_operands(Compiler *c, int id, const BuiltinOp *op, const int *argv, int argc, Buf *b) {
   if (!op || op->emit != BOPE_TEMPLATE) return 0;
-  BopCtx x = { id, -1, argc, rt, name, op, NULL, 0, argv };
+  BopCtx x = { id, -1, argc, op->recv, op->name, op, NULL, 0, argv };
   return emit_op_template(c, &x, b);
 }
 
 int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b) {
-  return emit_builtin_op_ex(c, id, recv, rt, name, NULL, 0, 0, bop_arg_ntype, 1, b);
+  return emit_builtin_op_ex(c, id, recv, rt, name, NULL, 0, 0, 1, b);
 }
 
 int emit_builtin_op_stage(Compiler *c, int id, int recv, TyKind rt, const char *name,
                           int stage, Buf *b) {
-  return emit_builtin_op_ex(c, id, recv, rt, name, NULL, 0, stage, bop_arg_ntype, 1, b);
-}
-
-/* See codegen_internal.h. */
-const BuiltinOp *emit_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name) {
-  int argc;
-  const int *argv = call_args(c->nt, id, &argc);
-  BopArgs a = { c, argv };
-  return bop_find_stage(bop_family_of(rt), name, argc, nt_ref(c->nt, id, "block") >= 0, bop_arg_ntype, &a, 0);
+  return emit_builtin_op_ex(c, id, recv, rt, name, NULL, 0, stage, 1, b);
 }
 
 /* See codegen_internal.h. */
@@ -709,11 +699,8 @@ int emit_builtin_class_op(Compiler *c, int id, const char *cls, const char *name
   int argc;
   call_args(c->nt, id, &argc);
   const BuiltinClassOp *cop = cplan_builtin_class_row(c, id, cls);
-  if (!cop || cop->op.emit == BOPE_NONE || !bop_emitters[cop->op.emit]) return 0;
-  BopCtx x = { id, nt_ref(c->nt, id, "receiver"), argc, TY_CLASS, name, &cop->op, NULL, 0 };
-  if (!bop_emitters[cop->op.emit](c, &x, b)) return 0;
-  if (g_plan_check) plan_check_observe(c, id, TY_CLASS, &cop->op);
-  return 1;
+  BopCtx x = { id, nt_ref(c->nt, id, "receiver"), argc, TY_CLASS, name, cop ? &cop->op : NULL, NULL, 0 };
+  return emit_selected_op(c, &x, 1, b);
 }
 
 /* The call emitted through the row of its name that guards no argument kind,
@@ -721,5 +708,5 @@ int emit_builtin_class_op(Compiler *c, int id, const char *cls, const char *name
    viewed as an Integer to emit the element branch, and the row of an
    Integer index would state a result the held branch does not take. */
 int emit_builtin_op_unguarded(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b) {
-  return emit_builtin_op_ex(c, id, recv, rt, name, NULL, 0, -1, NULL, 1, b);
+  return emit_builtin_op_ex(c, id, recv, rt, name, NULL, 0, -1, 1, b);
 }

@@ -868,7 +868,7 @@ int io_library_count_refused(Compiler *c, int id, const BuiltinOp *op, const cha
    the stream check of emit_call_poly_io_arms raises as ArgumentError. An
    operand no row takes (`winsize = "x"`) is left to the general dispatch. */
 static int boxed_io_library_call(Compiler *c, int id, const char *name) {
-  const BuiltinOp *op = emit_builtin_op_row(c, id, TY_IO, name);
+  const BuiltinOp *op = cplan_builtin_op_row(c, id, TY_IO, name, 0, NULL);
   return bop_io_library_row(op) || io_library_count_refused(c, id, op, name);
 }
 
@@ -1141,7 +1141,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       char tio[32]; snprintf(tio, sizeof tio, "_t%d", tio2);
       /* winsize=: the receiver, then the size, then the handle, as the
          typed arm sets it; a PTY master returned through a lambda is boxed */
-      const BuiltinOp *lop = emit_builtin_op_row(c, id, TY_IO, name);
+      const BuiltinOp *lop = cplan_builtin_op_row(c, id, TY_IO, name, 0, NULL);
       if (lop && lop->emit == BOPE_IO_SET_WINSIZE) {
         int trv = ++g_tmp, tsz = ++g_tmp;
         buf_puts(b, "({ "); trv = hold_operand(c, recv, TY_POLY, 1, trv, 1, " ", b);

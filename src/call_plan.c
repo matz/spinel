@@ -6073,6 +6073,25 @@ int cplan_builtin_hash_positionals(Compiler *c, int id, const char *cls, const c
   int kwpos = builtin_kw_positional(cls, name, cside);
   return kwpos == 2 ? hash_positionals_past(c, id, builtin_kw_taken(cls, name, cside)) : cplan_hash_positionals(c, id, kwpos);
 }
+typedef struct { const Compiler *c; const int *argv; } CallPlanArgKinds;
+
+static TyKind cplan_bop_arg(const void *ptr, int i) {
+  const CallPlanArgKinds *args = ptr;
+  return comp_ntype(args->c, args->argv[i]);
+}
+
+/* See call_plan.h. */
+const BuiltinOp *cplan_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name, int stage, int *argcp) {
+  TyKind fam = bop_family_of(rt);
+  if (!bop_covers(fam)) return NULL;
+  int argc;
+  const int *argv = call_args(c->nt, id, &argc);
+  CallPlanArgKinds args = { c, argv };
+  if (argcp) *argcp = argc;
+  return bop_find_stage(fam, name, argc, nt_ref(c->nt, id, "block") >= 0,
+                        stage >= 0 ? cplan_bop_arg : NULL, &args, stage);
+}
+
 /* See call_plan.h. */
 const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls) {
   const char *name = nt_str(c->nt, id, "name");

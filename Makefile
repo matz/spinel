@@ -5462,6 +5462,19 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	grep -Eq 'sp_PolyPolyHash \* *sp_free_hash' "$$tmp/hn.c" || { echo "infer-test: FAIL (a returned Hash.new that nothing narrows lost the widest variant)"; ok=0; }; \
 	$(SPINEL) test/infer/method_capture_dispatch_int.rb -c --no-line-map -o "$$tmp/mcd.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile method_capture_dispatch_int)"; exit 1; }; \
 	grep -Eq 'sp_Bus_poke_ram\(sp_Bus \*self, sp_int lv_addr, sp_int lv_data\)' "$$tmp/mcd.c" || { echo "infer-test: FAIL (a captured method called only with Integers through a dispatch table lost its sp_int parameters)"; grep -E 'sp_Bus_poke_ram\(' "$$tmp/mcd.c" | head -1; ok=0; }; \
+	if $(SPINEL) test/infer/method_capture_container_int.rb -c --no-line-map -o "$$tmp/mci.c" >/dev/null 2>&1; then \
+	grep -Eq 'sp_int sp_Counter_add\(sp_Counter \*self, sp_int lv_amount\)' "$$tmp/mci.c" || { echo "infer-test: FAIL (a captured method a direct call typed Integer, handed only Integers the compiler names through a container, lost its sp_int parameter or return)"; grep -E 'sp_Counter_add\(' "$$tmp/mci.c" | head -1; ok=0; }; \
+	else echo "infer-test: FAIL (compile method_capture_container_int)"; ok=0; fi; \
+	if $(SPINEL) test/infer/method_capture_same_name_uncaptured.rb -c --no-line-map -o "$$tmp/msn.c" >/dev/null 2>&1; then \
+	grep -Eq 'sp_int sp_Kept_echo\(sp_Kept \*self, sp_int lv_value\)' "$$tmp/msn.c" && grep -Eq 'sp_int sp_Item_echo\(sp_Item \*self, sp_int lv_value\)' "$$tmp/msn.c" && grep -Eq 'sp_int sp_Shape_s_echo\(sp_int lv_value\)' "$$tmp/msn.c" || { echo "infer-test: FAIL (a method nothing captures lost its sp_int lane to a boxed argument meant for a captured method of the same name)"; grep -E 'sp_(Kept|Item|Shape_s)_echo\(' "$$tmp/msn.c" | head -3; ok=0; }; \
+	grep -Eq 'sp_Captured_echo\(sp_Captured \*self, sp_RbVal lv_value\)' "$$tmp/msn.c" || { echo "infer-test: FAIL (a captured method a container call hands a boxed argument kept the parameter its direct call typed)"; ok=0; }; \
+	else echo "infer-test: FAIL (compile method_capture_same_name_uncaptured)"; ok=0; fi; \
+	if $(SPINEL) test/infer/method_capture_other_callee_int.rb -c --no-line-map -o "$$tmp/moc.c" >/dev/null 2>&1; then \
+	grep -Eq 'sp_int sp_Policy_s_check\(sp_int lv_value\)' "$$tmp/moc.c" && grep -Eq 'sp_int sp_Third_s_pass\(sp_int lv_value\)' "$$tmp/moc.c" || { echo "infer-test: FAIL (a captured method lost its sp_int lane to a boxed argument of a call that cannot run it: a class own call, an index, or a Method local written other methods)"; grep -E 'sp_(Policy_s_check|Third_s_pass)\(' "$$tmp/moc.c" | head -2; ok=0; }; \
+	else echo "infer-test: FAIL (compile method_capture_other_callee_int)"; ok=0; fi; \
+	if $(SPINEL) test/infer/method_capture_arity_int.rb -c --no-line-map -o "$$tmp/mar.c" >/dev/null 2>&1; then \
+	grep -Eq 'sp_int sp_Pair_s_sum\(sp_int lv_a, sp_int lv_b\)' "$$tmp/mar.c" || { echo "infer-test: FAIL (a captured method of two parameters lost its sp_int lane to a one-argument call that cannot enter it)"; grep -E 'sp_Pair_s_sum\(' "$$tmp/mar.c" | head -1; ok=0; }; \
+	else echo "infer-test: FAIL (compile method_capture_arity_int)"; ok=0; fi; \
 	$(SPINEL) test/infer/dead_constructor_no_arm.rb -c --no-line-map -o "$$tmp/dc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile dead_constructor_no_arm)"; exit 1; }; \
 	grep -q 'sp_poly_add' "$$tmp/dc.c" && { echo "infer-test: FAIL (a class constructed only in dead code widened a poly receiver's field read to poly)"; ok=0; }; \
 	grep -Eq '(sp_int_add\(|sp_o?int _t[0-9]+ = )\(\{ sp_RbVal _t[0-9]+ = lv_d; sp_o?int _t[0-9]+ = (0|sp_oint_nil\(\)); switch' "$$tmp/dc.c" || { echo "infer-test: FAIL (the field read of a boxed receiver did not stay an int switch, or its receiver is rooted for an arm that cannot run)"; ok=0; }; \

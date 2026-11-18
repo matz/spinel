@@ -86,6 +86,7 @@ int method_user_override_recv(Compiler *c, int node);
 int method_obj_target_mi(Compiler *c, int node);
 int method_obj_alias_owner(Compiler *c, int node, int *sg);
 int method_recv_node(Compiler *c, int recv);
+int local_takes_unwritten_value(Compiler *c, Scope *sc, const char *vn);
 int method_recv_nodes(Compiler *c, int recv, int **out);
 int method_expr_is_unbound(Compiler *c, int recv);
 int proc_to_proc_method_nodes(Compiler *c, int recv, int **out);

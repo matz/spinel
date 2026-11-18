@@ -5753,6 +5753,25 @@ static int method_nodes_same_target(Compiler *c, int a, int b) {
   return ta >= 0 && ta == method_obj_target_mi(c, b);
 }
 
+/* Does the local `vn` of scope `sc` take a value that no plain write of it
+   states: a parameter's argument, the target of a multiple assignment, a
+   `for`, a `rescue =>` or a pattern, or an operator write (`m &&= other`)?
+   What it holds then no write names. The scope's own writes of the name
+   are read from their index (comp_lvw_first_sc): a walk of the program's
+   targets for each Method local grew with the two multiplied. */
+int local_takes_unwritten_value(Compiler *c, Scope *sc, const char *vn) {
+  const NodeTable *nt = c->nt;
+  if (!sc || !vn) return 0;
+  for (int i = 0; i < sc->nparams; i++)
+    if (sc->pnames[i] && sp_streq(sc->pnames[i], vn)) return 1;
+  int si = (int)(sc - c->scopes);
+  for (int w = comp_lvw_first_sc(c, si, vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode && wn && sp_streq(wn, vn) && comp_scope_of(c, w) == sc) return 1;
+  }
+  return !c->lvws_built;   /* (no index: nothing says the local has no such write) */
+}
+
 /* The `method(:sym)` node a Method-typed expression resolves to: either the
    call itself (inline) or, for a local variable, its assignment in scope. */
 int method_recv_node(Compiler *c, int recv) {
@@ -5811,6 +5830,11 @@ int method_recv_node(Compiler *c, int recv) {
       if (found < 0) found = inner;
       else if (inner != found && !method_nodes_same_target(c, found, inner)) return -1;
     }
+    /* ... and no other value may reach the local: `spare, m = 0, other`,
+       `m &&= other` or a parameter's argument put another Method behind
+       the one node's signature, whose call handed a boxed argument to an
+       Integer parameter unchecked and unconverted */
+    if (found >= 0 && local_takes_unwritten_value(c, sc, vn)) return -1;
     return found;
   }
   return -1;

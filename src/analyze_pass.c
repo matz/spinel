@@ -11971,6 +11971,86 @@ static int opw_bind_operator(Compiler *c, int id, int k, const char *op, int val
   return slot_take(c, pp, infer_type(c, val), val);
 }
 static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before);
+
+/* A dynamic call of a Method the receiver does not name (one read out of a
+   container, or handed on through parameters) may run any method the program
+   captures, with whatever the site passes. A boxed argument's kind only the
+   run time knows, so a parameter a direct call typed cannot hold it to that
+   kind: `Policy.check(0)` typed the parameter Integer, and
+   `options[:loader].call(value)` with a Float in the boxed value was refused
+   at the Method's gate where CRuby runs the body. Each captured method's
+   typed parameter the call's layout funds with a boxed argument (a keyword
+   by its name) takes the boxed value, here in the fixpoint, so what the
+   method does with it (its return, an ivar, a helper's parameter) settles
+   with it. A typed argument is no such evidence: the parameter keeps its
+   lane and the gate. A parameter nothing typed is left to the backstop, as
+   before. A method the call's count or keywords cannot enter is no target:
+   its ArgumentError comes before a parameter is read. *caps is the program's
+   `method(:sym)` nodes, listed on first use (*ncaps -1 until then). */
+static int boxed_recv_may_be_callable(Compiler *c, int recv, const char *name);
+static int bind_boxed_args_to_captures(Compiler *c, int id, int **caps, int *ncaps) {
+  const NodeTable *nt = c->nt;
+  int args = nt_ref(nt, id, "arguments"), argc = 0, boxed = 0, changed = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  /* (a keyword hash may hold a boxed value: each target's layout says) */
+  for (int k = 0; k < argc && !boxed; k++)
+    boxed = nt_kind(nt, argv[k]) == NK_KeywordHashNode ||
+            (nt_kind(nt, argv[k]) != NK_SplatNode && nt_kind(nt, argv[k]) != NK_BlockArgumentNode &&
+             infer_type(c, argv[k]) == TY_POLY);
+  if (!boxed) return 0;
+  if (*ncaps < 0) {
+    int cap = 0;
+    *ncaps = 0;
+    NT_FOREACH_KIND(nt, NK_CallNode, mn) {
+      if (!is_method_obj_call(c, mn)) continue;
+      if (*ncaps == cap) {
+        cap = cap ? cap * 2 : 8;
+        *caps = realloc(*caps, sizeof **caps * (size_t)cap);
+        if (!*caps) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      (*caps)[(*ncaps)++] = mn;
+    }
+  }
+  for (int j = 0; j < *ncaps; j++) {
+    int tmi = method_obj_target_mi(c, (*caps)[j]);
+    if (tmi < 0 || method_call_param_shift(c, (*caps)[j], tmi)) continue;
+    Scope *m = &c->scopes[tmi];
+    if (!method_takes_call_args(c, m, id)) continue;
+    ArgLayout L;
+    call_layout(c, m, argv, argc, &L);
+    for (int i = 0; i < m->nparams; i++) {
+      LocalVar *p = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
+      if (!p || p->rbs_seeded || p->type == TY_UNKNOWN || p->type == TY_POLY) continue;
+      int a = layout_source_arg(c, m, argv, &L, i);
+      if (a < 0 || infer_type(c, a) != TY_POLY) continue;
+      /* (it stays boxed through the re-narrow, as a boxed receiver's argument
+         does (#4294): reset and typed again by the direct call, the Integer
+         went down the methods it calls a round ahead of the boxed value) */
+      changed |= slot_take(c, p, TY_POLY, a);
+      p->poly_dispatch_widened = 1;
+    }
+    arg_layout_free(&L);
+  }
+  return changed;
+}
+
+/* Do the nmn nodes method_recv_nodes answered for `recv` name every Method
+   it may hold: the one the expression names, or one for each write of the
+   local? A write that names none (a factory's result) may hold any captured
+   method. */
+static int method_recv_all_named(Compiler *c, int recv, int nmn) {
+  const NodeTable *nt = c->nt;
+  if (nmn == 0) return 0;
+  if (method_recv_node(c, recv) >= 0) return 1;
+  const char *vn = nt_str(nt, recv, "name");
+  Scope *sc = comp_scope_of(c, recv);
+  for (int w = an_local_writes_named_first(c, vn); w >= 0; w = an_local_writes_named_next(w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (comp_scope_of(c, w) == sc && wn && sp_streq(wn, vn)) nmn--;
+  }
+  return nmn == 0 && !local_takes_unwritten_value(c, sc, vn);
+}
+
 int infer_param_types(Compiler *c) { return infer_param_types_ex(c, 0, NULL); }
 int infer_param_types_settle(Compiler *c) { return infer_param_types_ex(c, 1, NULL); }
 int infer_changed_param_types(Compiler *c, const NodeTypes *before) { return infer_param_types_ex(c, 1, before); }
@@ -11985,6 +12065,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   sb_targets_share_begin(&changed, &any);
   IptWork w;
   ipt_work_begin(c, &w);
+  int *caps = NULL, ncaps = -1;   /* (bind_boxed_args_to_captures) */
   /* A class method `===` of the program's own is called by `when` and `in`
      arms, grep and a class held as a value, with any kind of value: its
      parameter takes a boxed value. */
@@ -12227,8 +12308,14 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         else changed |= bind_call_params(c, id, tmi);
       }
       free(mns);
+      if (!method_recv_all_named(c, recv, nmn)) changed |= bind_boxed_args_to_captures(c, id, &caps, &ncaps);
       continue;
     }
+    /* ... and `call` or `[]` on a boxed receiver whose class facts do not
+       rule a Method out */
+    if (recv >= 0 && name && (sp_streq(name, "call") || sp_streq(name, "()") || sp_streq(name, "[]")) &&
+        infer_type(c, recv) == TY_POLY && boxed_recv_may_be_callable(c, recv, name))
+      changed |= bind_boxed_args_to_captures(c, id, &caps, &ncaps);
 
     /* <unbound>.bind_call(obj, args...): the args after the receiver bind to
        the target's params, same as <method>.call -- without this the target's
@@ -12809,6 +12896,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   if (!settle || !ipt_work_next(c, &w, &ids, &nids)) break;
   }
   ipt_work_end(&w);
+  free(caps);
   sb_targets_share_end();
   wbas_share_end();
   return changed | any;

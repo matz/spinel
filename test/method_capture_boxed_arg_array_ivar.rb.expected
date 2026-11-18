@@ -1,0 +1,7 @@
+"Integer"
+"Float"
+"String"
+["Symbol", :sym]
+"NilClass"
+"Array"
+"Integer"

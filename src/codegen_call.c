@@ -21465,6 +21465,7 @@ static const char *const bop_arity_kw_rows[][2] = {
   {"Rational", "round"}, {"Rational", "floor"}, {"Rational", "ceil"}, {"Rational", "truncate"},  /* half: */
   {"Proc", "parameters"},   /* lambda: */
   {"String", "unpack"},     /* offset: */
+  {"String", "lines"}, {"String", "each_line"},  /* chomp: */
   {"Array", "pack"},        /* buffer: */
   {"Queue", "pop"}, {"Queue", "shift"}, {"Queue", "deq"},    /* timeout: */
   {"Queue", "push"}, {"Queue", "<<"}, {"Queue", "enq"},      /* timeout: (SizedQueue's) */

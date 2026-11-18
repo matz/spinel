@@ -26811,15 +26811,23 @@ int desugar_toplevel_hooked_mixins(Compiler *c) {
     incl_path_text(nt, recv, rpath, sizeof rpath);
     incl_path_text(nt, av[0], mpath, sizeof mpath);
     /* (a name that filled the buffer may be cut short, and match another's) */
-    if (strlen(rpath) + 1 >= sizeof rpath || strlen(mpath) + 1 >= sizeof mpath) continue;
+    /* (+2: the rooted argument the pre-walk splice reads back gains `::`) */
+    if (strlen(rpath) + 1 >= sizeof rpath || strlen(mpath) + 3 >= sizeof mpath) continue;
     const char *rp = rpath[0] == ':' ? rpath + 2 : rpath, *mp = mpath[0] == ':' ? mpath + 2 : mpath;
     int decl = 0;
     for (int m = 0; m < n0 && !decl; m++)
       if (qn[m] && sp_streq(qn[m], rp)) decl = class_def_is_module(nt, m) ? 2 : class_def_is_class(nt, m) ? 1 : 0;
-    if (!decl) continue;
+    /* (not a module's include: desugar_included_hooks splices no include in a module body, so the reopening
+       would run the hook nowhere either) */
+    if (!decl || (decl == 2 && k == 0)) continue;
     /* (a hook defined before the call: a later one is not the call's) */
     int hit = 0;
-    for (int q = 0; q < nhk && !hit; q++) hit = hk[q].kind == k && hk[q].def < st && sp_streq(hk[q].mod, mp);
+    /* (node order is source order within a file only: a hook another file defines is taken, that file having
+       been required ahead of the call) */
+    int sf = nt_int(nt, st, "node_file", 0);
+    for (int q = 0; q < nhk && !hit; q++)
+      hit = hk[q].kind == k && sp_streq(hk[q].mod, mp) &&
+            (nt_int(nt, hk[q].def, "node_file", 0) != sf || hk[q].def < st);
     if (!hit) continue;
     int arg = nt_clone_subtree(nt, av[0]), at = arg;
     while (nt_kind(nt, at) == NK_ConstantPathNode && nt_ref(nt, at, "parent") >= 0) at = nt_ref(nt, at, "parent");

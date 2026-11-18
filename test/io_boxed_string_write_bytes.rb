@@ -43,5 +43,23 @@ offset = [Offset.new(text)]
 p handles[0].pwrite(operands[0], *offset)
 file.rewind
 p [file.read.bytesize, text.bytesize]
+
+class Rendered
+  def initialize(text)
+    @text = text
+  end
+
+  def to_s
+    puts "render"
+    @text
+  end
+end
+
+text = +"a\0b"
+rendered = [Rendered.new(text), 1]
+p handles[0].pwrite(rendered[0], Offset.new(text))
+file.rewind
+bytes = file.read
+p [bytes.bytesize, bytes.bytes[0, 3]]
 file.close
 File.unlink(path)

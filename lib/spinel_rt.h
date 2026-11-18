@@ -4411,12 +4411,21 @@ static sp_int sp_File_pwrite_poly(sp_File *f, sp_RbVal v, sp_RbVal offset) {
   SP_GC_ROOT_RBVAL(v);
   SP_GC_ROOT_RBVAL(offset);
   if (!f) sp_nil_recv("pwrite");
-  sp_bool is_string = sp_rbval_is_string(v);
-  const char *converted = is_string ? NULL : sp_poly_to_s(v);
+  sp_RbVal text = v;
+  SP_GC_ROOT_RBVAL(text);
+  const char *converted = NULL;
   SP_GC_ROOT_STR(converted);
+  if (!sp_rbval_is_string(v)) {
+    if (sp_user_display_box(v, 0, &text)) {
+      if (!sp_rbval_is_string(text)) converted = sp_obj_to_s_fallback(v);
+    } else {
+      text = sp_box_nil();
+      converted = sp_poly_to_s(v);
+    }
+  }
   sp_int off = sp_poly_arg_int_chk_w(offset, 2);
-  return is_string ? sp_File_pwrite_bin(f, sp_rbval_string_bytes(v), off)
-                   : sp_File_pwrite(f, converted, off);
+  return sp_rbval_is_string(text) ? sp_File_pwrite_bin(f, sp_rbval_string_bytes(text), off)
+                                  : sp_File_pwrite(f, converted, off);
 }
 /* The domain or socket type Socket.new, Socket.pair and UDPSocket.new take:
    a String or Symbol names the constant (sp_sock_named_const), and anything

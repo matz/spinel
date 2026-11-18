@@ -10,3 +10,6 @@ wrong number of arguments (given 3, expected 2)
 [97, 0, 98]
 259
 [259, 259]
+render
+259
+[259, [97, 0, 98]]

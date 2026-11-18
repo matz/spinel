@@ -1598,24 +1598,41 @@ int desugar_sclass_hooks(Compiler *c) {
       if (sb < 0 || nt_kind(nt, sb) != NK_StatementsNode) continue;
       const int *ss = nt_arr(nt, sb, "body", &m);
       int *keep = malloc(sizeof(int) * (size_t)(m + 1)), *moved = malloc(sizeof(int) * (size_t)(m + 1));
-      if (!keep || !moved) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      int nk = 0, nm = 0;
+      char *hidden = calloc((size_t)(m + 1), 1);
+      if (!keep || !moved || !hidden) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      int nk = 0, nm = 0, priv = 0;
       for (int j = 0; j < m; j++) {
+        /* a bare `private` / `public` / `protected` sets the section the defs after it fall in */
+        if (nt_kind(nt, ss[j]) == NK_CallNode && nt_ref(nt, ss[j], "receiver") < 0 && nt_ref(nt, ss[j], "arguments") < 0) {
+          const char *vn = nt_str(nt, ss[j], "name");
+          if (vn && sp_streq(vn, "private")) priv = 1;
+          else if (vn && (sp_streq(vn, "public") || sp_streq(vn, "protected"))) priv = 0;
+        }
         const char *dn = nt_kind(nt, ss[j]) == NK_DefNode && nt_ref(nt, ss[j], "receiver") < 0 ? nt_str(nt, ss[j], "name") : NULL;
-        if (dn && (sp_streq(dn, "included") || sp_streq(dn, "extended") || sp_streq(dn, "prepended"))) moved[nm++] = ss[j];
+        if (dn && (sp_streq(dn, "included") || sp_streq(dn, "extended") || sp_streq(dn, "prepended"))) { hidden[nm] = (char)priv; moved[nm++] = ss[j]; }
         else keep[nk++] = ss[j];
       }
       if (nm) {
         nt_node_set_arr(nt, sb, "body", keep, nk);
         for (int j = 0; j < nm; j++) {
           nt_node_set_ref(nt, moved[j], "receiver", fwd_new_node_like(nt, moved[j], "SelfNode"));
-          out = realloc(out, sizeof(int) * (size_t)(no + n + nm + 1));
+          out = realloc(out, sizeof(int) * (size_t)(no + n + 2 * nm + 1));
           if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
           out[no++] = moved[j];
+          /* (not public: the section that held it kept the hook private, as `private_class_method` does here) */
+          if (hidden[j]) {
+            int call = fwd_new_node_like(nt, moved[j], "CallNode"), args = fwd_new_node_like(nt, moved[j], "ArgumentsNode");
+            int sym = fwd_new_node_like(nt, moved[j], "SymbolNode");
+            nt_node_set_str(nt, sym, "value", nt_str(nt, moved[j], "name"));
+            nt_node_set_arr(nt, args, "arguments", &sym, 1);
+            nt_node_set_str(nt, call, "name", "private_class_method");
+            nt_node_set_ref(nt, call, "arguments", args);
+            out[no++] = call;
+          }
         }
         changed = 1;
       }
-      free(keep); free(moved);
+      free(keep); free(moved); free(hidden);
       st = nt_arr(nt, body, "body", &n);
     }
     nt_node_set_arr(nt, body, "body", out, no);

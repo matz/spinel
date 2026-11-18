@@ -11520,7 +11520,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (g_plan_check) cplan_served("poly-form-n");
       /* a genuine String in a slot whose name a user class owns (#4816) */
       if (kw_pos) emit_poly_str_aset_prearm(c, recv, &ps, &ptemps, b);
-      if (kw_pos && !has_splat_arg)
+      if (kw_pos && !has_splat_arg && !cplan_poly_has_family(&pform, PB_STR_SETOP))
         emit_poly_str_prearm(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, tv, tr, b);
       buf_puts(b, "switch (");
       /* where this switch starts, so its end can tell whether any arm below

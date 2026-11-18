@@ -3736,34 +3736,46 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
       buf_printf(b, "sp_str_%s(_t%d.v.s, %s)", name, tv, strarg);
     buf_puts(b, "; }\nelse ");
   }
-  /* the multi-set forms on a TAG_STR receiver (#4195) */
+  /* The set operation owns the builtin base String arm. Reopened methods
+     and subclass receivers reach the class switch below. */
   if (is_strsetop_n) {
     int is_cnt = sp_streq(name, "count");
     if ((is_cnt && (ret == TY_POLY || ret == TY_INT)) ||
         (!is_cnt && (ret == TY_POLY || ret == TY_STRING))) {
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_SETOP, -1, TY_UNKNOWN, PC_SAME);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { ", tv);
-      char sets[256]; int sl;
-      sl = snprintf(sets, sizeof sets, "(const char *[]){");
-      for (int a = 0; a < argc && sl < (int)sizeof sets - 16; a++) {
-        int t = atmp[a];
-        /* A later set read can allocate before the helper consumes this one. */
-        if (atmp_ty[a] == TY_STRBUF) {
-          t = ++g_tmp;
-          buf_printf(b, "const char *_t%d = sp_strbuf_read(_t%d); SP_GC_ROOT(_t%d); ", t, atmp[a], t);
+      int sci = comp_core_class(c, CORE_STRING);
+      int undef = sci < 0 || cplan_builtin_call(c, T->id) ? 0 : cplan_undef_at(c, T->id, sci, name);
+      if (undef < 0) undef = cplan_undef_before(c, T->id, sci, name) || cplan_undef_stops(c, T->id, sci, name);
+      int raise_undef = undef && !cplan_has_method_missing(c, T->id, sci, 0);
+      if (raise_undef || (!undef && !string_reopen_defines(c, T->id, name)))
+        buf_printf(b, "if (sp_rbval_is_string(_t%d) && !sp_poly_is_str_subclass(_t%d)) { ", tv, tv);
+      else
+        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { ", tv);
+      if (raise_undef) {
+        buf_printf(b, "sp_exc_stage_recv(_t%d); sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); }\nelse ",
+                   tv, name, tv);
+      } else {
+        char sets[256]; int sl;
+        sl = snprintf(sets, sizeof sets, "(const char *[]){");
+        for (int a = 0; a < argc && sl < (int)sizeof sets - 16; a++) {
+          int t = atmp[a];
+          /* A later set read can allocate before the helper consumes this one. */
+          if (atmp_ty[a] == TY_STRBUF) {
+            t = ++g_tmp;
+            buf_printf(b, "const char *_t%d = sp_strbuf_read(_t%d); SP_GC_ROOT(_t%d); ", t, atmp[a], t);
+          }
+          sl += snprintf(sets + sl, sizeof sets - (size_t)sl, "%s_t%d", a ? ", " : "", t);
         }
-        sl += snprintf(sets + sl, sizeof sets - (size_t)sl, "%s_t%d", a ? ", " : "", t);
+        snprintf(sets + sl, sizeof sets - (size_t)sl, "}, %d", argc);
+        char call[384];
+        snprintf(call, sizeof call, "sp_str_%s_n(sp_poly_recv_s(_t%d, \"%s\"), %s)", name, tv, name, sets);
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) buf_printf(b, "%s(%s)", is_cnt ? "sp_box_int" : "sp_box_str_new", call);
+        /* A nullable integer result slot takes the count with its nil flag. */
+        else if (is_cnt && plan_slot_oint(c, T->id, ret)) buf_printf(b, "sp_oint_of(%s)", call);
+        else buf_puts(b, call);
+        buf_puts(b, "; }\nelse ");
       }
-      snprintf(sets + sl, sizeof sets - (size_t)sl, "}, %d", argc);
-      char call[384];
-      snprintf(call, sizeof call, "sp_str_%s_n(_t%d.v.s ? _t%d.v.s : \"\", %s)", name, tv, tv, sets);
-      buf_printf(b, "_t%d = ", tr);
-      if (ret == TY_POLY) buf_printf(b, "%s(%s)", is_cnt ? "sp_box_int" : "sp_box_str_new", call);
-      /* a result slot that holds a nil another arm answers (an oint,
-         plan_slot_oint) takes the count lifted (#8492) */
-      else if (is_cnt && plan_slot_oint(c, T->id, ret)) buf_printf(b, "sp_oint_of(%s)", call);
-      else buf_puts(b, call);
-      buf_puts(b, "; }\nelse ");
     }
   }
   /* Hash#store on a boxed hash receiver (#4195) */

@@ -1,0 +1,4 @@
+"hi"
+:override
+[:strip, true]
+:restored

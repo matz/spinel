@@ -3134,7 +3134,7 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
    function of the name (cls is not read), as call_target's flags; the planned
    rows ask instances. -1 with ML_NONE where cls has no
    class, the table holds no method, or an undef of the name on cls's chain
-   provably ran before id (ct_undef_before: *ml is ML_NONE with MLW_RECORD; a
+   provably ran before id (cplan_undef_before: *ml is ML_NONE with MLW_RECORD; a
    planned row's reader takes the table's program-wide undef, as it always
    did): the call is lowered as a
    call of `name`, which binds through the table, so that call is not the
@@ -3149,7 +3149,7 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
    the record places it, not in a method's body or a block it cannot place,
    which may run before the undef? Anywhere else the table's method stands, as
    cplan_hook_target keeps it. */
-static int ct_undef_before(Compiler *c, int site, int cls, const char *name) {
+int cplan_undef_before(Compiler *c, int site, int cls, const char *name) {
   if (site < 0 || elab_in_unplaced_block(c, site)) return 0;
   int framed = elab_plan_enter(c, site);
   LoadPoint p = elab_point_of(c, site);
@@ -3177,7 +3177,7 @@ int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *nam
      the sites before the undef, as cplan_undef_stops takes the undef
      program-wide) */
   if (undef && planned) return -1;
-  if (undef && ct_undef_before(c, site, cls, name)) {
+  if (undef && cplan_undef_before(c, site, cls, name)) {
     m->why = MLW_RECORD;   /* (the record proves the call raises, as call_target's none) */
     return -1;
   }
@@ -9210,7 +9210,6 @@ CallPlan cplan_refuse(Compiler *c, int id) {
 
 static void cpoly_family(PolyPlan *p, int *cap, int fam);
 static void cpoly_trial(PolyPlan *p, int *cap, int t);
-static int cpoly_has_family(const PolyPlan *p, int fam);
 static int cpoly_str_trial(Compiler *c, int id, const char *name, int argc, const int *argv,
                            const TyKind *atmp_ty, TyKind ret, const PolyPlan *p);
 static int cpoly_cls_value_arms(Compiler *c, int id, const char *name, int argc, const PolyArgs *A,
@@ -9603,16 +9602,16 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   if (ps.kw_pos && !ps.has_splat_arg && cpoly_str_trial(c, id, name, argc, argv, atmp_ty, ret, p))
     cpoly_trial(p, cap, PT_STR);
   cpoly_cases_n(c, id, name, argc, argv, ret, atmp_ty, &ps, splat_a, p, cap);
-  if (cpoly_has_family(p, PB_ND_GENERIC) && !cpoly_has_family(p, PB_ND_REPLACE) &&
-      !cpoly_has_family(p, PB_ND_UPTO) &&
-      !cpoly_has_family(p, PB_ND_ROUND) && !cpoly_has_family(p, PB_ND_NUM) &&
+  if (cplan_poly_has_family(p, PB_ND_GENERIC) && !cplan_poly_has_family(p, PB_ND_REPLACE) &&
+      !cplan_poly_has_family(p, PB_ND_UPTO) &&
+      !cplan_poly_has_family(p, PB_ND_ROUND) && !cplan_poly_has_family(p, PB_ND_NUM) &&
       !cpoly_obj_default_n(c, id, name, kwh, pos_argc, splat_a, p, cap))
     cpoly_trial(p, cap, PT_GENERIC_TAIL);
   /* the families that write the switch's `default:` themselves */
   static const int dflt[] = { PB_ND_GENERIC, PB_ND_FIRSTN, PB_ND_KEYS, PB_ND_MERGE, PB_ND_AREF2, PB_ND_AREF,
                               PB_PUSH, PB_INCLUDE_CASES, PB_PRED_N };
   int has_default = ps.cover || (ps.strftime && ps.ncand == 0);
-  for (size_t i = 0; i < sizeof dflt / sizeof dflt[0]; i++) has_default |= cpoly_has_family(p, dflt[i]);
+  for (size_t i = 0; i < sizeof dflt / sizeof dflt[0]; i++) has_default |= cplan_poly_has_family(p, dflt[i]);
   if (!is_setter_val && !has_default) cpoly_trial(p, cap, PT_DEFAULT_N);
 }
 
@@ -9792,7 +9791,7 @@ static void cpoly_trial(PolyPlan *p, int *cap, int t) {
   cpoly_add(p, cap, PA_TRIAL, PA_KEY_TRIAL + t, -1, TY_UNKNOWN, PC_SAME);
 }
 
-static int cpoly_has_family(const PolyPlan *p, int fam) {
+int cplan_poly_has_family(const PolyPlan *p, int fam) {
   for (int i = 0; i < p->n; i++)
     if (p->arm[i].key == PA_KEY_BUILTIN + fam) return 1;
   return 0;
@@ -9811,9 +9810,9 @@ static int cpoly_str_trial(Compiler *c, int id, const char *name, int argc, cons
   static const int str_tag[] = { PB_LEN, PB_EMPTY, PB_STRT, PB_SPLIT, PB_UNPACK1, PB_STR_DELETE,
                                  PB_STR_PARTITION, PB_STR_SETOP, PB_STR_ENCODE, PB_STR_SPLIT_N };
   for (size_t i = 0; i < sizeof str_tag / sizeof str_tag[0]; i++)
-    if (cpoly_has_family(p, str_tag[i])) return 0;
+    if (cplan_poly_has_family(p, str_tag[i])) return 0;
   /* an Integer's bit reference reads a String's character too */
-  if (cpoly_has_family(p, PB_INT_BITREF) && (ret == TY_POLY || ret == TY_STRING)) return 0;
+  if (cplan_poly_has_family(p, PB_INT_BITREF) && (ret == TY_POLY || ret == TY_STRING)) return 0;
   return 1;
 }
 
@@ -10008,8 +10007,8 @@ static void cpoly_resolve(Compiler *c, int id, PolyPlan *p, int full) {
     /* a default written by now (the Object reopening's, a builtin one), or
        the builtin surface's, and the raise when it declines */
     int done = n1 > n0;
-    for (int f = PB_D_ENUM_EACH; f <= PB_D_HASH; f++) done |= cpoly_has_family(p, f);
-    if (cpoly_has_family(p, PB_D_ARRAY_TRANSFORM)) cpoly_trial(p, &cap, PT_ARRAY_FALLBACK);
+    for (int f = PB_D_ENUM_EACH; f <= PB_D_HASH; f++) done |= cplan_poly_has_family(p, f);
+    if (cplan_poly_has_family(p, PB_D_ARRAY_TRANSFORM)) cpoly_trial(p, &cap, PT_ARRAY_FALLBACK);
     if (!done) cpoly_trial(p, &cap, PT_DEFAULT0);
   }
   else cpoly_user_arms_n(c, id, name, argc, nt_arr(c->nt, args, "arguments", &argc), p->ret, p, full);

@@ -55,3 +55,12 @@ C#first_who: alias#14 (who: def#5) end=yes
 const D: write#16
 D#maybe: define_method#18 may end=unknown open
 D#sure: def#19 end=yes
+post: after #24
+extent block class_eval line 10: from=#2 sure=never count=once kept=no
+extent def bar line 11: from=#20 sure=never count=many kept=no
+extent def who line 14: from=#22 sure=never count=many kept=no
+extent def kind line 16: from=#23 sure=never count=many kept=no
+extent def who line 20: from=#22 sure=never count=many kept=no
+extent def kind line 22: from=never sure=never count=zero kept=no
+extent block define_method line 32: from=#18 sure=never count=many kept=yes
+extent def sure line 34: from=#24 sure=never count=many kept=no

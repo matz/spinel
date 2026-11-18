@@ -41,3 +41,11 @@ C#name: def#8 runs=#18 end=yes
 C#x: reader#12 end=yes
 C#x=: writer#12 end=yes
 C.made: def#14 end=yes
+post: after #20
+extent def hi line 10: from=#20 sure=never count=many kept=no
+extent def name line 14: from=#18 sure=never count=many kept=no
+extent def ho line 18: from=#20 sure=never count=many kept=no
+extent def name line 22: from=#18 sure=never count=many kept=no
+extent block instance_eval line 25: from=#9 sure=#9 count=once kept=no
+extent block instance_eval line 31: from=#13 sure=#13 count=once kept=no
+extent def made line 32: from=#20 sure=never count=many kept=no

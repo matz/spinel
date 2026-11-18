@@ -33,3 +33,10 @@ const Lib::String: write#9
 Lib__String#lib: def#10 end=yes
 main#__int_double__0: def#16 private end=yes
 main#__cmp_tag__0: def#17 private end=yes
+post: after #17
+extent def double line 6: from=#11 sure=never count=many kept=no
+extent def tag line 9: from=#12 sure=never count=many kept=no
+extent def halve line 13: from=never sure=never count=zero kept=no
+extent def lib line 18: from=#13 sure=never count=many kept=no
+extent def __int_double__0 line 6: from=never sure=never count=zero kept=no
+extent def __cmp_tag__0 line 9: from=never sure=never count=zero kept=no

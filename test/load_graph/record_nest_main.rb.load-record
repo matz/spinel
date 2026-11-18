@@ -37,3 +37,9 @@ visibility in #8: vis#9 public
 main#lib_helper: def#10 end=yes
 A__Inner#more: def#12 end=yes
 main#entry_helper: def#13 private end=yes
+post: after #19
+extent def who line 8: from=#14 sure=never count=many kept=no
+extent def who line 13: from=#15 sure=never count=many kept=no
+extent def more line 18: from=#16 sure=never count=many kept=no
+extent def entry_helper line 20: from=#18 sure=never count=many kept=no
+extent def lib_helper line 2: from=#17 sure=never count=many kept=no

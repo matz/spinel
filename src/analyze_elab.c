@@ -81,6 +81,32 @@ int g_dump_load_record = 0;
    the class is there either way (lr_def_applied). */
 typedef struct { int node, file, region, top, rank, depth, frame, last, rep; unsigned char may, partial, fmay, fpartial, kept; int list, up, nrun; unsigned char runs, bmay; } LrStmt;
 
+/* The extent of a body (the record's, from the record alone: syntax and lr_rta's
+   own call binding, never types): the code that runs when something else does,
+   a method body, a lambda or proc, a block, an END or at_exit body, a region
+   loaded at no load point. A node takes the extent of the innermost body around
+   it; its statement's point is what stands in for it where it has one.
+   from: the first statement of region 0 it may start on (0: anywhere, LR_NEVER:
+   never, LR_POST: only after the load phase: an exit handler's, an --ext-entry
+   method's); sure: the first statement after which it has certainly run at
+   least once (LR_NEVER: none is certain); count: most runs from `from`
+   (LR_CNT_*); kept: it runs at a time the syntax does not tell (a block whose
+   call keeps it or the record does not know, a lambda or proc, a handler).
+   A block's runs and inplace are its call's reading (elab_block_runs, and
+   whether it runs where the call does: elab_blocks_run_at_once), as of the last
+   ask: passes add methods that change what a call may reach, and the parents
+   asked through differ (the tree's, the record's), so each ask reads it again.
+   hist, bind: what lr_rta saw of a def: the
+   history of its name, the call that reached it alone. */
+enum { LR_NEVER = INT_MAX, LR_POST = INT_MAX - 1 };
+enum { LR_B_DEF, LR_B_LAMBDA, LR_B_BLOCK, LR_B_END, LR_B_REGION };
+enum { LR_CNT_ZERO, LR_CNT_ONCE, LR_CNT_MANY };
+typedef struct LrExt {
+  int node, from, sure, hist, bind;
+  unsigned char body, count, kept, cb, timed;
+  signed char runs, inplace;
+} LrExt;
+
 /* The order questions SPINEL_ELAB_CHECK counts, by reader */
 typedef struct { const char *reader; long asked, differ; } LrCheck;
 enum { LR_CHECK_MAX = 32, LR_CHECK_SHOW = 100 };
@@ -110,6 +136,7 @@ struct LoadRecord {
   int *at;                   /* [n] each node's statement; -1 under no file's root */
   unsigned char *bits;       /* [n] LR_* */
   int n, ncap, nregion;
+  signed char *once; int nonce; unsigned long once_of;   /* [nonce] by node, in the call plan's frame: elab_blocks_run_at_once's answer + 1, 0 for not asked yet; of the histories at hgen once_of */
   struct ElabWalk *walk;     /* the registration's walk, while it runs (elab_walk_enter) */
   ANameHash cfirst; struct LrCallSt *cfirst_cs; int cfirst_done;   /* the statements of region 0 that call each name outside a method body, and whether a call is elsewhere (elab_accessor_first), of the nodes below cfirst_done (lr_calls_scan) */
   ANameHash cn_name, cn_leaf; int *cn_cls, cn_n, cn_cap, cn_done;   /* the classes registered so far, each by its Ruby name and by the last segment of it, in class order (lr_walk_class_by_name) */
@@ -120,7 +147,7 @@ struct LoadRecord {
   /* the call plan's frame (elab_plan_enter): the map one build made, swapped
      in while call_target asks its questions, with the parents it climbed and
      the run points made of it (lr_run_points) */
-  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *urun, *rentry; } plan;
+  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *rentry; struct LrExt *ext; int *extix, next, cext, cextix; } plan;
   int *up;                   /* [n] the parent each node's point was climbed from */
   int *plan_par, plan_depth;
   unsigned char plan_made;
@@ -192,7 +219,8 @@ struct LoadRecord {
   struct { int builds, nst; long entries; const int *at; unsigned ver; unsigned long edits; } fin_of;
   unsigned char fin_calls;   /* ...1 when a remove_const or a send names no name the record reads: no name is final */
   int runs_of, nrun, *rend;  /* lr_run_points: the build its bits are of, how many statements run code, each region's end */
-  int *rinst, *urun;         /* ...from which statement on an object of each class may exist, each def's body may run (lr_rta) */
+  int *rinst;                /* ...from which statement on an object of each class may exist (lr_rta) */
+  struct LrExt *ext; int *extix, next, cext, cextix;   /* the extents of the map's bodies (LrExt): [next] entries, by body node + 1 in extix[cextix]; made again with the run points (lr_run_points) */
   int *rentry;               /* ...and each region's load (all three statements of region 0) */
   unsigned char defs_computed;          /* ...and whether the program makes or copies a method by a computed name */
   struct LrVers *vers; int nvers, cvers, *vers_head;
@@ -203,7 +231,6 @@ struct LoadRecord {
   struct LrReader { const char *name; int node, key, next; unsigned char kind, sg, copy; } *rdr; int nrdr, crdr, *rdr_head; struct { int n; unsigned ver; } rdr_of;
   int follow;                /* the aliases lr_class_of is following, to cap a chain */
   signed char *bread; int nbread;   /* [nbread] by def node: lr_def_block's reading + 3, 1 while it is read, 0 for not read yet */
-  signed char *once; int nonce; unsigned long once_of;   /* [nonce] by node, in the call plan's frame: elab_blocks_run_at_once's answer + 1, 0 for not asked yet; of the histories at hgen once_of */
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
   ElabSurface *surf; int *surf_at;   /* elab_class_surface's, by class side: [2 * (cls + 1) + sg] .. [+ 1] */
   int *dscope, ndscope;      /* [ndscope] by node: the method scope the scope walk made of a def or define_method (elab_def_scope), 0 for none */
@@ -922,11 +949,12 @@ void elab_hold(Compiler *c, int on) {
    lr_rta's first statements) are facts of one map's statement numbers, so
    they swap with it: the frame and the live map each make their own. */
 static void lr_plan_swap(LoadRecord *r) {
-  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->runs_of, r->nrun, r->rend, r->rinst, r->urun, r->rentry };
+  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->runs_of, r->nrun, r->rend, r->rinst, r->rentry, r->ext, r->extix, r->next, r->cext, r->cextix };
   r->st = r->plan.st; r->nst = r->plan.nst; r->cst = r->plan.cst; r->at = r->plan.at;
   r->bits = r->plan.bits; r->n = r->plan.n; r->ncap = r->plan.ncap;
-  r->runs_of = r->plan.runs_of; r->nrun = r->plan.nrun; r->rend = r->plan.rend; r->rinst = r->plan.rinst; r->urun = r->plan.urun;
-  r->rentry = r->plan.rentry;
+  r->runs_of = r->plan.runs_of; r->nrun = r->plan.nrun; r->rend = r->plan.rend; r->rinst = r->plan.rinst;
+  r->rentry = r->plan.rentry; r->ext = r->plan.ext; r->extix = r->plan.extix; r->next = r->plan.next; r->cext = r->plan.cext;
+  r->cextix = r->plan.cextix;
   r->plan = live;
 }
 static void *lr_dup(const void *v, size_t sz) {
@@ -4118,21 +4146,101 @@ int elab_runs_with(Compiler *c, int node, int def) {
   return 0;
 }
 
-/* Does node run when its statement does, for certain: is every block
-   between it and the body it runs in (a def's, or a file's root) one that
-   runs at once where its call runs, with no lambda or END body between?
-   The record proves a block runs so (elab_block_runs: ELAB_BLK_NOW, a
-   builtin iterator's on a literal of a builtin class no reopening answers
-   the name on, or a method of the program's whose body runs it before it
-   answers), or takes it to by its call's name (ELAB_BLK_ASSUMED: an
-   iterator, tap, then, class_eval and kin, a class builder); such a block
-   counts where no method of the program's can take the call over
-   (elab_program_may_take) and no lazy enumerator keeps it (a name of
-   is_lazy_chain_name: `l.map { }` on a Lazy held in a variable runs when
-   the chain is forced). Any other block may run later, and a node whose
-   climb reaches no root is not known. In the call plan's frame, whose
-   parents stay as they are, the answer is kept per node (r->once) as of
-   the histories it was read through (hgen). */
+/* The extent entry of body node `node` of the map as it is (the frame's inside
+   elab_plan_enter), made at the first ask; NULL for a node that is no body: a
+   def, a lambda, an END, a block. The table is of the map's build, and its
+   entries are made by ask: lr_extents (lr_run_points) fills the rest. */
+static LrExt *lr_ext_make(Compiler *c, int node, int body) {
+  LoadRecord *r = c->lrec;
+  if (node >= r->cextix) {
+    int cap = r->cextix ? r->cextix : 256;
+    while (cap <= node) cap *= 2;
+    if (!(r->extix = realloc(r->extix, sizeof(int) * (size_t)cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(r->extix + r->cextix, 0, sizeof(int) * (size_t)(cap - r->cextix));
+    r->cextix = cap;
+  }
+  LrExt fresh = { .node = node, .sure = LR_NEVER, .hist = -1, .bind = -1, .count = LR_CNT_MANY, .body = (unsigned char)body,
+                  .kept = body == LR_B_LAMBDA || body == LR_B_END };
+  if (r->extix[node]) {
+    LrExt *e = &r->ext[r->extix[node] - 1];
+    if (e->body != body) *e = fresh;   /* (a node that was another kind of body when the entry was made) */
+    return e;
+  }
+  if (r->next == r->cext) {
+    r->cext = r->cext ? r->cext * 2 : 64;
+    if (!(r->ext = realloc(r->ext, sizeof *r->ext * (size_t)r->cext))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  r->ext[r->next] = fresh;
+  r->extix[node] = ++r->next;
+  return &r->ext[r->next - 1];
+}
+static LrExt *lr_ext_of(Compiler *c, const int *par, int n, int node) {
+  LoadRecord *r = c->lrec;
+  NodeKind k = node >= 0 && node < n ? nt_kind(c->nt, node) : NK_NilNode;
+  int body = k == NK_DefNode ? LR_B_DEF : k == NK_LambdaNode ? LR_B_LAMBDA : k == NK_PostExecutionNode ? LR_B_END : k == NK_BlockNode ? LR_B_BLOCK : -1;
+  if (body < 0) return NULL;
+  LrExt *e = lr_ext_make(c, node, body);
+  if (body == LR_B_BLOCK) {
+    int call = par[node];
+    int cb = call >= 0 && call < n && nt_ref(c->nt, call, "block") == node;
+    const char *nm = cb && nt_kind(c->nt, call) == NK_CallNode ? nt_str(c->nt, call, "name") : NULL;
+    int w = cb ? elab_block_runs(c, call) : ELAB_BLK_UNKNOWN;
+    e = lr_ext_make(c, node, body);   /* (the reading may have made entries: the table moved) */
+    e->cb = (unsigned char)cb;
+    e->runs = (signed char)w;
+    e->inplace = nm && (w == ELAB_BLK_NOW || (w == ELAB_BLK_ASSUMED && !is_lazy_chain_name(nm) && !elab_program_may_take(c, nm)));
+    e->kept = w == ELAB_BLK_LATER || w == ELAB_BLK_UNKNOWN;
+  }
+  return e;
+}
+
+/* The first statement def node d's body may run on (LrExt.from): 0 for a def
+   the record has no extent of, which opens anywhere */
+static int lr_def_from(const LoadRecord *r, int d) {
+  return d >= 0 && d < r->cextix && r->extix[d] ? r->ext[r->extix[d] - 1].from : 0;
+}
+
+/* Does id run in a body of the kind `which` asks about, climbing the bodies
+   around it up to the first def or lambda (a body of its own: its window is the
+   def's): an END body, or a block whose call keeps it (LRW_LATER: the record
+   answers ELAB_BLK_LATER for), does not run now (LRW_UNPLACED: any answer but
+   ELAB_BLK_NOW), or is taken to run at once (LRW_ASSUMED: ELAB_BLK_ASSUMED; with
+   kept, only where its typed call target keeps it, blk_kept, which also counts
+   a call the record does not know; an END is not one of these) */
+enum { LRW_LATER, LRW_UNPLACED, LRW_ASSUMED };
+static int lr_in_body(Compiler *c, const int *par, int n, int id, int which, int kept) {
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    const LrExt *e = lr_ext_of(c, par, n, a);
+    if (!e) continue;
+    if (e->body == LR_B_DEF || e->body == LR_B_LAMBDA) return 0;
+    if (e->body == LR_B_END) {
+      if (which != LRW_ASSUMED) return 1;
+      continue;
+    }
+    if (!e->cb) continue;
+    if (which == LRW_LATER) { if (e->runs == ELAB_BLK_LATER) return 1; continue; }
+    if (which == LRW_UNPLACED) { if (e->runs != ELAB_BLK_NOW) return 1; continue; }
+    int marked = (int)nt_int(c->nt, par[a], "blk_kept", 0);
+    if (kept && !marked) continue;
+    if (e->runs == ELAB_BLK_ASSUMED || (marked && e->runs == ELAB_BLK_UNKNOWN)) return 1;
+  }
+  return 0;
+}
+
+/* Does node run when its statement does, for certain: is every body between it
+   and the one it runs in (a def's, or a file's root) a block that runs at once
+   where its call runs (LrExt.inplace), with no lambda or END body between? The
+   record proves a block runs so (elab_block_runs: ELAB_BLK_NOW, a builtin
+   iterator's on a literal of a builtin class no reopening answers the name on,
+   or a method of the program's whose body runs it before it answers), or takes
+   it to by its call's name (ELAB_BLK_ASSUMED: an iterator, tap, then,
+   class_eval and kin, a class builder); such a block counts where no method of
+   the program's can take the call over (elab_program_may_take) and no lazy
+   enumerator keeps it (a name of is_lazy_chain_name: `l.map { }` on a Lazy held
+   in a variable runs when the chain is forced). Any other block may run later,
+   and a node whose climb reaches no root is not known. In the call plan's frame,
+   whose parents stay as they are, the answer is kept per node (r->once) as of the
+   histories it was read through (hgen). */
 int elab_blocks_run_at_once(Compiler *c, int node) {
   int n;
   const int *par = elab_node_parents(c, &n);
@@ -4148,14 +4256,10 @@ int elab_blocks_run_at_once(Compiler *c, int node) {
   if (r->plan_depth && r->once[node]) return r->once[node] - 1;
   int v = node, at = -1;
   for (int p; at < 0 && (p = par[v]) >= 0 && p < n; v = p) {
-    NodeKind k = nt_kind(c->nt, p);
-    int call = k == NK_BlockNode ? par[p] : -1, w;
-    const char *nm = call >= 0 && call < n && nt_kind(c->nt, call) == NK_CallNode && nt_ref(c->nt, call, "block") == p ? nt_str(c->nt, call, "name") : NULL;
-    if (k == NK_DefNode) at = 1;
-    else if (k == NK_LambdaNode || k == NK_PostExecutionNode) at = 0;
-    else if (k == NK_BlockNode && (!nm || ((w = elab_block_runs(c, call)) != ELAB_BLK_NOW &&
-                                           (w != ELAB_BLK_ASSUMED || is_lazy_chain_name(nm) || elab_program_may_take(c, nm)))))
-      at = 0;
+    const LrExt *e = lr_ext_of(c, par, n, p);
+    if (!e) continue;
+    if (e->body == LR_B_DEF) at = 1;
+    else if (e->body == LR_B_LAMBDA || e->body == LR_B_END || !e->inplace) at = 0;
   }
   if (at < 0) at = par[v] < 0 && nt_kind(c->nt, v) == NK_ProgramNode;
   if (r->plan_depth) r->once[node] = (signed char)(at + 1);
@@ -4598,6 +4702,32 @@ static int lr_child_first(const NodeTable *nt, int p, int x, int y) {
   return lx != ly ? ly : x < y;
 }
 
+/* Does node run whenever the statement it stands in runs: is every edge from
+   it up to that statement one that runs its child when it runs itself (an
+   assignment's value, a multiple assignment's, a call's argument or receiver,
+   parentheses, a statement list's member), but for a block, which its call runs
+   when it decides, and the arguments of a `&.` call, which run only on a
+   receiver that is not nil? Any other edge (a condition, a branch, a
+   short-circuit, defined?, an op-write's value, a begin, a rescue modifier, a
+   literal's element) is not known to. That the statement itself runs (not under
+   a condition, in a block or a rescue) is for the caller to ask: its may,
+   partial and kept. */
+static int lr_runs_with_stmt(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  const LrStmt *s = lr_stmt_of(c->lrec, node);
+  for (int v = node; s && v != s->node; v = par[v]) {
+    if (v < 0 || v >= n || par[v] < 0) return 0;
+    int pv = par[v];
+    NodeKind k = nt_kind(nt, pv);
+    if (k == NK_CallNode && (nt_ref(nt, pv, "block") == v || (nt_safe_nav(nt, pv) && nt_ref(nt, pv, "receiver") != v))) return 0;
+    if (k != NK_CallNode && k != NK_ArgumentsNode && k != NK_ParenthesesNode && k != NK_StatementsNode && k != NK_MultiWriteNode &&
+        k != NK_LocalVariableWriteNode && k != NK_InstanceVariableWriteNode && k != NK_ConstantWriteNode) return 0;
+  }
+  return s != NULL;
+}
+
 /* How node d of n's statement runs against n, as CRuby runs them: a
    call runs after its operands, so d in n's receiver, arguments or block
    argument runs before it, and d in n's block in it, after it; other two
@@ -4700,6 +4830,12 @@ static int lr_repeat_holds(const LoadRecord *r, const NodeTable *nt, LoadPoint p
   for (int e = r->st[p.seq].up; e >= 0; e = r->st[e].up)
     if (nt_kind(nt, r->st[e].node) == NK_BeginNode && nt_ref(nt, r->st[e].node, "rescue_clause") >= 0 && (q < 0 || q <= r->st[e].last)) return 1;
   return 0;
+}
+/* Does the statement of point p run again: a loop's, or in a body that does
+   (lr_repeat_holds)? */
+static int lr_stmt_repeats(const LoadRecord *r, const NodeTable *nt, LoadPoint p) {
+  NodeKind k = nt_kind(nt, r->st[p.seq].node);
+  return k == NK_WhileNode || k == NK_UntilNode || lr_repeat_holds(r, nt, p, -1);
 }
 /* May node's statement, which comes after p, also run before p: is it in
    a body around p that runs again (lr_repeat_holds), or in the body of a
@@ -6133,16 +6269,16 @@ static int lr_node_runs(Compiler *c, int id) {
    called). Each region is scanned once: a require loads once, and what a
    scan finds holds from its statement on.
    rinst[k + 1]: the first statement an object with k among its ancestors
-   may exist (LR_NEVER: none); urun[def]: the first statement a recorded
+   may exist (LR_NEVER: none); each def's LrExt.from: the first statement a recorded
    def's body may run, 0 for one the record did not record; rentry[k]: the
    first statement region k's load may run (LR_NEVER: none). All three are
    statements of region 0, the one time every region's code shares: a
    statement of another region is not ordered against them. */
-enum { LR_NEVER = INT_MAX, LR_CORE = -4, RQ_INST = 1, RQ_CLASS = 2, LR_RG_NAMED = 1, LR_RG_IN = 2 };
+enum { LR_CORE = -4, RQ_INST = 1, RQ_CLASS = 2, LR_RG_NAMED = 1, LR_RG_IN = 2 };
 /* The order of version v against point p (late == 1: as of the load phase's
    end): a version at a point, its point's; one a method body makes
    (LrDef.body), its extent's: after p where p comes before the first
-   statement that body may run on (lr_rta's urun) and that statement does
+   statement that body may run on (lr_rta's LrExt.from) and that statement does
    not run again before p (lr_runs_again), not known from there on, since
    the body may run any number of times, and after every point for a body
    that never runs */
@@ -6151,8 +6287,8 @@ static int lr_version_order(Compiler *c, const LrDef *v, LoadPoint p, int late) 
     return late == 1 ? (elab_point_of(c, v->node).region == 0 ? PROG_BEFORE : PROG_UNKNOWN) : elab_cmp(elab_point_of(c, v->node), p);
   LoadRecord *r = c->lrec;
   lr_run_points(c);
-  int from = r->urun[v->body];
-  if (from == LR_NEVER) return PROG_AFTER;
+  int from = lr_def_from(r, v->body);
+  if (from >= LR_POST) return PROG_AFTER;
   return late != 1 && p.region >= 0 && p.seq < from && !lr_runs_again(c, r->st[from].node, p) ? PROG_AFTER : PROG_UNKNOWN;
 }
 /* The class a builder's constant write w makes (`P = Struct.new(:x)`,
@@ -6168,7 +6304,7 @@ typedef struct { const char *name; int cls; } LrRtaName;
 typedef struct {
   Compiler *c; LoadRecord *r;
   int s, n, *key, *ustart, *ulist, *stack, nstack, *hnext, *hfirst, *pend, npend;
-  unsigned char *hreach, *rq, *sub, *ext, *seen, *rbits;   /* (rbits: by region, LR_RG_*) */
+  unsigned char *hreach, *hn, *rq, *sub, *ext, *seen, *rbits;   /* (rbits: by region, LR_RG_*; hn: by history, how many times it was reached, to 255) */
   int allinst, cb, allcls, any, builders, ncname, allreg;
   LrRtaName *cname;
   int *kid, *kids;   /* the classes by superclass: kids[kid[p + 1] .. kid[p + 2]) are p's (main's at p = LR_MAIN) */
@@ -6260,9 +6396,8 @@ static void lr_rta_reach_by(LrRta *t, int hi);
 /* name called on class k: its singleton chain's, its extended modules'.
    once: by a call that runs when statement t->s does and at no other time
    (lr_rta_once), which reaches only the singleton versions made by then */
-static void lr_rta_call_on(LrRta *t, const char *name, int k, int once) {
+static void lr_rta_chain(LrRta *t, const char *name, int k, int once) {
   LoadRecord *r = t->r;
-  lr_rta_call(t, name, RQ_INST);
   for (int a = k, d = 0; a >= LR_MAIN && a < t->c->nclasses && d < lr_chain_bound(t->c); a = lr_super(t->c, a), d++) {
     LrClass *kc = lr_class(r, a);
     LrHist *h = lr_hist(r, a, 1, name, 0);
@@ -6272,10 +6407,14 @@ static void lr_rta_call_on(LrRta *t, const char *name, int k, int once) {
       if (elab_mix_on_singleton(kc->mix[j].kind)) lr_rta_call(t, name, RQ_CLASS);   /* the modules extended (lr_rta_ext) */
   }
 }
+static void lr_rta_call_on(LrRta *t, const char *name, int k, int once) {
+  lr_rta_call(t, name, RQ_INST);
+  lr_rta_chain(t, name, k, once);
+}
 static void lr_rta_unit(LrRta *t, int d) {
   if (d < 0 || d >= t->n || t->seen[d]) return;
   t->seen[d] = 1;
-  if (t->r->urun[d] == LR_NEVER) t->r->urun[d] = t->s;
+  if (d < t->r->cextix && t->r->extix[d] && t->r->ext[t->r->extix[d] - 1].from == LR_NEVER) t->r->ext[t->r->extix[d] - 1].from = t->s;
   t->stack[t->nstack++] = d;
 }
 static void lr_rta_all(LrRta *t, int inst);
@@ -6307,6 +6446,7 @@ static void lr_rta_version(LrRta *t, const LrHist *h, const LrDef *v) {
 }
 static void lr_rta_reach(LrRta *t, int hi) {
   const LrHist *h = &t->r->hist[hi];
+  t->hn[hi] += t->hn[hi] < 255;
   if (t->hreach[hi]) return;
   t->hreach[hi] = 1;
   for (int j = 0; j < h->n; j++) lr_rta_version(t, h, &h->v[j]);
@@ -6317,6 +6457,7 @@ static void lr_rta_reach(LrRta *t, int hi) {
 static void lr_rta_reach_by(LrRta *t, int hi) {
   const LrHist *h = &t->r->hist[hi];
   int all = 1;
+  t->hn[hi] += t->hn[hi] < 255;
   if (t->hreach[hi]) return;
   for (int j = 0; j < h->n; j++) {
     LoadPoint q = h->v[j].body ? (LoadPoint){ -1, -1 } : elab_point_of(t->c, h->v[j].node);
@@ -6325,14 +6466,18 @@ static void lr_rta_reach_by(LrRta *t, int hi) {
   }
   t->hreach[hi] = (unsigned char)all;
 }
-/* Does call id run when statement t->s runs, and at no other time: a node
-   of the statement's own (no def around it), in no lambda and in no block
-   but one that runs at once (elab_blocks_run_at_once), the statement in no
-   body that runs again (a loop's)? */
+/* Does call id run where statement t->s does (lr_rta_inplace): a node of the
+   statement's own (no def around it), in no lambda and in no block but one that
+   runs at once (elab_blocks_run_at_once)? And (lr_rta_once) at no other time:
+   the statement in no body that runs again (a loop's)? */
+static int lr_rta_inplace(LrRta *t, int id) {
+  return t->s < t->r->nst && t->key[id] == t->s && elab_blocks_run_at_once(t->c, id);   /* (the post-load phase has no statement) */
+}
 static int lr_rta_once(LrRta *t, int id) {
+  if (t->s >= t->r->nst) return 0;
   const LrStmt *st = &t->r->st[t->s];
   NodeKind sk = nt_kind(t->c->nt, st->node);
-  return t->key[id] == t->s && st->rep < 0 && sk != NK_WhileNode && sk != NK_UntilNode && elab_blocks_run_at_once(t->c, id);
+  return st->rep < 0 && sk != NK_WhileNode && sk != NK_UntilNode && lr_rta_inplace(t, id);
 }
 /* every name (disp 0: every instance method of E, every singleton
    method), or what the runtime may call back (disp 1: the implicitly
@@ -6459,6 +6604,36 @@ static int lr_rta_raised(const VpLeaf *leaf, void *ud) {
   return 0;
 }
 
+/* Call id of `by` on class rc, a constant the record resolves, runs the one
+   def the singleton chain of rc holds of the name, when the program makes it
+   before the call and nothing else changes the chain (a module extended, a
+   visibility word, a removal: more entries of the histories), and the call
+   runs where its statement does (elab_blocks_run_at_once): the body has then
+   certainly run once its statement is over, if that statement runs for sure
+   (LrExt.sure), and the call itself runs whenever the statement does
+   (lr_runs_with_stmt). The call that is the only one to reach it, at a
+   statement that does not repeat, is the def's one run (LrExt.bind, kept by
+   lr_rta_extents). */
+static void lr_rta_bind(LrRta *t, int id, const char *by, int rc) {
+  LoadRecord *r = t->r;
+  const LrDef *d = NULL;
+  int hi = -1, nv = 0;
+  for (int a = rc, k = 0; a >= LR_MAIN && a < t->c->nclasses && k < lr_chain_bound(t->c); a = lr_super(t->c, a), k++) {
+    const LrClass *kc = lr_class(r, a);
+    for (int j = 0; kc && j < kc->nmix; j++) if (elab_mix_on_singleton(kc->mix[j].kind)) return;
+    const LrHist *h = lr_hist(r, a, 1, by, 0);
+    if (h && h->n) { d = &h->v[0]; hi = (int)(h - r->hist); }
+    nv += h ? h->n : 0;
+  }
+  const LrStmt *dst = d ? lr_stmt_of(r, d->node) : NULL, *st = t->s < r->nst ? &r->st[t->s] : NULL;
+  if (nv != 1 || d->kind != LR_DEF || d->vis != SP_VIS_PUBLIC || d->body || !st || st->region != 0 || !dst || dst->region != 0 ||
+      !lr_rta_inplace(t, id) || lr_stmt_applied(dst, 0, d->may) != 1 || r->at[d->node] >= t->s)
+    return;
+  LrExt *e = lr_ext_make(t->c, d->node, LR_B_DEF);
+  if (e->sure == LR_NEVER && lr_stmt_applied(st, 0, st->may) == 1 && !st->partial && !st->kept && lr_runs_with_stmt(t->c, id)) e->sure = t->s;
+  if (e->bind < 0 && lr_rta_once(t, id) && !lr_stmt_repeats(r, t->c->nt, (LoadPoint){ 0, t->s, id })) e->bind = id, e->hist = hi;
+}
+
 static void lr_rta_node(LrRta *t, int id) {
   const NodeTable *nt = t->c->nt;
   const char *nm, *hook[2], *by;
@@ -6475,7 +6650,7 @@ static void lr_rta_node(LrRta *t, int id) {
       /* a def the record did not record: from here; and a C extension's
          dispatch stub, the way its C code calls the program (a method's,
          an allocator's), which it may from the extension's load on */
-      if (t->r->urun[id] == 0 || nt_int(nt, id, "cext_stub", 0)) lr_rta_unit(t, id);
+      if (lr_def_from(t->r, id) == 0 || nt_int(nt, id, "cext_stub", 0)) lr_rta_unit(t, id);
       /* fallthrough */
     case NK_AliasMethodNode:
       lr_rta_call(t, "method_added", RQ_INST | RQ_CLASS);
@@ -6534,6 +6709,7 @@ static void lr_rta_node(LrRta *t, int id) {
     if ((m = m >= 0 ? elab_header_class(t->c, m, NULL, NULL) : LR_UNKNOWN_CLASS) >= 0) lr_rta_add(t, m);
     else lr_rta_any(t);
   }
+  if (rc >= LR_MAIN && by == nm) lr_rta_bind(t, id, by, rc);
   if (rc >= LR_MAIN) lr_rta_call_on(t, by, rc, by == nm && lr_rta_once(t, id));   /* a method called, sent or made a callable by its name */
   else lr_rta_call(t, by, RQ_INST | RQ_CLASS);
   if (lr_rta_ctor(t, by)) {
@@ -6590,6 +6766,41 @@ static void lr_rta_names(LrRta *t) {
   t->ncname = m;
 }
 
+static void lr_rta_entry(const char *cls, const char *meth, void *ud) {
+  LrRta *t = ud;
+  int k = comp_class_index(t->c, cls);
+  if (k >= 0) lr_rta_chain(t, meth, k, 0);
+}
+
+/* What lr_rta found of each def: its count (LrExt.count) is ZERO when no run
+   reaches it, ONCE when one call that runs once reached it alone and no other
+   call of the name is in the program (the history was reached once, by that call:
+   not by a send, a method object, a dispatch), else MANY */
+static void lr_rta_extents(LrRta *t) {
+  LoadRecord *r = t->r;
+  int *ncall = NULL;
+  for (int i = 0; i < r->next; i++) {
+    LrExt *e = &r->ext[i];
+    if (e->body != LR_B_DEF) continue;
+    e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_MANY;
+    if (e->bind < 0 || t->hn[e->hist] != 1 || r->hist[e->hist].n != 1) continue;
+    if (!ncall) {
+      ncall = calloc((size_t)r->nnames + 1, sizeof *ncall);
+      if (!ncall) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      NT_FOREACH_KIND(t->c->nt, NK_CallNode, id) {
+        const char *nm[2];
+        for (int q = call_node_names(t->c, id, nm) - 1; q >= 0; q--) {
+          int x = nm[q] ? lr_name_ix(r, nm[q]) : -1;
+          if (x >= 0) ncall[x]++;
+        }
+      }
+    }
+    int x = lr_name_ix(r, r->hist[e->hist].name);
+    if (x >= 0 && ncall[x] == 1) e->count = LR_CNT_ONCE;
+  }
+  free(ncall);
+}
+
 /* The code reached at statement t->s and not scanned yet: each body first
    reached (lr_rta_unit), and each region entered (lr_rta_enter), whose
    statements' nodes are one run of the groups */
@@ -6610,10 +6821,10 @@ static void lr_rta(Compiler *c) {
   LrRta t = { .c = c, .r = r, .n = c->nt->count < r->n ? c->nt->count : r->n, .allreg = r->nregion < 2 };
   int n = t.n, ncl = c->nclasses + 1, nk = r->nst + n;
   t.key = malloc(sizeof(int) * (size_t)(4 * n + r->nst + 2 + r->nhist + ncl + r->nregion));
-  t.hreach = calloc((size_t)(r->nhist + r->nnames + 3 * ncl + n + r->nregion) + 1, 1);
+  t.hreach = calloc((size_t)(2 * r->nhist + r->nnames + 3 * ncl + n + r->nregion) + 1, 1);
   if (!t.key || !t.hreach) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   t.ustart = t.key + n; t.ulist = t.ustart + nk + 2; t.stack = t.ulist + n; t.hnext = t.stack + n; t.hfirst = t.hnext + r->nhist; t.pend = t.hfirst + ncl;
-  t.rq = t.hreach + r->nhist; t.sub = t.rq + r->nnames; t.ext = t.sub + ncl; t.seen = t.ext + ncl; t.rbits = t.seen + n;
+  t.hn = t.hreach + r->nhist; t.rq = t.hn + r->nhist; t.sub = t.rq + r->nnames; t.ext = t.sub + ncl; t.seen = t.ext + ncl; t.rbits = t.seen + n;
   for (int i = 0; i < n; i++) {   /* each node's innermost def (the def itself is its outer one's) */
     int p = par[i], o;
     while (p >= 0 && p < n && p > i && nt_kind(c->nt, p) != NK_DefNode) p = par[p];
@@ -6639,7 +6850,7 @@ static void lr_rta(Compiler *c) {
   for (int i = r->nhist - 1; i >= 0; i--) {
     const LrHist *h = &r->hist[i];
     if (h->a < LR_MAIN || !h->name || h->a >= c->nclasses) continue;
-    for (int j = 0; j < h->n; j++) if (h->v[j].kind == LR_DEF && h->v[j].node < n) r->urun[h->v[j].node] = LR_NEVER;
+    for (int j = 0; j < h->n; j++) if (h->v[j].kind == LR_DEF && h->v[j].node < n) lr_ext_make(c, h->v[j].node, LR_B_DEF)->from = LR_NEVER;
     if (!h->b) { t.hnext[i] = t.hfirst[h->a + 1]; t.hfirst[h->a + 1] = i; }
   }
   for (int k = LR_MAIN; k < c->nclasses; k++) {
@@ -6662,6 +6873,10 @@ static void lr_rta(Compiler *c) {
       lr_rta_node(&t, t.ulist[i]);
       lr_rta_drain(&t);
     }
+  t.s = LR_POST;   /* the host calls each --ext-entry (Module.method, a class method) once the load is over */
+  ext_entries_each(lr_rta_entry, &t);
+  lr_rta_drain(&t);
+  lr_rta_extents(&t);
   free(t.key); free(t.hreach); free(t.cname); free(t.kid);
 }
 
@@ -6735,9 +6950,12 @@ static void lr_region_runs(Compiler *c) {
    itself that is there for any object can run: main's, Object's, a
    singleton's or a builtin class's, or one with a module mixed into one
    of those (global). */
+static void lr_extents(Compiler *c);
 static void lr_run_points(Compiler *c) {
   LoadRecord *r = elab_fresh(c);
   if (r->rend && r->runs_of == r->builds) return;
+  r->next = 0;   /* (the extents of the last run points are of statements that moved) */
+  if (r->extix) memset(r->extix, 0, sizeof(int) * (size_t)r->cextix);
   int implicit = 0, global = 0, seen = 0, n = 0;
   for (int i = 0; i < r->nhist && !global; i++) {
     const LrHist *h = &r->hist[i];
@@ -6774,13 +6992,114 @@ static void lr_run_points(Compiler *c) {
     r->rend[e->region] = s + 1;
   }
   r->nrun = n;
-  free(r->rinst); free(r->urun); free(r->rentry);
+  free(r->rinst); free(r->rentry);
   r->rinst = calloc((size_t)(r->ncls > c->nclasses ? r->ncls : c->nclasses + 1) + 1, sizeof(int));
-  r->urun = calloc((size_t)r->n + 1, sizeof(int));
   r->rentry = calloc((size_t)r->nregion, sizeof(int));
-  if (!r->rinst || !r->urun || !r->rentry) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (!r->rinst || !r->rentry) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   lr_rta(c);
+  lr_extents(c);
   r->runs_of = r->builds;
+}
+
+/* The statement of region 0 that code of statement e (of any region) starts
+   on: its own, or the entry of the region it is in (lr_rta's rentry) */
+static int lr_ext_stmt(const LoadRecord *r, int e) {
+  return e < 0 ? 0 : r->st[e].region == 0 ? e : r->st[e].region > 0 ? r->rentry[r->st[e].region] : 0;
+}
+/* The literal receiver's kind in the iterator rows' terms (a boxed Array's, a
+   Hash's, an Integer's), TY_UNKNOWN for no literal and for one the rows do not
+   count; *n is the elements an Array or Hash literal holds, -1 for not known
+   (a splat) */
+static TyKind lr_literal_row_kind(const NodeTable *nt, int rv, long long *n) {
+  NodeKind k = rv >= 0 ? nt_kind(nt, rv) : NK_NilNode;
+  *n = -1;
+  if (k == NK_ArrayNode || k == NK_HashNode) {
+    int m = 0;
+    const int *el = nt_arr(nt, rv, "elements", &m);
+    for (int i = 0; i < m; i++) if (nt_kind(nt, el[i]) == NK_SplatNode || nt_kind(nt, el[i]) == NK_AssocSplatNode) return TY_UNKNOWN;
+    *n = m;
+    return k == NK_ArrayNode ? TY_POLY_ARRAY : TY_POLY_POLY_HASH;
+  }
+  return k == NK_IntegerNode ? TY_INT : TY_UNKNOWN;
+}
+/* How often the in-place block of `call` runs, from its row (iter_row_runs) on
+   a literal receiver the record proves builtin (blk_now), or on any (tap, then):
+   LR_CNT_*, and *sure when it certainly runs at least once: a row that runs
+   its block once per element (IR_EACH) on a literal of some, a count by the
+   receiver's value of one or more, a row that runs it once. A row that may skip
+   its block (IR_ELEMS) counts the elements as its most. A class_eval's or a
+   class builder's block runs once. */
+static int lr_block_count(Compiler *c, int call, int blk_now, int *sure) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, call, "name");
+  int rv = nt_ref(nt, call, "receiver"), an = nt_ref(nt, call, "arguments"), ac = 0;
+  long long n = -1;
+  if (an >= 0) nt_arr(nt, an, "arguments", &ac);
+  *sure = 0;
+  if (elab_opens_frame(nt, call)) return *sure = 1, LR_CNT_ONCE;
+  TyKind rt = blk_now ? lr_literal_row_kind(nt, rv, &n) : TY_UNKNOWN;
+  if (rt == TY_UNKNOWN && blk_now) return LR_CNT_MANY;
+  IterRuns ir = iter_row_runs(rt, nm, ac);
+  if (ir == IR_ONCE) return *sure = 1, LR_CNT_ONCE;
+  if (ir == IR_COUNT_RECV) n = nt_int(nt, rv, "value", 0);
+  else if ((ir != IR_EACH && ir != IR_ELEMS) || n < 0) return LR_CNT_MANY;   /* (a receiver's elements are known only of a literal) */
+  *sure = n >= 1 && ir != IR_ELEMS;
+  return n <= 0 ? LR_CNT_ZERO : n == 1 ? LR_CNT_ONCE : LR_CNT_MANY;
+}
+/* The extent of entry i (LrExt): from, sure and count of every body but a def's
+   (lr_rta's), from the body around it, the statement that makes it and, for a
+   block, its call. */
+static void lr_ext_time(Compiler *c, const int *par, int n, int i) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  if (r->ext[i].timed) return;
+  r->ext[i].timed = 1;
+  int node = r->ext[i].node, body = r->ext[i].body, o = -1;
+  for (int p = node < n ? par[node] : -1; p >= 0 && p < n && o < 0; p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if ((k == NK_DefNode || k == NK_LambdaNode || k == NK_PostExecutionNode || k == NK_BlockNode) && p < r->cextix && r->extix[p]) o = r->extix[p] - 1;
+  }
+  if (o >= 0) lr_ext_time(c, par, n, o);
+  int ofrom = o >= 0 ? r->ext[o].from : 0, ocount = o >= 0 ? r->ext[o].count : LR_CNT_ONCE;
+  int call = body == LR_B_BLOCK && node < n ? par[node] : node;
+  int stmt = call >= 0 && call < r->n && r->at[call] >= 0 ? lr_ext_stmt(r, r->at[call]) : 0;
+  const LrStmt *st = lr_stmt_of(r, call);
+  int again = st && lr_stmt_repeats(r, nt, (LoadPoint){ st->region, (int)(st - r->st), call });
+  LrExt *e = &r->ext[i];
+  if (body == LR_B_DEF) return;
+  e->from = ocount == LR_CNT_ZERO ? LR_NEVER : stmt > ofrom ? stmt : ofrom;   /* (a body in one that runs no time never runs) */
+  e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_MANY;
+  int end = body == LR_B_END || (body == LR_B_BLOCK && e->cb && nt_kind(nt, call) == NK_CallNode && is_at_exit_name(nt_str(nt, call, "name")));
+  if (end) {   /* registered where it stands, run when the program exits */
+    e->from = e->from == LR_NEVER ? LR_NEVER : LR_POST;
+    e->count = e->from == LR_NEVER ? LR_CNT_ZERO : body == LR_B_END || (!again && ocount == LR_CNT_ONCE && st) ? LR_CNT_ONCE : LR_CNT_MANY;
+  }
+  else if (body == LR_B_BLOCK && e->inplace && e->from != LR_NEVER) {
+    int sure, cnt = lr_block_count(c, call, e->runs == ELAB_BLK_NOW, &sure);
+    e->count = cnt == LR_CNT_ZERO || ocount == LR_CNT_ZERO ? LR_CNT_ZERO : cnt == LR_CNT_ONCE && ocount == LR_CNT_ONCE && !again ? LR_CNT_ONCE : LR_CNT_MANY;
+    if (sure && o < 0 && st && st->region == 0 && lr_stmt_applied(st, 0, st->may) == 1 && !st->partial && !st->kept && !nt_safe_nav(nt, call) && lr_runs_with_stmt(c, call)) e->sure = stmt;
+  }
+  else if (body == LR_B_REGION) {   /* a load at no point: its require, where one names it alone and is sure */
+    e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_ONCE;
+    const LrStmt *q = e->from < r->nst ? &r->st[e->from] : NULL;
+    int tf = q && nt_kind(nt, q->node) == NK_LoadNode && !prog_load_open(nt, q->node) && !prog_load_ncand(nt, q->node) ? (int)nt_int(nt, q->node, "target_file", -1) : -1;
+    int root = tf > 0 && tf < nt_nroots(nt) ? nt_root(nt, tf) : -1;
+    if (root == node && lr_stmt_applied(q, 0, q->may) == 1 && !q->partial && !q->kept) e->sure = e->from;
+  }
+}
+/* Every body's extent, made after lr_rta, one pass over the nodes: an entry for
+   each body (a def's came with lr_rta) and the file root of each region, then
+   its extent. */
+static void lr_extents(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int id = 0; id < n; id++) lr_ext_of(c, par, n, id);
+  for (int f = 1; f < nt_nroots(c->nt); f++) {
+    int root = nt_root(c->nt, f);
+    if (root >= 0 && root < n && r->at[root] >= 0 && r->st[r->at[root]].region > 0 && !(root < r->cextix && r->extix[root])) lr_ext_make(c, root, LR_B_REGION);
+  }
+  for (int i = 0; i < r->next; i++) lr_ext_time(c, par, n, i);
 }
 
 /* How many statements in seq [a, b) may run code of the program's */
@@ -6913,9 +7232,10 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   }
   /* (the collapse below keeps a window, not a proof; lr_rta walks the load
      only, and under --ext-entry the host calls into the program after it) */
-  w->never = !g_ext_entries && nt_kind(c->nt, a) == NK_DefNode && r->urun[a] == LR_NEVER;
-  if (nt_kind(c->nt, a) == NK_DefNode && r->urun[a] > w->from.seq)   /* nor before the body may first run (lr_rta) */
-    w->from.seq = r->urun[a] < w->to.seq ? r->urun[a] : w->to.seq - 1;
+  int run = lr_def_from(r, a);
+  w->never = !g_ext_entries && nt_kind(c->nt, a) == NK_DefNode && run == LR_NEVER;
+  if (nt_kind(c->nt, a) == NK_DefNode && run > w->from.seq)   /* nor before the body may first run (lr_rta) */
+    w->from.seq = run < w->to.seq ? run : w->to.seq - 1;
   if (nt_kind(c->nt, a) == NK_DefNode && !lr_runs_in(r, w->from.seq, w->from.seq + 1)) {
     /* nor at a statement that runs no code of the program's (lr_run_points):
        from the first that may, w's last when none does */
@@ -6937,25 +7257,10 @@ int elab_def_before_call(Compiler *c, int id, int def) {
 }
 
 /* ...in a block the record takes to run at once, one whose typed call
-   target keeps it when kept (blk_kept), any when not: a call there may be
-   one a target keeps, before the typed pass has marked it; or in a block
-   given to any other call (ELAB_BLK_UNKNOWN) that its typed target keeps
-   (blk_kept), either way */
-static int lr_in_assumed_block(Compiler *c, const int *par, int n, int id, int kept) {
-  const NodeTable *nt = c->nt;
-  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
-    NodeKind k = nt_kind(nt, a);
-    if (k == NK_DefNode || k == NK_LambdaNode) break;   /* (a body of its own: its window is the def's) */
-    if (k != NK_BlockNode || nt_ref(nt, par[a], "block") != a) continue;
-    int marked = nt_int(nt, par[a], "blk_kept", 0);
-    if (kept && !marked) continue;
-    int runs = elab_block_runs(c, par[a]);
-    if (runs == ELAB_BLK_ASSUMED || (marked && runs == ELAB_BLK_UNKNOWN)) return 1;
-  }
-  return 0;
-}
+   target keeps it (blk_kept), where the pass has marked it: a call there may
+   be one a target keeps, before the typed pass has marked it */
 int elab_in_kept_block(Compiler *c, int id) {
-  return lr_in_assumed_block(c, comp_parent_map(c), c->nt->count, id, 1);
+  return lr_in_body(c, comp_parent_map(c), c->nt->count, id, LRW_ASSUMED, 1);
 }
 /* Does node id run later than its point, at a time the syntax does not
    tell: in a block whose call the record answers ELAB_BLK_LATER for (a
@@ -6965,24 +7270,12 @@ int elab_in_kept_block(Compiler *c, int id) {
 int elab_runs_later(Compiler *c, int id) {
   int n;
   const int *par = elab_node_parents(c, &n);
-  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
-    NodeKind k = nt_kind(c->nt, a);
-    if (k == NK_DefNode || k == NK_LambdaNode) return 0;
-    if (k == NK_PostExecutionNode ||
-        (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) == ELAB_BLK_LATER)) return 1;
-  }
-  return 0;
+  return lr_in_body(c, par, n, id, LRW_LATER, 0);
 }
 int elab_in_unplaced_block(Compiler *c, int id) {
   int n;
   const int *par = elab_node_parents(c, &n);
-  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
-    NodeKind k = nt_kind(c->nt, a);
-    if (k == NK_DefNode || k == NK_LambdaNode) return 0;
-    if (k == NK_PostExecutionNode ||
-        (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) != ELAB_BLK_NOW)) return 1;
-  }
-  return 0;
+  return lr_in_body(c, par, n, id, LRW_UNPLACED, 0);
 }
 void elab_window_open(Compiler *c, ElabWindow *w) {
   LoadRecord *r = elab_fresh(c);
@@ -7615,7 +7908,7 @@ static int lr_meet_holds(Compiler *c, const ElabMeet *m, const LrDef **ds, int c
 static int lr_call_meets(Compiler *c, int id, int copy, int cls, int sg, const char *name, int def) {
   int np;
   const int *par = elab_node_parents(c, &np);
-  int later = elab_runs_later(c, id), held = lr_in_assumed_block(c, par, np, id, 0);
+  int later = elab_runs_later(c, id), held = lr_in_body(c, par, np, id, LRW_ASSUMED, 0);
   const LrDef *ds[16] = { NULL };
   ElabMeet m;
   elab_call_meet(c, id, cls, name, sg, later | (copy ? ELAB_MEET_COPY : 0), &m, ds, 16);
@@ -8074,9 +8367,7 @@ static int lr_name_drops_block(Compiler *c, const char *name) {
 int elab_runs_again(Compiler *c, int node) {
   LoadRecord *r = elab_fresh(c);
   LoadPoint p = elab_point_of(c, node);
-  if (p.region < 0) return 1;
-  NodeKind k = nt_kind(c->nt, r->st[p.seq].node);
-  return k == NK_WhileNode || k == NK_UntilNode || lr_repeat_holds(r, c->nt, p, -1);
+  return p.region < 0 || lr_stmt_repeats(r, c->nt, p);
 }
 /* See analyze.h. */
 int elab_runs_before(Compiler *c, int node, int at) {
@@ -8294,32 +8585,17 @@ static void lr_sg_makers(Compiler *c) {
 }
 /* When form node, which makes a module's singleton class whenever it runs
    (sure) or may, runs as of p: ELAB_YES surely before p, ELAB_NO surely
-   not before it, ELAB_UNKNOWN. Surely: a statement placed under no
-   condition, which is the form itself or holds it as a value only (an
-   assignment's, a multiple assignment's, a call's argument or receiver,
-   parentheses), but for a block, which its call runs when it decides,
-   and the arguments of a `&.` call, which run only on a receiver that is
-   not nil. */
+   not before it, ELAB_UNKNOWN. Surely: lr_runs_with_stmt, in a statement
+   placed under no condition. */
 static int lr_sg_when(Compiler *c, int node, int may, int sure, LoadPoint p) {
   LoadRecord *r = c->lrec;
-  const NodeTable *nt = c->nt;
   const LrStmt *s = lr_stmt_of(r, node);
   if (!s || s->region < 0 || lr_unplaced(c, node)) return ELAB_UNKNOWN;
   LoadPoint q = { s->region, (int)(s - r->st), node };
   int o = elab_cmp(q, p);
   if (o == PROG_AFTER) return lr_runs_again(c, node, p) ? ELAB_UNKNOWN : ELAB_NO;
   if (o != PROG_BEFORE || may || !sure || s->may || s->partial || s->kept) return ELAB_UNKNOWN;
-  int n;
-  const int *par = elab_node_parents(c, &n);
-  for (int v = node; v != s->node; v = par[v]) {
-    if (v < 0 || v >= n || par[v] < 0) return ELAB_UNKNOWN;
-    int pv = par[v];
-    NodeKind k = nt_kind(nt, pv);
-    if (k == NK_CallNode && (nt_ref(nt, pv, "block") == v || (nt_safe_nav(nt, pv) && nt_ref(nt, pv, "receiver") != v))) return ELAB_UNKNOWN;
-    if (k != NK_CallNode && k != NK_ArgumentsNode && k != NK_ParenthesesNode && k != NK_StatementsNode && k != NK_MultiWriteNode &&
-        k != NK_LocalVariableWriteNode && k != NK_InstanceVariableWriteNode && k != NK_ConstantWriteNode) return ELAB_UNKNOWN;
-  }
-  return ELAB_YES;
+  return lr_runs_with_stmt(c, node) ? ELAB_YES : ELAB_UNKNOWN;
 }
 int elab_module_on_singleton_chain(Compiler *c, int cls) {
   LoadRecord *r = elab_fresh(c);
@@ -11021,7 +11297,7 @@ void elab_dump(Compiler *c, FILE *out) {
       fprintf(out, "entity %s: owner %s leaf %s\n", lr_class_name(c, r->hdr[i].cls), lr_class_name(c, r->hdr[i].owner), r->hdr[i].leaf);
   if (r->nhist || r->nregion > 1) lr_run_points(c);
   for (int k = 1; k < r->nregion; k++)   /* the first statement of region 0 each other region's load may run on (lr_rta) */
-    r->rentry[k] == LR_NEVER ? fprintf(out, "region %d: never\n", k) : fprintf(out, "region %d: entered #%d\n", k, r->rentry[k]);
+    r->rentry[k] == LR_NEVER ? fprintf(out, "region %d: never\n", k) : r->rentry[k] == LR_POST ? fprintf(out, "region %d: entered post\n", k) : fprintf(out, "region %d: entered #%d\n", k, r->rentry[k]);
   for (int i = 0; i < r->nhist; i++) {
     const LrHist *h = &r->hist[i];
     if (h->a == LR_KEY_RUNS) {   /* only the forms that run the program's code */
@@ -11046,11 +11322,11 @@ void elab_dump(Compiler *c, FILE *out) {
       if (v->body) {   /* a method body's (LrDef.body): its extent, from that body's first statement on */
         lr_run_points(c);
         fprintf(out, " in def#%d", elab_point_of(c, v->body).seq);
-        int from = r->urun[v->body];   /* (0: a body lr_rta did not record, whose extent opens anywhere) */
-        from == LR_NEVER ? fputs(" from=never", out) : from ? fprintf(out, " from=#%d", from) : fputs(" from=?", out);
+        int from = lr_def_from(r, v->body);   /* (0: a body lr_rta did not record, whose extent opens anywhere) */
+        from == LR_NEVER ? fputs(" from=never", out) : from == LR_POST ? fputs(" from=post", out) : from ? fprintf(out, " from=#%d", from) : fputs(" from=?", out);
       }
       if (v->kind == LR_DEF && !v->body && h->a >= LR_MAIN && v->node < r->n && elab_method_versions(c, h->name) > 1)   /* lr_rta */
-        r->urun[v->node] == LR_NEVER ? fputs(" runs=never", out) : fprintf(out, " runs=#%d", r->urun[v->node]);
+        lr_def_from(r, v->node) == LR_NEVER ? fputs(" runs=never", out) : lr_def_from(r, v->node) == LR_POST ? fputs(" runs=post", out) : fprintf(out, " runs=#%d", lr_def_from(r, v->node));
       if (v->kind == LR_ALIAS && v->target) {   /* the version the alias takes, as the query answers it */
         const LrDef *d = NULL;
         int o = elab_method_at(c, h->a, v->target, h->b, elab_point_of(c, v->node), &d);
@@ -11096,6 +11372,24 @@ void elab_dump(Compiler *c, FILE *out) {
       if (nd >= 0 && idle) fputs(" idle", out);
     }
     fprintf(out, "; %d of the name%s\n", elab_method_versions(c, h->name), elab_version_captured(c, h->name) ? ", named" : "");
+  }
+  /* each body's extent (LrExt), in node order, and where the post-load phase starts */
+  lr_run_points(c);
+  int np;
+  const int *epar = elab_node_parents(c, &np);
+  fprintf(out, "post: after #%d\n", r->rend[0] - 1);
+  for (int id = 0; id < r->n && id < r->cextix; id++) {
+    if (!r->extix[id]) continue;
+    const LrExt *e = &r->ext[r->extix[id] - 1];
+    int call = e->body == LR_B_BLOCK && id < np ? epar[id] : id;
+    static const char *const bk[] = { "def", "lambda", "block", "END", "region" };
+    const char *nm = e->body == LR_B_DEF ? nt_str(nt, id, "name") : e->body == LR_B_BLOCK && call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+    char f[24], u[24];
+    snprintf(f, sizeof f, e->from == LR_NEVER ? "never" : e->from == LR_POST ? "post" : e->from ? "#%d" : "any", e->from);
+    snprintf(u, sizeof u, e->sure == LR_NEVER ? "never" : e->sure == LR_POST ? "post" : "#%d", e->sure);
+    fprintf(out, "extent %s%s%s line %d: from=%s sure=%s count=%s kept=%s\n", bk[e->body], nm ? " " : "", nm ? nm : "",
+            (int)nt_int(nt, e->body == LR_B_REGION ? id : call >= 0 ? call : id, "node_line", 0), f, u,
+            (const char *const[]){ "zero", "once", "many" }[e->count], e->kept ? "yes" : "no");
   }
 }
 
@@ -11251,7 +11545,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->cfirst.n; i++) free(r->cfirst_cs[i].st);
   anh_free(&r->cfirst); free(r->cfirst_cs);
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
-  free(r->plan.rend); free(r->plan.rinst); free(r->plan.urun); free(r->plan.rentry);
+  free(r->plan.rend); free(r->plan.rinst); free(r->plan.ext); free(r->plan.extix); free(r->plan.rentry);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);
   for (int i = 0; i < r->nreopens; i++) free(r->reopens[i]);
   for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);
@@ -11270,7 +11564,7 @@ void elab_free(Compiler *c) {
   free(r->brings); free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
-  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->urun); free(r->rentry); free(r);
+  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->ext); free(r->extix); free(r->once); free(r);
   c->lrec = NULL;
 }
 

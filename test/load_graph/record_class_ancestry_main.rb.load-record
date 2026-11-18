@@ -57,3 +57,11 @@ opaque Object: opaque#27
 versions A#v: def#8..#14 seen=def#8, def#14..end seen=unknown; 4 of the name, named
 versions A#w: def#9..#20 seen=unknown, def#20..end seen=unknown; 2 of the name, named
 versions A3#v: def#24..#29 seen=unknown, def#29..end seen=def#29; 4 of the name, named
+post: after #30
+extent def <=> line 12: from=#10 sure=never count=many kept=no
+extent def v line 18: from=#10 sure=never count=many kept=no
+extent def w line 19: from=#16 sure=never count=many kept=no
+extent def v line 24: from=#10 sure=never count=many kept=no
+extent def w line 30: from=#16 sure=never count=many kept=no
+extent def v line 36: from=#25 sure=never count=many kept=no
+extent def v line 41: from=#25 sure=never count=many kept=no

@@ -22,3 +22,6 @@ const Foo: write#5
 opaque Foo: opaque#6
 const Bar: write#7
 opaque Bar: opaque#8
+post: after #10
+extent def tag line 6: from=never sure=never count=zero kept=no
+extent def note line 9: from=#8 sure=never count=many kept=no

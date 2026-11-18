@@ -6320,6 +6320,7 @@ CLASS_QUAL_LIMIT ?= 3.1
 # rebuilding its table from the declarations and not from every node, is what
 # the codegen leg above sees (6.51x to 6.33x); this leg does not.
 SINGLETON_DEFS_LIMIT ?= 2.2
+UNPLACED_DEFINERS_LIMIT ?= 2.3
 # N Struct.new blocks of 128 calls each, beside sixteen top-level defs per
 # block (test/scale/struct_blocks.sh), analyzed at N=100 and N=200. The pass
 # that marks a block's class anonymous asks of every call in a block whether
@@ -6518,6 +6519,11 @@ scale-test: $(SPINEL_WORK)
 	jib=$$(sw -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jga=$$(sw --load-model=graph -c -o "$$tmp/jf1.c" "$$tmp/jf1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jgb=$$(sw --load-model=graph -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen unplaced_definers 200 ue2.rb; gen unplaced_definers 400 ue4.rb; \
+	uea=$$(sw -c -o "$$tmp/ue2.c" "$$tmp/ue2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ueb=$$(sw -c -o "$$tmp/ue4.c" "$$tmp/ue4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	uga=$$(sw --load-model=graph -c -o "$$tmp/ue2.c" "$$tmp/ue2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ugb=$$(sw --load-model=graph -c -o "$$tmp/ue4.c" "$$tmp/ue4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen shadowed_extends 400 se4.rb; gen shadowed_extends 800 se8.rb; \
 	gen shadowed_extends "400 plain" sp4.rb; gen shadowed_extends "800 plain" sp8.rb; \
 	sea=$$(sw -c -o "$$tmp/se4.c" "$$tmp/se4.rb") || { rm -rf "$$tmp"; exit 1; }; \
@@ -6558,6 +6564,7 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$yna" ] || [ -z "$$ynb" ] || [ -z "$$yta" ] || [ -z "$$ytb" ] || \
 	   [ -z "$$uda" ] || [ -z "$$udb" ] || [ -z "$$sba" ] || [ -z "$$sbb" ] || \
 	   [ -z "$$jia" ] || [ -z "$$jib" ] || [ -z "$$jga" ] || [ -z "$$jgb" ] || \
+	   [ -z "$$uea" ] || [ -z "$$ueb" ] || [ -z "$$uga" ] || [ -z "$$ugb" ] || \
 	   [ -z "$$jra" ] || [ -z "$$jrb" ] || [ -z "$$jha" ] || [ -z "$$jhb" ] || \
 	   [ -z "$$sea" ] || [ -z "$$seb" ] || [ -z "$$spa" ] || [ -z "$$spb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
@@ -6616,6 +6623,12 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$uda" -v b="$$udb" -v lim="$(SINGLETON_DEFS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: singleton def check work at 2x the defs, compiled to C, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the arity check of a call scanned the singleton defs: see singleton_def_of)"; exit 1; }; \
+	awk -v a="$$uea" -v b="$$ueb" -v lim="$(UNPLACED_DEFINERS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: unplaced definer work at 2x the bodies is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the extents of the bodies without a load point, or a run predicate over them, grew superlinearly: see lr_extents and lr_in_body)"; exit 1; }; \
+	awk -v a="$$uga" -v b="$$ugb" -v lim="$(UNPLACED_DEFINERS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: unplaced definer work at 2x the bodies, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the extents of the bodies without a load point, or a run predicate over them, grew superlinearly under graph: see lr_extents and lr_in_body)"; exit 1; }; \
 	awk -v a="$$sba" -v b="$$sbb" -v lim="$(STRUCT_BLOCKS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: Struct block anonymity work at 2x the blocks is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the anonymity pass scanned the program per call of a Struct block: see block_only_declares)"; exit 1; }; \

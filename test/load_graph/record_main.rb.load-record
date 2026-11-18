@@ -39,3 +39,14 @@ Shape#odd: def#16 end=yes
 const Shape::KEEP: write#17
 Shape#area: def#18 end=yes
 main#helper: def#19 private end=yes
+post: after #23
+extent block each line 11: from=#11 sure=#11 count=many kept=no
+extent block define_method line 11: from=#12 sure=never count=many kept=yes
+extent def odd#__cond1 line 13: from=#22 sure=never count=many kept=no
+extent block proc line 15: from=#17 sure=never count=many kept=yes
+extent def area line 16: from=#22 sure=never count=many kept=no
+extent def helper line 18: from=#12 sure=never count=many kept=no
+extent block helper line 21: from=#20 sure=never count=many kept=yes
+extent def initialize line 2: from=#22 sure=never count=many kept=no
+extent def odd line 13: from=#22 sure=never count=many kept=no
+extent block line 11: from=any sure=never count=many kept=yes

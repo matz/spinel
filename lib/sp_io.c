@@ -33,6 +33,9 @@
 #define PIPE_BUF 512   /* POSIX's least (_POSIX_PIPE_BUF), for a target whose headers name none (MinGW) */
 #endif
 #include <fcntl.h>   /* fcntl flags for #close_on_exec?, #fcntl */
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
+#include <stdio_ext.h> /* __fpurge, for the stream a #reopen moves */
+#endif
 #include <poll.h>    /* POLLIN for the socket read park */
 #include <time.h>
 
@@ -2797,6 +2800,7 @@ static void sp_io_own_buf_reopened(sp_File *f) {
 }
 
 /* IO#reopen(io): rebind this handle's descriptor onto the other stream. */
+static void sp_io_stdout_rebuffer(sp_File *f, int was_tty);   /* below, with #reopen(path) */
 sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT(other); sp_gc_wb((void*)f);
   if (!f || !other) return f;
   /* a closed handle on either side is CRuby's IOError, not a quiet no-op */
@@ -2807,17 +2811,7 @@ sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT
   int was_tty = f->fp == stdout && isatty(fileno(stdout));
   if (dup2(fileno(other->fp), fileno(f->fp)) < 0)
     sp_file_raise_errno("reopen", other->path ? other->path : "");
-  /* STDOUT is unbuffered while it is on a terminal (sp_main_stack_run), and
-     that goes with the descriptor, as CRuby's handle takes the other's
-     terminal flag: moved onto a terminal the stream is written through, and
-     moved off one it is buffered again, or every puts into the file it now
-     writes would be two write(2) calls. The buffer is handed over because
-     glibc and musl give an unbuffered stream none of their own back. */
-  if (f->fp == stdout && !f->sync_on) {
-    static char buf[BUFSIZ];
-    if (isatty(fileno(stdout))) setvbuf(stdout, NULL, _IONBF, 0);
-    else if (was_tty) setvbuf(stdout, buf, _IOFBF, sizeof buf);
-  }
+  sp_io_stdout_rebuffer(f, was_tty);
   if (f->own_buf || other->own_buf) sp_io_own_buf_reopened(f);
   /* the other's Strings, which it may not outlive: a standard stream
      keeps them with no scan to mark them (sp_io_mark_static_stream) */
@@ -2987,6 +2981,80 @@ void sp_File_close_half(sp_File *f, sp_bool reading) {SP_GC_ROOT(f);
   if (f && f->fp && !f->closed) sp_io_close_handle(f);
 }
 /* IO#reopen(path, mode): rebind the handle to another file. */
+/* The open(2) flags of a mode string, as File.open and IO#reopen read it:
+   the access letter, "+" for both sides, "x" for an exclusive create (a w
+   mode only); "b", "t" and "e" pass and mean nothing to open(2), and an
+   encoding suffix is not read. -1 for a mode File.open refuses: the mode is
+   read before anything is opened or truncated. */
+int sp_io_mode_open_flags(const char *m) {
+  int fl;
+  switch (m[0]) {
+    case 'r': fl = O_RDONLY; break;
+    case 'w': fl = O_WRONLY | O_CREAT | O_TRUNC; break;
+    case 'a': fl = O_WRONLY | O_CREAT | O_APPEND; break;
+    default: return -1;
+  }
+  for (const char *q = m + 1; *q && *q != ':'; q++) {
+    if (*q == '+') fl = (fl & ~O_ACCMODE) | O_RDWR;
+    else if (*q == 'x' && m[0] == 'w') fl |= O_EXCL;
+    else if (*q != 'b' && *q != 't' && *q != 'e') return -1;
+  }
+  return fl;
+}
+
+/* The stdio mode that fits the flags: fdopen reads its own grammar ("wx+"
+   is write-only to it), so it gets the access the flag word says, and
+   freopen gets no "x", which would refuse the file the open made. */
+const char *sp_io_fdopen_mode(int fl) {
+  int acc = fl & O_ACCMODE;
+  return (acc == O_RDONLY) ? "r"
+       : (acc == O_WRONLY) ? ((fl & O_APPEND) ? "a" : "w")
+       : ((fl & O_APPEND) ? "a+" : (fl & O_TRUNC) ? "w+" : "r+");
+}
+
+/* STDOUT is unbuffered while it is on a terminal (sp_main_stack_run), and
+   that goes with the descriptor, as CRuby's handle takes the other's
+   terminal flag: moved onto a terminal the stream is written through, and
+   moved off one it is buffered again, or every puts into the file it now
+   writes would be two write(2) calls. The buffer is handed over because
+   glibc and musl give an unbuffered stream none of their own back. */
+static void sp_io_stdout_rebuffer(sp_File *f, int was_tty) {
+  if (f->fp != stdout || f->sync_on) return;
+  static char buf[BUFSIZ];
+  if (isatty(fileno(stdout))) setvbuf(stdout, NULL, _IONBF, 0);
+  else if (was_tty) setvbuf(stdout, buf, _IOFBF, sizeof buf);
+}
+
+/* An open stream takes another descriptor under its own number, as it
+   takes the other IO's in #reopen(io): the FILE stays, a standard stream's
+   among them, which C code writes through. What the stream read ahead of
+   the old file is dropped (BSD stdio's fflush leaves it in place), and the
+   end of file or the offset it saw on it is forgotten (rewind). */
+static int sp_io_stream_take_fd(sp_File *f, int fd) {
+  int n = fileno(f->fp);
+  int was_tty = f->fp == stdout && isatty(n);
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+  fpurge(f->fp);
+#elif !defined(_WIN32)
+  __fpurge(f->fp);
+#endif
+  if (dup2(fd, n) < 0) return -1;
+  /* close-on-exec as the open gave it, which dup2 does not carry over; a
+     standard stream stays inherited, as CRuby's rb_cloexec_dup2 leaves it */
+  if (n > 2) fcntl(n, F_SETFD, FD_CLOEXEC);
+  /* the stream is at the start of the new file, and remembers no end of
+     file or offset of the old one (BSD stdio keeps the offset of a seekable
+     stream in the FILE, and a read to the end measures against it); a
+     stream on a FIFO or a terminal cannot seek, and loses nothing by it */
+  rewind(f->fp);
+  sp_io_stdout_rebuffer(f, was_tty);
+  /* a reader parked on the number waits on the old file, which the event
+     set holds, not the number: readied now (sp_sched_ev_forget), it reads
+     the new one */
+  sp_sched_ev_forget(n);
+  return 0;
+}
+
 sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) {SP_GC_ROOT(f);SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode); sp_gc_wb((void*)f);
   path = sp_str_keep(path);   /* (the File keeps its path, sp_str_keep) */
   if (!f) return f;
@@ -3016,11 +3084,77 @@ sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) {SP_GC_R
       sp_raise_cls("IOError", "stream closed in another thread");
     reserved = 1;
   }
-  FILE *nf = (f->closed || !f->fp) ? fopen(path ? path : "", om)
-                                   : freopen(path ? path : "", om, f->fp);
-  if (!nf) {
+  /* the mode is read first, as File.open reads it, and one it refuses
+     raises before anything is opened or truncated */
+  int fl = sp_io_mode_open_flags(om);
+  if (fl < 0) {
+    if (reserved) SP_ATOMIC_STORE(&f->uses, SP_IO_CLOSING | SP_IO_RETIRED, __ATOMIC_RELEASE);
+    sp_raise_cls("ArgumentError", sp_sprintf("invalid access mode %s", om));
+  }
+  /* what the stream buffered goes to the old file before the new one is
+     opened: a reopen onto the file's own path truncates after it, as
+     CRuby's does, which flushes first */
+  int open_stream = !f->closed && f->fp;
+  if (open_stream) fflush(f->fp);
+  /* the file is opened first, as CRuby's rb_io_reopen opens before it
+     moves the descriptor: a path that cannot be opened raises and leaves
+     the handle as it was (freopen closes the stream when its own open
+     fails, POSIX, and glibc frees it too, so a handle left holding it was
+     freed a second time by its close or its finalizer). It is the one open
+     of the path, made as File.open makes it: a FIFO's peer is met once,
+     with the other green threads running meanwhile, one descriptor is
+     spent, and it is close-on-exec. The sentinel is made first, so a
+     failure below never has to open it */
+  (void)sp_io_closed_sentinel();
+  int fd = sp_open_fifo_aware(path ? path : "", fl | O_CLOEXEC, 0666);
+  if (fd < 0) {
     if (reserved) SP_ATOMIC_STORE(&f->uses, SP_IO_CLOSING | SP_IO_RETIRED, __ATOMIC_RELEASE);
     sp_file_raise_errno("reopen", path ? path : "");
+  }
+  const char *sm = sp_io_fdopen_mode(fl);
+  FILE *nf;
+  int ofl = open_stream && f->mode ? sp_io_mode_open_flags(f->mode) : -1;
+  if (!open_stream) {
+    /* a closed handle: a fresh stream over the descriptor */
+    nf = fdopen(fd, sm);
+    if (!nf) {
+      int e = errno;
+      close(fd);
+      SP_ATOMIC_STORE(&f->uses, SP_IO_CLOSING | SP_IO_RETIRED, __ATOMIC_RELEASE);
+      errno = e;
+      sp_file_raise_errno("reopen", path ? path : "");
+    }
+  } else if (ofl >= 0 && (ofl & O_ACCMODE) == (fl & O_ACCMODE)) {
+    /* the stream keeps its FILE and its number, which take the descriptor
+       (sp_io_stream_take_fd), while the side of the stream stays */
+    int rc = sp_io_stream_take_fd(f, fd);
+    int e = errno;
+    close(fd);
+    if (rc < 0) { errno = e; sp_file_raise_errno("reopen", path ? path : ""); }
+    nf = f->fp;
+  } else {
+    /* a change of the side of the stream wants a FILE of that mode under
+       the same number, which freopen alone makes, for a standard stream
+       too: the path is opened a second time for it, with the first open
+       held, so a FIFO's peer stays. A reader parked on the number is
+       readied before, as a close readies it (sp_sched_ev_forget), and
+       again after, for one that parked again meanwhile. Should freopen
+       fail all the same, the stream is gone with it, so the handle is
+       closed from there, with the sentinel a close leaves (sp_io_retire) */
+    int n = fileno(f->fp);
+    sp_sched_ev_forget(n);
+    nf = freopen(path ? path : "", sm, f->fp);
+    int e = errno;
+    close(fd);
+    if (!nf) {
+      SP_ATOMIC_STORE(&f->fp, sp_io_closed_sentinel(), __ATOMIC_RELAXED);
+      SP_ATOMIC_STORE(&f->closed, 1, __ATOMIC_RELAXED);
+      SP_ATOMIC_STORE(&f->uses, SP_IO_CLOSING | SP_IO_RETIRED, __ATOMIC_RELEASE);
+      errno = e;
+      sp_file_raise_errno("reopen", path ? path : "");
+    }
+    if (n > 2) fcntl(n, F_SETFD, FD_CLOEXEC);   /* as the open gave it; a standard stream stays inherited */
+    sp_sched_ev_forget(n);
   }
   SP_ATOMIC_STORE(&f->fp, nf, __ATOMIC_RELAXED);
   SP_ATOMIC_STORE(&f->closed, 0, __ATOMIC_RELAXED);

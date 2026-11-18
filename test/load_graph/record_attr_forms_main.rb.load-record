@@ -22,3 +22,6 @@ A#c=: writer#4 end=yes
 A#e: reader#6 end=yes
 A#initialize: def#7 private end=yes
 A#peek: def#8 end=yes
+post: after #13
+extent def initialize line 12: from=#9 sure=never count=many kept=no
+extent def peek line 13: from=#11 sure=never count=many kept=no

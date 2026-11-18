@@ -99,6 +99,7 @@ src/compiler.c comp_toplevel_mod_defines a name's presence
 
 # a method the language calls by a name from a fixed table
 src/analyze.c compute_reachable comp_cmethod_in_chain an --ext-entry name
+src/analyze.c mark_ext_entry comp_cmethod_in_chain an --ext-entry name
 src/analyze.c nn_structure the names of raise, exit and the iterators
 src/analyze_cls.c cf_call comp_method_in_chain the conversion protocol's names
 src/analyze_cls.c cf_proto_ret_build the protocol methods' names

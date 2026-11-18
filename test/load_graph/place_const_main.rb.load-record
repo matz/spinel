@@ -9,3 +9,4 @@ r0 #4 may f1 BeginNode line 1
 r0 #7 f0 ConstantWriteNode LIMIT line 4
 r0 #8 f0 CallNode p line 5
 const LIMIT: write#7
+post: after #8

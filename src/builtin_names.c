@@ -201,6 +201,11 @@ int is_async_code_entry(const char *recv, const char *n) {
   return sp_streq(recv, "Fiber") && sp_streq(n, "new");
 }
 
+/* at_exit: its block runs once the load phase is over, when the program exits */
+int is_at_exit_name(const char *n) {
+  return n && sp_streq(n, "at_exit");
+}
+
 /* A call whose block the program keeps to run later, not before the call
    answers: a Proc or lambda made of it (`proc`, `lambda`, `Proc.new`), a
    method body (`define_method`, `define_singleton_method`), code run on its
@@ -210,7 +215,7 @@ int is_async_code_entry(const char *recv, const char *n) {
 int is_deferred_block_call(const char *recv, const char *n) {
   if (!n) return 0;
   if (is_proc_constructor(n) || is_define_method_name(n) || is_define_singleton_method_name(n) ||
-      sp_streq(n, "at_exit") || is_async_code_entry(recv, n)) return 1;
+      is_at_exit_name(n) || is_async_code_entry(recv, n)) return 1;
   if (!recv) return 0;
   return ((sp_streq(recv, "Proc") || sp_streq(recv, "Enumerator")) && sp_streq(n, "new")) ||
          (sp_streq(recv, "ObjectSpace") && sp_streq(n, "define_finalizer"));

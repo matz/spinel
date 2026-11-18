@@ -1363,6 +1363,39 @@ static int new_call_passes_capacity(const NodeTable *nt, int id) {
   }
   return 0;
 }
+/* Each --ext-entry designation, Module.method, in the order given: f(Module,
+   method, ud). A designation with no dot is refused, as the host calls only a
+   module's singleton methods (v1). */
+void ext_entries_each(void (*f)(const char *cls, const char *meth, void *ud), void *ud) {
+  if (!g_ext_entries || !*g_ext_entries) return;
+  /* a copy as long as the list: a fixed buffer cut a long one short, and
+     the cut piece read as a method name (or the entries after it were
+     dropped without a word) */
+  char *list = strdup(g_ext_entries);
+  for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
+    char *dot = strrchr(tok, '.');
+    if (!dot) {
+      fprintf(stderr, "spinel: --ext-entry `%s`: spell it Module.method "
+                      "(module singleton methods export in v1)\n", tok);
+      exit(1);
+    }
+    *dot = '\0';
+    f(tok, dot + 1, ud);
+  }
+  free(list);
+}
+static void mark_ext_entry(const char *cls, const char *meth, void *ud) {
+  Compiler *c = ud;
+  int ci2 = comp_class_index(c, cls);
+  int mi2 = ci2 >= 0 ? comp_cmethod_in_chain(c, ci2, meth, NULL) : -1;
+  if (mi2 < 0) {
+    fprintf(stderr, "spinel: --ext-entry `%s.%s` does not name a "
+                    "`def self.%s` in module %s\n",
+            cls, meth, meth, cls);
+    exit(1);
+  }
+  c->scopes[mi2].is_ext_entry = 1;
+}
 void compute_reachable(Compiler *c, int typed) {
   mtab_enter(c);   /* (a scan of every call's name) */
   /* Build per-scope call sets (CallNode names, not entering nested DefNodes). */
@@ -1377,31 +1410,7 @@ void compute_reachable(Compiler *c, int typed) {
      out of the very library it is the point of (ext-design.md, Layer 1).
      They are marked before the census below (cr_live_collect), which
      opens the class of an exported method from the start. */
-  if (g_ext_entries && *g_ext_entries) {
-    /* a copy as long as the list: a fixed buffer cut a long one short, and
-       the cut piece read as a method name (or the entries after it were
-       dropped without a word) */
-    char *list = strdup(g_ext_entries);
-    for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
-      char *dot = strrchr(tok, '.');
-      if (!dot) {
-        fprintf(stderr, "spinel: --ext-entry `%s`: spell it Module.method "
-                        "(module singleton methods export in v1)\n", tok);
-        exit(1);
-      }
-      *dot = '\0';
-      int ci2 = comp_class_index(c, tok);
-      int mi2 = ci2 >= 0 ? comp_cmethod_in_chain(c, ci2, dot + 1, NULL) : -1;
-      if (mi2 < 0) {
-        fprintf(stderr, "spinel: --ext-entry `%s.%s` does not name a "
-                        "`def self.%s` in module %s\n",
-                tok, dot + 1, dot + 1, tok);
-        exit(1);
-      }
-      c->scopes[mi2].is_ext_entry = 1;
-    }
-    free(list);
-  }
+  ext_entries_each(mark_ext_entry, c);
   /* --ext-class: the public instance methods of the named classes join the
      graph as roots too, for the method table the library exports */
   if (g_ext_classes && *g_ext_classes) {
@@ -5205,9 +5214,13 @@ static int ie_rself_use(Compiler *c, int n, int nested) {
   /* A receiverless call to a method self answers (`title`, `respond_to?(m)`)
      takes self as its receiver (ie_rself_give_self) and so dispatches on the
      rebound self, as `self.title` does; inside a nested block it would be
-     that block's self, which no binding reaches. */
+     that block's self, which no binding reaches. A Kernel function (`raise`,
+     `puts`) is dispatched globally whatever self is, so it is no use of self
+     even when a class of the program defines a method of its name: give_self
+     leaves it receiverless, and a body whose only such call is one of these
+     would be marked as running on a runtime self yet hold no self to read. */
   if (k == NK_CallNode && nt_ref(nt, n, "receiver") < 0 && nt_str(nt, n, "name") &&
-      ie_rself_name_selfish(c, nt_str(nt, n, "name"))) return nested ? 2 : 1;
+      !ie_kernel_global(nt_str(nt, n, "name")) && ie_rself_name_selfish(c, nt_str(nt, n, "name"))) return nested ? 2 : 1;
   if (ie_rself_cmethod_call(c, n)) return nested ? 2 : 1;
   int in = nested || k == NK_BlockNode || k == NK_LambdaNode, r = 0;
   for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) r |= ie_rself_use(c, nt_ref_at(nt, n, i), in);
@@ -9566,6 +9579,26 @@ static int te_yield_step(NodeTable *nt) {
   nt_node_set_ref(nt, evsplat, "expression", te_lvread(nt, "__ev"));
   return te_call(nt, te_lvread(nt, "__ey"), "yield", te_args1(nt, evsplat), -1);
 }
+/* The required parameters of def `def`, when it takes nothing else (no
+   optional, post, rest, keyword or block parameter): NULL and 0 otherwise. */
+static const int *te_required_only_params(const NodeTable *nt, int def, int *n) {
+  *n = 0;
+  int pn = def >= 0 ? nt_ref(nt, def, "parameters") : -1;
+  if (pn < 0) return NULL;
+  int on = 0, pon = 0, kn = 0;
+  nt_arr(nt, pn, "optionals", &on); nt_arr(nt, pn, "posts", &pon); nt_arr(nt, pn, "keywords", &kn);
+  if (on || pon || kn || nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0 || nt_ref(nt, pn, "block") >= 0)
+    return NULL;
+  const int *reqs = nt_arr(nt, pn, "requireds", n);
+  /* (a parameter of the helper's own names, __ey and __ev, would read as
+     the yielder or the yielded values inside the helper: not forwarded) */
+  for (int i = 0; i < *n; i++) {
+    const char *pn = nt_kind(nt, reqs[i]) == NK_RequiredParameterNode ? nt_str(nt, reqs[i], "name") : NULL;
+    if (!pn || sp_streq(pn, "__ey") || sp_streq(pn, "__ev")) { *n = 0; return NULL; }
+  }
+  if (*n <= 0) { *n = 0; return NULL; }
+  return reqs;
+}
 static int te_stmts1(NodeTable *nt, int s) {
   int n = nt_new_node(nt, "StatementsNode"); nt_node_set_arr(nt, n, "body", &s, 1); return n;
 }
@@ -10483,7 +10516,21 @@ static void synth_to_enum_generators(Compiler *c) {
     int inner_blk = nt_new_node(nt, "BlockNode");
     nt_node_set_ref(nt, inner_blk, "parameters", inner_bp);
     nt_node_set_ref(nt, inner_blk, "body", te_stmts1(nt, fyield));
-    int mcall = te_call(nt, -1, m, -1, inner_blk);   /* implicit self.m -> cap_self */
+    /* m takes only required parameters: the helper takes the same (below)
+       and hands them to m, as `enum_for(__method__, dir)` hands dir on */
+    int nreq = 0; const int *reqs = te_required_only_params(nt, tdef[k], &nreq);
+    int margs = -1;
+    if (nreq > 0) {
+      char **pn = malloc(sizeof(char *) * (size_t)nreq);
+      int *reads = malloc(sizeof(int) * (size_t)nreq);
+      if (!pn || !reads) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      for (int i = 0; i < nreq; i++) pn[i] = strdup(nt_str(nt, reqs[i], "name"));
+      for (int i = 0; i < nreq; i++) reads[i] = te_lvread(nt, pn[i]);
+      margs = nt_new_node(nt, "ArgumentsNode"); nt_node_set_arr(nt, margs, "arguments", reads, nreq);
+      for (int i = 0; i < nreq; i++) free(pn[i]);
+      free(pn); free(reads);
+    }
+    int mcall = te_call(nt, -1, m, margs, inner_blk);   /* implicit self.m -> cap_self */
     /* outer block: Enumerator.new { |__ey| <mcall> } */
     int eyreq = nt_new_node(nt, "RequiredParameterNode"); nt_node_set_str(nt, eyreq, "name", "__ey");
     int outer_params = nt_new_node(nt, "ParametersNode"); nt_node_set_arr(nt, outer_params, "requireds", &eyreq, 1);
@@ -10499,6 +10546,7 @@ static void synth_to_enum_generators(Compiler *c) {
     { ms->class_id = ci; comp_touch_scope(ms->idx); }
     { ms->body = mbody; comp_touch_scope(ms->idx); }
     int ms_idx = c->nscopes - 1;
+    if (nreq > 0) collect_def_params(c, tdef[k], ms);   /* m's required parameters, the helper's own */
     LocalVar *ey = scope_local_intern(ms, "__ey"); if (ey) ey->is_block_param = 1;
     LocalVar *ev = scope_local_intern(ms, "__ev"); if (ev) ev->is_block_param = 1;
     comp_grow_node_arrays(c);
@@ -16596,7 +16644,23 @@ static int desugar_to_enum(Compiler *c) {
       int helper = toplevel ? call_target(c, id, -1, hname, CT_TOP, NULL)
                  : call_target(c, id, reopen_ci >= 0 ? reopen_ci : ty_object_class(rt), hname, CT_METHODS, NULL);
       if (helper < 0) continue;  /* no yielding m: leave */
-      if (extra > 0) continue;   /* user-class to_enum with args: PR follow-up (loud downstream) */
+      /* arguments reach m through the helper, which takes m's required
+         parameters when m takes only those (synth_to_enum_generators) */
+      {
+        int nreq = 0;
+        te_required_only_params(nt, c->scopes[helper].def_node, &nreq);
+        /* as many arguments as m's required parameters, none when m takes
+           other kinds (the helper then takes none, as before); a splat, a
+           keyword hash or a block argument has no count of its own */
+        if (nreq != extra) continue;
+        int eac = 0; const int *eav = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &eac);
+        int plain = 1;
+        for (int j = 1; j < eac && plain; j++) {
+          NodeKind jk = nt_kind(nt, eav[j]);
+          plain = jk != NK_SplatNode && jk != NK_KeywordHashNode && jk != NK_BlockArgumentNode;
+        }
+        if (!plain) continue;
+      }
       /* `return enum_for(:m) unless block_given?` inside method m: a blockless
          call to m returns the Enumerator (with a block m runs the body and its
          return is ignored). Pin m's return type so the blockless call site does
@@ -16627,7 +16691,9 @@ static int desugar_to_enum(Compiler *c) {
       }
       nt_node_set_str(nt, id, "name", hname);
       int empty = nt_new_node(nt, "ArgumentsNode");
-      nt_node_set_arr(nt, empty, "arguments", NULL, 0);
+      { /* the method symbol goes; the arguments after it stay, for the helper */
+        int ac2 = 0; const int *av2 = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac2);
+        nt_node_set_arr(nt, empty, "arguments", ac2 > 1 ? av2 + 1 : NULL, ac2 > 1 ? ac2 - 1 : 0); }
       nt_node_set_ref(nt, id, "arguments", empty);
       if (has_block) nt_node_set_ref(nt, id, "block", -1);
       comp_grow_node_arrays(c);
@@ -50499,6 +50565,7 @@ static void an_phase_desugar_register(Compiler *c) {
   desugar_builtin_method_defined_conds(c);  /* unless String.method_defined?(:m) -> unless true */
   AN_STEP_V("desugar_builtin_reopen_self_cmethods", desugar_builtin_reopen_self_cmethods(c)); /* self.sqrt in an Integer class method -> Integer.sqrt */
   AN_STEP_V("desugar_engine_branches", desugar_engine_branches(c));
+  AN_STEP_V("desugar_socket_constants", desugar_socket_constants(c));           /* Socket::Constants::X -> Socket::X */
   lower_run(c, &lc, LW_PAREN_DEF_BODY);            /* def m = (a; b) -> def m; a; b; end */
   desugar_def_unless_method_defined(c); /* def m .. end unless method_defined?(:m), answered in program order --
                                            ahead of the runtime-condition defs, which it answers statically */

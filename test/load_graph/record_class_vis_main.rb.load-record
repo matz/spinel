@@ -29,3 +29,11 @@ visibility in #8: vis#9 private vis#11 public
 A.h: def#10 private end=yes
 A.k: def#12 end=yes
 A.all: def#13 end=yes
+post: after #18
+extent def d line 8: from=#14 sure=never count=many kept=no
+extent def e line 9: from=#14 sure=never count=many kept=no
+extent def f line 10: from=#14 sure=never count=many kept=no
+extent def g line 11: from=#14 sure=never count=many kept=no
+extent def h line 16: from=#14 sure=never count=many kept=no
+extent def k line 18: from=#14 sure=never count=many kept=no
+extent def all line 20: from=#14 sure=#14 count=once kept=no

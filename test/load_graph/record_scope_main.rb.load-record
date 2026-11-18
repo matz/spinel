@@ -52,3 +52,10 @@ opaque Macro: opaque#18
 visibility in #15: vis#19 private vis#21 public
 Macro#hidden: def#20 private end=yes
 Macro#shown: def#22 end=yes
+post: after #26
+extent def from line 8: from=never sure=never count=zero kept=no
+extent def from line 12: from=#23 sure=never count=many kept=no
+extent def prop line 23: from=#17 sure=#17 count=once kept=no
+extent def hidden line 27: from=#26 sure=never count=many kept=no
+extent def shown line 29: from=#26 sure=never count=many kept=no
+extent def extra line 3: from=#25 sure=never count=many kept=no

@@ -20,3 +20,6 @@ Struct.method_added: alias#6 (on_added: def#4) end=yes
 const Pt: write#7
 Pt#x: reader#8 end=yes
 Pt#x=: writer#8 end=yes
+post: after #11
+extent block new line 9: from=#7 sure=#7 count=once kept=no
+extent def on_added line 4: from=#1 sure=never count=many kept=no

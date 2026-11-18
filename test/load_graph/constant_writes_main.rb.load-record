@@ -66,3 +66,18 @@ opaque Values: opaque#41
 const RATE: write#-1 may
 const LIST: write#-1 may
 const Values::N: write#-1 may
+post: after #42
+extent def run line 20: from=#16 sure=never count=many kept=no
+extent block run line 21: from=#16 sure=never count=many kept=yes
+extent block run line 22: from=#17 sure=never count=many kept=yes
+extent block run line 23: from=#18 sure=never count=many kept=yes
+extent block run line 24: from=#20 sure=never count=many kept=yes
+extent block run line 25: from=#22 sure=never count=many kept=yes
+extent block run line 26: from=#24 sure=never count=many kept=yes
+extent block run line 27: from=#26 sure=never count=many kept=yes
+extent block run line 28: from=#28 sure=never count=many kept=yes
+extent block run line 29: from=#30 sure=never count=many kept=yes
+extent block run line 30: from=#32 sure=never count=many kept=yes
+extent block run line 31: from=#34 sure=never count=many kept=yes
+extent lambda line 33: from=#37 sure=never count=many kept=yes
+extent def assign line 35: from=#41 sure=#41 count=once kept=no

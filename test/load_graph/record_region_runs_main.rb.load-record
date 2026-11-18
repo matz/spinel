@@ -44,3 +44,17 @@ main#load_d: def#5 private end=yes
 K#b: def#24 end=unknown
 K#c: def#28 end=unknown
 versions K#v: def#2..?, def#14..?, def#20..?; 3 of the name
+post: after #15
+extent def v line 9: from=#6 sure=never count=many kept=no
+extent def probe line 10: from=#6 sure=never count=many kept=no
+extent def load_a line 11: from=#6 sure=never count=many kept=no
+extent def load_d line 12: from=never sure=never count=zero kept=no
+extent block each line 15: from=#9 sure=#9 count=once kept=no
+extent def v line 18: from=#6 sure=never count=many kept=no
+extent region line 1: from=#6 sure=never count=once kept=no
+extent region line 1: from=never sure=never count=zero kept=no
+extent def v line 1: from=#6 sure=never count=many kept=no
+extent region line 1: from=#8 sure=never count=once kept=no
+extent def b line 1: from=#8 sure=never count=many kept=no
+extent region line 1: from=#10 sure=never count=once kept=no
+extent def c line 1: from=#10 sure=never count=many kept=no

@@ -1641,6 +1641,32 @@ int desugar_sclass_hooks(Compiler *c) {
   return changed;
 }
 
+/* `Socket::Constants::SOL_SOCKET` (excon's socket options): CRuby's Socket::Constants holds the same constants
+   Socket does, so the read is `Socket::SOL_SOCKET`, which the run time's table answers (sp_sock_const). */
+int desugar_socket_constants(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (!sp_feature_required("socket")) return 0;
+  int n0 = nt->count, changed = 0;
+  /* (none where the program declares a Socket or a Constants itself: a nested Socket module, or a reopened
+     ::Socket's own constants, are not the run time's table) */
+  for (int id = 0; id < n0; id++) {
+    const char *dn = class_def_name(nt, id);
+    if (dn && (sp_streq(dn, "Socket") || sp_streq(dn, "Constants"))) return 0;
+  }
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_ConstantPathNode) continue;
+    int mid = nt_ref(nt, id, "parent");
+    if (mid < 0 || nt_kind(nt, mid) != NK_ConstantPathNode || !sp_streq(nt_str(nt, mid, "name"), "Constants")) continue;
+    int root = nt_ref(nt, mid, "parent");
+    int rooted_socket = root < 0 ? 0 : (nt_kind(nt, root) == NK_ConstantReadNode && sp_streq(nt_str(nt, root, "name"), "Socket")) ||
+                        (nt_kind(nt, root) == NK_ConstantPathNode && nt_ref(nt, root, "parent") < 0 && sp_streq(nt_str(nt, root, "name"), "Socket"));
+    if (!rooted_socket) continue;
+    nt_node_set_ref(nt, id, "parent", root);
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_instance_eval_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -26082,6 +26108,36 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
     int body = cn_body(nt, blk);
     if (body < 0) continue;
     int par = parent[id];
+    /* `X = Module.new.freeze` (a frozen name validator): the write defines
+       the module as `X = Module.new` does, and X is frozen by a statement of
+       its own right after it, `X.freeze`, as the module is made before */
+    if (par >= 0 && nt_kind(nt, par) == NK_CallNode && nt_ref(nt, par, "receiver") == id &&
+        nt_str(nt, par, "name") && sp_streq(nt_str(nt, par, "name"), "freeze") &&
+        nt_ref(nt, par, "arguments") < 0 && nt_ref(nt, par, "block") < 0 &&
+        parent[par] >= 0 && nt_kind(nt, parent[par]) == NK_ConstantWriteNode && nt_ref(nt, parent[par], "value") == par) {
+      int fz = par, w = parent[par], st = parent[w], sn = 0;
+      const int *ss = st >= 0 && nt_kind(nt, st) == NK_StatementsNode ? nt_arr(nt, st, "body", &sn) : NULL;
+      int at = -1;
+      for (int k = 0; k < sn; k++) if (ss[k] == w) at = k;
+      if (at >= 0) {
+        int rd = fwd_new_node_like(nt, w, "ConstantReadNode");
+        if (rd >= 0) {
+          nt_node_set_str(nt, rd, "name", nt_str(nt, w, "name"));
+          nt_node_set_ref(nt, w, "value", id);
+          nt_node_set_ref(nt, fz, "receiver", rd);
+          ss = nt_arr(nt, st, "body", &sn);
+          int *out = malloc(sizeof(int) * (size_t)(sn + 1));
+          if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          memcpy(out, ss, sizeof(int) * (size_t)(at + 1));
+          out[at + 1] = fz;
+          memcpy(out + at + 2, ss + at + 1, sizeof(int) * (size_t)(sn - at - 1));
+          nt_node_set_arr(nt, st, "body", out, sn + 1);
+          free(out);
+          parent[id] = w; parent[fz] = st;
+          par = w;
+        }
+      }
+    }
     /* a class body opens a scope of its own, a block does not: a body reading
        the surrounding locals stays a block */
     int reads_outer = cn_reads_outer_local(nt, body, 0) ||
@@ -29060,7 +29116,10 @@ int desugar_dynamic_const_get(Compiler *c) {
       for (int m = q.head[g]; m >= 0 && first < 0; m = q.next[m]) { if (class_def_body(nt, m) >= 0) first = m; }
     else
       for (int m = 0; m < n0 && first < 0; m++) {
-        if (!class_def_opens_cref(nt, m)) continue;
+        /* a module builder's write (`V = Module.new`, a name validator) opens
+           no constant scope: its block is the body the generated methods go
+           in, when the module has no constants of its own (below) */
+        if (!class_def_opens_cref(nt, m) && !(class_def_builder(nt, m) >= 0 && class_def_is_module(nt, m))) continue;
         const char *bn = class_def_key(c, m);
         if (bn && sp_streq(bn, mn) && class_def_body(nt, m) >= 0) first = m;
       }
@@ -29071,6 +29130,15 @@ int desugar_dynamic_const_get(Compiler *c) {
       char **names = NULL; int nn = 0, cap = 0;
       if (g >= 0) cg_collect_qual(nt, parent, &q, g, n0, &names, &nn, &cap);
       else cg_collect(nt, mn, n0, &names, &nn, &cap);
+      /* a module builder's block does not open the module's constant scope,
+         so a constant written under it by path (`V::Entry = 1`) would be read
+         there as the surrounding scope's: such a module keeps its call as
+         it was, and only one with no constants of its own is answered */
+      if (!class_def_opens_cref(nt, first) && nn > 0) {
+        for (int k = 0; k < nn; k++) free(names[k]);
+        free(names);
+        continue;
+      }
       int body = class_def_body(nt, first);
       int bn = 0; const int *bs = nt_arr(nt, body, "body", &bn);
       int *out = malloc(sizeof(int) * (size_t)(bn + 2));

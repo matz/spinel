@@ -1940,6 +1940,41 @@ int ct_table_loop_form(Compiler *c, int st, int list, int j) {
 /* The macro call `call`, statement j of class body list `list` (or of an
    if's arm in it), run: the first statement now in its place, or -1 where
    it stays as written */
+/* The ffi gem's declarations on a class that extends FFI::Library
+   (`ffi_lib FFI::Library::LIBC`, `attach_function ...`): FFI::Library's own
+   methods (packages/ffi/ffi.rb), which write the class's @ffi_* instance
+   variables and nothing a macro reads otherwise. The evaluator cannot
+   follow them (they open the library natively), so the record keeps each
+   as code it does not follow; noted as a call that writes those variables,
+   their values not known, a later macro call is expanded past it, and one
+   that reads them is refused as before. */
+static const char *const ct_ffi_ivars[] = { "@ffi_convention", "@ffi_enums", "@ffi_functions", "@ffi_lib_flags",
+                                            "@ffi_libs", "@ffi_typedefs", "@ffi_variable_refs", "@ffi_variables", NULL };
+static int ct_ffi_decl_note(Compiler *c, HostStep *h, int call, int cls, LoadPoint p) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char *name = nt_str(nt, call, "name");
+  const LrDef *d = NULL;
+  if (!is_ffi_decl_name(name) || elab_method_at(c, cls, name, 1, p, &d) != ELAB_YES || !d || d->kind != LR_DEF ||
+      d->node < 0 || nt_kind(nt, d->node) != NK_DefNode)
+    return 0;
+  const char *fp = nt_file_path(nt, (int)nt_int(nt, d->node, "node_file", -1));
+  size_t fl = fp ? strlen(fp) : 0;
+  if (fl < 11 || strcmp(fp + fl - 11, "/ffi/ffi.rb") != 0) return 0;
+  struct CtMacroFacts *f = ct_macro_facts(c, h);
+  if (f->nscall == f->cscall) {
+    f->cscall = f->cscall ? f->cscall * 2 : 8;
+    f->scall = realloc(f->scall, sizeof *f->scall * (size_t)f->cscall);
+    f->sw = realloc(f->sw, sizeof *f->sw * (size_t)f->cscall);
+    if (!f->scall || !f->sw) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  CtIvs *w = &f->sw[f->nscall];
+  memset(w, 0, sizeof *w);
+  f->scall[f->nscall++] = call;
+  for (int i = 0; ct_ffi_ivars[i]; i++) ct_ivs_put(w, ct_ffi_ivars[i], mv_nil(), 0);
+  nt_node_set_int(nt, call, "ct_state_only", 1);
+  return 1;
+}
+
 int ct_macro_form(Compiler *c, int call, int list, int j) {
   NodeTable *nt = (NodeTable *)c->nt;
   HostStep *h = elab_walk_host(c);
@@ -1953,6 +1988,7 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
   /* the class, and what its call can meet at its point */
   int cls = elab_self_at(c, call);
   LoadPoint p = elab_point_of(c, call);
+  if (cls >= 0 && ct_ffi_decl_note(c, h, call, cls, p)) return -1;
   if (cls < 0 || (!elab_class_provisional(c, cls) && (is_builtin_class_name(c->classes[cls].name) || is_builtin_module_name(c->classes[cls].name))) ||
       elab_opaque_before_bar_state(c, cls, p) != ELAB_NO || elab_body_visibility_at(c, call) != BVIS_PUBLIC ||
       elab_method_at(c, cls, "method_added", 1, p, NULL) != ELAB_NO)

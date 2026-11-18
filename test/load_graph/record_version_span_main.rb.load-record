@@ -59,3 +59,16 @@ versions Bell#ring: def#6..#22 seen=def#6 idle, def#22..end seen=def#22; 9 of th
 versions Pod#ring: def#11..#24 seen=def#11, def#24..end seen=def#24; 9 of the name
 versions Drum#ring: def#14..#26 seen=def#14 idle, def#26..end seen=def#26; 9 of the name
 versions Gong#ring: def#19..#20 seen=def#19 idle, def#20..end seen=def#20; 9 of the name
+post: after #27
+extent def ring line 13: from=#27 sure=never count=many kept=no
+extent def to_s line 17: from=#12 sure=never count=many kept=no
+extent def ring line 21: from=#27 sure=never count=many kept=no
+extent block map line 22: from=#7 sure=#7 count=many kept=no
+extent def ring line 27: from=#12 sure=never count=many kept=no
+extent def ring line 33: from=#27 sure=never count=many kept=no
+extent block map line 34: from=#15 sure=#15 count=many kept=no
+extent def ring line 39: from=#27 sure=never count=many kept=no
+extent def ring line 40: from=#27 sure=never count=many kept=no
+extent def ring line 44: from=#27 sure=never count=many kept=no
+extent def ring line 48: from=#12 sure=never count=many kept=no
+extent def ring line 52: from=#27 sure=never count=many kept=no

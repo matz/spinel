@@ -38,3 +38,12 @@ Box#get: def#16 runs=#22 def#19 runs=#22 def#21 runs=#22 end=yes
 versions Tally.up: def#6..#8 seen=def#6 idle, def#8..end seen=def#8; 2 of the name
 versions Tally.kept: def#9..#12 seen=def#9 idle, def#12..end seen=def#12; 2 of the name, named
 versions Box#get: def#16..#19 seen=def#16 idle, def#19..#21 seen=def#19 idle, def#21..end seen=def#21; 4 of the name
+post: after #22
+extent def up line 10: from=#13 sure=never count=many kept=no
+extent def up line 13: from=#13 sure=never count=many kept=no
+extent def kept line 14: from=#14 sure=never count=many kept=no
+extent def kept line 18: from=#14 sure=never count=many kept=no
+extent def get line 23: from=#22 sure=never count=many kept=no
+extent def get line 27: from=#22 sure=never count=many kept=no
+extent def get line 30: from=#22 sure=never count=many kept=no
+extent def get line 3: from=#22 sure=never count=many kept=no

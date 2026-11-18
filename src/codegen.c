@@ -23845,7 +23845,9 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
   if (!exc_has_reopen_initialize(c)) return;
   /* every reopening that defines one, not the first eight: the pick is by the
      class's ancestry, so a later one must be in it */
-  int *xr = malloc((size_t)c->nclasses * sizeof *xr), xn = exc_reopen_definers(c, "initialize", xr, c->nclasses);
+  int *xr = calloc((size_t)c->nclasses + 1, sizeof *xr);
+  if (!xr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int xn = exc_reopen_definers(c, "initialize", xr, c->nclasses);
   buf_puts(b, "static void *sp_user_exc_reinit(const char *cls, const char *msg, void *obj){\n  ");
   int pk = emit_exc_reopen_pick_head(c, xr, xn, "cls", b);
   buf_printf(b, "\n  if (_xi%d < 0) return NULL;\n"

@@ -233,7 +233,9 @@ String result crosses the callback boundary as borrowed bytes. A `:str`
 callback returns a C string. A `:binstr` callback also sets `sp_ffi_bin_len`
 to the byte length, including any embedded NUL. A nil result returns NULL
 and sets the binary length to zero. Keep the Ruby String alive while C uses
-the bytes after the callback returns.
+the borrowed bytes. An operation that mutates the String can replace its
+buffer. Copy the bytes before reentering such an operation if C needs to
+retain them, using the reported byte count for `:binstr`.
 
 ### `offload: true` (Spinel's own)
 

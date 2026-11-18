@@ -1,0 +1,24 @@
+[:child_f, 1]
+[:child_f, 2]
+[:child_f, 3]
+Child
+:f
+:f
+1
+[[:req, :x]]
+[:child_f, 4]
+1
+[:child_f, 5]
+[true, false]
+10
+[[:child_f, 6], [:child_f, 7]]
+[:child_f, 8]
+[:child_f, 9]
+:f
+Child
+[:child_f, 10]
+[:parent_f, 11]
+Parent
+[:child_f, 1.5]
+[:child_f, "s"]
+[:child_f, nil]

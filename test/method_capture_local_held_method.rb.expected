@@ -1,0 +1,51 @@
+[:other_g, 1]
+[:other_g, 1]
+[:child_f, 1]
+[:other_g, 2]
+[:other_g, 2]
+[:child_f, 2]
+[:other_g, 3]
+[:other_g, 3]
+[:child_f, 3]
+Other
+Other
+Child
+:g
+:g
+:f
+:g
+:g
+:f
+1
+1
+1
+[[:req, :x]]
+[[:req, :x]]
+[[:req, :x]]
+[:other_g, 4]
+[:other_g, 4]
+[:child_f, 4]
+1
+1
+1
+[:other_g, 5]
+[:other_g, 5]
+[:child_f, 5]
+[false, true]
+[false, true]
+[true, false]
+15
+15
+9
+[[:other_g, 6], [:other_g, 7]]
+[[:other_g, 6], [:other_g, 7]]
+[[:child_f, 6], [:child_f, 7]]
+[:other_g, 8]
+[:other_g, 8]
+[:child_f, 8]
+[:other_g, 9]
+[:other_g, 9]
+[:child_f, 9]
+:g
+:g
+:f

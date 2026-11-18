@@ -754,9 +754,16 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
     buf_puts(b, "; })");
   }
   else {
-    buf_puts(b, "((void)(");
+    /* A local some write of which names a method, and that may hold another
+       (method_recv_node declines it), has no one parent to bind: the call
+       raises where it runs. It answered nil, or the parent of the method
+       the local did not hold. */
+    int *mns, held = mnp < 0 ? method_recv_nodes(c, recv, &mns) : 0;
+    if (mnp < 0) free(mns);
+    buf_puts(b, held > 0 ? "(sp_raise_cls(\"NotImplementedError\", ({ (void)(" : "((void)(");
     emit_expr_for_effect(c, recv, b);
-    buf_puts(b, "), (sp_BoundMethod *)NULL)");
+    buf_puts(b, held > 0 ? "); \"spinel: Method#super_method of a local that may hold more than one method is not supported\"; })), (sp_BoundMethod *)NULL)"
+                         : "), (sp_BoundMethod *)NULL)");
   }
   return 1;
   return 0;

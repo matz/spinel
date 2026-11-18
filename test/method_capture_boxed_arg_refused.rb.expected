@@ -1,6 +1,7 @@
 case equality: TypeError: wrong argument type Float (expected String)
 splat: TypeError: wrong argument type Float (expected String)
 :s
+computed keyword: TypeError: wrong argument type Float (expected String)
 keyword splat: TypeError: wrong argument type Float (expected String)
 :s
 literal keyword splat: TypeError: wrong argument type Float (expected String)
@@ -9,3 +10,4 @@ Array subclass: TypeError: wrong argument type Float (expected String)
 "c"
 "d"
 "e"
+super_method: NotImplementedError

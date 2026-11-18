@@ -11780,6 +11780,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
         nt_mark_builtin_call(nt, kcall);
         int krecv = nt_new_node(nt, "ConstantReadNode");
         nt_node_set_str(nt, krecv, "name", kcls >= 0 ? c->classes[kcls].name : "Kernel");
+        if (kcls >= 0) nt_node_set_int(nt, krecv, "made_class", kcls + 1);
         nt_node_set_ref(nt, kcall, "receiver", krecv);
       }
       int kbody = nt_new_node(nt, "StatementsNode");

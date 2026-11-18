@@ -5615,6 +5615,7 @@ static int sus_class_const(Compiler *c, int ci) {
     k = n;
     p = q ? q + 2 : NULL;
   }
+  if (k >= 0) nt_node_set_int(nt, k, "made_class", ci + 1);   /* (the class it names, which no lookup need find again) */
   return k;
 }
 /* `r.send(:m, args)` on a boxed receiver no class set describes, in a program

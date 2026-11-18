@@ -1596,7 +1596,9 @@ void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b);
 /* The ENV name check's text around a key desugar_env_enum marked. */
 const char *env_key_open(const NodeTable *nt, int n);
 const char *env_key_close(const NodeTable *nt, int n);
+int hash_bigint_key(Compiler *c, int key, TyKind kt);
 int hash_key_misses(Compiler *c, int key, TyKind kt);
+int hash_key_foreign(Compiler *c, int key, TyKind kt);
 int hash_okey_miss(Compiler *c, int key, TyKind kt);
 int hash_okey_form(Compiler *c, int key, TyKind kt);
 void emit_hash_okey(Compiler *c, int key, Buf *b);

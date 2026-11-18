@@ -1169,6 +1169,32 @@ static int emit_slice_okey_key(Compiler *c, int key, TyKind rt, int th, int tr, 
   return 1;
 }
 
+/* One key of values_at / fetch_values in the table's own kind, as `_t<tk>`.
+   A Bignum key (hash_bigint_key), or a boxed key on an Integer-keyed table,
+   is the Integer it holds: `okg` guards the lookup by whether an sp_int
+   holds it, and `*tkb` is the temp that keeps the key boxed, for the
+   KeyError to name. A block's parameter is typed as the table's key kind,
+   so with a block a boxed key keeps the conversion that raises for a key of
+   another class, and a Bignum key is refused. 0 after a refusal. */
+static int emit_values_at_key(Compiler *c, int id, int key, TyKind kt, int is_fetch, int tk, int *tkb, char *okg, Buf *b) {
+  int blk = is_fetch && nt_ref(c->nt, id, "block") >= 0;
+  int big = hash_bigint_key(c, key, kt);
+  if (!big && (kt != TY_INT || blk || repr_of(c, key).kind != RK_BOXED)) {
+    buf_printf(b, " %s _t%d = ", c_type_name(kt), tk); emit_hash_key(c, key, kt, b); buf_puts(b, ";");
+    return 1;
+  }
+  if (blk) {
+    unsupported_feature(c, id, "Hash#fetch_values with a block and a key of another class than the hash's keys");
+    return 0;
+  }
+  int tko = ++g_tmp;
+  *tkb = ++g_tmp;
+  buf_printf(b, " sp_RbVal _t%d = ", *tkb); emit_boxed(c, key, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_oint _t%d = sp_poly_okey(_t%d); sp_int _t%d = _t%d.v;", *tkb, tko, *tkb, tk, tko);
+  snprintf(okg, 40, "!_t%d.nil && ", tko);
+  return 1;
+}
+
 /* fetch's key on an Integer-keyed table, as the _okey lookup takes it
    (hash_okey_form): a boxed key, or an Integer that can be nil, becomes an
    sp_oint `_t<tk>` that is nil where it matches no entry. A boxed key is
@@ -1185,7 +1211,7 @@ static int emit_fetch_blk_key(Compiler *c, int key, TyKind kt, int tk, Buf *b) {
   }
   int tb = ++g_tmp;
   buf_printf(b, "; sp_RbVal _t%d = ", tb); emit_boxed(c, key, b);
-  buf_printf(b, "; sp_oint _t%d = _t%d.tag == SP_TAG_INT ? sp_oint_of(_t%d.v.i) : sp_oint_nil()", tk, tb, tb);
+  buf_printf(b, "; sp_oint _t%d = sp_poly_okey(_t%d)", tk, tb);
   return tb;
 }
 /* ... and the block's parameter, handed that key: the boxed key as given
@@ -7473,7 +7499,7 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "({ %s _t%d = ", c_type_name(rt), th); emit_recv_rooted(c, recv, th, "SP_GC_ROOT", b);
         buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr, tr);
         for (int a = 0; a < argc; a++) {
-          int tk = ++g_tmp, tkb = -1;
+          int tk = ++g_tmp, tkb = -1; char okg[40] = "";
           int is_splat = nt_kind(nt, argv[a]) == NK_SplatNode;
           int ts = 0, ti = 0;
           if (is_splat) {
@@ -7516,14 +7542,12 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
             if (kt == TY_STRING) buf_puts(b, "_hk = sp_poly_strbuf_deref(_hk); _hk.tag == SP_TAG_STR ? _hk.v.s : (const char *)0; });");
             else buf_puts(b, "_hk.tag == SP_TAG_SYM ? (sp_sym)_hk.v.i : (sp_sym)-1; });");
           }
-          else {
-            buf_printf(b, " %s _t%d = ", c_type_name(kt), tk); emit_hash_key(c, argv[a], kt, b); buf_puts(b, ";");
-          }
+          else if (!emit_values_at_key(c, id, argv[a], kt, is_fetch, tk, &tkb, okg, b)) return 0;
           /* A boxed-value hash answers its default on a miss, and values_at
              wants that default; only a typed-value hash needs the has_key
              guard, whose zero would otherwise read as a real value. */
           int use_default = !is_fetch && vt == TY_POLY;
-          if (!use_default) buf_printf(b, " if (sp_%sHash_has_key(_t%d, _t%d))", hn, th, tk);
+          if (!use_default) buf_printf(b, " if (%ssp_%sHash_has_key(_t%d, _t%d))", okg, hn, th, tk);
           buf_printf(b, " sp_PolyArray_push(_t%d, ", tr);
           char getexpr[128]; snprintf(getexpr, sizeof getexpr, "sp_%sHash_get(_t%d, _t%d)", hn, th, tk);
           if (vt == TY_POLY) buf_puts(b, getexpr);
@@ -7590,7 +7614,7 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         if (nt_kind(nt, blk) == NK_BlockArgumentNode) {
           return emit_hash_fetch_block_arg(c, id, recv, argc, argv, rt, hn, b);
         }
-        if (blk >= 0 && hash_key_misses(c, argv[0], ty_hash_key(rt))) {
+        if (blk >= 0 && hash_key_foreign(c, argv[0], ty_hash_key(rt))) {
           /* the block receives the missing key, and its parameter is typed
              as the table's key kind; a key of another kind has no slot */
           unsupported_feature(c, id, "Hash#fetch with a block and a key of another class than the hash's keys");
@@ -8329,7 +8353,7 @@ else {
         /* returns the deleted value (or nil on a miss), then removes the key */
         TyKind vt = ty_hash_val(rt);
         int th = ++g_tmp, tk = ++g_tmp, tv = ++g_tmp;
-        if (nt_ref(nt, id, "block") >= 0 && hash_key_misses(c, argv[0], ty_hash_key(rt))) {
+        if (nt_ref(nt, id, "block") >= 0 && hash_key_foreign(c, argv[0], ty_hash_key(rt))) {
           /* the block receives the missing key, typed as the table's key kind */
           unsupported_feature(c, id, "Hash#delete with a block and a key of another class than the hash's keys");
           return 0;

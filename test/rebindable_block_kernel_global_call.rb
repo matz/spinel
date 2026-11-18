@@ -1,7 +1,9 @@
 # A block a user method takes as a Proc may be instance_exec'd, so its self
-# uses are read: a receiverless call to a Kernel function (puts, raise)
-# dispatches the same on any self, so it is not one, even when a class of the
-# program defines a method of that name.
+# uses are read. Spinel dispatches a receiverless call to a Kernel function
+# (puts, raise) globally, whatever self is, and leaves it receiverless when it
+# gives the body's other calls a `self` receiver: the self-use scan skips such
+# a call the same way, even when a class of the program defines a method of
+# that name. A use of self inside the call's arguments still counts.
 
 # a method that keeps the block it is given
 class Registry
@@ -41,3 +43,5 @@ rescue RuntimeError => e
 end
 Console.new.puts("direct")
 p Ctx.new(5) { n + 1 }.go(Ctx.new(9))
+# self read inside the Kernel call's arguments: the rebound self's n
+Ctx.new(5) { puts(n + 1) }.go(Ctx.new(9))

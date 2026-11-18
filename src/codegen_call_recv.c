@@ -530,14 +530,6 @@ static int needle_misses(Compiler *c, int recv, TyKind rt, int node) {
   return value_kind_misses(c, node, ty_array_elem(rt));
 }
 
-/* A boxed needle can hold a legacy shared handle in either build. A
-   statically plain needle keeps its existing default emission. */
-static int needle_needs_deref(Compiler *c, int node) {
-  Repr r = repr_of(c, node);
-  (void)r;
-  return 1;
-}
-
 /* A needle in the Integer or Float array's own slot type, with its nil
    beside the value: a nil literal and a nilable scalar's nil pass
    unchecked, and the runtime search matches that nil against the array's
@@ -2608,10 +2600,11 @@ static void emit_str_array_delete(Compiler *c, int id, const char *arr, int need
   int rd = typed_elem_read_open(rt, id, b);
   if (a0 == TY_POLY) {
     int tv = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = %s", tv, needle_needs_deref(c, needle) ? "sp_poly_strbuf_deref(" : ""); emit_boxed(c, needle, b); if (needle_needs_deref(c, needle)) buf_puts(b, ")");
-    buf_printf(b, "; _t%d.tag == SP_TAG_STR ? sp_StrArray_delete%s(%s, SP_STR_HDL(_t%d.v.s))"
-                  " : _t%d.tag == SP_TAG_NIL ? sp_StrArray_delete%s(%s, NULL) : (sp_String *)0; })",
-               tv, sfx, arr, tv, tv, sfx, arr);
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+    emit_boxed(c, needle, b);
+    buf_printf(b, "; (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_NIL)"
+                  " ? sp_StrArray_delete%s(%s, sp_poly_elem_e(_t%d)) : (sp_String *)0; })",
+               tv, tv, sfx, arr, tv);
   }
   else {
     /* (a variable whose slot holds the handle is that handle, as a store
@@ -2691,11 +2684,11 @@ static int emit_typed_index_query(Compiler *c, int id, int recv, TyKind rt, cons
        compile (#4458). */
     int ta = ++g_tmp, tv = ++g_tmp;
     buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
-    buf_printf(b, "sp_RbVal _t%d = %s", tv, needle_needs_deref(c, argv[0]) ? "sp_poly_strbuf_deref(" : ""); emit_boxed(c, argv[0], b); if (needle_needs_deref(c, argv[0])) buf_puts(b, ")");
-    char nbs[32]; snprintf(nbs, sizeof nbs, "_t%d.v.s", tv);
-    buf_printf(b, "; _t%d.tag == SP_TAG_STR ? ", tv); emit_array_entry(b, "Str", fn); buf_printf(b, "(_t%d, ", ta);
-    emit_typed_elem_hold(c, -1, TY_STR_ARRAY, nbs, b);
-    buf_printf(b, ") : _t%d.tag == SP_TAG_NIL ? ", tv); emit_array_entry(b, "Str", fn); buf_printf(b, "(_t%d, NULL) : sp_box_nil(); })", ta);
+    buf_printf(b, "sp_RbVal _t%d = ", tv);
+    emit_boxed(c, argv[0], b);
+    buf_printf(b, "; (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_NIL) ? ", tv, tv);
+    emit_array_entry(b, "Str", fn);
+    buf_printf(b, "(_t%d, sp_poly_elem_e(_t%d)) : sp_box_nil(); })", ta, tv);
     return 1;
   }
   if (nil_needle) {
@@ -3266,12 +3259,14 @@ else {
              there, as include? and index read it (#4458) */
           int tv = ++g_tmp;
           char tvn[32]; snprintf(tvn, sizeof tvn, "_t%d", tv);
-          const char *nd = held[0] && !needle_needs_deref(c, argv[0]) ? held : tvn;
+          const char *nd = held[0] ? held : tvn;
           buf_puts(b, "({ ");
-          if (!held[0] || needle_needs_deref(c, argv[0])) { buf_printf(b, "sp_RbVal %s = %s", tvn, needle_needs_deref(c, argv[0]) ? "sp_poly_strbuf_deref(" : "");
-            if (held[0]) buf_puts(b, held); else emit_boxed(c, argv[0], b); buf_puts(b, needle_needs_deref(c, argv[0]) ? "); " : "; "); }
-          /* (one representation: the element answered is the handle, sp_strelem) */
-          buf_printf(b, "const char *_t%d = %s.tag == SP_TAG_STR ? SP_STR_B(sp_StrArray_delete_e(%s, SP_STR_HDL(%s.v.s)))"
+          if (!held[0]) {
+            buf_printf(b, "sp_RbVal %s = ", tvn);
+            emit_boxed(c, argv[0], b);
+            buf_puts(b, "; ");
+          }
+          buf_printf(b, "const char *_t%d = sp_rbval_is_string(%s) ? SP_STR_B(sp_StrArray_delete_e(%s, sp_poly_elem_e(%s)))"
                         " : (const char *)0; _t%d ? sp_box_str(_t%d) : ", tdr, nd, rdb.p, nd, tdr, tdr);
         }
         else {
@@ -3459,10 +3454,10 @@ else {
     if (rt == TY_STR_ARRAY && (satr.kind == RK_BOXED || sat == TY_NIL)) {
       int ta = ++g_tmp, tv = ++g_tmp;
       buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
-      buf_printf(b, "sp_RbVal _t%d = %s", tv, needle_needs_deref(c, argv[0]) ? "sp_poly_strbuf_deref(" : ""); emit_boxed(c, argv[0], b); if (needle_needs_deref(c, argv[0])) buf_puts(b, ")");
-      buf_printf(b, "; _t%d.tag == SP_TAG_STR ? sp_StrArray_%s(_t%d, _t%d.v.s)"
-                    " : _t%d.tag == SP_TAG_NIL ? sp_StrArray_%s(_t%d, NULL) : FALSE; })",
-                 tv, fn, ta, tv, tv, fn, ta);
+      buf_printf(b, "sp_RbVal _t%d = ", tv);
+      emit_boxed(c, argv[0], b);
+      buf_printf(b, "; (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_NIL) ? sp_StrArray_%s(_t%d, sp_rbval_string_bytes(_t%d))"
+                    " : FALSE; })", tv, tv, fn, ta, tv);
       { *out = 1; return 1; }
     }
     /* The same for an Integer array: a search for a value of another kind

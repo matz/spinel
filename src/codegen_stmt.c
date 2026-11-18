@@ -6244,7 +6244,14 @@ int emit_scalar_op_assign(Compiler *c, const char *lval, TyKind t, const char *o
      word as a number */
   if (oint_kind(vt) && nullable_int_value(c, v)) {
     if (t == TY_FLOAT && vt == TY_INT) buf_puts(&rb, "(sp_float)");
-    emit_oint_unwrap_ck(c, v, vt, g_ck_opnd, &rb);
+    /* a Bignum slot takes the unwrapped operand as the coercion gives it */
+    if (t == TY_BIGINT) {
+      Buf ub; memset(&ub, 0, sizeof ub);
+      emit_oint_unwrap_ck(c, v, vt, g_ck_opnd, &ub);
+      emit_coerce_text(c, v, vt, t, CO_HOLD, ub.p ? ub.p : "", "the operand of an `op=`", &rb);
+      free(ub.p);
+    }
+    else emit_oint_unwrap_ck(c, v, vt, g_ck_opnd, &rb);
   }
   else if (fop && vt == TY_FLOAT && emit_nilfree_operand(c, v, op, 0, NULL, &rb)) { }
   else if (t == TY_INT && fn && (is_div_or_mod(op))) emit_int_divisor(c, v, &rb);

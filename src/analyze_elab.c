@@ -7068,13 +7068,14 @@ static int lr_reaching_target(const char *n) {
    class_eval or instance_eval of a String, either through a send of a literal
    name (call_sent_name) or a `&:name` block; a Method made of, or an alias
    (`alias`, alias_method) taken of, a method lr_reaching_target names; a
-   send, a Method or an alias_method of a name no literal gives. Asked once
-   per run points (LoadRecord.creach). */
+   send, a Method or an alias_method of a name no literal gives; a load of
+   code the record has not read (elab_runs_unseen). Asked once per run
+   points (LoadRecord.creach). */
 static int lr_const_reached(Compiler *c) {
   LoadRecord *r = c->lrec;
   const NodeTable *nt = c->nt;
   if (r->creach >= 0) return r->creach;
-  int *ids = NULL, m = 0, reach = 0;
+  int *ids = NULL, m = 0, reach = elab_runs_unseen(c);
   int (*const preds[])(const char *) = { is_const_reaching_name, is_code_eval_name, is_send_family, is_method_object_maker, is_alias_method_name };
   for (int q = 0; q < 5 && !reach; q++, free(ids), ids = NULL) {
     m = an_calls_named_if(c, preds[q], nt->count, &ids);
@@ -7171,7 +7172,7 @@ static int lr_closure_sites(Compiler *c, const int *par, int n, int v, int *site
    calls that invoke it, where they are all known: the first statement one may
    run on, past the statement that makes it; ZERO with none that may run;
    ONCE for one that runs once (lr_ext_time's reading of a block's call, and no
-   loop between the call and its statement). A call in the closure's own body
+   loop between the call and its statement) into a body with no redo. A call in the closure's own body
    runs only once it runs. */
 static void lr_closure_time(Compiler *c, const int *par, int n, int i, int v) {
   LoadRecord *r = c->lrec;
@@ -7195,7 +7196,7 @@ static void lr_closure_time(Compiler *c, const int *par, int n, int i, int v) {
   }
   LrExt *e = &r->ext[i];
   e->from = !runs ? LR_NEVER : from > e->from ? from : e->from;
-  e->count = !runs ? LR_CNT_ZERO : runs == 1 && once ? LR_CNT_ONCE : LR_CNT_MANY;
+  e->count = !runs ? LR_CNT_ZERO : runs == 1 && once && !e->redo ? LR_CNT_ONCE : LR_CNT_MANY;   /* (a redo runs the body again) */
 }
 /* The extent of entry i (LrExt): from, sure and count of every body but a def's
    (lr_rta's), from the body around it, the statement that makes it and, for a

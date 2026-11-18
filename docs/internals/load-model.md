@@ -156,12 +156,13 @@ The record holds, for each:
   `===` (a name no method of the program's takes), or to a constant whose
   reads, by name anywhere in the program, all are. That holds only in a
   program that reaches no constant or local by a name it computes
-  (`lr_const_reached`): no `const_get`, `constants`, `binding`, `eval`,
-  `each_object` or kin called directly, through `send`, `__send__` or
+  (`lr_const_reached`): no `const_get`, `remove_const`, `constants`,
+  `binding`, `eval`, `each_object` or kin called directly, through `send`, `__send__` or
   `public_send`, as a Method or as an `&:name` block; no `class_eval` or
   `instance_eval` of a String; no Method made of, and no `alias` or
   `alias_method` taken of, any of those, a send or a Method maker; no
-  send, Method or `alias_method` of a name that is not a literal. The
+  send, Method or `alias_method` of a name that is not a literal; no load
+  of code the record has not read (`elab_runs_unseen`). The
   block of a `lambda` or `proc` call is such a closure only when no
   method of the program's may take that name (one it defines, or one a
   computed name may make), since that method may run the block at once.
@@ -191,7 +192,8 @@ The record holds, for each:
   row (`IterRow.runs`: once, by the receiver's value, a step per element;
   a call with no receiver reads Kernel's, `catch`), and a block with a
   `redo` in it is `many`. A lambda or proc whose invoking calls are known
-  is `once` when one call invokes it and that call runs once (its
+  is `once` when one call invokes it, that call runs once and its body has
+  no `redo` (its
   statement does not repeat, no loop stands between them, and the body
   around it, if any, runs once).
 - `kept`: it runs at a time the syntax does not tell (a block whose call

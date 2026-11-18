@@ -1,0 +1,9 @@
+load record: 5 points, 1 regions
+r0 #0 f0 ProgramNode line 2
+r0 #1 f0 LocalVariableWriteNode n line 2
+r0 #2 f0 LocalVariableWriteNode pr line 3
+r0 #3 f0 CallNode call line 4
+r0 #4 f0 CallNode p line 5
+block proc line 3: later
+post: after #4
+extent block proc line 3: from=#3 sure=never count=many kept=yes

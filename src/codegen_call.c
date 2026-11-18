@@ -9857,7 +9857,7 @@ static void emit_poly_route_arg(Compiler *c, int node, TyKind ty, int th, int tn
   if (pre.p) buf_puts(b, pre.p);
   buf_printf(b, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); ", th, val.p ? val.p : "NULL", th);
   emit_ctype(c, ty, b);
-  buf_printf(b, " _t%d = sp_strbuf_read_pub(_t%d); ", tn, th);
+  buf_printf(b, " _t%d = sp_strbuf_read(_t%d); ", tn, th);
   free(pre.p); free(val.p);
 }
 /* The box an `equal?` operand of a boxed receiver is held in
@@ -10028,7 +10028,7 @@ static void emit_poly_temp_as(Compiler *c, TyKind pt, const LocalVar *pv, int tm
      an earlier-parameter default's binding supplies its own root. */
   else if (at == TY_STRBUF && pt == TY_STRING) {
     int t = ++g_tmp;
-    buf_printf(g_pre, "const char *_t%d = sp_strbuf_read_pub(%s); ", t, tn);
+    buf_printf(g_pre, "const char *_t%d = sp_strbuf_read(%s); ", t, tn);
     if (root) { emit_gc_root_tmp(c, TY_STRING, t, g_pre); buf_puts(g_pre, " "); }
     buf_printf(pa, "_t%d", t);
   }
@@ -11451,7 +11451,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          read them */
       for (int a = 0; a < pos_argc; a++)
         if (htmp[a] > 0 && atmp[a] != htmp[a] && atmp_ty[a] == TY_STRING)
-          buf_printf(b, "_t%d = sp_strbuf_read_pub(_t%d); ", atmp[a], htmp[a]);
+          buf_printf(b, "_t%d = sp_strbuf_read(_t%d); ", atmp[a], htmp[a]);
       PolyTemps ptemps = { argc, pos_argc, argv, atmp, atmp_ty, kwall, kwn, kwels, kwtmp, kwty, ret, tv, tr,
                            idxref, id, 0 };
       int pa_frame = g_plan_check ? pa_begin(id) : -1;
@@ -12551,7 +12551,7 @@ void emit_reopen_self_arg(Compiler *c, int id, int mi, Buf *b) {
   Scope *s = comp_scope_of(c, id);
   int from = s && repr_self_handle(c, (int)(s - c->scopes));
   int to = repr_self_handle(c, mi);
-  if (from && !to) buf_printf(b, "sp_strbuf_read_pub(%s)", g_self);
+  if (from && !to) buf_printf(b, "sp_strbuf_read(%s)", g_self);
   else if (to && !from && s && repr_self_string_object(c, s->idx))
     buf_printf(b, "(sp_String *)(%s)", g_self);
   else if (to && !from) buf_printf(b, "SP_STR_HDL(%s)", g_self);
@@ -28506,7 +28506,7 @@ static int emit_nil_target_route(Compiler *c, int r, int handle, Buf *b, const c
     buf_puts(b, lead);
     buf_printf(b, "sp_String * _t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);", th, hb.p, th);
     buf_printf(b, " const char * _t%d = ", t);
-    str_read_handle_tmp(b, th, 1);
+    str_read_handle_tmp(b, th);
     buf_printf(b, "; SP_GC_ROOT(_t%d);", t);
     buf_puts(b, *lead ? "\n" : " ");
     ran_first_bind(r, t, th);
@@ -35978,6 +35978,7 @@ void emit_narrowed_box_mutator(Compiler *c, int id, Buf *b) {
   free(lv.p);
 }
 
+/* Emit a selected user call on a constant receiver. */
 static int emit_const_user_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");

@@ -11990,9 +11990,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (iv < 0 && nk != NK_InstanceVariableOperatorWriteNode && s->class_id >= 0 && !s->is_cmethod &&
         infer_type(c, nt_ref(nt, id, "value")) == TY_NIL && !infer_ivar_slot_below(c, wcls, nm))
       return TY_NIL;
-    /* a strbuf slot's write, like its read, is the String face (the handle
-       rides _sp_ret_strbuf): the raw STRBUF typed a method whose body is the
-       write `sp_String *` while its callers read the face (#4567) */
+    /* An ivar store has the semantic type of a read from the slot. */
     return ivar_value_ty(ci, iv);
   }
   if (nk == NK_LocalVariableOperatorWriteNode) {

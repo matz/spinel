@@ -577,7 +577,7 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
          into a plain String slot: read through the handle, as a reader's
          handle field is below; assigned bare, the C did not build */
       else if (cret9 == TY_STRBUF && ret == TY_STRING) {
-        str_read_handle(b, call, 0);
+        str_read_handle(b, call);
         pconv = PC_COPY;
       }
       /* The slot is scalar (e.g. a length dispatch fixed to sp_int) but
@@ -650,7 +650,7 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
        call under the pickup's own view, which has dropped the box mark, and
        answered no, so the pickup wrapped the bytes in a new handle and the
        field's String lost its identity: `{ host: req.host }` held a copy) */
-    str_read_handle(b, fld, 0);
+    str_read_handle(b, fld);
     pconv = PC_COPY;
   }
   /* a plain String field (a Struct member) where the call answers a handle
@@ -1494,7 +1494,7 @@ int emit_poly_user_arm_n(Compiler *c, int id, int k, const char *call, TyKind mr
     }
     /* a String's handle into a plain String slot (as the zero-argument arm) */
     else if (mret == TY_STRBUF && ret == TY_STRING) {
-      str_read_handle(b, call, 0);
+      str_read_handle(b, call);
       conv = PC_COPY;
     }
     /* so: the result slot is an sp_oint / sp_ofloat (plan_slot_oint) */
@@ -3499,7 +3499,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   /* Byte-taking builtin arms read the held handle; boxed arms keep it. */
   char strarg[64];
   snprintf(strarg, sizeof strarg, argc > 0 && atmp_ty[0] == TY_STRBUF
-           ? "sp_strbuf_read_pub(_t%d)"
+           ? "sp_strbuf_read(_t%d)"
            : argc > 0 && atmp_ty[0] == TY_STRING ? "SP_STR_B(_t%d)" : "_t%d",   /* (one representation: a handle held) */
            argc > 0 ? atmp[0] : 0);
   int is_cover = ps->cover, is_ctryconv = ps->ctryconv, is_gcdlcm = ps->gcdlcm, is_ppack = ps->ppack;
@@ -3719,7 +3719,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
         /* A later set read can allocate before the helper consumes this one. */
         if (atmp_ty[a] == TY_STRBUF) {
           t = ++g_tmp;
-          buf_printf(b, "const char *_t%d = sp_strbuf_read_pub(_t%d); SP_GC_ROOT(_t%d); ", t, atmp[a], t);
+          buf_printf(b, "const char *_t%d = sp_strbuf_read(_t%d); SP_GC_ROOT(_t%d); ", t, atmp[a], t);
         }
         sl += snprintf(sets + sl, sizeof sets - (size_t)sl, "%s_t%d", a ? ", " : "", t);
       }
@@ -3995,7 +3995,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
   const char *idxref = T->idxref;
   char strarg[64];
   snprintf(strarg, sizeof strarg, argc > 0 && atmp_ty[0] == TY_STRBUF
-           ? "sp_strbuf_read_pub(_t%d)"
+           ? "sp_strbuf_read(_t%d)"
            : argc > 0 && atmp_ty[0] == TY_STRING ? "SP_STR_B(_t%d)" : "_t%d",   /* (one representation: a handle held) */
            argc > 0 ? atmp[0] : 0);
   int is_index = ps->index, is_unshift = ps->unshift, is_push = ps->push, is_ppack = ps->ppack;

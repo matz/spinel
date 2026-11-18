@@ -3274,25 +3274,8 @@ static inline sp_RbVal sp_StrArray_box_handle(sp_StrArray *a, sp_int i) {
   sp_strelem s = sp_StrArray_get_e(a, i);
   return s ? sp_box_nullable_obj(s, SP_BUILTIN_STRBUF) : sp_box_nil();
 }
-/* A shared String handle's read face with the handle published to the
-   deep-return side channel: the call sequences the write, where two inline
-   `(_sp_ret_strbuf = h, ...)` among one call's arguments were unsequenced
-   writes to the channel. */
-/* One representation (string-one-repr-design.md): no slot holds bytes, so a
-   read face never outlives a change of the handle, and it is the bytes
-   themselves (the payload is laid out as a byte string, marker 0xfd). A
-   frozen handle's payload, which nothing can change or move any more, is
-   its read face too: it reads frozen through its handle
-   (sp_str_is_frozen_val), its mark reaches the handle, and the bytes are
-   that String's own, equal? to every name of it (`inject(s)` over a frozen
-   s answered a String `<<` changed). The runtime objects read it so as well
-   as the generated unit: a boxed Hash#merge! of a frozen String kept a
-   copy. NULL for nil. */
+/* Borrow the current payload of a nullable String handle. */
 static inline const char *sp_strbuf_read(sp_String *h) {
-  return h ? sp_String_cstr(h) : NULL;
-}
-static inline const char *sp_strbuf_read_pub(sp_String *h) {
-  _sp_ret_strbuf = (void *)h;
   return h ? sp_String_cstr(h) : NULL;
 }
 /* ...except a read held across a block the program runs (the receiver or
@@ -3302,10 +3285,6 @@ static inline const char *sp_strbuf_read_pub(sp_String *h) {
 static inline const char *sp_strbuf_read_own(sp_String *h) {
   if (h && SP_UNLIKELY(sp_String_is_frozen(h))) return sp_String_cstr(h);
   return h ? sp_str_concat(sp_String_cstr(h), (&("\xff")[1])) : NULL;
-}
-static inline const char *sp_strbuf_read_pub_own(sp_String *h) {
-  _sp_ret_strbuf = (void *)h;
-  return sp_strbuf_read_own(h);
 }
 /* --share-strings (#8321): a String Range made from shared handles keeps
    them (hf / hl), and a read of the Range takes each handle's bytes as they
@@ -18739,7 +18718,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg_h(sp_RbVal v, sp_RbVal m) {
     sp_String *h = (sp_String *)m.v.p;
     SP_GC_ROOT(h);
     sp_raise_exc((sp_Exception *)sp_exc_attach_msg(
-      sp_exc_exception((sp_Exception *)v.v.p, sp_exc_msg_given(sp_strbuf_read_pub(h))), h));
+      sp_exc_exception((sp_Exception *)v.v.p, sp_exc_msg_given(sp_strbuf_read(h))), h));
   }
   if (m.tag == SP_TAG_OBJ && m.cls_id == SP_BUILTIN_STRBUF && m.v.p && v.tag == SP_TAG_CLASS) {
     const char *cn = sp_class_val_name(v);
@@ -18749,7 +18728,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg_h(sp_RbVal v, sp_RbVal m) {
       sp_String *h = (sp_String *)m.v.p;
       SP_GC_ROOT(h);
       sp_raise_exc((sp_Exception *)sp_exc_attach_msg(
-        sp_exc_new_for_catch(cn, sp_exc_msg_given(sp_strbuf_read_pub(h))), h));
+        sp_exc_new_for_catch(cn, sp_exc_msg_given(sp_strbuf_read(h))), h));
     }
   }
   sp_raise_poly_msg(v, m);
@@ -24601,8 +24580,7 @@ static inline sp_RbVal sp_strface_zero_box(int z) { (void)z; return sp_box_nil()
 static inline sp_String *sp_strface_h_box(sp_RbVal v) { return sp_poly_nil_p(v) ? NULL : sp_poly_as_strbuf(v); }
 static inline sp_RbVal sp_strface_box_self(sp_RbVal v) { return v; }
 /* (an untyped pointer is bytes: a conditional with a bare NULL arm, `c ?
-   s : NULL` or a raise arm's `(raise, NULL)`, is a void *; the emitters
-   that hand the published handle on cast it, (sp_String *)_sp_ret_strbuf) */
+   s : NULL` or a raise arm's `(raise, NULL)`, has type void *. */
 #define SP_ONE_FACE(x, hf, bf, zf, rf) ({ __auto_type _sp_fv = (x); \
   _Generic(_sp_fv, sp_String *: hf, sp_RbVal: rf, int: zf, long: zf, long long: zf, default: bf)(_sp_fv); })
 #define SP_STR_B(x) SP_ONE_FACE(x, sp_strface_b_of, sp_strface_b_self, sp_strface_zero_b, sp_strface_b_box)
@@ -24618,8 +24596,6 @@ static inline sp_RbVal sp_strface_box_self(sp_RbVal v) { return v; }
 /* ...and a String of either face as the face slot `dst` has, where the
    emitter of `dst = v` knows neither (a block parameter a typed walk binds) */
 #define SP_STR_TO(dst, v) _Generic((dst), sp_String *: SP_STR_HDL(v), default: SP_STR_B(v))
-/* A foreign byte result gets no earlier builtin's return handle. */
-static inline const char *sp_strface_unpub(const char *s) { _sp_ret_strbuf = NULL; return s; }
 /* A mutator whose receiver is no variable (`String(a[0]) << "!"`): when
    the receiver's bytes are a live payload's view the String is the
    payload's owner, which takes the new bytes, and the answer is its view

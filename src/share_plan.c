@@ -581,7 +581,7 @@ static int share_plan_supply_kind(Compiler *c, int v, int k, int *op, int depth)
     if (*op < 0) return 1;
     return share_plan_poly_base(c, *op) ? 0 : -1;
   case SPK_SEQUENCE: return -1;
-  case SPK_PUBLISHED: return 1;
+  case SPK_NATIVE_CALL: return 1;
   case SPK_OPERAND: {
     if (*op >= 0) return -1;
     /* a String clamp: each operand it can answer */

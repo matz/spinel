@@ -290,7 +290,7 @@ int strbuf_recv_handle(Compiler *c, int id, int recv, Buf *out);
    --share-strings, when recv is a deep-return pickup that can answer nil,
    to raise NoMethodError for String mutator `name`: 2 wrapped, 1 read
    bare, 0 no slot read (nothing emitted) (codegen_stmt.c) */
-int strbuf_pickup_nil_check(Compiler *c, const char *name, int recv, Buf *out);
+int strbuf_call_result_nil_check(Compiler *c, const char *name, int recv, Buf *out);
 /* strbuf_recv_handle, and under --share-strings a route emitted whole into
    lb instead (emit_recv_route_handle; 2): the handle's text is lb's where
    it has one, else out's */
@@ -301,7 +301,7 @@ int strbuf_recv_handle_any(Compiler *c, int id, int recv, Buf *out, Buf *lb);
 void emit_route_recv_root(Compiler *c, int hr, int t, int argc, const int *argv, TyKind ty, Buf *b);
 /* --share-strings: is recv a deep-return pickup whose method can answer
    nil? (codegen_stmt.c) */
-int strbuf_pickup_may_nil(Compiler *c, int recv);
+int strbuf_call_result_may_nil(Compiler *c, int recv);
 /* --share-strings: the handle slot a variable's read names, 0 for any
    other node (codegen_stmt.c) */
 int strbuf_var_handle(Compiler *c, int n, Buf *b);
@@ -314,9 +314,8 @@ int emit_strbuf_route_box(Compiler *c, int v, Buf *b);
 /* --share-strings: the boxed operand whose String a route answers, or -1
    (codegen_stmt.c) */
 int strbuf_route_box_operand(Compiler *c, int v);
-/* A call result as a handle or a box. Builtins with a legacy published
-   result consume it here (codegen_stmt.c). */
-void emit_strbuf_pickup(Compiler *c, int v, int box, Buf *b);
+/* The selected native String result, as a handle or a box. */
+void emit_string_call_handle(Compiler *c, int v, int box, Buf *b);
 /* --share-strings: a call on v's receiver chain that answers its receiver's
    handle by a route boxes cannot render (codegen_stmt.c) */
 int strbuf_box_unrendered(Compiler *c, int v);
@@ -404,7 +403,7 @@ int range_boxes_new(TyKind t);
 int operand_allocates_beside(Compiler *c, int v);
 /* Is `v` a read of a shared String slot (a local's, an ivar's, a global's
    or a constant's) whose value form is a fresh copy of its bytes
-   (sp_strbuf_read_pub), held by nothing until its consumer takes it? A
+   (sp_strbuf_read), held by nothing until its consumer takes it? A
    read that hands out the handle or the live buffer copies nothing, and
    one that ran already is its temp. */
 int strbuf_read_copies(Compiler *c, int v);
@@ -501,13 +500,10 @@ void str_box_handle_tmp(Buf *b, int tmp);
 void str_box_open(Buf *b, int nullable);
 void str_box_close(Buf *b);
 void str_box_bytes(Buf *b, const char *e);
-/* The bytes a handle reads as, written in one place (codegen_str.c): of
-   text already written, of a temp, or around text the caller emits between
-   the open and the close; `pub` also publishes the handle
-   (sp_strbuf_read_pub) */
-void str_read_handle(Buf *b, const char *h, int pub);
-void str_read_handle_tmp(Buf *b, int tmp, int pub);
-void str_read_handle_open(Buf *b, int pub);
+/* Borrow bytes from a handle expression or from an already held temp. */
+void str_read_handle(Buf *b, const char *h);
+void str_read_handle_tmp(Buf *b, int tmp);
+void str_read_handle_open(Buf *b);
 void str_read_handle_close(Buf *b);
 /* A new handle around the bytes the caller emits between the open and the
    close, and the box of a String Range endpoint temp `t` keeps (handle

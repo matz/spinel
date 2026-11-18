@@ -1668,7 +1668,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                    tC2, srefC.p, tC2);
         free(srefC.p);
         if (repr_of(c, id).handle) buf_printf(b, " _t%d; })", tC2);
-        else buf_printf(b, " sp_strbuf_read_pub(_t%d); })", tC2);
+        else buf_printf(b, " sp_strbuf_read(_t%d); })", tC2);
         return 1;
       } }
     NodeKind rk = nt_kind(nt, recv);

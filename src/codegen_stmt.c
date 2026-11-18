@@ -118,7 +118,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   }
   /* a String the plan holds as its handle (an argument a user `puts(s = "")` shares) prints its bytes */
   else if (t == TY_STRBUF) {
-    buf_puts(b, "{ const char *_ps = sp_strbuf_read_pub("); emit_strbuf_handle_of(c, arg, b);
+    buf_puts(b, "{ const char *_ps = sp_strbuf_read("); emit_strbuf_handle_of(c, arg, b);
     buf_puts(b, "); sp_puts_str_line(_ps); }\n");
   }
   else if (t == TY_BOOL) {
@@ -357,7 +357,7 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, ");\n");
   }
   else if (t == TY_STRBUF) {
-    buf_puts(b, "sp_print_str_bin(sp_strbuf_read_pub("); emit_strbuf_handle_of(c, arg, b);
+    buf_puts(b, "sp_print_str_bin(sp_strbuf_read("); emit_strbuf_handle_of(c, arg, b);
     buf_puts(b, "));\n");
   }
   else if (t == TY_BIGINT) {
@@ -2912,7 +2912,7 @@ int strbuf_route_kind(Compiler *c, int v, int *op) {
   if (strbuf_route_inline_call(c, v)) return SPK_BLOCK_VALUE;
   if (strbuf_route_reopen_pf(c, v)) return SPK_PROC_CALL;
   if (strbuf_route_ie(c, v) || strbuf_route_loop(c, v)) return SPK_BLOCK_VALUE;
-  if (repr_call_returns_handle(c, v)) return SPK_PUBLISHED;
+  if (repr_call_returns_handle(c, v)) return SPK_NATIVE_CALL;
   if (strbuf_route_exc_message(c, v) || strbuf_route_boxed_exc_message(c, v)) return SPK_EXC_MESSAGE;
   if (strbuf_route_reader(c, v)) return SPK_READER;
   if (strbuf_route_srange_kept(c, v)) return SPK_SLOT;
@@ -2953,10 +2953,8 @@ int strbuf_route_kind(Compiler *c, int v, int *op) {
     return strbuf_native_answer(c, v) || strbuf_call_reads_handle(c, v) ? SPK_READER : SPK_NONE;
   return strbuf_slot_has(c, v) ? SPK_SLOT : SPK_NONE;
 }
-/* Read a call selected by the existing String plan. Program methods
-   return the selected object directly. Builtins with a legacy borrowed
-   result still supply the handle through their separate runtime contract. */
-void emit_strbuf_pickup(Compiler *c, int v, int box, Buf *b) {
+/* Pass on an evaluated argument temp or the call's native result. */
+void emit_string_call_handle(Compiler *c, int v, int box, Buf *b) {
   v = nt_paren_single(c->nt, v);
   /* an argument emit_args_filled_argv sequenced ahead into a temp of its
      handle type ran there, its pickup included: the temp is the handle */
@@ -2973,39 +2971,9 @@ void emit_strbuf_pickup(Compiler *c, int v, int box, Buf *b) {
           else buf_puts(b, g_argov_text[i]);
           return;
         } }
-  if (repr_native_call_handle(c, v)) {
-    if (box) str_box_open(b, 0);
-    emit_native_string_handle(c, v, b);
-    if (box) str_box_close(b);
-    return;
-  }
-  int t = ++g_tmp;
-  /* (one representation: the call may answer the handle itself, a method
-     whose String is a handle; held by face) */
-  buf_printf(b, "({ _sp_ret_strbuf = NULL; __auto_type _v%d = (", t);
-  int sv = view_push_repr(c, v, VR_STRBUF_BOX, 0), sd = view_push_repr(c, v, VR_HANDLE_DEMAND, 0);
-  emit_expr(c, v, b);
-  view_pop(c, sd); view_pop(c, sv);
-  buf_puts(b, "); ");
-  buf_printf(b, "!_v%d ? %s : ", t, box ? "sp_box_nil()" : "NULL");
-  /* (as a box, the bytes it takes only where nothing was published are
-     the String the call answered: no copy) */
-  if (box) {
-    char vt[24];
-    snprintf(vt, sizeof vt, "_v%d", t);
-    buf_puts(b, "_sp_ret_strbuf ? ");
-    str_box_handle(b, "(sp_String *)_sp_ret_strbuf");
-    buf_puts(b, " : ");
-    str_box_bytes(b, vt);
-    buf_puts(b, "; })");
-  }
-  else {
-    buf_puts(b, "_sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf : ");
-    str_new_handle_open(b);
-    buf_printf(b, "_v%d", t);
-    str_new_handle_close(b);
-    buf_puts(b, "; })");
-  }
+  if (box) str_box_open(b, 0);
+  emit_native_string_handle(c, v, b);
+  if (box) str_box_close(b);
 }
 /* --share-strings: the boxed operand whose String route v answers (`y.to_s`,
    `+y`, `String(y)` with y boxed: strbuf_route_operand), or -1. The
@@ -3254,7 +3222,7 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
     return 1;
   }
   if (repr_call_returns_handle(c, v) && (x < 0 || repr_of(c, x).kind != RK_BOXED)) {
-    emit_strbuf_pickup(c, v, 0, b);
+    emit_string_call_handle(c, v, 0, b);
     return 1;
   }
   if (strbuf_route_inline_call(c, v)) {
@@ -3400,7 +3368,7 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
     size_t guard_at = b->len;
     buf_puts(b, "({ ");
     t = hold_operand(c, x, TY_POLY, 0, t, 1, " ", b);
-    int pickup = repr_call_returns_handle(c, v);
+    int native = repr_native_call_handle(c, v);
     /* (to_s of a String subclass instance is a new String, #9968) */
     buf_printf(b, is_to_s_name(nt_str(nt, v, "name")) && program_has_strsub(c)
                   ? "sp_poly_is_strbuf(_t%d) ? sp_poly_to_s_strbuf(_t%d) : "
@@ -3413,32 +3381,18 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
       buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || "
                     "sp_is_exc_subclass_cls(_t%d.cls_id))) ? sp_exc_kept_message_handle((sp_Exception *)_t%d.v.p) : ",
                  t, t, t, t);
-    if (pickup) buf_printf(b, "({ _sp_ret_strbuf = NULL; __auto_type _v%d = (", t);
-    else str_new_handle_open(b);
+    if (!native) str_new_handle_open(b);
     int mark = view_bind_temp(x, t);
-    int sv = view_push_repr(c, v, VR_STRBUF_BOX, 0), sd = view_push_repr(c, v, VR_HANDLE_DEMAND, 0);
+    int sv = view_push_repr(c, v, VR_STRBUF_BOX, 0);
+    int sd = view_push_repr(c, v, VR_HANDLE_DEMAND, 0);
     if (sn) g_sn_skip = v;
-    size_t arm_at = b->len;
-    emit_expr(c, v, b);
-    /* this arm runs for a box that holds no shared handle: what it converts
-       is no String the rule shares, and the new one it wraps is its own. (A
-       pickup arm takes the handle the callee published, so a String the
-       rule shares does reach it: its reports stand.) */
+    if (native) emit_native_string_handle(c, v, b);
+    else emit_expr(c, v, b);
     g_sn_skip = sn_skip;
     view_pop(c, sd); view_pop(c, sv);
     view_unbind(mark);
-    /* As in the deep-return pickup, nil wins over an earlier publication. */
-    if (pickup) {
-      buf_printf(b, "); !_v%d ? NULL : _sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf : ", t);
-      str_new_handle_open(b);
-      buf_printf(b, "_v%d", t);
-      str_new_handle_close(b);
-      buf_puts(b, "; }); })");
-    }
-    else {
-      str_new_handle_close(b);
-      buf_puts(b, "; })");
-    }
+    if (!native) str_new_handle_close(b);
+    buf_puts(b, "; })");
     return 1;
   }
   if (is_receiver_conversion(nt_str(nt, v, "name")) && !is_to_s_name(nt_str(nt, v, "name"))) {
@@ -3665,7 +3619,7 @@ static int strbuf_route_nonnil(Compiler *c, int v) {
    neither, with nothing emitted. A route that can answer nil raises
    NoMethodError for id there, as the copy's own check did. */
 /* A handle held for a nullable receiver must be tested before mutation. */
-int strbuf_pickup_may_nil(Compiler *c, int recv) {
+int strbuf_call_result_may_nil(Compiler *c, int recv) {
   return recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode && (comp_strbuf_box_stored(c, recv) || comp_strbuf_handle_demand_stored(c, recv));
 }
 static int strbuf_route_recv(Compiler *c, int id, int recv, Buf *out);
@@ -3679,7 +3633,7 @@ int strbuf_recv_handle(Compiler *c, int id, int recv, Buf *out) {
     buf_printf(out, "_t%d", held);
     return 1;
   }
-  int sr = strbuf_pickup_nil_check(c, nt_str(c->nt, id, "name"), recv, out);
+  int sr = strbuf_call_result_nil_check(c, nt_str(c->nt, id, "name"), recv, out);
   if (sr) return sr;
   /* One representation: an element read of a typed String container
      whose index runs code (`arr[id(0)].upcase!`) is no slot to read
@@ -3700,13 +3654,13 @@ int strbuf_recv_handle(Compiler *c, int id, int recv, Buf *out) {
   return strbuf_route_recv(c, id, recv, out) ? 2 : 0;
 }
 /* See codegen_internal.h. */
-int strbuf_pickup_nil_check(Compiler *c, const char *name, int recv, Buf *out) {
+int strbuf_call_result_nil_check(Compiler *c, const char *name, int recv, Buf *out) {
   /* --share-strings: a deep-return pickup that can answer nil (a nil
      tail, an_pickup_tail) raises NoMethodError for name, as the copy's
      own check did; its text runs the call, so it is read once. */
   Buf rb; memset(&rb, 0, sizeof rb);
   if (!strbuf_slot_text(c, recv, &rb)) { free(rb.p); return 0; }
-  if (!strbuf_pickup_may_nil(c, recv) && !repr_of(c, recv).may_nil) {
+  if (!strbuf_call_result_may_nil(c, recv) && !repr_of(c, recv).may_nil) {
     buf_puts(out, rb.p);
     free(rb.p);
     return 1;
@@ -4517,7 +4471,7 @@ static int emit_held_self_answer_shim(Compiler *c, int id, int r, TyKind ty, Buf
       /* (one representation: with a block, the shadow is a copy the block
          cannot move, as every read was) */
       if (nt_ref(c->nt, id, "block") >= 0) g_one_held = 1;
-      str_read_handle_tmp(b, tH, 0);
+      str_read_handle_tmp(b, tH);
       g_one_held = held; }
     buf_printf(b, "; SP_GC_ROOT(%s);", sb_held_shadow_cname(tH).s);
     /* a block that changes the String through another name while gsub! or
@@ -4557,7 +4511,7 @@ int emit_freeze_self_answer(Compiler *c, int id, int recv, Buf *b) {
   if (ok) {
     int t = ++g_tmp;
     buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); _t%d ? (sp_String_freeze(_t%d), "
-                  "sp_str_freeze_val(sp_strbuf_read_pub(_t%d))) : (const char *)NULL; })", t, hb.p, t, t, t, t);
+                  "sp_str_freeze_val(sp_strbuf_read(_t%d))) : (const char *)NULL; })", t, hb.p, t, t, t, t);
   }
   free(hb.p);
   return ok;
@@ -5028,7 +4982,7 @@ static void emit_bang_self_form(Compiler *c, int v, int form, Buf *b) {
     }
     buf_printf(b, "const char *_t%d = ", tr);
     /* (an iterator given a block reads its receiver as the String: its reads
-       are the held handle's, sp_strbuf_read_pub, as emit_boxed_self_chain
+       are the held handle's, sp_strbuf_read, as emit_boxed_self_chain
        binds an each_char's; bound as the handle itself, `t.each_line((t =
        +"q"; "\n")) { }` read an sp_String * as its bytes, a C error) */
     int iter = nt_ref(c->nt, v, "block") >= 0 && nt_kind(c->nt, nt_ref(c->nt, v, "block")) == NK_BlockNode;
@@ -17025,7 +16979,7 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
       if (po && at == TY_POLY) buf_printf(&vb, "%s(%s)", oint_unbox(pt), src);
       else if (po && (at == TY_NIL || at == TY_VOID)) buf_puts(&vb, oint_nil(pt));
       else if (po && ty_is_numeric(at)) buf_printf(&vb, "%s(%s)", oint_of(pt), src);
-      else if (hread) buf_printf(&vb, "sp_strbuf_read_pub(%s)", src);
+      else if (hread) buf_printf(&vb, "sp_strbuf_read(%s)", src);
       else if (wrap) buf_printf(&vb, "SP_STR_HDL(%s)", src);
       /* (--share-strings: a String into a boxed parameter as its handle's
          box, which a change through the parameter reaches, the field it is
@@ -25035,7 +24989,7 @@ static int strbuf_recv_hold(Compiler *c, int recv, const char *name, int argc, c
   int runs = call && !subtree_is_pure_read(c, recv);
   /* --share-strings: a deep-return pickup that can answer nil is held, and
      nil raises NoMethodError for the mutator, as the copy's check did */
-  int nilt = strbuf_pickup_may_nil(c, recv);
+  int nilt = strbuf_call_result_may_nil(c, recv);
   int hold = (runs && many) || nilt;
   for (int a = 0; a < argc && !hold; a++) {
     if (runs) hold = subtree_has_side_effect(c, argv[a]) || read_rebound_by(c, argv[a], recv);
@@ -25108,7 +25062,7 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
     /* (an ordered temp read as it is: one staged as a copy is the copy,
        which the temp's root does not reach) */
     int held = !own && repr_of(c, argv[a]).as_ty == TY_STRING && arg_ran_first(argv[a], 0);
-    /* Fresh snapshots span later sp_strbuf_read_pub/sp_str_concat copies
+    /* Fresh snapshots span later sp_strbuf_read/sp_str_concat copies
        or argument allocations such as sp_str_repeat. append_bin cannot
        collect; an ordered String temp or immortal literal needs no root. */
     if (a < last_alloc && (boxed || (!literal && !held)))

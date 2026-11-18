@@ -1223,7 +1223,7 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
        root, the way the array iterators root their hoisted receiver. */
     /* One representation: the iterator answers its receiver, which for a
        variable the block can rebind (an ivar, a class variable, a global)
-       is read as a copy of its bytes (sp_strbuf_read_pub_own): the handle
+       is read as a copy of its bytes (sp_strbuf_read_own): the handle
        is held ahead of the loop and its payload's view answered, which
        is the String itself where it is stored (`[@s.each_char { }]`
        stored the copy) */
@@ -1335,7 +1335,7 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
     emit_iter_loop_stmts(c, body, b, 0);
     if (p0 && tsv_ech > 0) buf_printf(b, " lv_%s = _t%d;", p0, tsv_ech);
     buf_printf(b, " } _t%d; })", ts);
-    if (th_ech) buf_printf(b, "; sp_strbuf_read_pub(_t%d); })", th_ech);
+    if (th_ech) buf_printf(b, "; sp_strbuf_read(_t%d); })", th_ech);
     return 1;
   }
 
@@ -1527,7 +1527,7 @@ int emit_string_handle_append(Compiler *c, int id, Buf *b, const char *name, int
                     "sp_raise_frozen_str(sp_String_cstr(_t%d)); ", t, ref.p, t, t);
       free(ref.p);
       if (repr_of(c, id).handle) buf_printf(b, "_t%d; })", t);
-      else buf_printf(b, "sp_strbuf_read_pub(_t%d); })", t);
+      else buf_printf(b, "sp_strbuf_read(_t%d); })", t);
       return 1;
     }
   }
@@ -1590,7 +1590,7 @@ int emit_string_handle_append(Compiler *c, int id, Buf *b, const char *name, int
         /* an append marked to hand out the handle (`r = obj.buf << x`)
            answers the receiver itself; otherwise its String read */
         if (repr_of(c, id).handle) buf_printf(b, " _t%d; })", tb2);
-        else buf_printf(b, " sp_strbuf_read_pub(_t%d); })", tb2);
+        else buf_printf(b, " sp_strbuf_read(_t%d); })", tb2);
         return 1;
       }
     }
@@ -1849,7 +1849,7 @@ static void str_mut_bytes(Buf *b, int t) { buf_printf(b, "sp_String_cstr(_t%d)",
    finds the handle of */
 static void str_mut_self_answer(Compiler *c, const BopCtx *x, int t, Buf *b) {
   if (repr_of(c, x->id).handle) buf_printf(b, " _t%d; })", t);
-  else buf_printf(b, " sp_strbuf_read_pub(_t%d); })", t);
+  else buf_printf(b, " sp_strbuf_read(_t%d); })", t);
 }
 
 /* An operand of these rows. One that can run code, or read what a later

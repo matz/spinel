@@ -52757,15 +52757,6 @@ static void an_phase_post_fixpoint(Compiler *c) {
     int iv = comp_ivar_index(ci, nt_str(c->nt, id, "name"));
     if (iv >= 0 && ci->ivar_types[iv] == TY_UNKNOWN) ivar_set_type(ci, iv, TY_POLY_ARRAY);
   }
-  /* An ivar write in VALUE position evaluates to the slot. When the slot is
-     a strbuf, the value is presented exactly as an ordinary read of the slot
-     is: the const char * face with the live handle in _sp_ret_strbuf, so the
-     write's type, the return of a method whose body it is and every call to
-     that method agree on `const char *`. The write used to be marked to
-     yield the handle itself (#3993), which typed the function `sp_String *`
-     while its callers, typed from the String face, read a `const char *`:
-     `p obj.w("a")` for `def w(v) = (@body = v.to_s)` printed garbage, and
-     the C did not build under -Werror (#4567). */
   /* Backstop: a local variable assigned only empty arrays -- a `[]` literal
      or a bare `Array.new`, the same empty array (#3613) -- with no push
      evidence stays TY_UNKNOWN. Default it to TY_POLY_ARRAY so array

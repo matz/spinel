@@ -9430,11 +9430,11 @@ static void ran_first_bind_o(int v, int t, int th, int to) {
   if (to) view_bind_temp_o(v, t); else view_bind_temp(v, t);
 }
 /* --share-strings: String node v whose handle ran into _t<th>: its reads
-   are that handle's String (sp_strbuf_read_pub), as a variable's that holds
+   are that handle's String (sp_strbuf_read), as a variable's that holds
    the handle are, and ran_first_handle (strbuf_slot_text) answers _t<th>. */
 void ran_first_bind_read(int v, int th) {
   ran_first_bind_o(v, th, th, 0);
-  snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "sp_strbuf_read_pub(_t%d)", th);
+  snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "sp_strbuf_read(_t%d)", th);
   g_ran_hnd[g_n_ran_hnd - 1].read = 1;
 }
 /* The handle temp of node v's live ran_first_bind_read binding, or -1. */
@@ -9444,7 +9444,7 @@ int ran_first_read_handle(int node) {
     for (int j = 0; j < g_n_ran_hnd; j++) {
       if (g_ran_hnd[j].idx != i || g_ran_hnd[j].node != node) continue;
       char want[40];
-      snprintf(want, sizeof want, "sp_strbuf_read_pub(_t%d)", g_ran_hnd[j].th);
+      snprintf(want, sizeof want, "sp_strbuf_read(_t%d)", g_ran_hnd[j].th);
       return g_ran_hnd[j].read && sp_streq(g_argov_text[i], want) ? g_ran_hnd[j].th : -1;
     }
     return -1;
@@ -9570,7 +9570,7 @@ static void emit_arg_temp(Compiler *c, int v) {
        it holds where it keeps none: no String the rule shares */
     char rt[24]; snprintf(rt, sizeof rt, "_t%d", tr);
     emit_srange_kept_test(c, stail, rt, &hb);
-    buf_printf(&hb, " ? sp_strbuf_read_pub(_t%d) : ", th);
+    buf_printf(&hb, " ? sp_strbuf_read(_t%d) : ", th);
     size_t arm_at = hb.len;
     emit_expr(c, stail, &hb);
   }
@@ -9580,7 +9580,7 @@ static void emit_arg_temp(Compiler *c, int v) {
   else if (conversion && at == TY_STRING &&
            (arg_bang_on_handle(c, v) || face_str_bang_call(c, nt_paren_single(c->nt, v)) ||
             (strbuf_arg_bang_value(c, v) && !strbuf_arg_bang(c, v)))) {
-    buf_printf(&hb, "sp_strbuf_read_pub(_t%d)", th);
+    buf_printf(&hb, "sp_strbuf_read(_t%d)", th);
   }
   else if (wshare) {
     char thr[24]; snprintf(thr, sizeof thr, "_t%d", th);
@@ -9749,7 +9749,7 @@ int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, c
      (ran_first_bind_read): that handle, no second hold */
   int rh = !boxed && ty == TY_STRING && vb.p ? ran_first_read_handle(node) : -1;
   char rd[40];
-  if (rh >= 0 && snprintf(rd, sizeof rd, "sp_strbuf_read_pub(_t%d)", rh) > 0 && sp_streq(vb.p, rd)) {
+  if (rh >= 0 && snprintf(rd, sizeof rd, "sp_strbuf_read(_t%d)", rh) > 0 && sp_streq(vb.p, rd)) {
     free(vb.p);
     one_face_mark(rh, node);
     return rh;
@@ -13436,7 +13436,7 @@ int emit_reader_override_dispatch(Compiler *c, int id, int cid, const char *name
   }
   buf_printf(b, " default: _t%d = ", rtmp);
   if (ret == TY_POLY && reader_ty != TY_POLY) emit_boxed_text(c, reader_ty, reader, b);
-  else if (ret == TY_STRING && reader_ty == TY_STRBUF) str_read_handle(b, reader, 0);
+  else if (ret == TY_STRING && reader_ty == TY_STRBUF) str_read_handle(b, reader);
   else if (g_disp_ro && !reader_oint) buf_printf(b, "%s(%s)", oint_of(ret), reader);
   else buf_puts(b, reader);
   buf_printf(b, "; break; } _t%d; })", rtmp);

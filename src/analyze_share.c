@@ -1771,7 +1771,7 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
   *op = -1;
   /* The return route takes the handle its callee publishes, including
      when a borrowed parameter is returned beside a method-owned String. */
-  if (repr_call_returns_handle((Compiler *)c, n)) return SPK_PUBLISHED;
+  if (repr_call_returns_handle((Compiler *)c, n)) return SPK_NATIVE_CALL;
   /* freeze answers its receiver: it hands on the handle where its receiver
      does, and a new String's freeze is a String no other name holds */
   int u = nt_paren_single(c->nt, n);
@@ -1786,7 +1786,7 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
   }
   /* A call on a boxed receiver each of whose arms publishes its String's
      handle: an attr reader of a field that holds the handle (its arm reads
-     it through sp_strbuf_read_pub), or a method that publishes its own. A
+     it through sp_strbuf_read), or a method that publishes its own. A
      pickup around the call takes that handle, so the value is the field's
      String itself: `{ host: req.host }` with two classes answering host. */
   if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && nt_ref(c->nt, u, "receiver") >= 0 && repr_of(c, nt_ref(c->nt, u, "receiver")).kind == RK_BOXED &&

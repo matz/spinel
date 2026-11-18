@@ -1112,7 +1112,7 @@ static void emit_ternary_arm_o(Compiler *c, int nd, TyKind res, int res_o, Buf *
   if (res == TY_POLY && repr_of(c, nd).kind != RK_BOXED) { emit_boxed(c, nd, b); return; }
   /* A byte-valued conditional reads a handle arm through its byte face. */
   if (res == TY_STRING && repr_of(c, nd).as_ty == TY_STRBUF) {
-    str_read_handle_open(b, 0);
+    str_read_handle_open(b);
     emit_expr(c, nd, b);
     str_read_handle_close(b);
     return;
@@ -1613,7 +1613,7 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
     buf_puts(b, "({ ");
     emit_strbuf_orw_guard(c, ref, v, is_or, g_orw_store_guard, b);
     buf_printf(b, "%s%s ", mark ? " " : "", mark ? mark : "");
-    str_read_handle(b, ref, 1);
+    str_read_handle(b, ref);
     buf_puts(b, "; })");
     return;
   }
@@ -2543,19 +2543,9 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
         buf_puts(b, ") : NULL)");
         return 1;
       }
-      /* A mutable-string local read yields an independent GC string copy: its
-         sp_String buffer is not itself a GC object, so a bare cstr pointer
-         would dangle once the wrapper is unreachable (e.g. after `return`).
-         Transient append/length use the raw sp_String via dedicated paths. */
-      /* publish the handle to the deep-return side channel as the copy is
-         read out: a marked caller of a shared-returning method picks it up
-         right after the call (#3227 P6) */
-      /* Through sp_strbuf_read_pub, which sequences the channel's write
-         (two reads among one call's arguments), reads a nil handle as nil
-         (a parameter or a local can be one: `def run(cmd, text: nil)`,
-         `q = nil; q = +"x" if c`), and keeps a frozen handle's mark on the
-         copy it answers. */
-      buf_puts(b, "sp_strbuf_read_pub(");
+      /* Borrow the current contents for a byte consumer. The handle
+         remains in the local slot, and a nullable slot reads as NULL. */
+      buf_puts(b, "sp_strbuf_read(");
       emit_local_ref(c, id, lrn, b);
       buf_puts(b, ")");
       return 1;
@@ -2617,7 +2607,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       }
       /* a nil write leaves the handle NULL: the value is nil, not a read
          through it (CodeRabbit on #4990) */
-      buf_puts(b, " sp_strbuf_read_pub(");
+      buf_puts(b, " sp_strbuf_read(");
       emit_local_ref(c, id, nm, b);
       buf_puts(b, "); })");
       return 1;
@@ -2703,7 +2693,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
        as a read of the local gives */
     if (olv && repr_of_slot(c, olv).handle && repr_of_slot(c, olv).kind == RK_STRBUF &&
         !(repr_of(c, id).handle && repr_write_share(c, id))) {
-      buf_puts(b, "sp_strbuf_read_pub(");
+      buf_puts(b, "sp_strbuf_read(");
       emit_local_ref(c, id, nm, b);
       buf_puts(b, ")");
     }
@@ -2846,7 +2836,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
         buf_printf(b, "%s; })", ref2e);
       }
       else {
-        buf_printf(b, "sp_strbuf_read_pub(%s); })", ref2e);
+        buf_printf(b, "sp_strbuf_read(%s); })", ref2e);
       }
       return 1;
     }
@@ -3054,7 +3044,7 @@ static void emit_strbuf_slot_read(Compiler *c, int id, Repr rp, const char *sref
     buf_printf(b, "(%s ? sp_String_cstr(%s) : NULL)", sref, sref);
   }
   else {
-    str_read_handle(b, sref, 1);   /* (one representation: a copy when held, g_one_held) */
+    str_read_handle(b, sref);   /* (one representation: a copy when held, g_one_held) */
   }
 }
 
@@ -5094,7 +5084,7 @@ else {
         emit_strbuf_handle_of(c, nt_paren_single(c->nt, key), g_pre);
         buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", th);
         free(kb.p); memset(&kb, 0, sizeof kb);
-        buf_printf(&kb, "SP_STR_B(sp_strbuf_read_pub(_t%d))", th);
+        buf_printf(&kb, "SP_STR_B(sp_strbuf_read(_t%d))", th);
         krb = 0;
       }
       if (ty_is_hash(ht) && (subtree_may_allocate(c, key) || krb)) {
@@ -7337,14 +7327,14 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     if (svt == TY_STRBUF && sop && is_plus_op(sop)) {
       if (g_pre) {
         emit_stmt(c, id, g_pre, g_indent);
-        buf_printf(b, "sp_strbuf_read_pub(%s)", ref);
+        buf_printf(b, "sp_strbuf_read(%s)", ref);
       }
       else {
         char mk[300];
         const char *m = ivar_write_mark(c, id, mk, sizeof mk);
         buf_printf(b, "({ %s = ", ref);
         emit_strbuf_ivar_plus(c, nt_ref(nt, id, "value"), ref, b);
-        buf_printf(b, "; %s%ssp_strbuf_read_pub(%s); })", m ? m : "", m ? " " : "", ref);
+        buf_printf(b, "; %s%ssp_strbuf_read(%s); })", m ? m : "", m ? " " : "", ref);
       }
       return;
     }

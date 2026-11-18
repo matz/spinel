@@ -5146,9 +5146,9 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
              handle is, read through its bytes face: a sink finds the handle
              again; the new bytes were a String of their own) */
           if (sb_nil_nc)
-            buf_printf(b, "_t%d ? sp_strbuf_read_pub(_t%d) : NULL; })", tchg, tsb);
+            buf_printf(b, "_t%d ? sp_strbuf_read(_t%d) : NULL; })", tchg, tsb);
           else
-            buf_printf(b, "sp_strbuf_read_pub(_t%d); })", tsb);
+            buf_printf(b, "sp_strbuf_read(_t%d); })", tsb);
           { *out = 1; return 1; }
         }
       }
@@ -5276,7 +5276,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
             emit_str_append_arg(c, arg, rt, b); }
           buf_puts(b, ");");
         }
-        buf_printf(b, " sp_strbuf_read_pub(_t%d); })", tb9);
+        buf_printf(b, " sp_strbuf_read(_t%d); })", tb9);
         { *out = 1; return 1; }
       }
       if (nchain > 0 && repr_of_slot(c, blv).kind != RK_STRBUF && str_mut_var_recv(c, cur)) {
@@ -5348,7 +5348,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
           /* marked to hand out the handle (`r = obj.buf.replace(x)`): the
              receiver itself, as for the appends */
           if (repr_of(c, id).handle) buf_printf(b, "); _t%d; })", tbR);
-          else buf_printf(b, "); sp_strbuf_read_pub(_t%d); })", tbR);
+          else buf_printf(b, "); sp_strbuf_read(_t%d); })", tbR);
           { *out = 1; return 1; }
         }
       }
@@ -5380,7 +5380,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
     if (!strbuf_recv_handle_any(c, id, recv, &sref0, &lb0)) return 0;
     int t0 = ++g_tmp;
     buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                  " sp_strbuf_read_pub(_t%d); })", t0, lb0.p ? lb0.p : sref0.p, t0, t0, t0);
+                  " sp_strbuf_read(_t%d); })", t0, lb0.p ? lb0.p : sref0.p, t0, t0, t0);
     free(lb0.p); free(sref0.p);
     { *out = 1; return 1; }
   }
@@ -5395,7 +5395,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
         free(lbAB.p); free(srefAB.p);
         emit_route_recv_root(c, hrAB, tm2, 0, NULL, TY_UNKNOWN, b);
         emit_append_bytes_handle(c, tm2, argc, argv, b);
-        buf_printf(b, " sp_strbuf_read_pub(_t%d); })", tm2);
+        buf_printf(b, " sp_strbuf_read(_t%d); })", tm2);
         { *out = 1; return 1; }
       } }
     if (hrecv) return 0;
@@ -7138,7 +7138,7 @@ static void emit_hash_fetch_default_tail(Compiler *c, int id, int dflt, const ch
     Buf db; memset(&db, 0, sizeof db);
     emit_expr(c, dflt, &db);
     const char *dt_text = db.p ? db.p : "NULL";
-    /* (a shared String local's read can allocate, sp_strbuf_read_pub, and
+    /* (a shared String local's read can allocate, sp_strbuf_read, and
        the receiver is held unrooted when the key and the default are
        inert: evaluated ahead of the probe, it has to allocate nothing) */
     if ((fetch_operand_is_inert(c, dflt) && repr_of(c, dflt).kind != RK_STRBUF) || fzl_text_id(dt_text) >= 0)
@@ -9076,7 +9076,7 @@ static int str_arms_slice_encode(Compiler *c, int id, Buf *b, const char *name, 
     if (strbuf_route_clamp(c, id, ops)) {
       /* Publish the selected handle for a method's return pickup too. */
       int demand = repr_of(c, id).demand;
-      if (!demand) buf_puts(b, "sp_strbuf_read_pub(");
+      if (!demand) buf_puts(b, "sp_strbuf_read(");
       emit_strbuf_route(c, id, b);
       if (!demand) buf_puts(b, ")");
       return 1;
@@ -13768,7 +13768,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         else if (repr_of(c, id).read_raw && decide_node(c->nt, id, "strbuf-raw", NULL))
           buf_printf(b, "_t%d ? sp_String_cstr(_t%d) : NULL; })", tvR, tvR);
         else
-          { str_read_handle_tmp(b, tvR, 0); buf_puts(b, "; })"); }
+          { str_read_handle_tmp(b, tvR); buf_puts(b, "; })"); }
         return 1;
       }
       /* a field with a nil bit is read with it where the call's consumer
@@ -13997,7 +13997,7 @@ static void emit_strbuf_force_encoding(Compiler *c, const char *name, const char
   int ta = force_encoding_arg_hold(c, name, argv, argc, b);
   buf_printf(b, " if (!_t%d) sp_nil_recv(\"%s\"); sp_String_force_encoding(_t%d, ", th, name, th);
   emit_strbuf_force_encoding_mode(c, hv, argv, argc, ta, b);
-  buf_printf(b, "); sp_strbuf_read_pub(_t%d); })", th);
+  buf_printf(b, "); sp_strbuf_read(_t%d); })", th);
 }
 /* The option among an encode call's keyword hash elements (`els`, `en` of
    them) that the runtime does not read and that changes the bytes (xml:,
@@ -14217,7 +14217,7 @@ static void emit_strbuf_encode_bang(Compiler *c, const char *ref, int hr, const 
                 " if (sp_String_is_immutable(_t%d)) sp_raise_frozen_str(_t%d->data);"
                 " sp_String_encode_into(_t%d, sp_str_encode(sp_String_cstr(_t%d), ", th, th, th, th, th);
   emit_encode_args(ta, npos, b);
-  buf_printf(b, ")); sp_strbuf_read_pub(_t%d); })", th);
+  buf_printf(b, ")); sp_strbuf_read(_t%d); })", th);
 }
 /* Whether node n is a Time: a Time, or a Time subclass instance, which starts
    with its Time (read through a cast to sp_Time *) */

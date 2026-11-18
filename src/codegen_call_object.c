@@ -1145,7 +1145,7 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
 static int emit_freeze_recv_handle(Compiler *c, int recv, Buf *b) {
   Buf ref; memset(&ref, 0, sizeof ref);
   int th;
-  if (strbuf_slot_text(c, recv, &ref) && !strbuf_pickup_may_nil(c, recv)) {
+  if (strbuf_slot_text(c, recv, &ref) && !strbuf_call_result_may_nil(c, recv)) {
     th = ++g_tmp;
     buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); ", th, ref.p);
   }
@@ -1177,7 +1177,7 @@ static int emit_freeze_recv_handle(Compiler *c, int recv, Buf *b) {
   }
   else { free(ref.p); return 0; }
   free(ref.p);
-  buf_printf(b, "SP_GC_ROOT(_t%d); sp_String_freeze(_t%d); sp_str_freeze_val(sp_strbuf_read_pub(_t%d)); })", th, th, th);
+  buf_printf(b, "SP_GC_ROOT(_t%d); sp_String_freeze(_t%d); sp_str_freeze_val(sp_strbuf_read(_t%d)); })", th, th, th);
   return 1;
 }
 
@@ -1358,7 +1358,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     int th = ++g_tmp;
     buf_printf(b, "({ sp_String *_t%d = ", th);
     emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_String_freeze(_t%d); sp_str_freeze_val(sp_strbuf_read_pub(_t%d)); })",
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_String_freeze(_t%d); sp_str_freeze_val(sp_strbuf_read(_t%d)); })",
                th, th, th);
     return 1;
   }
@@ -1425,7 +1425,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
       buf_printf(b, " sp_String_freeze(%s); sp_str_freeze_val(", thr);
       /* (a reader call typed as the handle reads as the handle) */
-      if (repr_of(c, fzb).as_ty == TY_STRBUF) buf_printf(b, "sp_strbuf_read_pub(%s)", thr);
+      if (repr_of(c, fzb).as_ty == TY_STRBUF) buf_printf(b, "sp_strbuf_read(%s)", thr);
       else emit_strbuf_node_read(c, fzb, thr, b);
       buf_puts(b, "); })");
       return 1;
@@ -1894,7 +1894,7 @@ static int emit_safe_nav_freeze_handle(Compiler *c, int id, const char *name, in
   if (repr_of(c, id).demand || repr_of(c, id).as_ty == TY_STRBUF)
     buf_printf(b, "_sn%d ? sp_String_freeze(_sn%d) : (sp_String *)NULL; })", t, t);
   else
-    buf_printf(b, "_sn%d ? sp_str_freeze_val(sp_strbuf_read_pub(sp_String_freeze(_sn%d))) : (const char *)NULL; })", t, t);
+    buf_printf(b, "_sn%d ? sp_str_freeze_val(sp_strbuf_read(sp_String_freeze(_sn%d))) : (const char *)NULL; })", t, t);
   return 1;
 }
 
@@ -1921,7 +1921,7 @@ static int emit_safe_nav_self_handle(Compiler *c, int id, int recv, Buf *b) {
   }
   else {
     buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); _t%d ? ", t, hb.p, t);
-    str_read_handle_tmp(b, t, 1);
+    str_read_handle_tmp(b, t);
     buf_puts(b, " : (const char *)NULL; })");
   }
   free(hb.p);
@@ -2429,7 +2429,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
             tsh = ++g_tmp;
             emit_indent(g_pre, g_indent);
             buf_printf(g_pre, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);\n", tsh, hb.p, tsh);
-            buf_printf(&rsn, "_t%d ? sp_strbuf_read_pub(_t%d) : (const char *)NULL", tsh, tsh);
+            buf_printf(&rsn, "_t%d ? sp_strbuf_read(_t%d) : (const char *)NULL", tsh, tsh);
           }
           else sn_late = 0;
           free(hb.p);

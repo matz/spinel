@@ -1265,7 +1265,7 @@ int exc_msg_hold(Compiler *c, int arg, Buf *b, Buf *mh, int *mark) {
   buf_printf(b, "({ sp_String *_t%d = ", t);
   emit_str_form_handle(c, arg, b);
   buf_printf(b, "; SP_GC_ROOT(_t%d); ", t);
-  *mark = view_bind(arg, "sp_strbuf_read_pub(_t%d)", t);
+  *mark = view_bind(arg, "sp_strbuf_read(_t%d)", t);
   buf_printf(mh, "_t%d", t);
   return 1;
 }

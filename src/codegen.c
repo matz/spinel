@@ -17401,7 +17401,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
            parameter changed in place, and shares no message. */
         else if (repr_of_slot(c, p0).share) {
           buf_printf(b, "(%s->msg = ", g_self);
-          str_read_handle(b, rn.p, 1);
+          str_read_handle(b, rn.p);
           buf_printf(b, ", sp_gc_wb((void *)%s), "
                         "(void)sp_exc_attach_msg((void *)%s, %s), %s->msg)",
                      g_self, g_self, rn.p, g_self);

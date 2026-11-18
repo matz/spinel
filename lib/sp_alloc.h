@@ -217,13 +217,6 @@ static inline void sp_str_lcache_drop(const char *s) {
   for (unsigned w = 0; w < SP_STR_LCACHE_WAYS; w++)
     if (sp_str_lcache[h + w].s == s) sp_str_lcache[h + w].s = NULL;
 }
-/* Deep-return side channel (#3227): a method whose every return path yields
-   a shared-mutable string publishes the sp_String* handle here as the copy
-   is read out; a demand-marked call site picks it up right after the call
-   (resetting it to NULL first). Never read unless the analysis marked the
-   site, so ordinary callers are untouched. */
-extern SP_TLS void *_sp_ret_strbuf;
-
 /* Cold; single definitions in sp_alloc.c. sp_str_sweep is wired to the GC via a
    constructor so it runs from sp_gc_collect regardless of which TU triggered
    the collection. */

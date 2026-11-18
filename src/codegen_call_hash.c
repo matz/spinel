@@ -666,7 +666,7 @@ int emit_op_hash_set_default(Compiler *c, const BopCtx *x, Buf *b) {
     else buf_printf(b, "; sp_gc_wb((void *)_t%d); }", t);
   }
   buf_puts(b, " ");
-  if (shared_default && !repr_of(c, x->id).demand) buf_printf(b, "sp_strbuf_read_pub(%s)", av);
+  if (shared_default && !repr_of(c, x->id).demand) buf_printf(b, "sp_strbuf_read(%s)", av);
   else if (held || is_nil) buf_puts(b, av); else emit_expr(c, argv[0], b);
   free(dref.p);
   buf_puts(b, "; })"); return 1;

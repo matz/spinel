@@ -2406,27 +2406,16 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           if (ostruct) buf_puts(b, ")");
           return 1;
         }
-        /* JSON.generate(obj, opts) and JSON.pretty_generate(obj, opts): the
-           options are read at run time (sp_json_generate_options), where the
-           binding's one argument would drop them */
+        /* JSON.generate and JSON.pretty_generate take runtime options. */
         if (sp_streq(nvmod, "JSON") && (sp_streq(name, "generate") || sp_streq(name, "pretty_generate")) &&
             argc == 2) {
-          /* the options may run a user conversion (max_nesting's #to_int, an
-             unknown key's #to_s), as JSON.parse's may; and the answer is a new
-             String, so a handle a #to_s published on the way is cleared */
           g_conv_emitted++;
           int t = ++g_tmp;
-          buf_printf(b, "sp_strface_unpub(({ sp_RbVal _t%d = ", t); emit_boxed(c, argv[0], b);
+          buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_boxed(c, argv[0], b);
           buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_json_generate_options(_t%d, ", t, t); emit_boxed(c, argv[1], b);
-          buf_printf(b, ", %d); }))", sp_streq(name, "pretty_generate"));
+          buf_printf(b, ", %d); })", sp_streq(name, "pretty_generate"));
           return 1;
         }
-        /* one String representation: a handle argument's read publishes it
-           to the deep-return channel, which a caller's pickup would take for
-           this new String; the answer clears it, as the method's own body
-           does (sp_strface_unpub) */
-        int nv_unpub = (nv_cstr_ret || nv_bin_ret);
-        if (nv_unpub) buf_puts(b, "sp_strface_unpub(");
         if (nv_cstr_ret) buf_puts(b, "sp_str_dup_external(");
         /* Sequence the call before the sp_ffi_bin_len read: C leaves argument
            evaluation order unspecified, so bind the result to a temp first. */
@@ -2453,7 +2442,6 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         if (nv_bin_ret)
           buf_printf(b, "; sp_str_as_binary(sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len))); })",
                      nv_bin_tmp);
-        if (nv_unpub) buf_puts(b, ")");
         return 1;
       }
     }
@@ -2522,10 +2510,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           if (!c->classes[ty_object_class(pat)].is_native_class)
             unsupported(c, argv[ai], "ffi pointer argument (a Ruby object has no C address; pass an IO::Buffer, a String or a :ptr value)");
         }
-        /* Two String arguments each read a shared handle as `(_sp_ret_strbuf = h,
-           copy(h))`; side by side in one C call those are unsequenced writes of
-           the same variable (clang -Wunsequenced, an error under -Werror), so
-           with two or more they go out to ordered temps like the buffers do. */
+        /* Hold several String arguments through evaluation of the later
+           ones, as with the rooted pointer arguments. */
         int nstr_args = 0;
         for (int ai = 0; ai < fixed_argc && ai < argc; ai++) {
           if (!ffi_spec_is_str(c->ffi_funcs[fi].args[ai])) continue;
@@ -2788,9 +2774,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           buf_printf(b, "sp_box_foreign_ptr((void *)(%s))", call_buf.p);
         }
         else if (is_str_ret) {
-          /* (one representation: the answer clears the channel a handle
-             argument's read published, as a native_func's does) */
-          buf_printf(b, "sp_strface_unpub(sp_str_dup_external(%s))", call_buf.p);
+          buf_printf(b, "sp_str_dup_external(%s)", call_buf.p);
         }
         else if (is_binstr_ret) {
           /* Binary-safe: build the String from the exact byte count the callee
@@ -2799,9 +2783,9 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
              leaves argument evaluation order unspecified -- via a temp. Tagged
              BINARY for the reason the `cbinstr` arm above gives. */
           int tp = ++g_tmp;
-          buf_printf(b, "({ const char *_t%d = %s; %s"
+          buf_printf(b, "({ const char *_t%d = %s; "
                         "sp_str_as_binary(sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len))); })",
-                     tp, call_buf.p, "_sp_ret_strbuf = NULL; ", tp);
+                     tp, call_buf.p, tp);
         }
         else {
           /* numeric / bool: cast to sp_int or sp_float */
@@ -3045,7 +3029,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
             else {
               char _asr[300]; snprintf(_asr, sizeof _asr, "_t%d->iv_%s", _atmp, iv_c(_abase));
               buf_printf(b, "; %s", _amsp);
-              if (_avt == TY_STRBUF) buf_printf(b, "sp_strbuf_read_pub(%s)", _asr);
+              if (_avt == TY_STRBUF) buf_printf(b, "sp_strbuf_read(%s)", _asr);
               /* (one representation: an assignment whose value is boxed,
                  a writer a subclass overrides, boxes the handle) */
               else if (_avt == TY_POLY) buf_printf(b, "SP_STR_BOX(%s)", _asr);

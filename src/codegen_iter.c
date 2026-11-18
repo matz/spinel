@@ -4424,7 +4424,7 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   if (is_tap && (hparam || et == TY_STRBUF) && repr_of(c, id).demand)
     buf_printf(b, "_t%d", tr);
   else if (is_tap && hparam && repr_of(c, id).as_ty == TY_STRING && strbuf_value_carries(c, recv))
-    str_read_handle_tmp(b, tr, 1);
+    str_read_handle_tmp(b, tr);
   else if (is_tap && et == TY_STRBUF && repr_of(c, id).as_ty == TY_STRING)
     buf_printf(b, "(_t%d ? sp_String_cstr(_t%d) : NULL)", tr, tr);
   /* tap's value is the receiver's oint, unwrapped for a plain reader */

@@ -23849,7 +23849,9 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
   if (!exc_has_reopen_initialize(c)) return;
   /* every reopening that defines one, not the first eight: the pick is by the
      class's ancestry, so a later one must be in it */
-  int *xr = malloc((size_t)c->nclasses * sizeof *xr), xn = exc_reopen_definers(c, "initialize", xr, c->nclasses);
+  int *xr = calloc((size_t)c->nclasses + 1, sizeof *xr);
+  if (!xr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int xn = exc_reopen_definers(c, "initialize", xr, c->nclasses);
   /* the body is defined after the program's globals and constants, as the text
      dispatchers' are (c->exc_text_late): a default that reads one
      (`def initialize(msg, suffix = $suffix)`) names it there */
@@ -23897,6 +23899,7 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "  return NULL;\n}\n");
   size_t ol = c->exc_text_late ? strlen(c->exc_text_late) : 0, nl = strlen(d.p);
   char *cat = malloc(ol + nl + 1);
+  if (!cat) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   if (ol) memcpy(cat, c->exc_text_late, ol);
   memcpy(cat + ol, d.p, nl + 1);
   free(c->exc_text_late); free(d.p);

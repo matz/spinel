@@ -9676,8 +9676,16 @@ static void cpoly_user_arms_n(Compiler *c, int id, const char *name, int argc, c
   if (full) cpoly_prearms_n(c, id, name, argc, argv, ret, atmp_ty, kwall_any, is_setter_val, p, &cap);
   int *ks = malloc(sizeof(int) * (size_t)(c->nclasses > 0 ? c->nclasses : 1));
   int nks = cpoly_arm_classes(c, id, name, ks);
+  /* a class whose writer is an attr writer takes the field-write arm the
+     dispatch writes after the user arms: no user arm for it */
+  char wbase[256];
+  /* (as the dispatch reads the result: a call typed as no value answers boxed) */
+  TyKind wret = repr_poly_result_slot(is_scalar_ret(ret) ? ret : TY_POLY);
+  int attr_wr = poly_writer_attr_arms(c, id, name, argc, pos_argc, kwh, splat_a, wret, is_setter_val,
+                                      wbase, sizeof wbase);
   for (int ki = 0; ki < nks; ki++) {
     int k = ks[ki];
+    if (attr_wr && boxed_writer_attr_wins(c, k, wbase)) continue;
     if (!has_splat_arg && kwh < 0 && cplan_struct_aset(c, k, name, argc)) {
       cpoly_add(p, &cap, PA_STRUCT_SET, k, -1, ret, PC_SAME);
       continue;

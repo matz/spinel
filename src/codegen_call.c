@@ -11495,14 +11495,8 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       char wbase[256];
       /* (keywords alone, `o.send(:x=, **h)`, hand the writer their Hash) */
       int wr_kw = argc == 1 && pos_argc == 0 && kwh >= 0;
-      int attr_wr = !is_setter_val && argc == 1 && (pos_argc == 1 || wr_kw) && splat_a < 0 && (kwh < 0 || wr_kw) && ret == TY_POLY &&
-                    nt_ref(nt, id, "block") < 0 && name_is_plain_setter(name) &&
-                    setter_base_name(name, wbase, sizeof wbase);
-      if (attr_wr) {
-        int any = 0;
-        for (int k = 0; k < c->nclasses && !any; k++) any = comp_is_writer(&c->classes[k], wbase);
-        attr_wr = any;
-      }
+      int attr_wr = poly_writer_attr_arms(c, id, name, argc, pos_argc, kwh, splat_a, ret, is_setter_val,
+                                          wbase, sizeof wbase);
       int wr_src = attr_wr ? (wr_kw ? ++g_tmp : atmp[0]) : -1;
       TyKind wr_ty = wr_kw ? TY_POLY : attr_wr ? atmp_ty[0] : TY_UNKNOWN;
       if (attr_wr && wr_kw) {

@@ -1417,6 +1417,13 @@ extern int g_writer_arms_attr_only;
 /* Does class k's writer `base=` resolve to an attr writer, the field write
    emit_boxed_writer_arms gives it an arm for (codegen_stmt.c)? */
 int boxed_writer_attr_wins(Compiler *c, int k, const char *base);
+/* Does a dispatch over the classes of the writer `name` (a computed send's
+   `x=` with one value) give the classes with an attr writer `base=` their
+   field-write arms (emit_boxed_writer_arms)? base is written to wbase. The
+   switch's user arms (and the plan's) leave out the classes where
+   boxed_writer_attr_wins. */
+int poly_writer_attr_arms(Compiler *c, int id, const char *name, int argc, int pos_argc, int kwh,
+                          int splat_a, TyKind ret, int is_setter_val, char *wbase, size_t cap);
 /* The classes (by id, 1 = skip) emit_poly_user_arms_n emits no user arm
    for while set: another arm of the same switch takes them. */
 extern const unsigned char *g_poly_user_arm_skip;

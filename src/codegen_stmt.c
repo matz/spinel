@@ -16909,6 +16909,18 @@ int boxed_writer_attr_wins(Compiler *c, int k, const char *base) {
   return boxed_writer_of(c, k, base, &mi, &dc) == 1;
 }
 
+int poly_writer_attr_arms(Compiler *c, int id, const char *name, int argc, int pos_argc, int kwh,
+                          int splat_a, TyKind ret, int is_setter_val, char *wbase, size_t cap) {
+  int wr_kw = argc == 1 && pos_argc == 0 && kwh >= 0;
+  if (is_setter_val || argc != 1 || !(pos_argc == 1 || wr_kw) || splat_a >= 0 || !(kwh < 0 || wr_kw) ||
+      ret != TY_POLY || nt_ref(c->nt, id, "block") >= 0 || !name_is_plain_setter(name) ||
+      !setter_base_name(name, wbase, cap))
+    return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_is_writer(&c->classes[k], wbase)) return 1;
+  return 0;
+}
+
 int g_writer_arms_attr_only;
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, int vnode,

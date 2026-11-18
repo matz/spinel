@@ -65,7 +65,7 @@ size_t sp_gc_old_bytes = 0;
 int sp_gc_cycle = 0;
 void (*sp_gc_mark_suspended_fibers_hook)(void) = NULL;
 void (*sp_gc_mark_globals_hook)(void) = NULL;
-void (*sp_gc_mark_io_timeouts_hook)(void) = NULL;
+void (*sp_gc_mark_static_streams_hook)(void) = NULL;
 #ifdef SP_CEXT
 void (*sp_gc_mark_cext_hook)(void) = NULL;
 void (*sp_gc_sweep_cext_hook)(int full) = NULL;
@@ -641,8 +641,8 @@ else{void*obj=*e;if(obj)sp_gc_mark(obj);}}
   sp_gc_root_phase=0;
   SP_GC_MK_PH(sp_gc_ph_mk_fibers);
   if(vd)sp_gc_dbg_phase="globals";if(sp_gc_mark_globals_hook)sp_gc_mark_globals_hook();
-  void (*mark_io_timeouts)(void) = SP_ATOMIC_LOAD(&sp_gc_mark_io_timeouts_hook, __ATOMIC_ACQUIRE);
-  if(mark_io_timeouts)mark_io_timeouts();
+  void (*mark_static_streams)(void) = SP_ATOMIC_LOAD(&sp_gc_mark_static_streams_hook, __ATOMIC_ACQUIRE);
+  if(mark_static_streams)mark_static_streams();
   sp_slab_mark_pinned();   /* frozen heap Strings outside the slab, which no bitmap pins */
 #ifdef SP_CEXT
   if(sp_gc_mark_cext_hook)sp_gc_mark_cext_hook();

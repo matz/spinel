@@ -669,7 +669,7 @@ extern const char *(*sp_ivtbl_inspect_fn)(void *tbl);
  * sp_gc_mark_all / sp_gc_collect invoke them through these pointers, the
  * same way fibers register sp_gc_mark_suspended_fibers_hook. */
 extern void (*sp_gc_mark_globals_hook)(void);
-extern void (*sp_gc_mark_io_timeouts_hook)(void);
+extern void (*sp_gc_mark_static_streams_hook)(void);
 #ifdef SP_CEXT
 extern void (*sp_gc_mark_cext_hook)(void);
 extern void (*sp_gc_sweep_cext_hook)(int full);

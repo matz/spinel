@@ -82,10 +82,29 @@ static void sp_io_timeout_scan(void *p) {
   sp_mark_rbval(((sp_io_timeout *)p)->value);
 }
 
-static void sp_io_mark_static_timeouts(void) {
-  sp_gc_mark(SP_ATOMIC_LOAD(&sp_io_stdout()->timeout, __ATOMIC_ACQUIRE));
-  sp_gc_mark(SP_ATOMIC_LOAD(&sp_io_stderr()->timeout, __ATOMIC_ACQUIRE));
-  sp_gc_mark(SP_ATOMIC_LOAD(&sp_io_stdin()->timeout, __ATOMIC_ACQUIRE));
+/* The three standard streams are static handles (sp_StaticFile), no GC
+   object, so no scan reads them: what one points at is marked here, from
+   the time a timeout or a reopen gives it a heap object or String
+   (sp_io_static_stream_rooted installs the hook then). A path or a mode
+   that is still the literal of the handle carries the tag of SPL, which
+   sp_mark_string reads as no heap String. */
+static void sp_io_mark_static_stream(sp_File *f) {
+  sp_gc_mark(SP_ATOMIC_LOAD(&f->timeout, __ATOMIC_ACQUIRE));
+  sp_mark_string(f->path);
+  sp_mark_string(f->mode);
+}
+
+static void sp_io_mark_static_streams(void) {
+  sp_io_mark_static_stream(sp_io_stdout());
+  sp_io_mark_static_stream(sp_io_stderr());
+  sp_io_mark_static_stream(sp_io_stdin());
+}
+
+/* ...called before a store into a handle that may be static (the lead byte
+   of sp_StaticFile). */
+static void sp_io_static_stream_rooted(sp_File *f) {
+  if (((const unsigned char *)f)[-1] == 0xff)
+    SP_ATOMIC_STORE(&sp_gc_mark_static_streams_hook, sp_io_mark_static_streams, __ATOMIC_RELEASE);
 }
 
 sp_RbVal sp_File_timeout(sp_File *f) {
@@ -114,8 +133,7 @@ sp_File *sp_io_set_timeout(sp_File *f, sp_RbVal value, double seconds) {
     timeout->seconds = seconds;
   }
   sp_gc_wb(f);
-  if (((const unsigned char *)f)[-1] == 0xff)
-    SP_ATOMIC_STORE(&sp_gc_mark_io_timeouts_hook, sp_io_mark_static_timeouts, __ATOMIC_RELEASE);
+  sp_io_static_stream_rooted(f);
   SP_ATOMIC_STORE(&f->timeout, timeout, __ATOMIC_RELEASE);
   return f;
 }
@@ -1237,19 +1255,19 @@ _Static_assert(offsetof(sp_StaticFile, f) == 8, "the skip tag must sit immediate
 #define SP_STATIC_FILE_LEAD { 0, 0, 0, 0, 0, 0, 0, 0xff }
 
 sp_File *sp_io_stdout(void) {
-  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, "<STDOUT>", "w" } };
+  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, SPL("<STDOUT>"), SPL("w") } };
   if (!s.f.fp) s.f.fp = stdout;
   return &s.f;
 }
 
 sp_File *sp_io_stderr(void) {
-  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, "<STDERR>", "w" } };
+  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, SPL("<STDERR>"), SPL("w") } };
   if (!s.f.fp) s.f.fp = stderr;
   return &s.f;
 }
 
 sp_File *sp_io_stdin(void) {
-  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, "<STDIN>", "r" } };
+  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, SPL("<STDIN>"), SPL("r") } };
   if (!s.f.fp) s.f.fp = stdin;
   return &s.f;
 }
@@ -2801,6 +2819,9 @@ sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT
     else if (was_tty) setvbuf(stdout, buf, _IOFBF, sizeof buf);
   }
   if (f->own_buf || other->own_buf) sp_io_own_buf_reopened(f);
+  /* the other's Strings, which it may not outlive: a standard stream
+     keeps them with no scan to mark them (sp_io_mark_static_stream) */
+  sp_io_static_stream_rooted(f);
   f->path = other->path;
   f->mode = other->mode;
   f->shut = other->shut;        /* the sides the other socket has shut, none for a file */
@@ -3005,6 +3026,9 @@ sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) {SP_GC_R
   SP_ATOMIC_STORE(&f->closed, 0, __ATOMIC_RELAXED);
   if (reserved) SP_ATOMIC_STORE(&f->uses, 0, __ATOMIC_RELEASE);
   if (f->own_buf) sp_io_own_buf_reopened(f);
+  /* the path and the mode are the handle's now: a standard stream keeps
+     them with no scan to mark them (sp_io_mark_static_stream) */
+  sp_io_static_stream_rooted(f);
   f->path = sp_str_retained(path);
   /* a mode given replaces the handle's, as CRuby's does: an earlier
      #binmode or #set_encoding no longer decides what a read answers */

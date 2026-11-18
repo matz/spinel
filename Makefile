@@ -6453,6 +6453,14 @@ EXPLICIT_MIXINS_LIMIT ?= 2.55
 # with each copy: 3.08x at 2x the classes; 2.49x walking the instance_eval
 # and instance_exec calls alone (ie_rb_scan). The limit sits between them.
 INCLUDE_COPIES_LIMIT ?= 2.8
+# N methods that each test their own block parameter as an if's condition
+# (test/scale/block_conditions.sh), compiled to C at N=200 and N=400: the
+# work of that program less the work of the same methods testing an
+# instance variable (`plain`), which is what the block_given? rewrite of
+# the class structure phase costs. The rewrite walked the whole table for
+# the method's writes and reads of the parameter, for each method: 4.00x at
+# 2x the methods; 2.00x with each scope's locals indexed once.
+BLOCK_CONDITIONS_LIMIT ?= 2.2
 # A chain of forty bangs over a String a method answers, compiled to C with
 # under a CPU-time limit, as the hash-literal fan-out is:
 # strbuf_bang_self_local asked each link once per path that reaches it,
@@ -6584,6 +6592,12 @@ scale-test: $(SPINEL_WORK)
 	icb=$$(sw -c -o "$$tmp/ic4.c" "$$tmp/ic4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	ipa=$$(sw -c -o "$$tmp/ip2.c" "$$tmp/ip2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	ipb=$$(sw -c -o "$$tmp/ip4.c" "$$tmp/ip4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen block_conditions 200 bc2.rb; gen block_conditions 400 bc4.rb; \
+	gen block_conditions "200 plain" bp2.rb; gen block_conditions "400 plain" bp4.rb; \
+	bca=$$(sw -c -o "$$tmp/bc2.c" "$$tmp/bc2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	bcb=$$(sw -c -o "$$tmp/bc4.c" "$$tmp/bc4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	bpa=$$(sw -c -o "$$tmp/bp2.c" "$$tmp/bp2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	bpb=$$(sw -c -o "$$tmp/bp4.c" "$$tmp/bp4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	cpu () { b=; for i in 1 2 3; do \
 	  o=$$( ( $(SPINEL_WORK) -c -o "$$tmp/qt.c" "$$tmp/$$1" >/dev/null 2>&1 || exit 1; times ) ) || \
 	    { echo "scale-test: FAIL (spinel-work failed on $$1)" >&2; return 1; }; \
@@ -6615,7 +6629,8 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$uea" ] || [ -z "$$ueb" ] || [ -z "$$uga" ] || [ -z "$$ugb" ] || \
 	   [ -z "$$jra" ] || [ -z "$$jrb" ] || [ -z "$$jha" ] || [ -z "$$jhb" ] || \
 	   [ -z "$$sea" ] || [ -z "$$seb" ] || [ -z "$$spa" ] || [ -z "$$spb" ] || \
-	   [ -z "$$ica" ] || [ -z "$$icb" ] || [ -z "$$ipa" ] || [ -z "$$ipb" ]; then \
+	   [ -z "$$ica" ] || [ -z "$$icb" ] || [ -z "$$ipa" ] || [ -z "$$ipb" ] || \
+	   [ -z "$$bca" ] || [ -z "$$bcb" ] || [ -z "$$bpa" ] || [ -z "$$bpb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$ha" -v b="$$hb" 'BEGIN { r = b / a; \
 	  printf "scale-test: boxed Hash store work at 2x the methods is %.2fx (limit 2.20)\n", r; exit (r > 2.20) }' || \
@@ -6708,6 +6723,11 @@ scale-test: $(SPINEL_WORK)
 	  r = b / a; \
 	  printf "scale-test: include copy work at 2x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { [ $$? -eq 2 ] || echo "scale-test: FAIL (the rebound marks walked every call of the program once per method an include copies: see ie_rb_scan)"; exit 1; }; \
+	awk -v na="$$bca" -v nb="$$bcb" -v ta="$$bpa" -v tb="$$bpb" -v lim="$(BLOCK_CONDITIONS_LIMIT)" 'BEGIN { a = na - ta; b = nb - tb; \
+	  if (a <= 0 || b <= 0) { printf "scale-test: FAIL (the block conditions cost no more than the plain ones, %d - %d and %d - %d: the difference measures nothing; see test/scale/block_conditions.sh)\n", na, ta, nb, tb; exit 2 } \
+	  r = b / a; \
+	  printf "scale-test: block condition work at 2x the methods is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { [ $$? -eq 2 ] || echo "scale-test: FAIL (the block_given? rewrite walked the whole table for each method's block parameter: see an_phase_class_structure)"; exit 1; }; \
 	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }; \

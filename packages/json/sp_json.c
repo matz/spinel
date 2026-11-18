@@ -17,6 +17,7 @@
 #include <stdio.h>            /* snprintf (sp_json_float) */
 sp_Bigint *sp_bigint_new_str(const char *s, int base);   /* the runtime archive (sp_bigint.c) */
 const char *sp_poly_to_s(sp_RbVal v);                   /* the runtime archive (sp_poly_cold.c) */
+const char *sp_str_inspect(const char *s);              /* the runtime archive (sp_str_cold.c) */
 
 /* A 0xff-marked rodata literal, so sp_str_byte_len reads its length correctly
    (matches spinel_rt.h's SPL). Used for the fixed tokens true/false/null. */
@@ -973,8 +974,9 @@ static const char *jp_key(jrd *j) {
   if (j->nkeys < JP_KEYS && j->held->tag == SP_TAG_NIL) *j->held = sp_box_poly_array(sp_PolyArray_new());
   const char *k = sp_hash_key_from_bytes(s, n, 0);
   if (j->nkeys < JP_KEYS) {
-    SP_GC_ROOT_STR(k);
-    sp_PolyArray_push((sp_PolyArray *)j->held->v.p, sp_box_str(k));
+    sp_String *owner = sp_str_fd_owner(k);
+    SP_GC_ROOT(owner);
+    sp_PolyArray_push((sp_PolyArray *)j->held->v.p, sp_box_obj(owner, SP_BUILTIN_STRBUF));
     memmove(&j->keys[lo + 1], &j->keys[lo], sizeof(jkey) * (size_t)(j->nkeys - lo));
     j->keys[lo].key = k; j->keys[lo].len = n;
     j->nkeys++;
@@ -1103,7 +1105,7 @@ static sp_RbVal jp_array(jrd *j, int depth) {
   return box;
 }
 static void jp_duplicate(jrd *j, const char *at, const char *key) {
-  const char *name = sp_poly_inspect_fn(sp_box_str(key)); SP_GC_ROOT_STR(name);
+  const char *name = sp_str_inspect(key); SP_GC_ROOT_STR(name);
   const char *msg = sp_sprintf("duplicate key %s", name); SP_GC_ROOT_STR(msg);
   jp_raise(j, at, msg, 0);
 }

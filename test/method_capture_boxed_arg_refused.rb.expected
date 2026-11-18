@@ -11,3 +11,4 @@ Array subclass: TypeError: wrong argument type Float (expected String)
 "d"
 "e"
 super_method: NotImplementedError
+dup.super_method: NotImplementedError

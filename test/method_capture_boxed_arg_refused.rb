@@ -67,3 +67,13 @@ begin
 rescue NotImplementedError
   puts "super_method: NotImplementedError"
 end
+# The same through a copy of the local: `m.dup` holds what `m` holds.
+def parent_of_copy(m, flag)
+  m = Child.new.method(:f) if flag
+  [m.dup.super_method, m.clone.super_method]
+end
+begin
+  p parent_of_copy(Child.new.method(:f), false).length
+rescue NotImplementedError
+  puts "dup.super_method: NotImplementedError"
+end

@@ -1531,6 +1531,12 @@ typedef struct {
                       family among them (all_any, its keys); built once */
                    char **all; int nall, all_built; ANameHash all_seen, all_any;
                    char **all_any_keys; int nall_any;
+                   /* the names the builtin classes a boxed value may hold
+                      answer (dsend_add_builtin_names over each of them, in
+                      their order, each name once), for the classes bi_held
+                      lists; built once (dsn_builtin_names) */
+                   char **bi; int nbi, bi_built; ANameHash bi_seen;
+                   const char *bi_held[16]; int nbi_held;
                    ANameHash lits; } dsn;
   /* the top-level scope of each file root (nt_root), by graph id: 0 for the
      entry (analyze_program.c) */

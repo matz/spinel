@@ -7672,6 +7672,9 @@ static void dsn_memo_free(Compiler *c) {
   dsn_inames_free(c->dsn.all_any_keys, c->dsn.nall_any);
   anh_free(&c->dsn.all_seen); memset(&c->dsn.all_seen, 0, sizeof c->dsn.all_seen);
   anh_free(&c->dsn.all_any); memset(&c->dsn.all_any, 0, sizeof c->dsn.all_any);
+  dsn_inames_free(c->dsn.bi, c->dsn.nbi);
+  anh_free(&c->dsn.bi_seen); memset(&c->dsn.bi_seen, 0, sizeof c->dsn.bi_seen);
+  c->dsn.bi = NULL; c->dsn.nbi = 0; c->dsn.bi_built = 0; c->dsn.nbi_held = 0;
   c->dsn.all = NULL; c->dsn.nall = 0; c->dsn.all_built = 0;
   c->dsn.all_any_keys = NULL; c->dsn.nall_any = 0;
   c->dsn.names = NULL; c->dsn.n = NULL; c->dsn.ncls = c->dsn.nscp = 0;
@@ -8502,6 +8505,35 @@ static void dsend_add_builtin_names(Compiler *c, const char *bcls, char ***own, 
   }
 }
 
+/* The names the builtin classes `held` lists answer, as
+   dsend_add_builtin_names adds them for each in turn, each name once: the
+   memo's, built once while the pass runs, for the list it was built for
+   (the list grows with the types the program settles); 1, and the list in
+   *all. 0 with the memo off, when the asker walks the classes itself. Each
+   site put every held class's names (hundreds, Object's among them for
+   each) through its own set to arrive at this: most of a pass's time on an
+   application with many computed sends on boxed receivers. */
+static int dsn_builtin_names(Compiler *c, const char **held, int nheld, char ***all, int *n) {
+  if (!c->dsn.on || nheld > 16) return 0;
+  dsn_memo_sync(c);
+  int same = c->dsn.bi_built && c->dsn.nbi_held == nheld;
+  for (int k = 0; same && k < nheld; k++) same = sp_streq(c->dsn.bi_held[k], held[k]);
+  if (!same) {
+    dsn_inames_free(c->dsn.bi, c->dsn.nbi);
+    anh_free(&c->dsn.bi_seen); memset(&c->dsn.bi_seen, 0, sizeof c->dsn.bi_seen);
+    c->dsn.bi = NULL; c->dsn.nbi = 0;
+    int cap = 0;
+    for (int k = 0; k < nheld; k++) {
+      c->dsn.bi_held[k] = held[k];
+      dsend_add_builtin_names(c, held[k], &c->dsn.bi, &c->dsn.nbi, &cap, &c->dsn.bi_seen);
+    }
+    c->dsn.nbi_held = nheld;
+    c->dsn.bi_built = 1;
+  }
+  *all = c->dsn.bi; *n = c->dsn.nbi;
+  return 1;
+}
+
 /* The builtin classes a boxed value can be an instance of, into out (up to
    cap): the kinds a value of no static type is born as anywhere -- an
    element of a mixed literal, a JSON document, a method's widened answer --
@@ -8795,9 +8827,25 @@ static int desugar_dynamic_send_inner(Compiler *c) {
         if (plain) {
           nprog = nown;
           if (nheld < 0) nheld = dsend_poly_builtin_classes(c, held, 16);
-          for (int k = 0; k < nheld; k++) {
-            /* (not a builtin class the receiver never holds: an instance a
-               class value's `new` builds is no Integer) */
+          /* (not a builtin class the receiver never holds: an instance a
+             class value's `new` builds is no Integer) */
+          int every = 1;
+          for (int k = 0; k < nheld && every; k++) {
+            int core = builtin_core_class_slot(held[k]);
+            every = core < 0 || cls_fact_may_hold_builtin(c, recv, core);
+          }
+          char **bi = NULL; int nbi = 0;
+          if (every && dsn_builtin_names(c, held, nheld, &bi, &nbi)) {
+            /* every held class: the memo's names, past the program's the
+               set holds, as the walk below would add them; the set is
+               done with after this */
+            for (int j = 0; j < nbi; j++) {
+              if (anh_has(&seen, bi[j])) continue;
+              if (nown == cap) { cap = cap ? cap * 2 : 32; own = (char **)realloc(own, sizeof(char *) * (size_t)cap); }
+              own[nown++] = strdup(bi[j]);
+            }
+          }
+          else for (int k = 0; k < nheld; k++) {
             int core = builtin_core_class_slot(held[k]);
             if (core >= 0 && !cls_fact_may_hold_builtin(c, recv, core)) continue;
             dsend_add_builtin_names(c, held[k], &own, &nown, &cap, &seen);

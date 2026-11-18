@@ -18,6 +18,12 @@ class Lister
     @names.each_with_index { |n, i| yield "#{prefix}#{sep}#{n}", i }
   end
 
+  # an optional parameter: the helper takes none, as before
+  def tagged(tag = "t")
+    return enum_for(:tagged) unless block_given?
+    @names.each { |n| yield "#{tag}:#{n}" }
+  end
+
   # no argument, as before
   def each
     return enum_for(:each) unless block_given?
@@ -31,5 +37,6 @@ l.entries("e") { |path| puts path }
 p l.pairs("x", "-").to_a
 p l.pairs("y", ":").map { |s, i| "#{i}=#{s}" }
 l.pairs("z", "+") { |s, i| puts "#{i} #{s}" }
+p l.tagged.to_a
 p l.each.to_a
 p l.each.next

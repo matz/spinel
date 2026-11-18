@@ -9577,7 +9577,12 @@ static const int *te_required_only_params(const NodeTable *nt, int def, int *n) 
   if (on || pon || kn || nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0 || nt_ref(nt, pn, "block") >= 0)
     return NULL;
   const int *reqs = nt_arr(nt, pn, "requireds", n);
-  for (int i = 0; i < *n; i++) if (nt_kind(nt, reqs[i]) != NK_RequiredParameterNode) { *n = 0; return NULL; }
+  /* (a parameter of the helper's own names, __ey and __ev, would read as
+     the yielder or the yielded values inside the helper: not forwarded) */
+  for (int i = 0; i < *n; i++) {
+    const char *pn = nt_kind(nt, reqs[i]) == NK_RequiredParameterNode ? nt_str(nt, reqs[i], "name") : NULL;
+    if (!pn || sp_streq(pn, "__ey") || sp_streq(pn, "__ev")) { *n = 0; return NULL; }
+  }
   if (*n <= 0) { *n = 0; return NULL; }
   return reqs;
 }
@@ -16628,10 +16633,20 @@ static int desugar_to_enum(Compiler *c) {
       if (helper < 0) continue;  /* no yielding m: leave */
       /* arguments reach m through the helper, which takes m's required
          parameters when m takes only those (synth_to_enum_generators) */
-      if (extra > 0) {
+      {
         int nreq = 0;
         te_required_only_params(nt, c->scopes[helper].def_node, &nreq);
+        /* as many arguments as m's required parameters, none when m takes
+           other kinds (the helper then takes none, as before); a splat, a
+           keyword hash or a block argument has no count of its own */
         if (nreq != extra) continue;
+        int eac = 0; const int *eav = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &eac);
+        int plain = 1;
+        for (int j = 1; j < eac && plain; j++) {
+          NodeKind jk = nt_kind(nt, eav[j]);
+          plain = jk != NK_SplatNode && jk != NK_KeywordHashNode && jk != NK_BlockArgumentNode;
+        }
+        if (!plain) continue;
       }
       /* `return enum_for(:m) unless block_given?` inside method m: a blockless
          call to m returns the Enumerator (with a block m runs the body and its

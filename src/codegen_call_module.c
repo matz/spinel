@@ -18,15 +18,11 @@
    file offset. */
 static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth, int topts, int town) {
   for (int i = 0; i < 3; i++) {
-    /* a filename boxed as the String's handle reads as the String (the arms
-       below test the String tag) */
-    char vref[48];
-    snprintf(vref, sizeof vref, "sp_poly_strbuf_deref(_t%d)", tkv);
     buf_printf(b,
       "{ sp_RbVal _t%d; sp_bool _t%d; int _prior; "
       "_t%d = sp_process_redirect_value(_t%d, %d, &_t%d, &_prior); "
       "if (_t%d) { if (_prior >= 0) sp_PolyArray_push(_t%d, _t%d->data[_prior]);\nelse { "
-      "  sp_RbVal _v = %s; "
+      "  sp_RbVal _v = _t%d; "
       "  if (_v.tag == SP_TAG_NIL) { "
       "    sp_PolyArray_push(_t%d, sp_box_int(-1)); "
       "  }\nelse if (_v.tag == SP_TAG_BOOL && !_v.v.i) { "
@@ -35,8 +31,8 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       "    sp_PolyArray_push(_t%d, _v); "
       "  }\nelse if (_v.tag == SP_TAG_OBJ && _v.cls_id == SP_BUILTIN_IO && _v.v.p) { "
       "    sp_PolyArray_push(_t%d, sp_box_int(sp_File_fileno((sp_File*)_v.v.p))); "
-      "  }\nelse if (_v.tag == SP_TAG_STR) { "
-      "    sp_PolyArray_push(_t%d, sp_box_int(sp_process_open_redirect(_v.v.s, %d, _t%d))); "
+      "  }\nelse if (sp_rbval_is_string(_v)) { "
+      "    sp_PolyArray_push(_t%d, sp_box_int(sp_process_open_redirect(sp_rbval_string_bytes(_v), %d, _t%d))); "
       "  }\nelse if (_v.tag == SP_TAG_OBJ && _v.cls_id == SP_BUILTIN_POLY_ARRAY) { "
       "    sp_PolyArray *_a = (sp_PolyArray*)_v.v.p; "
       "    if (_a->len >= 2 && _a->data[0].tag == SP_TAG_SYM "
@@ -63,7 +59,7 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       "  } "
       "}}\nelse { sp_PolyArray_push(_t%d, sp_box_int(-1)); } }",
       tkv, tfd, tkv, tth, i, tfd,
-      tfd, topts, topts, vref,
+      tfd, topts, topts, tkv,
       topts,
       topts,
       topts,
@@ -2189,17 +2185,14 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
             tfd, tkv, topts, tkv,
             topts);
         }
-        /* chdir: look up, must be String, or nil. --share-strings: a
-           directory boxed as the String's handle reads as the String, as a
-           redirect's filename does above */
+        /* Pass the original String box through to spawn's directory reader. */
         buf_printf(b,
           " { sp_RbVal _t%d; sp_bool _t%d; "
           "_t%d = sp_poly_hash_get_pair_val(_t%d, "
           "sp_box_sym(sp_sym_intern(\"chdir\")), &_t%d); ",
           tkv, tfd, tkv, tth, tfd);
-        buf_printf(b, "_t%d = sp_poly_strbuf_deref(_t%d); ", tkv, tkv);
         buf_printf(b,
-          "if (_t%d && _t%d.tag == SP_TAG_STR) "
+          "if (_t%d && sp_rbval_is_string(_t%d)) "
           "{ sp_PolyArray_push(_t%d, _t%d); } "
           "\nelse { sp_PolyArray_push(_t%d, sp_box_nil()); } }",
           tfd, tkv, topts, tkv,

@@ -798,6 +798,7 @@ int elab_main_object_one_entry(Compiler *c, const char *name);
    calls, which the arm reads of the version's visibility cell. Asked once
    per version (LrDef.arm_vis). */
 int elab_version_vis(Compiler *c, const ElabVersion *ev);
+int elab_physical_version_vis(Compiler *c, const ElabVersion *ev);
 /* ...and the visibility words that write that cell (`public :m`, in the
    version's history or the one that is one table entry with it), by the
    index i of the two histories' entries: 1 for a word (its node and
@@ -866,6 +867,7 @@ int elab_foreign_mixin_open(Compiler *c, int cls, int body);   /* the frame of c
    module, in the order they run: `include A, B` as `include B` then
    `include A`, A nearest; *n their number */
 const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n);
+int elab_conditional_prepend_list(Compiler *c, const LrMixin *m);
 int elab_mix_on_singleton(int kind);   /* an extend, or a prepend of the singleton class */
 /* does a body of cls define name with a def of its own on its instance
    side, wherever in the body (under a condition, in a block), placed or

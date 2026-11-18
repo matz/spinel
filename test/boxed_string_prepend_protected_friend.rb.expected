@@ -1,0 +1,6 @@
+[:friend, 3]
+[:public, 3]
+[:stranger, 3]
+[:friend, 18]
+:public_closed
+:stranger_closed

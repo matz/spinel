@@ -230,6 +230,8 @@ const char *sp_slurp_stream_parked(sp_File *f);
 sp_int sp_File_write(sp_File *f, const char *s);
 sp_int sp_File_write_bin(sp_File *f, const char *s);
 sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n);
+sp_int sp_File_write_poly(sp_File *f, sp_RbVal v);
+sp_int sp_File_syswrite_poly(sp_File *f, sp_RbVal v);
 sp_int sp_File_close(sp_File *f);
 
 /* Every operation on a handle whose descriptor is gone raises IOError in
@@ -346,6 +348,7 @@ void sp_File_set_close_on_exec(sp_File *f, sp_bool on);
 sp_int sp_File_fcntl(sp_File *f, sp_int cmd, sp_int arg);
 sp_int sp_File_pwrite(sp_File *f, const char *s, sp_int off);
 sp_int sp_File_pwrite_bin(sp_File *f, const char *s, sp_int off);
+sp_int sp_File_pwrite_n(sp_File *f, const char *s, size_t n, sp_int off);
 void sp_File_advise(sp_File *f, const char *kind, sp_int off, sp_int len);
 void sp_File_close_half(sp_File *f, sp_bool reading);
 sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode);

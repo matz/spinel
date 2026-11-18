@@ -9509,16 +9509,15 @@ static int rtm_bool_of(NodeTable *nt, int pred) {
 }
 /* May a call whose receiver is an instance of class cid (-1: any value)
    reach a respond_to_missing? of class or module k: is k on the chain of
-   cid or of a class under it, as the class table records it
-   (comp_method_in_chain names the owner)? */
+   cid or of a class under it, as the call plan's by-name lookup records it? */
 static int rtm_may_reach(Compiler *c, int cid, int k) {
   if (cid < 0) return 1;
   int hit = 0;
   mtab_enter(c);   /* (the candidate owner of respond_to_missing? over cid and the classes under it: it asks every class by design, no call's question) */
   for (int j = 0; j < c->nclasses && !hit; j++) {
     if (j != cid && !is_descendant(c, j, cid)) continue;
-    int dc = -1;
-    hit = comp_method_in_chain(c, j, RESPOND_TO_MISSING_NAME, &dc) >= 0 && dc == k;
+    MethodLookup lookup = { .def_class = -1 };
+    hit = call_target(c, -1, j, RESPOND_TO_MISSING_NAME, CT_METHODS, &lookup) >= 0 && lookup.def_class == k;
   }
   mtab_leave(c);
   return hit;
@@ -17067,12 +17066,9 @@ int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk) {
   nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
   return call;
 }
-/* ...and call, a dispatcher arm's call of a method that takes no
-   arguments, where the dispatcher passes on `*__condr, **__condk` (ar -1):
-   `__condr.empty? && __condk.empty? ? call : raise ArgumentError, "wrong
-   number of arguments (given N, expected 0)"`, N the rest's size and one
-   more for keywords, as CRuby counts the call's arguments */
-int disp_when_unspread(Compiler *c, int call) {
+/* A dispatcher accepting *args and **keywords calls a builtin at its
+   fixed arity. The keyword Hash is one argument when it is present. */
+int disp_when_fixed_arity(Compiler *c, int call, int arity) {
   NodeTable *nt = (NodeTable *)c->nt;
   int iff = nt_new_node(nt, "IfNode"), el = nt_new_node(nt, "ElseNode"), both = nt_new_node(nt, "AndNode");
   nt_node_set_ref(nt, both, "left", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "empty?", -1));
@@ -17085,11 +17081,33 @@ int disp_when_unspread(Compiler *c, int call) {
   nt_node_set_ref(nt, kel, "statements", cdef_stmts(nt, one));
   nt_node_set_ref(nt, kw, "subsequent", kel);
   int given = fwd_new_call(nt, fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "size", -1), "+", kw);
+  int condition = both;
+  if (arity > 0) {
+    int values[arity];
+    for (int i = 0; i < arity; i++) {
+      int rest = cdef_local(nt, "LocalVariableReadNode", "__condr");
+      int size = fwd_new_call(nt, rest, "size", -1);
+      int index = nt_new_int(nt, i);
+      int hash_only = nt_new_node(nt, "IfNode"), nth = nt_new_node(nt, "ElseNode");
+      nt_node_set_ref(nt, hash_only, "predicate", fwd_new_call(nt, size, "==", index));
+      nt_node_set_ref(nt, hash_only, "statements",
+                      cdef_stmts(nt, cdef_local(nt, "LocalVariableReadNode", "__condk")));
+      nt_node_set_ref(nt, nth, "statements",
+                      cdef_stmts(nt, fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"),
+                                                  "[]", nt_new_int(nt, i))));
+      nt_node_set_ref(nt, hash_only, "subsequent", nth);
+      values[i] = hash_only;
+    }
+    nt_node_set_arr(nt, nt_ref(nt, call, "arguments"), "arguments", values, arity);
+    condition = fwd_new_call(nt, nt_clone_subtree(nt, given), "==", nt_new_int(nt, arity));
+  }
   int msg = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode"), es = nt_new_node(nt, "EmbeddedStatementsNode"), tl = nt_new_node(nt, "StringNode");
   nt_node_set_str(nt, hd, "unescaped", "wrong number of arguments (given ");
   nt_node_set_str(nt, hd, "content", "wrong number of arguments (given ");
-  nt_node_set_str(nt, tl, "unescaped", ", expected 0)");
-  nt_node_set_str(nt, tl, "content", ", expected 0)");
+  char expected[32];
+  snprintf(expected, sizeof expected, ", expected %d)", arity);
+  nt_node_set_str(nt, tl, "unescaped", expected);
+  nt_node_set_str(nt, tl, "content", expected);
   nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, given));
   int parts[3] = { hd, es, tl };
   nt_node_set_arr(nt, msg, "parts", parts, 3);
@@ -17101,7 +17119,7 @@ int disp_when_unspread(Compiler *c, int call) {
   int ra[2] = { ec, msg }, rargs = nt_new_node(nt, "ArgumentsNode"), raise = fwd_new_call(nt, -1, "raise", -1);
   nt_node_set_arr(nt, rargs, "arguments", ra, 2);
   nt_node_set_ref(nt, raise, "arguments", rargs);
-  nt_node_set_ref(nt, iff, "predicate", both);
+  nt_node_set_ref(nt, iff, "predicate", condition);
   nt_node_set_ref(nt, iff, "statements", cdef_stmts(nt, call));
   nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, raise));
   nt_node_set_ref(nt, iff, "subsequent", el);
@@ -20929,7 +20947,7 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   for (int i = 0; bx_cmp_recv_cls[i]; i++) {
     int k = comp_builtin_class_named(c, bx_cmp_recv_cls[i]);
     mtab_enter(c);   /* (a survey of the program's own def of nm on each builtin class and top-level include: no call's question) */
-    int mi = k >= 0 ? comp_method_in_chain(c, k, nm, NULL) : -1;
+    int mi = k >= 0 ? call_target(c, -1, k, nm, CT_METHODS, NULL) : -1;
     mtab_leave(c);
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
         !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return 1;
@@ -20937,7 +20955,7 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   int inc = 0;
   mtab_enter(c);
   for (int i = 0; i < c->ntoplevel_includes && !inc; i++)
-    inc = comp_method_in_chain(c, c->toplevel_includes[i], nm, NULL) >= 0;
+    inc = call_target(c, -1, c->toplevel_includes[i], nm, CT_METHODS, NULL) >= 0;
   mtab_leave(c);
   if (inc) return 1;
   /* a def in a module the chains above do not walk: one a mixed-in module

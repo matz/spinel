@@ -1591,10 +1591,7 @@ sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src) {SP_GC_ROOT_RBVAL(recv);SP
      takes the source's encoding as well, as CRuby's replace does. */
   if (recv.cls_id == SP_BUILTIN_STRBUF) {
     sp_String *m = (sp_String *)recv.v.p;
-    const char *s2 = NULL;
-    if (src.tag == SP_TAG_STR) s2 = src.v.s;
-    else if (src.tag == SP_TAG_OBJ && src.cls_id == SP_BUILTIN_STRBUF)
-      s2 = sp_String_cstr((sp_String *)src.v.p);
+    const char *s2 = sp_rbval_string_bytes(src);
     if (s2) sp_String_set_bin_enc(m, s2);
     return recv;
   }
@@ -2610,11 +2607,11 @@ sp_oint sp_File_getbyte(sp_File *f) {
   return ch == EOF ? sp_oint_nil() : sp_oint_of((sp_int)ch);
 }
 sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
-  v = sp_rbval_str(v);
   sp_io_check_readable(f);
-  if (v.tag == SP_TAG_STR && v.v.s && v.v.s[0]) {
-    size_t n = sp_str_byte_len(v.v.s);
-    for (size_t i = n; i > 0; i--) sp_io_ungetc(f, (unsigned char)v.v.s[i - 1]);
+  const char *bytes = sp_rbval_string_bytes(v);
+  if (bytes && bytes[0]) {
+    size_t n = sp_str_byte_len(bytes);
+    for (size_t i = n; i > 0; i--) sp_io_ungetc(f, (unsigned char)bytes[i - 1]);
   }
   else if (v.tag == SP_TAG_INT) sp_io_ungetc(f, (int)v.v.i);
   return sp_box_nil();
@@ -2654,12 +2651,12 @@ sp_int sp_File_fsync(sp_File *f) {
   return 0;
 }
 sp_RbVal sp_File_putc(sp_File *f, sp_RbVal v) {
-  /* putc answers its argument itself: a shared String's handle is read
-     as its bytes for the write only */
-  sp_RbVal w = sp_rbval_str(v);
   SP_IO_OPEN(f);
   if (v.tag == SP_TAG_INT) sp_File_put_byte(f, (int)(v.v.i & 0xff));
-  else if (w.tag == SP_TAG_STR) { if (w.v.s && w.v.s[0]) sp_File_put_byte(f, w.v.s[0]); }
+  else if (sp_rbval_is_string(v)) {
+    const char *bytes = sp_rbval_string_bytes(v);
+    if (bytes && bytes[0]) sp_File_put_byte(f, bytes[0]);
+  }
   /* anything else is no character: CRuby converts it as an Integer and
      raises for nil (the boxed nil wrote nothing and answered nil) */
   else if (v.tag == SP_TAG_NIL) sp_raise_nil_to_int(0);
@@ -4295,7 +4292,6 @@ void sp_sig_exit_dispatch(void) {
   if (p) { sp_int slot = 0; _sp_proc_poly_args[0] = sp_box_int(0); sp_proc_call(p, 1, &slot); }
 }
 sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);SP_GC_ROOT_RBVAL(handler);
-  handler = sp_rbval_str(handler);
   int no = sp_signal_resolve(sig);
   if (no == SIGKILL || no == SIGSTOP)
     sp_raise_cls("Errno::EINVAL",
@@ -4324,7 +4320,8 @@ sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);S
     }
   }
   else {
-    const char *hs = (handler.tag == SP_TAG_STR && handler.v.s) ? handler.v.s : "DEFAULT";
+    const char *hs = sp_rbval_string_bytes(handler);
+    if (!hs) hs = "DEFAULT";
     int ignore = strcmp(hs, "IGNORE") == 0 || strcmp(hs, "SIG_IGN") == 0;
     sp_trap_proc[no] = NULL;
     /* SYSTEM_DEFAULT reads back as itself (#2839); it installs SIG_DFL too.
@@ -5439,15 +5436,14 @@ static const char *sp_encoding_canon(const char *n) {
   return NULL;
 }
 sp_RbVal sp_encoding_find(sp_RbVal v) {
-  v = sp_rbval_str(v);
   if (v.tag == SP_TAG_ENCODING) return v;
-  if (v.tag != SP_TAG_STR) {
+  if (!sp_rbval_is_string(v)) {
     const char *cn = v.tag == SP_TAG_NIL ? "nil" : v.tag == SP_TAG_INT ? "Integer"
                    : v.tag == SP_TAG_FLT ? "Float" : v.tag == SP_TAG_SYM ? "Symbol"
                    : v.tag == SP_TAG_BOOL ? (v.v.b ? "true" : "false") : "Object";
     sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", cn));
   }
-  const char *n = v.v.s;
+  const char *n = sp_rbval_string_bytes(v);
   if (!strcasecmp(n, "internal")) return sp_box_nil();
   const char *cn = sp_encoding_canon(n);
   if (cn) return sp_box_encoding((sp_Encoding){ cn });
@@ -5481,15 +5477,14 @@ int sp_force_encoding_mode(sp_RbVal enc) {
    external), 2 ASCII-8BIT, -1 another encoding, -2 a "BOM|" one, 0 a name
    no encoding has. `*nm` is the name. */
 static int sp_io_enc_side(sp_RbVal v, const char *s, const char **nm) {
-  v = sp_rbval_str(v);
   const char *n = NULL;
+  if (!s) s = sp_rbval_string_bytes(v);
   if (s) {
     if (!strncasecmp(s, "BOM|", 4)) { *nm = s; return -2; }
     n = sp_encoding_canon(s);
     if (!n) { *nm = s; return 0; }
   }
   else if (v.tag == SP_TAG_NIL) n = "UTF-8";
-  else if (v.tag == SP_TAG_STR) return sp_io_enc_side(v, v.v.s, nm);
   else n = sp_encoding_find(v).v.s;   /* an Encoding, or CRuby's TypeError */
   *nm = n;
   if (!strcmp(n, "ASCII-8BIT")) return 2;
@@ -5509,12 +5504,12 @@ static int sp_io_enc_side(sp_RbVal v, const char *s, const char **nm) {
 sp_File *sp_File_set_encoding(sp_File *f, sp_RbVal ext, sp_RbVal in) {
   SP_GC_ROOT(f); SP_GC_ROOT_RBVAL(ext); SP_GC_ROOT_RBVAL(in);
   SP_IO_OPEN(f);
-  ext = sp_rbval_str(ext); in = sp_rbval_str(in);
   char eb[64];
   const char *es = NULL, *is = NULL, *en, *inn;
-  if (ext.tag == SP_TAG_STR && in.tag == SP_TAG_NIL && strchr(ext.v.s, ':')) {
-    const char *colon = strchr(ext.v.s, ':');
-    snprintf(eb, sizeof eb, "%.*s", (int)(colon - ext.v.s), ext.v.s);
+  const char *ext_name = sp_rbval_string_bytes(ext);
+  const char *colon = ext_name && in.tag == SP_TAG_NIL ? strchr(ext_name, ':') : NULL;
+  if (colon) {
+    snprintf(eb, sizeof eb, "%.*s", (int)(colon - ext_name), ext_name);
     es = eb; is = colon + 1;
   }
   int e = sp_io_enc_side(ext, es, &en);
@@ -6886,9 +6881,8 @@ static int sp_enc_kw_replace(sp_RbVal v) {   /* `invalid: :replace` / `undef: :r
 /* A String argument as CRuby's StringValue takes it: a String, a shared
    String's bytes, or a user object's #to_str; anything else is the TypeError */
 static const char *sp_enc_str_arg(sp_RbVal v) {
-  if (v.tag == SP_TAG_STR && v.v.s) return v.v.s;
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)
-    return sp_String_cstr((sp_String *)v.v.p);
+  const char *bytes = sp_rbval_string_bytes(v);
+  if (bytes) return bytes;
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn) {
     SP_GC_ROOT_RBVAL(v);   /* across the user #to_str */
     const char *r = sp_String_cstr_nil(sp_obj_to_str_fn((int)v.cls_id, v.v.p));
@@ -6971,7 +6965,6 @@ static void sp_enc_raise_at(const char *s, size_t i, size_t w, size_t bl, int ba
 const char *sp_str_encode(const char *s, int npos, sp_RbVal dst, sp_RbVal src,
                           sp_RbVal invalid, sp_RbVal undef, sp_RbVal replace) {
   SP_GC_ROOT_STR(s); SP_GC_ROOT_RBVAL(dst); SP_GC_ROOT_RBVAL(src); SP_GC_ROOT_RBVAL(replace);
-  replace = sp_rbval_str(replace);
   if (!s) sp_nil_recv("encode");
   sp_enc_opt_check(invalid, "invalid");
   sp_enc_opt_check(undef, "undefined");

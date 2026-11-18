@@ -1,0 +1,22 @@
+3
+3
+[97, 0, 98, 97, 0, 98]
+3
+3
+wrong number of arguments (given 1, expected 2)
+3
+wrong number of arguments (given 3, expected 2)
+3
+[97, 0, 98]
+259
+[259, 259]
+render
+259
+[259, [97, 0, 98]]
+3
+[97, 0, 98]
+259
+[259, 259]
+receiver
+arguments
+3

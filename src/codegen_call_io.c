@@ -879,7 +879,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
      and dispatch, unless a user class defines the name (then the general poly
      dispatch owns it). */
   if (recv >= 0 && repr_of(c, recv).as_ty == TY_POLY &&
-      (sp_streq(name, "write") || sp_streq(name, "read") || sp_streq(name, "gets") ||
+      (is_io_write(name) || sp_streq(name, "read") || sp_streq(name, "gets") ||
        sp_streq(name, "readline") || sp_streq(name, "close") || sp_streq(name, "flush") ||
        sp_streq(name, "fileno") ||
        /* the output family and the cheap predicates: a stream read back out of
@@ -991,6 +991,28 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       /* an attr writer answers `x.sync = v` as a reader answers `x.sync` */
       char base[256];
       if (setter_base_name(name, base, sizeof base) && call_attr_target(c, id, k, base, CT_ATTR | CT_WRITER, NULL)) iocand = 1;
+    }
+    if (!iocand && is_io_syswrite(name)) {
+      int ts = ++g_tmp;
+      buf_puts(b, "({ ");
+      int tr = hold_operand(c, recv, TY_POLY, 1, ++g_tmp, 1, " ", b);
+      if (argc == 1 && !nt_argv_has_splat(nt, argv, argc)) {
+        int ta = hold_operand(c, argv[0], TY_POLY, 1, ++g_tmp, 1, " ", b);
+        buf_printf(b, "sp_int _t%d = sp_File_syswrite_poly(sp_poly_as_io(_t%d, \"syswrite\"), _t%d); ", ts, tr, ta);
+      }
+      else {
+        int tp = ++g_tmp, tf = ++g_tmp;
+        buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tp, tp);
+        emit_push_arg_list(c, argv, argc, tp, b);
+        buf_printf(b, "sp_File *_t%d = sp_poly_as_io(_t%d, \"syswrite\"); sp_arity_check(_t%d->len, 1, 1, NULL); "
+                      "sp_int _t%d = sp_File_syswrite_poly(_t%d, sp_PolyArray_get(_t%d, 0)); ",
+                   tf, tr, tp, ts, tf, tp);
+      }
+      Repr result = repr_of(c, id);
+      if (result.kind == RK_BOXED) buf_printf(b, "sp_box_int(_t%d); })", ts);
+      else if (result.kind == RK_OPT) buf_printf(b, "sp_oint_of(_t%d); })", ts);
+      else buf_printf(b, "_t%d; })", ts);
+      return 1;
     }
     /* each_codepoint: the runtime answers a box, read back at the call's
        representation (an Enumerator where it is kept) */
@@ -1671,17 +1693,13 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
 static int emit_io_syswrite_count(Compiler *c, const char *r, const int *argv, int argc, Buf *b) {
   int splat = nt_argv_has_splat(c->nt, argv, argc);
   if (splat) {
-    int tf = ++g_tmp, tp = ++g_tmp, tv = ++g_tmp;
-    /* the receiver is rooted before the gathered arguments allocate and run */
+    int tf = ++g_tmp, tp = ++g_tmp;
     buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ",
                tf, r, tf, tp, tp);
     emit_push_arg_list(c, argv, argc, tp, b);
     buf_printf(b, "if (!_t%d) sp_nil_recv(\"syswrite\"); sp_arity_check(_t%d->len, 1, 1, NULL); "
-                  "sp_RbVal _t%d = sp_PolyArray_get(_t%d, 0); SP_GC_ROOT_RBVAL(_t%d); "
-                  "const char *_s%d = (_t%d.tag == SP_TAG_STR) ? _t%d.v.s : sp_poly_to_s(_t%d); "
-                  "sp_int _l%d = (_t%d.tag == SP_TAG_STR) ? sp_str_byte_len(_s%d) : strlen(_s%d); "
-                  "sp_File_syswrite(_t%d, _s%d, _l%d); })",
-               tf, tp, tv, tp, tv, tv, tv, tv, tv, tv, tv, tv, tv, tf, tv, tv);
+                  "sp_File_syswrite_poly(_t%d, sp_PolyArray_get(_t%d, 0)); })",
+               tf, tp, tf, tp);
     return 1;
   }
   if (argc == 1) return 0;
@@ -1740,8 +1758,21 @@ static void emit_io_read_overcount(Compiler *c, const char *name, const char *r,
 static int emit_boxed_positional_io(Compiler *c, int recv, const char *name, int argc,
                                     const int *argv, int tio, Buf *b) {
   int is_w = name[1] == 'w';   /* pwrite, beside pread */
-  if (!is_positional_io(name) || argc < 1 || argc > (is_w ? 2 : 3) ||
-      nt_argv_has_splat(c->nt, argv, argc)) return 0;
+  if (!is_positional_io(name)) return 0;
+  if (nt_argv_has_splat(c->nt, argv, argc)) {
+    if (!is_w) return 0;
+    buf_puts(b, "({ ");
+    int receiver = hold_operand(c, recv, TY_POLY, 1, ++g_tmp, 1, " ", b);
+    int args = ++g_tmp;
+    buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", args, args);
+    emit_push_arg_list(c, argv, argc, args, b);
+    buf_printf(b, "sp_File *_t%d = sp_poly_as_io(_t%d, \"pwrite\"); "
+                  "sp_arity_check(_t%d->len, 2, 2, NULL); "
+                  "sp_File_pwrite_poly(_t%d, sp_PolyArray_get(_t%d, 0), sp_PolyArray_get(_t%d, 1)); })",
+               tio, receiver, args, tio, args, args);
+    return 1;
+  }
+  if (argc < 1 || argc > (is_w ? 2 : 3)) return 0;
   int trv = ++g_tmp, th[3] = {0, 0, 0}, toff = ++g_tmp, tfirst = ++g_tmp;
   buf_puts(b, "({ ");
   trv = hold_operand(c, recv, TY_POLY, 1, trv, 1, " ", b);
@@ -1753,18 +1784,16 @@ static int emit_boxed_positional_io(Compiler *c, int recv, const char *name, int
   if (argc < 2)
     buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given 1, expected %s)\"); ",
                is_w ? "2" : "2..3");
-  /* the first operand converts ahead of the offset */
-  if (is_w)
-    buf_printf(b, "const char *_t%d = _t%d.tag == SP_TAG_STR ? _t%d.v.s : sp_poly_to_s(_t%d); SP_GC_ROOT_STR(_t%d); ",
-               tfirst, th[0], th[0], th[0], tfirst);
-  else buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 1); ", tfirst, th[0]);
-  if (argc >= 2) buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 2); ", toff, th[1]);
-  else buf_printf(b, "sp_int _t%d = 0; ", toff);
   if (is_w) {
-    buf_printf(b, "_t%d.tag == SP_TAG_STR ? sp_File_pwrite_bin(_t%d, _t%d, _t%d)"
-                  " : sp_File_pwrite(_t%d, _t%d, _t%d); })", th[0], tio, tfirst, toff, tio, tfirst, toff);
+    buf_printf(b, "sp_File_pwrite_poly(_t%d, _t%d, ", tio, th[0]);
+    if (argc >= 2) buf_printf(b, "_t%d", th[1]);
+    else buf_puts(b, "sp_box_nil()");
+    buf_puts(b, "); })");
     return 1;
   }
+  buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 1); ", tfirst, th[0]);
+  if (argc >= 2) buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 2); ", toff, th[1]);
+  else buf_printf(b, "sp_int _t%d = 0; ", toff);
   /* pread's buffer: a plain String or boxed local is checked mutable and
      rebound to the read result, as the typed arm rebinds it */
   const char *bufn = NULL;
@@ -1801,6 +1830,9 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
   if (recv >= 0 && comp_ntype(c, recv) == TY_IO) {
     if (sp_streq(name, "timeout=") && argc == 1)
       return emit_io_timeout_set(c, id, recv, argv[0], b);
+    if (argc >= 1 && is_positional_io(name) && name[1] == 'w' && nt_argv_has_splat(nt, argv, argc) &&
+        emit_boxed_positional_io(c, recv, name, argc, argv, ++g_tmp, b))
+      return 1;
     const char *r = NULL;
     Buf rb = {0};
     emit_expr(c, recv, &rb);
@@ -2020,13 +2052,21 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       free(rb.p); return 1;
     }
     if (sp_streq(name, "pwrite") && argc >= 1) {
-      /* the same String/non-String split the write arm makes: a String knows
-         its own byte count, so an embedded NUL reaches the descriptor (#4623) */
-      buf_printf(b, "%s(%s, ", repr_of(c, argv[0]).as_ty == TY_STRING
-                               ? "sp_File_pwrite_bin" : "sp_File_pwrite", r);
-      emit_to_s_expr(c, argv[0], b); buf_puts(b, ", ");
-      if (argc >= 2) emit_int_expr_offt(c, argv[1], b); else buf_puts(b, "0");
-      buf_puts(b, ")"); free(rb.p); return 1;
+      Repr operand = repr_of(c, argv[0]);
+      if (argc == 2 && (operand.kind == RK_BOXED || operand.as_ty == TY_STRING)) {
+        int tf = ++g_tmp;
+        buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); ", tf, r, tf);
+        int value = hold_operand(c, argv[0], TY_POLY, 1, ++g_tmp, 1, " ", b);
+        int offset = hold_operand(c, argv[1], TY_POLY, 1, ++g_tmp, 1, " ", b);
+        buf_printf(b, "sp_File_pwrite_poly(_t%d, _t%d, _t%d); })", tf, value, offset);
+      } else {
+        buf_printf(b, "%s(%s, ", operand.as_ty == TY_STRING
+                                 ? "sp_File_pwrite_bin" : "sp_File_pwrite", r);
+        emit_to_s_expr(c, argv[0], b); buf_puts(b, ", ");
+        if (argc >= 2) emit_int_expr_offt(c, argv[1], b); else buf_puts(b, "0");
+        buf_puts(b, ")");
+      }
+      free(rb.p); return 1;
     }
     if (sp_streq(name, "reopen") && argc == 1 && reopen_arg_may_be_io(c, argv[0])) {
       /* an object answering #to_io, or a box that may hold an IO */
@@ -2235,15 +2275,9 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       free(rchomp.p); free(rb.p); return 1;
     }
     if (is_io_write(name)) {
-      /* every argument writes in order; the return is the total byte count (#2814) */
-      /* A String operand goes to the _bin entry, which sizes it with the
-         header length so an embedded NUL is written rather than truncating
-         the write. The sp_poly_to_s arm keeps the plain entry: it can answer
-         a static class/symbol name with no marker byte, which _bin would read
-         out of bounds at s[-1]. syswrite is unbuffered, so it routes through
-         sp_File_syswrite (which writes straight to the descriptor) rather
-         than through the stdio-backed write entries. */
-      int is_sw = sp_streq(name, "syswrite");
+      /* Hold the arguments before their conversions. Each write then uses
+         the byte count of that String or of its to_s result. */
+      int is_sw = is_io_syswrite(name);
       if (is_sw && emit_io_syswrite_count(c, r, argv, argc, b)) { free(rb.p); return 1; }
       /* write(*parts): a splat contributes its elements, each converted and
          written in turn, as the boxed receiver's arm does. The arms below
@@ -2259,8 +2293,8 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
         }
         if (listable && has_splat) {
           int tio4 = ++g_tmp, tpa4 = ++g_tmp, tn4 = ++g_tmp;
-          buf_printf(b, "({ sp_File *_t%d = %s; sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ",
-                     tio4, r, tpa4, tpa4);
+          buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ",
+                     tio4, r, tio4, tpa4, tpa4);
           emit_push_arg_list(c, argv, argc, tpa4, b);
           buf_printf(b, "SP_IO_OPEN(_t%d); sp_int _t%d = 0; "
                         "for (sp_int _i = 0; _i < _t%d->len; _i++) _t%d += sp_File_write_poly(_t%d, _t%d->data[_i]); _t%d; })",
@@ -2269,106 +2303,36 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
         }
       }
       if (argc == 1) {
-        /* An operand whose class is only known at run time picks the entry by
-           its TAG, not by its static type: chosen statically it took the plain
-           entry and an embedded NUL truncated the write. syswrite sizes the
-           operand itself (sp_str_byte_len for a String source, strlen for a
-           converted value) and hands both pointer and count to
-           sp_File_syswrite, so a poly operand takes that path here rather
-           than being routed through sp_File_write_poly. */
-        if (is_sw && repr_of(c, argv[0]).kind == RK_BOXED) {
-          int sl = ++g_tmp;
-          /* The operand's class is only known at run time, so the length is
-             chosen by its TAG rather than off the pointer: a marked String
-             keeps its header length (binary-safe, embedded NULs survive),
-             anything else is a NUL-terminated C string from sp_poly_to_s
-             and is strlen'd. emit_boxed keeps the tag alongside the
-             pointer, so the check is exact -- a marker-byte probe cannot
-             tell a managed String from an unmarked conversion result. */
-          buf_printf(b, "({ sp_RbVal _t%d = ", sl);
-          emit_boxed(c, argv[0], b);
-          buf_printf(b, "; const char *_s%d = (_t%d.tag == SP_TAG_STR) ? _t%d.v.s : sp_poly_to_s(_t%d); "
-                     "sp_int _l%d = (_t%d.tag == SP_TAG_STR) ? "
-                     "sp_str_byte_len(_s%d) : strlen(_s%d); "
-                     "sp_int _r%d = sp_File_syswrite(%s, _s%d, _l%d); _r%d; })",
-                     sl, sl, sl, sl, sl, sl, sl, sl, sl, r, sl, sl, sl);
-        }
-        else if (repr_of(c, argv[0]).kind == RK_BOXED) {
-          buf_printf(b, "sp_File_write_poly(%s, ", r);
-          emit_boxed(c, argv[0], b);
-          buf_puts(b, ")");
+        Repr operand = repr_of(c, argv[0]);
+        if (operand.kind == RK_BOXED || operand.as_ty != TY_STRING) {
+          int tf = ++g_tmp;
+          buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); ", tf, r, tf);
+          int value = hold_operand(c, argv[0], TY_POLY, 1, ++g_tmp, 1, " ", b);
+          buf_printf(b, "sp_File_%s_poly(_t%d, _t%d); })", is_sw ? "syswrite" : "write", tf, value);
         }
         else {
-          int sk = repr_of(c, argv[0]).as_ty == TY_STRING;
-          const char *wfn = sk ? "sp_File_write_bin" : "sp_File_write";
           if (is_sw) {
-            /* syswrite needs the byte length alongside the pointer:
-               sp_str_byte_len for a String source (embedded NUL survives),
-               strlen for a converted value -- sp_poly_to_s always returns
-               a NUL-terminated C string, so its length is the C-string
-               length and the GC reclaims the conversion storage. */
-            int sl = ++g_tmp;
-            buf_printf(b, "({ const char *_s%d = ", sl);
-            emit_to_s_expr(c, argv[0], b);
-            buf_printf(b, "; sp_int _l%d = ", sl);
-            if (sk) buf_printf(b, "sp_str_byte_len(_s%d)", sl);
-            else    buf_printf(b, "strlen(_s%d)", sl);
-            buf_printf(b, "; sp_int _r%d = sp_File_syswrite(%s, _s%d, _l%d); _r%d; })",
-                       sl, r, sl, sl, sl);
+            int tf = ++g_tmp, ts = ++g_tmp;
+            buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); const char *_t%d = ", tf, r, tf, ts);
+            emit_str_expr(c, argv[0], b);
+            buf_printf(b, "; sp_File_syswrite(_t%d, _t%d, sp_str_byte_len(_t%d)); })", tf, ts, ts);
           }
           else {
-            buf_printf(b, "%s(%s, ", wfn, r);
-            emit_to_s_expr(c, argv[0], b);
+            buf_printf(b, "sp_File_write_bin(%s, ", r);
+            emit_str_expr(c, argv[0], b);
             buf_puts(b, ")");
           }
         }
       }
       else if (argc >= 2) {
-        int tw = ++g_tmp;
-        buf_printf(b, "({ sp_int _t%d = 0;", tw);
-        /* each operand converts right before its own write, as CRuby
-           interleaves them, so each write is its own held unit rather than
-           the call's */
-        for (int k = 0; k < argc; k++) {
-          if (is_sw && repr_of(c, argv[k]).kind == RK_BOXED) {
-            /* syswrite sizes the operand itself and routes through
-               sp_File_syswrite, so a poly operand takes that path here
-               rather than being routed through sp_File_write_poly. */
-            buf_printf(b, " _t%d += ({ const char *_s = ", tw);
-            emit_to_s_expr(c, argv[k], b);
-            buf_printf(b, "; sp_int _l = strlen(_s); sp_int _r = "
-                       "sp_File_syswrite(%s, _s, _l); _r; })", r);
-            continue;
-          }
-          if (repr_of(c, argv[k]).kind == RK_BOXED) {   /* see the one-argument form */
-            buf_printf(b, " _t%d += sp_File_write_poly(%s, ", tw, r);
-            emit_boxed(c, argv[k], b);
-            buf_puts(b, ");");
-            continue;
-          }
-          int sk = repr_of(c, argv[k]).as_ty == TY_STRING;
-          ConvHold hk; memset(&hk, 0, sizeof hk);
-          ConvHold *outer = g_conv_hold; g_conv_hold = &hk;
-          Buf conv; memset(&conv, 0, sizeof conv);
-          emit_to_s_expr(c, argv[k], &conv);
-          g_conv_hold = outer;
-          buf_printf(b, " _t%d += ", tw);
-          if (hk.n > 0) { buf_puts(b, "({ "); buf_puts(b, hk.b.p); }
-          if (is_sw) {
-            /* syswrite needs the byte length: sp_str_byte_len for a String
-               source (embedded NUL survives), strlen for a converted value. */
-            buf_printf(b, "({ const char *_s = %s; sp_int _l = %s; "
-                       "_t%d += sp_File_syswrite(%s, _s, _l); })",
-                       conv.p ? conv.p : "",
-                       sk ? "sp_str_byte_len(_s)" : "strlen(_s)",
-                       tw, r);
-          }
-          else
-            buf_printf(b, "%s(%s, %s)", sk ? "sp_File_write_bin" : "sp_File_write", r, conv.p ? conv.p : "");
-          if (hk.n > 0) buf_puts(b, "; })");
-          buf_puts(b, ";");
-          free(conv.p); free(hk.b.p); free(hk.tmp);
-        }
+        int tf = ++g_tmp, tw = ++g_tmp;
+        int values[argc];
+        buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); ", tf, r, tf);
+        for (int k = 0; k < argc; k++)
+          values[k] = hold_operand(c, argv[k], TY_POLY, 1, ++g_tmp, 1, " ", b);
+        buf_printf(b, "sp_int _t%d = 0;", tw);
+        for (int k = 0; k < argc; k++)
+          buf_printf(b, " _t%d += sp_File_write_poly(_t%d, _t%d);", tw, tf, values[k]);
         buf_printf(b, " _t%d; })", tw);
       }
       else buf_puts(b, "0");

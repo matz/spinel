@@ -2119,6 +2119,40 @@ static void emit_missing_guard(Compiler *c, int id, int mi, int q, int tmp, Buf 
              !nt_int(c->nt, id, "public_capture", 0), method_sym_arg(c, id), method_desc_class_name(c, c->scopes[mi].class_id));
 }
 
+/* A public capture rejects a real hidden method before any
+   respond_to_missing? handling for a name the receiver lacks. */
+static void emit_guarded_public_capture(Compiler *c, int id, const char *sym, int cls, int boxed_receiver, Buf *b) {
+  if (!c->n_prepend_cells || !nt_int(c->nt, id, "public_capture", 0)) return;
+  int key = 0;
+  for (int k = boxed_receiver >= 0 ? 0 : cls; k >= 0 && k < c->nclasses; k++) {
+    CplanCells cs;
+    if (cplan_guarded_presence(c, k, sym, 0, &cs)) {
+      if (boxed_receiver >= 0) {
+        if (!key) {
+          key = ++g_tmp;
+          buf_printf(b, "int _t%d = ", key);
+          emit_poly_dispatch_key(c, boxed_receiver, 1, 1, 0, b);
+          buf_puts(b, "; ");
+        }
+        buf_printf(b, "if (_t%d == %d) { ", key, k);
+      }
+      int vis = ++g_tmp;
+      buf_printf(b, "int _t%d = ", vis);
+      emit_guarded_presence(c, &cs, b);
+      buf_printf(b, "; if (_t%d & 6) { sp_exc_stage_name(", vis);
+      emit_str_literal(b, sym);
+      buf_printf(b, "); sp_exc_stage_recv(sp_box_class((sp_Class){%d})); "
+                    "sp_raise_cls(\"NameError\", sp_sprintf(\"method '%%s' for class '%%s' is %%s\", \"", k);
+      emit_c_escaped(b, sym);
+      buf_puts(b, "\", \"");
+      emit_c_escaped(b, method_desc_class_name(c, k));
+      buf_printf(b, "\", _t%d == 4 ? \"private\" : \"protected\")); } ", vis);
+      if (boxed_receiver >= 0) buf_puts(b, "} ");
+    }
+    if (boxed_receiver < 0) break;
+  }
+}
+
 static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture) {
   /* Klass.instance_method(:sym) -> the unbound object: the same
      sp_BoundMethod with a NULL self, so name/arity/owner ride the Method
@@ -2314,11 +2348,12 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       self_kind = "SP_BM_SELF_OBJ";
       self_rooted = 1;
       buf_puts(b, "({ "); tbr = hold_operand(c, recv, TY_POLY, 1, tbr, 1, " ", b);
+      const char *bsym = bam_builtin_sym(c, mi, sym);
+      emit_guarded_public_capture(c, id, bsym, -1, tbr, b);
       /* a nil, a String, an Integer ... that has no method sym: CRuby's
          NameError at the lookup, where the wrapper bound it anyway
          (bam_may_lack, desugar_builtin_method_obj) */
       int bdn = c->scopes[mi].def_node;
-      const char *bsym = nt_str(nt, bdn, "bam_sym");
       if (bsym && nt_int(nt, bdn, "bam_may_lack", 0) && repr_of(c, recv).kind == RK_BOXED) {
         buf_printf(b, "if (sp_poly_lacks_builtin_method(_t%d, ", tbr);
         emit_str_literal(b, bsym);
@@ -2374,6 +2409,12 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         if (nil_fact_node(c, recv))
           buf_printf(b, "if (!_t%d) sp_raise_cls(\"NameError\", \"undefined method '%s' for class 'NilClass'\"); ", self_tmp, sym);
       }
+    }
+    if (self_rooted && !bam_poly && nt_int(nt, id, "public_capture", 0)) {
+      TyKind receiver_type = repr_of(c, recv).as_ty;
+      const char *bsym = bam_builtin_sym(c, mi, NULL);
+      if (bsym && (receiver_type == TY_STRING || receiver_type == TY_STRBUF))
+        emit_guarded_public_capture(c, id, bsym, comp_core_class(c, CORE_STRING), -1, b);
     }
     /* `<typed_array>.method(:op)` with no method scope: a per-(type, op)
        adapter (below), which takes the descriptor constructor for its
@@ -2768,13 +2809,15 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     return emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, mi);
   size_t start = b->len;
   int to[2 * (VER_MAX_ARMS + 1)], tests[4 * (VER_MAX_ARMS + 1)], n = cplan_method_arms(c, mi, id, to, tests);
-  int tr = ++g_tmp, vr = -1;
+  int tr = ++g_tmp, vr = -1, boxed_receiver = -1;
   buf_puts(b, "({ ");
   /* Evaluate and root the receiver before testing the cells. */
   if (recv >= 0) {
     int rr = hold_operand(c, recv, repr_of(c, recv).as_ty, 0, ++g_tmp, 1, " ", b);
     vr = view_bind_temp(recv, rr);
+    if (repr_of(c, recv).kind == RK_BOXED) boxed_receiver = rr;
   }
+  emit_guarded_public_capture(c, id, method_sym_arg(c, id), plan.owner_ci, boxed_receiver, b);
   buf_printf(b, "sp_BoundMethod *_t%d; ", tr);
   for (int i = 0; i < n; i++) {
     if (i) buf_puts(b, "else ");

@@ -1957,6 +1957,9 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   int is_lengthlike = ps->lengthlike, is_empty = ps->empty, is_class_named = ps->class_named;
   int is_class_reflect = ps->class_reflect, is_ostruct = ps->ostruct, is_poly_to_a = ps->poly_to_a;
   int is_io_rewind = ps->io_rewind;
+  int str_reopen_owns = 0;
+  { int sci = comp_core_class(c, CORE_STRING);
+    if (sci >= 0 && call_target(c, id, sci, name, 0, NULL) >= 0) str_reopen_owns = 1; }
   /* When the dispatch result feeds a poly context, tr is sp_RbVal, so the
      length-like answer is boxed */
   /* ...and an oint result slot (plan_slot_oint) takes it lifted */
@@ -1977,11 +1980,18 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       MethodLookup ml = { .def_class = -1 };
       int sci = comp_core_class(c, CORE_STRING);
       int str_own = sci >= 0 && call_target(c, id, sci, name, 0, &ml) >= 0 && ml.def_class == sci;
-      if (!str_own)
-        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) _t%d = %ssp_poly_count(_t%d)%s; else ", tv, tr, bopen, tv, bclose);
+      if (!str_own) {
+        buf_puts(b, "if (");
+        emit_poly_str_guard(c, tv, name, b);
+        buf_printf(b, ") _t%d = %ssp_poly_count(_t%d)%s; else ", tr, bopen, tv, bclose);
+      }
     } else {
       buf_printf(b, "if (_t%d.tag == SP_TAG_SYM) _t%d = %ssp_str_length(sp_sym_to_s((sp_sym)_t%d.v.i))%s; else ", tv, tr, bopen, tv, bclose);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_STR) _t%d = %s(sp_int)sp_str_length(_t%d.v.s)%s; else ", tv, tr, bopen, tv, bclose);
+      if (!str_reopen_owns) {
+        buf_puts(b, "if (");
+        emit_poly_str_guard(c, tv, name, b);
+        buf_printf(b, ") _t%d = %s(sp_int)sp_str_length(sp_rbval_string_bytes(_t%d))%s; else ", tr, bopen, tv, bclose);
+      }
     }
   }
   if (is_lengthlike) {
@@ -2001,7 +2011,11 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   /* a string/symbol-tagged poly value answers empty? directly (#1438) */
   if (is_empty) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_EMPTY, -1, TY_UNKNOWN, PC_SAME);
-    buf_printf(b, "if (_t%d.tag == SP_TAG_STR) _t%d = %ssp_str_length(_t%d.v.s) == 0%s; else ", tv, tr, ebopen, tv, ebclose);
+    if (!str_reopen_owns) {
+      buf_puts(b, "if (");
+      emit_poly_str_guard(c, tv, name, b);
+      buf_printf(b, ") _t%d = %ssp_str_length(sp_rbval_string_bytes(_t%d)) == 0%s; else ", tr, ebopen, tv, ebclose);
+    }
     buf_printf(b, "if (_t%d.tag == SP_TAG_SYM) _t%d = %sstrlen(sp_sym_to_s((sp_sym)_t%d.v.i)) == 0%s; else ", tv, tr, ebopen, tv, ebclose);
   }
   /* a class-tagged poly value answers its name: `Base.subclasses` and
@@ -2306,9 +2320,6 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
      answer and this shortcut would take it away: `class String; def
      upcase; "nope"; end` has to reach "nope" for a run-time-typed
      receiver too, the way it now does for a concrete one. */
-  int str_reopen_owns = 0;
-  { int sci = comp_core_class(c, CORE_STRING);
-    if (sci >= 0 && call_target(c, id, sci, name, 0, NULL) >= 0) str_reopen_owns = 1; }
   if (argc == 0 && !str_reopen_owns) {
     const BuiltinZeroOp *str_op = bop_zero_find(TY_STRING, name);
     /* The result has to fit the slot the dispatch assigns into. */
@@ -3678,9 +3689,13 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     char tn6[24]; snprintf(tn6, sizeof tn6, "_t%d", atmp[0]);
     if (atmp_ty[0] == TY_POLY) buf_puts(&ab6, tn6);
     else emit_boxed_text(c, atmp_ty[0], tn6, &ab6);
+    /* The needle's to_str may grow the held receiver before the search. */
+    int needle = ++g_tmp;
     buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
-    buf_printf(b, ") { _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), sp_poly_arg_str_chk(sp_poly_strbuf_deref(%s)))%s; }\nelse ",
-               tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, ab6.p ? ab6.p : "sp_box_nil()",
+    buf_printf(b, ") { const char *_t%d = sp_poly_arg_str_chk(%s); SP_GC_ROOT_STR(_t%d);"
+                  " _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), _t%d)%s; }\nelse ",
+               needle, ab6.p ? ab6.p : "sp_box_nil()", needle,
+               tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, needle,
                ret == TY_POLY ? ")" : "");
     free(ab6.p);
   }
@@ -4157,20 +4172,8 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
                    tr, tv, atmp[0]);
     }
     else {
-      /* Non-String arg: atmp[0] is either sp_RbVal (TY_POLY/TY_NIL/
-         TY_VOID/TY_UNKNOWN were stored boxed at allocation) or a
-         scalar slot (TY_INT, TY_FLOAT, ...). Box the scalar into
-         sp_RbVal first, then route the boxed value through
-         sp_poly_to_s. When the slot is TY_POLY, the runtime value
-         may carry SP_TAG_STR (a String that came in through a poly
-         param or ivar read); in that case the SP_TAG_STR branch uses
-         sp_File_write_bin directly so an embedded NUL survives,
-         otherwise sp_poly_to_s may return either a marked String
-         (also safe to binary-write) or a static SPL() literal
-         (strlen-based, which sp_File_write already handles). The
-         result is always boxed to sp_RbVal (wrv) so the surrounding
-         _t<tr> either takes it directly (ret == TY_POLY) or unboxes
-         to sp_int (ret == TY_INT). */
+      /* Use the same byte reader as a typed IO receiving a boxed value.
+         The result joins the other arms in the selected slot. */
       int wrr = ++g_tmp, wrv = ++g_tmp;
       char a0n[24]; snprintf(a0n, sizeof a0n, "_t%d", atmp[0]);
       buf_puts(b, " case SP_BUILTIN_IO: { ");
@@ -4180,70 +4183,39 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
         buf_puts(b, "; ");
       }
       else buf_printf(b, "sp_RbVal _t%d = %s; ", wrr, a0n);
-      /* a shared String's box (SP_BUILTIN_STRBUF) is its bytes with their
-         length: read before the tag test, or the String arm below sized
-         it by strlen and a frame stopped at its first NUL (#9602) */
-      buf_printf(b, "_t%d = sp_poly_strbuf_deref(_t%d); ", wrr, wrr);
-      buf_printf(b, "sp_RbVal _t%d = (_t%d.tag == SP_TAG_STR) ? "
-                     "sp_box_int(sp_File_write_bin((sp_File *)_t%d.v.p, _t%d.v.s)) : "
-                     "sp_box_int(sp_File_write((sp_File *)_t%d.v.p, sp_poly_to_s(_t%d))); ",
-                   wrv, wrr, tv, wrr, tv, wrr);
+      buf_printf(b, "sp_RbVal _t%d = sp_box_int(sp_File_write_poly((sp_File *)_t%d.v.p, _t%d)); ",
+                 wrv, tv, wrr);
       if (ret == TY_POLY) buf_printf(b, "_t%d = _t%d; ", tr, wrv);
       else if (plan_slot_oint(c, id, ret)) buf_printf(b, "_t%d = %s(_t%d); ", tr, oint_unbox(ret), wrv);
       else                buf_printf(b, "_t%d = sp_poly_to_i(_t%d); ", tr, wrv);
       buf_puts(b, "break; }");
     }
   }
-  /* syswrite on a poly value: the same shape as the write arm above --
-     a Socket reaching this dispatch because some user class owns the
-     name had no arm and raised NoMethodError. syswrite takes one
-     String arg and returns the byte count. The byte length is sized
-     by the caller and handed to sp_File_syswrite directly: a String
-     source's length (sp_str_byte_len, so an embedded NUL reaches the
-     descriptor) or a converted value's length (strlen of sp_poly_to_s),
-     rather than reading it off a marker byte inside the write core. */
-  if (sp_streq(name, "syswrite") && argc == 1 && kwh < 0 && splat_a < 0) {
+  /* An IO alongside a program method writes exactly one argument. */
+  if (is_io_syswrite(name) && argc == 1 && kwh < 0 &&
+      (splat_a < 0 || (splat_a == 0 && atmp_ty[0] == TY_POLY_ARRAY))) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_IO_SYSWRITE, -1, TY_UNKNOWN, PC_SAME);
-    int wrv = ++g_tmp;
-    if (atmp_ty[0] == TY_STRING) {
-      if (ret == TY_POLY)
-        buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = sp_File_syswrite("
-                       "(sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d)); "
-                       "_t%d = sp_box_int(_t%d); break; }",
-                   wrv, tv, atmp[0], atmp[0], tr, wrv);
-      else
-        buf_printf(b, " case SP_BUILTIN_IO: _t%d = sp_File_syswrite("
-                       "(sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d)); break;",
-                   tr, tv, atmp[0], atmp[0]);
-    }
+    int a0 = atmp[0];
+    buf_puts(b, " case SP_BUILTIN_IO: { ");
+    if (splat_a == 0) buf_printf(b, "sp_arity_check(_t%d->len, 1, 1, NULL); ", a0);
+    int boxed = ret == TY_POLY, optional = !boxed && plan_slot_oint(c, id, ret);
+    buf_printf(b, "_t%d = %s", tr, boxed ? "sp_box_int(" : optional ? oint_of(ret) : "");
+    if (optional) buf_puts(b, "(");
+    if (atmp_ty[0] == TY_STRING)
+      buf_printf(b, "sp_File_syswrite((sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d))", tv, a0, a0);
     else {
-      int wrr = ++g_tmp, slen = ++g_tmp, wlen = ++g_tmp, wres = ++g_tmp;
-      char a0n[24]; snprintf(a0n, sizeof a0n, "_t%d", atmp[0]);
-      buf_puts(b, " case SP_BUILTIN_IO: { ");
-      if (atmp_ty[0] != TY_POLY) {
-        buf_printf(b, "sp_RbVal _t%d = ", wrr);
+      buf_printf(b, "sp_File_syswrite_poly((sp_File *)_t%d.v.p, ", tv);
+      if (splat_a == 0) buf_printf(b, "sp_PolyArray_get(_t%d, 0)", a0);
+      else if (atmp_ty[0] == TY_POLY) buf_printf(b, "_t%d", a0);
+      else {
+        char a0n[24];
+        snprintf(a0n, sizeof a0n, "_t%d", a0);
         emit_boxed_text(c, atmp_ty[0], a0n, b);
-        buf_puts(b, "; ");
       }
-      else buf_printf(b, "sp_RbVal _t%d = %s; ", wrr, a0n);
-      /* Root the boxed operand before calling sp_poly_to_s: the
-         conversion can allocate and trigger GC, which would lose the
-         operand if it were only reachable through a local. */
-      buf_printf(b, "_t%d = sp_poly_strbuf_deref(_t%d); SP_GC_ROOT_RBVAL(_t%d); ", wrr, wrr, wrr);   /* (a shared String's box: its bytes, #9602) */
-      /* Resolve the operand to a (pointer, length) pair once. A marked
-         String keeps its header length (binary-safe, embedded NULs
-         survive); anything else is a NUL-terminated C string from
-         sp_poly_to_s, whose length is the C-string length. */
-      buf_printf(b, "const char *_t%d = (_t%d.tag == SP_TAG_STR) ? _t%d.v.s : sp_poly_to_s(_t%d); "
-                 "sp_int _t%d = (_t%d.tag == SP_TAG_STR) ? "
-                 "sp_str_byte_len(_t%d) : strlen(_t%d); "
-                 "sp_int _t%d = sp_File_syswrite((sp_File *)_t%d.v.p, _t%d, _t%d); ",
-                 slen, wrr, wrr, wrr, wlen, wrr, slen, slen,
-                 wres, tv, slen, wlen);
-      if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_int(_t%d); ", tr, wres);
-      else                buf_printf(b, "_t%d = _t%d; ", tr, wres);
-      buf_puts(b, "break; }");
+      buf_puts(b, ")");
     }
+    if (boxed || optional) buf_puts(b, ")");
+    buf_puts(b, "; break; }");
   }
   /* print and puts on a poly value, beside the write arm: an IO held
      where a StringIO can be, or reached through a user class that owns
@@ -4265,9 +4237,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       else emit_boxed_text(c, atmp_ty[a], an, b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", pv);
       if (is_puts) buf_printf(b, "sp_File_puts_val((sp_File *)_t%d.v.p, _t%d); ", tv, pv);
-      else buf_printf(b, "if (_t%d.tag == SP_TAG_STR) sp_File_write_bin((sp_File *)_t%d.v.p, _t%d.v.s); "
-                         "else sp_File_write((sp_File *)_t%d.v.p, sp_poly_to_s(_t%d)); ",
-                      pv, tv, pv, tv, pv);
+      else buf_printf(b, "sp_File_write_poly((sp_File *)_t%d.v.p, _t%d); ", tv, pv);
     }
     if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_nil(); ", tr);
     buf_puts(b, "break; }");
@@ -4599,10 +4569,9 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
                    tr, ibo, atmp[0], atmp[0], tv, atmp[0], other, ibc); }
       /* a String handle's box (a String some name changes in place) is
          a String too: its bytes are what the elements are compared with */
-      { int ts = ++g_tmp;
-        buf_printf(b, " case SP_BUILTIN_STR_ARRAY: { sp_RbVal _t%d = sp_poly_strbuf_deref(_t%d);"
-                      " _t%d = %s_t%d.tag == SP_TAG_STR && sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d.v.s)%s; break; }",
-                   ts, atmp[0], tr, ibo, ts, tv, ts, ibc); }
+      buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = %ssp_rbval_is_string(_t%d)"
+                    " && sp_StrArray_include((sp_StrArray *)_t%d.v.p, sp_rbval_string_bytes(_t%d))%s; break;",
+                 tr, ibo, atmp[0], tv, atmp[0], ibc);
       break;
     case TY_NIL:
       /* is there a nil element */

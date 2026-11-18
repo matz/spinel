@@ -255,7 +255,7 @@ double sp_cext_num2dbl(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) sp_raise_cls("TypeError", "no implicit conversion to float from nil");
   if (v.tag == SP_TAG_BOOL)
     sp_raise_cls("TypeError", v.v.b ? "no implicit conversion to float from true" : "no implicit conversion to float from false");
-  if (v.tag == SP_TAG_STR || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF))
+  if (sp_rbval_is_string(v))
     sp_raise_cls("TypeError", "no implicit conversion to float from string");
   return sp_poly_to_f(v);
 }
@@ -309,13 +309,13 @@ sp_RbVal sp_cext_sym2str(sp_sym s) {
 /* rb_str_plus: a new String of both, ASCII-8BIT when either is */
 sp_RbVal sp_cext_str_plus(sp_RbVal a, sp_RbVal b) {
   SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
-  sp_RbVal x = sp_poly_strbuf_deref(a), y = sp_poly_strbuf_deref(b);
-  if (x.tag != SP_TAG_STR || y.tag != SP_TAG_STR) sp_raise_cls("TypeError", "no implicit conversion into String");
-  SP_GC_ROOT_RBVAL(x); SP_GC_ROOT_RBVAL(y);
-  int64_t la = (int64_t)sp_str_byte_len(x.v.s), lb = (int64_t)sp_str_byte_len(y.v.s);
-  sp_String *r = sp_String_new_len(x.v.s, la); SP_GC_ROOT(r);
-  sp_String_append_n(r, y.v.s, (size_t)lb);
-  if (sp_str_is_binary(x.v.s) || sp_str_is_binary(y.v.s)) sp_String_force_encoding(r, 1);
+  if (!sp_rbval_is_string(a) || !sp_rbval_is_string(b))
+    sp_raise_cls("TypeError", "no implicit conversion into String");
+  const char *x = sp_rbval_string_bytes(a), *y = sp_rbval_string_bytes(b);
+  int64_t la = (int64_t)sp_str_byte_len(x), lb = (int64_t)sp_str_byte_len(y);
+  sp_String *r = sp_String_new_len(x, la); SP_GC_ROOT(r);
+  sp_String_append_n(r, y, (size_t)lb);
+  if (sp_str_is_binary(x) || sp_str_is_binary(y)) sp_String_force_encoding(r, 1);
   return sp_box_obj(r, SP_BUILTIN_STRBUF);
 }
 /* An Array a method yields to a C extension's block (rb_block_call) that
@@ -609,13 +609,18 @@ const char *sp_poly_to_s(sp_RbVal v) {
   return sp_poly_to_s_impl(v, NULL);
 }
 
-const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length) {
+const char *sp_poly_to_s_bytes_owner(sp_RbVal v, size_t *length, sp_String **owner) {
   /* A selected Ruby String provides its length in its header. Fixed C
      display text leaves the count unset and uses its terminating NUL. */
   *length = SIZE_MAX;
   const char *text = sp_poly_to_s_impl(v, length);
+  if (owner) *owner = *length == SIZE_MAX ? NULL : sp_str_fd_owner(text);
   if (*length == SIZE_MAX) *length = strlen(text);
   return text;
+}
+
+const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length) {
+  return sp_poly_to_s_bytes_owner(v, length, NULL);
 }
 
 /* The class name of a boxed value, and in *id the builtin class id of that name
@@ -734,11 +739,10 @@ const char *sp_poly_class_name(sp_RbVal v)
 
 sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
 {
-  if (a.tag == SP_TAG_STR) return sp_box_nullable_str(sp_str_sub_range(a.v.s ? a.v.s : "", start, len));
-  /* A shared-string handle is a String: slicing is non-mutating, so it answers
-     as its live value rather than falling through to the array kinds and out
-     the nil default, which is what `s = +""; s << "abc"; s[0, 2]` did (#4279). */
-  if (sp_poly_is_strbuf(a)) return sp_poly_slice(sp_poly_strbuf_deref(a), start, len);
+  if (sp_rbval_is_string(a)) {
+    const char *bytes = sp_rbval_string_bytes(a);
+    return sp_box_nullable_str(sp_str_sub_range(bytes ? bytes : sp_str_empty, start, len));
+  }
   /* An Integer answers `n[start, len]`, the len-bit field starting at bit
      `start` -- the two-argument form of the bit read, which the typed arms
      have had all along. A boxed receiver fell past this to the nil default
@@ -1086,34 +1090,26 @@ sp_RbVal sp_poly_clear(sp_RbVal v)
 
 sp_RbVal sp_poly_slice_or_call(sp_RbVal v, sp_RbVal a, sp_RbVal b)
 {
-  /* a shared String handle receiver reads as its bytes; a capture name
-     does below, while a callable's argument stays the String itself */
-  if (sp_poly_is_strbuf(v)) v = sp_poly_strbuf_deref(v);
-  /* `sym[/re/, n]` on a boxed Symbol matches the name, as Symbol#[] does:
-     read as a two-integer slice, the Regexp operand raised TypeError */
-  if (v.tag == SP_TAG_SYM && a.tag == SP_TAG_OBJ && a.v.p && a.cls_id == SP_BUILTIN_REGEX)
-    v = sp_box_str(sp_sym_to_s((sp_sym)v.v.i));
-  /* `s[/re/, n]` on a boxed String: capture n of the first match, nil when
-     there is none -- the form the typed emitter answers inline. Read as a
-     two-integer slice, the Regexp operand raised TypeError (campfire's
-     `response.headers["Link"][/<(.*)>/, 1]` off a Hash[String, String]). */
-  if (v.tag == SP_TAG_STR && a.tag == SP_TAG_OBJ && a.v.p && a.cls_id == SP_BUILTIN_REGEX &&
-      b.tag == SP_TAG_INT) {
-    sp_int n = b.v.i;
-    if (sp_re_match((mrb_regexp_pattern *)a.v.p, v.v.s ? v.v.s : "") < 0) return sp_box_nil();
-    n = sp_re_group_nth(n);   /* a negative n counts back from the last group */
-    if (n == 0) return sp_box_nullable_str(sp_re_match_str);
-    if (n >= 1 && n <= 9) return sp_box_nullable_str(sp_re_captures[n]);
-    return sp_box_nil();
-  }
-  /* `s[/(?<x>..)/, "x"]` or `, :x`: the named capture of the first match,
-     nil when there is none, as the typed emitter answers it */
-  if (v.tag == SP_TAG_STR && a.tag == SP_TAG_OBJ && a.v.p && a.cls_id == SP_BUILTIN_REGEX &&
-      (b.tag == SP_TAG_STR || b.tag == SP_TAG_SYM || sp_poly_is_strbuf(b))) {
-    if (sp_poly_is_strbuf(b)) b = sp_poly_strbuf_deref(b);
-    const char *nm = b.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)b.v.i) : (b.v.s ? b.v.s : "");
-    if (sp_re_match((mrb_regexp_pattern *)a.v.p, v.v.s ? v.v.s : "") < 0) return sp_box_nil();
-    return sp_box_nullable_str(sp_re_named_capture((mrb_regexp_pattern *)a.v.p, nm));
+  /* A Regexp indexes either a String's bytes or a Symbol's name. */
+  if (a.tag == SP_TAG_OBJ && a.v.p && a.cls_id == SP_BUILTIN_REGEX &&
+      (sp_rbval_is_string(v) || v.tag == SP_TAG_SYM)) {
+    mrb_regexp_pattern *pattern = a.v.p;
+    const char *subject = v.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)v.v.i)
+                                             : sp_rbval_string_bytes(v);
+    if (b.tag == SP_TAG_INT) {
+      if (sp_re_match(pattern, subject ? subject : sp_str_empty) < 0) return sp_box_nil();
+      sp_int n = sp_re_group_nth(b.v.i);
+      if (n == 0) return sp_box_nullable_str(sp_re_match_str);
+      if (n >= 1 && n <= 9) return sp_box_nullable_str(sp_re_captures[n]);
+      return sp_box_nil();
+    }
+    if (sp_rbval_is_string(b) || b.tag == SP_TAG_SYM) {
+      const char *name = b.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)b.v.i)
+                                            : sp_rbval_string_bytes(b);
+      SP_GC_ROOT_STR(name);
+      if (sp_re_match(pattern, subject ? subject : sp_str_empty) < 0) return sp_box_nil();
+      return sp_box_nullable_str(sp_re_named_capture(pattern, name ? name : sp_str_empty));
+    }
   }
   /* a Method's [] too: its arguments of any kind are the call's, where
      sp_poly_slice took a String for an index and raised TypeError (#6179) */
@@ -1719,10 +1715,10 @@ sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, sp_Proc
   case 'S': {
     sp_dyn_new_arity(argc, 1);
     if (argc == 0) return sp_box_str(sp_str_dup_external((&("\xff")[1])));
-    sp_RbVal s = sp_poly_is_strbuf(av[0]) ? sp_poly_strbuf_deref(av[0]) : av[0];
-    if (s.tag != SP_TAG_STR)
+    sp_RbVal s = av[0];
+    if (!sp_rbval_is_string(s))
       sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", sp_poly_class_name(s)));
-    return sp_box_str(sp_str_dup(s.v.s));
+    return sp_box_str(sp_str_dup(sp_rbval_string_bytes(s)));
   }
   case 'A': {
     sp_dyn_new_arity(argc, 2);
@@ -1907,11 +1903,7 @@ else {
       }
       v = a->data[idx]; idx++;
     }
-    /* A mutable String arrives as a shared handle, not a plain String:
-       `%c` of one printed nothing and `%d` and `%f` refused it as no String,
-       where CRuby reads the String. Every conversion reads the handle as its
-       value, as %s did through sp_poly_to_s. */
-    if (sp_poly_is_strbuf(v)) v = sp_poly_strbuf_deref(v);
+    const char *text = sp_rbval_string_bytes(v);
     if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' || conv == 'o' ||
         conv == 'b' || conv == 'B') {
       long long lv = 0;
@@ -1980,7 +1972,7 @@ else {
       else if (v.tag == SP_TAG_FLT) lv = (long long)v.v.f;
       /* a String argument converts the way Integer() does, so unparseable text
          is an ArgumentError rather than a silent zero (#3554) */
-      else if (v.tag == SP_TAG_STR && v.v.s) lv = (long long)sp_str_to_i_strict(v.v.s);
+      else if (text) lv = (long long)sp_str_to_i_strict(text);
       /* Anything else is not a number at all, and formatting it as 0 was a
          quiet wrong answer where CRuby refuses (#4010). Same wording and same
          value spelling as Integer() uses. */
@@ -2014,7 +2006,7 @@ else if (conv == 'f' || conv == 'e' || conv == 'E' || conv == 'g' || conv == 'G'
       else if (v.tag == SP_TAG_BIGINT) dv = sp_poly_to_f(v);
       /* a String converts the way Float() does; anything else is not a number
          and CRuby refuses rather than formatting a zero (#4010) */
-      else if (v.tag == SP_TAG_STR) dv = (double)sp_str_to_f_strict(v.v.s ? v.v.s : sp_str_empty);
+      else if (sp_rbval_is_string(v)) dv = (double)sp_str_to_f_strict(text ? text : sp_str_empty);
       /* a user object converts through its #to_f, which may allocate */
       else if (sp_poly_is_user_obj(v)) {
         SP_GC_ROOT(a); SP_GC_ROOT_STR(fmt);
@@ -2079,10 +2071,10 @@ else if (conv == 'c') {
          first whole character -- not a single truncated byte (#3083) */
       char cbuf[8]; int clen = 0;
       if (v.tag == SP_TAG_INT) clen = sp_utf8_encode((uint32_t)v.v.i, cbuf);
-      else if (v.tag == SP_TAG_STR && v.v.s && v.v.s[0]) {
-        clen = sp_utf8_advance(v.v.s);
+      else if (text && text[0]) {
+        clen = sp_utf8_advance(text);
         if (clen > 8) clen = 8;
-        memcpy(cbuf, v.v.s, (size_t)clen);
+        memcpy(cbuf, text, (size_t)clen);
       }
       /* the character occupies one column; honor a width and the '-' flag */
       int left = 0, width = 0;

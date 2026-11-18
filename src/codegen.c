@@ -13917,8 +13917,8 @@ static void emit_marshal_unbox_ivar(Compiler *c, TyKind t, Buf *b) {
     return;
   }
   switch (t) {
-    case TY_STRING: buf_puts(b, "(val.tag == SP_TAG_STR ? val.v.s : NULL)"); break;
-    case TY_STRBUF: buf_puts(b, "(val.tag == SP_TAG_STR ? sp_String_new_shared(val.v.s) : NULL)"); break;
+    case TY_STRING: buf_puts(b, "sp_rbval_string_bytes(val)"); break;
+    case TY_STRBUF: buf_puts(b, "(sp_poly_is_strbuf(val) ? (sp_String *)val.v.p : sp_String_new_shared(sp_rbval_string_bytes(val)))"); break;
     case TY_BOOL:   buf_puts(b, "(val.tag == SP_TAG_BOOL ? val.v.b : 0)"); break;
     case TY_SYMBOL: buf_puts(b, "(val.tag == SP_TAG_SYM ? (sp_sym)val.v.i : 0)"); break;
     /* a Bignum whose value fits the inline representation arrives INT-tagged

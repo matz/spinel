@@ -707,6 +707,7 @@ extern const char *(*sp_poly_inspect_fn)(sp_RbVal);
 const char *sp_poly_to_s(sp_RbVal v);
 /* The display result and its byte length for native writers. */
 const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length);
+const char *sp_poly_to_s_bytes_owner(sp_RbVal v, size_t *length, struct sp_String_s **owner);
 extern const char *(*sp_poly_to_s_fn)(sp_RbVal);
 /* Convert a plain object (a Struct) to a boxed StrPoly hash of its members,
    generic (no format knowledge). The generated program installs it (switch on

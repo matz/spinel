@@ -518,6 +518,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_STRING_DEDUP] = emit_op_string_dedup,
   [BOPE_STRING_SCRUB_BLOCK] = emit_op_string_scrub_block,
   [BOPE_STRING_LINES] = emit_op_string_lines,
+  [BOPE_STRING_CASECMP] = emit_op_string_casecmp,
   [BOPE_THREAD_RAISE] = emit_op_thread_raise,
   [BOPE_THREAD_TLS] = emit_op_thread_tls,
   [BOPE_MUTEX_SLEEP] = emit_op_mutex_sleep,

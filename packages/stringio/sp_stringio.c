@@ -315,18 +315,16 @@ const char *sp_StringIO_gets_sep(sp_StringIO *s, const char *sep) {SP_GC_ROOT(s)
    of the program, an Array and a Hash theirs, and any other builtin class
    "Object". */
 static const char *sio_src_name(sp_RbVal v) {
+  if (sp_rbval_is_string(v)) return "String";
   switch (v.tag) {
     case SP_TAG_NIL: return "nil";
     case SP_TAG_BOOL: return v.v.b ? "true" : "false";
     case SP_TAG_INT: return "Integer";
     case SP_TAG_FLT: return "Float";
-    case SP_TAG_STR: return "String";
     case SP_TAG_SYM: return "Symbol";
     default: break;
   }
   if (v.tag == SP_TAG_OBJ) {
-    /* a String's handle box is a String */
-    if (v.cls_id == SP_BUILTIN_STRBUF) return "String";
     if (v.cls_id >= 0 && sp_obj_cls_name_fn) {
       const char *cn = sp_obj_cls_name_fn((int)v.cls_id);
       if (cn) return cn;
@@ -355,13 +353,6 @@ static sp_int sio_limit_arg(sp_RbVal v) {
   return -1;
 }
 
-/* A shared-mutable String held in a container is boxed as a handle; it reads
-   as its live text. */
-static sp_RbVal sio_arg_value(sp_RbVal v) {
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF) return sp_box_str(sp_String_cstr((sp_String *)v.v.p));
-  return v;
-}
-
 /* putc(Integer), the [:int] binding: its low byte, but one past a C int is
    CRuby's RangeError (NUM2CHR), raised after the stream's own write check */
 sp_int sp_StringIO_putc_i(sp_StringIO *s, sp_int ch) {
@@ -378,9 +369,11 @@ sp_int sp_StringIO_putc_i(sp_StringIO *s, sp_int ch) {
    CRuby's errors). It answers its argument, not what it wrote. */
 sp_RbVal sp_StringIO_putc_v(sp_StringIO *s, sp_RbVal v) {SP_GC_ROOT(s);SP_GC_ROOT_RBVAL(v);
   sio_check_write(s);
-  sp_RbVal a = sio_arg_value(v);
-  if (a.tag == SP_TAG_STR) { sp_StringIO_putc_s(s, a.v.s); return v; }
-  sp_StringIO_putc_i(s, sp_poly_arg_int(a));
+  if (sp_rbval_is_string(v)) {
+    sp_StringIO_putc_s(s, sp_rbval_string_bytes(v));
+    return v;
+  }
+  sp_StringIO_putc_i(s, sp_poly_arg_int(v));
   return v;
 }
 
@@ -389,13 +382,11 @@ sp_RbVal sp_StringIO_putc_v(sp_StringIO *s, sp_RbVal v) {SP_GC_ROOT(s);SP_GC_ROO
    anything else is the limit. With two, the first is the separator and the
    second the limit (nil for none). A trailing Hash is the keywords; `chomp:`
    is the one this reader takes. */
-static void sio_line_args(const sp_RbVal *a0, int n0, const char **sep, sp_int *limit, sp_bool *chomp) {
+static void sio_line_args(const sp_RbVal *a, int n0, const char **sep, sp_int *limit, sp_bool *chomp) {
   *sep = SPL("\n"); *limit = -1; *chomp = 0;
-  sp_RbVal sv[8];
-  int n = 0, given = n0;
-  for (int j = 0; j < n0 && j < 8; j++) sv[n++] = sio_arg_value(a0[j]);
-  const sp_RbVal *a = sv;
-  if (n > 0 && a[n - 1].tag == SP_TAG_OBJ && sp_json_kind_fn && sp_json_kind_fn(a[n - 1]) == 2) {
+  int n = n0 < 8 ? n0 : 8, given = n0;
+  if (n > 0 && a[n - 1].tag == SP_TAG_OBJ && !sp_rbval_is_string(a[n - 1]) &&
+      sp_json_kind_fn && sp_json_kind_fn(a[n - 1]) == 2) {
     sp_RbVal h = a[n - 1];
     sp_int hn = sp_json_len_fn(h);
     char unk[160]; int nunk = 0; size_t ul = 0;
@@ -425,13 +416,19 @@ static void sio_line_args(const sp_RbVal *a0, int n0, const char **sep, sp_int *
   }
   if (n == 1) {
     if (a[0].tag == SP_TAG_NIL) *sep = NULL;
-    else if (a[0].tag == SP_TAG_STR) *sep = a[0].v.s ? a[0].v.s : SPL("");
+    else if (sp_rbval_is_string(a[0])) {
+      const char *bytes = sp_rbval_string_bytes(a[0]);
+      *sep = bytes ? bytes : SPL("");
+    }
     else *limit = sio_limit_arg(a[0]);
     return;
   }
   if (n == 2) {
     if (a[0].tag == SP_TAG_NIL) *sep = NULL;
-    else if (a[0].tag == SP_TAG_STR) *sep = a[0].v.s ? a[0].v.s : SPL("");
+    else if (sp_rbval_is_string(a[0])) {
+      const char *bytes = sp_rbval_string_bytes(a[0]);
+      *sep = bytes ? bytes : SPL("");
+    }
     else sio_type_error(a[0], "String");
     *limit = sio_limit_arg(a[1]);
   }
@@ -503,10 +500,12 @@ sp_RbVal sp_StringIO_readlines(sp_StringIO *s) {SP_GC_ROOT(s);
    line, via the generic container hooks) and terminates lines. A value kind
    this in-memory stream can't render raises rather than writing garbage. */
 static int64_t sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROOT(s);SP_GC_ROOT_RBVAL(v);
-  v = sp_rbval_str(v);
   int64_t p0 = s->pos, w = 0;
-  switch (v.tag) {
-    case SP_TAG_STR: { const char *t = v.v.s ? v.v.s : ""; w += sio_write(s, t, (int64_t)sp_str_byte_len(t)); break; }
+  if (sp_rbval_is_string(v)) {
+    const char *t = sp_rbval_string_bytes(v);
+    if (t) w += sio_write(s, t, (int64_t)sp_str_byte_len(t));
+  }
+  else switch (v.tag) {
     case SP_TAG_INT: { const char *t = sp_int_to_s(v.v.i); w += sio_write(s, t, (int64_t)strlen(t)); break; }
     case SP_TAG_FLT: { const char *t = sp_float_to_s(v.v.f); w += sio_write(s, t, (int64_t)strlen(t)); break; }
     case SP_TAG_BOOL: { const char *t = v.v.b ? "true" : "false"; w += sio_write(s, t, (int64_t)strlen(t)); break; }

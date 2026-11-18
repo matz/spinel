@@ -1569,6 +1569,15 @@ further: since 3.4 CRuby steps a non-numeric range by repeated `+`, so
 `("a".."e").step("x")` diverges, while spinel takes every Nth element -- a
 stride a String cannot name -- and raises.
 
+#### Conditional prepends on String
+
+A placed conditional `prepend` in a String reopening can install a module
+whose methods are ordinary program methods or supported String readers.
+The first executed prepend of a module determines its place in the chain.
+`super` skips layers that have not run. Calls and reflection use the
+visibility of the method currently installed. A module with its own
+mixins, accessors, aliases, or mixin hooks is outside this conditional path.
+
 #### Embedded NUL bytes: byte-exact core, C-string transforms
 
 Strings store embedded NUL bytes, and the byte-exact core matches CRuby:
@@ -1587,7 +1596,10 @@ padding (`ljust` / `rjust` / `center`, a `"\0"` pad included).
 Interpolation and the `format` family are byte-exact too since #4632:
 `"x#{s}y"`, `format` / `sprintf` / `String#%` (with a width or a
 precision as well) carry the NUL and its tail, as do `IO#write`,
-`#print`, `#puts` and `#pwrite`. `inspect` renders `\x00` where CRuby
+`#syswrite`, `#print`, `#puts` and `#pwrite`. For `write`, `syswrite` and `pwrite`,
+the String returned by an operand's `to_s` supplies its full byte count.
+`pwrite` converts the operand before the offset and reads the String
+after both conversions, so it sees any mutation made during `to_int`. `inspect` renders `\x00` where CRuby
 prints `\u0000`. `test/embedded_nul_method_partition.rb` pins which
 method is which, and `test/format_interp_binary.rb` the formatting.
 

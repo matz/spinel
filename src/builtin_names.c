@@ -484,6 +484,11 @@ int is_identity_query(const char *n) {
   return sp_streq(n, "equal?") || sp_streq(n, "object_id") || sp_streq(n, "__id__") || sp_streq(n, "frozen?");
 }
 
+/* Boxed String readers with a builtin arm in the general send. */
+int is_string_boxed_reader(const char *n) {
+  return is_len_alias(n) || sp_streq(n, "empty?") || is_spaceship_name(n);
+}
+
 int is_len_alias(const char *n) {
   return sp_streq(n, "length") || sp_streq(n, "size");
 }
@@ -1125,8 +1130,12 @@ int is_io_wait(const char *n) {
   return sp_streq(n, "wait_readable") || sp_streq(n, "wait_writable") || sp_streq(n, "wait_priority");
 }
 
+int is_io_syswrite(const char *n) {
+  return sp_streq(n, "syswrite");
+}
+
 int is_io_write(const char *n) {
-  return sp_streq(n, "write") || sp_streq(n, "syswrite");
+  return sp_streq(n, "write") || is_io_syswrite(n);
 }
 
 int is_path_reader(const char *n) {
@@ -1182,8 +1191,12 @@ int is_select_reject(const char *n) {
   return sp_streq(n, "select") || sp_streq(n, "reject") || sp_streq(n, "filter");
 }
 
+int is_casecmp_predicate(const char *n) {
+  return sp_streq(n, "casecmp?");
+}
+
 int is_casecmp_family(const char *n) {
-  return sp_streq(n, "casecmp") || sp_streq(n, "casecmp?");
+  return sp_streq(n, "casecmp") || is_casecmp_predicate(n);
 }
 
 int str_int_promotes(const char *n, int argc) {

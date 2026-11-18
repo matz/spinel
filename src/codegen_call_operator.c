@@ -161,7 +161,7 @@ static int poly_cmp_reopen_test(Compiler *c, int id, int recv, const char *v, ch
     { CORE_INTEGER, "%s.tag == SP_TAG_INT || %s.tag == SP_TAG_BIGINT" },
     { CORE_FLOAT,   "%s.tag == SP_TAG_FLT" },
     { CORE_NUMERIC, "%s.tag == SP_TAG_INT || %s.tag == SP_TAG_BIGINT || %s.tag == SP_TAG_FLT" },
-    { CORE_STRING,  "%s.tag == SP_TAG_STR" },
+    { CORE_STRING,  "sp_rbval_is_string(%s)" },
     { CORE_SYMBOL,  "%s.tag == SP_TAG_SYM" },
     { CORE_TRUECLASS,  "(%s.tag == SP_TAG_BOOL && %s.v.i)" },
     { CORE_FALSECLASS, "(%s.tag == SP_TAG_BOOL && !%s.v.i)" },
@@ -169,7 +169,10 @@ static int poly_cmp_reopen_test(Compiler *c, int id, int recv, const char *v, ch
   size_t n = 0; out[0] = '\0';
   for (size_t i = 0; i < sizeof owners / sizeof owners[0]; i++) {
     int k = comp_core_class(c, owners[i].cls);
-    if (k < 0 || cplan_implied_target(c, id, recv, k, "<=>", CIT_TABLE, NULL) < 0) continue;
+    if (k < 0) continue;
+    int mi = owners[i].cls == CORE_STRING ? call_target(c, id, k, "<=>", 0, NULL)
+                                          : cplan_implied_target(c, id, recv, k, "<=>", CIT_TABLE, NULL);
+    if (mi < 0) continue;
     char one[200];
     snprintf(one, sizeof one, owners[i].tags, v, v, v);
     n += (size_t)snprintf(out + n, n < cap ? cap - n : 0, "%s(%s)", n ? " || " : "", one);

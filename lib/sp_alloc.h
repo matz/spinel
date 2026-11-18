@@ -735,6 +735,21 @@ static inline sp_RbVal sp_box_int(sp_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;
    carries SP_TAG_STR and fails tag-keyed comparisons -- `defined?(x).should
    == nil` compared STR(NULL) against NIL and answered false. */
 static inline sp_RbVal sp_box_str(const char *v){ sp_RbVal r; if (!v) { r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.s = NULL; return r; } r.tag = SP_TAG_STR;  r.cls_id = 0; r.v.s = v; return r; }
+/* Read a boxed base String without converting its representation. */
+static inline sp_bool sp_rbval_is_string(sp_RbVal v) {
+  return v.tag == SP_TAG_STR ||
+         (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p);
+}
+
+static inline const char *sp_rbval_string_bytes(sp_RbVal v) {
+  if (v.tag == SP_TAG_STR) return v.v.s;
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p) {
+    const struct sp_String_s *s = v.v.p;
+    return s->data;
+  }
+  return NULL;
+}
+
 /* A boxed value as the String it holds, for a reader that takes a String
    by its tag: a shared String's handle (SP_BUILTIN_STRBUF) reads as a box
    of its bytes, the handle's first field (sp_String.data); any other value

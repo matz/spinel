@@ -126,6 +126,7 @@ int is_push_unshift(const char *n);   /* << push append unshift: is_push_alias's
 int is_load_path_write(const char *n); /* << push append unshift prepend concat: the calls that add to $LOAD_PATH */
 int is_poly_object_surface_name(const char *n); /* hash object_id __id__ instance_variables: a boxed receiver's call is emitted as Object's builtin, whatever a reopened builtin defines */
 int is_identity_query(const char *n); /* equal? object_id __id__ frozen?: tells an object from its copy */
+int is_string_boxed_reader(const char *n);
 int is_len_alias(const char *n);      /* length size */
 int is_length_spelling(const char *n); /* size count empty? */
 int is_difference_spelling(const char *n); /* difference */
@@ -237,6 +238,7 @@ int is_io_read(const char *n); /* read */
 int is_mul_or_pow(const char *n); /* * ** */
 int is_unary_sign(const char *n); /* +@ -@ */
 int is_unary_minus(const char *n); /* -@ */
+int is_casecmp_predicate(const char *n);
 int is_casecmp_family(const char *n); /* casecmp casecmp? */
 /* String#to_i([base]), #hex, #oct: the parses promote mode reads as a
    Bignum past sp_int */
@@ -266,6 +268,7 @@ int is_sort_family(const char *n); /* sort sort! */
 int is_hash_transform(const char *n); /* transform_values transform_keys */
 int is_fallback_block_call(const char *n); /* fetch delete fetch_values: the block is the fallback */
 int is_delete_name(const char *n);       /* delete: removal by key (ENV's missing-key block answers) */
+int is_io_syswrite(const char *n);
 int is_io_write(const char *n); /* syswrite write */
 int is_to_integer(const char *n); /* to_i to_int */
 int is_match_operator(const char *n); /* !~ =~ */

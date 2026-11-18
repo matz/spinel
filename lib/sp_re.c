@@ -557,10 +557,8 @@ const char *sp_poly_class_name(sp_RbVal v);   /* lib/sp_poly_cold.c */
    `strict` (=~, !~, match, match?) and is NULL when not (===, which asks
    rb_check_string_type). */
 const char *sp_re_operand(sp_RbVal v, int strict) {SP_GC_ROOT_RBVAL(v);
-  if (v.tag == SP_TAG_STR) return v.v.s;
+  if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
   if (v.tag == SP_TAG_NIL) return NULL;
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)
-    return sp_String_cstr((sp_String *)v.v.p);
   if (v.tag == SP_TAG_SYM && sp_sym_name_fn) return sp_sym_name_fn((sp_sym)v.v.i);
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn) {
     const char *r = sp_String_cstr_nil(sp_obj_to_str_fn((int)v.cls_id, v.v.p));
@@ -580,9 +578,10 @@ const char *sp_re_operand(sp_RbVal v, int strict) {SP_GC_ROOT_RBVAL(v);
    nil there). */
 sp_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   const char *s = NULL;
-  if (v.tag == SP_TAG_STR) s = v.v.s ? v.v.s : "";
-  else if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)
-    s = sp_String_cstr((sp_String *)v.v.p);
+  if (sp_rbval_is_string(v)) {
+    s = sp_rbval_string_bytes(v);
+    if (!s) s = "";
+  }
   else s = sp_re_operand(v, 0);
   if (!s) {
     for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
@@ -600,18 +599,19 @@ sp_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
 mrb_regexp_pattern *sp_poly_as_pattern(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX) return (mrb_regexp_pattern *)v.v.p;
   const char *s = NULL;
-  if (v.tag == SP_TAG_STR) s = v.v.s ? v.v.s : "";
-  else if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)
-    s = sp_String_cstr((sp_String *)v.v.p);
+  if (sp_rbval_is_string(v)) {
+    s = sp_rbval_string_bytes(v);
+    if (!s) s = "";
+  }
   if (!s) return NULL;
   return re_compile(s, (int64_t)sp_str_byte_len(s), 0);
 }
-/* The subject string behind a boxed value (a plain string, a shared handle, a
-   Symbol); NULL when the value is not one. */
+/* The text of a String or Symbol accepted as a regexp subject. */
 static const char *sp_poly_subject(sp_RbVal v) {
-  if (v.tag == SP_TAG_STR) return v.v.s ? v.v.s : SPL("");
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)
-    return sp_String_cstr((sp_String *)v.v.p);
+  if (sp_rbval_is_string(v)) {
+    const char *s = sp_rbval_string_bytes(v);
+    return s ? s : SPL("");
+  }
   if (v.tag == SP_TAG_SYM && sp_sym_name_fn) return sp_sym_name_fn((sp_sym)v.v.i);
   return NULL;
 }
@@ -1218,10 +1218,12 @@ mrb_regexp_pattern *sp_re_union_array(sp_PolyArray *a) {SP_GC_ROOT(a);
   const char *joined = NULL;
   SP_GC_ROOT_STR(joined);
   for (sp_int i = 0; i < a->len; i++) {
-    /* (a String a variable shares is its handle's box: read as its bytes) */
-    sp_RbVal v = sp_rbval_str(sp_PolyArray_get(a, i));
+    sp_RbVal v = sp_PolyArray_get(a, i);
     const char *part;
-    if (v.tag == SP_TAG_STR) part = sp_re_escape(v.v.s ? v.v.s : "");
+    if (sp_rbval_is_string(v)) {
+      const char *s = sp_rbval_string_bytes(v);
+      part = sp_re_escape(s ? s : "");
+    }
     else if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX) part = sp_re_to_s_str(v.v.p);
     else { sp_raise_cls("TypeError", "no implicit conversion of element into String or Regexp"); return NULL; }
     joined = (i == 0) ? part : sp_re_alt_join(joined, part);

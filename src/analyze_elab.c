@@ -2833,13 +2833,16 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   int sent_args = 0;
   const char *sent = nm && is_send_family(nm) ? call_sent_name(nt, node, &sent_args) : NULL;
   if (sent && sent_args < ac && is_mixin_call(sent)) { nm = sent; av += sent_args; ac -= sent_args; }
+  /* An unreachable mixin cannot hide a method's recorded history. */
+  int mix = nm && is_mixin_call(nm);
+  if (mix && nt_int(nt, node, "refusal_dead", 0)) return;
   /* `singleton_class.attr_reader :x` in a class or module body: an attr of
      the body's singleton, as `class << self; attr_reader :x; end` records */
   if (nm && (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) && fc >= 0 && fs == LR_FS_NONE &&
       nt_self_singleton_class(nt, recv)) { cls = fc; sg = 1; }
   /* `singleton_class.include M` in a body, `K.singleton_class.prepend M`: a
      mixin of the singleton, as in `class << K` */
-  else if (nm && is_mixin_call(nm) && recv >= 0 && nt_kind(nt, recv) == NK_CallNode &&
+  else if (mix && recv >= 0 && nt_kind(nt, recv) == NK_CallNode &&
            is_singleton_class_name(nt_str(nt, recv, "name")) && nt_ref(nt, recv, "arguments") < 0 &&
            nt_ref(nt, recv, "block") < 0) {
     int in = nt_ref(nt, recv, "receiver");
@@ -2855,7 +2858,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
     if (!lr_main_protected(x, node, fc, fs)) nt_node_set_int((NodeTable *)nt, node, "form_raises", 1);
     return;
   }
-  if (!nested && nm && (bvis || is_method_naming_call(nm) || is_mixin_call(nm))) lr_form_runs(x, node, cls, sg, may);
+  if (!nested && nm && (bvis || is_method_naming_call(nm) || mix)) lr_form_runs(x, node, cls, sg, may);
   if (bvis && !ac && self) {
     /* the frame's visibility from here on: kept by the frame's node, so
        also in a body whose class the record does not know */
@@ -2865,7 +2868,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   }
   /* a mixin onto a receiver the record holds no class of (`o.extend M` on an object): the module has a position the
      record cannot list, which the queries of a module's `super` take as not known */
-  if (nm && cls < LR_MAIN && is_mixin_call(nm))
+  if (mix && cls < LR_MAIN)
     for (int i = 0; i < ac; i++) {
       int m = lr_class_ref_at(x->c, av[i], NULL);
       LrClass *mk = m >= LR_MAIN ? lr_class(x->r, m) : NULL;
@@ -2877,7 +2880,6 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   /* `include A, B` puts A nearest the class (ancestors [C, A, B]), as
      `include B` then `include A` would, and so do prepend and extend: the
      arguments of a mixin are recorded last first */
-  int mix = is_mixin_call(nm);
   /* `include M` where the class's own `def self.include` (or a
      superclass's) is what the call finds: that method runs, and it mixes
      nothing in by itself. The call is the program's, which may do anything
@@ -2972,8 +2974,11 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
       x->r->hgen++;
-      k->mix[k->nmix++] = (LrMixin){ node, lr_mix_kind(nt, node, nm, sg), mod, av[i], .cond = !x->unplaced && x->r->at[node] >= 0 && x->r->st[x->r->at[node]].fmay,
-                                     .applied = lr_stmt_applied(x->unplaced ? NULL : lr_stmt_of(x->r, node), x->unplaced, may) == 1, .open = fnode };
+      const LrStmt *stmt = x->unplaced ? NULL : lr_stmt_of(x->r, node);
+      LrMixKind kind = lr_mix_kind(nt, node, nm, sg);
+      int conditional_reopen = stmt && stmt->bmay && kind == LR_PREPEND && cls == lr_core(x->r, CORE_STRING);
+      k->mix[k->nmix++] = (LrMixin){ node, kind, mod, av[i], .cond = stmt && (stmt->fmay || conditional_reopen),
+                                     .applied = !conditional_reopen && lr_stmt_applied(stmt, x->unplaced, may) == 1, .open = fnode };
       /* `K.include M` in another class's body or at the top level, on a
          class of the program: a mixin the passes take as one of K's
          bodies' (elab_all_bodies), so the statement itself does nothing
@@ -3880,9 +3885,10 @@ int elab_version_held_row(const LrDef *v, const char *name, int cside) {
 static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) {
   const LoadRecord *r = c->lrec;
   int cside = h->a >= 0 && h->b;
+  int str_reader = !cside && h->a >= 0 && h->a == comp_core_class(c, CORE_STRING) && is_string_boxed_reader(x->name);
   if (!lr_first_version(h) || r->refl_any || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
-      (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside)) return 0;
-  return (cside && (bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name))) ||
+      (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside && !str_reader)) return 0;
+  return str_reader || (cside && (bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name))) ||
          !(builtin_object_method_known(x->name) || builtin_instance_name_known(x->name));
 }
 /* May class-side list call id list the class methods of class a: is a on the chain of the class the list names,
@@ -4096,6 +4102,9 @@ void elab_mark_versions(Compiler *c) {
        history replaces; its scope, made after that def's, takes no key */
     if (sc->attr_version) { sc->replaced = 1; continue; }
     int def = nt_kind(c->nt, sc->def_node) == NK_DefNode;
+    if (!def && !sc->is_cmethod && sc->class_id >= 0 && sc->class_id == comp_core_class(c, CORE_STRING) &&
+        is_string_boxed_reader(vname) && nt_kind(c->nt, sc->def_node) == NK_CallNode)
+      def = is_define_method_name(nt_str(c->nt, sc->def_node, "name"));
     if (!x->replaced || (sc->class_id < 0 && !def)) continue;
     if (!(nk & (nk - 1)) && !(keys = realloc(keys, sizeof *keys * (size_t)(nk ? 2 * nk : 1)))) {
       fprintf(stderr, "spinel: out of memory\n"); exit(1);
@@ -4968,8 +4977,10 @@ static int lr_mixin_dup(Compiler *c, int cls, int sg, LrClass *k, int i) {
     int o = ELAB_NO, pre = m->kind == LR_PREPEND || m->kind == LR_SG_PREPEND;
     for (int j = 0; j < i && o != ELAB_YES; j++) {
       LrMixin *e = &k->mix[j];
-      if ((pre || e->node == m->node) && e->kind == m->kind && lr_mixin_class(c, e) >= 0)
-        o = e->mod == m->mod || lr_search(c, e->mod, 0, NULL, m->mod, p, 0, 0, NULL, 0) == ELAB_YES ? ELAB_YES : ELAB_NO;
+      if (!(pre || e->node == m->node) || e->kind != m->kind || lr_mixin_class(c, e) < 0) continue;
+      if (e->mod != m->mod && lr_search(c, e->mod, 0, NULL, m->mod, p, 0, 0, NULL, 0) != ELAB_YES) continue;
+      o = cls == lr_core(c->lrec, CORE_STRING) && m->kind == LR_PREPEND && e->node != m->node && e->cond
+          ? ELAB_UNKNOWN : ELAB_YES;
     }
     if (o != ELAB_YES && !pre) o = lr_search(c, cls == LR_MAIN && !sg && lr_core(c->lrec, CORE_OBJECT) >= 0 ? lr_core(c->lrec, CORE_OBJECT) : cls, sg, NULL, m->mod, p, 0, 0, NULL, 0);
     m->dup = (unsigned char)(1 + o);
@@ -5454,7 +5465,7 @@ static int lr_vis_cellable(Compiler *c, const LrHist *h, const LrHist *t) {
     }
   return 1;
 }
-static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unmapped) {
+static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unmapped, int physical) {
   const NodeTable *nt = c->nt;
   const LrHist *t = lr_table_twin(c, h);
   LoadPoint pv = elab_point_of(c, v->node), pw = { -1, -1, -1 };
@@ -5472,6 +5483,7 @@ static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unm
       if (pw.region < 0 || elab_cmp(pw, p) == PROG_BEFORE) pw = p, vis = w->vis;
     }
   if (!changed) return v->vis;
+  if (physical && lr_vis_cellable(c, h, t)) return -1;
   for (int id = an_calls_named_first(c, h->name); id >= 0; id = an_calls_named_next(id))
     if (nt_kind(nt, id) == NK_CallNode && sp_streq(nt_str(nt, id, "name"), h->name) &&
         (nt_ref(nt, id, "receiver") >= 0 || nt_str(nt, id, "vis_enforce")) && lr_vis_call_ahead(c, h, t, v, pv, pw, id, unmapped))
@@ -5494,9 +5506,16 @@ int elab_version_vis(Compiler *c, const ElabVersion *ev) {
   if (v->arm_vis) return v->arm_vis - 2;
   /* (an answer that met a call with no point yet is not kept: it is
      asked again once the map places the call) */
-  int unmapped = 0, vis = lr_version_vis(c, h, v, &unmapped);
+  int unmapped = 0, vis = lr_version_vis(c, h, v, &unmapped, 0);
   if (!unmapped) v->arm_vis = (unsigned char)(vis + 2);
   return vis;
+}
+/* Reflection can observe a visibility word even with no call of the name. */
+int elab_physical_version_vis(Compiler *c, const ElabVersion *ev) {
+  const LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || ev->hist < 0 || ev->hist >= r->nhist) return ev->v->vis;
+  int unmapped = 0;
+  return lr_version_vis(c, &r->hist[ev->hist], ev->v, &unmapped, 1);
 }
 int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int *vis) {
   LoadRecord *r = c->lrec;
@@ -11292,6 +11311,18 @@ const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n) {
   const LrClass *k = c->lrec && c->lrec->recorded ? lr_class(c->lrec, cls) : NULL;
   *n = k ? k->nmix : 0;
   return k ? k->mix : NULL;
+}
+
+/* The list that executes a conditional prepend inside its class body.
+   A repeat or rescue can skip the statement, so the guard is written
+   in that list each time the prepend itself runs. */
+int elab_conditional_prepend_list(Compiler *c, const LrMixin *m) {
+  const LrStmt *s = lr_stmt_of(elab_fresh(c), m->node);
+  int frame;
+  if (!s || s->region < 0 || s->kept || !(s->fmay || s->bmay || s->fpartial)) return -1;
+  if (s->fpartial && (s->rep < 0 || elab_in_unplaced_block(c, m->node))) return -1;
+  int list = elab_stmt_list(c, m->node, &frame);
+  return list >= 0 && frame == m->open ? list : -1;
 }
 
 /* See analyze.h. A builtin module's name is asked before the alias chain,

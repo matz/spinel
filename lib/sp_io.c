@@ -1101,13 +1101,20 @@ sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_ST
   return sp_File_write_len(f, s, n);
 }
 
-/* IO#syswrite: the same write core as sp_File_write_bin, but the byte
-   length is passed in by the caller rather than read off the marker byte.
-   The codegen syswrite arm sizes the operand itself -- a String source's
-   length (sp_str_byte_len, so an embedded NUL reaches the descriptor) or a
-   converted value's length (sp_poly_to_s + strlen) -- and hands both the
-   pointer and the count to this entry, which is the single place the
-   socket/pipe/stream routing decision is made. A regular file writes
+/* Keep the file alive while the argument's to_s runs. A String returned
+   by to_s carries its full byte count, including any embedded NUL. */
+sp_int sp_File_write_poly(sp_File *f, sp_RbVal v) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT_RBVAL(v);
+  size_t n;
+  const char *text = sp_poly_to_s_bytes(v, &n);
+  SP_IO_OPEN(f);
+  if (!n) return 0;
+  sp_io_check_writable(f);
+  return sp_File_write_len(f, text, n);
+}
+
+/* IO#syswrite receives the byte count along with the pointer. A regular file writes
    straight to the descriptor (sp_io_write_raw), bypassing the stdio
    buffer: syswrite is unbuffered, so the bytes are on disk before the
    call returns and a read back through the same or another handle sees
@@ -1119,6 +1126,14 @@ sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_G
   if (f->is_sock || f->own_buf == SP_OWN_SOCK) return sp_sock_write(f, s, n);
   if (f->sync_on && sp_io_parkable(f)) return sp_sock_write(f, s, n);
   return sp_io_write_raw(f, s, n);
+}
+
+sp_int sp_File_syswrite_poly(sp_File *f, sp_RbVal v) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT_RBVAL(v);
+  size_t n;
+  const char *text = sp_poly_to_s_bytes(v, &n);
+  return sp_File_syswrite(f, text, n);
 }
 
 sp_bool sp_File_tty_p(sp_File *f) {
@@ -1688,11 +1703,10 @@ sp_int sp_sock_named_const(const char *name, sp_int is_family) {SP_GC_ROOT_STR(n
    (unrestricted), an Integer as given, a String or Symbol by name
    (sp_sock_named_const). */
 sp_int sp_sock_addrinfo_hint(sp_RbVal v, sp_int is_family) {
-  v = sp_rbval_str(v);
   if (v.tag == SP_TAG_NIL) return 0;
   if (v.tag == SP_TAG_INT) return v.v.i;
   const char *name = NULL;
-  if (v.tag == SP_TAG_STR) name = v.v.s;
+  if (sp_rbval_is_string(v)) name = sp_rbval_string_bytes(v);
   else if (v.tag == SP_TAG_SYM && sp_sym_name_fn) name = sp_sym_name_fn((sp_sym)v.v.i);
   if (!name) sp_raise_cls("TypeError", "no implicit conversion into Integer");
   return sp_sock_named_const(name, is_family);
@@ -2076,15 +2090,14 @@ sp_int sp_sock_shutdown(sp_File *f, sp_int how) {SP_GC_ROOT(f);
 /* A setsockopt value as the int the option takes: an Integer, true/false as
    1/0, or the option's packed bytes ([1].pack("i")), as CRuby accepts it. */
 sp_int sp_sock_optval(sp_RbVal v) {
-  /* a shared String handle reads as its bytes (sp_String's first field) */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p) { v.tag = SP_TAG_STR; v.v.s = *(const char **)v.v.p; }
   if (v.tag == SP_TAG_INT) return v.v.i;
   if (v.tag == SP_TAG_BOOL) return v.v.i != 0;
-  if (v.tag == SP_TAG_STR && v.v.s) {
+  const char *bytes = sp_rbval_string_bytes(v);
+  if (bytes) {
     int n = 0;
-    if (sp_str_byte_len(v.v.s) != sizeof n)
+    if (sp_str_byte_len(bytes) != sizeof n)
       sp_raise_cls("ArgumentError", "only an int-sized packed option value is supported");
-    memcpy(&n, v.v.s, sizeof n);
+    memcpy(&n, bytes, sizeof n);
     return n;
   }
   sp_raise_cls("TypeError", "no implicit conversion into Integer");
@@ -2907,14 +2920,15 @@ sp_int sp_File_fcntl(sp_File *f, sp_int cmd, sp_int arg) {SP_GC_ROOT(f);
   return (sp_int)r;
 }
 /* IO#pwrite(str, offset): write without moving the file position. */
-static sp_int sp_File_pwrite_n(sp_File *f, const char *s, size_t n, sp_int off) {
+sp_int sp_File_pwrite_n(sp_File *f, const char *s, size_t n, sp_int off) {
+  SP_GC_ROOT(f); SP_GC_ROOT_STR(s);
   SP_IO_OPEN(f);
   fflush(f->fp);
   ssize_t put = pwrite(fileno(f->fp), s ? s : "", n, (off_t)off);
   if (put < 0) sp_file_raise_errno("pwrite", f->path ? f->path : "");
   return (sp_int)put;
 }
-sp_int sp_File_pwrite(sp_File *f, const char *s, sp_int off) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+sp_int sp_File_pwrite(sp_File *f, const char *s, sp_int off) {
   return sp_File_pwrite_n(f, s, s ? strlen(s) : 0, off);
 }
 /* Binary-safe pwrite, the pair of sp_File_write_bin: sizes the operand with
@@ -2922,7 +2936,7 @@ sp_int sp_File_pwrite(sp_File *f, const char *s, sp_int off) {SP_GC_ROOT(f);SP_G
    cutting the write short. Reads s[-1], so it is for CODEGEN-emitted String
    values only -- the emitter picks it exactly where the write arm picks
    sp_File_write_bin. */
-sp_int sp_File_pwrite_bin(sp_File *f, const char *s, sp_int off) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+sp_int sp_File_pwrite_bin(sp_File *f, const char *s, sp_int off) {
   return sp_File_pwrite_n(f, s, s ? sp_str_byte_len(s) : 0, off);
 }
 /* IO#advise(sym, offset=0, len=0): a hint, and nil either way. POSIX

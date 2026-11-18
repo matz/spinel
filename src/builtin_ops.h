@@ -218,6 +218,7 @@ typedef enum {
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */
   BOPE_STRING_LINES,       /* String#lines without a block */
+  BOPE_STRING_CASECMP,
   BOPE_BOXED_ARRAY_COUNT, /* a count-taking Enumerable read through a box */
   BOPE_BOXED_ARRAY_ONLY,  /* a boxed Array read that requires an Array */
   BOPE_BOXED_ARRAY_OR_RANGE, /* a boxed read that accepts Array and Range */

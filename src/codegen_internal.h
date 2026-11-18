@@ -3009,6 +3009,8 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_lines(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_casecmp(Compiler *c, const BopCtx *x, Buf *b);
+void emit_string_casecmp(Compiler *c, int recv, int arg, int predicate, Buf *b);
 void emit_string_lines_array(Compiler *c, int recv, int argc, const int *argv, Buf *b);
 int emit_op_string_scrub_block(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_transpose(Compiler *c, const BopCtx *x, Buf *b);

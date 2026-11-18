@@ -82,8 +82,9 @@ when the result is a String. Calls that can also return a wait Symbol keep
 their boxed result.
 The native String result passes its handle directly through C. Byte
 consumers project the contents and take a snapshot where the read is
-held across a block. Fiber context switches carry the active
-GC roots and exception state.
+held across a block. When File.join walks boxed path components, it
+keeps the bytes of each selected segment through later conversions.
+Fiber context switches carry the active GC roots and exception state.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;
@@ -104,7 +105,15 @@ length together. This includes registered class conversions and a rescued
 exception’s override or stored message. A generated String member reader named to_s or inspect
 returns its stored field. The default Struct or Data renderer produces
 counted text. String comparisons borrow bytes from the selected conversion
-result. A conditional assignment to a String instance variable evaluates
+result. Case comparisons hold the receiver through `to_str` and read its
+current bytes after conversion. Boxed String readers use the load record
+to select their builtin or an installed override. An alias that captures
+the builtin keeps that implementation in a method scope. A prepend's guard
+and its `super` share the version history of the String method behind it.
+A placed conditional prepend activates its guard when its statement runs.
+Dispatch and `respond_to?` use the active arm's visibility and fall back
+to the underlying method while the guard is clear.
+A conditional assignment to a String instance variable evaluates
 the right-hand side only when the store is taken. It checks whether the
 receiver is frozen after evaluating that value and before updating the slot.
 
@@ -118,6 +127,12 @@ An immediate String append can consume the bytes of a boxed builtin
 selects the builtin display path. Calls that may reach another method
 produce the usual result. A multi-argument append stages its argument
 values before the first write.
+
+Process spawning and the JSON, StringIO and PTY packages read boxed base
+Strings through
+`sp_rbval_is_string` and `sp_rbval_string_bytes`. The byte accessor borrows
+the current contents and leaves the original box intact. Keep that box
+or its owner live across operations that can allocate.
 
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for

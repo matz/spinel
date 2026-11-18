@@ -73,6 +73,7 @@ int is_symbol_conversion(const char *n); /* to_sym intern: a Symbol made of a va
 int is_builtin_helper_name(const char *n); /* __x but not __x__: a builtins/ file's own helper */
 int is_opaque_reaching_call(const char *n); /* send family, call, new, lambda/proc, freeze, eval, instance_/class_/module_*, *method* */
 int is_async_code_entry(const char *recv, const char *n); /* Thread.new/start/fork, Fiber.new, trap, Signal.trap */
+int is_at_exit_name(const char *n);   /* at_exit: its block runs once the load phase is over, when the program exits */
 int is_deferred_block_call(const char *recv, const char *n); /* proc, Proc.new, define_method, at_exit, Enumerator.new, ...: the block runs later */
 int is_name_reader(const char *n);    /* name to_s inspect: a Class's or Module's name */
 int is_plain_builtin_reader(const char *n); /* name: every builtin with it reads a value */

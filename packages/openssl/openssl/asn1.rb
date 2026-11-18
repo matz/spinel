@@ -35,32 +35,42 @@ module OpenSSL
           children << decode_node(der, first, last, depth + 1)
           first = Native.asn1_decode_info(der, first, last, 2)
         end
-        # CRuby's decoder also bypasses Ruby-level initializers.
-        node = Sequence.allocate
-        node.instance_variable_set(:@value, children)
+        # CRuby's decoder also bypasses Ruby-level initializers. Each node is
+        # filled through a local of its own class: one local holding all four
+        # made every instance_variable_set a dispatch over the program's classes.
+        sequence = Sequence.allocate
+        sequence.instance_variable_set(:@value, children)
+        sequence.instance_variable_set(:@tag, tag)
+        sequence.instance_variable_set(:@tag_class, :UNIVERSAL)
+        return sequence
       elsif tag == 2
         bytes = der.byteslice(offset, last - offset)
         number = BN.allocate
         number.instance_variable_set(:@value, Native.asn1_decode_integer(bytes))
-        node = Integer.allocate
-        node.instance_variable_set(:@value, number)
+        integer = Integer.allocate
+        integer.instance_variable_set(:@value, number)
+        integer.instance_variable_set(:@tag, tag)
+        integer.instance_variable_set(:@tag_class, :UNIVERSAL)
+        return integer
       elsif tag == 6
         bytes = der.byteslice(offset, last - offset)
         value = Native.asn1_decode_value(bytes, tag)
         name = value.byteslice(1, value.bytesize - 1)
         name.force_encoding(Encoding::US_ASCII) if value.getbyte(0) == 0
-        node = ObjectId.allocate
-        node.instance_variable_set(:@value, name)
-      else
-        bytes = der.byteslice(offset, last - offset)
-        value = Native.asn1_decode_value(bytes, tag)
-        node = BitString.allocate
-        node.instance_variable_set(:@value, value.byteslice(1, value.bytesize - 1))
-        node.instance_variable_set(:@unused_bits, value.getbyte(0))
+        oid = ObjectId.allocate
+        oid.instance_variable_set(:@value, name)
+        oid.instance_variable_set(:@tag, tag)
+        oid.instance_variable_set(:@tag_class, :UNIVERSAL)
+        return oid
       end
-      node.instance_variable_set(:@tag, tag)
-      node.instance_variable_set(:@tag_class, :UNIVERSAL)
-      node
+      bytes = der.byteslice(offset, last - offset)
+      value = Native.asn1_decode_value(bytes, tag)
+      bits = BitString.allocate
+      bits.instance_variable_set(:@value, value.byteslice(1, value.bytesize - 1))
+      bits.instance_variable_set(:@unused_bits, value.getbyte(0))
+      bits.instance_variable_set(:@tag, tag)
+      bits.instance_variable_set(:@tag_class, :UNIVERSAL)
+      bits
     end
     private_class_method :decode_node
 

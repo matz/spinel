@@ -10883,7 +10883,8 @@ static int prepend_late_stmt(Compiler *c, int ci, int body, int nested) {
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
   int fl = foreign_late_stmt(c, ci, body, ob, nb);
   if (fl >= 0) return fl;
-  /* String already exists before the first body that reopens it. */
+  /* String already exists before the first body that reopens it, even
+     when the load record places that body inside a block. */
   int core_string = nested && ci == comp_core_class(c, CORE_STRING);
   /* The first body can run a call before its own prepend as well. */
   if (nb >= 1 && ob[0].body == body && nt_kind(nt, ob[0].node) == NK_ClassNode &&
@@ -10891,7 +10892,8 @@ static int prepend_late_stmt(Compiler *c, int ci, int body, int nested) {
     int s = ob[0].node, f, rank, cp = nt_ref(nt, s, "constant_path");
     elab_top_place(c, s, &f, &rank);
     if (cp >= 0 && (nt_kind(nt, cp) == NK_ConstantReadNode || nt_kind(nt, cp) == NK_ConstantPathNode) && f >= 0 &&
-        comp_parent_map(c)[s] == prog_root_stmts(c, f)) return s;
+        ((core_string && elab_point_of(c, s).region >= 0) ||
+         comp_parent_map(c)[s] == prog_root_stmts(c, f))) return s;
   }
   for (int k = 1; k < nb; k++) {
     int s = ob[k].node, f, rank;

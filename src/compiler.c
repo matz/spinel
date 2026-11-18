@@ -552,6 +552,7 @@ void comp_free(Compiler *c) {
   c->vs_count = c->vs_cap = 0;
   c->vs_built = 0;
   free(c->cg_parent);
+  free(c->hdr_cp);
   c->cg_parent = NULL;
   c->cg_parent_n = 0;
   free(c->lazy_hoist);

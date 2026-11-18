@@ -8779,10 +8779,17 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
        slot of another C type. */
     if (slot == s->rest_idx || slot == s->kwrest_idx) continue;
     TyKind pt = parse_seed_type(c, field);
+    /* `nil` types a parameter that only ever holds nil. No C slot kind
+       carries just nil (codegen refuses a TY_NIL parameter), so the slot
+       binds boxed, as an_phase_late_widen makes a nil-only local: every
+       caller hands it a boxed nil, and nil_only tells the reads so. */
+    int nil_param = pt == TY_NIL;
+    if (nil_param) pt = TY_POLY;
     if (pt != TY_UNKNOWN) {
       LocalVar *lv = scope_local(s, s->pnames[slot]);
       if (lv) {
         lv_set_type(lv, pt); lv->rbs_seeded = 1; lv->rbs_type = pt;
+        if (nil_param) lv->nil_only = 1;
         /* a nilable int parameter can hold nil like any other: mark it so
            it is an oint and boxing it answers nil rather than a number */
         if (g_seed_nilable && (pt == TY_INT || pt == TY_FLOAT)) lv->nullable_int = 1;

@@ -3605,8 +3605,10 @@ static int sg_block_param_new(Compiler *c, int id, const char *name, int *out_ci
 /* Point the `= <Class>.new(...)` of write `wnode` at class `snm`, so the
    binding's type becomes it and `.new` builds it. A local receiver becomes
    the constant: it held that class's parent and nothing else. `wnode` may
-   also be the `.new` call itself (a block parameter's binding). */
-static void sg_retarget(Compiler *c, int wnode, const char *snm) {
+   also be the `.new` call itself (a block parameter's binding). The
+   constant carries the class it names (made_class: its index + 1), which
+   no constant of the program holds by that name. */
+static void sg_retarget(Compiler *c, int wnode, const char *snm, int ci) {
   NodeTable *nt = (NodeTable *)c->nt;
   int newcall = nt_kind(nt, wnode) == NK_CallNode ? wnode : nt_ref(nt, wnode, "value");
   int wrecv = nt_ref(nt, newcall, "receiver");
@@ -3617,6 +3619,7 @@ static void sg_retarget(Compiler *c, int wnode, const char *snm) {
     nt_node_set_int(nt, wrecv, "node_file", file);
   }
   nt_node_set_str(nt, wrecv, "name", snm);
+  nt_node_set_int(nt, wrecv, "made_class", ci + 1);
 }
 
 /* wnode -> synthesized subclass index map, so every singleton def/extend on
@@ -3653,7 +3656,7 @@ static int sg_chain_link(Compiler *c, SgMap *m, int wnode, int parent_ci) {
   comp_class_shape_changed();
   sc->is_singleton_of = orig + 1;
   /* the binding's type is the LAST link: retarget on every addition */
-  sg_retarget(c, wnode, snm);
+  sg_retarget(c, wnode, snm, newci);
   for (int i = 0; i < m->n; i++) if (m->wkey[i] == wnode) { m->wci[i] = newci; return newci; }
   if (m->n >= m->cap) {
     m->cap = m->cap ? m->cap * 2 : 8;
@@ -3677,7 +3680,7 @@ static int sg_get_or_make(Compiler *c, SgMap *m, int wnode, int parent_ci) {
   sc->is_singleton_of = parent_ci + 1;
   /* retarget the `= Parent.new(...)` receiver to the synthesized class so the
      binding's type becomes ty_object(newci) and .new builds it. */
-  sg_retarget(c, wnode, snm);
+  sg_retarget(c, wnode, snm, newci);
   if (m->n >= m->cap) { m->cap = m->cap ? m->cap * 2 : 8; m->wkey = realloc(m->wkey, sizeof(int) * (size_t)m->cap); m->wci = realloc(m->wci, sizeof(int) * (size_t)m->cap); }
   m->wkey[m->n] = wnode; m->wci[m->n] = newci; m->n++;
   return newci;

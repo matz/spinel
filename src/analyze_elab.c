@@ -192,7 +192,8 @@ struct LoadRecord {
   struct LrAnc { int *at, nlist, clist, *seen, *walked, *depth, *up, mark; struct LrAncK { int k, on, mixed; } *list; unsigned char ready;
                  struct { unsigned long hgen; unsigned shape, ver; int nhist, ncls, nclasses, recorded; } of; } anc;
   int *mby, *mby_at, mby_unknown; struct { int nhist, ncls, recorded; unsigned ver; } mby_of;   /* lr_mixed_by: who mixes each module in, as (class + 1) * 2 + singleton, CSR by module + 1 */
-  int *rclass; struct { unsigned long hgen, nedits; unsigned shape, nver; int nclasses; } rclass_of;   /* [nclasses] by class: elab_record_class_of's answer + 2, 0 for not asked yet, and the state it is of */
+  int *rclass; struct { unsigned long hgen, nedits; unsigned shape, nver; int nclasses; } rclass_of;
+  int *cref; int ncref; struct { unsigned long hgen, nedits; unsigned shape, nver; int nclasses, count; } cref_of;   /* [ncref] by node: elab_class_ref_at's answer - LR_BUILTIN + 1 and its core + 2, 0 for not asked yet, and the state it is of */   /* [nclasses] by class: elab_record_class_of's answer + 2, 0 for not asked yet, and the state it is of */
   struct LrSgMaker { int node, cls; unsigned char sure; } *sgm; int nsgm, csgm;   /* lr_sg_makers, with the modules a singleton chain may hold (any of them: sgchain_any) */
   unsigned char *sgchain; int sgchain_any; struct { int recorded, nclasses; unsigned ver; } sgm_of;
   /* elab_class_unsettled's answers from the record, the tables and the
@@ -1507,16 +1508,39 @@ static int lr_class_ref_at(Compiler *c, int node, int *core) {
    appended the node since gets the answer at its source position, and the
    map is not rebuilt per ask. A node the frame cannot place answers not
    known. SPINEL_ELAB_CHECK asks the map as it is too. */
+/* The memo of elab_class_ref_at, kept while what it reads holds, as
+   lr_rclass_memo's, and the node count: a frame places a node by the tree
+   around it. */
+static int *lr_cref_memo(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  if (!r->cref || r->cref_of.hgen != r->hgen || r->cref_of.shape != comp_class_shape_gen() || r->cref_of.nclasses != c->nclasses ||
+      r->cref_of.nver != nt->version || r->cref_of.nedits != nt->edits || r->cref_of.count != nt->count) {
+    free(r->cref);
+    r->ncref = nt->count;
+    if (!(r->cref = calloc(2 * (size_t)r->ncref + 2, sizeof(int)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    r->cref_of.hgen = r->hgen; r->cref_of.shape = comp_class_shape_gen(); r->cref_of.nclasses = c->nclasses;
+    r->cref_of.nver = nt->version; r->cref_of.nedits = nt->edits; r->cref_of.count = nt->count;
+  }
+  return r->cref;
+}
 int elab_class_ref_at(Compiler *c, int node, int *core) {
   LoadRecord *r = lr_get(c);
   if (!r->recorded || r->walk || r->plan_depth) return lr_class_ref_at(c, node, core);
-  int framed = elab_plan_enter(c, node), ci = LR_UNKNOWN_CLASS;
-  if (core) *core = -1;
+  int *memo = !r->check && node >= 0 && node < c->nt->count ? lr_cref_memo(c) : NULL;
+  if (memo && memo[2 * node]) {
+    if (core) *core = memo[2 * node + 1] - 2;
+    return memo[2 * node] + LR_BUILTIN - 1;
+  }
+  int framed = elab_plan_enter(c, node), ci = LR_UNKNOWN_CLASS, co = -1;
   if (framed) {
-    ci = lr_class_ref_at(c, node, core);
+    ci = lr_class_ref_at(c, node, &co);
     elab_plan_leave(c);
   }
+  if (core) *core = co;
   if (r->check) lr_check_class_ref(c, node, ci);
+  /* (asked again: the answer's own asks can renew the memo under the one taken above) */
+  if (memo && ci >= LR_BUILTIN && co >= -1 && (memo = lr_cref_memo(c)) && node < r->ncref) { memo[2 * node] = ci - LR_BUILTIN + 1; memo[2 * node + 1] = co + 2; }
   return ci;
 }
 
@@ -11794,7 +11818,7 @@ void elab_free(Compiler *c) {
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
   free(r->fin); free(r->fin_head);
-  free(r->brings); free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
+  free(r->brings); free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->cref); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
   free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r);

@@ -5013,6 +5013,55 @@ static int fi_body_unforceable(Compiler *c, int id, int depth) {
   return 0;
 }
 
+static int g_fi_trunc;
+static void fi_collect_calls(Compiler *c, int body, int *out, int *n, int max, int depth);
+/* Anything in this subtree the emitter lowers through setjmp: a begin with
+   a rescue or an ensure (a def's own rescue is one), a rescue modifier,
+   retry. */
+static int fi_body_setjmp(Compiler *c, int id, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;
+  if (depth > 64) return 1;
+  switch (nt_kind(nt, id)) {
+    case NK_BeginNode:
+      if (nt_ref(nt, id, "rescue_clause") >= 0 || nt_ref(nt, id, "ensure_clause") >= 0) return 1;
+      break;
+    case NK_RescueNode: case NK_RescueModifierNode: case NK_RetryNode: case NK_EnsureNode:
+      return 1;
+    default: break;
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (fi_body_setjmp(c, nt_ref_at(nt, id, i), depth + 1)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++)
+      if (fi_body_setjmp(c, ids[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+static void fi_callees(Compiler *c, int callnode, int *out, int *n, int max);
+/* A call to a yielding method is spliced where it stands (emit_inline_call_x),
+   with or without a block: the callee's body becomes the caller's, so a
+   rescue or an ensure there lowers through setjmp in the caller, and gcc
+   refuses always_inline on it (Net::HTTP#get, whose request has both). A
+   call whose callees cannot all be listed is taken as one. */
+static int fi_spliced_unforceable(Compiler *c, int body) {
+  enum { FI_SPL_CALLS = 256, FI_SPL_CALLEES = 32 };
+  int calls[FI_SPL_CALLS], cal[FI_SPL_CALLEES], nc = 0;
+  g_fi_trunc = 0;
+  fi_collect_calls(c, body, calls, &nc, FI_SPL_CALLS, 0);
+  if (g_fi_trunc) return 1;
+  for (int i = 0; i < nc; i++) {
+    int n2 = 0;
+    fi_callees(c, calls[i], cal, &n2, FI_SPL_CALLEES);
+    for (int j = 0; j < n2; j++)
+      if (c->scopes[cal[j]].yields && fi_body_setjmp(c, c->scopes[cal[j]].body, 0)) return 1;
+  }
+  return 0;
+}
+
 /* Set when the walk below stopped early. A truncated call list under-counts,
    and every user of it is deciding whether something FITS, so the callers
    treat a truncated answer as "does not fit" rather than trusting the short
@@ -5363,6 +5412,7 @@ static void fi_build(Compiler *c) {
     if (!ok) continue;
     if (fi_body_unforceable(c, m->body, 0)) continue;
     if (fi_callee_defaults_unforceable(c, m->body)) continue;
+    if (fi_spliced_unforceable(c, m->body)) continue;
     if (fi_body_has_loop(c, m->body, 0)) continue;
     /* A default moved into a method of its own (#4900) calls back into the
        method whose default it is, and that call emits the default -- a call

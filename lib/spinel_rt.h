@@ -7387,7 +7387,9 @@ static SP_UNUSED sp_RbVal sp_poly_spaceship_v(sp_RbVal a, sp_RbVal b) {
    rb_cmpint normalizes before the negation, so a class answering 7 orders
    the pair rather than negating to -7. */
 static sp_oint sp_str_cmp_obj(const char *s, sp_RbVal o) {
-  sp_RbVal a = sp_box_str(s);
+  SP_GC_ROOT_RBVAL(o);
+  sp_RbVal a = sp_box_str_new(s);
+  SP_GC_ROOT_RBVAL(a);
   sp_oint r = sp_poly_spaceship(a, o);
   if (!r.nil) return r;
   if (o.tag == SP_TAG_OBJ && o.cls_id >= 0 && sp_obj_cmp_hook) {
@@ -14950,14 +14952,16 @@ static sp_bool sp_poly_eql_strict_obj(sp_RbVal a, sp_RbVal b) {
   }
 }
 static SP_NOINLINE sp_bool sp_poly_eql_strict_slow(sp_RbVal a, sp_RbVal b) {
-  /* a mutable String's handle is the String it holds */
-  a = sp_poly_strbuf_deref(a); b = sp_poly_strbuf_deref(b);
+  /* Only a String comparison reads the argument's bytes. A program's eql?
+     receives the original box and may retain it. */
+  a = sp_poly_strbuf_deref(a);
   switch (a.tag) {
     case SP_TAG_INT: case SP_TAG_BIGINT:
       if (b.tag != SP_TAG_INT && b.tag != SP_TAG_BIGINT) return FALSE;
       return a.tag == SP_TAG_INT && b.tag == SP_TAG_INT ? a.v.i == b.v.i : sp_poly_eq(a, b);
     case SP_TAG_FLT: return b.tag == SP_TAG_FLT && a.v.f == b.v.f;
     case SP_TAG_STR:
+      b = sp_poly_strbuf_deref(b);
       if (b.tag != SP_TAG_STR) return FALSE;
       if (a.v.s == b.v.s) return TRUE;
       return a.v.s && b.v.s && sp_str_cmp_bytes(a.v.s, b.v.s) == 0;
@@ -21822,9 +21826,8 @@ static sp_bool sp_poly_case_eq(sp_RbVal pat, sp_RbVal e) {
     if (ed.tag != SP_TAG_STR) return 0;
     return sp_srange_cover(r, ed.v.s ? ed.v.s : sp_str_empty);
   }
-  /* a shared-mutable string on either side behaves as its value (#3227) */
-  if (sp_poly_is_strbuf(pat) || sp_poly_is_strbuf(e))
-    return sp_poly_rb_equal(sp_poly_strbuf_deref(pat), sp_poly_strbuf_deref(e));
+  /* Equality reads String handles directly; a program's == keeps its
+     original argument when Object#=== calls it. */
   return sp_poly_rb_equal(pat, e);
 }
 /* `pattern === element` as a value: a class method `===` of the program's

@@ -1627,7 +1627,7 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
        comes from reads elsewhere, not from this slot (#4111) */
     if (t == TY_BIGINT && !repr_of(c, v).big && ty_is_numeric(comp_ntype(c, v))) {
       /* an Integer into a Bignum slot is promoted, as a plain ivar write does */
-      buf_puts(&vval, "sp_bigint_new_int("); emit_int_expr(c, v, &vval); buf_puts(&vval, ")");
+      if (!emit_bigint_lit(c, v, &vval)) { buf_puts(&vval, "sp_bigint_new_int("); emit_int_expr(c, v, &vval); buf_puts(&vval, ")"); }
     }
     else if (emit_empty_literal_as(c, v, t, &vval)) { }
     /* a typed array into a general Array slot is rebuilt as one, as a plain
@@ -2673,7 +2673,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       if (repr_of(c, v).kind == RK_BOXED) {
         buf_puts(b, "sp_poly_as_bigint("); emit_expr(c, v, b); buf_puts(b, ")");
       }
-      else { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, v, b); buf_puts(b, ")"); }
+      else if (!emit_bigint_lit(c, v, b)) { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, v, b); buf_puts(b, ")"); }
     }
     /* poly RHS into a scalar/string slot: the same unbox the statement form
        applies (emit_poly_rhs_coerced) */

@@ -8066,7 +8066,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
          both 1 and 2**200 typed its parameter sp_Bigint* and then passed it a
          raw sp_int. */
       if (pt == TY_BIGINT && !ar.big && ar.kind != RK_BOXED && ty_is_numeric(at)) {
-        buf_puts(out, "sp_bigint_new_int("); emit_int_expr(c, provided, out); buf_puts(out, ")");
+        if (!emit_bigint_lit(c, provided, out)) { buf_puts(out, "sp_bigint_new_int("); emit_int_expr(c, provided, out); buf_puts(out, ")"); }
         return;
       }
       if (pt == TY_BIGINT && ar.kind == RK_BOXED) {
@@ -8435,7 +8435,7 @@ else if (dk == NK_NilNode) {
      sp_Bigint* slot without it. */
   else if (pt == TY_BIGINT && !repr_of(c, dv).big &&
            ty_is_numeric(comp_ntype(c, dv))) {
-    buf_puts(out, "sp_bigint_new_int("); emit_int_expr(c, dv, out); buf_puts(out, ")");
+    if (!emit_bigint_lit(c, dv, out)) { buf_puts(out, "sp_bigint_new_int("); emit_int_expr(c, dv, out); buf_puts(out, ")"); }
   }
   /* a number slot that holds its nil beside the value takes the default's
      oint form (a plain default is wrapped as never nil) */

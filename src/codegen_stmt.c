@@ -6487,7 +6487,7 @@ int emit_scalar_op_assign(Compiler *c, const char *lval, TyKind t, const char *o
     emit_expr(c, v, &rb); buf_puts(&rb, ")");
   }
   else if (t == TY_BIGINT && vt == TY_INT) {
-    buf_puts(&rb, "sp_bigint_new_int("); emit_expr(c, v, &rb); buf_puts(&rb, ")");
+    if (!emit_bigint_lit(c, v, &rb)) { buf_puts(&rb, "sp_bigint_new_int("); emit_expr(c, v, &rb); buf_puts(&rb, ")"); }
   }
   /* an unresolved call (`t += f.weight` with no such method) lowers to the
      gate's raise token, an sp_RbVal; coerce it as a plain write does */
@@ -21445,7 +21445,7 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
        fixing the argument side). */
     else if (ivt == TY_BIGINT && comp_ntype(c, v) != TY_BIGINT &&
              ty_is_numeric(comp_ntype(c, v))) {
-      buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, v, b); buf_puts(b, ")");
+      if (!emit_bigint_lit(c, v, b)) { buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, v, b); buf_puts(b, ")"); }
     }
     else if (seeded_array_kind_mismatch(ivt, comp_ntype(c, v))) {
       /* An array of another kind into an array ivar a true --rbs seed kept at
@@ -23362,7 +23362,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
         else emit_coerce(c, v, ivt2, CO_HOLD, "an instance variable's `||=` or `&&=`", &vval);
       }
       else if (ivt2 == TY_BIGINT && comp_ntype(c, v) != TY_BIGINT && ty_is_numeric(comp_ntype(c, v))) {
-        buf_puts(&vval, "sp_bigint_new_int("); emit_int_expr(c, v, &vval); buf_puts(&vval, ")");
+        if (!emit_bigint_lit(c, v, &vval)) { buf_puts(&vval, "sp_bigint_new_int("); emit_int_expr(c, v, &vval); buf_puts(&vval, ")"); }
       }
       /* an Integer or Float slot holding its nil: the bit kept in step, or the oint */
       else if (oint_kind(ivt2) && (onk = ivar_orw_niltest(c, id, ref2, ont, sizeof ont, &ocid, &oiv, opfx, sizeof opfx)) == 1)

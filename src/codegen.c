@@ -24209,6 +24209,32 @@ static void bigl_intern_program(Compiler *c) {
       if (big & 1) bigl_intern(nt_str(c->nt, id, "rat_num"));
       if (big & 2) bigl_intern(nt_str(c->nt, id, "rat_den"));
     }
+    /* A word-sized literal a Bignum operation takes (`v & 0xFFFF`,
+       `big != 0`, `@x = 0` into a Bignum slot) and a literal shift past a
+       word (`1 << 64`) get a slot too, so emit_bigint_operand and the shift
+       name the shared Bignum rather than building one each time the line
+       runs. A literal this misses is still built in place (bigl_lookup). */
+    else if (k == NK_CallNode) {
+      char txt[400];
+      if (bigl_shift_text(c, id, txt, sizeof txt)) { bigl_intern(txt); continue; }
+      int recv = nt_ref(c->nt, id, "receiver"), argc = 0;
+      const int *argv = call_args(c->nt, id, &argc);
+      if (comp_ntype(c, id) != TY_BIGINT && (recv < 0 || comp_ntype(c, recv) != TY_BIGINT)) continue;
+      for (int i = -1; i < argc; i++) {
+        int lit = i < 0 ? recv : argv[i];
+        if (lit < 0 || nt_kind(c->nt, lit) != NK_IntegerNode || nt_str(c->nt, lit, "bigval")) continue;
+        char t[32]; bigl_int_text(c, lit, t); bigl_intern(t);
+      }
+    }
+    else if (k == NK_LocalVariableWriteNode || k == NK_InstanceVariableWriteNode ||
+             k == NK_GlobalVariableWriteNode || k == NK_ClassVariableWriteNode ||
+             k == NK_LocalVariableOperatorWriteNode || k == NK_InstanceVariableOperatorWriteNode) {
+      int val = nt_ref(c->nt, id, "value");
+      if (val >= 0 && nt_kind(c->nt, val) == NK_IntegerNode && !nt_str(c->nt, val, "bigval") &&
+          comp_ntype(c, id) == TY_BIGINT) {
+        char t[32]; bigl_int_text(c, val, t); bigl_intern(t);
+      }
+    }
   }
 }
 

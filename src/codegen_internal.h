@@ -1194,6 +1194,18 @@ int stmts_diverge(Compiler *c, int stmts);
 extern char **g_bigl_val;
 extern int g_bigl_n;
 int bigl_intern(const char *v);
+/* the slot of a literal already interned, -1 when none (an emitter asks this
+   after the table is written, so it never adds one) */
+int bigl_lookup(const char *v);
+/* An Integer literal a Bignum operation takes, as the shared slot the program
+   scan interned for it: 1 when emitted, 0 (nothing written) otherwise */
+int emit_bigint_lit(Compiler *c, int node, Buf *b);
+int emit_bigint_shift_lit(Compiler *c, int call, Buf *b);   /* the same for `v << n` */
+/* An Integer literal's decimal, for the table (32 bytes holds any sp_int) */
+void bigl_int_text(Compiler *c, int lit, char out[32]);
+/* The decimal of literal shift `v << n` when it is past sp_int, into out
+   (cap bytes); 0 when it is not one, or too long to keep as a literal */
+int bigl_shift_text(Compiler *c, int call, char *out, size_t cap);
 /* Whole-program feature presence, computed once before main is emitted, so the
    main() prologue can skip setup a trivial program never needs:
    g_emit_sym_rt -> sp_tu_init sets sp_sym_name_fn; g_uses_regex -> sp_tu_init

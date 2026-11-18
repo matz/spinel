@@ -516,6 +516,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
      Promote to a bigint shift. */
   if (recv >= 0 && argc == 1 && sp_streq(name, "<<") && rt == TY_INT &&
       repr_of(c, id).big) {
+    if (emit_bigint_shift_lit(c, id, b)) return 1;   /* both sides literal */
     buf_puts(b, "sp_bigint_shl(sp_bigint_new_int(");
     emit_expr(c, recv, b);
     buf_puts(b, "), ");
@@ -549,7 +550,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       buf_printf(b, "; SP_GC_ROOT(_t%d); sp_Bigint *_t%d = ", tbl, tbr);
       if (a0r.big) emit_expr(c, argv[0], b);
       else if (a0r.kind == RK_BOXED) { buf_puts(b, "sp_poly_as_bigint("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else { buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (!emit_bigint_lit(c, argv[0], b)) { buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       buf_printf(b, "; SP_GC_ROOT(_t%d); sp_bigint_%s(_t%d, _t%d); })", tbr, fn, tbl, tbr);
     }
     return 1;
@@ -772,10 +773,10 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       oint_lift_open(c, id, TY_INT, b);
       buf_printf(b, "({ int _t%d = sp_bigint_cmp(", tc);
       if (lrt == TY_BIGINT) emit_expr(c, recv, b);
-      else { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, recv, b); buf_puts(b, ")"); }
+      else if (!emit_bigint_lit(c, recv, b)) { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       buf_puts(b, ", ");
       if (latr.big) emit_expr(c, argv[0], b);
-      else { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (!emit_bigint_lit(c, argv[0], b)) { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       buf_printf(b, "); (sp_int)((_t%d > 0) - (_t%d < 0)); })", tc, tc);
       oint_lift_close(c, id, b);
       return 1;

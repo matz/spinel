@@ -5405,8 +5405,8 @@ sp_Bigint *sp_bigint_from_le_bytes(int negative, const unsigned char *bytes, siz
 }
 
 void sp_bigint_free(sp_Bigint *b) {
-  if (b && !sp_bigint_is_inline(b)) {
-    mpz_clear(sp_mpz_ctx, &b->mpz);
+  if (b) {
+    if (!sp_bigint_is_inline(b)) mpz_clear(sp_mpz_ctx, &b->mpz);
     if (!sp_gc_alloc_nogc) free(b);
   }
 }
@@ -5577,11 +5577,7 @@ int64_t sp_bigint_to_int(sp_Bigint *b) {
 /* IO::Buffer's u64 lane (lib/sp_iobuffer.c): a full unsigned-64 constructor,
    and the magnitude reader its range checks decide from. */
 sp_Bigint *sp_bigint_new_u64(uint64_t v) {
-  sp_bigint_init_ctx();
-  mpz_t b_t;
-  mpz_init(sp_mpz_ctx, &b_t);
-  mpz_set_uint64(sp_mpz_ctx, &b_t, v);
-  return sp_bigint_seal(&b_t);
+  return sp_bigint_new_mag(v, 0);   /* a word fits the inline limbs at either limb width */
 }
 
 /* |b| into *out when it fits 64 bits; 0 (out untouched) when it doesn't.

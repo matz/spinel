@@ -54,3 +54,4 @@ show "kept", kept.size
 show "kept sum", kept.sum
 show "kept max", kept.max
 show "marshal", Marshal.load(Marshal.dump([big1 + 1, -(big3), 0, MASK64])).inspect
+show "u64 unpack", [0, 4294967296, 9223372036854775808, MASK64].map { |v| [v].pack("Q<").unpack1("Q<") }.inspect

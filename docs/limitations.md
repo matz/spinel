@@ -1587,8 +1587,10 @@ padding (`ljust` / `rjust` / `center`, a `"\0"` pad included).
 Interpolation and the `format` family are byte-exact too since #4632:
 `"x#{s}y"`, `format` / `sprintf` / `String#%` (with a width or a
 precision as well) carry the NUL and its tail, as do `IO#write`,
-`#syswrite`, `#print`, `#puts` and `#pwrite`. For `write` and `syswrite`,
-a String returned by an operand's `to_s` also supplies its full byte count. `inspect` renders `\x00` where CRuby
+`#syswrite`, `#print`, `#puts` and `#pwrite`. For `write`, `syswrite` and `pwrite`,
+the String returned by an operand's `to_s` supplies its full byte count.
+`pwrite` converts the operand before the offset and reads the String
+after both conversions, so it sees any mutation made during `to_int`. `inspect` renders `\x00` where CRuby
 prints `\u0000`. `test/embedded_nul_method_partition.rb` pins which
 method is which, and `test/format_interp_binary.rb` the formatting.
 

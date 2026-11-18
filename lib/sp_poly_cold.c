@@ -609,13 +609,18 @@ const char *sp_poly_to_s(sp_RbVal v) {
   return sp_poly_to_s_impl(v, NULL);
 }
 
-const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length) {
+const char *sp_poly_to_s_bytes_owner(sp_RbVal v, size_t *length, sp_String **owner) {
   /* A selected Ruby String provides its length in its header. Fixed C
      display text leaves the count unset and uses its terminating NUL. */
   *length = SIZE_MAX;
   const char *text = sp_poly_to_s_impl(v, length);
+  if (owner) *owner = *length == SIZE_MAX ? NULL : sp_str_fd_owner(text);
   if (*length == SIZE_MAX) *length = strlen(text);
   return text;
+}
+
+const char *sp_poly_to_s_bytes(sp_RbVal v, size_t *length) {
+  return sp_poly_to_s_bytes_owner(v, length, NULL);
 }
 
 /* The class name of a boxed value, and in *id the builtin class id of that name

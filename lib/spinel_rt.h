@@ -4391,17 +4391,25 @@ static sp_int sp_File_pwrite_poly(sp_File *f, sp_RbVal v, sp_RbVal offset) {
   SP_GC_ROOT_RBVAL(text);
   const char *converted = NULL;
   SP_GC_ROOT_STR(converted);
+  sp_String *owner = NULL;
+  SP_GC_ROOT(owner);
+  size_t length = 0;
   if (!sp_rbval_is_string(v)) {
     if (sp_user_display_box(v, 0, &text)) {
-      if (!sp_rbval_is_string(text)) converted = sp_obj_to_s_fallback(v);
+      if (!sp_rbval_is_string(text)) {
+        converted = sp_obj_to_s_fallback(v);
+        length = strlen(converted);
+      }
     } else {
       text = sp_box_nil();
-      converted = sp_poly_to_s(v);
+      converted = sp_poly_to_s_bytes_owner(v, &length, &owner);
+      if (owner) converted = NULL;   /* offset conversion may grow the payload */
     }
   }
   sp_int off = sp_poly_arg_int_chk_w(offset, 2);
-  return sp_rbval_is_string(text) ? sp_File_pwrite_bin(f, sp_rbval_string_bytes(text), off)
-                                  : sp_File_pwrite(f, converted, off);
+  if (sp_rbval_is_string(text)) return sp_File_pwrite_bin(f, sp_rbval_string_bytes(text), off);
+  if (owner) return sp_File_pwrite_n(f, owner->data, (size_t)owner->len, off);
+  return sp_File_pwrite_n(f, converted, length, off);
 }
 /* The domain or socket type Socket.new, Socket.pair and UDPSocket.new take:
    a String or Symbol names the constant (sp_sock_named_const), and anything

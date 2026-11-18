@@ -61,5 +61,29 @@ p handles[0].pwrite(rendered[0], Offset.new(text))
 file.rewind
 bytes = file.read
 p [bytes.bytesize, bytes.bytes[0, 3]]
+file.truncate(0)
+match = [/a.b/m.match("a\0b"), 1]
+p handles[0].pwrite(match[0], 0)
+file.rewind
+p file.read(3).bytes
+
+text = +"a\0b"
+errors = [RuntimeError.new(text), 1]
+p handles[0].pwrite(errors[0], Offset.new(text))
+file.rewind
+p [file.read.bytesize, text.bytesize]
+
+def traced_arguments(value)
+  puts "arguments"
+  [value, 0]
+end
+
+p (if ENV["SPINEL_TEST_RECEIVER"]
+     puts "other receiver"
+     file
+   else
+     puts "receiver"
+     file
+   end).pwrite(*traced_arguments(match[0]))
 file.close
 File.unlink(path)

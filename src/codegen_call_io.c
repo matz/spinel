@@ -1830,6 +1830,9 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
   if (recv >= 0 && comp_ntype(c, recv) == TY_IO) {
     if (sp_streq(name, "timeout=") && argc == 1)
       return emit_io_timeout_set(c, id, recv, argv[0], b);
+    if (argc >= 1 && is_positional_io(name) && name[1] == 'w' && nt_argv_has_splat(nt, argv, argc) &&
+        emit_boxed_positional_io(c, recv, name, argc, argv, ++g_tmp, b))
+      return 1;
     const char *r = NULL;
     Buf rb = {0};
     emit_expr(c, recv, &rb);
@@ -2049,10 +2052,6 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       free(rb.p); return 1;
     }
     if (sp_streq(name, "pwrite") && argc >= 1) {
-      if (nt_argv_has_splat(nt, argv, argc) &&
-          emit_boxed_positional_io(c, recv, name, argc, argv, ++g_tmp, b)) {
-        free(rb.p); return 1;
-      }
       Repr operand = repr_of(c, argv[0]);
       if (argc == 2 && (operand.kind == RK_BOXED || operand.as_ty == TY_STRING)) {
         int tf = ++g_tmp;

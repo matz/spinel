@@ -2920,14 +2920,15 @@ sp_int sp_File_fcntl(sp_File *f, sp_int cmd, sp_int arg) {SP_GC_ROOT(f);
   return (sp_int)r;
 }
 /* IO#pwrite(str, offset): write without moving the file position. */
-static sp_int sp_File_pwrite_n(sp_File *f, const char *s, size_t n, sp_int off) {
+sp_int sp_File_pwrite_n(sp_File *f, const char *s, size_t n, sp_int off) {
+  SP_GC_ROOT(f); SP_GC_ROOT_STR(s);
   SP_IO_OPEN(f);
   fflush(f->fp);
   ssize_t put = pwrite(fileno(f->fp), s ? s : "", n, (off_t)off);
   if (put < 0) sp_file_raise_errno("pwrite", f->path ? f->path : "");
   return (sp_int)put;
 }
-sp_int sp_File_pwrite(sp_File *f, const char *s, sp_int off) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+sp_int sp_File_pwrite(sp_File *f, const char *s, sp_int off) {
   return sp_File_pwrite_n(f, s, s ? strlen(s) : 0, off);
 }
 /* Binary-safe pwrite, the pair of sp_File_write_bin: sizes the operand with
@@ -2935,7 +2936,7 @@ sp_int sp_File_pwrite(sp_File *f, const char *s, sp_int off) {SP_GC_ROOT(f);SP_G
    cutting the write short. Reads s[-1], so it is for CODEGEN-emitted String
    values only -- the emitter picks it exactly where the write arm picks
    sp_File_write_bin. */
-sp_int sp_File_pwrite_bin(sp_File *f, const char *s, sp_int off) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+sp_int sp_File_pwrite_bin(sp_File *f, const char *s, sp_int off) {
   return sp_File_pwrite_n(f, s, s ? sp_str_byte_len(s) : 0, off);
 }
 /* IO#advise(sym, offset=0, len=0): a hint, and nil either way. POSIX

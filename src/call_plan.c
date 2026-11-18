@@ -3844,9 +3844,11 @@ static int ver_chain_undef(Compiler *c, int rcls, int sg, const char *name) {
 }
 /* The face of the entry call id binds on rcls's chain (side sg): a
    variable-like call's (nt_vcall) where the chain holds an undef, whose arm
-   raises NameError for it (VF_VCALL); else ct_face_for's */
-static int ct_call_face(Compiler *c, int id, int rcls, int sg, const char *name, unsigned flags) {
-  if (id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) && ver_chain_undef(c, rcls, sg, name)) return VF_VCALL;
+   raises NameError for it (VF_VCALL), or where it may meet no version
+   (none), whose else arm does; else ct_face_for's. (Elsewhere its entry
+   is the one every other call takes.) */
+static int ct_call_face(Compiler *c, int id, int rcls, int sg, const char *name, unsigned flags, int none) {
+  if (id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) && (none || ver_chain_undef(c, rcls, sg, name))) return VF_VCALL;
   return ct_face_for(c, rcls, sg, name, flags);
 }
 /* The version of `name` call id runs, when the method has more than one
@@ -3971,7 +3973,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     /* the entry, where the chain holds still over the window: asked of
        an entry that was made, or by the entries' build (span); for a
        call that only meets no version, one that answers for none */
-    int ar = ver_call_arity(c, id, rcls, sg, name, mi), face = ct_call_face(c, id, rcls, sg, name, flags);
+    int ar = ver_call_arity(c, id, rcls, sg, name, mi), face = ct_call_face(c, id, rcls, sg, name, flags, none);
     int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar, face), own = ix;
     if (ix < 0 && face) ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar, VF_NONE);   /* (no face entry made: the entry every arm of which runs) */
     int many = n >= 2 || n == ELAB_SPAN_ANY;
@@ -3979,10 +3981,14 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     const Scope *in = comp_scope_of(c, id);
     /* (an entry only where the call takes it, in a body that may run; an
        Kernel.String's Symbol callback can also look up a late history) */
+    /* (a variable-like call's entry raises NameError where none is live: its own face's,
+       where its else arm raises: one that runs a method is the entry of no face, VerEntry.anyform) */
+    int nface = face == VF_VCALL ? VF_VCALL : VF_NONE, nix = face == VF_VCALL ? own : ix;
+    if (face == VF_VCALL && own < 0 && ix >= 0 && c->ver_entries[ix].anyform) nface = VF_NONE, nix = ix;
     if (none && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey &&
-        (ix < 0 || !c->ver_entries[ix].absent) &&
+        (nix < 0 || !c->ver_entries[nix].absent) &&
         (!(flags & CT_IMPLIED) || kernel_callback))
-      ver_absent_note(c, rcls, sg, name, mi, ar, ver_mm_at(c, rcls, sg, p, at, &w), 0, VF_NONE);
+      ver_absent_note(c, rcls, sg, name, mi, ar, ver_mm_at(c, rcls, sg, p, at, &w), 0, nface);
     /* a call the build did not ask (one in a method made after it, a
        dynamic send's arm) whose window spans versions asks the entry the
        build makes for such a call, of the face the call binds
@@ -11321,8 +11327,8 @@ static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, i
    else arm the same, VK_KEEP its last version (ver_entry_make) */
 enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP, VK_CELL };
 struct VerNamedAsks;
-static int ver_named_kind(const struct VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm);
-static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int *blk, int *spliced);
+static int ver_named_kind(const struct VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm, int shared);
+static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int vcall, int *blk, int *spliced);
 static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *name, int vis, int last);
 /* Does cls's chain (its class side when sg) hold a builtin class other
    than Object (a reopened one, a builtin superclass)? Its methods are not
@@ -11397,7 +11403,7 @@ static int ver_always_shadowed(Compiler *c, const ElabVersion *vs, int nv, int i
   return 0;
 }
 static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int into, int sg, const char *name, int mi, int ar, int mm,
-                          int face, int *absent, int *finds) {
+                          int face, int *absent, int *finds, int *anyform) {
   ElabVersion vs[VER_MAX_ARMS];
   DispArm arm[VER_MAX_ARMS];
   VerArmVis avis[VER_MAX_ARMS];
@@ -11444,7 +11450,7 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
     same &= ver_same_source(c->nt, c->scopes[s].def_node, c->scopes[mi].def_node);
   }
   /* (an open history's else arm with an undef on the chain: not told) */
-  if (q && na == nd && nd && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, dto, nd, vs[nv - 1].hist, vs[0].v->vis, ar, blk, mm);
+  if (q && na == nd && nd && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, dto, nd, vs[nv - 1].hist, vs[0].v->vis, ar, blk, mm, 0);
   /* (on a reopened builtin's instance side, a method the builtin itself
      has: with no version run, the builtin's own, #11819) */
   else if (q && nd && ar >= 0 && ct_versioned_string_reader(c, rcls, sg, name)) kind = VK_BUILTIN;
@@ -11453,7 +11459,13 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
      Model the absence even if the call sites only name Kernel.String. */
   else if (q && na == nd && nd && vis && !(mm & 1) && ver_symbol_conversion_callback(c, rcls, sg, name, ar))
     kind = VK_NOMETHOD;
-  if (kind != VK_KEEP) els = ver_absent_else(c, kind, rcls, sg, name, dto, nd, ar, &blk, &spliced);
+  /* (an else arm that runs a method raises nothing of its own, whatever
+     the call's form or its method_missing: asked with a variable-like
+     call's face, the entry of no face, -2, ver_late_make) */
+  int forms = kind == VK_SUPER || kind == VK_IVAR || kind == VK_TEXT || kind == VK_BUILTIN;
+  if (anyform) *anyform = forms;
+  if (q && face == VF_VCALL && forms) return -2;
+  if (kind != VK_KEEP) els = ver_absent_else(c, kind, rcls, sg, name, dto, nd, ar, face == VF_VCALL, &blk, &spliced);
   if (absent) *absent = els >= 0;
   *finds = ver_else_finds(c, kind, rcls, sg, name, nd > 0 ? vs[0].v->vis : SP_VIS_PUBLIC, nd ? dto[nd - 1] : -1);
   if (els < 0 && (q || nv < 2 || !nd || (same && !face))) return -1;   /* (asked for its else arm only: ver_late_make stores no scope for an entry without one) */
@@ -11830,16 +11842,16 @@ static int guard_entry_make(Compiler *c, int mi, int ar, int face, int *behind) 
   int absent = guard_behind_finds_none(c, to[n - 1], cls, sg, name);
   int mm = (absent || face) && cplan_mm_method(c, -1, cls, sg) >= 0;
   if (mm && (absent || else_vis)) {
-    els = ver_absent_else(c, VK_MM, cls, sg, name, to, n, ar, &blk, &spliced);
+    els = ver_absent_else(c, VK_MM, cls, sg, name, to, n, ar, 0, &blk, &spliced);
     if (absent) *behind = to[n - 1];
   } else if (absent && guard_is_conditional(c, to, n)) {
-    els = ver_absent_else(c, VK_NOMETHOD, cls, sg, name, to, n, ar, &blk, &spliced);
+    els = ver_absent_else(c, VK_NOMETHOD, cls, sg, name, to, n, ar, 0, &blk, &spliced);
   }
   /* A closed method still calls the receiver's method_missing. Keep
      its forwarding form and the caller's block in the entry. */
   for (int k = 0; mm && face && k < n - 1; k++) {
     if (!vis[k].raise) continue;
-    arm[k].stmt = 1 + ver_absent_else(c, VK_MM, cls, sg, name, to, n, ar, &blk, &spliced);
+    arm[k].stmt = 1 + ver_absent_else(c, VK_MM, cls, sg, name, to, n, ar, 0, &blk, &spliced);
     to[k] = -1;
   }
   return ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, face ? vis : NULL, n - 1, to[n - 1], els, else_vis);
@@ -11865,7 +11877,7 @@ static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e) {
    made after the last ask (VerNamed), so that a made entry's nodes
    rebuild no ask's parent map. */
 typedef struct {
-  int cls, sg, hcls, nv, ar, blk, els, espl, refl, atdef, bycount, last;   /* (espl: the else arm lets a spliced block through, ver_else_block; refl: ver_refl_named; atdef: ver_named_refuse_defs; bycount: ver_named_add) */
+  int cls, sg, hcls, nv, ar, blk, els, espl, refl, atdef, bycount, last, vcall;   /* (espl: the else arm lets a spliced block through, ver_else_block; refl: ver_refl_named; atdef: ver_named_refuse_defs; bycount: ver_named_add; vcall: the entry of a variable-like call, VF_VCALL, whose raise is NameError) */
   const char *name, *refuse;
   ElabVersion vs[VER_MAX_ARMS];
   int to[VER_MAX_ARMS];
@@ -11991,7 +12003,7 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
       comp_sym_intern(c, name);
       els = disp_method_missing_call(nt, name, w->ar, w->blk);
     }
-    else els = ver_no_method_raise(c, cls, sg, name, w->ar, 0);
+    else els = ver_no_method_raise(c, cls, sg, name, w->ar, w->vcall);
     VerIds cells;
     VerNamed row = *w;
     row.els = VK_BUILTIN;
@@ -12029,7 +12041,7 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   }
   default: break;
   }
-  return ver_no_method_raise(c, cls, sg, name, w->ar, 0);
+  return ver_no_method_raise(c, cls, sg, name, w->ar, w->vcall);
 }
 /* Reuse the named dispatcher's own selectors, arity, and builtin fallback.
    Only this entry's view of the installed method's visibility changes. */
@@ -12045,8 +12057,8 @@ static int guard_history_entry(Compiler *c, const struct VerEntry *history, int 
   if (!n) return -1;
   int blk = c->scopes[named].blk_param != NULL, spliced = c->scopes[named].yields;
   int mm = cplan_mm_method(c, -1, cls, sg) >= 0, builtin = -1;
-  int missing = mm ? ver_absent_else(c, VK_MM, cls, sg, name, &named, 1, ar, &blk, &spliced) : -1;
-  builtin = ver_absent_else(c, VK_BUILTIN, cls, sg, name, &named, 1, ar, &blk, &spliced);
+  int missing = mm ? ver_absent_else(c, VK_MM, cls, sg, name, &named, 1, ar, 0, &blk, &spliced) : -1;
+  builtin = ver_absent_else(c, VK_BUILTIN, cls, sg, name, &named, 1, ar, 0, &blk, &spliced);
   for (int i = 0; i < n; i++) {
     ver_cell_name(vs[i].cell, sel[i]);
     arm[i] = (DispArm){ sel[i], vs[i].n, name, vs[i].cell + 1 };
@@ -12168,16 +12180,17 @@ int cplan_other_answers(Compiler *c, int cls, int sg, const char *name, int cert
    not: CRuby's lookup finds it and refuses the call), method_missing
    where mm says it is there wherever the else arm runs (VK_KEEP where it
    is there at some calls only; an open history's else arm takes it as
-   there, mm 1), NoMethodError, but VK_KEEP for a name a bare call
-   names, which CRuby answers with NameError there (the entry, shared by
-   every call, does not see the call's form) */
+   there, mm 1), NoMethodError (NameError in a variable-like call's
+   entry, VF_VCALL: ver_absent_else), but VK_KEEP for a name a bare call
+   names in an entry shared by every call (shared: an open history's),
+   which does not see the call's form */
 static int ver_name_cmp(const void *a, const void *b) { return strcmp(*(const char *const *)a, *(const char *const *)b); }
 static void ver_name_add(const char ***v, int *n, const char *name) {
   if (!name) return;
   if (!(*n & (*n - 1)) && !(*v = realloc(*v, sizeof **v * (size_t)(*n ? 2 * *n : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   (*v)[(*n)++] = name;
 }
-static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm) {
+static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm, int shared) {
   Compiler *c = q->c;
   ElabVersion cv[VER_MAX_ARMS];
   int par = comp_super_parent(c, cls, sg), st, last = -1, nc;
@@ -12220,7 +12233,7 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   /* (method_missing where the calls run: there at some and not at
      others, the history keeps its handling; at none, NoMethodError) */
   if (cplan_mm_method(c, -1, cls, sg) >= 0 && (mm & 1)) return mm == 1 ? VK_MM : VK_KEEP;
-  return q->nvc && bsearch(&name, q->vc, (size_t)q->nvc, sizeof *q->vc, ver_name_cmp) ? VK_KEEP : VK_NOMETHOD;
+  return shared && q->nvc && bsearch(&name, q->vc, (size_t)q->nvc, sizeof *q->vc, ver_name_cmp) ? VK_KEEP : VK_NOMETHOD;
 }
 /* Does the method the else arm els calls (super's target, method_missing)
    take a block, which the entry then passes on (1), and is it spliced, a
@@ -12239,12 +12252,12 @@ static int ver_else_block(Compiler *c, int cls, int sg, int last, int els) {
    keeps the last version, the table's answer; ver_named_else), at the
    last version's line. It may take the caller's block on
    (ver_else_block). */
-static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int *blk, int *spliced) {
+static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int vcall, int *blk, int *spliced) {
   static const char *const at[] = { "node_line", "node_file", "node_col" };
   int eb = ver_else_block(c, rcls, sg, to[na - 1], els), like = c->scopes[to[na - 1]].def_node;
   *blk |= eb != 0;
   *spliced &= eb != 1;
-  VerNamed w = { .cls = rcls, .sg = sg, .ar = ar, .blk = *blk, .els = els, .name = name };
+  VerNamed w = { .cls = rcls, .sg = sg, .ar = ar, .blk = *blk, .els = els, .vcall = vcall, .name = name };
   int e = ver_named_else(c, &w);
   for (int i = 0; i < 3; i++) nt_node_set_int((NodeTable *)c->nt, e, at[i], nt_int(c->nt, like, at[i], 0));
   return e;
@@ -12392,7 +12405,7 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
       str_behind |= to[i] >= 0 && c->scopes[to[i]].shadow == SHADOW_PREP && !c->scopes[to[i]].origin_module_ci;
   if (str_behind && ar != (string_reader ? string_boxed_reader_arity(name) : is_spaceship_name(name))) ar = -1;
   if (!refuse && !bycount)
-    els = str_behind ? VK_BUILTIN : ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
+    els = str_behind ? VK_BUILTIN : ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1, 1);
   if (els == VK_KEEP && !held) return;
   if (els == VK_KEEP) refuse = "cond_def_override";
   eb = refuse ? 0 : ver_else_block(c, cls, sg, last, els);
@@ -12405,7 +12418,7 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
   VerNamed *w = &q->v[q->n++];
-  *w = (VerNamed){ cls, sg, hcls, nv, ar, blk, els, blk && eb != 1, !refuse && held, 0, bycount, last, name, refuse, { { 0 } }, { 0 } };
+  *w = (VerNamed){ cls, sg, hcls, nv, ar, blk, els, blk && eb != 1, !refuse && held, 0, bycount, last, 0, name, refuse, { { 0 } }, { 0 } };
   memcpy(w->vs, vs, sizeof *vs * (size_t)nv);
   memcpy(w->to, to, sizeof *to * (size_t)nv);
 }
@@ -12813,7 +12826,7 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
      copy has its guard entries: ver_entries_build) */
   if (!(flags & CT_TOP)) {
     VerPre *p = ver_pre(c, arg, id, nm, k, flags);
-    face = p->ok ? ct_call_face(c, id, k, p->sg, nm, flags) : VF_NONE;
+    face = p->ok ? ct_call_face(c, id, k, p->sg, nm, flags, 0) : VF_NONE;
     asked = p->ok && !ver_pre_needed(c, arg, p, face);
     mi = p->mi; sg = p->sg; ar = p->ar;
   }
@@ -12825,7 +12838,7 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
     ar = ver_call_arity(c, id, rcls, sg, nm, mi);
     /* (main's chain has no visibility face entry; a variable-like call's
        where it holds an undef) */
-    if (ct_call_face(c, id, rcls, sg, nm, flags) == VF_VCALL) face = VF_VCALL;
+    if (ct_call_face(c, id, rcls, sg, nm, flags, 0) == VF_VCALL) face = VF_VCALL;
   }
   if (asked) {
     ct_version(c, id, k, nm, flags, mi, &ml);
@@ -13209,7 +13222,7 @@ void ver_entries_build(Compiler *c) {
     const Scope *lm = &c->scopes[o.v[i].mi];   /* (a guarded layer's versions are its class's: super_layer_versions) */
     int behind = -1, e = o.v[i].guard == VER_ENTRY_LAYER ? guard_layer_versions(c, o.v[i].mi, lm->mixin_guarded ? lm->class_id : o.v[i].from - 1, o.v[i].ar)
           : o.v[i].guard != VER_ENTRY_CHAIN ? guard_entry_make(c, o.v[i].mi, o.v[i].ar, o.v[i].face, &behind)
-                         : ver_entry_make(c, NULL, o.v[i].from ? o.v[i].from - 1 : o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, o.v[i].face, NULL, &finds);
+                         : ver_entry_make(c, NULL, o.v[i].from ? o.v[i].from - 1 : o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, o.v[i].face, NULL, &finds, NULL);
     int super = o.v[i].guard == VER_ENTRY_LAYER || (o.v[i].guard == VER_ENTRY_GUARD && o.v[i].from);
     ver_entry_add(c, e >= 0 && !super ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from, .behind = behind + 1, .face = o.v[i].face });
   }
@@ -13828,17 +13841,24 @@ static int ver_late_make(Compiler *c) {
     int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, l->cls, l->sg, l->name, l->ar, l->face), absent = 0, e, mm = 0, finds = VER_FINDS_NONE;
     if ((i && !ver_late_cmp(l - 1, l)) || (ix >= 0 && c->ver_entries[ix].absent)) continue;
     if (l->span) {   /* (the build's entry for a call that spans versions, of its face, unless the key's others made one) */
-      if (ix < 0 && !(i && !ver_late_key_cmp(l - 1, l)) && (e = ver_entry_make(c, NULL, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, 1, l->face, NULL, &finds)) >= 0) {
+      if (ix < 0 && !(i && !ver_late_key_cmp(l - 1, l)) && (e = ver_entry_make(c, NULL, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, 1, l->face, NULL, &finds, NULL)) >= 0) {
         ver_entry_add(c, c->scopes[e].name, (struct VerEntry){ NULL, VER_ENTRY_CHAIN, l->cls, l->sg, l->ar, e, .finds = finds, .face = l->face });
         made = 1;
       }
       continue;
     }
     for (int j = i; j < c->nver_late && !ver_late_cmp(l, &c->ver_late[j]); j++) mm |= c->ver_late[j].mm;   /* (over every call of the key) */
-    e = ver_entry_make(c, &q, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, mm, VF_NONE, &absent, &finds);
-    if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, VER_ENTRY_CHAIN, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1, .finds = finds });
+    int face = l->face, forms = 0;
+    e = ver_entry_make(c, &q, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, mm, face, &absent, &finds, &forms);
+    if (e == -2) {   /* (a variable-like call's key whose else arm raises nothing of its own: the entry of no face, made once) */
+      face = VF_NONE;
+      if ((ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, l->cls, l->sg, l->name, l->ar, face)) >= 0 && c->ver_entries[ix].absent) continue;
+      e = ver_entry_make(c, &q, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, mm, face, &absent, &finds, &forms);
+    }
+    if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, VER_ENTRY_CHAIN, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1, .finds = finds, .face = face, .anyform = forms });
     else {
       c->ver_entries[ix].absent = absent ? 2 : 1;
+      c->ver_entries[ix].anyform = forms;
       if (absent) {   /* (its cells are written where the other was made) */
         c->ver_entries[ix].scope = e;
         c->ver_entries[ix].finds = finds;

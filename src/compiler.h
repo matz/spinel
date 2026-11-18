@@ -1940,11 +1940,13 @@ typedef struct {
      that are closed to it raise for (call_plan.h); vis, 1 where a class method's respond_to? reads the
      entry's cells (cplan_cmethod_presence), so its versions' visibility cells are written whatever the face
      (ver_presence_mark), or 2 where an instance guard reflects a hidden
-     String history. Each name
+     String history; anyform, 1 where its else arm runs a method,
+     raising nothing of its own, so a variable-like call takes it as a
+     call with a receiver does (ver_late_make). Each name
      is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
      the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis, anyform; } *ver_entries;
   int nver_entries;
   /* per global (c->gvars' index, the first nver_cell_dropped of them): 1 for
      a version cell no emitted code reads, whose declaration and writes the C

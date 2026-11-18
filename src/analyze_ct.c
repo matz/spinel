@@ -1488,7 +1488,7 @@ static int ct_text_const_lit(const NodeTable *nt, int v) {
 static int ct_text_stmts(Compiler *c, HostStep *h, int frame, int cls, LoadPoint p, const CtFx *f, int **ids, int *n) {
   NodeTable *nt = (NodeTable *)c->nt;
   *ids = NULL; *n = 0;
-  if (!class_def_is_class(nt, frame) || sce_graft_text(c, h, frame, f->name, f->site, p, ids, n) < 0) return 0;
+  if (!(class_def_is_class(nt, frame) || nt_kind(nt, frame) == NK_ModuleNode) || sce_graft_text(c, h, frame, f->name, f->site, p, ids, n) < 0) return 0;
   int ok = 1, nn = 0;
   for (int i = 0; i < *n && ok; i++) {
     int d = (*ids)[i], rv = nt_ref(nt, d, "receiver");

@@ -768,7 +768,7 @@ sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
 {
   if (sp_rbval_is_string(a)) {
     const char *bytes = sp_rbval_string_bytes(a);
-    return sp_box_nullable_str(sp_str_sub_range(bytes ? bytes : sp_str_empty, start, len));
+    return sp_box_str_fresh(sp_str_sub_range(bytes ? bytes : sp_str_empty, start, len));
   }
   /* An Integer answers `n[start, len]`, the len-bit field starting at bit
      `start` -- the two-argument form of the bit read, which the typed arms
@@ -791,7 +791,7 @@ sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
      the default below made `[:sym, nil][0][0, 4]` nil, which then went on
      being used as one. */
   if (a.tag == SP_TAG_SYM)
-    return sp_box_nullable_str(sp_str_sub_range(sp_sym_to_s((sp_sym)a.v.i), start, len));
+    return sp_box_str_fresh(sp_str_sub_range(sp_sym_to_s((sp_sym)a.v.i), start, len));
   /* Everything else here -- nil, a Float, true, false -- simply has no `[]`,
      and CRuby says so. The default used to answer nil for all of them, so a
      receiver that was never sliceable produced a value indistinguishable

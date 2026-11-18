@@ -1600,6 +1600,8 @@ graph, references to one String share the same object, including its
 encoding and any subsequent changes.
 Slicing with a String needle produces a fresh mutable String with the
 needle's encoding when the needle matches.
+The two-argument positional slice keeps its own mutable String through
+boxed receivers too, including short and empty results.
 
 The transforms and searches are byte-exact too: the case ops, the `strip`
 family, `chomp` / `chop` / `delete_prefix` / `delete_suffix`, `index` /

@@ -4217,30 +4217,12 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
                    tr, tv, atmp[0], atmp[0]);
     }
     else {
-      int wrr = ++g_tmp, slen = ++g_tmp, wlen = ++g_tmp, wres = ++g_tmp;
+      int wres = ++g_tmp;
       char a0n[24]; snprintf(a0n, sizeof a0n, "_t%d", atmp[0]);
-      buf_puts(b, " case SP_BUILTIN_IO: { ");
-      if (atmp_ty[0] != TY_POLY) {
-        buf_printf(b, "sp_RbVal _t%d = ", wrr);
-        emit_boxed_text(c, atmp_ty[0], a0n, b);
-        buf_puts(b, "; ");
-      }
-      else buf_printf(b, "sp_RbVal _t%d = %s; ", wrr, a0n);
-      /* Root the boxed operand before calling sp_poly_to_s: the
-         conversion can allocate and trigger GC, which would lose the
-         operand if it were only reachable through a local. */
-      buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", wrr);
-      /* Resolve the operand to a (pointer, length) pair once. A marked
-         String keeps its header length (binary-safe, embedded NULs
-         survive); anything else is a NUL-terminated C string from
-         sp_poly_to_s, whose length is the C-string length. */
-      int is_string = ++g_tmp;
-      buf_printf(b, "sp_bool _t%d = sp_rbval_is_string(_t%d); "
-                 "const char *_t%d = _t%d ? sp_rbval_string_bytes(_t%d) : sp_poly_to_s(_t%d); "
-                 "sp_int _t%d = _t%d ? sp_str_byte_len(_t%d) : strlen(_t%d); "
-                 "sp_int _t%d = sp_File_syswrite((sp_File *)_t%d.v.p, _t%d, _t%d); ",
-                 is_string, wrr, slen, is_string, wrr, wrr, wlen, is_string, slen, slen,
-                 wres, tv, slen, wlen);
+      buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = sp_File_syswrite_poly((sp_File *)_t%d.v.p, ", wres, tv);
+      if (atmp_ty[0] == TY_POLY) buf_puts(b, a0n);
+      else emit_boxed_text(c, atmp_ty[0], a0n, b);
+      buf_puts(b, "); ");
       if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_int(_t%d); ", tr, wres);
       else                buf_printf(b, "_t%d = _t%d; ", tr, wres);
       buf_puts(b, "break; }");

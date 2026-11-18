@@ -2211,6 +2211,16 @@ static SP_INLINE sp_int sp_File_write_poly(sp_File *f, sp_RbVal v) {
   if (sp_rbval_is_string(v)) return sp_File_write_bin(f, sp_rbval_string_bytes(v));
   return sp_File_write(f, sp_poly_to_s(v));
 }
+static SP_INLINE sp_int sp_File_syswrite_poly(sp_File *f, sp_RbVal v) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT_RBVAL(v);
+  if (sp_rbval_is_string(v)) {
+    const char *bytes = sp_rbval_string_bytes(v);
+    return sp_File_syswrite(f, bytes, sp_str_byte_len(bytes));
+  }
+  const char *text = sp_poly_to_s(v);
+  return sp_File_syswrite(f, text, strlen(text));
+}
 static inline sp_File *sp_poly_to_file(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO) return (sp_File *)v.v.p;
   return NULL;
@@ -4393,6 +4403,20 @@ static SP_INLINE sp_int sp_poly_arg_int_chk(sp_RbVal v) {
 static SP_INLINE sp_int sp_poly_arg_int_chk_w(sp_RbVal v, int wording) {
   if (v.tag == SP_TAG_NIL) sp_raise_nil_to_int(wording);
   return sp_poly_arg_int_chk(v);
+}
+/* The offset's coercion can grow the String. Keep its box through that
+   call and take the byte view immediately before writing. */
+static sp_int sp_File_pwrite_poly(sp_File *f, sp_RbVal v, sp_RbVal offset) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT_RBVAL(v);
+  SP_GC_ROOT_RBVAL(offset);
+  if (!f) sp_nil_recv("pwrite");
+  sp_bool is_string = sp_rbval_is_string(v);
+  const char *converted = is_string ? NULL : sp_poly_to_s(v);
+  SP_GC_ROOT_STR(converted);
+  sp_int off = sp_poly_arg_int_chk_w(offset, 2);
+  return is_string ? sp_File_pwrite_bin(f, sp_rbval_string_bytes(v), off)
+                   : sp_File_pwrite(f, converted, off);
 }
 /* The domain or socket type Socket.new, Socket.pair and UDPSocket.new take:
    a String or Symbol names the constant (sp_sock_named_const), and anything

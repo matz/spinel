@@ -1729,6 +1729,24 @@ int elab_class_named(Compiler *c, ElabNames *nx, int node) {
   int ci = c->lrec ? lr_class_named(c, nx, node, 0, 0) : LR_UNKNOWN_CLASS;
   return ci >= 0 ? ci : -1;
 }
+/* The classes the writes a lookup collected (r->cand, answer o) make, in
+   *out (the caller frees it): their count, -1 for a write that is no
+   class or for a lookup that found none */
+static int lr_cand_classes(Compiler *c, int o, LrClassSet *s, int **out) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  if (o == ELAB_NO || r->cand_bad || !r->ncand) return -1;
+  for (int i = 0; i < r->ncand && !s->bad; i++) {
+    const LrDef *d = r->cand[i];
+    int ci = lr_class_of(c, d, NULL);
+    if (ci >= LR_MAIN) lr_cls_add(s, ci);
+    else if (nt_kind(nt, d->node) == NK_ConstantWriteNode) for_each_value_position(nt, nt_ref(nt, d->node, "value"), 0, lr_value_leaf, s);
+    else s->bad = 1;
+  }
+  if (s->bad) { free(s->v); return -1; }
+  *out = s->v;
+  return s->n;
+}
 int elab_class_candidates(Compiler *c, int node, int **out) {
   LoadRecord *r = elab_fresh(c);
   const NodeTable *nt = c->nt;
@@ -1740,27 +1758,35 @@ int elab_class_candidates(Compiler *c, int node, int **out) {
   r->collect = 1;
   int o = lr_const_at(c, node, lr_written_name(nt, node), elab_point_of(c, node), NULL, LR_KEY_CONST);
   r->collect = 0;
-  if (o == ELAB_NO || r->cand_bad || !r->ncand) return -1;
-  for (int i = 0; i < r->ncand && !s.bad; i++) {
-    const LrDef *d = r->cand[i];
-    int ci = lr_class_of(c, d, NULL);
-    if (ci >= LR_MAIN) lr_cls_add(&s, ci);
-    else if (nt_kind(nt, d->node) == NK_ConstantWriteNode) for_each_value_position(nt, nt_ref(nt, d->node, "value"), 0, lr_value_leaf, &s);
-    else s.bad = 1;
-  }
-  if (s.bad) { free(s.v); return -1; }
-  *out = s.v;
-  return s.n;
+  return lr_cand_classes(c, o, &s, out);
 }
 
-/* The one class a constant read the record cannot settle names, asked
-   once the record is made: every write its lookup may end in makes that
-   class (a header under a run-time condition, read after the condition);
+/* The one class a constant read or path the record cannot settle names,
+   asked once the record is made: every write its lookup may end in makes
+   that class (a header under a run-time condition, read after the
+   condition; a builder written unless defined, then reopened);
    -1 for none, for several, or for a read the frame cannot place */
+static int lr_path_candidates(Compiler *c, int node, int **out) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  int par = nt_ref(nt, node, "parent"), at = lr_anchor(c, node);
+  int e = at >= 0 && at < r->n ? r->at[at] : -1;
+  LrClassSet s = { c, NULL, 0, 0, 0 };
+  *out = NULL;
+  if (e < 0 || r->st[e].frame >= 0 || par < 0) return -1;
+  int pc = lr_class_ref_at(c, par, NULL);
+  if (pc < LR_MAIN) return -1;
+  LoadPoint p = elab_point_of(c, at);
+  r->ncand = r->cand_bad = 0;
+  r->collect = 1;
+  int o = lr_const_in(c, pc, lr_written_name(nt, node), p, p.region < 0, pc == LR_MAIN, NULL, 0, LR_KEY_CONST);
+  r->collect = 0;
+  return lr_cand_classes(c, o, &s, out);
+}
 int elab_class_ref_one(Compiler *c, int node) {
   LoadRecord *r = lr_get(c);
   if (!r->recorded || r->walk || r->plan_depth || !elab_plan_enter(c, node)) return -1;
-  int *v = NULL, n = elab_class_candidates(c, node, &v);
+  int *v = NULL, n = nt_kind(c->nt, node) == NK_ConstantPathNode ? lr_path_candidates(c, node, &v) : elab_class_candidates(c, node, &v);
   elab_plan_leave(c);
   int one = n == 1 && v[0] >= 0 ? v[0] : -1;
   free(v);

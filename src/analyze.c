@@ -50861,6 +50861,7 @@ static void an_phase_desugar_register(Compiler *c) {
   /* include M / extend M -> M.included/extended(base)'s body, a splice the
      host grafts (its class_eval "<text>") and lowers with the rows run so far */
   host_begin(&hs, &lc);
+  AN_STEP_V("desugar_toplevel_hooked_mixins", desugar_toplevel_hooked_mixins(c)); /* Ver.extend(Basic), Basic hooked -> module Ver; extend ::Basic; end */
   AN_STEP_V("desugar_included_hooks", desugar_included_hooks(c, &hs));
   host_end(c, &hs);
   AN_STEP_V("desugar_eval_method_block", desugar_eval_method_block(c));          /* k.class_eval(&o.method(:m)) -> o.m(k) */

@@ -5818,6 +5818,13 @@ static sp_RbVal sp_poly_io_truncate(sp_RbVal v, sp_oint n) {
 }
 sp_RbVal sp_Enumerator_size_p(void *e);   /* lib/sp_cold.c; sp_Enumerator is declared further down */
 void sp_enum_index_search_each_raise(void *e);   /* lib/sp_cold.c: raise for a boxed index search's each */
+/* A typed MatchData reads a boxed selector by name or coerces its index. */
+static const char *sp_MatchData_aref_poly(sp_MatchData *m, sp_RbVal k) {
+  if (k.tag == SP_TAG_SYM) return sp_MatchData_aref_name(m, sp_sym_to_s((sp_sym)k.v.i));
+  if (sp_rbval_is_string(k)) return sp_MatchData_aref_name(m, sp_rbval_string_bytes(k));
+  SP_GC_ROOT(m);
+  return sp_MatchData_aref(m, sp_poly_arg_int_chk(k));
+}
 /* A boxed MatchData's group, by index or by name, boxed: a group that did
    not take part in the match is nil. */
 static sp_RbVal sp_poly_md_group(sp_MatchData *m, sp_RbVal k) {

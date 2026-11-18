@@ -14432,13 +14432,11 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
            the Integer slot's conversion: a Float or a Rational truncates, an
            object answers #to_int, and nil or an Object is CRuby's TypeError,
            where sp_poly_to_i read them as group 0. */
-        int mtmp = ++g_tmp, ktmp = ++g_tmp;
-        buf_printf(b, "({ sp_MatchData *_t%d = %s; sp_RbVal _t%d = %s", mtmp, r, ktmp, needle_needs_deref(c, argv[0]) ? "sp_poly_strbuf_deref(" : "");
-        emit_expr(c, argv[0], b); if (needle_needs_deref(c, argv[0])) buf_puts(b, ")");
-        buf_printf(b, "; _t%d.tag == SP_TAG_SYM ? sp_MatchData_aref_name(_t%d, sp_sym_to_s((sp_sym)_t%d.v.i)) :"
-                      " _t%d.tag == SP_TAG_STR ? sp_MatchData_aref_name(_t%d, _t%d.v.s) :"
-                      " sp_MatchData_aref(_t%d, sp_poly_arg_int_chk(_t%d)); })",
-                   ktmp, mtmp, ktmp, ktmp, mtmp, ktmp, mtmp, ktmp);
+        int mtmp = ++g_tmp;
+        buf_printf(b, "({ sp_MatchData *_t%d = %s; SP_GC_ROOT(_t%d); sp_MatchData_aref_poly(_t%d, ",
+                   mtmp, r, mtmp, mtmp);
+        emit_expr(c, argv[0], b);
+        buf_puts(b, "); })");
       }
       else { buf_printf(b, "sp_MatchData_aref(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
     }
@@ -14550,15 +14548,11 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
           /* a poly key dispatches at runtime like #[]: a Symbol/String resolves
              by name, anything else is an index. Passing the raw sp_RbVal to
              sp_MatchData_aref (sp_int) would be a C type error. */
-          int kt = ++g_tmp;
-          buf_printf(b, " sp_RbVal _t%d = %s", kt, needle_needs_deref(c, argv[i]) ? "sp_poly_strbuf_deref(" : "");
+          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str_new(sp_MatchData_aref_poly(_t%d, ",
+                     at, mt);
           if (hold) buf_printf(b, "_t%d", held[i]);
-          else emit_expr(c, argv[i], b); if (needle_needs_deref(c, argv[i])) buf_puts(b, ")");
-          buf_printf(b, "; sp_PolyArray_push(_t%d, sp_box_nullable_str_new("
-                        "_t%d.tag == SP_TAG_SYM ? sp_MatchData_aref_name(_t%d, sp_sym_to_s((sp_sym)_t%d.v.i)) :"
-                        " _t%d.tag == SP_TAG_STR ? sp_MatchData_aref_name(_t%d, _t%d.v.s) :"
-                        " sp_MatchData_aref(_t%d, sp_poly_arg_int_chk(_t%d))));",
-                     at, kt, mt, kt, kt, mt, kt, mt, kt);
+          else emit_expr(c, argv[i], b);
+          buf_puts(b, ")));");
           break;
         }
         default:

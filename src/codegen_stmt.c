@@ -14586,9 +14586,11 @@ static void emit_unbox_node(Compiler *c, TyKind t, int node, Buf *b) {
    check site. An effect-only or nil body completes before returning NULL. */
 static void emit_string_return_value(Compiler *c, int node, Buf *b) {
   Repr source = repr_of(c, node);
-  /* A literal block has a result at each call site. Its `next` values
-     and fallthrough use the String slot requested by this consumer. */
-  if (!arg_ran_first(node, 0) && is_block_call(c, node)) {
+  /* Splice a literal block into the receiving String slot. A yield and
+     a block-parameter call both carry next and fallthrough through it. */
+  int inline_yield = nt_kind(c->nt, node) == NK_YieldNode && g_block_id >= 0 &&
+                     !g_current_scope_is_lowered && !g_yield_proc_ref;
+  if (!arg_ran_first(node, 0) && (inline_yield || is_block_call(c, node))) {
     emit_block_invoke(c, node, b, 0, 1, TY_STRBUF);
   }
   /* A yield uses the current block's returned object. Its node's

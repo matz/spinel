@@ -1,3 +1,4 @@
+# spinel: int64 -- assumes a 64-bit Integer (1.size answers 8); not run on a 32-bit target
 module Reader
   def size = 7
 end

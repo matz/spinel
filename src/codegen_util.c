@@ -6791,10 +6791,8 @@ static void emit_hash_key_value(Compiler *c, int key, TyKind kt, Buf *b) {
        answer a value no key can equal and let the lookup miss. */
     buf_puts(b, "({ sp_RbVal _hk = ");
     emit_boxed(c, key, b);
-    /* A shared-string handle is `==` to the immediate string with the same
-       bytes and now hashes alike, so it is a key that IS in the table: deref
-       it rather than answering the no-key sentinel (#4279). */
-    if (kt == TY_STRING)      buf_puts(b, "; _hk = sp_poly_strbuf_deref(_hk); _hk.tag == SP_TAG_STR ? _hk.v.s : (const char *)0; })");
+    /* Either String box supplies a byte key. Other kinds miss (#4279). */
+    if (kt == TY_STRING)      buf_puts(b, "; sp_rbval_string_bytes(_hk); })");
     else if (kt == TY_SYMBOL) buf_puts(b, "; _hk.tag == SP_TAG_SYM ? (sp_sym)_hk.v.i : (sp_sym)-1; })");
     else                      buf_puts(b, "; sp_poly_hkey_i(_hk); })");   /* another kind raises (A5) */
     return;

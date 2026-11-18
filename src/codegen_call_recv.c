@@ -7513,7 +7513,7 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
             tkb = ++g_tmp;
             buf_printf(b, " sp_RbVal _t%d = ", tkb); emit_boxed(c, argv[a], b);
             buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s _t%d = ({ sp_RbVal _hk = _t%d; ", tkb, c_type_name(kt), tk, tkb);
-            if (kt == TY_STRING) buf_puts(b, "_hk = sp_poly_strbuf_deref(_hk); _hk.tag == SP_TAG_STR ? _hk.v.s : (const char *)0; });");
+            if (kt == TY_STRING) buf_puts(b, "sp_rbval_string_bytes(_hk); });");
             else buf_puts(b, "_hk.tag == SP_TAG_SYM ? (sp_sym)_hk.v.i : (sp_sym)-1; });");
           }
           else {

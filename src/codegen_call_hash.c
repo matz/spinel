@@ -108,7 +108,7 @@ int emit_op_hash_default_proc(Compiler *c, const BopCtx *x, Buf *b) {
       buf_puts(&g_proc_protos, "extern SP_TLS sp_RbVal _sp_proc_poly_args[SP_PROC_ARG_SLOTS];\n");
     }
     const char *kexpr = hdp_v == 0 ? "(sp_sym)sp_poly_to_i(_sp_proc_poly_args[1])"
-                      : hdp_v == 1 ? "_sp_proc_poly_args[1].v.s"
+                      : hdp_v == 1 ? "sp_rbval_string_bytes(_sp_proc_poly_args[1])"
                       : "_sp_proc_poly_args[1]";
     buf_printf(&g_procs,
       "static sp_int _hdp_tramp_%s(void *cap, sp_int argc, sp_int *args) {\n"
@@ -146,12 +146,12 @@ int emit_op_hash_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
      Float 1.0 on an Integer-keyed one, which is not eql? to 1) is a miss
      answering the Hash's default, as `h[key]` answers it. */
   const char *keyexpr = (kt == TY_SYMBOL) ? "(sp_sym)_k.v.i"
-                      : (kt == TY_STRING) ? "_k.v.s"
+                      : (kt == TY_STRING) ? "sp_rbval_string_bytes(_k)"
                       : (kt == TY_INT) ? "_k.v.i"
                       : "_k";
-  const char *keytag = (kt == TY_SYMBOL) ? "SP_TAG_SYM"
-                     : (kt == TY_STRING) ? "SP_TAG_STR"
-                     : (kt == TY_INT) ? "SP_TAG_INT" : NULL;
+  const char *foreign_key = (kt == TY_SYMBOL) ? "_k.tag != SP_TAG_SYM"
+                          : (kt == TY_STRING) ? "!sp_rbval_is_string(_k)"
+                          : (kt == TY_INT) ? "_k.tag != SP_TAG_INT" : NULL;
   g_needs_proc_poly_argslot = 1;
   buf_printf(&g_proc_protos, "static sp_int _hashproc_%s(void *cap, sp_int argc, sp_int *args);\n", pn);
   buf_printf(&g_procs, "static sp_int _hashproc_%s(void *cap, sp_int argc, sp_int *args) {\n", pn);
@@ -162,11 +162,8 @@ int emit_op_hash_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
              " sp_sprintf(\"wrong number of arguments (given %%lld, expected 1)\", (long long)argc));\n");
   buf_printf(&g_procs, "  sp_%sHash *_h = (sp_%sHash *)cap; (void)args;\n", hn, hn);
   buf_puts(&g_procs, "  sp_RbVal _k = _sp_proc_poly_args[0];\n");
-  /* a mutable String key looks its contents up */
-  if (kt == TY_STRING)
-    buf_puts(&g_procs, "  if (sp_poly_is_strbuf(_k)) _k = sp_poly_strbuf_deref(_k);\n");
-  if (keytag) {
-    buf_printf(&g_procs, "  if (_k.tag != %s) { _sp_proc_poly_ret = sp_poly_hash_foreign_miss(", keytag);
+  if (foreign_key) {
+    buf_printf(&g_procs, "  if (%s) { _sp_proc_poly_ret = sp_poly_hash_foreign_miss(", foreign_key);
     emit_boxed_text(c, rt, "_h", &g_procs);
     buf_puts(&g_procs, ", _k); return 0; }\n");
   }
@@ -399,7 +396,7 @@ int emit_op_hash_fetch(Compiler *c, const BopCtx *x, Buf *b) {
     tb = ++g_tmp;
     buf_printf(b, "; sp_RbVal _t%d = ", tb); emit_boxed(c, argv[0], b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s _t%d = ({ sp_RbVal _hk = _t%d; ", tb, c_type_name(kt), tk, tb);
-    if (kt == TY_STRING) buf_puts(b, "_hk = sp_poly_strbuf_deref(_hk); _hk.tag == SP_TAG_STR ? _hk.v.s : (const char *)0; })");
+    if (kt == TY_STRING) buf_puts(b, "sp_rbval_string_bytes(_hk); })");
     else buf_puts(b, "_hk.tag == SP_TAG_SYM ? (sp_sym)_hk.v.i : (sp_sym)-1; })");
   }
   /* ...and on an Integer-keyed table, a key that may be nil or another

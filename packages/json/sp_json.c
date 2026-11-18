@@ -363,6 +363,29 @@ static sp_RbVal sp_json_user_view(sp_RbVal v) {
    json reads a String subclass instance's bytes, not its #to_s); any other
    object is its #to_s, as Object#to_json is. */
 static void sp_json_obj_text_b(jbuf *b, sp_RbVal v) {
+  /* a class's own #to_s: its answer must be a String, as the generator
+     takes it (`to_s.to_json`); anything else is CRuby's TypeError, where
+     an interpolation (sp_poly_to_s) falls back to the default text */
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_s_fn) {
+    SP_GC_ROOT_RBVAL(v);
+    int found = 0;
+    sp_RbVal r = sp_obj_to_s_fn(v.cls_id, v.v.p, &found);
+    if (found) {
+      const char *us = r.tag == SP_TAG_STR ? r.v.s
+                     : r.tag == SP_TAG_OBJ && r.cls_id == SP_BUILTIN_STRBUF && r.v.p ? sp_String_cstr((sp_String *)r.v.p)
+                     : NULL;
+      if (!us) {
+        const char *tn = r.tag == SP_TAG_NIL ? "nil" : r.tag == SP_TAG_BOOL ? (r.v.b ? "true" : "false")
+                       : r.tag == SP_TAG_INT || r.tag == SP_TAG_BIGINT ? "Integer" : r.tag == SP_TAG_FLT ? "Float"
+                       : r.tag == SP_TAG_SYM ? "Symbol"
+                       : r.tag == SP_TAG_OBJ && r.cls_id >= 0 && sp_obj_cls_name_fn ? sp_obj_cls_name_fn(r.cls_id) : "Object";
+        sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected String)", tn));
+      }
+      SP_GC_ROOT_STR(us);
+      jb_rstr(b, us);
+      return;
+    }
+  }
   const char *t = sp_poly_to_s(v);
   SP_GC_ROOT_STR(t);
   jb_rstr(b, t);

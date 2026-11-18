@@ -9,8 +9,14 @@ class Label
   end
 end
 
-# Both calls receive a typed Array of program objects. A nil return from
-# to_s falls back to the object's default text within the same Array.
+# Both calls receive a typed Array of program objects, and each element's
+# own to_s is called once. A to_s that answers no String is CRuby's
+# TypeError, as Object#to_json takes it (an interpolation would fall back
+# to the default text instead).
 puts JSON.generate([Label.new(true)])
-puts JSON.generate([Label.new(false)]).gsub(/0x[0-9a-f]+/, "ADDR")
+begin
+  puts JSON.generate([Label.new(false)])
+rescue TypeError => e
+  p [e.class, e.message]
+end
 p $calls

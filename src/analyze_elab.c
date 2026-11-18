@@ -5260,19 +5260,20 @@ static long long lr_entry_key(const LoadRecord *r, const LrDef *v) {
    body's or a block's in it too, runs as lr_run_order orders it against
    that node, under the condition the node runs under; where that order
    is not sure, the statement's answers. */
-static int lr_version_order(Compiler *c, const LrDef *v, LoadPoint p, int late);
+static int lr_version_order(Compiler *c, const LrHist *h, const LrDef *v, LoadPoint p, int late);
 static int lr_last_before(Compiler *c, const LrHist *h, const LrHist *t, LoadPoint p, int late, int skip_vis, const LrDef **out) {
   int unsure = 0;
   LoadRecord *r = c->lrec;
   int take = r->collect && h && h->a == -2 - (int)ELAB_CONST;   /* a constant's writes, for elab_class_candidates */
   int at = !late && p.region >= 0 && p.node >= 0 && p.node < r->n && r->at[p.node] == p.seq;
   for (int i = h ? h->n - 1 : -1, j = t ? t->n - 1 : -1; i >= 0 || j >= 0;) {
-    const LrDef *v = j < 0 || (i >= 0 && lr_entry_key(r, &h->v[i]) > lr_entry_key(r, &t->v[j])) ? &h->v[i--] : &t->v[j--];
+    const LrHist *vh = j < 0 || (i >= 0 && lr_entry_key(r, &h->v[i]) > lr_entry_key(r, &t->v[j])) ? h : t;
+    const LrDef *v = vh == h ? &h->v[i--] : &t->v[j--];
     if (take && v->unplaced) r->cand_bad = 1;
     if ((skip_vis && v->kind == LR_VIS) || v->unplaced || v->absent) continue;
     int in = at && !v->body && v->node >= 0 && v->node < r->n && r->at[v->node] == p.seq;
     int o = in ? lr_run_order(c, v->node, p.node) : PROG_UNKNOWN;
-    if (o == PROG_UNKNOWN) o = lr_version_order(c, v, p, late);
+    if (o == PROG_UNKNOWN) o = lr_version_order(c, vh, v, p, late);
     if (o == PROG_UNKNOWN || (o == PROG_BEFORE && !in && v->may && (late == 1 || !lr_may_dominates(c->lrec, v, p)))) {
       unsure = 1;
       if (out && (h->a == LR_KEY_CONST || h->a == LR_KEY_AUTO) && !*out) *out = v;
@@ -6768,14 +6769,33 @@ static int lr_node_runs(Compiler *c, int id) {
    statements of region 0, the one time every region's code shares: a
    statement of another region is not ordered against them. */
 enum { LR_CORE = -4, RQ_INST = 1, RQ_CLASS = 2, LR_RG_NAMED = 1, LR_RG_IN = 2 };
-/* The order of version v against point p (late == 1: as of the load phase's
-   end): a version at a point, its point's; one a method body makes
-   (LrDef.body), its extent's: after p where p comes before the first
-   statement that body may run on (lr_rta's LrExt.from) and that statement does
-   not run again before p (lr_runs_again), not known from there on, since
-   the body may run any number of times, and after every point for a body
-   that never runs */
-static int lr_version_order(Compiler *c, const LrDef *v, LoadPoint p, int late) {
+/* Does nothing of history h but v (a version a body makes) run after
+   statement sure of region 0: every other entry at a point of region 0
+   no later than sure? A body's other version may run any time, and so
+   does an entry with no point (unplaced, absent) */
+static int lr_alone_after(Compiler *c, const LrHist *h, const LrDef *v, int sure) {
+  for (int i = 0; h && i < h->n; i++) {
+    const LrDef *w = &h->v[i];
+    if (w == v) continue;
+    if (w->body || w->unplaced || w->absent) return 0;
+    LoadPoint q = elab_point_of(c, w->node);
+    if (q.region != 0 || q.seq < 0 || q.seq > sure) return 0;
+  }
+  return 1;
+}
+/* The order of version v of history h against point p (late == 1: as of
+   the load phase's end): a version at a point, its point's; one a method
+   body makes (LrDef.body), the span of statements that body may run on: after p
+   where p comes before the first statement that body may run on (lr_rta's
+   LrExt.from) and that statement does not run again before p
+   (lr_runs_again), and after every point for a body that never runs;
+   before p from the statement after the body has surely run once
+   (LrExt.sure) on, where nothing else of h runs after that statement
+   (lr_alone_after: a body one placed statement runs once takes that
+   statement's point), and in that statement after the call
+   that runs it; not known otherwise, since the body may
+   run any number of times. h NULL: the first two only. */
+static int lr_version_order(Compiler *c, const LrHist *h, const LrDef *v, LoadPoint p, int late) {
   if (!v->body)
     return late == 1 ? (elab_point_of(c, v->node).region == 0 ? PROG_BEFORE : PROG_UNKNOWN) : elab_cmp(elab_point_of(c, v->node), p);
   LoadRecord *r = c->lrec;
@@ -6783,7 +6803,14 @@ static int lr_version_order(Compiler *c, const LrDef *v, LoadPoint p, int late) 
   lr_run_points(c);
   int from = lr_def_from(r, v->body);
   if (from >= LR_POST) return PROG_AFTER;
-  return late != 1 && p.region >= 0 && p.seq < from && !lr_runs_again(c, r->st[from].node, p) ? PROG_AFTER : PROG_UNKNOWN;
+  if (late != 1 && p.region >= 0 && p.seq < from && !lr_runs_again(c, r->st[from].node, p)) return PROG_AFTER;
+  const LrExt *e = v->body < r->cextix && r->extix[v->body] ? &r->ext[r->extix[v->body] - 1] : NULL;
+  int sure = e ? e->sure : LR_NEVER;
+  /* (at the sure statement itself, a point its one run (LrExt.bind) comes
+     before: `p K.setup, K.made`) */
+  int at = e && late != 1 && p.region == 0 && p.seq == sure && e->bind >= 0 && p.node >= 0 && lr_run_order(c, e->bind, p.node) == PROG_BEFORE;
+  if (h && sure < LR_POST && (late == 1 || (p.region == 0 && p.seq > sure) || at) && lr_alone_after(c, h, v, sure)) return PROG_BEFORE;
+  return PROG_UNKNOWN;
 }
 /* The class a builder's constant write w makes (`P = Struct.new(:x)`,
    block or not): the class the walk made at the write (record_write_class),
@@ -8270,7 +8297,7 @@ static void lr_span_take(Compiler *c, const LrHist *h, int cls, int sg, LoadPoin
   int had = s->m;
   for (int j = 0; j < h->n; j++) {
     const LrDef *v = &h->v[j];
-    if (!lr_is_version(v) || (v->body ? lr_version_order(c, v, p1, 0) == PROG_AFTER : !lr_inside(c, v->node, p0, p1))) continue;
+    if (!lr_is_version(v) || (v->body ? lr_version_order(c, NULL, v, p1, 0) == PROG_AFTER : !lr_inside(c, v->node, p0, p1))) continue;
     LoadPoint q = elab_point_of(c, v->node);
     if (v->may || elab_cmp(p0, q) != PROG_BEFORE || elab_cmp(q, p1) != PROG_BEFORE) { s->any = 1; continue; }
     if (!(s->m & (s->m - 1)) && !(s->cp = realloc(s->cp, sizeof(int) * (size_t)(s->m ? 2 * s->m : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

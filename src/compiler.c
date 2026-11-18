@@ -1845,17 +1845,25 @@ static int sm_owns_side(const Compiler *c, int s, int class_id, int side) {
    chain, while the index is not frozen) otherwise scanned every scope per
    class and per ancestor. The batch answers only while the scope count, the
    moved scopes and ver_built are as they were when it began; any other ask
-   scans. */
-typedef struct { char *name; int side; int *best; } SmbEntry;
-static struct { const Compiler *c; int depth, nscopes, nclasses, ver_built, n, cap; SmbEntry *e; int *slot, nslot; } smb;
+   scans. An answer keeps only the classes a scope answers (a name is
+   defined on few classes): a row of every class per name held names x
+   classes until the batch ended. */
+typedef struct { char *name; int side, n; int *ans; } SmbEntry;   /* ans: n (class, scope) pairs, by class */
+static struct { const Compiler *c; int depth, nscopes, nclasses, ver_built, n, cap; SmbEntry *e; int *slot, nslot, *tmp, tcap; } smb;
+static int smb_pair_cmp(const void *a, const void *b) {
+  const int *x = a, *y = b;
+  if (x[0] != y[0]) return x[0] < y[0] ? -1 : 1;
+  return (x[1] > y[1]) - (x[1] < y[1]);
+}
 void comp_scope_batch_begin(Compiler *c) {
   if (smb.depth++ > 0) return;
   smb.c = c; smb.nscopes = c->nscopes; smb.nclasses = c->nclasses; smb.ver_built = c->ver_built; smb.n = 0;
 }
 void comp_scope_batch_end(void) {
   if (smb.depth <= 0 || --smb.depth > 0) return;
-  for (int i = 0; i < smb.n; i++) { free(smb.e[i].name); free(smb.e[i].best); }
+  for (int i = 0; i < smb.n; i++) { free(smb.e[i].name); free(smb.e[i].ans); }
   free(smb.slot); smb.slot = NULL; smb.nslot = 0;
+  free(smb.tmp); smb.tmp = NULL; smb.tcap = 0;
   smb.n = 0; smb.c = NULL;
 }
 static int sm_name_matches(const Compiler *c, int s, const char *name) {
@@ -1894,25 +1902,50 @@ static int sm_batch_lookup(Compiler *c, int class_id, const char *name, int side
       smb.e = realloc(smb.e, sizeof(SmbEntry) * (size_t)smb.cap);
       if (!smb.e) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     }
-    int *best = malloc(sizeof(int) * (size_t)(smb.nclasses + 1));
     char *nm = strdup(name);
-    if (!best || !nm) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int k = 0; k <= smb.nclasses; k++) best[k] = -1;
-    /* (ascending, so the last scope that answers a class is the one kept:
-       the reverse scan's first) */
+    if (!nm) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    /* (every scope that answers its class, as (class, scope) pairs) */
+    int m = 0;
     for (int s = 0; s < c->nscopes; s++) {
+      int cls;
       if (side >= 3) {
-        if (sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&
-            sp_streq(c->scopes[s].name, name)) best[smb.nclasses] = s;
-        continue;
+        if (!(sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&
+              sp_streq(c->scopes[s].name, name))) continue;
+        cls = smb.nclasses;
+      } else {
+        cls = c->scopes[s].class_id;
+        if (cls < 0 || cls >= smb.nclasses || !sm_name_matches(c, s, name) || !sm_owns_side(c, s, cls, side)) continue;
       }
-      int cls = c->scopes[s].class_id;
-      if (cls < 0 || cls >= smb.nclasses || !sm_name_matches(c, s, name) || !sm_owns_side(c, s, cls, side)) continue;
-      best[cls] = s;
+      if (m == smb.tcap) {
+        smb.tcap = smb.tcap ? 2 * smb.tcap : 64;
+        smb.tmp = realloc(smb.tmp, 2 * sizeof(int) * (size_t)smb.tcap);
+        if (!smb.tmp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      smb.tmp[2 * m] = cls; smb.tmp[2 * m + 1] = s; m++;
     }
-    smb.e[i].name = nm; smb.e[i].side = side; smb.e[i].best = best; smb.n++;
+    /* (by class, then scope: of a class's pairs the highest scope is kept,
+       the reverse scan's first) */
+    qsort(smb.tmp, (size_t)m, 2 * sizeof(int), smb_pair_cmp);
+    int k = 0;
+    for (int j = 0; j < m; j++) {
+      if (j + 1 < m && smb.tmp[2 * (j + 1)] == smb.tmp[2 * j]) continue;
+      smb.tmp[2 * k] = smb.tmp[2 * j]; smb.tmp[2 * k + 1] = smb.tmp[2 * j + 1]; k++;
+    }
+    int *ans = NULL;
+    if (k > 0) {
+      ans = malloc(2 * sizeof(int) * (size_t)k);
+      if (!ans) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memcpy(ans, smb.tmp, 2 * sizeof(int) * (size_t)k);
+    }
+    smb.e[i].name = nm; smb.e[i].side = side; smb.e[i].n = k; smb.e[i].ans = ans; smb.n++;
   }
-  return smb.e[i].best[class_id];
+  const int *ans = smb.e[i].ans;
+  for (int lo = 0, hi = smb.e[i].n - 1; lo <= hi; ) {
+    int mid = lo + (hi - lo) / 2;
+    if (ans[2 * mid] == class_id) return ans[2 * mid + 1];
+    if (ans[2 * mid] < class_id) lo = mid + 1; else hi = mid - 1;
+  }
+  return -1;
 }
 static int sm_lookup(Compiler *c, int class_id, const char *name, int is_cm) {
   if (!name) return -1;

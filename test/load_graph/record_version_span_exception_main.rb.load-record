@@ -70,3 +70,17 @@ versions Raised#ring: def#10..#28 seen=def#10, def#28..end seen=def#28; 11 of th
 versions Called#ring: def#14..#30 seen=def#14, def#30..end seen=def#30; 11 of the name
 versions Point#ring: def#18..#32 seen=def#18, def#32..end seen=def#32; 11 of the name
 versions Bell#ring: def#23..#34 seen=def#23 idle, def#34..end seen=def#34; 11 of the name
+post: after #35
+extent def ring line 10: from=#7 sure=never count=many kept=no
+extent block new line 13: from=#3 sure=#3 count=once kept=no
+extent def twice line 14: from=never sure=never count=zero kept=no
+extent def ring line 18: from=#7 sure=never count=many kept=no
+extent def ring line 24: from=#11 sure=never count=many kept=no
+extent def ring line 34: from=#15 sure=never count=many kept=no
+extent def ring line 40: from=#19 sure=never count=many kept=no
+extent def ring line 50: from=#35 sure=never count=many kept=no
+extent def ring line 55: from=#7 sure=never count=many kept=no
+extent def ring line 59: from=#11 sure=never count=many kept=no
+extent def ring line 63: from=#15 sure=never count=many kept=no
+extent def ring line 67: from=#19 sure=never count=many kept=no
+extent def ring line 71: from=#35 sure=never count=many kept=no

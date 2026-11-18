@@ -10,3 +10,6 @@ entity Gauge: owner main leaf Gauge
 const Gauge: write#1
 Gauge#level: def#2 runs=#5 def#4 runs=#5 end=yes
 versions Gauge#level: def#2..#4 seen=def#2 idle, def#4..end seen=def#4; 2 of the name
+post: after #5
+extent def level line 5: from=#5 sure=never count=many kept=no
+extent def level line 8: from=#5 sure=never count=many kept=no

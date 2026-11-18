@@ -14,3 +14,6 @@ G#z: reader#3 unplaced end=no
 G#y: def#3 unplaced vis#3 unplaced private end=no
 G#w: alias#3 unplaced (y: none) private end=no
 G#hi: undef#3 unplaced end=yes
+post: after #3
+extent def hi line 6: from=never sure=never count=zero kept=no
+extent def y line 10: from=never sure=never count=zero kept=no

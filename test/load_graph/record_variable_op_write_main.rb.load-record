@@ -43,3 +43,15 @@ opaque Pl: opaque#17
 versions Iv.v: def#4..#8 seen=unknown, def#8..end seen=def#8; 6 of the name
 versions Gv.v: def#10..#13 seen=unknown, def#13..end seen=def#13; 6 of the name
 versions Pl.v: def#15..#18 seen=def#15, def#18..end seen=def#18 idle; 6 of the name
+post: after #18
+extent def ** line 12: from=never sure=never count=zero kept=no
+extent def w line 12: from=any sure=never count=many kept=no
+extent def v line 15: from=never sure=never count=zero kept=no
+extent def bump line 17: from=#7 sure=#7 count=many kept=no
+extent def v line 20: from=never sure=never count=zero kept=no
+extent def v line 23: from=never sure=never count=zero kept=no
+extent def bump line 24: from=#12 sure=#12 count=many kept=no
+extent def v line 27: from=never sure=never count=zero kept=no
+extent def v line 30: from=never sure=never count=zero kept=no
+extent def bump line 31: from=#17 sure=#17 count=many kept=no
+extent def v line 34: from=never sure=never count=zero kept=no

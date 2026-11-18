@@ -32,3 +32,9 @@ C.x: reader#9 end=yes
 C.x=: writer#9 end=yes
 C.made: def#12 end=yes
 opaque C: opaque#13
+post: after #15
+extent def hi line 11: from=#14 sure=never count=many kept=no
+extent def ho line 15: from=#14 sure=never count=many kept=no
+extent block instance_eval line 22: from=#7 sure=#7 count=once kept=no
+extent block class_eval line 26: from=#10 sure=#10 count=once kept=no
+extent def made line 28: from=#14 sure=never count=many kept=no

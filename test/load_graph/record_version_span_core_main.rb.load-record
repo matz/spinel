@@ -46,3 +46,15 @@ main#__int_ring__2: def#26 private end=yes
 versions ZeroDivisionError#ring: def#4..#18 seen=unknown, def#18..end seen=def#18; 7 of the name
 versions Integer#ring: def#6..#20 seen=unknown, def#20..end seen=def#20; 7 of the name
 versions Fizz#ring: def#8..#22 seen=def#8 idle, def#22..end seen=def#22; 7 of the name
+post: after #26
+extent def ring line 8: from=#10 sure=never count=many kept=no
+extent def ring line 12: from=#10 sure=never count=many kept=no
+extent def ring line 16: from=#10 sure=never count=many kept=no
+extent def ring line 20: from=#23 sure=never count=many kept=no
+extent def divide line 23: from=#10 sure=never count=many kept=no
+extent def ring line 44: from=#10 sure=never count=many kept=no
+extent def ring line 48: from=#10 sure=never count=many kept=no
+extent def ring line 52: from=#23 sure=never count=many kept=no
+extent def __int_ring__0 line 48: from=never sure=never count=zero kept=no
+extent def __int_ring__1 line 48: from=never sure=never count=zero kept=no
+extent def __int_ring__2 line 48: from=never sure=never count=zero kept=no

@@ -24,3 +24,10 @@ A#all: def#7 end=yes
 const M: write#8
 M#f: def#9 runs=#10 private end=yes
 M.f: copy#9 end=yes
+post: after #11
+extent def keep line 6: from=#3 sure=#3 count=once kept=no
+extent def m line 7: from=#10 sure=never count=many kept=no
+extent def n line 8: from=#10 sure=never count=many kept=no
+extent def o line 10: from=#10 sure=never count=many kept=no
+extent def all line 11: from=#10 sure=never count=many kept=no
+extent def f line 14: from=#10 sure=never count=many kept=no

@@ -16,3 +16,6 @@ Tag#to_s: def#2 end=yes
 const Foo: write#3
 Foo.show: def#4 end=yes
 opaque Foo: opaque#5
+post: after #7
+extent def to_s line 5: from=#5 sure=never count=many kept=no
+extent def show line 11: from=#5 sure=#5 count=many kept=no

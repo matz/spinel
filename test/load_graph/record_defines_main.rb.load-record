@@ -31,3 +31,12 @@ Foo#z: reader#10 end=yes
 Foo#z=: writer#10 end=yes
 opaque Foo: opaque#12 may opaque#13 opaque#15 may
 Foo.later: def#16 end=yes
+post: after #17
+extent def label line 6: from=#9 sure=never count=many kept=no
+extent def twice line 7: from=#9 sure=#9 count=many kept=no
+extent def defs line 8: from=never sure=never count=zero kept=no
+extent def ping line 9: from=#12 sure=never count=many kept=no
+extent def pong line 10: from=#12 sure=never count=many kept=no
+extent def sets line 11: from=#13 sure=#13 count=once kept=no
+extent def calls_later line 12: from=#15 sure=never count=many kept=no
+extent def later line 18: from=#15 sure=never count=many kept=no

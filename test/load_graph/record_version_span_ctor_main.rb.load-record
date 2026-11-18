@@ -69,3 +69,16 @@ versions Public#ring: def#8..#28 seen=def#8, def#28..end seen=def#28; 11 of the 
 versions Bare#ring: def#12..#30 seen=def#12, def#30..end seen=def#30; 11 of the name
 versions Bell#ring: def#16..#32 seen=def#16, def#32..end seen=def#32; 11 of the name
 versions Drum#ring: def#19..#34 seen=def#19 idle, def#34..end seen=def#34; 11 of the name
+post: after #36
+extent def ring line 11: from=#5 sure=never count=many kept=no
+extent def ring line 15: from=#5 sure=never count=many kept=no
+extent def ring line 21: from=#9 sure=never count=many kept=no
+extent def ring line 27: from=#13 sure=never count=many kept=no
+extent def ring line 34: from=#20 sure=never count=many kept=no
+extent def make line 35: from=#20 sure=#20 count=once kept=no
+extent def ring line 39: from=#36 sure=never count=many kept=no
+extent def ring line 53: from=#5 sure=never count=many kept=no
+extent def ring line 57: from=#9 sure=never count=many kept=no
+extent def ring line 61: from=#13 sure=never count=many kept=no
+extent def ring line 65: from=#20 sure=never count=many kept=no
+extent def ring line 69: from=#36 sure=never count=many kept=no

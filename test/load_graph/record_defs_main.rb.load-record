@@ -64,3 +64,12 @@ Util.twice: copy#25 end=yes
 $level: write#26
 main @main_ivar: write#27
 const LIMIT: write#28
+post: after #34
+extent def say line 8: from=#30 sure=never count=many kept=no
+extent def say line 11: from=#30 sure=never count=many kept=no
+extent def secret line 13: from=never sure=never count=zero kept=no
+extent def inherited line 16: from=#3 sure=never count=many kept=no
+extent block define_method line 22: from=#19 sure=never count=many kept=yes
+extent def make line 25: from=#29 sure=#29 count=once kept=no
+extent def twice line 30: from=#33 sure=never count=many kept=no
+extent def say line 2: from=#30 sure=never count=many kept=no

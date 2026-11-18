@@ -60,3 +60,15 @@ versions V.c: copy#11..#13 seen=copy#11, def#13..end seen=def#13; 3 of the name,
 versions W#e: def#17..#18 seen=def#17 idle, def#18..end seen=def#18 idle; 4 of the name
 versions W.e: copy#17..#18 seen=copy#17 idle, copy#18..end seen=copy#18; 4 of the name
 versions Y#yb: def#20..#26 seen=def#20 idle, def#26..end seen=def#26 idle; 2 of the name, named
+post: after #26
+extent def a line 12: from=#5 sure=never count=many kept=no
+extent def b line 13: from=#5 sure=never count=many kept=no
+extent def a line 16: from=#5 sure=never count=many kept=no
+extent def c line 19: from=#12 sure=never count=many kept=no
+extent def d line 20: from=#12 sure=never count=many kept=no
+extent def c line 24: from=#12 sure=never count=many kept=no
+extent def e line 28: from=never sure=never count=zero kept=no
+extent def e line 29: from=never sure=never count=zero kept=no
+extent def yb line 32: from=#24 sure=never count=many kept=no
+extent def yc line 33: from=#24 sure=never count=many kept=no
+extent def yb line 39: from=never sure=never count=zero kept=no

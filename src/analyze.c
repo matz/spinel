@@ -22461,16 +22461,6 @@ static int ekh_value_literals(const NodeTable *nt, int recv, int *lits, int cap)
   if (for_each_value_position(nt, recv, VPS_IF | VPS_UNLESS | VPS_CASE, ekh_lit_leaf, &a)) return 0;
   return a.n;
 }
-/* What a boxed key is when it reads the first parameter of an iteration
-   block over an Array -- each, map and the others whose lock
-   reset_locked_iter_block_params clears -- that nothing writes: such a
-   parameter is poly only because its walk's receiver read poly on some round
-   (bp_widen never narrows during the fixpoint), and the re-narrow re-derives
-   it from the receiver's element type. The key mark is permanent, so taking
-   that stale poly pinned the poly-keyed variant for keys the re-narrow types
-   as Strings. Answers the element type of a receiver typed by now, TY_POLY
-   while a receiver still reads boxed or untyped, and TY_UNKNOWN when `key`
-   is no such read. */
 /* The calls with a literal block, by the name of the block's first
    parameter and then by id: the calls ekh_locked_iter_param_elem asks of a
    name, kept while the table's count, version and edits stay. */
@@ -22509,8 +22499,18 @@ static const EkhCall *ekh_calls_named(Compiler *c, const char *nm, int *n) {
   int e = lo;
   while (e < ekh_ix_n && sp_streq(ekh_ix[e].name, nm)) e++;
   *n = e - lo;
-  return ekh_ix + lo;
+  return *n ? ekh_ix + lo : NULL;
 }
+/* What a boxed key is when it reads the first parameter of an iteration
+   block over an Array -- each, map and the others whose lock
+   reset_locked_iter_block_params clears -- that nothing writes: such a
+   parameter is poly only because its walk's receiver read poly on some round
+   (bp_widen never narrows during the fixpoint), and the re-narrow re-derives
+   it from the receiver's element type. The key mark is permanent, so taking
+   that stale poly pinned the poly-keyed variant for keys the re-narrow types
+   as Strings. Answers the element type of a receiver typed by now, TY_POLY
+   while a receiver still reads boxed or untyped, and TY_UNKNOWN when `key`
+   is no such read. */
 static TyKind ekh_locked_iter_param_elem(Compiler *c, int key) {
   const NodeTable *nt = c->nt;
   if (key < 0 || nt_kind(nt, key) != NK_LocalVariableReadNode) return TY_UNKNOWN;

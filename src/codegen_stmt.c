@@ -2252,8 +2252,7 @@ static int strbuf_inline_tail_ok(Compiler *c, int mi, int t, int depth) {
   if (strbuf_tail_answers_block(c, mi, t, 0) || k == NK_LocalVariableReadNode ||
       k == NK_InstanceVariableReadNode || repr_static_read_kind(k))
     return 1;
-  /* (a call whose every target publishes its handle, which the slot picks
-     up after it: emit_strbuf_value's pickup) */
+  /* The selected call already returns its handle. */
   if (k == NK_CallNode && repr_call_returns_handle(c, t)) return 1;
   if (depth == 0) return 0;
   if (k == NK_NilNode || share_value_fresh(c, t, 0)) return 1;
@@ -2956,8 +2955,7 @@ int strbuf_route_kind(Compiler *c, int v, int *op) {
 /* Pass on an evaluated argument temp or the call's native result. */
 void emit_string_call_handle(Compiler *c, int v, int box, Buf *b) {
   v = nt_paren_single(c->nt, v);
-  /* an argument emit_args_filled_argv sequenced ahead into a temp of its
-     handle type ran there, its pickup included: the temp is the handle */
+  /* Use the handle already evaluated and held by argument staging. */
   { Repr r = repr_of(c, v);
     if (r.as_ty == TY_STRBUF && !repr_handle_apart(c, v, r))
       for (int i = g_n_argov - 1; i >= 0; i--)
@@ -3655,9 +3653,7 @@ int strbuf_recv_handle(Compiler *c, int id, int recv, Buf *out) {
 }
 /* See codegen_internal.h. */
 int strbuf_call_result_nil_check(Compiler *c, const char *name, int recv, Buf *out) {
-  /* --share-strings: a deep-return pickup that can answer nil (a nil
-     tail, an_pickup_tail) raises NoMethodError for name, as the copy's
-     own check did; its text runs the call, so it is read once. */
+  /* Evaluate a nullable receiver once and check it before mutation. */
   Buf rb; memset(&rb, 0, sizeof rb);
   if (!strbuf_slot_text(c, recv, &rb)) { free(rb.p); return 0; }
   if (!strbuf_call_result_may_nil(c, recv) && !repr_of(c, recv).may_nil) {

@@ -1769,8 +1769,7 @@ static int sh_def_reader_box(const Compiler *c, int u) {
    other routes, as the String it is before the store's lift. */
 static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *op) {
   *op = -1;
-  /* The return route takes the handle its callee publishes, including
-     when a borrowed parameter is returned beside a method-owned String. */
+  /* A native String result carries its handle through the call. */
   if (repr_call_returns_handle((Compiler *)c, n)) return SPK_NATIVE_CALL;
   /* freeze answers its receiver: it hands on the handle where its receiver
      does, and a new String's freeze is a String no other name holds */
@@ -1803,7 +1802,7 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
     }
     if (all) return SPK_POLY_ARMS;
     /* ...or one whose other arms answer a new String beside it: the
-       dispatch boxes each arm's own answer, the published handle or a new
+       dispatch boxes each arm's own answer, the native handle or a new
        handle around the fresh String (strbuf_poly_user_boxes), as the
        String plan has it */
     if (strbuf_poly_user_boxes((Compiler *)c, u)) return SPK_POLY_ARMS;

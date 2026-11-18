@@ -286,10 +286,9 @@ int masgn_boxed_index_keeps(Compiler *c, int t, int e);
    a route (read once, nil raising NoMethodError for id), 0 neither
    (codegen_stmt.c) */
 int strbuf_recv_handle(Compiler *c, int id, int recv, Buf *out);
-/* The handle text of recv (strbuf_slot_text) appended to out, wrapped under
-   --share-strings, when recv is a deep-return pickup that can answer nil,
-   to raise NoMethodError for String mutator `name`: 2 wrapped, 1 read
-   bare, 0 no slot read (nothing emitted) (codegen_stmt.c) */
+/* Emit the receiver handle for String mutator name. A nullable result
+   raises NoMethodError. Returns 2 for a checked read, 1 for a direct read
+   or 0 when this receiver has no handle slot. */
 int strbuf_call_result_nil_check(Compiler *c, const char *name, int recv, Buf *out);
 /* strbuf_recv_handle, and under --share-strings a route emitted whole into
    lb instead (emit_recv_route_handle; 2): the handle's text is lb's where
@@ -299,8 +298,7 @@ int strbuf_recv_handle_any(Compiler *c, int id, int recv, Buf *out, Buf *lb);
    2) and something can allocate while it is live: the mutator (argv NULL)
    or one of its argc ty operands argv; a slot's needs none (codegen_stmt.c) */
 void emit_route_recv_root(Compiler *c, int hr, int t, int argc, const int *argv, TyKind ty, Buf *b);
-/* --share-strings: is recv a deep-return pickup whose method can answer
-   nil? (codegen_stmt.c) */
+/* Can the native String call return a null handle? */
 int strbuf_call_result_may_nil(Compiler *c, int recv);
 /* --share-strings: the handle slot a variable's read names, 0 for any
    other node (codegen_stmt.c) */

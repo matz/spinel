@@ -554,7 +554,7 @@ const char *sp_poly_to_s(sp_RbVal v)
         case SP_BUILTIN_REGEX: return sp_re_to_s_str(v.v.p);
         /* MatchData#to_s is the whole match (#3641) */
         case SP_BUILTIN_MATCHDATA: { const char *_m0 = sp_MatchData_aref((sp_MatchData *)v.v.p, 0); return _m0 ? _m0 : sp_str_empty; }
-        case SP_BUILTIN_EXCEPTION: return sp_exc_message((volatile struct sp_Exception_s *)v.v.p);
+        case SP_BUILTIN_EXCEPTION: return sp_exc_to_s_text((sp_Exception *)v.v.p);
         /* Object#to_s on a boxed handle of the IO family, as the typed arm
            renders it: a boxed one fell through to "" (`puts [f, d]`) */
         case SP_BUILTIN_IO: return sp_io_to_s((sp_File *)v.v.p);

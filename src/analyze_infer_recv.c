@@ -1268,7 +1268,7 @@ int infer_arysub_call(Compiler *c, int id, TyKind *out) {
     r = infer_call(c, id);
     an_face_pop();
   }
-  *out = self ? rt : r;
+  *out = self && (g_infer_ignore_brk || !call_breaks(c, id)) ? rt : r;
   return 1;
 }
 

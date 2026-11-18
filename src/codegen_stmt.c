@@ -16822,13 +16822,27 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
     nd_stamp(id, (rt == TY_POLY || rt == TY_UNKNOWN) ? ND_BOXED : ND_DIRECT);
   }
 }
+/* The block can rebind a receiver's local or ivar. Keep the String the
+   iterator started with in the statement's operand view until its result. */
+static void emit_tail_with_receiver(Compiler *c, int id, Buf *b, int indent) {
+  int recv = tail_iter_receiver(c, id);
+  Repr receiver = repr_of(c, recv);
+  if (recv >= 0 && (receiver.ty == TY_STRING || receiver.ty == TY_STRBUF) &&
+      !arg_ran_first(recv, 0)) {
+    emit_indent(g_pre, indent);
+    hold_string_handle(c, recv, g_pre);
+    buf_puts(g_pre, "\n");
+  }
+  emit_stmt_tail_inner(c, id, b, indent);
+}
+
 void emit_stmt_tail(Compiler *c, int id, Buf *b, int indent) {
 #ifdef SP_EMIT_TRACE
   emit_trace_node(c, id, 'l');
 #endif
   emit_line_directive(c, id, b);
   if (emit_const_recv_stmt_wrap(c, id, b, indent, 1)) return;
-  emit_with_prelude(c, id, b, indent, emit_stmt_tail_inner);
+  emit_with_prelude(c, id, b, indent, emit_tail_with_receiver);
 }
 
 

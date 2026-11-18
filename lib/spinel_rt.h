@@ -10559,11 +10559,13 @@ static sp_RbVal sp_poly_str_mod(sp_RbVal a, sp_RbVal b) {
   return sp_box_str_new(sp_str_format_polyarr(format ? format : sp_str_empty, ar));
 }
 static const char *sp_str_format_splat(sp_RbVal a) {
+  SP_GC_ROOT_RBVAL(a);
   sp_int n = sp_poly_arr_len(a);
-  const char *fmt = n > 0 ? sp_poly_to_s(sp_poly_arr_get(a, 0)) : "";
+  const char *fmt = n > 0 ? sp_poly_to_s(sp_poly_arr_get(a, 0)) : sp_str_empty;
+  SP_GC_ROOT_STR(fmt);
   sp_PolyArray *rest = sp_PolyArray_new(); SP_GC_ROOT(rest);
   for (sp_int i = 1; i < n; i++) sp_PolyArray_push(rest, sp_poly_arr_get(a, i));
-  return sp_str_format_polyarr(fmt ? fmt : "", rest);
+  return sp_str_format_polyarr(fmt ? fmt : sp_str_empty, rest);
 }
 const char *sp_poly_inspect(sp_RbVal v);            /* %p; defined after the container types */
 

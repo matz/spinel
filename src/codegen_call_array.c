@@ -2294,6 +2294,8 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
        the next argument runs. */
     const char *rvn = nt_kind(nt, recv) == NK_LocalVariableReadNode ? nt_str(nt, recv, "name") : NULL;
     int slot = rvn && strncmp(rvn, "__cap_", 6) == 0 ? recv : poly_shl_root_slot(c, recv);
+    HolderRef holder;
+    if (slot >= 0 && (!holder_of_node(c, slot, &holder) || holder.r.kind != RK_BOXED)) slot = -1;
     int se = 0;
     int t = poly_binop_recv_temp(c, recv, argv[0], b, &se);
     Buf ab; memset(&ab, 0, sizeof ab);
@@ -2312,9 +2314,9 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     emit_poly_shl_call(c, id, argv, t, ab.p, b);
     free(ab.p);
     buf_printf(b, "; if (_t%d.tag == SP_TAG_STR) { sp_RbVal _t%d = ", t, cur);
-    emit_expr(c, slot, b);
+    holder_slot_buf(c, &holder, b);
     buf_printf(b, "; if (_t%d.tag == SP_TAG_STR && _t%d.v.s == _t%d.v.s) ", cur, cur, t);
-    emit_expr(c, slot, b);
+    holder_slot_buf(c, &holder, b);
     buf_printf(b, " = _t%d; } _t%d; })", got, got);
     c->args_in_call = recv;
     return 1;

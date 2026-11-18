@@ -15231,6 +15231,20 @@ static void emit_display_overrides(Compiler *c, Buf *b) {
   }
   buf_puts(b, "  return 0;\n}\n");
 }
+/* sp_display_override has already tried the program's method. A generated
+   member reader has its field's representation; every other fallback is
+   the private default renderer actually emitted for this record. */
+static void emit_struct_display_arm(Compiler *c, int cid, const char *name, Buf *b) {
+  const char *cn = c->classes[cid].c_name;
+  int member = struct_display_member(c, cid, name);
+  const char *fn = member >= 0 ? name : struct_default_text_fn(c, cid);
+  Buf call = {0};
+  buf_printf(&call, "sp_%s_%s((sp_%s *)p)", cn, fn, cn);
+  buf_printf(b, "    case %d: return ", cid);
+  emit_boxed_text(c, member >= 0 ? repr_of_ivar(c, cid, member).as_ty : TY_STRING, call.p, b);
+  buf_puts(b, ";\n");
+  free(call.p);
+}
 static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static int sp_display_override(int, void *, int, sp_RbVal *);\n");
   /* user #to_s dispatcher: only classes defining one get an arm; NULL means
@@ -15265,8 +15279,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        it is taken above. The generated to_s, not inspect: a member or a user
        method owning inspect does not change to_s. */
     if (tci->is_struct || tci->is_data) {
-      buf_printf(b, "    case %d: return SP_STR_BOX(sp_%s_%s((sp_%s *)p));\n", i, tci->c_name,
-                 call_target(c, -1, i, "to_s", CT_METHODS | CT_SHARED, NULL) < 0 ? "to_s" : "inspect", tci->c_name);
+      emit_struct_display_arm(c, i, "to_s", b);
       continue;
     }
     /* an Array subclass instance's #to_s is its Array's (#7449) */
@@ -15355,7 +15368,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        route the contained-element render to it instead of the object default
        so [d] and {k: d} print like a directly-inspected d (#2698). */
     if (ci->is_struct || ci->is_data) {
-      buf_printf(b, "    case %d: return SP_STR_BOX(sp_%s_inspect((sp_%s *)p));\n", i, ci->c_name, ci->c_name);
+      emit_struct_display_arm(c, i, "inspect", b);
       continue;
     }
     if (class_is_exc_subclass(c, i)) {

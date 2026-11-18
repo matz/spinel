@@ -2199,27 +2199,6 @@ sp_String *sp_sym_to_s_new(sp_sym id);
    class is a pointer the user-defined #to_io just returned, and the
    dispatch already vetted it. NULL is the "not an IO" answer the
    dispatch turns into the caller's TypeError. */
-/* IO#write of an operand whose class is only known at run time. A String
-   writes through the binary entry so an embedded NUL survives; anything else
-   stringifies through the plain one, which it must -- a static class or symbol
-   name has no marker byte, and the _bin entry would read s[-1] out of bounds.
-   The typed-receiver arm chose by the operand's STATIC type, so a poly operand
-   took the plain entry and a NUL truncated the write; the poly-receiver arm
-   already took the byte path. */
-static SP_INLINE sp_int sp_File_write_poly(sp_File *f, sp_RbVal v) {
-  if (sp_rbval_is_string(v)) return sp_File_write_bin(f, sp_rbval_string_bytes(v));
-  return sp_File_write(f, sp_poly_to_s(v));
-}
-static SP_INLINE sp_int sp_File_syswrite_poly(sp_File *f, sp_RbVal v) {
-  SP_GC_ROOT(f);
-  SP_GC_ROOT_RBVAL(v);
-  if (sp_rbval_is_string(v)) {
-    const char *bytes = sp_rbval_string_bytes(v);
-    return sp_File_syswrite(f, bytes, sp_str_byte_len(bytes));
-  }
-  const char *text = sp_poly_to_s(v);
-  return sp_File_syswrite(f, text, strlen(text));
-}
 static inline sp_File *sp_poly_to_file(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO) return (sp_File *)v.v.p;
   return NULL;

@@ -1121,8 +1121,12 @@ int is_io_wait(const char *n) {
   return sp_streq(n, "wait_readable") || sp_streq(n, "wait_writable") || sp_streq(n, "wait_priority");
 }
 
+int is_io_syswrite(const char *n) {
+  return sp_streq(n, "syswrite");
+}
+
 int is_io_write(const char *n) {
-  return sp_streq(n, "write") || sp_streq(n, "syswrite");
+  return sp_streq(n, "write") || is_io_syswrite(n);
 }
 
 int is_path_reader(const char *n) {

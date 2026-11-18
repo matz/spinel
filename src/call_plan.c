@@ -9273,7 +9273,9 @@ static void cpoly_cases_n(Compiler *c, int id, const char *name, int argc, const
     cpoly_family(p, cap, PB_IO_READPARTIAL_BUF);
   if (sp_streq(name, "setsockopt") && argc == 3 && plain) cpoly_family(p, cap, PB_IO_SETSOCKOPT);
   if (sp_streq(name, "write") && argc == 1 && plain) cpoly_family(p, cap, PB_IO_WRITE);
-  if (sp_streq(name, "syswrite") && argc == 1 && plain) cpoly_family(p, cap, PB_IO_SYSWRITE);
+  if (is_io_syswrite(name) && argc == 1 &&
+      (plain || (splat_a == 0 && kwh < 0 && atmp_ty[0] == TY_POLY_ARRAY)))
+    cpoly_family(p, cap, PB_IO_SYSWRITE);
   if ((is_text_print(name)) && plain) cpoly_family(p, cap, PB_IO_PRINT);
   if (sp_streq(name, "putc") && argc == 1 && plain) cpoly_family(p, cap, PB_IO_PUTC);
   if (((sp_streq(name, "seek") && (argc == 1 || argc == 2)) ||

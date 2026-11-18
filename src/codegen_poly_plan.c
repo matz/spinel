@@ -4191,39 +4191,31 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       buf_puts(b, "break; }");
     }
   }
-  /* syswrite on a poly value: the same shape as the write arm above --
-     a Socket reaching this dispatch because some user class owns the
-     name had no arm and raised NoMethodError. syswrite takes one
-     String arg and returns the byte count. The byte length is sized
-     by the caller and handed to sp_File_syswrite directly: a String
-     source's length (sp_str_byte_len, so an embedded NUL reaches the
-     descriptor) or a converted value's length (strlen of sp_poly_to_s),
-     rather than reading it off a marker byte inside the write core. */
-  if (sp_streq(name, "syswrite") && argc == 1 && kwh < 0 && splat_a < 0) {
+  /* An IO alongside a program method writes exactly one argument. */
+  if (is_io_syswrite(name) && argc == 1 && kwh < 0 &&
+      (splat_a < 0 || (splat_a == 0 && atmp_ty[0] == TY_POLY_ARRAY))) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_IO_SYSWRITE, -1, TY_UNKNOWN, PC_SAME);
-    int wrv = ++g_tmp;
-    if (atmp_ty[0] == TY_STRING) {
-      if (ret == TY_POLY)
-        buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = sp_File_syswrite("
-                       "(sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d)); "
-                       "_t%d = sp_box_int(_t%d); break; }",
-                   wrv, tv, atmp[0], atmp[0], tr, wrv);
-      else
-        buf_printf(b, " case SP_BUILTIN_IO: _t%d = sp_File_syswrite("
-                       "(sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d)); break;",
-                   tr, tv, atmp[0], atmp[0]);
-    }
+    int a0 = atmp[0];
+    buf_puts(b, " case SP_BUILTIN_IO: { ");
+    if (splat_a == 0) buf_printf(b, "sp_arity_check(_t%d->len, 1, 1, NULL); ", a0);
+    int boxed = ret == TY_POLY, optional = !boxed && plan_slot_oint(c, id, ret);
+    buf_printf(b, "_t%d = %s", tr, boxed ? "sp_box_int(" : optional ? oint_of(ret) : "");
+    if (optional) buf_puts(b, "(");
+    if (atmp_ty[0] == TY_STRING)
+      buf_printf(b, "sp_File_syswrite((sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d))", tv, a0, a0);
     else {
-      int wres = ++g_tmp;
-      char a0n[24]; snprintf(a0n, sizeof a0n, "_t%d", atmp[0]);
-      buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = sp_File_syswrite_poly((sp_File *)_t%d.v.p, ", wres, tv);
-      if (atmp_ty[0] == TY_POLY) buf_puts(b, a0n);
-      else emit_boxed_text(c, atmp_ty[0], a0n, b);
-      buf_puts(b, "); ");
-      if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_int(_t%d); ", tr, wres);
-      else                buf_printf(b, "_t%d = _t%d; ", tr, wres);
-      buf_puts(b, "break; }");
+      buf_printf(b, "sp_File_syswrite_poly((sp_File *)_t%d.v.p, ", tv);
+      if (splat_a == 0) buf_printf(b, "sp_PolyArray_get(_t%d, 0)", a0);
+      else if (atmp_ty[0] == TY_POLY) buf_printf(b, "_t%d", a0);
+      else {
+        char a0n[24];
+        snprintf(a0n, sizeof a0n, "_t%d", a0);
+        emit_boxed_text(c, atmp_ty[0], a0n, b);
+      }
+      buf_puts(b, ")");
     }
+    if (boxed || optional) buf_puts(b, ")");
+    buf_puts(b, "; break; }");
   }
   /* print and puts on a poly value, beside the write arm: an IO held
      where a StringIO can be, or reached through a user class that owns

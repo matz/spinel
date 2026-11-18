@@ -1101,13 +1101,20 @@ sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_ST
   return sp_File_write_len(f, s, n);
 }
 
-/* IO#syswrite: the same write core as sp_File_write_bin, but the byte
-   length is passed in by the caller rather than read off the marker byte.
-   The codegen syswrite arm sizes the operand itself -- a String source's
-   length (sp_str_byte_len, so an embedded NUL reaches the descriptor) or a
-   converted value's length (sp_poly_to_s + strlen) -- and hands both the
-   pointer and the count to this entry, which is the single place the
-   socket/pipe/stream routing decision is made. A regular file writes
+/* Keep the file alive while the argument's to_s runs. A String returned
+   by to_s carries its full byte count, including any embedded NUL. */
+sp_int sp_File_write_poly(sp_File *f, sp_RbVal v) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT_RBVAL(v);
+  size_t n;
+  const char *text = sp_poly_to_s_bytes(v, &n);
+  SP_IO_OPEN(f);
+  if (!n) return 0;
+  sp_io_check_writable(f);
+  return sp_File_write_len(f, text, n);
+}
+
+/* IO#syswrite receives the byte count along with the pointer. A regular file writes
    straight to the descriptor (sp_io_write_raw), bypassing the stdio
    buffer: syswrite is unbuffered, so the bytes are on disk before the
    call returns and a read back through the same or another handle sees
@@ -1119,6 +1126,14 @@ sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_G
   if (f->is_sock || f->own_buf == SP_OWN_SOCK) return sp_sock_write(f, s, n);
   if (f->sync_on && sp_io_parkable(f)) return sp_sock_write(f, s, n);
   return sp_io_write_raw(f, s, n);
+}
+
+sp_int sp_File_syswrite_poly(sp_File *f, sp_RbVal v) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT_RBVAL(v);
+  size_t n;
+  const char *text = sp_poly_to_s_bytes(v, &n);
+  return sp_File_syswrite(f, text, n);
 }
 
 sp_bool sp_File_tty_p(sp_File *f) {

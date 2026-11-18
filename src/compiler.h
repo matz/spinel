@@ -1229,7 +1229,7 @@ typedef struct { char *mod; char *val; } FfiSource;  /* ffi_source inline C tran
 
 typedef struct { char *name, *init; int slots, constants; } CextExtension;
 typedef struct { char *key; int kind, argc, node; } CextStub;
-typedef struct { char *path; int module, extension, allocator; } CextClass;
+typedef struct { char *path; int module, extension, allocator, site; } CextClass;   /* site: the declaring call */
 
 /* One `native_func` declaration (typed static binding to carried C). Unlike
    FfiFunc, arg/ret specs are the spinel type language ("any"/"string"/"int"/

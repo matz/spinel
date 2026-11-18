@@ -788,4 +788,12 @@ if "$SPINEL" --load-model=graph --strict-require "$tmp/pe/strict.rb" -o "$tmp/pe
 fi
 grep -q "cannot load such file -- no_such_gem_for_strict" "$tmp/pe/strict.err" || fail "--strict-require names the missing file"
 
+# A require of a package with a C extension in a branch that never runs
+# (`if RUBY_ENGINE == "spinel" ... else require "sqlite3"`) loads nothing:
+# the file no live require reaches is dropped, and its extension's classes
+# with it.
+printf 'if RUBY_ENGINE == "spinel"\n  puts "spinel"\nelse\n  require "sqlite3"\nend\n' > "$tmp/pe/dead_cext.rb"
+"$SPINEL" --load-model=graph "$tmp/pe/dead_cext.rb" -o "$tmp/pe/dead_cext" >/dev/null 2>"$tmp/pe/dead_cext.err" &&
+  [ "$("$tmp/pe/dead_cext")" = spinel ] || { fail "a C extension required in a branch that never runs"; head -3 "$tmp/pe/dead_cext.err"; }
+
 [ $ok -eq 1 ] && echo "load-graph-test: pass" || exit 1

@@ -153,6 +153,9 @@ int an_const_read_is_value(Compiler *c, int id);
 void prog_file_scopes(Compiler *c);
 void prog_refuse_loads(Compiler *c);
 void prog_settle_files(Compiler *c);
+/* Is node in a required file prog_settle_files dropped, as no live require
+   reaches it (--load-model=graph)? */
+int prog_node_in_dropped_file(Compiler *c, int node);
 void prog_refuse_order(Compiler *c);
 int prog_is_top_scope(const Compiler *c, const Scope *s);
 int prog_is_root(const Compiler *c, int id);

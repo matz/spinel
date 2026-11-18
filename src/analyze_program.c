@@ -1472,6 +1472,19 @@ static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, cons
   free(parent); free(pos);
 }
 
+/* See analyze.h. */
+int prog_node_in_dropped_file(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || !prog_graph(c)) return 0;
+  const char *fp = nt_file_path(nt, (int)nt_int(nt, node, "node_file", -1));
+  if (!fp) return 0;
+  for (int f = 1; f < nt_nroots(nt); f++) {
+    const char *rp = nt_str(nt, nt_root(nt, f), "file_path");
+    if (rp && sp_streq(rp, fp)) return nt_int(nt, nt_root(nt, f), "file_dropped", 0) != 0;
+  }
+  return 0;
+}
+
 void prog_settle_files(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n = nt_nroots(nt);
@@ -1497,7 +1510,7 @@ void prog_settle_files(Compiler *c) {
   prog_unplace_candidates(c, seen, live);
   for (int f = 1; f < n; f++) {
     int st = live[f] ? -1 : prog_root_stmts(c, f);
-    if (st >= 0) nt_node_set_arr(nt, st, "body", NULL, 0);
+    if (st >= 0) { nt_node_set_arr(nt, st, "body", NULL, 0); nt_node_set_int(nt, nt_root(nt, f), "file_dropped", 1); }
     else if (live[f] && prog_load_by(c, f) < 0 && nsite[f] == 1 && ok[f]) {
       nt_node_set_int(nt, nt_root(nt, f), "load_by", site[f]);
       nt_node_set_int(nt, nt_root(nt, f), "load_stmt", at[f]);

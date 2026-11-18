@@ -121,7 +121,7 @@ void desugar_cext_decls(Compiler *c) {
         const char *cn=text(c,site,av[0]);path(c,site,cn);
         int q=c->n_cext_classes++;
         c->cext_classes=realloc(c->cext_classes,sizeof(CextClass)*(size_t)c->n_cext_classes);
-        c->cext_classes[q]=(CextClass){strdup(cn),0,-1,-1};
+        c->cext_classes[q]=(CextClass){strdup(cn),0,-1,-1,site};
         buf_printf(&b,"%s\n",cn);
       } else if (sp_streq(name, "__cext_class") || sp_streq(name, "__cext_module")) {
         int mod = sp_streq(name, "__cext_module"); need(c, site, ac, mod ? 1 : 2);
@@ -129,7 +129,7 @@ void desugar_cext_decls(Compiler *c) {
         const char *parent = mod ? NULL : text(c, site, av[1]); if (parent) path(c, site, parent);
         int q = c->n_cext_classes++;
         c->cext_classes = realloc(c->cext_classes, sizeof(CextClass) * (size_t)c->n_cext_classes);
-        c->cext_classes[q] = (CextClass){strdup(cn), mod, ext, -1};
+        c->cext_classes[q] = (CextClass){strdup(cn), mod, ext, -1, site};
         buf_printf(&b, "%s %s", mod ? "module" : "class", cn);
         if (parent) buf_printf(&b, " < %s", parent);
         buf_puts(&b, "\nend\n");
@@ -473,6 +473,10 @@ void register_cext_layouts(Compiler *c) {
       const char *ruby_name = class_ruby_name(c, k);
       if (ruby_name && sp_streq(ruby_name, cc->path)) { cid = k; break; }
     }
+    /* (a class declared in a file no live require reaches, dropped under
+       --load-model=graph: `require "sqlite3"` in an untaken RUBY_ENGINE
+       branch; nothing makes it, and nothing of it runs) */
+    if (cid < 0 && prog_node_in_dropped_file(c, cc->site)) continue;
     if (cid < 0) unsupported_feature(c, c->nt->root_id, "C extension class was not registered");
     /* -2: the allocator is undefined, so instances come only from
      * TypedData_Make_Struct / TypedData_Wrap_Struct; the layout is the same */

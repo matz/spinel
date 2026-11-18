@@ -11169,6 +11169,22 @@ static int rest_required_for(Compiler *c, Scope *m) {
   return req;
 }
 
+/* Conditional dispatchers forward real arguments, but can still answer
+   no method. Their existing selector decides whether a count error belongs
+   to a live method; otherwise their missing-method arm must run instead. */
+static int arity_conditional_dispatch(Compiler *c, const Scope *m) {
+  return m->def_node >= 0 && nt_int(c->nt, m->def_node, "cond_lone_disp", 0);
+}
+
+/* Prefix only the check, after argument evaluation: putting the binding
+   inside this guard would leave its held argument temps out of scope. */
+static void emit_arity_presence(Compiler *c, const Scope *m) {
+  Buf live = {0};
+  if (arity_conditional_dispatch(c, m) && emit_implied_entry_test(c, (int)(m - c->scopes), 0, &live))
+    buf_printf(g_pre, "if (%s) ", live.p);
+  free(live.p);
+}
+
 /* The count check of a call whose positional count only the run time knows
    (a splat, a gather), the C expression `given`, against `m`'s positional
    parameters -- keywords apart, and named in the message as CRuby names
@@ -11183,6 +11199,7 @@ static void emit_positional_count_check(Compiler *c, Scope *m, const char *given
   /* no upper bound where the static count has none: a rest, or a Kernel
      wrapper whose builtin takes any count (bam_variadic_kernel) */
   int unbounded = m && (m->rest_idx >= 0 || bam_variadic_kernel(c->nt, m));
+  emit_arity_presence(c, m);
   emit_arity_check(g_pre, given, pos_required, unbounded ? -1 : pos_params, kw);
   buf_puts(g_pre, ";\n");
 }
@@ -11224,9 +11241,11 @@ static int bam_variadic_kernel(const NodeTable *nt, const Scope *m) {
    emit_unreached_splat_count), which judged such a scope's synthesized
    slots as if they were arguments. A version entry's synthesized
    parameters are its call's arguments one for one: it forwards them to
-   versions that all take the same count, so that count is judged here. */
+   versions that all take the same count, so that count is judged here.
+   Conditional dispatchers likewise expose real positional arguments; their
+   synthesized names do not exempt callers from the argument contract. */
 static int arity_unjudged(Compiler *c, Scope *m) {
-  if (m->entry) return 0;
+  if (m->entry || arity_conditional_dispatch(c, m)) return 0;
   if (m->cs_synth) return 1;
   for (int i = 0; i < m->nparams; i++)
     if (m->pnames[i] && m->pnames[i][0] == '_' && m->pnames[i][1] == '_' &&
@@ -11357,7 +11376,9 @@ void emit_call_arity_check(Compiler *c, Scope *m, int argc, const int *argv) {
     /* A keyword hash that is keywords is no positional, `**` spreads among
        them too: `def r(a, k:)` called `r(**{k: 5})` is given 0. */
     if (arity_count_error(c, m, pos_argc + P.count, msg, sizeof msg)) {
-      args_raise(c, argv, argc, "%s", msg);
+      emit_args_run(c, argv, argc);
+      emit_arity_presence(c, m);
+      emit_argument_error(msg);
       return;
     }
   }
@@ -12957,7 +12978,8 @@ static Scope *dispatch_first_arm(Compiler *c, int call, int cid, const char *nam
    against pm? Not when an argument is forwarded or a block argument, nor
    when a parameter is synthesized (every __-prefixed one, a __bam_
    wrapper's too: a receiver-bound wrapper's first one is its receiver, not
-   an argument). */
+   an argument). Conditional dispatchers' parameters are real arguments;
+   their count check is guarded by the dispatcher's availability. */
 static int dispatch_count_judged(Compiler *c, const Scope *pm, const int *argv, int argc) {
   const NodeTable *nt = c->nt;
   if (!pm || (!argv && argc)) return 0;
@@ -12965,6 +12987,7 @@ static int dispatch_count_judged(Compiler *c, const Scope *pm, const int *argv, 
     NodeKind ak = nt_kind(nt, argv[k]);
     if (ak == NK_ForwardingArgumentsNode || ak == NK_BlockArgumentNode) return 0;
   }
+  if (arity_conditional_dispatch(c, pm)) return 1;
   for (int i = 0; i < pm->nparams; i++)
     if (pm->pnames[i] && pm->pnames[i][0] == '_' && pm->pnames[i][1] == '_') return 0;
   return 1;

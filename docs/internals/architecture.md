@@ -45,6 +45,14 @@ Hash key insertion consults the runtime String's frozen state. It retains a
 frozen key and makes a frozen key object for an unfrozen input, including a
 static empty or one-character result. The Hash stores the key's byte view.
 
+Conditional method dispatchers expose real call arguments even when their
+parameter names are synthesized. The shared argument binder judges those
+counts for ordinary calls and implicit conversion callbacks alike. A
+possibly absent dispatcher uses its existing availability selector to guard
+count errors, after evaluating the arguments; its missing-method arm still
+owns the absent case. Variable-arity dispatchers forward their arguments to
+the selected arm, where that method's defaults and keywords are checked.
+
 A default argument is evaluated on the callee. Binding a String default
 uses the same handle as the expression that supplied it.
 An ordered operand keeps its saved handle until its argument binding is

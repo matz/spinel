@@ -1,0 +1,4 @@
+[NoMethodError, :pair]
+[ArgumentError, nil]
+[:argument, :argument]
+[ArgumentError, nil]

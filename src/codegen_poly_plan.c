@@ -3690,7 +3690,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     if (atmp_ty[0] == TY_POLY) buf_puts(&ab6, tn6);
     else emit_boxed_text(c, atmp_ty[0], tn6, &ab6);
     buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
-    buf_printf(b, ") { _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), sp_poly_arg_str_chk(sp_poly_strbuf_deref(%s)))%s; }\nelse ",
+    buf_printf(b, ") { _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), sp_poly_arg_str_chk(%s))%s; }\nelse ",
                tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, ab6.p ? ab6.p : "sp_box_nil()",
                ret == TY_POLY ? ")" : "");
     free(ab6.p);
@@ -4168,20 +4168,8 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
                    tr, tv, atmp[0]);
     }
     else {
-      /* Non-String arg: atmp[0] is either sp_RbVal (TY_POLY/TY_NIL/
-         TY_VOID/TY_UNKNOWN were stored boxed at allocation) or a
-         scalar slot (TY_INT, TY_FLOAT, ...). Box the scalar into
-         sp_RbVal first, then route the boxed value through
-         sp_poly_to_s. When the slot is TY_POLY, the runtime value
-         may carry SP_TAG_STR (a String that came in through a poly
-         param or ivar read); in that case the SP_TAG_STR branch uses
-         sp_File_write_bin directly so an embedded NUL survives,
-         otherwise sp_poly_to_s may return either a marked String
-         (also safe to binary-write) or a static SPL() literal
-         (strlen-based, which sp_File_write already handles). The
-         result is always boxed to sp_RbVal (wrv) so the surrounding
-         _t<tr> either takes it directly (ret == TY_POLY) or unboxes
-         to sp_int (ret == TY_INT). */
+      /* Use the same byte reader as a typed IO receiving a boxed value.
+         The result joins the other arms in the selected slot. */
       int wrr = ++g_tmp, wrv = ++g_tmp;
       char a0n[24]; snprintf(a0n, sizeof a0n, "_t%d", atmp[0]);
       buf_puts(b, " case SP_BUILTIN_IO: { ");
@@ -4191,14 +4179,8 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
         buf_puts(b, "; ");
       }
       else buf_printf(b, "sp_RbVal _t%d = %s; ", wrr, a0n);
-      /* a shared String's box (SP_BUILTIN_STRBUF) is its bytes with their
-         length: read before the tag test, or the String arm below sized
-         it by strlen and a frame stopped at its first NUL (#9602) */
-      buf_printf(b, "_t%d = sp_poly_strbuf_deref(_t%d); ", wrr, wrr);
-      buf_printf(b, "sp_RbVal _t%d = (_t%d.tag == SP_TAG_STR) ? "
-                     "sp_box_int(sp_File_write_bin((sp_File *)_t%d.v.p, _t%d.v.s)) : "
-                     "sp_box_int(sp_File_write((sp_File *)_t%d.v.p, sp_poly_to_s(_t%d))); ",
-                   wrv, wrr, tv, wrr, tv, wrr);
+      buf_printf(b, "sp_RbVal _t%d = sp_box_int(sp_File_write_poly((sp_File *)_t%d.v.p, _t%d)); ",
+                 wrv, tv, wrr);
       if (ret == TY_POLY) buf_printf(b, "_t%d = _t%d; ", tr, wrv);
       else if (plan_slot_oint(c, id, ret)) buf_printf(b, "_t%d = %s(_t%d); ", tr, oint_unbox(ret), wrv);
       else                buf_printf(b, "_t%d = sp_poly_to_i(_t%d); ", tr, wrv);
@@ -4591,10 +4573,9 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
                    tr, ibo, atmp[0], atmp[0], tv, atmp[0], other, ibc); }
       /* a String handle's box (a String some name changes in place) is
          a String too: its bytes are what the elements are compared with */
-      { int ts = ++g_tmp;
-        buf_printf(b, " case SP_BUILTIN_STR_ARRAY: { sp_RbVal _t%d = sp_poly_strbuf_deref(_t%d);"
-                      " _t%d = %s_t%d.tag == SP_TAG_STR && sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d.v.s)%s; break; }",
-                   ts, atmp[0], tr, ibo, ts, tv, ts, ibc); }
+      buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = %ssp_rbval_is_string(_t%d)"
+                    " && sp_StrArray_include((sp_StrArray *)_t%d.v.p, sp_rbval_string_bytes(_t%d))%s; break;",
+                 tr, ibo, atmp[0], tv, atmp[0], ibc);
       break;
     case TY_NIL:
       /* is there a nil element */

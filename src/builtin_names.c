@@ -2255,7 +2255,8 @@ int builtin_every_object_answers(const char *m, int cmeth) {
    Class's or Module's (core_singleton_methods.inc, written by
    tools/gen_method_names.rb) */
 #define CSM(k, m) { k, m },
-static const struct { const char *cls, *m; } core_singleton_methods[] = {
+typedef struct { const char *cls, *m; } CoreSingletonRow;
+static const CoreSingletonRow core_singleton_methods[] = {
 #include "core_singleton_methods.inc"
   { NULL, NULL }
 };
@@ -2263,10 +2264,24 @@ static const struct { const char *cls, *m; } core_singleton_methods[] = {
 /* Does the core class or module cls answer m as a value (File.join,
    Kernel.trap) with a public method of CRuby's? cls "Class#" or "Module#"
    asks about every class or module (class_eval, attr_reader). */
+static int csm_cmp(const void *a, const void *b) {
+  const CoreSingletonRow *x = a, *y = b;
+  int d = strcmp(x->cls, y->cls);
+  return d ? d : strcmp(x->m, y->m);
+}
+/* (a binary search over the rows, sorted at the first ask: a call on a class value asked it of every row, a twentieth of a large program's compile) */
 int core_class_value_answers(const char *cls, const char *m) {
-  for (int i = 0; cls && m && core_singleton_methods[i].cls; i++)
-    if (!strcmp(core_singleton_methods[i].cls, cls) && !strcmp(core_singleton_methods[i].m, m)) return 1;
-  return 0;
+  enum { N = sizeof core_singleton_methods / sizeof core_singleton_methods[0] - 1 };
+  static CoreSingletonRow rows[N];
+  static int sorted;
+  if (!cls || !m) return 0;
+  if (!sorted) {
+    memcpy(rows, core_singleton_methods, sizeof rows);
+    qsort(rows, N, sizeof rows[0], csm_cmp);
+    sorted = 1;
+  }
+  CoreSingletonRow key = { cls, m };
+  return bsearch(&key, rows, N, sizeof rows[0], csm_cmp) != NULL;
 }
 /* Does the builtin class of cls_id id (class_builtin_parent's answer), or
    a builtin class above it, answer m with a method of its own (with

@@ -9,6 +9,7 @@
 #include "sp_cext.h"
 #endif
 #include "sp_alloc.h"   /* sp_box_nil / sp_box_obj */
+#include "sp_string.h"  /* sp_box_str_fresh */
 #include "sp_exc.h"     /* sp_exc_cls_display / sp_exc_cls_unnamed (the thread report) */
 #include "sp_re.h"      /* sp_re_switch: the match registers of a thread */
 #include <stdlib.h>
@@ -3686,8 +3687,8 @@ sp_thread *sp_Thread_list_at(sp_int i) {
    finished normally, nil when it died with an unhandled exception. */
 sp_RbVal sp_Thread_status(sp_thread *t) {
   switch (SP_TH_STATE(t)) {
-    case SP_TH_RUNNING: case SP_TH_RUNNABLE: return sp_box_str(&("\xff" "run")[1]);
-    case SP_TH_BLOCKED:                       return sp_box_str(&("\xff" "sleep")[1]);
+    case SP_TH_RUNNING: case SP_TH_RUNNABLE: return sp_box_str_fresh(&("\xff" "run")[1]);
+    case SP_TH_BLOCKED:                       return sp_box_str_fresh(&("\xff" "sleep")[1]);
     default:                                  return t->has_exc ? sp_box_nil() : sp_box_bool(0);
   }
 }

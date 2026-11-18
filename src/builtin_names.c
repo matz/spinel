@@ -1178,8 +1178,12 @@ int is_select_reject(const char *n) {
   return sp_streq(n, "select") || sp_streq(n, "reject") || sp_streq(n, "filter");
 }
 
+int is_casecmp_predicate(const char *n) {
+  return sp_streq(n, "casecmp?");
+}
+
 int is_casecmp_family(const char *n) {
-  return sp_streq(n, "casecmp") || sp_streq(n, "casecmp?");
+  return sp_streq(n, "casecmp") || is_casecmp_predicate(n);
 }
 
 int str_int_promotes(const char *n, int argc) {

@@ -237,6 +237,7 @@ int is_io_read(const char *n); /* read */
 int is_mul_or_pow(const char *n); /* * ** */
 int is_unary_sign(const char *n); /* +@ -@ */
 int is_unary_minus(const char *n); /* -@ */
+int is_casecmp_predicate(const char *n);
 int is_casecmp_family(const char *n); /* casecmp casecmp? */
 /* String#to_i([base]), #hex, #oct: the parses promote mode reads as a
    Bignum past sp_int */

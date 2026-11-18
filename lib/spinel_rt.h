@@ -5934,9 +5934,12 @@ static sp_RbVal sp_poly_casecmp(sp_RbVal v, sp_RbVal o, int q) {
     bs = sp_sym_to_s((sp_sym)o.v.i);
   }
   else {
+    if (!sp_poly_face_str_ok(v)) sp_raise_poly_nomethod(m, v);
+    SP_GC_ROOT_RBVAL(v);
+    bs = sp_poly_check_str(o);
+    if (!bs && !sp_rbval_is_string(o)) return sp_box_nil();
+    if (!bs) bs = sp_str_empty;
     a = sp_poly_recv_s(v, m);
-    bs = sp_poly_check_str(sp_poly_strbuf_deref(o));
-    if (!bs) return sp_box_nil();
   }
   if (q) return sp_box_bool(sp_str_casecmp_p(a, bs));
   return sp_box_int(sp_str_casecmp(a, bs));

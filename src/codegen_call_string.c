@@ -1764,6 +1764,22 @@ void emit_string_lines_array(Compiler *c, int recv, int argc, const int *argv, B
   buf_printf(b, "sp_poly_string_lines(_t%d, _t%d, _t%d, _t%d, \"lines\"); })", tr, ts, tc, n);
 }
 
+/* Keep the receiver in its box across argument evaluation and #to_str. */
+void emit_string_casecmp(Compiler *c, int recv, int arg, int predicate, Buf *b) {
+  buf_puts(b, "({ ");
+  int tr = hold_operand(c, recv, TY_POLY, 1, ++g_tmp, 1, " ", b);
+  int ta = hold_operand(c, arg, TY_POLY, 1, ++g_tmp, 1, " ", b);
+  buf_printf(b, "sp_poly_casecmp(_t%d, _t%d, %d); })", tr, ta, predicate);
+}
+
+int emit_op_string_casecmp(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  if (x->rtext || argc != 1 || nt_kind(c->nt, argv[0]) == NK_SplatNode) return 0;
+  emit_string_casecmp(c, x->recv, argv[0], is_casecmp_predicate(x->name), b);
+  return 1;
+}
+
 int emit_op_string_lines(Compiler *c, const BopCtx *x, Buf *b) {
   int argc;
   const int *argv = call_args(c->nt, x->id, &argc);

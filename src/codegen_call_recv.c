@@ -9111,22 +9111,6 @@ static int str_arms_slice_encode(Compiler *c, int id, Buf *b, const char *name, 
   /* encode with no argument is the receiver; with a destination it is a
      transcode between the two encodings the runtime models (#4439) */
   else if (sp_streq(name, "encode") && argc <= 3) emit_str_encode_call(c, r, recv, argv, argc, b);
-  /* an operand whose class answers #to_str: CRuby converts it and
-     compares, where the arm below discarded it and answered nil. The
-     answer is boxed because the conversion can still come back empty --
-     a #to_str that answers nil is CRuby's nil casecmp, not a comparison
-     with "" -- so the call is typed TY_POLY, as it is for a poly operand
-     above (analyze_infer.c, analyze_infer_recv.c). */
-  else if ((is_casecmp_family(name)) && argc == 1 &&
-           str_cmp_conv_shape(c, argv[0])) {
-    int tr, to, ts;
-    emit_str_cmp_prologue(c, r, argv[0], &tr, &to, &ts, b);
-    if (sp_streq(name, "casecmp"))
-      buf_printf(b, "sp_box_int(sp_str_casecmp(_t%d, _t%d))", tr, ts);
-    else
-      buf_printf(b, "sp_box_bool(sp_str_casecmp_p(_t%d, _t%d))", tr, ts);
-    buf_puts(b, " : sp_box_nil(); })");
-  }
   else if ((is_casecmp_family(name)) && argc == 1 &&
            comp_ntype(c, argv[0]) != TY_STRING && !repr_of(c, argv[0]).untyped) {
     /* statically non-string argument: nil (the call typed TY_NIL); the
@@ -10524,6 +10508,18 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
   if (rt == TY_STRING && is_str_line_method(name) && emit_builtin_op(c, id, recv, rt, name, b)) {
     *out = 1;
     return 1;
+  }
+  if (rt == TY_STRING && is_casecmp_family(name) && argc == 1 &&
+      nt_kind(nt, argv[0]) != NK_SplatNode) {
+    if (str_cmp_conv_shape(c, argv[0])) {
+      emit_string_casecmp(c, recv, argv[0], is_casecmp_predicate(name), b);
+      *out = 1;
+      return 1;
+    }
+    if (a0 == TY_POLY && emit_builtin_op(c, id, recv, rt, name, b)) {
+      *out = 1;
+      return 1;
+    }
   }
   if (rt == TY_STRING && str_partition_shared(c, id, b, name, recv, argc, argv)) { *out = 1; return 1; }
   /* `x.to_s(base)` on an Integer that may be nil: nil's to_s takes no
@@ -19568,9 +19564,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      raised NoMethodError for a Symbol */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode &&
       is_casecmp_family(name) && !user_defines_or_reads(c, name)) {
-    buf_puts(b, "sp_poly_casecmp("); emit_boxed(c, recv, b);
-    buf_puts(b, ", "); emit_boxed(c, argv[0], b);
-    buf_printf(b, ", %d)", sp_streq(name, "casecmp?"));
+    emit_string_casecmp(c, recv, argv[0], is_casecmp_predicate(name), b);
     return 1;
   }
   if (recv >= 0 && rt == TY_POLY && emit_poly_str_upto(c, id, b)) return 1;

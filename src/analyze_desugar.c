@@ -26698,6 +26698,90 @@ static int incl_hook_declined_any(NodeTable *nt, char *const *qn, int n0, int m,
   return 0;
 }
 
+/* `Ver.extend(Basic)` at the top level, Basic a module with a `def self.extended(base)`: as `module Ver; extend
+   ::Basic; end`, the reopening desugar_included_hooks splices the hook into. Left a statement, the load record took
+   it as Ver's extend but declined to splice a hook whose body a step before the walk reads (version_gem's
+   `base.extend(Api)`), so Api never reached Ver. The argument is rooted: a reopening reads names from Ver first. */
+int desugar_toplevel_hooked_mixins(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  static const char *const hooks[3] = { "included", "extended", "prepended" };
+  /* each hook def on a module's self: its kind, its module's qualified name and its node, which a call must follow */
+  typedef struct { int kind, def; const char *mod; } Hooked;
+  Hooked *hk = NULL; int nhk = 0, chk = 0;
+  int *parent = NULL; char **qn = NULL;
+  for (int d = 0; d < n0; d++) {
+    if (nt_kind(nt, d) != NK_DefNode) continue;
+    int r = nt_ref(nt, d, "receiver");
+    const char *dn = nt_str(nt, d, "name");
+    if (r < 0 || nt_kind(nt, r) != NK_SelfNode || !dn) continue;
+    for (int k = 0; k < 3; k++) {
+      if (!sp_streq(dn, hooks[k])) continue;
+      if (!parent) incl_names_build(nt, n0, &parent, &qn);
+      int holder = parent[d], mod = holder >= 0 ? parent[holder] : -1;
+      if (mod < 0 || !class_def_is_module(nt, mod) || !qn[mod]) continue;
+      if (nhk == chk) {
+        chk = chk ? chk * 2 : 16;
+        hk = realloc(hk, sizeof(Hooked) * (size_t)chk);
+        if (!hk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      hk[nhk++] = (Hooked){ k, d, qn[mod] };
+    }
+  }
+  if (!parent) return 0;
+  for (int st = 0; st < n0; st++) {
+    if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") >= 0) continue;
+    const char *nm = nt_str(nt, st, "name");
+    int k = !nm ? -1 : sp_streq(nm, "include") ? 0 : sp_streq(nm, "extend") ? 1 : sp_streq(nm, "prepend") ? 2 : -1;
+    int recv = nt_ref(nt, st, "receiver"), list = parent[st], prog = list >= 0 ? parent[list] : -1;
+    if (k < 0 || recv < 0 || (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode)) continue;
+    if (list < 0 || nt_kind(nt, list) != NK_StatementsNode || prog < 0 || nt_kind(nt, prog) != NK_ProgramNode) continue;
+    /* (one module: Ruby runs several modules' hooks last argument first, which one splice per argument would not) */
+    int an = nt_ref(nt, st, "arguments"), ac = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+    if (ac != 1 || (nt_kind(nt, av[0]) != NK_ConstantReadNode && nt_kind(nt, av[0]) != NK_ConstantPathNode)) continue;
+    /* the receiver's and the module's full names, at the top level as written; the receiver's header by its own
+       declaration, not a namesake's */
+    char rpath[512], mpath[512];
+    incl_path_text(nt, recv, rpath, sizeof rpath);
+    incl_path_text(nt, av[0], mpath, sizeof mpath);
+    /* (a name that filled the buffer may be cut short, and match another's) */
+    if (strlen(rpath) + 1 >= sizeof rpath || strlen(mpath) + 1 >= sizeof mpath) continue;
+    const char *rp = rpath[0] == ':' ? rpath + 2 : rpath, *mp = mpath[0] == ':' ? mpath + 2 : mpath;
+    int decl = 0;
+    for (int m = 0; m < n0 && !decl; m++)
+      if (qn[m] && sp_streq(qn[m], rp)) decl = class_def_is_module(nt, m) ? 2 : class_def_is_class(nt, m) ? 1 : 0;
+    if (!decl) continue;
+    /* (a hook defined before the call: a later one is not the call's) */
+    int hit = 0;
+    for (int q = 0; q < nhk && !hit; q++) hit = hk[q].kind == k && hk[q].def < st && sp_streq(hk[q].mod, mp);
+    if (!hit) continue;
+    int arg = nt_clone_subtree(nt, av[0]), at = arg;
+    while (nt_kind(nt, at) == NK_ConstantPathNode && nt_ref(nt, at, "parent") >= 0) at = nt_ref(nt, at, "parent");
+    if (nt_kind(nt, at) == NK_ConstantReadNode) {
+      int root = fwd_new_node_like(nt, at, "ConstantPathNode");
+      nt_node_set_str(nt, root, "name", nt_str(nt, at, "name"));
+      nt_node_set_ref(nt, root, "parent", -1);
+      if (at == arg) arg = root;
+      else for (int up = arg; up >= 0; up = nt_ref(nt, up, "parent"))
+        if (nt_ref(nt, up, "parent") == at) { nt_node_set_ref(nt, up, "parent", root); break; }
+    }
+    nt_node_set_arr(nt, an, "arguments", &arg, 1);
+    int rn = fwd_new_node_like(nt, st, decl == 2 ? "ModuleNode" : "ClassNode");
+    int body = fwd_new_node_like(nt, st, "StatementsNode");
+    int path = nt_clone_subtree(nt, recv);
+    nt_node_set_ref(nt, st, "receiver", -1);
+    nt_node_set_ref(nt, rn, "constant_path", path);
+    nt_node_set_arr(nt, body, "body", &st, 1);
+    nt_node_set_ref(nt, rn, "body", body);
+    nt_replace_child(nt, list, st, rn);
+    changed = 1;
+  }
+  for (int m = 0; m < n0; m++) free(qn[m]);
+  free(qn); free(parent); free(hk);
+  return changed;
+}
+
 int desugar_included_hooks(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;

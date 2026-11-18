@@ -15955,6 +15955,7 @@ static void array_new_size_convert(Compiler *c, int size, int form, int ts, int 
   emit_indent(g_pre, g_indent);
 }
 
+static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
 static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *out) {
   if (!(recv >= 0 && (is_hash_constructor(name)))) return 0;
   NodeKind rk = nt_kind(nt, recv);
@@ -16063,6 +16064,27 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           { *out = 1; return 1; }
         }
         free(ib.p);
+      }
+      /* A module has no `new`: `M.new(v)` is CRuby's NoMethodError, once
+         the arguments have run. The constructor the path below names,
+         sp_<Module>_new, raises the same error itself, but a module nothing
+         constructs has none emitted -- a computed-name send names `new` as
+         one arm among a Class's methods ahead of any construction -- and
+         the arity check ahead of it raised ArgumentError for a method the
+         module does not have. */
+      if (comp_class_is_module(c, &c->classes[ci])) {
+        int plain = 1;
+        for (int a = 0; a < argc && plain; a++) {
+          NodeKind ak = nt_kind(nt, argv[a]);
+          plain = ak != NK_SplatNode && ak != NK_KeywordHashNode && ak != NK_BlockArgumentNode &&
+                  ak != NK_ForwardingArgumentsNode;
+        }
+        buf_puts(b, "(");
+        for (int a = 0; plain && a < argc; a++) { buf_puts(b, "(void)("); emit_expr(c, argv[a], b); buf_puts(b, "), "); }
+        buf_printf(b, "sp_raise_cls(\"NoMethodError\", \"undefined method 'new' for module %s\")",
+                   class_ruby_name(c, ci) ? class_ruby_name(c, ci) : c->classes[ci].name);
+        emit_raise_placeholder(c, id, b);
+        { *out = 1; return 1; }
       }
       /* Extra/missing positional args to a fixed-arity initialize raise
          ArgumentError at the .new site, as in MRI; the check emits the raise

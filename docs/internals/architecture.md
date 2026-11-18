@@ -55,7 +55,8 @@ A method inferred or declared to return String returns `sp_String *`.
 return slots and callers. A nullable String uses the same pointer and returns
 `NULL` for nil. The caller can retain the handle, box it for a Ruby value,
 or read its bytes for a text operation. An initializer used for its effects
-has a void C signature even if its last expression is a String. A nil arm
+has a void C signature even if its last expression is a String. Other String
+methods return their selected object even when the caller drops it. A nil arm
 joined to a String handle uses a null of that pointer type, so boxing the
 result still selects the handle representation. Mixed receiver dispatch joins
 Ruby values in the switch and projects the result once. Proc and C extension

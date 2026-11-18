@@ -8304,10 +8304,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
     buf_puts(b, "  return _prret;\n");
   }
   else {
-    /* no call reads the value (an_mark_unread_returns): the body runs as
-       statements, and the default below is the value no one reads */
-    if (s->ret_unread) emit_stmts(c, s->body, b, 1);
-    else emit_stmts_tail(c, s->body, b, 1);
+    emit_stmts_tail(c, s->body, b, 1);
     buf_puts(b, "  return ");
     buf_printf(b, "%s;\n", method_ret_zero(c, s));
   }

@@ -740,10 +740,6 @@ typedef struct {
                            methods (`def pass(x) = x.p_`) and methods whose value
                            is their block's (`def key_of(x) = yield x`), which no
                            RBS signature covers (#3505). */
-  unsigned char ret_unread; /* a String method no call reads the value of: every
-                               call of its name drops it (an_mark_unread_returns),
-                               so its body runs as statements and builds no value
-                               -- a tail `@out << x` read the whole buffer out */
   unsigned char ret_fresh; /* the same return-tail walk proves a new String
                               (or nil) on every path; no incoming handle */
   int ret_param;       /* --share-strings: every non-fresh return reads this

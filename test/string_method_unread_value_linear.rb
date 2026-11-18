@@ -1,9 +1,5 @@
-# A method whose last statement appends to a String instance variable
-# answers that String, and a String held for appending answers a copy of
-# its bytes. A writer called once per node of a tree, by callers that all
-# drop its value, copied its whole output on every call: quadratic in the
-# output's length, so the tree below ran past the test's time budget. No
-# call reads these methods' values, so no copy is made.
+# A recursive writer returns the handle of its growing String. Returning
+# from each call must take constant time in the length already written.
 class Node
   attr_reader :type, :children
 

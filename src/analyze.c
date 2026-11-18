@@ -22527,6 +22527,46 @@ static int ekh_value_literals(const NodeTable *nt, int recv, int *lits, int cap)
   if (for_each_value_position(nt, recv, VPS_IF | VPS_UNLESS | VPS_CASE, ekh_lit_leaf, &a)) return 0;
   return a.n;
 }
+/* The calls with a literal block, by the name of the block's first
+   parameter and then by id: the calls ekh_locked_iter_param_elem asks of a
+   name, kept while the table's count, version and edits stay. */
+typedef struct { const char *name; int call; } EkhCall;
+static EkhCall *ekh_ix;
+static int ekh_ix_n = -1, ekh_ix_count;
+static unsigned ekh_ix_ver;
+static unsigned long ekh_ix_edits;
+static const NodeTable *ekh_ix_nt;
+static int ekh_call_cmp(const void *a, const void *b) {
+  const EkhCall *x = a, *y = b;
+  int k = strcmp(x->name, y->name);
+  return k ? k : (x->call > y->call) - (x->call < y->call);
+}
+static const EkhCall *ekh_calls_named(Compiler *c, const char *nm, int *n) {
+  const NodeTable *nt = c->nt;
+  if (ekh_ix_n < 0 || ekh_ix_nt != nt || ekh_ix_count != nt->count || ekh_ix_ver != nt->version || ekh_ix_edits != nt->edits) {
+    int cap = 0; ekh_ix_n = 0;
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      int block = nt_ref(nt, id, "block");
+      if (block < 0 || nt_kind(nt, block) != NK_BlockNode) continue;
+      const char *pn = block_param_name(c, block, 0);
+      if (!pn) continue;
+      if (ekh_ix_n == cap) {
+        cap = cap ? 2 * cap : 256;
+        ekh_ix = realloc(ekh_ix, sizeof *ekh_ix * (size_t)cap);
+        if (!ekh_ix) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      ekh_ix[ekh_ix_n++] = (EkhCall){ pn, id };
+    }
+    if (ekh_ix_n > 1) qsort(ekh_ix, (size_t)ekh_ix_n, sizeof *ekh_ix, ekh_call_cmp);
+    ekh_ix_nt = nt; ekh_ix_count = nt->count; ekh_ix_ver = nt->version; ekh_ix_edits = nt->edits;
+  }
+  int lo = 0, hi = ekh_ix_n;
+  while (lo < hi) { int m = lo + (hi - lo) / 2; if (strcmp(ekh_ix[m].name, nm) < 0) lo = m + 1; else hi = m; }
+  int e = lo;
+  while (e < ekh_ix_n && sp_streq(ekh_ix[e].name, nm)) e++;
+  *n = e - lo;
+  return *n ? ekh_ix + lo : NULL;
+}
 /* What a boxed key is when it reads the first parameter of an iteration
    block over an Array -- each, map and the others whose lock
    reset_locked_iter_block_params clears -- that nothing writes: such a
@@ -22547,11 +22587,12 @@ static TyKind ekh_locked_iter_param_elem(Compiler *c, int key) {
   if (ks->body >= 0 && blkp_name_written(c, ks->body, nm)) return TY_UNKNOWN;
   TyKind elem = TY_UNKNOWN;
   int found = 0, open = 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    int block = nt_ref(nt, id, "block");
-    if (block < 0 || nt_kind(nt, block) != NK_BlockNode) continue;
-    const char *pn = block_param_name(c, block, 0);
-    if (!pn || !sp_streq(pn, nm)) continue;
+  /* (a scan of every call per key read, each fixpoint round, was a twentieth of a large program's compile) */
+  int ncall = 0;
+  const EkhCall *calls = ekh_calls_named(c, nm, &ncall);
+  for (int ci = 0; ci < ncall; ci++) {
+    int id = calls[ci].call, block = nt_ref(nt, id, "block");
+    const char *pn = calls[ci].name;
     Scope *bs = comp_scope_of(c, block);
     if (!bs || scope_local(bs, pn) != kl) continue;
     /* every block binding this slot has to be such a walk, over one type */

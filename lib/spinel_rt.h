@@ -18711,6 +18711,21 @@ SP_NORETURN SP_COLD static void sp_raise_cls_cz(void *cz, const char *cls, const
 SP_NORETURN SP_COLD static void sp_raise_cz(void *cz, const char *msg) {
   SP_CAUSE_STAGE(cz); sp_raise_cls("RuntimeError", msg);
 }
+/* The same raises, written by the program itself (`raise Cls, msg`, `raise
+   "msg"`): sp_raise_cls does not run a reopened initialize on what it builds
+   for these (sp_user_exc_reinit), which is for the errors the runtime raises. */
+SP_NORETURN SP_COLD static void sp_raise_cls_u(const char *cls, const char *msg) {
+  sp_exc_user_raise = 1; sp_raise_cls(cls, msg);
+}
+SP_NORETURN SP_COLD static void sp_raise_cls_u_cz(void *cz, const char *cls, const char *msg) {
+  SP_CAUSE_STAGE(cz); sp_exc_user_raise = 1; sp_raise_cls(cls, msg);
+}
+SP_NORETURN SP_COLD static void sp_raise_u(const char *msg) {
+  sp_exc_user_raise = 1; sp_raise_cls("RuntimeError", msg);
+}
+SP_NORETURN SP_COLD static void sp_raise_u_cz(void *cz, const char *msg) {
+  SP_CAUSE_STAGE(cz); sp_exc_user_raise = 1; sp_raise_cls("RuntimeError", msg);
+}
 SP_NORETURN SP_COLD static void sp_raise_exc_cz(void *cz, volatile sp_Exception *e) {
   SP_CAUSE_STAGE(cz); sp_raise_exc(e); SP_UNREACHABLE();
 }
@@ -18760,6 +18775,13 @@ SP_NORETURN void sp_raise_stop_iteration(sp_RbVal result) {
      bare rodata literal would be an out-of-bounds read at a section edge. */
   const char *msg = (&("\xff" "iteration reached an end")[1]);
   sp_Exception *e = sp_exc_new("StopIteration", msg);
+  SP_GC_ROOT(e);
+  /* this object is made here, so a program's reopened initialize runs on it
+     now (sp_raise_cls does it for the objects it makes) */
+  if (sp_user_exc_reinit_fn && sp_user_exc_reinit_fn("StopIteration", msg, e)) {
+    msg = sp_msg_heapify(sp_exc_message(e));
+    SP_GC_ROOT_STR(msg);
+  }
   e->result = result;
   sp_pending_exc_obj = (void *)e;
   sp_raise_cls("StopIteration", msg);

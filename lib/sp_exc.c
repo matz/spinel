@@ -1433,6 +1433,8 @@ const char *sp_exc_inspect(void *p) {
 
 const char *(*sp_user_exc_to_s_fn)(sp_Exception *) = NULL;
 const char *(*sp_user_exc_message_fn)(sp_Exception *) = NULL;
+void *(*sp_user_exc_reinit_fn)(const char *cls, const char *msg, void *obj) = NULL;
+SP_TLS int sp_exc_user_raise = 0;
 const char *sp_exc_to_s_text(sp_Exception *e) {
   return sp_user_exc_to_s_fn ? sp_user_exc_to_s_fn(e) : sp_exc_message(e);
 }
@@ -1957,6 +1959,10 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      recorded before its own setjmp (sp_exc_rootmark, or a C local in the
      Kernel#loop and enumerator landings), which discards this entry, and a
      fiber's trampoline hands the whole root stack back to its resumer. */
+  /* a `raise` the program wrote (sp_raise_cls_u) is built by its own site's
+     initialize version, or by none: the reopened initialize is not run again */
+  int user_raise = sp_exc_user_raise;
+  sp_exc_user_raise = 0;
   int cont = sp_reraise_continues;   /* an ensure resuming its exception (see there) */
   sp_reraise_continues = 0;
   if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg);
@@ -1979,6 +1985,9 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
     sp_reraise_current = 0;
     if (!sp_pending_exc_obj && sp_cur_handled()) sp_pending_exc_obj = sp_cur_handled();
   }
+  /* an object pending here belongs to a raise already made (a re-raise); one
+     the steps below make for this raise is this raise's */
+  int reinit_fresh = !sp_pending_exc_obj;
   /* NameError/NoMethodError#name: the runtime raisers' messages carry the
      offending name as the first quoted token ("undefined method 'foo' for
      ..."); materialize the carried object with #name set so a rescue binding
@@ -1996,6 +2005,22 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   if (sp_pending_exc_flags && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed))
     sp_pending_exc_obj = sp_exc_apply_staged(cls, msg, sp_pending_exc_obj);
   sp_pending_exc_flags = 0;
+  /* An error the runtime raises is built in CRuby by the class's #initialize,
+     so a program's reopening of a builtin exception that defines one runs on
+     it here (the compiled `raise` and `.new` run it themselves and raise the
+     object, which is pending already). What it makes of the message is what
+     the rescue and the report read. FiberKillSignal is the runtime's own. */
+  /* (CRuby's NameError and KeyError raisers allocate the exception and fill its
+     name, receiver and key themselves, without running #initialize) */
+  if (sp_user_exc_reinit_fn && reinit_fresh && !user_raise && !cont && msg && cls && strcmp(cls, "FiberKillSignal") != 0 &&
+      !sp_exc_cls_matches(cls, "NameError") && !sp_exc_cls_matches(cls, "KeyError")) {
+    void *made = sp_user_exc_reinit_fn(cls, msg, sp_pending_exc_obj);
+    if (made) {
+      sp_pending_exc_obj = made;
+      msg = sp_msg_heapify(sp_exc_message((sp_Exception *)made));
+      SP_GC_ROOT_STR(msg);
+    }
+  }
   /* An explicit `cause:` replaces the cause the raised object already
      carries, as CRuby's does: a rescue clause fills only an empty cause, so
      it never saw the new one. A frozen exception is raised as a copy that

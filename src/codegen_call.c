@@ -8638,6 +8638,11 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
     else buf_puts(&ib, nb.p);
     free(nb.p);
   }
+  else if (ret == TY_POLY && bt == TY_STRING && cplan_builtin_handle_row(c, id)) {
+    buf_puts(&ib, "SP_STR_BOX(");
+    emit_native_string_handle(c, id, &ib);
+    buf_puts(&ib, ")");
+  }
   else if (ret == TY_POLY && bt != TY_POLY) {
     Buf nb; memset(&nb, 0, sizeof nb);
     emit_expr(c, id, &nb);
@@ -31424,7 +31429,11 @@ static void emit_call_lifted(Compiler *c, int id, Buf *b) {
   int reads_string = repr_of(c, id).as_ty == TY_STRING && repr_native_call_handle(c, id);
   if (reads_string) buf_puts(b, "SP_STR_B(");
   if (nk >= 0) buf_printf(b, "((%s *)(", class_ctype(c, nk));
+  /* A subclass's builtin view can re-enter the call. Pass the native
+     result through that view and read its bytes at this boundary. */
+  int native = reads_string && cplan_builtin_handle_row(c, id) ? view_push(c, id, TY_STRBUF) : -1;
   emit_reading_no_value(c, id, emit_call_inner, b);
+  if (native >= 0) view_pop(c, native);
   if (nk >= 0) buf_puts(b, "))");
   if (reads_string) buf_puts(b, ")");
   g_one_held = held;

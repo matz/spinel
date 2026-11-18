@@ -168,7 +168,7 @@ const char*sp_str_dup(const char*s);
 static inline const char*sp_str_one_answer(const char*s){return s&&((const unsigned char*)s)[-1]==0xfd?sp_str_dup(s):s;}
 const char *sp_plain_char(unsigned char c);
 const char *sp_bin_char(unsigned char c);
-const char*sp_str_b(const char*s);
+sp_String *sp_String_binary_copy(const char *s);
 
 /* ---- utf8-dependent cold transforms (lib/sp_str.c, lib/sp_str_cold.c) ---- */
 /* nil-receiver raise: a nullable string carries nil as NULL, and CRuby

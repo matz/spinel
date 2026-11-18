@@ -625,7 +625,12 @@ const char*sp_str_rstrip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("rstr
    left the copy UTF-8, so `"caf\u00e9".b.inspect` printed the characters where
    CRuby prints the escaped bytes, and length kept counting characters. pack
    already marks its answer; #b is the sibling that did not. */
-const char*sp_str_b(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("b");char*r=(char*)sp_str_dup(s);sp_str_mark_binary(r);return r;}
+sp_String *sp_String_binary_copy(const char *s) {
+  SP_GC_ROOT_STR(s);
+  if (!s) sp_nil_recv("b");
+  sp_String *copy = sp_String_new_inline_len(s, (int64_t)sp_str_byte_len(s));
+  return sp_String_force_encoding(copy, 1);
+}
 const char*sp_str_dup(const char*s){SP_GC_ROOT_STR(s);if(!s)return NULL;size_t l=sp_str_byte_len(s);char*r=sp_str_alloc(l);memcpy(r,s,l);if(sp_str_is_binary(s))sp_str_mark_binary(r);return r;}
 
 /* ===================== utf8-dependent transforms ===================== */

@@ -417,8 +417,8 @@ static const BuiltinOp bop_rows[] = {
      (an_poly_concrete). */
   { TY_POLY, "dump", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
     "sp_str_dump(sp_poly_recv_s($r, \"dump\"))", 0, 0, 0, 1 },
-  { TY_POLY, "b", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
-    "sp_str_b(sp_poly_recv_s($r, \"b\"))", 0, 0, 0, 1 },   /* a binary copy (#4441) */
+  { TY_POLY, "b", 0, 0, BF_ANY, TY_STRBUF, BOPE_TEMPLATE,
+    "sp_String_binary_copy(sp_poly_recv_s($r, \"b\"))", 0, 0, 0, 1 },   /* a binary copy (#4441) */
   { TY_POLY, "scrub", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,   /* a block is not called yet, as before */
     "sp_str_scrub(sp_poly_recv_s($r, \"scrub\"), 0)", 0, 0, 0, 1 },
   { TY_POLY, "encode", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE,
@@ -2308,7 +2308,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "append_as_bytes", 0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_str_check_mutable(_t$t); _t$t; })", 0, 0, BOPF_SELF, 6 },
   { TY_STRING, "append_as_bytes", 0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "force_encoding",  0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "b",               0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_b($r)", 0 },
+  { TY_STRING, "b",               0,   0, BF_ANY,      TY_STRBUF,     BOPE_TEMPLATE, "sp_String_binary_copy($r)", 0 },
   { TY_STRING, "b",               0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "encode",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "((const char *)sp_nil_recv_named($r, \"encode\"))", 0, 0, BOPF_KEYWORDS },  /* the receiver, so nil raises */
   { TY_STRING, "encode",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },

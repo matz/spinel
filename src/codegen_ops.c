@@ -165,7 +165,11 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
          whichever face its text has -- an `a || b` of handles) */
       int rface = x->rt == TY_STRING;
       if (!r && x->rtext) {
-        if (rface) { Buf fb; memset(&fb, 0, sizeof fb); buf_printf(&fb, "SP_STR_B(%s)", x->rtext); r = fb.p; }
+        /* The ordinary bytes view of a native call has already read
+           its handle. A held temp may still be a handle itself. */
+        int read = rface && x->recv >= 0 && !arg_ran_first(x->recv, 0) &&
+                   repr_of(c, x->recv).as_ty == TY_STRING && repr_native_call_handle(c, x->recv);
+        if (rface && !read) { Buf fb; memset(&fb, 0, sizeof fb); buf_printf(&fb, "SP_STR_B(%s)", x->rtext); r = fb.p; }
         else r = strdup(x->rtext);
         buf_puts(b, r);
       }

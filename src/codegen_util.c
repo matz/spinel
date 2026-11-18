@@ -5326,6 +5326,10 @@ void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
    the handle), so the text goes through the face macro of the declared
    type; anything else is the node as it is. */
 void emit_expr_face(Compiler *c, int node, TyKind t, Buf *b) {
+  if (t == TY_STRING && !arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
+    emit_str_expr(c, node, b);
+    return;
+  }
   if ((t == TY_STRING || t == TY_STRBUF)) {
     buf_puts(b, t == TY_STRBUF ? "SP_STR_HDL(" : "SP_STR_B(");
     emit_expr(c, node, b);

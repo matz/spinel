@@ -6188,7 +6188,9 @@ const BuiltinOp *cplan_builtin_op_row(Compiler *c, int id, TyKind rt, const char
 const BuiltinOp *cplan_boxed_fallback_row(Compiler *c, int id, const char *name, TyKind slot, int *argc) {
   if (slot != TY_POLY && slot != TY_STRING && slot != TY_STRBUF) return NULL;
   const BuiltinOp *op = cplan_builtin_op_row(c, id, BOP_BOXED_FALLBACK, name, 1, argc);
-  return op && op->emit == BOPE_TEMPLATE && (op->result == TY_POLY || op->result == TY_STRBUF) ? op : NULL;
+  if (op) return op->emit == BOPE_TEMPLATE && (op->result == TY_POLY || op->result == TY_STRBUF) ? op : NULL;
+  op = cplan_builtin_op_row(c, id, TY_POLY, name, 1, argc);
+  return op && op->emit == BOPE_TEMPLATE && op->result == TY_STRBUF ? op : NULL;
 }
 
 /* See call_plan.h. */
@@ -6945,11 +6947,12 @@ const BuiltinOp *cplan_builtin_handle_row(Compiler *c, int id) {
     if (cplan_handle_emitter(op) && cplan_kernel_row(c, id, name)) return op;
   }
   if (recv < 0) return NULL;
-  TyKind rt = comp_ntype(c, recv);
+  TyKind rt = comp_ntype(c, recv), base;
+  if (ty_is_object(rt) && comp_ary_is_str(c, ty_object_class(rt)) && comp_arysub_call(c, id, rt, &base)) rt = base;
   const BuiltinOp *op = rt == TY_POLY ? cplan_boxed_fallback_row(c, id, name, TY_STRBUF, NULL)
                                       : cplan_builtin_op_row(c, id, rt, name, 0, NULL);
   if (!cplan_handle_emitter(op)) return NULL;
-  if (cplan_pinned_builtin(c, id) || cplan_builtin_call(c, id)) return op;
+  if (cplan_pinned_builtin(c, id) || cplan_builtin_call(c, id) || (g_poly_builtin_arm && g_pd_skip == id)) return op;
   if (rt == TY_POLY && (an_user_defines_or_reads(c, name) || ostruct_member_read(c, id, rt))) return NULL;
   return cplan_user(c, id).dispatch == CP_NONE ? op : NULL;
 }

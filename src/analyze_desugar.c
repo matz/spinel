@@ -29090,10 +29090,10 @@ int desugar_dynamic_const_get(Compiler *c) {
       for (int m = q.head[g]; m >= 0 && first < 0; m = q.next[m]) { if (class_def_body(nt, m) >= 0) first = m; }
     else
       for (int m = 0; m < n0 && first < 0; m++) {
-        /* a class builder's write (`V = Module.new`, a name validator) opens
-           no constant scope, so the module has no constants of its own, and
-           its block is the body the generated methods go in */
-        if (!class_def_opens_cref(nt, m) && class_def_builder(nt, m) < 0) continue;
+        /* a module builder's write (`V = Module.new`, a name validator) opens
+           no constant scope: its block is the body the generated methods go
+           in, when the module has no constants of its own (below) */
+        if (!class_def_opens_cref(nt, m) && !(class_def_builder(nt, m) >= 0 && class_def_is_module(nt, m))) continue;
         const char *bn = class_def_key(c, m);
         if (bn && sp_streq(bn, mn) && class_def_body(nt, m) >= 0) first = m;
       }
@@ -29104,6 +29104,15 @@ int desugar_dynamic_const_get(Compiler *c) {
       char **names = NULL; int nn = 0, cap = 0;
       if (g >= 0) cg_collect_qual(nt, parent, &q, g, n0, &names, &nn, &cap);
       else cg_collect(nt, mn, n0, &names, &nn, &cap);
+      /* a module builder's block does not open the module's constant scope,
+         so a constant written under it by path (`V::Entry = 1`) would be read
+         there as the surrounding scope's: such a module keeps its call as
+         it was, and only one with no constants of its own is answered */
+      if (!class_def_opens_cref(nt, first) && nn > 0) {
+        for (int k = 0; k < nn; k++) free(names[k]);
+        free(names);
+        continue;
+      }
       int body = class_def_body(nt, first);
       int bn = 0; const int *bs = nt_arr(nt, body, "body", &bn);
       int *out = malloc(sizeof(int) * (size_t)(bn + 2));

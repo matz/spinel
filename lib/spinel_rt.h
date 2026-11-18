@@ -19490,18 +19490,16 @@ const char *sp_backtick(const char *cmd);
 /* sp_file_basename: moved to lib/sp_cold.c */
 const char *sp_file_basename(const char *path);
 const char *sp_file_basename2(const char *path, const char *suffix);
-/* File.join with runtime-typed components: strings pass through, arrays
-   flatten recursively (#2786), nil is CRuby's TypeError. */
-/* The flattened components are held in a GC-scanned array, not a raw
-   pointer array: a #to_path or #to_str may build its answer, and the next
-   component's conversion (or the join's own allocation) can collect a
-   String nothing else holds. */
+/* File.join consumes a segment before the next component's conversion
+   can change it. Keep the selected bytes alive in the scanned parts array. */
+static void sp_file_join_push_part(sp_StrArray *parts, const char *bytes) {
+  SP_GC_ROOT_STR(bytes);
+  sp_String *part = sp_str_is_frozen_val(bytes)
+      ? sp_String_new_shared(bytes) : sp_String_new_unfrozen(bytes);
+  sp_StrArray_push_e(parts, part);
+}
+/* Arrays flatten recursively (#2786); non-Arrays use the path protocol. */
 static void sp_file_join_flat(sp_RbVal v, sp_StrArray *parts, int depth) {
-  if (sp_rbval_is_string(v)) {
-    const char *bytes = sp_rbval_string_bytes(v);
-    sp_StrArray_push_e(parts, sp_String_new_shared(bytes ? bytes : sp_str_empty));
-    return;
-  }
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
     /* an Array nested past any sane depth is one that contains itself */
     if (depth >= 64) sp_raise_cls("ArgumentError", "recursive array");
@@ -19509,10 +19507,7 @@ static void sp_file_join_flat(sp_RbVal v, sp_StrArray *parts, int depth) {
     for (sp_int i = 0; i < n; i++) sp_file_join_flat(sp_poly_arr_get(v, i), parts, depth + 1);
     return;
   }
-  /* everything else takes the path slot's protocol: nil / bool / a
-     wrongly-classed scalar is CRuby's TypeError, a user object converts
-     through #to_path or #to_str, or raises */
-  sp_StrArray_push_e(parts, sp_String_new_shared(sp_poly_arg_path(v)));
+  sp_file_join_push_part(parts, sp_poly_arg_path(v));
 }
 static const char *sp_file_join_vals(sp_RbVal *vals, int n) {
   sp_StrArray *parts = sp_StrArray_new();

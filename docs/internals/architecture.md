@@ -82,8 +82,9 @@ when the result is a String. Calls that can also return a wait Symbol keep
 their boxed result.
 The native String result passes its handle directly through C. Byte
 consumers project the contents and take a snapshot where the read is
-held across a block. Fiber context switches carry the active
-GC roots and exception state.
+held across a block. When File.join walks boxed path components, it
+keeps the bytes of each selected segment through later conversions.
+Fiber context switches carry the active GC roots and exception state.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

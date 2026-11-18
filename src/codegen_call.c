@@ -11181,7 +11181,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* --share-strings: a setter read as a String, where a writer changes
          the String it is handed (`(o.a = +"ef").size`): the argument's
          handle too, in its htmp, read once the arm ran */
-      int setter_late = is_setter_val && !setter_handle && ret == TY_STRING &&
+      int setter_late = is_setter_val && !setter_handle && rr.as_ty == TY_STRING &&
                         user_assign_handle(c, id) && writers_change_param(c, id);
       for (int a = 0; a < pos_argc; a++) {
         atmp[a] = ++g_tmp;

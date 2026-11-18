@@ -60,3 +60,6 @@ p Edition.major
 p Basic.label
 p Thing.plugged
 p Word.new.shout
+p Plug.respond_to?(:included)
+p Plug.respond_to?(:included, true)
+p Basic.respond_to?(:extended)

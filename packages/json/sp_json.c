@@ -370,9 +370,7 @@ static void sp_json_obj_text_b(jbuf *b, sp_RbVal v) {
     int found = 0;
     sp_RbVal r = sp_obj_to_s_fn(v.cls_id, v.v.p, &found);
     if (found) {
-      const char *us = r.tag == SP_TAG_STR ? r.v.s
-                     : r.tag == SP_TAG_OBJ && r.cls_id == SP_BUILTIN_STRBUF && r.v.p ? sp_String_cstr((sp_String *)r.v.p)
-                     : NULL;
+      const char *us = sp_rbval_is_string(r) ? sp_rbval_string_bytes(r) : NULL;
       if (!us) {
         const char *tn = r.tag == SP_TAG_NIL ? "nil" : r.tag == SP_TAG_BOOL ? (r.v.b ? "true" : "false")
                        : r.tag == SP_TAG_INT || r.tag == SP_TAG_BIGINT ? "Integer" : r.tag == SP_TAG_FLT ? "Float"

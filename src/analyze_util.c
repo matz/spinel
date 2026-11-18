@@ -318,14 +318,14 @@ static int const_path_scope(Compiler *c, int seg, int *missing) {
   const char *nm = key_name(c, seg);
   if (!nm) return -1;
   if (sk == NK_ConstantReadNode) {
-    int k = comp_class_index(c, nm);
+    int k = const_node_class_index(c, seg);
     return k >= 0 && !c->classes[k].is_builtin_const && !comp_const(c, nm) ? k : -1;
   }
   if (sk != NK_ConstantPathNode) return -1;
   int par = nt_ref(nt, seg, "parent");
   int pk;
   if (par < 0) {                                  /* `::NAME`: the top level */
-    int k = comp_class_index(c, nm);
+    int k = const_node_class_index(c, seg);
     return k >= 0 && c->classes[k].enclosing_class < 0 && !c->classes[k].is_builtin_const &&
            !comp_const(c, nm) ? k : -1;
   }

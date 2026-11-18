@@ -12822,7 +12822,7 @@ static int emit_object_kind_nil(Compiler *c, int id, Buf *b, const NodeTable *nt
           else buf_printf(b, "; sp_class_le((sp_Class){%d}, _nc); })", nk);
         }
         else {
-          int yes = !comp_const(c, ncn) && comp_class_index(c, ncn) < 0 &&
+          int yes = !comp_const(c, ncn) && const_node_class_index(c, argv[0]) < 0 &&
                     (sp_streq(ncn, "NilClass") ||
                      (!exact && is_object_root(ncn)));
           buf_printf(b, "%d", yes);

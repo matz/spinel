@@ -36787,7 +36787,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     int cruby_known = 0;
     for (int ki = 0; tcn && CRUBY_KNOWN[ki]; ki++)
       if (sp_streq(tcn, CRUBY_KNOWN[ki])) { cruby_known = 1; break; }
-    if (tcn && !cruby_known && comp_class_index(c, tcn) < 0 &&
+    if (tcn && !cruby_known && const_node_class_index(c, argv[0]) < 0 &&
         !is_builtin_class_name(tcn) && !is_builtin_exception_name(tcn) &&
         !comp_const(c, tcn)) {
       buf_puts(b, "((void)(");

@@ -34880,7 +34880,12 @@ static int bsc_walk(NodeTable *nt, int n, const char *cn) {
     int r = nt_ref(nt, n, "receiver");
     if (nm && sp_streq(nm, "class") && nt_ref(nt, n, "arguments") < 0 && nt_ref(nt, n, "block") < 0 &&
         (r < 0 || nt_kind(nt, r) == NK_SelfNode)) {
+      /* (the read keeps the call's line, so the record answers it where
+         the call stood) */
+      long long line = nt_int(nt, n, "node_line", 0), file = nt_int(nt, n, "node_file", 0);
       nt_node_reset(nt, n, "ConstantReadNode");
+      nt_node_set_int(nt, n, "node_line", line);
+      nt_node_set_int(nt, n, "node_file", file);
       nt_node_set_str(nt, n, "name", cn);
       return 1;
     }

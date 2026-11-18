@@ -14096,6 +14096,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
     int cr = nt_new_node(nt, "ConstantReadNode");
     if (cr < 0) return;
     nt_node_set_str(nt, cr, "name", cname);
+    if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
     comp_grow_node_arrays(c);
     c->nscope[cr] = c->nscope[root];
     nt_node_set_ref(nt, root, "receiver", cr);
@@ -14110,6 +14111,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
       int cr = nt_new_node(nt, "ConstantReadNode");
       if (cr < 0) return;
       nt_node_set_str(nt, cr, "name", cname);
+      if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
       comp_grow_node_arrays(c);
       c->nscope[cr] = c->nscope[root];
       nd = &nt->nodes[root];        /* nt_new_node may realloc nt->nodes */
@@ -14125,6 +14127,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
         int cr = nt_new_node(nt, "ConstantReadNode");
         if (cr < 0) return;
         nt_node_set_str(nt, cr, "name", cname);
+        if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
         comp_grow_node_arrays(c);
         c->nscope[cr] = c->nscope[root];
         nd = &nt->nodes[root];

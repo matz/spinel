@@ -24072,19 +24072,16 @@ static void emit_obj_dispatchers(Compiler *c, Buf *body) {
   emit_obj_with_dispatch(c, body);
 }
 /* The program after its header region: the procs' prototypes, the
-   poly-dispatch prototypes, the procs, the bodies, the poly-dispatch
+   poly-dispatch prototypes, the conversion hooks, the procs and method
+   bodies, then the poly-dispatch
    definitions. With --incremental the two resets keep the dispatch helpers
    out of whatever unit the text before them ended in; without it they write
    nothing. */
-static void emit_program_tail(Compiler *c, Buf *b, Buf *body) {
-  if (g_emit_obj_dispatch) {
-    emit_obj_to_str_bridge(c, b);
-    emit_display_overrides(c, b);
-  }
-  emit_exc_text_tail(c, b);
+static void emit_program_tail(Buf *b, Buf *body, const Buf *hooks) {
   if (g_proc_protos.len) { buf_puts(b, g_proc_protos.p); buf_puts(b, "\n"); }
   unit_pragma_reset(b);   /* g_pd_protos carries no pragma of its own */
   if (g_pd_protos.len) { buf_puts(b, g_pd_protos.p); buf_puts(b, "\n"); }
+  if (hooks->len) buf_puts(b, hooks->p);
   if (g_procs.len) { buf_puts(b, g_procs.p); buf_puts(b, "\n"); }
   buf_puts(b, body->p ? body->p : "");
   unit_pragma_reset(b);
@@ -25147,24 +25144,33 @@ char *codegen_program(const NodeTable *nt) {
   tcg = cg_phase(tcg, "cg_main");
 
   emit_regex_section(c, &b);
-  { const char *pdt[3] = { g_procs.p, body->p, b.p };
-    pd_emit_used(pdt, 3, &g_pd_protos, &g_pd_defs);
+  /* Defaults in a conversion or exception hook can emit Procs and request
+     the same generated helpers as any other call. */
+  Buf hooks = {0};
+  if (g_emit_obj_dispatch) {
+    emit_obj_to_str_bridge(c, &hooks);
+    emit_display_overrides(c, &hooks);
+  }
+  emit_exc_text_tail(c, &hooks);
+  { const char *pdt[] = { g_procs.p, body->p, b.p, hooks.p };
+    pd_emit_used(pdt, 4, &g_pd_protos, &g_pd_defs);
     /* and the dispatch bodies pd_emit_used just wrote, which can hold a
        value's #methods call of their own */
-    const char *vmt[4] = { g_procs.p, body->p, b.p, g_pd_defs.p };
-    emit_value_methods_helpers(c, vmt, 4, &g_pd_protos, &g_pd_defs);
-    emit_class_value_responds_helper(c, vmt, 4, &g_pd_protos, &g_pd_defs);
+    const char *vmt[] = { g_procs.p, body->p, b.p, hooks.p, g_pd_defs.p };
+    emit_value_methods_helpers(c, vmt, 5, &g_pd_protos, &g_pd_defs);
+    emit_class_value_responds_helper(c, vmt, 5, &g_pd_protos, &g_pd_defs);
     /* (the helpers above may have grown g_pd_defs: its text read again) */
-    const char *smt[4] = { g_procs.p, body->p, b.p, g_pd_defs.p };
-    emit_struct_members_ctors(c, smt, 4, &g_pd_protos, &g_pd_defs);
+    const char *smt[] = { g_procs.p, body->p, b.p, hooks.p, g_pd_defs.p };
+    emit_struct_members_ctors(c, smt, 5, &g_pd_protos, &g_pd_defs);
     emit_obj_to_ary_entry_dispatch(c, &g_pd_protos, &g_pd_defs); }
   if (isa_ext) {
     if (calls_poly_is_a(b.p + isa_ext_at) || calls_poly_is_a(g_procs.p) ||
-        calls_poly_is_a(body->p) || calls_poly_is_a(g_pd_defs.p))
+        calls_poly_is_a(body->p) || calls_poly_is_a(hooks.p) || calls_poly_is_a(g_pd_defs.p))
       buf_insert_at(&b, isa_ext_at, isa_ext);
     free(isa_ext);
   }
-  emit_program_tail(c, &b, body);
+  emit_program_tail(&b, body, &hooks);
+  free(hooks.p);
   free(body->p);
   free(body);
   /* Over the whole program, not per function: methods, procs, block bodies,

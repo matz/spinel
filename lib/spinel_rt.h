@@ -9604,6 +9604,7 @@ static sp_RbVal sp_poly_inject_sym(sp_RbVal v, sp_sym op) {
    vs scalar distinction is only known at runtime. */
 static sp_PolyArray *sp_format_args(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) return sp_poly_to_poly_array(v);
+  SP_GC_ROOT_RBVAL(v);
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
   sp_PolyArray_push(a, v);
   return a;

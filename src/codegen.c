@@ -25143,21 +25143,22 @@ char *codegen_program(const NodeTable *nt) {
   if (!g_no_root_frame) gc_frame_build(c, body, main_frame_ins, "main");
   tcg = cg_phase(tcg, "cg_main");
 
-  emit_regex_section(c, &b);
   /* Defaults in a conversion or exception hook can emit Procs and request
-     the same generated helpers as any other call. */
+     the same constants and generated helpers as any other call. */
   Buf hooks = {0};
   if (g_emit_obj_dispatch) {
     emit_obj_to_str_bridge(c, &hooks);
     emit_display_overrides(c, &hooks);
   }
   emit_exc_text_tail(c, &hooks);
+  emit_regex_section(c, &b);
   { const char *pdt[] = { g_procs.p, body->p, b.p, hooks.p };
     pd_emit_used(pdt, 4, &g_pd_protos, &g_pd_defs);
     /* and the dispatch bodies pd_emit_used just wrote, which can hold a
        value's #methods call of their own */
     const char *vmt[] = { g_procs.p, body->p, b.p, hooks.p, g_pd_defs.p };
     emit_value_methods_helpers(c, vmt, 5, &g_pd_protos, &g_pd_defs);
+    vmt[4] = g_pd_defs.p;
     emit_class_value_responds_helper(c, vmt, 5, &g_pd_protos, &g_pd_defs);
     /* (the helpers above may have grown g_pd_defs: its text read again) */
     const char *smt[] = { g_procs.p, body->p, b.p, hooks.p, g_pd_defs.p };

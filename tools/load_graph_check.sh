@@ -120,6 +120,15 @@ for e in test/load_graph/*.rb.load-record; do
   cmp -s "$tmp/record" "$e" || { fail "$t's load record is not its .load-record"; diff "$e" "$tmp/record" | sed -n 1,10p; }
 done
 
+# ...and the same program's record under --load-model=inline, where a require
+# is spliced (.load-record-inline)
+for e in test/load_graph/*.rb.load-record-inline; do
+  t=${e%.load-record-inline}
+  "$SPINEL" --load-model=inline --dump-load-record "$t" >"$tmp/record" 2>"$tmp/record.err" ||
+    { fail "$t: no load record under inline"; sed -n 1,5p "$tmp/record.err"; }
+  cmp -s "$tmp/record" "$e" || { fail "$t's inline load record is not its .load-record-inline"; diff "$e" "$tmp/record" | sed -n 1,10p; }
+done
+
 # A raise in a required file leaves its load with the frames it was raised
 # with: a --debug build's report of it names the raising method first, not
 # the load the exception passes through.

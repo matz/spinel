@@ -1,0 +1,250 @@
+load record: 94 points, 1 regions
+r0 #0 f0 ProgramNode line 13
+r0 #1 f0 DefNode __enumw_map line 13
+r0 #2 f0 DefNode __enumw_select line 19
+r0 #3 f0 DefNode __enumw_reject line 25
+r0 #4 f0 DefNode __enumw_filter_map line 31
+r0 #5 f0 DefNode __enumw_each_with_object line 40
+r0 #6 f0 DefNode __enumw_inject0 line 45
+r0 #7 f0 DefNode __enumw_inject1 line 59
+r0 #8 f0 DefNode __enumw_with_index line 65
+r0 #9 f0 DefNode __enumw_str_chars_with_index line 78
+r0 #10 f0 DefNode __enumw_str_lines_with_index line 87
+r0 #11 f0 DefNode __enumw_str_bytes_with_index line 96
+r0 #12 f0 DefNode __enumw_str_codepoints_with_index line 105
+r0 #13 f0 DefNode __enumw_each_slice line 114
+r0 #14 f0 DefNode __enumw_each_cons line 127
+r0 #15 f0 DefNode __enumw_each_entry line 137
+r0 #16 f0 DefNode lib_m line 1
+r0 #17 f0 DefNode load_it line 19
+r0 #18 f0 ClassNode K line 20
+  r0 #19 f0 DefNode never line 21
+  r0 #20 f0 DefNode once line 22
+  r0 #21 f0 DefNode loop_run line 23
+  r0 #22 f0 DefNode guarded line 24
+r0 #23 f0 CallNode once line 26
+r0 #24 f0 CallNode load_it line 27
+r0 #25 f0 CallNode times line 28
+  r0 #26 f0 CallNode loop_run line 28
+r0 #27 f0 BeginNode line 29
+  r0 #28 f0 CallNode guarded line 30
+  r0 #29 may f0 CallNode p line 32
+r0 #30 f0 CallNode times line 34
+  r0 #31 f0 CallNode p line 34
+r0 #32 f0 CallNode times line 35
+  r0 #33 f0 CallNode p line 35
+r0 #34 f0 CallNode each line 36
+  r0 #35 f0 CallNode p line 36
+r0 #36 f0 LocalVariableWriteNode l line 37
+r0 #37 f0 CallNode at_exit line 38
+r0 #38 f0 CallNode p line 39
+r0 #39 f0 LocalVariableWriteNode c line 40
+r0 #40 f0 ClassNode G line 41
+  r0 #41 f0 DefNode a line 42
+  r0 #42 f0 DefNode b line 43
+  r0 #43 f0 DefNode c line 44
+  r0 #44 f0 DefNode d line 45
+r0 #45 f0 LocalVariableWriteNode x line 47
+r0 #46 f0 CallNode p line 48
+r0 #47 f0 LocalVariableWriteNode y line 49
+r0 #48 f0 LocalVariableWriteNode z line 50
+r0 #49 f0 LocalVariableWriteNode w line 51
+r0 #50 f0 LocalVariableWriteNode v line 52
+r0 #51 f0 CallNode each_with_index line 53
+  r0 #52 f0 CallNode p line 53
+r0 #53 f0 CallNode uniq line 54
+  r0 #54 f0 LocalVariableReadNode e__bp144 line 54
+r0 #55 f0 CallNode sort_by! line 55
+  r0 #56 f0 LocalVariableReadNode e__bp153 line 55
+r0 #57 f0 CallNode slice_before line 56
+  r0 #58 f0 CallNode > line 56
+r0 #59 f0 IfNode line 57
+  r0 #60 may f0 CallNode times line 57
+    r0 #61 may f0 BreakNode line 57
+r0 #62 f0 CallNode times line 58
+  r0 #63 f0 BreakNode line 58
+r0 #64 f0 CallNode times line 59
+  r0 #65 f0 CallNode at_exit line 59
+r0 #66 f0 CallNode p line 60
+r0 #67 f0 ClassNode H line 61
+  r0 #68 f0 DefNode a line 62
+  r0 #69 f0 DefNode b line 63
+  r0 #70 f0 DefNode c line 64
+  r0 #71 f0 DefNode d line 65
+  r0 #72 f0 DefNode e line 66
+  r0 #73 f0 DefNode f line 67
+r0 #74 f0 ClassNode NN line 69
+  r0 #75 f0 DefNode foo line 70
+r0 #76 f0 ClassNode OA line 72
+  r0 #77 f0 CallNode attr_accessor line 73
+r0 #78 f0 LocalVariableWriteNode nn line 75
+r0 #79 f0 CallNode foo line 76
+r0 #80 f0 LocalVariableWriteNode nav1 line 77
+  r0 #81 f0 CallNode p line 77
+r0 #82 f0 LocalVariableWriteNode nav2 line 78
+r0 #83 f0 LocalVariableWriteNode dfn line 79
+r0 #84 f0 LocalVariableWriteNode hh line 80
+r0 #85 f0 IndexOrWriteNode line 81
+r0 #86 f0 LocalVariableWriteNode beg line 82
+r0 #87 f0 LocalVariableWriteNode oa line 88
+r0 #88 f0 CallNode x= line 89
+r0 #89 f0 CallOrWriteNode x line 90
+r0 #90 f0 LocalVariableWriteNode hk line 91
+r0 #91 f0 IndexAndWriteNode line 92
+r0 #92 f0 CallNode p line 93
+r0 #93 f0 DefNode __enum_each_with_index__0 line 506
+block each line 15: assumed
+block each line 21: assumed
+block each line 27: assumed
+block each line 33: assumed
+block each line 41: assumed
+block each line 48: assumed
+block each line 61: assumed
+block each line 67: assumed
+block each line 80: assumed
+block each line 89: assumed
+block each line 98: assumed
+block each line 107: assumed
+block each line 116: assumed
+block each line 129: assumed
+block each line 138: assumed
+block times line 28: now
+block times line 34: now
+block times line 35: now
+block each line 36: now
+block at_exit line 38: later
+block times line 51: now
+block each line 52: now
+block each_with_index line 53: now
+block uniq line 54: now
+block sort_by! line 55: now
+block slice_before line 56: now
+block times line 57: now
+block times line 58: now
+block times line 59: now
+block at_exit line 59: later
+block tap line 77: assumed
+block then line 78: assumed
+block each line 509: assumed
+block new line 526: later
+block each line 528: assumed
+class K: body#18
+class G: body#40
+class H: body#67
+class NN: body#74
+class OA: body#76
+entity K: owner main leaf K
+entity G: owner main leaf G
+entity H: owner main leaf H
+entity NN: owner main leaf NN
+entity OA: owner main leaf OA
+main#__enumw_map: def#1 private end=yes
+main#__enumw_select: def#2 private end=yes
+main#__enumw_reject: def#3 private end=yes
+main#__enumw_filter_map: def#4 private end=yes
+main#__enumw_each_with_object: def#5 private end=yes
+main#__enumw_inject0: def#6 private end=yes
+main#__enumw_inject1: def#7 private end=yes
+main#__enumw_with_index: def#8 private end=yes
+main#__enumw_str_chars_with_index: def#9 private end=yes
+main#__enumw_str_lines_with_index: def#10 private end=yes
+main#__enumw_str_bytes_with_index: def#11 private end=yes
+main#__enumw_str_codepoints_with_index: def#12 private end=yes
+main#__enumw_each_slice: def#13 private end=yes
+main#__enumw_each_cons: def#14 private end=yes
+main#__enumw_each_entry: def#15 private end=yes
+main#lib_m: def#16 private end=yes
+main#load_it: def#17 private end=yes
+const K: write#18
+K.never: def#19 end=yes
+K.once: def#20 end=yes
+K.loop_run: def#21 end=yes
+K.guarded: def#22 end=yes
+const G: write#40
+G.a: def#41 runs=#45 end=yes
+G.b: def#42 runs=#46 end=yes
+G.c: def#43 runs=#47 end=yes
+G.d: def#44 runs=#48 end=yes
+const H: write#67
+H.a: def#68 runs=#79 end=yes
+H.b: def#69 runs=#83 end=yes
+H.c: def#70 runs=#85 end=yes
+H.d: def#71 runs=#86 end=yes
+H.e: def#72 end=yes
+H.f: def#73 end=yes
+const NN: write#74
+NN#foo: def#75 end=yes
+const OA: write#76
+OA#x: reader#77 end=yes
+OA#x=: writer#77 end=yes
+main#__enum_each_with_index__0: def#93 private end=yes
+post: after #93
+extent def __enumw_map line 13: from=never sure=never count=zero kept=no
+extent block each line 15: from=never sure=never count=zero kept=no
+extent def __enumw_select line 19: from=never sure=never count=zero kept=no
+extent block each line 21: from=never sure=never count=zero kept=no
+extent def __enumw_reject line 25: from=never sure=never count=zero kept=no
+extent block each line 27: from=never sure=never count=zero kept=no
+extent def __enumw_filter_map line 31: from=never sure=never count=zero kept=no
+extent block each line 33: from=never sure=never count=zero kept=no
+extent def __enumw_each_with_object line 40: from=never sure=never count=zero kept=no
+extent block each line 41: from=never sure=never count=zero kept=no
+extent def __enumw_inject0 line 45: from=never sure=never count=zero kept=no
+extent block each line 48: from=never sure=never count=zero kept=no
+extent def __enumw_inject1 line 59: from=never sure=never count=zero kept=no
+extent block each line 61: from=never sure=never count=zero kept=no
+extent def __enumw_with_index line 65: from=never sure=never count=zero kept=no
+extent block each line 67: from=never sure=never count=zero kept=no
+extent def __enumw_str_chars_with_index line 78: from=never sure=never count=zero kept=no
+extent block each line 80: from=never sure=never count=zero kept=no
+extent def __enumw_str_lines_with_index line 87: from=never sure=never count=zero kept=no
+extent block each line 89: from=never sure=never count=zero kept=no
+extent def __enumw_str_bytes_with_index line 96: from=never sure=never count=zero kept=no
+extent block each line 98: from=never sure=never count=zero kept=no
+extent def __enumw_str_codepoints_with_index line 105: from=never sure=never count=zero kept=no
+extent block each line 107: from=never sure=never count=zero kept=no
+extent def __enumw_each_slice line 114: from=never sure=never count=zero kept=no
+extent block each line 116: from=never sure=never count=zero kept=no
+extent def __enumw_each_cons line 127: from=never sure=never count=zero kept=no
+extent block each line 129: from=never sure=never count=zero kept=no
+extent def __enumw_each_entry line 137: from=never sure=never count=zero kept=no
+extent block each line 138: from=never sure=never count=zero kept=no
+extent def lib_m line 1: from=never sure=never count=zero kept=no
+extent def load_it line 19: from=#24 sure=never count=many kept=no
+extent def never line 21: from=never sure=never count=zero kept=no
+extent def once line 22: from=#23 sure=#23 count=once kept=no
+extent def loop_run line 23: from=#26 sure=#38 count=many kept=no
+extent def guarded line 24: from=#28 sure=#38 count=many kept=no
+extent block times line 28: from=#25 sure=#25 count=many kept=no
+extent block times line 34: from=#30 sure=never count=zero kept=no
+extent block times line 35: from=#32 sure=#32 count=once kept=no
+extent block each line 36: from=#34 sure=#34 count=once kept=no
+extent lambda line 37: from=#36 sure=never count=many kept=yes
+extent block at_exit line 38: from=post sure=never count=once kept=yes
+extent def a line 42: from=#45 sure=never count=many kept=no
+extent def b line 43: from=#46 sure=never count=many kept=no
+extent def c line 44: from=#47 sure=never count=many kept=no
+extent def d line 45: from=#48 sure=never count=many kept=no
+extent block times line 51: from=#49 sure=never count=once kept=no
+extent block each line 52: from=#50 sure=never count=once kept=no
+extent block each_with_index line 53: from=#51 sure=#51 count=once kept=no
+extent block uniq line 54: from=#53 sure=never count=once kept=no
+extent block sort_by! line 55: from=#55 sure=never count=once kept=no
+extent block slice_before line 56: from=#57 sure=never count=many kept=no
+extent block times line 57: from=#60 sure=never count=many kept=no
+extent block times line 58: from=#62 sure=#62 count=many kept=no
+extent block times line 59: from=#64 sure=never count=zero kept=no
+extent block at_exit line 59: from=never sure=never count=zero kept=yes
+extent def a line 62: from=#79 sure=never count=many kept=no
+extent def b line 63: from=#83 sure=never count=many kept=no
+extent def c line 64: from=#85 sure=never count=many kept=no
+extent def d line 65: from=#86 sure=never count=many kept=no
+extent def e line 66: from=#89 sure=never count=once kept=no
+extent def f line 67: from=#91 sure=never count=once kept=no
+extent def foo line 70: from=#79 sure=never count=many kept=no
+extent block tap line 77: from=#80 sure=never count=once kept=no
+extent block then line 78: from=#82 sure=never count=once kept=no
+extent def __enum_each_with_index__0 line 506: from=never sure=never count=zero kept=no
+extent block each line 509: from=never sure=never count=zero kept=no
+extent block new line 526: from=never sure=never count=zero kept=yes
+extent block each line 528: from=never sure=never count=zero kept=no

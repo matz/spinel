@@ -161,7 +161,7 @@ static int poly_cmp_reopen_test(Compiler *c, int id, int recv, const char *v, ch
     { CORE_INTEGER, "%s.tag == SP_TAG_INT || %s.tag == SP_TAG_BIGINT" },
     { CORE_FLOAT,   "%s.tag == SP_TAG_FLT" },
     { CORE_NUMERIC, "%s.tag == SP_TAG_INT || %s.tag == SP_TAG_BIGINT || %s.tag == SP_TAG_FLT" },
-    { CORE_STRING,  "%s.tag == SP_TAG_STR" },
+    { CORE_STRING,  "sp_rbval_is_string(%s)" },
     { CORE_SYMBOL,  "%s.tag == SP_TAG_SYM" },
     { CORE_TRUECLASS,  "(%s.tag == SP_TAG_BOOL && %s.v.i)" },
     { CORE_FALSECLASS, "(%s.tag == SP_TAG_BOOL && !%s.v.i)" },

@@ -689,13 +689,15 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     }
     if (sp_streq(name, "full_message")) {
       int t = hoist_exc_recv(c, recv);
-      buf_printf(b, "sp_exc_full_text(_t%d, sp_exc_message(_t%d))", t, t);
+      const char *mfn = exc_has_user_msg_override(c) ? "sp_user_exc_message" : "sp_exc_message";
+      buf_printf(b, "sp_exc_full_text(_t%d, %s(_t%d))", t, mfn, t);
       return 1;
     }
     /* detailed_message without keywords -> "message (ClassName)" */
     if (sp_streq(name, "detailed_message")) {
       int t = hoist_exc_recv(c, recv);
-      buf_printf(b, "sp_exc_detailed_text(_t%d, sp_exc_message(_t%d))", t, t);
+      const char *mfn = exc_has_user_msg_override(c) ? "sp_user_exc_message" : "sp_exc_message";
+      buf_printf(b, "sp_exc_detailed_text(_t%d, %s(_t%d))", t, mfn, t);
       return 1;
     }
     if (sp_streq(name, "inspect")) {

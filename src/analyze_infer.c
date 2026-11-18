@@ -12560,6 +12560,14 @@ TyKind infer_uncached(Compiler *c, int id) {
        (emit_super_data_with) */
     if (!s->is_cmethod && uname && sp_streq(uname, "with") &&
         c->classes[s->class_id].is_struct && c->classes[s->class_id].is_data) none = ty_object(s->class_id);
+    /* The exception reopening switch can answer either a Ruby override's
+       value or Exception's stored text. Keep that joined result boxed. */
+    if (mi < 0 && !s->is_cmethod && is_exception_message(uname) &&
+        (class_is_exc_subclass(c, s->class_id) || class_is_exc_reopen(c, s->class_id))) {
+      int xr[8], xn = exc_reopen_definers(c, uname, xr, 8);
+      for (int i = 0; i < xn; i++)
+        if (xr[i] != s->class_id) return TY_POLY;
+    }
     if (p < 0 && mi < 0) return none;
     /* a subclass of a native class (#9269): super reaches the native
        class's constructor (initialize) or binding */

@@ -17619,6 +17619,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
           buf_printf(&call, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[xm]), g_self);
           if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[xm], ", ", &call);
           else emit_args_filled(c, xm, nt_ref(c->nt, id, "arguments"), ", ", &call);
+          emit_super_block_arg(c, id, s, &c->scopes[xm], 1, &call);
           buf_puts(&call, ")");
           if (text) emit_boxed_ret_call(c, &c->scopes[xm], call.p, b);
           else buf_puts(b, call.p);

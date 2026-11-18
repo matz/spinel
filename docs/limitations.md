@@ -1569,6 +1569,15 @@ further: since 3.4 CRuby steps a non-numeric range by repeated `+`, so
 `("a".."e").step("x")` diverges, while spinel takes every Nth element -- a
 stride a String cannot name -- and raises.
 
+#### Conditional prepends on String
+
+A placed conditional `prepend` in a String reopening can install a module
+whose methods are ordinary program methods or supported String readers.
+The first executed prepend of a module determines its place in the chain.
+`super` skips layers that have not run. Calls and reflection use the
+visibility of the method currently installed. A module with its own
+mixins, accessors, aliases, or mixin hooks is outside this conditional path.
+
 #### Embedded NUL bytes: byte-exact core, C-string transforms
 
 Strings store embedded NUL bytes, and the byte-exact core matches CRuby:

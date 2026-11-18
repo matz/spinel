@@ -798,6 +798,7 @@ int elab_main_object_one_entry(Compiler *c, const char *name);
    calls, which the arm reads of the version's visibility cell. Asked once
    per version (LrDef.arm_vis). */
 int elab_version_vis(Compiler *c, const ElabVersion *ev);
+int elab_physical_version_vis(Compiler *c, const ElabVersion *ev);
 /* ...and the visibility words that write that cell (`public :m`, in the
    version's history or the one that is one table entry with it), by the
    index i of the two histories' entries: 1 for a word (its node and

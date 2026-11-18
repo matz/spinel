@@ -5458,7 +5458,7 @@ static int lr_vis_cellable(Compiler *c, const LrHist *h, const LrHist *t) {
     }
   return 1;
 }
-static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unmapped) {
+static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unmapped, int physical) {
   const NodeTable *nt = c->nt;
   const LrHist *t = lr_table_twin(c, h);
   LoadPoint pv = elab_point_of(c, v->node), pw = { -1, -1, -1 };
@@ -5476,6 +5476,7 @@ static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unm
       if (pw.region < 0 || elab_cmp(pw, p) == PROG_BEFORE) pw = p, vis = w->vis;
     }
   if (!changed) return v->vis;
+  if (physical && lr_vis_cellable(c, h, t)) return -1;
   for (int id = an_calls_named_first(c, h->name); id >= 0; id = an_calls_named_next(id))
     if (nt_kind(nt, id) == NK_CallNode && sp_streq(nt_str(nt, id, "name"), h->name) &&
         (nt_ref(nt, id, "receiver") >= 0 || nt_str(nt, id, "vis_enforce")) && lr_vis_call_ahead(c, h, t, v, pv, pw, id, unmapped))
@@ -5498,9 +5499,16 @@ int elab_version_vis(Compiler *c, const ElabVersion *ev) {
   if (v->arm_vis) return v->arm_vis - 2;
   /* (an answer that met a call with no point yet is not kept: it is
      asked again once the map places the call) */
-  int unmapped = 0, vis = lr_version_vis(c, h, v, &unmapped);
+  int unmapped = 0, vis = lr_version_vis(c, h, v, &unmapped, 0);
   if (!unmapped) v->arm_vis = (unsigned char)(vis + 2);
   return vis;
+}
+/* Reflection can observe a visibility word even with no call of the name. */
+int elab_physical_version_vis(Compiler *c, const ElabVersion *ev) {
+  const LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || ev->hist < 0 || ev->hist >= r->nhist) return ev->v->vis;
+  int unmapped = 0;
+  return lr_version_vis(c, &r->hist[ev->hist], ev->v, &unmapped, 1);
 }
 int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int *vis) {
   LoadRecord *r = c->lrec;

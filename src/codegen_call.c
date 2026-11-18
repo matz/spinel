@@ -20553,7 +20553,13 @@ void emit_guarded_presence(Compiler *c, const CplanCells *cs, Buf *b) {
   buf_puts(b, "(");
   for (int i = 0; i < cs->n; i++) {
     emit_cell_match(c, cs->cell[i], cs->val[i], b);
-    buf_printf(b, " ? %d : ", cs->ans[i]);
+    if (cs->vis[i][0]) {
+      buf_puts(b, " ? (");
+      emit_cell_match(c, cs->vis[i], SP_VIS_PRIVATE, b);
+      buf_printf(b, " ? %d : ", core_bit_of_vis(SP_VIS_PRIVATE));
+      emit_cell_match(c, cs->vis[i], SP_VIS_PROTECTED, b);
+      buf_printf(b, " ? %d : %d) : ", core_bit_of_vis(SP_VIS_PROTECTED), core_bit_of_vis(SP_VIS_PUBLIC));
+    } else buf_printf(b, " ? %d : ", cs->ans[i]);
   }
   buf_printf(b, "%d)", cs->els);
 }
@@ -23980,15 +23986,6 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
   emit_raise_placeholder(c, id, b);
   return 1;
 }
-/* Does class k or an ancestor include module mod (directly or through an
-   included module)? */
-static int caller_includes_module(Compiler *c, int k, int mod) {
-  for (int g = 0; k >= 0 && k < c->nclasses && g <= c->nclasses; k = c->classes[k].parent, g++)
-    for (int m = 0; m < c->classes[k].nincluded_mods; m++)
-      if (comp_module_includes(c, c->classes[k].included_mods[m], mod, 0)) return 1;
-  return 0;
-}
-
 /* The class whose instance is self in scope s when s is a top-level copy
    of an Integer, Float or Comparable reopening's method (`__int_cmp__0`,
    self its `__self` parameter, desugar_builtin_scalar_defs), else -1. */
@@ -24029,19 +24026,14 @@ int method_vis_for_caller(Compiler *c, int id, int vcid, const char *vnm) {
     Scope *cs = comp_scope_of(c, id);
     int caller = (cs && !cs->is_cmethod) ? cs->class_id : -1;
     if (caller < 0 && cs && !cs->is_cmethod) caller = scalar_copy_self_class(c, cs);
-    if (caller >= 0 && owner >= 0 && is_descendant(c, caller, owner)) vis = SP_VIS_PUBLIC;
-    /* a module's protected method: the caller is an instance of the module
-       when its class or an ancestor includes it, whatever the caller's own
-       method of that name is, or when its class took the method from it (a
-       prepend, which records no include) */
-    /* a class method's self is the class, an instance of a module its
-       class (or a superclass) extends */
-    if (cs && cs->is_cmethod && cs->class_id >= 0 && owner >= 0 &&
-        comp_class_singleton_has_module(c, cs->class_id, owner)) vis = SP_VIS_PUBLIC;
+    int singleton = cs && cs->is_cmethod;
+    if (cplan_protected_owner_open(c, singleton ? cs->class_id : caller, singleton, owner))
+      vis = SP_VIS_PUBLIC;
+    /* A prepend can supply the caller's copy without an include edge. */
     if (vis == SP_VIS_PROTECTED && caller >= 0 && owner >= 0) {
       int cmi = call_target(c, id, caller, vnm, 0, NULL);
-      if (caller_includes_module(c, caller, owner) ||
-          (cmi >= 0 && cmi < c->nscopes && c->scopes[cmi].origin_module_ci == owner + 1)) vis = SP_VIS_PUBLIC;
+      if (cmi >= 0 && cmi < c->nscopes && c->scopes[cmi].origin_module_ci == owner + 1)
+        vis = SP_VIS_PUBLIC;
     }
     /* a call in a module's own method (or a block in it): self there is an
        instance of a class that includes the module, so the module's
@@ -24051,7 +24043,7 @@ int method_vis_for_caller(Compiler *c, int id, int vcid, const char *vnm) {
       int rmi = call_target(c, id, vcid, vnm, 0, NULL);
       int from_caller = owner == caller ||
                         (rmi >= 0 && rmi < c->nscopes && c->scopes[rmi].origin_module_ci == caller + 1);
-      if (from_caller && (vcid == caller || caller_includes_module(c, vcid, caller))) vis = SP_VIS_PUBLIC;
+      if (from_caller && (vcid == caller || cplan_caller_includes_module(c, vcid, caller))) vis = SP_VIS_PUBLIC;
     }
   }
   return vis;

@@ -1938,7 +1938,8 @@ typedef struct {
      0 for none; face: VF_NONE, or the visibility the arms of the versions
      that are closed to it raise for (call_plan.h); vis, 1 where a class method's respond_to? reads the
      entry's cells (cplan_cmethod_presence), so its versions' visibility cells are written whatever the face
-     (ver_presence_mark). Each name
+     (ver_presence_mark), or 2 where an instance guard reflects a hidden
+     String history. Each name
      is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
      the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */

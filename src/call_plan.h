@@ -1188,6 +1188,8 @@ int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);
 enum { CPV_CMETHOD = 1, CPV_ROOT = 2 };
 int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, int *at);
 int cplan_guarded_call_visibility(Compiler *c, int id, int cls, const char *name);
+int cplan_caller_includes_module(Compiler *c, int caller, int module);
+int cplan_protected_owner_open(Compiler *c, int caller, int singleton, int owner);
 TyKind cplan_poly_arg_storage(Compiler *c, int id);
 /* The re-entry of a call on an object whose static class cannot answer the
    name while one of its subclasses can (#4023). Computed afresh. */

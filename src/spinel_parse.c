@@ -111,13 +111,25 @@ static void sp_pm_parser_init(pm_parser_t *parser, const char *src, size_t len,
    the requires its dead branches hold) are read from this parse. */
 typedef struct {
   const char *path;
+  const char *shown;   /* the path a message names, when not path (sp_shown_path) */
   const char *text;
   pm_parser_t parser;
   pm_node_t *root;
 } SpSrcFile;
 
+/* --load-model=graph: the name a message gives file `path` (the whole
+   path the graph holds) as the inline model names it: from the current
+   directory when the entry file is given relative to it and the file is
+   under it, else the path. A pointer into path. */
+static const char *sp_shown_path(const char *path, const char *entry) {
+  char cwd[1024];
+  size_t cl = entry && entry[0] != '/' && getcwd(cwd, sizeof cwd) ? strlen(cwd) : 0;
+  return cl && strncmp(path, cwd, cl) == 0 && path[cl] == '/' ? path + cl + 1 : path;
+}
+
 static void sp_src_file_parse(SpSrcFile *f, const char *text, const char *path) {
   f->path = path;
+  f->shown = NULL;
   f->text = text;
   sp_pm_parser_init(&f->parser, text, strlen(text), path);
   f->root = pm_parse(&f->parser);
@@ -214,7 +226,7 @@ static int sp_src_file_fsl(const SpSrcFile *f) {
   fprintf(stderr,
           "spinel: %s:%d: warning: frozen_string_literal: false is not supported "
           "in Spinel (string literals are always frozen); the pragma is "
-          "ignored\n", f->path, (int)line);
+          "ignored\n", f->shown ? f->shown : f->path, (int)line);
   return 1;
 }
 
@@ -245,7 +257,7 @@ static void sp_src_file_warn_encoding(const SpSrcFile *f) {
   fprintf(stderr,
           "spinel: %s:%d: warning: source encoding %s: Spinel's Strings are "
           "UTF-8, so this file's literals keep the bytes they are written with "
-          "but take UTF-8 as their encoding\n", f->path, (int)line, f->parser.encoding->name);
+          "but take UTF-8 as their encoding\n", f->shown ? f->shown : f->path, (int)line, f->parser.encoding->name);
 }
 
 /* Lines of `s` as the require splicers count them: one per '\n', plus one for
@@ -8386,17 +8398,12 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
   SpGraphFile *r = sp_graph_rec(g, f);
   r->text = text;
   sp_src_file_parse(&r->src, text, path);
+  if (f) r->src.shown = sp_shown_path(path, source_file);   /* (the entry is named as given) */
   r->read = 1;
   sp_src_file_note_defers(&r->src);
   sp_src_file_warn_encoding(&r->src);
   if (r->src.parser.error_list.size) {
-    /* the file as the program names it: under the current directory, from
-       there (as the entry file is given), else its whole path */
-    char cwd[1024];
-    const char *shown = path;
-    size_t cl = getcwd(cwd, sizeof cwd) ? strlen(cwd) : 0;
-    if (cl && source_file[0] != '/' && strncmp(path, cwd, cl) == 0 && path[cl] == '/') shown = path + cl + 1;
-    sp_report_parse_errors(&r->src.parser, source_file, shown);
+    sp_report_parse_errors(&r->src.parser, source_file, r->src.shown ? r->src.shown : path);
     return 0;
   }
   sp_src_file_fsl(&r->src);   /* (its pragma's warning; every literal is frozen) */

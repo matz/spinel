@@ -6658,6 +6658,12 @@ int emit_catch_tag(Compiler *c, int id, Buf *b) {
   unsupported(c, id, "catch/throw with a Float or Bignum tag (use a Symbol, String, Integer, nil, boolean, or object tag)");
   return 0;
 }
+/* A key typed Bignum on an Integer-keyed table: the value may fit an sp_int
+   (`2**64 - 2**64 + 5`), and CRuby's Integer is one class, so the lookup is
+   decided at run time (sp_bigint_okey). */
+int hash_bigint_key(Compiler *c, int key, TyKind kt) {
+  return kt == TY_INT && comp_ntype(c, key) == TY_BIGINT;
+}
 /* A key whose static kind can never be in a typed hash's table: a String
    or a user object looked up in an Integer-keyed Hash, a Float where
    1.eql?(1.0) is false, nil in any of them. Hash looks a key up by #hash and
@@ -6674,11 +6680,17 @@ int hash_key_misses(Compiler *c, int key, TyKind kt) {
   TyKind actual = comp_ntype(c, key);
   if (kt == TY_POLY || actual == kt || actual == TY_POLY || actual == TY_UNKNOWN) return 0;
   if (kt == TY_STRING && actual == TY_STRBUF) return 0;
+  if (hash_bigint_key(c, key, kt)) return 0;
   return actual == TY_NIL || actual == TY_BOOL || actual == TY_INT ||
          actual == TY_BIGINT || actual == TY_FLOAT || actual == TY_SYMBOL ||
          actual == TY_STRING || actual == TY_STRBUF || actual == TY_REGEX ||
          ty_is_struct_valued(actual) || ty_is_array(actual) || ty_is_hash(actual) ||
          ty_is_object(actual);
+}
+
+/* a key the table's own key kind cannot carry to a block's parameter */
+int hash_key_foreign(Compiler *c, int key, TyKind kt) {
+  return hash_key_misses(c, key, kt) || hash_bigint_key(c, key, kt);
 }
 
 /* nil looked up in an Integer-keyed table as a stored key: never now. An
@@ -6707,7 +6719,7 @@ void emit_hash_okey(Compiler *c, int key, Buf *b) {
    nil key (CRuby looks nil up and misses; it is no TypeError) */
 int hash_okey_form(Compiler *c, int key, TyKind kt) {
   if (kt != TY_INT) return 0;
-  if (hash_key_misses(c, key, kt)) return 1;
+  if (hash_key_foreign(c, key, kt)) return 1;
   Repr r = repr_of(c, key);
   if (r.kind == RK_BOXED) return 1;
   return r.opt_producer && r.as_ty == TY_INT;
@@ -6724,8 +6736,11 @@ void emit_hash_key_o(Compiler *c, int key, TyKind kt, Buf *b) {
   if (!hash_okey_form(c, key, kt)) { emit_hash_key(c, key, kt, b); return; }
   if (hash_key_misses(c, key, kt)) { emit_hash_okey(c, key, b); return; }
   if (repr_of(c, key).kind == RK_BOXED) {
-    buf_puts(b, "({ sp_RbVal _hk = "); emit_boxed(c, key, b);
-    buf_puts(b, "; _hk.tag == SP_TAG_INT ? sp_oint_of(_hk.v.i) : sp_oint_nil(); })");
+    buf_puts(b, "sp_poly_okey("); emit_boxed(c, key, b); buf_puts(b, ")");
+    return;
+  }
+  if (hash_bigint_key(c, key, kt)) {
+    buf_puts(b, "sp_bigint_okey("); emit_expr(c, key, b); buf_puts(b, ")");
     return;
   }
   emit_oint_expr(c, key, TY_INT, b);
@@ -6740,7 +6755,7 @@ int hash_opw_okey(Compiler *c, int key, TyKind rt) {
 }
 /* that boxed key temp as the read's sp_oint key */
 void emit_opw_okey_read(const char *t, Buf *b) {
-  buf_printf(b, "(%s.tag == SP_TAG_INT ? sp_oint_of(%s.v.i) : sp_oint_nil())", t, t);
+  buf_printf(b, "sp_poly_okey(%s)", t);
 }
 
 /* --share-strings: String Array value v as a PolyArray holding each
@@ -6797,7 +6812,7 @@ void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b) {
 }
 static void emit_hash_key_value(Compiler *c, int key, TyKind kt, Buf *b) {
   int kboxed = repr_of(c, key).kind == RK_BOXED;
-  if (hash_key_misses(c, key, kt)) {
+  if (hash_key_misses(c, key, kt) || (!kboxed && hash_bigint_key(c, key, kt))) {
     /* an Integer key no entry equals goes through the _okey entry points
        (hash_okey_miss), which each caller asks first: one that reaches here
        has none, and refuses at compile time rather than raise a TypeError

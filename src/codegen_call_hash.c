@@ -210,6 +210,7 @@ int emit_op_hash_aref(Compiler *c, const BopCtx *x, Buf *b) {
   if (hash_kt != TY_POLY && hash_kt != TY_UNKNOWN &&
       arg_ktr.kind != RK_BOXED && arg_kt != TY_UNKNOWN && arg_kt != hash_kt &&
       !(hash_kt == TY_STRING && arg_kt == TY_STRBUF) &&
+      !hash_bigint_key(c, argv[0], hash_kt) &&
       !hash_nil_key_stored(c, argv[0], hash_kt)) {
     TyKind vt = ty_hash_val(rt);
     int t = ++g_tmp;
@@ -257,6 +258,11 @@ int emit_op_hash_has_key(Compiler *c, const BopCtx *x, Buf *b) {
        the key still evaluated */
     buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[0], b);
     buf_puts(b, "); 0; })");
+    return 1;
+  }
+  if (hash_bigint_key(c, argv[0], hash_kt)) {
+    buf_printf(b, "sp_%sHash_has_key_okey(", hn);
+    emit_expr(c, recv, b); buf_puts(b, ", "); emit_hash_key_o(c, argv[0], hash_kt, b); buf_puts(b, ")");
     return 1;
   }
   buf_printf(b, "sp_%sHash_has_key(", hn);
@@ -408,7 +414,7 @@ int emit_op_hash_fetch(Compiler *c, const BopCtx *x, Buf *b) {
      class goes through the _okey ops (hash_okey_form), where it misses as
      CRuby's lookup does: converted, a nil key raised TypeError where
      CRuby's KeyError names it */
-  else if (hash_okey_form(c, argv[0], kt) && repr_of(c, argv[0]).kind == RK_BOXED) {
+  else if (hash_okey_form(c, argv[0], kt) && (repr_of(c, argv[0]).kind == RK_BOXED || hash_bigint_key(c, argv[0], kt))) {
     tb = ++g_tmp;
     buf_printf(b, "; sp_RbVal _t%d = ", tb); emit_boxed(c, argv[0], b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_oint _t%d = ", tb, tk);

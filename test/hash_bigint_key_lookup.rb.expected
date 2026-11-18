@@ -1,0 +1,58 @@
+"five"
+50
+nil
+nil
+true
+true
+true
+true
+false
+"five"
+50
+"five"
+0
+"five"
+50
+nil
+["five", "one", nil]
+[50, nil]
+["five", "one"]
+[50]
+{5 => "five", 1 => "one"}
+{}
+{1 => "one"}
+{1 => 10}
+[5, "five"]
+nil
+"five"
+"key not found: 18446744073709551616"
+18446744073709551616
+"key not found: 18446744073709551616"
+18446744073709551616
+"five"
+"dflt"
+"neg"
+true
+"five"
+"one"
+nil
+"five"
+nil
+true
+50
+[50]
+{5 => 50}
+[5, 50]
+"five"
+nil
+false
+"five"
+[50, nil, nil]
+["five"]
+"key not found: 18446744073709551616"
+18446744073709551616
+nil
+50
+{1 => 10}
+"five"
+{1 => "one"}

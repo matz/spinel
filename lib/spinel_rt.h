@@ -8782,6 +8782,16 @@ static sp_int sp_poly_hkey_i(sp_RbVal v) {
   if (v.tag == SP_TAG_INT) return v.v.i;
   sp_raise_typed_hash_part(v, "key", "Integer");
 }
+/* An Integer-keyed table's lookup key from a Bignum slot or a boxed value:
+   the Integer when an sp_int holds it, else the nil key no entry matches */
+static SP_UNUSED sp_oint sp_bigint_okey(sp_Bigint *b) {
+  return (b && sp_bigint_fits_int(b)) ? sp_oint_of((sp_int)sp_bigint_to_int(b)) : sp_oint_nil();
+}
+static SP_UNUSED sp_oint sp_poly_okey(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT) return sp_oint_of(v.v.i);
+  if (v.tag == SP_TAG_BIGINT) return sp_bigint_okey((sp_Bigint *)v.v.p);
+  return sp_oint_nil();
+}
 static const char *sp_poly_hkey_s(sp_RbVal v) {
   if (v.tag == SP_TAG_STR && v.v.s) return v.v.s;
   if (sp_poly_is_strbuf(v)) return sp_poly_strbuf_deref(v).v.s;

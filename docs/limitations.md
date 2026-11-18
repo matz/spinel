@@ -1811,13 +1811,13 @@ Proc, a Method, a Thread, a Mutex, a Queue, an exception, a Dir, a Class) or
 a Symbol, nil, true or false (#9171). Keys are then found by `equal?`: two
 instances whose `eql?` and `hash` agree are two keys, and an Array or a Hash
 key is its object, not its content. A hash that already holds entries is
-rebuilt, and `compare_by_identity?` answers true.
+rebuilt, and `compare_by_identity?` answers true. A String key is accepted
+when Spinel can establish its identity, as with a fresh String made by unary
+`+`. The identity Hash retains that object and can still find it after mutation.
 
-It stays refused at compile time, naming why, where a key may be a String
-(equal-content Strings may be one object here, through the frozen literal
-pool, where CRuby has two), an Integer or a Float (held by value here, where
-CRuby makes a new object of each Bignum and non-flonum Float), a Rational, a
-Complex, or a boxed value that may hold any of them. The hash also has to be
+Compilation refuses keys whose identity Spinel cannot establish, including
+uncertain String keys, Integers, Floats, Rationals, Complex values, and boxed
+values that may hold any of them. The hash also has to be
 held in one local or instance variable that is given no other hash (nil or a
 new one is fine), every use of it a call on it the compiler follows: `[]`,
 `[]=`, `store`, `fetch`, `key?` and its kin, `delete`, `dig`, an index

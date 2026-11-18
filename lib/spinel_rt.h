@@ -12535,6 +12535,9 @@ static void sp_PolyPolyHash_grow(sp_PolyPolyHash*h){ sp_gc_wb((void*)h);sp_RbVal
    or a Symbol, nil, true or false (#9171). */
 static sp_bool sp_poly_equal(sp_RbVal a, sp_RbVal b);
 static inline sp_int sp_rbval_ident_hash(sp_RbVal v) {
+  /* Hash the same identity that equal? compares, including both boxes of
+     the same static String during the representation transition. */
+  v = sp_poly_literal_identity(v);
   uint64_t x;
   switch (v.tag) {
     case SP_TAG_INT: case SP_TAG_SYM: x = (uint64_t)v.v.i; break;
@@ -12660,7 +12663,32 @@ static sp_RbVal sp_poly_to_h_subject(sp_RbVal v) {
   }
   return v;
 }
-static void sp_PolyPolyHash_set(sp_PolyPolyHash*h,sp_RbVal k,sp_RbVal v){sp_gc_wb((void*)h); SP_GC_ROOT(h);SP_GC_ROOT_RBVAL(k);SP_GC_ROOT_RBVAL(v);sp_int hs=sp_hash_slot(sp_pph_hash_key(h,k));if(h->len*2>=h->cap)sp_PolyPolyHash_grow(h);sp_int idx=(sp_int)(hs&h->mask);while(h->occ[idx]){if(h->hs[idx]==hs&&sp_pph_eql_key(h,h->keys[idx],k)){h->vals[idx]=v;return;}idx=(idx+1)&h->mask;}if(k.tag==SP_TAG_STR&&k.v.s)k.v.s=sp_hash_key_str(k.v.s);else if(sp_poly_is_strbuf(k))k=sp_box_str(sp_hash_key_str(sp_String_cstr((sp_String*)k.v.p)));sp_gc_wb((void*)h);h->keys[idx]=k;h->vals[idx]=v;h->hs[idx]=hs;h->occ[idx]=TRUE;h->order[h->len]=idx;h->len++;}
+static void sp_PolyPolyHash_set(sp_PolyPolyHash *h, sp_RbVal k, sp_RbVal v) {
+  sp_gc_wb(h);
+  SP_GC_ROOT(h); SP_GC_ROOT_RBVAL(k); SP_GC_ROOT_RBVAL(v);
+  sp_int hs = sp_hash_slot(sp_pph_hash_key(h, k));
+  if (h->len * 2 >= h->cap) sp_PolyPolyHash_grow(h);
+  sp_int idx = hs & h->mask;
+  while (h->occ[idx]) {
+    if (h->hs[idx] == hs && sp_pph_eql_key(h, h->keys[idx], k)) {
+      h->vals[idx] = v;
+      return;
+    }
+    idx = (idx + 1) & h->mask;
+  }
+  /* An identity Hash stores the very value whose identity it hashed.
+     An ordinary Hash stores a frozen copy of a mutable String key. */
+  if (!h->ident) {
+    const char *bytes = sp_rbval_string_bytes(k);
+    if (bytes) k = sp_box_str(sp_hash_key_str(bytes));
+  }
+  sp_gc_wb(h);
+  h->keys[idx] = k;
+  h->vals[idx] = v;
+  h->hs[idx] = hs;
+  h->occ[idx] = TRUE;
+  h->order[h->len++] = idx;
+}
 /* Marshal.dump/load hash vtable slots (sp_marshal_v.hash_new/hash_set):
    kept here (not moved to lib/sp_cold.c with the rest of the sp_marv_*
    vtable fns) since they'd otherwise force sp_PolyPolyHash_new/set --

@@ -42869,6 +42869,7 @@ static int ivar_target_nullable(Compiler *c, int t) {
 }
 static void mark_nullable_int_locals(Compiler *c) {
   const NodeTable *nt = c->nt; MethodLookup ml = { .def_class = -1 };
+  int *cm_cls = NULL, cm_cap = 0;
   /* A scalar local a read can reach before any write starts as its nil and
      carries it (du_read_maybe_unset); the rounds below spread the mark */
   {
@@ -43754,9 +43755,29 @@ static void mark_nullable_int_locals(Compiler *c) {
          binds the class method of the name any class has */
       else if (recv >= 0 && cn && nt_ref(nt, id, "arguments") >= 0 &&
                (infer_type(c, recv) == TY_CLASS || infer_type(c, recv) == TY_POLY)) {
-        for (int k = 0; k < c->nclasses; k++) {
-          int cmi = call_target(c, id, k, cn, CT_OWN | CT_CMETHOD, NULL);   /* an inherited one is its definer's */
-          if (cmi >= 0) changed |= mark_nullable_params_of_call(c, id, cmi);
+        /* (only a class with a class-side scope of the name, or a pin of the call, answers CT_OWN: asking every class for each such call was a twentieth of a large program's compile) */
+        if (!c->ver_built || cplan_pinned(c, id))
+          for (int k = 0; k < c->nclasses; k++) {
+            int cmi = call_target(c, id, k, cn, CT_OWN | CT_CMETHOD, NULL);   /* an inherited one is its definer's */
+            if (cmi >= 0) changed |= mark_nullable_params_of_call(c, id, cmi);
+          }
+        else {
+          int nk = 0;
+          for (int s = an_scopes_named_first(c, cn); s >= 0; s = an_scopes_named_next(c, cn, s)) {
+            int sk = c->scopes[s].class_id;
+            if (!c->scopes[s].is_cmethod || sk < 0 || sk >= c->nclasses) continue;
+            if (nk == cm_cap) {
+              cm_cap = cm_cap ? 2 * cm_cap : 16;
+              if (!(cm_cls = realloc(cm_cls, sizeof(int) * (size_t)cm_cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+            }
+            cm_cls[nk++] = sk;
+          }
+          if (nk > 1) qsort(cm_cls, (size_t)nk, sizeof(int), qc_int_order);
+          for (int j = 0; j < nk; j++) {
+            if (j > 0 && cm_cls[j] == cm_cls[j - 1]) continue;
+            int cmi = call_target(c, id, cm_cls[j], cn, CT_OWN | CT_CMETHOD, NULL);   /* an inherited one is its definer's */
+            if (cmi >= 0) changed |= mark_nullable_params_of_call(c, id, cmi);
+          }
         }
       }
       if (recv >= 0 && cn && is_call_alias(cn) && mi < 0) {
@@ -43908,7 +43929,7 @@ static void mark_nullable_int_locals(Compiler *c) {
      predicate whatever the program (the bound counts the flags themselves), so
      this firing means a marking arm that is not monotone -- worth a bug
      report. */
-  free(imeth);
+  free(imeth); free(cm_cls);
   if (!converged) {
     fprintf(stderr, "spinel: internal: nilable-scalar marking did not converge in "
                     "%ld rounds; refusing to emit (a slot that can hold nil would be "

@@ -6539,9 +6539,11 @@ const char *time_strict_parser_call(Compiler *c, int id) {
 /* The program's parent map (nt_parents, an_parent_map's), kept on the
    node table and updated by its edits, for an analysis that asks where a
    node sits on every round. The map is borrowed: an edit changes it under a
-   caller that holds it, and a caller that holds it across an edit that adds
-   a node reads freed memory once anything asks again: it finds what it
-   needs from the map first and edits after. */
+   caller that holds it, and an edit that replaces it (one that adds a node,
+   swaps or renumbers nodes, or takes a node from the highest of two that
+   hold it: nt_parents) leaves the caller the old one, freed once anything
+   asks again: a caller finds what it needs from the map first and edits
+   after. */
 const int *comp_parent_map(Compiler *c) {
   return nt_parents((NodeTable *)c->nt);
 }

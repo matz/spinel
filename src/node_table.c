@@ -276,6 +276,13 @@ static void par_relist(NodeTable *nt, int id, const int *was, int wn, const int 
   free(o);
 }
 
+void nt_truncate(NodeTable *nt, int count) {
+  if (count < 0 || count >= nt->count) return;
+  /* (the dropped nodes' slots counted toward the nodes they held) */
+  par_drop(nt);
+  nt->count = count;
+}
+
 void nt_parents_moved(NodeTable *nt, int parent, int old, int with) {
   if (old == with) return;
   par_link(nt, parent, with);

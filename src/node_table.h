@@ -375,8 +375,12 @@ void nt_replace_child(NodeTable *nt, int parent, int old, int with);
 /* Each node's parent (-1 for a root and for a node no slot holds), the same
    map an_parent_map makes, kept on the table and updated by its edits
    rather than rebuilt after each. Borrowed: it changes under a caller that
-   edits, and the next ask frees the one a growth replaced. */
+   edits. A node added, nt_swap_nodes, nt_renumber, nt_truncate, and a node
+   the highest of two holders lets go of replace it (the last four rebuild
+   it at the next ask), and the next ask frees the one replaced. */
 const int *nt_parents(NodeTable *nt);
+/* Drop the nodes from `count` on, which nothing may hold. */
+void nt_truncate(NodeTable *nt, int count);
 /* A slot of `parent` that held `old` holds `with` now, written without the
    table's setters (nt_parents follows it). */
 void nt_parents_moved(NodeTable *nt, int parent, int old, int with);

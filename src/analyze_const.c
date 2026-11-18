@@ -450,8 +450,8 @@ void an_const_presence(Compiler *c) {
       c->consts[i].const_early = 0;
   /* the name a flagged read shows ahead of the constant: "" at the top
      level. Each mark is a string (nt_node_set_str); every mark is found
-     first and set after the last read of w.par (comp_parent_map, which an
-     edit that adds a node replaces), below the presence marks. */
+     first and set after the last read of w.par (comp_parent_map, which the
+     edits nt_parents names replace), below the presence marks. */
   int *cref = calloc(nn, sizeof(int));   /* per node: 1 + its cw_cref_at, 0 for no flagged read */
   char *own = calloc(nn, 1);             /* per node: a read that asks its own class's flag */
   if (!cref || !own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

@@ -28360,11 +28360,8 @@ static int an_origin_value(Compiler *c, ReturnWalk *R, int n, ReturnOrigin *tc) 
     return (k == NK_AndNode || an_tail_origin(c, R, nt_ref(nt, n, "left"), tc)) &&
            an_tail_origin(c, R, nt_ref(nt, n, "right"), tc);
   if (k != NK_IfNode && k != NK_UnlessNode) return share_value_fresh(c, n, 0);
-  int el = nt_ref(nt, n, k == NK_IfNode ? "subsequent" : "else_clause");
-  if (!an_origin_stmts(c, R, nt_ref(nt, n, "statements"), tc)) return 0;
-  if (el < 0) return 1;
-  return nt_kind(nt, el) == NK_ElseNode ? an_origin_stmts(c, R, nt_ref(nt, el, "statements"), tc)
-                                        : an_tail_origin(c, R, el, tc);
+  return an_tail_arm(c, R, nt_ref(nt, n, "statements"), tc) &&
+         an_tail_arm(c, R, nt_ref(nt, n, k == NK_IfNode ? "subsequent" : "else_clause"), tc);
 }
 
 /* Follow the origins used by the sharing analysis. The method ABI carries
@@ -28375,9 +28372,6 @@ static int an_tail_origin(Compiler *c, ReturnWalk *R, int n, ReturnOrigin *tc) {
   if (k == NK_CallNode && (an_tail_recv_answer(c, n) || an_tail_tap_blind(c, n)))
     return an_tail_origin(c, R, nt_ref(nt, n, "receiver"), tc);
   if (an_builder_local_fresh(c, tc->mi, n) || an_origin_value(c, R, n, tc) || an_tail_param(c, n, tc)) return 1;
-  if (k == NK_IfNode || k == NK_UnlessNode)
-    return an_tail_arm(c, R, nt_ref(nt, n, "statements"), tc) &&
-           an_tail_arm(c, R, nt_ref(nt, n, k == NK_IfNode ? "subsequent" : "else_clause"), tc);
   if (k == NK_CallNode && comp_ntype_settled(c, n) == TY_NIL) return 1;
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
     const CallPlan p = cplan_user_fresh(c, n);

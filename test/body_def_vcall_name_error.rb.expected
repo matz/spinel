@@ -1,0 +1,13 @@
+[[NoMethodError, :m], [NameError, :m]]
+[NameError, :m]
+[NameError, :m]
+[NoMethodError, :m]
+nil
+[[NoMethodError, :w], [NameError, :w]]
+[22, 22]
+22
+22
+22
+[33, 33]
+[NoMethodError, NoMethodError, NoMethodError]
+[1, 3, 6]

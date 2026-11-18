@@ -1856,7 +1856,8 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         else
           /* no default: CRuby raises KeyError naming the key. Route it through
              sp_raise_key_not_found so the key is staged for #key (#3027). */
-          buf_printf(b, "(sp_raise_key_not_found(sp_box_str(_t%d)), (const char *)0)", tky);
+          buf_printf(b, "(sp_raise_key_not_found(sp_box_str(_t%d)), %s)", tky,
+                     fhandle ? "(sp_String *)0" : fpoly ? "sp_box_nil()" : "(const char *)0");
         buf_printf(b, "; _t%d; })", tv);
         return 1;
       }

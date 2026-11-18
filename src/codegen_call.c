@@ -21447,10 +21447,19 @@ int builtin_cmethod_known(const char *cls, const char *name) {
 }
 
 /* Does any builtin class or module have a class method of this name? */
+static int cmeth_name_cmp(const void *a, const void *b) { return strcmp(*(const char *const *)a, *(const char *const *)b); }
+/* (the names sorted at the first ask and searched, not the rows read in turn: it is asked of every call on a class value) */
 int builtin_cmethod_known_any(const char *name) {
-  for (int i = 0; name && sp_builtin_cmeth_arity_spec_tbl[i].cls; i++)
-    if (sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].m, name)) return 1;
-  return 0;
+  enum { N = sizeof sp_builtin_cmeth_arity_spec_tbl / sizeof sp_builtin_cmeth_arity_spec_tbl[0] - 1 };
+  static const char *names[N];
+  static int sorted;
+  if (!name) return 0;
+  if (!sorted) {
+    for (int i = 0; i < N; i++) names[i] = sp_builtin_cmeth_arity_spec_tbl[i].m;
+    qsort(names, N, sizeof names[0], cmeth_name_cmp);
+    sorted = 1;
+  }
+  return bsearch(&name, names, N, sizeof names[0], cmeth_name_cmp) != NULL;
 }
 
 static void refl_builtin_cls_rows(const char *k, const char *skip, ReflNames *r) {

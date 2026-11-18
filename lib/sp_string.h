@@ -148,6 +148,18 @@ static inline sp_String*sp_String_new_inline_len(const char*s,int64_t len){
   sp_fd_publish(r);
   return r;
 }
+/* Foreign code can lend static bytes or a pointer into a managed String.
+   The inline constructor copies the bytes before allocating in either case. */
+static inline sp_String *sp_String_from_cstr(const char *s) {
+  return s ? sp_String_new_inline_len(s, (int64_t)strlen(s)) : NULL;
+}
+static inline sp_String *sp_String_from_cbinstr(const char *s, int len) {
+  sp_String *value = sp_String_new_inline_len(s ? s : "", s && len > 0 ? len : 0);
+  value->binary = 1;
+  sp_fd_publish(value);
+  return value;
+}
+
 /* Shared append core: `tl` is the operand byte length (strlen for the
    bare-literal-safe entry, sp_str_byte_len for the binary one). */
 /* the operand may be a view of this very payload (`s << s`, `s.replace(s)`):

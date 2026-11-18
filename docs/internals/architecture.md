@@ -93,6 +93,9 @@ String line methods retain the receiver through separator and chomp
 evaluation. With a nil separator the receiver is the only line, including
 for an empty String. A line Enumerator retains its receiver and separator
 and reads their contents when each walk begins.
+A foreign binding that loans bytes copies them into a String handle before
+an allocation can retire the provider's buffer. Binary bindings pass their
+published count so embedded NUL bytes survive.
 Interpolation and printing call the display method selected at that site.
 They read the bytes of its native String result or format its boxed result
 while the receiver is rooted. Interpolation keeps a mutable conversion

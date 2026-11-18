@@ -2382,20 +2382,11 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       const char *feat = c->native_funcs[nvi].feat;
       if (!feat || !feat[0] || sp_feature_enabled(feat)) {
         NativeFunc *nf = &c->native_funcs[nvi];
-        /* a `cstring` return is a borrowed C string (typically the callee's
-           static buffer, e.g. sp_crypto's per-function buffers): the next call
-           to the same symbol clobbers it, so dup onto the GC string heap
-           before the value escapes into Ruby. */
+        /* Borrowed C returns are copied into a Ruby String before the
+           provider's next call. Binary bindings publish the byte count. */
         int nv_cstr_ret = sp_streq(nf->ret, "cstring");
-        /* a `cbinstr` return is the same borrowed buffer, but holding raw
-           bytes rather than a C string: dup exactly the count the callee
-           published in sp_ffi_bin_len, since strlen would stop at the first
-           NUL byte in (say) a binary digest. The result is tagged BINARY --
-           declaring this return mode is the callee saying its answer is
-           bytes, which is the same thing CRuby says by handing back
-           ASCII-8BIT, and an untagged one does not == the same bytes from
-           pack or File.binread once any of them is >= 0x80. */
         int nv_bin_ret = sp_streq(nf->ret, "cbinstr");
+        int bytes = (nv_cstr_ret || nv_bin_ret) && repr_of(c, id).as_ty != TY_STRBUF;
         int nv_bin_tmp = nv_bin_ret ? ++g_tmp : 0;
         /* Evaluate JSON's options once, including max_nesting and dynamic
            symbolize_names. OpenStruct still needs its known class here. */
@@ -2416,7 +2407,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           buf_printf(b, ", %d); })", sp_streq(name, "pretty_generate"));
           return 1;
         }
-        if (nv_cstr_ret) buf_puts(b, "sp_str_dup_external(");
+        if (bytes) buf_puts(b, "sp_strbuf_read(");
+        if (nv_cstr_ret) buf_puts(b, "sp_String_from_cstr(");
         /* Sequence the call before the sp_ffi_bin_len read: C leaves argument
            evaluation order unspecified, so bind the result to a temp first. */
         if (nv_bin_ret) buf_printf(b, "({ const char *_t%d = ", nv_bin_tmp);
@@ -2440,8 +2432,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         buf_puts(b, ")");
         if (nv_cstr_ret) buf_puts(b, ")");
         if (nv_bin_ret)
-          buf_printf(b, "; sp_str_as_binary(sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len))); })",
-                     nv_bin_tmp);
+          buf_printf(b, "; sp_String_from_cbinstr(_t%d, sp_ffi_bin_len); })", nv_bin_tmp);
+        if (bytes) buf_puts(b, ")");
         return 1;
       }
     }
@@ -2773,19 +2765,17 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           /* wrap the foreign void* in a poly sp_RbVal that the GC won't trace */
           buf_printf(b, "sp_box_foreign_ptr((void *)(%s))", call_buf.p);
         }
-        else if (is_str_ret) {
-          buf_printf(b, "sp_str_dup_external(%s)", call_buf.p);
-        }
-        else if (is_binstr_ret) {
-          /* Binary-safe: build the String from the exact byte count the callee
-             published in sp_ffi_bin_len, not strlen (which truncates at an
-             embedded NUL). Sequence the call before reading the length -- C
-             leaves argument evaluation order unspecified -- via a temp. Tagged
-             BINARY for the reason the `cbinstr` arm above gives. */
-          int tp = ++g_tmp;
-          buf_printf(b, "({ const char *_t%d = %s; "
-                        "sp_str_as_binary(sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len))); })",
-                     tp, call_buf.p, tp);
+        else if (is_str_ret || is_binstr_ret) {
+          int bytes = repr_of(c, id).as_ty != TY_STRBUF;
+          if (bytes) buf_puts(b, "sp_strbuf_read(");
+          if (is_str_ret) buf_printf(b, "sp_String_from_cstr(%s)", call_buf.p);
+          else {
+            /* Sequence the foreign call before reading its byte count. */
+            int tp = ++g_tmp;
+            buf_printf(b, "({ const char *_t%d = %s; sp_String_from_cbinstr(_t%d, sp_ffi_bin_len); })",
+                       tp, call_buf.p, tp);
+          }
+          if (bytes) buf_puts(b, ")");
         }
         else {
           /* numeric / bool: cast to sp_int or sp_float */

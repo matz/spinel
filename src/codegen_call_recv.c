@@ -12824,24 +12824,16 @@ static int emit_native_pattern_poly(Compiler *c, const char *name, int nm,
    self_text when given (a `super` reaching a native class's binding from
    a subclass of it, #9269), with its arguments converted to their specs
    and its value to the call's. */
-static void emit_native_call_on(Compiler *c, const NativeMethod *m, int recv, const char *self_text,
+static void emit_native_call_on(Compiler *c, int id, const NativeMethod *m, int recv, const char *self_text,
                                 int argc, const int *argv, Buf *b) {
   int wrap = sp_streq(m->ret, "string?");
-  /* The two borrowed-buffer return modes, which the native_func arm
-     (codegen_call.c) has carried since they were introduced and this
-     one never did: a `cstring` is the callee's own storage, clobbered
-     by its next call, so it is duplicated onto the GC string heap
-     before it escapes into Ruby; a `cbinstr` is the same buffer
-     holding raw BYTES, so exactly the count the callee published in
-     sp_ffi_bin_len is copied -- strlen stops at the first NUL, and a
-     PNG came back as the 8 bytes of its signature (#4821). The result
-     is tagged binary for the reason the other arm states: declaring
-     this return mode is the callee saying its answer is bytes. */
   int cstr_ret = sp_streq(m->ret, "cstring");
   int bin_ret = sp_streq(m->ret, "cbinstr");
   int bin_tmp = bin_ret ? ++g_tmp : 0;
+  int bytes = (cstr_ret || bin_ret) && repr_of(c, id).as_ty != TY_STRBUF;
   if (wrap) buf_puts(b, "sp_box_nullable_str(");
-  if (cstr_ret) buf_puts(b, "sp_str_dup_external(");
+  if (bytes) buf_puts(b, "sp_strbuf_read(");
+  if (cstr_ret) buf_puts(b, "sp_String_from_cstr(");
   /* Sequence the call before the sp_ffi_bin_len read: C leaves
      argument evaluation order unspecified. */
   if (bin_ret) buf_printf(b, "({ const char *_t%d = ", bin_tmp);
@@ -12868,8 +12860,8 @@ static void emit_native_call_on(Compiler *c, const NativeMethod *m, int recv, co
   buf_puts(b, ")");
   if (cstr_ret) buf_puts(b, ")");
   if (bin_ret)
-    buf_printf(b, "; sp_str_as_binary(sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len))); })",
-               bin_tmp);
+    buf_printf(b, "; sp_String_from_cbinstr(_t%d, sp_ffi_bin_len); })", bin_tmp);
+  if (bytes) buf_puts(b, ")");
   if (wrap) buf_puts(b, ")");
 }
 /* The handle form of the binding a `super(v)` reaches that keeps the
@@ -12911,7 +12903,7 @@ void emit_native_super_call(Compiler *c, int id, int nm, int argc, const int *ar
   TyKind rt = comp_ntype(c, id);
   int back = sp_streq(m->ret, "self") && ty_is_object(rt) && ty_object_class(rt) != m->class_id;
   if (back) { buf_puts(b, "(("); emit_ctype(c, rt, b); buf_puts(b, ")"); }
-  emit_native_call_on(c, m, -1, st, argc, argv, b);
+  emit_native_call_on(c, id, m, -1, st, argc, argv, b);
   if (back) buf_puts(b, ")");
 }
 
@@ -13076,7 +13068,7 @@ static int emit_native_binding_call(Compiler *c, int id, int cid, const char *na
     NativeMethod *m = &c->native_methods[nm];
     native_arg_check(c, id, "native method", m, argc, argv);
     if (emit_native_share_keeps(c, id, recv, m, argc, argv, b)) return 1;
-    emit_native_call_on(c, m, recv, NULL, argc, argv, b);
+    emit_native_call_on(c, id, m, recv, NULL, argc, argv, b);
     return 1;
   }
   return 0;

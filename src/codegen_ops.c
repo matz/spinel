@@ -644,7 +644,11 @@ static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const ch
 int emit_builtin_handle_call(Compiler *c, int id, Buf *b) {
   if (sn_guard_pending(c, id)) return 0;
   const BuiltinOp *op = cplan_builtin_handle_row(c, id);
-  if (!op) return 0;
+  if (!op || op->emit == BOPE_NONE) return 0;
+  size_t at = b->len;
+  Buf *pre = g_pre;
+  size_t pre_at = pre ? pre->len : 0;
+  int mark = view_mark();
   int recv = nt_ref(c->nt, id, "receiver"), argc;
   call_args(c->nt, id, &argc);
   int explicit_kernel = op->recv == BOP_KERNEL && recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode;
@@ -654,7 +658,12 @@ int emit_builtin_handle_call(Compiler *c, int id, Buf *b) {
   if (box) buf_puts(b, "SP_STR_BOX(");
   TyKind rt = op->recv == BOP_BOXED_FALLBACK ? TY_POLY : op->recv;
   BopCtx x = { id, recv, argc, rt, op->name, op, NULL, 0 };
-  emit_selected_op(c, &x, g_arm.send_split != id, b);
+  if (!emit_selected_op(c, &x, g_arm.send_split != id, b)) {
+    buf_erase(b, at, b->len - at);
+    if (pre && pre != b) buf_erase(pre, pre_at, pre->len - pre_at);
+    view_unwind(mark);
+    return 0;
+  }
   if (box) buf_puts(b, ")");
   if (explicit_kernel) buf_puts(b, ")");
   return 1;

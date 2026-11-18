@@ -393,7 +393,7 @@ no_gsub_enum:
       return 1;
     }
     /* A nullable String receiver raises before the matcher. */
-    if (are >= 0 && sp_streq(name, "match?") && rt == TY_STRING && argc == 1) {
+    if (are >= 0 && is_match_p_name(name) && rt == TY_STRING && argc == 1) {
       int nullable = !recv_never_nil(c, recv);
       buf_printf(b, "sp_re_match_p(sp_re_pat_%d, %s", are, nullable ? "sp_nil_recv_named(" : "");
       emit_expr(c, recv, b);

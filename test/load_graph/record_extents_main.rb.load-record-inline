@@ -216,7 +216,7 @@ extent def once line 22: from=#23 sure=#23 count=once kept=no
 extent def loop_run line 23: from=#26 sure=#38 count=many kept=no
 extent def guarded line 24: from=#28 sure=#38 count=many kept=no
 extent block times line 28: from=#25 sure=#25 count=many kept=no
-extent block times line 34: from=#30 sure=never count=zero kept=no
+extent block times line 34: from=never sure=never count=zero kept=no
 extent block times line 35: from=#32 sure=#32 count=once kept=no
 extent block each line 36: from=#34 sure=#34 count=once kept=no
 extent lambda line 37: from=#36 sure=never count=many kept=yes
@@ -233,7 +233,7 @@ extent block sort_by! line 55: from=#55 sure=never count=once kept=no
 extent block slice_before line 56: from=#57 sure=never count=many kept=no
 extent block times line 57: from=#60 sure=never count=many kept=no
 extent block times line 58: from=#62 sure=#62 count=many kept=no
-extent block times line 59: from=#64 sure=never count=zero kept=no
+extent block times line 59: from=never sure=never count=zero kept=no
 extent block at_exit line 59: from=never sure=never count=zero kept=yes
 extent def a line 62: from=#79 sure=never count=many kept=no
 extent def b line 63: from=#83 sure=never count=many kept=no

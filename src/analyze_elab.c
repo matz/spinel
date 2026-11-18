@@ -103,7 +103,7 @@ enum { LR_B_DEF, LR_B_LAMBDA, LR_B_BLOCK, LR_B_END, LR_B_REGION };
 enum { LR_CNT_ZERO, LR_CNT_ONCE, LR_CNT_MANY };
 typedef struct LrExt {
   int node, from, sure, hist, bind;
-  unsigned char body, count, kept, cb, timed;
+  unsigned char body, count, kept, cb, timed, redo;
   signed char runs, inplace;
 } LrExt;
 
@@ -4149,7 +4149,7 @@ static LrExt *lr_ext_of(Compiler *c, const int *par, int n, int node) {
     e->cb = (unsigned char)cb;
     e->runs = (signed char)w;
     e->inplace = nm && (w == ELAB_BLK_NOW || (w == ELAB_BLK_ASSUMED && !is_lazy_chain_name(nm) && !elab_program_may_take(c, nm)));
-    e->kept = w == ELAB_BLK_LATER || w == ELAB_BLK_UNKNOWN;
+    e->kept = w == ELAB_BLK_LATER || w == ELAB_BLK_UNKNOWN || (w == ELAB_BLK_ASSUMED && !e->inplace);   /* (a call a method of the program's may take over, a lazy chain's: it may keep the block) */
   }
   return e;
 }
@@ -6590,7 +6590,7 @@ static void lr_rta_bind(LrRta *t, int id, const char *by, int rc) {
       !lr_rta_inplace(t, id) || lr_stmt_applied(dst, 0, d->may) != 1 || r->at[d->node] >= t->s)
     return;
   LrExt *e = lr_ext_make(t->c, d->node, LR_B_DEF);
-  if (e->sure == LR_NEVER && lr_stmt_applied(st, 0, st->may) == 1 && !st->partial && !st->kept && lr_runs_with_stmt(t->c, id)) e->sure = t->s;
+  if (e->sure == LR_NEVER && !st->may && !st->partial && !st->kept && lr_runs_with_stmt(t->c, id)) e->sure = t->s;
   if (e->bind < 0 && lr_rta_once(t, id) && !lr_stmt_repeats(r, t->c->nt, (LoadPoint){ 0, t->s, id })) e->bind = id, e->hist = hi;
 }
 
@@ -6983,12 +6983,12 @@ static TyKind lr_literal_row_kind(const NodeTable *nt, int rv, long long *n) {
   return k == NK_IntegerNode ? TY_INT : TY_UNKNOWN;
 }
 /* How often the in-place block of `call` runs, from its row (iter_row_runs) on
-   a literal receiver the record proves builtin (blk_now), or on any (tap, then):
-   LR_CNT_*, and *sure when it certainly runs at least once: a row that runs
-   its block once per element (IR_EACH) on a literal of some, a count by the
-   receiver's value of one or more, a row that runs it once. A row that may skip
-   its block (IR_ELEMS) counts the elements as its most. A class_eval's or a
-   class builder's block runs once. */
+   a literal receiver the record proves builtin (blk_now), or on any (tap, then),
+   or on none (Kernel's: catch): LR_CNT_*, and *sure when it certainly runs at
+   least once: a row that runs its block once per element (IR_EACH) on a literal
+   of some, a count by the receiver's value of one or more, a row that runs it
+   once. A row that may skip its block (IR_ELEMS) counts the elements as its
+   most. A class_eval's or a class builder's block runs once. */
 static int lr_block_count(Compiler *c, int call, int blk_now, int *sure) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, call, "name");
@@ -6997,8 +6997,7 @@ static int lr_block_count(Compiler *c, int call, int blk_now, int *sure) {
   if (an >= 0) nt_arr(nt, an, "arguments", &ac);
   *sure = 0;
   if (elab_opens_frame(nt, call)) return *sure = 1, LR_CNT_ONCE;
-  TyKind rt = blk_now ? lr_literal_row_kind(nt, rv, &n) : TY_UNKNOWN;
-  if (rt == TY_UNKNOWN && blk_now) return LR_CNT_MANY;
+  TyKind rt = rv < 0 ? BOP_KERNEL : blk_now ? lr_literal_row_kind(nt, rv, &n) : TY_UNKNOWN;
   IterRuns ir = iter_row_runs(rt, nm, ac);
   if (ir == IR_ONCE) return *sure = 1, LR_CNT_ONCE;
   if (ir == IR_COUNT_RECV) n = nt_int(nt, rv, "value", 0);
@@ -7029,15 +7028,16 @@ static void lr_ext_time(Compiler *c, const int *par, int n, int i) {
   if (body == LR_B_DEF) return;
   e->from = ocount == LR_CNT_ZERO ? LR_NEVER : stmt > ofrom ? stmt : ofrom;   /* (a body in one that runs no time never runs) */
   e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_MANY;
-  int end = body == LR_B_END || (body == LR_B_BLOCK && e->cb && nt_kind(nt, call) == NK_CallNode && is_at_exit_name(nt_str(nt, call, "name")));
+  int end = body == LR_B_END || (body == LR_B_BLOCK && e->cb && nt_kind(nt, call) == NK_CallNode && is_at_exit_name(nt_str(nt, call, "name")) && !lr_defines(r, "at_exit"));   /* (a method of the program's of the name may run the block at once) */
   if (end) {   /* registered where it stands, run when the program exits */
     e->from = e->from == LR_NEVER ? LR_NEVER : LR_POST;
     e->count = e->from == LR_NEVER ? LR_CNT_ZERO : body == LR_B_END || (!again && ocount == LR_CNT_ONCE && st) ? LR_CNT_ONCE : LR_CNT_MANY;
   }
   else if (body == LR_B_BLOCK && e->inplace && e->from != LR_NEVER) {
     int sure, cnt = lr_block_count(c, call, e->runs == ELAB_BLK_NOW, &sure);
-    e->count = cnt == LR_CNT_ZERO || ocount == LR_CNT_ZERO ? LR_CNT_ZERO : cnt == LR_CNT_ONCE && ocount == LR_CNT_ONCE && !again ? LR_CNT_ONCE : LR_CNT_MANY;
-    if (sure && o < 0 && st && st->region == 0 && lr_stmt_applied(st, 0, st->may) == 1 && !st->partial && !st->kept && !nt_safe_nav(nt, call) && lr_runs_with_stmt(c, call)) e->sure = stmt;
+    e->count = cnt == LR_CNT_ZERO || ocount == LR_CNT_ZERO ? LR_CNT_ZERO : cnt == LR_CNT_ONCE && ocount == LR_CNT_ONCE && !again && !e->redo ? LR_CNT_ONCE : LR_CNT_MANY;   /* (a redo runs the body again at the same step) */
+    if (e->count == LR_CNT_ZERO) e->from = LR_NEVER;
+    if (sure && o < 0 && st && st->region == 0 && !st->may && !st->partial && !st->kept && !nt_safe_nav(nt, call) && lr_runs_with_stmt(c, call)) e->sure = stmt;
   }
   else if (body == LR_B_REGION) {   /* a load at no point: its require, where one names it alone and is sure */
     e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_ONCE;
@@ -7055,6 +7055,13 @@ static void lr_extents(Compiler *c) {
   int n;
   const int *par = elab_node_parents(c, &n);
   for (int id = 0; id < n; id++) lr_ext_of(c, par, n, id);
+  NT_FOREACH_KIND(c->nt, NK_RedoNode, id) {   /* a redo restarts the block (or loop) it stands in */
+    for (int p = id < n ? par[id] : -1; p >= 0 && p < n; p = par[p]) {
+      NodeKind k = nt_kind(c->nt, p);
+      if (k == NK_BlockNode) { if (p < r->cextix && r->extix[p]) r->ext[r->extix[p] - 1].redo = 1; break; }
+      if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_DefNode || k == NK_LambdaNode) break;
+    }
+  }
   for (int f = 1; f < nt_nroots(c->nt); f++) {
     int root = nt_root(c->nt, f);
     if (root >= 0 && root < n && r->at[root] >= 0 && r->st[r->at[root]].region > 0 && !(root < r->cextix && r->extix[root])) lr_ext_make(c, root, LR_B_REGION);

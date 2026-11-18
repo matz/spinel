@@ -113,9 +113,12 @@ is every `||=`.
 
 The histories hold what the load phase runs. A definition or write in a
 method body, a lambda or a block kept to run later has no point, so no
-query at a point sees it; it is in no history, except `def K.m` on a
-constant the record resolves in a method body, which is a version with the
-body's extent (`LrDef.body`, `lr_version_order`). A class body that is no statement of the load phase (in a
+query at a point sees it. Most are in no history; three kinds of entry are:
+`def K.m` on a constant the record resolves in a method body, a version
+with the body's extent (`LrDef.body`, `lr_version_order`); a constant
+write marked `LR_LATE`, held as a possible write (`lr_record_unplaced`);
+and a visibility word that runs later or is sent, held on the table it
+names (`lr_unplaced_words`). A class body that is no statement of the load phase (in a
 lambda, in a block kept to run later, a class builder's block in an
 expression) is its class's body all the same: its definitions are
 recorded after the placed bodies, `unplaced`, so the registrations apply
@@ -140,7 +143,8 @@ an `END` or `at_exit` body, or the file root of a region no load places.
 The record holds, for each:
 
 - `from`: the first statement of region 0 it may start on (`any` when the
-  record has no fact, `never` when no run reaches it). `LR_POST` (`post`)
+  record has no fact, `never` when no run reaches it, or its count is
+  `zero`). `LR_POST` (`post`)
   is the phase after the load: it comes after every statement of region 0,
   and is where exit handlers start and where `lr_rta` seeds the
   `--ext-entry` methods. A region's `from` is the statement its load may
@@ -150,10 +154,13 @@ The record holds, for each:
   once, or `never`. A method body is sure at a call that binds it alone
   (a constant receiver the record resolves, one public def of the name on
   the chain, made before the call) when the call runs whenever its
-  statement does (no `&&`, ternary, modifier `if` or `case` arm around it
-  inside the statement: the spine test `elab_child` makes, as
-  `lr_run_order` reads it) and that statement is not conditional, in a
-  block that may not run or under a rescue. An in-place block on a literal
+  statement does (`lr_runs_with_stmt`: every edge up to the statement is an
+  assignment's value, a call's argument or receiver, parentheses or a
+  statement list's member, none a block's or a `&.` call's argument, so no
+  `&&`, ternary, modifier `if`, `case` arm, `defined?`, op-write or `begin`
+  around it inside the statement) and that statement is not conditional
+  (`may`: also a class body under a condition), in a block that may not run
+  or under a rescue. An in-place block on a literal
   is sure at its call under the same tests, when its row runs it for
   certain (`IR_EACH` on a literal of some elements, `times` of one or
   more, `tap`); `0.times` and an iterator that may skip its block, such as
@@ -161,7 +168,9 @@ The record holds, for each:
 - `count`: the most runs after `from`, `zero`, `once` or `many`. A method
   called by one call that runs once, which nothing else of the program can
   reach, is `once`; a block of a literal receiver counts by its iterator
-  row (`IterRow.runs`: once, by the receiver's value, a step per element).
+  row (`IterRow.runs`: once, by the receiver's value, a step per element;
+  a call with no receiver reads Kernel's, `catch`), and a block with a
+  `redo` in it is `many`.
 - `kept`: it runs at a time the syntax does not tell (a block whose call
   keeps it or the record does not know, a lambda, a handler).
 

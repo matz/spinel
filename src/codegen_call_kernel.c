@@ -978,8 +978,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
   if (recv < 0 && (sp_streq(name, "exit") || sp_streq(name, "exit!")) && !bare_call_class_owned(c, id)) {
     Scope *xsc = comp_scope_of(c, id);
     int xcls = xsc ? xsc->class_id : -1;
-    if (xcls >= 0 && (comp_reader_in_chain(c, xcls, name, NULL) ||
-                      call_target(c, id, xcls, name, 0, NULL) >= 0)) {
+    if (xcls >= 0 && call_answers(c, id, xcls, name, 0, NULL)) {
       /* not Kernel#exit: leave it to the reader/method dispatch below */
     }
     else {

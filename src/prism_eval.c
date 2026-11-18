@@ -66,13 +66,31 @@ static int pev_path_call(PevCtx *c, pm_call_node_t *n, const char *name, Mv *out
   if (!file || !argc || argc > 16) return -1;
   Mv v[16];
   int expand = strcmp(name, "expand_path") == 0;
+  /* `File.expand_path("../x", __FILE__)`: __FILE__ is read as a directory,
+     so its first `..` is the file's own directory and x is beside it */
+  if (file && expand && argc == 2 && PM_NODE_TYPE(args->nodes[1]) == PM_SOURCE_FILE_NODE) {
+    Mv lit;
+    if (!pev_eval(c, args->nodes[0], &lit) || lit.k != MV_STR) return 0;
+    if (lit.s[0] == '/') { *out = lit; return 1; }
+    if (strncmp(lit.s, "../", 3) != 0) return 0;
+    Mv pair[2] = { mv_str(c->dir, strlen(c->dir), MV_STR), mv_str(lit.s + 3, strlen(lit.s + 3), MV_STR) };
+    return pev_file_join(pair, 2, out);
+  }
   if (!expand && strcmp(name, "join") != 0) return -1;
-  if (expand && argc != 2) return -1;
+  if (expand && argc > 2) return -1;
   for (size_t i = 0; i < argc; i++) {
     if (PM_NODE_TYPE(args->nodes[i]) == PM_SPLAT_NODE || !pev_eval(c, args->nodes[i], &v[i])) return 0;
     if (v[i].k != MV_STR) return 0;
   }
   if (!expand) return pev_file_join(v, (int)argc, out);
+  /* `File.expand_path(path)` of an absolute path (`File.dirname(__FILE__)`):
+     the path; a relative one is read against the current directory, which
+     only the run time knows */
+  if (argc == 1) {
+    if (v[0].s[0] != '/') return 0;
+    *out = v[0];
+    return 1;
+  }
   /* `File.expand_path(path, dir)` of a path under the directory it is given */
   if (v[0].s[0] == '/') { *out = v[0]; return 1; }
   Mv pair[2] = { v[1], v[0] };

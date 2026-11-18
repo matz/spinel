@@ -35,3 +35,11 @@ Lone#ring: def#10 runs=#13 def#17 runs=#13 end=yes
 const Lone::ORIGIN: write#11
 versions Point#ring: def#6..#15 seen=def#6, def#15..end seen=def#15; 5 of the name
 versions Lone#ring: def#10..#17 seen=def#10, def#17..end seen=def#17; 5 of the name
+post: after #18
+extent block new line 6: from=#1 sure=#1 count=once kept=no
+extent def twice line 7: from=#18 sure=never count=many kept=no
+extent def ring line 11: from=#7 sure=never count=many kept=no
+extent def ring line 15: from=#7 sure=never count=many kept=no
+extent def ring line 21: from=#13 sure=never count=many kept=no
+extent def ring line 29: from=#7 sure=never count=many kept=no
+extent def ring line 33: from=#13 sure=never count=many kept=no

@@ -22,3 +22,9 @@ const Q: write#1
 Q#map: def#2 end=yes
 const S: write#3
 S.z: def#10 end=yes
+post: after #11
+extent def map line 7: from=#11 sure=never count=many kept=no
+extent block map line 10: from=#4 sure=never count=many kept=no
+extent block select line 11: from=#6 sure=never count=many kept=yes
+extent def z line 14: from=#5 sure=never count=many kept=no
+extent block map line 15: from=#11 sure=never count=many kept=no

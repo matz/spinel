@@ -59,3 +59,10 @@ Own.attr_writer: def#20 end=yes
 form #21 runs code
 Own#w=: writer#21 end=yes
 Own#v: reader#22 end=yes
+post: after #25
+extent def included line 8: from=#13 sure=never count=many kept=no
+extent def hi line 9: from=#25 sure=never count=many kept=no
+extent def ho line 12: from=#25 sure=never count=many kept=no
+extent def method_added line 15: from=#2 sure=#10 count=many kept=no
+extent block define_method line 18: from=#9 sure=never count=many kept=yes
+extent def attr_writer line 29: from=#21 sure=#21 count=once kept=no

@@ -24,3 +24,4 @@ const #<Class:ChildOwner>::B: write#6
 const #<Class:ChildOwner>::C: write#6
 const #<Class:ChildOwner>::D: write#9
 const #<Class:main>::E: write#12
+post: after #13

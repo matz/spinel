@@ -62,3 +62,27 @@ opaque S: opaque#18 opaque#21
 main#build: def#22 private end=yes
 const B: write#23
 opaque K: opaque#27
+post: after #31
+extent block class_eval line 11: from=#3 sure=never count=many kept=no
+extent def made line 12: from=#18 sure=#24 count=many kept=no
+extent block each line 17: from=#6 sure=#6 count=once kept=no
+extent def from_iter line 17: from=#18 sure=never count=many kept=no
+extent def cond_m#__cond1 line 18: from=#18 sure=never count=many kept=no
+extent def cond_m#__cond2 line 18: from=#18 sure=never count=many kept=no
+extent def mk line 19: from=#18 sure=#27 count=many kept=no
+extent def inner_m line 20: from=any sure=never count=many kept=no
+extent block new line 24: from=#15 sure=never count=many kept=no
+extent block each line 26: from=#17 sure=never count=many kept=no
+extent block define_method line 26: from=#18 sure=never count=many kept=yes
+extent block each line 29: from=#20 sure=never count=many kept=no
+extent block define_method line 29: from=#21 sure=never count=many kept=yes
+extent def build line 33: from=#18 sure=never count=many kept=no
+extent block line 34: from=any sure=never count=many kept=yes
+extent block each line 35: from=any sure=never count=many kept=no
+extent block define_method line 35: from=any sure=never count=many kept=yes
+extent def cond_m line 18: from=#18 sure=never count=many kept=no
+extent block new line 34: from=#22 sure=never count=many kept=no
+extent block each line 35: from=#22 sure=never count=many kept=no
+extent block define_method line 35: from=#22 sure=never count=many kept=yes
+extent block line 26: from=any sure=never count=many kept=yes
+extent block line 35: from=any sure=never count=many kept=yes

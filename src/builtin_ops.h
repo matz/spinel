@@ -767,6 +767,18 @@ typedef enum {
 #define IRF_SHAPE_BOXED  16   /* the block-shape desugar reads the row on a
                                  boxed receiver too (of the Array and Hash
                                  rows, only these) */
+/* How often an iterator runs its block (IterRow.runs): IR_ELEMS, the
+   default, is read off the values a step yields (iter_row_runs): at most once
+   per element, and not at all for some (uniq and sort_by! skip it for a short
+   receiver, slice_before and slice_after return an enumerator that runs it
+   when forced); the others are stated by their row. */
+typedef enum {
+  IR_ELEMS,      /* at most once per element of the receiver, when each value a step yields is one element's */
+  IR_EACH,       /* exactly once per element of the receiver (each, map, each_with_index): a non-empty receiver runs it */
+  IR_ONCE,       /* once, whatever the receiver is (tap, then, catch) */
+  IR_COUNT_RECV, /* as many times as the receiver's value (Integer#times) */
+  IR_MANY        /* a number of times the receiver's size does not tell (cycle, loop) */
+} IterRuns;
 typedef struct IterRow {
   TyKind fam;
   const char *name;
@@ -775,6 +787,7 @@ typedef struct IterRow {
   unsigned char yield[3];   /* IterYield per position */
   unsigned char answer;     /* IterAnswer */
   unsigned char flags;      /* IRF_* */
+  unsigned char runs;       /* IterRuns */
 } IterRow;
 
 /* The first row of family fam for `name` that takes argc arguments (any
@@ -792,6 +805,11 @@ int object_iter_runs_now(const char *name);
    any receiver's (tap, then, each_with_object), else its family's (an
    Array's, a Hash's, a Range's, ...), or NULL. */
 const IterRow *iter_row_of(TyKind rt, const char *name, int argc);
+/* What the row of `name` on a receiver of kind rt says of how often it runs
+   its block: IR_EACH, IR_ONCE, IR_COUNT_RECV, IR_ELEMS for a row that steps
+   at most once per element of its receiver (the record counts a literal's
+   elements), else IR_MANY (also for a name with no row). */
+IterRuns iter_row_runs(TyKind rt, const char *name, int argc);
 /* The kind the value at position k of a step has, on a receiver of kind rt
    (TY_POLY: a boxed receiver, whose elements are boxed). */
 TyKind iter_yield_kind(const IterRow *r, int k, TyKind rt);

@@ -27,3 +27,8 @@ const SEED: write#5
 const Drum: write#6
 Drum#ring: def#7 runs=#10 def#12 runs=#10 end=yes
 versions Drum#ring: def#7..#12 seen=unknown, def#12..end seen=def#12; 3 of the name
+post: after #13
+extent def ring line 6: from=#10 sure=never count=many kept=no
+extent def inspect line 10: from=#5 sure=never count=many kept=no
+extent def ring line 19: from=#10 sure=never count=many kept=no
+extent def ring line 27: from=#10 sure=never count=many kept=no

@@ -48,3 +48,10 @@ visibility in #12: vis#13 private vis#15 public
 Pt#secret: def#14 private end=yes
 Pt#shown: def#16 end=yes
 const Q: write#17
+post: after #22
+extent def help line 8: from=#19 sure=never count=many kept=no
+extent def f line 14: from=#20 sure=never count=many kept=no
+extent def call_g line 20: from=#20 sure=never count=many kept=no
+extent block new line 22: from=#12 sure=#12 count=once kept=no
+extent def secret line 24: from=#22 sure=never count=many kept=no
+extent def shown line 26: from=#22 sure=never count=many kept=no

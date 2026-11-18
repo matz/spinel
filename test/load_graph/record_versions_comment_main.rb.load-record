@@ -16,3 +16,7 @@ const Gauge: write#3
 Gauge.unit: def#4 end=yes
 Gauge.level: def#6 runs=#9 def#8 runs=#9 end=yes
 versions Gauge.level: def#6..#8 seen=def#6 idle, def#8..end seen=def#8; 2 of the name
+post: after #10
+extent def level line 7: from=#9 sure=never count=many kept=no
+extent def level line 10: from=#9 sure=never count=many kept=no
+extent def unit line 3: from=#10 sure=#10 count=once kept=no

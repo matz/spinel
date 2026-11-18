@@ -47,3 +47,14 @@ const Own::Thread: write#21
 Own__Thread#hi: def#22 end=yes
 Thread#ie: def#26 end=yes
 versions Thread#x: def#3..#5 seen=def#3 idle, def#5..end seen=def#5; 2 of the name
+post: after #26
+extent def x line 12: from=#8 sure=never count=many kept=no
+extent block new line 18: from=#9 sure=never count=many kept=yes
+extent block instance_eval line 23: from=#14 sure=#14 count=once kept=no
+extent def hi line 28: from=#24 sure=never count=many kept=no
+extent def x line 14: from=#8 sure=never count=many kept=no
+extent def x= line 14: from=#7 sure=never count=many kept=no
+extent def tag line 20: from=#13 sure=never count=many kept=no
+extent def ie line 23: from=#16 sure=never count=many kept=no
+extent def own_x line 26: from=#24 sure=never count=many kept=no
+extent def own_x= line 26: from=#23 sure=never count=many kept=no

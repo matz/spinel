@@ -124,3 +124,20 @@ const O21: write#57
 const SpinelAnonClass2: write#58
 SpinelAnonClass2#hi: def#59 runs=#52 end=yes
 const Y21: write#60
+post: after #63
+extent block each line 27: from=#19 sure=#19 count=once kept=no
+extent def run line 31: from=#23 sure=never count=many kept=no
+extent block run line 32: from=#23 sure=never count=many kept=yes
+extent block run line 33: from=#25 sure=never count=many kept=yes
+extent block run line 34: from=#27 sure=never count=many kept=yes
+extent block map line 42: from=#34 sure=never count=many kept=no
+extent block map line 43: from=#36 sure=never count=once kept=no
+extent block map line 44: from=#38 sure=never count=once kept=no
+extent block line 57: from=any sure=never count=many kept=yes
+extent def hi line 57: from=#52 sure=never count=many kept=no
+extent block new line 58: from=#50 sure=#50 count=once kept=no
+extent def b line 59: from=#52 sure=never count=many kept=no
+extent def zz line 63: from=#55 sure=never count=many kept=no
+extent block line 69: from=any sure=never count=many kept=yes
+extent def hi line 69: from=#52 sure=never count=many kept=no
+extent block new line 48: from=#42 sure=#42 count=once kept=no

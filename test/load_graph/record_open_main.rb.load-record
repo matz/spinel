@@ -79,3 +79,21 @@ Branch#hey: alias#35 may (hi: define_method#32) end=unknown open
 Branch#other: alias#36 may (hi: unknown) end=unknown open
 Branch.tag: def#37 end=yes
 Branch#late: alias#38 (hi: unknown) end=yes
+post: after #44
+extent def run_time#__cond1 line 17: from=#40 sure=never count=many kept=no
+extent block each line 19: from=#6 sure=#6 count=once kept=no
+extent def from_block line 19: from=#40 sure=never count=many kept=no
+extent def first_in_begin line 21: from=#40 sure=never count=many kept=no
+extent def from_begin line 23: from=#40 sure=never count=many kept=no
+extent def folded line 27: from=#40 sure=never count=many kept=no
+extent def twice#__cond2 line 28: from=#40 sure=never count=many kept=no
+extent def twice#__cond3 line 29: from=#40 sure=never count=many kept=no
+extent def framed line 36: from=#42 sure=never count=many kept=no
+extent def inner#__cond4 line 38: from=#42 sure=never count=many kept=no
+extent def tag#__cond5 line 48: from=#31 sure=never count=many kept=no
+extent block define_method line 50: from=#32 sure=never count=many kept=yes
+extent block each line 52: from=#34 sure=never count=once kept=no
+extent def run_time line 17: from=#40 sure=never count=many kept=no
+extent def twice line 29: from=#40 sure=never count=many kept=no
+extent def inner line 38: from=#42 sure=never count=many kept=no
+extent def tag line 48: from=#31 sure=never count=many kept=no

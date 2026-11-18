@@ -111,3 +111,27 @@ versions Num#to_f: def#14..#46 seen=def#14, def#46..end seen=def#46; 2 of the na
 versions Money#+: def#18..#48 seen=def#18, def#48..end seen=def#48; 2 of the name
 versions Err#exception: def#20..#50 seen=def#20, def#50..end seen=def#50; 2 of the name
 versions Bell#ring: def#22..#52 seen=def#22, def#52..end seen=def#52; 2 of the name
+post: after #58
+extent def append_features line 12: from=#37 sure=never count=many kept=no
+extent block refine line 19: from=#4 sure=never count=many kept=yes
+extent def shout line 20: from=#38 sure=never count=many kept=no
+extent def === line 26: from=#24 sure=never count=many kept=no
+extent def deconstruct line 30: from=#26 sure=never count=many kept=no
+extent def respond_to_missing? line 34: from=#28 sure=never count=many kept=no
+extent def to_f line 38: from=#29 sure=never count=many kept=no
+extent def initialize line 43: from=#30 sure=never count=many kept=no
+extent def + line 44: from=#30 sure=never count=many kept=no
+extent def exception line 48: from=#32 sure=never count=many kept=no
+extent def ring line 52: from=#34 sure=never count=many kept=no
+extent block map line 70: from=#34 sure=#34 count=once kept=no
+extent def === line 77: from=#24 sure=never count=many kept=no
+extent def deconstruct line 81: from=#26 sure=never count=many kept=no
+extent def respond_to_missing? line 85: from=#28 sure=never count=many kept=no
+extent def to_f line 89: from=#29 sure=never count=many kept=no
+extent def + line 93: from=#30 sure=never count=many kept=no
+extent def exception line 97: from=#32 sure=never count=many kept=no
+extent def ring line 101: from=#34 sure=never count=many kept=no
+extent def append_features line 105: from=#37 sure=never count=many kept=no
+extent block refine line 111: from=#56 sure=never count=many kept=yes
+extent def shout line 112: from=#38 sure=never count=many kept=no
+extent def __spinel_civget_mixed line 71: from=#58 sure=#58 count=once kept=no

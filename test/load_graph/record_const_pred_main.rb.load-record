@@ -35,3 +35,5 @@ A#j: reader#14 may end=unknown open
 A#h: def#15 end=yes
 A#g: alias#17 (h: def#15) end=yes
 $w: write#19
+post: after #20
+extent def h line 14: from=#20 sure=never count=many kept=no

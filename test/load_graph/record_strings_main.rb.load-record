@@ -15,3 +15,8 @@ Box#get: def#2 runs=#7 def#3 runs=#7 end=yes
 Box#put: def#4 runs=#7 def#5 runs=#7 end=yes
 versions Box#get: def#2..#3 seen=def#2 idle, def#3..end seen=def#3; 2 of the name, named
 versions Box#put: def#4..#5 seen=def#4 idle, def#5..end seen=def#5; 2 of the name
+post: after #8
+extent def get line 8: from=#7 sure=never count=many kept=no
+extent def get line 9: from=#7 sure=never count=many kept=no
+extent def put line 10: from=#7 sure=never count=many kept=no
+extent def put line 11: from=#7 sure=never count=many kept=no

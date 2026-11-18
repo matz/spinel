@@ -78,3 +78,15 @@ Watch#tick: def#22 end=yes
 versions Bell#ring: def#5..#31 seen=unknown, def#31..end seen=def#31; 7 of the name
 versions Drum#ring: def#7..#33 seen=def#7, def#33..end seen=def#33; 7 of the name
 versions Gong#ring: def#9..#35 seen=unknown, def#35..end seen=def#35; 7 of the name
+post: after #37
+extent def ring line 9: from=#37 sure=never count=many kept=no
+extent def ring line 15: from=#37 sure=never count=many kept=no
+extent def ring line 19: from=#37 sure=never count=many kept=no
+extent def ring line 23: from=#37 sure=never count=many kept=no
+extent def inherited line 27: from=#2 sure=never count=many kept=no
+extent def included line 34: from=#19 sure=never count=many kept=no
+extent def method_added line 40: from=#2 sure=#23 count=many kept=no
+extent def tick line 53: from=#37 sure=never count=many kept=no
+extent def ring line 69: from=#37 sure=never count=many kept=no
+extent def ring line 73: from=#37 sure=never count=many kept=no
+extent def ring line 77: from=#37 sure=never count=many kept=no

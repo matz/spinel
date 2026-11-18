@@ -41,3 +41,9 @@ const Cat: write#7
 Cat.speak: def#8 runs=#13 end=yes
 const Bird: write#11
 Bird.speak: def#12 runs=#13 end=yes
+post: after #21
+extent def speak line 9: from=#13 sure=never count=many kept=no
+extent def speak line 13: from=#13 sure=never count=many kept=no
+extent def speak line 17: from=#13 sure=never count=many kept=no
+extent def speak line 21: from=#13 sure=never count=many kept=no
+extent def speak line 28: from=#13 sure=never count=many kept=no

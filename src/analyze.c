@@ -1363,6 +1363,39 @@ static int new_call_passes_capacity(const NodeTable *nt, int id) {
   }
   return 0;
 }
+/* Each --ext-entry designation, Module.method, in the order given: f(Module,
+   method, ud). A designation with no dot is refused, as the host calls only a
+   module's singleton methods (v1). */
+void ext_entries_each(void (*f)(const char *cls, const char *meth, void *ud), void *ud) {
+  if (!g_ext_entries || !*g_ext_entries) return;
+  /* a copy as long as the list: a fixed buffer cut a long one short, and
+     the cut piece read as a method name (or the entries after it were
+     dropped without a word) */
+  char *list = strdup(g_ext_entries);
+  for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
+    char *dot = strrchr(tok, '.');
+    if (!dot) {
+      fprintf(stderr, "spinel: --ext-entry `%s`: spell it Module.method "
+                      "(module singleton methods export in v1)\n", tok);
+      exit(1);
+    }
+    *dot = '\0';
+    f(tok, dot + 1, ud);
+  }
+  free(list);
+}
+static void mark_ext_entry(const char *cls, const char *meth, void *ud) {
+  Compiler *c = ud;
+  int ci2 = comp_class_index(c, cls);
+  int mi2 = ci2 >= 0 ? comp_cmethod_in_chain(c, ci2, meth, NULL) : -1;
+  if (mi2 < 0) {
+    fprintf(stderr, "spinel: --ext-entry `%s.%s` does not name a "
+                    "`def self.%s` in module %s\n",
+            cls, meth, meth, cls);
+    exit(1);
+  }
+  c->scopes[mi2].is_ext_entry = 1;
+}
 void compute_reachable(Compiler *c, int typed) {
   mtab_enter(c);   /* (a scan of every call's name) */
   /* Build per-scope call sets (CallNode names, not entering nested DefNodes). */
@@ -1377,31 +1410,7 @@ void compute_reachable(Compiler *c, int typed) {
      out of the very library it is the point of (ext-design.md, Layer 1).
      They are marked before the census below (cr_live_collect), which
      opens the class of an exported method from the start. */
-  if (g_ext_entries && *g_ext_entries) {
-    /* a copy as long as the list: a fixed buffer cut a long one short, and
-       the cut piece read as a method name (or the entries after it were
-       dropped without a word) */
-    char *list = strdup(g_ext_entries);
-    for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
-      char *dot = strrchr(tok, '.');
-      if (!dot) {
-        fprintf(stderr, "spinel: --ext-entry `%s`: spell it Module.method "
-                        "(module singleton methods export in v1)\n", tok);
-        exit(1);
-      }
-      *dot = '\0';
-      int ci2 = comp_class_index(c, tok);
-      int mi2 = ci2 >= 0 ? comp_cmethod_in_chain(c, ci2, dot + 1, NULL) : -1;
-      if (mi2 < 0) {
-        fprintf(stderr, "spinel: --ext-entry `%s.%s` does not name a "
-                        "`def self.%s` in module %s\n",
-                tok, dot + 1, dot + 1, tok);
-        exit(1);
-      }
-      c->scopes[mi2].is_ext_entry = 1;
-    }
-    free(list);
-  }
+  ext_entries_each(mark_ext_entry, c);
   /* --ext-class: the public instance methods of the named classes join the
      graph as roots too, for the method table the library exports */
   if (g_ext_classes && *g_ext_classes) {

@@ -5021,6 +5021,55 @@ static int fi_body_unforceable(Compiler *c, int id, int depth) {
   return 0;
 }
 
+static int g_fi_trunc;
+static void fi_collect_calls(Compiler *c, int body, int *out, int *n, int max, int depth);
+/* Anything in this subtree the emitter lowers through setjmp: a begin with
+   a rescue or an ensure (a def's own rescue is one), a rescue modifier,
+   retry. */
+static int fi_body_setjmp(Compiler *c, int id, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;
+  if (depth > 64) return 1;
+  switch (nt_kind(nt, id)) {
+    case NK_BeginNode:
+      if (nt_ref(nt, id, "rescue_clause") >= 0 || nt_ref(nt, id, "ensure_clause") >= 0) return 1;
+      break;
+    case NK_RescueNode: case NK_RescueModifierNode: case NK_RetryNode: case NK_EnsureNode:
+      return 1;
+    default: break;
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (fi_body_setjmp(c, nt_ref_at(nt, id, i), depth + 1)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++)
+      if (fi_body_setjmp(c, ids[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+static void fi_callees(Compiler *c, int callnode, int *out, int *n, int max);
+/* A call to a yielding method is spliced where it stands (emit_inline_call_x),
+   with or without a block: the callee's body becomes the caller's, so a
+   rescue or an ensure there lowers through setjmp in the caller, and gcc
+   refuses always_inline on it (Net::HTTP#get, whose request has both). A
+   call whose callees cannot all be listed is taken as one. */
+static int fi_spliced_unforceable(Compiler *c, int body) {
+  enum { FI_SPL_CALLS = 256, FI_SPL_CALLEES = 32 };
+  int calls[FI_SPL_CALLS], cal[FI_SPL_CALLEES], nc = 0;
+  g_fi_trunc = 0;
+  fi_collect_calls(c, body, calls, &nc, FI_SPL_CALLS, 0);
+  if (g_fi_trunc) return 1;
+  for (int i = 0; i < nc; i++) {
+    int n2 = 0;
+    fi_callees(c, calls[i], cal, &n2, FI_SPL_CALLEES);
+    for (int j = 0; j < n2; j++)
+      if (c->scopes[cal[j]].yields && fi_body_setjmp(c, c->scopes[cal[j]].body, 0)) return 1;
+  }
+  return 0;
+}
+
 /* Set when the walk below stopped early. A truncated call list under-counts,
    and every user of it is deciding whether something FITS, so the callers
    treat a truncated answer as "does not fit" rather than trusting the short
@@ -5371,6 +5420,7 @@ static void fi_build(Compiler *c) {
     if (!ok) continue;
     if (fi_body_unforceable(c, m->body, 0)) continue;
     if (fi_callee_defaults_unforceable(c, m->body)) continue;
+    if (fi_spliced_unforceable(c, m->body)) continue;
     if (fi_body_has_loop(c, m->body, 0)) continue;
     /* A default moved into a method of its own (#4900) calls back into the
        method whose default it is, and that call emits the default -- a call
@@ -17289,6 +17339,10 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
          runs, and reaches the builtin's through its own super */
       int upi = exc_super_reopen_initialize(c, sci);
       if (upi >= 0) {
+        /* a yielding initialize above has no function of its own: its proc-form
+           clone runs it, on the block this super hands on */
+        int upf = c->scopes[upi].yields ? scope_proc_form_of(c, upi) : -1;
+        if (upf >= 0) upi = upf;
         buf_printf(b, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[upi]), g_self);
         if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[upi], ", ", b);
         else emit_args_filled(c, upi, args_id, ", ", b);
@@ -18877,6 +18931,9 @@ static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "    default: break;\n  }\n  return FALSE;\n}\n");
 }
 
+static int exc_has_reopen_initialize(Compiler *c);
+int g_exc_reinit_hook = 0;
+
 /* Emit the static regex-literal globals and, when g_re_init_needed, the
    sp_tu_init() that installs the symbol/regex/class/global-mark hooks and
    compiles the literals at startup. */
@@ -19052,6 +19109,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_cmeth_eqq_hook = sp_cmeth_eqq_dispatch;\n");
   if (exc_has_user_msg_override(c))
     buf_puts(b, "  sp_user_exc_to_s_fn = sp_user_exc_to_s;\n  sp_user_exc_message_fn = sp_user_exc_message;\n");
+  if (exc_has_reopen_initialize(c))
+    buf_puts(b, "  sp_user_exc_reinit_fn = sp_user_exc_reinit;\n");
   if (c->bivar_table)
     buf_puts(b, "  sp_exc_bivar_copy_fn = sp_exc_bivar_copy;\n");
   if (exc_ivar_classes(c))
@@ -23759,6 +23818,68 @@ void emit_zero_arg_boxed_call(Compiler *c, int mi, const char *self, Buf *b) {
   free(call.p); free(pre.p); free(args.p);
 }
 
+/* Whether a program reopening of a builtin exception defines initialize: the
+   errors the runtime raises itself are then built through it
+   (emit_exc_reinit_dispatch). */
+static int exc_has_reopen_initialize(Compiler *c) {
+  int xr[8];
+  return any_exc_reopen(c) && exc_reopen_definers(c, "initialize", xr, 8) > 0;
+}
+
+/* sp_user_exc_reinit, the hook sp_raise_cls asks for an error the runtime
+   raises itself: CRuby builds it through the class's #initialize, so the
+   nearest reopening up the class's ancestry that defines one runs on the
+   exception with the runtime's message as its one argument, as `raise Cls, msg`
+   does (emit_exc_reopen_construct_as). Answers the exception, or NULL for a
+   class no reopening reaches. A reopening whose initialize cannot take one
+   argument raises ArgumentError, as the call would. */
+static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
+  if (!exc_has_reopen_initialize(c)) return;
+  /* every reopening that defines one, not the first eight: the pick is by the
+     class's ancestry, so a later one must be in it */
+  int *xr = malloc((size_t)c->nclasses * sizeof *xr), xn = exc_reopen_definers(c, "initialize", xr, c->nclasses);
+  buf_puts(b, "static void *sp_user_exc_reinit(const char *cls, const char *msg, void *obj){\n  ");
+  int pk = emit_exc_reopen_pick_head(c, xr, xn, "cls", b);
+  buf_printf(b, "\n  if (_xi%d < 0) return NULL;\n"
+                "  sp_Exception *e = (sp_Exception *)obj;\n"
+                "  if (!e) e = sp_exc_new(cls, (&(\"\\xff\")[1]));\n"
+                "  else { e->msg_h = NULL; e->msg = NULL; }   /* an object the runtime made: the message is the initialize's to set */\n"
+                "  SP_GC_ROOT(e);\n", pk);
+  for (int q = 0; q < xn; q++) {
+    int im = call_target(c, -1, xr[q], "initialize", CT_METHODS, NULL);
+    if (im < 0) continue;
+    /* a yielding initialize has no function of its own: its proc-form clone runs it, without a block */
+    int pf = c->scopes[im].yields ? scope_proc_form_of(c, im) : -1;
+    if (pf >= 0) im = pf;
+    else if (c->scopes[im].yields) continue;   /* (no clone: the runtime's message stands) */
+    Buf pre = {0}, args = {0};
+    char raise[640];
+    int builds = 0;
+    /* the message as the parameter that takes it holds it: boxed for a poly
+       one or a rest, the String itself for a String one; an initialize whose
+       first parameter has any other type has no arm (the call keeps the
+       runtime's message) */
+    int p0 = arm_arg_param(c, &c->scopes[im]);
+    LocalVar *p0v = p0 >= 0 && c->scopes[im].pnames ? scope_local(&c->scopes[im], c->scopes[im].pnames[p0]) : NULL;
+    TyKind p0t = p0v ? repr_of_slot(c, p0v).as_ty : TY_POLY;
+    Buf mb = {0};
+    if (p0t == TY_POLY || p0t == TY_UNKNOWN) buf_puts(&mb, "sp_box_str(msg)");
+    else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, "sp_box_str(msg)", &mb);
+    else { free(pre.p); free(args.p); continue; }
+    const char *argv[1] = { mb.p };
+    buf_printf(b, "  if (_xi%d == %d) {", pk, q);
+    if (emit_arm_args_text(c, im, "e", argv, 1, &pre, &args, &builds, raise, sizeof raise)) {
+      if (pre.p) buf_puts(b, pre.p);
+      buf_printf(b, " %s(e%s); return e;", mc_method(c, &c->scopes[im]), args.p ? args.p : "");
+    }
+    else buf_printf(b, " %s return e;", raise);
+    buf_puts(b, " }\n");
+    free(pre.p); free(args.p); free(mb.p);
+  }
+  buf_puts(b, "  return NULL;\n}\n");
+  free(xr);
+}
+
 static void emit_exc_text_call(Compiler *c, int mi, const char *self, Buf *b) {
   if (c->scopes[mi].yields) {
     int pf = scope_proc_form_of(c, mi);
@@ -23906,6 +24027,8 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
                 "static const char *sp_user_exc_message(sp_Exception *);\n"
                 "static const char *sp_user_exc_to_s(sp_Exception *);\n");
   }
+  if (exc_has_reopen_initialize(c))
+    buf_puts(b, "static void *sp_user_exc_reinit(const char *, const char *, void *);\n");
 }
 
 static void emit_runtime_include(Compiler *c, Buf *b, int blank) {
@@ -24821,6 +24944,7 @@ char *codegen_program(const NodeTable *nt) {
   }
   g_has_user_to_io = 0;
   for (int k = 0; k < c->nclasses && !g_has_user_to_io; k++) g_has_user_to_io = class_to_io_dispatched(c, -1, -1, k);
+  g_exc_reinit_hook = exc_has_reopen_initialize(c);
   g_has_user_succ = 0;
   g_obj_range_used = 0;
   /* a Range with boxed ends (sp_range_new_box) may turn out a Range of objects */
@@ -25166,6 +25290,7 @@ char *codegen_program(const NodeTable *nt) {
   }
   if (!g_ext_init_name) emit_cls_user_display_hooks(c, &hooks);
   emit_exc_text_tail(c, &hooks);
+  emit_exc_reinit_dispatch(c, &hooks);
   emit_regex_section(c, &b);
   { const char *pdt[] = { g_procs.p, body->p, b.p, hooks.p };
     pd_emit_used(pdt, 4, &g_pd_protos, &g_pd_defs);

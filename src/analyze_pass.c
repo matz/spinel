@@ -11956,6 +11956,20 @@ static int plan_top_def_target(Compiler *c, int id) {
   const CallPlan tp = cplan_user_fresh(c, id);
   return tp.mi >= 0 && tp.via == UC_REOPEN && tp.dispatch == CP_DIRECT && c->scopes[tp.mi].class_id < 0 && !c->scopes[tp.mi].is_cmethod ? tp.mi : -1;
 }
+
+/* `slot OP= val` reaching class k's operator: its parameter takes val's
+   type. 1 when it widened. A rest first parameter (`def +(*a)`) holds the
+   Array of the arguments and a `**` one a Hash, not val: each is left to
+   the call's own binding (typed as val, its C took the value raw). */
+static int opw_bind_operator(Compiler *c, int id, int k, const char *op, int val) {
+  int mi = call_target(c, id, k, op, 0, NULL);
+  if (mi < 0) return 0;
+  Scope *ms = &c->scopes[mi];
+  if (ms->nparams < 1 || ms->rest_idx == 0 || ms->kwrest_idx == 0) return 0;
+  LocalVar *pp = scope_local(ms, ms->pnames[0]);
+  if (!pp || pp->rbs_seeded) return 0;
+  return slot_take(c, pp, infer_type(c, val), val);
+}
 static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before);
 int infer_param_types(Compiler *c) { return infer_param_types_ex(c, 0, NULL); }
 int infer_param_types_settle(Compiler *c) { return infer_param_types_ex(c, 1, NULL); }
@@ -12063,23 +12077,16 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         int iidx = nm ? comp_ivar_index(&c->classes[s2->class_id], nm) : -1;
         slot_t = iidx >= 0 ? c->classes[s2->class_id].ivar_types[iidx] : TY_UNKNOWN;
       }
-      /* For TY_POLY slots, scan all user classes for a matching operator method. */
-      int cid2 = -1;
-      if (ty_is_object(slot_t)) cid2 = ty_object_class(slot_t);
-      else if (slot_t == TY_POLY) {
-        for (int _sc = 0; _sc < c->nclasses; _sc++) {
-          if (call_target(c, id, _sc, op, 0, NULL) >= 0) { cid2 = _sc; break; }
-        }
-      }
-      if (cid2 < 0) continue;
-      int mi2 = call_target(c, id, cid2, op, 0, NULL);
-      if (mi2 < 0) continue;
-      Scope *ms2 = &c->scopes[mi2];
-      if (ms2->nparams < 1) continue;
-      LocalVar *pp = scope_local(ms2, ms2->pnames[0]);
-      if (!pp || pp->rbs_seeded) continue;
-      TyKind at2 = infer_type(c, val);
-      changed |= slot_take(c, pp, at2, val);
+      /* An object slot reaches its class's operator; a POLY slot the
+         operator of each class it can hold (the class facts, as a POLY
+         receiver's call does), and no other class's. It took the first
+         program class defining the operator, whatever the slot held: `s +=
+         c.x` on a Float sum typed a Struct's `+` from it, and a slot that
+         held two such classes bound one. */
+      if (ty_is_object(slot_t)) changed |= opw_bind_operator(c, id, ty_object_class(slot_t), op, val);
+      else if (slot_t == TY_POLY)
+        for (int k = 0; k < c->nclasses; k++)
+          if (!cls_fact_excludes(c, id, k)) changed |= opw_bind_operator(c, id, k, op, val);
       continue;
     }
     if (nt_kind(nt, id) == NK_CallOrWriteNode || nt_kind(nt, id) == NK_CallAndWriteNode) {
@@ -14096,6 +14103,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
     int cr = nt_new_node(nt, "ConstantReadNode");
     if (cr < 0) return;
     nt_node_set_str(nt, cr, "name", cname);
+    if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
     comp_grow_node_arrays(c);
     c->nscope[cr] = c->nscope[root];
     nt_node_set_ref(nt, root, "receiver", cr);
@@ -14110,6 +14118,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
       int cr = nt_new_node(nt, "ConstantReadNode");
       if (cr < 0) return;
       nt_node_set_str(nt, cr, "name", cname);
+      if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
       comp_grow_node_arrays(c);
       c->nscope[cr] = c->nscope[root];
       nd = &nt->nodes[root];        /* nt_new_node may realloc nt->nodes */
@@ -14125,6 +14134,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
         int cr = nt_new_node(nt, "ConstantReadNode");
         if (cr < 0) return;
         nt_node_set_str(nt, cr, "name", cname);
+        if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
         comp_grow_node_arrays(c);
         c->nscope[cr] = c->nscope[root];
         nd = &nt->nodes[root];

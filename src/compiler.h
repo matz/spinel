@@ -1504,6 +1504,12 @@ typedef struct {
                       family among them (all_any, its keys); built once */
                    char **all; int nall, all_built; ANameHash all_seen, all_any;
                    char **all_any_keys; int nall_any;
+                   /* the names the builtin classes a boxed value may hold
+                      answer (dsend_add_builtin_names over each of them, in
+                      their order, each name once), for the classes bi_held
+                      lists; built once (dsn_builtin_names) */
+                   char **bi; int nbi, bi_built; ANameHash bi_seen;
+                   const char *bi_held[16]; int nbi_held;
                    ANameHash lits; } dsn;
   /* the top-level scope of each file root (nt_root), by graph id: 0 for the
      entry (analyze_program.c) */
@@ -1779,6 +1785,10 @@ typedef struct {
   int *cg_parent;
   int cg_parent_n;
   unsigned cg_parent_ver;
+  /* the constant_path of every class and module header, sorted (const_node_names_header), and the table it was read from */
+  int *hdr_cp, hdr_cp_n, hdr_cp_count;
+  unsigned hdr_cp_ver;
+  unsigned long hdr_cp_edits;
   /* the last eight method C names mc_method spelled, and the next to reuse:
      each grown to its name (mc_ring_setf), which no length bounds */
   char *mc_ring[8]; size_t mc_ring_cap[8]; int mc_ring_next;

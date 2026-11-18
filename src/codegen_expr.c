@@ -4259,10 +4259,13 @@ static int defined_value_path(Compiler *c, int v, Buf *b) {
      this point: when it is set is not known here, so the name is left to
      the path below, as before) */
   const LocalVar *topc = const_value_path_top(c, nm);
+  /* (a pointer constant is NULL until its assignment runs: that answers when it is set, as the flag would; a
+     version_gem hook's `defined?(base::VERSION)` reads one assigned after the hook's def) */
+#define DVP_PTR(ci) ty_is_builtin_ptr(c->consts[ci].type)
   for (int k = 0; k < c->nclasses; k++) {
     if (k == obj_k) continue;
     int ci2 = const_path_value_const(c, k, nm, cands, ncands);
-    if (ci2 >= 0 && !const_has_flag(&c->consts[ci2]) && !an_const_read_finds(c, v, c->consts[ci2].name)) {
+    if (ci2 >= 0 && !const_has_flag(&c->consts[ci2]) && !DVP_PTR(ci2) && !an_const_read_finds(c, v, c->consts[ci2].name)) {
       free(cands);
       return 0;
     }
@@ -4278,6 +4281,8 @@ static int defined_value_path(Compiler *c, int v, Buf *b) {
     int ci2 = const_path_value_const(c, k, nm, cands, ncands);
     if (ci2 >= 0 && const_has_flag(&c->consts[ci2]))
       buf_printf(b, " case %d: if (cst_%s__set) _t%d_r = SPL(\"constant\"); break;", k, c->consts[ci2].name, tk);
+    else if (ci2 >= 0 && DVP_PTR(ci2) && !an_const_read_finds(c, v, c->consts[ci2].name))
+      buf_printf(b, " case %d: if (cst_%s) _t%d_r = SPL(\"constant\"); break;", k, c->consts[ci2].name, tk);
     else if (ci2 >= 0 || const_path_value_class(c, k, nm) >= 0)
       buf_printf(b, " case %d: _t%d_r = SPL(\"constant\"); break;", k, tk);
   }

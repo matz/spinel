@@ -19,8 +19,9 @@ cd "$ROOT" || exit 2
 # Entries added by the S2-ASKS PR, in three groups. The program-level dispatchers, each emitted once per program for
 # every class (a switch on the class id): emit_user_coerce_dispatch and emit_obj_succ_dispatch (the numeric hooks),
 # hash_reader_ivar (the key hash of a class whose `hash` is a reader), emit_cls_answers_dispatch (Struct's members and
-# keyword_init?), emit_exc_text_tail (the exception text hooks), emit_display_overrides (the object display hooks)
-# and emit_obj_to_str_bridge (the implicit String conversion hook). No call
+# keyword_init?), emit_exc_text_tail (the exception text hooks), emit_display_overrides
+# (the object display hooks), emit_obj_to_str_bridge (implicit String conversion), and
+# emit_exc_reinit_dispatch (the initializer for errors the runtime raises). No call
 # stands behind an arm: the switch is the class's, so its question is the table's with no site, asked for every class
 # of the program, as the others of this list are. The readers of the compiler's own synthesized helper: obj_each_elems_text
 # and an_phase_procs, for every class an `__enum_to_a` call may reach (its `each` and `__enum_to_a`), whose call is a
@@ -32,6 +33,7 @@ FUNCS="
 src/analyze_infer.c:class_any_cmethod_eqq
 src/analyze_util.c:class_coerce_emittable
 src/codegen.c:emit_cls_user_display_hooks
+src/codegen.c:emit_exc_reinit_dispatch
 src/codegen.c:emit_struct_default_inspect
 src/codegen.c:obj_arm_calls_own_inspect1
 src/codegen.c:obj_deconstruct_keys_method

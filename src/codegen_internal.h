@@ -108,6 +108,8 @@ extern int  g_indent;
 extern int  g_tmp;
 /* a raise's explicit cause temp (codegen_call_exception.c) */
 extern int  g_raise_cz;
+/* the program reopens a builtin exception with an initialize, so the runtime builds its own errors through it (sp_user_exc_reinit) */
+extern int  g_exc_reinit_hook;
 const char *raise_fn(const char *fn);
 /* one representation: the String operands now being rendered are held across
    a block the program runs (emit_call sets it for a call with a block,

@@ -551,7 +551,9 @@ void comp_free(Compiler *c) {
   c->vs_count = c->vs_cap = 0;
   c->vs_built = 0;
   free(c->cg_parent);
+  free(c->hdr_cp);
   c->cg_parent = NULL;
+  c->hdr_cp = NULL; c->hdr_cp_n = 0;
   c->cg_parent_n = 0;
   free(c->lazy_hoist);
   c->lazy_hoist = NULL;
@@ -3035,6 +3037,25 @@ int comp_const_undefined(Compiler *c, int v) {
   if (vk == NK_ConstantReadNode)
     return !const_seg_resolves(c, v);
   if (vk == NK_ConstantPathNode) {
+    /* (a path off a value, `base::VERSION`: only the run time knows the class, and a leaf the program defines in
+       several classes does not resolve by its name alone, which the walk below would take as missing) */
+    int root = v;
+    while (nt_kind(nt, root) == NK_ConstantPathNode && nt_ref(nt, root, "parent") >= 0) root = nt_ref(nt, root, "parent");
+    if (nt_kind(nt, root) != NK_ConstantPathNode && nt_kind(nt, root) != NK_ConstantReadNode) {
+      /* (a leaf no class of the program holds is missing on any value: `m::Nope` raises) */
+      const char *leaf = nt_str(nt, v, "name");
+      if (!leaf) return 0;
+      int *cands = NULL, nc = comp_const_tail_cands(c, leaf, &cands);
+      free(cands);
+      if (nc > 0 || comp_const(c, leaf) || comp_is_wellknown_const(leaf) || is_builtin_class_name(leaf) ||
+          is_builtin_module_name(leaf) || is_builtin_exception_name(leaf)) return 0;
+      for (int k = 0; k < c->nclasses; k++) {
+        const char *cn = c->classes[k].name;
+        size_t ln = strlen(leaf), n = cn ? strlen(cn) : 0;
+        if (cn && n >= ln && sp_streq(cn + n - ln, leaf) && (n == ln || cn[n - ln - 1] == '_')) return 0;
+      }
+      return 1;
+    }
     /* a leaf no member of the program class its parent names is missing,
        though a constant of that name lives elsewhere (JSON::Coder) */
     if (const_path_misses_member(c, v)) return 1;

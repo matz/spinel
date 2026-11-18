@@ -850,6 +850,9 @@ const char *raise_fn(const char *fn) {
   static char bufs[4][96];
   static int k;
   char *o = bufs[k++ & 3];
+  /* a program with a reopened builtin exception initialize (sp_user_exc_reinit)
+     raises what it writes by the variants that leave the runtime's hook out */
+  if (g_exc_reinit_hook && (sp_streq(fn, "sp_raise_cls") || sp_streq(fn, "sp_raise"))) fn = sp_streq(fn, "sp_raise") ? "sp_raise_u" : "sp_raise_cls_u";
   if (g_raise_cz) snprintf(o, sizeof bufs[0], "%s_cz(_t%d, ", fn, g_raise_cz);
   else snprintf(o, sizeof bufs[0], "%s(", fn);
   return o;

@@ -5343,6 +5343,9 @@ typedef struct {
   int node;               /* --load-model=graph: its LoadNode, once flattened (-1 before) */
   int ncand, *cand;       /* SP_LOAD_SET: the files a path computed when it runs may name, ... */
   int open;               /* ... or (open) any file of the program */
+  char *pat_pre, *pat_suf; /* ... a plain require's literal head and tail around what
+                             only the run time knows (`"x/#{v}/n"`): open narrows to the
+                             program's files a path of that shape can name */
   char **autoload, **auto_path; int *auto_file, nauto;
 } SpLoadEdge;
 
@@ -5654,6 +5657,7 @@ static void sp_load_graph_free(SpLoadGraph *g) {
     for (int k = 0; k < g->edge[i].nauto; k++) { free(g->edge[i].autoload[k]); free(g->edge[i].auto_path[k]); }
     free(g->edge[i].autoload); free(g->edge[i].auto_path); free(g->edge[i].auto_file);
     free(g->edge[i].cand);
+    free(g->edge[i].pat_pre); free(g->edge[i].pat_suf);
   }
   for (int i = 0; i < g->nspl; i++) free(g->spl[i].name);
   free(g->file); free(g->found); free(g->flags); free(g->edge); free(g->spl);
@@ -7412,13 +7416,14 @@ static void sp_lower_rows_note(const pm_node_t *node, int id) {
 }
 
 /* Method name `b` given as a value (a Symbol, a String a reflection is
-   given): a row that asks only the name (an Enumerable alias) is reached
-   by it as by a call */
+   given): a row that asks only the name and a receiver (an Enumerable
+   alias, to_set) is reached by it as by a call, whatever arguments the
+   call is given (a superset only loads more) */
 static void sp_names_method(SpNames *s, const uint8_t *b, size_t n) {
   sp_names_add(s, "m:", (const char *)b, n);
   const LowerRow *r;
   for (int i = 0; (r = lower_row_at(i)) != NULL; i++)
-    if (r->recv == LR_RECV_ANY && !r->flags && r->argc_min == 0 && r->argc_max < 0 &&
+    if ((r->recv == LR_RECV_ANY || r->recv == LR_RECV_SOME) && !r->flags && r->argc_min == 0 &&
         strlen(r->name) == n && memcmp(r->name, b, n) == 0)
       sp_names_add(s, sp_names_target_tag(r->target), r->target, strlen(r->target));
 }
@@ -7446,11 +7451,13 @@ static void sp_names_call(SpNamesWalk *w, const pm_call_node_t *c) {
       if (reflect) sp_names_method(w->s, pm_string_source(str), pm_string_length(str));
       else sp_names_add(w->s, "c:", (const char *)pm_string_source(str), pm_string_length(str));
     }
-    else if (cget && t == PM_SYMBOL_NODE) {
+    else if (t == PM_SYMBOL_NODE) {
+      /* respond_to?(:to_set), send(:to_set): the method the Symbol names */
       const pm_string_t *str = &((const pm_symbol_node_t *)a0)->unescaped;
-      sp_names_add(w->s, "c:", (const char *)pm_string_source(str), pm_string_length(str));
+      if (reflect) sp_names_method(w->s, pm_string_source(str), pm_string_length(str));
+      else sp_names_add(w->s, "c:", (const char *)pm_string_source(str), pm_string_length(str));
     }
-    else if (a0 && t != PM_SYMBOL_NODE) sp_names_add(w->s, "dyn", "", 0);   /* (`req.method` names none) */
+    else if (a0) sp_names_add(w->s, "dyn", "", 0);   /* (`req.method` names none) */
   }
   /* a Symbol made of a String names what the String says */
   if (is_symbol_conversion(name)) sp_names_add(w->s, "dyn", "", 0);
@@ -8110,6 +8117,70 @@ static int sp_load_parses(SpLoadGraph *g, int from, const char *path) {
   return ok;
 }
 
+/* The literal head and tail of an interpolated path (`"x/#{v}/n"`: "x/"
+   and "/n"), kept on edge e: the parts before the first part only the run
+   time knows and after the last, a require_relative's head (from, the
+   requiring file) made absolute. Neither is kept when both are empty, or
+   for a head a plain require reads against the current directory. */
+static char *sp_pm_str_parts(const pm_node_list_t *ps, size_t from, size_t to) {
+  size_t len = 0;
+  for (size_t i = from; i < to; i++) len += pm_string_length(&((const pm_string_node_t *)ps->nodes[i])->unescaped);
+  char *out = malloc(len + 1), *o = out;
+  if (!out) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  for (size_t i = from; i < to; i++) {
+    const pm_string_t *u = &((const pm_string_node_t *)ps->nodes[i])->unescaped;
+    memcpy(o, pm_string_source(u), pm_string_length(u));
+    o += pm_string_length(u);
+  }
+  *o = 0;
+  return out;
+}
+static void sp_req_pattern(const pm_node_t *arg, const char *from, SpLoadEdge *e) {
+  if (PM_NODE_TYPE(arg) != PM_INTERPOLATED_STRING_NODE) return;
+  const pm_node_list_t *ps = &((const pm_interpolated_string_node_t *)arg)->parts;
+  size_t h = 0, t = ps->size;
+  while (h < ps->size && PM_NODE_TYPE(ps->nodes[h]) == PM_STRING_NODE) h++;
+  while (t > h && PM_NODE_TYPE(ps->nodes[t - 1]) == PM_STRING_NODE) t--;
+  if (h == ps->size) return;
+  char *pre = sp_pm_str_parts(ps, 0, h), *suf = sp_pm_str_parts(ps, t, ps->size);
+  size_t sl = strlen(suf);
+  if (sl >= 3 && strcmp(suf + sl - 3, ".rb") == 0) suf[sl - 3] = 0;
+  if (!pre[0] && !suf[0]) { free(pre); free(suf); return; }
+  /* a require_relative's head is read from the requiring file's directory */
+  if (from && pre[0] != '/') {
+    const char *sl = strrchr(from, '/');
+    size_t dl = sl ? (size_t)(sl - from) : 0, hl = strlen(pre);
+    char *abs = malloc(dl + hl + 2);
+    if (!abs) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+    memcpy(abs, from, dl);
+    abs[dl] = '/';
+    memcpy(abs + dl + 1, pre, hl + 1);
+    sp_normalize_dots(abs);
+    free(pre);
+    pre = abs;
+  }
+  else if (pre[0] == '.' || pre[0] == '~') { free(pre); free(suf); return; }
+  e->pat_pre = pre;
+  e->pat_suf = suf;
+}
+/* Can a require of a path with head pre and tail suf, whatever comes
+   between, name file `path` (".rb" taken off) from some directory of the
+   run-time $LOAD_PATH: path ends in suf, and has pre at its start for an
+   absolute head, else after a '/', before that tail (a '/' they both have
+   at the join may be one: "x//n" names x/n) */
+static int sp_req_pattern_names(const char *pre, const char *suf, const char *path) {
+  size_t pl = strlen(path), sl = strlen(suf), hl = strlen(pre);
+  if (pl >= 3 && strcmp(path + pl - 3, ".rb") == 0) pl -= 3;
+  if (sl > pl || strncmp(path + pl - sl, suf, sl) != 0) return 0;
+  size_t tail = pl - sl;
+  int join = hl && pre[hl - 1] == '/' && sl && suf[0] == '/';
+  if (!hl) return 1;
+  if (pre[0] == '/') return hl <= tail + (size_t)join && strncmp(path, pre, hl) == 0;
+  for (size_t i = 0; i + hl <= tail + (size_t)join; i++)
+    if (path[i] == '/' && i + 1 + hl <= pl && strncmp(path + i + 1, pre, hl) == 0 && i + 1 + hl <= tail + (size_t)join) return 1;
+  return 0;
+}
+
 static int sp_graph_computed(SpSiteWalk *w, const pm_call_node_t *n, const char *method, int line) {
   SpLoadGraph *g = w->g;
   char *dir = strdup(g->file[w->f]), *sl = dir ? strrchr(dir, '/') : NULL;
@@ -8151,6 +8222,7 @@ static int sp_graph_computed(SpSiteWalk *w, const pm_call_node_t *n, const char 
     sp_load_edge(&g->edge, &g->nedge, &g->edgecap, w->f, line, plain, "(computed)", SP_LOAD_SET, -1);
     e = g->nedge - 1;
     g->edge[e].open = bad || (beside && !nfile);
+    if (g->edge[e].open && !auto_load) sp_req_pattern(arg, plain ? NULL : g->file[w->f], &g->edge[e]);
     g->edge[e].ncand = g->edge[e].open ? 0 : nfile;
     g->edge[e].cand = g->edge[e].ncand ? malloc(sizeof(int) * (size_t)nfile) : NULL;
     for (int k = 0; k < g->edge[e].ncand; k++) g->edge[e].cand[k] = to[k];
@@ -8254,6 +8326,51 @@ static void sp_graph_inherit(SpLoadGraph *g, int f) {
   }
   r->ndirs = n;
 }
+/* Each parse error at its position, `file:line:col: message` (the column
+   1-based on stderr, as an editor reads a compiler's message; 0-based in
+   the JSON, as Prism gives it and --emit-types carries it). The file is
+   `shown` when given (a file of the load graph, parsed as written), else
+   the multi-file map's for the line, so an error in a required file names
+   that file. Under --emit-types the JSON is written too, with no types and
+   the errors as its diagnostics: a buffer is unparseable most of the time
+   it is being typed into, and its marker belongs on the token, not on
+   line 1. */
+static void sp_report_parse_errors(pm_parser_t *parser, const char *source_file, const char *shown) {
+  fprintf(stderr, "Parse errors in '%s':\n", source_file);
+  const char *types_out = g_opt_emit_types;
+  FILE *jf = types_out ? fopen(types_out, "w") : NULL;
+  if (types_out && !jf) fprintf(stderr, "spinel: cannot write '%s'\n", types_out);
+  if (jf) fputs("{\n  \"types\": [\n\n  ],\n  \"diagnostics\": [\n", jf);
+  int nd = 0;
+  pm_diagnostic_t *diag;
+  for (diag = (pm_diagnostic_t *)parser->error_list.head; diag; diag = (pm_diagnostic_t *)diag->node.next) {
+    pm_line_column_t lc = pm_newline_list_line_column(&parser->newline_list, diag->location.start, parser->start_line);
+    pm_line_column_t le = pm_newline_list_line_column(&parser->newline_list, diag->location.end, parser->start_line);
+    const char *file = shown ? shown : source_file;
+    int line = lc.line, end_line = le.line;
+    if (!shown && sp_line_map_n > 0 && lc.line >= 1 && lc.line <= sp_line_map_n && sp_line_orig[lc.line] > 0) {
+      file = sp_file_table[sp_line_file[lc.line]];
+      line = sp_line_orig[lc.line];
+      end_line = (le.line >= 1 && le.line <= sp_line_map_n && sp_line_orig[le.line] > 0) ? sp_line_orig[le.line] : line;
+    }
+    fprintf(stderr, "  %s:%d:%d: %s\n", file, line, lc.column + 1, diag->message);
+    if (jf) {
+      if (nd++) fputs(",\n", jf);
+      fputs("    {\"file\":\"", jf);
+      json_fputs(file, jf);
+      fprintf(jf, "\",\"line\":%d,\"col\":%d,\"end_line\":%d,\"end_col\":%d,\"severity\":\"error\",\"message\":\"",
+              line, lc.column, end_line, le.column);
+      json_fputs(diag->message, jf);
+      fputs("\"}", jf);
+    }
+  }
+  if (jf) {
+    fputs("\n  ],\n  \"codegen\": [\n\n  ]\n}\n", jf);
+    fclose(jf);
+    fprintf(stderr, "Wrote %s\n", types_out);
+  }
+}
+
 /* --load-model=graph: file `f` of graph `g` read and parsed, before any
    file is flattened: its requires resolved (each target file a file of the
    graph, read in its turn) and the names it uses added to `facts`. 0 when it
@@ -8273,8 +8390,13 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
   sp_src_file_note_defers(&r->src);
   sp_src_file_warn_encoding(&r->src);
   if (r->src.parser.error_list.size) {
-    const pm_diagnostic_t *d = (const pm_diagnostic_t *)r->src.parser.error_list.head;
-    fprintf(stderr, "Parse errors in '%s':\n  %s\n", path, d->message);
+    /* the file as the program names it: under the current directory, from
+       there (as the entry file is given), else its whole path */
+    char cwd[1024];
+    const char *shown = path;
+    size_t cl = getcwd(cwd, sizeof cwd) ? strlen(cwd) : 0;
+    if (cl && source_file[0] != '/' && strncmp(path, cwd, cl) == 0 && path[cl] == '/') shown = path + cl + 1;
+    sp_report_parse_errors(&r->src.parser, source_file, shown);
     return 0;
   }
   sp_src_file_fsl(&r->src);   /* (its pragma's warning; every literal is frozen) */
@@ -8345,6 +8467,16 @@ static int sp_graph_site_take(int id, const pm_node_t *call) {
         PM_NODE_TYPE(((const pm_call_node_t *)call)->arguments->arguments.nodes[0]) != PM_STRING_NODE)
       emit_str(id, "path", e->name);
     /* a set: the files it may name (prog_load_cand), or any (open) */
+    if (e->how == SP_LOAD_SET && e->open && e->pat_pre) {
+      SpLoadGraph *g = g_flat_sites.g;
+      free(e->cand);
+      e->cand = malloc(sizeof(int) * (size_t)(g->nfile + 1));
+      if (!e->cand) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+      e->ncand = 0;
+      for (int f = 0; f < g->nfile; f++)
+        if (sp_req_pattern_names(e->pat_pre, e->pat_suf, g->file[f])) e->cand[e->ncand++] = f;
+      e->open = 0;
+    }
     if (e->how == SP_LOAD_SET) {
       emit_int(id, "ncand", e->ncand);
       if (e->open) emit_int(id, "open", 1);
@@ -8990,47 +9122,7 @@ else {
   pm_node_t *root = pm_parse(&parser);
 
   if (parser.error_list.size > 0) {
-    /* Each error at its position, `file:line:col: message` (the column
-       1-based on stderr, as an editor reads a compiler's message; 0-based in
-       the JSON, as Prism gives it and --emit-types carries it), through the
-       multi-file map when one was built so an error in a required file
-       names that file. Under --emit-types the JSON is written too, with no
-       types and the errors as its diagnostics: a buffer is unparseable most
-       of the time it is being typed into, and its marker belongs on the
-       token, not on line 1. */
-    fprintf(stderr, "Parse errors in '%s':\n", source_file);
-    const char *types_out = g_opt_emit_types;
-    FILE *jf = types_out ? fopen(types_out, "w") : NULL;
-    if (types_out && !jf) fprintf(stderr, "spinel: cannot write '%s'\n", types_out);
-    if (jf) fputs("{\n  \"types\": [\n\n  ],\n  \"diagnostics\": [\n", jf);
-    int nd = 0;
-    pm_diagnostic_t *diag;
-    for (diag = (pm_diagnostic_t *)parser.error_list.head; diag; diag = (pm_diagnostic_t *)diag->node.next) {
-      pm_line_column_t lc = pm_newline_list_line_column(&parser.newline_list, diag->location.start, parser.start_line);
-      pm_line_column_t le = pm_newline_list_line_column(&parser.newline_list, diag->location.end, parser.start_line);
-      const char *file = source_file;
-      int line = lc.line, end_line = le.line;
-      if (sp_line_map_n > 0 && lc.line >= 1 && lc.line <= sp_line_map_n && sp_line_orig[lc.line] > 0) {
-        file = sp_file_table[sp_line_file[lc.line]];
-        line = sp_line_orig[lc.line];
-        end_line = (le.line >= 1 && le.line <= sp_line_map_n && sp_line_orig[le.line] > 0) ? sp_line_orig[le.line] : line;
-      }
-      fprintf(stderr, "  %s:%d:%d: %s\n", file, line, lc.column + 1, diag->message);
-      if (jf) {
-        if (nd++) fputs(",\n", jf);
-        fputs("    {\"file\":\"", jf);
-        json_fputs(file, jf);
-        fprintf(jf, "\",\"line\":%d,\"col\":%d,\"end_line\":%d,\"end_col\":%d,\"severity\":\"error\",\"message\":\"",
-                line, lc.column, end_line, le.column);
-        json_fputs(diag->message, jf);
-        fputs("\"}", jf);
-      }
-    }
-    if (jf) {
-      fputs("\n  ],\n  \"codegen\": [\n\n  ]\n}\n", jf);
-      fclose(jf);
-      fprintf(stderr, "Wrote %s\n", types_out);
-    }
+    sp_report_parse_errors(&parser, source_file, NULL);
     /* Issue #764: free the registered include paths on the parse-
        error exit path too. */
     pm_node_destroy(&parser, root);

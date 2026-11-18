@@ -15502,11 +15502,11 @@ int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn, int argc,
     if (k == NK_KeywordHashNode || k == NK_SplatNode) return -1;
   }
   int mi = exc_reopen_initialize_above(c, cn, 0, -1);
-  /* a yielding initialize has no function of its own (its proc-form clone runs
-     it, as ctor_alloc_init arranges); this helper calls the plain one, so the
-     call would name a function that is not emitted: such a call keeps the native
-     construction, as before the reopening was looked for */
-  return mi >= 0 && !c->scopes[mi].yields ? mi : -1;
+  /* a yielding initialize has no function of its own: emit_exc_reopen_construct_as
+     calls its proc-form clone. One without a clone would name a function that
+     is not emitted: such a call keeps the native construction, as before the
+     reopening was looked for */
+  return mi >= 0 && (!c->scopes[mi].yields || scope_proc_form_of(c, mi) >= 0) ? mi : -1;
 }
 
 /* Build the runtime's exception of the reopened class ci and run the
@@ -15531,6 +15531,11 @@ void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg
    the one of a reopening above it (cname's own reopening, or a builtin's it
    descends from: ArgumentError.new under a reopened StandardError#initialize). */
 void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int args, int msg_node, int call_id, Buf *b) {
+  /* a yielding initialize has no function of its own: its proc-form clone
+     runs it, on the call's block or on none (the same choice ctor_alloc_init
+     makes for a program's exception class) */
+  int pf = c->scopes[initm].yields ? scope_proc_form_of(c, initm) : -1;
+  if (pf >= 0) initm = pf;
   Scope *im = &c->scopes[initm];
   int lo, hi, argc = msg_node >= 0;
   if (args < 0 && class_new_pos_arity(c, initm, &lo, &hi) && (argc < lo || argc > hi)) {
@@ -27017,6 +27022,19 @@ static int operand_hoists_effect(Compiler *c, int node) {
   int a = nt_ref(nt, node, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   for (int i = 0; i < ac; i++) if (!subtree_is_pure_read(c, av[i])) return 1;
+  /* a call of the program's method that leaves out an optional argument:
+     the default is emitted at the call, so a default that runs code
+     (`def nxt(step = set(6))`) is code the operand hoists */
+  const char *nm = nt_str(nt, node, "name");
+  Scope *in = comp_scope_of(c, node);
+  int cls = recv < 0 || nt_kind(nt, recv) == NK_SelfNode ? (in ? in->class_id : -1) : -1;
+  int mi = nm && (recv < 0 || cls >= 0) ? call_target(c, node, cls, nm, 0, NULL) : -1;
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1, ps = dn >= 0 ? nt_ref(nt, dn, "parameters") : -1, on = 0;
+  const int *ov = ps >= 0 ? nt_arr(nt, ps, "optionals", &on) : NULL;
+  int rn = 0;
+  if (ps >= 0) (void)nt_arr(nt, ps, "requireds", &rn);
+  for (int i = ac - rn; i < on; i++)
+    if (i >= 0 && !subtree_is_pure_read(c, nt_ref(nt, ov[i], "value"))) return 1;
   return 0;
 }
 
@@ -36704,7 +36722,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     int cruby_known = 0;
     for (int ki = 0; tcn && CRUBY_KNOWN[ki]; ki++)
       if (sp_streq(tcn, CRUBY_KNOWN[ki])) { cruby_known = 1; break; }
-    if (tcn && !cruby_known && comp_class_index(c, tcn) < 0 &&
+    if (tcn && !cruby_known && const_node_class_index(c, argv[0]) < 0 &&
         !is_builtin_class_name(tcn) && !is_builtin_exception_name(tcn) &&
         !comp_const(c, tcn)) {
       buf_puts(b, "((void)(");

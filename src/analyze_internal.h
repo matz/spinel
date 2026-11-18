@@ -811,6 +811,8 @@ int desugar_index_assign_value(Compiler *c);
 int desugar_io_console_modes(Compiler *c);
 int desugar_reader_index_write(Compiler *c);
 int desugar_body_module_eval(Compiler *c);
+int desugar_sclass_hooks(Compiler *c);
+int desugar_toplevel_hooked_mixins(Compiler *c);
 int desugar_instance_eval_defs(Compiler *c);
 int desugar_user_send_others(Compiler *c);
 int desugar_missing_method_calls(Compiler *c);

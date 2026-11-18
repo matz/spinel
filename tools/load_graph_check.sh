@@ -762,4 +762,21 @@ unread_form require_def 2 'def require(x) = x\ndef require_all = 1\n'
 unread_form require_resolved 2 'require "tmpdir"\n'
 unread_form require_receiver 1 'class K; def self.require(x) = x; end\nK.require "x"\n'
 
+# A parse error in a required file is placed as the inline model places it,
+# `file:line:col`, the file from the current directory, and --emit-types
+# writes it as a diagnostic. Under --strict-require (spin build) a require
+# that no file answers is a compile-time refusal, not a run-time LoadError.
+mkdir -p "$tmp/pe"
+printf 'def helper(x)\n  x +\nend\n' > "$tmp/pe/pe_lib.rb"
+printf 'require_relative "pe_lib"\nputs helper(1)\n' > "$tmp/pe/pe.rb"
+sp_abs=$(cd "$(dirname "$SPINEL")" && pwd)/$(basename "$SPINEL")
+(cd "$tmp/pe" && "$sp_abs" --load-model=graph pe.rb --emit-types -o pe.json 2> pe.err; test $? -eq 1) || fail "a parse error in a required file exits 1"
+grep -q '^  pe_lib.rb:3:1: unexpected' "$tmp/pe/pe.err" || { fail "a parse error in a required file is placed at file:line:col"; cat "$tmp/pe/pe.err"; }
+grep -q '{"file":"pe_lib.rb","line":3,"col":0,' "$tmp/pe/pe.json" 2>/dev/null || fail "--emit-types writes a required file's parse error as a diagnostic"
+printf 'require "no_such_gem_for_strict"\nputs 1\n' > "$tmp/pe/strict.rb"
+if "$SPINEL" --load-model=graph --strict-require "$tmp/pe/strict.rb" -o "$tmp/pe/strict" 2> "$tmp/pe/strict.err"; then
+  fail "--strict-require compiled a require no file answers"
+fi
+grep -q "cannot load such file -- no_such_gem_for_strict" "$tmp/pe/strict.err" || fail "--strict-require names the missing file"
+
 [ $ok -eq 1 ] && echo "load-graph-test: pass" || exit 1

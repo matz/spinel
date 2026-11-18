@@ -7211,6 +7211,7 @@ static struct {
   ANameHash wnames;  int *wnode, *wown, nw;    /* the constant writes by name, each write's owner */
   ANameHash wkeys;                             /* the writes' keys (the name where none) */
   ANameHash natives;                           /* native_struct's "A::B::C" names */
+  ANameHash opened;                            /* the builtins a body or library reopens (is_builtin_const) */
   char **keys;
 } qcr;
 static const char *qcr_leaf(Compiler *c, int k) {
@@ -7224,7 +7225,9 @@ void qc_rule_prepare(Compiler *c, char **keys) {
   qcr.keys = keys;
   qcr.lcls = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
   for (int j = 0; j < c->nclasses; j++)
-    if (!c->classes[j].is_builtin_const && class_ruby_name(c, j)) { qcr.lcls[qcr.ncls++] = j; anh_add(&qcr.leaves, qcr_leaf(c, j)); }
+    if (!class_ruby_name(c, j)) continue;
+    else if (!c->classes[j].is_builtin_const) { qcr.lcls[qcr.ncls++] = j; anh_add(&qcr.leaves, qcr_leaf(c, j)); }
+    else anh_add(&qcr.opened, class_ruby_name(c, j));
   int cap = 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
     const char *wn = nt_str(nt, w, "name");
@@ -7253,7 +7256,7 @@ void qc_rule_prepare(Compiler *c, char **keys) {
   }
 }
 void qc_rule_release(void) {
-  anh_free(&qcr.leaves); anh_free(&qcr.wnames); anh_free(&qcr.wkeys); anh_free(&qcr.natives);
+  anh_free(&qcr.leaves); anh_free(&qcr.wnames); anh_free(&qcr.wkeys); anh_free(&qcr.natives); anh_free(&qcr.opened);
   free(qcr.lcls); free(qcr.wnode); free(qcr.wown);
   memset(&qcr, 0, sizeof qcr);
 }
@@ -7305,7 +7308,11 @@ int qc_rule_qualifies(Compiler *c, int id, int k) {
     if (sp_streq(qcr.leaves.key[i], leaf) && qcr.lcls[i] != k) others = 1;
   int builtin = builtin_class_id(leaf) != 0 || (is_builtin_class_name(leaf) && !is_builtin_module_name(leaf)) ||
                 (is_builtin_module_name(leaf) && !is_mod) || is_untabled_native_class_name(leaf) ||
-                is_builtin_exception_name(leaf);
+                is_builtin_exception_name(leaf) ||
+                /* a module of a builtin module's name (`M::Process`) beside a
+                   top-level reopen of the builtin (the program's `module
+                   Process`, or a library's): each is a class of its own */
+                (is_builtin_module_name(leaf) && anh_has(&qcr.opened, leaf));
   /* the header's own path as the record keys a value constant of it */
   char qn[512]; size_t qo = 0; qn[0] = 0;
   { const char *rn = class_ruby_name(c, k); int head = 1;
@@ -8779,10 +8786,17 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
        slot of another C type. */
     if (slot == s->rest_idx || slot == s->kwrest_idx) continue;
     TyKind pt = parse_seed_type(c, field);
+    /* `nil` types a parameter that only ever holds nil. No C slot kind
+       carries just nil (codegen refuses a TY_NIL parameter), so the slot
+       binds boxed, as an_phase_late_widen makes a nil-only local: every
+       caller hands it a boxed nil, and nil_only tells the reads so. */
+    int nil_param = pt == TY_NIL;
+    if (nil_param) pt = TY_POLY;
     if (pt != TY_UNKNOWN) {
       LocalVar *lv = scope_local(s, s->pnames[slot]);
       if (lv) {
         lv_set_type(lv, pt); lv->rbs_seeded = 1; lv->rbs_type = pt;
+        if (nil_param) lv->nil_only = 1;
         /* a nilable int parameter can hold nil like any other: mark it so
            it is an oint and boxing it answers nil rather than a number */
         if (g_seed_nilable && (pt == TY_INT || pt == TY_FLOAT)) lv->nullable_int = 1;
@@ -11780,6 +11794,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
         nt_mark_builtin_call(nt, kcall);
         int krecv = nt_new_node(nt, "ConstantReadNode");
         nt_node_set_str(nt, krecv, "name", kcls >= 0 ? c->classes[kcls].name : "Kernel");
+        if (kcls >= 0) nt_node_set_int(nt, krecv, "made_class", kcls + 1);
         nt_node_set_ref(nt, kcall, "receiver", krecv);
       }
       int kbody = nt_new_node(nt, "StatementsNode");
@@ -36096,9 +36111,15 @@ int make_yield_proc_forms(Compiler *c) {
     if (src->is_transplanted_source || !src->name) continue;
     if (src->body < 0) continue;
     /* an exception class is built through sp_X_new by raise, rescue's
-       re-raise and its own `new` sites alike, none of which splice the body */
+       re-raise and its own `new` sites alike, none of which splice the body.
+       A reopening of a builtin exception is built the same way (sp_exc_new,
+       then its initialize run on the result, emit_exc_reopen_construct_as),
+       so a yielding one needs its clone as well: without it the original,
+       which has no function of its own, was named by the call (K-059: a
+       `blk.nil?`, a `block_given?` or a `yield` in a reopened IndexError's
+       initialize failed in the C compiler). */
     int exc_init = src->class_id >= 0 && sp_streq(src->name, "initialize") && !src->is_cmethod &&
-                   class_is_exc_subclass(c, src->class_id);
+                   (class_is_exc_subclass(c, src->class_id) || class_is_exc_reopen(c, src->class_id));
     /* (a method_missing Method's target is wanted by its captures' name,
        desugar_missing_method_obj) */
     const char *bsym = src->def_node >= 0 ? nt_str(nt, src->def_node, "bam_sym") : NULL;
@@ -45814,6 +45835,20 @@ static int mixin_runs_between(const int *run, int n, int lo, int hi) {
     if (run[i] > lo && run[i] < hi) return 1;
   return 0;
 }
+/* May a call outside any method body run later than the top-level statement
+   it stands in: in a block the record does not take to run at once (one a
+   method keeps, as an initializer's), a lambda, or an END body? */
+static int mixin_call_deferred(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(c->nt, a);
+    if (k == NK_DefNode) return 0;
+    if (k == NK_LambdaNode || k == NK_PostExecutionNode) return 1;
+    if (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) != ELAB_BLK_NOW) return 1;
+  }
+  return 0;
+}
 /* Where a file of another region can start to run, from the requires that
    name it: blk, the least rank of a top-level statement holding one outside
    a method body (in a block kept for later), and def, of one holding a
@@ -45929,6 +45964,12 @@ static void refuse_mixin_after_calls(Compiler *c) {
          block that calls it, but a later statement runs that block. One
          in a file of another region may run at any time. */
       if (in_def && !other && !mixin_runs_between(run, nrun, rank > orank ? rank : orank, jrank)) continue;
+      /* a statement that runs ahead of the class's first body sees no object
+         of the class: its own run of the call reaches no method of it. Only
+         a block it stores (an initializer's, run by `initialize!`) can, and
+         only under a later statement between the body and the mixin. */
+      if (!in_def && !other && rank < orank &&
+          (!mixin_call_deferred(c, id) || !mixin_runs_between(run, nrun, orank, jrank))) continue;
       /* the classes the receiver can be an object of: its type's, or for a
          receiverless call in an instance method, self's */
       TyKind rt = TY_UNKNOWN;
@@ -50475,6 +50516,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_inherited_aliases", desugar_inherited_aliases(c));         /* alias_method :next, :builtin_m on a chain rooted at Array, Hash or String -> a forwarding def, until such an alias binds from the record */
   AN_STEP_V("desugar_readers_over_inherited_defs", desugar_readers_over_inherited_defs(c)); /* def r in Base; attr_reader :r in Sub < Base -> Sub: def r = @r */
   lower_run(c, &lc, LW_REASSIGNED_BLOCK_PARAMS);   /* |p| p = other -> |p__bpin| p = p__bpin; p = other */
+  AN_STEP_V("desugar_sclass_hooks", desugar_sclass_hooks(c));                 /* class << self; def extended(b) -> def self.extended(b) */
   AN_STEP_V("desugar_instance_eval_defs", desugar_instance_eval_defs(c));         /* K.instance_eval { def m } -> K.class_eval { def K.m } */
   AN_STEP_V("desugar_self_class_eval_blocks", desugar_self_class_eval_blocks(c));   /* class_eval { tag n } in def self.m -> self.instance_exec { tag n } */
   desugar_class_reopen(c);               /* class Class / Class.class_eval -> a module */
@@ -50492,6 +50534,7 @@ static void an_phase_desugar_register(Compiler *c) {
   /* include M / extend M -> M.included/extended(base)'s body, a splice the
      host grafts (its class_eval "<text>") and lowers with the rows run so far */
   host_begin(&hs, &lc);
+  AN_STEP_V("desugar_toplevel_hooked_mixins", desugar_toplevel_hooked_mixins(c)); /* Ver.extend(Basic), Basic hooked -> module Ver; extend ::Basic; end */
   AN_STEP_V("desugar_included_hooks", desugar_included_hooks(c, &hs));
   host_end(c, &hs);
   AN_STEP_V("desugar_eval_method_block", desugar_eval_method_block(c));          /* k.class_eval(&o.method(:m)) -> o.m(k) */
@@ -53717,7 +53760,15 @@ static void an_phase_method_backstops(Compiler *c) {
      holding `M.callee`'s parameter open, and the .rbs never mentioned callee
      (#4165). The fixpoint's own copy runs after its binding, which is why it
      recovered on the next iteration and this loop never did. */
-  for (int it = 0; it < 8; it++) {
+  /* The rounds run until one changes nothing, under the fixpoint's cap
+     (an_round_cap_step), which a chain extends and an oscillation does not.
+     A type crosses one call a round here too, and the re-narrow before this
+     phase can leave a chain mid-way: stopped at a fixed eight rounds, a
+     boxed value following an Integer down eleven methods reached the tenth
+     and not the last, which kept its Integer parameter, and the call into it
+     converted a Float to an Integer and a String to 0 with nothing raised. */
+  AnRoundCap brc = { 128, 0, 0, NULL, 0 };
+  for (int it = 0; it < brc.cap; it++) {
     reassert_rbs_param_seeds(c);
     int ch = infer_param_types(c);
     /* A binding here is a type change after the fixpoint too: a parameter
@@ -53731,9 +53782,14 @@ static void an_phase_method_backstops(Compiler *c) {
        sides in fact carry and passed it to the int parameter (the C did not
        build, #4684). */
     ch |= infer_write_types(c);
+    /* ... and the ivars it is stored in, whose readers' returns follow */
+    ch |= infer_ivar_types(c);
     ch |= infer_return_types(c);
     if (!ch) break;
+    an_round_cap_step(c, &brc, it);
+    if (it + 1 == brc.cap) g_fixpoint_capped = 1;   /* (warned of with the fixpoint's) */
   }
+  free(brc.seen);
   reassert_rbs_param_seeds(c);
 
   /* Block splat params reach only the lowerings that bind them; the rest

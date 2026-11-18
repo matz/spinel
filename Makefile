@@ -4900,7 +4900,10 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) test/tuple_taken_apart_redefined_walk.rb -c --no-line-map -o "$$tmp/trw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (tuple_taken_apart_redefined_walk: -c)"; ok=0; }; \
 	! grep -E -q 'sp_PtrArray \*( ?volatile)? *lv_(tm_a|ew_a)\b' "$$tmp/trw.c" || { echo "infer-test: FAIL (a tuple taken apart in the block of a walk the program redefines was narrowed)"; ok=0; }; \
 	$(SPINEL) test/identity_helper_arg_dropped.rb -c --no-line-map -o "$$tmp/iha.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (identity_helper_arg_dropped: -c)"; ok=0; }; \
-	[ "$$(grep -E -o 'sp_PtrArray \*( ?volatile)? *(cst_SH_TBL|lv_(sh_loc|sh_flt|lp_t|cd_t|eb_t|ls_t))\b' "$$tmp/iha.c" | sed 's/.*[ *]//' | LC_ALL=C sort -u | tr '\n' ' ')" = "cst_SH_TBL lv_cd_t lv_eb_t lv_lp_t lv_ls_t lv_sh_flt lv_sh_loc " ] && ! grep -E -q 'sp_PtrArray \*( ?volatile)? *lv_(kp_t|kd_t|an_t|ld_t|yl_t|dm_t|rb_t|ho_t)\b' "$$tmp/iha.c" || { echo "infer-test: FAIL (a table handed to a helper that only answers it back, the answer dropped, stayed boxed, or one the helper keeps was narrowed)"; ok=0; }; \
+	[ "$$(grep -E -o 'sp_PtrArray \*( ?volatile)? *(cst_SH_TBL|lv_(sh_loc|sh_flt|lp_t|cd_t|eb_t|ls_t))\b' "$$tmp/iha.c" | sed 's/.*[ *]//' | LC_ALL=C sort -u | tr '\n' ' ')" = "cst_SH_TBL lv_cd_t lv_eb_t lv_lp_t lv_ls_t lv_sh_flt lv_sh_loc " ] && ! grep -E -q 'sp_PtrArray \*( ?volatile)? *lv_(kp_t|kd_t|an_t|ld_t|yl_t|dm_t|ho_t)\b' "$$tmp/iha.c" || { echo "infer-test: FAIL (a table handed to a helper that only answers it back, the answer dropped, stayed boxed, or one the helper keeps was narrowed)"; ok=0; }; \
+	if [ -f "$(RBS_INC)/rbs/parser.h" ]; then \
+	! grep -E -q 'sp_PtrArray \*( ?volatile)? *lv_rb_t\b' "$$tmp/iha.c" || { echo "infer-test: FAIL (a table handed to a parameter an RBS signature types as an Array was narrowed)"; ok=0; }; \
+	else echo "infer-test: identity_helper_arg_dropped's RBS-typed parameter skipped (no rbs parser)"; fi; \
 	$(SPINEL) test/index_read_unsettled_local.rb -c --no-line-map -o "$$tmp/iru.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_read_unsettled_local: -c)"; ok=0; }; \
 	! grep -q 'sp_RbVal lv_line\b' "$$tmp/iru.c" || { echo "infer-test: FAIL (an index read guessed a settling local a Hash and boxed a block parameter)"; ok=0; }; \
 	$(SPINEL) test/table_row_join_keeps_kind.rb -c --no-line-map -o "$$tmp/trj.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_row_join_keeps_kind: -c)"; ok=0; }; \
@@ -5233,8 +5236,10 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	[ "$$(awk '/^struct sp_(Grid|Holder)_s \{/ { c = $$2 } c && /iv_rows/ { print c, $$1; c = "" }' "$$tmp/pitl.c" | tr '\n' ' ')" = "sp_Grid_s sp_PtrArray sp_Holder_s sp_PtrArray " ] && grep -qE '^static inline .*sp_int sp_row_sum\(sp_PtrArray \* lv_src\);$$' "$$tmp/pitl.c" && grep -qE '^static inline .*sp_int sp_corner\(sp_PtrArray \* lv_t\);$$' "$$tmp/pitl.c" && grep -qE '^static inline .*sp_describe\(sp_PolyArray \* lv_t\);$$' "$$tmp/pitl.c" && grep -qE '^static inline .*sp_push_odd\(sp_PolyArray \* lv_t\);$$' "$$tmp/pitl.c" && grep -qE '^static inline .*sp_rb_float_sum\(sp_PtrArray \* lv_rows\);$$' "$$tmp/pitl.c" || { echo "infer-test: FAIL (a literal of Integer or Float rows passed to a method kept its parameter boxed, or one with a String row or a String pushed narrowed it)"; ok=0; }; \
 	$(SPINEL) test/table_empty_row_literal.rb -c --no-line-map -o "$$tmp/terl.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_empty_row_literal: -c)"; ok=0; }; \
 	[ "$$(grep -oE '^ +sp_[A-Za-z]+Array \* lv_[xyfwzt] = NULL;' "$$tmp/terl.c" | tr '\n' ' ' | tr -s ' ')" = " sp_PolyArray * lv_x = NULL; sp_PolyArray * lv_y = NULL; sp_PolyArray * lv_f = NULL; sp_PtrArray * lv_w = NULL; sp_PtrArray * lv_z = NULL; sp_PtrArray * lv_t = NULL; " ] && awk '/^struct sp_Grid_s \{/,/^\}/' "$$tmp/terl.c" | grep -q 'sp_PolyArray \* iv_rows;' || { echo "infer-test: FAIL (a table whose empty row was built as a general Array narrowed, or one whose empty rows are built as rows stayed boxed)"; ok=0; }; \
+	if [ -f "$(RBS_INC)/rbs/parser.h" ]; then \
 	$(SPINEL) test/rbs-seed/nested_array_literal_rows.rb --rbs test/rbs-seed/sig -c --no-line-map -o "$$tmp/nalr.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (nested_array_literal_rows: -c)"; ok=0; }; \
 	[ "$$(awk '/^struct sp_Table_s \{/,/^\}/' "$$tmp/nalr.c" | grep -cE 'sp_PtrArray \* iv_(ints|floats);')" = 2 ] || { echo "infer-test: FAIL (a seeded table whose empty rows are pushed into stayed boxed)"; ok=0; }; \
+	else echo "infer-test: nested_array_literal_rows skipped (no rbs parser)"; fi; \
 	$(SPINEL) test/table_row_to_mutating_param.rb -c --no-line-map -o "$$tmp/trm.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_row_to_mutating_param: -c, a walked row handed to a method storing another kind was refused)"; ok=0; }; \
 	grep -qE '^ +sp_PolyArray \* lv_t1 = NULL;$$' "$$tmp/trm.c" && grep -qE '^ +sp_PtrArray \* lv_t10 = NULL;$$' "$$tmp/trm.c" || { echo "infer-test: FAIL (a table whose walked row a method stores another kind into narrowed, or one whose rows go to no such method stayed boxed)"; ok=0; }; \
 	$(SPINEL) test/table_printed_narrows.rb -c --no-line-map -o "$$tmp/tpn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_printed_narrows: -c)"; ok=0; }; \
@@ -5275,6 +5280,9 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	for v in by_max by_min cmp_max cmp_min pool empty one bad shrink grow; do \
 	  grep -q "sp_PtrArray \\* lv_$$v\b" "$$tmp/opn.c" || { echo "infer-test: FAIL (obj_array_pick_narrowed: max_by, min_by, a comparator's max or min, or sample left $$v boxed)"; ok=0; }; \
 	done; \
+	$(SPINEL) test/opassign_poly_slot_class_facts.rb -c --no-line-map -o "$$tmp/opc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: -c)"; ok=0; }; \
+	grep -q "sp_Vec__plus(sp_Vec \*self, sp_Vec \* lv_other)" "$$tmp/opc.c" || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: a boxed sum of no Vec boxed Vec#+ other)"; ok=0; }; \
+	grep -A3 "struct sp_Vec_s {" "$$tmp/opc.c" | grep -q "sp_float iv_x;" || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: Vec @x boxed)"; ok=0; }; \
 	$(SPINEL) test/inject_empty_seed_typed.rb -c --no-line-map -o "$$tmp/ies.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (inject_empty_seed_typed: -c)"; ok=0; }; \
 	for m in evens squares kept nested small; do \
 	  grep -q "^static inline sp_IntArray \\* sp_$$m(" "$$tmp/ies.c" || { echo "infer-test: FAIL (inject_empty_seed_typed: an empty [] seed the block pushes Integers into left $$m boxed)"; ok=0; }; \

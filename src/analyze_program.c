@@ -1422,6 +1422,14 @@ static void prog_warn_missing(Compiler *c, const unsigned char *seen) {
         prog_rescue_runs(nt, nt_ref(nt, b, "rescue_clause")) == 1) continue;
     int r = prog_root_of(c, parent, id);
     const char *file = r >= 0 ? nt_str(nt, r, "file_path") : nt_file_path(nt, (int)nt_int(nt, id, "node_file", 0));
+    /* --strict-require (spin build): a require no file answers is a
+       compile-time refusal, as the inline model's resolve makes it */
+    if (g_strict_require) {
+      fprintf(stderr, "spinel: %s:%lld: cannot load such file -- %s (%s \"%s\")\n",
+              file ? file : "-", nt_int(nt, id, "node_line", 0), nt_str(nt, id, "path"), nt_str(nt, id, "method"),
+              nt_str(nt, id, "path"));
+      exit(1);
+    }
     fprintf(stderr, "warning: %s:%lld: cannot load such file -- %s (the %s raises LoadError when it runs)\n",
             file ? file : "-", nt_int(nt, id, "node_line", 0), nt_str(nt, id, "path"), nt_str(nt, id, "method"));
   }

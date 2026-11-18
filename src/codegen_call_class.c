@@ -4931,13 +4931,17 @@ static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int r
       int nxs = 0;
       if (g_needs_class_machinery && comp_exc_subclasses(c, &nxs) && nxs > 0) {
         int tv = ++g_tmp;
-        buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+        /* (boxed: the receiver's representation may be a String handle's
+           where its type is poly -- a `self` the dispatcher of a conditional
+           def names the class of, in a String reopening whose self is a
+           handle -- and the read face of a handle is its bytes) */
+        buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
         buf_printf(b, "; (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_EXCEPTION && _t%d.v.p) ? "
                    "sp_user_exc_class(sp_exc_class_name((sp_Exception *)_t%d.v.p)) : sp_poly_class_val(_t%d); })",
                    tv, tv, tv, tv, tv);
         return 1;
       }
-      buf_puts(b, "sp_poly_class_val("); emit_expr(c, recv, b); buf_puts(b, ")");
+      buf_puts(b, "sp_poly_class_val("); emit_boxed(c, recv, b); buf_puts(b, ")");
       return 1;
     }
   }

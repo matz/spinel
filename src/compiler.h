@@ -565,6 +565,7 @@ typedef struct {
                                  behind it, guard_behind, until the cell is
                                  set */
   int guard_behind;
+  unsigned char mixin_conditional;   /* an instance prepend guarded at a placed conditional statement */
   unsigned char mixin_unversioned;   /* a plain copy of a mixin that may
                                         not run and is not guarded
                                         (include_module_methods' plain),

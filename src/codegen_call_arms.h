@@ -84,7 +84,7 @@ int emit_call_proc_literal_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
    has), at_cls and at_side the receiver class and side it asks there
    (refl_at, cplan_list_omits). */
 enum { REFL_SHOWN = 1, REFL_ROW = 2 };
-typedef struct { char **v; unsigned char *show; int n, cap, at, at_cls; unsigned at_side; } ReflNames;
+typedef struct { char **v; unsigned char *show; int n, cap, at, at_cls, vis_mask; unsigned at_side; } ReflNames;
 /* The classes a `k.new(...)` switch gives an ArgumentError arm, grouped by
    message so each message is emitted once. */
 typedef struct { char msg[256]; int *cis; int ncis; } CtorArityArm;
@@ -150,6 +150,9 @@ int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc, con
 int method_hidden_from_reflection(Compiler *c, int cid, const char *m);
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m);
 int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv);
+int respond_to_guard_reaches(Compiler *c, TyKind rt, const char *name);
+struct CplanCells;
+void emit_guarded_presence(Compiler *c, const struct CplanCells *cells, Buf *b);
 int is_enum_cursor_name(const char *n);
 /* nil's static answer to respond_to?(qm, ...); *prog: by a method of the program's */
 int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int *argv, int *prog);

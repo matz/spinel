@@ -1,0 +1,18 @@
+[3, false, false]
+[false, false, false, false]
+inherit flag
+false
+[:extra, true, [2]]
+[2, 3]
+[13, true, true]
+[true, false, true, false]
+inherit flag
+false
+11
+:wrong_arity
+[18, true, true]
+[true, false, true, false]
+inherit flag
+false
+11
+:wrong_arity

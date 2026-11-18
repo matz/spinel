@@ -110,8 +110,9 @@ current bytes after conversion. Boxed String readers use the load record
 to select their builtin or an installed override. An alias that captures
 the builtin keeps that implementation in a method scope. A prepend's guard
 and its `super` share the version history of the String method behind it.
-A conditional prepend confined to existing public String readers activates
-its guard at the statement list the load record identifies.
+A placed conditional prepend activates its guard when its statement runs.
+Dispatch and `respond_to?` use the active arm's visibility and fall back
+to the underlying method while the guard is clear.
 A conditional assignment to a String instance variable evaluates
 the right-hand side only when the store is taken. It checks whether the
 receiver is frozen after evaluating that value and before updating the slot.

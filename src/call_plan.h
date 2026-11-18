@@ -1186,6 +1186,7 @@ int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);
    visibility (cplan_pinned_vis), an arm's fact rather than a call's. */
 enum { CPV_CMETHOD = 1, CPV_ROOT = 2 };
 int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, int *at);
+int cplan_guarded_call_visibility(Compiler *c, int id, int cls, const char *name);
 TyKind cplan_poly_arg_storage(Compiler *c, int id);
 /* The re-entry of a call on an object whose static class cannot answer the
    name while one of its subclasses can (#4023). Computed afresh. */
@@ -1576,7 +1577,11 @@ int cplan_presence_class(Compiler *c, int id);
    point (cplan_cmethod_later), for a chain whose entry arms a remove, and
    in a program that defines respond_to_missing?
    (respond_to_missing_defined). */
-typedef struct { int n; char cell[VER_MAX_ARMS][32]; char vis[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char ans[VER_MAX_ARMS]; int els; } CplanCells;
+typedef struct CplanCells { int n; char cell[VER_MAX_ARMS][32]; char vis[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char ans[VER_MAX_ARMS]; int els; } CplanCells;
+/* Physical presence for a conditional prepend. Answers are visibility
+   masks (public 1, protected 2, private 4), or 0 for an absent method.
+   A null output asks only whether the selector decides the answer. */
+int cplan_guarded_presence(Compiler *c, int cls, const char *name, int own, CplanCells *out);
 /* Whether an implied callback has a live definition in its version entry.
    The caller supplies its own fallback when there is no definition. */
 int cplan_implied_entry_cells(Compiler *c, int mi, int undefined, CplanCells *out);

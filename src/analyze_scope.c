@@ -8779,8 +8779,8 @@ static int module_prepend_list(Compiler *c, int mod_id, int *out, int max);
    (-1 for none of the program's) and the LrMixKind. */
 typedef struct { int stmt, ref, mod, kind, list, conditional; } BodyMix;
 
-/* A conditional prepend can guard the replacement of an existing
-   String reader without changing which methods the receiver exposes. */
+/* The builtin readers have an explicit fallback. Ordinary names use the
+   same inherited lookup as a later prepend onto a program class. */
 static int string_reader_prepend(Compiler *c, int cls, int mod) {
   if (mod < 0 || mod >= c->nclasses || !comp_class_is_module(c, &c->classes[mod])) return 0;
   int mixins;
@@ -8796,9 +8796,8 @@ static int string_reader_prepend(Compiler *c, int cls, int mod) {
       if (name && (is_module_hook_name(name) || is_hook_protocol_name(name))) return 0;
       continue;
     }
-    if (!name || !is_string_boxed_reader(name) ||
-        comp_method_vis(&c->classes[mod], name) != SP_VIS_PUBLIC ||
-        comp_method_vis(&c->classes[cls], name) != SP_VIS_PUBLIC) return 0;
+    if (!name || (!is_string_boxed_reader(name) &&
+                  builtin_instance_method_known(c->classes[cls].name, name))) return 0;
     found = 1;
   }
   return found;
@@ -11072,7 +11071,8 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
       int list = mx[j].list, at = list == body ? late : mx[j].stmt;
       int stmt_here = late >= 0 && list_has_stmt(nt, list, mx[j].stmt);
       int layered = stmt_here && mixin_layers_call_super(c, ci, mod_id, at, mx[j].stmt);
-      int here = stmt_here && !mixin_presence_unguarded(c, ci, mod_id, at) && !mixin_rebrought_behind(c, ci, mod_id, at) &&
+      int here = stmt_here && (mx[j].conditional || !mixin_presence_unguarded(c, ci, mod_id, at)) &&
+                 !mixin_rebrought_behind(c, ci, mod_id, at) &&
                  !mixin_meets_plain_late(c, ci, mod_id) && !layered;
       if (mx[j].conditional && !here) continue;
       /* a module prepended before, or one such a module brings, is among
@@ -11129,7 +11129,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
         int active_mi = sc->shadow || prev >= 0 ? -1 : comp_method_in_class(c, ci, method_name);
         int str_reader = ci == comp_core_class(c, CORE_STRING) && is_string_boxed_reader(method_name);
         int guard = here && !sc->shadow && prev < 0 &&
-                    (active_mi >= 0 || str_reader || !is_builtin_reopen(c->classes[ci].name)),
+                    (active_mi >= 0 || str_reader || mx[j].conditional || !is_builtin_reopen(c->classes[ci].name)),
             behind = active_mi;
         /* A later prepend's cell selects the builtin or inherited method
            behind the copy until the prepend runs. */
@@ -11210,6 +11210,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
              statement has run (Scope.mixin_guarded) */
           if (guard) { dst->mixin_guarded = prepend_cell(c, &cell); dst->guard_behind = behind; }
           else if (vguard >= 0) { dst->mixin_guarded = c->scopes[vguard].mixin_guarded; dst->guard_behind = c->scopes[vguard].guard_behind; }
+          dst->mixin_conditional = dst->mixin_guarded && mx[j].conditional;
           dst->mixin_plain_late = stmt_here && !layered && !dst->mixin_guarded;
           dst->mixin_unversioned = stmt_here && !here;
           { dst->origin_module_ci = mod_id + 1; comp_touch_scope(dst->idx); }   /* #owner names the module */

@@ -339,40 +339,95 @@ static char **rtr_omitted(Compiler *c, int id, int *n) {
   }
   return v;
 }
+static int respond_to_guard_class(Compiler *c, TyKind rt, int cls) {
+  int str = comp_core_class(c, CORE_STRING);
+  if (str < 0 || !is_descendant(c, cls, str)) return 0;
+  if (rt == TY_STRING || rt == TY_STRBUF) return cls == str;
+  return rt == TY_POLY || rt == TY_UNKNOWN ||
+         (ty_is_object(rt) && is_descendant(c, cls, ty_object_class(rt)));
+}
+int respond_to_guard_reaches(Compiler *c, TyKind rt, const char *name) {
+  if (!c->n_prepend_cells) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (respond_to_guard_class(c, rt, k) && cplan_guarded_presence(c, k, name, 0, NULL)) return 1;
+  return 0;
+}
+typedef struct { Compiler *c; Buf *b; int cls, tmp, literal; } RespondGuard;
+static void emit_respond_guard(void *ud, const char *name) {
+  RespondGuard *g = ud;
+  CplanCells cs;
+  if (!cplan_guarded_presence(g->c, g->cls, name, 0, &cs)) return;
+  buf_printf(g->b, "(_k%d == %d", g->tmp, g->cls);
+  if (!g->literal) {
+    buf_printf(g->b, " && !strcmp(_q%d, \"", g->tmp);
+    emit_c_escaped(g->b, name);
+    buf_puts(g->b, "\")");
+  }
+  buf_puts(g->b, ") ? ((");
+  emit_guarded_presence(g->c, &cs, g->b);
+  buf_printf(g->b, " & (_a%d ? 7 : 1)) != 0) : ", g->tmp);
+}
 /* respond_to? asked at run time, by the name's string: each class's own
    methods by the value's class, then what every object has. */
-static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv) {
+static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv,
+                                         const char *literal) {
   const NodeTable *nt = c->nt;
   int tv = ++g_tmp;
+  Buf guarded = {0};
+  if (c->n_prepend_cells) {
+    TyKind rt = repr_of(c, recv).as_ty;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!respond_to_guard_class(c, rt, k)) continue;
+      RespondGuard guard = { c, &guarded, k, tv, literal != NULL };
+      if (literal) emit_respond_guard(&guard, literal);
+      else cplan_chain_names(c, k, emit_respond_guard, &guard);
+    }
+  }
   /* boxed when the call is typed so (an IO's is, see the fold above) */
   int boxed = repr_of(c, id).kind == RK_BOXED;
   if (boxed) buf_puts(b, "sp_box_bool(");
   buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
   int nom = 0;
   char **om = rtr_omitted(c, id, &nom);
-  if (nom) buf_printf(b, "; const char *_n%d = ({ const char *_q%d = sp_poly_to_name(", tv, tv);
-  else buf_printf(b, "; const char *_n%d = sp_poly_to_name(", tv);
-  emit_boxed(c, argv[0], b);
-  if (nom) {
-    buf_printf(b, "); sp_str_in_list(_q%d, (const char *const[]){", tv);
-    for (int i = 0; i < nom; i++) { buf_puts(b, "\""); emit_c_escaped(b, om[i]); buf_puts(b, "\", "); }
-    buf_printf(b, "NULL}) ? \"\" : _q%d; })", tv);
+  if (guarded.p) {
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _m%d = ", tv, tv);
+    emit_boxed(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_m%d); sp_bool _a%d = ", tv, tv);
+    if (argc >= 2) emit_cond(c, argv[1], b); else buf_puts(b, "0");
+    buf_printf(b, "; const char *_q%d = sp_poly_to_name(_m%d); const char *_n%d = ", tv, tv, tv);
+  } else {
+    if (nom) buf_printf(b, "; const char *_n%d = ({ const char *_q%d = sp_poly_to_name(", tv, tv);
+    else buf_printf(b, "; const char *_n%d = sp_poly_to_name(", tv);
+    emit_boxed(c, argv[0], b);
   }
+  if (nom) {
+    buf_printf(b, guarded.p ? "sp_str_in_list(_q%d, (const char *const[]){" : "); sp_str_in_list(_q%d, (const char *const[]){", tv);
+    for (int i = 0; i < nom; i++) { buf_puts(b, "\""); emit_c_escaped(b, om[i]); buf_puts(b, "\", "); }
+    buf_printf(b, guarded.p ? "NULL}) ? \"\" : _q%d" : "NULL}) ? \"\" : _q%d; })", tv);
+  }
+  else if (guarded.p) buf_printf(b, "_q%d", tv);
   else buf_puts(b, ")");
   for (int i = 0; i < nom; i++) free(om[i]);
   free(om);
-  buf_printf(b, "; sp_bool _a%d = ", tv);
-  if (argc >= 2) emit_cond(c, argv[1], b); else buf_puts(b, "0");
+  if (!guarded.p) {
+    buf_printf(b, "; sp_bool _a%d = ", tv);
+    if (argc >= 2) emit_cond(c, argv[1], b); else buf_puts(b, "0");
+  }
   /* the value's class as the poly dispatch keys it: a boxed builtin a
      reopening extended (a Time is an OBJ box naming SP_BUILTIN_TIME, a
      String the string tag) maps to the reopening's entry, where the
      plain cls_id never matched it */
   buf_printf(b, "; sp_int _k%d = ", tv);
   emit_poly_dispatch_key(c, tv, 1, 1, 0, b);
+  buf_puts(b, "; ");
+  if (guarded.p) {
+    buf_puts(b, guarded.p);
+    free(guarded.p);
+  }
   /* each class's names as one list, by a switch over the class: an ||
      chain of every name nests as deep as it is long, which overflows
      clang's stack at a few thousand */
-  buf_printf(b, "; ((({ sp_bool _r%d = 0; switch (_k%d) {", tv, tv);
+  buf_printf(b, "((({ sp_bool _r%d = 0; switch (_k%d) {", tv, tv);
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_class_is_module(c, &c->classes[k])) continue;
     const CplanRtrLists *rl = rtr_lists(c, k);
@@ -936,6 +991,10 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       qm = nt_str(nt, argv[0], "content");
       if (!qm) qm = nt_str(nt, argv[0], "unescaped");
     }
+    if (qm && recv >= 0 && argc <= 2 && respond_to_guard_reaches(c, rt, qm)) {
+      emit_respond_to_runtime_name(c, id, b, recv, argc, argv, qm);
+      return 1;
+    }
     /* main's def whose visibility only the run tells (a word under a condition, in a loop): every value
        answers by its cell, and a private one to a true include_all */
     const LocalVar *tg = qm && recv >= 0 && argc <= 2 && !ty_is_object(rt) && !any_class_responds(c, qm) ? cplan_top_def_cell(c, id, qm) : NULL;
@@ -1069,7 +1128,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                                                : ty_is_object(rt) && nt_kind(nt, argv[1]) != NK_FalseNode &&
                                                  nt_kind(nt, argv[1]) != NK_NilNode) &&
           respond_to_runtime_reaches(c, rt)) {
-        emit_respond_to_runtime_name(c, id, b, recv, argc, argv);
+        emit_respond_to_runtime_name(c, id, b, recv, argc, argv, qm);
         return 1;
       }
       /* a subclass instance the receiver may hold answers by its own class */
@@ -1311,7 +1370,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
     else if (recv >= 0 && rt != TY_CLASS && nt_kind(nt, argv[0]) != NK_SplatNode &&
              respond_to_runtime_reaches(c, rt)) {
-      emit_respond_to_runtime_name(c, id, b, recv, argc, argv);
+      emit_respond_to_runtime_name(c, id, b, recv, argc, argv, NULL);
       return 1;
     }
   }
@@ -1344,6 +1403,27 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       return 1;
     }
     if (qm && ci >= 0) {
+      CplanCells cs;
+      NodeKind ik = argc >= 2 ? nt_kind(nt, argv[1]) : NK_TrueNode;
+      int own = ik == NK_FalseNode || ik == NK_NilNode;
+      if (argc <= 2 && ik != NK_SplatNode && cplan_guarded_presence(c, ci, qm, own, &cs)) {
+        buf_puts(b, "((");
+        if (own || ik == NK_TrueNode) {
+          emit_guarded_presence(c, &cs, b);
+        } else {
+          CplanCells own_cs;
+          cplan_guarded_presence(c, ci, qm, 1, &own_cs);
+          buf_puts(b, "(");
+          emit_cond(c, argv[1], b);
+          buf_puts(b, " ? ");
+          emit_guarded_presence(c, &cs, b);
+          buf_puts(b, " : ");
+          emit_guarded_presence(c, &own_cs, b);
+          buf_puts(b, ")");
+        }
+        buf_printf(b, " & %d) != 0)", md_mask);
+        return 1;
+      }
       /* Ruby makes the initialize family private on every class, defined or
          not: private_method_defined? is true for all of them and the public /
          protected / plain queries are false (#3874). */
@@ -6705,9 +6785,18 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
       cplan_table_presence(c, k, CT_OWN, qm, &ow);
       int own = ow.table;
       int vis = pr.vis == SP_VIS_PRIVATE ? 4 : pr.vis == SP_VIS_PROTECTED ? 2 : 1;
+      CplanCells chain_cs, own_cs;
+      int guarded = cplan_guarded_presence(c, k, qm, 0, &chain_cs);
       buf_puts(&rows, "      if (!strcmp(name, \"");
       emit_c_escaped(&rows, qm);
-      buf_printf(&rows, "\")) return (inherit || %d) && (%d & mask) != 0;\n", own, vis);
+      if (guarded) {
+        cplan_guarded_presence(c, k, qm, 1, &own_cs);
+        buf_puts(&rows, "\")) return ((inherit ? ");
+        emit_guarded_presence(c, &chain_cs, &rows);
+        buf_puts(&rows, " : ");
+        emit_guarded_presence(c, &own_cs, &rows);
+        buf_puts(&rows, ") & mask) != 0;\n");
+      } else buf_printf(&rows, "\")) return (inherit || %d) && (%d & mask) != 0;\n", own, vis);
       nrows++;
     }
     if (nrows) {

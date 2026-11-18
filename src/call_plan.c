@@ -2463,6 +2463,52 @@ static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32
   return n;
 }
 static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs);
+static int ver_closed_to(int vis, int face);
+static int guard_visibility(Compiler *c, int scope) {
+  Scope *s = &c->scopes[scope];
+  if (s->super_behind) {
+    int inherited = cplan_super_target(c, -1, s, NULL);
+    if (inherited >= 0) s = &c->scopes[inherited];
+    else if (object_private_method_name(comp_scope_user_name(s))) return SP_VIS_PRIVATE;
+  }
+  int owner = s->origin_module_ci - 1;
+  if (owner >= 0) return comp_method_vis(&c->classes[owner], comp_scope_user_name(s));
+  return s->class_id >= 0 ? comp_method_vis(&c->classes[s->class_id], s->name) : SP_VIS_PUBLIC;
+}
+static int guard_is_conditional(Compiler *c, const int *to, int n) {
+  for (int k = 0; k < n; k++) if (c->scopes[to[k]].mixin_conditional) return 1;
+  return 0;
+}
+static int guard_arity(Compiler *c, int id, const int *to, int n) {
+  return guard_is_conditional(c, to, n) ? ver_call_n(c, id) : ver_arity(c, id, to, n);
+}
+static int guard_needs_face(Compiler *c, const int *to, int n) {
+  if (!guard_is_conditional(c, to, n)) return 0;
+  for (int k = 0; k < n; k++) if (guard_visibility(c, to[k]) != SP_VIS_PUBLIC) return 1;
+  return 0;
+}
+static int guard_call_face(Compiler *c, int id, const Scope *m, unsigned flags) {
+  if (!(flags & CT_PUBLIC)) return VF_NONE;
+  if (id >= 0 && nt_str(c->nt, id, "vis_enforce")) return VF_PUBLIC;
+  const Scope *caller = comp_scope_of(c, id);
+  return caller && !caller->is_cmethod && caller->class_id >= 0 &&
+         is_descendant(c, caller->class_id, m->class_id) ? VF_PRIVATE : VF_PUBLIC;
+}
+
+static int conditional_guard_method(Compiler *c, int cls, const char *name) {
+  if (!c->n_prepend_cells || cls < 0 || !name) return -1;
+  int mi = call_target(c, -1, cls, name, CT_METHODS, NULL);
+  return mi >= 0 && c->scopes[mi].mixin_guarded ? mi : -1;
+}
+/* Visibility of an installed conditional prepend belongs to the entry,
+   including the case where a known earlier call reaches its fallback. */
+int cplan_guarded_call_visibility(Compiler *c, int id, int cls, const char *name) {
+  if (!c->ver_built || !cplan_call_enforces_vis(c, id)) return 0;
+  int mi = conditional_guard_method(c, cls, name);
+  if (mi < 0) return 0;
+  int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, NULL, NULL);
+  return guard_needs_face(c, to, n);
+}
 /* A call that reaches mi, a copy a later prepend puts in front of a method,
    runs it once the prepend's statement has run and the method behind it
    until then: the guard entry of mi's class for the call's arguments
@@ -2489,7 +2535,13 @@ static int ct_guard(Compiler *c, int id, int mi, unsigned flags, MethodLookup *m
           }
       }
   }
-  int e = c->ver_built ? ct_entry_of(c, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, name, ver_arity(c, id, to, n)) : -1;
+  int e = -1;
+  if (c->ver_built) {
+    int ar = guard_arity(c, id, to, n);
+    int face = flags & CT_PUBLIC && guard_needs_face(c, to, n) ? guard_call_face(c, id, m, flags) : VF_NONE;
+    int ix = ver_entry_ix(c, VER_ENTRY_GUARD, 0, m->class_id, m->is_cmethod, name, ar, face);
+    e = ix >= 0 ? c->ver_entries[ix].scope : -1;
+  }
   *ml = (MethodLookup){ .kind = e >= 0 ? ML_ENTRY : ML_TABLE, .why = e >= 0 ? 0 : MLW_MANY, .n = (short)n, .def_class = ml->def_class };
   return e >= 0 ? e : mi;   /* a later synthesized call uses the general table entry */
 }
@@ -6651,7 +6703,11 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
   int cls = m ? m->class_id : cm_capture_class(c, id, &name), sg = m ? m->is_cmethod : 1;
   if (m) {
     name = method_sym_arg(c, id);
-    if ((m->entry != ENTRY_DISPATCH && m->entry != ENTRY_TABLE) || cplan_entry_finds(c, mi) != VER_FINDS_NONE || is_instance_method_name(nt_str(c->nt, id, "name"))) return 0;
+    if (m->entry != ENTRY_DISPATCH && m->entry != ENTRY_TABLE) return 0;
+    if (is_instance_method_name(nt_str(c->nt, id, "name"))) {
+      CplanCells cs;
+      if (!cplan_guarded_presence(c, cls, name, 0, &cs) || cs.els) return 0;
+    } else if (cplan_entry_finds(c, mi) != VER_FINDS_NONE) return 0;
   }
   else if (cls < 0 || !(ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1) || cm_capture_never_made(c, id, cls, name)) ||
            cm_builtin_answers(c, cls, name)) return 0;
@@ -11097,7 +11153,7 @@ static void ver_list_put(NodeTable *nt, int list, int at, int after, int g) {
    (ver_vis_arm) */
 typedef struct VerArmVis { int raise, cell_face; } VerArmVis;
 static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int ar, int blk, int spliced,
-                          const DispArm *arm, const int *to, const VerArmVis *avis, int na, int els_to, int els);
+                          const DispArm *arm, const int *to, const VerArmVis *avis, int na, int els_to, int els, int else_vis);
 /* The raise of a call of `name` that finds no method on cls's side sg
    (main for -1), in an entry of ar parameters: NoMethodError, or with vcall
    (a variable-like call's entry, VF_VCALL) NameError, whose message names
@@ -11279,7 +11335,7 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
       nt_set_ignore_visibility((NodeTable *)c->nt, call, 1);
       arm[k].stmt = 1 + call;
     }
-  return ver_entry_emit(c, into, sg, name, ar, blk, spliced, arm, to, face ? avis : NULL, na, fallback, els);
+  return ver_entry_emit(c, into, sg, name, ar, blk, spliced, arm, to, face ? avis : NULL, na, fallback, els, 0);
 }
 /* A face entry's arm call `call` of a version whose visibility only the
    run tells (VerArmVis.cell_face): `if $__spinel_vis_<cell> == private then <call>
@@ -11303,10 +11359,10 @@ static int ver_vis_arm(NodeTable *nt, int cell, int face, int call, const char *
    els_to, beside els_to's def; or, given els, that else arm, pinned to
    nothing */
 static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int ar, int blk, int spliced,
-                          const DispArm *arm, const int *to, const VerArmVis *avis, int na, int els_to, int els) {
+                          const DispArm *arm, const int *to, const VerArmVis *avis, int na, int els_to, int els, int else_vis) {
   NodeTable *nt = (NodeTable *)c->nt;
   int pin = els < 0, like = c->scopes[els_to].def_node, ecell = -1;
-  VerArmVis ev = { 0, 0 };
+  VerArmVis ev = { else_vis, 0 };
   int vc[VER_MAX_ARMS + 1][3], vv[VER_MAX_ARMS + 1][3], vn[VER_MAX_ARMS + 1] = { 0 };
   /* (the else arm raises as the last arm of its version does: avis, given
      for a face entry, says which arms raise, and with what) */
@@ -11446,7 +11502,7 @@ static int guard_layer_versions(Compiler *c, int mi, int from, int ar) {
     arm[k] = (DispArm){ sel[k], vs[k].n, c->scopes[to[k]].name, vs[k].cell + 1 };
   }
   const Scope *m = &c->scopes[mi];
-  return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, NULL, nv, to[nv - 1], -1);
+  return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, NULL, nv, to[nv - 1], -1, 0);
 }
 /* The copies t is one of, a mixin's unguarded copies of a module's
    versions under one hidden name (a layer the class's chain holds below a
@@ -11523,6 +11579,33 @@ static int guard_behind_finds_none(Compiler *c, int behind, int cls, int sg, con
   }
   return 1;
 }
+/* Reflection uses the call's selectors, but a method_missing arm does
+   not supply a physical method. */
+int cplan_guarded_presence(Compiler *c, int cls, const char *name, int own, CplanCells *out) {
+  int mi = conditional_guard_method(c, cls, name);
+  if (mi < 0) return 0;
+  int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, NULL, NULL);
+  if (!guard_is_conditional(c, to, n)) return 0;
+  if (!out) return 1;
+  DispArm arms[VER_MAX_ARMS];
+  memset(out, 0, sizeof *out);
+  char sel[VER_MAX_ARMS][32];
+  n = guard_chain(c, mi, to, arms, sel);
+  for (int i = 0; i < n - 1; i++) {
+    const Scope *s = &c->scopes[to[i]];
+    if (own && (s->is_include_copy || s->is_prepend_copy || s->class_id != cls)) continue;
+    int k = out->n++;
+    memcpy(out->cell[k], sel[i], sizeof out->cell[k]);
+    out->val[k] = arms[i].val;
+    out->ans[k] = (unsigned char)core_bit_of_vis(guard_visibility(c, to[i]));
+  }
+  int last = to[n - 1];
+  const Scope *s = &c->scopes[last];
+  if (guard_behind_finds_none(c, last, cls, 0, name)) return 1;
+  if (!own || (!s->super_behind && s->class_id == cls && !s->is_include_copy && !s->is_prepend_copy))
+    out->els = core_bit_of_vis(guard_visibility(c, last));
+  return 1;
+}
 /* The guard entry of mi, a copy a later prepend puts in front of a method
    (Scope.mixin_guarded), with ar parameters: the same if-chain over the
    cells of the prepends in front of the method, nearest first, its else
@@ -11532,12 +11615,22 @@ static int guard_behind_finds_none(Compiler *c, int behind, int cls, int sg, con
    module holds are told apart, each by its own cell. *behind: the method
    behind them all where the else arm calls method_missing in its place,
    -1 otherwise. */
-static int guard_entry_make(Compiler *c, int mi, int ar, int *behind) {
+static int guard_entry_make(Compiler *c, int mi, int ar, int face, int *behind) {
   DispArm arm[VER_MAX_ARMS];
+  VerArmVis vis[VER_MAX_ARMS];
   char sel[VER_MAX_ARMS][32];
   int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, arm, sel), blk = 0, spliced = 1;
   *behind = -1;
   if (n < 2) return -1;
+  int else_vis = 0;
+  if (face) {
+    for (int k = 0; k < n - 1; k++) {
+      int v = guard_visibility(c, to[k]);
+      vis[k] = (VerArmVis){ ver_closed_to(v, face) ? v : 0, 0 };
+    }
+    int v = guard_visibility(c, to[n - 1]);
+    else_vis = ver_closed_to(v, face) ? v : 0;
+  }
   /* Cloned forwarding bodies retain the hidden name even when the clone
      has no pin in the original entry's node index. */
   for (int k = 0; k < n - 1; k++) {
@@ -11560,11 +11653,22 @@ static int guard_entry_make(Compiler *c, int mi, int ar, int *behind) {
   /* the hidden method behind a later include's copy that finds no method:
      CRuby calls the chain's method_missing there, as an open history's
      entry does for none run (VK_MM) */
-  if (guard_behind_finds_none(c, to[n - 1], cls, sg, name) && cplan_mm_method(c, -1, cls, sg) >= 0) {
+  int absent = guard_behind_finds_none(c, to[n - 1], cls, sg, name);
+  int mm = (absent || face) && cplan_mm_method(c, -1, cls, sg) >= 0;
+  if (mm && (absent || else_vis)) {
     els = ver_absent_else(c, VK_MM, cls, sg, name, to, n, ar, &blk, &spliced);
-    *behind = to[n - 1];
+    if (absent) *behind = to[n - 1];
+  } else if (absent && guard_is_conditional(c, to, n)) {
+    els = ver_absent_else(c, VK_NOMETHOD, cls, sg, name, to, n, ar, &blk, &spliced);
   }
-  return ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, NULL, n - 1, to[n - 1], els);
+  /* A closed method still calls the receiver's method_missing. Keep
+     its forwarding form and the caller's block in the entry. */
+  for (int k = 0; mm && face && k < n - 1; k++) {
+    if (!vis[k].raise) continue;
+    arm[k].stmt = 1 + ver_absent_else(c, VK_MM, cls, sg, name, to, n, ar, &blk, &spliced);
+    to[k] = -1;
+  }
+  return ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, face ? vis : NULL, n - 1, to[n - 1], els, else_vis);
 }
 static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e) {
   if (!(c->nver_entries & (c->nver_entries - 1)) &&
@@ -11635,7 +11739,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   /* (at the last version, where a refusal names it) */
   static const char *const at[] = { "node_line", "node_file", "node_col" };
   for (int i = 0; i < 3; i++) nt_node_set_int(nt, els, at[i], nt_int(nt, like, at[i], 0));
-  int e = ver_entry_emit(c, w->cls, w->sg, w->name, w->ar, w->blk, spliced, arm, to, NULL, w->refuse ? 0 : nv, to[nv - 1], els);
+  int e = ver_entry_emit(c, w->cls, w->sg, w->name, w->ar, w->blk, spliced, arm, to, NULL, w->refuse ? 0 : nv, to[nv - 1], els, 0);
   c->scopes[e].entry = ENTRY_NAMED;
   if (w->refl) { nt_node_set_int(nt, c->scopes[e].def_node, "cond_def_refl", 1); ver_refl_count(c, w->vs[0].v->vis); }
   if (spell) {
@@ -12352,6 +12456,18 @@ static void ver_need_add(VerNeeds *o, VerNeed w) {
     o->ix[at] = o->n - 1;
   }
 }
+static void ver_need_guard(Compiler *c, VerNeeds *o, int id, int mi) {
+  const Scope *m = &c->scopes[mi];
+  int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, NULL, NULL);
+  VerNeed w = { VER_ENTRY_GUARD, m->class_id, m->is_cmethod, mi, guard_arity(c, id, to, n), comp_scope_user_name(m) };
+  if (!ver_need_has(c, o, w)) ver_need_add(o, w);
+  if (guard_needs_face(c, to, n)) {
+    w.face = VF_PRIVATE;
+    if (!ver_need_has(c, o, w)) ver_need_add(o, w);
+    w.face = VF_PUBLIC;
+    if (!ver_need_has(c, o, w)) ver_need_add(o, w);
+  }
+}
 static unsigned ver_pre_hash(int k, unsigned flags, const char *nm, int n) {
   return ver_mix(sp_strhash(nm) * 31u + (unsigned)(k + 1) * 131u + flags * 7u + (unsigned)(n + 1));
 }
@@ -12709,10 +12825,7 @@ void ver_entries_build(Compiler *c) {
     if (last != s) continue;
     if (!(ngc & (ngc - 1)) && !(gc = realloc(gc, sizeof *gc * (size_t)(ngc ? 2 * ngc : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     gc[ngc++] = s;
-    int to[VER_MAX_ARMS + 1];
-    VerNeed w = { VER_ENTRY_GUARD, c->scopes[s].class_id, c->scopes[s].is_cmethod, s,
-                  ver_arity(c, -1, to, guard_chain(c, s, to, NULL, NULL)), name };
-    if (!ver_need_has(c, &o, w)) ver_need_add(&o, w);
+    ver_need_guard(c, &o, -1, s);
   }
   ver_main_undef_guards(c);
   /* the open histories' entries first: the table answers them, and no call
@@ -12733,10 +12846,8 @@ void ver_entries_build(Compiler *c) {
       if (ct_version_named(c, names[i])) ct_version_classes(c, id, names[i], ver_need, &o);
       for (int j = 0; j < ngc; j++) {
         const Scope *m = &c->scopes[gc[j]];
-        int to[VER_MAX_ARMS + 1];
         if (!sp_streq(comp_scope_user_name(m), names[i]) && !is_send_family(names[i])) continue;
-        VerNeed w = { VER_ENTRY_GUARD, m->class_id, m->is_cmethod, gc[j], ver_arity(c, id, to, guard_chain(c, gc[j], to, NULL, NULL)), comp_scope_user_name(m) };
-        if (!ver_need_has(c, &o, w)) ver_need_add(&o, w);
+        ver_need_guard(c, &o, id, gc[j]);
       }
     }
   }
@@ -12761,7 +12872,7 @@ void ver_entries_build(Compiler *c) {
     int finds = n && guard_else_bare(c, to[n - 1], o.v[i].cls, o.v[i].sg, o.v[i].name, &hooks) ? VER_FINDS_NONE : ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
     const Scope *lm = &c->scopes[o.v[i].mi];   /* (a guarded layer's versions are its class's: super_layer_versions) */
     int behind = -1, e = o.v[i].guard == VER_ENTRY_LAYER ? guard_layer_versions(c, o.v[i].mi, lm->mixin_guarded ? lm->class_id : o.v[i].from - 1, o.v[i].ar)
-          : o.v[i].guard != VER_ENTRY_CHAIN ? guard_entry_make(c, o.v[i].mi, o.v[i].ar, &behind)
+          : o.v[i].guard != VER_ENTRY_CHAIN ? guard_entry_make(c, o.v[i].mi, o.v[i].ar, o.v[i].face, &behind)
                          : ver_entry_make(c, NULL, o.v[i].from ? o.v[i].from - 1 : o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, o.v[i].face, NULL, &finds);
     ver_entry_add(c, e >= 0 && o.v[i].guard != VER_ENTRY_LAYER ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from, .behind = behind + 1, .face = o.v[i].face });
   }
@@ -12773,7 +12884,7 @@ void ver_entries_build(Compiler *c) {
   for (int j = 0; j < ngc; j++) {
     int mi = gc[j], to[VER_MAX_ARMS + 1];
     Scope *m = &c->scopes[mi];
-    int ar = ver_arity(c, -1, to, guard_chain(c, mi, to, NULL, NULL));
+    int ar = guard_arity(c, -1, to, guard_chain(c, mi, to, NULL, NULL));
     int e = ct_entry_of(c, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar);
     if (e < 0) continue;
     c->scopes[e].entry = ENTRY_TABLE;

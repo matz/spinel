@@ -1,0 +1,6 @@
+[3, 3, 3, 3, 3]
+[true, true, true]
+[[:size, true], :size, 13, [:hidden, :size, true], 13]
+[false, true, false]
+[[:size, true], :size, 18, [:hidden, :size, true], 18]
+[false, true, false]

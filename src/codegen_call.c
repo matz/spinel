@@ -19813,6 +19813,7 @@ static void refl_cand_note(void *ud, const char *nm, int vis) {
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv,
                                       int with_modules, ReflNames *r) {
   ReflCand n = { c, r, pub, prot, priv };
+  r->vis_mask = (!!pub) | ((!!prot) << 1) | ((!!priv) << 2);
   mtab_build_enter(c);
   cplan_list_candidates(c, ci, with_modules ? 0 : CT_OWN, refl_cand_note, &n);
   mtab_build_leave(c);
@@ -19935,11 +19936,19 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
   int ta = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
   for (int i = 0; i < r->n; i++) {
-    if (!(r->show[i] & REFL_SHOWN)) continue;
-    if (cplan_undefined(c, cid, 0, r->v[i])) continue;
+    CplanCells cs;
+    int guarded = r->at && r->vis_mask && !(r->at_side & CT_CMETHOD) &&
+                  cplan_guarded_presence(c, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, &cs);
+    if (guarded) {
+      buf_puts(b, "if (");
+      emit_guarded_presence(c, &cs, b);
+      buf_printf(b, " & %d) ", r->vis_mask);
+    } else {
+      if (!(r->show[i] & REFL_SHOWN)) continue;
+      if (cplan_undefined(c, cid, 0, r->v[i])) continue;
+    }
     /* a class-side name whose versions the record cannot order against the list: listed where one of its
        cells says it is live (cplan_cmethod_presence), as a respond_to? there answers; public versions only */
-    CplanCells cs;
     if (r->at && (r->at_side & CT_CMETHOD) && !(r->show[i] & REFL_ROW) &&
         cplan_list_cells(c, r->at - 1, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, &cs) && cells_testable(c, &cs)) {
       buf_puts(b, "if (");
@@ -19951,7 +19960,7 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
       buf_puts(b, "))); ");
       continue;
     }
-    if (r->at && !(r->show[i] & REFL_ROW) && cplan_list_omits(c, r->at - 1, r->at_cls, r->at_side, r->v[i])) continue;
+    if (!guarded && r->at && !(r->show[i] & REFL_ROW) && cplan_list_omits(c, r->at - 1, r->at_cls, r->at_side, r->v[i])) continue;
     buf_printf(b, "sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", ta);
     emit_str_literal(b, r->v[i]);
     buf_puts(b, "))); ");
@@ -20536,6 +20545,18 @@ static int cells_testable(Compiler *c, const CplanCells *cs) {
   }
   return 1;
 }
+static void emit_cell_match(Compiler *c, const char *cell, int value, Buf *b) {
+  buf_printf(b, repr_slot_kind(c, comp_gvar(c, cell + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
+             cell + 1, value);
+}
+void emit_guarded_presence(Compiler *c, const CplanCells *cs, Buf *b) {
+  buf_puts(b, "(");
+  for (int i = 0; i < cs->n; i++) {
+    emit_cell_match(c, cs->cell[i], cs->val[i], b);
+    buf_printf(b, " ? %d : ", cs->ans[i]);
+  }
+  buf_printf(b, "%d)", cs->els);
+}
 /* ...the test that some version is live, ahead of the caller's last operand: each cell up to the last one that
    answers 0 (an undef's, a private version's, or a version's whose visibility cell tells) answers its own
    (`c == v ? ans : (`: the def's 1, the undef's 0, or `vis == public`), so a live version ahead of one is not
@@ -20545,13 +20566,11 @@ static int emit_cells_test(Compiler *c, const CplanCells *cs, Buf *b) {
   int open = 0, last = -1;
   for (int i = 0; i < cs->n; i++) if (!cs->ans[i] || cs->vis[i][0]) last = i;
   for (int i = 0; i < cs->n; i++) {
-    buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
-               cs->cell[i] + 1, cs->val[i]);
+    emit_cell_match(c, cs->cell[i], cs->val[i], b);
     if (i > last) buf_puts(b, " || ");
     else if (cs->vis[i][0]) {
       buf_puts(b, " ? (");
-      buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs->vis[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
-                 cs->vis[i] + 1, SP_VIS_PUBLIC);
+      emit_cell_match(c, cs->vis[i], SP_VIS_PUBLIC, b);
       buf_puts(b, ") : (");
       open++;
     }
@@ -24112,6 +24131,7 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard) {
           : plain ? method_vis_for_caller(c, id, vcid, vnm)
                   : cplan_method_vis(c, id, vcid, vnm, 0, NULL);
   if (vis == SP_VIS_PUBLIC) return 0;
+  if (!at_main && cplan_guarded_call_visibility(c, id, vcid, vnm)) return 0;
   const char *vrn = at_main ? "main" : class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
   buf_puts(b, "(");
   /* the receiver rides the error as NoMethodError#receiver */
@@ -24348,7 +24368,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
        typed receiver's call (method_vis_for_caller): a descendant, a class
        including the declaring module, a call inside that module */
     int vis = plain ? method_vis_for_caller(c, id, k, vnm) : cplan_method_vis(c, id, k, vnm, 0, NULL);
-    if (vis == SP_VIS_PUBLIC) continue;
+    if (vis == SP_VIS_PUBLIC || cplan_guarded_call_visibility(c, id, k, vnm)) continue;
     const char *vrn = class_ruby_name(c, k) ? class_ruby_name(c, k) : c->classes[k].name;
     {
       char head[200]; snprintf(head, sizeof head, "%s method '%s' called for an instance of ",
@@ -24369,7 +24389,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
       if (k == comp_core_class(c, CORE_OBJECT) || !class_is_builtin_reopen(c, k) ||
           comp_class_is_module(c, &c->classes[k]) || cplan_has_method_missing(c, id, k, 0)) continue;
       int vis = plain ? method_vis_for_caller(c, id, k, vnm) : cplan_method_vis(c, id, k, vnm, 0, NULL);
-      if (vis == SP_VIS_PUBLIC) continue;
+      if (vis == SP_VIS_PUBLIC || cplan_guarded_call_visibility(c, id, k, vnm)) continue;
       if (tk < 0) {
         tk = ++g_tmp;
         buf_printf(b, "{ int _t%d = ", tk);
@@ -24800,16 +24820,15 @@ static void emit_gate_msg(Compiler *c, const char *gmsg, int recv, int recv_run,
 }
 /* A face entry's arm for a version closed to the call that bound the entry
    (cplan_pinned_vis): the NoMethodError CRuby raises for a private (or
-   protected) method called with an explicit receiver. The entry is a root's
-   method, whose self is a boxed value, so the raise names its receiver at
-   run time and stages it for #receiver, with the arguments the entry was
-   handed for #args (emit_object_reopen_vis_refusal's boxed form). 1 when it
-   emitted. */
+   protected) method called with an explicit receiver. Box the entry's
+   receiver for the message and #receiver, and stage the arguments the
+   entry was handed for #args. 1 when it emitted. */
 static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
   int vis = cplan_pinned_vis(c, id);
   if (!vis) return 0;
   const NodeTable *nt = c->nt;
-  const char *vnm = nt_str(nt, id, "name");
+  Scope *entry = comp_scope_of(c, id);
+  const char *vnm = comp_scope_user_name(entry);
   int vac = 0; const int *vav = call_args(nt, id, &vac);
   /* the entry's own `*rest, **kw` (a splat entry's arms forward them): the
      list is built here, the rest and the keywords when there are any */
@@ -24818,7 +24837,9 @@ static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
   int tv = ++g_tmp, ta = ++g_tmp;
   Buf args, ops; memset(&args, 0, sizeof args); memset(&ops, 0, sizeof ops);
   if (staged) emit_staged_args(c, vac, vav, 0, -1, 0, &ops, &args);
-  buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = self; ", tv);
+  buf_printf(b, "(sp_raise_cls(\"NoMethodError\", ({ sp_RbVal _t%d = ", tv);
+  emit_reopen_self_boxed(c, entry, b);
+  buf_puts(b, "; ");
   if (ops.p) buf_puts(b, ops.p);
   if (spread)
     buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); "
@@ -35086,6 +35107,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
   g_rto_nil_obj = 0;
   g_rto_by_cls = -1;
   g_rto_exc = 0;
+  if (recv >= 0 && respond_to_guard_reaches(c, rt, qm)) return -1;
   /* respond_to?(sym, include_all=false): by default only public methods
      answer true; a literal `true` 2nd arg includes private+protected. A
      non-literal 2nd arg can't be folded, so a private/protected match is

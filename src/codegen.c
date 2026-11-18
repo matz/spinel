@@ -23760,6 +23760,16 @@ void emit_zero_arg_boxed_call(Compiler *c, int mi, const char *self, Buf *b) {
   free(call.p); free(pre.p); free(args.p);
 }
 
+static void emit_exc_text_call(Compiler *c, int mi, const char *self, Buf *b) {
+  if (c->scopes[mi].yields) {
+    int pf = scope_proc_form_of(c, mi);
+    if (pf < 0 || !proc_form_live(c, pf))
+      unsupported(c, c->scopes[mi].def_node, "exception text hook needs a callable proc form");
+    mi = pf;
+  }
+  emit_zero_arg_boxed_call(c, mi, self, b);
+}
+
 /* Ruby reads the override's actual value. Library reporting reads its
    text once at the archive boundary. Defaults can refer to program globals,
    so define this pair after the globals and method prototypes. */
@@ -23784,7 +23794,7 @@ static void emit_exc_text_tail(Compiler *c, Buf *b) {
       buf_puts(b, ") return ");
       char self[160];
       snprintf(self, sizeof self, "((sp_%s *)e)", c->classes[owner].c_name);
-      emit_zero_arg_boxed_call(c, mi, self, b);
+      emit_exc_text_call(c, mi, self, b);
       buf_puts(b, ";\n");
     }
     for (int f = msg ? 0 : 1; f < 2; f++) {
@@ -23800,7 +23810,7 @@ static void emit_exc_text_tail(Compiler *c, Buf *b) {
       for (int q = 0; q < kept; q++) {
         int mi = call_target(c, -1, xr[q], fn, CT_METHODS | CT_SHARED, NULL);
         buf_printf(b, " if (_xi%d == %d) return ", pk, q);
-        emit_zero_arg_boxed_call(c, mi, "e", b);
+        emit_exc_text_call(c, mi, "e", b);
         buf_puts(b, ";");
       }
       buf_puts(b, " }\n");

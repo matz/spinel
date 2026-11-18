@@ -21125,7 +21125,7 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
     /* --share-strings: a class variable holding the shared handle, as a
        global's slot (#6765) */
     if (h.r.share) {
-      emit_strbuf_orw_guard(c, ref.p, v, is_or, b);
+      emit_strbuf_orw_guard(c, ref.p, v, is_or, NULL, b);
       free(ref.p);
       buf_puts(b, " ");
       /* `||=` leaves the class variable defined whether or not it stored;
@@ -22410,7 +22410,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       char gref[256];
       snprintf(gref, sizeof gref, "gv_%s", rn);
       emit_indent(b, indent);
-      emit_strbuf_orw_guard(c, gref, v, is_or, b);
+      emit_strbuf_orw_guard(c, gref, v, is_or, NULL, b);
       buf_puts(b, "\n");
       return 1;
     }
@@ -22782,6 +22782,24 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       snprintf(ref2, sizeof ref2, "civ_Toplevel_%s", iv_c(nm + 1));
     else
       snprintf(ref2, sizeof ref2, "%s%siv_%s", g_self, g_self_deref, iv_c(nm + 1));
+    if (ivt2 == TY_STRBUF || ivt2 == TY_POLY) {
+      Buf frozen = {0};
+      if (sc2 >= 0 && strncmp(ref2, "civ_", 4) != 0)
+        emit_frozen_obj_guard(c, sc2, g_self ? g_self : "self", &frozen);
+      emit_indent(b, indent);
+      if (ivt2 == TY_STRBUF) emit_strbuf_orw_guard(c, ref2, v, is_or, frozen.p, b);
+      else {
+        const char *saved = g_orw_store_guard;
+        g_orw_store_guard = frozen.p;
+        buf_puts(b, "(void)");
+        emit_slot_orw_value(c, ivt2, eh2, ref2, v, is_or, NULL, b);
+        buf_puts(b, ";");
+        g_orw_store_guard = saved;
+      }
+      buf_puts(b, "\n");
+      free(frozen.p);
+      return;
+    }
     /* The RHS is rendered with its setup captured and spliced inside the
        guard, so a composite RHS (a hash literal's fills, a block-taking
        call's loop) runs only when the assignment is taken; see the
@@ -22792,16 +22810,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     int emitted_lit = 0;
     {
       Buf *saved_pre = g_pre; g_pre = &vpre;
-      if (ivt2 == TY_POLY) emit_boxed(c, v, &vval);
-      /* a shared-handle string slot takes an alias by handle and wraps
-         anything else in a fresh handle, as the plain write does */
-      else if (ivt2 == TY_STRBUF) {
-        if (strbuf_slot_text(c, v, &vval)) { }
-        else if (emit_strbuf_write_handle(c, v, &vval)) { }
-        /* (--share-strings: in the String plan's form, a box's handle) */
-        else emit_str_form_handle(c, v, &vval);
-      }
-      else if (ty_is_object(ivt2) || ty_is_array(ivt2) || ty_is_hash(ivt2) ||
+      if (ty_is_object(ivt2) || ty_is_array(ivt2) || ty_is_hash(ivt2) ||
                ivt2 == TY_FIBER || ivt2 == TY_THREAD || ivt2 == TY_QUEUE || ivt2 == TY_MUTEX || ivt2 == TY_CONDVAR || ivt2 == TY_PROC || ivt2 == TY_IO ||
                ivt2 == TY_MATCHDATA || ivt2 == TY_EXCEPTION || ivt2 == TY_REGEX) {
         emitted_lit = emit_empty_literal_as(c, v, ivt2, &vval);
@@ -22823,8 +22832,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       g_pre = saved_pre;
     }
     switch (ivt2) {
-    case TY_POLY: snprintf(cond2, sizeof cond2, "%ssp_poly_truthy(%s)", is_or ? "!" : "", ref2); break;
-    case TY_BOOL: case TY_STRING: case TY_STRBUF: snprintf(cond2, sizeof cond2, "%s%s", is_or ? "!" : "", ref2); break;
+    case TY_BOOL: case TY_STRING: snprintf(cond2, sizeof cond2, "%s%s", is_or ? "!" : "", ref2); break;
     /* an Integer or Float: its nil bit or oint flag; a plain one is never nil */
     case TY_INT: case TY_FLOAT:
       if (!onk) onk = ivar_orw_niltest(c, id, ref2, ont, sizeof ont, &ocid, &oiv, opfx, sizeof opfx);

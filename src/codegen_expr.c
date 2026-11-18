@@ -1484,7 +1484,17 @@ void emit_orw_guard(Compiler *c, int v, TyKind slot, const char *cond, const cha
 /* What the store of an object's own slot runs first, where the store is taken (the frozen guard `@x = v` takes),
    set by the ivar's value form around the slot's store (emit_ivar_orw_value, the shared-handle forms); NULL for any other slot. */
 const char *g_orw_store_guard = NULL;
-void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *b) {
+/* Evaluate a String or boxed RHS before testing whether the object accepts
+   the store. The caller has already selected the assigning branch. */
+void emit_conditional_slot_store(const char *ref, const char *value, const char *frozen, Buf *b) {
+  if (frozen) {
+    int t = ++g_tmp;
+    buf_printf(b, "__typeof__(%s) _t%d = %s; %s%s = _t%d;", ref, t, value, frozen, ref, t);
+  }
+  else buf_printf(b, "%s = %s;", ref, value);
+}
+
+void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, const char *frozen, Buf *b) {
   Buf vpre; memset(&vpre, 0, sizeof vpre);
   Buf vval; memset(&vval, 0, sizeof vval);
   Buf *saved_pre = g_pre; g_pre = &vpre;
@@ -1495,8 +1505,8 @@ void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *
   g_pre = saved_pre;
   buf_printf(b, "if (%s%s) { ", is_or ? "!" : "", ref);
   if (vpre.p) buf_puts(b, vpre.p);
-  if (g_orw_store_guard) buf_puts(b, g_orw_store_guard);
-  buf_printf(b, "%s = %s; }", ref, vval.p ? vval.p : "");
+  emit_conditional_slot_store(ref, vval.p, frozen, b);
+  buf_puts(b, " }");
   free(vpre.p); free(vval.p);
 }
 
@@ -1516,15 +1526,7 @@ int emit_strbuf_ivar_write_handle(Compiler *c, int v, Buf *b) {
   holder_slot_buf(c, &h, &rb);
   const char *ref = rb.p;
   buf_puts(b, "({ ");
-  if (nt_kind(nt, w) == NK_InstanceVariableWriteNode) emit_stmt_inner(c, w, b, 0);
-  else {
-    int is_or = nt_kind(nt, w) == NK_InstanceVariableOrWriteNode;
-    emit_strbuf_orw_guard(c, ref, nt_ref(nt, w, "value"), is_or, b);
-    /* `||=` leaves the ivar assigned (ivar_write_mark), `&&=` as it was */
-    char mk[300];
-    const char *m = is_or ? ivar_write_mark(c, w, mk, sizeof mk) : NULL;
-    if (m) buf_printf(b, " %s", m);
-  }
+  emit_stmt_inner(c, w, b, 0);
   buf_printf(b, " %s; })", ref);
   free(rb.p);
   return 1;
@@ -1561,9 +1563,9 @@ static void emit_strbuf_slot_read(Compiler *c, int id, Repr rp, const char *sref
    called an unset class variable defined. An ivar's assigned mark
    (ivar_write_mark, or NULL) is set the same way. */
 static void emit_strbuf_orw_share_value(Compiler *c, int id, const char *ref, int v, int is_or,
-                                        int fcid, const char *fnm, const char *mark, Buf *b) {
+                                        int fcid, const char *fnm, const char *mark, const char *frozen, Buf *b) {
   buf_puts(b, "({ ");
-  emit_strbuf_orw_guard(c, ref, v, is_or, b);
+  emit_strbuf_orw_guard(c, ref, v, is_or, frozen, b);
   buf_puts(b, " ");
   if (is_or) emit_cvar_set_flag(c, fcid, fnm, 0, b);
   if (is_or && mark) buf_printf(b, "%s ", mark);
@@ -1609,7 +1611,7 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
      the slot's read face with the handle published, as a plain write's is. */
   if (t == TY_STRBUF) {
     buf_puts(b, "({ ");
-    emit_strbuf_orw_guard(c, ref, v, is_or, b);
+    emit_strbuf_orw_guard(c, ref, v, is_or, g_orw_store_guard, b);
     buf_printf(b, "%s%s ", mark ? " " : "", mark ? mark : "");
     str_read_handle(b, ref, 1);
     buf_puts(b, "; })");
@@ -1691,8 +1693,12 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
   else {
     buf_printf(b, "({ if (%s) { ", cond);
     if (vpre.p) buf_puts(b, vpre.p);
-    if (g_orw_store_guard) buf_puts(b, g_orw_store_guard);
-    buf_printf(b, "%s = %s; } %s%s%s; })", ref, vval.p ? vval.p : "", mark ? mark : "", mark ? " " : "", ref);
+    if (t == TY_POLY) emit_conditional_slot_store(ref, vval.p, g_orw_store_guard, b);
+    else {
+      if (g_orw_store_guard) buf_puts(b, g_orw_store_guard);
+      buf_printf(b, "%s = %s;", ref, vval.p ? vval.p : "");
+    }
+    buf_printf(b, " } %s%s%s; })", mark ? mark : "", mark ? " " : "", ref);
   }
   free(vpre.p); free(vval.p);
 }
@@ -2938,7 +2944,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     const char *sv_guard = g_orw_store_guard;
     g_orw_store_guard = fz.p;
     if (repr_of(c, id).handle && repr_write_share(c, id))
-      emit_strbuf_orw_share_value(c, id, ref3, v, is_or, -1, NULL, m3, b);
+      emit_strbuf_orw_share_value(c, id, ref3, v, is_or, -1, NULL, m3, fz.p, b);
     else emit_ivar_orw_value(c, id, ivt3, eh3, ref3, v, is_or, m3, b);
     g_orw_store_guard = sv_guard;
     free(fz.p);
@@ -3333,7 +3339,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     int is_or = nt_kind(nt, id) == NK_GlobalVariableOrWriteNode;
     /* the handle under the mark, as an ivar's */
     if (repr_of(c, id).handle && repr_write_share(c, id))
-      emit_strbuf_orw_share_value(c, id, gref, nt_ref(nt, id, "value"), is_or, -1, NULL, NULL, b);
+      emit_strbuf_orw_share_value(c, id, gref, nt_ref(nt, id, "value"), is_or, -1, NULL, NULL, NULL, b);
     else if (gvar_is_oint(c, lv)) {
       char gnt[300]; snprintf(gnt, sizeof gnt, "%s.nil", gref);
       emit_slot_orw_value_o(c, lv->type, 0, gref, nt_ref(nt, id, "value"), is_or, gnt, -1, -1, NULL,
@@ -3385,7 +3391,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     /* --share-strings: a class variable holding the shared handle, as the
        statement form (the raw String went into its sp_String * slot) */
     if (h.idx >= 0 && repr_of_cvar(c, cid, h.idx).share) {
-      emit_strbuf_orw_share_value(c, id, ref.p, v, 1, cid, nm, NULL, b);
+      emit_strbuf_orw_share_value(c, id, ref.p, v, 1, cid, nm, NULL, NULL, b);
       free(ref.p);
       return 1;
     }
@@ -3412,7 +3418,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     holder_slot_buf(c, &h, &ref);
     TyKind at = h.idx >= 0 ? c->classes[h.cid].cvar_types[h.idx] : TY_UNKNOWN;
     if (h.idx >= 0 && repr_of_cvar(c, h.cid, h.idx).share) {   /* as `||=` */
-      emit_strbuf_orw_share_value(c, id, ref.p, v, 0, h.cid, nm, NULL, b);
+      emit_strbuf_orw_share_value(c, id, ref.p, v, 0, h.cid, nm, NULL, NULL, b);
       free(ref.p);
       return 1;
     }
@@ -7428,7 +7434,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
         emit_frozen_obj_guard(c, class_id, tn, &fz);
         const char *sv_guard = g_orw_store_guard;
         g_orw_store_guard = fz.p;
-        emit_strbuf_orw_share_value(c, id, lhs, v, is_or, -1, NULL, m, b);
+        emit_strbuf_orw_share_value(c, id, lhs, v, is_or, -1, NULL, m, fz.p, b);
         g_orw_store_guard = sv_guard;
         free(fz.p);
       }

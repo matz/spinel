@@ -54,8 +54,11 @@ A method inferred or declared to return String returns `sp_String *`.
 `repr_method_ret_storage` supplies the physical result type to signatures,
 return slots and callers. A nullable String uses the same pointer and returns
 `NULL` for nil. The caller can retain the handle, box it for a Ruby value,
-or read its bytes for a text operation. Mixed receiver dispatch joins Ruby
-values in the switch and projects the result once. Proc and C extension
+or read its bytes for a text operation. An initializer used for its effects
+has a void C signature even if its last expression is a String. A nil arm
+joined to a String handle uses a null of that pointer type, so boxing the
+result still selects the handle representation. Mixed receiver dispatch joins
+Ruby values in the switch and projects the result once. Proc and C extension
 callback signatures retain their declared result representation.
 Interpolation and printing call the display method selected at that site.
 They read the bytes of its native String result or format its boxed result
@@ -65,7 +68,9 @@ length together. This includes registered class conversions and a rescued
 exception’s override or stored message. A generated String member reader named to_s or inspect
 returns its stored field. The default Struct or Data renderer produces
 counted text. String comparisons borrow bytes from the selected conversion
-result.
+result. A conditional assignment to a String instance variable evaluates
+the right-hand side only when the store is taken. It checks whether the
+receiver is frozen after evaluating that value and before updating the slot.
 
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for

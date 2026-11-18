@@ -182,7 +182,8 @@ int strbuf_bang_self_local(const Compiler *c, int v);
 int strbuf_bang_emits(Compiler *c, int v);
 void emit_strbuf_param_bind(Compiler *c, const LocalVar *pv, TyKind want, const char *src, Buf *b);
 /* `REF ||= v` / `REF &&= v` on a shared-handle String slot (codegen_expr.c) */
-void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *b);
+void emit_conditional_slot_store(const char *ref, const char *value, const char *frozen, Buf *b);
+void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, const char *frozen, Buf *b);
 /* The value a write hands a shared-handle String slot `lv` (codegen_stmt.c) */
 void emit_strbuf_value(Compiler *c, int v, Buf *b);
 /* The handle such a slot takes from value v: its own, or a new one */
